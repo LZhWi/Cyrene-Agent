@@ -53,6 +53,11 @@ nul
 .DS_Store
 Thumbs.db
 
+# Sensitive keys and credentials
+*.key
+*.pem
+*.log
+
 # Local env files (keep .env.example tracked)
 .env
 .env.*
