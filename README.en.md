@@ -61,8 +61,10 @@ artwork, story content, and trademarks are the intellectual property of
 ## 🚀 Quick Start
 
 ### Prerequisites
-- Node.js 18+
-- npm 9+
+- This project is **only tested and supported on Windows 10/11 + Node.js 24 LTS**.
+  Node.js 18/20/22, Node.js 26 Current, and other non-LTS / non-24 versions
+  are **not** official support targets.
+- npm 10+ (recommended 11)
 - Windows 10/11 (Feishu / WeChat / nut-js key-mouse automation depend on
   Win32 APIs)
 - macOS / Linux may run, but desktop integration is only fully tested on
