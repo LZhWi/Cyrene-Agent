@@ -56,10 +56,10 @@
 ## 🚀 快速开始
 
 ### 前置条件
-- Node.js 18+
+- Node.js 18+ (推荐 22 LTS)
 - npm 9+
-- Windows 10/11（飞书 / 微信 / nut-js 键鼠自动化依赖 Win32 API）
-- macOS / Linux 理论上可运行，但桌面集成仅在 Windows 上完整测试过
+- Windows 10/11 (飞书 / 微信 / nut-js 键鼠自动化依赖 Win32 API)
+- macOS / Linux 理论上可运行, 但桌面集成仅在 Windows 上完整测试过
 
 ### 1. 克隆仓库
 
