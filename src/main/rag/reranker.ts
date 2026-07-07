@@ -108,12 +108,46 @@ export async function createStandardReranker(): Promise<RerankerProvider> {
 let currentReranker: RerankerProvider | null = null;
 let currentRerankerMode: "light" | "standard" | "none" = "none";
 
+/**
+ * 检查某个 rerank 模型的 onnx 文件是否存在于本地 models/ 目录。
+ * models/.gitignore 排除了 *.onnx，所以新 clone 的仓库默认没有这些文件。
+ */
+function checkRerankerModelInstalled(mode: "light" | "standard"): boolean {
+  const modelDir = mode === "light" ? "ms-marco-MiniLM-L-6-v2" : "bge-reranker-base";
+  const onnxPath = path.join(getModelsDir(), modelDir, "onnx", "model_quantized.onnx");
+  try {
+    const fs = require("fs");
+    return fs.existsSync(onnxPath);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 返回所有 rerank 模型的安装状态，供 UI 真实渲染（不再硬编码"已安装"）。
+ */
+export function getRerankerInstallStatus(): { light: boolean; standard: boolean } {
+  return {
+    light: checkRerankerModelInstalled("light"),
+    standard: checkRerankerModelInstalled("standard"),
+  };
+}
+
 export async function initReranker(mode: "light" | "standard" | "none"): Promise<void> {
   currentRerankerMode = mode;
 
   if (mode === "none") {
     currentReranker = null;
     console.log("[Reranker] disabled");
+    return;
+  }
+
+  // 入口 fallback：如果 onnx 文件不存在，自动降级为 none（不抛错，不让 RAG init FAILED）
+  if (!checkRerankerModelInstalled(mode)) {
+    const modelDir = mode === "light" ? "ms-marco-MiniLM-L-6-v2" : "bge-reranker-base";
+    console.warn(`[Reranker] 模型未找到 (models/${modelDir}/onnx/model_quantized.onnx)，自动降级为 none。基础聊天和基础 RAG 不受影响。`);
+    currentRerankerMode = "none";
+    currentReranker = null;
     return;
   }
 

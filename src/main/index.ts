@@ -45,7 +45,7 @@ import { loadUserStickerManifest, addUserSticker, deleteUserSticker, getAllStick
 import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
 import { normalizeWindowVisibilitySettings } from "./window-visibility-settings";
 import type { StickerConfigItem } from "../shared/sticker-types";
-import { initReranker } from "./rag/reranker";
+import { initReranker, getRerankerInstallStatus } from "./rag/reranker";
 import { memoryStore } from "./memory/memory-store"
 import type { L0Profile, L1Profile } from "./memory/memory-types";
 import { registerChatsIpc } from "./chats/chats-ipc";
@@ -2672,6 +2672,10 @@ ipcMain.handle(IPC.RERANKER_SET_MODE, async (_event, mode: "light" | "standard" 
   await initReranker(mode);
   console.log("[Cyrene] reranker mode switched to", mode);
   return true;
+});
+
+ipcMain.handle(IPC.RERANKER_GET_STATUS, () => {
+  return getRerankerInstallStatus();
 });
 
 ipcMain.on(IPC.SETTINGS_PREVIEW_RUNTIME_SYNC, (_event, value: "off" | "local" | "llm") => {

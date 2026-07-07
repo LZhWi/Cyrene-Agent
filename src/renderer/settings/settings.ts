@@ -2641,6 +2641,22 @@ window.settings?.onSwitchSection?.((section) => {
   });
 })();
 
+/* ===== Reranker install status (real on-disk check via IPC) ===== */
+(async () => {
+  const lightEl = document.getElementById("reranker-light-status");
+  const standardEl = document.getElementById("reranker-standard-status");
+  try {
+    const status = await (window as any).settings?.getRerankerStatus?.();
+    if (!status) return;
+    if (lightEl) lightEl.textContent = status.light ? "已下载 · 约 23MB" : "未下载 · 可选";
+    if (standardEl) standardEl.textContent = status.standard ? "已下载 · 约 279MB" : "未下载 · 可选";
+  } catch (err) {
+    console.warn("[Reranker] status check failed:", err);
+    if (lightEl) lightEl.textContent = "状态未知";
+    if (standardEl) standardEl.textContent = "状态未知";
+  }
+})();
+
 /* ===== Embedding download / delete ===== */
 (function () {
   const downloadBtn = document.getElementById("embedding-download-btn") as HTMLButtonElement | null;

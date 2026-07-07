@@ -122,6 +122,7 @@ export const IPC = {
   EMBEDDING_PROGRESS: "embedding:progress",
   EMBEDDING_SET_MODEL: "embedding:set-model",
   RERANKER_SET_MODE: "reranker:set-mode",
+  RERANKER_GET_STATUS: "reranker:get-status",
   // user profile
   USER_GET_PROFILE: "user:get-profile",
   USER_SAVE_PROFILE: "user:save-profile",

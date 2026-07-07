@@ -213,6 +213,18 @@ For deep diagnostics, use Chrome DevTools Memory profiler (DevTools
 opens automatically in dev mode) to grab a heap snapshot, then file
 an issue with the snapshot attached.
 
+### Reranker model shows "not downloaded" — what to do?
+
+The lightweight reranker model (ms-marco-MiniLM-L6-v2, ~23MB) and the
+standard reranker model (bge-reranker-base, ~279MB) are **not bundled
+with the repository** (onnx files are gitignored due to size).
+
+When the model is missing, reranker is automatically disabled — basic
+chat and basic RAG retrieval are not affected.
+
+A "Download Model" button with configurable mirror source will be
+provided in a future release. For now, the "Off" mode works fine.
+
 ---
 
 ## ✨ Features
