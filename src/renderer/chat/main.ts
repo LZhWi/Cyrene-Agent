@@ -1955,7 +1955,9 @@ function renderStickerPicker(): void {
     card.type = "button";
     card.className = "sticker-picker__item";
     const img = document.createElement("img");
-    img.src = s.src;
+      // 内置贴纸 src 是 "/stickers/xxx" 绝对路径，file:// 协议下解析到磁盘根目录
+      // 走 resolveAsset() 转成正确的 file:// 或 http:// URL（与 sticker-manager 缩略图同模式）
+      img.src = s.src.startsWith("/stickers/") ? resolveAsset(s.src) : s.src;
     img.alt = s.id;
     img.draggable = false;
     card.appendChild(img);

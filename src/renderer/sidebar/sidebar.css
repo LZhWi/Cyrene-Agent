@@ -33,7 +33,7 @@ body {
     0 0 24px var(--rb-glow-soft),
     inset 0 1px 0 rgba(255, 255, 255, 0.12),
     inset 0 0 0 1px var(--rb-border-faint);
-  transition: width 200ms ease, height 200ms ease;
+  transition: background 200ms ease, border-color 200ms ease, box-shadow 200ms ease;
 }
 
 .sidebar::before {
