@@ -1636,11 +1636,12 @@ async function requestModelReply(inputMessages: unknown, styleFile = "01_default
   const skillActivation = resolveSlashActivation(messages);
   // 语气硬注入：embedding 匹配场景，强制注入语气规则 + 场景参考样本（必须遵守，优先级最高）
   let toneInjection = "";
-  if (sceneEmbeddingIndex) {
+  const sceneProvider = getSceneEmbeddingProvider();
+  if (sceneProvider && sceneEmbeddingIndex) {
     try {
-      toneInjection = await buildToneInjection(latestUserText, messages, getSceneEmbeddingProvider(), sceneEmbeddingIndex);
+      toneInjection = await buildToneInjection(latestUserText, messages, sceneProvider, sceneEmbeddingIndex);
     } catch (err) {
-      console.warn("[Cyrene] tone injection failed:", err);
+      console.error("[Cyrene] tone injection failed:", err);
     }
   }
   // 注入顺序：环境 → 人格设定 → skill → 记忆 → ★已激活世界知识（放最后、最靠近 user message）
@@ -1707,11 +1708,14 @@ async function requestModelReply(inputMessages: unknown, styleFile = "01_default
   runtimeState.expression = feelingToExpression[runtimeState.feeling] ?? 0;
   runtimeState.updatedAt = Date.now();
 
-  const stickerCandidate = settings.stickerEnabled && stickerEmbeddingIndex
-    ? (await matchSticker(chatContent + "\n" + latestUserText, getEmbeddingProvider(), stickerEmbeddingIndex, settings.stickerSimilarityThreshold))?.id ?? null
-    : null;
-  const stickerSettings = loadStickerSettings();
-  const sticker = stickerCandidate && stickerSettings[stickerCandidate] !== false ? stickerCandidate : null;
+  let sticker: string | null = null;
+  if (settings.stickerEnabled && stickerEmbeddingIndex) {
+    const provider = getEmbeddingProvider();
+    if (provider) {
+      const matchResult = await matchSticker(chatContent + "\n" + latestUserText, provider, stickerEmbeddingIndex, settings.stickerSimilarityThreshold);
+      sticker = matchResult?.id ?? null;
+    }
+  }
 
   if (settings.runtimeSync === "local") {
     broadcastRuntimeStateChanged();
@@ -1965,8 +1969,9 @@ function createWindow(): void {
 
       // ⑥ 语气注入
       let toneInjection = "";
-      if (sceneEmbeddingIndex) {
-        try { toneInjection = await buildToneInjection(userText, messages, getSceneEmbeddingProvider(), sceneEmbeddingIndex); } catch { /* ignore */ }
+      const sceneProvider = getSceneEmbeddingProvider();
+      if (sceneProvider && sceneEmbeddingIndex) {
+        try { toneInjection = await buildToneInjection(userText, messages, sceneProvider, sceneEmbeddingIndex); } catch { /* ignore */ }
       }
 
       return timeStr + "\n\n" +
@@ -2676,6 +2681,23 @@ ipcMain.handle(IPC.RERANKER_SET_MODE, async (_event, mode: "light" | "standard" 
 
 ipcMain.handle(IPC.RERANKER_GET_STATUS, () => {
   return getRerankerInstallStatus();
+});
+
+ipcMain.handle(IPC.MODEL_GET_INSTALL_STATUS, () => {
+  const { getModelInstallStatus } = require("./rag/model-status");
+  return getModelInstallStatus();
+});
+
+ipcMain.handle(IPC.OPEN_EXTERNAL, async (_event, url: string) => {
+  if (!url.startsWith("http://") && !url.startsWith("https://")) {
+    return { ok: false, error: "Invalid URL" };
+  }
+  try {
+    await shell.openExternal(url);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  }
 });
 
 ipcMain.on(IPC.SETTINGS_PREVIEW_RUNTIME_SYNC, (_event, value: "off" | "local" | "llm") => {
@@ -3795,19 +3817,26 @@ app.whenReady().then(async () => {
         BUILT_IN_STICKER_DESCRIPTIONS,
         loadUserStickerManifest(),
       );
-      console.log(`[stickers] embedding index built: ${stickerEmbeddingIndex.length} entries`);
+      console.log(`[StickerEmbedding] index built: ${stickerEmbeddingIndex.length} entries`);
+    } else {
+      console.warn("[StickerEmbedding] Model not found. Sticker matching disabled.");
     }
   } catch (err) {
-    console.error("[stickers] embedding index init FAILED:", err);
+    console.error("[StickerEmbedding] Init failed:", (err as Error).message);
   }
 
   // 初始化场景 embedding 索引（语气注入用，替代关键词匹配）
   // 用 bge-m3（多语言，中文效果好），和文档/记忆的 minilm 独立
   try {
     const sceneProvider = getSceneEmbeddingProvider();
-    sceneEmbeddingIndex = await buildSceneIndex(sceneProvider);
+    if (sceneProvider) {
+      sceneEmbeddingIndex = await buildSceneIndex(sceneProvider);
+      console.log("[SceneEmbedding] index built:", sceneEmbeddingIndex.scenes.length, "scenes");
+    } else {
+      console.warn("[SceneEmbedding] bge-m3 model not found. Scene embedding disabled.");
+    }
   } catch (err) {
-    console.error("[scene] embedding index init FAILED:", err);
+    console.error("[SceneEmbedding] Init failed:", (err as Error).message);
   }
 
   schedulerEngine.start();

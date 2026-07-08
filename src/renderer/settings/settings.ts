@@ -2674,24 +2674,10 @@ window.settings?.onSwitchSection?.((section) => {
   }
 
   downloadBtn?.addEventListener("click", async () => {
-    const model = getSelectedModel();
-    const mirror = getSelectedMirror();
-    downloadBtn.disabled = true;
-    downloadBtn.textContent = "\u4E0B\u8F7D\u4E2D\u2026";
-    try {
-      const result = await window.settings?.downloadEmbeddingModel?.(model, mirror);
-      if (result?.ok) {
-        downloadBtn.textContent = "\u2705 \u5B8C\u6210";
-        setTimeout(() => location.reload(), 800);
-      } else {
-        downloadBtn.textContent = "\u274C \u5931\u8D25";
-        downloadBtn.disabled = false;
-        window.alert("\u4E0B\u8F7D\u5931\u8D25\uFF1A" + (result?.error || "\u672A\u77E5\u9519\u8BEF"));
-      }
-    } catch (err) {
-      downloadBtn.textContent = "\u274C \u5931\u8D25";
-      downloadBtn.disabled = false;
-    }
+    // 打开模型安装说明文档
+    await window.system?.openExternal(
+      "https://github.com/Playa-0v0/Cyrene-Agent/blob/master/docs/local-models.md"
+    );
   });
 
 

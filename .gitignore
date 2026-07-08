@@ -67,5 +67,7 @@ videos/
 
 # Private design docs — not published
 docs/
+!docs/
+!docs/local-models.md
 PRODUCT.md
 sticker-descriptions/

@@ -1,4 +1,5 @@
 // @xenova/transformers is ESM-only, use dynamic import in CJS context
+import { checkEmbeddingModelInstalled } from "./model-status";
 
 // ── 类型 ──
 export interface EmbeddingProvider {
@@ -47,10 +48,15 @@ async function getLocalPipeline(modelKey?: string): Promise<any> {
   return pipe;
 }
 
-export function createLocalEmbeddingProvider(modelKey?: string): EmbeddingProvider {
+export function createLocalEmbeddingProvider(modelKey?: string): EmbeddingProvider | null {
   const key = modelKey || DEFAULT_MODEL_KEY;
   const config = LOCAL_MODELS[key];
   if (!config) throw new Error("Unknown embedding model: " + key);
+
+  // 模型缺失返回 null，调用方决定如何处理
+  if (!checkEmbeddingModelInstalled(key)) {
+    return null;
+  }
 
   return {
     name: "local-" + config.hfName.split("/").pop(),
@@ -128,7 +134,7 @@ export function getEmbeddingProvider(
   cloudBaseUrl?: string,
   cloudApiKey?: string,
   modelKey?: string
-): EmbeddingProvider {
+): EmbeddingProvider | null {
   if (cachedProvider) return cachedProvider;
 
   if (mode === "local") {
@@ -136,7 +142,15 @@ export function getEmbeddingProvider(
   } else if (mode === "cloud" && cloudBaseUrl && cloudApiKey) {
     cachedProvider = createOpenAIEmbeddingProvider(cloudBaseUrl, cloudApiKey);
   } else {
-    cachedProvider = createLocalEmbeddingProvider(modelKey);
+    // auto 模式：优先 local，local 不存在且 cloud 配置完整时用 cloud，否则 null
+    const local = createLocalEmbeddingProvider(modelKey);
+    if (local) {
+      cachedProvider = local;
+    } else if (cloudBaseUrl && cloudApiKey) {
+      cachedProvider = createOpenAIEmbeddingProvider(cloudBaseUrl, cloudApiKey);
+    } else {
+      cachedProvider = null;
+    }
   }
 
   return cachedProvider;
@@ -171,10 +185,13 @@ let sceneProvider: EmbeddingProvider | null = null;
 /**
  * 获取场景识别专用的 embedding provider（固定 bge-m3）。
  * 和文档/记忆的 provider 独立——RAG 切换模型不影响场景识别。
+ * 模型不存在时返回 null。
  */
-export function getSceneEmbeddingProvider(): EmbeddingProvider {
+export function getSceneEmbeddingProvider(): EmbeddingProvider | null {
   if (!sceneProvider) {
     sceneProvider = createLocalEmbeddingProvider("bgem3");
   }
   return sceneProvider;
 }
+
+export { checkEmbeddingModelInstalled };

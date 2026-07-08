@@ -189,11 +189,11 @@ function bm25Score(
 // ── 混合检索器 ──
 export class HybridRetriever {
   private store: JsonVectorStore;
-  private provider: EmbeddingProvider;
+  private provider: EmbeddingProvider | null;
 
-  constructor(store: JsonVectorStore, provider?: EmbeddingProvider) {
+  constructor(store: JsonVectorStore, provider?: EmbeddingProvider | null) {
     this.store = store;
-    this.provider = provider || getEmbeddingProvider();
+    this.provider = provider ?? null;
   }
 
   async retrieve(
@@ -205,6 +205,12 @@ export class HybridRetriever {
   ): Promise<SearchResult[]> {
     const stats = this.store.stats;
     if (stats.total === 0) return [];
+
+    // 如果没有 provider，向量检索不可用，只用 BM25
+    if (!this.provider) {
+      const bm25Results = this.bm25Search(query, source, topK);
+      return bm25Results;
+    }
 
     // 1. Vector 检索
     const vectorResults = await this.store.search(query, source, this.provider, topK * 3);

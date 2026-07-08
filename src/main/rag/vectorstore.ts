@@ -293,9 +293,10 @@ export class JsonVectorStore {
   ): Promise<SearchResult[]> {
     if (this.entries.length === 0) return [];
 
-    const queryEmbedding = provider
-      ? await provider.embed(query)
-      : await getEmbeddingProvider().embed(query);
+    const embeddingProvider = provider ?? getEmbeddingProvider();
+    if (!embeddingProvider) return [];
+
+    const queryEmbedding = await embeddingProvider.embed(query);
 
     // 确保索引已构建
     this.ensureIndex();

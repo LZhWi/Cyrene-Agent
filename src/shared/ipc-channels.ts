@@ -123,6 +123,10 @@ export const IPC = {
   EMBEDDING_SET_MODEL: "embedding:set-model",
   RERANKER_SET_MODE: "reranker:set-mode",
   RERANKER_GET_STATUS: "reranker:get-status",
+  // unified model install status
+  MODEL_GET_INSTALL_STATUS: "model:get-install-status",
+  // shell external URL
+  OPEN_EXTERNAL: "shell:open-external",
   // user profile
   USER_GET_PROFILE: "user:get-profile",
   USER_SAVE_PROFILE: "user:save-profile",

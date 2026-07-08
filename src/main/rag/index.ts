@@ -30,7 +30,10 @@ export async function initRAG(
   const dataDir = getDataDir();
   provider = getEmbeddingProvider(ragMode, cloudBaseUrl, cloudApiKey, embeddingModel);
   store = new JsonVectorStore(dataDir);
-  retriever = new HybridRetriever(store, provider);
+  // 只有 provider 存在时才创建 retriever（向量检索依赖 embedding）
+  if (provider) {
+    retriever = new HybridRetriever(store, provider);
+  }
   worldbook = new WorldbookManager(
     path.join(app.getAppPath(), "prompts", "worldbook"),
     { stateFile: path.join(app.getPath("userData"), "worldbook-state.json") }
@@ -41,7 +44,13 @@ export async function initRAG(
   // 防止 "昔涟"、"小鹿" 等 AI 伴侣核心名词被错误切分
   await feedEntityNamesToJieba();
 
-  console.log("[RAG] initialized. Mode:", ragMode, "Provider:", provider.name, "Dims:", provider.dims, "Memories:", store.stats.total);
+  console.log(
+    "[RAG] initialized. Mode:", ragMode,
+    "Provider:", provider?.name ?? "none",
+    "Dims:", provider?.dims ?? "N/A",
+    "Memories:", store.stats.total,
+    provider ? "" : " [Vector retrieval disabled]"
+  );
 }
 
 // ── Switch embedding model (hot-swap) ──
@@ -50,6 +59,12 @@ export async function switchEmbeddingModel(modelKey: string): Promise<{ ok: bool
     // Switch the embedding pipeline first
     switchModel(modelKey);
     const newProvider = getEmbeddingProvider("auto", undefined, undefined, modelKey);
+    
+    // 模型不存在时无法切换
+    if (!newProvider) {
+      return { ok: false, clearedEntries: 0, error: "Local embedding model not found. Cannot switch." };
+    }
+    
     const newDims = newProvider.dims;
 
     // Check existing entries for dimension mismatch

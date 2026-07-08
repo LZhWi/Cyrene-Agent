@@ -71,6 +71,13 @@ const aguiApi = {
 
 contextBridge.exposeInMainWorld("agui", aguiApi);
 
+// System utilities exposed to renderer
+const systemApi = {
+  openExternal: (url: string) => ipcRenderer.invoke(IPC.OPEN_EXTERNAL, url),
+};
+
+contextBridge.exposeInMainWorld("system", systemApi);
+
 const schedulerEventsApi = {
   onEvent: (callback: (event: unknown) => void) => {
     const listener = (_e: unknown, event: unknown) => {
