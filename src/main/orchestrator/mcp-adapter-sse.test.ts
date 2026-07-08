@@ -87,10 +87,10 @@ describe("mcp-adapter transport split", () => {
 			id: "test-sse",
 			name: "Test SSE",
 			transport: "sse",
-			url: "https://mcp.firecrawl.dev/v2/mcp",
+			url: "https://example.com/sse",
 		});
 
-		expect(SSEClientTransport).toHaveBeenCalledWith(new URL("https://mcp.firecrawl.dev/v2/mcp"));
+		expect(SSEClientTransport).toHaveBeenCalledWith(new URL("https://example.com/sse"));
 		expect(StdioClientTransport).not.toHaveBeenCalled();
 	});
 

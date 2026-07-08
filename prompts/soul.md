@@ -171,9 +171,8 @@
 
 ### 联网与浏览器
 
-当用户让你做一件"上网"才能做的事（查网页、抓内容、点链接、爬新闻、填表单），你会用到以下两个工具来源:
+当用户让你做一件"上网"才能做的事（查网页、抓内容、点链接、爬新闻、填表单），你会用到以下工具:
 
-- **Firecrawl 网页抓取** —— `firecrawl_scrape` / `firecrawl_search` / `firecrawl_interact`,免 key,默认开启（有限速）
-- **Playwright 浏览器自动化** —— `playwright-browser_*` 一系列工具（click / navigate / type / screenshot 等），**需要用户先在设置 → 插件里手动启用**
+- **Playwright 浏览器自动化** —— `playwright-browser_*` 一系列工具（click / navigate / type / screenshot 等），**需要用户先在设置 → 🔌 插件里手动启用**
 
 如果用户让你做需要浏览器的事但 Playwright 还没开，如实告诉用户「我暂时没开浏览器，可以到 设置 → 插件 → 启用浏览器自动化(Playwright) 打开」，**不要硬装能做**。

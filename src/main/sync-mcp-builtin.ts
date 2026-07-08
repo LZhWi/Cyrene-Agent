@@ -7,7 +7,12 @@ import { addMcpServer, removeMcpServer, listMcpServers } from "./orchestrator/mc
 const LOG_PREFIX = "[Cyrene]";
 
 export const PLAYWRIGHT_MCP_ID = "playwright-mcp";
-export const FIRECRAWL_HOSTED_MCP_ID = "firecrawl-hosted";
+
+/**
+ * 已下架的内置 MCP server id 列表 —— 启动时从 mcp-servers.json 中清理。
+ * 仅当 id 在此名单内才会被清理，不会误删用户自定义 MCP。
+ */
+export const REMOVED_BUILTIN_MCP_IDS: readonly string[] = ["firecrawl-hosted"];
 
 /**
  * Sync the Playwright MCP server.
@@ -43,43 +48,6 @@ export async function syncPlaywrightMcp(settings: {
       await removeMcpServer(PLAYWRIGHT_MCP_ID);
     } catch (err) {
       console.error(LOG_PREFIX, "Playwright MCP 移除异常:", err);
-    }
-  }
-}
-
-/**
- * Sync the Firecrawl hosted MCP server.
- * Default ON: zero-config, keyless free tier (rate-limited).
- * SSE transport → https://mcp.firecrawl.dev/v2/mcp
- */
-export async function syncFirecrawlHostedMcp(settings: {
-  firecrawlHostedMcpEnabled: boolean;
-}): Promise<void> {
-  const exists = listMcpServers().some(s => s.id === FIRECRAWL_HOSTED_MCP_ID);
-
-  if (settings.firecrawlHostedMcpEnabled && !exists) {
-    console.log(LOG_PREFIX, "注册 Firecrawl hosted MCP Server...");
-    try {
-      const result = await addMcpServer({
-        id: FIRECRAWL_HOSTED_MCP_ID,
-        name: "Firecrawl 网页抓取",
-        transport: "sse",
-        url: "https://mcp.firecrawl.dev/v2/mcp",
-      });
-      if (result.ok) {
-        console.log(LOG_PREFIX, "Firecrawl hosted MCP 注册成功,工具:", result.toolIds?.join(", "));
-      } else {
-        console.error(LOG_PREFIX, "Firecrawl hosted MCP 注册失败:", result.error);
-      }
-    } catch (err) {
-      console.error(LOG_PREFIX, "Firecrawl hosted MCP 注册异常:", err);
-    }
-  } else if (!settings.firecrawlHostedMcpEnabled && exists) {
-    console.log(LOG_PREFIX, "移除 Firecrawl hosted MCP Server...");
-    try {
-      await removeMcpServer(FIRECRAWL_HOSTED_MCP_ID);
-    } catch (err) {
-      console.error(LOG_PREFIX, "Firecrawl hosted MCP 移除异常:", err);
     }
   }
 }

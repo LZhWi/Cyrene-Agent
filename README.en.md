@@ -200,8 +200,8 @@ leak. To reset, delete `<userData>/model-settings.json` and
    saves ~550 MB.
 2. **Disable reranker** — Settings → 🧠 Memory → Reranker mode = `none`,
    saves 23–279 MB.
-3. **Disable external MCPs** — Settings → 🔌 Plugins, turn off
-   `Playwright MCP` and `Firecrawl hosted MCP` to avoid Chromium child
+3. **Disable MCP tools** — Settings → 🔌 Plugins, turn off
+   `Playwright MCP` to avoid Chromium child
    processes eating hundreds of MB.
 4. **Clean up RAG documents** — Settings → 🧠 Memory → Imported docs,
    delete large files (embeddings stay in LanceDB index).
@@ -301,7 +301,7 @@ provided in a future release. For now, the "Off" mode works fine.
 - stdio / SSE / HTTP transports.
 - Builtin servers auto-synced; `install_mcp_server` tool lets the agent
   auto-install new servers.
-- Includes Playwright + Firecrawl hosted MCP configuration.
+- Includes Playwright MCP configuration.
 
 #### 💬 External Channels
 - **Lark / Feishu long-connection** — Official SDK + WebSocket (no public
@@ -369,6 +369,16 @@ provided in a future release. For now, the "Off" mode works fine.
 ## 📦 Project Structure
 
 ```
+models/                # Local AI models (user-provided, see docs/local-models.md)
+├── Xenova/
+│   ├── bge-m3/        # Embedding (sticker matching + scene detection, ~570MB)
+│   │   ├── tokenizer.json
+│   │   ├── config.json
+│   │   └── onnx/model_quantized.onnx
+│   └── all-MiniLM-L6-v2/  # Document / memory Embedding (~23MB)
+├── bge-reranker-base/  # Standard reranker (~279MB, optional)
+└── ms-marco-MiniLM-L-6-v2/  # Lightweight reranker (~23MB)
+
 src/
 ├── main/             # Electron main process
 │   ├── asr/          # Automatic speech recognition (Aliyun realtime ASR)

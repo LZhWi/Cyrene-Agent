@@ -41,6 +41,36 @@ function saveConfigs(configs: McpServerConfig[]): void {
 }
 
 /**
+ * 一次性清理已下架的内置 MCP server 配置（id 白名单模式）。
+ * 幂等：条目不存在时不报错、不写盘。
+ * 只删除传入的固定 id，不会误删用户自定义 MCP。
+ * 返回被实际移除的 id 列表（用于日志）。
+ */
+export async function pruneMcpServersByIds(serverIds: string[]): Promise<string[]> {
+  const configs = loadConfigs();
+  const removed: string[] = [];
+  const kept = configs.filter((c) => {
+    if (serverIds.includes(c.id)) {
+      removed.push(c.id);
+      return false;
+    }
+    return true;
+  });
+  if (removed.length > 0) {
+    saveConfigs(kept);
+  }
+  // 如果有已连接的实例也断开（启动期通常还没连，但如果早期注册过会存在）
+  for (const id of removed) {
+    try {
+      await disconnectMcpServer(id);
+    } catch {
+      // ignore
+    }
+  }
+  return removed;
+}
+
+/**
  * 启动时自动连接所有已保存的 MCP server。
  */
 export async function initMcpManager(): Promise<void> {

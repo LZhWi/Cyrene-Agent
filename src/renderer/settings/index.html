@@ -26,7 +26,6 @@
         <button type="button" class="nav-item" data-section="identity"><span>💼</span>职位</button>
         <button type="button" class="nav-item" data-section="skills"><span>✨</span>技能 Skill</button>
         <button type="button" class="nav-item" data-section="plugins"><span>🔌</span>插件</button>
-        <button type="button" class="nav-item" data-section="external-mcp"><span>🌐</span>外部 MCP</button>
         <hr class="nav-divider" />
         <button type="button" class="nav-item is-active" data-section="general"><span>⚙️</span>设置</button>
         <button type="button" class="nav-item" data-section="api"><span>🔑</span>API 设置</button>
@@ -1119,6 +1118,18 @@
               </label>
             </article>
 
+            <article class="plugin-card" id="plugin-playwright-mcp-card">
+              <div class="plugin-card__icon">🖥️</div>
+              <div class="plugin-card__body">
+                <h2>浏览器自动化（Playwright）</h2>
+                <p>让她能点网页、填表单、截图、跑 UI 流程。首次启用会下载 Chromium，约 150MB。<strong>默认关闭。</strong></p>
+              </div>
+              <label class="plugin-switch" aria-label="启用浏览器自动化（Playwright）">
+                <input type="checkbox" id="plugin-playwright-mcp-enabled" />
+                <span></span>
+              </label>
+            </article>
+
             <article class="plugin-card plugin-card--accordion" id="plugin-life-card">
               <div class="plugin-accordion-header">
                 <div class="plugin-card__icon">🏘️</div>
@@ -1146,41 +1157,6 @@
                   <span class="plugin-always-on" title="常驻">●</span>
                 </article>
               </div>
-            </article>
-          </div>
-        </section>
-
-        <section class="settings-panel is-hidden" id="external-mcp-panel" data-panel="external-mcp">
-          <div class="plugin-panel-heading">
-            <div>
-              <h1>外部 MCP</h1>
-              <p>接入社区 MCP Server 扩展她的能力。</p>
-            </div>
-          </div>
-
-          <div class="plugin-list">
-            <article class="plugin-card" id="plugin-playwright-mcp-card">
-              <div class="plugin-card__icon">🖥️</div>
-              <div class="plugin-card__body">
-                <h2>浏览器自动化（Playwright）</h2>
-                <p>让她能点网页、填表单、截图、跑 UI 流程。首次启用会下载 Chromium，约 150MB。<strong>默认关闭。</strong></p>
-              </div>
-              <label class="plugin-switch" aria-label="启用浏览器自动化（Playwright）">
-                <input type="checkbox" id="plugin-playwright-mcp-enabled" />
-                <span></span>
-              </label>
-            </article>
-
-            <article class="plugin-card" id="plugin-firecrawl-hosted-mcp-card">
-              <div class="plugin-card__icon">🔥</div>
-              <div class="plugin-card__body">
-                <h2>Firecrawl 网页抓取（免 key）</h2>
-                <p>让她能抓取网页内容、做网页搜索、模拟点击。免 API Key 但有请求限速。<strong>默认启用。</strong></p>
-              </div>
-              <label class="plugin-switch" aria-label="启用 Firecrawl 网页抓取（免 key）">
-                <input type="checkbox" id="plugin-firecrawl-hosted-mcp-enabled" />
-                <span></span>
-              </label>
             </article>
           </div>
         </section>

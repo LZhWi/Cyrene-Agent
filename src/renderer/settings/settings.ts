@@ -613,7 +613,6 @@ const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }>
   identity: { emoji: "💼", title: "职位", hint: "自定义昔涟的身份定位与工作职责" },
   skills: { emoji: "✨", title: "Skill", hint: "管理 agent 的 skill 指令（约束如何用工具）" },
   plugins: { emoji: "🔌", title: "插件", hint: "扩展功能与第三方集成" },
-  "external-mcp": { emoji: "🌐", title: "外部 MCP", hint: "接入社区 MCP Server 扩展她的能力" },
   general: { emoji: "⚙️", title: "设置", hint: "通用偏好与外观" },
   api: { emoji: "🔑", title: "API 设置", hint: "选择预设后只需要填写 API Key。" },
   cyrene: { emoji: "🌸", title: "昔涟设置", hint: "管理 Agent 行为、记忆、RAG 与权限" },
@@ -1456,11 +1455,9 @@ async function loadSearchConfig(): Promise<void> {
 void loadSearchConfig();
 
 // ── 🌐 内置 MCP 工具开关 ──────────────────────────────────────
-// Playwright MCP（浏览器自动化）和 Firecrawl hosted MCP（免 key 网页抓取）
-// 通过 settings 里的 playwrightMcpEnabled / firecrawlHostedMcpEnabled 控制，
-// main 端的 syncXxxMcp() 会监听这两个字段变化自动注册 / 移除 MCP server。
+// Playwright MCP（浏览器自动化）通过 playwrightMcpEnabled 控制，
+// main 端的 syncPlaywrightMcp() 会监听字段变化自动注册 / 移除 MCP server。
 const playwrightMcpCheckbox = document.getElementById("plugin-playwright-mcp-enabled") as HTMLInputElement | null;
-const firecrawlHostedMcpCheckbox = document.getElementById("plugin-firecrawl-hosted-mcp-enabled") as HTMLInputElement | null;
 
 async function saveBuiltinMcpField(field: string, value: unknown): Promise<void> {
   if (!window.tts) return;
@@ -1474,9 +1471,6 @@ async function saveBuiltinMcpField(field: string, value: unknown): Promise<void>
 playwrightMcpCheckbox?.addEventListener("change", () => {
   void saveBuiltinMcpField("playwrightMcpEnabled", playwrightMcpCheckbox.checked);
 });
-firecrawlHostedMcpCheckbox?.addEventListener("change", () => {
-  void saveBuiltinMcpField("firecrawlHostedMcpEnabled", firecrawlHostedMcpCheckbox.checked);
-});
 
 async function loadBuiltinMcpToggles(): Promise<void> {
   try {
@@ -1484,10 +1478,6 @@ async function loadBuiltinMcpToggles(): Promise<void> {
     if (cfg && playwrightMcpCheckbox) {
       // 默认关闭 —— 启用会下载 Chromium，约 150MB
       playwrightMcpCheckbox.checked = Boolean(cfg.playwrightMcpEnabled);
-    }
-    if (cfg && firecrawlHostedMcpCheckbox) {
-      // 默认开启 —— 免 key 的 hosted 端，限速但开箱即用
-      firecrawlHostedMcpCheckbox.checked = Boolean(cfg.firecrawlHostedMcpEnabled ?? true);
     }
   } catch (err) {
     console.warn("[settings] 加载内置 MCP 开关失败:", err);
@@ -2060,7 +2050,6 @@ function switchSection(section: string): void {
   const isTasks = section === "tasks";
   const isIdentity = section === "identity";
   const isPlugins = section === "plugins";
-  const isExternalMcp = section === "external-mcp";
   const isSkills = section === "skills";
   const isTokens = section === "tokens";
   const isChannels = section === "channels";
@@ -2084,8 +2073,6 @@ function switchSection(section: string): void {
   const identityPanel = document.getElementById("identity-panel");
   if (identityPanel) identityPanel.classList.toggle("is-hidden", !isIdentity);
   pluginsPanel.classList.toggle("is-hidden", !isPlugins);
-  const externalMcpPanel = document.getElementById("external-mcp-panel");
-  if (externalMcpPanel) externalMcpPanel.classList.toggle("is-hidden", !isExternalMcp);
   const skillsPanel = document.getElementById("skills-panel");
   if (skillsPanel) skillsPanel.classList.toggle("is-hidden", !isSkills);
   if (isSkills) void renderSkills();
@@ -2100,7 +2087,7 @@ function switchSection(section: string): void {
   if (asrPanel) asrPanel.classList.toggle("is-hidden", !isAsr);
   placeholderPanel.classList.toggle(
     "is-hidden",
-    isApi || isGeneral || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isExternalMcp || isSkills || isTokens || isChannels || isTts || isAsr,
+    isApi || isGeneral || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr,
   );
 
   if (
