@@ -20,7 +20,7 @@ vi.mock("./orchestrator/mcp-manager", () => ({
   listMcpServers: mockList,
 }));
 
-import { syncPlaywrightMcp, syncFirecrawlHostedMcp } from "./sync-mcp-builtin";
+import { syncPlaywrightMcp } from "./sync-mcp-builtin";
 
 describe("syncPlaywrightMcp", () => {
   beforeEach(() => {
@@ -55,27 +55,5 @@ describe("syncPlaywrightMcp", () => {
     await syncPlaywrightMcp({ playwrightMcpEnabled: true });
     expect(mockAdd).not.toHaveBeenCalled();
     expect(mockRemove).not.toHaveBeenCalled();
-  });
-});
-
-describe("syncFirecrawlHostedMcp", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockList.mockReturnValue([]);
-  });
-
-  it("adds sse server when enabled and not connected", async () => {
-    await syncFirecrawlHostedMcp({ firecrawlHostedMcpEnabled: true });
-    expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
-      id: "firecrawl-hosted",
-      transport: "sse",
-      url: "https://mcp.firecrawl.dev/v2/mcp",
-    }));
-  });
-
-  it("removes when disabled and connected", async () => {
-    mockList.mockReturnValue([{ id: "firecrawl-hosted", name: "x", connected: true, toolCount: 0, toolIds: [] }]);
-    await syncFirecrawlHostedMcp({ firecrawlHostedMcpEnabled: false });
-    expect(mockRemove).toHaveBeenCalledWith("firecrawl-hosted");
   });
 });

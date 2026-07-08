@@ -24,13 +24,8 @@ import { loadChannelsSettings } from "./channels/settings-store";
 import "./orchestrator/built-in-tools";
 // 触发 fs-tools 的副作用注册（read_file / list_dir / write_file / read_image）
 import "./orchestrator/fs-tools";
-import { initMcpManager, addMcpServer, removeMcpServer, listMcpServers } from "./orchestrator/mcp-manager";
-import {
-  syncPlaywrightMcp,
-  syncFirecrawlHostedMcp,
-  PLAYWRIGHT_MCP_ID,
-  FIRECRAWL_HOSTED_MCP_ID,
-} from "./sync-mcp-builtin";
+import { initMcpManager, addMcpServer, removeMcpServer, listMcpServers, pruneMcpServersByIds } from "./orchestrator/mcp-manager";
+import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from "./sync-mcp-builtin";
 import { buildEnvironmentContext } from "./orchestrator/environment";
 import { initPermissionFromDisk, registerPermissionIpc, getCurrentLevel } from "./permission";
 import { registerChoiceIpc, setChoiceCardSender } from "./user-choice";
@@ -367,6 +362,10 @@ interface GeneralSettings {
   petVisible: boolean;
   /** 桌宠缩放因子：1.0=默认，0.5~2.0，窗口与模型同步等比缩放。 */
   petZoom: number;
+  /** 桌宠窗口 X 坐标，未保存时为 undefined */
+  petWindowX?: number;
+  /** 桌宠窗口 Y 坐标，未保存时为 undefined */
+  petWindowY?: number;
   sidebarVisible: boolean;
   tasksVisible: boolean;
   launchAtLogin: boolean;
@@ -409,8 +408,6 @@ interface GeneralSettings {
   travelEnabled: boolean;
   /** 🖥️ 浏览器自动化（Playwright MCP）是否启用。默认 false，需用户手动开启。 */
   playwrightMcpEnabled: boolean;
-  /** 🔥 Firecrawl hosted MCP（免 key 网页抓取）是否启用。默认 true，用户可关。 */
-  firecrawlHostedMcpEnabled: boolean;
   // 联网搜索：选哪个搜索源 + 对应 key
   searchEngine: "off" | "bocha" | "tavily" | "minimax";
   searchBochaKey: string;
@@ -552,7 +549,6 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   amapKey: "",
   travelEnabled: false,
   playwrightMcpEnabled: false,
-  firecrawlHostedMcpEnabled: true,
   searchEngine: "off",
   searchBochaKey: "",
   searchTavilyKey: "",
@@ -907,6 +903,10 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     petAlwaysOnTop: input?.petAlwaysOnTop === undefined ? DEFAULT_GENERAL_SETTINGS.petAlwaysOnTop : Boolean(input.petAlwaysOnTop),
     petVisible: input?.petVisible === undefined ? DEFAULT_GENERAL_SETTINGS.petVisible : Boolean(input.petVisible),
     petZoom: typeof input?.petZoom === "number" ? Math.max(0.5, Math.min(2, input.petZoom)) : DEFAULT_GENERAL_SETTINGS.petZoom,
+    petWindowX: typeof input?.petWindowX === "number" && isFinite(input.petWindowX)
+      ? Math.round(input.petWindowX) : undefined,
+    petWindowY: typeof input?.petWindowY === "number" && isFinite(input.petWindowY)
+      ? Math.round(input.petWindowY) : undefined,
     sidebarVisible: windowVisibility.sidebarVisible,
     tasksVisible: windowVisibility.tasksVisible,
     launchAtLogin: Boolean(input?.launchAtLogin),
@@ -928,9 +928,6 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     amapKey: typeof input?.amapKey === "string" ? input.amapKey : "",
     travelEnabled: Boolean(input?.travelEnabled),
     playwrightMcpEnabled: Boolean(input?.playwrightMcpEnabled),
-    firecrawlHostedMcpEnabled: input?.firecrawlHostedMcpEnabled === undefined
-      ? DEFAULT_GENERAL_SETTINGS.firecrawlHostedMcpEnabled
-      : Boolean(input.firecrawlHostedMcpEnabled),
     searchEngine: ["off", "bocha", "tavily", "minimax"].includes(String(input?.searchEngine))
       ? (input!.searchEngine as "off" | "bocha" | "tavily" | "minimax")
       : "off",
@@ -1117,27 +1114,117 @@ function getStickerManagerConfig(): StickerConfigItem[] {
   return getAllStickerConfig(stickerSettings);
 }
 
-// 计算 chat / sidebar / tasks 三个窗口的初始位置。
-// 规则：聊天居中显示，侧边栏和定时任务依次往右排，三者同高 720 并垂直居中。
-// 屏宽不够时整组左对齐，让用户自己拖。
-function computeLayout(): {
-  chat: { x: number; y: number };
-  sidebar: { x: number; y: number };
-  tasks: { x: number; y: number };
-} {
-  const display = screen.getPrimaryDisplay();
-  const { x: dx, y: dy, width: dw, height: dh } = display.workArea;
-  const CHAT_W = 1280;
-  const SB_W = 320;
-  const TK_W = 320;
-  const WIN_H = 760;
-  const cy = dy + Math.max(0, Math.floor((dh - WIN_H) / 2));
-  const chatX = dx + Math.max(0, Math.floor((dw - CHAT_W) / 2));
+// ── 多面板自适应布局 ──────────────────────────────────────────────
+
+interface PanelLayout { x: number; y: number; }
+
+/**
+ * 将窗口位置 clamp 到 workArea 内，保证至少 minVisibleW × minVisibleH 可见。
+ * 允许窗口部分超出屏幕（可正可负），但可见区域不少于指定阈值。
+ */
+function clampWindowToWorkArea(
+  pos: PanelLayout,
+  size: { width: number; height: number },
+  workArea: { x: number; y: number; width: number; height: number },
+  minVisibleW = 120,
+  minVisibleH = 80,
+): PanelLayout {
+  const minX = workArea.x - size.width + minVisibleW;
+  const maxX = workArea.x + workArea.width - minVisibleW;
+  const minY = workArea.y - size.height + minVisibleH;
+  const maxY = workArea.y + workArea.height - minVisibleH;
+
+  function clamp(value: number, lo: number, hi: number): number {
+    return Math.max(lo, Math.min(hi, value));
+  }
+
   return {
-    chat: { x: chatX, y: cy },
-    sidebar: { x: chatX + CHAT_W, y: cy },
-    tasks: { x: chatX + CHAT_W + SB_W, y: cy },
+    x: clamp(pos.x, minX, maxX),
+    y: clamp(pos.y, minY, maxY),
   };
+}
+
+/**
+ * 计算多面板自适应布局。
+ *
+ * 策略：
+ * - 水平排列：totalWidth <= workArea.width → 三面板水平居中
+ * - 阶梯排列：totalWidth > workArea.width → sidebar/tasks 贴右边缘并垂直错开
+ *
+ * 所有窗口均 clampWindowToWorkArea 保证至少 120×80 可见。
+ */
+function computePanelLayout(
+  workArea: { x: number; y: number; width: number; height: number },
+  panels: Array<{ width: number; height: number }>,
+  gap = 8,
+): PanelLayout[] {
+  const totalWidth = panels.reduce((sum, p, i) => sum + p.width + (i > 0 ? gap : 0), 0);
+  const maxPanelHeight = Math.max(...panels.map(p => p.height));
+  const baseY =
+    workArea.height >= maxPanelHeight
+      ? workArea.y + Math.floor((workArea.height - maxPanelHeight) / 2)
+      : workArea.y;
+
+  if (totalWidth <= workArea.width) {
+    // 水平居中排列
+    const startX = workArea.x + Math.floor((workArea.width - totalWidth) / 2);
+    const positions: PanelLayout[] = [];
+    let curX = startX;
+    for (let i = 0; i < panels.length; i++) {
+      const pos = clampWindowToWorkArea({ x: curX, y: baseY }, panels[i], workArea);
+      positions.push(pos);
+      curX += panels[i].width + gap;
+    }
+    return positions;
+  }
+
+  // 阶梯排列：总宽超屏
+  // chat: 居中（clamp 后）
+  const chatPos = clampWindowToWorkArea(
+    { x: workArea.x + Math.floor((workArea.width - panels[0].width) / 2), y: baseY },
+    panels[0],
+    workArea,
+  );
+
+  // sidebar: 优先 chat 右侧有 gap；不够则贴 workArea 右边缘
+  const sidebarMaxX = workArea.x + workArea.width - panels[1].width;
+  const sidebarX = Math.min(chatPos.x + panels[0].width + gap, sidebarMaxX);
+  const sidebarPos = clampWindowToWorkArea({ x: sidebarX, y: baseY }, panels[1], workArea);
+
+  // tasks: 贴右边缘，y 与 sidebar 错开 48px
+  const tasksX = Math.min(sidebarPos.x, sidebarMaxX);
+  const tasksY = clampWindowToWorkArea(
+    { x: tasksX, y: sidebarPos.y + 48 },
+    panels[2],
+    workArea,
+  );
+
+  return [chatPos, sidebarPos, tasksY];
+}
+
+// 计算 chat / sidebar / tasks 三个窗口的初始位置。
+// 规则：优先鼠标所在 display；窗口自适应 workArea，保证至少 120×80 可见。
+function computeLayout(): {
+  chat: PanelLayout;
+  sidebar: PanelLayout;
+  tasks: PanelLayout;
+} {
+  const cursor = screen.getCursorScreenPoint();
+  const displays = screen.getAllDisplays();
+  const display =
+    displays.find(d => {
+      const { x, y, width, height } = d.workArea;
+      return cursor.x >= x && cursor.x < x + width && cursor.y >= y && cursor.y < y + height;
+    }) ?? screen.getPrimaryDisplay();
+
+  const { workArea } = display;
+  const panels = [
+    { width: 1280, height: 760 }, // chat
+    { width: 320, height: 760 },  // sidebar
+    { width: 320, height: 760 },  // tasks
+  ];
+  const [chatPos, sidebarPos, tasksPos] = computePanelLayout(workArea, panels, 8);
+  return { chat: chatPos, sidebar: sidebarPos, tasks: tasksPos };
 }
 
 
@@ -1809,7 +1896,44 @@ function attachExternalLinkHandler(win: BrowserWindow): void {
   });
 }
 function createWindow(): void {
+  const settings = loadGeneralSettings();
+  let restoreX: number | undefined;
+  let restoreY: number | undefined;
+
+  if (settings.petWindowX !== undefined && settings.petWindowY !== undefined) {
+    const PET_W = PET_WINDOW_BASE_WIDTH;
+    const PET_H = PET_WINDOW_BASE_HEIGHT;
+    const targetBounds = {
+      x: settings.petWindowX,
+      y: settings.petWindowY,
+      width: PET_W,
+      height: PET_H,
+    };
+    const display = screen.getDisplayMatching(targetBounds);
+    const wa = display.workArea;
+
+    // 窗口与 workArea 交集至少 80x80 才使用保存的坐标
+    const interW =
+      Math.min(targetBounds.x + PET_W, wa.x + wa.width) -
+      Math.max(targetBounds.x, wa.x);
+    const interH =
+      Math.min(targetBounds.y + PET_H, wa.y + wa.height) -
+      Math.max(targetBounds.y, wa.y);
+
+    if (interW >= 80 && interH >= 80) {
+      restoreX = settings.petWindowX;
+      restoreY = settings.petWindowY;
+    } else {
+      console.log(
+        "[Cyrene] 桌宠保存位置已离屏（仅 " +
+          interW + "x" + interH + " 可见），使用默认位置",
+      );
+    }
+  }
+
   mainWindow = new BrowserWindow({
+    x: restoreX,
+    y: restoreY,
     width: PET_WINDOW_BASE_WIDTH,
     height: PET_WINDOW_BASE_HEIGHT,
     transparent: true,
@@ -2402,7 +2526,11 @@ ipcMain.on(IPC.WINDOW_MOVE, (_event, dx: number, dy: number) => {
 
 ipcMain.on(IPC.WINDOW_MOVE_TO, (_event, x: number, y: number) => {
   if (!mainWindow) return;
-  mainWindow.setPosition(Math.round(x), Math.round(y), false);
+  const rx = Math.round(x);
+  const ry = Math.round(y);
+  mainWindow.setPosition(rx, ry, false);
+  // 拖拽结束或 setPosition 时保存位置
+  void saveGeneralSettings({ petWindowX: rx, petWindowY: ry });
 });
 
 /**
@@ -2989,12 +3117,9 @@ app.whenReady().then(async () => {
       await syncVolcanoSearchMcp(saved);
     }
 
-    // Playwright / Firecrawl hosted MCP：按 settings 字段自动连接/断开
+    // Playwright MCP：按 settings 字段自动连接/断开
     if ("playwrightMcpEnabled" in tts) {
       await syncPlaywrightMcp(saved);
-    }
-    if ("firecrawlHostedMcpEnabled" in tts) {
-      await syncFirecrawlHostedMcp(saved);
     }
 
     // Opener 主动开口：档位变化时重启
@@ -3496,13 +3621,17 @@ app.whenReady().then(async () => {
   registerEmailTools();
   syncBuiltInToolToggles(loadGeneralSettings());
 
-  // 内置 MCP 自动连接：Playwright (默认关闭,选项控制) / Firecrawl hosted (默认开启,零配置)
+  // 内置 MCP 自动连接：Playwright (默认关闭,选项控制)
   const initialSettings = loadGeneralSettings();
+
+  // 一次性清理已下架的内置 MCP（Firecrawl hosted 等）
+  const removed = await pruneMcpServersByIds([...REMOVED_BUILTIN_MCP_IDS]);
+  if (removed.length > 0) {
+    console.log("[Cyrene] 已清理遗留的已下架内置 MCP:", removed.join(", "));
+  }
+
   void syncPlaywrightMcp(initialSettings).catch((e) =>
     console.error("[Cyrene] playwright MCP sync failed:", e)
-  );
-  void syncFirecrawlHostedMcp(initialSettings).catch((e) =>
-    console.error("[Cyrene] firecrawl hosted MCP sync failed:", e)
   );
 
   // Skill 系统：扫描双源 skills + 注册 meta-tool
@@ -3831,7 +3960,7 @@ app.whenReady().then(async () => {
     const sceneProvider = getSceneEmbeddingProvider();
     if (sceneProvider) {
       sceneEmbeddingIndex = await buildSceneIndex(sceneProvider);
-      console.log("[SceneEmbedding] index built:", sceneEmbeddingIndex.scenes.length, "scenes");
+      console.log("[SceneEmbedding] index built:", Object.keys(sceneEmbeddingIndex.scenes).length, "scenes");
     } else {
       console.warn("[SceneEmbedding] bge-m3 model not found. Scene embedding disabled.");
     }
