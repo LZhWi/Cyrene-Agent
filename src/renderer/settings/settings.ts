@@ -2657,6 +2657,26 @@ window.settings?.onSwitchSection?.((section) => {
   }
 })();
 
+/* ===== Embedding model status ===== */
+(async () => {
+  const bgem3El = document.getElementById("embedding-bgem3-status");
+  const minilmEl = document.getElementById("embedding-minilm-status");
+  try {
+    const status = await window.modelConfig?.getModelInstallStatus?.();
+    if (!status) {
+      if (bgem3El) bgem3El.textContent = "状态未知";
+      if (minilmEl) minilmEl.textContent = "状态未知";
+      return;
+    }
+    if (bgem3El) bgem3El.textContent = status.embedding?.bgem3 ? "已下载 · 约 570MB" : "未下载";
+    if (minilmEl) minilmEl.textContent = status.embedding?.minilm ? "已下载 · 约 23MB" : "未下载";
+  } catch (err) {
+    console.warn("[Embedding] status check failed:", err);
+    if (bgem3El) bgem3El.textContent = "状态未知";
+    if (minilmEl) minilmEl.textContent = "状态未知";
+  }
+})();
+
 /* ===== Embedding download / delete ===== */
 (function () {
   const downloadBtn = document.getElementById("embedding-download-btn") as HTMLButtonElement | null;

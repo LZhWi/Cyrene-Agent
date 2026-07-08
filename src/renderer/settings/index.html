@@ -389,15 +389,15 @@
               <div class="agent-setting-subgroup">
                 <strong>Embedding 模型</strong>
                 <div class="rag-model-options">
-                  <button type="button" class="rag-model-card is-active" data-value="minilm">
-                    <span class="rag-model-card__title">轻量 MiniLM</span>
-                    <span class="rag-model-card__desc">适合日常闲聊 / 小文档，速度快，占用低。</span>
-                    <em>已安装 · 约 23MB</em>
-                  </button>
-                  <button type="button" class="rag-model-card" data-value="bgem3">
+                  <button type="button" class="rag-model-card is-active" data-value="bgem3">
                     <span class="rag-model-card__title">专业 BGE-M3</span>
-                    <span class="rag-model-card__desc">中文更强，适合长文档、小说和专业检索。</span>
-                    <em>已安装 · 约 570MB</em>
+                    <span class="rag-model-card__desc">中文效果优秀，支持贴纸语义匹配和场景语气注入。</span>
+                    <em id="embedding-bgem3-status">检测中...</em>
+                  </button>
+                  <button type="button" class="rag-model-card" data-value="minilm">
+                    <span class="rag-model-card__title">轻量 MiniLM</span>
+                    <span class="rag-model-card__desc">兼容项，中文效果一般。</span>
+                    <em id="embedding-minilm-status">检测中...</em>
                   </button>
                 </div>
               </div>
@@ -1225,7 +1225,7 @@
               <ul>
                 <li>📧 电子邮箱：1357502569@qq.com（邮件标题请注明【版权事宜】）</li>
                 <li>🎵 <a href="https://space.bilibili.com/260670644" target="_blank" rel="noopener noreferrer">B站：Playa0 作者空间</a>（私信请注明【版权联络】）</li>
-                <li>🧩 GitHub：待补充</li>
+                <li>🧩 GitHub：<a href="https://github.com/Playa-0v0/Cyrene-Agent" target="_blank" rel="noopener noreferrer">Playa-0v0/Cyrene-Agent</a></li>
               </ul>
             </article>
 

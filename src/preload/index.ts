@@ -292,6 +292,7 @@ contextBridge.exposeInMainWorld("stickerManager", stickerManagerApi);
 
 const modelConfigApi = {
   get: () => ipcRenderer.invoke(IPC.MODEL_CONFIG_GET),
+  getModelInstallStatus: () => ipcRenderer.invoke(IPC.MODEL_GET_INSTALL_STATUS),
   onChanged: (callback: (config: unknown) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, config: unknown) => callback(config);
     ipcRenderer.on(IPC.MODEL_CONFIG_CHANGED, listener);

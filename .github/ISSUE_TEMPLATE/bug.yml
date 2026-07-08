@@ -5,12 +5,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        ## ⚠️ 请先确认环境
-        本项目**仅在 Windows 10/11 + Node.js 24 LTS 下提供支持**。
-        其他 Node 版本（18 / 20 / 22 / 26 等）不作为支持目标。
+## ⚠️ 请先确认环境
+从源码构建需要 **Node.js 24 LTS**（`npm install` / `npm run build` 依赖此版本）。
+Electron runtime 当前为 **Electron 33**（暂不升级）。
 
-        Please first confirm you are on **Windows 10/11 + Node.js 24 LTS**.
-        Other Node versions are not supported targets.
+Please first confirm you are using **Node.js 24 LTS** for installation and build.
+Electron runtime is currently **Electron 33**.
 
   - type: dropdown
     id: os
