@@ -4215,10 +4215,13 @@ function playTtsAudio(base64: string, format: "wav" | "mp3" = "mp3"): void {
 }
 
 // 引擎选择切换
-document.querySelectorAll<HTMLButtonElement>(".tts-engine").forEach((btn) => {
+// 只匹配带 data-engine 的按钮（即 TTS 厂商按钮）——主动开口档位按钮虽然
+// 共用 .tts-engine 视觉 class，但只有 data-mode 没有 data-engine，
+// 用属性选择器避免误触把它们当作 TTS 厂商处理。
+document.querySelectorAll<HTMLButtonElement>("[data-engine]").forEach((btn) => {
   btn.addEventListener("click", () => {
     const engine = btn.dataset.engine || "off";
-    document.querySelectorAll<HTMLButtonElement>(".tts-engine").forEach((b) => {
+    document.querySelectorAll<HTMLButtonElement>("[data-engine]").forEach((b) => {
       b.classList.remove("is-active");
       b.setAttribute("aria-checked", "false");
     });
