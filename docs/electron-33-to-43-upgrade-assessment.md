@@ -329,13 +329,15 @@ npm start
 - ⚠️ pixi-live2d-display beta 版本需确认兼容性
 
 ### 建议
-1. **先升级到 Electron 35 或 36**，评估影响
-2. 重点测试透明窗口 + 鼠标穿透控制器
-3. 验证 native 模块重建成功
-4. 确认 35/36 稳定后再升级到 43
+1. **主路线直接升级到 Electron 43**
+2. 如果失败，再回退到 40/38/35 做定位
+3. 重点测试透明窗口 + 鼠标穿透控制器
+4. 验证 native 模块重建成功
 
 ### 下一步
-- 创建 `chore/electron-upgrade` 分支
-- 执行 `npm install electron@43.0.0 --save-dev`
-- 运行 `npm rebuild`
-- 执行测试清单
+- 当前分支 `chore/electron-upgrade` 已完成 Electron 43 试升级
+- `npm install` / `npm ci` 已通过
+- `npm run build` 已通过
+- `npm test` 已通过（350 tests / 52 files）
+- 仍需完成 GUI 手动测试清单（透明窗口、Live2D、IPC、托盘等）
+- GUI 测试通过后再提交并 push
