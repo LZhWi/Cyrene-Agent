@@ -2101,7 +2101,6 @@ function switchSection(section: string): void {
     !isTasks &&
     !isIdentity &&
     !isPlugins &&
-    !isExternalMcp &&
     !isSkills &&
     !isTokens &&
     !isChannels &&

@@ -357,7 +357,7 @@ provided in a future release. For now, the "Off" mode works fine.
 
 | Layer | Tech |
 |---|---|
-| Shell | Electron 33 |
+| Shell | Electron 43 |
 | Renderer | Vite 5 + TypeScript 5 + Pixi.js 7 |
 | Live2D | `pixi-live2d-display` 0.5.0-beta + Cubism Core |
 | AI / MCP | `@modelcontextprotocol/sdk`, `@ag-ui/core`, `@ag-ui/client` |
@@ -371,13 +371,13 @@ provided in a future release. For now, the "Off" mode works fine.
 ```
 models/                # Local AI models (user-provided, see docs/local-models.md)
 ├── Xenova/
-│   ├── bge-m3/        # Embedding (sticker matching + scene detection, ~570MB)
+│   ├── bge-m3/       # Embedding model (sticker matching + scene detection, ~570MB)
 │   │   ├── tokenizer.json
 │   │   ├── config.json
 │   │   └── onnx/model_quantized.onnx
-│   └── all-MiniLM-L6-v2/  # Document / memory Embedding (~23MB)
+│   └── all-MiniLM-L6-v2/  # Lightweight embedding (~23MB, optional)
 ├── bge-reranker-base/  # Standard reranker (~279MB, optional)
-└── ms-marco-MiniLM-L-6-v2/  # Lightweight reranker (~23MB)
+└── ms-marco-MiniLM-L-6-v2/  # Lightweight reranker (~23MB, optional)
 
 src/
 ├── main/             # Electron main process
@@ -385,8 +385,9 @@ src/
 │   ├── call/         # Voice call core logic
 │   ├── channels/     # External channel adapters (Lark / WeChat iLink / ...)
 │   ├── chats/        # Multi-chat history and persistence
+│   ├── embedding-manager.ts  # Local embedding model lifecycle
 │   ├── game-bot/     # Game automation (driven by game-recipes)
-│   ├── memory/       # L0/L1/L2 memory engine + RAG
+│   ├── memory/       # L0/L1/L2 memory engine
 │   ├── opener/       # Launcher / tray / single-instance
 │   ├── orchestrator/ # Agent main loop + tool dispatch
 │   ├── rag/          # Retrieval-augmented generation + worldbook injection
@@ -394,13 +395,14 @@ src/
 │   ├── scheduler/    # Scheduled tasks (reminders / agenda)
 │   ├── sim/          # Scenario simulation harness
 │   ├── skills/       # Agent skill system
+│   ├── sticker-*.ts  # Sticker semantic matching (protocol / storage / desc / embedder)
 │   └── tts/          # Text-to-speech (multi-engine)
 ├── preload/          # Electron preload bridges (IPC exposure)
 ├── renderer/         # Vite renderer
 │   ├── call/         # Voice call window
 │   ├── chat/         # Main chat UI
 │   ├── live2d/       # Live2D model rendering logic
-│   ├── public/       # Static assets (audio / avatars / models / stickers)
+│   ├── public/       # Static assets (audio / avatars / Cubism Core / stickers)
 │   ├── settings/     # Settings center
 │   ├── sidebar/      # Sidebar
 │   ├── sticker-manager/ # Sticker manager
