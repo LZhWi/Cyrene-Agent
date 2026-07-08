@@ -59,9 +59,35 @@ export async function switchEmbeddingModel(modelKey: string): Promise<{ ok: bool
     // Switch the embedding pipeline first
     switchModel(modelKey);
     const newProvider = getEmbeddingProvider("auto", undefined, undefined, modelKey);
-    
-    // 模型不存在时无法切换
+
+    // 模型不存在时无法切换 — 输出详细诊断帮助排查"放到 models/ 却检测不到"
     if (!newProvider) {
+      try {
+        // require to avoid circular import at module load
+        const { getModelInstallStatusDetail } = require("./model-status") as typeof import("./model-status");
+        const detail = getModelInstallStatusDetail("embedding", modelKey);
+        if (detail.existingProjectDir) {
+          // Project-side directory exists but is incomplete — explicit warning,
+          // do NOT silently fall back to HuggingFace cache.
+          console.error(
+            `[Cyrene] embedding model "${modelKey}" project directory exists but is incomplete.\n` +
+            `  existingProjectDir: ${detail.existingProjectDir}\n` +
+            `  requiredFiles:      ${JSON.stringify(detail.requiredFiles)}\n` +
+            `  missingFiles:       ${JSON.stringify(detail.missingFiles)}\n` +
+            `  HF cache fallback suppressed. Fix the files above, then retry.`,
+          );
+        } else {
+          console.error(
+            `[Cyrene] embedding model "${modelKey}" not detected anywhere.\n` +
+            `  modelDirCandidates: ${JSON.stringify(detail.modelDirCandidates)}\n` +
+            `  subPathCandidates:  ${JSON.stringify(detail.subPathCandidates)}\n` +
+            `  requiredFiles:      ${JSON.stringify(detail.requiredFiles)}\n` +
+            `  Drop the model files into one of the candidates above.`,
+          );
+        }
+      } catch (diagErr) {
+        console.error("[Cyrene] model diagnostic log failed:", diagErr);
+      }
       return { ok: false, clearedEntries: 0, error: "Local embedding model not found. Cannot switch." };
     }
     

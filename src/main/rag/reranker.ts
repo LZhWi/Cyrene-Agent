@@ -1,5 +1,6 @@
 ﻿// Reranker module — cross-encoder reranking for RAG
 import * as path from "path";
+import * as os from "os";
 import { app } from "electron";
 
 // ── Types ──
@@ -24,6 +25,7 @@ async function loadRerankerPipeline(modelDir: string): Promise<any> {
 
   // Save original localModelPath (embedding may have set it)
   const originalPath = env.localModelPath;
+  // 主路径：项目根 models/。兜底：HF cache，通过 cache_dir 选项传给 pipeline。
   env.localModelPath = getModelsDir();
   env.allowLocalModels = true;
   env.allowRemoteModels = false;
@@ -32,6 +34,7 @@ async function loadRerankerPipeline(modelDir: string): Promise<any> {
   try {
     const pipe = await pipeline("text-classification", modelDir, {
       quantized: true,
+      cache_dir: path.join(os.homedir(), ".cache", "huggingface"),
     });
     console.log(`[Reranker] pipeline "${modelDir}" loaded OK`);
     return pipe;
