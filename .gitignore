@@ -69,5 +69,6 @@ videos/
 docs/
 !docs/
 !docs/local-models.md
+!docs/electron-33-to-43-upgrade-assessment.md
 PRODUCT.md
 sticker-descriptions/
