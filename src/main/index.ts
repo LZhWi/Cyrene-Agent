@@ -3649,6 +3649,10 @@ app.whenReady().then(async () => {
   });
 
   setDispatcherBuildAndRunAgent(async (msg, sessionId, priorMessages) => {
+    // 渠道响应结果：统一由 dispatcher 按 cap 降级到 OutgoingMessage.parts。
+    // 包含 sticker 决定（从 onAgentRunFinished 返回，避免在 dispatcher 端重新算一遍 embedding）。
+    const channelResult: { text: string; sticker: string | null } = { text: "", sticker: null };
+
     // Phase 3.3：按 toolSandbox 过滤可用工具
     const sandbox = loadChannelsSettings().toolSandbox;
     const allTools = toolRegistry.getEnabledTools();
@@ -3699,12 +3703,16 @@ app.whenReady().then(async () => {
         error: (err) => reject(err instanceof Error ? err : new Error(String(err))),
       });
     });
+    channelResult.text = reply;
     if (agent.lastResult) {
-      await onAgentRunFinished(agent.lastResult, msg.text, onRunFinishedDeps, msg.channel);
+      const finished = await onAgentRunFinished(agent.lastResult, msg.text, onRunFinishedDeps, msg.channel);
+      // 把 sticker 决定透出给 dispatcher，让它纳入 OutgoingMessage.parts；
+      // 桌面聊天窗的 sticker 仍由 onAgentRunFinished 内部 IPC 广播承担，此处不重复。
+      channelResult.sticker = finished.sticker;
     }
     // 落历史
     void indexConversationTurn(sessionId, msg.text, reply);
-    return reply;
+    return channelResult;
   });
 
   // Phase 3.1：注入 TTS 合成 —— dispatcher 在 reply 后会用这个生成 mp3
@@ -3893,7 +3901,8 @@ app.whenReady().then(async () => {
   };
   registerAgUiIpc(
     async (input: AguiRunInput) => buildAgentRunOptions(input, buildOptionsDeps),
-    async (result, latestUserText) => onAgentRunFinished(result, latestUserText, onRunFinishedDeps),
+    // 桌面 IPC 路径不消费 sticker（sticker 由 onAgentRunFinished 内部 IPC 广播承担）
+    async (result, latestUserText) => { await onAgentRunFinished(result, latestUserText, onRunFinishedDeps); },
     () => chatWindow,
   );
 

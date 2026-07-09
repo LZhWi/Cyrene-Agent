@@ -27,6 +27,10 @@ import { channelManager, type ChannelManager } from "./manager";
 import { loadChannelsSettings, type ChannelsSettings } from "./settings-store";
 import { appendLog, reloadLogFromDisk } from "./message-log";
 import { appendHistory as appendChannelHistory } from "./history-log";
+import { resolveLocalStickerPath } from "../sticker-protocol";
+import { getStickersDir, loadUserStickerManifest } from "../sticker-storage";
+import { BUILT_IN_STICKER_FILES } from "../sticker-descriptions";
+import { BUILT_IN_STICKER_IDS } from "../../shared/sticker-types";
 
 /** Phase A：用于拼接历史对话的轻量 ChatMessage 形状（与 orchestrator ChatMessage 兼容）。 */
 interface ChatMessage {
@@ -103,13 +107,52 @@ export function lookupOriginalSender(sessionId: string): { channel: ChannelId; s
   return entry ? { channel: entry.channel, senderId: entry.senderId } : null;
 }
 
+/**
+ * 把 sticker id 解析成本地绝对路径（用于 OutgoingPart sticker.imagePath）。
+ *
+ * - 内置 sticker（BUILT_IN_STICKER_IDS）：从 app.getAppPath() 下找 public/stickers/<file>
+ *   - dev 模式：<appPath>/src/renderer/public/stickers
+ *   - built 模式：<appPath>/dist/renderer/stickers
+ *   两个路径都尝试，第一个命中即返回。
+ * - 用户 sticker：从 userData/stickers/<file>（通过 manifest 拿到 file 字段）。
+ * - 解析失败（文件不存在、路径穿越、未知 id）→ 返回 null，调用方跳过此 part。
+ */
+export function resolveStickerImagePath(stickerId: string): string | null {
+  if (!stickerId) return null;
+
+  // 内置 sticker：直接用 BUILT_IN_STICKER_FILES 映射到 public 目录
+  if ((BUILT_IN_STICKER_IDS as readonly string[]).includes(stickerId)) {
+    const file = BUILT_IN_STICKER_FILES[stickerId];
+    if (!file) return null;
+    const appPath = app.getAppPath();
+    // 优先 built 路径（生产），其次 dev 路径（开发模式）
+    const candidates = [
+      path.join(appPath, "dist", "renderer", "stickers", file),
+      path.join(appPath, "src", "renderer", "public", "stickers", file),
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+    return null;
+  }
+
+  // 用户 sticker：从 manifest 拿 file 字段，再走 sticker-protocol 的安全解析
+  // （resolveLocalStickerPath 已做路径穿越防护）
+  const manifest = loadUserStickerManifest();
+  const meta = manifest[stickerId];
+  if (!meta) return null;
+  return resolveLocalStickerPath(getStickersDir(), meta.file);
+}
+
 /** Dispatcher 配置（依赖注入）。 */
 export interface DispatcherDeps {
   manager: ChannelManager;
   /** 渲染端 chatWindow 用于镜像显示（可选） */
   getChatWindow?: () => { webContents: { isDestroyed(): boolean; send: (channel: string, ...args: unknown[]) => void }; isDestroyed(): boolean } | null;
-  /** Phase 1+：完整 agent 调用。Phase 0 留空，返回纯 echo。 */
-  buildAndRunAgent?: (msg: IncomingMessage, sessionId: string, priorMessages?: ChatMessage[]) => Promise<string>;
+  /** Phase 1+：完整 agent 调用。Phase 0 留空，返回纯 echo。
+   *  返回 text（必填）+ sticker（可选 sticker id，由 dispatcher 解析成本地路径后纳入 OutgoingMessage.parts）。
+   *  sticker 解析失败的会静默跳过（不会把坏数据塞进 parts）。 */
+  buildAndRunAgent?: (msg: IncomingMessage, sessionId: string, priorMessages?: ChatMessage[]) => Promise<{ text: string; sticker: string | null }>;
   /** Phase A：读这个 sessionId 最近 N 条对话历史（按时间顺序）。不提供时不拼历史，行为同 Phase 0。 */
   loadRecentChannelHistory?: (sessionId: string, limit: number) => Promise<ChatMessage[]>;
   /** Phase 3：可选 — 把文本合成成音频 (mp3 buffer)。失败返回 null，dispatcher 会跳过 audio。 */
@@ -200,6 +243,7 @@ export class ChannelDispatcher {
 
     // Phase 1 实装的 agent 调用；Phase 0 没有 → echo
     let replyText: string;
+    let sticker: string | null = null;
     if (this.deps.buildAndRunAgent) {
       // Phase A：拼接最近 16 条历史 (同桌面端 buildModelMessages 行为).
       // 加载失败/未注入 → 不拼历史 (兼容旧实现).
@@ -213,7 +257,9 @@ export class ChannelDispatcher {
         }
       }
       try {
-        replyText = await this.deps.buildAndRunAgent(msg, sessionId, priorMessages);
+        const result = await this.deps.buildAndRunAgent(msg, sessionId, priorMessages);
+        replyText = result.text;
+        sticker = result.sticker;
       } catch (err) {
         console.error(LOG, "agent 调用失败:", err instanceof Error ? err.message : err);
         return null;
@@ -247,6 +293,20 @@ export class ChannelDispatcher {
         } catch (err) {
           console.warn(LOG, "TTS 合成失败（跳过音频）:", err instanceof Error ? err.message : err);
         }
+      }
+    }
+
+    // Phase 4：sticker 决定纳入 OutgoingMessage.parts（统一消息模型）。
+    // 由 onAgentRunFinished 计算（同一个 embedding 匹配结果，避免重复计算），
+    // dispatcher 只负责解析本地路径 + 按 cap 降级。
+    // 桌面聊天窗的 sticker 由 onAgentRunFinished 内部 IPC 广播承担，此处不重复。
+    if (sticker && this.settings.stickerEnabled) {
+      const stickerPath = resolveStickerImagePath(sticker);
+      if (stickerPath) {
+        parts.push({ kind: "sticker", stickerId: sticker, imagePath: stickerPath });
+        console.log(LOG, `sticker 决定: id=${sticker} → ${stickerPath}`);
+      } else {
+        console.warn(LOG, `sticker 解析失败（跳过）: id=${sticker}`);
       }
     }
 
@@ -339,11 +399,12 @@ export const channelDispatcher = new ChannelDispatcher({
   manager: channelManager,
 });
 
-/** 给 index.ts 调：注入 buildAndRunAgent（让 dispatcher 真正跑 agent） */
+/** 给 index.ts 调：注入 buildAndRunAgent（让 dispatcher 真正跑 agent）
+ *  返回 text + sticker：text 直接做 reply；sticker 由 dispatcher 解析成本地路径后纳入 OutgoingMessage.parts。 */
 export function setDispatcherBuildAndRunAgent(
-  fn: (msg: IncomingMessage, sessionId: string, priorMessages?: { role: "user" | "assistant" | "system"; content?: string }[]) => Promise<string>,
+  fn: (msg: IncomingMessage, sessionId: string, priorMessages?: ChatMessage[]) => Promise<{ text: string; sticker: string | null }>,
 ): void {
-  channelDispatcher.deps.buildAndRunAgent = fn as never;
+  channelDispatcher.deps.buildAndRunAgent = fn;
 }
 
 /** Phase 3.1：注入 TTS 合成（返回 mp3 Buffer 或 null） */

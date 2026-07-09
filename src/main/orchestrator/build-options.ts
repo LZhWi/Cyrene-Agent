@@ -245,13 +245,17 @@ export async function buildAgentRunOptions(
  * 与 index.ts 原 AG-UI bridge 的 onRunFinished 行为完全一致。
  *
  * 注意：feeling 字段由 inferRuntimeState 内部副作用更新；本函数只同步 status/expression/updatedAt。
+ *
+ * 渠道（wechat/feishu/...）的 sticker 走 OutgoingMessage.parts（统一消息模型）；
+ * 桌面聊天窗保留 IPC 广播（向后兼容 + 桌面渲染端 sticker 选择器依赖此事件）。
+ * 两者从同一份 sticker 决定出发，不会重复。
  */
 export async function onAgentRunFinished(
   result: CyreneRunResult,
   latestUserText: string,
   deps: OnRunFinishedDeps,
   channel?: "wechat" | "feishu",
-): Promise<void> {
+): Promise<{ sticker: string | null }> {
   const chatContent = result.reply;
   deps.scheduleMemoryWrite(latestUserText, chatContent);
 
@@ -303,4 +307,10 @@ export async function onAgentRunFinished(
       void deps.observeRuntimeState(settings, [], latestUserText, chatContent);
     }
   }
+
+  // 返回 sticker 决定：
+  // - 桌面聊天窗的 sticker 由 IPC 广播（上面 chatWin.webContents.send）继续承担
+  // - 渠道（wechat/feishu/...）的 sticker 由 dispatcher 收下，纳入 OutgoingMessage.parts
+  // - 桌面路径也返回 sticker 以保持签名一致；dispatcher 路径下 channel !== undefined 才会消费它
+  return { sticker };
 }
