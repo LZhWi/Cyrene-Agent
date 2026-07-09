@@ -132,6 +132,7 @@ export function startCall(): void {
   active = true;
   finalText = "";
   callHistory.length = 0;
+  console.log(LOG_PREFIX, "startCall 重置: finalText 清空, history 清空");
   startAsrStream(cfg);
   sendState("LISTENING");
 }
@@ -147,6 +148,7 @@ function startAsrStream(cfg: { appKey: string; accessKeyId: string; accessKeySec
 
 /** 结束本轮（VAD 静默）：停 ASR → 跑 agent → TTS → 播放。 */
 export async function endTurn(): Promise<void> {
+  console.log(LOG_PREFIX, "endTurn 入口: active=", active, "state=", currentState, "finalText.length=", finalText.length);
   if (!active || currentState !== "LISTENING") return;
 
   if (asrStream) asrStream.stop();
@@ -156,6 +158,7 @@ export async function endTurn(): Promise<void> {
 
   if (!text) {
     // 空文本，直接重启 ASR 回 LISTENING
+    console.log(LOG_PREFIX, "endTurn 空文本，直接重启 ASR");
     restartAsr();
     return;
   }
@@ -164,7 +167,9 @@ export async function endTurn(): Promise<void> {
 
   try {
     // 调 agent 获取回复
+    console.log(LOG_PREFIX, "runAgentTurn 开始, text.length=", text.length);
     const reply = await runAgentTurn(text);
+    console.log(LOG_PREFIX, "runAgentTurn 结果: reply.length=", reply?.length ?? "null");
     if (!reply) {
       sendError("未收到 agent 回复");
       sendState("LISTENING");
@@ -312,10 +317,14 @@ async function runAgentTurn(userText: string): Promise<string | null> {
 
     // 2. 直接调 LLM（不走 FC loop）
     const ms = modelSettingsGetter?.();
-    if (!ms || !ms.apiKey) return null;
+    if (!ms || !ms.apiKey) {
+      throw new Error("模型配置缺失或未填写 API Key");
+    }
 
     const adapter = getAdapter(ms.provider);
-    if (!adapter) return null;
+    if (!adapter) {
+      throw new Error(`不支持的模型 provider: ${ms.provider}`);
+    }
 
     const url = buildVendorUrlByProvider(ms.provider, ms.baseUrl);
     const systemPrompt = await systemPromptBuilder?.(userText) ?? "";
@@ -335,11 +344,11 @@ async function runAgentTurn(userText: string): Promise<string | null> {
       method: "POST",
       headers: { ...req.headers, "Content-Type": "application/json" },
       body: req.body,
+      signal: AbortSignal.timeout(30000),
     });
 
     if (!httpResp.ok) {
-      console.error(LOG_PREFIX, "LLM 请求失败:", httpResp.status);
-      return null;
+      throw new Error(`LLM 请求失败: ${httpResp.status}`);
     }
 
     const raw = await httpResp.json();
@@ -356,8 +365,9 @@ async function runAgentTurn(userText: string): Promise<string | null> {
 
     return reply || null;
   } catch (err) {
-    console.error(LOG_PREFIX, "LLM 调用失败:", err);
-    return null;
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(LOG_PREFIX, "LLM 调用失败:", msg);
+    throw new Error(`LLM 调用失败: ${msg}`);
   }
 }
 

@@ -295,7 +295,7 @@ let workletNode: AudioWorkletNode | null = null;
 let micStream: MediaStream | null = null;
 let vadSilenceTimer: ReturnType<typeof setTimeout> | null = null;
 let vadSilenceMs = 1000;
-let vadThreshold = 0.02; // 音量阈值
+let vadThreshold = 0.01; // 音量阈值，默认调低照顾安静环境/小声麦克风
 let hasSpoken = false; // 用户是否已开始说话（VAD 只在说过话后检测静默）
 
 async function startMicrophone(): Promise<void> {
@@ -340,6 +340,7 @@ async function startMicrophone(): Promise<void> {
 
 /** VAD 静默检测：连续 N ms 低于阈值判定说完 */
 function startVAD(): void {
+  let logCounter = 0;
   const checkInterval = setInterval(() => {
     if (!analyser || !analyserData) return;
     if (currentState !== "LISTENING") return;
@@ -350,8 +351,14 @@ function startVAD(): void {
     for (let i = 0; i < analyserData.length; i++) sum += analyserData[i];
     const avg = sum / analyserData.length / 255;
 
+    logCounter++;
+    if (logCounter % 10 === 0) {
+      console.log("[Call VAD] volume=", avg.toFixed(4), "threshold=", vadThreshold, "hasSpoken=", hasSpoken);
+    }
+
     if (avg >= vadThreshold) {
       // 有声音：标记已开始说话，重置静默计时
+      if (!hasSpoken) console.log("[Call VAD] 开始说话 detected, volume=", avg.toFixed(4));
       hasSpoken = true;
       if (vadSilenceTimer) {
         clearTimeout(vadSilenceTimer);
@@ -360,6 +367,7 @@ function startVAD(): void {
     } else if (hasSpoken) {
       // 静默且之前说过话：开始静默计时
       if (!vadSilenceTimer) {
+        console.log("[Call VAD] 静默开始，准备结束本轮");
         vadSilenceTimer = setTimeout(() => {
           console.log("[Call] VAD 静默检测触发，结束本轮");
           window.call?.turnEnd();
@@ -525,8 +533,10 @@ async function init(): Promise<void> {
     const cfg = await window.tts?.loadSettings();
     if (cfg) {
       vadSilenceMs = typeof cfg.asrVadSilenceMs === "number" ? cfg.asrVadSilenceMs : 1000;
+      vadThreshold = typeof cfg.asrVadThreshold === "number" ? cfg.asrVadThreshold : 0.01;
       showTranscript = Boolean(cfg.asrShowTranscript);
     }
+    console.log("[Call] VAD config: threshold=", vadThreshold, "silenceMs=", vadSilenceMs);
   } catch { /* ignore */ }
 
   // 粒子背景

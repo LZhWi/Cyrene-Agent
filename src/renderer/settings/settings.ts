@@ -1299,6 +1299,8 @@ const asrAliyunAccessKeyIdInput = document.getElementById("asr-aliyun-access-key
 const asrAliyunAccessKeySecretInput = document.getElementById("asr-aliyun-access-key-secret") as HTMLInputElement | null;
 const asrLanguageSelect = document.getElementById("asr-language") as HTMLSelectElement | null;
 const asrVadSilenceInput = document.getElementById("asr-vad-silence") as HTMLInputElement | null;
+const asrVadThresholdInput = document.getElementById("asr-vad-threshold") as HTMLInputElement | null;
+const asrVadThresholdValue = document.getElementById("asr-vad-threshold-value");
 const asrShowTranscriptCheckbox = document.getElementById("asr-show-transcript") as HTMLInputElement | null;
 
 function syncAsrVisibility(): void {
@@ -1323,6 +1325,11 @@ asrLanguageSelect?.addEventListener("change", () => void saveAsrField("asrLangua
 asrVadSilenceInput?.addEventListener("input", () => {
   void saveAsrField("asrVadSilenceMs", Number(asrVadSilenceInput.value) || 1000);
 });
+asrVadThresholdInput?.addEventListener("input", () => {
+  const v = Number(asrVadThresholdInput.value) || 0.01;
+  if (asrVadThresholdValue) asrVadThresholdValue.textContent = String(v);
+  void saveAsrField("asrVadThreshold", v);
+});
 asrShowTranscriptCheckbox?.addEventListener("change", () => void saveAsrField("asrShowTranscript", asrShowTranscriptCheckbox.checked));
 
 async function saveAsrField(field: string, value: unknown): Promise<void> {
@@ -1344,6 +1351,11 @@ async function loadAsrConfig(): Promise<void> {
       if (asrAliyunAccessKeySecretInput) asrAliyunAccessKeySecretInput.value = String(cfg.asrAliyunAccessKeySecret ?? "");
       if (asrLanguageSelect) asrLanguageSelect.value = String(cfg.asrLanguage ?? "zh");
       if (asrVadSilenceInput) asrVadSilenceInput.value = String(cfg.asrVadSilenceMs ?? 1000);
+      if (asrVadThresholdInput) {
+        const v = Number(cfg.asrVadThreshold) || 0.01;
+        asrVadThresholdInput.value = String(v);
+        if (asrVadThresholdValue) asrVadThresholdValue.textContent = String(v);
+      }
       if (asrShowTranscriptCheckbox) asrShowTranscriptCheckbox.checked = Boolean(cfg.asrShowTranscript);
     }
     syncAsrVisibility();

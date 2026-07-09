@@ -439,6 +439,8 @@ interface GeneralSettings {
   asrLanguage: "zh" | "en" | "auto";
   /** VAD 静默检测阈值（毫秒），500~2000，默认 1000 */
   asrVadSilenceMs: number;
+  /** VAD 音量阈值（0~1），默认 0.01。环境吵或麦克风音量低时可调 */
+  asrVadThreshold: number;
   /** 通话中显示文字转写 */
   asrShowTranscript: boolean;
   /** Opener 主动开口档位 */
@@ -566,6 +568,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   asrAliyunAccessKeySecret: "",
   asrLanguage: "zh",
   asrVadSilenceMs: 1000,
+  asrVadThreshold: 0.01,
   asrShowTranscript: false,
   openerMode: "off",
 };
@@ -957,6 +960,9 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     asrVadSilenceMs: typeof input?.asrVadSilenceMs === "number"
       ? Math.max(300, Math.min(30000, Math.round(input.asrVadSilenceMs)))
       : DEFAULT_GENERAL_SETTINGS.asrVadSilenceMs,
+    asrVadThreshold: typeof input?.asrVadThreshold === "number"
+      ? Math.max(0.001, Math.min(0.5, Number(input.asrVadThreshold)))
+      : DEFAULT_GENERAL_SETTINGS.asrVadThreshold,
     asrShowTranscript: Boolean(input?.asrShowTranscript),
     openerMode: ["off", "quiet", "normal", "lively"].includes(String(input?.openerMode))
       ? (input!.openerMode as "off" | "quiet" | "normal" | "lively")
