@@ -2243,7 +2243,8 @@ const channelsRateChannelEl = document.getElementById("channels-rate-channel") a
 const channelsTtsEl = document.getElementById("channels-tts-enabled") as HTMLInputElement | null;
 const channelsStickerEl = document.getElementById("channels-sticker-enabled") as HTMLInputElement | null;
 const channelsMirrorEl = document.getElementById("channels-mirror-desktop") as HTMLInputElement | null;
-const channelsSandboxEl = document.getElementById("channels-tool-sandbox") as HTMLInputElement | null;
+const channelsToolSandboxAllEl = document.getElementById("channels-tool-sandbox-all") as HTMLInputElement | null;
+const channelsToolSandboxSafeEl = document.getElementById("channels-tool-sandbox-safe") as HTMLInputElement | null;
 // 飞书配置输入框（Phase 2 长连接版：只需 App ID + App Secret）
 const channelsFeishuAppIdEl = document.getElementById("channels-feishu-app-id") as HTMLInputElement | null;
 const channelsFeishuAppSecretEl = document.getElementById("channels-feishu-app-secret") as HTMLInputElement | null;
@@ -2285,7 +2286,8 @@ async function loadChannelsPanel(): Promise<void> {
     if (channelsTtsEl) channelsTtsEl.checked = cfg.ttsEnabled !== false;
     if (channelsStickerEl) channelsStickerEl.checked = cfg.stickerEnabled !== false;
     if (channelsMirrorEl) channelsMirrorEl.checked = cfg.mirrorToDesktop !== false;
-    if (channelsSandboxEl) channelsSandboxEl.checked = cfg.toolSandbox === "safe-only";
+    if (channelsToolSandboxAllEl) channelsToolSandboxAllEl.checked = cfg.toolSandbox === "all";
+    if (channelsToolSandboxSafeEl) channelsToolSandboxSafeEl.checked = cfg.toolSandbox === "safe-only";
 
     // 飞书字段填充（长连接模式只需要 App ID；secret 加密存盘，UI 不回填明文）
     if (channelsFeishuAppIdEl) channelsFeishuAppIdEl.value = cfg.feishu.appId ?? "";
@@ -2318,7 +2320,7 @@ async function loadChannelsPanel(): Promise<void> {
         ttsEnabled: channelsTtsEl?.checked ?? true,
         stickerEnabled: channelsStickerEl?.checked ?? true,
         mirrorToDesktop: channelsMirrorEl?.checked ?? true,
-        toolSandbox: channelsSandboxEl?.checked ? "safe-only" : "all",
+        toolSandbox: channelsToolSandboxSafeEl?.checked ? "safe-only" : "all",
       });
     }, 200);
   };
@@ -2330,7 +2332,8 @@ async function loadChannelsPanel(): Promise<void> {
     channelsTtsEl,
     channelsStickerEl,
     channelsMirrorEl,
-    channelsSandboxEl,
+    channelsToolSandboxAllEl,
+    channelsToolSandboxSafeEl,
   ]) {
     el?.addEventListener("change", scheduleSave);
   }

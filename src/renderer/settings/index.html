@@ -845,9 +845,24 @@
                 <span class="switch"><input id="channels-mirror-desktop" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
                 <span class="form-row__label">桌面端镜像显示</span>
               </div>
-              <div class="form-row form-row--inline">
-                <span class="switch"><input id="channels-tool-sandbox" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
-                <span class="form-row__label">工具沙箱: 仅 safe 类 (禁用文件/shell 工具)</span>
+              <div class="form-row">
+                <label class="form-label">工具权限</label>
+                <div class="tool-permission-group" role="radiogroup" aria-label="工具权限">
+                  <label class="tool-permission-option">
+                    <input type="radio" name="channels-tool-sandbox" value="all" id="channels-tool-sandbox-all" />
+                    <div class="tool-permission-option__text">
+                      <span class="tool-permission-option__title">全部开启</span>
+                      <span class="tool-permission-option__desc">允许天气、搜索、翻译、文件等工具在飞书/微信中使用。</span>
+                    </div>
+                  </label>
+                  <label class="tool-permission-option">
+                    <input type="radio" name="channels-tool-sandbox" value="safe-only" id="channels-tool-sandbox-safe" />
+                    <div class="tool-permission-option__text">
+                      <span class="tool-permission-option__title">安全模式</span>
+                      <span class="tool-permission-option__desc">仅允许记忆、待办等低风险工具。</span>
+                    </div>
+                  </label>
+                </div>
               </div>
             </div>
           </div>

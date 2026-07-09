@@ -2997,3 +2997,45 @@ body {
   white-space: pre-wrap;
   word-break: break-word;
 }
+
+/* 渠道工具权限 radio 组 */
+.tool-permission-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.tool-permission-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 182, 220, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease;
+}
+.tool-permission-option:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 182, 220, 0.28);
+}
+.tool-permission-option input[type="radio"] {
+  margin-top: 2px;
+  accent-color: #ec4899;
+  flex-shrink: 0;
+}
+.tool-permission-option__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.tool-permission-option__title {
+  font-weight: 600;
+  color: var(--rb-text-strong);
+  font: var(--rb-text-small-em);
+}
+.tool-permission-option__desc {
+  color: var(--rb-text-muted);
+  font: var(--rb-text-micro);
+  line-height: 1.4;
+}
