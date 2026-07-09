@@ -363,6 +363,14 @@ body {
   color: #fda4af;
 }
 
+/* TTS provider 底部操作行：复用 .save-btn 与 .save-status 主题样式，只补布局 */
+.tts-config-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+}
+
 .save-btn {
   flex: 0 0 auto;
   padding: 10px 16px;

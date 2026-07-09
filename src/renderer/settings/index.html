@@ -1390,6 +1390,12 @@
               </label>
               <button type="button" class="ghost-btn" id="tts-minimax-test">🔊 测试发音</button>
 
+              <!-- MiniMax 配置保存：复用 .save-btn（主题自适应） -->
+              <div class="tts-config-actions">
+                <div class="save-status" id="tts-minimax-save-status"></div>
+                <button type="button" class="save-btn is-hidden" id="tts-minimax-save-btn">保存配置</button>
+              </div>
+
               <!-- 音色快速复刻 -->
               <div class="tts-clone-section">
                 <h3 class="tts-clone-title">🎙️ 音色快速复刻</h3>
@@ -1445,6 +1451,11 @@
               </div>
               <button type="button" class="ghost-btn" id="tts-gptsovits-test">🔊 测试发音</button>
               <div class="tts-clone-status" id="tts-gptsovits-test-status"></div>
+              <!-- GPT-SoVITS 配置保存 -->
+              <div class="tts-config-actions">
+                <div class="save-status" id="tts-gptsovits-save-status"></div>
+                <button type="button" class="save-btn is-hidden" id="tts-gptsovits-save-btn">保存配置</button>
+              </div>
             </div>
 
             <div class="tts-config" id="tts-config-custom-cloud" hidden>
@@ -1474,6 +1485,11 @@
               </div>
               <button type="button" class="ghost-btn" id="tts-custom-cloud-test">🔊 测试发音</button>
               <div class="tts-clone-status" id="tts-custom-cloud-test-status"></div>
+              <!-- 自定义云端配置保存 -->
+              <div class="tts-config-actions">
+                <div class="save-status" id="tts-custom-cloud-save-status"></div>
+                <button type="button" class="save-btn is-hidden" id="tts-custom-cloud-save-btn">保存配置</button>
+              </div>
             </div>
 
             <div class="tts-config" id="tts-config-mimo" hidden>
@@ -1493,6 +1509,11 @@
               </div>
               <button type="button" class="ghost-btn" id="tts-mimo-test">🔊 测试发音</button>
               <div class="tts-clone-status" id="tts-mimo-test-status"></div>
+              <!-- MiMo 配置保存 -->
+              <div class="tts-config-actions">
+                <div class="save-status" id="tts-mimo-save-status"></div>
+                <button type="button" class="save-btn is-hidden" id="tts-mimo-save-btn">保存配置</button>
+              </div>
             </div>
 
             <p class="tts-hint">💡 MiniMax 需在控制台训练音色并填写音色 ID。GPT-SoVITS 需自行启动本地服务并提供参考音频。自定义云端会 POST 固定 JSON 到你的 Endpoint。小米 MiMo 当前使用昔涟参考音频走 voiceclone 非流式 wav 合成。</p>

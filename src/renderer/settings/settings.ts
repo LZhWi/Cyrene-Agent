@@ -4178,6 +4178,14 @@ async function loadTtsConfig(): Promise<void> {
     btn.classList.toggle("is-active", isActive);
     btn.setAttribute("aria-checked", isActive ? "true" : "false");
   });
+
+  // 加载完成后清掉所有 Provider 的脏态（按钮隐藏，status 清空）
+  for (const provider of Object.keys(TTS_PROVIDER_FIELDS)) {
+    const ui = ttsProviderUi[provider];
+    if (!ui) continue;
+    ui.btn.classList.add("is-hidden");
+    ui.status.textContent = "";
+  }
 }
 
 function updateTtsSliderLabels(): void {
@@ -4266,32 +4274,116 @@ ttsEl("tts-speed").addEventListener("change", () => saveTtsField("ttsSpeed", Num
 ttsEl("tts-volume").addEventListener("input", updateTtsSliderLabels);
 ttsEl("tts-volume").addEventListener("change", () => saveTtsField("ttsVolume", Number(ttsEl("tts-volume").value)));
 
-// 配置输入框 change 时保存 + input 时防抖保存（防粘贴后未失焦就丢失）
-const ttsSaveFields: Array<[string, string]> = [
-  ["tts-minimax-key", "ttsMinimaxKey"],
-  ["tts-minimax-voice", "ttsMinimaxVoiceId"],
-  ["tts-minimax-model", "ttsMinimaxModel"],
-  ["tts-gptsovits-url", "ttsGptsovitsBaseUrl"],
-  ["tts-gptsovits-ref-audio", "ttsGptsovitsRefAudioPath"],
-  ["tts-gptsovits-prompt-text", "ttsGptsovitsPromptText"],
-  ["tts-custom-cloud-url", "ttsCustomCloudEndpointUrl"],
-  ["tts-custom-cloud-key", "ttsCustomCloudApiKey"],
-  ["tts-custom-cloud-voice", "ttsCustomCloudVoiceId"],
-  ["tts-custom-cloud-timeout", "ttsCustomCloudTimeoutMs"],
-  ["tts-mimo-key", "ttsMimoKey"],
-  ["tts-mimo-voice-audio", "ttsMimoVoiceAudioPath"],
-  ["tts-mimo-style", "ttsMimoStylePrompt"],
-];
-const ttsDebounceTimers: Record<string, ReturnType<typeof setTimeout> | undefined> = {};
-for (const [elId, field] of ttsSaveFields) {
-  ttsEl(elId).addEventListener("change", () => saveTtsField(field, ttsEl(elId).value));
-  // 防抖保存：输入或粘贴后 800ms 自动保存，不依赖失焦
-  ttsEl(elId).addEventListener("input", () => {
-    clearTimeout(ttsDebounceTimers[field]);
-    ttsDebounceTimers[field] = setTimeout(() => {
-      void saveTtsField(field, ttsEl(elId).value);
-    }, 800);
-  });
+// ── TTS 文本输入框：按 Provider 分组 + 手动保存 ──
+// 之前这里有 input/change 自动 saveTtsField（settings.ts:4270–4295），
+// 但每次 input 都会触发 IPC，IME 组字过程会被打断，用户反馈"打着打着输入法被打断"。
+// 现在改为：文本框只 mark dirty，真正保存只发生在用户点击 Provider 自己的"保存配置"按钮。
+// switch / slider / select / 引擎选择 / Opener 档位仍然走立即保存（保持即时反馈）。
+const TTS_FIELD_MAP: Record<string, string> = {
+  "tts-minimax-key":          "ttsMinimaxKey",
+  "tts-minimax-voice":        "ttsMinimaxVoiceId",
+  "tts-minimax-model":        "ttsMinimaxModel",
+  "tts-gptsovits-url":        "ttsGptsovitsBaseUrl",
+  "tts-gptsovits-ref-audio":  "ttsGptsovitsRefAudioPath",
+  "tts-gptsovits-prompt-text":"ttsGptsovitsPromptText",
+  "tts-custom-cloud-url":     "ttsCustomCloudEndpointUrl",
+  "tts-custom-cloud-key":     "ttsCustomCloudApiKey",
+  "tts-custom-cloud-voice":   "ttsCustomCloudVoiceId",
+  "tts-custom-cloud-timeout": "ttsCustomCloudTimeoutMs",
+  "tts-mimo-key":             "ttsMimoKey",
+  "tts-mimo-voice-audio":     "ttsMimoVoiceAudioPath",
+  "tts-mimo-style":           "ttsMimoStylePrompt",
+};
+
+// 每个 Provider 自己负责的文本输入框列表（不含 switch/slider/select，复刻子区块也不在此）
+const TTS_PROVIDER_FIELDS: Record<string, string[]> = {
+  minimax:        ["tts-minimax-key", "tts-minimax-voice"],
+  gptsovits:      ["tts-gptsovits-url", "tts-gptsovits-ref-audio", "tts-gptsovits-prompt-text"],
+  "custom-cloud": ["tts-custom-cloud-url", "tts-custom-cloud-key", "tts-custom-cloud-voice", "tts-custom-cloud-timeout"],
+  mimo:           ["tts-mimo-key", "tts-mimo-voice-audio", "tts-mimo-style"],
+};
+
+// Provider ID → { 保存按钮, 状态 div }
+// 用 ttsEl() 安全获取：拿不到时返回 null，不让整个 settings.ts 初始化崩。
+function safeGet(id: string): HTMLElement | null {
+  return document.getElementById(id);
+}
+const ttsProviderUi: Record<string, { btn: HTMLButtonElement; status: HTMLElement } | null> = {
+  minimax:        ttsEl("tts-minimax-save-btn") && safeGet("tts-minimax-save-status")
+                    ? { btn: ttsEl("tts-minimax-save-btn"), status: safeGet("tts-minimax-save-status") as HTMLElement }
+                    : null,
+  gptsovits:      ttsEl("tts-gptsovits-save-btn") && safeGet("tts-gptsovits-save-status")
+                    ? { btn: ttsEl("tts-gptsovits-save-btn"), status: safeGet("tts-gptsovits-save-status") as HTMLElement }
+                    : null,
+  "custom-cloud": ttsEl("tts-custom-cloud-save-btn") && safeGet("tts-custom-cloud-save-status")
+                    ? { btn: ttsEl("tts-custom-cloud-save-btn"), status: safeGet("tts-custom-cloud-save-status") as HTMLElement }
+                    : null,
+  mimo:           ttsEl("tts-mimo-save-btn") && safeGet("tts-mimo-save-status")
+                    ? { btn: ttsEl("tts-mimo-save-btn"), status: safeGet("tts-mimo-save-status") as HTMLElement }
+                    : null,
+};
+
+// 输入框触发脏态：只显示按钮和"有未保存的更改"，不发 IPC
+function markTtsProviderDirty(provider: string): void {
+  const ui = ttsProviderUi[provider];
+  if (!ui) return;
+  ui.btn.classList.remove("is-hidden");
+  ui.status.textContent = "有未保存的更改";
+  ui.status.className = "save-status";
+}
+
+for (const [provider, elIds] of Object.entries(TTS_PROVIDER_FIELDS)) {
+  for (const elId of elIds) {
+    const el = ttsEl(elId);
+    el.addEventListener("input", () => markTtsProviderDirty(provider));
+  }
+}
+
+// 保存某个 Provider 的所有文本配置
+async function saveTtsProvider(provider: string): Promise<void> {
+  const ui = ttsProviderUi[provider];
+  if (!ui) return;
+  const fields = TTS_PROVIDER_FIELDS[provider] ?? [];
+  ui.btn.disabled = true;
+  ui.status.textContent = "保存中…";
+  ui.status.className = "save-status";
+  try {
+    const payload: Record<string, unknown> = {};
+    for (const elId of fields) {
+      const field = TTS_FIELD_MAP[elId];
+      if (!field) continue;
+      const el = ttsEl(elId);
+      // 数字字段（timeout）转 Number；无效则跳过该字段但继续保存其他字段
+      let value: unknown = el.value;
+      if (elId === "tts-custom-cloud-timeout") {
+        const num = Number(el.value);
+        if (!Number.isFinite(num) || num <= 0) continue;
+        value = num;
+      }
+      payload[field] = value;
+      ttsConfig[field] = value;   // 同步内存中的 ttsConfig 缓存
+    }
+    if (Object.keys(payload).length === 0) {
+      ui.status.textContent = "没有可保存的更改";
+      ui.status.className = "save-status";
+      return;
+    }
+    await window.tts!.saveSettings(payload);
+    ui.status.textContent = "已保存";
+    ui.status.className = "save-status is-ok";
+    ui.btn.classList.add("is-hidden");
+    setTimeout(() => { ui.status.textContent = ""; }, 2000);
+  } catch (e) {
+    ui.status.textContent = "保存失败：" + (e instanceof Error ? e.message : String(e));
+    ui.status.className = "save-status is-error";
+  } finally {
+    ui.btn.disabled = false;
+  }
+}
+
+// 注册点击 handler
+for (const [provider, ui] of Object.entries(ttsProviderUi)) {
+  ui?.btn.addEventListener("click", () => void saveTtsProvider(provider));
 }
 
 // GPT-SoVITS 格式选择（select，change 时直接保存）
