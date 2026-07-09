@@ -120,4 +120,21 @@
   --rb-toggle-on:      #ec4899;
   --rb-scroll-thumb:   rgba(255, 255, 255, 0.20);
   --rb-scroll-thumb-hover: rgba(255, 255, 255, 0.32);
+
+  /* ===== Weather card (light pink surface on top of dark UI) ===== */
+  --rb-weather-bg:        #F9CBDF;
+  --rb-weather-bg-2:      #f0b5d0;
+  --rb-weather-bg-3:      #eeacd2;
+  --rb-weather-card-border: rgba(180, 100, 150, 0.2);
+  --rb-weather-border:    rgba(140, 60, 110, 0.15);
+  --rb-weather-border-strong: rgba(140, 60, 110, 0.12);
+  --rb-weather-shadow:    rgba(180, 100, 150, 0.15);
+  --rb-weather-text-strong: #5a1f3a;
+  --rb-weather-text-default: #6b2745;
+  --rb-weather-text-muted: #8a3b5a;
+  --rb-weather-text-faint: #a85a7a;
+  --rb-weather-temp:      #b84a7a;
+  --rb-weather-temp-hi:   #c45a3a;
+  --rb-weather-temp-lo:   #3a7ab0;
+  --rb-weather-accent:    #9d2b5c;
 }

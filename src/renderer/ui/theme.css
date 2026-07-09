@@ -17,6 +17,16 @@
   --rb-shadow-card: 0 3px 12px rgba(0, 0, 0, 0.32);
   --rb-shadow-elevated: 0 12px 32px rgba(0, 0, 0, 0.48);
   --rb-shadow-pink: 0 8px 22px rgba(236, 72, 153, 0.24);
+
+  /* Weather card: same light-pink surface, but text tuned for readability on dark UI */
+  --rb-weather-text-strong: #5a1f3a;
+  --rb-weather-text-default: #6b2745;
+  --rb-weather-text-muted: #8a3b5a;
+  --rb-weather-text-faint: #a85a7a;
+  --rb-weather-temp: #b84a7a;
+  --rb-weather-temp-hi: #c45a3a;
+  --rb-weather-temp-lo: #3a7ab0;
+  --rb-weather-accent: #9d2b5c;
 }
 
 [data-ui-theme="polished-pink"] body {
@@ -282,6 +292,16 @@
   --rb-toggle-on:      var(--rb-pink-500);
   --rb-scroll-thumb:   rgba(0, 0, 0, 0.18);
   --rb-scroll-thumb-hover: rgba(0, 0, 0, 0.32);
+
+  /* Weather card: light-pink surface on white UI, text kept dark for contrast */
+  --rb-weather-text-strong: #5a1f3a;
+  --rb-weather-text-default: #6b2745;
+  --rb-weather-text-muted: #8a3b5a;
+  --rb-weather-text-faint: #a85a7a;
+  --rb-weather-temp: #b84a7a;
+  --rb-weather-temp-hi: #c45a3a;
+  --rb-weather-temp-lo: #3a7ab0;
+  --rb-weather-accent: #9d2b5c;
 }
 
 /* NOTE: do NOT paint `body` here. The Live2D pet window keeps its
