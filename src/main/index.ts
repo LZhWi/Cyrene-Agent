@@ -8,7 +8,8 @@ import { IPC } from "../shared/ipc-channels";
 import { STATUS_KEYWORDS } from "./status-keywords";
 import { initRAG, buildMemoryContext, addMemory, importDocument, switchEmbeddingModel, deleteImportedDoc } from "./rag";
 import { getEmbeddingProvider, getSceneEmbeddingProvider } from "./rag/embedding";
-import { ingestPaths } from "./rag/file-ingest";
+import { getMimeFromExt, ingestPaths, isImageExt, type Attachment } from "./rag/file-ingest";
+import { IMAGE_CAPTION_PROMPT, validateCaptionImagePath } from "./chat/image-caption";
 import { buildAlwaysOnContext, buildMemoryInjection, runFunctionCallingLoop, scheduleMemoryWrite } from "./orchestrator";
 import { CyreneAgent } from "./orchestrator/cyrene-agent";
 import { indexConversationTurn } from "./orchestrator/history-tools";
@@ -2643,11 +2644,55 @@ ipcMain.handle(IPC.CHAT_INGEST_FILES, async (_event, paths: unknown) => {
   const list = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === "string") : [];
   if (list.length === 0) return [];
   try {
-    const results = await ingestPaths(list, importDocument);
-    return results;
+    const imageResults: Attachment[] = [];
+    const otherPaths: string[] = [];
+    for (const filePath of list) {
+      const ext = path.extname(filePath).toLowerCase();
+      if (isImageExt(ext)) {
+        imageResults.push({
+          name: path.basename(filePath),
+          kind: "image",
+          filePath,
+          mime: getMimeFromExt(ext),
+          status: "pending",
+        });
+      } else {
+        otherPaths.push(filePath);
+      }
+    }
+    const results = otherPaths.length > 0 ? await ingestPaths(otherPaths, importDocument) : [];
+    return [...imageResults, ...results];
   } catch (err: any) {
     console.error("[Cyrene] ingestFiles ERROR:", err?.message || err);
     return [];
+  }
+});
+
+ipcMain.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {
+  const filePath = payload && typeof payload === "object"
+    ? (payload as { filePath?: unknown }).filePath
+    : undefined;
+  const validated = validateCaptionImagePath(filePath);
+  if (!validated.ok) return { ok: false, error: validated.error };
+
+  const visionCfg = loadVisionConfig();
+  if (!visionCfg) {
+    return { ok: false, error: "未配置视觉模型，无法分析图片" };
+  }
+
+  try {
+    const { captionImage } = await import("./orchestrator/vision-captioner");
+    const caption = await captionImage(
+      { base64: validated.buffer.toString("base64"), mime: validated.mime },
+      IMAGE_CAPTION_PROMPT,
+      visionCfg,
+    );
+    if (caption.startsWith("[错误")) {
+      return { ok: false, error: caption };
+    }
+    return { ok: true, caption };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || String(err) };
   }
 });
 ipcMain.on(IPC.SIDEBAR_MINIMIZE, () => {

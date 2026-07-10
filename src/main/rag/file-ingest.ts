@@ -2,11 +2,15 @@ import * as fs from "fs";
 import * as path from "path";
 
 // ── Public types ──
-export type AttachmentKind = "text" | "indexed" | "empty" | "unsupported";
+export type AttachmentKind = "text" | "indexed" | "empty" | "unsupported" | "image";
 
 export interface Attachment {
   name: string;
   kind: AttachmentKind;
+  filePath?: string;
+  mime?: string;
+  caption?: string;
+  status?: "pending" | "done" | "error";
   /** kind="text" 时的小文件内容 */
   text?: string;
   /** kind="indexed" 时的 chunk 数 */
@@ -34,6 +38,10 @@ const TEXT_EXTS = new Set([
   ".svg", ".html", ".htm",
 ]);
 
+export const IMAGE_EXTS = new Set([
+  ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp",
+]);
+
 const UNSUPPORTED_EXTS = new Set([
   ".zip", ".7z", ".rar", ".tar", ".gz",
   ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
@@ -46,6 +54,22 @@ const UNSUPPORTED_EXTS = new Set([
 
 export function isTextExt(ext: string): boolean {
   return TEXT_EXTS.has(ext.toLowerCase());
+}
+
+export function isImageExt(ext: string): boolean {
+  return IMAGE_EXTS.has(ext.toLowerCase());
+}
+
+export function getMimeFromExt(ext: string): string {
+  switch (ext.toLowerCase()) {
+    case ".png": return "image/png";
+    case ".jpg":
+    case ".jpeg": return "image/jpeg";
+    case ".gif": return "image/gif";
+    case ".bmp": return "image/bmp";
+    case ".webp": return "image/webp";
+    default: return "application/octet-stream";
+  }
 }
 
 export function isUnsupportedExt(ext: string): boolean {

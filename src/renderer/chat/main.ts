@@ -63,6 +63,7 @@ interface ChatApi {
     isMaximized: () => Promise<boolean>;
     sendMessage: (messages: Array<{ role: "user" | "model"; content: string }>, style: string) => Promise<ChatReplyPayload>;
     ingestDroppedFiles: (files: File[]) => Promise<Attachment[]>;
+    captionImage: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
     getEnabledStickers?: () => Promise<Array<{ id: string; src: string; description?: string }>>;
   }
 
@@ -128,11 +129,15 @@ interface AguiBaseEvent {
 }
 
 /** 文件摄入结果（与 main 侧 file-ingest.ts 的 Attachment 对齐）。 */
-type AttachmentKind = "text" | "indexed" | "empty" | "unsupported";
+type AttachmentKind = "text" | "indexed" | "empty" | "unsupported" | "image";
 
 interface Attachment {
   name: string;
   kind: AttachmentKind;
+  filePath?: string;
+  mime?: string;
+  caption?: string;
+  status?: "pending" | "done" | "error";
   text?: string;
   chunks?: number;
   reason?: string;
@@ -2372,6 +2377,25 @@ async function send(): Promise<void> {
         case "empty":
           hintsByKind.push(`📄 ${f.name}（为空）`);
           break;
+        case "image": {
+          if (!f.filePath) {
+            f.status = "error";
+            f.reason = "缺少图片路径";
+            hintsByKind.push(`⚠️ ${f.name}（图片分析失败：缺少图片路径）`);
+            break;
+          }
+          const result = await window.chat?.captionImage(f.filePath);
+          if (result?.ok && result.caption) {
+            f.status = "done";
+            f.caption = result.caption;
+            hintsByKind.push(`📷 ${f.name}（图片视觉信息：${result.caption}）`);
+          } else {
+            f.status = "error";
+            f.reason = result?.error || "图片分析失败";
+            hintsByKind.push(`⚠️ ${f.name}（图片分析失败：${f.reason}）`);
+          }
+          break;
+        }
         case "unsupported":
           hintsByKind.push(`⚠️ ${f.name}（暂不支持：${f.reason || ""}）`);
           break;
@@ -2709,6 +2733,7 @@ async function ingestDroppedFiles(files: File[]): Promise<void> {
 	    text: "📝",
 	    indexed: "📚",
 	    empty: "📄",
+	    image: "📷",
 	    unsupported: "⚠️",
 	  };
 	  attachedFiles.forEach((f, i) => {
@@ -2719,6 +2744,7 @@ async function ingestDroppedFiles(files: File[]): Promise<void> {
 	    const detail = f.kind === "text" ? "（附件）" :
 	      f.kind === "indexed" ? `（${f.chunks ?? 0} 段）` :
 	      f.kind === "empty" ? "（空）" :
+	      f.kind === "image" ? (f.status === "done" ? "（已分析）" : f.status === "error" ? "（分析失败）" : "（待分析）") :
 	      "（暂不支持）";
 	    label.textContent = `${icon} ${f.name} ${detail}`;
 	    const btn = document.createElement("button");

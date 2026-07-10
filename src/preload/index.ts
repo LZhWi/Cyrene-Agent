@@ -42,6 +42,7 @@ const chatApi = {
     if (paths.length === 0) return [];
     return ipcRenderer.invoke(IPC.CHAT_INGEST_FILES, paths);
   },
+  captionImage: (filePath: string) => ipcRenderer.invoke(IPC.CHAT_CAPTION_IMAGE, { filePath }),
   onStreamChunk: (cb: (chunk: string) => void) => { ipcRenderer.on(IPC.CHAT_STREAM_CHUNK, (_e: unknown, chunk: string) => cb(chunk)); },
   onStreamDone: (cb: (payload: unknown) => void) => { ipcRenderer.on(IPC.CHAT_STREAM_DONE, (_e: unknown, payload: unknown) => cb(payload)); },
   removeStreamListeners: () => { ipcRenderer.removeAllListeners(IPC.CHAT_STREAM_CHUNK); ipcRenderer.removeAllListeners(IPC.CHAT_STREAM_DONE); },

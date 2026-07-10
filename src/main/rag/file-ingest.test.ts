@@ -7,8 +7,10 @@ import {
   walkDir,
   ingestPaths,
   isBinary,
+  isImageExt,
   isTextExt,
   isUnsupportedExt,
+  getMimeFromExt,
   SMALL_THRESHOLD,
   type Attachment,
   type ImportFn,
@@ -78,6 +80,14 @@ describe("扩展名判断", () => {
     expect(isUnsupportedExt(".md")).toBe(false);
     expect(isUnsupportedExt("")).toBe(false);
     expect(isUnsupportedExt(".unknown")).toBe(false);
+  });
+  it("isImageExt true 且返回图片 mime", () => {
+    expect(isImageExt(".png")).toBe(true);
+    expect(isImageExt(".JPG")).toBe(true);
+    expect(isImageExt(".webp")).toBe(true);
+    expect(getMimeFromExt(".png")).toBe("image/png");
+    expect(getMimeFromExt(".jpg")).toBe("image/jpeg");
+    expect(getMimeFromExt(".unknown")).toBe("application/octet-stream");
   });
 });
 
