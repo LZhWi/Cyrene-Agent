@@ -9,6 +9,7 @@ export interface Attachment {
   kind: AttachmentKind;
   filePath?: string;
   mime?: string;
+  previewUrl?: string;
   caption?: string;
   status?: "pending" | "done" | "error";
   /** kind="text" 时的小文件内容 */

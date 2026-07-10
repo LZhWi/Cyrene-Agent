@@ -28,10 +28,23 @@ export interface ChatMessage {
   role: ChatRole;
   content: string;
   at: number;
+  /** 不直接显示在聊天气泡里，但会拼入模型上下文。 */
+  modelContext?: string;
+  attachments?: MessageAttachment[];
   /** 表情包 ID（内置或用户自定义） */
   sticker?: string | null;
   /** TTS 缓存 key。只存 key，不存绝对路径，避免 userData 路径变化后 session JSON 失效。 */
   ttsCacheKey?: string;
+}
+
+export interface MessageAttachment {
+  kind: "image";
+  name: string;
+  filePath: string;
+  mime: string;
+  previewUrl?: string;
+  caption?: string;
+  status: "pending" | "done" | "error";
 }
 
 export interface ChatSession {

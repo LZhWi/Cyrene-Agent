@@ -17,9 +17,21 @@ interface Message {
   role: Role;
   content: string;
   at: number;
+  modelContext?: string;
+  attachments?: MessageAttachment[];
   sticker?: string | null;
   thinking?: boolean;
   ttsCacheKey?: string;
+}
+
+interface MessageAttachment {
+  kind: "image";
+  name: string;
+  filePath: string;
+  mime: string;
+  previewUrl?: string;
+  caption?: string;
+  status: "pending" | "done" | "error";
 }
 
 interface ChatReplyPayload {
@@ -136,6 +148,7 @@ interface Attachment {
   kind: AttachmentKind;
   filePath?: string;
   mime?: string;
+  previewUrl?: string;
   caption?: string;
   status?: "pending" | "done" | "error";
   text?: string;
@@ -329,6 +342,8 @@ interface ChatStoreSession {
     role: Role;
     content: string;
     at: number;
+    modelContext?: string;
+    attachments?: MessageAttachment[];
     sticker?: string | null;
     ttsCacheKey?: string;
   }>;
@@ -365,15 +380,22 @@ declare global {
 // - 过滤空 content / 渲染中的 thinking 占位（thinking=true 时通常 content 为空，但保险起见双重过滤）
 // - 丢弃 thinking 字段（持久化层不存这种瞬态状态）
 function toPersistableMessages(arr: Message[]): Array<{
-  id: string; role: Role; content: string; at: number; sticker?: StickerId | null; ttsCacheKey?: string;
+  id: string; role: Role; content: string; at: number; modelContext?: string; attachments?: MessageAttachment[]; sticker?: StickerId | null; ttsCacheKey?: string;
 }> {
   return arr
-    .filter((m) => m && (m.role === "user" || m.role === "model") && typeof m.content === "string" && m.content.trim() && !m.thinking)
+    .filter((m) => m && (m.role === "user" || m.role === "model") && !m.thinking && (
+      typeof m.content === "string" && m.content.trim()
+      || Boolean(m.modelContext?.trim())
+      || ((m.attachments?.length ?? 0) > 0)
+      || Boolean(m.sticker)
+    ))
     .map((m) => ({
       id: m.id,
       role: m.role,
       content: m.content,
       at: m.at,
+      modelContext: m.modelContext,
+      attachments: m.attachments,
       sticker: m.sticker ?? null,
       ttsCacheKey: m.ttsCacheKey,
     }));
@@ -398,6 +420,8 @@ function loadSessionIntoUI(session: ChatStoreSession): void {
       role: m.role,
       content: m.content,
       at: m.at,
+      modelContext: m.modelContext,
+      attachments: m.attachments,
       sticker: m.sticker ?? null,
       ttsCacheKey: m.ttsCacheKey,
     });
@@ -937,11 +961,53 @@ function setAvatar(slot: HTMLElement, role: Role): void {
   slot.appendChild(img);
 }
 
+function renderImageAttachments(body: HTMLElement, attachments: MessageAttachment[] | undefined): void {
+  if (!attachments || attachments.length === 0) return;
+  const list = document.createElement("div");
+  list.className = "msg__attachments";
+  for (const att of attachments) {
+    if (att.kind !== "image") continue;
+    const card = document.createElement("div");
+    card.className = "msg__image-card";
+    const preview = document.createElement("div");
+    preview.className = "msg__image-preview";
+    if (att.previewUrl) {
+      const img = document.createElement("img");
+      img.src = att.previewUrl;
+      img.alt = att.name;
+      img.draggable = false;
+      img.addEventListener("load", () => {
+        messagesEl.scrollTop = messagesEl.scrollHeight;
+      });
+      img.addEventListener("error", () => {
+        preview.classList.add("is-error");
+        preview.textContent = "图片无法预览";
+      });
+      preview.appendChild(img);
+    } else {
+      preview.classList.add("is-error");
+      preview.textContent = "图片无法预览";
+    }
+    const name = document.createElement("div");
+    name.className = "msg__image-name";
+    name.textContent = att.name;
+    card.appendChild(preview);
+    card.appendChild(name);
+    list.appendChild(card);
+  }
+  if (list.childElementCount > 0) body.appendChild(list);
+}
+
 function render(): void {
   // 空态：当前会话还没有消息时（新建/全清）显示"昔涟期待与你聊天哦 ✨"占位
   // thinking 状态（昔涟主动开场/流式回复中）也算有消息，胶囊应立即消失
   const emptyEl = document.getElementById("chat-empty");
-  const hasMessages = messages.some((m) => m.content.trim() || m.thinking);
+  const hasMessages = messages.some((m) =>
+    m.content.trim()
+    || m.thinking
+    || ((m.attachments?.length ?? 0) > 0)
+    || Boolean(m.sticker)
+  );
   if (emptyEl) emptyEl.toggleAttribute("hidden", hasMessages);
 
   messagesEl.replaceChildren();
@@ -986,6 +1052,7 @@ function render(): void {
     time.textContent = formatTime(m.at);
 
     if (!bubble.hidden) body.appendChild(bubble);
+    if (m.role === "user") renderImageAttachments(body, m.attachments);
 
     if (m.sticker) {
       const stickerSrc = getStickerSrc(m.sticker);
@@ -2014,11 +2081,11 @@ document.addEventListener("keydown", (e) => {
 
 function buildModelMessages(): Array<{ role: "user" | "model"; content: string }> {
   return messages
-    .filter((message) => message.content.trim())
+    .filter((message) => message.content.trim() || message.modelContext?.trim() || message.sticker)
     .slice(-16)
     .map((message) => ({
       role: message.role,
-      content: message.content.replace(/\[sticker:([^\]]+)\]/g, (_match, id) => {
+      content: (message.content + (message.modelContext ? "\n\n" + message.modelContext : "")).replace(/\[sticker:([^\]]+)\]/g, (_match, id) => {
         const desc = getStickerDescription(id);
         return `（用户发送表情包：${desc}）`;
       }),
@@ -2349,85 +2416,112 @@ async function send(): Promise<void> {
     return;
   }
 
-    // Option C（临时注入）：内容不进 messages 历史，只附在 agui.run payload 传给本轮。
-    // fullUserText 只放精简 hint 进 history，不堆内容。
-    const hintsByKind: string[] = [];
-    const turnTextAttachments: { name: string; text: string }[] = [];
-    let budgetUsed = 0;
-    const budgetExceeded: string[] = [];
-    for (const f of attachedFiles) {
-      switch (f.kind) {
-        case "text":
-          if (f.text) {
-            const remaining = BUDGET_CHARS - budgetUsed;
-            if (f.text.length > remaining) {
-              turnTextAttachments.push({ name: f.name, text: f.text.slice(0, remaining) });
-              budgetExceeded.push(f.name);
-              budgetUsed = BUDGET_CHARS;
-            } else {
-              turnTextAttachments.push({ name: f.name, text: f.text });
-              budgetUsed += f.text.length;
-            }
-          }
-          hintsByKind.push(`📝 ${f.name}（附件，内容已注入本轮上下文）`);
-          break;
-        case "indexed":
-          hintsByKind.push(`📚 ${f.name}（已索引 ${f.chunks ?? 0} 段，可用 imported_docs 工具检索）`);
-          break;
-        case "empty":
-          hintsByKind.push(`📄 ${f.name}（为空）`);
-          break;
-        case "image": {
-          if (!f.filePath) {
-            f.status = "error";
-            f.reason = "缺少图片路径";
-            hintsByKind.push(`⚠️ ${f.name}（图片分析失败：缺少图片路径）`);
-            break;
-          }
-          const result = await window.chat?.captionImage(f.filePath);
-          if (result?.ok && result.caption) {
-            f.status = "done";
-            f.caption = result.caption;
-            hintsByKind.push(`📷 ${f.name}（图片视觉信息：${result.caption}）`);
-          } else {
-            f.status = "error";
-            f.reason = result?.error || "图片分析失败";
-            hintsByKind.push(`⚠️ ${f.name}（图片分析失败：${f.reason}）`);
-          }
-          break;
-        }
-        case "unsupported":
-          hintsByKind.push(`⚠️ ${f.name}（暂不支持：${f.reason || ""}）`);
-          break;
-      }
-    }
-    if (budgetExceeded.length > 0) {
-      hintsByKind.push(`⚠️ ${budgetExceeded.join("、")} 已省略部分内容（超一轮预算）`);
-    }
-    const fileHint = hintsByKind.length > 0
-      ? "\n\n【本轮文件】\n" + hintsByKind.join("\n")
-      : "";
-    const fullUserText = (text || (attachedFiles.length > 0 ? "请帮我看看这些文件" : "")) + fileHint;
-
   sending = true;
   sendBtn.disabled = true;
   await refreshModelConfig();
   chatHintEl.textContent = currentModelConfig?.connected ? `${currentModelConfig.model} 思考中…` : "模型未连接";
 
-  const stickerMatch = fullUserText.match(/\[sticker:([^\]]+)\]/);
+  const filesForThisTurn = [...attachedFiles];
+  const attachmentsForMsg: MessageAttachment[] = filesForThisTurn
+    .filter((f) => f.kind === "image" && typeof f.filePath === "string")
+    .map((f) => ({
+      kind: "image",
+      name: f.name,
+      filePath: f.filePath!,
+      mime: f.mime || "application/octet-stream",
+      previewUrl: f.previewUrl,
+      caption: f.caption,
+      status: f.status || "pending",
+    }));
+
+  const stickerMatch = text.match(/\[sticker:([^\]]+)\]/);
   const userStickerId = stickerMatch ? stickerMatch[1] : null;
 
   const userMsg: Message = {
     id: String(Date.now()),
     role: "user",
-    content: fullUserText,
+    content: text,
     at: Date.now(),
+    attachments: attachmentsForMsg.length > 0 ? attachmentsForMsg : undefined,
+    modelContext: undefined,
     sticker: userStickerId,
   };
   messages.push(userMsg);
   inputEl.value = "";
   autosize();
   removeAttachedFiles();
+  void saveSession();
+  render();
+
+  const hintsByKind: string[] = [];
+  const imageContextLines: string[] = [];
+  const turnTextAttachments: { name: string; text: string }[] = [];
+  let budgetUsed = 0;
+  const budgetExceeded: string[] = [];
+  for (const f of filesForThisTurn) {
+    switch (f.kind) {
+      case "text":
+        if (f.text) {
+          const remaining = BUDGET_CHARS - budgetUsed;
+          if (f.text.length > remaining) {
+            turnTextAttachments.push({ name: f.name, text: f.text.slice(0, remaining) });
+            budgetExceeded.push(f.name);
+            budgetUsed = BUDGET_CHARS;
+          } else {
+            turnTextAttachments.push({ name: f.name, text: f.text });
+            budgetUsed += f.text.length;
+          }
+        }
+        hintsByKind.push(`📝 ${f.name}（附件，内容已注入本轮上下文）`);
+        break;
+      case "indexed":
+        hintsByKind.push(`📚 ${f.name}（已索引 ${f.chunks ?? 0} 段，可用 imported_docs 工具检索）`);
+        break;
+      case "empty":
+        hintsByKind.push(`📄 ${f.name}（为空）`);
+        break;
+      case "image": {
+        const msgAtt = userMsg.attachments?.find((att) => att.filePath === f.filePath);
+        if (!f.filePath) {
+          f.status = "error";
+          f.reason = "缺少图片路径";
+          if (msgAtt) msgAtt.status = "error";
+          imageContextLines.push(`- ${f.name}：图片分析失败：缺少图片路径。请诚实说明暂时无法看清这张图。`);
+          break;
+        }
+        const result = await window.chat?.captionImage(f.filePath);
+        if (result?.ok && result.caption) {
+          f.status = "done";
+          f.caption = result.caption;
+          if (msgAtt) {
+            msgAtt.status = "done";
+            msgAtt.caption = result.caption;
+          }
+          imageContextLines.push(`- ${f.name}：${result.caption}`);
+        } else {
+          f.status = "error";
+          f.reason = result?.error || "图片分析失败";
+          if (msgAtt) msgAtt.status = "error";
+          imageContextLines.push(`- ${f.name}：图片分析失败：${f.reason}。请诚实说明暂时无法看清这张图。`);
+        }
+        break;
+      }
+      case "unsupported":
+        hintsByKind.push(`⚠️ ${f.name}（暂不支持：${f.reason || ""}）`);
+        break;
+    }
+  }
+  if (budgetExceeded.length > 0) {
+    hintsByKind.push(`⚠️ ${budgetExceeded.join("、")} 已省略部分内容（超一轮预算）`);
+  }
+  const contextParts: string[] = [];
+  if (hintsByKind.length > 0) {
+    contextParts.push("【本轮文件】\n" + hintsByKind.join("\n"));
+  }
+  if (imageContextLines.length > 0) {
+    contextParts.push("【图片视觉信息】\n以下内容是视觉模型对用户本轮图片的观察结果，请将其视为你已经看到的图片内容；如果某张图分析失败，请不要编造。\n" + imageContextLines.join("\n"));
+  }
+  userMsg.modelContext = contextParts.length > 0 ? contextParts.join("\n\n") : undefined;
   void saveSession();
   render();
 

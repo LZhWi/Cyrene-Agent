@@ -2654,6 +2654,7 @@ ipcMain.handle(IPC.CHAT_INGEST_FILES, async (_event, paths: unknown) => {
           kind: "image",
           filePath,
           mime: getMimeFromExt(ext),
+          previewUrl: pathToFileURL(filePath).toString(),
           status: "pending",
         });
       } else {
