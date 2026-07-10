@@ -1,3 +1,6 @@
+import * as fs from "fs"
+import * as os from "os"
+import * as path from "path"
 import { describe, expect, it, vi } from "vitest"
 import {
   buildAgentRunOptions,
@@ -50,6 +53,52 @@ describe("build-options", () => {
     const system = result.options.messages[0].content
     expect(system).not.toContain("你正在通过微信回复用户")
     expect(system).not.toContain("你正在通过飞书回复用户")
+  })
+
+  it("attaches direct image content blocks to the latest user message", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-image-direct-"))
+    const imagePath = path.join(dir, "图 像.png")
+    fs.writeFileSync(imagePath, Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+      0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    ]))
+
+    const result = await buildAgentRunOptions({
+      messages: [
+        { role: "user", content: "上一轮" },
+        { role: "assistant", content: "好的" },
+        { role: "user", content: "请看这张图" },
+      ],
+      style: "01_default.md",
+      imageAttachments: [{ name: "图 像.png", filePath: imagePath, mime: "image/png" }],
+    }, createBuildDeps())
+
+    const latestUser = result.options.messages.at(-1)
+    expect(latestUser?.content).toEqual([
+      { type: "text", text: "请看这张图" },
+      {
+        type: "image_url",
+        image_url: { url: expect.stringMatching(/^data:image\/png;base64,/) },
+      },
+    ])
+    expect(result.options.messages[1].content).toBe("上一轮")
+  })
+
+  it("builds caption fallback messages for direct image send failures", async () => {
+    const deps = createBuildDeps()
+    deps.captionImageForFallback = async () => ({ ok: true, caption: "画面里有一张安装截图" })
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "这图哪里不对？" }],
+      style: "01_default.md",
+      imageAttachments: [{ name: "setup.png", filePath: "C:\\tmp\\setup.png", mime: "image/png" }],
+    }, deps)
+
+    const fallbackMessages = await result.options.imageCaptionFallback?.()
+    const userMessage = fallbackMessages?.at(-1)
+    expect(userMessage?.content).toContain("这图哪里不对？")
+    expect(userMessage?.content).toContain("setup.png：画面里有一张安装截图")
+    expect(userMessage?.content).not.toContain("image_url")
   })
 
   it("has distinct system text for Feishu work chat", () => {

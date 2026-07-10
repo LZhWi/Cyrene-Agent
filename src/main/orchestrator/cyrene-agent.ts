@@ -18,7 +18,7 @@ import { toolRegistry, type ToolDefinition } from "./tool-registry";
 import { type ToolCallResult } from "./types";
 import { checkPermission, type ToolRiskLevel } from "../permission";
 import {
-  getAdapter,
+  getAdapterForConfig,
   type ChatMessage,
   type ChatRequest,
   type ToolExecutionResult,
@@ -43,6 +43,7 @@ export interface AgentLoopSettings {
   baseUrl: string;
   model: string;
   apiKey: string;
+  explicitTransport?: "openai" | "anthropic" | "auto";
 }
 
 /** CyreneAgent.run() 需要的输入——桥层构造好后塞进 input.state 或 forwardedProps。 */
@@ -53,6 +54,8 @@ export interface CyreneRunOptions {
   timeoutMs: number;
   /** 可选：本次 run 的工具集合。未传时使用当前所有已启用工具。 */
   tools?: ToolDefinition[];
+  /** 直发图片被主模型接口拒绝时，懒加载 caption fallback 消息并重试。 */
+  imageCaptionFallback?: () => Promise<ChatMessage[]>;
 }
 
 /** FC 循环最终结果（供桥层做副作用用）。 */
@@ -135,7 +138,7 @@ async function runFcLoopWithEvents(
   observer: { next: (e: BaseEvent) => void; error: (e: unknown) => void; complete: () => void },
 ): Promise<CyreneRunResult> {
   const { settings, messages, timeoutMs } = options;
-  const adapter = getAdapter(settings.provider);
+  const adapter = getAdapterForConfig(settings);
   const runTools = options.tools ?? toolRegistry.getEnabledTools();
   const tools = buildToolSpecs(runTools);
   const runnableToolIds = new Set(runTools.filter(t => t.enabled).map(t => t.id));
@@ -144,12 +147,21 @@ async function runFcLoopWithEvents(
   let accInput = 0;
   let accOutput = 0;
   let consecutiveTimeouts = 0; // 连续超时计数：达到上限直接跳出走强制总结
+  let usedImageCaptionFallback = false;
 
   console.log(LOG_PREFIX, `provider=${settings.provider} transport=${adapter.transport} model=${settings.model}`);
   console.log(LOG_PREFIX, "可用工具:", tools.map(t => t.name).join(", ") || "(无)");
   console.log(LOG_PREFIX, "消息数:", messages.length, "最后一角色:", messages[messages.length - 1]?.role);
 
   let conversation: ChatMessage[] = messages.map(m => ({ ...m }));
+
+  const switchToImageCaptionFallback = async (reason: string): Promise<boolean> => {
+    if (usedImageCaptionFallback || !options.imageCaptionFallback) return false;
+    usedImageCaptionFallback = true;
+    console.warn(LOG_PREFIX, "图片直发失败，回退 caption 后重试:", reason);
+    conversation = await options.imageCaptionFallback();
+    return true;
+  };
 
   // 清空本轮 skill reference 已读记录，防止跨对话污染
   resetReadRefs();
@@ -201,6 +213,10 @@ async function runFcLoopWithEvents(
         observer.next({ type: EventType.STEP_FINISHED, stepName: `round-${round + 1}` });
         continue;
       }
+      if (await switchToImageCaptionFallback(err instanceof Error ? err.message : String(err))) {
+        observer.next({ type: EventType.STEP_FINISHED, stepName: `round-${round + 1}` });
+        continue;
+      }
       throw err;
     } finally {
       clearTimeout(timer);
@@ -209,6 +225,10 @@ async function runFcLoopWithEvents(
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
       console.error(LOG_PREFIX, "LLM 请求失败 HTTP " + response.status + ":", errorText.slice(0, 300));
+      if (await switchToImageCaptionFallback("HTTP " + response.status + (errorText ? " — " + errorText.slice(0, 200) : ""))) {
+        observer.next({ type: EventType.STEP_FINISHED, stepName: `round-${round + 1}` });
+        continue;
+      }
       throw new Error("模型请求失败：HTTP " + response.status + (errorText ? " — " + errorText.slice(0, 200) : ""));
     }
 

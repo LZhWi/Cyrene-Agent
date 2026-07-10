@@ -20,6 +20,7 @@ export const IPC = {
   CHAT_SEND_MESSAGE: "chat:send-message",
   CHAT_INGEST_FILES: "chat:ingest-files",
   CHAT_CAPTION_IMAGE: "chat:caption-image",
+  CHAT_GET_IMAGE_SEND_STRATEGY: "chat:get-image-send-strategy",
   CHAT_STREAM_CHUNK: "chat:stream-chunk",
   CHAT_STREAM_DONE: "chat:stream-done",
 

@@ -40,10 +40,26 @@ export function estimateTokens(text: string): number {
 /**
  * 估算整个 conversation 数组的 token 总量。
  */
-export function estimateConversationTokens(messages: Array<{ content: string }>): number {
+function contentToText(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .map((block) => {
+        if (block && typeof block === "object" && (block as { type?: unknown }).type === "text") {
+          return String((block as { text?: unknown }).text ?? "");
+        }
+        return "";
+      })
+      .filter(Boolean)
+      .join("\n");
+  }
+  return String(content ?? "");
+}
+
+export function estimateConversationTokens(messages: Array<{ content: unknown }>): number {
   let total = 0;
   for (const m of messages) {
-    total += estimateTokens(m.content);
+    total += estimateTokens(contentToText(m.content));
   }
   return total;
 }
@@ -61,12 +77,12 @@ export function estimateConversationTokens(messages: Array<{ content: string }>)
  *
  * 返回压缩后的新数组（不修改原数组）。
  */
-export function compressConversation<T extends { role?: string; content?: string }>(
+export function compressConversation<T extends { role?: string; content?: unknown }>(
   messages: T[],
   thresholdChars: number = WINDOW_COMPRESS_THRESHOLD_CHARS,
   keepRecent: number = KEEP_RECENT_ROUNDS,
 ): T[] {
-  const totalChars = messages.reduce((sum, m) => sum + String(m.content ?? "").length, 0);
+  const totalChars = messages.reduce((sum, m) => sum + contentToText(m.content).length, 0);
   if (totalChars <= thresholdChars) return messages;
 
   console.log(`[ContextManager] 触发压缩: ${totalChars} 字符 > 阈值 ${thresholdChars}`);
@@ -89,27 +105,27 @@ export function compressConversation<T extends { role?: string; content?: string
     for (let i = 0; i < compressFromIndex; i++) {
       if (result[i].role === "system") continue;
       const msg = result[i];
-      const content = String(msg.content ?? "");
+      const content = contentToText(msg.content);
       if (content.length > 500) {
         result[i] = {
           ...msg,
           content: content.slice(0, 200) + "\n[compressed: 原始 " + content.length + " 字符]",
-        };
+        } as T;
       }
     }
   }
 
   // 压缩后仍超阈值 → 从最早的非 system 消息开始丢弃
-  let compressedChars = result.reduce((sum, m) => sum + String(m.content ?? "").length, 0);
+  let compressedChars = result.reduce((sum, m) => sum + contentToText(m.content).length, 0);
   while (compressedChars > thresholdChars) {
     const firstNonSystem = result.findIndex(m => m.role !== "system");
     if (firstNonSystem === -1 || firstNonSystem >= result.length - keepRecent) break;
-    compressedChars -= String(result[firstNonSystem].content ?? "").length;
+    compressedChars -= contentToText(result[firstNonSystem].content).length;
     result.splice(firstNonSystem, 1);
     console.log("[ContextManager] 丢弃最早一条消息，剩余 " + compressedChars + " 字符");
   }
 
-  const finalChars = result.reduce((sum, m) => sum + String(m.content ?? "").length, 0);
+  const finalChars = result.reduce((sum, m) => sum + contentToText(m.content).length, 0);
   console.log(`[ContextManager] 压缩完成: ${totalChars} → ${finalChars} 字符`);
 
   return result;

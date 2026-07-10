@@ -43,6 +43,7 @@ const chatApi = {
     return ipcRenderer.invoke(IPC.CHAT_INGEST_FILES, paths);
   },
   captionImage: (filePath: string) => ipcRenderer.invoke(IPC.CHAT_CAPTION_IMAGE, { filePath }),
+  getImageSendStrategy: () => ipcRenderer.invoke(IPC.CHAT_GET_IMAGE_SEND_STRATEGY),
   onStreamChunk: (cb: (chunk: string) => void) => { ipcRenderer.on(IPC.CHAT_STREAM_CHUNK, (_e: unknown, chunk: string) => cb(chunk)); },
   onStreamDone: (cb: (payload: unknown) => void) => { ipcRenderer.on(IPC.CHAT_STREAM_DONE, (_e: unknown, payload: unknown) => cb(payload)); },
   removeStreamListeners: () => { ipcRenderer.removeAllListeners(IPC.CHAT_STREAM_CHUNK); ipcRenderer.removeAllListeners(IPC.CHAT_STREAM_DONE); },
@@ -54,7 +55,13 @@ contextBridge.exposeInMainWorld("chat", chatApi);
 // AG-UI 事件流：发起一次 agent run，通过 onEvent 回调收 AG-UI 标准事件，
 // 返回 Promise<{success,error}> 表示整轮结束。onEvent 返回的取消订阅函数用于停止监听。
 const aguiApi = {
-  run: (input: { messages: unknown[]; style: string; sessionId?: string; attachments?: { name: string; text: string }[] }) =>
+  run: (input: {
+    messages: unknown[];
+    style: string;
+    sessionId?: string;
+    attachments?: { name: string; text: string }[];
+    imageAttachments?: { name: string; filePath: string; mime?: string }[];
+  }) =>
     ipcRenderer.invoke(IPC.AGUI_RUN, input) as Promise<{ success: boolean; error?: string }>,
   onEvent: (callback: (event: unknown) => void) => {
     const listener = (_e: unknown, event: unknown) => {

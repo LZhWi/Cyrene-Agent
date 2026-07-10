@@ -76,6 +76,7 @@ interface ChatApi {
     sendMessage: (messages: Array<{ role: "user" | "model"; content: string }>, style: string) => Promise<ChatReplyPayload>;
     ingestDroppedFiles: (files: File[]) => Promise<Attachment[]>;
     captionImage: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
+    getImageSendStrategy: () => Promise<{ mode: "direct" | "caption" }>;
     getEnabledStickers?: () => Promise<Array<{ id: string; src: string; description?: string }>>;
   }
 
@@ -107,7 +108,13 @@ const COPY_ICON_DONE = `<svg class="msg__copy-icon msg__copy-icon--done" viewBox
 </svg>`;
 
 interface AguiApi {
-  run: (input: { messages: unknown[]; style: string; sessionId?: string; attachments?: { name: string; text: string }[] }) => Promise<{ success: boolean; error?: string }>;
+  run: (input: {
+    messages: unknown[];
+    style: string;
+    sessionId?: string;
+    attachments?: { name: string; text: string }[];
+    imageAttachments?: { name: string; filePath: string; mime?: string }[];
+  }) => Promise<{ success: boolean; error?: string }>;
   onEvent: (callback: (event: unknown) => void) => () => void;
   cancel: () => Promise<boolean>;
 }
@@ -2484,11 +2491,22 @@ async function send(): Promise<void> {
 
   const hintsByKind: string[] = [];
   const imageContextLines: string[] = [];
+  const directImageLines: string[] = [];
   const turnTextAttachments: { name: string; text: string }[] = [];
+  const directImageAttachments: { name: string; filePath: string; mime?: string }[] = [];
   let budgetUsed = 0;
   const budgetExceeded: string[] = [];
-  const hasImageAttachments = filesForThisTurn.some((f) => f.kind === "image");
-  if (hasImageAttachments) showTransientStatus("正在分析图片...");
+  const imageFilesForThisTurn = filesForThisTurn.filter((f) => f.kind === "image");
+  let imageSendStrategy: { mode: "direct" | "caption" } = { mode: "caption" };
+  if (imageFilesForThisTurn.length > 0) {
+    try {
+      imageSendStrategy = await window.chat.getImageSendStrategy();
+    } catch (err) {
+      console.warn("[Cyrene Chat] 获取图片发送策略失败，回退 caption:", err);
+    }
+  }
+  const shouldCaptionImages = imageFilesForThisTurn.length > 0 && imageSendStrategy.mode !== "direct";
+  if (shouldCaptionImages) showTransientStatus("正在分析图片...");
   try {
     for (const f of filesForThisTurn) {
       switch (f.kind) {
@@ -2521,6 +2539,13 @@ async function send(): Promise<void> {
             imageContextLines.push(`- ${f.name}：图片分析失败：缺少图片路径。请诚实说明暂时无法看清这张图。`);
             break;
           }
+          if (imageSendStrategy.mode === "direct") {
+            f.status = "done";
+            if (msgAtt) msgAtt.status = "done";
+            directImageAttachments.push({ name: f.name, filePath: f.filePath, mime: f.mime });
+            directImageLines.push(`- ${f.name}：图片已随本轮消息直接发送给主模型。`);
+            break;
+          }
           const result = await window.chat?.captionImage(f.filePath);
           if (result?.ok && result.caption) {
             f.status = "done";
@@ -2544,7 +2569,7 @@ async function send(): Promise<void> {
       }
     }
   } finally {
-    if (hasImageAttachments) hideTransientStatus();
+    if (shouldCaptionImages) hideTransientStatus();
   }
   if (budgetExceeded.length > 0) {
     hintsByKind.push(`⚠️ ${budgetExceeded.join("、")} 已省略部分内容（超一轮预算）`);
@@ -2555,6 +2580,9 @@ async function send(): Promise<void> {
   }
   if (imageContextLines.length > 0) {
     contextParts.push("【图片视觉信息】\n以下内容是视觉模型对用户本轮图片的观察结果，请将其视为你已经看到的图片内容；如果某张图分析失败，请不要编造。\n" + imageContextLines.join("\n"));
+  }
+  if (directImageLines.length > 0) {
+    contextParts.push("【图片附件】\n以下图片已随本轮消息直接发送给主模型，请直接结合图片内容回答。\n" + directImageLines.join("\n"));
   }
   userMsg.modelContext = contextParts.length > 0 ? contextParts.join("\n\n") : undefined;
   void saveSession();
@@ -2734,6 +2762,7 @@ async function send(): Promise<void> {
       style: getCurrentStyle(),
       sessionId: currentSessionId || undefined,
       attachments: turnTextAttachments,
+      imageAttachments: directImageAttachments.length > 0 ? directImageAttachments : undefined,
     });
     if (!ack.success) {
       offEvent();

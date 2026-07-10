@@ -30,6 +30,8 @@ export interface AguiRunInput {
   channel?: RelationshipChannel;
   /** 本轮附件（文本内容，临时注入系统上下文，不存历史）。 */
   attachments?: { name: string; text: string }[];
+  /** 本轮图片附件。主进程会安全读取并转成 OpenAI-compatible image_url content block。 */
+  imageAttachments?: { name: string; filePath: string; mime?: string }[];
 }
 
 /** 调用方（index.ts）注入：把输入转成 agent 需要的 options（含 system prompt 拼接）。 */

@@ -22,10 +22,11 @@
 // 这些全部塞到 BuildOptionsDeps 里。dispatcher 在 Phase 1 注入同样的 deps 即可。
 import type { CyreneRunOptions, CyreneRunResult } from "./cyrene-agent";
 import type { ToolDefinition } from "./tool-registry";
-import type { ChatMessage } from "./vendors/types";
+import type { ChatMessage, OpenAIContentBlock } from "./vendors/types";
 import type { AguiRunInput } from "../agui-bridge";
 import { IPC } from "../../shared/ipc-channels";
 import type { RelationshipChannel, RelationshipTurnInput } from "../relationship/relationship-log";
+import { validateCaptionImagePath } from "../chat/image-caption";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
@@ -54,6 +55,7 @@ export interface BuildOptionsDeps {
   logWorldbookInjection: (alwaysOnContext: string, systemContent: string) => void;
   normalizeChatMessages: (raw: ReadonlyArray<unknown>) => ChatMessage[];
   chatRequestTimeoutMs: number;
+  captionImageForFallback?: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
 }
 
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
@@ -95,6 +97,7 @@ export interface ModelSettingsLite {
   baseUrl: string;
   model: string;
   apiKey: string;
+  explicitTransport?: "openai" | "anthropic" | "auto";
   runtimeSync?: string;
   stickerEnabled?: boolean;
   stickerSimilarityThreshold?: number;
@@ -129,6 +132,88 @@ export function buildChannelSystem(channel?: RelationshipChannel): string {
   return "";
 }
 
+function contentToText(content: ChatMessage["content"]): string {
+  if (typeof content === "string") return content;
+  if (Array.isArray(content)) {
+    return content
+      .filter((block): block is { type: "text"; text: string } => block?.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+  }
+  return "";
+}
+
+function withDirectImageAttachments(messages: ChatMessage[], input: AguiRunInput): ChatMessage[] {
+  const images = input.imageAttachments?.filter((image) =>
+    typeof image?.filePath === "string" && typeof image?.name === "string",
+  ) ?? [];
+  if (images.length === 0) return messages;
+
+  const latestUserIndex = messages.map((message) => message.role).lastIndexOf("user");
+  if (latestUserIndex < 0) return messages;
+
+  const current = messages[latestUserIndex];
+  const blocks: OpenAIContentBlock[] = [];
+  const text = contentToText(current.content);
+  blocks.push({ type: "text", text });
+
+  for (const image of images) {
+    const validated = validateCaptionImagePath(image.filePath);
+    if (!validated.ok) {
+      blocks.push({
+        type: "text",
+        text: `图片 ${image.name} 无法读取：${validated.error}。请诚实说明暂时无法看清这张图，不要编造图片内容。`,
+      });
+      continue;
+    }
+    blocks.push({
+      type: "image_url",
+      image_url: { url: `data:${validated.mime};base64,${validated.buffer.toString("base64")}` },
+    });
+  }
+
+  const next = messages.slice();
+  next[latestUserIndex] = { ...current, content: blocks };
+  return next;
+}
+
+function buildImageCaptionFallbackMessages(
+  systemContent: string,
+  messages: ChatMessage[],
+  input: AguiRunInput,
+  deps: BuildOptionsDeps,
+): (() => Promise<ChatMessage[]>) | undefined {
+  const images = input.imageAttachments?.filter((image) =>
+    typeof image?.filePath === "string" && typeof image?.name === "string",
+  ) ?? [];
+  if (images.length === 0 || !deps.captionImageForFallback) return undefined;
+
+  return async () => {
+    const fallbackMessages = messages.map((message) => ({ ...message }));
+    const latestUserIndex = fallbackMessages.map((message) => message.role).lastIndexOf("user");
+    if (latestUserIndex < 0) return [{ role: "system", content: systemContent }, ...fallbackMessages];
+
+    const current = fallbackMessages[latestUserIndex];
+    const text = contentToText(current.content);
+    const imageLines: string[] = [];
+    for (const image of images) {
+      const result = await deps.captionImageForFallback!(image.filePath);
+      if (result.ok && result.caption) {
+        imageLines.push(`- ${image.name}：${result.caption}`);
+      } else {
+        imageLines.push(`- ${image.name}：图片分析失败：${result.error || "图片分析失败"}。请诚实说明暂时无法看清这张图。`);
+      }
+    }
+
+    const imageContext = "【图片视觉信息】\n以下内容是视觉模型对用户本轮图片的观察结果，请将其视为你已经看到的图片内容；如果某张图分析失败，请不要编造。\n" + imageLines.join("\n");
+    fallbackMessages[latestUserIndex] = {
+      ...current,
+      content: text ? `${text}\n\n${imageContext}` : imageContext,
+    };
+    return [{ role: "system", content: systemContent }, ...fallbackMessages];
+  };
+}
+
 /**
  * 构造 CyreneAgent.runWithEvents 所需的 options + 提取 latestUserText。
  * 与 index.ts 原 AG-UI bridge 的 buildOptions 行为完全一致。
@@ -147,7 +232,7 @@ export async function buildAgentRunOptions(
   }
   // slim view for downstream helpers that only need { role, content }
   const slimMessages = messages as unknown as Array<{ role: string; content?: string }>;
-  const latestUserText = messages.filter((m) => m.role === "user").at(-1)?.content ?? "";
+  const latestUserText = contentToText(messages.filter((m) => m.role === "user").at(-1)?.content) ?? "";
 
   let alwaysOnContext = "";
   try {
@@ -221,8 +306,9 @@ export async function buildAgentRunOptions(
 
   const fcMessages: ChatMessage[] = [
     { role: "system", content: systemContent },
-    ...messages,
+    ...withDirectImageAttachments(messages, input),
   ];
+  const imageCaptionFallback = buildImageCaptionFallbackMessages(systemContent, messages, input, deps);
 
   return {
     options: {
@@ -231,9 +317,11 @@ export async function buildAgentRunOptions(
         baseUrl: settings.baseUrl,
         model: settings.model,
         apiKey: settings.apiKey,
+        explicitTransport: settings.explicitTransport,
       },
       messages: fcMessages,
       timeoutMs: deps.chatRequestTimeoutMs,
+      ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
       ...(isTalkMode ? { tools: [] as ToolDefinition[] } : {}),
     },
     latestUserText,

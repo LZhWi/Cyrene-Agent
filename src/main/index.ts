@@ -10,6 +10,7 @@ import { initRAG, buildMemoryContext, addMemory, importDocument, switchEmbedding
 import { getEmbeddingProvider, getSceneEmbeddingProvider } from "./rag/embedding";
 import { getMimeFromExt, ingestPaths, isImageExt, type Attachment } from "./rag/file-ingest";
 import { IMAGE_CAPTION_PROMPT, validateCaptionImagePath } from "./chat/image-caption";
+import { decideImageSendStrategy } from "./chat/image-send-strategy";
 import { buildAlwaysOnContext, buildMemoryInjection, runFunctionCallingLoop, scheduleMemoryWrite } from "./orchestrator";
 import { CyreneAgent } from "./orchestrator/cyrene-agent";
 import { indexConversationTurn } from "./orchestrator/history-tools";
@@ -2696,6 +2697,18 @@ ipcMain.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {
     return { ok: false, error: err?.message || String(err) };
   }
 });
+
+ipcMain.handle(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, () => {
+  const settings = loadModelSettings();
+  return decideImageSendStrategy({
+    provider: settings.provider,
+    baseUrl: settings.baseUrl,
+    model: settings.model,
+    apiKey: settings.apiKey,
+    explicitTransport: settings.explicitTransport,
+    vision: loadVisionConfig(),
+  });
+});
 ipcMain.on(IPC.SIDEBAR_MINIMIZE, () => {
   sidebarWindow?.minimize();
 });
@@ -3958,6 +3971,24 @@ app.whenReady().then(async () => {
     normalizeChatMessages: ((raw: ReadonlyArray<unknown>) =>
       normalizeChatMessages(raw as any)) as BuildOptionsDeps["normalizeChatMessages"],
     chatRequestTimeoutMs: CHAT_REQUEST_TIMEOUT_MS,
+    captionImageForFallback: async (filePath: string) => {
+      const validated = validateCaptionImagePath(filePath);
+      if (!validated.ok) return { ok: false, error: validated.error };
+      const visionCfg = loadVisionConfig();
+      if (!visionCfg) return { ok: false, error: "未配置视觉模型，无法分析图片" };
+      try {
+        const { captionImage } = await import("./orchestrator/vision-captioner");
+        const caption = await captionImage(
+          { base64: validated.buffer.toString("base64"), mime: validated.mime },
+          IMAGE_CAPTION_PROMPT,
+          visionCfg,
+        );
+        if (caption.startsWith("[错误")) return { ok: false, error: caption };
+        return { ok: true, caption };
+      } catch (err: any) {
+        return { ok: false, error: err?.message || String(err) };
+      }
+    },
   };
   const onRunFinishedDeps: OnRunFinishedDeps = {
     loadModelSettings: () => loadModelSettings(),

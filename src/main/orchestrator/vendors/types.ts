@@ -21,6 +21,12 @@ export interface VendorConfig {
   explicitTransport?: Transport | "auto";
 }
 
+export type OpenAIContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image_url"; image_url: { url: string } };
+
+export type ChatMessageContent = string | OpenAIContentBlock[];
+
 /** 统一工具调用描述（项目内部），与 OpenAI/Anthropic wire 格式解耦。 */
 export interface ToolCall {
   id: string;
@@ -35,7 +41,7 @@ export interface ToolCall {
  */
 export interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
-  content?: string;
+  content?: ChatMessageContent;
   /** assistant 上的工具调用（统一结构，OpenAI wire 再转成 tool_calls[].function）。 */
   toolCalls?: ToolCall[];
   /** role:"tool" 的回填锚点（OpenAI: tool_call_id；Anthropic: tool_use_id）。 */
