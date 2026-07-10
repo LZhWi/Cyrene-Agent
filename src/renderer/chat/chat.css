@@ -521,6 +521,32 @@ body {
   max-width: 70%;
 }
 
+.chat-transient-status {
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 70%;
+  padding: 9px 13px;
+  margin-left: 66px;
+  border-radius: 14px;
+  border: 1px solid var(--rb-border-soft);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--rb-text-muted);
+  font: var(--rb-text-small);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.14), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.chat-transient-status__dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chat-transient-status__text {
+  white-space: nowrap;
+}
+
 .msg--user  { align-self: flex-end; flex-direction: row-reverse; }
 .msg--model { align-self: flex-start; }
 

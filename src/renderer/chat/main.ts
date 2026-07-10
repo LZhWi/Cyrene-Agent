@@ -998,6 +998,35 @@ function renderImageAttachments(body: HTMLElement, attachments: MessageAttachmen
   if (list.childElementCount > 0) body.appendChild(list);
 }
 
+let transientStatusEl: HTMLElement | null = null;
+
+function showTransientStatus(text: string): void {
+  if (!transientStatusEl) {
+    transientStatusEl = document.createElement("div");
+    transientStatusEl.className = "chat-transient-status";
+    const dots = document.createElement("span");
+    dots.className = "chat-transient-status__dots";
+    for (let i = 0; i < 3; i += 1) {
+      const dot = document.createElement("span");
+      dot.className = "thinking-dot";
+      dots.appendChild(dot);
+    }
+    const label = document.createElement("span");
+    label.className = "chat-transient-status__text";
+    transientStatusEl.appendChild(dots);
+    transientStatusEl.appendChild(label);
+    messagesEl.appendChild(transientStatusEl);
+  }
+  const label = transientStatusEl.querySelector(".chat-transient-status__text");
+  if (label) label.textContent = text;
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function hideTransientStatus(): void {
+  transientStatusEl?.remove();
+  transientStatusEl = null;
+}
+
 function render(): void {
   // 空态：当前会话还没有消息时（新建/全清）显示"昔涟期待与你聊天哦 ✨"占位
   // thinking 状态（昔涟主动开场/流式回复中）也算有消息，胶囊应立即消失
@@ -2458,58 +2487,64 @@ async function send(): Promise<void> {
   const turnTextAttachments: { name: string; text: string }[] = [];
   let budgetUsed = 0;
   const budgetExceeded: string[] = [];
-  for (const f of filesForThisTurn) {
-    switch (f.kind) {
-      case "text":
-        if (f.text) {
-          const remaining = BUDGET_CHARS - budgetUsed;
-          if (f.text.length > remaining) {
-            turnTextAttachments.push({ name: f.name, text: f.text.slice(0, remaining) });
-            budgetExceeded.push(f.name);
-            budgetUsed = BUDGET_CHARS;
-          } else {
-            turnTextAttachments.push({ name: f.name, text: f.text });
-            budgetUsed += f.text.length;
+  const hasImageAttachments = filesForThisTurn.some((f) => f.kind === "image");
+  if (hasImageAttachments) showTransientStatus("正在分析图片...");
+  try {
+    for (const f of filesForThisTurn) {
+      switch (f.kind) {
+        case "text":
+          if (f.text) {
+            const remaining = BUDGET_CHARS - budgetUsed;
+            if (f.text.length > remaining) {
+              turnTextAttachments.push({ name: f.name, text: f.text.slice(0, remaining) });
+              budgetExceeded.push(f.name);
+              budgetUsed = BUDGET_CHARS;
+            } else {
+              turnTextAttachments.push({ name: f.name, text: f.text });
+              budgetUsed += f.text.length;
+            }
           }
-        }
-        hintsByKind.push(`📝 ${f.name}（附件，内容已注入本轮上下文）`);
-        break;
-      case "indexed":
-        hintsByKind.push(`📚 ${f.name}（已索引 ${f.chunks ?? 0} 段，可用 imported_docs 工具检索）`);
-        break;
-      case "empty":
-        hintsByKind.push(`📄 ${f.name}（为空）`);
-        break;
-      case "image": {
-        const msgAtt = userMsg.attachments?.find((att) => att.filePath === f.filePath);
-        if (!f.filePath) {
-          f.status = "error";
-          f.reason = "缺少图片路径";
-          if (msgAtt) msgAtt.status = "error";
-          imageContextLines.push(`- ${f.name}：图片分析失败：缺少图片路径。请诚实说明暂时无法看清这张图。`);
+          hintsByKind.push(`📝 ${f.name}（附件，内容已注入本轮上下文）`);
+          break;
+        case "indexed":
+          hintsByKind.push(`📚 ${f.name}（已索引 ${f.chunks ?? 0} 段，可用 imported_docs 工具检索）`);
+          break;
+        case "empty":
+          hintsByKind.push(`📄 ${f.name}（为空）`);
+          break;
+        case "image": {
+          const msgAtt = userMsg.attachments?.find((att) => att.filePath === f.filePath);
+          if (!f.filePath) {
+            f.status = "error";
+            f.reason = "缺少图片路径";
+            if (msgAtt) msgAtt.status = "error";
+            imageContextLines.push(`- ${f.name}：图片分析失败：缺少图片路径。请诚实说明暂时无法看清这张图。`);
+            break;
+          }
+          const result = await window.chat?.captionImage(f.filePath);
+          if (result?.ok && result.caption) {
+            f.status = "done";
+            f.caption = result.caption;
+            if (msgAtt) {
+              msgAtt.status = "done";
+              msgAtt.caption = result.caption;
+            }
+            imageContextLines.push(`- ${f.name}：${result.caption}`);
+          } else {
+            f.status = "error";
+            f.reason = result?.error || "图片分析失败";
+            if (msgAtt) msgAtt.status = "error";
+            imageContextLines.push(`- ${f.name}：图片分析失败：${f.reason}。请诚实说明暂时无法看清这张图。`);
+          }
           break;
         }
-        const result = await window.chat?.captionImage(f.filePath);
-        if (result?.ok && result.caption) {
-          f.status = "done";
-          f.caption = result.caption;
-          if (msgAtt) {
-            msgAtt.status = "done";
-            msgAtt.caption = result.caption;
-          }
-          imageContextLines.push(`- ${f.name}：${result.caption}`);
-        } else {
-          f.status = "error";
-          f.reason = result?.error || "图片分析失败";
-          if (msgAtt) msgAtt.status = "error";
-          imageContextLines.push(`- ${f.name}：图片分析失败：${f.reason}。请诚实说明暂时无法看清这张图。`);
-        }
-        break;
+        case "unsupported":
+          hintsByKind.push(`⚠️ ${f.name}（暂不支持：${f.reason || ""}）`);
+          break;
       }
-      case "unsupported":
-        hintsByKind.push(`⚠️ ${f.name}（暂不支持：${f.reason || ""}）`);
-        break;
     }
+  } finally {
+    if (hasImageAttachments) hideTransientStatus();
   }
   if (budgetExceeded.length > 0) {
     hintsByKind.push(`⚠️ ${budgetExceeded.join("、")} 已省略部分内容（超一轮预算）`);
