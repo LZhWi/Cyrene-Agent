@@ -202,3 +202,96 @@ describe("ILinkBotAdapter.send", () => {
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("ILinkBotAdapter inbound media", () => {
+  it("downloads supported image media into incoming attachments", async () => {
+    const adapter = new ILinkBotAdapter();
+    const onMessage = vi.fn(async () => null);
+    (adapter as any).onMessage = onMessage;
+    (adapter as any).client = { sendText: vi.fn() };
+    (adapter as any).downloadMedia = vi.fn(async () => ({
+      filePath: "C:/tmp/cyrene-test-user-data/channels/cache/wechat-msg-1-image.png",
+      mime: "image/png",
+    }));
+
+    await (adapter as any).dispatchInbound({
+      msgId: "msg-1",
+      fromUserId: "wx-user-1",
+      toUserId: "bot-1",
+      msgType: 1,
+      content: "看看这个",
+      items: [
+        {
+          type: 2,
+          image_item: {
+            media: {
+              encrypt_query_param: "download-param",
+              aes_key: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
+              encrypt_type: 1,
+            },
+          },
+        },
+      ],
+      contextToken: "ctx-1",
+      raw: {},
+    });
+
+    expect((adapter as any).downloadMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "image" }),
+      "msg-1",
+    );
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
+      channel: "wechat",
+      senderId: "wx-user-1",
+      text: "看看这个",
+      attachments: [
+        {
+          kind: "image",
+          filePath: "C:/tmp/cyrene-test-user-data/channels/cache/wechat-msg-1-image.png",
+          mime: "image/png",
+          caption: "微信图片",
+        },
+      ],
+    }));
+  });
+
+  it("does not dispatch to the agent when supported media download fails", async () => {
+    const adapter = new ILinkBotAdapter();
+    const onMessage = vi.fn(async () => null);
+    const sendText = vi.fn(async () => ({ ok: true }));
+    (adapter as any).onMessage = onMessage;
+    (adapter as any).client = { sendText };
+    (adapter as any).downloadMedia = vi.fn(async () => {
+      throw new Error("download failed");
+    });
+
+    await (adapter as any).dispatchInbound({
+      msgId: "msg-2",
+      fromUserId: "wx-user-1",
+      toUserId: "bot-1",
+      msgType: 1,
+      content: "看看这个",
+      items: [
+        {
+          type: 2,
+          image_item: {
+            media: {
+              encrypt_query_param: "download-param",
+              aes_key: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
+              encrypt_type: 1,
+            },
+          },
+        },
+      ],
+      contextToken: "ctx-1",
+      raw: {},
+    });
+
+    expect(sendText).toHaveBeenCalledWith(
+      "wx-user-1",
+      expect.stringContaining("微信附件下载失败"),
+      "ctx-1",
+    );
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+});

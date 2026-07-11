@@ -70,6 +70,7 @@ import { setCallWindow, registerCallIpc, setCallSettings, stopCall } from "./cal
 import { initSkills, skillRegistry, buildSkillCatalog, parseSlashCommand, setSkillEnabled, listSkillsForUi } from "./skills";
 import { initGameBot } from "./game-bot";
 import { initChannels, shutdownChannels } from "./channels/init";
+import { buildChannelAttachmentInputs } from "./channels/agent-input";
 import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
 import {
   buildAgentRunOptions,
@@ -3829,6 +3830,7 @@ app.whenReady().then(async () => {
       }));
 
     // 把 IncomingMessage 转成 AguiRunInput，调 CyreneAgent
+    const attachmentInputs = buildChannelAttachmentInputs(msg);
     const { options } = await buildAgentRunOptions(
       {
         messages: [
@@ -3837,10 +3839,8 @@ app.whenReady().then(async () => {
         ],
         style: "01_default.md",
         sessionId,
-        attachments: msg.attachments?.map((a) => ({
-          name: a.filePath ?? a.url ?? "attachment",
-          text: a.caption ?? "",
-        })),
+        attachments: attachmentInputs.attachments,
+        imageAttachments: attachmentInputs.imageAttachments,
         channel: msg.channel,
       },
       buildOptionsDeps,

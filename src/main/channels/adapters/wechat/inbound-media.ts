@@ -1,10 +1,15 @@
 import path from "node:path";
+import type { CDNMedia } from "./ilink-protocol-client";
 
 type InboundItemType = 1 | 2 | 3 | 4 | 5;
 
 export interface InboundWechatItem {
   type: InboundItemType;
-  image_item?: unknown;
+  image_item?: {
+    file_name?: unknown;
+    name?: unknown;
+    media?: unknown;
+  };
   voice_item?: unknown;
   file_item?: {
     file_name?: unknown;
@@ -25,6 +30,7 @@ export interface InboundMediaDescriptor {
   fileName: string;
   extension: string;
   analyzable: boolean;
+  media?: CDNMedia;
 }
 
 const ANALYZABLE_FILE_EXTENSIONS = new Set([
@@ -69,7 +75,14 @@ export function describeInboundWechatMedia(items: InboundWechatItem[]): InboundM
   const media: InboundMediaDescriptor[] = [];
   for (const item of items) {
     if (item.type === 2 && item.image_item) {
-      media.push({ kind: "image", fileName: "微信图片", extension: "", analyzable: true });
+      const fileName = asFileName(item.image_item.file_name ?? item.image_item.name, "微信图片");
+      media.push({
+        kind: "image",
+        fileName,
+        extension: getFileExtension(fileName),
+        analyzable: true,
+        media: asCdnMedia(item.image_item.media),
+      });
     } else if (item.type === 3 && item.voice_item) {
       media.push({ kind: "voice", fileName: "微信语音", extension: "", analyzable: false });
     } else if (item.type === 4 && item.file_item) {
@@ -79,6 +92,7 @@ export function describeInboundWechatMedia(items: InboundWechatItem[]): InboundM
         fileName,
         extension: getFileExtension(fileName),
         analyzable: isAnalyzableWechatFile(fileName),
+        media: asCdnMedia(item.file_item.media),
       });
     } else if (item.type === 5 && item.video_item) {
       const fileName = asFileName(item.video_item.file_name ?? item.video_item.name, "微信视频");
@@ -91,6 +105,18 @@ export function describeInboundWechatMedia(items: InboundWechatItem[]): InboundM
     }
   }
   return media;
+}
+
+function asCdnMedia(value: unknown): CDNMedia | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const media = value as Partial<CDNMedia>;
+  if (typeof media.encrypt_query_param !== "string" || typeof media.aes_key !== "string") return undefined;
+  return {
+    encrypt_query_param: media.encrypt_query_param,
+    aes_key: media.aes_key,
+    encrypt_type: media.encrypt_type,
+    full_url: media.full_url,
+  };
 }
 
 export function buildUnsupportedWechatFilePrompt(username: string): string {
