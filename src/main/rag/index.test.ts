@@ -30,6 +30,7 @@ vi.mock("./embedding", async (importOriginal) => ({
 }));
 
 import {
+  hasImportedDocumentChunks,
   importDocumentForTurn,
   initRAG,
   resetRAG,
@@ -60,5 +61,13 @@ describe("turn document imports", () => {
     const chunks = await searchImportedDocumentChunksForImportIds("paragraph", [result.importId], 3);
     expect(chunks.length).toBeGreaterThan(0);
     expect(chunks.every((chunk) => chunk.importId === result.importId)).toBe(true);
+  });
+
+  it("reports whether an importId still has stored document chunks", async () => {
+    expect(hasImportedDocumentChunks("import-missing")).toBe(false);
+
+    const result = await importDocumentForTurn("one paragraph", "turn-doc.md");
+
+    expect(hasImportedDocumentChunks(result.importId)).toBe(true);
   });
 });

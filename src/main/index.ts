@@ -6,9 +6,10 @@ import { createHash } from "crypto";
 import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
 import { STATUS_KEYWORDS } from "./status-keywords";
-import { initRAG, buildMemoryContext, addMemory, importDocumentForTurn, searchImportedDocumentChunksForImportIds, switchEmbeddingModel, deleteImportedDoc } from "./rag";
+import { initRAG, buildMemoryContext, addMemory, importDocumentForTurn, searchImportedDocumentChunksForImportIds, switchEmbeddingModel, deleteImportedDoc, hasImportedDocumentChunks } from "./rag";
 import { getEmbeddingProvider, getSceneEmbeddingProvider } from "./rag/embedding";
 import { describePendingAttachment, processDocumentsForChat } from "./rag/file-ingest";
+import { buildDocumentCacheIdentity, createDocumentCacheKey, getValidDocumentCacheRecord, putDocumentCacheRecord } from "./rag/document-cache";
 import { IMAGE_CAPTION_PROMPT, validateCaptionImagePath } from "./chat/image-caption";
 import { decideImageSendStrategy } from "./chat/image-send-strategy";
 import { buildAlwaysOnContext, buildMemoryInjection, runFunctionCallingLoop, scheduleMemoryWrite } from "./orchestrator";
@@ -2661,7 +2662,23 @@ ipcMain.handle(IPC.CHAT_PROCESS_DOCUMENTS, async (_event, payload: unknown) => {
   return processDocumentsForChat(
     filePaths,
     typeof (payload as { query?: unknown }).query === "string" ? (payload as { query: string }).query : "",
-    importDocumentForTurn,
+    {
+      importDocument: importDocumentForTurn,
+      getCachedImport: async (text) => {
+        const identity = await buildDocumentCacheIdentity(text);
+        return getValidDocumentCacheRecord(createDocumentCacheKey(identity), hasImportedDocumentChunks);
+      },
+      putCachedImport: async (text, fileName, imported) => {
+        const identity = await buildDocumentCacheIdentity(text);
+        await putDocumentCacheRecord({
+          key: createDocumentCacheKey(identity),
+          importId: imported.importId,
+          chunkCount: imported.chunkCount,
+          fileName,
+          createdAt: new Date().toISOString(),
+        });
+      },
+    },
     searchImportedDocumentChunksForImportIds,
   );
 });

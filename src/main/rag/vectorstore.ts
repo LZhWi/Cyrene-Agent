@@ -411,6 +411,12 @@ export class JsonVectorStore {
     return deleted;
   }
 
+  hasImportedDocumentChunks(importId: string): boolean {
+    return this.entries.some(
+      (entry) => entry.source === "imported_doc" && String(entry.metadata?.importId ?? "") === importId,
+    );
+  }
+
   // 统计
   get stats() {
     const sources: Record<string, number> = {};

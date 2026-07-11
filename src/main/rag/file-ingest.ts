@@ -8,7 +8,7 @@ export type AttachmentKind = "text" | "indexed" | "empty" | "unsupported" | "ima
 
 export type Attachment =
   | { kind: "text"; name: string; text: string; filePath?: string; mime?: string }
-  | { kind: "indexed"; name: string; chunks: number; importId?: string; filePath?: string; mime?: string; reason?: string; retrievedChunks?: ImportedDocumentChunk[] }
+  | { kind: "indexed"; name: string; chunks: number; importId?: string; cached?: boolean; filePath?: string; mime?: string; reason?: string; retrievedChunks?: ImportedDocumentChunk[] }
   | { kind: "empty"; name: string; filePath?: string; mime?: string }
   | { kind: "unsupported"; name: string; reason: string; filePath?: string; mime?: string; status?: "error" }
   | { kind: "image"; name: string; filePath: string; mime?: string; status: "pending"; previewUrl?: string; caption?: string }
@@ -17,6 +17,12 @@ export type Attachment =
 /** ingestOneFile 的大文件索引回调签名。由调用方（index.ts）注入具体实现（importDocument）。 */
 export type ImportFn = (text: string, fileName: string) => Promise<ImportedDocumentResult>;
 export type SearchImportedChunksFn = (query: string, importIds: string[], topK?: number) => Promise<ImportedDocumentChunk[]>;
+export type DocumentImportOptions = {
+  importDocument: ImportFn;
+  getCachedImport?: (text: string) => Promise<Pick<ImportedDocumentResult, "importId" | "chunkCount"> | null>;
+  putCachedImport?: (text: string, fileName: string, imported: ImportedDocumentResult) => Promise<void>;
+};
+export type DocumentImport = ImportFn | DocumentImportOptions;
 
 // ── Thresholds ──
 /** 小文件 vs 大文件（→RAG）的分界，字符数。 */
@@ -121,6 +127,41 @@ export function isBinary(buf: Buffer): boolean {
   return false;
 }
 
+async function indexLargeText(
+  text: string,
+  name: string,
+  documentImport: DocumentImport,
+): Promise<Attachment> {
+  const options: DocumentImportOptions = typeof documentImport === "function"
+    ? { importDocument: documentImport }
+    : documentImport;
+
+  if (options.getCachedImport) {
+    try {
+      const cached = await options.getCachedImport(text);
+      if (cached) {
+        return { name, kind: "indexed", chunks: cached.chunkCount, importId: cached.importId, cached: true };
+      }
+    } catch (err) {
+      console.warn("[RAG] document cache lookup failed:", err);
+    }
+  }
+
+  try {
+    const imported = await options.importDocument(text, name);
+    if (options.putCachedImport) {
+      try {
+        await options.putCachedImport(text, name, imported);
+      } catch (err) {
+        console.warn("[RAG] document cache write failed:", err);
+      }
+    }
+    return { name, kind: "indexed", chunks: imported.chunkCount, importId: imported.importId };
+  } catch (err: any) {
+    return { name, kind: "indexed", chunks: 0, reason: err?.message || String(err) };
+  }
+}
+
 // ── 核心路由：处理单个文件 ──
 
 /**
@@ -130,7 +171,7 @@ export function isBinary(buf: Buffer): boolean {
  */
 export async function ingestOneFile(
   filePath: string,
-  importFn: ImportFn,
+  documentImport: DocumentImport,
 ): Promise<Attachment> {
   let stat: fs.Stats;
   try {
@@ -171,12 +212,7 @@ export async function ingestOneFile(
     }
     if (text.length > SMALL_THRESHOLD) {
       // 大文本 → 索引到 Vector DB
-      try {
-        const result = await importFn(text, name);
-        return { name, kind: "indexed", chunks: result.chunkCount, importId: result.importId };
-      } catch (err: any) {
-        return { name, kind: "indexed", chunks: 0, reason: err?.message || String(err) };
-      }
+      return indexLargeText(text, name, documentImport);
     }
     return { name, kind: "text", text };
   }
@@ -191,12 +227,7 @@ export async function ingestOneFile(
     return { name, kind: "empty" };
   }
   if (text.length > SMALL_THRESHOLD) {
-    try {
-      const result = await importFn(text, name);
-      return { name, kind: "indexed", chunks: result.chunkCount, importId: result.importId };
-    } catch (err: any) {
-      return { name, kind: "indexed", chunks: 0, reason: err?.message || String(err) };
-    }
+    return indexLargeText(text, name, documentImport);
   }
   return { name, kind: "text", text };
 }
@@ -240,7 +271,7 @@ export function walkDir(dirPath: string): string[] {
  */
 export async function ingestPaths(
   paths: string[],
-  importFn: ImportFn,
+  documentImport: DocumentImport,
 ): Promise<Attachment[]> {
   // 展开目录，同时记录每个文件的"显示名"（相对输入目录的路径）
   const filesWithPaths: Array<{ absPath: string; displayName: string }> = [];
@@ -277,7 +308,7 @@ export async function ingestPaths(
 
   const results: Attachment[] = [];
   for (const { absPath, displayName } of unique) {
-    const att = await ingestOneFile(absPath, importFn);
+    const att = await ingestOneFile(absPath, documentImport);
     // 用保留相对路径的显示名覆盖 basename
     results.push({ ...att, name: displayName, filePath: absPath });
   }
@@ -287,13 +318,13 @@ export async function ingestPaths(
 export async function processDocumentsForChat(
   filePaths: string[],
   query: string,
-  importFn: ImportFn,
+  documentImport: DocumentImport,
   searchImportedChunks: SearchImportedChunksFn,
 ): Promise<Attachment[]> {
   const results: Attachment[] = [];
   for (const filePath of filePaths) {
     try {
-      const processed = await ingestPaths([filePath], importFn);
+      const processed = await ingestPaths([filePath], documentImport);
       if (processed.length === 0) {
         results.push({
           name: path.basename(filePath),

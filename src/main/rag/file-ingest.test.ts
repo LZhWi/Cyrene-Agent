@@ -174,6 +174,25 @@ describe("ingestOneFile", () => {
     });
   });
 
+  it("reuses a completed document cache record instead of embedding again", async () => {
+    const importFn = vi.fn();
+    const largeMarkdownPath = write("large.md", "x".repeat(SMALL_THRESHOLD + 1));
+
+    const result = await ingestOneFile(largeMarkdownPath, {
+      importDocument: importFn,
+      getCachedImport: async () => ({ importId: "import-cached", chunkCount: 9 }),
+    });
+
+    expect(result).toMatchObject({
+      kind: "indexed",
+      name: "large.md",
+      chunks: 9,
+      importId: "import-cached",
+      cached: true,
+    });
+    expect(importFn).not.toHaveBeenCalled();
+  });
+
   it("returns importId and relevant chunks for document processing", async () => {
     const fp = write("large.md", "x".repeat(SMALL_THRESHOLD + 1));
     const importForTurn = vi.fn().mockResolvedValue({ importId: "import-current", chunkCount: 12 });

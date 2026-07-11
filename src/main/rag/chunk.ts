@@ -11,6 +11,9 @@ export interface Chunk {
   metadata?: Record<string, unknown>;
 }
 
+export const DOCUMENT_CHUNK_SIZE = 512;
+export const DOCUMENT_CHUNK_OVERLAP = 128;
+
 // ── Token 估算 ──
 // 注意：这只是估算值，用于决定切分位置。
 // 实际模型的 tokenizer 会略有不同，但滑动窗口的冗余覆盖能容错。
@@ -156,8 +159,8 @@ function getTitlePrefix(tokenPos: number, titles: TitleRecord[]): string {
 export function chunkText(
   text: string,
   source: string,
-  chunkSize = 512,
-  overlap = 128,
+  chunkSize = DOCUMENT_CHUNK_SIZE,
+  overlap = DOCUMENT_CHUNK_OVERLAP,
 ): Chunk[] {
   // 预提取标题（只需扫描一次全文）
   const titles = extractTitles(text);

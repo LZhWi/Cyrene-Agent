@@ -340,3 +340,7 @@ export function deleteImportedDoc(importId: string, fileName?: string): number {
   if (!store) throw new Error("RAG not initialized");
   return store.deleteImportedDoc(importId, fileName);
 }
+
+export function hasImportedDocumentChunks(importId: string): boolean {
+  return store?.hasImportedDocumentChunks(importId) ?? false;
+}

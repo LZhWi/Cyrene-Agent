@@ -4,11 +4,19 @@ import * as path from "path";
 import * as os from "os";
 
 // ── 类型 ──
+export type EmbeddingProviderIdentity = {
+  provider: string;
+  model: string;
+  dimensions: number;
+  endpoint?: string;
+};
+
 export interface EmbeddingProvider {
   embed(text: string): Promise<number[]>;
   embedBatch(texts: string[]): Promise<number[][]>;
   readonly dims: number;
   readonly name: string;
+  readonly cacheIdentity?: EmbeddingProviderIdentity;
 }
 
 // ── 模型注册表 ──
@@ -68,6 +76,11 @@ export function createLocalEmbeddingProvider(modelKey?: string): EmbeddingProvid
   return {
     name: "local-" + config.hfName.split("/").pop(),
     dims: config.dims,
+    cacheIdentity: {
+      provider: "local",
+      model: config.hfName,
+      dimensions: config.dims,
+    },
 
     async embed(text: string): Promise<number[]> {
       const pipe = await getLocalPipeline(key);
@@ -93,11 +106,18 @@ export function createOpenAIEmbeddingProvider(
   apiKey: string,
   model = "text-embedding-ada-002"
 ): EmbeddingProvider {
-  const endpoint = baseUrl.replace(/\/+$/, "") + "/embeddings";
+  const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
+  const endpoint = normalizedBaseUrl + "/embeddings";
 
   return {
     name: "openai-compat-" + model,
     dims: 1536,
+    cacheIdentity: {
+      provider: "openai-compat",
+      model,
+      dimensions: 1536,
+      endpoint: normalizedBaseUrl,
+    },
 
     async embed(text: string): Promise<number[]> {
       const res = await fetch(endpoint, {
@@ -161,6 +181,39 @@ export function getEmbeddingProvider(
   }
 
   return cachedProvider;
+}
+
+export async function getEmbeddingProviderIdentity(): Promise<EmbeddingProviderIdentity> {
+  const provider = getEmbeddingProvider();
+  if (!provider) throw new Error("Embedding provider is not available");
+
+  if (provider.cacheIdentity) return provider.cacheIdentity;
+
+  const localModel = Object.values(LOCAL_MODELS).find(
+    (model) => provider.name === "local-" + model.hfName.split("/").pop(),
+  );
+  if (localModel) {
+    return {
+      provider: "local",
+      model: localModel.hfName,
+      dimensions: provider.dims,
+    };
+  }
+
+  const cloudModelPrefix = "openai-compat-";
+  if (provider.name.startsWith(cloudModelPrefix)) {
+    return {
+      provider: "openai-compat",
+      model: provider.name.slice(cloudModelPrefix.length),
+      dimensions: provider.dims,
+    };
+  }
+
+  return {
+    provider: provider.name,
+    model: provider.name,
+    dimensions: provider.dims,
+  };
 }
 
 export function getCurrentModelKey(): string {
