@@ -1874,7 +1874,8 @@ async function requestModelReply(inputMessages: unknown, styleFile = "01_default
   if (settings.stickerEnabled && stickerEmbeddingIndex) {
     const provider = getEmbeddingProvider();
     if (provider) {
-      const matchResult = await matchSticker(chatContent + "\n" + latestUserText, provider, stickerEmbeddingIndex, settings.stickerSimilarityThreshold);
+      const stickerQuery = (chatContent + "\n" + latestUserText).slice(0, 1000);
+      const matchResult = await matchSticker(stickerQuery, provider, stickerEmbeddingIndex, settings.stickerSimilarityThreshold);
       sticker = matchResult?.id ?? null;
     }
   }

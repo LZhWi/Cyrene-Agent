@@ -382,11 +382,12 @@ export async function onAgentRunFinished(
   });
 
   const stickerIndex = deps.getStickerEmbeddingIndex?.() ?? deps.stickerEmbeddingIndex;
+  const stickerQuery = (chatContent + "\n" + sideEffectUserText).slice(0, 1000);
   const stickerCandidate =
     settings.stickerEnabled && stickerIndex
       ? (
           await deps.matchSticker(
-            chatContent + "\n" + sideEffectUserText,
+            stickerQuery,
             deps.getEmbeddingProvider(),
             stickerIndex,
             settings.stickerSimilarityThreshold ?? 0.55,

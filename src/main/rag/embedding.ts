@@ -41,6 +41,7 @@ const DEFAULT_MODEL_KEY = "minilm";
 // ── 本地 Pipeline ──
 // 每个模型 key 独立缓存 pipeline，支持多模型同时运行（minilm 管文档/记忆，bgem3 管场景识别）
 const localPipelines: Map<string, any> = new Map();
+const localPipelineLoads: Map<string, Promise<any>> = new Map();
 let currentModelKey: string = DEFAULT_MODEL_KEY;
 
 const importEsm = new Function("moduleName", "return import(moduleName)") as (moduleName: string) => Promise<any>;
@@ -50,8 +51,12 @@ async function getLocalPipeline(modelKey?: string): Promise<any> {
   const config = LOCAL_MODELS[key];
   if (!config) throw new Error("Unknown embedding model: " + key);
 
-  let pipe = localPipelines.get(key);
-  if (!pipe) {
+  const cached = localPipelines.get(key);
+  if (cached) return cached;
+  const loading = localPipelineLoads.get(key);
+  if (loading) return loading;
+
+  const load = (async () => {
     const { pipeline, env } = await importEsm("@xenova/transformers");
     env.allowLocalModels = true;
     env.allowRemoteModels = false;
@@ -60,12 +65,18 @@ async function getLocalPipeline(modelKey?: string): Promise<any> {
     // 兜底：HF cache，通过 cache_dir 选项传给 pipeline。
     // transformers 内部会按 (localModelPath, cache_dir) 顺序查找文件。
     env.localModelPath = getProjectModelsDir();
-    pipe = await pipeline("feature-extraction", config.hfName, {
+    const pipe = await pipeline("feature-extraction", config.hfName, {
       cache_dir: path.join(os.homedir(), ".cache", "huggingface"),
     });
     localPipelines.set(key, pipe);
+    return pipe;
+  })();
+  localPipelineLoads.set(key, load);
+  try {
+    return await load;
+  } finally {
+    localPipelineLoads.delete(key);
   }
-  return pipe;
 }
 
 export function createLocalEmbeddingProvider(modelKey?: string): EmbeddingProvider | null {
@@ -249,12 +260,14 @@ export function switchEmbeddingModel(modelKey: string): void {
   if (!config) throw new Error("Unknown embedding model: " + modelKey);
   cachedProvider = null;
   localPipelines.delete(currentModelKey);
+  localPipelineLoads.delete(currentModelKey);
   currentModelKey = modelKey;
 }
 
 export function resetEmbeddingProvider(): void {
   cachedProvider = null;
   localPipelines.clear();
+  localPipelineLoads.clear();
   currentModelKey = DEFAULT_MODEL_KEY;
 }
 
