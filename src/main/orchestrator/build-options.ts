@@ -143,6 +143,24 @@ function contentToText(content: ChatMessage["content"]): string {
   return "";
 }
 
+function stripTurnModelContextForSideEffects(text: string): string {
+  const markers = [
+    "\n\n【本轮文件】",
+    "\n\n【文档内容】",
+    "\n\n【图片视觉信息】",
+    "\n\n【图片附件】",
+    "【本轮文件】",
+    "【文档内容】",
+    "【图片视觉信息】",
+    "【图片附件】",
+  ];
+  const cut = markers
+    .map((marker) => text.indexOf(marker))
+    .filter((index) => index >= 0)
+    .sort((a, b) => a - b)[0];
+  return (cut === undefined ? text : text.slice(0, cut)).trim();
+}
+
 function withDirectImageAttachments(messages: ChatMessage[], input: AguiRunInput): ChatMessage[] {
   const images = input.imageAttachments?.filter((image) =>
     typeof image?.filePath === "string" && typeof image?.name === "string",
@@ -345,10 +363,11 @@ export async function onAgentRunFinished(
   channel?: "wechat" | "feishu",
 ): Promise<{ sticker: string | null }> {
   const chatContent = result.reply;
-  deps.scheduleMemoryWrite(latestUserText, chatContent);
+  const sideEffectUserText = stripTurnModelContextForSideEffects(latestUserText);
+  deps.scheduleMemoryWrite(sideEffectUserText, chatContent);
 
   const settings = deps.loadModelSettings();
-  const inferredStatus = deps.inferRuntimeState(latestUserText, chatContent, false);
+  const inferredStatus = deps.inferRuntimeState(sideEffectUserText, chatContent, false);
   deps.setRuntimeState({
     status: inferredStatus.status,
     expression: deps.feelingToExpression[deps.runtimeState.feeling ?? ""] ?? 0,
@@ -356,7 +375,7 @@ export async function onAgentRunFinished(
   });
 
   await deps.recordRelationshipTurn({
-    userText: latestUserText,
+    userText: sideEffectUserText,
     assistantText: chatContent,
     cyreneFeeling: deps.runtimeState.feeling ?? "平静",
     channel: channel ?? "desktop",
@@ -367,7 +386,7 @@ export async function onAgentRunFinished(
     settings.stickerEnabled && stickerIndex
       ? (
           await deps.matchSticker(
-            chatContent + "\n" + latestUserText,
+            chatContent + "\n" + sideEffectUserText,
             deps.getEmbeddingProvider(),
             stickerIndex,
             settings.stickerSimilarityThreshold ?? 0.55,
@@ -392,7 +411,7 @@ export async function onAgentRunFinished(
     // 心情观察器在 channels bot (wechat/feishu) 上跳过：节省一次 LLM 调用、加快首条回复
     // 桌面聊天（channel === undefined）照常跑，保持 Live2D 表情/心情跟随对话变化
     if (channel !== "wechat" && channel !== "feishu") {
-      void deps.observeRuntimeState(settings, [], latestUserText, chatContent);
+      void deps.observeRuntimeState(settings, [], sideEffectUserText, chatContent);
     }
   }
 

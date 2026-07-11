@@ -184,4 +184,50 @@ describe("build-options", () => {
       value: "hugtight",
     }))
   })
+
+  it("does not send document model context into memory or sticker embedding side effects", async () => {
+    const scheduleMemoryWrite = vi.fn()
+    const matchSticker = vi.fn(async () => null)
+    const latestIndex = [{ id: "thinking", embedding: [1, 0] }]
+    const hugeDoc = "超长文档内容".repeat(1000)
+    const latestUserText = [
+      "帮我总结这个 md",
+      "【本轮文件】\n📝 notes.md（附件，内容已注入本轮上下文）",
+      `【文档内容】\n文档 notes.md 内容：\n${hugeDoc}`,
+    ].join("\n\n")
+    const deps: OnRunFinishedDeps = {
+      loadModelSettings: () => ({
+        provider: "test",
+        baseUrl: "",
+        model: "",
+        apiKey: "",
+        runtimeSync: "off",
+        stickerEnabled: true,
+        stickerSimilarityThreshold: 0.55,
+      }),
+      scheduleMemoryWrite,
+      inferRuntimeState: () => ({ status: "陪伴中" }),
+      runtimeState: { status: "陪伴中", feeling: "温柔", expression: 0, updatedAt: 0 },
+      feelingToExpression: { "温柔": 0 },
+      setRuntimeState: () => {},
+      stickerEmbeddingIndex: latestIndex,
+      getEmbeddingProvider: () => ({ embed: async () => [1, 0] }),
+      matchSticker,
+      loadStickerSettings: () => ({}),
+      broadcastRuntimeStateChanged: () => {},
+      observeRuntimeState: async () => {},
+      recordRelationshipTurn: async () => {},
+      getChatWindow: () => null,
+    }
+
+    await onAgentRunFinished({ reply: "总结好了", toolResults: [] }, latestUserText, deps)
+
+    expect(scheduleMemoryWrite).toHaveBeenCalledWith("帮我总结这个 md", "总结好了")
+    expect(matchSticker).toHaveBeenCalledWith(
+      "总结好了\n帮我总结这个 md",
+      expect.anything(),
+      latestIndex,
+      0.55,
+    )
+  })
 })

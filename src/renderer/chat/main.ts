@@ -8,6 +8,7 @@ import {
 } from "../../shared/chat-ui";
 import { canUseMinimaxStreamingEarly, extractEarlyTtsSegment } from "../../shared/tts-early-playback";
 import { getStickerSrcForId } from "./sticker-src";
+import { formatAttachmentTagDetail, getAttachmentIcon } from "./attachment-labels";
 import { resolveAsset } from "../../shared/renderer-base";
 import { buildTurnModelContext } from "../../shared/chat-context";
 
@@ -3003,23 +3004,12 @@ async function ingestDroppedFiles(files: File[]): Promise<void> {
 	    return;
 	  }
 	  attachBtn?.classList.add("has-file");
-	  const kindLabel: Record<AttachmentKind, string> = {
-	    text: "📝",
-	    indexed: "📚",
-	    empty: "📄",
-	    image: "📷",
-	    unsupported: "⚠️",
-	  };
 	  attachedFiles.forEach((f, i) => {
 	    const tag = document.createElement("div");
 	    tag.className = "chat__file-tag";
 	    const label = document.createElement("span");
-	    const icon = kindLabel[f.kind] || "📄";
-	    const detail = f.kind === "text" ? "（附件）" :
-	      f.kind === "indexed" ? `（${f.chunks ?? 0} 段）` :
-	      f.kind === "empty" ? "（空）" :
-	      f.kind === "image" ? (f.status === "done" ? "（已分析）" : f.status === "error" ? "（分析失败）" : "（待分析）") :
-	      "（暂不支持）";
+	    const icon = getAttachmentIcon(f.kind);
+	    const detail = formatAttachmentTagDetail(f);
 	    label.textContent = `${icon} ${f.name} ${detail}`;
 	    const btn = document.createElement("button");
 	    btn.type = "button";
