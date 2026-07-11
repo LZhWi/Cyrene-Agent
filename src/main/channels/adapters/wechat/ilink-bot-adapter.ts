@@ -23,6 +23,17 @@ import {
 } from "./ilink-protocol-client";
 import { uploadWechatMedia, uploadWechatMediaFile } from "./wechat-media-upload";
 import { encodeWechatVoiceSilk } from "./wechat-voice-encoding";
+import {
+  SAVE_INTENT_TTL_MS,
+  buildUnsupportedWechatFilePrompt,
+  buildWechatAsrMissingPrompt,
+  buildWechatSaveIntentPrompt,
+  buildWechatVideoPrompt,
+  describeInboundWechatMedia,
+  getWechatDisplayName,
+  isWechatSaveIntent,
+  type InboundMediaDescriptor,
+} from "./inbound-media";
 import type {
   ChannelCapability,
   ChannelId,
@@ -34,6 +45,12 @@ import type {
 import type { ChannelAdapter } from "../base";
 
 const LOG_PREFIX = "[WechatBot]";
+const USER_PROFILE_FILE = "user-profile.json";
+
+interface PendingInboundMedia {
+  media: InboundMediaDescriptor;
+  expiresAt: number;
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Capability
@@ -71,6 +88,8 @@ export class ILinkBotAdapter implements ChannelAdapter {
   /** 当前 credentials（动态加载） */
   currentCredentials: Credentials | null = null;
   private replyContextByTarget = new Map<string, string>();
+  private pendingSaveIntentByTarget = new Map<string, number>();
+  private pendingUnsupportedMediaByTarget = new Map<string, PendingInboundMedia>();
   private uploadMedia = uploadWechatMediaFile;
   private uploadMediaData = uploadWechatMedia;
   private encodeVoice = encodeWechatVoiceSilk;
@@ -302,6 +321,12 @@ export class ILinkBotAdapter implements ChannelAdapter {
     console.log(LOG_PREFIX, `inbound from=${msg.fromUserId} text=${(msg.content ?? "").slice(0, 80)}`);
     this.replyContextByTarget.set(msg.fromUserId, msg.contextToken);
 
+    const intercept = this.#maybeInterceptInboundMedia(msg);
+    if (intercept) {
+      void this.#sendInterceptText(msg.fromUserId, msg.contextToken, intercept);
+      return;
+    }
+
     const incoming: IncomingMessage = {
       channel: "wechat",
       senderId: msg.fromUserId,
@@ -314,6 +339,66 @@ export class ILinkBotAdapter implements ChannelAdapter {
     void this.onMessage(incoming).catch((err) => {
       console.error(LOG_PREFIX, "dispatcher error:", err);
     });
+  }
+
+  #maybeInterceptInboundMedia(msg: WeixinMessage): string | null {
+    const now = Date.now();
+    this.#clearExpiredInboundState(msg.fromUserId, now);
+
+    const username = loadWechatPreferredName();
+    const text = msg.content ?? "";
+    const media = describeInboundWechatMedia(msg.items);
+
+    if (isWechatSaveIntent(text)) {
+      this.pendingSaveIntentByTarget.set(msg.fromUserId, now + SAVE_INTENT_TTL_MS);
+      return buildWechatSaveIntentPrompt(username);
+    }
+
+    if (media.length === 0) return null;
+
+    const video = media.find((item) => item.kind === "video");
+    if (video) {
+      this.pendingUnsupportedMediaByTarget.set(msg.fromUserId, { media: video, expiresAt: now + SAVE_INTENT_TTL_MS });
+      return buildWechatVideoPrompt(username);
+    }
+
+    const voice = media.find((item) => item.kind === "voice");
+    if (voice && !isWechatAsrConfigured()) {
+      return buildWechatAsrMissingPrompt(username);
+    }
+
+    const unsupportedFile = media.find((item) => item.kind === "file" && !item.analyzable);
+    if (unsupportedFile) {
+      this.pendingUnsupportedMediaByTarget.set(msg.fromUserId, { media: unsupportedFile, expiresAt: now + SAVE_INTENT_TTL_MS });
+      return buildUnsupportedWechatFilePrompt(username);
+    }
+
+    // P4B 会下载可分析图片/文件并交给统一附件链路；在下载链路接入前避免空附件进 LLM。
+    const supportedButNotDownloaded = media.find((item) => item.kind === "image" || (item.kind === "file" && item.analyzable));
+    if (supportedButNotDownloaded) {
+      return `${username}，这个微信附件人家已经认出来啦，但接收下载还在接入中。你可以先发文字给我哦~~`;
+    }
+
+    return null;
+  }
+
+  #clearExpiredInboundState(targetId: string, now: number): void {
+    const saveIntentUntil = this.pendingSaveIntentByTarget.get(targetId);
+    if (saveIntentUntil !== undefined && saveIntentUntil <= now) {
+      this.pendingSaveIntentByTarget.delete(targetId);
+    }
+    const pendingMedia = this.pendingUnsupportedMediaByTarget.get(targetId);
+    if (pendingMedia && pendingMedia.expiresAt <= now) {
+      this.pendingUnsupportedMediaByTarget.delete(targetId);
+    }
+  }
+
+  async #sendInterceptText(toUserId: string, contextToken: string, text: string): Promise<void> {
+    if (!this.client) return;
+    const result = await this.client.sendText(toUserId, text, contextToken);
+    if (!result.ok) {
+      console.warn(LOG_PREFIX, "入站媒体拦截回复发送失败:", result.error);
+    }
   }
 }
 
@@ -384,4 +469,37 @@ async function deleteCredentials(): Promise<void> {
   try {
     await fs.unlink(credPath());
   } catch {}
+}
+
+function loadWechatPreferredName(): string {
+  try {
+    const filePath = path.join(app.getPath("userData"), USER_PROFILE_FILE);
+    const raw = require("node:fs").readFileSync(filePath, "utf8") as string;
+    const profile = JSON.parse(raw) as { callPreference?: unknown };
+    return getWechatDisplayName(profile.callPreference);
+  } catch {
+    return "伙伴";
+  }
+}
+
+function isWechatAsrConfigured(): boolean {
+  try {
+    const filePath = path.join(app.getPath("userData"), "app-settings.json");
+    const raw = require("node:fs").readFileSync(filePath, "utf8") as string;
+    const settings = JSON.parse(raw) as {
+      asrEngine?: unknown;
+      asrAliyunAppKey?: unknown;
+      asrAliyunAccessKeyId?: unknown;
+      asrAliyunAccessKeySecret?: unknown;
+    };
+    if (settings.asrEngine === "local") return true;
+    if (settings.asrEngine !== "aliyun") return false;
+    return Boolean(
+      typeof settings.asrAliyunAppKey === "string" && settings.asrAliyunAppKey.trim()
+      && typeof settings.asrAliyunAccessKeyId === "string" && settings.asrAliyunAccessKeyId.trim()
+      && typeof settings.asrAliyunAccessKeySecret === "string" && settings.asrAliyunAccessKeySecret.trim(),
+    );
+  } catch {
+    return false;
+  }
 }

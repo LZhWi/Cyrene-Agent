@@ -42,6 +42,7 @@ export interface WeixinMessage {
   toUserId: string;
   msgType: number;            // 1=user, 2=bot echo
   content: string;            // 从 item_list[].text_item.text 提取
+  items: WeixinItem[];
   contextToken: string;       // ⚠️ 回复时原样带回
   createTimeMs?: number;
   raw: unknown;
@@ -193,6 +194,7 @@ export class ILinkClient {
       toUserId: w.to_user_id,
       msgType: w.message_type,
       content: text,
+      items: w.item_list ?? [],
       contextToken: w.context_token,
       createTimeMs: w.create_time_ms,
       raw: w,
