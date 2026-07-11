@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { IPC } from "../shared/ipc-channels";
+import type { DocumentIndexProgress } from "../main/rag/document-index-queue";
 
 const cyreneApi = {
   minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
@@ -44,6 +45,13 @@ const chatApi = {
   },
   processDocuments: (filePaths: string[], query: string) =>
     ipcRenderer.invoke(IPC.CHAT_PROCESS_DOCUMENTS, { filePaths, query }),
+  onDocumentIndexProgress: (callback: (progress: DocumentIndexProgress) => void) => {
+    const listener = (_event: unknown, progress: DocumentIndexProgress) => callback(progress);
+    ipcRenderer.on(IPC.CHAT_DOCUMENT_INDEX_PROGRESS, listener);
+    return () => ipcRenderer.removeListener(IPC.CHAT_DOCUMENT_INDEX_PROGRESS, listener);
+  },
+  cancelDocumentIndex: (jobId: string) =>
+    ipcRenderer.invoke(IPC.CHAT_CANCEL_DOCUMENT_INDEX, { jobId }) as Promise<boolean>,
   captionImage: (filePath: string) => ipcRenderer.invoke(IPC.CHAT_CAPTION_IMAGE, { filePath }),
   getImageSendStrategy: () => ipcRenderer.invoke(IPC.CHAT_GET_IMAGE_SEND_STRATEGY),
   onStreamChunk: (cb: (chunk: string) => void) => { ipcRenderer.on(IPC.CHAT_STREAM_CHUNK, (_e: unknown, chunk: string) => cb(chunk)); },

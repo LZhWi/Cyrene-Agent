@@ -1,4 +1,4 @@
-export type ComposerAttachmentKind = "text" | "indexed" | "empty" | "unsupported" | "image" | "document";
+export type ComposerAttachmentKind = "text" | "indexed" | "empty" | "unsupported" | "error" | "image" | "document";
 
 export interface ComposerAttachmentLabelInput {
   kind: ComposerAttachmentKind;
@@ -11,6 +11,7 @@ export function getAttachmentIcon(kind: ComposerAttachmentKind): string {
     text: "📝",
     indexed: "📚",
     empty: "📄",
+    error: "⚠️",
     image: "📷",
     document: "📄",
     unsupported: "⚠️",
@@ -28,5 +29,6 @@ export function formatAttachmentTagDetail(file: ComposerAttachmentLabelInput): s
   if (file.kind === "image") {
     return file.status === "done" ? "（已分析）" : file.status === "error" ? "（分析失败）" : "（待分析）";
   }
+  if (file.kind === "error") return "（处理失败）";
   return "（暂不支持）";
 }

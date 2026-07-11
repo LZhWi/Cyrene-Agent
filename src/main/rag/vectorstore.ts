@@ -260,17 +260,25 @@ export class JsonVectorStore {
   // 批量添加（用于导入文档 chunk）
   async addBatch(
     items: Array<{ text: string; source: string; metadata?: Record<string, unknown> }>,
-    provider: EmbeddingProvider
+    provider: EmbeddingProvider,
+    options?: { isCancelled?: () => boolean },
   ): Promise<MemoryEntry[]> {
     const texts = items.map((i) => i.text);
     const embeddings = await provider.embedBatch(texts);
+    if (options?.isCancelled?.()) throw new Error("cancelled");
+    return this.addPreparedBatch(items.map((item, index) => ({ ...item, embedding: embeddings[index] })));
+  }
+
+  addPreparedBatch(
+    items: Array<{ text: string; source: string; embedding: number[]; metadata?: Record<string, unknown> }>,
+  ): MemoryEntry[] {
     const results: MemoryEntry[] = [];
 
     for (let i = 0; i < items.length; i++) {
       const entry: MemoryEntry = {
         id: `${items[i].source}_${Date.now()}_${i}_${Math.random().toString(36).slice(2, 6)}`,
         text: items[i].text,
-        embedding: embeddings[i],
+        embedding: items[i].embedding,
         source: items[i].source,
         weight: 1.0,
         createdAt: Date.now(),

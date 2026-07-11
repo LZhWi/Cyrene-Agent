@@ -15,12 +15,23 @@ export type Attachment =
   | { kind: "document"; name: string; filePath: string; mime?: string; status: "pending" | "done" | "error" };
 
 /** ingestOneFile 的大文件索引回调签名。由调用方（index.ts）注入具体实现（importDocument）。 */
-export type ImportFn = (text: string, fileName: string) => Promise<ImportedDocumentResult>;
+export type DocumentImportProgress = {
+  status: "chunking" | "embedding" | "cached";
+  completedChunks?: number;
+  totalChunks?: number;
+};
+export type DocumentImportControl = {
+  isCancelled?: () => boolean;
+  onProgress?: (progress: DocumentImportProgress) => void;
+};
+export type ImportFn = (text: string, fileName: string, control?: DocumentImportControl) => Promise<ImportedDocumentResult>;
 export type SearchImportedChunksFn = (query: string, importIds: string[], topK?: number) => Promise<ImportedDocumentChunk[]>;
 export type DocumentImportOptions = {
   importDocument: ImportFn;
   getCachedImport?: (text: string) => Promise<Pick<ImportedDocumentResult, "importId" | "chunkCount"> | null>;
   putCachedImport?: (text: string, fileName: string, imported: ImportedDocumentResult) => Promise<void>;
+  isCancelled?: () => boolean;
+  onProgress?: (progress: DocumentImportProgress) => void;
 };
 export type DocumentImport = ImportFn | DocumentImportOptions;
 
@@ -136,10 +147,15 @@ async function indexLargeText(
     ? { importDocument: documentImport }
     : documentImport;
 
+  if (options.isCancelled?.()) {
+    return { name, kind: "indexed", chunks: 0, reason: "cancelled" };
+  }
+
   if (options.getCachedImport) {
     try {
       const cached = await options.getCachedImport(text);
       if (cached) {
+        options.onProgress?.({ status: "cached", completedChunks: cached.chunkCount, totalChunks: cached.chunkCount });
         return { name, kind: "indexed", chunks: cached.chunkCount, importId: cached.importId, cached: true };
       }
     } catch (err) {
@@ -148,7 +164,16 @@ async function indexLargeText(
   }
 
   try {
-    const imported = await options.importDocument(text, name);
+    const control: DocumentImportControl = {
+      isCancelled: options.isCancelled,
+      onProgress: options.onProgress,
+    };
+    const imported = control.isCancelled || control.onProgress
+      ? await options.importDocument(text, name, control)
+      : await options.importDocument(text, name);
+    if (options.isCancelled?.()) {
+      return { name, kind: "indexed", chunks: 0, reason: "cancelled" };
+    }
     if (options.putCachedImport) {
       try {
         await options.putCachedImport(text, name, imported);

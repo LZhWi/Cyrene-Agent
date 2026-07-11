@@ -9,6 +9,7 @@ import { WorldbookManager } from "./worldbook";
 export { INJECTION_HEADER, INJECTION_PREAMBLE } from "./worldbook-constants";
 import { chunkText } from "./chunk";
 import { feedEntityNamesToJieba } from "../memory/entity-graph";
+import type { DocumentImportControl } from "./file-ingest";
 
 // ── Global RAG instances ──
 let store: JsonVectorStore | null = null;
@@ -246,19 +247,48 @@ export type ImportedDocumentChunk = {
   importId?: string;
 };
 
-export async function importDocumentForTurn(
-  text: string,
-  fileName: string
+export type PreparedDocumentEmbedding = {
+  text: string;
+  chunkIndex: number;
+  embedding: number[];
+};
+
+export async function importPreparedDocumentForTurn(
+  fileName: string,
+  prepared: PreparedDocumentEmbedding[],
 ): Promise<ImportedDocumentResult> {
-  if (!store || !provider) throw new Error("RAG not initialized");
-  const chunks = chunkText(text, "doc_" + fileName);
+  if (!store) throw new Error("RAG not initialized");
   const id = typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2, 8);
   const importId = `import-${Date.now()}-${id}`;
+  store.addPreparedBatch(prepared.map((entry) => ({
+    text: entry.text,
+    embedding: entry.embedding,
+    source: "imported_doc",
+    metadata: { fileName, chunkIndex: entry.chunkIndex, importId },
+  })));
+  return { importId, chunkCount: prepared.length };
+}
+
+export async function importDocumentForTurn(
+  text: string,
+  fileName: string,
+  control?: DocumentImportControl,
+): Promise<ImportedDocumentResult> {
+  if (!store || !provider) throw new Error("RAG not initialized");
+  const chunks = chunkText(text, "doc_" + fileName);
+  control?.onProgress?.({ status: "chunking", completedChunks: chunks.length, totalChunks: chunks.length });
+  if (control?.isCancelled?.()) throw new Error("cancelled");
+  const id = typeof crypto !== "undefined" && crypto.randomUUID
+    ? crypto.randomUUID()
+    : Math.random().toString(36).slice(2, 8);
+  const importId = `import-${Date.now()}-${id}`;
+  control?.onProgress?.({ status: "embedding", completedChunks: 0, totalChunks: chunks.length });
   await store.addBatch(
     chunks.map((c) => ({ text: c.text, source: "imported_doc", metadata: { fileName, chunkIndex: c.index, importId } })),
-    provider
+    provider,
+    { isCancelled: control?.isCancelled },
   );
   return { importId, chunkCount: chunks.length };
 }

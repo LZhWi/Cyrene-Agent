@@ -11,6 +11,12 @@ import { getStickerSrcForId } from "./sticker-src";
 import { formatAttachmentTagDetail, getAttachmentIcon } from "./attachment-labels";
 import { resolveAsset } from "../../shared/renderer-base";
 import { buildDocumentContextLines, processDocumentsWithWait, type RetrievedDocumentChunk } from "./document-processing";
+import {
+  canCancelDocumentIndexStatus,
+  getDocumentIndexStatusLabel,
+  type DocumentIndexCardStatus,
+  type DocumentIndexProgress,
+} from "./types";
 
 type Role = "user" | "model";
 
@@ -43,7 +49,8 @@ interface DocumentMessageAttachment {
   kind: "document";
   name: string;
   filePath: string;
-  status: "pending" | "done" | "error";
+  status: DocumentIndexCardStatus;
+  jobId?: string;
   processedKind?: "text" | "indexed" | "empty" | "unsupported";
   chunks?: number;
   importId?: string;
@@ -92,6 +99,8 @@ interface ChatApi {
     sendMessage: (messages: Array<{ role: "user" | "model"; content: string }>, style: string) => Promise<ChatReplyPayload>;
     ingestDroppedFiles: (files: File[]) => Promise<Attachment[]>;
     processDocuments: (filePaths: string[], query: string) => Promise<Attachment[]>;
+    onDocumentIndexProgress?: (callback: (progress: DocumentIndexProgress) => void) => () => void;
+    cancelDocumentIndex: (jobId: string) => Promise<boolean>;
     captionImage: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
     getImageSendStrategy: () => Promise<{ mode: "direct" | "caption" }>;
     getEnabledStickers?: () => Promise<Array<{ id: string; src: string; description?: string }>>;
@@ -165,7 +174,7 @@ interface AguiBaseEvent {
 }
 
 /** 文件摄入结果（与 main 侧 file-ingest.ts 的 Attachment 对齐）。 */
-type AttachmentKind = "text" | "indexed" | "empty" | "unsupported" | "image" | "document";
+type AttachmentKind = "text" | "indexed" | "empty" | "unsupported" | "error" | "image" | "document";
 
 interface Attachment {
   name: string;
@@ -174,7 +183,7 @@ interface Attachment {
   mime?: string;
   previewUrl?: string;
   caption?: string;
-  status?: "pending" | "done" | "error";
+  status?: DocumentIndexCardStatus;
   text?: string;
   chunks?: number;
   importId?: string;
@@ -1035,13 +1044,23 @@ function renderMessageAttachments(body: HTMLElement, attachments: MessageAttachm
       status.className = "msg__document-status";
       status.textContent = att.status === "done"
         ? (att.processedKind === "indexed" ? `已索引 ${att.chunks ?? 0} 段` : "已处理")
-        : att.status === "error"
-          ? "处理失败"
-          : "待处理";
+        : getDocumentIndexStatusLabel(att.status);
       meta.appendChild(name);
       meta.appendChild(status);
       card.appendChild(icon);
       card.appendChild(meta);
+      if (canCancelDocumentIndexStatus(att.status) && att.jobId) {
+        const cancel = document.createElement("button");
+        cancel.type = "button";
+        cancel.className = "msg__document-cancel";
+        cancel.textContent = "×";
+        cancel.title = "取消处理";
+        cancel.setAttribute("aria-label", "取消处理");
+        cancel.addEventListener("click", () => {
+          void window.chat?.cancelDocumentIndex(att.jobId!);
+        });
+        card.appendChild(cancel);
+      }
       list.appendChild(card);
     } else {
       continue;
@@ -1049,6 +1068,27 @@ function renderMessageAttachments(body: HTMLElement, attachments: MessageAttachm
   }
   if (list.childElementCount > 0) body.appendChild(list);
 }
+
+function updateDocumentAttachmentProgress(progress: DocumentIndexProgress): void {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const attachment = messages[index].attachments?.find((item): item is DocumentMessageAttachment =>
+      item.kind === "document"
+      && item.filePath === progress.filePath
+      && (!item.jobId || item.jobId === progress.jobId)
+    );
+    if (!attachment) continue;
+    attachment.jobId = progress.jobId;
+    attachment.status = progress.status;
+    attachment.reason = progress.reason;
+    if (typeof progress.totalChunks === "number") attachment.chunks = progress.totalChunks;
+    return;
+  }
+}
+
+window.chat?.onDocumentIndexProgress?.((progress) => {
+  updateDocumentAttachmentProgress(progress);
+  render();
+});
 
 let transientStatusEl: HTMLElement | null = null;
 
@@ -2663,7 +2703,7 @@ async function send(): Promise<void> {
           appendDocumentContext(buildDocumentContextLines([result]));
         } else {
           const reason = result.reason || "暂不支持或无法读取";
-          if (msgAtt) msgAtt.status = "error";
+          if (msgAtt) msgAtt.status = reason === "cancelled" ? "cancelled" : "error";
           hintsByKind.push(`⚠️ ${result.name}（暂不支持或处理失败）`);
           appendDocumentContext(buildDocumentContextLines([{ ...result, reason }]));
         }

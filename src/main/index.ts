@@ -6,10 +6,12 @@ import { createHash } from "crypto";
 import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
 import { STATUS_KEYWORDS } from "./status-keywords";
-import { initRAG, buildMemoryContext, addMemory, importDocumentForTurn, searchImportedDocumentChunksForImportIds, switchEmbeddingModel, deleteImportedDoc, hasImportedDocumentChunks } from "./rag";
+import { initRAG, buildMemoryContext, addMemory, switchEmbeddingModel, deleteImportedDoc } from "./rag";
 import { getEmbeddingProvider, getSceneEmbeddingProvider } from "./rag/embedding";
-import { describePendingAttachment, processDocumentsForChat } from "./rag/file-ingest";
-import { buildDocumentCacheIdentity, createDocumentCacheKey, getValidDocumentCacheRecord, putDocumentCacheRecord } from "./rag/document-cache";
+import { describePendingAttachment } from "./rag/file-ingest";
+import { cancelDocumentIndexJob, configureDocumentIndexQueue, enqueueDocumentIndexJob } from "./rag/document-index-queue";
+import { retrieveQueuedDocumentChunks, runDocumentIndexJob } from "./rag/document-index-worker";
+import { processDocumentIndexRequest } from "./rag/document-index-ipc";
 import { IMAGE_CAPTION_PROMPT, validateCaptionImagePath } from "./chat/image-caption";
 import { decideImageSendStrategy } from "./chat/image-send-strategy";
 import { buildAlwaysOnContext, buildMemoryInjection, runFunctionCallingLoop, scheduleMemoryWrite } from "./orchestrator";
@@ -81,6 +83,8 @@ import { SchedulerEngine } from "./scheduler/scheduler-engine";
 import { createSchedulerRunner } from "./scheduler/scheduler-runner";
 import { registerSchedulerIpc } from "./scheduler/scheduler-ipc";
 import type { ScheduledTask } from "./scheduler/types";
+
+configureDocumentIndexQueue(runDocumentIndexJob);
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -2653,34 +2657,26 @@ ipcMain.handle(IPC.CHAT_INGEST_FILES, async (_event, paths: unknown) => {
   }
 });
 
-ipcMain.handle(IPC.CHAT_PROCESS_DOCUMENTS, async (_event, payload: unknown) => {
+ipcMain.handle(IPC.CHAT_PROCESS_DOCUMENTS, async (event, payload: unknown) => {
   const filePaths = payload && typeof payload === "object" && Array.isArray((payload as { filePaths?: unknown }).filePaths)
     ? (payload as { filePaths: unknown[] }).filePaths.filter((p): p is string => typeof p === "string")
     : [];
   if (filePaths.length === 0) return [];
-
-  return processDocumentsForChat(
+  const query = typeof (payload as { query?: unknown }).query === "string"
+    ? (payload as { query: string }).query
+    : "";
+  return processDocumentIndexRequest({
     filePaths,
-    typeof (payload as { query?: unknown }).query === "string" ? (payload as { query: string }).query : "",
-    {
-      importDocument: importDocumentForTurn,
-      getCachedImport: async (text) => {
-        const identity = await buildDocumentCacheIdentity(text);
-        return getValidDocumentCacheRecord(createDocumentCacheKey(identity), hasImportedDocumentChunks);
-      },
-      putCachedImport: async (text, fileName, imported) => {
-        const identity = await buildDocumentCacheIdentity(text);
-        await putDocumentCacheRecord({
-          key: createDocumentCacheKey(identity),
-          importId: imported.importId,
-          chunkCount: imported.chunkCount,
-          fileName,
-          createdAt: new Date().toISOString(),
-        });
-      },
-    },
-    searchImportedDocumentChunksForImportIds,
-  );
+    query,
+    sender: event.sender,
+    enqueue: enqueueDocumentIndexJob,
+    retrieve: retrieveQueuedDocumentChunks,
+  });
+});
+
+ipcMain.handle(IPC.CHAT_CANCEL_DOCUMENT_INDEX, (_event, payload: unknown) => {
+  const jobId = payload && typeof payload === "object" ? (payload as { jobId?: unknown }).jobId : undefined;
+  return typeof jobId === "string" && cancelDocumentIndexJob(jobId);
 });
 
 ipcMain.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {

@@ -11,12 +11,17 @@ export type EmbeddingProviderIdentity = {
   endpoint?: string;
 };
 
+export type EmbeddingWorkerConfig =
+  | { provider: "local"; modelKey: string }
+  | { provider: "openai-compat"; baseUrl: string; apiKey: string; model: string };
+
 export interface EmbeddingProvider {
   embed(text: string): Promise<number[]>;
   embedBatch(texts: string[]): Promise<number[][]>;
   readonly dims: number;
   readonly name: string;
   readonly cacheIdentity?: EmbeddingProviderIdentity;
+  readonly workerConfig?: EmbeddingWorkerConfig;
 }
 
 // ── 模型注册表 ──
@@ -81,6 +86,7 @@ export function createLocalEmbeddingProvider(modelKey?: string): EmbeddingProvid
       model: config.hfName,
       dimensions: config.dims,
     },
+    workerConfig: { provider: "local", modelKey: key },
 
     async embed(text: string): Promise<number[]> {
       const pipe = await getLocalPipeline(key);
@@ -117,6 +123,12 @@ export function createOpenAIEmbeddingProvider(
       model,
       dimensions: 1536,
       endpoint: normalizedBaseUrl,
+    },
+    workerConfig: {
+      provider: "openai-compat",
+      baseUrl: normalizedBaseUrl,
+      apiKey,
+      model,
     },
 
     async embed(text: string): Promise<number[]> {
@@ -214,6 +226,13 @@ export async function getEmbeddingProviderIdentity(): Promise<EmbeddingProviderI
     model: provider.name,
     dimensions: provider.dims,
   };
+}
+
+export function getEmbeddingWorkerConfig(): EmbeddingWorkerConfig {
+  const provider = getEmbeddingProvider();
+  if (!provider) throw new Error("Embedding provider is not available");
+  if (provider.workerConfig) return provider.workerConfig;
+  return { provider: "local", modelKey: currentModelKey };
 }
 
 export function getCurrentModelKey(): string {

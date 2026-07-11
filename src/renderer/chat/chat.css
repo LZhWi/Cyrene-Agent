@@ -702,7 +702,7 @@ body {
 .msg__document-card {
   width: min(280px, 58vw);
   display: grid;
-  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-columns: 34px minmax(0, 1fr) 24px;
   align-items: center;
   gap: 10px;
   padding: 10px;
@@ -745,6 +745,25 @@ body {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.msg__document-cancel {
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  color: var(--rb-text-muted);
+  background: transparent;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.msg__document-cancel:hover,
+.msg__document-cancel:focus-visible {
+  color: var(--rb-text-default);
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .msg__time {
