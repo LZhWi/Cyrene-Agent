@@ -3830,7 +3830,36 @@ app.whenReady().then(async () => {
       }));
 
     // 把 IncomingMessage 转成 AguiRunInput，调 CyreneAgent
-    const attachmentInputs = buildChannelAttachmentInputs(msg);
+    const channelModelSettings = loadModelSettings();
+    const imageSendStrategy = decideImageSendStrategy({
+      provider: channelModelSettings.provider,
+      baseUrl: channelModelSettings.baseUrl,
+      model: channelModelSettings.model,
+      apiKey: channelModelSettings.apiKey,
+      explicitTransport: channelModelSettings.explicitTransport,
+      vision: loadVisionConfig(),
+    });
+    const attachmentInputs = await buildChannelAttachmentInputs(msg, {
+      imageMode: imageSendStrategy.mode,
+      captionImage: async (filePath: string) => {
+        const validated = validateCaptionImagePath(filePath);
+        if (!validated.ok) return { ok: false, error: validated.error };
+        const visionCfg = loadVisionConfig();
+        if (!visionCfg) return { ok: false, error: "未配置视觉模型，无法分析图片" };
+        try {
+          const { captionImage } = await import("./orchestrator/vision-captioner");
+          const caption = await captionImage(
+            { base64: validated.buffer.toString("base64"), mime: validated.mime },
+            IMAGE_CAPTION_PROMPT,
+            visionCfg,
+          );
+          if (caption.startsWith("[错误")) return { ok: false, error: caption };
+          return { ok: true, caption };
+        } catch (err: any) {
+          return { ok: false, error: err?.message || String(err) };
+        }
+      },
+    });
     const { options } = await buildAgentRunOptions(
       {
         messages: [
