@@ -11,6 +11,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { app } from "electron";
+import { decode, isSilk } from "silk-wasm";
 import {
   ILinkClient,
   MediaType,
@@ -27,6 +28,7 @@ import { encodeWechatVoiceSilk } from "./wechat-voice-encoding";
 import {
   SAVE_INTENT_TTL_MS,
   buildUnsupportedWechatFilePrompt,
+  buildWechatAsrFailedPrompt,
   buildWechatAsrMissingPrompt,
   buildWechatSaveSuccessPrompt,
   buildWechatSaveIntentPrompt,
@@ -36,6 +38,7 @@ import {
   isWechatSaveIntent,
   type InboundMediaDescriptor,
 } from "./inbound-media";
+import { getAsrConfig, VolcanoAsrStream } from "../../../asr/volcano-asr-engine";
 import type {
   ChannelAttachment,
   ChannelCapability,
@@ -98,6 +101,8 @@ export class ILinkBotAdapter implements ChannelAdapter {
   private uploadMediaData = uploadWechatMedia;
   private downloadMedia = downloadInboundWechatMedia;
   private saveInboundMedia = saveInboundWechatMedia;
+  private transcribeVoice = transcribeInboundWechatVoice;
+  private isAsrConfigured = isWechatAsrConfigured;
   private encodeVoice = encodeWechatVoiceSilk;
 
   status: ChannelStatus = { enabled: false, phase: "offline" };
@@ -328,6 +333,8 @@ export class ILinkBotAdapter implements ChannelAdapter {
     this.replyContextByTarget.set(msg.fromUserId, msg.contextToken);
 
     const media = describeInboundWechatMedia(msg.items);
+    const voiceText = await this.#maybeTranscribeInboundVoice(msg, media);
+    if (voiceText === null) return;
     const intercept = await this.#maybeInterceptInboundMedia(msg, media);
     if (intercept.handled) {
       if (intercept.text) void this.#sendInterceptText(msg.fromUserId, msg.contextToken, intercept.text);
@@ -340,7 +347,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
       channel: "wechat",
       senderId: msg.fromUserId,
       chatId: msg.fromUserId,
-      text: msg.content ?? "",
+      text: voiceText || msg.content || "",
       attachments: attachments.length > 0 ? attachments : undefined,
       at: new Date(),
       _raw: msg,
@@ -398,7 +405,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
     }
 
     const voice = media.find((item) => item.kind === "voice");
-    if (voice && !isWechatAsrConfigured()) {
+    if (voice && !this.isAsrConfigured()) {
       return { handled: true, text: buildWechatAsrMissingPrompt(username) };
     }
 
@@ -428,6 +435,31 @@ export class ILinkBotAdapter implements ChannelAdapter {
       const reason = err instanceof Error ? err.message : String(err);
       console.warn(LOG_PREFIX, "入站媒体保存失败:", reason);
       return `${username}，这个文件保存失败啦：${reason}`;
+    }
+  }
+
+  async #maybeTranscribeInboundVoice(msg: WeixinMessage, media: InboundMediaDescriptor[]): Promise<string | undefined | null> {
+    const voice = media.find((item) => item.kind === "voice");
+    if (!voice) return undefined;
+
+    const username = loadWechatPreferredName();
+    if (!this.isAsrConfigured()) {
+      await this.#sendInterceptText(msg.fromUserId, msg.contextToken, buildWechatAsrMissingPrompt(username));
+      return null;
+    }
+
+    try {
+      const transcript = (await this.transcribeVoice(voice, msg.msgId || String(Date.now()))).trim();
+      if (!transcript) {
+        await this.#sendInterceptText(msg.fromUserId, msg.contextToken, buildWechatAsrFailedPrompt(username, "没有识别到文字"));
+        return null;
+      }
+      return transcript;
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn(LOG_PREFIX, "入站语音识别失败:", reason);
+      await this.#sendInterceptText(msg.fromUserId, msg.contextToken, buildWechatAsrFailedPrompt(username, reason));
+      return null;
     }
   }
 
@@ -552,6 +584,72 @@ async function saveInboundWechatMedia(
   const filePath = path.join(inboxDir, buildStoredFileName("wechat", messageId, item.fileName || item.kind, ext));
   await fs.writeFile(filePath, data);
   return filePath;
+}
+
+async function transcribeInboundWechatVoice(
+  item: InboundMediaDescriptor,
+  _messageId: string,
+): Promise<string> {
+  if (!item.media) throw new Error("缺少语音下载参数");
+  const cfg = getAsrConfig();
+  if (!cfg || cfg.engine !== "aliyun" || !cfg.appKey || !cfg.accessKeyId || !cfg.accessKeySecret) {
+    throw new Error("ASR 未配置");
+  }
+
+  const source = await downloadWechatMedia(item.media);
+  const sampleRate = item.sampleRate ?? 16000;
+  if (sampleRate !== 16000) {
+    throw new Error(`暂不支持 ${sampleRate}Hz 微信语音识别`);
+  }
+
+  let pcm = source;
+  if (isSilk(source)) {
+    const decoded = await decode(source, sampleRate);
+    pcm = Buffer.from(decoded.data);
+  }
+  return transcribePcmWithAliyun(pcm, cfg);
+}
+
+function transcribePcmWithAliyun(
+  pcm: Buffer,
+  cfg: { appKey: string; accessKeyId: string; accessKeySecret: string; language: string },
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const finals: string[] = [];
+    const stream = new VolcanoAsrStream(
+      () => {},
+      (text) => {
+        if (text.trim()) finals.push(text.trim());
+      },
+    );
+    const timeout = setTimeout(() => {
+      stream.stop();
+      const result = finals.join("").trim();
+      if (result) resolve(result);
+      else reject(new Error("ASR timeout"));
+    }, 15_000);
+
+    stream.start(cfg.appKey, cfg.accessKeyId, cfg.accessKeySecret, cfg.language)
+      .then(async () => {
+        await delay(500);
+        stream.sendAudio(pcm);
+        stream.stop();
+        await delay(2500);
+        clearTimeout(timeout);
+        const result = finals.join("").trim();
+        if (result) resolve(result);
+        else reject(new Error("没有识别到文字"));
+      })
+      .catch((err) => {
+        clearTimeout(timeout);
+        stream.stop();
+        reject(err instanceof Error ? err : new Error(String(err)));
+      });
+  });
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function pickInboundExtension(item: InboundMediaDescriptor, data: Buffer): string {

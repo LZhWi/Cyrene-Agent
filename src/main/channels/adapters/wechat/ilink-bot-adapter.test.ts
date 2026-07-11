@@ -456,4 +456,91 @@ describe("ILinkBotAdapter inbound media", () => {
     expect((adapter as any).downloadMedia).not.toHaveBeenCalled();
     expect(onMessage).not.toHaveBeenCalled();
   });
+
+  it("transcribes inbound voice and dispatches the transcript when ASR is configured", async () => {
+    const adapter = new ILinkBotAdapter();
+    const onMessage = vi.fn(async () => null);
+    const sendText = vi.fn(async () => ({ ok: true }));
+    (adapter as any).onMessage = onMessage;
+    (adapter as any).client = { sendText };
+    (adapter as any).isAsrConfigured = () => true;
+    (adapter as any).transcribeVoice = vi.fn(async () => "你在忙什么呀");
+
+    await (adapter as any).dispatchInbound({
+      msgId: "msg-voice-1",
+      fromUserId: "wx-user-1",
+      toUserId: "bot-1",
+      msgType: 1,
+      content: "",
+      items: [
+        {
+          type: 3,
+          voice_item: {
+            media: {
+              encrypt_query_param: "download-param",
+              aes_key: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
+              encrypt_type: 1,
+            },
+            sample_rate: 16000,
+          },
+        },
+      ],
+      contextToken: "ctx-voice",
+      raw: {},
+    });
+
+    expect((adapter as any).transcribeVoice).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "voice", fileName: "微信语音" }),
+      "msg-voice-1",
+    );
+    expect(sendText).not.toHaveBeenCalled();
+    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
+      channel: "wechat",
+      senderId: "wx-user-1",
+      text: "你在忙什么呀",
+      attachments: undefined,
+    }));
+  });
+
+  it("does not dispatch inbound voice when ASR transcription fails", async () => {
+    const adapter = new ILinkBotAdapter();
+    const onMessage = vi.fn(async () => null);
+    const sendText = vi.fn(async () => ({ ok: true }));
+    (adapter as any).onMessage = onMessage;
+    (adapter as any).client = { sendText };
+    (adapter as any).isAsrConfigured = () => true;
+    (adapter as any).transcribeVoice = vi.fn(async () => {
+      throw new Error("ASR timeout");
+    });
+
+    await (adapter as any).dispatchInbound({
+      msgId: "msg-voice-2",
+      fromUserId: "wx-user-1",
+      toUserId: "bot-1",
+      msgType: 1,
+      content: "",
+      items: [
+        {
+          type: 3,
+          voice_item: {
+            media: {
+              encrypt_query_param: "download-param",
+              aes_key: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
+              encrypt_type: 1,
+            },
+            sample_rate: 16000,
+          },
+        },
+      ],
+      contextToken: "ctx-voice",
+      raw: {},
+    });
+
+    expect(sendText).toHaveBeenCalledWith(
+      "wx-user-1",
+      "伙伴，这条语音人家暂时没听清楚：ASR timeout。可以换成文字再发我一次哦~~",
+      "ctx-voice",
+    );
+    expect(onMessage).not.toHaveBeenCalled();
+  });
 });

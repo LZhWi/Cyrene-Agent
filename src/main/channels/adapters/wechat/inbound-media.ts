@@ -10,7 +10,12 @@ export interface InboundWechatItem {
     name?: unknown;
     media?: unknown;
   };
-  voice_item?: unknown;
+  voice_item?: {
+    file_name?: unknown;
+    name?: unknown;
+    media?: unknown;
+    sample_rate?: unknown;
+  };
   file_item?: {
     file_name?: unknown;
     name?: unknown;
@@ -31,6 +36,7 @@ export interface InboundMediaDescriptor {
   extension: string;
   analyzable: boolean;
   media?: CDNMedia;
+  sampleRate?: number;
 }
 
 const ANALYZABLE_FILE_EXTENSIONS = new Set([
@@ -84,7 +90,15 @@ export function describeInboundWechatMedia(items: InboundWechatItem[]): InboundM
         media: asCdnMedia(item.image_item.media),
       });
     } else if (item.type === 3 && item.voice_item) {
-      media.push({ kind: "voice", fileName: "微信语音", extension: "", analyzable: false });
+      const fileName = asFileName(item.voice_item.file_name ?? item.voice_item.name, "微信语音");
+      media.push({
+        kind: "voice",
+        fileName,
+        extension: getFileExtension(fileName),
+        analyzable: false,
+        media: asCdnMedia(item.voice_item.media),
+        sampleRate: typeof item.voice_item.sample_rate === "number" ? item.voice_item.sample_rate : undefined,
+      });
     } else if (item.type === 4 && item.file_item) {
       const fileName = asFileName(item.file_item.file_name ?? item.file_item.name, "微信文件");
       media.push({
@@ -138,4 +152,8 @@ export function buildWechatSaveSuccessPrompt(username: string, filePath: string)
 
 export function buildWechatAsrMissingPrompt(username: string): string {
   return `${username}，人家现在还没有配置语音识别，暂时听不懂这条语音。可以发文字给我哦~~`;
+}
+
+export function buildWechatAsrFailedPrompt(username: string, reason: string): string {
+  return `${username}，这条语音人家暂时没听清楚：${reason}。可以换成文字再发我一次哦~~`;
 }
