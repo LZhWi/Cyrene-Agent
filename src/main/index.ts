@@ -37,9 +37,10 @@ import { registerChoiceIpc, setChoiceCardSender } from "./user-choice";
 import { enqueueLLMTask } from "./llm-queue";
 import { getEmbeddingStatus, downloadEmbeddingModel, deleteEmbeddingModel } from "./embedding-manager";
 import { BUILT_IN_STICKER_DESCRIPTIONS } from "./sticker-descriptions";
-import { buildStickerEmbeddingIndex, matchSticker } from "./sticker-embedder";
+import { buildCachedStickerEmbeddingIndex } from "./sticker-embedding-cache";
+import { matchSticker } from "./sticker-embedder";
 import type { StickerEmbeddingEntry } from "./sticker-embedder";
-import { buildSceneIndex } from "./scene-embedder";
+import { buildCachedSceneIndex } from "./scene-embedding-cache";
 import type { SceneIndex } from "./scene-embedder";
 import { loadUserStickerManifest, addUserSticker, deleteUserSticker, getAllStickerConfig, isStickerIdTaken, getStickersDir } from "./sticker-storage";
 import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
@@ -493,6 +494,7 @@ const CHAT_REQUEST_TIMEOUT_MS = 300000; // FC 总预算：20 轮 × 推理模型
 /** 桌宠窗口的基础尺寸（zoom=1.0 时）。缩放因子改变窗口与模型尺寸，二者同步。 */
 const PET_WINDOW_BASE_WIDTH = 400;
 const PET_WINDOW_BASE_HEIGHT = 500;
+const STARTUP_EMBEDDING_REFRESH_DELAY_MS = 1500;
 
 /** 任务栏 / 托盘图标路径（相对于 dist/main/main/）。所有窗口共用同一个 .ico。 */
 const APP_ICON_PATH = path.join(__dirname, "..", "..", "..", "assets", "tray-icon.ico");
@@ -504,7 +506,65 @@ let runtimeState: RuntimeState = {
   };
 let feelingScores = createFeelingScores(runtimeState.feeling);
 let stickerEmbeddingIndex: StickerEmbeddingEntry[] | null = null;
+let stickerEmbeddingRefreshSeq = 0;
 let sceneEmbeddingIndex: SceneIndex | null = null;
+let sceneEmbeddingRefreshSeq = 0;
+
+function refreshStickerEmbeddingIndexInBackground(reason: string): void {
+  const seq = ++stickerEmbeddingRefreshSeq;
+  void (async () => {
+    try {
+      const provider = getEmbeddingProvider();
+      if (!provider) {
+        if (seq === stickerEmbeddingRefreshSeq) stickerEmbeddingIndex = null;
+        console.warn("[StickerEmbedding] Model not found. Sticker matching disabled.");
+        return;
+      }
+
+      const index = await buildCachedStickerEmbeddingIndex(
+        provider,
+        BUILT_IN_STICKER_DESCRIPTIONS,
+        loadUserStickerManifest(),
+      );
+      if (seq !== stickerEmbeddingRefreshSeq) return;
+      stickerEmbeddingIndex = index;
+      console.log(`[StickerEmbedding] index ready (${reason}): ${index.length} entries`);
+    } catch (err) {
+      if (seq === stickerEmbeddingRefreshSeq) stickerEmbeddingIndex = null;
+      console.error("[StickerEmbedding] refresh failed:", err instanceof Error ? err.message : String(err));
+    }
+  })();
+}
+
+function refreshSceneEmbeddingIndexInBackground(reason: string): void {
+  const seq = ++sceneEmbeddingRefreshSeq;
+  void (async () => {
+    try {
+      const sceneProvider = getSceneEmbeddingProvider();
+      if (!sceneProvider) {
+        if (seq === sceneEmbeddingRefreshSeq) sceneEmbeddingIndex = null;
+        console.warn("[SceneEmbedding] bge-m3 model not found. Scene embedding disabled.");
+        return;
+      }
+
+      const index = await buildCachedSceneIndex(sceneProvider);
+      if (seq !== sceneEmbeddingRefreshSeq) return;
+      sceneEmbeddingIndex = index;
+      console.log("[SceneEmbedding] index ready:", Object.keys(index.scenes).length, "scenes", `(${reason})`);
+    } catch (err) {
+      if (seq === sceneEmbeddingRefreshSeq) sceneEmbeddingIndex = null;
+      console.error("[SceneEmbedding] refresh failed:", err instanceof Error ? err.message : String(err));
+    }
+  })();
+}
+
+function scheduleStartupEmbeddingRefreshes(): void {
+  setTimeout(() => {
+    refreshStickerEmbeddingIndexInBackground("startup");
+    refreshSceneEmbeddingIndexInBackground("startup");
+  }, STARTUP_EMBEDDING_REFRESH_DELAY_MS);
+}
+
 const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   mode: "auto",
   // 默认厂商改为 MiniMax（v1 vendor adapter 第一个落地的），DeepSeek 已从 v1 清单移除。
@@ -2866,6 +2926,8 @@ ipcMain.handle(IPC.EMBEDDING_SET_MODEL, async (_event, modelKey: string) => {
     if (result.ok) {
       saveModelSettings({ embeddingModel: modelKey as "minilm" | "bgem3" });
       broadcastModelConfigChanged();
+      stickerEmbeddingIndex = null;
+      refreshStickerEmbeddingIndexInBackground("embedding-model-switch");
     }
     return result;
   } catch (err) {
@@ -2954,15 +3016,8 @@ ipcMain.handle(IPC.STICKERS_ADD, async (_event, payload: unknown) => {
   };
   try {
     await addUserSticker(sourcePath, id, description, phrases);
-    // 重建 embedding 索引
-    const provider = getEmbeddingProvider();
-    if (provider) {
-      stickerEmbeddingIndex = await buildStickerEmbeddingIndex(
-        provider,
-        BUILT_IN_STICKER_DESCRIPTIONS,
-        loadUserStickerManifest(),
-      );
-    }
+    stickerEmbeddingIndex = null;
+    refreshStickerEmbeddingIndexInBackground("user-sticker-add");
   } catch (err) {
     console.error("[stickers] add failed:", err);
     throw err;
@@ -2973,15 +3028,8 @@ ipcMain.handle(IPC.STICKERS_ADD, async (_event, payload: unknown) => {
 ipcMain.handle(IPC.STICKERS_DELETE, async (_event, id: string) => {
   try {
     await deleteUserSticker(id);
-    // 重建 embedding 索引
-    const provider = getEmbeddingProvider();
-    if (provider) {
-      stickerEmbeddingIndex = await buildStickerEmbeddingIndex(
-        provider,
-        BUILT_IN_STICKER_DESCRIPTIONS,
-        loadUserStickerManifest(),
-      );
-    }
+    stickerEmbeddingIndex = null;
+    refreshStickerEmbeddingIndexInBackground("user-sticker-delete");
   } catch (err) {
     console.error("[stickers] delete failed:", err);
     throw err;
@@ -4068,41 +4116,12 @@ app.whenReady().then(async () => {
       await initMcpManager();
       console.log("[Cyrene] RAG initialized OK");
 
-    await initReranker(modelSettings.rerankerMode);
+    console.log("[Reranker] startup preload skipped; reranker initializes when changed in settings.");
   } catch (err) {
     console.error("[Cyrene] RAG init FAILED:", err);
   }
 
-  // 初始化表情包 embedding 索引
-  try {
-    const provider = getEmbeddingProvider();
-    if (provider) {
-      stickerEmbeddingIndex = await buildStickerEmbeddingIndex(
-        provider,
-        BUILT_IN_STICKER_DESCRIPTIONS,
-        loadUserStickerManifest(),
-      );
-      console.log(`[StickerEmbedding] index built: ${stickerEmbeddingIndex.length} entries`);
-    } else {
-      console.warn("[StickerEmbedding] Model not found. Sticker matching disabled.");
-    }
-  } catch (err) {
-    console.error("[StickerEmbedding] Init failed:", (err as Error).message);
-  }
-
-  // 初始化场景 embedding 索引（语气注入用，替代关键词匹配）
-  // 用 bge-m3（多语言，中文效果好），和文档/记忆的 minilm 独立
-  try {
-    const sceneProvider = getSceneEmbeddingProvider();
-    if (sceneProvider) {
-      sceneEmbeddingIndex = await buildSceneIndex(sceneProvider);
-      console.log("[SceneEmbedding] index built:", Object.keys(sceneEmbeddingIndex.scenes).length, "scenes");
-    } else {
-      console.warn("[SceneEmbedding] bge-m3 model not found. Scene embedding disabled.");
-    }
-  } catch (err) {
-    console.error("[SceneEmbedding] Init failed:", (err as Error).message);
-  }
+  scheduleStartupEmbeddingRefreshes();
 
   schedulerEngine.start();
 });

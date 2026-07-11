@@ -14,7 +14,7 @@ const WEIGHT_PREV = 0.20;
 const WEIGHT_PREV2 = 0.05;
 
 // ── 定稿的 42 句例句（7 场景 × 6 句）──
-const SCENE_EXAMPLES: Record<string, string[]> = {
+export const SCENE_EXAMPLES: Record<string, string[]> = {
   daily: [
     "今天发生什么了。",
     "无聊，随便聊聊。",
