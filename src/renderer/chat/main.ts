@@ -10,7 +10,7 @@ import { canUseMinimaxStreamingEarly, extractEarlyTtsSegment } from "../../share
 import { getStickerSrcForId } from "./sticker-src";
 import { formatAttachmentTagDetail, getAttachmentIcon } from "./attachment-labels";
 import { resolveAsset } from "../../shared/renderer-base";
-import { buildTurnModelContext } from "../../shared/chat-context";
+import { buildDocumentContextLines, processDocumentsWithWait, type RetrievedDocumentChunk } from "./document-processing";
 
 type Role = "user" | "model";
 
@@ -23,6 +23,7 @@ interface Message {
   attachments?: MessageAttachment[];
   sticker?: string | null;
   thinking?: boolean;
+  transient?: boolean;
   ttsCacheKey?: string;
 }
 
@@ -45,6 +46,7 @@ interface DocumentMessageAttachment {
   status: "pending" | "done" | "error";
   processedKind?: "text" | "indexed" | "empty" | "unsupported";
   chunks?: number;
+  importId?: string;
   reason?: string;
 }
 
@@ -175,6 +177,8 @@ interface Attachment {
   status?: "pending" | "done" | "error";
   text?: string;
   chunks?: number;
+  importId?: string;
+  retrievedChunks?: RetrievedDocumentChunk[];
   reason?: string;
 }
 
@@ -405,7 +409,7 @@ function toPersistableMessages(arr: Message[]): Array<{
   id: string; role: Role; content: string; at: number; modelContext?: string; attachments?: MessageAttachment[]; sticker?: StickerId | null; ttsCacheKey?: string;
 }> {
   return arr
-    .filter((m) => m && (m.role === "user" || m.role === "model") && !m.thinking && (
+    .filter((m) => m && (m.role === "user" || m.role === "model") && !m.thinking && !m.transient && (
       typeof m.content === "string" && m.content.trim()
       || Boolean(m.modelContext?.trim())
       || ((m.attachments?.length ?? 0) > 0)
@@ -2158,7 +2162,7 @@ document.addEventListener("keydown", (e) => {
 
 function buildModelMessages(): Array<{ role: "user" | "model"; content: string }> {
   return messages
-    .filter((message) => message.content.trim() || message.modelContext?.trim() || message.sticker)
+    .filter((message) => !message.transient && (message.content.trim() || message.modelContext?.trim() || message.sticker))
     .slice(-16)
     .map((message) => ({
       role: message.role,
@@ -2541,9 +2545,35 @@ async function send(): Promise<void> {
   render();
 
   const hintsByKind: string[] = [];
-  const documentContextLines: string[] = [];
-  const imageContextLines: string[] = [];
-  const directImageLines: string[] = [];
+  const modelContextParts: string[] = [];
+  let hasDocumentContext = false;
+  let hasImageCaptionContext = false;
+  let hasDirectImageContext = false;
+  const appendDocumentContext = (lines: string[]) => {
+    if (lines.length === 0) return;
+    if (!hasDocumentContext) {
+      modelContextParts.push(`【文档内容】\n${lines.join("\n\n")}`);
+      hasDocumentContext = true;
+      return;
+    }
+    modelContextParts.push(...lines);
+  };
+  const appendImageCaptionContext = (line: string) => {
+    if (!hasImageCaptionContext) {
+      modelContextParts.push("【图片视觉信息】\n以下内容是视觉模型对用户本轮图片的观察结果，请将其视为你已经看到的图片内容；如果某张图分析失败，请不要编造。\n" + line);
+      hasImageCaptionContext = true;
+      return;
+    }
+    modelContextParts.push(line);
+  };
+  const appendDirectImageContext = (line: string) => {
+    if (!hasDirectImageContext) {
+      modelContextParts.push("【图片附件】\n以下图片已随本轮消息直接发送给主模型，请直接结合图片内容回答。\n" + line);
+      hasDirectImageContext = true;
+      return;
+    }
+    modelContextParts.push(line);
+  };
   const directImageAttachments: { name: string; filePath: string; mime?: string }[] = [];
   let budgetUsed = 0;
   const budgetExceeded: string[] = [];
@@ -2553,10 +2583,30 @@ async function send(): Promise<void> {
   if (documentFilesForThisTurn.length > 0) {
     showTransientStatus("正在分析文档...");
     try {
-      const processedDocs = await window.chat?.processDocuments(
-        documentFilesForThisTurn.map((f) => f.filePath!),
-        text,
-      ) ?? [];
+      let waitMessage: Message | null = null;
+      const processedDocs = await processDocumentsWithWait({
+        processDocuments: async (filePaths, query) => window.chat?.processDocuments(filePaths, query) ?? [],
+        filePaths: documentFilesForThisTurn.map((f) => f.filePath!),
+        query: text,
+        onWaitStart: (content) => {
+          waitMessage = {
+            id: `document-wait-${Date.now()}`,
+            role: "model",
+            content,
+            at: Date.now(),
+            transient: true,
+          };
+          messages.push(waitMessage);
+          render();
+        },
+        onWaitEnd: () => {
+          if (!waitMessage) return;
+          const index = messages.indexOf(waitMessage);
+          if (index >= 0) messages.splice(index, 1);
+          waitMessage = null;
+          render();
+        },
+      });
       for (const f of documentFilesForThisTurn) {
         const result = processedDocs.find((doc) => doc.filePath === f.filePath)
           ?? processedDocs.find((doc) => doc.name === f.name)
@@ -2575,6 +2625,7 @@ async function send(): Promise<void> {
         if (msgAtt) {
           msgAtt.processedKind = processedKind;
           msgAtt.chunks = result.chunks;
+          msgAtt.importId = result.kind === "indexed" ? result.importId : undefined;
           msgAtt.reason = result.reason;
         }
 
@@ -2587,12 +2638,12 @@ async function send(): Promise<void> {
             hintsByKind.push(`📝 ${result.name}（附件，内容因一轮预算限制未注入）`);
           } else if (docText.length > remaining) {
             const clipped = docText.slice(0, remaining);
-            documentContextLines.push(`文档 ${result.name} 内容节选：\n${clipped}`);
+            appendDocumentContext([`文档 ${result.name} 内容节选：\n${clipped}`]);
             budgetExceeded.push(result.name);
             budgetUsed = BUDGET_CHARS;
             hintsByKind.push(`📝 ${result.name}（附件，内容已按预算节选注入本轮上下文）`);
           } else {
-            documentContextLines.push(`文档 ${result.name} 内容：\n${docText}`);
+            appendDocumentContext([`文档 ${result.name} 内容：\n${docText}`]);
             budgetUsed += docText.length;
             hintsByKind.push(`📝 ${result.name}（附件，内容已注入本轮上下文）`);
           }
@@ -2600,21 +2651,21 @@ async function send(): Promise<void> {
           if (result.reason && (result.chunks ?? 0) <= 0) {
             if (msgAtt) msgAtt.status = "error";
             hintsByKind.push(`⚠️ ${result.name}（文档处理失败）`);
-            documentContextLines.push(`用户发送了文档 ${result.name}，但文档处理失败：${result.reason}。\n请诚实说明暂时无法分析该文档，不要编造文档内容。`);
+            appendDocumentContext(buildDocumentContextLines([result]));
           } else {
             if (msgAtt) msgAtt.status = "done";
             hintsByKind.push(`📚 ${result.name}（已索引 ${result.chunks ?? 0} 段）`);
-            documentContextLines.push(`文档 ${result.name} 已建立索引 ${result.chunks ?? 0} 段。`);
+            appendDocumentContext(buildDocumentContextLines([result]));
           }
         } else if (result.kind === "empty") {
           if (msgAtt) msgAtt.status = "done";
           hintsByKind.push(`📄 ${result.name}（为空）`);
-          documentContextLines.push(`用户发送的文档 ${result.name} 为空。`);
+          appendDocumentContext(buildDocumentContextLines([result]));
         } else {
           const reason = result.reason || "暂不支持或无法读取";
           if (msgAtt) msgAtt.status = "error";
           hintsByKind.push(`⚠️ ${result.name}（暂不支持或处理失败）`);
-          documentContextLines.push(`用户发送了文档 ${result.name}，但文档处理失败：${reason}。\n请诚实说明暂时无法分析该文档，不要编造文档内容。`);
+          appendDocumentContext(buildDocumentContextLines([{ ...result, reason }]));
         }
       }
     } catch (err) {
@@ -2629,7 +2680,7 @@ async function send(): Promise<void> {
           msgAtt.reason = reason;
         }
         hintsByKind.push(`⚠️ ${f.name}（文档处理失败）`);
-        documentContextLines.push(`用户发送了文档 ${f.name}，但文档处理失败：${reason}。\n请诚实说明暂时无法分析该文档，不要编造文档内容。`);
+        appendDocumentContext(buildDocumentContextLines([{ kind: "error", name: f.name, reason }]));
       }
     } finally {
       hideTransientStatus();
@@ -2659,14 +2710,14 @@ async function send(): Promise<void> {
             f.status = "error";
             f.reason = "缺少图片路径";
             if (msgAtt) msgAtt.status = "error";
-            imageContextLines.push(`- ${f.name}：图片分析失败：缺少图片路径。请诚实说明暂时无法看清这张图。`);
+            appendImageCaptionContext(`- ${f.name}：图片分析失败：缺少图片路径。请诚实说明暂时无法看清这张图。`);
             break;
           }
           if (imageSendStrategy.mode === "direct") {
             f.status = "done";
             if (msgAtt) msgAtt.status = "done";
             directImageAttachments.push({ name: f.name, filePath: f.filePath, mime: f.mime });
-            directImageLines.push(`- ${f.name}：图片已随本轮消息直接发送给主模型。`);
+            appendDirectImageContext(`- ${f.name}：图片已随本轮消息直接发送给主模型。`);
             break;
           }
           const result = await window.chat?.captionImage(f.filePath);
@@ -2677,12 +2728,12 @@ async function send(): Promise<void> {
               msgAtt.status = "done";
               msgAtt.caption = result.caption;
             }
-            imageContextLines.push(`- ${f.name}：${result.caption}`);
+            appendImageCaptionContext(`- ${f.name}：${result.caption}`);
           } else {
             f.status = "error";
             f.reason = result?.error || "图片分析失败";
             if (msgAtt) msgAtt.status = "error";
-            imageContextLines.push(`- ${f.name}：图片分析失败：${f.reason}。请诚实说明暂时无法看清这张图。`);
+            appendImageCaptionContext(`- ${f.name}：图片分析失败：${f.reason}。请诚实说明暂时无法看清这张图。`);
           }
           break;
         }
@@ -2697,12 +2748,10 @@ async function send(): Promise<void> {
   if (budgetExceeded.length > 0) {
     hintsByKind.push(`⚠️ ${budgetExceeded.join("、")} 已省略部分内容（超一轮预算）`);
   }
-  userMsg.modelContext = buildTurnModelContext({
-    fileHints: hintsByKind,
-    documentContextLines,
-    imageCaptionLines: imageContextLines,
-    directImageLines,
-  });
+  if (hintsByKind.length > 0) {
+    modelContextParts.unshift("【本轮文件】\n" + hintsByKind.join("\n"));
+  }
+  userMsg.modelContext = modelContextParts.join("\n\n");
   void saveSession();
   render();
 

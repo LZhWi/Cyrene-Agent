@@ -19,6 +19,10 @@ export interface SearchResult {
   score: number;        // 加权后的综合分数（余弦 × weight × 衰减）
 }
 
+export interface VectorSearchOptions {
+  importIds?: string[];
+}
+
 // ── 余弦相似度（嵌入已归一化，等价于点积） ──
 export function cosineSimilarity(a: number[], b: number[]): number {
   let dot = 0;
@@ -289,7 +293,8 @@ export class JsonVectorStore {
     source?: string,
     provider?: EmbeddingProvider,
     topK = 5,
-    minScore = 0.3
+    minScore = 0.3,
+    options: VectorSearchOptions = {},
   ): Promise<SearchResult[]> {
     if (this.entries.length === 0) return [];
 
@@ -303,6 +308,9 @@ export class JsonVectorStore {
 
     const now = Date.now();
     const results: SearchResult[] = [];
+    const allowedImportIds = new Set(options.importIds ?? []);
+    const shouldKeep = (entry: MemoryEntry) =>
+      !allowedImportIds.size || allowedImportIds.has(String(entry.metadata?.importId ?? ""));
 
     if (this.ivf && !source) {
       // ── IVF 加速路径（无 source 过滤时） ──
@@ -323,6 +331,7 @@ export class JsonVectorStore {
       for (const clusterIdx of probeClusters) {
         for (const entryIdx of this.ivf.clusters[clusterIdx]) {
           const entry = this.entries[entryIdx];
+          if (!shouldKeep(entry)) continue;
           const sim = cosineSimilarity(queryEmbedding, entry.embedding);
           const hoursSinceRecall = (now - entry.lastRecalledAt) / (1000 * 60 * 60);
           const decayFactor = Math.pow(0.95, hoursSinceRecall / 24);
@@ -337,6 +346,7 @@ export class JsonVectorStore {
       // ── 全量搜索路径（有 source 过滤时，或索引未就绪） ──
       for (const entry of this.entries) {
         if (source && entry.source !== source) continue;
+        if (!shouldKeep(entry)) continue;
 
         const sim = cosineSimilarity(queryEmbedding, entry.embedding);
         // 时间衰减：24h 未提及权重 ×0.95

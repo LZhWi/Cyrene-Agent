@@ -45,6 +45,10 @@ const STOP_WEIGHT = 0.3;
 /** 名词加权系数 */
 const NOUN_WEIGHT = 1.3;
 
+export interface RetrieveOptions {
+  importIds?: string[];
+}
+
 // ── 自定义词表（entity-graph 维护） ──
 // @node-rs/jieba 没有运行时 insertWord()，改用「后处理重组」方案：
 // jieba 切完后，把被切散的自定义词（如"昔涟"→"昔","涟"）重新合并。
@@ -200,6 +204,7 @@ export class HybridRetriever {
     query: string,
     source?: string,
     topK = 5,
+    options: RetrieveOptions = {},
     vectorWeight = 0.7,
     bm25Weight = 0.3
   ): Promise<SearchResult[]> {
@@ -208,15 +213,15 @@ export class HybridRetriever {
 
     // 如果没有 provider，向量检索不可用，只用 BM25
     if (!this.provider) {
-      const bm25Results = this.bm25Search(query, source, topK);
+      const bm25Results = this.bm25Search(query, source, topK, options);
       return bm25Results;
     }
 
     // 1. Vector 检索
-    const vectorResults = await this.store.search(query, source, this.provider, topK * 3);
+    const vectorResults = await this.store.search(query, source, this.provider, topK * 3, 0.3, options);
 
     // 2. BM25 检索
-    const bm25Results = this.bm25Search(query, source, topK * 3);
+    const bm25Results = this.bm25Search(query, source, topK * 3, options);
 
     // 3. 融合：加权求和
     const merged: Map<string, { result: SearchResult; vectorScore: number; bm25Score: number }> = new Map();
@@ -248,13 +253,16 @@ export class HybridRetriever {
     return scored.slice(0, topK);
   }
 
-  private bm25Search(query: string, source?: string, topK = 15): SearchResult[] {
+  private bm25Search(query: string, source?: string, topK = 15, options: RetrieveOptions = {}): SearchResult[] {
     const entries = this.store["entries"] as Array<{
       id: string; text: string; embedding: number[]; source: string;
       weight: number; createdAt: number; lastRecalledAt: number; metadata?: Record<string, unknown>;
     }>;
 
-    const docs = source ? entries.filter((e) => e.source === source) : entries;
+    const allowedImportIds = new Set(options.importIds ?? []);
+    const docs = (source ? entries.filter((e) => e.source === source) : entries).filter((entry) =>
+      !allowedImportIds.size || allowedImportIds.has(String(entry.metadata?.importId ?? "")),
+    );
     if (docs.length === 0) return [];
 
     const queryTokenInfo = tokenize(query);

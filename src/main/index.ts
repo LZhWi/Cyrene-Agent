@@ -6,9 +6,9 @@ import { createHash } from "crypto";
 import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
 import { STATUS_KEYWORDS } from "./status-keywords";
-import { initRAG, buildMemoryContext, addMemory, importDocument, switchEmbeddingModel, deleteImportedDoc } from "./rag";
+import { initRAG, buildMemoryContext, addMemory, importDocumentForTurn, searchImportedDocumentChunksForImportIds, switchEmbeddingModel, deleteImportedDoc } from "./rag";
 import { getEmbeddingProvider, getSceneEmbeddingProvider } from "./rag/embedding";
-import { describePendingAttachment, ingestPaths, type Attachment } from "./rag/file-ingest";
+import { describePendingAttachment, processDocumentsForChat } from "./rag/file-ingest";
 import { IMAGE_CAPTION_PROMPT, validateCaptionImagePath } from "./chat/image-caption";
 import { decideImageSendStrategy } from "./chat/image-send-strategy";
 import { buildAlwaysOnContext, buildMemoryInjection, runFunctionCallingLoop, scheduleMemoryWrite } from "./orchestrator";
@@ -2658,32 +2658,12 @@ ipcMain.handle(IPC.CHAT_PROCESS_DOCUMENTS, async (_event, payload: unknown) => {
     : [];
   if (filePaths.length === 0) return [];
 
-  const results: Attachment[] = [];
-  for (const filePath of filePaths) {
-    try {
-      const processed = await ingestPaths([filePath], importDocument);
-      if (processed.length === 0) {
-        results.push({
-          name: path.basename(filePath),
-          kind: "unsupported",
-          filePath,
-          status: "error",
-          reason: "文件不存在或无法读取",
-        });
-      } else {
-        results.push(...processed);
-      }
-    } catch (err: any) {
-      results.push({
-        name: path.basename(filePath),
-        kind: "unsupported",
-        filePath,
-        status: "error",
-        reason: err?.message || String(err),
-      });
-    }
-  }
-  return results;
+  return processDocumentsForChat(
+    filePaths,
+    typeof (payload as { query?: unknown }).query === "string" ? (payload as { query: string }).query : "",
+    importDocumentForTurn,
+    searchImportedDocumentChunksForImportIds,
+  );
 });
 
 ipcMain.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {

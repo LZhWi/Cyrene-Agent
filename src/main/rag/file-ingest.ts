@@ -1,28 +1,22 @@
 import * as fs from "fs";
 import * as path from "path";
 import { pathToFileURL } from "url";
+import type { ImportedDocumentChunk, ImportedDocumentResult } from "./index";
 
 // ── Public types ──
 export type AttachmentKind = "text" | "indexed" | "empty" | "unsupported" | "image" | "document";
 
-export interface Attachment {
-  name: string;
-  kind: AttachmentKind;
-  filePath?: string;
-  mime?: string;
-  previewUrl?: string;
-  caption?: string;
-  status?: "pending" | "done" | "error";
-  /** kind="text" 时的小文件内容 */
-  text?: string;
-  /** kind="indexed" 时的 chunk 数 */
-  chunks?: number;
-  /** kind="unsupported" 或 indexed 失败时的原因 */
-  reason?: string;
-}
+export type Attachment =
+  | { kind: "text"; name: string; text: string; filePath?: string; mime?: string }
+  | { kind: "indexed"; name: string; chunks: number; importId?: string; filePath?: string; mime?: string; reason?: string; retrievedChunks?: ImportedDocumentChunk[] }
+  | { kind: "empty"; name: string; filePath?: string; mime?: string }
+  | { kind: "unsupported"; name: string; reason: string; filePath?: string; mime?: string; status?: "error" }
+  | { kind: "image"; name: string; filePath: string; mime?: string; status: "pending"; previewUrl?: string; caption?: string }
+  | { kind: "document"; name: string; filePath: string; mime?: string; status: "pending" | "done" | "error" };
 
 /** ingestOneFile 的大文件索引回调签名。由调用方（index.ts）注入具体实现（importDocument）。 */
-export type ImportFn = (text: string, fileName: string) => Promise<number>;
+export type ImportFn = (text: string, fileName: string) => Promise<ImportedDocumentResult>;
+export type SearchImportedChunksFn = (query: string, importIds: string[], topK?: number) => Promise<ImportedDocumentChunk[]>;
 
 // ── Thresholds ──
 /** 小文件 vs 大文件（→RAG）的分界，字符数。 */
@@ -178,8 +172,8 @@ export async function ingestOneFile(
     if (text.length > SMALL_THRESHOLD) {
       // 大文本 → 索引到 Vector DB
       try {
-        const chunks = await importFn(text, name);
-        return { name, kind: "indexed", chunks };
+        const result = await importFn(text, name);
+        return { name, kind: "indexed", chunks: result.chunkCount, importId: result.importId };
       } catch (err: any) {
         return { name, kind: "indexed", chunks: 0, reason: err?.message || String(err) };
       }
@@ -198,8 +192,8 @@ export async function ingestOneFile(
   }
   if (text.length > SMALL_THRESHOLD) {
     try {
-      const chunks = await importFn(text, name);
-      return { name, kind: "indexed", chunks };
+      const result = await importFn(text, name);
+      return { name, kind: "indexed", chunks: result.chunkCount, importId: result.importId };
     } catch (err: any) {
       return { name, kind: "indexed", chunks: 0, reason: err?.message || String(err) };
     }
@@ -286,6 +280,50 @@ export async function ingestPaths(
     const att = await ingestOneFile(absPath, importFn);
     // 用保留相对路径的显示名覆盖 basename
     results.push({ ...att, name: displayName, filePath: absPath });
+  }
+  return results;
+}
+
+export async function processDocumentsForChat(
+  filePaths: string[],
+  query: string,
+  importFn: ImportFn,
+  searchImportedChunks: SearchImportedChunksFn,
+): Promise<Attachment[]> {
+  const results: Attachment[] = [];
+  for (const filePath of filePaths) {
+    try {
+      const processed = await ingestPaths([filePath], importFn);
+      if (processed.length === 0) {
+        results.push({
+          name: path.basename(filePath),
+          kind: "unsupported",
+          filePath,
+          status: "error",
+          reason: "文件不存在或无法读取",
+        });
+        continue;
+      }
+
+      for (const attachment of processed) {
+        if (attachment.kind === "indexed" && attachment.importId && query.trim()) {
+          try {
+            attachment.retrievedChunks = await searchImportedChunks(query, [attachment.importId]);
+          } catch (err: any) {
+            attachment.reason = err?.message || String(err);
+          }
+        }
+        results.push(attachment);
+      }
+    } catch (err: any) {
+      results.push({
+        name: path.basename(filePath),
+        kind: "unsupported",
+        filePath,
+        status: "error",
+        reason: err?.message || String(err),
+      });
+    }
   }
   return results;
 }

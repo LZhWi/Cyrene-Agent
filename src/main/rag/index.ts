@@ -233,20 +233,55 @@ export function getPermanentWorldbookEntries(): string[] {
 }
 
 // ── Import document ──
-export async function importDocument(
+export type ImportedDocumentResult = {
+  importId: string;
+  chunkCount: number;
+};
+
+export type ImportedDocumentChunk = {
+  text: string;
+  score: number;
+  fileName?: string;
+  chunkIndex?: number;
+  importId?: string;
+};
+
+export async function importDocumentForTurn(
   text: string,
   fileName: string
-): Promise<number> {
+): Promise<ImportedDocumentResult> {
   if (!store || !provider) throw new Error("RAG not initialized");
   const chunks = chunkText(text, "doc_" + fileName);
-  const importId = typeof crypto !== "undefined" && crypto.randomUUID
+  const id = typeof crypto !== "undefined" && crypto.randomUUID
     ? crypto.randomUUID()
-    : "import_" + Date.now() + "_" + Math.random().toString(36).slice(2, 8);
+    : Math.random().toString(36).slice(2, 8);
+  const importId = `import-${Date.now()}-${id}`;
   await store.addBatch(
     chunks.map((c) => ({ text: c.text, source: "imported_doc", metadata: { fileName, chunkIndex: c.index, importId } })),
     provider
   );
-  return chunks.length;
+  return { importId, chunkCount: chunks.length };
+}
+
+export async function importDocument(text: string, fileName: string): Promise<number> {
+  const result = await importDocumentForTurn(text, fileName);
+  return result.chunkCount;
+}
+
+export async function searchImportedDocumentChunksForImportIds(
+  query: string,
+  importIds: string[],
+  topK = 6,
+): Promise<ImportedDocumentChunk[]> {
+  if (!retriever || !query.trim() || importIds.length === 0) return [];
+  const results = await retriever.retrieve(query, "imported_doc", topK, { importIds });
+  return results.map((result) => ({
+    text: result.entry.text,
+    score: result.score,
+    fileName: typeof result.entry.metadata?.fileName === "string" ? result.entry.metadata.fileName : undefined,
+    chunkIndex: typeof result.entry.metadata?.chunkIndex === "number" ? result.entry.metadata.chunkIndex : undefined,
+    importId: typeof result.entry.metadata?.importId === "string" ? result.entry.metadata.importId : undefined,
+  }));
 }
 
 // ── Build memory context (legacy, kept for compatibility) ──
