@@ -19,6 +19,12 @@ const LONG_POLL_TIMEOUT_MS = 35_000;
 
 export type ItemType = 1 | 2 | 3 | 4 | 5;  // text|image|voice|file|video
 export type MessageType = 1;               // 摘要只描述了 user→bot 类型
+export enum MediaType {
+  IMAGE = 1,
+  VIDEO = 2,
+  FILE = 3,
+  VOICE = 4,
+}
 
 export interface Credentials {
   botToken: string;
@@ -74,13 +80,40 @@ interface GetUpdatesResponse {
   longpolling_timeout_ms?: number;
 }
 
-interface SendMessageItem {
+export interface CDNMedia {
+  encrypt_query_param: string;
+  aes_key: string;
+  encrypt_type?: 0 | 1;
+  full_url?: string;
+}
+
+export interface SendMessageItem {
   type: ItemType;
   text_item?: { text: string };
   image_item?: any;
   voice_item?: any;
   file_item?: any;
   video_item?: any;
+}
+
+export interface GetUploadUrlRequest {
+  filekey: string;
+  media_type: MediaType;
+  to_user_id: string;
+  rawsize: number;
+  rawfilemd5: string;
+  filesize: number;
+  thumb_rawsize?: number;
+  thumb_rawfilemd5?: string;
+  thumb_filesize?: number;
+  no_need_thumb?: boolean;
+  aeskey?: string;
+}
+
+export interface GetUploadUrlResponse {
+  upload_param: string;
+  thumb_upload_param?: string;
+  upload_full_url?: string;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -214,6 +247,19 @@ export class ILinkClient {
       if (err instanceof SessionExpiredError) throw err;
       return { ok: false, error: String(err) };
     }
+  }
+
+  async getUploadUrl(req: GetUploadUrlRequest): Promise<GetUploadUrlResponse> {
+    const resp = await this.doJson<unknown>("POST", "/ilink/bot/getuploadurl", {
+      ...req,
+      base_info: { channel_version: "2.0.0" },
+    });
+    const data = resp as GetUploadUrlResponse & { ret?: number; errmsg?: string };
+    if (data.ret === -14) throw new SessionExpiredError("session expired on getuploadurl");
+    if (data.ret !== 0 && data.ret !== undefined) {
+      throw new Error(`iLink getuploadurl failed: ${data.errmsg ?? `ret=${data.ret}`}`);
+    }
+    return data;
   }
 
   // ── Typing ──────────────────────────────────────────────────────────────

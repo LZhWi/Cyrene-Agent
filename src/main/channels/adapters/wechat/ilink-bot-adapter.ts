@@ -13,11 +13,15 @@ import path from "node:path";
 import { app } from "electron";
 import {
   ILinkClient,
+  MediaType,
   pollQrStatus,
   SessionExpiredError,
+  type CDNMedia,
   type Credentials,
+  type SendMessageItem,
   type WeixinMessage,
 } from "./ilink-protocol-client";
+import { uploadWechatMediaFile } from "./wechat-media-upload";
 import type {
   ChannelCapability,
   ChannelId,
@@ -42,7 +46,7 @@ const CAPABILITY: ChannelCapability = {
   video: false,
   markdown: false,
   card: false,
-  sticker: false,
+  sticker: true,
   maxTextLength: 2048,
 };
 
@@ -66,6 +70,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
   /** 当前 credentials（动态加载） */
   currentCredentials: Credentials | null = null;
   private replyContextByTarget = new Map<string, string>();
+  private uploadMedia = uploadWechatMediaFile;
 
   status: ChannelStatus = { enabled: false, phase: "offline" };
 
@@ -119,14 +124,33 @@ export class ILinkBotAdapter implements ChannelAdapter {
     const contextToken = this.replyContextByTarget.get(msg.targetId);
     if (!contextToken) return { ok: false, error: "缺少微信 context_token，无法回复" };
 
-    const text = msg.parts
-      .filter((p) => p.kind === "text")
-      .map((p) => p.text)
-      .join("")
-      .trim();
-    if (!text) return { ok: true };
+    const hasMedia = msg.parts.some((p) => p.kind === "image" || p.kind === "sticker");
+    if (!hasMedia) {
+      const text = msg.parts
+        .filter((p) => p.kind === "text")
+        .map((p) => p.text)
+        .join("")
+        .trim();
+      if (!text) return { ok: true };
+      return this.client.sendText(msg.targetId, text, contextToken);
+    }
 
-    return this.client.sendText(msg.targetId, text, contextToken);
+    const items: SendMessageItem[] = [];
+    for (const part of msg.parts) {
+      if (part.kind === "text") {
+        const text = part.text.trim();
+        if (text) items.push({ type: 1, text_item: { text } });
+      } else if (part.kind === "image") {
+        if (!part.filePath) return { ok: false, error: "微信图片发送需要本地 filePath" };
+        const media = await this.uploadMedia(this.client, msg.targetId, part.filePath, MediaType.IMAGE);
+        items.push(buildImageItem(media));
+      } else if (part.kind === "sticker") {
+        const media = await this.uploadMedia(this.client, msg.targetId, part.imagePath, MediaType.IMAGE);
+        items.push(buildImageItem(media));
+      }
+    }
+    if (items.length === 0) return { ok: true };
+    return this.client.sendMessage(msg.targetId, items, contextToken);
   }
 
   getStatus(): ChannelStatus {
@@ -237,6 +261,13 @@ export class ILinkBotAdapter implements ChannelAdapter {
       console.error(LOG_PREFIX, "dispatcher error:", err);
     });
   }
+}
+
+function buildImageItem(media: CDNMedia): SendMessageItem {
+  return {
+    type: 2,
+    image_item: { media },
+  };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
