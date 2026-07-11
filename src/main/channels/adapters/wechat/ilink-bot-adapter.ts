@@ -65,6 +65,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
   isLoggedIn = false;
   /** 当前 credentials（动态加载） */
   currentCredentials: Credentials | null = null;
+  private replyContextByTarget = new Map<string, string>();
 
   status: ChannelStatus = { enabled: false, phase: "offline" };
 
@@ -114,9 +115,18 @@ export class ILinkBotAdapter implements ChannelAdapter {
   }
 
   async send(msg: OutgoingMessage): Promise<{ ok: boolean; error?: string }> {
-    // adapter.send() 由 dispatcher 通过 manager 的镜像路径调用；不走主回复链。
-    // 主回复在 #dispatchInbound() 内 await onMessage → 直接拿 contextToken 发。
-    return { ok: false, error: "请使用 adapter 主回复链 (dispatchInbound→onMessage→client.sendText)" };
+    if (!this.client) return { ok: false, error: "微信未连接" };
+    const contextToken = this.replyContextByTarget.get(msg.targetId);
+    if (!contextToken) return { ok: false, error: "缺少微信 context_token，无法回复" };
+
+    const text = msg.parts
+      .filter((p) => p.kind === "text")
+      .map((p) => p.text)
+      .join("")
+      .trim();
+    if (!text) return { ok: true };
+
+    return this.client.sendText(msg.targetId, text, contextToken);
   }
 
   getStatus(): ChannelStatus {
@@ -212,6 +222,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
       return;
     }
     console.log(LOG_PREFIX, `inbound from=${msg.fromUserId} text=${(msg.content ?? "").slice(0, 80)}`);
+    this.replyContextByTarget.set(msg.fromUserId, msg.contextToken);
 
     const incoming: IncomingMessage = {
       channel: "wechat",
@@ -222,24 +233,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
       _raw: msg,
     };
 
-    // 主回复链：await onMessage 拿到 OutgoingMessage，直接用 contextToken 调 sendText
-    void this.onMessage(incoming).then(async (outgoing) => {
-      if (!outgoing || !this.client) return;
-      const text = outgoing.parts
-        .filter((p) => p.kind === "text")
-        .map((p) => p.text)
-        .join("")
-        .trim();
-      if (!text) return;
-      try {
-        const result = await this.client.sendText(msg.fromUserId, text, msg.contextToken);
-        if (!result.ok) {
-          console.error(LOG_PREFIX, "sendText failed:", result.error);
-        }
-      } catch (err) {
-        console.error(LOG_PREFIX, "sendText error:", err);
-      }
-    }).catch((err) => {
+    void this.onMessage(incoming).catch((err) => {
       console.error(LOG_PREFIX, "dispatcher error:", err);
     });
   }
