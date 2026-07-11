@@ -263,10 +263,16 @@ export class JsonVectorStore {
     provider: EmbeddingProvider,
     options?: { isCancelled?: () => boolean },
   ): Promise<MemoryEntry[]> {
-    const texts = items.map((i) => i.text);
-    const embeddings = await provider.embedBatch(texts);
-    if (options?.isCancelled?.()) throw new Error("cancelled");
-    return this.addPreparedBatch(items.map((item, index) => ({ ...item, embedding: embeddings[index] })));
+    const results: MemoryEntry[] = [];
+    const batchSize = 16;
+    for (let start = 0; start < items.length; start += batchSize) {
+      if (options?.isCancelled?.()) throw new Error("cancelled");
+      const batch = items.slice(start, start + batchSize);
+      const embeddings = await provider.embedBatch(batch.map((item) => item.text));
+      if (options?.isCancelled?.()) throw new Error("cancelled");
+      results.push(...this.addPreparedBatch(batch.map((item, index) => ({ ...item, embedding: embeddings[index] }))));
+    }
+    return results;
   }
 
   addPreparedBatch(

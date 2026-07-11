@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
@@ -30,6 +30,17 @@ afterEach(() => {
 });
 
 describe("HybridRetriever", () => {
+  it("embeds document imports in bounded batches", async () => {
+    const store = createStore();
+    const embedBatch = vi.fn(async (texts: string[]) => texts.map(() => [1, 0]));
+    const items = Array.from({ length: 17 }, (_, index) => ({ text: `chunk-${index}`, source: "imported_doc" }));
+
+    await store.addBatch(items, { ...provider, embedBatch });
+
+    expect(embedBatch).toHaveBeenCalledTimes(2);
+    expect(embedBatch.mock.calls.map(([texts]) => texts.length)).toEqual([16, 1]);
+  });
+
   it("limits imported document retrieval to the current turn importIds", async () => {
     const store = createStore();
     await store.addBatch(
