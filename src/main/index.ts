@@ -3870,8 +3870,8 @@ app.whenReady().then(async () => {
     return channelResult;
   });
 
-  // Phase 3.1：注入 TTS 合成 —— dispatcher 在 reply 后会用这个生成 mp3
-  setDispatcherSynthesizeTts(async (text: string) => {
+  // Phase 3.1：注入 TTS 合成 —— dispatcher 在 reply 后会用这个生成渠道音频
+  setDispatcherSynthesizeTts(async (text: string, context) => {
     const cfg = loadGeneralSettings();
     if (cfg.ttsEngine === "off") return null;
     if (cfg.ttsEngine === "minimax" && (!cfg.ttsMinimaxKey || !cfg.ttsMinimaxVoiceId)) return null;
@@ -3881,6 +3881,7 @@ app.whenReady().then(async () => {
     // 限制 TTS 文本长度（飞书 audio 100M 限制 + 用户体验，太长应截断）
     const ttsText = text.length > 1000 ? text.slice(0, 1000) + "…" : text;
     try {
+      const requestedFormat = context.channel === "wechat" ? "wav" : "mp3";
       const result = await synthesizeByEngine(cfg.ttsEngine, {
         text: ttsText,
         speed: cfg.ttsSpeed,
@@ -3907,11 +3908,16 @@ app.whenReady().then(async () => {
         // mimo
         voiceAudioPath: cfg.ttsMimoVoiceAudioPath,
         stylePrompt: cfg.ttsMimoStylePrompt,
-        format: "mp3",
+        format: requestedFormat,
       });
       const headerHex = result.audio.subarray(0, 4).toString("hex");
       console.log("[TTS verify] engine=", cfg.ttsEngine, "format=", result.format, "header=", headerHex, "size=", result.audio.length);
-      return result.audio;
+      return {
+        audio: result.audio,
+        format: result.format,
+        mime: result.format === "wav" ? "audio/wav" : "audio/mpeg",
+        extension: result.format === "wav" ? ".wav" : ".mp3",
+      };
     } catch (err) {
       console.warn("[Channels] TTS 合成失败:", err instanceof Error ? err.message : err);
       return null;

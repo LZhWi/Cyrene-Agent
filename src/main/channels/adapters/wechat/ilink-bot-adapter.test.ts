@@ -31,13 +31,14 @@ describe("ILinkBotAdapter.send", () => {
 
   it("uploads image and sticker parts as image items in one sendmessage payload", async () => {
     const adapter = new ILinkBotAdapter();
+    const sendText = vi.fn(async () => ({ ok: true }));
     const sendMessage = vi.fn(async () => ({ ok: true }));
     const uploadMedia = vi.fn(async (_client, _userId, filePath: string) => ({
       encrypt_query_param: `encrypted:${filePath}`,
       aes_key: "encoded-key",
       encrypt_type: 1,
     }));
-    (adapter as any).client = { sendMessage };
+    (adapter as any).client = { sendText, sendMessage };
     (adapter as any).uploadMedia = uploadMedia;
     (adapter as any).replyContextByTarget.set("wx-user-1", "ctx-1");
 
@@ -48,11 +49,11 @@ describe("ILinkBotAdapter.send", () => {
     ]));
 
     expect(result).toEqual({ ok: true });
+    expect(sendText).toHaveBeenCalledWith("wx-user-1", "看图", "ctx-1");
     expect(uploadMedia).toHaveBeenCalledTimes(2);
     expect(uploadMedia).toHaveBeenNthCalledWith(1, expect.anything(), "wx-user-1", "C:/tmp/pic.png", 1);
     expect(uploadMedia).toHaveBeenNthCalledWith(2, expect.anything(), "wx-user-1", "C:/tmp/sticker.png", 1);
-    expect(sendMessage).toHaveBeenCalledWith("wx-user-1", [
-      { type: 1, text_item: { text: "看图" } },
+    expect(sendMessage).toHaveBeenNthCalledWith(1, "wx-user-1", [
       {
         type: 2,
         image_item: {
@@ -63,6 +64,8 @@ describe("ILinkBotAdapter.send", () => {
           },
         },
       },
+    ], "ctx-1");
+    expect(sendMessage).toHaveBeenNthCalledWith(2, "wx-user-1", [
       {
         type: 2,
         image_item: {
@@ -96,7 +99,7 @@ describe("ILinkBotAdapter.send", () => {
     expect(result).toEqual({ ok: true });
     expect(uploadMedia).toHaveBeenNthCalledWith(1, expect.anything(), "wx-user-1", "C:/tmp/report.pdf", 3);
     expect(uploadMedia).toHaveBeenNthCalledWith(2, expect.anything(), "wx-user-1", "C:/tmp/demo.mp4", 2);
-    expect(sendMessage).toHaveBeenCalledWith("wx-user-1", [
+    expect(sendMessage).toHaveBeenNthCalledWith(1, "wx-user-1", [
       {
         type: 4,
         file_item: {
@@ -108,6 +111,8 @@ describe("ILinkBotAdapter.send", () => {
           },
         },
       },
+    ], "ctx-1");
+    expect(sendMessage).toHaveBeenNthCalledWith(2, "wx-user-1", [
       {
         type: 5,
         video_item: {
@@ -119,5 +124,81 @@ describe("ILinkBotAdapter.send", () => {
         },
       },
     ], "ctx-1");
+  });
+
+  it("encodes and uploads audio parts as voice items", async () => {
+    const adapter = new ILinkBotAdapter();
+    const sendText = vi.fn(async () => ({ ok: true }));
+    const sendMessage = vi.fn(async () => ({ ok: true }));
+    const encodeVoice = vi.fn(async () => ({
+      data: Buffer.from("silk-data"),
+      durationMs: 1200,
+      sampleRate: 24000,
+      encodeType: 6,
+    }));
+    const uploadMediaData = vi.fn(async (_client, _userId, data: Buffer) => ({
+      encrypt_query_param: `encrypted:${data.toString("utf8")}`,
+      aes_key: "encoded-key",
+      encrypt_type: 1,
+    }));
+    (adapter as any).client = { sendText, sendMessage };
+    (adapter as any).encodeVoice = encodeVoice;
+    (adapter as any).uploadMediaData = uploadMediaData;
+    (adapter as any).replyContextByTarget.set("wx-user-1", "ctx-1");
+
+    const result = await adapter.send(message([
+      { kind: "text", text: "语音来了" },
+      { kind: "audio", filePath: "package.json", mime: "audio/wav" },
+    ]));
+
+    expect(result).toEqual({ ok: true });
+    expect(sendText).toHaveBeenCalledWith("wx-user-1", "语音来了", "ctx-1");
+    expect(encodeVoice).toHaveBeenCalledWith(expect.any(Buffer), { format: "wav" });
+    expect(uploadMediaData).toHaveBeenCalledWith(expect.anything(), "wx-user-1", Buffer.from("silk-data"), 4);
+    expect(sendMessage).toHaveBeenCalledWith("wx-user-1", [
+      {
+        type: 3,
+        voice_item: {
+          media: {
+            encrypt_query_param: "encrypted:silk-data",
+            aes_key: "encoded-key",
+            encrypt_type: 1,
+          },
+          encode_type: 6,
+          sample_rate: 24000,
+          playtime: 1200,
+        },
+      },
+    ], "ctx-1");
+  });
+
+  it("keeps the text reply successful when optional audio sending is rejected", async () => {
+    const adapter = new ILinkBotAdapter();
+    const sendText = vi.fn(async () => ({ ok: true }));
+    const sendMessage = vi.fn(async () => ({ ok: false, error: "ret=-2" }));
+    const encodeVoice = vi.fn(async () => ({
+      data: Buffer.from("silk-data"),
+      durationMs: 1200,
+      sampleRate: 24000,
+      encodeType: 6,
+    }));
+    const uploadMediaData = vi.fn(async () => ({
+      encrypt_query_param: "encrypted:silk-data",
+      aes_key: "encoded-key",
+      encrypt_type: 1,
+    }));
+    (adapter as any).client = { sendText, sendMessage };
+    (adapter as any).encodeVoice = encodeVoice;
+    (adapter as any).uploadMediaData = uploadMediaData;
+    (adapter as any).replyContextByTarget.set("wx-user-1", "ctx-1");
+
+    const result = await adapter.send(message([
+      { kind: "text", text: "先把文字发出去" },
+      { kind: "audio", filePath: "package.json", mime: "audio/wav" },
+    ]));
+
+    expect(result).toEqual({ ok: true });
+    expect(sendText).toHaveBeenCalledWith("wx-user-1", "先把文字发出去", "ctx-1");
+    expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 });

@@ -38,6 +38,19 @@ interface ChatMessage {
   content?: string;
 }
 
+type TtsAudioFormat = "mp3" | "wav";
+
+interface DispatcherTtsContext {
+  channel: ChannelId;
+}
+
+interface DispatcherTtsResult {
+  audio: Buffer;
+  format: TtsAudioFormat;
+  mime: string;
+  extension: ".mp3" | ".wav";
+}
+
 const LOG = "[ChannelDispatcher]";
 
 /** sessionId 缓存（用于查重 / 调试 / 上限管理） */
@@ -155,8 +168,8 @@ export interface DispatcherDeps {
   buildAndRunAgent?: (msg: IncomingMessage, sessionId: string, priorMessages?: ChatMessage[]) => Promise<{ text: string; sticker: string | null }>;
   /** Phase A：读这个 sessionId 最近 N 条对话历史（按时间顺序）。不提供时不拼历史，行为同 Phase 0。 */
   loadRecentChannelHistory?: (sessionId: string, limit: number) => Promise<ChatMessage[]>;
-  /** Phase 3：可选 — 把文本合成成音频 (mp3 buffer)。失败返回 null，dispatcher 会跳过 audio。 */
-  synthesizeTts?: (text: string) => Promise<Buffer | null>;
+  /** Phase 3：可选 — 把文本合成成音频。失败返回 null，dispatcher 会跳过 audio。 */
+  synthesizeTts?: (text: string, context: DispatcherTtsContext) => Promise<Buffer | DispatcherTtsResult | null>;
   /** Phase 3：可选 — 桌面端镜像广播：bot 入站/出站消息通知给 chatWindow。 */
   broadcastChat?: (event: {
     type: "bot:incoming" | "bot:outgoing";
@@ -279,17 +292,17 @@ export class ChannelDispatcher {
       console.log(LOG, `TTS 决策: adapterCap.audio=${adapterCap?.audio}`);
       if (adapterCap?.audio) {
         try {
-          const audioBuf = await this.deps.synthesizeTts(replyText);
-          console.log(LOG, `TTS 决策: 合成结果 length=${audioBuf?.length ?? "null"}`);
-          if (audioBuf && audioBuf.length > 0) {
-            // 写到 userData/channels/audio/<messageId>.mp3 缓存
+          const audioResult = normalizeTtsResult(await this.deps.synthesizeTts(replyText, { channel: msg.channel }));
+          console.log(LOG, `TTS 决策: 合成结果 length=${audioResult?.audio.length ?? "null"} format=${audioResult?.format ?? "null"}`);
+          if (audioResult && audioResult.audio.length > 0) {
+            // 写到 userData/channels/audio/<messageId>.<ext> 缓存
             const audioDir = path.join(app.getPath("userData"), "channels", "audio");
             fs.mkdirSync(audioDir, { recursive: true });
-            const audioPath = path.join(audioDir, `${msg.channel}-${Date.now()}.mp3`);
-            fs.writeFileSync(audioPath, audioBuf);
-            console.log(LOG, `TTS verify: written path=${audioPath} ext=.mp3 mime=audio/mpeg`);
-            parts.push({ kind: "audio", filePath: audioPath, mime: "audio/mpeg" });
-            console.log(LOG, `TTS 合成完成: ${audioBuf.length} bytes → ${audioPath}`);
+            const audioPath = path.join(audioDir, `${msg.channel}-${Date.now()}${audioResult.extension}`);
+            fs.writeFileSync(audioPath, audioResult.audio);
+            console.log(LOG, `TTS verify: written path=${audioPath} ext=${audioResult.extension} mime=${audioResult.mime}`);
+            parts.push({ kind: "audio", filePath: audioPath, mime: audioResult.mime });
+            console.log(LOG, `TTS 合成完成: ${audioResult.audio.length} bytes → ${audioPath}`);
           }
         } catch (err) {
           console.warn(LOG, "TTS 合成失败（跳过音频）:", err instanceof Error ? err.message : err);
@@ -399,6 +412,19 @@ export class ChannelDispatcher {
   }
 }
 
+function normalizeTtsResult(result: Buffer | DispatcherTtsResult | null): DispatcherTtsResult | null {
+  if (!result) return null;
+  if (Buffer.isBuffer(result)) {
+    return {
+      audio: result,
+      format: "mp3",
+      mime: "audio/mpeg",
+      extension: ".mp3",
+    };
+  }
+  return result;
+}
+
 /** 进程级单例 —— Phase 1 注入 buildAndRunAgent 后才会真正干活。 */
 export const channelDispatcher = new ChannelDispatcher({
   manager: channelManager,
@@ -412,8 +438,10 @@ export function setDispatcherBuildAndRunAgent(
   channelDispatcher.deps.buildAndRunAgent = fn;
 }
 
-/** Phase 3.1：注入 TTS 合成（返回 mp3 Buffer 或 null） */
-export function setDispatcherSynthesizeTts(fn: (text: string) => Promise<Buffer | null>): void {
+/** Phase 3.1：注入 TTS 合成（返回音频或 null） */
+export function setDispatcherSynthesizeTts(
+  fn: (text: string, context: DispatcherTtsContext) => Promise<Buffer | DispatcherTtsResult | null>,
+): void {
   channelDispatcher.deps.synthesizeTts = fn;
 }
 

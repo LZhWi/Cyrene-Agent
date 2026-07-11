@@ -21,7 +21,8 @@ import {
   type SendMessageItem,
   type WeixinMessage,
 } from "./ilink-protocol-client";
-import { uploadWechatMediaFile } from "./wechat-media-upload";
+import { uploadWechatMedia, uploadWechatMediaFile } from "./wechat-media-upload";
+import { encodeWechatVoiceSilk } from "./wechat-voice-encoding";
 import type {
   ChannelCapability,
   ChannelId,
@@ -41,7 +42,7 @@ const LOG_PREFIX = "[WechatBot]";
 const CAPABILITY: ChannelCapability = {
   text: true,
   image: true,
-  audio: false,    // iLink 支持 voice_item，先不上传，等用到再加
+  audio: false,
   file: true,
   video: true,
   markdown: false,
@@ -71,6 +72,8 @@ export class ILinkBotAdapter implements ChannelAdapter {
   currentCredentials: Credentials | null = null;
   private replyContextByTarget = new Map<string, string>();
   private uploadMedia = uploadWechatMediaFile;
+  private uploadMediaData = uploadWechatMedia;
+  private encodeVoice = encodeWechatVoiceSilk;
 
   status: ChannelStatus = { enabled: false, phase: "offline" };
 
@@ -124,39 +127,84 @@ export class ILinkBotAdapter implements ChannelAdapter {
     const contextToken = this.replyContextByTarget.get(msg.targetId);
     if (!contextToken) return { ok: false, error: "缺少微信 context_token，无法回复" };
 
-    const hasMedia = msg.parts.some((p) => p.kind === "image" || p.kind === "sticker" || p.kind === "file" || p.kind === "video");
-    if (!hasMedia) {
-      const text = msg.parts
-        .filter((p) => p.kind === "text")
-        .map((p) => p.text)
-        .join("")
-        .trim();
-      if (!text) return { ok: true };
-      return this.client.sendText(msg.targetId, text, contextToken);
+    let anyOk = false;
+    let lastErr: string | undefined;
+    const text = msg.parts
+      .filter((p) => p.kind === "text")
+      .map((p) => p.text)
+      .join("")
+      .trim();
+    if (text) {
+      const textResult = await this.client.sendText(msg.targetId, text, contextToken);
+      if (textResult.ok) {
+        anyOk = true;
+      } else {
+        lastErr = textResult.error ?? "微信文本发送失败";
+        console.warn(LOG_PREFIX, "text_item 发送失败:", lastErr);
+      }
     }
 
-    const items: SendMessageItem[] = [];
     for (const part of msg.parts) {
       if (part.kind === "text") {
-        const text = part.text.trim();
-        if (text) items.push({ type: 1, text_item: { text } });
+        continue;
       } else if (part.kind === "image") {
         if (!part.filePath) return { ok: false, error: "微信图片发送需要本地 filePath" };
         const media = await this.uploadMedia(this.client, msg.targetId, part.filePath, MediaType.IMAGE);
-        items.push(buildImageItem(media));
+        const result = await this.client.sendMessage(msg.targetId, [buildImageItem(media)], contextToken);
+        if (result.ok) anyOk = true;
+        else {
+          lastErr = result.error ?? "微信图片发送失败";
+          console.warn(LOG_PREFIX, "image_item 发送失败:", lastErr);
+        }
       } else if (part.kind === "sticker") {
         const media = await this.uploadMedia(this.client, msg.targetId, part.imagePath, MediaType.IMAGE);
-        items.push(buildImageItem(media));
+        const result = await this.client.sendMessage(msg.targetId, [buildImageItem(media)], contextToken);
+        if (result.ok) anyOk = true;
+        else {
+          lastErr = result.error ?? "微信表情发送失败";
+          console.warn(LOG_PREFIX, "sticker image_item 发送失败:", lastErr);
+        }
+      } else if (part.kind === "audio") {
+        const voice = await this.buildVoiceItem(msg.targetId, part.filePath).catch((err) => {
+          console.warn(LOG_PREFIX, "voice_item 构造失败（跳过语音）:", err instanceof Error ? err.message : err);
+          return null;
+        });
+        if (voice) {
+          const result = await this.client.sendMessage(msg.targetId, [voice], contextToken);
+          if (result.ok) anyOk = true;
+          else {
+            lastErr = result.error ?? "微信语音发送失败";
+            console.warn(LOG_PREFIX, "voice_item 发送失败:", lastErr);
+          }
+        }
       } else if (part.kind === "file") {
         const media = await this.uploadMedia(this.client, msg.targetId, part.filePath, MediaType.FILE);
-        items.push(buildFileItem(media, path.basename(part.name ?? part.filePath)));
+        const result = await this.client.sendMessage(msg.targetId, [buildFileItem(media, path.basename(part.name ?? part.filePath))], contextToken);
+        if (result.ok) anyOk = true;
+        else {
+          lastErr = result.error ?? "微信文件发送失败";
+          console.warn(LOG_PREFIX, "file_item 发送失败:", lastErr);
+        }
       } else if (part.kind === "video") {
         const media = await this.uploadMedia(this.client, msg.targetId, part.filePath, MediaType.VIDEO);
-        items.push(buildVideoItem(media));
+        const result = await this.client.sendMessage(msg.targetId, [buildVideoItem(media)], contextToken);
+        if (result.ok) anyOk = true;
+        else {
+          lastErr = result.error ?? "微信视频发送失败";
+          console.warn(LOG_PREFIX, "video_item 发送失败:", lastErr);
+        }
       }
     }
-    if (items.length === 0) return { ok: true };
-    return this.client.sendMessage(msg.targetId, items, contextToken);
+    if (!anyOk && lastErr) return { ok: false, error: lastErr };
+    return { ok: true };
+  }
+
+  private async buildVoiceItem(targetId: string, filePath: string): Promise<SendMessageItem> {
+    if (!this.client) throw new Error("微信未连接");
+    const source = await fs.readFile(filePath);
+    const encoded = await this.encodeVoice(source, { format: "wav" });
+    const media = await this.uploadMediaData(this.client, targetId, encoded.data, MediaType.VOICE);
+    return buildVoiceItem(media, encoded.durationMs, encoded.sampleRate, encoded.encodeType);
   }
 
   getStatus(): ChannelStatus {
@@ -291,6 +339,18 @@ function buildVideoItem(media: CDNMedia): SendMessageItem {
     type: 5,
     video_item: {
       media,
+    },
+  };
+}
+
+function buildVoiceItem(media: CDNMedia, playtime: number, sampleRate: number, encodeType: number): SendMessageItem {
+  return {
+    type: 3,
+    voice_item: {
+      media,
+      encode_type: encodeType,
+      sample_rate: sampleRate,
+      playtime,
     },
   };
 }

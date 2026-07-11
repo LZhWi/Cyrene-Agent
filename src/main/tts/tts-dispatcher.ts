@@ -53,9 +53,9 @@ export async function synthesizeByEngine(
       speed: payload.speed,
       volume: payload.volume,
       model: payload.model ?? "speech-2.8-turbo",
-      format: "mp3",
+      format: payload.format ?? "mp3",
     });
-    return { audio, format: "mp3" };
+    return { audio, format: payload.format ?? "mp3" };
   }
 
   if (engine === "gptsovits") {
