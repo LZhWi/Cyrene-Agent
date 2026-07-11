@@ -28,6 +28,7 @@ import {
   SAVE_INTENT_TTL_MS,
   buildUnsupportedWechatFilePrompt,
   buildWechatAsrMissingPrompt,
+  buildWechatSaveSuccessPrompt,
   buildWechatSaveIntentPrompt,
   buildWechatVideoPrompt,
   describeInboundWechatMedia,
@@ -51,6 +52,7 @@ const USER_PROFILE_FILE = "user-profile.json";
 
 interface PendingInboundMedia {
   media: InboundMediaDescriptor;
+  messageId: string;
   expiresAt: number;
 }
 
@@ -95,6 +97,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
   private uploadMedia = uploadWechatMediaFile;
   private uploadMediaData = uploadWechatMedia;
   private downloadMedia = downloadInboundWechatMedia;
+  private saveInboundMedia = saveInboundWechatMedia;
   private encodeVoice = encodeWechatVoiceSilk;
 
   status: ChannelStatus = { enabled: false, phase: "offline" };
@@ -325,9 +328,9 @@ export class ILinkBotAdapter implements ChannelAdapter {
     this.replyContextByTarget.set(msg.fromUserId, msg.contextToken);
 
     const media = describeInboundWechatMedia(msg.items);
-    const intercept = this.#maybeInterceptInboundMedia(msg, media);
-    if (intercept) {
-      void this.#sendInterceptText(msg.fromUserId, msg.contextToken, intercept);
+    const intercept = await this.#maybeInterceptInboundMedia(msg, media);
+    if (intercept.handled) {
+      if (intercept.text) void this.#sendInterceptText(msg.fromUserId, msg.contextToken, intercept.text);
       return;
     }
     const attachments = await this.#downloadInboundAttachments(msg, media);
@@ -348,7 +351,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
     });
   }
 
-  #maybeInterceptInboundMedia(msg: WeixinMessage, media: InboundMediaDescriptor[]): string | null {
+  async #maybeInterceptInboundMedia(msg: WeixinMessage, media: InboundMediaDescriptor[]): Promise<{ handled: boolean; text?: string }> {
     const now = Date.now();
     this.#clearExpiredInboundState(msg.fromUserId, now);
 
@@ -356,30 +359,76 @@ export class ILinkBotAdapter implements ChannelAdapter {
     const text = msg.content ?? "";
 
     if (isWechatSaveIntent(text)) {
+      const mediaToSave = firstSaveableMedia(media);
+      if (mediaToSave) {
+        const result = await this.#saveInboundMedia(mediaToSave, msg.msgId || String(now), username);
+        return { handled: true, text: result };
+      }
+      const pending = this.pendingUnsupportedMediaByTarget.get(msg.fromUserId);
+      if (pending) {
+        const result = await this.#saveInboundMedia(pending.media, pending.messageId, username);
+        this.pendingUnsupportedMediaByTarget.delete(msg.fromUserId);
+        return { handled: true, text: result };
+      }
       this.pendingSaveIntentByTarget.set(msg.fromUserId, now + SAVE_INTENT_TTL_MS);
-      return buildWechatSaveIntentPrompt(username);
+      return { handled: true, text: buildWechatSaveIntentPrompt(username) };
     }
 
-    if (media.length === 0) return null;
+    if (media.length === 0) return { handled: false };
+
+    const saveIntentUntil = this.pendingSaveIntentByTarget.get(msg.fromUserId);
+    if (saveIntentUntil !== undefined) {
+      const mediaToSave = firstSaveableMedia(media);
+      if (mediaToSave) {
+        this.pendingSaveIntentByTarget.delete(msg.fromUserId);
+        const result = await this.#saveInboundMedia(mediaToSave, msg.msgId || String(now), username);
+        return { handled: true, text: result };
+      }
+    }
 
     const video = media.find((item) => item.kind === "video");
     if (video) {
-      this.pendingUnsupportedMediaByTarget.set(msg.fromUserId, { media: video, expiresAt: now + SAVE_INTENT_TTL_MS });
-      return buildWechatVideoPrompt(username);
+      if (this.pendingSaveIntentByTarget.has(msg.fromUserId)) {
+        this.pendingSaveIntentByTarget.delete(msg.fromUserId);
+        const result = await this.#saveInboundMedia(video, msg.msgId || String(now), username);
+        return { handled: true, text: result };
+      }
+      this.pendingUnsupportedMediaByTarget.set(msg.fromUserId, { media: video, messageId: msg.msgId || String(now), expiresAt: now + SAVE_INTENT_TTL_MS });
+      return { handled: true, text: buildWechatVideoPrompt(username) };
     }
 
     const voice = media.find((item) => item.kind === "voice");
     if (voice && !isWechatAsrConfigured()) {
-      return buildWechatAsrMissingPrompt(username);
+      return { handled: true, text: buildWechatAsrMissingPrompt(username) };
     }
 
     const unsupportedFile = media.find((item) => item.kind === "file" && !item.analyzable);
     if (unsupportedFile) {
-      this.pendingUnsupportedMediaByTarget.set(msg.fromUserId, { media: unsupportedFile, expiresAt: now + SAVE_INTENT_TTL_MS });
-      return buildUnsupportedWechatFilePrompt(username);
+      if (this.pendingSaveIntentByTarget.has(msg.fromUserId)) {
+        this.pendingSaveIntentByTarget.delete(msg.fromUserId);
+        const result = await this.#saveInboundMedia(unsupportedFile, msg.msgId || String(now), username);
+        return { handled: true, text: result };
+      }
+      this.pendingUnsupportedMediaByTarget.set(msg.fromUserId, { media: unsupportedFile, messageId: msg.msgId || String(now), expiresAt: now + SAVE_INTENT_TTL_MS });
+      return { handled: true, text: buildUnsupportedWechatFilePrompt(username) };
     }
 
-    return null;
+    return { handled: false };
+  }
+
+  async #saveInboundMedia(
+    media: InboundMediaDescriptor,
+    messageId: string,
+    username: string,
+  ): Promise<string> {
+    try {
+      const filePath = await this.saveInboundMedia(media, messageId);
+      return buildWechatSaveSuccessPrompt(username, filePath);
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.warn(LOG_PREFIX, "入站媒体保存失败:", reason);
+      return `${username}，这个文件保存失败啦：${reason}`;
+    }
   }
 
   async #downloadInboundAttachments(msg: WeixinMessage, media: InboundMediaDescriptor[]): Promise<ChannelAttachment[] | null> {
@@ -466,6 +515,12 @@ function buildVoiceItem(media: CDNMedia, playtime: number, sampleRate: number, e
   };
 }
 
+function firstSaveableMedia(media: InboundMediaDescriptor[]): InboundMediaDescriptor | undefined {
+  return media.find((item) =>
+    (item.kind === "image" || item.kind === "file" || item.kind === "video") && Boolean(item.media),
+  );
+}
+
 interface DownloadedInboundMedia {
   filePath: string;
   mime: string;
@@ -478,12 +533,25 @@ async function downloadInboundWechatMedia(
   if (!item.media) throw new Error("缺少媒体下载参数");
   const data = await downloadWechatMedia(item.media);
   const ext = pickInboundExtension(item, data);
-  const safeName = sanitizeFileName(item.fileName || item.kind);
   const cacheDir = path.join(app.getPath("userData"), "channels", "cache");
   await fs.mkdir(cacheDir, { recursive: true });
-  const filePath = path.join(cacheDir, `wechat-${sanitizeFileName(messageId)}-${Date.now()}-${safeName}${ext}`);
+  const filePath = path.join(cacheDir, buildStoredFileName("wechat", messageId, item.fileName || item.kind, ext));
   await fs.writeFile(filePath, data);
   return { filePath, mime: mimeFromExtension(ext) };
+}
+
+async function saveInboundWechatMedia(
+  item: InboundMediaDescriptor,
+  messageId: string,
+): Promise<string> {
+  if (!item.media) throw new Error("缺少媒体下载参数");
+  const data = await downloadWechatMedia(item.media);
+  const ext = pickInboundExtension(item, data);
+  const inboxDir = path.join(app.getPath("desktop"), "Cyrene 收件箱");
+  await fs.mkdir(inboxDir, { recursive: true });
+  const filePath = path.join(inboxDir, buildStoredFileName("wechat", messageId, item.fileName || item.kind, ext));
+  await fs.writeFile(filePath, data);
+  return filePath;
 }
 
 function pickInboundExtension(item: InboundMediaDescriptor, data: Buffer): string {
@@ -526,6 +594,12 @@ function mimeFromExtension(ext: string): string {
 function sanitizeFileName(value: string): string {
   const sanitized = value.replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim();
   return sanitized || "attachment";
+}
+
+function buildStoredFileName(prefix: string, messageId: string, fileName: string, ext: string): string {
+  const parsed = path.parse(fileName);
+  const base = sanitizeFileName(parsed.name || fileName);
+  return `${sanitizeFileName(prefix)}-${sanitizeFileName(messageId)}-${Date.now()}-${base}${ext}`;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

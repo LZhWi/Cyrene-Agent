@@ -294,4 +294,166 @@ describe("ILinkBotAdapter inbound media", () => {
     );
     expect(onMessage).not.toHaveBeenCalled();
   });
+
+  it("saves a pending unsupported file when the user replies with save intent within five minutes", async () => {
+    const adapter = new ILinkBotAdapter();
+    const onMessage = vi.fn(async () => null);
+    const sendText = vi.fn(async () => ({ ok: true }));
+    (adapter as any).onMessage = onMessage;
+    (adapter as any).client = { sendText };
+    (adapter as any).saveInboundMedia = vi.fn(async () => "C:/Users/13575/Desktop/Cyrene 收件箱/archive.zip");
+
+    await (adapter as any).dispatchInbound({
+      msgId: "msg-file-1",
+      fromUserId: "wx-user-1",
+      toUserId: "bot-1",
+      msgType: 1,
+      content: "",
+      items: [
+        {
+          type: 4,
+          file_item: {
+            file_name: "archive.zip",
+            media: {
+              encrypt_query_param: "download-param",
+              aes_key: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
+              encrypt_type: 1,
+            },
+          },
+        },
+      ],
+      contextToken: "ctx-file",
+      raw: {},
+    });
+    await (adapter as any).dispatchInbound({
+      msgId: "msg-text-1",
+      fromUserId: "wx-user-1",
+      toUserId: "bot-1",
+      msgType: 1,
+      content: "保存到桌面",
+      items: [{ type: 1, text_item: { text: "保存到桌面" } }],
+      contextToken: "ctx-text",
+      raw: {},
+    });
+
+    expect((adapter as any).saveInboundMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "file", fileName: "archive.zip" }),
+      "msg-file-1",
+    );
+    expect(sendText).toHaveBeenLastCalledWith(
+      "wx-user-1",
+      "收好啦，伙伴。人家已经帮你放到桌面的“Cyrene 收件箱”里了：C:/Users/13575/Desktop/Cyrene 收件箱/archive.zip",
+      "ctx-text",
+    );
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("saves an unsupported file when it arrives after a save intent", async () => {
+    const adapter = new ILinkBotAdapter();
+    const onMessage = vi.fn(async () => null);
+    const sendText = vi.fn(async () => ({ ok: true }));
+    (adapter as any).onMessage = onMessage;
+    (adapter as any).client = { sendText };
+    (adapter as any).saveInboundMedia = vi.fn(async () => "C:/Users/13575/Desktop/Cyrene 收件箱/movie.mp4");
+
+    await (adapter as any).dispatchInbound({
+      msgId: "msg-text-2",
+      fromUserId: "wx-user-1",
+      toUserId: "bot-1",
+      msgType: 1,
+      content: "帮我代收一下",
+      items: [{ type: 1, text_item: { text: "帮我代收一下" } }],
+      contextToken: "ctx-text",
+      raw: {},
+    });
+    await (adapter as any).dispatchInbound({
+      msgId: "msg-video-1",
+      fromUserId: "wx-user-1",
+      toUserId: "bot-1",
+      msgType: 1,
+      content: "",
+      items: [
+        {
+          type: 5,
+          video_item: {
+            file_name: "movie.mp4",
+            media: {
+              encrypt_query_param: "download-param",
+              aes_key: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
+              encrypt_type: 1,
+            },
+          },
+        },
+      ],
+      contextToken: "ctx-video",
+      raw: {},
+    });
+
+    expect(sendText).toHaveBeenNthCalledWith(
+      1,
+      "wx-user-1",
+      "好呀，伙伴，尽管把文件发过来吧。我会帮你放到桌面的“Cyrene 收件箱”里哦~~",
+      "ctx-text",
+    );
+    expect((adapter as any).saveInboundMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "video", fileName: "movie.mp4" }),
+      "msg-video-1",
+    );
+    expect(sendText).toHaveBeenLastCalledWith(
+      "wx-user-1",
+      "收好啦，伙伴。人家已经帮你放到桌面的“Cyrene 收件箱”里了：C:/Users/13575/Desktop/Cyrene 收件箱/movie.mp4",
+      "ctx-video",
+    );
+    expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("saves an analyzable file instead of dispatching it when a save intent is already pending", async () => {
+    const adapter = new ILinkBotAdapter();
+    const onMessage = vi.fn(async () => null);
+    const sendText = vi.fn(async () => ({ ok: true }));
+    (adapter as any).onMessage = onMessage;
+    (adapter as any).client = { sendText };
+    (adapter as any).saveInboundMedia = vi.fn(async () => "C:/Users/13575/Desktop/Cyrene 收件箱/report.pdf");
+    (adapter as any).downloadMedia = vi.fn();
+
+    await (adapter as any).dispatchInbound({
+      msgId: "msg-text-3",
+      fromUserId: "wx-user-1",
+      toUserId: "bot-1",
+      msgType: 1,
+      content: "保存到桌面",
+      items: [{ type: 1, text_item: { text: "保存到桌面" } }],
+      contextToken: "ctx-text",
+      raw: {},
+    });
+    await (adapter as any).dispatchInbound({
+      msgId: "msg-file-2",
+      fromUserId: "wx-user-1",
+      toUserId: "bot-1",
+      msgType: 1,
+      content: "",
+      items: [
+        {
+          type: 4,
+          file_item: {
+            file_name: "report.pdf",
+            media: {
+              encrypt_query_param: "download-param",
+              aes_key: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
+              encrypt_type: 1,
+            },
+          },
+        },
+      ],
+      contextToken: "ctx-file",
+      raw: {},
+    });
+
+    expect((adapter as any).saveInboundMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "file", fileName: "report.pdf" }),
+      "msg-file-2",
+    );
+    expect((adapter as any).downloadMedia).not.toHaveBeenCalled();
+    expect(onMessage).not.toHaveBeenCalled();
+  });
 });
