@@ -1300,6 +1300,19 @@ function render(preserveScroll = false): void {
   if (!preserveScroll) messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
+let schedulerEventsOff: (() => void) | null = null;
+const activeAguiOffs = new Set<() => void>();
+
+function registerAguiListener(callback: (event: unknown) => void): () => void {
+  const off = window.agui!.onEvent(callback);
+  const release = () => {
+    if (!activeAguiOffs.delete(release)) return;
+    off();
+  };
+  activeAguiOffs.add(release);
+  return release;
+}
+
 function installSchedulerEventListener(): void {
   if (!window.schedulerEvents?.onEvent) return;
 
@@ -1326,7 +1339,8 @@ function installSchedulerEventListener(): void {
     render();
   };
 
-  window.schedulerEvents.onEvent((rawEvent) => {
+  schedulerEventsOff?.();
+  schedulerEventsOff = window.schedulerEvents.onEvent((rawEvent) => {
     const event = rawEvent as AguiBaseEvent;
     if (event.type === "CUSTOM" && event.name === "scheduler.started") {
       const value = event.value as { taskId?: string; title?: string; firedAt?: string; runId?: string } | undefined;
@@ -1699,6 +1713,8 @@ async function streamAndPlayCached(
   let sourceBuffer: SourceBuffer | null = null;
   let audioEl: HTMLAudioElement | null = null;
   const chunkQueue: Uint8Array[] = [];
+  const maxQueuedAudioBytes = 12 * 1024 * 1024;
+  let queuedAudioBytes = 0;
   let ended = false;
   let resolvedCacheKey: string | null = null;
   let pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -1715,6 +1731,8 @@ async function streamAndPlayCached(
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     offChunk?.(); offEnd?.(); offErr?.();
     offChunk = offEnd = offErr = null;
+    chunkQueue.length = 0;
+    queuedAudioBytes = 0;
   };
 
   const finishStream = (result: { cacheKey: string } | null) => {
@@ -1745,10 +1763,12 @@ async function streamAndPlayCached(
       // append 队列里的 chunk（如果 sourceBuffer 空闲）
       if (sourceBuffer && !sourceBuffer.updating && chunkQueue.length > 0) {
         const chunk = chunkQueue.shift()!;
+        queuedAudioBytes -= chunk.byteLength;
         try {
           sourceBuffer.appendBuffer(chunk);
         } catch {
           chunkQueue.unshift(chunk);
+          queuedAudioBytes += chunk.byteLength;
         }
       }
       // 第一块 append 成功后（buffered 有数据）开始播放
@@ -1801,7 +1821,15 @@ async function streamAndPlayCached(
         console.log(`[TTS-Stream] 第一个 chunk +${Math.round(firstChunkAt - t0)}ms`);
       }
       const bytes = Uint8Array.from(atob(payload.base64), (c) => c.charCodeAt(0));
+      if (queuedAudioBytes + bytes.byteLength > maxQueuedAudioBytes) {
+        console.warn("[TTS-Stream] 音频队列超过 12MB，停止本轮流式播放");
+        cleanup();
+        if (audioEl) releaseCurrentTtsAudio(audioEl);
+        finishStream(null);
+        return;
+      }
       chunkQueue.push(bytes);
+      queuedAudioBytes += bytes.byteLength;
     });
     offEnd = window.tts.onStreamEnd((payload) => {
       ended = true;
@@ -2431,7 +2459,7 @@ async function triggerCyreneGreeting(): Promise<void> {
         tryFinish();
       }, 40);
     };
-    const offEvent = window.agui!.onEvent((rawEvent) => {
+    const offEvent = registerAguiListener((rawEvent) => {
       try {
         const event = rawEvent as AguiBaseEvent;
         const msg = messages.find(m => m.id === streamMsgId);
@@ -2914,7 +2942,7 @@ async function send(): Promise<void> {
         tryFinish();
       }, 40);
     };
-    const offEvent = window.agui!.onEvent((rawEvent) => {
+    const offEvent = registerAguiListener((rawEvent) => {
       try {
         const event = rawEvent as AguiBaseEvent;
         const msg = messages.find(m => m.id === streamMsgId);
@@ -3318,6 +3346,7 @@ let particles: Particle[] = [];
 let particlesDpr = 1;
 let particlesW = 0;
 let particlesH = 0;
+let particlesRaf: number | null = null;
 
 function spawnParticle(): Particle {
   return {
@@ -3370,13 +3399,13 @@ function drawParticles(): void {
     particlesCtx.arc(p.x, p.y, r, 0, Math.PI * 2);
     particlesCtx.fill();
   }
-  requestAnimationFrame(drawParticles);
+  particlesRaf = requestAnimationFrame(drawParticles);
 }
 
 if (particlesCtx) {
   resizeParticles();
   particles = Array.from({ length: PARTICLE_COUNT }, spawnParticle);
-  requestAnimationFrame(drawParticles);
+  particlesRaf = requestAnimationFrame(drawParticles);
   window.addEventListener("resize", resizeParticles);
 }
 
@@ -3391,6 +3420,16 @@ void (async () => {
   installSchedulerEventListener();
   void initModelConfig();
 })();
+
+window.addEventListener("beforeunload", () => {
+  for (const off of [...activeAguiOffs]) off();
+  schedulerEventsOff?.();
+  schedulerEventsOff = null;
+  stopCurrentTts();
+  if (particlesRaf !== null) cancelAnimationFrame(particlesRaf);
+  particlesRaf = null;
+  window.removeEventListener("resize", resizeParticles);
+});
 
 // main → renderer：权限审批请求（per-action 档位下工具调用前）
 // 插入一张审批卡片到聊天流；用户点同意/拒绝后回传给主进程。
