@@ -23,6 +23,7 @@ import type { VendorConfig } from "./orchestrator/vendors";
 import { getCapability } from "./orchestrator/vendors/capabilities";
 import type { VisionConfig } from "./orchestrator/vision-captioner";
 import { toolRegistry, type ToolDefinition } from "./orchestrator/tool-registry";
+import { buildToolCatalog } from "./orchestrator/tool-catalog";
 import type { ToolRiskLevel } from "./permission";
 import { loadChannelsSettings } from "./channels/settings-store";
 // 触发 built-in-tools 的副作用注册（fetch_url / run_shell / install_mcp_server）
@@ -1647,23 +1648,50 @@ function buildSystemPrompt(styleFile: string): string {
   const isTalkMode = styleFile.startsWith("talk");
   const system = loadPromptFile(isTalkMode ? "talk_system.md" : "system.md");
   if (system) parts.push(system);
-  
+
   const identity = loadPromptFile("identity.md");
   if (identity) parts.push(identity);
-  
+
   const soul = loadPromptFile("soul.md");
   if (soul) parts.push(soul);
-  
+
   const canon = loadPromptFile("canon_quotes.md");
   if (canon) parts.push(canon);
-  
+
   // 纯聊天模式不加载 style 文件（talk_system.md 已包含完整规则）
   if (!isTalkMode) {
     const style = loadPromptFile("styles/" + styleFile);
     if (style) parts.push(style);
   }
-  
+
   return parts.join("\n\n---\n\n");
+}
+
+/**
+ * 工具阶段使用的 system prompt。
+ * 第一期：固定 tools_system.md 规则 + 运行时生成的工具目录。
+ * 不放任何人格 / 环境 / 记忆，避免人设污染工具决策。
+ */
+function buildToolSystemPrompt(enabledTools: ReadonlyArray<ToolDefinition>): string {
+  const base = loadPromptFile("tools_system.md");
+  const catalog = buildToolCatalog(enabledTools as ToolDefinition[]);
+  return [
+    base,
+    "## 当前可用工具",
+    catalog,
+  ].filter(Boolean).join("\n\n");
+}
+
+/**
+ * Soul 阶段使用的基础 system prompt。
+ * 包含：人设（system.md + identity.md + soul.md + canon + style）+ 后续可追加的环境/记忆等。
+ * 注意：工具结果（`role: "tool"` 消息）在 conversation 中已携带，本函数不重复注入。
+ * 第一期：build-options 会把 environmentContext / skillCatalog / toneInjection /
+ * alwaysOnContext / relationshipContext / attachmentContext 等都拼到 baseContent 末尾，
+ * 后续第二期再拆分为 toolEnvironmentContext / soulEnvironmentContext。
+ */
+function buildSoulSystemBasePrompt(styleFile: string): string {
+  return buildSystemPrompt(styleFile);
 }
 
 /**
@@ -4077,6 +4105,9 @@ app.whenReady().then(async () => {
       buildAlwaysOnContext(userText, messages as any)) as BuildOptionsDeps["buildAlwaysOnContext"],
     buildRelationshipContext,
     buildSystemPrompt,
+    buildToolSystemPrompt: (enabledTools) => buildToolSystemPrompt(enabledTools as ToolDefinition[]),
+    buildSoulSystemBasePrompt,
+    toolRegistry: { getEnabled: () => toolRegistry.getEnabledTools() },
     logWorldbookInjection,
     normalizeChatMessages: ((raw: ReadonlyArray<unknown>) =>
       normalizeChatMessages(raw as any)) as BuildOptionsDeps["normalizeChatMessages"],

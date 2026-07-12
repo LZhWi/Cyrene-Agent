@@ -52,6 +52,12 @@ export interface BuildOptionsDeps {
   ) => Promise<string>;
   buildRelationshipContext: () => Promise<string>;
   buildSystemPrompt: (styleFile: string) => string;
+  /** 第一期：工具阶段 system prompt。仅含工具调度规则 + 自动生成的工具目录。 */
+  buildToolSystemPrompt: (enabledTools: ReadonlyArray<unknown>) => string;
+  /** 第一期：Soul 阶段使用的基础 system prompt。工具结果在 FC 循环 Soul 阶段执行前动态追加。 */
+  buildSoulSystemBasePrompt: (styleFile: string) => string;
+  /** 第一期：注入 toolRegistry（用于 buildToolSystemPrompt 自动生成目录）。 */
+  toolRegistry: { getEnabled(): ReadonlyArray<unknown> };
   logWorldbookInjection: (alwaysOnContext: string, systemContent: string) => void;
   normalizeChatMessages: (raw: ReadonlyArray<unknown>) => ChatMessage[];
   chatRequestTimeoutMs: number;
@@ -309,10 +315,31 @@ export async function buildAgentRunOptions(
   }
 
   const isTalkMode = (input.style || "").startsWith("talk");
+  const styleFile = input.style || "01_default.md";
+
+  // 第一期：保留旧 systemContent 兼容（已不再使用，保留字段是为了 logger 诊断）。
+  // 同时新增 toolSystemContent / soulSystemBaseContent 两套。
   const systemContent =
     (environmentContext ? environmentContext + "\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
-    deps.buildSystemPrompt(input.style || "01_default.md") +
+    deps.buildSystemPrompt(styleFile) +
+    (skillCatalog ? "\n\n---\n\n" + skillCatalog : "") +
+    skillActivation +
+    toneInjection +
+    (alwaysOnContext ? "\n\n" + alwaysOnContext + "\n\n" : "") +
+    (relationshipContext ? "\n\n" + relationshipContext + "\n\n" : "") +
+    attachmentContext;
+
+  // 工具阶段：只含 tools_system 规则 + 运行时生成的工具目录。
+  const toolSystemContent = deps.buildToolSystemPrompt(deps.toolRegistry.getEnabled());
+
+  // Soul 阶段基础 system：人设 + 环境/记忆/关系/附件/渠道（这些是"表达"所需）。
+  // 工具结果（role: tool 消息）已在 conversation 中携带，本字段不重复注入；
+  // FC 循环 Soul 阶段执行前会按需动态追加 soulToolResultsSummary。
+  const soulSystemBaseContent =
+    (environmentContext ? environmentContext + "\n\n" : "") +
+    (channelSystem ? channelSystem + "\n\n" : "") +
+    deps.buildSoulSystemBasePrompt(styleFile) +
     (skillCatalog ? "\n\n---\n\n" + skillCatalog : "") +
     skillActivation +
     toneInjection +
@@ -322,11 +349,9 @@ export async function buildAgentRunOptions(
 
   deps.logWorldbookInjection(alwaysOnContext, systemContent);
 
-  const fcMessages: ChatMessage[] = [
-    { role: "system", content: systemContent },
-    ...withDirectImageAttachments(messages, input),
-  ];
-  const imageCaptionFallback = buildImageCaptionFallbackMessages(systemContent, messages, input, deps);
+  // 第一期：原始 messages 不再携带 system。FC 循环按阶段动态注入。
+  const fcMessages: ChatMessage[] = withDirectImageAttachments(messages, input);
+  const imageCaptionFallback = buildImageCaptionFallbackMessages(toolSystemContent + "\n\n---\n\n" + soulSystemBaseContent, messages, input, deps);
 
   return {
     options: {
@@ -339,6 +364,8 @@ export async function buildAgentRunOptions(
       },
       messages: fcMessages,
       timeoutMs: deps.chatRequestTimeoutMs,
+      toolSystemContent,
+      soulSystemBaseContent,
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
       ...(isTalkMode ? { tools: [] as ToolDefinition[] } : {}),
     },

@@ -5,8 +5,18 @@ import { toolRegistry } from "../orchestrator/tool-registry";
 import { filterToolsForTask } from "./tool-filter";
 import type { ScheduledRunResult, ScheduledTask, ScheduledTaskHistoryEntry } from "./types";
 
+/**
+ * 第一期：scheduler 的 buildOptions 返回"传统"形式（包含 system 消息）。
+ * CyreneAgent 暂时通过 fallback 兼容：检测 options.messages[0].role === "system" 时，
+ * 用它作为 soulSystemBaseContent（重复一次），toolSystemContent 用同一个串（暂时不拆分）。
+ *
+ * 第二期：scheduler 同步迁移到 tool_system / soul_system 分阶段，buildOptions 改为返回
+ * 带 toolSystemContent / soulSystemBaseContent 的 CyreneRunOptions。
+ */
+type LegacyRunOptions = Omit<CyreneRunOptions, "toolSystemContent" | "soulSystemBaseContent">;
+
 interface RunnerDeps {
-  buildOptions: (task: ScheduledTask) => Promise<CyreneRunOptions>;
+  buildOptions: (task: ScheduledTask) => Promise<LegacyRunOptions>;
   getChatWebContents: () => WebContents | null;
   recordHistory: (entry: ScheduledTaskHistoryEntry) => void;
   id: () => string;
@@ -46,8 +56,30 @@ export function createSchedulerRunner(deps: RunnerDeps) {
     });
 
     try {
-      const options = await deps.buildOptions(task);
-      options.tools = effectiveTools;
+      const legacyOptions = await deps.buildOptions(task);
+      legacyOptions.tools = effectiveTools;
+
+      // 第一期兼容：把传统 messages 里的 system 消息拆出来作为 soulSystemBaseContent。
+      // toolSystemContent 暂用同一份（scheduler 第二期再迁）。
+      const sysIdx = legacyOptions.messages.findIndex((m) => m.role === "system");
+      let soulSystemBaseContent: string;
+      let messages = legacyOptions.messages;
+      if (sysIdx >= 0) {
+        const sysMsg = legacyOptions.messages[sysIdx];
+        soulSystemBaseContent = typeof sysMsg.content === "string" ? sysMsg.content : "";
+        messages = legacyOptions.messages.filter((_, i) => i !== sysIdx);
+      } else {
+        soulSystemBaseContent = "";
+      }
+      const toolSystemContent = soulSystemBaseContent; // 第一期暂用同一份
+
+      const options: CyreneRunOptions = {
+        ...legacyOptions,
+        messages,
+        toolSystemContent,
+        soulSystemBaseContent,
+      };
+
       const agent = new CyreneAgent({ threadId: `scheduler-${task.id}`, description: `Scheduled task: ${task.title}` });
 
       await new Promise<void>((resolve, reject) => {

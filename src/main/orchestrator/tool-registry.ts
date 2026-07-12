@@ -15,6 +15,11 @@ export interface ToolDefinition {
   id: string;           // 工具唯一标识，如 "imported_docs"
   name: string;         // 展示名，如 "导入文档"
   description: string;  // 一句话描述，供 LLM Router 的 Prompt 使用
+  /** 工具目录里展示的一句话用途（可选）。未填时回落 description 第一行。
+   *  只用于运行时生成的工具目录，完整参数仍走 tools Schema。 */
+  catalogHint?: string;
+  /** 可选分类标签，第一期暂不强制使用。 */
+  category?: string;
   enabled: boolean;     // 用户是否启用（对应设置面板的开关）
   // 危险等级：决定该工具在哪些权限档位下可调用；不填默认 "safe"
   risk?: ToolRiskLevel;

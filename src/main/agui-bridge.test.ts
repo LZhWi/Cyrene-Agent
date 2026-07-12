@@ -57,6 +57,8 @@ describe("agui-bridge sticker event ordering", () => {
           settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
           messages: [],
           timeoutMs: 1000,
+          toolSystemContent: "TOOL",
+          soulSystemBaseContent: "SOUL",
         },
         latestUserText: "累了",
       }),

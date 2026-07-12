@@ -24,6 +24,9 @@ function createBuildDeps(): BuildOptionsDeps {
     buildAlwaysOnContext: async () => "ALWAYS",
     buildRelationshipContext: async () => "RELATIONSHIP",
     buildSystemPrompt: () => "BASE_SYSTEM",
+    buildToolSystemPrompt: () => "TOOL_SYSTEM",
+    buildSoulSystemBasePrompt: () => "SOUL_SYSTEM_BASE",
+    toolRegistry: { getEnabled: () => [] },
     logWorldbookInjection: () => {},
     normalizeChatMessages: (raw) => raw as never,
     chatRequestTimeoutMs: 1000,
@@ -38,10 +41,10 @@ describe("build-options", () => {
       channel: "wechat",
     }, createBuildDeps())
 
-    const system = result.options.messages[0].content
-    expect(system).toContain("你正在通过微信回复用户")
-    expect(system).toContain("BASE_SYSTEM")
-    expect(system).toContain("RELATIONSHIP")
+    expect(result.options.soulSystemBaseContent).toContain("你正在通过微信回复用户")
+    expect(result.options.soulSystemBaseContent).toContain("SOUL_SYSTEM_BASE")
+    expect(result.options.soulSystemBaseContent).toContain("RELATIONSHIP")
+    expect(result.options.toolSystemContent).toBe("TOOL_SYSTEM")
   })
 
   it("does not add channel system for desktop chat", async () => {
@@ -50,9 +53,29 @@ describe("build-options", () => {
       style: "01_default.md",
     }, createBuildDeps())
 
-    const system = result.options.messages[0].content
-    expect(system).not.toContain("你正在通过微信回复用户")
-    expect(system).not.toContain("你正在通过飞书回复用户")
+    expect(result.options.soulSystemBaseContent).not.toContain("你正在通过微信回复用户")
+    expect(result.options.soulSystemBaseContent).not.toContain("你正在通过飞书回复用户")
+  })
+
+  it("messages 不含 system，FC 循环按阶段动态注入", async () => {
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "你好" }],
+      style: "01_default.md",
+    }, createBuildDeps())
+
+    // 第一期：原始 messages 不含 system 消息
+    expect(result.options.messages.some((m) => m.role === "system")).toBe(false)
+  })
+
+  it("toolSystemContent / soulSystemBaseContent 是分开的两套字符串", async () => {
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "你好" }],
+      style: "01_default.md",
+    }, createBuildDeps())
+
+    expect(result.options.toolSystemContent).toBe("TOOL_SYSTEM")
+    expect(result.options.soulSystemBaseContent).not.toBe("TOOL_SYSTEM")
+    expect(result.options.soulSystemBaseContent).toContain("SOUL_SYSTEM_BASE")
   })
 
   it("attaches direct image content blocks to the latest user message", async () => {
@@ -81,7 +104,8 @@ describe("build-options", () => {
         image_url: { url: expect.stringMatching(/^data:image\/png;base64,/) },
       },
     ])
-    expect(result.options.messages[1].content).toBe("上一轮")
+    // 第一期：原始 messages 不含 system，所以 messages[0] 就是首条用户消息
+    expect(result.options.messages[0].content).toBe("上一轮")
   })
 
   it("builds caption fallback messages for direct image send failures", async () => {
