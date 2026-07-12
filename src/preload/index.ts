@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { IPC } from "../shared/ipc-channels";
 import type { DocumentIndexProgress } from "../main/rag/document-index-queue";
+import { getLive2DIpcListenerCounts } from "./live2d-listener-diagnostics";
 
 const cyreneApi = {
   minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
@@ -386,6 +387,12 @@ const live2dActionApi = {
   },
 };
 contextBridge.exposeInMainWorld("live2dAction", live2dActionApi);
+
+const live2dDiagnosticsApi = {
+  getMain: () => ipcRenderer.invoke(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS),
+  getIpcListenerCounts: () => getLive2DIpcListenerCounts(ipcRenderer),
+};
+contextBridge.exposeInMainWorld("live2dDiagnostics", live2dDiagnosticsApi);
 
 // Opener 主动开口反馈（渲染端 → 主进程）
 const openerApi = {

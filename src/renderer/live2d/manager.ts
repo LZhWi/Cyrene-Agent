@@ -22,6 +22,18 @@ export interface Live2DManagerOptions {
   onError?: (err: Error) => void;
 }
 
+export interface Live2DResourceMetrics {
+  appActive: boolean;
+  modelLoaded: boolean;
+  disposed: boolean;
+  tickerStarted: boolean | null;
+  stageChildren: number | null;
+  textureCacheSize: number | null;
+  rendererType: "webgl" | "unknown" | null;
+  drawingBufferWidth: number | null;
+  drawingBufferHeight: number | null;
+}
+
 interface MotionEntry {
   Name?: string;
   File?: string;
@@ -210,6 +222,22 @@ export class Live2DManager {
 
   getHitAreaDefs(): HitAreaDef[] {
     return this.hitAreaDefs;
+  }
+
+  getResourceMetrics(): Live2DResourceMetrics {
+    const gl = this.getGL();
+    const textureCache = (PIXI as unknown as { utils?: { TextureCache?: Record<string, unknown> } }).utils?.TextureCache;
+    return {
+      appActive: this.app !== null,
+      modelLoaded: this.model !== null,
+      disposed: this.disposed,
+      tickerStarted: this.app ? Boolean((this.app.ticker as unknown as { started?: boolean }).started) : null,
+      stageChildren: this.app ? ((this.app.stage as unknown as { children?: unknown[] }).children?.length ?? null) : null,
+      textureCacheSize: textureCache ? Object.keys(textureCache).length : null,
+      rendererType: gl ? "webgl" : this.app ? "unknown" : null,
+      drawingBufferWidth: gl?.drawingBufferWidth ?? null,
+      drawingBufferHeight: gl?.drawingBufferHeight ?? null,
+    };
   }
 
   /**

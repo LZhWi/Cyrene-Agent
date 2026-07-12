@@ -18,13 +18,14 @@ vi.mock("pixi-live2d-display/cubism4", () => {
 vi.mock("pixi.js", () => {
   return {
     Application: class {
-      renderer = { resize: vi.fn(), gl: null };
-      stage = { addChild: vi.fn() };
-      ticker = { stop: vi.fn(), start: vi.fn() };
+      renderer = { resize: vi.fn(), gl: { drawingBufferWidth: 200, drawingBufferHeight: 100 } };
+      stage = { children: [] as unknown[], addChild: vi.fn((child: unknown) => { this.stage.children.push(child); }) };
+      ticker = { started: true, stop: vi.fn(() => { this.ticker.started = false; }), start: vi.fn(() => { this.ticker.started = true; }) };
       render = vi.fn();
       destroy = vi.fn();
     },
     Renderer: class {},
+    utils: { TextureCache: { a: {}, b: {} } },
   };
 });
 
@@ -57,6 +58,44 @@ describe("Live2DManager.playAction", () => {
 
     expect(Live2DModel.from).toHaveBeenCalledTimes(1);
     mgr.dispose();
+    vi.unstubAllGlobals();
+  });
+
+  it("reports resource metrics for app, model, ticker, and texture cache", async () => {
+    vi.clearAllMocks();
+    vi.stubGlobal("window", { devicePixelRatio: 2, innerWidth: 100, innerHeight: 100 });
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, json: async () => ({}) })));
+    const { Live2DModel } = await import("pixi-live2d-display/cubism4");
+    const model = {
+      anchor: { set: vi.fn() }, scale: { set: vi.fn() }, width: 100, height: 100,
+      destroy: vi.fn(), motion: vi.fn(), expression: vi.fn(), internalModel: { motionManager: { definitions: {} } },
+    };
+    vi.mocked(Live2DModel.from).mockResolvedValue(model as never);
+    const { Live2DManager } = await import("./manager");
+    const mgr = new Live2DManager({ canvas: fakeCanvas, width: 100, height: 100, modelPath: "/x" });
+
+    expect(mgr.getResourceMetrics()).toMatchObject({
+      appActive: false,
+      modelLoaded: false,
+      disposed: false,
+    });
+
+    await mgr.init();
+
+    expect(mgr.getResourceMetrics()).toMatchObject({
+      appActive: true,
+      modelLoaded: true,
+      disposed: false,
+      tickerStarted: true,
+      stageChildren: 1,
+    });
+
+    mgr.dispose();
+    expect(mgr.getResourceMetrics()).toMatchObject({
+      appActive: false,
+      modelLoaded: false,
+      disposed: true,
+    });
     vi.unstubAllGlobals();
   });
 

@@ -72,6 +72,7 @@ import { initGameBot } from "./game-bot";
 import { initChannels, shutdownChannels } from "./channels/init";
 import { buildChannelAttachmentInputs } from "./channels/agent-input";
 import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
+import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
 import {
   buildAgentRunOptions,
   onAgentRunFinished,
@@ -97,6 +98,9 @@ let settingsWindow: BrowserWindow | null = null;
 let stickerManagerWindow: BrowserWindow | null = null;
 let callWindow: BrowserWindow | null = null;
 let schedulerEngine: SchedulerEngine | null = null;
+const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
+  onClosed: () => setLive2dWindow(null),
+});
 // 聊天窗口当前活跃的会话 id（通过 IPC 由聊天窗口上报）；
 // 设置面板"删除当前会话"差异化提示用。聊天窗口关闭时由 closed 事件置 null。
 let activeChatSessionId: string | null = null;
@@ -2025,6 +2029,7 @@ function createWindow(): void {
       sandbox: false,
     },
   });
+  live2dWindowLifecycle.attach(mainWindow);
 
   if (isDev) {
     mainWindow.loadURL("http://localhost:5173");
@@ -2213,6 +2218,7 @@ function createWindow(): void {
   });
 
   mainWindow.on("closed", () => {
+    live2dWindowLifecycle.clear(mainWindow ?? undefined);
     mainWindow = null;
   });
 }
@@ -2669,6 +2675,10 @@ ipcMain.handle(IPC.WINDOW_CAPTURE_FRAME, async () => {
 ipcMain.handle(IPC.WINDOW_GET_CURSOR_POSITION, () => {
   return screen.getCursorScreenPoint();
 });
+
+ipcMain.handle(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS, () => ({
+  window: live2dWindowLifecycle.getDiagnostics(),
+}));
 
 ipcMain.handle("debug:screenshot", async () => {
   if (!mainWindow) return null;
