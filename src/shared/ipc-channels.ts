@@ -78,6 +78,7 @@ export const IPC = {
   CHATS_CREATE: "chats:create",
   CHATS_APPEND: "chats:append",
   CHATS_REPLACE_MESSAGES: "chats:replace-messages",
+  CHATS_REPLACE_TAIL: "chats:replace-tail",
   CHATS_RENAME: "chats:rename",
   CHATS_DELETE: "chats:delete",
   CHATS_OPEN_FOLDER: "chats:open-folder",

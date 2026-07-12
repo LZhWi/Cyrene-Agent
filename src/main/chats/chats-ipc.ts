@@ -68,6 +68,15 @@ export function registerChatsIpc(): void {
       return session;
     },
   );
+  ipcMain.handle(
+    IPC.CHATS_REPLACE_TAIL,
+    (_event, payload: { id: string; startIndex: number; messages: ChatMessage[] }) => {
+      if (!payload?.id || !Array.isArray(payload.messages)) return null;
+      const session = chatsStore.replaceMessagesTail(payload.id, payload.startIndex, payload.messages);
+      if (session) broadcastChanged();
+      return session;
+    },
+  );
 
   ipcMain.handle(
     IPC.CHATS_RENAME,

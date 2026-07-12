@@ -329,6 +329,8 @@ function getStickerSrc(id: string): string | undefined {
 // 启动期间 currentSessionId 为 null，发送按钮通过 sending 标志兜底（bootstrap 极快）。
 const messages: Message[] = [];
 let currentSessionId: string | null = null;
+let sessionTailStart = 0;
+const CHAT_WINDOW_SIZE = 100;
 let currentModelConfig: ModelConfig | null = null;
 
 function formatModelHint(config: ModelConfig | null): string {
@@ -390,9 +392,11 @@ interface ChatStoreSession {
 interface ChatStoreApi {
   list: () => Promise<ChatSessionMetaUI[]>;
   get: (id: string) => Promise<ChatStoreSession | null>;
+  getPage: (id: string, before: number | null, limit: number) => Promise<{ session: Omit<ChatStoreSession, "messages">; messages: ChatStoreSession["messages"]; hasMore: boolean } | null>;
   create: (payload?: { title?: string; identityId?: string | null }) => Promise<ChatStoreSession>;
   append: (id: string, message: unknown) => Promise<ChatStoreSession | null>;
   replaceMessages: (id: string, messages: unknown[]) => Promise<ChatStoreSession | null>;
+  replaceTail: (id: string, startIndex: number, messages: unknown[]) => Promise<ChatStoreSession | null>;
   rename: (id: string, title: string) => Promise<ChatStoreSession | null>;
   delete: (id: string) => Promise<boolean>;
   openFolder: () => Promise<boolean>;
@@ -437,7 +441,7 @@ function toPersistableMessages(arr: Message[]): Array<{
 async function saveSession(): Promise<void> {
   if (!currentSessionId || !window.chatStore) return;
   try {
-    await window.chatStore.replaceMessages(currentSessionId, toPersistableMessages(messages));
+    await window.chatStore.replaceTail(currentSessionId, sessionTailStart, toPersistableMessages(messages));
   } catch (err) {
     console.warn("[Cyrene Chat] saveSession 失败:", err);
   }
@@ -463,6 +467,14 @@ function loadSessionIntoUI(session: ChatStoreSession): void {
   render();
   // 切换会话后刷新侧栏列表的活跃高亮
   void renderRailList();
+}
+
+async function loadSessionTailIntoUI(id: string): Promise<boolean> {
+  const page = await window.chatStore?.getPage(id, null, CHAT_WINDOW_SIZE);
+  if (!page) return false;
+  sessionTailStart = Math.max(0, page.session.messageCount - page.messages.length);
+  loadSessionIntoUI({ ...page.session, messages: page.messages });
+  return true;
 }
 
 // ── 会话侧栏（点左上角 loader 展开）──

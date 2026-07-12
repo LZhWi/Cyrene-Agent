@@ -216,6 +216,17 @@ export function replaceMessages(id: string, messages: ChatMessage[]): ChatSessio
   return session;
 }
 
+export function replaceMessagesTail(id: string, startIndex: number, messages: ChatMessage[]): ChatSession | null {
+  const session = readSessionFile(id);
+  if (!session || !Number.isInteger(startIndex) || startIndex < 0 || startIndex > session.messages.length) return null;
+  session.messages = session.messages.slice(0, startIndex).concat(messages);
+  session.updatedAt = Date.now();
+  if (!session.titleIsCustom) session.title = deriveTitle(session.messages);
+  writeSessionFile(session);
+  upsertMeta(metaFromSession(session));
+  return session;
+}
+
 export function renameSession(id: string, title: string): ChatSession | null {
   const session = readSessionFile(id);
   if (!session) return null;

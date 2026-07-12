@@ -402,12 +402,16 @@ contextBridge.exposeInMainWorld("openerBridge", openerApi);
 const chatStoreApi = {
   list: () => ipcRenderer.invoke(IPC.CHATS_LIST),
   get: (id: string) => ipcRenderer.invoke(IPC.CHATS_GET, id),
+  getPage: (id: string, before: number | null, limit: number) =>
+    ipcRenderer.invoke(IPC.CHATS_GET_PAGE, { id, before, limit }),
   create: (payload?: { title?: string; identityId?: string | null }) =>
     ipcRenderer.invoke(IPC.CHATS_CREATE, payload ?? {}),
   append: (id: string, message: unknown) =>
     ipcRenderer.invoke(IPC.CHATS_APPEND, { id, message }),
   replaceMessages: (id: string, messages: unknown[]) =>
     ipcRenderer.invoke(IPC.CHATS_REPLACE_MESSAGES, { id, messages }),
+  replaceTail: (id: string, startIndex: number, messages: unknown[]) =>
+    ipcRenderer.invoke(IPC.CHATS_REPLACE_TAIL, { id, startIndex, messages }),
   rename: (id: string, title: string) =>
     ipcRenderer.invoke(IPC.CHATS_RENAME, { id, title }),
   delete: (id: string) => ipcRenderer.invoke(IPC.CHATS_DELETE, id),
