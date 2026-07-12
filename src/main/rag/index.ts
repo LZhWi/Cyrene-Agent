@@ -253,6 +253,20 @@ export type PreparedDocumentEmbedding = {
   embedding: number[];
 };
 
+export async function appendPreparedDocumentBatch(
+  fileName: string,
+  importId: string,
+  prepared: PreparedDocumentEmbedding[],
+): Promise<void> {
+  if (!store) throw new Error("RAG not initialized");
+  store.addPreparedBatch(prepared.map((entry) => ({
+    text: entry.text,
+    embedding: entry.embedding,
+    source: "imported_doc",
+    metadata: { fileName, chunkIndex: entry.chunkIndex, importId },
+  })));
+}
+
 export async function importPreparedDocumentForTurn(
   fileName: string,
   prepared: PreparedDocumentEmbedding[],
@@ -262,12 +276,7 @@ export async function importPreparedDocumentForTurn(
     ? crypto.randomUUID()
     : Math.random().toString(36).slice(2, 8);
   const importId = `import-${Date.now()}-${id}`;
-  store.addPreparedBatch(prepared.map((entry) => ({
-    text: entry.text,
-    embedding: entry.embedding,
-    source: "imported_doc",
-    metadata: { fileName, chunkIndex: entry.chunkIndex, importId },
-  })));
+  await appendPreparedDocumentBatch(fileName, importId, prepared);
   return { importId, chunkCount: prepared.length };
 }
 
