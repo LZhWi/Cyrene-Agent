@@ -477,6 +477,17 @@ async function loadSessionTailIntoUI(id: string): Promise<boolean> {
   return true;
 }
 
+async function loadEarlierMessages(): Promise<void> {
+  if (!currentSessionId || !window.chatStore || sessionTailStart <= 0) return;
+  const beforeHeight = messagesEl.scrollHeight;
+  const page = await window.chatStore.getPage(currentSessionId, sessionTailStart, CHAT_WINDOW_SIZE);
+  if (!page) return;
+  sessionTailStart -= page.messages.length;
+  messages.unshift(...page.messages);
+  render(true);
+  messagesEl.scrollTop = messagesEl.scrollHeight - beforeHeight;
+}
+
 // ── 会话侧栏（点左上角 loader 展开）──
 // 精简版：+新对话 / 列表点击切换 / 活跃高亮。改名删除留设置面板。
 // 渲染逻辑跟 settings.ts 的 renderChatSessions 同源（复用 shared 的格式化函数），
@@ -532,8 +543,7 @@ function buildRailItem(session: ChatSessionMetaUI): HTMLLIElement {
   // 点击列表项 = 本地切换会话（不走跨窗口 IPC，比设置面板还快）
   li.addEventListener("click", async () => {
     if (session.id === currentSessionId) return;
-    const full = await window.chatStore?.get(session.id);
-    if (full) loadSessionIntoUI(full as ChatStoreSession);
+    await loadSessionTailIntoUI(session.id);
   });
 
   li.appendChild(titleEl);
@@ -602,22 +612,26 @@ async function bootstrap(): Promise<void> {
 
   // 优先级：URL ?sessionId= → 列表最新一条 → 自动建新
   const urlSessionId = new URLSearchParams(window.location.search).get("sessionId");
-  let session: ChatStoreSession | null = null;
+  let sessionId: string | null = null;
 
   if (urlSessionId) {
-    session = await window.chatStore.get(urlSessionId);
+    sessionId = urlSessionId;
   }
-  if (!session) {
+  if (!sessionId) {
     const list = await window.chatStore.list();
     if (list.length > 0) {
-      session = await window.chatStore.get(list[0].id);
+      sessionId = list[0].id;
     }
   }
-  if (!session) {
-    session = await window.chatStore.create({ identityId: null });
+  if (!sessionId) {
+    sessionId = (await window.chatStore.create({ identityId: null })).id;
   }
 
-  loadSessionIntoUI(session);
+  if (!await loadSessionTailIntoUI(sessionId)) {
+    const session = await window.chatStore.create({ identityId: null });
+    sessionTailStart = 0;
+    loadSessionIntoUI(session);
+  }
 }
 
 function formatTime(at: number): string {
@@ -1128,7 +1142,7 @@ function hideTransientStatus(): void {
   transientStatusEl = null;
 }
 
-function render(): void {
+function render(preserveScroll = false): void {
   // 空态：当前会话还没有消息时（新建/全清）显示"昔涟期待与你聊天哦 ✨"占位
   // thinking 状态（昔涟主动开场/流式回复中）也算有消息，胶囊应立即消失
   const emptyEl = document.getElementById("chat-empty");
@@ -1141,6 +1155,14 @@ function render(): void {
   if (emptyEl) emptyEl.toggleAttribute("hidden", hasMessages);
 
   messagesEl.replaceChildren();
+  if (sessionTailStart > 0) {
+    const loadEarlier = document.createElement("button");
+    loadEarlier.type = "button";
+    loadEarlier.className = "chat__load-earlier";
+    loadEarlier.textContent = "加载更早消息";
+    loadEarlier.addEventListener("click", () => void loadEarlierMessages());
+    messagesEl.appendChild(loadEarlier);
+  }
   for (const m of messages) {
     const row = document.createElement("div");
     row.className = `msg msg--${m.role}`;
@@ -1275,7 +1297,7 @@ function render(): void {
     row.appendChild(body);
     messagesEl.appendChild(row);
   }
-  messagesEl.scrollTop = messagesEl.scrollHeight;
+  if (!preserveScroll) messagesEl.scrollTop = messagesEl.scrollHeight;
 }
 
 function installSchedulerEventListener(): void {
