@@ -10,12 +10,15 @@ import {
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
   normalizeProactiveChatMode,
+  normalizeProactiveDeliveryTarget,
   normalizeSegmentedOutputMode,
   type DefaultChatMode,
   type MobileMessageSegmentationMode,
   type ProactiveChatMode,
+  type ProactiveDeliveryTarget,
   type SegmentedOutputMode,
 } from "../../shared/preferences";
+import { isProactiveDeliveryTargetSelectable } from "../../shared/proactive-delivery";
 
 // Inline modal (to avoid Vite tree-shaking)
 let _cyModalOverlay: HTMLElement | null = null;
@@ -281,6 +284,7 @@ interface GeneralSettings {
   segmentedOutputMode: SegmentedOutputMode;
   mobileMessageSegmentation: MobileMessageSegmentationMode;
   proactiveChatMode: ProactiveChatMode;
+  proactiveDeliveryTarget: ProactiveDeliveryTarget;
 }
 
 interface UserApi {
@@ -368,6 +372,8 @@ interface SettingsApi {
   testVision?: (config: { baseUrl: string; apiKey: string; model: string }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
   // main → settings：要求切到指定标签（窗口已打开时由 main 发这个事件）
   onSwitchSection?: (callback: (section: string) => void) => (() => void) | void;
+  channelsGetStatus: () => Promise<Record<string, { phase?: string; message?: string }>>;
+  onChannelsStatusChanged: (callback: (status: unknown) => void) => (() => void) | void;
 }
 
 declare global {
@@ -496,8 +502,11 @@ if (!window.settings) {
       segmentedOutputMode: "off",
       mobileMessageSegmentation: "off",
       proactiveChatMode: "off",
+      proactiveDeliveryTarget: "local",
     }),
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
+    channelsGetStatus: () => Promise.resolve({}),
+    onChannelsStatusChanged: () => () => {},
     openSidebar: () => {},
     closeSidebar: () => {},
     openTasks: () => {},
@@ -634,6 +643,8 @@ const defaultChatModeSelect = document.getElementById("default-chat-mode-select"
 const segmentedOutputSelect = document.getElementById("segmented-output-select") as HTMLElement;
 const mobileMessageSegmentationSelect = document.getElementById("mobile-message-segmentation-select") as HTMLElement;
 const proactiveChatSelect = document.getElementById("proactive-chat-select") as HTMLElement;
+const proactiveDeliveryRow = document.getElementById("proactive-delivery-row") as HTMLElement;
+const proactiveDeliverySelect = document.getElementById("proactive-delivery-select") as HTMLElement;
 const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
 const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputElement;
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
@@ -796,6 +807,26 @@ function applyProactiveChatSelection(mode: ProactiveChatMode): void {
 
 function getProactiveChatValue(): ProactiveChatMode {
   return normalizeProactiveChatMode(getOptionGroupValue(proactiveChatSelect, "off"));
+}
+
+function applyProactiveDeliverySelection(target: ProactiveDeliveryTarget): void {
+  applyOptionGroupValue(proactiveDeliverySelect, target);
+}
+
+function getProactiveDeliveryValue(): ProactiveDeliveryTarget {
+  return normalizeProactiveDeliveryTarget(getOptionGroupValue(proactiveDeliverySelect, "local"));
+}
+
+function renderProactiveDeliveryVisibility(): void {
+  proactiveDeliveryRow.hidden = getProactiveChatValue() !== "on";
+}
+
+function renderProactiveDeliveryAvailability(statuses: Record<string, { phase?: string }>): void {
+  proactiveDeliverySelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
+    const target = normalizeProactiveDeliveryTarget(button.dataset.value);
+    const status = target === "local" ? undefined : statuses[target];
+    button.disabled = !isProactiveDeliveryTargetSelectable(target, status);
+  });
 }
 
 function applyUiThemeSelection(theme: GeneralSettings["uiTheme"]): void {
@@ -1019,6 +1050,11 @@ async function loadGeneralSettings(): Promise<void> {
     applySegmentedOutputSelection(normalizeSegmentedOutputMode(cfg.segmentedOutputMode));
     applyMobileMessageSegmentationSelection(normalizeMobileMessageSegmentationMode(cfg.mobileMessageSegmentation));
     applyProactiveChatSelection(normalizeProactiveChatMode(cfg.proactiveChatMode));
+    applyProactiveDeliverySelection(normalizeProactiveDeliveryTarget(cfg.proactiveDeliveryTarget));
+    renderProactiveDeliveryVisibility();
+    void window.settings!.channelsGetStatus()
+      .then((status: unknown) => renderProactiveDeliveryAvailability(status as Record<string, { phase?: string }>))
+      .catch(() => renderProactiveDeliveryAvailability({}));
     applyLanguageSelection("zh-CN");
     setPreferencesSaveStatus("等待保存");
     setGeneralSaveStatus("等待保存");
@@ -1120,6 +1156,15 @@ mobileMessageSegmentationSelect.querySelectorAll<HTMLButtonElement>(".option-blo
 proactiveChatSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
   button.addEventListener("click", () => {
     applyProactiveChatSelection(normalizeProactiveChatMode(button.dataset.value));
+    renderProactiveDeliveryVisibility();
+    setPreferencesSaveStatus("有未保存的更改");
+  });
+});
+
+proactiveDeliverySelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
+  button.addEventListener("click", () => {
+    if (button.disabled) return;
+    applyProactiveDeliverySelection(normalizeProactiveDeliveryTarget(button.dataset.value));
     setPreferencesSaveStatus("有未保存的更改");
   });
 });
@@ -1133,6 +1178,7 @@ preferencesForm.addEventListener("submit", async (e) => {
       segmentedOutputMode: getSegmentedOutputValue(),
       mobileMessageSegmentation: getMobileMessageSegmentationValue(),
       proactiveChatMode: getProactiveChatValue(),
+      proactiveDeliveryTarget: getProactiveDeliveryValue(),
     });
     setPreferencesSaveStatus("已保存", "is-ok");
   } catch {
@@ -2385,6 +2431,9 @@ function initGameBotPluginCard(): void {
 initGameBotPluginCard();
 void loadConfig();
 void loadGeneralSettings();
+window.settings?.onChannelsStatusChanged((status) => {
+  renderProactiveDeliveryAvailability(status as Record<string, { phase?: string }>);
+});
 
 // ===== channels panel (连接手机) =====
 const channelsWechatEnabledEl = document.getElementById("channels-wechat-enabled") as HTMLInputElement | null;
@@ -2453,6 +2502,7 @@ async function loadChannelsPanel(): Promise<void> {
 
     // 拉一次渠道状态
     const status = (await window.settings.channelsGetStatus()) as Record<string, { phase: string; message?: string }>;
+    renderProactiveDeliveryAvailability(status);
     renderChannelStatus(channelsWechatStatusEl, status.wechat?.phase ?? "offline", status.wechat?.message);
     renderChannelStatus(channelsFeishuStatusEl, status.feishu?.phase ?? "offline", status.feishu?.message);
     // Phase 3.4：拉一次消息日志
@@ -2498,6 +2548,7 @@ async function loadChannelsPanel(): Promise<void> {
   });
   window.settings.onChannelsStatusChanged((status) => {
     const s = status as Record<string, { phase: string; message?: string }>;
+    renderProactiveDeliveryAvailability(s);
     renderChannelStatus(channelsWechatStatusEl, s.wechat?.phase ?? "offline", s.wechat?.message);
     renderChannelStatus(channelsFeishuStatusEl, s.feishu?.phase ?? "offline", s.feishu?.message);
   });

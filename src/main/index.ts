@@ -9,10 +9,12 @@ import {
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
   normalizeProactiveChatMode,
+  normalizeProactiveDeliveryTarget,
   normalizeSegmentedOutputMode,
   type DefaultChatMode,
   type MobileMessageSegmentationMode,
   type ProactiveChatMode,
+  type ProactiveDeliveryTarget,
   type SegmentedOutputMode,
 } from "../shared/preferences";
 import { STATUS_KEYWORDS } from "./status-keywords";
@@ -422,6 +424,8 @@ interface GeneralSettings {
   mobileMessageSegmentation: MobileMessageSegmentationMode;
   /** 主动聊天功能开关占位；当前不接实际逻辑。 */
   proactiveChatMode: ProactiveChatMode;
+  /** 主动消息最终投递到本地、微信或飞书。 */
+  proactiveDeliveryTarget: ProactiveDeliveryTarget;
   // TTS 配置
   ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo";
   ttsAutoRead: boolean;
@@ -640,6 +644,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   segmentedOutputMode: "off",
   mobileMessageSegmentation: "off",
   proactiveChatMode: "off",
+  proactiveDeliveryTarget: "local",
   ttsEngine: "off",
   ttsAutoRead: true,
   ttsSpeed: 1,
@@ -1033,6 +1038,7 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     segmentedOutputMode: normalizeSegmentedOutputMode(input?.segmentedOutputMode),
     mobileMessageSegmentation: normalizeMobileMessageSegmentationMode(input?.mobileMessageSegmentation),
     proactiveChatMode: normalizeProactiveChatMode(input?.proactiveChatMode),
+    proactiveDeliveryTarget: normalizeProactiveDeliveryTarget(input?.proactiveDeliveryTarget),
     // TTS 配置
     ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo"].includes(input?.ttsEngine as string) ? input?.ttsEngine : "off") as GeneralSettings["ttsEngine"],
     ttsAutoRead: input?.ttsAutoRead === undefined ? DEFAULT_GENERAL_SETTINGS.ttsAutoRead : Boolean(input.ttsAutoRead),
@@ -3141,7 +3147,7 @@ ipcMain.handle(IPC.UI_THEME_GET, () => {
 
 ipcMain.handle(IPC.SETTINGS_SAVE_GENERAL, (_event, settings: Partial<GeneralSettings>) => {
   const saved = saveGeneralSettings(settings);
-  if ("proactiveChatMode" in settings || "openerMode" in settings) {
+  if ("proactiveChatMode" in settings || "proactiveDeliveryTarget" in settings || "openerMode" in settings) {
     stopOpener();
     proactiveChatService?.invalidate();
     if (saved.proactiveChatMode === "on") {

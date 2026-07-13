@@ -228,6 +228,18 @@
                 <button type="button" class="option-block" data-value="on" aria-pressed="false">开启</button>
               </div>
             </div>
+
+            <div class="setting-row proactive-delivery-row" id="proactive-delivery-row" hidden>
+              <div>
+                <strong>主动消息发送到</strong>
+                <span>手机渠道不可用时，本次主动消息会取消，不会改发到本地。</span>
+              </div>
+              <div class="option-blocks option-blocks--wide" id="proactive-delivery-select" role="radiogroup" aria-label="主动消息发送到">
+                <button type="button" class="option-block is-active" data-value="local" aria-pressed="true">仅本地</button>
+                <button type="button" class="option-block" data-value="wechat" aria-pressed="false">仅微信</button>
+                <button type="button" class="option-block" data-value="feishu" aria-pressed="false">仅飞书</button>
+              </div>
+            </div>
           </div>
 
           <div class="form-actions">
