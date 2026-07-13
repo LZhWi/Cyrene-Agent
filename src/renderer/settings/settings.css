@@ -485,6 +485,10 @@ body {
   .form-grid {
     grid-template-columns: 1fr;
   }
+
+  .appearance-options {
+    grid-template-columns: 1fr;
+  }
 }
 
 .field-note {
@@ -621,8 +625,147 @@ body {
 }
 
 .theme-options {
-  grid-template-columns: repeat(3, minmax(68px, 1fr));
+  grid-template-columns: repeat(2, minmax(96px, 1fr));
   min-width: 250px;
+}
+
+.appearance-section {
+  display: grid;
+  gap: 12px;
+}
+
+.appearance-section + .appearance-section {
+  margin-top: 24px;
+}
+
+.appearance-section__heading {
+  display: grid;
+  gap: 4px;
+}
+
+.appearance-section__heading h2 {
+  margin: 0;
+  color: var(--rb-text-strong);
+  font-size: 15px;
+}
+
+.appearance-section__heading p {
+  margin: 0;
+  color: var(--rb-text-muted);
+  font-size: 12px;
+}
+
+.appearance-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.appearance-option,
+.appearance-placeholder {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 13px 14px;
+  color: var(--rb-text-strong);
+  text-align: left;
+  background: var(--rb-bg-2);
+  border: 1px solid var(--rb-border-soft);
+  border-radius: 15px;
+  transition: transform 120ms ease, border-color 160ms ease, background 160ms ease;
+}
+
+.appearance-option.is-active {
+  border-color: var(--rb-border-strong);
+  background: linear-gradient(135deg, rgba(236, 72, 153, 0.16), rgba(168, 85, 247, 0.12));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.appearance-option__icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border-radius: 11px;
+  color: var(--rb-text-strong);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.appearance-option__copy {
+  display: grid;
+  min-width: 0;
+  gap: 3px;
+}
+
+.appearance-option__copy small {
+  color: var(--rb-text-muted);
+  font-size: 11px;
+}
+
+.appearance-placeholder-list {
+  display: grid;
+  gap: 8px;
+}
+
+.appearance-placeholder {
+  justify-content: space-between;
+  width: 100%;
+  min-height: 48px;
+}
+
+.appearance-font-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  min-height: 60px;
+  padding: 12px 14px;
+  color: var(--rb-text-strong);
+  background: var(--rb-bg-2);
+  border: 1px solid var(--rb-border-soft);
+  border-radius: 15px;
+}
+
+.appearance-font-control__copy {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.appearance-font-control__copy small {
+  overflow: hidden;
+  color: var(--rb-text-muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.appearance-font-control__actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.appearance-option:disabled,
+.appearance-placeholder:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+  transform: none;
+}
+
+.soon-badge {
+  margin-left: auto;
+  padding: 3px 8px;
+  border: 1px solid var(--rb-border-soft);
+  border-radius: 999px;
+  color: var(--rb-text-muted);
+  background: rgba(255, 255, 255, 0.05);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
 }
 
 /* Theme picker swatches — preview of each theme's actual look */
@@ -638,9 +781,6 @@ body {
 }
 .theme-swatch--classic {
   background: linear-gradient(135deg, #08070f 0%, #221c46 60%, #ec4899 100%);
-}
-.theme-swatch--pink {
-  background: linear-gradient(135deg, #181432 0%, #ec4899 50%, #9f7aea 100%);
 }
 .theme-swatch--white {
   background: linear-gradient(135deg, #ffffff 0%, #f5f5f7 100%);

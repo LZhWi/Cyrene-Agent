@@ -5,6 +5,9 @@ import * as os from "os";
 import { createHash, randomUUID } from "crypto";
 import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
+import { normalizeUiTheme, type UiTheme } from "../shared/ui-theme";
+import { DEFAULT_UI_FONT, isSupportedFontFileName, normalizeUiFont, type UiFont } from "../shared/ui-font";
+import { getUiFontResponseHeaders, isSafeUiFontRequest } from "./ui-font-protocol";
 import {
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
@@ -459,7 +462,8 @@ interface GeneralSettings {
   tasksVisible: boolean;
   launchAtLogin: boolean;
   language: "zh-CN";
-  uiTheme: "classic" | "polished-pink" | "pearl-white";
+  uiTheme: UiTheme;
+  uiFont: UiFont;
   /** 聊天窗口打开时默认选中的模式。 */
   defaultChatMode: DefaultChatMode;
   /** 聊天气泡分段输出偏好。 */
@@ -684,6 +688,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   launchAtLogin: false,
   language: "zh-CN",
   uiTheme: "classic",
+  uiFont: DEFAULT_UI_FONT,
   defaultChatMode: "collab",
   segmentedOutputMode: "off",
   mobileMessageSegmentation: "off",
@@ -1077,7 +1082,8 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     tasksVisible: windowVisibility.tasksVisible,
     launchAtLogin: Boolean(input?.launchAtLogin),
     language: "zh-CN",
-    uiTheme: input?.uiTheme === "pearl-white" ? "pearl-white" : input?.uiTheme === "polished-pink" ? "polished-pink" : "classic",
+    uiTheme: normalizeUiTheme(input?.uiTheme),
+    uiFont: normalizeUiFont(input?.uiFont),
     defaultChatMode: normalizeDefaultChatMode(input?.defaultChatMode),
     segmentedOutputMode: normalizeSegmentedOutputMode(input?.segmentedOutputMode),
     mobileMessageSegmentation: normalizeMobileMessageSegmentationMode(input?.mobileMessageSegmentation),
@@ -1191,6 +1197,9 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   syncBuiltInToolToggles(normalized);
   if (before.uiTheme !== normalized.uiTheme) {
     broadcastUiThemeChanged(normalized.uiTheme);
+  }
+  if (JSON.stringify(before.uiFont) !== JSON.stringify(normalized.uiFont)) {
+    broadcastUiFontChanged(normalized.uiFont);
   }
   return normalized;
 }
@@ -2316,6 +2325,14 @@ function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
   }
 }
 
+function broadcastUiFontChanged(font: GeneralSettings["uiFont"]): void {
+  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(IPC.UI_FONT_CHANGED, font);
+    }
+  }
+}
+
 function broadcastModelConfigChanged(settings = loadModelSettings()): void {
   broadcastToAuxWindows(IPC.MODEL_CONFIG_CHANGED, getPublicModelConfig(settings));
 }
@@ -3234,6 +3251,58 @@ ipcMain.handle(IPC.UI_THEME_GET, () => {
   return loadGeneralSettings().uiTheme;
 });
 
+ipcMain.handle(IPC.UI_FONT_GET, () => {
+  return loadGeneralSettings().uiFont;
+});
+
+function getUiFontsDir(): string {
+  return path.join(app.getPath("userData"), "ui-fonts");
+}
+
+function getCustomFontDisplayName(filePath: string): string {
+  return path.basename(filePath, path.extname(filePath)).replace(/[-_]+/g, " ").trim().slice(0, 80) || "自定义字体";
+}
+
+ipcMain.handle(IPC.SETTINGS_PICK_UI_FONT, async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ["openFile"],
+    filters: [{ name: "字体文件", extensions: ["ttf", "otf"] }],
+  });
+  return result.canceled ? null : result.filePaths[0] ?? null;
+});
+
+ipcMain.handle(IPC.SETTINGS_IMPORT_UI_FONT, (_event, sourcePath: unknown) => {
+  if (typeof sourcePath !== "string" || !sourcePath) throw new Error("未选择字体文件");
+  const extension = path.extname(sourcePath).toLowerCase();
+  if (extension !== ".ttf" && extension !== ".otf") throw new Error("仅支持 .ttf 或 .otf 字体文件");
+  const stat = fs.statSync(sourcePath);
+  if (!stat.isFile() || stat.size <= 0 || stat.size > 50 * 1024 * 1024) throw new Error("字体文件无效或超过 50 MB");
+
+  const fileName = `custom-${randomUUID()}${extension}`;
+  if (!isSupportedFontFileName(fileName)) throw new Error("字体文件名无效");
+  const fontsDir = getUiFontsDir();
+  fs.mkdirSync(fontsDir, { recursive: true });
+  const targetPath = path.join(fontsDir, fileName);
+  fs.copyFileSync(sourcePath, targetPath);
+
+  const before = loadGeneralSettings().uiFont;
+  const saved = saveGeneralSettings({ uiFont: { kind: "custom", fileName, displayName: getCustomFontDisplayName(sourcePath) } });
+  if (before.kind === "custom" && before.fileName !== fileName) {
+    const oldPath = path.join(fontsDir, before.fileName);
+    if (isSupportedFontFileName(before.fileName)) fs.rmSync(oldPath, { force: true });
+  }
+  return saved.uiFont;
+});
+
+ipcMain.handle(IPC.SETTINGS_RESET_UI_FONT, () => {
+  const before = loadGeneralSettings().uiFont;
+  const saved = saveGeneralSettings({ uiFont: DEFAULT_UI_FONT });
+  if (before.kind === "custom" && isSupportedFontFileName(before.fileName)) {
+    fs.rmSync(path.join(getUiFontsDir(), before.fileName), { force: true });
+  }
+  return saved.uiFont;
+});
+
 ipcMain.handle(IPC.SETTINGS_SAVE_GENERAL, (_event, settings: Partial<GeneralSettings>) => {
   const saved = saveGeneralSettings(settings);
   if ("proactiveChatMode" in settings || "proactiveDeliveryTarget" in settings || "openerMode" in settings) {
@@ -3606,10 +3675,11 @@ ipcMain.handle(IPC.EMBEDDING_DELETE, async (_event, payload: unknown) => {
   }
 });
 
-// 注册 local-sticker:// 协议（用户添加的表情包图片）
+// 注册本地用户资源协议（表情包图片与用户导入的字体）
 // 必须在 app.ready 之前调用
 protocol.registerSchemesAsPrivileged([
   { scheme: "local-sticker", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
+  { scheme: "local-font", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
 ]);
 
 app.whenReady().then(async () => {
@@ -3622,6 +3692,20 @@ app.whenReady().then(async () => {
     if (!filePath) return new Response("Invalid sticker path", { status: 403 });
 
     return net.fetch(pathToFileURL(filePath).toString());
+  });
+  protocol.handle("local-font", (request) => {
+    let fileName: string;
+    try {
+      fileName = decodeURIComponent(new URL(request.url).hostname);
+    } catch {
+      return new Response("Invalid font URL", { status: 404 });
+    }
+    if (!isSafeUiFontRequest(fileName)) return new Response("Invalid font URL", { status: 404 });
+    const filePath = path.join(getUiFontsDir(), fileName);
+    if (path.dirname(filePath) !== getUiFontsDir() || !fs.existsSync(filePath)) return new Response("Font not found", { status: 404 });
+    return net.fetch(pathToFileURL(filePath).toString()).then((response) => new Response(response.body, {
+      headers: getUiFontResponseHeaders(fileName),
+    }));
   });
   // Token 用量查询 IPC
   ipcMain.handle(IPC.TOKEN_USAGE_GET, (_event, days: number) => {

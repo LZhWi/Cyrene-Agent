@@ -19,6 +19,9 @@ import {
   type SegmentedOutputMode,
 } from "../../shared/preferences";
 import { isProactiveDeliveryTargetSelectable } from "../../shared/proactive-delivery";
+import { normalizeUiTheme, type UiTheme } from "../../shared/ui-theme";
+import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-font";
+import { buildAppearanceSettingsPatch } from "./appearance-settings-state";
 
 // Inline modal (to avoid Vite tree-shaking)
 let _cyModalOverlay: HTMLElement | null = null;
@@ -279,7 +282,8 @@ interface GeneralSettings {
   tasksVisible: boolean;
   launchAtLogin: boolean;
   language: "zh-CN";
-  uiTheme: "classic" | "polished-pink" | "pearl-white";
+  uiTheme: UiTheme;
+  uiFont: UiFont;
   defaultChatMode: DefaultChatMode;
   segmentedOutputMode: SegmentedOutputMode;
   mobileMessageSegmentation: MobileMessageSegmentationMode;
@@ -343,6 +347,9 @@ interface SettingsApi {
   saveConfig: (config: Partial<ModelSettings>) => Promise<ModelSettings>;
   getGeneral: () => Promise<GeneralSettings>;
   saveGeneral: (config: Partial<GeneralSettings>) => Promise<GeneralSettings>;
+  pickUiFont: () => Promise<string | null>;
+  importUiFont: (sourcePath: string) => Promise<UiFont>;
+  resetUiFont: () => Promise<UiFont>;
   openSidebar: () => void;
   closeSidebar: () => void;
   openTasks: () => void;
@@ -549,6 +556,7 @@ const bgmAudio = new Audio("/audio/bgm.mp3");
 bgmAudio.preload = "auto";
 bgmAudio.loop = true;
 const apiForm = document.getElementById("api-form") as HTMLFormElement;
+const appearanceForm = document.getElementById("appearance-form") as HTMLFormElement;
 const generalForm = document.getElementById("general-form") as HTMLFormElement;
 const preferencesForm = document.getElementById("preferences-form") as HTMLFormElement;
 const sectionTitle = document.getElementById("section-title") as HTMLElement;
@@ -561,6 +569,7 @@ const placeholderIcon = document.getElementById("placeholder-icon") as HTMLEleme
 const placeholderTitle = document.getElementById("placeholder-title") as HTMLElement;
 const placeholderCopy = document.getElementById("placeholder-copy") as HTMLElement;
 const saveStatus = document.getElementById("save-status") as HTMLElement;
+const appearanceSaveStatus = document.getElementById("appearance-save-status") as HTMLElement;
 const generalSaveStatus = document.getElementById("general-save-status") as HTMLElement;
 const preferencesSaveStatus = document.getElementById("preferences-save-status") as HTMLElement;
 const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLElement;
@@ -638,6 +647,9 @@ const petZoomInput = document.getElementById("pet-zoom") as HTMLInputElement;
 const petZoomVal = document.getElementById("pet-zoom-val") as HTMLElement;
 const launchAtLoginInput = document.getElementById("launch-at-login") as HTMLInputElement;
 const uiThemeSelect = document.getElementById("ui-theme-select") as HTMLElement;
+const uiFontCurrent = document.getElementById("ui-font-current") as HTMLElement;
+const uiFontImportButton = document.getElementById("ui-font-import") as HTMLButtonElement;
+const uiFontResetButton = document.getElementById("ui-font-reset") as HTMLButtonElement;
 const languageSelect = document.getElementById("language-select") as HTMLElement;
 const defaultChatModeSelect = document.getElementById("default-chat-mode-select") as HTMLElement;
 const segmentedOutputSelect = document.getElementById("segmented-output-select") as HTMLElement;
@@ -662,7 +674,8 @@ const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }>
   skills: { emoji: "✨", title: "Skill", hint: "管理 agent 的 skill 指令（约束如何用工具）" },
   plugins: { emoji: "🔌", title: "插件", hint: "扩展功能与第三方集成" },
   preferences: { emoji: "🫧", title: "偏好设置", hint: "设置聊天窗口和输出行为的默认偏好" },
-  general: { emoji: "⚙️", title: "设置", hint: "通用偏好与外观" },
+  appearance: { emoji: "🎨", title: "外观设置", hint: "调整窗口布局、界面主题与昔涟桌宠" },
+  general: { emoji: "⚙️", title: "通用设置", hint: "管理窗口、音频和系统行为" },
   api: { emoji: "🔑", title: "API 设置", hint: "选择预设后只需要填写 API Key。" },
   cyrene: { emoji: "🌸", title: "昔涟设置", hint: "管理 Agent 行为、记忆、RAG 与权限" },
   tts: { emoji: "🎙️", title: "TTS 设置", hint: "语音合成与朗读偏好" },
@@ -698,6 +711,12 @@ function setPreferencesSaveStatus(text: string, cls?: string): void {
   preferencesSaveStatus.textContent = text;
   preferencesSaveStatus.className = "save-status";
   if (cls) preferencesSaveStatus.classList.add(cls);
+}
+
+function setAppearanceSaveStatus(text: string, cls?: string): void {
+  appearanceSaveStatus.textContent = text;
+  appearanceSaveStatus.className = "save-status";
+  if (cls) appearanceSaveStatus.classList.add(cls);
 }
 
 function playSettingsClickSound(): void {
@@ -753,11 +772,6 @@ function applyLanguageSelection(language: "zh-CN"): void {
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
   });
-}
-
-function normalizeUiTheme(theme: unknown): GeneralSettings["uiTheme"] {
-  if (theme === "polished-pink" || theme === "pearl-white") return theme;
-  return "classic";
 }
 
 function getUiThemeValue(): GeneralSettings["uiTheme"] {
@@ -836,6 +850,11 @@ function applyUiThemeSelection(theme: GeneralSettings["uiTheme"]): void {
     button.setAttribute("aria-pressed", String(active));
   });
   document.documentElement.dataset.uiTheme = theme;
+}
+
+function renderUiFont(font: UiFont): void {
+  uiFontCurrent.textContent = font.kind === "custom" ? font.displayName : "思源黑体（默认）";
+  uiFontResetButton.hidden = font.kind !== "custom";
 }
 
 function setGeneralSaveStatus(text: string, cls?: string): void {
@@ -1046,6 +1065,7 @@ async function loadGeneralSettings(): Promise<void> {
     tasksVisibleInput.checked = cfg.tasksVisible ?? true;
     launchAtLoginInput.checked = cfg.launchAtLogin;
     applyUiThemeSelection(normalizeUiTheme(cfg.uiTheme));
+    renderUiFont(normalizeUiFont(cfg.uiFont));
     applyDefaultChatModeSelection(normalizeDefaultChatMode(cfg.defaultChatMode));
     applySegmentedOutputSelection(normalizeSegmentedOutputMode(cfg.segmentedOutputMode));
     applyMobileMessageSegmentationSelection(normalizeMobileMessageSegmentationMode(cfg.mobileMessageSegmentation));
@@ -1057,9 +1077,11 @@ async function loadGeneralSettings(): Promise<void> {
       .catch(() => renderProactiveDeliveryAvailability({}));
     applyLanguageSelection("zh-CN");
     setPreferencesSaveStatus("等待保存");
+    setAppearanceSaveStatus("等待保存");
     setGeneralSaveStatus("等待保存");
   } catch {
     setPreferencesSaveStatus("读取偏好失败", "is-error");
+    setAppearanceSaveStatus("读取外观失败", "is-error");
     setGeneralSaveStatus("读取设置失败", "is-error");
   }
 }
@@ -1115,20 +1137,58 @@ musicVolumeInput.addEventListener("input", () => {
 soundEnabledInput.addEventListener("change", () => setGeneralSaveStatus("有未保存的更改"));
 soundVolumeInput.addEventListener("input", () => setGeneralSaveStatus("有未保存的更改"));
 
-petAlwaysOnTopInput.addEventListener("change", () => window.settings?.setPetAlwaysOnTop(petAlwaysOnTopInput.checked));
-petVisibleInput.addEventListener("change", () => window.settings?.setPetVisible(petVisibleInput.checked));
+petAlwaysOnTopInput.addEventListener("change", () => {
+  window.settings?.setPetAlwaysOnTop(petAlwaysOnTopInput.checked);
+  setAppearanceSaveStatus("已应用", "is-ok");
+});
+
+uiFontImportButton.addEventListener("click", async () => {
+  try {
+    const sourcePath = await window.settings?.pickUiFont();
+    if (!sourcePath) return;
+    uiFontImportButton.disabled = true;
+    setAppearanceSaveStatus("正在导入字体…");
+    const font = await window.settings!.importUiFont(sourcePath);
+    renderUiFont(font);
+    setAppearanceSaveStatus("字体已应用", "is-ok");
+  } catch (error) {
+    console.error("导入字体失败:", error);
+    setAppearanceSaveStatus("导入字体失败", "is-error");
+  } finally {
+    uiFontImportButton.disabled = false;
+  }
+});
+
+uiFontResetButton.addEventListener("click", async () => {
+  try {
+    uiFontResetButton.disabled = true;
+    const font = await window.settings!.resetUiFont();
+    renderUiFont(font);
+    setAppearanceSaveStatus("已恢复思源黑体", "is-ok");
+  } catch (error) {
+    console.error("恢复默认字体失败:", error);
+    setAppearanceSaveStatus("恢复默认字体失败", "is-error");
+  } finally {
+    uiFontResetButton.disabled = false;
+  }
+});
+petVisibleInput.addEventListener("change", () => {
+  window.settings?.setPetVisible(petVisibleInput.checked);
+  setAppearanceSaveStatus("已应用", "is-ok");
+});
 petZoomInput.addEventListener("input", () => {
   petZoomVal.textContent = Math.round(Number(petZoomInput.value) * 100) + "%";
 });
 petZoomInput.addEventListener("change", () => {
   window.settings?.setPetZoom(Number(petZoomInput.value));
+  setAppearanceSaveStatus("已应用", "is-ok");
 });
 
 uiThemeSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
   button.addEventListener("click", () => {
     const theme = normalizeUiTheme(button.dataset.theme);
     applyUiThemeSelection(theme);
-    setGeneralSaveStatus("有未保存的更改");
+    setAppearanceSaveStatus("有未保存的更改");
   });
 });
 
@@ -2004,6 +2064,22 @@ async function renderSchedulerList(): Promise<void> {
   }
 }
 
+appearanceForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  setAppearanceSaveStatus("保存中…");
+  try {
+    await window.settings!.saveGeneral(buildAppearanceSettingsPatch({
+      uiTheme: getUiThemeValue(),
+      petAlwaysOnTop: petAlwaysOnTopInput.checked,
+      petVisible: petVisibleInput.checked,
+      petZoom: Number(petZoomInput.value),
+    }));
+    setAppearanceSaveStatus("已保存", "is-ok");
+  } catch {
+    setAppearanceSaveStatus("保存失败", "is-error");
+  }
+});
+
 generalForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   setGeneralSaveStatus("保存中…");
@@ -2013,14 +2089,10 @@ generalForm.addEventListener("submit", async (e) => {
       musicVolume: Number(musicVolumeInput.value),
       soundEnabled: soundEnabledInput.checked,
       soundVolume: Number(soundVolumeInput.value),
-      petAlwaysOnTop: petAlwaysOnTopInput.checked,
-      petVisible: petVisibleInput.checked,
-      petZoom: Number(petZoomInput.value),
       sidebarVisible: sidebarVisibleInput.checked,
       tasksVisible: tasksVisibleInput.checked,
       launchAtLogin: launchAtLoginInput.checked,
       language: "zh-CN",
-      uiTheme: getUiThemeValue(),
     });
     setGeneralSaveStatus("已保存", "is-ok");
   } catch {
@@ -2237,6 +2309,7 @@ function switchSection(section: string): void {
   sectionHint.textContent = label.hint;
 
   const isApi = section === "api";
+  const isAppearance = section === "appearance";
   const isGeneral = section === "general";
   const isPreferences = section === "preferences";
   const isCyrene = section === "cyrene";
@@ -2253,6 +2326,7 @@ function switchSection(section: string): void {
   const isTts = section === "tts";
   const isAsr = section === "asr";
   apiForm.classList.toggle("is-hidden", !isApi);
+  appearanceForm.classList.toggle("is-hidden", !isAppearance);
   generalForm.classList.toggle("is-hidden", !isGeneral);
   preferencesForm.classList.toggle("is-hidden", !isPreferences);
   cyrenePanel.classList.toggle("is-hidden", !isCyrene);
@@ -2285,11 +2359,12 @@ function switchSection(section: string): void {
   if (asrPanel) asrPanel.classList.toggle("is-hidden", !isAsr);
   placeholderPanel.classList.toggle(
     "is-hidden",
-    isApi || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr,
+    isApi || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr,
   );
 
   if (
     !isApi &&
+    !isAppearance &&
     !isGeneral &&
     !isPreferences &&
     !isCyrene &&

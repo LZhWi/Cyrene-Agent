@@ -1,5 +1,7 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { IPC } from "../shared/ipc-channels";
+import type { UiTheme } from "../shared/ui-theme";
+import type { UiFont } from "../shared/ui-font";
 import type { DocumentIndexProgress } from "../main/rag/document-index-queue";
 import { getLive2DIpcListenerCounts } from "./live2d-listener-diagnostics";
 
@@ -180,15 +182,26 @@ const callApi = {
 contextBridge.exposeInMainWorld("call", callApi);
 
 const cyreneThemeApi = {
-  get: () => ipcRenderer.invoke(IPC.UI_THEME_GET) as Promise<"classic" | "polished-pink" | "pearl-white">,
-  onChanged: (callback: (theme: "classic" | "polished-pink" | "pearl-white") => void) => {
-    const listener = (_e: unknown, theme: "classic" | "polished-pink" | "pearl-white") => callback(theme);
+  get: () => ipcRenderer.invoke(IPC.UI_THEME_GET) as Promise<UiTheme>,
+  onChanged: (callback: (theme: UiTheme) => void) => {
+    const listener = (_e: unknown, theme: UiTheme) => callback(theme);
     ipcRenderer.on(IPC.UI_THEME_CHANGED, listener);
     return () => ipcRenderer.off(IPC.UI_THEME_CHANGED, listener);
   },
 };
 
 contextBridge.exposeInMainWorld("cyreneTheme", cyreneThemeApi);
+
+const cyreneFontApi = {
+  get: () => ipcRenderer.invoke(IPC.UI_FONT_GET) as Promise<UiFont>,
+  onChanged: (callback: (font: UiFont) => void) => {
+    const listener = (_e: unknown, font: UiFont) => callback(font);
+    ipcRenderer.on(IPC.UI_FONT_CHANGED, listener);
+    return () => ipcRenderer.off(IPC.UI_FONT_CHANGED, listener);
+  },
+};
+
+contextBridge.exposeInMainWorld("cyreneFont", cyreneFontApi);
 
 const settingsApi = {
   minimize: () => ipcRenderer.send(IPC.SETTINGS_MINIMIZE),
@@ -205,6 +218,9 @@ const settingsApi = {
   },
   getGeneral: () => ipcRenderer.invoke(IPC.SETTINGS_GET_GENERAL),
   saveGeneral: (config: unknown) => ipcRenderer.invoke(IPC.SETTINGS_SAVE_GENERAL, config),
+  pickUiFont: () => ipcRenderer.invoke(IPC.SETTINGS_PICK_UI_FONT) as Promise<string | null>,
+  importUiFont: (sourcePath: string) => ipcRenderer.invoke(IPC.SETTINGS_IMPORT_UI_FONT, sourcePath) as Promise<UiFont>,
+  resetUiFont: () => ipcRenderer.invoke(IPC.SETTINGS_RESET_UI_FONT) as Promise<UiFont>,
   openSidebar: () => ipcRenderer.send(IPC.SETTINGS_OPEN_SIDEBAR),
   closeSidebar: () => ipcRenderer.send(IPC.SETTINGS_CLOSE_SIDEBAR),
   openTasks: () => ipcRenderer.send(IPC.SETTINGS_OPEN_TASKS),

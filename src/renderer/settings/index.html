@@ -28,7 +28,8 @@
         <button type="button" class="nav-item" data-section="plugins"><span>🔌</span>插件</button>
         <hr class="nav-divider" />
         <button type="button" class="nav-item" data-section="preferences"><span>🫧</span>偏好设置</button>
-        <button type="button" class="nav-item is-active" data-section="general"><span>⚙️</span>设置</button>
+        <button type="button" class="nav-item" data-section="appearance"><span>🎨</span>外观设置</button>
+        <button type="button" class="nav-item is-active" data-section="general"><span>⚙️</span>通用设置</button>
         <button type="button" class="nav-item" data-section="api"><span>🔑</span>API 设置</button>
         <button type="button" class="nav-item" data-section="cyrene"><span>🌸</span>昔涟设置</button>
         <button type="button" class="nav-item" data-section="channels"><span>📱</span>连接手机</button>
@@ -249,12 +250,105 @@
         </form>
 
 
+        <form class="settings-panel is-hidden" id="appearance-form" data-panel="appearance">
+          <div class="panel-heading">
+            <div class="panel-heading__icon">🎨</div>
+            <div>
+              <h1>外观设置</h1>
+              <p>调整窗口布局、界面主题和昔涟桌宠的显示方式。</p>
+            </div>
+          </div>
+
+          <div class="appearance-section">
+            <div class="appearance-section__heading">
+              <h2>布局</h2>
+              <p>选择昔涟与聊天、状态和日程窗口的组织方式。</p>
+            </div>
+            <div class="appearance-options" aria-label="窗口布局">
+              <button type="button" class="appearance-option is-active" aria-pressed="true">
+                <span class="appearance-option__icon">▦</span>
+                <span class="appearance-option__copy"><strong>多窗口</strong><small>各功能使用独立窗口</small></span>
+              </button>
+              <button type="button" class="appearance-option" disabled>
+                <span class="appearance-option__icon">▣</span>
+                <span class="appearance-option__copy"><strong>单窗口</strong><small>集中在一个主窗口中</small></span>
+                <span class="soon-badge">SOON</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="appearance-section">
+            <div class="appearance-section__heading">
+              <h2>外观主题</h2>
+              <p>主题会立即预览，保存后应用到所有窗口。</p>
+            </div>
+            <div class="option-blocks theme-options" id="ui-theme-select" role="radiogroup" aria-label="界面主题">
+              <button type="button" class="option-block is-active" data-theme="classic" aria-pressed="true">
+                <span class="theme-swatch theme-swatch--classic" aria-hidden="true"></span>
+                <span>默认</span>
+              </button>
+              <button type="button" class="option-block" data-theme="pearl-white" aria-pressed="false">
+                <span class="theme-swatch theme-swatch--white" aria-hidden="true"></span>
+                <span>白调</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="appearance-section">
+            <div class="appearance-section__heading">
+              <h2>个性化</h2>
+              <p>字体会立即应用到所有窗口；请仅导入你有权使用的字体文件。</p>
+            </div>
+            <div class="appearance-placeholder-list">
+              <div class="appearance-font-control">
+                <div class="appearance-font-control__copy"><strong>界面字体</strong><small id="ui-font-current">思源黑体（默认）</small></div>
+                <div class="appearance-font-control__actions">
+                  <button id="ui-font-import" type="button" class="ghost-btn">导入字体</button>
+                  <button id="ui-font-reset" type="button" class="ghost-btn" hidden>恢复默认</button>
+                </div>
+              </div>
+              <button type="button" class="appearance-placeholder" disabled><span>桌面图标</span><span class="soon-badge">SOON</span></button>
+              <button type="button" class="appearance-placeholder" disabled><span>聊天背景</span><span class="soon-badge">SOON</span></button>
+            </div>
+          </div>
+
+          <div class="appearance-section">
+            <div class="appearance-section__heading">
+              <h2>昔涟桌宠</h2>
+              <p>控制 Live2D 桌宠的窗口层级、显示状态和大小。</p>
+            </div>
+            <div class="settings-list">
+              <label class="setting-row">
+                <div><strong>桌宠置顶</strong><span>只让桌宠保持最上层，聊天和侧边窗口不置顶。</span></div>
+                <span class="switch"><input id="pet-always-on-top" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
+              <label class="setting-row">
+                <div><strong>桌宠显示</strong><span>隐藏或显示 Live2D 桌宠本体。</span></div>
+                <span class="switch"><input id="pet-visible" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
+              <label class="setting-row">
+                <div><strong>桌宠缩放</strong><span>调整 Live2D 模型大小（0.5× ~ 2.0×），窗口与模型同步缩放。</span></div>
+                <div class="range-row">
+                  <input id="pet-zoom" type="range" min="0.5" max="2" step="0.1" />
+                  <span id="pet-zoom-val" class="range-val">100%</span>
+                </div>
+              </label>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <div class="save-status" id="appearance-save-status">等待保存</div>
+            <button type="submit" class="save-btn">保存外观设置</button>
+          </div>
+        </form>
+
+
         <form class="settings-panel" id="general-form" data-panel="general">
           <div class="panel-heading">
             <div class="panel-heading__icon">⚙️</div>
             <div>
-              <h1>设置</h1>
-              <p>控制桌宠窗口、状态栏、日程栏和基础音频偏好。</p>
+              <h1>通用设置</h1>
+              <p>控制状态栏、日程栏、基础音频和系统行为。</p>
             </div>
           </div>
 
@@ -296,54 +390,6 @@
                 <input id="sound-volume" type="range" min="0" max="100" />
               </div>
             </label>
-
-            <label class="setting-row">
-              <div>
-                <strong>桌宠置顶</strong>
-                <span>只让桌宠保持最上层，聊天和侧边窗口不置顶。</span>
-              </div>
-              <span class="switch"><input id="pet-always-on-top" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
-            </label>
-
-            <label class="setting-row">
-              <div>
-                <strong>桌宠显示</strong>
-                <span>隐藏或显示 Live2D 桌宠本体。</span>
-              </div>
-              <span class="switch"><input id="pet-visible" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
-            </label>
-
-            <label class="setting-row">
-              <div>
-                <strong>桌宠缩放</strong>
-                <span>调整 Live2D 模型大小（0.5× ~ 2.0×），窗口与模型同步缩放。</span>
-              </div>
-              <div class="range-row">
-                <input id="pet-zoom" type="range" min="0.5" max="2" step="0.1" />
-                <span id="pet-zoom-val" class="range-val">100%</span>
-              </div>
-            </label>
-
-            <div class="setting-row">
-              <div>
-                <strong>界面主题</strong>
-                <span>默认保持当前外观；暗系更清透；白调是柔和珍珠白。</span>
-              </div>
-              <div class="option-blocks theme-options" id="ui-theme-select" role="radiogroup" aria-label="界面主题">
-                <button type="button" class="option-block is-active" data-theme="classic" aria-pressed="true">
-                  <span class="theme-swatch theme-swatch--classic" aria-hidden="true"></span>
-                  <span>默认</span>
-                </button>
-                <button type="button" class="option-block" data-theme="polished-pink" aria-pressed="false">
-                  <span class="theme-swatch theme-swatch--pink" aria-hidden="true"></span>
-                  <span>暗系</span>
-                </button>
-                <button type="button" class="option-block" data-theme="pearl-white" aria-pressed="false">
-                  <span class="theme-swatch theme-swatch--white" aria-hidden="true"></span>
-                  <span>白调</span>
-                </button>
-              </div>
-            </div>
 
             <label class="setting-row">
               <div>
