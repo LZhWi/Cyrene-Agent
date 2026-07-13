@@ -4,7 +4,9 @@ import {
   type SegmentedOutputMode,
 } from "../../shared/preferences";
 
-const SHORT_REPLY_LIMIT = 90;
+const SHORT_REPLY_LIMIT = 45;
+const COMPACT_MULTI_SENTENCE_LIMIT = 90;
+const MIN_SENTENCE_PART_LENGTH = 14;
 const MIN_PART_LENGTH = 35;
 const IDEAL_MIN = 55;
 const HARD_MAX = 130;
@@ -23,6 +25,11 @@ export function segmentAssistantReply(text: string): string[] {
   const clean = text.trim();
   if (!clean) return [];
   if (clean.length < SHORT_REPLY_LIMIT || hasStructuredContent(clean)) return [clean];
+
+  if (clean.length <= COMPACT_MULTI_SENTENCE_LIMIT) {
+    const sentenceParts = splitCompactSentences(clean);
+    if (sentenceParts.length > 1) return sentenceParts;
+  }
 
   const maxParts = chooseMaxParts(clean.length);
   const targetLength = Math.ceil(clean.length / maxParts);
@@ -76,6 +83,45 @@ function splitByNaturalPauses(text: string, targetLength: number, maxParts: numb
     const mustSplit = len >= HARD_MAX && (STRONG_PAUSE.test(char) || WEAK_PAUSE.test(char));
 
     if (canSplitStrong || canSplitWeak || mustSplit) {
+      parts.push(buffer);
+      buffer = "";
+    }
+  }
+
+  if (buffer) parts.push(buffer);
+  return parts;
+}
+
+function splitCompactSentences(text: string): string[] {
+  const sentences = splitIntoStrongPauseUnits(text);
+  if (sentences.length < 3) return [text];
+
+  const parts: string[] = [];
+  for (let i = 0; i < sentences.length; i += 1) {
+    let part = sentences[i];
+    while (part.length < MIN_SENTENCE_PART_LENGTH && i < sentences.length - 1) {
+      i += 1;
+      part += sentences[i];
+    }
+    parts.push(part);
+  }
+
+  while (parts.length > 4) {
+    const tail = parts.pop();
+    if (tail === undefined) break;
+    parts[parts.length - 1] += tail;
+  }
+
+  return parts.length > 1 ? parts : [text];
+}
+
+function splitIntoStrongPauseUnits(text: string): string[] {
+  const parts: string[] = [];
+  let buffer = "";
+
+  for (const char of text) {
+    buffer += char;
+    if (STRONG_PAUSE.test(char)) {
       parts.push(buffer);
       buffer = "";
     }

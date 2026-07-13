@@ -11,6 +11,20 @@ describe("message segmentation", () => {
     expect(segmentAssistantReply(text)).toEqual([text]);
   });
 
+  it("splits compact multi-sentence casual replies", () => {
+    const text = "今天天气挺凉快的呢，淄博那边下雨了吗？开发辛苦了，记得多起来动一动哦。你中午吃的什么呀？最近有什么好玩的事想分享吗？要喝点水啦，别光顾着忙。";
+
+    const parts = segmentAssistantReply(text);
+
+    expect(parts).toEqual([
+      "今天天气挺凉快的呢，淄博那边下雨了吗？",
+      "开发辛苦了，记得多起来动一动哦。",
+      "你中午吃的什么呀？最近有什么好玩的事想分享吗？",
+      "要喝点水啦，别光顾着忙。",
+    ]);
+    expect(parts.join("")).toBe(text);
+  });
+
   it("splits medium natural chat into two readable bubbles", () => {
     const text = [
       "我知道啦，今天你其实已经撑得很久了，不是没有努力。",

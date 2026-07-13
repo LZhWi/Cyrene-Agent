@@ -153,7 +153,7 @@ export function getSession(id: string): ChatSession | null {
 }
 
 export function getSessionPage(id: string, before: number | null, limit: number): {
-  session: Omit<ChatSession, "messages">;
+  session: Omit<ChatSession, "messages"> & { messageCount: number };
   messages: ChatMessage[];
   hasMore: boolean;
 } | null {
@@ -163,7 +163,11 @@ export function getSessionPage(id: string, before: number | null, limit: number)
   const safeLimit = Math.max(1, Math.min(Math.floor(limit) || 1, 200));
   const start = Math.max(0, end - safeLimit);
   const { messages: _messages, ...meta } = session;
-  return { session: meta, messages: session.messages.slice(start, end), hasMore: start > 0 };
+  return {
+    session: { ...meta, messageCount: session.messages.length },
+    messages: session.messages.slice(start, end),
+    hasMore: start > 0,
+  };
 }
 
 export function createSession(opts?: {
