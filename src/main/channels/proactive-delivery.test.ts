@@ -168,4 +168,28 @@ describe("proactive channel delivery", () => {
     expect(appendHistory).toHaveBeenCalledWith("session-wx-1", "assistant", "第一句。");
     expect(appendLog).toHaveBeenCalledWith(expect.objectContaining({ text: "第一句。" }));
   });
+
+  it("stops before the next segment when the proactive generation becomes invalid", async () => {
+    const adapter = fakeAdapter();
+    registry.remember(incoming("wechat", "wx-1"), "session-wx-1");
+    let allowed = true;
+    vi.mocked(adapter.send).mockImplementation(async () => {
+      allowed = false;
+      return { ok: true };
+    });
+
+    const result = await sendProactiveChannelMessage({
+      channel: "wechat",
+      text: "第一句。第二句？",
+      mobileMessageSegmentation: "on",
+      manager: { getAdapter: () => adapter },
+      recipientRegistry: registry,
+      appendHistory: vi.fn(),
+      appendLog: vi.fn(),
+      canContinue: () => allowed,
+    });
+
+    expect(result).toEqual({ kind: "committed", deliveredParts: 1, totalParts: 2 });
+    expect(adapter.send).toHaveBeenCalledTimes(1);
+  });
 });

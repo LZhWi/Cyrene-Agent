@@ -56,6 +56,7 @@ interface ProactiveChannelDeliveryInput {
   recipientRegistry?: ProactiveChannelRecipientRegistry;
   appendHistory?: typeof appendChannelHistory;
   appendLog?: (entry: Omit<LogEntry, "at">) => void;
+  canContinue?: () => boolean;
 }
 
 export async function sendProactiveChannelMessage(
@@ -75,6 +76,7 @@ export async function sendProactiveChannelMessage(
 
   const deliveredTexts: string[] = [];
   for (const text of texts) {
+    if (input.canContinue && !input.canContinue()) break;
     if (adapter.getStatus().phase !== "running") break;
     const message: OutgoingMessage = {
       channel: input.channel,

@@ -38,6 +38,8 @@ import { toolRegistry, type ToolDefinition } from "./orchestrator/tool-registry"
 import { buildToolCatalog } from "./orchestrator/tool-catalog";
 import type { ToolRiskLevel } from "./permission";
 import { loadChannelsSettings } from "./channels/settings-store";
+import { channelManager } from "./channels/manager";
+import { sendProactiveChannelMessage } from "./channels/proactive-delivery";
 // 触发 built-in-tools 的副作用注册（fetch_url / run_shell / install_mcp_server）
 import "./orchestrator/built-in-tools";
 // 触发 fs-tools 的副作用注册（read_file / list_dir / write_file / read_image）
@@ -109,7 +111,13 @@ import { SchedulerEngine } from "./scheduler/scheduler-engine";
 import { createSchedulerRunner } from "./scheduler/scheduler-runner";
 import { registerSchedulerIpc } from "./scheduler/scheduler-ipc";
 import type { ScheduledTask } from "./scheduler/types";
-import { createProactiveChatService, type ProactiveChatService } from "./proactive/proactive-service";
+import {
+  createProactiveChatService,
+  type ProactiveChatService,
+  type ProactiveCommitInput,
+  type ProactiveCommitResult,
+} from "./proactive/proactive-service";
+import { routeProactiveDelivery } from "./proactive/proactive-delivery-routing";
 import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive/proactive-prompt";
 import { runProactiveModel } from "./proactive/proactive-model";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/proactive-types";
@@ -1826,6 +1834,95 @@ const proactiveConversationLifecycle = {
   },
 };
 
+function getProactiveCommitDecision(candidate: ProactiveCandidate, generationEpoch: number) {
+  return canCommitProactiveMessage(
+    getProactiveRuntimeSnapshot(),
+    loadOpenerState(),
+    candidate,
+    generationEpoch,
+  );
+}
+
+function recordProactiveDeliveryMetadata(input: ProactiveCommitInput): void {
+  const openerState = loadOpenerState();
+  const sceneConfig = SCENE_CONFIGS.find((config) => config.id === input.candidate.sceneId);
+  if (sceneConfig?.todayFiredFlag) openerState.todayFired[sceneConfig.todayFiredFlag] = true;
+  if (input.source === "fallback" && input.fallbackPayload) {
+    const itemId = (input.fallbackPayload as ShowBubblePayload).itemId;
+    if (itemId) {
+      const recent = openerState.recentItems[input.candidate.sceneId] ?? [];
+      openerState.recentItems[input.candidate.sceneId] = [itemId, ...recent.filter((id) => id !== itemId)].slice(0, 4);
+    }
+  }
+  saveOpenerState(openerState);
+}
+
+async function commitLocalProactiveMessage(input: ProactiveCommitInput): Promise<ProactiveCommitResult> {
+  const initialDecision = getProactiveCommitDecision(input.candidate, input.generationEpoch);
+  if (!initialDecision.allowed) return { kind: "cancelled", reason: initialDecision.reason };
+
+  const session = chatsStore.getOrCreateSessionByPurpose("proactive-chat", {
+    title: "昔涟的主动消息",
+    identityId: null,
+  });
+  const at = Date.now();
+  const appended = chatsStore.appendMessage(session.id, {
+    id: randomUUID(),
+    role: "model",
+    content: input.text,
+    at,
+  });
+  if (!appended) throw new Error("主动聊天会话写入失败");
+  broadcastChatsChanged();
+
+  let payload: ShowBubblePayload = input.source === "fallback" && input.fallbackPayload
+    ? { ...(input.fallbackPayload as ShowBubblePayload), text: input.text, sessionId: session.id }
+    : {
+        text: input.text,
+        sceneId: input.candidate.sceneId,
+        itemId: `proactive-${at}`,
+        sessionId: session.id,
+      };
+
+  if (input.source === "model") {
+    const speech = await synthesizeProactiveSpeech(input.text);
+    if (speech) payload = { ...payload, ...speech };
+  }
+
+  // 文本已落库；气泡/TTS 前再次执行完整检查，失败时只取消展示和语音。
+  const displayDecision = getProactiveCommitDecision(input.candidate, input.generationEpoch);
+  if (displayDecision.allowed && mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send(IPC.LIVE2D_SHOW_BUBBLE, payload);
+  }
+  return { kind: "committed" };
+}
+
+async function commitSelectedProactiveMessage(input: ProactiveCommitInput): Promise<ProactiveCommitResult> {
+  const settings = loadGeneralSettings();
+  const target = settings.proactiveDeliveryTarget;
+  const result = await routeProactiveDelivery(target, {
+    commitLocal: () => commitLocalProactiveMessage(input),
+    commitChannel: async (channel) => {
+      const channelResult = await sendProactiveChannelMessage({
+        channel,
+        text: input.text,
+        mobileMessageSegmentation: settings.mobileMessageSegmentation,
+        manager: channelManager,
+        canContinue: () => {
+          if (loadGeneralSettings().proactiveDeliveryTarget !== channel) return false;
+          return getProactiveCommitDecision(input.candidate, input.generationEpoch).allowed;
+        },
+      });
+      return channelResult.kind === "committed"
+        ? { kind: "committed" }
+        : { kind: "cancelled", reason: channelResult.reason };
+    },
+  });
+
+  if (result.kind === "committed") recordProactiveDeliveryMetadata(input);
+  return result;
+}
+
 function initializeProactiveChatService(): void {
   proactiveChatService = createProactiveChatService({
     loadState: loadOpenerState,
@@ -1852,54 +1949,7 @@ function initializeProactiveChatService(): void {
       });
     },
     getFallback: async (candidate) => getPresetFallback(candidate.sceneId, new Date().getHours()),
-    commitMessage: async ({ candidate, text, source, fallbackPayload, generationEpoch }) => {
-      const session = chatsStore.getOrCreateSessionByPurpose("proactive-chat", {
-        title: "昔涟的主动消息",
-        identityId: null,
-      });
-      const at = Date.now();
-      const appended = chatsStore.appendMessage(session.id, {
-        id: randomUUID(),
-        role: "model",
-        content: text,
-        at,
-      });
-      if (!appended) throw new Error("主动聊天会话写入失败");
-      broadcastChatsChanged();
-
-      const openerState = loadOpenerState();
-      const sceneConfig = SCENE_CONFIGS.find((config) => config.id === candidate.sceneId);
-      if (sceneConfig?.todayFiredFlag) openerState.todayFired[sceneConfig.todayFiredFlag] = true;
-      if (source === "fallback" && fallbackPayload) {
-        const itemId = (fallbackPayload as ShowBubblePayload).itemId;
-        if (itemId) {
-          const recent = openerState.recentItems[candidate.sceneId] ?? [];
-          openerState.recentItems[candidate.sceneId] = [itemId, ...recent.filter((id) => id !== itemId)].slice(0, 4);
-        }
-      }
-      saveOpenerState(openerState);
-
-      let payload: ShowBubblePayload = source === "fallback" && fallbackPayload
-        ? { ...(fallbackPayload as ShowBubblePayload), text, sessionId: session.id }
-        : { text, sceneId: candidate.sceneId, itemId: `proactive-${at}`, sessionId: session.id };
-
-      if (source === "model") {
-        const speech = await synthesizeProactiveSpeech(text);
-        if (speech) payload = { ...payload, ...speech };
-      }
-
-      // 文本已落库；气泡/TTS 前再次执行完整本地检查，失败时只取消展示和语音。
-      const displayDecision = canCommitProactiveMessage(
-        getProactiveRuntimeSnapshot(),
-        loadOpenerState(),
-        candidate,
-        generationEpoch,
-      );
-      if (!displayDecision.allowed) return;
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send(IPC.LIVE2D_SHOW_BUBBLE, payload);
-      }
-    },
+    commitMessage: commitSelectedProactiveMessage,
     log: (event, detail) => console.log(`[Proactive] ${event}`, detail ?? ""),
   });
 
