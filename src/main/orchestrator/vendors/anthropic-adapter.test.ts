@@ -47,4 +47,108 @@ describe("AnthropicAdapter", () => {
     expect(req.headers["x-api-key"]).toBeUndefined();
     expect(req.headers["anthropic-version"]).toBeDefined();
   });
+
+  // ─── 流式 / 非流式 thinking 解析（覆盖 Claude / MiniMax） ───
+
+  test("parseStreamEvent: content_block_delta + thinking_delta → chunk.deltaThinking", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    const chunk = adapter.parseStreamEvent({
+      eventType: "content_block_delta",
+      data: JSON.stringify({ delta: { type: "thinking_delta", thinking: "我在推理" } }),
+    });
+    expect(chunk?.deltaThinking).toBe("我在推理");
+    expect(chunk?.deltaText).toBeUndefined();
+  });
+
+  test("parseStreamEvent: content_block_delta + text_delta → chunk.deltaText", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    const chunk = adapter.parseStreamEvent({
+      eventType: "content_block_delta",
+      data: JSON.stringify({ delta: { type: "text_delta", text: "你好" } }),
+    });
+    expect(chunk?.deltaText).toBe("你好");
+    expect(chunk?.deltaThinking).toBeUndefined();
+  });
+
+  test("parseResponse: thinking block + text block + tool_use block 完整解析", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    const resp = adapter.parseResponse({
+      stop_reason: "tool_use",
+      content: [
+        { type: "thinking", thinking: "需要查天气" },
+        { type: "text", text: "我先查一下" },
+        { type: "tool_use", id: "t1", name: "get_weather", input: { city: "北京" } },
+      ],
+    });
+    expect(resp.thinking).toBe("需要查天气");
+    expect(resp.text).toBe("我先查一下");
+    expect(resp.toolCalls).toEqual([
+      { id: "t1", name: "get_weather", arguments: '{"city":"北京"}' },
+    ]);
+    expect(resp.finishReason).toBe("tool_calls");  // adapter 把 tool_use 映射成 tool_calls（OpenAI 习惯）
+  });
+
+  // ─── 多轮工具调用 + thinking block + signature：appendToolResults → buildRequest 端到端 ───
+  // Claude 官方要求多轮 tool_calls 时必须完整回传 assistant.content 数组（含 thinking + tool_use），
+  // 本 fixture 断言经过 appendToolResults + buildRequest 后 wire body 里这些 block 的顺序与字段完整。
+
+  test("多轮工具调用：assistant.content 含 thinking + tool_use → appendToolResults → buildRequest 的 wire body 完整保留", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    const rawAssistantBlocks = [
+      { type: "thinking", thinking: "我先想一下", signature: "sig-abc" },
+      { type: "text", text: "需要查天气" },
+      { type: "tool_use", id: "t1", name: "get_weather", input: { city: "北京" } },
+    ];
+    // 输入 messages 不预先手写 tool 消息——appendToolResults() 会生成 tool_result，
+    // 否则 wire 上会出现重复的 tool_result。
+    const messages = [
+      { role: "user" as const, content: "北京天气如何" },
+      {
+        role: "assistant" as const,
+        content: undefined,
+        rawAssistant: rawAssistantBlocks,  // 直接是 content block 数组（anthropic-adapter.ts:173 写入形态）
+      },
+      { role: "user" as const, content: "那上海呢" },
+    ];
+
+    const afterAppend = adapter.appendToolResults(messages, [
+      { toolCall: { id: "t1", name: "get_weather", arguments: '{"city":"北京"}' }, output: "晴 25°C" },
+    ]);
+
+    const req = adapter.buildRequest(
+      { model: "claude-test", messages: afterAppend },
+      { provider: "Test", baseUrl: "https://e.test/v1", model: "claude-test", apiKey: "k" },
+    );
+    const body = JSON.parse(req.body) as {
+      messages: Array<{ role: string; content: unknown }>;
+    };
+
+    // 4 条 wire messages：user → assistant(blocks) → user(string) → user(tool_result array)
+    // 工具结果 adapter 把 tool_result 嵌入"前一条 user 的 content 数组"——前一条 user 是
+    // string content 时走 else 分支新建 user 消息，因此 tool_result 出现在最后一条。
+    expect(body.messages).toHaveLength(4);
+
+    // [0] user 原样
+    expect(body.messages[0]).toEqual({ role: "user", content: "北京天气如何" });
+
+    // [1] assistant.content 是 block 数组（不是 { content: [...] } 嵌套）
+    expect(body.messages[1].role).toBe("assistant");
+    expect(Array.isArray(body.messages[1].content)).toBe(true);
+    const assistantBlocks = body.messages[1].content as Array<Record<string, unknown>>;
+    expect(assistantBlocks).toEqual([
+      { type: "thinking", thinking: "我先想一下", signature: "sig-abc" },
+      { type: "text", text: "需要查天气" },
+      { type: "tool_use", id: "t1", name: "get_weather", input: { city: "北京" } },
+    ]);
+
+    // [2] 第二条 user（content 是 string，没被 tool_result 嵌入）
+    expect(body.messages[2]).toEqual({ role: "user", content: "那上海呢" });
+
+    // [3] tool_result 在 Anthropic 协议里嵌入新生成的 user 消息的 content 数组中
+    expect(body.messages[3].role).toBe("user");
+    expect(Array.isArray(body.messages[3].content)).toBe(true);
+    expect(body.messages[3].content).toEqual([
+      { type: "tool_result", tool_use_id: "t1", content: "晴 25°C" },
+    ]);
+  });
 });
