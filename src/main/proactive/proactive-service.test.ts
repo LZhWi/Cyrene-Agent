@@ -23,7 +23,7 @@ function setup(overrides: Record<string, unknown> = {}) {
     generationBusy: false,
     screenLocked: false,
   };
-  const commitMessage = vi.fn(async () => {});
+  const commitMessage = vi.fn(async () => ({ kind: "committed" as const }));
   const saveState = vi.fn();
   const runModel = vi.fn(async () => ({ kind: "send" as const, text: "休息一下吧♪" }));
   const getFallback = vi.fn(async () => ({ text: "预设关心", payload: { audio: true } }));
@@ -106,6 +106,22 @@ describe("proactive chat service", () => {
     expect(ctx.commitMessage).toHaveBeenCalledTimes(2);
   });
 
+  it("does not consume cooldown or unanswered count when delivery is cancelled", async () => {
+    const log = vi.fn();
+    const ctx = setup({
+      commitMessage: vi.fn(async () => ({ kind: "cancelled" as const, reason: "channel_offline" })),
+      log,
+    });
+
+    await ctx.service.evaluateCandidate(candidate);
+
+    expect(ctx.state.lastProactiveAt).toBeNull();
+    expect(ctx.state.unansweredCount).toBe(0);
+    expect(log).toHaveBeenCalledWith("commit_cancelled", expect.objectContaining({
+      reason: "channel_offline",
+    }));
+  });
+
   it("normal conversation lifecycle invalidates generation and starts quiet state", () => {
     const ctx = setup();
     ctx.service.normalConversationStarted();
@@ -115,7 +131,7 @@ describe("proactive chat service", () => {
   });
 
   it("does not overwrite newer user activity when delivery finishes later", async () => {
-    const delivery = deferred<void>();
+    const delivery = deferred<{ kind: "committed" }>();
     const deliveryStarted = deferred<void>();
     const ctx = setup({ commitMessage: vi.fn(() => {
       deliveryStarted.resolve();
@@ -124,7 +140,7 @@ describe("proactive chat service", () => {
     const evaluation = ctx.service.evaluateCandidate(candidate);
     await deliveryStarted.promise;
     ctx.service.invalidateForUserMessage();
-    delivery.resolve();
+    delivery.resolve({ kind: "committed" });
     await evaluation;
 
     expect(ctx.state.proactiveEpoch).toBe(1);

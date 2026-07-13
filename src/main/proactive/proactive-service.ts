@@ -23,6 +23,10 @@ export interface ProactiveCommitInput {
   generationEpoch: number;
 }
 
+export type ProactiveCommitResult =
+  | { kind: "committed" }
+  | { kind: "cancelled"; reason: string };
+
 export interface ProactiveChatServiceDeps {
   loadState: () => ProactiveState;
   saveState: (state: ProactiveState) => void;
@@ -30,7 +34,7 @@ export interface ProactiveChatServiceDeps {
   buildMessages: (candidate: ProactiveCandidate, state: ProactiveState) => Promise<ChatMessage[]>;
   runModel: (messages: ChatMessage[]) => Promise<ProactiveModelResult>;
   getFallback: (candidate: ProactiveCandidate) => Promise<ProactiveFallback | null>;
-  commitMessage: (input: ProactiveCommitInput) => Promise<void>;
+  commitMessage: (input: ProactiveCommitInput) => Promise<ProactiveCommitResult>;
   log?: (event: string, detail?: unknown) => void;
 }
 
@@ -115,7 +119,15 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
           return;
         }
 
-        await deps.commitMessage({ candidate, text, source, fallbackPayload, generationEpoch });
+        const commitResult = await deps.commitMessage({ candidate, text, source, fallbackPayload, generationEpoch });
+        if (commitResult.kind === "cancelled") {
+          deps.log?.("commit_cancelled", {
+            scene: candidate.sceneId,
+            reason: commitResult.reason,
+            source,
+          });
+          return;
+        }
         const latestState = deps.loadState();
         if (latestState.proactiveEpoch === generationEpoch) {
           markProactiveCommitted(latestState, candidate, commitSnapshot.now);
