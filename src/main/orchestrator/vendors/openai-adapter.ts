@@ -5,6 +5,7 @@ import {
   HttpRequest, ProviderCapability, StreamChunk, StreamEvent,
   TestConnectionResult, ToolCall, ToolExecutionResult, VendorConfig,
 } from "./types";
+import { authHeaderFor } from "./auth";
 
 function buildUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");
@@ -74,7 +75,7 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${cfg.apiKey}`,
+        ...authHeaderFor(this.capability, cfg.apiKey),
       },
       body: JSON.stringify(body),
     };

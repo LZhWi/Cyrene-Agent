@@ -154,7 +154,8 @@
               </label>
               <label class="field">
                 <span>视觉型号</span>
-                <input id="vision-model" type="text" placeholder="gpt-4o / glm-5v-turbo / qwen-vl-max" autocomplete="off" />
+                <input id="vision-model" type="text" placeholder="gpt-4o / glm-5v-turbo / qwen-vl-max" list="vision-model-suggestions" autocomplete="off" />
+                <datalist id="vision-model-suggestions"></datalist>
               </label>
             </div>
             <p class="vision-hint">ⓘ 该模型需支持 OpenAI 兼容的 /chat/completions 接口及 image_url 多模态能力</p>

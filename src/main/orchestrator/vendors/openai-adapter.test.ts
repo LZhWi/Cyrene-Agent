@@ -51,4 +51,24 @@ describe("OpenAICompatAdapter", () => {
       ],
     });
   });
+
+  test("buildRequest uses Authorization Bearer when authStyle=bearer", () => {
+    const adapter = new OpenAICompatAdapter("test-openai", { ...capability, authStyle: "bearer" });
+    const req = adapter.buildRequest(
+      { model: "m", messages: [{ role: "user", content: "hi" }] },
+      { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "sk-test" },
+    );
+    expect(req.headers.Authorization).toBe("Bearer sk-test");
+    expect(req.headers["x-api-key"]).toBeUndefined();
+  });
+
+  test("buildRequest uses x-api-key when authStyle=x-api-key (transport=openai decoupled)", () => {
+    const adapter = new OpenAICompatAdapter("test-openai", { ...capability, authStyle: "x-api-key" });
+    const req = adapter.buildRequest(
+      { model: "m", messages: [{ role: "user", content: "hi" }] },
+      { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "sk-test" },
+    );
+    expect(req.headers["x-api-key"]).toBe("sk-test");
+    expect(req.headers.Authorization).toBeUndefined();
+  });
 });

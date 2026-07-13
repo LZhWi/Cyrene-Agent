@@ -269,6 +269,13 @@ interface ModelPreset {
   // 标记为 true 时，该项在 <select> 里显示但不可选；
   // 用于"已列出但 vendor adapter 还没接好"的情况，避免用户选到后调用直接报错。
   disabled?: boolean;
+  // 视觉模型与主模型本质不同（如 MiMo 主 mimo-v2.5-pro、视觉 mimo-v2.5），
+  // 强制独立配置，无法"与主聊天模型相同"。与 supportsVision 正交。
+  independentVision?: boolean;
+  // 独立视觉模型的默认值（applyPreset 在没有保存值时使用）。
+  defaultVisionModel?: string;
+  // 独立视觉模型的候选列表（用于视觉模型输入框的 datalist）。
+  visionModels?: string[];
 }
 
 interface GeneralSettings {
@@ -394,6 +401,12 @@ declare global {
   }
 }
 
+// MiMo 的 icon 是 lobehub-icons 仓库的 PNG（不在 icons-static-svg 包里）。
+// 单独声明，与 8 家 npmmirror SVG 常量解耦（feat/chore 两个 commit 真正独立）。
+// 实施时若图片加载失败，可考虑：1) 锁定 commit hash；2) 下载到本地 assets/icons/mimo.png
+const MIMO_ICON_URL =
+  "https://raw.githubusercontent.com/lobehub/lobe-icons/refs/heads/master/packages/static-png/light/xiaomimimo.png";
+
 const MODEL_PRESETS: ModelPreset[] = [
   // 当前 v1 计划适配的 7 家：MiniMax / 火山 Agent-Plan / 智谱 GLM / Kimi / Qwen / ChatGPT / Claude
   // 顺序按使用频率 + 适配优先级；未在此清单内的厂商已硬删，需要时再补回。
@@ -475,6 +488,20 @@ const MODEL_PRESETS: ModelPreset[] = [
     // Anthropic 的请求体不是 OpenAI 兼容格式（messages / system / 流式都不一样），
     // 在专属 vendor adapter 接好之前先 disabled，避免用户选到后调用直接报 4xx。
     disabled: true,
+  },
+  {
+    providerName: "MiMo（小米）",
+    shortName: "MiMo",
+    baseUrl: "https://api.xiaomimimo.com/v1",
+    mainModels: ["mimo-v2.5-pro"],
+    iconUrl: MIMO_ICON_URL,
+    websiteUrl: "https://mimo.mi.com/",
+    visionBaseUrl: "https://api.xiaomimimo.com/v1",
+    supportsVision: true,
+    // 主模型 mimo-v2.5-pro 不适合做视觉（视觉模型是 mimo-v2.5），强制独立配置
+    independentVision: true,
+    defaultVisionModel: "mimo-v2.5",
+    visionModels: ["mimo-v2.5"],
   },
 ];
 
@@ -940,24 +967,45 @@ function getCurrentModelValue(): string {
 }
 
 /**
- * 视觉同步 UI（胶囊按钮组）：
- * - 选"与主聊天模型相同"：三框变只读 + 值随主配置
- * - 选"独立配置"：三框可编辑
- * baseUrl 特殊处理：若当前厂商标了 visionBaseUrl（主配走 Anthropic 入口、视觉要走 OpenAI 入口），
- * 用 visionBaseUrl 填视觉框，让用户看到的就是正确的视觉入口，不用手动改。
+ * 视觉同步 UI（胶囊按钮组）—— 纯 UI 状态控制，不修改输入框值。
+ *
+ * 三种情况：
+ * 1. independentVision=true（preset 强制独立配置）：
+ *    用真实 disabled 属性禁用"与主聊天模型相同"按钮；视觉框不锁（独立 = 可编辑）。
+ *    直接 return，不读分支前缓存的 synced，避免重新给视觉框加 is-locked。
+ * 2. 普通 provider，synced=true：视觉框加 is-locked 样式（仅 UI，不动 input.value）
+ * 3. 普通 provider，synced=false：视觉框解锁
+ *
+ * 输入框的初值由 applyPreset 在切厂商时一次性写入，本函数不再覆盖。
  */
 function applyVisionSyncUI(): void {
+  const preset = findPreset(activeProvider);
+
+  if (preset?.independentVision) {
+    visionSyncMainBtn.disabled = true;
+    setVisionSyncState(false);
+    visionFieldsWrap.classList.remove("is-locked");
+    return;
+  }
+
+  visionSyncMainBtn.disabled = false;
   const synced = visionSyncMainBtn.classList.contains("is-active");
   if (synced) {
     visionFieldsWrap.classList.add("is-locked");
-    // 找当前厂商 preset，看有没有 visionBaseUrl
-    const preset = findPreset(activeProvider);
-    const visionBaseUrl = preset?.visionBaseUrl || baseUrlInput.value;
-    visionBaseUrlInput.value = visionBaseUrl;
-    visionApiKeyInput.value = apiKeyInput.value;
-    visionModelInput.value = getCurrentModelValue();
   } else {
     visionFieldsWrap.classList.remove("is-locked");
+  }
+}
+
+/** 填充视觉模型输入框的 datalist 候选。仅渲染候选，不修改 visionModelInput.value。 */
+function fillVisionModelOptions(preset: ModelPreset): void {
+  const datalist = document.getElementById("vision-model-suggestions") as HTMLDataListElement | null;
+  if (!datalist) return;
+  datalist.replaceChildren();
+  for (const m of preset.visionModels ?? []) {
+    const option = document.createElement("option");
+    option.value = m;
+    datalist.appendChild(option);
   }
 }
 
@@ -969,7 +1017,15 @@ function setVisionSyncState(synced: boolean): void {
   visionSyncIndepBtn.setAttribute("aria-pressed", String(!synced));
 }
 
-function applyPreset(providerName: string, preferredModel?: string, preferredApiKey?: string, preferredBaseUrl?: string, preferredDisplayName?: string, preferredExplicitTransport?: "openai" | "anthropic" | "auto"): void {
+function applyPreset(
+  providerName: string,
+  preferredModel?: string,
+  preferredApiKey?: string,
+  preferredBaseUrl?: string,
+  preferredDisplayName?: string,
+  preferredExplicitTransport?: "openai" | "anthropic" | "auto",
+  preferredVision?: { baseUrl: string; apiKey: string; model: string; syncWithMain: boolean },
+): void {
   const preset = findPreset(providerName);
 
   // 模式按钮已删除——ChatGPT / Claude 这种没预设型号的厂商，input 框空着让用户手填，
@@ -994,6 +1050,32 @@ function applyPreset(providerName: string, preferredModel?: string, preferredApi
   // （切厂商时上一家的 explicitTransport 不应该延续，preset 自带 capabilities transport 兜底）
   transportSelect.value = preferredExplicitTransport ?? "auto";
 
+  // —— 视觉字段初始化（一次性写入，避免反复覆盖用户编辑）——
+  // 优先级：preferredVision（已保存） > preset 默认
+  // 关键：independentVision=true 时，即使旧配置保存了 syncWithMain=true，
+  // 也统一归一化为 false（与 applyVisionSyncUI 的"独立配置态"一致）。
+  if (preferredVision) {
+    const synced = preset.independentVision === true ? false : preferredVision.syncWithMain;
+    setVisionSyncState(synced);
+    visionBaseUrlInput.value = preferredVision.baseUrl;
+    visionApiKeyInput.value = preferredVision.apiKey;
+    visionModelInput.value = preferredVision.model;
+  } else if (preset.independentVision === true) {
+    // 强制独立配置态
+    setVisionSyncState(false);
+    visionBaseUrlInput.value = preset.visionBaseUrl ?? preset.baseUrl;
+    visionApiKeyInput.value = apiKeyInput.value;
+    visionModelInput.value = preset.defaultVisionModel ?? "";
+  } else {
+    // 默认同步主模型
+    setVisionSyncState(preset.supportsVision === true);
+    visionBaseUrlInput.value = preset.visionBaseUrl ?? baseUrlInput.value;
+    visionApiKeyInput.value = apiKeyInput.value;
+    visionModelInput.value = modelInput.value;
+  }
+
+  fillVisionModelOptions(preset);
+
   // 官网链接：有 websiteUrl 就显示并指向，没有就隐藏。
   if (preset.websiteUrl) {
     presetWebsiteLink.href = preset.websiteUrl;
@@ -1004,6 +1086,7 @@ function applyPreset(providerName: string, preferredModel?: string, preferredApi
   }
 
   activeProvider = preset.providerName;
+  applyVisionSyncUI();
 }
 
 async function loadConfig(): Promise<void> {
@@ -1027,7 +1110,23 @@ async function loadConfig(): Promise<void> {
         }
       }
     }
-    applyPreset(cfg.provider, cfg.model, cfg.apiKey, cfg.baseUrl, cfg.displayName, cfg.explicitTransport);
+    const vision = cfg.vision;
+    applyPreset(
+      cfg.provider,
+      cfg.model,
+      cfg.apiKey,
+      cfg.baseUrl,
+      cfg.displayName,
+      cfg.explicitTransport,
+      vision
+        ? {
+            baseUrl: vision.baseUrl,
+            apiKey: vision.apiKey,
+            model: vision.model,
+            syncWithMain: vision.syncWithMain,
+          }
+        : undefined,
+    );
     applyRuntimeSyncSelection(cfg.runtimeSync);
     stickerEnabledInput.checked = cfg.stickerEnabled !== false;
     applyStickerSizeSelection(cfg.stickerSize);
@@ -1035,23 +1134,7 @@ async function loadConfig(): Promise<void> {
     stickerThresholdInput.value = String(threshold);
     stickerThresholdVal.textContent = threshold.toFixed(2);
 
-    // 视觉模型配置
-    const vision = cfg.vision;
-    if (vision) {
-      setVisionSyncState(vision.syncWithMain);
-      visionBaseUrlInput.value = vision.baseUrl || "";
-      visionApiKeyInput.value = vision.apiKey || "";
-      visionModelInput.value = vision.model || "";
-    } else {
-      // 用户从未配过视觉。按当前主模型 supportsVision 决定默认——
-      // 多模态主模型用户开箱即用（默认"与主相同"），非视觉主模型则默认"独立配置"。
-      const preset = findPreset(cfg.provider);
-      setVisionSyncState(preset?.supportsVision === true);
-      visionBaseUrlInput.value = "";
-      visionApiKeyInput.value = "";
-      visionModelInput.value = "";
-    }
-    applyVisionSyncUI();
+    // 视觉模型配置已并入 applyPreset（preferredVision 参数）。
 
     setSaveStatus("等待保存");
     setCyreneSaveStatus("等待保存");

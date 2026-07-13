@@ -131,6 +131,24 @@ export const PROVIDER_CAPABILITIES: ProviderCapability[] = [
     supportsVision: true,
     disabled: true,
   },
+  {
+    id: "mimo",
+    displayName: "MiMo（小米）",
+    // 默认入口：用户切 /anthropic 时由 detectTransport 自动推断
+    transport: "openai",
+    baseUrl: "https://api.xiaomimimo.com/v1",
+    // 官方文档：/v1 与 /anthropic 都支持 Authorization: Bearer
+    authStyle: "bearer",
+    defaultModel: "mimo-v2.5-pro",
+    supportsTools: true,
+    supportsThinking: true,
+    thinkingField: "reasoning_content",
+    cacheStrategy: "auto",
+    testStrategy: "text",
+    supportsVision: true,
+    // 结构上独立：用户切主入口到 /anthropic 时视觉仍由 visionBaseUrl 决定
+    visionBaseUrl: "https://api.xiaomimimo.com/v1",
+  },
 ];
 
 const byDisplayName = new Map(PROVIDER_CAPABILITIES.map(c => [c.displayName, c]));

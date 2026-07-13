@@ -1,11 +1,15 @@
 // Anthropic transport —— MiniMax（主推）/ Claude
 // 请求体协议：POST {baseUrl}/v1/messages（baseUrl 已含 /v1 时只加 /messages）
 // system 顶层 + messages[].content 为 content block 数组 + tools[].input_schema
+//
+// 鉴权由 authHeaderFor 根据 capability.authStyle 决定——Anthropic transport
+// 也可以配 bearer（如 MiMo /anthropic 端点）。
 import {
   ChatMessage, ChatRequest, ChatResponse, ChatVendorAdapter,
   HttpRequest, ProviderCapability, StreamChunk, StreamEvent,
   TestConnectionResult, ToolCall, ToolExecutionResult, VendorConfig,
 } from "./types";
+import { authHeaderFor } from "./auth";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_MAX_TOKENS = 4096;
@@ -117,7 +121,7 @@ export class AnthropicAdapter implements ChatVendorAdapter {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "x-api-key": cfg.apiKey,
+        ...authHeaderFor(this.capability, cfg.apiKey),
         "anthropic-version": ANTHROPIC_VERSION,
       },
       body: JSON.stringify(body),
