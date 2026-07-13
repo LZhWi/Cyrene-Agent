@@ -10,6 +10,7 @@ const MIN_SENTENCE_PART_LENGTH = 14;
 const MIN_PART_LENGTH = 35;
 const IDEAL_MIN = 55;
 const HARD_MAX = 130;
+const STREAMING_BUBBLE_BREAK = /[。？?]/;
 const STRONG_PAUSE = /[。！？!?♪～~]/;
 const WEAK_PAUSE = /[，,；;：:]/;
 
@@ -19,6 +20,10 @@ export function shouldSegmentAssistantReply(
 ): boolean {
   const mode = normalizeSegmentedOutputMode(preference);
   return mode === "all" || (mode === "chat" && chatMode === "talk");
+}
+
+export function shouldBreakStreamingBubbleAfterChar(char: string): boolean {
+  return STREAMING_BUBBLE_BREAK.test(char);
 }
 
 export function segmentAssistantReply(text: string): string[] {
@@ -94,7 +99,7 @@ function splitByNaturalPauses(text: string, targetLength: number, maxParts: numb
 
 function splitCompactSentences(text: string): string[] {
   const sentences = splitIntoStrongPauseUnits(text);
-  if (sentences.length < 3) return [text];
+  if (sentences.length < 2) return [text];
 
   const parts: string[] = [];
   for (let i = 0; i < sentences.length; i += 1) {

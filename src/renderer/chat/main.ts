@@ -11,7 +11,11 @@ import { canUseMinimaxStreamingEarly, extractEarlyTtsSegment } from "../../share
 import { getStickerSrcForId } from "./sticker-src";
 import { formatAttachmentTagDetail, getAttachmentIcon } from "./attachment-labels";
 import { resolveAsset } from "../../shared/renderer-base";
-import { getAssistantReplyBubbleTexts } from "./message-segmentation";
+import {
+  getAssistantReplyBubbleTexts,
+  shouldBreakStreamingBubbleAfterChar,
+  shouldSegmentAssistantReply,
+} from "./message-segmentation";
 import { buildDocumentContextLines, processDocumentsWithWait, type RetrievedDocumentChunk } from "./document-processing";
 import {
   canCancelDocumentIndexStatus,
@@ -1023,6 +1027,30 @@ function setAvatar(slot: HTMLElement, role: Role): void {
   slot.appendChild(img);
 }
 
+function createMessageBubble(text?: string): HTMLElement {
+  const item = document.createElement("div");
+  item.className = "msg__bubble";
+  item.hidden = false;
+  if (text) item.textContent = text;
+  return item;
+}
+
+function getLastBubbleForMessage(messageId: string): HTMLElement | null {
+  const row = messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+  if (!row) return null;
+  const bubbles = row.querySelectorAll<HTMLElement>(".msg__bubble");
+  return bubbles.length > 0 ? bubbles[bubbles.length - 1] : null;
+}
+
+function appendBubbleForMessage(messageId: string): HTMLElement | null {
+  const row = messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
+  const body = row?.querySelector(".msg__body");
+  if (!body) return null;
+  const bubble = createMessageBubble();
+  body.appendChild(bubble);
+  return bubble;
+}
+
 function renderMessageAttachments(body: HTMLElement, attachments: MessageAttachment[] | undefined): void {
   if (!attachments || attachments.length === 0) return;
   const list = document.createElement("div");
@@ -1181,15 +1209,7 @@ function render(preserveScroll = false): void {
     body.className = "msg__body";
 
     const bubbles: HTMLElement[] = [];
-    const createBubble = (text?: string): HTMLElement => {
-      const item = document.createElement("div");
-      item.className = "msg__bubble";
-      item.hidden = false;
-      if (text) item.textContent = text;
-      return item;
-    };
-
-    const bubble = createBubble();
+    const bubble = createMessageBubble();
     if (m.thinking) {
       bubble.classList.add("msg__bubble--thinking");
       const dot1 = document.createElement("span");
@@ -1215,7 +1235,7 @@ function render(preserveScroll = false): void {
       });
       for (const segment of segments) {
         const text = segment.trim();
-        if (text || m.transient) bubbles.push(createBubble(text));
+        if (text || m.transient) bubbles.push(createMessageBubble(text));
       }
     }
 
@@ -2451,9 +2471,10 @@ async function triggerCyreneGreeting(): Promise<void> {
     const deltaQueue: string[] = [];
     let playbackTimer: number | null = null;
     let runFinishedArrived = false;
+    let startNextStreamingBubble = false;
+    const allowStreamingBubbleSplit = shouldSegmentAssistantReply(isTalkMode() ? "talk" : "collab", segmentedOutputMode);
     const getStreamingBubble = (): HTMLElement | null => {
-      const row = messagesEl.querySelector(`[data-msg-id="${streamMsgId}"]`);
-      return row ? row.querySelector(".msg__bubble") as HTMLElement : null;
+      return getLastBubbleForMessage(streamMsgId);
     };
     const tryFinish = (): void => {
       if (runFinishedArrived && deltaQueue.length === 0 && playbackTimer === null) {
@@ -2466,12 +2487,18 @@ async function triggerCyreneGreeting(): Promise<void> {
         const next = deltaQueue.shift();
         if (next !== undefined) {
           streamContent += next;
-          const bubble = getStreamingBubble();
+          const bubble = startNextStreamingBubble
+            ? (appendBubbleForMessage(streamMsgId) ?? getStreamingBubble())
+            : getStreamingBubble();
+          startNextStreamingBubble = false;
           if (bubble) {
             const span = document.createElement("span");
             span.className = "msg__char";
             span.textContent = next;
             bubble.appendChild(span);
+          }
+          if (allowStreamingBubbleSplit && shouldBreakStreamingBubbleAfterChar(next)) {
+            startNextStreamingBubble = true;
           }
           messagesEl.scrollTop = messagesEl.scrollHeight;
           return;
@@ -2524,7 +2551,7 @@ async function triggerCyreneGreeting(): Promise<void> {
             if (event.delta) {
               ttsContent += event.delta;
               earlyMinimaxPlayback.append(ttsContent);
-              deltaQueue.push(event.delta);
+              deltaQueue.push(...Array.from(event.delta));
               if (!textMouthStarted) {
                 void loadTtsSettings().then((settings) => {
                   if (settings && !settings.ttsAutoRead) {
@@ -2932,10 +2959,11 @@ async function send(): Promise<void> {
     const deltaQueue: string[] = [];
     let playbackTimer: number | null = null;
     let runFinishedArrived = false;
+    let startNextStreamingBubble = false;
+    const allowStreamingBubbleSplit = shouldSegmentAssistantReply(isTalkMode() ? "talk" : "collab", segmentedOutputMode);
     /** 找到当前流式消息的气泡 DOM（TEXT_MESSAGE_START 时 render 过一次，带 data-msg-id）。 */
     const getStreamingBubble = (): HTMLElement | null => {
-      const row = messagesEl.querySelector(`[data-msg-id="${streamMsgId}"]`);
-      return row ? row.querySelector(".msg__bubble") as HTMLElement : null;
+      return getLastBubbleForMessage(streamMsgId);
     };
     // 终态条件：RUN_FINISHED 到达 AND 回放队列空。两者都满足才 finishRun。
     const tryFinish = (): void => {
@@ -2950,12 +2978,18 @@ async function send(): Promise<void> {
         if (next !== undefined) {
           streamContent += next;
           // 增量追加 span 到气泡，CSS 渐显。不调 render()，避免全量重建卡顿。
-          const bubble = getStreamingBubble();
+          const bubble = startNextStreamingBubble
+            ? (appendBubbleForMessage(streamMsgId) ?? getStreamingBubble())
+            : getStreamingBubble();
+          startNextStreamingBubble = false;
           if (bubble) {
             const span = document.createElement("span");
             span.className = "msg__char";
             span.textContent = next;
             bubble.appendChild(span);
+          }
+          if (allowStreamingBubbleSplit && shouldBreakStreamingBubbleAfterChar(next)) {
+            startNextStreamingBubble = true;
           }
           messagesEl.scrollTop = messagesEl.scrollHeight;
           return;
@@ -3013,7 +3047,7 @@ async function send(): Promise<void> {
             if (event.delta) {
               ttsContent += event.delta;
               earlyMinimaxPlayback.append(ttsContent);
-              deltaQueue.push(event.delta);
+              deltaQueue.push(...Array.from(event.delta));
               if (!textMouthStarted) {
                 void loadTtsSettings().then((settings) => {
                   if (settings && !settings.ttsAutoRead) {

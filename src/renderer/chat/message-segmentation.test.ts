@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   getAssistantReplyBubbleTexts,
   segmentAssistantReply,
+  shouldBreakStreamingBubbleAfterChar,
   shouldSegmentAssistantReply,
 } from "./message-segmentation";
 
@@ -23,6 +24,14 @@ describe("message segmentation", () => {
       "要喝点水啦，别光顾着忙。",
     ]);
     expect(parts.join("")).toBe(text);
+  });
+
+  it("uses sentence-ending punctuation as streaming bubble boundaries", () => {
+    expect(shouldBreakStreamingBubbleAfterChar("。")).toBe(true);
+    expect(shouldBreakStreamingBubbleAfterChar("？")).toBe(true);
+    expect(shouldBreakStreamingBubbleAfterChar("?")).toBe(true);
+    expect(shouldBreakStreamingBubbleAfterChar("，")).toBe(false);
+    expect(shouldBreakStreamingBubbleAfterChar("！")).toBe(false);
   });
 
   it("splits medium natural chat into two readable bubbles", () => {
