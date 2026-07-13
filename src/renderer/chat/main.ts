@@ -11,7 +11,7 @@ import { canUseMinimaxStreamingEarly, extractEarlyTtsSegment } from "../../share
 import { getStickerSrcForId } from "./sticker-src";
 import { formatAttachmentTagDetail, getAttachmentIcon } from "./attachment-labels";
 import { resolveAsset } from "../../shared/renderer-base";
-import { segmentAssistantReply, shouldSegmentAssistantReply } from "./message-segmentation";
+import { getAssistantReplyBubbleTexts } from "./message-segmentation";
 import { buildDocumentContextLines, processDocumentsWithWait, type RetrievedDocumentChunk } from "./document-processing";
 import {
   canCancelDocumentIndexStatus,
@@ -1210,12 +1210,12 @@ function render(preserveScroll = false): void {
       if (!bubble.hidden) bubbles.push(bubble);
     } else {
       const currentMode = isTalkMode() ? "talk" : "collab";
-      const segments = shouldSegmentAssistantReply(currentMode, segmentedOutputMode)
-        ? segmentAssistantReply(m.content)
-        : [m.content];
+      const segments = getAssistantReplyBubbleTexts(m.content, currentMode, segmentedOutputMode, {
+        preserveEmpty: !!m.transient,
+      });
       for (const segment of segments) {
         const text = segment.trim();
-        if (text) bubbles.push(createBubble(text));
+        if (text || m.transient) bubbles.push(createBubble(text));
       }
     }
 
@@ -2428,7 +2428,7 @@ async function triggerCyreneGreeting(): Promise<void> {
   let streamMsgId = "";
   try {
     streamMsgId = String(Date.now() + 1);
-    const streamMsg = { id: streamMsgId, role: "model" as const, content: "", at: Date.now(), thinking: true };
+    const streamMsg = { id: streamMsgId, role: "model" as const, content: "", at: Date.now(), thinking: true, transient: true };
     messages.push(streamMsg);
     render();
 
@@ -2588,6 +2588,7 @@ async function triggerCyreneGreeting(): Promise<void> {
     const msg = messages.find(m => m.id === streamMsgId);
     if (msg) {
       msg.thinking = false;
+      msg.transient = false;
       msg.content = streamContent;
       msg.sticker = sticker;
     }
@@ -2612,6 +2613,7 @@ async function triggerCyreneGreeting(): Promise<void> {
     const msg = messages.find(m => m.id === streamMsgId);
     if (msg) {
       msg.thinking = false;
+      msg.transient = false;
       msg.content = "连接模型失败：" + message;
     } else {
       messages.push({
@@ -2902,7 +2904,7 @@ async function send(): Promise<void> {
   let streamMsgId = "";
   try {
     streamMsgId = String(Date.now() + 1);
-    const streamMsg = { id: streamMsgId, role: "model", content: "", at: Date.now(), thinking: true };
+    const streamMsg = { id: streamMsgId, role: "model", content: "", at: Date.now(), thinking: true, transient: true };
     messages.push(streamMsg);
     render();
 
@@ -3088,6 +3090,7 @@ async function send(): Promise<void> {
     const msg = messages.find(m => m.id === streamMsgId);
     if (msg) {
       msg.thinking = false;
+      msg.transient = false;
       msg.content = streamContent;
       msg.sticker = sticker;
     }
@@ -3115,6 +3118,7 @@ async function send(): Promise<void> {
     const msg = messages.find(m => m.id === streamMsgId);
     if (msg) {
       msg.thinking = false;
+      msg.transient = false;
       msg.content = "连接模型失败：" + message;
     } else {
       messages.push({

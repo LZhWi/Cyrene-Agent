@@ -31,6 +31,18 @@ export function segmentAssistantReply(text: string): string[] {
   return merged.length > 1 ? merged : [clean];
 }
 
+export function getAssistantReplyBubbleTexts(
+  text: string,
+  chatMode: DefaultChatMode,
+  preference: SegmentedOutputMode,
+  options: { preserveEmpty?: boolean } = {},
+): string[] {
+  if (!text.trim()) return options.preserveEmpty ? [""] : [];
+  return shouldSegmentAssistantReply(chatMode, preference)
+    ? segmentAssistantReply(text)
+    : [text];
+}
+
 function chooseMaxParts(length: number): number {
   if (length <= 220) return 2;
   if (length <= 380) return 3;

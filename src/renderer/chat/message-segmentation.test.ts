@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  getAssistantReplyBubbleTexts,
   segmentAssistantReply,
   shouldSegmentAssistantReply,
 } from "./message-segmentation";
@@ -44,5 +45,10 @@ describe("message segmentation", () => {
     expect(shouldSegmentAssistantReply("collab", "chat")).toBe(false);
     expect(shouldSegmentAssistantReply("collab", "all")).toBe(true);
     expect(shouldSegmentAssistantReply("talk", "off")).toBe(false);
+  });
+
+  it("keeps one empty assistant bubble only while streaming", () => {
+    expect(getAssistantReplyBubbleTexts("", "talk", "all")).toEqual([]);
+    expect(getAssistantReplyBubbleTexts("", "talk", "all", { preserveEmpty: true })).toEqual([""]);
   });
 });
