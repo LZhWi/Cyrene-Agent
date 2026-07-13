@@ -28,6 +28,7 @@ verify-*.js
 verify-*.png
 verify-*.html
 .zcode/
+.worktrees/
 
 # Debug previews / scratch files generated during UI work
 cyrene-*-preview.html
