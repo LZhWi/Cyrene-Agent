@@ -11,6 +11,7 @@ export interface ConversationTimeContext {
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_MINUTE_MS = 60 * 1000;
+const LEADING_TIME_METADATA_RE = /^(?:\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}, [A-Za-z_]+(?:\/[A-Za-z_+-]+)+\]\s*)+/;
 
 function stripThinkBlocks(text: string): string {
   return text
@@ -96,6 +97,19 @@ function formatDuration(ms: number): string {
   return minutes > 0 ? `约 ${hours} 小时 ${minutes} 分钟` : `约 ${hours} 小时`;
 }
 
+function hasTimestampedMessages(messages: ChatContextMessage[]): boolean {
+  return messages.some((message) => isValidTimestamp(message.at));
+}
+
+function buildTimestampUseRule(messages: ChatContextMessage[]): string {
+  if (!hasTimestampedMessages(messages)) return "";
+  return [
+    "[时间戳使用规则]",
+    "历史消息开头的方括号时间是系统提供的元数据，只用于理解对话顺序和连续性。",
+    "不要复述、引用或输出这些方括号时间标签；回复应只包含你要对用户说的话。",
+  ].join("\n");
+}
+
 function latestUserIndex(messages: ChatContextMessage[]): number {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     if (messages[index].role === "user") return index;
@@ -125,14 +139,20 @@ function buildGapNotice(messages: ChatContextMessage[], timezone: string): strin
     "[对话时间信息]",
     `当前时间：${formatLocalTime(latestUser.at, timezone)}`,
     `距离上一条有效聊天消息：${formatDuration(gapMs)}`,
-    "仅用于理解对话连续性；除非与当前语境有关，否则不要主动提及时间间隔。",
+    "仅用于理解对话连续性；除非与当前语境有关，否则不要主动提及时间间隔，也不要复述本段内容。",
   ].join("\n");
+}
+
+export function stripLeakedChatTimeContext(text: string): string {
+  return text.replace(LEADING_TIME_METADATA_RE, "").trimStart();
 }
 
 export function buildConversationTimeContext(messages: ChatContextMessage[], timezone: string): ConversationTimeContext {
   const resolvedTimezone = resolveChatContextTimezone(timezone);
+  const timestampUseRule = buildTimestampUseRule(messages);
+  const gapNotice = buildGapNotice(messages, resolvedTimezone);
   return {
     messages: messages.map((message) => withTimePrefix(message, resolvedTimezone)),
-    timeContext: buildGapNotice(messages, resolvedTimezone),
+    timeContext: [timestampUseRule, gapNotice].filter(Boolean).join("\n\n"),
   };
 }

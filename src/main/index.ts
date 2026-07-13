@@ -617,7 +617,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   language: "zh-CN",
   uiTheme: "classic",
   defaultChatMode: "collab",
-  segmentedOutputMode: "all",
+  segmentedOutputMode: "off",
   ttsEngine: "off",
   ttsAutoRead: true,
   ttsSpeed: 1,

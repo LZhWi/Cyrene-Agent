@@ -6,5 +6,5 @@ export function normalizeDefaultChatMode(value: unknown): DefaultChatMode {
 }
 
 export function normalizeSegmentedOutputMode(value: unknown): SegmentedOutputMode {
-  return value === "chat" || value === "off" ? value : "all";
+  return value === "all" || value === "chat" ? value : "off";
 }

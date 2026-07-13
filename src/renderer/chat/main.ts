@@ -11,6 +11,7 @@ import { canUseMinimaxStreamingEarly, extractEarlyTtsSegment } from "../../share
 import { getStickerSrcForId } from "./sticker-src";
 import { formatAttachmentTagDetail, getAttachmentIcon } from "./attachment-labels";
 import { resolveAsset } from "../../shared/renderer-base";
+import { segmentAssistantReply, shouldSegmentAssistantReply } from "./message-segmentation";
 import { buildDocumentContextLines, processDocumentsWithWait, type RetrievedDocumentChunk } from "./document-processing";
 import {
   canCancelDocumentIndexStatus,
@@ -104,7 +105,7 @@ interface ChatApi {
     cancelDocumentIndex: (jobId: string) => Promise<boolean>;
     captionImage: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
     getImageSendStrategy: () => Promise<{ mode: "direct" | "caption" }>;
-    getGeneralSettings?: () => Promise<{ defaultChatMode?: DefaultChatMode }>;
+    getGeneralSettings?: () => Promise<{ defaultChatMode?: DefaultChatMode; segmentedOutputMode?: "all" | "chat" | "off" }>;
     getEnabledStickers?: () => Promise<Array<{ id: string; src: string; description?: string }>>;
   }
 
@@ -332,6 +333,7 @@ function getStickerSrc(id: string): string | undefined {
 const messages: Message[] = [];
 let currentSessionId: string | null = null;
 let sessionTailStart = 0;
+let segmentedOutputMode: "all" | "chat" | "off" = "off";
 const CHAT_WINDOW_SIZE = 100;
 let currentModelConfig: ModelConfig | null = null;
 
@@ -1178,9 +1180,16 @@ function render(preserveScroll = false): void {
     const body = document.createElement("div");
     body.className = "msg__body";
 
-    const bubble = document.createElement("div");
-    bubble.className = "msg__bubble";
-    bubble.hidden = false;
+    const bubbles: HTMLElement[] = [];
+    const createBubble = (text?: string): HTMLElement => {
+      const item = document.createElement("div");
+      item.className = "msg__bubble";
+      item.hidden = false;
+      if (text) item.textContent = text;
+      return item;
+    };
+
+    const bubble = createBubble();
     if (m.thinking) {
       bubble.classList.add("msg__bubble--thinking");
       const dot1 = document.createElement("span");
@@ -1192,20 +1201,29 @@ function render(preserveScroll = false): void {
       bubble.appendChild(dot1);
       bubble.appendChild(dot2);
       bubble.appendChild(dot3);
+      bubbles.push(bubble);
     } else if (m.role === "user") {
       // 用户消息：去掉 [sticker:xxx] 标记后显示纯文字
       const cleanText = m.content.replace(/\[sticker:[^\]]+\]/g, "").trim();
       if (cleanText) bubble.textContent = cleanText;
       else bubble.hidden = true; // 纯表情包消息不显示气泡
+      if (!bubble.hidden) bubbles.push(bubble);
     } else {
-      bubble.textContent = m.content;
+      const currentMode = isTalkMode() ? "talk" : "collab";
+      const segments = shouldSegmentAssistantReply(currentMode, segmentedOutputMode)
+        ? segmentAssistantReply(m.content)
+        : [m.content];
+      for (const segment of segments) {
+        const text = segment.trim();
+        if (text) bubbles.push(createBubble(text));
+      }
     }
 
     const time = document.createElement("div");
     time.className = "msg__time";
     time.textContent = formatTime(m.at);
 
-    if (!bubble.hidden) body.appendChild(bubble);
+    for (const item of bubbles) body.appendChild(item);
     if (m.role === "user") renderMessageAttachments(body, m.attachments);
 
     if (m.sticker) {
@@ -3329,9 +3347,15 @@ clearBtn.addEventListener("click", clearChat);
   void window.chat?.getGeneralSettings?.()
     .then(function(settings) {
       selectDropdownOption("mode-dropdown", normalizeDefaultChatMode(settings?.defaultChatMode));
+      segmentedOutputMode = settings?.segmentedOutputMode === "chat" || settings?.segmentedOutputMode === "off"
+        ? settings.segmentedOutputMode
+        : settings?.segmentedOutputMode === "all" ? "all" : "off";
+      render(true);
     })
     .catch(function() {
       selectDropdownOption("mode-dropdown", "collab");
+      segmentedOutputMode = "off";
+      render(true);
     });
 
   // Click outside closes

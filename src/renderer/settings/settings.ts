@@ -487,7 +487,7 @@ if (!window.settings) {
       language: "zh-CN",
       uiTheme: "classic",
       defaultChatMode: "collab",
-      segmentedOutputMode: "all",
+      segmentedOutputMode: "off",
     }),
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
     openSidebar: () => {},
@@ -640,7 +640,7 @@ const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }>
   identity: { emoji: "💼", title: "职位", hint: "自定义昔涟的身份定位与工作职责" },
   skills: { emoji: "✨", title: "Skill", hint: "管理 agent 的 skill 指令（约束如何用工具）" },
   plugins: { emoji: "🔌", title: "插件", hint: "扩展功能与第三方集成" },
-  preferences: { emoji: "🎛️", title: "偏好设置", hint: "设置聊天窗口和输出行为的默认偏好" },
+  preferences: { emoji: "🫧", title: "偏好设置", hint: "设置聊天窗口和输出行为的默认偏好" },
   general: { emoji: "⚙️", title: "设置", hint: "通用偏好与外观" },
   api: { emoji: "🔑", title: "API 设置", hint: "选择预设后只需要填写 API Key。" },
   cyrene: { emoji: "🌸", title: "昔涟设置", hint: "管理 Agent 行为、记忆、RAG 与权限" },
@@ -769,7 +769,7 @@ function applySegmentedOutputSelection(mode: SegmentedOutputMode): void {
 }
 
 function getSegmentedOutputValue(): SegmentedOutputMode {
-  return normalizeSegmentedOutputMode(getOptionGroupValue(segmentedOutputSelect, "all"));
+  return normalizeSegmentedOutputMode(getOptionGroupValue(segmentedOutputSelect, "off"));
 }
 
 function applyUiThemeSelection(theme: GeneralSettings["uiTheme"]): void {

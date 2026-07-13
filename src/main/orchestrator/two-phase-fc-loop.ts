@@ -34,6 +34,7 @@
 //   - 不输出任何 AG-UI 事件，只输出 TwoPhaseEvent（中性事件），由 CyreneAgent 包装成 AG-UI。
 
 import { recordUsage } from "../token-usage-store";
+import { stripLeakedChatTimeContext } from "../chat-time-context";
 import { compressConversation } from "./context-manager";
 import { truncateToolResult } from "./context-manager";
 import type {
@@ -490,17 +491,18 @@ async function runSoulPhase(args: {
   try {
     const data = await callAdapter(adapter, req, cfg, forceSummaryTimeoutMs);
     const chat = adapter.parseResponse(data);
+    const reply = stripLeakedChatTimeContext(chat.text);
     if (chat.usage) {
       const finalInput = accInput + chat.usage.input;
       const finalOutput = accOutput + chat.usage.output;
       recordUsageFn(chat.usage.input, chat.usage.output, 1);
 
       const textMessageId = `msg-${Date.now()}`;
-      emitTextMessage(onEvent, textMessageId, chat.text);
+      emitTextMessage(onEvent, textMessageId, reply);
       onEvent?.({ type: "step_finished", stepName: `soul-phase-${reason}` });
 
       return {
-        reply: chat.text,
+        reply,
         toolResults: allToolResults,
         totalUsage: { input: finalInput, output: finalOutput },
         soulPhaseReason: reason,
@@ -508,11 +510,11 @@ async function runSoulPhase(args: {
     }
 
     const textMessageId = `msg-${Date.now()}`;
-    emitTextMessage(onEvent, textMessageId, chat.text);
+    emitTextMessage(onEvent, textMessageId, reply);
     onEvent?.({ type: "step_finished", stepName: `soul-phase-${reason}` });
 
     return {
-      reply: chat.text,
+      reply,
       toolResults: allToolResults,
       totalUsage: accInput > 0 || accOutput > 0 ? { input: accInput, output: accOutput } : undefined,
       soulPhaseReason: reason,

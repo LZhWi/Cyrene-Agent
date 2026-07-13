@@ -398,4 +398,31 @@ describe("runTwoPhaseFcLoop", () => {
     expect(result.reply).not.toContain("工具阶段的文本");
     expect(result.reply).toBe("这是 soul 阶段的正式回复");
   });
+
+  it("strips leaked leading chat timestamp metadata before emitting and returning reply", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueText("");
+    adapter.enqueueText("[2026-07-13 13:36, Asia/Shanghai]\n怎么啦，看起来不太高兴的样子…");
+
+    let streamed = "";
+    const result = await runTwoPhaseFcLoop({
+      ...baseOptions,
+      settings: {
+        provider: "test",
+        baseUrl: "https://test",
+        model: "m",
+        apiKey: "k",
+      },
+      adapter,
+      executeTool: async () => {
+        throw new Error("不应调用");
+      },
+      onEvent: (event) => {
+        if (event.type === "text_message_content") streamed += event.delta;
+      },
+    });
+
+    expect(result.reply).toBe("怎么啦，看起来不太高兴的样子…");
+    expect(streamed).toBe("怎么啦，看起来不太高兴的样子…");
+  });
 });

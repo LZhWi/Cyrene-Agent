@@ -13,8 +13,8 @@ describe("preferences", () => {
   });
 
   it("normalizes segmented output placeholder mode", () => {
-    expect(normalizeSegmentedOutputMode(undefined)).toBe("all");
-    expect(normalizeSegmentedOutputMode("bad")).toBe("all");
+    expect(normalizeSegmentedOutputMode(undefined)).toBe("off");
+    expect(normalizeSegmentedOutputMode("bad")).toBe("off");
     expect(normalizeSegmentedOutputMode("all")).toBe("all");
     expect(normalizeSegmentedOutputMode("chat")).toBe("chat");
     expect(normalizeSegmentedOutputMode("off")).toBe("off");

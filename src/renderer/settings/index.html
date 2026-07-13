@@ -27,7 +27,7 @@
         <button type="button" class="nav-item" data-section="skills"><span>✨</span>技能 Skill</button>
         <button type="button" class="nav-item" data-section="plugins"><span>🔌</span>插件</button>
         <hr class="nav-divider" />
-        <button type="button" class="nav-item" data-section="preferences"><span>🎛️</span>偏好设置</button>
+        <button type="button" class="nav-item" data-section="preferences"><span>🫧</span>偏好设置</button>
         <button type="button" class="nav-item is-active" data-section="general"><span>⚙️</span>设置</button>
         <button type="button" class="nav-item" data-section="api"><span>🔑</span>API 设置</button>
         <button type="button" class="nav-item" data-section="cyrene"><span>🌸</span>昔涟设置</button>
@@ -176,7 +176,7 @@
 
         <form class="settings-panel is-hidden" id="preferences-form" data-panel="preferences">
           <div class="panel-heading">
-            <div class="panel-heading__icon">🎛️</div>
+            <div class="panel-heading__icon">🫧</div>
             <div>
               <h1>偏好设置</h1>
               <p>设置聊天窗口打开后的默认行为。这里的选择会保存为全局默认值。</p>
@@ -201,9 +201,9 @@
                 <span>预留偏好项；当前只保存选择，后续接入实际输出策略。</span>
               </div>
               <div class="option-blocks option-blocks--wide" id="segmented-output-select" role="radiogroup" aria-label="分段输出">
-                <button type="button" class="option-block is-active" data-value="all" aria-pressed="true">所有</button>
+                <button type="button" class="option-block" data-value="all" aria-pressed="false">所有</button>
                 <button type="button" class="option-block" data-value="chat" aria-pressed="false">聊天</button>
-                <button type="button" class="option-block" data-value="off" aria-pressed="false">关闭</button>
+                <button type="button" class="option-block is-active" data-value="off" aria-pressed="true">关闭</button>
               </div>
             </div>
           </div>
