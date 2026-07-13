@@ -27,6 +27,7 @@ coverage/
 verify-*.js
 verify-*.png
 verify-*.html
+.zcode/
 
 # Debug previews / scratch files generated during UI work
 cyrene-*-preview.html
