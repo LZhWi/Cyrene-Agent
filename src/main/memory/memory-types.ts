@@ -56,6 +56,15 @@ export interface L2Memory {
 
 export type L2MemoryStatus = "active" | "aging" | "archived" | "superseded" | "merged"
 
+export function isL2LocallyRecallable(memory: L2Memory): boolean {
+  return (
+    (memory.status === "active" || memory.status === "aging") &&
+    memory.syncStatus === "synced" &&
+    typeof memory.ragId === "string" &&
+    memory.ragId.length > 0
+  )
+}
+
 export interface ReflectionLog {
   id: string
   createdAt: number

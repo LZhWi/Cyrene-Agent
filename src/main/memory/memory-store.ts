@@ -259,19 +259,27 @@ class MemoryStoreManager {
     const store = await this.load()
     const mem = store.l2.find((m) => m.id === id)
     if (!mem) return
+    if (mem.status !== "active" && mem.status !== "aging") {
+      appendMemoryTrace({
+        op: "l2.weight.update",
+        layer: "L2",
+        status: "skip",
+        l2Id: mem.id,
+        ragId: mem.ragId,
+        details: { delta, memoryStatus: mem.status, reason: "not_recallable" },
+      })
+      return
+    }
+    const previousStatus = mem.status
     mem.weight = Math.max(0, Math.min(100, mem.weight + delta))
     mem.lastAccessedAt = Date.now()
     mem.accessCount += 1
-    if (mem.isPinned) {
-      mem.status = "active"
-    } else if (mem.weight > 60) {
+    if (mem.isPinned || previousStatus === "active") {
       mem.status = "active"
     } else if (mem.weight >= 30) {
       mem.status = "active"
-    } else if (mem.weight >= 10) {
-      mem.status = "aging"
     } else {
-      mem.status = "archived"
+      mem.status = "aging"
     }
     await this.save(store)
     appendMemoryTrace({
@@ -314,6 +322,7 @@ class MemoryStoreManager {
   async deleteL2(id: string): Promise<void> {
     const store = await this.load()
     store.l2 = store.l2.filter((m) => m.id !== id)
+    store.evidence = (store.evidence ?? []).filter((evidence) => evidence.memoryId !== id)
     await this.save(store)
     appendMemoryTrace({
       op: "l2.delete",

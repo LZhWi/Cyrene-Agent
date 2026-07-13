@@ -47,6 +47,7 @@ const NOUN_WEIGHT = 1.3;
 
 export interface RetrieveOptions {
   importIds?: string[];
+  allowedEntryIds?: string[];
 }
 
 // ── 自定义词表（entity-graph 维护） ──
@@ -260,8 +261,10 @@ export class HybridRetriever {
     }>;
 
     const allowedImportIds = new Set(options.importIds ?? []);
+    const allowedEntryIds = options.allowedEntryIds ? new Set(options.allowedEntryIds) : null;
     const docs = (source ? entries.filter((e) => e.source === source) : entries).filter((entry) =>
-      !allowedImportIds.size || allowedImportIds.has(String(entry.metadata?.importId ?? "")),
+      (!allowedImportIds.size || allowedImportIds.has(String(entry.metadata?.importId ?? ""))) &&
+      (!allowedEntryIds || allowedEntryIds.has(entry.id)),
     );
     if (docs.length === 0) return [];
 

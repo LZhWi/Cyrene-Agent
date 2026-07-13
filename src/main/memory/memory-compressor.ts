@@ -8,7 +8,7 @@
 
 import { memoryStore } from "./memory-store";
 import type { L0WritableField } from "./memory-store";
-import { getEntriesBySource } from "../rag/index";
+import { addL2MemoryVector, deleteUserMemoryVectors, getEntriesBySource } from "../rag/index";
 import { cosineSimilarity } from "../rag/vectorstore";
 import { L0_FIELD_DESCRIPTIONS } from "./memory-types";
 import type { L2Memory } from "./memory-types";
@@ -17,6 +17,7 @@ import * as path from "path";
 import { app } from "electron";
 import { getAdapterForConfig } from "../orchestrator/vendors";
 import { recordUsage } from "../token-usage-store";
+import { commitMemoryCompression } from "./memory-compression-transaction";
 
 // ── LLM 调用（复用与 MemoryJudge 相同的 API 模式） ──
 
@@ -229,23 +230,33 @@ async function compressMemories(): Promise<number> {
       const cleanSummary = summary.replace(/^["「『]|["」』]$/g, "").trim();
       if (!cleanSummary || cleanSummary.length < 5) continue;
 
-      // 收集原始条目 id
       const subEntryIds = group.map((g) => g.l2.id);
-
-      // 创建压缩总结条目
-      await memoryStore.addL2Memory({
+      await commitMemoryCompression({
         content: cleanSummary,
         triggerText: group[0].l2.triggerText,
         sourceConversationId: group[0].l2.sourceConversationId,
-        ragId: undefined,
-        embedding: [],
-        isPinned: false,
-        isSummary: true,
-        subEntryIds,
+        sources: group.map((entry) => ({
+          id: entry.l2.id,
+          ragId: entry.l2.ragId,
+          status: entry.l2.status,
+        })),
+      }, {
+        createSummary: (input) => memoryStore.addL2Memory(input),
+        addSummaryVector: addL2MemoryVector,
+        markSummarySynced: (l2Id, ragId) => memoryStore.markL2SyncStatus(l2Id, "synced", ragId),
+        archiveSources: (ids) => memoryStore.archiveL2Batch(ids),
+        restoreSources: async (sources) => {
+          const byStatus = new Map<L2Memory["status"], string[]>();
+          for (const source of sources) {
+            byStatus.set(source.status, [...(byStatus.get(source.status) ?? []), source.id]);
+          }
+          for (const [status, ids] of byStatus) await memoryStore.updateL2Status(ids, status);
+        },
+        deactivateSummary: (id) => memoryStore.updateL2Status([id], "archived"),
+        deleteSummary: (id) => memoryStore.deleteL2(id),
+        deleteVectors: (ids) => deleteUserMemoryVectors(ids),
+        warn: (message, error) => console.warn(`[MemoryCompressor] ${message}:`, error),
       });
-
-      // 原始条目归档
-      await memoryStore.archiveL2Batch(subEntryIds);
 
       // 记录日志
       await memoryStore.appendReflectionLog({

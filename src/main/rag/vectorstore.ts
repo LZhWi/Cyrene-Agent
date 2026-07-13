@@ -21,6 +21,7 @@ export interface SearchResult {
 
 export interface VectorSearchOptions {
   importIds?: string[];
+  allowedEntryIds?: string[];
 }
 
 // ── 余弦相似度（嵌入已归一化，等价于点积） ──
@@ -66,7 +67,12 @@ function kmeansPlusPlusInit(
       return minDist * minDist;
     });
     const totalDist = dists.reduce((a, b) => a + b, 0);
-    if (totalDist <= 0) break;
+    if (totalDist <= 0) {
+      while (centroids.length < K) {
+        centroids.push(vectors[centroids.length % vectors.length].slice());
+      }
+      break;
+    }
     let r = Math.random() * totalDist;
     for (let i = 0; i < dists.length; i++) {
       r -= dists[i];
@@ -257,6 +263,16 @@ export class JsonVectorStore {
     return entry;
   }
 
+  async addUnique(
+    text: string,
+    source: string,
+    provider: EmbeddingProvider,
+    metadata?: Record<string, unknown>,
+  ): Promise<MemoryEntry> {
+    const embedding = await provider.embed(text);
+    return this.addPreparedBatch([{ text, source, embedding, metadata }])[0];
+  }
+
   // 批量添加（用于导入文档 chunk）
   async addBatch(
     items: Array<{ text: string; source: string; metadata?: Record<string, unknown> }>,
@@ -323,8 +339,10 @@ export class JsonVectorStore {
     const now = Date.now();
     const results: SearchResult[] = [];
     const allowedImportIds = new Set(options.importIds ?? []);
+    const allowedEntryIds = options.allowedEntryIds ? new Set(options.allowedEntryIds) : null;
     const shouldKeep = (entry: MemoryEntry) =>
-      !allowedImportIds.size || allowedImportIds.has(String(entry.metadata?.importId ?? ""));
+      (!allowedImportIds.size || allowedImportIds.has(String(entry.metadata?.importId ?? ""))) &&
+      (!allowedEntryIds || allowedEntryIds.has(entry.id));
 
     if (this.ivf && !source) {
       // ── IVF 加速路径（无 source 过滤时） ──
@@ -399,6 +417,20 @@ export class JsonVectorStore {
     this.markIndexDirty();
     this.save();
     return before - this.entries.length;
+  }
+
+  deleteEntriesByIds(ids: string[], source?: string): number {
+    const idSet = new Set(ids);
+    if (idSet.size === 0) return 0;
+    const before = this.entries.length;
+    this.entries = this.entries.filter((entry) => !idSet.has(entry.id) || (source !== undefined && entry.source !== source));
+    const deleted = before - this.entries.length;
+    if (deleted > 0) {
+      this.dirty = true;
+      this.markIndexDirty();
+      this.save();
+    }
+    return deleted;
   }
 
   // 删除导入文档

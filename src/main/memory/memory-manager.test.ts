@@ -9,7 +9,7 @@ const electronMock = vi.hoisted(() => ({
 }))
 
 const ragMock = vi.hoisted(() => ({
-  addMemory: vi.fn(),
+  addL2MemoryVector: vi.fn(),
   searchMemoryEntries: vi.fn(),
 }))
 
@@ -34,14 +34,14 @@ function readTraceEvents(): Array<Record<string, unknown>> {
 describe("MemoryManager L2 sync", () => {
   beforeEach(() => {
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "memory-manager-"))
-    ragMock.addMemory.mockReset()
+    ragMock.addL2MemoryVector.mockReset()
     ragMock.searchMemoryEntries.mockReset()
     ragMock.searchMemoryEntries.mockResolvedValue([])
     vi.resetModules()
   })
 
   it("creates L2 first, syncs it to RAG with l2Id metadata, then marks it synced", async () => {
-    ragMock.addMemory.mockResolvedValue("rag_synced")
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_synced")
     const { memoryManager } = await import("./memory-manager")
     const { memoryStore } = await import("./memory-store")
     const candidate: MemoryCandidate = {
@@ -66,15 +66,15 @@ describe("MemoryManager L2 sync", () => {
     expect(syncIndex).toBeGreaterThan(addIndex)
     expect(traceEvents[syncIndex].ragId).toBe("rag_synced")
     expect(reflectionLogs).toHaveLength(0)
-    expect(ragMock.addMemory).toHaveBeenCalledWith(
+    expect(ragMock.addL2MemoryVector).toHaveBeenCalledWith(
       candidate.content,
-      "user_memory",
-      expect.objectContaining({ l2Id: allL2[0].id, confidence: candidate.confidence }),
+      allL2[0].id,
+      expect.objectContaining({ confidence: candidate.confidence }),
     )
   })
 
   it("keeps L2 as sync_failed when RAG write fails", async () => {
-    ragMock.addMemory.mockRejectedValue(new Error("RAG down"))
+    ragMock.addL2MemoryVector.mockRejectedValue(new Error("RAG down"))
     const { memoryManager } = await import("./memory-manager")
     const { memoryStore } = await import("./memory-store")
     const candidate: MemoryCandidate = {
@@ -156,7 +156,7 @@ describe("MemoryManager L2 sync", () => {
   })
 
   it("writes candidate conflict logs separately when local candidate detection matches", async () => {
-    ragMock.addMemory.mockResolvedValue("rag_new")
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_new")
     const { memoryManager } = await import("./memory-manager")
     const { memoryStore } = await import("./memory-store")
     const existing = await memoryStore.addL2Memory({
@@ -216,7 +216,7 @@ describe("MemoryManager L2 sync", () => {
   })
 
   it("keeps text-matched candidates below resolver eligibility when RAG metadata has no l2Id", async () => {
-    ragMock.addMemory.mockResolvedValue("rag_new")
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_new")
     ragMock.searchMemoryEntries.mockResolvedValue([{
       id: "rag_existing",
       text: "用户喜欢香菇",
@@ -254,7 +254,7 @@ describe("MemoryManager L2 sync", () => {
   })
 
   it("raises RAG-backed candidates when the target memory was recently injected", async () => {
-    ragMock.addMemory.mockResolvedValue("rag_new")
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_new")
     const { memoryManager } = await import("./memory-manager")
     const { memoryStore } = await import("./memory-store")
     const { recordRecentMemoryInjection } = await import("./recent-injected-memory")
@@ -295,7 +295,7 @@ describe("MemoryManager L2 sync", () => {
   })
 
   it("does not write conflict logs for unrelated negative memories", async () => {
-    ragMock.addMemory.mockResolvedValue("rag_new")
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_new")
     ragMock.searchMemoryEntries.mockResolvedValue([{
       id: "rag_existing",
       text: "用户曾因食用见手青而有过不好经历",

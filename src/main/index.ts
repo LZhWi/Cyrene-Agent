@@ -18,7 +18,17 @@ import {
   type SegmentedOutputMode,
 } from "../shared/preferences";
 import { STATUS_KEYWORDS } from "./status-keywords";
-import { initRAG, buildMemoryContext, addMemory, switchEmbeddingModel, deleteImportedDoc } from "./rag";
+import {
+  addL2MemoryVector,
+  addMemory,
+  buildMemoryContext,
+  deleteImportedDoc,
+  deleteUserMemoryVectors,
+  getEntriesBySource,
+  initRAG,
+  isUserMemoryVectorStoreReady,
+  switchEmbeddingModel,
+} from "./rag";
 import { getEmbeddingProvider, getSceneEmbeddingProvider } from "./rag/embedding";
 import { describePendingAttachment } from "./rag/file-ingest";
 import { cancelDocumentIndexJob, configureDocumentIndexQueue, enqueueDocumentIndexJob } from "./rag/document-index-queue";
@@ -64,6 +74,7 @@ import { PetWindowMoveController } from "./pet-window-movement";
 import type { StickerConfigItem } from "../shared/sticker-types";
 import { initReranker, getRerankerInstallStatus } from "./rag/reranker";
 import { memoryStore } from "./memory/memory-store"
+import { backupMemoryRagFiles, reconcileMemoryRag } from "./memory/memory-rag-reconciliation";
 import type { L0Profile, L1Profile } from "./memory/memory-types";
 import { broadcastChatsChanged, registerChatsIpc } from "./chats/chats-ipc";
 import * as chatsStore from "./chats/chats-store";
@@ -125,6 +136,24 @@ import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/p
 import { canCommitProactiveMessage } from "./proactive/proactive-policy";
 
 configureDocumentIndexQueue(runDocumentIndexJob);
+
+async function reconcileUserMemoryIndex(): Promise<void> {
+  if (!isUserMemoryVectorStoreReady()) {
+    console.warn("[Memory/RAG] reconciliation skipped: vector store is not writable");
+    return;
+  }
+  const report = await reconcileMemoryRag({
+    getMemories: () => memoryStore.getAllL2(),
+    getVectors: () => getEntriesBySource("user_memory"),
+    backup: async () => backupMemoryRagFiles(app.getPath("userData")),
+    addVector: addL2MemoryVector,
+    markSynced: (l2Id, ragId) => memoryStore.markL2SyncStatus(l2Id, "synced", ragId),
+    markSyncFailed: (l2Id, error) => memoryStore.markL2SyncStatus(l2Id, "sync_failed", undefined, error),
+    deleteVectors: (ids) => deleteUserMemoryVectors(ids),
+    warn: (message, error) => console.warn(`[Memory/RAG] ${message}:`, error),
+  });
+  console.log("[Memory/RAG] reconciliation:", report);
+}
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
@@ -3304,6 +3333,7 @@ ipcMain.handle(IPC.EMBEDDING_SET_MODEL, async (_event, modelKey: string) => {
   try {
     const result = await switchEmbeddingModel(modelKey);
     if (result.ok) {
+      await reconcileUserMemoryIndex();
       saveModelSettings({ embeddingModel: modelKey as "minilm" | "bgem3" });
       broadcastModelConfigChanged();
       stickerEmbeddingIndex = null;
@@ -4535,9 +4565,14 @@ app.whenReady().then(async () => {
   try {
     const modelSettings = loadModelSettings();
     await initRAG("auto", undefined, undefined, modelSettings.embeddingModel);
-      // 初始化 MCP Manager；scheduler 启动前等待一次，避免近即时任务早于 MCP 工具恢复。
-      await initMcpManager();
-      console.log("[Cyrene] RAG initialized OK");
+    try {
+      await reconcileUserMemoryIndex();
+    } catch (err) {
+      console.warn("[Memory/RAG] startup reconciliation failed:", err);
+    }
+    // 初始化 MCP Manager；scheduler 启动前等待一次，避免近即时任务早于 MCP 工具恢复。
+    await initMcpManager();
+    console.log("[Cyrene] RAG initialized OK");
 
     console.log("[Reranker] startup preload skipped; reranker initializes when changed in settings.");
   } catch (err) {

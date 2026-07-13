@@ -128,10 +128,49 @@ describe("memoryStore", () => {
     expect(l0.updatedAt).toBeGreaterThan(0)
     expect(updated.weight).toBe(12)
     expect(updated.accessCount).toBe(1)
-    expect(updated.status).toBe("aging")
+    expect(updated.status).toBe("active")
     expect(traceEvents.some((event) => event.op === "l0.update")).toBe(true)
     expect(traceEvents.some((event) => event.op === "l2.weight.update" && event.l2Id === memory.id)).toBe(true)
   })
+
+  it("does not downgrade an active memory when recording a recall", async () => {
+    const { memoryStore } = await import("./memory-store")
+    const memory = await memoryStore.addL2Memory({
+      content: "用户喜欢香菇",
+      triggerText: "我喜欢香菇",
+      sourceConversationId: "test",
+      ragId: "rag_active_recall",
+      isPinned: false,
+    })
+
+    await memoryStore.updateL2RecallStats(memory.id, 1)
+
+    const updated = (await memoryStore.getAllL2()).find((item) => item.id === memory.id)!
+    expect(updated.weight).toBe(1)
+    expect(updated.status).toBe("active")
+  })
+
+  it.each(["archived", "superseded", "merged"] as const)(
+    "does not let recall statistics reactivate %s L2 memories",
+    async (status) => {
+      const { memoryStore } = await import("./memory-store")
+      const memory = await memoryStore.addL2Memory({
+        content: `终止状态 ${status}`,
+        triggerText: "测试终止状态",
+        sourceConversationId: "test",
+        ragId: `rag_${status}`,
+        isPinned: false,
+      })
+      await memoryStore.updateL2Status([memory.id], status)
+
+      await memoryStore.updateL2RecallStats(memory.id, 50)
+
+      const persisted = (await memoryStore.getAllL2()).find((item) => item.id === memory.id)!
+      expect(persisted.status).toBe(status)
+      expect(persisted.weight).toBe(0)
+      expect(persisted.accessCount).toBe(0)
+    },
+  )
 
   it("creates evidence for new L2 memories with bounded snippets", async () => {
     const { memoryStore } = await import("./memory-store")
@@ -156,6 +195,24 @@ describe("memoryStore", () => {
     expect(evidence[0].messageIds).toEqual(["msg_1", "msg_2"])
     expect(evidence[0].sourceStatus).toBe("active")
     expect(traceEvents.some((event) => event.op === "evidence.add" && event.l2Id === memory.id)).toBe(true)
+  })
+
+  it("deletes evidence together with a rolled-back L2 memory", async () => {
+    const { memoryStore } = await import("./memory-store")
+    const memory = await memoryStore.addL2Memory({
+      content: "临时压缩摘要",
+      triggerText: "compression",
+      sourceConversationId: "test",
+      isPinned: false,
+      isSummary: true,
+      syncStatus: "pending_sync",
+    })
+
+    await memoryStore.deleteL2(memory.id)
+
+    const store = await memoryStore.load()
+    expect(store.l2.some((item) => item.id === memory.id)).toBe(false)
+    expect((store.evidence ?? []).some((item) => item.memoryId === memory.id)).toBe(false)
   })
 
   it("marks L2 sync status and persists rag ids", async () => {

@@ -66,4 +66,38 @@ describe("HybridRetriever", () => {
 
     expect(results.map((result) => result.entry.text)).toEqual(["beta budget deadline is May"]);
   });
+
+  it("filters disallowed entries before scoring or recall side effects", async () => {
+    const store = createStore();
+    const [active, stale] = store.addPreparedBatch([
+      { text: "alpha active memory", source: "user_memory", embedding: [1, 0] },
+      { text: "alpha stale memory", source: "user_memory", embedding: [0.99, 0.1] },
+    ]);
+    const staleWeight = stale.weight;
+    const staleLastRecalledAt = stale.lastRecalledAt;
+    const retriever = new HybridRetriever(store, provider);
+
+    const results = await retriever.retrieve("alpha memory", "user_memory", 5, {
+      allowedEntryIds: [active.id],
+    });
+
+    expect(results.map((result) => result.entry.id)).toEqual([active.id]);
+    expect(stale.weight).toBe(staleWeight);
+    expect(stale.lastRecalledAt).toBe(staleLastRecalledAt);
+  });
+
+  it("retrieves distinct entries with identical embeddings without IVF failure", async () => {
+    const store = createStore();
+    const entries = store.addPreparedBatch([
+      { text: "same memory", source: "user_memory", embedding: [1, 0] },
+      { text: "same memory", source: "user_memory", embedding: [1, 0] },
+    ]);
+    const retriever = new HybridRetriever(store, provider);
+
+    const results = await retriever.retrieve("same memory", "user_memory", 5, {
+      allowedEntryIds: entries.map((entry) => entry.id),
+    });
+
+    expect(results.map((result) => result.entry.id).sort()).toEqual(entries.map((entry) => entry.id).sort());
+  });
 });
