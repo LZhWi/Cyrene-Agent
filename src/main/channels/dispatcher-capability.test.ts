@@ -1,7 +1,7 @@
 // dispatcher.downgradeToCapability 全组合测试
 // 重点验证 8 个能力字段 × 5 个 part kind 的所有边界条件
 import { describe, it, expect } from "vitest";
-import { buildTextOutgoingParts, ChannelDispatcher } from "./dispatcher";
+import { buildTextOutgoingParts, ChannelDispatcher, shouldAppendChannelTtsAudio } from "./dispatcher";
 import type { ChannelCapability, OutgoingMessage, OutgoingPart } from "./types";
 
 function makeCap(over: Partial<ChannelCapability> = {}): ChannelCapability {
@@ -36,6 +36,16 @@ describe("buildTextOutgoingParts", () => {
       { kind: "text", text: "第二句？" },
       { kind: "text", text: "第三句！" },
     ]);
+  });
+});
+
+describe("shouldAppendChannelTtsAudio", () => {
+  it("does not append TTS audio for WeChat even when TTS and audio capability are enabled", () => {
+    expect(shouldAppendChannelTtsAudio("wechat", true, true, true)).toBe(false);
+  });
+
+  it("can append TTS audio for Feishu when TTS and audio capability are enabled", () => {
+    expect(shouldAppendChannelTtsAudio("feishu", true, true, true)).toBe(true);
   });
 });
 

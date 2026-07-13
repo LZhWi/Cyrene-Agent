@@ -198,6 +198,16 @@ export function buildTextOutgoingParts(
   return texts.map((text) => ({ kind: "text", text }));
 }
 
+export function shouldAppendChannelTtsAudio(
+  channel: ChannelId,
+  ttsEnabled: boolean,
+  hasSynthesizeTts: boolean,
+  adapterSupportsAudio: boolean | undefined,
+): boolean {
+  if (channel === "wechat") return false;
+  return ttsEnabled && hasSynthesizeTts && adapterSupportsAudio === true;
+}
+
 export class ChannelDispatcher {
   private settings: ChannelsSettings;
   private limiter: RateLimiter;
@@ -306,10 +316,10 @@ export class ChannelDispatcher {
 
     // Phase 3：TTS 音频自动追加（如果启用且适配器支持 audio）
     console.log(LOG, `TTS 决策: ttsEnabled=${this.settings.ttsEnabled} hasFn=${!!this.deps.synthesizeTts}`);
-    if (this.settings.ttsEnabled && this.deps.synthesizeTts) {
-      const adapterCap = this.deps.manager.getAdapter(msg.channel)?.capability;
-      console.log(LOG, `TTS 决策: adapterCap.audio=${adapterCap?.audio}`);
-      if (adapterCap?.audio) {
+    const adapterCap = this.deps.manager.getAdapter(msg.channel)?.capability;
+    console.log(LOG, `TTS 决策: adapterCap.audio=${adapterCap?.audio}`);
+    if (shouldAppendChannelTtsAudio(msg.channel, this.settings.ttsEnabled, !!this.deps.synthesizeTts, adapterCap?.audio)) {
+      if (this.deps.synthesizeTts) {
         try {
           const audioResult = normalizeTtsResult(await this.deps.synthesizeTts(replyText, { channel: msg.channel }));
           console.log(LOG, `TTS 决策: 合成结果 length=${audioResult?.audio.length ?? "null"} format=${audioResult?.format ?? "null"}`);
