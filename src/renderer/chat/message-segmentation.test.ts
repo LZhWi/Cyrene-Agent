@@ -3,6 +3,7 @@ import {
   getAssistantReplyBubbleTexts,
   segmentAssistantReply,
   shouldBreakStreamingBubbleAfterChar,
+  shouldSkipStreamingBubbleLeadingChar,
   shouldSegmentAssistantReply,
 } from "./message-segmentation";
 
@@ -30,8 +31,19 @@ describe("message segmentation", () => {
     expect(shouldBreakStreamingBubbleAfterChar("。")).toBe(true);
     expect(shouldBreakStreamingBubbleAfterChar("？")).toBe(true);
     expect(shouldBreakStreamingBubbleAfterChar("?")).toBe(true);
+    expect(shouldBreakStreamingBubbleAfterChar("！")).toBe(true);
+    expect(shouldBreakStreamingBubbleAfterChar("!")).toBe(true);
+    expect(shouldBreakStreamingBubbleAfterChar("；")).toBe(true);
+    expect(shouldBreakStreamingBubbleAfterChar(";")).toBe(true);
     expect(shouldBreakStreamingBubbleAfterChar("，")).toBe(false);
-    expect(shouldBreakStreamingBubbleAfterChar("！")).toBe(false);
+  });
+
+  it("skips whitespace at the start of a streaming bubble", () => {
+    expect(shouldSkipStreamingBubbleLeadingChar("\n", true)).toBe(true);
+    expect(shouldSkipStreamingBubbleLeadingChar("\r", true)).toBe(true);
+    expect(shouldSkipStreamingBubbleLeadingChar(" ", true)).toBe(true);
+    expect(shouldSkipStreamingBubbleLeadingChar("中", true)).toBe(false);
+    expect(shouldSkipStreamingBubbleLeadingChar("\n", false)).toBe(false);
   });
 
   it("splits medium natural chat into two readable bubbles", () => {
@@ -49,11 +61,12 @@ describe("message segmentation", () => {
     expect(parts.every((part) => part.length >= 35)).toBe(true);
   });
 
-  it("caps long chat replies at four bubbles", () => {
+  it("caps long chat replies at ten bubbles", () => {
     const text = "今天先不用把自己逼得太紧，我们可以从最小的一步开始。".repeat(12);
     const parts = segmentAssistantReply(text);
 
-    expect(parts.length).toBeLessThanOrEqual(4);
+    expect(parts.length).toBeLessThanOrEqual(10);
+    expect(parts.length).toBeGreaterThan(4);
     expect(parts.join("")).toBe(text);
   });
 

@@ -7,12 +7,13 @@ import {
 const SHORT_REPLY_LIMIT = 45;
 const COMPACT_MULTI_SENTENCE_LIMIT = 90;
 const MIN_SENTENCE_PART_LENGTH = 14;
+export const MAX_ASSISTANT_REPLY_BUBBLES = 10;
 const MIN_PART_LENGTH = 35;
 const IDEAL_MIN = 55;
 const HARD_MAX = 130;
-const STREAMING_BUBBLE_BREAK = /[。？?]/;
-const STRONG_PAUSE = /[。！？!?♪～~]/;
-const WEAK_PAUSE = /[，,；;：:]/;
+const STREAMING_BUBBLE_BREAK = /[。！？!?；;]/;
+const STRONG_PAUSE = /[。！？!?；;♪～~]/;
+const WEAK_PAUSE = /[，,：:]/;
 
 export function shouldSegmentAssistantReply(
   chatMode: DefaultChatMode,
@@ -24,6 +25,10 @@ export function shouldSegmentAssistantReply(
 
 export function shouldBreakStreamingBubbleAfterChar(char: string): boolean {
   return STREAMING_BUBBLE_BREAK.test(char);
+}
+
+export function shouldSkipStreamingBubbleLeadingChar(char: string, isAtBubbleStart: boolean): boolean {
+  return isAtBubbleStart && /^\s$/.test(char);
 }
 
 export function segmentAssistantReply(text: string): string[] {
@@ -56,9 +61,10 @@ export function getAssistantReplyBubbleTexts(
 }
 
 function chooseMaxParts(length: number): number {
-  if (length <= 220) return 2;
-  if (length <= 380) return 3;
-  return 4;
+  if (length <= 220) return 4;
+  if (length <= 380) return 6;
+  if (length <= 700) return 8;
+  return MAX_ASSISTANT_REPLY_BUBBLES;
 }
 
 function hasStructuredContent(text: string): boolean {
@@ -111,7 +117,7 @@ function splitCompactSentences(text: string): string[] {
     parts.push(part);
   }
 
-  while (parts.length > 4) {
+  while (parts.length > MAX_ASSISTANT_REPLY_BUBBLES) {
     const tail = parts.pop();
     if (tail === undefined) break;
     parts[parts.length - 1] += tail;

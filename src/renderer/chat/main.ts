@@ -13,7 +13,9 @@ import { formatAttachmentTagDetail, getAttachmentIcon } from "./attachment-label
 import { resolveAsset } from "../../shared/renderer-base";
 import {
   getAssistantReplyBubbleTexts,
+  MAX_ASSISTANT_REPLY_BUBBLES,
   shouldBreakStreamingBubbleAfterChar,
+  shouldSkipStreamingBubbleLeadingChar,
   shouldSegmentAssistantReply,
 } from "./message-segmentation";
 import { buildDocumentContextLines, processDocumentsWithWait, type RetrievedDocumentChunk } from "./document-processing";
@@ -1047,8 +1049,22 @@ function appendBubbleForMessage(messageId: string): HTMLElement | null {
   const body = row?.querySelector(".msg__body");
   if (!body) return null;
   const bubble = createMessageBubble();
+  bubble.hidden = true;
   body.appendChild(bubble);
   return bubble;
+}
+
+function appendStreamingCharToBubble(bubble: HTMLElement, char: string): void {
+  if (shouldSkipStreamingBubbleLeadingChar(char, bubble.childNodes.length === 0)) return;
+  bubble.hidden = false;
+  if (bubble.childNodes.length === 0) {
+    bubble.appendChild(document.createTextNode(char));
+    return;
+  }
+  const span = document.createElement("span");
+  span.className = "msg__char";
+  span.textContent = char;
+  bubble.appendChild(span);
 }
 
 function renderMessageAttachments(body: HTMLElement, attachments: MessageAttachment[] | undefined): void {
@@ -1264,14 +1280,15 @@ function render(preserveScroll = false): void {
     }
 
     // actions 行：喇叭 / 复制 / 时间三个控件水平排在气泡下方。
-    // 没有可显示控件的消息（纯表情包 / thinking 空内容）跳过整行。
+    // 流式中的 transient 消息会继续追加新气泡；此时先隐藏 actions，
+    // 避免时间戳被夹在第一段气泡和后续气泡之间。
     const actions = document.createElement("div");
     actions.className = "msg__actions";
 
     let hasActionItem = false;
 
     // model 消息加 SVG 朗读按钮（thinking 中的不显示）
-    if (m.role === "model" && !m.thinking && m.content.trim()) {
+    if (!m.transient && m.role === "model" && !m.thinking && m.content.trim()) {
       const speakBtn = document.createElement("button");
       speakBtn.type = "button";
       speakBtn.className = "msg__speak";
@@ -1296,7 +1313,7 @@ function render(preserveScroll = false): void {
 
     // 复制按钮：user / model 都有，thinking / 空内容 / 纯表情包跳过
     //   user 复制时去掉 [sticker:xxx] 标记，model 直接复制 content
-    if (!m.thinking && m.content.trim()) {
+    if (!m.transient && !m.thinking && m.content.trim()) {
       const copyBtn = document.createElement("button");
       copyBtn.type = "button";
       copyBtn.className = "msg__copy";
@@ -1327,9 +1344,12 @@ function render(preserveScroll = false): void {
       hasActionItem = true;
     }
 
-    // 时间戳总是显示；哪怕只有一个时间，也用 actions 行保持视觉一致
-    actions.appendChild(time);
-    hasActionItem = true;
+    // 时间戳总是显示；哪怕只有一个时间，也用 actions 行保持视觉一致。
+    // 但流式 transient 阶段先不显示，等最终 render 后再出现到整条消息底部。
+    if (!m.transient) {
+      actions.appendChild(time);
+      hasActionItem = true;
+    }
 
     if (hasActionItem) body.appendChild(actions);
 
@@ -2472,6 +2492,7 @@ async function triggerCyreneGreeting(): Promise<void> {
     let playbackTimer: number | null = null;
     let runFinishedArrived = false;
     let startNextStreamingBubble = false;
+    let streamingBubbleCount = 1;
     const allowStreamingBubbleSplit = shouldSegmentAssistantReply(isTalkMode() ? "talk" : "collab", segmentedOutputMode);
     const getStreamingBubble = (): HTMLElement | null => {
       return getLastBubbleForMessage(streamMsgId);
@@ -2492,13 +2513,15 @@ async function triggerCyreneGreeting(): Promise<void> {
             : getStreamingBubble();
           startNextStreamingBubble = false;
           if (bubble) {
-            const span = document.createElement("span");
-            span.className = "msg__char";
-            span.textContent = next;
-            bubble.appendChild(span);
+            appendStreamingCharToBubble(bubble, next);
           }
-          if (allowStreamingBubbleSplit && shouldBreakStreamingBubbleAfterChar(next)) {
+          if (
+            allowStreamingBubbleSplit
+            && streamingBubbleCount < MAX_ASSISTANT_REPLY_BUBBLES
+            && shouldBreakStreamingBubbleAfterChar(next)
+          ) {
             startNextStreamingBubble = true;
+            streamingBubbleCount += 1;
           }
           messagesEl.scrollTop = messagesEl.scrollHeight;
           return;
@@ -2960,6 +2983,7 @@ async function send(): Promise<void> {
     let playbackTimer: number | null = null;
     let runFinishedArrived = false;
     let startNextStreamingBubble = false;
+    let streamingBubbleCount = 1;
     const allowStreamingBubbleSplit = shouldSegmentAssistantReply(isTalkMode() ? "talk" : "collab", segmentedOutputMode);
     /** 找到当前流式消息的气泡 DOM（TEXT_MESSAGE_START 时 render 过一次，带 data-msg-id）。 */
     const getStreamingBubble = (): HTMLElement | null => {
@@ -2983,13 +3007,15 @@ async function send(): Promise<void> {
             : getStreamingBubble();
           startNextStreamingBubble = false;
           if (bubble) {
-            const span = document.createElement("span");
-            span.className = "msg__char";
-            span.textContent = next;
-            bubble.appendChild(span);
+            appendStreamingCharToBubble(bubble, next);
           }
-          if (allowStreamingBubbleSplit && shouldBreakStreamingBubbleAfterChar(next)) {
+          if (
+            allowStreamingBubbleSplit
+            && streamingBubbleCount < MAX_ASSISTANT_REPLY_BUBBLES
+            && shouldBreakStreamingBubbleAfterChar(next)
+          ) {
             startNextStreamingBubble = true;
+            streamingBubbleCount += 1;
           }
           messagesEl.scrollTop = messagesEl.scrollHeight;
           return;
