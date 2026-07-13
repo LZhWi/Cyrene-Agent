@@ -39,7 +39,7 @@ import { buildToolCatalog } from "./orchestrator/tool-catalog";
 import type { ToolRiskLevel } from "./permission";
 import { loadChannelsSettings } from "./channels/settings-store";
 import { channelManager } from "./channels/manager";
-import { sendProactiveChannelMessage } from "./channels/proactive-delivery";
+import { canStartProactiveChannelDelivery, sendProactiveChannelMessage } from "./channels/proactive-delivery";
 // 触发 built-in-tools 的副作用注册（fetch_url / run_shell / install_mcp_server）
 import "./orchestrator/built-in-tools";
 // 触发 fs-tools 的副作用注册（read_file / list_dir / write_file / read_image）
@@ -1949,6 +1949,10 @@ function initializeProactiveChatService(): void {
       });
     },
     getFallback: async (candidate) => getPresetFallback(candidate.sceneId, new Date().getHours()),
+    canStartDelivery: () => {
+      const target = loadGeneralSettings().proactiveDeliveryTarget;
+      return target === "local" || canStartProactiveChannelDelivery(target, channelManager);
+    },
     commitMessage: commitSelectedProactiveMessage,
     log: (event, detail) => console.log(`[Proactive] ${event}`, detail ?? ""),
   });

@@ -106,6 +106,13 @@ describe("proactive chat service", () => {
     expect(ctx.commitMessage).toHaveBeenCalledTimes(2);
   });
 
+  it("does not call the model when the selected delivery destination is unavailable", async () => {
+    const ctx = setup({ canStartDelivery: () => false });
+    await ctx.service.evaluateCandidate(candidate);
+    expect(ctx.runModel).not.toHaveBeenCalled();
+    expect(ctx.commitMessage).not.toHaveBeenCalled();
+  });
+
   it("does not consume cooldown or unanswered count when delivery is cancelled", async () => {
     const log = vi.fn();
     const ctx = setup({

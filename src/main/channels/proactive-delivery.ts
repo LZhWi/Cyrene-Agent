@@ -44,6 +44,15 @@ export function rememberProactiveChannelRecipient(message: IncomingMessage, sess
   defaultRecipientRegistry.remember(message, sessionId);
 }
 
+export function canStartProactiveChannelDelivery(
+  channel: ProactiveMobileChannel,
+  manager: Pick<ChannelManager, "getAdapter">,
+  recipientRegistry: ProactiveChannelRecipientRegistry = defaultRecipientRegistry,
+): boolean {
+  const adapter = manager.getAdapter(channel);
+  return adapter?.getStatus().phase === "running" && recipientRegistry.get(channel) !== null;
+}
+
 export type ProactiveChannelDeliveryResult =
   | { kind: "committed"; deliveredParts: number; totalParts: number }
   | { kind: "cancelled"; reason: string };
@@ -86,9 +95,10 @@ export async function sendProactiveChannelMessage(
     };
     try {
       const result = await adapter.send(message);
-      if (result.ok) deliveredTexts.push(text);
+      if (!result.ok) break;
+      deliveredTexts.push(text);
     } catch {
-      // A failed segment is not retried. Later segments may still succeed if the adapter recovered.
+      break;
     }
   }
 

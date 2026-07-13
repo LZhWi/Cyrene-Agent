@@ -35,6 +35,7 @@ export interface ProactiveChatServiceDeps {
   runModel: (messages: ChatMessage[]) => Promise<ProactiveModelResult>;
   getFallback: (candidate: ProactiveCandidate) => Promise<ProactiveFallback | null>;
   commitMessage: (input: ProactiveCommitInput) => Promise<ProactiveCommitResult>;
+  canStartDelivery?: () => boolean;
   log?: (event: string, detail?: unknown) => void;
 }
 
@@ -64,6 +65,10 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
       const startDecision = canStartProactiveGeneration(initialSnapshot, initialState, candidate);
       if (!startDecision.allowed) {
         deps.log?.("candidate_blocked", { scene: candidate.sceneId, reason: startDecision.reason });
+        return;
+      }
+      if (deps.canStartDelivery && !deps.canStartDelivery()) {
+        deps.log?.("candidate_blocked", { scene: candidate.sceneId, reason: "delivery_unavailable" });
         return;
       }
 

@@ -192,4 +192,26 @@ describe("proactive channel delivery", () => {
     expect(result).toEqual({ kind: "committed", deliveredParts: 1, totalParts: 2 });
     expect(adapter.send).toHaveBeenCalledTimes(1);
   });
+
+  it("stops at the first failed segment instead of sending later fragments", async () => {
+    const adapter = fakeAdapter();
+    registry.remember(incoming("wechat", "wx-1"), "session-wx-1");
+    vi.mocked(adapter.send)
+      .mockResolvedValueOnce({ ok: true })
+      .mockResolvedValueOnce({ ok: false, error: "failed" })
+      .mockResolvedValueOnce({ ok: true });
+
+    const result = await sendProactiveChannelMessage({
+      channel: "wechat",
+      text: "第一句。第二句？第三句！",
+      mobileMessageSegmentation: "on",
+      manager: { getAdapter: () => adapter },
+      recipientRegistry: registry,
+      appendHistory: vi.fn(),
+      appendLog: vi.fn(),
+    });
+
+    expect(result).toEqual({ kind: "committed", deliveredParts: 1, totalParts: 3 });
+    expect(adapter.send).toHaveBeenCalledTimes(2);
+  });
 });
