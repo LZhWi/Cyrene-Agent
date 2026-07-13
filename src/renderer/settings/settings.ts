@@ -21,6 +21,7 @@ import {
 import { isProactiveDeliveryTargetSelectable } from "../../shared/proactive-delivery";
 import { normalizeUiTheme, type UiTheme } from "../../shared/ui-theme";
 import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-font";
+import { normalizeUiIcon, type UiIcon } from "../../shared/ui-icon";
 import { buildAppearanceSettingsPatch } from "./appearance-settings-state";
 
 // Inline modal (to avoid Vite tree-shaking)
@@ -284,6 +285,7 @@ interface GeneralSettings {
   language: "zh-CN";
   uiTheme: UiTheme;
   uiFont: UiFont;
+  uiIcon: UiIcon;
   defaultChatMode: DefaultChatMode;
   segmentedOutputMode: SegmentedOutputMode;
   mobileMessageSegmentation: MobileMessageSegmentationMode;
@@ -650,6 +652,7 @@ const uiThemeSelect = document.getElementById("ui-theme-select") as HTMLElement;
 const uiFontCurrent = document.getElementById("ui-font-current") as HTMLElement;
 const uiFontImportButton = document.getElementById("ui-font-import") as HTMLButtonElement;
 const uiFontResetButton = document.getElementById("ui-font-reset") as HTMLButtonElement;
+const uiIconSelect = document.getElementById("ui-icon-select") as HTMLElement;
 const languageSelect = document.getElementById("language-select") as HTMLElement;
 const defaultChatModeSelect = document.getElementById("default-chat-mode-select") as HTMLElement;
 const segmentedOutputSelect = document.getElementById("segmented-output-select") as HTMLElement;
@@ -855,6 +858,18 @@ function applyUiThemeSelection(theme: GeneralSettings["uiTheme"]): void {
 function renderUiFont(font: UiFont): void {
   uiFontCurrent.textContent = font.kind === "custom" ? font.displayName : "思源黑体（默认）";
   uiFontResetButton.hidden = font.kind !== "custom";
+}
+
+function getUiIconValue(): UiIcon {
+  return normalizeUiIcon(uiIconSelect.querySelector<HTMLButtonElement>(".is-active")?.dataset.icon);
+}
+
+function renderUiIcon(icon: UiIcon): void {
+  uiIconSelect.querySelectorAll<HTMLButtonElement>(".appearance-icon-option").forEach((button) => {
+    const active = button.dataset.icon === icon;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
 }
 
 function setGeneralSaveStatus(text: string, cls?: string): void {
@@ -1066,6 +1081,7 @@ async function loadGeneralSettings(): Promise<void> {
     launchAtLoginInput.checked = cfg.launchAtLogin;
     applyUiThemeSelection(normalizeUiTheme(cfg.uiTheme));
     renderUiFont(normalizeUiFont(cfg.uiFont));
+    renderUiIcon(normalizeUiIcon(cfg.uiIcon));
     applyDefaultChatModeSelection(normalizeDefaultChatMode(cfg.defaultChatMode));
     applySegmentedOutputSelection(normalizeSegmentedOutputMode(cfg.segmentedOutputMode));
     applyMobileMessageSegmentationSelection(normalizeMobileMessageSegmentationMode(cfg.mobileMessageSegmentation));
@@ -1172,6 +1188,21 @@ uiFontResetButton.addEventListener("click", async () => {
     uiFontResetButton.disabled = false;
   }
 });
+
+uiIconSelect.querySelectorAll<HTMLButtonElement>(".appearance-icon-option").forEach((button) => {
+  button.addEventListener("click", async () => {
+    const icon = normalizeUiIcon(button.dataset.icon);
+    try {
+      await window.settings!.saveGeneral({ uiIcon: icon });
+      renderUiIcon(icon);
+      setAppearanceSaveStatus("图标已应用", "is-ok");
+    } catch (error) {
+      console.error("应用图标失败:", error);
+      setAppearanceSaveStatus("应用图标失败", "is-error");
+    }
+  });
+});
+
 petVisibleInput.addEventListener("change", () => {
   window.settings?.setPetVisible(petVisibleInput.checked);
   setAppearanceSaveStatus("已应用", "is-ok");
@@ -2070,6 +2101,7 @@ appearanceForm.addEventListener("submit", async (e) => {
   try {
     await window.settings!.saveGeneral(buildAppearanceSettingsPatch({
       uiTheme: getUiThemeValue(),
+      uiIcon: getUiIconValue(),
       petAlwaysOnTop: petAlwaysOnTopInput.checked,
       petVisible: petVisibleInput.checked,
       petZoom: Number(petZoomInput.value),

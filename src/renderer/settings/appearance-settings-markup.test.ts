@@ -21,9 +21,17 @@ describe("appearance settings markup", () => {
     for (const heading of ["布局", "外观主题", "个性化", "昔涟桌宠"]) {
       expect(panel).toContain(heading);
     }
-    for (const label of ["单窗口", "字体", "桌面图标", "聊天背景"]) {
+    for (const label of ["单窗口", "聊天背景"]) {
       expect(panel).toMatch(new RegExp(`<button[^>]+disabled[^>]*>[\\s\\S]*?${label}[\\s\\S]*?SOON`));
     }
+  });
+
+  it("offers the two supplied desktop icon presets", () => {
+    const panel = form("appearance-form");
+    expect(panel).toContain('id="ui-icon-select"');
+    expect(panel).toContain('data-icon="cyrene-pink"');
+    expect(panel).toContain('data-icon="cyrene-sun"');
+    expect(panel).not.toContain('data-icon="classic"');
   });
 
   it("offers only default and pearl-white themes", () => {

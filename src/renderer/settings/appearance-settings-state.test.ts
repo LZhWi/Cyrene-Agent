@@ -5,11 +5,13 @@ describe("buildAppearanceSettingsPatch", () => {
   it("builds only theme and desktop-pet settings", () => {
     expect(buildAppearanceSettingsPatch({
       uiTheme: "pearl-white",
+      uiIcon: "cyrene-pink",
       petAlwaysOnTop: true,
       petVisible: false,
       petZoom: 1.4,
     })).toEqual({
       uiTheme: "pearl-white",
+      uiIcon: "cyrene-pink",
       petAlwaysOnTop: true,
       petVisible: false,
       petZoom: 1.4,

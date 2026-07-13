@@ -297,7 +297,7 @@
           <div class="appearance-section">
             <div class="appearance-section__heading">
               <h2>个性化</h2>
-              <p>字体会立即应用到所有窗口；请仅导入你有权使用的字体文件。</p>
+              <p>字体和图标会立即应用；请仅导入你有权使用的字体文件。</p>
             </div>
             <div class="appearance-placeholder-list">
               <div class="appearance-font-control">
@@ -307,7 +307,13 @@
                   <button id="ui-font-reset" type="button" class="ghost-btn" hidden>恢复默认</button>
                 </div>
               </div>
-              <button type="button" class="appearance-placeholder" disabled><span>桌面图标</span><span class="soon-badge">SOON</span></button>
+              <div class="appearance-icon-control">
+                <div class="appearance-font-control__copy"><strong>桌面图标</strong><small>切换系统托盘与应用窗口图标。</small></div>
+                <div class="appearance-icon-options" id="ui-icon-select" role="radiogroup" aria-label="桌面图标">
+                  <button type="button" class="appearance-icon-option" data-icon="cyrene-pink" aria-pressed="false" aria-label="图标 1"><img src="../icons/cyrene-pink.png" alt="" /></button>
+                  <button type="button" class="appearance-icon-option is-active" data-icon="cyrene-sun" aria-pressed="true" aria-label="图标 2"><img src="../icons/cyrene-sun.png" alt="" /></button>
+                </div>
+              </div>
               <button type="button" class="appearance-placeholder" disabled><span>聊天背景</span><span class="soon-badge">SOON</span></button>
             </div>
           </div>

@@ -7,6 +7,7 @@ import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
 import { normalizeUiTheme, type UiTheme } from "../shared/ui-theme";
 import { DEFAULT_UI_FONT, isSupportedFontFileName, normalizeUiFont, type UiFont } from "../shared/ui-font";
+import { normalizeUiIcon, UI_ICON_PRESETS, type UiIcon } from "../shared/ui-icon";
 import { getUiFontResponseHeaders, isSafeUiFontRequest } from "./ui-font-protocol";
 import {
   normalizeDefaultChatMode,
@@ -464,6 +465,7 @@ interface GeneralSettings {
   language: "zh-CN";
   uiTheme: UiTheme;
   uiFont: UiFont;
+  uiIcon: UiIcon;
   /** 聊天窗口打开时默认选中的模式。 */
   defaultChatMode: DefaultChatMode;
   /** 聊天气泡分段输出偏好。 */
@@ -590,8 +592,14 @@ const PET_WINDOW_BASE_WIDTH = 400;
 const PET_WINDOW_BASE_HEIGHT = 500;
 const STARTUP_EMBEDDING_REFRESH_DELAY_MS = 1500;
 
-/** 任务栏 / 托盘图标路径（相对于 dist/main/main/）。所有窗口共用同一个 .ico。 */
-const APP_ICON_PATH = path.join(__dirname, "..", "..", "..", "assets", "tray-icon.ico");
+function getAppIconPath(icon: UiIcon): string {
+  const preset = UI_ICON_PRESETS.find((item) => item.id === icon);
+  return path.join(__dirname, "..", "..", "..", "assets", "icon-presets", preset?.fileName ?? "cyrene-sun.png");
+}
+
+function getCurrentAppIconPath(): string {
+  return getAppIconPath(loadGeneralSettings().uiIcon);
+}
 let runtimeState: RuntimeState = {
     status: "陪伴中",
     feeling: "平静",
@@ -689,6 +697,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   language: "zh-CN",
   uiTheme: "classic",
   uiFont: DEFAULT_UI_FONT,
+  uiIcon: "cyrene-sun",
   defaultChatMode: "collab",
   segmentedOutputMode: "off",
   mobileMessageSegmentation: "off",
@@ -1084,6 +1093,7 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     language: "zh-CN",
     uiTheme: normalizeUiTheme(input?.uiTheme),
     uiFont: normalizeUiFont(input?.uiFont),
+    uiIcon: normalizeUiIcon(input?.uiIcon),
     defaultChatMode: normalizeDefaultChatMode(input?.defaultChatMode),
     segmentedOutputMode: normalizeSegmentedOutputMode(input?.segmentedOutputMode),
     mobileMessageSegmentation: normalizeMobileMessageSegmentationMode(input?.mobileMessageSegmentation),
@@ -1200,6 +1210,9 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   }
   if (JSON.stringify(before.uiFont) !== JSON.stringify(normalized.uiFont)) {
     broadcastUiFontChanged(normalized.uiFont);
+  }
+  if (before.uiIcon !== normalized.uiIcon) {
+    applyUiIcon(normalized.uiIcon);
   }
   return normalized;
 }
@@ -2413,7 +2426,7 @@ function createWindow(): void {
     skipTaskbar: true,
     resizable: false,
     hasShadow: false,
-    icon: APP_ICON_PATH,
+    icon: getCurrentAppIconPath(),
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
       contextIsolation: true,
@@ -2640,7 +2653,7 @@ function createChatWindow(sessionId?: string): void {
     minWidth: 960,
     minHeight: 540,
     title: "Cyrene · 聊天",
-    icon: APP_ICON_PATH,
+    icon: getCurrentAppIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
     show: false,
@@ -2700,7 +2713,7 @@ function createSidebarWindow(): void {
     minWidth: 56,
     minHeight: 540,
     title: "昔涟 · 状态",
-    icon: APP_ICON_PATH,
+    icon: getCurrentAppIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
     show: false,
@@ -2747,7 +2760,7 @@ function createTasksWindow(): void {
     height: 760,
     minHeight: 540,
     title: "昔涟 · 今日日程",
-    icon: APP_ICON_PATH,
+    icon: getCurrentAppIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
     show: false,
@@ -2802,7 +2815,7 @@ function createSettingsWindow(section?: string): void {
     minWidth: 920,
     minHeight: 580,
     title: "昔涟 · 设置",
-    icon: APP_ICON_PATH,
+    icon: getCurrentAppIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
     show: false,
@@ -2928,7 +2941,7 @@ function createCallWindow(): void {
     minWidth: 420,
     minHeight: 600,
     title: "Cyrene · 语音通话",
-    icon: APP_ICON_PATH,
+    icon: getCurrentAppIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
     show: false,
@@ -2964,7 +2977,7 @@ function createCallWindow(): void {
 }
 
 function createTray(): void {
-  const icon = nativeImage.createFromPath(APP_ICON_PATH);
+  const icon = nativeImage.createFromPath(getCurrentAppIconPath());
   tray = new Tray(icon);
 
   const contextMenu = Menu.buildFromTemplate([
@@ -2993,6 +3006,18 @@ function createTray(): void {
 
   tray.setToolTip("Cyrene");
   tray.setContextMenu(contextMenu);
+}
+
+function applyUiIcon(iconSetting: UiIcon): void {
+  const icon = nativeImage.createFromPath(getAppIconPath(iconSetting));
+  if (icon.isEmpty()) {
+    console.warn("[Cyrene] failed to load selected app icon:", iconSetting);
+    return;
+  }
+  tray?.setImage(icon);
+  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+    if (win && !win.isDestroyed()) win.setIcon(icon);
+  }
 }
 
 ipcMain.handle(IPC.WINDOW_SET_INTERACTIVE, (_event, interactive: boolean) => {
