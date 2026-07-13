@@ -8,8 +8,10 @@ import {
 } from "../../shared/chat-ui";
 import {
   normalizeDefaultChatMode,
+  normalizeMobileMessageSegmentationMode,
   normalizeSegmentedOutputMode,
   type DefaultChatMode,
+  type MobileMessageSegmentationMode,
   type SegmentedOutputMode,
 } from "../../shared/preferences";
 
@@ -275,6 +277,7 @@ interface GeneralSettings {
   uiTheme: "classic" | "polished-pink" | "pearl-white";
   defaultChatMode: DefaultChatMode;
   segmentedOutputMode: SegmentedOutputMode;
+  mobileMessageSegmentation: MobileMessageSegmentationMode;
 }
 
 interface UserApi {
@@ -488,6 +491,7 @@ if (!window.settings) {
       uiTheme: "classic",
       defaultChatMode: "collab",
       segmentedOutputMode: "off",
+      mobileMessageSegmentation: "off",
     }),
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
     openSidebar: () => {},
@@ -624,6 +628,7 @@ const uiThemeSelect = document.getElementById("ui-theme-select") as HTMLElement;
 const languageSelect = document.getElementById("language-select") as HTMLElement;
 const defaultChatModeSelect = document.getElementById("default-chat-mode-select") as HTMLElement;
 const segmentedOutputSelect = document.getElementById("segmented-output-select") as HTMLElement;
+const mobileMessageSegmentationSelect = document.getElementById("mobile-message-segmentation-select") as HTMLElement;
 const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
 const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputElement;
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
@@ -770,6 +775,14 @@ function applySegmentedOutputSelection(mode: SegmentedOutputMode): void {
 
 function getSegmentedOutputValue(): SegmentedOutputMode {
   return normalizeSegmentedOutputMode(getOptionGroupValue(segmentedOutputSelect, "off"));
+}
+
+function applyMobileMessageSegmentationSelection(mode: MobileMessageSegmentationMode): void {
+  applyOptionGroupValue(mobileMessageSegmentationSelect, mode);
+}
+
+function getMobileMessageSegmentationValue(): MobileMessageSegmentationMode {
+  return normalizeMobileMessageSegmentationMode(getOptionGroupValue(mobileMessageSegmentationSelect, "off"));
 }
 
 function applyUiThemeSelection(theme: GeneralSettings["uiTheme"]): void {
@@ -991,6 +1004,7 @@ async function loadGeneralSettings(): Promise<void> {
     applyUiThemeSelection(normalizeUiTheme(cfg.uiTheme));
     applyDefaultChatModeSelection(normalizeDefaultChatMode(cfg.defaultChatMode));
     applySegmentedOutputSelection(normalizeSegmentedOutputMode(cfg.segmentedOutputMode));
+    applyMobileMessageSegmentationSelection(normalizeMobileMessageSegmentationMode(cfg.mobileMessageSegmentation));
     applyLanguageSelection("zh-CN");
     setPreferencesSaveStatus("等待保存");
     setGeneralSaveStatus("等待保存");
@@ -1082,6 +1096,13 @@ segmentedOutputSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEa
   });
 });
 
+mobileMessageSegmentationSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
+  button.addEventListener("click", () => {
+    applyMobileMessageSegmentationSelection(normalizeMobileMessageSegmentationMode(button.dataset.value));
+    setPreferencesSaveStatus("有未保存的更改");
+  });
+});
+
 preferencesForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   setPreferencesSaveStatus("保存中…");
@@ -1089,6 +1110,7 @@ preferencesForm.addEventListener("submit", async (e) => {
     await window.settings!.saveGeneral({
       defaultChatMode: getDefaultChatModeValue(),
       segmentedOutputMode: getSegmentedOutputValue(),
+      mobileMessageSegmentation: getMobileMessageSegmentationValue(),
     });
     setPreferencesSaveStatus("已保存", "is-ok");
   } catch {

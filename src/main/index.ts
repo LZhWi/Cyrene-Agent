@@ -7,8 +7,10 @@ import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
 import {
   normalizeDefaultChatMode,
+  normalizeMobileMessageSegmentationMode,
   normalizeSegmentedOutputMode,
   type DefaultChatMode,
+  type MobileMessageSegmentationMode,
   type SegmentedOutputMode,
 } from "../shared/preferences";
 import { STATUS_KEYWORDS } from "./status-keywords";
@@ -84,7 +86,7 @@ import { initSkills, skillRegistry, buildSkillCatalog, parseSlashCommand, setSki
 import { initGameBot } from "./game-bot";
 import { initChannels, shutdownChannels } from "./channels/init";
 import { buildChannelAttachmentInputs } from "./channels/agent-input";
-import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
+import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadGeneralSettings, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
 import {
   buildAgentRunOptions,
@@ -400,8 +402,10 @@ interface GeneralSettings {
   uiTheme: "classic" | "polished-pink" | "pearl-white";
   /** 聊天窗口打开时默认选中的模式。 */
   defaultChatMode: DefaultChatMode;
-  /** 分段输出偏好。当前为 UI 占位，后续接入输出策略。 */
+  /** 聊天气泡分段输出偏好。 */
   segmentedOutputMode: SegmentedOutputMode;
+  /** 手机渠道文本消息分段发送偏好。 */
+  mobileMessageSegmentation: MobileMessageSegmentationMode;
   // TTS 配置
   ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo";
   ttsAutoRead: boolean;
@@ -618,6 +622,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   uiTheme: "classic",
   defaultChatMode: "collab",
   segmentedOutputMode: "off",
+  mobileMessageSegmentation: "off",
   ttsEngine: "off",
   ttsAutoRead: true,
   ttsSpeed: 1,
@@ -1009,6 +1014,7 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     uiTheme: input?.uiTheme === "pearl-white" ? "pearl-white" : input?.uiTheme === "polished-pink" ? "polished-pink" : "classic",
     defaultChatMode: normalizeDefaultChatMode(input?.defaultChatMode),
     segmentedOutputMode: normalizeSegmentedOutputMode(input?.segmentedOutputMode),
+    mobileMessageSegmentation: normalizeMobileMessageSegmentationMode(input?.mobileMessageSegmentation),
     // TTS 配置
     ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo"].includes(input?.ttsEngine as string) ? input?.ttsEngine : "off") as GeneralSettings["ttsEngine"],
     ttsAutoRead: input?.ttsAutoRead === undefined ? DEFAULT_GENERAL_SETTINGS.ttsAutoRead : Boolean(input.ttsAutoRead),
@@ -3863,6 +3869,7 @@ app.whenReady().then(async () => {
     const { loadRecentHistory } = await import("./channels/history-log");
     return loadRecentHistory(sessionId, limit);
   });
+  setDispatcherLoadGeneralSettings(loadGeneralSettings);
 
   setDispatcherBuildAndRunAgent(async (msg, sessionId, priorMessages) => {
     // 渠道响应结果：统一由 dispatcher 按 cap 降级到 OutgoingMessage.parts。

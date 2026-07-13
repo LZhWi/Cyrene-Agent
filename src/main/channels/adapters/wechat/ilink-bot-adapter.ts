@@ -159,24 +159,18 @@ export class ILinkBotAdapter implements ChannelAdapter {
 
     let anyOk = false;
     let lastErr: string | undefined;
-    const text = msg.parts
-      .filter((p) => p.kind === "text")
-      .map((p) => p.text)
-      .join("")
-      .trim();
-    if (text) {
-      const textResult = await this.client.sendText(msg.targetId, text, contextToken);
-      if (textResult.ok) {
-        anyOk = true;
-      } else {
-        lastErr = textResult.error ?? "微信文本发送失败";
-        console.warn(LOG_PREFIX, "text_item 发送失败:", lastErr);
-      }
-    }
 
     for (const part of msg.parts) {
       if (part.kind === "text") {
-        continue;
+        const text = part.text.trim();
+        if (!text) continue;
+        const textResult = await this.client.sendText(msg.targetId, text, contextToken);
+        if (textResult.ok) {
+          anyOk = true;
+        } else {
+          lastErr = textResult.error ?? "微信文本发送失败";
+          console.warn(LOG_PREFIX, "text_item 发送失败:", lastErr);
+        }
       } else if (part.kind === "image") {
         if (!part.filePath) return { ok: false, error: "微信图片发送需要本地 filePath" };
         const media = await this.uploadMedia(this.client, msg.targetId, part.filePath, MediaType.IMAGE);

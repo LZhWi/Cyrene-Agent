@@ -31,6 +31,11 @@ import { resolveLocalStickerPath } from "../sticker-protocol";
 import { getStickersDir, loadUserStickerManifest } from "../sticker-storage";
 import { BUILT_IN_STICKER_FILES } from "../sticker-descriptions";
 import { BUILT_IN_STICKER_IDS } from "../../shared/sticker-types";
+import { splitTextBySentenceBreaks } from "../../shared/message-segmentation";
+import {
+  normalizeMobileMessageSegmentationMode,
+  type MobileMessageSegmentationMode,
+} from "../../shared/preferences";
 
 /** Phase A：用于拼接历史对话的轻量 ChatMessage 形状（与 orchestrator ChatMessage 兼容）。 */
 interface ChatMessage {
@@ -180,6 +185,17 @@ export interface DispatcherDeps {
     text: string;
     at: number;
   }) => void;
+  /** 读取通用设置中与渠道发送有关的偏好。 */
+  loadGeneralSettings?: () => { mobileMessageSegmentation?: MobileMessageSegmentationMode };
+}
+
+export function buildTextOutgoingParts(
+  replyText: string,
+  mobileMessageSegmentation: MobileMessageSegmentationMode,
+): OutgoingPart[] {
+  const mode = normalizeMobileMessageSegmentationMode(mobileMessageSegmentation);
+  const texts = mode === "on" ? splitTextBySentenceBreaks(replyText) : [replyText];
+  return texts.map((text) => ({ kind: "text", text }));
 }
 
 export class ChannelDispatcher {
@@ -283,7 +299,10 @@ export class ChannelDispatcher {
     }
 
     // 构造 OutgoingMessage parts
-    const parts: OutgoingPart[] = [{ kind: "text", text: replyText }];
+    const mobileMessageSegmentation = normalizeMobileMessageSegmentationMode(
+      this.deps.loadGeneralSettings?.().mobileMessageSegmentation,
+    );
+    const parts: OutgoingPart[] = buildTextOutgoingParts(replyText, mobileMessageSegmentation);
 
     // Phase 3：TTS 音频自动追加（如果启用且适配器支持 audio）
     console.log(LOG, `TTS 决策: ttsEnabled=${this.settings.ttsEnabled} hasFn=${!!this.deps.synthesizeTts}`);
@@ -465,4 +484,11 @@ export function setDispatcherBroadcastChat(
   }) => void,
 ): void {
   channelDispatcher.deps.broadcastChat = fn;
+}
+
+/** 注入通用设置读取器（渠道发送时实时读取偏好）。 */
+export function setDispatcherLoadGeneralSettings(
+  fn: () => { mobileMessageSegmentation?: MobileMessageSegmentationMode },
+): void {
+  channelDispatcher.deps.loadGeneralSettings = fn;
 }

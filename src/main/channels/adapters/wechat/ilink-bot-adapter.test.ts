@@ -29,6 +29,24 @@ describe("ILinkBotAdapter.send", () => {
     expect(sendText).toHaveBeenCalledWith("wx-user-1", "你好", "ctx-1");
   });
 
+  it("sends multiple text parts as separate messages", async () => {
+    const adapter = new ILinkBotAdapter();
+    const sendText = vi.fn(async () => ({ ok: true }));
+    (adapter as any).client = { sendText };
+    (adapter as any).replyContextByTarget.set("wx-user-1", "ctx-1");
+
+    const result = await adapter.send(message([
+      { kind: "text", text: "第一句。" },
+      { kind: "text", text: "第二句？" },
+      { kind: "text", text: "\n第三句！" },
+    ]));
+
+    expect(result).toEqual({ ok: true });
+    expect(sendText).toHaveBeenNthCalledWith(1, "wx-user-1", "第一句。", "ctx-1");
+    expect(sendText).toHaveBeenNthCalledWith(2, "wx-user-1", "第二句？", "ctx-1");
+    expect(sendText).toHaveBeenNthCalledWith(3, "wx-user-1", "第三句！", "ctx-1");
+  });
+
   it("uploads image and sticker parts as image items in one sendmessage payload", async () => {
     const adapter = new ILinkBotAdapter();
     const sendText = vi.fn(async () => ({ ok: true }));

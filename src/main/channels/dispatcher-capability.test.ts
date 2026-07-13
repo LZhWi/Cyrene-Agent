@@ -1,7 +1,7 @@
 // dispatcher.downgradeToCapability 全组合测试
 // 重点验证 8 个能力字段 × 5 个 part kind 的所有边界条件
 import { describe, it, expect } from "vitest";
-import { ChannelDispatcher } from "./dispatcher";
+import { buildTextOutgoingParts, ChannelDispatcher } from "./dispatcher";
 import type { ChannelCapability, OutgoingMessage, OutgoingPart } from "./types";
 
 function makeCap(over: Partial<ChannelCapability> = {}): ChannelCapability {
@@ -22,6 +22,22 @@ function makeCap(over: Partial<ChannelCapability> = {}): ChannelCapability {
 function makeMsg(parts: OutgoingPart[]): OutgoingMessage {
   return { channel: "feishu", targetId: "oc_x", parts };
 }
+
+describe("buildTextOutgoingParts", () => {
+  it("keeps channel replies as one text part when mobile segmentation is off", () => {
+    expect(buildTextOutgoingParts("第一句。第二句？", "off")).toEqual([
+      { kind: "text", text: "第一句。第二句？" },
+    ]);
+  });
+
+  it("splits channel replies into text parts when mobile segmentation is on", () => {
+    expect(buildTextOutgoingParts("第一句。\n第二句？第三句！", "on")).toEqual([
+      { kind: "text", text: "第一句。" },
+      { kind: "text", text: "第二句？" },
+      { kind: "text", text: "第三句！" },
+    ]);
+  });
+});
 
 describe("downgradeToCapability", () => {
   // 构造一个最简 dispatcher 实例（只测 downgradeToCapability，不碰 buildAndRunAgent）
