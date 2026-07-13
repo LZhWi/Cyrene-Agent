@@ -35,6 +35,45 @@ afterEach(() => {
 });
 
 describe("OpenerBubbleController", () => {
+  it("shows a text-only proactive bubble without creating audio", () => {
+    vi.useFakeTimers();
+    const audioCtor = vi.fn();
+    globalThis.Audio = audioCtor as unknown as typeof Audio;
+    Object.defineProperty(globalThis, "window", {
+      value: { live2dSpeech: { prepare: vi.fn(), startMouth: vi.fn(), stopMouth: vi.fn() } },
+      configurable: true,
+    });
+    const bubble = new FakeBubble();
+    const controller = new OpenerBubbleController(bubble as unknown as HTMLElement);
+    const show = (controller as unknown as { handle: (payload: unknown) => void }).handle.bind(controller);
+
+    show({ text: "早点休息呀", sceneId: "late_night", itemId: "p1", sessionId: "session-1" });
+
+    expect(bubble.textContent).toBe("早点休息呀");
+    expect(bubble.hidden).toBe(false);
+    expect(audioCtor).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
+  it("opens the proactive session when its bubble is clicked", () => {
+    const openSession = vi.fn();
+    Object.defineProperty(globalThis, "window", {
+      value: {
+        live2dSpeech: { prepare: vi.fn(), startMouth: vi.fn(), stopMouth: vi.fn() },
+        openerBridge: { feedback: vi.fn(), openSession },
+      },
+      configurable: true,
+    });
+    const bubble = new FakeBubble();
+    const controller = new OpenerBubbleController(bubble as unknown as HTMLElement);
+    const show = (controller as unknown as { handle: (payload: unknown) => void }).handle.bind(controller);
+
+    show({ text: "看看我呀", sceneId: "morning", itemId: "p2", sessionId: "session-2" });
+    bubble.onclick?.();
+
+    expect(openSession).toHaveBeenCalledWith("session-2");
+  });
+
   it("releases the interrupted audio object URL before starting a new bubble", () => {
     Object.defineProperty(globalThis, "window", { value: { live2dSpeech: { prepare: vi.fn(), startMouth: vi.fn(), stopMouth: vi.fn() } }, configurable: true });
     const urls = ["blob:first", "blob:second"];

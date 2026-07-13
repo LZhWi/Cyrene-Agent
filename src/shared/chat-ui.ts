@@ -11,6 +11,7 @@ export interface ChatSessionMetaUI {
   createdAt: number;
   updatedAt: number;
   messageCount: number;
+  purpose?: "proactive-chat";
 }
 
 // 默认 identity 显示名（职位面板未做，所有会话先用这个）

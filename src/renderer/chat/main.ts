@@ -397,6 +397,7 @@ interface ChatStoreSession {
   createdAt: number;
   updatedAt: number;
   schemaVersion: 1;
+  purpose?: "proactive-chat";
 }
 
 interface ChatStoreApi {
@@ -460,6 +461,8 @@ async function saveSession(): Promise<void> {
 // 把 store 里的 ChatStoreSession 装载到当前窗口（替换 messages 数组并 render）。
 function loadSessionIntoUI(session: ChatStoreSession): void {
   currentSessionId = session.id;
+  seenSessionUpdatedAt.set(session.id, session.updatedAt);
+  unreadProactiveSessionIds.delete(session.id);
   messages.length = 0;
   for (const m of session.messages) {
     messages.push({
@@ -503,6 +506,9 @@ async function loadEarlierMessages(): Promise<void> {
 // 渲染逻辑跟 settings.ts 的 renderChatSessions 同源（复用 shared 的格式化函数），
 // 但点击行为不同：这里是本地 loadSessionIntoUI，不走跨窗口 IPC，更快。
 
+const unreadProactiveSessionIds = new Set<string>();
+const seenSessionUpdatedAt = new Map<string, number>();
+
 async function renderRailList(): Promise<void> {
   if (!chatRailList || !window.chatStore) return;
 
@@ -535,6 +541,7 @@ function buildRailItem(session: ChatSessionMetaUI): HTMLLIElement {
   const titleEl = document.createElement("div");
   titleEl.className = "chat__rail-title";
   titleEl.textContent = session.title || "新对话";
+  if (unreadProactiveSessionIds.has(session.id)) titleEl.textContent = `● ${titleEl.textContent}`;
 
   const metaEl = document.createElement("div");
   metaEl.className = "chat__rail-meta";
@@ -3560,14 +3567,28 @@ window.chatStore?.onSwitchSession(async (sessionId) => {
 // 1. 当前活跃会话被外部删了 → fallback 到最新一条 / 自动建新
 // 2. 侧栏展开时刷新列表（别的窗口新建/改名/删除都会触发）
 window.chatStore?.onChanged(async () => {
-  // 侧栏展开时刷新列表（收起时不浪费 DOM 写入）
-  if (chatRail && !chatRail.hidden) void renderRailList();
-
   if (!window.chatStore || !currentSessionId) return;
+  const sessions = await window.chatStore.list();
+  for (const session of sessions) {
+    const seenAt = seenSessionUpdatedAt.get(session.id) ?? 0;
+    if (session.purpose === "proactive-chat" && session.id !== currentSessionId && session.updatedAt > seenAt) {
+      unreadProactiveSessionIds.add(session.id);
+    }
+  }
+  // 标记未读后再刷新，确保红点在本次变更中立即出现。
+  if (chatRail && !chatRail.hidden) void renderRailList();
   const stillExists = await window.chatStore.get(currentSessionId);
-  if (stillExists) return;
+  if (stillExists) {
+    if (
+      stillExists.purpose === "proactive-chat" &&
+      stillExists.updatedAt > (seenSessionUpdatedAt.get(stillExists.id) ?? 0)
+    ) {
+      await loadSessionTailIntoUI(stillExists.id);
+    }
+    return;
+  }
   // 当前会话已被外部删除：fallback 到最新一条 / 自动建新
-  const list = await window.chatStore.list();
+  const list = sessions;
   let next: ChatStoreSession | null = null;
   if (list.length > 0) next = await window.chatStore.get(list[0].id);
   if (!next) next = await window.chatStore.create({ identityId: null });

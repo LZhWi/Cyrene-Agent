@@ -403,6 +403,7 @@ const openerApi = {
   getStatus: () => ipcRenderer.invoke(IPC.OPENER_GET_STATUS),
   openPackDir: () => ipcRenderer.invoke(IPC.OPENER_OPEN_PACK_DIR),
   openInstallDocs: () => ipcRenderer.invoke(IPC.OPENER_OPEN_INSTALL_DOCS),
+  openSession: (sessionId: string) => ipcRenderer.invoke(IPC.CHATS_OPEN_IN_CHAT_WINDOW, sessionId),
 };
 contextBridge.exposeInMainWorld("openerBridge", openerApi);
 

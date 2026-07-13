@@ -1,6 +1,7 @@
 // 桌宠气泡 controller：监听 onShowBubble + 显示气泡 + 播 wav + prepare/mouthStart/mouthStop
 // 复用 chat/main.ts playTtsBase64 的口型同步思路。荡秋千随 MOUTH_START 自动触发（SpeakingMotionController）。
 import { IPC } from "../../shared/ipc-channels";
+import type { ShowBubblePayload } from "../../main/opener/opener-types";
 
 const BUBBLE_HOLD_MS = 7000;
 
@@ -21,7 +22,7 @@ export class OpenerBubbleController {
     return window.live2dSpeech.onShowBubble((payload) => this.handle(payload));
   }
 
-  private handle(payload: { text: string; audioBase64: string; format: "wav" | "mp3"; durationMs: number; sceneId: string; itemId: string }): void {
+  private handle(payload: ShowBubblePayload): void {
     if (!this.bubbleEl) return;
     this.stopCurrent();
 
@@ -33,7 +34,13 @@ export class OpenerBubbleController {
     // 点击气泡 = 接话
     this.bubbleEl.onclick = () => {
       window.openerBridge?.feedback({ type: "clicked", sceneId: payload.sceneId, itemId: payload.itemId });
+      if (payload.sessionId) void window.openerBridge?.openSession(payload.sessionId);
     };
+
+    if (!payload.audioBase64 || !payload.format || !payload.durationMs) {
+      this.fadeTimer = setTimeout(() => this.fadeOut(), BUBBLE_HOLD_MS);
+      return;
+    }
 
     // prepare（停当前 motion + 嘴动 reset）
     window.live2dSpeech?.prepare();
