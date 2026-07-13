@@ -1,6 +1,7 @@
 export type DefaultChatMode = "collab" | "talk";
 export type SegmentedOutputMode = "all" | "chat" | "off";
 export type MobileMessageSegmentationMode = "on" | "off";
+export type ProactiveChatMode = "on" | "off";
 
 export function normalizeDefaultChatMode(value: unknown): DefaultChatMode {
   return value === "talk" ? "talk" : "collab";
@@ -11,5 +12,9 @@ export function normalizeSegmentedOutputMode(value: unknown): SegmentedOutputMod
 }
 
 export function normalizeMobileMessageSegmentationMode(value: unknown): MobileMessageSegmentationMode {
+  return value === "on" ? "on" : "off";
+}
+
+export function normalizeProactiveChatMode(value: unknown): ProactiveChatMode {
   return value === "on" ? "on" : "off";
 }

@@ -9,9 +9,11 @@ import {
 import {
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
+  normalizeProactiveChatMode,
   normalizeSegmentedOutputMode,
   type DefaultChatMode,
   type MobileMessageSegmentationMode,
+  type ProactiveChatMode,
   type SegmentedOutputMode,
 } from "../../shared/preferences";
 
@@ -278,6 +280,7 @@ interface GeneralSettings {
   defaultChatMode: DefaultChatMode;
   segmentedOutputMode: SegmentedOutputMode;
   mobileMessageSegmentation: MobileMessageSegmentationMode;
+  proactiveChatMode: ProactiveChatMode;
 }
 
 interface UserApi {
@@ -492,6 +495,7 @@ if (!window.settings) {
       defaultChatMode: "collab",
       segmentedOutputMode: "off",
       mobileMessageSegmentation: "off",
+      proactiveChatMode: "off",
     }),
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
     openSidebar: () => {},
@@ -629,6 +633,7 @@ const languageSelect = document.getElementById("language-select") as HTMLElement
 const defaultChatModeSelect = document.getElementById("default-chat-mode-select") as HTMLElement;
 const segmentedOutputSelect = document.getElementById("segmented-output-select") as HTMLElement;
 const mobileMessageSegmentationSelect = document.getElementById("mobile-message-segmentation-select") as HTMLElement;
+const proactiveChatSelect = document.getElementById("proactive-chat-select") as HTMLElement;
 const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
 const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputElement;
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
@@ -783,6 +788,14 @@ function applyMobileMessageSegmentationSelection(mode: MobileMessageSegmentation
 
 function getMobileMessageSegmentationValue(): MobileMessageSegmentationMode {
   return normalizeMobileMessageSegmentationMode(getOptionGroupValue(mobileMessageSegmentationSelect, "off"));
+}
+
+function applyProactiveChatSelection(mode: ProactiveChatMode): void {
+  applyOptionGroupValue(proactiveChatSelect, mode);
+}
+
+function getProactiveChatValue(): ProactiveChatMode {
+  return normalizeProactiveChatMode(getOptionGroupValue(proactiveChatSelect, "off"));
 }
 
 function applyUiThemeSelection(theme: GeneralSettings["uiTheme"]): void {
@@ -1005,6 +1018,7 @@ async function loadGeneralSettings(): Promise<void> {
     applyDefaultChatModeSelection(normalizeDefaultChatMode(cfg.defaultChatMode));
     applySegmentedOutputSelection(normalizeSegmentedOutputMode(cfg.segmentedOutputMode));
     applyMobileMessageSegmentationSelection(normalizeMobileMessageSegmentationMode(cfg.mobileMessageSegmentation));
+    applyProactiveChatSelection(normalizeProactiveChatMode(cfg.proactiveChatMode));
     applyLanguageSelection("zh-CN");
     setPreferencesSaveStatus("等待保存");
     setGeneralSaveStatus("等待保存");
@@ -1103,6 +1117,13 @@ mobileMessageSegmentationSelect.querySelectorAll<HTMLButtonElement>(".option-blo
   });
 });
 
+proactiveChatSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
+  button.addEventListener("click", () => {
+    applyProactiveChatSelection(normalizeProactiveChatMode(button.dataset.value));
+    setPreferencesSaveStatus("有未保存的更改");
+  });
+});
+
 preferencesForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   setPreferencesSaveStatus("保存中…");
@@ -1111,6 +1132,7 @@ preferencesForm.addEventListener("submit", async (e) => {
       defaultChatMode: getDefaultChatModeValue(),
       segmentedOutputMode: getSegmentedOutputValue(),
       mobileMessageSegmentation: getMobileMessageSegmentationValue(),
+      proactiveChatMode: getProactiveChatValue(),
     });
     setPreferencesSaveStatus("已保存", "is-ok");
   } catch {

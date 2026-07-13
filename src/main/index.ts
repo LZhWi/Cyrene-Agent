@@ -8,9 +8,11 @@ import { IPC } from "../shared/ipc-channels";
 import {
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
+  normalizeProactiveChatMode,
   normalizeSegmentedOutputMode,
   type DefaultChatMode,
   type MobileMessageSegmentationMode,
+  type ProactiveChatMode,
   type SegmentedOutputMode,
 } from "../shared/preferences";
 import { STATUS_KEYWORDS } from "./status-keywords";
@@ -406,6 +408,8 @@ interface GeneralSettings {
   segmentedOutputMode: SegmentedOutputMode;
   /** 手机渠道文本消息分段发送偏好。 */
   mobileMessageSegmentation: MobileMessageSegmentationMode;
+  /** 主动聊天功能开关占位；当前不接实际逻辑。 */
+  proactiveChatMode: ProactiveChatMode;
   // TTS 配置
   ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo";
   ttsAutoRead: boolean;
@@ -623,6 +627,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   defaultChatMode: "collab",
   segmentedOutputMode: "off",
   mobileMessageSegmentation: "off",
+  proactiveChatMode: "off",
   ttsEngine: "off",
   ttsAutoRead: true,
   ttsSpeed: 1,
@@ -1015,6 +1020,7 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     defaultChatMode: normalizeDefaultChatMode(input?.defaultChatMode),
     segmentedOutputMode: normalizeSegmentedOutputMode(input?.segmentedOutputMode),
     mobileMessageSegmentation: normalizeMobileMessageSegmentationMode(input?.mobileMessageSegmentation),
+    proactiveChatMode: normalizeProactiveChatMode(input?.proactiveChatMode),
     // TTS 配置
     ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo"].includes(input?.ttsEngine as string) ? input?.ttsEngine : "off") as GeneralSettings["ttsEngine"],
     ttsAutoRead: input?.ttsAutoRead === undefined ? DEFAULT_GENERAL_SETTINGS.ttsAutoRead : Boolean(input.ttsAutoRead),
