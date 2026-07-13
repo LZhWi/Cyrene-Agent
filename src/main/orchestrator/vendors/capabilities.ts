@@ -3,7 +3,7 @@
 // displayName 必须与 renderer settings.ts 的 MODEL_PRESETS.providerName 完全一致。
 import { ProviderCapability } from "./types";
 
-export const PROVIDER_CAPABILITIES: ProviderCapability[] = [
+export const PROVIDER_CAPABILITIES = [
   {
     id: "minimax",
     displayName: "MiniMax（稀宇科技）",
@@ -149,7 +149,7 @@ export const PROVIDER_CAPABILITIES: ProviderCapability[] = [
     // 结构上独立：用户切主入口到 /anthropic 时视觉仍由 visionBaseUrl 决定
     visionBaseUrl: "https://api.xiaomimimo.com/v1",
   },
-];
+] satisfies readonly ProviderCapability[];
 
 const byDisplayName = new Map(PROVIDER_CAPABILITIES.map(c => [c.displayName, c]));
 
