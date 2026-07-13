@@ -6,6 +6,8 @@ import {
   TestConnectionResult, ToolCall, ToolExecutionResult, VendorConfig,
 } from "./types";
 import { authHeaderFor } from "./auth";
+import { resolveReasoningCapability } from "../../../shared/reasoning";
+import { applyReasoningPreference } from "./reasoning";
 
 function buildUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");
@@ -70,6 +72,19 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
       body.tool_choice = "auto";
     }
     if (req.extraBody) Object.assign(body, req.extraBody);
+    // 推理控制：按 (providerId, model) 解析 capability，调用 applyReasoningPreference 转换 body。
+    // cfg.reasoning 缺省视为 auto（不发送任何字段）。
+    const reasoningCap = resolveReasoningCapability(this.capability.id, cfg.model);
+    const finalBody = applyReasoningPreference(
+      body,
+      cfg.reasoning ?? { mode: "auto" },
+      reasoningCap,
+      {
+        hasTools: Boolean(req.tools?.length),
+        providerId: this.capability.id,
+        model: cfg.model,
+      },
+    );
     return {
       url: buildUrl(cfg.baseUrl),
       method: "POST",
@@ -77,7 +92,7 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
         "Content-Type": "application/json",
         ...authHeaderFor(this.capability, cfg.apiKey),
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(finalBody),
     };
   }
 

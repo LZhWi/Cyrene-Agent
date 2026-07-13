@@ -10,6 +10,8 @@ import {
   TestConnectionResult, ToolCall, ToolExecutionResult, VendorConfig,
 } from "./types";
 import { authHeaderFor } from "./auth";
+import { resolveReasoningCapability } from "../../../shared/reasoning";
+import { applyReasoningPreference } from "./reasoning";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_MAX_TOKENS = 4096;
@@ -116,6 +118,18 @@ export class AnthropicAdapter implements ChatVendorAdapter {
       body.tool_choice = { type: "auto" };
     }
     if (req.extraBody) Object.assign(body, req.extraBody);
+    // 推理控制：按 (providerId, model) 解析 capability，调用 applyReasoningPreference 转换 body。
+    const reasoningCap = resolveReasoningCapability(this.capability.id, cfg.model);
+    const finalBody = applyReasoningPreference(
+      body,
+      cfg.reasoning ?? { mode: "auto" },
+      reasoningCap,
+      {
+        hasTools: Boolean(req.tools?.length),
+        providerId: this.capability.id,
+        model: cfg.model,
+      },
+    );
     return {
       url: buildUrl(cfg.baseUrl),
       method: "POST",
@@ -124,7 +138,7 @@ export class AnthropicAdapter implements ChatVendorAdapter {
         ...authHeaderFor(this.capability, cfg.apiKey),
         "anthropic-version": ANTHROPIC_VERSION,
       },
-      body: JSON.stringify(body),
+      body: JSON.stringify(finalBody),
     };
   }
 
