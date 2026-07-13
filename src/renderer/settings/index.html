@@ -27,6 +27,7 @@
         <button type="button" class="nav-item" data-section="skills"><span>✨</span>技能 Skill</button>
         <button type="button" class="nav-item" data-section="plugins"><span>🔌</span>插件</button>
         <hr class="nav-divider" />
+        <button type="button" class="nav-item" data-section="preferences"><span>🎛️</span>偏好设置</button>
         <button type="button" class="nav-item is-active" data-section="general"><span>⚙️</span>设置</button>
         <button type="button" class="nav-item" data-section="api"><span>🔑</span>API 设置</button>
         <button type="button" class="nav-item" data-section="cyrene"><span>🌸</span>昔涟设置</button>
@@ -169,6 +170,47 @@
             -->
             <button type="button" class="save-btn save-btn--ghost" id="test-connection-btn">测试连接</button>
             <button type="submit" class="save-btn">保存 API 设置</button>
+          </div>
+        </form>
+
+
+        <form class="settings-panel is-hidden" id="preferences-form" data-panel="preferences">
+          <div class="panel-heading">
+            <div class="panel-heading__icon">🎛️</div>
+            <div>
+              <h1>偏好设置</h1>
+              <p>设置聊天窗口打开后的默认行为。这里的选择会保存为全局默认值。</p>
+            </div>
+          </div>
+
+          <div class="settings-list">
+            <div class="setting-row">
+              <div>
+                <strong>默认聊天模式</strong>
+                <span>打开聊天窗口时默认使用的模式；窗口内仍可临时切换。</span>
+              </div>
+              <div class="option-blocks option-blocks--wide" id="default-chat-mode-select" role="radiogroup" aria-label="默认聊天模式">
+                <button type="button" class="option-block is-active" data-value="collab" aria-pressed="true">协作</button>
+                <button type="button" class="option-block" data-value="talk" aria-pressed="false">日常聊天</button>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <strong>分段输出</strong>
+                <span>预留偏好项；当前只保存选择，后续接入实际输出策略。</span>
+              </div>
+              <div class="option-blocks option-blocks--wide" id="segmented-output-select" role="radiogroup" aria-label="分段输出">
+                <button type="button" class="option-block is-active" data-value="all" aria-pressed="true">所有</button>
+                <button type="button" class="option-block" data-value="chat" aria-pressed="false">聊天</button>
+                <button type="button" class="option-block" data-value="off" aria-pressed="false">关闭</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="form-actions">
+            <div class="save-status" id="preferences-save-status">等待保存</div>
+            <button type="submit" class="save-btn">保存偏好</button>
           </div>
         </form>
 

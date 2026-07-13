@@ -5,6 +5,12 @@ import * as os from "os";
 import { createHash } from "crypto";
 import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
+import {
+  normalizeDefaultChatMode,
+  normalizeSegmentedOutputMode,
+  type DefaultChatMode,
+  type SegmentedOutputMode,
+} from "../shared/preferences";
 import { STATUS_KEYWORDS } from "./status-keywords";
 import { initRAG, buildMemoryContext, addMemory, switchEmbeddingModel, deleteImportedDoc } from "./rag";
 import { getEmbeddingProvider, getSceneEmbeddingProvider } from "./rag/embedding";
@@ -392,6 +398,10 @@ interface GeneralSettings {
   launchAtLogin: boolean;
   language: "zh-CN";
   uiTheme: "classic" | "polished-pink" | "pearl-white";
+  /** 聊天窗口打开时默认选中的模式。 */
+  defaultChatMode: DefaultChatMode;
+  /** 分段输出偏好。当前为 UI 占位，后续接入输出策略。 */
+  segmentedOutputMode: SegmentedOutputMode;
   // TTS 配置
   ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo";
   ttsAutoRead: boolean;
@@ -606,6 +616,8 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   launchAtLogin: false,
   language: "zh-CN",
   uiTheme: "classic",
+  defaultChatMode: "collab",
+  segmentedOutputMode: "all",
   ttsEngine: "off",
   ttsAutoRead: true,
   ttsSpeed: 1,
@@ -995,6 +1007,8 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     launchAtLogin: Boolean(input?.launchAtLogin),
     language: "zh-CN",
     uiTheme: input?.uiTheme === "pearl-white" ? "pearl-white" : input?.uiTheme === "polished-pink" ? "polished-pink" : "classic",
+    defaultChatMode: normalizeDefaultChatMode(input?.defaultChatMode),
+    segmentedOutputMode: normalizeSegmentedOutputMode(input?.segmentedOutputMode),
     // TTS 配置
     ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo"].includes(input?.ttsEngine as string) ? input?.ttsEngine : "off") as GeneralSettings["ttsEngine"],
     ttsAutoRead: input?.ttsAutoRead === undefined ? DEFAULT_GENERAL_SETTINGS.ttsAutoRead : Boolean(input.ttsAutoRead),

@@ -6,6 +6,12 @@ import {
   formatChatRelativeTime,
   type ChatSessionMetaUI,
 } from "../../shared/chat-ui";
+import {
+  normalizeDefaultChatMode,
+  normalizeSegmentedOutputMode,
+  type DefaultChatMode,
+  type SegmentedOutputMode,
+} from "../../shared/preferences";
 
 // Inline modal (to avoid Vite tree-shaking)
 let _cyModalOverlay: HTMLElement | null = null;
@@ -267,6 +273,8 @@ interface GeneralSettings {
   launchAtLogin: boolean;
   language: "zh-CN";
   uiTheme: "classic" | "polished-pink" | "pearl-white";
+  defaultChatMode: DefaultChatMode;
+  segmentedOutputMode: SegmentedOutputMode;
 }
 
 interface UserApi {
@@ -465,7 +473,22 @@ if (!window.settings) {
         stickerSize: "standard",
       }),
     saveConfig: (c) => Promise.resolve(c as ModelSettings),
-    getGeneral: () => Promise.resolve({ musicEnabled: false, musicVolume: 60, soundEnabled: true, soundVolume: 70, petAlwaysOnTop: true, petVisible: true, petZoom: 1, sidebarVisible: true, tasksVisible: true, launchAtLogin: false, language: "zh-CN", uiTheme: "classic" }),
+    getGeneral: () => Promise.resolve({
+      musicEnabled: false,
+      musicVolume: 60,
+      soundEnabled: true,
+      soundVolume: 70,
+      petAlwaysOnTop: true,
+      petVisible: true,
+      petZoom: 1,
+      sidebarVisible: true,
+      tasksVisible: true,
+      launchAtLogin: false,
+      language: "zh-CN",
+      uiTheme: "classic",
+      defaultChatMode: "collab",
+      segmentedOutputMode: "all",
+    }),
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
     openSidebar: () => {},
     closeSidebar: () => {},
@@ -510,6 +533,7 @@ bgmAudio.preload = "auto";
 bgmAudio.loop = true;
 const apiForm = document.getElementById("api-form") as HTMLFormElement;
 const generalForm = document.getElementById("general-form") as HTMLFormElement;
+const preferencesForm = document.getElementById("preferences-form") as HTMLFormElement;
 const sectionTitle = document.getElementById("section-title") as HTMLElement;
 const sectionHint = document.getElementById("section-hint") as HTMLElement;
 const placeholderPanel = document.getElementById("placeholder-panel") as HTMLElement;
@@ -521,6 +545,7 @@ const placeholderTitle = document.getElementById("placeholder-title") as HTMLEle
 const placeholderCopy = document.getElementById("placeholder-copy") as HTMLElement;
 const saveStatus = document.getElementById("save-status") as HTMLElement;
 const generalSaveStatus = document.getElementById("general-save-status") as HTMLElement;
+const preferencesSaveStatus = document.getElementById("preferences-save-status") as HTMLElement;
 const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLElement;
 
 const schedulerNewBtn = document.getElementById("scheduler-new-btn") as HTMLButtonElement | null;
@@ -597,6 +622,8 @@ const petZoomVal = document.getElementById("pet-zoom-val") as HTMLElement;
 const launchAtLoginInput = document.getElementById("launch-at-login") as HTMLInputElement;
 const uiThemeSelect = document.getElementById("ui-theme-select") as HTMLElement;
 const languageSelect = document.getElementById("language-select") as HTMLElement;
+const defaultChatModeSelect = document.getElementById("default-chat-mode-select") as HTMLElement;
+const segmentedOutputSelect = document.getElementById("segmented-output-select") as HTMLElement;
 const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
 const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputElement;
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
@@ -613,6 +640,7 @@ const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }>
   identity: { emoji: "💼", title: "职位", hint: "自定义昔涟的身份定位与工作职责" },
   skills: { emoji: "✨", title: "Skill", hint: "管理 agent 的 skill 指令（约束如何用工具）" },
   plugins: { emoji: "🔌", title: "插件", hint: "扩展功能与第三方集成" },
+  preferences: { emoji: "🎛️", title: "偏好设置", hint: "设置聊天窗口和输出行为的默认偏好" },
   general: { emoji: "⚙️", title: "设置", hint: "通用偏好与外观" },
   api: { emoji: "🔑", title: "API 设置", hint: "选择预设后只需要填写 API Key。" },
   cyrene: { emoji: "🌸", title: "昔涟设置", hint: "管理 Agent 行为、记忆、RAG 与权限" },
@@ -643,6 +671,12 @@ function setCyreneSaveStatus(text: string, cls?: string): void {
   cyreneSaveStatus.textContent = text;
   cyreneSaveStatus.className = "save-status";
   if (cls) cyreneSaveStatus.classList.add(cls);
+}
+
+function setPreferencesSaveStatus(text: string, cls?: string): void {
+  preferencesSaveStatus.textContent = text;
+  preferencesSaveStatus.className = "save-status";
+  if (cls) preferencesSaveStatus.classList.add(cls);
 }
 
 function playSettingsClickSound(): void {
@@ -708,6 +742,34 @@ function normalizeUiTheme(theme: unknown): GeneralSettings["uiTheme"] {
 function getUiThemeValue(): GeneralSettings["uiTheme"] {
   const value = uiThemeSelect.querySelector<HTMLButtonElement>(".option-block.is-active")?.dataset.theme;
   return normalizeUiTheme(value);
+}
+
+function applyOptionGroupValue(group: HTMLElement, value: string): void {
+  group.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
+    const active = button.dataset.value === value;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+}
+
+function getOptionGroupValue(group: HTMLElement, fallback: string): string {
+  return group.querySelector<HTMLButtonElement>(".option-block.is-active")?.dataset.value ?? fallback;
+}
+
+function applyDefaultChatModeSelection(mode: DefaultChatMode): void {
+  applyOptionGroupValue(defaultChatModeSelect, mode);
+}
+
+function getDefaultChatModeValue(): DefaultChatMode {
+  return normalizeDefaultChatMode(getOptionGroupValue(defaultChatModeSelect, "collab"));
+}
+
+function applySegmentedOutputSelection(mode: SegmentedOutputMode): void {
+  applyOptionGroupValue(segmentedOutputSelect, mode);
+}
+
+function getSegmentedOutputValue(): SegmentedOutputMode {
+  return normalizeSegmentedOutputMode(getOptionGroupValue(segmentedOutputSelect, "all"));
 }
 
 function applyUiThemeSelection(theme: GeneralSettings["uiTheme"]): void {
@@ -927,9 +989,13 @@ async function loadGeneralSettings(): Promise<void> {
     tasksVisibleInput.checked = cfg.tasksVisible ?? true;
     launchAtLoginInput.checked = cfg.launchAtLogin;
     applyUiThemeSelection(normalizeUiTheme(cfg.uiTheme));
+    applyDefaultChatModeSelection(normalizeDefaultChatMode(cfg.defaultChatMode));
+    applySegmentedOutputSelection(normalizeSegmentedOutputMode(cfg.segmentedOutputMode));
     applyLanguageSelection("zh-CN");
+    setPreferencesSaveStatus("等待保存");
     setGeneralSaveStatus("等待保存");
   } catch {
+    setPreferencesSaveStatus("读取偏好失败", "is-error");
     setGeneralSaveStatus("读取设置失败", "is-error");
   }
 }
@@ -1000,6 +1066,34 @@ uiThemeSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((butt
     applyUiThemeSelection(theme);
     setGeneralSaveStatus("有未保存的更改");
   });
+});
+
+defaultChatModeSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
+  button.addEventListener("click", () => {
+    applyDefaultChatModeSelection(normalizeDefaultChatMode(button.dataset.value));
+    setPreferencesSaveStatus("有未保存的更改");
+  });
+});
+
+segmentedOutputSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
+  button.addEventListener("click", () => {
+    applySegmentedOutputSelection(normalizeSegmentedOutputMode(button.dataset.value));
+    setPreferencesSaveStatus("有未保存的更改");
+  });
+});
+
+preferencesForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  setPreferencesSaveStatus("保存中…");
+  try {
+    await window.settings!.saveGeneral({
+      defaultChatMode: getDefaultChatModeValue(),
+      segmentedOutputMode: getSegmentedOutputValue(),
+    });
+    setPreferencesSaveStatus("已保存", "is-ok");
+  } catch {
+    setPreferencesSaveStatus("保存失败", "is-error");
+  }
 });
 
 openStickerManagerBtn.addEventListener("click", async () => {
@@ -2054,6 +2148,7 @@ function switchSection(section: string): void {
 
   const isApi = section === "api";
   const isGeneral = section === "general";
+  const isPreferences = section === "preferences";
   const isCyrene = section === "cyrene";
   const isDisclaimer = section === "disclaimer";
   const isMemory = section === "memory";
@@ -2069,6 +2164,7 @@ function switchSection(section: string): void {
   const isAsr = section === "asr";
   apiForm.classList.toggle("is-hidden", !isApi);
   generalForm.classList.toggle("is-hidden", !isGeneral);
+  preferencesForm.classList.toggle("is-hidden", !isPreferences);
   cyrenePanel.classList.toggle("is-hidden", !isCyrene);
   disclaimerPanel.classList.toggle("is-hidden", !isDisclaimer);
   const memoryPanel = document.getElementById("memory-panel");
@@ -2099,12 +2195,13 @@ function switchSection(section: string): void {
   if (asrPanel) asrPanel.classList.toggle("is-hidden", !isAsr);
   placeholderPanel.classList.toggle(
     "is-hidden",
-    isApi || isGeneral || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr,
+    isApi || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr,
   );
 
   if (
     !isApi &&
     !isGeneral &&
+    !isPreferences &&
     !isCyrene &&
     !isDisclaimer &&
     !isMemory &&

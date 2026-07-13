@@ -6,6 +6,7 @@ import {
   formatChatRelativeTime,
   type ChatSessionMetaUI,
 } from "../../shared/chat-ui";
+import { normalizeDefaultChatMode, type DefaultChatMode } from "../../shared/preferences";
 import { canUseMinimaxStreamingEarly, extractEarlyTtsSegment } from "../../shared/tts-early-playback";
 import { getStickerSrcForId } from "./sticker-src";
 import { formatAttachmentTagDetail, getAttachmentIcon } from "./attachment-labels";
@@ -103,6 +104,7 @@ interface ChatApi {
     cancelDocumentIndex: (jobId: string) => Promise<boolean>;
     captionImage: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
     getImageSendStrategy: () => Promise<{ mode: "direct" | "caption" }>;
+    getGeneralSettings?: () => Promise<{ defaultChatMode?: DefaultChatMode }>;
     getEnabledStickers?: () => Promise<Array<{ id: string; src: string; description?: string }>>;
   }
 
@@ -3290,6 +3292,17 @@ clearBtn.addEventListener("click", clearChat);
     trigger.classList.add("is-open");
   }
 
+  function selectDropdownOption(id, value) {
+    var menu = menus[id];
+    if (!menu) return;
+    var target = menu.querySelector('.dm-opt[data-value="' + value + '"]');
+    if (!target) return;
+    menu.querySelectorAll(".dm-opt").forEach(function(o) { o.classList.remove("is-active"); });
+    target.classList.add("is-active");
+    var val = values[id];
+    if (val) val.textContent = target.textContent?.trim() || "";
+  }
+
   // Trigger click
   triggers.forEach(function(t) {
     t.addEventListener("click", function(e) {
@@ -3307,14 +3320,19 @@ clearBtn.addEventListener("click", clearChat);
     if (!menu) return;
     menu.querySelectorAll(".dm-opt").forEach(function(opt) {
       opt.addEventListener("click", function() {
-        menu.querySelectorAll(".dm-opt").forEach(function(o) { o.classList.remove("is-active"); });
-        opt.classList.add("is-active");
-        var val = values[id];
-        if (val) val.textContent = opt.textContent?.trim() || "";
+        selectDropdownOption(id, opt.getAttribute("data-value"));
         closeAll();
       });
     });
   });
+
+  void window.chat?.getGeneralSettings?.()
+    .then(function(settings) {
+      selectDropdownOption("mode-dropdown", normalizeDefaultChatMode(settings?.defaultChatMode));
+    })
+    .catch(function() {
+      selectDropdownOption("mode-dropdown", "collab");
+    });
 
   // Click outside closes
   document.addEventListener("click", closeAll);
