@@ -10,6 +10,8 @@
 
 export type ChatRole = "user" | "model";
 
+export type ChatSessionPurpose = "proactive-chat";
+
 export type ChatStickerId =
   | "playful"
   | "love-happy"
@@ -67,6 +69,8 @@ export interface ChatSession {
   createdAt: number;
   updatedAt: number;
   schemaVersion: 1;
+  /** 系统用途会话的稳定标识；普通用户会话不设置。 */
+  purpose?: ChatSessionPurpose;
   // 用户是否手动改过名；true 时不再根据消息内容自动派生 title。
   // 没有此字段的老数据视为 false（向后兼容）。
   titleIsCustom?: boolean;
@@ -80,6 +84,7 @@ export interface ChatSessionMeta {
   createdAt: number;
   updatedAt: number;
   messageCount: number;
+  purpose?: ChatSessionPurpose;
 }
 
 export const CHAT_SCHEMA_VERSION = 1 as const;
