@@ -36,6 +36,7 @@ import {
   normalizeMobileMessageSegmentationMode,
   type MobileMessageSegmentationMode,
 } from "../../shared/preferences";
+import { rememberProactiveChannelRecipient } from "./proactive-delivery";
 
 /** Phase A：用于拼接历史对话的轻量 ChatMessage 形状（与 orchestrator ChatMessage 兼容）。 */
 interface ChatMessage {
@@ -240,6 +241,7 @@ export class ChannelDispatcher {
 
     const sessionId = makeSessionId(msg.channel, msg.senderId);
     recordSession(msg.channel, msg.senderId, sessionId);
+    rememberProactiveChannelRecipient(msg, sessionId);
 
     // Phase 3：入站消息广播到桌面端 chatWindow（让用户看到 bot 在和谁聊天）
     if (this.settings.mirrorToDesktop) {
