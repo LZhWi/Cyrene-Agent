@@ -4,6 +4,8 @@ import type { OpenerState, UserStateSnapshot, WeatherSnapshot } from "./opener-t
 
 const state: OpenerState = {
   globalDesire: 0,
+  proactiveEpoch: 0, unansweredCount: 0, lastProactiveAt: null,
+  lastProactiveScene: null, lastNormalConversationEndedAt: null,
   affinity: { morning:1, late_night:1, idle_daze:1, work_break:1, back_from_away:1, rainy_day:1, cold_drop:1, sunny_day:1 },
   todayFired: {}, lastFiredAt: {}, recentItems: {},
   lastTriggeredScene: null, lastTriggeredAt: null, desireRateMultiplier: 1, lastDateStr: "x",

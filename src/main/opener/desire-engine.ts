@@ -14,6 +14,11 @@ export function defaultState(): OpenerState {
   const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
   return {
     globalDesire: 0,
+    proactiveEpoch: 0,
+    unansweredCount: 0,
+    lastProactiveAt: null,
+    lastProactiveScene: null,
+    lastNormalConversationEndedAt: null,
     affinity: {
       morning: 1.0, late_night: 1.0, idle_daze: 1.0, work_break: 1.0,
       back_from_away: 1.0, rainy_day: 1.0, cold_drop: 1.0, sunny_day: 1.0,

@@ -190,6 +190,7 @@ export function createSession(opts?: {
     updatedAt: now,
     schemaVersion: CHAT_SCHEMA_VERSION,
     purpose: opts?.purpose,
+    titleIsCustom: opts?.purpose ? true : undefined,
   };
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));

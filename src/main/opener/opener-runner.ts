@@ -8,6 +8,7 @@ import { snapshot } from "./user-state-sensor";
 import { loadState, saveState, accumulateDesire, probabilityGate, applyClickFeedback, applyIgnoreFeedback } from "./desire-engine";
 import { scoreScene } from "./scene-scorer";
 import type { OpenerState, SceneId, ShowBubblePayload, WeatherSnapshot } from "./opener-types";
+import type { ProactiveCandidate } from "../proactive/proactive-types";
 
 const TICK_MS = 60_000;
 const DEFAULT_LAT = 31.23;
@@ -18,6 +19,13 @@ let responseTimer: ReturnType<typeof setTimeout> | null = null;
 let live2dWindow: BrowserWindow | null = null;
 let manifest = loadManifest();
 let weatherCachedHour = -1;
+let proactiveCandidateHandler: ((candidate: ProactiveCandidate) => Promise<void>) | null = null;
+
+export function setProactiveCandidateHandler(
+  handler: ((candidate: ProactiveCandidate) => Promise<void>) | null,
+): void {
+  proactiveCandidateHandler = handler;
+}
 
 export function setLive2dWindow(win: BrowserWindow | null): void {
   live2dWindow = win;
@@ -29,10 +37,6 @@ export function reloadManifest(): void {
 
 export function startOpener(mode: "quiet" | "normal" | "lively"): void {
   stopOpener();
-  if (!manifest) {
-    console.warn("[Opener] manifest 未配置，不启动");
-    return;
-  }
   const rate = DESIRE_RATE[mode];
   tickTimer = setInterval(() => void tick(rate), TICK_MS);
   console.log(`[Opener] 启动，mode=${mode} rate=${rate}/min`);
@@ -53,7 +57,7 @@ async function tick(rate: number): Promise<void> {
   if (snap.mouseResumeEvent) {
     state.globalDesire = 100;
     saveState(state);
-    await tryFire("back_from_away", snap, state, now);
+    await dispatchCandidateOrPreset("back_from_away", 100, snap, state, now);
     return;
   }
 
@@ -86,7 +90,48 @@ async function tick(rate: number): Promise<void> {
   const winner = ties[Math.floor(Math.random() * ties.length)];
 
   saveState(state);
-  await tryFire(winner.scene, snap, state, now);
+  await dispatchCandidateOrPreset(winner.scene, winner.score, snap, state, now);
+}
+
+async function dispatchCandidateOrPreset(
+  scene: SceneId,
+  score: number,
+  snap: { hour: number },
+  state: OpenerState,
+  now: number,
+): Promise<void> {
+  if (proactiveCandidateHandler) {
+    const cfg = SCENE_CONFIGS.find((item) => item.id === scene);
+    if (!cfg) return;
+    await proactiveCandidateHandler({ sceneId: scene, score, sceneCooldownMs: cfg.cooldownMs });
+    return;
+  }
+  await tryFire(scene, snap, state, now);
+}
+
+export async function getPresetFallback(
+  scene: string,
+  hour: number,
+): Promise<{ text: string; payload: ShowBubblePayload } | null> {
+  if (!manifest) return null;
+  const pack = manifest.packs[scene];
+  if (!pack) return null;
+  const state = loadState();
+  const item = pickItem(pack.items, hour, state.recentItems[scene] ?? []);
+  if (!item) return null;
+  const wavPath = resolveAudioPath(item.audio);
+  if (!wavPath) return null;
+  return {
+    text: item.text,
+    payload: {
+      text: item.text,
+      audioBase64: readWavBase64(wavPath),
+      format: "wav",
+      durationMs: readWavDurationMs(wavPath),
+      sceneId: scene,
+      itemId: item.id,
+    },
+  };
 }
 
 async function getWeatherIfNeeded(hour: number): Promise<WeatherSnapshot> {

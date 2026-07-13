@@ -1,8 +1,8 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, protocol, net } from "electron";
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, protocol, net, powerMonitor } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
 import {
@@ -60,14 +60,18 @@ import type { StickerConfigItem } from "../shared/sticker-types";
 import { initReranker, getRerankerInstallStatus } from "./rag/reranker";
 import { memoryStore } from "./memory/memory-store"
 import type { L0Profile, L1Profile } from "./memory/memory-types";
-import { registerChatsIpc } from "./chats/chats-ipc";
+import { broadcastChatsChanged, registerChatsIpc } from "./chats/chats-ipc";
+import * as chatsStore from "./chats/chats-store";
 import { recordUsage, getUsage, flush as flushTokenUsage } from "./token-usage-store";
 import { uploadFile as ttsUploadFile, cloneVoice as ttsCloneVoice, synthesize as ttsSynthesize } from "./tts/minimax-engine";
 import { synthesize as gptsovitsSynthesize } from "./tts/gptsovits-engine";
 import { synthesize as customCloudSynthesize } from "./tts/custom-cloud-engine";
 import { synthesize as mimoSynthesize } from "./tts/mimo-engine";
 import { synthesizeByEngine } from "./tts/tts-dispatcher";
-import { startOpener, stopOpener, setLive2dWindow, reloadManifest, handleBubbleClick, handleChatWindowOpened, testFire } from "./opener/opener-runner";
+import { startOpener, stopOpener, setLive2dWindow, reloadManifest, handleBubbleClick, handleChatWindowOpened, testFire, setProactiveCandidateHandler, getPresetFallback } from "./opener/opener-runner";
+import { loadState as loadOpenerState, saveState as saveOpenerState } from "./opener/desire-engine";
+import type { ShowBubblePayload } from "./opener/opener-types";
+import { SCENE_CONFIGS } from "./opener/scenes-config";
 import { getManifestPath, getOpenerPackDir } from "./opener/opener-pack-store";
 import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
 import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegateSettings } from "./orchestrator/built-in-tools";
@@ -86,7 +90,7 @@ import { setAsrConfig } from "./asr/volcano-asr-engine";
 import { setCallWindow, registerCallIpc, setCallSettings, stopCall } from "./call/call-manager";
 import { initSkills, skillRegistry, buildSkillCatalog, parseSlashCommand, setSkillEnabled, listSkillsForUi } from "./skills";
 import { initGameBot } from "./game-bot";
-import { initChannels, shutdownChannels } from "./channels/init";
+import { initChannels, shutdownChannels, setChannelsConversationLifecycle } from "./channels/init";
 import { buildChannelAttachmentInputs } from "./channels/agent-input";
 import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadGeneralSettings, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
@@ -103,6 +107,11 @@ import { SchedulerEngine } from "./scheduler/scheduler-engine";
 import { createSchedulerRunner } from "./scheduler/scheduler-runner";
 import { registerSchedulerIpc } from "./scheduler/scheduler-ipc";
 import type { ScheduledTask } from "./scheduler/types";
+import { createProactiveChatService, type ProactiveChatService } from "./proactive/proactive-service";
+import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive/proactive-prompt";
+import { runProactiveModel } from "./proactive/proactive-model";
+import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/proactive-types";
+import { canCommitProactiveMessage } from "./proactive/proactive-policy";
 
 configureDocumentIndexQueue(runDocumentIndexJob);
 
@@ -115,6 +124,9 @@ let settingsWindow: BrowserWindow | null = null;
 let stickerManagerWindow: BrowserWindow | null = null;
 let callWindow: BrowserWindow | null = null;
 let schedulerEngine: SchedulerEngine | null = null;
+let proactiveChatService: ProactiveChatService | null = null;
+let normalConversationBusyCount = 0;
+let proactiveScreenLocked = false;
 const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
   onClosed: () => setLive2dWindow(null),
 });
@@ -1690,6 +1702,219 @@ function buildSystemPrompt(styleFile: string): string {
   return parts.join("\n\n---\n\n");
 }
 
+function buildProactivePersonaPrompt(): string {
+  const parts: string[] = [];
+  const talkSystem = loadPromptFile("talk_system.md");
+  if (talkSystem) parts.push(talkSystem);
+  const soul = loadPromptFile("soul.md");
+  if (soul) {
+    // 主动轮完全不携带工具说明；Soul 尾部的 Live2D/联网章节由正常聊天使用。
+    parts.push(soul.split("\n## Live2D 与聊天文字的分工")[0].trim());
+  }
+  const canon = loadPromptFile("canon_quotes.md");
+  if (canon) parts.push(canon);
+  const style = loadPromptFile("styles/01_default.md");
+  if (style) parts.push(style);
+  return parts.join("\n\n---\n\n");
+}
+
+function toProactiveHistory(messages: Array<{ role: "user" | "model"; content: string; at: number }>): ProactiveHistoryTurn[] {
+  return messages
+    .filter((message) => message.content.trim())
+    .slice(-16)
+    .map((message) => ({ role: message.role, content: message.content, at: message.at }));
+}
+
+function getProactiveHistories(): { ordinary: ProactiveHistoryTurn[]; proactive: ProactiveHistoryTurn[] } {
+  const ordinaryMeta = chatsStore.listSessions().find((session) => session.purpose !== "proactive-chat");
+  const ordinarySession = ordinaryMeta ? chatsStore.getSession(ordinaryMeta.id) : null;
+  const proactiveSession = chatsStore.getSessionByPurpose("proactive-chat");
+  return {
+    ordinary: toProactiveHistory(ordinarySession?.messages ?? []),
+    proactive: toProactiveHistory(proactiveSession?.messages ?? []),
+  };
+}
+
+function getProactiveRuntimeSnapshot(): ProactiveRuntimeSnapshot {
+  const now = Date.now();
+  let idleSec = Number.POSITIVE_INFINITY;
+  try { idleSec = powerMonitor.getSystemIdleTime(); } catch { /* app 尚未 ready */ }
+  return {
+    now,
+    localHour: new Date(now).getHours(),
+    idleSec,
+    enabled: loadGeneralSettings().proactiveChatMode === "on",
+    conversationBusy: normalConversationBusyCount > 0,
+    generationBusy: false,
+    screenLocked: proactiveScreenLocked,
+  };
+}
+
+async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
+  const histories = getProactiveHistories();
+  const recentTopic = histories.ordinary.slice(-4).map((turn) => turn.content).join("\n");
+  const retrievalQuery = `${candidate.sceneId}\n${recentTopic}`.trim();
+  const [profileContext, memoryContext] = await Promise.all([
+    buildAlwaysOnContext(retrievalQuery, histories.ordinary.map((turn) => ({ role: turn.role, content: turn.content }))).catch(() => ""),
+    buildMemoryInjection(retrievalQuery).catch(() => ""),
+  ]);
+  const state = loadOpenerState();
+  const snapshot = getProactiveRuntimeSnapshot();
+  return buildProactiveMessages({
+    basePersona: buildProactivePersonaPrompt(),
+    userProfile: profileContext,
+    relevantMemory: memoryContext,
+    ordinaryHistory: histories.ordinary,
+    proactiveHistory: histories.proactive,
+    sceneId: candidate.sceneId,
+    localNow: new Date(snapshot.now),
+    idleSec: snapshot.idleSec,
+    unansweredCount: state.unansweredCount,
+  });
+}
+
+async function synthesizeProactiveSpeech(text: string): Promise<{ audioBase64: string; format: "wav" | "mp3"; durationMs: number } | null> {
+  const cfg = loadGeneralSettings();
+  if (!cfg.ttsAutoRead || cfg.ttsEngine === "off") return null;
+  try {
+    const result = await synthesizeByEngine(cfg.ttsEngine, {
+      text,
+      speed: cfg.ttsSpeed,
+      volume: cfg.ttsVolume,
+      apiKey: cfg.ttsEngine === "mimo" ? cfg.ttsMimoKey : (cfg.ttsEngine === "custom-cloud" ? cfg.ttsCustomCloudApiKey : cfg.ttsMinimaxKey),
+      voiceId: cfg.ttsEngine === "custom-cloud" ? cfg.ttsCustomCloudVoiceId : cfg.ttsMinimaxVoiceId,
+      model: cfg.ttsMinimaxModel,
+      baseUrl: cfg.ttsGptsovitsBaseUrl,
+      refAudioPath: cfg.ttsGptsovitsRefAudioPath,
+      promptText: cfg.ttsGptsovitsPromptText,
+      endpointUrl: cfg.ttsCustomCloudEndpointUrl,
+      timeoutMs: cfg.ttsCustomCloudTimeoutMs,
+      voiceAudioPath: cfg.ttsMimoVoiceAudioPath,
+      stylePrompt: cfg.ttsMimoStylePrompt,
+      format: cfg.ttsEngine === "gptsovits" ? cfg.ttsGptsovitsFormat : (cfg.ttsEngine === "custom-cloud" ? cfg.ttsCustomCloudFormat : "mp3"),
+    });
+    return {
+      audioBase64: result.audio.toString("base64"),
+      format: result.format,
+      durationMs: Math.max(1_500, Math.min(30_000, text.length * 180)),
+    };
+  } catch (error) {
+    console.warn("[Proactive] TTS 合成失败，保留文本消息:", error instanceof Error ? error.message : error);
+    return null;
+  }
+}
+
+function updateNormalConversationBusy(delta: 1 | -1): void {
+  normalConversationBusyCount = Math.max(0, normalConversationBusyCount + delta);
+}
+
+const proactiveConversationLifecycle = {
+  onUserMessage: () => proactiveChatService?.invalidateForUserMessage(),
+  onConversationStarted: () => {
+    updateNormalConversationBusy(1);
+    proactiveChatService?.normalConversationStarted();
+  },
+  onConversationEnded: () => {
+    updateNormalConversationBusy(-1);
+    if (normalConversationBusyCount === 0) proactiveChatService?.normalConversationEnded();
+  },
+};
+
+function initializeProactiveChatService(): void {
+  proactiveChatService = createProactiveChatService({
+    loadState: loadOpenerState,
+    saveState: (state) => {
+      const openerState = loadOpenerState();
+      Object.assign(openerState, state);
+      saveOpenerState(openerState);
+    },
+    getSnapshot: getProactiveRuntimeSnapshot,
+    buildMessages: async (candidate) => buildProactiveAgentMessages(candidate),
+    runModel: async (messages) => {
+      const settings = loadModelSettings();
+      if (!settings.apiKey) return { kind: "error", reason: "missing_api_key" };
+      return runProactiveModel({
+        settings: {
+          provider: settings.provider,
+          baseUrl: settings.baseUrl,
+          model: settings.model,
+          apiKey: settings.apiKey,
+          explicitTransport: settings.explicitTransport,
+        },
+        messages,
+        timeoutMs: 45_000,
+      });
+    },
+    getFallback: async (candidate) => getPresetFallback(candidate.sceneId, new Date().getHours()),
+    commitMessage: async ({ candidate, text, source, fallbackPayload, generationEpoch }) => {
+      const session = chatsStore.getOrCreateSessionByPurpose("proactive-chat", {
+        title: "昔涟的主动消息",
+        identityId: null,
+      });
+      const at = Date.now();
+      const appended = chatsStore.appendMessage(session.id, {
+        id: randomUUID(),
+        role: "model",
+        content: text,
+        at,
+      });
+      if (!appended) throw new Error("主动聊天会话写入失败");
+      broadcastChatsChanged();
+
+      const openerState = loadOpenerState();
+      const sceneConfig = SCENE_CONFIGS.find((config) => config.id === candidate.sceneId);
+      if (sceneConfig?.todayFiredFlag) openerState.todayFired[sceneConfig.todayFiredFlag] = true;
+      if (source === "fallback" && fallbackPayload) {
+        const itemId = (fallbackPayload as ShowBubblePayload).itemId;
+        if (itemId) {
+          const recent = openerState.recentItems[candidate.sceneId] ?? [];
+          openerState.recentItems[candidate.sceneId] = [itemId, ...recent.filter((id) => id !== itemId)].slice(0, 4);
+        }
+      }
+      saveOpenerState(openerState);
+
+      let payload: ShowBubblePayload = source === "fallback" && fallbackPayload
+        ? { ...(fallbackPayload as ShowBubblePayload), text, sessionId: session.id }
+        : { text, sceneId: candidate.sceneId, itemId: `proactive-${at}`, sessionId: session.id };
+
+      if (source === "model") {
+        const speech = await synthesizeProactiveSpeech(text);
+        if (speech) payload = { ...payload, ...speech };
+      }
+
+      // 文本已落库；气泡/TTS 前再次执行完整本地检查，失败时只取消展示和语音。
+      const displayDecision = canCommitProactiveMessage(
+        getProactiveRuntimeSnapshot(),
+        loadOpenerState(),
+        candidate,
+        generationEpoch,
+      );
+      if (!displayDecision.allowed) return;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send(IPC.LIVE2D_SHOW_BUBBLE, payload);
+      }
+    },
+    log: (event, detail) => console.log(`[Proactive] ${event}`, detail ?? ""),
+  });
+
+  setProactiveCandidateHandler(async (candidate) => {
+    await proactiveChatService?.evaluateCandidate(candidate);
+  });
+
+  setChannelsConversationLifecycle(proactiveConversationLifecycle);
+
+  powerMonitor.on("lock-screen", () => {
+    proactiveScreenLocked = true;
+    proactiveChatService?.invalidate();
+  });
+  powerMonitor.on("unlock-screen", () => { proactiveScreenLocked = false; });
+  powerMonitor.on("suspend", () => {
+    proactiveScreenLocked = true;
+    proactiveChatService?.invalidate();
+  });
+  powerMonitor.on("resume", () => { proactiveScreenLocked = false; });
+}
+
 /**
  * 工具阶段使用的 system prompt。
  * 第一期：固定 tools_system.md 规则 + 运行时生成的工具目录。
@@ -2110,7 +2335,9 @@ function createWindow(): void {
   const initOpener = () => {
     const s = loadGeneralSettings();
     stopOpener();
-    if (s.openerMode !== "off") startOpener(s.openerMode);
+    if (s.proactiveChatMode === "on") {
+      startOpener(s.openerMode === "off" ? "normal" : s.openerMode);
+    }
   };
   initOpener();
 
@@ -2776,7 +3003,13 @@ ipcMain.handle(IPC.CHAT_IS_MAXIMIZED, () => {
   return chatWindow?.isMaximized() ?? false;
 });
 ipcMain.handle(IPC.CHAT_SEND_MESSAGE, async (_event, messages: unknown) => {
-  return requestModelReply(messages);
+  proactiveConversationLifecycle.onUserMessage();
+  proactiveConversationLifecycle.onConversationStarted();
+  try {
+    return await requestModelReply(messages);
+  } finally {
+    proactiveConversationLifecycle.onConversationEnded();
+  }
 });
 
 ipcMain.handle(IPC.CHAT_INGEST_FILES, async (_event, paths: unknown) => {
@@ -2907,7 +3140,15 @@ ipcMain.handle(IPC.UI_THEME_GET, () => {
 });
 
 ipcMain.handle(IPC.SETTINGS_SAVE_GENERAL, (_event, settings: Partial<GeneralSettings>) => {
-  return saveGeneralSettings(settings);
+  const saved = saveGeneralSettings(settings);
+  if ("proactiveChatMode" in settings || "openerMode" in settings) {
+    stopOpener();
+    proactiveChatService?.invalidate();
+    if (saved.proactiveChatMode === "on") {
+      startOpener(saved.openerMode === "off" ? "normal" : saved.openerMode);
+    }
+  }
+  return saved;
 });
 
 ipcMain.on(IPC.SETTINGS_OPEN_SIDEBAR, () => {
@@ -3318,10 +3559,13 @@ app.whenReady().then(async () => {
       await syncPlaywrightMcp(saved);
     }
 
-    // Opener 主动开口：档位变化时重启
-    if ("openerMode" in tts) {
+    // 主动聊天总开关或频率变化时重启。
+    if ("openerMode" in tts || "proactiveChatMode" in tts) {
       stopOpener();
-      if (saved.openerMode !== "off") startOpener(saved.openerMode);
+      proactiveChatService?.invalidate();
+      if (saved.proactiveChatMode === "on") {
+        startOpener(saved.openerMode === "off" ? "normal" : saved.openerMode);
+      }
     }
 
     // 返回不含密钥明文的副本（前端展示用）
@@ -3827,6 +4071,7 @@ app.whenReady().then(async () => {
 
   // 聊天会话存储 IPC（chats-store.initialize 会建好 cyrene-chats 目录并加载 index）
   registerChatsIpc();
+  initializeProactiveChatService();
 
   // 历史召回工具（recall_history）——让模型能回忆滚出窗口的对话
   registerRecallHistoryTool();
@@ -4190,6 +4435,7 @@ app.whenReady().then(async () => {
     // 桌面 IPC 路径不消费 sticker（sticker 由 onAgentRunFinished 内部 IPC 广播承担）
     async (result, latestUserText) => { await onAgentRunFinished(result, latestUserText, onRunFinishedDeps); },
     () => chatWindow,
+    proactiveConversationLifecycle,
   );
 
   ipcMain.handle(IPC.CHATS_OPEN_IN_CHAT_WINDOW, (_event, sessionId: string) => {

@@ -1,4 +1,5 @@
 // Opener engine 共享类型。
+import type { ProactiveState } from "../proactive/proactive-types";
 
 /** 8 个场景 id（与 manifest packs 的 key 对应）。 */
 export type SceneId =
@@ -28,11 +29,8 @@ export interface Manifest {
 }
 
 /** 运行时持久化状态（opener-state.json）。 */
-export interface OpenerState {
-  globalDesire: number;                       // 0-100
-  affinity: Record<string, number>;           // 各场景偏好倍数，初始 1.0，范围 [0.3, 2.0]
+export interface OpenerState extends ProactiveState {
   todayFired: Record<string, boolean>;        // 今日已触发的标志
-  lastFiredAt: Record<string, number | null>; // 各场景上次触发时间戳 ms
   recentItems: Record<string, string[]>;      // 各场景最近播过的 item id
   lastTriggeredScene: string | null;          // 供反馈闭环
   lastTriggeredAt: number | null;
@@ -62,11 +60,12 @@ export interface WeatherSnapshot {
 /** LIVE2D_SHOW_BUBBLE payload。 */
 export interface ShowBubblePayload {
   text: string;
-  audioBase64: string;
-  format: "wav" | "mp3";
-  durationMs: number;
+  audioBase64?: string;
+  format?: "wav" | "mp3";
+  durationMs?: number;
   sceneId: string;
   itemId: string;
+  sessionId?: string;
 }
 
 /** OPENER_FEEDBACK payload。 */

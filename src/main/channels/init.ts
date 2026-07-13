@@ -21,6 +21,15 @@ import { getRecentLog, clearLog } from "./message-log";
 const LOG = "[ChannelsInit]";
 
 let initialized = false;
+let conversationLifecycle: {
+  onUserMessage(): void;
+  onConversationStarted(): void;
+  onConversationEnded(): void;
+} | null = null;
+
+export function setChannelsConversationLifecycle(lifecycle: typeof conversationLifecycle): void {
+  conversationLifecycle = lifecycle;
+}
 /** 微信 adapter 全局引用（UI 登录按钮需要） */
 let wxAdapter: ILinkBotAdapter | null = null;
 
@@ -31,7 +40,13 @@ export async function initChannels(): Promise<void> {
 
   // 注入 dispatcher 到 manager
   channelManager.setDispatcher(async (msg) => {
-    return await channelDispatcher.handleIncoming(msg);
+    conversationLifecycle?.onUserMessage();
+    conversationLifecycle?.onConversationStarted();
+    try {
+      return await channelDispatcher.handleIncoming(msg);
+    } finally {
+      conversationLifecycle?.onConversationEnded();
+    }
   });
 
   // 注册全局 IPC
