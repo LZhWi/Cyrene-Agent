@@ -8,6 +8,7 @@ import { IPC } from "../shared/ipc-channels";
 import { normalizeUiTheme, type UiTheme } from "../shared/ui-theme";
 import { DEFAULT_UI_FONT, isSupportedFontFileName, normalizeUiFont, type UiFont } from "../shared/ui-font";
 import { normalizeUiIcon, UI_ICON_PRESETS, type UiIcon } from "../shared/ui-icon";
+import { foldReasoning, normalizeReasoningPreference, type ReasoningPreference } from "../shared/reasoning";
 import { getUiFontResponseHeaders, isSafeUiFontRequest } from "./ui-font-protocol";
 import {
   normalizeDefaultChatMode,
@@ -353,6 +354,12 @@ interface ProviderProfile {
    * 不存 = 等价于 "auto"。
    */
   explicitTransport?: "openai" | "anthropic" | "auto";
+  /**
+   * 用户保存的推理偏好（source of truth）。顶层 ModelSettings.reasoning 是当前厂商镜像。
+   * 当前模型不支持某个 effort 时仍保留 user preference，
+   * 实际请求时由 resolveEffectiveReasoning 决定 effective config。
+   */
+  reasoning?: ReasoningPreference;
 }
 
 /**
@@ -413,6 +420,12 @@ interface ModelSettings {
    * 详见 ProviderProfile.explicitTransport。
    */
   explicitTransport?: "openai" | "anthropic" | "auto";
+  /**
+   * 当前厂商 reasoning 偏好的顶层镜像（与 explicitTransport 同思路）。
+   * 真值在 perProvider[currentProvider].reasoning；顶层字段是 view。
+   * 保存的是用户 preference（不覆盖）；effective config 由 capability 决定。
+   */
+  reasoning?: ReasoningPreference;
   // 按厂商缓存：currentProvider 之外的厂商配置也保留在这里，切回来时回填。
   // 真值（source of truth）是 perProvider；顶层 baseUrl/model/apiKey 是当前厂商那一份的展开镜像，
   // 仅为兼容现有 main 进程里大量直接读 settings.baseUrl 等代码而保留。
@@ -891,6 +904,7 @@ function normalizeProviderProfile(input: Partial<ProviderProfile> | null | undef
     apiKey: typeof input?.apiKey === "string" ? input.apiKey.trim() : "",
     displayName: typeof input?.displayName === "string" && input?.displayName.trim() ? input.displayName.trim() : undefined,
     explicitTransport,
+    reasoning: normalizeReasoningPreference((input as { reasoning?: unknown })?.reasoning),
   };
 }
 
@@ -954,6 +968,7 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
     model: profile.model,
     apiKey: profile.apiKey,
     explicitTransport: profile.explicitTransport,
+    reasoning: profile.reasoning,  // 顶层镜像：与 explicitTransport 同源（perProvider[currentProvider].reasoning）
     perProvider,
     runtimeSync: input?.runtimeSync === "llm" ? "llm" : input?.runtimeSync === "local" ? "local" : "off",
     stickerEnabled: input?.stickerEnabled !== false,
@@ -1041,6 +1056,25 @@ function saveModelSettings(settings: Partial<ModelSettings>): ModelSettings {
     settings.explicitTransport === "openai" || settings.explicitTransport === "anthropic" || settings.explicitTransport === "auto"
       ? settings.explicitTransport
       : incomingProfile.explicitTransport;
+  // reasoning 折叠（用户第三轮修订 #4）：优先级 perProvider > 顶层 > existing
+  const incomingProfileForReasoning = (settings.perProvider ?? {})[currentProvider];
+  const hasProfileReasoning = incomingProfileForReasoning
+    && Object.prototype.hasOwnProperty.call(incomingProfileForReasoning, "reasoning");
+  const hasTopLevelReasoning = Object.prototype.hasOwnProperty.call(settings, "reasoning");
+  let chosenReasoningRaw: unknown;
+  let chosenReasoningHasKey: boolean;
+  if (hasProfileReasoning) {
+    chosenReasoningRaw = (incomingProfileForReasoning as { reasoning?: unknown }).reasoning;
+    chosenReasoningHasKey = true;
+  } else if (hasTopLevelReasoning) {
+    chosenReasoningRaw = settings.reasoning;
+    chosenReasoningHasKey = true;
+  } else {
+    chosenReasoningRaw = undefined;
+    chosenReasoningHasKey = false;
+  }
+  const foldedReasoning = foldReasoning(chosenReasoningRaw, incomingProfile.reasoning, chosenReasoningHasKey);
+
   perProvider[currentProvider] = {
     baseUrl: typeof settings.baseUrl === "string" ? settings.baseUrl.trim() : incomingProfile.baseUrl,
     model: typeof settings.model === "string" ? settings.model.trim() : incomingProfile.model,
@@ -1049,6 +1083,7 @@ function saveModelSettings(settings: Partial<ModelSettings>): ModelSettings {
       ? settings.displayName.trim()
       : incomingProfile.displayName,
     explicitTransport: incomingExplicitTransport,
+    reasoning: foldedReasoning,
   };
 
   merged.provider = currentProvider;
@@ -1631,6 +1666,7 @@ async function callChatCompletionsStream(
     model: settings.model,
     apiKey: settings.apiKey,
     explicitTransport: settings.explicitTransport,
+    reasoning: settings.reasoning,
   };
 
   try {
@@ -2001,6 +2037,7 @@ function initializeProactiveChatService(): void {
           model: settings.model,
           apiKey: settings.apiKey,
           explicitTransport: settings.explicitTransport,
+          reasoning: settings.reasoning,
         },
         messages,
         timeoutMs: 45_000,

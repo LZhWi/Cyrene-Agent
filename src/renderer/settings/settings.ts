@@ -23,6 +23,12 @@ import { normalizeUiTheme, type UiTheme } from "../../shared/ui-theme";
 import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-font";
 import { normalizeUiIcon, type UiIcon } from "../../shared/ui-icon";
 import { buildAppearanceSettingsPatch } from "./appearance-settings-state";
+import {
+  EFFORT_LABEL,
+  renderReasoningControls as renderReasoningControlsImpl,
+  type ReasoningDomRefs,
+} from "./reasoning-controls";
+import { type ReasoningEffort, type ReasoningMode, type ReasoningPreference } from "../../shared/reasoning";
 
 // Inline modal (to avoid Vite tree-shaking)
 let _cyModalOverlay: HTMLElement | null = null;
@@ -159,6 +165,7 @@ interface ProviderProfile {
    * main 进程的 resolveTransport() 负责把 "auto" 解析为具体 transport。
    */
   explicitTransport?: "openai" | "anthropic" | "auto";
+  reasoning?: ReasoningPreference;
 }
 
 interface ModelSettings {
@@ -174,6 +181,8 @@ interface ModelSettings {
    * UI 改动 transport-select 时，saveConfig 把这个值带给 main 进程折叠回 perProvider。
    */
   explicitTransport?: "openai" | "anthropic" | "auto";
+  /** 当前厂商 reasoning 偏好的顶层镜像。 */
+  reasoning?: ReasoningPreference;
   // 按厂商缓存：切回该厂商时，从这里恢复 baseUrl / model / apiKey
   perProvider?: Record<string, ProviderProfile>;
   runtimeSync: "off" | "local" | "llm";
@@ -656,6 +665,14 @@ const visionFieldsWrap = document.querySelector(".vision-fields") as HTMLElement
 const testVisionBtn = document.getElementById("test-vision-btn") as HTMLButtonElement;
 const visionTestStatus = document.getElementById("vision-test-status") as HTMLElement;
 
+// 推理设置 DOM
+const reasoningModeRow = document.getElementById("reasoning-mode-row") as HTMLElement;
+const reasoningModeControls = document.getElementById("reasoning-mode-controls") as HTMLElement;
+const reasoningEffortRow = document.getElementById("reasoning-effort-row") as HTMLElement;
+const reasoningEffortControls = document.getElementById("reasoning-effort-controls") as HTMLElement;
+const reasoningFixedOnRow = document.getElementById("reasoning-fixed-on-row") as HTMLElement;
+const reasoningStatusNote = document.getElementById("reasoning-status-note") as HTMLElement;
+
 // 渲染端内存缓存：保存每个厂商上一次填写的 baseUrl / model / apiKey
 // 切厂商时从这里读，保存时同步进去；持久化由 main 进程的 saveModelSettings 负责（perProvider 字段）。
 const providerProfileCache: Record<string, ProviderProfile> = {};
@@ -952,12 +969,15 @@ function fillModelOptions(preset: ModelPreset, preferredModel?: string): void {
  */
 function captureActiveProviderProfile(): void {
   if (!activeProvider) return;
+  const cached = providerProfileCache[activeProvider];
+  // reasoning 仍由 renderReasoningControls 写入 cache；这里只保留它（不动 mode/effort）
   providerProfileCache[activeProvider] = {
     baseUrl: baseUrlInput.value.trim(),
     model: getCurrentModelValue().trim(),
     apiKey: apiKeyInput.value.trim(),
     displayName: displayNameInput.value.trim(),
     explicitTransport: transportSelect.value as ProviderProfile["explicitTransport"],
+    reasoning: cached?.reasoning,
   };
 }
 
@@ -1087,7 +1107,64 @@ function applyPreset(
 
   activeProvider = preset.providerName;
   applyVisionSyncUI();
+  renderReasoningControls(
+    preset.providerName,
+    getCurrentModelValue(),
+    providerProfileCache[preset.providerName]?.reasoning,
+  );
 }
+
+// ── 推理控件 ──────────────────────────────────────────────────────
+
+const REASONING_REFS: ReasoningDomRefs = {
+  modeRow: reasoningModeRow,
+  modeControls: reasoningModeControls,
+  effortRow: reasoningEffortRow,
+  effortControls: reasoningEffortControls,
+  fixedOnRow: reasoningFixedOnRow,
+  statusNote: reasoningStatusNote,
+};
+
+function renderReasoningControls(
+  provider: string,
+  model: string,
+  saved: ReasoningPreference | undefined,
+): void {
+  renderReasoningControlsImpl(provider, model, saved, REASONING_REFS);
+}
+
+function onModeClick(provider: string, model: string, mode: ReasoningMode): void {
+  const cached = providerProfileCache[provider] ?? {};
+  const newPref: ReasoningPreference = { mode, ...(cached.reasoning?.effort !== undefined ? { effort: cached.reasoning.effort } : {}) };
+  providerProfileCache[provider] = { ...cached, reasoning: newPref };
+  renderReasoningControls(provider, model, newPref);
+  setSaveStatus("有未保存的更改");
+}
+
+function onEffortClick(provider: string, model: string, effort: ReasoningEffort): void {
+  const cached = providerProfileCache[provider] ?? {};
+  const newPref: ReasoningPreference = { mode: cached.reasoning?.mode ?? "on", effort };
+  providerProfileCache[provider] = { ...cached, reasoning: newPref };
+  renderReasoningControls(provider, model, newPref);
+  setSaveStatus("有未保存的更改");
+}
+
+reasoningModeControls.querySelectorAll<HTMLButtonElement>(".option-block").forEach((btn) => {
+  btn.addEventListener("click", () => {
+    if (!activeProvider) return;
+    const mode = btn.dataset.reasoningMode as ReasoningMode;
+    onModeClick(activeProvider, getCurrentModelValue(), mode);
+  });
+});
+
+reasoningEffortControls.addEventListener("click", (ev) => {
+  const target = ev.target as HTMLElement;
+  if (!activeProvider) return;
+  const btn = target.closest<HTMLButtonElement>(".option-block[data-reasoning-effort]");
+  if (!btn) return;
+  const effort = btn.dataset.reasoningEffort as ReasoningEffort;
+  onEffortClick(activeProvider, getCurrentModelValue(), effort);
+});
 
 async function loadConfig(): Promise<void> {
   try {
@@ -1106,6 +1183,7 @@ async function loadConfig(): Promise<void> {
               ? (value as { displayName: string }).displayName
               : undefined,
             explicitTransport: (value as { explicitTransport?: "openai" | "anthropic" | "auto" }).explicitTransport,
+            reasoning: (value as { reasoning?: ReasoningPreference }).reasoning,
           };
         }
       }
@@ -2035,7 +2113,13 @@ baseUrlInput.addEventListener("input", () => {
   visionBaseUrlInput.value = preset?.visionBaseUrl || baseUrlInput.value;
 });
 apiKeyInput.addEventListener("input", () => { if (isVisionSynced()) visionApiKeyInput.value = apiKeyInput.value; });
-modelInput.addEventListener("input", () => { if (isVisionSynced()) visionModelInput.value = modelInput.value; });
+modelInput.addEventListener("input", () => {
+  if (isVisionSynced()) visionModelInput.value = modelInput.value;
+  // 切换模型名时重新解析 capability
+  if (activeProvider) {
+    renderReasoningControls(activeProvider, modelInput.value, providerProfileCache[activeProvider]?.reasoning);
+  }
+});
 
 // Base URL 重置按钮：一键复原厂商默认 baseUrl
 baseUrlResetBtn.addEventListener("click", () => {
@@ -2243,6 +2327,7 @@ apiForm.addEventListener("submit", async (e) => {
       model: getCurrentModelValue().trim(),
       apiKey: apiKeyInput.value.trim(),
       explicitTransport: transportSelect.value as "openai" | "anthropic" | "auto",
+      reasoning: providerProfileCache[activeProvider]?.reasoning,
       vision: {
         syncWithMain: isVisionSynced(),
         // syncWithMain=true 时三字段传空（main 进程不落盘，运行时从主配置读）

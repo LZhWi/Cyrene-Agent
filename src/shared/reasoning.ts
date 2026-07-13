@@ -379,3 +379,27 @@ export function normalizeReasoningPreference(
   }
   return { mode, effort: obj.effort as ReasoningEffort };
 }
+
+/**
+ * 持久化折叠（用户第三轮修订 #4）：
+ *
+ * 语义：
+ * - hasIncomingKey=false（字段缺失）→ 保留旧值（不覆盖）
+ * - hasIncomingKey=true 且 incomingRaw 为 undefined / null → 视作"用户主动清空" → 返 undefined
+ * - hasIncomingKey=true 且 incomingRaw 为非法对象 → normalize 后 undefined → 保留旧值（防覆盖）
+ * - hasIncomingKey=true 且合法对象 → 用新值
+ *
+ * 调用方负责传入正确的 hasIncomingKey（区分 "settings 里没这个字段" vs "settings 里显式 undefined"）。
+ * hasOwnProperty 是判断字段缺失的标准方式。
+ */
+export function foldReasoning(
+  incomingRaw: unknown,
+  existing: ReasoningPreference | undefined,
+  hasIncomingKey: boolean,
+): ReasoningPreference | undefined {
+  if (!hasIncomingKey) return existing;
+  if (incomingRaw === undefined || incomingRaw === null) return undefined;
+  const normalized = normalizeReasoningPreference(incomingRaw);
+  if (normalized === undefined) return existing;
+  return normalized;
+}

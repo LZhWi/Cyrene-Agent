@@ -406,3 +406,69 @@ describe("MODEL_REASONING_RULES — 数据完整性", () => {
     }
   });
 });
+
+// ── F. foldReasoning 三态 + 优先级（用户第三轮修订 #4）──
+
+import { foldReasoning } from "./reasoning";
+
+describe("foldReasoning — 持久化折叠（用户第三轮修订 #4）", () => {
+  test("H1 缺省（hasIncomingKey=false）→ 保留旧值", () => {
+    const existing = { mode: "on" as const, effort: "high" as const };
+    expect(foldReasoning(undefined, existing, false)).toEqual(existing);
+  });
+
+  test("H1b 缺省 + existing 为 undefined → 返 undefined", () => {
+    expect(foldReasoning(undefined, undefined, false)).toBeUndefined();
+  });
+
+  test("H2 显式 auto（合法）→ 写盘为 {mode:'auto'}，清掉旧 effort", () => {
+    const existing = { mode: "on" as const, effort: "high" as const };
+    expect(foldReasoning({ mode: "auto" }, existing, true)).toEqual({ mode: "auto" });
+  });
+
+  test("H3 非法值（hasIncomingKey=true 但 normalize 后 undefined）→ 保留旧值（防覆盖）", () => {
+    const existing = { mode: "on" as const, effort: "high" as const };
+    expect(foldReasoning({ mode: "banana" }, existing, true)).toEqual(existing);
+    expect(foldReasoning("not an object", existing, true)).toEqual(existing);
+  });
+
+  test("H3b 合法 mode + 非法 effort → normalize 后是 {mode}，作为更新（清掉非法 effort）", () => {
+    const existing = { mode: "on" as const, effort: "high" as const };
+    expect(foldReasoning({ mode: "on", effort: "ultra" }, existing, true)).toEqual({ mode: "on" });
+  });
+
+  test("H4 显式 undefined/null → 视作用户主动清空，返 undefined", () => {
+    expect(foldReasoning(undefined, { mode: "on" as const, effort: "high" as const }, true))
+      .toBeUndefined();
+    expect(foldReasoning(null, { mode: "on" as const, effort: "high" as const }, true))
+      .toBeUndefined();
+  });
+
+  test("H5 perProfile 优先于顶层 reasoning（H5 模拟 foldReasoning 调用：选 perProfile）", () => {
+    // 模拟 saveModelSettings 决策：perProfile.reasoning 存在时 → 选 perProfile
+    const perProfileReasoning = { mode: "off" as const };
+    const topLevelReasoning = { mode: "on" as const, effort: "low" as const };
+    const existing = { mode: "auto" as const };
+
+    // 决策 1：选 perProfile → foldReasoning(perProfileReasoning, existing, true)
+    const r1 = foldReasoning(perProfileReasoning, existing, true);
+    expect(r1).toEqual({ mode: "off" });
+
+    // 决策 2：没 perProfile 时选 topLevel → foldReasoning(topLevelReasoning, existing, true)
+    const r2 = foldReasoning(topLevelReasoning, existing, true);
+    expect(r2).toEqual({ mode: "on", effort: "low" });
+
+    // 决策 3：都没选 → foldReasoning(undefined, existing, false) → 保留旧值
+    const r3 = foldReasoning(undefined, existing, false);
+    expect(r3).toEqual(existing);
+  });
+
+  test("H6 顶层 reasoning 在没有 perProfile 写入时生效", () => {
+    const topLevel = { mode: "on" as const, effort: "low" as const };
+    const existing = undefined;
+    // 模拟决策：incomingProfileForReasoning 不带 reasoning → hasProfileReasoning=false，
+    // 顶层 settings.reasoning 存在 → hasTopLevelReasoning=true
+    // → foldReasoning(topLevel, undefined, true)
+    expect(foldReasoning(topLevel, existing, true)).toEqual({ mode: "on", effort: "low" });
+  });
+});
