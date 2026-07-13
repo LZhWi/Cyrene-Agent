@@ -60,6 +60,7 @@ import type { SceneIndex } from "./scene-embedder";
 import { loadUserStickerManifest, addUserSticker, deleteUserSticker, getAllStickerConfig, isStickerIdTaken, getStickersDir } from "./sticker-storage";
 import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
 import { normalizeWindowVisibilitySettings } from "./window-visibility-settings";
+import { PetWindowMoveController } from "./pet-window-movement";
 import type { StickerConfigItem } from "../shared/sticker-types";
 import { initReranker, getRerankerInstallStatus } from "./rag/reranker";
 import { memoryStore } from "./memory/memory-store"
@@ -137,6 +138,12 @@ let schedulerEngine: SchedulerEngine | null = null;
 let proactiveChatService: ProactiveChatService | null = null;
 let normalConversationBusyCount = 0;
 let proactiveScreenLocked = false;
+const petWindowMoveController = new PetWindowMoveController(
+  () => mainWindow,
+  ({ x, y }) => {
+    saveGeneralSettings({ petWindowX: x, petWindowY: y });
+  },
+);
 const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
   onClosed: () => setLive2dWindow(null),
 });
@@ -2559,6 +2566,7 @@ function createWindow(): void {
   });
 
   mainWindow.on("closed", () => {
+    petWindowMoveController.dispose();
     live2dWindowLifecycle.clear(mainWindow ?? undefined);
     mainWindow = null;
   });
@@ -2948,19 +2956,11 @@ ipcMain.handle(IPC.WINDOW_SET_INTERACTIVE, (_event, interactive: boolean) => {
 });
 
 ipcMain.on(IPC.WINDOW_MOVE, (_event, dx: number, dy: number) => {
-  if (mainWindow) {
-    const [x, y] = mainWindow.getPosition();
-    mainWindow.setPosition(x + dx, y + dy);
-  }
+  petWindowMoveController.moveRelative(dx, dy);
 });
 
 ipcMain.on(IPC.WINDOW_MOVE_TO, (_event, x: number, y: number) => {
-  if (!mainWindow) return;
-  const rx = Math.round(x);
-  const ry = Math.round(y);
-  mainWindow.setPosition(rx, ry, false);
-  // 拖拽结束或 setPosition 时保存位置
-  void saveGeneralSettings({ petWindowX: rx, petWindowY: ry });
+  petWindowMoveController.queueAbsolute(x, y);
 });
 
 /**
@@ -2989,8 +2989,14 @@ ipcMain.on(IPC.WINDOW_MOVE_TO, (_event, x: number, y: number) => {
  * translucent during the drag.
  */
 ipcMain.on(IPC.WINDOW_SET_DRAGGING, (_event, isDragging: boolean) => {
-  if (!mainWindow) return;
-  mainWindow.setOpacity(isDragging ? 0.99 : 1.0);
+  const window = mainWindow;
+  if (!window || window.isDestroyed()) return;
+  if (!isDragging) petWindowMoveController.finishDragging();
+  try {
+    window.setOpacity(isDragging ? 0.99 : 1.0);
+  } catch (error) {
+    console.warn("[Cyrene] Failed to update pet window dragging opacity:", error);
+  }
 });
 
 /**
@@ -4547,6 +4553,7 @@ app.on("window-all-closed", () => {});
 
 // 应用退出前把 token 用量缓存落盘（防抖未触发的最后一次写）
 app.on("before-quit", () => {
+  petWindowMoveController.dispose();
   schedulerEngine?.stop();
   stopOpener();
   flushTokenUsage();
