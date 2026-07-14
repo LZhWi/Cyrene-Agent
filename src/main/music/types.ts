@@ -1,3 +1,11 @@
+export interface EncryptedAccountBlob {
+  formatVersion: 1;
+  provider: "netease-cloud-music";
+  savedAt: number;
+  credentialRevision: number;
+  payload: Buffer;
+}
+
 export interface MusicProfile {
   userId: string;
   nickname: string;
