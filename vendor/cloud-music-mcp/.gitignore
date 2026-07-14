@@ -5,3 +5,4 @@ __pycache__/
 storage/
 .venv/
 .pytest_cache/
+src/cloud_music_mcp.egg-info/
