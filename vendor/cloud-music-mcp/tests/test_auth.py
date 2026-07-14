@@ -219,3 +219,28 @@ def test_check_login_atomicity_cancel_after_803_cannot_run(monkeypatch, tmp_stor
     # After 803, the pending session must have been popped.
     cancel_out = auth.cancel_login(sid)
     assert cancel_out["status"] == "no_op"
+
+
+def test_main_module_exposes_cyrene_login_tools():
+    """The three Cyrene non-blocking login tools must be registered on
+    the FastMCP server, and the legacy `cloud_music_login` tool must
+    still be present so non-Cyrene callers are not broken."""
+    # NOTE: `cloud_music_mcp.__init__` defines a top-level `main()`
+    # function which shadows the `main` submodule on `import X.main`,
+    # so we cannot do `from cloud_music_mcp import main as m`.
+    # The package re-exports the FastMCP instance as `cloud_music_mcp.mcp`,
+    # which is the canonical public accessor.
+    import cloud_music_mcp
+
+    # FastMCP 2.x keeps registered tools in `_tool_manager._tools`
+    # as a dict[str, FunctionTool]; each value exposes `.name`. The
+    # public `get_tools()` is async-only and not usable from a sync test.
+    tool_names = {
+        t.name for t in cloud_music_mcp.mcp._tool_manager._tools.values()
+    }
+
+    assert "cyrene_music_login_begin" in tool_names
+    assert "cyrene_music_login_check" in tool_names
+    assert "cyrene_music_login_cancel" in tool_names
+    # Legacy tool must still be present
+    assert "cloud_music_login" in tool_names

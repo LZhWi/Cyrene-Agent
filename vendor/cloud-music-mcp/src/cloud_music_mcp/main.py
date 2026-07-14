@@ -241,3 +241,34 @@ def cloud_music_play(id: str, type: str = "song"):
 
 if __name__ == "__main__":
     mcp.run()
+
+
+# === Cyrene non-blocking login MCP tools (vendored patch) ===
+# Preserved verbatim above: `cloud_music_login` and `login_via_qrcode`
+# are unchanged for non-Cyrene callers. The three tools below call the
+# non-blocking auth interface from auth.py (begin_login / check_login /
+# cancel_login) and never invoke os.startfile / render PNGs.
+from cloud_music_mcp.auth import (  # noqa: E402
+    begin_login,
+    check_login,
+    cancel_login,
+    _sanitize,
+)
+
+
+@mcp.tool(description="[Cyrene] Begin QR-code login. Returns session id and qr text; no PNG, no startfile.")
+def cyrene_music_login_begin():
+    logger.info(_sanitize("cyrene_music_login_begin called"))
+    return begin_login()
+
+
+@mcp.tool(description="[Cyrene] Check login status for an existing session.")
+def cyrene_music_login_check(session_id: str):
+    logger.info(_sanitize(f"cyrene_music_login_check session_id={session_id}"))
+    return check_login(session_id)
+
+
+@mcp.tool(description="[Cyrene] Cancel an in-flight login session.")
+def cyrene_music_login_cancel(session_id: str):
+    logger.info(_sanitize(f"cyrene_music_login_cancel session_id={session_id}"))
+    return cancel_login(session_id)
