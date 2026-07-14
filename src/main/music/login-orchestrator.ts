@@ -148,6 +148,8 @@ export class LoginOrchestrator {
     try {
       const json = JSON.parse(raw.toString("utf8")) as Record<string, string>;
       await this.deps.vault.persist({ cookies: json, revision });
+    } catch {
+      /* fire-and-forget; caller must not rely on persistence success */
     } finally {
       this.pendingPersist = false;
     }
