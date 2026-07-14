@@ -1233,14 +1233,14 @@ body {
 }
 .dm-opt:hover {
   background: var(--rb-border-faint);
-  color: var(--rb-pink-100);
+  color: #E74C77;
 }
 .dm-opt.is-active {
-  color: var(--rb-text-on-pink);
+  color: #E74C77;
 }
 .dm-opt.is-active::after {
   content: "✓";
-  color: var(--rb-pink-glow);
+  color: #E74C77;
   margin-left: 10px;
   font-weight: 600;
 }
@@ -1454,7 +1454,7 @@ body {
 
 .chat__empty-text {
   font-size: 15px;
-  color: rgba(255, 255, 255, 0.65);
+  color: var(--rb-text-muted);
   margin: 0;
   letter-spacing: 0.5px;
 }
