@@ -47,7 +47,7 @@ import { indexConversationTurn } from "./orchestrator/history-tools";
 import { buildToneInjection } from "./orchestrator/tone-injector";
 import { getAdapter, buildVendorUrl, getAdapterForConfig, createSseReader } from "./orchestrator/vendors";
 import type { VendorConfig } from "./orchestrator/vendors";
-import { getCapability } from "./orchestrator/vendors/capabilities";
+import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
 import type { VisionConfig } from "./orchestrator/vision-captioner";
 import { toolRegistry, type ToolDefinition } from "./orchestrator/tool-registry";
 import { buildToolCatalog } from "./orchestrator/tool-catalog";
@@ -3175,6 +3175,34 @@ ipcMain.on(IPC.CHAT_TOGGLE_MAXIMIZE, () => {
 
 ipcMain.handle(IPC.CHAT_IS_MAXIMIZED, () => {
   return chatWindow?.isMaximized() ?? false;
+});
+
+// 推理下拉原子读：{ providerKey, providerId, model, preference }
+// providerKey = settings.provider（displayName），用来防竞态；chat:setReasoning 需携带同 providerKey。
+ipcMain.handle(IPC.CHAT_GET_REASONING_STATE, () => {
+  const settings = loadModelSettings();
+  const cap = getCapabilityOrOpenAI(settings.provider);
+  return {
+    providerKey: settings.provider,
+    providerId: cap.id,
+    model: settings.model,
+    preference: settings.perProvider?.[settings.provider]?.reasoning,
+  };
+});
+
+// 推理下拉写：原子。payload 形如 { providerKey, preference }，providerKey 防竞态。
+ipcMain.handle(IPC.CHAT_SET_REASONING, (_event, payload: unknown) => {
+  if (!payload || typeof payload !== "object") return;
+  const p = payload as { providerKey?: unknown; preference?: unknown };
+  if (typeof p.providerKey !== "string" || typeof p.preference !== "object" || !p.preference) return;
+  const current = loadModelSettings();
+  if (current.provider !== p.providerKey) {
+    // 竞态：用户拿到 state 后、点选项前，provider 已切换。丢弃旧 providerKey 的写。
+    return;
+  }
+  const normalized = normalizeReasoningPreference(p.preference);
+  if (!normalized) return;
+  saveModelSettings({ reasoning: normalized });
 });
 ipcMain.handle(IPC.CHAT_SEND_MESSAGE, async (_event, messages: unknown) => {
   proactiveConversationLifecycle.onUserMessage();

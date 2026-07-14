@@ -27,6 +27,9 @@ export const IPC = {
   CHAT_GET_IMAGE_SEND_STRATEGY: "chat:get-image-send-strategy",
   CHAT_STREAM_CHUNK: "chat:stream-chunk",
   CHAT_STREAM_DONE: "chat:stream-done",
+  // 推理下拉（chat 窗口：原子读 + providerKey 写）
+  CHAT_GET_REASONING_STATE: "chat:get-reasoning-state",
+  CHAT_SET_REASONING: "chat:set-reasoning",
 
   // AG-UI 事件流（替换上面的 chat:stream-* 的新通道）
   AGUI_RUN: "agui:run",

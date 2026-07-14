@@ -118,31 +118,6 @@
             </label>
           </div>
 
-          <!-- 推理设置（auto/off/on + effort） -->
-          <fieldset id="reasoning-card" class="reasoning-card">
-            <legend>推理设置</legend>
-            <div class="reasoning-row" id="reasoning-mode-row">
-              <span class="field-label">思考模式</span>
-              <div id="reasoning-mode-controls" class="option-blocks option-blocks--wide" role="radiogroup" aria-label="思考模式">
-                <button type="button" class="option-block" data-reasoning-mode="auto" aria-pressed="false">跟随模型</button>
-                <button type="button" class="option-block" data-reasoning-mode="off" aria-pressed="false">关闭</button>
-                <button type="button" class="option-block" data-reasoning-mode="on" aria-pressed="false">开启</button>
-              </div>
-            </div>
-            <div class="reasoning-row" id="reasoning-effort-row" hidden>
-              <span class="field-label">推理强度</span>
-              <div id="reasoning-effort-controls" class="option-blocks option-blocks--wide" role="radiogroup" aria-label="推理强度">
-                <!-- 按 capability.supportedEfforts 动态生成按钮 -->
-              </div>
-            </div>
-            <div class="reasoning-row" id="reasoning-fixed-on-row" hidden>
-              <span class="hint" id="reasoning-fixed-on-note">思考模式：始终开启</span>
-            </div>
-            <div class="reasoning-row">
-              <span class="hint" id="reasoning-status-note"></span>
-            </div>
-          </fieldset>
-
           <div class="api-note">
             <span>🔒</span>
             <p>选择模型预设后会自动填入 Provider、Base URL 和模型名；你只需要填写对应平台的 API Key。配置只保存在本机 Electron 用户数据目录。</p>

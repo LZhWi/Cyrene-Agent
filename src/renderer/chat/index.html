@@ -123,11 +123,8 @@
   </div>
   <div class="dropdown-menu" id="reasoning-dropdown">
     <div class="dm-title">推理强度</div>
-    <div class="dm-opt" data-value="Custom · 自定义">Custom · 自定义</div>
-    <div class="dm-opt is-active" data-value="Auto · 自动">Auto · 自动</div>
-    <div class="dm-opt" data-value="Low · 低">Low · 低</div>
-    <div class="dm-opt" data-value="Medium · 中">Medium · 中</div>
-    <div class="dm-opt" data-value="High · 高">High · 高</div>
+    <!-- 由 chat/main.ts 运行时按 (providerId, model) capability 动态生成。
+         初始留空；main.ts init 失败时塞入一个 disabled "跟随模型" 安全占位。 -->
   </div>
 </body>
 </html>

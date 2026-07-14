@@ -3415,6 +3415,117 @@ clearBtn.addEventListener("click", clearChat);
     });
   });
 
+  // ── 推理下拉：动态生成 ──────────────────────────────
+  let reasoningDropdownActive = false;
+  let reasoningProviderKey = "";
+  let reasoningDropdownDisabled = false;
+  let reasoningActivePreference: unknown = null;
+
+  async function rebuildReasoningDropdown() {
+    try {
+      const state = await window.chat!.getReasoningState() as {
+        providerKey: string; providerId: string; model: string;
+        preference?: { mode: string; effort?: string };
+      };
+      reasoningProviderKey = state.providerKey;
+      // 动态 import 纯函数（vite tree-shake 后仍可执行）
+      const { computeReasoningDropdown, formatReasoningTriggerLabel } = await import("./reasoning-dropdown");
+      const view = computeReasoningDropdown(state.providerId, state.model, state.preference);
+      reasoningDropdownDisabled = view.disabled;
+      reasoningActivePreference = view.activePreference;
+
+      // 填充下拉项
+      const menu = menus["reasoning-dropdown"];
+      if (!menu) return;
+      // 保留 dm-title，清空后续所有 dm-opt
+      const title = menu.querySelector(".dm-title");
+      menu.replaceChildren();
+      if (title) menu.appendChild(title);
+
+      for (const item of view.items) {
+        const opt = document.createElement("div");
+        opt.className = "dm-opt";
+        opt.dataset.reasoningPreference = JSON.stringify(item.preference);
+        opt.textContent = item.label;
+        if (item.disabled) {
+          opt.classList.add("is-disabled");
+          opt.style.opacity = "0.4";
+          opt.style.pointerEvents = "none";
+        }
+        if (item.hint) opt.title = item.hint;
+        // 当前选中
+        if (JSON.stringify(item.preference) === JSON.stringify(view.activePreference)) {
+          opt.classList.add("is-active");
+        }
+        // disabled item 不绑 click
+        if (item.disabled) {
+          opt.addEventListener("click", (e) => e.stopPropagation());
+        } else {
+          opt.addEventListener("click", () => {
+            if (!window.chat) return;
+            window.chat.setReasoning({
+              providerKey: reasoningProviderKey,
+              preference: item.preference,
+            }).then(() => {
+              reasoningActivePreference = item.preference;
+              menu.querySelectorAll(".dm-opt").forEach(o => o.classList.remove("is-active"));
+              opt.classList.add("is-active");
+              const val = values["reasoning-dropdown"];
+              if (val) val.textContent = formatReasoningTriggerLabel(item.label);
+              closeAll();
+            }).catch(() => {});
+          });
+        }
+        menu.appendChild(opt);
+      }
+
+      // 更新触发按钮文案
+      const val = values["reasoning-dropdown"];
+      if (val && view.statusText) {
+        val.textContent = formatReasoningTriggerLabel(view.statusText);
+        // dm-title hidden when dropdown is active (view controls visualization)
+        const title2 = menu.querySelector(".dm-title") as HTMLElement | null;
+        if (title2) title2.style.display = "";
+      }
+      reasoningDropdownActive = true;
+    } catch {
+      // 失败安全占位（用户修正 #4）：塞入 disabled "跟随模型"
+      reasoningDropdownDisabled = true;
+      reasoningDropdownActive = false;
+      const menu = menus["reasoning-dropdown"];
+      if (menu) {
+        const title = menu.querySelector(".dm-title");
+        menu.replaceChildren();
+        if (title) menu.appendChild(title);
+        const opt = document.createElement("div");
+        opt.className = "dm-opt is-disabled";
+        opt.textContent = "跟随模型";
+        opt.style.opacity = "0.4";
+        opt.style.pointerEvents = "none";
+        opt.title = "推理控制暂时不可用";
+        menu.appendChild(opt);
+      }
+      const val = values["reasoning-dropdown"];
+      if (val) val.textContent = "推理 · 跟随模型";
+    }
+  }
+
+  // 初始加载
+  void rebuildReasoningDropdown();
+
+  // trigger 点击时先重渲染（model 可能已切换）
+  const reasoningTrigger = document.querySelector<HTMLElement>('.dropdown-trigger[data-dropdown="reasoning-dropdown"]');
+  if (reasoningTrigger) {
+    reasoningTrigger.addEventListener("click", async (e) => {
+      if (reasoningDropdownDisabled) {
+        e.stopImmediatePropagation(); // 当控件 disabled 时阻止原 handler 打开下拉
+        return;
+      }
+      await rebuildReasoningDropdown();
+      // 不阻止原 handler：原 handler 会 closeAll() + openDropdown(id, t)
+    }, true); // capture phase: 在原 handler (bubble 注册) 之前执行
+  }
+
   void window.chat?.getGeneralSettings?.()
     .then(function(settings) {
       selectDropdownOption("mode-dropdown", normalizeDefaultChatMode(settings?.defaultChatMode));
