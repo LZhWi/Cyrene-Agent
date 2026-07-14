@@ -121,15 +121,14 @@ export const PROVIDER_CAPABILITIES = [
     transport: "anthropic",
     baseUrl: "https://api.anthropic.com/v1",
     authStyle: "x-api-key",
-    defaultModel: "",
+    defaultModel: "claude-sonnet-4-6",
     supportsTools: true,
     supportsThinking: true,
     thinkingField: "thinking",
     cacheStrategy: "cache_control",
     testStrategy: "text",
-    // Claude 支持多模态 image content block，但 adapter 当前 disabled
+    // Claude 支持多模态 image content block
     supportsVision: true,
-    disabled: true,
   },
   {
     id: "mimo",

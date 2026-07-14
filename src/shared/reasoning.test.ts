@@ -110,6 +110,13 @@ describe("MODEL_REASONING_RULES — 9 家全部存在性", () => {
     expect(cap.control).toBe("none");
   });
 
+  test("claude claude-fable-5 → toggle-effort + anthropic-adaptive（2026.6 新旗舰）", () => {
+    const cap = resolveReasoningCapability("claude", "claude-fable-5");
+    expect(cap.control).toBe("toggle-effort");
+    expect(cap.requestStyle).toBe("anthropic-adaptive");
+    expect(cap.supportedEfforts).toContain("max");
+  });
+
   test("claude claude-sonnet-5 → toggle-effort + anthropic-adaptive", () => {
     const cap = resolveReasoningCapability("claude", "claude-sonnet-5");
     expect(cap.control).toBe("toggle-effort");

@@ -127,6 +127,13 @@ export const MODEL_REASONING_RULES: readonly ModelReasoningRule[] = [
   { providerId: "chatgpt", modelPattern: /.*/, capability: UNKNOWN_CAPABILITY },
 
   // ── claude（Anthropic）──
+  { providerId: "claude", modelPattern: /^claude-fable-5/i, capability: {
+    control: "toggle-effort",
+    supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
+    defaultEffort: "high",
+    requestStyle: "anthropic-adaptive",
+    supportsDisable: true,
+  } },
   { providerId: "claude", modelPattern: /^claude-sonnet-5/i, capability: {
     control: "toggle-effort",
     supportedEfforts: ["low", "medium", "high", "xhigh", "max"],

@@ -412,7 +412,7 @@ const MIMO_ICON_URL =
   "https://raw.githubusercontent.com/lobehub/lobe-icons/refs/heads/master/packages/static-png/light/xiaomimimo.png";
 
 const MODEL_PRESETS: ModelPreset[] = [
-  // 当前 v1 计划适配的 7 家：MiniMax / 火山 Agent-Plan / 智谱 GLM / Kimi / Qwen / ChatGPT / Claude
+  // 当前已适配 9 家：MiniMax / DeepSeek / 火山 AgentPlan / 智谱 GLM / Kimi / Qwen / ChatGPT / Claude / MiMo
   // 顺序按使用频率 + 适配优先级；未在此清单内的厂商已硬删，需要时再补回。
   {
     providerName: "MiniMax（稀宇科技）",
@@ -485,13 +485,9 @@ const MODEL_PRESETS: ModelPreset[] = [
     providerName: "Claude（Anthropic）",
     shortName: "Claude",
     baseUrl: "https://api.anthropic.com/v1",
-    // 同上，且 Anthropic 协议尚未接入，暂禁选。
-    mainModels: [],
+    mainModels: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6"],
     iconUrl: "https://unpkg.com/@lobehub/icons-static-svg@latest/icons/claude.svg",
     websiteUrl: "https://console.anthropic.com/",
-    // Anthropic 的请求体不是 OpenAI 兼容格式（messages / system / 流式都不一样），
-    // 在专属 vendor adapter 接好之前先 disabled，避免用户选到后调用直接报 4xx。
-    disabled: true,
   },
   {
     providerName: "MiMo（小米）",
