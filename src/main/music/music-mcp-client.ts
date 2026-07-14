@@ -90,11 +90,8 @@ export class MusicMcpClient {
   }
 
   async close(): Promise<void> {
-    try {
-      if (this.client) await this.client.close();
-    } catch {
-      if (this.transport) await this.transport.close();
-    }
+    try { if (this.client) await this.client.close(); } catch { /* ignore */ }
+    try { if (this.transport) await this.transport.close(); } catch { /* ignore */ }
     this.client = null;
     this.transport = null;
     this.toolsByName.clear();
