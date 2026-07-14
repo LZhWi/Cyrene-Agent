@@ -8,7 +8,7 @@
 
 | 文件 | 改动 | 目的 |
 |---|---|---|
-| `auth.py` | 末尾追加 `begin_login` / `check_login` / `cancel_login` / `validate_session_three_state` + 模块级 `_PENDING_SESSIONS` 单例状态机；新增 `STORAGE_DIR` 读取 `CYRENE_MUSIC_STORAGE_DIR` 环境变量；新增 Cookie 写入 `tempfile + os.replace` 原子写；新增 `_sanitize` 日志脱敏 | 提供非阻塞扫码会话接口、复用 pyncm 完成 weapi 加密、消除对 `os.startfile` 的依赖 |
+| `auth.py` | 末尾追加 `begin_login` / `check_login` / `cancel_login` / `validate_session_three_state` + 模块级 `_PENDING_SESSIONS` 单例状态机；新增 `STORAGE_DIR` 读取 `CYRENE_MUSIC_STORAGE_DIR` 环境变量；新增 Cookie 写入 `tempfile + os.replace` 原子写；新增 `_sanitize` 日志脱敏 + `_logger = logging.getLogger("cloud_music_mcp.cyrene")`（spec-review nit：原代码引用未定义的 `logger`，会让 803 异常路径 NameError） | 提供非阻塞扫码会话接口、复用 pyncm 完成 weapi 加密、消除对 `os.startfile` 的依赖 |
 | `tests/test_auth.py` | 新增 5 个测试用例覆盖 `begin_login` 单会话 / `login_already_active` / pyncm code 映射 / `authorized`+`credentialRevision` / `cancel_login` 幂等 | 单元测试 |
 | `pyproject.toml` | 新增 `[tool.uv] dev-dependencies = ["pytest>=8.0"]` | 让 venv 自带 pytest，便于 vendored 项目独立跑测试 |
 | `uv.lock` | 自动 lock 后含 pytest 依赖 | 与 pyproject.toml 保持一致 |

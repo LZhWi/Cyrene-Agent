@@ -116,11 +116,17 @@ def login_via_qrcode():
 
 # === Cyrene non-blocking login interface (vendored patch) ===
 
+import logging
 import threading
 
 _PENDING_SESSIONS: dict = {}
 _PENDING_LOCK = threading.Lock()
 _REVISION = 0
+
+# Local logger used by the Cyrene non-blocking interface. The legacy
+# `login_via_qrcode()` function above never defined one, so we create a
+# module-scoped logger here that is sanitized by `_sanitize()` before emit.
+_logger = logging.getLogger("cloud_music_mcp.cyrene")
 
 
 def _reset_for_tests() -> None:
@@ -225,7 +231,7 @@ def check_login(session_id: str) -> dict:
             cookies = GetCurrentSession().cookies.get_dict()
             _write_session_cookies(cookies)
         except Exception as e:  # noqa: BLE001
-            logger.warning(_sanitize(f"failed to write runtime cookies: {e}"))
+            _logger.warning(_sanitize(f"failed to write runtime cookies: {e}"))
         global _REVISION
         _REVISION += 1
         try:
@@ -278,6 +284,6 @@ def validate_session_three_state() -> dict:
                 }
             return {"state": "invalid_credentials"}
         except Exception as e:  # noqa: BLE001
-            logger.warning(_sanitize(f"validate_session transient error: {e}"))
+            _logger.warning(_sanitize(f"validate_session transient error: {e}"))
             return {"state": "temporarily_unavailable", "reason": str(e)[:200]}
     return {"state": "invalid_credentials"}
