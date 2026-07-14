@@ -200,64 +200,82 @@ def begin_login() -> dict:
 
 
 def check_login(session_id: str) -> dict:
-    """Single check on an existing session. Returns structured status."""
+    """Single check on an existing session. Returns structured status.
+
+    The lock is held across the whole check transaction so that
+    cancel_login() cannot interleave with an in-flight 803 authorization.
+    We expect at most one active session, so serializing network calls
+    via the shared lock is acceptable.
+    """
     with _PENDING_LOCK:
         info = _PENDING_SESSIONS.get(session_id)
-    if not info:
-        return {"status": "expired", "errorCode": "E_SESSION_UNKNOWN"}
-
-    if time.time() - info["started_at"] > 120:
-        with _PENDING_LOCK:
+        if not info:
+            return {"status": "expired", "errorCode": "E_SESSION_UNKNOWN"}
+        if time.time() - info["started_at"] > 120:
             _PENDING_SESSIONS.pop(session_id, None)
-        return {"status": "expired", "errorCode": "E_TIMEOUT"}
+            return {"status": "expired", "errorCode": "E_TIMEOUT"}
 
-    result = apis.login.LoginQrcodeCheck(info["uuid"])
-    code = result.get("code")
-    if code == 800:
-        with _PENDING_LOCK:
-            _PENDING_SESSIONS.pop(session_id, None)
-        return {"status": "expired", "errorCode": "E_QR_EXPIRED"}
-    if code == 801:
-        return {"status": "waiting_scan"}
-    if code == 802:
-        return {"status": "waiting_confirm"}
-    if code == 803:
-        if "cookie" in result:
-            apis.login.WriteLoginInfo(result["cookie"])
-        save_session()  # legacy helper writes into STORAGE_DIR; replaced below
-        # Re-route the cookies into the cyrene-controlled runtime dir.
         try:
-            from pyncm import GetCurrentSession
-            cookies = GetCurrentSession().cookies.get_dict()
-            _write_session_cookies(cookies)
+            result = apis.login.LoginQrcodeCheck(info["uuid"])
         except Exception as e:  # noqa: BLE001
-            _logger.warning(_sanitize(f"failed to write runtime cookies: {e}"))
-        global _REVISION
-        _REVISION += 1
-        try:
-            ui = apis.login.GetCurrentLoginStatus()
-            profile = ui.get("profile") or {}
-            payload = {
-                "status": "authorized",
-                "credentialsPersisted": True,
-                "credentialRevision": _REVISION,
-                "profile": {
-                    "userId": str(profile.get("userId") or profile.get("id") or ""),
+            _logger.warning(_sanitize(f"check_login network error: {e}"))
+            return {"status": "failed", "errorCode": "E_NETWORK"}
+
+        code = result.get("code")
+        if code == 800:
+            _PENDING_SESSIONS.pop(session_id, None)
+            return {"status": "expired", "errorCode": "E_QR_EXPIRED"}
+        if code == 801:
+            return {"status": "waiting_scan"}
+        if code == 802:
+            return {"status": "waiting_confirm"}
+        if code == 803:
+            # 803 confirms the authorization. Read cookies out of the
+            # in-process pyncm session (LoginQrcodeCheck already populates
+            # it on success) and atomically persist them into the
+            # env-controlled runtime dir. Single source of truth: the
+            # legacy save_session() / STORAGE_DIR writes are intentionally
+            # removed so they cannot shadow the runtime dir.
+            persisted_ok = False
+            try:
+                cookies = GetCurrentSession().cookies.get_dict()
+                _write_session_cookies(cookies)
+                persisted_ok = True
+            except Exception as e:  # noqa: BLE001
+                _logger.warning(
+                    _sanitize(f"failed to write runtime cookies: {e}")
+                )
+
+            global _REVISION
+            _REVISION += 1
+
+            profile_payload = {"userId": "", "nickname": "user"}
+            try:
+                ui = apis.login.GetCurrentLoginStatus()
+                profile = ui.get("profile") or {}
+                profile_payload = {
+                    "userId": str(
+                        profile.get("userId") or profile.get("id") or ""
+                    ),
                     "nickname": profile.get("nickname") or "user",
                     "avatarUrl": profile.get("avatarUrl"),
-                },
-            }
-        except Exception:  # noqa: BLE001
-            payload = {
+                }
+            except Exception:  # noqa: BLE001
+                pass
+
+            # Only drop the pending session if persistence actually
+            # succeeded. A false-success would leave the caller believing
+            # credentials are durable while they are not.
+            if persisted_ok:
+                _PENDING_SESSIONS.pop(session_id, None)
+
+            return {
                 "status": "authorized",
-                "credentialsPersisted": True,
+                "credentialsPersisted": persisted_ok,
                 "credentialRevision": _REVISION,
-                "profile": {"userId": "", "nickname": "user"},
+                "profile": profile_payload,
             }
-        with _PENDING_LOCK:
-            _PENDING_SESSIONS.pop(session_id, None)
-        return payload
-    return {"status": "failed", "errorCode": f"E_UNKNOWN_CODE_{code}"}
+        return {"status": "failed", "errorCode": f"E_UNKNOWN_CODE_{code}"}
 
 
 def cancel_login(session_id: str) -> dict:
@@ -268,22 +286,41 @@ def cancel_login(session_id: str) -> dict:
 
 
 def validate_session_three_state() -> dict:
-    """Startup-time session validation. Returns one of three states."""
-    is_logged_in, nickname = load_session()
-    if is_logged_in:
-        try:
-            from pyncm import GetCurrentSession
-            user_info = apis.login.GetCurrentLoginStatus()
-            if user_info.get("code") == 200 and user_info.get("profile"):
-                return {
-                    "state": "valid",
-                    "profile": {
-                        "userId": str(user_info["profile"].get("userId") or user_info["profile"].get("id") or ""),
-                        "nickname": user_info["profile"].get("nickname") or nickname or "",
-                    },
-                }
-            return {"state": "invalid_credentials"}
-        except Exception as e:  # noqa: BLE001
-            _logger.warning(_sanitize(f"validate_session transient error: {e}"))
-            return {"state": "temporarily_unavailable", "reason": str(e)[:200]}
+    """Startup-time session validation.
+
+    Reads cookies from the env-controlled runtime dir
+    (``<CYRENE_MUSIC_STORAGE_DIR>/cookies.json``) directly via
+    ``_write_session_cookies``'s mirror logic, then pings the upstream
+    API to confirm they're still accepted. Never echoes raw exception
+    text in the response — only stable error codes.
+    """
+    cookies_path = os.path.join(_storage_dir(), "cookies.json")
+    try:
+        with open(cookies_path, "r", encoding="utf-8") as f:
+            cookies = json.load(f)
+    except FileNotFoundError:
+        return {"state": "invalid_credentials"}
+    except Exception as e:  # noqa: BLE001
+        _logger.warning(_sanitize(f"validate_session read error: {e}"))
+        return {"state": "temporarily_unavailable", "reason": "storage_read_failed"}
+    if not cookies:
+        return {"state": "invalid_credentials"}
+
+    try:
+        user_info = apis.login.GetCurrentLoginStatus()
+    except Exception as e:  # noqa: BLE001
+        _logger.warning(_sanitize(f"validate_session transient error: {e}"))
+        return {"state": "temporarily_unavailable", "reason": "api_unreachable"}
+
+    if user_info.get("code") == 200 and user_info.get("profile"):
+        profile = user_info["profile"]
+        return {
+            "state": "valid",
+            "profile": {
+                "userId": str(
+                    profile.get("userId") or profile.get("id") or ""
+                ),
+                "nickname": profile.get("nickname") or "",
+            },
+        }
     return {"state": "invalid_credentials"}
