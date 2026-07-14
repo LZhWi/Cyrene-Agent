@@ -20,4 +20,19 @@ describe("sanitizeLogLine", () => {
   it("leaves normal text untouched", () => {
     expect(sanitizeLogLine("hello world")).toBe("hello world");
   });
+
+  // === Edge cases added during code-quality review (commit ad9a13f) ===
+  it("redacts JSON-style MUSIC_U without surrounding cookies={...}", () => {
+    expect(sanitizeLogLine('"MUSIC_U":"abc"')).toBe('"MUSIC_U":"<redacted>"');
+  });
+  it("is case-insensitive for Authorization Bearer", () => {
+    expect(sanitizeLogLine("authorization: bearer abc")).toBe("authorization: bearer <redacted>");
+    expect(sanitizeLogLine("AUTHORIZATION: Bearer abc")).toBe("AUTHORIZATION: Bearer <redacted>");
+  });
+  it("preserves delimiter after __csrf value", () => {
+    expect(sanitizeLogLine("__csrf=xyz&type=1")).toBe("__csrf=<redacted>&type=1");
+  });
+  it("preserves delimiter after Authorization Bearer value", () => {
+    expect(sanitizeLogLine("Authorization: Bearer abc; next")).toBe("Authorization: Bearer <redacted>; next");
+  });
 });
