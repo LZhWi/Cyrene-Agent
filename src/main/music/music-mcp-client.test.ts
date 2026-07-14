@@ -1,0 +1,99 @@
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+const listTools = vi.fn();
+const callTool = vi.fn();
+const connect = vi.fn();
+const close = vi.fn();
+const transportClose = vi.fn();
+
+vi.mock("@modelcontextprotocol/sdk/client/index.js", () => ({
+  Client: vi.fn().mockImplementation(function () {
+    return { connect, listTools, callTool, close };
+  }),
+}));
+vi.mock("@modelcontextprotocol/sdk/client/stdio.js", () => ({
+  StdioClientTransport: vi.fn().mockImplementation(function () {
+    return { close: transportClose };
+  }),
+}));
+
+import { MusicMcpClient } from "./music-mcp-client";
+import { buildChildEnv } from "./child-env";
+import * as path from "node:path";
+
+beforeEach(() => {
+  listTools.mockReset();
+  callTool.mockReset();
+  connect.mockReset();
+  close.mockReset();
+  transportClose.mockReset();
+});
+
+const VENDOR = path.resolve("/tmp/vendor/cloud-music-mcp");
+const RUNTIME = "/tmp/runtime";
+
+function tool(name: string, props: Record<string, unknown>) {
+  return { name, description: "", inputSchema: { type: "object", properties: props, required: Object.keys(props).filter(k => (props[k] as { required?: boolean })?.required) } };
+}
+
+describe("MusicMcpClient", () => {
+  it("verifyContractOnConnect returns missing tool names", async () => {
+    listTools.mockResolvedValue({ tools: [
+      tool("cloud_music_get_daily_recommend", {}),
+      tool("cloud_music_search", { keyword: { type: "string" } }),
+    ]});
+    connect.mockResolvedValue(undefined);
+    const c = new MusicMcpClient(VENDOR, RUNTIME);
+    await c.connect();
+    const r = await c.verifyContractOnConnect();
+    expect(r.ok).toBe(false);
+    expect(r.missing).toEqual(expect.arrayContaining([
+      "cyrene_music_login_begin",
+      "cyrene_music_login_check",
+      "cyrene_music_login_cancel",
+    ]));
+  });
+
+  it("verifyContractOnConnect ok when all tools present", async () => {
+    listTools.mockResolvedValue({ tools: [
+      tool("cloud_music_get_daily_recommend", {}),
+      tool("cloud_music_search", { keyword: { type: "string" } }),
+      tool("cyrene_music_login_begin", {}),
+      tool("cyrene_music_login_check", { session_id: { type: "string" } }),
+      tool("cyrene_music_login_cancel", { session_id: { type: "string" } }),
+    ]});
+    connect.mockResolvedValue(undefined);
+    const c = new MusicMcpClient(VENDOR, RUNTIME);
+    await c.connect();
+    expect((await c.verifyContractOnConnect()).ok).toBe(true);
+  });
+
+  it("callDataTool rejects tool not in DATA allowlist", async () => {
+    listTools.mockResolvedValue({ tools: [] });
+    connect.mockResolvedValue(undefined);
+    const c = new MusicMcpClient(VENDOR, RUNTIME);
+    await c.connect();
+    await expect(c.callDataTool("cloud_music_login", {})).rejects.toThrow(/E_TOOL_NOT_ALLOWED/);
+  });
+
+  it("callAuthTool rejects tool not in AUTH allowlist", async () => {
+    listTools.mockResolvedValue({ tools: [] });
+    connect.mockResolvedValue(undefined);
+    const c = new MusicMcpClient(VENDOR, RUNTIME);
+    await c.connect();
+    await expect(c.callAuthTool("cloud_music_search", {})).rejects.toThrow(/E_TOOL_NOT_ALLOWED/);
+  });
+
+  it("forwards env from buildChildEnv", async () => {
+    listTools.mockResolvedValue({ tools: [] });
+    connect.mockResolvedValue(undefined);
+    process.env.PATH = "/usr/bin";
+    const c = new MusicMcpClient(VENDOR, RUNTIME);
+    await c.connect();
+    const sdk = await import("@modelcontextprotocol/sdk/client/stdio.js");
+    const inst = (sdk.StdioClientTransport as unknown as { mock: { calls: unknown[][] } }).mock.calls[0]?.[0] as Record<string, unknown>;
+    expect(inst.env).toBeDefined();
+    expect((inst.env as NodeJS.ProcessEnv).CYRENE_MUSIC_STORAGE_DIR).toBe(RUNTIME);
+    expect((inst.env as NodeJS.ProcessEnv).MINIMAX_API_KEY).toBeUndefined();
+  });
+});
