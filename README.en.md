@@ -53,6 +53,7 @@ artwork, story content, and trademarks are the intellectual property of
 | 🔌 MCP (Model Context Protocol) ecosystem | 🧪 Experimental |
 | ✨ Skill system | ✅ Stable |
 | 📚 RAG document knowledge base (hybrid retrieval / reranker) | 🧪 Experimental |
+| 🌙 Proactive chat (routed delivery + safety guards) | ✅ Stable |
 
 > ✅ Stable = usable for daily use; 🧪 Experimental = implemented but edge cases / compatibility / UX still being polished.
 
@@ -209,6 +210,14 @@ leak. To reset, delete `<userData>/model-settings.json` and
    log, and conflict log are push arrays with no cap; long-running
    sessions **must be restarted**.
 
+**Known improvements**: embedding indexing has moved to a background
+worker queue with result caching; warm-up is deferred at startup;
+batch writing and streaming now replace the previous one-shot large
+array writes — **peak resident memory per document indexing job has
+dropped noticeably**. Persistent OOM is most likely tied to L2 long-term
+memory growth or third-party MCP processes (e.g. Playwright / browser
+automation).
+
 For deep diagnostics, use Chrome DevTools Memory profiler (DevTools
 opens automatically in dev mode) to grab a heap snapshot, then file
 an issue with the snapshot attached.
@@ -253,6 +262,9 @@ provided in a future release. For now, the "Off" mode works fine.
   window; chunks are auto-extracted into the RAG knowledge base.
 - **Sticker panel** — Built-in sticker picker; AI auto-matches the best
   sticker by reply similarity.
+- **Streaming reply segmentation** — Chat preferences let you pick
+  `all / chat-only / off`; when enabled, long replies are split into
+  sentence-level bubbles instead of dumping all at once.
 
 #### 🧠 Memory System
 - **L0 core profile / L1 recent state / L2 long-term memory** — Full
@@ -307,8 +319,11 @@ provided in a future release. For now, the "Off" mode works fine.
 - **Lark / Feishu long-connection** — Official SDK + WebSocket (no public
   domain / intranet penetration needed); p2p chat, multi-modal text /
   image / audio / video / file / sticker.
-- **WeChat iLink Bot** — iLink Bot HTTP / long-poll 35 s `getUpdates` →
-  auto `sendText`.
+- **WeChat iLink Bot** — Plain-text chat uses iLink HTTP / long-poll 35 s
+  `getUpdates`. Outbound supports image / sticker / file / video via the
+  ilink media upload path, plus silk voice encoding. Inbound media is
+  auto-classified: images / files are downloaded to a desktop inbox,
+  voice is transcribed by ASR, and unsupported types are intercepted.
 
 #### 🤖 Game Bot Automation
 - `engine.ts` step interpreter supports `launch / wait / key / click /
@@ -322,6 +337,16 @@ provided in a future release. For now, the "Off" mode works fine.
 - Meta tools `invoke_skill` / `read_skill_reference` with path traversal
   guard + read replay interceptor + large-text truncation.
 - Supports `/skill_id ...` slash commands.
+
+#### 🌙 Proactive Chat
+- **Routed delivery** — Preferences let you pick `Local / WeChat / Feishu`
+  as the proactive destination; if the phone channel is unavailable, the
+  message is cancelled instead of silently falling back to local.
+- **Runtime guards** — Hard safety policy, guarded prompt, tool-free
+  model runner, and a proactive session singleton provide layered
+  protection.
+- **Quiet hours** — Won't fire while you idle late at night, while a
+  normal chat is in progress, or after two unanswered replies in a row.
 
 </details>
 
