@@ -1,0 +1,152 @@
+import { describe, it, expect, beforeEach, vi } from "vitest";
+
+const handlerMap: Record<string, (e: unknown, payload: unknown) => Promise<unknown>> = {};
+const removed: string[] = [];
+
+vi.mock("electron", () => ({
+  ipcMain: {
+    handle: (channel: string, fn: (e: unknown, payload: unknown) => Promise<unknown> | unknown) => {
+      handlerMap[channel] = fn as (e: unknown, payload: unknown) => Promise<unknown>;
+    },
+    removeHandler: (channel: string) => {
+      removed.push(channel);
+    },
+  },
+}));
+
+import { registerMusicIpcHandlers } from "./ipc-handlers";
+import { MusicInputError } from "./types";
+
+function mockService(overrides: Record<string, unknown> = {}): any {
+  // Real service methods are async; mirrors must return a Promise so the
+  // wrap helper can `.then()` on the result. The default mocks reject with
+  // the same MusicInputError codes the real service throws, so input-validation
+  // tests can assert the IPC envelope without spinning up a full MusicService.
+  function asyncThat(impl?: (...args: any[]) => any): any {
+    const fn = vi.fn(async (...args: unknown[]) => {
+      if (impl) return impl(...args);
+      return undefined;
+    });
+    return fn;
+  }
+  function searchImpl(keyword: unknown): unknown {
+    const trimmed = (typeof keyword === "string" ? keyword : "").trim();
+    if (trimmed.length === 0) throw new MusicInputError("E_INVALID_KEYWORD_EMPTY");
+    if (trimmed.length > 100) throw new MusicInputError("E_INVALID_KEYWORD_TOO_LONG");
+    return undefined;
+  }
+  function playTrackImpl(trackId: unknown): unknown {
+    if (typeof trackId !== "string" || !/^\d+$/.test(trackId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
+    return undefined;
+  }
+  const base: any = {
+    getBackendState: vi.fn(() => "ready"),
+    getAccountState: vi.fn(() => "signed_in"),
+    getPlayerState: vi.fn(() => "available"),
+    getRootPid: vi.fn(() => undefined),
+    beginLogin: asyncThat(),
+    cancelLogin: asyncThat(),
+    getDailyRecommendations: asyncThat(),
+    searchTracks: asyncThat(searchImpl),
+    presentTracks: asyncThat(),
+    playTrack: asyncThat(playTrackImpl),
+    playPlaylist: asyncThat(playTrackImpl),
+  };
+  for (const [k, v] of Object.entries(overrides)) base[k] = v;
+  return base;
+}
+
+beforeEach(() => {
+  for (const k of Object.keys(handlerMap)) delete handlerMap[k];
+  removed.length = 0;
+});
+
+describe("registerMusicIpcHandlers", () => {
+  it("registers all 9 invoke channels", () => {
+    registerMusicIpcHandlers(mockService());
+    const expected = [
+      "music:get-status",
+      "music:begin-login",
+      "music:cancel-login",
+      "music:get-daily",
+      "music:search",
+      "music:present-tracks",
+      "music:play-track",
+      "music:play-playlist",
+      "music:detect-player",
+    ];
+    for (const ch of expected) {
+      expect(handlerMap[ch]).toBeDefined();
+    }
+  });
+
+  it("returns a disposer that removes all handlers", () => {
+    const disposer = registerMusicIpcHandlers(mockService());
+    disposer();
+    expect(removed).toContain("music:get-status");
+    expect(removed).toContain("music:play-track");
+    expect(removed.length).toBe(9);
+  });
+
+  it("MUSIC_SEARCH: keyword too long returns ok:false errorCode", async () => {
+    registerMusicIpcHandlers(mockService());
+    const r = await handlerMap["music:search"](null, { keyword: "x".repeat(101) });
+    expect(r).toEqual({
+      ok: false,
+      errorCode: "E_INVALID_KEYWORD_TOO_LONG",
+      backendState: "ready",
+      accountState: "signed_in",
+      playerState: "available",
+    });
+  });
+
+  it("MUSIC_SEARCH: empty keyword returns ok:false errorCode", async () => {
+    registerMusicIpcHandlers(mockService());
+    const r = await handlerMap["music:search"](null, { keyword: "   " });
+    expect(r).toEqual({
+      ok: false,
+      errorCode: "E_INVALID_KEYWORD_EMPTY",
+      backendState: "ready",
+      accountState: "signed_in",
+      playerState: "available",
+    });
+  });
+
+  it("MUSIC_PLAY_TRACK: non-numeric id returns ok:false", async () => {
+    registerMusicIpcHandlers(mockService());
+    const r = await handlerMap["music:play-track"](null, "abc");
+    expect(r).toEqual({
+      ok: false,
+      errorCode: "E_INVALID_ID_FORMAT",
+      backendState: "ready",
+      accountState: "signed_in",
+      playerState: "available",
+    });
+  });
+
+  it("successful path returns ok:true with data", async () => {
+    const svc = mockService();
+    svc.searchTracks.mockResolvedValue({
+      setId: "s1", source: "search", query: "q",
+      createdAt: 0, expiresAt: 0, conversationId: "c1", tracks: [],
+    });
+    registerMusicIpcHandlers(svc);
+    const r = (await handlerMap["music:search"](null, { keyword: "q" })) as any;
+    expect(r.ok).toBe(true);
+    expect(r.data.setId).toBe("s1");
+  });
+
+  it("non-MusicInputError exception is converted to E_INTERNAL_ERROR, no internal path leak", async () => {
+    const svc = mockService();
+    svc.searchTracks.mockRejectedValue(
+      new Error("ENOENT: C:\\Users\\admin\\vendor\\cloud-music-mcp\\missing"),
+    );
+    registerMusicIpcHandlers(svc);
+    const r = (await handlerMap["music:search"](null, { keyword: "q" })) as any;
+    expect(r.ok).toBe(false);
+    expect(r.errorCode).toBe("E_INTERNAL_ERROR");
+    const serialized = JSON.stringify(r);
+    expect(serialized).not.toContain("C:\\Users");
+    expect(serialized).not.toContain("vendor/cloud-music-mcp");
+  });
+});

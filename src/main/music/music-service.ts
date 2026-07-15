@@ -277,12 +277,12 @@ export class MusicService {
   // ── Playback ───────────────────────────────────────────────
 
   async playTrack(trackId: string): Promise<PlaybackDispatchResult> {
-    if (!/^\d+$/.test(trackId)) throw new MusicInputError("E_INVALID_ID");
+    if (!/^\d+$/.test(trackId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
     return this.dispatcher.dispatch("song", trackId);
   }
 
   async playPlaylist(playlistId: string): Promise<PlaybackDispatchResult> {
-    if (!/^\d+$/.test(playlistId)) throw new MusicInputError("E_INVALID_ID");
+    if (!/^\d+$/.test(playlistId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
     return this.dispatcher.dispatch("playlist", playlistId);
   }
 
