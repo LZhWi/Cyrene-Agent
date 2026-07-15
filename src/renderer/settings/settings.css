@@ -3298,3 +3298,196 @@ body {
   font: var(--rb-text-micro);
   line-height: 1.4;
 }
+
+/* ===== Music Tools 插件 (Phase 2) ===== */
+.music-platform-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.music-platform {
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid rgba(255, 182, 220, 0.18);
+  font: inherit;
+  color: inherit;
+}
+.music-platform:hover {
+  border-color: rgba(236, 72, 153, 0.45);
+  background: rgba(255, 255, 255, 0.05);
+}
+.plugin-placeholder-tag {
+  align-self: center;
+  font-size: 10px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--rb-text-muted);
+  white-space: nowrap;
+}
+
+.music-card {
+  margin-top: 18px;
+  padding: 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 182, 220, 0.14);
+}
+.music-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.music-card__header h2 {
+  margin: 0;
+  font-size: 16px;
+}
+.music-status {
+  font-size: 12px;
+  color: var(--rb-text-muted);
+}
+
+.music-state-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 14px;
+}
+.music-state-row {
+  display: grid;
+  grid-template-columns: 60px 16px 1fr;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  font-size: 12px;
+}
+.music-state-row__label {
+  color: var(--rb-text-muted);
+}
+.music-state-row__dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  display: inline-block;
+  background: #888;
+}
+.music-state-row__dot[data-color="green"] { background: #4ade80; }
+.music-state-row__dot[data-color="red"] { background: #f87171; }
+.music-state-row__dot[data-color="yellow"] { background: #facc15; }
+.music-state-row__dot[data-color="gray"] { background: #888; }
+.music-state-row__value {
+  font-family: var(--rb-font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 12px;
+  color: var(--rb-text-strong);
+}
+
+.music-actions {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.music-actions .btn-primary,
+.music-actions .btn-secondary {
+  margin: 0;
+}
+
+.music-profile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(74, 222, 128, 0.08);
+  border: 1px solid rgba(74, 222, 128, 0.32);
+  margin-bottom: 14px;
+}
+.music-profile__avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+}
+.music-profile__name {
+  font-weight: 600;
+  font-size: 14px;
+}
+.music-profile__hint {
+  font-size: 11px;
+  color: var(--rb-text-muted);
+}
+
+.music-qr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.03);
+  margin-bottom: 14px;
+}
+.music-qr__img {
+  width: 180px;
+  height: 180px;
+  background: #fff;
+  border-radius: 8px;
+  padding: 6px;
+}
+.music-qr__tip {
+  margin: 0;
+  font-size: 12px;
+  color: var(--rb-text-muted);
+}
+
+.music-feedback {
+  font-size: 12px;
+  min-height: 18px;
+  color: var(--rb-text-muted);
+}
+.music-feedback--info { color: var(--rb-text-muted); }
+.music-feedback--ok { color: #4ade80; }
+.music-feedback--err { color: #f87171; }
+
+.music-search-results {
+  margin-top: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.music-search-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+}
+.music-search-row__main {
+  min-width: 0;
+}
+.music-search-row__name {
+  font-size: 13px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.music-search-row__meta {
+  font-size: 11px;
+  color: var(--rb-text-muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.music-search-row__play {
+  margin: 0;
+}

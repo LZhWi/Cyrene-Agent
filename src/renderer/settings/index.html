@@ -1301,6 +1301,122 @@
                 </article>
               </div>
             </article>
+
+            <article class="plugin-card plugin-card--accordion" id="plugin-music-card">
+              <div class="plugin-accordion-header">
+                <div class="plugin-card__icon">🎵</div>
+                <div class="plugin-card__body">
+                  <h2>音乐工具</h2>
+                  <p>网易云扫码登录 + 搜索。QQ / Spotify / 本地敬请期待。</p>
+                </div>
+                <button type="button" class="accordion-toggle" id="plugin-music-toggle" aria-label="展开音乐工具" aria-expanded="false">▾</button>
+              </div>
+              <div class="plugin-accordion-body is-collapsed" id="plugin-music-body">
+                <div class="music-platform-grid">
+                  <button type="button" class="plugin-card plugin-card--sub music-platform" id="music-platform-netease" data-platform="netease">
+                    <div class="plugin-card__icon">🟢</div>
+                    <div class="plugin-card__body">
+                      <h2>网易云音乐</h2>
+                      <p>扫码登录后可以搜索并播放。</p>
+                    </div>
+                  </button>
+                  <article class="plugin-card plugin-card--sub is-muted">
+                    <div class="plugin-card__icon">🐧</div>
+                    <div class="plugin-card__body">
+                      <h2>QQ 音乐</h2>
+                      <p>敬请期待</p>
+                    </div>
+                    <span class="plugin-placeholder-tag">敬请期待</span>
+                  </article>
+                  <article class="plugin-card plugin-card--sub is-muted">
+                    <div class="plugin-card__icon">🎧</div>
+                    <div class="plugin-card__body">
+                      <h2>Spotify</h2>
+                      <p>敬请期待</p>
+                    </div>
+                    <span class="plugin-placeholder-tag">敬请期待</span>
+                  </article>
+                  <article class="plugin-card plugin-card--sub is-muted">
+                    <div class="plugin-card__icon">💾</div>
+                    <div class="plugin-card__body">
+                      <h2>本地音乐</h2>
+                      <p>敬请期待</p>
+                    </div>
+                    <span class="plugin-placeholder-tag">敬请期待</span>
+                  </article>
+                </div>
+              </div>
+            </article>
+          </div>
+        </section>
+
+        <section class="settings-panel is-hidden" id="music-panel" data-panel="music">
+          <h1>音乐工具</h1>
+          <p class="panel-hint">网易云扫码登录后可以搜索并把歌曲推给桌面端的网易云音乐客户端。</p>
+
+          <div class="music-card">
+            <div class="music-card__header">
+              <h2>网易云音乐</h2>
+              <span class="music-status" id="music-account-status-text">未连接</span>
+            </div>
+            <div class="music-card__body">
+              <div class="music-state-rows">
+                <div class="music-state-row" data-row="backend">
+                  <span class="music-state-row__label">后端</span>
+                  <span class="music-state-row__dot" data-color="gray"></span>
+                  <span class="music-state-row__value">unknown</span>
+                </div>
+                <div class="music-state-row" data-row="account">
+                  <span class="music-state-row__label">账号</span>
+                  <span class="music-state-row__dot" data-color="gray"></span>
+                  <span class="music-state-row__value">unknown</span>
+                </div>
+                <div class="music-state-row" data-row="player">
+                  <span class="music-state-row__label">客户端</span>
+                  <span class="music-state-row__dot" data-color="gray"></span>
+                  <span class="music-state-row__value">unknown</span>
+                </div>
+              </div>
+
+              <div class="music-actions" id="music-actions">
+                <button type="button" class="btn-primary" id="music-login-btn">连接网易云</button>
+                <button type="button" class="btn-secondary is-hidden" id="music-cancel-btn">取消登录</button>
+                <button type="button" class="btn-secondary is-hidden" id="music-disconnect-btn">断开连接</button>
+              </div>
+
+              <div class="music-profile is-hidden" id="music-profile">
+                <div class="music-profile__avatar" aria-hidden="true">👤</div>
+                <div class="music-profile__info">
+                  <div class="music-profile__name" id="music-profile-name">已连接</div>
+                  <div class="music-profile__hint">昵称等详细信息后续接入</div>
+                </div>
+              </div>
+
+              <div class="music-qr is-hidden" id="music-qr">
+                <img class="music-qr__img" id="music-qr-img" alt="网易云登录二维码" />
+                <p class="music-qr__tip" id="music-qr-tip">请用网易云音乐 App 扫描二维码完成登录</p>
+              </div>
+
+              <div class="music-feedback" id="music-feedback"></div>
+            </div>
+          </div>
+
+          <div class="music-card">
+            <div class="music-card__header">
+              <h2>搜索</h2>
+            </div>
+            <div class="music-card__body">
+              <div class="form-row">
+                <label class="form-label" for="music-search-input">关键词</label>
+                <div class="form-input-with-action">
+                  <input type="text" id="music-search-input" class="form-input form-input--wide" placeholder="输入歌名或歌手" autocomplete="off" />
+                  <button type="button" class="btn-secondary" id="music-search-btn">搜索</button>
+                </div>
+              </div>
+              <div class="music-search-results" id="music-search-results">
+                <p class="empty-hint">输入关键词搜索网易云曲库。</p>
+              </div>
+            </div>
           </div>
         </section>
 

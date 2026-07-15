@@ -712,6 +712,7 @@ const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }>
   asr: { emoji: "🎧", title: "ASR 设置", hint: "语音识别与通话配置" },
   tokens: { emoji: "📊", title: "Token 用量", hint: "查看 API 调用统计与消耗" },
   disclaimer: { emoji: "📜", title: "免责声明", hint: "使用条款与隐私说明" },
+  music: { emoji: "🎵", title: "音乐工具", hint: "网易云扫码登录与搜索" },
 };
 
 minBtn.addEventListener("click", () => window.settings?.minimize());
@@ -2447,6 +2448,7 @@ function switchSection(section: string): void {
   const isChannels = section === "channels";
   const isTts = section === "tts";
   const isAsr = section === "asr";
+  const isMusic = section === "music";
   apiForm.classList.toggle("is-hidden", !isApi);
   appearanceForm.classList.toggle("is-hidden", !isAppearance);
   generalForm.classList.toggle("is-hidden", !isGeneral);
@@ -2479,9 +2481,13 @@ function switchSection(section: string): void {
   if (ttsPanel) ttsPanel.classList.toggle("is-hidden", !isTts);
   const asrPanel = document.getElementById("asr-panel");
   if (asrPanel) asrPanel.classList.toggle("is-hidden", !isAsr);
+  const musicPanel = document.getElementById("music-panel");
+  if (musicPanel) musicPanel.classList.toggle("is-hidden", !isMusic);
+  if (isMusic) void loadMusicPanel();
+  else disposeMusicPanel();
   placeholderPanel.classList.toggle(
     "is-hidden",
-    isApi || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr,
+    isApi || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr || isMusic,
   );
 
   if (
@@ -2501,7 +2507,8 @@ function switchSection(section: string): void {
     !isTokens &&
     !isChannels &&
     !isTts &&
-    !isAsr
+    !isAsr &&
+    !isMusic
   ) {
     placeholderIcon.textContent = label.emoji;
     placeholderTitle.textContent = label.title;
@@ -2942,6 +2949,382 @@ channelsLogClearBtn?.addEventListener("click", async () => {
 // 首次进入 channels panel 时拉一次日志
 // （也可以在用户展开 details 时再拉，但保持简单直接拉）
 void loadChannelsPanel();
+
+// ===== Phase 2: 音乐工具面板 =====
+// 备注：window.music.* 已在 preload 中通过 contextBridge 暴露。
+// 由于 renderer 走 Vite 打包、main/preload 走 esbuild，两端类型不互通，
+// 这里直接用 (window as any).music 做弱类型化调用，避免给 global.d.ts 加一堆 cross-bundle 类型。
+
+interface MusicStatusSnapshot {
+  backend: string;
+  account: string;
+  player: string;
+}
+
+interface MusicSelectionTrack {
+  id: string;
+  name: string;
+  artists: string[];
+  album?: string;
+  durationMs?: number;
+}
+
+interface MusicSelectionResult {
+  setId: string;
+  source: string;
+  query?: string;
+  tracks: MusicSelectionTrack[];
+}
+
+type MusicIpcResult<T> =
+  | { ok: true; data: T }
+  | { ok: false; errorCode: string; backendState?: string; accountState?: string; playerState?: string };
+
+interface MusicApi {
+  getStatus: () => Promise<MusicIpcResult<MusicStatusSnapshot>>;
+  beginLogin: () => Promise<MusicIpcResult<{ loginSessionId: string; qrContent: string; expiresAt: number; pollIntervalMs: number }>>;
+  cancelLogin: () => Promise<MusicIpcResult<unknown>>;
+  search: (keyword: string, limit?: number) => Promise<MusicIpcResult<MusicSelectionResult>>;
+  onStateChanged: (h: (s: MusicStatusSnapshot) => void) => (() => void) | void;
+}
+
+function getMusicApi(): MusicApi | null {
+  const w = window as unknown as { music?: MusicApi };
+  return w.music ?? null;
+}
+
+const musicLoginBtn = document.getElementById("music-login-btn") as HTMLButtonElement | null;
+const musicCancelBtn = document.getElementById("music-cancel-btn") as HTMLButtonElement | null;
+const musicDisconnectBtn = document.getElementById("music-disconnect-btn") as HTMLButtonElement | null;
+const musicQrBox = document.getElementById("music-qr");
+const musicQrImg = document.getElementById("music-qr-img") as HTMLImageElement | null;
+const musicQrTip = document.getElementById("music-qr-tip");
+const musicProfileBox = document.getElementById("music-profile");
+const musicProfileName = document.getElementById("music-profile-name");
+const musicFeedbackEl = document.getElementById("music-feedback");
+const musicAccountStatusText = document.getElementById("music-account-status-text");
+const musicStateRowEls = {
+  backend: document.querySelector('.music-state-row[data-row="backend"]'),
+  account: document.querySelector('.music-state-row[data-row="account"]'),
+  player: document.querySelector('.music-state-row[data-row="player"]'),
+};
+const musicSearchInput = document.getElementById("music-search-input") as HTMLInputElement | null;
+const musicSearchBtn = document.getElementById("music-search-btn") as HTMLButtonElement | null;
+const musicSearchResults = document.getElementById("music-search-results");
+
+let musicPanelInitialized = false;
+let musicStateUnsub: (() => void) | null = null;
+let musicLoginPollTimer: number | null = null;
+let musicLastQrDataUrl: string | null = null;
+
+function setMusicFeedback(kind: "info" | "ok" | "err", msg: string): void {
+  if (!musicFeedbackEl) return;
+  musicFeedbackEl.textContent = msg;
+  musicFeedbackEl.className = "music-feedback";
+  if (kind === "ok") musicFeedbackEl.classList.add("music-feedback--ok");
+  else if (kind === "err") musicFeedbackEl.classList.add("music-feedback--err");
+  else musicFeedbackEl.classList.add("music-feedback--info");
+}
+
+function dotColorFor(state: string, axis: "backend" | "account" | "player"): "green" | "yellow" | "red" | "gray" {
+  if (state === "unknown") return "gray";
+  if (axis === "backend") {
+    if (state === "ready") return "green";
+    if (state === "degraded") return "yellow";
+    if (state === "failed" || state === "incompatible") return "red";
+    return "yellow"; // starting / stopped
+  }
+  if (axis === "account") {
+    if (state === "signed_in") return "green";
+    if (state === "validating") return "yellow";
+    if (state === "signed_out" || state === "expired") return "yellow";
+    if (state === "temporarily_unavailable") return "red";
+    return "gray";
+  }
+  // player
+  if (state === "available") return "green";
+  if (state === "unavailable") return "red";
+  return "gray";
+}
+
+function renderMusicStateRow(axis: "backend" | "account" | "player", value: string): void {
+  const row = musicStateRowEls[axis];
+  if (!row) return;
+  const dot = row.querySelector(".music-state-row__dot") as HTMLElement | null;
+  const val = row.querySelector(".music-state-row__value") as HTMLElement | null;
+  if (dot) dot.setAttribute("data-color", dotColorFor(value, axis));
+  if (val) val.textContent = value;
+}
+
+function renderMusicStatus(snapshot: MusicStatusSnapshot): void {
+  renderMusicStateRow("backend", snapshot.backend);
+  renderMusicStateRow("account", snapshot.account);
+  renderMusicStateRow("player", snapshot.player);
+  updateMusicActionsForAccount(snapshot.account);
+  if (musicAccountStatusText) {
+    if (snapshot.account === "signed_in") musicAccountStatusText.textContent = "已连接";
+    else if (snapshot.account === "validating") musicAccountStatusText.textContent = "校验中…";
+    else if (snapshot.account === "temporarily_unavailable") musicAccountStatusText.textContent = "临时不可用";
+    else if (snapshot.account === "expired") musicAccountStatusText.textContent = "登录已过期";
+    else musicAccountStatusText.textContent = "未连接";
+  }
+}
+
+function updateMusicActionsForAccount(account: string): void {
+  // Login-in-progress 状态：暂时还没有 IPC 通道告诉我们 creating_qr / waiting_scan / waiting_confirm，
+  // 所以这里只能根据"是否显示了二维码 + account 状态"来推断。
+  // 显示规则：
+  //   - account === "signed_in"      → 显示 断开连接
+  //   - account === "temporarily_unavailable" → 显示 连接网易云（让用户重试）
+  //   - 二维码显示中 → 显示 取消登录
+  //   - 其他 → 显示 连接网易云
+  const qrVisible = !!musicQrBox && !musicQrBox.classList.contains("is-hidden");
+  if (musicLoginBtn) musicLoginBtn.classList.toggle("is-hidden", qrVisible || account === "signed_in");
+  if (musicCancelBtn) musicCancelBtn.classList.toggle("is-hidden", !qrVisible);
+  if (musicDisconnectBtn) musicDisconnectBtn.classList.toggle("is-hidden", account !== "signed_in");
+  if (musicProfileBox) musicProfileBox.classList.toggle("is-hidden", account !== "signed_in");
+}
+
+function clearMusicQr(): void {
+  if (musicQrImg) musicQrImg.src = "";
+  if (musicQrBox) musicQrBox.classList.add("is-hidden");
+  if (musicQrTip) musicQrTip.textContent = "请用网易云音乐 App 扫描二维码完成登录";
+  musicLastQrDataUrl = null;
+}
+
+function showMusicQr(dataUrl: string, tip: string): void {
+  if (musicQrImg) musicQrImg.src = dataUrl;
+  if (musicQrTip) musicQrTip.textContent = tip;
+  if (musicQrBox) musicQrBox.classList.remove("is-hidden");
+  musicLastQrDataUrl = dataUrl;
+}
+
+function stopMusicLoginPolling(): void {
+  if (musicLoginPollTimer != null) {
+    window.clearInterval(musicLoginPollTimer);
+    musicLoginPollTimer = null;
+  }
+}
+
+function startMusicLoginPolling(): void {
+  stopMusicLoginPolling();
+  const api = getMusicApi();
+  if (!api) return;
+  musicLoginPollTimer = window.setInterval(async () => {
+    try {
+      const r = await api.getStatus();
+      if (r.ok) {
+        renderMusicStatus(r.data);
+        if (r.data.account === "signed_in") {
+          // 登录成功 → 关闭 QR 面板、停止轮询
+          clearMusicQr();
+          stopMusicLoginPolling();
+          setMusicFeedback("ok", "已连接到网易云音乐");
+        } else if (r.data.account === "temporarily_unavailable" || r.data.account === "expired") {
+          stopMusicLoginPolling();
+          clearMusicQr();
+          setMusicFeedback("err", "登录失败：账户状态 " + r.data.account);
+        }
+      }
+    } catch (err) {
+      console.warn("[music] login poll failed", err);
+    }
+  }, 1000);
+}
+
+async function startMusicLogin(): Promise<void> {
+  const api = getMusicApi();
+  if (!api) {
+    setMusicFeedback("err", "window.music 未就绪，请确认 music plugin 已注册");
+    return;
+  }
+  setMusicFeedback("info", "正在生成二维码…");
+  try {
+    const r = await api.beginLogin();
+    if (!r.ok) {
+      setMusicFeedback("err", "启动登录失败：" + r.errorCode);
+      // 把错误状态同步渲染出来
+      const snapshot: MusicStatusSnapshot = {
+        backend: r.backendState ?? "unknown",
+        account: r.accountState ?? "unknown",
+        player: r.playerState ?? "unknown",
+      };
+      renderMusicStatus(snapshot);
+      return;
+    }
+    // 用 qrcode 包把 qrContent 渲染成 PNG dataURL
+    let dataUrl = "";
+    try {
+      // qrcode 包没有官方 d.ts；用 require 形式确保 esbuild 能解析
+      // （renderer 走 Vite，import 形式也 OK；下面用动态 import 兼容两种打包器）
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const qrcodeMod: any = await import(/* @vite-ignore */ "qrcode");
+      dataUrl = await qrcodeMod.toDataURL(r.data.qrContent, { width: 240, margin: 1 });
+    } catch (qrErr) {
+      console.error("[music] QR 渲染失败", qrErr);
+      setMusicFeedback("err", "二维码渲染失败");
+      return;
+    }
+    showMusicQr(dataUrl, "请用网易云音乐 App 扫描二维码完成登录");
+    setMusicFeedback("info", "等待扫码…");
+    updateMusicActionsForAccount("signed_out"); // 切到"取消登录"显示
+    startMusicLoginPolling();
+  } catch (err) {
+    console.error("[music] beginLogin threw", err);
+    setMusicFeedback("err", "启动登录异常：" + (err instanceof Error ? err.message : String(err)));
+  }
+}
+
+async function cancelMusicLogin(): Promise<void> {
+  const api = getMusicApi();
+  if (!api) return;
+  stopMusicLoginPolling();
+  clearMusicQr();
+  setMusicFeedback("info", "已取消登录");
+  try {
+    await api.cancelLogin();
+  } catch (err) {
+    console.warn("[music] cancelLogin threw", err);
+  }
+  // 重新拉一次 status 让 UI 回到初始态
+  try {
+    const r = await api.getStatus();
+    if (r.ok) renderMusicStatus(r.data);
+  } catch (err) {
+    console.warn("[music] getStatus after cancel failed", err);
+  }
+}
+
+async function disconnectMusic(): Promise<void> {
+  // 暂时没有正式的 disconnect API；先用 cancelLogin 作为近似（它会清掉 loginSession），
+  // 并把 UI 切回"未连接"。后续会接 music.disconnect。
+  setMusicFeedback("info", "正在断开…");
+  await cancelMusicLogin();
+  setMusicFeedback("ok", "已断开（当前仅清空登录会话，详见说明）");
+}
+
+function renderMusicSearchResults(r: MusicIpcResult<MusicSelectionResult>, kw: string): void {
+  if (!musicSearchResults) return;
+  musicSearchResults.innerHTML = "";
+  if (!r.ok) {
+    const div = document.createElement("div");
+    div.className = "music-feedback music-feedback--err";
+    div.textContent = "搜索失败：" + r.errorCode;
+    musicSearchResults.appendChild(div);
+    return;
+  }
+  const tracks = r.data.tracks ?? [];
+  if (tracks.length === 0) {
+    const p = document.createElement("p");
+    p.className = "empty-hint";
+    // 安全转义
+    const safeKw = kw.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    p.textContent = `暂无结果，关键词 '${safeKw}' 未匹配到歌曲`;
+    musicSearchResults.appendChild(p);
+    return;
+  }
+  for (const t of tracks) {
+    const row = document.createElement("div");
+    row.className = "music-search-row";
+
+    const main = document.createElement("div");
+    main.className = "music-search-row__main";
+    const name = document.createElement("div");
+    name.className = "music-search-row__name";
+    name.textContent = t.name;
+    const meta = document.createElement("div");
+    meta.className = "music-search-row__meta";
+    const artistStr = (t.artists ?? []).join(" / ");
+    meta.textContent = [artistStr, t.album].filter(Boolean).join(" · ");
+    main.appendChild(name);
+    main.appendChild(meta);
+
+    const playBtn = document.createElement("button");
+    playBtn.type = "button";
+    playBtn.className = "btn-secondary music-search-row__play";
+    playBtn.textContent = "▶ 播放";
+    playBtn.addEventListener("click", () => {
+      setMusicFeedback("info", "已请求播放：" + t.name);
+      // Phase 3 接 dispatch；这里只是占位提示
+    });
+
+    row.appendChild(main);
+    row.appendChild(playBtn);
+    musicSearchResults.appendChild(row);
+  }
+}
+
+async function runMusicSearch(): Promise<void> {
+  const api = getMusicApi();
+  if (!api) {
+    setMusicFeedback("err", "window.music 未就绪");
+    return;
+  }
+  const kw = (musicSearchInput?.value ?? "").trim();
+  if (!kw) {
+    setMusicFeedback("info", "请输入搜索关键词");
+    return;
+  }
+  if (musicSearchResults) musicSearchResults.innerHTML = '<p class="empty-hint">搜索中…</p>';
+  try {
+    const r = await api.search(kw, 20);
+    renderMusicSearchResults(r, kw);
+  } catch (err) {
+    console.error("[music] search threw", err);
+    if (musicSearchResults) musicSearchResults.innerHTML = "";
+    setMusicFeedback("err", "搜索异常：" + (err instanceof Error ? err.message : String(err)));
+  }
+}
+
+async function loadMusicPanel(): Promise<void> {
+  if (musicPanelInitialized) return;
+  musicPanelInitialized = true;
+
+  // 平台按钮（网易云 → 切到 music panel）的点击处理在文件下方模块初始化时已绑定，
+  // 这里不再重复 attach，避免多次进入面板造成重复监听。
+
+  // 登录 / 取消 / 断开
+  musicLoginBtn?.addEventListener("click", () => void startMusicLogin());
+  musicCancelBtn?.addEventListener("click", () => void cancelMusicLogin());
+  musicDisconnectBtn?.addEventListener("click", () => void disconnectMusic());
+
+  // 搜索
+  musicSearchBtn?.addEventListener("click", () => void runMusicSearch());
+  musicSearchInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") void runMusicSearch();
+  });
+
+  // 订阅状态推送
+  const api = getMusicApi();
+  if (api && typeof api.onStateChanged === "function") {
+    const unsub = api.onStateChanged((s) => renderMusicStatus(s));
+    if (typeof unsub === "function") musicStateUnsub = unsub;
+  }
+
+  // 首次拉一次状态
+  if (api) {
+    try {
+      const r = await api.getStatus();
+      if (r.ok) renderMusicStatus(r.data);
+      else setMusicFeedback("err", "读取状态失败：" + r.errorCode);
+    } catch (err) {
+      console.warn("[music] getStatus failed", err);
+    }
+  } else {
+    setMusicFeedback("err", "window.music 未就绪");
+  }
+}
+
+function disposeMusicPanel(): void {
+  // 离开面板时：停止轮询、取消订阅、清掉 QR dataURL 释放内存
+  stopMusicLoginPolling();
+  if (musicStateUnsub) {
+    try { musicStateUnsub(); } catch { /* ignore */ }
+    musicStateUnsub = null;
+  }
+  clearMusicQr();
+  setMusicFeedback("info", "");
+}
 // 启动时读 URL hash 决定初始标签（main 通过 loadURL 带 #api 实现"切换模型按钮跳 API"）。
 // 无 hash 默认 general。
 const initialSection = (window.location.hash || "#general").slice(1);
@@ -3736,6 +4119,22 @@ lifeToggle?.addEventListener("click", () => {
   lifeToggle.setAttribute("aria-expanded", String(!expanded));
   lifeCard?.classList.toggle("is-expanded", !expanded);
   lifeBody?.classList.toggle("is-collapsed", expanded);
+});
+
+// ── 音乐工具手风琴 ─────────────────────────────────────────
+const musicToggle = document.getElementById("plugin-music-toggle") as HTMLButtonElement | null;
+const musicAccordionCard = document.getElementById("plugin-music-card");
+const musicAccordionBody = document.getElementById("plugin-music-body");
+musicToggle?.addEventListener("click", () => {
+  const expanded = musicToggle.getAttribute("aria-expanded") === "true";
+  musicToggle.setAttribute("aria-expanded", String(!expanded));
+  musicAccordionCard?.classList.toggle("is-expanded", !expanded);
+  musicAccordionBody?.classList.toggle("is-collapsed", expanded);
+});
+
+// 网易云按钮：点击后切到 music panel
+document.getElementById("music-platform-netease")?.addEventListener("click", () => {
+  switchSection("music");
 });
 
 // ── Skill 面板：列 skill 开关 ──────────────────────────────
