@@ -18,8 +18,9 @@ if (!fs.existsSync(entry)) {
   process.exit(1);
 }
 
+const vendorDir = path.join(repoRoot, "vendor", "cloud-music-mcp");
 const child = spawn(electronPath, [entry], {
-  env: { ...process.env, CYRENE_MUSIC_SMOKE: "1" },
+  env: { ...process.env, CYRENE_MUSIC_SMOKE: "1", CYRENE_MUSIC_VENDOR_DIR: vendorDir },
   stdio: "inherit",
 });
 child.on("exit", (code) => process.exit(code ?? 1));

@@ -11,9 +11,17 @@ export interface MusicPaths {
 export function resolveMusicPaths(): MusicPaths {
   const isPackaged = app.isPackaged;
   const userDataMusic = path.join(app.getPath("userData"), "music", "netease");
-  const vendorDir = isPackaged
-    ? path.join(process.resourcesPath, "music-mcp")
-    : path.resolve(app.getAppPath(), "vendor", "cloud-music-mcp");
+  // When running the smoke harness via electron <standalone-entry>, app.getAppPath()
+  // returns the entry's directory (dist/main/main/music/), not the repo root. The
+  // runner passes CYRENE_MUSIC_VENDOR_DIR to override the vendor location.
+  let vendorDir: string;
+  if (process.env.CYRENE_MUSIC_VENDOR_DIR) {
+    vendorDir = process.env.CYRENE_MUSIC_VENDOR_DIR;
+  } else if (isPackaged) {
+    vendorDir = path.join(process.resourcesPath, "music-mcp");
+  } else {
+    vendorDir = path.resolve(app.getAppPath(), "vendor", "cloud-music-mcp");
+  }
   return {
     vendorDir,
     runtimeDir: path.join(userDataMusic, "runtime"),
