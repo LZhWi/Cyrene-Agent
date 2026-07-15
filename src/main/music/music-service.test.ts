@@ -52,14 +52,16 @@ const PATHS = {
 };
 
 describe("MusicService", () => {
-  it("getDailyRecommendations rejects when account not signed_in", async () => {
+  it("getDailyRecommendations rejects when backend not ready (stopped initial)", async () => {
     const s = new MusicService(PATHS);
-    await expect(s.getDailyRecommendations("c1")).rejects.toThrow(/E_ACCOUNT_REQUIRED|E_BACKEND/);
+    expect(s.getBackendState()).toBe("stopped");
+    await expect(s.getDailyRecommendations("c1")).rejects.toThrow(/E_BACKEND_NOT_READY/);
   });
 
-  it("searchTracks returns a set even without account", async () => {
+  it("searchTracks returns a set after start", async () => {
     searchTool.mockResolvedValue({ success: true, items: [{ id: 1, name: "X", artist: "Y" }] });
     const s = new MusicService(PATHS);
+    await s.start();
     const set = await s.searchTracks("X", "c1");
     expect(set.source).toBe("search");
     expect(set.tracks).toHaveLength(1);
@@ -68,12 +70,20 @@ describe("MusicService", () => {
 
   it("searchTracks rejects keyword longer than 100 chars", async () => {
     const s = new MusicService(PATHS);
+    await s.start();
     await expect(s.searchTracks("x".repeat(101), "c1")).rejects.toThrow(/E_INVALID_KEYWORD_TOO_LONG/);
+  });
+
+  it("searchTracks rejects empty keyword", async () => {
+    const s = new MusicService(PATHS);
+    await s.start();
+    await expect(s.searchTracks("   ", "c1")).rejects.toThrow(/E_INVALID_KEYWORD_EMPTY/);
   });
 
   it("searchTracks clamps limit to 20", async () => {
     searchTool.mockResolvedValue({ success: true, items: [] });
     const s = new MusicService(PATHS);
+    await s.start();
     await s.searchTracks("q", "c1", 999);
     expect(searchTool).toHaveBeenCalledWith(expect.objectContaining({ limit: 20 }));
   });
@@ -81,6 +91,7 @@ describe("MusicService", () => {
   it("presentTracks validates trackIds belong to the set", async () => {
     searchTool.mockResolvedValue({ success: true, items: [{ id: 1, name: "X", artist: "Y" }] });
     const s = new MusicService(PATHS);
+    await s.start();
     const set = await s.searchTracks("X", "c1");
     await expect(s.presentTracks({ setId: set.setId, conversationId: "c1", trackIds: ["999"] }))
       .rejects.toThrow(/E_TRACK_NOT_IN_SET/);
@@ -91,9 +102,19 @@ describe("MusicService", () => {
   it("presentTracks limits to 5 selected", async () => {
     searchTool.mockResolvedValue({ success: true, items: [{ id: 1, name: "X", artist: "Y" }] });
     const s = new MusicService(PATHS);
+    await s.start();
     const set = await s.searchTracks("X", "c1");
     await expect(s.presentTracks({ setId: set.setId, conversationId: "c1", trackIds: ["1", "1", "1", "1", "1", "1"] }))
       .rejects.toThrow(/E_TOO_MANY_SELECTED/);
+  });
+
+  it("presentTracks validates reason length", async () => {
+    searchTool.mockResolvedValue({ success: true, items: [{ id: 1, name: "X", artist: "Y" }] });
+    const s = new MusicService(PATHS);
+    await s.start();
+    const set = await s.searchTracks("X", "c1");
+    await expect(s.presentTracks({ setId: set.setId, conversationId: "c1", trackIds: ["1"], reasons: ["x".repeat(51)] }))
+      .rejects.toThrow(/E_REASON_TOO_LONG/);
   });
 
   it("playTrack rejects non-numeric id", async () => {
@@ -117,5 +138,35 @@ describe("MusicService", () => {
     expect(r.state).toBe("dispatched");
     expect(r.resourceType).toBe("song");
     expect(r.resourceId).toBe("123");
+  });
+
+  // ── New spec-required methods ──────────────────────────────
+
+  it("getSelectionSet retrieves set by id and conversationId", async () => {
+    searchTool.mockResolvedValue({ success: true, items: [{ id: 1, name: "X", artist: "Y" }] });
+    const s = new MusicService(PATHS);
+    await s.start();
+    const set = await s.searchTracks("X", "c1");
+    expect(s.getSelectionSet(set.setId, "c1")).toEqual(set);
+    expect(s.getSelectionSet(set.setId, "c2")).toBeNull();
+  });
+
+  it("getLoginFlowState returns orchestrator flow state", () => {
+    const s = new MusicService(PATHS);
+    expect(s.getLoginFlowState()).toBe("idle");
+  });
+
+  it("getActiveProfile returns null before login", () => {
+    const s = new MusicService(PATHS);
+    expect(s.getActiveProfile()).toBeNull();
+  });
+
+  it("event listeners return unsubscribe functions", () => {
+    const s = new MusicService(PATHS);
+    const fn = () => {};
+    const unsub = s.onBackendStateChange(fn);
+    unsub();
+    // No assertion needed — just verifying no throw
+    expect(true).toBe(true);
   });
 });

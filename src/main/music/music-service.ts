@@ -16,6 +16,8 @@ import type {
   MusicBackendState,
   MusicAccountState,
   MusicPlayerState,
+  LoginFlowState,
+  MusicProfile,
 } from "./types";
 
 const SET_TTL_MS = 30 * 60_000;
@@ -24,9 +26,12 @@ export interface PresentResult {
   cardRef: string;
 }
 
+type StateListener<T> = (state: T) => void;
+
 export class MusicService {
-  private backendState: MusicBackendState = "ready";
+  private backendState: MusicBackendState = "stopped";
   private playerState: MusicPlayerState = "unknown";
+  private activeProfile: MusicProfile | null = null;
 
   private readonly client: MusicMcpClient;
   private readonly detector: ProtocolDetector;
@@ -35,6 +40,11 @@ export class MusicService {
   private readonly orchestrator: LoginOrchestrator;
   private readonly cache: SelectionSetCache;
   private readonly paths: MusicPaths;
+
+  private backendListeners = new Set<StateListener<MusicBackendState>>();
+  private accountListeners = new Set<StateListener<MusicAccountState>>();
+  private playerListeners = new Set<StateListener<MusicPlayerState>>();
+  private flowListeners = new Set<StateListener<LoginFlowState>>();
 
   constructor(paths: MusicPaths) {
     this.paths = paths;
@@ -73,17 +83,41 @@ export class MusicService {
           const cookiesPath = path.join(this.paths.runtimeDir, "cookies.json");
           await fs.mkdir(this.paths.runtimeDir, { recursive: true });
           await fs.writeFile(cookiesPath, JSON.stringify(payload.cookies), "utf8");
-          this.orchestrator.setAccountState("signed_in");
+          this.orchestrator.setAccountState("validating");
+          this.emitAccountChange("validating");
+          // Three-state validation per spec §8.3
+          const r = await this.validateSessionThreeState();
+          switch (r.state) {
+            case "valid":
+              this.orchestrator.setAccountState("signed_in");
+              this.activeProfile = r.profile ?? null;
+              this.emitAccountChange("signed_in");
+              break;
+            case "invalid_credentials":
+              await fs.rm(this.paths.accountPath, { force: true }).catch(() => {});
+              this.activeProfile = null;
+              this.orchestrator.setAccountState("signed_out");
+              this.emitAccountChange("signed_out");
+              break;
+            case "temporarily_unavailable":
+              this.orchestrator.setAccountState("temporarily_unavailable");
+              this.emitAccountChange("temporarily_unavailable");
+              break;
+          }
         } else {
           this.orchestrator.setAccountState("signed_out");
+          this.emitAccountChange("signed_out");
         }
       } catch {
         this.orchestrator.setAccountState("signed_out");
+        this.emitAccountChange("signed_out");
       }
 
       this.backendState = "ready";
+      this.emitBackendChange("ready");
     } catch (err) {
       this.backendState = "failed";
+      this.emitBackendChange("failed");
       throw err;
     }
   }
@@ -93,20 +127,38 @@ export class MusicService {
     try { await this.client.close(); } catch { /* ignore */ }
     try { await fs.rm(this.paths.runtimeDir, { recursive: true, force: true }); } catch { /* ignore */ }
     this.backendState = "stopped";
+    this.emitBackendChange("stopped");
   }
 
   // ── State accessors ────────────────────────────────────────
 
-  getBackendState(): MusicBackendState {
-    return this.backendState;
+  getBackendState(): MusicBackendState { return this.backendState; }
+  getAccountState(): MusicAccountState { return this.orchestrator.getAccountState(); }
+  getPlayerState(): MusicPlayerState { return this.playerState; }
+  getLoginFlowState(): LoginFlowState { return this.orchestrator.getFlowState(); }
+  getActiveProfile(): MusicProfile | null { return this.activeProfile; }
+
+  getSelectionSet(setId: string, conversationId: string): MusicSelectionSet | null {
+    return this.cache.get(setId, conversationId);
   }
 
-  getAccountState(): MusicAccountState {
-    return this.orchestrator.getAccountState();
-  }
+  // ── Event listeners ────────────────────────────────────────
 
-  getPlayerState(): MusicPlayerState {
-    return this.playerState;
+  onBackendStateChange(listener: StateListener<MusicBackendState>): () => void {
+    this.backendListeners.add(listener);
+    return () => this.backendListeners.delete(listener);
+  }
+  onAccountStateChange(listener: StateListener<MusicAccountState>): () => void {
+    this.accountListeners.add(listener);
+    return () => this.accountListeners.delete(listener);
+  }
+  onPlayerStateChange(listener: StateListener<MusicPlayerState>): () => void {
+    this.playerListeners.add(listener);
+    return () => this.playerListeners.delete(listener);
+  }
+  onLoginFlowStateChange(listener: StateListener<LoginFlowState>): () => void {
+    this.flowListeners.add(listener);
+    return () => this.flowListeners.delete(listener);
   }
 
   // ── Login ──────────────────────────────────────────────────
@@ -142,17 +194,17 @@ export class MusicService {
 
   async searchTracks(keyword: string, conversationId: string, limit?: number): Promise<MusicSelectionSet> {
     this.requireReady();
-    if (keyword.length > 100) {
-      throw new MusicInputError("E_INVALID_KEYWORD_TOO_LONG");
-    }
+    const trimmed = (typeof keyword === "string" ? keyword : "").trim();
+    if (trimmed.length === 0) throw new MusicInputError("E_INVALID_KEYWORD_EMPTY");
+    if (trimmed.length > 100) throw new MusicInputError("E_INVALID_KEYWORD_TOO_LONG");
     const clampedLimit = Math.max(1, Math.min(limit ?? 20, 20));
-    const raw = await this.client.callDataTool("cloud_music_search", { keyword, limit: clampedLimit });
+    const raw = await this.client.callDataTool("cloud_music_search", { keyword: trimmed, limit: clampedLimit });
     const tracks = normalizeSearchResults(this.unwrapContent(raw));
     const setId = crypto.randomUUID();
     const set: MusicSelectionSet = {
       setId,
       source: "search",
-      query: keyword,
+      query: trimmed,
       createdAt: Date.now(),
       expiresAt: Date.now() + SET_TTL_MS,
       conversationId,
@@ -170,20 +222,18 @@ export class MusicService {
   }): Promise<PresentResult> {
     const { setId, conversationId, trackIds, reasons } = params;
     const set = this.cache.get(setId, conversationId);
-    if (!set) {
-      throw new MusicInputError("E_SET_NOT_FOUND");
-    }
-    if (trackIds.length === 0 || trackIds.length > 5) {
-      throw new MusicInputError("E_TOO_MANY_SELECTED");
-    }
-    if (reasons && reasons.length !== trackIds.length) {
-      throw new MusicInputError("E_REASONS_MISMATCH");
+    if (!set) throw new MusicInputError("E_SET_NOT_FOUND");
+    if (trackIds.length === 0 || trackIds.length > 5) throw new MusicInputError("E_TOO_MANY_SELECTED");
+    if (reasons) {
+      if (reasons.length !== trackIds.length) throw new MusicInputError("E_REASONS_MISMATCH");
+      for (const r of reasons) {
+        if (r.length > 50) throw new MusicInputError("E_REASON_TOO_LONG");
+      }
+      if (reasons.join("").length > 500) throw new MusicInputError("E_REASONS_TOTAL_TOO_LONG");
     }
     const setTrackIds = new Set(set.tracks.map((t) => t.id));
     for (const tid of trackIds) {
-      if (!setTrackIds.has(tid)) {
-        throw new MusicInputError("E_TRACK_NOT_IN_SET");
-      }
+      if (!setTrackIds.has(tid)) throw new MusicInputError("E_TRACK_NOT_IN_SET");
     }
     this.cache.touch(setId);
     const cardRef = `cyrene:music:${setId}:${trackIds.join(":")}`;
@@ -193,25 +243,19 @@ export class MusicService {
   // ── Playback ───────────────────────────────────────────────
 
   async playTrack(trackId: string): Promise<PlaybackDispatchResult> {
-    this.requireReady();
-    if (!/^\d+$/.test(trackId)) {
-      throw new MusicInputError("E_INVALID_ID");
-    }
+    if (!/^\d+$/.test(trackId)) throw new MusicInputError("E_INVALID_ID");
     return this.dispatcher.dispatch("song", trackId);
   }
 
   async playPlaylist(playlistId: string): Promise<PlaybackDispatchResult> {
-    this.requireReady();
-    if (!/^\d+$/.test(playlistId)) {
-      throw new MusicInputError("E_INVALID_ID");
-    }
+    if (!/^\d+$/.test(playlistId)) throw new MusicInputError("E_INVALID_ID");
     return this.dispatcher.dispatch("playlist", playlistId);
   }
 
   // ── Helpers ────────────────────────────────────────────────
 
   private requireReady(): void {
-    if (this.backendState !== "ready") {
+    if (this.backendState !== "ready" && this.backendState !== "degraded") {
       throw new MusicInputError("E_BACKEND_NOT_READY");
     }
   }
@@ -222,24 +266,40 @@ export class MusicService {
     }
   }
 
-  /**
-   * Unwrap an MCP CallToolResult content array into the first text payload.
-   * If the result does not look like an MCP envelope it is returned as-is.
-   */
+  private async validateSessionThreeState(): Promise<{ state: string; profile?: MusicProfile }> {
+    try {
+      const raw = await this.client.callAuthTool("cyrene_music_login_check", { session_id: "validation-only" });
+      const r = raw as { status?: string; profile?: MusicProfile };
+      if (r.status === "authorized") return { state: "valid", profile: r.profile };
+      return { state: "invalid_credentials" };
+    } catch {
+      return { state: "temporarily_unavailable" };
+    }
+  }
+
   private unwrapContent(result: unknown): unknown {
     if (result && typeof result === "object") {
       const r = result as Record<string, unknown>;
       if (Array.isArray(r.content)) {
         const first = (r.content as Array<Record<string, unknown>>)[0];
         if (first && first.type === "text" && typeof first.text === "string") {
-          try {
-            return JSON.parse(first.text);
-          } catch {
-            return result;
-          }
+          try { return JSON.parse(first.text); } catch { return result; }
         }
       }
     }
     return result;
+  }
+
+  private emitBackendChange(s: MusicBackendState): void {
+    for (const l of this.backendListeners) l(s);
+  }
+  private emitAccountChange(s: MusicAccountState): void {
+    for (const l of this.accountListeners) l(s);
+  }
+  private emitPlayerChange(s: MusicPlayerState): void {
+    for (const l of this.playerListeners) l(s);
+  }
+  private emitFlowChange(s: LoginFlowState): void {
+    for (const l of this.flowListeners) l(s);
   }
 }
