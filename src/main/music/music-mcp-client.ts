@@ -52,8 +52,10 @@ export class MusicMcpClient {
       cwd: this.vendorDir,
     });
     this.client = new Client({ name: "cyrene-music", version: "0.1.0" }, { capabilities: {} });
-    this.rootPid = this.readTransportPid(this.transport);
     await this.client.connect(this.transport);
+    // SDK populates the child's pid lazily during start() (called inside
+    // Client.connect); only safe to read after connect resolves.
+    this.rootPid = this.readTransportPid(this.transport);
   }
 
   async verifyContractOnConnect(): Promise<ContractResult> {
@@ -106,7 +108,8 @@ export class MusicMcpClient {
 
   private readTransportPid(transport: StdioClientTransport | null): number | undefined {
     if (!transport) return undefined;
-    const t = transport as unknown as { process?: { pid?: number } };
-    return typeof t.process?.pid === "number" ? t.process.pid : undefined;
+    // StdioClientTransport exposes a public `pid` getter (stored in private `_process`)
+    const t = transport as unknown as { pid?: number | null };
+    return typeof t.pid === "number" ? t.pid : undefined;
   }
 }

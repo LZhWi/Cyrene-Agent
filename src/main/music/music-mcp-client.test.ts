@@ -106,8 +106,11 @@ describe("MusicMcpClient", () => {
     listTools.mockResolvedValue({ tools: [] });
     connect.mockResolvedValue(undefined);
     const sdk = await import("@modelcontextprotocol/sdk/client/stdio.js");
-    const Ctor = sdk.StdioClientTransport as unknown as { mock: { results: unknown[] } } & { mockImplementation?: (impl: () => unknown) => unknown };
-    Ctor.mockImplementation?.(function () { return { close: transportClose, process: { pid: 4242 } }; });
+    const Ctor = sdk.StdioClientTransport as unknown as { mockImplementation: (impl: () => unknown) => void };
+    // Match the real SDK shape: StdioClientTransport exposes a public `pid` getter.
+    Ctor.mockImplementation(function () {
+      return { close: transportClose, pid: 4242 };
+    });
     const c = new MusicMcpClient(VENDOR, RUNTIME);
     await c.connect();
     expect(c.getRootPid()).toBe(4242);
