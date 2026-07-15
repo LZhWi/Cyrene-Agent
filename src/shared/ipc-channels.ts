@@ -268,5 +268,18 @@ export const IPC = {
   // Phase 3.4：消息日志
   CHANNELS_LOG_GET: "channels:log:get",
   CHANNELS_LOG_CLEAR: "channels:log:clear",
+
+  // Music
+  MUSIC_GET_STATUS: "music:get-status",
+  MUSIC_BEGIN_LOGIN: "music:begin-login",
+  MUSIC_CANCEL_LOGIN: "music:cancel-login",
+  MUSIC_GET_DAILY: "music:get-daily",
+  MUSIC_SEARCH: "music:search",
+  MUSIC_PRESENT_TRACKS: "music:present-tracks",
+  MUSIC_PLAY_TRACK: "music:play-track",
+  MUSIC_PLAY_PLAYLIST: "music:play-playlist",
+  MUSIC_DETECT_PLAYER: "music:detect-player",
+  MUSIC_STATE_CHANGED: "music:state-changed",
+  MUSIC_CARD: "music:card",
 } as const;
 
