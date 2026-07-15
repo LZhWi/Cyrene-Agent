@@ -96,4 +96,20 @@ describe("MusicMcpClient", () => {
     expect((inst.env as NodeJS.ProcessEnv).CYRENE_MUSIC_STORAGE_DIR).toBe(RUNTIME);
     expect((inst.env as NodeJS.ProcessEnv).MINIMAX_API_KEY).toBeUndefined();
   });
+
+  it("getRootPid returns undefined before connect", () => {
+    const c = new MusicMcpClient(VENDOR, RUNTIME);
+    expect(c.getRootPid()).toBeUndefined();
+  });
+
+  it("getRootPid reads pid from StdioClientTransport after connect", async () => {
+    listTools.mockResolvedValue({ tools: [] });
+    connect.mockResolvedValue(undefined);
+    const sdk = await import("@modelcontextprotocol/sdk/client/stdio.js");
+    const Ctor = sdk.StdioClientTransport as unknown as { mock: { results: unknown[] } } & { mockImplementation?: (impl: () => unknown) => unknown };
+    Ctor.mockImplementation?.(function () { return { close: transportClose, process: { pid: 4242 } }; });
+    const c = new MusicMcpClient(VENDOR, RUNTIME);
+    await c.connect();
+    expect(c.getRootPid()).toBe(4242);
+  });
 });

@@ -34,6 +34,7 @@ export class MusicMcpClient {
   private client: Client | null = null;
   private transport: StdioClientTransport | null = null;
   private toolsByName = new Map<string, { name: string }>();
+  private rootPid: number | undefined = undefined;
 
   constructor(
     private readonly vendorDir: string,
@@ -51,6 +52,7 @@ export class MusicMcpClient {
       cwd: this.vendorDir,
     });
     this.client = new Client({ name: "cyrene-music", version: "0.1.0" }, { capabilities: {} });
+    this.rootPid = this.readTransportPid(this.transport);
     await this.client.connect(this.transport);
   }
 
@@ -95,5 +97,16 @@ export class MusicMcpClient {
     this.client = null;
     this.transport = null;
     this.toolsByName.clear();
+    this.rootPid = undefined;
+  }
+
+  getRootPid(): number | undefined {
+    return this.rootPid;
+  }
+
+  private readTransportPid(transport: StdioClientTransport | null): number | undefined {
+    if (!transport) return undefined;
+    const t = transport as unknown as { process?: { pid?: number } };
+    return typeof t.process?.pid === "number" ? t.process.pid : undefined;
   }
 }
