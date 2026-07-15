@@ -3368,11 +3368,12 @@ body {
   color: var(--rb-text-muted);
 }
 .music-state-row__dot {
-  width: 10px;
-  height: 10px;
+  width: 12px;
+  height: 12px;
   border-radius: 50%;
   display: inline-block;
   background: #888;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4) inset;
 }
 .music-state-row__dot[data-color="green"] { background: #4ade80; }
 .music-state-row__dot[data-color="red"] { background: #f87171; }
