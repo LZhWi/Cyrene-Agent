@@ -101,6 +101,9 @@ import { registerDocumentTools } from "./orchestrator/document-tools";
 import { registerLifeTools, setTranslateConfig } from "./orchestrator/life-tools";
 import { registerTravelTools, setTravelConfig } from "./orchestrator/travel-tools";
 import { registerEmailTools, setEmailConfig } from "./orchestrator/email-tools";
+import { resolveMusicPaths } from "./music/paths";
+import { bootstrapMusicService } from "./music/bootstrap";
+import { installShutdownLatch } from "./music/shutdown-latch";
 import {
   buildConversationTimeContext,
   normalizeChatMessagesWithTime,
@@ -4376,6 +4379,11 @@ app.whenReady().then(async () => {
   void syncPlaywrightMcp(initialSettings).catch((e) =>
     console.error("[Cyrene] playwright MCP sync failed:", e)
   );
+
+  // Cloud Music MCP wiring (MusicService + IPC + 5 Agent tools + shutdown latch)
+  const musicPaths = resolveMusicPaths();
+  const musicBootstrap = bootstrapMusicService(musicPaths);
+  installShutdownLatch(musicBootstrap);
 
   // Skill 系统：扫描双源 skills + 注册 meta-tool
   initSkills();
