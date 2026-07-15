@@ -134,6 +134,9 @@ export class MusicService {
       };
     }
     this.shuttingDown = true;
+    // 1. Cancel any in-flight login flow (background polling) before tearing down
+    //    the MCP client, so no further cyrene_music_login_check RPCs are issued.
+    try { await this.orchestrator.shutdown(); } catch { /* ignore */ }
     const rootProcessPid = this.client.getRootPid();
     let transportClosed = true;
     try {
