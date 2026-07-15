@@ -16,7 +16,11 @@ export function bootstrapMusicService(paths: MusicPaths): MusicBootstrap {
   const ipcDisposer = registerMusicIpcHandlers(service);
   const tools = buildMusicTools(service);
   for (const tool of tools) toolRegistry.register(tool);
-  void service.start();
+  // start() emits the "failed" backend state on error and then re-throws;
+  // attach a no-op .catch() so the rejection does not surface as
+  // UnhandledPromiseRejectionWarning. Callers observe failures via
+  // service.getBackendState() (e.g. smoke harness polls state).
+  service.start().catch(() => { /* failure is signalled via backendState="failed" */ });
 
   let shuttingDown = false;
   return {
