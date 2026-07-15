@@ -84,13 +84,27 @@ export class MusicMcpClient {
   async callDataTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     if (!DATA_TOOL_ALLOWLIST.has(name)) throw new Error(`E_TOOL_NOT_ALLOWED: ${name}`);
     if (!this.client) throw new Error("E_NOT_CONNECTED");
-    return this.client.callTool({ name, arguments: args });
+    return this.unwrapMcpResult(await this.client.callTool({ name, arguments: args }));
   }
 
   async callAuthTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     if (!AUTH_TOOL_ALLOWLIST.has(name)) throw new Error(`E_TOOL_NOT_ALLOWED: ${name}`);
     if (!this.client) throw new Error("E_NOT_CONNECTED");
-    return this.client.callTool({ name, arguments: args });
+    return this.unwrapMcpResult(await this.client.callTool({ name, arguments: args }));
+  }
+
+  /** Extract the first text block from an MCP CallToolResult envelope. */
+  private unwrapMcpResult(result: unknown): unknown {
+    if (result && typeof result === "object") {
+      const r = result as Record<string, unknown>;
+      if (Array.isArray(r.content)) {
+        const first = (r.content as Array<Record<string, unknown>>)[0];
+        if (first && first.type === "text" && typeof first.text === "string") {
+          try { return JSON.parse(first.text); } catch { return first.text; }
+        }
+      }
+    }
+    return result;
   }
 
   async close(): Promise<void> {
