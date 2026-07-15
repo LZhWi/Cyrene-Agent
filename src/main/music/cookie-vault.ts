@@ -63,6 +63,10 @@ export class CookieVault {
     return parsed;
   }
 
+  async delete(): Promise<void> {
+    await fs.rm(this.accountPath, { force: true });
+  }
+
   async decrypt(blob: EncryptedAccountBlob): Promise<PersistPayload> {
     const json = this.storage.decryptString(blob.payload);
     const data = JSON.parse(json) as { cookies: Record<string, string> };

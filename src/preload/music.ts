@@ -6,6 +6,7 @@ export function exposeMusicApi() {
     getStatus: () => ipcRenderer.invoke(IPC.MUSIC_GET_STATUS),
     beginLogin: () => ipcRenderer.invoke(IPC.MUSIC_BEGIN_LOGIN),
     cancelLogin: () => ipcRenderer.invoke(IPC.MUSIC_CANCEL_LOGIN),
+    logout: () => ipcRenderer.invoke(IPC.MUSIC_LOGOUT),
     getDaily: () => ipcRenderer.invoke(IPC.MUSIC_GET_DAILY),
     search: (keyword: string, limit?: number) => ipcRenderer.invoke(IPC.MUSIC_SEARCH, { keyword, limit }),
     presentTracks: (args: unknown) => ipcRenderer.invoke(IPC.MUSIC_PRESENT_TRACKS, args),

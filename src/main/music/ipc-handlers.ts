@@ -49,6 +49,9 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
   ipcMain.handle(IPC.MUSIC_CANCEL_LOGIN, () => wrap(() => service.cancelLogin(), service));
   channels.push(IPC.MUSIC_CANCEL_LOGIN);
 
+  ipcMain.handle(IPC.MUSIC_LOGOUT, () => wrap(() => service.logout(), service));
+  channels.push(IPC.MUSIC_LOGOUT);
+
   ipcMain.handle(IPC.MUSIC_GET_DAILY, () =>
     wrap(() => service.getDailyRecommendations("default"), service),
   );

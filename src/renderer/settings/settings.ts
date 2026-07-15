@@ -2959,6 +2959,20 @@ interface MusicStatusSnapshot {
   backend: string;
   account: string;
   player: string;
+  flow?: string;
+  profile?: { nickname?: string; avatarUrl?: string; avatar?: string } | null;
+}
+
+type NeteaseViewState = "backend_starting" | "backend_error" | "signed_out" | "creating_qr" | "waiting_scan" | "waiting_confirm" | "login_expired" | "login_failed" | "connected" | "connected_without_client";
+
+export function deriveNeteaseViewState(snapshot: MusicStatusSnapshot): NeteaseViewState {
+  if (snapshot.backend === "starting") return "backend_starting";
+  if (snapshot.backend === "failed" || snapshot.backend === "incompatible") return "backend_error";
+  if (snapshot.account !== "signed_in") return "signed_out";
+  if (snapshot.flow === "creating_qr" || snapshot.flow === "waiting_scan" || snapshot.flow === "waiting_confirm") return snapshot.flow;
+  if (snapshot.flow === "expired") return "login_expired";
+  if (snapshot.flow === "failed") return "login_failed";
+  return snapshot.player === "available" ? "connected" : "connected_without_client";
 }
 
 interface MusicSelectionTrack {
@@ -2984,6 +2998,7 @@ interface MusicApi {
   getStatus: () => Promise<MusicIpcResult<MusicStatusSnapshot>>;
   beginLogin: () => Promise<MusicIpcResult<{ loginSessionId: string; qrContent: string; expiresAt: number; pollIntervalMs: number }>>;
   cancelLogin: () => Promise<MusicIpcResult<unknown>>;
+  logout: () => Promise<MusicIpcResult<unknown>>;
   search: (keyword: string, limit?: number) => Promise<MusicIpcResult<MusicSelectionResult>>;
   onStateChanged: (h: (s: MusicStatusSnapshot) => void) => (() => void) | void;
 }
@@ -2993,10 +3008,17 @@ function getMusicApi(): MusicApi | null {
   return w.music ?? null;
 }
 
+const musicHomeView = document.getElementById("music-home-view");
+const neteaseDetailView = document.getElementById("netease-detail-view");
+const musicReturnBtn = document.getElementById("music-return-btn");
+const musicSearchForm = document.getElementById("music-search-form");
+const musicSearchHint = document.getElementById("music-search-hint");
+const musicQrStatus = document.getElementById("music-qr-status");
+const musicProfileAvatar = document.getElementById("music-profile-avatar") as HTMLImageElement | null;
 const musicLoginBtn = document.getElementById("music-login-btn") as HTMLButtonElement | null;
-const musicCancelBtn = document.getElementById("music-cancel-btn") as HTMLButtonElement | null;
-const musicDisconnectBtn = document.getElementById("music-disconnect-btn") as HTMLButtonElement | null;
-const musicQrBox = document.getElementById("music-qr");
+const musicCancelBtn = document.createElement("button");
+const musicDisconnectBtn = document.createElement("button");
+
 const musicQrImg = document.getElementById("music-qr-img") as HTMLImageElement | null;
 const musicQrTip = document.getElementById("music-qr-tip");
 const musicProfileBox = document.getElementById("music-profile");
@@ -3057,17 +3079,40 @@ function renderMusicStateRow(axis: "backend" | "account" | "player", value: stri
 }
 
 function renderMusicStatus(snapshot: MusicStatusSnapshot): void {
+  const state = deriveNeteaseViewState(snapshot);
   renderMusicStateRow("backend", snapshot.backend);
   renderMusicStateRow("account", snapshot.account);
   renderMusicStateRow("player", snapshot.player);
-  updateMusicActionsForAccount(snapshot.account);
-  if (musicAccountStatusText) {
-    if (snapshot.account === "signed_in") musicAccountStatusText.textContent = "已连接";
-    else if (snapshot.account === "validating") musicAccountStatusText.textContent = "校验中…";
-    else if (snapshot.account === "temporarily_unavailable") musicAccountStatusText.textContent = "临时不可用";
-    else if (snapshot.account === "expired") musicAccountStatusText.textContent = "登录已过期";
-    else musicAccountStatusText.textContent = "未连接";
+  const labels: Record<NeteaseViewState, string> = {
+    backend_starting: "音乐服务暂不可用", backend_error: "音乐服务暂不可用", signed_out: "尚未连接",
+    creating_qr: "正在等待扫码", waiting_scan: "正在等待扫码", waiting_confirm: "已扫码，请在手机确认",
+    login_expired: "二维码已过期", login_failed: "登录失败", connected: "网易云音乐已连接", connected_without_client: "已登录，但未检测到桌面客户端",
+  };
+  if (musicAccountStatusText) musicAccountStatusText.textContent = labels[state];
+  const actionHost = document.getElementById("music-actions");
+  if (actionHost) {
+    actionHost.innerHTML = "";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = state === "signed_out" || state === "backend_error" ? "btn-primary" : "btn-secondary";
+    const actions: Partial<Record<NeteaseViewState, string>> = { signed_out: "连接网易云", creating_qr: "取消登录", waiting_scan: "取消登录", waiting_confirm: "取消登录", login_expired: "重新生成二维码", login_failed: "重新登录", connected: "断开连接", connected_without_client: "断开连接", backend_error: "重新启动音乐服务" };
+    if (actions[state]) { button.textContent = actions[state]!; button.addEventListener("click", () => void handleMusicAction(state)); actionHost.appendChild(button); }
   }
+  const loggedIn = state === "connected" || state === "connected_without_client";
+  musicProfileBox?.classList.toggle("is-hidden", !loggedIn);
+  musicSearchForm?.classList.toggle("is-hidden", !loggedIn);
+  if (musicSearchHint) musicSearchHint.textContent = loggedIn ? "搜索网易云曲库。" : "连接网易云后即可搜索歌曲和获取每日推荐。";
+  if (snapshot.profile?.nickname && musicProfileName) musicProfileName.textContent = snapshot.profile.nickname;
+  if (snapshot.profile?.avatarUrl && musicProfileAvatar) musicProfileAvatar.src = snapshot.profile.avatarUrl;
+  musicQrBox?.classList.toggle("is-hidden", !(state === "creating_qr" || state === "waiting_scan" || state === "waiting_confirm" || state === "login_expired"));
+  if (musicQrStatus) musicQrStatus.textContent = state === "waiting_confirm" ? "当前状态：等待手机确认" : state === "login_expired" ? "当前状态：二维码过期" : "当前状态：等待扫码";
+}
+
+async function handleMusicAction(state: NeteaseViewState): Promise<void> {
+  const api = getMusicApi(); if (!api) return;
+  if (state === "signed_out" || state === "login_expired" || state === "login_failed") return void startMusicLogin();
+  if (state === "connected" || state === "connected_without_client") { await api.logout(); return; }
+  if (state === "creating_qr" || state === "waiting_scan" || state === "waiting_confirm") { await api.cancelLogin?.(); clearMusicQr(); }
 }
 
 function updateMusicActionsForAccount(account: string): void {
@@ -3283,7 +3328,6 @@ async function loadMusicPanel(): Promise<void> {
   // 平台按钮（网易云 → 切到 music panel）的点击处理在文件下方模块初始化时已绑定，
   // 这里不再重复 attach，避免多次进入面板造成重复监听。
 
-  // 登录 / 取消 / 断开
   musicLoginBtn?.addEventListener("click", () => void startMusicLogin());
   musicCancelBtn?.addEventListener("click", () => void cancelMusicLogin());
   musicDisconnectBtn?.addEventListener("click", () => void disconnectMusic());
@@ -4121,21 +4165,20 @@ lifeToggle?.addEventListener("click", () => {
   lifeBody?.classList.toggle("is-collapsed", expanded);
 });
 
-// ── 音乐工具手风琴 ─────────────────────────────────────────
-const musicToggle = document.getElementById("plugin-music-toggle") as HTMLButtonElement | null;
-const musicAccordionCard = document.getElementById("plugin-music-card");
-const musicAccordionBody = document.getElementById("plugin-music-body");
-musicToggle?.addEventListener("click", () => {
-  const expanded = musicToggle.getAttribute("aria-expanded") === "true";
-  musicToggle.setAttribute("aria-expanded", String(!expanded));
-  musicAccordionCard?.classList.toggle("is-expanded", !expanded);
-  musicAccordionBody?.classList.toggle("is-collapsed", expanded);
-});
-
-// 网易云按钮：点击后切到 music panel
+// ── 音乐工具路由 ──────────────────────────────────────────────
+const musicToggle = null;
+const musicAccordionCard = null;
+const musicAccordionBody = null;
 document.getElementById("music-platform-netease")?.addEventListener("click", () => {
   switchSection("music");
+  musicHomeView?.classList.add("is-hidden");
+  neteaseDetailView?.classList.remove("is-hidden");
 });
+musicReturnBtn?.addEventListener("click", () => {
+  neteaseDetailView?.classList.add("is-hidden");
+  musicHomeView?.classList.remove("is-hidden");
+});
+
 
 // ── Skill 面板：列 skill 开关 ──────────────────────────────
 async function renderSkills(): Promise<void> {

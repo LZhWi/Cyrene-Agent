@@ -176,6 +176,13 @@ export class MusicService {
     return this.cache.get(setId, conversationId);
   }
 
+  // ── Login poll passthrough (smoke harness + future orchestrators) ──
+
+  /** Drive one login-state check against the MCP auth server. */
+  async pollOnce(): Promise<unknown> {
+    return this.orchestrator.pollOnce();
+  }
+
   // ── Event listeners ────────────────────────────────────────
 
   onBackendStateChange(listener: StateListener<MusicBackendState>): () => void {
@@ -204,6 +211,20 @@ export class MusicService {
 
   async cancelLogin() {
     return this.orchestrator.cancelLogin();
+  }
+
+  async logout(): Promise<void> {
+    await this.orchestrator.cancelLogin();
+    try {
+      await this.client.close();
+    } catch {
+      // The client may already be closed; logout must still clear credentials.
+    }
+    await this.vault.delete();
+    await fs.rm(path.join(this.paths.runtimeDir, "cookies.json"), { force: true });
+    this.activeProfile = null;
+    this.orchestrator.setAccountState("signed_out");
+    this.emitAccountChange("signed_out");
   }
 
   // ── Data ───────────────────────────────────────────────────

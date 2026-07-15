@@ -273,6 +273,7 @@ export const IPC = {
   MUSIC_GET_STATUS: "music:get-status",
   MUSIC_BEGIN_LOGIN: "music:begin-login",
   MUSIC_CANCEL_LOGIN: "music:cancel-login",
+  MUSIC_LOGOUT: "music:logout",
   MUSIC_GET_DAILY: "music:get-daily",
   MUSIC_SEARCH: "music:search",
   MUSIC_PRESENT_TRACKS: "music:present-tracks",

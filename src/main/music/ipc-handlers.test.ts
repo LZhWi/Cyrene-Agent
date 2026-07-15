@@ -46,6 +46,7 @@ function mockService(overrides: Record<string, unknown> = {}): any {
     getRootPid: vi.fn(() => undefined),
     beginLogin: asyncThat(),
     cancelLogin: asyncThat(),
+    logout: asyncThat(),
     getDailyRecommendations: asyncThat(),
     searchTracks: asyncThat(searchImpl),
     presentTracks: asyncThat(),
@@ -62,12 +63,13 @@ beforeEach(() => {
 });
 
 describe("registerMusicIpcHandlers", () => {
-  it("registers all 9 invoke channels", () => {
+  it("registers all 10 invoke channels", () => {
     registerMusicIpcHandlers(mockService());
     const expected = [
       "music:get-status",
       "music:begin-login",
       "music:cancel-login",
+      "music:logout",
       "music:get-daily",
       "music:search",
       "music:present-tracks",
@@ -85,7 +87,7 @@ describe("registerMusicIpcHandlers", () => {
     disposer();
     expect(removed).toContain("music:get-status");
     expect(removed).toContain("music:play-track");
-    expect(removed.length).toBe(9);
+    expect(removed.length).toBe(10);
   });
 
   it("MUSIC_SEARCH: keyword too long returns ok:false errorCode", async () => {
