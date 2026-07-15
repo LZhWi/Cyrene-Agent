@@ -1,9 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-vi.mock("electron", () => ({
-  ipcMain: { removeHandler: vi.fn() },
-}));
-
 vi.mock("./music-service", () => ({
   MusicService: vi.fn().mockImplementation(function () {
     return {
@@ -77,7 +73,7 @@ describe("bootstrapMusicService", () => {
     const b = bootstrapMusicService(PATHS);
     const report = await b.shutdown();
     expect(b.service.shutdown).toHaveBeenCalledTimes(1);
-    expect(ipcDisposer).not.toHaveBeenCalled();
+    expect(ipcDisposer).toHaveBeenCalledTimes(1);
     expect(unregistered).toEqual(["music_a", "music_b"]);
     expect(report).toEqual({
       rootProcessPid: undefined,
@@ -91,8 +87,10 @@ describe("bootstrapMusicService", () => {
     const b = bootstrapMusicService(PATHS);
     await b.shutdown();
     unregistered.length = 0;
+    ipcDisposer.mockClear();
     const r2 = await b.shutdown();
     expect(b.service.shutdown).toHaveBeenCalledTimes(1);
+    expect(ipcDisposer).not.toHaveBeenCalled();
     expect(unregistered).toHaveLength(0);
     expect(r2.runtimeRemoved).toBe(true);
   });
