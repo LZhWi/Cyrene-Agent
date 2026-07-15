@@ -24,6 +24,7 @@ import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-f
 import { normalizeUiIcon, type UiIcon } from "../../shared/ui-icon";
 import { buildAppearanceSettingsPatch } from "./appearance-settings-state";
 import { type ReasoningPreference } from "../../shared/reasoning";
+import { type LoginFlowState } from "../../main/music/types";
 
 // Inline modal (to avoid Vite tree-shaking)
 let _cyModalOverlay: HTMLElement | null = null;
@@ -2959,7 +2960,7 @@ interface MusicStatusSnapshot {
   backend: string;
   account: string;
   player: string;
-  flow?: string;
+  flow: LoginFlowState;
   profile?: { nickname?: string; avatarUrl?: string; avatar?: string } | null;
 }
 

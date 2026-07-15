@@ -39,6 +39,7 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
       backend: service.getBackendState(),
       account: service.getAccountState(),
       player: service.getPlayerState(),
+      flow: service.getLoginFlowState(),
     }), service),
   );
   channels.push(IPC.MUSIC_GET_STATUS);

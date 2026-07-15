@@ -43,6 +43,7 @@ function mockService(overrides: Record<string, unknown> = {}): any {
     getBackendState: vi.fn(() => "ready"),
     getAccountState: vi.fn(() => "signed_in"),
     getPlayerState: vi.fn(() => "available"),
+    getLoginFlowState: vi.fn(() => "idle"),
     getRootPid: vi.fn(() => undefined),
     beginLogin: asyncThat(),
     cancelLogin: asyncThat(),
@@ -136,6 +137,22 @@ describe("registerMusicIpcHandlers", () => {
     const r = (await handlerMap["music:search"](null, { keyword: "q" })) as any;
     expect(r.ok).toBe(true);
     expect(r.data.setId).toBe("s1");
+  });
+
+  it("MUSIC_GET_STATUS: response includes login flow state", async () => {
+    const svc = mockService();
+    svc.getBackendState.mockReturnValue("ready");
+    svc.getAccountState.mockReturnValue("signed_in");
+    svc.getPlayerState.mockReturnValue("available");
+    svc.getLoginFlowState.mockReturnValue("waiting_scan");
+    registerMusicIpcHandlers(svc);
+    const r = (await handlerMap["music:get-status"](null)) as any;
+    expect(r.ok).toBe(true);
+    expect(r.data).toHaveProperty("flow");
+    expect(r.data.flow).toBe("waiting_scan");
+    expect(r.data.backend).toBe("ready");
+    expect(r.data.account).toBe("signed_in");
+    expect(r.data.player).toBe("available");
   });
 
   it("non-MusicInputError exception is converted to E_INTERNAL_ERROR, no internal path leak", async () => {
