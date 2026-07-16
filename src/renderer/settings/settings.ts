@@ -1,6 +1,7 @@
 import "../ui/base.css";
 import "./settings.css";
 import "../ui/theme";
+import neteaseLogoUrl from "./assets/netease-logo.svg?url";
 import {
   CHAT_DEFAULT_IDENTITY_LABEL,
   formatChatRelativeTime,
@@ -605,6 +606,9 @@ const placeholderPanel = document.getElementById("placeholder-panel") as HTMLEle
 const cyrenePanel = document.getElementById("cyrene-panel") as HTMLFormElement;
 const disclaimerPanel = document.getElementById("disclaimer-panel") as HTMLElement;
 const pluginsPanel = document.getElementById("plugins-panel") as HTMLElement;
+document.querySelectorAll<HTMLImageElement>("[data-music-logo]").forEach((image) => {
+  image.src = neteaseLogoUrl;
+});
 const placeholderIcon = document.getElementById("placeholder-icon") as HTMLElement;
 const placeholderTitle = document.getElementById("placeholder-title") as HTMLElement;
 const placeholderCopy = document.getElementById("placeholder-copy") as HTMLElement;
