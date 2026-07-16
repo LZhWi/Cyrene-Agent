@@ -1,4 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import * as os from "node:os";
 
 const { beginTool, checkTool, cancelTool, searchTool, dailyTool, isRegistered, openExternal } = vi.hoisted(() => ({
   beginTool: vi.fn(),
@@ -10,12 +13,18 @@ const { beginTool, checkTool, cancelTool, searchTool, dailyTool, isRegistered, o
   openExternal: vi.fn(),
 }));
 
+// Track each constructed client so logout tests can inspect the close() mock
+// on the exact instance held by a given MusicService.
+const clientInstances: Array<{ close: ReturnType<typeof vi.fn> }> = [];
+
 vi.mock("./music-mcp-client", () => ({
   MusicMcpClient: vi.fn().mockImplementation(function () {
+    const close = vi.fn();
+    clientInstances.push({ close });
     return {
       connect: vi.fn(),
       verifyContractOnConnect: vi.fn().mockResolvedValue({ ok: true, missing: [], schemaMismatch: [] }),
-      close: vi.fn(),
+      close,
       getRootPid: vi.fn().mockReturnValue(undefined),
       callDataTool: (name: string, args: unknown) => name === "cloud_music_search" ? searchTool(args) : dailyTool(args),
       callAuthTool: (name: string, args: unknown) => name === "cyrene_music_login_begin" ? beginTool(args) : name === "cyrene_music_login_check" ? checkTool(args) : cancelTool(args),
@@ -43,6 +52,7 @@ beforeEach(() => {
   beginTool.mockReset(); checkTool.mockReset(); cancelTool.mockReset();
   searchTool.mockReset(); dailyTool.mockReset();
   isRegistered.mockReset(); openExternal.mockReset();
+  clientInstances.length = 0;
 });
 
 const PATHS = {
@@ -51,6 +61,28 @@ const PATHS = {
   accountPath: "/userdata/music/netease/account.enc",
   resourceBaseDir: "/repo",
 };
+
+// Helper: build a fresh MusicService whose paths point at a temp directory
+// so logout() can delete a real account.enc / cookies.json without leaking
+// state across tests (the default PATHS use hard-coded /userdata paths).
+async function freshServiceWithTmpPaths(): Promise<{ svc: MusicService; accountPath: string; runtimeDir: string; cleanup: () => Promise<void> }> {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "music-logout-"));
+  const accountPath = path.join(tmp, "account.enc");
+  const runtimeDir = path.join(tmp, "runtime");
+  await fs.mkdir(runtimeDir, { recursive: true });
+  const svc = new MusicService({
+    vendorDir: "/repo/vendor/cloud-music-mcp",
+    runtimeDir,
+    accountPath,
+    resourceBaseDir: "/repo",
+  });
+  return {
+    svc,
+    accountPath,
+    runtimeDir,
+    cleanup: async () => { await fs.rm(tmp, { recursive: true, force: true }); },
+  };
+}
 
 describe("MusicService", () => {
   it("getDailyRecommendations rejects when backend not ready (stopped initial)", async () => {
@@ -187,5 +219,76 @@ describe("MusicService", () => {
     const r1 = await s.shutdown();
     const r2 = await s.shutdown();
     expect(r1).toEqual(r2);
+  });
+
+  // ── logout() ───────────────────────────────────────────────
+
+  it("logout() on a fresh service cancels login, closes client, removes account file and runtime cookies, sets signed_out", async () => {
+    cancelTool.mockResolvedValue({ ok: true, status: "cancelled" });
+    beginTool.mockResolvedValue({ loginSessionId: "sess-1" });
+
+    const { svc, accountPath, runtimeDir, cleanup } = await freshServiceWithTmpPaths();
+    try {
+      // Seed the vault with a fake encrypted account file (safeStorage is mocked as
+      // unavailable so persist() is a no-op; we just drop the file on disk directly).
+      await fs.writeFile(accountPath, "seed-account-blob");
+      // And a runtime cookies file that logout() must scrub.
+      const cookiesPath = path.join(runtimeDir, "cookies.json");
+      await fs.writeFile(cookiesPath, JSON.stringify({ MUSIC_U: "old" }));
+
+      // Track that the service was constructed with one MCP client whose close
+      // we can later inspect.
+      expect(clientInstances).toHaveLength(1);
+      const clientInstance = clientInstances[0]!;
+
+      // Bring the service to "ready" and start a login session so the orchestrator
+      // actually has a currentSessionId to cancel.
+      await svc.start();
+      await svc.beginLogin();
+      expect(beginTool).toHaveBeenCalledTimes(1);
+
+      await svc.logout();
+
+      // 1. orchestrator.cancelLogin was called -> routed through MCP cancel RPC.
+      expect(cancelTool).toHaveBeenCalledTimes(1);
+      // 2. client.close was called exactly once on the service's client instance.
+      expect(clientInstance.close).toHaveBeenCalledTimes(1);
+      // 3. vault.delete removed account.enc.
+      await expect(fs.stat(accountPath)).rejects.toThrow(/ENOENT/);
+      // 4. runtime cookies.json removed.
+      await expect(fs.stat(cookiesPath)).rejects.toThrow(/ENOENT/);
+      // 5. accountState reports signed_out.
+      expect(svc.getAccountState()).toBe("signed_out");
+      expect(svc.getActiveProfile()).toBeNull();
+    } finally {
+      await cleanup();
+    }
+  });
+
+  it("logout() succeeds even when there is no account file and client.close throws", async () => {
+    cancelTool.mockResolvedValue({ ok: true, status: "cancelled" });
+    beginTool.mockResolvedValue({ loginSessionId: "sess-2" });
+
+    const { svc, accountPath, cleanup } = await freshServiceWithTmpPaths();
+    try {
+      // Ensure no account.enc exists.
+      await expect(fs.stat(accountPath)).rejects.toThrow(/ENOENT/);
+      // Force the underlying MCP client's close() to throw — logout must swallow
+      // this so the rest of the cleanup still runs.
+      expect(clientInstances).toHaveLength(1);
+      clientInstances[0]!.close.mockRejectedValueOnce(new Error("transport already closed"));
+
+      // Start the service and a login session so cancelLogin has something to cancel.
+      await svc.start();
+      await svc.beginLogin();
+
+      await expect(svc.logout()).resolves.toBeUndefined();
+
+      expect(cancelTool).toHaveBeenCalledTimes(1);
+      expect(clientInstances[0]!.close).toHaveBeenCalledTimes(1);
+      expect(svc.getAccountState()).toBe("signed_out");
+    } finally {
+      await cleanup();
+    }
   });
 });

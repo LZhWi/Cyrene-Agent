@@ -56,4 +56,40 @@ describe("CookieVault", () => {
     const exists = await fs.stat(path.join(dir, "account.enc")).then(() => true, () => false);
     expect(exists).toBe(false);
   });
+
+  describe("delete()", () => {
+    it("is a no-op when the account file does not exist", async () => {
+      const v = new CookieVault(dir, safeStorageMock as never);
+      // Should not throw even though there is nothing to remove.
+      await expect(v.delete()).resolves.toBeUndefined();
+      // And load() should still report null.
+      expect(await v.load()).toBeNull();
+    });
+
+    it("removes an existing account file", async () => {
+      const v = new CookieVault(dir, safeStorageMock as never);
+      const ok = await v.persist({ cookies: { MUSIC_U: "u" }, revision: 1 });
+      expect(ok).toBe(true);
+      const accountPath = path.join(dir, "account.enc");
+      // Sanity check: file is on disk before delete.
+      await expect(fs.stat(accountPath)).resolves.toBeDefined();
+
+      await v.delete();
+
+      // File should be gone.
+      await expect(fs.stat(accountPath)).rejects.toThrow(/ENOENT/);
+      // And load() should return null afterwards.
+      expect(await v.load()).toBeNull();
+    });
+
+    it("after delete, a subsequent persist + load cycle works cleanly", async () => {
+      const v = new CookieVault(dir, safeStorageMock as never);
+      await v.persist({ cookies: { MUSIC_U: "first" }, revision: 1 });
+      await v.delete();
+      // After delete, a fresh persist should still succeed and overwrite cleanly.
+      await v.persist({ cookies: { MUSIC_U: "second" }, revision: 2 });
+      const blob = await v.load();
+      expect(blob?.credentialRevision).toBe(2);
+    });
+  });
 });

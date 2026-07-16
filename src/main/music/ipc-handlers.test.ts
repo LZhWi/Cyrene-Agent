@@ -146,7 +146,7 @@ describe("registerMusicIpcHandlers", () => {
     svc.getPlayerState.mockReturnValue("available");
     svc.getLoginFlowState.mockReturnValue("waiting_scan");
     registerMusicIpcHandlers(svc);
-    const r = (await handlerMap["music:get-status"](null)) as any;
+    const r = (await handlerMap["music:get-status"](null, undefined)) as any;
     expect(r.ok).toBe(true);
     expect(r.data).toHaveProperty("flow");
     expect(r.data.flow).toBe("waiting_scan");
