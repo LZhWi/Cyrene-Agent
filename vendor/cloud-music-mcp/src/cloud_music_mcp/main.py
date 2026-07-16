@@ -3,10 +3,6 @@ import os
 import sys
 import logging
 
-# 彻底静音：将 stderr 重定向到 devnull
-# 这样可以消除 FastMCP 的 Banner 以及所有第三方库的日志干扰
-sys.stderr = open(os.devnull, "w")
-
 # 在导入 FastMCP 之前设置环境变量以抑制日志和 Banner
 os.environ["LOGURU_LEVEL"] = "WARNING"
 os.environ["CI"] = "true"
