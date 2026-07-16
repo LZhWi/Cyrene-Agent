@@ -723,7 +723,6 @@ const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }>
   asr: { emoji: "🎧", title: "ASR 设置", hint: "语音识别与通话配置" },
   tokens: { emoji: "📊", title: "Token 用量", hint: "查看 API 调用统计与消耗" },
   disclaimer: { emoji: "📜", title: "免责声明", hint: "使用条款与隐私说明" },
-  music: { emoji: "🎵", title: "音乐工具", hint: "网易云扫码登录与搜索" },
 };
 
 minBtn.addEventListener("click", () => window.settings?.minimize());
