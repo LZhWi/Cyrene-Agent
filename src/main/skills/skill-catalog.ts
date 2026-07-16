@@ -57,3 +57,27 @@ export function buildSkillCatalog(skills: SkillEntry[]): string {
     ...lines,
   ].join("\n") + AMBIGUITY_POLICY;
 }
+
+/**
+ * 为显式声明 autoInject 的复合 Skill 注入完整规则。
+ * 能力可用性已由 SkillRegistry.getEnabled() 过滤；读取失败时安全跳过。
+ */
+export function buildAutoInjectedSkillContext(
+  skills: SkillEntry[],
+  getBody: (id: string) => string | null,
+): string {
+  const blocks = skills
+    .filter((skill) => skill.enabled && skill.manifest?.autoInject === true)
+    .map((skill) => {
+      const body = getBody(skill.id)?.trim();
+      return body ? `### ${skill.id}\n${body}` : "";
+    })
+    .filter(Boolean);
+  if (blocks.length === 0) return "";
+  return [
+    "## 自动激活 Skill 指令",
+    "以下 Skill 已通过能力门控，当前对话必须直接遵循其完整规则，无需再次调用 invoke_skill。",
+    "",
+    ...blocks,
+  ].join("\n");
+}

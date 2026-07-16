@@ -27,7 +27,6 @@ export type NeteaseViewState =
 export function deriveNeteaseViewState(snapshot: MusicStatusSnapshot): NeteaseViewState {
   if (snapshot.backend === "starting") return "backend_starting";
   if (snapshot.backend === "failed" || snapshot.backend === "incompatible") return "backend_error";
-  if (snapshot.account !== "signed_in") return "signed_out";
   if (
     snapshot.flow === "creating_qr" ||
     snapshot.flow === "waiting_scan" ||
@@ -37,5 +36,6 @@ export function deriveNeteaseViewState(snapshot: MusicStatusSnapshot): NeteaseVi
   }
   if (snapshot.flow === "expired") return "login_expired";
   if (snapshot.flow === "failed") return "login_failed";
+  if (snapshot.account !== "signed_in") return "signed_out";
   return snapshot.player === "available" ? "connected" : "connected_without_client";
 }

@@ -26,6 +26,16 @@ describe("result-normalizer", () => {
     expect(out[0].album).toBe("AL");
   });
 
+  it("normalizes upstream bare-array search results", () => {
+    const out = normalizeSearchResults([
+      { id: 11, name: "Bare", artist: "Solo" },
+    ]);
+
+    expect(out).toEqual([
+      expect.objectContaining({ id: "11", name: "Bare", artists: ["Solo"] }),
+    ]);
+  });
+
   it("returns empty array on failure", () => {
     expect(normalizeDailyRecommendations({ success: false, error: "x" })).toEqual([]);
     expect(normalizeSearchResults({ success: false, error: "x" })).toEqual([]);

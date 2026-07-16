@@ -75,6 +75,8 @@ export interface TwoPhaseFcOptions {
   messages: ChatMessage[];
   /** 工具列表（含未启用时调度层负责过滤；这里传已过滤的）。 */
   tools: ToolDefinition[];
+  /** 明确外部操作意图需要首轮强制选择的工具。 */
+  requiredToolName?: string;
   /** 工具阶段使用的 system prompt（仅含工具调度规则 + 自动生成的工具目录）。 */
   toolSystemContent: string;
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。
@@ -297,6 +299,9 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
       stream: false,
     };
     if (toolSpecs.length > 0) req = { ...req, tools: toolSpecs };
+    if (round === 0 && options.requiredToolName && runnableToolIds.has(options.requiredToolName)) {
+      req = { ...req, toolChoice: { name: options.requiredToolName } };
+    }
     if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, options.settings);
 
     let data: unknown;

@@ -8,6 +8,8 @@ import type { ChatMessage } from "./vendors";
 export interface ToolContext {
   /** 用户当前问题（最后一条 user 消息文本）。最核心字段。 */
   userQuery: string;
+  /** 当前聊天会话 ID；需要跨轮隔离状态的工具必须使用该字段。 */
+  conversationId?: string;
   /** 未来扩展兜底；当前为空对象，不预设字段。遵循"地基通用，上层克制"。 */
   metadata?: Record<string, unknown>;
 }

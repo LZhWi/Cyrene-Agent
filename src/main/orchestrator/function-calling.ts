@@ -226,7 +226,7 @@ export async function runFunctionCallingLoop(
             // ToolContext 注入：声明 needsContext 的工具拿到用户当前问题。
             // 能力判断交给工具内部（read_image 自己查视觉配置），调度层不再提前门控。
             const ctx: ToolContext | undefined = tool.needsContext
-              ? { userQuery: extractLastUserQuery(conversation) }
+              ? { userQuery: extractLastUserQuery(conversation), conversationId: "default" }
               : undefined;
             try {
               output = await tool.execute(args, ctx);

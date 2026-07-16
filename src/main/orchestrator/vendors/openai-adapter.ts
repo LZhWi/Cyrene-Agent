@@ -69,7 +69,9 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
     const tools = toWireTools(req.tools);
     if (tools) {
       body.tools = tools;
-      body.tool_choice = "auto";
+      body.tool_choice = req.toolChoice
+        ? { type: "function", function: { name: req.toolChoice.name } }
+        : "auto";
     }
     if (req.extraBody) Object.assign(body, req.extraBody);
     // 推理控制：按 (providerId, model) 解析 capability，调用 applyReasoningPreference 转换 body。

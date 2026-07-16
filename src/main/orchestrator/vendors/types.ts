@@ -71,6 +71,8 @@ export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
   tools?: ToolSpec[];
+  /** 明确意图的单轮强制工具选择；未传时由厂商使用 auto。 */
+  toolChoice?: { name: string };
   temperature?: number;
   stream?: boolean;
   /**

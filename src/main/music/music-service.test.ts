@@ -113,12 +113,26 @@ describe("MusicService", () => {
     await expect(s.searchTracks("   ", "c1")).rejects.toThrow(/E_INVALID_KEYWORD_EMPTY/);
   });
 
-  it("searchTracks clamps limit to 20", async () => {
-    searchTool.mockResolvedValue({ success: true, items: [] });
+  it("searchTracks sends category song without forwarding local limit", async () => {
+    searchTool.mockResolvedValue([]);
     const s = new MusicService(PATHS);
     await s.start();
     await s.searchTracks("q", "c1", 999);
-    expect(searchTool).toHaveBeenCalledWith(expect.objectContaining({ limit: 20 }));
+    expect(searchTool).toHaveBeenCalledWith({ keyword: "q", category: "song" });
+  });
+
+  it("searchTracks applies the clamped limit after normalization", async () => {
+    searchTool.mockResolvedValue(Array.from({ length: 8 }, (_, i) => ({
+      id: i + 1,
+      name: `Song ${i + 1}`,
+      artist: "Artist",
+    })));
+    const s = new MusicService(PATHS);
+    await s.start();
+
+    const set = await s.searchTracks("q", "c1", 3);
+
+    expect(set.tracks.map((track) => track.id)).toEqual(["1", "2", "3"]);
   });
 
   it("presentTracks validates trackIds belong to the set", async () => {

@@ -52,6 +52,38 @@ describe("deriveNeteaseViewState", () => {
     ).toBe("signed_out");
   });
 
+  it("(ready, signed_out, _, waiting_scan) -> waiting_scan", () => {
+    expect(
+      deriveNeteaseViewState(
+        snap({ backend: "ready", account: "signed_out", flow: "waiting_scan" }),
+      ),
+    ).toBe("waiting_scan");
+  });
+
+  it("(ready, signed_out, _, waiting_confirm) -> waiting_confirm", () => {
+    expect(
+      deriveNeteaseViewState(
+        snap({ backend: "ready", account: "signed_out", flow: "waiting_confirm" }),
+      ),
+    ).toBe("waiting_confirm");
+  });
+
+  it("(ready, signed_out, _, expired) -> login_expired", () => {
+    expect(
+      deriveNeteaseViewState(
+        snap({ backend: "ready", account: "signed_out", flow: "expired" }),
+      ),
+    ).toBe("login_expired");
+  });
+
+  it("(ready, signed_out, _, failed) -> login_failed", () => {
+    expect(
+      deriveNeteaseViewState(
+        snap({ backend: "ready", account: "signed_out", flow: "failed" }),
+      ),
+    ).toBe("login_failed");
+  });
+
   it("(ready, signed_in, _, creating_qr) -> creating_qr", () => {
     expect(
       deriveNeteaseViewState(snap({ backend: "ready", account: "signed_in", flow: "creating_qr" })),

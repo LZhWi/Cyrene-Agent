@@ -25,6 +25,8 @@ import {
   type DocumentIndexCardStatus,
   type DocumentIndexProgress,
 } from "./types";
+import { normalizeMusicCardData, type MusicCardData } from "../../shared/music-card";
+import { requestTrackPlayback } from "../settings/music-playback";
 
 type Role = "user" | "model";
 
@@ -39,6 +41,7 @@ interface Message {
   thinking?: boolean;
   transient?: boolean;
   ttsCacheKey?: string;
+  musicCard?: MusicCardData;
 }
 
 type MessageAttachment = ImageMessageAttachment | DocumentMessageAttachment;
@@ -163,6 +166,14 @@ interface ChoiceApi {
   resolve: (id: string, value: string) => Promise<unknown>;
 }
 
+interface ChatMusicApi {
+  playTrack: (trackId: string) => Promise<{
+    ok: boolean;
+    data?: { state: "dispatched" | "client_unavailable" | "launch_failed" };
+    errorCode?: string;
+  }>;
+}
+
 /** AG-UI BaseEvent 的最小本地类型（只取我们关心的字段）。 */
 interface AguiBaseEvent {
   type: string;
@@ -219,6 +230,7 @@ declare global {
     schedulerEvents?: SchedulerEventsApi;
     modelConfig?: ModelConfigApi;
     choice?: ChoiceApi;
+    music?: ChatMusicApi;
   }
 }
 
@@ -393,6 +405,7 @@ interface ChatStoreSession {
     attachments?: MessageAttachment[];
     sticker?: string | null;
     ttsCacheKey?: string;
+    musicCard?: MusicCardData;
   }>;
   createdAt: number;
   updatedAt: number;
@@ -430,13 +443,14 @@ declare global {
 // - 过滤空 content / 渲染中的 thinking 占位（thinking=true 时通常 content 为空，但保险起见双重过滤）
 // - 丢弃仅用于本轮模型调用的 modelContext 与 thinking 等瞬态字段
 function toPersistableMessages(arr: Message[]): Array<{
-  id: string; role: Role; content: string; at: number; attachments?: MessageAttachment[]; sticker?: StickerId | null; ttsCacheKey?: string;
+  id: string; role: Role; content: string; at: number; attachments?: MessageAttachment[]; sticker?: StickerId | null; ttsCacheKey?: string; musicCard?: MusicCardData;
 }> {
   return arr
     .filter((m) => m && (m.role === "user" || m.role === "model") && !m.thinking && !m.transient && (
       typeof m.content === "string" && m.content.trim()
       || ((m.attachments?.length ?? 0) > 0)
       || Boolean(m.sticker)
+      || Boolean(m.musicCard)
     ))
     .map((m) => ({
       id: m.id,
@@ -446,6 +460,7 @@ function toPersistableMessages(arr: Message[]): Array<{
       attachments: m.attachments,
       sticker: m.sticker ?? null,
       ttsCacheKey: m.ttsCacheKey,
+      musicCard: m.musicCard,
     }));
 }
 
@@ -473,6 +488,7 @@ function loadSessionIntoUI(session: ChatStoreSession): void {
       attachments: m.attachments,
       sticker: m.sticker ?? null,
       ttsCacheKey: m.ttsCacheKey,
+      musicCard: m.musicCard,
     });
   }
   // 上报活跃 sessionId（设置面板"删除当前会话"差异化提示用）
@@ -1008,6 +1024,64 @@ function buildWeatherCardEl(data: Record<string, unknown>): HTMLElement {
   return card;
 }
 
+function buildMusicCardEl(data: MusicCardData): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "music-agui-card";
+
+  const header = document.createElement("div");
+  header.className = "music-agui-card__header";
+  const title = document.createElement("strong");
+  title.textContent = data.source === "daily_recommendation" ? "今日推荐" : "歌曲候选";
+  const badge = document.createElement("span");
+  badge.textContent = "网易云音乐";
+  header.append(title, badge);
+  card.appendChild(header);
+
+  data.tracks.forEach((track, index) => {
+    const row = document.createElement("div");
+    row.className = "music-agui-card__track";
+
+    const order = document.createElement("span");
+    order.className = "music-agui-card__order";
+    order.textContent = String(index + 1);
+    const meta = document.createElement("div");
+    meta.className = "music-agui-card__meta";
+    const name = document.createElement("strong");
+    name.textContent = track.name;
+    const detail = document.createElement("span");
+    detail.textContent = [track.artists.join(" / "), track.album].filter(Boolean).join(" · ");
+    meta.append(name, detail);
+
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "music-agui-card__play";
+    play.textContent = "播放";
+    play.setAttribute("aria-label", `播放 ${track.name}`);
+    play.addEventListener("click", async () => {
+      if (!window.music) return;
+      play.disabled = true;
+      const original = play.textContent;
+      try {
+        const feedback = await requestTrackPlayback(window.music, track);
+        play.textContent = feedback.kind === "ok" ? "已发送" : "不可用";
+        play.title = feedback.message;
+      } catch (err) {
+        play.textContent = "失败";
+        play.title = err instanceof Error ? err.message : String(err);
+      } finally {
+        window.setTimeout(() => {
+          play.disabled = false;
+          play.textContent = original;
+        }, 1800);
+      }
+    });
+
+    row.append(order, meta, play);
+    card.appendChild(row);
+  });
+  return card;
+}
+
 /** AQI → 颜文字。 */
 function aqiKaomojiText(aqi: number): string {
   if (aqi <= 50) return "(◕‿◕)";
@@ -1206,6 +1280,7 @@ function render(preserveScroll = false): void {
     || m.thinking
     || ((m.attachments?.length ?? 0) > 0)
     || Boolean(m.sticker)
+    || Boolean(m.musicCard)
   );
   if (emptyEl) emptyEl.toggleAttribute("hidden", hasMessages);
 
@@ -1285,6 +1360,8 @@ function render(preserveScroll = false): void {
         body.appendChild(sticker);
       }
     }
+
+    if (m.musicCard) body.appendChild(buildMusicCardEl(m.musicCard));
 
     // actions 行：喇叭 / 复制 / 时间三个控件水平排在气泡下方。
     // 流式中的 transient 消息会继续追加新气泡；此时先隐藏 actions，
@@ -2487,6 +2564,7 @@ async function triggerCyreneGreeting(): Promise<void> {
     let pendingTtsCachePromise: Promise<{ cacheKey: string } | null> | null = null;
     let sticker: string | null = null;
     let pendingWeatherCard: Record<string, unknown> | null = null;
+    let pendingMusicCard: MusicCardData | null = null;
 
     let finishRun!: () => void;
     let failRun!: (err: Error) => void;
@@ -2604,6 +2682,8 @@ async function triggerCyreneGreeting(): Promise<void> {
               sticker = (event.value as StickerId | null) ?? null;
             } else if (event.name === "cyrene.weather") {
               pendingWeatherCard = event.value as Record<string, unknown>;
+            } else if (event.name === "cyrene.music") {
+              pendingMusicCard = normalizeMusicCardData(event.value);
             } else if (event.name === "cyrene.todos") {
               renderTodoPanel(event.value as TodoState | null);
             } else if (event.name === "cyrene.choice") {
@@ -2648,6 +2728,7 @@ async function triggerCyreneGreeting(): Promise<void> {
       msg.transient = false;
       msg.content = streamContent;
       msg.sticker = sticker;
+      msg.musicCard = pendingMusicCard ?? undefined;
     }
     void saveSession();
     const finishedMsgId = streamMsgId;
@@ -2973,6 +3054,7 @@ async function send(): Promise<void> {
     let pendingTtsCachePromise: Promise<{ cacheKey: string } | null> | null = null;
     let sticker: string | null = null;
     let pendingWeatherCard: Record<string, unknown> | null = null;
+    let pendingMusicCard: MusicCardData | null = null;
 
     // 终态信号：由事件流的 RUN_FINISHED/RUN_ERROR 触发 resolve，
     // 不依赖 invoke 的 resolve（invoke 只做 ack，可能与事件投递存在顺序竞争）。
@@ -3108,6 +3190,8 @@ async function send(): Promise<void> {
               // 暂存天气数据，等 runDone 后 render 再插入（避免 render 的 replaceChildren 清掉卡片）
               console.log("[Chat] 收到天气卡片数据:", JSON.stringify(event.value)?.slice(0, 100));
               pendingWeatherCard = event.value as Record<string, unknown>;
+            } else if (event.name === "cyrene.music") {
+              pendingMusicCard = normalizeMusicCardData(event.value);
             } else if (event.name === "cyrene.todos") {
               renderTodoPanel(event.value as TodoState | null);
             } else if (event.name === "cyrene.choice") {
@@ -3160,6 +3244,7 @@ async function send(): Promise<void> {
       msg.transient = false;
       msg.content = streamContent;
       msg.sticker = sticker;
+      msg.musicCard = pendingMusicCard ?? undefined;
     }
     void saveSession();
     const finishedMsgId = streamMsgId;

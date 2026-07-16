@@ -115,7 +115,9 @@ export class AnthropicAdapter implements ChatVendorAdapter {
         description: t.description,
         input_schema: t.parameters,
       }));
-      body.tool_choice = { type: "auto" };
+      body.tool_choice = req.toolChoice
+        ? { type: "tool", name: req.toolChoice.name }
+        : { type: "auto" };
     }
     if (req.extraBody) Object.assign(body, req.extraBody);
     // 推理控制：按 (providerId, model) 解析 capability，调用 applyReasoningPreference 转换 body。

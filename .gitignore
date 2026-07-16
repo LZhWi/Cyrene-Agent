@@ -13,6 +13,7 @@ dist/renderer/tasks/index.html
 dist/renderer/index.html
 dist/renderer/live2dcubismcore.min.js
 dist/sim/
+dist/skills/
 *.js.map
 *.tsbuildinfo
 

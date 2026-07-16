@@ -45,6 +45,7 @@ function mockService(overrides: Record<string, unknown> = {}): any {
     getPlayerState: vi.fn(() => "available"),
     getLoginFlowState: vi.fn(() => "idle"),
     getRootPid: vi.fn(() => undefined),
+    pollOnce: asyncThat(),
     beginLogin: asyncThat(),
     cancelLogin: asyncThat(),
     logout: asyncThat(),
@@ -153,6 +154,32 @@ describe("registerMusicIpcHandlers", () => {
     expect(r.data.backend).toBe("ready");
     expect(r.data.account).toBe("signed_in");
     expect(r.data.player).toBe("available");
+  });
+
+  it("MUSIC_GET_STATUS: advances an active login before returning the snapshot", async () => {
+    const svc = mockService();
+    svc.getAccountState.mockReturnValue("signed_out");
+    svc.getLoginFlowState.mockReturnValue("creating_qr");
+    svc.pollOnce.mockImplementation(async () => {
+      svc.getLoginFlowState.mockReturnValue("waiting_confirm");
+    });
+    registerMusicIpcHandlers(svc);
+
+    const r = (await handlerMap["music:get-status"](null, undefined)) as any;
+
+    expect(svc.pollOnce).toHaveBeenCalledTimes(1);
+    expect(r.ok).toBe(true);
+    expect(r.data.flow).toBe("waiting_confirm");
+  });
+
+  it("MUSIC_GET_STATUS: does not poll an idle or terminal login", async () => {
+    const svc = mockService();
+    svc.getLoginFlowState.mockReturnValue("idle");
+    registerMusicIpcHandlers(svc);
+
+    await handlerMap["music:get-status"](null, undefined);
+
+    expect(svc.pollOnce).not.toHaveBeenCalled();
   });
 
   it("non-MusicInputError exception is converted to E_INTERNAL_ERROR, no internal path leak", async () => {

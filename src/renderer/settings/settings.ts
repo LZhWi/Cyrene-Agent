@@ -24,6 +24,7 @@ import { normalizeUiTheme, type UiTheme } from "../../shared/ui-theme";
 import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-font";
 import { normalizeUiIcon, type UiIcon } from "../../shared/ui-icon";
 import { buildAppearanceSettingsPatch } from "./appearance-settings-state";
+import { requestTrackPlayback } from "./music-playback";
 import { type ReasoningPreference } from "../../shared/reasoning";
 import { type LoginFlowState } from "../../shared/music-types";
 import {
@@ -2994,6 +2995,7 @@ interface MusicApi {
   cancelLogin: () => Promise<MusicIpcResult<unknown>>;
   logout: () => Promise<MusicIpcResult<unknown>>;
   search: (keyword: string, limit?: number) => Promise<MusicIpcResult<MusicSelectionResult>>;
+  playTrack: (trackId: string) => Promise<MusicIpcResult<{ state: "dispatched" | "client_unavailable" | "launch_failed" }>>;
   onStateChanged: (h: (s: MusicStatusSnapshot) => void) => (() => void) | void;
 }
 
@@ -3146,7 +3148,7 @@ function stopMusicLoginPolling(): void {
   }
 }
 
-function startMusicLoginPolling(): void {
+function startMusicLoginPolling(pollIntervalMs = 2000): void {
   stopMusicLoginPolling();
   const api = getMusicApi();
   if (!api) return;
@@ -3160,6 +3162,10 @@ function startMusicLoginPolling(): void {
           clearMusicQr();
           stopMusicLoginPolling();
           setMusicFeedback("ok", "已连接到网易云音乐");
+        } else if (r.data.flow === "expired" || r.data.flow === "failed" || r.data.flow === "cancelled") {
+          stopMusicLoginPolling();
+          if (r.data.flow !== "expired") clearMusicQr();
+          setMusicFeedback("err", r.data.flow === "expired" ? "二维码已过期，请重新生成" : "登录未完成，请重试");
         } else if (r.data.account === "temporarily_unavailable" || r.data.account === "expired") {
           stopMusicLoginPolling();
           clearMusicQr();
@@ -3169,7 +3175,7 @@ function startMusicLoginPolling(): void {
     } catch (err) {
       console.warn("[music] login poll failed", err);
     }
-  }, 1000);
+  }, Math.max(1000, pollIntervalMs));
 }
 
 async function startMusicLogin(): Promise<void> {
@@ -3208,7 +3214,7 @@ async function startMusicLogin(): Promise<void> {
     showMusicQr(dataUrl, "请用网易云音乐 App 扫描二维码完成登录");
     setMusicFeedback("info", "等待扫码…");
     updateMusicActionsForAccount("signed_out"); // 切到"取消登录"显示
-    startMusicLoginPolling();
+    startMusicLoginPolling(r.data.pollIntervalMs);
   } catch (err) {
     console.error("[music] beginLogin threw", err);
     setMusicFeedback("err", "启动登录异常：" + (err instanceof Error ? err.message : String(err)));
@@ -3283,9 +3289,21 @@ function renderMusicSearchResults(r: MusicIpcResult<MusicSelectionResult>, kw: s
     playBtn.type = "button";
     playBtn.className = "btn-secondary music-search-row__play";
     playBtn.textContent = "▶ 播放";
-    playBtn.addEventListener("click", () => {
-      setMusicFeedback("info", "已请求播放：" + t.name);
-      // Phase 3 接 dispatch；这里只是占位提示
+    playBtn.addEventListener("click", async () => {
+      const api = getMusicApi();
+      if (!api) {
+        setMusicFeedback("err", "window.music 未就绪");
+        return;
+      }
+      playBtn.disabled = true;
+      try {
+        const feedback = await requestTrackPlayback(api, t);
+        setMusicFeedback(feedback.kind, feedback.message);
+      } catch (err) {
+        setMusicFeedback("err", "播放请求异常：" + (err instanceof Error ? err.message : String(err)));
+      } finally {
+        playBtn.disabled = false;
+      }
     });
 
     row.appendChild(main);

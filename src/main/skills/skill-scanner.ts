@@ -5,7 +5,20 @@
 import * as fs from "fs";
 import * as path from "path";
 import matter from "gray-matter";
-import type { ParsedSkill, SkillEntry } from "./types";
+import type { ParsedSkill, SkillEntry, SkillManifest } from "./types";
+
+function readManifest(skillDir: string, id: string): SkillManifest | undefined {
+  const manifestPath = path.join(skillDir, "manifest.json");
+  if (!fs.existsSync(manifestPath)) return undefined;
+  try {
+    const value = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as Partial<SkillManifest>;
+    if (value.id !== id || typeof value.version !== "string" || typeof value.defaultEnabled !== "boolean"
+      || typeof value.entry !== "string" || !Array.isArray(value.dependencies)) return undefined;
+    return { ...value, dependencies: value.dependencies.map(String) } as SkillManifest;
+  } catch {
+    return undefined;
+  }
+}
 
 /** gray-matter 解析结果的最小结构（不依赖其类型导出，规避 export = 的类型访问问题）。 */
 interface MatterResult {
@@ -90,17 +103,19 @@ export function scanSkills(dir: string, source: "builtin" | "user"): SkillEntry[
     } catch {
       references = [];
     }
+    const manifest = readManifest(skillDir, id);
     result.push({
       id,
       name: parsed.name,
       description: parsed.description,
-      tools: parsed.tools,
-      version: parsed.version,
+      tools: parsed.tools ?? manifest?.dependencies,
+      version: parsed.version ?? manifest?.version,
       dirPath: skillDir,
       bodyPath: mdPath,
       references,
-      enabled: true,
+      enabled: manifest?.defaultEnabled ?? true,
       source,
+      manifest,
     });
   }
   return result;

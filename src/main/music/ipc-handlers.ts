@@ -35,12 +35,18 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
   const channels: string[] = [];
 
   ipcMain.handle(IPC.MUSIC_GET_STATUS, () =>
-    wrap(async () => ({
-      backend: service.getBackendState(),
-      account: service.getAccountState(),
-      player: service.getPlayerState(),
-      flow: service.getLoginFlowState(),
-    }), service),
+    wrap(async () => {
+      const flow = service.getLoginFlowState();
+      if (flow === "creating_qr" || flow === "waiting_scan" || flow === "waiting_confirm") {
+        await service.pollOnce();
+      }
+      return {
+        backend: service.getBackendState(),
+        account: service.getAccountState(),
+        player: service.getPlayerState(),
+        flow: service.getLoginFlowState(),
+      };
+    }, service),
   );
   channels.push(IPC.MUSIC_GET_STATUS);
 

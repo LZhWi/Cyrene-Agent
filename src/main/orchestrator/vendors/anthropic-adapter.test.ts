@@ -18,6 +18,18 @@ const anthropicCap: ProviderCapability = {
 };
 
 describe("AnthropicAdapter", () => {
+  test("maps an explicit required tool to Anthropic tool_choice", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    const req = adapter.buildRequest({
+      model: "m",
+      messages: [{ role: "user", content: "搜歌" }],
+      tools: [{ name: "music_search", description: "搜索", parameters: { type: "object" } }],
+      toolChoice: { name: "music_search" },
+    }, { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "sk-test" });
+
+    expect(JSON.parse(req.body).tool_choice).toEqual({ type: "tool", name: "music_search" });
+  });
+
   test("buildRequest uses x-api-key when authStyle=x-api-key (default Anthropic)", () => {
     const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
     const req = adapter.buildRequest(

@@ -16,6 +16,7 @@ function createBuildDeps(): BuildOptionsDeps {
     loadUserProfile: () => ({}),
     buildEnvironmentContext: () => "ENV",
     buildSkillCatalog: () => "",
+    buildAutoInjectedSkillContext: () => "",
     skillRegistry: { getEnabled: () => [] },
     resolveSlashActivation: () => "",
     buildToneInjection: async () => "",
@@ -97,6 +98,103 @@ describe("build-options", () => {
     expect(result.options.toolSystemContent).toBe("TOOL_SYSTEM")
     expect(result.options.soulSystemBaseContent).not.toBe("TOOL_SYSTEM")
     expect(result.options.soulSystemBaseContent).toContain("SOUL_SYSTEM_BASE")
+  })
+
+  it("keeps enabled music tools available in Talk mode and hides unrelated tools", async () => {
+    const deps = createBuildDeps()
+    deps.toolRegistry.getEnabled = () => [
+      { id: "music_search" },
+      { id: "music_play_track" },
+      { id: "weather" },
+    ]
+    deps.buildToolSystemPrompt = vi.fn((tools: ReadonlyArray<unknown>) =>
+      `TOOLS:${tools.map((tool) => (tool as { id: string }).id).join(",")}`,
+    )
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "放个左转灯怎么样？" }],
+      style: "talk",
+    }, deps)
+
+    expect(result.options.tools?.map((tool) => tool.id)).toEqual([
+      "music_search",
+      "music_play_track",
+    ])
+    expect(result.options.toolSystemContent).toContain("TOOLS:music_search,music_play_track")
+    expect(result.options.toolSystemContent).not.toContain("weather")
+  })
+
+  it("requires music_search for an explicit NetEase Cloud search request", async () => {
+    const deps = createBuildDeps()
+    deps.toolRegistry.getEnabled = () => [{ id: "music_search" }]
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "网易云上搜一下左转灯" }],
+      style: "talk",
+    }, deps)
+
+    expect(result.options.requiredToolName).toBe("music_search")
+  })
+
+  it("requires daily recommendations only for an explicit daily request", async () => {
+    const deps = createBuildDeps()
+    deps.toolRegistry.getEnabled = () => [
+      { id: "music_get_daily_recommendations" },
+      { id: "music_search" },
+    ]
+
+    const daily = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "看看网易云今日推荐" }],
+      style: "talk",
+    }, deps)
+    const generic = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "有点无聊，想听歌" }],
+      style: "talk",
+    }, deps)
+
+    expect(daily.options.requiredToolName).toBe("music_get_daily_recommendations")
+    expect(generic.options.requiredToolName).toBeUndefined()
+  })
+
+  it("injects deterministic recent-music selection context for the current conversation", async () => {
+    const deps = createBuildDeps()
+    deps.buildMusicCompanionContext = vi.fn(() => "[真实候选解析] 第二首 = trackId 102")
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "第二首" }],
+      style: "01_default.md",
+      sessionId: "conversation-1",
+    }, deps)
+
+    expect(deps.buildMusicCompanionContext).toHaveBeenCalledWith("conversation-1", "第二首")
+    expect(result.options.conversationId).toBe("conversation-1")
+    expect(result.options.toolSystemContent).toContain("trackId 102")
+    expect(result.options.soulSystemBaseContent).toContain("trackId 102")
+  })
+
+  it("puts the enabled Skill catalog into the tool phase so invoke_skill can route", async () => {
+    const deps = createBuildDeps()
+    deps.buildSkillCatalog = () => "SKILL_CATALOG"
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "好无聊" }],
+      style: "01_default.md",
+    }, deps)
+
+    expect(result.options.toolSystemContent).toContain("SKILL_CATALOG")
+  })
+
+  it("puts auto-injected Skill rules into both tool and Soul phases", async () => {
+    const deps = createBuildDeps()
+    deps.buildAutoInjectedSkillContext = () => "AUTO_MUSIC_RULES"
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "今日推荐呢" }],
+      style: "01_default.md",
+    }, deps)
+
+    expect(result.options.toolSystemContent).toContain("AUTO_MUSIC_RULES")
+    expect(result.options.soulSystemBaseContent).toContain("AUTO_MUSIC_RULES")
   })
 
   it("attaches direct image content blocks to the latest user message", async () => {

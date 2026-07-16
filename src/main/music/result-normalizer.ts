@@ -40,6 +40,9 @@ export function normalizeDailyRecommendations(payload: unknown): MusicTrack[] {
 }
 
 export function normalizeSearchResults(payload: unknown): MusicTrack[] {
+  if (Array.isArray(payload)) {
+    return (payload as UpstreamSong[]).slice(0, MAX_TRACKS).map(toTrack);
+  }
   const p = payload as { success?: boolean; items?: UpstreamSong[]; error?: string };
   if (!p?.success || !Array.isArray(p.items)) return [];
   return p.items.slice(0, MAX_TRACKS).map(toTrack);

@@ -57,7 +57,7 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
   };
 
   const client = new Client(
-    { name: "cyrene", version: "0.1.1" },
+    { name: "cyrene", version: "0.4.3" },
     { capabilities: {} },
   );
 

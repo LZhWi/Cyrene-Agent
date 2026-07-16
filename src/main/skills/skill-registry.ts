@@ -9,13 +9,14 @@ import { parseSkillFrontmatter } from "./skill-scanner";
 export class SkillRegistry {
   private skills = new Map<string, SkillEntry>();
   private bodyCache = new Map<string, string>();
+  private availability = new Map<string, () => boolean>();
 
   register(skill: SkillEntry): void {
     this.skills.set(skill.id, skill);
   }
 
   getEnabled(): SkillEntry[] {
-    return Array.from(this.skills.values()).filter(s => s.enabled);
+    return Array.from(this.skills.values()).filter(s => s.enabled && (this.availability.get(s.id)?.() ?? true));
   }
 
   getAll(): SkillEntry[] {
@@ -29,6 +30,14 @@ export class SkillRegistry {
   setEnabled(id: string, enabled: boolean): void {
     const s = this.skills.get(id);
     if (s) s.enabled = enabled;
+  }
+
+  setAvailability(id: string, probe: () => boolean): void {
+    this.availability.set(id, probe);
+  }
+
+  isAvailable(id: string): boolean {
+    return this.availability.get(id)?.() ?? true;
   }
 
   /**

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { buildSkillCatalog } from "./skill-catalog";
+import { buildAutoInjectedSkillContext, buildSkillCatalog } from "./skill-catalog";
 import type { SkillEntry } from "./types";
 
 function e(id: string, desc: string, tools?: string[], enabled = true): SkillEntry {
@@ -43,5 +43,42 @@ describe("buildSkillCatalog", () => {
     const out = buildSkillCatalog([e("a", "x"), e("b", "y", undefined, false)]);
     expect(out).toContain("- a: x");
     expect(out).not.toContain("- b:");
+  });
+});
+
+describe("buildAutoInjectedSkillContext", () => {
+  it("injects the full body only for enabled autoInject skills", () => {
+    const music = e("cyrene-music-companion", "音乐陪伴");
+    music.manifest = {
+      id: music.id,
+      version: "1.0.0",
+      defaultEnabled: true,
+      entry: "index.ts",
+      dependencies: [],
+      autoInject: true,
+    };
+    const ordinary = e("ordinary", "普通 Skill");
+
+    const out = buildAutoInjectedSkillContext([music, ordinary], (id) =>
+      id === music.id ? "只使用真实音乐工具结果。" : "不应注入",
+    );
+
+    expect(out).toContain("cyrene-music-companion");
+    expect(out).toContain("只使用真实音乐工具结果。");
+    expect(out).not.toContain("不应注入");
+  });
+
+  it("does not inject a disabled autoInject skill", () => {
+    const music = e("cyrene-music-companion", "音乐陪伴", undefined, false);
+    music.manifest = {
+      id: music.id,
+      version: "1.0.0",
+      defaultEnabled: true,
+      entry: "index.ts",
+      dependencies: [],
+      autoInject: true,
+    };
+
+    expect(buildAutoInjectedSkillContext([music], () => "正文")).toBe("");
   });
 });

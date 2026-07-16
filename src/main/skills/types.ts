@@ -13,6 +13,17 @@ export interface SkillEntry {
   references: string[];  // references/ 下文件名清单（不含内容）
   enabled: boolean;      // 运行时状态，持久化到 settings.json
   source: "builtin" | "user";  // 来源
+  manifest?: SkillManifest;
+}
+
+export interface SkillManifest {
+  id: string;
+  version: string;
+  defaultEnabled: boolean;
+  entry: string;
+  dependencies: string[];
+  autoInject?: boolean;
+  autoPlayPolicy?: string;
 }
 
 /** frontmatter 解析结果。 */

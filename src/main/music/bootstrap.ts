@@ -1,7 +1,7 @@
 import type { MusicPaths } from "./paths";
 import { MusicService } from "./music-service";
 import { registerMusicIpcHandlers } from "./ipc-handlers";
-import { buildMusicTools } from "../orchestrator/tools/music-tools";
+import { buildMusicTools, type MusicToolHooks } from "../orchestrator/tools/music-tools";
 import { toolRegistry } from "../orchestrator/tool-registry";
 import type { MusicShutdownReport } from "./types";
 
@@ -11,10 +11,10 @@ export interface MusicBootstrap {
   shutdown(): Promise<MusicShutdownReport>;
 }
 
-export function bootstrapMusicService(paths: MusicPaths): MusicBootstrap {
+export function bootstrapMusicService(paths: MusicPaths, hooks: MusicToolHooks = {}): MusicBootstrap {
   const service = new MusicService(paths);
   const ipcDisposer = registerMusicIpcHandlers(service);
-  const tools = buildMusicTools(service);
+  const tools = buildMusicTools(service, hooks);
   for (const tool of tools) toolRegistry.register(tool);
   // start() emits the "failed" backend state on error and then re-throws;
   // attach a no-op .catch() so the rejection does not surface as

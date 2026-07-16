@@ -253,8 +253,8 @@ export class MusicService {
     if (trimmed.length === 0) throw new MusicInputError("E_INVALID_KEYWORD_EMPTY");
     if (trimmed.length > 100) throw new MusicInputError("E_INVALID_KEYWORD_TOO_LONG");
     const clampedLimit = Math.max(1, Math.min(limit ?? 20, 20));
-    const raw = await this.client.callDataTool("cloud_music_search", { keyword: trimmed, limit: clampedLimit });
-    const tracks = normalizeSearchResults(this.unwrapContent(raw));
+    const raw = await this.client.callDataTool("cloud_music_search", { keyword: trimmed, category: "song" });
+    const tracks = normalizeSearchResults(this.unwrapContent(raw)).slice(0, clampedLimit);
     const setId = crypto.randomUUID();
     const set: MusicSelectionSet = {
       setId,

@@ -74,7 +74,7 @@ export function registerSkillTools(): void {
     execute: async (args) => {
       const id = String(args.skill_id || "");
       const skill = skillRegistry.getById(id);
-      if (!skill || !skill.enabled) {
+      if (!skill || !skill.enabled || !skillRegistry.isAvailable(id)) {
         const available = skillRegistry.getEnabled().map(s => s.id).join(", ") || "(无)";
         return `[invoke_skill] skill not found: ${id}。可用 skill: ${available}`;
       }
@@ -117,7 +117,7 @@ export function registerSkillTools(): void {
       const id = String(args.skill_id || "");
       const ref = String(args.ref || "");
       const skill = skillRegistry.getById(id);
-      if (!skill || !skill.enabled) {
+      if (!skill || !skill.enabled || !skillRegistry.isAvailable(id)) {
         return `[read_skill_reference] skill not found: ${id}`;
       }
       // 去重：同一轮内同一 reference 不重复返回（内容已在对话历史里，再读浪费轮数+token）

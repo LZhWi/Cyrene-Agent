@@ -144,6 +144,23 @@ afterEach(() => {
 });
 
 describe("runTwoPhaseFcLoop", () => {
+  it("passes an explicit required tool choice only to the first tool-phase request", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueText("模型仍未调用工具");
+    adapter.enqueueText("最终回复");
+
+    await runTwoPhaseFcLoop({
+      ...baseOptions,
+      requiredToolName: "weather",
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      executeTool: async () => "ok",
+    });
+
+    expect(adapter.requests[0].toolChoice).toEqual({ name: "weather" });
+    expect(adapter.requests[1].toolChoice).toBeUndefined();
+  });
+
   it("模型无 tool_calls → 切 SOUL_PHASE，工具阶段自由文本不写入 conversation", async () => {
     const adapter = new FakeAdapter();
     // TOOL_PHASE: 模型生成自由文本（这个文本不应进入 soul 的 conversation）

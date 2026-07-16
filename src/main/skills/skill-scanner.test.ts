@@ -160,4 +160,24 @@ describe("scanSkills", () => {
     expect(r.map(s => s.id).sort()).toEqual(["a", "b"]);
     expect(r.every(s => s.source === "user")).toBe(true);
   });
+
+  it("reads compound Skill dependencies and default switch from manifest.json", () => {
+    makeSkillDir(tmp, "music", "---\nname: music\ndescription: d\n---\n正文");
+    fs.writeFileSync(path.join(tmp, "music", "manifest.json"), JSON.stringify({
+      id: "music",
+      version: "1.0.0",
+      defaultEnabled: false,
+      entry: "index.ts",
+      dependencies: ["music_search", "music_play_track"],
+      autoPlayPolicy: "explicit_selection_or_delegate",
+      autoInject: true,
+    }), "utf8");
+
+    const [skill] = scanSkills(tmp, "builtin");
+
+    expect(skill.enabled).toBe(false);
+    expect(skill.manifest?.dependencies).toEqual(["music_search", "music_play_track"]);
+    expect(skill.manifest?.entry).toBe("index.ts");
+    expect(skill.manifest?.autoInject).toBe(true);
+  });
 });

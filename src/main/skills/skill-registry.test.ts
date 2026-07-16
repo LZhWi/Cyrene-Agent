@@ -38,6 +38,14 @@ describe("SkillRegistry", () => {
     expect(reg.getEnabled().map(s => s.id)).toEqual(["a"]);
   });
 
+  it("excludes an enabled Skill when its runtime availability gate is closed", () => {
+    reg.register(entry("music"));
+    reg.setAvailability("music", () => false);
+
+    expect(reg.getEnabled()).toEqual([]);
+    expect(reg.getAll()[0].enabled).toBe(true);
+  });
+
   it("getBody 懒加载 + 缓存（改磁盘不刷新）", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "reg-"));
     const mdPath = path.join(tmp, "SKILL.md");

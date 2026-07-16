@@ -1,0 +1,14 @@
+{
+  "id": "cyrene-music-companion",
+  "version": "1.0.0",
+  "defaultEnabled": true,
+  "entry": "index.ts",
+  "autoInject": true,
+  "dependencies": [
+    "music_get_daily_recommendations",
+    "music_search",
+    "music_present_tracks",
+    "music_play_track"
+  ],
+  "autoPlayPolicy": "explicit_selection_or_delegate"
+}

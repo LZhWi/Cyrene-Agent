@@ -1,7 +1,26 @@
 import type { ToolDefinition } from "../tool-registry";
 import type { MusicService } from "../../music/music-service";
+import type { MusicTrack } from "../../music/types";
 
-export function buildMusicTools(service: MusicService): ToolDefinition[] {
+export interface MusicToolHooks {
+  onPresented?: (set: {
+    conversationId: string;
+    setId: string;
+    expiresAt: number;
+    tracks: Array<{ trackId: string; name: string; artists: string[]; album?: string; coverUrl?: string }>;
+  }) => void;
+  sendCard?: (card: {
+    setId: string;
+    source: string;
+    tracks: MusicTrack[];
+  }) => void;
+}
+
+function conversationIdOf(ctx?: { conversationId?: string }): string {
+  return ctx?.conversationId || "default";
+}
+
+export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {}): ToolDefinition[] {
   return [
     {
       id: "music_get_daily_recommendations",
@@ -10,8 +29,9 @@ export function buildMusicTools(service: MusicService): ToolDefinition[] {
       enabled: true,
       risk: "safe",
       inputSchema: { type: "object", properties: {}, required: [] },
-      execute: async () => {
-        const set = await service.getDailyRecommendations("default");
+      needsContext: true,
+      execute: async (_args, ctx) => {
+        const set = await service.getDailyRecommendations(conversationIdOf(ctx));
         return JSON.stringify({ kind: "recommendations", set });
       },
     },
@@ -29,9 +49,10 @@ export function buildMusicTools(service: MusicService): ToolDefinition[] {
         },
         required: ["keyword"],
       },
-      execute: async (args) => {
+      needsContext: true,
+      execute: async (args, ctx) => {
         const set = await service.searchTracks(
-          String(args.keyword ?? ""), "default", args.limit as number | undefined,
+          String(args.keyword ?? ""), conversationIdOf(ctx), args.limit as number | undefined,
         );
         return JSON.stringify({ kind: "search", set });
       },
@@ -51,13 +72,34 @@ export function buildMusicTools(service: MusicService): ToolDefinition[] {
         },
         required: ["setId", "trackIds"],
       },
-      execute: async (args) => {
+      needsContext: true,
+      execute: async (args, ctx) => {
+        const conversationId = conversationIdOf(ctx);
+        const trackIds = Array.isArray(args.trackIds) ? (args.trackIds as string[]) : [];
         const r = await service.presentTracks({
           setId: String(args.setId ?? ""),
-          conversationId: "default",
-          trackIds: Array.isArray(args.trackIds) ? (args.trackIds as string[]) : [],
+          conversationId,
+          trackIds,
           reasons: Array.isArray(args.reasons) ? (args.reasons as string[]) : undefined,
         });
+        const set = service.getSelectionSet(String(args.setId ?? ""), conversationId);
+        if (set) {
+          const byId = new Map(set.tracks.map((track) => [track.id, track]));
+          const displayed = trackIds.map((id) => byId.get(id)).filter((track): track is MusicTrack => Boolean(track));
+          hooks.onPresented?.({
+            conversationId,
+            setId: set.setId,
+            expiresAt: set.expiresAt,
+            tracks: displayed.map((track) => ({
+              trackId: track.id,
+              name: track.name,
+              artists: track.artists,
+              album: track.album,
+              coverUrl: track.coverUrl,
+            })),
+          });
+          hooks.sendCard?.({ setId: set.setId, source: set.source, tracks: displayed });
+        }
         return JSON.stringify({ kind: "presentation", cardRef: r.cardRef });
       },
     },

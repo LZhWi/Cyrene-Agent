@@ -18,6 +18,21 @@ const capability: ProviderCapability = {
 };
 
 describe("OpenAICompatAdapter", () => {
+  test("maps an explicit required tool to OpenAI tool_choice", () => {
+    const adapter = new OpenAICompatAdapter("test-openai", capability);
+    const req = adapter.buildRequest({
+      model: "m",
+      messages: [{ role: "user", content: "搜歌" }],
+      tools: [{ name: "music_search", description: "搜索", parameters: { type: "object" } }],
+      toolChoice: { name: "music_search" },
+    }, { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "sk-test" });
+
+    expect(JSON.parse(req.body).tool_choice).toEqual({
+      type: "function",
+      function: { name: "music_search" },
+    });
+  });
+
   test("preserves user content blocks for direct image attachments", () => {
     const adapter = new OpenAICompatAdapter("test-openai", capability);
     const request = adapter.buildRequest(
