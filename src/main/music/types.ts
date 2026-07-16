@@ -1,3 +1,13 @@
+// Re-export shared music state-machine types so existing main-process
+// callers (`./types`) keep working while the renderer can depend on
+// the shared module directly without crossing the main/renderer boundary.
+export type {
+  MusicBackendState,
+  MusicAccountState,
+  MusicPlayerState,
+  LoginFlowState,
+} from "../../shared/music-types";
+
 export interface EncryptedAccountBlob {
   formatVersion: 1;
   provider: "netease-cloud-music";
@@ -37,15 +47,6 @@ export interface PlaybackDispatchResult {
   resourceId: string;
   errorCode?: string;
 }
-
-export type MusicBackendState =
-  | "stopped" | "starting" | "ready" | "degraded" | "incompatible" | "failed";
-export type MusicAccountState =
-  | "unknown" | "signed_out" | "validating" | "signed_in" | "expired" | "temporarily_unavailable";
-export type MusicPlayerState = "unknown" | "available" | "unavailable";
-export type LoginFlowState =
-  | "idle" | "creating_qr" | "waiting_scan" | "waiting_confirm"
-  | "authorized" | "expired" | "cancelled" | "failed";
 
 export class MusicInputError extends Error {
   constructor(public readonly code: string, message?: string) {

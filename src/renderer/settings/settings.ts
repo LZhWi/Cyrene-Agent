@@ -24,7 +24,17 @@ import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-f
 import { normalizeUiIcon, type UiIcon } from "../../shared/ui-icon";
 import { buildAppearanceSettingsPatch } from "./appearance-settings-state";
 import { type ReasoningPreference } from "../../shared/reasoning";
-import { type LoginFlowState } from "../../main/music/types";
+import { type LoginFlowState } from "../../shared/music-types";
+import {
+  deriveNeteaseViewState,
+  type MusicStatusSnapshot,
+  type NeteaseViewState,
+} from "../../shared/music-view-state";
+export {
+  deriveNeteaseViewState,
+  type MusicStatusSnapshot,
+  type NeteaseViewState,
+} from "../../shared/music-view-state";
 
 // Inline modal (to avoid Vite tree-shaking)
 let _cyModalOverlay: HTMLElement | null = null;
@@ -2956,26 +2966,6 @@ void loadChannelsPanel();
 // 由于 renderer 走 Vite 打包、main/preload 走 esbuild，两端类型不互通，
 // 这里直接用 (window as any).music 做弱类型化调用，避免给 global.d.ts 加一堆 cross-bundle 类型。
 
-interface MusicStatusSnapshot {
-  backend: string;
-  account: string;
-  player: string;
-  flow: LoginFlowState;
-  profile?: { nickname?: string; avatarUrl?: string; avatar?: string } | null;
-}
-
-type NeteaseViewState = "backend_starting" | "backend_error" | "signed_out" | "creating_qr" | "waiting_scan" | "waiting_confirm" | "login_expired" | "login_failed" | "connected" | "connected_without_client";
-
-export function deriveNeteaseViewState(snapshot: MusicStatusSnapshot): NeteaseViewState {
-  if (snapshot.backend === "starting") return "backend_starting";
-  if (snapshot.backend === "failed" || snapshot.backend === "incompatible") return "backend_error";
-  if (snapshot.account !== "signed_in") return "signed_out";
-  if (snapshot.flow === "creating_qr" || snapshot.flow === "waiting_scan" || snapshot.flow === "waiting_confirm") return snapshot.flow;
-  if (snapshot.flow === "expired") return "login_expired";
-  if (snapshot.flow === "failed") return "login_failed";
-  return snapshot.player === "available" ? "connected" : "connected_without_client";
-}
-
 interface MusicSelectionTrack {
   id: string;
   name: string;
@@ -3022,6 +3012,7 @@ const musicDisconnectBtn = document.createElement("button");
 
 const musicQrImg = document.getElementById("music-qr-img") as HTMLImageElement | null;
 const musicQrTip = document.getElementById("music-qr-tip");
+const musicQrBox = document.getElementById("music-qr") as HTMLElement | null;
 const musicProfileBox = document.getElementById("music-profile");
 const musicProfileName = document.getElementById("music-profile-name");
 const musicFeedbackEl = document.getElementById("music-feedback");
