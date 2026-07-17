@@ -7,8 +7,9 @@ import { PlaybackDispatcher } from "./playback-dispatcher";
 import { CookieVault } from "./cookie-vault";
 import { LoginOrchestrator } from "./login-orchestrator";
 import { SelectionSetCache } from "./selection-set-cache";
-import { normalizeDailyRecommendations, normalizeSearchResults } from "./result-normalizer";
 import { MusicInputError } from "./types";
+import { MusicRouter } from "./music-router";
+import { NeteaseMusicProvider, NETEASE_PROVIDER_ID } from "./netease-music-provider";
 import type { MusicPaths } from "./paths";
 import type {
   MusicSelectionSet,
@@ -42,6 +43,7 @@ export class MusicService {
   private readonly orchestrator: LoginOrchestrator;
   private readonly cache: SelectionSetCache;
   private readonly paths: MusicPaths;
+  private readonly router: MusicRouter;
 
   private backendListeners = new Set<StateListener<MusicBackendState>>();
   private accountListeners = new Set<StateListener<MusicAccountState>>();
@@ -53,6 +55,8 @@ export class MusicService {
     this.client = new MusicMcpClient(paths.vendorDir, paths.runtimeDir);
     this.detector = new ProtocolDetector();
     this.dispatcher = new PlaybackDispatcher(this.detector);
+    const netease = new NeteaseMusicProvider(this.client, this.dispatcher);
+    this.router = new MusicRouter(new Map([[netease.id, netease]]), () => NETEASE_PROVIDER_ID);
     this.vault = new CookieVault(path.dirname(paths.accountPath));
     this.orchestrator = new LoginOrchestrator({
       client: this.client,
@@ -229,40 +233,52 @@ export class MusicService {
 
   // ── Data ───────────────────────────────────────────────────
 
-  async getDailyRecommendations(conversationId: string): Promise<MusicSelectionSet> {
+  async getDailyRecommendations(
+    conversationId: string,
+    options: { provider?: string; resolutionRunId?: string } = {},
+  ): Promise<MusicSelectionSet> {
     this.requireReady();
     this.requireSignedIn();
-    const raw = await this.client.callDataTool("cloud_music_get_daily_recommend", {});
-    const tracks = normalizeDailyRecommendations(this.unwrapContent(raw));
+    const provider = this.router.resolve(options.provider);
+    const tracks = await provider.getDailyRecommendations();
     const setId = crypto.randomUUID();
     const set: MusicSelectionSet = {
       setId,
+      provider: provider.id,
       source: "daily_recommendation",
       createdAt: Date.now(),
       expiresAt: Date.now() + SET_TTL_MS,
       conversationId,
+      resolutionRunId: options.resolutionRunId,
       tracks,
     };
     this.cache.add(set);
     return set;
   }
 
-  async searchTracks(keyword: string, conversationId: string, limit?: number): Promise<MusicSelectionSet> {
+  async searchTracks(
+    keyword: string,
+    conversationId: string,
+    limit?: number,
+    options: { provider?: string; resolutionRunId?: string } = {},
+  ): Promise<MusicSelectionSet> {
     this.requireReady();
     const trimmed = (typeof keyword === "string" ? keyword : "").trim();
     if (trimmed.length === 0) throw new MusicInputError("E_INVALID_KEYWORD_EMPTY");
     if (trimmed.length > 100) throw new MusicInputError("E_INVALID_KEYWORD_TOO_LONG");
     const clampedLimit = Math.max(1, Math.min(limit ?? 20, 20));
-    const raw = await this.client.callDataTool("cloud_music_search", { keyword: trimmed, category: "song" });
-    const tracks = normalizeSearchResults(this.unwrapContent(raw)).slice(0, clampedLimit);
+    const provider = this.router.resolve(options.provider);
+    const tracks = (await provider.searchTracks(trimmed)).slice(0, clampedLimit);
     const setId = crypto.randomUUID();
     const set: MusicSelectionSet = {
       setId,
+      provider: provider.id,
       source: "search",
       query: trimmed,
       createdAt: Date.now(),
       expiresAt: Date.now() + SET_TTL_MS,
       conversationId,
+      resolutionRunId: options.resolutionRunId,
       tracks,
     };
     this.cache.add(set);
@@ -290,7 +306,7 @@ export class MusicService {
     for (const tid of trackIds) {
       if (!setTrackIds.has(tid)) throw new MusicInputError("E_TRACK_NOT_IN_SET");
     }
-    this.cache.touch(setId);
+    this.cache.markPresented(setId, conversationId, trackIds);
     const cardRef = `cyrene:music:${setId}:${trackIds.join(":")}`;
     return { cardRef };
   }
@@ -299,12 +315,12 @@ export class MusicService {
 
   async playTrack(trackId: string): Promise<PlaybackDispatchResult> {
     if (!/^\d+$/.test(trackId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
-    return this.dispatcher.dispatch("song", trackId);
+    return this.router.resolve().playTrack(trackId);
   }
 
   async playPlaylist(playlistId: string): Promise<PlaybackDispatchResult> {
     if (!/^\d+$/.test(playlistId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
-    return this.dispatcher.dispatch("playlist", playlistId);
+    return this.router.resolve().playPlaylist(playlistId);
   }
 
   // ── Helpers ────────────────────────────────────────────────
@@ -330,19 +346,6 @@ export class MusicService {
     } catch {
       return { state: "temporarily_unavailable" };
     }
-  }
-
-  private unwrapContent(result: unknown): unknown {
-    if (result && typeof result === "object") {
-      const r = result as Record<string, unknown>;
-      if (Array.isArray(r.content)) {
-        const first = (r.content as Array<Record<string, unknown>>)[0];
-        if (first && first.type === "text" && typeof first.text === "string") {
-          try { return JSON.parse(first.text); } catch { return result; }
-        }
-      }
-    }
-    return result;
   }
 
   private emitBackendChange(s: MusicBackendState): void {

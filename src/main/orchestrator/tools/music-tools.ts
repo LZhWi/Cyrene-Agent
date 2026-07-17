@@ -7,7 +7,7 @@ export interface MusicToolHooks {
     conversationId: string;
     setId: string;
     expiresAt: number;
-    tracks: Array<{ trackId: string; name: string; artists: string[]; album?: string; coverUrl?: string }>;
+    tracks: Array<{ provider: string; trackId: string; name: string; artists: string[]; album?: string; coverUrl?: string }>;
   }) => void;
   sendCard?: (card: {
     setId: string;
@@ -21,18 +21,54 @@ function conversationIdOf(ctx?: { conversationId?: string }): string {
 }
 
 export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {}): ToolDefinition[] {
+  const presentAndPublish = async (
+    setId: string,
+    conversationId: string,
+    trackIds: string[],
+    reasons?: string[],
+  ): Promise<{ cardRef: string }> => {
+    const result = await service.presentTracks({ setId, conversationId, trackIds, reasons });
+    const set = service.getSelectionSet(setId, conversationId);
+    if (set) {
+      const byId = new Map(set.tracks.map((track) => [track.id, track]));
+      const displayed = trackIds.map((id) => byId.get(id)).filter((track): track is MusicTrack => Boolean(track));
+      hooks.onPresented?.({
+        conversationId,
+        setId: set.setId,
+        expiresAt: set.expiresAt,
+        tracks: displayed.map((track) => ({
+          provider: set.provider,
+          trackId: track.id,
+          name: track.name,
+          artists: track.artists,
+          album: track.album,
+          coverUrl: track.coverUrl,
+        })),
+      });
+      hooks.sendCard?.({ setId: set.setId, source: set.source, tracks: displayed });
+    }
+    return result;
+  };
+
   return [
     {
       id: "music_get_daily_recommendations",
       name: "获取今日推荐歌曲",
-      description: "获取网易云音乐今日推荐（最多 10 首）。需要用户已登录。返回带 setId 的集合。",
+      description: "获取网易云音乐今日推荐并将前 5 首展示为卡片。需要用户已登录。返回带 setId 的真实集合与 presentation。",
       enabled: true,
       risk: "safe",
       inputSchema: { type: "object", properties: {}, required: [] },
       needsContext: true,
       execute: async (_args, ctx) => {
-        const set = await service.getDailyRecommendations(conversationIdOf(ctx));
-        return JSON.stringify({ kind: "recommendations", set });
+        const conversationId = conversationIdOf(ctx);
+        const set = await service.getDailyRecommendations(conversationId, {
+          resolutionRunId: ctx?.runId,
+        });
+        const trackIds = set.tracks.slice(0, 5).map((track) => track.id);
+        const presentation = trackIds.length > 0
+          ? await presentAndPublish(set.setId, conversationId, trackIds)
+          : undefined;
+        return JSON.stringify({ kind: "recommendations", set, presentation });
       },
     },
     {
@@ -53,6 +89,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       execute: async (args, ctx) => {
         const set = await service.searchTracks(
           String(args.keyword ?? ""), conversationIdOf(ctx), args.limit as number | undefined,
+          { resolutionRunId: ctx?.runId },
         );
         return JSON.stringify({ kind: "search", set });
       },
@@ -76,30 +113,12 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       execute: async (args, ctx) => {
         const conversationId = conversationIdOf(ctx);
         const trackIds = Array.isArray(args.trackIds) ? (args.trackIds as string[]) : [];
-        const r = await service.presentTracks({
-          setId: String(args.setId ?? ""),
+        const r = await presentAndPublish(
+          String(args.setId ?? ""),
           conversationId,
           trackIds,
-          reasons: Array.isArray(args.reasons) ? (args.reasons as string[]) : undefined,
-        });
-        const set = service.getSelectionSet(String(args.setId ?? ""), conversationId);
-        if (set) {
-          const byId = new Map(set.tracks.map((track) => [track.id, track]));
-          const displayed = trackIds.map((id) => byId.get(id)).filter((track): track is MusicTrack => Boolean(track));
-          hooks.onPresented?.({
-            conversationId,
-            setId: set.setId,
-            expiresAt: set.expiresAt,
-            tracks: displayed.map((track) => ({
-              trackId: track.id,
-              name: track.name,
-              artists: track.artists,
-              album: track.album,
-              coverUrl: track.coverUrl,
-            })),
-          });
-          hooks.sendCard?.({ setId: set.setId, source: set.source, tracks: displayed });
-        }
+          Array.isArray(args.reasons) ? (args.reasons as string[]) : undefined,
+        );
         return JSON.stringify({ kind: "presentation", cardRef: r.cardRef });
       },
     },

@@ -50,6 +50,14 @@ export class SelectionSetCache {
     conv.add(setId);
   }
 
+  markPresented(setId: string, conversationId: string, trackIds: string[], presentedAt = Date.now()): void {
+    const set = this.get(setId, conversationId);
+    if (!set) throw new Error("E_SET_NOT_FOUND");
+    set.presentedAt = presentedAt;
+    set.presentedTrackIds = [...trackIds];
+    this.touch(setId);
+  }
+
   evictExpired(): void {
     const now = Date.now();
     for (const [id, s] of this.bySetId) {

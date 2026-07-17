@@ -33,11 +33,15 @@ export interface MusicTrack {
 
 export interface MusicSelectionSet {
   setId: string;
+  provider: string;
   source: "daily_recommendation" | "search";
   query?: string;
   createdAt: number;
   expiresAt: number;
   conversationId: string;
+  resolutionRunId?: string;
+  presentedAt?: number;
+  presentedTrackIds?: string[];
   tracks: MusicTrack[];
 }
 

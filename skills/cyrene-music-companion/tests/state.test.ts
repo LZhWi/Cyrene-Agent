@@ -2,9 +2,9 @@ import { describe, expect, it } from "vitest";
 import { createMusicCompanionRuntime } from "../index";
 
 const tracks = [
-  { trackId: "101", name: "晴天", artists: ["周杰伦"] },
-  { trackId: "102", name: "夜曲", artists: ["周杰伦"] },
-  { trackId: "103", name: "后来", artists: ["刘若英"] },
+  { provider: "netease-cloud-music", trackId: "101", name: "晴天", artists: ["周杰伦"] },
+  { provider: "netease-cloud-music", trackId: "102", name: "夜曲", artists: ["周杰伦"] },
+  { provider: "netease-cloud-music", trackId: "103", name: "后来", artists: ["刘若英"] },
 ];
 
 function runtime(now = 1_000) {
@@ -21,8 +21,8 @@ describe("cyrene-music-companion candidate state", () => {
   it("returns ambiguous when multiple displayed tracks share a name", () => {
     const skill = runtime();
     skill.recordPresented({ conversationId: "c1", setId: "set-1", expiresAt: 9_000, tracks: [
-      { trackId: "201", name: "唯一", artists: ["告五人"] },
-      { trackId: "202", name: "唯一", artists: ["邓紫棋"] },
+      { provider: "netease-cloud-music", trackId: "201", name: "唯一", artists: ["告五人"] },
+      { provider: "netease-cloud-music", trackId: "202", name: "唯一", artists: ["邓紫棋"] },
     ] });
     const result = skill.resolveSelection("c1", "播放唯一");
     expect(result.kind).toBe("ambiguous");

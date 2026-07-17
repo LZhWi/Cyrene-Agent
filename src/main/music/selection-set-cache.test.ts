@@ -8,11 +8,13 @@ function track(id: string): MusicTrack {
 function set(id: string, conv: string, n = 3, ageMs = 0): MusicSelectionSet {
   return {
     setId: id,
+    provider: "netease-cloud-music",
     source: "search",
     query: "q",
     createdAt: Date.now() - ageMs,
     expiresAt: Date.now() + 30 * 60_000 - ageMs,
     conversationId: conv,
+    resolutionRunId: "run-1",
     tracks: Array.from({ length: n }, (_, i) => track(`${id}-${i}`)),
   };
 }
@@ -63,5 +65,15 @@ describe("SelectionSetCache", () => {
     c.touch("s0");
     for (let i = 20; i < 21; i++) c.add(set(`s${i}`, "convA"));
     expect(c.get("s0", "convA")).not.toBeNull();
+  });
+
+  it("marks only validated displayed tracks as presented", () => {
+    c.add(set("s1", "convA"));
+    c.markPresented("s1", "convA", ["s1-2", "s1-0"], 1_234);
+
+    expect(c.get("s1", "convA")).toEqual(expect.objectContaining({
+      presentedAt: 1_234,
+      presentedTrackIds: ["s1-2", "s1-0"],
+    }));
   });
 });

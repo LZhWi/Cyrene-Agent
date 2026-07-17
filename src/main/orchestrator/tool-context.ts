@@ -10,6 +10,8 @@ export interface ToolContext {
   userQuery: string;
   /** 当前聊天会话 ID；需要跨轮隔离状态的工具必须使用该字段。 */
   conversationId?: string;
+  /** One Agent execution; resolved-only candidates must not cross this boundary. */
+  runId?: string;
   /** 未来扩展兜底；当前为空对象，不预设字段。遵循"地基通用，上层克制"。 */
   metadata?: Record<string, unknown>;
 }

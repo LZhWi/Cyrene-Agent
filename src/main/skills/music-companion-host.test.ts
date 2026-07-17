@@ -32,7 +32,7 @@ describe("music-companion host", () => {
     const runtime = runtimeDouble();
     configureMusicCompanionHost(runtime, () => ({ skillEnabled: true, backendAvailable: true, enabledTools: [] }));
     const set = { conversationId: "c1", setId: "s1", expiresAt: 9_000, tracks: [
-      { trackId: "101", name: "晴天", artists: ["周杰伦"] },
+      { provider: "netease-cloud-music", trackId: "101", name: "晴天", artists: ["周杰伦"] },
     ] };
 
     recordMusicCompanionPresentation(set);
@@ -45,7 +45,7 @@ describe("music-companion host", () => {
       kind: "resolved",
       reason: "ordinal",
       setId: "s1",
-      track: { trackId: "102", name: "夜曲", artists: ["周杰伦"] },
+      track: { provider: "netease-cloud-music", trackId: "102", name: "夜曲", artists: ["周杰伦"] },
     });
     configureMusicCompanionHost(runtime, () => ({ skillEnabled: true, backendAvailable: true, enabledTools: [] }));
 
@@ -57,7 +57,7 @@ describe("music-companion host", () => {
   });
 
   it("does not inject selection context while capabilities are unavailable", () => {
-    const runtime = runtimeDouble({ kind: "resolved", reason: "ordinal", setId: "s1", track: { trackId: "1", name: "x", artists: [] } });
+    const runtime = runtimeDouble({ kind: "resolved", reason: "ordinal", setId: "s1", track: { provider: "netease-cloud-music", trackId: "1", name: "x", artists: [] } });
     runtime.shouldInject.mockReturnValue(false);
     configureMusicCompanionHost(runtime, () => ({ skillEnabled: true, backendAvailable: false, enabledTools: [] }));
 

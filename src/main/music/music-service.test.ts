@@ -112,8 +112,11 @@ describe("MusicService", () => {
     searchTool.mockResolvedValue({ success: true, items: [{ id: 1, name: "X", artist: "Y" }] });
     const s = new MusicService(PATHS);
     await s.start();
-    const set = await s.searchTracks("X", "c1");
+    const set = await s.searchTracks("X", "c1", undefined, { resolutionRunId: "run-1" });
     expect(set.source).toBe("search");
+    expect(set.provider).toBe("netease-cloud-music");
+    expect(set.resolutionRunId).toBe("run-1");
+    expect(set.presentedAt).toBeUndefined();
     expect(set.tracks).toHaveLength(1);
     expect(set.tracks[0].artists).toEqual(["Y"]);
   });
@@ -161,6 +164,10 @@ describe("MusicService", () => {
       .rejects.toThrow(/E_TRACK_NOT_IN_SET/);
     const ok = await s.presentTracks({ setId: set.setId, conversationId: "c1", trackIds: ["1"] });
     expect(ok.cardRef).toContain(set.setId);
+    expect(s.getSelectionSet(set.setId, "c1")).toEqual(expect.objectContaining({
+      presentedAt: expect.any(Number),
+      presentedTrackIds: ["1"],
+    }));
   });
 
   it("presentTracks limits to 5 selected", async () => {

@@ -1,4 +1,5 @@
 export interface MusicCandidate {
+  provider: string;
   trackId: string;
   name: string;
   artists: string[];

@@ -13,6 +13,54 @@ function serviceDouble() {
 }
 
 describe("music Agent tools", () => {
+  it("daily recommendations publish the first five real tracks as a card", async () => {
+    const service = serviceDouble();
+    const tracks = Array.from({ length: 6 }, (_, index) => ({
+      id: String(index + 1),
+      name: `歌曲${index + 1}`,
+      artists: ["歌手"],
+    }));
+    const set = {
+      setId: "daily-1",
+      provider: "netease-cloud-music",
+      source: "daily_recommendation",
+      expiresAt: 9_000,
+      conversationId: "conversation-1",
+      tracks,
+    };
+    service.getDailyRecommendations.mockResolvedValue(set);
+    service.presentTracks.mockResolvedValue({ cardRef: "cyrene:music:daily-1" });
+    service.getSelectionSet.mockReturnValue(set);
+    const onPresented = vi.fn();
+    const sendCard = vi.fn();
+    const tool = buildMusicTools(service as never, { onPresented, sendCard })
+      .find((candidate) => candidate.id === "music_get_daily_recommendations")!;
+
+    await tool.execute({}, { userQuery: "今日推荐", conversationId: "conversation-1", runId: "run-1" });
+
+    expect(service.getDailyRecommendations).toHaveBeenCalledWith(
+      "conversation-1",
+      { resolutionRunId: "run-1" },
+    );
+
+    expect(service.presentTracks).toHaveBeenCalledWith(expect.objectContaining({
+      setId: "daily-1",
+      conversationId: "conversation-1",
+      trackIds: ["1", "2", "3", "4", "5"],
+    }));
+    expect(onPresented).toHaveBeenCalledWith(expect.objectContaining({
+      setId: "daily-1",
+      tracks: expect.arrayContaining([expect.objectContaining({
+        provider: "netease-cloud-music",
+        trackId: "1",
+      })]),
+    }));
+    expect(sendCard).toHaveBeenCalledWith(expect.objectContaining({
+      setId: "daily-1",
+      tracks: tracks.slice(0, 5),
+    }));
+  });
+
   it("music_play_track delegates to MusicService.playTrack", async () => {
     const service = serviceDouble();
     service.playTrack.mockResolvedValue({ state: "dispatched", resourceType: "song", resourceId: "123" });
@@ -39,6 +87,7 @@ describe("music Agent tools", () => {
     service.presentTracks.mockResolvedValue({ cardRef: "cyrene:music:set-1:102:101" });
     service.getSelectionSet.mockReturnValue({
       setId: "set-1",
+      provider: "netease-cloud-music",
       expiresAt: 9_000,
       conversationId: "conversation-1",
       tracks: [
