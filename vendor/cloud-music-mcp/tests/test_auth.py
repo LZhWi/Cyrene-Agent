@@ -162,10 +162,15 @@ def test_validate_session_three_state_reads_runtime_dir(monkeypatch, tmp_storage
     with open(cookies_file, "w", encoding="utf-8") as f:
         json.dump({"MUSIC_U": "x", "__csrf": "y"}, f)
 
-    monkeypatch.setattr(auth.apis.login, "GetCurrentLoginStatus", lambda: {
-        "code": 200,
-        "profile": {"nickname": "alice", "userId": 42},
-    })
+    def current_login_status():
+        assert auth.GetCurrentSession().cookies.get("MUSIC_U") == "x"
+        assert auth.GetCurrentSession().cookies.get("__csrf") == "y"
+        return {
+            "code": 200,
+            "profile": {"nickname": "alice", "userId": 42},
+        }
+
+    monkeypatch.setattr(auth.apis.login, "GetCurrentLoginStatus", current_login_status)
     out = auth.validate_session_three_state()
     assert out["state"] == "valid"
     assert out["profile"]["nickname"] == "alice"
@@ -242,5 +247,39 @@ def test_main_module_exposes_cyrene_login_tools():
     assert "cyrene_music_login_begin" in tool_names
     assert "cyrene_music_login_check" in tool_names
     assert "cyrene_music_login_cancel" in tool_names
+    assert "cyrene_music_validate_session" in tool_names
     # Legacy tool must still be present
     assert "cloud_music_login" in tool_names
+
+
+def test_daily_recommend_tool_returns_structured_success(monkeypatch):
+    import importlib
+
+    main_module = importlib.import_module("cloud_music_mcp.main")
+    payload = {
+        "success": True,
+        "songs": [{"id": 1, "name": "Song", "artist": "Artist"}],
+    }
+    monkeypatch.setattr(main_module, "get_daily_recommendations", lambda: payload)
+
+    assert main_module.cloud_music_get_daily_recommend.fn() == payload
+
+
+def test_daily_recommend_tool_returns_structured_error(monkeypatch):
+    import importlib
+
+    main_module = importlib.import_module("cloud_music_mcp.main")
+    monkeypatch.setattr(
+        main_module,
+        "get_daily_recommendations",
+        lambda: {"success": False, "error": "upstream unavailable"},
+    )
+
+    assert main_module.cloud_music_get_daily_recommend.fn() == {
+        "success": False,
+        "songs": [],
+        "error": {
+            "code": "E_DAILY_RECOMMEND_FAILED",
+            "message": "upstream unavailable",
+        },
+    }

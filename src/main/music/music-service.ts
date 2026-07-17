@@ -323,10 +323,10 @@ export class MusicService {
 
   private async validateSessionThreeState(): Promise<{ state: string; profile?: MusicProfile }> {
     try {
-      const raw = await this.client.callAuthTool("cyrene_music_login_check", { session_id: "validation-only" });
-      const r = raw as { status?: string; profile?: MusicProfile };
-      if (r.status === "authorized") return { state: "valid", profile: r.profile };
-      return { state: "invalid_credentials" };
+      return await this.client.callAuthTool(
+        "cyrene_music_validate_session",
+        {},
+      ) as { state: string; profile?: MusicProfile };
     } catch {
       return { state: "temporarily_unavailable" };
     }

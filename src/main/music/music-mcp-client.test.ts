@@ -61,6 +61,7 @@ describe("MusicMcpClient", () => {
       tool("cyrene_music_login_begin", {}),
       tool("cyrene_music_login_check", { session_id: { type: "string" } }),
       tool("cyrene_music_login_cancel", { session_id: { type: "string" } }),
+      tool("cyrene_music_validate_session", {}),
     ]});
     connect.mockResolvedValue(undefined);
     const c = new MusicMcpClient(VENDOR, RUNTIME);
@@ -82,6 +83,17 @@ describe("MusicMcpClient", () => {
     const c = new MusicMcpClient(VENDOR, RUNTIME);
     await c.connect();
     await expect(c.callAuthTool("cloud_music_search", {})).rejects.toThrow(/E_TOOL_NOT_ALLOWED/);
+  });
+
+  it("calls the dedicated startup session validator", async () => {
+    listTools.mockResolvedValue({ tools: [] });
+    connect.mockResolvedValue(undefined);
+    callTool.mockResolvedValue({ content: [{ type: "text", text: JSON.stringify({ state: "valid" }) }] });
+    const c = new MusicMcpClient(VENDOR, RUNTIME);
+    await c.connect();
+
+    await expect(c.callAuthTool("cyrene_music_validate_session", {})).resolves.toEqual({ state: "valid" });
+    expect(callTool).toHaveBeenCalledWith({ name: "cyrene_music_validate_session", arguments: {} });
   });
 
   it("forwards env from buildChildEnv", async () => {

@@ -3,10 +3,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 
-const { beginTool, checkTool, cancelTool, searchTool, dailyTool, isRegistered, openExternal } = vi.hoisted(() => ({
+const { beginTool, checkTool, cancelTool, validateTool, searchTool, dailyTool, isRegistered, openExternal } = vi.hoisted(() => ({
   beginTool: vi.fn(),
   checkTool: vi.fn(),
   cancelTool: vi.fn(),
+  validateTool: vi.fn(),
   searchTool: vi.fn(),
   dailyTool: vi.fn(),
   isRegistered: vi.fn(),
@@ -27,7 +28,13 @@ vi.mock("./music-mcp-client", () => ({
       close,
       getRootPid: vi.fn().mockReturnValue(undefined),
       callDataTool: (name: string, args: unknown) => name === "cloud_music_search" ? searchTool(args) : dailyTool(args),
-      callAuthTool: (name: string, args: unknown) => name === "cyrene_music_login_begin" ? beginTool(args) : name === "cyrene_music_login_check" ? checkTool(args) : cancelTool(args),
+      callAuthTool: (name: string, args: unknown) => name === "cyrene_music_login_begin"
+        ? beginTool(args)
+        : name === "cyrene_music_login_check"
+          ? checkTool(args)
+          : name === "cyrene_music_validate_session"
+            ? validateTool(args)
+            : cancelTool(args),
     };
   }),
 }));
@@ -49,7 +56,7 @@ vi.mock("electron", () => ({
 import { MusicService } from "./music-service";
 
 beforeEach(() => {
-  beginTool.mockReset(); checkTool.mockReset(); cancelTool.mockReset();
+  beginTool.mockReset(); checkTool.mockReset(); cancelTool.mockReset(); validateTool.mockReset();
   searchTool.mockReset(); dailyTool.mockReset();
   isRegistered.mockReset(); openExternal.mockReset();
   clientInstances.length = 0;
@@ -85,6 +92,16 @@ async function freshServiceWithTmpPaths(): Promise<{ svc: MusicService; accountP
 }
 
 describe("MusicService", () => {
+  it("uses the dedicated three-state validator instead of a fake QR session", async () => {
+    validateTool.mockResolvedValue({ state: "valid", profile: { userId: "1", nickname: "alice" } });
+    const s = new MusicService(PATHS);
+
+    const result = await (s as unknown as { validateSessionThreeState(): Promise<unknown> }).validateSessionThreeState();
+
+    expect(result).toEqual({ state: "valid", profile: { userId: "1", nickname: "alice" } });
+    expect(validateTool).toHaveBeenCalledWith({});
+    expect(checkTool).not.toHaveBeenCalled();
+  });
   it("getDailyRecommendations rejects when backend not ready (stopped initial)", async () => {
     const s = new MusicService(PATHS);
     expect(s.getBackendState()).toBe("stopped");

@@ -307,6 +307,7 @@ def validate_session_three_state() -> dict:
         return {"state": "invalid_credentials"}
 
     try:
+        GetCurrentSession().cookies.update(cookies)
         user_info = apis.login.GetCurrentLoginStatus()
     except Exception as e:  # noqa: BLE001
         _logger.warning(_sanitize(f"validate_session transient error: {e}"))
