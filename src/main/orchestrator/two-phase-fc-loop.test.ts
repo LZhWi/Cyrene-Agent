@@ -144,6 +144,30 @@ afterEach(() => {
 });
 
 describe("runTwoPhaseFcLoop", () => {
+  it("executes a deterministic required tool call before asking the model", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueText("工具阶段结束");
+    adapter.enqueueText("已经找到真实结果");
+    const executed: ToolCall[] = [];
+
+    await runTwoPhaseFcLoop({
+      ...baseOptions,
+      tools: [makeTool("music_search")],
+      requiredToolName: "music_search",
+      requiredToolArgs: { keyword: "左转灯" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      executeTool: async (toolCall) => {
+        executed.push(toolCall);
+        return JSON.stringify({ kind: "search", set: { tracks: [{ id: "1", name: "左转灯" }] } });
+      },
+    });
+
+    expect(JSON.parse(executed[0].arguments)).toEqual({ keyword: "左转灯" });
+    expect(adapter.requests[0].messages.some((message) => message.role === "tool")).toBe(true);
+    expect(adapter.requests[0].toolChoice).toBeUndefined();
+  });
+
   it("passes an explicit required tool choice only to the first tool-phase request", async () => {
     const adapter = new FakeAdapter();
     adapter.enqueueText("模型仍未调用工具");
@@ -441,5 +465,87 @@ describe("runTwoPhaseFcLoop", () => {
 
     expect(result.reply).toBe("怎么啦，看起来不太高兴的样子…");
     expect(streamed).toBe("怎么啦，看起来不太高兴的样子…");
+  });
+
+  it("never emits MiniMax textual tool-call protocol from the Soul phase", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueText("");
+    adapter.enqueueText("]<]minimax[>[<tool_call>\n]<]minimax[>[<invoke name=\"music_get_daily_recommendations\">]<]minimax[>[</invoke>\n]<]minimax[>[</tool_call>");
+
+    let streamed = "";
+    const result = await runTwoPhaseFcLoop({
+      ...baseOptions,
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      executeTool: async () => "ok",
+      onEvent: (event) => {
+        if (event.type === "text_message_content") streamed += event.delta;
+      },
+    });
+
+    expect(result.reply).not.toContain("tool_call");
+    expect(result.reply).not.toContain("minimax");
+    expect(result.reply.trim().length).toBeGreaterThan(0);
+    expect(streamed).toBe(result.reply);
+  });
+
+  it("replaces a bracketed textual daily tool call with a truthful card acknowledgement", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueText("");
+    adapter.enqueueText("[tool_call]\nmusic_get_daily_recommendations\n[/tool_call]");
+
+    const result = await runTwoPhaseFcLoop({
+      ...baseOptions,
+      tools: [makeTool("music_get_daily_recommendations")],
+      requiredToolName: "music_get_daily_recommendations",
+      requiredToolArgs: {},
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      executeTool: async () => JSON.stringify({
+        kind: "recommendations",
+        set: { tracks: [{ id: "1", name: "真实歌曲" }] },
+        presentation: { cardRef: "cyrene:music:daily-1" },
+      }),
+    });
+
+    expect(result.reply).toContain("今日推荐")
+    expect(result.reply).toContain("卡片")
+    expect(result.reply).not.toContain("tool_call")
+  });
+
+  it("does not claim playback when no playback tool was successfully dispatched", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueText("");
+    adapter.enqueueText("正在为你播放♪");
+
+    const result = await runTwoPhaseFcLoop({
+      ...baseOptions,
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      executeTool: async () => "ok",
+    });
+
+    expect(result.reply).toBe("这次还没有成功向网易云发送播放请求。")
+  });
+
+  it("normalizes dispatched playback wording to the only truthful acknowledgement", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueText("");
+    adapter.enqueueText("已经开始播放了♪");
+
+    const result = await runTwoPhaseFcLoop({
+      ...baseOptions,
+      tools: [makeTool("music_play_track")],
+      requiredToolName: "music_play_track",
+      requiredToolArgs: { provider: "netease-cloud-music", setId: "s1", trackId: "1" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      executeTool: async () => JSON.stringify({
+        kind: "playback",
+        dispatch: { state: "dispatched", resourceType: "song", resourceId: "1" },
+      }),
+    });
+
+    expect(result.reply).toBe("已向网易云发送播放请求。")
   });
 });

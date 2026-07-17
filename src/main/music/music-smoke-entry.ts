@@ -94,7 +94,7 @@ async function runPhases(smokeUserDataDir: string): Promise<number> {
     if (!trackId) {
       log("playback_skipped reason=no_track_id");
     } else {
-      const dispatch: PlaybackDispatchResult = await bootstrap.service.playTrack(trackId);
+      const dispatch: PlaybackDispatchResult = await bootstrap.service.playTrackFromUi(trackId);
       if (dispatch.state === "dispatched") {
         log(`playback_ok trackId=${trackId}`);
       } else if (dispatch.state === "client_unavailable") {

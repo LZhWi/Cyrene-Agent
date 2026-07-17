@@ -313,7 +313,8 @@ def validate_session_three_state() -> dict:
         _logger.warning(_sanitize(f"validate_session transient error: {e}"))
         return {"state": "temporarily_unavailable", "reason": "api_unreachable"}
 
-    if user_info.get("code") == 200 and user_info.get("profile"):
+    code = user_info.get("code")
+    if code == 200 and user_info.get("profile"):
         profile = user_info["profile"]
         return {
             "state": "valid",
@@ -324,4 +325,6 @@ def validate_session_three_state() -> dict:
                 "nickname": profile.get("nickname") or "",
             },
         }
-    return {"state": "invalid_credentials"}
+    if code == 200 or code in {301, 302, 400, 401, 403}:
+        return {"state": "invalid_credentials"}
+    return {"state": "temporarily_unavailable", "reason": "api_unreachable"}

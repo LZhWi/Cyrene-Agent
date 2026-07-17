@@ -40,6 +40,7 @@ export interface MusicSelectionSet {
   expiresAt: number;
   conversationId: string;
   resolutionRunId?: string;
+  resolutionPurpose?: "discover" | "play";
   presentedAt?: number;
   presentedTrackIds?: string[];
   tracks: MusicTrack[];
@@ -50,6 +51,14 @@ export interface PlaybackDispatchResult {
   resourceType: "song" | "playlist";
   resourceId: string;
   errorCode?: string;
+}
+
+export interface CandidatePlaybackRequest {
+  provider: string;
+  setId: string;
+  trackId: string;
+  conversationId: string;
+  runId?: string;
 }
 
 export class MusicInputError extends Error {

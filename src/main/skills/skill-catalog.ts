@@ -81,3 +81,29 @@ export function buildAutoInjectedSkillContext(
     ...blocks,
   ].join("\n");
 }
+
+/**
+ * Soul 阶段没有工具能力，只注入 Skill 明确声明的回复策略小节。
+ * 其余工具流程仍只属于 TOOL_PHASE，避免模型把工具协议输出成聊天文本。
+ */
+export function buildAutoInjectedSoulContext(
+  skills: SkillEntry[],
+  getBody: (id: string) => string | null,
+): string {
+  const blocks = skills
+    .filter((skill) => skill.enabled && skill.manifest?.autoInject === true)
+    .map((skill) => {
+      const body = getBody(skill.id) ?? "";
+      const match = body.match(/^## Soul 回复策略\s*\r?\n([\s\S]*?)(?=^##\s|(?![\s\S]))/m);
+      const section = match?.[1]?.trim();
+      return section ? `### ${skill.id}\n${section}` : "";
+    })
+    .filter(Boolean);
+  if (blocks.length === 0) return "";
+  return [
+    "## 自动激活 Skill 回复策略",
+    "以下内容只约束自然语言回复；当前阶段没有工具能力，不得输出工具名、调用标记或工具协议。",
+    "",
+    ...blocks,
+  ].join("\n");
+}

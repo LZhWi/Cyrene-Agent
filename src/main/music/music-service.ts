@@ -20,6 +20,7 @@ import type {
   LoginFlowState,
   MusicProfile,
   MusicShutdownReport,
+  CandidatePlaybackRequest,
 } from "./types";
 
 const SET_TTL_MS = 30 * 60_000;
@@ -250,6 +251,7 @@ export class MusicService {
       expiresAt: Date.now() + SET_TTL_MS,
       conversationId,
       resolutionRunId: options.resolutionRunId,
+      resolutionPurpose: "discover",
       tracks,
     };
     this.cache.add(set);
@@ -260,7 +262,7 @@ export class MusicService {
     keyword: string,
     conversationId: string,
     limit?: number,
-    options: { provider?: string; resolutionRunId?: string } = {},
+    options: { provider?: string; resolutionRunId?: string; purpose?: "discover" | "play" } = {},
   ): Promise<MusicSelectionSet> {
     this.requireReady();
     const trimmed = (typeof keyword === "string" ? keyword : "").trim();
@@ -279,6 +281,7 @@ export class MusicService {
       expiresAt: Date.now() + SET_TTL_MS,
       conversationId,
       resolutionRunId: options.resolutionRunId,
+      resolutionPurpose: options.purpose ?? "discover",
       tracks,
     };
     this.cache.add(set);
@@ -313,7 +316,27 @@ export class MusicService {
 
   // ── Playback ───────────────────────────────────────────────
 
-  async playTrack(trackId: string): Promise<PlaybackDispatchResult> {
+  async playTrack(input: CandidatePlaybackRequest): Promise<PlaybackDispatchResult> {
+    const trackId = input.trackId;
+    if (!/^\d+$/.test(trackId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
+    const set = this.cache.get(input.setId, input.conversationId);
+    if (!set) throw new MusicInputError("E_SET_NOT_FOUND");
+    if (set.provider !== input.provider) throw new MusicInputError("E_PROVIDER_MISMATCH");
+    if (!set.tracks.some((track) => track.id === trackId)) {
+      throw new MusicInputError("E_TRACK_NOT_IN_SET");
+    }
+    const wasPresented = set.presentedTrackIds?.includes(trackId) === true;
+    const resolvedForThisRun = set.resolutionPurpose === "play"
+      && Boolean(input.runId)
+      && set.resolutionRunId === input.runId;
+    if (!wasPresented && !resolvedForThisRun) {
+      throw new MusicInputError("E_TRACK_NOT_PLAYABLE");
+    }
+    return this.router.resolve(input.provider).playTrack(trackId);
+  }
+
+  /** Trusted renderer path: card/settings IDs originate from MusicService results. */
+  async playTrackFromUi(trackId: string): Promise<PlaybackDispatchResult> {
     if (!/^\d+$/.test(trackId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
     return this.router.resolve().playTrack(trackId);
   }

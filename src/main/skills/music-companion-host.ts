@@ -81,7 +81,7 @@ export function buildMusicCompanionContext(conversationId: string, utterance: st
       "[近期音乐候选的确定性解析]",
       `用户已明确授权播放候选：${result.track.name} - ${result.track.artists.join("/")}，provider=${result.track.provider}，trackId=${result.track.trackId}。`,
       `解析依据：${result.reason}，setId=${result.setId}。`,
-      "只允许使用上述真实 trackId 调用 music_play_track；不要重新猜测或搜索替换。",
+      "只允许携带上述 provider、setId、trackId 调用 music_play_track；不要重新猜测或搜索替换。",
     ].join("\n");
   }
   if (result.kind === "ambiguous") {

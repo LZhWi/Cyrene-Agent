@@ -112,7 +112,7 @@ import {
 } from "./chat-time-context";
 import { setAsrConfig } from "./asr/volcano-asr-engine";
 import { setCallWindow, registerCallIpc, setCallSettings, stopCall } from "./call/call-manager";
-import { initSkills, skillRegistry, buildAutoInjectedSkillContext, buildSkillCatalog, parseSlashCommand, setSkillEnabled, listSkillsForUi } from "./skills";
+import { initSkills, skillRegistry, buildAutoInjectedSkillContext, buildAutoInjectedSoulContext, buildSkillCatalog, parseSlashCommand, setSkillEnabled, listSkillsForUi } from "./skills";
 import {
   buildMusicCompanionContext,
   isMusicCompanionAvailable,
@@ -4677,6 +4677,8 @@ app.whenReady().then(async () => {
       buildSkillCatalog(skills as any)) as BuildOptionsDeps["buildSkillCatalog"],
     buildAutoInjectedSkillContext: ((skills: ReadonlyArray<unknown>) =>
       buildAutoInjectedSkillContext(skills as any, (id) => skillRegistry.getBody(id))) as BuildOptionsDeps["buildAutoInjectedSkillContext"],
+    buildAutoInjectedSoulContext: ((skills: ReadonlyArray<unknown>) =>
+      buildAutoInjectedSoulContext(skills as any, (id) => skillRegistry.getBody(id))) as BuildOptionsDeps["buildAutoInjectedSoulContext"],
     skillRegistry: skillRegistry as unknown as BuildOptionsDeps["skillRegistry"],
     resolveSlashActivation: ((messages: ReadonlyArray<{ role: string; content?: string }>) =>
       resolveSlashActivation(messages as any)) as BuildOptionsDeps["resolveSlashActivation"],

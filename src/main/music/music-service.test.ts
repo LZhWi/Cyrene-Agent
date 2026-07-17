@@ -190,13 +190,13 @@ describe("MusicService", () => {
 
   it("playTrack rejects non-numeric id", async () => {
     const s = new MusicService(PATHS);
-    await expect(s.playTrack("not-num")).rejects.toThrow(/E_INVALID_ID/);
+    await expect(s.playTrackFromUi("not-num")).rejects.toThrow(/E_INVALID_ID/);
   });
 
   it("playTrack returns client_unavailable when protocol missing", async () => {
     isRegistered.mockResolvedValue(false);
     const s = new MusicService(PATHS);
-    const r = await s.playTrack("123");
+    const r = await s.playTrackFromUi("123");
     expect(r.state).toBe("client_unavailable");
     expect(r.errorCode).toBe("E_PROTOCOL_NOT_REGISTERED");
   });
@@ -205,10 +205,80 @@ describe("MusicService", () => {
     isRegistered.mockResolvedValue(true);
     openExternal.mockResolvedValue(undefined);
     const s = new MusicService(PATHS);
-    const r = await s.playTrack("123");
+    const r = await s.playTrackFromUi("123");
     expect(r.state).toBe("dispatched");
     expect(r.resourceType).toBe("song");
     expect(r.resourceId).toBe("123");
+  });
+
+  it("plays a resolved candidate only inside the Agent run that fetched it", async () => {
+    searchTool.mockResolvedValue([{ id: 123, name: "稻香", artist: "周杰伦" }]);
+    isRegistered.mockResolvedValue(true);
+    openExternal.mockResolvedValue(undefined);
+    const s = new MusicService(PATHS);
+    await s.start();
+    const set = await s.searchTracks("稻香", "c1", 5, { resolutionRunId: "run-1", purpose: "play" });
+
+    await expect(s.playTrack({
+      provider: set.provider,
+      setId: set.setId,
+      trackId: "123",
+      conversationId: "c1",
+      runId: "run-2",
+    })).rejects.toThrow(/E_TRACK_NOT_PLAYABLE/);
+
+    await expect(s.playTrack({
+      provider: set.provider,
+      setId: set.setId,
+      trackId: "123",
+      conversationId: "c1",
+      runId: "run-1",
+    })).resolves.toEqual(expect.objectContaining({ state: "dispatched" }));
+  });
+
+  it("plays only the displayed subset across later Agent runs", async () => {
+    searchTool.mockResolvedValue([
+      { id: 123, name: "稻香", artist: "周杰伦" },
+      { id: 456, name: "晴天", artist: "周杰伦" },
+    ]);
+    isRegistered.mockResolvedValue(true);
+    openExternal.mockResolvedValue(undefined);
+    const s = new MusicService(PATHS);
+    await s.start();
+    const set = await s.searchTracks("周杰伦", "c1", 5, { resolutionRunId: "run-1" });
+    await s.presentTracks({ setId: set.setId, conversationId: "c1", trackIds: ["456"] });
+
+    await expect(s.playTrack({
+      provider: set.provider,
+      setId: set.setId,
+      trackId: "123",
+      conversationId: "c1",
+      runId: "run-later",
+    })).rejects.toThrow(/E_TRACK_NOT_PLAYABLE/);
+    await expect(s.playTrack({
+      provider: set.provider,
+      setId: set.setId,
+      trackId: "456",
+      conversationId: "c1",
+      runId: "run-later",
+    })).resolves.toEqual(expect.objectContaining({ state: "dispatched" }));
+  });
+
+  it("rejects a provider or track id not contained in the real candidate set", async () => {
+    searchTool.mockResolvedValue([{ id: 123, name: "稻香", artist: "周杰伦" }]);
+    const s = new MusicService(PATHS);
+    await s.start();
+    const set = await s.searchTracks("稻香", "c1", 5, { resolutionRunId: "run-1", purpose: "play" });
+
+    await expect(s.playTrack({ ...set, trackId: "999", runId: "run-1" } as never))
+      .rejects.toThrow(/E_TRACK_NOT_IN_SET/);
+    await expect(s.playTrack({
+      provider: "qq-music",
+      setId: set.setId,
+      trackId: "123",
+      conversationId: "c1",
+      runId: "run-1",
+    })).rejects.toThrow(/E_PROVIDER_MISMATCH/);
   });
 
   // ── New spec-required methods ──────────────────────────────

@@ -77,6 +77,8 @@ export interface TwoPhaseFcOptions {
   tools: ToolDefinition[];
   /** 明确外部操作意图需要首轮强制选择的工具。 */
   requiredToolName?: string;
+  /** 已确定的工具参数；存在时在首轮模型调用前确定性执行。 */
+  requiredToolArgs?: Record<string, unknown>;
   /** 工具阶段使用的 system prompt（仅含工具调度规则 + 自动生成的工具目录）。 */
   toolSystemContent: string;
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。
@@ -154,6 +156,49 @@ function buildFallbackReply(toolResults: ToolCallResult[], reason: string): stri
     lines.push("", "（暂无已完成的步骤信息）");
   }
   return lines.join("\n");
+}
+
+function stripTextualToolProtocol(text: string): string {
+  return text
+    .split("]<]minimax[>[").join("")
+    .replace(/<tool_call\b[^>]*>[\s\S]*?<\/tool_call>/gi, "")
+    .replace(/\[tool_call\][\s\S]*?\[\/tool_call\]/gi, "")
+    .replace(/<invoke\b[^>]*>[\s\S]*?<\/invoke>/gi, "")
+    .trim();
+}
+
+function buildTextualToolProtocolFallback(toolResults: ToolCallResult[]): string {
+  const daily = [...toolResults].reverse().find((result) => result.toolId === "music_get_daily_recommendations");
+  if (daily) {
+    try {
+      const parsed = JSON.parse(daily.output) as { presentation?: unknown };
+      if (parsed.presentation) return "今日推荐已经放在卡片里啦，看看有没有喜欢的♪";
+    } catch {
+      // 工具异常字符串不是 JSON；下方使用诚实的失败回复。
+    }
+    return "今日推荐暂时没读取成功，请稍后再试一次。";
+  }
+  return "刚才的操作没有生成正常回复，请再试一次。";
+}
+
+function guardPlaybackClaim(text: string, toolResults: ToolCallResult[]): string {
+  const playback = [...toolResults].reverse().find((result) => result.toolId === "music_play_track");
+  if (playback) {
+    try {
+      const parsed = JSON.parse(playback.output) as { dispatch?: { state?: string } };
+      if (parsed.dispatch?.state === "dispatched") return "已向网易云发送播放请求。";
+      if (parsed.dispatch?.state === "client_unavailable") {
+        return "已找到歌曲，但播放需要安装网易云桌面客户端。";
+      }
+      if (parsed.dispatch?.state === "launch_failed") {
+        return "已找到歌曲，但这次没能向网易云发送播放请求。";
+      }
+    } catch {
+      // Failed tool output falls through to the unsupported-claim guard.
+    }
+  }
+  const unsupportedClaim = /(?:正在|已经|开始|为你).{0,8}(?:播放|放歌)|(?:播放|音乐).{0,6}(?:开始|响起来)/.test(text);
+  return unsupportedClaim ? "这次还没有成功向网易云发送播放请求。" : text;
 }
 
 function buildToolSpecs(tools: ReadonlyArray<ToolDefinition>): Array<{ name: string; description: string; parameters: object }> {
@@ -280,6 +325,37 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     return true;
   };
 
+  if (options.requiredToolName && options.requiredToolArgs !== undefined && runnableToolIds.has(options.requiredToolName)) {
+    const toolCall: ToolCall = {
+      id: `required-${options.requiredToolName}-${Date.now()}`,
+      name: options.requiredToolName,
+      arguments: JSON.stringify(options.requiredToolArgs),
+    };
+    onEvent?.({ type: "step_started", stepName: "required-tool" });
+    onEvent?.({ type: "tool_call_start", toolCallId: toolCall.id, toolCallName: toolCall.name });
+    const requiredArgsLog = toolCall.name.startsWith("music_")
+      ? toolCall.arguments
+      : `keys=${Object.keys(options.requiredToolArgs).join(",")}`;
+    console.log(LOG_PREFIX, "确定性执行工具:", toolCall.name, requiredArgsLog);
+    let output: string;
+    try {
+      output = await executeTool(toolCall, runnableToolIds);
+    } catch (err) {
+      output = "[工具执行失败] " + (err instanceof Error ? err.message : String(err));
+    }
+    const requiredResultLog = toolCall.name.startsWith("music_")
+      ? truncateToolResult(output).slice(0, 500)
+      : `length=${output.length}`;
+    console.log(LOG_PREFIX, "工具结果:", toolCall.name, requiredResultLog);
+    allToolResults.push({ toolId: toolCall.name, args: options.requiredToolArgs, output });
+    conversation.push({ role: "assistant", toolCalls: [toolCall] });
+    conversation = adapter.appendToolResults(conversation, [{ toolCall, output: truncateToolResult(output) }]);
+    conversation = compressConversation(conversation);
+    onEvent?.({ type: "tool_call_result", toolCallId: toolCall.id, messageId: `${toolCall.id}-result`, content: output });
+    onEvent?.({ type: "tool_call_end", toolCallId: toolCall.id });
+    onEvent?.({ type: "step_finished", stepName: "required-tool" });
+  }
+
   // ── TOOL_PHASE 主循环 ──
   for (let round = 0; round < maxToolRounds; round++) {
     if (signal?.aborted) {
@@ -299,7 +375,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
       stream: false,
     };
     if (toolSpecs.length > 0) req = { ...req, tools: toolSpecs };
-    if (round === 0 && options.requiredToolName && runnableToolIds.has(options.requiredToolName)) {
+    if (round === 0 && options.requiredToolArgs === undefined && options.requiredToolName && runnableToolIds.has(options.requiredToolName)) {
       req = { ...req, toolChoice: { name: options.requiredToolName } };
     }
     if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, options.settings);
@@ -374,6 +450,10 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
           output = "[工具执行失败] " + errMsg;
           console.error(LOG_PREFIX, "工具执行失败 [" + tc.name + "]:", errMsg);
         }
+        const resultLog = tc.name.startsWith("music_")
+          ? truncateToolResult(output).slice(0, 500)
+          : `length=${output.length}`;
+        console.log(LOG_PREFIX, "工具结果:", tc.name, resultLog);
 
         allToolResults.push({ toolId: tc.name, args, output });
         execResults.push({ toolCall: tc, output: truncateToolResult(output) });
@@ -496,7 +576,13 @@ async function runSoulPhase(args: {
   try {
     const data = await callAdapter(adapter, req, cfg, forceSummaryTimeoutMs);
     const chat = adapter.parseResponse(data);
-    const reply = stripLeakedChatTimeContext(chat.text);
+    const withoutProtocol = stripTextualToolProtocol(chat.text);
+    const reply = guardPlaybackClaim(
+      stripLeakedChatTimeContext(
+        withoutProtocol || buildTextualToolProtocolFallback(allToolResults),
+      ),
+      allToolResults,
+    );
     if (chat.usage) {
       const finalInput = accInput + chat.usage.input;
       const finalOutput = accOutput + chat.usage.output;
@@ -530,7 +616,7 @@ async function runSoulPhase(args: {
       ? "总结请求超时"
       : (err instanceof Error ? err.message : String(err));
     console.error(LOG_PREFIX, "SOUL_PHASE 也失败，降级返回已有结果:", errReason);
-    const fallback = buildFallbackReply(allToolResults, errReason);
+    const fallback = guardPlaybackClaim(buildFallbackReply(allToolResults, errReason), allToolResults);
     const textMessageId = `msg-${Date.now()}`;
     emitTextMessage(onEvent, textMessageId, fallback);
     onEvent?.({ type: "step_finished", stepName: `soul-phase-${reason}` });

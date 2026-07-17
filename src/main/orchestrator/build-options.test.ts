@@ -134,6 +134,7 @@ describe("build-options", () => {
     }, deps)
 
     expect(result.options.requiredToolName).toBe("music_search")
+    expect(result.options.requiredToolArgs).toEqual({ keyword: "左转灯" })
   })
 
   it("requires daily recommendations only for an explicit daily request", async () => {
@@ -153,10 +154,40 @@ describe("build-options", () => {
     }, deps)
 
     expect(daily.options.requiredToolName).toBe("music_get_daily_recommendations")
+    expect(daily.options.requiredToolArgs).toEqual({})
     expect(generic.options.requiredToolName).toBeUndefined()
   })
 
-  it("injects deterministic recent-music selection context for the current conversation", async () => {
+  it("marks an explicit song playback search as current-run resolution", async () => {
+    const deps = createBuildDeps()
+    deps.toolRegistry.getEnabled = () => [{ id: "music_search" }]
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "播放《稻香》" }],
+      style: "talk",
+    }, deps)
+
+    expect(result.options.requiredToolArgs).toEqual({ keyword: "稻香" })
+  })
+
+  it("continues a recent daily recommendation request after the user confirms login", async () => {
+    const deps = createBuildDeps()
+    deps.toolRegistry.getEnabled = () => [{ id: "music_get_daily_recommendations" }]
+
+    const result = await buildAgentRunOptions({
+      messages: [
+        { role: "user", content: "看一下网易云的今日推荐歌单吧" },
+        { role: "assistant", content: "需要登录账号才能看到" },
+        { role: "user", content: "登录好了，你查查" },
+      ],
+      style: "talk",
+    }, deps)
+
+    expect(result.options.requiredToolName).toBe("music_get_daily_recommendations")
+    expect(result.options.requiredToolArgs).toEqual({})
+  })
+
+  it("injects deterministic recent-music selection context only into the tool phase", async () => {
     const deps = createBuildDeps()
     deps.buildMusicCompanionContext = vi.fn(() => "[真实候选解析] 第二首 = trackId 102")
 
@@ -169,7 +200,7 @@ describe("build-options", () => {
     expect(deps.buildMusicCompanionContext).toHaveBeenCalledWith("conversation-1", "第二首")
     expect(result.options.conversationId).toBe("conversation-1")
     expect(result.options.toolSystemContent).toContain("trackId 102")
-    expect(result.options.soulSystemBaseContent).toContain("trackId 102")
+    expect(result.options.soulSystemBaseContent).not.toContain("trackId 102")
   })
 
   it("puts the enabled Skill catalog into the tool phase so invoke_skill can route", async () => {
@@ -182,11 +213,13 @@ describe("build-options", () => {
     }, deps)
 
     expect(result.options.toolSystemContent).toContain("SKILL_CATALOG")
+    expect(result.options.soulSystemBaseContent).not.toContain("SKILL_CATALOG")
   })
 
-  it("puts auto-injected Skill rules into both tool and Soul phases", async () => {
+  it("keeps tool-oriented Skill rules out of Soul but retains reply-only strategy", async () => {
     const deps = createBuildDeps()
     deps.buildAutoInjectedSkillContext = () => "AUTO_MUSIC_RULES"
+    deps.buildAutoInjectedSoulContext = () => "SOUL_MUSIC_REPLY_RULES"
 
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "今日推荐呢" }],
@@ -194,7 +227,8 @@ describe("build-options", () => {
     }, deps)
 
     expect(result.options.toolSystemContent).toContain("AUTO_MUSIC_RULES")
-    expect(result.options.soulSystemBaseContent).toContain("AUTO_MUSIC_RULES")
+    expect(result.options.soulSystemBaseContent).not.toContain("AUTO_MUSIC_RULES")
+    expect(result.options.soulSystemBaseContent).toContain("SOUL_MUSIC_REPLY_RULES")
   })
 
   it("attaches direct image content blocks to the latest user message", async () => {

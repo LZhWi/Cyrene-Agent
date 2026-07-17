@@ -42,6 +42,7 @@ export interface BuildOptionsDeps {
   buildEnvironmentContext: (model: { provider: string; model: string }, profile: unknown) => string;
   buildSkillCatalog: (skills: ReadonlyArray<unknown>) => string;
   buildAutoInjectedSkillContext: (skills: ReadonlyArray<unknown>) => string;
+  buildAutoInjectedSoulContext?: (skills: ReadonlyArray<unknown>) => string;
   skillRegistry: { getEnabled(): ReadonlyArray<unknown> };
   resolveSlashActivation: (messages: ReadonlyArray<{ role: string; content?: string }>) => string;
   buildToneInjection: (
@@ -171,6 +172,27 @@ export function resolveRequiredMusicTool(
   const explicitSearch = /网易云.{0,12}(?:搜|找)|(?:搜|搜索|找).{0,12}(?:网易云|歌曲?|音乐)/.test(text);
   const explicitTrackPlayback = /^(?:帮我)?(?:播放|放个|放一下)(?!点音乐)/.test(text);
   return explicitSearch || explicitTrackPlayback ? "music_search" : undefined;
+}
+
+function resolvesRecentDailyContinuation(
+  userText: string,
+  messages: ReadonlyArray<ChatMessage>,
+): boolean {
+  const continuation = /^(?:登录(?:好|完成|上)了[，,、 ]*(?:你)?(?:查查|查一下|看看|试试)?|(?:好(?:了|的)?[，,、 ]*)?(?:去吧|查吧|看吧|试试吧))?[。！!？? ]*$/.test(userText.trim());
+  if (!continuation) return false;
+  return messages
+    .slice(-6, -1)
+    .some((message) => /(?:网易云)?(?:今日推荐|每日推荐|日推)/.test(contentToText(message.content)));
+}
+
+function extractMusicSearchKeyword(userText: string): string {
+  return userText
+    .trim()
+    .replace(/^.*?网易云(?:音乐)?(?:上|里)?/, "")
+    .replace(/^(?:帮我)?(?:搜一下|搜索一下|找一下|搜|搜索|找|播放|放个|放一下)/, "")
+    .replace(/[《》“”"']/g, "")
+    .replace(/(?:怎么样|可以吗|行吗|好吗|吧|呢|呀)[？?。！!]*$/, "")
+    .trim();
 }
 
 function stripTurnModelContextForSideEffects(text: string): string {
@@ -322,6 +344,7 @@ export async function buildAgentRunOptions(
   const enabledSkills = deps.skillRegistry.getEnabled();
   const skillCatalog = deps.buildSkillCatalog(enabledSkills);
   const autoInjectedSkillContext = deps.buildAutoInjectedSkillContext(enabledSkills);
+  const autoInjectedSoulContext = deps.buildAutoInjectedSoulContext?.(enabledSkills) ?? "";
   const conversationId = input.sessionId || "default";
   const musicCompanionContext = deps.buildMusicCompanionContext?.(conversationId, latestUserText) ?? "";
   const channelSystem = buildChannelSystem(input.channel);
@@ -353,10 +376,21 @@ export async function buildAgentRunOptions(
   const runTools = isTalkMode
     ? enabledTools.filter((tool) => String((tool as { id?: unknown }).id ?? "").startsWith("music_"))
     : enabledTools;
+  const availableToolIds = new Set(runTools.map((tool) => String((tool as { id?: unknown }).id ?? "")));
   const requiredToolName = resolveRequiredMusicTool(
     latestUserText,
-    new Set(runTools.map((tool) => String((tool as { id?: unknown }).id ?? ""))),
+    availableToolIds,
+  ) ?? (
+    availableToolIds.has("music_get_daily_recommendations")
+      && resolvesRecentDailyContinuation(latestUserText, messages)
+      ? "music_get_daily_recommendations"
+      : undefined
   );
+  const requiredToolArgs = requiredToolName === "music_get_daily_recommendations"
+    ? {}
+    : requiredToolName === "music_search"
+      ? { keyword: extractMusicSearchKeyword(latestUserText) }
+      : undefined;
 
   // 第一期：保留旧 systemContent 兼容（已不再使用，保留字段是为了 logger 诊断）。
   // 同时新增 toolSystemContent / soulSystemBaseContent 两套。
@@ -387,13 +421,11 @@ export async function buildAgentRunOptions(
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
     deps.buildSoulSystemBasePrompt(styleFile) +
-    (skillCatalog ? "\n\n---\n\n" + skillCatalog : "") +
-    (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "") +
+    (autoInjectedSoulContext ? "\n\n---\n\n" + autoInjectedSoulContext : "") +
     skillActivation +
     toneInjection +
     (alwaysOnContext ? "\n\n" + alwaysOnContext + "\n\n" : "") +
     (relationshipContext ? "\n\n" + relationshipContext + "\n\n" : "") +
-    (musicCompanionContext ? "\n\n" + musicCompanionContext : "") +
     attachmentContext;
 
   deps.logWorldbookInjection(alwaysOnContext, systemContent);
@@ -414,6 +446,7 @@ export async function buildAgentRunOptions(
       messages: fcMessages,
       conversationId,
       requiredToolName,
+      requiredToolArgs,
       timeoutMs: deps.chatRequestTimeoutMs,
       toolSystemContent,
       soulSystemBaseContent,

@@ -61,15 +61,111 @@ describe("music Agent tools", () => {
     }));
   });
 
-  it("music_play_track delegates to MusicService.playTrack", async () => {
+  it("music_play_track delegates a complete real-candidate reference with ToolContext", async () => {
     const service = serviceDouble();
     service.playTrack.mockResolvedValue({ state: "dispatched", resourceType: "song", resourceId: "123" });
     const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_play_track")!;
 
-    const output = JSON.parse(await tool.execute({ trackId: "123" }));
+    const output = JSON.parse(await tool.execute(
+      { provider: "netease-cloud-music", setId: "set-1", trackId: "123" },
+      { userQuery: "播放稻香", conversationId: "c1", runId: "run-1" },
+    ));
 
-    expect(service.playTrack).toHaveBeenCalledWith("123");
+    expect(service.playTrack).toHaveBeenCalledWith({
+      provider: "netease-cloud-music",
+      setId: "set-1",
+      trackId: "123",
+      conversationId: "c1",
+      runId: "run-1",
+    });
     expect(output.dispatch.state).toBe("dispatched");
+  });
+
+  it("marks discovery searches as presented but keeps direct-play resolution unpresented", async () => {
+    const service = serviceDouble();
+    const set = {
+      setId: "set-1",
+      provider: "netease-cloud-music",
+      source: "search",
+      expiresAt: 9_000,
+      conversationId: "c1",
+      tracks: [{ id: "123", name: "稻香", artists: ["周杰伦"] }],
+    };
+    service.searchTracks.mockResolvedValue(set);
+    service.presentTracks.mockResolvedValue({ cardRef: "card" });
+    service.getSelectionSet.mockReturnValue(set);
+    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_search")!;
+
+    await tool.execute(
+      { keyword: "稻香", purpose: "discover" },
+      { userQuery: "搜一下稻香", conversationId: "c1", runId: "run-1" },
+    );
+    expect(service.presentTracks).toHaveBeenCalled();
+
+    service.presentTracks.mockClear();
+    await tool.execute(
+      { keyword: "稻香", purpose: "play" },
+      { userQuery: "播放稻香", conversationId: "c1", runId: "run-2" },
+    );
+    expect(service.presentTracks).not.toHaveBeenCalled();
+  });
+
+  it("does not trust a model-supplied play purpose without an explicit playback request", async () => {
+    const service = serviceDouble();
+    const set = {
+      setId: "set-1",
+      provider: "netease-cloud-music",
+      source: "search",
+      expiresAt: 9_000,
+      conversationId: "c1",
+      tracks: [{ id: "123", name: "稻香", artists: ["周杰伦"] }],
+    };
+    service.searchTracks.mockResolvedValue(set);
+    service.presentTracks.mockResolvedValue({ cardRef: "card" });
+    service.getSelectionSet.mockReturnValue(set);
+    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_search")!;
+
+    await tool.execute(
+      { keyword: "稻香", purpose: "play" },
+      { userQuery: "搜一下稻香", conversationId: "c1", runId: "run-1" },
+    );
+
+    expect(service.searchTracks).toHaveBeenCalledWith(
+      "稻香",
+      "c1",
+      undefined,
+      { resolutionRunId: "run-1", purpose: "discover" },
+    );
+    expect(service.presentTracks).toHaveBeenCalled();
+  });
+
+  it("presents ambiguous direct-play search results for a later explicit selection", async () => {
+    const service = serviceDouble();
+    const set = {
+      setId: "set-ambiguous",
+      provider: "netease-cloud-music",
+      source: "search",
+      expiresAt: 9_000,
+      conversationId: "c1",
+      tracks: [
+        { id: "123", name: "唯一", artists: ["告五人"] },
+        { id: "456", name: "唯一", artists: ["邓紫棋"] },
+      ],
+    };
+    service.searchTracks.mockResolvedValue(set);
+    service.presentTracks.mockResolvedValue({ cardRef: "card" });
+    service.getSelectionSet.mockReturnValue(set);
+    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_search")!;
+
+    await tool.execute(
+      { keyword: "唯一" },
+      { userQuery: "播放唯一", conversationId: "c1", runId: "run-1" },
+    );
+
+    expect(service.presentTracks).toHaveBeenCalledWith(expect.objectContaining({
+      setId: "set-ambiguous",
+      trackIds: ["123", "456"],
+    }));
   });
 
   it("music_play_playlist delegates to MusicService.playPlaylist", async () => {

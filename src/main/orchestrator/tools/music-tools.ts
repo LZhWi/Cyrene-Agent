@@ -20,6 +20,12 @@ function conversationIdOf(ctx?: { conversationId?: string }): string {
   return ctx?.conversationId || "default";
 }
 
+function searchPurposeOf(userQuery = ""): "discover" | "play" {
+  return /^(?:帮我)?(?:播放|放个|放一下)(?!点音乐)/.test(userQuery.trim())
+    ? "play"
+    : "discover";
+}
+
 export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {}): ToolDefinition[] {
   const presentAndPublish = async (
     setId: string,
@@ -87,11 +93,23 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       },
       needsContext: true,
       execute: async (args, ctx) => {
+        const purpose = searchPurposeOf(ctx?.userQuery);
         const set = await service.searchTracks(
           String(args.keyword ?? ""), conversationIdOf(ctx), args.limit as number | undefined,
-          { resolutionRunId: ctx?.runId },
+          {
+            resolutionRunId: ctx?.runId,
+            purpose,
+          },
         );
-        return JSON.stringify({ kind: "search", set });
+        const presentation = set.tracks.length > 0
+          && (purpose === "discover" || set.tracks.length > 1)
+          ? await presentAndPublish(
+            set.setId,
+            conversationIdOf(ctx),
+            set.tracks.slice(0, 5).map((track) => track.id),
+          )
+          : undefined;
+        return JSON.stringify({ kind: "search", set, presentation });
       },
     },
     {
@@ -125,16 +143,27 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
     {
       id: "music_play_track",
       name: "播放网易云歌曲",
-      description: "通过本地网易云客户端播放指定歌曲 ID。",
+      description: "向默认音乐来源发送播放请求。仅接受真实候选返回的 provider、setId、trackId；dispatched 不等于已开始播放。",
       enabled: true,
       risk: "input-control",
       inputSchema: {
         type: "object",
-        properties: { trackId: { type: "string" } },
-        required: ["trackId"],
+        properties: {
+          provider: { type: "string" },
+          setId: { type: "string" },
+          trackId: { type: "string" },
+        },
+        required: ["provider", "setId", "trackId"],
       },
-      execute: async (args) => {
-        const dispatch = await service.playTrack(String(args.trackId));
+      needsContext: true,
+      execute: async (args, ctx) => {
+        const dispatch = await service.playTrack({
+          provider: String(args.provider ?? ""),
+          setId: String(args.setId ?? ""),
+          trackId: String(args.trackId ?? ""),
+          conversationId: conversationIdOf(ctx),
+          runId: ctx?.runId,
+        });
         return JSON.stringify({ kind: "playback", dispatch });
       },
     },

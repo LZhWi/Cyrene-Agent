@@ -205,6 +205,25 @@ def test_validate_session_three_state_does_not_leak_exception_text(
     assert out["reason"] in {"api_unreachable", "storage_read_failed"}
 
 
+def test_validate_session_three_state_preserves_cookie_on_upstream_5xx(
+    monkeypatch, tmp_storage
+):
+    cookies_file = _cookies_file(tmp_storage)
+    with open(cookies_file, "w", encoding="utf-8") as f:
+        json.dump({"MUSIC_U": "x"}, f)
+
+    monkeypatch.setattr(
+        auth.apis.login,
+        "GetCurrentLoginStatus",
+        lambda: {"code": 503, "message": "service unavailable"},
+    )
+
+    assert auth.validate_session_three_state() == {
+        "state": "temporarily_unavailable",
+        "reason": "api_unreachable",
+    }
+
+
 def test_check_login_atomicity_cancel_after_803_cannot_run(monkeypatch, tmp_storage):
     """cancel_login must not be able to interleave with check_login once
     the 803 lock is held. We simulate by making cancel_login a no-op
