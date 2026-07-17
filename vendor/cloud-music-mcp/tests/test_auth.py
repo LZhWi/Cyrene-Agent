@@ -302,3 +302,46 @@ def test_daily_recommend_tool_returns_structured_error(monkeypatch):
             "message": "upstream unavailable",
         },
     }
+
+
+def test_daily_recommend_uses_the_cyrene_runtime_cookie(monkeypatch, tmp_storage):
+    """All NetEase APIs must use the same runtime Cookie/Session as
+    Cyrene startup validation, even when the legacy package cookie file
+    does not exist."""
+    from cloud_music_mcp import api
+
+    with open(_cookies_file(tmp_storage), "w", encoding="utf-8") as f:
+        json.dump({"MUSIC_U": "shared-runtime-cookie", "__csrf": "csrf"}, f)
+    auth.GetCurrentSession().cookies.clear()
+
+    monkeypatch.setattr(
+        api.apis,
+        "WeapiCryptoRequest",
+        lambda _fn: lambda: {"code": 200, "recommend": []},
+    )
+
+    assert api.get_daily_recommendations() == {"success": True, "songs": []}
+    assert auth.GetCurrentSession().cookies.get("MUSIC_U") == "shared-runtime-cookie"
+
+
+def test_anonymous_search_does_not_depend_on_legacy_cookie_loader(monkeypatch):
+    from cloud_music_mcp import api
+
+    monkeypatch.setattr(
+        api.apis.cloudsearch,
+        "GetSearchResult",
+        lambda keyword, stype, limit: {
+            "code": 200,
+            "result": {
+                "songs": [
+                    {"id": 1, "name": "左转灯", "ar": [{"name": "派伟俊"}]}
+                ]
+            },
+        },
+    )
+
+    assert api.search("左转灯", category="song") == {
+        "success": True,
+        "category": "song",
+        "items": [{"id": 1, "name": "左转灯", "artist": "派伟俊"}],
+    }

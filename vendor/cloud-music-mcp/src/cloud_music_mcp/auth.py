@@ -163,6 +163,30 @@ def _write_session_cookies(cookies: dict) -> None:
     _atomic_write_json(target, cookies)
 
 
+def ensure_runtime_session() -> bool:
+    """Hydrate the one shared pyncm Session from Cyrene runtime cookies.
+
+    Login-aware NetEase APIs call this instead of the legacy package-local
+    ``load_session`` path. It performs no network request; the API call itself
+    remains authoritative for expired credentials.
+    """
+    session = GetCurrentSession()
+    current = session.cookies.get_dict()
+    if current.get("MUSIC_U"):
+        return True
+
+    cookies_path = os.path.join(_storage_dir(), "cookies.json")
+    try:
+        with open(cookies_path, "r", encoding="utf-8") as f:
+            cookies = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return False
+    if not isinstance(cookies, dict) or not cookies.get("MUSIC_U"):
+        return False
+    session.cookies.update(cookies)
+    return True
+
+
 def _sanitize(value: str) -> str:
     """Sanitize log lines: redact cookies, MUSIC_U, CSRF."""
     import re
