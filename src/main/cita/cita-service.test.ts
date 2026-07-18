@@ -75,6 +75,20 @@ describe("CitaService", () => {
     expect(understandTurn).toHaveBeenCalledTimes(1);
   });
 
+  it("emits a readable prepare and result trace", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const service = createService({ understandTurn: vi.fn(async () => validUnderstanding) });
+      await service.prepareTurn(turnInput());
+      const lines = log.mock.calls.map((call) => call.join(" ")).join("\n");
+
+      expect(lines).toContain("[CITA/Trace] prepare conversation=conversation-a");
+      expect(lines).toContain("status=accepted dialogueAct=inform rewrite=unchanged refs=[]");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("degrades without blocking when remote understanding fails", async () => {
     const service = createService({
       understandTurn: vi.fn(async () => { throw new Error("timeout"); }),

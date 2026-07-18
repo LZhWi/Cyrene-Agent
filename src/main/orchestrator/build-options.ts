@@ -333,8 +333,11 @@ export async function buildAgentRunOptions(
         recentDialogue,
       });
       citaContextBlock = prepared.contextBlock;
-    } catch (err) {
-      console.warn("[CITA] prepare turn failed:", err);
+      console.log(
+        `[CITA/Trace] injection conversation=${conversationId} tool=${citaContextBlock.length > 0} soul=${citaContextBlock.length > 0} blockChars=${citaContextBlock.length}`,
+      );
+    } catch {
+      console.warn(`[CITA/Trace] injection conversation=${conversationId} tool=false soul=false reason=prepare_failed`);
     }
   }
 

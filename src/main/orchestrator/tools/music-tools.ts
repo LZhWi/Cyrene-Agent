@@ -127,6 +127,9 @@ function issueSelectionContext(
       ...(track.album ? { album: track.album } : {}),
     };
   });
+  console.log(
+    `[MusicContext/Trace] projected conversation=${set.conversationId} source=${set.source} setRef=${setRef} candidates=${candidates.length}`,
+  );
   return { setRef, source: set.source, candidates };
 }
 
@@ -140,11 +143,17 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
   ): Promise<{ presented: boolean }> => {
     await service.presentTracks({ setId, conversationId, trackIds, reasons });
     const set = service.getSelectionSet(setId, conversationId);
-    if (!set || !hooks.sendCard) return { presented: false };
+    if (!set || !hooks.sendCard) {
+      console.log(`[MusicContext/Trace] presentation conversation=${conversationId} delivered=false reason=no_recipient candidates=${candidateRefs.length}`);
+      return { presented: false };
+    }
     const byId = new Map(set.tracks.map((track) => [track.id, track]));
     const displayed = trackIds.map((id) => byId.get(id)).filter((track): track is MusicTrack => Boolean(track));
     const delivered = hooks.sendCard({ setId: set.setId, source: set.source, tracks: displayed });
-    if (!delivered) return { presented: false };
+    if (!delivered) {
+      console.log(`[MusicContext/Trace] presentation conversation=${conversationId} delivered=false reason=recipient_unavailable candidates=${candidateRefs.length}`);
+      return { presented: false };
+    }
     service.markTracksPresented(setId, conversationId, trackIds);
     publishEvent(hooks, {
       type: "context_presented",
@@ -154,6 +163,9 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       source: "music-tools",
       contextRefs: candidateRefs,
     });
+    console.log(
+      `[MusicContext/Trace] presentation conversation=${conversationId} delivered=true candidates=${candidateRefs.length} refs=[${candidateRefs.join(",")}]`,
+    );
     return { presented: true };
   };
 
@@ -272,8 +284,11 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       needsContext: true,
       execute: async (args, ctx) => {
         const conversationId = conversationIdOf(ctx);
-        const payload = refsOf(ctx, hooks).resolve<MusicCandidateRefPayload>(String(args.candidateRef ?? ""), conversationId);
+        const candidateRef = String(args.candidateRef ?? "");
+        console.log(`[MusicContext/Trace] playback-resolve conversation=${conversationId} ref=${candidateRef || "(empty)"}`);
+        const payload = refsOf(ctx, hooks).resolve<MusicCandidateRefPayload>(candidateRef, conversationId);
         if (payload.conversationId !== conversationId) throw new Error("E_CONTEXT_REF_CONVERSATION_MISMATCH");
+        console.log(`[MusicContext/Trace] playback-resolved conversation=${conversationId} ref=${candidateRef}`);
         const dispatch = await service.playTrack({ ...payload, conversationId, runId: ctx?.runId });
         return JSON.stringify({ kind: "playback", dispatch });
       },

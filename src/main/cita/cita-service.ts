@@ -63,10 +63,18 @@ export class CitaService {
 
   async prepareTurn(input: CitaPrepareTurnInput, signal?: AbortSignal): Promise<CitaPrepareTurnResult> {
     const settings = this.getSettings();
-    if (!settings.enabled) return { contextBlock: "" };
+    if (!settings.enabled) {
+      console.log(`[CITA/Trace] bypass conversation=${input.conversationId} reason=disabled`);
+      return { contextBlock: "" };
+    }
 
     const state = this.store.snapshot(input.conversationId);
+    const recentEvents = this.store.recentEvents(input.conversationId);
+    console.log(
+      `[CITA/Trace] prepare conversation=${input.conversationId} turn=${input.turnId} revision=${state.revision} contexts=${state.contexts.length} events=${recentEvents.length} queryChars=${input.originalQuery.length}`,
+    );
     if (settings.semanticEngine === "local") {
+      console.log(`[CITA/Trace] unavailable conversation=${input.conversationId} reason=local_engine_deferred`);
       return this.buildUnavailablePackage(input, state.revision);
     }
 
@@ -74,7 +82,7 @@ export class CitaService {
       ...input,
       stateRevision: state.revision,
       availableContexts: state.contexts,
-      recentEvents: this.store.recentEvents(input.conversationId),
+      recentEvents,
     };
 
     try {
@@ -92,12 +100,14 @@ export class CitaService {
         validation.status === "accepted" ? "ready" : "degraded",
         validation.status === "degraded" ? validation.reasons : [],
       );
+      const contextBlock = buildCitaContextBlock(contextPackage);
       console.log(
-        `[CITA] understandTurn status=${validation.status} dialogueAct=${validation.understanding.dialogueAct.type} refs=${validation.understanding.resolvedReferences.length}`,
+        `[CITA/Trace] result conversation=${input.conversationId} status=${validation.status} dialogueAct=${validation.understanding.dialogueAct.type} rewrite=${validation.understanding.rewriteStatus} refs=${this.formatRefs(validation.understanding.resolvedReferences.map((reference) => reference.targetRef))} focused=${validation.understanding.focusedEntityRefs.length} blockChars=${contextBlock.length}`,
       );
-      return { contextPackage, contextBlock: buildCitaContextBlock(contextPackage) };
-    } catch {
-      console.warn("[CITA] understandTurn status=unavailable");
+      return { contextPackage, contextBlock };
+    } catch (error) {
+      const reason = error instanceof Error ? error.name : "unknown_error";
+      console.warn(`[CITA/Trace] unavailable conversation=${input.conversationId} reason=${reason}`);
       return this.buildUnavailablePackage(input, state.revision);
     }
   }
@@ -150,5 +160,11 @@ export class CitaService {
       semanticStatus,
       stateRevision,
     };
+  }
+
+  private formatRefs(refs: string[]): string {
+    if (refs.length === 0) return "[]";
+    const visible = refs.slice(0, 5);
+    return `[${visible.join(",")}${refs.length > visible.length ? `,+${refs.length - visible.length}` : ""}]`;
   }
 }
