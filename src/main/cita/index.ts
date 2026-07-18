@@ -5,3 +5,5 @@ export { reduceStructuralEvent } from "./structural-reducer";
 export type { CitaSemanticEngine, SemanticGenerateRequest, SemanticTextGenerator } from "./semantic-engine";
 export { RemoteSemanticEngine } from "./remote-semantic-engine";
 export { validateUnderstanding } from "./understanding-validator";
+export { buildCitaContextBlock } from "./context-package";
+export { CitaService } from "./cita-service";
