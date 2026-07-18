@@ -22,6 +22,7 @@ export interface ModelVisibleContext {
   label: string;
   attributes?: Record<string, string | string[]>;
   position?: number;
+  presented?: boolean;
   lifecycle: "active" | "expired";
   expiresAt?: number;
   source: "tool_result" | "ui_event" | "runtime_event";
