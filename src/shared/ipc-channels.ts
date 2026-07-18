@@ -74,6 +74,8 @@ export const IPC = {
   SETTINGS_SET_PET_ALWAYS_ON_TOP: "settings:set-pet-always-on-top",
   SETTINGS_SET_PET_VISIBLE: "settings:set-pet-visible",
   SETTINGS_SET_PET_ZOOM: "settings:set-pet-zoom",
+  // debugging
+  SETTINGS_OPEN_CHROME_GPU: "settings:open-chrome-gpu",
   // main → pet window：推送当前 zoom 因子，渲染进程据此重算 scale
   PET_ZOOM: "pet:zoom",
   SETTINGS_PREVIEW_RUNTIME_SYNC: "settings:preview-runtime-sync",

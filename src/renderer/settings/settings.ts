@@ -303,6 +303,7 @@ interface GeneralSettings {
   petAlwaysOnTop: boolean;
   petVisible: boolean;
   petZoom: number;
+  disableGpuElectron?: boolean;
   sidebarVisible: boolean;
   tasksVisible: boolean;
   launchAtLogin: boolean;
@@ -380,6 +381,7 @@ interface SettingsApi {
   closeSidebar: () => void;
   openTasks: () => void;
   closeTasks: () => void;
+  openChromeGpu: () => void;
   setPetAlwaysOnTop: (value: boolean) => void;
   setPetVisible: (value: boolean) => void;
   setPetZoom: (value: number) => void;
@@ -560,6 +562,7 @@ if (!window.settings) {
     closeSidebar: () => {},
     openTasks: () => {},
     closeTasks: () => {},
+    openChromeGpu: () => {},
     setPetAlwaysOnTop: () => {},
     setPetVisible: () => {},
     setPetZoom: () => {},
@@ -703,6 +706,8 @@ const mobileMessageSegmentationSelect = document.getElementById("mobile-message-
 const proactiveChatSelect = document.getElementById("proactive-chat-select") as HTMLElement;
 const proactiveDeliveryRow = document.getElementById("proactive-delivery-row") as HTMLElement;
 const proactiveDeliverySelect = document.getElementById("proactive-delivery-select") as HTMLElement;
+const openChromeGpu = document.getElementById("open-chrome-gpu") as HTMLElement;
+const disableGpuInput = document.getElementById("disable-gpu-electron") as HTMLInputElement;
 const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
 const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputElement;
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
@@ -1179,6 +1184,7 @@ async function loadGeneralSettings(): Promise<void> {
     petVisibleInput.checked = cfg.petVisible;
     petZoomInput.value = String(cfg.petZoom ?? 1);
     petZoomVal.textContent = Math.round((cfg.petZoom ?? 1) * 100) + "%";
+    disableGpuInput.checked = cfg.disableGpuElectron ?? false;
     sidebarVisibleInput.checked = cfg.sidebarVisible ?? true;
     tasksVisibleInput.checked = cfg.tasksVisible ?? true;
     launchAtLoginInput.checked = cfg.launchAtLogin;
@@ -1229,6 +1235,14 @@ stickerSizeSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((
 stickerThresholdInput.addEventListener("input", () => {
   stickerThresholdVal.textContent = parseFloat(stickerThresholdInput.value).toFixed(2);
   setCyreneSaveStatus("有未保存的更改");
+});
+
+openChromeGpu.addEventListener("click", () => {
+  window.settings?.openChromeGpu();
+});
+
+disableGpuInput.addEventListener("change", () => {
+  void window.settings?.saveGeneral({ disableGpuElectron: disableGpuInput.checked });
 });
 
 sidebarVisibleInput.addEventListener("change", () => {
@@ -2226,6 +2240,7 @@ generalForm.addEventListener("submit", async (e) => {
       musicVolume: Number(musicVolumeInput.value),
       soundEnabled: soundEnabledInput.checked,
       soundVolume: Number(soundVolumeInput.value),
+      disableGpuElectron: disableGpuInput.checked,
       sidebarVisible: sidebarVisibleInput.checked,
       tasksVisible: tasksVisibleInput.checked,
       launchAtLogin: launchAtLoginInput.checked,

@@ -481,6 +481,7 @@ interface GeneralSettings {
   petWindowX?: number;
   /** 桌宠窗口 Y 坐标，未保存时为 undefined */
   petWindowY?: number;
+  disableGpuElectron?: boolean;
   sidebarVisible: boolean;
   tasksVisible: boolean;
   launchAtLogin: boolean;
@@ -1131,6 +1132,7 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
       ? Math.round(input.petWindowX) : undefined,
     petWindowY: typeof input?.petWindowY === "number" && isFinite(input.petWindowY)
       ? Math.round(input.petWindowY) : undefined,
+    disableGpuElectron: input?.disableGpuElectron,
     sidebarVisible: windowVisibility.sidebarVisible,
     tasksVisible: windowVisibility.tasksVisible,
     launchAtLogin: Boolean(input?.launchAtLogin),
@@ -3774,12 +3776,22 @@ ipcMain.handle(IPC.EMBEDDING_DELETE, async (_event, payload: unknown) => {
   }
 });
 
+ipcMain.on(IPC.SETTINGS_OPEN_CHROME_GPU, async () => {
+  const win = new BrowserWindow({ width: 1024, height: 768 });
+  win.loadURL("chrome://gpu");
+  win.show();
+});
+
 // 注册本地用户资源协议（表情包图片与用户导入的字体）
 // 必须在 app.ready 之前调用
 protocol.registerSchemesAsPrivileged([
   { scheme: "local-sticker", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
   { scheme: "local-font", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
 ]);
+
+if (loadGeneralSettings().disableGpuElectron) {
+  app.commandLine.appendSwitch("disable-gpu");
+}
 
 app.whenReady().then(async () => {
   // 注册 local-sticker:// 协议处理器：将请求映射到 userData/stickers/ 下的文件
