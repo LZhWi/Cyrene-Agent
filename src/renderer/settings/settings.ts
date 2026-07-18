@@ -374,6 +374,8 @@ interface SettingsApi {
   saveConfig: (config: Partial<ModelSettings>) => Promise<ModelSettings>;
   getGeneral: () => Promise<GeneralSettings>;
   saveGeneral: (config: Partial<GeneralSettings>) => Promise<GeneralSettings>;
+  getTimeoutSettings: () => Promise<TimeoutSettings>;
+  saveTimeoutSettings: (config: Partial<TimeoutSettings>) => Promise<TimeoutSettings>;
   pickUiFont: () => Promise<string | null>;
   importUiFont: (sourcePath: string) => Promise<UiFont>;
   resetUiFont: () => Promise<UiFont>;
@@ -576,6 +578,8 @@ if (!window.settings) {
     addMcpServer: async () => ({ ok: false, error: "settings api unavailable" }),
     removeMcpServer: async () => ({ ok: false, error: "settings api unavailable" }),
     listMcpServers: async () => [],
+    getTimeoutSettings: async () => DEFAULT_TIMEOUT_SETTINGS,
+    saveTimeoutSettings: async c => (c as TimeoutSettings),
   };
 }
 
@@ -601,6 +605,7 @@ const bgmAudio = new Audio("/audio/bgm.mp3");
 bgmAudio.preload = "auto";
 bgmAudio.loop = true;
 const apiForm = document.getElementById("api-form") as HTMLFormElement;
+const apiTimeoutForm = document.getElementById("api-timeout-form") as HTMLFormElement;
 const appearanceForm = document.getElementById("appearance-form") as HTMLFormElement;
 const generalForm = document.getElementById("general-form") as HTMLFormElement;
 const preferencesForm = document.getElementById("preferences-form") as HTMLFormElement;
@@ -619,6 +624,7 @@ const placeholderCopy = document.getElementById("placeholder-copy") as HTMLEleme
 const saveStatus = document.getElementById("save-status") as HTMLElement;
 const appearanceSaveStatus = document.getElementById("appearance-save-status") as HTMLElement;
 const generalSaveStatus = document.getElementById("general-save-status") as HTMLElement;
+const timeoutSaveStatus = document.getElementById("timeout-save-status") as HTMLElement;
 const preferencesSaveStatus = document.getElementById("preferences-save-status") as HTMLElement;
 const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLElement;
 
@@ -715,6 +721,18 @@ const openStickerManagerBtn = document.getElementById("open-sticker-manager-btn"
 const addStickerBtn = document.getElementById("add-sticker-btn") as HTMLButtonElement;
 const stickerThresholdInput = document.getElementById("sticker-threshold") as HTMLInputElement;
 const stickerThresholdVal = document.getElementById("sticker-threshold-val") as HTMLElement;
+const timeoutChatRequestInput = document.getElementById("timeout-chat-request") as HTMLInputElement;
+const timeoutChatRequestReset = document.getElementById("timeout-chat-request-reset-btn") as HTMLButtonElement;
+const timeoutPerRoundInput = document.getElementById("timeout-per-round") as HTMLInputElement;
+const timeoutPerRoundReset = document.getElementById("timeout-per-round-reset-btn") as HTMLButtonElement;
+const timeoutSummaryInput = document.getElementById("timeout-summary") as HTMLInputElement;
+const timeoutSummaryReset = document.getElementById("timeout-summary-reset-btn") as HTMLButtonElement;
+const timeoutVisionInput = document.getElementById("timeout-vision") as HTMLInputElement;
+const timeoutVisionReset = document.getElementById("timeout-vision-reset-btn") as HTMLButtonElement;
+const timeoutUserChoiceInput = document.getElementById("timeout-user-choice") as HTMLInputElement;
+const timeoutUserChoiceReset = document.getElementById("timeout-user-choice-reset-btn") as HTMLButtonElement;
+const timeoutTestInput = document.getElementById("timeout-test") as HTMLInputElement;
+const timeoutTestReset = document.getElementById("timeout-test-reset-btn") as HTMLButtonElement;
 
 const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }> = {
   memory: { emoji: "🧠", title: "记忆", hint: "管理长期记忆与画像" },
@@ -728,6 +746,7 @@ const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }>
   appearance: { emoji: "🎨", title: "外观设置", hint: "调整窗口布局、界面主题与昔涟桌宠" },
   general: { emoji: "⚙️", title: "通用设置", hint: "管理窗口、音频和系统行为" },
   api: { emoji: "🔑", title: "API 设置", hint: "选择预设后只需要填写 API Key。" },
+  "api-timeout": { emoji: "⌛", title: "API 超时设置", hint: "配置 API 超时时间" },
   cyrene: { emoji: "🌸", title: "昔涟设置", hint: "管理 Agent 行为、记忆、RAG 与权限" },
   tts: { emoji: "🎙️", title: "TTS 设置", hint: "语音合成与朗读偏好" },
   asr: { emoji: "🎧", title: "ASR 设置", hint: "语音识别与通话配置" },
@@ -924,6 +943,12 @@ function setGeneralSaveStatus(text: string, cls?: string): void {
   generalSaveStatus.textContent = text;
   generalSaveStatus.className = "save-status";
   if (cls) generalSaveStatus.classList.add(cls);
+}
+
+function setTimeoutSaveStatus(text: string, cls?: string): void {
+  timeoutSaveStatus.textContent = text;
+  timeoutSaveStatus.className = "save-status";
+  if (cls) timeoutSaveStatus.classList.add(cls);
 }
 
 function fillPresetOptions(): void {
@@ -1210,6 +1235,84 @@ async function loadGeneralSettings(): Promise<void> {
     setGeneralSaveStatus("读取设置失败", "is-error");
   }
 }
+
+async function loadTimeoutSettings() {
+  try {
+    const cfg = await window.settings!.getTimeoutSettings();
+    timeoutChatRequestInput.value = String(cfg.chatRequestTimeout);
+    timeoutPerRoundInput.value = String(cfg.perRoundTimeout);
+    timeoutSummaryInput.value = String(cfg.forceSummaryTimeout);
+    timeoutVisionInput.value = String(cfg.visionTimeout);
+    timeoutUserChoiceInput.value = String(cfg.userChoiceTimeout);
+    timeoutTestInput.value = String(cfg.testTimeout);
+    setTimeoutSaveStatus("此页需要保存才能生效");
+  } catch {
+    setTimeoutSaveStatus("读取偏好失败", "is-error");
+  }
+}
+
+function parsePositiveIntOrThrow(input: string, th: any) {
+  if (!/^[0-9]+$/.test(input)){
+    throw th;
+  }
+  if (isNaN(input as any)){
+    throw th;
+  }
+  const result = parseInt(input);
+  if (Number.isNaN(result) || result <= 0) {
+    throw th;
+  }
+  return result;
+}
+
+async function saveTimeoutSettings(saveTestTimeout: boolean) {
+  let settings: Partial<TimeoutSettings>;
+  try {
+    if (!saveTestTimeout) {
+      settings = {
+        perRoundTimeout: parsePositiveIntOrThrow(timeoutPerRoundInput.value, "工具阶段单次 API 超时"),
+        forceSummaryTimeout: parsePositiveIntOrThrow(timeoutSummaryInput.value, "总结阶段单次 API 超时"),
+        chatRequestTimeout: parsePositiveIntOrThrow(timeoutChatRequestInput.value, "单次回复总时间限制"),
+        visionTimeout: parsePositiveIntOrThrow(timeoutVisionInput.value, "视觉模型单次 API 超时"),
+        userChoiceTimeout: parsePositiveIntOrThrow(timeoutUserChoiceInput.value, "工具请求确认时间限制"),
+      };
+    } else {
+      settings = {
+        testTimeout: parsePositiveIntOrThrow(timeoutTestInput.value, "测试超时"),
+      };
+    }
+  } catch (e) {
+    if (saveTestTimeout) {
+      setSaveStatus("无效输入：" + e, "is-error");
+    } else {
+      setTimeoutSaveStatus("无效输入：" + e, "is-error");
+    }
+    return false;
+  }
+  try {
+    await window.settings!.saveTimeoutSettings(settings);
+    if (saveTestTimeout) {
+      setSaveStatus("已保存", "is-ok");
+    } else {
+      setTimeoutSaveStatus("已保存", "is-ok");
+    }
+    return true;
+  } catch {
+    if (saveTestTimeout) {
+      setSaveStatus("保存失败", "is-error");
+    } else {
+      setTimeoutSaveStatus("保存失败", "is-error");
+    }
+  }
+  return false;
+}
+
+timeoutTestReset.addEventListener("click", () => { timeoutTestInput.value = "15000" });
+timeoutChatRequestReset.addEventListener("click", () => { timeoutChatRequestInput.value = String(DEFAULT_CHAT_REQUEST_TIMEOUT_MS) });
+timeoutPerRoundReset.addEventListener("click", () => { timeoutPerRoundInput.value = String(DEFAULT_PER_ROUND_TIMEOUT_MS) });
+timeoutSummaryReset.addEventListener("click", () => { timeoutSummaryInput.value = String(DEFAULT_FORCE_SUMMARY_TIMEOUT_MS) });
+timeoutVisionReset.addEventListener("click", () => { timeoutVisionInput.value = String(DEFAULT_VISION_TIMEOUT_MS) });
+timeoutUserChoiceReset.addEventListener("click", () => { timeoutUserChoiceInput.value = "60000" });
 
 runtimeSyncSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
   button.addEventListener("click", () => {
@@ -2029,6 +2132,9 @@ if (testConnectionBtn) {
     const model = getCurrentModelValue().trim();
     const apiKey = apiKeyInput.value;
     if (!model) { setSaveStatus("请先选择/填写模型再测试", "is-error"); return; }
+    if (!await saveTimeoutSettings(true)) {
+      return;
+    }
     setSaveStatus("测试连接中…");
     testConnectionBtn.disabled = true;
     try {
@@ -2212,6 +2318,12 @@ async function renderSchedulerList(): Promise<void> {
   }
 }
 
+apiTimeoutForm.addEventListener("submit", (e) => {
+  e.preventDefault();
+  setAppearanceSaveStatus("保存中…");
+  saveTimeoutSettings(false);
+});
+
 appearanceForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   setAppearanceSaveStatus("保存中…");
@@ -2265,6 +2377,9 @@ apiForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   setSaveStatus("保存中…");
   try {
+    if (!await saveTimeoutSettings(true)) {
+      return;
+    }
     // 保存前把当前输入快照进 perProvider 缓存（main 进程也会做一次，但渲染端先做一遍，
     // 是为了下一次切厂商再切回来不依赖磁盘往返）
     captureActiveProviderProfile();
@@ -2460,6 +2575,7 @@ function switchSection(section: string): void {
   sectionHint.textContent = label.hint;
 
   const isApi = section === "api";
+  const isApiTimeout = section === "api-timeout";
   const isAppearance = section === "appearance";
   const isGeneral = section === "general";
   const isPreferences = section === "preferences";
@@ -2478,6 +2594,7 @@ function switchSection(section: string): void {
   const isAsr = section === "asr";
   const isMusic = section === "music";
   apiForm.classList.toggle("is-hidden", !isApi);
+  apiTimeoutForm.classList.toggle("is-hidden", !isApiTimeout);
   appearanceForm.classList.toggle("is-hidden", !isAppearance);
   generalForm.classList.toggle("is-hidden", !isGeneral);
   preferencesForm.classList.toggle("is-hidden", !isPreferences);
@@ -2515,11 +2632,12 @@ function switchSection(section: string): void {
   else disposeMusicPanel();
   placeholderPanel.classList.toggle(
     "is-hidden",
-    isApi || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr || isMusic,
+    isApi || isApiTimeout || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr || isMusic,
   );
 
   if (
     !isApi &&
+    !isApiTimeout &&
     !isAppearance &&
     !isGeneral &&
     !isPreferences &&
@@ -2663,6 +2781,7 @@ function initGameBotPluginCard(): void {
 initGameBotPluginCard();
 void loadConfig();
 void loadGeneralSettings();
+void loadTimeoutSettings();
 window.settings?.onChannelsStatusChanged((status) => {
   renderProactiveDeliveryAvailability(status as Record<string, { phase?: string }>);
 });
@@ -4621,6 +4740,7 @@ window.chatStore?.onActiveSessionChanged((sessionId) => {
    ============================================================ */
 
 import { Chart, registerables, type ChartConfiguration } from "chart.js";
+import { DEFAULT_CHAT_REQUEST_TIMEOUT_MS, DEFAULT_FORCE_SUMMARY_TIMEOUT_MS, DEFAULT_PER_ROUND_TIMEOUT_MS, DEFAULT_TIMEOUT_SETTINGS, DEFAULT_VISION_TIMEOUT_MS, TimeoutSettings } from "../../shared/timeout-types";
 
 Chart.register(...registerables);
 

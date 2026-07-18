@@ -7,6 +7,7 @@ import { app } from "electron";
 import * as fs from "fs";
 import * as path from "path";
 import { IPC } from "../shared/ipc-channels";
+import { getTimeoutSettings } from "./timeout-manager";
 
 const LOG_PREFIX = "[Permission]";
 
@@ -130,11 +131,12 @@ export interface ApprovalRequest {
 export function requestApproval(request: Omit<ApprovalRequest, "id">): Promise<boolean> {
   return new Promise<boolean>((resolve, reject) => {
     const id = "approve-" + (++approvalCounter) + "-" + Date.now();
+    const timeout = getTimeoutSettings().userChoiceTimeout;
     const timer = setTimeout(() => {
       pendingApprovals.delete(id);
-      console.warn(LOG_PREFIX, "审批超时（60s 未响应），自动拒绝:", request.toolId);
+      console.warn(LOG_PREFIX, `审批超时（${timeout}ms 未响应），自动拒绝:`, request.toolId);
       resolve(false);
-    }, 60_000);
+    }, timeout);
     pendingApprovals.set(id, { resolve, reject, timer });
 
     const payload: ApprovalRequest = { id, ...request };

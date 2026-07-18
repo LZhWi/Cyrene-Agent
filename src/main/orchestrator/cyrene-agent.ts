@@ -24,6 +24,7 @@ import {
   type TwoPhaseEvent,
   type TwoPhaseFcResult,
 } from "./two-phase-fc-loop";
+import { getTimeoutSettings } from "../timeout-manager";
 
 export interface AgentLoopSettings {
   provider: string;
@@ -176,6 +177,7 @@ export class CyreneAgent extends AbstractAgent {
           subscriber.next({ type: EventType.RUN_STARTED, threadId, runId });
 
           const adapter = getAdapterForConfig(options.settings);
+          const timeoutSettings = getTimeoutSettings();
 
           const result: TwoPhaseFcResult = await runTwoPhaseFcLoop({
             settings: options.settings,
@@ -186,6 +188,8 @@ export class CyreneAgent extends AbstractAgent {
             toolSystemContent: options.toolSystemContent,
             soulSystemBaseContent: options.soulSystemBaseContent,
             timeoutMs: options.timeoutMs,
+            perRoundTimeoutMs: timeoutSettings.perRoundTimeout,
+            forceSummaryTimeoutMs: timeoutSettings.forceSummaryTimeout,
             imageCaptionFallback: options.imageCaptionFallback,
             executeTool: (tc, runnableToolIds) => executeToolCall(tc, runnableToolIds, {
               userQuery: extractLastUserQuery(options.messages),

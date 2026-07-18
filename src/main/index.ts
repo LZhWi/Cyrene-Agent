@@ -148,6 +148,8 @@ import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive/p
 import { runProactiveModel } from "./proactive/proactive-model";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/proactive-types";
 import { canCommitProactiveMessage } from "./proactive/proactive-policy";
+import { getTimeoutSettings, saveTimeoutSettings } from "./timeout-manager";
+import { TimeoutSettings } from "../shared/timeout-types";
 
 configureDocumentIndexQueue(runDocumentIndexJob);
 
@@ -608,7 +610,7 @@ interface ChatReplyPayload {
 
 const RUNTIME_STATUSES: RuntimeStatus[] = ["陪伴中", "思考中", "工作中", "聆听中", "提醒中", "离线"];
 const RUNTIME_FEELINGS: RuntimeFeeling[] = ["平静", "开心", "温柔", "激动", "撒娇", "担心", "难过", "感动", "害羞"];
-const CHAT_REQUEST_TIMEOUT_MS = 300000; // FC 总预算：20 轮 × 推理模型 ~10-15s 需 300s 余量
+const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 300000; // FC 总预算：20 轮 × 推理模型 ~10-15s 需 300s 余量
 
 /** 桌宠窗口的基础尺寸（zoom=1.0 时）。缩放因子改变窗口与模型尺寸，二者同步。 */
 const PET_WINDOW_BASE_WIDTH = 400;
@@ -2281,7 +2283,7 @@ async function requestModelReply(inputMessages: unknown, styleFile = "01_default
     const fcResult = await runFunctionCallingLoop(
       settings,
       fcMessages,
-      CHAT_REQUEST_TIMEOUT_MS,
+      getTimeoutSettings().chatRequestTimeout,
     );
     chatContent = fcResult.reply;
 
@@ -2297,7 +2299,7 @@ async function requestModelReply(inputMessages: unknown, styleFile = "01_default
       settings,
       fcMessages as Array<{ role: "system" | "user" | "assistant"; content: string }>,
       undefined,
-      CHAT_REQUEST_TIMEOUT_MS,
+      getTimeoutSettings().chatRequestTimeout,
       "主聊天（降级）",
     );
   }
@@ -3346,6 +3348,14 @@ ipcMain.handle(IPC.SETTINGS_GET_CONFIG, () => {
 
 ipcMain.handle(IPC.SETTINGS_GET_GENERAL, () => {
   return loadGeneralSettings();
+});
+
+ipcMain.handle(IPC.SETTINGS_GET_TIMEOUT_SETTINGS, () => {
+  return getTimeoutSettings();
+});
+
+ipcMain.handle(IPC.SETTINGS_SAVE_TIMEOUT_SETTINGS, (_event, settings: Partial<TimeoutSettings>) => {
+  return saveTimeoutSettings(settings);
 });
 
 ipcMain.handle(IPC.UI_THEME_GET, () => {
@@ -4662,7 +4672,7 @@ app.whenReady().then(async () => {
       return {
         settings: { provider: settings.provider, baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey },
         messages: [{ role: "system", content: systemContent }, ...messages],
-        timeoutMs: CHAT_REQUEST_TIMEOUT_MS,
+        timeoutMs: getTimeoutSettings().chatRequestTimeout,
       };
     },
     getChatWebContents: () => (chatWindow && !chatWindow.isDestroyed() ? chatWindow.webContents : null),
@@ -4707,7 +4717,7 @@ app.whenReady().then(async () => {
     logWorldbookInjection,
     normalizeChatMessages: ((raw: ReadonlyArray<unknown>) =>
       normalizeChatMessages(raw as any)) as BuildOptionsDeps["normalizeChatMessages"],
-    chatRequestTimeoutMs: CHAT_REQUEST_TIMEOUT_MS,
+    chatRequestTimeoutMs: getTimeoutSettings().chatRequestTimeout,
     captionImageForFallback: async (filePath: string) => {
       const validated = validateCaptionImagePath(filePath);
       if (!validated.ok) return { ok: false, error: validated.error };
