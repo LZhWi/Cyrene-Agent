@@ -69,7 +69,12 @@ export interface BuildOptionsDeps {
   normalizeChatMessages: (raw: ReadonlyArray<unknown>) => ChatMessage[];
   chatRequestTimeoutMs: number;
   captionImageForFallback?: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
-  buildMusicCompanionContext?: (conversationId: string, userText: string) => string;
+  prepareCitaTurn?: (input: {
+    conversationId: string;
+    turnId: string;
+    originalQuery: string;
+    recentDialogue: Array<{ role: "user" | "assistant"; text: string }>;
+  }) => Promise<{ contextBlock: string }>;
 }
 
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
@@ -157,42 +162,6 @@ function contentToText(content: ChatMessage["content"]): string {
       .join("\n");
   }
   return "";
-}
-
-export function resolveRequiredMusicTool(
-  userText: string,
-  availableToolIds: ReadonlySet<string>,
-): string | undefined {
-  const text = userText.trim();
-  if (!text) return undefined;
-  if (availableToolIds.has("music_get_daily_recommendations") && /(?:网易云)?(?:今日推荐|每日推荐|日推)/.test(text)) {
-    return "music_get_daily_recommendations";
-  }
-  if (!availableToolIds.has("music_search")) return undefined;
-  const explicitSearch = /网易云.{0,12}(?:搜|找)|(?:搜|搜索|找).{0,12}(?:网易云|歌曲?|音乐)/.test(text);
-  const explicitTrackPlayback = /^(?:帮我)?(?:播放|放个|放一下)(?!点音乐)/.test(text);
-  return explicitSearch || explicitTrackPlayback ? "music_search" : undefined;
-}
-
-function resolvesRecentDailyContinuation(
-  userText: string,
-  messages: ReadonlyArray<ChatMessage>,
-): boolean {
-  const continuation = /^(?:登录(?:好|完成|上)了[，,、 ]*(?:你)?(?:查查|查一下|看看|试试)?|(?:好(?:了|的)?[，,、 ]*)?(?:去吧|查吧|看吧|试试吧))?[。！!？? ]*$/.test(userText.trim());
-  if (!continuation) return false;
-  return messages
-    .slice(-6, -1)
-    .some((message) => /(?:网易云)?(?:今日推荐|每日推荐|日推)/.test(contentToText(message.content)));
-}
-
-function extractMusicSearchKeyword(userText: string): string {
-  return userText
-    .trim()
-    .replace(/^.*?网易云(?:音乐)?(?:上|里)?/, "")
-    .replace(/^(?:帮我)?(?:搜一下|搜索一下|找一下|搜|搜索|找|播放|放个|放一下)/, "")
-    .replace(/[《》“”"']/g, "")
-    .replace(/(?:怎么样|可以吗|行吗|好吗|吧|呢|呀)[？?。！!]*$/, "")
-    .trim();
 }
 
 function stripTurnModelContextForSideEffects(text: string): string {
@@ -346,8 +315,28 @@ export async function buildAgentRunOptions(
   const autoInjectedSkillContext = deps.buildAutoInjectedSkillContext(enabledSkills);
   const autoInjectedSoulContext = deps.buildAutoInjectedSoulContext?.(enabledSkills) ?? "";
   const conversationId = input.sessionId || "default";
-  const musicCompanionContext = deps.buildMusicCompanionContext?.(conversationId, latestUserText) ?? "";
   const channelSystem = buildChannelSystem(input.channel);
+
+  let citaContextBlock = "";
+  if (deps.prepareCitaTurn) {
+    try {
+      const recentDialogue = messages
+        .filter((message): message is ChatMessage & { role: "user" | "assistant" } => (
+          message.role === "user" || message.role === "assistant"
+        ))
+        .slice(-12)
+        .map((message) => ({ role: message.role, text: contentToText(message.content) }));
+      const prepared = await deps.prepareCitaTurn({
+        conversationId,
+        turnId: `${conversationId}:${messages.length}`,
+        originalQuery: latestUserText,
+        recentDialogue,
+      });
+      citaContextBlock = prepared.contextBlock;
+    } catch (err) {
+      console.warn("[CITA] prepare turn failed:", err);
+    }
+  }
 
   let toneInjection = "";
   if (deps.sceneEmbeddingIndex) {
@@ -376,22 +365,6 @@ export async function buildAgentRunOptions(
   const runTools = isTalkMode
     ? enabledTools.filter((tool) => String((tool as { id?: unknown }).id ?? "").startsWith("music_"))
     : enabledTools;
-  const availableToolIds = new Set(runTools.map((tool) => String((tool as { id?: unknown }).id ?? "")));
-  const requiredToolName = resolveRequiredMusicTool(
-    latestUserText,
-    availableToolIds,
-  ) ?? (
-    availableToolIds.has("music_get_daily_recommendations")
-      && resolvesRecentDailyContinuation(latestUserText, messages)
-      ? "music_get_daily_recommendations"
-      : undefined
-  );
-  const requiredToolArgs = requiredToolName === "music_get_daily_recommendations"
-    ? {}
-    : requiredToolName === "music_search"
-      ? { keyword: extractMusicSearchKeyword(latestUserText) }
-      : undefined;
-
   // 第一期：保留旧 systemContent 兼容（已不再使用，保留字段是为了 logger 诊断）。
   // 同时新增 toolSystemContent / soulSystemBaseContent 两套。
   const systemContent =
@@ -411,7 +384,7 @@ export async function buildAgentRunOptions(
   const toolSystemContent = deps.buildToolSystemPrompt(runTools)
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
     + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "")
-    + (musicCompanionContext ? "\n\n" + musicCompanionContext : "");
+    + (citaContextBlock ? "\n\n" + citaContextBlock : "");
 
   // Soul 阶段基础 system：人设 + 环境/记忆/关系/附件/渠道（这些是"表达"所需）。
   // 工具结果（role: tool 消息）已在 conversation 中携带，本字段不重复注入；
@@ -445,8 +418,6 @@ export async function buildAgentRunOptions(
       },
       messages: fcMessages,
       conversationId,
-      requiredToolName,
-      requiredToolArgs,
       timeoutMs: deps.chatRequestTimeoutMs,
       toolSystemContent,
       soulSystemBaseContent,

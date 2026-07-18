@@ -75,10 +75,6 @@ export interface TwoPhaseFcOptions {
   messages: ChatMessage[];
   /** 工具列表（含未启用时调度层负责过滤；这里传已过滤的）。 */
   tools: ToolDefinition[];
-  /** 明确外部操作意图需要首轮强制选择的工具。 */
-  requiredToolName?: string;
-  /** 已确定的工具参数；存在时在首轮模型调用前确定性执行。 */
-  requiredToolArgs?: Record<string, unknown>;
   /** 工具阶段使用的 system prompt（仅含工具调度规则 + 自动生成的工具目录）。 */
   toolSystemContent: string;
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。
@@ -325,37 +321,6 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     return true;
   };
 
-  if (options.requiredToolName && options.requiredToolArgs !== undefined && runnableToolIds.has(options.requiredToolName)) {
-    const toolCall: ToolCall = {
-      id: `required-${options.requiredToolName}-${Date.now()}`,
-      name: options.requiredToolName,
-      arguments: JSON.stringify(options.requiredToolArgs),
-    };
-    onEvent?.({ type: "step_started", stepName: "required-tool" });
-    onEvent?.({ type: "tool_call_start", toolCallId: toolCall.id, toolCallName: toolCall.name });
-    const requiredArgsLog = toolCall.name.startsWith("music_")
-      ? toolCall.arguments
-      : `keys=${Object.keys(options.requiredToolArgs).join(",")}`;
-    console.log(LOG_PREFIX, "确定性执行工具:", toolCall.name, requiredArgsLog);
-    let output: string;
-    try {
-      output = await executeTool(toolCall, runnableToolIds);
-    } catch (err) {
-      output = "[工具执行失败] " + (err instanceof Error ? err.message : String(err));
-    }
-    const requiredResultLog = toolCall.name.startsWith("music_")
-      ? truncateToolResult(output).slice(0, 500)
-      : `length=${output.length}`;
-    console.log(LOG_PREFIX, "工具结果:", toolCall.name, requiredResultLog);
-    allToolResults.push({ toolId: toolCall.name, args: options.requiredToolArgs, output });
-    conversation.push({ role: "assistant", toolCalls: [toolCall] });
-    conversation = adapter.appendToolResults(conversation, [{ toolCall, output: truncateToolResult(output) }]);
-    conversation = compressConversation(conversation);
-    onEvent?.({ type: "tool_call_result", toolCallId: toolCall.id, messageId: `${toolCall.id}-result`, content: output });
-    onEvent?.({ type: "tool_call_end", toolCallId: toolCall.id });
-    onEvent?.({ type: "step_finished", stepName: "required-tool" });
-  }
-
   // ── TOOL_PHASE 主循环 ──
   for (let round = 0; round < maxToolRounds; round++) {
     if (signal?.aborted) {
@@ -375,9 +340,6 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
       stream: false,
     };
     if (toolSpecs.length > 0) req = { ...req, tools: toolSpecs };
-    if (round === 0 && options.requiredToolArgs === undefined && options.requiredToolName && runnableToolIds.has(options.requiredToolName)) {
-      req = { ...req, toolChoice: { name: options.requiredToolName } };
-    }
     if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, options.settings);
 
     let data: unknown;

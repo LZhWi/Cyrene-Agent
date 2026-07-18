@@ -114,10 +114,8 @@ import { setAsrConfig } from "./asr/volcano-asr-engine";
 import { setCallWindow, registerCallIpc, setCallSettings, stopCall } from "./call/call-manager";
 import { initSkills, skillRegistry, buildAutoInjectedSkillContext, buildAutoInjectedSoulContext, buildSkillCatalog, parseSlashCommand, setSkillEnabled, listSkillsForUi } from "./skills";
 import {
-  buildMusicCompanionContext,
   isMusicCompanionAvailable,
   loadMusicCompanionHost,
-  recordMusicCompanionPresentation,
 } from "./skills/music-companion-host";
 import { initGameBot } from "./game-bot";
 import { initChannels, shutdownChannels, setChannelsConversationLifecycle } from "./channels/init";
@@ -149,6 +147,7 @@ import { runProactiveModel } from "./proactive/proactive-model";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/proactive-types";
 import { canCommitProactiveMessage } from "./proactive/proactive-policy";
 import { normalizeCitaSettings } from "./cita/settings";
+import { CitaService, ContextStore, RemoteSemanticEngine } from "./cita";
 
 configureDocumentIndexQueue(runDocumentIndexJob);
 
@@ -1769,6 +1768,27 @@ async function callChatCompletions(
 ): Promise<string> {
   return callChatCompletionsStream(settings, messages, temperature, timeoutMs, label, () => {});
 }
+
+const citaService = new CitaService({
+  store: new ContextStore(),
+  engine: new RemoteSemanticEngine(
+    (request) => callChatCompletions(
+      loadModelSettings(),
+      [
+        { role: "system", content: request.systemPrompt },
+        { role: "user", content: request.userPrompt },
+      ],
+      0,
+      6_000,
+      "CITA understandTurn",
+    ),
+    { timeoutMs: 6_000 },
+  ),
+  getSettings: () => normalizeCitaSettings({
+    enabled: loadGeneralSettings().citaEnabled,
+    semanticEngine: loadGeneralSettings().citaSemanticEngine,
+  }),
+});
 
 function loadPromptFile(filename: string): string {
   try {
@@ -4400,7 +4420,6 @@ app.whenReady().then(async () => {
   // Cloud Music MCP wiring (MusicService + IPC + 5 Agent tools + shutdown latch)
   const musicPaths = resolveMusicPaths();
   const musicBootstrap = bootstrapMusicService(musicPaths, {
-    onPresented: recordMusicCompanionPresentation,
     sendCard: (card) => {
       if (chatWindow && !chatWindow.isDestroyed()) {
         chatWindow.webContents.send(IPC.AGUI_EVENT, {
@@ -4726,7 +4745,7 @@ app.whenReady().then(async () => {
         return { ok: false, error: err?.message || String(err) };
       }
     },
-    buildMusicCompanionContext,
+    prepareCitaTurn: (input) => citaService.prepareTurn(input),
   };
   const onRunFinishedDeps: OnRunFinishedDeps = {
     loadModelSettings: () => loadModelSettings(),

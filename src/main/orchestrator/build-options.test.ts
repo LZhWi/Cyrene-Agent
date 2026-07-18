@@ -124,7 +124,7 @@ describe("build-options", () => {
     expect(result.options.toolSystemContent).not.toContain("weather")
   })
 
-  it("requires music_search for an explicit NetEase Cloud search request", async () => {
+  it("does not locally route an explicit NetEase Cloud search request", async () => {
     const deps = createBuildDeps()
     deps.toolRegistry.getEnabled = () => [{ id: "music_search" }]
 
@@ -133,11 +133,11 @@ describe("build-options", () => {
       style: "talk",
     }, deps)
 
-    expect(result.options.requiredToolName).toBe("music_search")
-    expect(result.options.requiredToolArgs).toEqual({ keyword: "左转灯" })
+    expect(result.options).not.toHaveProperty("requiredToolName")
+    expect(result.options).not.toHaveProperty("requiredToolArgs")
   })
 
-  it("requires daily recommendations only for an explicit daily request", async () => {
+  it("does not locally route daily recommendations or infer continuations", async () => {
     const deps = createBuildDeps()
     deps.toolRegistry.getEnabled = () => [
       { id: "music_get_daily_recommendations" },
@@ -153,43 +153,36 @@ describe("build-options", () => {
       style: "talk",
     }, deps)
 
-    expect(daily.options.requiredToolName).toBe("music_get_daily_recommendations")
-    expect(daily.options.requiredToolArgs).toEqual({})
-    expect(generic.options.requiredToolName).toBeUndefined()
+    expect(daily.options).not.toHaveProperty("requiredToolName")
+    expect(generic.options).not.toHaveProperty("requiredToolName")
   })
 
-  it("marks an explicit song playback search as current-run resolution", async () => {
+  it("injects CITA as a separate tool-phase block and preserves the original user message", async () => {
     const deps = createBuildDeps()
-    deps.toolRegistry.getEnabled = () => [{ id: "music_search" }]
+    deps.prepareCitaTurn = vi.fn(async () => ({
+      contextBlock: "[CITA_CONTEXT]\n{\"focusedContexts\":[{\"contextRef\":\"music-candidate-1\"}]}\n[/CITA_CONTEXT]",
+    }))
+    const originalUserMessage = { role: "user", content: "第二首" }
 
     const result = await buildAgentRunOptions({
-      messages: [{ role: "user", content: "播放《稻香》" }],
-      style: "talk",
+      messages: [originalUserMessage],
+      style: "01_default.md",
+      sessionId: "conversation-1",
     }, deps)
 
-    expect(result.options.requiredToolArgs).toEqual({ keyword: "稻香" })
+    expect(deps.prepareCitaTurn).toHaveBeenCalledTimes(1)
+    expect(result.options.conversationId).toBe("conversation-1")
+    expect(result.options.messages.at(-1)).toEqual(originalUserMessage)
+    expect(result.options.toolSystemContent).toContain("[CITA_CONTEXT]")
+    expect(result.options.toolSystemContent).toContain("music-candidate-1")
+    expect(result.options.soulSystemBaseContent).not.toContain("[CITA_CONTEXT]")
+    expect(result.options).not.toHaveProperty("requiredToolName")
+    expect(result.options).not.toHaveProperty("requiredToolArgs")
   })
 
-  it("continues a recent daily recommendation request after the user confirms login", async () => {
+  it("emits no CITA marker when the service is disabled", async () => {
     const deps = createBuildDeps()
-    deps.toolRegistry.getEnabled = () => [{ id: "music_get_daily_recommendations" }]
-
-    const result = await buildAgentRunOptions({
-      messages: [
-        { role: "user", content: "看一下网易云的今日推荐歌单吧" },
-        { role: "assistant", content: "需要登录账号才能看到" },
-        { role: "user", content: "登录好了，你查查" },
-      ],
-      style: "talk",
-    }, deps)
-
-    expect(result.options.requiredToolName).toBe("music_get_daily_recommendations")
-    expect(result.options.requiredToolArgs).toEqual({})
-  })
-
-  it("injects deterministic recent-music selection context only into the tool phase", async () => {
-    const deps = createBuildDeps()
-    deps.buildMusicCompanionContext = vi.fn(() => "[真实候选解析] 第二首 = trackId 102")
+    deps.prepareCitaTurn = vi.fn(async () => ({ contextBlock: "" }))
 
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "第二首" }],
@@ -197,10 +190,7 @@ describe("build-options", () => {
       sessionId: "conversation-1",
     }, deps)
 
-    expect(deps.buildMusicCompanionContext).toHaveBeenCalledWith("conversation-1", "第二首")
-    expect(result.options.conversationId).toBe("conversation-1")
-    expect(result.options.toolSystemContent).toContain("trackId 102")
-    expect(result.options.soulSystemBaseContent).not.toContain("trackId 102")
+    expect(result.options.toolSystemContent).not.toContain("[CITA_CONTEXT]")
   })
 
   it("puts the enabled Skill catalog into the tool phase so invoke_skill can route", async () => {

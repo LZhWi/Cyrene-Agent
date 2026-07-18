@@ -42,10 +42,6 @@ export interface CyreneRunOptions {
   timeoutMs: number;
   /** 可选：本次 run 的工具集合。未传时使用当前所有已启用工具。 */
   tools?: ToolDefinition[];
-  /** 明确意图在首轮必须调用的工具。 */
-  requiredToolName?: string;
-  /** 已能确定的正式工具参数；存在时由调度器先执行，不依赖模型服从 tool_choice。 */
-  requiredToolArgs?: Record<string, unknown>;
   /** 直发图片被主模型接口拒绝时，懒加载 caption fallback 消息并重试。 */
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
   /** 工具阶段使用的 system prompt（仅含工具调度规则 + 自动生成的工具目录）。 */
@@ -184,8 +180,6 @@ export class CyreneAgent extends AbstractAgent {
             adapter,
             messages: options.messages,
             tools: options.tools ?? toolRegistry.getEnabledTools(),
-            requiredToolName: options.requiredToolName,
-            requiredToolArgs: options.requiredToolArgs,
             toolSystemContent: options.toolSystemContent,
             soulSystemBaseContent: options.soulSystemBaseContent,
             timeoutMs: options.timeoutMs,

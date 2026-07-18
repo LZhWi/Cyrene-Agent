@@ -144,8 +144,9 @@ afterEach(() => {
 });
 
 describe("runTwoPhaseFcLoop", () => {
-  it("executes a deterministic required tool call before asking the model", async () => {
+  it("executes only model-authored tool calls", async () => {
     const adapter = new FakeAdapter();
+    adapter.enqueueToolCalls([{ id: "call-1", name: "music_search", arguments: JSON.stringify({ keyword: "左转灯" }) }]);
     adapter.enqueueText("工具阶段结束");
     adapter.enqueueText("已经找到真实结果");
     const executed: ToolCall[] = [];
@@ -153,8 +154,6 @@ describe("runTwoPhaseFcLoop", () => {
     await runTwoPhaseFcLoop({
       ...baseOptions,
       tools: [makeTool("music_search")],
-      requiredToolName: "music_search",
-      requiredToolArgs: { keyword: "左转灯" },
       settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
       adapter,
       executeTool: async (toolCall) => {
@@ -164,24 +163,24 @@ describe("runTwoPhaseFcLoop", () => {
     });
 
     expect(JSON.parse(executed[0].arguments)).toEqual({ keyword: "左转灯" });
-    expect(adapter.requests[0].messages.some((message) => message.role === "tool")).toBe(true);
+    expect(adapter.requests[0].messages.some((message) => message.role === "tool")).toBe(false);
+    expect(adapter.requests[1].messages.some((message) => message.role === "tool")).toBe(true);
     expect(adapter.requests[0].toolChoice).toBeUndefined();
   });
 
-  it("passes an explicit required tool choice only to the first tool-phase request", async () => {
+  it("never forces a tool choice before the model decides", async () => {
     const adapter = new FakeAdapter();
     adapter.enqueueText("模型仍未调用工具");
     adapter.enqueueText("最终回复");
 
     await runTwoPhaseFcLoop({
       ...baseOptions,
-      requiredToolName: "weather",
       settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
       adapter,
       executeTool: async () => "ok",
     });
 
-    expect(adapter.requests[0].toolChoice).toEqual({ name: "weather" });
+    expect(adapter.requests[0].toolChoice).toBeUndefined();
     expect(adapter.requests[1].toolChoice).toBeUndefined();
   });
 
@@ -491,14 +490,13 @@ describe("runTwoPhaseFcLoop", () => {
 
   it("replaces a bracketed textual daily tool call with a truthful card acknowledgement", async () => {
     const adapter = new FakeAdapter();
+    adapter.enqueueToolCalls([{ id: "daily-1", name: "music_get_daily_recommendations", arguments: "{}" }]);
     adapter.enqueueText("");
     adapter.enqueueText("[tool_call]\nmusic_get_daily_recommendations\n[/tool_call]");
 
     const result = await runTwoPhaseFcLoop({
       ...baseOptions,
       tools: [makeTool("music_get_daily_recommendations")],
-      requiredToolName: "music_get_daily_recommendations",
-      requiredToolArgs: {},
       settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
       adapter,
       executeTool: async () => JSON.stringify({
@@ -530,14 +528,17 @@ describe("runTwoPhaseFcLoop", () => {
 
   it("normalizes dispatched playback wording to the only truthful acknowledgement", async () => {
     const adapter = new FakeAdapter();
+    adapter.enqueueToolCalls([{
+      id: "play-1",
+      name: "music_play_track",
+      arguments: JSON.stringify({ provider: "netease-cloud-music", setId: "s1", trackId: "1" }),
+    }]);
     adapter.enqueueText("");
     adapter.enqueueText("已经开始播放了♪");
 
     const result = await runTwoPhaseFcLoop({
       ...baseOptions,
       tools: [makeTool("music_play_track")],
-      requiredToolName: "music_play_track",
-      requiredToolArgs: { provider: "netease-cloud-music", setId: "s1", trackId: "1" },
       settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
       adapter,
       executeTool: async () => JSON.stringify({
