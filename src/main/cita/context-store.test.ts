@@ -42,6 +42,15 @@ describe("ContextStore", () => {
     expect(store.recentEvents("c1").map((item) => item.eventId)).toEqual(["e2", "e3"]);
   });
 
+  it("bounds active context projections per conversation", () => {
+    const store = new ContextStore({ maxContextsPerConversation: 2, now: () => 100 });
+    store.append(event("c1", "e1", "ref-1"));
+    store.append(event("c1", "e2", "ref-2"));
+    store.append(event("c1", "e3", "ref-3"));
+
+    expect(store.snapshot("c1").contexts.map((item) => item.contextRef)).toEqual(["ref-2", "ref-3"]);
+  });
+
   it("marks expired contexts at snapshot time", () => {
     let now = 100;
     const store = new ContextStore({ now: () => now });

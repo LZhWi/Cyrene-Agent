@@ -389,7 +389,7 @@ export async function buildAgentRunOptions(
   // Soul 阶段基础 system：人设 + 环境/记忆/关系/附件/渠道（这些是"表达"所需）。
   // 工具结果（role: tool 消息）已在 conversation 中携带，本字段不重复注入；
   // FC 循环 Soul 阶段执行前会按需动态追加 soulToolResultsSummary。
-  const soulSystemBaseContent =
+  const soulSystemWithoutCita =
     (environmentContext ? environmentContext + "\n\n" : "") +
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
@@ -400,12 +400,19 @@ export async function buildAgentRunOptions(
     (alwaysOnContext ? "\n\n" + alwaysOnContext + "\n\n" : "") +
     (relationshipContext ? "\n\n" + relationshipContext + "\n\n" : "") +
     attachmentContext;
+  const soulSystemBaseContent = soulSystemWithoutCita
+    + (citaContextBlock ? "\n\n" + citaContextBlock : "");
 
   deps.logWorldbookInjection(alwaysOnContext, systemContent);
 
   // 第一期：原始 messages 不再携带 system。FC 循环按阶段动态注入。
   const fcMessages: ChatMessage[] = withDirectImageAttachments(llmMessages as unknown as ChatMessage[], input);
-  const imageCaptionFallback = buildImageCaptionFallbackMessages(toolSystemContent + "\n\n---\n\n" + soulSystemBaseContent, llmMessages as unknown as ChatMessage[], input, deps);
+  const imageCaptionFallback = buildImageCaptionFallbackMessages(
+    toolSystemContent + "\n\n---\n\n" + soulSystemWithoutCita,
+    llmMessages as unknown as ChatMessage[],
+    input,
+    deps,
+  );
 
   return {
     options: {

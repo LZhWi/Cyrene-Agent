@@ -60,7 +60,7 @@ function setup() {
   const hooks = {
     contextRefs: refs,
     ingestContextEvent: (event: Parameters<CitaService["ingest"]>[0]) => cita.ingest(event),
-    sendCard: vi.fn(),
+    sendCard: vi.fn(() => true),
   };
   return { refs, store, engine, cita, service, hooks };
 }

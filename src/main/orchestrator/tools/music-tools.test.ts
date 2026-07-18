@@ -41,7 +41,7 @@ describe("music Agent tools", () => {
     service.getSelectionSet.mockReturnValue(set);
     const contextRefs = registry();
     const ingestContextEvent = vi.fn();
-    const sendCard = vi.fn();
+    const sendCard = vi.fn(() => true);
     const tool = buildMusicTools(service as never, { contextRefs, ingestContextEvent, sendCard })
       .find((candidate) => candidate.id === "music_get_daily_recommendations")!;
 
@@ -94,6 +94,27 @@ describe("music Agent tools", () => {
     await expect(tool.execute({}, { userQuery: "日推", conversationId: "c1", contextRefs }))
       .rejects.toThrow("renderer unavailable");
     expect(service.markTracksPresented).not.toHaveBeenCalled();
+  });
+
+  it("does not mark candidates presented when no card recipient exists", async () => {
+    const service = serviceDouble();
+    const set = selectionSet();
+    service.getDailyRecommendations.mockResolvedValue(set);
+    service.presentTracks.mockResolvedValue({ cardRef: "internal-card" });
+    service.getSelectionSet.mockReturnValue(set);
+    const contextRefs = registry();
+    const ingestContextEvent = vi.fn();
+    const tool = buildMusicTools(service as never, {
+      contextRefs,
+      ingestContextEvent,
+      sendCard: () => false,
+    }).find((candidate) => candidate.id === "music_get_daily_recommendations")!;
+
+    const output = JSON.parse(await tool.execute({}, { userQuery: "日推", conversationId: "c1", contextRefs }));
+
+    expect(output.presentation).toEqual({ presented: false });
+    expect(service.markTracksPresented).not.toHaveBeenCalled();
+    expect(ingestContextEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: "context_presented" }));
   });
 
   it("resolves candidateRef internally before delegating playback", async () => {
@@ -184,7 +205,7 @@ describe("music Agent tools", () => {
       value: { provider: set.provider, setId: "s1", trackId: "101", conversationId: "c1" } });
     const second = contextRefs.issue({ conversationId: "c1", domain: "music", kind: "candidate", expiresAt: 9_000,
       value: { provider: set.provider, setId: "s1", trackId: "102", conversationId: "c1" } });
-    const tool = buildMusicTools(service as never, { contextRefs, sendCard: vi.fn() })
+    const tool = buildMusicTools(service as never, { contextRefs, sendCard: vi.fn(() => true) })
       .find((candidate) => candidate.id === "music_present_tracks")!;
 
     await tool.execute({ candidateRefs: [second, first] }, { userQuery: "展示", conversationId: "c1", contextRefs });

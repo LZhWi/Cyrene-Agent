@@ -6,7 +6,7 @@ import type {
   UnderstandingValidationResult,
 } from "./contracts";
 
-type RefState = "valid" | "unknown" | "cross_conversation" | "expired";
+type RefState = "valid" | "unknown" | "cross_conversation" | "expired" | "unpresented";
 
 function classifyRef(
   ref: ContextRef,
@@ -17,6 +17,7 @@ function classifyRef(
   const context = contexts.get(ref);
   if (!context) return "unknown";
   if (context.conversationId !== conversationId) return "cross_conversation";
+  if (context.kind === "candidate" && context.presented !== true) return "unpresented";
   if (context.lifecycle === "expired" || (context.expiresAt !== undefined && now >= context.expiresAt)) {
     return "expired";
   }

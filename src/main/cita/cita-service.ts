@@ -29,6 +29,16 @@ interface CitaServiceInput {
   now?: () => number;
 }
 
+const SENSITIVE_ATTRIBUTE_KEY = /cookie|authorization|api.?key|secret|token|csrf|music_u/i;
+const SENSITIVE_VALUE = /MUSIC_U=|__csrf=|csrf_token=|Authorization\s*:\s*Bearer\s+/i;
+
+function isSafeProjection(event: ContextEvent): boolean {
+  if (event.type !== "context_upserted") return true;
+  const attributes = event.context.attributes ?? {};
+  if (Object.keys(attributes).some((key) => SENSITIVE_ATTRIBUTE_KEY.test(key))) return false;
+  return !SENSITIVE_VALUE.test(JSON.stringify({ label: event.context.label, attributes }));
+}
+
 export class CitaService {
   private readonly store: ContextStore;
   private readonly engine: CitaSemanticEngine;
@@ -44,6 +54,10 @@ export class CitaService {
 
   ingest(event: ContextEvent): void {
     if (!this.getSettings().enabled) return;
+    if (!isSafeProjection(event)) {
+      console.warn("[CITA] rejected unsafe context projection");
+      return;
+    }
     this.store.append(event);
   }
 
@@ -67,6 +81,7 @@ export class CitaService {
       const candidate = await this.engine.understandTurn(understandingInput, signal);
       const validation = validateUnderstanding(understandingInput, candidate, this.now());
       if (validation.status === "rejected") {
+        console.warn("[CITA] understandTurn status=rejected");
         return this.buildUnavailablePackage(input, state.revision, validation.reasons);
       }
       const contextPackage = this.toContextPackage(
@@ -77,8 +92,12 @@ export class CitaService {
         validation.status === "accepted" ? "ready" : "degraded",
         validation.status === "degraded" ? validation.reasons : [],
       );
+      console.log(
+        `[CITA] understandTurn status=${validation.status} dialogueAct=${validation.understanding.dialogueAct.type} refs=${validation.understanding.resolvedReferences.length}`,
+      );
       return { contextPackage, contextBlock: buildCitaContextBlock(contextPackage) };
     } catch {
+      console.warn("[CITA] understandTurn status=unavailable");
       return this.buildUnavailablePackage(input, state.revision);
     }
   }

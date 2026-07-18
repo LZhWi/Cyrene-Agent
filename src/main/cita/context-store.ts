@@ -3,6 +3,7 @@ import { reduceStructuralEvent } from "./structural-reducer";
 
 interface ContextStoreOptions {
   maxEventsPerConversation?: number;
+  maxContextsPerConversation?: number;
   now?: () => number;
 }
 
@@ -10,15 +11,20 @@ export class ContextStore {
   private readonly states = new Map<string, ContextState>();
   private readonly events = new Map<string, ContextEvent[]>();
   private readonly maxEvents: number;
+  private readonly maxContexts: number;
   private readonly now: () => number;
 
   constructor(options: ContextStoreOptions = {}) {
     this.maxEvents = Math.max(1, options.maxEventsPerConversation ?? 64);
+    this.maxContexts = Math.max(1, options.maxContextsPerConversation ?? 256);
     this.now = options.now ?? Date.now;
   }
 
   append(event: ContextEvent): ContextState {
     const next = reduceStructuralEvent(this.getState(event.conversationId), event);
+    next.contexts = next.contexts
+      .filter((context) => context.expiresAt === undefined || context.expiresAt > this.now())
+      .slice(-this.maxContexts);
     this.states.set(event.conversationId, next);
     const events = [...(this.events.get(event.conversationId) ?? []), event].slice(-this.maxEvents);
     this.events.set(event.conversationId, events);

@@ -4430,7 +4430,9 @@ app.whenReady().then(async () => {
           name: "cyrene.music",
           value: card,
         });
+        return true;
       }
+      return false;
     },
   });
   installShutdownLatch(musicBootstrap);

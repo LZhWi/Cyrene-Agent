@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { CitaService } from "./cita-service";
 import { ContextStore } from "./context-store";
 import type { CitaSemanticEngine } from "./semantic-engine";
-import type { CitaSettings, TurnUnderstanding } from "./contracts";
+import type { CitaSettings, ModelVisibleContext, TurnUnderstanding } from "./contracts";
 
 const validUnderstanding: TurnUnderstanding = {
   dialogueAct: { type: "inform" },
@@ -13,6 +13,12 @@ const validUnderstanding: TurnUnderstanding = {
   rewriteStatus: "unchanged",
   uncertainties: [],
 };
+
+const unsafeProjectionPatches: Array<Partial<ModelVisibleContext>> = [
+  { attributes: { apiKey: "secret-value" } },
+  { attributes: { cookie: "MUSIC_U=secret" } },
+  { label: "Authorization: Bearer secret-value" },
+];
 
 function turnInput(overrides: Partial<Parameters<CitaService["prepareTurn"]>[0]> = {}) {
   return {
@@ -100,5 +106,36 @@ describe("CitaService", () => {
 
     expect(understandTurn).not.toHaveBeenCalled();
     expect(result.contextPackage?.semanticStatus).toBe("unavailable");
+  });
+
+  it.each(unsafeProjectionPatches)("rejects credential-shaped context projections", async (unsafePatch) => {
+    const understandTurn = vi.fn<CitaSemanticEngine["understandTurn"]>(async () => validUnderstanding);
+    const service = createService({ understandTurn });
+    service.ingest({
+      type: "context_upserted",
+      eventId: "unsafe-1",
+      conversationId: "conversation-a",
+      occurredAt: 1_000,
+      source: "test",
+      context: {
+        contextRef: "ctx_unsafe",
+        conversationId: "conversation-a",
+        domain: "test",
+        kind: "candidate",
+        label: "safe",
+        lifecycle: "active",
+        source: "tool_result",
+        ...unsafePatch,
+      },
+    });
+
+    const result = await service.prepareTurn(turnInput());
+    const semanticInput = understandTurn.mock.calls[0]?.[0];
+    expect(semanticInput?.availableContexts).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ contextRef: "ctx_unsafe" }),
+    ]));
+    expect(result.contextBlock).not.toContain("ctx_unsafe");
+    expect(result.contextBlock).not.toContain("secret-value");
+    expect(result.contextBlock).not.toContain("MUSIC_U");
   });
 });

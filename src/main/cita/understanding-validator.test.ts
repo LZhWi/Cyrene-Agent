@@ -12,6 +12,7 @@ function context(overrides: Partial<ModelVisibleContext> = {}): ModelVisibleCont
     kind: "candidate",
     label: "胆小鬼 - 梁咏琪",
     position: 1,
+    presented: true,
     lifecycle: "active",
     expiresAt: now + 500,
     source: "tool_result",
@@ -82,6 +83,20 @@ describe("validateUnderstanding", () => {
     expect(result.status).toBe("degraded");
     if (result.status === "degraded") {
       expect(result.reasons).toContain("expired_ref:music-candidate-1");
+      expect(result.understanding.contextualizedQuery).toBe("第一首吧");
+    }
+  });
+
+  it("rejects candidate references that were never presented to the user", () => {
+    const result = validateUnderstanding(
+      input([context({ presented: false })]),
+      candidate(),
+      now,
+    );
+
+    expect(result.status).toBe("degraded");
+    if (result.status === "degraded") {
+      expect(result.reasons).toContain("unpresented_ref:music-candidate-1");
       expect(result.understanding.contextualizedQuery).toBe("第一首吧");
     }
   });

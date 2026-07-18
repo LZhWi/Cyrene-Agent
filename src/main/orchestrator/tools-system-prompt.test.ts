@@ -20,8 +20,8 @@ describe("tools_system prompt truthfulness fallback", () => {
       "utf8",
     );
 
-    expect(prompt).toContain("已包含 `presentation`");
-    expect(skill).toContain("已包含 `presentation`");
+    expect(prompt).toContain("`presentation.presented` 为 true");
+    expect(skill).toContain("`presentation.presented` 为 true");
     expect(skill).toContain("不要重复");
   });
 });

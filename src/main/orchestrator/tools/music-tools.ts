@@ -18,7 +18,7 @@ export interface MusicToolHooks {
     setId: string;
     source: string;
     tracks: MusicTrack[];
-  }) => void;
+  }) => boolean;
 }
 
 interface SafeMusicContext {
@@ -143,7 +143,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
     if (!set || !hooks.sendCard) return { presented: false };
     const byId = new Map(set.tracks.map((track) => [track.id, track]));
     const displayed = trackIds.map((id) => byId.get(id)).filter((track): track is MusicTrack => Boolean(track));
-    hooks.sendCard({ setId: set.setId, source: set.source, tracks: displayed });
+    const delivered = hooks.sendCard({ setId: set.setId, source: set.source, tracks: displayed });
+    if (!delivered) return { presented: false };
     service.markTracksPresented(setId, conversationId, trackIds);
     publishEvent(hooks, {
       type: "context_presented",

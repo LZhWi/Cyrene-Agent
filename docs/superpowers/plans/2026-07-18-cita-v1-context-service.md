@@ -616,7 +616,7 @@ git commit -m "feat(settings): add optional CITA remote mode"
 
 **Interfaces:**
 - Consumes: `CitaService.prepareTurn()` and `buildCitaContextBlock()`.
-- Produces: normal Agent tool phase with a separate CITA internal block and unchanged messages.
+- Produces: normal Agent tool and Soul phases with the same separate CITA internal block and unchanged messages.
 
 - [ ] **Step 1: Replace legacy expectations with failing integration tests**
 
@@ -626,6 +626,7 @@ Add tests proving:
 expect(result.options.messages.at(-1)).toEqual(originalUserMessage);
 expect(result.options.toolSystemContent).toContain("[CITA_CONTEXT]");
 expect(result.options.toolSystemContent).toContain("music-candidate-1");
+expect(result.options.soulSystemBaseContent).toContain("music-candidate-1");
 expect(result.options).not.toHaveProperty("requiredToolName");
 expect(result.options).not.toHaveProperty("requiredToolArgs");
 ```
@@ -659,7 +660,7 @@ prepareCitaTurn?: (input: {
 }) => Promise<{ contextBlock: string }>;
 ```
 
-Append `contextBlock` only to `toolSystemContent`; never mutate `messages` and never inject it into the user content.
+Append `contextBlock` to both internal system contexts (`toolSystemContent` and `soulSystemBaseContent`); never mutate `messages` and never inject it into the user content. The Soul phase still receives no tools, so this does not create an execution path.
 
 - [ ] **Step 4: Remove forced execution from the FC loop**
 

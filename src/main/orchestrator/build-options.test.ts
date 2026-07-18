@@ -175,7 +175,7 @@ describe("build-options", () => {
     expect(result.options.messages.at(-1)).toEqual(originalUserMessage)
     expect(result.options.toolSystemContent).toContain("[CITA_CONTEXT]")
     expect(result.options.toolSystemContent).toContain("music-candidate-1")
-    expect(result.options.soulSystemBaseContent).not.toContain("[CITA_CONTEXT]")
+    expect(result.options.soulSystemBaseContent).toContain("[CITA_CONTEXT]")
     expect(result.options).not.toHaveProperty("requiredToolName")
     expect(result.options).not.toHaveProperty("requiredToolArgs")
   })

@@ -16,10 +16,10 @@ export function reduceStructuralEvent(state: ContextState, event: ContextEvent):
   let contexts = state.contexts;
   if (event.type === "context_upserted") {
     if (event.context.conversationId !== event.conversationId) throw new Error("E_CITA_CONVERSATION_MISMATCH");
-    const index = contexts.findIndex((item) => item.contextRef === event.context.contextRef);
-    contexts = index < 0
-      ? [...contexts, event.context]
-      : contexts.map((item, current) => current === index ? event.context : item);
+    contexts = [
+      ...contexts.filter((item) => item.contextRef !== event.context.contextRef),
+      event.context,
+    ];
   } else if (event.type === "context_presented") {
     const refs = new Set(event.contextRefs);
     contexts = contexts.map((item) => refs.has(item.contextRef) ? { ...item, presented: true } : item);
