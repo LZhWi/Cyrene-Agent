@@ -309,9 +309,18 @@ export class MusicService {
     for (const tid of trackIds) {
       if (!setTrackIds.has(tid)) throw new MusicInputError("E_TRACK_NOT_IN_SET");
     }
-    this.cache.markPresented(setId, conversationId, trackIds);
     const cardRef = `cyrene:music:${setId}:${trackIds.join(":")}`;
     return { cardRef };
+  }
+
+  markTracksPresented(setId: string, conversationId: string, trackIds: string[]): void {
+    const set = this.cache.get(setId, conversationId);
+    if (!set) throw new MusicInputError("E_SET_NOT_FOUND");
+    const available = new Set(set.tracks.map((track) => track.id));
+    if (trackIds.length === 0 || trackIds.some((trackId) => !available.has(trackId))) {
+      throw new MusicInputError("E_TRACK_NOT_IN_SET");
+    }
+    this.cache.markPresented(setId, conversationId, trackIds);
   }
 
   // ── Playback ───────────────────────────────────────────────

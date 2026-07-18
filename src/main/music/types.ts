@@ -61,6 +61,21 @@ export interface CandidatePlaybackRequest {
   runId?: string;
 }
 
+/** Tool Runtime only. Never expose these Provider parameters to the Agent or CITA package. */
+export interface MusicCandidateRefPayload {
+  provider: string;
+  setId: string;
+  trackId: string;
+  conversationId: string;
+}
+
+/** Tool Runtime only. */
+export interface MusicSetRefPayload {
+  provider: string;
+  setId: string;
+  conversationId: string;
+}
+
 export class MusicInputError extends Error {
   constructor(public readonly code: string, message?: string) {
     super(message ?? code);

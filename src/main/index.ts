@@ -148,6 +148,7 @@ import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/p
 import { canCommitProactiveMessage } from "./proactive/proactive-policy";
 import { normalizeCitaSettings } from "./cita/settings";
 import { CitaService, ContextStore, RemoteSemanticEngine } from "./cita";
+import { contextRefRegistry } from "./orchestrator/tool-context";
 
 configureDocumentIndexQueue(runDocumentIndexJob);
 
@@ -4420,6 +4421,8 @@ app.whenReady().then(async () => {
   // Cloud Music MCP wiring (MusicService + IPC + 5 Agent tools + shutdown latch)
   const musicPaths = resolveMusicPaths();
   const musicBootstrap = bootstrapMusicService(musicPaths, {
+    contextRefs: contextRefRegistry,
+    ingestContextEvent: (event) => citaService.ingest(event),
     sendCard: (card) => {
       if (chatWindow && !chatWindow.isDestroyed()) {
         chatWindow.webContents.send(IPC.AGUI_EVENT, {

@@ -164,6 +164,8 @@ describe("MusicService", () => {
       .rejects.toThrow(/E_TRACK_NOT_IN_SET/);
     const ok = await s.presentTracks({ setId: set.setId, conversationId: "c1", trackIds: ["1"] });
     expect(ok.cardRef).toContain(set.setId);
+    expect(s.getSelectionSet(set.setId, "c1")).not.toHaveProperty("presentedAt");
+    s.markTracksPresented(set.setId, "c1", ["1"]);
     expect(s.getSelectionSet(set.setId, "c1")).toEqual(expect.objectContaining({
       presentedAt: expect.any(Number),
       presentedTrackIds: ["1"],
@@ -247,6 +249,7 @@ describe("MusicService", () => {
     await s.start();
     const set = await s.searchTracks("周杰伦", "c1", 5, { resolutionRunId: "run-1" });
     await s.presentTracks({ setId: set.setId, conversationId: "c1", trackIds: ["456"] });
+    s.markTracksPresented(set.setId, "c1", ["456"]);
 
     await expect(s.playTrack({
       provider: set.provider,

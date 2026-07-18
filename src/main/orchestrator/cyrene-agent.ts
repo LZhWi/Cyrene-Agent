@@ -18,7 +18,7 @@ import { toolRegistry, type ToolDefinition } from "./tool-registry";
 import { type ToolCallResult } from "./types";
 import { checkPermission, type ToolRiskLevel } from "../permission";
 import { getAdapterForConfig, type ChatMessage } from "./vendors";
-import { extractLastUserQuery, type ToolContext } from "./tool-context";
+import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./tool-context";
 import {
   runTwoPhaseFcLoop,
   type TwoPhaseEvent,
@@ -188,6 +188,7 @@ export class CyreneAgent extends AbstractAgent {
               userQuery: extractLastUserQuery(options.messages),
               conversationId: options.conversationId ?? "default",
               runId,
+              contextRefs: contextRefRegistry,
             }),
             onEvent: (event) => {
               if (cancelled) return;

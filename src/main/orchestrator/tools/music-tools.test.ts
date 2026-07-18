@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { ContextRefRegistry } from "../context-ref-registry";
 import { buildMusicTools } from "./music-tools";
 
 function serviceDouble() {
@@ -6,169 +7,214 @@ function serviceDouble() {
     getDailyRecommendations: vi.fn(),
     searchTracks: vi.fn(),
     presentTracks: vi.fn(),
+    markTracksPresented: vi.fn(),
     getSelectionSet: vi.fn(),
     playTrack: vi.fn(),
     playPlaylist: vi.fn(),
   };
 }
 
+function registry(now = () => 1_000) {
+  let sequence = 0;
+  return new ContextRefRegistry({ now, createId: () => `ctx_${++sequence}` });
+}
+
+function selectionSet(overrides: Record<string, unknown> = {}) {
+  return {
+    setId: "daily-raw-id",
+    provider: "netease-cloud-music",
+    source: "daily_recommendation",
+    createdAt: 900,
+    expiresAt: 9_000,
+    conversationId: "c1",
+    tracks: [{ id: "255667", name: "胆小鬼", artists: ["梁咏琪"], album: "最爱梁咏琪" }],
+    ...overrides,
+  };
+}
+
 describe("music Agent tools", () => {
-  it("daily recommendations publish the first five real tracks as a card", async () => {
+  it("returns opaque daily candidates and publishes only safe CITA projections", async () => {
     const service = serviceDouble();
-    const tracks = Array.from({ length: 6 }, (_, index) => ({
-      id: String(index + 1),
-      name: `歌曲${index + 1}`,
-      artists: ["歌手"],
-    }));
-    const set = {
-      setId: "daily-1",
-      provider: "netease-cloud-music",
-      source: "daily_recommendation",
-      expiresAt: 9_000,
-      conversationId: "conversation-1",
-      tracks,
-    };
+    const set = selectionSet();
     service.getDailyRecommendations.mockResolvedValue(set);
-    service.presentTracks.mockResolvedValue({ cardRef: "cyrene:music:daily-1" });
+    service.presentTracks.mockResolvedValue({ cardRef: "internal-card" });
     service.getSelectionSet.mockReturnValue(set);
-    const onPresented = vi.fn();
+    const contextRefs = registry();
+    const ingestContextEvent = vi.fn();
     const sendCard = vi.fn();
-    const tool = buildMusicTools(service as never, { onPresented, sendCard })
+    const tool = buildMusicTools(service as never, { contextRefs, ingestContextEvent, sendCard })
       .find((candidate) => candidate.id === "music_get_daily_recommendations")!;
 
-    await tool.execute({}, { userQuery: "今日推荐", conversationId: "conversation-1", runId: "run-1" });
+    const outputText = await tool.execute({}, {
+      userQuery: "今日推荐",
+      conversationId: "c1",
+      runId: "run-1",
+      contextRefs,
+    });
+    const output = JSON.parse(outputText);
 
-    expect(service.getDailyRecommendations).toHaveBeenCalledWith(
-      "conversation-1",
-      { resolutionRunId: "run-1" },
-    );
-
-    expect(service.presentTracks).toHaveBeenCalledWith(expect.objectContaining({
-      setId: "daily-1",
-      conversationId: "conversation-1",
-      trackIds: ["1", "2", "3", "4", "5"],
-    }));
-    expect(onPresented).toHaveBeenCalledWith(expect.objectContaining({
-      setId: "daily-1",
-      tracks: expect.arrayContaining([expect.objectContaining({
-        provider: "netease-cloud-music",
-        trackId: "1",
-      })]),
-    }));
-    expect(sendCard).toHaveBeenCalledWith(expect.objectContaining({
-      setId: "daily-1",
-      tracks: tracks.slice(0, 5),
+    expect(output).toEqual({
+      kind: "recommendations",
+      context: {
+        setRef: "ctx_1",
+        source: "daily_recommendation",
+        candidates: [{
+          candidateRef: "ctx_2",
+          position: 1,
+          name: "胆小鬼",
+          artists: ["梁咏琪"],
+          album: "最爱梁咏琪",
+        }],
+      },
+      presentation: { presented: true },
+    });
+    expect(outputText).not.toContain("255667");
+    expect(outputText).not.toContain("daily-raw-id");
+    expect(outputText).not.toContain("netease-cloud-music");
+    expect(service.markTracksPresented).toHaveBeenCalledWith("daily-raw-id", "c1", ["255667"]);
+    expect(sendCard).toHaveBeenCalledWith(expect.objectContaining({ tracks: set.tracks }));
+    expect(ingestContextEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: "context_presented",
+      contextRefs: ["ctx_2"],
     }));
   });
 
-  it("music_play_track delegates a complete real-candidate reference with ToolContext", async () => {
+  it("does not mark candidates presented when card delivery fails", async () => {
     const service = serviceDouble();
-    service.playTrack.mockResolvedValue({ state: "dispatched", resourceType: "song", resourceId: "123" });
-    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_play_track")!;
+    const set = selectionSet();
+    service.getDailyRecommendations.mockResolvedValue(set);
+    service.presentTracks.mockResolvedValue({ cardRef: "internal-card" });
+    service.getSelectionSet.mockReturnValue(set);
+    const contextRefs = registry();
+    const tool = buildMusicTools(service as never, {
+      contextRefs,
+      sendCard: () => { throw new Error("renderer unavailable"); },
+    }).find((candidate) => candidate.id === "music_get_daily_recommendations")!;
+
+    await expect(tool.execute({}, { userQuery: "日推", conversationId: "c1", contextRefs }))
+      .rejects.toThrow("renderer unavailable");
+    expect(service.markTracksPresented).not.toHaveBeenCalled();
+  });
+
+  it("resolves candidateRef internally before delegating playback", async () => {
+    const service = serviceDouble();
+    service.playTrack.mockResolvedValue({ state: "dispatched", resourceType: "song", resourceId: "255667" });
+    const contextRefs = registry();
+    const candidateRef = contextRefs.issue({
+      conversationId: "c1",
+      domain: "music",
+      kind: "candidate",
+      expiresAt: 9_000,
+      value: {
+        provider: "netease-cloud-music",
+        setId: "daily-raw-id",
+        trackId: "255667",
+        conversationId: "c1",
+      },
+    });
+    const tool = buildMusicTools(service as never, { contextRefs })
+      .find((candidate) => candidate.id === "music_play_track")!;
 
     const output = JSON.parse(await tool.execute(
-      { provider: "netease-cloud-music", setId: "set-1", trackId: "123" },
-      { userQuery: "播放稻香", conversationId: "c1", runId: "run-1" },
+      { candidateRef },
+      { userQuery: "播放第一首", conversationId: "c1", runId: "run-1", contextRefs },
     ));
 
+    expect(tool.inputSchema).toEqual(expect.objectContaining({ required: ["candidateRef"] }));
     expect(service.playTrack).toHaveBeenCalledWith({
       provider: "netease-cloud-music",
-      setId: "set-1",
-      trackId: "123",
+      setId: "daily-raw-id",
+      trackId: "255667",
       conversationId: "c1",
       runId: "run-1",
     });
     expect(output.dispatch.state).toBe("dispatched");
   });
 
-  it("marks discovery searches as presented but keeps direct-play resolution unpresented", async () => {
+  it.each([
+    { name: "cross-conversation", ref: "valid", conversationId: "c2", error: /CONVERSATION/ },
+    { name: "invented", ref: "ctx_invented", conversationId: "c1", error: /NOT_FOUND/ },
+  ])("rejects $name refs before playback", async ({ ref, conversationId, error }) => {
     const service = serviceDouble();
-    const set = {
-      setId: "set-1",
-      provider: "netease-cloud-music",
-      source: "search",
-      expiresAt: 9_000,
-      conversationId: "c1",
-      tracks: [{ id: "123", name: "稻香", artists: ["周杰伦"] }],
-    };
-    service.searchTracks.mockResolvedValue(set);
-    service.presentTracks.mockResolvedValue({ cardRef: "card" });
-    service.getSelectionSet.mockReturnValue(set);
-    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_search")!;
+    const contextRefs = registry();
+    const valid = contextRefs.issue({
+      conversationId: "c1", domain: "music", kind: "candidate", expiresAt: 9_000,
+      value: { provider: "netease-cloud-music", setId: "s1", trackId: "1", conversationId: "c1" },
+    });
+    const tool = buildMusicTools(service as never, { contextRefs })
+      .find((candidate) => candidate.id === "music_play_track")!;
 
-    await tool.execute(
-      { keyword: "稻香", purpose: "discover" },
-      { userQuery: "搜一下稻香", conversationId: "c1", runId: "run-1" },
-    );
-    expect(service.presentTracks).toHaveBeenCalled();
-
-    service.presentTracks.mockClear();
-    await tool.execute(
-      { keyword: "稻香", purpose: "play" },
-      { userQuery: "播放稻香", conversationId: "c1", runId: "run-2" },
-    );
-    expect(service.presentTracks).not.toHaveBeenCalled();
+    await expect(tool.execute(
+      { candidateRef: ref === "valid" ? valid : ref },
+      { userQuery: "播放", conversationId, contextRefs },
+    )).rejects.toThrow(error);
+    expect(service.playTrack).not.toHaveBeenCalled();
   });
 
-  it("does not trust a model-supplied play purpose without an explicit playback request", async () => {
+  it("rejects expired refs before playback", async () => {
+    let now = 1_000;
     const service = serviceDouble();
-    const set = {
-      setId: "set-1",
-      provider: "netease-cloud-music",
-      source: "search",
-      expiresAt: 9_000,
-      conversationId: "c1",
-      tracks: [{ id: "123", name: "稻香", artists: ["周杰伦"] }],
-    };
-    service.searchTracks.mockResolvedValue(set);
-    service.presentTracks.mockResolvedValue({ cardRef: "card" });
-    service.getSelectionSet.mockReturnValue(set);
-    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_search")!;
+    const contextRefs = registry(() => now);
+    const candidateRef = contextRefs.issue({
+      conversationId: "c1", domain: "music", kind: "candidate", expiresAt: 1_100,
+      value: { provider: "netease-cloud-music", setId: "s1", trackId: "1", conversationId: "c1" },
+    });
+    now = 1_101;
+    const tool = buildMusicTools(service as never, { contextRefs })
+      .find((candidate) => candidate.id === "music_play_track")!;
 
-    await tool.execute(
-      { keyword: "稻香", purpose: "play" },
-      { userQuery: "搜一下稻香", conversationId: "c1", runId: "run-1" },
-    );
-
-    expect(service.searchTracks).toHaveBeenCalledWith(
-      "稻香",
-      "c1",
-      undefined,
-      { resolutionRunId: "run-1", purpose: "discover" },
-    );
-    expect(service.presentTracks).toHaveBeenCalled();
+    await expect(tool.execute({ candidateRef }, { userQuery: "播放", conversationId: "c1", contextRefs }))
+      .rejects.toThrow(/EXPIRED/);
+    expect(service.playTrack).not.toHaveBeenCalled();
   });
 
-  it("presents ambiguous direct-play search results for a later explicit selection", async () => {
+  it("resolves ordered candidateRefs to one real set for presentation", async () => {
     const service = serviceDouble();
-    const set = {
-      setId: "set-ambiguous",
-      provider: "netease-cloud-music",
-      source: "search",
-      expiresAt: 9_000,
-      conversationId: "c1",
+    const set = selectionSet({
+      setId: "s1",
       tracks: [
-        { id: "123", name: "唯一", artists: ["告五人"] },
-        { id: "456", name: "唯一", artists: ["邓紫棋"] },
+        { id: "101", name: "晴天", artists: ["周杰伦"] },
+        { id: "102", name: "夜曲", artists: ["周杰伦"] },
       ],
-    };
-    service.searchTracks.mockResolvedValue(set);
-    service.presentTracks.mockResolvedValue({ cardRef: "card" });
+    });
+    service.presentTracks.mockResolvedValue({ cardRef: "internal-card" });
     service.getSelectionSet.mockReturnValue(set);
-    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_search")!;
+    const contextRefs = registry();
+    const first = contextRefs.issue({ conversationId: "c1", domain: "music", kind: "candidate", expiresAt: 9_000,
+      value: { provider: set.provider, setId: "s1", trackId: "101", conversationId: "c1" } });
+    const second = contextRefs.issue({ conversationId: "c1", domain: "music", kind: "candidate", expiresAt: 9_000,
+      value: { provider: set.provider, setId: "s1", trackId: "102", conversationId: "c1" } });
+    const tool = buildMusicTools(service as never, { contextRefs, sendCard: vi.fn() })
+      .find((candidate) => candidate.id === "music_present_tracks")!;
 
-    await tool.execute(
-      { keyword: "唯一" },
-      { userQuery: "播放唯一", conversationId: "c1", runId: "run-1" },
-    );
+    await tool.execute({ candidateRefs: [second, first] }, { userQuery: "展示", conversationId: "c1", contextRefs });
 
-    expect(service.presentTracks).toHaveBeenCalledWith(expect.objectContaining({
-      setId: "set-ambiguous",
-      trackIds: ["123", "456"],
-    }));
+    expect(service.presentTracks).toHaveBeenCalledWith(expect.objectContaining({ setId: "s1", trackIds: ["102", "101"] }));
+    expect(service.markTracksPresented).toHaveBeenCalledWith("s1", "c1", ["102", "101"]);
   });
 
-  it("music_play_playlist delegates to MusicService.playPlaylist", async () => {
+  it("keeps search purpose local and returns safe search projections", async () => {
+    const service = serviceDouble();
+    const set = selectionSet({ source: "search", query: "稻香", resolutionPurpose: "play" });
+    service.searchTracks.mockResolvedValue(set);
+    const contextRefs = registry();
+    const tool = buildMusicTools(service as never, { contextRefs })
+      .find((candidate) => candidate.id === "music_search")!;
+
+    const output = await tool.execute(
+      { keyword: "稻香", purpose: "discover" },
+      { userQuery: "播放稻香", conversationId: "c1", runId: "run-1", contextRefs },
+    );
+
+    expect(service.searchTracks).toHaveBeenCalledWith("稻香", "c1", undefined, {
+      resolutionRunId: "run-1",
+      purpose: "play",
+    });
+    expect(output).not.toContain("255667");
+    expect(output).not.toContain("netease-cloud-music");
+  });
+
+  it("music_play_playlist remains a real service call", async () => {
     const service = serviceDouble();
     service.playPlaylist.mockResolvedValue({ state: "dispatched", resourceType: "playlist", resourceId: "456" });
     const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_play_playlist")!;
@@ -176,43 +222,5 @@ describe("music Agent tools", () => {
     await tool.execute({ playlistId: "456" });
 
     expect(service.playPlaylist).toHaveBeenCalledWith("456");
-  });
-
-  it("music_present_tracks uses ToolContext conversation and publishes the exact displayed order", async () => {
-    const service = serviceDouble();
-    service.presentTracks.mockResolvedValue({ cardRef: "cyrene:music:set-1:102:101" });
-    service.getSelectionSet.mockReturnValue({
-      setId: "set-1",
-      provider: "netease-cloud-music",
-      expiresAt: 9_000,
-      conversationId: "conversation-1",
-      tracks: [
-        { id: "101", name: "晴天", artists: ["周杰伦"] },
-        { id: "102", name: "夜曲", artists: ["周杰伦"] },
-      ],
-    });
-    const onPresented = vi.fn();
-    const sendCard = vi.fn();
-    const tool = buildMusicTools(service as never, { onPresented, sendCard })
-      .find((candidate) => candidate.id === "music_present_tracks")!;
-
-    await tool.execute(
-      { setId: "set-1", trackIds: ["102", "101"] },
-      { userQuery: "帮我找几首", conversationId: "conversation-1" },
-    );
-
-    expect(service.presentTracks).toHaveBeenCalledWith(expect.objectContaining({ conversationId: "conversation-1" }));
-    expect(onPresented).toHaveBeenCalledWith(expect.objectContaining({
-      conversationId: "conversation-1",
-      setId: "set-1",
-      tracks: [
-        expect.objectContaining({ trackId: "102", name: "夜曲" }),
-        expect.objectContaining({ trackId: "101", name: "晴天" }),
-      ],
-    }));
-    expect(sendCard).toHaveBeenCalledWith(expect.objectContaining({
-      setId: "set-1",
-      tracks: [expect.objectContaining({ id: "102" }), expect.objectContaining({ id: "101" })],
-    }));
   });
 });

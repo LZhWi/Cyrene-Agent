@@ -14,22 +14,22 @@ description: 使用网易云真实工具结果完成音乐陪伴、今日推荐�
 
 ## 工具调用策略
 
-1. 用户接受提议或要求“帮我找几首”时，调用 `music_get_daily_recommendations`。结果已包含 `presentation` 时，使用已展示的真实候选，不要重复调用 `music_present_tracks`；否则从真实结果中选择 3–5 首再呈现。
+1. 用户接受提议或要求“帮我找几首”时，调用 `music_get_daily_recommendations`。结果的 `presentation.presented` 为 true 时，使用已展示的真实候选，不要重复调用 `music_present_tracks`；否则从真实结果的 `context.candidates` 中选择 3–5 个 `candidateRef` 再呈现。
 2. 用户直接要求某首歌时，先调用 `music_search` 确认真实歌曲；唯一明确结果可以播放，同名多版本先询问。
 3. 用户通过歌名、序号明确选择，或明确说“你挑一首”“随便放”后，才调用 `music_play_track`。
 4. “好啊”“帮我找几首”仅授权推荐，不授权自动播放。
 
 ## 真实结果约束
 
-- 只使用工具返回的 provider、setId、trackId、歌名、歌手、专辑和封面。
+- 只使用工具返回的 `candidateRef`、歌名、歌手和专辑；真实 Provider 参数由 Tool Runtime 保管。
 - 不凭记忆编造今日推荐，不为空结果补歌，不猜测歌曲 ID。
 - 今日推荐失败时如实说明，不能把普通搜索称为“今日推荐”。
 - 搜索为空、候选已过期或指代有歧义时如实说明或询问。
-- 近期指代必须采用系统提供的真实候选解析结果，不依据聊天文本重新猜 ID。
+- 近期指代必须采用 CITA 提供的真实 `candidateRef`，不依据聊天文本重新猜引用或歌曲 ID。
 
 ## 播放边界
 
-- 最终播放始终携带真实候选的 provider、setId、trackId 调用 `music_play_track`；不要直接调用 Python MCP、URL Scheme 或系统路径。
+- 最终播放始终携带真实候选的 `candidateRef` 调用 `music_play_track`；不要构造 provider、setId、trackId，也不要直接调用 Python MCP、URL Scheme 或系统路径。
 - `dispatched` 只表示请求已交给网易云客户端，表述为“已向网易云发送播放请求”。
 - `client_unavailable` 时说明已找到歌曲，但播放需要安装网易云桌面客户端。
 - 不因 `shell.openExternal()` 返回成功而声称歌曲已经开始播放。
