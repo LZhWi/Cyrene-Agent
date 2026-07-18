@@ -7,3 +7,4 @@ export { RemoteSemanticEngine } from "./remote-semantic-engine";
 export { validateUnderstanding } from "./understanding-validator";
 export { buildCitaContextBlock } from "./context-package";
 export { CitaService } from "./cita-service";
+export { DEFAULT_CITA_SETTINGS, normalizeCitaSettings } from "./settings";

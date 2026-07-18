@@ -148,6 +148,7 @@ import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive/p
 import { runProactiveModel } from "./proactive/proactive-model";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/proactive-types";
 import { canCommitProactiveMessage } from "./proactive/proactive-policy";
+import { normalizeCitaSettings } from "./cita/settings";
 
 configureDocumentIndexQueue(runDocumentIndexJob);
 
@@ -469,6 +470,8 @@ interface UserProfile {
 }
 
 interface GeneralSettings {
+  citaEnabled: boolean;
+  citaSemanticEngine: "remote";
   musicEnabled: boolean;
   musicVolume: number;
   soundEnabled: boolean;
@@ -706,6 +709,8 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
 };
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
+  citaEnabled: false,
+  citaSemanticEngine: "remote",
   musicEnabled: false,
   musicVolume: 60,
   soundEnabled: true,
@@ -1107,6 +1112,10 @@ function saveModelSettings(settings: Partial<ModelSettings>): ModelSettings {
 
 function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undefined): GeneralSettings {
   const windowVisibility = normalizeWindowVisibilitySettings(input);
+  const cita = normalizeCitaSettings({
+    enabled: input?.citaEnabled,
+    semanticEngine: input?.citaSemanticEngine,
+  });
   const clamp = (value: unknown, fallback: number) => {
     const num = typeof value === "number" ? value : Number(value);
     return Number.isFinite(num) ? Math.max(0, Math.min(100, Math.round(num))) : fallback;
@@ -1120,6 +1129,8 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     return Number.isFinite(num) ? Math.max(1000, Math.min(120000, Math.round(num))) : fallback;
   };
   return {
+    citaEnabled: cita.enabled,
+    citaSemanticEngine: cita.semanticEngine,
     musicEnabled: Boolean(input?.musicEnabled),
     musicVolume: clamp(input?.musicVolume, DEFAULT_GENERAL_SETTINGS.musicVolume),
     soundEnabled: input?.soundEnabled === undefined ? DEFAULT_GENERAL_SETTINGS.soundEnabled : Boolean(input.soundEnabled),

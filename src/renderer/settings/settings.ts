@@ -24,6 +24,7 @@ import { normalizeUiTheme, type UiTheme } from "../../shared/ui-theme";
 import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-font";
 import { normalizeUiIcon, type UiIcon } from "../../shared/ui-icon";
 import { buildAppearanceSettingsPatch } from "./appearance-settings-state";
+import { getCitaUiState } from "./cita-settings-state";
 import { requestTrackPlayback } from "./music-playback";
 import { type ReasoningPreference } from "../../shared/reasoning";
 import { type LoginFlowState } from "../../shared/music-types";
@@ -296,6 +297,8 @@ interface ModelPreset {
 }
 
 interface GeneralSettings {
+  citaEnabled: boolean;
+  citaSemanticEngine: "remote" | "local";
   musicEnabled: boolean;
   musicVolume: number;
   soundEnabled: boolean;
@@ -703,6 +706,8 @@ const mobileMessageSegmentationSelect = document.getElementById("mobile-message-
 const proactiveChatSelect = document.getElementById("proactive-chat-select") as HTMLElement;
 const proactiveDeliveryRow = document.getElementById("proactive-delivery-row") as HTMLElement;
 const proactiveDeliverySelect = document.getElementById("proactive-delivery-select") as HTMLElement;
+const citaEnabledInput = document.getElementById("cita-enabled") as HTMLInputElement;
+const citaEngineSelect = document.getElementById("cita-engine-select") as HTMLElement;
 const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
 const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputElement;
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
@@ -1170,6 +1175,13 @@ async function loadConfig(): Promise<void> {
 async function loadGeneralSettings(): Promise<void> {
   try {
     const cfg = await window.settings!.getGeneral();
+    const cita = getCitaUiState({ enabled: cfg.citaEnabled, semanticEngine: cfg.citaSemanticEngine });
+    citaEnabledInput.checked = cita.enabled;
+    citaEngineSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
+      const selected = button.dataset.value === cita.selectedEngine;
+      button.classList.toggle("is-active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
     musicEnabledInput.checked = cfg.musicEnabled;
     musicVolumeInput.value = String(cfg.musicVolume);
     syncMusicPlayback();
@@ -1363,11 +1375,17 @@ proactiveDeliverySelect.querySelectorAll<HTMLButtonElement>(".option-block").for
   });
 });
 
+citaEnabledInput.addEventListener("change", () => {
+  setPreferencesSaveStatus("有未保存的更改");
+});
+
 preferencesForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   setPreferencesSaveStatus("保存中…");
   try {
     await window.settings!.saveGeneral({
+      citaEnabled: citaEnabledInput.checked,
+      citaSemanticEngine: "remote",
       defaultChatMode: getDefaultChatModeValue(),
       segmentedOutputMode: getSegmentedOutputValue(),
       mobileMessageSegmentation: getMobileMessageSegmentationValue(),
