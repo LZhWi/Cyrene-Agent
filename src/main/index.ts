@@ -449,6 +449,7 @@ interface ModelSettings {
   embeddingModel: "minilm" | "bgem3";
   // 视觉模型配置（可选）。undefined 或未启用 = 不支持看图，read_image 诚实拒绝。
   vision?: VisionModelConfig;
+  optimizeFirstRound?: boolean;
 }
 
 /** 视觉模型配置。syncWithMain=true 时三字段不落盘，运行时强制从主配置读。 */
@@ -991,6 +992,7 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
     rerankerMode: input?.rerankerMode === "standard" || input?.rerankerMode === "none" ? input.rerankerMode : "light",
     embeddingModel: input?.embeddingModel === "bgem3" ? "bgem3" : "minilm",
     vision: normalizeVisionConfig(input?.vision),
+    optimizeFirstRound: input?.optimizeFirstRound,
   };
 }
 

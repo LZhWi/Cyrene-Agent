@@ -232,6 +232,10 @@ body {
   display: none;
 }
 
+.settings-panel#api-fc-mode-form {
+  margin-bottom: 16px;
+}
+
 .panel-heading {
   display: flex;
   gap: 14px;
@@ -689,6 +693,7 @@ body {
   gap: 10px;
 }
 
+.fc-mode-option,
 .appearance-option,
 .appearance-placeholder {
   position: relative;
@@ -705,10 +710,19 @@ body {
   transition: transform 120ms ease, border-color 160ms ease, background 160ms ease;
 }
 
+.fc-mode-option.is-active,
 .appearance-option.is-active {
   border-color: var(--rb-border-strong);
   background: linear-gradient(135deg, rgba(236, 72, 153, 0.16), rgba(168, 85, 247, 0.12));
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.fc-mode-option.is-active > .fc-mode-option__icon::before {
+  content: "☑";
+}
+
+.fc-mode-option:not(.is-active) > .fc-mode-option__icon::before {
+  content: "☐";
 }
 
 .appearance-option__icon {
@@ -722,6 +736,7 @@ body {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.fc-mode-option__copy,
 .appearance-option__copy {
   display: grid;
   min-width: 0;
@@ -731,6 +746,11 @@ body {
 .appearance-option__copy small {
   color: var(--rb-text-muted);
   font-size: 11px;
+}
+
+.fc-mode-option__copy small {
+  color: var(--rb-text-muted);
+  font-size: 14px;
 }
 
 .appearance-placeholder-list {

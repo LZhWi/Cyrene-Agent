@@ -116,6 +116,7 @@ export interface ModelSettingsLite {
   runtimeSync?: string;
   stickerEnabled?: boolean;
   stickerSimilarityThreshold?: number;
+  optimizeFirstRound?: boolean;
 }
 
 export interface UserProfileLite {
@@ -424,7 +425,7 @@ export async function buildAgentRunOptions(
       soulSystemBaseContent,
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
       ...(isTalkMode ? { tools: runTools as ToolDefinition[] } : {}),
-      optimizeFirstRound: true,
+      optimizeFirstRound: settings.optimizeFirstRound,
     },
     latestUserText,
   };

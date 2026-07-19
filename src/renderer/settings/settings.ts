@@ -203,6 +203,7 @@ interface ModelSettings {
     apiKey: string;
     model: string;
   };
+  optimizeFirstRound?: boolean;
 }
 
 type ScheduleConfig =
@@ -606,6 +607,7 @@ bgmAudio.preload = "auto";
 bgmAudio.loop = true;
 const apiForm = document.getElementById("api-form") as HTMLFormElement;
 const apiTimeoutForm = document.getElementById("api-timeout-form") as HTMLFormElement;
+const apiFcModeForm = document.getElementById("api-fc-mode-form") as HTMLFormElement;
 const appearanceForm = document.getElementById("appearance-form") as HTMLFormElement;
 const generalForm = document.getElementById("general-form") as HTMLFormElement;
 const preferencesForm = document.getElementById("preferences-form") as HTMLFormElement;
@@ -733,6 +735,10 @@ const timeoutUserChoiceInput = document.getElementById("timeout-user-choice") as
 const timeoutUserChoiceReset = document.getElementById("timeout-user-choice-reset-btn") as HTMLButtonElement;
 const timeoutTestInput = document.getElementById("timeout-test") as HTMLInputElement;
 const timeoutTestReset = document.getElementById("timeout-test-reset-btn") as HTMLButtonElement;
+const timeoutMemoryJudgeInput = document.getElementById("timeout-memory-judge") as HTMLInputElement;
+const timeoutMemoryJudgeReset = document.getElementById("timeout-memory-judge-reset-btn") as HTMLButtonElement;
+const fcModeEnableOptimizationButton = document.getElementById("fc-mode-enable-optimization") as HTMLButtonElement;
+const fcModeDisableOptimizationButton = document.getElementById("fc-mode-disable-optimization") as HTMLButtonElement;
 
 const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }> = {
   memory: { emoji: "🧠", title: "记忆", hint: "管理长期记忆与画像" },
@@ -746,7 +752,7 @@ const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }>
   appearance: { emoji: "🎨", title: "外观设置", hint: "调整窗口布局、界面主题与昔涟桌宠" },
   general: { emoji: "⚙️", title: "通用设置", hint: "管理窗口、音频和系统行为" },
   api: { emoji: "🔑", title: "API 设置", hint: "选择预设后只需要填写 API Key。" },
-  "api-timeout": { emoji: "⌛", title: "API 超时设置", hint: "配置 API 超时时间" },
+  "api-advanced": { emoji: "", title: "API 高级设置", hint: "配置 API 超时时间、调用模式．" },
   cyrene: { emoji: "🌸", title: "昔涟设置", hint: "管理 Agent 行为、记忆、RAG 与权限" },
   tts: { emoji: "🎙️", title: "TTS 设置", hint: "语音合成与朗读偏好" },
   asr: { emoji: "🎧", title: "ASR 设置", hint: "语音识别与通话配置" },
@@ -920,6 +926,11 @@ function applyUiThemeSelection(theme: GeneralSettings["uiTheme"]): void {
     button.setAttribute("aria-pressed", String(active));
   });
   document.documentElement.dataset.uiTheme = theme;
+}
+
+function applyFcOptimizeSelection(optimizeFirstRound?: boolean) {
+  fcModeEnableOptimizationButton.className = optimizeFirstRound ? "fc-mode-option is-active" : "fc-mode-option";
+  fcModeDisableOptimizationButton.className = !optimizeFirstRound ? "fc-mode-option is-active" : "fc-mode-option";
 }
 
 function renderUiFont(font: UiFont): void {
@@ -1183,6 +1194,7 @@ async function loadConfig(): Promise<void> {
     const threshold = cfg.stickerSimilarityThreshold ?? 0.55;
     stickerThresholdInput.value = String(threshold);
     stickerThresholdVal.textContent = threshold.toFixed(2);
+    applyFcOptimizeSelection(cfg.optimizeFirstRound);
 
     // 视觉模型配置已并入 applyPreset（preferredVision 参数）。
 
@@ -1245,7 +1257,8 @@ async function loadTimeoutSettings() {
     timeoutVisionInput.value = String(cfg.visionTimeout);
     timeoutUserChoiceInput.value = String(cfg.userChoiceTimeout);
     timeoutTestInput.value = String(cfg.testTimeout);
-    setTimeoutSaveStatus("此页需要保存才可生效．");
+    timeoutMemoryJudgeInput.value = String(cfg.memoryJudgeTimeout);
+    setTimeoutSaveStatus("时间设置保存后，对后续请求生效．");
   } catch {
     setTimeoutSaveStatus("读取偏好失败", "is-error");
   }
@@ -1270,11 +1283,12 @@ async function saveTimeoutSettings(saveTestTimeout: boolean) {
   try {
     if (!saveTestTimeout) {
       settings = {
-        perRoundTimeout: parsePositiveIntOrThrow(timeoutPerRoundInput.value, "工具阶段单次 API 超时"),
-        forceSummaryTimeout: parsePositiveIntOrThrow(timeoutSummaryInput.value, "总结阶段单次 API 超时"),
+        perRoundTimeout: parsePositiveIntOrThrow(timeoutPerRoundInput.value, "工具阶段每轮 API 超时"),
+        forceSummaryTimeout: parsePositiveIntOrThrow(timeoutSummaryInput.value, "工具总结阶段 API 超时"),
         chatRequestTimeout: parsePositiveIntOrThrow(timeoutChatRequestInput.value, "单次回复总时间限制"),
         visionTimeout: parsePositiveIntOrThrow(timeoutVisionInput.value, "视觉模型单次 API 超时"),
         userChoiceTimeout: parsePositiveIntOrThrow(timeoutUserChoiceInput.value, "工具请求确认时间限制"),
+        memoryJudgeTimeout: parsePositiveIntOrThrow(timeoutMemoryJudgeInput.value, "记忆总结阶段 API 超时"),
       };
     } else {
       settings = {
@@ -1312,7 +1326,17 @@ timeoutChatRequestReset.addEventListener("click", () => { timeoutChatRequestInpu
 timeoutPerRoundReset.addEventListener("click", () => { timeoutPerRoundInput.value = String(DEFAULT_PER_ROUND_TIMEOUT_MS) });
 timeoutSummaryReset.addEventListener("click", () => { timeoutSummaryInput.value = String(DEFAULT_FORCE_SUMMARY_TIMEOUT_MS) });
 timeoutVisionReset.addEventListener("click", () => { timeoutVisionInput.value = String(DEFAULT_VISION_TIMEOUT_MS) });
+timeoutMemoryJudgeReset.addEventListener("click", () => { timeoutMemoryJudgeInput.value = String(DEFAULT_MEMORY_JUDGE_MS) });
 timeoutUserChoiceReset.addEventListener("click", () => { timeoutUserChoiceInput.value = "60000" });
+
+fcModeEnableOptimizationButton.addEventListener("click", async () => {
+  await window.settings!.saveConfig({ optimizeFirstRound: true });
+  applyFcOptimizeSelection(true);
+});
+fcModeDisableOptimizationButton.addEventListener("click", async () => {
+  await window.settings!.saveConfig({ optimizeFirstRound: false });
+  applyFcOptimizeSelection(false);
+});
 
 runtimeSyncSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
   button.addEventListener("click", () => {
@@ -2575,7 +2599,7 @@ function switchSection(section: string): void {
   sectionHint.textContent = label.hint;
 
   const isApi = section === "api";
-  const isApiTimeout = section === "api-timeout";
+  const isApiAdvanced = section === "api-advanced";
   const isAppearance = section === "appearance";
   const isGeneral = section === "general";
   const isPreferences = section === "preferences";
@@ -2594,7 +2618,8 @@ function switchSection(section: string): void {
   const isAsr = section === "asr";
   const isMusic = section === "music";
   apiForm.classList.toggle("is-hidden", !isApi);
-  apiTimeoutForm.classList.toggle("is-hidden", !isApiTimeout);
+  apiTimeoutForm.classList.toggle("is-hidden", !isApiAdvanced);
+  apiFcModeForm.classList.toggle("is-hidden", !isApiAdvanced);
   appearanceForm.classList.toggle("is-hidden", !isAppearance);
   generalForm.classList.toggle("is-hidden", !isGeneral);
   preferencesForm.classList.toggle("is-hidden", !isPreferences);
@@ -2632,12 +2657,12 @@ function switchSection(section: string): void {
   else disposeMusicPanel();
   placeholderPanel.classList.toggle(
     "is-hidden",
-    isApi || isApiTimeout || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr || isMusic,
+    isApi || isApiAdvanced || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr || isMusic,
   );
 
   if (
     !isApi &&
-    !isApiTimeout &&
+    !isApiAdvanced &&
     !isAppearance &&
     !isGeneral &&
     !isPreferences &&
@@ -4740,7 +4765,7 @@ window.chatStore?.onActiveSessionChanged((sessionId) => {
    ============================================================ */
 
 import { Chart, registerables, type ChartConfiguration } from "chart.js";
-import { DEFAULT_CHAT_REQUEST_TIMEOUT_MS, DEFAULT_FORCE_SUMMARY_TIMEOUT_MS, DEFAULT_PER_ROUND_TIMEOUT_MS, DEFAULT_TIMEOUT_SETTINGS, DEFAULT_VISION_TIMEOUT_MS, TimeoutSettings } from "../../shared/timeout-types";
+import { DEFAULT_CHAT_REQUEST_TIMEOUT_MS, DEFAULT_FORCE_SUMMARY_TIMEOUT_MS, DEFAULT_MEMORY_JUDGE_MS, DEFAULT_PER_ROUND_TIMEOUT_MS, DEFAULT_TIMEOUT_SETTINGS, DEFAULT_VISION_TIMEOUT_MS, TimeoutSettings } from "../../shared/timeout-types";
 
 Chart.register(...registerables);
 
