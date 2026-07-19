@@ -47,7 +47,7 @@ export interface MusicSelectionSet {
 }
 
 export interface PlaybackDispatchResult {
-  state: "dispatched" | "client_unavailable" | "launch_failed";
+  state: "dispatched" | "web_fallback" | "client_unavailable" | "launch_failed";
   resourceType: "song" | "playlist";
   resourceId: string;
   errorCode?: string;

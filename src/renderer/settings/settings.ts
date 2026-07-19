@@ -3019,7 +3019,7 @@ interface MusicApi {
   cancelLogin: () => Promise<MusicIpcResult<unknown>>;
   logout: () => Promise<MusicIpcResult<unknown>>;
   search: (keyword: string, limit?: number) => Promise<MusicIpcResult<MusicSelectionResult>>;
-  playTrack: (trackId: string) => Promise<MusicIpcResult<{ state: "dispatched" | "client_unavailable" | "launch_failed" }>>;
+  playTrack: (trackId: string) => Promise<MusicIpcResult<{ state: "dispatched" | "web_fallback" | "client_unavailable" | "launch_failed" }>>;
   onStateChanged: (h: (s: MusicStatusSnapshot) => void) => (() => void) | void;
 }
 

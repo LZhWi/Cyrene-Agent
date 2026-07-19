@@ -24,6 +24,21 @@ describe("buildToolExecutionContext", () => {
     expect(block).toContain("dispatched 只表示请求已发送给客户端");
   });
 
+  it("distinguishes browser fallback from a desktop playback dispatch", () => {
+    const block = buildToolExecutionContext([{
+      toolId: "music_play_track",
+      args: { candidateRef: "ctx_song_1" },
+      output: JSON.stringify({
+        kind: "playback",
+        dispatch: { state: "web_fallback", resourceType: "song", resourceId: "1" },
+      }),
+      status: "succeeded",
+    }]);
+
+    expect(block).toContain("web_fallback 表示已在浏览器中打开");
+    expect(block).toContain("不能声称网易云桌面客户端已开始播放");
+  });
+
   it("preserves a runtime failure as data instead of inferring it from Soul text", () => {
     const block = buildToolExecutionContext([{
       toolId: "music_play_track",

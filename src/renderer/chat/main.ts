@@ -169,7 +169,7 @@ interface ChoiceApi {
 interface ChatMusicApi {
   playTrack: (trackId: string) => Promise<{
     ok: boolean;
-    data?: { state: "dispatched" | "client_unavailable" | "launch_failed" };
+    data?: { state: "dispatched" | "web_fallback" | "client_unavailable" | "launch_failed" };
     errorCode?: string;
   }>;
 }

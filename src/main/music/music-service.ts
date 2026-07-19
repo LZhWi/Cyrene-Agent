@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { MusicMcpClient } from "./music-mcp-client";
 import { ProtocolDetector } from "./protocol-detector";
-import { PlaybackDispatcher } from "./playback-dispatcher";
 import { CookieVault } from "./cookie-vault";
 import { LoginOrchestrator } from "./login-orchestrator";
 import { SelectionSetCache } from "./selection-set-cache";
@@ -39,7 +38,6 @@ export class MusicService {
 
   private readonly client: MusicMcpClient;
   private readonly detector: ProtocolDetector;
-  private readonly dispatcher: PlaybackDispatcher;
   private readonly vault: CookieVault;
   private readonly orchestrator: LoginOrchestrator;
   private readonly cache: SelectionSetCache;
@@ -55,8 +53,7 @@ export class MusicService {
     this.paths = paths;
     this.client = new MusicMcpClient(paths.vendorDir, paths.runtimeDir);
     this.detector = new ProtocolDetector();
-    this.dispatcher = new PlaybackDispatcher(this.detector);
-    const netease = new NeteaseMusicProvider(this.client, this.dispatcher);
+    const netease = new NeteaseMusicProvider(this.client);
     this.router = new MusicRouter(new Map([[netease.id, netease]]), () => NETEASE_PROVIDER_ID);
     this.vault = new CookieVault(path.dirname(paths.accountPath));
     this.orchestrator = new LoginOrchestrator({

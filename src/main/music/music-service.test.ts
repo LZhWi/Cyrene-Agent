@@ -3,13 +3,14 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 
-const { beginTool, checkTool, cancelTool, validateTool, searchTool, dailyTool, isRegistered, openExternal } = vi.hoisted(() => ({
+const { beginTool, checkTool, cancelTool, validateTool, searchTool, dailyTool, playTool, isRegistered, openExternal } = vi.hoisted(() => ({
   beginTool: vi.fn(),
   checkTool: vi.fn(),
   cancelTool: vi.fn(),
   validateTool: vi.fn(),
   searchTool: vi.fn(),
   dailyTool: vi.fn(),
+  playTool: vi.fn(),
   isRegistered: vi.fn(),
   openExternal: vi.fn(),
 }));
@@ -27,7 +28,11 @@ vi.mock("./music-mcp-client", () => ({
       verifyContractOnConnect: vi.fn().mockResolvedValue({ ok: true, missing: [], schemaMismatch: [] }),
       close,
       getRootPid: vi.fn().mockReturnValue(undefined),
-      callDataTool: (name: string, args: unknown) => name === "cloud_music_search" ? searchTool(args) : dailyTool(args),
+      callDataTool: (name: string, args: unknown) => name === "cloud_music_search"
+        ? searchTool(args)
+        : name === "cloud_music_play"
+          ? playTool(args)
+          : dailyTool(args),
       callAuthTool: (name: string, args: unknown) => name === "cyrene_music_login_begin"
         ? beginTool(args)
         : name === "cyrene_music_login_check"
@@ -58,6 +63,8 @@ import { MusicService } from "./music-service";
 beforeEach(() => {
   beginTool.mockReset(); checkTool.mockReset(); cancelTool.mockReset(); validateTool.mockReset();
   searchTool.mockReset(); dailyTool.mockReset();
+  playTool.mockReset();
+  playTool.mockImplementation((args: { id: string; type: string }) => `已发送播放指令: ${args.type} ${args.id}`);
   isRegistered.mockReset(); openExternal.mockReset();
   clientInstances.length = 0;
 });
@@ -195,22 +202,24 @@ describe("MusicService", () => {
     await expect(s.playTrackFromUi("not-num")).rejects.toThrow(/E_INVALID_ID/);
   });
 
-  it("playTrack returns client_unavailable when protocol missing", async () => {
-    isRegistered.mockResolvedValue(false);
+  it("playTrack preserves the MCP browser fallback state", async () => {
+    playTool.mockResolvedValue(
+      "⚠️ 未检测到客户端，已在浏览器中播放: https://music.163.com/#/song?id=123",
+    );
     const s = new MusicService(PATHS);
     const r = await s.playTrackFromUi("123");
-    expect(r.state).toBe("client_unavailable");
-    expect(r.errorCode).toBe("E_PROTOCOL_NOT_REGISTERED");
+    expect(r.state).toBe("web_fallback");
+    expect(playTool).toHaveBeenCalledWith({ id: "123", type: "song" });
   });
 
-  it("playTrack dispatches when protocol registered", async () => {
-    isRegistered.mockResolvedValue(true);
-    openExternal.mockResolvedValue(undefined);
+  it("playTrack dispatches through the MCP tool", async () => {
     const s = new MusicService(PATHS);
     const r = await s.playTrackFromUi("123");
     expect(r.state).toBe("dispatched");
     expect(r.resourceType).toBe("song");
     expect(r.resourceId).toBe("123");
+    expect(playTool).toHaveBeenCalledWith({ id: "123", type: "song" });
+    expect(openExternal).not.toHaveBeenCalled();
   });
 
   it("plays a resolved candidate only inside the Agent run that fetched it", async () => {

@@ -29,7 +29,7 @@ export function buildToolExecutionContext(results: ToolCallResult[]): string {
   }));
   return [
     "[TOOL_EXECUTION_CONTEXT]",
-    "以下 JSON 是本轮 Tool Runtime 的权威执行事实。calls 为空表示本轮没有执行工具。不要声称发生了未记录的执行。dispatched 只表示请求已发送给客户端，不代表客户端已经开始播放。",
+    "以下 JSON 是本轮 Tool Runtime 的权威执行事实。calls 为空表示本轮没有执行工具。不要声称发生了未记录的执行。dispatched 只表示请求已发送给客户端，不代表客户端已经开始播放。web_fallback 表示已在浏览器中打开，不能声称网易云桌面客户端已开始播放。",
     JSON.stringify({ calls }),
     "[/TOOL_EXECUTION_CONTEXT]",
   ].join("\n");
