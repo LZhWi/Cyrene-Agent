@@ -429,6 +429,7 @@ export async function buildAgentRunOptions(
         model: settings.model,
         apiKey: settings.apiKey,
         explicitTransport: settings.explicitTransport,
+        reasoning: settings.reasoning,
       },
       messages: fcMessages,
       conversationId,

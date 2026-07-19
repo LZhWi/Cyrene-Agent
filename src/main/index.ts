@@ -47,6 +47,8 @@ import { indexConversationTurn } from "./orchestrator/history-tools";
 import { buildToneInjection } from "./orchestrator/tone-injector";
 import { getAdapter, buildVendorUrl, getAdapterForConfig, createSseReader } from "./orchestrator/vendors";
 import type { VendorConfig } from "./orchestrator/vendors";
+import { testVendorConnection } from "./orchestrator/vendors/test-connection";
+import { migrateLegacyMinimaxDefaults } from "./orchestrator/vendors/minimax-defaults";
 import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
 import type { VisionConfig } from "./orchestrator/vision-captioner";
 import { toolRegistry, type ToolDefinition } from "./orchestrator/tool-registry";
@@ -684,7 +686,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   mode: "auto",
   // 默认厂商改为 MiniMax（v1 vendor adapter 第一个落地的），DeepSeek 已从 v1 清单移除。
   provider: "MiniMax（稀宇科技）",
-  baseUrl: "https://api.minimaxi.com/anthropic",
+  baseUrl: "https://api.minimaxi.com/v1",
   model: "MiniMax-M3",
   apiKey: "",
   perProvider: {},
@@ -945,6 +947,9 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
   // 厂商重命名迁移：把旧 provider 名在字典里和当前 provider 字段一并改成新名。
   // 必须在"旧 schema 兼容回填"之前做，否则会用旧名先创建一份僵尸数据。
   ({ provider, perProvider } = migrateProviderRenames(provider, perProvider));
+  for (const [providerName, profile] of Object.entries(perProvider)) {
+    perProvider[providerName] = migrateLegacyMinimaxDefaults(providerName, profile);
+  }
 
   // 旧 schema 兼容：v1 之前的 model-config.json 没有 perProvider 字段，
   // 但有顶层 baseUrl/model/apiKey 三件套。首次升级时把它们当作 currentProvider 那一份回填。
@@ -3476,13 +3481,7 @@ ipcMain.handle(IPC.SETTINGS_SAVE_CONFIG, (_event, settings: Partial<ModelSetting
   return saved;
 });
 
-ipcMain.handle(IPC.SETTINGS_TEST_CONNECTION, async (_event, cfg: { provider: string; baseUrl: string; model: string; apiKey: string }) => {
-  const adapter = getAdapter(cfg.provider);
-  console.log("[Cyrene] test connection: provider=" + cfg.provider + " transport=" + adapter.transport + " model=" + cfg.model);
-  const result = await adapter.testConnection(cfg);
-  console.log("[Cyrene] test connection result:", JSON.stringify(result));
-  return result;
-});
+ipcMain.handle(IPC.SETTINGS_TEST_CONNECTION, async (_event, cfg: VendorConfig) => testVendorConnection(cfg));
 
 /**
  * 测试视觉模型连通性。

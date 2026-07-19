@@ -54,6 +54,7 @@ export interface AgentLoopSettings {
   model: string;
   apiKey: string;
   explicitTransport?: "openai" | "anthropic" | "auto";
+  reasoning?: import("../../shared/reasoning").ReasoningPreference;
 }
 
 /** FC 循环中性事件。CyreneAgent 把它包成 AG-UI BaseEvent。 */

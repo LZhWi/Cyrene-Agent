@@ -7,10 +7,10 @@ export const PROVIDER_CAPABILITIES = [
   {
     id: "minimax",
     displayName: "MiniMax（稀宇科技）",
-    // 主推 Anthropic 兼容入口；多轮 tool_calls 必须完整回传 thinking/reasoning_details
-    transport: "anthropic",
-    baseUrl: "https://api.minimaxi.com/anthropic",
-    authStyle: "x-api-key",
+    // 默认走 OpenAI 兼容入口；Anthropic 入口仍可由用户显式选择。
+    transport: "openai",
+    baseUrl: "https://api.minimaxi.com/v1",
+    authStyle: "bearer",
     defaultModel: "MiniMax-M3",
     supportsTools: true,
     supportsThinking: true,
@@ -19,8 +19,7 @@ export const PROVIDER_CAPABILITIES = [
     testStrategy: "text",
     // M3 原生多模态（image_url / video_url）
     supportsVision: true,
-    // 主配走 /anthropic（Anthropic 入口），但视觉要走 OpenAI 入口 /v1。
-    // 同步主模型时用这个 baseUrl，避免用户手动改。
+    // 视觉同样走 OpenAI 兼容入口。
     visionBaseUrl: "https://api.minimaxi.com/v1",
   },
   {

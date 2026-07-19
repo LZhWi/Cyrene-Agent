@@ -6,7 +6,12 @@ import {
   type ActionCapability,
 } from "./action-gate";
 import { runAgentGraph, type AgentGraphState } from "./agent-graph";
-import { buildForcedToolRequest, parseForcedToolResponse, resolveToolForCapability } from "./forced-tool-call";
+import { ExecutionLedger } from "./execution-ledger";
+import {
+  buildToolArgumentRequest,
+  parseAndValidateToolArguments,
+  resolveToolForCapability,
+} from "./tool-argument-resolver";
 import { buildToolExecutionContext } from "./tool-execution-context";
 import type { ToolDefinition } from "./tool-registry";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
@@ -27,6 +32,7 @@ export interface LangGraphAgentLoopOptions {
   maxIterations?: number;
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
   executeTool: (tc: ToolCall, runnableToolIds: Set<string>) => Promise<string | ToolExecutionOutcome>;
+  executionLedger?: ExecutionLedger;
   onEvent?: (event: TwoPhaseEvent) => void;
   recordUsage?: (input: number, output: number, calls: number) => void;
   signal?: AbortSignal;
@@ -84,17 +90,6 @@ function stripToolProtocol(text: string): string {
     .trim();
 }
 
-function argumentsOf(toolCall: ToolCall): Record<string, unknown> {
-  try {
-    const value = JSON.parse(toolCall.arguments || "{}");
-    return value && typeof value === "object" && !Array.isArray(value)
-      ? value as Record<string, unknown>
-      : {};
-  } catch {
-    return {};
-  }
-}
-
 function errorCodeOf(error: unknown): string {
   if (typeof error === "object" && error !== null && "code" in error
     && typeof (error as { code?: unknown }).code === "string") {
@@ -103,6 +98,17 @@ function errorCodeOf(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error);
   const token = message.split(" ", 1)[0].split(":", 1)[0];
   return token.startsWith("E_") ? token : "E_TOOL_EXECUTION_FAILED";
+}
+
+function jsonResponseSummary(response: Awaited<ReturnType<ChatVendorAdapter["parseResponse"]>>): string {
+  let keys: string[] = [];
+  try {
+    const parsed = JSON.parse(response.text);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) keys = Object.keys(parsed as Record<string, unknown>);
+  } catch {
+    keys = ["<invalid-json>"];
+  }
+  return JSON.stringify({ finishReason: response.finishReason, textChars: response.text.length, keys });
 }
 
 export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions): Promise<TwoPhaseFcResult> {
@@ -119,7 +125,11 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
   let usageOutput = 0;
   let fallbackMessages: ChatMessage[] | undefined;
   let usedImageCaptionFallback = false;
+  const executionLedger = options.executionLedger ?? new ExecutionLedger();
   const usageRecorder = options.recordUsage ?? ((input, output, calls) => recordUsage(input, output, calls));
+  console.log(
+    `${LOG_PREFIX} runtime=start adapter=${options.adapter.id} transport=${options.adapter.transport} capabilities=${capabilities.length}`,
+  );
 
   const ensureBudget = () => {
     if (options.signal?.aborted) throw new Error("E_AGENT_GRAPH_CANCELLED");
@@ -187,6 +197,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             messages,
             availableCapabilities: capabilities,
             toolResults: state.toolResults,
+            ...(lastError instanceof Error ? { protocolFeedback: lastError.message } : {}),
           }));
           trackUsage(response.usage);
           try {
@@ -195,7 +206,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             return decision;
           } catch (error) {
             lastError = error;
-            console.warn(`${LOG_PREFIX} node=action-gate protocol_retry=${attempt}`);
+            console.warn(`${LOG_PREFIX} node=action-gate protocol_retry=${attempt} response=${jsonResponseSummary(response)}`);
           }
         }
         throw lastError instanceof Error ? lastError : new Error("E_ACTION_GATE_PROTOCOL");
@@ -208,10 +219,10 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       const selectedTool = resolveToolForCapability(enabledTools, decision.capability);
       options.onEvent?.({ type: "step_started", stepName: `agent-graph-tool-${selectedTool.id}` });
       try {
-        let toolCall: ToolCall | undefined;
+        let args: Record<string, unknown> | undefined;
         let lastError: unknown;
         for (let attempt = 1; attempt <= 2; attempt++) {
-          const response = await invokeWithFallback((messages) => buildForcedToolRequest({
+          const response = await invokeWithFallback((messages) => buildToolArgumentRequest({
             model: options.settings.model,
             messages,
             toolSystemContent: options.toolSystemContent,
@@ -219,39 +230,51 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             decision,
             toolResults: state.toolResults,
             tool: selectedTool,
+            ...(lastError instanceof Error ? { protocolFeedback: lastError.message } : {}),
           }));
           trackUsage(response.usage);
           try {
-            toolCall = parseForcedToolResponse(response, selectedTool.id);
+            args = parseAndValidateToolArguments(response, selectedTool, decision.targetRefs, state.toolResults);
             break;
           } catch (error) {
             lastError = error;
-            console.warn(`${LOG_PREFIX} node=force-tool tool=${selectedTool.id} protocol_retry=${attempt}`);
+            console.warn(`${LOG_PREFIX} node=tool-arguments tool=${selectedTool.id} protocol_retry=${attempt} response=${jsonResponseSummary(response)}`);
           }
         }
-        if (!toolCall) throw lastError instanceof Error ? lastError : new Error("E_FORCED_TOOL_PROTOCOL");
+        if (!args) throw lastError instanceof Error ? lastError : new Error("E_TOOL_ARGUMENT_PROTOCOL");
 
-        const toolCallId = toolCall.id || `${selectedTool.id}-${Date.now()}`;
+        const toolCall: ToolCall = {
+          id: `${selectedTool.id}-${Date.now()}`,
+          name: selectedTool.id,
+          arguments: JSON.stringify(args),
+        };
+        const toolCallId = toolCall.id;
         options.onEvent?.({ type: "tool_call_start", toolCallId, toolCallName: selectedTool.name });
-        let outcome: ToolExecutionOutcome;
-        try {
-          const executed = await options.executeTool(toolCall, runnableToolIds);
-          outcome = typeof executed === "string" ? { status: "succeeded", output: executed } : executed;
-        } catch (error) {
-          outcome = {
-            status: "failed",
-            errorCode: errorCodeOf(error),
-            output: error instanceof Error ? error.message : String(error),
-          };
-        }
+        const execution = await executionLedger.execute({
+          capability: decision.capability,
+          targetRefs: decision.targetRefs,
+          args,
+        }, async () => {
+          try {
+            const executed = await options.executeTool(toolCall, runnableToolIds);
+            return typeof executed === "string" ? { status: "succeeded", output: executed } : executed;
+          } catch (error) {
+            return {
+              status: "failed",
+              errorCode: errorCodeOf(error),
+              output: error instanceof Error ? error.message : String(error),
+            };
+          }
+        });
+        const outcome: ToolExecutionOutcome = execution.outcome;
         const result: ToolCallResult = {
           toolId: selectedTool.id,
-          args: argumentsOf(toolCall),
+          args,
           output: outcome.output,
           status: outcome.status,
           ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
         };
-        console.log(`${LOG_PREFIX} node=tool-result tool=${selectedTool.id} status=${outcome.status}${outcome.errorCode ? ` errorCode=${outcome.errorCode}` : ""}`);
+        console.log(`${LOG_PREFIX} node=tool-result tool=${selectedTool.id} status=${outcome.status} cached=${execution.cached}${outcome.errorCode ? ` errorCode=${outcome.errorCode}` : ""}`);
         const messageId = `tool-result-${Date.now()}`;
         options.onEvent?.({ type: "tool_call_result", toolCallId, messageId, content: outcome.output });
         options.onEvent?.({ type: "tool_call_end", toolCallId });

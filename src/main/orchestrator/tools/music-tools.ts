@@ -276,6 +276,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
         },
         required: ["candidateRefs"],
       },
+      controlledInput: { candidateRefs: "context_ref_array" },
       needsContext: true,
       execute: async (args, ctx) => {
         const conversationId = conversationIdOf(ctx);
@@ -312,6 +313,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
         },
         required: ["candidateRef"],
       },
+      controlledInput: { candidateRef: "context_ref" },
       needsContext: true,
       execute: async (args, ctx) => {
         const conversationId = conversationIdOf(ctx);
@@ -336,6 +338,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
         properties: { playlistId: { type: "string" } },
         required: ["playlistId"],
       },
+      controlledInput: { playlistId: "tool_result" },
       execute: async (args) => {
         const dispatch = await service.playPlaylist(String(args.playlistId));
         return JSON.stringify({ kind: "playback", dispatch });

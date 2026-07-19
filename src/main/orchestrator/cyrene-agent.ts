@@ -25,6 +25,9 @@ import {
   type TwoPhaseFcResult,
 } from "./two-phase-fc-loop";
 import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
+import { ExecutionLedgerStore } from "./execution-ledger";
+
+const executionLedgers = new ExecutionLedgerStore();
 
 export interface AgentLoopSettings {
   provider: string;
@@ -32,6 +35,7 @@ export interface AgentLoopSettings {
   model: string;
   apiKey: string;
   explicitTransport?: "openai" | "anthropic" | "auto";
+  reasoning?: import("../../shared/reasoning").ReasoningPreference;
 }
 
 /** CyreneAgent.run() 需要的输入——桥层构造好后塞进 input.state 或 forwardedProps。 */
@@ -223,6 +227,8 @@ export class CyreneAgent extends AbstractAgent {
             },
             signal: abortController.signal,
           };
+          const conversationId = options.conversationId ?? "default";
+          const executionLedger = executionLedgers.forScope(`${conversationId}:messages-${options.messages.length}`);
           const result: TwoPhaseFcResult = resolveAgentRuntime(options.agentRuntime) === "langgraph"
             ? await runLangGraphAgentLoop({
               ...commonOptions,
@@ -230,6 +236,7 @@ export class CyreneAgent extends AbstractAgent {
               contextualizedQuery: options.contextualizedQuery ?? options.originalQuery ?? extractLastUserQuery(options.messages),
               citaContextBlock: options.citaContextBlock ?? "",
               imageCaptionFallback: options.imageCaptionFallback,
+              executionLedger,
             })
             : await runTwoPhaseFcLoop({
               ...commonOptions,

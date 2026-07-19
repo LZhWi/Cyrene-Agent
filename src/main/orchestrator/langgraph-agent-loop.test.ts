@@ -1,16 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { ACTION_DECISION_TOOL_ID } from "./action-gate";
 import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
+import { ExecutionLedger } from "./execution-ledger";
 import type { ToolDefinition } from "./tool-registry";
 import type {
-  ChatMessage,
-  ChatRequest,
-  ChatResponse,
-  ChatVendorAdapter,
-  HttpRequest,
-  ProviderCapability,
-  ToolCall,
-  ToolExecutionResult,
+  ChatMessage, ChatRequest, ChatResponse, ChatVendorAdapter, HttpRequest,
+  ProviderCapability, ToolExecutionResult,
 } from "./vendors/types";
 
 const capability: ProviderCapability = {
@@ -24,27 +18,21 @@ class FakeAdapter implements ChatVendorAdapter {
   readonly transport = "openai" as const;
   capability = capability;
   readonly requests: ChatRequest[] = [];
-  private scripts: Array<{ text?: string; toolCalls?: ToolCall[] }> = [];
+  private scripts: string[] = [];
   private index = 0;
 
-  enqueueText(text: string) { this.scripts.push({ text }); }
-  enqueueTool(name: string, args: Record<string, unknown>) {
-    this.scripts.push({ toolCalls: [{ id: `call-${this.scripts.length + 1}`, name, arguments: JSON.stringify(args) }] });
-  }
+  enqueueText(text: string) { this.scripts.push(text); }
+  enqueueJson(value: unknown) { this.enqueueText(JSON.stringify(value)); }
   buildRequest(req: ChatRequest): HttpRequest {
     this.requests.push(req);
     return { url: "https://fake/", method: "POST", headers: {}, body: "{}" };
   }
   parseResponse(): ChatResponse {
-    const script = this.scripts[this.index++];
-    if (!script) throw new Error("missing fake response");
-    const toolCalls = script.toolCalls ?? [];
+    const text = this.scripts[this.index++];
+    if (text === undefined) throw new Error("missing fake response");
     return {
-      assistantMessage: { role: "assistant", content: script.text, ...(toolCalls.length ? { toolCalls } : {}) },
-      text: script.text ?? "",
-      toolCalls,
-      finishReason: toolCalls.length ? "tool_calls" : "stop",
-      raw: {},
+      assistantMessage: { role: "assistant", content: text }, text, toolCalls: [],
+      finishReason: "stop", raw: {},
     };
   }
   appendToolResults(messages: ChatMessage[], results: ToolExecutionResult[]): ChatMessage[] {
@@ -59,17 +47,32 @@ class FakeAdapter implements ChatVendorAdapter {
 
 function musicPlayTool(): ToolDefinition {
   return {
-    id: "music_play_track",
-    capability: "music.play_track",
-    name: "播放歌曲",
-    description: "播放可信歌曲候选",
-    enabled: true,
+    id: "music_play_track", capability: "music.play_track", name: "播放歌曲",
+    description: "播放可信歌曲候选", enabled: true,
     inputSchema: {
-      type: "object",
-      properties: { candidateRef: { type: "string" } },
-      required: ["candidateRef"],
+      type: "object", properties: { candidateRef: { type: "string" } }, required: ["candidateRef"],
     },
+    controlledInput: { candidateRef: "context_ref" },
     execute: async () => "unused",
+  };
+}
+
+function options(adapter: FakeAdapter, executeTool = vi.fn(async () => ({
+  status: "succeeded" as const,
+  output: JSON.stringify({ kind: "playback", dispatch: { state: "dispatched" } }),
+}))) {
+  return {
+    settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+    adapter,
+    messages: [{ role: "user" as const, content: "播放第一首" }],
+    tools: [musicPlayTool()],
+    toolSystemContent: "TOOL_SYSTEM",
+    soulSystemBaseContent: "SOUL_SYSTEM",
+    originalQuery: "播放第一首",
+    contextualizedQuery: "播放当前网易云日推第一首",
+    citaContextBlock: "ctx_song_1",
+    timeoutMs: 30_000,
+    executeTool,
   };
 }
 
@@ -78,170 +81,132 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-describe("runLangGraphAgentLoop", () => {
-  it("forces an act decision through the selected tool before Soul", async () => {
+describe("runLangGraphAgentLoop JSON runtime", () => {
+  it("decides and resolves arguments as JSON, then Runtime directly executes the tool", async () => {
     const adapter = new FakeAdapter();
-    adapter.enqueueTool(ACTION_DECISION_TOOL_ID, {
-      decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"],
-    });
-    adapter.enqueueTool("music_play_track", { candidateRef: "ctx_song_1" });
-    adapter.enqueueTool(ACTION_DECISION_TOOL_ID, { decision: "respond", reason: "工具请求已成功发送" });
+    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"] });
+    adapter.enqueueJson({ candidateRef: "ctx_song_1" });
+    adapter.enqueueJson({ decision: "respond" });
     adapter.enqueueText("已向网易云发送播放请求。");
-    const executeTool = vi.fn(async () => ({
-      status: "succeeded" as const,
-      output: JSON.stringify({ kind: "playback", dispatch: { state: "dispatched" } }),
-    }));
+    const executeTool = vi.fn(async () => ({ status: "succeeded" as const, output: "{\"kind\":\"playback\"}" }));
 
-    const result = await runLangGraphAgentLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
-      adapter,
-      messages: [{ role: "user", content: "播放第一首" }],
-      tools: [musicPlayTool()],
-      toolSystemContent: "TOOL_SYSTEM",
-      soulSystemBaseContent: "SOUL_SYSTEM",
-      originalQuery: "播放第一首",
-      contextualizedQuery: "播放当前网易云日推第一首《最初的记忆》",
-      citaContextBlock: "ctx_song_1",
-      timeoutMs: 30_000,
-      executeTool,
-    });
+    const result = await runLangGraphAgentLoop(options(adapter, executeTool));
 
     expect(executeTool).toHaveBeenCalledTimes(1);
-    expect(adapter.requests.map((request) => request.toolChoice?.name)).toEqual([
-      ACTION_DECISION_TOOL_ID,
-      "music_play_track",
-      ACTION_DECISION_TOOL_ID,
-      undefined,
-    ]);
+    expect(executeTool).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "music_play_track", arguments: '{"candidateRef":"ctx_song_1"}' }),
+      expect.any(Set),
+    );
+    expect(adapter.requests.every((request) => request.tools === undefined && request.toolChoice === undefined)).toBe(true);
     expect(result.reply).toBe("已向网易云发送播放请求。");
-    expect(result.toolResults[0].status).toBe("succeeded");
   });
 
-  it("routes ask_user to Soul without exposing runtime tools", async () => {
+  it("routes ask_user to Soul without executing a tool", async () => {
     const adapter = new FakeAdapter();
-    adapter.enqueueTool(ACTION_DECISION_TOOL_ID, {
-      decision: "ask_user", reason: "存在多个版本", missingInformation: ["歌曲版本"],
-    });
+    adapter.enqueueJson({ decision: "ask_user", reason: "版本不明确", missingInformation: ["歌曲版本"] });
     adapter.enqueueText("你想听哪个版本？");
     const executeTool = vi.fn();
 
-    const result = await runLangGraphAgentLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
-      adapter,
-      messages: [{ role: "user", content: "播放左转灯" }],
-      tools: [musicPlayTool()],
-      toolSystemContent: "TOOL_SYSTEM",
-      soulSystemBaseContent: "SOUL_SYSTEM",
-      originalQuery: "播放左转灯",
-      contextualizedQuery: "播放左转灯，但版本不明确",
-      citaContextBlock: "",
-      timeoutMs: 30_000,
-      executeTool,
-    });
+    const result = await runLangGraphAgentLoop(options(adapter, executeTool));
 
     expect(executeTool).not.toHaveBeenCalled();
-    expect(adapter.requests.at(-1)?.tools).toBeUndefined();
     expect(result.reply).toBe("你想听哪个版本？");
   });
 
-  it("retries a skipped forced tool call instead of falling through to Soul", async () => {
+  it("repairs malformed Action Gate JSON once", async () => {
     const adapter = new FakeAdapter();
-    adapter.enqueueTool(ACTION_DECISION_TOOL_ID, {
-      decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"],
-    });
-    adapter.enqueueText("已经给你播放啦");
-    adapter.enqueueTool("music_play_track", { candidateRef: "ctx_song_1" });
-    adapter.enqueueTool(ACTION_DECISION_TOOL_ID, { decision: "respond", reason: "工具请求已成功发送" });
-    adapter.enqueueText("播放请求已经发出。");
-    const executeTool = vi.fn(async () => ({ status: "succeeded" as const, output: "{\"ok\":true}" }));
+    adapter.enqueueText("我直接回复用户");
+    adapter.enqueueJson({ decision: "respond" });
+    adapter.enqueueText("好的。");
 
-    const result = await runLangGraphAgentLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
-      adapter,
-      messages: [{ role: "user", content: "播放第一首" }],
-      tools: [musicPlayTool()],
-      toolSystemContent: "TOOL_SYSTEM",
-      soulSystemBaseContent: "SOUL_SYSTEM",
-      originalQuery: "播放第一首",
-      contextualizedQuery: "播放当前日推第一首",
-      citaContextBlock: "ctx_song_1",
-      timeoutMs: 30_000,
-      executeTool,
-    });
+    const result = await runLangGraphAgentLoop(options(adapter));
 
-    expect(executeTool).toHaveBeenCalledTimes(1);
-    expect(adapter.requests.filter((request) => request.toolChoice?.name === "music_play_track")).toHaveLength(2);
-    expect(result.reply).toBe("播放请求已经发出。");
-    expect(result.reply).not.toContain("已经给你播放啦");
+    expect(String(adapter.requests[1].messages[0].content)).toContain("上一次 JSON 决策无效");
+    expect(result.reply).toBe("好的。");
   });
 
-  it("feeds a failed tool result back into Action Gate so the model can retry", async () => {
+  it("repairs malformed tool argument JSON before execution", async () => {
     const adapter = new FakeAdapter();
-    adapter.enqueueTool(ACTION_DECISION_TOOL_ID, {
-      decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"],
-    });
-    adapter.enqueueTool("music_play_track", { candidateRef: "ctx_song_1" });
-    adapter.enqueueTool(ACTION_DECISION_TOOL_ID, {
-      decision: "act", capability: "music.play_track", objective: "重试播放第一首", targetRefs: ["ctx_song_1"],
-    });
-    adapter.enqueueTool("music_play_track", { candidateRef: "ctx_song_1" });
-    adapter.enqueueTool(ACTION_DECISION_TOOL_ID, { decision: "respond", reason: "第二次请求成功" });
+    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"] });
+    adapter.enqueueJson({ candidateRef: "ctx_invented" });
+    adapter.enqueueJson({ candidateRef: "ctx_song_1" });
+    adapter.enqueueJson({ decision: "respond" });
+    adapter.enqueueText("请求已发送。");
+    const executeTool = vi.fn(async () => ({ status: "succeeded" as const, output: "ok" }));
+
+    await runLangGraphAgentLoop(options(adapter, executeTool));
+
+    expect(String(adapter.requests[2].messages[0].content)).toContain("E_TOOL_ARGUMENT_SOURCE");
+    expect(executeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("feeds failed execution facts back so the model can explicitly retry", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"] });
+    adapter.enqueueJson({ candidateRef: "ctx_song_1" });
+    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "重试播放第一首", targetRefs: ["ctx_song_1"] });
+    adapter.enqueueJson({ candidateRef: "ctx_song_1" });
+    adapter.enqueueJson({ decision: "respond" });
     adapter.enqueueText("第二次请求成功发送。");
     const executeTool = vi.fn()
       .mockResolvedValueOnce({ status: "failed" as const, errorCode: "E_LAUNCH_FAILED", output: "启动失败" })
       .mockResolvedValueOnce({ status: "succeeded" as const, output: "{\"ok\":true}" });
 
-    const result = await runLangGraphAgentLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
-      adapter,
-      messages: [{ role: "user", content: "播放第一首" }],
-      tools: [musicPlayTool()],
-      toolSystemContent: "TOOL_SYSTEM",
-      soulSystemBaseContent: "SOUL_SYSTEM",
-      originalQuery: "播放第一首",
-      contextualizedQuery: "播放当前日推第一首",
-      citaContextBlock: "ctx_song_1",
-      timeoutMs: 30_000,
-      executeTool,
-    });
+    const result = await runLangGraphAgentLoop(options(adapter, executeTool));
 
     expect(executeTool).toHaveBeenCalledTimes(2);
     expect(result.toolResults.map((item) => item.status)).toEqual(["failed", "succeeded"]);
     expect(String(adapter.requests[2].messages[0].content)).toContain("E_LAUNCH_FAILED");
   });
 
-  it("preserves an explicit error code when a runtime tool throws", async () => {
+  it("does not repeat a successful side effect when the graph reaches the same action again", async () => {
     const adapter = new FakeAdapter();
-    adapter.enqueueTool(ACTION_DECISION_TOOL_ID, {
-      decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"],
-    });
-    adapter.enqueueTool("music_play_track", { candidateRef: "ctx_song_1" });
-    adapter.enqueueTool(ACTION_DECISION_TOOL_ID, { decision: "respond", reason: "播放失败" });
-    adapter.enqueueText("这次没有成功发送播放请求。");
+    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"] });
+    adapter.enqueueJson({ candidateRef: "ctx_song_1" });
+    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "确认播放第一首", targetRefs: ["ctx_song_1"] });
+    adapter.enqueueJson({ candidateRef: "ctx_song_1" });
+    adapter.enqueueJson({ decision: "respond" });
+    adapter.enqueueText("请求已发送。");
+    const executeTool = vi.fn(async () => ({ status: "succeeded" as const, output: "{\"ok\":true}" }));
 
-    const result = await runLangGraphAgentLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
-      adapter,
-      messages: [{ role: "user", content: "播放第一首" }],
-      tools: [musicPlayTool()],
-      toolSystemContent: "TOOL_SYSTEM",
-      soulSystemBaseContent: "SOUL_SYSTEM",
-      originalQuery: "播放第一首",
-      contextualizedQuery: "播放当前日推第一首",
-      citaContextBlock: "ctx_song_1",
-      timeoutMs: 30_000,
-      executeTool: async () => { throw Object.assign(new Error("候选已过期"), { code: "E_CANDIDATE_EXPIRED" }); },
-    });
+    const result = await runLangGraphAgentLoop(options(adapter, executeTool));
 
-    expect(result.toolResults[0]).toMatchObject({ status: "failed", errorCode: "E_CANDIDATE_EXPIRED" });
-    expect(String(adapter.requests[2].messages[0].content)).toContain("E_CANDIDATE_EXPIRED");
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(result.toolResults).toHaveLength(2);
   });
 
-  it("preserves the existing image-caption fallback before continuing the graph", async () => {
+  it("does not repeat a successful side effect when Soul fails and the same turn is retried", async () => {
+    const ledger = new ExecutionLedger();
+    const first = new FakeAdapter();
+    first.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"] });
+    first.enqueueJson({ candidateRef: "ctx_song_1" });
+    first.enqueueJson({ decision: "respond" });
+    first.enqueueText("不会送达的 Soul 回复");
+    const executeTool = vi.fn(async () => ({ status: "succeeded" as const, output: "{\"ok\":true}" }));
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }))
+      .mockResolvedValueOnce(new Response("{}", { status: 200 }))
+      .mockResolvedValueOnce(new Response("soul failed", { status: 500 })) as unknown as typeof fetch;
+
+    await expect(runLangGraphAgentLoop({ ...options(first, executeTool), executionLedger: ledger })).rejects.toThrow("HTTP 500");
+
+    const retry = new FakeAdapter();
+    retry.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"] });
+    retry.enqueueJson({ candidateRef: "ctx_song_1" });
+    retry.enqueueJson({ decision: "respond" });
+    retry.enqueueText("已向网易云发送播放请求。");
+    globalThis.fetch = vi.fn(async () => new Response("{}", { status: 200 })) as unknown as typeof fetch;
+
+    const result = await runLangGraphAgentLoop({ ...options(retry, executeTool), executionLedger: ledger });
+
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(result.reply).toBe("已向网易云发送播放请求。");
+  });
+
+  it("preserves image-caption fallback for the first JSON decision request", async () => {
     const adapter = new FakeAdapter();
-    adapter.enqueueTool(ACTION_DECISION_TOOL_ID, {
-      decision: "ask_user", reason: "图片信息不足", missingInformation: ["图片细节"],
-    });
+    adapter.enqueueJson({ decision: "ask_user", reason: "图片信息不足", missingInformation: ["图片细节"] });
     adapter.enqueueText("你可以再描述一下图片吗？");
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(new Response("unsupported image", { status: 400 }))
@@ -250,20 +215,7 @@ describe("runLangGraphAgentLoop", () => {
       { role: "user", content: "[图片描述] 一张夜景照片" },
     ]);
 
-    await runLangGraphAgentLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
-      adapter,
-      messages: [{ role: "user", content: "看看这张图" }],
-      tools: [musicPlayTool()],
-      toolSystemContent: "TOOL_SYSTEM",
-      soulSystemBaseContent: "SOUL_SYSTEM",
-      originalQuery: "看看这张图",
-      contextualizedQuery: "看看这张图",
-      citaContextBlock: "",
-      timeoutMs: 30_000,
-      executeTool: async () => ({ status: "succeeded", output: "ok" }),
-      imageCaptionFallback,
-    });
+    await runLangGraphAgentLoop({ ...options(adapter), imageCaptionFallback });
 
     expect(imageCaptionFallback).toHaveBeenCalledTimes(1);
     expect(adapter.requests[1].messages).toContainEqual({ role: "user", content: "[图片描述] 一张夜景照片" });
