@@ -10,7 +10,7 @@ Resolve only to an opaque contextRef present in availableContexts. Never invent 
 Preserve the user's original meaning and tone. If context adds no meaning, contextualizedQuery must equal originalQuery and rewriteStatus must be "unchanged".`;
 
 const OUTPUT_SCHEMA = {
-  dialogueAct: { type: "affirm|cancel|select|request|request_explanation|inform|correct|continue|compare|comment|greet|unclear" },
+  dialogueAct: "affirm|cancel|select|request|request_explanation|inform|correct|continue|compare|comment|greet|unclear",
   resolvedReferences: [{ surface: "string", targetRef: "existing contextRef", relation: "direct|candidate_position|previous|focused|comparison_item" }],
   topicTransition: "continue|switch|return|unclear",
   focusedEntityRefs: ["existing contextRef"],

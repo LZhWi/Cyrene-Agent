@@ -161,6 +161,10 @@ describe("build-options", () => {
     const deps = createBuildDeps()
     deps.prepareCitaTurn = vi.fn(async () => ({
       contextBlock: "[CITA_CONTEXT]\n{\"focusedContexts\":[{\"contextRef\":\"music-candidate-1\"}]}\n[/CITA_CONTEXT]",
+      contextPackage: {
+        originalQuery: "第二首",
+        contextualizedQuery: "播放当前网易云日推第二首",
+      },
     }))
     const originalUserMessage = { role: "user", content: "第二首" }
 
@@ -176,6 +180,9 @@ describe("build-options", () => {
     expect(result.options.toolSystemContent).toContain("[CITA_CONTEXT]")
     expect(result.options.toolSystemContent).toContain("music-candidate-1")
     expect(result.options.soulSystemBaseContent).toContain("[CITA_CONTEXT]")
+    expect(result.options.originalQuery).toBe("第二首")
+    expect(result.options.contextualizedQuery).toBe("播放当前网易云日推第二首")
+    expect(result.options.citaContextBlock).toContain("music-candidate-1")
     expect(result.options).not.toHaveProperty("requiredToolName")
     expect(result.options).not.toHaveProperty("requiredToolArgs")
   })

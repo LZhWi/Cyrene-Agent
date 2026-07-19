@@ -44,6 +44,23 @@ describe("buildSkillCatalog", () => {
     expect(out).toContain("- a: x");
     expect(out).not.toContain("- b:");
   });
+
+  it("distinguishes auto-injected skills from skills that require invoke_skill", () => {
+    const music = e("cyrene-music-companion", "音乐陪伴");
+    music.manifest = {
+      id: music.id,
+      version: "1.0.0",
+      defaultEnabled: true,
+      entry: "index.ts",
+      dependencies: [],
+      autoInject: true,
+    };
+
+    const out = buildSkillCatalog([music]);
+
+    expect(out).toContain("自动注入");
+    expect(out).toContain("无需再次调用 invoke_skill");
+  });
 });
 
 describe("buildAutoInjectedSkillContext", () => {

@@ -74,7 +74,10 @@ export interface BuildOptionsDeps {
     turnId: string;
     originalQuery: string;
     recentDialogue: Array<{ role: "user" | "assistant"; text: string }>;
-  }) => Promise<{ contextBlock: string }>;
+  }) => Promise<{
+    contextBlock: string;
+    contextPackage?: { originalQuery: string; contextualizedQuery: string };
+  }>;
 }
 
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
@@ -318,6 +321,7 @@ export async function buildAgentRunOptions(
   const channelSystem = buildChannelSystem(input.channel);
 
   let citaContextBlock = "";
+  let contextualizedQuery = latestUserText;
   if (deps.prepareCitaTurn) {
     try {
       const recentDialogue = messages
@@ -333,6 +337,7 @@ export async function buildAgentRunOptions(
         recentDialogue,
       });
       citaContextBlock = prepared.contextBlock;
+      contextualizedQuery = prepared.contextPackage?.contextualizedQuery ?? latestUserText;
       console.log(
         `[CITA/Trace] injection conversation=${conversationId} tool=${citaContextBlock.length > 0} soul=${citaContextBlock.length > 0} blockChars=${citaContextBlock.length}`,
       );
@@ -390,8 +395,7 @@ export async function buildAgentRunOptions(
     + (citaContextBlock ? "\n\n" + citaContextBlock : "");
 
   // Soul 阶段基础 system：人设 + 环境/记忆/关系/附件/渠道（这些是"表达"所需）。
-  // 工具结果（role: tool 消息）已在 conversation 中携带，本字段不重复注入；
-  // FC 循环 Soul 阶段执行前会按需动态追加 soulToolResultsSummary。
+  // FC 循环在 Soul 阶段追加通用 ToolExecutionContext，并保留 role:tool 协议消息。
   const soulSystemWithoutCita =
     (environmentContext ? environmentContext + "\n\n" : "") +
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
@@ -428,6 +432,9 @@ export async function buildAgentRunOptions(
       },
       messages: fcMessages,
       conversationId,
+      originalQuery: latestUserText,
+      contextualizedQuery,
+      citaContextBlock,
       timeoutMs: deps.chatRequestTimeoutMs,
       toolSystemContent,
       soulSystemBaseContent,

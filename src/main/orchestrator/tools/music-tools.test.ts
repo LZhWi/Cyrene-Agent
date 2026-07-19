@@ -5,6 +5,7 @@ import { buildMusicTools } from "./music-tools";
 function serviceDouble() {
   return {
     getDailyRecommendations: vi.fn(),
+    getLatestSelectionSet: vi.fn(),
     searchTracks: vi.fn(),
     presentTracks: vi.fn(),
     markTracksPresented: vi.fn(),
@@ -33,6 +34,20 @@ function selectionSet(overrides: Record<string, unknown> = {}) {
 }
 
 describe("music Agent tools", () => {
+  it("declares stable capabilities for Action Gate routing", () => {
+    const capabilities = Object.fromEntries(
+      buildMusicTools(serviceDouble() as never).map((tool) => [tool.id, tool.capability]),
+    );
+
+    expect(capabilities).toMatchObject({
+      music_get_daily_recommendations: "music.daily_recommendations",
+      music_search: "music.search",
+      music_present_tracks: "music.present_tracks",
+      music_play_track: "music.play_track",
+      music_play_playlist: "music.play_playlist",
+    });
+  });
+
   it("returns opaque daily candidates and publishes only safe CITA projections", async () => {
     const service = serviceDouble();
     const set = selectionSet();
@@ -76,6 +91,42 @@ describe("music Agent tools", () => {
     expect(ingestContextEvent).toHaveBeenCalledWith(expect.objectContaining({
       type: "context_presented",
       contextRefs: ["ctx_2"],
+    }));
+  });
+
+  it("reuses the current daily set and does not render the same card twice", async () => {
+    const service = serviceDouble();
+    const set = selectionSet({ presentedTrackIds: ["255667"], presentedAt: 950 });
+    service.getLatestSelectionSet.mockReturnValue(set);
+    service.getSelectionSet.mockReturnValue(set);
+    service.presentTracks.mockResolvedValue({ cardRef: "internal-card" });
+    const contextRefs = registry();
+    const sendCard = vi.fn(() => true);
+    const ingestContextEvent = vi.fn();
+    const tool = buildMusicTools(service as never, { contextRefs, sendCard, ingestContextEvent })
+      .find((candidate) => candidate.id === "music_get_daily_recommendations")!;
+
+    const first = JSON.parse(await tool.execute({}, {
+      userQuery: "今日推荐",
+      conversationId: "c1",
+      runId: "run-1",
+      contextRefs,
+    }));
+    const second = JSON.parse(await tool.execute({}, {
+      userQuery: "再试一次",
+      conversationId: "c1",
+      runId: "run-2",
+      contextRefs,
+    }));
+
+    expect(service.getDailyRecommendations).not.toHaveBeenCalled();
+    expect(first.context).toEqual(second.context);
+    expect(first.presentation).toEqual({ presented: true, reused: true });
+    expect(second.presentation).toEqual({ presented: true, reused: true });
+    expect(sendCard).not.toHaveBeenCalled();
+    expect(ingestContextEvent).toHaveBeenCalledWith(expect.objectContaining({
+      type: "context_presented",
+      contextRefs: first.context.candidates.map((candidate: { candidateRef: string }) => candidate.candidateRef),
     }));
   });
 
@@ -214,7 +265,7 @@ describe("music Agent tools", () => {
     expect(service.markTracksPresented).toHaveBeenCalledWith("s1", "c1", ["102", "101"]);
   });
 
-  it("keeps search purpose local and returns safe search projections", async () => {
+  it("uses the model-selected search purpose without inferring from user wording", async () => {
     const service = serviceDouble();
     const set = selectionSet({ source: "search", query: "稻香", resolutionPurpose: "play" });
     service.searchTracks.mockResolvedValue(set);
@@ -229,10 +280,22 @@ describe("music Agent tools", () => {
 
     expect(service.searchTracks).toHaveBeenCalledWith("稻香", "c1", undefined, {
       resolutionRunId: "run-1",
-      purpose: "play",
+      purpose: "discover",
     });
     expect(output).not.toContain("255667");
     expect(output).not.toContain("netease-cloud-music");
+  });
+
+  it("rejects a missing search purpose instead of guessing from user wording", async () => {
+    const service = serviceDouble();
+    const tool = buildMusicTools(service as never)
+      .find((candidate) => candidate.id === "music_search")!;
+
+    await expect(tool.execute(
+      { keyword: "稻香" },
+      { userQuery: "播放稻香", conversationId: "c1", runId: "run-1" },
+    )).rejects.toThrow("E_MUSIC_SEARCH_PURPOSE_REQUIRED");
+    expect(service.searchTracks).not.toHaveBeenCalled();
   });
 
   it("music_play_playlist remains a real service call", async () => {

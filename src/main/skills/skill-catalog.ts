@@ -48,11 +48,14 @@ export function buildSkillCatalog(skills: SkillEntry[]): string {
   if (enabled.length === 0) return "";
   const lines = enabled.map(s => {
     const toolsTag = s.tools && s.tools.length > 0 ? ` [tools: ${s.tools.join(", ")}]` : "";
-    return `- ${s.id}: ${s.description}${toolsTag}`;
+    const activationTag = s.manifest?.autoInject === true
+      ? " [自动注入：无需再次调用 invoke_skill]"
+      : "";
+    return `- ${s.id}: ${s.description}${toolsTag}${activationTag}`;
   });
   return [
     "## 可用 Skill",
-    "当某 skill 适用于当前任务时，先调用 invoke_skill(skill_id) 取详细指令，再按指令用工具执行。",
+    "当未自动注入的 skill 适用于当前任务时，先调用 invoke_skill(skill_id) 取详细指令；标记为自动注入的 skill 已在后文提供完整规则，无需再次调用 invoke_skill。",
     "",
     ...lines,
   ].join("\n") + AMBIGUITY_POLICY;

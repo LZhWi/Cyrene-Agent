@@ -39,7 +39,9 @@ export function parseTurnUnderstanding(value: unknown): TurnUnderstanding {
     "contextualizedQuery", "rewriteStatus", "uncertainties",
   ], "TurnUnderstanding");
 
-  const dialogueAct = object(root.dialogueAct, "dialogueAct");
+  const dialogueAct = typeof root.dialogueAct === "string"
+    ? { type: root.dialogueAct }
+    : object(root.dialogueAct, "dialogueAct");
   exactKeys(dialogueAct, ["type"], "dialogueAct");
   if (!ACTS.has(dialogueAct.type as DialogueActType)) throw new Error("dialogueAct.type is invalid");
 

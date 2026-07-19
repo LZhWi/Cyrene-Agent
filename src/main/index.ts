@@ -203,9 +203,6 @@ function appendMinimaxTtsLog(entry: Record<string, unknown>): void {
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, "minimax-tts.log");
     fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
-    if (entry.phase === "request.begin") {
-      console.log("[TTS MiniMax] 诊断日志:", logFile);
-    }
   } catch (err) {
     console.warn("[TTS MiniMax] 写诊断日志失败:", err);
   }
@@ -217,9 +214,6 @@ function appendGptsovitsTtsLog(entry: Record<string, unknown>): void {
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, "gptsovits-tts.log");
     fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
-    if (entry.phase === "request.begin") {
-      console.log("[TTS GPT-SoVITS] 诊断日志:", logFile);
-    }
   } catch (err) {
     console.warn("[TTS GPT-SoVITS] 写诊断日志失败:", err);
   }
@@ -231,9 +225,6 @@ function appendCustomCloudTtsLog(entry: Record<string, unknown>): void {
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, "custom-cloud-tts.log");
     fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
-    if (entry.phase === "request.begin") {
-      console.log("[TTS CustomCloud] 诊断日志:", logFile);
-    }
   } catch (err) {
     console.warn("[TTS CustomCloud] 写诊断日志失败:", err);
   }
@@ -245,9 +236,6 @@ function appendMimoTtsLog(entry: Record<string, unknown>): void {
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, "mimo-tts.log");
     fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
-    if (entry.phase === "request.begin") {
-      console.log("[TTS MiMo] 诊断日志:", logFile);
-    }
   } catch (err) {
     console.warn("[TTS MiMo] 写诊断日志失败:", err);
   }
@@ -1673,11 +1661,12 @@ async function callChatCompletionsStream(
   timeoutMs: number,
   label: string,
   onChunk: (text: string) => void,
+  logTiming = true,
 ): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const _startTime = Date.now();
-  console.log(`[TIMING] ${label} START timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`);
+  if (logTiming) console.log(`[TIMING] ${label} START timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`);
 
   // 拼 VendorConfig（settings 顶层三件套 + 镜像字段都参与）
   const cfg: VendorConfig = {
@@ -1743,15 +1732,15 @@ async function callChatCompletionsStream(
     }
 
     const result = stripThinkBlocks(fullText);
-    console.log(`[TIMING] ${label} OK in ${Date.now() - _startTime}ms resultLen=${result.length}`);
+    if (logTiming) console.log(`[TIMING] ${label} OK in ${Date.now() - _startTime}ms resultLen=${result.length}`);
     appendApiLog(label, messages, fullText, result);
     return result;
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      console.log(`[TIMING] ${label} TIMEOUT at ${Date.now() - _startTime}ms`);
+      if (logTiming) console.log(`[TIMING] ${label} TIMEOUT at ${Date.now() - _startTime}ms`);
       throw new Error("模型请求超时，请稍后重试。");
     }
-    console.log(`[TIMING] ${label} ERROR at ${Date.now() - _startTime}ms: ${err instanceof Error ? err.message : err}`);
+    if (logTiming) console.log(`[TIMING] ${label} ERROR at ${Date.now() - _startTime}ms: ${err instanceof Error ? err.message : err}`);
     throw err;
   } finally {
     clearTimeout(timer);
@@ -1766,8 +1755,9 @@ async function callChatCompletions(
   temperature: number | undefined,
   timeoutMs: number,
   label: string,
+  logTiming = true,
 ): Promise<string> {
-  return callChatCompletionsStream(settings, messages, temperature, timeoutMs, label, () => {});
+  return callChatCompletionsStream(settings, messages, temperature, timeoutMs, label, () => {}, logTiming);
 }
 
 const citaService = new CitaService({
@@ -2194,8 +2184,6 @@ async function observeRuntimeState(
   // 入 LLM 后台队列：和 MemoryJudge 串行执行，避免并发触发限流；
   // 限流自动退避 5s 重试 1 次。.catch 吞错误，不影响主流程。
   enqueueLLMTask("心情观察器", async () => {
-    const _obsStart = Date.now();
-    console.log(`[TIMING] 心情观察器 SENDING request`);
     const observerContent = await callChatCompletions(settings, [
       {
         role: "system",
@@ -2208,8 +2196,7 @@ async function observeRuntimeState(
           recentDialogue,
         }),
       },
-    ], undefined, 30000, "心情观察器");
-    console.log(`[TIMING] 心情观察器 OK in ${Date.now() - _obsStart}ms raw=${observerContent?.slice(0, 100)}`);
+    ], undefined, 30000, "心情观察器", false);
     const feeling = parseObserverFeeling(observerContent);
     if (feeling) {
       const smoothed = smoothFeeling(feelingScores, feeling);
@@ -2219,7 +2206,7 @@ async function observeRuntimeState(
       runtimeState.updatedAt = Date.now();
       broadcastRuntimeStateChanged();
     }
-  }).catch((err) => {
+  }, { log: false }).catch((err) => {
     console.warn("[Cyrene] observe runtime failed; keeping current feeling:", err);
   });
   // 标注未使用的参数，避免 lint 警告
@@ -2429,7 +2416,6 @@ function broadcastModelConfigChanged(settings = loadModelSettings()): void {
 }
 
 function broadcastRuntimeStateChanged(): void {
-  console.log("[Cyrene] broadcasting runtime state:", JSON.stringify(runtimeState));
   broadcastToAuxWindows(IPC.RUNTIME_STATE_CHANGED, runtimeState);
 }
 

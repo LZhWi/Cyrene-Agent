@@ -48,6 +48,15 @@ describe("RemoteSemanticEngine", () => {
     expect(generate.mock.calls[0][0].userPrompt).toContain("music-candidate-1");
   });
 
+  it("accepts the compact dialogueAct shape produced by the semantic model", async () => {
+    const generate = vi.fn<SemanticTextGenerator>(async () => JSON.stringify({
+      ...understanding,
+      dialogueAct: "select",
+    }));
+
+    await expect(new RemoteSemanticEngine(generate).understandTurn(input)).resolves.toEqual(understanding);
+  });
+
   it("rejects model-authored tool arguments", async () => {
     const generate = vi.fn(async () => JSON.stringify({ ...understanding, trackId: "123" }));
 

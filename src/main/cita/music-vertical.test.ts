@@ -9,6 +9,7 @@ import type { TurnUnderstanding, TurnUnderstandingInput } from "./contracts";
 function serviceDouble() {
   return {
     getDailyRecommendations: vi.fn(),
+    getLatestSelectionSet: vi.fn(),
     searchTracks: vi.fn(),
     presentTracks: vi.fn(async () => ({ cardRef: "internal-card" })),
     markTracksPresented: vi.fn(),
@@ -146,7 +147,7 @@ describe("CITA music vertical", () => {
     await tools.find((tool) => tool.id === "music_get_daily_recommendations")!
       .execute({}, { userQuery: "日推", conversationId: "c1", contextRefs: env.refs });
     await tools.find((tool) => tool.id === "music_search")!
-      .execute({ keyword: "左转灯" }, { userQuery: "搜左转灯", conversationId: "c1", contextRefs: env.refs });
+      .execute({ keyword: "左转灯", purpose: "discover" }, { userQuery: "搜左转灯", conversationId: "c1", contextRefs: env.refs });
 
     const sources = env.store.snapshot("c1").contexts
       .filter((context) => context.kind === "candidate")

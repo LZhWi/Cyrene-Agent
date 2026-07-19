@@ -75,6 +75,108 @@ describe("CitaService", () => {
     expect(understandTurn).toHaveBeenCalledTimes(1);
   });
 
+  it("retains structural context while disabled so enabling CITA does not lose presented candidates", async () => {
+    let enabled = false;
+    const store = new ContextStore({ now: () => 1_000 });
+    const understandTurn = vi.fn(async () => validUnderstanding);
+    const service = new CitaService({
+      store,
+      engine: { understandTurn },
+      getSettings: () => ({ enabled, semanticEngine: "remote" }),
+      now: () => 1_000,
+    });
+    service.ingest({
+      type: "context_upserted",
+      eventId: "candidate-1",
+      conversationId: "conversation-a",
+      occurredAt: 1_000,
+      source: "music-tools",
+      context: {
+        contextRef: "ctx_song_1",
+        conversationId: "conversation-a",
+        domain: "music",
+        kind: "candidate",
+        label: "最初的记忆",
+        position: 1,
+        presented: true,
+        lifecycle: "active",
+        source: "tool_result",
+      },
+    });
+
+    enabled = true;
+    await service.prepareTurn(turnInput({ originalQuery: "播放第一首" }));
+
+    expect(understandTurn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        availableContexts: expect.arrayContaining([
+          expect.objectContaining({ contextRef: "ctx_song_1", label: "最初的记忆" }),
+        ]),
+      }),
+      undefined,
+    );
+  });
+
+  it("includes active presented candidates as supporting evidence even when semantic focus is empty", async () => {
+    const service = createService({ understandTurn: vi.fn(async () => validUnderstanding) });
+    service.ingest({
+      type: "context_upserted",
+      eventId: "candidate-1",
+      conversationId: "conversation-a",
+      occurredAt: 1_000,
+      source: "music-tools",
+      context: {
+        contextRef: "ctx_song_1",
+        conversationId: "conversation-a",
+        domain: "music",
+        kind: "candidate",
+        label: "最初的记忆",
+        position: 1,
+        presented: true,
+        lifecycle: "active",
+        source: "tool_result",
+      },
+    });
+
+    const result = await service.prepareTurn(turnInput({ originalQuery: "播放第一首" }));
+    const pkg = result.contextPackage as unknown as { supportingContexts?: ModelVisibleContext[] };
+
+    expect(pkg.supportingContexts).toEqual([
+      expect.objectContaining({ contextRef: "ctx_song_1", label: "最初的记忆", position: 1 }),
+    ]);
+    expect(result.contextBlock).toContain("ctx_song_1");
+  });
+
+  it("reports the number of supporting contexts in the CITA trace", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const service = createService({ understandTurn: vi.fn(async () => validUnderstanding) });
+      service.ingest({
+        type: "context_upserted",
+        eventId: "candidate-1",
+        conversationId: "conversation-a",
+        occurredAt: 1_000,
+        source: "music-tools",
+        context: {
+          contextRef: "ctx_song_1",
+          conversationId: "conversation-a",
+          domain: "music",
+          kind: "candidate",
+          label: "最初的记忆",
+          presented: true,
+          lifecycle: "active",
+          source: "tool_result",
+        },
+      });
+
+      await service.prepareTurn(turnInput());
+      const lines = log.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(lines).toContain("supporting=1");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it("emits a readable prepare and result trace", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
@@ -99,6 +201,21 @@ describe("CitaService", () => {
     expect(result.contextPackage?.originalQuery).toBe("第一首吧");
     expect(result.contextPackage?.contextualizedQuery).toBe("第一首吧");
     expect(result.contextPackage?.semanticStatus).toBe("unavailable");
+  });
+
+  it("logs the concrete semantic failure instead of only Error", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const service = createService({
+        understandTurn: vi.fn(async () => { throw new Error("CITA semantic schema validation failed: dialogueAct.type is invalid"); }),
+      });
+
+      await service.prepareTurn(turnInput());
+      const lines = warn.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(lines).toContain("schema validation failed: dialogueAct.type is invalid");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("works without observeTurn", async () => {

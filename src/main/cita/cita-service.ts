@@ -53,7 +53,6 @@ export class CitaService {
   }
 
   ingest(event: ContextEvent): void {
-    if (!this.getSettings().enabled) return;
     if (!isSafeProjection(event)) {
       console.warn("[CITA] rejected unsafe context projection");
       return;
@@ -102,11 +101,11 @@ export class CitaService {
       );
       const contextBlock = buildCitaContextBlock(contextPackage);
       console.log(
-        `[CITA/Trace] result conversation=${input.conversationId} status=${validation.status} dialogueAct=${validation.understanding.dialogueAct.type} rewrite=${validation.understanding.rewriteStatus} refs=${this.formatRefs(validation.understanding.resolvedReferences.map((reference) => reference.targetRef))} focused=${validation.understanding.focusedEntityRefs.length} blockChars=${contextBlock.length}`,
+        `[CITA/Trace] result conversation=${input.conversationId} status=${validation.status} dialogueAct=${validation.understanding.dialogueAct.type} rewrite=${validation.understanding.rewriteStatus} refs=${this.formatRefs(validation.understanding.resolvedReferences.map((reference) => reference.targetRef))} focused=${validation.understanding.focusedEntityRefs.length} supporting=${contextPackage.supportingContexts?.length ?? 0} blockChars=${contextBlock.length}`,
       );
       return { contextPackage, contextBlock };
     } catch (error) {
-      const reason = error instanceof Error ? error.name : "unknown_error";
+      const reason = error instanceof Error ? error.message : String(error || "unknown_error");
       console.warn(`[CITA/Trace] unavailable conversation=${input.conversationId} reason=${reason}`);
       return this.buildUnavailablePackage(input, state.revision);
     }
@@ -121,12 +120,16 @@ export class CitaService {
     stateRevision: number,
     uncertaintyNotes: string[] = [],
   ): CitaPrepareTurnResult {
+    const supportingContexts = this.collectSupportingContexts(
+      this.store.snapshot(input.conversationId).contexts,
+    );
     const contextPackage: ContextPackage = {
       originalQuery: input.originalQuery,
       contextualizedQuery: input.originalQuery,
       rewriteStatus: "unchanged",
       resolvedReferences: [],
       focusedContexts: [],
+      supportingContexts,
       uncertaintyNotes,
       semanticStatus: "unavailable",
       stateRevision,
@@ -153,6 +156,7 @@ export class CitaService {
       dialogueAct: understanding.dialogueAct,
       resolvedReferences: understanding.resolvedReferences,
       focusedContexts: contexts.filter((context) => focusedRefs.has(context.contextRef)),
+      supportingContexts: this.collectSupportingContexts(contexts),
       uncertaintyNotes: [
         ...understanding.uncertainties.map((uncertainty) => uncertainty.description),
         ...validationNotes,
@@ -160,6 +164,12 @@ export class CitaService {
       semanticStatus,
       stateRevision,
     };
+  }
+
+  private collectSupportingContexts(contexts: ModelVisibleContext[]): ModelVisibleContext[] {
+    return contexts
+      .filter((context) => context.lifecycle === "active" && context.presented === true)
+      .slice(-20);
   }
 
   private formatRefs(refs: string[]): string {

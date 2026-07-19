@@ -181,6 +181,13 @@ export class MusicService {
     return this.cache.get(setId, conversationId);
   }
 
+  getLatestSelectionSet(
+    conversationId: string,
+    source?: MusicSelectionSet["source"],
+  ): MusicSelectionSet | null {
+    return this.cache.latest(conversationId, source);
+  }
+
   // ── Login poll passthrough (smoke harness + future orchestrators) ──
 
   /** Drive one login-state check against the MCP auth server. */

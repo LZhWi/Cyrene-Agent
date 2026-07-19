@@ -227,7 +227,8 @@ describe("runTwoPhaseFcLoop", () => {
 
     // soul 阶段 system
     expect(soulReq.messages[0].role).toBe("system");
-    expect(soulReq.messages[0].content).toBe("SOUL_SYSTEM_BASE");
+    expect(String(soulReq.messages[0].content)).toContain("SOUL_SYSTEM_BASE");
+    expect(String(soulReq.messages[0].content)).toContain('"calls":[]');
     // soul 阶段不携带 tools
     expect(soulReq.tools).toBeUndefined();
 
@@ -276,8 +277,9 @@ describe("runTwoPhaseFcLoop", () => {
     // soul 阶段不带 tools
     const soulReq = adapter.requests[adapter.requests.length - 1];
     expect(soulReq.tools).toBeUndefined();
-    // soul 阶段 system 是 soul base
-    expect(soulReq.messages[0].content).toBe("SOUL_SYSTEM_BASE");
+    // soul 阶段 system 同时包含 soul base 与本轮执行事实
+    expect(String(soulReq.messages[0].content)).toContain("SOUL_SYSTEM_BASE");
+    expect(String(soulReq.messages[0].content)).toContain('"toolId":"weather"');
   });
 
   it("纯聊天场景：tool 阶段 no_tool → soul 阶段回复", async () => {
@@ -332,7 +334,7 @@ describe("runTwoPhaseFcLoop", () => {
     expect(result.reply).toBe("抱歉，已经循环太多次了");
   });
 
-  it("工具执行异常不影响主流程，结果带 [工具执行失败] 前缀", async () => {
+  it("工具执行异常不影响主流程，并记录结构化失败状态", async () => {
     const adapter = new FakeAdapter();
     adapter.enqueueToolCalls([
       { id: "tc-1", name: "weather", arguments: "{}" },
@@ -355,11 +357,70 @@ describe("runTwoPhaseFcLoop", () => {
     });
 
     expect(result.toolResults).toHaveLength(1);
-    expect(result.toolResults[0].output).toContain("[工具执行失败]");
+    expect(result.toolResults[0]).toMatchObject({
+      output: "boom",
+      status: "failed",
+      errorCode: "E_TOOL_EXECUTION_FAILED",
+    });
     expect(result.reply).toBe("出错了但我继续");
   });
 
-  it("Soul 阶段不重复注入同一份工具结果（依赖 conversation 中的 tool 消息）", async () => {
+  it("preserves a structured runtime failure for the final Soul call", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueToolCalls([{ id: "play-1", name: "music_play_track", arguments: "{\"candidateRef\":\"ctx_missing\"}" }]);
+    adapter.enqueueText("");
+    adapter.enqueueText("这次请求没有成功，我再确认一下目标。");
+
+    const result = await runTwoPhaseFcLoop({
+      ...baseOptions,
+      tools: [makeTool("music_play_track")],
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      executeTool: async () => ({
+        status: "failed" as const,
+        output: "E_CONTEXT_REF_NOT_FOUND",
+        errorCode: "E_CONTEXT_REF_NOT_FOUND",
+      }),
+    });
+
+    expect(result.toolResults[0]).toMatchObject({
+      toolId: "music_play_track",
+      status: "failed",
+      errorCode: "E_CONTEXT_REF_NOT_FOUND",
+    });
+    const sysContent = String(adapter.requests.at(-1)!.messages[0].content);
+    expect(sysContent).toContain('"status":"failed"');
+    expect(sysContent).toContain('"errorCode":"E_CONTEXT_REF_NOT_FOUND"');
+  });
+
+  it("emits a concise structured tool execution trace", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const adapter = new FakeAdapter();
+      adapter.enqueueToolCalls([{ id: "play-1", name: "music_play_track", arguments: "{}" }]);
+      adapter.enqueueText("");
+      adapter.enqueueText("没有执行成功。");
+
+      await runTwoPhaseFcLoop({
+        ...baseOptions,
+        tools: [makeTool("music_play_track")],
+        settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+        adapter,
+        executeTool: async () => ({
+          status: "failed",
+          output: "E_CONTEXT_REF_NOT_FOUND",
+          errorCode: "E_CONTEXT_REF_NOT_FOUND",
+        }),
+      });
+
+      const lines = log.mock.calls.map((call) => call.join(" ")).join("\n");
+      expect(lines).toContain("[ToolExecution/Trace] tool=music_play_track status=failed errorCode=E_CONTEXT_REF_NOT_FOUND");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("Soul 阶段同时保留 tool 消息并注入本轮权威执行上下文", async () => {
     const adapter = new FakeAdapter();
     adapter.enqueueToolCalls([
       { id: "tc-1", name: "weather", arguments: "{}" },
@@ -367,7 +428,6 @@ describe("runTwoPhaseFcLoop", () => {
     adapter.enqueueText("");
     adapter.enqueueText("北京 25 度");
 
-    // 不传 buildSoulToolResultsSummary：默认应该是空字符串
     await runTwoPhaseFcLoop({
       ...baseOptions,
       settings: {
@@ -378,14 +438,18 @@ describe("runTwoPhaseFcLoop", () => {
       },
       adapter,
       executeTool: async () => "北京：晴 25°C",
-      // 不传 buildSoulToolResultsSummary，默认应该是空字符串
     });
 
-    // 第一期：默认 buildSoulToolResultsSummary 是空，soul system 不含具体工具结果
-    // 调用方可以选择注入摘要，但默认不重复 conversation 已有的 tool 消息
     const soulReq = adapter.requests[adapter.requests.length - 1];
     const sysContent = String(soulReq.messages[0].content);
-    expect(sysContent).toBe("SOUL_SYSTEM_BASE");
+    expect(sysContent).toContain("SOUL_SYSTEM_BASE");
+    expect(sysContent).toContain("[TOOL_EXECUTION_CONTEXT]");
+    expect(sysContent).toContain('"toolId":"weather"');
+    expect(sysContent).toContain('"status":"succeeded"');
+    expect(sysContent).toContain("北京：晴 25°C");
+    expect(soulReq.messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: "tool", name: "weather", content: "北京：晴 25°C" }),
+    ]));
   });
 
   it("buildSoulToolResultsSummary 非空时，会追加到 soul system 末尾", async () => {
@@ -488,7 +552,7 @@ describe("runTwoPhaseFcLoop", () => {
     expect(streamed).toBe(result.reply);
   });
 
-  it("replaces a bracketed textual daily tool call with a truthful card acknowledgement", async () => {
+  it("replaces a leaked textual tool protocol with a generic retry message", async () => {
     const adapter = new FakeAdapter();
     adapter.enqueueToolCalls([{ id: "daily-1", name: "music_get_daily_recommendations", arguments: "{}" }]);
     adapter.enqueueText("");
@@ -506,12 +570,46 @@ describe("runTwoPhaseFcLoop", () => {
       }),
     });
 
-    expect(result.reply).toContain("今日推荐")
-    expect(result.reply).toContain("卡片")
+    expect(result.reply).toContain("没有生成正常回复")
     expect(result.reply).not.toContain("tool_call")
   });
 
-  it("does not claim playback when no playback tool was successfully dispatched", async () => {
+  it("lets Soul generate the natural card reply from structured tool facts without fixed replacement", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueToolCalls([{ id: "daily-1", name: "music_get_daily_recommendations", arguments: "{}" }]);
+    adapter.enqueueText("");
+    adapter.enqueueText("今天的推荐已经整理好啦，看看卡片里有没有喜欢的♪");
+
+    const result = await runTwoPhaseFcLoop({
+      ...baseOptions,
+      tools: [makeTool("music_get_daily_recommendations")],
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      executeTool: async () => JSON.stringify({
+        kind: "recommendations",
+        context: {
+          setRef: "ctx_set",
+          source: "daily_recommendation",
+          candidates: [{
+            candidateRef: "ctx_song_1",
+            position: 1,
+            name: "最初的记忆",
+            artists: ["徐佳莹"],
+          }],
+        },
+        presentation: { presented: true },
+      }),
+    });
+
+    expect(result.reply).toBe("今天的推荐已经整理好啦，看看卡片里有没有喜欢的♪");
+    const soulReq = adapter.requests.at(-1)!;
+    const sysContent = String(soulReq.messages[0].content);
+    expect(sysContent).toContain('"kind":"recommendations"');
+    expect(sysContent).toContain('"name":"最初的记忆"');
+    expect(sysContent).toContain('"artists":["徐佳莹"]');
+  });
+
+  it("tells Soul explicitly when no tool ran instead of using a reply regex", async () => {
     const adapter = new FakeAdapter();
     adapter.enqueueText("");
     adapter.enqueueText("正在为你播放♪");
@@ -523,10 +621,12 @@ describe("runTwoPhaseFcLoop", () => {
       executeTool: async () => "ok",
     });
 
-    expect(result.reply).toBe("这次还没有成功向网易云发送播放请求。")
+    expect(result.reply).toBe("正在为你播放♪");
+    const sysContent = String(adapter.requests.at(-1)!.messages[0].content);
+    expect(sysContent).toContain('"calls":[]');
   });
 
-  it("normalizes dispatched playback wording to the only truthful acknowledgement", async () => {
+  it("provides dispatched playback as a runtime fact and leaves wording to Soul", async () => {
     const adapter = new FakeAdapter();
     adapter.enqueueToolCalls([{
       id: "play-1",
@@ -547,6 +647,10 @@ describe("runTwoPhaseFcLoop", () => {
       }),
     });
 
-    expect(result.reply).toBe("已向网易云发送播放请求。")
+    expect(result.reply).toBe("已经开始播放了♪");
+    const sysContent = String(adapter.requests.at(-1)!.messages[0].content);
+    expect(sysContent).toContain('"toolId":"music_play_track"');
+    expect(sysContent).toContain('"state":"dispatched"');
+    expect(sysContent).toContain("dispatched 只表示请求已发送给客户端");
   });
 });

@@ -5,4 +5,12 @@ export interface ToolCallResult {
   toolId: string;
   args: Record<string, unknown>;
   output: string;
+  status: "succeeded" | "failed";
+  errorCode?: string;
+}
+
+export interface ToolExecutionOutcome {
+  output: string;
+  status: "succeeded" | "failed";
+  errorCode?: string;
 }

@@ -67,6 +67,16 @@ describe("SelectionSetCache", () => {
     expect(c.get("s0", "convA")).not.toBeNull();
   });
 
+  it("returns the newest non-expired set for a conversation and source", () => {
+    const search = set("search-1", "convA");
+    const daily = { ...set("daily-1", "convA"), source: "daily_recommendation" as const };
+    c.add(search);
+    c.add(daily);
+
+    expect(c.latest("convA", "daily_recommendation")).toEqual(daily);
+    expect(c.latest("convB", "daily_recommendation")).toBeNull();
+  });
+
   it("marks only validated displayed tracks as presented", () => {
     c.add(set("s1", "convA"));
     c.markPresented("s1", "convA", ["s1-2", "s1-0"], 1_234);

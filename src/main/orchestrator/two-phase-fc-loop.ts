@@ -20,7 +20,7 @@
 //
 //   SOUL_PHASE
 //     1. 构造 soulMessages：[{ role: "system", content: soulSystemBaseContent + 动态 soulToolResultsSummary }, ...conversation]
-//        - 工具结果（role: tool 消息）已在 conversation 中携带，本字段不重复注入
+//        - role:tool 保留协议消息；另注入结构化 ToolExecutionContext 供 Soul 核对本轮事实
 //        - conversation 不含工具阶段自由文本
 //     2. req.messages = soulMessages
 //     3. req.tools 不携带（避免再次进入工具决策）
@@ -45,7 +45,8 @@ import type {
   ToolExecutionResult,
 } from "./vendors/types";
 import type { ToolDefinition } from "./tool-registry";
-import type { ToolCallResult } from "./types";
+import { buildToolExecutionContext } from "./tool-execution-context";
+import type { ToolCallResult, ToolExecutionOutcome } from "./types";
 
 export interface AgentLoopSettings {
   provider: string;
@@ -77,8 +78,7 @@ export interface TwoPhaseFcOptions {
   tools: ToolDefinition[];
   /** 工具阶段使用的 system prompt（仅含工具调度规则 + 自动生成的工具目录）。 */
   toolSystemContent: string;
-  /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。
-   *  工具结果（role: tool 消息）已在 conversation 中携带，本字段不重复注入。 */
+  /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。 */
   soulSystemBaseContent: string;
   timeoutMs: number;
   maxToolRounds?: number;
@@ -88,9 +88,8 @@ export interface TwoPhaseFcOptions {
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
   /** 工具执行器（封装权限检查 + execute + 异常转 output 字符串）。
    *  由调用方（CyreneAgent）注入。 */
-  executeTool: (tc: ToolCall, runnableToolIds: Set<string>) => Promise<string>;
-  /** 可选：构建 Soul 阶段动态追加的工具结果摘要。
-   *  第一期默认实现是空字符串（依赖 conversation 里的 role: tool 消息）。 */
+  executeTool: (tc: ToolCall, runnableToolIds: Set<string>) => Promise<string | ToolExecutionOutcome>;
+  /** 可选：构建额外的业务摘要；权威执行事实始终由 ToolExecutionContext 注入。 */
   buildSoulToolResultsSummary?: (results: ToolCallResult[]) => string;
   /** 事件回调。 */
   onEvent?: (event: TwoPhaseEvent) => void;
@@ -164,37 +163,7 @@ function stripTextualToolProtocol(text: string): string {
 }
 
 function buildTextualToolProtocolFallback(toolResults: ToolCallResult[]): string {
-  const daily = [...toolResults].reverse().find((result) => result.toolId === "music_get_daily_recommendations");
-  if (daily) {
-    try {
-      const parsed = JSON.parse(daily.output) as { presentation?: unknown };
-      if (parsed.presentation) return "今日推荐已经放在卡片里啦，看看有没有喜欢的♪";
-    } catch {
-      // 工具异常字符串不是 JSON；下方使用诚实的失败回复。
-    }
-    return "今日推荐暂时没读取成功，请稍后再试一次。";
-  }
   return "刚才的操作没有生成正常回复，请再试一次。";
-}
-
-function guardPlaybackClaim(text: string, toolResults: ToolCallResult[]): string {
-  const playback = [...toolResults].reverse().find((result) => result.toolId === "music_play_track");
-  if (playback) {
-    try {
-      const parsed = JSON.parse(playback.output) as { dispatch?: { state?: string } };
-      if (parsed.dispatch?.state === "dispatched") return "已向网易云发送播放请求。";
-      if (parsed.dispatch?.state === "client_unavailable") {
-        return "已找到歌曲，但播放需要安装网易云桌面客户端。";
-      }
-      if (parsed.dispatch?.state === "launch_failed") {
-        return "已找到歌曲，但这次没能向网易云发送播放请求。";
-      }
-    } catch {
-      // Failed tool output falls through to the unsupported-claim guard.
-    }
-  }
-  const unsupportedClaim = /(?:正在|已经|开始|为你).{0,8}(?:播放|放歌)|(?:播放|音乐).{0,6}(?:开始|响起来)/.test(text);
-  return unsupportedClaim ? "这次还没有成功向网易云发送播放请求。" : text;
 }
 
 function buildToolSpecs(tools: ReadonlyArray<ToolDefinition>): Array<{ name: string; description: string; parameters: object }> {
@@ -404,20 +373,34 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
 
         console.log(LOG_PREFIX, "执行工具:", tc.name, JSON.stringify(args).slice(0, 200));
 
-        let output: string;
+        let outcome: ToolExecutionOutcome;
         try {
-          output = await executeTool(tc, runnableToolIds);
+          const executed = await executeTool(tc, runnableToolIds);
+          outcome = typeof executed === "string"
+            ? { output: executed, status: "succeeded" }
+            : executed;
         } catch (err) {
           const errMsg = err instanceof Error ? err.message : String(err);
-          output = "[工具执行失败] " + errMsg;
+          outcome = { output: errMsg, status: "failed", errorCode: "E_TOOL_EXECUTION_FAILED" };
           console.error(LOG_PREFIX, "工具执行失败 [" + tc.name + "]:", errMsg);
         }
+        const output = outcome.output;
+        console.log(
+          `[ToolExecution/Trace] tool=${tc.name} status=${outcome.status}`
+          + (outcome.errorCode ? ` errorCode=${outcome.errorCode}` : ""),
+        );
         const resultLog = tc.name.startsWith("music_")
           ? truncateToolResult(output).slice(0, 500)
           : `length=${output.length}`;
         console.log(LOG_PREFIX, "工具结果:", tc.name, resultLog);
 
-        allToolResults.push({ toolId: tc.name, args, output });
+        allToolResults.push({
+          toolId: tc.name,
+          args,
+          output,
+          status: outcome.status,
+          ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
+        });
         execResults.push({ toolCall: tc, output: truncateToolResult(output) });
 
         onEvent?.({
@@ -515,11 +498,12 @@ async function runSoulPhase(args: {
   onEvent?.({ type: "step_started", stepName: `soul-phase-${reason}` });
   console.log(LOG_PREFIX, "进入 SOUL_PHASE, reason=" + reason);
 
-  // 动态追加 soulToolResultsSummary（在 baseContent 之后），不重复 conversation 已有的 tool 消息
+  // Soul 同时获得原始 role:tool 协议消息和通用结构化执行事实。
   const soulResultsSummary = buildSoulToolResultsSummary(allToolResults);
-  const finalSystemContent = soulResultsSummary
-    ? soulSystemBaseContent + "\n\n" + soulResultsSummary
-    : soulSystemBaseContent;
+  const executionContext = buildToolExecutionContext(allToolResults);
+  const finalSystemContent = [soulSystemBaseContent, soulResultsSummary, executionContext]
+    .filter(Boolean)
+    .join("\n\n");
 
   // Soul 请求**不带 tools** 字段
   let req: ChatRequest = {
@@ -539,11 +523,8 @@ async function runSoulPhase(args: {
     const data = await callAdapter(adapter, req, cfg, forceSummaryTimeoutMs);
     const chat = adapter.parseResponse(data);
     const withoutProtocol = stripTextualToolProtocol(chat.text);
-    const reply = guardPlaybackClaim(
-      stripLeakedChatTimeContext(
-        withoutProtocol || buildTextualToolProtocolFallback(allToolResults),
-      ),
-      allToolResults,
+    const reply = stripLeakedChatTimeContext(
+      withoutProtocol || buildTextualToolProtocolFallback(allToolResults),
     );
     if (chat.usage) {
       const finalInput = accInput + chat.usage.input;
@@ -578,7 +559,7 @@ async function runSoulPhase(args: {
       ? "总结请求超时"
       : (err instanceof Error ? err.message : String(err));
     console.error(LOG_PREFIX, "SOUL_PHASE 也失败，降级返回已有结果:", errReason);
-    const fallback = guardPlaybackClaim(buildFallbackReply(allToolResults, errReason), allToolResults);
+    const fallback = buildFallbackReply(allToolResults, errReason);
     const textMessageId = `msg-${Date.now()}`;
     emitTextMessage(onEvent, textMessageId, fallback);
     onEvent?.({ type: "step_finished", stepName: `soul-phase-${reason}` });

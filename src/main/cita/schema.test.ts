@@ -22,6 +22,10 @@ describe("parseTurnUnderstanding", () => {
     expect(parseTurnUnderstanding(valid)).toEqual(valid);
   });
 
+  it("normalizes a model-produced dialogueAct string without losing trusted references", () => {
+    expect(parseTurnUnderstanding({ ...valid, dialogueAct: "select" })).toEqual(valid);
+  });
+
   it.each(["toolName", "toolCall", "execute", "requiredToolArgs", "trackId", "provider"])(
     "rejects execution field %s",
     (field) => {
