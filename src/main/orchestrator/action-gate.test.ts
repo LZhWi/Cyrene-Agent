@@ -25,7 +25,7 @@ describe("ActionGate JSON protocol", () => {
     });
 
     expect(request.tools).toBeUndefined();
-    expect(request.toolChoice).toBeUndefined();
+    expect(request.toolChoiceIntent).toBeUndefined();
     expect(String(request.messages[0].content)).toContain("只返回一个 JSON 对象");
     expect(String(request.messages[0].content)).not.toContain('输出结构：{"act"');
     expect(String(request.messages[0].content)).toContain('respond 示例：{"decision":"respond"');
@@ -55,25 +55,6 @@ describe("ActionGate JSON protocol", () => {
       decision: "ask_user",
       reason: "版本不明确",
       missingInformation: [],
-    });
-  });
-
-  it("normalizes the single-key decision wrapper emitted by DeepSeek", () => {
-    expect(parseActionDecisionResponse(response('{"respond":{"reason":"可以直接回复"}}'), [])).toEqual({
-      decision: "respond",
-      reason: "可以直接回复",
-    });
-    expect(parseActionDecisionResponse(response(JSON.stringify({
-      act: {
-        capability: "music.play_track",
-        objective: "播放第一首",
-        targetRefs: ["ctx_song_1"],
-      },
-    })), ["music.play_track"])).toEqual({
-      decision: "act",
-      capability: "music.play_track",
-      objective: "播放第一首",
-      targetRefs: ["ctx_song_1"],
     });
   });
 

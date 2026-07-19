@@ -12,6 +12,7 @@ import {
 import { authHeaderFor } from "./auth";
 import { resolveReasoningCapability } from "../../../shared/reasoning";
 import { applyReasoningPreference } from "./reasoning";
+import { resolveAutomaticToolChoicePolicy, resolveToolChoicePolicy } from "./tool-choice-policy";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_MAX_TOKENS = 4096;
@@ -115,9 +116,27 @@ export class AnthropicAdapter implements ChatVendorAdapter {
         description: t.description,
         input_schema: t.parameters,
       }));
-      body.tool_choice = req.toolChoice
-        ? { type: "tool", name: req.toolChoice.name }
-        : { type: "auto" };
+      if (req.toolChoiceIntent) {
+        const policy = resolveToolChoicePolicy({
+          providerId: this.capability.id,
+          model: cfg.model,
+          transport: this.transport,
+          reasoning: cfg.reasoning ?? { mode: "auto" },
+          requestedToolName: req.toolChoiceIntent.toolName,
+          supportedModes: this.capability.toolChoiceModes,
+        });
+        if (policy.kind === "named") body.tool_choice = { type: "tool", name: policy.name };
+        else if (policy.kind === "required") body.tool_choice = { type: "any" };
+        else if (policy.kind === "auto") body.tool_choice = { type: "auto" };
+      } else if (resolveAutomaticToolChoicePolicy({
+        providerId: this.capability.id,
+        model: cfg.model,
+        transport: this.transport,
+        reasoning: cfg.reasoning ?? { mode: "auto" },
+        supportedModes: this.capability.toolChoiceModes,
+      }) === "auto") {
+        body.tool_choice = { type: "auto" };
+      }
     }
     if (req.extraBody) Object.assign(body, req.extraBody);
     // 推理控制：按 (providerId, model) 解析 capability，调用 applyReasoningPreference 转换 body。

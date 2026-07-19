@@ -73,19 +73,6 @@ function optionalString(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
 }
 
-function normalizeDecisionEnvelope(parsed: unknown): Record<string, unknown> {
-  const value = asObject(parsed);
-  if (typeof value.decision === "string") return value;
-  const keys = Object.keys(value);
-  if (keys.length !== 1 || !["act", "respond", "ask_user"].includes(keys[0])) {
-    throw new Error("E_ACTION_GATE_PROTOCOL");
-  }
-  const decision = keys[0];
-  const payload = asObject(value[decision]);
-  if (payload.decision !== undefined && payload.decision !== decision) throw new Error("E_ACTION_GATE_PROTOCOL");
-  return { ...payload, decision };
-}
-
 export function parseActionDecisionResponse(response: ChatResponse, availableCapabilities: string[]): ActionDecision {
   let parsed: unknown;
   try {
@@ -93,7 +80,7 @@ export function parseActionDecisionResponse(response: ChatResponse, availableCap
   } catch {
     throw new Error("E_ACTION_GATE_PROTOCOL");
   }
-  const value = normalizeDecisionEnvelope(parsed);
+  const value = asObject(parsed);
   if (value.decision === "act") {
     exactKeys(value, ["decision", "capability", "objective", "targetRefs"]);
     const capability = requiredString(value.capability);

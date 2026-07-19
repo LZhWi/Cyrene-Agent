@@ -71,8 +71,8 @@ export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
   tools?: ToolSpec[];
-  /** 明确意图的单轮强制工具选择；未传时由厂商使用 auto。 */
-  toolChoice?: { name: string };
+  /** Runtime semantic intent; the active Adapter maps it to named/required/any/auto/omitted wire syntax. */
+  toolChoiceIntent?: { mode: "must_call"; toolName: string };
   temperature?: number;
   stream?: boolean;
   /**
@@ -165,6 +165,8 @@ export interface ProviderCapability {
   testStrategy: TestStrategy;
   /** 是否支持视觉（图片）输入。非多模态模型禁止走 read_image。 */
   supportsVision: boolean;
+  /** Supported must-call wire policies; Adapter maps required to OpenAI required / Anthropic any. */
+  toolChoiceModes?: ReadonlyArray<"named" | "required" | "auto" | "omit">;
   /**
    * 视觉模型的 OpenAI 兼容 baseUrl。仅当主聊天走 Anthropic 入口、视觉需走 OpenAI 入口时才需要标
    * （如 MiniMax 主配 /anthropic，视觉要走 /v1）。不标 = 视觉用主配置 baseUrl。

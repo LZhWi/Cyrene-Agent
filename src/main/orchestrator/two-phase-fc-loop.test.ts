@@ -165,7 +165,7 @@ describe("runTwoPhaseFcLoop", () => {
     expect(JSON.parse(executed[0].arguments)).toEqual({ keyword: "左转灯" });
     expect(adapter.requests[0].messages.some((message) => message.role === "tool")).toBe(false);
     expect(adapter.requests[1].messages.some((message) => message.role === "tool")).toBe(true);
-    expect(adapter.requests[0].toolChoice).toBeUndefined();
+    expect(adapter.requests[0].toolChoiceIntent).toBeUndefined();
   });
 
   it("never forces a tool choice before the model decides", async () => {
@@ -180,8 +180,8 @@ describe("runTwoPhaseFcLoop", () => {
       executeTool: async () => "ok",
     });
 
-    expect(adapter.requests[0].toolChoice).toBeUndefined();
-    expect(adapter.requests[1].toolChoice).toBeUndefined();
+    expect(adapter.requests[0].toolChoiceIntent).toBeUndefined();
+    expect(adapter.requests[1].toolChoiceIntent).toBeUndefined();
   });
 
   it("模型无 tool_calls → 切 SOUL_PHASE，工具阶段自由文本不写入 conversation", async () => {

@@ -7,11 +7,11 @@ import {
 } from "./action-gate";
 import { runAgentGraph, type AgentGraphState } from "./agent-graph";
 import { ExecutionLedger } from "./execution-ledger";
+import { resolveNativeToolCall } from "./native-function-calling";
 import {
-  buildToolArgumentRequest,
-  parseAndValidateToolArguments,
+  parseAndValidateToolCallArguments,
   resolveToolForCapability,
-} from "./tool-argument-resolver";
+} from "./tool-argument-validator";
 import { buildToolExecutionContext } from "./tool-execution-context";
 import type { ToolDefinition } from "./tool-registry";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
@@ -220,34 +220,42 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       options.onEvent?.({ type: "step_started", stepName: `agent-graph-tool-${selectedTool.id}` });
       try {
         let args: Record<string, unknown> | undefined;
+        let toolCall: ToolCall | undefined;
         let lastError: unknown;
         for (let attempt = 1; attempt <= 2; attempt++) {
-          const response = await invokeWithFallback((messages) => buildToolArgumentRequest({
-            model: options.settings.model,
-            messages,
-            toolSystemContent: options.toolSystemContent,
-            citaContextBlock: state.citaContextBlock,
-            decision,
-            toolResults: state.toolResults,
-            tool: selectedTool,
-            ...(lastError instanceof Error ? { protocolFeedback: lastError.message } : {}),
-          }));
-          trackUsage(response.usage);
           try {
-            args = parseAndValidateToolArguments(response, selectedTool, decision.targetRefs, state.toolResults);
+            const resolved = await resolveNativeToolCall({
+              model: options.settings.model,
+              messages: [],
+              toolSystemContent: options.toolSystemContent,
+              citaContextBlock: state.citaContextBlock,
+              decision,
+              toolResults: state.toolResults,
+              tool: selectedTool,
+              ...(lastError instanceof Error ? { protocolFeedback: lastError.message } : {}),
+            }, async (request) => {
+              const response = await invokeWithFallback((messages) => ({
+                ...request,
+                messages: [request.messages[0], ...messages],
+              }));
+              trackUsage(response.usage);
+              return response;
+            });
+            args = parseAndValidateToolCallArguments(
+              resolved,
+              selectedTool,
+              decision.targetRefs,
+              state.toolResults,
+            );
+            toolCall = { ...resolved, arguments: JSON.stringify(args) };
             break;
           } catch (error) {
             lastError = error;
-            console.warn(`${LOG_PREFIX} node=tool-arguments tool=${selectedTool.id} protocol_retry=${attempt} response=${jsonResponseSummary(response)}`);
+            console.warn(`${LOG_PREFIX} node=native-tool tool=${selectedTool.id} protocol_retry=${attempt} error=${errorCodeOf(error)}`);
           }
         }
-        if (!args) throw lastError instanceof Error ? lastError : new Error("E_TOOL_ARGUMENT_PROTOCOL");
+        if (!args || !toolCall) throw lastError instanceof Error ? lastError : new Error("E_NATIVE_TOOL_PROTOCOL");
 
-        const toolCall: ToolCall = {
-          id: `${selectedTool.id}-${Date.now()}`,
-          name: selectedTool.id,
-          arguments: JSON.stringify(args),
-        };
         const toolCallId = toolCall.id;
         options.onEvent?.({ type: "tool_call_start", toolCallId, toolCallName: selectedTool.name });
         const execution = await executionLedger.execute({
