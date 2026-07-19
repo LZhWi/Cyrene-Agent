@@ -996,16 +996,23 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
   };
 }
 
-function loadModelSettings(): ModelSettings {
+let modelSettingsCache: ModelSettings | null = null;
+
+function loadModelSettings0(): ModelSettings {
   try {
     const filePath = getSettingsPath();
-    if (!fs.existsSync(filePath)) return DEFAULT_MODEL_SETTINGS;
+    if (!fs.existsSync(filePath)) return { ...DEFAULT_MODEL_SETTINGS };
     const raw = fs.readFileSync(filePath, "utf8");
     return normalizeModelSettings(JSON.parse(raw) as Partial<ModelSettings>);
   } catch (err) {
     console.error("[Cyrene] load settings failed:", err);
-    return DEFAULT_MODEL_SETTINGS;
+    return { ...DEFAULT_MODEL_SETTINGS };
   }
+}
+
+function loadModelSettings(): ModelSettings {
+  if (modelSettingsCache !== null) return modelSettingsCache;
+  return modelSettingsCache = loadModelSettings0();
 }
 
 /**
@@ -1107,6 +1114,7 @@ function saveModelSettings(settings: Partial<ModelSettings>): ModelSettings {
   const filePath = getSettingsPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(final, null, 2), "utf8");
+  Object.assign(existing, final);
   return final;
 }
 
@@ -1216,15 +1224,22 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
   };
 }
 
-function loadGeneralSettings(): GeneralSettings {
+let generalSettingsCache: GeneralSettings | null = null;
+
+function loadGeneralSettings0(): GeneralSettings {
   try {
     const filePath = getGeneralSettingsPath();
-    if (!fs.existsSync(filePath)) return DEFAULT_GENERAL_SETTINGS;
+    if (!fs.existsSync(filePath)) return { ...DEFAULT_GENERAL_SETTINGS };
     return normalizeGeneralSettings(JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<GeneralSettings>);
   } catch (err) {
     console.error("[Cyrene] load general settings failed:", err);
-    return DEFAULT_GENERAL_SETTINGS;
+    return { ...DEFAULT_GENERAL_SETTINGS };
   }
+}
+
+function loadGeneralSettings(): GeneralSettings {
+  if (generalSettingsCache !== null) return generalSettingsCache;
+  return generalSettingsCache = loadGeneralSettings0();
 }
 
 function applyGeneralSettings(settings: GeneralSettings): void {
@@ -1264,6 +1279,7 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   if (before.uiIcon !== normalized.uiIcon) {
     applyUiIcon(normalized.uiIcon);
   }
+  Object.assign(before, normalized);
   return normalized;
 }
 
@@ -1323,7 +1339,9 @@ async function syncVolcanoSearchMcp(settings: GeneralSettings): Promise<void> {
   }
 }
 
-function loadStickerSettings(): Record<string, boolean> {
+let stickerSettingsCache: Record<string, boolean> | null = null;
+
+function loadStickerSettings0(): Record<string, boolean> {
   let raw: Record<string, unknown> = {};
   try {
     const filePath = getStickerSettingsPath();
@@ -1342,10 +1360,16 @@ function loadStickerSettings(): Record<string, boolean> {
   return result;
 }
 
+function loadStickerSettings(): Record<string, boolean> {
+  if (stickerSettingsCache !== null) return stickerSettingsCache;
+  return stickerSettingsCache = loadStickerSettings0();
+}
+
 function saveStickerSettings(settings: Record<string, boolean>): Record<string, boolean> {
   const filePath = getStickerSettingsPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(settings, null, 2), "utf8");
+  Object.assign(loadStickerSettings(), settings);
   return settings;
 }
 
