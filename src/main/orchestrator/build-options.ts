@@ -272,8 +272,8 @@ export async function buildAgentRunOptions(
   deps: BuildOptionsDeps,
 ): Promise<{ options: CyreneRunOptions; latestUserText: string }> {
   const settings = deps.loadModelSettings();
-  if (!settings.apiKey) {
-    throw new Error("还没有填写 API Key，请先在设置里保存 API 配置。");
+  if (!settings.baseUrl) {
+    throw new Error("还没有填写 API URL，请先在设置里保存 API 配置。");
   }
   const messages = deps.normalizeChatMessages(input.messages);
   if (messages.length === 0) {

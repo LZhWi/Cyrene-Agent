@@ -2202,8 +2202,8 @@ async function observeRuntimeState(
 
 async function requestModelReply(inputMessages: unknown, styleFile = "01_default.md"): Promise<ChatReplyPayload> {
   const settings = loadModelSettings();
-  if (!settings.apiKey) {
-    throw new Error("还没有填写 API Key，请先在设置里保存 API 配置。");
+  if (!settings.baseUrl) {
+    throw new Error("还没有填写 API URL，请先在设置里保存 API 配置。");
   }
 
   const messages = normalizeChatMessages(inputMessages);
@@ -4647,7 +4647,7 @@ app.whenReady().then(async () => {
   const schedulerRunner = createSchedulerRunner({
     buildOptions: async (task: ScheduledTask) => {
       const settings = loadModelSettings();
-      if (!settings.apiKey) throw new Error("还没有填写 API Key，请先在设置里保存 API 配置。");
+      if (!settings.baseUrl) throw new Error("还没有填写 API URL，请先在设置里保存 API 配置。");
       const messages = [{ role: "user" as const, content: task.prompt }];
       let alwaysOnContext = "";
       try {

@@ -2155,6 +2155,7 @@ if (testConnectionBtn) {
     const baseUrl = baseUrlInput.value;
     const model = getCurrentModelValue().trim();
     const apiKey = apiKeyInput.value;
+    if (!baseUrl) { setSaveStatus("请先填写 API URL 再测试", "is-error"); return; }
     if (!model) { setSaveStatus("请先选择/填写模型再测试", "is-error"); return; }
     if (!await saveTimeoutSettings(true)) {
       return;
@@ -2217,6 +2218,7 @@ testVisionBtn.addEventListener("click", async () => {
   const baseUrl = synced ? baseUrlInput.value : visionBaseUrlInput.value;
   const apiKey = synced ? apiKeyInput.value : visionApiKeyInput.value;
   const model = synced ? getCurrentModelValue() : visionModelInput.value;
+  if (!baseUrl) { visionTestStatus.textContent = "请先填写 API URL"; return; }
   if (!model) { visionTestStatus.textContent = "请先填写视觉型号"; return; }
   visionTestStatus.textContent = "测试中…";
   testVisionBtn.disabled = true;
