@@ -106,14 +106,32 @@ function errorCodeOf(error: unknown): string {
 }
 
 function jsonResponseSummary(response: Awaited<ReturnType<ChatVendorAdapter["parseResponse"]>>): string {
-  let keys: string[] = [];
+  // 记录 toolCalls 信息：数量、name、arguments 是否合法 JSON
+  const toolCallSummaries = response.toolCalls.map((tc) => {
+    let argsStatus: string;
+    try {
+      JSON.parse(tc.arguments);
+      argsStatus = "valid";
+    } catch {
+      argsStatus = "INVALID_JSON";
+    }
+    return { name: tc.name, argsStatus, argsChars: tc.arguments.length };
+  });
+  // 仍然记录 text 的解析状态（兼容文本兜底路径的诊断）
+  let textKeys: string[] = [];
   try {
     const parsed = JSON.parse(response.text);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) keys = Object.keys(parsed as Record<string, unknown>);
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) textKeys = Object.keys(parsed as Record<string, unknown>);
   } catch {
-    keys = ["<invalid-json>"];
+    textKeys = ["<invalid-json>"];
   }
-  return JSON.stringify({ finishReason: response.finishReason, textChars: response.text.length, keys });
+  return JSON.stringify({
+    finishReason: response.finishReason,
+    textChars: response.text.length,
+    textKeys,
+    toolCallCount: response.toolCalls.length,
+    toolCalls: toolCallSummaries,
+  });
 }
 
 export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions): Promise<TwoPhaseFcResult> {
@@ -227,7 +245,8 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             return decision;
           } catch (error) {
             lastError = error;
-            console.warn(`${LOG_PREFIX} node=action-gate protocol_retry=${attempt} response=${jsonResponseSummary(response)}`);
+            const errCode = error instanceof Error ? error.message : String(error);
+            console.warn(`${LOG_PREFIX} node=action-gate protocol_retry=${attempt} error=${errCode} response=${jsonResponseSummary(response)}`);
           }
         }
         throw lastError instanceof Error ? lastError : new Error("E_ACTION_GATE_PROTOCOL");
