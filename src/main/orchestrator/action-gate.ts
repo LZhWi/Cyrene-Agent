@@ -23,32 +23,40 @@ export interface BuildActionGateRequestInput {
 /**
  * Action Gate 虚拟工具：用 Provider 原生 function calling 强制结构化输出，
  * 取代旧的纯文本 JSON 协议。LLM 必须调用此工具提交决策，不能在普通文本中输出。
+ *
+ * 注意：capability 字段的 enum 在 buildActionGateRequest 里动态注入（因为可用能力是运行时的）。
  */
-const ACTION_GATE_TOOL: ToolSpec = {
-  name: "submit_decision",
-  description: "提交 Action Gate 的下一步决策。必须调用此工具，不要在普通文本中输出决策。",
-  parameters: {
-    type: "object",
-    properties: {
-      decision: {
-        type: "string",
-        enum: ["act", "respond", "ask_user"],
-        description: "act=执行外部能力；respond=进入 Soul 回复用户；ask_user=缺少继续所必需的信息",
+function buildActionGateTool(availableCapabilities: string[]): ToolSpec {
+  return {
+    name: "submit_decision",
+    description: "提交 Action Gate 的下一步决策。必须调用此工具，不要在普通文本中输出决策。",
+    parameters: {
+      type: "object",
+      properties: {
+        decision: {
+          type: "string",
+          enum: ["act", "respond", "ask_user"],
+          description: "act=执行外部能力；respond=进入 Soul 回复用户；ask_user=缺少继续所必需的信息",
+        },
+        capability: {
+          type: "string",
+          enum: availableCapabilities,
+          description: "decision=act 时必填，必须从枚举值中选择（capability 名，带点号，如 music.play_track）",
+        },
+        objective: { type: "string", description: "decision=act 时必填，本次行动目标" },
+        targetRefs: { type: "array", items: { type: "string" }, description: "decision=act 时必填，可信上下文引用" },
+        afterSuccess: {
+          type: "string",
+          enum: ["respond", "replan"],
+          description: "decision=act 时必填。respond=成功后直接回复用户；replan=成功后回 Action Gate 处理剩余目标",
+        },
+        reason: { type: "string", description: "decision=respond/ask_user 时的理由" },
+        missingInformation: { type: "array", items: { type: "string" }, description: "decision=ask_user 时缺少的信息" },
       },
-      capability: { type: "string", description: "decision=act 时必填，从可用能力中选择" },
-      objective: { type: "string", description: "decision=act 时必填，本次行动目标" },
-      targetRefs: { type: "array", items: { type: "string" }, description: "decision=act 时必填，可信上下文引用" },
-      afterSuccess: {
-        type: "string",
-        enum: ["respond", "replan"],
-        description: "decision=act 时必填。respond=成功后直接回复用户；replan=成功后回 Action Gate 处理剩余目标",
-      },
-      reason: { type: "string", description: "decision=respond/ask_user 时的理由" },
-      missingInformation: { type: "array", items: { type: "string" }, description: "decision=ask_user 时缺少的信息" },
+      required: ["decision"],
     },
-    required: ["decision"],
-  },
-};
+  };
+}
 
 export function buildActionGateRequest(input: BuildActionGateRequestInput): ChatRequest {
   const context = [
@@ -80,7 +88,7 @@ export function buildActionGateRequest(input: BuildActionGateRequestInput): Chat
   return {
     model: input.model,
     messages: [{ role: "system", content: context }, ...input.messages],
-    tools: [ACTION_GATE_TOOL],
+    tools: [buildActionGateTool(input.availableCapabilities.map((item) => item.capability))],
     toolChoiceIntent: { mode: "must_call", toolName: "submit_decision" },
     stream: false,
   };
@@ -123,8 +131,19 @@ export function parseActionDecisionResponse(response: ChatResponse, availableCap
   const value = asObject(parsed);
   if (value.decision === "act") {
     exactKeys(value, ["decision", "capability", "objective", "targetRefs", "afterSuccess"]);
-    const capability = requiredString(value.capability);
-    if (!availableCapabilities.includes(capability)) throw new Error("E_ACTION_GATE_CAPABILITY_UNAVAILABLE");
+    let capability = requiredString(value.capability);
+    // 容错：LLM 可能填 toolId（music_play_track）而非 capability（music.play_track）。
+    // 遍历可用能力，看有没有哪个 capability 的点号换成下划线后等于填入的值。
+    if (!availableCapabilities.includes(capability)) {
+      const match = availableCapabilities.find(
+        (cap) => cap.replace(/\./g, "_") === capability,
+      );
+      if (match) {
+        capability = match;
+      } else {
+        throw new Error("E_ACTION_GATE_CAPABILITY_UNAVAILABLE");
+      }
+    }
     const afterSuccess = value.afterSuccess === "replan" ? "replan"
       : value.afterSuccess === "respond" ? "respond"
       : undefined;

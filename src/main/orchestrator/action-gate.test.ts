@@ -44,6 +44,9 @@ describe("ActionGate native function calling protocol", () => {
     expect(request.tools).toHaveLength(1);
     expect(request.tools?.[0].name).toBe("submit_decision");
     expect(request.toolChoiceIntent).toEqual({ mode: "must_call", toolName: "submit_decision" });
+    // capability 字段应该是 enum，限制 LLM 只能选可用能力
+    const capabilityProp = (request.tools?.[0].parameters as { properties: { capability: { enum?: string[] } } }).properties.capability;
+    expect(capabilityProp.enum).toEqual(["music.play_track"]);
     expect(String(request.messages[0].content)).toContain("必须调用 submit_decision 工具提交决策");
     expect(String(request.messages[0].content)).toContain("播放当前网易云日推第一首《最初的记忆》");
   });
@@ -103,6 +106,29 @@ describe("ActionGate native function calling protocol", () => {
     }), ["music.play_track"]);
     expect(parsed.decision).toBe("act");
     expect("afterSuccess" in parsed).toBe(false);
+  });
+
+  it("tolerates toolId-style capability (underscore) by normalizing to dot notation", () => {
+    // LLM 可能填 music_play_track（toolId）而非 music.play_track（capability）
+    const parsed = parseActionDecisionResponse(toolCallResponse({
+      decision: "act",
+      capability: "music_play_track",
+      objective: "播放",
+      targetRefs: ["ctx_song_1"],
+    }), ["music.play_track"]);
+    expect(parsed.decision).toBe("act");
+    if (parsed.decision === "act") {
+      expect(parsed.capability).toBe("music.play_track");
+    }
+  });
+
+  it("still throws E_ACTION_GATE_CAPABILITY_UNAVAILABLE for truly unknown capability", () => {
+    expect(() => parseActionDecisionResponse(toolCallResponse({
+      decision: "act",
+      capability: "nonexistent.capability",
+      objective: "播放",
+      targetRefs: ["ctx_song_1"],
+    }), ["music.play_track"])).toThrow("E_ACTION_GATE_CAPABILITY_UNAVAILABLE");
   });
 
   it("includes afterSuccess guidance in the system prompt", () => {
