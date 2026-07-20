@@ -35,6 +35,24 @@ function createBuildDeps(): BuildOptionsDeps {
 }
 
 describe("build-options", () => {
+  it("passes the saved reasoning preference into the Agent Runtime", async () => {
+    const deps = createBuildDeps()
+    deps.loadModelSettings = () => ({
+      provider: "DeepSeek（深度求索）",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-pro",
+      apiKey: "k",
+      reasoning: { mode: "off" },
+    })
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "你好" }],
+      style: "01_default.md",
+    }, deps)
+
+    expect(result.options.settings.reasoning).toEqual({ mode: "off" })
+  })
+
   it("adds a concise WeChat system when the run comes from WeChat", async () => {
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "你好" }],
@@ -124,7 +142,7 @@ describe("build-options", () => {
     expect(result.options.toolSystemContent).not.toContain("weather")
   })
 
-  it("requires music_search for an explicit NetEase Cloud search request", async () => {
+  it("does not locally route an explicit NetEase Cloud search request", async () => {
     const deps = createBuildDeps()
     deps.toolRegistry.getEnabled = () => [{ id: "music_search" }]
 
@@ -133,10 +151,11 @@ describe("build-options", () => {
       style: "talk",
     }, deps)
 
-    expect(result.options.requiredToolName).toBe("music_search")
+    expect(result.options).not.toHaveProperty("requiredToolName")
+    expect(result.options).not.toHaveProperty("requiredToolArgs")
   })
 
-  it("requires daily recommendations only for an explicit daily request", async () => {
+  it("does not locally route daily recommendations or infer continuations", async () => {
     const deps = createBuildDeps()
     deps.toolRegistry.getEnabled = () => [
       { id: "music_get_daily_recommendations" },
@@ -152,13 +171,43 @@ describe("build-options", () => {
       style: "talk",
     }, deps)
 
-    expect(daily.options.requiredToolName).toBe("music_get_daily_recommendations")
-    expect(generic.options.requiredToolName).toBeUndefined()
+    expect(daily.options).not.toHaveProperty("requiredToolName")
+    expect(generic.options).not.toHaveProperty("requiredToolName")
   })
 
-  it("injects deterministic recent-music selection context for the current conversation", async () => {
+  it("injects CITA as a separate tool-phase block and preserves the original user message", async () => {
     const deps = createBuildDeps()
-    deps.buildMusicCompanionContext = vi.fn(() => "[真实候选解析] 第二首 = trackId 102")
+    deps.prepareCitaTurn = vi.fn(async () => ({
+      contextBlock: "[CITA_CONTEXT]\n{\"focusedContexts\":[{\"contextRef\":\"music-candidate-1\"}]}\n[/CITA_CONTEXT]",
+      contextPackage: {
+        originalQuery: "第二首",
+        contextualizedQuery: "播放当前网易云日推第二首",
+      },
+    }))
+    const originalUserMessage = { role: "user", content: "第二首" }
+
+    const result = await buildAgentRunOptions({
+      messages: [originalUserMessage],
+      style: "01_default.md",
+      sessionId: "conversation-1",
+    }, deps)
+
+    expect(deps.prepareCitaTurn).toHaveBeenCalledTimes(1)
+    expect(result.options.conversationId).toBe("conversation-1")
+    expect(result.options.messages.at(-1)).toEqual(originalUserMessage)
+    expect(result.options.toolSystemContent).toContain("[CITA_CONTEXT]")
+    expect(result.options.toolSystemContent).toContain("music-candidate-1")
+    expect(result.options.soulSystemBaseContent).toContain("[CITA_CONTEXT]")
+    expect(result.options.originalQuery).toBe("第二首")
+    expect(result.options.contextualizedQuery).toBe("播放当前网易云日推第二首")
+    expect(result.options.citaContextBlock).toContain("music-candidate-1")
+    expect(result.options).not.toHaveProperty("requiredToolName")
+    expect(result.options).not.toHaveProperty("requiredToolArgs")
+  })
+
+  it("emits no CITA marker when the service is disabled", async () => {
+    const deps = createBuildDeps()
+    deps.prepareCitaTurn = vi.fn(async () => ({ contextBlock: "" }))
 
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "第二首" }],
@@ -166,10 +215,7 @@ describe("build-options", () => {
       sessionId: "conversation-1",
     }, deps)
 
-    expect(deps.buildMusicCompanionContext).toHaveBeenCalledWith("conversation-1", "第二首")
-    expect(result.options.conversationId).toBe("conversation-1")
-    expect(result.options.toolSystemContent).toContain("trackId 102")
-    expect(result.options.soulSystemBaseContent).toContain("trackId 102")
+    expect(result.options.toolSystemContent).not.toContain("[CITA_CONTEXT]")
   })
 
   it("puts the enabled Skill catalog into the tool phase so invoke_skill can route", async () => {
@@ -182,11 +228,13 @@ describe("build-options", () => {
     }, deps)
 
     expect(result.options.toolSystemContent).toContain("SKILL_CATALOG")
+    expect(result.options.soulSystemBaseContent).not.toContain("SKILL_CATALOG")
   })
 
-  it("puts auto-injected Skill rules into both tool and Soul phases", async () => {
+  it("keeps tool-oriented Skill rules out of Soul but retains reply-only strategy", async () => {
     const deps = createBuildDeps()
     deps.buildAutoInjectedSkillContext = () => "AUTO_MUSIC_RULES"
+    deps.buildAutoInjectedSoulContext = () => "SOUL_MUSIC_REPLY_RULES"
 
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "今日推荐呢" }],
@@ -194,7 +242,8 @@ describe("build-options", () => {
     }, deps)
 
     expect(result.options.toolSystemContent).toContain("AUTO_MUSIC_RULES")
-    expect(result.options.soulSystemBaseContent).toContain("AUTO_MUSIC_RULES")
+    expect(result.options.soulSystemBaseContent).not.toContain("AUTO_MUSIC_RULES")
+    expect(result.options.soulSystemBaseContent).toContain("SOUL_MUSIC_REPLY_RULES")
   })
 
   it("attaches direct image content blocks to the latest user message", async () => {

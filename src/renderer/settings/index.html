@@ -242,6 +242,25 @@
                 <button type="button" class="option-block" data-value="feishu" aria-pressed="false">仅飞书</button>
               </div>
             </div>
+
+            <div class="setting-row">
+              <div>
+                <strong>CITA 上下文认知</strong>
+                <span>辅助昔涟理解跨轮状态、指代和省略表达。</span>
+              </div>
+              <input id="cita-enabled" type="checkbox" />
+            </div>
+
+            <div class="setting-row" id="cita-engine-row">
+              <div>
+                <strong>语义认知方式</strong>
+                <span>本地语义模型将在后续版本开放。</span>
+              </div>
+              <div class="option-blocks option-blocks--wide" id="cita-engine-select" role="radiogroup" aria-label="语义认知方式">
+                <button type="button" class="option-block is-active" data-value="remote" aria-pressed="true">在线大模型</button>
+                <button type="button" class="option-block" data-value="local" aria-pressed="false" disabled aria-disabled="true">本地语义模型（暂不可用）</button>
+              </div>
+            </div>
           </div>
 
           <div class="form-actions">

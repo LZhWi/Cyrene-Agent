@@ -42,6 +42,7 @@ export interface BuildOptionsDeps {
   buildEnvironmentContext: (model: { provider: string; model: string }, profile: unknown) => string;
   buildSkillCatalog: (skills: ReadonlyArray<unknown>) => string;
   buildAutoInjectedSkillContext: (skills: ReadonlyArray<unknown>) => string;
+  buildAutoInjectedSoulContext?: (skills: ReadonlyArray<unknown>) => string;
   skillRegistry: { getEnabled(): ReadonlyArray<unknown> };
   resolveSlashActivation: (messages: ReadonlyArray<{ role: string; content?: string }>) => string;
   buildToneInjection: (
@@ -68,7 +69,15 @@ export interface BuildOptionsDeps {
   normalizeChatMessages: (raw: ReadonlyArray<unknown>) => ChatMessage[];
   chatRequestTimeoutMs: number;
   captionImageForFallback?: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
-  buildMusicCompanionContext?: (conversationId: string, userText: string) => string;
+  prepareCitaTurn?: (input: {
+    conversationId: string;
+    turnId: string;
+    originalQuery: string;
+    recentDialogue: Array<{ role: "user" | "assistant"; text: string }>;
+  }) => Promise<{
+    contextBlock: string;
+    contextPackage?: { originalQuery: string; contextualizedQuery: string };
+  }>;
 }
 
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
@@ -156,21 +165,6 @@ function contentToText(content: ChatMessage["content"]): string {
       .join("\n");
   }
   return "";
-}
-
-export function resolveRequiredMusicTool(
-  userText: string,
-  availableToolIds: ReadonlySet<string>,
-): string | undefined {
-  const text = userText.trim();
-  if (!text) return undefined;
-  if (availableToolIds.has("music_get_daily_recommendations") && /(?:网易云)?(?:今日推荐|每日推荐|日推)/.test(text)) {
-    return "music_get_daily_recommendations";
-  }
-  if (!availableToolIds.has("music_search")) return undefined;
-  const explicitSearch = /网易云.{0,12}(?:搜|找)|(?:搜|搜索|找).{0,12}(?:网易云|歌曲?|音乐)/.test(text);
-  const explicitTrackPlayback = /^(?:帮我)?(?:播放|放个|放一下)(?!点音乐)/.test(text);
-  return explicitSearch || explicitTrackPlayback ? "music_search" : undefined;
 }
 
 function stripTurnModelContextForSideEffects(text: string): string {
@@ -322,9 +316,35 @@ export async function buildAgentRunOptions(
   const enabledSkills = deps.skillRegistry.getEnabled();
   const skillCatalog = deps.buildSkillCatalog(enabledSkills);
   const autoInjectedSkillContext = deps.buildAutoInjectedSkillContext(enabledSkills);
+  const autoInjectedSoulContext = deps.buildAutoInjectedSoulContext?.(enabledSkills) ?? "";
   const conversationId = input.sessionId || "default";
-  const musicCompanionContext = deps.buildMusicCompanionContext?.(conversationId, latestUserText) ?? "";
   const channelSystem = buildChannelSystem(input.channel);
+
+  let citaContextBlock = "";
+  let contextualizedQuery = latestUserText;
+  if (deps.prepareCitaTurn) {
+    try {
+      const recentDialogue = messages
+        .filter((message): message is ChatMessage & { role: "user" | "assistant" } => (
+          message.role === "user" || message.role === "assistant"
+        ))
+        .slice(-12)
+        .map((message) => ({ role: message.role, text: contentToText(message.content) }));
+      const prepared = await deps.prepareCitaTurn({
+        conversationId,
+        turnId: `${conversationId}:${messages.length}`,
+        originalQuery: latestUserText,
+        recentDialogue,
+      });
+      citaContextBlock = prepared.contextBlock;
+      contextualizedQuery = prepared.contextPackage?.contextualizedQuery ?? latestUserText;
+      console.log(
+        `[CITA/Trace] injection conversation=${conversationId} tool=${citaContextBlock.length > 0} soul=${citaContextBlock.length > 0} blockChars=${citaContextBlock.length}`,
+      );
+    } catch {
+      console.warn(`[CITA/Trace] injection conversation=${conversationId} tool=false soul=false reason=prepare_failed`);
+    }
+  }
 
   let toneInjection = "";
   if (deps.sceneEmbeddingIndex) {
@@ -353,11 +373,6 @@ export async function buildAgentRunOptions(
   const runTools = isTalkMode
     ? enabledTools.filter((tool) => String((tool as { id?: unknown }).id ?? "").startsWith("music_"))
     : enabledTools;
-  const requiredToolName = resolveRequiredMusicTool(
-    latestUserText,
-    new Set(runTools.map((tool) => String((tool as { id?: unknown }).id ?? ""))),
-  );
-
   // 第一期：保留旧 systemContent 兼容（已不再使用，保留字段是为了 logger 诊断）。
   // 同时新增 toolSystemContent / soulSystemBaseContent 两套。
   const systemContent =
@@ -377,30 +392,34 @@ export async function buildAgentRunOptions(
   const toolSystemContent = deps.buildToolSystemPrompt(runTools)
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
     + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "")
-    + (musicCompanionContext ? "\n\n" + musicCompanionContext : "");
+    + (citaContextBlock ? "\n\n" + citaContextBlock : "");
 
   // Soul 阶段基础 system：人设 + 环境/记忆/关系/附件/渠道（这些是"表达"所需）。
-  // 工具结果（role: tool 消息）已在 conversation 中携带，本字段不重复注入；
-  // FC 循环 Soul 阶段执行前会按需动态追加 soulToolResultsSummary。
-  const soulSystemBaseContent =
+  // FC 循环在 Soul 阶段追加通用 ToolExecutionContext，并保留 role:tool 协议消息。
+  const soulSystemWithoutCita =
     (environmentContext ? environmentContext + "\n\n" : "") +
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
     deps.buildSoulSystemBasePrompt(styleFile) +
-    (skillCatalog ? "\n\n---\n\n" + skillCatalog : "") +
-    (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "") +
+    (autoInjectedSoulContext ? "\n\n---\n\n" + autoInjectedSoulContext : "") +
     skillActivation +
     toneInjection +
     (alwaysOnContext ? "\n\n" + alwaysOnContext + "\n\n" : "") +
     (relationshipContext ? "\n\n" + relationshipContext + "\n\n" : "") +
-    (musicCompanionContext ? "\n\n" + musicCompanionContext : "") +
     attachmentContext;
+  const soulSystemBaseContent = soulSystemWithoutCita
+    + (citaContextBlock ? "\n\n" + citaContextBlock : "");
 
   deps.logWorldbookInjection(alwaysOnContext, systemContent);
 
   // 第一期：原始 messages 不再携带 system。FC 循环按阶段动态注入。
   const fcMessages: ChatMessage[] = withDirectImageAttachments(llmMessages as unknown as ChatMessage[], input);
-  const imageCaptionFallback = buildImageCaptionFallbackMessages(toolSystemContent + "\n\n---\n\n" + soulSystemBaseContent, llmMessages as unknown as ChatMessage[], input, deps);
+  const imageCaptionFallback = buildImageCaptionFallbackMessages(
+    toolSystemContent + "\n\n---\n\n" + soulSystemWithoutCita,
+    llmMessages as unknown as ChatMessage[],
+    input,
+    deps,
+  );
 
   return {
     options: {
@@ -410,10 +429,13 @@ export async function buildAgentRunOptions(
         model: settings.model,
         apiKey: settings.apiKey,
         explicitTransport: settings.explicitTransport,
+        reasoning: settings.reasoning,
       },
       messages: fcMessages,
       conversationId,
-      requiredToolName,
+      originalQuery: latestUserText,
+      contextualizedQuery,
+      citaContextBlock,
       timeoutMs: deps.chatRequestTimeoutMs,
       toolSystemContent,
       soulSystemBaseContent,

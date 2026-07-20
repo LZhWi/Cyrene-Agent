@@ -52,7 +52,7 @@ function mockService(overrides: Record<string, unknown> = {}): any {
     getDailyRecommendations: asyncThat(),
     searchTracks: asyncThat(searchImpl),
     presentTracks: asyncThat(),
-    playTrack: asyncThat(playTrackImpl),
+    playTrackFromUi: asyncThat(playTrackImpl),
     playPlaylist: asyncThat(playTrackImpl),
   };
   for (const [k, v] of Object.entries(overrides)) base[k] = v;

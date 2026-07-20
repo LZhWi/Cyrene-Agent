@@ -75,7 +75,7 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
   channels.push(IPC.MUSIC_PRESENT_TRACKS);
 
   ipcMain.handle(IPC.MUSIC_PLAY_TRACK, (_e, trackId: string) =>
-    wrap(() => service.playTrack(trackId), service),
+    wrap(() => service.playTrackFromUi(trackId), service),
   );
   channels.push(IPC.MUSIC_PLAY_TRACK);
 

@@ -47,6 +47,8 @@ import { indexConversationTurn } from "./orchestrator/history-tools";
 import { buildToneInjection } from "./orchestrator/tone-injector";
 import { getAdapter, buildVendorUrl, getAdapterForConfig, createSseReader } from "./orchestrator/vendors";
 import type { VendorConfig } from "./orchestrator/vendors";
+import { testVendorConnection } from "./orchestrator/vendors/test-connection";
+import { migrateLegacyMinimaxDefaults } from "./orchestrator/vendors/minimax-defaults";
 import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
 import type { VisionConfig } from "./orchestrator/vision-captioner";
 import { toolRegistry, type ToolDefinition } from "./orchestrator/tool-registry";
@@ -112,12 +114,10 @@ import {
 } from "./chat-time-context";
 import { setAsrConfig } from "./asr/volcano-asr-engine";
 import { setCallWindow, registerCallIpc, setCallSettings, stopCall } from "./call/call-manager";
-import { initSkills, skillRegistry, buildAutoInjectedSkillContext, buildSkillCatalog, parseSlashCommand, setSkillEnabled, listSkillsForUi } from "./skills";
+import { initSkills, skillRegistry, buildAutoInjectedSkillContext, buildAutoInjectedSoulContext, buildSkillCatalog, parseSlashCommand, setSkillEnabled, listSkillsForUi } from "./skills";
 import {
-  buildMusicCompanionContext,
   isMusicCompanionAvailable,
   loadMusicCompanionHost,
-  recordMusicCompanionPresentation,
 } from "./skills/music-companion-host";
 import { initGameBot } from "./game-bot";
 import { initChannels, shutdownChannels, setChannelsConversationLifecycle } from "./channels/init";
@@ -148,6 +148,9 @@ import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive/p
 import { runProactiveModel } from "./proactive/proactive-model";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/proactive-types";
 import { canCommitProactiveMessage } from "./proactive/proactive-policy";
+import { normalizeCitaSettings } from "./cita/settings";
+import { CitaService, ContextStore, RemoteSemanticEngine } from "./cita";
+import { contextRefRegistry } from "./orchestrator/tool-context";
 
 configureDocumentIndexQueue(runDocumentIndexJob);
 
@@ -202,9 +205,6 @@ function appendMinimaxTtsLog(entry: Record<string, unknown>): void {
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, "minimax-tts.log");
     fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
-    if (entry.phase === "request.begin") {
-      console.log("[TTS MiniMax] 诊断日志:", logFile);
-    }
   } catch (err) {
     console.warn("[TTS MiniMax] 写诊断日志失败:", err);
   }
@@ -216,9 +216,6 @@ function appendGptsovitsTtsLog(entry: Record<string, unknown>): void {
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, "gptsovits-tts.log");
     fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
-    if (entry.phase === "request.begin") {
-      console.log("[TTS GPT-SoVITS] 诊断日志:", logFile);
-    }
   } catch (err) {
     console.warn("[TTS GPT-SoVITS] 写诊断日志失败:", err);
   }
@@ -230,9 +227,6 @@ function appendCustomCloudTtsLog(entry: Record<string, unknown>): void {
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, "custom-cloud-tts.log");
     fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
-    if (entry.phase === "request.begin") {
-      console.log("[TTS CustomCloud] 诊断日志:", logFile);
-    }
   } catch (err) {
     console.warn("[TTS CustomCloud] 写诊断日志失败:", err);
   }
@@ -244,9 +238,6 @@ function appendMimoTtsLog(entry: Record<string, unknown>): void {
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, "mimo-tts.log");
     fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
-    if (entry.phase === "request.begin") {
-      console.log("[TTS MiMo] 诊断日志:", logFile);
-    }
   } catch (err) {
     console.warn("[TTS MiMo] 写诊断日志失败:", err);
   }
@@ -469,6 +460,8 @@ interface UserProfile {
 }
 
 interface GeneralSettings {
+  citaEnabled: boolean;
+  citaSemanticEngine: "remote";
   musicEnabled: boolean;
   musicVolume: number;
   soundEnabled: boolean;
@@ -693,7 +686,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   mode: "auto",
   // 默认厂商改为 MiniMax（v1 vendor adapter 第一个落地的），DeepSeek 已从 v1 清单移除。
   provider: "MiniMax（稀宇科技）",
-  baseUrl: "https://api.minimaxi.com/anthropic",
+  baseUrl: "https://api.minimaxi.com/v1",
   model: "MiniMax-M3",
   apiKey: "",
   perProvider: {},
@@ -706,6 +699,8 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
 };
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
+  citaEnabled: false,
+  citaSemanticEngine: "remote",
   musicEnabled: false,
   musicVolume: 60,
   soundEnabled: true,
@@ -952,6 +947,9 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
   // 厂商重命名迁移：把旧 provider 名在字典里和当前 provider 字段一并改成新名。
   // 必须在"旧 schema 兼容回填"之前做，否则会用旧名先创建一份僵尸数据。
   ({ provider, perProvider } = migrateProviderRenames(provider, perProvider));
+  for (const [providerName, profile] of Object.entries(perProvider)) {
+    perProvider[providerName] = migrateLegacyMinimaxDefaults(providerName, profile);
+  }
 
   // 旧 schema 兼容：v1 之前的 model-config.json 没有 perProvider 字段，
   // 但有顶层 baseUrl/model/apiKey 三件套。首次升级时把它们当作 currentProvider 那一份回填。
@@ -1107,6 +1105,10 @@ function saveModelSettings(settings: Partial<ModelSettings>): ModelSettings {
 
 function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undefined): GeneralSettings {
   const windowVisibility = normalizeWindowVisibilitySettings(input);
+  const cita = normalizeCitaSettings({
+    enabled: input?.citaEnabled,
+    semanticEngine: input?.citaSemanticEngine,
+  });
   const clamp = (value: unknown, fallback: number) => {
     const num = typeof value === "number" ? value : Number(value);
     return Number.isFinite(num) ? Math.max(0, Math.min(100, Math.round(num))) : fallback;
@@ -1120,6 +1122,8 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     return Number.isFinite(num) ? Math.max(1000, Math.min(120000, Math.round(num))) : fallback;
   };
   return {
+    citaEnabled: cita.enabled,
+    citaSemanticEngine: cita.semanticEngine,
     musicEnabled: Boolean(input?.musicEnabled),
     musicVolume: clamp(input?.musicVolume, DEFAULT_GENERAL_SETTINGS.musicVolume),
     soundEnabled: input?.soundEnabled === undefined ? DEFAULT_GENERAL_SETTINGS.soundEnabled : Boolean(input.soundEnabled),
@@ -1662,11 +1666,12 @@ async function callChatCompletionsStream(
   timeoutMs: number,
   label: string,
   onChunk: (text: string) => void,
+  logTiming = true,
 ): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const _startTime = Date.now();
-  console.log(`[TIMING] ${label} START timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`);
+  if (logTiming) console.log(`[TIMING] ${label} START timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`);
 
   // 拼 VendorConfig（settings 顶层三件套 + 镜像字段都参与）
   const cfg: VendorConfig = {
@@ -1732,15 +1737,15 @@ async function callChatCompletionsStream(
     }
 
     const result = stripThinkBlocks(fullText);
-    console.log(`[TIMING] ${label} OK in ${Date.now() - _startTime}ms resultLen=${result.length}`);
+    if (logTiming) console.log(`[TIMING] ${label} OK in ${Date.now() - _startTime}ms resultLen=${result.length}`);
     appendApiLog(label, messages, fullText, result);
     return result;
   } catch (err) {
     if (err instanceof Error && err.name === "AbortError") {
-      console.log(`[TIMING] ${label} TIMEOUT at ${Date.now() - _startTime}ms`);
+      if (logTiming) console.log(`[TIMING] ${label} TIMEOUT at ${Date.now() - _startTime}ms`);
       throw new Error("模型请求超时，请稍后重试。");
     }
-    console.log(`[TIMING] ${label} ERROR at ${Date.now() - _startTime}ms: ${err instanceof Error ? err.message : err}`);
+    if (logTiming) console.log(`[TIMING] ${label} ERROR at ${Date.now() - _startTime}ms: ${err instanceof Error ? err.message : err}`);
     throw err;
   } finally {
     clearTimeout(timer);
@@ -1755,9 +1760,31 @@ async function callChatCompletions(
   temperature: number | undefined,
   timeoutMs: number,
   label: string,
+  logTiming = true,
 ): Promise<string> {
-  return callChatCompletionsStream(settings, messages, temperature, timeoutMs, label, () => {});
+  return callChatCompletionsStream(settings, messages, temperature, timeoutMs, label, () => {}, logTiming);
 }
+
+const citaService = new CitaService({
+  store: new ContextStore(),
+  engine: new RemoteSemanticEngine(
+    (request) => callChatCompletions(
+      loadModelSettings(),
+      [
+        { role: "system", content: request.systemPrompt },
+        { role: "user", content: request.userPrompt },
+      ],
+      0,
+      6_000,
+      "CITA understandTurn",
+    ),
+    { timeoutMs: 6_000 },
+  ),
+  getSettings: () => normalizeCitaSettings({
+    enabled: loadGeneralSettings().citaEnabled,
+    semanticEngine: loadGeneralSettings().citaSemanticEngine,
+  }),
+});
 
 function loadPromptFile(filename: string): string {
   try {
@@ -2162,8 +2189,6 @@ async function observeRuntimeState(
   // 入 LLM 后台队列：和 MemoryJudge 串行执行，避免并发触发限流；
   // 限流自动退避 5s 重试 1 次。.catch 吞错误，不影响主流程。
   enqueueLLMTask("心情观察器", async () => {
-    const _obsStart = Date.now();
-    console.log(`[TIMING] 心情观察器 SENDING request`);
     const observerContent = await callChatCompletions(settings, [
       {
         role: "system",
@@ -2176,8 +2201,7 @@ async function observeRuntimeState(
           recentDialogue,
         }),
       },
-    ], undefined, 30000, "心情观察器");
-    console.log(`[TIMING] 心情观察器 OK in ${Date.now() - _obsStart}ms raw=${observerContent?.slice(0, 100)}`);
+    ], undefined, 30000, "心情观察器", false);
     const feeling = parseObserverFeeling(observerContent);
     if (feeling) {
       const smoothed = smoothFeeling(feelingScores, feeling);
@@ -2187,7 +2211,7 @@ async function observeRuntimeState(
       runtimeState.updatedAt = Date.now();
       broadcastRuntimeStateChanged();
     }
-  }).catch((err) => {
+  }, { log: false }).catch((err) => {
     console.warn("[Cyrene] observe runtime failed; keeping current feeling:", err);
   });
   // 标注未使用的参数，避免 lint 警告
@@ -2397,7 +2421,6 @@ function broadcastModelConfigChanged(settings = loadModelSettings()): void {
 }
 
 function broadcastRuntimeStateChanged(): void {
-  console.log("[Cyrene] broadcasting runtime state:", JSON.stringify(runtimeState));
   broadcastToAuxWindows(IPC.RUNTIME_STATE_CHANGED, runtimeState);
 }
 
@@ -3458,13 +3481,7 @@ ipcMain.handle(IPC.SETTINGS_SAVE_CONFIG, (_event, settings: Partial<ModelSetting
   return saved;
 });
 
-ipcMain.handle(IPC.SETTINGS_TEST_CONNECTION, async (_event, cfg: { provider: string; baseUrl: string; model: string; apiKey: string }) => {
-  const adapter = getAdapter(cfg.provider);
-  console.log("[Cyrene] test connection: provider=" + cfg.provider + " transport=" + adapter.transport + " model=" + cfg.model);
-  const result = await adapter.testConnection(cfg);
-  console.log("[Cyrene] test connection result:", JSON.stringify(result));
-  return result;
-});
+ipcMain.handle(IPC.SETTINGS_TEST_CONNECTION, async (_event, cfg: VendorConfig) => testVendorConnection(cfg));
 
 /**
  * 测试视觉模型连通性。
@@ -4389,7 +4406,8 @@ app.whenReady().then(async () => {
   // Cloud Music MCP wiring (MusicService + IPC + 5 Agent tools + shutdown latch)
   const musicPaths = resolveMusicPaths();
   const musicBootstrap = bootstrapMusicService(musicPaths, {
-    onPresented: recordMusicCompanionPresentation,
+    contextRefs: contextRefRegistry,
+    ingestContextEvent: (event) => citaService.ingest(event),
     sendCard: (card) => {
       if (chatWindow && !chatWindow.isDestroyed()) {
         chatWindow.webContents.send(IPC.AGUI_EVENT, {
@@ -4397,7 +4415,9 @@ app.whenReady().then(async () => {
           name: "cyrene.music",
           value: card,
         });
+        return true;
       }
+      return false;
     },
   });
   installShutdownLatch(musicBootstrap);
@@ -4677,6 +4697,8 @@ app.whenReady().then(async () => {
       buildSkillCatalog(skills as any)) as BuildOptionsDeps["buildSkillCatalog"],
     buildAutoInjectedSkillContext: ((skills: ReadonlyArray<unknown>) =>
       buildAutoInjectedSkillContext(skills as any, (id) => skillRegistry.getBody(id))) as BuildOptionsDeps["buildAutoInjectedSkillContext"],
+    buildAutoInjectedSoulContext: ((skills: ReadonlyArray<unknown>) =>
+      buildAutoInjectedSoulContext(skills as any, (id) => skillRegistry.getBody(id))) as BuildOptionsDeps["buildAutoInjectedSoulContext"],
     skillRegistry: skillRegistry as unknown as BuildOptionsDeps["skillRegistry"],
     resolveSlashActivation: ((messages: ReadonlyArray<{ role: string; content?: string }>) =>
       resolveSlashActivation(messages as any)) as BuildOptionsDeps["resolveSlashActivation"],
@@ -4713,7 +4735,7 @@ app.whenReady().then(async () => {
         return { ok: false, error: err?.message || String(err) };
       }
     },
-    buildMusicCompanionContext,
+    prepareCitaTurn: (input) => citaService.prepareTurn(input),
   };
   const onRunFinishedDeps: OnRunFinishedDeps = {
     loadModelSettings: () => loadModelSettings(),

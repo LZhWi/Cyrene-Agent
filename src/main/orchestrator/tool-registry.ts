@@ -20,6 +20,10 @@ export interface ToolDefinition {
   catalogHint?: string;
   /** 可选分类标签，第一期暂不强制使用。 */
   category?: string;
+  /** Action Gate 使用的稳定能力标识；未填时回落到工具 id。 */
+  capability?: string;
+  /** Runtime 校验受控参数来源；这些值不能由模型自由编造。 */
+  controlledInput?: Record<string, "context_ref" | "context_ref_array" | "tool_result">;
   enabled: boolean;     // 用户是否启用（对应设置面板的开关）
   // 危险等级：决定该工具在哪些权限档位下可调用；不填默认 "safe"
   risk?: ToolRiskLevel;

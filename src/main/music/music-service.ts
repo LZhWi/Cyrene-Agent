@@ -3,12 +3,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { MusicMcpClient } from "./music-mcp-client";
 import { ProtocolDetector } from "./protocol-detector";
-import { PlaybackDispatcher } from "./playback-dispatcher";
 import { CookieVault } from "./cookie-vault";
 import { LoginOrchestrator } from "./login-orchestrator";
 import { SelectionSetCache } from "./selection-set-cache";
-import { normalizeDailyRecommendations, normalizeSearchResults } from "./result-normalizer";
 import { MusicInputError } from "./types";
+import { MusicRouter } from "./music-router";
+import { NeteaseMusicProvider, NETEASE_PROVIDER_ID } from "./netease-music-provider";
 import type { MusicPaths } from "./paths";
 import type {
   MusicSelectionSet,
@@ -19,6 +19,7 @@ import type {
   LoginFlowState,
   MusicProfile,
   MusicShutdownReport,
+  CandidatePlaybackRequest,
 } from "./types";
 
 const SET_TTL_MS = 30 * 60_000;
@@ -37,11 +38,11 @@ export class MusicService {
 
   private readonly client: MusicMcpClient;
   private readonly detector: ProtocolDetector;
-  private readonly dispatcher: PlaybackDispatcher;
   private readonly vault: CookieVault;
   private readonly orchestrator: LoginOrchestrator;
   private readonly cache: SelectionSetCache;
   private readonly paths: MusicPaths;
+  private readonly router: MusicRouter;
 
   private backendListeners = new Set<StateListener<MusicBackendState>>();
   private accountListeners = new Set<StateListener<MusicAccountState>>();
@@ -52,7 +53,8 @@ export class MusicService {
     this.paths = paths;
     this.client = new MusicMcpClient(paths.vendorDir, paths.runtimeDir);
     this.detector = new ProtocolDetector();
-    this.dispatcher = new PlaybackDispatcher(this.detector);
+    const netease = new NeteaseMusicProvider(this.client);
+    this.router = new MusicRouter(new Map([[netease.id, netease]]), () => NETEASE_PROVIDER_ID);
     this.vault = new CookieVault(path.dirname(paths.accountPath));
     this.orchestrator = new LoginOrchestrator({
       client: this.client,
@@ -176,6 +178,13 @@ export class MusicService {
     return this.cache.get(setId, conversationId);
   }
 
+  getLatestSelectionSet(
+    conversationId: string,
+    source?: MusicSelectionSet["source"],
+  ): MusicSelectionSet | null {
+    return this.cache.latest(conversationId, source);
+  }
+
   // ── Login poll passthrough (smoke harness + future orchestrators) ──
 
   /** Drive one login-state check against the MCP auth server. */
@@ -229,40 +238,54 @@ export class MusicService {
 
   // ── Data ───────────────────────────────────────────────────
 
-  async getDailyRecommendations(conversationId: string): Promise<MusicSelectionSet> {
+  async getDailyRecommendations(
+    conversationId: string,
+    options: { provider?: string; resolutionRunId?: string } = {},
+  ): Promise<MusicSelectionSet> {
     this.requireReady();
     this.requireSignedIn();
-    const raw = await this.client.callDataTool("cloud_music_get_daily_recommend", {});
-    const tracks = normalizeDailyRecommendations(this.unwrapContent(raw));
+    const provider = this.router.resolve(options.provider);
+    const tracks = await provider.getDailyRecommendations();
     const setId = crypto.randomUUID();
     const set: MusicSelectionSet = {
       setId,
+      provider: provider.id,
       source: "daily_recommendation",
       createdAt: Date.now(),
       expiresAt: Date.now() + SET_TTL_MS,
       conversationId,
+      resolutionRunId: options.resolutionRunId,
+      resolutionPurpose: "discover",
       tracks,
     };
     this.cache.add(set);
     return set;
   }
 
-  async searchTracks(keyword: string, conversationId: string, limit?: number): Promise<MusicSelectionSet> {
+  async searchTracks(
+    keyword: string,
+    conversationId: string,
+    limit?: number,
+    options: { provider?: string; resolutionRunId?: string; purpose?: "discover" | "play" } = {},
+  ): Promise<MusicSelectionSet> {
     this.requireReady();
     const trimmed = (typeof keyword === "string" ? keyword : "").trim();
     if (trimmed.length === 0) throw new MusicInputError("E_INVALID_KEYWORD_EMPTY");
     if (trimmed.length > 100) throw new MusicInputError("E_INVALID_KEYWORD_TOO_LONG");
     const clampedLimit = Math.max(1, Math.min(limit ?? 20, 20));
-    const raw = await this.client.callDataTool("cloud_music_search", { keyword: trimmed, category: "song" });
-    const tracks = normalizeSearchResults(this.unwrapContent(raw)).slice(0, clampedLimit);
+    const provider = this.router.resolve(options.provider);
+    const tracks = (await provider.searchTracks(trimmed)).slice(0, clampedLimit);
     const setId = crypto.randomUUID();
     const set: MusicSelectionSet = {
       setId,
+      provider: provider.id,
       source: "search",
       query: trimmed,
       createdAt: Date.now(),
       expiresAt: Date.now() + SET_TTL_MS,
       conversationId,
+      resolutionRunId: options.resolutionRunId,
+      resolutionPurpose: options.purpose ?? "discover",
       tracks,
     };
     this.cache.add(set);
@@ -290,21 +313,50 @@ export class MusicService {
     for (const tid of trackIds) {
       if (!setTrackIds.has(tid)) throw new MusicInputError("E_TRACK_NOT_IN_SET");
     }
-    this.cache.touch(setId);
     const cardRef = `cyrene:music:${setId}:${trackIds.join(":")}`;
     return { cardRef };
   }
 
+  markTracksPresented(setId: string, conversationId: string, trackIds: string[]): void {
+    const set = this.cache.get(setId, conversationId);
+    if (!set) throw new MusicInputError("E_SET_NOT_FOUND");
+    const available = new Set(set.tracks.map((track) => track.id));
+    if (trackIds.length === 0 || trackIds.some((trackId) => !available.has(trackId))) {
+      throw new MusicInputError("E_TRACK_NOT_IN_SET");
+    }
+    this.cache.markPresented(setId, conversationId, trackIds);
+  }
+
   // ── Playback ───────────────────────────────────────────────
 
-  async playTrack(trackId: string): Promise<PlaybackDispatchResult> {
+  async playTrack(input: CandidatePlaybackRequest): Promise<PlaybackDispatchResult> {
+    const trackId = input.trackId;
     if (!/^\d+$/.test(trackId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
-    return this.dispatcher.dispatch("song", trackId);
+    const set = this.cache.get(input.setId, input.conversationId);
+    if (!set) throw new MusicInputError("E_SET_NOT_FOUND");
+    if (set.provider !== input.provider) throw new MusicInputError("E_PROVIDER_MISMATCH");
+    if (!set.tracks.some((track) => track.id === trackId)) {
+      throw new MusicInputError("E_TRACK_NOT_IN_SET");
+    }
+    const wasPresented = set.presentedTrackIds?.includes(trackId) === true;
+    const resolvedForThisRun = set.resolutionPurpose === "play"
+      && Boolean(input.runId)
+      && set.resolutionRunId === input.runId;
+    if (!wasPresented && !resolvedForThisRun) {
+      throw new MusicInputError("E_TRACK_NOT_PLAYABLE");
+    }
+    return this.router.resolve(input.provider).playTrack(trackId);
+  }
+
+  /** Trusted renderer path: card/settings IDs originate from MusicService results. */
+  async playTrackFromUi(trackId: string): Promise<PlaybackDispatchResult> {
+    if (!/^\d+$/.test(trackId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
+    return this.router.resolve().playTrack(trackId);
   }
 
   async playPlaylist(playlistId: string): Promise<PlaybackDispatchResult> {
     if (!/^\d+$/.test(playlistId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
-    return this.dispatcher.dispatch("playlist", playlistId);
+    return this.router.resolve().playPlaylist(playlistId);
   }
 
   // ── Helpers ────────────────────────────────────────────────
@@ -323,26 +375,13 @@ export class MusicService {
 
   private async validateSessionThreeState(): Promise<{ state: string; profile?: MusicProfile }> {
     try {
-      const raw = await this.client.callAuthTool("cyrene_music_login_check", { session_id: "validation-only" });
-      const r = raw as { status?: string; profile?: MusicProfile };
-      if (r.status === "authorized") return { state: "valid", profile: r.profile };
-      return { state: "invalid_credentials" };
+      return await this.client.callAuthTool(
+        "cyrene_music_validate_session",
+        {},
+      ) as { state: string; profile?: MusicProfile };
     } catch {
       return { state: "temporarily_unavailable" };
     }
-  }
-
-  private unwrapContent(result: unknown): unknown {
-    if (result && typeof result === "object") {
-      const r = result as Record<string, unknown>;
-      if (Array.isArray(r.content)) {
-        const first = (r.content as Array<Record<string, unknown>>)[0];
-        if (first && first.type === "text" && typeof first.text === "string") {
-          try { return JSON.parse(first.text); } catch { return result; }
-        }
-      }
-    }
-    return result;
   }
 
   private emitBackendChange(s: MusicBackendState): void {

@@ -8,6 +8,7 @@ import {
 import { authHeaderFor } from "./auth";
 import { resolveReasoningCapability } from "../../../shared/reasoning";
 import { applyReasoningPreference } from "./reasoning";
+import { resolveAutomaticToolChoicePolicy, resolveToolChoicePolicy } from "./tool-choice-policy";
 
 function buildUrl(baseUrl: string): string {
   const trimmed = baseUrl.trim().replace(/\/+$/, "");
@@ -69,9 +70,46 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
     const tools = toWireTools(req.tools);
     if (tools) {
       body.tools = tools;
-      body.tool_choice = req.toolChoice
-        ? { type: "function", function: { name: req.toolChoice.name } }
-        : "auto";
+      if (req.toolChoiceOverride) {
+        // Action Gate 专用：直接指定 tool_choice wire 值，绕过 resolveToolChoicePolicy
+        switch (req.toolChoiceOverride.kind) {
+          case "named":
+            body.tool_choice = { type: "function", function: { name: req.toolChoiceOverride.toolName } };
+            break;
+          case "required":
+            body.tool_choice = "required";
+            break;
+          case "auto":
+            body.tool_choice = "auto";
+            break;
+          case "none":
+            body.tool_choice = "none";
+            break;
+          case "omit":
+            // 不发 tool_choice 字段
+            break;
+        }
+      } else if (req.toolChoiceIntent) {
+        const policy = resolveToolChoicePolicy({
+          providerId: this.capability.id,
+          model: cfg.model,
+          transport: this.transport,
+          reasoning: cfg.reasoning ?? { mode: "auto" },
+          requestedToolName: req.toolChoiceIntent.toolName,
+          supportedModes: this.capability.toolChoiceModes,
+        });
+        if (policy.kind === "named") body.tool_choice = { type: "function", function: { name: policy.name } };
+        else if (policy.kind === "required") body.tool_choice = "required";
+        else if (policy.kind === "auto") body.tool_choice = "auto";
+      } else if (resolveAutomaticToolChoicePolicy({
+        providerId: this.capability.id,
+        model: cfg.model,
+        transport: this.transport,
+        reasoning: cfg.reasoning ?? { mode: "auto" },
+        supportedModes: this.capability.toolChoiceModes,
+      }) === "auto") {
+        body.tool_choice = "auto";
+      }
     }
     if (req.extraBody) Object.assign(body, req.extraBody);
     // 推理控制：按 (providerId, model) 解析 capability，调用 applyReasoningPreference 转换 body。

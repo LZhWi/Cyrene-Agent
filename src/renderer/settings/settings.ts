@@ -24,6 +24,7 @@ import { normalizeUiTheme, type UiTheme } from "../../shared/ui-theme";
 import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-font";
 import { normalizeUiIcon, type UiIcon } from "../../shared/ui-icon";
 import { buildAppearanceSettingsPatch } from "./appearance-settings-state";
+import { getCitaUiState } from "./cita-settings-state";
 import { requestTrackPlayback } from "./music-playback";
 import { type ReasoningPreference } from "../../shared/reasoning";
 import { type LoginFlowState } from "../../shared/music-types";
@@ -277,8 +278,7 @@ interface ModelPreset {
   iconUrl: string;
   // 厂商官网链接，显示在预设下拉框旁边，方便用户直接跳转注册/查看文档。
   websiteUrl?: string;
-  // 视觉模型的 OpenAI 兼容 baseUrl。仅当主配走 Anthropic 入口、视觉要走 OpenAI 入口时才标
-  // （如 MiniMax 主配 /anthropic，视觉走 /v1）。勾选"同步主模型"时 UI 用它填视觉框。
+  // 视觉模型的 OpenAI 兼容 baseUrl。主模型与视觉模型入口不同时使用。
   visionBaseUrl?: string;
   // 该厂商默认主模型是否支持视觉。true 时设置页加载默认勾选"同步主模型"，
   // 多模态用户开箱即用。与 capabilities.ts 的 supportsVision 镜像，需手动同步。
@@ -296,6 +296,8 @@ interface ModelPreset {
 }
 
 interface GeneralSettings {
+  citaEnabled: boolean;
+  citaSemanticEngine: "remote" | "local";
   musicEnabled: boolean;
   musicVolume: number;
   soundEnabled: boolean;
@@ -401,7 +403,7 @@ interface SettingsApi {
   listMcpServers?: () => Promise<Array<{ id: string; name: string; connected: boolean; toolCount: number; toolIds: string[] }>>;
   getPermissionLevel?: () => Promise<{ level: "read-only" | "scoped" | "per-action" | "full" }>;
   setPermissionLevel?: (level: string) => Promise<{ ok: boolean; level?: string; error?: string }>;
-  testConnection?: (config: { provider: string; baseUrl: string; model: string; apiKey: string }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
+  testConnection?: (config: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: "openai" | "anthropic" | "auto"; reasoning?: ReasoningPreference }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
   testVision?: (config: { baseUrl: string; apiKey: string; model: string }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
   // main → settings：要求切到指定标签（窗口已打开时由 main 发这个事件）
   onSwitchSection?: (callback: (section: string) => void) => (() => void) | void;
@@ -430,11 +432,11 @@ const MODEL_PRESETS: ModelPreset[] = [
   {
     providerName: "MiniMax（稀宇科技）",
     shortName: "MiniMax",
-    baseUrl: "https://api.minimaxi.com/anthropic",
+    baseUrl: "https://api.minimaxi.com/v1",
     mainModels: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
     iconUrl: "https://unpkg.com/@lobehub/icons-static-svg@latest/icons/minimax.svg",
     websiteUrl: "https://platform.minimaxi.com/",
-    // 主配走 /anthropic，但视觉要走 OpenAI 入口 /v1。勾"同步"时 UI 自动用这个，用户不用手改。
+    // 主模型和视觉模型默认都走 OpenAI 兼容入口。
     visionBaseUrl: "https://api.minimaxi.com/v1",
     supportsVision: true,
   },
@@ -703,6 +705,8 @@ const mobileMessageSegmentationSelect = document.getElementById("mobile-message-
 const proactiveChatSelect = document.getElementById("proactive-chat-select") as HTMLElement;
 const proactiveDeliveryRow = document.getElementById("proactive-delivery-row") as HTMLElement;
 const proactiveDeliverySelect = document.getElementById("proactive-delivery-select") as HTMLElement;
+const citaEnabledInput = document.getElementById("cita-enabled") as HTMLInputElement;
+const citaEngineSelect = document.getElementById("cita-engine-select") as HTMLElement;
 const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
 const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputElement;
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
@@ -1170,6 +1174,13 @@ async function loadConfig(): Promise<void> {
 async function loadGeneralSettings(): Promise<void> {
   try {
     const cfg = await window.settings!.getGeneral();
+    const cita = getCitaUiState({ enabled: cfg.citaEnabled, semanticEngine: cfg.citaSemanticEngine });
+    citaEnabledInput.checked = cita.enabled;
+    citaEngineSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
+      const selected = button.dataset.value === cita.selectedEngine;
+      button.classList.toggle("is-active", selected);
+      button.setAttribute("aria-pressed", String(selected));
+    });
     musicEnabledInput.checked = cfg.musicEnabled;
     musicVolumeInput.value = String(cfg.musicVolume);
     syncMusicPlayback();
@@ -1363,11 +1374,17 @@ proactiveDeliverySelect.querySelectorAll<HTMLButtonElement>(".option-block").for
   });
 });
 
+citaEnabledInput.addEventListener("change", () => {
+  setPreferencesSaveStatus("有未保存的更改");
+});
+
 preferencesForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   setPreferencesSaveStatus("保存中…");
   try {
     await window.settings!.saveGeneral({
+      citaEnabled: citaEnabledInput.checked,
+      citaSemanticEngine: "remote",
       defaultChatMode: getDefaultChatModeValue(),
       segmentedOutputMode: getSegmentedOutputValue(),
       mobileMessageSegmentation: getMobileMessageSegmentationValue(),
@@ -2019,7 +2036,14 @@ if (testConnectionBtn) {
     setSaveStatus("测试连接中…");
     testConnectionBtn.disabled = true;
     try {
-      const result = await window.settings!.testConnection({ provider, baseUrl, model, apiKey });
+      const result = await window.settings!.testConnection({
+        provider,
+        baseUrl,
+        model,
+        apiKey,
+        explicitTransport: transportSelect.value as ProviderProfile["explicitTransport"],
+        reasoning: providerProfileCache[activeProvider]?.reasoning,
+      });
       if (result.ok) setSaveStatus("连接成功 " + result.latency + "ms · " + (result.sample ?? ""), "is-ok");
       else setSaveStatus("连接失败：" + (result.error ?? "未知错误"), "is-error");
     } catch (e) {
@@ -2995,7 +3019,7 @@ interface MusicApi {
   cancelLogin: () => Promise<MusicIpcResult<unknown>>;
   logout: () => Promise<MusicIpcResult<unknown>>;
   search: (keyword: string, limit?: number) => Promise<MusicIpcResult<MusicSelectionResult>>;
-  playTrack: (trackId: string) => Promise<MusicIpcResult<{ state: "dispatched" | "client_unavailable" | "launch_failed" }>>;
+  playTrack: (trackId: string) => Promise<MusicIpcResult<{ state: "dispatched" | "web_fallback" | "client_unavailable" | "launch_failed" }>>;
   onStateChanged: (h: (s: MusicStatusSnapshot) => void) => (() => void) | void;
 }
 
