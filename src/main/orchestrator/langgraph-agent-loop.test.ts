@@ -26,6 +26,10 @@ class FakeAdapter implements ChatVendorAdapter {
   enqueueToolCall(name: string, args: Record<string, unknown>, id = `call-${this.scripts.length + 1}`) {
     this.scripts.push({ toolCalls: [{ id, name, arguments: JSON.stringify(args) }] });
   }
+  /** 模拟 Action Gate 的 submit_decision 虚拟工具调用响应。 */
+  enqueueDecision(value: Record<string, unknown>, id = `call-${this.scripts.length + 1}`) {
+    this.scripts.push({ toolCalls: [{ id, name: "submit_decision", arguments: JSON.stringify(value) }] });
+  }
   buildRequest(req: ChatRequest): HttpRequest {
     this.requests.push(req);
     return { url: "https://fake/", method: "POST", headers: {}, body: "{}" };
@@ -89,7 +93,7 @@ afterEach(() => vi.restoreAllMocks());
 describe("runLangGraphAgentLoop native Function Calling runtime", () => {
   it("decides an action, resolves one native ToolCall, then Runtime executes it", async () => {
     const adapter = new FakeAdapter();
-    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
+    adapter.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
     adapter.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
     // routeAfterTool 在工具成功后直接路由到 soul，不再调 Action Gate
     adapter.enqueueText("已向网易云发送播放请求。");
@@ -102,7 +106,10 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
       expect.objectContaining({ name: "music_play_track", arguments: '{"candidateRef":"ctx_song_1"}' }),
       expect.any(Set),
     );
-    const nativeRequests = adapter.requests.filter((request) => request.tools !== undefined);
+    // Action Gate 请求也带 tools（submit_decision 虚拟工具），所以要按 toolName 过滤出原生 FC 请求
+    const nativeRequests = adapter.requests.filter(
+      (request) => request.toolChoiceIntent?.toolName === "music_play_track",
+    );
     expect(nativeRequests).toHaveLength(1);
     expect(nativeRequests[0]).toMatchObject({
       toolChoiceIntent: { mode: "must_call", toolName: "music_play_track" },
@@ -112,7 +119,7 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
 
   it("routes ask_user to Soul without executing a tool", async () => {
     const adapter = new FakeAdapter();
-    adapter.enqueueJson({ decision: "ask_user", reason: "版本不明确", missingInformation: ["歌曲版本"] });
+    adapter.enqueueDecision({ decision: "ask_user", reason: "版本不明确", missingInformation: ["歌曲版本"] });
     adapter.enqueueText("你想听哪个版本？");
     const executeTool = vi.fn();
 
@@ -122,21 +129,23 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     expect(result.reply).toBe("你想听哪个版本？");
   });
 
-  it("repairs malformed Action Gate JSON once", async () => {
+  it("repairs a malformed Action Gate tool call once", async () => {
     const adapter = new FakeAdapter();
+    // 第一次：LLM 没调 submit_decision，返回纯文本 -> E_ACTION_GATE_PROTOCOL
     adapter.enqueueText("我直接回复用户");
-    adapter.enqueueJson({ decision: "respond" });
+    // 第二次：LLM 正确调用 submit_decision
+    adapter.enqueueDecision({ decision: "respond" });
     adapter.enqueueText("好的。");
 
     const result = await runLangGraphAgentLoop(options(adapter));
 
-    expect(String(adapter.requests[1].messages[0].content)).toContain("上一次 JSON 决策无效");
+    expect(String(adapter.requests[1].messages[0].content)).toContain("上一次决策未通过校验");
     expect(result.reply).toBe("好的。");
   });
 
   it("repairs a native ToolCall whose arguments fail Runtime validation", async () => {
     const adapter = new FakeAdapter();
-    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
+    adapter.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
     adapter.enqueueToolCall("music_play_track", { candidateRef: "ctx_invented" });
     adapter.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
     // routeAfterTool 在工具成功后直接路由到 soul
@@ -151,9 +160,9 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
 
   it("feeds failed execution facts back so the model can explicitly retry", async () => {
     const adapter = new FakeAdapter();
-    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
+    adapter.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
     adapter.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
-    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "重试播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
+    adapter.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "重试播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
     adapter.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
     // routeAfterTool 在第二次（succeeded）后直接路由到 soul
     adapter.enqueueText("第二次请求成功发送。");
@@ -172,7 +181,7 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     // 新主路径：act 成功后 routeAfterTool 直接路由到 soul，模型没有机会再次输出相同 act。
     // ExecutionLedger 的去重 / forced_respond 不再承担正常终止职责。
     const adapter = new FakeAdapter();
-    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
+    adapter.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
     adapter.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
     adapter.enqueueText("请求已发送。");
     const executeTool = vi.fn(async () => ({ status: "succeeded" as const, output: "{\"ok\":true}" }));
@@ -187,10 +196,10 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     // 异常兜底路径：routeAfterTool 因为 afterSuccess=replan 回到 decide，
     // 模型又重复同一动作 -> execute 命中缓存 deduplicated=true -> forced_respond 不调 LLM。
     const adapter = new FakeAdapter();
-    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放", targetRefs: ["ctx_song_1"], afterSuccess: "replan" });
+    adapter.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放", targetRefs: ["ctx_song_1"], afterSuccess: "replan" });
     adapter.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
     // replan 后模型重复同一动作（相同 capability+targetRefs+args）
-    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "再播放", targetRefs: ["ctx_song_1"], afterSuccess: "replan" });
+    adapter.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "再播放", targetRefs: ["ctx_song_1"], afterSuccess: "replan" });
     adapter.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
     // execute 命中缓存 deduplicated=true -> routeAfterTool 看到 succeeded+terminal+respond(默认) -> soul
     // （注意：replan 只在第一次 act 声明；第二次 act 也声明 replan，但 routeAfterTool 仍会路由到 soul，
@@ -210,9 +219,9 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     // 多步任务：第 1 次 play(ctx_song_1) 成功 + afterSuccess=replan -> routeAfterTool 回 decide
     // -> 第 2 次 play(ctx_song_2) 指纹不同，cached=false，正常执行 -> respond
     const adapter = new FakeAdapter();
-    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "replan" });
+    adapter.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "replan" });
     adapter.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
-    adapter.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第二首", targetRefs: ["ctx_song_2"], afterSuccess: "respond" });
+    adapter.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放第二首", targetRefs: ["ctx_song_2"], afterSuccess: "respond" });
     adapter.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_2" });
     adapter.enqueueText("完成。");
     const executeTool = vi.fn(async () => ({ status: "succeeded" as const, output: "{\"ok\":true}" }));
@@ -226,7 +235,7 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
   it("does not repeat a successful side effect when Soul fails and the same turn is retried", async () => {
     const ledger = new ExecutionLedger();
     const first = new FakeAdapter();
-    first.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
+    first.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
     first.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
     // routeAfterTool 在工具成功后直接路由到 soul，不调 Action Gate
     first.enqueueText("不会送达的 Soul 回复");
@@ -239,7 +248,7 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     await expect(runLangGraphAgentLoop({ ...options(first, executeTool), executionLedger: ledger })).rejects.toThrow("HTTP 500");
 
     const retry = new FakeAdapter();
-    retry.enqueueJson({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
+    retry.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
     retry.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
     // 重试时 execute 命中 ledger 缓存 -> deduplicated=true -> forced_respond 不调 LLM -> soul
     retry.enqueueText("已向网易云发送播放请求。");
@@ -253,7 +262,7 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
 
   it("preserves image-caption fallback for the first JSON decision request", async () => {
     const adapter = new FakeAdapter();
-    adapter.enqueueJson({ decision: "ask_user", reason: "图片信息不足", missingInformation: ["图片细节"] });
+    adapter.enqueueDecision({ decision: "ask_user", reason: "图片信息不足", missingInformation: ["图片细节"] });
     adapter.enqueueText("你可以再描述一下图片吗？");
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(new Response("unsupported image", { status: 400 }))

@@ -1,8 +1,25 @@
 import { describe, expect, it } from "vitest";
 import { buildActionGateRequest, parseActionDecisionResponse } from "./action-gate";
-import type { ChatResponse } from "./vendors/types";
+import type { ChatResponse, ToolCall } from "./vendors/types";
 
-function response(text: string): ChatResponse {
+/** 构造一个带 submit_decision tool call 的 ChatResponse（模拟 Provider 原生 function calling 返回）。 */
+function toolCallResponse(args: object, name = "submit_decision"): ChatResponse {
+  const toolCall: ToolCall = {
+    id: `call-${Date.now()}`,
+    name,
+    arguments: JSON.stringify(args),
+  };
+  return {
+    assistantMessage: { role: "assistant", content: "", toolCalls: [toolCall] },
+    text: "",
+    toolCalls: [toolCall],
+    finishReason: "tool_calls",
+    raw: {},
+  };
+}
+
+/** 构造一个空 toolCalls 的 ChatResponse（模拟 LLM 没调虚拟工具的异常情况）。 */
+function emptyResponse(text = ""): ChatResponse {
   return {
     assistantMessage: { role: "assistant", content: text },
     text,
@@ -12,8 +29,8 @@ function response(text: string): ChatResponse {
   };
 }
 
-describe("ActionGate JSON protocol", () => {
-  it("requests provider-neutral JSON without tools or toolChoice", () => {
+describe("ActionGate native function calling protocol", () => {
+  it("requests a virtual submit_decision tool with must_call intent", () => {
     const request = buildActionGateRequest({
       model: "test-model",
       originalQuery: "播放第一首",
@@ -24,21 +41,20 @@ describe("ActionGate JSON protocol", () => {
       toolResults: [],
     });
 
-    expect(request.tools).toBeUndefined();
-    expect(request.toolChoiceIntent).toBeUndefined();
-    expect(String(request.messages[0].content)).toContain("只返回一个 JSON 对象");
-    expect(String(request.messages[0].content)).not.toContain('输出结构：{"act"');
-    expect(String(request.messages[0].content)).toContain('respond 示例：{"decision":"respond"');
+    expect(request.tools).toHaveLength(1);
+    expect(request.tools?.[0].name).toBe("submit_decision");
+    expect(request.toolChoiceIntent).toEqual({ mode: "must_call", toolName: "submit_decision" });
+    expect(String(request.messages[0].content)).toContain("必须调用 submit_decision 工具提交决策");
     expect(String(request.messages[0].content)).toContain("播放当前网易云日推第一首《最初的记忆》");
   });
 
-  it("parses an act decision from exact JSON text", () => {
-    expect(parseActionDecisionResponse(response(JSON.stringify({
+  it("parses an act decision from submit_decision tool arguments", () => {
+    expect(parseActionDecisionResponse(toolCallResponse({
       decision: "act",
       capability: "music.play_track",
       objective: "播放已选择歌曲",
       targetRefs: ["ctx_song_1"],
-    })), ["music.play_track"])).toEqual({
+    }), ["music.play_track"])).toEqual({
       decision: "act",
       capability: "music.play_track",
       objective: "播放已选择歌曲",
@@ -47,13 +63,13 @@ describe("ActionGate JSON protocol", () => {
   });
 
   it("parses afterSuccess=respond from an act decision", () => {
-    expect(parseActionDecisionResponse(response(JSON.stringify({
+    expect(parseActionDecisionResponse(toolCallResponse({
       decision: "act",
       capability: "music.play_track",
       objective: "播放",
       targetRefs: ["ctx_song_1"],
       afterSuccess: "respond",
-    })), ["music.play_track"])).toEqual({
+    }), ["music.play_track"])).toEqual({
       decision: "act",
       capability: "music.play_track",
       objective: "播放",
@@ -63,13 +79,13 @@ describe("ActionGate JSON protocol", () => {
   });
 
   it("parses afterSuccess=replan for multi-step tasks", () => {
-    expect(parseActionDecisionResponse(response(JSON.stringify({
+    expect(parseActionDecisionResponse(toolCallResponse({
       decision: "act",
       capability: "music.play_track",
       objective: "播放第一首",
       targetRefs: ["ctx_song_1"],
       afterSuccess: "replan",
-    })), ["music.play_track"])).toEqual({
+    }), ["music.play_track"])).toEqual({
       decision: "act",
       capability: "music.play_track",
       objective: "播放第一首",
@@ -79,12 +95,12 @@ describe("ActionGate JSON protocol", () => {
   });
 
   it("omits afterSuccess when not declared (default respond is derived downstream)", () => {
-    const parsed = parseActionDecisionResponse(response(JSON.stringify({
+    const parsed = parseActionDecisionResponse(toolCallResponse({
       decision: "act",
       capability: "music.play_track",
       objective: "播放",
       targetRefs: ["ctx_song_1"],
-    })), ["music.play_track"]);
+    }), ["music.play_track"]);
     expect(parsed.decision).toBe("act");
     expect("afterSuccess" in parsed).toBe(false);
   });
@@ -103,29 +119,49 @@ describe("ActionGate JSON protocol", () => {
     expect(content).toContain("afterSuccess");
     expect(content).toContain("单步任务");
     expect(content).toContain("多步任务");
-    expect(content).toContain('"afterSuccess":"respond"');
   });
 
-  it("parses respond and ask_user decisions without diagnostic-only optional fields", () => {
-    expect(parseActionDecisionResponse(response('{"decision":"respond"}'), [])).toEqual({
+  it("parses respond and ask_user decisions", () => {
+    expect(parseActionDecisionResponse(toolCallResponse({ decision: "respond" }), [])).toEqual({
       decision: "respond",
       reason: "ready_to_respond",
     });
-    expect(parseActionDecisionResponse(response('{"decision":"ask_user","reason":"版本不明确"}'), [])).toEqual({
+    expect(parseActionDecisionResponse(toolCallResponse({
+      decision: "ask_user",
+      reason: "版本不明确",
+    }), [])).toEqual({
       decision: "ask_user",
       reason: "版本不明确",
       missingInformation: [],
     });
   });
 
-  it("rejects natural language and markdown-wrapped JSON", () => {
-    expect(() => parseActionDecisionResponse(response("我来播放"), ["music.play_track"]))
+  it("throws E_ACTION_GATE_PROTOCOL when toolCalls is empty (LLM did not call the virtual tool)", () => {
+    expect(() => parseActionDecisionResponse(emptyResponse("我来播放"), ["music.play_track"]))
       .toThrow("E_ACTION_GATE_PROTOCOL");
-    expect(() => parseActionDecisionResponse(response('```json\n{"decision":"respond"}\n```'), []))
+    expect(() => parseActionDecisionResponse(emptyResponse(), []))
       .toThrow("E_ACTION_GATE_PROTOCOL");
   });
 
-  it("includes protocol feedback in a JSON repair request", () => {
+  it("throws E_ACTION_GATE_PROTOCOL when the tool call name is not submit_decision", () => {
+    expect(() => parseActionDecisionResponse(
+      toolCallResponse({ decision: "respond" }, "wrong_tool_name"),
+      [],
+    )).toThrow("E_ACTION_GATE_PROTOCOL");
+  });
+
+  it("throws E_ACTION_GATE_PROTOCOL when tool arguments are not valid JSON", () => {
+    const badResponse: ChatResponse = {
+      assistantMessage: { role: "assistant", content: "" },
+      text: "",
+      toolCalls: [{ id: "call-1", name: "submit_decision", arguments: "not valid json" }],
+      finishReason: "tool_calls",
+      raw: {},
+    };
+    expect(() => parseActionDecisionResponse(badResponse, [])).toThrow("E_ACTION_GATE_PROTOCOL");
+  });
+
+  it("includes protocol feedback in a repair request", () => {
     const request = buildActionGateRequest({
       model: "test-model",
       originalQuery: "播放第一首",
@@ -137,7 +173,7 @@ describe("ActionGate JSON protocol", () => {
       protocolFeedback: "E_ACTION_GATE_PROTOCOL",
     });
 
-    expect(String(request.messages[0].content)).toContain("上一次 JSON 决策无效");
+    expect(String(request.messages[0].content)).toContain("上一次决策未通过校验");
     expect(String(request.messages[0].content)).toContain("E_ACTION_GATE_PROTOCOL");
   });
 });

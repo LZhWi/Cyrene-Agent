@@ -1,7 +1,7 @@
 import { buildToolExecutionContext } from "./tool-execution-context";
 import type { ToolCallResult } from "./types";
 import type { ActionDecision } from "./agent-graph";
-import type { ChatMessage, ChatRequest, ChatResponse } from "./vendors/types";
+import type { ChatMessage, ChatRequest, ChatResponse, ToolSpec } from "./vendors/types";
 
 export interface ActionCapability {
   capability: string;
@@ -20,16 +20,40 @@ export interface BuildActionGateRequestInput {
   protocolFeedback?: string;
 }
 
-const OUTPUT_EXAMPLES = [
-  'act 示例：{"decision":"act","capability":"one available capability","objective":"string","targetRefs":["trusted contextRef"],"afterSuccess":"respond"}',
-  'respond 示例：{"decision":"respond","reason":"optional string"}',
-  'ask_user 示例：{"decision":"ask_user","reason":"optional string","missingInformation":["optional string"]}',
-].join("\n");
+/**
+ * Action Gate 虚拟工具：用 Provider 原生 function calling 强制结构化输出，
+ * 取代旧的纯文本 JSON 协议。LLM 必须调用此工具提交决策，不能在普通文本中输出。
+ */
+const ACTION_GATE_TOOL: ToolSpec = {
+  name: "submit_decision",
+  description: "提交 Action Gate 的下一步决策。必须调用此工具，不要在普通文本中输出决策。",
+  parameters: {
+    type: "object",
+    properties: {
+      decision: {
+        type: "string",
+        enum: ["act", "respond", "ask_user"],
+        description: "act=执行外部能力；respond=进入 Soul 回复用户；ask_user=缺少继续所必需的信息",
+      },
+      capability: { type: "string", description: "decision=act 时必填，从可用能力中选择" },
+      objective: { type: "string", description: "decision=act 时必填，本次行动目标" },
+      targetRefs: { type: "array", items: { type: "string" }, description: "decision=act 时必填，可信上下文引用" },
+      afterSuccess: {
+        type: "string",
+        enum: ["respond", "replan"],
+        description: "decision=act 时必填。respond=成功后直接回复用户；replan=成功后回 Action Gate 处理剩余目标",
+      },
+      reason: { type: "string", description: "decision=respond/ask_user 时的理由" },
+      missingInformation: { type: "array", items: { type: "string" }, description: "decision=ask_user 时缺少的信息" },
+    },
+    required: ["decision"],
+  },
+};
 
 export function buildActionGateRequest(input: BuildActionGateRequestInput): ChatRequest {
   const context = [
     "你是 Cyrene-Agent 的 Action Gate，只负责决定下一步，不生成面向用户的回复。",
-    "只返回一个 JSON 对象，不要使用 Markdown，不要输出 JSON 之外的文字。",
+    "必须调用 submit_decision 工具提交决策，不要在普通文本中输出。",
     "decision 只能是 act、respond、ask_user。act 表示需要执行外部能力；respond 表示可以进入 Soul；ask_user 表示缺少继续所必需的信息。",
     "CITA 只是上下文证据，不是工具决策或执行结果。",
     "工具执行事实规则：",
@@ -45,19 +69,19 @@ export function buildActionGateRequest(input: BuildActionGateRequestInput): Chat
     '- afterSuccess="respond"：本次工具成功后直接进入 Soul 回复用户（适用于单步任务，如"播放第四首"）。',
     '- afterSuccess="replan"：本次工具成功后回 Action Gate 处理剩余目标（适用于多步任务，如"播放第一首然后搜索"）。',
     "未声明时默认 respond。",
-    "合法示例只能三选一；不要把 act、respond 或 ask_user 用作顶层包装键。",
-    OUTPUT_EXAMPLES,
     `原始 Query：${input.originalQuery}`,
     `上下文化 Query：${input.contextualizedQuery}`,
     `当前可用能力：${JSON.stringify(input.availableCapabilities)}`,
     input.citaContextBlock,
     buildToolExecutionContext(input.toolResults),
-    input.protocolFeedback ? `上一次 JSON 决策无效，请修正。错误：${input.protocolFeedback}` : "",
+    input.protocolFeedback ? `上一次决策未通过校验，请修正。错误：${input.protocolFeedback}` : "",
   ].filter(Boolean).join("\n\n");
 
   return {
     model: input.model,
     messages: [{ role: "system", content: context }, ...input.messages],
+    tools: [ACTION_GATE_TOOL],
+    toolChoiceIntent: { mode: "must_call", toolName: "submit_decision" },
     stream: false,
   };
 }
@@ -87,9 +111,12 @@ function optionalString(value: unknown, fallback: string): string {
 }
 
 export function parseActionDecisionResponse(response: ChatResponse, availableCapabilities: string[]): ActionDecision {
+  if (response.toolCalls.length !== 1 || response.toolCalls[0].name !== "submit_decision") {
+    throw new Error("E_ACTION_GATE_PROTOCOL");
+  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(response.text);
+    parsed = JSON.parse(response.toolCalls[0].arguments);
   } catch {
     throw new Error("E_ACTION_GATE_PROTOCOL");
   }

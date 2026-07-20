@@ -153,13 +153,15 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
   };
   const invokeWithFallback = async (
     buildRequest: (messages: ChatMessage[]) => ChatRequest,
+    settingsOverride?: AgentLoopSettings,
   ) => {
     const activeMessages = fallbackMessages ?? options.messages;
+    const effectiveSettings = settingsOverride ?? options.settings;
     try {
       return await callAdapter(
         options.adapter,
         buildRequest(activeMessages),
-        options.settings,
+        effectiveSettings,
         Math.min(perCallTimeout, remainingBudget()),
         options.signal,
       );
@@ -171,7 +173,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       return await callAdapter(
         options.adapter,
         buildRequest(fallbackMessages),
-        options.settings,
+        effectiveSettings,
         Math.min(perCallTimeout, remainingBudget()),
         options.signal,
       );
@@ -203,16 +205,21 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       try {
         let lastError: unknown;
         for (let attempt = 1; attempt <= 2; attempt++) {
-          const response = await invokeWithFallback((messages) => buildActionGateRequest({
-            model: options.settings.model,
-            originalQuery: state.originalQuery,
-            contextualizedQuery: state.contextualizedQuery,
-            citaContextBlock: state.citaContextBlock,
-            messages,
-            availableCapabilities: capabilities,
-            toolResults: state.toolResults,
-            ...(lastError instanceof Error ? { protocolFeedback: lastError.message } : {}),
-          }));
+          const response = await invokeWithFallback(
+            (messages) => buildActionGateRequest({
+              model: options.settings.model,
+              originalQuery: state.originalQuery,
+              contextualizedQuery: state.contextualizedQuery,
+              citaContextBlock: state.citaContextBlock,
+              messages,
+              availableCapabilities: capabilities,
+              toolResults: state.toolResults,
+              ...(lastError instanceof Error ? { protocolFeedback: lastError.message } : {}),
+            }),
+            // Action Gate 强制 reasoning=off：DeepSeek reasoning on 时不支持 tool_choice 强制调用，
+            // 关掉 reasoning 保证 submit_decision 虚拟工具被强制调用，消除 JSON 协议解析失败风险。
+            { ...options.settings, reasoning: { mode: "off" } },
+          );
           trackUsage(response.usage);
           try {
             const decision = parseActionDecisionResponse(response, state.availableCapabilities);
