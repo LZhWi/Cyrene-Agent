@@ -1628,6 +1628,14 @@ body {
   border: 1px solid rgba(255, 255, 255, 0.08);
   font-size: 22px;
 }
+/* 高德出行的箭头 SVG 视觉重心偏右，靠加大容器右 padding 让它视觉居中 */
+.plugin-card__icon--nudge-left {
+  padding: 0 3px 0 0;
+  justify-items: center;
+}
+.plugin-card__icon--nudge-left > svg {
+  transform: translateX(-0.5px);
+}
 .plugin-card__body h2 {
   margin: 0;
   color: var(--rb-text-strong);
@@ -3316,7 +3324,7 @@ body {
 /* ===== Music Tools redesign ===== */
 .plugin-card--music .plugin-card__icon img,
 .music-platform .plugin-card__icon img { width: 32px; height: 38px; object-fit: contain; }
-.music-platform-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-top:16px; }
+.music-platform-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
 .music-platform { text-align:left; cursor:pointer; font:inherit; color:inherit; }
 .music-platform span { display:block; margin-top:6px; font-size:12px; color:var(--rb-text-muted); }
 .music-return-btn { border:0; background:transparent; color:var(--rb-text-muted); padding:4px 0; cursor:pointer; }

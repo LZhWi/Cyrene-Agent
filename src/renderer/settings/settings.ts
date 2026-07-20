@@ -4202,10 +4202,18 @@ lifeToggle?.addEventListener("click", () => {
   lifeBody?.classList.toggle("is-collapsed", expanded);
 });
 
+// ── 音乐工具手风琴（跟生活工具一样的折叠逻辑）────────────────
+const musicToggle = document.getElementById("plugin-music-toggle") as HTMLButtonElement | null;
+const musicAccordionCard = document.getElementById("plugin-music-card");
+const musicAccordionBody = document.getElementById("plugin-music-body");
+musicToggle?.addEventListener("click", () => {
+  const expanded = musicToggle.getAttribute("aria-expanded") === "true";
+  musicToggle.setAttribute("aria-expanded", String(!expanded));
+  musicAccordionCard?.classList.toggle("is-expanded", !expanded);
+  musicAccordionBody?.classList.toggle("is-collapsed", expanded);
+});
+
 // ── 音乐工具路由 ──────────────────────────────────────────────
-const musicToggle = null;
-const musicAccordionCard = null;
-const musicAccordionBody = null;
 document.getElementById("music-platform-netease")?.addEventListener("click", () => {
   switchSection("music");
   musicHomeView?.classList.add("is-hidden");
