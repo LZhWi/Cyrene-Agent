@@ -67,17 +67,34 @@ export interface ToolSpec {
   parameters: object; // JSON Schema
 }
 
+/**
+ * Action Gate 专用：直接指定 tool_choice wire 值，绕过 resolveToolChoicePolicy。
+ * Native FC 不设此字段，仍走 toolChoiceIntent + resolveToolChoicePolicy。
+ *
+ * `none` 和 `omit` 的区别：
+ * - `none`：明确发送"禁止调用工具"（wire: tool_choice: "none"）
+ * - `omit`：请求里完全不出现 tool_choice 字段
+ */
+export type ToolChoiceOverride =
+  | { kind: "named"; toolName: string }
+  | { kind: "required" }
+  | { kind: "auto" }
+  | { kind: "none" }
+  | { kind: "omit" };
+
 export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
   tools?: ToolSpec[];
   /** Runtime semantic intent; the active Adapter maps it to named/required/any/auto/omitted wire syntax. */
   toolChoiceIntent?: { mode: "must_call"; toolName: string };
+  /** Action Gate 专用：直接指定 tool_choice wire 值，绕过 resolveToolChoicePolicy。 */
+  toolChoiceOverride?: ToolChoiceOverride;
   temperature?: number;
   stream?: boolean;
   /**
    * 非流式调用时的 max_tokens 上限（OpenAI wire: `max_tokens`；Anthropic wire 覆盖默认 4096）。
-   * 流式时由 adapter 决定是否使用（通常不用——流式靠 finish_reason 判断）。
+   * 流式时由 adapter 决定是否使用（通常不用--流式靠 finish_reason 判断）。
    */
   maxTokens?: number;
   /** 透传到请求体顶层的厂商扩展字段（如 Kimi 的 prompt_cache_key）。 */

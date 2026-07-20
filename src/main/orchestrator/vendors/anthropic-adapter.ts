@@ -116,7 +116,26 @@ export class AnthropicAdapter implements ChatVendorAdapter {
         description: t.description,
         input_schema: t.parameters,
       }));
-      if (req.toolChoiceIntent) {
+      if (req.toolChoiceOverride) {
+        // Action Gate 专用：直接指定 tool_choice wire 值，绕过 resolveToolChoicePolicy
+        switch (req.toolChoiceOverride.kind) {
+          case "named":
+            body.tool_choice = { type: "tool", name: req.toolChoiceOverride.toolName };
+            break;
+          case "required":
+            body.tool_choice = { type: "any" };
+            break;
+          case "auto":
+            body.tool_choice = { type: "auto" };
+            break;
+          case "none":
+            body.tool_choice = { type: "none" };
+            break;
+          case "omit":
+            // 不发 tool_choice 字段
+            break;
+        }
+      } else if (req.toolChoiceIntent) {
         const policy = resolveToolChoicePolicy({
           providerId: this.capability.id,
           model: cfg.model,

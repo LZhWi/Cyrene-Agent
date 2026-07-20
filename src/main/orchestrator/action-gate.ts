@@ -1,7 +1,29 @@
 import { buildToolExecutionContext } from "./tool-execution-context";
 import type { ToolCallResult } from "./types";
 import type { ActionDecision } from "./agent-graph";
-import type { ChatMessage, ChatRequest, ChatResponse, ToolSpec } from "./vendors/types";
+import type { ActionGateStrategy } from "./vendors/action-gate-profiles";
+import type { ChatMessage, ChatRequest, ChatResponse, ToolSpec, ToolChoiceOverride } from "./vendors/types";
+
+// ── 结构化协议错误（GPT 第 4 点）─────────────────────────
+
+export type ActionGateProtocolErrorCode =
+  | "MISSING_DECISION_TOOL_CALL"
+  | "MULTIPLE_DECISION_TOOL_CALLS"
+  | "UNEXPECTED_TOOL_NAME"
+  | "INVALID_TOOL_ARGUMENTS_JSON"
+  | "INVALID_DECISION_SCHEMA"
+  | "CAPABILITY_UNAVAILABLE"
+  | "INVALID_TEXT_JSON"
+  | "UNEXPECTED_TOOL_CALL_IN_TEXT_MODE";
+
+export class ActionGateProtocolError extends Error {
+  constructor(readonly code: ActionGateProtocolErrorCode, readonly repairable: boolean = true) {
+    super("E_ACTION_GATE_PROTOCOL");
+    this.name = "ActionGateProtocolError";
+  }
+}
+
+// ── 类型 ─────────────────────────────────────────────────
 
 export interface ActionCapability {
   capability: string;
@@ -17,18 +39,17 @@ export interface BuildActionGateRequestInput {
   messages: ChatMessage[];
   availableCapabilities: ActionCapability[];
   toolResults: ToolCallResult[];
+  strategy: ActionGateStrategy;
   protocolFeedback?: string;
 }
 
-/**
- * Action Gate 虚拟工具：用 Provider 原生 function calling 强制结构化输出，
- * 取代旧的纯文本 JSON 协议。LLM 必须调用此工具提交决策，不能在普通文本中输出。
- *
- * 注意：capability 字段的 enum 在 buildActionGateRequest 里动态注入（因为可用能力是运行时的）。
- */
+const SUBMIT_DECISION_TOOL_NAME = "submit_decision";
+
+// ── 虚拟工具 schema ──────────────────────────────────────
+
 function buildActionGateTool(availableCapabilities: string[]): ToolSpec {
   return {
-    name: "submit_decision",
+    name: SUBMIT_DECISION_TOOL_NAME,
     description: "提交 Action Gate 的下一步决策。必须调用此工具，不要在普通文本中输出决策。",
     parameters: {
       type: "object",
@@ -58,10 +79,35 @@ function buildActionGateTool(availableCapabilities: string[]): ToolSpec {
   };
 }
 
+// ── 协议修复 Prompt（GPT 第 3 点：按 strategy 分）─────────
+
+function buildProtocolFeedback(strategy: ActionGateStrategy, errorCode: string): string {
+  const base = `上一次决策未通过协议校验。错误类型：${errorCode}`;
+  let instruction: string;
+  switch (strategy) {
+    case "named_decision_tool":
+    case "required_single_decision_tool":
+      instruction = "只提交一个 submit_decision 工具调用。不得输出普通文本。";
+      break;
+    case "auto_single_decision_tool_with_json_fallback":
+    case "omit_tool_choice_with_json_fallback":
+      instruction = "优先提交一个 submit_decision 工具调用。如果未调用工具，只能输出一个完整 JSON 对象。不得输出解释或 Markdown。";
+      break;
+    case "plain_json_text":
+      instruction = "只输出一个完整 JSON 对象。不得调用工具，不得输出解释或 Markdown。";
+      break;
+  }
+  return `${base}\n${instruction}`;
+}
+
+// ── 请求构建 ─────────────────────────────────────────────
+
 export function buildActionGateRequest(input: BuildActionGateRequestInput): ChatRequest {
   const context = [
     "你是 Cyrene-Agent 的 Action Gate，只负责决定下一步，不生成面向用户的回复。",
-    "必须调用 submit_decision 工具提交决策，不要在普通文本中输出。",
+    input.strategy === "plain_json_text"
+      ? "只输出一个 JSON 对象，不要使用 Markdown，不要输出 JSON 之外的文字。"
+      : "必须调用 submit_decision 工具提交决策，不要在普通文本中输出。",
     "decision 只能是 act、respond、ask_user。act 表示需要执行外部能力；respond 表示可以进入 Soul；ask_user 表示缺少继续所必需的信息。",
     "CITA 只是上下文证据，不是工具决策或执行结果。",
     "工具执行事实规则：",
@@ -82,35 +128,56 @@ export function buildActionGateRequest(input: BuildActionGateRequestInput): Chat
     `当前可用能力：${JSON.stringify(input.availableCapabilities)}`,
     input.citaContextBlock,
     buildToolExecutionContext(input.toolResults),
-    input.protocolFeedback ? `上一次决策未通过校验，请修正。错误：${input.protocolFeedback}` : "",
+    input.protocolFeedback ? buildProtocolFeedback(input.strategy, input.protocolFeedback) : "",
   ].filter(Boolean).join("\n\n");
+
+  // 按 strategy 构建 tools + toolChoiceOverride（GPT 第 2/3 点）
+  const useTools = input.strategy !== "plain_json_text";
+  const toolChoiceOverride = buildToolChoiceOverride(input.strategy);
 
   return {
     model: input.model,
     messages: [{ role: "system", content: context }, ...input.messages],
-    tools: [buildActionGateTool(input.availableCapabilities.map((item) => item.capability))],
-    toolChoiceIntent: { mode: "must_call", toolName: "submit_decision" },
+    ...(useTools ? { tools: [buildActionGateTool(input.availableCapabilities.map((item) => item.capability))] } : {}),
+    ...(toolChoiceOverride ? { toolChoiceOverride } : {}),
     stream: false,
   };
 }
 
+function buildToolChoiceOverride(strategy: ActionGateStrategy): ToolChoiceOverride | undefined {
+  switch (strategy) {
+    case "named_decision_tool":
+      return { kind: "named", toolName: SUBMIT_DECISION_TOOL_NAME };
+    case "required_single_decision_tool":
+      return { kind: "required" };
+    case "auto_single_decision_tool_with_json_fallback":
+      return { kind: "auto" };
+    case "omit_tool_choice_with_json_fallback":
+      return { kind: "omit" };
+    case "plain_json_text":
+      return undefined;
+  }
+}
+
+// ── 校验辅助 ─────────────────────────────────────────────
+
 function asObject(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("E_ACTION_GATE_PROTOCOL");
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ActionGateProtocolError("INVALID_DECISION_SCHEMA");
   return value as Record<string, unknown>;
 }
 
 function exactKeys(value: Record<string, unknown>, allowed: string[]): void {
   const keys = new Set(allowed);
-  if (Object.keys(value).some((key) => !keys.has(key))) throw new Error("E_ACTION_GATE_PROTOCOL");
+  if (Object.keys(value).some((key) => !keys.has(key))) throw new ActionGateProtocolError("INVALID_DECISION_SCHEMA");
 }
 
 function stringArray(value: unknown): string[] {
-  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error("E_ACTION_GATE_PROTOCOL");
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new ActionGateProtocolError("INVALID_DECISION_SCHEMA");
   return value as string[];
 }
 
 function requiredString(value: unknown): string {
-  if (typeof value !== "string" || value.trim().length === 0) throw new Error("E_ACTION_GATE_PROTOCOL");
+  if (typeof value !== "string" || value.trim().length === 0) throw new ActionGateProtocolError("INVALID_DECISION_SCHEMA");
   return value.trim();
 }
 
@@ -118,54 +185,124 @@ function optionalString(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : fallback;
 }
 
-export function parseActionDecisionResponse(response: ChatResponse, availableCapabilities: string[]): ActionDecision {
-  if (response.toolCalls.length !== 1 || response.toolCalls[0].name !== "submit_decision") {
-    throw new Error("E_ACTION_GATE_PROTOCOL");
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(response.toolCalls[0].arguments);
-  } catch {
-    throw new Error("E_ACTION_GATE_PROTOCOL");
-  }
-  const value = asObject(parsed);
-  if (value.decision === "act") {
-    exactKeys(value, ["decision", "capability", "objective", "targetRefs", "afterSuccess"]);
-    let capability = requiredString(value.capability);
-    // 容错：LLM 可能填 toolId（music_play_track）而非 capability（music.play_track）。
-    // 遍历可用能力，看有没有哪个 capability 的点号换成下划线后等于填入的值。
+// ── 决策值解析（所有路径复用）────────────────────────────
+
+function parseDecisionValue(value: unknown, availableCapabilities: string[]): ActionDecision {
+  const obj = asObject(value);
+  if (obj.decision === "act") {
+    exactKeys(obj, ["decision", "capability", "objective", "targetRefs", "afterSuccess"]);
+    let capability = requiredString(obj.capability);
+    // 容错：LLM 可能填 toolId（music_play_track）而非 capability（music.play_track）
     if (!availableCapabilities.includes(capability)) {
-      const match = availableCapabilities.find(
-        (cap) => cap.replace(/\./g, "_") === capability,
-      );
+      const match = availableCapabilities.find((cap) => cap.replace(/\./g, "_") === capability);
       if (match) {
         capability = match;
       } else {
-        throw new Error("E_ACTION_GATE_CAPABILITY_UNAVAILABLE");
+        throw new ActionGateProtocolError("CAPABILITY_UNAVAILABLE");
       }
     }
-    const afterSuccess = value.afterSuccess === "replan" ? "replan"
-      : value.afterSuccess === "respond" ? "respond"
+    const afterSuccess = obj.afterSuccess === "replan" ? "replan"
+      : obj.afterSuccess === "respond" ? "respond"
       : undefined;
     return {
       decision: "act",
       capability,
-      objective: requiredString(value.objective),
-      targetRefs: stringArray(value.targetRefs ?? []),
+      objective: requiredString(obj.objective),
+      targetRefs: stringArray(obj.targetRefs ?? []),
       ...(afterSuccess ? { afterSuccess } : {}),
     };
   }
-  if (value.decision === "respond") {
-    exactKeys(value, ["decision", "reason"]);
-    return { decision: "respond", reason: optionalString(value.reason, "ready_to_respond") };
+  if (obj.decision === "respond") {
+    exactKeys(obj, ["decision", "reason"]);
+    return { decision: "respond", reason: optionalString(obj.reason, "ready_to_respond") };
   }
-  if (value.decision === "ask_user") {
-    exactKeys(value, ["decision", "reason", "missingInformation"]);
+  if (obj.decision === "ask_user") {
+    exactKeys(obj, ["decision", "reason", "missingInformation"]);
     return {
       decision: "ask_user",
-      reason: optionalString(value.reason, "missing_information"),
-      missingInformation: value.missingInformation === undefined ? [] : stringArray(value.missingInformation),
+      reason: optionalString(obj.reason, "missing_information"),
+      missingInformation: obj.missingInformation === undefined ? [] : stringArray(obj.missingInformation),
     };
   }
-  throw new Error("E_ACTION_GATE_PROTOCOL");
+  throw new ActionGateProtocolError("INVALID_DECISION_SCHEMA");
+}
+
+// ── 响应解析（GPT 第 5 点：四类路径，按 strategy）─────────
+
+export interface ParseActionDecisionInput {
+  response: ChatResponse;
+  strategy: ActionGateStrategy;
+  availableCapabilities: string[];
+}
+
+export function parseActionDecisionResponse(input: ParseActionDecisionInput): ActionDecision {
+  const { response, strategy, availableCapabilities } = input;
+  const toolCalls = response.toolCalls;
+  const isForcedMode = strategy === "named_decision_tool" || strategy === "required_single_decision_tool";
+  const isBestEffortMode = strategy === "auto_single_decision_tool_with_json_fallback" || strategy === "omit_tool_choice_with_json_fallback";
+  const isTextOnlyMode = strategy === "plain_json_text";
+
+  // plain_json_text：必须没有 ToolCall，必须有合法 JSON text（GPT 第 5 点）
+  if (isTextOnlyMode) {
+    if (toolCalls.length > 0) {
+      throw new ActionGateProtocolError("UNEXPECTED_TOOL_CALL_IN_TEXT_MODE");
+    }
+    return parseTextJson(response.text, availableCapabilities);
+  }
+
+  // 强制模式（named/required）：必须恰好 1 个 submit_decision ToolCall，不允许文本兜底
+  if (isForcedMode) {
+    if (toolCalls.length === 0) {
+      throw new ActionGateProtocolError("MISSING_DECISION_TOOL_CALL");
+    }
+    return parseToolCall(toolCalls, availableCapabilities);
+  }
+
+  // best-effort 模式（auto/omit）：优先 ToolCall，无 ToolCall 时允许文本兜底
+  if (isBestEffortMode) {
+    if (toolCalls.length > 0) {
+      return parseToolCall(toolCalls, availableCapabilities);
+    }
+    return parseTextJson(response.text, availableCapabilities);
+  }
+
+  // 理论上不会到这里
+  throw new ActionGateProtocolError("INVALID_DECISION_SCHEMA", false);
+}
+
+/** 解析 ToolCall 路径：校验 name + arguments */
+function parseToolCall(toolCalls: ChatResponse["toolCalls"], availableCapabilities: string[]): ActionDecision {
+  // 过滤出 submit_decision 调用
+  const decisionCalls = toolCalls.filter((tc) => tc.name === SUBMIT_DECISION_TOOL_NAME);
+  if (decisionCalls.length === 0) {
+    throw new ActionGateProtocolError("UNEXPECTED_TOOL_NAME");
+  }
+  if (decisionCalls.length > 1) {
+    throw new ActionGateProtocolError("MULTIPLE_DECISION_TOOL_CALLS");
+  }
+  // 如果有非 submit_decision 的 ToolCall，也视为协议错误
+  if (toolCalls.length > decisionCalls.length) {
+    throw new ActionGateProtocolError("UNEXPECTED_TOOL_NAME");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decisionCalls[0].arguments);
+  } catch {
+    throw new ActionGateProtocolError("INVALID_TOOL_ARGUMENTS_JSON");
+  }
+  return parseDecisionValue(parsed, availableCapabilities);
+}
+
+/** 解析文本 JSON 路径 */
+function parseTextJson(text: string, availableCapabilities: string[]): ActionDecision {
+  if (!text || text.trim().length === 0) {
+    throw new ActionGateProtocolError("INVALID_TEXT_JSON");
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new ActionGateProtocolError("INVALID_TEXT_JSON");
+  }
+  return parseDecisionValue(parsed, availableCapabilities);
 }

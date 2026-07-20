@@ -3,10 +3,16 @@ import { stripLeakedChatTimeContext } from "../chat-time-context";
 import {
   buildActionGateRequest,
   parseActionDecisionResponse,
+  ActionGateProtocolError,
   type ActionCapability,
 } from "./action-gate";
 import { runAgentGraph, type AgentGraphState } from "./agent-graph";
 import { AgentRuntimeError } from "./agent-runtime-error";
+import {
+  resolveActionGateProfile,
+  resolveActionGateReasoningFromSettings,
+  selectActionGateStrategy,
+} from "./vendors/action-gate-profiles";
 import { ExecutionLedger } from "./execution-ledger";
 import { resolveNativeToolCall } from "./native-function-calling";
 import { normalizeToolExecutionOutcome } from "./tool-outcome-normalizer";
@@ -221,35 +227,90 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       }
       options.onEvent?.({ type: "step_started", stepName: "agent-graph-action-gate" });
       try {
-        let lastError: unknown;
-        for (let attempt = 1; attempt <= 2; attempt++) {
-          const response = await invokeWithFallback(
-            (messages) => buildActionGateRequest({
-              model: options.settings.model,
-              originalQuery: state.originalQuery,
-              contextualizedQuery: state.contextualizedQuery,
-              citaContextBlock: state.citaContextBlock,
-              messages,
-              availableCapabilities: capabilities,
-              toolResults: state.toolResults,
-              ...(lastError instanceof Error ? { protocolFeedback: lastError.message } : {}),
-            }),
-            // Action Gate 强制 reasoning=off：DeepSeek reasoning on 时不支持 tool_choice 强制调用，
-            // 关掉 reasoning 保证 submit_decision 虚拟工具被强制调用，消除 JSON 协议解析失败风险。
-            { ...options.settings, reasoning: { mode: "off" } },
+        // GPT 第 2 点：先归一化 reasoning 状态为 on/off
+        const requestedReasoningState = resolveActionGateReasoningFromSettings(
+          options.adapter.id,
+          options.settings.model,
+          options.settings.reasoning,
+        );
+        const requestedProfile = resolveActionGateProfile({
+          provider: options.adapter.id,
+          transport: options.adapter.transport,
+          model: options.settings.model,
+          reasoning: requestedReasoningState,
+        });
+
+        // 如果 Profile 建议关 reasoning，先关（GPT 第 6 点：产品策略，非能力事实）
+        const actionGateSettings = requestedProfile.reasoning.preferredForActionGate === "disable"
+          && requestedProfile.reasoning.canDisablePerRequest
+          ? { ...options.settings, reasoning: { mode: "off" as const } }
+          : options.settings;
+
+        // GPT 第 1 点：用关闭后的实际 reasoning 状态重新 resolve Profile + Strategy
+        const effectiveReasoningState = resolveActionGateReasoningFromSettings(
+          options.adapter.id,
+          options.settings.model,
+          actionGateSettings.reasoning,
+        );
+        const effectiveProfile = resolveActionGateProfile({
+          provider: options.adapter.id,
+          transport: options.adapter.transport,
+          model: options.settings.model,
+          reasoning: effectiveReasoningState,
+        });
+        const strategy = selectActionGateStrategy(effectiveProfile);
+        console.log(`${LOG_PREFIX} node=action-gate strategy=${strategy} reasoning=${effectiveReasoningState}`);
+
+        const buildReq = (messages: ChatMessage[], protocolFeedback?: string) => buildActionGateRequest({
+          model: options.settings.model,
+          originalQuery: state.originalQuery,
+          contextualizedQuery: state.contextualizedQuery,
+          citaContextBlock: state.citaContextBlock,
+          messages,
+          availableCapabilities: capabilities,
+          toolResults: state.toolResults,
+          strategy,
+          ...(protocolFeedback ? { protocolFeedback } : {}),
+        });
+
+        const response = await invokeWithFallback(buildReq, actionGateSettings);
+        trackUsage(response.usage);
+
+        try {
+          const decision = parseActionDecisionResponse({
+            response,
+            strategy,
+            availableCapabilities: state.availableCapabilities,
+          });
+          console.log(`${LOG_PREFIX} decision=${decision.decision}${decision.decision === "act" ? ` capability=${decision.capability}` : ""}`);
+          return decision;
+        } catch (error) {
+          // GPT 第 4 点：只捕获 ActionGateProtocolError，不 catch 网络错误等
+          if (!(error instanceof ActionGateProtocolError) || !error.repairable || effectiveProfile.fallback.maxProtocolRepairs < 1) {
+            throw error;
+          }
+          // 协议修复：全新请求，带 error.code（不是 error.message）
+          console.warn(`${LOG_PREFIX} node=action-gate protocol_repair error_code=${error.code} response=${jsonResponseSummary(response)}`);
+          const repairResponse = await invokeWithFallback(
+            (messages) => buildReq(messages, error.code),
+            actionGateSettings,
           );
-          trackUsage(response.usage);
+          trackUsage(repairResponse.usage);
           try {
-            const decision = parseActionDecisionResponse(response, state.availableCapabilities);
-            console.log(`${LOG_PREFIX} decision=${decision.decision}${decision.decision === "act" ? ` capability=${decision.capability}` : ""}`);
+            const decision = parseActionDecisionResponse({
+              response: repairResponse,
+              strategy,
+              availableCapabilities: state.availableCapabilities,
+            });
+            console.log(`${LOG_PREFIX} decision=${decision.decision}${decision.decision === "act" ? ` capability=${decision.capability}` : ""} (after repair)`);
             return decision;
-          } catch (error) {
-            lastError = error;
-            const errCode = error instanceof Error ? error.message : String(error);
-            console.warn(`${LOG_PREFIX} node=action-gate protocol_retry=${attempt} error=${errCode} response=${jsonResponseSummary(response)}`);
+          } catch (repairError) {
+            console.warn(`${LOG_PREFIX} node=action-gate protocol_repair_failed response=${jsonResponseSummary(repairResponse)}`);
+            throw repairError instanceof ActionGateProtocolError
+              ? repairError
+              : new ActionGateProtocolError("INVALID_DECISION_SCHEMA", false);
           }
         }
-        throw lastError instanceof Error ? lastError : new Error("E_ACTION_GATE_PROTOCOL");
       } finally {
         options.onEvent?.({ type: "step_finished", stepName: "agent-graph-action-gate" });
       }

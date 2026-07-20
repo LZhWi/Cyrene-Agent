@@ -14,7 +14,9 @@ const capability: ProviderCapability = {
 };
 
 class FakeAdapter implements ChatVendorAdapter {
-  readonly id = "fake";
+  // id="chatgpt" 让 Action Gate 走 FULL_PROFILE -> named_decision_tool 策略
+  // （submit_decision 虚拟工具被强制调用，测试用 enqueueDecision 模拟）
+  readonly id = "chatgpt";
   readonly transport = "openai" as const;
   capability = capability;
   readonly requests: ChatRequest[] = [];
@@ -139,7 +141,8 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
 
     const result = await runLangGraphAgentLoop(options(adapter));
 
-    expect(String(adapter.requests[1].messages[0].content)).toContain("上一次决策未通过校验");
+    expect(String(adapter.requests[1].messages[0].content)).toContain("上一次决策未通过协议校验");
+    expect(String(adapter.requests[1].messages[0].content)).toContain("MISSING_DECISION_TOOL_CALL");
     expect(result.reply).toBe("好的。");
   });
 
