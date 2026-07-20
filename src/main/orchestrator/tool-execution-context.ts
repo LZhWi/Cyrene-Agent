@@ -25,11 +25,14 @@ export function buildToolExecutionContext(results: ToolCallResult[]): string {
     status: result.status,
     args: result.args,
     result: resultValue(result),
+    terminal: result.terminal,
+    retryable: result.retryable,
+    ...(result.deduplicated ? { deduplicated: true } : {}),
     ...(result.errorCode ? { errorCode: result.errorCode } : {}),
   }));
   return [
     "[TOOL_EXECUTION_CONTEXT]",
-    "以下 JSON 是本轮 Tool Runtime 的权威执行事实。calls 为空表示本轮没有执行工具。不要声称发生了未记录的执行。dispatched 只表示请求已发送给客户端，不代表客户端已经开始播放。web_fallback 表示已在浏览器中打开，不能声称网易云桌面客户端已开始播放。",
+    "以下 JSON 是本轮 Tool Runtime 的权威执行事实。calls 为空表示本轮没有执行工具。不要声称发生了未记录的执行。\n完成语义：\n1. status=succeeded 且 terminal=true 表示该工具动作已经完成。\n2. effect.state=dispatched 表示请求已成功发送给外部客户端。它只影响最终回复措辞，不代表动作未完成。\n3. 不得重复执行相同 toolId 和相同参数的已完成终态动作。\n4. deduplicated=true 表示本次调用未重新执行，因为相同动作此前已经成功完成；必须选择能产生新进展的下一步。\n5. 只有 retryable=true 的失败才可以考虑重试。\nweb_fallback 表示已在浏览器中打开，不能声称网易云桌面客户端已开始播放。",
     JSON.stringify({ calls }),
     "[/TOOL_EXECUTION_CONTEXT]",
   ].join("\n");

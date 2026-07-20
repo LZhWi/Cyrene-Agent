@@ -13,6 +13,7 @@
 import { ipcMain, IpcMainInvokeEvent, WebContents } from "electron";
 import { IPC } from "../shared/ipc-channels";
 import { Subscription } from "rxjs";
+import { AgentRuntimeError } from "./orchestrator/agent-runtime-error";
 import {
   CyreneAgent,
   type CyreneRunOptions,
@@ -138,8 +139,10 @@ export function registerAgUiIpc(
       error: (err) => {
         const message = err instanceof Error ? err.message : String(err);
         console.error("[AgUiBridge] run 失败:", message);
+        const code = err instanceof AgentRuntimeError ? err.code : undefined;
         // 补发 RUN_ERROR 事件，渲染端据此收尾（invoke 早已 resolve，靠事件驱动）
-        send({ type: "RUN_ERROR", error: message, threadId, runId });
+        // 用 upstream RunErrorEvent 规范的 `message` 字段名（旧代码发 `error`，renderer 读 `content`，两边都对不上）
+        send({ type: "RUN_ERROR", message, code, threadId, runId });
         activeRuns.delete(runId);
         endLifecycle();
       },

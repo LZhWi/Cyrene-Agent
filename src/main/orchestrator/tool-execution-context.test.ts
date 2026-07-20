@@ -21,7 +21,39 @@ describe("buildToolExecutionContext", () => {
     expect(block).toContain('"toolId":"music_play_track"');
     expect(block).toContain('"status":"succeeded"');
     expect(block).toContain('"state":"dispatched"');
-    expect(block).toContain("dispatched 只表示请求已发送给客户端");
+    expect(block).toContain("effect.state=dispatched");
+    expect(block).toContain("terminal=true");
+  });
+
+  it("serializes terminal/retryable/deduplicated completion semantics", () => {
+    const block = buildToolExecutionContext([{
+      toolId: "music_play_track",
+      args: { candidateRef: "ctx_song_1" },
+      output: JSON.stringify({ kind: "playback", dispatch: { state: "dispatched" } }),
+      status: "succeeded",
+      terminal: true,
+      retryable: false,
+      deduplicated: true,
+    }]);
+
+    expect(block).toContain('"terminal":true');
+    expect(block).toContain('"retryable":false');
+    expect(block).toContain('"deduplicated":true');
+    expect(block).toContain("不得重复执行相同 toolId");
+    expect(block).toContain("deduplicated=true 表示本次调用未重新执行");
+  });
+
+  it("omits deduplicated field when not set", () => {
+    const block = buildToolExecutionContext([{
+      toolId: "music_play_track",
+      args: { candidateRef: "ctx_song_1" },
+      output: "ok",
+      status: "succeeded",
+      terminal: true,
+      retryable: false,
+    }]);
+
+    expect(block).not.toContain('"deduplicated"');
   });
 
   it("distinguishes browser fallback from a desktop playback dispatch", () => {

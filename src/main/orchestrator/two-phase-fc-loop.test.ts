@@ -651,6 +651,6 @@ describe("runTwoPhaseFcLoop", () => {
     const sysContent = String(adapter.requests.at(-1)!.messages[0].content);
     expect(sysContent).toContain('"toolId":"music_play_track"');
     expect(sysContent).toContain('"state":"dispatched"');
-    expect(sysContent).toContain("dispatched 只表示请求已发送给客户端");
+    expect(sysContent).toContain("effect.state=dispatched");
   });
 });

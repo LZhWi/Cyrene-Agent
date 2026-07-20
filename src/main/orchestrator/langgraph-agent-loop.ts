@@ -6,8 +6,10 @@ import {
   type ActionCapability,
 } from "./action-gate";
 import { runAgentGraph, type AgentGraphState } from "./agent-graph";
+import { AgentRuntimeError } from "./agent-runtime-error";
 import { ExecutionLedger } from "./execution-ledger";
 import { resolveNativeToolCall } from "./native-function-calling";
+import { normalizeToolExecutionOutcome } from "./tool-outcome-normalizer";
 import {
   parseAndValidateToolCallArguments,
   resolveToolForCapability,
@@ -63,7 +65,10 @@ async function callAdapter(
     });
     if (!response.ok) {
       const body = await response.text().catch(() => "");
-      throw new Error(`模型请求失败：HTTP ${response.status}${body ? ` — ${body.slice(0, 200)}` : ""}`);
+      throw new AgentRuntimeError(
+        "E_MODEL_REQUEST_FAILED",
+        `模型请求失败：HTTP ${response.status}${body ? ` - ${body.slice(0, 200)}` : ""}`,
+      );
     }
     return adapter.parseResponse(await response.json());
   } finally {
@@ -125,6 +130,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
   let usageOutput = 0;
   let fallbackMessages: ChatMessage[] | undefined;
   let usedImageCaptionFallback = false;
+  let duplicateTerminalStreak = 0;
   const executionLedger = options.executionLedger ?? new ExecutionLedger();
   const usageRecorder = options.recordUsage ?? ((input, output, calls) => recordUsage(input, output, calls));
   console.log(
@@ -185,6 +191,14 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     },
     decide: async (state) => {
       ensureBudget();
+      // 异常兜底：正常路径下 routeAfterTool 已经在工具成功后确定性路由到 soul，
+      // 不会走到这里。只有 routeAfterTool 路由回 decide（replan 或可重试失败）后，
+      // 模型又重复同一已完成动作时才触发。主路径不依赖此检查。
+      const lastResult = state.toolResults[state.toolResults.length - 1];
+      if (lastResult?.deduplicated) {
+        console.log(`${LOG_PREFIX} node=decide forced_respond reason=duplicate_terminal_action`);
+        return { decision: "respond", reason: "duplicate_terminal_action" };
+      }
       options.onEvent?.({ type: "step_started", stepName: "agent-graph-action-gate" });
       try {
         let lastError: unknown;
@@ -274,15 +288,31 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             };
           }
         });
-        const outcome: ToolExecutionOutcome = execution.outcome;
+        const outcome = normalizeToolExecutionOutcome(execution.outcome);
+        const deduplicated = execution.cached && outcome.terminal;
+        if (deduplicated) {
+          duplicateTerminalStreak += 1;
+          // 连续 2 次重复同一终态动作，说明模型没有吸收"动作已完成"的事实，提前抛错。
+          if (duplicateTerminalStreak >= 2) {
+            throw new AgentRuntimeError(
+              "E_AGENT_NO_PROGRESS",
+              "Agent repeated an already completed terminal action.",
+            );
+          }
+        } else {
+          duplicateTerminalStreak = 0;
+        }
         const result: ToolCallResult = {
           toolId: selectedTool.id,
           args,
           output: outcome.output,
           status: outcome.status,
           ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
+          terminal: outcome.terminal,
+          retryable: outcome.retryable,
+          ...(deduplicated ? { deduplicated: true } : {}),
         };
-        console.log(`${LOG_PREFIX} node=tool-result tool=${selectedTool.id} status=${outcome.status} cached=${execution.cached}${outcome.errorCode ? ` errorCode=${outcome.errorCode}` : ""}`);
+        console.log(`${LOG_PREFIX} node=tool-result tool=${selectedTool.id} status=${outcome.status} cached=${execution.cached} deduplicated=${deduplicated}${outcome.errorCode ? ` errorCode=${outcome.errorCode}` : ""}`);
         const messageId = `tool-result-${Date.now()}`;
         options.onEvent?.({ type: "tool_call_result", toolCallId, messageId, content: outcome.output });
         options.onEvent?.({ type: "tool_call_end", toolCallId });

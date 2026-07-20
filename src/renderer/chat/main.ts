@@ -184,6 +184,8 @@ interface AguiBaseEvent {
   toolCallName?: string;
   content?: string;
   error?: string;
+  message?: string;  // RUN_ERROR 的规范字段（upstream RunErrorEvent.message）
+  code?: string;     // 结构化错误码（AgentRuntimeError.code）
   stepName?: string;
   runId?: string;
   threadId?: string;
@@ -191,6 +193,28 @@ interface AguiBaseEvent {
   schedulerTaskId?: string;
   name?: string;   // CUSTOM 事件的 name
   value?: unknown; // CUSTOM 事件的 value
+}
+
+/**
+ * 渲染端 Agent 错误。携带结构化 code，用于在 failRun reject 和 catch 之间传递。
+ * 与主进程的 AgentRuntimeError 对应，但这里是纯 renderer 类。
+ */
+class AgentRenderError extends Error {
+  constructor(
+    public readonly code: string | undefined,
+    message: string,
+  ) {
+    super(message);
+    this.name = "AgentRenderError";
+  }
+}
+
+/** 根据结构化错误码把 Agent 运行时错误翻译成面向用户的文案。 */
+function classifyAgentError(code: string | undefined, message: string): string {
+  if (code === "E_AGENT_NO_PROGRESS") return "任务执行未能继续，请重试";
+  if (code === "E_AGENT_GRAPH_ITERATION_LIMIT") return "Agent 执行达到循环上限";
+  if (code === "E_MODEL_REQUEST_FAILED") return "连接模型失败：" + message;
+  return message; // 兜底：原样显示
 }
 
 /** 文件摄入结果（与 main 侧 file-ingest.ts 的 Attachment 对齐）。 */
@@ -1532,7 +1556,9 @@ function installSchedulerEventListener(): void {
       streams.delete(runKey);
     } else if (event.type === "RUN_ERROR") {
       msg.thinking = false;
-      msg.content = "定时任务执行失败：" + (event.error ?? event.content ?? "未知错误");
+      // 优先读 upstream 规范的 `message` 字段，兜底兼容旧的 `error`/`content`
+      const rawMessage = event.message ?? event.error ?? event.content ?? "未知错误";
+      msg.content = "定时任务执行失败：" + classifyAgentError(event.code, rawMessage);
       render();
       void saveSession();
       streams.delete(runKey);
@@ -2698,7 +2724,7 @@ async function triggerCyreneGreeting(): Promise<void> {
             tryFinish();
             break;
           case "RUN_ERROR":
-            failRun(new Error(event.content || "模型请求失败"));
+            failRun(new AgentRenderError(event.code, event.message ?? "模型请求失败"));
             break;
           default:
             break;
@@ -2748,16 +2774,18 @@ async function triggerCyreneGreeting(): Promise<void> {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : "模型请求失败";
+    const code = err instanceof AgentRenderError ? err.code : undefined;
+    const userMessage = classifyAgentError(code, message);
     const msg = messages.find(m => m.id === streamMsgId);
     if (msg) {
       msg.thinking = false;
       msg.transient = false;
-      msg.content = "连接模型失败：" + message;
+      msg.content = userMessage;
     } else {
       messages.push({
         id: String(Date.now() + 2),
         role: "model",
-        content: "连接模型失败：" + message,
+        content: userMessage,
         at: Date.now(),
       });
     }
@@ -3208,7 +3236,7 @@ async function send(): Promise<void> {
             tryFinish();
             break;
           case "RUN_ERROR":
-            failRun(new Error(event.content || "模型请求失败"));
+            failRun(new AgentRenderError(event.code, event.message ?? "模型请求失败"));
             break;
           default:
             // TOOL_CALL_* / STEP_* 暂不在 UI 处理（骨架阶段）
@@ -3267,16 +3295,18 @@ async function send(): Promise<void> {
     // TTS 已在 TEXT_MESSAGE_END 时触发，这里不再重复朗读
   } catch (err) {
     const message = err instanceof Error ? err.message : "模型请求失败";
+    const code = err instanceof AgentRenderError ? err.code : undefined;
+    const userMessage = classifyAgentError(code, message);
     const msg = messages.find(m => m.id === streamMsgId);
     if (msg) {
       msg.thinking = false;
       msg.transient = false;
-      msg.content = "连接模型失败：" + message;
+      msg.content = userMessage;
     } else {
       messages.push({
         id: String(Date.now() + 2),
         role: "model",
-        content: "连接模型失败：" + message,
+        content: userMessage,
         at: Date.now(),
       });
     }

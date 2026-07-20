@@ -46,6 +46,66 @@ describe("ActionGate JSON protocol", () => {
     });
   });
 
+  it("parses afterSuccess=respond from an act decision", () => {
+    expect(parseActionDecisionResponse(response(JSON.stringify({
+      decision: "act",
+      capability: "music.play_track",
+      objective: "播放",
+      targetRefs: ["ctx_song_1"],
+      afterSuccess: "respond",
+    })), ["music.play_track"])).toEqual({
+      decision: "act",
+      capability: "music.play_track",
+      objective: "播放",
+      targetRefs: ["ctx_song_1"],
+      afterSuccess: "respond",
+    });
+  });
+
+  it("parses afterSuccess=replan for multi-step tasks", () => {
+    expect(parseActionDecisionResponse(response(JSON.stringify({
+      decision: "act",
+      capability: "music.play_track",
+      objective: "播放第一首",
+      targetRefs: ["ctx_song_1"],
+      afterSuccess: "replan",
+    })), ["music.play_track"])).toEqual({
+      decision: "act",
+      capability: "music.play_track",
+      objective: "播放第一首",
+      targetRefs: ["ctx_song_1"],
+      afterSuccess: "replan",
+    });
+  });
+
+  it("omits afterSuccess when not declared (default respond is derived downstream)", () => {
+    const parsed = parseActionDecisionResponse(response(JSON.stringify({
+      decision: "act",
+      capability: "music.play_track",
+      objective: "播放",
+      targetRefs: ["ctx_song_1"],
+    })), ["music.play_track"]);
+    expect(parsed.decision).toBe("act");
+    expect("afterSuccess" in parsed).toBe(false);
+  });
+
+  it("includes afterSuccess guidance in the system prompt", () => {
+    const request = buildActionGateRequest({
+      model: "test-model",
+      originalQuery: "播放第四首",
+      contextualizedQuery: "播放第四首",
+      citaContextBlock: "",
+      messages: [{ role: "user", content: "播放第四首" }],
+      availableCapabilities: [{ capability: "music.play_track", toolId: "music_play_track", description: "播放歌曲" }],
+      toolResults: [],
+    });
+    const content = String(request.messages[0].content);
+    expect(content).toContain("afterSuccess");
+    expect(content).toContain("单步任务");
+    expect(content).toContain("多步任务");
+    expect(content).toContain('"afterSuccess":"respond"');
+  });
+
   it("parses respond and ask_user decisions without diagnostic-only optional fields", () => {
     expect(parseActionDecisionResponse(response('{"decision":"respond"}'), [])).toEqual({
       decision: "respond",
