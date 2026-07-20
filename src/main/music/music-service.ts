@@ -192,7 +192,9 @@ export class MusicService {
 
   /** Drive one login-state check against the MCP auth server. */
   async pollOnce(): Promise<unknown> {
-    return this.orchestrator.pollOnce();
+    const result = await this.orchestrator.pollOnce();
+    this.emitStateChange();
+    return result;
   }
 
   // ── Event listeners ────────────────────────────────────────
@@ -244,7 +246,8 @@ export class MusicService {
   }
 
   async cancelLogin() {
-    return this.orchestrator.cancelLogin();
+    await this.orchestrator.cancelLogin();
+    this.emitStateChange();
   }
 
   async logout(): Promise<void> {
