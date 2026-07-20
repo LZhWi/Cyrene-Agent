@@ -214,6 +214,7 @@ function classifyAgentError(code: string | undefined, message: string): string {
   if (code === "E_AGENT_NO_PROGRESS") return "任务执行未能继续，请重试";
   if (code === "E_AGENT_GRAPH_ITERATION_LIMIT") return "Agent 执行达到循环上限";
   if (code === "E_MODEL_REQUEST_FAILED") return "连接模型失败：" + message;
+  if (code === "E_ACTION_GATE_PROTOCOL") return "决策协议解析失败，请重试";
   return message; // 兜底：原样显示
 }
 

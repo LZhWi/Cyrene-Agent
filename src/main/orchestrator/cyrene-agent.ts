@@ -1,7 +1,7 @@
 // CyreneAgent —— 把两阶段 FC 循环包进 AG-UI 的 AbstractAgent。
 //
 // 第一期重构：
-// - 不再持有 FC 状态机，调用 runTwoPhaseFcLoop（src/main/orchestrator/two-phase-fc-loop.ts）。
+// - 持有 runWithEvents 入口，按 agentRuntime 选择 runLangGraphAgentLoop 或 runTwoPhaseFcLoop。
 // - 工具阶段只携带 tool_system + tools schema；Soul 阶段只携带 soul_systemBase + 工具结果摘要，不携带 tools。
 // - runWithEvents 把 TwoPhaseEvent 包装成 AG-UI BaseEvent 转发给渲染端。
 //
