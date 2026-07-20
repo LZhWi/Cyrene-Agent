@@ -259,7 +259,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           reasoning: effectiveReasoningState,
         });
         const strategy = selectActionGateStrategy(effectiveProfile);
-        console.log(`${LOG_PREFIX} node=action-gate strategy=${strategy} reasoning=${effectiveReasoningState}`);
+        console.log(`${LOG_PREFIX} node=action-gate provider=${options.adapter.id} transport=${options.adapter.transport} model=${options.settings.model} effectiveReasoning=${effectiveReasoningState} strategy=${strategy}`);
 
         const buildReq = (messages: ChatMessage[], protocolFeedback?: string) => buildActionGateRequest({
           model: options.settings.model,

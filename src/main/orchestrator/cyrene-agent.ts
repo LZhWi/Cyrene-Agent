@@ -229,7 +229,9 @@ export class CyreneAgent extends AbstractAgent {
           };
           const conversationId = options.conversationId ?? "default";
           const executionLedger = executionLedgers.forScope(`${conversationId}:messages-${options.messages.length}`);
-          const result: TwoPhaseFcResult = resolveAgentRuntime(options.agentRuntime) === "langgraph"
+          const runtime = resolveAgentRuntime(options.agentRuntime);
+          console.log(`${LOG_PREFIX} agentRuntime=${runtime} provider=${options.settings.provider} model=${options.settings.model}`);
+          const result: TwoPhaseFcResult = runtime === "langgraph"
             ? await runLangGraphAgentLoop({
               ...commonOptions,
               originalQuery: options.originalQuery ?? extractLastUserQuery(options.messages),
