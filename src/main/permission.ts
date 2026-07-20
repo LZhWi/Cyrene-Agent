@@ -122,6 +122,7 @@ export interface ApprovalRequest {
   toolDescription: string;
   args: Record<string, unknown>;
   risk: ToolRiskLevel;
+  timeoutMs: number;
 }
 
 /**
@@ -225,6 +226,7 @@ export async function checkPermission(input: {
     toolDescription: input.toolDescription,
     args: input.args,
     risk: input.risk,
+    timeoutMs: getTimeoutSettings().userChoiceTimeout,
   });
   if (approved) return { allowed: true };
   return { allowed: false, reason: "用户拒绝了此次操作。" };
