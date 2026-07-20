@@ -722,7 +722,7 @@ const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }>
   tasks: { emoji: "⏰", title: "定时任务", hint: "管理定时提醒与日程" },
   identity: { emoji: "💼", title: "职位", hint: "自定义昔涟的身份定位与工作职责" },
   skills: { emoji: "✨", title: "Skill", hint: "管理 agent 的 skill 指令（约束如何用工具）" },
-  plugins: { emoji: "🔌", title: "插件", hint: "扩展功能与第三方集成" },
+  plugins: { emoji: "🔌", title: "MCP", hint: "扩展功能与第三方集成" },
   preferences: { emoji: "🫧", title: "偏好设置", hint: "设置聊天窗口和输出行为的默认偏好" },
   appearance: { emoji: "🎨", title: "外观设置", hint: "调整窗口布局、界面主题与昔涟桌宠" },
   general: { emoji: "⚙️", title: "通用设置", hint: "管理窗口、音频和系统行为" },

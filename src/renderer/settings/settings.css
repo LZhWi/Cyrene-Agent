@@ -105,6 +105,11 @@ body {
   filter: drop-shadow(0 0 5px rgba(236, 72, 153, 0.35));
 }
 
+.nav-item svg.nav-item__icon {
+  display: block;
+  margin: 0 auto;
+}
+
 .nav-item:hover,
 .nav-item.is-active {
   color: var(--rb-text-strong);
@@ -1552,6 +1557,15 @@ body {
   margin: 0;
   color: var(--rb-text-strong);
   font: var(--rb-title-small);
+}
+.plugin-panel-heading__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.plugin-panel-heading__icon {
+  flex: 0 0 auto;
+  filter: drop-shadow(0 0 6px rgba(236, 72, 153, 0.45));
 }
 .plugin-panel-heading p {
   margin: 6px 0 0;
