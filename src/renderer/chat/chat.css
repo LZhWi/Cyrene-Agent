@@ -105,6 +105,21 @@ body {
   text-shadow: 0 0 16px rgba(236, 72, 153, 0.24);
 }
 
+/* 标题栏头像：默认主题显示白线稿 PNG，白调主题切换为黑色线条 SVG。 */
+.chat__name-avatar {
+  display: block;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  border-radius: var(--rb-radius-full);
+  object-fit: cover;
+}
+
+[data-ui-theme="pearl-white"] .chat__name-avatar {
+  content: url("/icons/cyrene-avatar-line.svg");
+  display: block;
+}
+
 /* 名字与状态之间的分隔点：弱化，不抢名字 */
 .chat__name-sep {
   color: var(--rb-text-faint);
@@ -303,7 +318,9 @@ body {
   transition: background 120ms ease, color 120ms ease, transform 120ms ease, box-shadow 200ms ease, border-color 120ms ease;
 }
 
-.chat__winbtn svg { display: block; }
+.chat__winbtn svg,
+.chat__icon-btn svg,
+.chat__attach svg { display: block; }
 
 .chat__icon-btn:hover,
 .chat__winbtn:hover {
@@ -943,6 +960,16 @@ body {
   transition: all 0.2s;
   padding: 0;
   line-height: 1;
+  overflow: hidden;
+}
+
+.chat__sticker-btn-icon {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+  -webkit-user-drag: none;
 }
 
 .chat__sticker-btn:hover {
