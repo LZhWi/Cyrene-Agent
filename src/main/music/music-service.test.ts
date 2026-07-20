@@ -343,7 +343,7 @@ describe("MusicService", () => {
 
   // ── logout() ───────────────────────────────────────────────
 
-  it("logout() on a fresh service cancels login, closes client, removes account file and runtime cookies, sets signed_out", async () => {
+  it("logout() on a fresh service cancels login, removes account file and runtime cookies, sets signed_out", async () => {
     cancelTool.mockResolvedValue({ ok: true, status: "cancelled" });
     beginTool.mockResolvedValue({ loginSessionId: "sess-1" });
 
@@ -359,7 +359,6 @@ describe("MusicService", () => {
       // Track that the service was constructed with one MCP client whose close
       // we can later inspect.
       expect(clientInstances).toHaveLength(1);
-      const clientInstance = clientInstances[0]!;
 
       // Bring the service to "ready" and start a login session so the orchestrator
       // actually has a currentSessionId to cancel.
@@ -371,13 +370,11 @@ describe("MusicService", () => {
 
       // 1. orchestrator.cancelLogin was called -> routed through MCP cancel RPC.
       expect(cancelTool).toHaveBeenCalledTimes(1);
-      // 2. client.close was called exactly once on the service's client instance.
-      expect(clientInstance.close).toHaveBeenCalledTimes(1);
-      // 3. vault.delete removed account.enc.
+      // 2. vault.delete removed account.enc.
       await expect(fs.stat(accountPath)).rejects.toThrow(/ENOENT/);
-      // 4. runtime cookies.json removed.
+      // 3. runtime cookies.json removed.
       await expect(fs.stat(cookiesPath)).rejects.toThrow(/ENOENT/);
-      // 5. accountState reports signed_out.
+      // 4. accountState reports signed_out.
       expect(svc.getAccountState()).toBe("signed_out");
       expect(svc.getActiveProfile()).toBeNull();
     } finally {
@@ -385,7 +382,7 @@ describe("MusicService", () => {
     }
   });
 
-  it("logout() succeeds even when there is no account file and client.close throws", async () => {
+  it("logout() succeeds even when there is no account file", async () => {
     cancelTool.mockResolvedValue({ ok: true, status: "cancelled" });
     beginTool.mockResolvedValue({ loginSessionId: "sess-2" });
 
@@ -393,10 +390,6 @@ describe("MusicService", () => {
     try {
       // Ensure no account.enc exists.
       await expect(fs.stat(accountPath)).rejects.toThrow(/ENOENT/);
-      // Force the underlying MCP client's close() to throw — logout must swallow
-      // this so the rest of the cleanup still runs.
-      expect(clientInstances).toHaveLength(1);
-      clientInstances[0]!.close.mockRejectedValueOnce(new Error("transport already closed"));
 
       // Start the service and a login session so cancelLogin has something to cancel.
       await svc.start();
@@ -405,7 +398,6 @@ describe("MusicService", () => {
       await expect(svc.logout()).resolves.toBeUndefined();
 
       expect(cancelTool).toHaveBeenCalledTimes(1);
-      expect(clientInstances[0]!.close).toHaveBeenCalledTimes(1);
       expect(svc.getAccountState()).toBe("signed_out");
     } finally {
       await cleanup();

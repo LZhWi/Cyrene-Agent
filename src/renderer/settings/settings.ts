@@ -3042,15 +3042,8 @@ const musicDisconnectBtn = document.createElement("button");
 const musicQrImg = document.getElementById("music-qr-img") as HTMLImageElement | null;
 const musicQrTip = document.getElementById("music-qr-tip");
 const musicQrBox = document.getElementById("music-qr") as HTMLElement | null;
-const musicProfileBox = document.getElementById("music-profile");
-const musicProfileName = document.getElementById("music-profile-name");
 const musicFeedbackEl = document.getElementById("music-feedback");
 const musicAccountStatusText = document.getElementById("music-account-status-text");
-const musicStateRowEls = {
-  backend: document.querySelector('.music-state-row[data-row="backend"]'),
-  account: document.querySelector('.music-state-row[data-row="account"]'),
-  player: document.querySelector('.music-state-row[data-row="player"]'),
-};
 const musicSearchInput = document.getElementById("music-search-input") as HTMLInputElement | null;
 const musicSearchBtn = document.getElementById("music-search-btn") as HTMLButtonElement | null;
 const musicSearchResults = document.getElementById("music-search-results");
@@ -3069,47 +3062,16 @@ function setMusicFeedback(kind: "info" | "ok" | "err", msg: string): void {
   else musicFeedbackEl.classList.add("music-feedback--info");
 }
 
-function dotColorFor(state: string, axis: "backend" | "account" | "player"): "green" | "yellow" | "red" | "gray" {
-  if (state === "unknown") return "gray";
-  if (axis === "backend") {
-    if (state === "ready") return "green";
-    if (state === "degraded") return "yellow";
-    if (state === "failed" || state === "incompatible") return "red";
-    return "yellow"; // starting / stopped
-  }
-  if (axis === "account") {
-    if (state === "signed_in") return "green";
-    if (state === "validating") return "yellow";
-    if (state === "signed_out" || state === "expired") return "yellow";
-    if (state === "temporarily_unavailable") return "red";
-    return "gray";
-  }
-  // player
-  if (state === "available") return "green";
-  if (state === "unavailable") return "red";
-  return "gray";
-}
-
-function renderMusicStateRow(axis: "backend" | "account" | "player", value: string): void {
-  const row = musicStateRowEls[axis];
-  if (!row) return;
-  const dot = row.querySelector(".music-state-row__dot") as HTMLElement | null;
-  const val = row.querySelector(".music-state-row__value") as HTMLElement | null;
-  if (dot) dot.setAttribute("data-color", dotColorFor(value, axis));
-  if (val) val.textContent = value;
-}
-
 function renderMusicStatus(snapshot: MusicStatusSnapshot): void {
   const state = deriveNeteaseViewState(snapshot);
-  renderMusicStateRow("backend", snapshot.backend);
-  renderMusicStateRow("account", snapshot.account);
-  renderMusicStateRow("player", snapshot.player);
   const labels: Record<NeteaseViewState, string> = {
     backend_starting: "音乐服务暂不可用", backend_error: "音乐服务暂不可用", signed_out: "尚未连接",
     creating_qr: "正在等待扫码", waiting_scan: "正在等待扫码", waiting_confirm: "已扫码，请在手机确认",
     login_expired: "二维码已过期", login_failed: "登录失败", connected: "网易云音乐已连接", connected_without_client: "已登录，但未检测到桌面客户端",
   };
   if (musicAccountStatusText) musicAccountStatusText.textContent = labels[state];
+  const musicStatusDot = document.getElementById("music-status-dot");
+  if (musicStatusDot) musicStatusDot.classList.toggle("is-connected", state === "connected" || state === "connected_without_client");
   const actionHost = document.getElementById("music-actions");
   if (actionHost) {
     actionHost.innerHTML = "";
@@ -3120,19 +3082,26 @@ function renderMusicStatus(snapshot: MusicStatusSnapshot): void {
     if (actions[state]) { button.textContent = actions[state]!; button.addEventListener("click", () => void handleMusicAction(state)); actionHost.appendChild(button); }
   }
   const loggedIn = state === "connected" || state === "connected_without_client";
-  musicProfileBox?.classList.toggle("is-hidden", !loggedIn);
   musicSearchForm?.classList.toggle("is-hidden", !loggedIn);
   if (musicSearchHint) musicSearchHint.textContent = loggedIn ? "搜索网易云曲库。" : "连接网易云后即可搜索歌曲和获取每日推荐。";
-  if (snapshot.profile?.nickname && musicProfileName) musicProfileName.textContent = snapshot.profile.nickname;
-  if (snapshot.profile?.avatarUrl && musicProfileAvatar) musicProfileAvatar.src = snapshot.profile.avatarUrl;
   musicQrBox?.classList.toggle("is-hidden", !(state === "creating_qr" || state === "waiting_scan" || state === "waiting_confirm" || state === "login_expired"));
-  if (musicQrStatus) musicQrStatus.textContent = state === "waiting_confirm" ? "当前状态：等待手机确认" : state === "login_expired" ? "当前状态：二维码过期" : "当前状态：等待扫码";
+  if (musicQrStatus) musicQrStatus.textContent = state === "connected" || state === "connected_without_client" ? "当前状态：网易云音乐已连接" : state === "waiting_confirm" ? "当前状态：等待手机确认" : state === "login_expired" ? "当前状态：二维码过期" : "当前状态：等待扫码";
 }
 
 async function handleMusicAction(state: NeteaseViewState): Promise<void> {
-  const api = getMusicApi(); if (!api) return;
+  const api = getMusicApi(); if (!api) { setMusicFeedback("err", "音乐 API 未就绪"); return; }
   if (state === "signed_out" || state === "login_expired" || state === "login_failed") return void startMusicLogin();
-  if (state === "connected" || state === "connected_without_client") { await api.logout(); return; }
+  if (state === "connected" || state === "connected_without_client") {
+    setMusicFeedback("info", "正在断开连接…");
+    try {
+      const r = await api.logout();
+    if (r.ok) setMusicFeedback("ok", "已断开连接");
+    else setMusicFeedback("err", "断开失败：" + r.errorCode);
+    } catch (err) {
+      setMusicFeedback("err", "断开异常：" + (err instanceof Error ? err.message : String(err)));
+    }
+    return;
+  }
   if (state === "creating_qr" || state === "waiting_scan" || state === "waiting_confirm") { await api.cancelLogin?.(); clearMusicQr(); }
 }
 
@@ -3148,18 +3117,17 @@ function updateMusicActionsForAccount(account: string): void {
   if (musicLoginBtn) musicLoginBtn.classList.toggle("is-hidden", qrVisible || account === "signed_in");
   if (musicCancelBtn) musicCancelBtn.classList.toggle("is-hidden", !qrVisible);
   if (musicDisconnectBtn) musicDisconnectBtn.classList.toggle("is-hidden", account !== "signed_in");
-  if (musicProfileBox) musicProfileBox.classList.toggle("is-hidden", account !== "signed_in");
 }
 
 function clearMusicQr(): void {
-  if (musicQrImg) musicQrImg.src = "";
+  if (musicQrImg) { musicQrImg.style.display = "none"; musicQrImg.src = ""; }
   if (musicQrBox) musicQrBox.classList.add("is-hidden");
   if (musicQrTip) musicQrTip.textContent = "请用网易云音乐 App 扫描二维码完成登录";
   musicLastQrDataUrl = null;
 }
 
 function showMusicQr(dataUrl: string, tip: string): void {
-  if (musicQrImg) musicQrImg.src = dataUrl;
+  if (musicQrImg) { musicQrImg.src = dataUrl; musicQrImg.style.display = "block"; }
   if (musicQrTip) musicQrTip.textContent = tip;
   if (musicQrBox) musicQrBox.classList.remove("is-hidden");
   musicLastQrDataUrl = dataUrl;
@@ -3395,6 +3363,36 @@ async function loadMusicPanel(): Promise<void> {
     setMusicFeedback("err", "window.music 未就绪");
   }
 }
+
+// ── 网易云折叠卡片用的全局 status 订阅（不依赖切到 music 面板） ────────
+// 让 MCP 面板里的「网易云音乐 / 尚未连接」永远跟主进程状态同步。
+// 用一个独立的 unsub 句柄，跟 music 面板自己的订阅解耦。
+(() => {
+  const api = getMusicApi();
+  if (!api || typeof api.onStateChanged !== "function") return;
+  try {
+    api.onStateChanged((s) => {
+      // 只更新折叠卡片的状态文案，避免与 music 面板里的 renderMusicStatus 重复副作用
+      const el = document.getElementById("music-platform-status");
+      if (!el) return;
+      const state = deriveNeteaseViewState(s);
+      const connected = state === "connected" || state === "connected_without_client";
+      el.textContent = connected ? "已连接" : "尚未连接";
+      el.classList.toggle("is-connected", connected);
+    });
+    api.getStatus().then((r) => {
+      if (!r.ok) return;
+      const el = document.getElementById("music-platform-status");
+      if (!el) return;
+      const state = deriveNeteaseViewState(r.data);
+      const connected = state === "connected" || state === "connected_without_client";
+      el.textContent = connected ? "已连接" : "尚未连接";
+      el.classList.toggle("is-connected", connected);
+    }).catch(() => { /* ignore */ });
+  } catch {
+    /* window.music 还没准备好，忽略 */
+  }
+})();
 
 function disposeMusicPanel(): void {
   // 离开面板时：停止轮询、取消订阅、清掉 QR dataURL 释放内存
@@ -4220,9 +4218,8 @@ document.getElementById("music-platform-netease")?.addEventListener("click", () 
   neteaseDetailView?.classList.remove("is-hidden");
 });
 musicReturnBtn?.addEventListener("click", () => {
-  neteaseDetailView?.classList.add("is-hidden");
-  musicHomeView?.classList.remove("is-hidden");
-});
+	  switchSection("plugins");
+	});
 
 
 // ── Skill 面板：列 skill 开关 ──────────────────────────────

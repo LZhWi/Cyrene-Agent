@@ -22,7 +22,9 @@ import type {
   CandidatePlaybackRequest,
 } from "./types";
 
-const SET_TTL_MS = 30 * 60_000;
+	import type { MusicStatusSnapshot } from "../../shared/music-view-state";
+	
+	const SET_TTL_MS = 30 * 60_000;
 
 export interface PresentResult {
   cardRef: string;
@@ -48,6 +50,7 @@ export class MusicService {
   private accountListeners = new Set<StateListener<MusicAccountState>>();
   private playerListeners = new Set<StateListener<MusicPlayerState>>();
   private flowListeners = new Set<StateListener<LoginFlowState>>();
+  private stateListeners = new Set<StateListener<MusicStatusSnapshot>>();
 
   constructor(paths: MusicPaths) {
     this.paths = paths;
@@ -211,6 +214,28 @@ export class MusicService {
     return () => this.flowListeners.delete(listener);
   }
 
+  /** Subscribe to full-snapshot changes (one unified callback for any axis). */
+  onStateChange(listener: StateListener<MusicStatusSnapshot>): () => void {
+    this.stateListeners.add(listener);
+    return () => this.stateListeners.delete(listener);
+  }
+
+  /** Build a snapshot of every state axis plus profile. */
+  getSnapshot(): MusicStatusSnapshot {
+    return {
+      backend: this.backendState,
+      account: this.getAccountState(),
+      player: this.playerState,
+      flow: this.getLoginFlowState(),
+      profile: this.activeProfile,
+    };
+  }
+
+  private emitStateChange(): void {
+    const snapshot = this.getSnapshot();
+    for (const l of this.stateListeners) l(snapshot);
+  }
+
   // ── Login ──────────────────────────────────────────────────
 
   async beginLogin() {
@@ -224,11 +249,6 @@ export class MusicService {
 
   async logout(): Promise<void> {
     await this.orchestrator.cancelLogin();
-    try {
-      await this.client.close();
-    } catch {
-      // The client may already be closed; logout must still clear credentials.
-    }
     await this.vault.delete();
     await fs.rm(path.join(this.paths.runtimeDir, "cookies.json"), { force: true });
     this.activeProfile = null;
@@ -386,14 +406,18 @@ export class MusicService {
 
   private emitBackendChange(s: MusicBackendState): void {
     for (const l of this.backendListeners) l(s);
+    this.emitStateChange();
   }
   private emitAccountChange(s: MusicAccountState): void {
     for (const l of this.accountListeners) l(s);
+    this.emitStateChange();
   }
   private emitPlayerChange(s: MusicPlayerState): void {
     for (const l of this.playerListeners) l(s);
+    this.emitStateChange();
   }
   private emitFlowChange(s: LoginFlowState): void {
     for (const l of this.flowListeners) l(s);
+    this.emitStateChange();
   }
 }
