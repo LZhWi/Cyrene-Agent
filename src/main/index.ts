@@ -490,6 +490,7 @@ interface GeneralSettings {
   launchAtLogin: boolean;
   language: "zh-CN";
   uiTheme: UiTheme;
+  uiThemeRadius: boolean;
   uiFont: UiFont;
   uiIcon: UiIcon;
   /** 聊天窗口打开时默认选中的模式。 */
@@ -723,6 +724,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   launchAtLogin: false,
   language: "zh-CN",
   uiTheme: "classic",
+  uiThemeRadius: false,
   uiFont: DEFAULT_UI_FONT,
   uiIcon: "cyrene-sun",
   defaultChatMode: "collab",
@@ -1152,6 +1154,7 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     launchAtLogin: Boolean(input?.launchAtLogin),
     language: "zh-CN",
     uiTheme: normalizeUiTheme(input?.uiTheme),
+    uiThemeRadius: input?.uiThemeRadius ?? true,
     uiFont: normalizeUiFont(input?.uiFont),
     uiIcon: normalizeUiIcon(input?.uiIcon),
     defaultChatMode: normalizeDefaultChatMode(input?.defaultChatMode),
@@ -1275,6 +1278,9 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   syncBuiltInToolToggles(normalized);
   if (before.uiTheme !== normalized.uiTheme) {
     broadcastUiThemeChanged(normalized.uiTheme);
+  }
+  if (before.uiThemeRadius !== normalized.uiThemeRadius) {
+    broadcastUiThemeRadiusChanged(normalized.uiThemeRadius);
   }
   if (JSON.stringify(before.uiFont) !== JSON.stringify(normalized.uiFont)) {
     broadcastUiFontChanged(normalized.uiFont);
@@ -2417,6 +2423,14 @@ function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
   }
 }
 
+function broadcastUiThemeRadiusChanged(theme: GeneralSettings["uiThemeRadius"]): void {
+  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(IPC.UI_THEME_RADIUS_CHANGED, theme);
+    }
+  }
+}
+
 function broadcastUiFontChanged(font: GeneralSettings["uiFont"]): void {
   for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
@@ -2461,6 +2475,7 @@ function attachExternalLinkHandler(win: BrowserWindow): void {
 }
 function createWindow(): void {
   const settings = loadGeneralSettings();
+  const transparent = settings.uiThemeRadius;
   let restoreX: number | undefined;
   let restoreY: number | undefined;
 
@@ -2500,7 +2515,7 @@ function createWindow(): void {
     y: restoreY,
     width: PET_WINDOW_BASE_WIDTH,
     height: PET_WINDOW_BASE_HEIGHT,
-    transparent: true,
+    transparent: transparent,
     frame: false,
     skipTaskbar: true,
     resizable: false,
@@ -2738,7 +2753,7 @@ function createChatWindow(sessionId?: string): void {
     autoHideMenuBar: true,
     show: false,
     frame: false,
-    transparent: true,
+    transparent: loadGeneralSettings().uiThemeRadius,
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
@@ -2798,7 +2813,7 @@ function createSidebarWindow(): void {
     autoHideMenuBar: true,
     show: false,
     frame: false,
-    transparent: true,
+    transparent: loadGeneralSettings().uiThemeRadius,
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
@@ -2845,7 +2860,7 @@ function createTasksWindow(): void {
     autoHideMenuBar: true,
     show: false,
     frame: false,
-    transparent: true,
+    transparent: loadGeneralSettings().uiThemeRadius,
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
@@ -2900,7 +2915,7 @@ function createSettingsWindow(section?: string): void {
     autoHideMenuBar: true,
     show: false,
     frame: false,
-    transparent: true,
+    transparent: loadGeneralSettings().uiThemeRadius,
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
@@ -3390,6 +3405,10 @@ ipcMain.handle(IPC.SETTINGS_SAVE_TIMEOUT_SETTINGS, (_event, settings: Partial<Ti
 
 ipcMain.handle(IPC.UI_THEME_GET, () => {
   return loadGeneralSettings().uiTheme;
+});
+
+ipcMain.handle(IPC.UI_THEME_RADIUS_GET, () => {
+  return loadGeneralSettings().uiThemeRadius;
 });
 
 ipcMain.handle(IPC.UI_FONT_GET, () => {
