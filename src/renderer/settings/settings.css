@@ -2051,17 +2051,31 @@ body {
   border-color: var(--rb-pink-200);
 }
 
+/* 昵称 + 前往官网按钮并排 */
+.nickname-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+.nickname-row input {
+  flex: 1;
+  min-width: 0;
+}
+
 .preset-website-link {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
-  margin-top: 8px;
-  padding: 4px 10px;
-  border-radius: 12px;
+  justify-content: center;
+  gap: 3px;
+  padding: 0 12px;
+  border-radius: 14px;
   color: var(--rb-text-muted);
   background: rgba(255, 255, 255, 0.055);
   border: 1px solid rgba(255, 182, 220, 0.14);
   font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
   text-decoration: none;
   cursor: pointer;
   transition: border-color 160ms ease, background 160ms ease, color 160ms ease;
