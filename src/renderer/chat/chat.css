@@ -476,17 +476,6 @@ body {
   flex: 0 0 auto;
 }
 
-.chat__rail-identity {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 1px 7px;
-  border-radius: 999px;
-  background: var(--rb-border-faint);
-  color: var(--rb-text-muted);
-  font-size: 10px;
-}
 
 .chat__rail-empty {
   display: flex;
