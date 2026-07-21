@@ -18,6 +18,7 @@ import {
   shouldSegmentAssistantReply,
 } from "./message-segmentation";
 import { buildDocumentContextLines, processDocumentsWithWait, type RetrievedDocumentChunk } from "./document-processing";
+import { decideReloadCurrentSession } from "./session-reload-policy";
 import {
   canCancelDocumentIndexStatus,
   getDocumentIndexStatusLabel,
@@ -2519,6 +2520,33 @@ async function getModelReply(): Promise<ChatReplyPayload> {
 
 let sending = false;
 
+// 发送期间到达的 proactive-chat 外部变更（如昔涟又发了一条主动消息）不立刻重载，
+// 否则会清掉 transient 思考消息 / 冲掉刚落库的回复。记下 sessionId，等发送结束、
+// 最终 saveSession 落盘后再 flush 重载。
+let pendingProactiveReloadId: string | null = null;
+
+/**
+ * 发送结束后调用：若有排队的外部变更，重载当前会话。
+ *
+ * 依赖 IPC 有序处理：发送的最终 saveSession（replaceTail）在 finally 之前已同步
+ * 发出 IPC，flush 这里的 getPage IPC 一定排在它之后被主进程处理，所以重载读到的
+ * 是已落库的回复，不会把它冲掉。
+ *
+ * 已知限制：若外部主动消息在用户 saveSession 之前 append，replaceMessagesTail
+ * 会用本地视图覆盖它（写冲突）。当前无调度器触发 evaluateCandidate，外部主动消息
+ * 不会在发送期间产生，此限制暂不构成实际问题；未来接入调度器时需把 saveSession
+ * 改成 merge-aware。
+ */
+async function flushPendingProactiveReload(): Promise<void> {
+  const pendingId = pendingProactiveReloadId;
+  if (!pendingId) return;
+  pendingProactiveReloadId = null;
+  // 重载前再确认仍是当前会话；用户可能已手动切走。
+  if (pendingId === currentSessionId) {
+    await loadSessionTailIntoUI(pendingId);
+  }
+}
+
 // ── 快捷预设胶囊 ──────────────────────────────────────────
 // 空对话时在 empty-state 下方显示的半透明胶囊，点击后：
 // - fill 模式：预设提示词填入输入框，用户修改后发送
@@ -2813,6 +2841,7 @@ async function triggerCyreneGreeting(): Promise<void> {
     sendBtn.disabled = false;
     chatHintEl.textContent = formatModelHint(currentModelConfig);
     inputEl.focus();
+    void flushPendingProactiveReload();
   }
 }
 
@@ -3333,6 +3362,7 @@ async function send(): Promise<void> {
     sendBtn.disabled = false;
     chatHintEl.textContent = formatModelHint(currentModelConfig);
     inputEl.focus();
+    void flushPendingProactiveReload();
   }
 }
 function clearChat(): void {
@@ -3822,11 +3852,17 @@ window.chatStore?.onChanged(async () => {
   if (chatRail && !chatRail.hidden) void renderRailList();
   const stillExists = await window.chatStore.get(currentSessionId);
   if (stillExists) {
-    if (
-      stillExists.purpose === "proactive-chat" &&
-      stillExists.updatedAt > (seenSessionUpdatedAt.get(stillExists.id) ?? 0)
-    ) {
+    const decision = decideReloadCurrentSession({
+      purpose: stillExists.purpose,
+      updatedAt: stillExists.updatedAt,
+      seenAt: seenSessionUpdatedAt.get(stillExists.id) ?? 0,
+      sending,
+    });
+    if (decision === "reload") {
       await loadSessionTailIntoUI(stillExists.id);
+    } else if (decision === "defer") {
+      // 发送期间到达的外部变更：排队，等发送结束 flush（见 send/triggerCyreneGreeting 的 finally）。
+      pendingProactiveReloadId = stillExists.id;
     }
     return;
   }
