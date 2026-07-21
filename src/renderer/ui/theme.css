@@ -120,10 +120,6 @@
 [data-ui-theme="pearl-white"] .tasks__hint,
 [data-ui-theme="pearl-white"] .chat__rail-meta,
 [data-ui-theme="pearl-white"] .chat__rail-time,
-[data-ui-theme="pearl-white"] .chat__rail-identity,
-[data-ui-theme="pearl-white"] .sidebar__version {
-  color: var(--rb-text-muted);
-}
 
 [data-ui-theme="pearl-white"] .settings-nav__brand,
 [data-ui-theme="pearl-white"] .settings-titlebar__title,
@@ -640,24 +636,6 @@
   border-color: var(--rb-border-soft);
 }
 
-[data-ui-theme="pearl-white"] .opener-pack-warning {
-  color: var(--rb-text-default);
-  background: #fff8e6;
-  border-color: rgba(180, 117, 0, 0.28);
-}
-
-[data-ui-theme="pearl-white"] .opener-pack-warning__body {
-  color: var(--rb-text-muted);
-}
-
-[data-ui-theme="pearl-white"] .opener-pack-warning__body strong {
-  color: #6f4600;
-}
-
-[data-ui-theme="pearl-white"] .opener-pack-warning__body code {
-  color: var(--rb-text-strong);
-}
-
 [data-ui-theme="pearl-white"] .plugin-config,
 [data-ui-theme="pearl-white"] .plugin-accordion-body,
 [data-ui-theme="pearl-white"] .vision-config-section,
@@ -1028,21 +1006,12 @@
 }
 
 [data-ui-theme="pearl-white"] .chat-sessions__new,
-[data-ui-theme="pearl-white"] .chat-sessions__identity,
-[data-ui-theme="pearl-white"] .chat-sessions__item.is-active {
-  color: var(--rb-pink-600);
-  background: var(--rb-pink-50);
-  border-color: var(--rb-pink-500);
-}
 
 [data-ui-theme="pearl-white"] .chat-sessions__new:hover {
   background: var(--rb-pink-100);
   border-color: var(--rb-pink-600);
 }
 
-[data-ui-theme="pearl-white"] .chat-sessions__identity {
-  border: 1px solid var(--rb-pink-200);
-}
 
 [data-ui-theme="pearl-white"] .chat-sessions__footer {
   border-top-color: var(--rb-border-strong);

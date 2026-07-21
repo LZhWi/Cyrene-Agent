@@ -168,7 +168,7 @@ function renderWeeklyBars(data7: TokenDayData[]): void {
     if (span) span.textContent = `日均 ${formatTokenShort(avg)}`;
   }
   if (noteEl && peakSlot) {
-    noteEl.textContent = `📊 本周 Token 消耗趋势 ｜ 峰值 ${formatTokenShort(peakSlot.total ?? 0)}（${peakSlot.weekday}）`;
+    noteEl.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-2px"><title>Token</title><path d="M4 42H44" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><rect x="8" y="28" width="6" height="14" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><rect x="21" y="18" width="6" height="24" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><rect x="34" y="6" width="6" height="36" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg> 本周 Token 消耗趋势 ｜ 峰值 ${formatTokenShort(peakSlot.total ?? 0)}（${peakSlot.weekday}）`;
   }
 }
 

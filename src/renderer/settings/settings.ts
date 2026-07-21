@@ -3,7 +3,6 @@ import "./settings.css";
 import "../ui/theme";
 import neteaseLogoUrl from "./assets/netease-logo.svg?url";
 import {
-  CHAT_DEFAULT_IDENTITY_LABEL,
   formatChatRelativeTime,
   type ChatSessionMetaUI,
 } from "../../shared/chat-ui";
@@ -101,7 +100,7 @@ function _initInputOverlay(): void {
   _cyInputOverlay.innerHTML = [
     '<div class="cy-modal" role="dialog" aria-modal="true" style="width:min(420px,90vw);">',
     '  <div class="cy-modal__head">',
-    '    <span class="cy-modal__icon" id="cy-input-icon">✏️</span>',
+    '    <span class="cy-modal__icon" id="cy-input-icon"><svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M5.32497 43.4996L13.81 43.4998L44.9227 12.3871L36.4374 3.90186L5.32471 35.0146L5.32497 43.4996Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M27.9521 12.3872L36.4374 20.8725" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>',
     '    <h3 class="cy-modal__title" id="cy-input-title">请输入</h3>',
     '  </div>',
     '  <hr class="cy-modal__divider">',
@@ -134,7 +133,7 @@ function showInputModal(options: {
   const inputEl = _cyInputOverlay.querySelector("#cy-input-field") as HTMLInputElement;
   const cancelBtn = _cyInputOverlay.querySelector("#cy-input-cancel") as HTMLButtonElement;
   const confirmBtn = _cyInputOverlay.querySelector("#cy-input-confirm") as HTMLButtonElement;
-  iconEl.textContent = options.icon || "✏️";
+  iconEl.textContent = options.icon || `<svg width="22" height="22" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M5.32497 43.4996L13.81 43.4998L44.9227 12.3871L36.4374 3.90186L5.32471 35.0146L5.32497 43.4996Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M27.9521 12.3872L36.4374 20.8725" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   titleEl.textContent = options.title;
   msgEl.textContent = options.message;
   inputEl.value = options.defaultValue || "";
@@ -717,21 +716,20 @@ const stickerThresholdVal = document.getElementById("sticker-threshold-val") as 
 
 const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }> = {
   memory: { emoji: "🧠", title: "记忆", hint: "管理长期记忆与画像" },
-  chat: { emoji: "💬", title: "聊天", hint: "管理聊天窗口与会话" },
-  user: { emoji: "👤", title: "用户信息", hint: "编辑你的个人资料" },
-  tasks: { emoji: "⏰", title: "定时任务", hint: "管理定时提醒与日程" },
-  identity: { emoji: "💼", title: "职位", hint: "自定义昔涟的身份定位与工作职责" },
-  skills: { emoji: "✨", title: "Skill", hint: "管理 agent 的 skill 指令（约束如何用工具）" },
+  chat: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M33 38H22V30H36V22H44V38H39L36 41L33 38Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 6H36V30H17L13 34L9 30H4V6Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 18H20" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M26 18H27" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 18H13" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>`, title: "聊天", hint: "管理聊天窗口与会话" },
+  user: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M44 8H4V38H19L24 43L29 38H44V8Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24" cy="19" r="5" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M33 32C33 27.5817 28.9706 24 24 24C19.0294 24 15 27.5817 15 32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "用户信息", hint: "编辑你的个人资料" },
+  tasks: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M23.9998 44.3332C34.1251 44.3332 42.3332 36.1251 42.3332 25.9999C42.3332 15.8747 34.1251 7.66656 23.9998 7.66656C13.8746 7.66656 5.6665 15.8747 5.6665 25.9999C5.6665 36.1251 13.8746 44.3332 23.9998 44.3332Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M23.7594 15.3536L23.7582 26.3624L31.5305 34.1347" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9.00001L11 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M44 9.00001L37 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "定时任务", hint: "管理定时提醒与日程" },
+	  skills: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>Skills</title><rect x="9" y="8" width="30" height="36" rx="2" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M18 4V10" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M30 4V10" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 19L32 19" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 27L28 27" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 35H24" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "Skills", hint: "管理 agent 的 skill 指令（约束如何用工具）" },
   plugins: { emoji: "🔌", title: "MCP", hint: "扩展功能与第三方集成" },
-  preferences: { emoji: "🫧", title: "偏好设置", hint: "设置聊天窗口和输出行为的默认偏好" },
-  appearance: { emoji: "🎨", title: "外观设置", hint: "调整窗口布局、界面主题与昔涟桌宠" },
-  general: { emoji: "⚙️", title: "通用设置", hint: "管理窗口、音频和系统行为" },
-  api: { emoji: "🔑", title: "API 设置", hint: "选择预设后只需要填写 API Key。" },
+	  preferences: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>偏好设置</title><path d="M12 35.0137H9H4V8.01273C4 6.90868 4.89543 6.01367 6 6.01367H42C43.1046 6.01367 44 6.90868 44 8.01273V35.0137H36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 32L14 42H34L24 32Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "偏好设置", hint: "设置聊天窗口和输出行为的默认偏好" },
+	  appearance: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>外观设置</title><path d="M24 44C29.9601 44 26.3359 35.136 30 31C33.1264 27.4709 44 29.0856 44 24C44 12.9543 35.0457 4 24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M28 17C29.6569 17 31 15.6569 31 14C31 12.3431 29.6569 11 28 11C26.3431 11 25 12.3431 25 14C25 15.6569 26.3431 17 28 17Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M16 21C17.6569 21 19 19.6569 19 18C19 16.3431 17.6569 15 16 15C14.3431 15 13 16.3431 13 18C13 19.6569 14.3431 21 16 21Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M17 34C18.6569 34 20 32.6569 20 31C20 29.3431 18.6569 28 17 28C15.3431 28 14 29.3431 14 31C14 32.6569 15.3431 34 17 34Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "外观设置", hint: "调整窗口布局、界面主题与昔涟桌宠" },
+	  general: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>通用设置</title><path d="M18.2838 43.1713C14.9327 42.1736 11.9498 40.3213 9.58787 37.867C10.469 36.8227 11 35.4734 11 34.0001C11 30.6864 8.31371 28.0001 5 28.0001C4.79955 28.0001 4.60139 28.01 4.40599 28.0292C4.13979 26.7277 4 25.3803 4 24.0001C4 21.9095 4.32077 19.8938 4.91579 17.9995C4.94381 17.9999 4.97188 18.0001 5 18.0001C8.31371 18.0001 11 15.3138 11 12.0001C11 11.0488 10.7786 10.1493 10.3846 9.35011C12.6975 7.1995 15.5205 5.59002 18.6521 4.72314C19.6444 6.66819 21.6667 8.00013 24 8.00013C26.3333 8.00013 28.3556 6.66819 29.3479 4.72314C32.4795 5.59002 35.3025 7.1995 37.6154 9.35011C37.2214 10.1493 37 11.0488 37 12.0001C37 15.3138 39.6863 18.0001 43 18.0001C43.0281 18.0001 43.0562 17.9999 43.0842 17.9995C43.6792 19.8938 44 21.9095 44 24.0001C44 25.3803 43.8602 26.7277 43.594 28.0292C43.3986 28.01 43.2005 28.0001 43 28.0001C39.6863 28.0001 37 30.6864 37 34.0001C37 35.4734 37.531 36.8227 38.4121 37.867C36.0502 40.3213 33.0673 42.1736 29.7162 43.1713C28.9428 40.752 26.676 39.0001 24 39.0001C21.324 39.0001 19.0572 40.752 18.2838 43.1713Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M24 31C27.866 31 31 27.866 31 24C31 20.134 27.866 17 24 17C20.134 17 17 20.134 17 24C17 27.866 20.134 31 24 31Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "通用设置", hint: "管理窗口、音频和系统行为" },
+	  api: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>API 设置</title><g clip-path="url(#api-key-nav-clip)"><circle cx="15" cy="33" r="8" fill="none" stroke="currentColor" stroke-width="4"/><path d="M29 16L35.5 22" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 26L37 7" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M35 11L42 17.5" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></g><defs><clipPath id="api-key-nav-clip"><rect width="48" height="48" fill="none"/></clipPath></defs></svg>`, title: "API 设置", hint: "选择预设后只需要填写 API Key。" },
   cyrene: { emoji: "🌸", title: "昔涟设置", hint: "管理 Agent 行为、记忆、RAG 与权限" },
   tts: { emoji: "🎙️", title: "TTS 设置", hint: "语音合成与朗读偏好" },
   asr: { emoji: "🎧", title: "ASR 设置", hint: "语音识别与通话配置" },
-  tokens: { emoji: "📊", title: "Token 用量", hint: "查看 API 调用统计与消耗" },
-  disclaimer: { emoji: "📜", title: "免责声明", hint: "使用条款与隐私说明" },
+	  tokens: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>Token 用量</title><path d="M4 42H44" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><rect x="8" y="28" width="6" height="14" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><rect x="21" y="18" width="6" height="24" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><rect x="34" y="6" width="6" height="36" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "Token 用量", hint: "查看 API 调用统计与消耗" },
+	  disclaimer: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>免责声明</title><rect x="13" y="10" width="28" height="34" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M35 10V4H8C7.44772 4 7 4.44772 7 5V38H13" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 22H33" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 30H33" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "免责声明", hint: "使用条款与隐私说明" },
 };
 
 minBtn.addEventListener("click", () => window.settings?.minimize());
@@ -2176,7 +2174,7 @@ async function renderSchedulerList(): Promise<void> {
     card.className = "scheduler-card";
     card.innerHTML = `
       <div class="scheduler-card__head">
-        <div class="scheduler-card__title"><span>⏰</span><strong></strong><span class="scheduler-badge"></span></div>
+        <div class="scheduler-card__title"><span><svg width="16" height="16" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M23.9998 44.3332C34.1251 44.3332 42.3332 36.1251 42.3332 25.9999C42.3332 15.8747 34.1251 7.66656 23.9998 7.66656C13.8746 7.66656 5.6665 15.8747 5.6665 25.9999C5.6665 36.1251 13.8746 44.3332 23.9998 44.3332Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M23.7594 15.3536L23.7582 26.3624L31.5305 34.1347" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9.00001L11 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M44 9.00001L37 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span><strong></strong><span class="scheduler-badge"></span></div>
       </div>
       <div class="scheduler-card__meta"></div>
       <div class="scheduler-card__actions"></div>
@@ -2480,7 +2478,6 @@ function switchSection(section: string): void {
   const isUser = section === "user";
   const isChat = section === "chat";
   const isTasks = section === "tasks";
-  const isIdentity = section === "identity";
   const isPlugins = section === "plugins";
   const isSkills = section === "skills";
   const isTokens = section === "tokens";
@@ -2505,8 +2502,6 @@ function switchSection(section: string): void {
   const tasksPanel = document.getElementById("tasks-panel");
   if (tasksPanel) tasksPanel.classList.toggle("is-hidden", !isTasks);
   if (isTasks) void loadSchedulerPanel();
-  const identityPanel = document.getElementById("identity-panel");
-  if (identityPanel) identityPanel.classList.toggle("is-hidden", !isIdentity);
   pluginsPanel.classList.toggle("is-hidden", !isPlugins);
   const skillsPanel = document.getElementById("skills-panel");
   if (skillsPanel) skillsPanel.classList.toggle("is-hidden", !isSkills);
@@ -2526,7 +2521,7 @@ function switchSection(section: string): void {
   else disposeMusicPanel();
   placeholderPanel.classList.toggle(
     "is-hidden",
-    isApi || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr || isMusic,
+    isApi || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr || isMusic,
   );
 
   if (
@@ -2538,10 +2533,9 @@ function switchSection(section: string): void {
     !isDisclaimer &&
     !isMemory &&
     !isUser &&
-    !isChat &&
-    !isTasks &&
-    !isIdentity &&
-    !isPlugins &&
+	    !isChat &&
+	    !isTasks &&
+	    !isPlugins &&
     !isSkills &&
     !isTokens &&
     !isChannels &&
@@ -2549,7 +2543,7 @@ function switchSection(section: string): void {
     !isAsr &&
     !isMusic
   ) {
-    placeholderIcon.textContent = label.emoji;
+	    placeholderIcon.innerHTML = label.emoji;
     placeholderTitle.textContent = label.title;
     placeholderCopy.textContent = "这个模块先占位，等核心聊天与 API 接通后再继续扩展。";
   }
@@ -3907,7 +3901,7 @@ function enterL0EditMode(): void {
   l0Editing = true;
   l0Snapshot = takeL0Snapshot();
   setL0FieldsDisabled(false);
-  if (memoryL0EditBtn) memoryL0EditBtn.textContent = "💾 保存";
+  if (memoryL0EditBtn) memoryL0EditBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M6 9C6 7.34315 7.34315 6 9 6H30.3363C31.132 6 31.895 6.31607 32.4576 6.87868L36.3158 10.7368L41.1213 15.5424C41.6839 16.105 42 16.868 42 17.6637V39C42 40.6569 40.6569 42 39 42H9C7.34315 42 6 40.6569 6 39V9Z" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M31 26H17C15.3431 26 14 27.3431 14 29V42H34V29C34 27.3431 32.6569 26 31 26Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M29 16H17C15.3431 16 14 14.6569 14 13V6" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 保存`;
   if (memoryL0CancelBtn) memoryL0CancelBtn.classList.remove("is-hidden");
 }
 
@@ -3915,7 +3909,7 @@ function exitL0EditMode(): void {
   l0Editing = false;
   l0Snapshot = null;
   setL0FieldsDisabled(true);
-  if (memoryL0EditBtn) memoryL0EditBtn.textContent = "✏️ 编辑";
+  if (memoryL0EditBtn) memoryL0EditBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M5.32497 43.4996L13.81 43.4998L44.9227 12.3871L36.4374 3.90186L5.32471 35.0146L5.32497 43.4996Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M27.9521 12.3872L36.4374 20.8725" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 编辑`;
   if (memoryL0CancelBtn) memoryL0CancelBtn.classList.add("is-hidden");
 }
 
@@ -3931,7 +3925,7 @@ async function saveL0(): Promise<void> {
     exitL0EditMode();
     if (memoryL0EditBtn) {
       memoryL0EditBtn.textContent = "✅ 已保存";
-      setTimeout(() => { if (memoryL0EditBtn && !l0Editing) memoryL0EditBtn.textContent = "✏️ 编辑"; }, 2000);
+      setTimeout(() => { if (memoryL0EditBtn && !l0Editing) memoryL0EditBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M5.32497 43.4996L13.81 43.4998L44.9227 12.3871L36.4374 3.90186L5.32471 35.0146L5.32497 43.4996Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M27.9521 12.3872L36.4374 20.8725" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 编辑`; }, 2000);
     }
   } catch (err) {
     console.error("[settings] save L0 failed", err);
@@ -3955,7 +3949,7 @@ function enterL1EditMode(): void {
   l1Editing = true;
   l1Snapshot = takeL1Snapshot();
   setL1FieldsDisabled(false);
-  if (memoryL1EditBtn) memoryL1EditBtn.textContent = "💾 保存";
+  if (memoryL1EditBtn) memoryL1EditBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M6 9C6 7.34315 7.34315 6 9 6H30.3363C31.132 6 31.895 6.31607 32.4576 6.87868L36.3158 10.7368L41.1213 15.5424C41.6839 16.105 42 16.868 42 17.6637V39C42 40.6569 40.6569 42 39 42H9C7.34315 42 6 40.6569 6 39V9Z" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M31 26H17C15.3431 26 14 27.3431 14 29V42H34V29C34 27.3431 32.6569 26 31 26Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M29 16H17C15.3431 16 14 14.6569 14 13V6" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 保存`;
   if (memoryL1CancelBtn) memoryL1CancelBtn.classList.remove("is-hidden");
 }
 
@@ -3963,7 +3957,7 @@ function exitL1EditMode(): void {
   l1Editing = false;
   l1Snapshot = null;
   setL1FieldsDisabled(true);
-  if (memoryL1EditBtn) memoryL1EditBtn.textContent = "✏️ 编辑";
+  if (memoryL1EditBtn) memoryL1EditBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M5.32497 43.4996L13.81 43.4998L44.9227 12.3871L36.4374 3.90186L5.32471 35.0146L5.32497 43.4996Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M27.9521 12.3872L36.4374 20.8725" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 编辑`;
   if (memoryL1CancelBtn) memoryL1CancelBtn.classList.add("is-hidden");
 }
 
@@ -4407,14 +4401,8 @@ function buildChatSessionItem(session: ChatSessionMetaUI): HTMLLIElement {
   timeEl.className = "chat-sessions__time";
   timeEl.textContent = formatChatRelativeTime(session.updatedAt);
 
-  const identityEl = document.createElement("span");
-  identityEl.className = "chat-sessions__identity";
-  // 职位面板未做，所有 identityId == null 的会话先 fallback 到"聊天陪伴"
-  // 后续职位面板做好后这里改成用 identity 注册表查实际名称
-  identityEl.textContent = "💼 " + (session.identityId ? session.identityId : CHAT_DEFAULT_IDENTITY_LABEL);
 
   metaEl.appendChild(timeEl);
-  metaEl.appendChild(identityEl);
 
   // 左侧主区：标题 + meta
   const mainEl = document.createElement("div");
@@ -4434,7 +4422,7 @@ function buildChatSessionItem(session: ChatSessionMetaUI): HTMLLIElement {
   renameBtn.className = "chat-sessions__rename";
   renameBtn.title = "重命名";
   renameBtn.setAttribute("aria-label", "重命名会话");
-  renameBtn.textContent = "✏️";
+  renameBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M5.32497 43.4996L13.81 43.4998L44.9227 12.3871L36.4374 3.90186L5.32471 35.0146L5.32497 43.4996Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M27.9521 12.3872L36.4374 20.8725" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
   // 编辑态确认/取消按钮（默认隐藏，进入编辑态时显示，替换 ✏️/🗑️ 的位置）
   const confirmRenameBtn = document.createElement("button");
@@ -5059,14 +5047,6 @@ async function loadTtsConfig(): Promise<void> {
   ttsEl("tts-mimo-voice-audio").value = String(ttsConfig.ttsMimoVoiceAudioPath ?? "");
   ttsEl("tts-mimo-style").value = String(ttsConfig.ttsMimoStylePrompt ?? "温柔、自然、略带亲近感，像在轻声陪用户聊天。");
 
-  // Opener 主动开口档位
-  const openerMode = String(ttsConfig.openerMode ?? "off");
-  document.querySelectorAll<HTMLButtonElement>(".opener-mode").forEach((btn) => {
-    const isActive = btn.dataset.mode === openerMode;
-    btn.classList.toggle("is-active", isActive);
-    btn.setAttribute("aria-checked", isActive ? "true" : "false");
-  });
-
   // 加载完成后清掉所有 Provider 的脏态（按钮隐藏，status 清空）
   for (const provider of Object.keys(TTS_PROVIDER_FIELDS)) {
     const ui = ttsProviderUi[provider];
@@ -5130,71 +5110,6 @@ document.querySelectorAll<HTMLButtonElement>("[data-engine]").forEach((btn) => {
     void saveTtsField("ttsEngine", engine);
   });
 });
-
-// Opener 主动开口档位切换
-document.querySelectorAll<HTMLButtonElement>(".opener-mode").forEach((btn) => {
-  btn.addEventListener("click", () => {
-    const mode = btn.dataset.mode || "off";
-    document.querySelectorAll<HTMLButtonElement>(".opener-mode").forEach((b) => {
-      b.classList.remove("is-active");
-      b.setAttribute("aria-checked", "false");
-    });
-    btn.classList.add("is-active");
-    btn.setAttribute("aria-checked", "true");
-    void saveTtsField("openerMode", mode);
-  });
-});
-
-interface OpenerPackStatus {
-  manifestInstalled: boolean;
-  packDir: string;
-  manifestPath: string;
-}
-
-interface OpenerBridgeApi {
-  testFire?: () => Promise<void>;
-  getStatus?: () => Promise<OpenerPackStatus>;
-  openPackDir?: () => Promise<{ ok: boolean; error?: string }>;
-  openInstallDocs?: () => Promise<{ ok: boolean; error?: string }>;
-}
-
-function getOpenerBridge(): OpenerBridgeApi | undefined {
-  return (window as unknown as { openerBridge?: OpenerBridgeApi }).openerBridge;
-}
-
-let latestOpenerPackStatus: OpenerPackStatus | null = null;
-
-async function refreshOpenerPackStatus(): Promise<void> {
-  const warning = document.getElementById("opener-pack-warning");
-  const pathEl = document.getElementById("opener-pack-path");
-  const status = await getOpenerBridge()?.getStatus?.();
-  if (!warning || !status) return;
-  latestOpenerPackStatus = status;
-  if (pathEl) pathEl.textContent = status.packDir;
-  warning.toggleAttribute("hidden", status.manifestInstalled);
-}
-
-document.getElementById("opener-open-pack-dir")?.addEventListener("click", async () => {
-  const result = await getOpenerBridge()?.openPackDir?.();
-  if (result && !result.ok) {
-    window.alert("打开语音包目录失败：" + (result.error || "未知错误"));
-  }
-  await refreshOpenerPackStatus();
-});
-
-document.getElementById("opener-show-install-help")?.addEventListener("click", async () => {
-  const result = await getOpenerBridge()?.openInstallDocs?.();
-  if (result && !result.ok) {
-    window.alert("打开安装说明失败：" + (result.error || "未知错误"));
-  }
-});
-
-// Opener 测试气泡（手动触发一次，看样式）
-document.getElementById("opener-test-fire")?.addEventListener("click", () => {
-  void getOpenerBridge()?.testFire?.();
-});
-
-void refreshOpenerPackStatus();
 
 // 自动朗读开关
 ttsEl("tts-auto-read").addEventListener("change", () => {

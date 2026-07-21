@@ -91,11 +91,6 @@ import { synthesize as gptsovitsSynthesize } from "./tts/gptsovits-engine";
 import { synthesize as customCloudSynthesize } from "./tts/custom-cloud-engine";
 import { synthesize as mimoSynthesize } from "./tts/mimo-engine";
 import { synthesizeByEngine } from "./tts/tts-dispatcher";
-import { startOpener, stopOpener, setLive2dWindow, reloadManifest, handleBubbleClick, handleChatWindowOpened, testFire, setProactiveCandidateHandler, getPresetFallback } from "./opener/opener-runner";
-import { loadState as loadOpenerState, saveState as saveOpenerState } from "./opener/desire-engine";
-import type { ShowBubblePayload } from "./opener/opener-types";
-import { SCENE_CONFIGS } from "./opener/scenes-config";
-import { getManifestPath, getOpenerPackDir } from "./opener/opener-pack-store";
 import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
 import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegateSettings } from "./orchestrator/built-in-tools";
 import { registerRecallHistoryTool } from "./orchestrator/history-tools";
@@ -148,6 +143,7 @@ import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive/p
 import { runProactiveModel } from "./proactive/proactive-model";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/proactive-types";
 import { canCommitProactiveMessage } from "./proactive/proactive-policy";
+import { loadProactiveState, saveProactiveState } from "./proactive/proactive-state-store";
 import { normalizeCitaSettings } from "./cita/settings";
 import { CitaService, ContextStore, RemoteSemanticEngine } from "./cita";
 import { contextRefRegistry } from "./orchestrator/tool-context";
@@ -184,15 +180,15 @@ let schedulerEngine: SchedulerEngine | null = null;
 let proactiveChatService: ProactiveChatService | null = null;
 let normalConversationBusyCount = 0;
 let proactiveScreenLocked = false;
+const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
+  onClosed: () => { /* no-op：原 setLive2dWindow 已随 opener 子系统一起移除 */ },
+});
 const petWindowMoveController = new PetWindowMoveController(
   () => mainWindow,
   ({ x, y }) => {
     saveGeneralSettings({ petWindowX: x, petWindowY: y });
   },
 );
-const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
-  onClosed: () => setLive2dWindow(null),
-});
 // 聊天窗口当前活跃的会话 id（通过 IPC 由聊天窗口上报）；
 // 设置面板"删除当前会话"差异化提示用。聊天窗口关闭时由 closed 事件置 null。
 let activeChatSessionId: string | null = null;
@@ -563,8 +559,6 @@ interface GeneralSettings {
   asrVadThreshold: number;
   /** 通话中显示文字转写 */
   asrShowTranscript: boolean;
-  /** Opener 主动开口档位 */
-  openerMode: "off" | "quiet" | "normal" | "lively";
 }
 
 
@@ -764,7 +758,6 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   asrVadSilenceMs: 1000,
   asrVadThreshold: 0.01,
   asrShowTranscript: false,
-  openerMode: "off",
 };
 
 function getSettingsPath(): string {
@@ -1196,9 +1189,6 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
       ? Math.max(0.001, Math.min(0.5, Number(input.asrVadThreshold)))
       : DEFAULT_GENERAL_SETTINGS.asrVadThreshold,
     asrShowTranscript: Boolean(input?.asrShowTranscript),
-    openerMode: ["off", "quiet", "normal", "lively"].includes(String(input?.openerMode))
-      ? (input!.openerMode as "off" | "quiet" | "normal" | "lively")
-      : "off",
     ttsGptsovitsBaseUrl: typeof input?.ttsGptsovitsBaseUrl === "string" ? input.ttsGptsovitsBaseUrl : DEFAULT_GENERAL_SETTINGS.ttsGptsovitsBaseUrl,
     ttsGptsovitsRefAudioPath: typeof input?.ttsGptsovitsRefAudioPath === "string" ? input.ttsGptsovitsRefAudioPath : "",
     ttsGptsovitsPromptText: typeof input?.ttsGptsovitsPromptText === "string" ? input.ttsGptsovitsPromptText : "",
@@ -1902,7 +1892,7 @@ async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
     buildAlwaysOnContext(retrievalQuery, histories.ordinary.map((turn) => ({ role: turn.role, content: turn.content }))).catch(() => ""),
     buildMemoryInjection(retrievalQuery).catch(() => ""),
   ]);
-  const state = loadOpenerState();
+  const state = loadProactiveState();
   const snapshot = getProactiveRuntimeSnapshot();
   return buildProactiveMessages({
     basePersona: buildProactivePersonaPrompt(),
@@ -1915,37 +1905,6 @@ async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
     idleSec: snapshot.idleSec,
     unansweredCount: state.unansweredCount,
   });
-}
-
-async function synthesizeProactiveSpeech(text: string): Promise<{ audioBase64: string; format: "wav" | "mp3"; durationMs: number } | null> {
-  const cfg = loadGeneralSettings();
-  if (!cfg.ttsAutoRead || cfg.ttsEngine === "off") return null;
-  try {
-    const result = await synthesizeByEngine(cfg.ttsEngine, {
-      text,
-      speed: cfg.ttsSpeed,
-      volume: cfg.ttsVolume,
-      apiKey: cfg.ttsEngine === "mimo" ? cfg.ttsMimoKey : (cfg.ttsEngine === "custom-cloud" ? cfg.ttsCustomCloudApiKey : cfg.ttsMinimaxKey),
-      voiceId: cfg.ttsEngine === "custom-cloud" ? cfg.ttsCustomCloudVoiceId : cfg.ttsMinimaxVoiceId,
-      model: cfg.ttsMinimaxModel,
-      baseUrl: cfg.ttsGptsovitsBaseUrl,
-      refAudioPath: cfg.ttsGptsovitsRefAudioPath,
-      promptText: cfg.ttsGptsovitsPromptText,
-      endpointUrl: cfg.ttsCustomCloudEndpointUrl,
-      timeoutMs: cfg.ttsCustomCloudTimeoutMs,
-      voiceAudioPath: cfg.ttsMimoVoiceAudioPath,
-      stylePrompt: cfg.ttsMimoStylePrompt,
-      format: cfg.ttsEngine === "gptsovits" ? cfg.ttsGptsovitsFormat : (cfg.ttsEngine === "custom-cloud" ? cfg.ttsCustomCloudFormat : "mp3"),
-    });
-    return {
-      audioBase64: result.audio.toString("base64"),
-      format: result.format,
-      durationMs: Math.max(1_500, Math.min(30_000, text.length * 180)),
-    };
-  } catch (error) {
-    console.warn("[Proactive] TTS 合成失败，保留文本消息:", error instanceof Error ? error.message : error);
-    return null;
-  }
 }
 
 function updateNormalConversationBusy(delta: 1 | -1): void {
@@ -1967,24 +1926,16 @@ const proactiveConversationLifecycle = {
 function getProactiveCommitDecision(candidate: ProactiveCandidate, generationEpoch: number) {
   return canCommitProactiveMessage(
     getProactiveRuntimeSnapshot(),
-    loadOpenerState(),
+    loadProactiveState(),
     candidate,
     generationEpoch,
   );
 }
 
 function recordProactiveDeliveryMetadata(input: ProactiveCommitInput): void {
-  const openerState = loadOpenerState();
-  const sceneConfig = SCENE_CONFIGS.find((config) => config.id === input.candidate.sceneId);
-  if (sceneConfig?.todayFiredFlag) openerState.todayFired[sceneConfig.todayFiredFlag] = true;
-  if (input.source === "fallback" && input.fallbackPayload) {
-    const itemId = (input.fallbackPayload as ShowBubblePayload).itemId;
-    if (itemId) {
-      const recent = openerState.recentItems[input.candidate.sceneId] ?? [];
-      openerState.recentItems[input.candidate.sceneId] = [itemId, ...recent.filter((id) => id !== itemId)].slice(0, 4);
-    }
-  }
-  saveOpenerState(openerState);
+  // Opener 的 todayFired/recentItems 字段已整体废弃（依赖的 SCENE_CONFIGS 与 ShowBubblePayload 来自旧 opener 子系统）。
+  // ProactiveChat 这边只需持久化 committed 副作用；当前 implementation 已无副作用，留空占位即可。
+  void input;
 }
 
 async function commitLocalProactiveMessage(input: ProactiveCommitInput): Promise<ProactiveCommitResult> {
@@ -2005,25 +1956,9 @@ async function commitLocalProactiveMessage(input: ProactiveCommitInput): Promise
   if (!appended) throw new Error("主动聊天会话写入失败");
   broadcastChatsChanged();
 
-  let payload: ShowBubblePayload = input.source === "fallback" && input.fallbackPayload
-    ? { ...(input.fallbackPayload as ShowBubblePayload), text: input.text, sessionId: session.id }
-    : {
-        text: input.text,
-        sceneId: input.candidate.sceneId,
-        itemId: `proactive-${at}`,
-        sessionId: session.id,
-      };
-
-  if (input.source === "model") {
-    const speech = await synthesizeProactiveSpeech(input.text);
-    if (speech) payload = { ...payload, ...speech };
-  }
-
-  // 文本已落库；气泡/TTS 前再次执行完整检查，失败时只取消展示和语音。
-  const displayDecision = getProactiveCommitDecision(input.candidate, input.generationEpoch);
-  if (displayDecision.allowed && mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(IPC.LIVE2D_SHOW_BUBBLE, payload);
-  }
+  // 文本已落库；上次落库后没有 panel/show 步骤要做（opener 气泡已被移除，fallback 路径没有了）。
+  void input;
+  void at;
   return { kind: "committed" };
 }
 
@@ -2055,11 +1990,9 @@ async function commitSelectedProactiveMessage(input: ProactiveCommitInput): Prom
 
 function initializeProactiveChatService(): void {
   proactiveChatService = createProactiveChatService({
-    loadState: loadOpenerState,
+    loadState: loadProactiveState,
     saveState: (state) => {
-      const openerState = loadOpenerState();
-      Object.assign(openerState, state);
-      saveOpenerState(openerState);
+      saveProactiveState(state);
     },
     getSnapshot: getProactiveRuntimeSnapshot,
     buildMessages: async (candidate) => buildProactiveAgentMessages(candidate),
@@ -2079,17 +2012,14 @@ function initializeProactiveChatService(): void {
         timeoutMs: 45_000,
       });
     },
-    getFallback: async (candidate) => getPresetFallback(candidate.sceneId, new Date().getHours()),
+    // Opener 的 preset fallback 已移除：model 失败时由 proactive-service 自身走 cancel 路径。
+    getFallback: async () => null,
     canStartDelivery: () => {
       const target = loadGeneralSettings().proactiveDeliveryTarget;
       return target === "local" || canStartProactiveChannelDelivery(target, channelManager);
     },
     commitMessage: commitSelectedProactiveMessage,
     log: (event, detail) => console.log(`[Proactive] ${event}`, detail ?? ""),
-  });
-
-  setProactiveCandidateHandler(async (candidate) => {
-    await proactiveChatService?.evaluateCandidate(candidate);
   });
 
   setChannelsConversationLifecycle(proactiveConversationLifecycle);
@@ -2524,18 +2454,6 @@ function createWindow(): void {
 
   applyGeneralSettings(loadGeneralSettings());
 
-  // Opener 主动开口：注入桌宠窗口 + 启动 tick
-  setLive2dWindow(mainWindow);
-  reloadManifest();
-  const initOpener = () => {
-    const s = loadGeneralSettings();
-    stopOpener();
-    if (s.proactiveChatMode === "on") {
-      startOpener(s.openerMode === "off" ? "normal" : s.openerMode);
-    }
-  };
-  initOpener();
-
   // 注入天气工具配置获取器：每次工具执行时实时读 key/默认城市
   // （用户改了设置不用重启就能生效）
   setWeatherConfig(
@@ -2705,7 +2623,6 @@ function createChatWindow(sessionId?: string): void {
   if (chatWindow && !chatWindow.isDestroyed()) {
     chatWindow.show();
     chatWindow.focus();
-    handleChatWindowOpened();  // Opener 响应窗口内打开 chat = 接话
     // 窗口已存在：通过事件让渲染进程切到目标会话（不重 load）
     if (sessionId) {
       chatWindow.webContents.send(IPC.CHATS_SWITCH_SESSION, sessionId);
@@ -2751,7 +2668,6 @@ function createChatWindow(sessionId?: string): void {
 
   chatWindow.once("ready-to-show", () => {
     chatWindow?.show();
-    handleChatWindowOpened();  // Opener 响应窗口内打开 chat = 接话
   });
 
   chatWindow.on("closed", () => {
@@ -3427,12 +3343,8 @@ ipcMain.handle(IPC.SETTINGS_RESET_UI_FONT, () => {
 
 ipcMain.handle(IPC.SETTINGS_SAVE_GENERAL, (_event, settings: Partial<GeneralSettings>) => {
   const saved = saveGeneralSettings(settings);
-  if ("proactiveChatMode" in settings || "proactiveDeliveryTarget" in settings || "openerMode" in settings) {
-    stopOpener();
+  if ("proactiveChatMode" in settings || "proactiveDeliveryTarget" in settings) {
     proactiveChatService?.invalidate();
-    if (saved.proactiveChatMode === "on") {
-      startOpener(saved.openerMode === "off" ? "normal" : saved.openerMode);
-    }
   }
   return saved;
 });
@@ -3855,13 +3767,9 @@ app.whenReady().then(async () => {
       await syncPlaywrightMcp(saved);
     }
 
-    // 主动聊天总开关或频率变化时重启。
-    if ("openerMode" in tts || "proactiveChatMode" in tts) {
-      stopOpener();
+    // 主动聊天总开关变化时使现有评估失效（频率档位由 ProactiveChat 内部判定，无需重启）。
+    if ("proactiveChatMode" in tts) {
       proactiveChatService?.invalidate();
-      if (saved.proactiveChatMode === "on") {
-        startOpener(saved.openerMode === "off" ? "normal" : saved.openerMode);
-      }
     }
 
     // 返回不含密钥明文的副本（前端展示用）
@@ -3869,48 +3777,6 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle(IPC.TTS_LOAD_SETTINGS, () => {
     return loadGeneralSettings();
-  });
-
-  // Opener 反馈：点气泡接话
-  ipcMain.on(IPC.OPENER_FEEDBACK, (_event, payload: { type: "clicked"; sceneId: string; itemId: string }) => {
-    if (payload?.type === "clicked") {
-      handleBubbleClick(payload.sceneId, payload.itemId);
-    }
-  });
-
-  // Opener 手动测试气泡
-  ipcMain.handle(IPC.OPENER_TEST_FIRE, async () => { await testFire(); });
-
-  ipcMain.handle(IPC.OPENER_GET_STATUS, () => {
-    const packDir = getOpenerPackDir();
-    const manifestPath = getManifestPath();
-    return {
-      manifestInstalled: fs.existsSync(manifestPath),
-      packDir,
-      manifestPath,
-    };
-  });
-
-  ipcMain.handle(IPC.OPENER_OPEN_PACK_DIR, async () => {
-    const packDir = getOpenerPackDir();
-    try {
-      fs.mkdirSync(packDir, { recursive: true });
-      const error = await shell.openPath(packDir);
-      return error ? { ok: false, error } : { ok: true };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
-  });
-
-  ipcMain.handle(IPC.OPENER_OPEN_INSTALL_DOCS, async () => {
-    const docPath = path.join(app.getAppPath(), "docs", "opener-pack.md");
-    try {
-      if (!fs.existsSync(docPath)) return { ok: false, error: "安装说明文档不存在：" + docPath };
-      const error = await shell.openPath(docPath);
-      return error ? { ok: false, error } : { ok: true };
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) };
-    }
   });
 
   // 上传音频文件 → file_id
@@ -4828,7 +4694,6 @@ app.on("window-all-closed", () => {});
 app.on("before-quit", () => {
   petWindowMoveController.dispose();
   schedulerEngine?.stop();
-  stopOpener();
   flushTokenUsage();
   void shutdownChannels();
 });

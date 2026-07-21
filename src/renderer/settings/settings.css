@@ -106,9 +106,24 @@ body {
 }
 
 .nav-item svg.nav-item__icon {
-  display: block;
-  margin: 0 auto;
-}
+	  display: block;
+	  margin: 0 auto;
+	}
+
+	.nav-item img.nav-item__avatar {
+	  display: block;
+	  margin: 0 auto;
+	}
+
+	[data-ui-theme="pearl-white"] .nav-item__avatar {
+	  content: url("/icons/cyrene-avatar-line.svg");
+	  display: block;
+	}
+
+	[data-ui-theme="pearl-white"] .panel-heading__avatar {
+	  content: url("/icons/cyrene-avatar-line.svg");
+	  display: block;
+	}
 
 .nav-item:hover,
 .nav-item.is-active {
@@ -601,10 +616,14 @@ body {
   font: var(--rb-text-small-em);
 }
 
-.ghost-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
-  border-color: rgba(255, 182, 220, 0.32);
-}
+	.ghost-btn svg {
+	  vertical-align: -2px;
+	}
+	
+	.ghost-btn:hover {
+	  background: rgba(255, 255, 255, 0.12);
+	  border-color: rgba(255, 182, 220, 0.32);
+	}
 
 .setting-row--about {
   justify-content: flex-start;
@@ -1939,25 +1958,34 @@ body {
 }
 
 .chat-sessions__new {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 12px 16px;
-  border-radius: 14px;
-  border: 1.5px dashed var(--rb-pink-300);
-  background: var(--rb-pink-50);
-  color: var(--rb-pink-600);
-  font: var(--rb-text-small-em);
-  font-size: 14px;
-  cursor: pointer;
-  transition: background 0.2s, border-color 0.2s, transform 0.12s;
-}
+	  display: flex;
+	  align-items: center;
+	  justify-content: center;
+	  gap: 8px;
+	  padding: 12px 16px;
+	  border-radius: 14px;
+	  border: 1.5px dashed var(--rb-pink-300);
+	  background: rgba(0, 0, 0, 0.10);
+	  color: var(--rb-pink-500);
+	  font: var(--rb-text-small-em);
+	  font-size: 14px;
+	  cursor: pointer;
+	  transition: background 0.2s, border-color 0.2s, transform 0.12s;
+	}
 
-.chat-sessions__new:hover {
-  background: var(--rb-pink-100);
-  border-color: var(--rb-pink-500);
-}
+	.chat-sessions__new:hover {
+	  background: rgba(0, 0, 0, 0.18);
+	  border-color: var(--rb-pink-500);
+	}
+
+	[data-ui-theme="pearl-white"] .chat-sessions__new {
+	  background: var(--rb-pink-50);
+	  color: var(--rb-pink-600);
+	}
+
+	[data-ui-theme="pearl-white"] .chat-sessions__new:hover {
+	  background: var(--rb-pink-100);
+	}
 
 .chat-sessions__new:active {
   transform: scale(0.98);
@@ -1996,10 +2024,21 @@ body {
 }
 
 .chat-sessions__item.is-active {
-  background: var(--rb-pink-50);
-  border-color: var(--rb-pink-500);
-  box-shadow: 0 0 0 2px var(--rb-pink-100);
-}
+	  background: rgba(0, 0, 0, 0.15);
+	  border-color: var(--rb-pink-500);
+	}
+
+	[data-ui-theme="pearl-white"] .chat-sessions__item.is-active {
+	  background: var(--rb-pink-50);
+	  border-color: var(--rb-pink-500);
+	  box-shadow: 0 0 0 2px var(--rb-pink-100);
+	}
+
+	.chat-sessions__item.is-active .chat-sessions__title,
+	.chat-sessions__item.is-active .chat-sessions__time,
+	.chat-sessions__item.is-active .chat-sessions__identity {
+	  color: var(--rb-text-strong);
+	}
 
 /* 左侧：标题 + meta 纵向堆叠，吃满剩余宽度 */
 .chat-sessions__main {
@@ -2042,18 +2081,6 @@ body {
   flex: 0 0 auto;
 }
 
-.chat-sessions__identity {
-  flex: 0 0 auto;
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--rb-pink-50);
-  color: var(--rb-pink-600);
-  font-size: 11px;
-  letter-spacing: 0.2px;
-}
 
 /* 右侧：操作按钮组（✏️ 🗑️ 常规态 / ✓ ✕ 编辑态） */
 .chat-sessions__actions {
@@ -2605,47 +2632,6 @@ body {
   font-size: 12px;
   color: rgba(235, 229, 245, 0.5);
   line-height: 1.6;
-}
-
-.opener-pack-warning {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 14px;
-  margin-top: 12px;
-  padding: 12px 14px;
-  border: 1px solid rgba(250, 204, 21, 0.36);
-  border-radius: 12px;
-  background: rgba(250, 204, 21, 0.1);
-}
-.opener-pack-warning[hidden] {
-  display: none;
-}
-.opener-pack-warning__body {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-  min-width: 0;
-  color: rgba(254, 247, 255, 0.82);
-  font-size: 13px;
-  line-height: 1.5;
-}
-.opener-pack-warning__body strong {
-  color: rgba(254, 240, 138, 0.96);
-  font-size: 14px;
-}
-.opener-pack-warning__body code {
-  overflow-wrap: anywhere;
-  color: rgba(254, 247, 255, 0.72);
-  font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
-  font-size: 12px;
-}
-.opener-pack-warning__actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: flex-end;
-  flex-shrink: 0;
 }
 
 /* 音色快速复刻区 */

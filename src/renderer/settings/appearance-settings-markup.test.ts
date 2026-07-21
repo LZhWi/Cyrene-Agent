@@ -11,12 +11,13 @@ function form(id: string): string {
 }
 
 describe("appearance settings markup", () => {
-  it("adds appearance navigation and renames general settings", () => {
-    expect(html).toContain('data-section="appearance"');
-    expect(html).toContain('data-section="general"><span>⚙️</span>通用设置');
-  });
+	  it("adds appearance navigation and renames general settings", () => {
+	    expect(html).toContain('data-section="appearance"');
+	    expect(html).toContain('data-section="general"><span><svg class="nav-item__icon"');
+	    expect(html).toContain('通用设置</button>');
+	  });
 
-  it("contains the four appearance groups and disabled future options", () => {
+	  it("contains the four appearance groups and disabled future options", () => {
     const panel = form("appearance-form");
     for (const heading of ["布局", "外观主题", "个性化", "昔涟桌宠"]) {
       expect(panel).toContain(heading);

@@ -126,15 +126,8 @@ export const IPC = {
   LIVE2D_SPEECH_PREPARE: "live2d:speech-prepare",
   LIVE2D_MOUTH_START: "live2d:mouth-start",
   LIVE2D_MOUTH_STOP: "live2d:mouth-stop",
-  // Opener 主动开口
-  LIVE2D_SHOW_BUBBLE: "live2d:show-bubble",       // 主进程 → 桌宠窗口：显示气泡+播 wav
   LIVE2D_PLAY_ACTION: "live2d:play-action",        // 主进程 → 桌宠窗口：执行动作（motion 或 expression）
   LIVE2D_GET_MAIN_DIAGNOSTICS: "live2d:get-main-diagnostics",
-  OPENER_FEEDBACK: "opener:feedback",             // 渲染端 → 主进程：点气泡反馈
-  OPENER_TEST_FIRE: "opener:test-fire",           // 渲染端 → 主进程：手动测试气泡
-  OPENER_GET_STATUS: "opener:get-status",         // 渲染端 → 主进程：查询主动开口语音包状态
-  OPENER_OPEN_PACK_DIR: "opener:open-pack-dir",   // 渲染端 → 主进程：打开当前实际读取的语音包目录
-  OPENER_OPEN_INSTALL_DOCS: "opener:open-install-docs", // 渲染端 → 主进程：打开本地语音包安装说明
   // embedding model status
   EMBEDDING_GET_STATUS: "embedding:get-status",
   EMBEDDING_DOWNLOAD: "embedding:download",

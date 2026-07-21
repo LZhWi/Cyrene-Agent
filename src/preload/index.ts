@@ -392,11 +392,6 @@ const live2dSpeechApi = {
     ipcRenderer.on(IPC.LIVE2D_MOUTH_STOP, listener);
     return () => ipcRenderer.removeListener(IPC.LIVE2D_MOUTH_STOP, listener);
   },
-  onShowBubble: (callback: (payload: import("../main/opener/opener-types").ShowBubblePayload) => void) => {
-    const listener = (_event: Electron.IpcRendererEvent, payload: import("../main/opener/opener-types").ShowBubblePayload) => callback(payload);
-    ipcRenderer.on(IPC.LIVE2D_SHOW_BUBBLE, listener);
-    return () => ipcRenderer.removeListener(IPC.LIVE2D_SHOW_BUBBLE, listener);
-  },
 };
 contextBridge.exposeInMainWorld("live2dSpeech", live2dSpeechApi);
 
@@ -414,18 +409,6 @@ const live2dDiagnosticsApi = {
   getIpcListenerCounts: () => getLive2DIpcListenerCounts(ipcRenderer),
 };
 contextBridge.exposeInMainWorld("live2dDiagnostics", live2dDiagnosticsApi);
-
-// Opener 主动开口反馈（渲染端 → 主进程）
-const openerApi = {
-  feedback: (payload: { type: "clicked"; sceneId: string; itemId: string }) =>
-    ipcRenderer.send(IPC.OPENER_FEEDBACK, payload),
-  testFire: () => ipcRenderer.invoke(IPC.OPENER_TEST_FIRE),
-  getStatus: () => ipcRenderer.invoke(IPC.OPENER_GET_STATUS),
-  openPackDir: () => ipcRenderer.invoke(IPC.OPENER_OPEN_PACK_DIR),
-  openInstallDocs: () => ipcRenderer.invoke(IPC.OPENER_OPEN_INSTALL_DOCS),
-  openSession: (sessionId: string) => ipcRenderer.invoke(IPC.CHATS_OPEN_IN_CHAT_WINDOW, sessionId),
-};
-contextBridge.exposeInMainWorld("openerBridge", openerApi);
 
 // 聊天会话存储（多对话历史）
 const chatStoreApi = {

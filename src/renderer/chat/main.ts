@@ -2,7 +2,6 @@ import "../ui/base.css";
 import "./chat.css";
 import "../ui/theme";
 import {
-  CHAT_DEFAULT_IDENTITY_LABEL,
   formatChatRelativeTime,
   type ChatSessionMetaUI,
 } from "../../shared/chat-ui";
@@ -591,12 +590,8 @@ function buildRailItem(session: ChatSessionMetaUI): HTMLLIElement {
   timeEl.className = "chat__rail-time";
   timeEl.textContent = formatChatRelativeTime(session.updatedAt);
 
-  const identityEl = document.createElement("span");
-  identityEl.className = "chat__rail-identity";
-  identityEl.textContent = "💼 " + (session.identityId ? session.identityId : CHAT_DEFAULT_IDENTITY_LABEL);
 
   metaEl.appendChild(timeEl);
-  metaEl.appendChild(identityEl);
 
   // 点击列表项 = 本地切换会话（不走跨窗口 IPC，比设置面板还快）
   li.addEventListener("click", async () => {
@@ -1022,7 +1017,7 @@ function buildWeatherCardEl(data: Record<string, unknown>): HTMLElement {
       <div class="w-qitem"><div class="w-qicon">💧</div><div class="w-qlabel">湿度</div><div class="w-qvalue">${humidity}%</div></div>
       <div class="w-qitem"><div class="w-qicon">💨</div><div class="w-qlabel">风力</div><div class="w-qvalue">${windScale}</div></div>
       <div class="w-qitem"><div class="w-qicon">🌧️</div><div class="w-qlabel">降水</div><div class="w-qvalue">${precip}mm</div></div>
-      <div class="w-qitem"><div class="w-qicon">📊</div><div class="w-qlabel">气压</div><div class="w-qvalue">${pressure || "—"}</div></div>
+      <div class="w-qitem"><div class="w-qicon"><svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><title>气压</title><path d="M4 42H44" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><rect x="8" y="28" width="6" height="14" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><rect x="21" y="18" width="6" height="24" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><rect x="34" y="6" width="6" height="36" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg></div><div class="w-qlabel">气压</div><div class="w-qvalue">${pressure || "—"}</div></div>
     </div>
     <button class="w-expand" type="button">查看更多 <span class="w-arrow">▼</span></button>
     <div class="w-details">
@@ -2517,8 +2512,8 @@ interface QuickPreset {
 }
 
 const QUICK_PRESETS: QuickPreset[] = [
-  { id: "chat",     label: "和昔涟聊天", icon: "💬",  mode: "chat" },
-  { id: "schedule", label: "设置定时任务", icon: "⏰", mode: "fill", prompt: "帮我设置一个定时任务：" },
+  { id: "chat",     label: "和昔涟聊天", icon: `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M33 38H22V30H36V22H44V38H39L36 41L33 38Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 6H36V30H17L13 34L9 30H4V6Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 18H20" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M26 18H27" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 18H13" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>`,  mode: "chat" },
+  { id: "schedule", label: "设置定时任务", icon: `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M23.9998 44.3332C34.1251 44.3332 42.3332 36.1251 42.3332 25.9999C42.3332 15.8747 34.1251 7.66656 23.9998 7.66656C13.8746 7.66656 5.6665 15.8747 5.6665 25.9999C5.6665 36.1251 13.8746 44.3332 23.9998 44.3332Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M23.7594 15.3536L23.7582 26.3624L31.5305 34.1347" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9.00001L11 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M44 9.00001L37 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, mode: "fill", prompt: "帮我设置一个定时任务：" },
   { id: "weather",  label: "查看天气",   icon: "🌤️", mode: "fill", prompt: "帮我查一下今天的天气" },
   { id: "document", label: "生成文档",   icon: "📄", mode: "fill", prompt: "帮我生成一份文档：" },
   { id: "email",    label: "发送邮件",   icon: "✉️", mode: "fill", prompt: "帮我发一封邮件：" },
@@ -2536,7 +2531,7 @@ function buildQuickPresets(): void {
     btn.dataset.presetId = preset.id;
     const icon = document.createElement("span");
     icon.className = "chat__preset-icon";
-    icon.textContent = preset.icon;
+    icon.innerHTML = preset.icon;
     const label = document.createElement("span");
     label.className = "chat__preset-label";
     label.textContent = preset.label;
