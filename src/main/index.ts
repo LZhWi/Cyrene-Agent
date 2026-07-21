@@ -140,6 +140,10 @@ import {
 } from "./proactive/proactive-service";
 import { routeProactiveDelivery } from "./proactive/proactive-delivery-routing";
 import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive/proactive-prompt";
+import {
+  createProactiveTrigger,
+  type ProactiveTriggerController,
+} from "./proactive/proactive-trigger";
 import { runProactiveModel } from "./proactive/proactive-model";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/proactive-types";
 import { canCommitProactiveMessage } from "./proactive/proactive-policy";
@@ -1894,6 +1898,9 @@ async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
   ]);
   const state = loadProactiveState();
   const snapshot = getProactiveRuntimeSnapshot();
+  // 用户有效时区：resolver 校验后传给 prompt，禁止未校验的 profile.timezone。
+  const profile = loadUserProfile();
+  const timezone = resolveChatContextTimezone(profile.timezone);
   return buildProactiveMessages({
     basePersona: buildProactivePersonaPrompt(),
     userProfile: profileContext,
@@ -1904,6 +1911,7 @@ async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
     localNow: new Date(snapshot.now),
     idleSec: snapshot.idleSec,
     unansweredCount: state.unansweredCount,
+    timezone,
   });
 }
 
@@ -2034,6 +2042,38 @@ function initializeProactiveChatService(): void {
     proactiveChatService?.invalidate();
   });
   powerMonitor.on("resume", () => { proactiveScreenLocked = false; });
+}
+
+// ── 主动聊天触发器（60s 周期扫描 → evaluateCandidate） ─────────────
+// 闭包持有的 evaluation backoff Map（仅内存，重启后由 policy 持久化冷却接续）
+let proactiveTrigger: ProactiveTriggerController | null = null;
+const proactiveBackoffMap = new Map<string, number>();
+
+function initializeProactiveTrigger(): void {
+  if (proactiveTrigger) return; // 幂等
+  if (!proactiveChatService) {
+    console.warn("[Proactive] trigger skipped: service not initialized");
+    return;
+  }
+  const service = proactiveChatService;
+  proactiveTrigger = createProactiveTrigger({
+    evaluateCandidate: (c) => service.evaluateCandidate(c),
+    getRuntimeSnapshot: getProactiveRuntimeSnapshot,
+    getProactiveState: loadProactiveState,
+    getTimezone: () => resolveChatContextTimezone(loadUserProfile().timezone),
+    // getWeatherContext 第一版不传：未来天气缓存接入后填，函数体无需改
+    getLastEvaluatedAtByScene: () => new Map(proactiveBackoffMap),
+    setLastEvaluatedAtByScene: (next) => {
+      proactiveBackoffMap.clear();
+      for (const [k, v] of next) proactiveBackoffMap.set(k, v);
+    },
+  });
+  proactiveTrigger.start();
+}
+
+function stopProactiveTrigger(): void {
+  proactiveTrigger?.stop();
+  proactiveTrigger = null;
 }
 
 /**
@@ -4239,6 +4279,7 @@ app.whenReady().then(async () => {
   // 聊天会话存储 IPC（chats-store.initialize 会建好 cyrene-chats 目录并加载 index）
   registerChatsIpc();
   initializeProactiveChatService();
+  initializeProactiveTrigger();
 
   // 历史召回工具（recall_history）——让模型能回忆滚出窗口的对话
   registerRecallHistoryTool();
@@ -4699,6 +4740,7 @@ app.on("window-all-closed", () => {});
 app.on("before-quit", () => {
   petWindowMoveController.dispose();
   schedulerEngine?.stop();
+  stopProactiveTrigger();
   flushTokenUsage();
   void shutdownChannels();
 });
