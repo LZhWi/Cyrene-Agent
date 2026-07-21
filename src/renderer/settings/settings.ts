@@ -71,7 +71,7 @@ function showModal (options: { title: string; message: string; icon?: string; co
   var msgEl = _cyModalOverlay.querySelector("#cy-modal-message") as HTMLElement;
   var cancelBtn = _cyModalOverlay.querySelector("#cy-modal-cancel") as HTMLButtonElement;
   var confirmBtn = _cyModalOverlay.querySelector("#cy-modal-confirm") as HTMLButtonElement;
-  iconEl.textContent = options.icon || "📌";
+  iconEl.innerHTML = options.icon || "📌";
   titleEl.textContent = options.title;
   msgEl.textContent = options.message;
   cancelBtn.textContent = options.cancelText || "取消";
@@ -2407,7 +2407,7 @@ async function fireSchedulerTask(id: string): Promise<void> {
 }
 
 async function deleteSchedulerTask(id: string): Promise<void> {
-  const ok = await showModal({ title: "删除定时任务", message: "确定删除这个定时任务吗？", icon: "🗑️", confirmText: "删除" });
+  const ok = await showModal({ title: "删除定时任务", message: "确定删除这个定时任务吗？", icon: '<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-2px"><path fill-rule="evenodd" clip-rule="evenodd" d="M8 15H40L37 44H11L8 15Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M20.002 25.0024V35.0026" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M28.0024 24.9995V34.9972" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 14.9999L28.3242 3L36 15" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>', confirmText: "删除" });
   if (!ok) return;
   const result = await window.cyreneScheduler!.delete(id);
   if (!result.ok) window.alert(result.error ?? "删除失败");
@@ -3535,7 +3535,7 @@ window.settings?.onSwitchSection?.((section) => {
     var msgEl = ov.querySelector("#cy-modal-message") as HTMLElement;
     var cancelBtn = ov.querySelector("#cy-modal-cancel") as HTMLButtonElement;
     var confirmBtn = ov.querySelector("#cy-modal-confirm") as HTMLButtonElement;
-    iconEl.textContent = opts.icon || "📌";
+    iconEl.innerHTML = opts.icon || "📌";
     titleEl.textContent = opts.title;
     msgEl.textContent = opts.message;
     cancelBtn.textContent = opts.cancelText || "取消";
@@ -4041,7 +4041,7 @@ function renderImportedDocs(): void {
         '    <p class="memory-record__body">' + escapeHtml(chunkInfo) + '</p>',
         '    <p class="memory-record__meta">' + escapeHtml(timeInfo) + '</p>',
         '  </div>',
-        '  <button type="button" class="memory-record__delete" data-import-id="' + escapeHtml(importId) + '" data-file-name="' + fileName + '" title="删除此导入文档">🗑️</button>',
+        '  <button type="button" class="memory-record__delete" data-import-id="' + escapeHtml(importId) + '" data-file-name="' + fileName + '" title="删除此导入文档"><svg width="16" height="16" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-2px"><path fill-rule="evenodd" clip-rule="evenodd" d="M8 15H40L37 44H11L8 15Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M20.002 25.0024V35.0026" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M28.0024 24.9995V34.9972" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 14.9999L28.3242 3L36 15" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></button>',
         '</article>',
       ].join("\n");
     })
@@ -4432,7 +4432,7 @@ function buildChatSessionItem(session: ChatSessionMetaUI): HTMLLIElement {
   deleteBtn.className = "chat-sessions__delete";
   deleteBtn.title = "删除会话";
   deleteBtn.setAttribute("aria-label", "删除会话");
-  deleteBtn.textContent = "🗑️";
+  deleteBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path fill-rule="evenodd" clip-rule="evenodd" d="M8 15H40L37 44H11L8 15Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M20.002 25.0024V35.0026" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M28.0024 24.9995V34.9972" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 14.9999L28.3242 3L36 15" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
 
   const renameBtn = document.createElement("button");
   renameBtn.type = "button";

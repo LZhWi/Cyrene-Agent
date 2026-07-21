@@ -2378,6 +2378,11 @@ body {
   box-shadow: 0 0 12px rgba(236, 72, 153, 0.35);
 }
 
+/* 白调主题：选中态文字改为深色，避免白字看不清 */
+[data-ui-theme="pearl-white"] .token-range__btn.is-active {
+  color: #1d1d1f;
+}
+
 /* Hero 区：总消耗(左大字) + 请求数(右上小字) */
 .token-hero {
   display: flex;
