@@ -247,6 +247,11 @@ interface TodoState {
   updatedAt: number;
 }
 
+interface UserApi {
+  getAvatar: () => Promise<string | null>;
+  onAvatarChanged: (callback: () => void) => () => void;
+}
+
 declare global {
   interface Window {
     chat?: ChatApi;
@@ -255,6 +260,7 @@ declare global {
     modelConfig?: ModelConfigApi;
     choice?: ChoiceApi;
     music?: ChatMusicApi;
+    user?: UserApi;
   }
 }
 
@@ -292,16 +298,31 @@ const AVATAR_SRC: Record<Role, string> = {
   user: "",
 };
 
-// Load user avatar from profile
-(async () => {
+// Load user avatar from profile and keep it in sync when changed in settings.
+async function loadUserAvatar(): Promise<boolean> {
   try {
-    const dataUrl = await (window as any).user?.getAvatar();
+    const dataUrl = await window.user?.getAvatar();
     if (dataUrl) {
       AVATAR_SRC.user = dataUrl;
-      render();
+      return true;
     }
   } catch { /* ignore */ }
+  return false;
+}
+
+(async () => {
+  if (await loadUserAvatar()) {
+    render();
+  }
 })();
+
+window.user?.onAvatarChanged(() => {
+  void (async () => {
+    if (await loadUserAvatar()) {
+      render();
+    }
+  })();
+});
 
 const BUILT_IN_STICKER_SRC: Record<string, string> = {
   playful: "/stickers/playful.png",

@@ -145,6 +145,7 @@ export const IPC = {
   USER_SAVE_PROFILE: "user:save-profile",
   USER_UPLOAD_AVATAR: "user:upload-avatar",
   USER_GET_AVATAR: "user:get-avatar",
+  USER_AVATAR_CHANGED: "user:avatar-changed",
 
   // memory panel
   MEMORY_PANEL_GET_DATA: "memory-panel:get-data",

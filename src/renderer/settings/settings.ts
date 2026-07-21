@@ -323,6 +323,7 @@ interface UserApi {
   saveProfile: (profile: Record<string, unknown>) => Promise<unknown>;
   uploadAvatar: () => Promise<{ avatarPath: string } | null>;
   getAvatar: () => Promise<string | null>;
+  onAvatarChanged: (callback: () => void) => () => void;
 }
 
 interface MemoryPanelPayload {

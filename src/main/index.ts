@@ -3639,6 +3639,7 @@ ipcMain.handle(IPC.USER_UPLOAD_AVATAR, async () => {
   fs.mkdirSync(path.dirname(avatarPath), { recursive: true });
   fs.copyFileSync(srcPath, avatarPath);
   const profile = saveUserProfile({ avatarPath });
+  broadcastToAuxWindows(IPC.USER_AVATAR_CHANGED, null);
   return { avatarPath, profile };
 });
 

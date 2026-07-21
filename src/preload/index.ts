@@ -360,6 +360,11 @@ const userApi = {
   saveProfile: (profile: unknown) => ipcRenderer.invoke(IPC.USER_SAVE_PROFILE, profile),
   uploadAvatar: () => ipcRenderer.invoke(IPC.USER_UPLOAD_AVATAR),
   getAvatar: () => ipcRenderer.invoke(IPC.USER_GET_AVATAR),
+  onAvatarChanged: (callback: () => void) => {
+    const listener = (_event: Electron.IpcRendererEvent) => callback();
+    ipcRenderer.on(IPC.USER_AVATAR_CHANGED, listener);
+    return () => ipcRenderer.off(IPC.USER_AVATAR_CHANGED, listener);
+  },
 };
 
 const memoryPanelApi = {
