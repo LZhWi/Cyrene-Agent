@@ -1182,3 +1182,19 @@
   border-color: var(--rb-pink-500) !important;
   box-shadow: 0 0 0 3px var(--rb-pink-100) !important;
 }
+
+/* ===== Markdown render variables (light theme overrides) ===== */
+[data-ui-theme="pearl-white"] {
+  --md-code-bg:           rgba(0, 0, 0, 0.03);
+  --md-code-border:       var(--rb-pink-200);
+  --md-inline-code-bg:    rgba(236, 72, 153, 0.08);
+  --md-inline-code-text:  #1d1d1f;
+  --md-quote-border:      var(--rb-pink-400);
+  --md-quote-bg:          rgba(236, 72, 153, 0.04);
+  --md-table-border:      var(--rb-pink-200);
+  --md-link-color:        var(--rb-pink-600);
+  --md-link-hover:        var(--rb-pink-700);
+  --md-copy-text:         var(--rb-text-muted);
+  --md-copy-bg:           rgba(0, 0, 0, 0.03);
+  --md-copy-border:       var(--rb-border-soft);
+}

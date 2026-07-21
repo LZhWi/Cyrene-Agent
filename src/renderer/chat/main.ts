@@ -1,6 +1,7 @@
 import "../ui/base.css";
 import "./chat.css";
 import "../ui/theme";
+import { initMarkdownRenderer, initCodeBlockController, renderMarkdown } from "./markdown/init";
 import {
   formatChatRelativeTime,
   type ChatSessionMetaUI,
@@ -266,6 +267,11 @@ declare global {
 }
 
 const messagesEl = document.getElementById("messages") as HTMLElement;
+
+// 初始化 Markdown 渲染系统（Shiki 异步启动 + 复制按钮事件委托）
+initMarkdownRenderer();
+initCodeBlockController(messagesEl);
+
 const formEl = document.getElementById("composer") as HTMLFormElement;
 const inputEl = document.getElementById("input") as HTMLTextAreaElement;
 const sendBtn = document.getElementById("send") as HTMLButtonElement;
@@ -1375,7 +1381,22 @@ function render(preserveScroll = false): void {
       });
       for (const segment of segments) {
         const text = segment.trim();
-        if (text || m.transient) bubbles.push(createMessageBubble(text));
+        if (text || m.transient) {
+          const bubble = createMessageBubble();
+          if (m.transient) {
+            // 流式期：纯文本，不跑 Markdown
+            bubble.textContent = text;
+          } else {
+            // 终态：Markdown 渲染
+            const result = renderMarkdown(text);
+            if (result.mode === "html") {
+              bubble.innerHTML = result.content;
+            } else {
+              bubble.textContent = result.content;
+            }
+          }
+          bubbles.push(bubble);
+        }
       }
     }
 
