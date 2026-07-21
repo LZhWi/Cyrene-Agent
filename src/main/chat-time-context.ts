@@ -33,16 +33,21 @@ function isValidTimezone(timezone: string): boolean {
   }
 }
 
-function systemTimezone(): string {
-  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return timezone && isValidTimezone(timezone) ? timezone : "UTC";
-}
+/**
+ * 默认时区：用户资料缺失或非法时使用。需求：用户时区 → Asia/Shanghai。
+ * 注意：所有"模型可见时间"的格式化位置都必须先调 `resolveChatContextTimezone`，
+ * 禁止直接把未校验的 profile.timezone 喂 Intl，避免非法 IANA 值触发 RangeError。
+ */
+export const DEFAULT_CHAT_CONTEXT_TIMEZONE = "Asia/Shanghai";
 
-export function resolveChatContextTimezone(profileTimezone?: string, fallbackTimezone = systemTimezone()): string {
+export function resolveChatContextTimezone(
+  profileTimezone?: string,
+  fallbackTimezone = DEFAULT_CHAT_CONTEXT_TIMEZONE,
+): string {
   const profile = profileTimezone?.trim();
   if (profile && isValidTimezone(profile)) return profile;
   const fallback = fallbackTimezone.trim();
-  return fallback && isValidTimezone(fallback) ? fallback : "UTC";
+  return fallback && isValidTimezone(fallback) ? fallback : DEFAULT_CHAT_CONTEXT_TIMEZONE;
 }
 
 export function normalizeChatMessagesWithTime(input: unknown): ChatContextMessage[] {

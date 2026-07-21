@@ -718,7 +718,11 @@
                   <label for="user-default-city">默认城市</label>
                   <input type="text" id="user-default-city" placeholder="例如：上海、北京、广州（用于天气等）" />
                 </div>
-                <p class="user-field-hint">这些信息会告诉昔涟，让她知道怎么称呼你、你在哪。默认城市用于天气等需要定位的工具。</p>
+                <div class="tts-field">
+                  <label for="user-timezone">时区</label>
+                  <select id="user-timezone" data-timezone-select></select>
+                </div>
+                <p class="user-field-hint">这些信息会告诉昔涟，让她知道怎么称呼你、你在哪。默认城市用于天气等需要定位的工具；时区仅用于时间计算，不代表所在城市。</p>
               </div>
             </div>
           </div>

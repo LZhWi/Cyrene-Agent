@@ -92,7 +92,7 @@ import { synthesize as customCloudSynthesize } from "./tts/custom-cloud-engine";
 import { synthesize as mimoSynthesize } from "./tts/mimo-engine";
 import { synthesizeByEngine } from "./tts/tts-dispatcher";
 import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
-import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegateSettings } from "./orchestrator/built-in-tools";
+import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegateSettings, setUserTimezoneConfig } from "./orchestrator/built-in-tools";
 import { registerRecallHistoryTool } from "./orchestrator/history-tools";
 import { registerDocumentTools } from "./orchestrator/document-tools";
 import { registerLifeTools, setTranslateConfig } from "./orchestrator/life-tools";
@@ -2473,6 +2473,9 @@ function createWindow(): void {
     () => loadGeneralSettings().weatherEnabled,
   );
 
+  // 注入用户时区 getter：工具侧通过 currentUserTimezone() 统一拿用户时区（缺/非法回退 Asia/Shanghai）
+  setUserTimezoneConfig(() => loadUserProfile().timezone);
+
   // 注入用户选择卡片回调：工具调 ask_user_choice 时发 Custom 事件给聊天窗口
   setChoiceCardSender((cardData) => {
     if (chatWindow && !chatWindow.isDestroyed()) {
@@ -2543,9 +2546,10 @@ function createWindow(): void {
     async (userText: string) => {
       const messages = [{ role: "user" as const, content: userText }];
 
-      // ① 时间日期
+      // ① 时间日期（用用户时区，禁止直接喂未校验的 profile.timezone 给 Intl）
       const now = new Date();
-      const timeStr = `当前时间：${now.toLocaleDateString("zh-CN")} ${now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`;
+      const userTz = resolveChatContextTimezone(loadUserProfile().timezone);
+      const timeStr = `当前时间：${now.toLocaleDateString("zh-CN", { timeZone: userTz })} ${now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: userTz })}`;
 
       // ② 常驻上下文（世界书 + L0/L1 画像）
       let alwaysOnContext = "";

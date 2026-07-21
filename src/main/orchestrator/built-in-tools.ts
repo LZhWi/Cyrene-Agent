@@ -6,8 +6,25 @@ import { toolRegistry } from "./tool-registry";
 import { addMcpServer } from "./mcp-manager";
 import { sendToLive2DWindow } from "../index";
 import { createPlayLive2DActionTool } from "./tools/play-live2d-action";
+import { resolveChatContextTimezone } from "../chat-time-context";
 
 const LOG_PREFIX = "[BuiltinTools]";
+
+/**
+ * 工具侧统一 timezone 注入：index.ts 启动时调 setUserTimezoneConfig。
+ * 任何工具要给模型格式化时间，统一走 `currentUserTimezone()`，禁止各自直接读 profile/Intl。
+ */
+let userTimezoneGetter: (() => string | undefined) | null = null;
+
+export function setUserTimezoneConfig(timezoneGetter: () => string | undefined): void {
+  userTimezoneGetter = timezoneGetter;
+}
+
+/** 当前用户的有效时区（缺/非法时回退 Asia/Shanghai）。统一封装，所有工具复用。 */
+export function currentUserTimezone(): string {
+  const raw = userTimezoneGetter?.();
+  return resolveChatContextTimezone(raw);
+}
 
 // ── 工具 1：fetch_url ─────────────────────────────────────
 // 拉一个 URL 的纯文本 / Markdown 形式的 body，给 agent 读 README 用
@@ -524,7 +541,7 @@ async function omFetchWeather(city: string): Promise<string> {
         text: wmoText, icon,
         humidity: c.relative_humidity_2m, windDir, windScale: `${c.wind_speed_10m}km/h`,
         precip: c.precipitation, pressure: Math.round(c.surface_pressure),
-        source: "Open-Meteo", updateTime: new Date().toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
+        source: "Open-Meteo", updateTime: new Date().toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: currentUserTimezone() }),
       });
     }
 
@@ -653,6 +670,18 @@ async function executeWeather(args: Record<string, unknown>): Promise<string> {
   if (!city) {
     city = (weatherCityGetter?.() ?? "").trim();
   }
+  // 城市解析日志：用于确认模型是否仍自行传入"上海"。
+  // 脱敏：仅记城市名（公开地理名）+ 来源标签；不带用户 ID/任何凭证。
+  const argsCityRaw = String(args.city ?? "").trim();
+  const defaultCityRaw = (weatherCityGetter?.() ?? "").trim();
+  const source2: "arg" | "default" | "none" = argsCityRaw
+    ? "arg"
+    : defaultCityRaw
+      ? "default"
+      : "none";
+  console.log(
+    `[Weather] city resolution: argsCity=${argsCityRaw || "(empty)"} defaultCity=${defaultCityRaw || "(empty)"} final=${city || "(empty)"} source=${source2}`,
+  );
   if (!city) {
     return "[提示] 没有指定城市，也没设置默认城市。请告诉用户：在 设置 → 我的信息 填默认城市，或直接说出要查的城市名。";
   }

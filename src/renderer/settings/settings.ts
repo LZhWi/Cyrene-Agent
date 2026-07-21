@@ -19,6 +19,7 @@ import {
   type SegmentedOutputMode,
 } from "../../shared/preferences";
 import { isProactiveDeliveryTargetSelectable } from "../../shared/proactive-delivery";
+import { TIMEZONE_OPTIONS, FALLBACK_TIMEZONE, normalizeTimezoneOptionValue } from "./timezone-options";
 import { normalizeUiTheme, type UiTheme } from "../../shared/ui-theme";
 import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-font";
 import { normalizeUiIcon, type UiIcon } from "../../shared/ui-icon";
@@ -3646,6 +3647,7 @@ const userDefaultCityInput = document.getElementById("user-default-city") as HTM
 const userNicknameInput = document.getElementById("user-nickname") as HTMLInputElement | null;
 const userCallPrefInput = document.getElementById("user-call-pref") as HTMLInputElement | null;
 const userBirthdayInput = document.getElementById("user-birthday") as HTMLInputElement | null;
+const userTimezoneSelect = document.getElementById("user-timezone") as HTMLSelectElement | null;
 const memoryL0NameInput = document.getElementById("memory-l0-name") as HTMLInputElement | null;
 const memoryL0OccupationInput = document.getElementById("memory-l0-occupation") as HTMLInputElement | null;
 const memoryL0InterestsInput = document.getElementById("memory-l0-interests") as HTMLInputElement | null;
@@ -3808,13 +3810,15 @@ async function loadUserProfile(): Promise<void> {
     const avatarDataUrl = await window.user?.getAvatar();
     if (avatarDataUrl) showAvatar(avatarDataUrl);
     if (uploadAvatarBtn) uploadAvatarBtn.disabled = false;
-    // 加载用户字段（昵称/称呼偏好/生日/默认城市）
+    // 加载用户字段（昵称/称呼偏好/生日/默认城市/时区）
     const profile = await window.user?.getProfile();
     if (profile) {
       if (userNicknameInput) userNicknameInput.value = String(profile.nickname ?? "");
       if (userCallPrefInput) userCallPrefInput.value = String(profile.callPreference ?? "");
       if (userBirthdayInput) userBirthdayInput.value = String(profile.birthday ?? "");
       if (userDefaultCityInput) userDefaultCityInput.value = String(profile.defaultCity ?? "");
+      // 时区：白名单校验，空/非法/不在白名单都回退 FALLBACK_TIMEZONE，不直接用 ?? 兜底
+      if (userTimezoneSelect) userTimezoneSelect.value = normalizeTimezoneOptionValue(profile.timezone);
     }
   } catch {
     console.warn("[settings] load user profile failed");
@@ -3839,6 +3843,26 @@ if (userDefaultCityInput) {
   };
   userDefaultCityInput.addEventListener("change", saveCity);
   userDefaultCityInput.addEventListener("blur", saveCity);
+}
+
+// 时区：白名单填充 options；保存只接受白名单 value（select 只能选白名单项，天然受限）
+if (userTimezoneSelect) {
+  for (const opt of TIMEZONE_OPTIONS) {
+    const o = document.createElement("option");
+    o.value = opt.value;
+    o.textContent = opt.label;
+    userTimezoneSelect.appendChild(o);
+  }
+  userTimezoneSelect.addEventListener("change", () => {
+    const raw = userTimezoneSelect.value;
+    // 防御性二次校验：即便有人手动改 DOM，保存路径也只放行白名单 value
+    const safe = normalizeTimezoneOptionValue(raw);
+    if (safe !== raw) {
+      userTimezoneSelect.value = safe;
+      return; // 不发保存请求，等用户重新选
+    }
+    void window.user?.saveProfile({ timezone: safe });
+  });
 }
 
 if (uploadAvatarBtn) {
