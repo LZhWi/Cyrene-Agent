@@ -1197,4 +1197,5 @@
   --md-copy-text:         var(--rb-text-muted);
   --md-copy-bg:           rgba(0, 0, 0, 0.03);
   --md-copy-border:       var(--rb-border-soft);
+  --md-katex-text:        var(--rb-text-default);
 }

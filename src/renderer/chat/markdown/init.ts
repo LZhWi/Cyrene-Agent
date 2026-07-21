@@ -13,6 +13,7 @@ import { initHighlighter, isHighlighterReady } from "./code-highlighter";
 export { initHighlighter, isHighlighterReady };
 
 import "./markdown.css";
+import "katex/dist/katex.min.css";
 
 /**
  * 初始化 Markdown 渲染系统：

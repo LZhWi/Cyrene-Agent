@@ -4,13 +4,14 @@
  * 数据流：
  *   raw markdown
  *   -> markdown-it 解析（html:false, linkify, breaks:false）
+ *   -> KaTeX 插件处理公式（行内 $...$ / 块级 $$...$$）
  *   -> fenced code 自定义 renderer -> Shiki codeToHtml
- *   -> KaTeX 插件处理公式（Phase 2）
  *   -> DOMPurify 净化
  *   -> 返回 MarkdownRenderResult
  *
  * 降级策略：
  *   - 单个 Shiki 代码块失败：只降级该代码块，不影响整条消息
+ *   - KaTeX 解析失败：显示原始 LaTeX 文本（throwOnError:false），不丢失内容
  *   - markdown-it 整体异常：返回 { mode:"text", content: raw }
  *   - DOMPurify 整体异常：返回 { mode:"text", content: raw }
  *
@@ -21,6 +22,7 @@
  */
 
 import MarkdownIt from "markdown-it";
+import { katex as katexPlugin } from "@mdit/plugin-katex";
 import DOMPurify from "dompurify";
 import { codeToHtml } from "./code-highlighter";
 import { normalizeLang, getLanguageDisplayName } from "./language-normalizer";
@@ -34,6 +36,10 @@ const md: MarkdownIt = new MarkdownIt({
   breaks: false,
   typographer: false,
 });
+
+// KaTeX 插件：处理行内 $...$ 和块级 $$...$$ 公式
+// throwOnError:false -> 无效 LaTeX 显示原始文本，不崩溃
+md.use(katexPlugin, { throwOnError: false });
 
 // ── 链接安全：自定义 link_open renderer ────────────────────
 

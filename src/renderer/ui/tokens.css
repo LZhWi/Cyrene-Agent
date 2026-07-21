@@ -134,6 +134,7 @@
   --md-copy-text:         var(--rb-text-muted);
   --md-copy-bg:           rgba(255, 255, 255, 0.06);
   --md-copy-border:       var(--rb-border-soft);
+  --md-katex-text:        var(--rb-text-default);
 
   /* ===== Weather card (light pink surface on top of dark UI) ===== */
   --rb-weather-bg:        #F9CBDF;
