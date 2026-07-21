@@ -129,38 +129,36 @@
             <div class="vision-config-heading">
               <span class="vision-config-icon"><svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><title>视觉模型</title><path d="M44 21C44 19.8954 43.1046 19 42 19C40.8954 19 40 19.8954 40 21H44ZM23 8C24.1046 8 25 7.10457 25 6C25 4.89543 24.1046 4 23 4V8ZM39 40H9V44H39V40ZM8 39V9H4V39H8ZM40 21V39H44V21H40ZM9 8H23V4H9V8ZM9 40C8.44772 40 8 39.5523 8 39H4C4 41.7614 6.23857 44 9 44V40ZM39 44C41.7614 44 44 41.7614 44 39H40C40 39.5523 39.5523 40 39 40V44ZM8 9C8 8.44772 8.44771 8 9 8V4C6.23858 4 4 6.23857 4 9H8Z" fill="currentColor"/><path d="M6 35L16.6931 25.198C17.4389 24.5143 18.5779 24.4953 19.3461 25.1538L32 36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M28 31L32.7735 26.2265C33.4772 25.5228 34.5914 25.4436 35.3877 26.0408L42 31" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M33.3 6C31.4775 6 30 7.43473 30 9.20455C30 12.4091 33.9 15.3223 36 16C38.1 15.3223 42 12.4091 42 9.20455C42 7.43473 40.5225 6 38.7 6C37.5839 6 36.5972 6.53804 36 7.3616C35.4028 6.53804 34.4161 6 33.3 6Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
               <div>
-                <h2>视觉模型（可选）</h2>
+                <h2>视觉模型</h2>
                 <p>配置后昔涟能看懂图片。留空则遇到图片会诚实告知看不了。</p>
               </div>
+              <label class="vision-multimodal-row">
+                <span>模型是否为多模态模型</span>
+                <span class="switch"><input id="multimodal-toggle" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
             </div>
 
-            <div class="vision-sync-row">
-              <span class="field-label">配置方式</span>
-              <div class="option-blocks option-blocks--wide" id="vision-sync-blocks" role="radiogroup" aria-label="视觉模型配置方式">
-                <button type="button" class="option-block is-active" data-vision-sync="main" aria-pressed="true">与主聊天模型相同</button>
-                <button type="button" class="option-block" data-vision-sync="independent" aria-pressed="false">独立配置</button>
+            <div id="vision-fields-wrap">
+              <div class="form-grid vision-fields">
+                <label class="field field--full">
+                  <span>Base URL</span>
+                  <input id="vision-base-url" type="url" placeholder="https://api.openai.com/v1" autocomplete="off" />
+                </label>
+                <label class="field">
+                  <span>API Key</span>
+                  <input id="vision-api-key" type="password" placeholder="sk-..." autocomplete="off" />
+                </label>
+                <label class="field">
+                  <span>视觉型号</span>
+                  <input id="vision-model" type="text" placeholder="gpt-4o / glm-5v-turbo / qwen-vl-max" list="vision-model-suggestions" autocomplete="off" />
+                  <datalist id="vision-model-suggestions"></datalist>
+                </label>
               </div>
-            </div>
+              <p class="vision-hint">ⓘ 该模型需支持 OpenAI 兼容的 /chat/completions 接口及 image_url 多模态能力</p>
 
-            <div class="form-grid vision-fields">
-              <label class="field field--full">
-                <span>Base URL</span>
-                <input id="vision-base-url" type="url" placeholder="https://api.openai.com/v1" autocomplete="off" />
-              </label>
-              <label class="field">
-                <span>API Key</span>
-                <input id="vision-api-key" type="password" placeholder="sk-..." autocomplete="off" />
-              </label>
-              <label class="field">
-                <span>视觉型号</span>
-                <input id="vision-model" type="text" placeholder="gpt-4o / glm-5v-turbo / qwen-vl-max" list="vision-model-suggestions" autocomplete="off" />
-                <datalist id="vision-model-suggestions"></datalist>
-              </label>
+              <button type="button" class="save-btn save-btn--ghost" id="test-vision-btn">测试视觉模型</button>
+              <div class="save-status" id="vision-test-status"></div>
             </div>
-            <p class="vision-hint">ⓘ 该模型需支持 OpenAI 兼容的 /chat/completions 接口及 image_url 多模态能力</p>
-
-            <button type="button" class="save-btn save-btn--ghost" id="test-vision-btn">测试视觉模型</button>
-            <div class="save-status" id="vision-test-status"></div>
           </div>
 
           <div class="form-actions">

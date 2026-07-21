@@ -438,11 +438,12 @@ interface ModelSettings {
   embeddingModel: "minilm" | "bgem3";
   // 视觉模型配置（可选）。undefined 或未启用 = 不支持看图，read_image 诚实拒绝。
   vision?: VisionModelConfig;
+  /** 主模型是否多模态。true 时图片直发主模型（direct），vision 配置保留但忽略。 */
+  multimodal: boolean;
 }
 
-/** 视觉模型配置。syncWithMain=true 时三字段不落盘，运行时强制从主配置读。 */
+/** 视觉模型配置（独立视觉模型，非多模态直发场景）。全空 = 未启用。 */
 interface VisionModelConfig {
-  syncWithMain: boolean;
   baseUrl: string;
   apiKey: string;
   model: string;
@@ -696,6 +697,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   stickerSimilarityThreshold: 0.55,
   rerankerMode: "light",
   embeddingModel: "minilm",
+  multimodal: false,
 };
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
@@ -912,20 +914,15 @@ function normalizeProviderProfile(input: Partial<ProviderProfile> | null | undef
   };
 }
 
-/** 清洗视觉模型配置。syncWithMain=true 时三字段不保留（运行时从主配置读）。 */
+/** 清洗视觉模型配置。三字段全空 = 未启用，返回 undefined。 */
 function normalizeVisionConfig(input: Partial<VisionModelConfig> | undefined): VisionModelConfig | undefined {
   if (!input || typeof input !== "object") return undefined;
-  const syncWithMain = input.syncWithMain === true;
-  if (syncWithMain) {
-    // syncWithMain=true：强制忽略三字段（即便手动编辑配置文件写了也忽略），运行时从主配置读
-    return { syncWithMain: true, baseUrl: "", apiKey: "", model: "" };
-  }
   const baseUrl = typeof input.baseUrl === "string" ? input.baseUrl.trim() : "";
   const apiKey = typeof input.apiKey === "string" ? input.apiKey.trim() : "";
   const model = typeof input.model === "string" ? input.model.trim() : "";
   // 三项全空 = 未启用
   if (!baseUrl && !apiKey && !model) return undefined;
-  return { syncWithMain: false, baseUrl, apiKey, model };
+  return { baseUrl, apiKey, model };
 }
 
 function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined): ModelSettings {
@@ -967,6 +964,13 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
   // 顶层镜像：用 perProvider[provider] 展开
   const profile = perProvider[provider];
 
+  // 迁移旧配置：vision.syncWithMain === true -> multimodal: true
+  let multimodal = input?.multimodal === true;
+  const rawVision = input?.vision as Partial<VisionModelConfig> & { syncWithMain?: boolean } | undefined;
+  if (rawVision && rawVision.syncWithMain === true) {
+    multimodal = true;
+  }
+
   return {
     mode,
     provider,
@@ -985,7 +989,8 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
       : 0.55,
     rerankerMode: input?.rerankerMode === "standard" || input?.rerankerMode === "none" ? input.rerankerMode : "light",
     embeddingModel: input?.embeddingModel === "bgem3" ? "bgem3" : "minilm",
-    vision: normalizeVisionConfig(input?.vision),
+    vision: normalizeVisionConfig(rawVision),
+    multimodal,
   };
 }
 
@@ -1008,26 +1013,21 @@ function loadModelSettings(): ModelSettings {
  * syncWithMain=true 时：从主配置读 baseUrl/key/model，并检查主模型 supportsVision——
  * 若主模型非视觉，返回 null（避免把非视觉模型当视觉模型硬调导致运行时错误让用户困惑）。
  */
+/**
+ * 运行时解析视觉配置。
+ * multimodal=true：主模型本身支持视觉，返回主模型配置（让 read_image 等工具可用）。
+ * multimodal=false：返回独立视觉模型配置（三字段齐全才有效），否则 null。
+ */
 export function loadVisionConfig(): VisionConfig | null {
   const settings = loadModelSettings();
-  const v = settings.vision;
-  if (!v) return null;
 
-  if (v.syncWithMain) {
-    // 从主配置读
-    const cap = getCapability(settings.provider);
-    if (!cap?.supportsVision) {
-      console.warn("[Vision] syncWithMain=true 但主模型不支持视觉，视为未启用");
-      return null;
-    }
+  if (settings.multimodal) {
     if (!settings.apiKey || !settings.model) return null;
-    // 视觉 baseUrl：优先用 visionBaseUrl（主配走 Anthropic 入口时视觉需走 OpenAI 入口），
-    // 没标就用主配置 baseUrl。这样用户勾"同步"就能用，不用手动改 URL。
-    const visionBaseUrl = cap.visionBaseUrl || settings.baseUrl;
-    return { baseUrl: visionBaseUrl, apiKey: settings.apiKey, model: settings.model };
+    return { baseUrl: settings.baseUrl, apiKey: settings.apiKey, model: settings.model };
   }
 
-  // 独立配置
+  const v = settings.vision;
+  if (!v) return null;
   if (!v.baseUrl || !v.apiKey || !v.model) return null;
   return { baseUrl: v.baseUrl, apiKey: v.apiKey, model: v.model };
 }
@@ -3273,11 +3273,7 @@ ipcMain.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {
 ipcMain.handle(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, () => {
   const settings = loadModelSettings();
   return decideImageSendStrategy({
-    provider: settings.provider,
-    baseUrl: settings.baseUrl,
-    model: settings.model,
-    apiKey: settings.apiKey,
-    explicitTransport: settings.explicitTransport,
+    multimodal: settings.multimodal,
     vision: loadVisionConfig(),
   });
 });
@@ -4394,11 +4390,7 @@ app.whenReady().then(async () => {
     // 把 IncomingMessage 转成 AguiRunInput，调 CyreneAgent
     const channelModelSettings = loadModelSettings();
     const imageSendStrategy = decideImageSendStrategy({
-      provider: channelModelSettings.provider,
-      baseUrl: channelModelSettings.baseUrl,
-      model: channelModelSettings.model,
-      apiKey: channelModelSettings.apiKey,
-      explicitTransport: channelModelSettings.explicitTransport,
+      multimodal: channelModelSettings.multimodal,
       vision: loadVisionConfig(),
     });
     const attachmentInputs = await buildChannelAttachmentInputs(msg, {

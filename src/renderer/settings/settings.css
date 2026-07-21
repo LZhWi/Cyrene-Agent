@@ -1905,30 +1905,29 @@ body {
 .vision-config-icon { font-size: 24px; }
 .vision-config-heading h2 { margin: 0 0 4px; font-size: 16px; }
 .vision-config-heading p { margin: 0; font-size: 12px; opacity: 0.7; }
-.vision-sync-row {
+
+/* 多模态开关行 */
+.vision-multimodal-row {
   display: flex;
   align-items: center;
-  gap: 16px;
-  margin-bottom: 16px;
-}
-.vision-sync-row .field-label {
-  font: var(--rb-text-small-em);
-  color: var(--rb-text-muted);
+  gap: 8px;
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--rb-text-default);
   white-space: nowrap;
+  cursor: pointer;
 }
-.vision-sync-row .option-blocks {
-  flex: 1;
-  grid-template-columns: repeat(2, minmax(140px, 1fr));
-  min-width: 0;
-}
+
 .vision-hint {
   font-size: 11px;
   opacity: 0.5;
   margin: 8px 0 12px;
 }
-.vision-fields.is-locked input {
-  opacity: 0.5;
-  pointer-events: none;
+
+/* 多模态开关 ON 时隐藏视觉配置区 */
+#vision-fields-wrap.is-hidden {
+  display: none;
 }
 
 /* Base URL 重置按钮 */

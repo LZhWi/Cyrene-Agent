@@ -199,11 +199,11 @@ interface ModelSettings {
   stickerSize: "small" | "standard" | "large";
   stickerSimilarityThreshold: number;
   vision?: {
-    syncWithMain: boolean;
     baseUrl: string;
     apiKey: string;
     model: string;
   };
+  multimodal: boolean;
 }
 
 type ScheduleConfig =
@@ -664,14 +664,11 @@ const testConnectionBtn = document.getElementById("test-connection-btn") as HTML
 const transportSelect = document.getElementById("transport-select") as HTMLSelectElement;
 
 // 视觉模型配置区元素
-// 同步主模型改为胶囊按钮组：[与主聊天模型相同] / [独立配置]
-const visionSyncBlocks = document.getElementById("vision-sync-blocks") as HTMLElement;
-const visionSyncMainBtn = visionSyncBlocks.querySelector('[data-vision-sync="main"]') as HTMLButtonElement;
-const visionSyncIndepBtn = visionSyncBlocks.querySelector('[data-vision-sync="independent"]') as HTMLButtonElement;
+const multimodalToggle = document.getElementById("multimodal-toggle") as HTMLInputElement;
 const visionBaseUrlInput = document.getElementById("vision-base-url") as HTMLInputElement;
 const visionApiKeyInput = document.getElementById("vision-api-key") as HTMLInputElement;
 const visionModelInput = document.getElementById("vision-model") as HTMLInputElement;
-const visionFieldsWrap = document.querySelector(".vision-fields") as HTMLElement;
+const visionFieldsWrap = document.getElementById("vision-fields-wrap") as HTMLElement;
 const testVisionBtn = document.getElementById("test-vision-btn") as HTMLButtonElement;
 const visionTestStatus = document.getElementById("vision-test-status") as HTMLElement;
 
@@ -1020,35 +1017,10 @@ function getCurrentModelValue(): string {
   return modelInput.value;
 }
 
-/**
- * 视觉同步 UI（胶囊按钮组）—— 纯 UI 状态控制，不修改输入框值。
- *
- * 三种情况：
- * 1. independentVision=true（preset 强制独立配置）：
- *    用真实 disabled 属性禁用"与主聊天模型相同"按钮；视觉框不锁（独立 = 可编辑）。
- *    直接 return，不读分支前缓存的 synced，避免重新给视觉框加 is-locked。
- * 2. 普通 provider，synced=true：视觉框加 is-locked 样式（仅 UI，不动 input.value）
- * 3. 普通 provider，synced=false：视觉框解锁
- *
- * 输入框的初值由 applyPreset 在切厂商时一次性写入，本函数不再覆盖。
- */
-function applyVisionSyncUI(): void {
-  const preset = findPreset(activeProvider);
-
-  if (preset?.independentVision) {
-    visionSyncMainBtn.disabled = true;
-    setVisionSyncState(false);
-    visionFieldsWrap.classList.remove("is-locked");
-    return;
-  }
-
-  visionSyncMainBtn.disabled = false;
-  const synced = visionSyncMainBtn.classList.contains("is-active");
-  if (synced) {
-    visionFieldsWrap.classList.add("is-locked");
-  } else {
-    visionFieldsWrap.classList.remove("is-locked");
-  }
+/** 多模态开关 UI：ON 时隐藏视觉配置区，OFF 时显示。不清空输入框值。 */
+function applyMultimodalUI(): void {
+  const on = multimodalToggle.checked;
+  visionFieldsWrap.classList.toggle("is-hidden", on);
 }
 
 /** 填充视觉模型输入框的 datalist 候选。仅渲染候选，不修改 visionModelInput.value。 */
@@ -1063,14 +1035,6 @@ function fillVisionModelOptions(preset: ModelPreset): void {
   }
 }
 
-/** 切换视觉同步胶囊按钮的激活态。synced=true 激活"与主相同"，false 激活"独立配置"。 */
-function setVisionSyncState(synced: boolean): void {
-  visionSyncMainBtn.classList.toggle("is-active", synced);
-  visionSyncMainBtn.setAttribute("aria-pressed", String(synced));
-  visionSyncIndepBtn.classList.toggle("is-active", !synced);
-  visionSyncIndepBtn.setAttribute("aria-pressed", String(!synced));
-}
-
 function applyPreset(
   providerName: string,
   preferredModel?: string,
@@ -1078,7 +1042,8 @@ function applyPreset(
   preferredBaseUrl?: string,
   preferredDisplayName?: string,
   preferredExplicitTransport?: "openai" | "anthropic" | "auto",
-  preferredVision?: { baseUrl: string; apiKey: string; model: string; syncWithMain: boolean },
+  preferredVision?: { baseUrl: string; apiKey: string; model: string },
+  preferredMultimodal?: boolean,
 ): void {
   const preset = findPreset(providerName);
 
@@ -1104,28 +1069,21 @@ function applyPreset(
   // （切厂商时上一家的 explicitTransport 不应该延续，preset 自带 capabilities transport 兜底）
   transportSelect.value = preferredExplicitTransport ?? "auto";
 
-  // —— 视觉字段初始化（一次性写入，避免反复覆盖用户编辑）——
-  // 优先级：preferredVision（已保存） > preset 默认
-  // 关键：independentVision=true 时，即使旧配置保存了 syncWithMain=true，
-  // 也统一归一化为 false（与 applyVisionSyncUI 的"独立配置态"一致）。
+  if (preferredMultimodal !== undefined) {
+    multimodalToggle.checked = preset.independentVision === true ? false : preferredMultimodal;
+  } else {
+    multimodalToggle.checked = preset.supportsVision === true && preset.independentVision !== true;
+  }
+
+  // 视觉三框：始终写入值（从 preferredVision 或 preset 默认），不受开关影响
   if (preferredVision) {
-    const synced = preset.independentVision === true ? false : preferredVision.syncWithMain;
-    setVisionSyncState(synced);
     visionBaseUrlInput.value = preferredVision.baseUrl;
     visionApiKeyInput.value = preferredVision.apiKey;
     visionModelInput.value = preferredVision.model;
-  } else if (preset.independentVision === true) {
-    // 强制独立配置态
-    setVisionSyncState(false);
-    visionBaseUrlInput.value = preset.visionBaseUrl ?? preset.baseUrl;
-    visionApiKeyInput.value = apiKeyInput.value;
-    visionModelInput.value = preset.defaultVisionModel ?? "";
   } else {
-    // 默认同步主模型
-    setVisionSyncState(preset.supportsVision === true);
     visionBaseUrlInput.value = preset.visionBaseUrl ?? baseUrlInput.value;
     visionApiKeyInput.value = apiKeyInput.value;
-    visionModelInput.value = modelInput.value;
+    visionModelInput.value = preset.defaultVisionModel ?? modelInput.value;
   }
 
   fillVisionModelOptions(preset);
@@ -1140,7 +1098,7 @@ function applyPreset(
   }
 
   activeProvider = preset.providerName;
-  applyVisionSyncUI();
+  applyMultimodalUI();
 }
 
 async function loadConfig(): Promise<void> {
@@ -1178,9 +1136,9 @@ async function loadConfig(): Promise<void> {
             baseUrl: vision.baseUrl,
             apiKey: vision.apiKey,
             model: vision.model,
-            syncWithMain: vision.syncWithMain,
           }
         : undefined,
+      cfg.multimodal,
     );
     applyRuntimeSyncSelection(cfg.runtimeSync);
     stickerEnabledInput.checked = cfg.stickerEnabled !== false;
@@ -2091,32 +2049,10 @@ if (testConnectionBtn) {
 }
 
 // ── 视觉模型配置事件 ──────────────────────────────────────
-// 胶囊按钮组：[与主聊天模型相同] / [独立配置]
-function isVisionSynced(): boolean {
-  return visionSyncMainBtn.classList.contains("is-active");
-}
-
-visionSyncMainBtn.addEventListener("click", () => {
-  setVisionSyncState(true);
-  applyVisionSyncUI();
+// 多模态开关：ON 隐藏视觉配置区，OFF 显示
+multimodalToggle.addEventListener("change", () => {
+  applyMultimodalUI();
   setSaveStatus("有未保存的更改");
-});
-visionSyncIndepBtn.addEventListener("click", () => {
-  setVisionSyncState(false);
-  applyVisionSyncUI();
-  setSaveStatus("有未保存的更改");
-});
-
-// 主配置变化时，若处于"与主相同"，联动更新视觉三框。
-// baseUrl 用 visionBaseUrl（若有），其他直接复制。
-baseUrlInput.addEventListener("input", () => {
-  if (!isVisionSynced()) return;
-  const preset = findPreset(activeProvider);
-  visionBaseUrlInput.value = preset?.visionBaseUrl || baseUrlInput.value;
-});
-apiKeyInput.addEventListener("input", () => { if (isVisionSynced()) visionApiKeyInput.value = apiKeyInput.value; });
-modelInput.addEventListener("input", () => {
-  if (isVisionSynced()) visionModelInput.value = modelInput.value;
 });
 
 // Base URL 重置按钮：一键复原厂商默认 baseUrl
@@ -2128,12 +2064,11 @@ baseUrlResetBtn.addEventListener("click", () => {
   }
 });
 
-// 测试视觉模型按钮
+// 测试视觉模型按钮（仅在多模态开关 OFF 时可见）
 testVisionBtn.addEventListener("click", async () => {
-  const synced = isVisionSynced();
-  const baseUrl = synced ? baseUrlInput.value : visionBaseUrlInput.value;
-  const apiKey = synced ? apiKeyInput.value : visionApiKeyInput.value;
-  const model = synced ? getCurrentModelValue() : visionModelInput.value;
+  const baseUrl = visionBaseUrlInput.value;
+  const apiKey = visionApiKeyInput.value;
+  const model = visionModelInput.value;
   if (!apiKey) { visionTestStatus.textContent = "请先填写 API Key"; return; }
   if (!model) { visionTestStatus.textContent = "请先填写视觉型号"; return; }
   visionTestStatus.textContent = "测试中…";
@@ -2326,12 +2261,12 @@ apiForm.addEventListener("submit", async (e) => {
       apiKey: apiKeyInput.value.trim(),
       explicitTransport: transportSelect.value as "openai" | "anthropic" | "auto",
       reasoning: providerProfileCache[activeProvider]?.reasoning,
+      multimodal: multimodalToggle.checked,
+      // 视觉配置始终传三框值，不论开关状态（开关 ON 时保留但不使用）
       vision: {
-        syncWithMain: isVisionSynced(),
-        // syncWithMain=true 时三字段传空（main 进程不落盘，运行时从主配置读）
-        baseUrl: isVisionSynced() ? "" : visionBaseUrlInput.value.trim(),
-        apiKey: isVisionSynced() ? "" : visionApiKeyInput.value.trim(),
-        model: isVisionSynced() ? "" : visionModelInput.value.trim(),
+        baseUrl: visionBaseUrlInput.value.trim(),
+        apiKey: visionApiKeyInput.value.trim(),
+        model: visionModelInput.value.trim(),
       },
     });
     setSaveStatus("已保存", "is-ok");
