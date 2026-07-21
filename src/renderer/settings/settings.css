@@ -2050,6 +2050,11 @@ body {
   border-color: var(--rb-pink-200);
 }
 
+/* 白调主题下 Kimi logo 换用深色版本 */
+[data-ui-theme="pearl-white"] .preset-card[data-provider="Kimi（月之暗面）"] .preset-card__logo img {
+  content: url("/icons/providers/kimi-light.svg");
+}
+
 /* 昵称 + 前往官网按钮并排 */
 .nickname-row {
   display: flex;
