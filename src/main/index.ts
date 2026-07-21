@@ -457,6 +457,8 @@ interface UserProfile {
   avatarPath: string;
   /** 默认城市（用于天气等需要地理定位的工具，没填则模型会问用户） */
   defaultCity: string;
+  /** 性别：secret(保密) | male(男) | female(女) */
+  gender: string;
 }
 
 interface GeneralSettings {
@@ -792,6 +794,7 @@ const DEFAULT_USER_PROFILE: UserProfile = {
   timezone: "Asia/Shanghai",
   avatarPath: "",
   defaultCity: "",
+  gender: "secret",
 };
 
 function loadUserProfile(): UserProfile {

@@ -320,7 +320,7 @@ interface GeneralSettings {
 }
 
 interface UserApi {
-  getProfile: () => Promise<{ nickname: string; callPreference: string; birthday: string; timezone: string; avatarPath: string; defaultCity: string }>;
+  getProfile: () => Promise<{ nickname: string; callPreference: string; birthday: string; timezone: string; avatarPath: string; defaultCity: string; gender: string }>;
   saveProfile: (profile: Record<string, unknown>) => Promise<unknown>;
   uploadAvatar: () => Promise<{ avatarPath: string } | null>;
   getAvatar: () => Promise<string | null>;
@@ -435,7 +435,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     shortName: "MiniMax",
     baseUrl: "https://api.minimaxi.com/v1",
     mainModels: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
-    iconUrl: "https://unpkg.com/@lobehub/icons-static-svg@latest/icons/minimax.svg",
+    iconUrl: "../icons/providers/minimax.svg",
     websiteUrl: "https://platform.minimaxi.com/",
     // 主模型和视觉模型默认都走 OpenAI 兼容入口。
     visionBaseUrl: "https://api.minimaxi.com/v1",
@@ -449,7 +449,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     shortName: "DeepSeek",
     baseUrl: "https://api.deepseek.com",
     mainModels: ["deepseek-v4-pro", "deepseek-v4-flash"],
-    iconUrl: "https://unpkg.com/@lobehub/icons-static-svg@latest/icons/deepseek.svg",
+    iconUrl: "../icons/providers/deepseek.svg",
     websiteUrl: "https://platform.deepseek.com/",
   },
   {
@@ -457,7 +457,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     shortName: "火山",
     baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
     mainModels: ["ark-code-latest"],
-    iconUrl: "https://unpkg.com/@lobehub/icons-static-svg@latest/icons/doubao.svg",
+    iconUrl: "../icons/providers/volcengine.svg",
     websiteUrl: "https://www.volcengine.com/product/agent-plan",
     // 火山方舟是聚合平台，路由到 doubao-seed 等多模态子模型时支持视觉
     supportsVision: true,
@@ -467,7 +467,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     shortName: "GLM",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     mainModels: ["glm-5.1", "glm-5-turbo", "glm-4.7"],
-    iconUrl: "https://unpkg.com/@lobehub/icons-static-svg@latest/icons/zhipu.svg",
+    iconUrl: "../icons/providers/glm.svg",
     websiteUrl: "https://open.bigmodel.cn/",
   },
   {
@@ -475,7 +475,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     shortName: "Kimi",
     baseUrl: "https://api.moonshot.cn/v1",
     mainModels: ["kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking"],
-    iconUrl: "https://unpkg.com/@lobehub/icons-static-svg@latest/icons/moonshot.svg",
+    iconUrl: "../icons/providers/kimi.svg",
     websiteUrl: "https://platform.moonshot.cn/",
     // k2.6 / k2.7-code 支持 image_url 多模态
     supportsVision: true,
@@ -485,7 +485,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     shortName: "Qwen",
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     mainModels: ["qwen-max", "qwen-plus", "qwen-turbo"],
-    iconUrl: "https://unpkg.com/@lobehub/icons-static-svg@latest/icons/qwen.svg",
+    iconUrl: "../icons/providers/qwen.svg",
     websiteUrl: "https://bailian.console.aliyun.com/",
   },
   {
@@ -494,7 +494,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     baseUrl: "https://api.openai.com/v1",
     // 国内多数用户走中转站，型号命名各家不一；预设留空，由用户在型号输入框里自行填写。
     mainModels: [],
-    iconUrl: "https://unpkg.com/@lobehub/icons-static-svg@latest/icons/openai.svg",
+    iconUrl: "../icons/providers/openai.svg",
     websiteUrl: "https://platform.openai.com/",
   },
   {
@@ -502,7 +502,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     shortName: "Claude",
     baseUrl: "https://api.anthropic.com/v1",
     mainModels: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6"],
-    iconUrl: "https://unpkg.com/@lobehub/icons-static-svg@latest/icons/claude.svg",
+    iconUrl: "../icons/providers/claude.svg",
     websiteUrl: "https://console.anthropic.com/",
   },
   {
@@ -510,7 +510,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     shortName: "MiMo",
     baseUrl: "https://api.xiaomimimo.com/v1",
     mainModels: ["mimo-v2.5-pro"],
-    iconUrl: MIMO_ICON_URL,
+    iconUrl: "../icons/providers/xiaomimimo.svg",
     websiteUrl: "https://mimo.mi.com/",
     visionBaseUrl: "https://api.xiaomimimo.com/v1",
     supportsVision: true,
@@ -648,7 +648,7 @@ let schedulerTasks: ScheduledTask[] = [];
 let schedulerTools: SchedulerToolInfo[] = [];
 let editingSchedulerTaskId: string | null = null;
 
-const presetSelect = document.getElementById("preset-select") as HTMLSelectElement;
+const presetCards = document.getElementById("preset-cards") as HTMLElement;
 const presetWebsiteLink = document.getElementById("preset-website-link") as HTMLAnchorElement;
 // 模式按钮已删除——baseUrl 永远可改、模型名永远可手填（datalist 出预设建议）
 // provider 不再暴露给用户（从预设内部拿，保证 capabilities 匹配不出错）。
@@ -717,7 +717,7 @@ const stickerThresholdInput = document.getElementById("sticker-threshold") as HT
 const stickerThresholdVal = document.getElementById("sticker-threshold-val") as HTMLElement;
 
 const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }> = {
-  memory: { emoji: "🧠", title: "记忆", hint: "管理长期记忆与画像" },
+  memory: { emoji: `<img src="../icons/mimi.png" width="24" height="24" alt="" aria-hidden="true" style="vertical-align:-3px" />`, title: "记忆", hint: "管理长期记忆与画像" },
   chat: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M33 38H22V30H36V22H44V38H39L36 41L33 38Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 6H36V30H17L13 34L9 30H4V6Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 18H20" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M26 18H27" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 18H13" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>`, title: "聊天", hint: "管理聊天窗口与会话" },
   user: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M44 8H4V38H19L24 43L29 38H44V8Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24" cy="19" r="5" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M33 32C33 27.5817 28.9706 24 24 24C19.0294 24 15 27.5817 15 32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "用户信息", hint: "编辑你的个人资料" },
   tasks: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M23.9998 44.3332C34.1251 44.3332 42.3332 36.1251 42.3332 25.9999C42.3332 15.8747 34.1251 7.66656 23.9998 7.66656C13.8746 7.66656 5.6665 15.8747 5.6665 25.9999C5.6665 36.1251 13.8746 44.3332 23.9998 44.3332Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M23.7594 15.3536L23.7582 26.3624L31.5305 34.1347" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9.00001L11 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M44 9.00001L37 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "定时任务", hint: "管理定时提醒与日程" },
@@ -926,18 +926,49 @@ function setGeneralSaveStatus(text: string, cls?: string): void {
 }
 
 function fillPresetOptions(): void {
-  presetSelect.replaceChildren();
+  if (!presetCards) return;
+  presetCards.replaceChildren();
   for (const preset of MODEL_PRESETS) {
-    const option = document.createElement("option");
-    option.value = preset.providerName;
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "preset-card";
+    card.dataset.provider = preset.providerName;
     if (preset.disabled) {
-      option.textContent = preset.providerName + "（暂未适配）";
-      option.disabled = true;
-    } else {
-      option.textContent = preset.providerName;
+      card.classList.add("is-disabled");
+      card.disabled = true;
     }
-    presetSelect.appendChild(option);
+
+    // logo：有本地 SVG 用 img，没有（如 DeepSeek）用首字母文字占位
+    const logoWrap = document.createElement("span");
+    logoWrap.className = "preset-card__logo";
+    if (preset.iconUrl) {
+      const img = document.createElement("img");
+      img.src = preset.iconUrl;
+      img.alt = "";
+      img.width = 24;
+      img.height = 24;
+      logoWrap.appendChild(img);
+    } else {
+      logoWrap.textContent = preset.shortName.charAt(0);
+    }
+    card.appendChild(logoWrap);
+
+    const label = document.createElement("span");
+    label.className = "preset-card__name";
+    label.textContent = preset.shortName;
+    if (preset.disabled) label.textContent += "（暂未适配）";
+    card.appendChild(label);
+
+    presetCards.appendChild(card);
   }
+}
+
+/** 标记当前选中的厂商卡片（替换原 presetSelect.value = ...） */
+function setActivePresetCard(providerName: string): void {
+  if (!presetCards) return;
+  presetCards.querySelectorAll(".preset-card").forEach((card) => {
+    card.classList.toggle("is-active", (card as HTMLElement).dataset.provider === providerName);
+  });
 }
 
 function findPreset(providerName: string): ModelPreset {
@@ -1054,7 +1085,7 @@ function applyPreset(
   // 模式按钮已删除——ChatGPT / Claude 这种没预设型号的厂商，input 框空着让用户手填，
   // datalist 没建议也不影响（用户知道自己型号）。
 
-  presetSelect.value = preset.providerName;
+  setActivePresetCard(preset.providerName);
 
   // 昵称：优先用传入的（用户自定义过）；否则用厂商 shortName 作默认。
   // 留空显示厂商短名——但这里主动填 shortName 让用户看到默认值，可改可清。
@@ -2007,14 +2038,19 @@ clearChatHistoryBtn.addEventListener("click", async () => {
   }
 });
 
-presetSelect.addEventListener("change", () => {
+presetCards?.addEventListener("click", (e) => {
+  const card = (e.target as HTMLElement).closest(".preset-card") as HTMLElement | null;
+  if (!card || card.classList.contains("is-disabled")) return;
+  const providerName = card.dataset.provider;
+  if (!providerName) return;
+
   // 切厂商前先把当前厂商的输入值快照进缓存，避免覆盖丢失
   captureActiveProviderProfile();
 
   // 从缓存里取目标厂商的旧配置；没有缓存就用 preset 默认值
-  const cached = providerProfileCache[presetSelect.value];
+  const cached = providerProfileCache[providerName];
   applyPreset(
-    presetSelect.value,
+    providerName,
     cached?.model,
     cached?.apiKey,
     cached?.baseUrl,
@@ -2075,7 +2111,7 @@ visionSyncIndepBtn.addEventListener("click", () => {
 // baseUrl 用 visionBaseUrl（若有），其他直接复制。
 baseUrlInput.addEventListener("input", () => {
   if (!isVisionSynced()) return;
-  const preset = findPreset(presetSelect.value);
+  const preset = findPreset(activeProvider);
   visionBaseUrlInput.value = preset?.visionBaseUrl || baseUrlInput.value;
 });
 apiKeyInput.addEventListener("input", () => { if (isVisionSynced()) visionApiKeyInput.value = apiKeyInput.value; });
@@ -2085,7 +2121,7 @@ modelInput.addEventListener("input", () => {
 
 // Base URL 重置按钮：一键复原厂商默认 baseUrl
 baseUrlResetBtn.addEventListener("click", () => {
-  const preset = findPreset(presetSelect.value);
+  const preset = findPreset(activeProvider);
   if (preset) {
     baseUrlInput.value = preset.baseUrl;
     setSaveStatus("已重置为厂商默认 URL");
@@ -3648,6 +3684,7 @@ const userNicknameInput = document.getElementById("user-nickname") as HTMLInputE
 const userCallPrefInput = document.getElementById("user-call-pref") as HTMLInputElement | null;
 const userBirthdayInput = document.getElementById("user-birthday") as HTMLInputElement | null;
 const userTimezoneSelect = document.getElementById("user-timezone") as HTMLSelectElement | null;
+const userGenderGroup = document.getElementById("user-gender") as HTMLElement | null;
 const memoryL0NameInput = document.getElementById("memory-l0-name") as HTMLInputElement | null;
 const memoryL0OccupationInput = document.getElementById("memory-l0-occupation") as HTMLInputElement | null;
 const memoryL0InterestsInput = document.getElementById("memory-l0-interests") as HTMLInputElement | null;
@@ -3819,6 +3856,13 @@ async function loadUserProfile(): Promise<void> {
       if (userDefaultCityInput) userDefaultCityInput.value = String(profile.defaultCity ?? "");
       // 时区：白名单校验，空/非法/不在白名单都回退 FALLBACK_TIMEZONE，不直接用 ?? 兜底
       if (userTimezoneSelect) userTimezoneSelect.value = normalizeTimezoneOptionValue(profile.timezone);
+      // 性别：标记当前选中的按钮
+      const gender = String(profile.gender ?? "secret");
+      if (userGenderGroup) {
+        userGenderGroup.querySelectorAll(".gender-select__btn").forEach((btn) => {
+          btn.classList.toggle("is-active", (btn as HTMLElement).dataset.gender === gender);
+        });
+      }
     }
   } catch {
     console.warn("[settings] load user profile failed");
@@ -3862,6 +3906,19 @@ if (userTimezoneSelect) {
       return; // 不发保存请求，等用户重新选
     }
     void window.user?.saveProfile({ timezone: safe });
+  });
+}
+
+// 性别：三档按钮，点击切换并原子保存
+if (userGenderGroup) {
+  userGenderGroup.querySelectorAll(".gender-select__btn").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const value = (btn as HTMLElement).dataset.gender;
+      if (!value) return;
+      userGenderGroup.querySelectorAll(".gender-select__btn").forEach((b) => b.classList.remove("is-active"));
+      btn.classList.add("is-active");
+      void window.user?.saveProfile({ gender: value });
+    });
   });
 }
 

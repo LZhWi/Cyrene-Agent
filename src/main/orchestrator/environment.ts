@@ -32,6 +32,7 @@ export interface UserInfoContext {
   birthday?: string;
   defaultCity?: string;
   timezone?: string;
+  gender?: string;
 }
 
 function safeGetPath(name: "desktop" | "documents" | "downloads" | "home"): string {
@@ -190,6 +191,8 @@ export function buildEnvironmentContext(modelInfo?: ModelInfo, userInfo?: UserIn
     }
     if (userInfo.birthday) lines.push(`- 生日：${userInfo.birthday}`);
     if (userInfo.defaultCity) lines.push(`- 默认城市：${userInfo.defaultCity}（用户问天气/位置且没指定其他城市时，默认用这个）`);
+    if (userInfo.gender === "male") lines.push(`- 性别：男`);
+    else if (userInfo.gender === "female") lines.push(`- 性别：女`);
     lines.push("");
     // 时区≠地点：明确告知模型 timezone 与 defaultCity 是两个独立维度，不得交叉推断。
     lines.push("> 用户时区仅用于时间计算，不代表用户所在地，不得根据时区推断用户所在城市。默认城市仅用于天气等需要定位的工具。");

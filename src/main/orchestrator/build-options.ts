@@ -133,6 +133,7 @@ export interface UserProfileLite {
   birthday?: string;
   defaultCity?: string;
   timezone?: string;
+  gender?: string;
 }
 
 export function buildChannelSystem(channel?: RelationshipChannel): string {
@@ -307,6 +308,7 @@ export async function buildAgentRunOptions(
         birthday: profile.birthday,
         defaultCity: profile.defaultCity,
         timezone: profile.timezone,
+        gender: profile.gender,
       },
     );
   } catch (err) {

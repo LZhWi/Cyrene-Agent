@@ -1563,6 +1563,57 @@ body {
   line-height: 1.5;
 }
 
+/* 性别选择器：三档按钮组 */
+.gender-select {
+  display: flex;
+  gap: 6px;
+}
+
+.gender-select__btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  justify-content: center;
+  padding: 7px 8px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: rgba(235, 229, 245, 0.70);
+  background: transparent;
+  border: 1px solid rgba(255, 182, 220, 0.18);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.gender-select__btn:hover {
+  border-color: rgba(255, 182, 220, 0.36);
+  color: var(--rb-text-strong);
+}
+
+.gender-select__btn.is-active {
+  color: var(--rb-text-strong);
+  background: rgba(236, 72, 153, 0.16);
+  border-color: rgba(255, 182, 220, 0.24);
+}
+
+/* 白调主题：未选中态文字/边框加深，避免在白底上太淡 */
+[data-ui-theme="pearl-white"] .gender-select__btn {
+  color: var(--rb-text-muted);
+  border-color: var(--rb-pink-200);
+}
+
+[data-ui-theme="pearl-white"] .gender-select__btn:hover {
+  color: var(--rb-pink-600);
+  border-color: var(--rb-pink-200);
+}
+
+[data-ui-theme="pearl-white"] .gender-select__btn.is-active {
+  color: var(--rb-pink-600);
+  background: var(--rb-pink-50);
+  border-color: var(--rb-pink-200);
+}
+
 
 /* 插件面板 */
 .plugin-panel-heading {
@@ -1909,28 +1960,108 @@ body {
   color: var(--rb-text-on-pink);
 }
 
-/* 预设下拉框 + 官网链接 */
-.preset-select-row {
+/* 厂商卡片网格 + 官网链接 */
+.preset-row {
+  margin-top: 6px;
+}
+.preset-cards {
   display: flex;
   gap: 8px;
-  align-items: stretch;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-top: 2px;
+  padding-bottom: 4px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--rb-border-strong) transparent;
 }
-.preset-select-row select {
-  flex: 1;
-  min-width: 0;
+.preset-cards::-webkit-scrollbar { height: 4px; }
+.preset-cards::-webkit-scrollbar-track { background: transparent; }
+.preset-cards::-webkit-scrollbar-thumb {
+  background: var(--rb-border-strong);
+  border-radius: 2px;
 }
-.preset-website-link {
+
+.preset-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
   flex-shrink: 0;
+  width: 72px;
+  padding: 10px 6px;
+  border-radius: 14px;
+  font-size: 11px;
+  font-weight: 600;
+  color: rgba(235, 229, 245, 0.70);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 182, 220, 0.14);
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+
+.preset-card:hover:not(.is-disabled) {
+  border-color: rgba(255, 182, 220, 0.36);
+  color: var(--rb-text-strong);
+  transform: translateY(-1px);
+}
+
+.preset-card.is-active {
+  color: var(--rb-text-strong);
+  background: rgba(236, 72, 153, 0.16);
+  border-color: rgba(255, 182, 220, 0.24);
+}
+
+.preset-card.is-disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.preset-card__logo {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  padding: 0;
+  width: 28px;
+  height: 28px;
+}
+.preset-card__logo img {
+  max-width: 24px;
+  max-height: 24px;
+  object-fit: contain;
+}
+.preset-card__name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* 白调主题 */
+[data-ui-theme="pearl-white"] .preset-card {
+  color: var(--rb-text-muted);
+  background: rgba(0, 0, 0, 0.02);
+  border-color: var(--rb-pink-200);
+}
+[data-ui-theme="pearl-white"] .preset-card:hover:not(.is-disabled) {
+  color: var(--rb-pink-600);
+  border-color: var(--rb-pink-200);
+}
+[data-ui-theme="pearl-white"] .preset-card.is-active {
+  color: var(--rb-pink-600);
+  background: var(--rb-pink-50);
+  border-color: var(--rb-pink-200);
+}
+
+.preset-website-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 8px;
+  padding: 4px 10px;
   border-radius: 12px;
   color: var(--rb-text-muted);
   background: rgba(255, 255, 255, 0.055);
   border: 1px solid rgba(255, 182, 220, 0.14);
-  font-size: 16px;
+  font-size: 12px;
   text-decoration: none;
   cursor: pointer;
   transition: border-color 160ms ease, background 160ms ease, color 160ms ease;

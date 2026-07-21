@@ -18,7 +18,7 @@
       </header>
 
       <nav class="settings-nav__list">
-        <button type="button" class="nav-item" data-section="memory"><span>🧠</span>记忆</button>
+        <button type="button" class="nav-item" data-section="memory"><span><img class="nav-item__avatar" src="../icons/mimi.png" width="18" height="18" alt="" aria-hidden="true" /></span>记忆</button>
         <button type="button" class="nav-item" data-section="chat"><span><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M33 38H22V30H36V22H44V38H39L36 41L33 38Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 6H36V30H17L13 34L9 30H4V6Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 18H20" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M26 18H27" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 18H13" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg></span>聊天</button>
         <button type="button" class="nav-item" data-section="user"><span><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M44 8H4V38H19L24 43L29 38H44V8Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24" cy="19" r="5" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M33 32C33 27.5817 28.9706 24 24 24C19.0294 24 15 27.5817 15 32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>用户信息</button>
         <hr class="nav-divider" />
@@ -72,13 +72,11 @@
           </div>
 
           <div class="preset-row">
-            <label class="field field--full">
+            <div class="field field--full">
               <span>模型预设</span>
-              <div class="preset-select-row">
-                <select id="preset-select"></select>
-                <a id="preset-website-link" class="preset-website-link" href="#" target="_blank" rel="noopener noreferrer" title="前往厂商官网">↗</a>
-              </div>
-            </label>
+              <div class="preset-cards" id="preset-cards"></div>
+              <a id="preset-website-link" class="preset-website-link" href="#" target="_blank" rel="noopener noreferrer" title="前往厂商官网">↗ 前往官网</a>
+            </div>
           </div>
 
           <div class="form-grid">
@@ -601,7 +599,7 @@
 
                 <section class="settings-panel is-hidden" id="memory-panel" data-panel="memory">
           <div class="panel-heading">
-            <div class="panel-heading__icon">🧠</div>
+            <div class="panel-heading__icon"><img class="panel-heading__avatar" src="../icons/mimi.png" width="32" height="32" alt="" aria-hidden="true" /></div>
             <div>
               <h1>昔涟记忆</h1>
               <p>昔涟对你的认知和记忆，你可以查看、编辑和管理。</p>
@@ -611,7 +609,7 @@
             <!-- L0 -->
             <div class="memory-card">
               <div class="memory-card__head">
-                <span>📌</span>
+                <span><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><rect x="4" y="8" width="40" height="32" rx="2" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M17 25C19.2091 25 21 23.2091 21 21C21 18.7909 19.2091 17 17 17C14.7909 17 13 18.7909 13 21C13 23.2091 14.7909 25 17 25Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M23 31C23 27.6863 20.3137 25 17 25C13.6863 25 11 27.6863 11 31" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M28 20H36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M30 28H36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
                 <div>
                   <h2>长期画像</h2>
                   <p>昔涟一直记得、基本不会变化的信息</p><p class="memory-card__hint">手动修改的内容优先级高于自动推断</p>
@@ -630,7 +628,7 @@
             <!-- L1 -->
             <div class="memory-card">
               <div class="memory-card__head">
-                <span>🌱</span>
+                <span><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M7 4H41" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 44H41" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 44C13.6667 30.6611 18 23.9944 24 24C30 24.0056 34.3333 30.6722 37 44H11Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M37 4C34.3333 17.3389 30 24.0056 24 24C18 23.9944 13.6667 17.3278 11 4H37Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M21 15H27" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 38H29" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
                 <div>
                   <h2>当前阶段</h2>
                   <p>最近的目标、偏好和状态，会随时间变化</p><p class="memory-card__hint">手动修改的内容优先级高于自动推断</p>
@@ -647,7 +645,7 @@
             <!-- L2 -->
             <div class="memory-card">
               <div class="memory-card__head">
-                <span>📝</span>
+                <span><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M40 27V6C40 4.89543 39.1046 4 38 4H10C8.89543 4 8 4.89543 8 6V42C8 43.1046 8.89543 44 10 44H21" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 12L31 12" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 20L31 20" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 28H23" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M37 37C37 38.3807 36.4404 39.6307 35.5355 40.5355C34.6307 41.4404 33.3807 42 32 42C29.2386 42 27 39.7614 27 37C27 34.2386 29.2386 32 32 32C34.7614 32 37 34.2386 37 37Z" fill="none"/><path d="M39 44L35.5355 40.5355M35.5355 40.5355C36.4404 39.6307 37 38.3807 37 37C37 34.2386 34.7614 32 32 32C29.2386 32 27 34.2386 27 37C27 39.7614 29.2386 42 32 42C33.3807 42 34.6307 41.4404 35.5355 40.5355Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
                 <div>
                   <h2>事件记忆</h2>
                   <p>从聊天中提炼的重要事件，可搜索和管理</p>
@@ -671,7 +669,7 @@
             <!-- reflection -->
             <div class="memory-card">
               <div class="memory-card__head">
-                <span>📖</span>
+                <span><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M24 24V19L39 4L44 9L29 24H24Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 24H9C6.23858 24 4 26.2386 4 29C4 31.7614 6.23858 34 9 34H39C41.7614 34 44 36.2386 44 39C44 41.7614 41.7614 44 39 44H18" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
                 <div>
                   <h2>阶段总结</h2>
                   <p>AI 自动生成的阶段性回顾</p>
@@ -697,7 +695,7 @@
                   <span><svg width="22" height="22" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M44 8H4V38H19L24 43L29 38H44V8Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24" cy="19" r="5" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M33 32C33 27.5817 28.9706 24 24 24C19.0294 24 15 27.5817 15 32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
                 </div>
                 <div class="user-avatar-actions">
-                  <button type="button" class="ghost-btn" id="upload-avatar-btn">📷 上传头像</button>
+                  <button type="button" class="ghost-btn" id="upload-avatar-btn"><svg width="16" height="16" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px; margin-right:4px"><circle cx="24" cy="24" r="20" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M9 37L17 28L33 41" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="18" cy="17" r="4" fill="none" stroke="currentColor" stroke-width="4"/><path d="M24 33L32 23L42 31" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>上传头像</button>
                   <p class="user-avatar-hint">支持 JPG、PNG，建议 1:1 比例</p>
                 </div>
               </div>
@@ -705,6 +703,14 @@
                 <div class="tts-field">
                   <label for="user-nickname">昵称</label>
                   <input type="text" id="user-nickname" placeholder="你想让昔涟怎么称呼你" />
+                </div>
+                <div class="tts-field">
+                  <label>性别</label>
+                  <div class="gender-select" id="user-gender">
+                    <button type="button" class="gender-select__btn is-active" data-gender="secret"><svg width="16" height="16" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-2px"><path d="M6 8.25564L24.0086 3L42 8.25564V19.0337C42 30.3622 34.7502 40.4194 24.0026 44.0005C13.2521 40.4195 6 30.36 6 19.0287V8.25564Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg> 保密</button>
+                    <button type="button" class="gender-select__btn" data-gender="male"><svg width="16" height="16" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-2px"><path d="M41.9517 15.0483V6.04834H32.9517" stroke="#4A9EFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M10.4135 38.0007C15.8808 43.4681 24.7451 43.4681 30.2125 38.0007C32.9462 35.2671 34.313 31.6841 34.313 28.1012C34.313 24.5183 32.9462 20.9354 30.2125 18.2017C24.7451 12.7344 15.8808 12.7344 10.4135 18.2017C4.94615 23.6691 4.94615 32.5334 10.4135 38.0007Z" fill="none" stroke="#4A9EFF" stroke-width="4" stroke-linejoin="round"/><path d="M30.0002 17.9999L39.9517 8.04838" stroke="#4A9EFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 男生</button>
+                    <button type="button" class="gender-select__btn" data-gender="female"><svg width="16" height="16" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-2px"><g clip-path="url(#icon-gender-female)"><path d="M38.3785 9.85132C32.9112 4.38398 24.0468 4.38398 18.5795 9.85132C15.8458 12.585 14.479 16.1679 14.479 19.7508C14.479 23.3337 15.8458 26.9166 18.5795 29.6503C24.0468 35.1176 32.9112 35.1176 38.3785 29.6503C43.8458 24.183 43.8458 15.3187 38.3785 9.85132Z" fill="none" stroke="#EC4899" stroke-width="4" stroke-linejoin="round"/><path d="M18.4642 29.5353L5.73633 42.2632" stroke="#EC4899" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19.1714 41.5562L6.44346 28.8282" stroke="#EC4899" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></g><defs><clipPath id="icon-gender-female"><rect width="48" height="48" fill="#EC4899"/></clipPath></defs></svg> 女生</button>
+                  </div>
                 </div>
                 <div class="tts-field">
                   <label for="user-call-pref">称呼偏好</label>

@@ -661,9 +661,7 @@
 /* 通用 select option：在 pearl-white 下默认底是白(--rb-bg-2/#fafafc)，
    base CSS 里 .field select option 的色是 var(--rb-text-on-pink)
    (即 white) — 与白底融为一体导致选项看不见。这里统一强制为深色。 */
-[data-ui-theme="pearl-white"] .field select option,
-[data-ui-theme="pearl-white"] #preset-select option,
-[data-ui-theme="pearl-white"] .preset-select-row select option {
+[data-ui-theme="pearl-white"] .field select option {
   color: var(--rb-input-text);
   background: var(--rb-card-bg);
 }
