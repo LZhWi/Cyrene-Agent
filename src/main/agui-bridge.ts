@@ -22,6 +22,7 @@ import {
 } from "./orchestrator/cyrene-agent";
 import { indexConversationTurn } from "./orchestrator/history-tools";
 import type { RelationshipChannel } from "./relationship/relationship-log";
+import { createThinkFilter, type ThinkStreamFilter, type ThinkFilterMode } from "./chat/think-filter";
 
 /** 渲染进程发起 run 时传的输入。 */
 export interface AguiRunInput {
@@ -125,19 +126,68 @@ export function registerAgUiIpc(
       lifecycle?.onConversationEnded();
     };
 
+    // <think> 标签过滤器：按单条 assistant message 隔离（TEXT_MESSAGE_START ~ END）
+    // leading-only 模式：只在消息开头以 <think> 开头时才过滤，避免误删正文中的 <think> 讨论
+    let thinkFilter: ThinkStreamFilter | null = null;
+    const thinkFilterMode: ThinkFilterMode = "leading-only";
+
     // 订阅 agent 事件流：每个事件透传渲染端；
+    // TEXT_MESSAGE_CONTENT 经 <think> 过滤后再转发；
     // complete/error 时做副作用，并补发一个终态事件让渲染端知道这轮结束。
     const sub = agent.runWithEvents(options).subscribe({
       next: (baseEvent) => {
+        const eventType = (baseEvent as { type?: string })?.type;
+
         // sticker / memory 等副作用在 complete 回调里执行。前端收到 RUN_FINISHED 后会收尾并取消监听，
         // 所以必须把 RUN_FINISHED 延后到副作用事件之后发送，否则 cyrene.sticker 会晚到而被丢掉。
-        if ((baseEvent as { type?: string })?.type === "RUN_FINISHED") {
+        if (eventType === "RUN_FINISHED") {
+          // 兜底清理：如果 filter 仍存在（TEXT_MESSAGE_END 缺失），销毁
+          thinkFilter = null;
           pendingRunFinishedEvent = baseEvent;
           return;
         }
+
+        // <think> 过滤：拦截 TEXT_MESSAGE_* 事件
+        if (eventType === "TEXT_MESSAGE_START") {
+          thinkFilter = createThinkFilter(thinkFilterMode);
+          send(baseEvent);
+          return;
+        }
+
+        if (eventType === "TEXT_MESSAGE_CONTENT") {
+          if (!thinkFilter) {
+            // 没有 START 边界（异常），原样转发
+            send(baseEvent);
+            return;
+          }
+          const event = baseEvent as { type: string; delta?: string };
+          const rawDelta = typeof event.delta === "string" ? event.delta : "";
+          const visibleDelta = thinkFilter.push(rawDelta);
+          if (visibleDelta) {
+            send({ ...event, delta: visibleDelta });
+          }
+          // visibleDelta 为空时跳过发送（不产生空 CONTENT 事件）
+          return;
+        }
+
+        if (eventType === "TEXT_MESSAGE_END") {
+          if (thinkFilter) {
+            const tail = thinkFilter.flush();
+            if (tail) {
+              // flush 出的尾部文本作为最后一个 CONTENT 发送，确保在 END 之前到达
+              send({ type: "TEXT_MESSAGE_CONTENT", delta: tail, threadId, runId });
+            }
+            thinkFilter = null;
+          }
+          send(baseEvent);
+          return;
+        }
+
+        // 其他事件原样透传
         send(baseEvent);
       },
       error: (err) => {
+        thinkFilter = null; // 错误时丢弃残留 filter 状态
         const message = err instanceof Error ? err.message : String(err);
         console.error("[AgUiBridge] run 失败:", message);
         // 识别两类结构化错误：AgentRuntimeError（循环/模型错误）和 ActionGateProtocolError（协议错误）
