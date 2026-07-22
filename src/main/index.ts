@@ -90,6 +90,7 @@ import { uploadFile as ttsUploadFile, cloneVoice as ttsCloneVoice, synthesize as
 import { synthesize as gptsovitsSynthesize } from "./tts/gptsovits-engine";
 import { synthesize as customCloudSynthesize } from "./tts/custom-cloud-engine";
 import { synthesize as mimoSynthesize } from "./tts/mimo-engine";
+import { synthesize as mosslandSynthesize, cloneVoice as mosslandCloneVoice, listVoices as mosslandListVoices } from "./tts/mossland-engine";
 import { synthesizeByEngine } from "./tts/tts-dispatcher";
 import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
 import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegateSettings, setUserTimezoneConfig } from "./orchestrator/built-in-tools";
@@ -334,6 +335,25 @@ function buildMimoCacheKey(payload: {
     text: payload.text,
   });
   return "mimo-" + createHash("sha256").update(source, "utf8").digest("hex");
+}
+
+/** Mossland cache key：voice_id + model + format + text 哈希。
+ *  因为 Mossland 没有"参考音频路径"作为天然 key 源，用 voice_id + model 区分。 */
+function buildMosslandCacheKey(payload: {
+  voiceId?: string;
+  text: string;
+  model?: string;
+  format?: "mp3" | "wav" | "pcm";
+}): string {
+  const source = JSON.stringify({
+    version: 1,
+    engine: "mossland",
+    model: payload.model ?? "moss-tts",
+    voiceId: payload.voiceId ?? "",
+    format: payload.format ?? "mp3",
+    text: payload.text,
+  });
+  return "mossland-" + createHash("sha256").update(source, "utf8").digest("hex");
 }
 
 function getTtsCachePath(cacheKey: string, format: "mp3" | "wav" | "pcm" = "mp3"): string {
@@ -4275,6 +4295,117 @@ app.whenReady().then(async () => {
     };
   });
 
+  // ── Mossland (api.mosi.cn) ──────────────────────────────────────
+
+  // Mossland 合成（Settings「测试发音」用，无缓存）
+  ipcMain.handle(IPC.TTS_SYNTHESIZE_MOSSLAND, async (_event, payload: {
+    apiKey: string; voiceId: string; text: string;
+    speed?: number; volume?: number; model?: string;
+    format?: "mp3" | "wav" | "pcm";
+  }) => {
+    if (!payload?.apiKey || !payload?.voiceId || !payload?.text) {
+      throw new Error("缺少必要参数（apiKey/voiceId/text）");
+    }
+    const result = await mosslandSynthesize({
+      apiKey: payload.apiKey,
+      voiceId: payload.voiceId,
+      text: payload.text,
+      speed: payload.speed,
+      volume: payload.volume,
+      model: payload.model,
+      format: payload.format,
+    });
+    const cacheKey = buildMosslandCacheKey(payload);
+    return {
+      base64: result.audio.toString("base64"),
+      cacheKey,
+      cached: false,
+      format: result.format,
+    };
+  });
+
+  // Mossland 合成 + 本地缓存（聊天自动朗读用；cache-only 兜底由 chat 侧传 "cache-only"）
+  ipcMain.handle(IPC.TTS_SYNTHESIZE_CACHED_MOSSLAND, async (_event, payload: {
+    apiKey: string; voiceId: string; text: string;
+    speed?: number; volume?: number; model?: string;
+    format?: "mp3" | "wav" | "pcm";
+    expectedCacheKey?: string;
+  }) => {
+    const format: "mp3" | "wav" | "pcm" = payload.format ?? "mp3";
+
+    // 缓存命中
+    let expectedPath: string | null = null;
+    if (payload.expectedCacheKey) {
+      try {
+        expectedPath = getTtsCachePath(payload.expectedCacheKey, format);
+      } catch { /* expectedCacheKey 非法，忽略 */ }
+    }
+    if (expectedPath && fs.existsSync(expectedPath)) {
+      const cachedBuffer = fs.readFileSync(expectedPath);
+      return {
+        base64: cachedBuffer.toString("base64"),
+        cacheKey: payload.expectedCacheKey,
+        cached: true,
+        format,
+      };
+    }
+
+    // 缓存未命中 + 缺关键参数（或 chat 端 cache-only 占位）→ 抛错
+    if (!payload?.apiKey || !payload?.voiceId || !payload?.text
+        || payload.apiKey === "cache-only" || payload.voiceId === "cache-only") {
+      throw new Error("缓存未命中且缺少必要参数（apiKey/voiceId/text）");
+    }
+
+    const cacheKey = buildMosslandCacheKey(payload);
+    const audioPath = getTtsCachePath(cacheKey, format);
+    fs.mkdirSync(path.dirname(audioPath), { recursive: true });
+
+    const result = await mosslandSynthesize({
+      apiKey: payload.apiKey,
+      voiceId: payload.voiceId,
+      text: payload.text,
+      speed: payload.speed,
+      volume: payload.volume,
+      model: payload.model,
+      format,
+    });
+    fs.writeFileSync(audioPath, result.audio);
+    return {
+      base64: result.audio.toString("base64"),
+      cacheKey,
+      cached: false,
+      format: result.format,
+    };
+  });
+
+  // Mossland 音色克隆（multipart 上传）
+  ipcMain.handle(IPC.TTS_CLONE_MOSSLAND, async (_event, payload: {
+    apiKey: string; filePath: string; name?: string; description?: string;
+  }) => {
+    const result = await mosslandCloneVoice({
+      apiKey: payload.apiKey,
+      filePath: payload.filePath,
+      name: payload.name,
+      description: payload.description,
+    });
+    return {
+      voiceId: result.voiceId,
+      name: result.name,
+      createdAt: result.createdAt,
+    };
+  });
+
+  // Mossland 拉取账号下音色列表
+  ipcMain.handle(IPC.TTS_LIST_MOSSLAND_VOICES, async (_event, payload: {
+    apiKey: string; limit?: number;
+  }) => {
+    const result = await mosslandListVoices({
+      apiKey: payload.apiKey,
+      limit: payload.limit,
+    });
+    return { voices: result.voices };
+  });
+
   // 聊天会话存储 IPC（chats-store.initialize 会建好 cyrene-chats 目录并加载 index）
   registerChatsIpc();
   initializeProactiveChatService();
@@ -4498,8 +4629,8 @@ app.whenReady().then(async () => {
       return {
         audio: result.audio,
         format: result.format,
-        mime: result.format === "wav" ? "audio/wav" : "audio/mpeg",
-        extension: result.format === "wav" ? ".wav" : ".mp3",
+        mime: result.format === "wav" ? "audio/wav" : result.format === "pcm" ? "audio/pcm" : "audio/mpeg",
+        extension: result.format === "wav" ? ".wav" : result.format === "pcm" ? ".pcm" : ".mp3",
       };
     } catch (err) {
       console.warn("[Channels] TTS 合成失败:", err instanceof Error ? err.message : err);

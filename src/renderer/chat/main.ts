@@ -1733,6 +1733,10 @@ interface TtsSettings {
   ttsMimoKey: string;
   ttsMimoVoiceAudioPath: string;
   ttsMimoStylePrompt: string;
+  // Mossland（api.mosi.cn）
+  ttsMosslandKey: string;
+  ttsMosslandVoiceId: string;
+  ttsMosslandModel: string;
   // MiniMax 流式播放
   ttsStreaming: boolean;
 }
@@ -1912,6 +1916,9 @@ async function loadTtsSettings(): Promise<TtsSettings | null> {
       ttsMimoKey: String(raw.ttsMimoKey ?? ""),
       ttsMimoVoiceAudioPath: String(raw.ttsMimoVoiceAudioPath ?? ""),
       ttsMimoStylePrompt: String(raw.ttsMimoStylePrompt ?? ""),
+      ttsMosslandKey: String(raw.ttsMosslandKey ?? ""),
+      ttsMosslandVoiceId: String(raw.ttsMosslandVoiceId ?? ""),
+      ttsMosslandModel: String(raw.ttsMosslandModel ?? "moss-tts"),
       ttsStreaming: raw.ttsStreaming !== false,
     };
   } catch {
@@ -2213,6 +2220,7 @@ async function synthesizeAndPlayCached(
     const isGptsovitsCache = existing.ttsCacheKey.startsWith("gptsovits-");
     const isCustomCloudCache = existing.ttsCacheKey.startsWith("custom-cloud-");
     const isMimoCache = existing.ttsCacheKey.startsWith("mimo-");
+    const isMosslandCache = existing.ttsCacheKey.startsWith("mossland-");
     try {
       if (isGptsovitsCache) {
         const result = await window.tts.synthesizeCachedGptsovits({
@@ -2256,6 +2264,20 @@ async function synthesizeAndPlayCached(
         });
         if (result.cached) {
           console.log("[TTS] mimo 缓存命中，直接播放");
+          playTtsBase64(result.base64, result.format, msgId);
+          return { cacheKey: result.cacheKey };
+        }
+      } else if (isMosslandCache) {
+        const result = await window.tts.synthesizeCachedMossland({
+          apiKey: "cache-only",
+          voiceId: "cache-only",
+          text,
+          model: "moss-tts",
+          format: "mp3",
+          expectedCacheKey: existing.ttsCacheKey,
+        });
+        if (result.cached) {
+          console.log("[TTS] mossland 缓存命中，直接播放");
           playTtsBase64(result.base64, result.format, msgId);
           return { cacheKey: result.cacheKey };
         }
@@ -2376,6 +2398,30 @@ async function synthesizeAndPlayCached(
       return { cacheKey: result.cacheKey };
     } catch (err) {
       console.warn("[TTS] 小米 MiMo 合成失败:", err);
+      return null;
+    }
+  }
+
+  if (settings.ttsEngine === "mossland") {
+    if (!settings.ttsMosslandKey || !settings.ttsMosslandVoiceId) {
+      console.warn("[TTS] 缺少 Mossland API Key 或 voice_id");
+      return null;
+    }
+    try {
+      const result = await window.tts.synthesizeCachedMossland({
+        apiKey: settings.ttsMosslandKey,
+        voiceId: settings.ttsMosslandVoiceId,
+        text,
+        speed: settings.ttsSpeed,
+        volume: settings.ttsVolume,
+        model: settings.ttsMosslandModel || "moss-tts",
+        format: "mp3",
+        expectedCacheKey: existing?.ttsCacheKey,
+      });
+      playTtsBase64(result.base64, result.format, msgId);
+      return { cacheKey: result.cacheKey };
+    } catch (err) {
+      console.warn("[TTS] Mossland 合成失败:", err);
       return null;
     }
   }

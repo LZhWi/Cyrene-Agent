@@ -688,6 +688,13 @@
   color: var(--rb-text-strong);
 }
 
+/* Mossland / 未来新增的「敬请期待」卡（占位）—— pearl-white 下保持可读 */
+[data-ui-theme="pearl-white"] .tts-engine__soon {
+  color: #7a3d0a;
+  background: #fff0d6;
+  border-color: #f5d4a8;
+}
+
 [data-ui-theme="pearl-white"] .save-status.is-ok,
 [data-ui-theme="pearl-white"] .tts-clone-status.is-ok {
   color: #15803d;

@@ -2647,6 +2647,20 @@ body {
   border-bottom: 1px solid rgba(255, 182, 220, 0.12);
 }
 
+/* 标题里嵌品牌 logo（目前只用于 Mossland；MiniMax logo 走 .tts-clone-logo 在 h3 里） */
+.tts-section__title--logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding-bottom: 8px;
+}
+.tts-mossland-logo {
+  flex: 0 0 auto;
+  /* 宽度由 SVG 属性 width="55" height="20" 给出，按 1652×599 viewBox 等比缩放 */
+  display: inline-block;
+  /* currentColor 跟随 .tts-section__title 的 color，dark / pearl-white 双主题自适应 */
+}
+
 /* 引擎选择卡片 */
 .tts-engines {
   display: flex;
@@ -2678,6 +2692,31 @@ body {
   background: rgba(255, 192, 230, 0.16);
   border-color: rgba(255, 182, 220, 0.6);
   box-shadow: 0 0 14px rgba(236, 72, 153, 0.22);
+}
+
+/* 占位 / 敬请期待卡：data-mode="coming-soon"（不会被通用 click handler 选中） */
+.tts-engine.is-coming-soon {
+  cursor: not-allowed;
+  opacity: 0.55;
+  /* 阻止 hover 高亮，避免误导用户以为可点 */
+}
+.tts-engine.is-coming-soon:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 182, 220, 0.18);
+}
+
+.tts-engine__soon {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 196, 120, 0.18);
+  border: 1px solid rgba(255, 196, 120, 0.42);
+  color: #ffe2b8;
 }
 
 .tts-engine__icon {
@@ -2804,11 +2843,198 @@ body {
   margin: 0 0 6px;
 }
 
+/* 标题行：标题 + 右侧"ⓘ 复刻须知"按钮 */
+.tts-clone-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+.tts-clone-title-row .tts-clone-title {
+  margin: 0;
+}
+.tts-clone-info-btn {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  font-size: 11px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 182, 220, 0.32);
+  background: rgba(255, 182, 220, 0.08);
+  color: rgba(255, 215, 235, 0.85);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  font-family: inherit;
+}
+
+/* MiniMax 品牌 logo：固定用官方渐变色，不跟随主题。
+   14px 略小于 emoji，与"音色快速复刻"标题文字基线对齐。 */
+.tts-clone-logo {
+  flex: 0 0 auto;
+  width: 18px;
+  height: 18px;
+  display: inline-block;
+  vertical-align: -3px;
+  margin-right: 4px;
+}
+.tts-clone-info-btn:hover {
+  background: rgba(255, 182, 220, 0.18);
+  border-color: rgba(255, 182, 220, 0.55);
+}
+
 .tts-clone-hint {
   font-size: 11px;
   color: rgba(235, 229, 245, 0.45);
-  margin: 0 0 14px;
+  margin: 0 0 10px;
   line-height: 1.5;
+}
+
+/* 费用 / 过期警告行 */
+.tts-clone-warning {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(255, 196, 120, 0.08);
+  border: 1px solid rgba(255, 196, 120, 0.28);
+  color: rgba(255, 222, 180, 0.92);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.tts-clone-warning strong {
+  color: #ffd49a;
+  font-weight: 600;
+}
+.tts-clone-info-link {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  color: #ffc9b8;
+  font-size: 12px;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  font-family: inherit;
+}
+.tts-clone-info-link:hover {
+  color: #ffe2d6;
+}
+
+/* 规格说明模态框内的分组 */
+.tts-clone-spec-block {
+  margin: 10px 0 14px;
+}
+.tts-clone-spec-block h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rb-text-strong, #fff);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.tts-clone-spec-icon {
+  flex: 0 0 auto;
+  display: inline-block;
+  vertical-align: -2px;
+}
+.tts-clone-spec-block ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: rgba(235, 229, 245, 0.78);
+}
+.tts-clone-spec-block code {
+  background: rgba(0, 0, 0, 0.32);
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  color: #ffd6e8;
+}
+.tts-clone-fee {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(255, 196, 120, 0.16);
+  border: 1px solid rgba(255, 196, 120, 0.4);
+  color: #ffe2b8;
+  font-weight: 600;
+}
+
+/* 富文本说明模态框（规格说明用）。复用 cy-modal 样式但加宽 body 并允许纵向滚动。 */
+.cy-html-modal {
+  width: min(560px, 92vw);
+  max-height: 86vh;
+  display: flex;
+  flex-direction: column;
+}
+.cy-html-modal__body {
+  margin: 0 0 16px;
+  padding: 0 4px;
+  overflow-y: auto;
+  max-height: calc(86vh - 160px);
+  color: rgba(235, 229, 245, 0.88);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.cy-html-modal__body p {
+  margin: 0 0 6px;
+}
+
+/* ===== pearl-white 主题覆盖（默认主题沿用上方暗色配色） =====
+   注意：暗色默认主题的所有色都是针对深底设计的浅色字 / 半透明边框，
+   套到白底上全部消失。这里只为本次新增的元素覆盖，主题文件里已有的
+   .tts-clone-section / .tts-clone-title / .tts-clone-hint 等都已覆盖。 */
+[data-ui-theme="pearl-white"] .tts-clone-info-btn {
+  color: var(--rb-pink-700);
+  background: var(--rb-pink-50);
+  border-color: var(--rb-pink-200);
+}
+[data-ui-theme="pearl-white"] .tts-clone-info-btn:hover {
+  color: var(--rb-pink-700);
+  background: var(--rb-pink-100);
+  border-color: var(--rb-pink-400);
+}
+
+[data-ui-theme="pearl-white"] .tts-clone-warning {
+  color: #8a4a14;                       /* 深棕：白底上读得清 */
+  background: #fff5e6;                  /* 实色浅橙底 */
+  border-color: #f5d4a8;
+}
+[data-ui-theme="pearl-white"] .tts-clone-warning strong {
+  color: #7a3d0a;
+}
+
+[data-ui-theme="pearl-white"] .tts-clone-info-link {
+  color: var(--rb-pink-600);
+}
+[data-ui-theme="pearl-white"] .tts-clone-info-link:hover {
+  color: var(--rb-pink-700);
+}
+
+/* 模态框 body 与富文本元素：dark 默认下"rgb 浅紫 + 黑底 code"
+   在白底上不可读。复用主题文件里 .cy-modal 的覆盖规则，body 与代码块单独适配。 */
+[data-ui-theme="pearl-white"] .cy-html-modal__body {
+  color: var(--rb-text-default);
+}
+[data-ui-theme="pearl-white"] .tts-clone-spec-block h4 {
+  color: var(--rb-text-strong);
+}
+[data-ui-theme="pearl-white"] .tts-clone-spec-block ul {
+  color: var(--rb-text-default);
+}
+[data-ui-theme="pearl-white"] .tts-clone-spec-block code {
+  background: var(--rb-pink-50);
+  color: var(--rb-pink-700);
+  border: 1px solid var(--rb-pink-100);
+}
+[data-ui-theme="pearl-white"] .tts-clone-fee {
+  color: #7a3d0a;
+  background: #fff0d6;
+  border-color: #f5d4a8;
 }
 
 .tts-pick-btn {
@@ -2827,6 +3053,56 @@ body {
 .tts-clone-status.is-ok { color: #4ade80; }
 .tts-clone-status.is-error { color: #f87171; }
 .tts-clone-status.is-loading { color: var(--rb-text-muted); }
+
+/* Mossland 已克隆音色列表（拉取 GET /v1/audio/voices 后渲染） */
+.tts-mossland-voice-list {
+  list-style: none;
+  margin: 10px 0 0;
+  padding: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 182, 220, 0.14);
+}
+.tts-mossland-voice-list:empty {
+  display: none;
+}
+.tts-mossland-voice-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+  border-bottom: 1px solid rgba(255, 182, 220, 0.08);
+}
+.tts-mossland-voice-list li:last-child {
+  border-bottom: 0;
+}
+.tts-mossland-voice-list .voice-id {
+  font-family: ui-monospace, "SFMono-Regular", monospace;
+  color: var(--rb-text-default);
+  flex: 1 1 auto;
+  word-break: break-all;
+}
+.tts-mossland-voice-list .voice-name {
+  color: var(--rb-text-muted);
+  font-size: 11px;
+  flex: 0 0 auto;
+}
+.tts-mossland-voice-list .voice-use {
+  flex: 0 0 auto;
+  padding: 3px 10px;
+  font-size: 11px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 182, 220, 0.32);
+  background: rgba(255, 182, 220, 0.08);
+  color: var(--rb-text-default);
+  cursor: pointer;
+}
+.tts-mossland-voice-list .voice-use:hover {
+  background: rgba(255, 182, 220, 0.18);
+  border-color: rgba(255, 182, 220, 0.55);
+}
 
 /* ── Skill 面板 ── */
 .skill-row {

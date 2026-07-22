@@ -517,6 +517,26 @@ const ttsApi = {
     apiKey: string; voiceAudioPath?: string; text: string; stylePrompt?: string;
     expectedCacheKey?: string;
   }) => ipcRenderer.invoke(IPC.TTS_SYNTHESIZE_CACHED_MIMO, payload),
+  // Mossland TTS（api.mosi.cn，POST /v1/audio/speech）
+  synthesizeMossland: (payload: {
+    apiKey: string; voiceId: string; text: string;
+    speed?: number; volume?: number; model?: string;
+    format?: "mp3" | "wav" | "pcm";
+  }) => ipcRenderer.invoke(IPC.TTS_SYNTHESIZE_MOSSLAND, payload),
+  synthesizeCachedMossland: (payload: {
+    apiKey: string; voiceId: string; text: string;
+    speed?: number; volume?: number; model?: string;
+    format?: "mp3" | "wav" | "pcm";
+    expectedCacheKey?: string;
+  }) => ipcRenderer.invoke(IPC.TTS_SYNTHESIZE_CACHED_MOSSLAND, payload),
+  // Mossland 音色克隆（POST /v1/audio/voices，multipart 上传本地文件）
+  cloneMossland: (payload: {
+    apiKey: string; filePath: string; name?: string; description?: string;
+  }) => ipcRenderer.invoke(IPC.TTS_CLONE_MOSSLAND, payload),
+  // Mossland 拉取账号下音色列表（GET /v1/audio/voices）
+  listMosslandVoices: (payload: {
+    apiKey: string; limit?: number;
+  }) => ipcRenderer.invoke(IPC.TTS_LIST_MOSSLAND_VOICES, payload),
   // 选择音频文件（复用 TTS_PICK_AUDIO，gptsovits 选 ref audio 也用这个）
   pickAudioFile: () => ipcRenderer.invoke(IPC.TTS_PICK_AUDIO),
   // 流式语音合成（边合成边播）

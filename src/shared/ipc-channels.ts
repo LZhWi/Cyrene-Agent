@@ -209,6 +209,10 @@ export const IPC = {
   TTS_SYNTHESIZE_CACHED_CUSTOM_CLOUD: "tts:synthesize-cached-custom-cloud", // 自定义云端 TTS 合成 + 本地缓存
   TTS_SYNTHESIZE_MIMO: "tts:synthesize-mimo",             // 小米 MiMo TTS 合成 → base64
   TTS_SYNTHESIZE_CACHED_MIMO: "tts:synthesize-cached-mimo", // 小米 MiMo TTS 合成 + 本地缓存
+  TTS_SYNTHESIZE_MOSSLAND: "tts:synthesize-mossland",       // Mossland (api.mosi.cn) 合成 → base64
+  TTS_SYNTHESIZE_CACHED_MOSSLAND: "tts:synthesize-cached-mossland", // Mossland 合成 + 本地缓存
+  TTS_CLONE_MOSSLAND: "tts:clone-mossland",           // Mossland 克隆音色（multipart 上传）
+  TTS_LIST_MOSSLAND_VOICES: "tts:list-mossland-voices", // Mossland 拉取账号下音色列表
 
   // agent permission level (file/shell access)
   PERMISSION_GET_LEVEL: "permission:get-level",
