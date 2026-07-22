@@ -1125,22 +1125,26 @@ function buildWeatherCardEl(data: Record<string, unknown>): HTMLElement {
   const humidity = Number(data.humidity ?? 0);
   const precip = Number(data.precip ?? 0);
   const pressure = Number(data.pressure ?? 0);
-  const icon = String(data.icon ?? "🌤️");
-  const windDir = String(data.windDir ?? "");
-  const windScale = String(data.windScale ?? "");
-  const visibility = data.visibility != null ? `${data.visibility}km` : "—";
-  const uv = String(data.uv ?? "—");
+  const icon = escapeHtml(String(data.icon ?? "🌤️"));
+  const windDir = escapeHtml(String(data.windDir ?? ""));
+  const windScale = escapeHtml(String(data.windScale ?? ""));
+  const visibility = data.visibility != null ? `${data.visibility}km` : "-";
+  const uv = escapeHtml(String(data.uv ?? "-"));
   const aqi = data.aqi != null ? Number(data.aqi) : null;
-  const aqiText = String(data.aqiText ?? "");
-  const kaomoji = aqi != null ? aqiKaomojiText(Number(aqi)) : "";
+  const aqiText = escapeHtml(String(data.aqiText ?? ""));
+  const kaomoji = aqi != null ? escapeHtml(aqiKaomojiText(Number(aqi))) : "";
+  const city = escapeHtml(String(data.city ?? ""));
+  const adm = escapeHtml(String(data.adm ?? ""));
+  const desc = escapeHtml(String(data.text ?? ""));
+  const source = escapeHtml(String(data.source ?? ""));
 
   card.innerHTML = `
     <div class="w-header">
       <div class="w-datetime"><span class="w-date">${dateStr}</span><span class="w-time">${timeStr} 更新</span></div>
-      <div class="w-loc"><span class="w-city">${String(data.city ?? "")}</span><span class="w-adm">${String(data.adm ?? "")}</span></div>
+      <div class="w-loc"><span class="w-city">${city}</span><span class="w-adm">${adm}</span></div>
     </div>
     <div class="w-main">
-      <div class="w-icon-box"><span class="w-icon">${icon}</span><span class="w-desc">${String(data.text ?? "")}</span></div>
+      <div class="w-icon-box"><span class="w-icon">${icon}</span><span class="w-desc">${desc}</span></div>
       <div class="w-temp-box">
         <div class="w-temp">${temp}<span class="w-deg">°</span></div>
         ${data.hi != null ? `<div class="w-hilo"><span class="w-hi">↑${data.hi}°</span><span class="w-sep">|</span><span class="w-lo">↓${data.lo}°</span></div>` : ""}
@@ -1151,7 +1155,7 @@ function buildWeatherCardEl(data: Record<string, unknown>): HTMLElement {
       <div class="w-qitem"><div class="w-qicon">💧</div><div class="w-qlabel">湿度</div><div class="w-qvalue">${humidity}%</div></div>
       <div class="w-qitem"><div class="w-qicon">💨</div><div class="w-qlabel">风力</div><div class="w-qvalue">${windScale}</div></div>
       <div class="w-qitem"><div class="w-qicon">🌧️</div><div class="w-qlabel">降水</div><div class="w-qvalue">${precip}mm</div></div>
-      <div class="w-qitem"><div class="w-qicon"><svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><title>气压</title><path d="M4 42H44" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><rect x="8" y="28" width="6" height="14" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><rect x="21" y="18" width="6" height="24" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><rect x="34" y="6" width="6" height="36" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg></div><div class="w-qlabel">气压</div><div class="w-qvalue">${pressure || "—"}</div></div>
+      <div class="w-qitem"><div class="w-qicon"><svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><title>气压</title><path d="M4 42H44" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><rect x="8" y="28" width="6" height="14" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><rect x="21" y="18" width="6" height="24" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><rect x="34" y="6" width="6" height="36" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg></div><div class="w-qlabel">气压</div><div class="w-qvalue">${pressure || "-"}</div></div>
     </div>
     <button class="w-expand" type="button">查看更多 <span class="w-arrow">▼</span></button>
     <div class="w-details">
@@ -1163,7 +1167,7 @@ function buildWeatherCardEl(data: Record<string, unknown>): HTMLElement {
         ${aqi != null ? `<div class="w-ditem"><span class="w-dicon">🌿</span><div><div class="w-dlabel">空气质量</div><div class="w-dvalue">${aqi} ${aqiText} <span class="w-kaomoji">${kaomoji}</span></div></div></div>` : ""}
       </div>
     </div>
-    <div class="w-source"><span>${icon} ${String(data.source ?? "")}</span><span>${timeStr} 更新</span></div>
+    <div class="w-source"><span>${icon} ${source}</span><span>${timeStr} 更新</span></div>
   `;
 
   // 展开按钮点击切换
