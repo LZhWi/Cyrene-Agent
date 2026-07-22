@@ -12,7 +12,7 @@ import { loadChannelsSettings, saveChannelsSettings } from "./settings-store";
 import { channelManager } from "./manager";
 import type { ChannelId, IncomingMessage } from "./types";
 import { applySyncSnapshot, buildSyncSnapshot } from "../sync/sync-service";
-import type { SyncSnapshot } from "../sync/types";
+import type { HistoryBundle, SyncSnapshot } from "../sync/types";
 
 const LOG = "[InboundServer]";
 
@@ -53,11 +53,32 @@ export type InboundChatRunner = (input: {
   sessionId: string;
   /** 用户输入文本。 */
   text: string;
-}) => Promise<{ reply: string }>;
+}) => Promise<{
+  reply: string;
+  /** PC 给用户消息落历史时的权威时间戳（ISO），端上据此存本地条目，保证与 /sync 去重键一致。 */
+  userAt?: string;
+  /** PC 给回复落历史时的权威时间戳（ISO）。 */
+  assistantAt?: string;
+}>;
 
 let chatRunner: InboundChatRunner | null = null;
 export function setInboundChatRunner(fn: InboundChatRunner | null): void {
   chatRunner = fn;
+}
+
+/**
+ * 只读桌面历史提供者（可注入）。
+ *
+ * 用途：手机端「桌面对话」只读镜像。桌面 proactive-chat 会话存在 chatsStore（非 history-log），
+ * 不在 buildSyncSnapshot 的常规 stem 里。这里由 index.ts 注入一个把 proactive-chat 会话转成
+ * HistoryBundle 的函数，/sync/pull 时把它追加进快照 history（stem 用只读前缀，见 types.ts）。
+ * 手机拉到后仅展示、不回写；PC 收到 push 时会跳过该前缀的 stem（防幻影历史文件）。
+ */
+export type DesktopHistoryProvider = (since: number) => HistoryBundle[];
+
+let desktopHistoryProvider: DesktopHistoryProvider | null = null;
+export function setDesktopHistoryProvider(fn: DesktopHistoryProvider | null): void {
+  desktopHistoryProvider = fn;
 }
 
 /** 内部：检查共享密钥（仅当 secret 已设置时强制校验） */
@@ -179,6 +200,17 @@ async function handleRequest(
       }
       try {
         const snapshot = await buildSyncSnapshot(getPcDeviceId(), since);
+        // 追加只读桌面镜像 bundle（手机「桌面对话」用）。失败不影响主同步。
+        if (desktopHistoryProvider) {
+          try {
+            const extra = desktopHistoryProvider(since);
+            for (const bundle of extra) {
+              if (bundle && bundle.stem && bundle.entries.length > 0) snapshot.history.push(bundle);
+            }
+          } catch (err) {
+            console.warn(LOG, "desktopHistoryProvider 失败（跳过只读镜像）:", err);
+          }
+        }
         sendJson(res, 200, { ok: true, snapshot });
       } catch (err) {
         console.error(LOG, "sync/pull 失败:", err);
@@ -250,8 +282,8 @@ async function handleRequest(
           ? body.sessionId.trim()
           : "channel:mobile:main";
       try {
-        const { reply } = await chatRunner({ sessionId, text: userText });
-        sendJson(res, 200, { ok: true, reply, sessionId });
+        const { reply, userAt, assistantAt } = await chatRunner({ sessionId, text: userText });
+        sendJson(res, 200, { ok: true, reply, sessionId, userAt, assistantAt });
       } catch (err) {
         console.error(LOG, "chat 失败:", err);
         sendJson(res, 500, { ok: false, error: "chat failed" });

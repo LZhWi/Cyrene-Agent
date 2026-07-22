@@ -123,7 +123,8 @@ import { initGameBot } from "./game-bot";
 import { initChannels, shutdownChannels, setChannelsConversationLifecycle } from "./channels/init";
 import { buildChannelAttachmentInputs } from "./channels/agent-input";
 import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadGeneralSettings, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
-import { setInboundChatRunner } from "./channels/inbound-server";
+import { setInboundChatRunner, setDesktopHistoryProvider } from "./channels/inbound-server";
+import { DESKTOP_PROACTIVE_STEM } from "./sync/types";
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
 import {
   buildAgentRunOptions,
@@ -4543,8 +4544,9 @@ app.whenReady().then(async () => {
       .filter((m) => typeof m.content === "string" && m.content.trim().length > 0)
       .map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }));
 
+    let userAt: string | undefined;
     try {
-      appendHistory(sessionId, "user", text);
+      userAt = appendHistory(sessionId, "user", text)?.at;
     } catch (err) {
       console.warn("[Mobile] appendHistory (user) 失败:", err);
     }
@@ -4558,6 +4560,21 @@ app.whenReady().then(async () => {
       },
       buildOptionsDeps,
     );
+    // 手机 App 与 wechat/feishu 一样是「远程渠道」：按 toolSandbox 过滤可用工具，
+    // 覆盖默认的全量 enabledTools。否则 mobile 会拿到桌面 agent 的全部工具
+    // （含视觉 read_image / 截图等 risky 工具），导致把纯文本消息误当成图片去「看」。
+    {
+      const sandbox = loadChannelsSettings().toolSandbox;
+      const allTools = toolRegistry.getEnabledTools();
+      const filteredTools: ToolDefinition[] = sandbox === "safe-only"
+        ? allTools.filter((t) => (t.risk ?? "safe") === ("safe" as ToolRiskLevel))
+        : allTools;
+      options.tools = filteredTools;
+      console.log(
+        "[Mobile] chat run:",
+        `sessionId=${sessionId} sandbox=${sandbox} tools=${filteredTools.length}/${allTools.length}`,
+      );
+    }
 
     const threadId = `thread-${sessionId}-${Date.now()}`;
     const agent = new CyreneAgent({ threadId, description: `mobile:${sessionId}` });
@@ -4571,13 +4588,37 @@ app.whenReady().then(async () => {
     if (agent.lastResult) {
       await onAgentRunFinished(agent.lastResult, text, onRunFinishedDeps, "mobile");
     }
+    let assistantAt: string | undefined;
     try {
-      appendHistory(sessionId, "assistant", reply);
+      assistantAt = appendHistory(sessionId, "assistant", reply)?.at;
     } catch (err) {
       console.warn("[Mobile] appendHistory (assistant) 失败:", err);
     }
     void indexConversationTurn(sessionId, text, reply);
-    return { reply };
+    // 回传权威时间戳：端上用它存本地条目，保证与 /sync 拉回来的历史去重键一致（避免同步出现重复消息）。
+    return { reply, userAt, assistantAt };
+  });
+
+  // 手机「桌面对话」只读镜像（阶段 1）：把桌面 proactive-chat 会话转成一个只读 HistoryBundle，
+  // 随 /sync/pull 下发给手机展示。手机只读不回写；PC 收到 push 会按 READONLY 前缀跳过（见 sync-service）。
+  setDesktopHistoryProvider((since) => {
+    try {
+      const session = chatsStore.getSessionByPurpose("proactive-chat");
+      if (!session) return [];
+      const entries = session.messages
+        .filter((m) => typeof m.content === "string" && m.content.trim().length > 0)
+        .filter((m) => !(since > 0) || m.at >= since)
+        .map((m) => ({
+          role: (m.role === "model" ? "assistant" : "user") as "user" | "assistant",
+          content: m.content,
+          at: new Date(m.at).toISOString(),
+        }));
+      if (entries.length === 0) return [];
+      return [{ stem: DESKTOP_PROACTIVE_STEM, entries }];
+    } catch (err) {
+      console.warn("[Mobile] desktopHistoryProvider 失败:", err);
+      return [];
+    }
   });
 
   // Phase 3.1：注入 TTS 合成 —— dispatcher 在 reply 后会用这个生成渠道音频

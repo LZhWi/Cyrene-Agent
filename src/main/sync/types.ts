@@ -24,6 +24,16 @@ export interface HistoryBundle {
 }
 
 /**
+ * 只读镜像 stem 前缀。带此前缀的 HistoryBundle 只用于对端「只读展示」（如手机「桌面对话」），
+ * 不是真正的 history-log 文件：applySyncSnapshot 收到带此前缀的 bundle 时直接跳过，
+ * 避免在 PC 侧落地出幻影历史文件。
+ */
+export const READONLY_HISTORY_STEM_PREFIX = "desktop_";
+
+/** 手机「桌面对话」只读镜像使用的固定 stem（对应桌面 proactive-chat 会话）。 */
+export const DESKTOP_PROACTIVE_STEM = "desktop_proactive";
+
+/**
  * 同步快照：一端把"自 since 以来的可合并事实"打包给对端。
  *
  * - L0/L1 始终整块携带（体积极小，按时间戳整块 LWW）。

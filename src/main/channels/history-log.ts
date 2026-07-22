@@ -43,9 +43,10 @@ function filePath(sessionId: string): string {
   return path.join(dir(), `${safeName(sessionId)}.jsonl`);
 }
 
-/** 追加一条. role 只能是 user/assistant (dispatcher 内部强制). */
-export function appendHistory(sessionId: string, role: "user" | "assistant", content: string): void {
-  if (!sessionId || !content) return;
+/** 追加一条. role 只能是 user/assistant (dispatcher 内部强制).
+ *  返回写入的 HistoryEntry（含权威 at，用于回传给端上做跨端去重）；跳过/失败时返回 null。 */
+export function appendHistory(sessionId: string, role: "user" | "assistant", content: string): HistoryEntry | null {
+  if (!sessionId || !content) return null;
   const entry: HistoryEntry = { role, content, at: new Date().toISOString() };
   const fp = filePath(sessionId);
   try {
@@ -58,8 +59,10 @@ export function appendHistory(sessionId: string, role: "user" | "assistant", con
       const trimmed = lines.slice(lines.length - MAX_FILE_LINES).join("\n");
       fs.writeFileSync(fp, trimmed.endsWith("\n") ? trimmed : trimmed + "\n", "utf8");
     }
+    return entry;
   } catch (err) {
     console.warn(LOG, "appendHistory 失败:", sessionId, err instanceof Error ? err.message : err);
+    return null;
   }
 }
 

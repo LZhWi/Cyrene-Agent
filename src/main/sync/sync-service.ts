@@ -26,6 +26,7 @@ import {
   mergeReflectionLogs,
 } from "./merge";
 import type { HistoryBundle, SyncApplyStats, SyncSnapshot } from "./types";
+import { READONLY_HISTORY_STEM_PREFIX } from "./types";
 
 /** since 判定：ISO 时间戳字符串是否 >= since(ms)。 */
 function historyEntryAtOrAfter(entry: HistoryEntry, since: number): boolean {
@@ -104,6 +105,8 @@ export async function applySyncSnapshot(
   let historyAdded = 0;
   for (const bundle of incoming.history ?? []) {
     if (!bundle.stem) continue;
+    // 只读镜像 stem（如手机「桌面对话」）只用于对端展示，PC 不落地，避免生成幻影历史文件。
+    if (bundle.stem.startsWith(READONLY_HISTORY_STEM_PREFIX)) continue;
     const base = readHistoryByStem(bundle.stem);
     const { merged, added } = mergeHistoryEntries(base, bundle.entries ?? []);
     if (added > 0) {
