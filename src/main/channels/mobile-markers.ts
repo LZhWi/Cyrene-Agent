@@ -1,0 +1,38 @@
+// 手机端「内联标记」与 LLM 可读描述之间的转换。
+// 标记形态：[sticker:<id>] / [image:<hash>]。history-log 存标记，喂 LLM 时转描述。
+import { BUILT_IN_STICKER_DESCRIPTIONS } from "../sticker-descriptions";
+import { loadUserStickerManifest } from "../sticker-storage";
+
+const STICKER_RE = /\[sticker:([A-Za-z0-9_-]+)\]/g;
+const IMAGE_RE = /\[image:([A-Za-z0-9_-]+)\]/g;
+
+export function formatStickerMarker(id: string): string {
+  return `[sticker:${id}]`;
+}
+
+export function formatImageMarker(hash: string): string {
+  return `[image:${hash}]`;
+}
+
+/** 取一个 sticker id 的中文描述（内置 phrases / 用户 manifest phrases / 兜底空）。 */
+export function getStickerDescription(id: string): string {
+  const builtIn = BUILT_IN_STICKER_DESCRIPTIONS[id];
+  if (builtIn && builtIn.phrases.length > 0) return builtIn.phrases.join("，");
+  try {
+    const meta = loadUserStickerManifest()[id];
+    if (meta) return meta.phrases.length > 0 ? meta.phrases.join("，") : meta.description;
+  } catch {
+    /* ignore */
+  }
+  return "";
+}
+
+/** 把内容里的 [sticker:id]/[image:hash] 转成 LLM 可读文字。 */
+export function describeMarkersForLlm(content: string): string {
+  return content
+    .replace(STICKER_RE, (_m, id: string) => {
+      const desc = getStickerDescription(id);
+      return desc ? `（发送表情包：${desc}）` : "（发送表情包）";
+    })
+    .replace(IMAGE_RE, "（图片）");
+}
