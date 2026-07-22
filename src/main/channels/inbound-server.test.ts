@@ -207,6 +207,26 @@ describe("inbound-server · /chat forward", () => {
     expect(gotSession).toBe("channel:mobile:main");
     mod.setInboundChatRunner(null);
   });
+
+  it("accepts images and returns userContent (with sticker marker in reply)", async () => {
+    const { port, secret, mod } = await start();
+    mod.setInboundChatRunner(async ({ text, images }) => ({
+      reply: "看到啦 [sticker:OK]",
+      userContent: `${text} [image:${"a".repeat(64)}]`,
+      userAt: "2026-07-19T00:00:00.000Z",
+      assistantAt: "2026-07-19T00:00:01.000Z",
+    }));
+    const res = await req(port, "POST", "/chat", secret, {
+      sessionId: "channel:mobile:main",
+      text: "看这个",
+      images: [{ name: "a.png", mime: "image/png", dataBase64: "AAAA" }],
+    });
+    expect(res.status).toBe(200);
+    expect(res.json.ok).toBe(true);
+    expect(res.json.reply).toContain("[sticker:OK]");
+    expect(res.json.userContent).toContain("[image:");
+    mod.setInboundChatRunner(null);
+  });
 });
 
 describe("inbound-server · bind host", () => {

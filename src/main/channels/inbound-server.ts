@@ -13,6 +13,12 @@ import { channelManager } from "./manager";
 import type { ChannelId, IncomingMessage } from "./types";
 import { applySyncSnapshot, buildSyncSnapshot } from "../sync/sync-service";
 import type { HistoryBundle, SyncSnapshot } from "../sync/types";
+import { getAllStickerConfig } from "../sticker-storage";
+import { resolveStickerImagePath } from "./dispatcher";
+import { resolveBlobPath, extToMime } from "./mobile-blobs";
+import { readHistoryByStem, writeHistoryByStem, stemForSession } from "./history-log";
+import * as fs from "fs";
+import * as path from "path";
 
 const LOG = "[InboundServer]";
 
@@ -53,9 +59,13 @@ export type InboundChatRunner = (input: {
   sessionId: string;
   /** 用户输入文本。 */
   text: string;
+  /** 手机随消息发来的图片（base64）。运行器落 blob 并做视觉分析。 */
+  images?: { name: string; mime: string; dataBase64: string }[];
 }) => Promise<{
   reply: string;
-  /** PC 给用户消息落历史时的权威时间戳（ISO），端上据此存本地条目，保证与 /sync 去重键一致。 */
+  /** 权威 user 内容（含 [image:hash] 标记），端上按此存本地，保证与 /sync 去重键一致。 */
+  userContent?: string;
+  /** PC 给用户消息落历史时的权威时间戳（ISO）。 */
   userAt?: string;
   /** PC 给回复落历史时的权威时间戳（ISO）。 */
   assistantAt?: string;
@@ -264,17 +274,28 @@ async function handleRequest(
         sendJson(res, 503, { ok: false, error: "chat runner not ready" });
         return;
       }
-      let body: { sessionId?: unknown; text?: unknown } | null = null;
+      let body:
+        | { sessionId?: unknown; text?: unknown; images?: unknown }
+        | null = null;
       try {
-        const text = await readBody(req);
-        body = text ? (JSON.parse(text) as { sessionId?: unknown; text?: unknown }) : null;
+        const text = await readBody(req, 16 * 1024 * 1024);
+        body = text ? JSON.parse(text) : null;
       } catch (err) {
         sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : "bad json" });
         return;
       }
       const userText = typeof body?.text === "string" ? body.text.trim() : "";
-      if (!userText) {
-        sendJson(res, 400, { ok: false, error: "missing text" });
+      const rawImages = Array.isArray(body?.images) ? body!.images : [];
+      const images = rawImages
+        .filter(
+          (x: unknown): x is { name: string; mime: string; dataBase64: string } =>
+            !!x &&
+            typeof (x as any).mime === "string" &&
+            typeof (x as any).dataBase64 === "string",
+        )
+        .map((x) => ({ name: typeof x.name === "string" ? x.name : "image", mime: x.mime, dataBase64: x.dataBase64 }));
+      if (!userText && images.length === 0) {
+        sendJson(res, 400, { ok: false, error: "missing text or images" });
         return;
       }
       const sessionId =
@@ -282,11 +303,98 @@ async function handleRequest(
           ? body.sessionId.trim()
           : "channel:mobile:main";
       try {
-        const { reply, userAt, assistantAt } = await chatRunner({ sessionId, text: userText });
-        sendJson(res, 200, { ok: true, reply, sessionId, userAt, assistantAt });
+        const { reply, userContent, userAt, assistantAt } = await chatRunner({
+          sessionId,
+          text: userText,
+          images: images.length > 0 ? images : undefined,
+        });
+        sendJson(res, 200, { ok: true, reply, sessionId, userContent, userAt, assistantAt });
       } catch (err) {
         console.error(LOG, "chat 失败:", err);
         sendJson(res, 500, { ok: false, error: "chat failed" });
+      }
+      return;
+    }
+  }
+
+  // 表情包列表：GET /stickers → { ok, stickers:[{id,description}] }
+  {
+    const m2 = /^\/stickers\/?$/.exec(req.url || "");
+    if (m2 && req.method === "GET") {
+      if (!checkSecret(req, secret)) { sendJson(res, 401, { ok: false, error: "invalid shared secret" }); return; }
+      try {
+        const items = getAllStickerConfig({})
+          .filter((it) => it.enabled)
+          .map((it) => ({ id: it.id, description: it.description }));
+        sendJson(res, 200, { ok: true, stickers: items });
+      } catch (err) {
+        console.error(LOG, "/stickers 失败:", err);
+        sendJson(res, 500, { ok: false, error: "stickers failed" });
+      }
+      return;
+    }
+  }
+
+  // 表情包图片：GET /sticker/:id
+  {
+    const m2 = /^\/sticker\/([A-Za-z0-9_-]+)\/?$/.exec(req.url || "");
+    if (m2 && req.method === "GET") {
+      if (!checkSecret(req, secret)) { sendJson(res, 401, { ok: false, error: "invalid shared secret" }); return; }
+      const fp = resolveStickerImagePath(decodeURIComponent(m2[1]));
+      if (!fp || !fs.existsSync(fp)) { sendJson(res, 404, { ok: false, error: "sticker not found" }); return; }
+      const ext = path.extname(fp).slice(1).toLowerCase();
+      const mime = ext === "gif" ? "image/gif" : ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+      res.writeHead(200, { "content-type": mime, "cache-control": "public, max-age=31536000" });
+      fs.createReadStream(fp).pipe(res);
+      return;
+    }
+  }
+
+  // 图片 blob：GET /blob/:hash
+  {
+    const m2 = /^\/blob\/([0-9a-f]{64})\/?$/.exec(req.url || "");
+    if (m2 && req.method === "GET") {
+      if (!checkSecret(req, secret)) { sendJson(res, 401, { ok: false, error: "invalid shared secret" }); return; }
+      const fp = resolveBlobPath(m2[1]);
+      if (!fp) { sendJson(res, 404, { ok: false, error: "blob not found" }); return; }
+      const ext = path.extname(fp).slice(1).toLowerCase();
+      res.writeHead(200, { "content-type": extToMime(ext), "cache-control": "public, max-age=31536000" });
+      fs.createReadStream(fp).pipe(res);
+      return;
+    }
+  }
+
+  // 整轮删除：POST /history/delete-turn  body={ sessionId, at }
+  // 删除 at 命中的条目，并按 role 连带删除配对（user→后一条 assistant；assistant→前一条 user）。
+  {
+    const m2 = /^\/history\/delete-turn\/?$/.exec(req.url || "");
+    if (m2 && req.method === "POST") {
+      if (!checkSecret(req, secret)) { sendJson(res, 401, { ok: false, error: "invalid shared secret" }); return; }
+      let body: { sessionId?: unknown; at?: unknown } | null = null;
+      try {
+        const text = await readBody(req);
+        body = text ? JSON.parse(text) : null;
+      } catch (err) {
+        sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : "bad json" });
+        return;
+      }
+      const sessionId = typeof body?.sessionId === "string" ? body.sessionId.trim() : "";
+      const at = typeof body?.at === "string" ? body.at : "";
+      if (!sessionId || !at) { sendJson(res, 400, { ok: false, error: "missing sessionId or at" }); return; }
+      try {
+        const stem = stemForSession(sessionId);
+        const entries = readHistoryByStem(stem);
+        const idx = entries.findIndex((e) => e.at === at);
+        if (idx < 0) { sendJson(res, 200, { ok: true, removed: 0 }); return; }
+        const toRemove = new Set<number>([idx]);
+        if (entries[idx].role === "user" && entries[idx + 1]?.role === "assistant") toRemove.add(idx + 1);
+        else if (entries[idx].role === "assistant" && entries[idx - 1]?.role === "user") toRemove.add(idx - 1);
+        const kept = entries.filter((_, i) => !toRemove.has(i));
+        writeHistoryByStem(stem, kept);
+        sendJson(res, 200, { ok: true, removed: toRemove.size });
+      } catch (err) {
+        console.error(LOG, "/history/delete-turn 失败:", err);
+        sendJson(res, 500, { ok: false, error: "delete failed" });
       }
       return;
     }
