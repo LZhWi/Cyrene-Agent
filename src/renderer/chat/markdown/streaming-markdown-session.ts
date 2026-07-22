@@ -69,8 +69,11 @@ export function createStreamingMarkdownSession(
 
   // 上一次解析的 committed blocks（用于 fingerprint 对比）
   let lastCommitted: StreamMarkdownBlock[] = [];
-  // 上一次 active HTML（避免重复写入相同内容）
   let lastActiveHtml = "";
+  let renderFailureCount = 0;
+  let degraded = false;
+  /** committed 部分已渲染的字符 offset（用于降级时避免重复显示） */
+  let committedOffset = 0;
 
   // 创建 DOM 结构
   bubble.hidden = false;
@@ -111,35 +114,82 @@ export function createStreamingMarkdownSession(
 
   function doRender(): void {
     if (disposed) return;
-    const currentRevision = revision;
 
-    // 解析 blocks
-    const blocks = parseStreamingBlocks(md, raw);
-    const { committed, mutable } = splitCommittedAndMutable(blocks, 2);
+    // 降级模式：整条消息用 textContent，不做 block reconciliation
+    if (degraded) {
+      return; // 终态 render() 会接管
+    }
 
-    // 处理新 committed blocks（只追加新增的）
-    const newCommitted = committed.slice(lastCommitted.length);
-    for (const block of newCommitted) {
-      const html = renderCommittedBlock(md, block);
-      if (html) {
-        const wrapper = document.createElement("div");
-        wrapper.innerHTML = html;
-        // 移动子节点到 stableRoot（不保留 wrapper）
-        while (wrapper.firstChild) {
-          stableRoot.appendChild(wrapper.firstChild);
+    try {
+      const currentRevision = revision;
+
+      // 解析 blocks
+      let blocks: StreamMarkdownBlock[];
+      try {
+        blocks = parseStreamingBlocks(md, raw);
+      } catch (parseErr) {
+        console.error("[streaming-session] parseStreamingBlocks 失败:", parseErr);
+        renderFailureCount++;
+        checkDegraded();
+        // 降级：只更新 activeRoot（不含已 committed 的部分，避免重复）
+        const activeRaw = raw.slice(committedOffset);
+        activeRoot.textContent = activeRaw;
+        return;
+      }
+
+      const { committed, mutable } = splitCommittedAndMutable(blocks, 2);
+
+      // 处理新 committed blocks（只追加新增的）
+      const newCommitted = committed.slice(lastCommitted.length);
+      for (const block of newCommitted) {
+        const html = renderCommittedBlock(md, block);
+        if (html) {
+          const wrapper = document.createElement("div");
+          wrapper.innerHTML = html;
+          while (wrapper.firstChild) {
+            stableRoot.appendChild(wrapper.firstChild);
+          }
         }
+        committedOffset = block.endOffset;
+      }
+      lastCommitted = committed;
+
+      // 渲染 mutable tail
+      const activeHtml = renderMutableTail(md, mutable);
+      if (activeHtml !== lastActiveHtml) {
+        activeRoot.innerHTML = activeHtml;
+        lastActiveHtml = activeHtml;
+      }
+
+      // 成功渲染，重置失败计数
+      renderFailureCount = 0;
+
+      followScroll();
+    } catch (err) {
+      console.error("[streaming-session] doRender 失败:", err);
+      renderFailureCount++;
+      checkDegraded();
+
+      // 降级：只更新 activeRoot（不含已 committed 的部分，避免重复）
+      try {
+        const activeRaw = raw.slice(committedOffset);
+        activeRoot.textContent = activeRaw;
+      } catch {
+        // 最后兜底
       }
     }
-    lastCommitted = committed;
+  }
 
-    // 渲染 mutable tail
-    const activeHtml = renderMutableTail(md, mutable);
-    if (activeHtml !== lastActiveHtml) {
-      activeRoot.innerHTML = activeHtml;
-      lastActiveHtml = activeHtml;
+  /** 检查是否需要进入降级模式（连续 3 次失败） */
+  function checkDegraded(): void {
+    if (renderFailureCount >= 3 && !degraded) {
+      degraded = true;
+      console.warn("[streaming-session] 连续渲染失败 3 次，进入降级模式");
+      // 清空 stableRoot，用完整 raw 作为 textContent
+      stableRoot.innerHTML = "";
+      activeRoot.textContent = raw;
+      committedOffset = 0;
     }
-
-    followScroll();
   }
 
   return {

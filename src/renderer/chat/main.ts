@@ -16,7 +16,6 @@ import {
   getAssistantReplyBubbleTexts,
   MAX_ASSISTANT_REPLY_BUBBLES,
   shouldBreakStreamingBubbleAfterChar,
-  shouldSkipStreamingBubbleLeadingChar,
   shouldSegmentAssistantReply,
 } from "./message-segmentation";
 import { buildDocumentContextLines, processDocumentsWithWait, type RetrievedDocumentChunk } from "./document-processing";
@@ -272,6 +271,112 @@ const messagesEl = document.getElementById("messages") as HTMLElement;
 // 初始化 Markdown 渲染系统（Shiki 异步启动 + 复制按钮事件委托）
 initMarkdownRenderer();
 initCodeBlockController(messagesEl);
+
+// ── 历史消息渐进渲染队列 ────────────────────────────────────
+// render() 先同步创建纯文本占位，标记 data-md-pending，
+// 队列用 requestIdleCallback 渐进升级为 Markdown HTML。
+
+/** 存储所有助手 bubble 的原始 markdown 文本（WeakMap 防 DOM 回收后泄漏） */
+const bubbleRawText = new WeakMap<HTMLElement, string>();
+/** 向后兼容：pendingMarkdownText 指向同一个 WeakMap */
+const pendingMarkdownText = bubbleRawText;
+
+/** 队列状态 */
+let renderGeneration = 0;
+let historyIdleId: number | null = null;
+
+const HISTORY_MAX_BATCH = 3;
+const HISTORY_MIN_REMAINING_MS = 4;
+
+/** 取消当前队列，递增 generation */
+function cancelHistoryRender(): void {
+  renderGeneration++;
+  if (historyIdleId !== null) {
+    cancelIdleCallback(historyIdleId);
+    historyIdleId = null;
+  }
+}
+
+/** 调度历史消息渐进渲染（在 render() 后调用） */
+function scheduleHistoryRender(): void {
+  cancelHistoryRender();
+  const gen = renderGeneration;
+
+  const processBatch = (deadline?: IdleDeadline): void => {
+    historyIdleId = null;
+    if (gen !== renderGeneration) return; // 已被取消
+
+    const pendingBubbles = messagesEl.querySelectorAll<HTMLElement>("[data-md-pending='true']");
+    if (pendingBubbles.length === 0) return;
+
+    let processed = 0;
+    const hasDeadline = !!deadline;
+
+    for (const bubble of pendingBubbles) {
+      if (gen !== renderGeneration) return; // 已被取消
+      if (!bubble.isConnected) continue;
+
+      const text = pendingMarkdownText.get(bubble);
+      if (text === undefined) {
+        bubble.removeAttribute("data-md-pending");
+        continue;
+      }
+
+      const result = renderMarkdown(text);
+      if (result.mode === "html") {
+        bubble.innerHTML = result.content;
+      } else {
+        bubble.textContent = result.content;
+      }
+      bubble.removeAttribute("data-md-pending");
+      pendingMarkdownText.delete(bubble);
+      processed++;
+
+      // 时间预算：有 deadline 时检查剩余时间，无 deadline 时按数量限制
+      if (processed >= HISTORY_MAX_BATCH) break;
+      if (hasDeadline && deadline!.timeRemaining() < HISTORY_MIN_REMAINING_MS) break;
+    }
+
+    // 还有 pending，继续调度
+    if (gen === renderGeneration && messagesEl.querySelector("[data-md-pending='true']")) {
+      historyIdleId = requestIdleCallback(processBatch, { timeout: 200 });
+    }
+  };
+
+  // requestIdleCallback fallback
+  if (typeof requestIdleCallback === "function") {
+    historyIdleId = requestIdleCallback(processBatch, { timeout: 200 });
+  } else {
+    historyIdleId = null;
+    setTimeout(() => processBatch(undefined), 0);
+  }
+}
+
+/**
+ * 主题切换时刷新已完成助手消息的 Markdown 渲染（Shiki 主题更新）。
+ * 不调用全局 render()，避免销毁流式 session DOM。
+ * 流式 session 中的已稳定代码块暂保留旧主题（方案 B），终态自动切换。
+ */
+function refreshMarkdownTheme(): void {
+  // 取消旧队列
+  cancelHistoryRender();
+
+  // 找到所有助手消息气泡，标记为 pending 重新渲染
+  const assistantBubbles = messagesEl.querySelectorAll<HTMLElement>(".msg--model .msg__bubble");
+  for (const bubble of assistantBubbles) {
+    const text = bubbleRawText.get(bubble);
+    if (text !== undefined && text.trim()) {
+      bubble.dataset.mdPending = "true";
+    }
+  }
+
+  scheduleHistoryRender();
+}
+
+// 监听主题切换
+window.cyreneTheme?.onChanged(() => {
+  refreshMarkdownTheme();
+});
 
 const formEl = document.getElementById("composer") as HTMLFormElement;
 const inputEl = document.getElementById("input") as HTMLTextAreaElement;
@@ -1184,19 +1289,6 @@ function appendBubbleForMessage(messageId: string): HTMLElement | null {
   return bubble;
 }
 
-function appendStreamingCharToBubble(bubble: HTMLElement, char: string): void {
-  if (shouldSkipStreamingBubbleLeadingChar(char, bubble.childNodes.length === 0)) return;
-  bubble.hidden = false;
-  if (bubble.childNodes.length === 0) {
-    bubble.appendChild(document.createTextNode(char));
-    return;
-  }
-  const span = document.createElement("span");
-  span.className = "msg__char";
-  span.textContent = char;
-  bubble.appendChild(span);
-}
-
 function renderMessageAttachments(body: HTMLElement, attachments: MessageAttachment[] | undefined): void {
   if (!attachments || attachments.length === 0) return;
   const list = document.createElement("div");
@@ -1385,17 +1477,14 @@ function render(preserveScroll = false): void {
         if (text || m.transient) {
           const bubble = createMessageBubble();
           if (m.transient) {
-            // 流式期：纯文本，不跑 Markdown
+            // 流式期：纯文本，由 StreamingMarkdownSession 管理后续 DOM
             bubble.textContent = text;
           } else {
-            // 终态：Markdown 渲染
-            const result = renderMarkdown(text);
-            if (result.mode === "html") {
-              bubble.innerHTML = result.content;
-            } else {
-              bubble.textContent = result.content;
-            }
+            // 终态：先放纯文本占位，标记为 pending，由历史渐进队列升级为 Markdown
+            bubble.textContent = text;
+            bubble.dataset.mdPending = "true";
           }
+          bubbleRawText.set(bubble, text);
           bubbles.push(bubble);
         }
       }
@@ -1506,6 +1595,9 @@ function render(preserveScroll = false): void {
     messagesEl.appendChild(row);
   }
   if (!preserveScroll) messagesEl.scrollTop = messagesEl.scrollHeight;
+
+  // 历史消息渐进渲染：纯文本占位 -> Markdown HTML
+  scheduleHistoryRender();
 }
 
 let schedulerEventsOff: (() => void) | null = null;

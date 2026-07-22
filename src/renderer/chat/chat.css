@@ -1293,17 +1293,6 @@ body {
   30% { opacity: 1; }
 }
 
-/* 流式逐字渐显：每个字 span 从透明淡入，营造打字机渐显感 */
-.msg__char {
-  display: inline;
-  animation: char-fade-in 200ms ease-out;
-}
-
-@keyframes char-fade-in {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
 /* 工具调用提示：FC 循环里模型调工具时，气泡显示"🔧 调用中：xxx" */
 .msg__tool-tip {
   display: flex;
