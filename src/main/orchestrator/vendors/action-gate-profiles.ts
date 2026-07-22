@@ -128,12 +128,18 @@ const PROFILES: ProfileDefinition[] = [
     profile: {
       // thinking on: named 不可用，required 仍可用
       toolChoice: { parameterAccepted: true, modes: ["required", "auto", "none"], behaviorWhenOmitted: "auto" },
-      reasoning: { canDisablePerRequest: true, preferredForActionGate: "preserve" },
+      reasoning: { canDisablePerRequest: true, preferredForActionGate: "disable" },
       toolCalling: { reliableWithReasoning: true, requiresReasoningReplay: true },
       fallback: { jsonText: false, maxProtocolRepairs: 1 },
     },
   },
-  { match: { provider: "kimi", reasoning: "off" }, profile: FULL_PROFILE },
+  {
+    match: { provider: "kimi", reasoning: "off" },
+    profile: {
+      ...FULL_PROFILE,
+      reasoning: { canDisablePerRequest: true, preferredForActionGate: "disable" },
+    },
+  },
 
   // ── Qwen ──
   {
@@ -150,17 +156,24 @@ const PROFILES: ProfileDefinition[] = [
   // ── ChatGPT (OpenAI) ── 完整支持，thinking 无已知限制
   { match: { provider: "chatgpt" }, profile: FULL_PROFILE },
 
-  // ── GLM ── 永远 auto
+  // ── GLM ── 永远 auto，ActionGate 强制关 thinking
   {
     match: { provider: "glm" },
     profile: {
       ...AUTO_ONLY_PROFILE,
+      reasoning: { canDisablePerRequest: true, preferredForActionGate: "disable" },
       toolCalling: { reliableWithReasoning: true, requiresReasoningReplay: true },
     },
   },
 
-  // ── MiniMax ── 永远 auto
-  { match: { provider: "minimax" }, profile: AUTO_ONLY_PROFILE },
+  // ── MiniMax ── 永远 auto，ActionGate 强制关 thinking
+  {
+    match: { provider: "minimax" },
+    profile: {
+      ...AUTO_ONLY_PROFILE,
+      reasoning: { canDisablePerRequest: true, preferredForActionGate: "disable" },
+    },
+  },
 
   // ── MiMo ──
   {

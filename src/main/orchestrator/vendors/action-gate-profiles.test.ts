@@ -49,7 +49,7 @@ describe("resolveActionGateProfile", () => {
     const profile = resolveActionGateProfile(ctx("kimi", "on"));
     expect(profile.toolChoice.modes).toContain("required");
     expect(profile.toolChoice.modes).not.toContain("named");
-    expect(profile.reasoning.preferredForActionGate).toBe("preserve");
+    expect(profile.reasoning.preferredForActionGate).toBe("disable");
   });
 
   it("returns auto-only profile for MiMo reasoning on with contract_test_required reliability", () => {

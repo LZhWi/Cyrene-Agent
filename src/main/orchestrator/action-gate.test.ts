@@ -255,4 +255,71 @@ describe("parseActionDecisionResponse", () => {
     expect(result.decision).toBe("act");
     expect("afterSuccess" in result).toBe(false);
   });
+
+  // ── M. <think> 标签防御：stripThinkBlocks 后正确解析 ──
+  it("strips <think> tags and parses JSON in best-effort mode", () => {
+    const result = parseActionDecisionResponse({
+      response: textResponse('<think>用户要公式，直接回复</think>\n{"decision":"respond","reason":"ok"}'),
+      strategy: "auto_single_decision_tool_with_json_fallback",
+      availableCapabilities: caps,
+    });
+    expect(result).toEqual({ decision: "respond", reason: "ok" });
+  });
+
+  it("strips multiple <think> blocks and parses JSON", () => {
+    const result = parseActionDecisionResponse({
+      response: textResponse('<think>第一段思考</think>\n<think>第二段思考</think>\n{"decision":"respond"}'),
+      strategy: "plain_json_text",
+      availableCapabilities: caps,
+    });
+    expect(result).toEqual({ decision: "respond", reason: "ready_to_respond" });
+  });
+
+  it("strips multiline <think> blocks", () => {
+    const result = parseActionDecisionResponse({
+      response: textResponse('<think>\n多行\n思考\n内容\n</think>\n{"decision":"respond","reason":"done"}'),
+      strategy: "plain_json_text",
+      availableCapabilities: caps,
+    });
+    expect(result).toEqual({ decision: "respond", reason: "done" });
+  });
+
+  it("throws INVALID_TEXT_JSON when only <think> tags exist", () => {
+    expect(() => parseActionDecisionResponse({
+      response: textResponse("<think>只有思考没有 JSON</think>"),
+      strategy: "plain_json_text",
+      availableCapabilities: caps,
+    })).toThrow(ActionGateProtocolError);
+    try {
+      parseActionDecisionResponse({ response: textResponse("<think>只有思考</think>"), strategy: "plain_json_text", availableCapabilities: caps });
+    } catch (e) {
+      expect((e as ActionGateProtocolError).code).toBe("INVALID_TEXT_JSON");
+    }
+  });
+
+  it("throws INVALID_TEXT_JSON when <think> is unclosed and no JSON follows", () => {
+    expect(() => parseActionDecisionResponse({
+      response: textResponse("<think>未闭合的思考"),
+      strategy: "plain_json_text",
+      availableCapabilities: caps,
+    })).toThrow(ActionGateProtocolError);
+  });
+
+  it("parses JSON with leading/trailing whitespace after think strip", () => {
+    const result = parseActionDecisionResponse({
+      response: textResponse('  <think>x</think>  \n  {"decision":"respond"}  '),
+      strategy: "plain_json_text",
+      availableCapabilities: caps,
+    });
+    expect(result.decision).toBe("respond");
+  });
+
+  it("still parses clean JSON without think tags", () => {
+    const result = parseActionDecisionResponse({
+      response: textResponse('{"decision":"respond","reason":"clean"}'),
+      strategy: "plain_json_text",
+      availableCapabilities: caps,
+    });
+    expect(result).toEqual({ decision: "respond", reason: "clean" });
+  });
 });

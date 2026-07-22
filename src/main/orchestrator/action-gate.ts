@@ -3,6 +3,7 @@ import type { ToolCallResult } from "./types";
 import type { ActionDecision } from "./agent-graph";
 import type { ActionGateStrategy } from "./vendors/action-gate-profiles";
 import type { ChatMessage, ChatRequest, ChatResponse, ToolSpec, ToolChoiceOverride } from "./vendors/types";
+import { stripThinkBlocks } from "../chat/think-filter";
 
 // ── 结构化协议错误（GPT 第 4 点）─────────────────────────
 
@@ -293,15 +294,27 @@ function parseToolCall(toolCalls: ChatResponse["toolCalls"], availableCapabiliti
   return parseDecisionValue(parsed, availableCapabilities);
 }
 
-/** 解析文本 JSON 路径 */
+/** 解析文本 JSON 路径（防御：先剥离 <think> 标签） */
 function parseTextJson(text: string, availableCapabilities: string[]): ActionDecision {
-  if (!text || text.trim().length === 0) {
+  if (!text?.trim()) {
+    throw new ActionGateProtocolError("INVALID_TEXT_JSON");
+  }
+  // 防御：剥离 <think>...</think> 标签（模型可能内联思考链）
+  const cleaned = stripThinkBlocks(text).trim();
+  if (!cleaned) {
     throw new ActionGateProtocolError("INVALID_TEXT_JSON");
   }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text);
-  } catch {
+    parsed = JSON.parse(cleaned);
+  } catch (error) {
+    console.warn("[ActionGate] parseTextJson failed", {
+      rawPreview: text.slice(0, 500),
+      cleanedPreview: cleaned.slice(0, 500),
+      rawLength: text.length,
+      cleanedLength: cleaned.length,
+      error: error instanceof Error ? error.message : String(error),
+    });
     throw new ActionGateProtocolError("INVALID_TEXT_JSON");
   }
   return parseDecisionValue(parsed, availableCapabilities);
