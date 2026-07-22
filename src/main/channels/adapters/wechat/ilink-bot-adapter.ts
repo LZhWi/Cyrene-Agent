@@ -59,6 +59,22 @@ interface PendingInboundMedia {
   expiresAt: number;
 }
 
+/**
+ * 消息聚合缓冲：微信上图文只能分开发送，用户往往连着发好几条其实是「一条」。
+ * 收到普通图文后先缓冲，静默窗口（AGGREGATION_WINDOW_MS）内没有新消息才 flush 成一条 IncomingMessage。
+ * 每来一条新消息就重置计时器（reset-on-new-message）。
+ */
+interface PendingAggregation {
+  timer: ReturnType<typeof setTimeout>;
+  texts: string[];
+  attachments: ChannelAttachment[];
+  /** 最后一条消息，用于取最新 contextToken / senderId / _raw */
+  lastMsg: WeixinMessage;
+}
+
+/** 消息聚合静默窗口：用户停手 5 秒后才判定「发完了」。 */
+const AGGREGATION_WINDOW_MS = 5_000;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Capability
 // ─────────────────────────────────────────────────────────────────────────────
@@ -97,6 +113,10 @@ export class ILinkBotAdapter implements ChannelAdapter {
   private replyContextByTarget = new Map<string, string>();
   private pendingSaveIntentByTarget = new Map<string, number>();
   private pendingUnsupportedMediaByTarget = new Map<string, PendingInboundMedia>();
+  /** 普通图文的聚合缓冲，按 fromUserId 分组。 */
+  private pendingAggregationByTarget = new Map<string, PendingAggregation>();
+  /** 按发送者串行化的 in-flight promise 链：新一批链在上一批之后，绝不并发或打断当前 agent。 */
+  private inFlightByTarget = new Map<string, Promise<void>>();
   private uploadMedia = uploadWechatMediaFile;
   private uploadMediaData = uploadWechatMedia;
   private downloadMedia = downloadInboundWechatMedia;
@@ -139,6 +159,12 @@ export class ILinkBotAdapter implements ChannelAdapter {
 
   async stop(): Promise<void> {
     console.log(LOG_PREFIX, "Stopping...");
+    // 清理未 flush 的聚合缓冲与计时器，避免停止后仍有延迟派发
+    for (const pending of this.pendingAggregationByTarget.values()) {
+      clearTimeout(pending.timer);
+    }
+    this.pendingAggregationByTarget.clear();
+    this.inFlightByTarget.clear();
     this.pollAbort?.abort();
     if (this.pollLoopPromise) {
       try {
@@ -337,18 +363,70 @@ export class ILinkBotAdapter implements ChannelAdapter {
     const attachments = await this.#downloadInboundAttachments(msg, media);
     if (attachments === null) return;
 
+    // 普通图文路径：不立即派发，而是进聚合缓冲，等静默窗口结束再合并成一条。
+    this.#enqueueForAggregation(msg, voiceText || msg.content || "", attachments);
+  }
+
+  /**
+   * 把一条普通图文并入该发送者的聚合缓冲，并重置静默计时器。
+   * 窗口内每来一条新消息都会重置计时器；静默 AGGREGATION_WINDOW_MS 后 flush。
+   */
+  #enqueueForAggregation(msg: WeixinMessage, text: string, attachments: ChannelAttachment[]): void {
+    const targetId = msg.fromUserId;
+    const existing = this.pendingAggregationByTarget.get(targetId);
+    if (existing) {
+      clearTimeout(existing.timer);
+      if (text) existing.texts.push(text);
+      existing.attachments.push(...attachments);
+      existing.lastMsg = msg;
+      existing.timer = setTimeout(() => void this.#flushAggregation(targetId), AGGREGATION_WINDOW_MS);
+      return;
+    }
+    const pending: PendingAggregation = {
+      timer: setTimeout(() => void this.#flushAggregation(targetId), AGGREGATION_WINDOW_MS),
+      texts: text ? [text] : [],
+      attachments: [...attachments],
+      lastMsg: msg,
+    };
+    this.pendingAggregationByTarget.set(targetId, pending);
+  }
+
+  /**
+   * 静默窗口结束：把缓冲的多条消息合并成一条 IncomingMessage 派发。
+   * 按发送者串行化——链在该发送者上一批 in-flight promise 之后，绝不并发或打断当前 agent。
+   */
+  async #flushAggregation(targetId: string): Promise<void> {
+    const pending = this.pendingAggregationByTarget.get(targetId);
+    if (!pending) return;
+    this.pendingAggregationByTarget.delete(targetId);
+
+    const handler = this.onMessage;
+    if (!handler) return;
+
     const incoming: IncomingMessage = {
       channel: "wechat",
-      senderId: msg.fromUserId,
-      chatId: msg.fromUserId,
-      text: voiceText || msg.content || "",
-      attachments: attachments.length > 0 ? attachments : undefined,
+      senderId: targetId,
+      chatId: targetId,
+      text: pending.texts.join("\n"),
+      attachments: pending.attachments.length > 0 ? pending.attachments : undefined,
       at: new Date(),
-      _raw: msg,
+      _raw: pending.lastMsg,
     };
 
-    void this.onMessage(incoming).catch((err) => {
-      console.error(LOG_PREFIX, "dispatcher error:", err);
+    const prev = this.inFlightByTarget.get(targetId) ?? Promise.resolve();
+    const next = prev
+      .catch(() => {})
+      .then(() => handler(incoming))
+      .then(() => {})
+      .catch((err) => {
+        console.error(LOG_PREFIX, "dispatcher error:", err);
+      });
+    this.inFlightByTarget.set(targetId, next);
+    // 链尾清理：只有当自己仍是最新一批时才移除，避免误删后来的批次
+    void next.finally(() => {
+      if (this.inFlightByTarget.get(targetId) === next) {
+        this.inFlightByTarget.delete(targetId);
+      }
     });
   }
 

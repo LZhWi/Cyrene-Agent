@@ -223,54 +223,62 @@ describe("ILinkBotAdapter.send", () => {
 
 describe("ILinkBotAdapter inbound media", () => {
   it("downloads supported image media into incoming attachments", async () => {
-    const adapter = new ILinkBotAdapter();
-    const onMessage = vi.fn(async () => null);
-    (adapter as any).onMessage = onMessage;
-    (adapter as any).client = { sendText: vi.fn() };
-    (adapter as any).downloadMedia = vi.fn(async () => ({
-      filePath: "C:/tmp/cyrene-test-user-data/channels/cache/wechat-msg-1-image.png",
-      mime: "image/png",
-    }));
+    vi.useFakeTimers();
+    try {
+      const adapter = new ILinkBotAdapter();
+      const onMessage = vi.fn(async () => null);
+      (adapter as any).onMessage = onMessage;
+      (adapter as any).client = { sendText: vi.fn() };
+      (adapter as any).downloadMedia = vi.fn(async () => ({
+        filePath: "C:/tmp/cyrene-test-user-data/channels/cache/wechat-msg-1-image.png",
+        mime: "image/png",
+      }));
 
-    await (adapter as any).dispatchInbound({
-      msgId: "msg-1",
-      fromUserId: "wx-user-1",
-      toUserId: "bot-1",
-      msgType: 1,
-      content: "看看这个",
-      items: [
-        {
-          type: 2,
-          image_item: {
-            media: {
-              encrypt_query_param: "download-param",
-              aes_key: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
-              encrypt_type: 1,
+      await (adapter as any).dispatchInbound({
+        msgId: "msg-1",
+        fromUserId: "wx-user-1",
+        toUserId: "bot-1",
+        msgType: 1,
+        content: "看看这个",
+        items: [
+          {
+            type: 2,
+            image_item: {
+              media: {
+                encrypt_query_param: "download-param",
+                aes_key: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
+                encrypt_type: 1,
+              },
             },
           },
-        },
-      ],
-      contextToken: "ctx-1",
-      raw: {},
-    });
+        ],
+        contextToken: "ctx-1",
+        raw: {},
+      });
 
-    expect((adapter as any).downloadMedia).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "image" }),
-      "msg-1",
-    );
-    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
-      channel: "wechat",
-      senderId: "wx-user-1",
-      text: "看看这个",
-      attachments: [
-        {
-          kind: "image",
-          filePath: "C:/tmp/cyrene-test-user-data/channels/cache/wechat-msg-1-image.png",
-          mime: "image/png",
-          caption: "微信图片",
-        },
-      ],
-    }));
+      expect((adapter as any).downloadMedia).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "image" }),
+        "msg-1",
+      );
+      // 普通图文进入 5 秒聚合窗口，尚未派发
+      expect(onMessage).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
+        channel: "wechat",
+        senderId: "wx-user-1",
+        text: "看看这个",
+        attachments: [
+          {
+            kind: "image",
+            filePath: "C:/tmp/cyrene-test-user-data/channels/cache/wechat-msg-1-image.png",
+            mime: "image/png",
+            caption: "微信图片",
+          },
+        ],
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not dispatch to the agent when supported media download fails", async () => {
@@ -476,48 +484,54 @@ describe("ILinkBotAdapter inbound media", () => {
   });
 
   it("transcribes inbound voice and dispatches the transcript when ASR is configured", async () => {
-    const adapter = new ILinkBotAdapter();
-    const onMessage = vi.fn(async () => null);
-    const sendText = vi.fn(async () => ({ ok: true }));
-    (adapter as any).onMessage = onMessage;
-    (adapter as any).client = { sendText };
-    (adapter as any).isAsrConfigured = () => true;
-    (adapter as any).transcribeVoice = vi.fn(async () => "你在忙什么呀");
+    vi.useFakeTimers();
+    try {
+      const adapter = new ILinkBotAdapter();
+      const onMessage = vi.fn(async () => null);
+      const sendText = vi.fn(async () => ({ ok: true }));
+      (adapter as any).onMessage = onMessage;
+      (adapter as any).client = { sendText };
+      (adapter as any).isAsrConfigured = () => true;
+      (adapter as any).transcribeVoice = vi.fn(async () => "你在忙什么呀");
 
-    await (adapter as any).dispatchInbound({
-      msgId: "msg-voice-1",
-      fromUserId: "wx-user-1",
-      toUserId: "bot-1",
-      msgType: 1,
-      content: "",
-      items: [
-        {
-          type: 3,
-          voice_item: {
-            media: {
-              encrypt_query_param: "download-param",
-              aes_key: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
-              encrypt_type: 1,
+      await (adapter as any).dispatchInbound({
+        msgId: "msg-voice-1",
+        fromUserId: "wx-user-1",
+        toUserId: "bot-1",
+        msgType: 1,
+        content: "",
+        items: [
+          {
+            type: 3,
+            voice_item: {
+              media: {
+                encrypt_query_param: "download-param",
+                aes_key: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
+                encrypt_type: 1,
+              },
+              sample_rate: 16000,
             },
-            sample_rate: 16000,
           },
-        },
-      ],
-      contextToken: "ctx-voice",
-      raw: {},
-    });
+        ],
+        contextToken: "ctx-voice",
+        raw: {},
+      });
 
-    expect((adapter as any).transcribeVoice).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "voice", fileName: "微信语音" }),
-      "msg-voice-1",
-    );
-    expect(sendText).not.toHaveBeenCalled();
-    expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
-      channel: "wechat",
-      senderId: "wx-user-1",
-      text: "你在忙什么呀",
-      attachments: undefined,
-    }));
+      expect((adapter as any).transcribeVoice).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: "voice", fileName: "微信语音" }),
+        "msg-voice-1",
+      );
+      expect(sendText).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
+        channel: "wechat",
+        senderId: "wx-user-1",
+        text: "你在忙什么呀",
+        attachments: undefined,
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("does not dispatch inbound voice when ASR transcription fails", async () => {
@@ -560,5 +574,125 @@ describe("ILinkBotAdapter inbound media", () => {
       "ctx-voice",
     );
     expect(onMessage).not.toHaveBeenCalled();
+  });
+
+  it("merges图文分开发送的多条消息 into one dispatch after the silence window", async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new ILinkBotAdapter();
+      const onMessage = vi.fn(async () => null);
+      (adapter as any).onMessage = onMessage;
+      (adapter as any).client = { sendText: vi.fn() };
+      (adapter as any).downloadMedia = vi.fn(async () => ({
+        filePath: "C:/tmp/cyrene-test-user-data/channels/cache/wechat-msg-img.png",
+        mime: "image/png",
+      }));
+
+      // 第一条：图片
+      await (adapter as any).dispatchInbound({
+        msgId: "msg-img",
+        fromUserId: "wx-user-1",
+        toUserId: "bot-1",
+        msgType: 1,
+        content: "",
+        items: [
+          {
+            type: 2,
+            image_item: {
+              media: {
+                encrypt_query_param: "download-param",
+                aes_key: "MDAxMTIyMzM0NDU1NjY3Nzg4OTlhYWJiY2NkZGVlZmY=",
+                encrypt_type: 1,
+              },
+            },
+          },
+        ],
+        contextToken: "ctx-1",
+        raw: {},
+      });
+      // 窗口内又发第二条：文字（重置计时器）
+      await vi.advanceTimersByTimeAsync(3_000);
+      await (adapter as any).dispatchInbound({
+        msgId: "msg-text",
+        fromUserId: "wx-user-1",
+        toUserId: "bot-1",
+        msgType: 1,
+        content: "帮我看看这张图",
+        items: [{ type: 1, text_item: { text: "帮我看看这张图" } }],
+        contextToken: "ctx-2",
+        raw: {},
+      });
+
+      // 第一条之后 3s 未满 5s，且第二条重置了计时器，尚未派发
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(onMessage).not.toHaveBeenCalled();
+
+      // 再过 2s 补足第二条之后的静默窗口 → 合并派发
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(onMessage).toHaveBeenCalledTimes(1);
+      expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
+        channel: "wechat",
+        senderId: "wx-user-1",
+        text: "帮我看看这张图",
+        attachments: [
+          {
+            kind: "image",
+            filePath: "C:/tmp/cyrene-test-user-data/channels/cache/wechat-msg-img.png",
+            mime: "image/png",
+            caption: "微信图片",
+          },
+        ],
+      }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("serializes a later batch behind the in-flight agent run", async () => {
+    vi.useFakeTimers();
+    try {
+      const adapter = new ILinkBotAdapter();
+      let resolveFirst: (() => void) | undefined;
+      const started: string[] = [];
+      const onMessage = vi.fn((incoming: any) => {
+        started.push(incoming.text);
+        if (started.length === 1) {
+          return new Promise<null>((resolve) => {
+            resolveFirst = () => resolve(null);
+          });
+        }
+        return Promise.resolve(null);
+      });
+      (adapter as any).onMessage = onMessage;
+      (adapter as any).client = { sendText: vi.fn() };
+
+      const sendText = (id: string, text: string) => (adapter as any).dispatchInbound({
+        msgId: id,
+        fromUserId: "wx-user-1",
+        toUserId: "bot-1",
+        msgType: 1,
+        content: text,
+        items: [{ type: 1, text_item: { text } }],
+        contextToken: "ctx",
+        raw: {},
+      });
+
+      // 第一批 → flush → agent 开始跑（挂起）
+      await sendText("m1", "第一批");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(started).toEqual(["第一批"]);
+
+      // 第一批仍在跑时来第二批 → flush 后必须等第一批结束才派发
+      await sendText("m2", "第二批");
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(started).toEqual(["第一批"]);
+
+      // 放行第一批 → 第二批才开始
+      resolveFirst?.();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(started).toEqual(["第一批", "第二批"]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

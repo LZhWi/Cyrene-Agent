@@ -24,6 +24,42 @@ export const ACCESS_LEVEL_LABEL: Record<AgentFileAccessLevel, string> = {
 export type ToolRiskLevel = "safe" | "fs-read" | "fs-write" | "shell" | "network" | "input-control";
 
 /**
+ * 默认放行（不阻塞）但仍发通知卡片让用户可阻止的工具白名单。
+ * 这些工具风险较低且日常使用频繁，每次审批会打断对话流畅度。
+ * 用户仍可通过点击通知卡片的"阻止"按钮来中止（但工具可能已开始执行）。
+ *
+ * 注意：write_file 不在此列表中，它在 checkPermission 里按路径条件判断：
+ *   - 写入桌面路径 → 3 秒通知（notifyApproval）
+ *   - 写入其他路径 → 60 秒审批（requestApproval）
+ */
+const AUTO_ALLOW_TOOL_IDS = new Set<string>([
+  "weather",        // 天气查询
+  "web_search",     // 联网搜索
+  "fetch_url",      // 网页抓取
+  "read_file",      // 读取文件
+  "list_dir",       // 列出目录
+  "read_image",     // 读取图片
+  "delegate_task",  // 子任务委派
+]);
+
+/**
+ * 判断 write_file 的目标路径是否在"安全目录"（桌面）下。
+ * 桌面路径走 3 秒通知模式；其他路径走 60 秒审批。
+ */
+function isSafeWritePath(args: Record<string, unknown>): boolean {
+  const raw = typeof args.path === "string" ? args.path.trim() : "";
+  if (!raw) return false;
+  try {
+    const { app } = require("electron");
+    const desktop = app.getPath("desktop");
+    const normalized = require("path").resolve(raw);
+    return normalized.startsWith(desktop + require("path").sep) || normalized === desktop;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * 给定档位 + 工具危险等级 → 返回授权策略：
  *   - "allow"       直接放行
  *   - "ask"         弹审批 UI，用户点同意才放行
@@ -121,6 +157,8 @@ export interface ApprovalRequest {
   toolDescription: string;
   args: Record<string, unknown>;
   risk: ToolRiskLevel;
+  /** 通知模式：true=已自动放行，卡片只用于通知和可阻止；false=等待用户审批 */
+  notifyOnly?: boolean;
 }
 
 /**
@@ -156,6 +194,43 @@ export function requestApproval(request: Omit<ApprovalRequest, "id">): Promise<b
   });
 }
 
+/**
+ * 通知模式审批：发通知卡片，等待 3 秒。
+ * - 用户点"阻止" → 返回 false（拒绝）
+ * - 3 秒超时未操作 → 返回 true（默认允许）
+ * - 用户点"允许" → 立即返回 true
+ */
+const NOTIFY_WAIT_MS = 3000;
+
+const pendingNotifications = new Map<string, { resolve: (allowed: boolean) => void; timer: NodeJS.Timeout }>();
+
+export function notifyApproval(request: Omit<ApprovalRequest, "id">): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const id = "notify-" + (++approvalCounter) + "-" + Date.now();
+    const payload: ApprovalRequest = { id, ...request, notifyOnly: true };
+    console.log(LOG_PREFIX, "发送工具执行通知（3s 等待）:", id, request.toolId);
+
+    const timer = setTimeout(() => {
+      pendingNotifications.delete(id);
+      console.log(LOG_PREFIX, "通知超时（3s），默认允许:", request.toolId);
+      resolve(true);
+    }, NOTIFY_WAIT_MS);
+    pendingNotifications.set(id, { resolve, timer });
+
+    const wins = BrowserWindow.getAllWindows();
+    if (wins.length === 0) {
+      clearTimeout(timer);
+      pendingNotifications.delete(id);
+      console.warn(LOG_PREFIX, "无窗口可通知，默认允许");
+      resolve(true);
+      return;
+    }
+    for (const win of wins) {
+      win.webContents.send(IPC.PERMISSION_APPROVAL_REQUEST, payload);
+    }
+  });
+}
+
 // ── IPC 注册 ──────────────────────────────────────────────
 
 export function registerPermissionIpc(): void {
@@ -173,6 +248,19 @@ export function registerPermissionIpc(): void {
 
   // 渲染端审批 UI 回传结果
   ipcMain.handle(IPC.PERMISSION_APPROVAL_RESOLVE, (_event, payload: { id: string; allowed: boolean }) => {
+    // 通知模式：3 秒等待中的 Promise resolve
+    if (payload?.id?.startsWith("notify-")) {
+      const pending = pendingNotifications.get(payload.id);
+      if (pending) {
+        clearTimeout(pending.timer);
+        pendingNotifications.delete(payload.id);
+        console.log(LOG_PREFIX, "通知结果:", payload.id, payload.allowed ? "允许" : "阻止");
+        pending.resolve(Boolean(payload.allowed));
+      }
+      return { ok: true };
+    }
+
+    // 审批模式：等待中的 Promise resolve
     const pending = pendingApprovals.get(payload?.id);
     if (!pending) {
       console.warn(LOG_PREFIX, "审批回传未匹配到 pending:", payload?.id);
@@ -197,6 +285,9 @@ function isValidLevel(value: unknown): value is AgentFileAccessLevel {
  * - allow → 返回 true
  * - ask   → 触发审批，等用户回应
  * - deny  → 返回 false
+ *
+ * 白名单工具（AUTO_ALLOW_TOOL_IDS）：即使 policy 是 ask/deny 也直接放行，
+ * 但会异步发通知卡片让用户知道 AI 在干什么，用户可点"阻止"中止后续（不阻塞当前执行）。
  */
 export async function checkPermission(input: {
   toolId: string;
@@ -208,6 +299,34 @@ export async function checkPermission(input: {
   const level = currentLevel;
   const policy = policyFor(level, input.risk);
   console.log(LOG_PREFIX, "checkPermission:", input.toolId, "risk=" + input.risk, "level=" + level, "→", policy);
+
+  // 白名单工具：3 秒通知等待，超时默认允许，用户可阻止
+  // write_file 特殊处理：仅桌面路径走 3 秒通知，其他路径走 60 秒审批
+  const isWriteFileToDesktop = input.toolId === "write_file" && isSafeWritePath(input.args);
+  if (AUTO_ALLOW_TOOL_IDS.has(input.toolId) || isWriteFileToDesktop) {
+    const allowed = await notifyApproval({
+      toolId: input.toolId,
+      toolName: input.toolName,
+      toolDescription: input.toolDescription,
+      args: input.args,
+      risk: input.risk,
+    });
+    if (allowed) return { allowed: true };
+    return { allowed: false, reason: "用户阻止了此次操作。" };
+  }
+
+  // write_file 写非桌面路径：无论档位如何，都走 60 秒审批（不被 read-only 直接拒绝）
+  if (input.toolId === "write_file" && !isWriteFileToDesktop) {
+    const approved = await requestApproval({
+      toolId: input.toolId,
+      toolName: input.toolName,
+      toolDescription: input.toolDescription,
+      args: input.args,
+      risk: input.risk,
+    });
+    if (approved) return { allowed: true };
+    return { allowed: false, reason: "用户拒绝了此次操作。" };
+  }
 
   if (policy === "allow") return { allowed: true };
   if (policy === "deny") {

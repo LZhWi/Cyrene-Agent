@@ -5,7 +5,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { app } from "electron";
+import { getAppRootDir } from "../runtime/runtime-paths";
 import { matchScene, type SceneId, type SceneIndex } from "../scene-embedder";
 import { type EmbeddingProvider } from "../rag/embedding";
 
@@ -26,9 +26,9 @@ const SCENE_NAMES: Record<string, string> = {
 // 通用语气规则（无论哪个场景都注入）—— 从 prompts/tone-rules.md 读取
 const DEFAULT_RULES = `## 句式禁止
 
-- 不可以使用「不是……而是……」结构。想表达同样意思时，直接说你想说的那一半就行，不需要先否定再肯定
-- 不可以使用「不只是……更是……」结构。道理同上
-- 避免「首先……其次……」「总的来说……」「本质上……」「归根结底……」「换句话说……」
+- 不可以使用「不是X而是Y」结构。想表达同样意思时，直接说你想说的那一半就行，不需要先否定再肯定
+- 不可以使用「不只是X更是Y」结构。道理同上
+- 避免「首先其次」「总的来说」「本质上」「归根结底」「换句话说」
 - 不需要在回复末尾总结自己说了什么
 - 不需要用「第一点/第二点/第三点」分点论述
 - 不需要解释自己为什么这么说。说出来就是说了，解释就是画蛇添足
@@ -52,7 +52,7 @@ const DEFAULT_RULES = `## 句式禁止
 /** 从 prompts/tone-rules.md 加载语气规则，文件不存在时用内置默认值。 */
 function loadToneRules(): string {
   try {
-    const rulesPath = path.join(app.getAppPath(), "prompts", "tone-rules.md");
+    const rulesPath = path.join(getAppRootDir(), "prompts", "tone-rules.md");
     if (fs.existsSync(rulesPath)) {
       const content = fs.readFileSync(rulesPath, "utf8").trim();
       // 去掉 frontmatter（如果有）
@@ -73,7 +73,7 @@ function loadToneRules(): string {
 function loadSceneSamples(scene: SceneId): string {
   if (!scene) return "";
   try {
-    const skillDir = path.join(app.getAppPath(), "skills", "cyrene-original-voice", "references");
+    const skillDir = path.join(getAppRootDir(), "skills", "cyrene-original-voice", "references");
     const filePath = path.join(skillDir, `${scene}.md`);
     if (!fs.existsSync(filePath)) return "";
     return fs.readFileSync(filePath, "utf8");

@@ -158,6 +158,13 @@ export interface ChannelsSettings {
   feishu: FeishuChannelConfig;
   /** 入站 HTTP server 绑定的端口。0 = 随机空闲。 */
   inboundPort: number;
+  /**
+   * 是否把 inbound-server 绑定到局域网（0.0.0.0）而非仅回环（127.0.0.1）。
+   * 默认 false —— 保持只绑 127.0.0.1，与历史行为一致、不暴露任何端口给局域网。
+   * 仅当用户显式开启（如为了让手机 App 直连 PC 同步）时才绑 0.0.0.0；
+   * 此时仍强制 X-Cyrene-Channel-Secret 鉴权。
+   */
+  inboundBindLan: boolean;
   /** HMAC 共享密钥。启动时若为空则自动生成。 */
   sharedSecret: string;
   /** 全局：每用户每分钟最多消息数 */
@@ -178,6 +185,7 @@ const DEFAULT_SETTINGS: ChannelsSettings = {
   wechat: { enabled: false },
   feishu: { enabled: false },
   inboundPort: 0,
+  inboundBindLan: false,
   sharedSecret: "",
   rateLimitPerUser: 10,
   rateLimitPerChannel: 100,
@@ -228,6 +236,7 @@ feishu: {
       appSecret: typeof f?.appSecret === "string" ? f?.appSecret : undefined,
     },
     inboundPort: safeNum(input?.inboundPort, 0, 0, 65535),
+    inboundBindLan: safeBool(input?.inboundBindLan, false),
     sharedSecret: typeof input?.sharedSecret === "string" ? input.sharedSecret : "",
     rateLimitPerUser: safeNum(input?.rateLimitPerUser, 10, 1, 1000),
     rateLimitPerChannel: safeNum(input?.rateLimitPerChannel, 100, 1, 10000),
@@ -291,6 +300,7 @@ export type ChannelConfigPatch = Partial<{
   wechat: Partial<WechatChannelConfig>;
   feishu: Partial<FeishuChannelConfig>;
   inboundPort: number;
+  inboundBindLan: boolean;
   sharedSecret: string;
   rateLimitPerUser: number;
   rateLimitPerChannel: number;

@@ -72,7 +72,9 @@ describe("proactive chat service", () => {
     expect(ctx.getFallback).not.toHaveBeenCalled();
     expect(ctx.commitMessage).not.toHaveBeenCalled();
     expect(ctx.state.globalDesire).toBe(0);
-    expect(ctx.state.lastFiredAt.work_break).toBe(NOW);
+    // silent 时不设场景冷却，只设全局 silent 冷却
+    expect(ctx.state.lastFiredAt.work_break).toBeUndefined();
+    expect(ctx.state.lastSilentAt).toBe(NOW);
     expect(ctx.state.unansweredCount).toBe(0);
   });
 

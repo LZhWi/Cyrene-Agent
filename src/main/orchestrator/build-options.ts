@@ -56,6 +56,7 @@ export interface BuildOptionsDeps {
     userText: string,
     messages: ReadonlyArray<{ role: string; content?: string }>,
   ) => Promise<string>;
+  buildMemoryInjection: (userText: string) => Promise<string>;
   buildRelationshipContext: () => Promise<string>;
   buildSystemPrompt: (styleFile: string) => string;
   /** 第一期：工具阶段 system prompt。仅含工具调度规则 + 自动生成的工具目录。 */
@@ -296,6 +297,13 @@ export async function buildAgentRunOptions(
     console.warn("[Cyrene] always-on context build failed:", err);
   }
 
+  let memoryInjection = "";
+  try {
+    memoryInjection = await deps.buildMemoryInjection(latestUserText);
+  } catch (err) {
+    console.warn("[Cyrene] memory injection failed:", err);
+  }
+
   let relationshipContext = "";
   try {
     relationshipContext = await deps.buildRelationshipContext();
@@ -350,8 +358,16 @@ export async function buildAgentRunOptions(
   const isTalkMode = (input.style || "").startsWith("talk");
   const styleFile = input.style || "01_default.md";
   const enabledTools = deps.toolRegistry.getEnabled();
+  // talk 模式白名单：只允许轻量、日常聊天场景常用的工具。
+  // - music_* 前缀：音乐陪伴功能在 talk 模式下必须可用
+  // - weather：用户日常聊天常问天气，天气卡片是核心体验
+  const TALK_MODE_ALLOWED_TOOL_IDS = new Set(["weather"]);
+  const TALK_MODE_ALLOWED_TOOL_PREFIXES = ["music_"];
   const runTools = isTalkMode
-    ? enabledTools.filter((tool) => String((tool as { id?: unknown }).id ?? "").startsWith("music_"))
+    ? enabledTools.filter((tool) => {
+      const id = String((tool as { id?: unknown }).id ?? "");
+      return TALK_MODE_ALLOWED_TOOL_IDS.has(id) || TALK_MODE_ALLOWED_TOOL_PREFIXES.some((prefix) => id.startsWith(prefix));
+    })
     : enabledTools;
   const requiredToolName = resolveRequiredMusicTool(
     latestUserText,
@@ -373,15 +389,19 @@ export async function buildAgentRunOptions(
     (relationshipContext ? "\n\n" + relationshipContext + "\n\n" : "") +
     attachmentContext;
 
-  // 工具阶段：工具规则 + 运行时工具目录 + 可用 Skill 路由清单。
+  // 工具阶段：工具规则 + 运行时工具目录 + 可用 Skill 路由清单 + 环境上下文。
+  // environmentContext 必须注入工具阶段：LLM 在决定工具参数时需要知道用户默认城市、桌面路径等信息，
+  // 否则会自作主张猜城市/路径（如把苏州猜成武汉）。
   const toolSystemContent = deps.buildToolSystemPrompt(runTools)
+    + (environmentContext ? "\n\n---\n\n" + environmentContext : "")
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
     + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "")
     + (musicCompanionContext ? "\n\n" + musicCompanionContext : "");
 
-  // Soul 阶段基础 system：人设 + 环境/记忆/关系/附件/渠道（这些是"表达"所需）。
+  // Soul 阶段基础 system：人设 + 环境/记忆/关系/附件/渠道（这些是“表达”所需）。
   // 工具结果（role: tool 消息）已在 conversation 中携带，本字段不重复注入；
   // FC 循环 Soul 阶段执行前会按需动态追加 soulToolResultsSummary。
+  // 注入顺序与旧路径（requestModelReply）保持一致：记忆 → 世界书（世界书放最后，最靠近 user message）
   const soulSystemBaseContent =
     (environmentContext ? environmentContext + "\n\n" : "") +
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
@@ -391,7 +411,8 @@ export async function buildAgentRunOptions(
     (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "") +
     skillActivation +
     toneInjection +
-    (alwaysOnContext ? "\n\n" + alwaysOnContext + "\n\n" : "") +
+    (memoryInjection ? memoryInjection + "\n\n" : "") +
+    (alwaysOnContext ? alwaysOnContext + "\n\n" : "") +
     (relationshipContext ? "\n\n" + relationshipContext + "\n\n" : "") +
     (musicCompanionContext ? "\n\n" + musicCompanionContext : "") +
     attachmentContext;
@@ -438,7 +459,7 @@ export async function onAgentRunFinished(
   result: CyreneRunResult,
   latestUserText: string,
   deps: OnRunFinishedDeps,
-  channel?: "wechat" | "feishu",
+  channel?: "wechat" | "feishu" | "mobile",
 ): Promise<{ sticker: string | null }> {
   const chatContent = result.reply;
   const sideEffectUserText = stripTurnModelContextForSideEffects(latestUserText);
@@ -487,9 +508,10 @@ export async function onAgentRunFinished(
     deps.broadcastRuntimeStateChanged();
   } else if (settings.runtimeSync === "llm") {
     deps.broadcastRuntimeStateChanged();
-    // 心情观察器在 channels bot (wechat/feishu) 上跳过：节省一次 LLM 调用、加快首条回复
-    // 桌面聊天（channel === undefined）照常跑，保持 Live2D 表情/心情跟随对话变化
-    if (channel !== "wechat" && channel !== "feishu") {
+    // 心情观察器在渠道 bot (wechat/feishu) 与手机 App (mobile) 上跳过：
+    // 节省一次 LLM 调用、加快首条回复，且避免远程消息扰动桌面 Live2D 表情/心情。
+    // 桌面聊天（channel === undefined）照常跑，保持 Live2D 表情/心情跟随对话变化。
+    if (channel !== "wechat" && channel !== "feishu" && channel !== "mobile") {
       void deps.observeRuntimeState(settings, [], sideEffectUserText, chatContent);
     }
   }

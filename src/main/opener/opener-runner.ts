@@ -1,11 +1,14 @@
 // tick 主循环 + 事件打断 + 选文案 + 触发 LIVE2D_SHOW_BUBBLE + 响应窗口 + 反馈闭环
-import { BrowserWindow } from "electron";
+import { BrowserWindow, app } from "electron";
+import * as fs from "fs";
+import * as path from "path";
 import { IPC } from "../../shared/ipc-channels";
 import { SCENE_CONFIGS, DESIRE_RATE, RESPONSE_WINDOW_MS } from "./scenes-config";
 import { loadManifest, pickItem, resolveAudioPath, readWavDurationMs, readWavBase64 } from "./opener-pack-store";
 import { getWeather } from "./weather-cache";
 import { snapshot } from "./user-state-sensor";
 import { loadState, saveState, accumulateDesire, probabilityGate, applyClickFeedback, applyIgnoreFeedback } from "./desire-engine";
+import { NORMAL_QUIET_MS } from "../proactive/proactive-policy";
 import { scoreScene } from "./scene-scorer";
 import type { OpenerState, SceneId, ShowBubblePayload, WeatherSnapshot } from "./opener-types";
 import type { ProactiveCandidate } from "../proactive/proactive-types";
@@ -19,7 +22,47 @@ let responseTimer: ReturnType<typeof setTimeout> | null = null;
 let live2dWindow: BrowserWindow | null = null;
 let manifest = loadManifest();
 let weatherCachedHour = -1;
+// 缓存用户城市坐标，避免每 tick 都 geocoding
+let cachedCityCoords: { lat: number; lon: number } | null = null;
 let proactiveCandidateHandler: ((candidate: ProactiveCandidate) => Promise<void>) | null = null;
+
+/** 从用户配置的城市名解析坐标（通过 Open-Meteo Geocoding API），缓存结果。
+ *  查不到或未配置城市时用上海兑底。 */
+async function resolveUserCityCoords(): Promise<{ lat: number; lon: number }> {
+  if (cachedCityCoords) return cachedCityCoords;
+  let cityName = "";
+  try {
+    // 直接读取用户配置文件，避免循环依赖
+    const profilePath = path.join(app.getPath("userData"), "user-profile.json");
+    if (fs.existsSync(profilePath)) {
+      const profile = JSON.parse(fs.readFileSync(profilePath, "utf8")) as { defaultCity?: string };
+      cityName = (profile.defaultCity ?? "").trim();
+    }
+  } catch { /* 读取失败，用兑底 */ }
+  if (!cityName) {
+    cachedCityCoords = { lat: DEFAULT_LAT, lon: DEFAULT_LON };
+    return cachedCityCoords;
+  }
+  try {
+    const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityName)}&count=1&language=zh&format=json`;
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 5000);
+    try {
+      const resp = await fetch(url, { signal: ctrl.signal });
+      if (resp.ok) {
+        const data = await resp.json() as { results?: Array<{ latitude: number; longitude: number }> };
+        if (data.results && data.results.length > 0) {
+          cachedCityCoords = { lat: data.results[0].latitude, lon: data.results[0].longitude };
+          return cachedCityCoords;
+        }
+      }
+    } finally {
+      clearTimeout(timer);
+    }
+  } catch { /* geocoding 失败，用兑底 */ }
+  cachedCityCoords = { lat: DEFAULT_LAT, lon: DEFAULT_LON };
+  return cachedCityCoords;
+}
 
 export function setProactiveCandidateHandler(
   handler: ((candidate: ProactiveCandidate) => Promise<void>) | null,
@@ -61,8 +104,12 @@ async function tick(rate: number): Promise<void> {
     return;
   }
 
-  // 2. Desire 累积
-  state = accumulateDesire(state, rate);
+  // 2. Desire 累积（正常对话静默期内不累积，避免静默期一结束 desire 已过高立刻触发）
+  const inQuietPeriod = state.lastNormalConversationEndedAt !== null
+    && (now - state.lastNormalConversationEndedAt < NORMAL_QUIET_MS);
+  if (!inQuietPeriod) {
+    state = accumulateDesire(state, rate);
+  }
 
   // 3. 概率门
   if (!probabilityGate(state)) {
@@ -138,10 +185,12 @@ async function getWeatherIfNeeded(hour: number): Promise<WeatherSnapshot> {
   const empty: WeatherSnapshot = { isRaining:false, precip:0, temp:0, tempDropFromYesterday:0, isSunny:false, tempComfortable:false };
   if (hour < 6 || hour > 22) return empty;
   if (hour === weatherCachedHour) {
-    return getWeather(DEFAULT_LAT, DEFAULT_LON);
+    const coords = await resolveUserCityCoords();
+    return getWeather(coords.lat, coords.lon);
   }
   weatherCachedHour = hour;
-  return getWeather(DEFAULT_LAT, DEFAULT_LON);
+  const coords = await resolveUserCityCoords();
+  return getWeather(coords.lat, coords.lon);
 }
 
 async function tryFire(scene: SceneId, snap: { hour: number }, state: OpenerState, now: number): Promise<void> {

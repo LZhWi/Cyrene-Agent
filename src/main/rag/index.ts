@@ -1,6 +1,6 @@
 import * as path from "path";
 import * as fs from "fs";
-import { app } from "electron";
+import { getUserDataDir, getAppRootDir } from "../runtime/runtime-paths";
 import { getEmbeddingProvider, resetEmbeddingProvider, EmbeddingProvider, switchEmbeddingModel as switchModel, getCurrentModelDims } from "./embedding";
 import { JsonVectorStore } from "./vectorstore";
 import type { MemoryEntry } from "./vectorstore";
@@ -19,7 +19,7 @@ let worldbook: WorldbookManager | null = null;
 let provider: EmbeddingProvider | null = null;
 
 function getDataDir(): string {
-  return path.join(app.getPath("userData"), "rag-data");
+  return path.join(getUserDataDir(), "rag-data");
 }
 
 // ── Init ──
@@ -37,8 +37,8 @@ export async function initRAG(
     retriever = new HybridRetriever(store, provider);
   }
   worldbook = new WorldbookManager(
-    path.join(app.getAppPath(), "prompts", "worldbook"),
-    { stateFile: path.join(app.getPath("userData"), "worldbook-state.json") }
+    path.join(getAppRootDir(), "prompts", "worldbook"),
+    { stateFile: path.join(getUserDataDir(), "worldbook-state.json") }
   );
   await worldbook.loadFromDirectory();
 

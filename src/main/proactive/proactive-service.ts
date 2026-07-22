@@ -90,7 +90,8 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
           const silentState = deps.loadState();
           if (silentState.proactiveEpoch === generationEpoch) {
             silentState.globalDesire = 0;
-            silentState.lastFiredAt[candidate.sceneId] = deps.getSnapshot().now;
+            // silent 时不设 lastFiredAt：不触发场景级冷却，10 分钟全局静默后任何场景可再试
+            silentState.lastSilentAt = deps.getSnapshot().now;
             deps.saveState(silentState);
           }
           deps.log?.("model_silent", { scene: candidate.sceneId });

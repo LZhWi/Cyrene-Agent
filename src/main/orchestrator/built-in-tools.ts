@@ -6,6 +6,9 @@ import { toolRegistry } from "./tool-registry";
 import { addMcpServer } from "./mcp-manager";
 import { sendToLive2DWindow } from "../index";
 import { createPlayLive2DActionTool } from "./tools/play-live2d-action";
+import type { WeatherCardData } from "../../shared/weather-card";
+
+export type { WeatherCardData };
 
 const LOG_PREFIX = "[BuiltinTools]";
 
@@ -375,29 +378,6 @@ let weatherEnabledGetter: (() => boolean) | null = null;
 
 /** 天气卡片数据回调：工具拿到结构化数据后调这个，由桥层发 Custom 事件给渲染端。 */
 let weatherCardCallback: ((card: WeatherCardData) => void) | null = null;
-
-/** 天气卡片结构化数据（发给渲染端渲染 MBE 卡片用）。 */
-export interface WeatherCardData {
-  city: string;
-  adm: string;
-  temp: number;
-  feelsLike: number;
-  text: string;
-  icon: string;
-  hi?: number;
-  lo?: number;
-  humidity: number;
-  windDir: string;
-  windScale: string;
-  precip: number;
-  pressure: number;
-  visibility?: number;
-  uv?: string;
-  aqi?: number;
-  aqiText?: string;
-  source: string;
-  updateTime: string;
-}
 
 /** WMO 天气代码 → emoji 图标。 */
 function weatherIconFromCode(code: number): string {

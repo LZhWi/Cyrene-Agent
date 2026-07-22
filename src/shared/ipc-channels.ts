@@ -89,6 +89,7 @@ export const IPC = {
   CHATS_REPLACE_TAIL: "chats:replace-tail",
   CHATS_RENAME: "chats:rename",
   CHATS_DELETE: "chats:delete",
+    CHATS_DELETE_MESSAGE: "chats:delete-message",
   CHATS_OPEN_FOLDER: "chats:open-folder",
   CHATS_MIGRATE_LEGACY: "chats:migrate-legacy",
   // 任意会话变动后 main → 所有渲染窗口 broadcast，触发列表/标题刷新

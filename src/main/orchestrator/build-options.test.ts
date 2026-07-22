@@ -23,6 +23,7 @@ function createBuildDeps(): BuildOptionsDeps {
     sceneEmbeddingIndex: null,
     getSceneEmbeddingProvider: () => null,
     buildAlwaysOnContext: async () => "ALWAYS",
+    buildMemoryInjection: async () => "MEMORY",
     buildRelationshipContext: async () => "RELATIONSHIP",
     buildSystemPrompt: () => "BASE_SYSTEM",
     buildToolSystemPrompt: () => "TOOL_SYSTEM",
@@ -45,7 +46,8 @@ describe("build-options", () => {
     expect(result.options.soulSystemBaseContent).toContain("你正在通过微信回复用户")
     expect(result.options.soulSystemBaseContent).toContain("SOUL_SYSTEM_BASE")
     expect(result.options.soulSystemBaseContent).toContain("RELATIONSHIP")
-    expect(result.options.toolSystemContent).toBe("TOOL_SYSTEM")
+    expect(result.options.toolSystemContent).toContain("TOOL_SYSTEM")
+    expect(result.options.toolSystemContent).toContain("ENV")
   })
 
   it("does not add channel system for desktop chat", async () => {
@@ -95,17 +97,19 @@ describe("build-options", () => {
       style: "01_default.md",
     }, createBuildDeps())
 
-    expect(result.options.toolSystemContent).toBe("TOOL_SYSTEM")
+    expect(result.options.toolSystemContent).toContain("TOOL_SYSTEM")
+    expect(result.options.toolSystemContent).toContain("ENV")
     expect(result.options.soulSystemBaseContent).not.toBe("TOOL_SYSTEM")
     expect(result.options.soulSystemBaseContent).toContain("SOUL_SYSTEM_BASE")
   })
 
-  it("keeps enabled music tools available in Talk mode and hides unrelated tools", async () => {
+  it("keeps enabled music and weather tools available in Talk mode and hides unrelated tools", async () => {
     const deps = createBuildDeps()
     deps.toolRegistry.getEnabled = () => [
       { id: "music_search" },
       { id: "music_play_track" },
       { id: "weather" },
+      { id: "web_search" },
     ]
     deps.buildToolSystemPrompt = vi.fn((tools: ReadonlyArray<unknown>) =>
       `TOOLS:${tools.map((tool) => (tool as { id: string }).id).join(",")}`,
@@ -119,9 +123,10 @@ describe("build-options", () => {
     expect(result.options.tools?.map((tool) => tool.id)).toEqual([
       "music_search",
       "music_play_track",
+      "weather",
     ])
-    expect(result.options.toolSystemContent).toContain("TOOLS:music_search,music_play_track")
-    expect(result.options.toolSystemContent).not.toContain("weather")
+    expect(result.options.toolSystemContent).toContain("TOOLS:music_search,music_play_track,weather")
+    expect(result.options.toolSystemContent).not.toContain("web_search")
   })
 
   it("requires music_search for an explicit NetEase Cloud search request", async () => {

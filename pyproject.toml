@@ -1,0 +1,12 @@
+[project]
+name = "cyrene-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "pyncm",
+]
+
+[tool.uv.sources]
+pyncm = { git = "https://github.com/Code-MonkeyZhang/pyncm.git", rev = "26fda90ba874b652885458b89b92045ff88a8eef" }

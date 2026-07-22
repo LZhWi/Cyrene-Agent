@@ -123,6 +123,7 @@ import { initGameBot } from "./game-bot";
 import { initChannels, shutdownChannels, setChannelsConversationLifecycle } from "./channels/init";
 import { buildChannelAttachmentInputs } from "./channels/agent-input";
 import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadGeneralSettings, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
+import { setInboundChatRunner } from "./channels/inbound-server";
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
 import {
   buildAgentRunOptions,
@@ -4526,6 +4527,59 @@ app.whenReady().then(async () => {
     return channelResult;
   });
 
+  // 手机 App 聊天转发（阶段 1）：/chat 端点调用此运行器。
+  // 复用桌面同款两阶段大脑（buildAgentRunOptions + CyreneAgent + onAgentRunFinished），
+  // channel="mobile" 会跳过桌面心情观察器（不扰动 Live2D），并把对话落到 sessionId 历史，
+  // 手机随后 /sync/pull 即可同步到同一条会话。
+  setInboundChatRunner(async ({ sessionId, text }) => {
+    const { loadRecentHistory, appendHistory } = await import("./channels/history-log");
+    let priorMessages: { role: "user" | "assistant"; content?: string }[] = [];
+    try {
+      priorMessages = loadRecentHistory(sessionId, 16);
+    } catch (err) {
+      console.warn("[Mobile] loadRecentHistory 失败 (继续不带历史):", err);
+    }
+    const historyMessages = priorMessages
+      .filter((m) => typeof m.content === "string" && m.content.trim().length > 0)
+      .map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }));
+
+    try {
+      appendHistory(sessionId, "user", text);
+    } catch (err) {
+      console.warn("[Mobile] appendHistory (user) 失败:", err);
+    }
+
+    const { options } = await buildAgentRunOptions(
+      {
+        messages: [...historyMessages, { role: "user", content: text }],
+        style: "01_default.md",
+        sessionId,
+        channel: "mobile",
+      },
+      buildOptionsDeps,
+    );
+
+    const threadId = `thread-${sessionId}-${Date.now()}`;
+    const agent = new CyreneAgent({ threadId, description: `mobile:${sessionId}` });
+    const reply = await new Promise<string>((resolve, reject) => {
+      agent.runWithEvents(options).subscribe({
+        complete: () => resolve(agent.lastResult?.reply ?? ""),
+        error: (err) => reject(err instanceof Error ? err : new Error(String(err))),
+      });
+    });
+
+    if (agent.lastResult) {
+      await onAgentRunFinished(agent.lastResult, text, onRunFinishedDeps, "mobile");
+    }
+    try {
+      appendHistory(sessionId, "assistant", reply);
+    } catch (err) {
+      console.warn("[Mobile] appendHistory (assistant) 失败:", err);
+    }
+    void indexConversationTurn(sessionId, text, reply);
+    return { reply };
+  });
+
   // Phase 3.1：注入 TTS 合成 —— dispatcher 在 reply 后会用这个生成渠道音频
   setDispatcherSynthesizeTts(async (text: string, context) => {
     const cfg = loadGeneralSettings();
@@ -4686,6 +4740,7 @@ app.whenReady().then(async () => {
     getSceneEmbeddingProvider: () => getSceneEmbeddingProvider() as unknown,
     buildAlwaysOnContext: (async (userText, messages) =>
       buildAlwaysOnContext(userText, messages as any)) as BuildOptionsDeps["buildAlwaysOnContext"],
+    buildMemoryInjection,
     buildRelationshipContext,
     buildSystemPrompt,
     buildToolSystemPrompt: (enabledTools) => buildToolSystemPrompt(enabledTools as ToolDefinition[]),

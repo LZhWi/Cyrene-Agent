@@ -295,8 +295,9 @@ const settingsApi = {
   setPermissionLevel: (level: string) => ipcRenderer.invoke(IPC.PERMISSION_SET_LEVEL, level),
 
   // 审批弹窗：主进程在 per-action 档位下推过来的请求（每 60 秒超时自动拒绝）
+  // notifyOnly=true 时为通知模式：工具已自动放行，卡片只用于通知和可阻止
   onPermissionApprovalRequest: (
-    cb: (req: { id: string; toolId: string; toolName: string; toolDescription: string; args: Record<string, unknown>; risk: string }) => void
+    cb: (req: { id: string; toolId: string; toolName: string; toolDescription: string; args: Record<string, unknown>; risk: string; notifyOnly?: boolean }) => void
   ): (() => void) => {
     const listener = (_e: Electron.IpcRendererEvent, req: Parameters<typeof cb>[0]) => cb(req);
     ipcRenderer.on(IPC.PERMISSION_APPROVAL_REQUEST, listener);
@@ -443,6 +444,8 @@ const chatStoreApi = {
   rename: (id: string, title: string) =>
     ipcRenderer.invoke(IPC.CHATS_RENAME, { id, title }),
   delete: (id: string) => ipcRenderer.invoke(IPC.CHATS_DELETE, id),
+    deleteMessage: (id: string, messageId: string) =>
+      ipcRenderer.invoke(IPC.CHATS_DELETE_MESSAGE, { id, messageId }),
   openFolder: () => ipcRenderer.invoke(IPC.CHATS_OPEN_FOLDER),
   migrateLegacy: (messages: unknown[]) =>
     ipcRenderer.invoke(IPC.CHATS_MIGRATE_LEGACY, messages),

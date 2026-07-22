@@ -1,6 +1,6 @@
 import * as fs from "fs"
 import * as path from "path"
-import { app } from "electron"
+import { getUserDataDir } from "../runtime/runtime-paths"
 import { ConflictLog, L0Profile, L1Profile, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryStore, ReflectionLog } from "./memory-types"
 import { appendMemoryTrace } from "./memory-trace"
 
@@ -48,7 +48,7 @@ export type L1WritableField = keyof L1Profile
 export type L2Input = Omit<L2Memory, "id" | "createdAt" | "lastAccessedAt" | "accessCount" | "weight" | "status">
 
 function getMemoryPath(): string {
-  return path.join(app.getPath("userData"), "memory.json")
+  return path.join(getUserDataDir(), "memory.json")
 }
 
 function cloneDefaultStore(): MemoryStore {

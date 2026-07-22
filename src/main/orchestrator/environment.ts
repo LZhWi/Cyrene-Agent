@@ -8,8 +8,8 @@
 // 输出格式刻意选择 Markdown 小节，方便 LLM 抓字段；同时在终端打印
 // `[Env]` 日志便于排障。
 
-import { app } from "electron";
 import * as os from "os";
+import { getRuntimePath } from "../runtime/runtime-paths";
 import { toolRegistry } from "./tool-registry";
 import { listMcpServers } from "./mcp-manager";
 import { ACCESS_LEVEL_LABEL, getCurrentLevel, policyFor } from "../permission";
@@ -35,7 +35,7 @@ export interface UserInfoContext {
 
 function safeGetPath(name: "desktop" | "documents" | "downloads" | "home"): string {
   try {
-    return app.getPath(name);
+    return getRuntimePath(name);
   } catch (err) {
     console.warn(LOG_PREFIX, "getPath 失败:", name, err);
     return "";

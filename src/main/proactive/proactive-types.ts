@@ -20,6 +20,8 @@ export interface ProactiveState {
   lastProactiveAt: number | null;
   lastProactiveScene: string | null;
   lastNormalConversationEndedAt: number | null;
+  /** LLM 返回 silent 的时间戳，触发短暂静默期（10 分钟），区别于真正发送消息后的 2 小时冷却。 */
+  lastSilentAt: number | null;
   globalDesire: number;
   affinity: Record<string, number>;
   lastFiredAt: Record<string, number | null>;
@@ -34,6 +36,7 @@ export type ProactiveBlockReason =
   | "night_inactive"
   | "normal_quiet_period"
   | "global_cooldown"
+  | "silent_cooldown"
   | "scene_cooldown"
   | "unanswered_limit"
   | "followup_cooldown"

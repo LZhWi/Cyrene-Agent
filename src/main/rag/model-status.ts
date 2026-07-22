@@ -4,7 +4,7 @@
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
-import { app } from "electron";
+import { getAppRootDir } from "../runtime/runtime-paths";
 
 const HF_CACHE_DIR = path.join(os.homedir(), ".cache", "huggingface", "Xenova");
 
@@ -102,7 +102,7 @@ export function getProjectModelsDirCandidates(): string[] {
   const cwdModels = path.join(process.cwd(), "models");
   if (!out.includes(cwdModels)) out.push(cwdModels);
   try {
-    const appModels = path.join(app.getAppPath(), "models");
+    const appModels = path.join(getAppRootDir(), "models");
     if (!out.includes(appModels)) out.push(appModels);
   } catch {
     // app not ready yet — fall through

@@ -26,6 +26,7 @@ import {
   type DocumentIndexProgress,
 } from "./types";
 import { normalizeMusicCardData, type MusicCardData } from "../../shared/music-card";
+import { normalizeWeatherCardData, type WeatherCardData } from "../../shared/weather-card";
 import { requestTrackPlayback } from "../settings/music-playback";
 
 type Role = "user" | "model";
@@ -42,6 +43,7 @@ interface Message {
   transient?: boolean;
   ttsCacheKey?: string;
   musicCard?: MusicCardData;
+  weatherCard?: WeatherCardData;
 }
 
 type MessageAttachment = ImageMessageAttachment | DocumentMessageAttachment;
@@ -143,6 +145,12 @@ const COPY_ICON_IDLE = `<svg class="msg__copy-icon msg__copy-icon--idle" viewBox
 </svg>`;
 const COPY_ICON_DONE = `<svg class="msg__copy-icon msg__copy-icon--done" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
   <path d="M5 12.5l4 4 10-10" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+
+/* ===== 删除按钮 SVG =====
+   垃圾桶图标，颜色随主题走。 */
+const DELETE_ICON = `<svg class="msg__delete-icon" viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+  <path d="M4 7h16M9 7V4h6v3M6 7l1 12h10l1-12" stroke="currentColor" stroke-width="1.6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>`;
 
 interface AguiApi {
@@ -406,6 +414,7 @@ interface ChatStoreSession {
     sticker?: string | null;
     ttsCacheKey?: string;
     musicCard?: MusicCardData;
+    weatherCard?: WeatherCardData;
   }>;
   createdAt: number;
   updatedAt: number;
@@ -423,6 +432,7 @@ interface ChatStoreApi {
   replaceTail: (id: string, startIndex: number, messages: unknown[]) => Promise<ChatStoreSession | null>;
   rename: (id: string, title: string) => Promise<ChatStoreSession | null>;
   delete: (id: string) => Promise<boolean>;
+  deleteMessage: (id: string, messageId: string) => Promise<ChatStoreSession | null>;
   openFolder: () => Promise<boolean>;
   migrateLegacy: (messages: unknown[]) => Promise<ChatStoreSession | null>;
   openInChatWindow: (sessionId: string) => Promise<boolean>;
@@ -443,7 +453,7 @@ declare global {
 // - 过滤空 content / 渲染中的 thinking 占位（thinking=true 时通常 content 为空，但保险起见双重过滤）
 // - 丢弃仅用于本轮模型调用的 modelContext 与 thinking 等瞬态字段
 function toPersistableMessages(arr: Message[]): Array<{
-  id: string; role: Role; content: string; at: number; attachments?: MessageAttachment[]; sticker?: StickerId | null; ttsCacheKey?: string; musicCard?: MusicCardData;
+  id: string; role: Role; content: string; at: number; attachments?: MessageAttachment[]; sticker?: StickerId | null; ttsCacheKey?: string; musicCard?: MusicCardData; weatherCard?: WeatherCardData;
 }> {
   return arr
     .filter((m) => m && (m.role === "user" || m.role === "model") && !m.thinking && !m.transient && (
@@ -451,6 +461,7 @@ function toPersistableMessages(arr: Message[]): Array<{
       || ((m.attachments?.length ?? 0) > 0)
       || Boolean(m.sticker)
       || Boolean(m.musicCard)
+      || Boolean(m.weatherCard)
     ))
     .map((m) => ({
       id: m.id,
@@ -461,6 +472,7 @@ function toPersistableMessages(arr: Message[]): Array<{
       sticker: m.sticker ?? null,
       ttsCacheKey: m.ttsCacheKey,
       musicCard: m.musicCard,
+      weatherCard: m.weatherCard,
     }));
 }
 
@@ -468,6 +480,10 @@ async function saveSession(): Promise<void> {
   if (!currentSessionId || !window.chatStore) return;
   try {
     await window.chatStore.replaceTail(currentSessionId, sessionTailStart, toPersistableMessages(messages));
+    // 更新 seenAt：本窗口 saveSession 触发的 onChanged 不应被当作"外部写入"而重载
+    // proactive-chat 会话（会导致 UI 闪烁 / ttsCacheKey 丢失）。
+    const updated = await window.chatStore.get(currentSessionId);
+    if (updated) seenSessionUpdatedAt.set(updated.id, updated.updatedAt);
   } catch (err) {
     console.warn("[Cyrene Chat] saveSession 失败:", err);
   }
@@ -478,6 +494,9 @@ function loadSessionIntoUI(session: ChatStoreSession): void {
   currentSessionId = session.id;
   seenSessionUpdatedAt.set(session.id, session.updatedAt);
   unreadProactiveSessionIds.delete(session.id);
+  // 重置 sessionTailStart：loadSessionIntoUI 加载的是完整 session（非分页），
+  // tail 起点应为 0。loadSessionTailIntoUI 会在调用本函数后重新设置正确的 tailStart。
+  sessionTailStart = 0;
   messages.length = 0;
   for (const m of session.messages) {
     messages.push({
@@ -489,9 +508,10 @@ function loadSessionIntoUI(session: ChatStoreSession): void {
       sticker: m.sticker ?? null,
       ttsCacheKey: m.ttsCacheKey,
       musicCard: m.musicCard,
+      weatherCard: m.weatherCard,
     });
   }
-  // 上报活跃 sessionId（设置面板"删除当前会话"差异化提示用）
+  // 上报活跃 sessionId（设置面板“删除当前会话”差异化提示用）
   void window.chatStore?.setActiveSession(session.id);
   render();
   // 切换会话后刷新侧栏列表的活跃高亮
@@ -501,17 +521,20 @@ function loadSessionIntoUI(session: ChatStoreSession): void {
 async function loadSessionTailIntoUI(id: string): Promise<boolean> {
   const page = await window.chatStore?.getPage(id, null, CHAT_WINDOW_SIZE);
   if (!page) return false;
-  sessionTailStart = Math.max(0, page.session.messageCount - page.messages.length);
+  // 先调用 loadSessionIntoUI（内部会重置 sessionTailStart=0），
+  // 然后再设置分页正确的 tailStart。
   loadSessionIntoUI({ ...page.session, messages: page.messages });
+  sessionTailStart = Math.max(0, page.session.messageCount - page.messages.length);
   return true;
 }
 
 async function loadEarlierMessages(): Promise<void> {
   if (!currentSessionId || !window.chatStore || sessionTailStart <= 0) return;
+  if (sending || deleting) return;  // 删除中禁止加载更早消息，避免竞态
   const beforeHeight = messagesEl.scrollHeight;
   const page = await window.chatStore.getPage(currentSessionId, sessionTailStart, CHAT_WINDOW_SIZE);
   if (!page) return;
-  sessionTailStart -= page.messages.length;
+  sessionTailStart = Math.max(0, sessionTailStart - page.messages.length);
   messages.unshift(...page.messages);
   render(true);
   messagesEl.scrollTop = messagesEl.scrollHeight - beforeHeight;
@@ -576,6 +599,8 @@ function buildRailItem(session: ChatSessionMetaUI): HTMLLIElement {
   // 点击列表项 = 本地切换会话（不走跨窗口 IPC，比设置面板还快）
   li.addEventListener("click", async () => {
     if (session.id === currentSessionId) return;
+    // 发送中/删除中禁止切换：避免 loadSessionTailIntoUI 清空 messages 丢失流式 streamMsg。
+    if (sending || deleting) return;
     await loadSessionTailIntoUI(session.id);
   });
 
@@ -595,6 +620,8 @@ chatStatusBtn?.addEventListener("click", () => {
 // +新对话
 chatRailNew?.addEventListener("click", async () => {
   if (!window.chatStore) return;
+  // 发送中/删除中禁止新建切换：避免 loadSessionIntoUI 清空 messages 丢失流式 streamMsg。
+  if (sending || deleting) return;
   try {
     const session = await window.chatStore.create({ identityId: null });
     if (session?.id) {
@@ -846,7 +873,7 @@ function buildChoiceCardEl(data: {
   return card;
 }
 
-/** 构建权限审批卡片 DOM 元素（per-action 档位下工具调用前弹出）。 */
+/** 构建权限审批卡片 DOM 元素（per-action 档位下工具调用前弹出，或通知模式下工具执行中弹出）。 */
 function buildApprovalCardEl(req: {
   id: string;
   toolId: string;
@@ -854,9 +881,11 @@ function buildApprovalCardEl(req: {
   toolDescription: string;
   args: Record<string, unknown>;
   risk: string;
+  notifyOnly?: boolean;
 }): HTMLElement {
   const card = document.createElement("div");
   card.className = "approval-card";
+  if (req.notifyOnly) card.classList.add("approval-card--notify");
   card.dataset.approvalId = req.id;
 
   // 标题（带工具名 + 风险标签）
@@ -908,57 +937,100 @@ function buildApprovalCardEl(req: {
     card.appendChild(argsBlock);
   }
 
-  // 按钮行
+  // 按钮行 + 提示行：通知模式 vs 审批模式
   const actions = document.createElement("div");
   actions.className = "approval-card__actions";
-  const denyBtn = document.createElement("button");
-  denyBtn.type = "button";
-  denyBtn.className = "approval-card__btn approval-card__btn--deny";
-  denyBtn.textContent = "拒绝";
-  const allowBtn = document.createElement("button");
-  allowBtn.type = "button";
-  allowBtn.className = "approval-card__btn approval-card__btn--allow";
-  allowBtn.textContent = "允许";
-  actions.appendChild(denyBtn);
-  actions.appendChild(allowBtn);
-  card.appendChild(actions);
-
-  // 提示行（60 秒超时）
   const note = document.createElement("div");
   note.className = "approval-card__note";
-  note.textContent = "60 秒未操作自动拒绝";
-  card.appendChild(note);
 
-  // 倒计时更新（每秒刷新）
-  let remaining = 60;
-  const tick = setInterval(() => {
-    remaining -= 1;
-    if (remaining <= 0) {
-      note.textContent = "已超时，自动拒绝";
+  if (req.notifyOnly) {
+    // 通知模式：3 秒后自动允许，用户可点"阻止"或"立即允许"
+    const stopBtn = document.createElement("button");
+    stopBtn.type = "button";
+    stopBtn.className = "approval-card__btn approval-card__btn--deny";
+    stopBtn.textContent = "阻止";
+    const allowBtn = document.createElement("button");
+    allowBtn.type = "button";
+    allowBtn.className = "approval-card__btn approval-card__btn--allow";
+    allowBtn.textContent = "立即允许";
+    actions.appendChild(stopBtn);
+    actions.appendChild(allowBtn);
+    card.appendChild(actions);
+
+    note.textContent = "3 秒后自动执行";
+    card.appendChild(note);
+
+    // 3 秒倒计时
+    let remaining = 3;
+    const tick = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        clearInterval(tick);
+        return;
+      }
+      note.textContent = `${remaining} 秒后自动执行`;
+    }, 1000);
+
+    const resolve = (allowed: boolean) => {
       clearInterval(tick);
-      return;
-    }
-    note.textContent = `${remaining} 秒后自动拒绝`;
-  }, 1000);
+      if (!card.isConnected) return;
+      card.classList.add(allowed ? "approval-card--allowed" : "approval-card--denied");
+      stopBtn.disabled = true;
+      allowBtn.disabled = true;
+      note.textContent = allowed ? "已允许" : "已阻止";
+      void window.settings?.resolvePermissionApproval?.(req.id, allowed);
+    };
 
-  const resolve = (allowed: boolean) => {
-    clearInterval(tick);
-    if (!card.isConnected) return;
-    card.classList.add(allowed ? "approval-card--allowed" : "approval-card--denied");
-    denyBtn.disabled = true;
-    allowBtn.disabled = true;
-    note.textContent = allowed ? "已允许" : "已拒绝";
-    void window.settings?.resolvePermissionApproval?.(req.id, allowed);
-  };
+    stopBtn.addEventListener("click", () => resolve(false));
+    allowBtn.addEventListener("click", () => resolve(true));
+  } else {
+    // 审批模式：等待用户允许/拒绝
+    const denyBtn = document.createElement("button");
+    denyBtn.type = "button";
+    denyBtn.className = "approval-card__btn approval-card__btn--deny";
+    denyBtn.textContent = "拒绝";
+    const allowBtn = document.createElement("button");
+    allowBtn.type = "button";
+    allowBtn.className = "approval-card__btn approval-card__btn--allow";
+    allowBtn.textContent = "允许";
+    actions.appendChild(denyBtn);
+    actions.appendChild(allowBtn);
+    card.appendChild(actions);
 
-  denyBtn.addEventListener("click", () => resolve(false));
-  allowBtn.addEventListener("click", () => resolve(true));
+    note.textContent = "60 秒未操作自动拒绝";
+    card.appendChild(note);
+
+    // 倒计时更新（每秒刷新）
+    let remaining = 60;
+    const tick = setInterval(() => {
+      remaining -= 1;
+      if (remaining <= 0) {
+        note.textContent = "已超时，自动拒绝";
+        clearInterval(tick);
+        return;
+      }
+      note.textContent = `${remaining} 秒后自动拒绝`;
+    }, 1000);
+
+    const resolve = (allowed: boolean) => {
+      clearInterval(tick);
+      if (!card.isConnected) return;
+      card.classList.add(allowed ? "approval-card--allowed" : "approval-card--denied");
+      denyBtn.disabled = true;
+      allowBtn.disabled = true;
+      note.textContent = allowed ? "已允许" : "已拒绝";
+      void window.settings?.resolvePermissionApproval?.(req.id, allowed);
+    };
+
+    denyBtn.addEventListener("click", () => resolve(false));
+    allowBtn.addEventListener("click", () => resolve(true));
+  }
 
   return card;
 }
 
 /** 构建天气卡片 DOM 元素（不插入，由调用方决定位置）。 */
-function buildWeatherCardEl(data: Record<string, unknown>): HTMLElement {
+function buildWeatherCardEl(data: WeatherCardData): HTMLElement {
   const card = document.createElement("div");
   card.className = "weather-card";
 
@@ -966,18 +1038,18 @@ function buildWeatherCardEl(data: Record<string, unknown>): HTMLElement {
   const dateStr = `${now.getMonth() + 1}月${now.getDate()}日 周${"日一二三四五六"[now.getDay()]}`;
   const timeStr = formatTime(Date.now());
 
-  const temp = Number(data.temp ?? 0);
-  const feelsLike = Number(data.feelsLike ?? temp);
-  const humidity = Number(data.humidity ?? 0);
-  const precip = Number(data.precip ?? 0);
-  const pressure = Number(data.pressure ?? 0);
-  const icon = String(data.icon ?? "🌤️");
-  const windDir = String(data.windDir ?? "");
-  const windScale = String(data.windScale ?? "");
+  const temp = data.temp;
+  const feelsLike = data.feelsLike;
+  const humidity = data.humidity;
+  const precip = data.precip;
+  const pressure = data.pressure;
+  const icon = data.icon;
+  const windDir = data.windDir;
+  const windScale = data.windScale;
   const visibility = data.visibility != null ? `${data.visibility}km` : "—";
-  const uv = String(data.uv ?? "—");
-  const aqi = data.aqi != null ? Number(data.aqi) : null;
-  const aqiText = String(data.aqiText ?? "");
+  const uv = data.uv ?? "—";
+  const aqi = data.aqi != null ? data.aqi : null;
+  const aqiText = data.aqiText ?? "";
   const kaomoji = aqi != null ? aqiKaomojiText(Number(aqi)) : "";
 
   card.innerHTML = `
@@ -1281,6 +1353,7 @@ function render(preserveScroll = false): void {
     || ((m.attachments?.length ?? 0) > 0)
     || Boolean(m.sticker)
     || Boolean(m.musicCard)
+    || Boolean(m.weatherCard)
   );
   if (emptyEl) emptyEl.toggleAttribute("hidden", hasMessages);
 
@@ -1362,6 +1435,7 @@ function render(preserveScroll = false): void {
     }
 
     if (m.musicCard) body.appendChild(buildMusicCardEl(m.musicCard));
+    if (m.weatherCard) body.appendChild(buildWeatherCardEl(m.weatherCard));
 
     // actions 行：喇叭 / 复制 / 时间三个控件水平排在气泡下方。
     // 流式中的 transient 消息会继续追加新气泡；此时先隐藏 actions，
@@ -1425,6 +1499,47 @@ function render(preserveScroll = false): void {
         });
       });
       actions.appendChild(copyBtn);
+      hasActionItem = true;
+    }
+
+    // 删除按钮：user / model 都有，thinking / transient 跳过
+    if (!m.transient && !m.thinking) {
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "msg__delete";
+      deleteBtn.title = "删除";
+      deleteBtn.setAttribute("aria-label", "删除这条消息");
+      deleteBtn.innerHTML = DELETE_ICON;
+      deleteBtn.addEventListener("click", async () => {
+        if (sending || deleting) return;
+        const ok = window.confirm("删除这条消息？\n如果是AI回复，对应的用户消息也会一起删除。");
+        if (!ok) {
+          inputEl.focus();
+          return;
+        }
+        if (!currentSessionId || !window.chatStore) return;
+        deleting = true;
+        try {
+          // 只在 IPC 调用期间禁用输入框，重载阶段允许输入（deleting 标志仍阻止 send）
+          inputEl.disabled = true;
+          const updated = await window.chatStore.deleteMessage(currentSessionId, m.id);
+          inputEl.disabled = false;
+          if (!updated) return;
+          // 立即更新 seenAt，避免 onChanged 回调检测到 updatedAt 变化后重复重载 proactive-chat 会话
+          seenSessionUpdatedAt.set(currentSessionId, updated.updatedAt);
+          // 重新加载会话 tail，确保 sessionTailStart 和 messages 与后端完全同步
+          // （避免删除跨 tail 边界的消息时前后端索引不一致）
+          await loadSessionTailIntoUI(currentSessionId);
+          render();
+        } catch (err) {
+          console.warn("[chat] 删除消息失败:", err);
+          inputEl.disabled = false;
+        } finally {
+          deleting = false;
+          inputEl.focus();
+        }
+      });
+      actions.appendChild(deleteBtn);
       hasActionItem = true;
     }
 
@@ -2475,6 +2590,7 @@ async function getModelReply(): Promise<ChatReplyPayload> {
 }
 
 let sending = false;
+let deleting = false;  // 删除操作进行中标志，阻止 onChanged 并发重载和用户输入竞态
 
 // ── 快捷预设胶囊 ──────────────────────────────────────────
 // 空对话时在 empty-state 下方显示的半透明胶囊，点击后：
@@ -2563,7 +2679,7 @@ async function triggerCyreneGreeting(): Promise<void> {
     textMouthStarted = false;
     let pendingTtsCachePromise: Promise<{ cacheKey: string } | null> | null = null;
     let sticker: string | null = null;
-    let pendingWeatherCard: Record<string, unknown> | null = null;
+    let pendingWeatherCard: WeatherCardData | null = null;
     let pendingMusicCard: MusicCardData | null = null;
 
     let finishRun!: () => void;
@@ -2578,6 +2694,8 @@ async function triggerCyreneGreeting(): Promise<void> {
     let runFinishedArrived = false;
     let startNextStreamingBubble = false;
     let streamingBubbleCount = 1;
+    let currentBubbleLength = 0;
+    const STREAMING_BUBBLE_MIN_LENGTH = 20;
     const allowStreamingBubbleSplit = shouldSegmentAssistantReply(isTalkMode() ? "talk" : "collab", segmentedOutputMode);
     const getStreamingBubble = (): HTMLElement | null => {
       return getLastBubbleForMessage(streamMsgId);
@@ -2596,17 +2714,21 @@ async function triggerCyreneGreeting(): Promise<void> {
           const bubble = startNextStreamingBubble
             ? (appendBubbleForMessage(streamMsgId) ?? getStreamingBubble())
             : getStreamingBubble();
+          if (startNextStreamingBubble) currentBubbleLength = 0;
           startNextStreamingBubble = false;
           if (bubble) {
             appendStreamingCharToBubble(bubble, next);
           }
+          currentBubbleLength += next.length;
           if (
             allowStreamingBubbleSplit
             && streamingBubbleCount < MAX_ASSISTANT_REPLY_BUBBLES
+            && currentBubbleLength >= STREAMING_BUBBLE_MIN_LENGTH
             && shouldBreakStreamingBubbleAfterChar(next)
           ) {
             startNextStreamingBubble = true;
             streamingBubbleCount += 1;
+            currentBubbleLength = 0;
           }
           messagesEl.scrollTop = messagesEl.scrollHeight;
           return;
@@ -2681,7 +2803,8 @@ async function triggerCyreneGreeting(): Promise<void> {
             if (event.name === "cyrene.sticker") {
               sticker = (event.value as StickerId | null) ?? null;
             } else if (event.name === "cyrene.weather") {
-              pendingWeatherCard = event.value as Record<string, unknown>;
+              const normalized = normalizeWeatherCardData(event.value);
+              if (normalized) pendingWeatherCard = normalized;
             } else if (event.name === "cyrene.music") {
               pendingMusicCard = normalizeMusicCardData(event.value);
             } else if (event.name === "cyrene.todos") {
@@ -2729,6 +2852,7 @@ async function triggerCyreneGreeting(): Promise<void> {
       msg.content = streamContent;
       msg.sticker = sticker;
       msg.musicCard = pendingMusicCard ?? undefined;
+      msg.weatherCard = pendingWeatherCard ?? undefined;
     }
     void saveSession();
     const finishedMsgId = streamMsgId;
@@ -2740,12 +2864,7 @@ async function triggerCyreneGreeting(): Promise<void> {
       void saveSession();
     });
     render();
-    if (pendingWeatherCard) {
-      const card = buildWeatherCardEl(pendingWeatherCard);
-      messagesEl.appendChild(card);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-      pendingWeatherCard = null;
-    }
+    // 天气卡片已通过 msg.weatherCard 持久化并在 render 中渲染，无需单独 appendChild。
   } catch (err) {
     const message = err instanceof Error ? err.message : "模型请求失败";
     const msg = messages.find(m => m.id === streamMsgId);
@@ -2773,7 +2892,7 @@ async function triggerCyreneGreeting(): Promise<void> {
 
 async function send(): Promise<void> {
   const text = inputEl.value.trim();
-  if ((!text && attachedFiles.length === 0) || sending) return;
+  if ((!text && attachedFiles.length === 0) || sending || deleting) return;
   // bootstrap 极快但理论上仍有竞态：currentSessionId 为 null 时消息无处可存，
   // 直接拦截避免丢失。正常情况下 bootstrap 会在用户首次按键前完成。
   if (!currentSessionId) {
@@ -3053,7 +3172,7 @@ async function send(): Promise<void> {
     textMouthStarted = false;
     let pendingTtsCachePromise: Promise<{ cacheKey: string } | null> | null = null;
     let sticker: string | null = null;
-    let pendingWeatherCard: Record<string, unknown> | null = null;
+    let pendingWeatherCard: WeatherCardData | null = null;
     let pendingMusicCard: MusicCardData | null = null;
 
     // 终态信号：由事件流的 RUN_FINISHED/RUN_ERROR 触发 resolve，
@@ -3073,6 +3192,8 @@ async function send(): Promise<void> {
     let runFinishedArrived = false;
     let startNextStreamingBubble = false;
     let streamingBubbleCount = 1;
+    let currentBubbleLength = 0;
+    const STREAMING_BUBBLE_MIN_LENGTH = 20;
     const allowStreamingBubbleSplit = shouldSegmentAssistantReply(isTalkMode() ? "talk" : "collab", segmentedOutputMode);
     /** 找到当前流式消息的气泡 DOM（TEXT_MESSAGE_START 时 render 过一次，带 data-msg-id）。 */
     const getStreamingBubble = (): HTMLElement | null => {
@@ -3094,17 +3215,21 @@ async function send(): Promise<void> {
           const bubble = startNextStreamingBubble
             ? (appendBubbleForMessage(streamMsgId) ?? getStreamingBubble())
             : getStreamingBubble();
+          if (startNextStreamingBubble) currentBubbleLength = 0;
           startNextStreamingBubble = false;
           if (bubble) {
             appendStreamingCharToBubble(bubble, next);
           }
+          currentBubbleLength += next.length;
           if (
             allowStreamingBubbleSplit
             && streamingBubbleCount < MAX_ASSISTANT_REPLY_BUBBLES
+            && currentBubbleLength >= STREAMING_BUBBLE_MIN_LENGTH
             && shouldBreakStreamingBubbleAfterChar(next)
           ) {
             startNextStreamingBubble = true;
             streamingBubbleCount += 1;
+            currentBubbleLength = 0;
           }
           messagesEl.scrollTop = messagesEl.scrollHeight;
           return;
@@ -3187,9 +3312,9 @@ async function send(): Promise<void> {
             if (event.name === "cyrene.sticker") {
               sticker = (event.value as StickerId | null) ?? null;
             } else if (event.name === "cyrene.weather") {
-              // 暂存天气数据，等 runDone 后 render 再插入（避免 render 的 replaceChildren 清掉卡片）
-              console.log("[Chat] 收到天气卡片数据:", JSON.stringify(event.value)?.slice(0, 100));
-              pendingWeatherCard = event.value as Record<string, unknown>;
+              // 暂存天气数据，等 runDone 后写入 msg.weatherCard 持久化并在 render 中渲染
+              const normalized = normalizeWeatherCardData(event.value);
+              if (normalized) pendingWeatherCard = normalized;
             } else if (event.name === "cyrene.music") {
               pendingMusicCard = normalizeMusicCardData(event.value);
             } else if (event.name === "cyrene.todos") {
@@ -3245,6 +3370,7 @@ async function send(): Promise<void> {
       msg.content = streamContent;
       msg.sticker = sticker;
       msg.musicCard = pendingMusicCard ?? undefined;
+      msg.weatherCard = pendingWeatherCard ?? undefined;
     }
     void saveSession();
     const finishedMsgId = streamMsgId;
@@ -3256,14 +3382,7 @@ async function send(): Promise<void> {
       void saveSession();
     });
     render();
-    // 天气卡片在 render 后追加到末尾（模型回复之后）
-    if (pendingWeatherCard) {
-      console.log("[Chat] 插入天气卡片");
-      const card = buildWeatherCardEl(pendingWeatherCard);
-      messagesEl.appendChild(card);
-      messagesEl.scrollTop = messagesEl.scrollHeight;
-      pendingWeatherCard = null;
-    }
+    // 天气卡片已通过 msg.weatherCard 持久化并在 render 中渲染，无需单独 appendChild。
     // TTS 已在 TEXT_MESSAGE_END 时触发，这里不再重复朗读
   } catch (err) {
     const message = err instanceof Error ? err.message : "模型请求失败";
@@ -3289,7 +3408,7 @@ async function send(): Promise<void> {
   }
 }
 function clearChat(): void {
-  if (sending) return;
+  if (sending || deleting) return;
   if (messages.length === 0) return;
   const ok = window.confirm("清空当前对话？");
   if (!ok) return;
@@ -3755,6 +3874,10 @@ window.settings?.onPermissionApprovalRequest?.((req) => {
 window.chatStore?.onSwitchSession(async (sessionId) => {
   if (!window.chatStore) return;
   if (sessionId === currentSessionId) return;
+  // 发送中/删除中跳过切换：loadSessionIntoUI 会清空 messages 数组（messages.length = 0），
+  // 把正在流式渲染的 streamMsg 一起清掉，导致 AG-UI 事件到达时找不到消息、
+  // 回复不显示在 UI（TTS 仍正常播放）。发送结束后用户可再次点击切换。
+  if (sending || deleting) return;
   const session = await window.chatStore.get(sessionId);
   if (session) loadSessionIntoUI(session);
 });
@@ -3764,6 +3887,9 @@ window.chatStore?.onSwitchSession(async (sessionId) => {
 // 2. 侧栏展开时刷新列表（别的窗口新建/改名/删除都会触发）
 window.chatStore?.onChanged(async () => {
   if (!window.chatStore || !currentSessionId) return;
+  // 删除操作期间跳过重载：删除回调会自己处理 loadSessionTailIntoUI，
+  // 此处重载会导致并发清空 messages 数组的竞态。
+  if (deleting) return;
   const sessions = await window.chatStore.list();
   for (const session of sessions) {
     const seenAt = seenSessionUpdatedAt.get(session.id) ?? 0;
@@ -3779,11 +3905,23 @@ window.chatStore?.onChanged(async () => {
       stillExists.purpose === "proactive-chat" &&
       stillExists.updatedAt > (seenSessionUpdatedAt.get(stillExists.id) ?? 0)
     ) {
-      await loadSessionTailIntoUI(stillExists.id);
+      if (!sending && !deleting) {
+        // 发送中跳过重载：loadSessionIntoUI 会清空 messages 数组（messages.length = 0），
+        // 把正在流式渲染的 streamMsg 一起清掉，导致 AG-UI 事件到达时找不到消息、
+        // 回复不显示在 UI（TTS 仍正常播放）。
+        await loadSessionTailIntoUI(stillExists.id);
+      } else {
+        // 发送中：更新 seenAt，避免发送结束后 saveSession 触发的 onChanged 重复重载导致 UI 闪烁。
+        // 若期间有新主动消息到达，其 updatedAt 更大，下次 onChanged 仍会检测到并重载。
+        seenSessionUpdatedAt.set(stillExists.id, stillExists.updatedAt);
+      }
     }
     return;
   }
   // 当前会话已被外部删除：fallback 到最新一条 / 自动建新
+  // 发送中跳过：避免 loadSessionIntoUI 清空 messages 数组丢失正在流式渲染的 streamMsg。
+  // 发送结束后若当前会话已不存在，下次 onChanged 会重新进入此分支处理。
+  if (sending || deleting) return;
   const list = sessions;
   let next: ChatStoreSession | null = null;
   if (list.length > 0) next = await window.chatStore.get(list[0].id);

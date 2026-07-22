@@ -14,7 +14,7 @@ import { L0_FIELD_DESCRIPTIONS } from "./memory-types";
 import type { L2Memory } from "./memory-types";
 import * as fs from "fs";
 import * as path from "path";
-import { app } from "electron";
+import { getUserDataDir } from "../runtime/runtime-paths";
 import { getAdapterForConfig } from "../orchestrator/vendors";
 import { recordUsage } from "../token-usage-store";
 import { commitMemoryCompression } from "./memory-compression-transaction";
@@ -32,7 +32,7 @@ interface ModelSettings {
 function loadModelSettings(): ModelSettings {
   const defaults = { provider: "DeepSeek（深度求索）", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-pro", apiKey: "" };
   try {
-    const filePath = path.join(app.getPath("userData"), "model-settings.json");
+    const filePath = path.join(getUserDataDir(), "model-settings.json");
     if (!fs.existsSync(filePath)) return defaults;
     const raw = fs.readFileSync(filePath, "utf8");
     const parsed = JSON.parse(raw) as Partial<ModelSettings>;

@@ -1,13 +1,13 @@
 // MCP Manager — 管理多个 MCP server 的生命周期、配置持久化、启动自动连接
 import * as fs from "fs";
 import * as path from "path";
-import { app } from "electron";
+import { getUserDataDir } from "../runtime/runtime-paths";
 import { connectMcpServer, disconnectMcpServer, getMcpServerStates, McpServerConfig } from "./mcp-adapter";
 
 const LOG_PREFIX = "[MCP Manager]";
 
 function getConfigPath(): string {
-  const userDataPath = app.getPath("userData");
+  const userDataPath = getUserDataDir();
   return path.join(userDataPath, "mcp-servers.json");
 }
 

@@ -7,7 +7,7 @@ import { memoryStore } from "./memory-store"
 import type { ConflictLog, L2Memory, MemoryEvidence } from "./memory-types"
 import * as fs from "fs"
 import * as path from "path"
-import { app } from "electron"
+import { getUserDataDir } from "../runtime/runtime-paths"
 
 export type MemoryConflictResolutionType =
   | "unrelated"
@@ -78,7 +78,7 @@ let lastResolverRunAt: number | null = null
 
 function loadResolverModelSettings(): ResolverModelSettings {
   try {
-    const filePath = path.join(app.getPath("userData"), "model-settings.json")
+    const filePath = path.join(getUserDataDir(), "model-settings.json")
     if (!fs.existsSync(filePath)) return DEFAULT_MODEL_SETTINGS
     const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<ResolverModelSettings>
     return {

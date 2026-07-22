@@ -259,6 +259,36 @@ export function replaceMessagesTail(id: string, startIndex: number, messages: Ch
   return session;
 }
 
+/**
+ * 删除一条消息及其配对（整轮）。
+ * - 删除 AI(model) 消息时：如果前一条是 user 消息，一起删除
+ * - 删除 user 消息时：如果后一条是 model 消息，一起删除
+ * 用于清除 AI 越界生成等有问题的历史记录，避免污染上下文。
+ */
+export function deleteMessageRound(id: string, messageId: string): ChatSession | null {
+  const session = readSessionFile(id);
+  if (!session) return null;
+  const index = session.messages.findIndex(m => m.id === messageId);
+  if (index < 0) return null;
+
+  let start = index;
+  let end = index + 1;
+
+  const target = session.messages[index];
+  if (target.role === "model" && index > 0 && session.messages[index - 1].role === "user") {
+    start = index - 1;
+  } else if (target.role === "user" && index + 1 < session.messages.length && session.messages[index + 1].role === "model") {
+    end = index + 2;
+  }
+
+  session.messages.splice(start, end - start);
+  session.updatedAt = Date.now();
+  if (!session.titleIsCustom) session.title = deriveTitle(session.messages);
+  writeSessionFile(session);
+  upsertMeta(metaFromSession(session));
+  return session;
+}
+
 export function renameSession(id: string, title: string): ChatSession | null {
   const session = readSessionFile(id);
   if (!session) return null;

@@ -7,7 +7,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import { app } from "electron";
+import { getUserDataDir } from "../runtime/runtime-paths";
 import { registerJiebaCustomWord, registerJiebaCustomWords } from "../rag/retriever";
 
 // ── 类型 ──
@@ -100,7 +100,7 @@ export function extractEntitiesFromText(text: string): Array<{ type: EntityNode[
 
 // ── 实体图谱管理器 ──
 
-const dataDir = () => path.join(app.getPath("userData"));
+const dataDir = () => path.join(getUserDataDir());
 const getPath = () => path.join(dataDir(), "entity-graph.json");
 
 class EntityGraph {

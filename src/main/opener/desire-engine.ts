@@ -19,6 +19,7 @@ export function defaultState(): OpenerState {
     lastProactiveAt: null,
     lastProactiveScene: null,
     lastNormalConversationEndedAt: null,
+    lastSilentAt: null,
     affinity: {
       morning: 1.0, late_night: 1.0, idle_daze: 1.0, work_break: 1.0,
       back_from_away: 1.0, rainy_day: 1.0, cold_drop: 1.0, sunny_day: 1.0,

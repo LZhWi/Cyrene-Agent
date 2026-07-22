@@ -1,7 +1,7 @@
 ﻿// Reranker module — cross-encoder reranking for RAG
 import * as path from "path";
 import * as os from "os";
-import { app } from "electron";
+import { getAppRootDir } from "../runtime/runtime-paths";
 
 // ── Types ──
 export interface RerankerProvider {
@@ -17,7 +17,7 @@ let lightPipeline: any = null;
 let standardPipeline: any = null;
 
 function getModelsDir(): string {
-  return path.join(app.getAppPath(), "models");
+  return path.join(getAppRootDir(), "models");
 }
 
 async function loadRerankerPipeline(modelDir: string): Promise<any> {

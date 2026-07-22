@@ -2,7 +2,7 @@ import * as fs from "fs"
 import * as path from "path"
 import { getAdapterForConfig } from "../orchestrator/vendors"
 import type { VendorConfig, ChatMessage } from "../orchestrator/vendors"
-import { app } from "electron"
+import { getUserDataDir } from "../runtime/runtime-paths"
 import { MemoryCandidate, L0_FIELD_DESCRIPTIONS, MemoryJudgeTurn } from "./memory-types"
 import { recordUsage } from "../token-usage-store"
 
@@ -22,7 +22,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
 };
 
 function getSettingsPath(): string {
-  return path.join(app.getPath("userData"), "model-settings.json")
+  return path.join(getUserDataDir(), "model-settings.json")
 }
 
 function loadModelSettings(): ModelSettings {

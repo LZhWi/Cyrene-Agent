@@ -1,7 +1,7 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { app } from "electron";
+import { getUserDataDir } from "../runtime/runtime-paths";
 import { DOCUMENT_CHUNK_OVERLAP, DOCUMENT_CHUNK_SIZE } from "./chunk";
 import { getEmbeddingProviderIdentity } from "./embedding";
 
@@ -61,7 +61,7 @@ export async function buildDocumentCacheIdentityFromTextSha(textSha256: string):
 }
 
 function cachePath(): string {
-  return path.join(app.getPath("userData"), "rag-data", "document-cache.json");
+  return path.join(getUserDataDir(), "rag-data", "document-cache.json");
 }
 
 async function readDocumentCache(): Promise<DocumentCacheFile> {

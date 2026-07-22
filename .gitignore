@@ -82,6 +82,12 @@ models/Xenova/
 **/*.onnx_data
 **/*.bin
 **/*.safetensors
+**/*.model
+
+# Python (uv) 本地环境 — 虚拟环境与缓存不跟踪，pyproject.toml / uv.lock 保持跟踪
+.venv/
+__pycache__/
+*.pyc
 
 # Local opener voice pack files. Keep the directory and installation note tracked.
 opener-pack/*

@@ -11,8 +11,18 @@ import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { loadChannelsSettings, saveChannelsSettings } from "./settings-store";
 import { channelManager } from "./manager";
 import type { ChannelId, IncomingMessage } from "./types";
+import { applySyncSnapshot, buildSyncSnapshot } from "../sync/sync-service";
+import type { SyncSnapshot } from "../sync/types";
 
 const LOG = "[InboundServer]";
+
+/** PC 端设备标识（阶段 3 CRDT 会持久化；阶段 1 仅进程内生成，用于快照来源标注）。 */
+let pcDeviceId: string | null = null;
+function getPcDeviceId(): string {
+  if (!pcDeviceId) pcDeviceId = `pc-${randomBytes(6).toString("hex")}`;
+  return pcDeviceId;
+}
+
 
 /** 给定 channelId + raw payload → IncomingMessage。每个 adapter 自己注册。 */
 export type NormalizeFn = (channel: ChannelId, raw: unknown) => IncomingMessage | null;
@@ -29,6 +39,25 @@ export function registerInboundRoute(channel: ChannelId, normalize: NormalizeFn)
   const existing = routes.findIndex((r) => r.channel === channel);
   if (existing >= 0) routes[existing] = { channel, normalize };
   else routes.push({ channel, normalize });
+}
+
+/**
+ * 手机 App 聊天转发的运行器（可注入）。
+ *
+ * 阶段 1 的 "RN 聊天先经 PC 转发"：手机把一条文本 POST 到 /chat，PC 用
+ * 现有两阶段大脑生成回复并写入该 sessionId 的历史（随后手机通过 /sync/pull 也能拿到）。
+ * index.ts 启动时注入真实实现；未注入时 /chat 返回 503（大脑未就绪）。
+ */
+export type InboundChatRunner = (input: {
+  /** 稳定会话 id，手机端固定用（如 "channel:mobile:main"），同时作为同步 stem。 */
+  sessionId: string;
+  /** 用户输入文本。 */
+  text: string;
+}) => Promise<{ reply: string }>;
+
+let chatRunner: InboundChatRunner | null = null;
+export function setInboundChatRunner(fn: InboundChatRunner | null): void {
+  chatRunner = fn;
 }
 
 /** 内部：检查共享密钥（仅当 secret 已设置时强制校验） */
@@ -128,6 +157,109 @@ async function handleRequest(
     return;
   }
 
+  // 同步：拉取增量快照。GET /sync/pull?since=<ms>
+  // 鉴权沿用 X-Cyrene-Channel-Secret。since 为上次游标（ms），缺省 = 全量。
+  {
+    const pull = /^\/sync\/pull(?:\?.*)?$/.exec(req.url || "");
+    if (pull && req.method === "GET") {
+      if (!checkSecret(req, secret)) {
+        sendJson(res, 401, { ok: false, error: "invalid shared secret" });
+        return;
+      }
+      let since = 0;
+      try {
+        const u = new URL(req.url || "", "http://127.0.0.1");
+        const raw = u.searchParams.get("since");
+        if (raw) {
+          const n = Number(raw);
+          if (Number.isFinite(n) && n >= 0) since = n;
+        }
+      } catch {
+        /* ignore malformed query, treat as full pull */
+      }
+      try {
+        const snapshot = await buildSyncSnapshot(getPcDeviceId(), since);
+        sendJson(res, 200, { ok: true, snapshot });
+      } catch (err) {
+        console.error(LOG, "sync/pull 失败:", err);
+        sendJson(res, 500, { ok: false, error: "sync pull failed" });
+      }
+      return;
+    }
+  }
+
+  // 同步：接收对端推送并合并。POST /sync/push  body=SyncSnapshot
+  {
+    const push = /^\/sync\/push\/?$/.exec(req.url || "");
+    if (push && req.method === "POST") {
+      if (!checkSecret(req, secret)) {
+        sendJson(res, 401, { ok: false, error: "invalid shared secret" });
+        return;
+      }
+      let snapshot: SyncSnapshot | null = null;
+      try {
+        const text = await readBody(req);
+        snapshot = text ? (JSON.parse(text) as SyncSnapshot) : null;
+      } catch (err) {
+        sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : "bad json" });
+        return;
+      }
+      if (!snapshot || typeof snapshot !== "object" || !snapshot.l0 || !snapshot.l1) {
+        sendJson(res, 400, { ok: false, error: "invalid sync snapshot" });
+        return;
+      }
+      try {
+        const { cursor, applied } = await applySyncSnapshot(snapshot);
+        sendJson(res, 200, { ok: true, cursor, applied });
+      } catch (err) {
+        console.error(LOG, "sync/push 失败:", err);
+        sendJson(res, 500, { ok: false, error: "sync push failed" });
+      }
+      return;
+    }
+  }
+
+  // 手机 App 聊天转发。POST /chat  body={ sessionId, text }
+  // PC 用现有大脑生成回复并落该 sessionId 历史（手机随后 /sync/pull 也能拿到）。
+  {
+    const chat = /^\/chat\/?$/.exec(req.url || "");
+    if (chat && req.method === "POST") {
+      if (!checkSecret(req, secret)) {
+        sendJson(res, 401, { ok: false, error: "invalid shared secret" });
+        return;
+      }
+      if (!chatRunner) {
+        sendJson(res, 503, { ok: false, error: "chat runner not ready" });
+        return;
+      }
+      let body: { sessionId?: unknown; text?: unknown } | null = null;
+      try {
+        const text = await readBody(req);
+        body = text ? (JSON.parse(text) as { sessionId?: unknown; text?: unknown }) : null;
+      } catch (err) {
+        sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : "bad json" });
+        return;
+      }
+      const userText = typeof body?.text === "string" ? body.text.trim() : "";
+      if (!userText) {
+        sendJson(res, 400, { ok: false, error: "missing text" });
+        return;
+      }
+      const sessionId =
+        typeof body?.sessionId === "string" && body.sessionId.trim()
+          ? body.sessionId.trim()
+          : "channel:mobile:main";
+      try {
+        const { reply } = await chatRunner({ sessionId, text: userText });
+        sendJson(res, 200, { ok: true, reply, sessionId });
+      } catch (err) {
+        console.error(LOG, "chat 失败:", err);
+        sendJson(res, 500, { ok: false, error: "chat failed" });
+      }
+      return;
+    }
+  }
+
   sendJson(res, 404, { ok: false, error: "not found" });
 }
 
@@ -162,6 +294,10 @@ export async function startInboundServer(): Promise<InboundServerHandle> {
   if (settings.inboundPort > 0) tryPorts.push(settings.inboundPort);
   tryPorts.push("random");
 
+  // 绑定地址：默认仅回环（与历史行为一致）；仅当用户显式开启 inboundBindLan 时才绑 0.0.0.0，
+  // 让局域网内的手机 App 能直连（仍强制 X-Cyrene-Channel-Secret 鉴权）。
+  const bindHost = settings.inboundBindLan ? "0.0.0.0" : "127.0.0.1";
+
   let lastErr: unknown = null;
   let actualPort = 0;
   for (const target of tryPorts) {
@@ -189,7 +325,7 @@ export async function startInboundServer(): Promise<InboundServerHandle> {
       await new Promise<void>((resolve, reject) => {
         const onError = (err: Error) => reject(err);
         server!.once("error", onError);
-        server!.listen(port, "127.0.0.1", () => {
+        server!.listen(port, bindHost, () => {
           server!.off("error", onError);
           resolve();
         });
@@ -230,7 +366,7 @@ export async function startInboundServer(): Promise<InboundServerHandle> {
         }
       }),
   };
-  console.log(LOG, `启动于 http://127.0.0.1:${port}`);
+  console.log(LOG, `启动于 http://${bindHost}:${port}`);
   return currentHandle;
 }
 

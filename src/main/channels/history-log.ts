@@ -16,7 +16,7 @@
 //   history-log 是精确窗口 (sliding window), 短期明确
 import * as fs from "fs";
 import * as path from "path";
-import { app } from "electron";
+import { getUserDataDir } from "../runtime/runtime-paths";
 
 const LOG = "[ChannelHistory]";
 
@@ -30,7 +30,7 @@ export interface HistoryEntry {
 const MAX_FILE_LINES = 200; // 最近 200 条, 远大于滑动窗口 16
 
 function dir(): string {
-  return path.join(app.getPath("userData"), "channels", "history");
+  return path.join(getUserDataDir(), "channels", "history");
 }
 
 /** sessionId 可能不安全做文件名, 用 sha256 hex 兜底. dispatcher 给的已是 hash+prefix 形式也 OK. */
@@ -106,4 +106,70 @@ export function reloadAllHistory(): Map<string, HistoryEntry[]> {
     /* ignore */
   }
   return out;
+}
+
+// ── 同步支持（sync 模块用）──
+//
+// 同步以"安全文件名 (stem)"为键：PC 与 RN 采用同一 safeName 规则，stem 天然是稳定的
+// 跨端同步键，无需反推原 sessionId。以下函数按 stem 直接读写整份历史文件。
+
+/** 列出所有历史会话的 stem（去掉 .jsonl 后缀的安全文件名）。 */
+export function listHistoryStems(): string[] {
+  try {
+    fs.mkdirSync(dir(), { recursive: true });
+    return fs
+      .readdirSync(dir())
+      .filter((name) => name.endsWith(".jsonl"))
+      .map((name) => name.replace(/\.jsonl$/, ""));
+  } catch (err) {
+    console.warn(LOG, "listHistoryStems 失败:", err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+/** 把 sessionId 转成同步用的 stem（与内部落盘文件名一致）。 */
+export function stemForSession(sessionId: string): string {
+  return safeName(sessionId);
+}
+
+/** 按 stem 读取整份历史（按落盘顺序，旧 → 新）。 */
+export function readHistoryByStem(stem: string): HistoryEntry[] {
+  const fp = path.join(dir(), `${stem}.jsonl`);
+  if (!fs.existsSync(fp)) return [];
+  try {
+    const buf = fs.readFileSync(fp, "utf8");
+    const lines = buf.split("\n").filter((l) => l.length > 0);
+    const parsed: HistoryEntry[] = [];
+    for (const line of lines) {
+      try {
+        const e = JSON.parse(line) as HistoryEntry;
+        if (e && (e.role === "user" || e.role === "assistant") && typeof e.content === "string" && typeof e.at === "string") {
+          parsed.push(e);
+        }
+      } catch {
+        /* skip bad line */
+      }
+    }
+    return parsed;
+  } catch (err) {
+    console.warn(LOG, "readHistoryByStem 失败:", stem, err instanceof Error ? err.message : err);
+    return [];
+  }
+}
+
+/**
+ * 按 stem 覆盖写入整份历史（调用方负责去重/排序/截断）。
+ * 用于同步合并后落盘；末尾补换行保持 JSONL 一致。
+ */
+export function writeHistoryByStem(stem: string, entries: HistoryEntry[]): void {
+  if (!stem) return;
+  const fp = path.join(dir(), `${stem}.jsonl`);
+  try {
+    fs.mkdirSync(dir(), { recursive: true });
+    const capped = entries.length > MAX_FILE_LINES ? entries.slice(-MAX_FILE_LINES) : entries;
+    const body = capped.map((e) => JSON.stringify(e)).join("\n");
+    fs.writeFileSync(fp, body.length > 0 ? body + "\n" : "", "utf8");
+  } catch (err) {
+    console.warn(LOG, "writeHistoryByStem 失败:", stem, err instanceof Error ? err.message : err);
+  }
 }

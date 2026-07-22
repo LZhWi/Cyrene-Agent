@@ -5,8 +5,14 @@ import type {
   ProactiveState,
 } from "./proactive-types";
 
-export const NORMAL_QUIET_MS = 30 * 60 * 1000;
+/** 正常对话结束后的静默期：20 分钟。期间不累积 desire，
+ *  避免静默期一结束 desire 已过高立刻触发主动消息。 */
+export const NORMAL_QUIET_MS = 20 * 60 * 1000;
 export const GLOBAL_PROACTIVE_INTERVAL_MS = 2 * 60 * 60 * 1000;
+/** LLM 返回 silent 后的全局静默期：10 分钟。比真正发送消息的 2 小时冷却短，
+ *  让 AI 能更快适应环境变化（如用户闲下来、到饭点等）。
+ *  silent 时不设场景级冷却，10 分钟后任何场景都可再试。 */
+export const SILENT_COOLDOWN_MS = 10 * 60 * 1000;
 export const FOLLOWUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
 export const NIGHT_ACTIVE_IDLE_LIMIT_SEC = 60;
 export const FOLLOWUP_MIN_SCORE = 85;
@@ -21,6 +27,7 @@ export function createDefaultProactiveState(): ProactiveState {
     lastProactiveAt: null,
     lastProactiveScene: null,
     lastNormalConversationEndedAt: null,
+    lastSilentAt: null,
     globalDesire: 0,
     affinity: {},
     lastFiredAt: {},
@@ -53,6 +60,13 @@ export function canStartProactiveGeneration(
     snapshot.now - state.lastProactiveAt < GLOBAL_PROACTIVE_INTERVAL_MS
   ) return block("global_cooldown");
 
+  // LLM 上次返回 silent 后的全局静默期（10 分钟），比真正发送消息的 2 小时冷却短
+  // silent 时不设场景冷却，10 分钟后任何场景可再试
+  if (
+    state.lastSilentAt !== null &&
+    snapshot.now - state.lastSilentAt < SILENT_COOLDOWN_MS
+  ) return block("silent_cooldown");
+
   const sceneLastFiredAt = state.lastFiredAt[candidate.sceneId];
   if (
     typeof sceneLastFiredAt === "number" &&
@@ -84,6 +98,7 @@ export function canCommitProactiveMessage(
 export function markUserActivity(state: ProactiveState): void {
   state.proactiveEpoch += 1;
   state.unansweredCount = 0;
+  state.lastSilentAt = null;
 }
 
 export function markNormalConversationStarted(state: ProactiveState): void {
@@ -94,6 +109,7 @@ export function markNormalConversationEnded(state: ProactiveState, now: number):
   state.proactiveEpoch += 1;
   state.lastNormalConversationEndedAt = now;
   state.globalDesire = 0;
+  state.lastSilentAt = null;
 }
 
 export function markProactiveCommitted(
@@ -106,4 +122,18 @@ export function markProactiveCommitted(
   state.lastProactiveScene = candidate.sceneId;
   state.lastFiredAt[candidate.sceneId] = now;
   state.globalDesire = 0;
+  state.lastSilentAt = null;
+}
+
+/**
+ * 回退最近一次主动消息的冷却状态。
+ * 用于用户删除了 proactive-chat 会话中最后一条未回复的 AI 主动消息时。
+ * 取消 2 小时全局冷却（lastProactiveAt），回退 unansweredCount，
+ * 但保留场景冷却（lastFiredAt）和 silent 冷却（lastSilentAt）。
+ * desire 保持 0 重新累积，提供自然的时间缓冲。
+ */
+export function rollbackLastProactive(state: ProactiveState): void {
+  state.lastProactiveAt = null;
+  state.lastProactiveScene = null;
+  state.unansweredCount = Math.max(0, state.unansweredCount - 1) as 0 | 1 | 2;
 }

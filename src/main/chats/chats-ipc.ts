@@ -11,6 +11,8 @@ import { BrowserWindow, ipcMain } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import type { ChatMessage } from "../../shared/chat-types";
 import * as chatsStore from "./chats-store";
+import { loadState as loadOpenerState, saveState as saveOpenerState } from "../opener/desire-engine";
+import { rollbackLastProactive } from "../proactive/proactive-policy";
 
 function broadcastChanged(): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -94,6 +96,37 @@ export function registerChatsIpc(): void {
     if (ok) broadcastChanged();
     return ok;
   });
+
+  ipcMain.handle(
+    IPC.CHATS_DELETE_MESSAGE,
+    (_event, payload: { id: string; messageId: string }) => {
+      if (!payload?.id || !payload?.messageId) return null;
+
+      // 删除前检查：是否是 proactive-chat 会话中最后一条未回复的 AI 主动消息
+      // 条件：1) purpose === "proactive-chat" 2) 最后一条是 AI 消息 3) 被删除的正是最后一条
+      const beforeSession = chatsStore.getSession(payload.id);
+      const lastMsg = beforeSession?.messages?.[beforeSession.messages.length - 1];
+      const isLastUnrepliedProactive =
+        beforeSession?.purpose === "proactive-chat" &&
+        lastMsg !== undefined &&
+        lastMsg.id === payload.messageId &&
+        lastMsg.role === "model";
+
+      const session = chatsStore.deleteMessageRound(payload.id, payload.messageId);
+      if (session) {
+        broadcastChanged();
+
+        // 删除的是 proactive-chat 会话中最后一条未回复的 AI 主动消息时，
+        // 回退 2 小时全局冷却和 unansweredCount，保留场景冷却。
+        if (isLastUnrepliedProactive) {
+          const openerState = loadOpenerState();
+          rollbackLastProactive(openerState);
+          saveOpenerState(openerState);
+        }
+      }
+      return session;
+    },
+  );
 
   ipcMain.handle(IPC.CHATS_OPEN_FOLDER, async () => {
     await chatsStore.openStorageFolder();

@@ -3,6 +3,7 @@ import {
   FOLLOWUP_INTERVAL_MS,
   GLOBAL_PROACTIVE_INTERVAL_MS,
   NORMAL_QUIET_MS,
+  SILENT_COOLDOWN_MS,
   canCommitProactiveMessage,
   canStartProactiveGeneration,
   createDefaultProactiveState,
@@ -130,5 +131,21 @@ describe("proactive hard policy", () => {
     expect(state.lastProactiveAt).toBe(NOW);
     expect(state.lastProactiveScene).toBe("work_break");
     expect(state.lastFiredAt.work_break).toBe(NOW);
+  });
+
+  it("blocks during silent cooldown and allows after it expires", () => {
+    const state = createDefaultProactiveState();
+    state.lastSilentAt = NOW - SILENT_COOLDOWN_MS + 1;
+    expect(canStartProactiveGeneration(snapshot(), state, candidate()).reason).toBe("silent_cooldown");
+
+    state.lastSilentAt = NOW - SILENT_COOLDOWN_MS;
+    expect(canStartProactiveGeneration(snapshot(), state, candidate()).allowed).toBe(true);
+  });
+
+  it("user activity clears silent cooldown", () => {
+    const state = createDefaultProactiveState();
+    state.lastSilentAt = NOW - 60_000;
+    markUserActivity(state);
+    expect(state.lastSilentAt).toBe(null);
   });
 });
