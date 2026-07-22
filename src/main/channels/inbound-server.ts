@@ -127,6 +127,21 @@ function sendJson(res: http.ServerResponse, status: number, body: unknown): void
   res.end(JSON.stringify(body));
 }
 
+/** 内部：把磁盘文件以给定 mime 流式返回，并妥善处理流错误（避免未捕获 error 崩溃进程）。 */
+function streamFile(res: http.ServerResponse, fp: string, mime: string): void {
+  res.writeHead(200, { "content-type": mime, "cache-control": "public, max-age=31536000" });
+  const stream = fs.createReadStream(fp);
+  stream.on("error", (err) => {
+    console.error(LOG, "文件流失败:", err);
+    if (!res.headersSent) {
+      try { sendJson(res, 500, { ok: false, error: "file read failed" }); } catch { /* ignore */ }
+    } else {
+      res.destroy(err);
+    }
+  });
+  stream.pipe(res);
+}
+
 async function handleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse,
@@ -344,8 +359,7 @@ async function handleRequest(
       if (!fp || !fs.existsSync(fp)) { sendJson(res, 404, { ok: false, error: "sticker not found" }); return; }
       const ext = path.extname(fp).slice(1).toLowerCase();
       const mime = ext === "gif" ? "image/gif" : ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-      res.writeHead(200, { "content-type": mime, "cache-control": "public, max-age=31536000" });
-      fs.createReadStream(fp).pipe(res);
+      streamFile(res, fp, mime);
       return;
     }
   }
@@ -358,8 +372,7 @@ async function handleRequest(
       const fp = resolveBlobPath(m2[1]);
       if (!fp) { sendJson(res, 404, { ok: false, error: "blob not found" }); return; }
       const ext = path.extname(fp).slice(1).toLowerCase();
-      res.writeHead(200, { "content-type": extToMime(ext), "cache-control": "public, max-age=31536000" });
-      fs.createReadStream(fp).pipe(res);
+      streamFile(res, fp, extToMime(ext));
       return;
     }
   }
