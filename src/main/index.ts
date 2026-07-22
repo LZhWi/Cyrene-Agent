@@ -124,6 +124,8 @@ import { initChannels, shutdownChannels, setChannelsConversationLifecycle } from
 import { buildChannelAttachmentInputs } from "./channels/agent-input";
 import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadGeneralSettings, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
 import { setInboundChatRunner, setDesktopHistoryProvider } from "./channels/inbound-server";
+import { describeMarkersForLlm, formatStickerMarker, formatImageMarker } from "./channels/mobile-markers";
+import { saveBlob } from "./channels/mobile-blobs";
 import { DESKTOP_PROACTIVE_STEM } from "./sync/types";
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
 import {
@@ -4532,7 +4534,7 @@ app.whenReady().then(async () => {
   // 复用桌面同款两阶段大脑（buildAgentRunOptions + CyreneAgent + onAgentRunFinished），
   // channel="mobile" 会跳过桌面心情观察器（不扰动 Live2D），并把对话落到 sessionId 历史，
   // 手机随后 /sync/pull 即可同步到同一条会话。
-  setInboundChatRunner(async ({ sessionId, text }) => {
+  setInboundChatRunner(async ({ sessionId, text, images }) => {
     const { loadRecentHistory, appendHistory } = await import("./channels/history-log");
     let priorMessages: { role: "user" | "assistant"; content?: string }[] = [];
     try {
@@ -4540,29 +4542,49 @@ app.whenReady().then(async () => {
     } catch (err) {
       console.warn("[Mobile] loadRecentHistory 失败 (继续不带历史):", err);
     }
+    // 历史里的标记转描述后再喂 LLM（避免把 [sticker:x]/[image:x] 原样塞给模型）。
     const historyMessages = priorMessages
       .filter((m) => typeof m.content === "string" && m.content.trim().length > 0)
-      .map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }));
+      .map((m) => ({ role: m.role as "user" | "assistant" | "system", content: describeMarkersForLlm(m.content!) }));
+
+    // 落 blob，构造 imageAttachments + 用户内容的 [image:hash] 标记。
+    const imageAttachments: { name: string; filePath: string; mime?: string }[] = [];
+    const imageMarkers: string[] = [];
+    for (const img of images ?? []) {
+      try {
+        const buf = Buffer.from(img.dataBase64, "base64");
+        const { hash, ext } = saveBlob(buf, img.mime);
+        const { app } = await import("electron");
+        const filePath = require("path").join(app.getPath("userData"), "mobile-blobs", `${hash}.${ext}`);
+        imageAttachments.push({ name: img.name, filePath, mime: img.mime });
+        imageMarkers.push(formatImageMarker(hash));
+      } catch (err) {
+        console.warn("[Mobile] 图片落地失败(跳过):", err);
+      }
+    }
+
+    // 权威 user 内容：原始文本(可能含用户发的 [sticker:id]) + 各图片标记。
+    const userContent = [text, ...imageMarkers].filter((s) => s.length > 0).join("\n");
 
     let userAt: string | undefined;
     try {
-      userAt = appendHistory(sessionId, "user", text)?.at;
+      userAt = appendHistory(sessionId, "user", userContent)?.at;
     } catch (err) {
       console.warn("[Mobile] appendHistory (user) 失败:", err);
     }
 
+    // 当前轮喂 LLM：文本标记转描述；图片走真视觉(imageAttachments)。
+    const llmUserContent = describeMarkersForLlm(text) || (imageAttachments.length > 0 ? "（图片）" : "");
     const { options } = await buildAgentRunOptions(
       {
-        messages: [...historyMessages, { role: "user", content: text }],
+        messages: [...historyMessages, { role: "user", content: llmUserContent }],
         style: "01_default.md",
         sessionId,
         channel: "mobile",
+        imageAttachments: imageAttachments.length > 0 ? imageAttachments : undefined,
       },
       buildOptionsDeps,
     );
-    // 手机 App 与 wechat/feishu 一样是「远程渠道」：按 toolSandbox 过滤可用工具，
-    // 覆盖默认的全量 enabledTools。否则 mobile 会拿到桌面 agent 的全部工具
-    // （含视觉 read_image / 截图等 risky 工具），导致把纯文本消息误当成图片去「看」。
     {
       const sandbox = loadChannelsSettings().toolSandbox;
       const allTools = toolRegistry.getEnabledTools();
@@ -4570,33 +4592,34 @@ app.whenReady().then(async () => {
         ? allTools.filter((t) => (t.risk ?? "safe") === ("safe" as ToolRiskLevel))
         : allTools;
       options.tools = filteredTools;
-      console.log(
-        "[Mobile] chat run:",
-        `sessionId=${sessionId} sandbox=${sandbox} tools=${filteredTools.length}/${allTools.length}`,
-      );
+      console.log("[Mobile] chat run:", `sessionId=${sessionId} sandbox=${sandbox} tools=${filteredTools.length}/${allTools.length} images=${imageAttachments.length}`);
     }
 
     const threadId = `thread-${sessionId}-${Date.now()}`;
     const agent = new CyreneAgent({ threadId, description: `mobile:${sessionId}` });
-    const reply = await new Promise<string>((resolve, reject) => {
+    const rawReply = await new Promise<string>((resolve, reject) => {
       agent.runWithEvents(options).subscribe({
         complete: () => resolve(agent.lastResult?.reply ?? ""),
         error: (err) => reject(err instanceof Error ? err : new Error(String(err))),
       });
     });
 
+    // onAgentRunFinished 内部已算贴纸；捕获它内联进回复。
+    let sticker: string | null = null;
     if (agent.lastResult) {
-      await onAgentRunFinished(agent.lastResult, text, onRunFinishedDeps, "mobile");
+      const finished = await onAgentRunFinished(agent.lastResult, text, onRunFinishedDeps, "mobile");
+      sticker = finished.sticker;
     }
+    const reply = sticker ? `${rawReply} ${formatStickerMarker(sticker)}`.trim() : rawReply;
+
     let assistantAt: string | undefined;
     try {
       assistantAt = appendHistory(sessionId, "assistant", reply)?.at;
     } catch (err) {
       console.warn("[Mobile] appendHistory (assistant) 失败:", err);
     }
-    void indexConversationTurn(sessionId, text, reply);
-    // 回传权威时间戳：端上用它存本地条目，保证与 /sync 拉回来的历史去重键一致（避免同步出现重复消息）。
-    return { reply, userAt, assistantAt };
+    void indexConversationTurn(sessionId, text, rawReply);
+    return { reply, userContent, userAt, assistantAt };
   });
 
   // 手机「桌面对话」只读镜像（阶段 1）：把桌面 proactive-chat 会话转成一个只读 HistoryBundle，
