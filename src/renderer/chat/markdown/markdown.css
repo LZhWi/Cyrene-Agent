@@ -183,6 +183,16 @@
 /* ── KaTeX 数学公式 ──────────────────────────────────────── */
 /* KaTeX 自带 katex.min.css 处理排版；这里只覆盖颜色以适配主题 */
 
+/* 流式代码块（Phase 3）：与终态代码块共用 .code-block 样式，
+   额外标记 --streaming 用于细微差异（如无 Shiki 高亮时的等宽字体） */
+.code-block--streaming .code-block__code pre code {
+  color: var(--rb-text-default);
+  font-family: "Cascadia Code", "JetBrains Mono", "Fira Code", "Consolas", monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: pre;
+}
+
 .msg__bubble .katex {
   color: var(--md-katex-text, var(--rb-text-default));
   font-size: 1.05em;
