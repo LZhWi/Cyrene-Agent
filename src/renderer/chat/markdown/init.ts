@@ -4,9 +4,11 @@
  * main.ts 只从 `./markdown/init` 导入，不直接依赖内部模块。
  */
 
-export { renderMarkdown, escapeHtml } from "./markdown-renderer";
+export { renderMarkdown, escapeHtml, getMd } from "./markdown-renderer";
 export { initCodeBlockController } from "./code-block-controller";
 export { normalizeLang, getLanguageDisplayName } from "./language-normalizer";
+export { createStreamingMarkdownSession } from "./streaming-markdown-session";
+export type { StreamingMarkdownSession } from "./streaming-markdown-session";
 export type { MarkdownRenderResult } from "./types";
 
 import { initHighlighter, isHighlighterReady } from "./code-highlighter";

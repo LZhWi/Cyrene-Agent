@@ -30,6 +30,9 @@ import type { MarkdownRenderResult } from "./types";
 
 // ── markdown-it 实例（模块级单例） ──────────────────────────
 
+/** 获取 markdown-it 实例（供 streaming session 使用） */
+export function getMd(): MarkdownIt { return md; }
+
 const md: MarkdownIt = new MarkdownIt({
   html: false,
   linkify: true,

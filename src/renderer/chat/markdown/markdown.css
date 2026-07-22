@@ -180,6 +180,19 @@
   border-radius: 3px;
 }
 
+/* ── 流式 Markdown 渲染容器 ──────────────────────────────── */
+.markdown-stream {
+  width: 100%;
+}
+
+.markdown-stream__stable {
+  /* committed blocks 只追加，不重建 */
+}
+
+.markdown-stream__active {
+  /* mutable tail 可替换 */
+}
+
 /* ── KaTeX 数学公式 ──────────────────────────────────────── */
 /* KaTeX 自带 katex.min.css 处理排版；这里只覆盖颜色以适配主题 */
 

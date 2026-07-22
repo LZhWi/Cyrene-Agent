@@ -1,9 +1,8 @@
 import "../ui/base.css";
 import "./chat.css";
 import "../ui/theme";
-import { initMarkdownRenderer, initCodeBlockController, renderMarkdown } from "./markdown/init";
-import { createStreamMarkdownParser, type StreamAction } from "./markdown/stream-markdown-parser";
-import { getLanguageDisplayName, normalizeLang } from "./markdown/init";
+import { initMarkdownRenderer, initCodeBlockController, renderMarkdown, createStreamingMarkdownSession, getMd } from "./markdown/init";
+import type { StreamingMarkdownSession } from "./markdown/init";
 import {
   formatChatRelativeTime,
   type ChatSessionMetaUI,
@@ -1196,81 +1195,6 @@ function appendStreamingCharToBubble(bubble: HTMLElement, char: string): void {
   span.className = "msg__char";
   span.textContent = char;
   bubble.appendChild(span);
-}
-
-// ── Phase 3: 流式代码块容器 ────────────────────────────────
-
-/** 流式代码块状态（每条流式消息独立） */
-interface StreamCodeState {
-  parser: ReturnType<typeof createStreamMarkdownParser>;
-  /** 当前代码块的 <code> 元素，null 表示在文本模式 */
-  codeEl: HTMLElement | null;
-}
-
-function createStreamCodeState(): StreamCodeState {
-  return { parser: createStreamMarkdownParser(), codeEl: null };
-}
-
-/** 创建流式代码块容器，返回 <code> 元素供后续追加 */
-function createStreamingCodeBlock(bubble: HTMLElement, rawLang: string): HTMLElement {
-  const lang = normalizeLang(rawLang);
-  const displayName = getLanguageDisplayName(lang);
-
-  const container = document.createElement("div");
-  container.className = "code-block code-block--streaming";
-  container.dataset.language = lang;
-
-  const header = document.createElement("header");
-  header.className = "code-block__header";
-
-  const langSpan = document.createElement("span");
-  langSpan.className = "code-block__language";
-  langSpan.textContent = displayName;
-
-  const copyBtn = document.createElement("button");
-  copyBtn.type = "button";
-  copyBtn.className = "code-block__copy";
-  copyBtn.textContent = "复制";
-
-  header.appendChild(langSpan);
-  header.appendChild(copyBtn);
-
-  const codeWrap = document.createElement("div");
-  codeWrap.className = "code-block__code";
-  const pre = document.createElement("pre");
-  const code = document.createElement("code");
-  pre.appendChild(code);
-  codeWrap.appendChild(pre);
-
-  container.appendChild(header);
-  container.appendChild(codeWrap);
-  bubble.appendChild(container);
-
-  return code;
-}
-
-/** 处理一个流式字符：经 parser 状态机后更新 DOM */
-function processStreamChar(char: string, bubble: HTMLElement, state: StreamCodeState): void {
-  const actions = state.parser.push(char);
-  for (const action of actions) {
-    switch (action.type) {
-      case "text_char":
-        appendStreamingCharToBubble(bubble, action.char);
-        break;
-      case "code_start":
-        bubble.hidden = false;
-        state.codeEl = createStreamingCodeBlock(bubble, action.lang);
-        break;
-      case "code_char":
-        if (state.codeEl) {
-          state.codeEl.appendChild(document.createTextNode(action.char));
-        }
-        break;
-      case "code_end":
-        state.codeEl = null;
-        break;
-    }
-  }
 }
 
 function renderMessageAttachments(body: HTMLElement, attachments: MessageAttachment[] | undefined): void {
@@ -2743,7 +2667,7 @@ async function triggerCyreneGreeting(): Promise<void> {
     });
 
     const deltaQueue: string[] = [];
-    const streamCodeState = createStreamCodeState();
+    let streamSession: StreamingMarkdownSession | null = null;
     let playbackTimer: number | null = null;
     let runFinishedArrived = false;
     let startNextStreamingBubble = false;
@@ -2768,7 +2692,10 @@ async function triggerCyreneGreeting(): Promise<void> {
             : getStreamingBubble();
           startNextStreamingBubble = false;
           if (bubble) {
-            processStreamChar(next, bubble, streamCodeState);
+            if (!streamSession) {
+              streamSession = createStreamingMarkdownSession(getMd(), bubble, streamMsgId, messagesEl);
+            }
+            streamSession.append(next);
           }
           if (
             allowStreamingBubbleSplit
@@ -2891,6 +2818,13 @@ async function triggerCyreneGreeting(): Promise<void> {
 
     await runDone;
     offEvent();
+
+    // flush + dispose 流式 Markdown session（终态 render 会全量重建）
+    if (streamSession) {
+      streamSession.flush();
+      streamSession.dispose();
+      streamSession = null;
+    }
 
     const msg = messages.find(m => m.id === streamMsgId);
     if (msg) {
@@ -3242,7 +3176,7 @@ async function send(): Promise<void> {
     // 主进程在 FC 完成后瞬间把所有 delta 发完，渲染端用"回放队列"按固定节奏逐字显示，
     // 营造真流式感。流式中的气泡用增量 span 追加 + CSS 渐显，不调 render() 全量重建。
     const deltaQueue: string[] = [];
-    const streamCodeState = createStreamCodeState();
+    let streamSession: StreamingMarkdownSession | null = null;
     let playbackTimer: number | null = null;
     let runFinishedArrived = false;
     let startNextStreamingBubble = false;
@@ -3270,7 +3204,10 @@ async function send(): Promise<void> {
             : getStreamingBubble();
           startNextStreamingBubble = false;
           if (bubble) {
-            processStreamChar(next, bubble, streamCodeState);
+            if (!streamSession) {
+              streamSession = createStreamingMarkdownSession(getMd(), bubble, streamMsgId, messagesEl);
+            }
+            streamSession.append(next);
           }
           if (
             allowStreamingBubbleSplit
@@ -3411,6 +3348,13 @@ async function send(): Promise<void> {
     // 等事件流终态
     await runDone;
     offEvent();
+
+    // flush + dispose 流式 Markdown session（终态 render 会全量重建）
+    if (streamSession) {
+      streamSession.flush();
+      streamSession.dispose();
+      streamSession = null;
+    }
 
     const msg = messages.find(m => m.id === streamMsgId);
     if (msg) {
