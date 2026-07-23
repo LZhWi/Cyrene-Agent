@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const html = fs.readFileSync(fileURLToPath(new URL("./index.html", import.meta.url)), "utf8");
 const source = fs.readFileSync(fileURLToPath(new URL("./settings.ts", import.meta.url)), "utf8");
+const styles = fs.readFileSync(fileURLToPath(new URL("./settings.css", import.meta.url)), "utf8");
 const icon = fs.readFileSync(
   fileURLToPath(new URL("../public/icons/providers/custom-endpoint.svg", import.meta.url)),
   "utf8",
@@ -37,5 +38,9 @@ describe("custom endpoint API settings UI", () => {
 
   it("persists the inactive custom profile together with the active one", () => {
     expect(source).toContain("perProvider: { ...providerProfileCache }");
+  });
+
+  it("top-aligns fields with different amounts of helper text", () => {
+    expect(styles).toMatch(/\.field\s*\{[^}]*align-content:\s*start;/s);
   });
 });
