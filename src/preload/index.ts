@@ -76,6 +76,8 @@ contextBridge.exposeInMainWorld("chat", chatApi);
 const aguiApi = {
   run: (input: {
     messages: unknown[];
+    userTurnId?: string;
+    assistantTurnId?: string;
     style?: string;
     styleId?: string;
     executionMode?: "work" | "chat";

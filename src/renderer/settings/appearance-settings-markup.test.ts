@@ -48,6 +48,14 @@ describe("appearance settings markup", () => {
     expect(panel).toContain('id="custom-style-prompt-btn"');
   });
 
+  it("offers chat social context as an existing capsule switch", () => {
+    const panel = form("preferences-form");
+    expect(panel).toContain("聊天上下文增强");
+    expect(panel).toMatch(
+      /class="switch"[\s\S]*?id="chat-social-context-enabled"[\s\S]*?class="switch__track"[\s\S]*?class="switch__thumb"/,
+    );
+  });
+
   it("moves desktop-pet controls out of general settings", () => {
     const appearance = form("appearance-form");
     const general = form("general-form");

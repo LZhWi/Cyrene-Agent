@@ -45,6 +45,10 @@ import {
   type StyleId,
 } from "../../shared/style-sampling";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
+import type {
+  SocialAtom,
+  SocialExtractionInput,
+} from "../social-context/types";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
@@ -108,12 +112,20 @@ export interface BuildOptionsDeps {
       supportingContexts?: Array<{ contextRef: string }>;
     };
   }>;
+  buildChatSocialContext?: (input: {
+    conversationId: string;
+    query: string;
+  }) => Promise<{
+    contextBlock: string;
+    retrievedAtoms: SocialAtom[];
+  }>;
 }
 
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
 export interface OnRunFinishedDeps {
   loadModelSettings: () => ModelSettingsLite;
   scheduleMemoryWrite: (userText: string, reply: string) => void;
+  scheduleSocialAtomExtraction?: (input: SocialExtractionInput) => void;
   inferRuntimeState: (userText: string, reply: string, flag: boolean) => { status: string };
   runtimeState: {
     status: string;
@@ -160,6 +172,7 @@ export interface ModelSettingsLite {
 export interface StyleSettingsLite {
   currentStyleId?: unknown;
   customStyle?: unknown;
+  chatSocialContextEnabled?: unknown;
 }
 
 export interface UserProfileLite {
@@ -352,10 +365,15 @@ export async function buildAgentRunOptions(
     input.executionMode ?? ((input.style || "").startsWith("talk") ? "chat" : "work"),
   );
   const isChatMode = executionMode === "chat";
+  const conversationId = input.sessionId || "default";
+  const socialContextEnabled = isChatMode
+    && styleSettings.chatSocialContextEnabled === true
+    && Boolean(deps.buildChatSocialContext);
+  const messagesForSoul = socialContextEnabled ? messages.slice(-12) : messages;
   const skillActivation = deps.resolveSlashActivation(slimMessages);
   const profile = deps.loadUserProfile();
   const { cleanMessages: cleanLlm, timestampedMessages: llmMessages, timeContext: conversationTimeContext } = buildConversationTimeContext(
-    messages as unknown as ChatContextMessage[],
+    messagesForSoul as unknown as ChatContextMessage[],
     resolveChatContextTimezone(profile.timezone),
   );
   const slimLlmMessages = llmMessages as Array<{ role: string; content?: string }>;
@@ -397,8 +415,24 @@ export async function buildAgentRunOptions(
   const skillCatalog = deps.buildSkillCatalog(enabledSkills);
   const autoInjectedSkillContext = deps.buildAutoInjectedSkillContext(enabledSkills);
   const autoInjectedSoulContext = deps.buildAutoInjectedSoulContext?.(enabledSkills) ?? "";
-  const conversationId = input.sessionId || "default";
   const channelSystem = buildChannelSystem(input.channel);
+
+  let chatSocialContextBlock = "";
+  let retrievedSocialAtoms: SocialAtom[] = [];
+  if (socialContextEnabled) {
+    try {
+      const built = await perf.track("build_chat_social_context", () => (
+        deps.buildChatSocialContext!({
+          conversationId,
+          query: latestUserText,
+        })
+      ));
+      chatSocialContextBlock = built.contextBlock;
+      retrievedSocialAtoms = built.retrievedAtoms.slice(0, 5);
+    } catch (err) {
+      console.warn("[Cyrene] chat social context build failed:", err);
+    }
+  }
 
   let citaContextBlock = "";
   let contextualizedQuery = latestUserText;
@@ -499,6 +533,7 @@ export async function buildAgentRunOptions(
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
     deps.buildSoulSystemBasePrompt(basePromptMode) +
+    (chatSocialContextBlock ? "\n\n---\n\n" + chatSocialContextBlock : "") +
     (stylePromptBlock ? "\n\n---\n\n" + stylePromptBlock : "") +
     (autoInjectedSoulContext ? "\n\n---\n\n" + autoInjectedSoulContext : "") +
     skillActivation +
@@ -550,6 +585,16 @@ export async function buildAgentRunOptions(
       toolSystemContent,
       soulSystemBaseContent,
       soulSampling,
+      ...(socialContextEnabled && input.userTurnId && input.assistantTurnId ? {
+        socialContext: {
+          enabled: true as const,
+          conversationId,
+          userTurnId: input.userTurnId,
+          assistantTurnId: input.assistantTurnId,
+          retrievedAtoms: retrievedSocialAtoms,
+          now: Date.now(),
+        },
+      } : {}),
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
       ...(isChatMode ? { tools: runTools as ToolDefinition[] } : {}),
     },
@@ -575,7 +620,29 @@ export async function onAgentRunFinished(
 ): Promise<{ sticker: string | null }> {
   const chatContent = result.reply;
   const sideEffectUserText = stripTurnModelContextForSideEffects(latestUserText);
-  deps.scheduleMemoryWrite(sideEffectUserText, chatContent);
+  const socialContext = result.executionMode === "chat" && result.socialContext?.enabled === true
+    ? result.socialContext
+    : undefined;
+  const usesSocialExtractor = Boolean(socialContext);
+  if (socialContext) {
+    deps.scheduleSocialAtomExtraction?.({
+      conversationId: socialContext.conversationId,
+      userTurn: {
+        id: socialContext.userTurnId,
+        role: "user",
+        text: sideEffectUserText,
+      },
+      assistantTurn: {
+        id: socialContext.assistantTurnId,
+        role: "assistant",
+        text: chatContent,
+      },
+      retrievedAtoms: socialContext.retrievedAtoms,
+      now: socialContext.now,
+    });
+  } else {
+    deps.scheduleMemoryWrite(sideEffectUserText, chatContent);
+  }
 
   const settings = deps.loadModelSettings();
   const inferredStatus = deps.inferRuntimeState(sideEffectUserText, chatContent, false);
@@ -625,7 +692,7 @@ export async function onAgentRunFinished(
     deps.broadcastRuntimeStateChanged();
     // 心情观察器在 channels bot (wechat/feishu) 上跳过：节省一次 LLM 调用、加快首条回复
     // 桌面聊天（channel === undefined）照常跑，保持 Live2D 表情/心情跟随对话变化
-    if (channel !== "wechat" && channel !== "feishu") {
+    if (!usesSocialExtractor && channel !== "wechat" && channel !== "feishu") {
       void deps.observeRuntimeState(settings, [], sideEffectUserText, chatContent);
     }
   }

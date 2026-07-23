@@ -11,6 +11,7 @@ import { normalizeUiIcon, UI_ICON_PRESETS, type UiIcon } from "../shared/ui-icon
 import { foldReasoning, normalizeReasoningPreference, type ReasoningPreference } from "../shared/reasoning";
 import { getUiFontResponseHeaders, isSafeUiFontRequest } from "./ui-font-protocol";
 import {
+  normalizeChatSocialContextEnabled,
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
   normalizeProactiveChatMode,
@@ -60,6 +61,7 @@ import {
   classifyStructuredOutputEndpoint,
   resolveStructuredOutputProfile,
 } from "./orchestrator/structured-output/profiles";
+import { normalizeFinishReason } from "./orchestrator/structured-output/finish-reason";
 import { testVendorConnection } from "./orchestrator/vendors/test-connection";
 import { migrateLegacyMinimaxDefaults } from "./orchestrator/vendors/minimax-defaults";
 import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
@@ -81,6 +83,14 @@ import { buildEnvironmentContext } from "./orchestrator/environment";
 import { initPermissionFromDisk, registerPermissionIpc, getCurrentLevel } from "./permission";
 import { registerChoiceIpc, setChoiceCardSender } from "./user-choice";
 import { enqueueLLMTask } from "./llm-queue";
+import { compileSocialContextBlock } from "./social-context/context";
+import {
+  buildSocialExtractionPrompt,
+  SOCIAL_EXTRACTION_SCHEMA,
+} from "./social-context/extractor";
+import { rankSocialAtoms } from "./social-context/retrieval";
+import { createSocialContextScheduler } from "./social-context/scheduler";
+import { createSocialAtomStore } from "./social-context/store";
 import { getEmbeddingStatus, downloadEmbeddingModel, deleteEmbeddingModel } from "./embedding-manager";
 import { BUILT_IN_STICKER_DESCRIPTIONS } from "./sticker-descriptions";
 import { buildCachedStickerEmbeddingIndex } from "./sticker-embedding-cache";
@@ -498,6 +508,8 @@ interface UserProfile {
 interface GeneralSettings {
   citaEnabled: boolean;
   citaSemanticEngine: "remote";
+  /** Chat 模式的轻量社交上下文；默认关闭，开启后每轮最多多一次异步抽取调用。 */
+  chatSocialContextEnabled: boolean;
   musicEnabled: boolean;
   musicVolume: number;
   soundEnabled: boolean;
@@ -735,6 +747,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   citaEnabled: false,
   citaSemanticEngine: "remote",
+  chatSocialContextEnabled: false,
   musicEnabled: false,
   musicVolume: 60,
   soundEnabled: true,
@@ -1158,6 +1171,7 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
   return {
     citaEnabled: cita.enabled,
     citaSemanticEngine: cita.semanticEngine,
+    chatSocialContextEnabled: normalizeChatSocialContextEnabled(input?.chatSocialContextEnabled),
     musicEnabled: Boolean(input?.musicEnabled),
     musicVolume: clamp(input?.musicVolume, DEFAULT_GENERAL_SETTINGS.musicVolume),
     soundEnabled: input?.soundEnabled === undefined ? DEFAULT_GENERAL_SETTINGS.soundEnabled : Boolean(input.soundEnabled),
@@ -1862,6 +1876,9 @@ async function callChatCompletionsNonStream(
     }
     const json = await response.json();
     const parsed = adapter.parseResponse(json);
+    if (parsed.usage) {
+      recordUsage(parsed.usage.input, parsed.usage.output, 1);
+    }
     const totalTime = Date.now() - startTime;
     console.log(`[TIMING] ${label} OK in ${totalTime}ms resultLen=${parsed.text.length}`);
     return {
@@ -4582,6 +4599,10 @@ app.whenReady().then(async () => {
         imageAttachments: attachmentInputs.imageAttachments,
         channel: msg.channel,
         executionMode: sandbox === "off" ? "chat" : "work",
+        ...(sandbox === "off" ? {
+          userTurnId: `${msg.channel}:${msg.senderId}:${msg.at.toISOString()}:user`,
+          assistantTurnId: `${msg.channel}:${msg.senderId}:${msg.at.toISOString()}:assistant`,
+        } : {}),
       },
       buildOptionsDeps,
     );
@@ -4751,6 +4772,81 @@ app.whenReady().then(async () => {
   // buildOptions 负责统一构建上下文；onRunFinished 复用副作用
   // Phase 0 重构：抽出到 orchestrator/build-options.ts，三处共用（桌面 / scheduler / bot）
   // deps 函数签名故意宽 (unknown/ReadonlyArray)；这里做一次包装把强类型函数适配进去
+  const socialAtomStore = createSocialAtomStore(
+    path.join(app.getPath("userData"), "chat-social-atoms.json"),
+  );
+  const socialContextScheduler = createSocialContextScheduler({
+    store: socialAtomStore,
+    enqueue: (label, task) => enqueueLLMTask(label, task, {
+      log: false,
+      retryRateLimit: false,
+    }),
+    generate: async (input) => {
+      const settings = loadModelSettings();
+      const config: VendorConfig = {
+        provider: settings.provider,
+        baseUrl: settings.baseUrl,
+        model: settings.model,
+        apiKey: settings.apiKey,
+        explicitTransport: settings.explicitTransport,
+        reasoning: { mode: "off" },
+      };
+      const adapter = getAdapterForConfig(config);
+      const profile = resolveStructuredOutputProfile({
+        provider: adapter.id,
+        model: config.model,
+        transport: adapter.transport,
+        endpointKind: classifyStructuredOutputEndpoint({
+          providerId: adapter.id,
+          configuredBaseUrl: config.baseUrl,
+          officialBaseUrl: adapter.capability.baseUrl,
+        }),
+      });
+      const structuredOutput: StructuredOutputRequest = profile.mode === "provider_json_schema"
+        ? {
+            mode: "json_schema",
+            name: "chat_social_atoms",
+            schema: SOCIAL_EXTRACTION_SCHEMA,
+            strict: true,
+          }
+        : profile.mode === "provider_json_object"
+          ? { mode: "json_object" }
+          : {
+              mode: "prompt_json",
+              sendJsonObjectHint: profile.requestHints.sendJsonObject,
+            };
+      const response = await callChatCompletionsNonStream(
+        settings,
+        [
+          {
+            role: "system",
+            content: "Extract only directly supported chat continuity facts. Return exactly one JSON object and no prose.",
+          },
+          { role: "user", content: buildSocialExtractionPrompt(input) },
+        ],
+        0,
+        12_000,
+        "Chat social context extraction",
+        { mode: "off" },
+        {
+          structuredOutput,
+          maxTokens: 1_000,
+          ...(profile.requestHints.reasoningSplit
+            ? { extraBody: { reasoning_split: true } }
+            : {}),
+        },
+      );
+      if (response.refusal || normalizeFinishReason(response.finishReason) !== "complete") {
+        throw new Error("CHAT_SOCIAL_EXTRACTION_INCOMPLETE");
+      }
+      return response.text;
+    },
+    recordMetric: (metric) => {
+      console.log(
+        `[ChatSocialContext] outcome=${metric.outcome} accepted=${metric.acceptedCount} rejected=${metric.rejectedCount}`,
+      );
+    },
+  });
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const buildOptionsDeps: BuildOptionsDeps = {
     loadModelSettings: () => loadModelSettings(),
@@ -4805,10 +4901,20 @@ app.whenReady().then(async () => {
     loadActionGateSystemPrompt: () => loadPromptFile("action_gate_system.md"),
     loadNativeFcSystemPrompt: () => loadPromptFile("native_fc_system.md"),
     prepareCitaTurn: (input) => citaService.prepareTurn(input),
+    buildChatSocialContext: async ({ conversationId, query }) => {
+      const now = Date.now();
+      const active = socialAtomStore.listActive(conversationId, now);
+      const retrievedAtoms = rankSocialAtoms(query, active, { now, limit: 5 });
+      return {
+        contextBlock: compileSocialContextBlock(retrievedAtoms),
+        retrievedAtoms,
+      };
+    },
   };
   const onRunFinishedDeps: OnRunFinishedDeps = {
     loadModelSettings: () => loadModelSettings(),
     scheduleMemoryWrite,
+    scheduleSocialAtomExtraction: (input) => socialContextScheduler.schedule(input),
     inferRuntimeState,
     runtimeState,
     feelingToExpression,

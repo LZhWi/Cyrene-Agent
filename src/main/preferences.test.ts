@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  normalizeChatSocialContextEnabled,
   normalizeProactiveChatMode,
   normalizeProactiveDeliveryTarget,
   normalizeDefaultChatMode,
@@ -7,6 +8,13 @@ import {
 } from "../shared/preferences";
 
 describe("preferences", () => {
+  it("keeps chat social context opt-in and accepts only an explicit boolean true", () => {
+    expect(normalizeChatSocialContextEnabled(undefined)).toBe(false);
+    expect(normalizeChatSocialContextEnabled("true")).toBe(false);
+    expect(normalizeChatSocialContextEnabled(false)).toBe(false);
+    expect(normalizeChatSocialContextEnabled(true)).toBe(true);
+  });
+
   it("defaults to work and migrates legacy collab/talk values", () => {
     expect(normalizeDefaultChatMode(undefined)).toBe("work");
     expect(normalizeDefaultChatMode("bad")).toBe("work");

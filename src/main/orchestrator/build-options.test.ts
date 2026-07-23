@@ -9,6 +9,7 @@ import {
   type BuildOptionsDeps,
   type OnRunFinishedDeps,
 } from "./build-options"
+import type { SocialAtom } from "../social-context/types"
 
 function createBuildDeps(): BuildOptionsDeps {
   return {
@@ -16,6 +17,7 @@ function createBuildDeps(): BuildOptionsDeps {
     loadGeneralSettings: () => ({
       currentStyleId: "default",
       customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+      chatSocialContextEnabled: false,
     }),
     loadUserProfile: () => ({}),
     buildEnvironmentContext: () => "ENV",
@@ -146,6 +148,100 @@ describe("build-options", () => {
     expect(result.options.citaContextBlock).toBe("")
     expect(result.options.soulSystemBaseContent).toContain("STYLE_PROMPT:lively")
     expect(result.options.toolSystemContent).not.toContain("STYLE_PROMPT:lively")
+  })
+
+  it("adds a bounded social background only to enabled Chat runs", async () => {
+    const deps = createBuildDeps()
+    const retrievedAtom: SocialAtom = {
+      id: "atom-1",
+      conversationId: "chat-a",
+      type: "long_term",
+      content: "用户喜欢海边",
+      evidenceTurnId: "old-user",
+      evidenceQuote: "我喜欢海边",
+      createdAt: 1,
+      status: "active",
+    }
+    deps.loadGeneralSettings = () => ({
+      currentStyleId: "default",
+      customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+      chatSocialContextEnabled: true,
+    })
+    deps.buildChatSocialContext = vi.fn(async () => ({
+      contextBlock: "【本轮可用的对话背景】\n- 用户喜欢海边",
+      retrievedAtoms: [retrievedAtom],
+    }))
+    const messages = Array.from({ length: 14 }, (_, index) => ({
+      role: index % 2 === 0 ? "assistant" : "user",
+      content: `message-${index}`,
+      at: index + 1,
+    }))
+
+    const result = await buildAgentRunOptions({
+      messages,
+      executionMode: "chat",
+      sessionId: "chat-a",
+      userTurnId: "user-14",
+      assistantTurnId: "assistant-14",
+    }, deps)
+
+    expect(deps.buildChatSocialContext).toHaveBeenCalledWith({
+      conversationId: "chat-a",
+      query: "message-13",
+    })
+    expect(result.options.messages).toHaveLength(12)
+    expect(result.options.soulSystemBaseContent).toContain("用户喜欢海边")
+    expect(result.options.socialContext).toMatchObject({
+      enabled: true,
+      conversationId: "chat-a",
+      userTurnId: "user-14",
+      assistantTurnId: "assistant-14",
+      retrievedAtoms: [retrievedAtom],
+    })
+  })
+
+  it("omits empty social background and never calls it for Work or disabled Chat", async () => {
+    const emptyDeps = createBuildDeps()
+    emptyDeps.loadGeneralSettings = () => ({
+      currentStyleId: "default",
+      customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+      chatSocialContextEnabled: true,
+    })
+    emptyDeps.buildChatSocialContext = vi.fn(async () => ({
+      contextBlock: "",
+      retrievedAtoms: [],
+    }))
+    const chat = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "你好" }],
+      executionMode: "chat",
+      sessionId: "chat-a",
+      userTurnId: "user-1",
+      assistantTurnId: "assistant-1",
+    }, emptyDeps)
+    expect(chat.options.soulSystemBaseContent).not.toContain("本轮可用的对话背景")
+
+    const workDeps = createBuildDeps()
+    workDeps.loadGeneralSettings = emptyDeps.loadGeneralSettings
+    workDeps.buildChatSocialContext = vi.fn(async () => ({
+      contextBlock: "unexpected",
+      retrievedAtoms: [],
+    }))
+    await buildAgentRunOptions({
+      messages: [{ role: "user", content: "你好" }],
+      executionMode: "work",
+    }, workDeps)
+    expect(workDeps.buildChatSocialContext).not.toHaveBeenCalled()
+
+    const disabledDeps = createBuildDeps()
+    disabledDeps.buildChatSocialContext = vi.fn(async () => ({
+      contextBlock: "unexpected",
+      retrievedAtoms: [],
+    }))
+    await buildAgentRunOptions({
+      messages: [{ role: "user", content: "你好" }],
+      executionMode: "chat",
+    }, disabledDeps)
+    expect(disabledDeps.buildChatSocialContext).not.toHaveBeenCalled()
   })
 
   it("honors an explicit Chat mode for channel runs", async () => {
@@ -476,5 +572,53 @@ describe("build-options", () => {
       latestIndex,
       0.55,
     )
+  })
+
+  it("schedules one social extraction instead of legacy memory for an enabled Chat result", async () => {
+    const scheduleMemoryWrite = vi.fn()
+    const scheduleSocialAtomExtraction = vi.fn()
+    const observeRuntimeState = vi.fn(async () => {})
+    const deps: OnRunFinishedDeps = {
+      loadModelSettings: () => ({ provider: "test", baseUrl: "", model: "", apiKey: "", runtimeSync: "llm" }),
+      scheduleMemoryWrite,
+      scheduleSocialAtomExtraction,
+      inferRuntimeState: () => ({ status: "陪伴中" }),
+      runtimeState: { status: "陪伴中", feeling: "温柔", expression: 0, updatedAt: 0 },
+      feelingToExpression: { "温柔": 0 },
+      setRuntimeState: () => {},
+      stickerEmbeddingIndex: null,
+      getEmbeddingProvider: () => null,
+      matchSticker: async () => null,
+      loadStickerSettings: () => ({}),
+      broadcastRuntimeStateChanged: () => {},
+      observeRuntimeState,
+      recordRelationshipTurn: async () => {},
+      getChatWindow: () => null,
+    }
+    const retrievedAtoms: SocialAtom[] = []
+
+    await onAgentRunFinished({
+      reply: "海风确实很舒服。",
+      toolResults: [],
+      executionMode: "chat",
+      socialContext: {
+        enabled: true,
+        conversationId: "chat-a",
+        userTurnId: "user-1",
+        assistantTurnId: "assistant-1",
+        retrievedAtoms,
+        now: 100,
+      },
+    }, "我喜欢海边。", deps)
+
+    expect(scheduleMemoryWrite).not.toHaveBeenCalled()
+    expect(observeRuntimeState).not.toHaveBeenCalled()
+    expect(scheduleSocialAtomExtraction).toHaveBeenCalledWith({
+      conversationId: "chat-a",
+      userTurn: { id: "user-1", role: "user", text: "我喜欢海边。" },
+      assistantTurn: { id: "assistant-1", role: "assistant", text: "海风确实很舒服。" },
+      retrievedAtoms,
+      now: 100,
+    })
   })
 })

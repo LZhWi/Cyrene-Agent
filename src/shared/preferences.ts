@@ -6,6 +6,10 @@ export type ProactiveDeliveryTarget = "local" | "wechat" | "feishu";
 
 export type { CustomStyleConfig, StyleId } from "./style-sampling";
 
+export function normalizeChatSocialContextEnabled(value: unknown): boolean {
+  return value === true;
+}
+
 export function normalizeDefaultChatMode(value: unknown): DefaultChatMode {
   // 兼容旧版磁盘值：talk -> chat，collab -> work。
   return value === "chat" || value === "talk" ? "chat" : "work";

@@ -132,6 +132,8 @@ const COPY_ICON_DONE = `<svg class="msg__copy-icon msg__copy-icon--done" viewBox
 interface AguiApi {
   run: (input: {
     messages: unknown[];
+    userTurnId?: string;
+    assistantTurnId?: string;
     styleId: StyleId;
     executionMode: "work" | "chat";
     sessionId?: string;
@@ -3436,6 +3438,8 @@ async function send(): Promise<void> {
     const modelMessages = buildModelMessages();
     const ack = await window.agui!.run({
       messages: modelMessages,
+      userTurnId: userMsg.id,
+      assistantTurnId: streamMsgId,
       styleId: getCurrentStyleId(),
       executionMode: isChatMode() ? "chat" : "work",
       sessionId: currentSessionId || undefined,

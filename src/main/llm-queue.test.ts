@@ -11,4 +11,20 @@ describe("enqueueLLMTask", () => {
       log.mockRestore();
     }
   });
+
+  it("can disable the automatic rate-limit retry for one-shot extractors", async () => {
+    vi.useFakeTimers();
+    const task = vi.fn().mockRejectedValue(new Error("HTTP 429 rate limit"));
+    try {
+      const result = enqueueLLMTask("one-shot", task, {
+        log: false,
+        retryRateLimit: false,
+      });
+      await vi.runAllTimersAsync();
+      await expect(result).rejects.toThrow("429");
+      expect(task).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

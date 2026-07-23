@@ -26,6 +26,7 @@ import {
 } from "./two-phase-fc-loop";
 import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
 import { runChatLoop } from "./chat-loop";
+import type { SocialAtom } from "../social-context/types";
 import { ExecutionLedgerStore } from "./execution-ledger";
 import { perf } from "../perf-trace";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
@@ -80,6 +81,15 @@ export interface CyreneRunOptions {
   actionGateSystemPrompt?: string;
   /** [RESPONSE_CONTEXT] 文本，从 CITA 结果生成，给 Soul 动态追加。 */
   responseContext?: string;
+  /** 仅 Chat：异步社交原子抽取所需的已校验证据元数据。 */
+  socialContext?: {
+    enabled: true;
+    conversationId: string;
+    userTurnId: string;
+    assistantTurnId: string;
+    retrievedAtoms: SocialAtom[];
+    now: number;
+  };
 }
 
 /** FC 循环最终结果（供桥层做副作用用）。 */
@@ -88,6 +98,8 @@ export interface CyreneRunResult {
   toolResults: ToolCallResult[];
   totalUsage?: { input: number; output: number };
   soulPhaseReason?: "no_tool" | "max_rounds" | "timeout" | "tool_error";
+  executionMode?: AgentExecutionMode;
+  socialContext?: CyreneRunOptions["socialContext"];
 }
 
 const LOG_PREFIX = "[CyreneAgent]";
@@ -303,6 +315,8 @@ export class CyreneAgent extends AbstractAgent {
             toolResults: result.toolResults,
             totalUsage: result.totalUsage,
             soulPhaseReason: result.soulPhaseReason,
+            executionMode,
+            socialContext: options.socialContext,
           };
 
           if (cancelled) return;

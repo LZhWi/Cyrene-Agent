@@ -29,6 +29,10 @@ import type { StyleId } from "../shared/style-sampling";
 /** 渲染进程发起 run 时传的输入。 */
 export interface AguiRunInput {
   messages: unknown[];   // 原始 {role, content}[]，主进程会 normalize
+  /** Renderer 已落库的稳定 turn ID；用于 Chat 社交原子的证据锚点。 */
+  userTurnId?: string;
+  /** 本轮 assistant 占位消息的稳定 turn ID。 */
+  assistantTurnId?: string;
   /** 旧版人格 style 文件名；仅保留兼容，不再承担运行模式语义。 */
   style?: string;
   /** 本轮表达风格，与 executionMode 正交。 */

@@ -7,6 +7,7 @@ import {
   type ChatSessionMetaUI,
 } from "../../shared/chat-ui";
 import {
+  normalizeChatSocialContextEnabled,
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
   normalizeProactiveChatMode,
@@ -368,6 +369,7 @@ interface ModelPreset {
 interface GeneralSettings {
   citaEnabled: boolean;
   citaSemanticEngine: "remote" | "local";
+  chatSocialContextEnabled: boolean;
   musicEnabled: boolean;
   musicVolume: number;
   soundEnabled: boolean;
@@ -651,6 +653,7 @@ if (!window.settings) {
       mobileMessageSegmentation: "off",
       proactiveChatMode: "off",
       proactiveDeliveryTarget: "local",
+      chatSocialContextEnabled: false,
     }),
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
     openCustomStylePrompt: async () => ({ ok: false, error: "settings api unavailable" }),
@@ -808,6 +811,7 @@ const mobileMessageSegmentationSelect = document.getElementById("mobile-message-
 const proactiveChatSelect = document.getElementById("proactive-chat-select") as HTMLElement;
 const proactiveDeliveryRow = document.getElementById("proactive-delivery-row") as HTMLElement;
 const proactiveDeliverySelect = document.getElementById("proactive-delivery-select") as HTMLElement;
+const chatSocialContextEnabledInput = document.getElementById("chat-social-context-enabled") as HTMLInputElement;
 const citaEnabledInput = document.getElementById("cita-enabled") as HTMLInputElement;
 const citaEngineSelect = document.getElementById("cita-engine-select") as HTMLElement;
 const customStyleSamplingBtn = document.getElementById("custom-style-sampling-btn") as HTMLButtonElement | null;
@@ -1468,6 +1472,7 @@ async function loadGeneralSettings(): Promise<void> {
     const cfg = await window.settings!.getGeneral();
     const cita = getCitaUiState({ enabled: cfg.citaEnabled, semanticEngine: cfg.citaSemanticEngine });
     citaEnabledInput.checked = cita.enabled;
+    chatSocialContextEnabledInput.checked = normalizeChatSocialContextEnabled(cfg.chatSocialContextEnabled);
     citaEngineSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
       const selected = button.dataset.value === cita.selectedEngine;
       button.classList.toggle("is-active", selected);
@@ -1671,6 +1676,10 @@ citaEnabledInput.addEventListener("change", () => {
   setPreferencesSaveStatus("有未保存的更改");
 });
 
+chatSocialContextEnabledInput.addEventListener("change", () => {
+  setPreferencesSaveStatus("有未保存的更改");
+});
+
 customStyleSamplingBtn?.addEventListener("click", () => {
   openCustomStyleModal();
 });
@@ -1695,6 +1704,7 @@ preferencesForm.addEventListener("submit", async (e) => {
     await window.settings!.saveGeneral({
       citaEnabled: citaEnabledInput.checked,
       citaSemanticEngine: "remote",
+      chatSocialContextEnabled: chatSocialContextEnabledInput.checked,
       defaultChatMode: getDefaultChatModeValue(),
       segmentedOutputMode: getSegmentedOutputValue(),
       mobileMessageSegmentation: getMobileMessageSegmentationValue(),
