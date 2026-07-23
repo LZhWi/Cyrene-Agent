@@ -46,7 +46,8 @@ import { CyreneAgent } from "./orchestrator/cyrene-agent";
 import { indexConversationTurn } from "./orchestrator/history-tools";
 import { buildToneInjection } from "./orchestrator/tone-injector";
 import { getAdapter, buildVendorUrl, getAdapterForConfig, createSseReader } from "./orchestrator/vendors";
-import type { VendorConfig } from "./orchestrator/vendors";
+import type { StructuredOutputRequest, VendorConfig } from "./orchestrator/vendors";
+import { resolveStructuredOutputProfile } from "./orchestrator/structured-output/profiles";
 import { testVendorConnection } from "./orchestrator/vendors/test-connection";
 import { migrateLegacyMinimaxDefaults } from "./orchestrator/vendors/minimax-defaults";
 import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
@@ -1793,8 +1794,18 @@ async function callChatCompletionsNonStream(
   timeoutMs: number,
   label: string,
   reasoningOverride?: ModelSettings["reasoning"],
-  options?: { tools?: unknown[]; toolChoice?: "required" },
-): Promise<{ text: string; toolCalls: Array<{ name: string; arguments: string }> }> {
+  options?: {
+    structuredOutput?: StructuredOutputRequest;
+    maxTokens?: number;
+    extraBody?: Record<string, unknown>;
+  },
+  signal?: AbortSignal,
+): Promise<{
+  text: string;
+  thinking?: string;
+  finishReason: string;
+  refusal?: string;
+}> {
   const cfg: VendorConfig = {
     provider: settings.provider,
     baseUrl: settings.baseUrl,
@@ -1809,11 +1820,14 @@ async function callChatCompletionsNonStream(
     messages,
     ...(temperature !== undefined ? { temperature } : {}),
     stream: false,
-    ...(options?.tools ? { tools: options.tools as never } : {}),
-    ...(options?.toolChoice === "required" ? { toolChoiceIntent: { mode: "must_call" as const } } : {}),
-  } as never, cfg);
+    ...(options?.structuredOutput ? { structuredOutput: options.structuredOutput } : {}),
+    ...(options?.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
+    ...(options?.extraBody ? { extraBody: options.extraBody } : {}),
+  }, cfg);
 
   const controller = new AbortController();
+  const abort = (): void => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   const startTime = Date.now();
   console.log(`[TIMING] ${label} START (non-stream) timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`);
@@ -1833,8 +1847,13 @@ async function callChatCompletionsNonStream(
     const json = await response.json();
     const parsed = adapter.parseResponse(json);
     const totalTime = Date.now() - startTime;
-    console.log(`[TIMING] ${label} OK in ${totalTime}ms resultLen=${parsed.text.length} toolCalls=${parsed.toolCalls.length}`);
-    return { text: parsed.text, toolCalls: parsed.toolCalls };
+    console.log(`[TIMING] ${label} OK in ${totalTime}ms resultLen=${parsed.text.length}`);
+    return {
+      text: parsed.text,
+      thinking: parsed.thinking,
+      finishReason: parsed.finishReason,
+      refusal: parsed.refusal,
+    };
   } catch (error) {
     const totalTime = Date.now() - startTime;
     if (error instanceof Error && error.name === "AbortError") {
@@ -1845,13 +1864,14 @@ async function callChatCompletionsNonStream(
     throw error;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", abort);
   }
 }
 
 const citaService = new CitaService({
   store: new ContextStore(),
   engine: new RemoteSemanticEngine(
-    async (request) => callChatCompletionsNonStream(
+    async (request, signal) => callChatCompletionsNonStream(
       loadModelSettings(),
       [
         { role: "system", content: request.systemPrompt },
@@ -1861,9 +1881,34 @@ const citaService = new CitaService({
       6_000,
       "CITA understandTurn",
       { mode: "off" as const },
-      { tools: request.tools, toolChoice: request.toolChoice },
+      {
+        structuredOutput: request.structuredOutput,
+        maxTokens: request.maxTokens,
+        extraBody: request.extraBody,
+      },
+      signal,
     ),
-    { timeoutMs: 6_000, systemPrompt: loadPromptFile("cita_system.md") },
+    {
+      timeoutMs: 8_000,
+      systemPrompt: loadPromptFile("cita_system.md"),
+      getProfile: () => {
+        const settings = loadModelSettings();
+        const cfg: VendorConfig = {
+          provider: settings.provider,
+          baseUrl: settings.baseUrl,
+          model: settings.model,
+          apiKey: settings.apiKey,
+          explicitTransport: settings.explicitTransport,
+          reasoning: { mode: "off" },
+        };
+        const adapter = getAdapterForConfig(cfg);
+        return resolveStructuredOutputProfile({
+          provider: adapter.id,
+          model: cfg.model,
+          transport: adapter.transport,
+        });
+      },
+    },
   ),
   getSettings: () => normalizeCitaSettings({
     enabled: loadGeneralSettings().citaEnabled,

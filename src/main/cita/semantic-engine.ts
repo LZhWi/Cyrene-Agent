@@ -4,21 +4,22 @@ import type {
   TurnUnderstanding,
   TurnUnderstandingInput,
 } from "./contracts";
+import type { StructuredOutputRequest } from "../orchestrator/vendors/types";
 
 export interface SemanticGenerateRequest {
   systemPrompt: string;
   userPrompt: string;
   maxTokens: number;
-  /** Function Calling 工具定义（ToolSpec 格式）。传入时 generate 回调应将它们附加到请求。 */
-  tools?: unknown[];
-  /** tool_choice 模式："required" 强制调用工具，undefined 不传。 */
-  toolChoice?: "required";
+  structuredOutput: StructuredOutputRequest;
+  /** Provider-specific non-secret request hints, such as MiniMax reasoning_split. */
+  extraBody?: Record<string, unknown>;
 }
 
 export interface SemanticGeneratorResult {
   text: string;
-  /** 模型返回的工具调用列表。FC 模式下包含 submit_context_understanding 的结果。 */
-  toolCalls?: Array<{ name: string; arguments: string }>;
+  thinking?: string;
+  finishReason?: string;
+  refusal?: string;
 }
 
 export type SemanticTextGenerator = (
