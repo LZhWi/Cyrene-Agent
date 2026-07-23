@@ -78,6 +78,25 @@
             </div>
           </div>
 
+          <div class="custom-endpoint-controls" id="custom-endpoint-controls" hidden>
+            <div class="custom-endpoint-controls__copy">
+              <div class="custom-endpoint-controls__title">
+                <span>自定义端点</span>
+                <span class="custom-endpoint-controls__badge">高级</span>
+              </div>
+              <p id="custom-endpoint-summary">接入 OpenAI 兼容的云端服务，能力由服务提供方决定。</p>
+            </div>
+            <div class="custom-endpoint-controls__actions">
+              <div class="custom-endpoint-mode" role="group" aria-label="自定义端点类型">
+                <button type="button" class="custom-endpoint-mode__btn is-active" data-custom-endpoint-mode="cloud" aria-pressed="true">云端服务</button>
+                <button type="button" class="custom-endpoint-mode__btn" data-custom-endpoint-mode="local" aria-pressed="false">本地服务</button>
+              </div>
+              <button type="button" class="custom-endpoint-guide-btn" id="custom-endpoint-guide-btn">
+                <span aria-hidden="true">ⓘ</span> 接入说明与 FAQ
+              </button>
+            </div>
+          </div>
+
           <div class="form-grid">
             <label class="field">
               <span>昵称</span>
@@ -88,8 +107,9 @@
             </label>
 
             <label class="field">
-              <span>API Key</span>
+              <span id="api-key-label">API Key</span>
               <input id="api-key" type="password" placeholder="sk-..." autocomplete="off" />
+              <span class="form-hint" id="api-key-hint">填写对应平台创建的 API Key</span>
             </label>
 
             <label class="field field--full base-url-field">
@@ -107,7 +127,7 @@
                 <option value="openai">OpenAI 兼容</option>
                 <option value="anthropic">Anthropic 兼容</option>
               </select>
-              <span class="form-hint">默认按 Base URL 推断；如有歧义可手动指定</span>
+              <span class="form-hint" id="transport-hint">默认按 Base URL 推断；如有歧义可手动指定</span>
             </label>
 
             <label class="field field--full">
@@ -119,7 +139,7 @@
 
           <div class="api-note">
             <span><svg width="22" height="22" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:block"><title>安全</title><rect x="6" y="22" width="36" height="22" rx="2" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M14 22V14C14 8.47715 18.4772 4 24 4C29.5228 4 34 8.47715 34 14V22" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 30V36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
-            <p>选择模型预设后会自动填入 Provider、Base URL 和模型名；你只需要填写对应平台的 API Key。配置只保存在本机 Electron 用户数据目录。</p>
+            <p id="api-note-text">选择模型预设后会自动填入 Provider、Base URL 和模型名；你只需要填写对应平台的 API Key。配置只保存在本机 Electron 用户数据目录。</p>
           </div>
 
           <hr class="api-section-divider" />

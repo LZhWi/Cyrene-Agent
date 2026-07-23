@@ -345,6 +345,17 @@ body {
   box-shadow: 0 0 0 4px rgba(236, 72, 153, 0.12), inset 0 1px 0 rgba(255, 255, 255, 0.08);
 }
 
+.field .form-hint {
+  color: var(--rb-text-muted);
+  font: var(--rb-text-micro);
+  line-height: 1.5;
+}
+
+.field select:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
+}
+
 .api-note {
   display: flex;
   gap: 10px;
@@ -2034,6 +2045,168 @@ body {
   max-width: 100%;
 }
 
+/* 自定义端点：与官方厂商卡片共用主表单，但明确标注高级与非官方边界。 */
+.custom-endpoint-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  margin: 10px 0 16px;
+  padding: 14px 15px;
+  border-radius: 17px;
+  color: var(--rb-text-default);
+  background:
+    radial-gradient(circle at 0 0, rgba(255, 110, 199, 0.13), transparent 50%),
+    rgba(255, 255, 255, 0.045);
+  border: 1px solid rgba(255, 182, 220, 0.18);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.custom-endpoint-controls[hidden] {
+  display: none;
+}
+
+.custom-endpoint-controls__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--rb-text-strong);
+  font: var(--rb-text-small-em);
+}
+
+.custom-endpoint-controls__badge {
+  padding: 2px 7px;
+  border-radius: var(--rb-radius-full);
+  color: rgba(255, 214, 236, 0.9);
+  background: rgba(236, 72, 153, 0.13);
+  border: 1px solid rgba(255, 182, 220, 0.2);
+  font: var(--rb-text-micro);
+}
+
+.custom-endpoint-controls__copy p {
+  margin: 5px 0 0;
+  color: var(--rb-text-muted);
+  font: var(--rb-text-micro);
+  line-height: 1.55;
+}
+
+.custom-endpoint-controls__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  flex-wrap: wrap;
+}
+
+.custom-endpoint-mode {
+  display: inline-flex;
+  padding: 3px;
+  border-radius: var(--rb-radius-full);
+  background: rgba(0, 0, 0, 0.17);
+  border: 1px solid rgba(255, 182, 220, 0.14);
+}
+
+.custom-endpoint-mode__btn,
+.custom-endpoint-guide-btn {
+  border: 0;
+  color: var(--rb-text-muted);
+  background: transparent;
+  font: var(--rb-text-small-em);
+  cursor: pointer;
+}
+
+.custom-endpoint-mode__btn {
+  padding: 7px 11px;
+  border-radius: var(--rb-radius-full);
+  transition: color 140ms ease, background 140ms ease, box-shadow 140ms ease;
+}
+
+.custom-endpoint-mode__btn:hover:not(.is-active) {
+  color: var(--rb-text-strong);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.custom-endpoint-mode__btn.is-active {
+  color: var(--rb-text-on-pink);
+  background: var(--rb-grad-pink-hot);
+  box-shadow: 0 0 13px rgba(236, 72, 153, 0.24);
+}
+
+.custom-endpoint-guide-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  color: rgba(255, 214, 236, 0.78);
+  border: 1px solid rgba(255, 182, 220, 0.16);
+  transition: color 140ms ease, background 140ms ease, border-color 140ms ease;
+}
+
+.custom-endpoint-guide-btn:hover {
+  color: var(--rb-text-strong);
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 182, 220, 0.3);
+}
+
+.custom-endpoint-guide-section + .custom-endpoint-guide-section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid rgba(255, 182, 220, 0.13);
+}
+
+.custom-endpoint-guide-section h4 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 8px;
+  color: var(--rb-text-strong);
+  font-size: 14px;
+}
+
+.custom-endpoint-guide-section h4 span {
+  padding: 2px 7px;
+  border-radius: var(--rb-radius-full);
+  color: rgba(255, 214, 236, 0.84);
+  background: rgba(236, 72, 153, 0.14);
+  font-size: 10px;
+}
+
+.custom-endpoint-guide-note,
+.custom-endpoint-guide-security {
+  color: rgba(255, 214, 236, 0.8);
+}
+
+.custom-endpoint-guide-warning {
+  margin: 11px 0;
+  padding: 11px 12px;
+  border-radius: 13px;
+  color: rgba(255, 237, 245, 0.92);
+  background: rgba(245, 158, 11, 0.10);
+  border: 1px solid rgba(251, 191, 36, 0.2);
+  line-height: 1.65;
+}
+
+.custom-endpoint-faq details {
+  border-top: 1px solid rgba(255, 182, 220, 0.1);
+}
+
+.custom-endpoint-faq details:last-child {
+  border-bottom: 1px solid rgba(255, 182, 220, 0.1);
+}
+
+.custom-endpoint-faq summary {
+  padding: 10px 2px;
+  color: var(--rb-text-default);
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.custom-endpoint-faq details p {
+  margin: 0;
+  padding: 0 2px 11px 18px;
+}
+
 /* 白调主题 */
 [data-ui-theme="pearl-white"] .preset-card {
   color: var(--rb-text-muted);
@@ -2048,6 +2221,49 @@ body {
   color: var(--rb-pink-600);
   background: var(--rb-pink-50);
   border-color: var(--rb-pink-200);
+}
+
+[data-ui-theme="pearl-white"] .custom-endpoint-controls {
+  color: var(--rb-text-default);
+  background: linear-gradient(135deg, rgba(255, 240, 247, 0.8), rgba(255, 255, 255, 0.72));
+  border-color: var(--rb-pink-200);
+}
+
+[data-ui-theme="pearl-white"] .custom-endpoint-controls__badge {
+  color: var(--rb-pink-600);
+  background: var(--rb-pink-50);
+  border-color: var(--rb-pink-200);
+}
+
+[data-ui-theme="pearl-white"] .custom-endpoint-mode {
+  background: rgba(255, 255, 255, 0.78);
+  border-color: var(--rb-pink-200);
+}
+
+[data-ui-theme="pearl-white"] .custom-endpoint-guide-btn {
+  color: var(--rb-pink-600);
+  border-color: var(--rb-pink-200);
+}
+
+[data-ui-theme="pearl-white"] .custom-endpoint-guide-warning {
+  color: #7c2d12;
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+
+[data-ui-theme="pearl-white"] .custom-endpoint-guide-note,
+[data-ui-theme="pearl-white"] .custom-endpoint-guide-security {
+  color: var(--rb-pink-600);
+}
+
+@media (max-width: 780px) {
+  .custom-endpoint-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .custom-endpoint-controls__actions {
+    justify-content: flex-start;
+  }
 }
 
 /* 白调主题下 Kimi logo 换用深色版本 */

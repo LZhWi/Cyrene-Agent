@@ -29,6 +29,14 @@ import { requestTrackPlayback } from "./music-playback";
 import { type ReasoningPreference } from "../../shared/reasoning";
 import { type LoginFlowState } from "../../shared/music-types";
 import {
+  CUSTOM_ENDPOINT_PROVIDERS,
+  getCustomEndpointMode,
+  getCustomEndpointPresentation,
+  getCustomEndpointProvider,
+  validateCustomEndpointConfig,
+  type CustomEndpointMode,
+} from "./custom-endpoint-state";
+import {
   deriveNeteaseViewState,
   type MusicStatusSnapshot,
   type NeteaseViewState,
@@ -345,6 +353,9 @@ interface ModelPreset {
   defaultVisionModel?: string;
   // 独立视觉模型的候选列表（用于视觉模型输入框的 datalist）。
   visionModels?: string[];
+  // 自定义端点的云端/本地变体共用一张可见卡片，但分别持久化配置。
+  customEndpointMode?: CustomEndpointMode;
+  hiddenInPresetList?: boolean;
 }
 
 interface GeneralSettings {
@@ -548,8 +559,8 @@ const MODEL_PRESETS: ModelPreset[] = [
     providerName: "ChatGPT（OpenAI）",
     shortName: "ChatGPT",
     baseUrl: "https://api.openai.com/v1",
-    // 国内多数用户走中转站，型号命名各家不一；预设留空，由用户在型号输入框里自行填写。
-    mainModels: [],
+    // 官方入口只推荐已纳入结构化输出 Profile 的型号；代理与自定义型号走“自定义端点”。
+    mainModels: ["gpt-5.6"],
     iconUrl: "../icons/providers/openai.svg",
     websiteUrl: "https://platform.openai.com/",
   },
@@ -574,6 +585,23 @@ const MODEL_PRESETS: ModelPreset[] = [
     independentVision: true,
     defaultVisionModel: "mimo-v2.5",
     visionModels: ["mimo-v2.5"],
+  },
+  {
+    providerName: CUSTOM_ENDPOINT_PROVIDERS.cloud,
+    shortName: "自定义",
+    baseUrl: "",
+    mainModels: [],
+    iconUrl: "../icons/providers/custom-endpoint.svg",
+    customEndpointMode: "cloud",
+  },
+  {
+    providerName: CUSTOM_ENDPOINT_PROVIDERS.local,
+    shortName: "本地模型",
+    baseUrl: "",
+    mainModels: [],
+    iconUrl: "../icons/providers/custom-endpoint.svg",
+    customEndpointMode: "local",
+    hiddenInPresetList: true,
   },
 ];
 
@@ -715,9 +743,16 @@ const baseUrlResetBtn = document.getElementById("base-url-reset-btn") as HTMLBut
 const modelInput = document.getElementById("model-input") as HTMLInputElement;
 const modelInputSuggestions = document.getElementById("model-input-suggestions") as HTMLDataListElement;
 const apiKeyInput = document.getElementById("api-key") as HTMLInputElement;
+const apiKeyLabel = document.getElementById("api-key-label") as HTMLElement;
+const apiKeyHint = document.getElementById("api-key-hint") as HTMLElement;
 const testConnectionBtn = document.getElementById("test-connection-btn") as HTMLButtonElement | null;
 // API 协议下拉（auto / openai / anthropic）—— 用户显式 override transport
 const transportSelect = document.getElementById("transport-select") as HTMLSelectElement;
+const transportHint = document.getElementById("transport-hint") as HTMLElement;
+const customEndpointControls = document.getElementById("custom-endpoint-controls") as HTMLElement;
+const customEndpointSummary = document.getElementById("custom-endpoint-summary") as HTMLElement;
+const customEndpointGuideBtn = document.getElementById("custom-endpoint-guide-btn") as HTMLButtonElement;
+const apiNoteText = document.getElementById("api-note-text") as HTMLElement;
 
 // 视觉模型配置区元素
 const multimodalToggle = document.getElementById("multimodal-toggle") as HTMLInputElement;
@@ -734,6 +769,7 @@ const providerProfileCache: Record<string, ProviderProfile> = {};
 
 // 当前激活的厂商：每次 applyPreset 后更新；用于"切到下一家厂商前先把当前那家的输入框值缓存住"
 let activeProvider: string = "";
+let customEndpointMode: CustomEndpointMode = "cloud";
 const runtimeSyncSelect = document.getElementById("runtime-sync") as HTMLElement;
 const runtimeSyncNote = document.getElementById("runtime-sync-note") as HTMLElement;
 const stickerEnabledInput = document.getElementById("sticker-enabled") as HTMLInputElement;
@@ -982,6 +1018,7 @@ function fillPresetOptions(): void {
   if (!presetCards) return;
   presetCards.replaceChildren();
   for (const preset of MODEL_PRESETS) {
+    if (preset.hiddenInPresetList) continue;
     const card = document.createElement("button");
     card.type = "button";
     card.className = "preset-card";
@@ -1019,8 +1056,11 @@ function fillPresetOptions(): void {
 /** 标记当前选中的厂商卡片（替换原 presetSelect.value = ...） */
 function setActivePresetCard(providerName: string): void {
   if (!presetCards) return;
+  const cardProvider = getCustomEndpointMode(providerName)
+    ? CUSTOM_ENDPOINT_PROVIDERS.cloud
+    : providerName;
   presetCards.querySelectorAll(".preset-card").forEach((card) => {
-    card.classList.toggle("is-active", (card as HTMLElement).dataset.provider === providerName);
+    card.classList.toggle("is-active", (card as HTMLElement).dataset.provider === cardProvider);
   });
 }
 
@@ -1091,6 +1131,66 @@ function fillVisionModelOptions(preset: ModelPreset): void {
   }
 }
 
+const LOCAL_ENDPOINT_AUTH_FALLBACK = "__CYRENE_LOCAL_NO_AUTH__";
+
+function getApiKeyForRequest(): string {
+  const value = apiKeyInput.value.trim();
+  return getCustomEndpointMode(activeProvider) === "local" && !value
+    ? LOCAL_ENDPOINT_AUTH_FALLBACK
+    : value;
+}
+
+function validateActiveCustomEndpoint(): string | null {
+  const mode = getCustomEndpointMode(activeProvider);
+  if (!mode) return null;
+  return validateCustomEndpointConfig(mode, {
+    baseUrl: baseUrlInput.value,
+    model: getCurrentModelValue(),
+    apiKey: apiKeyInput.value,
+  });
+}
+
+function applyCustomEndpointUI(preset: ModelPreset): void {
+  const mode = getCustomEndpointMode(preset.providerName);
+  customEndpointControls.hidden = mode === null;
+  transportSelect.disabled = mode !== null;
+
+  if (!mode) {
+    apiKeyLabel.textContent = "API Key";
+    apiKeyHint.textContent = "填写对应平台创建的 API Key";
+    apiKeyInput.placeholder = "sk-...";
+    baseUrlInput.placeholder = "https://api.deepseek.com";
+    modelInput.placeholder = "选厂商后自动填入，可手填覆盖";
+    transportHint.textContent = "默认按 Base URL 推断；如有歧义可手动指定";
+    baseUrlResetBtn.title = "重置为厂商默认 URL";
+    apiNoteText.textContent = "选择模型预设后会自动填入 Provider、Base URL 和模型名；你只需要填写对应平台的 API Key。配置只保存在本机 Electron 用户数据目录。";
+    return;
+  }
+
+  customEndpointMode = mode;
+  const presentation = getCustomEndpointPresentation(mode);
+  customEndpointControls.querySelectorAll<HTMLButtonElement>("[data-custom-endpoint-mode]").forEach((button) => {
+    const active = button.dataset.customEndpointMode === mode;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  });
+
+  customEndpointSummary.textContent = mode === "local"
+    ? "填写本机 OpenAI 兼容服务地址；不扫描端口，也不探测模型能力。"
+    : "接入 OpenAI 兼容的云端服务或第三方代理，能力由服务提供方决定。";
+  apiKeyLabel.textContent = presentation.apiKeyOptional ? "API Key（可选）" : "API Key";
+  apiKeyHint.textContent = presentation.apiKeyOptional
+    ? "本地服务无需鉴权时可留空；如网关要求令牌，请在此填写"
+    : "填写自定义服务或第三方代理提供的 API Key";
+  apiKeyInput.placeholder = presentation.apiKeyOptional ? "无需鉴权时留空" : "sk-...";
+  baseUrlInput.placeholder = presentation.baseUrlPlaceholder;
+  modelInput.placeholder = "填写服务实际提供的模型 ID";
+  transportSelect.value = presentation.transport;
+  transportHint.textContent = "自定义端点仅提供 OpenAI 兼容协议；不会探测或自动升级能力档位";
+  baseUrlResetBtn.title = "清空自定义 Base URL";
+  apiNoteText.textContent = "自定义端点按保守兼容模式运行。保存后请先测试连接；连接成功不代表结构化输出、工具调用或思考模式一定可用。";
+}
+
 function applyPreset(
   providerName: string,
   preferredModel?: string,
@@ -1119,11 +1219,15 @@ function applyPreset(
 
   // apiKey：优先用缓存；否则**显式清空**——避免上一家厂商的 key 残留在输入框里被用户误点保存。
   // 这是 v1 切厂商行为里的关键不变量：apiKey 永远只跟当前厂商绑定。
-  apiKeyInput.value = preferredApiKey ?? "";
+  const customMode = getCustomEndpointMode(preset.providerName);
+  apiKeyInput.value = customMode === "local" && preferredApiKey === LOCAL_ENDPOINT_AUTH_FALLBACK
+    ? ""
+    : (preferredApiKey ?? "");
 
   // explicitTransport：优先用缓存（用户自定义过），其次默认 "auto"
   // （切厂商时上一家的 explicitTransport 不应该延续，preset 自带 capabilities transport 兜底）
   transportSelect.value = preferredExplicitTransport ?? "auto";
+  applyCustomEndpointUI(preset);
 
   if (preferredMultimodal !== undefined) {
     multimodalToggle.checked = preset.independentVision === true ? false : preferredMultimodal;
@@ -2055,12 +2159,15 @@ clearChatHistoryBtn.addEventListener("click", async () => {
 presetCards?.addEventListener("click", (e) => {
   const card = (e.target as HTMLElement).closest(".preset-card") as HTMLElement | null;
   if (!card || card.classList.contains("is-disabled")) return;
-  const providerName = card.dataset.provider;
-  if (!providerName) return;
+  const cardProviderName = card.dataset.provider;
+  if (!cardProviderName) return;
 
   // 切厂商前先把当前厂商的输入值快照进缓存，避免覆盖丢失
   captureActiveProviderProfile();
 
+  const providerName = getCustomEndpointMode(cardProviderName)
+    ? getCustomEndpointProvider(customEndpointMode)
+    : cardProviderName;
   // 从缓存里取目标厂商的旧配置；没有缓存就用 preset 默认值
   const cached = providerProfileCache[providerName];
   applyPreset(
@@ -2074,13 +2181,78 @@ presetCards?.addEventListener("click", (e) => {
   setSaveStatus(cached ? "已切回上次配置" : "已应用预设，填写 API Key 后保存");
 });
 
+customEndpointControls?.addEventListener("click", (e) => {
+  const button = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-custom-endpoint-mode]");
+  const nextMode = button?.dataset.customEndpointMode as CustomEndpointMode | undefined;
+  if (!nextMode || nextMode === customEndpointMode) return;
+
+  captureActiveProviderProfile();
+  customEndpointMode = nextMode;
+  const providerName = getCustomEndpointProvider(nextMode);
+  const cached = providerProfileCache[providerName];
+  applyPreset(
+    providerName,
+    cached?.model,
+    cached?.apiKey,
+    cached?.baseUrl,
+    cached?.displayName,
+    cached?.explicitTransport,
+  );
+  setSaveStatus(cached ? "已切回上次配置" : nextMode === "local"
+    ? "请填写本地服务地址和模型 ID"
+    : "请填写云端服务地址、API Key 和模型 ID");
+});
+
+const CUSTOM_ENDPOINT_GUIDE_BODY = [
+  '<section class="custom-endpoint-guide-section">',
+  '  <h4>官方云端模型</h4>',
+  '  <p>从列表选择已适配厂商（OpenAI、Claude、Kimi、DeepSeek、MiniMax、智谱 GLM、通义千问、豆包、小米 MiMo），填写对应平台获取的 API Key 即可。Base URL 与推荐模型 ID 已预填。</p>',
+  '  <p class="custom-endpoint-guide-note">同一厂商的不同模型在结构化输出、工具调用和思考模式等能力上可能存在差异，请优先使用列表内的推荐型号。</p>',
+  '</section>',
+  '<section class="custom-endpoint-guide-section">',
+  '  <h4>自定义端点 <span>高级</span></h4>',
+  '  <p>可接入提供 OpenAI 兼容接口的云端服务、本地推理服务或第三方代理。请自行填写完整 Base URL 和服务实际提供的模型 ID。</p>',
+  '  <div class="custom-endpoint-guide-warning"><strong>本地模型与自定义端点不在官方技术支持范围内。</strong>实际能力取决于推理服务的具体实现，系统不会扫描端口、探测模型或自动升级能力档位。接入第三方代理前，请自行评估隐私和数据安全风险。</div>',
+  '  <p>建议保存后点击“<strong>测试连接</strong>”进行基础验证。连接成功仅表示服务能够响应，不代表结构化输出、工具调用和思考模式一定可用。</p>',
+  '  <p class="custom-endpoint-guide-security">🔒 你的 API Key 仅存储在本地设备，不会上传至昔涟的服务器。</p>',
+  '</section>',
+  '<section class="custom-endpoint-guide-section custom-endpoint-faq">',
+  '  <h4>常见问题</h4>',
+  '  <details>',
+  '    <summary>本地模型回复格式异常</summary>',
+  '    <p>许多本地推理服务缺少稳定的约束解码或完整协议实现，偶尔输出多余文本、Markdown 围栏或不完整 JSON 属于常见情况。系统会使用本地校验与自动修复兜底；如需更高稳定性，建议选择官方云端模型。</p>',
+  '  </details>',
+  '  <details>',
+  '    <summary>MiniMax 思考模式失效</summary>',
+  '    <p>MiniMax 在 JSON 模式下不建议同时启用思考。系统会依据已验证的配置自动处理这一冲突，以结构化结果的稳定性为优先。</p>',
+  '  </details>',
+  '  <details>',
+  '    <summary>Claude 配置项比其他厂商少</summary>',
+  '    <p>Claude 的接口规范与 OpenAI 兼容接口不同，部分参数和结构化输出档位并不适用，因此页面显示的配置项会更少。这属于正常差异，不影响已适配能力的使用。</p>',
+  '  </details>',
+  '</section>',
+].join("\n");
+
+customEndpointGuideBtn?.addEventListener("click", () => {
+  void showHtmlModal({
+    title: "模型服务接入说明",
+    icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 10.5V17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="7.25" r="1.1" fill="currentColor"/></svg>',
+    htmlBody: CUSTOM_ENDPOINT_GUIDE_BODY,
+  });
+});
+
 // 测试连接按钮：调用厂商 adapter 的真实连接测试
 if (testConnectionBtn) {
   testConnectionBtn.addEventListener("click", async () => {
     const provider = activeProvider;
     const baseUrl = baseUrlInput.value;
     const model = getCurrentModelValue().trim();
-    const apiKey = apiKeyInput.value;
+    const customValidationError = validateActiveCustomEndpoint();
+    if (customValidationError) {
+      setSaveStatus(customValidationError, "is-error");
+      return;
+    }
+    const apiKey = getApiKeyForRequest();
     if (!apiKey) { setSaveStatus("请先填写 API Key 再测试", "is-error"); return; }
     if (!model) { setSaveStatus("请先选择/填写模型再测试", "is-error"); return; }
     setSaveStatus("测试连接中…");
@@ -2301,6 +2473,11 @@ cyrenePanel.addEventListener("submit", async (e) => {
 
 apiForm.addEventListener("submit", async (e) => {
   e.preventDefault();
+  const customValidationError = validateActiveCustomEndpoint();
+  if (customValidationError) {
+    setSaveStatus(customValidationError, "is-error");
+    return;
+  }
   setSaveStatus("保存中…");
   try {
     // 保存前把当前输入快照进 perProvider 缓存（main 进程也会做一次，但渲染端先做一遍，
@@ -2314,9 +2491,10 @@ apiForm.addEventListener("submit", async (e) => {
       displayName: displayNameInput.value.trim(),
       baseUrl: baseUrlInput.value.trim(),
       model: getCurrentModelValue().trim(),
-      apiKey: apiKeyInput.value.trim(),
+      apiKey: getApiKeyForRequest(),
       explicitTransport: transportSelect.value as "openai" | "anthropic" | "auto",
       reasoning: providerProfileCache[activeProvider]?.reasoning,
+      perProvider: { ...providerProfileCache },
       multimodal: multimodalToggle.checked,
       // 视觉配置始终传三框值，不论开关状态（开关 ON 时保留但不使用）
       vision: {
