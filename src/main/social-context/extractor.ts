@@ -206,16 +206,22 @@ export function parseAndValidateSocialExtraction(
 export function buildSocialExtractionPrompt(input: SocialExtractionInput): string {
   const oldAtoms = input.retrievedAtoms.length > 0
     ? input.retrievedAtoms.map((atom) => (
-      `- atomId=${atom.id}; type=${atom.type}; content=${JSON.stringify(atom.content)}`
+      `- supersedesAtomId=${atom.id}; type=${atom.type}; content=${JSON.stringify(atom.content)}`
     )).join("\n")
     : "（无）";
   return [
     "你是保守的聊天连续性信息提取器。只记录本轮原文能直接支持、未来对自然聊天有帮助的信息。",
     "禁止推断情绪，禁止改写证据引文，禁止为了有输出而输出。没有合适内容时返回 {\"operations\":[] }。",
-    "只返回一个 JSON 对象，operations 最多 3 条。operation 为 add、supersede 或 resolve。",
+    "只返回一个 JSON 对象，operations 最多 3 条。每条都必须完整包含以下七个键：",
+    "\"operation\"、\"type\"、\"content\"、\"evidenceTurnId\"、\"evidenceQuote\"、\"supersedesAtomId\"、\"expiresAt\"。",
+    "禁止使用 op、atomId、targetAtomId 等别名。",
+    "add 示例：{\"operation\":\"add\",\"type\":\"long_term\",\"content\":\"用户明确表达的事实\",\"evidenceTurnId\":\"user-id\",\"evidenceQuote\":\"严格原文子串\",\"supersedesAtomId\":null,\"expiresAt\":null}",
+    "supersede 示例：{\"operation\":\"supersede\",\"type\":\"long_term\",\"content\":\"纠正后的事实\",\"evidenceTurnId\":\"user-id\",\"evidenceQuote\":\"严格原文子串\",\"supersedesAtomId\":\"旧原子ID\",\"expiresAt\":null}",
+    "resolve 示例：{\"operation\":\"resolve\",\"type\":null,\"content\":null,\"evidenceTurnId\":\"user-id\",\"evidenceQuote\":\"严格原文子串\",\"supersedesAtomId\":\"open_loop原子ID\",\"expiresAt\":null}",
+    "operation 只能是 add、supersede 或 resolve。",
     "type 只能是 long_term、short_term、open_loop。short_term 的 expiresAt 使用毫秒时间戳。",
     "long_term/short_term 的 evidenceTurnId 必须来自用户；open_loop 可来自助手。",
-    "evidenceQuote 必须是对应消息的严格原文子串。纠正和关闭只能引用下面给出的旧 atomId。",
+    "evidenceQuote 必须是对应消息的严格原文子串。纠正和关闭只能引用下面给出的 supersedesAtomId。",
     "resolve 只用于用户已经回答一个 open_loop，不带 type/content。",
     "",
     `当前时间戳：${input.now}`,

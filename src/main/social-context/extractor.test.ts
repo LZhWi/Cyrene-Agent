@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { parseAndValidateSocialExtraction } from "./extractor";
+import {
+  buildSocialExtractionPrompt,
+  parseAndValidateSocialExtraction,
+} from "./extractor";
 import type { SocialAtom, SocialExtractionInput } from "./types";
 
 const NOW = Date.parse("2026-07-24T00:00:00Z");
@@ -37,6 +40,23 @@ function input(overrides: Partial<SocialExtractionInput> = {}): SocialExtraction
 }
 
 describe("social extraction validation", () => {
+  it("spells out the exact prompt-json field contract and forbids common aliases", () => {
+    const prompt = buildSocialExtractionPrompt(input());
+
+    for (const field of [
+      "operation",
+      "type",
+      "content",
+      "evidenceTurnId",
+      "evidenceQuote",
+      "supersedesAtomId",
+      "expiresAt",
+    ]) {
+      expect(prompt).toContain(`\"${field}\"`);
+    }
+    expect(prompt).toContain("禁止使用 op、atomId、targetAtomId 等别名");
+  });
+
   it("accepts a strict-evidence correction and a resolve operation", () => {
     const result = parseAndValidateSocialExtraction(JSON.stringify({
       operations: [
