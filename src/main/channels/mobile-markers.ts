@@ -27,6 +27,16 @@ export function getStickerDescription(id: string): string {
   return "";
 }
 
+/** 从模型输出里剥离它「模仿」describeMarkersForLlm 写出的舞台指示「（发送表情包：…）」。
+ *  真正的表情包由嵌入匹配追加 [sticker:id]，模型不该把这段描述写进正文。
+ *  只匹配「发送表情包」精确措辞，避免误删「这个表情包好可爱」之类正常表达。 */
+export function stripStickerStageDirections(content: string): string {
+  return content
+    .replace(/[（(]\s*发送表情包(?:\s*[:：][^）)]*)?\s*[）)]/g, "")
+    .replace(/[ \t]{2,}/g, " ")
+    .trim();
+}
+
 /** 把内容里的 [sticker:id]/[image:hash] 转成 LLM 可读文字。 */
 export function describeMarkersForLlm(content: string): string {
   return content

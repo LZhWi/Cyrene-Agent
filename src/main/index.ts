@@ -124,7 +124,7 @@ import { initChannels, shutdownChannels, setChannelsConversationLifecycle } from
 import { buildChannelAttachmentInputs } from "./channels/agent-input";
 import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadGeneralSettings, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
 import { setInboundChatRunner, setDesktopHistoryProvider } from "./channels/inbound-server";
-import { describeMarkersForLlm, formatStickerMarker, formatImageMarker } from "./channels/mobile-markers";
+import { describeMarkersForLlm, formatStickerMarker, formatImageMarker, stripStickerStageDirections } from "./channels/mobile-markers";
 import { saveBlob } from "./channels/mobile-blobs";
 import { DESKTOP_PROACTIVE_STEM } from "./sync/types";
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
@@ -4610,7 +4610,8 @@ app.whenReady().then(async () => {
       const finished = await onAgentRunFinished(agent.lastResult, text, onRunFinishedDeps, "mobile");
       sticker = finished.sticker;
     }
-    const reply = sticker ? `${rawReply} ${formatStickerMarker(sticker)}`.trim() : rawReply;
+    const cleanReply = stripStickerStageDirections(rawReply);
+    const reply = sticker ? `${cleanReply} ${formatStickerMarker(sticker)}`.trim() : cleanReply;
 
     let assistantAt: string | undefined;
     try {
@@ -4618,7 +4619,7 @@ app.whenReady().then(async () => {
     } catch (err) {
       console.warn("[Mobile] appendHistory (assistant) 失败:", err);
     }
-    void indexConversationTurn(sessionId, text, rawReply);
+    void indexConversationTurn(sessionId, text, cleanReply);
     return { reply, userContent, userAt, assistantAt };
   });
 
