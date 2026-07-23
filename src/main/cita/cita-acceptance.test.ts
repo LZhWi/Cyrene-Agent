@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { CitaService } from "./cita-service";
 import { ContextStore } from "./context-store";
-import type { DialogueActType, ModelVisibleContext, TurnUnderstanding } from "./contracts";
+import type { ModelVisibleContext, TurnUnderstanding } from "./contracts";
 import type { CitaSemanticEngine } from "./semantic-engine";
 
 const candidateContext: ModelVisibleContext = {
@@ -20,25 +20,19 @@ const candidateContext: ModelVisibleContext = {
 
 function cognition(input: {
   query: string;
-  dialogueAct: DialogueActType;
   rewriteStatus: TurnUnderstanding["rewriteStatus"];
   contextualizedQuery?: string;
   withRef?: boolean;
 }): TurnUnderstanding {
   return {
-    dialogueAct: { type: input.dialogueAct },
     resolvedReferences: input.withRef ? [{
       surface: input.query,
       targetRef: candidateContext.contextRef,
       relation: "focused",
     }] : [],
-    topicTransition: input.dialogueAct === "correct" ? "return" : "continue",
     focusedEntityRefs: input.withRef ? [candidateContext.contextRef] : [],
     contextualizedQuery: input.contextualizedQuery ?? input.query,
     rewriteStatus: input.rewriteStatus,
-    uncertainties: input.rewriteStatus === "ambiguous"
-      ? [{ type: "missing_context", description: "无法唯一确定所指对象" }]
-      : [],
   };
 }
 
@@ -46,15 +40,14 @@ const cases = [
   {
     name: "self-contained query remains unchanged",
     query: "今天上海天气怎么样？",
-    result: cognition({ query: "今天上海天气怎么样？", dialogueAct: "request", rewriteStatus: "unchanged" }),
+    result: cognition({ query: "今天上海天气怎么样？", rewriteStatus: "unchanged" }),
   },
   {
     name: "ordinal selection uses existing ref",
     query: "第一首吧",
     result: cognition({
       query: "第一首吧",
-      dialogueAct: "select",
-      rewriteStatus: "contextualized",
+      rewriteStatus: "rewritten",
       contextualizedQuery: "用户选择当前日推候选中的第一首《胆小鬼》。",
       withRef: true,
     }),
@@ -62,20 +55,19 @@ const cases = [
   {
     name: "ambiguous reference stays ambiguous",
     query: "就那个吧",
-    result: cognition({ query: "就那个吧", dialogueAct: "unclear", rewriteStatus: "ambiguous" }),
+    result: cognition({ query: "就那个吧", rewriteStatus: "insufficient_context" }),
   },
   {
     name: "comment does not become playback",
     query: "第四首名字挺怪",
-    result: cognition({ query: "第四首名字挺怪", dialogueAct: "comment", rewriteStatus: "unchanged" }),
+    result: cognition({ query: "第四首名字挺怪", rewriteStatus: "unchanged" }),
   },
   {
     name: "correction returns to prior topic",
     query: "不是左转灯，是之前日推那个",
     result: cognition({
       query: "不是左转灯，是之前日推那个",
-      dialogueAct: "correct",
-      rewriteStatus: "contextualized",
+      rewriteStatus: "rewritten",
       contextualizedQuery: "用户纠正目标为此前日推中的《胆小鬼》。",
       withRef: true,
     }),
@@ -103,7 +95,6 @@ describe("CITA advisory acceptance", () => {
 
     expect(prepared.contextPackage?.originalQuery).toBe(query);
     expect(prepared.contextPackage?.rewriteStatus).toBe(result.rewriteStatus);
-    expect(prepared.contextPackage?.dialogueAct).toEqual(result.dialogueAct);
     expect(prepared.contextBlock).toContain("[CITA_CONTEXT]");
     expect(prepared.contextBlock).not.toMatch(/\bmusic_play_track\b|\brequiredTool|\bexecute\b|netease-cloud-music|"trackId"|"setId"|"provider"|\b255667\b|正在播放/);
   });

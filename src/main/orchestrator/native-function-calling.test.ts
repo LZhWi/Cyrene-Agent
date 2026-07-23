@@ -26,8 +26,7 @@ describe("resolveNativeToolCall", () => {
   it("executes a zero-argument action without another model request", async () => {
     const invoke = vi.fn<(_: ChatRequest) => Promise<ChatResponse>>();
     const result = await resolveNativeToolCall({
-      model: "m", messages: [], toolSystemContent: "tools", citaContextBlock: "ctx",
-      decision: { decision: "act", capability: "music.daily_recommendations", objective: "读取日推", targetRefs: [] },
+      model: "m", nativeFcSystemPrompt: "test", executionBrief: "test",
       toolResults: [], tool: { ...tool(), id: "music_get_daily_recommendations", capability: "music.daily_recommendations" },
     }, invoke);
 
@@ -40,9 +39,7 @@ describe("resolveNativeToolCall", () => {
       id: "call-1", name: "music_search", arguments: '{"keyword":"左转灯"}',
     }]));
     const result = await resolveNativeToolCall({
-      model: "m", messages: [{ role: "user", content: "搜索左转灯" }],
-      toolSystemContent: "tools", citaContextBlock: "ctx",
-      decision: { decision: "act", capability: "music.search", objective: "搜索左转灯", targetRefs: [] },
+      model: "m", nativeFcSystemPrompt: "test", executionBrief: "test",
       toolResults: [], tool: tool({ keyword: { type: "string" } }),
     }, invoke);
 
@@ -56,8 +53,7 @@ describe("resolveNativeToolCall", () => {
   it("rejects text pretending to be a function call", async () => {
     const invoke = vi.fn(async () => response([], '{"name":"music_search","arguments":{"keyword":"左转灯"}}'));
     await expect(resolveNativeToolCall({
-      model: "m", messages: [], toolSystemContent: "tools", citaContextBlock: "ctx",
-      decision: { decision: "act", capability: "music.search", objective: "搜索", targetRefs: [] },
+      model: "m", nativeFcSystemPrompt: "test", executionBrief: "test",
       toolResults: [], tool: tool({ keyword: { type: "string" } }),
     }, invoke)).rejects.toThrow("E_NATIVE_TOOL_PROTOCOL");
   });

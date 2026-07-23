@@ -5,6 +5,11 @@ export interface ChatContextMessage {
 }
 
 export interface ConversationTimeContext {
+  /** 不带时间戳前缀的干净消息（给 Action Gate 等决策层用）*/
+  cleanMessages: ChatContextMessage[];
+  /** 带时间戳前缀的消息（给 Soul / Legacy 用，当前行为）*/
+  timestampedMessages: ChatContextMessage[];
+  /** @deprecated 使用 timestampedMessages */
   messages: ChatContextMessage[];
   timeContext: string;
 }
@@ -156,8 +161,11 @@ export function buildConversationTimeContext(messages: ChatContextMessage[], tim
   const resolvedTimezone = resolveChatContextTimezone(timezone);
   const timestampUseRule = buildTimestampUseRule(messages);
   const gapNotice = buildGapNotice(messages, resolvedTimezone);
+  const timestampedMessages = messages.map((message) => withTimePrefix(message, resolvedTimezone));
   return {
-    messages: messages.map((message) => withTimePrefix(message, resolvedTimezone)),
+    cleanMessages: messages.map((message) => ({ ...message })),
+    timestampedMessages,
+    messages: timestampedMessages,
     timeContext: [timestampUseRule, gapNotice].filter(Boolean).join("\n\n"),
   };
 }

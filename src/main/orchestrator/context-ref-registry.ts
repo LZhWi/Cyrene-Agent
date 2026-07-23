@@ -55,7 +55,7 @@ export class ContextRefRegistry {
     return contextRef;
   }
 
-  resolve<T>(contextRef: string, conversationId: string): T {
+  resolve<T>(contextRef: string, conversationId: string, expectedKind?: string): T {
     const entry = this.entries.get(contextRef);
     if (!entry) throw new Error("E_CONTEXT_REF_NOT_FOUND");
     if (entry.conversationId !== conversationId) {
@@ -64,6 +64,9 @@ export class ContextRefRegistry {
     if (this.now() >= entry.expiresAt) {
       this.entries.delete(contextRef);
       throw new Error("E_CONTEXT_REF_EXPIRED");
+    }
+    if (expectedKind && entry.kind !== expectedKind) {
+      throw new Error("E_CONTEXT_REF_KIND_MISMATCH");
     }
     return structuredClone(entry.value) as T;
   }

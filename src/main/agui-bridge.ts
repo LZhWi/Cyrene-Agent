@@ -23,6 +23,7 @@ import {
 import { indexConversationTurn } from "./orchestrator/history-tools";
 import type { RelationshipChannel } from "./relationship/relationship-log";
 import { createThinkFilter, type ThinkStreamFilter, type ThinkFilterMode } from "./chat/think-filter";
+import { perf } from "./perf-trace";
 
 /** 渲染进程发起 run 时传的输入。 */
 export interface AguiRunInput {
@@ -85,11 +86,13 @@ export function registerAgUiIpc(
     }
     lifecycle?.onUserMessage();
     lifecycle?.onConversationStarted();
+    perf.beginTurn("desktop");
     const input = rawInput as AguiRunInput;
     let built;
     try {
-      built = await buildOptionsFn(input);
+      built = await perf.track("build_options", () => buildOptionsFn!(input));
     } catch (error) {
+      perf.dump();
       lifecycle?.onConversationEnded();
       throw error;
     }
@@ -134,6 +137,7 @@ export function registerAgUiIpc(
     // 订阅 agent 事件流：每个事件透传渲染端；
     // TEXT_MESSAGE_CONTENT 经 <think> 过滤后再转发；
     // complete/error 时做副作用，并补发一个终态事件让渲染端知道这轮结束。
+    perf.mark("agent_run_start");
     const sub = agent.runWithEvents(options).subscribe({
       next: (baseEvent) => {
         const eventType = (baseEvent as { type?: string })?.type;
@@ -190,6 +194,7 @@ export function registerAgUiIpc(
         thinkFilter = null; // 错误时丢弃残留 filter 状态
         const message = err instanceof Error ? err.message : String(err);
         console.error("[AgUiBridge] run 失败:", message);
+        perf.dump();
         // 识别两类结构化错误：AgentRuntimeError（循环/模型错误）和 ActionGateProtocolError（协议错误）
         const code = err instanceof AgentRuntimeError ? err.code
           : err instanceof ActionGateProtocolError ? "E_ACTION_GATE_PROTOCOL"
@@ -201,16 +206,18 @@ export function registerAgUiIpc(
         endLifecycle();
       },
       complete: async () => {
+        perf.mark("agent_run_complete");
         activeRuns.delete(runId);
         try {
           if (agent.lastResult) {
-            await onFinished(agent.lastResult, latestUserText);
+            const lastResult = agent.lastResult;
+            await perf.track("on_run_finished", async () => { await onFinished(lastResult, latestUserText); });
             // 历史召回用：把这轮对话存入向量库（异步，不阻塞，失败不影响主流程）
             // 放在 onFinished 之后，确保记忆/sticker 等副作用先跑完
             void indexConversationTurn(
               input.sessionId || "default",
               latestUserText,
-              agent.lastResult.reply,
+              lastResult.reply,
             );
           }
         } catch (err) {
@@ -220,6 +227,7 @@ export function registerAgUiIpc(
           send(pendingRunFinishedEvent);
         }
         endLifecycle();
+        perf.dump();
       },
     });
     activeRuns.set(runId, { subscription: sub, endLifecycle });

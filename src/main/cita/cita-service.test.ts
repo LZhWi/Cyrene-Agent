@@ -5,13 +5,10 @@ import type { CitaSemanticEngine } from "./semantic-engine";
 import type { CitaSettings, ModelVisibleContext, TurnUnderstanding } from "./contracts";
 
 const validUnderstanding: TurnUnderstanding = {
-  dialogueAct: { type: "inform" },
   resolvedReferences: [],
-  topicTransition: "continue",
   focusedEntityRefs: [],
   contextualizedQuery: "你好",
   rewriteStatus: "unchanged",
-  uncertainties: [],
 };
 
 const unsafeProjectionPatches: Array<Partial<ModelVisibleContext>> = [
@@ -185,7 +182,7 @@ describe("CitaService", () => {
       const lines = log.mock.calls.map((call) => call.join(" ")).join("\n");
 
       expect(lines).toContain("[CITA/Trace] prepare conversation=conversation-a");
-      expect(lines).toContain("status=accepted dialogueAct=inform rewrite=unchanged refs=[]");
+      expect(lines).toContain("status=accepted rewrite=unchanged refs=[]");
     } finally {
       log.mockRestore();
     }

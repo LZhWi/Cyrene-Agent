@@ -40,9 +40,11 @@ describe("resolveActionGateProfile", () => {
     expect(profile.fallback.jsonText).toBe(true);
   });
 
-  it("returns auto-only profile for MiniMax (always auto)", () => {
+  it("returns required-first profile for MiniMax (required preferred, auto as fallback)", () => {
     const profile = resolveActionGateProfile(ctx("minimax", "on"));
-    expect(profile.toolChoice.modes).toEqual(["auto"]);
+    expect(profile.toolChoice.modes).toContain("required");
+    expect(profile.toolChoice.modes).toContain("auto");
+    expect(profile.reasoning.preferredForActionGate).toBe("disable");
   });
 
   it("returns required-only profile for Kimi reasoning on (named unavailable, required still works)", () => {

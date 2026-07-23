@@ -77,32 +77,24 @@ export interface TurnUnderstandingInput {
 }
 
 export interface TurnUnderstanding {
-  dialogueAct: { type: DialogueActType };
   resolvedReferences: Array<{
     surface: string;
     targetRef: ContextRef;
     relation: "direct" | "candidate_position" | "previous" | "focused" | "comparison_item";
   }>;
-  topicTransition: "continue" | "switch" | "return" | "unclear";
   focusedEntityRefs: ContextRef[];
   contextualizedQuery: string;
-  rewriteStatus: "unchanged" | "contextualized" | "ambiguous";
-  uncertainties: Array<{
-    type: "multiple_references" | "missing_context" | "expired_context" | "unclear_dialogue_act" | "topic_ambiguity";
-    description: string;
-  }>;
+  rewriteStatus: "unchanged" | "rewritten" | "insufficient_context";
 }
 
 export interface ContextPackage {
   originalQuery: string;
   contextualizedQuery: string;
   rewriteStatus: TurnUnderstanding["rewriteStatus"];
-  dialogueAct?: TurnUnderstanding["dialogueAct"];
   resolvedReferences: TurnUnderstanding["resolvedReferences"];
   focusedContexts: ModelVisibleContext[];
   /** 当前仍可引用的已展示上下文。它是证据，不代表 CITA 替 Agent 做了决定。 */
   supportingContexts?: ModelVisibleContext[];
-  uncertaintyNotes: string[];
   semanticStatus: "ready" | "degraded" | "unavailable";
   stateRevision: number;
 }

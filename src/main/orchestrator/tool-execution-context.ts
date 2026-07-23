@@ -37,3 +37,25 @@ export function buildToolExecutionContext(results: ToolCallResult[]): string {
     "[/TOOL_EXECUTION_CONTEXT]",
   ].join("\n");
 }
+
+export function buildExecutionBrief(
+  objective: string,
+  targetRefs: string[],
+  contextualizedQuery: string,
+  refVerification?: { verified: boolean; detail: string },
+): string {
+  return [
+    "[EXECUTION_BRIEF]",
+    `执行目标：${objective}`,
+    "",
+    "targetRefs（模型理解）：",
+    JSON.stringify(targetRefs ?? [], null, 2),
+    "",
+    refVerification
+      ? `引用验证：${refVerification.verified ? "✅ 已验证" : "❌ " + refVerification.detail}`
+      : "引用验证：不需要",
+    "",
+    `用户实际问题：${contextualizedQuery}`,
+    "[/EXECUTION_BRIEF]",
+  ].join("\n");
+}

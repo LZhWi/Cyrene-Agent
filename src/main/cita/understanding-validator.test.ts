@@ -34,17 +34,14 @@ function input(availableContexts = [context()]): TurnUnderstandingInput {
 
 function candidate(overrides: Partial<TurnUnderstanding> = {}): TurnUnderstanding {
   return {
-    dialogueAct: { type: "select" },
     resolvedReferences: [{
       surface: "第一首",
       targetRef: "music-candidate-1",
       relation: "candidate_position",
     }],
-    topicTransition: "continue",
     focusedEntityRefs: ["music-candidate-1"],
     contextualizedQuery: "用户选择当前候选中的第一首《胆小鬼》。",
-    rewriteStatus: "contextualized",
-    uncertainties: [],
+    rewriteStatus: "rewritten",
     ...overrides,
   };
 }
@@ -69,7 +66,7 @@ describe("validateUnderstanding", () => {
     expect(result.understanding.resolvedReferences).toEqual([]);
     expect(result.understanding.focusedEntityRefs).toEqual([]);
     expect(result.understanding.contextualizedQuery).toBe("第一首吧");
-    expect(result.understanding.rewriteStatus).toBe("ambiguous");
+    expect(result.understanding.rewriteStatus).toBe("insufficient_context");
     expect(result.reasons).toContain("cross_conversation_ref:music-candidate-1");
   });
 
@@ -117,18 +114,14 @@ describe("validateUnderstanding", () => {
     }
   });
 
-  it("keeps independently valid dialogue and topic fields during rewrite fallback", () => {
+  it("falls back to the original query during rewrite fallback when refs are empty", () => {
     const result = validateUnderstanding(input([]), candidate({
-      dialogueAct: { type: "correct" },
-      topicTransition: "return",
       resolvedReferences: [],
       focusedEntityRefs: [],
     }), now);
 
     expect(result.status).toBe("degraded");
     if (result.status === "degraded") {
-      expect(result.understanding.dialogueAct.type).toBe("correct");
-      expect(result.understanding.topicTransition).toBe("return");
       expect(result.understanding.contextualizedQuery).toBe("第一首吧");
     }
   });

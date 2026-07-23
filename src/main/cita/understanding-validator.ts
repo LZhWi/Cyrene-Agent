@@ -45,7 +45,7 @@ export function validateUnderstanding(
   const lacksTrustedGrounding = resolvedReferences.length === 0 && focusedEntityRefs.length === 0;
   const rewriteIsUnsupported = rewriteDiffers && (
     candidate.rewriteStatus === "unchanged"
-    || candidate.rewriteStatus === "contextualized" && lacksTrustedGrounding
+    || candidate.rewriteStatus === "rewritten" && lacksTrustedGrounding
   );
 
   if (rewriteIsUnsupported) reasons.add("unsupported_contextualized_query");
@@ -55,7 +55,7 @@ export function validateUnderstanding(
     resolvedReferences,
     focusedEntityRefs,
     contextualizedQuery: mustFallback ? input.originalQuery : candidate.contextualizedQuery,
-    rewriteStatus: mustFallback ? "ambiguous" : candidate.rewriteStatus,
+    rewriteStatus: mustFallback ? "insufficient_context" : candidate.rewriteStatus,
   };
 
   if (!mustFallback) return { status: "accepted", understanding };

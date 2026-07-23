@@ -5,8 +5,7 @@ import { buildCitaContextBlock } from "./context-package";
 const fixture: ContextPackage = {
   originalQuery: "第一首吧",
   contextualizedQuery: "选择当前候选中的第一首。",
-  rewriteStatus: "contextualized",
-  dialogueAct: { type: "select" },
+  rewriteStatus: "rewritten",
   resolvedReferences: [{
     surface: "第一首",
     targetRef: "candidate-1",
@@ -21,7 +20,6 @@ const fixture: ContextPackage = {
     lifecycle: "active",
     source: "tool_result",
   }],
-  uncertaintyNotes: [],
   semanticStatus: "ready",
   stateRevision: 1,
 };

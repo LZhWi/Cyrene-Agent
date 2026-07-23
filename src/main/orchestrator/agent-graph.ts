@@ -1,5 +1,6 @@
 import { Annotation, Command, END, START, StateGraph } from "@langchain/langgraph";
 import { AgentRuntimeError } from "./agent-runtime-error";
+import { perf } from "../perf-trace";
 import type { ToolCallResult } from "./types";
 import type { ChatMessage } from "./vendors/types";
 
@@ -65,6 +66,7 @@ const GraphState = Annotation.Root({
 export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps): Promise<AgentGraphState> {
   const maxIterations = Math.max(1, deps.maxIterations ?? 12);
 
+  const compileTimer = perf.begin("graph_build_compile");
   const graph = new StateGraph(GraphState)
     .addNode("decide", async (state) => {
       deps.trace?.("decide", state);
@@ -130,8 +132,10 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
     .addEdge("execute", "routeAfterTool")
     .addEdge("soul", END)
     .compile();
+  compileTimer.end();
 
-  return await graph.invoke({
+  const invokeTimer = perf.begin("graph_invoke");
+  const result = await graph.invoke({
     ...input,
     decision: undefined,
     currentAction: undefined,
@@ -143,4 +147,6 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
     // 保持 LangGraph 自己的递归保护在域特定迭代错误之后。
     recursionLimit: maxIterations * 3 + 6,
   });
+  invokeTimer.end();
+  return result;
 }

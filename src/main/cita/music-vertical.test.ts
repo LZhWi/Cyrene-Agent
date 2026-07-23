@@ -21,28 +21,27 @@ function serviceDouble() {
 
 function understanding(input: TurnUnderstandingInput): TurnUnderstanding {
   const candidate = input.availableContexts.find((context) => context.kind === "candidate" && context.position === 1);
-  const awaiting = input.availableContexts.some((context) => context.kind === "awaiting_question");
   if (input.originalQuery === "第一首吧" && candidate) {
     return {
-      dialogueAct: { type: "select" },
       resolvedReferences: [{ surface: "第一首", targetRef: candidate.contextRef, relation: "candidate_position" }],
-      topicTransition: "continue",
       focusedEntityRefs: [candidate.contextRef],
       contextualizedQuery: `用户选择当前歌曲候选中的第一首《${candidate.label}》。`,
-      rewriteStatus: "contextualized",
-      uncertainties: [],
+      rewriteStatus: "rewritten",
     };
   }
   if (input.originalQuery === "第四首名字挺怪") {
     return {
-      dialogueAct: { type: "comment" }, resolvedReferences: [], topicTransition: "continue",
-      focusedEntityRefs: [], contextualizedQuery: input.originalQuery, rewriteStatus: "unchanged", uncertainties: [],
+      resolvedReferences: [],
+      focusedEntityRefs: [],
+      contextualizedQuery: input.originalQuery,
+      rewriteStatus: "unchanged",
     };
   }
   return {
-    dialogueAct: { type: input.originalQuery === "好啊" && awaiting ? "affirm" : "inform" },
-    resolvedReferences: [], topicTransition: "continue", focusedEntityRefs: [],
-    contextualizedQuery: input.originalQuery, rewriteStatus: "unchanged", uncertainties: [],
+    resolvedReferences: [],
+    focusedEntityRefs: [],
+    contextualizedQuery: input.originalQuery,
+    rewriteStatus: "unchanged",
   };
 }
 
@@ -93,7 +92,6 @@ describe("CITA music vertical", () => {
       conversationId: "c1", turnId: "turn-2", originalQuery: "第一首吧", recentDialogue: [],
     });
     expect(prepared.contextPackage).toMatchObject({
-      dialogueAct: { type: "select" },
       resolvedReferences: [{ targetRef: candidates[0].contextRef }],
       semanticStatus: "ready",
     });
@@ -106,13 +104,11 @@ describe("CITA music vertical", () => {
     const comment = await env.cita.prepareTurn({
       conversationId: "c1", turnId: "turn-comment", originalQuery: "第四首名字挺怪", recentDialogue: [],
     });
-    expect(comment.contextPackage?.dialogueAct?.type).toBe("comment");
     expect(comment.contextBlock).not.toContain("toolName");
 
     const withoutQuestion = await env.cita.prepareTurn({
       conversationId: "c1", turnId: "turn-no-question", originalQuery: "好啊", recentDialogue: [],
     });
-    expect(withoutQuestion.contextPackage?.dialogueAct?.type).toBe("inform");
 
     env.cita.ingest({
       type: "context_upserted", eventId: "awaiting-1", conversationId: "c1", occurredAt: 1_000, source: "test",
@@ -124,7 +120,6 @@ describe("CITA music vertical", () => {
     const withQuestion = await env.cita.prepareTurn({
       conversationId: "c1", turnId: "turn-question", originalQuery: "好啊", recentDialogue: [],
     });
-    expect(withQuestion.contextPackage?.dialogueAct?.type).toBe("affirm");
     expect(env.service.playTrack).not.toHaveBeenCalled();
   });
 

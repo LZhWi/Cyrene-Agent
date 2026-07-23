@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { parseTurnUnderstanding } from "./schema";
 
 const valid = {
-  dialogueAct: { type: "select" },
   resolvedReferences: [
     {
       surface: "第一首",
@@ -10,11 +9,9 @@ const valid = {
       relation: "candidate_position",
     },
   ],
-  topicTransition: "continue",
   focusedEntityRefs: ["music-candidate-1"],
   contextualizedQuery: "用户选择当前候选中的第一首《胆小鬼》。",
-  rewriteStatus: "contextualized",
-  uncertainties: [],
+  rewriteStatus: "rewritten",
 };
 
 describe("parseTurnUnderstanding", () => {
@@ -22,22 +19,28 @@ describe("parseTurnUnderstanding", () => {
     expect(parseTurnUnderstanding(valid)).toEqual(valid);
   });
 
-  it("normalizes a model-produced dialogueAct string without losing trusted references", () => {
-    expect(parseTurnUnderstanding({ ...valid, dialogueAct: "select" })).toEqual(valid);
+  it("ignores legacy fields (dialogueAct, topicTransition, uncertainties)", () => {
+    const withLegacy = {
+      ...valid,
+      dialogueAct: { type: "select" },
+      topicTransition: "continue",
+      uncertainties: [],
+    };
+    expect(parseTurnUnderstanding(withLegacy)).toEqual(valid);
   });
 
   it.each(["toolName", "toolCall", "execute", "requiredToolArgs", "trackId", "provider"])(
-    "rejects execution field %s",
+    "ignores extra execution field %s",
     (field) => {
-      expect(() => parseTurnUnderstanding({ ...valid, [field]: "forbidden" })).toThrow(/unknown/i);
+      expect(parseTurnUnderstanding({ ...valid, [field]: "forbidden" })).toEqual(valid);
     },
   );
 
-  it("rejects unknown nested fields", () => {
-    expect(() => parseTurnUnderstanding({
+  it("ignores unknown nested fields in legacy dialogueAct", () => {
+    expect(parseTurnUnderstanding({
       ...valid,
       dialogueAct: { type: "select", tool: "music_play_track" },
-    })).toThrow(/unknown/i);
+    })).toEqual(valid);
   });
 
   it("allows reference existence to be checked by the validation layer", () => {
@@ -57,5 +60,14 @@ describe("parseTurnUnderstanding", () => {
       ...valid,
       contextualizedQuery: "x".repeat(2_001),
     })).toThrow(/contextualizedQuery/i);
+  });
+
+  it("normalizes legacy rewriteStatus values", () => {
+    expect(parseTurnUnderstanding({ ...valid, rewriteStatus: "contextualized" }).rewriteStatus).toBe("rewritten");
+    expect(parseTurnUnderstanding({ ...valid, rewriteStatus: "ambiguous" }).rewriteStatus).toBe("insufficient_context");
+  });
+
+  it("rejects invalid rewriteStatus values", () => {
+    expect(() => parseTurnUnderstanding({ ...valid, rewriteStatus: "invalid" })).toThrow(/rewriteStatus/i);
   });
 });

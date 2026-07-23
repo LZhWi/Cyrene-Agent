@@ -31,6 +31,8 @@ function createBuildDeps(): BuildOptionsDeps {
     logWorldbookInjection: () => {},
     normalizeChatMessages: (raw) => raw as never,
     chatRequestTimeoutMs: 1000,
+    loadActionGateSystemPrompt: () => "",
+    loadNativeFcSystemPrompt: () => "",
   }
 }
 
@@ -182,6 +184,7 @@ describe("build-options", () => {
       contextPackage: {
         originalQuery: "第二首",
         contextualizedQuery: "播放当前网易云日推第二首",
+        resolvedReferences: [],
       },
     }))
     const originalUserMessage = { role: "user", content: "第二首" }
@@ -197,7 +200,6 @@ describe("build-options", () => {
     expect(result.options.messages.at(-1)).toEqual(originalUserMessage)
     expect(result.options.toolSystemContent).toContain("[CITA_CONTEXT]")
     expect(result.options.toolSystemContent).toContain("music-candidate-1")
-    expect(result.options.soulSystemBaseContent).toContain("[CITA_CONTEXT]")
     expect(result.options.originalQuery).toBe("第二首")
     expect(result.options.contextualizedQuery).toBe("播放当前网易云日推第二首")
     expect(result.options.citaContextBlock).toContain("music-candidate-1")

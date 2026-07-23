@@ -8,3 +8,18 @@ export function buildCitaContextBlock(pkg: ContextPackage): string {
     "[/CITA_CONTEXT]",
   ].join("\n");
 }
+
+export function buildResponseContext(
+  contextualizedQuery: string,
+  resolvedReferences: Array<{ surface: string; targetRef: string }>,
+): string {
+  const refs = resolvedReferences
+    .map((r) => `${r.surface} = ${r.targetRef}`)
+    .join("，");
+  return [
+    "[RESPONSE_CONTEXT]",
+    `用户实际问题：${contextualizedQuery}`,
+    refs ? `指代关系：${refs}` : "",
+    "[/RESPONSE_CONTEXT]",
+  ].filter(Boolean).join("\n");
+}

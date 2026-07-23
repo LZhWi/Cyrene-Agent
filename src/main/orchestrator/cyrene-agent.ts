@@ -26,6 +26,7 @@ import {
 } from "./two-phase-fc-loop";
 import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
 import { ExecutionLedgerStore } from "./execution-ledger";
+import { perf } from "../perf-trace";
 
 const executionLedgers = new ExecutionLedgerStore();
 
@@ -61,6 +62,14 @@ export interface CyreneRunOptions {
   toolSystemContent: string;
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。 */
   soulSystemBaseContent: string;
+  /** 不带时间戳前缀的 messages，给 Action Gate 用。未传时回退到 messages。 */
+  cleanMessages?: ChatMessage[];
+  /** Native FC 专用 system prompt（从 native_fc_system.md 读取）。 */
+  nativeFcSystemContent?: string;
+  /** Action Gate 专用 system prompt（从 action_gate_system.md 读取）。 */
+  actionGateSystemPrompt?: string;
+  /** [RESPONSE_CONTEXT] 文本，从 CITA 结果生成，给 Soul 动态追加。 */
+  responseContext?: string;
 }
 
 /** FC 循环最终结果（供桥层做副作用用）。 */
@@ -204,7 +213,9 @@ export class CyreneAgent extends AbstractAgent {
         try {
           subscriber.next({ type: EventType.RUN_STARTED, threadId, runId });
 
+          const adapterTimer = perf.begin("get_adapter");
           const adapter = getAdapterForConfig(options.settings);
+          adapterTimer.end();
 
           const executeTool = (tc: Parameters<typeof executeToolCall>[0], runnableToolIds: Set<string>) => executeToolCall(tc, runnableToolIds, {
             userQuery: extractLastUserQuery(options.messages),
@@ -219,6 +230,11 @@ export class CyreneAgent extends AbstractAgent {
             tools: options.tools ?? toolRegistry.getEnabledTools(),
             toolSystemContent: options.toolSystemContent,
             soulSystemBaseContent: options.soulSystemBaseContent,
+            cleanMessages: options.cleanMessages,
+            nativeFcSystemContent: options.nativeFcSystemContent,
+            actionGateSystemPrompt: options.actionGateSystemPrompt,
+            responseContext: options.responseContext,
+            conversationId: options.conversationId ?? "default",
             timeoutMs: options.timeoutMs,
             executeTool,
             onEvent: (event: TwoPhaseEvent) => {
@@ -232,18 +248,18 @@ export class CyreneAgent extends AbstractAgent {
           const runtime = resolveAgentRuntime(options.agentRuntime);
           console.log(`${LOG_PREFIX} agentRuntime=${runtime} provider=${options.settings.provider} model=${options.settings.model}`);
           const result: TwoPhaseFcResult = runtime === "langgraph"
-            ? await runLangGraphAgentLoop({
+            ? await perf.track("langgraph_agent_loop", () => runLangGraphAgentLoop({
               ...commonOptions,
               originalQuery: options.originalQuery ?? extractLastUserQuery(options.messages),
               contextualizedQuery: options.contextualizedQuery ?? options.originalQuery ?? extractLastUserQuery(options.messages),
               citaContextBlock: options.citaContextBlock ?? "",
               imageCaptionFallback: options.imageCaptionFallback,
               executionLedger,
-            })
-            : await runTwoPhaseFcLoop({
+            }))
+            : await perf.track("legacy_agent_loop", () => runTwoPhaseFcLoop({
               ...commonOptions,
               imageCaptionFallback: options.imageCaptionFallback,
-            });
+            }));
 
           this.lastResult = {
             reply: result.reply,

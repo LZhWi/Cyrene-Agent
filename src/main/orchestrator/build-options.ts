@@ -32,6 +32,8 @@ import {
   resolveChatContextTimezone,
   type ChatContextMessage,
 } from "../chat-time-context";
+import { perf } from "../perf-trace";
+import { buildResponseContext } from "../cita/context-package";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
@@ -69,6 +71,8 @@ export interface BuildOptionsDeps {
   normalizeChatMessages: (raw: ReadonlyArray<unknown>) => ChatMessage[];
   chatRequestTimeoutMs: number;
   captionImageForFallback?: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
+  loadActionGateSystemPrompt: () => string;
+  loadNativeFcSystemPrompt: () => string;
   prepareCitaTurn?: (input: {
     conversationId: string;
     turnId: string;
@@ -76,7 +80,7 @@ export interface BuildOptionsDeps {
     recentDialogue: Array<{ role: "user" | "assistant"; text: string }>;
   }) => Promise<{
     contextBlock: string;
-    contextPackage?: { originalQuery: string; contextualizedQuery: string };
+    contextPackage?: { originalQuery: string; contextualizedQuery: string; resolvedReferences: Array<{ surface: string; targetRef: string }> };
   }>;
 }
 
@@ -278,7 +282,7 @@ export async function buildAgentRunOptions(
   const latestUserText = contentToText(messages.filter((m) => m.role === "user").at(-1)?.content) ?? "";
   const skillActivation = deps.resolveSlashActivation(slimMessages);
   const profile = deps.loadUserProfile();
-  const { messages: llmMessages, timeContext: conversationTimeContext } = buildConversationTimeContext(
+  const { cleanMessages: cleanLlm, timestampedMessages: llmMessages, timeContext: conversationTimeContext } = buildConversationTimeContext(
     messages as unknown as ChatContextMessage[],
     resolveChatContextTimezone(profile.timezone),
   );
@@ -286,19 +290,20 @@ export async function buildAgentRunOptions(
 
   let alwaysOnContext = "";
   try {
-    alwaysOnContext = await deps.buildAlwaysOnContext(latestUserText, slimMessages);
+    alwaysOnContext = await perf.track("build_always_on_context", () => deps.buildAlwaysOnContext(latestUserText, slimMessages));
   } catch (err) {
     console.warn("[Cyrene] always-on context build failed:", err);
   }
 
   let relationshipContext = "";
   try {
-    relationshipContext = await deps.buildRelationshipContext();
+    relationshipContext = await perf.track("build_relationship_context", () => deps.buildRelationshipContext());
   } catch (err) {
     console.warn("[Cyrene] relationship context build failed:", err);
   }
 
   let environmentContext = "";
+  const envTimer = perf.begin("build_environment_context");
   try {
     environmentContext = deps.buildEnvironmentContext(
       { provider: settings.provider, model: settings.model },
@@ -314,6 +319,7 @@ export async function buildAgentRunOptions(
   } catch (err) {
     console.warn("[Cyrene] environment context build failed:", err);
   }
+  envTimer.end();
 
   const enabledSkills = deps.skillRegistry.getEnabled();
   const skillCatalog = deps.buildSkillCatalog(enabledSkills);
@@ -324,6 +330,7 @@ export async function buildAgentRunOptions(
 
   let citaContextBlock = "";
   let contextualizedQuery = latestUserText;
+  let responseContext = "";
   if (deps.prepareCitaTurn) {
     try {
       const recentDialogue = messages
@@ -332,14 +339,20 @@ export async function buildAgentRunOptions(
         ))
         .slice(-12)
         .map((message) => ({ role: message.role, text: contentToText(message.content) }));
-      const prepared = await deps.prepareCitaTurn({
+      const prepared = await perf.track("cita_prepare_turn", () => deps.prepareCitaTurn!({
         conversationId,
         turnId: `${conversationId}:${messages.length}`,
         originalQuery: latestUserText,
         recentDialogue,
-      });
+      }));
       citaContextBlock = prepared.contextBlock;
       contextualizedQuery = prepared.contextPackage?.contextualizedQuery ?? latestUserText;
+      if (prepared.contextPackage) {
+        responseContext = buildResponseContext(
+          prepared.contextPackage.contextualizedQuery,
+          prepared.contextPackage.resolvedReferences,
+        );
+      }
       console.log(
         `[CITA/Trace] injection conversation=${conversationId} tool=${citaContextBlock.length > 0} soul=${citaContextBlock.length > 0} blockChars=${citaContextBlock.length}`,
       );
@@ -351,12 +364,12 @@ export async function buildAgentRunOptions(
   let toneInjection = "";
   if (deps.sceneEmbeddingIndex) {
     try {
-      toneInjection = await deps.buildToneInjection(
+      toneInjection = await perf.track("build_tone_injection", () => deps.buildToneInjection(
         latestUserText,
         slimLlmMessages,
         deps.getSceneEmbeddingProvider(),
         deps.sceneEmbeddingIndex,
-      );
+      ));
     } catch (err) {
       console.warn("[Cyrene] tone injection failed:", err);
     }
@@ -409,13 +422,16 @@ export async function buildAgentRunOptions(
     (alwaysOnContext ? "\n\n" + alwaysOnContext + "\n\n" : "") +
     (relationshipContext ? "\n\n" + relationshipContext + "\n\n" : "") +
     attachmentContext;
-  const soulSystemBaseContent = soulSystemWithoutCita
-    + (citaContextBlock ? "\n\n" + citaContextBlock : "");
+  const soulSystemBaseContent = soulSystemWithoutCita;
+
+  const nativeFcSystemContent = deps.loadNativeFcSystemPrompt();
+  const actionGateSystemPrompt = deps.loadActionGateSystemPrompt();
 
   deps.logWorldbookInjection(alwaysOnContext, systemContent);
 
   // 第一期：原始 messages 不再携带 system。FC 循环按阶段动态注入。
   const fcMessages: ChatMessage[] = withDirectImageAttachments(llmMessages as unknown as ChatMessage[], input);
+  const cleanFcMessages: ChatMessage[] = withDirectImageAttachments(cleanLlm as unknown as ChatMessage[], input);
   const imageCaptionFallback = buildImageCaptionFallbackMessages(
     toolSystemContent + "\n\n---\n\n" + soulSystemWithoutCita,
     llmMessages as unknown as ChatMessage[],
@@ -434,10 +450,14 @@ export async function buildAgentRunOptions(
         reasoning: settings.reasoning,
       },
       messages: fcMessages,
+      cleanMessages: cleanFcMessages,
       conversationId,
       originalQuery: latestUserText,
       contextualizedQuery,
       citaContextBlock,
+      responseContext,
+      nativeFcSystemContent,
+      actionGateSystemPrompt,
       timeoutMs: deps.chatRequestTimeoutMs,
       toolSystemContent,
       soulSystemBaseContent,
@@ -476,26 +496,29 @@ export async function onAgentRunFinished(
     updatedAt: Date.now(),
   });
 
-  await deps.recordRelationshipTurn({
-    userText: sideEffectUserText,
-    assistantText: chatContent,
-    cyreneFeeling: deps.runtimeState.feeling ?? "平静",
-    channel: channel ?? "desktop",
+  await perf.track("record_relationship_turn", async () => {
+    await deps.recordRelationshipTurn({
+      userText: sideEffectUserText,
+      assistantText: chatContent,
+      cyreneFeeling: deps.runtimeState.feeling ?? "平静",
+      channel: channel ?? "desktop",
+    });
   });
 
   const stickerIndex = deps.getStickerEmbeddingIndex?.() ?? deps.stickerEmbeddingIndex;
   const stickerQuery = (chatContent + "\n" + sideEffectUserText).slice(0, 1000);
-  const stickerCandidate =
-    settings.stickerEnabled && stickerIndex
-      ? (
-          await deps.matchSticker(
-            stickerQuery,
-            deps.getEmbeddingProvider(),
-            stickerIndex,
-            settings.stickerSimilarityThreshold ?? 0.55,
-          )
-        )?.id ?? null
-      : null;
+  let stickerCandidate: string | null = null;
+  if (settings.stickerEnabled && stickerIndex) {
+    const matched = await perf.track("match_sticker", () =>
+      deps.matchSticker(
+        stickerQuery,
+        deps.getEmbeddingProvider(),
+        stickerIndex,
+        settings.stickerSimilarityThreshold ?? 0.55,
+      ),
+    );
+    stickerCandidate = matched?.id ?? null;
+  }
   const stickerSettings = deps.loadStickerSettings();
   const sticker = stickerCandidate && stickerSettings[stickerCandidate] !== false ? stickerCandidate : null;
 

@@ -1782,10 +1782,77 @@ async function callChatCompletions(
   return callChatCompletionsStream(settings, messages, temperature, timeoutMs, label, () => {}, logTiming);
 }
 
+/**
+ * 非流式 chat completions 调用（CITA 专用）。
+ * CITA 不需要流式输出（它只要完整 JSON），非流式比流式快 ~2 倍。
+ * 支持 reasoningOverride 强制关闭 reasoning（CITA 不需要深度推理）。
+ */
+async function callChatCompletionsNonStream(
+  settings: ModelSettings,
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
+  temperature: number | undefined,
+  timeoutMs: number,
+  label: string,
+  reasoningOverride?: ModelSettings["reasoning"],
+  options?: { tools?: unknown[]; toolChoice?: "required" },
+): Promise<{ text: string; toolCalls: Array<{ name: string; arguments: string }> }> {
+  const cfg: VendorConfig = {
+    provider: settings.provider,
+    baseUrl: settings.baseUrl,
+    model: settings.model,
+    apiKey: settings.apiKey,
+    explicitTransport: settings.explicitTransport,
+    reasoning: reasoningOverride ?? settings.reasoning,
+  };
+  const adapter = getAdapterForConfig(cfg);
+  const http = adapter.buildRequest({
+    model: cfg.model,
+    messages,
+    ...(temperature !== undefined ? { temperature } : {}),
+    stream: false,
+    ...(options?.tools ? { tools: options.tools as never } : {}),
+    ...(options?.toolChoice === "required" ? { toolChoiceIntent: { mode: "must_call" as const } } : {}),
+  } as never, cfg);
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const startTime = Date.now();
+  console.log(`[TIMING] ${label} START (non-stream) timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`);
+
+  try {
+    const response = await fetch(http.url, {
+      method: "POST",
+      headers: http.headers,
+      body: http.body,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({})) as Record<string, unknown>;
+      const errMsg = (errorData as { error?: { message?: string } }).error?.message;
+      throw new Error(errMsg || `模型请求失败：HTTP ${response.status}`);
+    }
+    const json = await response.json();
+    const parsed = adapter.parseResponse(json);
+    const totalTime = Date.now() - startTime;
+    console.log(`[TIMING] ${label} OK in ${totalTime}ms resultLen=${parsed.text.length} toolCalls=${parsed.toolCalls.length}`);
+    return { text: parsed.text, toolCalls: parsed.toolCalls };
+  } catch (error) {
+    const totalTime = Date.now() - startTime;
+    if (error instanceof Error && error.name === "AbortError") {
+      console.log(`[TIMING] ${label} TIMEOUT at ${totalTime}ms`);
+    } else {
+      console.log(`[TIMING] ${label} ERROR at ${totalTime}ms: ${error}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 const citaService = new CitaService({
   store: new ContextStore(),
   engine: new RemoteSemanticEngine(
-    (request) => callChatCompletions(
+    async (request) => callChatCompletionsNonStream(
       loadModelSettings(),
       [
         { role: "system", content: request.systemPrompt },
@@ -1794,8 +1861,10 @@ const citaService = new CitaService({
       0,
       6_000,
       "CITA understandTurn",
+      { mode: "off" as const },
+      { tools: request.tools, toolChoice: request.toolChoice },
     ),
-    { timeoutMs: 6_000 },
+    { timeoutMs: 6_000, systemPrompt: loadPromptFile("cita_system.md") },
   ),
   getSettings: () => normalizeCitaSettings({
     enabled: loadGeneralSettings().citaEnabled,
@@ -4773,6 +4842,8 @@ app.whenReady().then(async () => {
         return { ok: false, error: err?.message || String(err) };
       }
     },
+    loadActionGateSystemPrompt: () => loadPromptFile("action_gate_system.md"),
+    loadNativeFcSystemPrompt: () => loadPromptFile("native_fc_system.md"),
     prepareCitaTurn: (input) => citaService.prepareTurn(input),
   };
   const onRunFinishedDeps: OnRunFinishedDeps = {

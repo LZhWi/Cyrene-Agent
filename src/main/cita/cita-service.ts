@@ -9,6 +9,7 @@ import { buildCitaContextBlock } from "./context-package";
 import type { ContextStore } from "./context-store";
 import type { CitaSemanticEngine } from "./semantic-engine";
 import { validateUnderstanding } from "./understanding-validator";
+import { perf } from "../perf-trace";
 
 export interface CitaPrepareTurnInput {
   conversationId: string;
@@ -85,11 +86,13 @@ export class CitaService {
     };
 
     try {
-      const candidate = await this.engine.understandTurn(understandingInput, signal);
+      const candidate = await perf.track("cita_engine_understand", () => this.engine.understandTurn(understandingInput, signal));
+      const validateTimer = perf.begin("cita_validate");
       const validation = validateUnderstanding(understandingInput, candidate, this.now());
+      validateTimer.end();
       if (validation.status === "rejected") {
         console.warn("[CITA] understandTurn status=rejected");
-        return this.buildUnavailablePackage(input, state.revision, validation.reasons);
+        return this.buildUnavailablePackage(input, state.revision);
       }
       const contextPackage = this.toContextPackage(
         input.originalQuery,
@@ -97,11 +100,12 @@ export class CitaService {
         state.contexts,
         state.revision,
         validation.status === "accepted" ? "ready" : "degraded",
-        validation.status === "degraded" ? validation.reasons : [],
       );
+      const blockTimer = perf.begin("cita_build_context_block");
       const contextBlock = buildCitaContextBlock(contextPackage);
+      blockTimer.end();
       console.log(
-        `[CITA/Trace] result conversation=${input.conversationId} status=${validation.status} dialogueAct=${validation.understanding.dialogueAct.type} rewrite=${validation.understanding.rewriteStatus} refs=${this.formatRefs(validation.understanding.resolvedReferences.map((reference) => reference.targetRef))} focused=${validation.understanding.focusedEntityRefs.length} supporting=${contextPackage.supportingContexts?.length ?? 0} blockChars=${contextBlock.length}`,
+        `[CITA/Trace] result conversation=${input.conversationId} status=${validation.status} rewrite=${validation.understanding.rewriteStatus} refs=${this.formatRefs(validation.understanding.resolvedReferences.map((reference) => reference.targetRef))} focused=${validation.understanding.focusedEntityRefs.length} supporting=${contextPackage.supportingContexts?.length ?? 0} blockChars=${contextBlock.length}`,
       );
       return { contextPackage, contextBlock };
     } catch (error) {
@@ -118,7 +122,6 @@ export class CitaService {
   private buildUnavailablePackage(
     input: CitaPrepareTurnInput,
     stateRevision: number,
-    uncertaintyNotes: string[] = [],
   ): CitaPrepareTurnResult {
     const supportingContexts = this.collectSupportingContexts(
       this.store.snapshot(input.conversationId).contexts,
@@ -130,7 +133,6 @@ export class CitaService {
       resolvedReferences: [],
       focusedContexts: [],
       supportingContexts,
-      uncertaintyNotes,
       semanticStatus: "unavailable",
       stateRevision,
     };
@@ -143,7 +145,6 @@ export class CitaService {
     contexts: ModelVisibleContext[],
     stateRevision: number,
     semanticStatus: ContextPackage["semanticStatus"],
-    validationNotes: string[],
   ): ContextPackage {
     const focusedRefs = new Set([
       ...understanding.focusedEntityRefs,
@@ -153,14 +154,9 @@ export class CitaService {
       originalQuery,
       contextualizedQuery: understanding.contextualizedQuery,
       rewriteStatus: understanding.rewriteStatus,
-      dialogueAct: understanding.dialogueAct,
       resolvedReferences: understanding.resolvedReferences,
       focusedContexts: contexts.filter((context) => focusedRefs.has(context.contextRef)),
       supportingContexts: this.collectSupportingContexts(contexts),
-      uncertaintyNotes: [
-        ...understanding.uncertainties.map((uncertainty) => uncertainty.description),
-        ...validationNotes,
-      ],
       semanticStatus,
       stateRevision,
     };

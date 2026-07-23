@@ -166,12 +166,17 @@ const PROFILES: ProfileDefinition[] = [
     },
   },
 
-  // ── MiniMax ── 永远 auto，ActionGate 强制关 thinking
+  // ── MiniMax ── required 优先，ActionGate 强制关 thinking
+  // 实测 MiniMax-M3 支持 tool_choice: required，协议服从率 100%。
+  // auto 保留在 modes 中仅作为 API 明确拒绝 required 时的兼容降级，
+  // 正常路径必须走 required，禁止静默降级到 auto。
   {
     match: { provider: "minimax" },
     profile: {
-      ...AUTO_ONLY_PROFILE,
+      toolChoice: { parameterAccepted: true, modes: ["required", "auto"], behaviorWhenOmitted: "auto" },
       reasoning: { canDisablePerRequest: true, preferredForActionGate: "disable" },
+      toolCalling: { reliableWithReasoning: true, requiresReasoningReplay: false },
+      fallback: { jsonText: true, maxProtocolRepairs: 1 },
     },
   },
 

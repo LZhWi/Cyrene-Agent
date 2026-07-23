@@ -20,11 +20,13 @@ import {
   parseAndValidateToolCallArguments,
   resolveToolForCapability,
 } from "./tool-argument-validator";
-import { buildToolExecutionContext } from "./tool-execution-context";
+import { buildToolExecutionContext, buildExecutionBrief } from "./tool-execution-context";
 import type { ToolDefinition } from "./tool-registry";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
 import type { TwoPhaseEvent, TwoPhaseFcResult, AgentLoopSettings } from "./two-phase-fc-loop";
 import type { ChatMessage, ChatRequest, ChatVendorAdapter, ToolCall } from "./vendors/types";
+import { perf } from "../perf-trace";
+import { contextRefRegistry } from "./tool-context";
 
 export interface LangGraphAgentLoopOptions {
   settings: AgentLoopSettings;
@@ -44,6 +46,11 @@ export interface LangGraphAgentLoopOptions {
   onEvent?: (event: TwoPhaseEvent) => void;
   recordUsage?: (input: number, output: number, calls: number) => void;
   signal?: AbortSignal;
+  cleanMessages?: ChatMessage[];
+  actionGateSystemPrompt?: string;
+  nativeFcSystemContent?: string;
+  responseContext?: string;
+  conversationId?: string;
 }
 
 const LOG_PREFIX = "[AgentGraph/Trace]";
@@ -63,12 +70,14 @@ async function callAdapter(
   signal?.addEventListener("abort", abort, { once: true });
   const timer = setTimeout(abort, timeoutMs);
   try {
+    const fetchTimer = perf.begin(`llm_http_fetch[${adapter.id}]`);
     const response = await fetch(http.url, {
       method: "POST",
       headers: http.headers,
       body: http.body,
       signal: controller.signal,
     });
+    fetchTimer.end(`status=${response.status}`);
     if (!response.ok) {
       const body = await response.text().catch(() => "");
       throw new AgentRuntimeError(
@@ -76,7 +85,10 @@ async function callAdapter(
         `模型请求失败：HTTP ${response.status}${body ? ` - ${body.slice(0, 200)}` : ""}`,
       );
     }
-    return adapter.parseResponse(await response.json());
+    const parseTimer = perf.begin("llm_parse_response");
+    const result = adapter.parseResponse(await response.json());
+    parseTimer.end();
+    return result;
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", abort);
@@ -178,8 +190,9 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
   const invokeWithFallback = async (
     buildRequest: (messages: ChatMessage[]) => ChatRequest,
     settingsOverride?: AgentLoopSettings,
+    messagesOverride?: ChatMessage[],
   ) => {
-    const activeMessages = fallbackMessages ?? options.messages;
+    const activeMessages = messagesOverride ?? fallbackMessages ?? options.messages;
     const effectiveSettings = settingsOverride ?? options.settings;
     try {
       return await callAdapter(
@@ -204,7 +217,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     }
   };
 
-  const result = await runAgentGraph({
+  const result = await perf.track("agent_graph_invoke", () => runAgentGraph({
     originalQuery: options.originalQuery,
     contextualizedQuery: options.contextualizedQuery,
     citaContextBlock: options.citaContextBlock,
@@ -270,10 +283,11 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           availableCapabilities: capabilities,
           toolResults: state.toolResults,
           strategy,
+          actionGateSystemPrompt: options.actionGateSystemPrompt,
           ...(protocolFeedback ? { protocolFeedback } : {}),
         });
 
-        const response = await invokeWithFallback(buildReq, actionGateSettings);
+        const response = await perf.track("decide_action_gate_llm", () => invokeWithFallback(buildReq, actionGateSettings, options.cleanMessages));
         trackUsage(response.usage);
 
         try {
@@ -291,10 +305,11 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           }
           // 协议修复：全新请求，带 error.code（不是 error.message）
           console.warn(`${LOG_PREFIX} node=action-gate protocol_repair error_code=${error.code} response=${jsonResponseSummary(response)}`);
-          const repairResponse = await invokeWithFallback(
+          const repairResponse = await perf.track("decide_action_gate_repair_llm", () => invokeWithFallback(
             (messages) => buildReq(messages, error.code),
             actionGateSettings,
-          );
+            options.cleanMessages,
+          ));
           trackUsage(repairResponse.usage);
           try {
             const decision = parseActionDecisionResponse({
@@ -320,6 +335,38 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       const selectedTool = resolveToolForCapability(enabledTools, decision.capability);
       options.onEvent?.({ type: "step_started", stepName: `agent-graph-tool-${selectedTool.id}` });
       try {
+        // 引用验证：检查需要可信引用的工具的 targetRefs 是否有效
+        const controlledInput = (selectedTool as ToolDefinition & { controlledInput?: Record<string, string> }).controlledInput;
+        const needsRefVerification = controlledInput
+          && Object.values(controlledInput).some((v) => v === "context_ref" || v === "context_ref_array");
+        let refVerification: { verified: boolean; detail: string } | undefined;
+        if (needsRefVerification && decision.targetRefs.length > 0) {
+          try {
+            for (const ref of decision.targetRefs) {
+              contextRefRegistry.resolve(ref, options.conversationId ?? "default");
+            }
+            refVerification = { verified: true, detail: "" };
+          } catch (error) {
+            refVerification = { verified: false, detail: error instanceof Error ? error.message : String(error) };
+            return [{
+              toolId: selectedTool.id,
+              args: {},
+              output: `引用验证失败：${refVerification.detail}。需要重新搜索或获取候选列表。`,
+              status: "failed",
+              errorCode: "E_TRUSTED_REF_VERIFICATION_FAILED",
+              terminal: false,
+              retryable: true,
+            }];
+          }
+        }
+
+        const executionBrief = buildExecutionBrief(
+          decision.objective,
+          decision.targetRefs,
+          state.contextualizedQuery,
+          refVerification,
+        );
+
         let args: Record<string, unknown> | undefined;
         let toolCall: ToolCall | undefined;
         let lastError: unknown;
@@ -327,18 +374,13 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           try {
             const resolved = await resolveNativeToolCall({
               model: options.settings.model,
-              messages: [],
-              toolSystemContent: options.toolSystemContent,
-              citaContextBlock: state.citaContextBlock,
-              decision,
+              nativeFcSystemPrompt: options.nativeFcSystemContent ?? "",
+              executionBrief,
               toolResults: state.toolResults,
               tool: selectedTool,
               ...(lastError instanceof Error ? { protocolFeedback: lastError.message } : {}),
             }, async (request) => {
-              const response = await invokeWithFallback((messages) => ({
-                ...request,
-                messages: [request.messages[0], ...messages],
-              }));
+              const response = await perf.track("execute_native_tool_llm", () => invokeWithFallback(() => request));
               trackUsage(response.usage);
               return response;
             });
@@ -365,7 +407,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           args,
         }, async () => {
           try {
-            const executed = await options.executeTool(toolCall, runnableToolIds);
+            const executed = await perf.track(`execute_tool[${selectedTool.id}]`, () => options.executeTool(toolCall, runnableToolIds));
             return typeof executed === "string" ? { status: "succeeded", output: executed } : executed;
           } catch (error) {
             return {
@@ -414,14 +456,15 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       try {
         const system = [
           options.soulSystemBaseContent,
+          options.responseContext ?? "",
           `[ACTION_DECISION]\n${JSON.stringify(decision)}\n[/ACTION_DECISION]`,
           buildToolExecutionContext(state.toolResults),
-        ].join("\n\n");
-        const response = await invokeWithFallback((messages) => ({
+        ].filter(Boolean).join("\n\n");
+        const response = await perf.track("respond_soul_llm", () => invokeWithFallback((messages) => ({
           model: options.settings.model,
           messages: [{ role: "system", content: system }, ...messages],
           stream: false,
-        }));
+        })));
         trackUsage(response.usage);
         const reply = stripLeakedChatTimeContext(stripToolProtocol(response.text))
           || "刚才没有生成正常回复，请再试一次。";
@@ -431,7 +474,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         options.onEvent?.({ type: "step_finished", stepName: "agent-graph-soul" });
       }
     },
-  });
+  }));
 
   return {
     reply: result.reply,

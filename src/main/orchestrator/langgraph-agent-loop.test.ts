@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
 import { ExecutionLedger } from "./execution-ledger";
+import { contextRefRegistry } from "./tool-context";
 import type { ToolDefinition } from "./tool-registry";
 import type {
   ChatMessage, ChatRequest, ChatResponse, ChatVendorAdapter, HttpRequest,
@@ -88,6 +89,9 @@ function options(adapter: FakeAdapter, executeTool = vi.fn(async () => ({
 }
 
 beforeEach(() => {
+  // 测试用的 context ref（ctx_song_1 等）未在全局 registry 注册，
+  // mock resolve 使引用验证始终通过，让测试聚焦于 agent loop 流程。
+  vi.spyOn(contextRefRegistry, "resolve").mockImplementation((() => ({})) as never);
   globalThis.fetch = vi.fn(async () => new Response("{}", { status: 200 })) as unknown as typeof fetch;
 });
 afterEach(() => vi.restoreAllMocks());

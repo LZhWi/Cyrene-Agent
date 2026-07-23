@@ -282,7 +282,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
         const conversationId = conversationIdOf(ctx);
         const candidateRefs = Array.isArray(args.candidateRefs) ? args.candidateRefs.map(String) : [];
         const refs = refsOf(ctx, hooks);
-        const payloads = candidateRefs.map((ref) => refs.resolve<MusicCandidateRefPayload>(ref, conversationId));
+        const payloads = candidateRefs.map((ref) => refs.resolve<MusicCandidateRefPayload>(ref, conversationId, "candidate"));
         const first = payloads[0];
         if (!first || payloads.some((payload) => (
           payload.setId !== first.setId
@@ -319,7 +319,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
         const conversationId = conversationIdOf(ctx);
         const candidateRef = String(args.candidateRef ?? "");
         console.log(`[MusicContext/Trace] playback-resolve conversation=${conversationId} ref=${candidateRef || "(empty)"}`);
-        const payload = refsOf(ctx, hooks).resolve<MusicCandidateRefPayload>(candidateRef, conversationId);
+        const payload = refsOf(ctx, hooks).resolve<MusicCandidateRefPayload>(candidateRef, conversationId, "candidate");
         if (payload.conversationId !== conversationId) throw new Error("E_CONTEXT_REF_CONVERSATION_MISMATCH");
         console.log(`[MusicContext/Trace] playback-resolved conversation=${conversationId} ref=${candidateRef}`);
         const dispatch = await service.playTrack({ ...payload, conversationId, runId: ctx?.runId });
