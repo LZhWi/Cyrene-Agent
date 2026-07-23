@@ -4610,17 +4610,20 @@ app.whenReady().then(async () => {
       const finished = await onAgentRunFinished(agent.lastResult, text, onRunFinishedDeps, "mobile");
       sticker = finished.sticker;
     }
+    // 显示 + history-log：保留原始回复（含可能漏出的舞台指示），让用户能看到异常并用单轮删除清掉。
+    // history-log 里的原始文本仅供显示/删除；喂 LLM 时由 describeMarkersForLlm(assistant) 剥离，模型侧不会重新吃到。
+    const displayReply = sticker ? `${rawReply} ${formatStickerMarker(sticker)}`.trim() : rawReply;
+    // RAG 长期记忆：存剥离后的干净版——单轮删除清不到 RAG，绝不能让异常污染长期记忆。
     const cleanReply = stripStickerStageDirections(rawReply);
-    const reply = sticker ? `${cleanReply} ${formatStickerMarker(sticker)}`.trim() : cleanReply;
 
     let assistantAt: string | undefined;
     try {
-      assistantAt = appendHistory(sessionId, "assistant", reply)?.at;
+      assistantAt = appendHistory(sessionId, "assistant", displayReply)?.at;
     } catch (err) {
       console.warn("[Mobile] appendHistory (assistant) 失败:", err);
     }
     void indexConversationTurn(sessionId, text, cleanReply);
-    return { reply, userContent, userAt, assistantAt };
+    return { reply: displayReply, userContent, userAt, assistantAt };
   });
 
   // 手机「桌面对话」只读镜像（阶段 1）：把桌面 proactive-chat 会话转成一个只读 HistoryBundle，

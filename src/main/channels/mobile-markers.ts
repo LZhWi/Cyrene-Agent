@@ -50,11 +50,9 @@ export function stripStickerStageDirections(content: string): string {
  *  标记本身仍留在存储与同步文本里，供 iOS/桌面镜像显示。 */
 export function describeMarkersForLlm(content: string, role: "user" | "assistant" = "user"): string {
   if (role === "assistant") {
-    return content
-      .replace(STICKER_RE, "")
-      .replace(IMAGE_RE, "")
-      .replace(/[ \t]{2,}/g, " ")
-      .trim();
+    // 她自己发的标记不进上下文；同时剥离 history-log 里可能残留的舞台指示，
+    // 使「显示保留原始、模型侧永远干净」——history-log 里的原始文本仅供用户查看/删除。
+    return stripStickerStageDirections(content.replace(STICKER_RE, "").replace(IMAGE_RE, ""));
   }
   return content
     .replace(STICKER_RE, (_m, id: string) => {

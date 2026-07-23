@@ -27,6 +27,12 @@ describe("mobile-markers", () => {
     expect(describeMarkersForLlm("好呀 [sticker:OK]", "assistant")).toBe("好呀");
   });
 
+  it("also strips leaked stage-directions when feeding assistant history to LLM", () => {
+    // history-log 存原始（含漏出的舞台指示 + 真标记），喂回 LLM 时应得到干净正文。
+    expect(describeMarkersForLlm("好呀～（发送表情包：开心） [sticker:OK]", "assistant")).toBe("好呀～");
+    expect(describeMarkersForLlm("（我发送了表情包：开心）", "assistant")).toBe("");
+  });
+
   it("replaces user image markers with subject-aware placeholder; drops assistant's own", () => {
     expect(describeMarkersForLlm("看这个 [image:deadbeef]")).toBe("看这个 （用户发送了图片）");
     expect(describeMarkersForLlm("[image:deadbeef]", "assistant")).toBe("");
