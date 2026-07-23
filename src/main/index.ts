@@ -41,7 +41,7 @@ import { retrieveQueuedDocumentChunks, runDocumentIndexJob } from "./rag/documen
 import { processDocumentIndexRequest } from "./rag/document-index-ipc";
 import { IMAGE_CAPTION_PROMPT, validateCaptionImagePath } from "./chat/image-caption";
 import { decideImageSendStrategy } from "./chat/image-send-strategy";
-import { buildAlwaysOnContext, buildMemoryInjection, runFunctionCallingLoop, scheduleMemoryWrite } from "./orchestrator";
+import { buildAlwaysOnContext, buildMemoryInjection, scheduleMemoryWrite } from "./orchestrator";
 import { CyreneAgent } from "./orchestrator/cyrene-agent";
 import { indexConversationTurn } from "./orchestrator/history-tools";
 import { buildToneInjection } from "./orchestrator/tone-injector";
@@ -615,11 +615,6 @@ interface RuntimeState {
   feeling: RuntimeFeeling;
   expression: number;
   updatedAt: number;
-}
-
-interface ChatReplyPayload {
-  reply: string;
-  sticker: string | null;
 }
 
 const RUNTIME_STATUSES: RuntimeStatus[] = ["陪伴中", "思考中", "工作中", "聆听中", "提醒中", "离线"];
@@ -2332,153 +2327,6 @@ async function observeRuntimeState(
   void latestUserText;
 }
 
-async function requestModelReply(inputMessages: unknown, styleFile = "01_default.md"): Promise<ChatReplyPayload> {
-  const settings = loadModelSettings();
-  if (!settings.apiKey) {
-    throw new Error("还没有填写 API Key，请先在设置里保存 API 配置。");
-  }
-
-  const messages = normalizeChatMessages(inputMessages);
-  if (messages.length === 0) {
-    throw new Error("没有可发送的聊天内容。");
-  }
-  const profile = loadUserProfile();
-  const chatContextTimezone = resolveChatContextTimezone(profile.timezone);
-  const skillActivation = resolveSlashActivation(messages);
-  const { messages: llmMessages, timeContext: conversationTimeContext } = buildConversationTimeContext(messages, chatContextTimezone);
-  const latestUserText = messages.filter((message) => message.role === "user").at(-1)?.content ?? "";
-
-  // 1. 构建 always-on 上下文（世界书 + L0/L1 画像）
-  let alwaysOnContext = "";
-  try {
-    alwaysOnContext = await buildAlwaysOnContext(latestUserText, messages);
-  } catch (err) {
-    console.warn("[Cyrene] always-on context build failed:", err);
-  }
-
-  // 1.1 自动注入相关记忆（L2 + 导入文档），让模型无需调 tool 也能感知
-  let memoryInjection = "";
-  try {
-    memoryInjection = await buildMemoryInjection(latestUserText);
-  } catch (err) {
-    console.warn("[Cyrene] memory injection failed:", err);
-  }
-
-  // 1.5 环境上下文（Step 1）：当前日期 / OS / 桌面真实路径 / 权限档位 / 工具可用情况 / 模型视觉能力
-  // 放在 always-on 之后、system prompt 末尾，让模型最近读到的就是机器事实，
-  // 降低"桌面在哪"这类低级幻觉。失败不影响主流程。
-  let environmentContext = "";
-  try {
-    environmentContext = buildEnvironmentContext(
-      { provider: settings.provider, model: settings.model },
-      { nickname: profile.nickname, callPreference: profile.callPreference, birthday: profile.birthday, defaultCity: profile.defaultCity, timezone: profile.timezone },
-    );
-  } catch (err) {
-    console.warn("[Cyrene] environment context build failed:", err);
-  }
-
-  // system prompt 拼装顺序：事实层在前，人格层在后，skill 清单 + /命令激活放最后。
-  // /命令拦截：命中 /skill-id 则当轮 system 注入 skill 正文（user message 原样，不污染 memory）
-  const skillCatalog = buildSkillCatalog(skillRegistry.getEnabled());
-  // 语气硬注入：embedding 匹配场景，强制注入语气规则 + 场景参考样本（必须遵守，优先级最高）
-  let toneInjection = "";
-  const sceneProvider = getSceneEmbeddingProvider();
-  if (sceneProvider && sceneEmbeddingIndex) {
-    try {
-      toneInjection = await buildToneInjection(latestUserText, llmMessages, sceneProvider, sceneEmbeddingIndex);
-    } catch (err) {
-      console.error("[Cyrene] tone injection failed:", err);
-    }
-  }
-  // 注入顺序：环境 → 人格设定 → skill → 记忆 → ★已激活世界知识（放最后、最靠近 user message）
-  // 世界知识放最后：LLM 对靠近 user 的信息权重更高；且避免被 system.md 的"不知道不要编"规则覆盖
-  const systemContent =
-    (environmentContext ? environmentContext + "\n\n" : "") +
-    (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
-    buildSystemPrompt(styleFile) +
-    (skillCatalog ? "\n\n---\n\n" + skillCatalog : "") +
-    skillActivation +
-    (memoryInjection ? memoryInjection + "\n\n" : "") +
-    (alwaysOnContext ? alwaysOnContext + "\n\n" : "") +
-    toneInjection;
-
-  // ── 诊断：WorldBook 注入验证 ──
-  logWorldbookInjection(alwaysOnContext, systemContent);
-
-  // 2. Function Calling 循环：模型自己决定调不调工具、调哪个
-  const fcMessages: Array<{ role: "system" | "user" | "assistant" | "tool"; content: string }> = [
-    { role: "system", content: systemContent },
-    ...llmMessages,
-  ];
-
-  let chatContent = "";
-
-  try {
-    const fcResult = await runFunctionCallingLoop(
-      settings,
-      fcMessages,
-      CHAT_REQUEST_TIMEOUT_MS,
-    );
-    chatContent = fcResult.reply;
-
-    // 工具执行日志
-    if (fcResult.toolResults.length > 0) {
-      console.log("[Cyrene] Function Calling 使用了 " + fcResult.toolResults.length + " 个工具:",
-        fcResult.toolResults.map(tr => tr.toolId).join(", "));
-    }
-  } catch (err) {
-    console.error("[Cyrene] Function Calling 失败，降级为普通对话", err);
-    // 降级：不带 tools 的普通 LLM 调用
-    chatContent = await callChatCompletions(
-      settings,
-      fcMessages as Array<{ role: "system" | "user" | "assistant"; content: string }>,
-      undefined,
-      CHAT_REQUEST_TIMEOUT_MS,
-      "主聊天（降级）",
-    );
-  }
-
-  if (!chatContent) {
-    throw new Error("模型没有返回有效回复。");
-  }
-
-  // 发送流式事件（非流式模式下一次性发送）
-  if (chatWindow && !chatWindow.isDestroyed()) {
-    chatWindow.webContents.send("chat:stream-chunk", chatContent);
-  }
-
-
-  scheduleMemoryWrite(latestUserText, chatContent);
-
-  const inferredStatus = inferRuntimeState(latestUserText, chatContent, false);
-  runtimeState.status = inferredStatus.status;
-  runtimeState.expression = feelingToExpression[runtimeState.feeling] ?? 0;
-  runtimeState.updatedAt = Date.now();
-
-  let sticker: string | null = null;
-  if (settings.stickerEnabled && stickerEmbeddingIndex) {
-    const provider = getEmbeddingProvider();
-    if (provider) {
-      const stickerQuery = (chatContent + "\n" + latestUserText).slice(0, 1000);
-      const matchResult = await matchSticker(stickerQuery, provider, stickerEmbeddingIndex, settings.stickerSimilarityThreshold);
-      sticker = matchResult?.id ?? null;
-    }
-  }
-
-  if (settings.runtimeSync === "local") {
-    broadcastRuntimeStateChanged();
-  } else if (settings.runtimeSync === "llm") {
-    broadcastRuntimeStateChanged();
-    void observeRuntimeState(settings, llmMessages, latestUserText, chatContent);
-  }
-
-
-  if (chatWindow && !chatWindow.isDestroyed()) {
-    chatWindow.webContents.send("chat:stream-done", { reply: chatContent, sticker });
-  }
-  return { reply: chatContent, sticker };
-}
-
 // 厂商短名映射（与 settings.ts 的 MODEL_PRESETS.shortName 镜像，需手动同步）。
 // 状态栏"正在喂养"在用户没填昵称时用这个兜底。
 const PROVIDER_SHORT_NAMES: Record<string, string> = {
@@ -3340,16 +3188,6 @@ ipcMain.handle(IPC.CHAT_SET_REASONING, (_event, payload: unknown) => {
   if (!normalized) return;
   saveModelSettings({ reasoning: normalized });
 });
-ipcMain.handle(IPC.CHAT_SEND_MESSAGE, async (_event, messages: unknown) => {
-  proactiveConversationLifecycle.onUserMessage();
-  proactiveConversationLifecycle.onConversationStarted();
-  try {
-    return await requestModelReply(messages);
-  } finally {
-    proactiveConversationLifecycle.onConversationEnded();
-  }
-});
-
 ipcMain.handle(IPC.CHAT_INGEST_FILES, async (_event, paths: unknown) => {
   const list = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === "string") : [];
   if (list.length === 0) return [];
@@ -4846,7 +4684,7 @@ app.whenReady().then(async () => {
   registerSchedulerIpc(schedulerStore, schedulerEngine, () => toolRegistry.getAllTools());
 
   // AG-UI 事件流桥：渲染进程 invoke(AGUI_RUN) → CyreneAgent 跑 FC 循环 → 事件透传
-  // buildOptions 复用 requestModelReply 的上下文构建；onRunFinished 复用副作用
+  // buildOptions 负责统一构建上下文；onRunFinished 复用副作用
   // Phase 0 重构：抽出到 orchestrator/build-options.ts，三处共用（桌面 / scheduler / bot）
   // deps 函数签名故意宽 (unknown/ReadonlyArray)；这里做一次包装把强类型函数适配进去
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

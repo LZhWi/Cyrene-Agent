@@ -18,20 +18,17 @@ export const IPC = {
   CHAT_CLOSE: "chat:close",
   CHAT_TOGGLE_MAXIMIZE: "chat:toggle-maximize",
   CHAT_IS_MAXIMIZED: "chat:is-maximized",
-  CHAT_SEND_MESSAGE: "chat:send-message",
   CHAT_INGEST_FILES: "chat:ingest-files",
   CHAT_PROCESS_DOCUMENTS: "chat:process-documents",
   CHAT_DOCUMENT_INDEX_PROGRESS: "chat:document-index-progress",
   CHAT_CANCEL_DOCUMENT_INDEX: "chat:cancel-document-index",
   CHAT_CAPTION_IMAGE: "chat:caption-image",
   CHAT_GET_IMAGE_SEND_STRATEGY: "chat:get-image-send-strategy",
-  CHAT_STREAM_CHUNK: "chat:stream-chunk",
-  CHAT_STREAM_DONE: "chat:stream-done",
   // 推理下拉（chat 窗口：原子读 + providerKey 写）
   CHAT_GET_REASONING_STATE: "chat:get-reasoning-state",
   CHAT_SET_REASONING: "chat:set-reasoning",
 
-  // AG-UI 事件流（替换上面的 chat:stream-* 的新通道）
+  // AG-UI 事件流
   AGUI_RUN: "agui:run",
   AGUI_EVENT: "agui:event",
   AGUI_CANCEL: "agui:cancel",

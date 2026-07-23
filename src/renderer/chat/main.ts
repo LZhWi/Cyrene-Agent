@@ -69,27 +69,6 @@ interface DocumentMessageAttachment {
   reason?: string;
 }
 
-interface ChatReplyPayload {
-  reply: string;
-  sticker: string | null;
-}
-
-function normalizeChatReplyPayload(payload: unknown): ChatReplyPayload {
-  if (typeof payload === "string") {
-    return { reply: payload.trim(), sticker: null };
-  }
-
-  if (payload && typeof payload === "object") {
-    const record = payload as Partial<ChatReplyPayload>;
-    return {
-      reply: typeof record.reply === "string" ? record.reply.trim() : "",
-      sticker: record.sticker ?? null,
-    };
-  }
-
-  return { reply: "", sticker: null };
-}
-
 interface ModelConfig {
   mode: "auto" | "manual";
   provider: string;
@@ -108,7 +87,6 @@ interface ChatApi {
     close: () => void;
     toggleMaximize: () => void;
     isMaximized: () => Promise<boolean>;
-    sendMessage: (messages: Array<{ role: "user" | "model"; content: string }>, style: string) => Promise<ChatReplyPayload>;
     ingestDroppedFiles: (files: File[]) => Promise<Attachment[]>;
     processDocuments: (filePaths: string[], query: string) => Promise<Attachment[]>;
     onDocumentIndexProgress?: (callback: (progress: DocumentIndexProgress) => void) => () => void;
@@ -397,8 +375,6 @@ const chatRailEmpty = document.getElementById("chat-rail-empty") as HTMLElement 
 
 // 旧版 localStorage key——首次启动时检测到老数据会迁移到主进程 chats 存储再清掉。
 const LEGACY_STORAGE_KEY = "cyrene.chat.history.v1";
-const FRONTEND_REPLY_TIMEOUT_MS = 35000;
-
 /**
  * Avatar source per role. Empty string = use the gradient placeholder
  * baked into the CSS background of `.msg--user .msg__avatar`.
@@ -2647,16 +2623,6 @@ function clearModelContexts(): boolean {
   return changed;
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);
-    promise
-      .then(resolve, reject)
-      .finally(() => window.clearTimeout(timer));
-  });
-}
-
-
 function isTalkMode(): boolean {
   const active = document.querySelector("#mode-dropdown .dm-opt.is-active") as HTMLElement | null;
   return active?.dataset?.value === "talk";
@@ -2667,19 +2633,6 @@ function getCurrentStyle(): string {
   const style = (active && active.dataset && active.dataset.value) || "01_default.md";
   // 日常聊天模式：前缀 "talk" 触发后端走 talk_system.md + tools:[]
   return isTalkMode() ? "talk" : style;
-}
-async function getModelReply(): Promise<ChatReplyPayload> {
-  if (!window.chat?.sendMessage) {
-    throw new Error("聊天 IPC 尚未就绪，请重启应用后再试。");
-  }
-  const modelMessages = buildModelMessages();
-  const payload = await withTimeout(
-    window.chat.sendMessage(modelMessages, getCurrentStyle()),
-    FRONTEND_REPLY_TIMEOUT_MS,
-    "模型响应超时，请稍后重试。",
-  );
-  if (clearModelContexts()) void saveSession();
-  return normalizeChatReplyPayload(payload);
 }
 
 let sending = false;
