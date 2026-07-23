@@ -21,6 +21,14 @@ export type ActionDecision =
       decision: "ask_user";
       reason: string;
       missingInformation: string[];
+    }
+  | {
+      /** Local trusted failure fact. It is never produced by a model. */
+      decision: "failure";
+      reason: "action_gate_failed";
+      code: string;
+      disposition: "repair" | "ask_user" | "refresh_state" | "execution_policy" | "fail_closed";
+      toolExecuted: false;
     };
 
 export type ActDecision = Extract<ActionDecision, { decision: "act" }>;

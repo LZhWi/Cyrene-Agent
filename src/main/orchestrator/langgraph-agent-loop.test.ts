@@ -15,8 +15,7 @@ const capability: ProviderCapability = {
 };
 
 class FakeAdapter implements ChatVendorAdapter {
-  // id="chatgpt" 让 Action Gate 走 FULL_PROFILE -> named_decision_tool 策略
-  // （submit_decision 虚拟工具被强制调用，测试用 enqueueDecision 模拟）
+  // id="chatgpt"；测试模型不在已验证 A 档清单，因此固定走 prompt_json。
   readonly id = "chatgpt";
   readonly transport = "openai" as const;
   capability = capability;
@@ -29,9 +28,9 @@ class FakeAdapter implements ChatVendorAdapter {
   enqueueToolCall(name: string, args: Record<string, unknown>, id = `call-${this.scripts.length + 1}`) {
     this.scripts.push({ toolCalls: [{ id, name, arguments: JSON.stringify(args) }] });
   }
-  /** 模拟 Action Gate 的 submit_decision 虚拟工具调用响应。 */
-  enqueueDecision(value: Record<string, unknown>, id = `call-${this.scripts.length + 1}`) {
-    this.scripts.push({ toolCalls: [{ id, name: "submit_decision", arguments: JSON.stringify(value) }] });
+  /** 模拟 Action Gate 的结构化 JSON 文本响应。 */
+  enqueueDecision(value: Record<string, unknown>) {
+    this.enqueueJson(value);
   }
   buildRequest(req: ChatRequest): HttpRequest {
     this.requests.push(req);
@@ -83,6 +82,7 @@ function options(adapter: FakeAdapter, executeTool = vi.fn(async () => ({
     originalQuery: "播放第一首",
     contextualizedQuery: "播放当前网易云日推第一首",
     citaContextBlock: "ctx_song_1",
+    trustedRefs: ["ctx_song_1", "ctx_song_2"],
     timeoutMs: 30_000,
     executeTool,
   };
@@ -112,7 +112,7 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
       expect.objectContaining({ name: "music_play_track", arguments: '{"candidateRef":"ctx_song_1"}' }),
       expect.any(Set),
     );
-    // Action Gate 请求也带 tools（submit_decision 虚拟工具），所以要按 toolName 过滤出原生 FC 请求
+    // Action Gate 不再带虚拟 tools；这里只筛真实 Native FC 请求。
     const nativeRequests = adapter.requests.filter(
       (request) => request.toolChoiceIntent?.toolName === "music_play_track",
     );
@@ -135,19 +135,34 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     expect(result.reply).toBe("你想听哪个版本？");
   });
 
-  it("repairs a malformed Action Gate tool call once", async () => {
+  it("repairs a malformed Action Gate JSON once", async () => {
     const adapter = new FakeAdapter();
-    // 第一次：LLM 没调 submit_decision，返回纯文本 -> E_ACTION_GATE_PROTOCOL
+    // 第一次返回非 JSON，第二次按结构化错误码修复。
     adapter.enqueueText("我直接回复用户");
-    // 第二次：LLM 正确调用 submit_decision
-    adapter.enqueueDecision({ decision: "respond" });
+    adapter.enqueueDecision({ decision: "respond", reason: "ready" });
     adapter.enqueueText("好的。");
 
     const result = await runLangGraphAgentLoop(options(adapter));
 
-    expect(String(adapter.requests[1].messages[0].content)).toContain("上一次决策未通过协议校验");
-    expect(String(adapter.requests[1].messages[0].content)).toContain("MISSING_DECISION_TOOL_CALL");
+    expect(String(adapter.requests[1].messages.at(-1)?.content)).toContain("repair");
+    expect(String(adapter.requests[1].messages.at(-1)?.content)).toContain("NO_JSON_OBJECT");
     expect(result.reply).toBe("好的。");
+  });
+
+  it("routes exhausted Action Gate failures to Failure Soul without executing tools", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueText("not json");
+    adapter.enqueueText("still not json");
+    adapter.enqueueText("again not json");
+    adapter.enqueueText("这次没有执行任何操作，请稍后重试。");
+    const executeTool = vi.fn();
+
+    const result = await runLangGraphAgentLoop(options(adapter, executeTool));
+
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(result.reply).toBe("这次没有执行任何操作，请稍后重试。");
+    expect(String(adapter.requests[3].messages[0].content)).toContain("FAILURE_SOUL_POLICY");
+    expect(String(adapter.requests[3].messages[0].content)).toContain('"toolExecuted":false');
   });
 
   it("repairs a native ToolCall whose arguments fail Runtime validation", async () => {
@@ -163,6 +178,33 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
 
     expect(String(adapter.requests[2].messages[0].content)).toContain("E_TOOL_ARGUMENT_SOURCE");
     expect(executeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops Native FC after one repair and sends a local non-execution fact to Soul", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({
+      decision: "act",
+      capability: "music.play_track",
+      objective: "播放第一首",
+      targetRefs: ["ctx_song_1"],
+      afterSuccess: "respond",
+    });
+    adapter.enqueueText("pretend tool call");
+    adapter.enqueueText("still no real tool call");
+    adapter.enqueueText("工具参数没有可靠生成，所以没有执行播放。");
+    const executeTool = vi.fn();
+
+    const result = await runLangGraphAgentLoop(options(adapter, executeTool));
+
+    expect(executeTool).not.toHaveBeenCalled();
+    expect(result.toolResults).toContainEqual(expect.objectContaining({
+      status: "failed",
+      errorCode: "E_NATIVE_TOOL_PROTOCOL",
+      toolExecuted: false,
+      retryable: false,
+    }));
+    expect(String(adapter.requests[3].messages[0].content)).toContain("FAILURE_SOUL_POLICY");
+    expect(String(adapter.requests[3].messages[0].content)).toContain('"toolExecuted":false');
   });
 
   it("feeds failed execution facts back so the model can explicitly retry", async () => {
@@ -181,7 +223,7 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
 
     expect(executeTool).toHaveBeenCalledTimes(2);
     expect(result.toolResults.map((item) => item.status)).toEqual(["failed", "succeeded"]);
-    expect(String(adapter.requests[2].messages[0].content)).toContain("E_LAUNCH_FAILED");
+    expect(String(adapter.requests[2].messages.at(-1)?.content)).toContain("E_LAUNCH_FAILED");
   });
 
   it("does not repeat a successful side effect because routeAfterTool routes directly to Soul", async () => {

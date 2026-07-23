@@ -13,6 +13,8 @@ export interface ToolCallResult {
   retryable?: boolean;
   // 本次调用未真正执行，是 ExecutionLedger 缓存命中
   deduplicated?: boolean;
+  /** false means the failure happened before Tool Runtime was invoked. */
+  toolExecuted?: false;
 }
 
 export interface ToolExecutionOutcome {

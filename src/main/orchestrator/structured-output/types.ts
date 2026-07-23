@@ -16,6 +16,7 @@ export interface StructuredOutputProfileContext {
   provider: string;
   model: string;
   transport: Transport;
+  endpointKind: "official" | "custom" | "local";
 }
 
 export interface StructuredOutputRepairPolicy {
@@ -28,6 +29,7 @@ export interface StructuredOutputRepairPolicy {
 export interface StructuredOutputProfile {
   id: string;
   provider: string;
+  model: string;
   transport?: Transport;
   mode: StructuredOutputMode;
   verification: StructuredOutputVerification;
@@ -39,4 +41,3 @@ export interface StructuredOutputProfile {
   reasoning: "disabled" | "preserve";
   repair: Record<StructuredOutputStage, StructuredOutputRepairPolicy>;
 }
-

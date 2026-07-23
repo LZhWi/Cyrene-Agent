@@ -1,5 +1,8 @@
 import { describe, expect, test } from "vitest";
-import { resolveStructuredOutputProfile } from "./profiles";
+import {
+  classifyStructuredOutputEndpoint,
+  resolveStructuredOutputProfile,
+} from "./profiles";
 
 describe("resolveStructuredOutputProfile", () => {
   test.each([
@@ -13,7 +16,12 @@ describe("resolveStructuredOutputProfile", () => {
     ["mimo", "mimo-v2.5-pro", "openai", "provider_json_object"],
     ["minimax", "MiniMax-M3", "openai", "prompt_json"],
   ] as const)("%s/%s resolves to %s", (provider, model, transport, mode) => {
-    expect(resolveStructuredOutputProfile({ provider, model, transport }).mode).toBe(mode);
+    expect(resolveStructuredOutputProfile({
+      provider,
+      model,
+      transport,
+      endpointKind: "official",
+    }).mode).toBe(mode);
   });
 
   test("custom and local endpoints are permanently prompt_json", () => {
@@ -22,6 +30,7 @@ describe("resolveStructuredOutputProfile", () => {
         provider,
         model: "gpt-5.6",
         transport: "openai",
+        endpointKind: provider === "local" ? "local" : "custom",
       })).toMatchObject({
         mode: "prompt_json",
         verification: "contract_required",
@@ -35,6 +44,7 @@ describe("resolveStructuredOutputProfile", () => {
       provider: "chatgpt",
       model: "future-unverified-model",
       transport: "openai",
+      endpointKind: "official",
     }).mode).toBe("prompt_json");
   });
 
@@ -43,6 +53,7 @@ describe("resolveStructuredOutputProfile", () => {
       provider: "claude",
       model: "claude-sonnet-4-6",
       transport: "openai",
+      endpointKind: "official",
     }).mode).toBe("prompt_json");
   });
 
@@ -51,6 +62,7 @@ describe("resolveStructuredOutputProfile", () => {
       provider: "minimax",
       model: "MiniMax-M3",
       transport: "openai",
+      endpointKind: "official",
     })).toMatchObject({
       mode: "prompt_json",
       requestHints: {
@@ -58,5 +70,31 @@ describe("resolveStructuredOutputProfile", () => {
         reasoningSplit: true,
       },
     });
+  });
+
+  test("a custom endpoint never inherits an A profile from its provider label or model name", () => {
+    expect(resolveStructuredOutputProfile({
+      provider: "chatgpt",
+      model: "gpt-5.6",
+      transport: "openai",
+      endpointKind: "custom",
+    })).toMatchObject({
+      id: "prompt-json-fallback",
+      mode: "prompt_json",
+      allowCapabilityPromotion: false,
+      requestHints: { sendJsonObject: false, reasoningSplit: false },
+    });
+  });
+
+  test.each([
+    ["https://api.openai.com/v1/", "official"],
+    ["https://proxy.example.com/v1", "custom"],
+    ["http://127.0.0.1:11434/v1", "local"],
+  ] as const)("classifies %s as %s", (configuredBaseUrl, endpointKind) => {
+    expect(classifyStructuredOutputEndpoint({
+      providerId: "chatgpt",
+      configuredBaseUrl,
+      officialBaseUrl: "https://api.openai.com/v1",
+    })).toBe(endpointKind);
   });
 });

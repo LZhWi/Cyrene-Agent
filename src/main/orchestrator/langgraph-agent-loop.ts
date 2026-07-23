@@ -1,18 +1,15 @@
 import { recordUsage } from "../token-usage-store";
 import { stripLeakedChatTimeContext } from "../chat-time-context";
 import {
-  buildActionGateRequest,
-  parseActionDecisionResponse,
-  ActionGateProtocolError,
+  runActionGate,
   type ActionCapability,
 } from "./action-gate";
 import { runAgentGraph, type AgentGraphState } from "./agent-graph";
 import { AgentRuntimeError } from "./agent-runtime-error";
 import {
-  resolveActionGateProfile,
-  resolveActionGateReasoningFromSettings,
-  selectActionGateStrategy,
-} from "./vendors/action-gate-profiles";
+  classifyStructuredOutputEndpoint,
+  resolveStructuredOutputProfile,
+} from "./structured-output/profiles";
 import { ExecutionLedger } from "./execution-ledger";
 import { resolveNativeToolCall } from "./native-function-calling";
 import { normalizeToolExecutionOutcome } from "./tool-outcome-normalizer";
@@ -38,6 +35,7 @@ export interface LangGraphAgentLoopOptions {
   originalQuery: string;
   contextualizedQuery: string;
   citaContextBlock: string;
+  trustedRefs?: string[];
   timeoutMs: number;
   maxIterations?: number;
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
@@ -123,35 +121,6 @@ function errorCodeOf(error: unknown): string {
   return token.startsWith("E_") ? token : "E_TOOL_EXECUTION_FAILED";
 }
 
-function jsonResponseSummary(response: Awaited<ReturnType<ChatVendorAdapter["parseResponse"]>>): string {
-  // 记录 toolCalls 信息：数量、name、arguments 是否合法 JSON
-  const toolCallSummaries = response.toolCalls.map((tc) => {
-    let argsStatus: string;
-    try {
-      JSON.parse(tc.arguments);
-      argsStatus = "valid";
-    } catch {
-      argsStatus = "INVALID_JSON";
-    }
-    return { name: tc.name, argsStatus, argsChars: tc.arguments.length };
-  });
-  // 仍然记录 text 的解析状态（兼容文本兜底路径的诊断）
-  let textKeys: string[] = [];
-  try {
-    const parsed = JSON.parse(response.text);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) textKeys = Object.keys(parsed as Record<string, unknown>);
-  } catch {
-    textKeys = ["<invalid-json>"];
-  }
-  return JSON.stringify({
-    finishReason: response.finishReason,
-    textChars: response.text.length,
-    textKeys,
-    toolCallCount: response.toolCalls.length,
-    toolCalls: toolCallSummaries,
-  });
-}
-
 export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions): Promise<TwoPhaseFcResult> {
   const startedAt = Date.now();
   const perCallTimeout = Math.max(1_000, Math.min(75_000, options.timeoutMs));
@@ -191,18 +160,21 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     buildRequest: (messages: ChatMessage[]) => ChatRequest,
     settingsOverride?: AgentLoopSettings,
     messagesOverride?: ChatMessage[],
+    requestSignal?: AbortSignal,
   ) => {
     const activeMessages = messagesOverride ?? fallbackMessages ?? options.messages;
     const effectiveSettings = settingsOverride ?? options.settings;
+    const activeSignal = requestSignal ?? options.signal;
     try {
       return await callAdapter(
         options.adapter,
         buildRequest(activeMessages),
         effectiveSettings,
         Math.min(perCallTimeout, remainingBudget()),
-        options.signal,
+        activeSignal,
       );
     } catch (error) {
+      if (activeSignal?.aborted) throw error;
       if (usedImageCaptionFallback || !options.imageCaptionFallback) throw error;
       usedImageCaptionFallback = true;
       fallbackMessages = await options.imageCaptionFallback();
@@ -212,7 +184,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         buildRequest(fallbackMessages),
         effectiveSettings,
         Math.min(perCallTimeout, remainingBudget()),
-        options.signal,
+        activeSignal,
       );
     }
   };
@@ -240,92 +212,84 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       }
       options.onEvent?.({ type: "step_started", stepName: "agent-graph-action-gate" });
       try {
-        // GPT 第 2 点：先归一化 reasoning 状态为 on/off
-        const requestedReasoningState = resolveActionGateReasoningFromSettings(
-          options.adapter.id,
-          options.settings.model,
-          options.settings.reasoning,
-        );
-        const requestedProfile = resolveActionGateProfile({
+        const profile = resolveStructuredOutputProfile({
           provider: options.adapter.id,
           transport: options.adapter.transport,
           model: options.settings.model,
-          reasoning: requestedReasoningState,
+          endpointKind: classifyStructuredOutputEndpoint({
+            providerId: options.adapter.id,
+            configuredBaseUrl: options.settings.baseUrl,
+            officialBaseUrl: options.adapter.capability.baseUrl,
+          }),
         });
-
-        // 如果 Profile 建议关 reasoning，先关（GPT 第 6 点：产品策略，非能力事实）
-        const actionGateSettings = requestedProfile.reasoning.preferredForActionGate === "disable"
-          && requestedProfile.reasoning.canDisablePerRequest
+        const actionGateSettings = profile.reasoning === "disabled"
           ? { ...options.settings, reasoning: { mode: "off" as const } }
           : options.settings;
-
-        // GPT 第 1 点：用关闭后的实际 reasoning 状态重新 resolve Profile + Strategy
-        const effectiveReasoningState = resolveActionGateReasoningFromSettings(
-          options.adapter.id,
-          options.settings.model,
-          actionGateSettings.reasoning,
+        console.log(
+          `${LOG_PREFIX} node=action-gate provider=${options.adapter.id} transport=${options.adapter.transport} model=${options.settings.model} mode=${profile.mode} profile=${profile.id}`,
         );
-        const effectiveProfile = resolveActionGateProfile({
-          provider: options.adapter.id,
-          transport: options.adapter.transport,
-          model: options.settings.model,
-          reasoning: effectiveReasoningState,
-        });
-        const strategy = selectActionGateStrategy(effectiveProfile);
-        console.log(`${LOG_PREFIX} node=action-gate provider=${options.adapter.id} transport=${options.adapter.transport} model=${options.settings.model} effectiveReasoning=${effectiveReasoningState} strategy=${strategy}`);
-
-        const buildReq = (messages: ChatMessage[], protocolFeedback?: string) => buildActionGateRequest({
+        const trustedRefs = new Set(options.trustedRefs ?? []);
+        const gate = await perf.track("decide_action_gate_structured", () => runActionGate({
           model: options.settings.model,
           originalQuery: state.originalQuery,
           contextualizedQuery: state.contextualizedQuery,
           citaContextBlock: state.citaContextBlock,
-          messages,
+          messages: options.cleanMessages ?? options.messages,
           availableCapabilities: capabilities,
+          trustedRefs: [...trustedRefs],
           toolResults: state.toolResults,
-          strategy,
+          profile,
           actionGateSystemPrompt: options.actionGateSystemPrompt,
-          ...(protocolFeedback ? { protocolFeedback } : {}),
-        });
-
-        const response = await perf.track("decide_action_gate_llm", () => invokeWithFallback(buildReq, actionGateSettings, options.cleanMessages));
-        trackUsage(response.usage);
-
-        try {
-          const decision = parseActionDecisionResponse({
-            response,
-            strategy,
-            availableCapabilities: state.availableCapabilities,
-          });
-          console.log(`${LOG_PREFIX} decision=${decision.decision}${decision.decision === "act" ? ` capability=${decision.capability}` : ""}`);
-          return decision;
-        } catch (error) {
-          // GPT 第 4 点：只捕获 ActionGateProtocolError，不 catch 网络错误等
-          if (!(error instanceof ActionGateProtocolError) || !error.repairable || effectiveProfile.fallback.maxProtocolRepairs < 1) {
-            throw error;
-          }
-          // 协议修复：全新请求，带 error.code（不是 error.message）
-          console.warn(`${LOG_PREFIX} node=action-gate protocol_repair error_code=${error.code} response=${jsonResponseSummary(response)}`);
-          const repairResponse = await perf.track("decide_action_gate_repair_llm", () => invokeWithFallback(
-            (messages) => buildReq(messages, error.code),
+          signal: options.signal,
+          generate: (request, signal) => invokeWithFallback(
+            (messages) => ({
+              ...request,
+              messages: [
+                request.messages[0],
+                ...messages,
+                request.messages[request.messages.length - 1],
+              ],
+            }),
             actionGateSettings,
             options.cleanMessages,
-          ));
-          trackUsage(repairResponse.usage);
-          try {
-            const decision = parseActionDecisionResponse({
-              response: repairResponse,
-              strategy,
-              availableCapabilities: state.availableCapabilities,
-            });
-            console.log(`${LOG_PREFIX} decision=${decision.decision}${decision.decision === "act" ? ` capability=${decision.capability}` : ""} (after repair)`);
-            return decision;
-          } catch (repairError) {
-            console.warn(`${LOG_PREFIX} node=action-gate protocol_repair_failed response=${jsonResponseSummary(repairResponse)}`);
-            throw repairError instanceof ActionGateProtocolError
-              ? repairError
-              : new ActionGateProtocolError("INVALID_DECISION_SCHEMA", false);
-          }
+            signal,
+          ),
+          onResponse: (response) => trackUsage(response.usage),
+          validateTargetRef: (ref) => {
+            if (trustedRefs.has(ref)) return true;
+            try {
+              contextRefRegistry.resolve(ref, options.conversationId ?? "default");
+              return true;
+            } catch {
+              return false;
+            }
+          },
+          recordMetric: (metric) => {
+            console.log(`[StructuredOutput] ${JSON.stringify({
+              provider: options.adapter.id,
+              model: options.settings.model,
+              profile: profile.id,
+              ...metric,
+            })}`);
+          },
+        }));
+        if (gate.outcome === "failure") {
+          console.warn(
+            `${LOG_PREFIX} node=action-gate failure=${gate.failure.code} disposition=${gate.failure.disposition} toolExecuted=false`,
+          );
+          return {
+            decision: "failure",
+            reason: "action_gate_failed",
+            code: gate.failure.code,
+            disposition: gate.failure.disposition,
+            toolExecuted: false,
+          };
         }
+        const decision = gate.decision;
+        console.log(
+          `${LOG_PREFIX} decision=${decision.decision}${decision.decision === "act" ? ` capability=${decision.capability}` : ""} repairs=${gate.repairCount}`,
+        );
+        return decision;
       } finally {
         options.onEvent?.({ type: "step_finished", stepName: "agent-graph-action-gate" });
       }
@@ -397,7 +361,18 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             console.warn(`${LOG_PREFIX} node=native-tool tool=${selectedTool.id} protocol_retry=${attempt} error=${errorCodeOf(error)}`);
           }
         }
-        if (!args || !toolCall) throw lastError instanceof Error ? lastError : new Error("E_NATIVE_TOOL_PROTOCOL");
+        if (!args || !toolCall) {
+          return [{
+            toolId: selectedTool.id,
+            args: {},
+            output: "Native Function Calling did not return one valid tool call after one repair. Tool Runtime was not invoked.",
+            status: "failed",
+            errorCode: errorCodeOf(lastError),
+            terminal: true,
+            retryable: false,
+            toolExecuted: false,
+          }];
+        }
 
         const toolCallId = toolCall.id;
         options.onEvent?.({ type: "tool_call_start", toolCallId, toolCallName: selectedTool.name });
@@ -454,9 +429,26 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       ensureBudget();
       options.onEvent?.({ type: "step_started", stepName: "agent-graph-soul" });
       try {
+        const localNonExecutionFact = state.toolResults
+          .slice()
+          .reverse()
+          .find((item) => item.toolExecuted === false);
+        const failureInstruction = decision.decision === "failure" || localNonExecutionFact
+          ? [
+              "[FAILURE_SOUL_POLICY]",
+              "A local trusted failure occurred before Tool Runtime execution.",
+              "Use only the trusted failure facts below. Be honest and concise.",
+              "Never claim that a tool, request, or external action was executed successfully.",
+              `TRUSTED_FAILURE_FACT=${JSON.stringify(
+                decision.decision === "failure" ? decision : localNonExecutionFact,
+              )}`,
+              "[/FAILURE_SOUL_POLICY]",
+            ].join("\n")
+          : "";
         const system = [
           options.soulSystemBaseContent,
           options.responseContext ?? "",
+          failureInstruction,
           `[ACTION_DECISION]\n${JSON.stringify(decision)}\n[/ACTION_DECISION]`,
           buildToolExecutionContext(state.toolResults),
         ].filter(Boolean).join("\n\n");

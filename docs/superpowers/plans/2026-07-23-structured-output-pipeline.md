@@ -34,10 +34,10 @@
 - Produces: built-in provider id `doubao`, display name `豆包（火山方舟）`, base URL `https://ark.cn-beijing.volces.com/api/v3`.
 - Produces: old AgentPlan values no longer resolve as a built-in provider.
 
-- [ ] Write failing tests asserting `PROVIDER_CAPABILITIES` contains `doubao` and no `volcengine`.
-- [ ] Run the focused provider/reasoning tests and verify they fail on the old preset.
-- [ ] Replace the preset, reasoning rule, labels, icon metadata, short-name mapping, and tests.
-- [ ] Run the focused tests and `npm run build:main`.
+- [x] Write failing tests asserting `PROVIDER_CAPABILITIES` contains `doubao` and no `volcengine`.
+- [x] Run the focused provider/reasoning tests and verify they fail on the old preset.
+- [x] Replace the preset, reasoning rule, labels, icon metadata, short-name mapping, and tests.
+- [x] Run the focused tests and `npm run build:main`.
 
 ### Task 2: Add Structured Output Profiles and Request Types
 
@@ -52,10 +52,10 @@
 - Produces: `resolveStructuredOutputProfile({ provider, model, transport })`.
 - Produces: `ChatRequest.structuredOutput` as an explicit transport-neutral request contract.
 
-- [ ] Write table-driven failing tests for OpenAI/Claude/Kimi/Doubao A, DeepSeek/Qwen/GLM/MiMo B, MiniMax D, and unknown/custom D.
-- [ ] Verify the tests fail because the resolver does not exist.
-- [ ] Implement exact model matchers, conservative unknown fallback, stage repair policy, and transport-neutral request types.
-- [ ] Run the profile tests and typecheck.
+- [x] Write table-driven failing tests for OpenAI/Claude/Kimi/Doubao A, DeepSeek/Qwen/GLM/MiMo B, MiniMax D, and unknown/custom D.
+- [x] Verify the tests fail because the resolver does not exist.
+- [x] Implement exact model matchers, conservative unknown fallback, stage repair policy, and transport-neutral request types.
+- [x] Run the profile tests and typecheck.
 
 ### Task 3: Implement Provider Request Builders
 
@@ -68,10 +68,10 @@
 - Consumes: `ChatRequest.structuredOutput`.
 - Produces: OpenAI-compatible `response_format` or Anthropic `output_config.format`.
 
-- [ ] Write failing adapter tests for OpenAI `json_schema`, OpenAI `json_object`, Claude `output_config.format`, and MiniMax prompt mode with JSON hint.
-- [ ] Verify each test fails on missing wire fields.
-- [ ] Implement request translation without using tools or `tool_choice`.
-- [ ] Run adapter tests and ensure Native FC tests still pass.
+- [x] Write failing adapter tests for OpenAI `json_schema`, OpenAI `json_object`, Claude `output_config.format`, and MiniMax prompt mode with JSON hint.
+- [x] Verify each test fails on missing wire fields.
+- [x] Implement request translation without using tools or `tool_choice`.
+- [x] Run adapter tests and ensure Native FC tests still pass.
 
 ### Task 4: Implement Normalization and JSON Candidate Extraction
 
@@ -84,10 +84,10 @@
 - Produces: normalized finish states `complete`, `truncated`, `tool_call`, `content_filtered`, `refused`, `unknown`.
 - Produces: `extractJsonCandidates(text): JsonCandidate[]`.
 
-- [ ] Write failing tests for direct JSON, fenced JSON, prose, escaped quotes, braces in strings, nesting, duplicate extraction, multiple objects, arrays, scalars, and truncated objects.
-- [ ] Write failing tests for OpenAI and Anthropic finish-reason mappings.
-- [ ] Implement string-aware brace scanning and structural candidate deduplication.
-- [ ] Run focused tests.
+- [x] Write failing tests for direct JSON, fenced JSON, prose, escaped quotes, braces in strings, nesting, duplicate extraction, multiple objects, arrays, scalars, and truncated objects.
+- [x] Write failing tests for OpenAI and Anthropic finish-reason mappings.
+- [x] Implement string-aware brace scanning and structural candidate deduplication.
+- [x] Run focused tests.
 
 ### Task 5: Implement the Shared Runner, Validation, Repair, and Metrics
 
@@ -101,10 +101,10 @@
 - Produces: `runStructuredOutput<T>(input): Promise<StructuredOutputRunResult<T>>`.
 - Produces: explicit success or trusted failure with `toolExecuted: false`.
 
-- [ ] Write failing tests for first-pass success, unique valid candidate, ambiguous valid candidates, truncated repair, missing-information bypass, expired-state bypass, refusal, network failure, repair exhaustion, and deadline exhaustion.
-- [ ] Verify the tests fail on the missing runner.
-- [ ] Implement absolute deadline handling, per-attempt abort, structured error codes, two repair shapes, and metrics without raw private content.
-- [ ] Run runner tests.
+- [x] Write failing tests for first-pass success, unique valid candidate, ambiguous valid candidates, truncated repair, missing-information bypass, expired-state bypass, refusal, network failure, repair exhaustion, and deadline exhaustion.
+- [x] Verify the tests fail on the missing runner.
+- [x] Implement absolute deadline handling, per-attempt abort, structured error codes, two repair shapes, and metrics without raw private content.
+- [x] Run runner tests.
 
 ### Task 6: Migrate CITA
 
@@ -121,11 +121,11 @@
 - Consumes: shared Structured Output runner.
 - Produces: trusted `TurnUnderstanding` or deterministic degraded/unavailable CITA facts.
 
-- [ ] Rewrite CITA tests to expect structured text requests with no tools or tool choice and verify failure first.
-- [ ] Replace the FC schema with a JSON Schema matching `TurnUnderstanding`.
-- [ ] Route generation through the shared runner and existing `parseTurnUnderstanding` plus `validateUnderstanding`.
-- [ ] Remove `submit_context_understanding`, `FcUnderstandingResult`, and FC adaptation.
-- [ ] Run all CITA tests and build.
+- [x] Rewrite CITA tests to expect structured text requests with no tools or tool choice and verify failure first.
+- [x] Replace the FC schema with a JSON Schema matching `TurnUnderstanding`.
+- [x] Route generation through the shared runner and existing `parseTurnUnderstanding` plus `validateUnderstanding`.
+- [x] Remove `submit_context_understanding`, `FcUnderstandingResult`, and FC adaptation.
+- [x] Run all CITA tests and build.
 
 ### Task 7: Migrate Action Gate and Add Explicit Failure Routing
 
@@ -141,11 +141,11 @@
 - Consumes: shared Structured Output runner.
 - Produces: `TrustedActionDecision` or explicit `TrustedFailureFact`.
 
-- [ ] Rewrite Action Gate tests to require no virtual tools and verify they fail.
-- [ ] Export the Action Decision JSON Schema and local parser/business validator.
-- [ ] Replace `ActionGateStrategy`, virtual tool parsing, and one-off repair with the shared runner.
-- [ ] Add a graph failure route whose Soul input contains only local failure facts and `toolExecuted: false`.
-- [ ] Run Action Gate, graph, AG-UI, and build tests.
+- [x] Rewrite Action Gate tests to require no virtual tools and verify they fail.
+- [x] Build the Action Decision JSON Schema and local parser/business validator.
+- [x] Replace `ActionGateStrategy`, virtual tool parsing, and one-off repair with the shared runner.
+- [x] Add a graph failure route whose Soul input contains only local failure facts and `toolExecuted: false`.
+- [x] Run Action Gate, graph, AG-UI, and build tests.
 
 ### Task 8: Verify Native FC Boundary and Remove Old Protocol
 
@@ -159,8 +159,7 @@
 - Consumes: trusted `act` decision.
 - Produces: one real tool call matching the approved capability and refs, or trusted failure.
 
-- [ ] Write failing tests proving ordinary text never counts as execution and only one repair is attempted.
-- [ ] Enforce one exposed tool, matching tool name, approved refs, argument schema, and execution ledger checks.
-- [ ] Remove virtual Action Gate/CITA FC profiles and stale protocol branches.
-- [ ] Run `npm run build:main`, `npm test`, and `npm run smoke:music`.
-
+- [x] Write failing tests proving ordinary text never counts as execution and only one repair is attempted.
+- [x] Enforce one exposed tool, matching tool name, approved refs, argument schema, and execution ledger checks.
+- [x] Remove virtual Action Gate/CITA FC profiles and stale protocol branches.
+- [x] Run `npm run build:main`, `npm test`, and `npm run smoke:music`.

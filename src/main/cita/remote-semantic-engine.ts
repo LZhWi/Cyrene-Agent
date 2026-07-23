@@ -63,6 +63,7 @@ const FALLBACK_PROFILE = resolveStructuredOutputProfile({
   provider: "unknown",
   model: "unknown",
   transport: "openai",
+  endpointKind: "custom",
 });
 
 export interface RemoteSemanticEngineOptions {
@@ -227,6 +228,7 @@ export class RemoteSemanticEngine implements CitaSemanticEngine {
         recordMetric: (metric) => {
           console.log(`[StructuredOutput] ${JSON.stringify({
             provider: profile.provider,
+            model: profile.model,
             profile: profile.id,
             ...metric,
           })}`);

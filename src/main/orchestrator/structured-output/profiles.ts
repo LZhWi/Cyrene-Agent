@@ -106,10 +106,14 @@ const REPAIR: StructuredOutputProfile["repair"] = {
   },
 };
 
-function materialize(definition: ProfileDefinition): StructuredOutputProfile {
+function materialize(
+  definition: ProfileDefinition,
+  context: StructuredOutputProfileContext,
+): StructuredOutputProfile {
   return {
     id: definition.id,
     provider: definition.provider,
+    model: context.model,
     transport: definition.transport,
     mode: definition.mode,
     verification: definition.verification,
@@ -126,6 +130,7 @@ function materialize(definition: ProfileDefinition): StructuredOutputProfile {
 const FALLBACK: StructuredOutputProfile = {
   id: "prompt-json-fallback",
   provider: "unknown",
+  model: "unknown",
   mode: "prompt_json",
   verification: "contract_required",
   allowCapabilityPromotion: false,
@@ -137,11 +142,40 @@ const FALLBACK: StructuredOutputProfile = {
 export function resolveStructuredOutputProfile(
   context: StructuredOutputProfileContext,
 ): StructuredOutputProfile {
+  const fallback: StructuredOutputProfile = {
+    ...FALLBACK,
+    provider: context.provider,
+    model: context.model,
+  };
+  if (context.endpointKind !== "official") return fallback;
   const match = DEFINITIONS.find((definition) => (
     definition.provider === context.provider
     && definition.transport === context.transport
     && definition.modelPattern.test(context.model)
   ));
-  return match ? materialize(match) : FALLBACK;
+  return match ? materialize(match, context) : fallback;
 }
 
+function normalizeBaseUrl(value: string): string {
+  return value.trim().replace(/\/+$/, "").toLowerCase();
+}
+
+export function classifyStructuredOutputEndpoint(input: {
+  providerId: string;
+  configuredBaseUrl: string;
+  officialBaseUrl: string;
+}): StructuredOutputProfileContext["endpointKind"] {
+  const configured = normalizeBaseUrl(input.configuredBaseUrl);
+  if (/^https?:\/\/(?:localhost|127(?:\.\d+){3}|0\.0\.0\.0|\[::1\])(?::|\/|$)/.test(configured)) {
+    return "local";
+  }
+  if (
+    input.providerId === "unknown"
+    || !configured
+    || !input.officialBaseUrl
+    || configured !== normalizeBaseUrl(input.officialBaseUrl)
+  ) {
+    return "custom";
+  }
+  return "official";
+}

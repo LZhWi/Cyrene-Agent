@@ -28,6 +28,7 @@ export function buildToolExecutionContext(results: ToolCallResult[]): string {
     terminal: result.terminal,
     retryable: result.retryable,
     ...(result.deduplicated ? { deduplicated: true } : {}),
+    ...(result.toolExecuted === false ? { toolExecuted: false } : {}),
     ...(result.errorCode ? { errorCode: result.errorCode } : {}),
   }));
   return [

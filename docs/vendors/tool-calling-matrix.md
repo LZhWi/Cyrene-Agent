@@ -1,7 +1,8 @@
 # Tool Calling 能力矩阵
 
 各厂商 Provider 的 `tool_choice` + Function Calling 能力事实表。
-作为 `src/main/orchestrator/vendors/action-gate-profiles.ts` 的唯一事实来源。
+仅用于 Native Function Calling。CITA 和 Action Gate 的 JSON 阶段改用
+`src/main/orchestrator/structured-output/profiles.ts`，不再通过虚拟工具生成结构化结果。
 
 调研时间：2026-07-20（GPT 基于各厂商官方文档）
 
@@ -56,10 +57,11 @@
 - 支持 `response_format: json_object`
 - thinking 可按请求关闭：`{ thinking: { type: "disabled" } }`
 
-## Volcengine
+## Doubao（火山方舟）
 
-- 旧 SDK 版本不支持 `tool_choice`，当前新接口能力待契约测试
-- 暂标 `contract_test_required`，保守按 `auto` 处理
+- 内置厂商入口使用豆包官方方舟 `/api/v3`；不再保留独立的 Volcengine/AgentPlan 预设。
+- Native FC 能力仍需按具体豆包模型做契约测试，未验证前不得从结构化输出档位反推 FC 能力。
+- AgentPlan 或其他聚合入口由用户走自定义端点，固定 D 档，不由项目探测或维护。
 
 ## 参考链接
 

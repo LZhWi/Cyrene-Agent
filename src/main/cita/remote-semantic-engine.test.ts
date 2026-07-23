@@ -28,6 +28,7 @@ const profile = resolveStructuredOutputProfile({
   provider: "chatgpt",
   model: "gpt-5.2",
   transport: "openai",
+  endpointKind: "official",
 });
 
 function understanding(

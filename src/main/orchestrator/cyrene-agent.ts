@@ -51,6 +51,8 @@ export interface CyreneRunOptions {
   contextualizedQuery?: string;
   /** 独立 CITA 证据块；原始 user 消息不会被替换。 */
   citaContextBlock?: string;
+  /** CITA 本地校验后允许 Action Gate 引用的不透明引用集合。 */
+  trustedRefs?: string[];
   /** 临时回退开关；默认使用 LangGraph Runtime。 */
   agentRuntime?: "langgraph" | "legacy";
   timeoutMs: number;
@@ -253,6 +255,7 @@ export class CyreneAgent extends AbstractAgent {
               originalQuery: options.originalQuery ?? extractLastUserQuery(options.messages),
               contextualizedQuery: options.contextualizedQuery ?? options.originalQuery ?? extractLastUserQuery(options.messages),
               citaContextBlock: options.citaContextBlock ?? "",
+              trustedRefs: options.trustedRefs ?? [],
               imageCaptionFallback: options.imageCaptionFallback,
               executionLedger,
             }))

@@ -16,6 +16,7 @@ function baseInput(
       provider: "minimax",
       model: "MiniMax-M3",
       transport: "openai",
+      endpointKind: "official",
     }),
     buildRequest: ({ attempt, minimal }) => ({ attempt, minimal }),
     generate: async () => {
@@ -135,4 +136,3 @@ describe("runStructuredOutput", () => {
     });
   });
 });
-

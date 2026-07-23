@@ -80,7 +80,13 @@ export interface BuildOptionsDeps {
     recentDialogue: Array<{ role: "user" | "assistant"; text: string }>;
   }) => Promise<{
     contextBlock: string;
-    contextPackage?: { originalQuery: string; contextualizedQuery: string; resolvedReferences: Array<{ surface: string; targetRef: string }> };
+    contextPackage?: {
+      originalQuery: string;
+      contextualizedQuery: string;
+      resolvedReferences: Array<{ surface: string; targetRef: string }>;
+      focusedContexts?: Array<{ contextRef: string }>;
+      supportingContexts?: Array<{ contextRef: string }>;
+    };
   }>;
 }
 
@@ -331,6 +337,7 @@ export async function buildAgentRunOptions(
   let citaContextBlock = "";
   let contextualizedQuery = latestUserText;
   let responseContext = "";
+  let trustedRefs: string[] = [];
   if (deps.prepareCitaTurn) {
     try {
       const recentDialogue = messages
@@ -348,6 +355,11 @@ export async function buildAgentRunOptions(
       citaContextBlock = prepared.contextBlock;
       contextualizedQuery = prepared.contextPackage?.contextualizedQuery ?? latestUserText;
       if (prepared.contextPackage) {
+        trustedRefs = [...new Set([
+          ...prepared.contextPackage.resolvedReferences.map((reference) => reference.targetRef),
+          ...(prepared.contextPackage.focusedContexts ?? []).map((context) => context.contextRef),
+          ...(prepared.contextPackage.supportingContexts ?? []).map((context) => context.contextRef),
+        ])];
         responseContext = buildResponseContext(
           prepared.contextPackage.contextualizedQuery,
           prepared.contextPackage.resolvedReferences,
@@ -455,6 +467,7 @@ export async function buildAgentRunOptions(
       originalQuery: latestUserText,
       contextualizedQuery,
       citaContextBlock,
+      trustedRefs,
       responseContext,
       nativeFcSystemContent,
       actionGateSystemPrompt,

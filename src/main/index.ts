@@ -47,7 +47,10 @@ import { indexConversationTurn } from "./orchestrator/history-tools";
 import { buildToneInjection } from "./orchestrator/tone-injector";
 import { getAdapter, buildVendorUrl, getAdapterForConfig, createSseReader } from "./orchestrator/vendors";
 import type { StructuredOutputRequest, VendorConfig } from "./orchestrator/vendors";
-import { resolveStructuredOutputProfile } from "./orchestrator/structured-output/profiles";
+import {
+  classifyStructuredOutputEndpoint,
+  resolveStructuredOutputProfile,
+} from "./orchestrator/structured-output/profiles";
 import { testVendorConnection } from "./orchestrator/vendors/test-connection";
 import { migrateLegacyMinimaxDefaults } from "./orchestrator/vendors/minimax-defaults";
 import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
@@ -1906,6 +1909,11 @@ const citaService = new CitaService({
           provider: adapter.id,
           model: cfg.model,
           transport: adapter.transport,
+          endpointKind: classifyStructuredOutputEndpoint({
+            providerId: adapter.id,
+            configuredBaseUrl: cfg.baseUrl,
+            officialBaseUrl: adapter.capability.baseUrl,
+          }),
         });
       },
     },
