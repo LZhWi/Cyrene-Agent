@@ -480,7 +480,7 @@ const MIMO_ICON_URL =
   "https://raw.githubusercontent.com/lobehub/lobe-icons/refs/heads/master/packages/static-png/light/xiaomimimo.png";
 
 const MODEL_PRESETS: ModelPreset[] = [
-  // 当前已适配 9 家：MiniMax / DeepSeek / 火山 AgentPlan / 智谱 GLM / Kimi / Qwen / ChatGPT / Claude / MiMo
+  // 当前已适配 9 家：MiniMax / DeepSeek / 豆包 / 智谱 GLM / Kimi / Qwen / ChatGPT / Claude / MiMo
   // 顺序按使用频率 + 适配优先级；未在此清单内的厂商已硬删，需要时再补回。
   {
     providerName: "MiniMax（稀宇科技）",
@@ -505,13 +505,17 @@ const MODEL_PRESETS: ModelPreset[] = [
     websiteUrl: "https://platform.deepseek.com/",
   },
   {
-    providerName: "火山 AgentPlan（火山引擎）",
-    shortName: "火山",
-    baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
-    mainModels: ["ark-code-latest"],
+    providerName: "豆包（火山方舟）",
+    shortName: "豆包",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    mainModels: [
+      "doubao-seed-2-1-pro-260628",
+      "doubao-seed-2-0-pro-260215",
+      "doubao-seed-2-0-lite-260428",
+      "doubao-seed-2-0-mini-260428",
+    ],
     iconUrl: "../icons/providers/volcengine.svg",
-    websiteUrl: "https://www.volcengine.com/product/agent-plan",
-    // 火山方舟是聚合平台，路由到 doubao-seed 等多模态子模型时支持视觉
+    websiteUrl: "https://www.volcengine.com/product/ark",
     supportsVision: true,
   },
   {

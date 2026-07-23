@@ -133,7 +133,7 @@ describe("OpenAICompatAdapter", () => {
     expect(req.headers.Authorization).toBeUndefined();
   });
 
-  // ─── 流式 / 非流式 reasoning_content 解析（覆盖 DeepSeek / Qwen / GLM / MiMo /volcengine） ───
+  // ─── 流式 / 非流式 reasoning_content 解析（覆盖 DeepSeek / Qwen / GLM / MiMo / Doubao） ───
 
   test("parseStreamEvent: delta.reasoning_content → chunk.deltaThinking（DeepSeek/Qwen/GLM/MiMo 流式）", () => {
     const adapter = new OpenAICompatAdapter("test-openai", capability);

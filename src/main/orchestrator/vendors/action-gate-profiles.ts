@@ -193,9 +193,9 @@ const PROFILES: ProfileDefinition[] = [
   },
   { match: { provider: "mimo", reasoning: "off" }, profile: AUTO_ONLY_PROFILE },
 
-  // ── Volcengine ── 待契约测试，保守 auto
+  // ── Doubao ── Native FC 能力仍保守按 auto；结构化决策另走 Structured Output Profile。
   {
-    match: { provider: "volcengine" },
+    match: { provider: "doubao" },
     profile: {
       ...AUTO_ONLY_PROFILE,
       toolCalling: { reliableWithReasoning: "contract_test_required", requiresReasoningReplay: false },

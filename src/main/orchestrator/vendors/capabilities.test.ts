@@ -26,6 +26,17 @@ describe("PROVIDER_CAPABILITIES — schema smoke", () => {
     expect(mimo?.id).toBe("mimo");
     expect(mimo?.displayName).toBe("MiMo（小米）");
   });
+
+  test("豆包替换火山 AgentPlan，使用官方方舟 Chat Completions 入口", () => {
+    expect(getCapability("豆包（火山方舟）")).toMatchObject({
+      id: "doubao",
+      transport: "openai",
+      baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+      defaultModel: "doubao-seed-2-1-pro-260628",
+    });
+    expect(getCapability("火山 AgentPlan（火山引擎）")).toBeUndefined();
+    expect(PROVIDER_CAPABILITIES.some((capability) => capability.id === "volcengine")).toBe(false);
+  });
 });
 
 describe("PROVIDER_CAPABILITIES — 已知条目存在性回归", () => {
@@ -62,7 +73,7 @@ describe("PROVIDER_CAPABILITIES — 已知条目存在性回归", () => {
     for (const expected of [
       "MiniMax（稀宇科技）",
       "DeepSeek（深度求索）",
-      "火山 AgentPlan（火山引擎）",
+      "豆包（火山方舟）",
       "GLM（智谱）",
       "Kimi（月之暗面）",
       "Qwen（通义千问）",

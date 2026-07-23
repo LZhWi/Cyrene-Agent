@@ -38,19 +38,17 @@ export const PROVIDER_CAPABILITIES = [
     supportsVision: false,
   },
   {
-    id: "volcengine",
-    displayName: "火山 AgentPlan（火山引擎）",
-    // OpenAI 兼容 + 专属 baseUrl + 可选 reasoning_content；不为它单独写 transport
+    id: "doubao",
+    displayName: "豆包（火山方舟）",
     transport: "openai",
-    baseUrl: "https://ark.cn-beijing.volces.com/api/plan/v3",
+    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
     authStyle: "bearer",
-    defaultModel: "ark-code-latest",
+    defaultModel: "doubao-seed-2-1-pro-260628",
     supportsTools: true,
     supportsThinking: true,
     thinkingField: "reasoning_content",
     cacheStrategy: "none",
     testStrategy: "text",
-    // 火山方舟是聚合平台，可路由到 doubao-seed 等多模态子模型；支持视觉
     supportsVision: true,
   },
   {

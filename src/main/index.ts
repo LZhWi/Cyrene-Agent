@@ -397,7 +397,6 @@ const PROVIDER_RENAMES: Record<string, string> = {
   "DeepSeek": "DeepSeek（深度求索）",
   "智谱 GLM": "GLM（智谱）",
   "通义千问（DashScope）": "Qwen（通义千问）",
-  "火山 Agent-Plan": "火山 AgentPlan（火山引擎）",
 };
 
 /**
@@ -2432,7 +2431,7 @@ async function requestModelReply(inputMessages: unknown, styleFile = "01_default
 const PROVIDER_SHORT_NAMES: Record<string, string> = {
   "MiniMax（稀宇科技）": "MiniMax",
   "DeepSeek（深度求索）": "DeepSeek",
-  "火山 AgentPlan（火山引擎）": "火山",
+  "豆包（火山方舟）": "豆包",
   "GLM（智谱）": "GLM",
   "Kimi（月之暗面）": "Kimi",
   "Qwen（通义千问）": "Qwen",
