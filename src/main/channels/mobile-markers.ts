@@ -37,12 +37,15 @@ export function stripStickerStageDirections(content: string): string {
     .trim();
 }
 
-/** 把内容里的 [sticker:id]/[image:hash] 转成 LLM 可读文字。 */
-export function describeMarkersForLlm(content: string): string {
+/** 把内容里的 [sticker:id]/[image:hash] 转成 LLM 可读文字。
+ *  对齐 PC 的「带主语」纪律：根据消息角色标明是谁发的，
+ *  避免无主语的「（发送表情包：…）」被模型当成自己可执行的动作而照抄。 */
+export function describeMarkersForLlm(content: string, role: "user" | "assistant" = "user"): string {
+  const stickerSubject = role === "assistant" ? "我发送了表情包" : "用户发送表情包";
   return content
     .replace(STICKER_RE, (_m, id: string) => {
       const desc = getStickerDescription(id);
-      return desc ? `（发送表情包：${desc}）` : "（发送表情包）";
+      return desc ? `（${stickerSubject}：${desc}）` : `（${stickerSubject}）`;
     })
-    .replace(IMAGE_RE, "（图片）");
+    .replace(IMAGE_RE, role === "assistant" ? "（我发送了图片）" : "（用户发送了图片）");
 }

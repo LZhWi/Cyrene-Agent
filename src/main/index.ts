@@ -4545,7 +4545,7 @@ app.whenReady().then(async () => {
     // 历史里的标记转描述后再喂 LLM（避免把 [sticker:x]/[image:x] 原样塞给模型）。
     const historyMessages = priorMessages
       .filter((m) => typeof m.content === "string" && m.content.trim().length > 0)
-      .map((m) => ({ role: m.role as "user" | "assistant" | "system", content: describeMarkersForLlm(m.content!) }));
+      .map((m) => ({ role: m.role as "user" | "assistant" | "system", content: describeMarkersForLlm(m.content!, m.role === "assistant" ? "assistant" : "user") }));
 
     // 落 blob，构造 imageAttachments + 用户内容的 [image:hash] 标记。
     const imageAttachments: { name: string; filePath: string; mime?: string }[] = [];

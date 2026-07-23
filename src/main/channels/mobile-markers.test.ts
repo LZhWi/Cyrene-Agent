@@ -14,20 +14,25 @@ describe("mobile-markers", () => {
     expect(formatImageMarker("abc123")).toBe("[image:abc123]");
   });
 
-  it("describes built-in sticker markers for LLM", () => {
-    expect(describeMarkersForLlm("好呀 [sticker:OK]")).toBe("好呀 （发送表情包：好的，没问题）");
+  it("describes built-in sticker markers for LLM (user subject by default)", () => {
+    expect(describeMarkersForLlm("好呀 [sticker:OK]")).toBe("好呀 （用户发送表情包：好的，没问题）");
   });
 
   it("describes user sticker markers via manifest phrases", () => {
-    expect(describeMarkersForLlm("[sticker:mycat]")).toBe("（发送表情包：喵）");
+    expect(describeMarkersForLlm("[sticker:mycat]")).toBe("（用户发送表情包：喵）");
   });
 
-  it("replaces image markers with placeholder", () => {
-    expect(describeMarkersForLlm("看这个 [image:deadbeef]")).toBe("看这个 （图片）");
+  it("uses assistant subject when role is assistant", () => {
+    expect(describeMarkersForLlm("[sticker:mycat]", "assistant")).toBe("（我发送了表情包：喵）");
+  });
+
+  it("replaces image markers with subject-aware placeholder", () => {
+    expect(describeMarkersForLlm("看这个 [image:deadbeef]")).toBe("看这个 （用户发送了图片）");
+    expect(describeMarkersForLlm("[image:deadbeef]", "assistant")).toBe("（我发送了图片）");
   });
 
   it("leaves unknown sticker id as generic label", () => {
-    expect(describeMarkersForLlm("[sticker:__nope__]")).toBe("（发送表情包）");
+    expect(describeMarkersForLlm("[sticker:__nope__]")).toBe("（用户发送表情包）");
   });
 
   it("strips stage-direction the model echoed (with desc)", () => {
