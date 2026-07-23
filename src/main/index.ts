@@ -4622,7 +4622,9 @@ app.whenReady().then(async () => {
     } catch (err) {
       console.warn("[Mobile] appendHistory (assistant) 失败:", err);
     }
-    void indexConversationTurn(sessionId, text, cleanReply);
+    // RAG 用户侧对齐 PC：存描述形式（[sticker:id]→（用户发送表情包：…）），不存原始标记 token。
+    // history-log 仍存原始 userContent 供同步/显示；与 assistant 侧「history 原始、RAG 干净」对称。
+    void indexConversationTurn(sessionId, describeMarkersForLlm(text), cleanReply);
     return { reply: displayReply, userContent, userAt, assistantAt };
   });
 
