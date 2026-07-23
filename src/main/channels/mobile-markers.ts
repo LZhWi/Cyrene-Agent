@@ -27,12 +27,16 @@ export function getStickerDescription(id: string): string {
   return "";
 }
 
-/** 从模型输出里剥离它「模仿」describeMarkersForLlm 写出的舞台指示「（发送表情包：…）」。
- *  真正的表情包由嵌入匹配追加 [sticker:id]，模型不该把这段描述写进正文。
- *  只匹配「发送表情包」精确措辞，避免误删「这个表情包好可爱」之类正常表达。 */
+/** 从模型输出里剥离它「模仿」describeMarkersForLlm 写出的表情包/图片舞台指示。
+ *  describeMarkersForLlm 会把标记转成「（我发送了表情包：…）/（用户发送表情包：…）」等
+ *  带主语的描述喂进上下文；模型可能照抄自己过去这类输出。真正的表情包由嵌入匹配追加
+ *  [sticker:id]、图片走真视觉，模型都不该把这段描述写进正文。
+ *  这里覆盖「(我/你/用户/对方/她) 发送(了) 表情包/图片」的括号舞台指示（全/半角括号与冒号），
+ *  但要求带「发送」动词，避免误删「这个表情包好可爱」之类正常表达。 */
 export function stripStickerStageDirections(content: string): string {
   return content
-    .replace(/[（(]\s*发送表情包(?:\s*[:：][^）)]*)?\s*[）)]/g, "")
+    .replace(/[（(]\s*(?:我|你|用户|对方|她)?\s*发送?了?\s*表情包(?:\s*[:：][^）)]*)?\s*[）)]/g, "")
+    .replace(/[（(]\s*(?:我|你|用户|对方|她)?\s*发送?了?\s*图片\s*[）)]/g, "")
     .replace(/[ \t]{2,}/g, " ")
     .trim();
 }

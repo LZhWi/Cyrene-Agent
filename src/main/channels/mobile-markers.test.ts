@@ -48,6 +48,13 @@ describe("mobile-markers", () => {
     expect(stripStickerStageDirections("(发送表情包:开心)么么哒")).toBe("么么哒");
   });
 
+  it("strips subject-carrying variants the model may echo from its own history", () => {
+    expect(stripStickerStageDirections("好呀～（我发送了表情包：开心）")).toBe("好呀～");
+    expect(stripStickerStageDirections("（用户发送表情包：期待）你好")).toBe("你好");
+    expect(stripStickerStageDirections("嗯（我发送了图片）")).toBe("嗯");
+    expect(stripStickerStageDirections("（用户发送了图片）看到了")).toBe("看到了");
+  });
+
   it("keeps normal sentences that merely mention stickers", () => {
     expect(stripStickerStageDirections("这个表情包好可爱")).toBe("这个表情包好可爱");
   });
