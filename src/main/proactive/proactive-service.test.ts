@@ -131,6 +131,32 @@ describe("proactive chat service", () => {
     }));
   });
 
+  it("suppresses a verbatim duplicate of the last assistant message like silent", async () => {
+    const ctx = setup({
+      runModel: vi.fn(async () => ({ kind: "send" as const, text: "记得喝水哦！" })),
+      // 归一化（去标点）后与生成文本完全相同。
+      getRecentTextsForDedup: () => ["记得喝水哦。"],
+    });
+    ctx.state.globalDesire = 90;
+    await ctx.service.evaluateCandidate(candidate);
+    expect(ctx.commitMessage).not.toHaveBeenCalled();
+    expect(ctx.getFallback).not.toHaveBeenCalled();
+    // 与 silent 一致：归 0 desire、只设全局静默，不设场景冷却，不消耗未回复计数。
+    expect(ctx.state.globalDesire).toBe(0);
+    expect(ctx.state.lastFiredAt.work_break).toBeUndefined();
+    expect(ctx.state.lastSilentAt).toBe(NOW);
+    expect(ctx.state.unansweredCount).toBe(0);
+  });
+
+  it("does not suppress a paraphrased follow-up", async () => {
+    const ctx = setup({
+      runModel: vi.fn(async () => ({ kind: "send" as const, text: "今天过得怎么样？" })),
+      getRecentTextsForDedup: () => ["记得喝水哦。"],
+    });
+    await ctx.service.evaluateCandidate(candidate);
+    expect(ctx.commitMessage).toHaveBeenCalledOnce();
+  });
+
   it("normal conversation lifecycle invalidates generation and starts quiet state", () => {
     const ctx = setup();
     ctx.service.normalConversationStarted();

@@ -123,7 +123,7 @@ import { initGameBot } from "./game-bot";
 import { initChannels, shutdownChannels, setChannelsConversationLifecycle } from "./channels/init";
 import { buildChannelAttachmentInputs } from "./channels/agent-input";
 import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadGeneralSettings, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
-import { setInboundChatRunner, setDesktopHistoryProvider } from "./channels/inbound-server";
+import { setInboundChatRunner, setDesktopHistoryProvider, setProactiveReplyRunner } from "./channels/inbound-server";
 import { describeMarkersForLlm, formatStickerMarker, formatImageMarker, stripStickerStageDirections } from "./channels/mobile-markers";
 import { saveBlob } from "./channels/mobile-blobs";
 import { DESKTOP_PROACTIVE_STEM } from "./sync/types";
@@ -2057,6 +2057,14 @@ function initializeProactiveChatService(): void {
       });
     },
     getFallback: async (candidate) => getPresetFallback(candidate.sceneId, new Date().getHours()),
+    // 去重护栏数据源：普通会话与主动会话各自最后一条 assistant 文本（仅上一条，误杀最小）。
+    getRecentTextsForDedup: () => {
+      const { ordinary, proactive } = getProactiveHistories();
+      const lastModel = (turns: { role: "user" | "model"; content: string }[]): string | undefined =>
+        [...turns].reverse().find((turn) => turn.role === "model")?.content;
+      return [lastModel(ordinary), lastModel(proactive)]
+        .filter((text): text is string => typeof text === "string" && text.trim().length > 0);
+    },
     canStartDelivery: () => {
       const target = loadGeneralSettings().proactiveDeliveryTarget;
       return target === "local" || canStartProactiveChannelDelivery(target, channelManager);
@@ -4647,6 +4655,94 @@ app.whenReady().then(async () => {
     } catch (err) {
       console.warn("[Mobile] desktopHistoryProvider 失败:", err);
       return [];
+    }
+  });
+
+  // 手机「桌面对话」回复主动消息（阶段 3）：把手机回复写进 PC 的 proactive-chat 会话，
+  // 由 PC 大脑生成回复。**完整复刻桌面回复主动消息时的副作用**，确保对本地 proactive 流程零影响：
+  //   1) onUserMessage → invalidateForUserMessage：重置未回复计数 / 推进 epoch（与桌面回复一致）；
+  //   2) onConversationStarted：busy++，生成期间不打断；
+  //   3) 写入 chats-store 的 proactive-chat 会话（镜像读取的权威库）+ indexConversationTurn 抽记忆；
+  //   4) onConversationEnded：busy--，进入正常静默期。
+  // 不触碰 proactive 的触发/生成/冷却策略本身；不写 channels history-log（避免幻影会话）。
+  setProactiveReplyRunner(async ({ text }) => {
+    const session0 = chatsStore.getSessionByPurpose("proactive-chat");
+    if (!session0) throw new Error("暂无主动消息会话，无法回复");
+    const sessionId = session0.id;
+
+    // 忙时门控：一切以 PC 为重。若桌面正在对话（含 proactive-chat 回复流式中），
+    // 拒绝手机侧回复，从源头杜绝与桌面 replaceTail 的并发写竞态（避免丢轮）。
+    // 检查必须在 onConversationStarted() 之前——后者会自增 busy 计数。
+    if (normalConversationBusyCount > 0) {
+      throw Object.assign(new Error("PC 正在对话中，请稍后再回复～"), { code: "PC_BUSY" });
+    }
+
+    proactiveConversationLifecycle.onUserMessage();
+    proactiveConversationLifecycle.onConversationStarted();
+    try {
+      // 历史窗口：本轮之前的 proactive-chat 消息（标记转描述，避免把 [sticker:x]/[image:x] 塞给模型）。
+      const historyMessages = session0.messages
+        .filter((m) => typeof m.content === "string" && m.content.trim().length > 0)
+        .slice(-16)
+        .map((m) => ({
+          role: (m.role === "model" ? "assistant" : "user") as "user" | "assistant" | "system",
+          content: describeMarkersForLlm(m.content, m.role === "model" ? "assistant" : "user"),
+        }));
+
+      // 先把用户回复写入 chats-store 的 proactive-chat 会话（镜像读取的权威库）并广播刷新。
+      const userAtMs = Date.now();
+      chatsStore.appendMessage(sessionId, { id: randomUUID(), role: "user", content: text, at: userAtMs });
+      broadcastChatsChanged();
+
+      const llmUserContent = describeMarkersForLlm(text) || text;
+      const { options } = await buildAgentRunOptions(
+        {
+          messages: [...historyMessages, { role: "user", content: llmUserContent }],
+          style: "01_default.md",
+          sessionId,
+          channel: "mobile",
+        },
+        buildOptionsDeps,
+      );
+      {
+        const sandbox = loadChannelsSettings().toolSandbox;
+        const allTools = toolRegistry.getEnabledTools();
+        const filteredTools: ToolDefinition[] = sandbox === "safe-only"
+          ? allTools.filter((t) => (t.risk ?? "safe") === ("safe" as ToolRiskLevel))
+          : allTools;
+        options.tools = filteredTools;
+      }
+
+      const threadId = `thread-proactive-${sessionId}-${Date.now()}`;
+      const agent = new CyreneAgent({ threadId, description: `mobile-proactive:${sessionId}` });
+      const rawReply = await new Promise<string>((resolve, reject) => {
+        agent.runWithEvents(options).subscribe({
+          complete: () => resolve(agent.lastResult?.reply ?? ""),
+          error: (err) => reject(err instanceof Error ? err : new Error(String(err))),
+        });
+      });
+
+      let sticker: string | null = null;
+      if (agent.lastResult) {
+        const finished = await onAgentRunFinished(agent.lastResult, text, onRunFinishedDeps, "mobile");
+        sticker = finished.sticker;
+      }
+      const displayReply = sticker ? `${rawReply} ${formatStickerMarker(sticker)}`.trim() : rawReply;
+      const cleanReply = stripStickerStageDirections(rawReply);
+
+      // 回复写入 proactive-chat 会话（含可能的贴纸标记，供显示/删除）；RAG 存剥离后的干净版。
+      const assistantAtMs = Date.now();
+      chatsStore.appendMessage(sessionId, { id: randomUUID(), role: "model", content: displayReply, at: assistantAtMs });
+      broadcastChatsChanged();
+
+      void indexConversationTurn(sessionId, describeMarkersForLlm(text), cleanReply);
+      return {
+        reply: displayReply,
+        userAt: new Date(userAtMs).toISOString(),
+        assistantAt: new Date(assistantAtMs).toISOString(),
+      };
+    } finally {
+      proactiveConversationLifecycle.onConversationEnded();
     }
   });
 

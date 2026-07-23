@@ -77,6 +77,30 @@ export function setInboundChatRunner(fn: InboundChatRunner | null): void {
 }
 
 /**
+ * 手机「桌面对话」主动消息回复运行器（可注入）。
+ *
+ * 用途：手机在「桌面对话」里回复 PC 的 proactive-chat 主动消息。运行器复用 PC 大脑，
+ * 且必须在 index.ts 侧完整复刻桌面回复主动消息时的副作用（invalidateForUserMessage 重置冷却、
+ * 会话生命周期 busy 计数、记忆抽取、写入 chats-store 的 proactive-chat 会话并广播刷新）。
+ * 未注入时 /proactive/reply 返回 503。手机随后 /sync/pull 拉到的只读桌面镜像即含本轮问答。
+ */
+export type ProactiveReplyRunner = (input: {
+  /** 用户在手机上对主动消息的回复文本。 */
+  text: string;
+}) => Promise<{
+  reply: string;
+  /** PC 给用户消息落库时的权威时间戳（ISO）。 */
+  userAt?: string;
+  /** PC 给回复落库时的权威时间戳（ISO）。 */
+  assistantAt?: string;
+}>;
+
+let proactiveReplyRunner: ProactiveReplyRunner | null = null;
+export function setProactiveReplyRunner(fn: ProactiveReplyRunner | null): void {
+  proactiveReplyRunner = fn;
+}
+
+/**
  * 只读桌面历史提供者（可注入）。
  *
  * 用途：手机端「桌面对话」只读镜像。桌面 proactive-chat 会话存在 chatsStore（非 history-log），
@@ -327,6 +351,50 @@ async function handleRequest(
       } catch (err) {
         console.error(LOG, "chat 失败:", err);
         sendJson(res, 500, { ok: false, error: "chat failed" });
+      }
+      return;
+    }
+  }
+
+  // 手机回复桌面主动消息。POST /proactive/reply  body={ text }
+  // PC 用现有大脑生成回复，写入 proactive-chat 会话（手机随后 /sync/pull 拉到桌面镜像即含本轮）。
+  // 该路径仅在手机在线时使用（手机侧门控），离线不可回复，避免记忆/历史冲突。
+  {
+    const reply = /^\/proactive\/reply\/?$/.exec(req.url || "");
+    if (reply && req.method === "POST") {
+      if (!checkSecret(req, secret)) {
+        sendJson(res, 401, { ok: false, error: "invalid shared secret" });
+        return;
+      }
+      if (!proactiveReplyRunner) {
+        sendJson(res, 503, { ok: false, error: "proactive reply runner not ready" });
+        return;
+      }
+      let body: { text?: unknown } | null = null;
+      try {
+        const text = await readBody(req);
+        body = text ? JSON.parse(text) : null;
+      } catch (err) {
+        sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : "bad json" });
+        return;
+      }
+      const userText = typeof body?.text === "string" ? body.text.trim() : "";
+      if (!userText) {
+        sendJson(res, 400, { ok: false, error: "missing text" });
+        return;
+      }
+      try {
+        const { reply: replyText, userAt, assistantAt } = await proactiveReplyRunner({ text: userText });
+        sendJson(res, 200, { ok: true, reply: replyText, userAt, assistantAt });
+      } catch (err) {
+        console.error(LOG, "proactive/reply 失败:", err);
+        // 忙时拒绝（PC 正在对话）返回 409，与“PC 离线/其他错误”区分：
+        // 手机侧据此保持在线态并还原草稿，而非当作掉线隐藏输入框。
+        if ((err as { code?: unknown }).code === "PC_BUSY") {
+          sendJson(res, 409, { ok: false, busy: true, error: err instanceof Error ? err.message : "pc busy" });
+        } else {
+          sendJson(res, 500, { ok: false, error: err instanceof Error ? err.message : "proactive reply failed" });
+        }
       }
       return;
     }

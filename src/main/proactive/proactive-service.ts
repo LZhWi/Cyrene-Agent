@@ -10,6 +10,18 @@ import {
 import type { ProactiveModelResult } from "./proactive-model";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot, ProactiveState } from "./proactive-types";
 
+// 归一化：去除空白与标点（Unicode 感知，含中英文标点），并转小写。仅用于去重判定，不改动落库文本。
+export function normalizeForDedup(text: string): string {
+  return text.replace(/[\s\p{P}]/gu, "").toLowerCase();
+}
+
+// 判定候选文本是否与最近历史逐字重复（归一化后完全相等）。空文本不参与；正常改写过的跟进不会命中。
+export function isDuplicateProactiveText(candidate: string, recent: string[]): boolean {
+  const norm = normalizeForDedup(candidate);
+  if (!norm) return false;
+  return recent.some((entry) => normalizeForDedup(entry) === norm);
+}
+
 export interface ProactiveFallback {
   text: string;
   payload?: unknown;
@@ -36,6 +48,8 @@ export interface ProactiveChatServiceDeps {
   getFallback: (candidate: ProactiveCandidate) => Promise<ProactiveFallback | null>;
   commitMessage: (input: ProactiveCommitInput) => Promise<ProactiveCommitResult>;
   canStartDelivery?: () => boolean;
+  // 去重护栏数据源：返回最近历史里用于比对的文本（当前为普通/主动会话各自的最后一条 assistant）。
+  getRecentTextsForDedup?: () => string[];
   log?: (event: string, detail?: unknown) => void;
 }
 
@@ -74,6 +88,17 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
 
       generating = true;
       const generationEpoch = initialState.proactiveEpoch;
+      // silent 与「去重命中」共用的收尾：归 0 globalDesire、进入 10 分钟全局静默；
+      // 不设 lastFiredAt/lastProactiveAt（不触发场景级/2 小时冷却），过静默窗后可再尝试生成新内容。
+      const applySilentLikeOutcome = (logEvent: string): void => {
+        const silentState = deps.loadState();
+        if (silentState.proactiveEpoch === generationEpoch) {
+          silentState.globalDesire = 0;
+          silentState.lastSilentAt = deps.getSnapshot().now;
+          deps.saveState(silentState);
+        }
+        deps.log?.(logEvent, { scene: candidate.sceneId });
+      };
       try {
         const messages = await deps.buildMessages(candidate, initialState);
         const result = await deps.runModel(messages);
@@ -87,17 +112,16 @@ export function createProactiveChatService(deps: ProactiveChatServiceDeps): Proa
         let source: "model" | "fallback";
         let fallbackPayload: unknown;
         if (result.kind === "silent") {
-          const silentState = deps.loadState();
-          if (silentState.proactiveEpoch === generationEpoch) {
-            silentState.globalDesire = 0;
-            // silent 时不设 lastFiredAt：不触发场景级冷却，10 分钟全局静默后任何场景可再试
-            silentState.lastSilentAt = deps.getSnapshot().now;
-            deps.saveState(silentState);
-          }
-          deps.log?.("model_silent", { scene: candidate.sceneId });
+          applySilentLikeOutcome("model_silent");
           return;
         }
         if (result.kind === "send") {
+          // 去重护栏：模型偶发把历史里它自己上一条消息原样复述出来（归一化后完全相同）。
+          // 视同 silent 跳过——此刻尚未写历史/记忆/冷却，无副作用需要回滚。
+          if (isDuplicateProactiveText(result.text, deps.getRecentTextsForDedup?.() ?? [])) {
+            applySilentLikeOutcome("duplicate_suppressed");
+            return;
+          }
           text = result.text;
           source = "model";
         } else {
