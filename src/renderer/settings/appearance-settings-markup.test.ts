@@ -42,6 +42,12 @@ describe("appearance settings markup", () => {
     expect(panel).not.toContain('data-theme="polished-pink"');
   });
 
+  it("adds custom style controls to preferences", () => {
+    const panel = form("preferences-form");
+    expect(panel).toContain('id="custom-style-sampling-btn"');
+    expect(panel).toContain('id="custom-style-prompt-btn"');
+  });
+
   it("moves desktop-pet controls out of general settings", () => {
     const appearance = form("appearance-form");
     const general = form("general-form");

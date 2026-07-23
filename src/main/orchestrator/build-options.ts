@@ -20,7 +20,11 @@
 //   IPC.AGUI_EVENT / chatWindow（用于推 sticker）
 //
 // 这些全部塞到 BuildOptionsDeps 里。dispatcher 在 Phase 1 注入同样的 deps 即可。
-import type { CyreneRunOptions, CyreneRunResult } from "./cyrene-agent";
+import {
+  resolveExecutionMode,
+  type CyreneRunOptions,
+  type CyreneRunResult,
+} from "./cyrene-agent";
 import type { ToolDefinition } from "./tool-registry";
 import type { ChatMessage, OpenAIContentBlock } from "./vendors/types";
 import type { AguiRunInput } from "../agui-bridge";
@@ -34,12 +38,20 @@ import {
 } from "../chat-time-context";
 import { perf } from "../perf-trace";
 import { buildResponseContext } from "../cita/context-package";
+import {
+  STYLE_IDS,
+  normalizeStyleId,
+  type CustomStyleConfig,
+  type StyleId,
+} from "../../shared/style-sampling";
+import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
  *  实际调用时由 index.ts 注入真实的强类型函数。这避免循环类型依赖。 */
 export interface BuildOptionsDeps {
   loadModelSettings: () => ModelSettingsLite;
+  loadGeneralSettings: () => StyleSettingsLite;
   loadUserProfile: () => UserProfileLite;
   buildEnvironmentContext: (model: { provider: string; model: string }, profile: unknown) => string;
   buildSkillCatalog: (skills: ReadonlyArray<unknown>) => string;
@@ -65,6 +77,14 @@ export interface BuildOptionsDeps {
   buildToolSystemPrompt: (enabledTools: ReadonlyArray<unknown>) => string;
   /** 第一期：Soul 阶段使用的基础 system prompt。工具结果在 FC 循环 Soul 阶段执行前动态追加。 */
   buildSoulSystemBasePrompt: (styleFile: string) => string;
+  /** 已由 main 侧解析好的 style Markdown；build-options 只负责注入边界。 */
+  readStylePrompt: (styleId: StyleId) => string;
+  /** 按 provider/model/reasoning/customStyle 解析后的 Soul 采样参数。 */
+  resolveSoulSampling: (input: {
+    styleId: StyleId;
+    settings: ModelSettingsLite;
+    customStyle: CustomStyleConfig;
+  }) => ApprovedStyleSampling;
   /** 第一期：注入 toolRegistry（用于 buildToolSystemPrompt 自动生成目录）。 */
   toolRegistry: { getEnabled(): ReadonlyArray<unknown> };
   logWorldbookInjection: (alwaysOnContext: string, systemContent: string) => void;
@@ -135,6 +155,11 @@ export interface ModelSettingsLite {
   runtimeSync?: string;
   stickerEnabled?: boolean;
   stickerSimilarityThreshold?: number;
+}
+
+export interface StyleSettingsLite {
+  currentStyleId?: unknown;
+  customStyle?: unknown;
 }
 
 export interface UserProfileLite {
@@ -267,6 +292,42 @@ function buildImageCaptionFallbackMessages(
   };
 }
 
+function isStyleId(value: unknown): value is StyleId {
+  return typeof value === "string" && (STYLE_IDS as readonly string[]).includes(value);
+}
+
+function styleIdFromLegacyFile(value: unknown): StyleId | undefined {
+  if (typeof value !== "string") return undefined;
+  const legacy: Record<string, StyleId> = {
+    "01_default.md": "default",
+    "02_lively.md": "lively",
+    "03_healing.md": "healing",
+    "04_focused.md": "focused",
+    "05_sweet.md": "sweet",
+  };
+  return legacy[value];
+}
+
+function resolveRunStyleId(input: AguiRunInput, saved: StyleSettingsLite): StyleId {
+  if (isStyleId(input.styleId)) return input.styleId;
+  const legacyStyleId = styleIdFromLegacyFile(input.style);
+  if (legacyStyleId) return legacyStyleId;
+  if (isStyleId(saved.currentStyleId)) return saved.currentStyleId;
+  return normalizeStyleId(undefined);
+}
+
+function buildStylePromptBlock(markdown: string): string {
+  const trimmed = markdown.trim();
+  if (!trimmed) return "";
+  return [
+    "[表达风格]",
+    "以下内容仅用于控制措辞、句式、语气和信息密度。",
+    "不得修改角色身份、事实记忆、工具规则、安全约束及硬性行为规则。",
+    "",
+    trimmed,
+  ].join("\n");
+}
+
 /**
  * 构造 CyreneAgent.runWithEvents 所需的 options + 提取 latestUserText。
  * 与 index.ts 原 AG-UI bridge 的 buildOptions 行为完全一致。
@@ -276,6 +337,7 @@ export async function buildAgentRunOptions(
   deps: BuildOptionsDeps,
 ): Promise<{ options: CyreneRunOptions; latestUserText: string }> {
   const settings = deps.loadModelSettings();
+  const styleSettings = deps.loadGeneralSettings();
   if (!settings.apiKey) {
     throw new Error("还没有填写 API Key，请先在设置里保存 API 配置。");
   }
@@ -286,9 +348,10 @@ export async function buildAgentRunOptions(
   // slim view for downstream helpers that only need { role, content }
   const slimMessages = messages as unknown as Array<{ role: string; content?: string }>;
   const latestUserText = contentToText(messages.filter((m) => m.role === "user").at(-1)?.content) ?? "";
-  const executionMode = input.executionMode
-    ?? ((input.style || "").startsWith("talk") ? "soul-only" : "collaboration");
-  const isSoulOnly = executionMode === "soul-only";
+  const executionMode = resolveExecutionMode(
+    input.executionMode ?? ((input.style || "").startsWith("talk") ? "chat" : "work"),
+  );
+  const isChatMode = executionMode === "chat";
   const skillActivation = deps.resolveSlashActivation(slimMessages);
   const profile = deps.loadUserProfile();
   const { cleanMessages: cleanLlm, timestampedMessages: llmMessages, timeContext: conversationTimeContext } = buildConversationTimeContext(
@@ -341,7 +404,7 @@ export async function buildAgentRunOptions(
   let contextualizedQuery = latestUserText;
   let responseContext = "";
   let trustedRefs: string[] = [];
-  if (!isSoulOnly && deps.prepareCitaTurn) {
+  if (!isChatMode && deps.prepareCitaTurn) {
     try {
       const recentDialogue = messages
         .filter((message): message is ChatMessage & { role: "user" | "assistant" } => (
@@ -397,16 +460,24 @@ export async function buildAgentRunOptions(
     attachmentContext = `\n\n【本轮附件内容】\n${parts.join("\n\n")}`;
   }
 
-  const styleFile = isSoulOnly ? "talk" : input.style || "01_default.md";
+  const styleId = resolveRunStyleId(input, styleSettings);
+  const stylePromptBlock = buildStylePromptBlock(deps.readStylePrompt(styleId));
+  const soulSampling = deps.resolveSoulSampling({
+    styleId,
+    settings,
+    customStyle: styleSettings.customStyle as CustomStyleConfig,
+  });
+  // 运行模式只决定基础 system；表达 style 始终单独注入 Soul。
+  const basePromptMode = isChatMode ? "chat" : "work";
   const enabledTools = deps.toolRegistry.getEnabled();
-  const runTools = isSoulOnly ? [] : enabledTools;
+  const runTools = isChatMode ? [] : enabledTools;
   // 第一期：保留旧 systemContent 兼容（已不再使用，保留字段是为了 logger 诊断）。
   // 同时新增 toolSystemContent / soulSystemBaseContent 两套。
   const systemContent =
     (environmentContext ? environmentContext + "\n\n" : "") +
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
-    deps.buildSystemPrompt(styleFile) +
+    deps.buildSystemPrompt(basePromptMode) +
     (skillCatalog ? "\n\n---\n\n" + skillCatalog : "") +
     (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "") +
     skillActivation +
@@ -427,7 +498,8 @@ export async function buildAgentRunOptions(
     (environmentContext ? environmentContext + "\n\n" : "") +
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
-    deps.buildSoulSystemBasePrompt(styleFile) +
+    deps.buildSoulSystemBasePrompt(basePromptMode) +
+    (stylePromptBlock ? "\n\n---\n\n" + stylePromptBlock : "") +
     (autoInjectedSoulContext ? "\n\n---\n\n" + autoInjectedSoulContext : "") +
     skillActivation +
     toneInjection +
@@ -445,7 +517,7 @@ export async function buildAgentRunOptions(
   const fcMessages: ChatMessage[] = withDirectImageAttachments(llmMessages as unknown as ChatMessage[], input);
   const cleanFcMessages: ChatMessage[] = withDirectImageAttachments(cleanLlm as unknown as ChatMessage[], input);
   const imageCaptionFallback = buildImageCaptionFallbackMessages(
-    isSoulOnly
+    isChatMode
       ? soulSystemWithoutCita
       : toolSystemContent + "\n\n---\n\n" + soulSystemWithoutCita,
     llmMessages as unknown as ChatMessage[],
@@ -477,8 +549,9 @@ export async function buildAgentRunOptions(
       timeoutMs: deps.chatRequestTimeoutMs,
       toolSystemContent,
       soulSystemBaseContent,
+      soulSampling,
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
-      ...(isSoulOnly ? { tools: runTools as ToolDefinition[] } : {}),
+      ...(isChatMode ? { tools: runTools as ToolDefinition[] } : {}),
     },
     latestUserText,
   };

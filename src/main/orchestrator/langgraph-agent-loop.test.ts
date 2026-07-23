@@ -135,6 +135,23 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     expect(result.reply).toBe("你想听哪个版本？");
   });
 
+  it("applies style sampling only to the final Soul request", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({ decision: "respond", reason: "直接回复" });
+    adapter.enqueueText("陪着你呢。");
+
+    await runLangGraphAgentLoop({
+      ...options(adapter),
+      soulSampling: { temperature: 0.82, frequencyPenalty: 0.2 },
+    });
+
+    expect(adapter.requests).toHaveLength(2);
+    expect(adapter.requests[0].temperature).toBeUndefined();
+    expect(adapter.requests[0].frequencyPenalty).toBeUndefined();
+    expect(adapter.requests[1].temperature).toBe(0.82);
+    expect(adapter.requests[1].frequencyPenalty).toBe(0.2);
+  });
+
   it("repairs a malformed Action Gate JSON once", async () => {
     const adapter = new FakeAdapter();
     // 第一次返回非 JSON，第二次按结构化错误码修复。

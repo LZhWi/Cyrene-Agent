@@ -65,6 +65,9 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
     // 不传时让厂商用默认值——不同型号约束不同（如 Kimi k2.6 只允许 1），
     // 硬编码兜底值会在某些模型上报错。
     if (req.temperature !== undefined) body.temperature = req.temperature;
+    if (req.topP !== undefined) body.top_p = req.topP;
+    if (req.frequencyPenalty !== undefined) body.frequency_penalty = req.frequencyPenalty;
+    if (req.repetitionPenalty !== undefined) body.repetition_penalty = req.repetitionPenalty;
     // maxTokens：调用方显式传时才塞（流式场景下通常不传）
     if (req.maxTokens !== undefined) body.max_tokens = req.maxTokens;
     const tools = toWireTools(req.tools);

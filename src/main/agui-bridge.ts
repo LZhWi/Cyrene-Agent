@@ -24,16 +24,20 @@ import { indexConversationTurn } from "./orchestrator/history-tools";
 import type { RelationshipChannel } from "./relationship/relationship-log";
 import { createThinkFilter, type ThinkStreamFilter, type ThinkFilterMode } from "./chat/think-filter";
 import { perf } from "./perf-trace";
+import type { StyleId } from "../shared/style-sampling";
 
 /** 渲染进程发起 run 时传的输入。 */
 export interface AguiRunInput {
   messages: unknown[];   // 原始 {role, content}[]，主进程会 normalize
-  style: string;         // 人格 style 文件名
+  /** 旧版人格 style 文件名；仅保留兼容，不再承担运行模式语义。 */
+  style?: string;
+  /** 本轮表达风格，与 executionMode 正交。 */
+  styleId?: StyleId | string;
   sessionId?: string;    // 会话 ID，用于历史召回按会话隔离（可选，默认 "default"）
   /** 外部渠道入口。桌面聊天不传；微信/飞书用于注入渠道语气规则。 */
   channel?: RelationshipChannel;
-  /** 显式运行模式；未传时由聊天 style 推导。 */
-  executionMode?: AgentExecutionMode;
+  /** 显式运行模式；桌面聊天始终显式传入。 */
+  executionMode?: AgentExecutionMode | "soul-only" | "collaboration";
   /** 本轮附件（文本内容，临时注入系统上下文，不存历史）。 */
   attachments?: { name: string; text: string }[];
   /** 本轮图片附件。主进程会安全读取并转成 OpenAI-compatible image_url content block。 */

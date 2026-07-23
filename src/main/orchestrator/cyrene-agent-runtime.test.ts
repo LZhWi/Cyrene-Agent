@@ -10,9 +10,11 @@ describe("resolveAgentRuntime", () => {
 });
 
 describe("resolveExecutionMode", () => {
-  it("uses collaboration by default and honors Soul-only explicitly", () => {
-    expect(resolveExecutionMode(undefined)).toBe("collaboration");
-    expect(resolveExecutionMode("collaboration")).toBe("collaboration");
-    expect(resolveExecutionMode("soul-only")).toBe("soul-only");
+  it("uses Work by default and migrates legacy execution mode names", () => {
+    expect(resolveExecutionMode(undefined)).toBe("work");
+    expect(resolveExecutionMode("work")).toBe("work");
+    expect(resolveExecutionMode("chat")).toBe("chat");
+    expect(resolveExecutionMode("collaboration")).toBe("work");
+    expect(resolveExecutionMode("soul-only")).toBe("chat");
   });
 });

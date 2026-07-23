@@ -75,6 +75,7 @@ export const IPC = {
   PET_ZOOM: "pet:zoom",
   SETTINGS_PREVIEW_RUNTIME_SYNC: "settings:preview-runtime-sync",
   SETTINGS_OPEN_STICKER_MANAGER: "settings:open-sticker-manager",
+  SETTINGS_OPEN_CUSTOM_STYLE_PROMPT: "settings:open-custom-style-prompt",
 
   // chat sessions (multi-conversation history, persisted to userData/cyrene-chats/)
   CHATS_LIST: "chats:list",

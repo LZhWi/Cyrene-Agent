@@ -25,9 +25,10 @@ import {
   type TwoPhaseFcResult,
 } from "./two-phase-fc-loop";
 import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
-import { runSoulOnlyLoop } from "./soul-only-loop";
+import { runChatLoop } from "./chat-loop";
 import { ExecutionLedgerStore } from "./execution-ledger";
 import { perf } from "../perf-trace";
+import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 
 const executionLedgers = new ExecutionLedgerStore();
 
@@ -40,7 +41,7 @@ export interface AgentLoopSettings {
   reasoning?: import("../../shared/reasoning").ReasoningPreference;
 }
 
-export type AgentExecutionMode = "soul-only" | "collaboration";
+export type AgentExecutionMode = "work" | "chat";
 
 /** CyreneAgent.run() 需要的输入——桥层构造好后塞进 input.state 或 forwardedProps。 */
 export interface CyreneRunOptions {
@@ -58,7 +59,7 @@ export interface CyreneRunOptions {
   trustedRefs?: string[];
   /** 临时回退开关；默认使用 LangGraph Runtime。 */
   agentRuntime?: "langgraph" | "legacy";
-  /** Soul-only 跳过 CITA/Action Gate/Native FC；默认 collaboration。 */
+  /** Chat 跳过 CITA/Action Gate/Native FC；默认 Work。 */
   executionMode?: AgentExecutionMode;
   timeoutMs: number;
   /** 可选：本次 run 的工具集合。未传时使用当前所有已启用工具。 */
@@ -69,6 +70,8 @@ export interface CyreneRunOptions {
   toolSystemContent: string;
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。 */
   soulSystemBaseContent: string;
+  /** 只应用到 Soul 最终自然语言回复，禁止影响 CITA、Action Gate 与 Native FC。 */
+  soulSampling?: ApprovedStyleSampling;
   /** 不带时间戳前缀的 messages，给 Action Gate 用。未传时回退到 messages。 */
   cleanMessages?: ChatMessage[];
   /** Native FC 专用 system prompt（从 native_fc_system.md 读取）。 */
@@ -93,8 +96,9 @@ export function resolveAgentRuntime(runtime: CyreneRunOptions["agentRuntime"]): 
   return runtime === "legacy" ? "legacy" : "langgraph";
 }
 
-export function resolveExecutionMode(mode: CyreneRunOptions["executionMode"]): AgentExecutionMode {
-  return mode === "soul-only" ? "soul-only" : "collaboration";
+export function resolveExecutionMode(mode: unknown): AgentExecutionMode {
+  // 兼容尚未重启的旧 renderer 与历史内部调用。
+  return mode === "chat" || mode === "soul-only" ? "chat" : "work";
 }
 
 /**
@@ -239,12 +243,13 @@ export class CyreneAgent extends AbstractAgent {
           );
 
           let result: TwoPhaseFcResult;
-          if (executionMode === "soul-only") {
-            result = await perf.track("soul_only_loop", () => runSoulOnlyLoop({
+          if (executionMode === "chat") {
+            result = await perf.track("chat_loop", () => runChatLoop({
               settings: options.settings,
               adapter,
               messages: options.messages,
               soulSystemBaseContent: options.soulSystemBaseContent,
+              soulSampling: options.soulSampling,
               timeoutMs: options.timeoutMs,
               imageCaptionFallback: options.imageCaptionFallback,
               onEvent,
@@ -264,6 +269,7 @@ export class CyreneAgent extends AbstractAgent {
               tools: options.tools ?? toolRegistry.getEnabledTools(),
               toolSystemContent: options.toolSystemContent,
               soulSystemBaseContent: options.soulSystemBaseContent,
+              soulSampling: options.soulSampling,
               cleanMessages: options.cleanMessages,
               nativeFcSystemContent: options.nativeFcSystemContent,
               actionGateSystemPrompt: options.actionGateSystemPrompt,

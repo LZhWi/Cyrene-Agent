@@ -11,12 +11,14 @@ import type {
   ChatRequest,
   ChatVendorAdapter,
 } from "./vendors/types";
+import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 
-export interface SoulOnlyLoopOptions {
+export interface ChatLoopOptions {
   settings: AgentLoopSettings;
   adapter: ChatVendorAdapter;
   messages: ChatMessage[];
   soulSystemBaseContent: string;
+  soulSampling?: ApprovedStyleSampling;
   timeoutMs: number;
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
   onEvent?: (event: TwoPhaseEvent) => void;
@@ -24,7 +26,7 @@ export interface SoulOnlyLoopOptions {
   signal?: AbortSignal;
 }
 
-function emitText(onEvent: SoulOnlyLoopOptions["onEvent"], text: string): void {
+function emitText(onEvent: ChatLoopOptions["onEvent"], text: string): void {
   const messageId = `msg-${Date.now()}`;
   onEvent?.({ type: "text_message_start", messageId, role: "assistant" });
   for (const char of Array.from(text)) {
@@ -47,7 +49,7 @@ function withSoulSystem(messages: ChatMessage[], system: string): ChatMessage[] 
   return [{ role: "system", content: system }, ...messages];
 }
 
-export async function runSoulOnlyLoop(options: SoulOnlyLoopOptions): Promise<TwoPhaseFcResult> {
+export async function runChatLoop(options: ChatLoopOptions): Promise<TwoPhaseFcResult> {
   const startedAt = Date.now();
   const usageRecorder = options.recordUsage ?? ((input, output, calls) => recordUsage(input, output, calls));
   let usedImageCaptionFallback = false;
@@ -64,6 +66,7 @@ export async function runSoulOnlyLoop(options: SoulOnlyLoopOptions): Promise<Two
       model: options.settings.model,
       messages: withSoulSystem(messages, options.soulSystemBaseContent),
       stream: false,
+      ...(options.soulSampling ?? {}),
     };
     const effectiveRequest = options.adapter.applyCacheHints?.(request, options.settings) ?? request;
     const http = options.adapter.buildRequest(effectiveRequest, options.settings);
@@ -92,7 +95,7 @@ export async function runSoulOnlyLoop(options: SoulOnlyLoopOptions): Promise<Two
     }
   };
 
-  options.onEvent?.({ type: "step_started", stepName: "soul-only" });
+  options.onEvent?.({ type: "step_started", stepName: "chat" });
   try {
     let response;
     try {
@@ -118,6 +121,6 @@ export async function runSoulOnlyLoop(options: SoulOnlyLoopOptions): Promise<Two
       soulPhaseReason: "no_tool",
     };
   } finally {
-    options.onEvent?.({ type: "step_finished", stepName: "soul-only" });
+    options.onEvent?.({ type: "step_finished", stepName: "chat" });
   }
 }

@@ -106,6 +106,9 @@ export interface ChatRequest {
   /** Action Gate 专用：直接指定 tool_choice wire 值，绕过 resolveToolChoicePolicy。 */
   toolChoiceOverride?: ToolChoiceOverride;
   temperature?: number;
+  topP?: number;
+  frequencyPenalty?: number;
+  repetitionPenalty?: number;
   stream?: boolean;
   /** CITA/Action Gate only. Native FC keeps using real tools instead. */
   structuredOutput?: StructuredOutputRequest;

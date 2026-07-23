@@ -205,12 +205,12 @@
           <div class="settings-list">
             <div class="setting-row">
               <div>
-                <strong>默认聊天模式</strong>
+                <strong>默认模式</strong>
                 <span>打开聊天窗口时默认使用的模式；窗口内仍可临时切换。</span>
               </div>
-              <div class="option-blocks option-blocks--wide" id="default-chat-mode-select" role="radiogroup" aria-label="默认聊天模式">
-                <button type="button" class="option-block is-active" data-value="collab" aria-pressed="true">协作</button>
-                <button type="button" class="option-block" data-value="talk" aria-pressed="false">日常聊天</button>
+              <div class="option-blocks option-blocks--wide" id="default-chat-mode-select" role="radiogroup" aria-label="默认模式">
+                <button type="button" class="option-block is-active" data-value="work" aria-pressed="true">Work</button>
+                <button type="button" class="option-block" data-value="chat" aria-pressed="false">Chat</button>
               </div>
             </div>
 
@@ -234,6 +234,17 @@
               <div class="option-blocks option-blocks--wide" id="mobile-message-segmentation-select" role="radiogroup" aria-label="手机信息分段">
                 <button type="button" class="option-block is-active" data-value="off" aria-pressed="true">关闭</button>
                 <button type="button" class="option-block" data-value="on" aria-pressed="false">开启</button>
+              </div>
+            </div>
+
+            <div class="setting-row">
+              <div>
+                <strong>自定义风格</strong>
+                <span>配置聊天窗口“自定义”风格的采样参数，或打开自定义 Prompt 文件。</span>
+              </div>
+              <div class="settings-actions-inline">
+                <button type="button" class="save-btn save-btn--ghost" id="custom-style-sampling-btn">自定义风格采样</button>
+                <button type="button" class="save-btn save-btn--ghost" id="custom-style-prompt-btn">打开 Prompt 文件</button>
               </div>
             </div>
 
@@ -1013,7 +1024,7 @@
                     <input type="radio" name="channels-tool-sandbox" value="off" id="channels-tool-sandbox-off" />
                     <div class="tool-permission-option__text">
                       <span class="tool-permission-option__title">关闭</span>
-                      <span class="tool-permission-option__desc">仅进行日常聊天，不启用 CITA、Action Gate 或任何工具。</span>
+                      <span class="tool-permission-option__desc">切换至 Chat，不启用 CITA、Action Gate 或任何工具。</span>
                     </div>
                   </label>
                   <label class="tool-permission-option">

@@ -24,6 +24,7 @@ import type { TwoPhaseEvent, TwoPhaseFcResult, AgentLoopSettings } from "./two-p
 import type { ChatMessage, ChatRequest, ChatVendorAdapter, ToolCall } from "./vendors/types";
 import { perf } from "../perf-trace";
 import { contextRefRegistry } from "./tool-context";
+import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 
 export interface LangGraphAgentLoopOptions {
   settings: AgentLoopSettings;
@@ -32,6 +33,7 @@ export interface LangGraphAgentLoopOptions {
   tools: ToolDefinition[];
   toolSystemContent: string;
   soulSystemBaseContent: string;
+  soulSampling?: ApprovedStyleSampling;
   originalQuery: string;
   contextualizedQuery: string;
   citaContextBlock: string;
@@ -456,6 +458,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           model: options.settings.model,
           messages: [{ role: "system", content: system }, ...messages],
           stream: false,
+          ...(options.soulSampling ?? {}),
         })));
         trackUsage(response.usage);
         const reply = stripLeakedChatTimeContext(stripToolProtocol(response.text))

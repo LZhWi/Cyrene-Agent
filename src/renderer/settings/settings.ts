@@ -29,6 +29,13 @@ import { requestTrackPlayback } from "./music-playback";
 import { type ReasoningPreference } from "../../shared/reasoning";
 import { type LoginFlowState } from "../../shared/music-types";
 import {
+  DEFAULT_CUSTOM_STYLE,
+  normalizeCustomStyleConfig,
+  type CustomStyleConfig,
+  type DiversityPreference,
+  type RepetitionLevel,
+} from "../../shared/style-sampling";
+import {
   CUSTOM_ENDPOINT_PROVIDERS,
   getCustomEndpointMode,
   getCustomEndpointPresentation,
@@ -376,6 +383,8 @@ interface GeneralSettings {
   uiFont: UiFont;
   uiIcon: UiIcon;
   defaultChatMode: DefaultChatMode;
+  currentStyleId?: string;
+  customStyle: CustomStyleConfig;
   segmentedOutputMode: SegmentedOutputMode;
   mobileMessageSegmentation: MobileMessageSegmentationMode;
   proactiveChatMode: ProactiveChatMode;
@@ -439,6 +448,7 @@ interface SettingsApi {
   saveConfig: (config: Partial<ModelSettings>) => Promise<ModelSettings>;
   getGeneral: () => Promise<GeneralSettings>;
   saveGeneral: (config: Partial<GeneralSettings>) => Promise<GeneralSettings>;
+  openCustomStylePrompt?: () => Promise<{ ok: boolean; filePath?: string; error?: string }>;
   pickUiFont: () => Promise<string | null>;
   importUiFont: (sourcePath: string) => Promise<UiFont>;
   resetUiFont: () => Promise<UiFont>;
@@ -634,13 +644,16 @@ if (!window.settings) {
       launchAtLogin: false,
       language: "zh-CN",
       uiTheme: "classic",
-      defaultChatMode: "collab",
+      defaultChatMode: "work",
+      currentStyleId: "default",
+      customStyle: DEFAULT_CUSTOM_STYLE,
       segmentedOutputMode: "off",
       mobileMessageSegmentation: "off",
       proactiveChatMode: "off",
       proactiveDeliveryTarget: "local",
     }),
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
+    openCustomStylePrompt: async () => ({ ok: false, error: "settings api unavailable" }),
     channelsGetStatus: () => Promise.resolve({}),
     onChannelsStatusChanged: () => () => {},
     openSidebar: () => {},
@@ -797,6 +810,8 @@ const proactiveDeliveryRow = document.getElementById("proactive-delivery-row") a
 const proactiveDeliverySelect = document.getElementById("proactive-delivery-select") as HTMLElement;
 const citaEnabledInput = document.getElementById("cita-enabled") as HTMLInputElement;
 const citaEngineSelect = document.getElementById("cita-engine-select") as HTMLElement;
+const customStyleSamplingBtn = document.getElementById("custom-style-sampling-btn") as HTMLButtonElement | null;
+const customStylePromptBtn = document.getElementById("custom-style-prompt-btn") as HTMLButtonElement | null;
 const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
 const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputElement;
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
@@ -935,7 +950,7 @@ function applyDefaultChatModeSelection(mode: DefaultChatMode): void {
 }
 
 function getDefaultChatModeValue(): DefaultChatMode {
-  return normalizeDefaultChatMode(getOptionGroupValue(defaultChatModeSelect, "collab"));
+  return normalizeDefaultChatMode(getOptionGroupValue(defaultChatModeSelect, "work"));
 }
 
 function applySegmentedOutputSelection(mode: SegmentedOutputMode): void {
@@ -968,6 +983,134 @@ function applyProactiveDeliverySelection(target: ProactiveDeliveryTarget): void 
 
 function getProactiveDeliveryValue(): ProactiveDeliveryTarget {
   return normalizeProactiveDeliveryTarget(getOptionGroupValue(proactiveDeliverySelect, "local"));
+}
+
+let currentCustomStyleConfig: CustomStyleConfig = DEFAULT_CUSTOM_STYLE;
+let customStyleOverlay: HTMLElement | null = null;
+
+function diversityDriverOf(config: CustomStyleConfig): DiversityPreference["driver"] {
+  return config.diversity.driver;
+}
+
+function diversityValueOf(config: CustomStyleConfig): number {
+  return config.diversity.driver === "temperature" || config.diversity.driver === "top-p"
+    ? config.diversity.value
+    : 0.65;
+}
+
+function buildCustomStyleConfigFromModal(): CustomStyleConfig {
+  if (!customStyleOverlay) return currentCustomStyleConfig;
+  const diversityDriver = (
+    customStyleOverlay.querySelector<HTMLInputElement>('input[name="custom-diversity"]:checked')?.value
+    ?? "model-default"
+  ) as DiversityPreference["driver"];
+  const rawValue = Number((
+    customStyleOverlay.querySelector<HTMLInputElement>("#custom-diversity-value")?.value
+    ?? ""
+  ).trim());
+  const repetition = (
+    customStyleOverlay.querySelector<HTMLInputElement>('input[name="custom-repetition"]:checked')?.value
+    ?? "model-default"
+  ) as RepetitionLevel;
+  return normalizeCustomStyleConfig({
+    diversity: diversityDriver === "model-default"
+      ? { driver: "model-default" }
+      : { driver: diversityDriver, value: rawValue },
+    repetition,
+  });
+}
+
+function ensureCustomStyleModal(): HTMLElement {
+  if (customStyleOverlay) return customStyleOverlay;
+  customStyleOverlay = document.createElement("div");
+  customStyleOverlay.id = "custom-style-overlay";
+  customStyleOverlay.className = "cy-modal-overlay is-hidden custom-style-overlay";
+  customStyleOverlay.innerHTML = [
+    '<div class="cy-modal custom-style-modal" role="dialog" aria-modal="true">',
+    '  <div class="cy-modal__head"><span class="cy-modal__icon">🖊️</span><h3 class="cy-modal__title">自定义风格采样</h3></div>',
+    '  <hr class="cy-modal__divider">',
+    '  <div class="custom-style-modal__section">',
+    '    <div class="custom-style-modal__label">多样性控制</div>',
+    '    <label><input type="radio" name="custom-diversity" value="model-default"> 跟随模型</label>',
+    '    <label><input type="radio" name="custom-diversity" value="temperature"> Temperature</label>',
+    '    <label><input type="radio" name="custom-diversity" value="top-p"> Top-P</label>',
+    '    <div class="custom-style-modal__value" id="custom-diversity-row"><span id="custom-diversity-label">Temperature</span><input id="custom-diversity-value" type="number" min="0" max="2" step="0.01"></div>',
+    '  </div>',
+    '  <div class="custom-style-modal__section">',
+    '    <div class="custom-style-modal__label">重复控制</div>',
+    '    <label><input type="radio" name="custom-repetition" value="model-default"> 跟随模型</label>',
+    '    <label><input type="radio" name="custom-repetition" value="light"> 轻度抑制</label>',
+    '    <label><input type="radio" name="custom-repetition" value="medium"> 中度抑制</label>',
+    '    <label><input type="radio" name="custom-repetition" value="strong"> 重度抑制</label>',
+    '  </div>',
+    '  <div class="cy-modal__actions">',
+    '    <button type="button" class="ghost-btn" id="custom-style-reset">恢复默认</button>',
+    '    <button type="button" class="ghost-btn" id="custom-style-cancel">取消</button>',
+    '    <button type="button" class="btn-primary" id="custom-style-save">保存</button>',
+    '  </div>',
+    '</div>',
+  ].join("\n");
+  document.body.appendChild(customStyleOverlay);
+
+  const updateDiversityRow = () => {
+    const driver = customStyleOverlay!.querySelector<HTMLInputElement>(
+      'input[name="custom-diversity"]:checked',
+    )?.value ?? "model-default";
+    const row = customStyleOverlay!.querySelector<HTMLElement>("#custom-diversity-row");
+    const label = customStyleOverlay!.querySelector<HTMLElement>("#custom-diversity-label");
+    const value = customStyleOverlay!.querySelector<HTMLInputElement>("#custom-diversity-value");
+    if (!row || !label || !value) return;
+    row.hidden = driver === "model-default";
+    label.textContent = driver === "top-p" ? "Top-P" : "Temperature";
+    value.min = "0";
+    value.max = driver === "top-p" ? "1" : "2";
+  };
+  customStyleOverlay.querySelectorAll<HTMLInputElement>('input[name="custom-diversity"]').forEach((input) => {
+    input.addEventListener("change", updateDiversityRow);
+  });
+  customStyleOverlay.querySelector<HTMLButtonElement>("#custom-style-cancel")?.addEventListener("click", () => {
+    customStyleOverlay?.classList.add("is-hidden");
+  });
+  customStyleOverlay.querySelector<HTMLButtonElement>("#custom-style-reset")?.addEventListener("click", () => {
+    renderCustomStyleModal(DEFAULT_CUSTOM_STYLE);
+  });
+  customStyleOverlay.querySelector<HTMLButtonElement>("#custom-style-save")?.addEventListener("click", async () => {
+    try {
+      currentCustomStyleConfig = buildCustomStyleConfigFromModal();
+      await window.settings!.saveGeneral({ customStyle: currentCustomStyleConfig });
+      customStyleOverlay?.classList.add("is-hidden");
+      setPreferencesSaveStatus("自定义风格已保存", "is-ok");
+    } catch {
+      setPreferencesSaveStatus("自定义风格保存失败", "is-error");
+    }
+  });
+  return customStyleOverlay;
+}
+
+function renderCustomStyleModal(config: CustomStyleConfig): void {
+  const overlay = ensureCustomStyleModal();
+  const normalized = normalizeCustomStyleConfig(config);
+  const driver = diversityDriverOf(normalized);
+  const repetition = normalized.repetition;
+  const driverInput = overlay.querySelector<HTMLInputElement>(
+    `input[name="custom-diversity"][value="${driver}"]`,
+  );
+  const repetitionInput = overlay.querySelector<HTMLInputElement>(
+    `input[name="custom-repetition"][value="${repetition}"]`,
+  );
+  if (driverInput) driverInput.checked = true;
+  if (repetitionInput) repetitionInput.checked = true;
+  const valueInput = overlay.querySelector<HTMLInputElement>("#custom-diversity-value");
+  if (valueInput) valueInput.value = String(diversityValueOf(normalized));
+  overlay.querySelectorAll<HTMLInputElement>('input[name="custom-diversity"]').forEach((input) => {
+    input.dispatchEvent(new Event("change"));
+  });
+}
+
+function openCustomStyleModal(): void {
+  const overlay = ensureCustomStyleModal();
+  renderCustomStyleModal(currentCustomStyleConfig);
+  overlay.classList.remove("is-hidden");
 }
 
 function renderProactiveDeliveryVisibility(): void {
@@ -1346,6 +1489,7 @@ async function loadGeneralSettings(): Promise<void> {
     renderUiFont(normalizeUiFont(cfg.uiFont));
     renderUiIcon(normalizeUiIcon(cfg.uiIcon));
     applyDefaultChatModeSelection(normalizeDefaultChatMode(cfg.defaultChatMode));
+    currentCustomStyleConfig = normalizeCustomStyleConfig(cfg.customStyle);
     applySegmentedOutputSelection(normalizeSegmentedOutputMode(cfg.segmentedOutputMode));
     applyMobileMessageSegmentationSelection(normalizeMobileMessageSegmentationMode(cfg.mobileMessageSegmentation));
     applyProactiveChatSelection(normalizeProactiveChatMode(cfg.proactiveChatMode));
@@ -1525,6 +1669,23 @@ proactiveDeliverySelect.querySelectorAll<HTMLButtonElement>(".option-block").for
 
 citaEnabledInput.addEventListener("change", () => {
   setPreferencesSaveStatus("有未保存的更改");
+});
+
+customStyleSamplingBtn?.addEventListener("click", () => {
+  openCustomStyleModal();
+});
+
+customStylePromptBtn?.addEventListener("click", async () => {
+  try {
+    const result = await window.settings?.openCustomStylePrompt?.();
+    if (!result?.ok) {
+      setPreferencesSaveStatus("打开 Prompt 文件失败", "is-error");
+      return;
+    }
+    setPreferencesSaveStatus("已打开 Prompt 文件位置", "is-ok");
+  } catch {
+    setPreferencesSaveStatus("打开 Prompt 文件失败", "is-error");
+  }
 });
 
 preferencesForm.addEventListener("submit", async (e) => {

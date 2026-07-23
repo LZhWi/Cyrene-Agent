@@ -47,6 +47,7 @@ import type {
 import type { ToolDefinition } from "./tool-registry";
 import { buildToolExecutionContext } from "./tool-execution-context";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
+import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 
 export interface AgentLoopSettings {
   provider: string;
@@ -81,6 +82,8 @@ export interface TwoPhaseFcOptions {
   toolSystemContent: string;
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。 */
   soulSystemBaseContent: string;
+  /** 只应用到 Soul 阶段最终自然语言回复。 */
+  soulSampling?: ApprovedStyleSampling;
   timeoutMs: number;
   maxToolRounds?: number;
   perRoundTimeoutMs?: number;
@@ -428,6 +431,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
       cfg: options.settings,
       conversation,
       soulSystemBaseContent,
+      soulSampling: options.soulSampling,
       buildSoulToolResultsSummary,
       allToolResults,
       accInput,
@@ -450,6 +454,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     cfg: options.settings,
     conversation,
     soulSystemBaseContent,
+    soulSampling: options.soulSampling,
     buildSoulToolResultsSummary,
     allToolResults,
     accInput,
@@ -470,6 +475,7 @@ async function runSoulPhase(args: {
   cfg: AgentLoopSettings;
   conversation: ChatMessage[];
   soulSystemBaseContent: string;
+  soulSampling: ApprovedStyleSampling | undefined;
   buildSoulToolResultsSummary: (results: ToolCallResult[]) => string;
   allToolResults: ToolCallResult[];
   accInput: number;
@@ -485,6 +491,7 @@ async function runSoulPhase(args: {
     cfg,
     conversation,
     soulSystemBaseContent,
+    soulSampling,
     buildSoulToolResultsSummary,
     allToolResults,
     accInput,
@@ -511,6 +518,7 @@ async function runSoulPhase(args: {
     model: cfg.model,
     messages: withSystem(conversation, finalSystemContent),
     stream: false,
+    ...(soulSampling ?? {}),
   };
   if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, cfg);
 

@@ -13,6 +13,10 @@ import {
 function createBuildDeps(): BuildOptionsDeps {
   return {
     loadModelSettings: () => ({ provider: "test", baseUrl: "https://example.test", model: "m", apiKey: "k" }),
+    loadGeneralSettings: () => ({
+      currentStyleId: "default",
+      customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+    }),
     loadUserProfile: () => ({}),
     buildEnvironmentContext: () => "ENV",
     buildSkillCatalog: () => "",
@@ -27,6 +31,8 @@ function createBuildDeps(): BuildOptionsDeps {
     buildSystemPrompt: () => "BASE_SYSTEM",
     buildToolSystemPrompt: () => "TOOL_SYSTEM",
     buildSoulSystemBasePrompt: () => "SOUL_SYSTEM_BASE",
+    readStylePrompt: (styleId) => `STYLE_PROMPT:${styleId}`,
+    resolveSoulSampling: () => ({}),
     toolRegistry: { getEnabled: () => [] },
     logWorldbookInjection: () => {},
     normalizeChatMessages: (raw) => raw as never,
@@ -120,7 +126,7 @@ describe("build-options", () => {
     expect(result.options.soulSystemBaseContent).toContain("SOUL_SYSTEM_BASE")
   })
 
-  it("builds Talk mode as Soul-only without CITA or tools", async () => {
+  it("builds Chat mode without CITA or tools", async () => {
     const deps = createBuildDeps()
     deps.prepareCitaTurn = vi.fn(async () => ({ contextBlock: "unexpected" }))
     deps.toolRegistry.getEnabled = () => [
@@ -130,16 +136,19 @@ describe("build-options", () => {
 
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "陪我聊聊" }],
-      style: "talk",
+      styleId: "lively",
+      executionMode: "chat",
     }, deps)
 
     expect(deps.prepareCitaTurn).not.toHaveBeenCalled()
-    expect(result.options.executionMode).toBe("soul-only")
+    expect(result.options.executionMode).toBe("chat")
     expect(result.options.tools).toEqual([])
     expect(result.options.citaContextBlock).toBe("")
+    expect(result.options.soulSystemBaseContent).toContain("STYLE_PROMPT:lively")
+    expect(result.options.toolSystemContent).not.toContain("STYLE_PROMPT:lively")
   })
 
-  it("honors an explicit Soul-only mode for channel runs", async () => {
+  it("honors an explicit Chat mode for channel runs", async () => {
     const deps = createBuildDeps()
     deps.prepareCitaTurn = vi.fn(async () => ({ contextBlock: "unexpected" }))
     deps.toolRegistry.getEnabled = () => [{ id: "weather" }]
@@ -149,13 +158,40 @@ describe("build-options", () => {
       messages: [{ role: "user", content: "今天怎么样" }],
       style: "01_default.md",
       channel: "wechat",
-      executionMode: "soul-only",
+      executionMode: "chat",
     }, deps)
 
     expect(deps.prepareCitaTurn).not.toHaveBeenCalled()
-    expect(deps.buildSoulSystemBasePrompt).toHaveBeenCalledWith("talk")
-    expect(result.options.executionMode).toBe("soul-only")
+    expect(deps.buildSoulSystemBasePrompt).toHaveBeenCalledWith("chat")
+    expect(result.options.executionMode).toBe("chat")
     expect(result.options.tools).toEqual([])
+  })
+
+  it("keeps selected style prompt and sampling independent from execution mode", async () => {
+    const deps = createBuildDeps()
+    deps.resolveSoulSampling = ({ styleId }) => (
+      styleId === "sweet"
+        ? { temperature: 0.82, frequencyPenalty: 0.2 }
+        : {}
+    )
+
+    const chat = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "陪我聊聊" }],
+      styleId: "sweet",
+      executionMode: "chat",
+    }, deps)
+    const work = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "查一下天气" }],
+      styleId: "sweet",
+      executionMode: "work",
+    }, deps)
+
+    for (const result of [chat, work]) {
+      expect(result.options.soulSystemBaseContent).toContain("STYLE_PROMPT:sweet")
+      expect(result.options.soulSampling).toEqual({ temperature: 0.82, frequencyPenalty: 0.2 })
+    }
+    expect(chat.options.executionMode).toBe("chat")
+    expect(work.options.executionMode).toBe("work")
   })
 
   it("does not locally route an explicit NetEase Cloud search request", async () => {
@@ -164,7 +200,8 @@ describe("build-options", () => {
 
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "网易云上搜一下左转灯" }],
-      style: "talk",
+      styleId: "default",
+      executionMode: "chat",
     }, deps)
 
     expect(result.options).not.toHaveProperty("requiredToolName")
@@ -180,11 +217,13 @@ describe("build-options", () => {
 
     const daily = await buildAgentRunOptions({
       messages: [{ role: "user", content: "看看网易云今日推荐" }],
-      style: "talk",
+      styleId: "default",
+      executionMode: "chat",
     }, deps)
     const generic = await buildAgentRunOptions({
       messages: [{ role: "user", content: "有点无聊，想听歌" }],
-      style: "talk",
+      styleId: "default",
+      executionMode: "chat",
     }, deps)
 
     expect(daily.options).not.toHaveProperty("requiredToolName")

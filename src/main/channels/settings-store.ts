@@ -172,7 +172,7 @@ export interface ChannelsSettings {
   stickerEnabled: boolean;
   /** 全局：是否把 bot 会话镜像到桌面端 chatWindow */
   mirrorToDesktop: boolean;
-  /** 全局：关闭工具，或在协作模式下限制工具风险等级。 */
+  /** 全局：Chat 关闭工具；Work 可限制工具风险等级。 */
   toolSandbox: ChannelToolSandbox;
 }
 

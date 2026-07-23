@@ -303,6 +303,88 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/* Work / Chat 始终可见的分段开关。外壳保持低对比，
+   当前项用抬起的玻璃片强调，避免与右侧下拉控件混淆。 */
+.mode-switch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(72px, 1fr));
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--rb-border-faint);
+  border-radius: 10px;
+  background: rgba(8, 7, 12, 0.24);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.16);
+  flex: 0 0 auto;
+  -webkit-app-region: no-drag;
+}
+
+.mode-switch__option {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--rb-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    color 120ms ease,
+    background 120ms ease,
+    border-color 120ms ease,
+    box-shadow 120ms ease,
+    transform 120ms ease;
+}
+
+.mode-switch__option svg {
+  display: block;
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.mode-switch__option:hover:not(.is-active) {
+  color: var(--rb-text-default);
+  background: rgba(255, 255, 255, 0.055);
+}
+
+.mode-switch__option.is-active {
+  color: var(--rb-text-strong);
+  background: rgba(255, 255, 255, 0.15);
+  border-color: var(--rb-border-soft);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.10),
+    0 2px 6px rgba(0, 0, 0, 0.16);
+}
+
+.mode-switch__option:active {
+  transform: translateY(1px);
+}
+
+.mode-switch__option:focus-visible {
+  outline: 2px solid var(--rb-pink-glow);
+  outline-offset: 1px;
+}
+
+[data-ui-theme="pearl-white"] .mode-switch {
+  background: rgba(36, 26, 42, 0.055);
+  box-shadow: inset 0 1px 2px rgba(36, 26, 42, 0.08);
+}
+
+[data-ui-theme="pearl-white"] .mode-switch__option.is-active {
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 2px 7px rgba(83, 57, 88, 0.10);
+}
+
 .chat__icon-btn,
 .chat__winbtn {
   display: grid;

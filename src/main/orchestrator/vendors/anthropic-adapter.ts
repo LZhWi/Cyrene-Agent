@@ -102,6 +102,7 @@ export class AnthropicAdapter implements ChatVendorAdapter {
     };
     // temperature 只在调用方显式传时才塞进 body，让厂商用默认值避免型号约束冲突
     if (req.temperature !== undefined) body.temperature = req.temperature;
+    if (req.topP !== undefined) body.top_p = req.topP;
     // system + 主动缓存（MiniMax/Claude：cache_control: ephemeral 打在 system block 上）
     if (system) {
       if (this.capability.cacheStrategy === "cache_control") {

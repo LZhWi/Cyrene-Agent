@@ -653,4 +653,26 @@ describe("runTwoPhaseFcLoop", () => {
     expect(sysContent).toContain('"state":"dispatched"');
     expect(sysContent).toContain("effect.state=dispatched");
   });
+
+  it("keeps style sampling out of tool requests and applies it to Soul only", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueText("");
+    adapter.enqueueText("done");
+
+    await runTwoPhaseFcLoop({
+      ...baseOptions,
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      soulSampling: { temperature: 0.9, frequencyPenalty: 0.2 },
+      executeTool: async () => {
+        throw new Error("不应调用");
+      },
+    });
+
+    expect(adapter.requests).toHaveLength(2);
+    expect(adapter.requests[0]).not.toHaveProperty("temperature");
+    expect(adapter.requests[0]).not.toHaveProperty("frequencyPenalty");
+    expect(adapter.requests[1]).toMatchObject({ temperature: 0.9, frequencyPenalty: 0.2 });
+    expect(adapter.requests[1].tools).toBeUndefined();
+  });
 });

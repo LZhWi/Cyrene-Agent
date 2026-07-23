@@ -22,6 +22,15 @@ import {
   type ProactiveDeliveryTarget,
   type SegmentedOutputMode,
 } from "../shared/preferences";
+import {
+  DEFAULT_CUSTOM_STYLE,
+  STYLE_FILE_BY_ID,
+  normalizeCustomStyleConfig,
+  normalizeStyleId,
+  resolveStylePreference,
+  type CustomStyleConfig,
+  type StyleId,
+} from "../shared/style-sampling";
 import { STATUS_KEYWORDS } from "./status-keywords";
 import {
   addL2MemoryVector,
@@ -54,6 +63,7 @@ import {
 import { testVendorConnection } from "./orchestrator/vendors/test-connection";
 import { migrateLegacyMinimaxDefaults } from "./orchestrator/vendors/minimax-defaults";
 import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
+import { resolveApprovedStyleSampling } from "./orchestrator/vendors/style-sampling";
 import type { VisionConfig } from "./orchestrator/vision-captioner";
 import { toolRegistry, type ToolDefinition } from "./orchestrator/tool-registry";
 import { buildToolCatalog } from "./orchestrator/tool-catalog";
@@ -509,6 +519,10 @@ interface GeneralSettings {
   uiIcon: UiIcon;
   /** 聊天窗口打开时默认选中的模式。 */
   defaultChatMode: DefaultChatMode;
+  /** 聊天窗口当前风格，启动时恢复；本轮请求仍以 renderer 显式 styleId 为准。 */
+  currentStyleId: StyleId;
+  /** 全局自定义风格采样配置。 */
+  customStyle: CustomStyleConfig;
   /** 聊天气泡分段输出偏好。 */
   segmentedOutputMode: SegmentedOutputMode;
   /** 手机渠道文本消息分段发送偏好。 */
@@ -735,7 +749,9 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   uiTheme: "classic",
   uiFont: DEFAULT_UI_FONT,
   uiIcon: "cyrene-sun",
-  defaultChatMode: "collab",
+  defaultChatMode: "work",
+  currentStyleId: "default",
+  customStyle: DEFAULT_CUSTOM_STYLE,
   segmentedOutputMode: "off",
   mobileMessageSegmentation: "off",
   proactiveChatMode: "off",
@@ -1161,6 +1177,8 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     uiFont: normalizeUiFont(input?.uiFont),
     uiIcon: normalizeUiIcon(input?.uiIcon),
     defaultChatMode: normalizeDefaultChatMode(input?.defaultChatMode),
+    currentStyleId: normalizeStyleId(input?.currentStyleId),
+    customStyle: normalizeCustomStyleConfig(input?.customStyle),
     segmentedOutputMode: normalizeSegmentedOutputMode(input?.segmentedOutputMode),
     mobileMessageSegmentation: normalizeMobileMessageSegmentationMode(input?.mobileMessageSegmentation),
     proactiveChatMode: normalizeProactiveChatMode(input?.proactiveChatMode),
@@ -1929,6 +1947,46 @@ function loadPromptFile(filename: string): string {
   }
 }
 
+function getCustomStylePromptPath(): string {
+  return path.join(app.getPath("userData"), "styles", "custom", "custom.md");
+}
+
+function ensureCustomStylePrompt(): string {
+  const targetPath = getCustomStylePromptPath();
+  if (fs.existsSync(targetPath)) return targetPath;
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
+  const templatePath = path.join(app.getAppPath(), "prompts", "styles", "custom", "custom.md");
+  if (fs.existsSync(templatePath)) {
+    fs.copyFileSync(templatePath, targetPath);
+  } else {
+    fs.writeFileSync(targetPath, "", "utf8");
+  }
+  return targetPath;
+}
+
+function readStylePrompt(styleId: StyleId): string {
+  if (styleId === "custom") {
+    const filePath = ensureCustomStylePrompt();
+    return fs.readFileSync(filePath, "utf8").trim();
+  }
+  return loadPromptFile("styles/" + STYLE_FILE_BY_ID[styleId]);
+}
+
+function resolveSoulSamplingForStyle(input: {
+  styleId: StyleId;
+  settings: { provider: string; model: string; reasoning?: ReasoningPreference };
+  customStyle: CustomStyleConfig;
+}) {
+  const capability = getCapabilityOrOpenAI(input.settings.provider);
+  const preference = resolveStylePreference(input.styleId, input.customStyle);
+  return resolveApprovedStyleSampling({
+    providerId: capability.id,
+    model: input.settings.model,
+    reasoning: input.settings.reasoning ?? { mode: "auto" },
+    preference,
+  });
+}
+
 /**
  * 诊断：确认 WorldBook active entries 是否真正进入最终 system prompt，
  * 以及在什么位置。不预设结论——先看数据再判断是 lost-in-middle、
@@ -1953,12 +2011,12 @@ function logWorldbookInjection(alwaysOnContext: string, systemContent: string): 
   }
 }
 
-function buildSystemPrompt(styleFile: string): string {
+function buildSystemPrompt(styleFile: string, includeStyle = true): string {
   const parts: string[] = [];
 
-  // styleFile 以 "talk" 开头时走纯聊天模式：用 talk_system.md 替换 system.md（不调工具）
-  const isTalkMode = styleFile.startsWith("talk");
-  const system = loadPromptFile(isTalkMode ? "talk_system.md" : "system.md");
+  // Chat 模式使用独立基础规则；仍兼容旧调用方传入的 "talk"。
+  const isChatMode = styleFile.startsWith("chat") || styleFile.startsWith("talk");
+  const system = loadPromptFile(isChatMode ? "chat_system.md" : "system.md");
   if (system) parts.push(system);
 
   const identity = loadPromptFile("identity.md");
@@ -1970,8 +2028,8 @@ function buildSystemPrompt(styleFile: string): string {
   const canon = loadPromptFile("canon_quotes.md");
   if (canon) parts.push(canon);
 
-  // 纯聊天模式不加载 style 文件（talk_system.md 已包含完整规则）
-  if (!isTalkMode) {
+  // 新链路由 build-options 独立注入 style Prompt；旧调用方仍可选择在这里附加 style 文件。
+  if (includeStyle && !isChatMode) {
     const style = loadPromptFile("styles/" + styleFile);
     if (style) parts.push(style);
   }
@@ -1981,8 +2039,8 @@ function buildSystemPrompt(styleFile: string): string {
 
 function buildProactivePersonaPrompt(): string {
   const parts: string[] = [];
-  const talkSystem = loadPromptFile("talk_system.md");
-  if (talkSystem) parts.push(talkSystem);
+  const chatSystem = loadPromptFile("chat_system.md");
+  if (chatSystem) parts.push(chatSystem);
   const soul = loadPromptFile("soul.md");
   if (soul) {
     // 主动轮完全不携带工具说明；Soul 尾部的 Live2D/联网章节由正常聊天使用。
@@ -2239,7 +2297,7 @@ function buildToolSystemPrompt(enabledTools: ReadonlyArray<ToolDefinition>): str
  * 后续第二期再拆分为 toolEnvironmentContext / soulEnvironmentContext。
  */
 function buildSoulSystemBasePrompt(styleFile: string): string {
-  return buildSystemPrompt(styleFile);
+  return buildSystemPrompt(styleFile, false);
 }
 
 /**
@@ -3369,6 +3427,12 @@ ipcMain.handle(IPC.SETTINGS_SAVE_GENERAL, (_event, settings: Partial<GeneralSett
     proactiveChatService?.invalidate();
   }
   return saved;
+});
+
+ipcMain.handle(IPC.SETTINGS_OPEN_CUSTOM_STYLE_PROMPT, async () => {
+  const filePath = ensureCustomStylePrompt();
+  await shell.showItemInFolder(filePath);
+  return { ok: true, filePath };
 });
 
 ipcMain.on(IPC.SETTINGS_OPEN_SIDEBAR, () => {
@@ -4517,7 +4581,7 @@ app.whenReady().then(async () => {
         attachments: attachmentInputs.attachments,
         imageAttachments: attachmentInputs.imageAttachments,
         channel: msg.channel,
-        executionMode: sandbox === "off" ? "soul-only" : "collaboration",
+        executionMode: sandbox === "off" ? "chat" : "work",
       },
       buildOptionsDeps,
     );
@@ -4690,6 +4754,7 @@ app.whenReady().then(async () => {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const buildOptionsDeps: BuildOptionsDeps = {
     loadModelSettings: () => loadModelSettings(),
+    loadGeneralSettings: () => loadGeneralSettings(),
     loadUserProfile: () => loadUserProfile(),
     buildEnvironmentContext: ((model: { provider: string; model: string }, profile: unknown) =>
       buildEnvironmentContext(model as any, profile as any)) as BuildOptionsDeps["buildEnvironmentContext"],
@@ -4712,6 +4777,8 @@ app.whenReady().then(async () => {
     buildSystemPrompt,
     buildToolSystemPrompt: (enabledTools) => buildToolSystemPrompt(enabledTools as ToolDefinition[]),
     buildSoulSystemBasePrompt,
+    readStylePrompt,
+    resolveSoulSampling: resolveSoulSamplingForStyle,
     toolRegistry: { getEnabled: () => toolRegistry.getEnabledTools() },
     logWorldbookInjection,
     normalizeChatMessages: ((raw: ReadonlyArray<unknown>) =>

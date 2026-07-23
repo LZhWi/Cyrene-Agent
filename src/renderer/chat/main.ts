@@ -8,6 +8,7 @@ import {
   type ChatSessionMetaUI,
 } from "../../shared/chat-ui";
 import { normalizeDefaultChatMode, type DefaultChatMode } from "../../shared/preferences";
+import { normalizeStyleId, type StyleId } from "../../shared/style-sampling";
 import { canUseMinimaxStreamingEarly, extractEarlyTtsSegment } from "../../shared/tts-early-playback";
 import { getStickerSrcForId } from "./sticker-src";
 import { formatAttachmentTagDetail, getAttachmentIcon } from "./attachment-labels";
@@ -93,9 +94,13 @@ interface ChatApi {
     cancelDocumentIndex: (jobId: string) => Promise<boolean>;
     captionImage: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
     getImageSendStrategy: () => Promise<{ mode: "direct" | "caption" }>;
-    getGeneralSettings?: () => Promise<{ defaultChatMode?: DefaultChatMode; segmentedOutputMode?: "all" | "chat" | "off" }>;
+    getGeneralSettings?: () => Promise<{ defaultChatMode?: DefaultChatMode; segmentedOutputMode?: "all" | "chat" | "off"; currentStyleId?: StyleId }>;
     getEnabledStickers?: () => Promise<Array<{ id: string; src: string; description?: string }>>;
   }
+
+interface ChatSettingsApi {
+  saveGeneral?: (config: { currentStyleId?: StyleId }) => Promise<unknown>;
+}
 
 /** AG-UI 事件流 API（window.agui）。 */
 const BUDGET_CHARS = 60000;
@@ -127,7 +132,8 @@ const COPY_ICON_DONE = `<svg class="msg__copy-icon msg__copy-icon--done" viewBox
 interface AguiApi {
   run: (input: {
     messages: unknown[];
-    style: string;
+    styleId: StyleId;
+    executionMode: "work" | "chat";
     sessionId?: string;
     attachments?: { name: string; text: string }[];
     imageAttachments?: { name: string; filePath: string; mime?: string }[];
@@ -241,6 +247,7 @@ declare global {
     choice?: ChoiceApi;
     music?: ChatMusicApi;
     user?: UserApi;
+    settings?: ChatSettingsApi;
   }
 }
 
@@ -1448,7 +1455,7 @@ function render(preserveScroll = false): void {
       else bubble.hidden = true; // 纯表情包消息不显示气泡
       if (!bubble.hidden) bubbles.push(bubble);
     } else {
-      const currentMode = isTalkMode() ? "talk" : "collab";
+      const currentMode = isChatMode() ? "chat" : "work";
       const segments = getAssistantReplyBubbleTexts(m.content, currentMode, segmentedOutputMode, {
         preserveEmpty: !!m.transient,
       });
@@ -2623,16 +2630,14 @@ function clearModelContexts(): boolean {
   return changed;
 }
 
-function isTalkMode(): boolean {
-  const active = document.querySelector("#mode-dropdown .dm-opt.is-active") as HTMLElement | null;
-  return active?.dataset?.value === "talk";
+function isChatMode(): boolean {
+  const active = document.querySelector(".mode-switch__option.is-active") as HTMLElement | null;
+  return active?.dataset?.modeValue === "chat";
 }
 
-function getCurrentStyle(): string {
+function getCurrentStyleId(): StyleId {
   const active = document.querySelector("#style-dropdown .dm-opt.is-active") as HTMLElement | null;
-  const style = (active && active.dataset && active.dataset.value) || "01_default.md";
-  // 日常聊天模式：前缀 "talk" 触发后端走 talk_system.md + tools:[]
-  return isTalkMode() ? "talk" : style;
+  return normalizeStyleId(active?.dataset?.value);
 }
 
 let sending = false;
@@ -2767,7 +2772,7 @@ async function triggerCyreneGreeting(): Promise<void> {
     let runFinishedArrived = false;
     let startNextStreamingBubble = false;
     let streamingBubbleCount = 1;
-    const allowStreamingBubbleSplit = shouldSegmentAssistantReply(isTalkMode() ? "talk" : "collab", segmentedOutputMode);
+    const allowStreamingBubbleSplit = shouldSegmentAssistantReply(isChatMode() ? "chat" : "work", segmentedOutputMode);
     const getStreamingBubble = (): HTMLElement | null => {
       return getLastBubbleForMessage(streamMsgId);
     };
@@ -2903,7 +2908,8 @@ async function triggerCyreneGreeting(): Promise<void> {
     // 种子消息：不推入 messages 数组、不渲染，只作为 agent 输入触发昔涟主动开口
     const ack = await window.agui!.run({
       messages: [{ role: "user", content: "[internal] 用户点击了「和昔涟聊天」，请你主动开口聊几句，像朋友打招呼一样自然开场。" }],
-      style: getCurrentStyle(),
+      styleId: getCurrentStyleId(),
+      executionMode: isChatMode() ? "chat" : "work",
       sessionId: currentSessionId || undefined,
     });
     if (!ack.success) {
@@ -3276,7 +3282,7 @@ async function send(): Promise<void> {
     let runFinishedArrived = false;
     let startNextStreamingBubble = false;
     let streamingBubbleCount = 1;
-    const allowStreamingBubbleSplit = shouldSegmentAssistantReply(isTalkMode() ? "talk" : "collab", segmentedOutputMode);
+    const allowStreamingBubbleSplit = shouldSegmentAssistantReply(isChatMode() ? "chat" : "work", segmentedOutputMode);
     /** 找到当前流式消息的气泡 DOM（TEXT_MESSAGE_START 时 render 过一次，带 data-msg-id）。 */
     const getStreamingBubble = (): HTMLElement | null => {
       return getLastBubbleForMessage(streamMsgId);
@@ -3430,7 +3436,8 @@ async function send(): Promise<void> {
     const modelMessages = buildModelMessages();
     const ack = await window.agui!.run({
       messages: modelMessages,
-      style: getCurrentStyle(),
+      styleId: getCurrentStyleId(),
+      executionMode: isChatMode() ? "chat" : "work",
       sessionId: currentSessionId || undefined,
       imageAttachments: directImageAttachments.length > 0 ? directImageAttachments : undefined,
     });
@@ -3649,19 +3656,33 @@ clearBtn.addEventListener("click", clearChat);
 
 
 
-/* ===== Dropdown: mode + style + reasoning (body-level menus) ===== */
+/* ===== Work / Chat switch + style / reasoning dropdowns ===== */
 (function() {
   var triggers = document.querySelectorAll(".dropdown-trigger");
+  var modeOptions = document.querySelectorAll(".mode-switch__option");
   var menus = {
-    "mode-dropdown": document.getElementById("mode-dropdown"),
     "style-dropdown": document.getElementById("style-dropdown"),
     "reasoning-dropdown": document.getElementById("reasoning-dropdown")
   };
   var values = {
-    "mode-dropdown": document.getElementById("mode-val"),
     "style-dropdown": document.getElementById("style-val"),
     "reasoning-dropdown": document.getElementById("reasoning-val")
   };
+
+  function selectModeOption(value) {
+    const normalized = normalizeDefaultChatMode(value);
+    modeOptions.forEach(function(option) {
+      const active = (option as HTMLElement).dataset.modeValue === normalized;
+      option.classList.toggle("is-active", active);
+      option.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  }
+
+  modeOptions.forEach(function(option) {
+    option.addEventListener("click", function() {
+      selectModeOption((option as HTMLElement).dataset.modeValue);
+    });
+  });
 
   // Close all dropdowns
   function closeAll() {
@@ -3711,6 +3732,10 @@ clearBtn.addEventListener("click", clearChat);
     menu.querySelectorAll(".dm-opt").forEach(function(opt) {
       opt.addEventListener("click", function() {
         selectDropdownOption(id, opt.getAttribute("data-value"));
+        if (id === "style-dropdown") {
+          const styleId = normalizeStyleId(opt.getAttribute("data-value"));
+          void window.settings?.saveGeneral?.({ currentStyleId: styleId });
+        }
         closeAll();
       });
     });
@@ -3829,14 +3854,15 @@ clearBtn.addEventListener("click", clearChat);
 
   void window.chat?.getGeneralSettings?.()
     .then(function(settings) {
-      selectDropdownOption("mode-dropdown", normalizeDefaultChatMode(settings?.defaultChatMode));
+      selectModeOption(settings?.defaultChatMode);
+      selectDropdownOption("style-dropdown", normalizeStyleId(settings?.currentStyleId));
       segmentedOutputMode = settings?.segmentedOutputMode === "chat" || settings?.segmentedOutputMode === "off"
         ? settings.segmentedOutputMode
         : settings?.segmentedOutputMode === "all" ? "all" : "off";
       render(true);
     })
     .catch(function() {
-      selectDropdownOption("mode-dropdown", "collab");
+      selectModeOption("work");
       segmentedOutputMode = "off";
       render(true);
     });
