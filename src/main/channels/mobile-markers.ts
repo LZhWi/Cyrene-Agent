@@ -42,14 +42,24 @@ export function stripStickerStageDirections(content: string): string {
 }
 
 /** 把内容里的 [sticker:id]/[image:hash] 转成 LLM 可读文字。
- *  对齐 PC 的「带主语」纪律：根据消息角色标明是谁发的，
- *  避免无主语的「（发送表情包：…）」被模型当成自己可执行的动作而照抄。 */
+ *  对齐 PC 纪律，按方向区分：
+ *  ① 用户发的 → 描述成「（用户发送表情包：…）/（用户发送了图片）」（与 PC 逐字一致，
+ *     带主语经验安全，且是她读懂用户情绪的关键）；
+ *  ② 她自己发的 → 不进 LLM 上下文（抹成空），对齐 PC 的「带外字段」纪律，
+ *     从根上消除「（我发送了…）」被自我模仿而污染历史/记忆的可能。
+ *  标记本身仍留在存储与同步文本里，供 iOS/桌面镜像显示。 */
 export function describeMarkersForLlm(content: string, role: "user" | "assistant" = "user"): string {
-  const stickerSubject = role === "assistant" ? "我发送了表情包" : "用户发送表情包";
+  if (role === "assistant") {
+    return content
+      .replace(STICKER_RE, "")
+      .replace(IMAGE_RE, "")
+      .replace(/[ \t]{2,}/g, " ")
+      .trim();
+  }
   return content
     .replace(STICKER_RE, (_m, id: string) => {
       const desc = getStickerDescription(id);
-      return desc ? `（${stickerSubject}：${desc}）` : `（${stickerSubject}）`;
+      return desc ? `（用户发送表情包：${desc}）` : `（用户发送表情包）`;
     })
-    .replace(IMAGE_RE, role === "assistant" ? "（我发送了图片）" : "（用户发送了图片）");
+    .replace(IMAGE_RE, "（用户发送了图片）");
 }

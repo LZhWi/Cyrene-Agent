@@ -22,13 +22,14 @@ describe("mobile-markers", () => {
     expect(describeMarkersForLlm("[sticker:mycat]")).toBe("（用户发送表情包：喵）");
   });
 
-  it("uses assistant subject when role is assistant", () => {
-    expect(describeMarkersForLlm("[sticker:mycat]", "assistant")).toBe("（我发送了表情包：喵）");
+  it("drops the assistant's own markers from LLM context (PC out-of-band discipline)", () => {
+    expect(describeMarkersForLlm("[sticker:mycat]", "assistant")).toBe("");
+    expect(describeMarkersForLlm("好呀 [sticker:OK]", "assistant")).toBe("好呀");
   });
 
-  it("replaces image markers with subject-aware placeholder", () => {
+  it("replaces user image markers with subject-aware placeholder; drops assistant's own", () => {
     expect(describeMarkersForLlm("看这个 [image:deadbeef]")).toBe("看这个 （用户发送了图片）");
-    expect(describeMarkersForLlm("[image:deadbeef]", "assistant")).toBe("（我发送了图片）");
+    expect(describeMarkersForLlm("[image:deadbeef]", "assistant")).toBe("");
   });
 
   it("leaves unknown sticker id as generic label", () => {
