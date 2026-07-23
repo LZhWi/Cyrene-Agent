@@ -112,6 +112,21 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
       }
     }
     if (req.extraBody) Object.assign(body, req.extraBody);
+    if (req.structuredOutput?.mode === "json_schema") {
+      body.response_format = {
+        type: "json_schema",
+        json_schema: {
+          name: req.structuredOutput.name,
+          strict: req.structuredOutput.strict,
+          schema: req.structuredOutput.schema,
+        },
+      };
+    } else if (
+      req.structuredOutput?.mode === "json_object"
+      || req.structuredOutput?.mode === "prompt_json" && req.structuredOutput.sendJsonObjectHint
+    ) {
+      body.response_format = { type: "json_object" };
+    }
     // 推理控制：按 (providerId, model) 解析 capability，调用 applyReasoningPreference 转换 body。
     // cfg.reasoning 缺省视为 auto（不发送任何字段）。
     const reasoningCap = resolveReasoningCapability(this.capability.id, cfg.model);
@@ -183,6 +198,7 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
           tool_calls?: Array<{ id: string; type: string; function: { name: string; arguments: string } }>;
           reasoning_content?: string;
           thinking?: string;
+          refusal?: string | null;
         };
         finish_reason?: string;
       }>;
@@ -192,6 +208,7 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
     const msg = choice?.message;
     const text = msg?.content ?? "";
     const thinking = msg?.reasoning_content || msg?.thinking || undefined;
+    const refusal = msg?.refusal || undefined;
 
     const toolCalls: ToolCall[] = (msg?.tool_calls ?? []).map(tc => ({
       id: tc.id,
@@ -215,6 +232,7 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
       assistantMessage,
       text,
       thinking,
+      refusal,
       toolCalls,
       finishReason: choice?.finish_reason ?? "stop",
       raw,

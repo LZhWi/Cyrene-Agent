@@ -18,6 +18,38 @@ const anthropicCap: ProviderCapability = {
 };
 
 describe("AnthropicAdapter", () => {
+  test("maps structured json_schema requests to output_config.format without OpenAI name", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    const schema = {
+      type: "object",
+      properties: { decision: { type: "string", enum: ["respond"] } },
+      required: ["decision"],
+      additionalProperties: false,
+    };
+    const req = adapter.buildRequest({
+      model: "m",
+      maxTokens: 200,
+      messages: [{ role: "user", content: "hi" }],
+      structuredOutput: { mode: "json_schema", name: "ignored_by_anthropic", schema, strict: true },
+    }, { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "k" });
+
+    expect(JSON.parse(req.body).output_config).toEqual({
+      format: { type: "json_schema", schema },
+    });
+  });
+
+  test("does not invent structured output fields for prompt_json", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    const req = adapter.buildRequest({
+      model: "m",
+      maxTokens: 200,
+      messages: [{ role: "user", content: "hi" }],
+      structuredOutput: { mode: "prompt_json", sendJsonObjectHint: false },
+    }, { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "k" });
+
+    expect(JSON.parse(req.body).output_config).toBeUndefined();
+  });
+
   test("keeps ordinary native Function Calling on auto", () => {
     const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
     const req = adapter.buildRequest({

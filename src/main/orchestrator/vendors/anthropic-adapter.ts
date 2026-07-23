@@ -158,6 +158,21 @@ export class AnthropicAdapter implements ChatVendorAdapter {
       }
     }
     if (req.extraBody) Object.assign(body, req.extraBody);
+    if (req.structuredOutput?.mode === "json_schema") {
+      body.output_config = {
+        ...(
+          body.output_config
+          && typeof body.output_config === "object"
+          && !Array.isArray(body.output_config)
+            ? body.output_config as Record<string, unknown>
+            : {}
+        ),
+        format: {
+          type: "json_schema",
+          schema: req.structuredOutput.schema,
+        },
+      };
+    }
     // 推理控制：按 (providerId, model) 解析 capability，调用 applyReasoningPreference 转换 body。
     const reasoningCap = resolveReasoningCapability(this.capability.id, cfg.model);
     const finalBody = applyReasoningPreference(

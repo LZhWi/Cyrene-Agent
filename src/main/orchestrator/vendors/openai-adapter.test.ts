@@ -18,6 +18,59 @@ const capability: ProviderCapability = {
 };
 
 describe("OpenAICompatAdapter", () => {
+  test("maps structured json_schema requests to response_format", () => {
+    const adapter = new OpenAICompatAdapter("test-openai", capability);
+    const schema = {
+      type: "object",
+      properties: { decision: { type: "string", enum: ["respond"] } },
+      required: ["decision"],
+      additionalProperties: false,
+    };
+    const req = adapter.buildRequest({
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      structuredOutput: { mode: "json_schema", name: "action_decision", schema, strict: true },
+    }, { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "k" });
+
+    expect(JSON.parse(req.body).response_format).toEqual({
+      type: "json_schema",
+      json_schema: { name: "action_decision", strict: true, schema },
+    });
+  });
+
+  test("maps json_object and prompt-json hints without tools", () => {
+    const adapter = new OpenAICompatAdapter("test-openai", capability);
+    const config = { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "k" };
+    const makeBody = (structuredOutput: {
+      mode: "json_object";
+    } | {
+      mode: "prompt_json";
+      sendJsonObjectHint: true;
+    }) => JSON.parse(adapter.buildRequest({
+      model: "m",
+      messages: [{ role: "user", content: "hi" }],
+      structuredOutput,
+    }, config).body);
+
+    expect(makeBody({ mode: "json_object" }).response_format).toEqual({ type: "json_object" });
+    expect(makeBody({ mode: "prompt_json", sendJsonObjectHint: true }).response_format)
+      .toEqual({ type: "json_object" });
+  });
+
+  test("preserves refusal even when finish_reason is stop", () => {
+    const adapter = new OpenAICompatAdapter("test-openai", capability);
+    expect(adapter.parseResponse({
+      choices: [{
+        message: { role: "assistant", content: null, refusal: "blocked" },
+        finish_reason: "stop",
+      }],
+    })).toMatchObject({
+      text: "",
+      refusal: "blocked",
+      finishReason: "stop",
+    });
+  });
+
   test("keeps ordinary native Function Calling on auto", () => {
     const adapter = new OpenAICompatAdapter("test-openai", capability);
     const req = adapter.buildRequest({

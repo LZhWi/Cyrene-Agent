@@ -67,6 +67,21 @@ export interface ToolSpec {
   parameters: object; // JSON Schema
 }
 
+export type StructuredOutputRequest =
+  | {
+      mode: "json_schema";
+      name: string;
+      schema: object;
+      strict: boolean;
+    }
+  | {
+      mode: "json_object";
+    }
+  | {
+      mode: "prompt_json";
+      sendJsonObjectHint: boolean;
+    };
+
 /**
  * Action Gate 专用：直接指定 tool_choice wire 值，绕过 resolveToolChoicePolicy。
  * Native FC 不设此字段，仍走 toolChoiceIntent + resolveToolChoicePolicy。
@@ -92,6 +107,8 @@ export interface ChatRequest {
   toolChoiceOverride?: ToolChoiceOverride;
   temperature?: number;
   stream?: boolean;
+  /** CITA/Action Gate only. Native FC keeps using real tools instead. */
+  structuredOutput?: StructuredOutputRequest;
   /**
    * 非流式调用时的 max_tokens 上限（OpenAI wire: `max_tokens`；Anthropic wire 覆盖默认 4096）。
    * 流式时由 adapter 决定是否使用（通常不用--流式靠 finish_reason 判断）。
@@ -137,6 +154,8 @@ export interface ChatResponse {
   assistantMessage: ChatMessage;
   text: string;
   thinking?: string;
+  /** Provider-declared refusal; it may coexist with a normal-looking finish reason. */
+  refusal?: string;
   toolCalls: ToolCall[];
   finishReason: string;
   raw: unknown;
