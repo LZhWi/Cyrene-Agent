@@ -25,6 +25,7 @@ import {
   type TwoPhaseFcResult,
 } from "./two-phase-fc-loop";
 import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
+import { runSoulOnlyLoop } from "./soul-only-loop";
 import { ExecutionLedgerStore } from "./execution-ledger";
 import { perf } from "../perf-trace";
 
@@ -38,6 +39,8 @@ export interface AgentLoopSettings {
   explicitTransport?: "openai" | "anthropic" | "auto";
   reasoning?: import("../../shared/reasoning").ReasoningPreference;
 }
+
+export type AgentExecutionMode = "soul-only" | "collaboration";
 
 /** CyreneAgent.run() 需要的输入——桥层构造好后塞进 input.state 或 forwardedProps。 */
 export interface CyreneRunOptions {
@@ -55,6 +58,8 @@ export interface CyreneRunOptions {
   trustedRefs?: string[];
   /** 临时回退开关；默认使用 LangGraph Runtime。 */
   agentRuntime?: "langgraph" | "legacy";
+  /** Soul-only 跳过 CITA/Action Gate/Native FC；默认 collaboration。 */
+  executionMode?: AgentExecutionMode;
   timeoutMs: number;
   /** 可选：本次 run 的工具集合。未传时使用当前所有已启用工具。 */
   tools?: ToolDefinition[];
@@ -86,6 +91,10 @@ const LOG_PREFIX = "[CyreneAgent]";
 
 export function resolveAgentRuntime(runtime: CyreneRunOptions["agentRuntime"]): "langgraph" | "legacy" {
   return runtime === "legacy" ? "legacy" : "langgraph";
+}
+
+export function resolveExecutionMode(mode: CyreneRunOptions["executionMode"]): AgentExecutionMode {
+  return mode === "soul-only" ? "soul-only" : "collaboration";
 }
 
 /**
@@ -219,50 +228,69 @@ export class CyreneAgent extends AbstractAgent {
           const adapter = getAdapterForConfig(options.settings);
           adapterTimer.end();
 
-          const executeTool = (tc: Parameters<typeof executeToolCall>[0], runnableToolIds: Set<string>) => executeToolCall(tc, runnableToolIds, {
-            userQuery: extractLastUserQuery(options.messages),
-            conversationId: options.conversationId ?? "default",
-            runId,
-            contextRefs: contextRefRegistry,
-          });
-          const commonOptions = {
-            settings: options.settings,
-            adapter,
-            messages: options.messages,
-            tools: options.tools ?? toolRegistry.getEnabledTools(),
-            toolSystemContent: options.toolSystemContent,
-            soulSystemBaseContent: options.soulSystemBaseContent,
-            cleanMessages: options.cleanMessages,
-            nativeFcSystemContent: options.nativeFcSystemContent,
-            actionGateSystemPrompt: options.actionGateSystemPrompt,
-            responseContext: options.responseContext,
-            conversationId: options.conversationId ?? "default",
-            timeoutMs: options.timeoutMs,
-            executeTool,
-            onEvent: (event: TwoPhaseEvent) => {
-              if (cancelled) return;
-              subscriber.next(toAguiEvent(event));
-            },
-            signal: abortController.signal,
+          const onEvent = (event: TwoPhaseEvent) => {
+            if (cancelled) return;
+            subscriber.next(toAguiEvent(event));
           };
-          const conversationId = options.conversationId ?? "default";
-          const executionLedger = executionLedgers.forScope(`${conversationId}:messages-${options.messages.length}`);
+          const executionMode = resolveExecutionMode(options.executionMode);
           const runtime = resolveAgentRuntime(options.agentRuntime);
-          console.log(`${LOG_PREFIX} agentRuntime=${runtime} provider=${options.settings.provider} model=${options.settings.model}`);
-          const result: TwoPhaseFcResult = runtime === "langgraph"
-            ? await perf.track("langgraph_agent_loop", () => runLangGraphAgentLoop({
-              ...commonOptions,
-              originalQuery: options.originalQuery ?? extractLastUserQuery(options.messages),
-              contextualizedQuery: options.contextualizedQuery ?? options.originalQuery ?? extractLastUserQuery(options.messages),
-              citaContextBlock: options.citaContextBlock ?? "",
-              trustedRefs: options.trustedRefs ?? [],
+          console.log(
+            `${LOG_PREFIX} executionMode=${executionMode} agentRuntime=${runtime} provider=${options.settings.provider} model=${options.settings.model}`,
+          );
+
+          let result: TwoPhaseFcResult;
+          if (executionMode === "soul-only") {
+            result = await perf.track("soul_only_loop", () => runSoulOnlyLoop({
+              settings: options.settings,
+              adapter,
+              messages: options.messages,
+              soulSystemBaseContent: options.soulSystemBaseContent,
+              timeoutMs: options.timeoutMs,
               imageCaptionFallback: options.imageCaptionFallback,
-              executionLedger,
-            }))
-            : await perf.track("legacy_agent_loop", () => runTwoPhaseFcLoop({
-              ...commonOptions,
-              imageCaptionFallback: options.imageCaptionFallback,
+              onEvent,
+              signal: abortController.signal,
             }));
+          } else {
+            const executeTool = (tc: Parameters<typeof executeToolCall>[0], runnableToolIds: Set<string>) => executeToolCall(tc, runnableToolIds, {
+              userQuery: extractLastUserQuery(options.messages),
+              conversationId: options.conversationId ?? "default",
+              runId,
+              contextRefs: contextRefRegistry,
+            });
+            const commonOptions = {
+              settings: options.settings,
+              adapter,
+              messages: options.messages,
+              tools: options.tools ?? toolRegistry.getEnabledTools(),
+              toolSystemContent: options.toolSystemContent,
+              soulSystemBaseContent: options.soulSystemBaseContent,
+              cleanMessages: options.cleanMessages,
+              nativeFcSystemContent: options.nativeFcSystemContent,
+              actionGateSystemPrompt: options.actionGateSystemPrompt,
+              responseContext: options.responseContext,
+              conversationId: options.conversationId ?? "default",
+              timeoutMs: options.timeoutMs,
+              executeTool,
+              onEvent,
+              signal: abortController.signal,
+            };
+            const conversationId = options.conversationId ?? "default";
+            const executionLedger = executionLedgers.forScope(`${conversationId}:messages-${options.messages.length}`);
+            result = runtime === "langgraph"
+              ? await perf.track("langgraph_agent_loop", () => runLangGraphAgentLoop({
+                ...commonOptions,
+                originalQuery: options.originalQuery ?? extractLastUserQuery(options.messages),
+                contextualizedQuery: options.contextualizedQuery ?? options.originalQuery ?? extractLastUserQuery(options.messages),
+                citaContextBlock: options.citaContextBlock ?? "",
+                trustedRefs: options.trustedRefs ?? [],
+                imageCaptionFallback: options.imageCaptionFallback,
+                executionLedger,
+              }))
+              : await perf.track("legacy_agent_loop", () => runTwoPhaseFcLoop({
+                ...commonOptions,
+                imageCaptionFallback: options.imageCaptionFallback,
+              }));
+          }
 
           this.lastResult = {
             reply: result.reply,

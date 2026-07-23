@@ -16,6 +16,7 @@ import { Subscription } from "rxjs";
 import { AgentRuntimeError } from "./orchestrator/agent-runtime-error";
 import {
   CyreneAgent,
+  type AgentExecutionMode,
   type CyreneRunOptions,
   type CyreneRunResult,
 } from "./orchestrator/cyrene-agent";
@@ -31,6 +32,8 @@ export interface AguiRunInput {
   sessionId?: string;    // 会话 ID，用于历史召回按会话隔离（可选，默认 "default"）
   /** 外部渠道入口。桌面聊天不传；微信/飞书用于注入渠道语气规则。 */
   channel?: RelationshipChannel;
+  /** 显式运行模式；未传时由聊天 style 推导。 */
+  executionMode?: AgentExecutionMode;
   /** 本轮附件（文本内容，临时注入系统上下文，不存历史）。 */
   attachments?: { name: string; text: string }[];
   /** 本轮图片附件。主进程会安全读取并转成 OpenAI-compatible image_url content block。 */

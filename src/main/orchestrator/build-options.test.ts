@@ -120,28 +120,42 @@ describe("build-options", () => {
     expect(result.options.soulSystemBaseContent).toContain("SOUL_SYSTEM_BASE")
   })
 
-  it("keeps enabled music tools available in Talk mode and hides unrelated tools", async () => {
+  it("builds Talk mode as Soul-only without CITA or tools", async () => {
     const deps = createBuildDeps()
+    deps.prepareCitaTurn = vi.fn(async () => ({ contextBlock: "unexpected" }))
     deps.toolRegistry.getEnabled = () => [
       { id: "music_search" },
-      { id: "music_play_track" },
       { id: "weather" },
     ]
-    deps.buildToolSystemPrompt = vi.fn((tools: ReadonlyArray<unknown>) =>
-      `TOOLS:${tools.map((tool) => (tool as { id: string }).id).join(",")}`,
-    )
 
     const result = await buildAgentRunOptions({
-      messages: [{ role: "user", content: "放个左转灯怎么样？" }],
+      messages: [{ role: "user", content: "陪我聊聊" }],
       style: "talk",
     }, deps)
 
-    expect(result.options.tools?.map((tool) => tool.id)).toEqual([
-      "music_search",
-      "music_play_track",
-    ])
-    expect(result.options.toolSystemContent).toContain("TOOLS:music_search,music_play_track")
-    expect(result.options.toolSystemContent).not.toContain("weather")
+    expect(deps.prepareCitaTurn).not.toHaveBeenCalled()
+    expect(result.options.executionMode).toBe("soul-only")
+    expect(result.options.tools).toEqual([])
+    expect(result.options.citaContextBlock).toBe("")
+  })
+
+  it("honors an explicit Soul-only mode for channel runs", async () => {
+    const deps = createBuildDeps()
+    deps.prepareCitaTurn = vi.fn(async () => ({ contextBlock: "unexpected" }))
+    deps.toolRegistry.getEnabled = () => [{ id: "weather" }]
+    deps.buildSoulSystemBasePrompt = vi.fn(() => "TALK_SOUL_SYSTEM")
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "今天怎么样" }],
+      style: "01_default.md",
+      channel: "wechat",
+      executionMode: "soul-only",
+    }, deps)
+
+    expect(deps.prepareCitaTurn).not.toHaveBeenCalled()
+    expect(deps.buildSoulSystemBasePrompt).toHaveBeenCalledWith("talk")
+    expect(result.options.executionMode).toBe("soul-only")
+    expect(result.options.tools).toEqual([])
   })
 
   it("does not locally route an explicit NetEase Cloud search request", async () => {

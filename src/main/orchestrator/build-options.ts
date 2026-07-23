@@ -286,6 +286,9 @@ export async function buildAgentRunOptions(
   // slim view for downstream helpers that only need { role, content }
   const slimMessages = messages as unknown as Array<{ role: string; content?: string }>;
   const latestUserText = contentToText(messages.filter((m) => m.role === "user").at(-1)?.content) ?? "";
+  const executionMode = input.executionMode
+    ?? ((input.style || "").startsWith("talk") ? "soul-only" : "collaboration");
+  const isSoulOnly = executionMode === "soul-only";
   const skillActivation = deps.resolveSlashActivation(slimMessages);
   const profile = deps.loadUserProfile();
   const { cleanMessages: cleanLlm, timestampedMessages: llmMessages, timeContext: conversationTimeContext } = buildConversationTimeContext(
@@ -338,7 +341,7 @@ export async function buildAgentRunOptions(
   let contextualizedQuery = latestUserText;
   let responseContext = "";
   let trustedRefs: string[] = [];
-  if (deps.prepareCitaTurn) {
+  if (!isSoulOnly && deps.prepareCitaTurn) {
     try {
       const recentDialogue = messages
         .filter((message): message is ChatMessage & { role: "user" | "assistant" } => (
@@ -394,12 +397,9 @@ export async function buildAgentRunOptions(
     attachmentContext = `\n\n【本轮附件内容】\n${parts.join("\n\n")}`;
   }
 
-  const isTalkMode = (input.style || "").startsWith("talk");
-  const styleFile = input.style || "01_default.md";
+  const styleFile = isSoulOnly ? "talk" : input.style || "01_default.md";
   const enabledTools = deps.toolRegistry.getEnabled();
-  const runTools = isTalkMode
-    ? enabledTools.filter((tool) => String((tool as { id?: unknown }).id ?? "").startsWith("music_"))
-    : enabledTools;
+  const runTools = isSoulOnly ? [] : enabledTools;
   // 第一期：保留旧 systemContent 兼容（已不再使用，保留字段是为了 logger 诊断）。
   // 同时新增 toolSystemContent / soulSystemBaseContent 两套。
   const systemContent =
@@ -445,7 +445,9 @@ export async function buildAgentRunOptions(
   const fcMessages: ChatMessage[] = withDirectImageAttachments(llmMessages as unknown as ChatMessage[], input);
   const cleanFcMessages: ChatMessage[] = withDirectImageAttachments(cleanLlm as unknown as ChatMessage[], input);
   const imageCaptionFallback = buildImageCaptionFallbackMessages(
-    toolSystemContent + "\n\n---\n\n" + soulSystemWithoutCita,
+    isSoulOnly
+      ? soulSystemWithoutCita
+      : toolSystemContent + "\n\n---\n\n" + soulSystemWithoutCita,
     llmMessages as unknown as ChatMessage[],
     input,
     deps,
@@ -464,6 +466,7 @@ export async function buildAgentRunOptions(
       messages: fcMessages,
       cleanMessages: cleanFcMessages,
       conversationId,
+      executionMode,
       originalQuery: latestUserText,
       contextualizedQuery,
       citaContextBlock,
@@ -475,7 +478,7 @@ export async function buildAgentRunOptions(
       toolSystemContent,
       soulSystemBaseContent,
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
-      ...(isTalkMode ? { tools: runTools as ToolDefinition[] } : {}),
+      ...(isSoulOnly ? { tools: runTools as ToolDefinition[] } : {}),
     },
     latestUserText,
   };

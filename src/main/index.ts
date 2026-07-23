@@ -4622,9 +4622,11 @@ app.whenReady().then(async () => {
     // Phase 3.3：按 toolSandbox 过滤可用工具
     const sandbox = loadChannelsSettings().toolSandbox;
     const allTools = toolRegistry.getEnabledTools();
-    const filteredTools: ToolDefinition[] = sandbox === "safe-only"
-      ? allTools.filter((t) => (t.risk ?? "safe") === ("safe" as ToolRiskLevel))
-      : allTools;
+    const filteredTools: ToolDefinition[] = sandbox === "off"
+      ? []
+      : sandbox === "safe-only"
+        ? allTools.filter((t) => (t.risk ?? "safe") === ("safe" as ToolRiskLevel))
+        : allTools;
     console.log(
       "[Channels] bot run:",
       `msg.channel=${msg.channel} sandbox=${sandbox} tools=${filteredTools.length}/${allTools.length} priorMsgs=${priorMessages?.length ?? 0}`,
@@ -4677,6 +4679,7 @@ app.whenReady().then(async () => {
         attachments: attachmentInputs.attachments,
         imageAttachments: attachmentInputs.imageAttachments,
         channel: msg.channel,
+        executionMode: sandbox === "off" ? "soul-only" : "collaboration",
       },
       buildOptionsDeps,
     );
