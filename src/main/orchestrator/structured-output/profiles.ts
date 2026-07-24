@@ -17,6 +17,8 @@ interface ProfileDefinition {
   requestHints?: Partial<StructuredOutputProfile["requestHints"]>;
 }
 
+const KIMI_SLOW_MODEL_PATTERN = /^(?:kimi-for-coding|kimi-(?:k3|k2\.7-code(?:-highspeed)?))(?:$|-)/i;
+
 const DEFINITIONS: readonly ProfileDefinition[] = [
   {
     id: "openai-structured-output",
@@ -40,7 +42,7 @@ const DEFINITIONS: readonly ProfileDefinition[] = [
     id: "kimi-structured-output",
     provider: "kimi",
     transport: "openai",
-    modelPattern: /^kimi-(?:k3|k2\.(?:6|7-code(?:-highspeed)?))(?:$|-)/i,
+    modelPattern: /^(?:kimi-for-coding|kimi-(?:k3|k2\.(?:6|7-code(?:-highspeed)?)))(?:$|-)/i,
     tier: "A",
     mode: "provider_json_schema",
     verification: "official",
@@ -117,6 +119,31 @@ const REPAIR: StructuredOutputProfile["repair"] = {
   },
 };
 
+const A_REPAIR: StructuredOutputProfile["repair"] = {
+  cita: {
+    maxAttempts: 2,
+    totalBudgetMs: 20_000,
+    perAttemptTimeoutMs: 10_000,
+    minimumRemainingBudgetMs: 500,
+  },
+  action_gate: {
+    maxAttempts: 2,
+    totalBudgetMs: 25_000,
+    perAttemptTimeoutMs: 12_500,
+    minimumRemainingBudgetMs: 800,
+  },
+};
+
+const KIMI_SLOW_REPAIR: StructuredOutputProfile["repair"] = {
+  cita: {
+    maxAttempts: 2,
+    totalBudgetMs: 40_000,
+    perAttemptTimeoutMs: 20_000,
+    minimumRemainingBudgetMs: 500,
+  },
+  action_gate: A_REPAIR.action_gate,
+};
+
 const B_REPAIR: StructuredOutputProfile["repair"] = {
   cita: {
     maxAttempts: 2,
@@ -147,6 +174,22 @@ const MINIMAX_REPAIR: StructuredOutputProfile["repair"] = {
   },
 };
 
+function repairFor(
+  definition: ProfileDefinition,
+  context: StructuredOutputProfileContext,
+): StructuredOutputProfile["repair"] {
+  if (definition.tier === "M") return MINIMAX_REPAIR;
+  if (definition.tier === "B") return B_REPAIR;
+  if (
+    definition.tier === "A"
+    && definition.provider === "kimi"
+    && KIMI_SLOW_MODEL_PATTERN.test(context.model)
+  ) {
+    return KIMI_SLOW_REPAIR;
+  }
+  return definition.tier === "A" ? A_REPAIR : REPAIR;
+}
+
 function materialize(
   definition: ProfileDefinition,
   context: StructuredOutputProfileContext,
@@ -165,11 +208,7 @@ function materialize(
       reasoningSplit: definition.requestHints?.reasoningSplit ?? false,
     },
     reasoning: "disabled",
-    repair: definition.tier === "M"
-      ? MINIMAX_REPAIR
-      : definition.tier === "B"
-        ? B_REPAIR
-        : REPAIR,
+    repair: repairFor(definition, context),
   };
 }
 
@@ -213,14 +252,17 @@ export function classifyStructuredOutputEndpoint(input: {
   officialBaseUrl: string;
 }): StructuredOutputProfileContext["endpointKind"] {
   const configured = normalizeBaseUrl(input.configuredBaseUrl);
+  const officialBaseUrls = [
+    input.officialBaseUrl,
+    ...(input.providerId === "kimi" ? ["https://api.kimi.com/coding/v1"] : []),
+  ].filter(Boolean).map(normalizeBaseUrl);
   if (/^https?:\/\/(?:localhost|127(?:\.\d+){3}|0\.0\.0\.0|\[::1\])(?::|\/|$)/.test(configured)) {
     return "local";
   }
   if (
     input.providerId === "unknown"
     || !configured
-    || !input.officialBaseUrl
-    || configured !== normalizeBaseUrl(input.officialBaseUrl)
+    || !officialBaseUrls.includes(configured)
   ) {
     return "custom";
   }

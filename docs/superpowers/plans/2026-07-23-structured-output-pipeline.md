@@ -14,8 +14,9 @@
 - Custom and local endpoints are permanently `prompt_json`; no A/B probing or automatic promotion.
 - CITA and Action Gate never use virtual tools after migration.
 - Only locally validated values may enter routing, Native FC, execution, or Soul.
-- CITA is bounded by two total attempts; baseline total budget is 8 seconds, B tier is 16 seconds, and MiniMax M tier is 10 seconds.
-- Action Gate is bounded by two total attempts; baseline total budget is 10 seconds, B tier is 20 seconds, and MiniMax M tier is 12 seconds.
+- CITA is bounded by two total attempts; D tier keeps the 8-second baseline, A tier uses 20 seconds, B tier uses 16 seconds, and MiniMax M tier uses 10 seconds.
+- Action Gate is bounded by two total attempts; D tier keeps the 10-second baseline, A tier uses 25 seconds, B tier uses 20 seconds, and MiniMax M tier uses 12 seconds.
+- Kimi K2.7 Code, K3, and the `kimi-for-coding` TokenPlan alias override only the CITA budget to 40 seconds total and 20 seconds per attempt; K2.6 keeps the standard A-tier budget.
 - Native FC keeps real business tools and gets at most one protocol repair.
 - Existing user changes from baseline commit `666c317` must be preserved.
 

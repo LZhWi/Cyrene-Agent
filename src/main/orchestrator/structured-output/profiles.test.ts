@@ -9,6 +9,7 @@ describe("resolveStructuredOutputProfile", () => {
     ["chatgpt", "gpt-5.6", "openai", "provider_json_schema"],
     ["claude", "claude-sonnet-4-6", "anthropic", "provider_json_schema"],
     ["kimi", "kimi-k3", "openai", "provider_json_schema"],
+    ["kimi", "kimi-for-coding", "openai", "provider_json_schema"],
     ["doubao", "doubao-seed-2-1-pro-260628", "openai", "provider_json_schema"],
     ["deepseek", "deepseek-v4-pro", "openai", "provider_json_object"],
     ["qwen", "qwen3.7-plus", "openai", "provider_json_object"],
@@ -112,6 +113,72 @@ describe("resolveStructuredOutputProfile", () => {
     });
   });
 
+  test("A tier gives schema-capable providers 2.5x the baseline time budget", () => {
+    expect(resolveStructuredOutputProfile({
+      provider: "doubao",
+      model: "doubao-seed-2-1-pro-260628",
+      transport: "openai",
+      endpointKind: "official",
+    })).toMatchObject({
+      tier: "A",
+      repair: {
+        cita: {
+          maxAttempts: 2,
+          totalBudgetMs: 20_000,
+          perAttemptTimeoutMs: 10_000,
+          minimumRemainingBudgetMs: 500,
+        },
+        action_gate: {
+          maxAttempts: 2,
+          totalBudgetMs: 25_000,
+          perAttemptTimeoutMs: 12_500,
+          minimumRemainingBudgetMs: 800,
+        },
+      },
+    });
+  });
+
+  test.each([
+    "kimi-k2.7-code",
+    "kimi-k3",
+    "kimi-for-coding",
+  ])("%s gets the slow-thinking Kimi CITA budget", (model) => {
+    expect(resolveStructuredOutputProfile({
+      provider: "kimi",
+      model,
+      transport: "openai",
+      endpointKind: "official",
+    })).toMatchObject({
+      tier: "A",
+      repair: {
+        cita: {
+          maxAttempts: 2,
+          totalBudgetMs: 40_000,
+          perAttemptTimeoutMs: 20_000,
+          minimumRemainingBudgetMs: 500,
+        },
+        action_gate: {
+          maxAttempts: 2,
+          totalBudgetMs: 25_000,
+          perAttemptTimeoutMs: 12_500,
+          minimumRemainingBudgetMs: 800,
+        },
+      },
+    });
+  });
+
+  test("kimi-k2.6 keeps the standard A-tier CITA budget", () => {
+    expect(resolveStructuredOutputProfile({
+      provider: "kimi",
+      model: "kimi-k2.6",
+      transport: "openai",
+      endpointKind: "official",
+    }).repair.cita).toMatchObject({
+      totalBudgetMs: 20_000,
+      perAttemptTimeoutMs: 10_000,
+    });
+  });
+
   test("a custom endpoint never inherits an A profile from its provider label or model name", () => {
     expect(resolveStructuredOutputProfile({
       provider: "chatgpt",
@@ -137,5 +204,13 @@ describe("resolveStructuredOutputProfile", () => {
       configuredBaseUrl,
       officialBaseUrl: "https://api.openai.com/v1",
     })).toBe(endpointKind);
+  });
+
+  test("recognizes the official Kimi Coding TokenPlan endpoint", () => {
+    expect(classifyStructuredOutputEndpoint({
+      providerId: "kimi",
+      configuredBaseUrl: "https://api.kimi.com/coding/v1",
+      officialBaseUrl: "https://api.moonshot.cn/v1",
+    })).toBe("official");
   });
 });
