@@ -70,7 +70,7 @@ body {
   text-shadow: 0 0 14px rgba(236, 72, 153, 0.30);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
 }
 
 .settings-nav__logo {
@@ -82,7 +82,7 @@ body {
 
 .settings-nav__sub {
   margin-top: 2px;
-  font: var(--rb-text-micro);
+  font: var(--rb-text-small);
   color: rgba(235, 229, 245, 0.50);
 }
 
