@@ -302,6 +302,13 @@
                 <button type="button" class="option-block" data-value="local" aria-pressed="false" disabled aria-disabled="true">本地语义模型（暂不可用）</button>
               </div>
             </div>
+            <div class="setting-row">
+              <div>
+                <strong>截图快捷键</strong>
+                <span>全局热键，拖拽选区截图并写入剪贴板。聚焦后按下组合键录入，Esc 取消。</span>
+              </div>
+              <input type="text" id="screenshot-hotkey-input" class="hotkey-input" placeholder="Alt+Shift+S" readonly />
+            </div>
           </div>
 
           <div class="form-actions">
@@ -309,7 +316,6 @@
             <button type="submit" class="save-btn">保存偏好</button>
           </div>
         </form>
-
 
         <form class="settings-panel is-hidden" id="appearance-form" data-panel="appearance">
           <div class="panel-heading">

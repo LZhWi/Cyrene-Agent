@@ -66,6 +66,20 @@ const chatApi = {
   getGeneralSettings: () => ipcRenderer.invoke(IPC.SETTINGS_GET_GENERAL),
   getReasoningState: () => ipcRenderer.invoke(IPC.CHAT_GET_REASONING_STATE),
   setReasoning: (payload: { providerKey: string; preference: unknown }) => ipcRenderer.invoke(IPC.CHAT_SET_REASONING, payload),
+  // 截图
+  startScreenshot: () => ipcRenderer.invoke(IPC.SCREENSHOT_START),
+  onScreenshotInsert: (
+    callback: (data: { base64: string; mime: string; width: number; height: number; filePath: string }) => void,
+  ) => {
+    const listener = (
+      _e: unknown,
+      data: { base64: string; mime: string; width: number; height: number; filePath: string },
+    ) => callback(data);
+    ipcRenderer.on(IPC.SCREENSHOT_INSERT, listener);
+    return () => ipcRenderer.removeListener(IPC.SCREENSHOT_INSERT, listener);
+  },
+  saveScreenshotTemp: (base64: string, mime: string) =>
+    ipcRenderer.invoke(IPC.SCREENSHOT_SAVE_TEMP, base64, mime) as Promise<{ filePath: string }>,
 };
 
 contextBridge.exposeInMainWorld("cyrene", cyreneApi);
@@ -306,6 +320,9 @@ const settingsApi = {
   },
   resolvePermissionApproval: (id: string, allowed: boolean): Promise<{ ok: boolean }> =>
     ipcRenderer.invoke(IPC.PERMISSION_APPROVAL_RESOLVE, { id, allowed }),
+  // 截图热键捕获（设置页临时挂起全局快捷键）
+  beginScreenshotHotkeyCapture: () => ipcRenderer.invoke(IPC.SCREENSHOT_HOTKEY_CAPTURE_START),
+  endScreenshotHotkeyCapture: () => ipcRenderer.invoke(IPC.SCREENSHOT_HOTKEY_CAPTURE_END),
 };
 
 contextBridge.exposeInMainWorld("settings", settingsApi);

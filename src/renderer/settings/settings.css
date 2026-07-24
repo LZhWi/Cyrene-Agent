@@ -621,6 +621,31 @@ body {
   accent-color: var(--rb-pink-500);
 }
 
+/* 截图热键输入框 */
+.hotkey-input {
+  min-width: 160px;
+  text-align: center;
+  font: 600 14px/1.4 var(--rb-font-mono, ui-monospace, monospace);
+  letter-spacing: 0.5px;
+  padding: 7px 14px;
+  border: 1px solid var(--rb-border-faint);
+  border-radius: 10px;
+  background: rgba(8, 7, 12, 0.32);
+  color: var(--rb-text-default);
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+  -webkit-app-region: no-drag;
+}
+.hotkey-input:focus {
+  outline: none;
+  border-color: var(--rb-pink-400);
+  box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.16);
+}
+.hotkey-input::placeholder {
+  color: var(--rb-text-faint);
+  font-weight: 400;
+}
+
 .inline-control,
 .button-group {
   display: flex;

@@ -82,6 +82,7 @@ import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from ".
 import { buildEnvironmentContext } from "./orchestrator/environment";
 import { initPermissionFromDisk, registerPermissionIpc, getCurrentLevel } from "./permission";
 import { registerChoiceIpc, setChoiceCardSender } from "./user-choice";
+import { initScreenshotIpc, registerScreenshotHotkey, unregisterScreenshotHotkey, replaceScreenshotHotkey, cleanupOnQuit as cleanupScreenshotOnQuit } from "./screenshot/screenshot-manager";
 import { enqueueLLMTask } from "./llm-queue";
 import { compileSocialContextBlock } from "./social-context/context";
 import {
@@ -615,6 +616,8 @@ interface GeneralSettings {
   asrVadThreshold: number;
   /** 通话中显示文字转写 */
   asrShowTranscript: boolean;
+  /** 截图全局热键（Electron Accelerator 格式，如 "Alt+Shift+S"） */
+  screenshotHotkey: string;
 }
 
 
@@ -813,6 +816,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   asrVadSilenceMs: 1000,
   asrVadThreshold: 0.01,
   asrShowTranscript: false,
+  screenshotHotkey: "Alt+Shift+S",
 };
 
 function getSettingsPath(): string {
@@ -1246,6 +1250,8 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
       ? Math.max(0.001, Math.min(0.5, Number(input.asrVadThreshold)))
       : DEFAULT_GENERAL_SETTINGS.asrVadThreshold,
     asrShowTranscript: Boolean(input?.asrShowTranscript),
+    screenshotHotkey: typeof input?.screenshotHotkey === "string" && input.screenshotHotkey.trim()
+      ? input.screenshotHotkey.trim() : DEFAULT_GENERAL_SETTINGS.screenshotHotkey,
     ttsGptsovitsBaseUrl: typeof input?.ttsGptsovitsBaseUrl === "string" ? input.ttsGptsovitsBaseUrl : DEFAULT_GENERAL_SETTINGS.ttsGptsovitsBaseUrl,
     ttsGptsovitsRefAudioPath: typeof input?.ttsGptsovitsRefAudioPath === "string" ? input.ttsGptsovitsRefAudioPath : "",
     ttsGptsovitsPromptText: typeof input?.ttsGptsovitsPromptText === "string" ? input.ttsGptsovitsPromptText : "",
@@ -1308,6 +1314,12 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   }
   if (before.uiIcon !== normalized.uiIcon) {
     applyUiIcon(normalized.uiIcon);
+  }
+  if (before.screenshotHotkey !== normalized.screenshotHotkey) {
+    const result = replaceScreenshotHotkey(normalized.screenshotHotkey);
+    if (!result.ok) {
+      console.warn("[Cyrene] 截图热键注册失败，可能被其他应用占用:", normalized.screenshotHotkey);
+    }
   }
   return normalized;
 }
@@ -4485,6 +4497,10 @@ app.whenReady().then(async () => {
     console.error("[Cyrene] playwright MCP sync failed:", e)
   );
 
+  // 截图：注册 IPC + 全局热键
+  initScreenshotIpc();
+  registerScreenshotHotkey(initialSettings.screenshotHotkey ?? "Alt+Shift+S");
+
   // Cloud Music MCP wiring (MusicService + IPC + 5 Agent tools + shutdown latch)
   const musicPaths = resolveMusicPaths();
   const musicBootstrap = bootstrapMusicService(musicPaths, {
@@ -5006,6 +5022,7 @@ app.on("before-quit", () => {
   stopProactiveTrigger();
   flushTokenUsage();
   void shutdownChannels();
+  cleanupScreenshotOnQuit();
 });
 
 app.on("activate", () => {

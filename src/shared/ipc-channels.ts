@@ -278,5 +278,17 @@ export const IPC = {
   MUSIC_DETECT_PLAYER: "music:detect-player",
   MUSIC_STATE_CHANGED: "music:state-changed",
   MUSIC_CARD: "music:card",
+
+  // screenshot
+  SCREENSHOT_START: "screenshot:start",
+  SCREENSHOT_SAVE_TEMP: "screenshot:save-temp",
+  SCREENSHOT_OVERLAY_READY: "screenshot:overlay-ready",
+  SCREENSHOT_DATA: "screenshot:data",
+  SCREENSHOT_RENDERED: "screenshot:rendered",
+  SCREENSHOT_REGION: "screenshot:region",
+  SCREENSHOT_CANCEL: "screenshot:cancel",
+  SCREENSHOT_INSERT: "screenshot:insert",
+  SCREENSHOT_HOTKEY_CAPTURE_START: "screenshot:hotkey-capture-start",
+  SCREENSHOT_HOTKEY_CAPTURE_END: "screenshot:hotkey-capture-end",
 } as const;
 

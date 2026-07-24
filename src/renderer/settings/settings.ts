@@ -393,6 +393,7 @@ interface GeneralSettings {
   mobileMessageSegmentation: MobileMessageSegmentationMode;
   proactiveChatMode: ProactiveChatMode;
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
+  screenshotHotkey?: string;
 }
 
 interface UserApi {
@@ -487,6 +488,8 @@ interface SettingsApi {
   onSwitchSection?: (callback: (section: string) => void) => (() => void) | void;
   channelsGetStatus: () => Promise<Record<string, { phase?: string; message?: string }>>;
   onChannelsStatusChanged: (callback: (status: unknown) => void) => (() => void) | void;
+  beginScreenshotHotkeyCapture: () => Promise<boolean>;
+  endScreenshotHotkeyCapture: () => Promise<boolean>;
 }
 
 declare global {
@@ -656,11 +659,14 @@ if (!window.settings) {
       proactiveChatMode: "off",
       proactiveDeliveryTarget: "local",
       chatSocialContextEnabled: false,
+      screenshotHotkey: "Alt+Shift+S",
     }),
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
     openCustomStylePrompt: async () => ({ ok: false, error: "settings api unavailable" }),
     channelsGetStatus: () => Promise.resolve({}),
     onChannelsStatusChanged: () => () => {},
+    beginScreenshotHotkeyCapture: () => Promise.resolve(true),
+    endScreenshotHotkeyCapture: () => Promise.resolve(true),
     openSidebar: () => {},
     closeSidebar: () => {},
     openTasks: () => {},
@@ -817,6 +823,7 @@ const proactiveDeliverySelect = document.getElementById("proactive-delivery-sele
 const chatSocialContextEnabledInput = document.getElementById("chat-social-context-enabled") as HTMLInputElement;
 const citaEnabledInput = document.getElementById("cita-enabled") as HTMLInputElement;
 const citaEngineSelect = document.getElementById("cita-engine-select") as HTMLElement;
+const screenshotHotkeyInput = document.getElementById("screenshot-hotkey-input") as HTMLInputElement | null;
 const customStyleSamplingBtn = document.getElementById("custom-style-sampling-btn") as HTMLButtonElement | null;
 const customStylePromptBtn = document.getElementById("custom-style-prompt-btn") as HTMLButtonElement | null;
 const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
@@ -1503,6 +1510,9 @@ async function loadGeneralSettings(): Promise<void> {
     applyProactiveChatSelection(normalizeProactiveChatMode(cfg.proactiveChatMode));
     applyProactiveDeliverySelection(normalizeProactiveDeliveryTarget(cfg.proactiveDeliveryTarget));
     renderProactiveDeliveryVisibility();
+    if (screenshotHotkeyInput) {
+      screenshotHotkeyInput.value = cfg.screenshotHotkey ?? "Alt+Shift+S";
+    }
     void window.settings!.channelsGetStatus()
       .then((status: unknown) => renderProactiveDeliveryAvailability(status as Record<string, { phase?: string }>))
       .catch(() => renderProactiveDeliveryAvailability({}));
@@ -1679,6 +1689,49 @@ citaEnabledInput.addEventListener("change", () => {
   setPreferencesSaveStatus("有未保存的更改");
 });
 
+// ── 截图热键捕获 ──
+// 聚焦时临时挂起全局快捷键（防止录入时触发截图），失焦恢复。
+const MODIFIER_KEYS = new Set(["Control", "Alt", "Shift", "Meta"]);
+
+screenshotHotkeyInput?.addEventListener("focus", async () => {
+  await window.settings!.beginScreenshotHotkeyCapture();
+});
+
+screenshotHotkeyInput?.addEventListener("blur", async () => {
+  await window.settings!.endScreenshotHotkeyCapture();
+});
+
+screenshotHotkeyInput?.addEventListener("keydown", (e) => {
+  e.preventDefault();
+
+  if (e.key === "Escape") {
+    screenshotHotkeyInput!.blur();
+    return;
+  }
+  if (e.key === "Enter") {
+    screenshotHotkeyInput!.blur();
+    return;
+  }
+
+  const parts: string[] = [];
+  if (e.ctrlKey) parts.push("Ctrl");
+  if (e.altKey) parts.push("Alt");
+  if (e.shiftKey) parts.push("Shift");
+  if (e.metaKey) parts.push("Super");
+
+  // 纯修饰键不提交
+  if (MODIFIER_KEYS.has(e.key)) return;
+
+  const keyName = e.key.length === 1 ? e.key.toUpperCase() : e.key;
+  parts.push(keyName);
+
+  // 至少需要一个修饰键
+  if (parts.length < 2) return;
+
+  screenshotHotkeyInput!.value = parts.join("+");
+  setPreferencesSaveStatus("有未保存的更改");
+});
+
 chatSocialContextEnabledInput.addEventListener("change", () => {
   setPreferencesSaveStatus("有未保存的更改");
 });
@@ -1713,6 +1766,7 @@ preferencesForm.addEventListener("submit", async (e) => {
       mobileMessageSegmentation: getMobileMessageSegmentationValue(),
       proactiveChatMode: getProactiveChatValue(),
       proactiveDeliveryTarget: getProactiveDeliveryValue(),
+      screenshotHotkey: screenshotHotkeyInput?.value || "Alt+Shift+S",
     });
     setPreferencesSaveStatus("已保存", "is-ok");
   } catch {

@@ -96,6 +96,9 @@ interface ChatApi {
     getImageSendStrategy: () => Promise<{ mode: "direct" | "caption" }>;
     getGeneralSettings?: () => Promise<{ defaultChatMode?: DefaultChatMode; segmentedOutputMode?: "all" | "chat" | "off"; currentStyleId?: StyleId }>;
     getEnabledStickers?: () => Promise<Array<{ id: string; src: string; description?: string }>>;
+    startScreenshot: () => Promise<{ ok: boolean; reason?: string }>;
+    onScreenshotInsert: (callback: (data: { base64: string; mime: string; width: number; height: number; filePath: string }) => void) => () => void;
+    saveScreenshotTemp: (base64: string, mime: string) => Promise<{ filePath: string }>;
   }
 
 interface ChatSettingsApi {
@@ -3554,6 +3557,7 @@ inputEl.addEventListener("keydown", (e) => {
 /* ===== File upload ===== */
 const fileInput = document.getElementById("file-input") as HTMLInputElement | null;
 const attachBtn = document.getElementById("attach-btn") as HTMLButtonElement | null;
+const screenshotBtn = document.getElementById("screenshot-btn") as HTMLButtonElement | null;
 let attachedFiles: Attachment[] = [];
 	
 // ── path-based 文件摄入 ──
@@ -3612,6 +3616,70 @@ async function ingestDroppedFiles(files: File[]): Promise<void> {
 	    void ingestDroppedFiles(Array.from(fileInput.files));
 	  }
 	});
+
+/* ===== Screenshot ===== */
+
+/** 统一插入图片附件（粘贴和截图按钮共用） */
+async function insertImageAttachment(input: {
+  base64: string;
+  mime: string;
+  filePath?: string;
+  name?: string;
+}): Promise<void> {
+  const filePath = input.filePath
+    ?? (await window.chat!.saveScreenshotTemp(input.base64, input.mime)).filePath;
+
+  attachedFiles.push({
+    kind: "image",
+    name: input.name ?? `截图_${Date.now()}.png`,
+    filePath,
+    mime: input.mime,
+    previewUrl: `data:${input.mime};base64,${input.base64}`,
+    status: "pending",
+  });
+  updateFileTags();
+}
+
+// 截图按钮 -> 触发主进程截图流程（按钮模式：选区后直接插入，不需要粘贴）
+screenshotBtn?.addEventListener("click", () => {
+  void window.chat!.startScreenshot();
+});
+
+// 按钮模式回调：主进程裁剪完直接发图片过来
+window.chat!.onScreenshotInsert((data) => {
+  void insertImageAttachment({
+    base64: data.base64,
+    mime: data.mime,
+    filePath: data.filePath,
+    name: `截图_${Date.now()}.png`,
+  });
+});
+
+// 粘贴监听：检测剪贴板图片 -> 插入附件（热键模式：Alt+Shift+S 截图后 Ctrl+V）
+document.addEventListener("paste", async (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of items) {
+    if (item.type.startsWith("image/")) {
+      e.preventDefault();
+      const blob = item.getAsFile();
+      if (!blob) continue;
+      const reader = new FileReader();
+      reader.onload = async () => {
+        const dataUrl = reader.result as string;
+        const base64 = dataUrl.split(",")[1] ?? "";
+        if (!base64) return;
+        try {
+          await insertImageAttachment({ base64, mime: blob.type || "image/png" });
+        } catch (err) {
+          console.error("[Chat] 粘贴图片失败:", err);
+        }
+      };
+      reader.readAsDataURL(blob);
+      break; // 只处理第一张图片
+    }
+  }
+});
 	
 	function removeAttachedFiles(): void {
 	  attachedFiles = [];
