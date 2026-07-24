@@ -3627,7 +3627,7 @@ async function insertImageAttachment(input: {
   name?: string;
 }): Promise<void> {
   const filePath = input.filePath
-    ?? (await window.chat!.saveScreenshotTemp(input.base64, input.mime)).filePath;
+    ?? (await window.chat?.saveScreenshotTemp(input.base64, input.mime))?.filePath;
 
   attachedFiles.push({
     kind: "image",
@@ -3642,11 +3642,11 @@ async function insertImageAttachment(input: {
 
 // 截图按钮 -> 触发主进程截图流程（按钮模式：选区后直接插入，不需要粘贴）
 screenshotBtn?.addEventListener("click", () => {
-  void window.chat!.startScreenshot();
+  void window.chat?.startScreenshot();
 });
 
 // 按钮模式回调：主进程裁剪完直接发图片过来
-window.chat!.onScreenshotInsert((data) => {
+window.chat?.onScreenshotInsert?.((data) => {
   void insertImageAttachment({
     base64: data.base64,
     mime: data.mime,
