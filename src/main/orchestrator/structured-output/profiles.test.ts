@@ -50,6 +50,53 @@ describe("resolveStructuredOutputProfile", () => {
     }).mode).toBe("prompt_json");
   });
 
+  test("Doubao Seed deployment IDs use the A profile regardless of their user-specific suffix", () => {
+    expect(resolveStructuredOutputProfile({
+      provider: "doubao",
+      model: "doubao-seed-user-deployment-abc123",
+      transport: "openai",
+      endpointKind: "official",
+    })).toMatchObject({
+      tier: "A",
+      mode: "provider_json_schema",
+    });
+  });
+
+  test("Doubao prefix matching keeps a hyphen boundary", () => {
+    expect(resolveStructuredOutputProfile({
+      provider: "doubao",
+      model: "doubao-seeding-unrelated",
+      transport: "openai",
+      endpointKind: "official",
+    }).mode).toBe("prompt_json");
+  });
+
+  test.each([
+    "qwen3.7-plus-2026-05-26",
+    "qwen3.7-max-2026-06-08",
+    "qwen3.6-plus-user-suffix",
+    "qwen3.5-plus-user-suffix",
+  ])("%s uses the Qwen B profile with an optional deployment suffix", (model) => {
+    expect(resolveStructuredOutputProfile({
+      provider: "qwen",
+      model,
+      transport: "openai",
+      endpointKind: "official",
+    })).toMatchObject({
+      tier: "B",
+      mode: "provider_json_object",
+    });
+  });
+
+  test("Qwen family matching keeps a hyphen boundary", () => {
+    expect(resolveStructuredOutputProfile({
+      provider: "qwen",
+      model: "qwen3.7-maximus",
+      transport: "openai",
+      endpointKind: "official",
+    }).mode).toBe("prompt_json");
+  });
+
   test("official profiles do not apply through the wrong transport", () => {
     expect(resolveStructuredOutputProfile({
       provider: "claude",
