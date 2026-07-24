@@ -2,7 +2,6 @@ use std::{
     io::{self, BufRead, BufReader, Write},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread,
@@ -24,15 +23,23 @@ pub struct RuntimeChannels {
 }
 
 #[derive(Clone)]
-pub struct InputEventGate {
-    inner: Arc<InputEventGateInner>,
+pub struct InputGate {
+    inner: Arc<Mutex<InputGateState>>,
     target: MessageTarget,
 }
 
-struct InputEventGateInner {
-    closed: AtomicBool,
-    wake_pending: AtomicBool,
-    sender: Mutex<Option<Sender<Event>>>,
+struct InputGateState {
+    command_sender: Option<Sender<Command>>,
+    event_sender: Option<Sender<Event>>,
+    deferred_command: Option<Command>,
+    deferred_event: Option<Event>,
+    wake_pending: bool,
+    closed: bool,
+}
+
+pub struct InputBatch {
+    pub commands: Vec<Command>,
+    pub events: Vec<Event>,
 }
 
 #[derive(Clone, Copy)]
@@ -51,77 +58,148 @@ impl MessageTarget {
     }
 }
 
-pub fn create_runtime_channels() -> (RuntimeChannels, Sender<Command>, Receiver<Event>) {
-    let (command_tx, command_rx) = mpsc::channel();
+pub fn create_runtime_channels(
+    target: MessageTarget,
+) -> (RuntimeChannels, InputGate, Receiver<Event>, Receiver<Event>) {
+    let (command_sender, command_rx) = mpsc::channel();
     let (event_tx, event_rx) = mpsc::channel();
+    let (input_event_sender, input_event_rx) = mpsc::channel();
     (
         RuntimeChannels {
             command_rx,
             event_tx,
         },
-        command_tx,
-        event_rx,
-    )
-}
-
-pub fn create_input_event_gate(target: MessageTarget) -> (InputEventGate, Receiver<Event>) {
-    let (sender, receiver) = mpsc::channel();
-    (
-        InputEventGate {
-            inner: Arc::new(InputEventGateInner {
-                closed: AtomicBool::new(false),
-                wake_pending: AtomicBool::new(false),
-                sender: Mutex::new(Some(sender)),
-            }),
+        InputGate {
+            inner: Arc::new(Mutex::new(InputGateState {
+                command_sender: Some(command_sender),
+                event_sender: Some(input_event_sender),
+                deferred_command: None,
+                deferred_event: None,
+                wake_pending: false,
+                closed: false,
+            })),
             target,
         },
-        receiver,
+        event_rx,
+        input_event_rx,
     )
 }
 
-impl InputEventGate {
-    pub fn submit(&self, event: Event) -> bool {
-        if self.inner.closed.load(Ordering::Acquire) {
+impl InputGate {
+    pub fn submit_command(&self, command: Command) -> bool {
+        let mut state = self.lock_state();
+        if state.closed
+            || state
+                .command_sender
+                .as_ref()
+                .is_none_or(|sender| sender.send(command).is_err())
+        {
             return false;
         }
+        self.ensure_wake(&mut state)
+    }
 
-        let sender = self.inner.sender.lock().unwrap_or_else(|error| {
-            eprintln!("input event gate mutex was poisoned; recovering");
-            error.into_inner()
-        });
-        if self.inner.closed.load(Ordering::Acquire) {
+    pub fn submit_event(&self, event: Event) -> bool {
+        let mut state = self.lock_state();
+        if state.closed
+            || state
+                .event_sender
+                .as_ref()
+                .is_none_or(|sender| sender.send(event).is_err())
+        {
             return false;
         }
-        let submitted = sender
-            .as_ref()
-            .is_some_and(|sender| sender.send(event).is_ok());
-        drop(sender);
-        if submitted && !self.inner.wake_pending.swap(true, Ordering::AcqRel) {
-            let _ = self.target.post(WM_APP_COMMAND);
+        self.ensure_wake(&mut state)
+    }
+
+    pub fn drain_batch(
+        &self,
+        command_rx: &Receiver<Command>,
+        event_rx: &Receiver<Event>,
+        limit_per_queue: usize,
+    ) -> InputBatch {
+        let mut state = self.lock_state();
+        let (commands, command_backlog) =
+            receive_batch(&mut state.deferred_command, command_rx, limit_per_queue);
+        let (events, event_backlog) =
+            receive_batch(&mut state.deferred_event, event_rx, limit_per_queue);
+
+        if command_backlog || event_backlog {
+            state.wake_pending = true;
+            if self.target.post(WM_APP_COMMAND).is_err() {
+                state.wake_pending = false;
+            }
+        } else {
+            state.wake_pending = false;
         }
-        submitted
+
+        InputBatch { commands, events }
     }
 
-    pub fn prepare_to_drain(&self) {
-        self.inner.wake_pending.store(false, Ordering::Release);
+    pub fn close(&self) -> Vec<Event> {
+        let (command_sender, event_sender, deferred_event) = {
+            let mut state = self.lock_state();
+            state.closed = true;
+            state.wake_pending = false;
+            state.deferred_command.take();
+            (
+                state.command_sender.take(),
+                state.event_sender.take(),
+                state.deferred_event.take(),
+            )
+        };
+        drop(command_sender);
+        drop(event_sender);
+        deferred_event.into_iter().collect()
     }
 
-    pub fn close(&self) {
-        self.inner.closed.store(true, Ordering::Release);
-        let mut sender = self.inner.sender.lock().unwrap_or_else(|error| {
-            eprintln!("input event gate mutex was poisoned during close; recovering");
+    fn ensure_wake(&self, state: &mut InputGateState) -> bool {
+        if state.wake_pending {
+            return true;
+        }
+        state.wake_pending = true;
+        if self.target.post(WM_APP_COMMAND).is_err() {
+            state.wake_pending = false;
+            return false;
+        }
+        true
+    }
+
+    fn lock_state(&self) -> std::sync::MutexGuard<'_, InputGateState> {
+        self.inner.lock().unwrap_or_else(|error| {
+            eprintln!("input gate mutex was poisoned; recovering");
             error.into_inner()
-        });
-        sender.take();
-        self.inner.wake_pending.store(false, Ordering::Release);
+        })
     }
 }
 
-pub fn spawn_stdin_reader(
-    target: MessageTarget,
-    command_tx: Sender<Command>,
-    input_events: InputEventGate,
-) {
+fn receive_batch<T>(
+    deferred: &mut Option<T>,
+    receiver: &Receiver<T>,
+    limit: usize,
+) -> (Vec<T>, bool) {
+    let mut items = Vec::with_capacity(limit);
+    if let Some(item) = deferred.take() {
+        items.push(item);
+    }
+    while items.len() < limit {
+        match receiver.try_recv() {
+            Ok(item) => items.push(item),
+            Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => {
+                return (items, false);
+            }
+        }
+    }
+    match receiver.try_recv() {
+        Ok(item) => {
+            *deferred = Some(item);
+            (items, true)
+        }
+        Err(mpsc::TryRecvError::Empty | mpsc::TryRecvError::Disconnected) => (items, false),
+    }
+}
+
+pub fn spawn_stdin_reader(target: MessageTarget, input_gate: InputGate) {
     thread::Builder::new()
         .name("cyrene-stdin".into())
         .spawn(move || {
@@ -144,9 +222,7 @@ pub fn spawn_stdin_reader(
                         match parsed {
                             Ok(command) => {
                                 let shutdown = matches!(command, Command::Shutdown);
-                                if command_tx.send(command).is_err()
-                                    || target.post(WM_APP_COMMAND).is_err()
-                                {
+                                if !input_gate.submit_command(command) {
                                     return;
                                 }
                                 if shutdown {
@@ -154,7 +230,7 @@ pub fn spawn_stdin_reader(
                                 }
                             }
                             Err((code, message)) => {
-                                if !input_events.submit(Event::Error {
+                                if !input_gate.submit_event(Event::Error {
                                     request_id: None,
                                     code: code.into(),
                                     message,
@@ -166,7 +242,7 @@ pub fn spawn_stdin_reader(
                         }
                     }
                     Ok(InputLine::TooLong) => {
-                        if !input_events.submit(Event::Error {
+                        if !input_gate.submit_event(Event::Error {
                             request_id: None,
                             code: "line-too-long".into(),
                             message: format!("NDJSON line exceeds {MAX_NDJSON_LINE_BYTES} bytes"),

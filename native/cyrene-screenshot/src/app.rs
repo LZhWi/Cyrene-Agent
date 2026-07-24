@@ -17,24 +17,24 @@ use crate::{
     cli::CliOptions,
     error::AppError,
     ipc::{
-        InputEventGate, MessageTarget, RuntimeChannels, create_input_event_gate,
-        create_runtime_channels, spawn_stdin_reader, spawn_stdout_writer,
+        InputGate, MessageTarget, RuntimeChannels, create_runtime_channels, spawn_stdin_reader,
+        spawn_stdout_writer,
     },
     parent_watch,
     protocol::{Command, Event, PROTOCOL_VERSION},
 };
 
 const WINDOW_CLASS: PCWSTR = w!("CyreneScreenshotRuntimeWindow");
+const INPUT_BATCH_LIMIT: usize = 64;
 
 pub fn run(options: CliOptions) -> Result<(), AppError> {
     let window = MessageWindow::create()?;
     let target = MessageTarget::new(window.hwnd);
-    let (channels, command_tx, event_rx) = create_runtime_channels();
-    let (input_events, input_event_rx) = create_input_event_gate(target);
+    let (channels, input_gate, event_rx, input_event_rx) = create_runtime_channels(target);
     let stdout_thread = spawn_stdout_writer(event_rx);
 
     parent_watch::start(options.parent_pid, target);
-    spawn_stdin_reader(target, command_tx, input_events.clone());
+    spawn_stdin_reader(target, input_gate.clone());
     channels
         .event_tx
         .send(Event::Ready {
@@ -42,8 +42,10 @@ pub fn run(options: CliOptions) -> Result<(), AppError> {
         })
         .map_err(|_| AppError::Runtime("stdout writer stopped before ready".into()))?;
 
-    let message_result = run_message_loop(&window, &channels, &input_events, &input_event_rx);
-    input_events.close();
+    let message_result = run_message_loop(&window, &channels, &input_gate, &input_event_rx);
+    for event in input_gate.close() {
+        let _ = channels.event_tx.send(event);
+    }
     drain_closed_input_events(&channels.event_tx, &input_event_rx);
     drop(channels);
     let stdout_result = stdout_thread
@@ -58,7 +60,7 @@ pub fn run(options: CliOptions) -> Result<(), AppError> {
 fn run_message_loop(
     window: &MessageWindow,
     channels: &RuntimeChannels,
-    input_events: &InputEventGate,
+    input_gate: &InputGate,
     input_event_rx: &Receiver<Event>,
 ) -> Result<(), AppError> {
     let mut message = MSG::default();
@@ -73,9 +75,12 @@ fn run_message_loop(
             return Ok(());
         }
         if message.hwnd == window.hwnd && message.message == WM_APP_COMMAND {
-            input_events.prepare_to_drain();
-            forward_input_events(&channels.event_tx, input_event_rx);
-            for command in channels.command_rx.try_iter() {
+            let batch =
+                input_gate.drain_batch(&channels.command_rx, input_event_rx, INPUT_BATCH_LIMIT);
+            for event in batch.events {
+                let _ = channels.event_tx.send(event);
+            }
+            for command in batch.commands {
                 if !handle_command(command, &channels.event_tx) {
                     return Ok(());
                 }
@@ -87,17 +92,6 @@ fn run_message_loop(
         unsafe {
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
-        }
-    }
-}
-
-fn forward_input_events(
-    event_tx: &std::sync::mpsc::Sender<Event>,
-    input_event_rx: &Receiver<Event>,
-) {
-    for event in input_event_rx.try_iter() {
-        if event_tx.send(event).is_err() {
-            return;
         }
     }
 }

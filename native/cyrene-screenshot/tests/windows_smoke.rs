@@ -2,6 +2,7 @@
 
 use std::{
     io::{BufRead, BufReader, Write},
+    os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
     path::PathBuf,
     process::{Child, ChildStdin, Command, ExitStatus, Stdio},
     sync::{
@@ -12,13 +13,51 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+use windows::{
+    Win32::{
+        Foundation::HANDLE,
+        System::Threading::{OpenThread, ResumeThread, SuspendThread, THREAD_SUSPEND_RESUME},
+        UI::WindowsAndMessaging::{FindWindowExW, GetWindowThreadProcessId, HWND_MESSAGE},
+    },
+    core::{PCWSTR, w},
+};
 
 const READY_TIMEOUT: Duration = Duration::from_secs(3);
 const EXIT_TIMEOUT: Duration = Duration::from_secs(2);
 const REAP_TIMEOUT: Duration = Duration::from_secs(2);
+const FLOOD_SETUP_TIMEOUT: Duration = Duration::from_secs(10);
 
 struct ChildGuard {
     child: Child,
+}
+
+struct SuspendedThread {
+    handle: OwnedHandle,
+    suspended: bool,
+}
+
+impl SuspendedThread {
+    fn resume(&mut self) {
+        if !self.suspended {
+            return;
+        }
+        let handle = HANDLE(self.handle.as_raw_handle());
+        // SAFETY: handle owns an open thread handle with suspend/resume access.
+        let previous_count = unsafe { ResumeThread(handle) };
+        assert_ne!(previous_count, u32::MAX, "resume helper UI thread");
+        self.suspended = false;
+    }
+}
+
+impl Drop for SuspendedThread {
+    fn drop(&mut self) {
+        if self.suspended {
+            let handle = HANDLE(self.handle.as_raw_handle());
+            // SAFETY: Best-effort failure cleanup for the still-owned handle.
+            let _ = unsafe { ResumeThread(handle) };
+            self.suspended = false;
+        }
+    }
 }
 
 impl ChildGuard {
@@ -180,6 +219,48 @@ impl Helper {
                     .unwrap_or_else(|error| panic!("stdout was not NDJSON: {line:?}: {error}"))
             })
             .collect()
+    }
+
+    fn suspend_ui_thread(&self) -> SuspendedThread {
+        let deadline = Instant::now() + READY_TIMEOUT;
+        loop {
+            let mut after = None;
+            while let Ok(hwnd) = unsafe {
+                FindWindowExW(
+                    Some(HWND_MESSAGE),
+                    after,
+                    w!("CyreneScreenshotRuntimeWindow"),
+                    PCWSTR::null(),
+                )
+            } {
+                let mut pid = 0;
+                // SAFETY: pid points to writable storage and hwnd came from
+                // FindWindowExW.
+                let thread_id = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+                if pid == self.process.child.id() {
+                    // SAFETY: thread_id identifies the helper UI thread that
+                    // owns its message-only HWND.
+                    let handle = unsafe { OpenThread(THREAD_SUSPEND_RESUME, false, thread_id) }
+                        .expect("open helper UI thread");
+                    // SAFETY: OpenThread returned a newly owned handle.
+                    let handle = unsafe { OwnedHandle::from_raw_handle(handle.0) };
+                    let raw_handle = HANDLE(handle.as_raw_handle());
+                    // SAFETY: raw_handle remains owned for the guard lifetime.
+                    let previous_count = unsafe { SuspendThread(raw_handle) };
+                    assert_ne!(previous_count, u32::MAX, "suspend helper UI thread");
+                    return SuspendedThread {
+                        handle,
+                        suspended: true,
+                    };
+                }
+                after = Some(hwnd);
+            }
+            assert!(
+                Instant::now() < deadline,
+                "helper message-only HWND was not found before timeout"
+            );
+            thread::sleep(Duration::from_millis(10));
+        }
     }
 }
 
@@ -366,6 +447,7 @@ fn parent_shutdown_closes_a_continuous_error_producer_and_drains_stdout() {
     let mut parent = ChildGuard::new(parent);
     let mut helper = Helper::spawn(parent.child.id(), 1);
     helper.expect_ready();
+    let mut suspended_ui = helper.suspend_ui_thread();
 
     let mut stdin = helper.stdin.take().expect("helper stdin");
     let written = Arc::new(AtomicUsize::new(0));
@@ -390,6 +472,8 @@ fn parent_shutdown_closes_a_continuous_error_producer_and_drains_stdout() {
     parent
         .terminate_and_reap(REAP_TIMEOUT)
         .expect("bounded disposable parent cleanup");
+    thread::sleep(Duration::from_millis(50));
+    suspended_ui.resume();
 
     let natural_exit = helper
         .process
@@ -416,5 +500,102 @@ fn parent_shutdown_closes_a_continuous_error_producer_and_drains_stdout() {
         event["type"] == "error"
             && event["code"] == "invalid-command"
             && event["recoverable"] == true
+    }));
+}
+
+#[test]
+fn parent_shutdown_closes_a_continuous_command_producer_and_drains_stdout() {
+    let parent = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "Start-Sleep -Seconds 30",
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn disposable parent");
+    let mut parent = ChildGuard::new(parent);
+    let mut helper = Helper::spawn(parent.child.id(), 1);
+    helper.expect_ready();
+    let mut suspended_ui = helper.suspend_ui_thread();
+
+    let mut stdin = helper.stdin.take().expect("helper stdin");
+    let written = Arc::new(AtomicUsize::new(0));
+    let writer_count = Arc::clone(&written);
+    let (writer_done_tx, writer_done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let command = b"{\"type\":\"cancel\",\"requestId\":\"flood\"}\n";
+        let batch = command.repeat(256);
+        while stdin.write_all(&batch).is_ok() {
+            writer_count.fetch_add(256, Ordering::Release);
+        }
+        let _ = writer_done_tx.send(());
+    });
+
+    let write_deadline = Instant::now() + FLOOD_SETUP_TIMEOUT;
+    let mut last_written = 0;
+    let mut last_progress = Instant::now();
+    let producer_stopped_while_suspended = loop {
+        let current_written = written.load(Ordering::Acquire);
+        if current_written >= 32_768 {
+            break false;
+        }
+        if writer_done_rx.try_recv().is_ok() {
+            break true;
+        }
+        if current_written != last_written {
+            last_written = current_written;
+            last_progress = Instant::now();
+        } else if current_written >= 4_096 && last_progress.elapsed() >= Duration::from_millis(200)
+        {
+            break false;
+        }
+        assert!(
+            Instant::now() < write_deadline,
+            "continuous command producer did not fill the suspended UI backlog; completed writes: {}",
+            current_written
+        );
+        thread::sleep(Duration::from_millis(5));
+    };
+    assert!(
+        written.load(Ordering::Acquire) >= 4_096,
+        "continuous command producer did not establish a message backlog"
+    );
+    parent
+        .terminate_and_reap(REAP_TIMEOUT)
+        .expect("bounded disposable parent cleanup");
+    thread::sleep(Duration::from_millis(50));
+    suspended_ui.resume();
+
+    let natural_exit = helper
+        .process
+        .wait_timeout(EXIT_TIMEOUT)
+        .expect("poll helper under continuous commands");
+    if natural_exit.is_none() {
+        helper
+            .process
+            .terminate_and_reap(REAP_TIMEOUT)
+            .expect("bounded helper cleanup after command-flood timeout");
+    }
+    if !producer_stopped_while_suspended {
+        writer_done_rx
+            .recv_timeout(EXIT_TIMEOUT)
+            .expect("command flood writer did not stop before timeout");
+    }
+    let events = helper.finish_stdout(EXIT_TIMEOUT);
+
+    assert!(
+        natural_exit.is_some(),
+        "helper did not close the command producer and exit before timeout"
+    );
+    assert_eq!(events[0], ready_event());
+    assert!(events.len() > 1, "expected request-scoped command events");
+    assert!(events[1..].iter().all(|event| {
+        event["type"] == "cancelled"
+            && event["requestId"] == "flood"
+            && event["reason"] == "no-active-capture"
     }));
 }
