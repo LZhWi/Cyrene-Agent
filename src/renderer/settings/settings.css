@@ -68,6 +68,16 @@ body {
   font: var(--rb-text-title);
   color: var(--rb-text-strong);
   text-shadow: 0 0 14px rgba(236, 72, 153, 0.30);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-nav__logo {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--rb-radius-sm);
+  flex-shrink: 0;
 }
 
 .settings-nav__sub {
