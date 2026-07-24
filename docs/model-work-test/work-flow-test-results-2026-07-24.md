@@ -3,6 +3,7 @@
 > 测试日期：2026-07-22  ----  2026-07-24
 > 测试范围：CITA → Action Gate → Native Function Calling → 无副作用 Tool Runtime → Soul  
 > 撰写：Playa
+> 备注：本项目为个人业余学习开发项目，无协作团队；文档完整记录全链路细节，不做精简压缩，用于长期留存测试标准、链路逻辑，避免长期搁置后遗忘流程与判定规则。
 
 ## 1. 测试方法
 
@@ -227,7 +228,7 @@ CITA 可以失败后降级继续；Action Gate、Native FC 和 Execution Policy
 | DeepSeek `deepseek-v4-flash` | B | 10 | 10/10 | 10/10 | 4.57s | 稳定、快速 |
 | DeepSeek `deepseek-v4-pro` | B | 10 | 10/10 | 10/10 | 12.27s | 稳定|
 | 豆包 `doubao-seed-2-1-turbo` | A | 10 | 10/10 | 10/10 | 16.65s | 稳定 |
-| 豆包 `doubao-seed-2-1-pro` | A | 10 | 10/10 | 10/10 | 28.22 | 极其慢 |
+| 豆包 `doubao-seed-2-1-pro` | A | 10 | 10/10 | 10/10 | 28.22s | 极其慢 |
 | Qwen `qwen3.7-max` | B | 10 | 10/10 | 5/5 | 6.83s | 稳定、较快 |
 | Qwen `qwen3.7-max` | B | 10 | 10/10 | 10/10 | 5.87s | 稳定、较快 |
 | MiMo `mimo-v2.5` | B | 10 | 10/10 | 10/10 | 7.50s | 稳定 |
