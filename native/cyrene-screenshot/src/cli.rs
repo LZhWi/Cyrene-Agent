@@ -72,9 +72,10 @@ where
     let protocol_version = protocol_version
         .ok_or_else(|| AppError::InvalidArguments("--protocol-version is required".into()))?;
     if protocol_version != PROTOCOL_VERSION {
-        return Err(AppError::InvalidArguments(format!(
-            "--protocol-version must be {PROTOCOL_VERSION}"
-        )));
+        return Err(AppError::ProtocolVersionMismatch {
+            provided: protocol_version,
+            expected: PROTOCOL_VERSION,
+        });
     }
 
     Ok(CliOptions {
@@ -86,6 +87,6 @@ where
 }
 
 pub fn run() -> Result<(), AppError> {
-    let _options = parse_arguments(std::env::args().skip(1))?;
-    Err(AppError::NotImplemented)
+    let options = parse_arguments(std::env::args().skip(1))?;
+    crate::app::run(options)
 }
