@@ -87,6 +87,8 @@ export function setInboundChatRunner(fn: InboundChatRunner | null): void {
 export type ProactiveReplyRunner = (input: {
   /** 用户在手机上对主动消息的回复文本。 */
   text: string;
+  /** 手机随回复发来的图片（base64）。运行器落 blob、做视觉分析并挂 attachments，与 /chat 同构。 */
+  images?: { name: string; mime: string; dataBase64: string }[];
 }) => Promise<{
   reply: string;
   /** PC 给用户消息落库时的权威时间戳（ISO）。 */
@@ -370,21 +372,30 @@ async function handleRequest(
         sendJson(res, 503, { ok: false, error: "proactive reply runner not ready" });
         return;
       }
-      let body: { text?: unknown } | null = null;
+      let body: { text?: unknown; images?: unknown } | null = null;
       try {
-        const text = await readBody(req);
+        const text = await readBody(req, 16 * 1024 * 1024);
         body = text ? JSON.parse(text) : null;
       } catch (err) {
         sendJson(res, 400, { ok: false, error: err instanceof Error ? err.message : "bad json" });
         return;
       }
       const userText = typeof body?.text === "string" ? body.text.trim() : "";
-      if (!userText) {
-        sendJson(res, 400, { ok: false, error: "missing text" });
+      const rawImages = Array.isArray(body?.images) ? body!.images : [];
+      const images = rawImages
+        .filter(
+          (x: unknown): x is { name: string; mime: string; dataBase64: string } =>
+            !!x &&
+            typeof (x as any).mime === "string" &&
+            typeof (x as any).dataBase64 === "string",
+        )
+        .map((x) => ({ name: typeof x.name === "string" ? x.name : "image", mime: x.mime, dataBase64: x.dataBase64 }));
+      if (!userText && images.length === 0) {
+        sendJson(res, 400, { ok: false, error: "missing text or images" });
         return;
       }
       try {
-        const { reply: replyText, userAt, assistantAt } = await proactiveReplyRunner({ text: userText });
+        const { reply: replyText, userAt, assistantAt } = await proactiveReplyRunner({ text: userText, images: images.length > 0 ? images : undefined });
         sendJson(res, 200, { ok: true, reply: replyText, userAt, assistantAt });
       } catch (err) {
         console.error(LOG, "proactive/reply 失败:", err);

@@ -77,6 +77,7 @@ import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker
 import { normalizeWindowVisibilitySettings } from "./window-visibility-settings";
 import { PetWindowMoveController } from "./pet-window-movement";
 import type { StickerConfigItem } from "../shared/sticker-types";
+import type { ImageMessageAttachment } from "../shared/chat-types";
 import { initReranker, getRerankerInstallStatus } from "./rag/reranker";
 import { memoryStore } from "./memory/memory-store"
 import { backupMemoryRagFiles, reconcileMemoryRag } from "./memory/memory-rag-reconciliation";
@@ -4643,13 +4644,29 @@ app.whenReady().then(async () => {
       const session = chatsStore.getSessionByPurpose("proactive-chat");
       if (!session) return [];
       const entries = session.messages
-        .filter((m) => typeof m.content === "string" && m.content.trim().length > 0)
+        .filter((m) => (typeof m.content === "string" && m.content.trim().length > 0) || !!m.sticker || (m.attachments?.some((a) => a.kind === "image") ?? false))
         .filter((m) => !(since > 0) || m.at >= since)
-        .map((m) => ({
-          role: (m.role === "model" ? "assistant" : "user") as "user" | "assistant",
-          content: m.content,
-          at: new Date(m.at).toISOString(),
-        }));
+        .map((m) => {
+          // 手机镜像只承载 content 文本，故把独立字段合成回内联标记供手机 parseMessageParts 解析：
+          //   · sticker 字段 → [sticker:id]
+          //   · image attachments → [image:hash]（仅内容寻址 blob：filePath basename 为 64 位 hex、能经 /blob/:hash 取回；
+          //     PC 桌面本地发的图 filePath 是任意本地路径、不被 /blob 服务，跳过以免手机端裂图——与本功能上线前行为一致）。
+          // 老消息可能同时带「content 内嵌标记 + 独立字段」，故先剥掉 content 里已有的 [sticker:*]/[image:*] 再从字段合成一次，
+          // 保证每个字段恒对应一个标记（字段为权威），杜绝手机端加倍。
+          let content = (m.content ?? "").replace(/\[sticker:[^\]]+\]/g, "").replace(/\[image:[^\]]+\]/g, "").trim();
+          if (m.sticker) content = `${content} ${formatStickerMarker(m.sticker)}`.trim();
+          for (const a of m.attachments ?? []) {
+            if (a.kind !== "image") continue;
+            const base = require("path").basename(a.filePath);
+            const hash = base.replace(/\.[^.]+$/, "");
+            if (/^[0-9a-f]{64}$/.test(hash)) content = `${content} ${formatImageMarker(hash)}`.trim();
+          }
+          return {
+            role: (m.role === "model" ? "assistant" : "user") as "user" | "assistant",
+            content,
+            at: new Date(m.at).toISOString(),
+          };
+        });
       if (entries.length === 0) return [];
       return [{ stem: DESKTOP_PROACTIVE_STEM, entries }];
     } catch (err) {
@@ -4665,7 +4682,7 @@ app.whenReady().then(async () => {
   //   3) 写入 chats-store 的 proactive-chat 会话（镜像读取的权威库）+ indexConversationTurn 抽记忆；
   //   4) onConversationEnded：busy--，进入正常静默期。
   // 不触碰 proactive 的触发/生成/冷却策略本身；不写 channels history-log（避免幻影会话）。
-  setProactiveReplyRunner(async ({ text }) => {
+  setProactiveReplyRunner(async ({ text, images }) => {
     const session0 = chatsStore.getSessionByPurpose("proactive-chat");
     if (!session0) throw new Error("暂无主动消息会话，无法回复");
     const sessionId = session0.id;
@@ -4687,20 +4704,53 @@ app.whenReady().then(async () => {
         .map((m) => ({
           role: (m.role === "model" ? "assistant" : "user") as "user" | "assistant" | "system",
           content: describeMarkersForLlm(m.content, m.role === "model" ? "assistant" : "user"),
+          at: m.at,
         }));
 
+      // 手机随回复发来的图片：落内容寻址 blob，构造 ①真视觉用的 imageAttachments（filePath+mime）、
+      // ②写库用的 ImageMessageAttachment（PC 桌面渲染器原生显示，零渲染器改动）。与 /chat 图片链路同构。
+      const imageAttachmentsForVision: { name: string; filePath: string; mime?: string }[] = [];
+      const imageAttachmentsForStore: ImageMessageAttachment[] = [];
+      for (const img of images ?? []) {
+        try {
+          const buf = Buffer.from(img.dataBase64, "base64");
+          const { hash, ext } = saveBlob(buf, img.mime);
+          const { app } = await import("electron");
+          const filePath = require("path").join(app.getPath("userData"), "mobile-blobs", `${hash}.${ext}`);
+          imageAttachmentsForVision.push({ name: img.name, filePath, mime: img.mime });
+          imageAttachmentsForStore.push({ kind: "image", name: img.name, filePath, mime: img.mime, previewUrl: require("url").pathToFileURL(filePath).toString(), status: "done" });
+        } catch (err) {
+          console.warn("[Mobile] proactive 图片落地失败(跳过):", err);
+        }
+      }
+
       // 先把用户回复写入 chats-store 的 proactive-chat 会话（镜像读取的权威库）并广播刷新。
+      // 手机把 [sticker:id] 嵌在文本里发来；PC 桌面渲染器只认独立的 sticker 字段（content 里的标记会被剥离显示），
+      // 故解析出贴纸放进字段、content 存剥离后的纯文本，与 PC 原生消息的存储约定一致。
+      // 图片走独立 attachments 字段（同 PC 桌面本地发图），content 不塞 [image:*]（手机镜像所需标记由 desktopHistoryProvider 从字段合成）。
       const userAtMs = Date.now();
-      chatsStore.appendMessage(sessionId, { id: randomUUID(), role: "user", content: text, at: userAtMs });
+      const userStickerMatch = /\[sticker:([A-Za-z0-9_-]+)\]/.exec(text);
+      const userSticker = userStickerMatch ? userStickerMatch[1] : null;
+      const userCleanText = text.replace(/\[sticker:[^\]]+\]/g, "").trim();
+      chatsStore.appendMessage(sessionId, {
+        id: randomUUID(),
+        role: "user",
+        content: userCleanText,
+        at: userAtMs,
+        sticker: userSticker,
+        attachments: imageAttachmentsForStore.length > 0 ? imageAttachmentsForStore : undefined,
+      });
       broadcastChatsChanged();
 
-      const llmUserContent = describeMarkersForLlm(text) || text;
+      // 当前轮喂 LLM：文本标记转描述；图片走真视觉（imageAttachments）。图片无文字时给占位描述，与 /chat 一致。
+      const llmUserContent = describeMarkersForLlm(text) || (imageAttachmentsForVision.length > 0 ? "（图片）" : text);
       const { options } = await buildAgentRunOptions(
         {
-          messages: [...historyMessages, { role: "user", content: llmUserContent }],
+          messages: [...historyMessages, { role: "user", content: llmUserContent, at: userAtMs }],
           style: "01_default.md",
           sessionId,
           channel: "mobile",
+          imageAttachments: imageAttachmentsForVision.length > 0 ? imageAttachmentsForVision : undefined,
         },
         buildOptionsDeps,
       );
@@ -4724,20 +4774,24 @@ app.whenReady().then(async () => {
 
       let sticker: string | null = null;
       if (agent.lastResult) {
-        const finished = await onAgentRunFinished(agent.lastResult, text, onRunFinishedDeps, "mobile");
+        // 副作用侧（记忆抽取/心情/关系/她的贴纸选择）传入与 PC 逐字一致的
+        // 「（用户发送表情包：…）」描述形（llmUserContent），而非原始 [sticker:id] 裸标记，
+        // 完整对齐桌面原生回复的副作用输入，避免记忆里存进裸标记、或她的贴纸基于裸标记匹配。
+        const finished = await onAgentRunFinished(agent.lastResult, llmUserContent, onRunFinishedDeps, "mobile");
         sticker = finished.sticker;
       }
-      const displayReply = sticker ? `${rawReply} ${formatStickerMarker(sticker)}`.trim() : rawReply;
       const cleanReply = stripStickerStageDirections(rawReply);
 
-      // 回复写入 proactive-chat 会话（含可能的贴纸标记，供显示/删除）；RAG 存剥离后的干净版。
+      // 回复写入 proactive-chat 会话：贴纸放独立字段（PC 桌面渲染器只认 sticker 字段），
+      // content 存剥离后的干净文本，与 PC 原生聊天/主动消息的存储约定一致；
+      // 手机镜像所需的 [sticker:id] 标记由 desktopHistoryProvider 从字段合成回 content。
       const assistantAtMs = Date.now();
-      chatsStore.appendMessage(sessionId, { id: randomUUID(), role: "model", content: displayReply, at: assistantAtMs });
+      chatsStore.appendMessage(sessionId, { id: randomUUID(), role: "model", content: cleanReply, at: assistantAtMs, sticker });
       broadcastChatsChanged();
 
       void indexConversationTurn(sessionId, describeMarkersForLlm(text), cleanReply);
       return {
-        reply: displayReply,
+        reply: cleanReply,
         userAt: new Date(userAtMs).toISOString(),
         assistantAt: new Date(assistantAtMs).toISOString(),
       };
