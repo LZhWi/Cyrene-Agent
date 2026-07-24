@@ -30,6 +30,7 @@ import { requestTrackPlayback } from "./music-playback";
 import { type ReasoningPreference } from "../../shared/reasoning";
 import { type LoginFlowState } from "../../shared/music-types";
 import { renderMarkdown } from "../chat/markdown/markdown-renderer";
+import workFlowDocMd from "../../../docs/model-work-test/work-flow-test-results-2026-07-24.md?raw";
 import {
   DEFAULT_CUSTOM_STYLE,
   normalizeCustomStyleConfig,
@@ -2415,10 +2416,7 @@ customEndpointGuideBtn?.addEventListener("click", () => {
 });
 
 // ── 模型厂商 Work 流程适配说明 ──────────────────────────────
-// 展示各厂商结构化输出档位与实测兼容性；「详细文档」跳转完整实测报告。
-const WORK_FLOW_DOC_URL =
-  "https://github.com/Playa-0v0/Cyrene-Agent/blob/master/docs/model-work-test/work-flow-test-results-2026-07-24.md";
-
+// 展示各厂商结构化输出档位与实测兼容性；「详细文档」在 app 内本地渲染完整实测报告。
 const WORK_FLOW_COMPAT_MD = `## 模型兼容性
 
 > Cyrene 会根据不同厂商自动选择对应的 Structured Output Profile。
@@ -2467,13 +2465,18 @@ workFlowAdaptBtn?.addEventListener("click", () => {
     icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 10.5V17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="7.25" r="1.1" fill="currentColor"/></svg>',
     htmlBody: buildWorkFlowAdaptBody(),
   });
-  // 「详细文档」跳转完整实测报告（GitHub 上的 md，与 local-models 文档同源）
+  // 「详细文档」在 app 内本地渲染完整实测报告（?raw 内联 md + renderMarkdown）
   const docLink = document.querySelector(
     "#cy-html-modal-body #work-flow-adapt-doc-link",
   ) as HTMLButtonElement | null;
-  docLink?.addEventListener("click", async (event) => {
-    event.preventDefault();
-    await window.system?.openExternal(WORK_FLOW_DOC_URL);
+  docLink?.addEventListener("click", () => {
+    const rendered = renderMarkdown(workFlowDocMd);
+    const docHtml = rendered.mode === "html" ? rendered.content : "";
+    void showHtmlModal({
+      title: "详细文档",
+      icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 3h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
+      htmlBody: `<div class="work-flow-doc">${docHtml}</div>`,
+    });
   });
 });
 
