@@ -7,8 +7,23 @@
   <link rel="stylesheet" href="./screenshot.css" />
 </head>
 <body>
+  <video id="screenshot-video" autoplay muted playsinline style="display:none"></video>
   <canvas id="screenshot-canvas"></canvas>
-  <div class="screenshot-hint" id="screenshot-hint">拖拽选择区域 · 双击全屏 · Esc 取消</div>
+  <canvas id="screenshot-dimmer"></canvas>
+  <div class="screenshot-toolbar" id="screenshot-toolbar" style="display:none">
+    <button type="button" class="screenshot-toolbar__btn screenshot-toolbar__btn--cancel" id="screenshot-cancel" title="取消（Esc）">
+      <svg width="14" height="14" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <line x1="10" y1="10" x2="38" y2="38" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+        <line x1="38" y1="10" x2="10" y2="38" stroke="currentColor" stroke-width="4" stroke-linecap="round"/>
+      </svg>
+    </button>
+    <button type="button" class="screenshot-toolbar__btn screenshot-toolbar__btn--confirm" id="screenshot-confirm" title="确认（Enter）">
+      <svg width="14" height="14" viewBox="0 0 48 48" fill="none" aria-hidden="true">
+        <path d="M10 24L20 34L38 14" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+      </svg>
+    </button>
+  </div>
+  <div class="screenshot-hint" id="screenshot-hint">拖拽选择区域 · 双击或 Enter 确认 · Esc 取消</div>
   <script type="module" src="./screenshot.ts"></script>
 </body>
 </html>

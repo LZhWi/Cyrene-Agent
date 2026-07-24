@@ -1,50 +1,60 @@
 /**
- * 截图覆盖窗专用 preload -- 最小权限，只暴露选区交互所需的 5 个方法。
- *
- * 覆盖窗不需要聊天 API、设置 API 或任何其他能力。
+ * 截图覆盖窗专用 preload -- 最小权限。
  */
 import { contextBridge, ipcRenderer } from "electron";
 import { IPC } from "../shared/ipc-channels";
 
 const screenshotOverlayApi = {
-  /** 通知主进程：覆盖窗已加载，可以发送截图数据了 */
-  ready: () => ipcRenderer.send(IPC.SCREENSHOT_OVERLAY_READY),
-
-  /** 接收主进程发来的截图数据（base64 + 尺寸 + sessionId） */
-  onData: (
+  // 会话开始：主进程通知渲染层启动新截图会话
+  onStartSession: (
     cb: (data: {
-      base64: string;
-      imageWidth: number;
-      imageHeight: number;
+      sessionId: string;
+      fromButton: boolean;
       displayWidth: number;
       displayHeight: number;
-      sessionId: string;
+      timings: Record<string, number>;
     }) => void,
   ) => {
     const listener = (
       _e: unknown,
       data: {
-        base64: string;
-        imageWidth: number;
-        imageHeight: number;
+        sessionId: string;
+        fromButton: boolean;
         displayWidth: number;
         displayHeight: number;
-        sessionId: string;
+        timings: Record<string, number>;
       },
     ) => cb(data);
-    ipcRenderer.on(IPC.SCREENSHOT_DATA, listener as never);
-    return () => ipcRenderer.off(IPC.SCREENSHOT_DATA, listener as never);
+    ipcRenderer.on(IPC.SCREENSHOT_START_SESSION, listener as never);
+    return () => ipcRenderer.off(IPC.SCREENSHOT_START_SESSION, listener as never);
   },
 
-  /** 通知主进程：canvas 已画完，可以 show() 了 */
-  rendered: () => ipcRenderer.send(IPC.SCREENSHOT_RENDERED),
+  // 帧就绪：Renderer 抓到帧并画完 canvas 后调用
+  frameReady: (sessionId: string, timings: Record<string, number>) =>
+    ipcRenderer.send(IPC.SCREENSHOT_FRAME_READY, { sessionId, timings }),
 
-  /** 发送选区坐标（CSS 像素）给主进程裁剪 */
-  select: (sessionId: string, x: number, y: number, w: number, h: number) =>
-    ipcRenderer.send(IPC.SCREENSHOT_REGION, sessionId, x, y, w, h),
+  // 主进程通知窗口已显示（用于埋点）
+  onShown: (cb: (data: { timings: Record<string, number> }) => void) => {
+    const listener = (_e: unknown, data: { timings: Record<string, number> }) => cb(data);
+    ipcRenderer.on(IPC.SCREENSHOT_SHOWN, listener as never);
+    return () => ipcRenderer.off(IPC.SCREENSHOT_SHOWN, listener as never);
+  },
 
-  /** 取消截图 */
-  cancel: () => ipcRenderer.send(IPC.SCREENSHOT_CANCEL),
+  // 用户确认：发送 PNG ArrayBuffer
+  confirm: (payload: {
+    sessionId: string;
+    png: ArrayBuffer;
+    width: number;
+    height: number;
+    timings: Record<string, number>;
+  }) => ipcRenderer.send(IPC.SCREENSHOT_CONFIRM, payload),
+
+  // 用户取消
+  cancel: (sessionId: string, reason: string) =>
+    ipcRenderer.send(IPC.SCREENSHOT_CANCEL, sessionId, reason),
+
+  // 调试用：原 dev:screenshot 通道保留
+  ready: () => ipcRenderer.send(IPC.SCREENSHOT_OVERLAY_READY),
 };
 
 contextBridge.exposeInMainWorld("screenshotOverlay", screenshotOverlayApi);

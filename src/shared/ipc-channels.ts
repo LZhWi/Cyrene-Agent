@@ -290,5 +290,10 @@ export const IPC = {
   SCREENSHOT_INSERT: "screenshot:insert",
   SCREENSHOT_HOTKEY_CAPTURE_START: "screenshot:hotkey-capture-start",
   SCREENSHOT_HOTKEY_CAPTURE_END: "screenshot:hotkey-capture-end",
+  // 屏幕流架构（v2）
+  SCREENSHOT_START_SESSION: "screenshot:start-session",
+  SCREENSHOT_FRAME_READY: "screenshot:frame-ready",
+  SCREENSHOT_CONFIRM: "screenshot:confirm",
+  SCREENSHOT_SHOWN: "screenshot:shown",
 } as const;
 

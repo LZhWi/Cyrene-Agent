@@ -1,107 +1,31 @@
 /**
- * 截图管理器 -- 截全屏 -> 覆盖窗选区 -> nativeImage.crop -> 剪贴板。
+ * 截图管理器 -- 常驻屏幕流 + 即时冻结选区。
  *
- * 优化（复刻微信/QQ 体验）：
- * - 预创建覆盖窗：app 启动时就创建并加载好，热键触发时只截屏+发数据+show，延迟最低
- * - 并行截屏与窗口准备：desktopCapturer 和窗口 bounds 更新同时进行
- * - screen-saver 层级：覆盖 Windows 任务栏，不出现叠影
- * - 按真实截图尺寸/CSS 尺寸比例裁剪
- * - display_id 匹配主屏
- * - 单例会话防并发 + sender 校验
- * - 按钮模式主进程直接写临时文件
- * - 热键事务式切换+回滚
+ * 流程（一次截图）：
+ *   1. 热键 / 按钮触发 -> 通知 overlay "ready to show"
+ *   2. Renderer 从常驻 MediaStream 抓帧，drawImage 到静态 Canvas
+ *   3. Canvas 画完后通知 main "frame ready"
+ *   4. Main show() 窗口 + 注册全局 ESC（绕过覆盖窗失焦问题）
+ *   5. 用户拖框 + 双击/Enter/点确认 -> Renderer 裁剪 + toBlob
+ *   6. Renderer 把 PNG ArrayBuffer 发给 main
+ *   7. Main 写剪贴板 + 临时文件 + 插入聊天附件 -> 隐藏窗口
  */
 
 import {
   app,
   BrowserWindow,
-  desktopCapturer,
   screen,
   clipboard,
   nativeImage,
   globalShortcut,
   ipcMain,
-  type IpcMainEvent,
 } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import { randomUUID } from "node:crypto";
 import { IPC } from "../../shared/ipc-channels";
 
-const MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024; // 20 MB
-
-// ── 会话状态 ──────────────────────────────────────────────
-
-interface ScreenshotSession {
-  id: string;
-  image: Electron.NativeImage;
-  imageWidth: number;
-  imageHeight: number;
-  displayWidth: number;
-  displayHeight: number;
-  fromButton: boolean;
-}
-
-let activeSession: ScreenshotSession | null = null;
-
-// ── 预创建覆盖窗 ──────────────────────────────────────────
-
-let overlayWindow: BrowserWindow | null = null;
-let overlayReady = false; // HTML 是否已加载完毕
-
-/** 创建并预加载覆盖窗（隐藏），app 启动时调一次 */
-function ensureOverlayWindow(): void {
-  if (overlayWindow && !overlayWindow.isDestroyed()) return;
-
-  const isDev = process.env.VITE_DEV === "1";
-
-  overlayWindow = new BrowserWindow({
-    frame: false,
-    transparent: false,
-    backgroundColor: "#000000",
-    show: false,
-    skipTaskbar: true,
-    resizable: false,
-    movable: false,
-    minimizable: false,
-    maximizable: false,
-    fullscreenable: false,
-    webPreferences: {
-      preload: path.join(__dirname, "..", "..", "..", "preload", "preload", "screenshot.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-
-  // screen-saver 层级确保覆盖 Windows 任务栏
-  overlayWindow.setAlwaysOnTop(true, "screen-saver");
-
-  overlayReady = false;
-
-  overlayWindow.webContents.on("did-finish-load", () => {
-    overlayReady = true;
-  });
-
-  overlayWindow.on("closed", () => {
-    overlayWindow = null;
-    overlayReady = false;
-  });
-
-  // 预加载 HTML（不 show）
-  if (isDev) {
-    void overlayWindow.loadURL("http://localhost:5173/screenshot/");
-  } else {
-    void overlayWindow.loadFile(
-      path.join(__dirname, "..", "..", "..", "renderer", "screenshot", "index.html"),
-    );
-  }
-}
-
-// ── 热键状态 ──────────────────────────────────────────────
-
-let registeredHotkey: string | null = null;
-let suspendedHotkey: string | null = null;
+const MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024;
 
 // ── 临时文件 ──────────────────────────────────────────────
 
@@ -130,14 +54,112 @@ export async function cleanupOldScreenshots(): Promise<void> {
       }),
     );
     stats.sort((a, b) => b.mtime - a.mtime);
-    const toDelete = stats.slice(50);
-    await Promise.all(toDelete.map((s) => fs.promises.unlink(s.file).catch(() => {})));
+    await Promise.all(
+      stats.slice(50).map((s) => fs.promises.unlink(s.file).catch(() => {})),
+    );
   } catch {
-    // 清理失败不影响主流程
+    /* ignore */
   }
 }
 
-// ── 查找聊天窗口 ──────────────────────────────────────────
+// ── 会话状态 ──────────────────────────────────────────────
+
+interface ScreenshotSession {
+  id: string;
+  fromButton: boolean;
+  timings: Record<string, number>;
+}
+
+let activeSession: ScreenshotSession | null = null;
+
+// ── 热键状态 ──────────────────────────────────────────────
+
+let registeredHotkey: string | null = null;
+let suspendedHotkey: string | null = null;
+
+// ESC 全局热键（仅会话期间注册）
+let escapeHotkeyActive = false;
+
+// ── 覆盖窗 ────────────────────────────────────────────────
+
+let overlayWindow: BrowserWindow | null = null;
+let overlayReady = false;
+
+const isDev = process.env.VITE_DEV === "1";
+
+function ensureOverlayWindow(): void {
+  if (overlayWindow && !overlayWindow.isDestroyed()) return;
+
+  overlayWindow = new BrowserWindow({
+    frame: false,
+    transparent: false,
+    backgroundColor: "#000000",
+    show: false,
+    skipTaskbar: true,
+    resizable: false,
+    movable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    focusable: true,
+    webPreferences: {
+      preload: path.join(
+        __dirname,
+        "..",
+        "..",
+        "..",
+        "preload",
+        "preload",
+        "screenshot.js",
+      ),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false, // 关键：禁止后台节流，保证屏幕流不卡顿
+    },
+  });
+
+  overlayWindow.setAlwaysOnTop(true, "screen-saver");
+
+  overlayReady = false;
+
+  overlayWindow.webContents.on("did-finish-load", () => {
+    overlayReady = true;
+  });
+
+  overlayWindow.on("closed", () => {
+    overlayWindow = null;
+    overlayReady = false;
+  });
+
+  if (isDev) {
+    void overlayWindow.loadURL("http://localhost:5173/screenshot/");
+  } else {
+    void overlayWindow.loadFile(
+      path.join(
+        __dirname,
+        "..",
+        "..",
+        "..",
+        "renderer",
+        "screenshot",
+        "index.html",
+      ),
+    );
+  }
+}
+
+/** 更新覆盖窗到主屏完整 bounds（包含任务栏） */
+function updateOverlayBounds(): void {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return;
+  const display = screen.getPrimaryDisplay();
+  overlayWindow.setBounds({
+    x: display.bounds.x,
+    y: display.bounds.y,
+    width: display.bounds.width,
+    height: display.bounds.height,
+  });
+}
 
 function findChatWindow(): BrowserWindow | null {
   return (
@@ -147,61 +169,47 @@ function findChatWindow(): BrowserWindow | null {
   );
 }
 
-// ── 核心截图流程 ──────────────────────────────────────────
+// ── 性能埋点（开发模式） ──────────────────────────────────
+
+function logTimings(session: ScreenshotSession, label: string): void {
+  if (!isDev) return;
+  const t = session.timings;
+  const order = [
+    "hotkeyReceived",
+    "frameRequested",
+    "frameAvailable",
+    "canvasPainted",
+    "overlayShown",
+    "selectionConfirmed",
+    "pngEncoded",
+    "clipboardWritten",
+  ];
+  const parts = order
+    .filter((k) => t[k] !== undefined)
+    .map((k) => `${k.replace("hotkeyReceived", "hotkey")}=${t[k]! - t.hotkeyReceived}ms`);
+  const total = Date.now() - session.timings.hotkeyReceived;
+  console.log(`[Screenshot] ${label} total=${total}ms ${parts.join(" ")}`);
+}
+
+// ── 核心流程 ──────────────────────────────────────────────
 
 async function startScreenshot(fromButton: boolean): Promise<{ ok: boolean; reason?: string }> {
-  // 单例守卫
   if (activeSession) {
+    overlayWindow?.show();
     overlayWindow?.focus();
     return { ok: false, reason: "SCREENSHOT_ALREADY_ACTIVE" };
   }
 
-  const display = screen.getPrimaryDisplay();
-  const { width, height } = display.size;
-  const scaleFactor = display.scaleFactor;
+  const session: ScreenshotSession = {
+    id: randomUUID(),
+    fromButton,
+    timings: { hotkeyReceived: Date.now() },
+  };
+  activeSession = session;
 
-  // 更新覆盖窗 bounds 到当前屏幕（预创建时可能位置不对）
-  if (overlayWindow && !overlayWindow.isDestroyed()) {
-    overlayWindow.setBounds({
-      x: display.bounds.x,
-      y: display.bounds.y,
-      width: display.bounds.width,
-      height: display.bounds.height,
-    });
-  }
-
-  // 截全屏
-  let sources: Electron.DesktopCapturerSource[];
-  try {
-    sources = await desktopCapturer.getSources({
-      types: ["screen"],
-      thumbnailSize: {
-        width: Math.ceil(width * scaleFactor),
-        height: Math.ceil(height * scaleFactor),
-      },
-    });
-  } catch {
-    return { ok: false, reason: "SCREENSHOT_CAPTURE_FAILED" };
-  }
-
-  const source =
-    sources.find((s) => s.display_id === String(display.id)) ?? sources[0];
-
-  if (!source || source.thumbnail.isEmpty()) {
-    return { ok: false, reason: "SCREENSHOT_SOURCE_UNAVAILABLE" };
-  }
-
-  const thumb = source.thumbnail;
-  const imageSize = thumb.getSize();
-  const pngBuffer = thumb.toPNG();
-  const image = nativeImage.createFromBuffer(pngBuffer);
-
-  const sessionId = randomUUID();
-
-  // 确保覆盖窗存在且已加载
+  // 确保覆盖窗存在
   if (!overlayWindow || overlayWindow.isDestroyed()) {
     ensureOverlayWindow();
-    // 等待加载完成
     await new Promise<void>((resolve) => {
       if (overlayReady) return resolve();
       const check = setInterval(() => {
@@ -213,99 +221,101 @@ async function startScreenshot(fromButton: boolean): Promise<{ ok: boolean; reas
     });
   }
 
-  if (!overlayWindow || overlayWindow.isDestroyed() || !overlayReady) {
+  if (!overlayWindow || overlayWindow.isDestroyed()) {
+    activeSession = null;
     return { ok: false, reason: "SCREENSHOT_OVERLAY_NOT_READY" };
   }
 
-  activeSession = {
-    id: sessionId,
-    image,
-    imageWidth: imageSize.width,
-    imageHeight: imageSize.height,
-    displayWidth: display.bounds.width,
-    displayHeight: display.bounds.height,
-    fromButton,
-  };
+  updateOverlayBounds();
 
-  // 直接发送截图数据（窗口已预加载，不需要等 ready）
-  overlayWindow.webContents.send(IPC.SCREENSHOT_DATA, {
-    base64: pngBuffer.toString("base64"),
-    imageWidth: imageSize.width,
-    imageHeight: imageSize.height,
-    displayWidth: display.bounds.width,
-    displayHeight: display.bounds.height,
-    sessionId,
+  // 注册会话级全局 ESC（应对覆盖窗失焦）
+  if (!escapeHotkeyActive) {
+    const ok = globalShortcut.register("Escape", () => {
+      if (activeSession) cancelScreenshot("escape-global");
+    });
+    escapeHotkeyActive = ok;
+  }
+
+  // 通知 Renderer 开始截帧（从常驻 MediaStream）
+  overlayWindow.webContents.send(IPC.SCREENSHOT_START_SESSION, {
+    sessionId: session.id,
+    fromButton,
+    displayWidth: screen.getPrimaryDisplay().bounds.width,
+    displayHeight: screen.getPrimaryDisplay().bounds.height,
+    timings: session.timings,
   });
 
   return { ok: true };
 }
 
-// ── IPC 事件处理 ──────────────────────────────────────────
+/** Renderer 报告帧已抓到且 Canvas 已画好 -> 显示窗口 */
+function onFrameReady(
+  event: import("electron").IpcMainEvent,
+  payload: { sessionId: string; timings: Record<string, number> },
+): void {
+  if (!isFromOverlay(event) || !activeSession) return;
+  if (payload.sessionId !== activeSession.id) return;
 
-function isFromOverlay(event: IpcMainEvent): boolean {
-  return (
-    !!activeSession &&
-    !!overlayWindow &&
-    !overlayWindow.isDestroyed() &&
-    !event.sender.isDestroyed() &&
-    event.sender.id === overlayWindow.webContents.id
-  );
-}
+  Object.assign(activeSession.timings, payload.timings);
 
-/** 覆盖窗 ready（预加载模式下用于初次加载完成通知） */
-function onOverlayReady(event: IpcMainEvent): void {
   if (!overlayWindow || overlayWindow.isDestroyed()) return;
-  if (event.sender.id !== overlayWindow.webContents.id) return;
-  overlayReady = true;
-}
 
-/** 覆盖窗 rendered -> show + focus */
-function onRendered(event: IpcMainEvent): void {
-  if (!isFromOverlay(event) || !activeSession || !overlayWindow) return;
-
+  // 显示窗口（严格按 GPT 规范顺序）
   overlayWindow.show();
+  overlayWindow.moveTop();
   overlayWindow.focus();
+
+  activeSession.timings.overlayShown = Date.now();
+  overlayWindow.webContents.send(IPC.SCREENSHOT_SHOWN, {
+    timings: activeSession.timings,
+  });
+  logTimings(activeSession, "shown");
 }
 
-/** 用户选区 -> 裁剪 -> 剪贴板 -> 可选插入聊天 */
-async function onRegion(
-  event: IpcMainEvent,
-  sessionId: string,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
+/** 用户确认 -> 收 PNG ArrayBuffer */
+async function onConfirm(
+  event: import("electron").IpcMainEvent,
+  payload: {
+    sessionId: string;
+    png: ArrayBuffer;
+    width: number;
+    height: number;
+    timings: Record<string, number>;
+  },
 ): Promise<void> {
-  if (!activeSession || sessionId !== activeSession.id) return;
-  if (!isFromOverlay(event)) return;
+  if (!isFromOverlay(event) || !activeSession) return;
+  if (payload.sessionId !== activeSession.id) return;
 
   const session = activeSession;
+  Object.assign(session.timings, payload.timings);
+  session.timings.selectionConfirmed = Date.now();
 
-  const ratioX = session.imageWidth / session.displayWidth;
-  const ratioY = session.imageHeight / session.displayHeight;
+  const pngBuffer = Buffer.from(payload.png);
+  if (pngBuffer.byteLength > MAX_SCREENSHOT_BYTES) {
+    cancelScreenshot("too-large");
+    return;
+  }
 
-  const cropRect = {
-    x: Math.round(x * ratioX),
-    y: Math.round(y * ratioY),
-    width: Math.max(1, Math.round(w * ratioX)),
-    height: Math.max(1, Math.round(h * ratioY)),
-  };
+  // 写入剪贴板
+  const image = nativeImage.createFromBuffer(pngBuffer);
+  if (image.isEmpty()) {
+    cancelScreenshot("invalid-image");
+    return;
+  }
+  clipboard.writeImage(image);
+  session.timings.clipboardWritten = Date.now();
+  logTimings(session, "done");
 
-  const cropped = session.image.crop(cropRect);
-  clipboard.writeImage(cropped);
-
+  // 按钮模式插入聊天附件
   if (session.fromButton) {
     try {
-      const pngBuffer = cropped.toPNG();
       const filePath = await savePngBuffer(pngBuffer);
-      const size = cropped.getSize();
-
       const chatWindow = findChatWindow();
       chatWindow?.webContents.send(IPC.SCREENSHOT_INSERT, {
         base64: pngBuffer.toString("base64"),
         mime: "image/png",
-        width: size.width,
-        height: size.height,
+        width: payload.width,
+        height: payload.height,
         filePath,
       });
     } catch (err) {
@@ -313,43 +323,62 @@ async function onRegion(
     }
   }
 
-  cleanupSession(sessionId);
+  finishSession(session.id);
 }
 
-/** 取消 */
-function onCancel(event: IpcMainEvent): void {
+/** 用户取消 */
+function onCancel(event: import("electron").IpcMainEvent, reason: string): void {
   if (!isFromOverlay(event)) return;
-  const sessionId = activeSession?.id;
-  if (sessionId) cleanupSession(sessionId);
+  cancelScreenshot(reason);
 }
 
-function cleanupSession(sessionId: string): void {
+/** 全局 ESC 触发的取消 */
+function cancelScreenshot(reason: string): void {
+  if (!activeSession) return;
+  if (isDev) console.log(`[Screenshot] cancel: ${reason}`);
+  finishSession(activeSession.id);
+}
+
+/** 统一清理入口 */
+function finishSession(sessionId: string): void {
   if (!activeSession || activeSession.id !== sessionId) return;
   activeSession = null;
-  // 隐藏覆盖窗（不销毁，下次复用）
+
+  // 注销会话级 ESC
+  if (escapeHotkeyActive) {
+    globalShortcut.unregister("Escape");
+    escapeHotkeyActive = false;
+  }
+
   if (overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.hide();
   }
   void cleanupOldScreenshots();
 }
 
-// ── 临时文件保存（粘贴模式，带校验） ──────────
+function isFromOverlay(event: import("electron").IpcMainEvent): boolean {
+  return (
+    !!overlayWindow &&
+    !overlayWindow.isDestroyed() &&
+    !event.sender.isDestroyed() &&
+    event.sender.id === overlayWindow.webContents.id
+  );
+}
+
+// ── 临时文件保存（粘贴模式） ──────────────────────────────
 
 async function saveScreenshotTemp(
   base64: string,
   _mime: string,
 ): Promise<{ filePath: string }> {
   const raw = Buffer.from(base64, "base64");
-
   if (raw.byteLength > MAX_SCREENSHOT_BYTES) {
     throw new Error("SCREENSHOT_TOO_LARGE");
   }
-
   const image = nativeImage.createFromBuffer(raw);
   if (image.isEmpty()) {
     throw new Error("INVALID_SCREENSHOT_IMAGE");
   }
-
   const pngBuffer = image.toPNG();
   const filePath = await savePngBuffer(pngBuffer);
   return { filePath };
@@ -369,10 +398,7 @@ export function registerScreenshotHotkey(accelerator: string): boolean {
     void startScreenshot(false);
   });
 
-  if (ok) {
-    registeredHotkey = accelerator;
-  }
-
+  if (ok) registeredHotkey = accelerator;
   return ok;
 }
 
@@ -381,10 +407,7 @@ export function replaceScreenshotHotkey(next: string): {
   activeHotkey: string | null;
 } {
   const previous = registeredHotkey;
-
-  if (previous === next) {
-    return { ok: true, activeHotkey: previous };
-  }
+  if (previous === next) return { ok: true, activeHotkey: previous };
 
   if (previous) {
     globalShortcut.unregister(previous);
@@ -395,22 +418,19 @@ export function replaceScreenshotHotkey(next: string): {
     const registered = globalShortcut.register(next, () => {
       void startScreenshot(false);
     });
-
     if (registered) {
       registeredHotkey = next;
       return { ok: true, activeHotkey: next };
     }
   } catch {
-    // fall through to rollback
+    /* fall through */
   }
 
   if (previous) {
     const restored = globalShortcut.register(previous, () => {
       void startScreenshot(false);
     });
-    if (restored) {
-      registeredHotkey = previous;
-    }
+    if (restored) registeredHotkey = previous;
   }
 
   return { ok: false, activeHotkey: registeredHotkey };
@@ -434,9 +454,7 @@ export function resumeScreenshotHotkey(): void {
   const ok = globalShortcut.register(suspendedHotkey, () => {
     void startScreenshot(false);
   });
-  if (ok) {
-    registeredHotkey = suspendedHotkey;
-  }
+  if (ok) registeredHotkey = suspendedHotkey;
   suspendedHotkey = null;
 }
 
@@ -447,24 +465,18 @@ export function cleanupOnQuit(): void {
     overlayWindow = null;
   }
   activeSession = null;
+  escapeHotkeyActive = false;
 }
 
 // ── IPC 注册 ──────────────────────────────────────────────
 
 export function initScreenshotIpc(): void {
-  // 预创建覆盖窗
   ensureOverlayWindow();
 
-  ipcMain.handle(IPC.SCREENSHOT_START, async () => {
-    return startScreenshot(true);
-  });
-
-  ipcMain.on(IPC.SCREENSHOT_OVERLAY_READY, (event) => onOverlayReady(event));
-  ipcMain.on(IPC.SCREENSHOT_RENDERED, (event) => onRendered(event));
-  ipcMain.on(IPC.SCREENSHOT_REGION, (event, sessionId, x, y, w, h) => {
-    void onRegion(event, sessionId, x, y, w, h);
-  });
-  ipcMain.on(IPC.SCREENSHOT_CANCEL, (event) => onCancel(event));
+  ipcMain.handle(IPC.SCREENSHOT_START, async () => startScreenshot(true));
+  ipcMain.on(IPC.SCREENSHOT_FRAME_READY, (event, payload) => onFrameReady(event, payload));
+  ipcMain.on(IPC.SCREENSHOT_CONFIRM, (event, payload) => void onConfirm(event, payload));
+  ipcMain.on(IPC.SCREENSHOT_CANCEL, (event, reason: string) => onCancel(event, reason));
 
   ipcMain.handle(IPC.SCREENSHOT_SAVE_TEMP, async (_event, base64: string, mime: string) => {
     return saveScreenshotTemp(base64, mime);

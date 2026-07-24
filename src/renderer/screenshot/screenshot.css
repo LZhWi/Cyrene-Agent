@@ -1,19 +1,38 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body {
-  width: 100%;
-  height: 100%;
+  width: 100vw;
+  height: 100vh;
   overflow: hidden;
   background: #000;
   user-select: none;
   -webkit-user-select: none;
 }
 
+#screenshot-video {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: -1;
+}
+
 #screenshot-canvas {
-  display: block;
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  pointer-events: none;
+  z-index: 0;
+}
+
+#screenshot-dimmer {
+  position: fixed;
+  inset: 0;
   width: 100vw;
   height: 100vh;
   cursor: crosshair;
+  z-index: 1;
+  touch-action: none;
 }
 
 .screenshot-hint {
@@ -33,4 +52,44 @@ html, body {
 
 .screenshot-hint.is-hidden {
   opacity: 0;
+}
+
+.screenshot-toolbar {
+  position: fixed;
+  display: flex;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 10px;
+  background: rgba(20, 20, 22, 0.92);
+  backdrop-filter: blur(8px);
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.45);
+  z-index: 20;
+  pointer-events: auto;
+}
+
+.screenshot-toolbar__btn {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+
+.screenshot-toolbar__btn--cancel {
+  background: rgba(255, 255, 255, 0.08);
+  color: rgba(255, 255, 255, 0.85);
+}
+.screenshot-toolbar__btn--cancel:hover {
+  background: rgba(255, 90, 95, 0.85);
+}
+
+.screenshot-toolbar__btn--confirm {
+  background: #ec4899;
+  color: #fff;
+}
+.screenshot-toolbar__btn--confirm:hover {
+  background: #f472b6;
 }
