@@ -571,6 +571,11 @@ body {
   justify-content: flex-start;
 }
 
+#preferences-form .setting-row .switch,
+#preferences-form .setting-row .hotkey-input {
+  margin-left: auto;
+}
+
 #preferences-form .setting-row .option-blocks {
   margin-left: auto;
   display: grid;
