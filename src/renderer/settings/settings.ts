@@ -2477,6 +2477,23 @@ workFlowAdaptBtn?.addEventListener("click", () => {
       icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 3h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
       htmlBody: `<div class="work-flow-doc">${docHtml}</div>`,
     });
+    // 代码块复制按钮（设置窗未初始化 chat 的 code-block controller，这里就近绑定）
+    const copyBtns = document.querySelectorAll<HTMLButtonElement>(
+      "#cy-html-modal-body .code-block__copy",
+    );
+    copyBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const code =
+          btn.closest(".code-block")?.querySelector(".code-block__code")?.textContent ?? "";
+        void navigator.clipboard.writeText(code).then(() => {
+          const orig = btn.textContent;
+          btn.textContent = "已复制";
+          window.setTimeout(() => {
+            btn.textContent = orig;
+          }, 1200);
+        });
+      });
+    });
   });
 });
 
