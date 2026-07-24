@@ -11,7 +11,7 @@ pub enum CaptureMode {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
-#[serde(tag = "type", rename_all = "kebab-case")]
+#[serde(deny_unknown_fields, tag = "type", rename_all = "kebab-case")]
 pub enum Command {
     Start {
         #[serde(rename = "requestId")]

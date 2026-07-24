@@ -27,6 +27,15 @@ fn rejects_business_source_field_instead_of_mode() {
 }
 
 #[test]
+fn rejects_business_source_field_alongside_a_valid_mode() {
+    let error = parse_command_line(
+        r#"{"type":"start","requestId":"x","mode":"clipboard-only","source":"hotkey"}"#,
+    )
+    .unwrap_err();
+    assert_eq!(error.code(), "invalid-command");
+}
+
+#[test]
 fn rejects_oversized_line() {
     let line = "x".repeat(MAX_NDJSON_LINE_BYTES + 1);
     assert_eq!(
