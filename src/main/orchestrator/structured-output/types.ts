@@ -12,6 +12,8 @@ export type StructuredOutputVerification =
   | "contract_verified"
   | "contract_required";
 
+export type StructuredOutputTier = "A" | "B" | "D" | "M";
+
 export interface StructuredOutputProfileContext {
   provider: string;
   model: string;
@@ -31,6 +33,7 @@ export interface StructuredOutputProfile {
   provider: string;
   model: string;
   transport?: Transport;
+  tier: StructuredOutputTier;
   mode: StructuredOutputMode;
   verification: StructuredOutputVerification;
   allowCapabilityPromotion: false;

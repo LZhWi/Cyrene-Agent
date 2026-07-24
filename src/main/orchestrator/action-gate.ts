@@ -244,7 +244,9 @@ export function parseActionDecisionValue(value: unknown): ActionDecision {
   const root = object(value);
   exactKeys(root);
   if (root.decision === "act") {
-    assertEmpty(root.reason, "reason");
+    if (!isAbsent(root.reason) && typeof root.reason !== "string") {
+      throw new Error("reason is invalid");
+    }
     assertEmpty(root.missingInformation, "missingInformation");
     return {
       decision: "act",

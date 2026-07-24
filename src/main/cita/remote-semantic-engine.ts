@@ -230,6 +230,7 @@ export class RemoteSemanticEngine implements CitaSemanticEngine {
             provider: profile.provider,
             model: profile.model,
             profile: profile.id,
+            tier: profile.tier,
             ...metric,
           })}`);
         },

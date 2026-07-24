@@ -271,6 +271,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
               provider: options.adapter.id,
               model: options.settings.model,
               profile: profile.id,
+              tier: profile.tier,
               ...metric,
             })}`);
           },

@@ -20,7 +20,8 @@ CITA 和 Action Gate 已使用 `structured-output/profiles.ts`，只决定
 
 - A：OpenAI、Claude、Kimi、豆包中已列入 Profile 的模型。
 - B：DeepSeek、Qwen、GLM、MiMo 中已列入 Profile 的模型。
-- D：MiniMax M3、所有自定义/本地端点、所有未知模型。
+- M：MiniMax M3 官方端点。底层仍使用 `prompt_json`，但采用独立厂商 Profile、请求提示与修复预算。
+- D：所有自定义/本地端点、所有未知模型。
 
 新增或升级模型必须先补契约测试再修改白名单。未知模型永远回落 D 档，禁止运行时探测和自动升档。
 

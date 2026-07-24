@@ -4781,7 +4781,7 @@ app.whenReady().then(async () => {
       log: false,
       retryRateLimit: false,
     }),
-    generate: async (input) => {
+    generate: async (input, repair) => {
       const settings = loadModelSettings();
       const config: VendorConfig = {
         provider: settings.provider,
@@ -4822,7 +4822,7 @@ app.whenReady().then(async () => {
             role: "system",
             content: "Extract only directly supported chat continuity facts. Return exactly one JSON object and no prose.",
           },
-          { role: "user", content: buildSocialExtractionPrompt(input) },
+          { role: "user", content: buildSocialExtractionPrompt(input, repair) },
         ],
         0,
         12_000,
@@ -4843,7 +4843,7 @@ app.whenReady().then(async () => {
     },
     recordMetric: (metric) => {
       console.log(
-        `[ChatSocialContext] outcome=${metric.outcome} accepted=${metric.acceptedCount} rejected=${metric.rejectedCount}`,
+        `[ChatSocialContext] outcome=${metric.outcome} accepted=${metric.acceptedCount} rejected=${metric.rejectedCount} attempts=${metric.attempts} repairs=${metric.repairCount}`,
       );
     },
   });

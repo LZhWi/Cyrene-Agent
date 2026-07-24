@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildActionGateRequest,
+  parseActionDecisionValue,
   runActionGate,
   type ActionCapability,
   type RunActionGateInput,
@@ -126,6 +127,24 @@ describe("buildActionGateRequest", () => {
 });
 
 describe("runActionGate", () => {
+  it("accepts and discards a harmless explanatory reason on an act decision", () => {
+    expect(parseActionDecisionValue({
+      decision: "act",
+      capability: "music.play_track",
+      objective: "播放当前候选中的第一首",
+      targetRefs: ["ctx-song-1"],
+      afterSuccess: "respond",
+      reason: "目标、能力和引用已经明确，可以执行。",
+      missingInformation: [],
+    })).toEqual({
+      decision: "act",
+      capability: "music.play_track",
+      objective: "播放当前候选中的第一首",
+      targetRefs: ["ctx-song-1"],
+      afterSuccess: "respond",
+    });
+  });
+
   it("returns a trusted act decision only after schema and business validation", async () => {
     const generate = vi.fn(async () => response(actDecision()));
 

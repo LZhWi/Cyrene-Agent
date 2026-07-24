@@ -14,8 +14,8 @@
 - Custom and local endpoints are permanently `prompt_json`; no A/B probing or automatic promotion.
 - CITA and Action Gate never use virtual tools after migration.
 - Only locally validated values may enter routing, Native FC, execution, or Soul.
-- CITA repair is bounded by two repairs and a 6–8 second total deadline.
-- Action Gate repair is bounded by two repairs and an 8–12 second total deadline.
+- CITA is bounded by two total attempts; baseline total budget is 8 seconds, B tier is 16 seconds, and MiniMax M tier is 10 seconds.
+- Action Gate is bounded by two total attempts; baseline total budget is 10 seconds, B tier is 20 seconds, and MiniMax M tier is 12 seconds.
 - Native FC keeps real business tools and gets at most one protocol repair.
 - Existing user changes from baseline commit `666c317` must be preserved.
 
@@ -52,7 +52,7 @@
 - Produces: `resolveStructuredOutputProfile({ provider, model, transport })`.
 - Produces: `ChatRequest.structuredOutput` as an explicit transport-neutral request contract.
 
-- [x] Write table-driven failing tests for OpenAI/Claude/Kimi/Doubao A, DeepSeek/Qwen/GLM/MiMo B, MiniMax D, and unknown/custom D.
+- [x] Write table-driven failing tests for OpenAI/Claude/Kimi/Doubao A, DeepSeek/Qwen/GLM/MiMo B, MiniMax M, and unknown/custom D.
 - [x] Verify the tests fail because the resolver does not exist.
 - [x] Implement exact model matchers, conservative unknown fallback, stage repair policy, and transport-neutral request types.
 - [x] Run the profile tests and typecheck.

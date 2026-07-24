@@ -2,6 +2,7 @@ import type {
   StructuredOutputMode,
   StructuredOutputProfile,
   StructuredOutputProfileContext,
+  StructuredOutputTier,
   StructuredOutputVerification,
 } from "./types";
 
@@ -10,6 +11,7 @@ interface ProfileDefinition {
   provider: string;
   transport: StructuredOutputProfileContext["transport"];
   modelPattern: RegExp;
+  tier: Exclude<StructuredOutputTier, "D">;
   mode: StructuredOutputMode;
   verification: StructuredOutputVerification;
   requestHints?: Partial<StructuredOutputProfile["requestHints"]>;
@@ -21,6 +23,7 @@ const DEFINITIONS: readonly ProfileDefinition[] = [
     provider: "chatgpt",
     transport: "openai",
     modelPattern: /^(?:gpt-5(?:\.\d+)?(?:-(?:sol|terra|luna))?|gpt-4\.1(?:$|-)|gpt-4o-mini(?:$|-)|gpt-4o-(?:2024-08-06|2024-11-20)|o[134](?:$|-))/i,
+    tier: "A",
     mode: "provider_json_schema",
     verification: "official",
   },
@@ -29,6 +32,7 @@ const DEFINITIONS: readonly ProfileDefinition[] = [
     provider: "claude",
     transport: "anthropic",
     modelPattern: /^claude-(?:fable-5|mythos(?:-5|-preview)|opus-4-[5-8]|sonnet-(?:5|4-[56])|haiku-4-5)(?:$|-\d{8})/i,
+    tier: "A",
     mode: "provider_json_schema",
     verification: "official",
   },
@@ -37,6 +41,7 @@ const DEFINITIONS: readonly ProfileDefinition[] = [
     provider: "kimi",
     transport: "openai",
     modelPattern: /^kimi-(?:k3|k2\.(?:6|7-code(?:-highspeed)?))(?:$|-)/i,
+    tier: "A",
     mode: "provider_json_schema",
     verification: "official",
   },
@@ -45,6 +50,7 @@ const DEFINITIONS: readonly ProfileDefinition[] = [
     provider: "doubao",
     transport: "openai",
     modelPattern: /^doubao-seed-(?:1-6|1-8|2-[01])(?:$|-)/i,
+    tier: "A",
     mode: "provider_json_schema",
     verification: "official",
   },
@@ -53,6 +59,7 @@ const DEFINITIONS: readonly ProfileDefinition[] = [
     provider: "deepseek",
     transport: "openai",
     modelPattern: /^deepseek-v4-(?:pro|flash)$/i,
+    tier: "B",
     mode: "provider_json_object",
     verification: "official",
   },
@@ -61,6 +68,7 @@ const DEFINITIONS: readonly ProfileDefinition[] = [
     provider: "qwen",
     transport: "openai",
     modelPattern: /^(?:qwen3\.(?:7|8)-(?:max|plus)|qwen-flash)(?:$|-)/i,
+    tier: "B",
     mode: "provider_json_object",
     verification: "official",
   },
@@ -68,7 +76,8 @@ const DEFINITIONS: readonly ProfileDefinition[] = [
     id: "glm-json-object",
     provider: "glm",
     transport: "openai",
-    modelPattern: /^glm-(?:5\.2|4\.[67])(?:$|-)/i,
+    modelPattern: /^glm-(?:5\.[12]|4\.[67])(?:$|-)/i,
+    tier: "B",
     mode: "provider_json_object",
     verification: "official",
   },
@@ -77,14 +86,16 @@ const DEFINITIONS: readonly ProfileDefinition[] = [
     provider: "mimo",
     transport: "openai",
     modelPattern: /^mimo-v2\.5(?:$|-)/i,
+    tier: "B",
     mode: "provider_json_object",
     verification: "official",
   },
   {
-    id: "minimax-m3-prompt-json",
+    id: "minimax-m3-adapter",
     provider: "minimax",
     transport: "openai",
     modelPattern: /^MiniMax-M3(?:$|[-_])/i,
+    tier: "M",
     mode: "prompt_json",
     verification: "contract_verified",
     requestHints: { sendJsonObject: true, reasoningSplit: true },
@@ -106,6 +117,36 @@ const REPAIR: StructuredOutputProfile["repair"] = {
   },
 };
 
+const B_REPAIR: StructuredOutputProfile["repair"] = {
+  cita: {
+    maxAttempts: 2,
+    totalBudgetMs: 16_000,
+    perAttemptTimeoutMs: 8_000,
+    minimumRemainingBudgetMs: 500,
+  },
+  action_gate: {
+    maxAttempts: 2,
+    totalBudgetMs: 20_000,
+    perAttemptTimeoutMs: 10_000,
+    minimumRemainingBudgetMs: 800,
+  },
+};
+
+const MINIMAX_REPAIR: StructuredOutputProfile["repair"] = {
+  cita: {
+    maxAttempts: 2,
+    totalBudgetMs: 10_000,
+    perAttemptTimeoutMs: 5_500,
+    minimumRemainingBudgetMs: 500,
+  },
+  action_gate: {
+    maxAttempts: 2,
+    totalBudgetMs: 12_000,
+    perAttemptTimeoutMs: 7_000,
+    minimumRemainingBudgetMs: 800,
+  },
+};
+
 function materialize(
   definition: ProfileDefinition,
   context: StructuredOutputProfileContext,
@@ -115,6 +156,7 @@ function materialize(
     provider: definition.provider,
     model: context.model,
     transport: definition.transport,
+    tier: definition.tier,
     mode: definition.mode,
     verification: definition.verification,
     allowCapabilityPromotion: false,
@@ -123,7 +165,11 @@ function materialize(
       reasoningSplit: definition.requestHints?.reasoningSplit ?? false,
     },
     reasoning: "disabled",
-    repair: REPAIR,
+    repair: definition.tier === "M"
+      ? MINIMAX_REPAIR
+      : definition.tier === "B"
+        ? B_REPAIR
+        : REPAIR,
   };
 }
 
@@ -131,6 +177,7 @@ const FALLBACK: StructuredOutputProfile = {
   id: "prompt-json-fallback",
   provider: "unknown",
   model: "unknown",
+  tier: "D",
   mode: "prompt_json",
   verification: "contract_required",
   allowCapabilityPromotion: false,

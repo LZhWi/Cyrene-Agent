@@ -13,6 +13,7 @@ describe("resolveStructuredOutputProfile", () => {
     ["deepseek", "deepseek-v4-pro", "openai", "provider_json_object"],
     ["qwen", "qwen3.7-plus", "openai", "provider_json_object"],
     ["glm", "glm-5.2", "openai", "provider_json_object"],
+    ["glm", "glm-5.1", "openai", "provider_json_object"],
     ["mimo", "mimo-v2.5-pro", "openai", "provider_json_object"],
     ["minimax", "MiniMax-M3", "openai", "prompt_json"],
   ] as const)("%s/%s resolves to %s", (provider, model, transport, mode) => {
@@ -57,17 +58,56 @@ describe("resolveStructuredOutputProfile", () => {
     }).mode).toBe("prompt_json");
   });
 
-  test("MiniMax M3 keeps JSON hint and reasoning split without upgrading from D", () => {
+  test("MiniMax M3 uses its dedicated M tier and evidence-based repair budget", () => {
     expect(resolveStructuredOutputProfile({
       provider: "minimax",
       model: "MiniMax-M3",
       transport: "openai",
       endpointKind: "official",
     })).toMatchObject({
+      id: "minimax-m3-adapter",
+      tier: "M",
       mode: "prompt_json",
       requestHints: {
         sendJsonObject: true,
         reasoningSplit: true,
+      },
+      repair: {
+        cita: {
+          maxAttempts: 2,
+          totalBudgetMs: 10_000,
+          perAttemptTimeoutMs: 5_500,
+        },
+        action_gate: {
+          maxAttempts: 2,
+          totalBudgetMs: 12_000,
+          perAttemptTimeoutMs: 7_000,
+        },
+      },
+    });
+  });
+
+  test("B tier doubles the structured-output time budget for slower providers", () => {
+    expect(resolveStructuredOutputProfile({
+      provider: "glm",
+      model: "glm-4.7",
+      transport: "openai",
+      endpointKind: "official",
+    })).toMatchObject({
+      tier: "B",
+      repair: {
+        cita: {
+          maxAttempts: 2,
+          totalBudgetMs: 16_000,
+          perAttemptTimeoutMs: 8_000,
+          minimumRemainingBudgetMs: 500,
+        },
+        action_gate: {
+          maxAttempts: 2,
+          totalBudgetMs: 20_000,
+          perAttemptTimeoutMs: 10_000,
+          minimumRemainingBudgetMs: 800,
+        },
       },
     });
   });
@@ -80,6 +120,7 @@ describe("resolveStructuredOutputProfile", () => {
       endpointKind: "custom",
     })).toMatchObject({
       id: "prompt-json-fallback",
+      tier: "D",
       mode: "prompt_json",
       allowCapabilityPromotion: false,
       requestHints: { sendJsonObject: false, reasoningSplit: false },
