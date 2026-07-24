@@ -1,12 +1,11 @@
 use std::{
     io::{self, BufRead, BufReader, Write},
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc::{self, Receiver, Sender},
     },
     thread,
-    time::Duration,
 };
 
 use windows::Win32::{
@@ -22,6 +21,18 @@ use crate::{
 pub struct RuntimeChannels {
     pub command_rx: Receiver<Command>,
     pub event_tx: Sender<Event>,
+}
+
+#[derive(Clone)]
+pub struct InputEventGate {
+    inner: Arc<InputEventGateInner>,
+    target: MessageTarget,
+}
+
+struct InputEventGateInner {
+    closed: AtomicBool,
+    wake_pending: AtomicBool,
+    sender: Mutex<Option<Sender<Event>>>,
 }
 
 #[derive(Clone, Copy)]
@@ -53,10 +64,63 @@ pub fn create_runtime_channels() -> (RuntimeChannels, Sender<Command>, Receiver<
     )
 }
 
+pub fn create_input_event_gate(target: MessageTarget) -> (InputEventGate, Receiver<Event>) {
+    let (sender, receiver) = mpsc::channel();
+    (
+        InputEventGate {
+            inner: Arc::new(InputEventGateInner {
+                closed: AtomicBool::new(false),
+                wake_pending: AtomicBool::new(false),
+                sender: Mutex::new(Some(sender)),
+            }),
+            target,
+        },
+        receiver,
+    )
+}
+
+impl InputEventGate {
+    pub fn submit(&self, event: Event) -> bool {
+        if self.inner.closed.load(Ordering::Acquire) {
+            return false;
+        }
+
+        let sender = self.inner.sender.lock().unwrap_or_else(|error| {
+            eprintln!("input event gate mutex was poisoned; recovering");
+            error.into_inner()
+        });
+        if self.inner.closed.load(Ordering::Acquire) {
+            return false;
+        }
+        let submitted = sender
+            .as_ref()
+            .is_some_and(|sender| sender.send(event).is_ok());
+        drop(sender);
+        if submitted && !self.inner.wake_pending.swap(true, Ordering::AcqRel) {
+            let _ = self.target.post(WM_APP_COMMAND);
+        }
+        submitted
+    }
+
+    pub fn prepare_to_drain(&self) {
+        self.inner.wake_pending.store(false, Ordering::Release);
+    }
+
+    pub fn close(&self) {
+        self.inner.closed.store(true, Ordering::Release);
+        let mut sender = self.inner.sender.lock().unwrap_or_else(|error| {
+            eprintln!("input event gate mutex was poisoned during close; recovering");
+            error.into_inner()
+        });
+        sender.take();
+        self.inner.wake_pending.store(false, Ordering::Release);
+    }
+}
+
 pub fn spawn_stdin_reader(
     target: MessageTarget,
     command_tx: Sender<Command>,
-    event_tx: Sender<Event>,
+    input_events: InputEventGate,
 ) {
     thread::Builder::new()
         .name("cyrene-stdin".into())
@@ -90,32 +154,24 @@ pub fn spawn_stdin_reader(
                                 }
                             }
                             Err((code, message)) => {
-                                if event_tx
-                                    .send(Event::Error {
-                                        request_id: None,
-                                        code: code.into(),
-                                        message,
-                                        recoverable: true,
-                                    })
-                                    .is_err()
-                                {
+                                if !input_events.submit(Event::Error {
+                                    request_id: None,
+                                    code: code.into(),
+                                    message,
+                                    recoverable: true,
+                                }) {
                                     return;
                                 }
                             }
                         }
                     }
                     Ok(InputLine::TooLong) => {
-                        if event_tx
-                            .send(Event::Error {
-                                request_id: None,
-                                code: "line-too-long".into(),
-                                message: format!(
-                                    "NDJSON line exceeds {MAX_NDJSON_LINE_BYTES} bytes"
-                                ),
-                                recoverable: true,
-                            })
-                            .is_err()
-                        {
+                        if !input_events.submit(Event::Error {
+                            request_id: None,
+                            code: "line-too-long".into(),
+                            message: format!("NDJSON line exceeds {MAX_NDJSON_LINE_BYTES} bytes"),
+                            recoverable: true,
+                        }) {
                             return;
                         }
                     }
@@ -134,28 +190,16 @@ pub fn spawn_stdin_reader(
         .expect("failed to start stdin reader");
 }
 
-pub fn spawn_stdout_writer(
-    event_rx: Receiver<Event>,
-    stopping: Arc<AtomicBool>,
-) -> thread::JoinHandle<io::Result<()>> {
+pub fn spawn_stdout_writer(event_rx: Receiver<Event>) -> thread::JoinHandle<io::Result<()>> {
     thread::Builder::new()
         .name("cyrene-stdout".into())
         .spawn(move || {
             let stdout = io::stdout();
             let mut stdout = stdout.lock();
-            loop {
-                match event_rx.recv_timeout(Duration::from_millis(10)) {
-                    Ok(event) => write_event(&mut stdout, &event)?,
-                    Err(mpsc::RecvTimeoutError::Timeout) if stopping.load(Ordering::Acquire) => {
-                        for event in event_rx.try_iter() {
-                            write_event(&mut stdout, &event)?;
-                        }
-                        return Ok(());
-                    }
-                    Err(mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(mpsc::RecvTimeoutError::Disconnected) => return Ok(()),
-                }
+            for event in event_rx {
+                write_event(&mut stdout, &event)?;
             }
+            Ok(())
         })
         .expect("failed to start stdout writer")
 }

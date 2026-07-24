@@ -1,7 +1,4 @@
-use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
-};
+use std::sync::mpsc::Receiver;
 
 use windows::{
     Win32::{
@@ -20,8 +17,8 @@ use crate::{
     cli::CliOptions,
     error::AppError,
     ipc::{
-        MessageTarget, RuntimeChannels, create_runtime_channels, spawn_stdin_reader,
-        spawn_stdout_writer,
+        InputEventGate, MessageTarget, RuntimeChannels, create_input_event_gate,
+        create_runtime_channels, spawn_stdin_reader, spawn_stdout_writer,
     },
     parent_watch,
     protocol::{Command, Event, PROTOCOL_VERSION},
@@ -33,11 +30,11 @@ pub fn run(options: CliOptions) -> Result<(), AppError> {
     let window = MessageWindow::create()?;
     let target = MessageTarget::new(window.hwnd);
     let (channels, command_tx, event_rx) = create_runtime_channels();
-    let stopping = Arc::new(AtomicBool::new(false));
-    let stdout_thread = spawn_stdout_writer(event_rx, Arc::clone(&stopping));
+    let (input_events, input_event_rx) = create_input_event_gate(target);
+    let stdout_thread = spawn_stdout_writer(event_rx);
 
     parent_watch::start(options.parent_pid, target);
-    spawn_stdin_reader(target, command_tx, channels.event_tx.clone());
+    spawn_stdin_reader(target, command_tx, input_events.clone());
     channels
         .event_tx
         .send(Event::Ready {
@@ -45,8 +42,9 @@ pub fn run(options: CliOptions) -> Result<(), AppError> {
         })
         .map_err(|_| AppError::Runtime("stdout writer stopped before ready".into()))?;
 
-    let message_result = run_message_loop(&window, &channels);
-    stopping.store(true, Ordering::Release);
+    let message_result = run_message_loop(&window, &channels, &input_events, &input_event_rx);
+    input_events.close();
+    drain_closed_input_events(&channels.event_tx, &input_event_rx);
     drop(channels);
     let stdout_result = stdout_thread
         .join()
@@ -57,7 +55,12 @@ pub fn run(options: CliOptions) -> Result<(), AppError> {
     Ok(())
 }
 
-fn run_message_loop(window: &MessageWindow, channels: &RuntimeChannels) -> Result<(), AppError> {
+fn run_message_loop(
+    window: &MessageWindow,
+    channels: &RuntimeChannels,
+    input_events: &InputEventGate,
+    input_event_rx: &Receiver<Event>,
+) -> Result<(), AppError> {
     let mut message = MSG::default();
     loop {
         // SAFETY: message points to initialized writable storage and the window
@@ -70,6 +73,8 @@ fn run_message_loop(window: &MessageWindow, channels: &RuntimeChannels) -> Resul
             return Ok(());
         }
         if message.hwnd == window.hwnd && message.message == WM_APP_COMMAND {
+            input_events.prepare_to_drain();
+            forward_input_events(&channels.event_tx, input_event_rx);
             for command in channels.command_rx.try_iter() {
                 if !handle_command(command, &channels.event_tx) {
                     return Ok(());
@@ -82,6 +87,28 @@ fn run_message_loop(window: &MessageWindow, channels: &RuntimeChannels) -> Resul
         unsafe {
             let _ = TranslateMessage(&message);
             DispatchMessageW(&message);
+        }
+    }
+}
+
+fn forward_input_events(
+    event_tx: &std::sync::mpsc::Sender<Event>,
+    input_event_rx: &Receiver<Event>,
+) {
+    for event in input_event_rx.try_iter() {
+        if event_tx.send(event).is_err() {
+            return;
+        }
+    }
+}
+
+fn drain_closed_input_events(
+    event_tx: &std::sync::mpsc::Sender<Event>,
+    input_event_rx: &Receiver<Event>,
+) {
+    while let Ok(event) = input_event_rx.recv() {
+        if event_tx.send(event).is_err() {
+            return;
         }
     }
 }
