@@ -27,7 +27,7 @@ use std::{
     fs,
     os::windows::ffi::OsStrExt,
     path::{Path, PathBuf},
-    sync::mpsc::Sender,
+    sync::{Arc, Mutex, mpsc::Sender},
     thread,
 };
 
@@ -51,7 +51,9 @@ use windows::{
     core::{HRESULT, PCWSTR},
 };
 
-use crate::{error::HelperError, protocol::Event, win::capture::CpuBgraFrame};
+use crate::{
+    error::HelperError, protocol::Event, request::RequestRegistry, win::capture::CpuBgraFrame,
+};
 
 /// One async PNG encode. The worker owns the frame so the UI thread can drop
 /// its reference immediately after spawning.
@@ -63,21 +65,36 @@ pub struct EncodeJob {
 }
 
 /// Spawn a worker thread that runs [`run_encode_job`] with `job` and posts
-/// the resulting [`Event`] on `event_tx`.
+/// the resulting [`Event`] on `event_tx`. The shared `registry` is finalized
+/// on the worker when it emits the terminal event, so a second `Start` for
+/// the same `request_id` is rejected even if it arrives before this worker
+/// has shut down.
 ///
 /// The worker is detached (no `JoinHandle` is returned) because the helper's
 /// stdout writer drains the channel independently of commit completion; if
 /// the helper shuts down before the encoder posts its event, the
 /// `Event::Completed` is simply dropped (the request ID was never observed
 /// in the pending registry at that point either).
-pub fn spawn_encode_job(job: EncodeJob, event_tx: Sender<Event>) {
-    thread::Builder::new()
+///
+/// On `Builder::spawn` failure (resource exhaustion, etc.) we surface an
+/// `error("encode-failed", "failed to spawn encoder")` event on the existing
+/// `event_tx` and finalize the registry entry, so the requestId never stays
+/// in pending forever. We never panic the helper process from this path.
+pub fn spawn_encode_job(
+    job: EncodeJob,
+    event_tx: Sender<Event>,
+    registry: Arc<Mutex<RequestRegistry>>,
+) {
+    let request_id_for_failure = job.request_id.clone();
+    let event_tx_for_worker = event_tx.clone();
+    let registry_for_worker = Arc::clone(&registry);
+    let spawn_result = thread::Builder::new()
         .name("cyrene-encode".into())
         .spawn(move || {
             let outcome = run_encode_job(&job);
             let event = match outcome {
                 Ok(()) => Event::Completed {
-                    request_id: job.request_id,
+                    request_id: job.request_id.clone(),
                     file_name: Some(job.file_name),
                     width: job.frame.width,
                     height: job.frame.height,
@@ -85,7 +102,7 @@ pub fn spawn_encode_job(job: EncodeJob, event_tx: Sender<Event>) {
                     clipboard_written: true,
                 },
                 Err(error) => Event::Error {
-                    request_id: Some(job.request_id),
+                    request_id: Some(job.request_id.clone()),
                     code: "encode-failed".into(),
                     message: error.to_string(),
                     recoverable: false,
@@ -93,24 +110,72 @@ pub fn spawn_encode_job(job: EncodeJob, event_tx: Sender<Event>) {
             };
             // Best-effort: if the helper has already dropped the channel
             // (e.g., during shutdown) there is nothing to send.
-            let _ = event_tx.send(event);
-        })
-        .expect("failed to start cyrene-encode worker");
+            let _ = event_tx_for_worker.send(event);
+            // Finalize the registry entry on the worker thread so a follow-up
+            // `Start` for the same requestId observes a clean state. The
+            // `Cancel`-during-encode path also calls `registry.cancel` from
+            // the UI thread; whoever gets there first wins (the second
+            // observes `AlreadyFinished` and is logged-and-ignored).
+            finalize_registry(&registry_for_worker, &job.request_id, "complete");
+        });
+    if let Err(error) = spawn_result {
+        let _ = event_tx.send(Event::Error {
+            request_id: Some(request_id_for_failure.clone()),
+            code: "encode-failed".into(),
+            message: format!("failed to spawn encoder: {error}"),
+            recoverable: false,
+        });
+        finalize_registry(&registry, &request_id_for_failure, "cancel");
+    }
+}
+
+/// Lock `registry` briefly to finalize `request_id`. Errors are logged
+/// instead of propagated because the wire event has already been emitted.
+fn finalize_registry(registry: &Arc<Mutex<RequestRegistry>>, request_id: &str, mode: &str) {
+    match registry.lock() {
+        Ok(mut registry_guard) => {
+            let outcome = match mode {
+                "complete" => registry_guard.complete(request_id, None),
+                _ => registry_guard.cancel(request_id, mode),
+            };
+            if let Err(error) = outcome {
+                eprintln!(
+                    "cyrene-screenshot: encoder finalize ({mode}) for {request_id} failed: {error}"
+                );
+            }
+        }
+        Err(poison) => {
+            eprintln!(
+                "cyrene-screenshot: encoder finalize lock unavailable for {request_id}: {poison}"
+            );
+        }
+    }
 }
 
 /// RAII guard for `CoInitializeEx` / `CoUninitialize` on the encode worker
 /// thread. CoInitializeEx returns `S_FALSE` (== 0x00000001) if COM was
 /// already initialized on this thread; treat that as success so a test
 /// thread that called `CoInitializeEx` upstream can still spawn an encode.
-struct ComGuard;
+struct ComGuard {
+    /// True only when `CoInitializeEx` returned `S_OK` and this thread owns
+    /// the matching init. `S_FALSE` (already initialized) does NOT entitle
+    /// us to call `CoUninitialize`, which would tear down an init owned by
+    /// another upstream component.
+    owns_init: bool,
+}
 
 impl ComGuard {
-    fn initialize() -> Result<(), HelperError> {
+    fn initialize() -> Result<Self, HelperError> {
         // SAFETY: CoInitializeEx has no preconditions; passing None for the
         // reserved pointer matches the documented FFI signature.
         let result = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
-        if result.is_ok() || result == HRESULT(0x0000_0001) {
-            Ok(())
+        if result.is_ok() {
+            Ok(Self { owns_init: true })
+        } else if result == HRESULT(0x0000_0001) {
+            // COM was already initialized on this thread (e.g., a test
+            // harness called CoInitializeEx upstream). We do not own that
+            // init, so do not pair it with CoUninitialize.
+            Ok(Self { owns_init: false })
         } else {
             Err(HelperError::CaptureFailed(format!(
                 "CoInitializeEx failed: {result:?}"
@@ -121,10 +186,14 @@ impl ComGuard {
 
 impl Drop for ComGuard {
     fn drop(&mut self) {
-        // SAFETY: ComGuard::initialize returned Ok so this thread currently
-        // owns a matching CoInitialize; CoUninitialize is the documented
-        // pair. The HRESULT is intentionally ignored because the worker
-        // thread is about to exit anyway.
+        if !self.owns_init {
+            return;
+        }
+        // SAFETY: `owns_init` was set only when CoInitializeEx returned
+        // S_OK, so this thread currently owns a matching CoInitialize;
+        // CoUninitialize is the documented pair. The HRESULT is
+        // intentionally ignored because the worker thread is about to
+        // exit anyway.
         unsafe {
             CoUninitialize();
         }
@@ -272,11 +341,16 @@ fn encode_to_path(
     // will pack them in PNG without padding because we supply exactly
     // width*4 bytes per row.
     let pitch = (frame.width * 4) as u32;
+    let expected_bytes = frame.height.checked_mul(pitch).ok_or_else(|| {
+        HelperError::EncodeFailed(format!(
+            "encoder pixel buffer overflow computing {}*{}",
+            frame.height, pitch
+        ))
+    })?;
     let bytes = frame.pixels.len() as u32;
-    if bytes != (frame.height * pitch) {
+    if bytes != expected_bytes {
         return Err(HelperError::CaptureFailed(format!(
-            "encoder pixel buffer mismatch: bytes={bytes} expected={}",
-            frame.height * pitch
+            "encoder pixel buffer mismatch: bytes={bytes} expected={expected_bytes}"
         )));
     }
     unsafe { frame_encoder.WritePixels(height, pitch, frame.pixels.as_slice()) }

@@ -168,8 +168,12 @@ impl OverlayRenderer {
     ///   * We allocate a top-down destination DIB section via `CreateDIBSection`
     ///     sized to `rect.width × rect.height`. `BitBlt(SRCCOPY)` from the
     ///     frozen cache DC into the destination DC copies pixels in their
-    ///     native orientation (top-down); we then read them out via
-    ///     `GetDIBits` so the returned buffer is independent of GDI lifetime.
+    ///     native orientation (top-down); we then copy them out of the
+    ///     destination DIB via `std::ptr::copy_nonoverlapping` against
+    ///     `dib.bits()` so the returned `Vec<u8>` is independent of GDI
+    ///     lifetime. (An earlier draft read the pixels back via `GetDIBits`;
+    ///     the current implementation uses direct pointer copy from the
+    ///     DIB's mapped bits pointer returned by `CreateDIBSection`.)
     ///   * Any failure between guards is rolled back via the standard RAII
     ///     guards — no partial DIB can leak past a returned `Err`.
     pub fn extract_selection(&self, rect: RectI) -> Result<CpuBgraFrame, HelperError> {

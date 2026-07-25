@@ -57,9 +57,10 @@ impl RequestRegistry {
         if self.pending.contains_key(request_id) {
             return Err(RequestError::AlreadyPending(request_id.into()));
         }
-        if self.finished.contains(request_id) {
-            return Err(RequestError::AlreadyFinished(request_id.into()));
-        }
+        // A finished requestId can be reused for a new request. Drop the
+        // finished marker so the new `pending` insert does not collide
+        // with the prior lifetime in the same hashset.
+        self.finished.remove(request_id);
 
         self.pending.insert(
             request_id.into(),

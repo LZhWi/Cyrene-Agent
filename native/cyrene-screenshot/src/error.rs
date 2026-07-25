@@ -56,6 +56,8 @@ pub enum HelperError {
     CaptureFailed(String),
     #[error("invalid display configuration: {0}")]
     InvalidDisplay(String),
+    #[error("encode failed: {0}")]
+    EncodeFailed(String),
     #[error("Windows API failed: {0}")]
     Windows(#[from] windows::core::Error),
 }
@@ -66,6 +68,7 @@ impl HelperError {
             Self::DisplayQueryFailed(_) => "display-query-failed",
             Self::CaptureFailed(_) => "capture-failed",
             Self::InvalidDisplay(_) => "invalid-display",
+            Self::EncodeFailed(_) => "encode-failed",
             Self::Windows(_) => "windows-api-failed",
         }
     }

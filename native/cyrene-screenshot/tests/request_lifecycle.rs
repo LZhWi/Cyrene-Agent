@@ -45,7 +45,7 @@ fn request_cannot_finish_twice() {
 }
 
 #[test]
-fn accept_rejects_pending_and_finished_request_ids() {
+fn accept_rejects_pending_request_id() {
     let mut registry = RequestRegistry::default();
     registry
         .accept("pending", CaptureMode::ClipboardOnly)
@@ -57,15 +57,23 @@ fn accept_rejects_pending_and_finished_request_ids() {
             .code(),
         "request-already-pending"
     );
+}
 
-    registry.complete("pending", None).unwrap();
-    assert_eq!(
-        registry
-            .accept("pending", CaptureMode::ClipboardOnly)
-            .unwrap_err()
-            .code(),
-        "request-already-finished"
-    );
+#[test]
+fn accept_recycles_finished_request_id() {
+    // A finished requestId can be reused for a new request; the registry
+    // drops the finished marker before inserting the new pending entry.
+    let mut registry = RequestRegistry::default();
+    registry
+        .accept("recycled", CaptureMode::ClipboardOnly)
+        .unwrap();
+    registry.complete("recycled", None).unwrap();
+    assert!(!registry.is_pending("recycled"));
+
+    registry
+        .accept("recycled", CaptureMode::ClipboardAndFile)
+        .expect("finished requestId must be reusable");
+    assert!(registry.is_pending("recycled"));
 }
 
 #[test]

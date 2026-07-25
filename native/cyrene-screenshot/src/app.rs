@@ -1,6 +1,9 @@
 use std::{
     path::PathBuf,
-    sync::mpsc::{Receiver, Sender},
+    sync::{
+        Arc, Mutex,
+        mpsc::{Receiver, Sender},
+    },
 };
 
 use windows::{
@@ -25,6 +28,7 @@ use crate::{
     },
     parent_watch,
     protocol::{CaptureMode, Command, Event, InteractionStateEvent, PROTOCOL_VERSION},
+    request::RequestRegistry,
     win::{
         capture::{CaptureBackend, FrozenFrame},
         capture_gdi::GdiCaptureBackend,
@@ -143,7 +147,26 @@ struct OverlayApp {
     overlay: OverlayWindow,
     capture: GdiCaptureBackend,
     renderer: OverlayRenderer,
+    /// Interaction state for the currently-visible overlay. Cleared as soon as
+    /// the overlay hides (after `capture-released` or any error path). Does NOT
+    /// track the encoded/Pending lifecycle of a `clipboard-and-file` request —
+    /// see `requests` for that.
     active: Option<ActiveRequest>,
+    /// Persistent registry of request IDs and their lifecycle. A requestId
+    /// stays in this registry from `accept` through `capture_released` (which
+    /// records the release metadata) until a terminal event (`Completed`,
+    /// `Cancelled`, or `Error`) finishes it. Gates `Start` against duplicate
+    /// IDs and lives independently of the overlay interaction, so a second
+    /// `Start` can be accepted while a previous `clipboard-and-file` request
+    /// is still encoding.
+    ///
+    /// The registry is shared with the encode worker thread via a `Mutex`:
+    /// the worker needs to mark its request finished when it emits the
+    /// terminal `Completed` / `Error`. The `Arc` lets us clone a handle into
+    /// the worker without holding the UI thread's `&mut` borrow across the
+    /// `spawn` boundary. The lock is only briefly held when the worker emits
+    /// its terminal event, so command-path throughput is unaffected.
+    requests: Arc<Mutex<RequestRegistry>>,
     output_dir: PathBuf,
 }
 
@@ -159,6 +182,7 @@ impl OverlayApp {
             capture: GdiCaptureBackend::new()?,
             renderer: OverlayRenderer::new()?,
             active: None,
+            requests: Arc::new(Mutex::new(RequestRegistry::default())),
             output_dir,
         })
     }
@@ -170,12 +194,64 @@ impl OverlayApp {
     ) -> bool {
         match command {
             Command::Start { request_id, mode } => {
+                // Two distinct "busy" gates must both pass:
+                //   1. The local `active` flag — only one interaction session
+                //      can have a visible overlay at a time; a Start arriving
+                //      while the previous overlay is still on-screen is the
+                //      classic "race" the T6 plan calls out.
+                //   2. The `RequestRegistry` — the same `request_id` may not
+                //      be reused while a previous request with that ID is
+                //      still pending (between `accept` and the terminal
+                //      event). This is independent of `active` because
+                //      clipboard-and-file requests stay pending across the
+                //      overlay teardown.
                 if self.active.is_some() {
                     send_error(
                         event_tx,
-                        Some(request_id),
+                        Some(request_id.clone()),
                         "busy",
                         "a screenshot interaction is already active",
+                        true,
+                    );
+                    return true;
+                }
+                // Lock the registry briefly. If the mutex is poisoned we
+                // take the inner guard anyway (callers are idempotent) and
+                // proceed; on the edge case that the lock itself fails, we
+                // surface a busy error so the caller can retry.
+                let mut registry_guard = match lock_registry(&self.requests) {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        send_error(
+                            event_tx,
+                            Some(request_id.clone()),
+                            "busy",
+                            "request registry is unavailable",
+                            true,
+                        );
+                        return true;
+                    }
+                };
+                let accept_result = registry_guard
+                    .accept(&request_id, mode)
+                    .map_err(|error| error.to_string());
+                // Release the registry guard immediately so the rest of this
+                // function (which mutates `self`) is not blocked behind the
+                // mutex lock for the duration of the freeze and overlay
+                // presentation. The encoder worker will re-acquire the lock
+                // on its terminal event publish.
+                drop(registry_guard);
+                if let Err(reason) = accept_result {
+                    // The locked spec surface uses code "busy" for any
+                    // duplicate-id rejection; the underlying
+                    // `request-already-pending` / `request-already-finished`
+                    // distinction is preserved in the message so the
+                    // Electron side can log it without a wire-format change.
+                    send_error(
+                        event_tx,
+                        Some(request_id.clone()),
+                        "busy",
+                        &format!("request {request_id} is already pending: {reason}"),
                         true,
                     );
                     return true;
@@ -190,6 +266,7 @@ impl OverlayApp {
                 match query_primary_display() {
                     Ok(display) => self.display = display,
                     Err(error) => {
+                        finalize_request(&self.requests, &request_id, "cancel");
                         send_error(
                             event_tx,
                             Some(request_id),
@@ -204,6 +281,7 @@ impl OverlayApp {
                 let frame = match self.capture.freeze(&self.display) {
                     Ok(frame) => frame,
                     Err(error) => {
+                        finalize_request(&self.requests, &request_id, "cancel");
                         send_error(
                             event_tx,
                             Some(request_id),
@@ -216,6 +294,7 @@ impl OverlayApp {
                 };
 
                 if matches!(frame, FrozenFrame::Gpu(_)) {
+                    finalize_request(&self.requests, &request_id, "cancel");
                     send_error(
                         event_tx,
                         Some(request_id),
@@ -265,6 +344,23 @@ impl OverlayApp {
                     .is_some_and(|active| active.request_id == request_id)
                 {
                     self.cancel(event_tx, "electron-cancelled");
+                } else if registry_is_pending(&self.requests, &request_id) {
+                    // The interaction has moved past capture-released into
+                    // the encode phase. The overlay is hidden and `active`
+                    // is `None`, but the requestId is still in the registry.
+                    // Surface a `Cancelled` event matching the
+                    // active-capture path; the encoder worker still emits
+                    // its terminal `Completed` / `Error` event but the
+                    // registry has already finalized the slot. (We don't
+                    // kill the encoder mid-flight because the encode worker
+                    // doesn't currently observe a cancellation channel; the
+                    // Electron-side cancellation acknowledgement comes
+                    // through this Cancelled event.)
+                    let _ = event_tx.send(Event::Cancelled {
+                        request_id: request_id.clone(),
+                        reason: "electron-cancelled".into(),
+                    });
+                    finalize_request(&self.requests, &request_id, "cancel");
                 } else {
                     let _ = event_tx.send(Event::Cancelled {
                         request_id,
@@ -407,25 +503,51 @@ impl OverlayApp {
         self.teardown_overlay();
 
         // Step 4: capture-released so the caller can immediately offer
-        // clipboard-based paste.
+        // clipboard-based paste. Record the release in the registry so the
+        // request's metadata is visible to subsequent Start/Cancel handling
+        // until the terminal event below.
         let _ = event_tx.send(Event::CaptureReleased {
             request_id: active.request_id.clone(),
             clipboard_written,
             width: selection_width,
             height: selection_height,
         });
+        match lock_registry(&self.requests) {
+            Ok(mut registry_guard) => {
+                if let Err(error) = registry_guard.capture_released(
+                    &active.request_id,
+                    clipboard_written,
+                    selection_width,
+                    selection_height,
+                ) {
+                    // A capture_released error means the registry has lost
+                    // track of the request ID (e.g., a cancel arrived
+                    // mid-commit). The wire events have already been
+                    // published; surface the inconsistency so the underlying
+                    // channel can match the registry in the future.
+                    eprintln!("cyrene-screenshot: registry capture_released failed: {error}");
+                }
+            }
+            Err(error) => {
+                eprintln!("cyrene-screenshot: registry capture_released lock unavailable: {error}");
+            }
+        }
 
         // Step 5/6: terminal event depends on capture mode.
         match active.mode {
             CaptureMode::ClipboardOnly => {
+                let request_id = active.request_id;
                 let _ = event_tx.send(Event::Completed {
-                    request_id: active.request_id,
+                    request_id: request_id.clone(),
                     file_name: None,
                     width: selection_width,
                     height: selection_height,
                     mime: "image/png",
                     clipboard_written,
                 });
+                // Terminal event: remove the requestId from the registry so a
+                // future Start with the same ID can succeed.
+                finalize_request(&self.requests, &request_id, "complete");
             }
             CaptureMode::ClipboardAndFile => {
                 let file_name = encoder::new_png_file_name();
@@ -435,7 +557,10 @@ impl OverlayApp {
                     output_dir: self.output_dir.clone(),
                     frame: selection,
                 };
-                encoder::spawn_encode_job(job, event_tx.clone());
+                // The encoder worker is the producer of the terminal
+                // `Completed`/`Error` event for this requestId. It will
+                // finalize the registry entry when it emits that event.
+                encoder::spawn_encode_job(job, event_tx.clone(), Arc::clone(&self.requests));
             }
         }
     }
@@ -448,11 +573,14 @@ impl OverlayApp {
         // The internal state machine transitions through `Cancelling` before
         // reaching a terminal state, but the wire protocol surfaces a single
         // terminal `Cancelled` event (no `Cancelling` variant exists on
-        // `InteractionStateEvent`).
+        // `InteractionStateEvent`). The requestId is finalized in the registry
+        // so a subsequent Start with the same ID can succeed.
+        let request_id = active.request_id;
         let _ = event_tx.send(Event::Cancelled {
-            request_id: active.request_id,
+            request_id: request_id.clone(),
             reason: reason.into(),
         });
+        finalize_request(&self.requests, &request_id, "cancel");
     }
 
     fn finish_error(
@@ -464,6 +592,13 @@ impl OverlayApp {
     ) {
         let request_id = self.active.take().map(|active| active.request_id);
         self.teardown_overlay();
+        // Terminal event: a non-recoverable error finishes the requestId in
+        // the registry; a recoverable error does the same because the
+        // overlay has been torn down and no further events for the request
+        // will be published.
+        if let Some(id) = &request_id {
+            finalize_request(&self.requests, id, "cancel");
+        }
         send_error(event_tx, request_id, code, message, recoverable);
     }
 
@@ -488,6 +623,61 @@ fn send_error(
         message: message.into(),
         recoverable,
     });
+}
+
+/// Lock the registry for a brief mutation. Recoverable from a poisoned mutex
+/// because the only mutation paths are command-/event-driven and idempotent;
+/// `PoisonError::into_inner` hands back the guard so an eventual poisoned
+/// state never blocks progress.
+fn lock_registry(
+    registry: &Arc<Mutex<RequestRegistry>>,
+) -> std::sync::LockResult<std::sync::MutexGuard<'_, RequestRegistry>> {
+    // `PoisonError::into_inner` returns the inner guard. Wrapping it in
+    // `PoisonError::new`-equivalent would re-poison; the simplest way to
+    // return a `LockResult` is to use the `ok` conversion on the guard
+    // directly via `Ok(guard.into_inner())` equivalent — which is what
+    // `PoisonError::into_inner` already does. But that returns the guard
+    // itself rather than a new `LockResult`, so we wrap it back manually.
+    match registry.lock() {
+        Ok(guard) => Ok(guard),
+        Err(poison) => {
+            eprintln!("cyrene-screenshot: requests mutex poisoned, recovering");
+            Ok(poison.into_inner())
+        }
+    }
+}
+
+/// Look up whether a requestId is currently pending. Reads the registry
+/// without disturbing any in-progress mutation.
+fn registry_is_pending(registry: &Arc<Mutex<RequestRegistry>>, request_id: &str) -> bool {
+    match lock_registry(registry) {
+        Ok(registry_guard) => registry_guard.is_pending(request_id),
+        Err(_) => false,
+    }
+}
+
+/// Finalize a requestId in the registry after a terminal event has been
+/// published to the wire. `mode` is "complete" (success path) or "cancel"
+/// (cancel/error path); both currently route to `RequestRegistry::finish`
+/// internally. Errors are logged instead of propagated because the wire event
+/// has already been emitted and a registry mismatch cannot be undone.
+fn finalize_request(registry: &Arc<Mutex<RequestRegistry>>, request_id: &str, mode: &str) {
+    match lock_registry(registry) {
+        Ok(mut registry_guard) => {
+            let outcome = match mode {
+                "complete" => registry_guard.complete(request_id, None),
+                _ => registry_guard.cancel(request_id, mode),
+            };
+            if let Err(error) = outcome {
+                eprintln!(
+                    "cyrene-screenshot: requests finalize ({mode}) for {request_id} failed: {error}"
+                );
+            }
+        }
+        Err(_) => {
+            eprintln!("cyrene-screenshot: requests finalize lock unavailable");
+        }
+    }
 }
 
 struct MessageWindow {

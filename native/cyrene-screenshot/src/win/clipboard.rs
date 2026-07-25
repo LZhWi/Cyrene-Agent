@@ -115,6 +115,22 @@ pub fn write_cf_dibv5(hwnd: HWND, frame: &CpuBgraFrame) -> Result<(), HelperErro
             "cannot write an empty frame to the clipboard".into(),
         ));
     }
+    // A pitch below `width * 4` would mean the source rows are shorter than
+    // BGRA, guaranteeing a row copy past the buffer end. Pitch may exceed
+    // `width * 4` when callers (e.g., GPU captures) align rows to 4-byte
+    // boundaries, so we only reject the under-sized case.
+    let min_row_bytes = frame.width.checked_mul(4).ok_or_else(|| {
+        HelperError::CaptureFailed(format!(
+            "clipboard row bytes overflow for width {}",
+            frame.width
+        ))
+    })?;
+    if frame.pitch < min_row_bytes {
+        return Err(HelperError::CaptureFailed(format!(
+            "clipboard frame pitch {} is below width*4={}",
+            frame.pitch, min_row_bytes
+        )));
+    }
 
     // OpenClipboard returns Err if another process currently owns the
     // clipboard; the caller maps this to `clipboardWritten: false` and
