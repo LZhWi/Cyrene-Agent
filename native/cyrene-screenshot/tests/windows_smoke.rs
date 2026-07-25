@@ -1435,3 +1435,137 @@ fn cancel_during_encode_emits_cancelled() {
     let (status, _events) = helper.finish(EXIT_TIMEOUT);
     assert!(status.success());
 }
+
+// ---------------------------------------------------------------------------
+// Task 7: DXGI capture-pump diagnostics tests
+// ---------------------------------------------------------------------------
+
+fn diagnostics_field(event: &serde_json::Value, field: &str) -> u64 {
+    event["diagnostics"][field]
+        .as_u64()
+        .unwrap_or_else(|| panic!("diagnostics.{field} must be a u64 on {event:?}"))
+}
+
+#[test]
+fn start_to_overlay_visible_has_no_full_frame_cpu_readback() {
+    // Task 7 invariant: when the DXGI capture path is active (the documented
+    // primary path on a healthy desktop), the helper must produce a frozen
+    // frame WITHOUT reading the entire desktop back to the CPU. GDI is a
+    // pull-on-demand backend that always reads back at freeze time, so the
+    // assertion is only meaningful on machines where DXGI initializes; the
+    // GDI fallback path is permitted (and `backend == "gdi"`).
+    //
+    // For this smoke test we accept either:
+    //   * backend == "dxgi"  → full_frame_cpu_readbacks MUST be 0.
+    //   * backend == "gdi"   → full_frame_cpu_readbacks MUST be 1 (one
+    //     freeze-time BitBlt + DIB copy).
+    // The selection_cpu_readbacks counter must be 0 at overlay-visible
+    // because no commit has happened yet.
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    helper.send_command(start_command("diagnostics-zero-readback"));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+    let overlay_visible = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(overlay_visible["type"], "overlay-visible");
+
+    let backend = overlay_visible["diagnostics"]["backend"]
+        .as_str()
+        .expect("diagnostics.backend must be a string");
+    let full_frame = diagnostics_field(&overlay_visible, "fullFrameCpuReadbacks");
+    let selection = diagnostics_field(&overlay_visible, "selectionCpuReadbacks");
+    let latest_copies = diagnostics_field(&overlay_visible, "latestCopies");
+
+    assert!(
+        matches!(backend, "dxgi" | "gdi"),
+        "unexpected backend label {backend:?}"
+    );
+    assert!(
+        latest_copies >= 1,
+        "latestCopies must be at least 1 after a successful freeze (got {latest_copies})"
+    );
+    match backend {
+        "dxgi" => assert_eq!(
+            full_frame, 0,
+            "DXGI must not perform any full-frame CPU readback before overlay-visible"
+        ),
+        "gdi" => assert_eq!(
+            full_frame, 1,
+            "GDI must perform exactly one full-frame CPU readback at freeze"
+        ),
+        _ => unreachable!(),
+    }
+    assert_eq!(
+        selection, 0,
+        "no selection extraction must have happened before overlay-visible"
+    );
+
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
+}
+
+#[test]
+fn commit_has_selection_cpu_readback() {
+    // Task 7 invariant: after commit, the helper's diagnostics MUST record
+    // at least one selection CPU readback regardless of backend (both DXGI
+    // and GDI paths use CopySubresourceRegion or BitBlt to materialize the
+    // selection into the encoder/clipboard payload).
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    drive_to_committing(&mut helper, "diagnostics-selection-readback");
+
+    let released = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(released["type"], "capture-released");
+    let selection_readbacks = diagnostics_field(&released, "selectionCpuReadbacks");
+    assert!(
+        selection_readbacks >= 1,
+        "selectionCpuReadbacks must be at least 1 after commit (got {selection_readbacks})"
+    );
+    assert!(
+        diagnostics_field(&released, "latestCopies") >= 1,
+        "latestCopies must be at least 1 by commit time"
+    );
+
+    // Drain the terminal completed event so stdout is clean for shutdown.
+    let _ = helper.next_event(EXIT_TIMEOUT);
+
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
+}
+
+#[test]
+fn overlay_visible_diagnostics_reports_backend_and_counters() {
+    // Sanity check: the wire payload must contain every documented
+    // diagnostics field with the right shape, regardless of which backend
+    // was actually used. This guards against a future change that drops one
+    // field and silently breaks the readback-counting assertions above.
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    helper.send_command(start_command("diagnostics-shape"));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+    let overlay_visible = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(overlay_visible["type"], "overlay-visible");
+
+    let diagnostics = &overlay_visible["diagnostics"];
+    assert!(diagnostics.is_object(), "diagnostics must be an object");
+    assert!(
+        diagnostics["backend"].is_string(),
+        "backend must be a string"
+    );
+    for field in [
+        "fullFrameCpuReadbacks",
+        "selectionCpuReadbacks",
+        "latestCopies",
+        "duplicationRebuilds",
+    ] {
+        assert!(
+            diagnostics[field].is_u64(),
+            "diagnostics.{field} must be a u64, got {:?}",
+            diagnostics[field]
+        );
+    }
+
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
+}

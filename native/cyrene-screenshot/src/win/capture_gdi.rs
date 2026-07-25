@@ -32,7 +32,7 @@ use crate::{
     error::HelperError,
     geometry::DisplayRotation,
     win::{
-        capture::{CaptureBackend, CpuBgraFrame, FrozenFrame, RefreshOutcome},
+        capture::{CaptureBackend, CaptureDiagnostics, CpuBgraFrame, FrozenFrame, RefreshOutcome},
         display::DisplayInfo,
     },
 };
@@ -49,7 +49,9 @@ use crate::{
 /// `Default` impl because panicking in production is the wrong behavior.
 #[derive(Debug)]
 pub struct GdiCaptureBackend {
-    _private: (),
+    full_frame_cpu_readbacks: u64,
+    selection_cpu_readbacks: u64,
+    latest_copies: u64,
 }
 
 impl GdiCaptureBackend {
@@ -65,11 +67,19 @@ impl GdiCaptureBackend {
         // freeze().
         let probe = ScreenDcGuard::acquire()?;
         drop(probe);
-        Ok(Self { _private: () })
+        Ok(Self {
+            full_frame_cpu_readbacks: 0,
+            selection_cpu_readbacks: 0,
+            latest_copies: 0,
+        })
     }
 }
 
 impl CaptureBackend for GdiCaptureBackend {
+    fn name(&self) -> &'static str {
+        "gdi"
+    }
+
     fn refresh_latest(&mut self, _timeout_ms: u32) -> Result<RefreshOutcome, HelperError> {
         // GDI is pull-on-demand: there is no producer-consumer pipeline to
         // pump, so a refresh is always observed as "no change".
@@ -79,6 +89,9 @@ impl CaptureBackend for GdiCaptureBackend {
     fn freeze(&mut self, display: &DisplayInfo) -> Result<FrozenFrame, HelperError> {
         let captured = capture_primary_bgra(display)?;
         let (width, height, pitch, pixels) = rotate_to_canonical(captured, display.rotation)?;
+        // One full-frame CPU readback per freeze.
+        self.full_frame_cpu_readbacks = self.full_frame_cpu_readbacks.saturating_add(1);
+        self.latest_copies = self.latest_copies.saturating_add(1);
         Ok(FrozenFrame::Cpu(CpuBgraFrame {
             width,
             height,
@@ -89,6 +102,25 @@ impl CaptureBackend for GdiCaptureBackend {
 
     fn invalidate(&mut self) {
         // No persistent state to drop; nothing to do.
+    }
+
+    fn diagnostics(&self) -> CaptureDiagnostics {
+        CaptureDiagnostics {
+            backend: "gdi",
+            full_frame_cpu_readbacks: self.full_frame_cpu_readbacks,
+            selection_cpu_readbacks: self.selection_cpu_readbacks,
+            latest_copies: self.latest_copies,
+            duplication_rebuilds: 0,
+        }
+    }
+}
+
+impl GdiCaptureBackend {
+    /// Increment the selection readback counter. Called by `OverlayRenderer`
+    /// when it BitBlts the selection out of the GDI cache so the wire
+    /// diagnostics report the same number on `capture-released`.
+    pub fn record_selection_readback(&mut self) {
+        self.selection_cpu_readbacks = self.selection_cpu_readbacks.saturating_add(1);
     }
 }
 
