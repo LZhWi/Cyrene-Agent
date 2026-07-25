@@ -23,7 +23,7 @@ use crate::{
     parent_watch,
     protocol::{Command, Event, InteractionStateEvent, PROTOCOL_VERSION},
     win::{
-        capture::{CaptureBackend, CpuBgraFrame, FrozenFrame},
+        capture::{CaptureBackend, FrozenFrame},
         capture_gdi::GdiCaptureBackend,
         display::{DisplayInfo, query_primary_display},
         renderer::{OverlayRenderer, present_first_frame, qpc_elapsed_ms, qpc_now},
@@ -120,10 +120,9 @@ fn drain_closed_input_events(
 
 struct ActiveRequest {
     request_id: String,
-    /// Frozen frame retained for the lifetime of the interaction. Currently
-    /// unused beyond ownership (clipboard/encoder land in Task 6), but must
-    /// outlive the D2D/GDI upload of its CPU pixels.
-    _frame: FrozenFrame,
+    /// Frozen frame retained for the lifetime of the interaction. Uploaded by
+    /// reference into the GDI cache on present; clipboard/encoder land in Task 6.
+    frame: FrozenFrame,
 }
 
 struct OverlayApp {
@@ -197,23 +196,20 @@ impl OverlayApp {
                     }
                 };
 
-                let cpu_frame = match &frame {
-                    FrozenFrame::Cpu(cpu) => cpu.clone(),
-                    FrozenFrame::Gpu(_) => {
-                        send_error(
-                            event_tx,
-                            Some(request_id),
-                            "not-implemented",
-                            "gpu frozen frames are not supported yet",
-                            true,
-                        );
-                        return true;
-                    }
-                };
+                if matches!(frame, FrozenFrame::Gpu(_)) {
+                    send_error(
+                        event_tx,
+                        Some(request_id),
+                        "not-implemented",
+                        "gpu frozen frames are not supported yet",
+                        true,
+                    );
+                    return true;
+                }
 
                 self.active = Some(ActiveRequest {
                     request_id: request_id.clone(),
-                    _frame: frame,
+                    frame,
                 });
                 let _ = event_tx.send(Event::Accepted {
                     request_id: request_id.clone(),
@@ -229,7 +225,7 @@ impl OverlayApp {
                     state: InteractionStateEvent::Selecting,
                 });
 
-                if let Err(error) = self.present_overlay(&cpu_frame) {
+                if let Err(error) = self.present_overlay() {
                     self.finish_error(event_tx, error.code(), &error.to_string(), true);
                     return true;
                 }
@@ -263,18 +259,43 @@ impl OverlayApp {
 
     /// Spec ordering for first presentation:
     /// ShowWindow / SetForegroundWindow
-    /// → first paint (Direct2D or GDI fallback)
-    /// → UpdateWindow
+    /// → upload frozen frame
+    /// → InvalidateRect + UpdateWindow (WM_PAINT path only; no stacked &mut)
     /// → DwmFlush
     /// (caller then emits OverlayVisible)
-    fn present_overlay(&mut self, frame: &CpuBgraFrame) -> Result<(), crate::error::HelperError> {
-        self.renderer.clear_frozen();
-        self.overlay.attach_renderer(&mut self.renderer);
-        // Show first so the HWND is mapped, then size the D2D target to it.
-        self.overlay.show(&self.display)?;
-        self.renderer.resize(self.overlay.hwnd(), &self.display)?;
-        self.renderer.upload_frozen(frame)?;
-        present_first_frame(&mut self.renderer, &self.overlay, None, &self.display, None)?;
+    fn present_overlay(&mut self) -> Result<(), crate::error::HelperError> {
+        // Split borrows: upload from the stored frozen frame by reference
+        // without cloning the full BGRA buffer.
+        let Self {
+            renderer,
+            overlay,
+            display,
+            active,
+            ..
+        } = self;
+        let cpu = match active.as_ref().map(|a| &a.frame) {
+            Some(FrozenFrame::Cpu(cpu)) => cpu,
+            Some(FrozenFrame::Gpu(_)) => {
+                return Err(crate::error::HelperError::CaptureFailed(
+                    "gpu frozen frames are not supported yet".into(),
+                ));
+            }
+            None => {
+                return Err(crate::error::HelperError::CaptureFailed(
+                    "present_overlay called without an active request".into(),
+                ));
+            }
+        };
+
+        renderer.clear_frozen();
+        overlay.attach_renderer(renderer);
+        // Show first so the HWND is mapped, then size resources to it.
+        overlay.show(display)?;
+        renderer.resize(overlay.hwnd(), display)?;
+        // Exclusive borrow ends after upload; present_first_frame must not hold
+        // &mut OverlayRenderer across UpdateWindow (WM_PAINT re-enters via NonNull).
+        renderer.upload_frozen(cpu)?;
+        present_first_frame(overlay)?;
         Ok(())
     }
 

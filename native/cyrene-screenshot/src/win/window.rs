@@ -211,10 +211,6 @@ impl OverlayWindow {
     pub fn hwnd(&self) -> HWND {
         self.hwnd
     }
-
-    pub fn request_repaint(&self) {
-        let _ = unsafe { InvalidateRect(Some(self.hwnd), None, false) };
-    }
 }
 
 impl Drop for OverlayWindow {
@@ -373,7 +369,11 @@ unsafe extern "system" fn window_proc(
                 if let Some(renderer_ptr) = state.renderer {
                     // SAFETY: attach_renderer guarantees the renderer outlives
                     // the attached period; hide/detach clear this pointer first.
-                    let renderer = unsafe { &mut *renderer_ptr.as_ptr() };
+                    // Shared borrow only: paint_on_hdc reads the frozen cache and
+                    // does not mutate OverlayRenderer, so this is safe even if a
+                    // caller briefly holds &OverlayRenderer on the same thread
+                    // (present_first_frame intentionally holds none across UpdateWindow).
+                    let renderer = unsafe { &*renderer_ptr.as_ptr() };
                     let _ =
                         renderer.paint_on_hdc(hdc, hwnd, state.selection, &display, state.toolbar);
                 } else {

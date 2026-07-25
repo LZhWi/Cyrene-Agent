@@ -59,12 +59,27 @@ pub struct OverlayRenderer {
     _d2d_factory: Option<ID2D1Factory>,
 }
 
+/// Long-lived GDI cache of the frozen frame. `Drop` restores the previous
+/// object and frees the owned DC/bitmap so misuse cannot leak handles.
 struct GdiFrameCache {
     width: i32,
     height: i32,
     dib: HBITMAP,
     mem_dc: HDC,
     old_obj: HGDIOBJ,
+}
+
+impl Drop for GdiFrameCache {
+    fn drop(&mut self) {
+        // SAFETY: `mem_dc` / `dib` were created as a pair in `create_gdi_frame_cache`
+        // and `old_obj` is the object that was selected before the DIB. Restoring
+        // first satisfies Win32's rule that a selected bitmap must not be deleted.
+        unsafe {
+            let _ = SelectObject(self.mem_dc, self.old_obj);
+            let _ = DeleteObject(HGDIOBJ(self.dib.0));
+            let _ = DeleteDC(self.mem_dc);
+        }
+    }
 }
 
 impl OverlayRenderer {
@@ -102,13 +117,19 @@ impl OverlayRenderer {
     }
 
     /// Paint dimmed frozen background, selection border, and optional toolbar.
+    ///
+    /// Takes shared `&self` so paint never needs exclusive access to the
+    /// renderer (WM_PAINT and optional GetDC callers only read the cache).
     pub fn paint(
-        &mut self,
+        &self,
         hwnd: HWND,
         selection: Option<RectI>,
         display: &DisplayInfo,
         toolbar: Option<ToolbarLayout>,
     ) -> Result<(), HelperError> {
+        // SAFETY: `hwnd` is a live overlay window on this UI thread. `GetDC`
+        // returns a DC that must be paired with `ReleaseDC` for the same hwnd;
+        // we always release it below, including on paint failure.
         let hdc = unsafe { GetDC(Some(hwnd)) };
         if hdc.is_invalid() {
             return Err(windows::core::Error::from_thread().into());
@@ -120,7 +141,7 @@ impl OverlayRenderer {
 
     /// Paint using a caller-provided HDC (WM_PAINT path).
     pub fn paint_on_hdc(
-        &mut self,
+        &self,
         hdc: HDC,
         _hwnd: HWND,
         selection: Option<RectI>,
@@ -138,14 +159,8 @@ impl OverlayRenderer {
     }
 
     fn clear_gdi_cache(&mut self) {
-        if let Some(cache) = self.gdi_cache.take() {
-            // SAFETY: restore previous object then free owned DC/bitmap.
-            unsafe {
-                let _ = SelectObject(cache.mem_dc, cache.old_obj);
-                let _ = DeleteObject(HGDIOBJ(cache.dib.0));
-                let _ = DeleteDC(cache.mem_dc);
-            }
-        }
+        // Drop runs GdiFrameCache::drop (restore + DeleteObject + DeleteDC).
+        self.gdi_cache = None;
     }
 }
 
@@ -197,44 +212,241 @@ pub fn compute_toolbar(selection: RectI, display: &DisplayInfo) -> Option<Toolba
     })
 }
 
-/// First-paint helper used by the start sequence:
-/// (ShowWindow already done) → paint → UpdateWindow → DwmFlush.
-pub fn present_first_frame(
-    renderer: &mut OverlayRenderer,
-    overlay: &OverlayWindow,
-    selection: Option<RectI>,
-    display: &DisplayInfo,
-    toolbar: Option<ToolbarLayout>,
-) -> Result<(), HelperError> {
-    renderer.resize(overlay.hwnd(), display)?;
-    renderer.paint(overlay.hwnd(), selection, display, toolbar)?;
-    // SAFETY: UpdateWindow forces a synchronous WM_PAINT for the shown window.
-    let _ = unsafe { UpdateWindow(overlay.hwnd()) };
-    renderer.flush()?;
+/// First-paint helper used by the start sequence after ShowWindow / upload:
+/// `InvalidateRect` → `UpdateWindow` (WM_PAINT) → `DwmFlush`.
+///
+/// Intentionally does **not** take `&mut OverlayRenderer`. `UpdateWindow`
+/// re-enters `window_proc` and paints via the attached `NonNull` pointer; holding
+/// an overlapping exclusive borrow across that call would be stacked-borrows UB
+/// and would double-paint if a GetDC path ran first.
+///
+/// Preconditions: frozen frame uploaded, renderer attached to `overlay`, window
+/// already shown. Selection/toolbar are read from window state inside WM_PAINT.
+pub fn present_first_frame(overlay: &OverlayWindow) -> Result<(), HelperError> {
+    let hwnd = overlay.hwnd();
+    // SAFETY: marks the full client area invalid so UpdateWindow will dispatch
+    // a WM_PAINT. The window is shown and the renderer is attached by the caller.
+    let _ = unsafe { windows::Win32::Graphics::Gdi::InvalidateRect(Some(hwnd), None, false) };
+    // SAFETY: UpdateWindow pumps a synchronous WM_PAINT on this thread. No
+    // `&mut OverlayRenderer` is live on this stack frame; WM_PAINT creates the
+    // sole paint borrow through the attached NonNull.
+    let _ = unsafe { UpdateWindow(hwnd) };
+    // SAFETY: DwmFlush has no parameters; synchronizes with the compositor so
+    // the first frame is presented before overlay-visible is emitted.
+    unsafe { DwmFlush() }.map_err(HelperError::from)?;
     Ok(())
 }
 
 // ---- timing helpers (QPC) ---------------------------------------------------
 
 /// Capture `QueryPerformanceCounter` ticks.
+///
+/// Returns `0` when the counter cannot be read (should not happen on modern
+/// Windows; treated the same as a missing sample by [`qpc_elapsed_ms`]).
 pub fn qpc_now() -> i64 {
     let mut counter = 0i64;
     // SAFETY: counter points to writable aligned storage.
-    let _ = unsafe { windows::Win32::System::Performance::QueryPerformanceCounter(&mut counter) };
+    let ok = unsafe { windows::Win32::System::Performance::QueryPerformanceCounter(&mut counter) };
+    if ok.is_err() {
+        return 0;
+    }
     counter
 }
 
 /// Elapsed whole milliseconds between two QPC samples. Returns 0 on clock
-/// regression or missing frequency.
+/// regression, missing frequency, or a failed / zero `start` sample.
 pub fn qpc_elapsed_ms(start: i64, end: i64) -> u64 {
+    if start <= 0 || end <= start {
+        return 0;
+    }
     let mut freq = 0i64;
     // SAFETY: freq points to writable aligned storage.
     let ok = unsafe { windows::Win32::System::Performance::QueryPerformanceFrequency(&mut freq) };
-    if ok.is_err() || freq <= 0 || end <= start {
+    if ok.is_err() || freq <= 0 {
         return 0;
     }
     let delta = (end as u128).saturating_sub(start as u128);
     ((delta.saturating_mul(1000)) / (freq as u128)) as u64
+}
+
+// ---- GDI RAII guards (private; mirror T5a capture_gdi pattern) --------------
+//
+// HDC has no `windows_core::Free` impl, so we own each handle in a small guard
+// and free it in `Drop`. Guards are not `Send`: GDI handles are tied to the
+// thread that acquired them.
+
+/// Owns an HDC acquired via `GetDC(None)` and releases it via `ReleaseDC`.
+struct ScreenDcGuard(HDC);
+
+impl ScreenDcGuard {
+    fn acquire() -> Result<Self, HelperError> {
+        // SAFETY: `GetDC(None)` returns a DC for the entire screen; it must be
+        // released with `ReleaseDC(None, hdc)`, which we do in `Drop`.
+        let hdc = unsafe { GetDC(None) };
+        if hdc.is_invalid() {
+            return Err(windows::core::Error::from_thread().into());
+        }
+        Ok(Self(hdc))
+    }
+
+    fn handle(&self) -> HDC {
+        self.0
+    }
+}
+
+impl Drop for ScreenDcGuard {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` was acquired via `GetDC(None)` in `acquire`.
+        let _ = unsafe { ReleaseDC(None, self.0) };
+    }
+}
+
+/// Owns an HDC acquired via `CreateCompatibleDC` and deletes it via `DeleteDC`.
+struct MemoryDcGuard(HDC);
+
+impl MemoryDcGuard {
+    fn create(parent: HDC) -> Result<Self, HelperError> {
+        // SAFETY: parent is a valid DC; the returned memory DC must be freed
+        // with `DeleteDC`.
+        let hdc = unsafe { CreateCompatibleDC(Some(parent)) };
+        if hdc.is_invalid() {
+            return Err(windows::core::Error::from_thread().into());
+        }
+        Ok(Self(hdc))
+    }
+
+    fn handle(&self) -> HDC {
+        self.0
+    }
+
+    /// Disarm Drop and return the owned HDC (for transfer into `GdiFrameCache`).
+    fn into_handle(self) -> HDC {
+        let hdc = self.0;
+        std::mem::forget(self);
+        hdc
+    }
+}
+
+impl Drop for MemoryDcGuard {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` was acquired via `CreateCompatibleDC`.
+        let _ = unsafe { DeleteDC(self.0) };
+    }
+}
+
+/// Owns an HBITMAP from `CreateDIBSection` (or `CreateCompatibleBitmap`) and
+/// deletes it via `DeleteObject`.
+struct BitmapGuard {
+    bitmap: HBITMAP,
+    /// Non-null only for DIB sections created via `CreateDIBSection`.
+    bits: *mut core::ffi::c_void,
+}
+
+impl BitmapGuard {
+    fn create_dib_top_down(memory_dc: HDC, width: i32, height: i32) -> Result<Self, HelperError> {
+        let info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height, // top-down
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0 as u32,
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            },
+            bmiColors: [Default::default()],
+        };
+        let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
+        // SAFETY: `info` describes a 32-bit top-down DIB; `bits` receives the
+        // section pointer. Ownership of the HBITMAP (and its bits) transfers
+        // to this guard and is released in `Drop` unless `into_bitmap` is used.
+        let dib =
+            unsafe { CreateDIBSection(Some(memory_dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) };
+        let dib = match dib {
+            Ok(dib) if !bits.is_null() => dib,
+            Ok(dib) => {
+                // Non-null HBITMAP with null bits: free explicitly and error.
+                let _ = unsafe { DeleteObject(HGDIOBJ(dib.0)) };
+                return Err(HelperError::CaptureFailed(
+                    "CreateDIBSection returned a null bits pointer".into(),
+                ));
+            }
+            Err(error) => return Err(error.into()),
+        };
+        Ok(Self { bitmap: dib, bits })
+    }
+
+    fn create_compatible(screen_dc: HDC, width: i32, height: i32) -> Result<Self, HelperError> {
+        // SAFETY: `screen_dc` is a valid DC; the bitmap must be freed with
+        // `DeleteObject`.
+        let bmp = unsafe { CreateCompatibleBitmap(screen_dc, width, height) };
+        if bmp.is_invalid() {
+            return Err(windows::core::Error::from_thread().into());
+        }
+        Ok(Self {
+            bitmap: bmp,
+            bits: std::ptr::null_mut(),
+        })
+    }
+
+    fn bits(&self) -> *mut core::ffi::c_void {
+        self.bits
+    }
+
+    /// Disarm Drop and return the owned HBITMAP (for transfer into `GdiFrameCache`).
+    fn into_bitmap(self) -> HBITMAP {
+        let bitmap = self.bitmap;
+        std::mem::forget(self);
+        bitmap
+    }
+}
+
+impl Drop for BitmapGuard {
+    fn drop(&mut self) {
+        // SAFETY: `self.bitmap` was acquired via CreateDIBSection or
+        // CreateCompatibleBitmap and is not currently selected into a DC
+        // (SelectionGuard restores first when used).
+        let _ = unsafe { DeleteObject(HGDIOBJ(self.bitmap.0)) };
+    }
+}
+
+/// Restores the GDI object that was selected before a temporary bitmap.
+///
+/// Declare after the bitmap guard so reverse drop order restores before
+/// `DeleteObject`, including during unwind.
+struct SelectionGuard {
+    hdc: HDC,
+    previous: HGDIOBJ,
+    released: bool,
+}
+
+impl SelectionGuard {
+    fn new(hdc: HDC, previous: HGDIOBJ) -> Self {
+        Self {
+            hdc,
+            previous,
+            released: false,
+        }
+    }
+
+    /// Disarm Drop after a successful intentional transfer (caller keeps the
+    /// selection live inside `GdiFrameCache`).
+    fn disarm(mut self) {
+        self.released = true;
+    }
+}
+
+impl Drop for SelectionGuard {
+    fn drop(&mut self) {
+        if !self.released {
+            // SAFETY: best-effort restore; Drop cannot report failure.
+            let _ = unsafe { SelectObject(self.hdc, self.previous) };
+        }
+    }
 }
 
 // ---- GDI helpers ------------------------------------------------------------
@@ -245,51 +457,17 @@ fn create_gdi_frame_cache(frame: &CpuBgraFrame) -> Result<GdiFrameCache, HelperE
     let height = i32::try_from(frame.height)
         .map_err(|_| HelperError::InvalidDisplay("frame height does not fit i32".into()))?;
 
-    // SAFETY: desktop DC acquisition for creating a compatible DIB.
-    let screen_dc = unsafe { GetDC(None) };
-    if screen_dc.is_invalid() {
-        return Err(windows::core::Error::from_thread().into());
-    }
-    // SAFETY: screen_dc is valid.
-    let mem_dc = unsafe { CreateCompatibleDC(Some(screen_dc)) };
-    if mem_dc.is_invalid() {
-        let _ = unsafe { ReleaseDC(None, screen_dc) };
-        return Err(windows::core::Error::from_thread().into());
-    }
-
-    let info = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: width,
-            biHeight: -height, // top-down
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0 as u32,
-            biSizeImage: 0,
-            biXPelsPerMeter: 0,
-            biYPelsPerMeter: 0,
-            biClrUsed: 0,
-            biClrImportant: 0,
-        },
-        bmiColors: [Default::default()],
-    };
-    let mut bits: *mut core::ffi::c_void = std::ptr::null_mut();
-    // SAFETY: info describes a 32-bit top-down DIB; bits receives the section pointer.
-    let dib = unsafe { CreateDIBSection(Some(mem_dc), &info, DIB_RGB_COLORS, &mut bits, None, 0) };
-    if dib.is_err() || bits.is_null() {
-        let _ = unsafe { DeleteDC(mem_dc) };
-        let _ = unsafe { ReleaseDC(None, screen_dc) };
-        return Err(dib
-            .err()
-            .unwrap_or_else(windows::core::Error::from_thread)
-            .into());
-    }
-    let dib = dib.unwrap();
+    // Guards acquire in dependency order; on any `?` they release in reverse.
+    let screen_dc = ScreenDcGuard::acquire()?;
+    let mem_dc = MemoryDcGuard::create(screen_dc.handle())?;
+    let dib = BitmapGuard::create_dib_top_down(mem_dc.handle(), width, height)?;
 
     // Copy pixels. Pitch may exceed width*4; copy row by row.
     let dst_pitch = (frame.width * 4) as usize;
     let src_pitch = frame.pitch as usize;
-    // SAFETY: bits points at biWidth*abs(biHeight)*4 writable bytes.
+    let bits = dib.bits();
+    // SAFETY: bits points at biWidth*abs(biHeight)*4 writable bytes owned by
+    // the DIB section; we copy at most min(src,dst) bytes per row.
     unsafe {
         for y in 0..frame.height as usize {
             let src = frame.pixels.as_ptr().add(y * src_pitch);
@@ -299,14 +477,28 @@ fn create_gdi_frame_cache(frame: &CpuBgraFrame) -> Result<GdiFrameCache, HelperE
     }
 
     // SAFETY: select DIB into mem_dc for subsequent BitBlt source use.
-    let old_obj = unsafe { SelectObject(mem_dc, HGDIOBJ(dib.0)) };
-    let _ = unsafe { ReleaseDC(None, screen_dc) };
+    let old_obj = unsafe { SelectObject(mem_dc.handle(), HGDIOBJ(dib.bitmap.0)) };
+    if old_obj.0.is_null() || old_obj.0 as isize == -1 {
+        return Err(windows::core::Error::from_thread().into());
+    }
+    // Keep the DIB selected for the lifetime of GdiFrameCache. Disarm the
+    // selection guard so Drop does not restore before we transfer ownership;
+    // GdiFrameCache::drop restores `old_obj` itself.
+    let selection = SelectionGuard::new(mem_dc.handle(), old_obj);
+    selection.disarm();
+
+    // Transfer DC + bitmap ownership into the long-lived cache. Screen DC
+    // drops here (ReleaseDC). Memory DC and DIB guards are disarmed via
+    // into_* so their Drop does not free the transferred handles.
+    let mem_dc_handle = mem_dc.into_handle();
+    let dib_handle = dib.into_bitmap();
+    drop(screen_dc);
 
     Ok(GdiFrameCache {
         width,
         height,
-        dib,
-        mem_dc,
+        dib: dib_handle,
+        mem_dc: mem_dc_handle,
         old_obj,
     })
 }
@@ -330,7 +522,7 @@ fn paint_gdi_on_hdc(
     };
 
     if let Some(cache) = cache {
-        // SAFETY: cache.mem_dc has the frozen DIB selected.
+        // SAFETY: cache.mem_dc has the frozen DIB selected for the cache lifetime.
         unsafe {
             let _ = BitBlt(
                 hdc,
@@ -390,25 +582,19 @@ fn alpha_dim(
     height: i32,
     selection: Option<RectI>,
 ) -> Result<(), HelperError> {
-    // Create a 1x1 black DIB and AlphaBlend it stretched. When a selection is
+    // Create a 1x1 black bitmap and AlphaBlend it stretched. When a selection is
     // present we dim the four surrounding rects so the selection stays bright.
-    // SAFETY: desktop DC for compatible resources.
-    let screen_dc = unsafe { GetDC(None) };
-    if screen_dc.is_invalid() {
+    // RAII guards release every handle if FillRect / AlphaBlend panics.
+    let screen_dc = ScreenDcGuard::acquire()?;
+    let mem_dc = MemoryDcGuard::create(screen_dc.handle())?;
+    let bmp = BitmapGuard::create_compatible(screen_dc.handle(), 1, 1)?;
+    // SAFETY: select the 1x1 bitmap into mem_dc; SelectionGuard restores on drop.
+    let old = unsafe { SelectObject(mem_dc.handle(), HGDIOBJ(bmp.bitmap.0)) };
+    if old.0.is_null() || old.0 as isize == -1 {
         return Err(windows::core::Error::from_thread().into());
     }
-    let mem_dc = unsafe { CreateCompatibleDC(Some(screen_dc)) };
-    if mem_dc.is_invalid() {
-        let _ = unsafe { ReleaseDC(None, screen_dc) };
-        return Err(windows::core::Error::from_thread().into());
-    }
-    let bmp = unsafe { CreateCompatibleBitmap(screen_dc, 1, 1) };
-    if bmp.is_invalid() {
-        let _ = unsafe { DeleteDC(mem_dc) };
-        let _ = unsafe { ReleaseDC(None, screen_dc) };
-        return Err(windows::core::Error::from_thread().into());
-    }
-    let old = unsafe { SelectObject(mem_dc, HGDIOBJ(bmp.0)) };
+    let _selection = SelectionGuard::new(mem_dc.handle(), old);
+
     let brush = unsafe { CreateSolidBrush(COLORREF(0x00000000)) };
     if !brush.is_invalid() {
         let r = RECT {
@@ -418,7 +604,7 @@ fn alpha_dim(
             bottom: 1,
         };
         unsafe {
-            FillRect(mem_dc, &r, brush);
+            FillRect(mem_dc.handle(), &r, brush);
             let _ = DeleteObject(HGDIOBJ(brush.0));
         }
     }
@@ -434,7 +620,7 @@ fn alpha_dim(
             return;
         }
         // SAFETY: mem_dc holds a 1x1 black bitmap; AlphaBlend stretches it.
-        let _ = unsafe { AlphaBlend(hdc, x, y, w, h, mem_dc, 0, 0, 1, 1, blend) };
+        let _ = unsafe { AlphaBlend(hdc, x, y, w, h, mem_dc.handle(), 0, 0, 1, 1, blend) };
     };
 
     if let Some(sel) = selection {
@@ -450,12 +636,8 @@ fn alpha_dim(
         dim_rect(hdc, 0, 0, width, height);
     }
 
-    unsafe {
-        let _ = SelectObject(mem_dc, old);
-        let _ = DeleteObject(HGDIOBJ(bmp.0));
-        let _ = DeleteDC(mem_dc);
-        let _ = ReleaseDC(None, screen_dc);
-    }
+    // Guards drop in reverse order: selection restores, then bitmap, mem DC,
+    // screen DC.
     Ok(())
 }
 
@@ -513,4 +695,49 @@ pub(crate) fn paint_hdc(
     display: &DisplayInfo,
 ) -> Result<(), HelperError> {
     paint_gdi_on_hdc(hdc, None, selection, display, None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_frame(width: u32, height: u32) -> CpuBgraFrame {
+        let pitch = width * 4;
+        CpuBgraFrame {
+            width,
+            height,
+            pitch,
+            pixels: vec![0u8; (pitch * height) as usize],
+        }
+    }
+
+    #[test]
+    fn upload_count_increments_per_upload_and_survives_clear() {
+        let mut renderer = OverlayRenderer::new().expect("OverlayRenderer::new");
+        assert_eq!(renderer.upload_count, 0);
+
+        let frame = sample_frame(8, 8);
+        renderer
+            .upload_frozen(&frame)
+            .expect("first upload_frozen must succeed under an interactive session");
+        assert_eq!(renderer.upload_count, 1);
+
+        renderer
+            .upload_frozen(&frame)
+            .expect("second upload replaces the cache");
+        assert_eq!(renderer.upload_count, 2);
+
+        renderer.clear_frozen();
+        // clear drops the GDI cache (Drop path) but does not reset the counter.
+        assert_eq!(renderer.upload_count, 2);
+        assert!(renderer.gdi_cache.is_none());
+    }
+
+    #[test]
+    fn gdi_frame_cache_drop_releases_without_panic() {
+        let frame = sample_frame(4, 4);
+        let cache = create_gdi_frame_cache(&frame).expect("create_gdi_frame_cache");
+        // Explicit drop exercises GdiFrameCache::drop (SelectObject + Delete*).
+        drop(cache);
+    }
 }
