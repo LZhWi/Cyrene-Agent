@@ -19,6 +19,8 @@
 
 pub mod capture;
 pub mod capture_gdi;
+pub mod clipboard;
 pub mod display;
+pub mod encoder;
 pub mod renderer;
 pub mod window;

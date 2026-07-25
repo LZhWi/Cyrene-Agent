@@ -123,12 +123,14 @@ struct Helper {
 
 impl Helper {
     fn spawn(parent_pid: u32, protocol_version: u32) -> Self {
+        Self::spawn_with_output_dir(parent_pid, protocol_version, absolute_output_dir())
+    }
+
+    fn spawn_with_output_dir(parent_pid: u32, protocol_version: u32, output_dir: PathBuf) -> Self {
         let mut child = Command::new(env!("CARGO_BIN_EXE_cyrene-screenshot"))
             .args([
                 "--output-dir",
-                absolute_output_dir()
-                    .to_str()
-                    .expect("UTF-8 temp directory"),
+                output_dir.to_str().expect("UTF-8 output directory"),
                 "--protocol-version",
                 &protocol_version.to_string(),
                 "--parent-pid",
@@ -292,16 +294,81 @@ fn absolute_output_dir() -> PathBuf {
     std::env::temp_dir().join("cyrene-screenshot-smoke")
 }
 
+fn ensure_clean_output_dir() -> PathBuf {
+    let dir = absolute_output_dir();
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create smoke output dir");
+    dir
+}
+
+fn count_pngs(dir: &std::path::Path) -> usize {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .path()
+                        .extension()
+                        .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+                })
+                .count()
+        })
+        .unwrap_or(0)
+}
+
 fn ready_event() -> serde_json::Value {
     serde_json::json!({"type": "ready", "protocolVersion": 1})
 }
 
 fn start_command(request_id: &str) -> serde_json::Value {
+    start_command_with_mode(request_id, "clipboard-only")
+}
+
+fn start_command_with_mode(request_id: &str, mode: &str) -> serde_json::Value {
     serde_json::json!({
         "type": "start",
         "requestId": request_id,
-        "mode": "clipboard-only"
+        "mode": mode,
     })
+}
+
+/// Drive the helper from `start` through `committing` to a release. Returns
+/// the events emitted between `commit` (enter key press) and the caller taking
+/// over. Drains `accepted`, `selecting`, `overlay-visible`, `selected`, and
+/// `committing` in order; subsequent events depend on mode and are returned
+/// to the caller.
+fn drive_to_committing(helper: &mut Helper, request_id: &str) {
+    helper.send_command(start_command(request_id));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
+
+    let hwnd = helper.overlay_hwnd();
+    let point = |x: i32, y: i32| LPARAM(((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as isize);
+    unsafe {
+        PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), point(32, 32)).unwrap();
+        PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), point(96, 96)).unwrap();
+        PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), point(96, 96)).unwrap();
+    }
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selected");
+    unsafe {
+        PostMessageW(
+            Some(hwnd),
+            WM_KEYDOWN,
+            WPARAM(VK_RETURN.0 as usize),
+            LPARAM(0),
+        )
+    }
+    .unwrap();
+    assert_eq!(
+        helper.next_event(EXIT_TIMEOUT),
+        serde_json::json!({
+            "type": "interaction-state",
+            "requestId": request_id,
+            "state": "committing"
+        })
+    );
 }
 
 #[test]
@@ -439,43 +506,29 @@ fn escape_after_selecting_cancels() {
 }
 
 #[test]
-fn enter_after_valid_selection_emits_committing_then_not_implemented() {
+fn enter_after_valid_selection_emits_committing_then_release_and_completed() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
-    helper.send_command(start_command("commit"));
-    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
-    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
-    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
+    drive_to_committing(&mut helper, "commit");
 
-    let hwnd = helper.overlay_hwnd();
-    let point = |x: i32, y: i32| LPARAM(((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as isize);
-    unsafe {
-        PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), point(32, 32)).unwrap();
-        PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), point(96, 96)).unwrap();
-        PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), point(96, 96)).unwrap();
-    }
-    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selected");
-    unsafe {
-        PostMessageW(
-            Some(hwnd),
-            WM_KEYDOWN,
-            WPARAM(VK_RETURN.0 as usize),
-            LPARAM(0),
-        )
-    }
-    .unwrap();
-    assert_eq!(
-        helper.next_event(EXIT_TIMEOUT),
-        serde_json::json!({
-            "type": "interaction-state",
-            "requestId": "commit",
-            "state": "committing"
-        })
-    );
-    let terminal = helper.next_event(EXIT_TIMEOUT);
-    assert_eq!(terminal["type"], "error");
-    assert_eq!(terminal["requestId"], "commit");
-    assert_eq!(terminal["code"], "not-implemented");
+    let released = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(released["type"], "capture-released");
+    assert_eq!(released["requestId"], "commit");
+    assert_eq!(released["clipboardWritten"], true);
+    let width = released["width"].as_u64().expect("width is u32");
+    let height = released["height"].as_u64().expect("height is u32");
+    assert!(width > 0, "released width must be positive");
+    assert!(height > 0, "released height must be positive");
+
+    let completed = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(completed["type"], "completed");
+    assert_eq!(completed["requestId"], "commit");
+    assert_eq!(completed["fileName"], serde_json::Value::Null);
+    assert_eq!(completed["width"].as_u64(), Some(width));
+    assert_eq!(completed["height"].as_u64(), Some(height));
+    assert_eq!(completed["mime"], "image/png");
+    assert_eq!(completed["clipboardWritten"], true);
+
     helper.send_command(serde_json::json!({"type": "shutdown"}));
     assert!(helper.finish(EXIT_TIMEOUT).0.success());
 }
@@ -837,4 +890,300 @@ fn parent_shutdown_closes_a_continuous_command_producer_and_drains_stdout() {
             && event["requestId"] == "flood"
             && event["reason"] == "no-active-capture"
     }));
+}
+
+// ---------------------------------------------------------------------------
+// Task 6: clipboard + async PNG encoding smoke tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn clipboard_only_does_not_generate_png() {
+    let dir = ensure_clean_output_dir();
+    assert_eq!(count_pngs(&dir), 0, "smoke dir must start empty");
+
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    drive_to_committing(&mut helper, "clipboard-only");
+
+    let released = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(released["type"], "capture-released");
+    assert_eq!(released["requestId"], "clipboard-only");
+
+    let completed = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(completed["type"], "completed");
+    assert_eq!(completed["requestId"], "clipboard-only");
+    assert_eq!(
+        completed["fileName"],
+        serde_json::Value::Null,
+        "clipboard-only must produce no fileName"
+    );
+
+    // Brief settling delay for any (incorrect) async encoder to enqueue work.
+    std::thread::sleep(Duration::from_millis(250));
+    assert_eq!(
+        count_pngs(&dir),
+        0,
+        "clipboard-only must not write any PNG into the output dir"
+    );
+    assert_eq!(
+        std::fs::read_dir(&dir).map(|d| d.count()).unwrap_or(0),
+        0,
+        "clipboard-only must not write any file into the output dir"
+    );
+
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
+}
+
+#[test]
+fn clipboard_and_file_enqueues_encode_job_and_completes_after_encode() {
+    let dir = ensure_clean_output_dir();
+    assert_eq!(count_pngs(&dir), 0);
+
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    helper.send_command(start_command_with_mode("file-mode", "clipboard-and-file"));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
+
+    let hwnd = helper.overlay_hwnd();
+    let point = |x: i32, y: i32| LPARAM(((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as isize);
+    unsafe {
+        PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), point(48, 48)).unwrap();
+        PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), point(160, 120)).unwrap();
+        PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), point(160, 120)).unwrap();
+    }
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selected");
+    unsafe {
+        PostMessageW(
+            Some(hwnd),
+            WM_KEYDOWN,
+            WPARAM(VK_RETURN.0 as usize),
+            LPARAM(0),
+        )
+    }
+    .unwrap();
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "committing");
+
+    let released = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(released["type"], "capture-released");
+    assert_eq!(released["requestId"], "file-mode");
+    let released_width = released["width"].as_u64().expect("width is u32");
+    let released_height = released["height"].as_u64().expect("height is u32");
+
+    // The encoder can finish before or after the helper processes our new
+    // start command; we do not assume an order. The invariant we verify is
+    // that BOTH the file-mode `completed` event arrives AND a new start is
+    // accepted (i.e., the helper is not stuck waiting on the encode).
+    helper.send_command(start_command("after-release"));
+
+    let mut completed: Option<serde_json::Value> = None;
+    let mut accepted_after_release = false;
+    let drain_deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < drain_deadline {
+        if completed.is_some() && accepted_after_release {
+            break;
+        }
+        let event = helper.next_event(EXIT_TIMEOUT);
+        match event["type"].as_str() {
+            Some("accepted") if event["requestId"] == "after-release" => {
+                accepted_after_release = true;
+                assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+                assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
+            }
+            Some("completed") if event["requestId"] == "file-mode" => {
+                completed = Some(event);
+            }
+            _ => panic!("unexpected event after capture-released: {event:?}"),
+        }
+    }
+
+    assert!(
+        accepted_after_release,
+        "a new start must be accepted while an encode is pending"
+    );
+    let completed = completed.expect("expected completed event for file-mode");
+    assert_eq!(completed["width"].as_u64(), Some(released_width));
+    assert_eq!(completed["height"].as_u64(), Some(released_height));
+    assert_eq!(completed["mime"], "image/png");
+    let file_name = completed["fileName"]
+        .as_str()
+        .expect("clipboard-and-file must produce a fileName")
+        .to_string();
+    assert!(
+        file_name.ends_with(".png"),
+        "file name {file_name} must end with .png"
+    );
+    let stem = file_name.trim_end_matches(".png");
+    assert!(
+        uuid::Uuid::parse_str(stem).is_ok(),
+        "file stem {stem} must be a UUID"
+    );
+
+    let on_disk = dir.join(&file_name);
+    assert!(
+        on_disk.is_file(),
+        "expected PNG at {} but it was not written",
+        on_disk.display()
+    );
+    let meta = std::fs::metadata(&on_disk).expect("stat PNG");
+    assert!(meta.len() > 0, "PNG must not be empty");
+
+    let pngs = count_pngs(&dir);
+    assert_eq!(pngs, 1, "exactly one PNG must remain in the output dir");
+
+    // No temp file should leak past the rename.
+    let leaks: Vec<_> = std::fs::read_dir(&dir)
+        .expect("read output dir")
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .path()
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.ends_with(".tmp"))
+        })
+        .collect();
+    assert!(leaks.is_empty(), "no .tmp files should remain");
+
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
+}
+
+#[test]
+fn capture_released_returns_clipboard_written_and_dimensions() {
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    drive_to_committing(&mut helper, "release-fields");
+
+    let released = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(released["type"], "capture-released");
+    assert_eq!(released["requestId"], "release-fields");
+    assert!(
+        released["clipboardWritten"].is_boolean(),
+        "clipboardWritten must be a bool"
+    );
+    assert!(released["width"].is_number(), "width must be a number");
+    assert!(released["height"].is_number(), "height must be a number");
+    let width = released["width"].as_u64().expect("width is u32");
+    let height = released["height"].as_u64().expect("height is u64");
+    assert!(
+        width >= 4 && width < 100_000,
+        "width must be in a sane range"
+    );
+    assert!(
+        height >= 4 && height < 100_000,
+        "height must be in a sane range"
+    );
+
+    // Drain the terminal completed event so stdout is clean for shutdown.
+    let _ = helper.next_event(EXIT_TIMEOUT);
+
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
+}
+
+#[test]
+fn encode_failure_removes_temp_file_and_emits_error() {
+    // Make the helper's output dir point at an existing *regular file* so
+    // that the WIC stream init (which calls CreateFile on the .tmp path)
+    // fails with a Windows "not a directory" error. This is robust because
+    // the path round-trips through Command::args losslessly on Windows.
+    let dir = ensure_clean_output_dir();
+    let bogus_output_dir = dir.join("not-a-directory");
+    std::fs::write(&bogus_output_dir, b"this is a regular file").expect("seed blocker file");
+
+    // Spawn a helper whose --output-dir is the regular file. The frozen
+    // frame and selection extract are independent of the output dir, so the
+    // helper accepts the start and reaches `committing` normally; the
+    // encoder worker is what fails.
+    let mut helper = Helper::spawn_with_output_dir(std::process::id(), 1, bogus_output_dir.clone());
+    helper.expect_ready();
+    helper.send_command(start_command_with_mode("encode-fail", "clipboard-and-file"));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
+
+    // Drive selection + commit so the encoder runs against the bogus dir.
+    let hwnd = helper.overlay_hwnd();
+    let point = |x: i32, y: i32| LPARAM(((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as isize);
+    unsafe {
+        PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), point(48, 48)).unwrap();
+        PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), point(160, 120)).unwrap();
+        PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), point(160, 120)).unwrap();
+    }
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selected");
+    unsafe {
+        PostMessageW(
+            Some(hwnd),
+            WM_KEYDOWN,
+            WPARAM(VK_RETURN.0 as usize),
+            LPARAM(0),
+        )
+    }
+    .unwrap();
+    assert_eq!(
+        helper.next_event(EXIT_TIMEOUT),
+        serde_json::json!({
+            "type": "interaction-state",
+            "requestId": "encode-fail",
+            "state": "committing"
+        })
+    );
+
+    // After committing we get capture-released and then the encoder worker
+    // emits the terminal error. Drain until we see the terminal for the
+    // encode-fail request.
+    let released = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(released["type"], "capture-released");
+    assert_eq!(released["requestId"], "encode-fail");
+    assert_eq!(released["clipboardWritten"], true);
+
+    let mut terminal: Option<serde_json::Value> = None;
+    let drain_deadline = Instant::now() + Duration::from_secs(15);
+    while Instant::now() < drain_deadline {
+        let event = helper.next_event(EXIT_TIMEOUT);
+        if event["requestId"] == "encode-fail"
+            && (event["type"] == "error" || event["type"] == "completed")
+        {
+            terminal = Some(event);
+            break;
+        }
+    }
+
+    let terminal = terminal.expect("terminal event for encode-fail");
+    assert_eq!(terminal["type"], "error");
+    assert_eq!(terminal["code"], "encode-failed");
+    assert_eq!(terminal["requestId"], "encode-fail");
+    assert_eq!(terminal["recoverable"], false);
+
+    // The blocker file must still be the original regular file; no .tmp must
+    // have been created next to it (or in the parent dir).
+    let parent = bogus_output_dir.parent().expect("blocker has parent");
+    let leaked_tmp: Vec<_> = std::fs::read_dir(parent)
+        .map(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .filter(|entry| {
+                    entry
+                        .path()
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.ends_with(".tmp"))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    assert!(
+        leaked_tmp.is_empty(),
+        "no temp file may leak on encode failure"
+    );
+
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    let (status, _events) = helper.finish(EXIT_TIMEOUT);
+    assert!(
+        status.success(),
+        "helper must exit cleanly even on encode failure"
+    );
 }

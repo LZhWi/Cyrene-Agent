@@ -1,4 +1,7 @@
-use std::sync::mpsc::Receiver;
+use std::{
+    path::PathBuf,
+    sync::mpsc::{Receiver, Sender},
+};
 
 use windows::{
     Win32::{
@@ -21,11 +24,13 @@ use crate::{
         spawn_stdout_writer,
     },
     parent_watch,
-    protocol::{Command, Event, InteractionStateEvent, PROTOCOL_VERSION},
+    protocol::{CaptureMode, Command, Event, InteractionStateEvent, PROTOCOL_VERSION},
     win::{
         capture::{CaptureBackend, FrozenFrame},
         capture_gdi::GdiCaptureBackend,
+        clipboard::write_cf_dibv5,
         display::{DisplayInfo, query_primary_display},
+        encoder::{self, EncodeJob},
         renderer::{OverlayRenderer, present_first_frame, qpc_elapsed_ms, qpc_now},
         window::{OverlayAction, OverlayWindow},
     },
@@ -49,7 +54,13 @@ pub fn run(options: CliOptions) -> Result<(), AppError> {
         })
         .map_err(|_| AppError::Runtime("stdout writer stopped before ready".into()))?;
 
-    let message_result = run_message_loop(&window, &channels, &input_gate, &input_event_rx);
+    let message_result = run_message_loop(
+        &window,
+        &channels,
+        &input_gate,
+        &input_event_rx,
+        options.output_dir.clone(),
+    );
     for event in input_gate.close() {
         let _ = channels.event_tx.send(event);
     }
@@ -69,10 +80,11 @@ fn run_message_loop(
     channels: &RuntimeChannels,
     input_gate: &InputGate,
     input_event_rx: &Receiver<Event>,
+    output_dir: PathBuf,
 ) -> Result<(), AppError> {
     let display = query_primary_display()?;
     let overlay = OverlayWindow::create(&display)?;
-    let mut app_state = OverlayApp::new(display, overlay)?;
+    let mut app_state = OverlayApp::new(display, overlay, output_dir)?;
     let mut message = MSG::default();
     loop {
         // SAFETY: message points to initialized writable storage and the window
@@ -120,6 +132,7 @@ fn drain_closed_input_events(
 
 struct ActiveRequest {
     request_id: String,
+    mode: CaptureMode,
     /// Frozen frame retained for the lifetime of the interaction. Uploaded by
     /// reference into the GDI cache on present; clipboard/encoder land in Task 6.
     frame: FrozenFrame,
@@ -131,16 +144,22 @@ struct OverlayApp {
     capture: GdiCaptureBackend,
     renderer: OverlayRenderer,
     active: Option<ActiveRequest>,
+    output_dir: PathBuf,
 }
 
 impl OverlayApp {
-    fn new(display: DisplayInfo, overlay: OverlayWindow) -> Result<Self, AppError> {
+    fn new(
+        display: DisplayInfo,
+        overlay: OverlayWindow,
+        output_dir: PathBuf,
+    ) -> Result<Self, AppError> {
         Ok(Self {
             display,
             overlay,
             capture: GdiCaptureBackend::new()?,
             renderer: OverlayRenderer::new()?,
             active: None,
+            output_dir,
         })
     }
 
@@ -150,7 +169,7 @@ impl OverlayApp {
         event_tx: &std::sync::mpsc::Sender<Event>,
     ) -> bool {
         match command {
-            Command::Start { request_id, .. } => {
+            Command::Start { request_id, mode } => {
                 if self.active.is_some() {
                     send_error(
                         event_tx,
@@ -209,6 +228,7 @@ impl OverlayApp {
 
                 self.active = Some(ActiveRequest {
                     request_id: request_id.clone(),
+                    mode,
                     frame,
                 });
                 let _ = event_tx.send(Event::Accepted {
@@ -303,9 +323,10 @@ impl OverlayApp {
         let Some(action) = self.overlay.take_action() else {
             return;
         };
-        let Some(request_id) = self.active.as_ref().map(|active| active.request_id.clone()) else {
+        let Some(active) = self.active.as_ref() else {
             return;
         };
+        let request_id = active.request_id.clone();
         match action {
             OverlayAction::Selected => {
                 let _ = event_tx.send(Event::InteractionState {
@@ -315,15 +336,10 @@ impl OverlayApp {
             }
             OverlayAction::Commit => {
                 let _ = event_tx.send(Event::InteractionState {
-                    request_id,
+                    request_id: request_id.clone(),
                     state: InteractionStateEvent::Committing,
                 });
-                self.finish_error(
-                    event_tx,
-                    "not-implemented",
-                    "clipboard commit is not implemented",
-                    true,
-                );
+                self.commit(event_tx);
             }
             OverlayAction::Cancel => self.cancel(event_tx, "user-cancelled"),
             OverlayAction::DisplayChanged => {
@@ -333,6 +349,93 @@ impl OverlayApp {
                     "display topology or DPI changed during capture",
                     true,
                 );
+            }
+        }
+    }
+
+    /// Execute the real commit path described in the T6 plan:
+    ///   1. Extract the selection BGRA from the frozen cache (best effort;
+    ///      failure aborts the commit with `selection-extract-failed`).
+    ///   2. Publish the selection to the clipboard (failure sets
+    ///      `clipboard_written: false` but continues).
+    ///   3. Hide the overlay, clear the GDI cache, and release the
+    ///      interaction state to Idle.
+    ///   4. Emit `Event::CaptureReleased` so the Electron side can unblock
+    ///      the user immediately (paste works, attachment does not).
+    ///   5. For `clipboard-only`, emit `Event::Completed { fileName: None }`
+    ///      with the clipboard flag.
+    ///   6. For `clipboard-and-file`, spawn the encoder thread (owning the
+    ///      selection BGRA) and emit `Event::Completed { fileName: Some }`
+    ///      or `Event::Error { code: encode-failed }` from the worker.
+    fn commit(&mut self, event_tx: &Sender<Event>) {
+        // Step 1: read selection while it is still valid (overlay still up).
+        let selection = self.overlay.selection().unwrap_or(crate::geometry::RectI {
+            x: 0,
+            y: 0,
+            width: self.display.bounds.width,
+            height: self.display.bounds.height,
+        });
+        let selection = match self.renderer.extract_selection(selection) {
+            Ok(selection) => selection,
+            Err(error) => {
+                self.finish_error(
+                    event_tx,
+                    "selection-extract-failed",
+                    &error.to_string(),
+                    true,
+                );
+                return;
+            }
+        };
+        let selection_width = selection.width;
+        let selection_height = selection.height;
+
+        // Step 2: clipboard (best effort — capture-released records the flag).
+        let clipboard_written = write_cf_dibv5(self.overlay.hwnd(), &selection)
+            .map(|()| true)
+            .unwrap_or_else(|error| {
+                eprintln!("cyrene-screenshot: clipboard write failed: {error}");
+                false
+            });
+
+        // Step 3: take the active request, hide overlay, free GDI cache, and
+        // mark the overlay input state as Idle.
+        let active = match self.active.take() {
+            Some(active) => active,
+            None => return,
+        };
+        self.teardown_overlay();
+
+        // Step 4: capture-released so the caller can immediately offer
+        // clipboard-based paste.
+        let _ = event_tx.send(Event::CaptureReleased {
+            request_id: active.request_id.clone(),
+            clipboard_written,
+            width: selection_width,
+            height: selection_height,
+        });
+
+        // Step 5/6: terminal event depends on capture mode.
+        match active.mode {
+            CaptureMode::ClipboardOnly => {
+                let _ = event_tx.send(Event::Completed {
+                    request_id: active.request_id,
+                    file_name: None,
+                    width: selection_width,
+                    height: selection_height,
+                    mime: "image/png",
+                    clipboard_written,
+                });
+            }
+            CaptureMode::ClipboardAndFile => {
+                let file_name = encoder::new_png_file_name();
+                let job = EncodeJob {
+                    request_id: active.request_id,
+                    file_name,
+                    output_dir: self.output_dir.clone(),
+                    frame: selection,
+                };
+                encoder::spawn_encode_job(job, event_tx.clone());
             }
         }
     }

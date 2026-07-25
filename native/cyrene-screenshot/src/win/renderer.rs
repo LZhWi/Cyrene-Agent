@@ -158,6 +158,130 @@ impl OverlayRenderer {
         unsafe { DwmFlush() }.map_err(HelperError::from)
     }
 
+    /// Extract a copy of the cached frozen frame cropped to `rect` (in
+    /// display-local coordinates, i.e. origin at top-left of the captured
+    /// desktop). The returned [`CpuBgraFrame`] owns its pixel buffer so the
+    /// renderer can hand it to the clipboard writer and (optionally) the
+    /// encoder thread without aliasing the GDI cache.
+    ///
+    /// Implementation notes:
+    ///   * We allocate a top-down destination DIB section via `CreateDIBSection`
+    ///     sized to `rect.width × rect.height`. `BitBlt(SRCCOPY)` from the
+    ///     frozen cache DC into the destination DC copies pixels in their
+    ///     native orientation (top-down); we then read them out via
+    ///     `GetDIBits` so the returned buffer is independent of GDI lifetime.
+    ///   * Any failure between guards is rolled back via the standard RAII
+    ///     guards — no partial DIB can leak past a returned `Err`.
+    pub fn extract_selection(&self, rect: RectI) -> Result<CpuBgraFrame, HelperError> {
+        if rect.width == 0 || rect.height == 0 {
+            return Err(HelperError::CaptureFailed(
+                "extract_selection called with zero-sized rect".into(),
+            ));
+        }
+        let cache = self.gdi_cache.as_ref().ok_or_else(|| {
+            HelperError::CaptureFailed(
+                "extract_selection called without an active frozen cache".into(),
+            )
+        })?;
+
+        // Selection is in display-local coordinates; clamp to the cache
+        // dimensions so a malformed selection cannot read past the DIB.
+        let cache_w = u32::try_from(cache.width).map_err(|_| {
+            HelperError::CaptureFailed(format!(
+                "frozen cache width {} does not fit in u32",
+                cache.width
+            ))
+        })?;
+        let cache_h = u32::try_from(cache.height).map_err(|_| {
+            HelperError::CaptureFailed(format!(
+                "frozen cache height {} does not fit in u32",
+                cache.height
+            ))
+        })?;
+        if rect.x < 0 || rect.y < 0 {
+            return Err(HelperError::CaptureFailed(format!(
+                "selection origin ({},{}) must be non-negative",
+                rect.x, rect.y
+            )));
+        }
+        if (rect.x as u64) + (rect.width as u64) > cache_w as u64
+            || (rect.y as u64) + (rect.height as u64) > cache_h as u64
+        {
+            return Err(HelperError::CaptureFailed(format!(
+                "selection {:?} exceeds cached frozen frame {cache_w}x{cache_h}",
+                rect
+            )));
+        }
+
+        let dst_w = i32::try_from(rect.width).map_err(|_| {
+            HelperError::CaptureFailed(format!(
+                "selection width {} does not fit in i32",
+                rect.width
+            ))
+        })?;
+        let dst_h = i32::try_from(rect.height).map_err(|_| {
+            HelperError::CaptureFailed(format!(
+                "selection height {} does not fit in i32",
+                rect.height
+            ))
+        })?;
+
+        let row_bytes = (rect.width as usize)
+            .checked_mul(4)
+            .and_then(|b| b.checked_mul(rect.height as usize))
+            .ok_or_else(|| HelperError::CaptureFailed("selection pixel buffer overflow".into()))?;
+        if row_bytes > isize::MAX as usize {
+            return Err(HelperError::CaptureFailed(format!(
+                "selection pixel buffer {row_bytes} exceeds isize::MAX"
+            )));
+        }
+        let mut pixels = vec![0u8; row_bytes];
+
+        // Use the cache's own mem_dc as the source. Acquiring fresh guards
+        // for the destination side keeps the cache untouched on failure.
+        let screen_dc = ScreenDcGuard::acquire()?;
+        let mem_dc = MemoryDcGuard::create(screen_dc.handle())?;
+        let dib = BitmapGuard::create_dib_top_down(mem_dc.handle(), dst_w, dst_h)?;
+
+        // SAFETY: cache.mem_dc has the frozen DIB selected for its lifetime;
+        // mem_dc holds our destination DIB. BitBlt parameters match both
+        // sides (selection rect inside the cache; destination size == dst_w
+        // × dst_h).
+        let blt_ok = unsafe {
+            BitBlt(
+                mem_dc.handle(),
+                0,
+                0,
+                dst_w,
+                dst_h,
+                Some(cache.mem_dc),
+                rect.x,
+                rect.y,
+                SRCCOPY,
+            )
+        };
+        if let Err(error) = blt_ok {
+            return Err(HelperError::CaptureFailed(format!(
+                "BitBlt for selection extraction failed: {error}"
+            )));
+        }
+
+        // Read the destination pixels out into our owned Vec. The DIB is
+        // top-down with biHeight = -dst_h, so rows are stored at increasing
+        // addresses; copy with the documented DIB row pitch (width*4).
+        let bits = dib.bits();
+        unsafe {
+            std::ptr::copy_nonoverlapping(bits as *const u8, pixels.as_mut_ptr(), row_bytes);
+        }
+
+        Ok(CpuBgraFrame {
+            width: rect.width,
+            height: rect.height,
+            pitch: rect.width * 4,
+            pixels,
+        })
+    }
+
     fn clear_gdi_cache(&mut self) {
         // Drop runs GdiFrameCache::drop (restore + DeleteObject + DeleteDC).
         self.gdi_cache = None;
