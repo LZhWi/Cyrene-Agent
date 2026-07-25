@@ -20,3 +20,5 @@
 pub mod capture;
 pub mod capture_gdi;
 pub mod display;
+pub mod renderer;
+pub mod window;

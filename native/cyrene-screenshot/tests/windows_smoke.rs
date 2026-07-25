@@ -15,9 +15,15 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::HANDLE,
+        Foundation::{HANDLE, LPARAM, WPARAM},
         System::Threading::{OpenThread, ResumeThread, SuspendThread, THREAD_SUSPEND_RESUME},
-        UI::WindowsAndMessaging::{FindWindowExW, GetWindowThreadProcessId, HWND_MESSAGE},
+        UI::{
+            Input::KeyboardAndMouse::VK_RETURN,
+            WindowsAndMessaging::{
+                FindWindowExW, GetWindowThreadProcessId, PostMessageW, WM_KEYDOWN, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE,
+            },
+        },
     },
     core::{PCWSTR, w},
 };
@@ -221,46 +227,57 @@ impl Helper {
             .collect()
     }
 
+    fn send_command(&mut self, command: serde_json::Value) {
+        let stdin = self.stdin.as_mut().expect("helper stdin");
+        serde_json::to_writer(&mut *stdin, &command).expect("serialize command");
+        stdin.write_all(b"\n").expect("write command newline");
+        stdin.flush().expect("flush command");
+    }
+
+    fn overlay_hwnd(&self) -> windows::Win32::Foundation::HWND {
+        find_process_window(self.process.child.id(), w!("CyreneScreenshotOverlayWindow"))
+    }
+
     fn suspend_ui_thread(&self) -> SuspendedThread {
-        let deadline = Instant::now() + READY_TIMEOUT;
-        loop {
-            let mut after = None;
-            while let Ok(hwnd) = unsafe {
-                FindWindowExW(
-                    Some(HWND_MESSAGE),
-                    after,
-                    w!("CyreneScreenshotRuntimeWindow"),
-                    PCWSTR::null(),
-                )
-            } {
-                let mut pid = 0;
-                // SAFETY: pid points to writable storage and hwnd came from
-                // FindWindowExW.
-                let thread_id = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-                if pid == self.process.child.id() {
-                    // SAFETY: thread_id identifies the helper UI thread that
-                    // owns its message-only HWND.
-                    let handle = unsafe { OpenThread(THREAD_SUSPEND_RESUME, false, thread_id) }
-                        .expect("open helper UI thread");
-                    // SAFETY: OpenThread returned a newly owned handle.
-                    let handle = unsafe { OwnedHandle::from_raw_handle(handle.0) };
-                    let raw_handle = HANDLE(handle.as_raw_handle());
-                    // SAFETY: raw_handle remains owned for the guard lifetime.
-                    let previous_count = unsafe { SuspendThread(raw_handle) };
-                    assert_ne!(previous_count, u32::MAX, "suspend helper UI thread");
-                    return SuspendedThread {
-                        handle,
-                        suspended: true,
-                    };
-                }
-                after = Some(hwnd);
-            }
-            assert!(
-                Instant::now() < deadline,
-                "helper message-only HWND was not found before timeout"
-            );
-            thread::sleep(Duration::from_millis(10));
+        let hwnd =
+            find_process_window(self.process.child.id(), w!("CyreneScreenshotRuntimeWindow"));
+        let mut pid = 0;
+        // SAFETY: pid points to writable storage and hwnd came from FindWindowExW.
+        let thread_id = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+        // SAFETY: thread_id identifies the helper UI thread that owns its message-only HWND.
+        let handle = unsafe { OpenThread(THREAD_SUSPEND_RESUME, false, thread_id) }
+            .expect("open helper UI thread");
+        // SAFETY: OpenThread returned a newly owned handle.
+        let handle = unsafe { OwnedHandle::from_raw_handle(handle.0) };
+        let raw_handle = HANDLE(handle.as_raw_handle());
+        // SAFETY: raw_handle remains owned for the guard lifetime.
+        let previous_count = unsafe { SuspendThread(raw_handle) };
+        assert_ne!(previous_count, u32::MAX, "suspend helper UI thread");
+        SuspendedThread {
+            handle,
+            suspended: true,
         }
+    }
+}
+
+fn find_process_window(process_id: u32, class_name: PCWSTR) -> windows::Win32::Foundation::HWND {
+    let deadline = Instant::now() + READY_TIMEOUT;
+    loop {
+        let mut after = None;
+        while let Ok(hwnd) = unsafe { FindWindowExW(None, after, class_name, PCWSTR::null()) } {
+            let mut pid = 0;
+            // SAFETY: pid points to writable storage and hwnd came from FindWindowExW.
+            unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
+            if pid == process_id {
+                return hwnd;
+            }
+            after = Some(hwnd);
+        }
+        assert!(
+            Instant::now() < deadline,
+            "helper HWND for class was not found before timeout"
+        );
+        thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -270,6 +287,150 @@ fn absolute_output_dir() -> PathBuf {
 
 fn ready_event() -> serde_json::Value {
     serde_json::json!({"type": "ready", "protocolVersion": 1})
+}
+
+fn start_command(request_id: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "start",
+        "requestId": request_id,
+        "mode": "clipboard-only"
+    })
+}
+
+#[test]
+fn start_emits_accepted_then_selecting_then_overlay_visible() {
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    helper.send_command(start_command("start-visible"));
+
+    assert_eq!(
+        helper.next_event(EXIT_TIMEOUT),
+        serde_json::json!({"type": "accepted", "requestId": "start-visible"})
+    );
+    assert_eq!(
+        helper.next_event(EXIT_TIMEOUT),
+        serde_json::json!({
+            "type": "interaction-state",
+            "requestId": "start-visible",
+            "state": "selecting"
+        })
+    );
+    assert_eq!(
+        helper.next_event(EXIT_TIMEOUT),
+        serde_json::json!({
+            "type": "overlay-visible",
+            "requestId": "start-visible",
+            "freezeDurationMs": 0
+        })
+    );
+    assert!(!helper.overlay_hwnd().is_invalid());
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
+}
+
+#[test]
+fn escape_after_selecting_cancels() {
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    helper.send_command(start_command("cancel-one"));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
+
+    helper.send_command(serde_json::json!({
+        "type": "cancel",
+        "requestId": "cancel-one"
+    }));
+    assert_eq!(
+        helper.next_event(EXIT_TIMEOUT),
+        serde_json::json!({
+            "type": "cancelled",
+            "requestId": "cancel-one",
+            "reason": "electron-cancelled"
+        })
+    );
+
+    helper.send_command(start_command("cancel-two"));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
+}
+
+#[test]
+fn enter_after_valid_selection_emits_not_implemented() {
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    helper.send_command(start_command("commit"));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
+
+    let hwnd = helper.overlay_hwnd();
+    let point = |x: i32, y: i32| {
+        windows::Win32::Foundation::LPARAM(
+            ((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as isize,
+        )
+    };
+    unsafe {
+        PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), point(32, 32)).unwrap();
+        PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), point(96, 96)).unwrap();
+        PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), point(96, 96)).unwrap();
+    }
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selected");
+    unsafe {
+        PostMessageW(
+            Some(hwnd),
+            WM_KEYDOWN,
+            WPARAM(VK_RETURN.0 as usize),
+            LPARAM(0),
+        )
+    }
+    .unwrap();
+    assert_eq!(
+        helper.next_event(EXIT_TIMEOUT),
+        serde_json::json!({
+            "type": "interaction-state",
+            "requestId": "commit",
+            "state": "committing"
+        })
+    );
+    let terminal = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(terminal["type"], "error");
+    assert_eq!(terminal["requestId"], "commit");
+    assert_eq!(terminal["code"], "not-implemented");
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
+}
+
+#[test]
+fn busy_start_returns_error() {
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    helper.send_command(start_command("first"));
+    helper.send_command(start_command("second"));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["requestId"], "first");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
+    assert_eq!(
+        helper.next_event(EXIT_TIMEOUT),
+        serde_json::json!({
+            "type": "error",
+            "requestId": "second",
+            "code": "busy",
+            "message": "a screenshot interaction is already active",
+            "recoverable": true
+        })
+    );
+    helper.send_command(serde_json::json!({
+        "type": "cancel",
+        "requestId": "first"
+    }));
+    assert_eq!(
+        helper.next_event(EXIT_TIMEOUT)["reason"],
+        "electron-cancelled"
+    );
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
 }
 
 #[test]
