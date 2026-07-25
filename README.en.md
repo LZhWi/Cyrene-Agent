@@ -72,7 +72,18 @@ Cyrene can chat normally without running a local large language model. However, 
 >
 > Not installing BGE-M3 does not affect basic chat. Features that depend on Embedding will be disabled or degraded automatically.
 
-### 4. Build and Start
+### 4. Music Feature (Optional)
+
+To use the NetEase Cloud Music feature, install the following additional dependencies:
+
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — A Python package manager that will automatically download Python and install all dependencies when the music tool is first used
+- **[NetEase Cloud Music Desktop Client](https://music.163.com/)** — Required for music playback; the `orpheus://` protocol must be registered
+
+> [!NOTE]
+>
+> The music feature is optional and does not affect chat or other core features. If `uv` is not installed, the music tool will be skipped automatically with a UI prompt.
+
+### 5. Build and Start
 
 ```bash
 npm run build
