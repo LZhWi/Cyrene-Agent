@@ -43,3 +43,30 @@ impl ProtocolError {
         }
     }
 }
+
+/// Errors that arise while the helper is actively serving a screenshot
+/// request: display query, capture backend, geometry transforms, and the
+/// underlying Windows APIs. These are distinct from `AppError`/`ProtocolError`
+/// (which describe runtime/process-level failures and the IPC protocol).
+#[derive(Debug, thiserror::Error)]
+pub enum HelperError {
+    #[error("display query failed: {0}")]
+    DisplayQueryFailed(String),
+    #[error("capture failed: {0}")]
+    CaptureFailed(String),
+    #[error("invalid display configuration: {0}")]
+    InvalidDisplay(String),
+    #[error("Windows API failed: {0}")]
+    Windows(#[from] windows::core::Error),
+}
+
+impl HelperError {
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::DisplayQueryFailed(_) => "display-query-failed",
+            Self::CaptureFailed(_) => "capture-failed",
+            Self::InvalidDisplay(_) => "invalid-display",
+            Self::Windows(_) => "windows-api-failed",
+        }
+    }
+}
