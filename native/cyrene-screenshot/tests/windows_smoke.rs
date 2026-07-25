@@ -20,8 +20,8 @@ use windows::{
         UI::{
             Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN},
             WindowsAndMessaging::{
-                FindWindowExW, GetWindowThreadProcessId, HWND_MESSAGE, PostMessageW, WM_KEYDOWN,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+                FindWindowExW, GetWindowThreadProcessId, HWND_MESSAGE, PostMessageW,
+                WM_DISPLAYCHANGE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
             },
         },
     },
@@ -322,15 +322,82 @@ fn start_emits_accepted_then_selecting_then_overlay_visible() {
             "state": "selecting"
         })
     );
-    assert_eq!(
-        helper.next_event(EXIT_TIMEOUT),
-        serde_json::json!({
-            "type": "overlay-visible",
-            "requestId": "start-visible",
-            "freezeDurationMs": 0
-        })
+    let overlay_visible = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(overlay_visible["type"], "overlay-visible");
+    assert_eq!(overlay_visible["requestId"], "start-visible");
+    // T5c wires a real QueryPerformanceCounter measurement into
+    // freezeDurationMs. The exact value is environment-dependent
+    // (CI variance, monitor latency, ...), so we only assert it parses as
+    // a non-negative u64 within the expected physical bound.
+    let freeze_ms = overlay_visible["freezeDurationMs"]
+        .as_u64()
+        .expect("freezeDurationMs is a u64");
+    assert!(
+        freeze_ms < 5_000,
+        "freezeDurationMs {freeze_ms} must be < 5000 (current implementation should be well under one second)"
     );
     assert!(!helper.overlay_hwnd().is_invalid());
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
+}
+
+#[test]
+fn overlay_visible_freeze_duration_is_non_negative() {
+    // T5c invariant: the `OverlayVisible` event carries a measured
+    // freeze_duration_ms derived from QueryPerformanceCounter between the
+    // `Command::Start` accepted point and the post-DwmFlush moment. The
+    // exact value is environment-dependent (capture path latency, GPU
+    // driver timing), but it MUST be a real, non-negative u64 and below
+    // an upper bound that no healthy machine should breach.
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    helper.send_command(start_command("freeze-duration"));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+    let overlay_visible = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(overlay_visible["type"], "overlay-visible");
+    assert_eq!(overlay_visible["requestId"], "freeze-duration");
+    let freeze_ms = overlay_visible["freezeDurationMs"]
+        .as_u64()
+        .expect("freezeDurationMs is a u64");
+    assert!(
+        freeze_ms < 5_000,
+        "freeze duration {freeze_ms}ms exceeds 5s"
+    );
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
+}
+
+#[test]
+fn display_change_during_active_capture_errors() {
+    // T5c: while an overlay capture is active, WM_DISPLAYCHANGE (and
+    // WM_DPICHANGED) must abort the interaction with a recoverable
+    // `display-changed` error, hide the overlay, and return to Idle so a
+    // subsequent start can re-query the display and succeed.
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    helper.send_command(start_command("display-change"));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
+
+    let overlay_hwnd = helper.overlay_hwnd();
+    // SAFETY: The overlay window is owned by the helper; WM_DISPLAYCHANGE is
+    // a standard broadcast that our WndProc maps to OverlayAction::DisplayChanged.
+    unsafe { PostMessageW(Some(overlay_hwnd), WM_DISPLAYCHANGE, WPARAM(32), LPARAM(0)) }.unwrap();
+
+    let error = helper.next_event(EXIT_TIMEOUT);
+    assert_eq!(error["type"], "error");
+    assert_eq!(error["requestId"], "display-change");
+    assert_eq!(error["code"], "display-changed");
+    assert_eq!(error["recoverable"], true);
+
+    // Idle recovery: a fresh start after display-change must succeed.
+    helper.send_command(start_command("after-display-change"));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
+
     helper.send_command(serde_json::json!({"type": "shutdown"}));
     assert!(helper.finish(EXIT_TIMEOUT).0.success());
 }

@@ -23,10 +23,10 @@ use crate::{
     parent_watch,
     protocol::{Command, Event, InteractionStateEvent, PROTOCOL_VERSION},
     win::{
-        capture::{CaptureBackend, FrozenFrame},
+        capture::{CaptureBackend, CpuBgraFrame, FrozenFrame},
         capture_gdi::GdiCaptureBackend,
         display::{DisplayInfo, query_primary_display},
-        renderer,
+        renderer::{OverlayRenderer, present_first_frame, qpc_elapsed_ms, qpc_now},
         window::{OverlayAction, OverlayWindow},
     },
 };
@@ -120,6 +120,9 @@ fn drain_closed_input_events(
 
 struct ActiveRequest {
     request_id: String,
+    /// Frozen frame retained for the lifetime of the interaction. Currently
+    /// unused beyond ownership (clipboard/encoder land in Task 6), but must
+    /// outlive the D2D/GDI upload of its CPU pixels.
     _frame: FrozenFrame,
 }
 
@@ -127,6 +130,7 @@ struct OverlayApp {
     display: DisplayInfo,
     overlay: OverlayWindow,
     capture: GdiCaptureBackend,
+    renderer: OverlayRenderer,
     active: Option<ActiveRequest>,
 }
 
@@ -136,6 +140,7 @@ impl OverlayApp {
             display,
             overlay,
             capture: GdiCaptureBackend::new()?,
+            renderer: OverlayRenderer::new()?,
             active: None,
         })
     }
@@ -157,6 +162,27 @@ impl OverlayApp {
                     );
                     return true;
                 }
+
+                // Measure freeze duration from the moment Start is accepted
+                // (immediately before freeze begins) until DwmFlush succeeds.
+                let freeze_start = qpc_now();
+
+                // Re-query display so a prior display-changed recovery sees
+                // the latest topology before freezing.
+                match query_primary_display() {
+                    Ok(display) => self.display = display,
+                    Err(error) => {
+                        send_error(
+                            event_tx,
+                            Some(request_id),
+                            error.code(),
+                            &error.to_string(),
+                            true,
+                        );
+                        return true;
+                    }
+                }
+
                 let frame = match self.capture.freeze(&self.display) {
                     Ok(frame) => frame,
                     Err(error) => {
@@ -170,6 +196,21 @@ impl OverlayApp {
                         return true;
                     }
                 };
+
+                let cpu_frame = match &frame {
+                    FrozenFrame::Cpu(cpu) => cpu.clone(),
+                    FrozenFrame::Gpu(_) => {
+                        send_error(
+                            event_tx,
+                            Some(request_id),
+                            "not-implemented",
+                            "gpu frozen frames are not supported yet",
+                            true,
+                        );
+                        return true;
+                    }
+                };
+
                 self.active = Some(ActiveRequest {
                     request_id: request_id.clone(),
                     _frame: frame,
@@ -187,17 +228,17 @@ impl OverlayApp {
                     request_id: request_id.clone(),
                     state: InteractionStateEvent::Selecting,
                 });
-                if let Err(error) = self
-                    .overlay
-                    .show(&self.display)
-                    .and_then(|_| renderer::paint(&self.overlay, None, &self.display))
-                {
+
+                if let Err(error) = self.present_overlay(&cpu_frame) {
                     self.finish_error(event_tx, error.code(), &error.to_string(), true);
                     return true;
                 }
+
+                let freeze_end = qpc_now();
+                let freeze_duration_ms = qpc_elapsed_ms(freeze_start, freeze_end);
                 let _ = event_tx.send(Event::OverlayVisible {
                     request_id,
-                    freeze_duration_ms: 0,
+                    freeze_duration_ms,
                 });
                 true
             }
@@ -218,6 +259,23 @@ impl OverlayApp {
             }
             Command::Shutdown => false,
         }
+    }
+
+    /// Spec ordering for first presentation:
+    /// ShowWindow / SetForegroundWindow
+    /// → first paint (Direct2D or GDI fallback)
+    /// → UpdateWindow
+    /// → DwmFlush
+    /// (caller then emits OverlayVisible)
+    fn present_overlay(&mut self, frame: &CpuBgraFrame) -> Result<(), crate::error::HelperError> {
+        self.renderer.clear_frozen();
+        self.overlay.attach_renderer(&mut self.renderer);
+        // Show first so the HWND is mapped, then size the D2D target to it.
+        self.overlay.show(&self.display)?;
+        self.renderer.resize(self.overlay.hwnd(), &self.display)?;
+        self.renderer.upload_frozen(frame)?;
+        present_first_frame(&mut self.renderer, &self.overlay, None, &self.display, None)?;
+        Ok(())
     }
 
     fn process_overlay_action(&mut self, event_tx: &std::sync::mpsc::Sender<Event>) {
@@ -247,6 +305,14 @@ impl OverlayApp {
                 );
             }
             OverlayAction::Cancel => self.cancel(event_tx, "user-cancelled"),
+            OverlayAction::DisplayChanged => {
+                self.finish_error(
+                    event_tx,
+                    "display-changed",
+                    "display topology or DPI changed during capture",
+                    true,
+                );
+            }
         }
     }
 
@@ -254,7 +320,7 @@ impl OverlayApp {
         let Some(active) = self.active.take() else {
             return;
         };
-        let _ = self.overlay.hide();
+        self.teardown_overlay();
         // The internal state machine transitions through `Cancelling` before
         // reaching a terminal state, but the wire protocol surfaces a single
         // terminal `Cancelled` event (no `Cancelling` variant exists on
@@ -273,8 +339,15 @@ impl OverlayApp {
         recoverable: bool,
     ) {
         let request_id = self.active.take().map(|active| active.request_id);
-        let _ = self.overlay.hide();
+        self.teardown_overlay();
         send_error(event_tx, request_id, code, message, recoverable);
+    }
+
+    fn teardown_overlay(&mut self) {
+        self.overlay.detach_renderer();
+        self.renderer.clear_frozen();
+        let _ = self.overlay.hide();
+        self.capture.invalidate();
     }
 }
 

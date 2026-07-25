@@ -13,24 +13,44 @@ use windows::{
                 GWLP_USERDATA, GetClientRect, GetWindowLongPtrW, IDC_CROSS, LoadCursorW,
                 RegisterClassW, SW_HIDE, SW_SHOW, SWP_NOACTIVATE, SWP_NOOWNERZORDER,
                 SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, ShowWindow, UnregisterClassW,
-                WM_CAPTURECHANGED, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_KEYDOWN, WM_LBUTTONDBLCLK,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WNDCLASSW,
-                WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+                WM_CAPTURECHANGED, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DISPLAYCHANGE,
+                WM_DPICHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+                WM_MOUSEMOVE, WM_NCDESTROY, WM_PAINT, WNDCLASSW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+                WS_POPUP,
             },
         },
     },
     core::{Error as WindowsError, PCWSTR, w},
 };
 
-use crate::{error::HelperError, geometry::RectI, win::display::DisplayInfo};
+use crate::{
+    error::HelperError,
+    geometry::RectI,
+    win::{
+        display::DisplayInfo,
+        renderer::{OverlayRenderer, ToolbarLayout, compute_toolbar},
+    },
+};
 
 const WINDOW_CLASS: PCWSTR = w!("CyreneScreenshotOverlayWindow");
+
+/// Confirm button id reserved for `WM_COMMAND` (T5b).
+pub const CMD_CONFIRM: usize = 1;
+/// Cancel button id reserved for `WM_COMMAND` (T5b).
+pub const CMD_CANCEL: usize = 2;
+
+pub const TOOLBAR_WIDTH: u32 = 160;
+pub const TOOLBAR_HEIGHT: u32 = 36;
+pub const TOOLBAR_GAP: u32 = 8;
+pub const TOOLBAR_BUTTON_GAP: u32 = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OverlayAction {
     Selected,
     Commit,
     Cancel,
+    /// Display topology or DPI changed while the overlay was active.
+    DisplayChanged,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -42,9 +62,16 @@ enum InputState {
 
 struct WindowState {
     display_bounds: RectI,
+    display_dpi: f32,
     selection: Option<RectI>,
+    toolbar: Option<ToolbarLayout>,
     input: InputState,
     action: Option<OverlayAction>,
+    /// Non-owning pointer to the active [`OverlayRenderer`]. Set by
+    /// [`OverlayWindow::attach_renderer`] for the duration of a capture and
+    /// cleared on hide. Used by WM_PAINT / mouse-move repaints so the frozen
+    /// frame cache is reused without re-upload.
+    renderer: Option<NonNull<OverlayRenderer>>,
 }
 
 pub struct OverlayWindow {
@@ -71,9 +98,12 @@ impl OverlayWindow {
 
         let state = Box::new(RefCell::new(WindowState {
             display_bounds: display.bounds,
+            display_dpi: display.dpi,
             selection: None,
+            toolbar: None,
             input: InputState::Idle,
             action: None,
+            renderer: None,
         }));
         let state = NonNull::new(Box::into_raw(state)).expect("Box pointer is never null");
         let bounds = display.bounds;
@@ -107,6 +137,17 @@ impl OverlayWindow {
         }
     }
 
+    /// Bind a live [`OverlayRenderer`] for paint callbacks. The pointer must
+    /// remain valid until [`Self::detach_renderer`] or [`Self::hide`].
+    pub fn attach_renderer(&self, renderer: &mut OverlayRenderer) {
+        unsafe { self.state.as_ref() }.borrow_mut().renderer =
+            NonNull::new(renderer as *mut OverlayRenderer);
+    }
+
+    pub fn detach_renderer(&self) {
+        unsafe { self.state.as_ref() }.borrow_mut().renderer = None;
+    }
+
     pub fn show(&self, display: &DisplayInfo) -> Result<(), HelperError> {
         self.set_fullscreen_bounds(display)?;
         unsafe {
@@ -121,8 +162,10 @@ impl OverlayWindow {
         let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
         let mut state = unsafe { self.state.as_ref() }.borrow_mut();
         state.selection = None;
+        state.toolbar = None;
         state.input = InputState::Idle;
         state.action = None;
+        state.renderer = None;
         Ok(())
     }
 
@@ -143,7 +186,9 @@ impl OverlayWindow {
                 SWP_NOACTIVATE | SWP_NOOWNERZORDER,
             )?;
         }
-        unsafe { self.state.as_ref() }.borrow_mut().display_bounds = display.bounds;
+        let mut state = unsafe { self.state.as_ref() }.borrow_mut();
+        state.display_bounds = display.bounds;
+        state.display_dpi = display.dpi;
         Ok(())
     }
 
@@ -159,8 +204,16 @@ impl OverlayWindow {
         unsafe { self.state.as_ref() }.borrow().selection
     }
 
+    pub fn toolbar(&self) -> Option<ToolbarLayout> {
+        unsafe { self.state.as_ref() }.borrow().toolbar
+    }
+
     pub fn hwnd(&self) -> HWND {
         self.hwnd
+    }
+
+    pub fn request_repaint(&self) {
+        let _ = unsafe { InvalidateRect(Some(self.hwnd), None, false) };
     }
 }
 
@@ -193,10 +246,23 @@ unsafe extern "system" fn window_proc(
 
     match message {
         WM_LBUTTONDOWN => {
-            let point = point_from_lparam(lparam);
+            let point = clamp_client_point(hwnd, point_from_lparam(lparam));
             let mut state = unsafe { &*raw }.borrow_mut();
-            let point = clamp_client_point(hwnd, point);
+            // Hit-test toolbar buttons when a selection is already active.
+            if matches!(state.input, InputState::Selected) {
+                if let Some(toolbar) = state.toolbar {
+                    if contains(toolbar.confirm, point) {
+                        state.action = Some(OverlayAction::Commit);
+                        return LRESULT(0);
+                    }
+                    if contains(toolbar.cancel, point) {
+                        state.action = Some(OverlayAction::Cancel);
+                        return LRESULT(0);
+                    }
+                }
+            }
             state.selection = None;
+            state.toolbar = None;
             state.input = InputState::Dragging { anchor: point };
             unsafe { SetCapture(hwnd) };
             LRESULT(0)
@@ -206,6 +272,7 @@ unsafe extern "system" fn window_proc(
             if let InputState::Dragging { anchor } = state.input {
                 state.selection =
                     normalized_rect(anchor, clamp_client_point(hwnd, point_from_lparam(lparam)));
+                state.toolbar = None;
                 let _ = unsafe { InvalidateRect(Some(hwnd), None, false) };
             }
             LRESULT(0)
@@ -221,14 +288,20 @@ unsafe extern "system" fn window_proc(
                     )
                     .filter(|rect| rect.width >= 4 && rect.height >= 4);
                     state.selection = selection;
-                    state.input = if selection.is_some() {
-                        InputState::Selected
-                    } else {
-                        InputState::Idle
-                    };
-                    selected = selection.is_some();
-                    if selected {
+                    if let Some(sel) = selection {
+                        let display = DisplayInfo {
+                            bounds: state.display_bounds,
+                            dpi: state.display_dpi,
+                            rotation: crate::geometry::DisplayRotation::Identity,
+                            is_primary: true,
+                        };
+                        state.toolbar = compute_toolbar(sel, &display);
+                        state.input = InputState::Selected;
                         state.action = Some(OverlayAction::Selected);
+                        selected = true;
+                    } else {
+                        state.toolbar = None;
+                        state.input = InputState::Idle;
                     }
                 }
                 selected
@@ -263,10 +336,19 @@ unsafe extern "system" fn window_proc(
         WM_COMMAND => {
             let command = wparam.0 & 0xffff;
             let mut state = unsafe { &*raw }.borrow_mut();
-            if command == 1 && state.selection.is_some() {
+            if command == CMD_CONFIRM && state.selection.is_some() {
                 state.action = Some(OverlayAction::Commit);
-            } else if command == 2 {
+            } else if command == CMD_CANCEL {
                 state.action = Some(OverlayAction::Cancel);
+            }
+            LRESULT(0)
+        }
+        WM_DISPLAYCHANGE | WM_DPICHANGED => {
+            // Surface when the overlay is visible so an active capture aborts.
+            // The app layer only acts if `active` is Some, so a broadcast while
+            // the window is hidden is a no-op after take_action.
+            if unsafe { windows::Win32::UI::WindowsAndMessaging::IsWindowVisible(hwnd).as_bool() } {
+                unsafe { &*raw }.borrow_mut().action = Some(OverlayAction::DisplayChanged);
             }
             LRESULT(0)
         }
@@ -280,14 +362,24 @@ unsafe extern "system" fn window_proc(
         WM_PAINT => {
             let mut paint = PAINTSTRUCT::default();
             let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
-            let state = unsafe { &*raw }.borrow();
-            let display = DisplayInfo {
-                bounds: state.display_bounds,
-                dpi: 96.0,
-                rotation: crate::geometry::DisplayRotation::Identity,
-                is_primary: true,
-            };
-            let _ = crate::win::renderer::paint_hdc(hdc, state.selection, &display);
+            {
+                let state = unsafe { &*raw }.borrow();
+                let display = DisplayInfo {
+                    bounds: state.display_bounds,
+                    dpi: state.display_dpi,
+                    rotation: crate::geometry::DisplayRotation::Identity,
+                    is_primary: true,
+                };
+                if let Some(renderer_ptr) = state.renderer {
+                    // SAFETY: attach_renderer guarantees the renderer outlives
+                    // the attached period; hide/detach clear this pointer first.
+                    let renderer = unsafe { &mut *renderer_ptr.as_ptr() };
+                    let _ =
+                        renderer.paint_on_hdc(hdc, hwnd, state.selection, &display, state.toolbar);
+                } else {
+                    let _ = crate::win::renderer::paint_hdc(hdc, state.selection, &display);
+                }
+            }
             let _ = unsafe { EndPaint(hwnd, &paint) };
             LRESULT(0)
         }
@@ -331,6 +423,6 @@ fn normalized_rect(a: POINT, b: POINT) -> Option<RectI> {
 fn contains(rect: RectI, point: POINT) -> bool {
     i64::from(point.x) >= i64::from(rect.x)
         && i64::from(point.y) >= i64::from(rect.y)
-        && i64::from(point.x) <= i64::from(rect.x) + i64::from(rect.width)
-        && i64::from(point.y) <= i64::from(rect.y) + i64::from(rect.height)
+        && i64::from(point.x) < i64::from(rect.x) + i64::from(rect.width)
+        && i64::from(point.y) < i64::from(rect.y) + i64::from(rect.height)
 }
