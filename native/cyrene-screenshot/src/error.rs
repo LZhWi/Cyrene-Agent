@@ -71,10 +71,18 @@ impl HelperError {
     }
 }
 
-// TODO(T5b): bridge `HelperError` into the process-level `AppError` so
-// request handlers can convert capture / display failures into the IPC
-// error envelope that the Electron helper client understands. The two
-// hierarchies are intentionally separate today — `HelperError` is
-// request-scoped (a single freeze / display query), `AppError` is
-// process-scoped — but T5b's overlay state machine needs a single
-// error type to surface to the JS helper.
+impl From<HelperError> for AppError {
+    fn from(error: HelperError) -> Self {
+        AppError::Runtime(error.to_string())
+    }
+}
+
+// `HelperError` is bridged into `AppError` via `From<HelperError> for AppError`
+// below so request handlers can convert capture / display failures through
+// the `?` operator. The two hierarchies remain intentionally separate:
+// `HelperError` is request-scoped (a single freeze / display query) while
+// `AppError` is process-scoped. Bridging them via `Runtime` keeps the wire
+// error codes (`display-query-failed`, `capture-failed`, ...) visible in
+// `HelperError::code()` and `AppError::code()` separately for layered
+// diagnostics without introducing a new variant on the locked protocol
+// surface.

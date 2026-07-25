@@ -70,8 +70,8 @@ fn run_message_loop(
     input_gate: &InputGate,
     input_event_rx: &Receiver<Event>,
 ) -> Result<(), AppError> {
-    let display = query_primary_display().map_err(helper_error)?;
-    let overlay = OverlayWindow::create(&display).map_err(helper_error)?;
+    let display = query_primary_display()?;
+    let overlay = OverlayWindow::create(&display)?;
     let mut app_state = OverlayApp::new(display, overlay)?;
     let mut message = MSG::default();
     loop {
@@ -135,7 +135,7 @@ impl OverlayApp {
         Ok(Self {
             display,
             overlay,
-            capture: GdiCaptureBackend::new().map_err(helper_error)?,
+            capture: GdiCaptureBackend::new()?,
             active: None,
         })
     }
@@ -177,6 +177,12 @@ impl OverlayApp {
                 let _ = event_tx.send(Event::Accepted {
                     request_id: request_id.clone(),
                 });
+                // The locked `InteractionStateEvent` enum (in `protocol.rs`) only
+                // exposes `Selecting | Selected | Committing`. The internal state
+                // machine here also tracks `Freezing` and `Cancelling`; those are
+                // projected onto the wire by emitting `OverlayVisible` (after the
+                // freeze completes) and `Cancelled` (when the user cancels),
+                // respectively, so the locked protocol surface stays unchanged.
                 let _ = event_tx.send(Event::InteractionState {
                     request_id: request_id.clone(),
                     state: InteractionStateEvent::Selecting,
@@ -249,6 +255,10 @@ impl OverlayApp {
             return;
         };
         let _ = self.overlay.hide();
+        // The internal state machine transitions through `Cancelling` before
+        // reaching a terminal state, but the wire protocol surfaces a single
+        // terminal `Cancelled` event (no `Cancelling` variant exists on
+        // `InteractionStateEvent`).
         let _ = event_tx.send(Event::Cancelled {
             request_id: active.request_id,
             reason: reason.into(),
@@ -281,10 +291,6 @@ fn send_error(
         message: message.into(),
         recoverable,
     });
-}
-
-fn helper_error(error: crate::error::HelperError) -> AppError {
-    AppError::Runtime(error.to_string())
 }
 
 struct MessageWindow {

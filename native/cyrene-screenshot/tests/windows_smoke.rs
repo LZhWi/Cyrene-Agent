@@ -15,13 +15,13 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::{HANDLE, LPARAM, WPARAM},
+        Foundation::{HANDLE, HWND, LPARAM, WPARAM},
         System::Threading::{OpenThread, ResumeThread, SuspendThread, THREAD_SUSPEND_RESUME},
         UI::{
-            Input::KeyboardAndMouse::VK_RETURN,
+            Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN},
             WindowsAndMessaging::{
-                FindWindowExW, GetWindowThreadProcessId, PostMessageW, WM_KEYDOWN, WM_LBUTTONDOWN,
-                WM_LBUTTONUP, WM_MOUSEMOVE,
+                FindWindowExW, GetWindowThreadProcessId, HWND_MESSAGE, PostMessageW, WM_KEYDOWN,
+                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
             },
         },
     },
@@ -234,13 +234,20 @@ impl Helper {
         stdin.flush().expect("flush command");
     }
 
-    fn overlay_hwnd(&self) -> windows::Win32::Foundation::HWND {
-        find_process_window(self.process.child.id(), w!("CyreneScreenshotOverlayWindow"))
+    fn overlay_hwnd(&self) -> HWND {
+        find_process_window(
+            self.process.child.id(),
+            None,
+            w!("CyreneScreenshotOverlayWindow"),
+        )
     }
 
     fn suspend_ui_thread(&self) -> SuspendedThread {
-        let hwnd =
-            find_process_window(self.process.child.id(), w!("CyreneScreenshotRuntimeWindow"));
+        let hwnd = find_process_window(
+            self.process.child.id(),
+            Some(HWND_MESSAGE),
+            w!("CyreneScreenshotRuntimeWindow"),
+        );
         let mut pid = 0;
         // SAFETY: pid points to writable storage and hwnd came from FindWindowExW.
         let thread_id = unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
@@ -260,11 +267,11 @@ impl Helper {
     }
 }
 
-fn find_process_window(process_id: u32, class_name: PCWSTR) -> windows::Win32::Foundation::HWND {
+fn find_process_window(process_id: u32, parent: Option<HWND>, class_name: PCWSTR) -> HWND {
     let deadline = Instant::now() + READY_TIMEOUT;
     loop {
         let mut after = None;
-        while let Ok(hwnd) = unsafe { FindWindowExW(None, after, class_name, PCWSTR::null()) } {
+        while let Ok(hwnd) = unsafe { FindWindowExW(parent, after, class_name, PCWSTR::null()) } {
             let mut pid = 0;
             // SAFETY: pid points to writable storage and hwnd came from FindWindowExW.
             unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
@@ -337,16 +344,24 @@ fn escape_after_selecting_cancels() {
     assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
     assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
 
-    helper.send_command(serde_json::json!({
-        "type": "cancel",
-        "requestId": "cancel-one"
-    }));
+    let overlay_hwnd = helper.overlay_hwnd();
+    // SAFETY: The overlay window is owned by the helper; WM_KEYDOWN routes through
+    // its WndProc which sets OverlayAction::Cancel on VK_ESCAPE.
+    unsafe {
+        PostMessageW(
+            Some(overlay_hwnd),
+            WM_KEYDOWN,
+            WPARAM(VK_ESCAPE.0 as usize),
+            LPARAM(0),
+        )
+    }
+    .unwrap();
     assert_eq!(
         helper.next_event(EXIT_TIMEOUT),
         serde_json::json!({
             "type": "cancelled",
             "requestId": "cancel-one",
-            "reason": "electron-cancelled"
+            "reason": "user-cancelled"
         })
     );
 
@@ -357,7 +372,7 @@ fn escape_after_selecting_cancels() {
 }
 
 #[test]
-fn enter_after_valid_selection_emits_not_implemented() {
+fn enter_after_valid_selection_emits_committing_then_not_implemented() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
     helper.send_command(start_command("commit"));
@@ -366,11 +381,7 @@ fn enter_after_valid_selection_emits_not_implemented() {
     assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
 
     let hwnd = helper.overlay_hwnd();
-    let point = |x: i32, y: i32| {
-        windows::Win32::Foundation::LPARAM(
-            ((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as isize,
-        )
-    };
+    let point = |x: i32, y: i32| LPARAM(((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as isize);
     unsafe {
         PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), point(32, 32)).unwrap();
         PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), point(96, 96)).unwrap();
