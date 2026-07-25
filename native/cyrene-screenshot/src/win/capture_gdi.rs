@@ -165,10 +165,9 @@ impl Drop for MemoryDcGuard {
 }
 
 /// Owns an HBITMAP acquired via `CreateDIBSection` and deletes it via
-/// `DeleteObject`. The handle is also restored as the *unselected* object
-/// inside the memory DC via `set_unselected`, which keeps the Win32
-/// "don't delete a selected bitmap" invariant: the DIB is deselected
-/// before `DeleteObject` is called.
+/// `DeleteObject`. A `SelectionGuard` declared after this guard restores the
+/// memory DC before this guard can drop, preserving Win32's rule that selected
+/// bitmaps must not be deleted.
 struct DibGuard {
     bitmap: HBITMAP,
     bits: *mut core::ffi::c_void,
@@ -250,38 +249,66 @@ impl DibGuard {
     fn bits(&self) -> *mut core::ffi::c_void {
         self.bits
     }
-
-    /// Deselect this DIB from the memory DC, restoring the previous
-    /// object. **Must** be called before the HBITMAP is deleted so the
-    /// Win32 ownership invariant (no bitmap may be deleted while it is
-    /// still selected into a DC) is honored.
-    ///
-    /// `previous` is the HGDIOBJ returned by `SelectObject(memory_dc,
-    /// this_bitmap)`. We pass it back in so the memory DC is restored to
-    /// its original selection.
-    fn set_unselected(&mut self, memory_dc: HDC, previous: HGDIOBJ) {
-        // SAFETY: `self.bitmap` is selected into `memory_dc` at the time
-        // of this call; selecting `previous` back deselects it. We do not
-        // care about the new return value because the DIB is about to be
-        // deleted regardless.
-        let _ = unsafe { SelectObject(memory_dc, previous) };
-    }
 }
 
 impl Drop for DibGuard {
     fn drop(&mut self) {
-        // SAFETY: `self.bitmap` was acquired via `CreateDIBSection` and
-        // is no longer selected into any DC (the caller is required to
-        // invoke `set_unselected` before this Drop runs). The handle is
-        // therefore safe to delete.
+        // SAFETY: `self.bitmap` was acquired via `CreateDIBSection`. When it
+        // was selected, the later-declared `SelectionGuard` restored the
+        // previous object before this guard could drop.
         let _ = unsafe { DeleteObject(HGDIOBJ(self.bitmap.0)) };
     }
 }
 
-// SAFETY: the bits pointer is process-local and only ever read, never
-// aliased elsewhere.
-unsafe impl Send for DibGuard {}
-unsafe impl Sync for DibGuard {}
+/// Restores the GDI object that was selected before the capture DIB.
+///
+/// This guard must be declared after `DibGuard`: reverse drop order then
+/// guarantees restoration completes before `DeleteObject` runs, including
+/// during unwinding from `BitBlt`, allocation, or pixel-copy failures.
+struct SelectionGuard {
+    hdc: HDC,
+    previous: HGDIOBJ,
+    released: bool,
+}
+
+impl SelectionGuard {
+    fn new(hdc: HDC, previous: HGDIOBJ) -> Self {
+        Self {
+            hdc,
+            previous,
+            released: false,
+        }
+    }
+
+    fn release(mut self) -> Result<(), HelperError> {
+        // SAFETY: `hdc` remains owned by the surrounding `MemoryDcGuard`, and
+        // `previous` is exactly the object returned when the DIB was selected.
+        // Propagating restoration failure prevents reporting capture success;
+        // Drop retries best-effort before the later-declared DIB guard deletes
+        // the bitmap.
+        let restored = unsafe { SelectObject(self.hdc, self.previous) };
+        if restored.0.is_null() || restored.0 as isize == -1 {
+            return Err(HelperError::CaptureFailed(format!(
+                "failed to restore previous GDI object (last error: {})",
+                windows::core::Error::from_thread().message()
+            )));
+        }
+        self.released = true;
+        Ok(())
+    }
+}
+
+impl Drop for SelectionGuard {
+    fn drop(&mut self) {
+        if !self.released {
+            // SAFETY: the same lifetime invariants as `release` hold. This is
+            // best-effort because Drop cannot report an error; even an invalid
+            // synthetic handle is accepted by Win32 without a Rust crash. The
+            // attempt finishes before `DibGuard::drop` due to declaration order.
+            let _ = unsafe { SelectObject(self.hdc, self.previous) };
+        }
+    }
+}
 
 /// Validate that the BGRA pixel buffer for `(width, height)` fits in
 /// `isize::MAX` so the subsequent `Vec<u8>` allocation cannot panic on a
@@ -353,7 +380,7 @@ fn capture_primary_bgra(display: &DisplayInfo) -> Result<RawBgraCapture, HelperE
     // automatically.
     let screen_dc = ScreenDcGuard::acquire()?;
     let memory_dc = MemoryDcGuard::create(screen_dc.0)?;
-    let mut dib_section = DibGuard::create_top_down(memory_dc.handle(), width_i32, height_i32)?;
+    let dib_section = DibGuard::create_top_down(memory_dc.handle(), width_i32, height_i32)?;
 
     // I1: SelectObject returns `HGDI_ERROR` (== `HGDIOBJ(-1)`) on failure.
     // Treat that as CaptureFailed and let the guards clean up.
@@ -362,12 +389,16 @@ fn capture_primary_bgra(display: &DisplayInfo) -> Result<RawBgraCapture, HelperE
     // capture the previous object so we can restore it before deleting
     // the DIB (the Win32 rule: do not delete a selected bitmap).
     let previous = unsafe { SelectObject(memory_dc.handle(), HGDIOBJ(dib_section.bitmap.0)) };
-    if previous.0 as isize == -1 {
+    if previous.0.is_null() || previous.0 as isize == -1 {
         return Err(HelperError::CaptureFailed(format!(
-            "SelectObject returned HGDI_ERROR (last error: {})",
+            "SelectObject failed (last error: {})",
             windows::core::Error::from_thread().message()
         )));
     }
+    // Declaration order is load-bearing: `_selection` drops before
+    // `dib_section`, restoring the previous object before DeleteObject even
+    // if any operation below returns early or panics.
+    let selection = SelectionGuard::new(memory_dc.handle(), previous);
 
     // BitBlt with CAPTUREBLT to also include layered windows' content. The
     // system cursor is not drawn into the captured desktop.
@@ -399,24 +430,21 @@ fn capture_primary_bgra(display: &DisplayInfo) -> Result<RawBgraCapture, HelperE
     // that rows are tightly packed to width * 4 bytes because we used a
     // negative biHeight (top-down), so the pitch equals width * 4.
     let mut pixels = vec![0u8; total_bytes];
+    // `create_top_down` rejects a null bits pointer, so no redundant null
+    // branch is needed here.
     let bits = dib_section.bits();
-    if !bits.is_null() {
-        // SAFETY: `bits` points to a freshly-allocated DIB section whose
-        // ownership is being transferred to us; we read exactly the
-        // documented number of bytes (width * 4 * height == total_bytes,
-        // which fits in isize::MAX per `validate_capture_dimensions`).
-        unsafe {
-            core::ptr::copy_nonoverlapping(bits as *const u8, pixels.as_mut_ptr(), total_bytes);
-        }
+    // SAFETY: `bits` points to a freshly-allocated DIB section whose
+    // ownership remains with `dib_section`; we read exactly the documented
+    // number of bytes (width * 4 * height == total_bytes, which fits in
+    // isize::MAX per `validate_capture_dimensions`).
+    unsafe {
+        core::ptr::copy_nonoverlapping(bits as *const u8, pixels.as_mut_ptr(), total_bytes);
     }
 
-    // C2 / cleanup: deselect the DIB by restoring the previous object,
-    // THEN drop the DIB guard (which deletes the bitmap), THEN drop the
-    // memory DC guard (which deletes the DC), THEN drop the screen DC
-    // guard (which releases the desktop DC). The order is load-bearing:
-    // deleting a bitmap while it is still selected into a DC is the
-    // classic Win32 ownership violation this fix is closing.
-    dib_section.set_unselected(memory_dc.handle(), previous);
+    // Restore explicitly so restoration failure becomes a structured capture
+    // error. On error, SelectionGuard::drop retries best-effort before the DIB
+    // guard drops.
+    selection.release()?;
 
     Ok(RawBgraCapture {
         width: source_width,
@@ -616,6 +644,13 @@ mod tests {
 
     fn solid_bgra(width: u32, height: u32, byte: u8) -> Vec<u8> {
         vec![byte; (width as usize) * 4 * (height as usize)]
+    }
+
+    #[test]
+    fn selection_guard_drop_is_best_effort_for_invalid_previous_object() {
+        let guard =
+            SelectionGuard::new(HDC::default(), HGDIOBJ((-1isize) as *mut core::ffi::c_void));
+        drop(guard);
     }
 
     #[test]
