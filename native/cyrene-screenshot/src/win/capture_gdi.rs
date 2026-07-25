@@ -15,10 +15,17 @@
 //! GDI is pull-on-demand: there is no persistent framebuffer to refresh, so
 //! [`refresh_latest`](CaptureBackend::refresh_latest) returns
 //! [`RefreshOutcome::Unchanged`] in T5a.
+//!
+//! All GDI handles (`screen_dc`, `memory_dc`, `dib_section`) are owned by
+//! RAII guards and released deterministically when the guards drop. The
+//! guards are acquired in dependency order (screen → memory → dib) and
+//! released in reverse order, so a panic in any intermediate step still
+//! releases every earlier handle.
 
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BitBlt, CAPTUREBLT, CreateCompatibleDC, CreateDIBSection,
-    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HBITMAP, HDC, ReleaseDC, SRCCOPY, SelectObject,
+    DIB_RGB_COLORS, DeleteDC, DeleteObject, GetDC, HBITMAP, HDC, HGDIOBJ, ReleaseDC, SRCCOPY,
+    SelectObject,
 };
 
 use crate::{
@@ -32,10 +39,14 @@ use crate::{
 
 /// GDI-backed capture of the primary monitor.
 ///
-/// Holds the compatible DC and DIB section for the most recent freeze so
-/// subsequent freezes can reuse the same allocation. In T5a the backend is
-/// constructed freshly per capture and drops the DC on destruction, so the
-/// internal caches are reset on every `new()`.
+/// Holds no long-lived state in T5a — every freeze allocates a fresh DC and
+/// DIB section. The constructor validates the process can obtain the
+/// desktop DC, surfacing a structured error early when GDI is unavailable.
+///
+/// Construction is fallible (`Result`) because GDI may legitimately be
+/// unavailable (non-interactive session, headless service, etc.). Callers
+/// must handle the error path explicitly; there is intentionally no
+/// `Default` impl because panicking in production is the wrong behavior.
 #[derive(Debug)]
 pub struct GdiCaptureBackend {
     _private: (),
@@ -44,30 +55,17 @@ pub struct GdiCaptureBackend {
 impl GdiCaptureBackend {
     /// Create a fresh backend. The GDI backend currently holds no long-lived
     /// state, so this is a cheap constructor that only validates the
-    /// process DPI awareness is in place by allocating a throwaway DC.
+    /// process can obtain the desktop DC (e.g., it is running in an
+    /// interactive session) by allocating a throwaway DC.
     pub fn new() -> Result<Self, HelperError> {
         // We probe the desktop DC and immediately release it. The point is
         // to surface a deterministic HelperError::CaptureFailed when GDI is
         // unavailable (e.g., the process is running in a session that does
         // not have an interactive desktop) rather than failing on first
         // freeze().
-        let hdc = unsafe { GetDC(None) };
-        if hdc.is_invalid() {
-            return Err(HelperError::CaptureFailed(format!(
-                "GetDC returned an invalid handle (last error: {})",
-                windows::core::Error::from_thread().message()
-            )));
-        }
-        // SAFETY: We acquired the DC with GetDC(None) and must release it
-        // before the function returns.
-        let _ = unsafe { ReleaseDC(None, hdc) };
+        let probe = ScreenDcGuard::acquire()?;
+        drop(probe);
         Ok(Self { _private: () })
-    }
-}
-
-impl Default for GdiCaptureBackend {
-    fn default() -> Self {
-        Self::new().expect("GdiCaptureBackend::new must succeed by default on Windows")
     }
 }
 
@@ -92,6 +90,229 @@ impl CaptureBackend for GdiCaptureBackend {
     fn invalidate(&mut self) {
         // No persistent state to drop; nothing to do.
     }
+}
+
+// ---- GDI handle RAII guards ------------------------------------------------
+//
+// HDC has no `windows_core::Free` impl, so we roll three small guards that
+// own one handle each and free it in `Drop`. Guards are not `Send`: GDI
+// handles are tied to the thread that acquired them, and the helper's UI
+// thread is the only consumer in T5a.
+
+/// Owns an HDC acquired via `GetDC(None)` and releases it via `ReleaseDC`.
+struct ScreenDcGuard(HDC);
+
+impl ScreenDcGuard {
+    fn acquire() -> Result<Self, HelperError> {
+        // SAFETY: `GetDC(None)` is documented to return a DC for the entire
+        // screen. It takes no preconditions beyond the process holding a
+        // station / desktop, which is already guaranteed by the caller's
+        // success in `query_primary_display`. The returned HDC must be
+        // released with `ReleaseDC(None, hdc)`; we do that in `Drop`.
+        let hdc = unsafe { GetDC(None) };
+        if hdc.is_invalid() {
+            return Err(HelperError::CaptureFailed(format!(
+                "GetDC returned an invalid handle (last error: {})",
+                windows::core::Error::from_thread().message()
+            )));
+        }
+        Ok(Self(hdc))
+    }
+}
+
+impl Drop for ScreenDcGuard {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` was acquired via `GetDC(None)` in `acquire`; the
+        // matching `ReleaseDC(None, hdc)` is the only valid way to dispose
+        // of it. We ignore the BOOL return because a ReleaseDC failure
+        // indicates the handle is already in a bad state — there is no
+        // recovery action to take.
+        let _ = unsafe { ReleaseDC(None, self.0) };
+    }
+}
+
+/// Owns an HDC acquired via `CreateCompatibleDC` and deletes it via `DeleteDC`.
+struct MemoryDcGuard(HDC);
+
+impl MemoryDcGuard {
+    fn create(parent: HDC) -> Result<Self, HelperError> {
+        // SAFETY: `CreateCompatibleDC` returns an HDC compatible with the
+        // provided source DC. We pass the desktop DC so the new memory DC
+        // matches the screen's pixel format. The handle must be freed with
+        // `DeleteDC`; we do that in `Drop`.
+        let hdc = unsafe { CreateCompatibleDC(Some(parent)) };
+        if hdc.is_invalid() {
+            return Err(HelperError::CaptureFailed(format!(
+                "CreateCompatibleDC returned an invalid handle (last error: {})",
+                windows::core::Error::from_thread().message()
+            )));
+        }
+        Ok(Self(hdc))
+    }
+
+    fn handle(&self) -> HDC {
+        self.0
+    }
+}
+
+impl Drop for MemoryDcGuard {
+    fn drop(&mut self) {
+        // SAFETY: `self.0` was acquired via `CreateCompatibleDC` and must
+        // be disposed with `DeleteDC`. Calling `DeleteDC` on an HDC
+        // returned by `CreateCompatibleDC` is the documented contract.
+        let _ = unsafe { DeleteDC(self.0) };
+    }
+}
+
+/// Owns an HBITMAP acquired via `CreateDIBSection` and deletes it via
+/// `DeleteObject`. The handle is also restored as the *unselected* object
+/// inside the memory DC via `set_unselected`, which keeps the Win32
+/// "don't delete a selected bitmap" invariant: the DIB is deselected
+/// before `DeleteObject` is called.
+struct DibGuard {
+    bitmap: HBITMAP,
+    bits: *mut core::ffi::c_void,
+}
+
+impl DibGuard {
+    fn create_top_down(
+        memory_dc: HDC,
+        width_i32: i32,
+        height_i32: i32,
+    ) -> Result<Self, HelperError> {
+        // BITMAPINFO contains a single RGBQUAD slot for the color table;
+        // for 32-bit BI_RGB images the color table is unused, so we only
+        // need the header.
+        let mut bitmap_info = BITMAPINFO {
+            bmiHeader: BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width_i32,
+                // Negative biHeight => top-down DIB (origin at top-left).
+                biHeight: -height_i32,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                biSizeImage: 0,
+                biXPelsPerMeter: 0,
+                biYPelsPerMeter: 0,
+                biClrUsed: 0,
+                biClrImportant: 0,
+            },
+            bmiColors: [windows::Win32::Graphics::Gdi::RGBQUAD::default(); 1],
+        };
+
+        let mut bits: *mut core::ffi::c_void = core::ptr::null_mut();
+        // SAFETY: `bitmap_info` is a valid BITMAPINFO describing a 32-bit
+        // top-down BGRA DIB. `CreateDIBSection` writes the pointer to the
+        // pixel storage into `bits` and returns the HBITMAP whose lifetime
+        // owns that storage. We hold the HBITMAP for the full duration the
+        // bits are read; both are released together in `Drop`.
+        let result = unsafe {
+            CreateDIBSection(
+                Some(memory_dc),
+                &mut bitmap_info,
+                DIB_RGB_COLORS,
+                &mut bits,
+                None,
+                0,
+            )
+        };
+        let dib_section = result.map_err(|error| {
+            HelperError::CaptureFailed(format!(
+                "CreateDIBSection failed: {error} (last error: {})",
+                windows::core::Error::from_thread().message()
+            ))
+        })?;
+
+        // I2: even on success `CreateDIBSection` can hand back a non-null
+        // HBITMAP whose bits pointer is null (e.g., when memory
+        // allocation for the pixel buffer failed but the DIB header was
+        // allocated). Treating that as success would yield a zero-filled
+        // frame; instead surface a CaptureFailed so the caller sees the
+        // error.
+        if bits.is_null() {
+            // SAFETY: `dib_section` was returned by `CreateDIBSection` and
+            // is a real, non-invalid HBITMAP. We delete it explicitly
+            // because we cannot hand it to `DibGuard` (whose `Drop` would
+            // also delete it), avoiding a double-free.
+            let _ = unsafe { DeleteObject(HGDIOBJ(dib_section.0)) };
+            return Err(HelperError::CaptureFailed(
+                "CreateDIBSection returned a null bits pointer".into(),
+            ));
+        }
+
+        Ok(Self {
+            bitmap: dib_section,
+            bits,
+        })
+    }
+
+    fn bits(&self) -> *mut core::ffi::c_void {
+        self.bits
+    }
+
+    /// Deselect this DIB from the memory DC, restoring the previous
+    /// object. **Must** be called before the HBITMAP is deleted so the
+    /// Win32 ownership invariant (no bitmap may be deleted while it is
+    /// still selected into a DC) is honored.
+    ///
+    /// `previous` is the HGDIOBJ returned by `SelectObject(memory_dc,
+    /// this_bitmap)`. We pass it back in so the memory DC is restored to
+    /// its original selection.
+    fn set_unselected(&mut self, memory_dc: HDC, previous: HGDIOBJ) {
+        // SAFETY: `self.bitmap` is selected into `memory_dc` at the time
+        // of this call; selecting `previous` back deselects it. We do not
+        // care about the new return value because the DIB is about to be
+        // deleted regardless.
+        let _ = unsafe { SelectObject(memory_dc, previous) };
+    }
+}
+
+impl Drop for DibGuard {
+    fn drop(&mut self) {
+        // SAFETY: `self.bitmap` was acquired via `CreateDIBSection` and
+        // is no longer selected into any DC (the caller is required to
+        // invoke `set_unselected` before this Drop runs). The handle is
+        // therefore safe to delete.
+        let _ = unsafe { DeleteObject(HGDIOBJ(self.bitmap.0)) };
+    }
+}
+
+// SAFETY: the bits pointer is process-local and only ever read, never
+// aliased elsewhere.
+unsafe impl Send for DibGuard {}
+unsafe impl Sync for DibGuard {}
+
+/// Validate that the BGRA pixel buffer for `(width, height)` fits in
+/// `isize::MAX` so the subsequent `Vec<u8>` allocation cannot panic on a
+/// 64-bit target. Returns the total byte count on success.
+fn validate_capture_dimensions(width: u32, height: u32) -> Result<usize, HelperError> {
+    let width_usize = usize::try_from(width).map_err(|_| {
+        HelperError::InvalidDisplay(format!(
+            "capture width {width} does not fit in usize on this platform"
+        ))
+    })?;
+    let height_usize = usize::try_from(height).map_err(|_| {
+        HelperError::InvalidDisplay(format!(
+            "capture height {height} does not fit in usize on this platform"
+        ))
+    })?;
+    let row_bytes = width_usize.checked_mul(4).ok_or_else(|| {
+        HelperError::InvalidDisplay(format!(
+            "capture row bytes overflow for width {width} (width*4 > usize::MAX)"
+        ))
+    })?;
+    let total_bytes = row_bytes.checked_mul(height_usize).ok_or_else(|| {
+        HelperError::InvalidDisplay(format!(
+            "capture pixel buffer overflow for {width}x{height} (4*w*h > usize::MAX)"
+        ))
+    })?;
+    if total_bytes > isize::MAX as usize {
+        return Err(HelperError::InvalidDisplay(format!(
+            "capture pixel buffer {total_bytes} exceeds isize::MAX for {width}x{height}"
+        )));
+    }
+    Ok(total_bytes)
 }
 
 /// Raw BGRA capture in the *physical* (possibly rotated) source orientation
@@ -122,105 +343,52 @@ fn capture_primary_bgra(display: &DisplayInfo) -> Result<RawBgraCapture, HelperE
         HelperError::InvalidDisplay(format!("height {source_height} does not fit in i32"))
     })?;
 
-    // Grab the desktop DC. We pass None for hwnd, matching GetDC's behavior
-    // for the screen-wide device context.
-    // SAFETY: GetDC(None) is safe to call at any time; we release below.
-    let screen_dc: HDC = unsafe { GetDC(None) };
-    if screen_dc.is_invalid() {
+    // Validate the byte arithmetic BEFORE touching any GDI handles so an
+    // over-sized (hostile or corrupt) DisplayInfo never opens a screen DC
+    // that we would then leak when the pixel allocation panics.
+    let total_bytes = validate_capture_dimensions(source_width, source_height)?;
+
+    // Acquire guards in dependency order. Drop order is reverse, so on any
+    // `?` error the screen DC, memory DC, and DIB section are all released
+    // automatically.
+    let screen_dc = ScreenDcGuard::acquire()?;
+    let memory_dc = MemoryDcGuard::create(screen_dc.0)?;
+    let mut dib_section = DibGuard::create_top_down(memory_dc.handle(), width_i32, height_i32)?;
+
+    // I1: SelectObject returns `HGDI_ERROR` (== `HGDIOBJ(-1)`) on failure.
+    // Treat that as CaptureFailed and let the guards clean up.
+    // SAFETY: `memory_dc` is a valid HDC, `dib_section.bitmap` is a valid
+    // HBITMAP. SelectObject is documented to accept any HGDIOBJ; we
+    // capture the previous object so we can restore it before deleting
+    // the DIB (the Win32 rule: do not delete a selected bitmap).
+    let previous = unsafe { SelectObject(memory_dc.handle(), HGDIOBJ(dib_section.bitmap.0)) };
+    if previous.0 as isize == -1 {
         return Err(HelperError::CaptureFailed(format!(
-            "GetDC returned an invalid handle (last error: {})",
+            "SelectObject returned HGDI_ERROR (last error: {})",
             windows::core::Error::from_thread().message()
         )));
     }
-
-    // Build a compatible memory DC and a top-down 32-bit BGRA DIB section
-    // sized to the physical bounds.
-    // SAFETY: CreateCompatibleDC takes an existing HDC; passing the desktop
-    // DC ensures the new DC is screen-compatible (same bit depth / palette).
-    let memory_dc: HDC = unsafe { CreateCompatibleDC(Some(screen_dc)) };
-    if memory_dc.is_invalid() {
-        let _ = unsafe { ReleaseDC(None, screen_dc) };
-        return Err(HelperError::CaptureFailed(format!(
-            "CreateCompatibleDC returned an invalid handle (last error: {})",
-            windows::core::Error::from_thread().message()
-        )));
-    }
-
-    // BITMAPINFO contains a single RGBQUAD slot for the color table; for
-    // 32-bit BI_RGB images the color table is unused, so we only need the
-    // header.
-    let mut bitmap_info = BITMAPINFO {
-        bmiHeader: BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: width_i32,
-            // Negative biHeight => top-down DIB (origin at top-left).
-            biHeight: -height_i32,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
-            biSizeImage: 0,
-            biXPelsPerMeter: 0,
-            biYPelsPerMeter: 0,
-            biClrUsed: 0,
-            biClrImportant: 0,
-        },
-        bmiColors: [windows::Win32::Graphics::Gdi::RGBQUAD::default(); 1],
-    };
-
-    let mut bits: *mut core::ffi::c_void = core::ptr::null_mut();
-    // SAFETY: `bitmap_info` is a valid BITMAPINFO describing a 32-bit
-    // top-down BGRA DIB. `bits` receives a pointer to the DIB's pixel
-    // storage, which lives as long as the returned HBITMAP. We release the
-    // bitmap (and thus the bits) before returning.
-    let dib_section: HBITMAP = unsafe {
-        CreateDIBSection(
-            Some(memory_dc),
-            &mut bitmap_info,
-            DIB_RGB_COLORS,
-            &mut bits,
-            None,
-            0,
-        )
-    }
-    .map_err(|error| {
-        let _ = unsafe { DeleteDC(memory_dc) };
-        let _ = unsafe { ReleaseDC(None, screen_dc) };
-        HelperError::CaptureFailed(format!(
-            "CreateDIBSection failed: {error} (last error: {})",
-            windows::core::Error::from_thread().message()
-        ))
-    })?;
-
-    // Select the DIB section into the memory DC. The previous object
-    // selected into a freshly-created compatible DC is a 1x1 monochrome
-    // bitmap; we deliberately drop it on cleanup, so we don't restore it.
-    // SAFETY: Selecting a freshly created HBITMAP into a memory DC is the
-    // documented pattern. We discard the previous 1x1 default bitmap by
-    // leaking the previous HGDIOBJ slot — the documentation permits this
-    // for DCs that own no GDI resources, and we drop the DIB section on
-    // cleanup.
-    let _previous = unsafe { SelectObject(memory_dc, dib_section.into()) };
 
     // BitBlt with CAPTUREBLT to also include layered windows' content. The
     // system cursor is not drawn into the captured desktop.
+    // SAFETY: `memory_dc` is a valid HDC with the DIB section selected;
+    // `screen_dc` is a valid HDC for the desktop. The width/height bounds
+    // match the DIB section dimensions (validated above), so BitBlt will
+    // not read or write past the allocated buffers.
     let blt_ok = unsafe {
         BitBlt(
-            memory_dc,
+            memory_dc.handle(),
             0,
             0,
             width_i32,
             height_i32,
-            Some(screen_dc),
+            Some(screen_dc.0),
             0,
             0,
             SRCCOPY | CAPTUREBLT,
         )
     };
     if let Err(error) = blt_ok {
-        // Best-effort cleanup before reporting the failure.
-        let _ = unsafe { DeleteObject(dib_section.into()) };
-        let _ = unsafe { DeleteDC(memory_dc) };
-        let _ = unsafe { ReleaseDC(None, screen_dc) };
         return Err(HelperError::CaptureFailed(format!(
             "BitBlt failed: {error} (last error: {})",
             windows::core::Error::from_thread().message()
@@ -230,32 +398,30 @@ fn capture_primary_bgra(display: &DisplayInfo) -> Result<RawBgraCapture, HelperE
     // Copy the bits out of the DIB section. CreateDIBSection guarantees
     // that rows are tightly packed to width * 4 bytes because we used a
     // negative biHeight (top-down), so the pitch equals width * 4.
-    let width_u32 = source_width;
-    let height_u32 = source_height;
-    let row_bytes = (width_u32 as usize) * 4;
-    let total_bytes = row_bytes * (height_u32 as usize);
     let mut pixels = vec![0u8; total_bytes];
+    let bits = dib_section.bits();
     if !bits.is_null() {
         // SAFETY: `bits` points to a freshly-allocated DIB section whose
         // ownership is being transferred to us; we read exactly the
-        // documented number of bytes.
+        // documented number of bytes (width * 4 * height == total_bytes,
+        // which fits in isize::MAX per `validate_capture_dimensions`).
         unsafe {
             core::ptr::copy_nonoverlapping(bits as *const u8, pixels.as_mut_ptr(), total_bytes);
         }
     }
 
-    // Cleanup: delete the DIB section (frees the pixel storage pointed to
-    // by `bits`), delete the memory DC, and release the desktop DC. Order
-    // matters: deleting the DIB before the DC ensures we don't outlive the
-    // device that selected it.
-    let _ = unsafe { DeleteObject(dib_section.into()) };
-    let _ = unsafe { DeleteDC(memory_dc) };
-    let _ = unsafe { ReleaseDC(None, screen_dc) };
+    // C2 / cleanup: deselect the DIB by restoring the previous object,
+    // THEN drop the DIB guard (which deletes the bitmap), THEN drop the
+    // memory DC guard (which deletes the DC), THEN drop the screen DC
+    // guard (which releases the desktop DC). The order is load-bearing:
+    // deleting a bitmap while it is still selected into a DC is the
+    // classic Win32 ownership violation this fix is closing.
+    dib_section.set_unselected(memory_dc.handle(), previous);
 
     Ok(RawBgraCapture {
-        width: width_u32,
-        height: height_u32,
-        pitch: width_u32 * 4,
+        width: source_width,
+        height: source_height,
+        pitch: source_width * 4,
         pixels,
     })
 }
@@ -291,9 +457,33 @@ fn rotate_to_canonical(
         }
     }
 
-    let new_pitch = target_width
+    let new_pitch = target_width.checked_mul(4).ok_or_else(|| {
+        HelperError::CaptureFailed(format!("pitch overflow for rotated width {target_width}"))
+    })?;
+
+    // Validate the source pixel buffer length matches the expected
+    // pre-rotation size. This catches hostile or corrupt RawBgraCapture
+    // inputs that would otherwise cause out-of-bounds reads inside the
+    // rotation helpers.
+    let expected_source_bytes = (source_width as usize)
         .checked_mul(4)
-        .ok_or_else(|| HelperError::CaptureFailed("pitch overflow".into()))?;
+        .and_then(|row| row.checked_mul(source_height as usize))
+        .ok_or_else(|| {
+            HelperError::CaptureFailed(format!(
+                "raw capture pixel buffer size overflows usize for {source_width}x{source_height}"
+            ))
+        })?;
+    if raw.pixels.len() != expected_source_bytes {
+        return Err(HelperError::CaptureFailed(format!(
+            "raw capture pixel buffer length {} does not match expected {} for {source_width}x{source_height}",
+            raw.pixels.len(),
+            expected_source_bytes
+        )));
+    }
+
+    // Validate the destination pixel buffer size fits in isize::MAX
+    // before allocating it.
+    let _ = validate_capture_dimensions(target_width, target_height)?;
 
     let pixels = match rotation {
         DisplayRotation::Identity => raw.pixels,
@@ -539,5 +729,46 @@ mod tests {
         let pixels = solid_bgra(3, 2, 0xAB);
         assert_eq!(pixels.len(), 3 * 4 * 2);
         assert!(pixels.iter().all(|byte| *byte == 0xAB));
+    }
+
+    #[test]
+    fn validate_capture_dimensions_rejects_overflow() {
+        // i32::MAX * i32::MAX pixels at 4 bytes each is ~1.84e19 bytes —
+        // larger than isize::MAX on any supported platform, so a `vec![0u8;
+        // total]` allocation would panic. The validator must surface this as
+        // an InvalidDisplay error instead of leaking the panic through the
+        // caller (the panic path would in turn leak the desktop DC).
+        let err = validate_capture_dimensions(i32::MAX as u32, i32::MAX as u32)
+            .expect_err("i32::MAX x i32::MAX must overflow the pixel buffer");
+        assert!(
+            matches!(err, HelperError::InvalidDisplay(_)),
+            "overflow must surface as InvalidDisplay, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn validate_capture_dimensions_accepts_a_normal_1080p_monitor() {
+        // 1920x1080 fits comfortably in usize (1920 * 4 * 1080 = ~8MB) and
+        // must not be rejected.
+        validate_capture_dimensions(1920, 1080).expect("1920x1080 must pass dimension validation");
+    }
+
+    #[test]
+    fn rotate_to_canonical_rejects_mismatched_pixel_length() {
+        // A RawBgraCapture claiming 4x4 but holding only 3 bytes must be
+        // rejected up-front (otherwise the rotation helpers would panic on
+        // out-of-bounds indexing). rotate_to_canonical is the test seam.
+        let bogus = RawBgraCapture {
+            width: 4,
+            height: 4,
+            pitch: 16,
+            pixels: vec![1, 2, 3],
+        };
+        let err = rotate_to_canonical(bogus, DisplayRotation::Identity)
+            .expect_err("mismatched pixel length must be rejected");
+        assert!(
+            matches!(err, HelperError::CaptureFailed(_)),
+            "mismatched length must surface as CaptureFailed, got {err:?}"
+        );
     }
 }

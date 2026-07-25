@@ -55,6 +55,12 @@ pub fn set_dpi_awareness() -> Result<(), HelperError> {
         // because we set it earlier in this run, or because the host already
         // configured it for us), treat a second call as success.
         let context = current_process_awareness_context();
+        // SAFETY: `AreDpiAwarenessContextsEqual` is a pure FFI comparison
+        // between two DPI_AWARENESS_CONTEXT values; both arguments are valid
+        // because `current_process_awareness_context()` returns the value
+        // previously returned by the system for our process, and the
+        // `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` is a documented SDK
+        // constant. The function takes no pointers and writes to no memory.
         let already_v2 = unsafe {
             AreDpiAwarenessContextsEqual(context, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
                 .as_bool()
@@ -162,6 +168,10 @@ fn dpi_from_desktop() -> Result<f32, HelperError> {
             windows::core::Error::from_thread().message()
         )));
     }
+    // SAFETY: `GetDeviceCaps` is a pure query against an HDC. We hold the
+    // desktop DC acquired above; the call neither frees nor invalidates
+    // it, so the same HDC remains valid for the matching `ReleaseDC`
+    // below. The capability index (`LOGPIXELSX`) is a documented constant.
     let dpi_x = unsafe { GetDeviceCaps(Some(hdc), LOGPIXELSX) };
     // SAFETY: We obtained the DC via GetDC(None) and must release it to avoid
     // leaking the desktop DC. Passing the same hwnd is correct.

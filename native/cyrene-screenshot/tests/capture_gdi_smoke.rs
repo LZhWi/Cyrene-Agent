@@ -116,3 +116,40 @@ fn gdi_freeze_handles_canonical_rotation_invariant() {
         "frozen height must match display.bounds.height in canonical orientation"
     );
 }
+
+#[test]
+fn gdi_freeze_returns_invalid_display_for_overflowing_dimensions() {
+    // A DisplayInfo whose bounds would overflow the pixel buffer (4 bytes
+    // per pixel times width times height) must be rejected up-front with a
+    // structured HelperError, not allowed to leak a panic through the
+    // allocator and the GDI handles held by the in-progress capture.
+    cyrene_screenshot::win::display::set_dpi_awareness()
+        .expect("set_dpi_awareness must succeed before freeze");
+
+    let display = cyrene_screenshot::win::display::DisplayInfo {
+        bounds: cyrene_screenshot::geometry::RectI {
+            x: 0,
+            y: 0,
+            // i32::MAX x i32::MAX (each fits in i32, but 4*w*h exceeds
+            // isize::MAX) — a value no real monitor ever reports but a
+            // hostile / corrupt DisplayInfo could.
+            width: i32::MAX as u32,
+            height: i32::MAX as u32,
+        },
+        dpi: 96.0,
+        rotation: cyrene_screenshot::geometry::DisplayRotation::Identity,
+        is_primary: true,
+    };
+
+    let mut backend = GdiCaptureBackend::new().expect("GdiCaptureBackend::new must succeed");
+    let err = backend
+        .freeze(&display)
+        .expect_err("freeze must reject overflowing dimensions with a structured error");
+    assert!(
+        matches!(
+            err,
+            cyrene_screenshot::error::HelperError::InvalidDisplay(_)
+        ),
+        "overflow must surface as InvalidDisplay, got {err:?}"
+    );
+}

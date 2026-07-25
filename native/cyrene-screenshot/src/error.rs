@@ -70,3 +70,11 @@ impl HelperError {
         }
     }
 }
+
+// TODO(T5b): bridge `HelperError` into the process-level `AppError` so
+// request handlers can convert capture / display failures into the IPC
+// error envelope that the Electron helper client understands. The two
+// hierarchies are intentionally separate today — `HelperError` is
+// request-scoped (a single freeze / display query), `AppError` is
+// process-scoped — but T5b's overlay state machine needs a single
+// error type to surface to the JS helper.
