@@ -78,25 +78,25 @@ const onlineBadge = onlineStatusLabel.closest(".profile__online") as HTMLElement
 let runtimeSyncEnabled = false;
 let latestRuntimeState: RuntimeState | null = null;
 
-const STATUS_EMOJI: Record<RuntimeStatus, string> = {
-  陪伴中: "🌸",
-  思考中: "💭",
-  工作中: "⚡",
-	  聆听中: `<svg width="20" height="20" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:block"><title>聆听中</title><path d="M12 35.0137H9H4V8.01273C4 6.90868 4.89543 6.01367 6 6.01367H42C43.1046 6.01367 44 6.90868 44 8.01273V35.0137H36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 32L14 42H34L24 32Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`,
-  提醒中: "🔔",
-  离线: "💤",
+const STATUS_ICON: Record<RuntimeStatus, string> = {
+  陪伴中: "../status/陪伴中.png",
+  思考中: "../status/思考中.png",
+  工作中: "../status/工作中.png",
+  聆听中: "../status/聆听中.png",
+  提醒中: "../status/提醒.png",
+  离线: "../status/离线.png",
 };
 
-const FEELING_EMOJI: Record<RuntimeFeeling, string> = {
-  平静: "🌿",
-  开心: "✨",
-  温柔: "🌸",
-  激动: "🎉",
-  撒娇: "🥺",
-  担心: "💙",
-  难过: "💧",
-  感动: "🥹",
-  害羞: "🌹",
+const FEELING_ICON: Record<RuntimeFeeling, string> = {
+  平静: "../feeling/平静.png",
+  开心: "../feeling/开心.png",
+  温柔: "../feeling/温柔.png",
+  激动: "../feeling/激动.png",
+  撒娇: "../feeling/撒娇.png",
+  担心: "../feeling/担心.png",
+  难过: "../feeling/难过.png",
+  感动: "../feeling/感动.png",
+  害羞: "../feeling/害羞.png",
 };
 
 function applyRuntimeDisabled(): void {
@@ -115,9 +115,11 @@ function applyRuntimeState(state: RuntimeState | null): void {
   }
   const status = state?.status ?? "陪伴中";
   const feeling = state?.feeling ?? "平静";
-	  statusEmojiEl.innerHTML = STATUS_EMOJI[status] ?? `<svg width="20" height="20" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M33 38H22V30H36V22H44V38H39L36 41L33 38Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 6H36V30H17L13 34L9 30H4V6Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 18H20" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M26 18H27" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 18H13" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>`;
+  const statusIcon = STATUS_ICON[status] ?? STATUS_ICON["陪伴中"];
+  const feelingIcon = FEELING_ICON[feeling] ?? FEELING_ICON["平静"];
+  statusEmojiEl.innerHTML = `<img src="${statusIcon}" alt="${status}" width="48" height="48" />`;
   statusLabelEl.textContent = status;
-  feelingEmojiEl.textContent = FEELING_EMOJI[feeling] ?? "🌿";
+  feelingEmojiEl.innerHTML = `<img src="${feelingIcon}" alt="${feeling}" width="48" height="48" />`;
   feelingLabelEl.textContent = feeling;
 }
 
