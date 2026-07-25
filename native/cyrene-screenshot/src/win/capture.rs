@@ -78,7 +78,8 @@ pub enum RefreshOutcome {
 /// Fields are cumulative monotonic counters exposed on the wire via
 /// `Event::OverlayVisible` and `Event::CaptureReleased` so integration tests
 /// can assert the documented invariants without a private inspector.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CaptureDiagnostics {
     /// Stable backend identifier surfaced on the wire (e.g. `"dxgi"`, `"gdi"`).
     pub backend: &'static str,

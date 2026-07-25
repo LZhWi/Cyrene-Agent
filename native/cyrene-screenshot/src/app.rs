@@ -334,6 +334,7 @@ impl OverlayApp {
                 let _ = event_tx.send(Event::OverlayVisible {
                     request_id,
                     freeze_duration_ms,
+                    diagnostics: self.capture.diagnostics(),
                 });
                 true
             }
@@ -472,7 +473,10 @@ impl OverlayApp {
             height: self.display.bounds.height,
         });
         let selection = match self.renderer.extract_selection(selection) {
-            Ok(selection) => selection,
+            Ok(selection) => {
+                self.capture.record_selection_readback();
+                selection
+            }
             Err(error) => {
                 self.finish_error(
                     event_tx,
@@ -511,6 +515,7 @@ impl OverlayApp {
             clipboard_written,
             width: selection_width,
             height: selection_height,
+            diagnostics: self.capture.diagnostics(),
         });
         match lock_registry(&self.requests) {
             Ok(mut registry_guard) => {
