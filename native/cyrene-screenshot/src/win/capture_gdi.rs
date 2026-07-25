@@ -113,13 +113,8 @@ impl CaptureBackend for GdiCaptureBackend {
             duplication_rebuilds: 0,
         }
     }
-}
 
-impl GdiCaptureBackend {
-    /// Increment the selection readback counter. Called by `OverlayRenderer`
-    /// when it BitBlts the selection out of the GDI cache so the wire
-    /// diagnostics report the same number on `capture-released`.
-    pub fn record_selection_readback(&mut self) {
+    fn record_selection_readback(&mut self) {
         self.selection_cpu_readbacks = self.selection_cpu_readbacks.saturating_add(1);
     }
 }

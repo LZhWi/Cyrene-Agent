@@ -129,6 +129,11 @@ pub trait CaptureBackend {
     /// intentionally `Copy` so callers can read it without disturbing the
     /// backend's internal state.
     fn diagnostics(&self) -> CaptureDiagnostics;
+
+    /// Record that a selection CPU readback has been performed. Callers invoke
+    /// this after extracting a selection from the frozen frame, so the
+    /// diagnostics counter tracks the readback for verification tests.
+    fn record_selection_readback(&mut self);
 }
 
 /// Convenience: copy of the active frozen frame's canonical bounds. Used by

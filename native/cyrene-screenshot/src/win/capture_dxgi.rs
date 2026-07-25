@@ -624,14 +624,8 @@ impl CaptureBackend for DxgiCaptureBackend {
             duplication_rebuilds: self.duplication_rebuilds,
         }
     }
-}
 
-impl DxgiCaptureBackend {
-    /// Increment the selection readback counter from an external caller (the
-    /// `OverlayApp` commit path). Mirrors
-    /// [`crate::win::capture_gdi::GdiCaptureBackend::record_selection_readback`]
-    /// so the wire diagnostics count is uniform across backends.
-    pub fn record_selection_readback(&mut self) {
+    fn record_selection_readback(&mut self) {
         self.selection_cpu_readbacks = self.selection_cpu_readbacks.saturating_add(1);
     }
 }

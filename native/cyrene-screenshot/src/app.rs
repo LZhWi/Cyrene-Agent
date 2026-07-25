@@ -88,7 +88,8 @@ fn run_message_loop(
 ) -> Result<(), AppError> {
     let display = query_primary_display()?;
     let overlay = OverlayWindow::create(&display)?;
-    let mut app_state = OverlayApp::new(display, overlay, output_dir)?;
+    let capture: Box<dyn CaptureBackend> = Box::new(GdiCaptureBackend::new()?);
+    let mut app_state = OverlayApp::new(display, overlay, capture, output_dir)?;
     let mut message = MSG::default();
     loop {
         // SAFETY: message points to initialized writable storage and the window
@@ -145,7 +146,7 @@ struct ActiveRequest {
 struct OverlayApp {
     display: DisplayInfo,
     overlay: OverlayWindow,
-    capture: GdiCaptureBackend,
+    capture: Box<dyn CaptureBackend>,
     renderer: OverlayRenderer,
     /// Interaction state for the currently-visible overlay. Cleared as soon as
     /// the overlay hides (after `capture-released` or any error path). Does NOT
@@ -174,12 +175,13 @@ impl OverlayApp {
     fn new(
         display: DisplayInfo,
         overlay: OverlayWindow,
+        capture: Box<dyn CaptureBackend>,
         output_dir: PathBuf,
     ) -> Result<Self, AppError> {
         Ok(Self {
             display,
             overlay,
-            capture: GdiCaptureBackend::new()?,
+            capture,
             renderer: OverlayRenderer::new()?,
             active: None,
             requests: Arc::new(Mutex::new(RequestRegistry::default())),
