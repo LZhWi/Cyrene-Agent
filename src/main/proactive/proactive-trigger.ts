@@ -452,7 +452,7 @@ export function createProactiveTrigger(deps: ProactiveTriggerDependencies): Proa
     const sorted = sortCandidates(filtered);
 
     if (sorted.length === 0) {
-      log("skipped reason=no_candidate_above_threshold", { reason });
+      // log("skipped reason=no_candidate_above_threshold", { reason });
       previousIdleSec = snapshot.idleSec;
       return;
     }

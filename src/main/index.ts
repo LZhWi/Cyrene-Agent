@@ -1315,12 +1315,13 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   if (before.uiIcon !== normalized.uiIcon) {
     applyUiIcon(normalized.uiIcon);
   }
-  if (before.screenshotHotkey !== normalized.screenshotHotkey) {
-    const result = replaceScreenshotHotkey(normalized.screenshotHotkey);
-    if (!result.ok) {
-      console.warn("[Cyrene] 截图热键注册失败，可能被其他应用占用:", normalized.screenshotHotkey);
-    }
-  }
+  // TODO: 截图功能重构中，暂时禁用
+  // if (before.screenshotHotkey !== normalized.screenshotHotkey) {
+  //   const result = replaceScreenshotHotkey(normalized.screenshotHotkey);
+  //   if (!result.ok) {
+  //     console.warn("[Cyrene] 截图热键注册失败，可能被其他应用占用:", normalized.screenshotHotkey);
+  //   }
+  // }
   return normalized;
 }
 
@@ -4497,9 +4498,9 @@ app.whenReady().then(async () => {
     console.error("[Cyrene] playwright MCP sync failed:", e)
   );
 
-  // 截图：注册 IPC + 全局热键
-  initScreenshotIpc();
-  registerScreenshotHotkey(initialSettings.screenshotHotkey ?? "Alt+Shift+S");
+  // TODO: 截图功能重构中，暂时禁用
+  // initScreenshotIpc();
+  // registerScreenshotHotkey(initialSettings.screenshotHotkey ?? "Alt+Shift+S");
 
   // Cloud Music MCP wiring (MusicService + IPC + 5 Agent tools + shutdown latch)
   const musicPaths = resolveMusicPaths();

@@ -163,7 +163,7 @@ Cyrene 对本地模型、自定义端点及未列入兼容性名单的第三方�
 - MiMo
 - MiniMax
 - OpenAI
-- Anthropic Claude
+- Anthropic
 
 不同厂商和具体型号的验证状态并不相同，请以项目内的模型兼容性表及实测报告为准。
 
