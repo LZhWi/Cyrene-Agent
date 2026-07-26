@@ -3625,6 +3625,7 @@ async function insertImageAttachment(input: {
   base64?: string;
   mime: string;
   filePath?: string;
+  previewUrl?: string;
   name?: string;
 }): Promise<void> {
   const filePath = input.filePath
@@ -3640,7 +3641,7 @@ async function insertImageAttachment(input: {
     mime: input.mime,
     previewUrl: input.base64
       ? `data:${input.mime};base64,${input.base64}`
-      : undefined,
+      : input.previewUrl,
     status: "pending",
   });
   updateFileTags();
@@ -3656,6 +3657,7 @@ window.chat?.onScreenshotInsert?.((data) => {
   void insertImageAttachment({
     mime: data.mime,
     filePath: data.filePath,
+    previewUrl: data.previewUrl,
     name: `截图_${Date.now()}.png`,
   });
 });

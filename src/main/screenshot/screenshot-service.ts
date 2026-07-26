@@ -1,8 +1,12 @@
 import * as path from "node:path";
+import { pathToFileURL } from "node:url";
 import type { ScreenshotInsertPayload } from "../../shared/ipc-channels";
 import type { ScreenshotHelperClient } from "./helper-client";
 
 export type ScreenshotInsertData = ScreenshotInsertPayload;
+export type ScreenshotInsertCandidate =
+  Omit<ScreenshotInsertPayload, "previewUrl">
+  & { previewUrl?: string };
 
 export interface ScreenshotService {
   init(initialHotkey: string): void;
@@ -28,7 +32,7 @@ export interface ScreenshotImageProbe {
 }
 
 export function validateScreenshotInsert(
-  data: ScreenshotInsertData,
+  data: ScreenshotInsertCandidate,
   screenshotDirectory: string,
   loadImage: (filePath: string) => ScreenshotImageProbe,
 ): ScreenshotInsertData | null {
@@ -56,7 +60,11 @@ export function validateScreenshotInsert(
   ) {
     return null;
   }
-  return { ...data, filePath };
+  return {
+    ...data,
+    filePath,
+    previewUrl: pathToFileURL(filePath).toString(),
+  };
 }
 
 function reasonFrom(error: unknown): string {
@@ -87,6 +95,7 @@ export function createScreenshotService(deps: ScreenshotServiceDeps): Screenshot
         width: result.width,
         height: result.height,
         mime: result.mime,
+        previewUrl: pathToFileURL(result.filePath).toString(),
       });
       return { ok: true };
     } catch (error) {

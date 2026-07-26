@@ -64,7 +64,7 @@ describe("createScreenshotService", () => {
     expect(harness.sendInsert).not.toHaveBeenCalled();
   });
 
-  it("maps the chat button to clipboard-and-file and inserts path-only metadata", async () => {
+  it("maps the chat button to clipboard-and-file with a renderer-safe preview URL", async () => {
     const harness = createHarness();
     vi.mocked(harness.client.start).mockResolvedValueOnce(
       result({
@@ -81,6 +81,7 @@ describe("createScreenshotService", () => {
       width: 800,
       height: 600,
       mime: "image/png",
+      previewUrl: "file:///C:/shots/valid.png",
     });
   });
 
@@ -178,7 +179,10 @@ describe("validateScreenshotInsert", () => {
         isEmpty: () => false,
         getSize: () => ({ width: 800, height: 600 }),
       })),
-    ).toEqual(data);
+    ).toEqual({
+      ...data,
+      previewUrl: "file:///C:/user-data/screenshots/capture.png",
+    });
   });
 
   it("rejects files outside the screenshot directory and mismatched image dimensions", () => {
@@ -228,6 +232,9 @@ describe("validateScreenshotInsert", () => {
         isEmpty: () => false,
         getSize: () => ({ width: 20, height: 10 }),
       })),
-    ).toEqual(data);
+    ).toEqual({
+      ...data,
+      previewUrl: "file:///C:/user-data/screenshots/..capture.png",
+    });
   });
 });

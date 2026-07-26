@@ -4,6 +4,7 @@ export interface ScreenshotInsertPayload {
   width: number;
   height: number;
   filePath: string;
+  previewUrl: string;
 }
 
 export const IPC = {
