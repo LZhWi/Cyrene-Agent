@@ -86,6 +86,23 @@ describe("proactive prompt", () => {
     expect(combined).not.toContain("工具目录");
     expect(combined).not.toContain("Tool Calling");
   });
+
+  it("places tone rules after both histories so rules outweigh stale samples", () => {
+    const messages = buildProactiveMessages({
+      basePersona: "PERSONA",
+      ordinaryHistory: [turn("user", 1)],
+      proactiveHistory: [turn("model", 2)],
+      sceneId: "work_break",
+      localNow: new Date(2026, 6, 13, 14, 0),
+      idleSec: 0,
+      unansweredCount: 0,
+      toneRules: "TONE_RULES_MARKER",
+    });
+    const system = String(messages[0].content);
+    expect(system).toContain("TONE_RULES_MARKER");
+    expect(system.indexOf("TONE_RULES_MARKER")).toBeGreaterThan(system.indexOf("[最近使用的普通聊天会话]"));
+    expect(system.indexOf("TONE_RULES_MARKER")).toBeGreaterThan(system.indexOf("[主动聊天专用会话]"));
+  });
 });
 
 describe("parseProactiveDecision", () => {

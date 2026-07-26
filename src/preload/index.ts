@@ -424,6 +424,10 @@ const openerApi = {
   openPackDir: () => ipcRenderer.invoke(IPC.OPENER_OPEN_PACK_DIR),
   openInstallDocs: () => ipcRenderer.invoke(IPC.OPENER_OPEN_INSTALL_DOCS),
   openSession: (sessionId: string) => ipcRenderer.invoke(IPC.CHATS_OPEN_IN_CHAT_WINDOW, sessionId),
+  // LLM 主动消息反馈闭环（聊天窗口用）
+  proactiveReplyFeedback: () => ipcRenderer.invoke(IPC.OPENER_PROACTIVE_REPLY_FEEDBACK) as Promise<boolean>,
+  proactiveIgnoreFeedback: () => ipcRenderer.invoke(IPC.OPENER_PROACTIVE_IGNORE_FEEDBACK) as Promise<boolean>,
+  proactivePendingFeedback: () => ipcRenderer.invoke(IPC.OPENER_PROACTIVE_PENDING_FEEDBACK) as Promise<boolean>,
 };
 contextBridge.exposeInMainWorld("openerBridge", openerApi);
 

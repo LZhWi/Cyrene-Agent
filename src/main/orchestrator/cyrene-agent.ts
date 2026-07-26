@@ -50,6 +50,8 @@ export interface CyreneRunOptions {
   toolSystemContent: string;
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。 */
   soulSystemBaseContent: string;
+  /** 可选：Soul 阶段尾部锚点（压缩版硬行为规则，追加在对话之后）。 */
+  soulTailAnchorContent?: string;
 }
 
 /** FC 循环最终结果（供桥层做副作用用）。 */
@@ -185,6 +187,7 @@ export class CyreneAgent extends AbstractAgent {
             requiredToolName: options.requiredToolName,
             toolSystemContent: options.toolSystemContent,
             soulSystemBaseContent: options.soulSystemBaseContent,
+            soulTailAnchorContent: options.soulTailAnchorContent,
             timeoutMs: options.timeoutMs,
             imageCaptionFallback: options.imageCaptionFallback,
             executeTool: (tc, runnableToolIds) => executeToolCall(tc, runnableToolIds, {

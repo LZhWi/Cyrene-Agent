@@ -82,6 +82,9 @@ export interface TwoPhaseFcOptions {
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。
    *  工具结果（role: tool 消息）已在 conversation 中携带，本字段不重复注入。 */
   soulSystemBaseContent: string;
+  /** 可选：Soul 阶段尾部锚点（压缩版硬行为规则）。
+   *  作为独立 system 消息追加在 conversation 之后，确保规则近因权重高于历史中的旧样本。 */
+  soulTailAnchorContent?: string;
   timeoutMs: number;
   maxToolRounds?: number;
   perRoundTimeoutMs?: number;
@@ -243,6 +246,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     tools,
     toolSystemContent,
     soulSystemBaseContent,
+    soulTailAnchorContent,
     timeoutMs,
     imageCaptionFallback,
     executeTool,
@@ -402,6 +406,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
       cfg: options.settings,
       conversation,
       soulSystemBaseContent,
+      soulTailAnchorContent,
       buildSoulToolResultsSummary,
       allToolResults,
       accInput,
@@ -424,6 +429,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     cfg: options.settings,
     conversation,
     soulSystemBaseContent,
+    soulTailAnchorContent,
     buildSoulToolResultsSummary,
     allToolResults,
     accInput,
@@ -444,6 +450,7 @@ async function runSoulPhase(args: {
   cfg: AgentLoopSettings;
   conversation: ChatMessage[];
   soulSystemBaseContent: string;
+  soulTailAnchorContent: string | undefined;
   buildSoulToolResultsSummary: (results: ToolCallResult[]) => string;
   allToolResults: ToolCallResult[];
   accInput: number;
@@ -459,6 +466,7 @@ async function runSoulPhase(args: {
     cfg,
     conversation,
     soulSystemBaseContent,
+    soulTailAnchorContent,
     buildSoulToolResultsSummary,
     allToolResults,
     accInput,
@@ -479,10 +487,18 @@ async function runSoulPhase(args: {
     ? soulSystemBaseContent + "\n\n" + soulResultsSummary
     : soulSystemBaseContent;
 
+  // 尾部锚点：作为独立 system 消息追加在 conversation 之后，
+  // 确保硬行为规则比历史消息中的旧样本更靠近生成点（与主动管线的 toneRules 后置等效）。
+  const baseSoulMessages = withSystem(conversation, finalSystemContent);
+  const anchor = soulTailAnchorContent?.trim();
+  const soulMessages = anchor
+    ? [...baseSoulMessages, { role: "system" as const, content: anchor }]
+    : baseSoulMessages;
+
   // Soul 请求**不带 tools** 字段
   let req: ChatRequest = {
     model: cfg.model,
-    messages: withSystem(conversation, finalSystemContent),
+    messages: soulMessages,
     stream: false,
   };
   if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, cfg);

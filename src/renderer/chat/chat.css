@@ -894,6 +894,41 @@ body {
   padding: 0 9px;
 }
 
+/* ── 主动消息"忽略"按钮 ──
+   只出现在 proactive-chat 会话最后一条未回复的主动消息下。
+   点击 = 负反馈（她会少发类似场景的主动消息），消息保留；与删除按钮语义不同。
+   风格同复制按钮：低调小文字按钮，避免视觉上像在催用户表态。 */
+.msg__ignore {
+  flex: 0 0 auto;
+  height: 26px;
+  padding: 0 9px;
+  border-radius: var(--rb-radius-md);
+  background: transparent;
+  border: 1px solid var(--rb-border-soft);
+  color: var(--rb-text-muted);
+  cursor: pointer;
+  opacity: 0.55;
+  display: inline-flex;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1;
+  transition: opacity 0.18s, background 0.18s, border-color 0.18s, color 0.18s;
+}
+.msg__ignore:hover {
+  opacity: 1;
+  background: var(--rb-border-faint);
+  border-color: var(--rb-border-strong);
+  color: var(--rb-text-default);
+}
+.msg__ignore:active {
+  transform: scale(0.96);
+}
+.msg__ignore:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
 
 /* ── 文件上传按钮 ── */
 .chat__attach {

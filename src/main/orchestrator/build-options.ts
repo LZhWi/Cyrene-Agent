@@ -70,6 +70,8 @@ export interface BuildOptionsDeps {
   chatRequestTimeoutMs: number;
   captionImageForFallback?: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
   buildMusicCompanionContext?: (conversationId: string, userText: string) => string;
+  /** 可选：加载尾部锚点（prompts/tone-anchor.md，压缩版硬行为规则）。文件不存在时返回空串=不启用。 */
+  loadToneAnchor?: () => string;
 }
 
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
@@ -419,6 +421,10 @@ export async function buildAgentRunOptions(
 
   deps.logWorldbookInjection(alwaysOnContext, systemContent);
 
+  // 尾部锚点：SOUL 阶段追加在 conversation 之后的压缩版硬规则，
+  // 解决 tone-rules 在 system 内部被 16 条历史消息压住的近因劣势（热加载，每轮现读）。
+  const soulTailAnchorContent = deps.loadToneAnchor?.()?.trim() ?? "";
+
   // 第一期：原始 messages 不再携带 system。FC 循环按阶段动态注入。
   const fcMessages: ChatMessage[] = withDirectImageAttachments(llmMessages as unknown as ChatMessage[], input);
   const imageCaptionFallback = buildImageCaptionFallbackMessages(toolSystemContent + "\n\n---\n\n" + soulSystemBaseContent, llmMessages as unknown as ChatMessage[], input, deps);
@@ -438,6 +444,7 @@ export async function buildAgentRunOptions(
       timeoutMs: deps.chatRequestTimeoutMs,
       toolSystemContent,
       soulSystemBaseContent,
+      ...(soulTailAnchorContent ? { soulTailAnchorContent } : {}),
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
       ...(isTalkMode ? { tools: runTools as ToolDefinition[] } : {}),
     },

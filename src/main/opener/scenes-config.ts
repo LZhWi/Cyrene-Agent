@@ -29,7 +29,10 @@ export const DESIRE_RATE: Record<"quiet" | "normal" | "lively", number> = {
 };
 
 export const DESIRE_THRESHOLD = 40;        // 起步阈值
-export const RESPONSE_WINDOW_MS = 300000;  // 5 分钟响应窗口
+// 响应窗口：主动触发后等待接话的时长，超时记为忽略（affinity 负反馈）。
+// 15 分钟：主动消息是异步消息而非弹窗，用户离开片刻后回来接话不应被误记为无视；
+// 误判"忽略"的负反馈会落盘且迟到回应无法补偿，而真忽略晚记账几乎无代价。
+export const RESPONSE_WINDOW_MS = 900000;  // 15 分钟响应窗口
 
 /** affinity 边界。 */
 export const AFFINITY_MIN = 0.3;

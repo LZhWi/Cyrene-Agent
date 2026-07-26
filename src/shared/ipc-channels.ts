@@ -136,6 +136,10 @@ export const IPC = {
   OPENER_GET_STATUS: "opener:get-status",         // 渲染端 → 主进程：查询主动开口语音包状态
   OPENER_OPEN_PACK_DIR: "opener:open-pack-dir",   // 渲染端 → 主进程：打开当前实际读取的语音包目录
   OPENER_OPEN_INSTALL_DOCS: "opener:open-install-docs", // 渲染端 → 主进程：打开本地语音包安装说明
+  // LLM 主动消息的反馈闭环（聊天窗口 → 主进程）
+  OPENER_PROACTIVE_REPLY_FEEDBACK: "opener:proactive-reply-feedback",     // 用户回复了主动会话 → 正反馈
+  OPENER_PROACTIVE_IGNORE_FEEDBACK: "opener:proactive-ignore-feedback",   // 用户点"忽略" → 负反馈
+  OPENER_PROACTIVE_PENDING_FEEDBACK: "opener:proactive-pending-feedback", // 查询是否有待判定的主动消息（控制"忽略"按钮显隐）
   // embedding model status
   EMBEDDING_GET_STATUS: "embedding:get-status",
   EMBEDDING_DOWNLOAD: "embedding:download",

@@ -92,6 +92,7 @@ import { synthesize as mimoSynthesize } from "./tts/mimo-engine";
 import { synthesizeByEngine } from "./tts/tts-dispatcher";
 import { startOpener, stopOpener, setLive2dWindow, reloadManifest, handleBubbleClick, handleChatWindowOpened, testFire, setProactiveCandidateHandler, getPresetFallback } from "./opener/opener-runner";
 import { loadState as loadOpenerState, saveState as saveOpenerState } from "./opener/desire-engine";
+import { hasPendingFeedback, settleReplyFeedback, settleIgnoreFeedback } from "./opener/proactive-feedback";
 import type { ShowBubblePayload } from "./opener/opener-types";
 import { SCENE_CONFIGS } from "./opener/scenes-config";
 import { getManifestPath, getOpenerPackDir } from "./opener/opener-pack-store";
@@ -503,6 +504,8 @@ interface GeneralSettings {
   proactiveChatMode: ProactiveChatMode;
   /** 主动消息最终投递到本地、微信或飞书。 */
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
+  /** 主动消息回应反馈学习：根据回复/忽略微调各场景开口频率；关闭后不记录任何反馈。 */
+  proactiveFeedbackEnabled: boolean;
   // TTS 配置
   ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo";
   ttsAutoRead: boolean;
@@ -730,6 +733,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   mobileMessageSegmentation: "off",
   proactiveChatMode: "off",
   proactiveDeliveryTarget: "local",
+  proactiveFeedbackEnabled: true,
   ttsEngine: "off",
   ttsAutoRead: true,
   ttsSpeed: 1,
@@ -1148,6 +1152,9 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     mobileMessageSegmentation: normalizeMobileMessageSegmentationMode(input?.mobileMessageSegmentation),
     proactiveChatMode: normalizeProactiveChatMode(input?.proactiveChatMode),
     proactiveDeliveryTarget: normalizeProactiveDeliveryTarget(input?.proactiveDeliveryTarget),
+    proactiveFeedbackEnabled: input?.proactiveFeedbackEnabled === undefined
+      ? DEFAULT_GENERAL_SETTINGS.proactiveFeedbackEnabled
+      : Boolean(input.proactiveFeedbackEnabled),
     // TTS 配置
     ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo"].includes(input?.ttsEngine as string) ? input?.ttsEngine : "off") as GeneralSettings["ttsEngine"],
     ttsAutoRead: input?.ttsAutoRead === undefined ? DEFAULT_GENERAL_SETTINGS.ttsAutoRead : Boolean(input.ttsAutoRead),
@@ -1892,6 +1899,8 @@ async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
     localNow: new Date(snapshot.now),
     idleSec: snapshot.idleSec,
     unansweredCount: state.unansweredCount,
+    // tone-rules 放 system 末尾（历史墙之后），与回复管线的近尾部注入等效。
+    toneRules: loadPromptFile("tone-rules.md"),
   });
 }
 
@@ -2075,6 +2084,16 @@ function initializeProactiveChatService(): void {
   });
 
   setProactiveCandidateHandler(async (candidate) => {
+    // 兜底负反馈：她再次想开口时发现上一条主动消息仍未被回复/判定 → 补记一次忽略。
+    // 比固定响应窗口更自然：desire 重新积到阈值至少要十几分钟，给了用户充足的接话时间。
+    if (loadGeneralSettings().proactiveFeedbackEnabled) {
+      const fbState = loadOpenerState();
+      const ignoredScene = fbState.lastProactiveScene;
+      if (settleIgnoreFeedback(fbState)) {
+        saveOpenerState(fbState);
+        console.log(`[Opener] ${ignoredScene} 未获回应，补记忽略反馈`);
+      }
+    }
     await proactiveChatService?.evaluateCandidate(candidate);
   });
 
@@ -3874,6 +3893,28 @@ app.whenReady().then(async () => {
     }
   });
 
+  // LLM 主动消息的反馈闭环（聊天窗口）：回复=正反馈，点"忽略"=负反馈。
+  // 判定去重在 settle* 纯函数内部（lastFeedbackJudgedAt），重复调用无副作用。
+  // proactiveFeedbackEnabled=false 时四个入口全部短路，不读写 opener-state。
+  ipcMain.handle(IPC.OPENER_PROACTIVE_REPLY_FEEDBACK, () => {
+    if (!loadGeneralSettings().proactiveFeedbackEnabled) return false;
+    const state = loadOpenerState();
+    if (!settleReplyFeedback(state)) return false;
+    saveOpenerState(state);
+    console.log("[Opener] 主动消息被回复，记正反馈");
+    return true;
+  });
+  ipcMain.handle(IPC.OPENER_PROACTIVE_IGNORE_FEEDBACK, () => {
+    if (!loadGeneralSettings().proactiveFeedbackEnabled) return false;
+    const state = loadOpenerState();
+    if (!settleIgnoreFeedback(state)) return false;
+    saveOpenerState(state);
+    console.log("[Opener] 主动消息被忽略，记负反馈");
+    return true;
+  });
+  ipcMain.handle(IPC.OPENER_PROACTIVE_PENDING_FEEDBACK, () =>
+    loadGeneralSettings().proactiveFeedbackEnabled && hasPendingFeedback(loadOpenerState()));
+
   // Opener 手动测试气泡
   ipcMain.handle(IPC.OPENER_TEST_FIRE, async () => { await testFire(); });
 
@@ -4694,6 +4735,12 @@ app.whenReady().then(async () => {
       throw Object.assign(new Error("PC 正在对话中，请稍后再回复～"), { code: "PC_BUSY" });
     }
 
+    // 回复主动消息 = 正反馈（与桌面一致）。必须在 onUserMessage 之前——
+    // invalidateForUserMessage 会清零 unansweredCount，之后 settleReplyFeedback 就判不到了。
+    if (loadGeneralSettings().proactiveFeedbackEnabled) {
+      const openerState = loadOpenerState();
+      if (settleReplyFeedback(openerState)) saveOpenerState(openerState);
+    }
     proactiveConversationLifecycle.onUserMessage();
     proactiveConversationLifecycle.onConversationStarted();
     try {
@@ -4970,6 +5017,8 @@ app.whenReady().then(async () => {
     normalizeChatMessages: ((raw: ReadonlyArray<unknown>) =>
       normalizeChatMessages(raw as any)) as BuildOptionsDeps["normalizeChatMessages"],
     chatRequestTimeoutMs: CHAT_REQUEST_TIMEOUT_MS,
+    // 尾部锚点：热加载，文件不存在时返回空串=不启用。
+    loadToneAnchor: () => loadPromptFile("tone-anchor.md"),
     captionImageForFallback: async (filePath: string) => {
       const validated = validateCaptionImagePath(filePath);
       if (!validated.ok) return { ok: false, error: validated.error };

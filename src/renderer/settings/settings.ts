@@ -315,6 +315,7 @@ interface GeneralSettings {
   mobileMessageSegmentation: MobileMessageSegmentationMode;
   proactiveChatMode: ProactiveChatMode;
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
+  proactiveFeedbackEnabled: boolean;
 }
 
 interface UserApi {
@@ -552,6 +553,7 @@ if (!window.settings) {
       mobileMessageSegmentation: "off",
       proactiveChatMode: "off",
       proactiveDeliveryTarget: "local",
+      proactiveFeedbackEnabled: true,
     }),
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
     channelsGetStatus: () => Promise.resolve({}),
@@ -703,6 +705,8 @@ const mobileMessageSegmentationSelect = document.getElementById("mobile-message-
 const proactiveChatSelect = document.getElementById("proactive-chat-select") as HTMLElement;
 const proactiveDeliveryRow = document.getElementById("proactive-delivery-row") as HTMLElement;
 const proactiveDeliverySelect = document.getElementById("proactive-delivery-select") as HTMLElement;
+const proactiveFeedbackRow = document.getElementById("proactive-feedback-row") as HTMLElement;
+const proactiveFeedbackSelect = document.getElementById("proactive-feedback-select") as HTMLElement;
 const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
 const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputElement;
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
@@ -877,8 +881,18 @@ function getProactiveDeliveryValue(): ProactiveDeliveryTarget {
   return normalizeProactiveDeliveryTarget(getOptionGroupValue(proactiveDeliverySelect, "local"));
 }
 
+function applyProactiveFeedbackSelection(enabled: boolean): void {
+  applyOptionGroupValue(proactiveFeedbackSelect, enabled ? "on" : "off");
+}
+
+function getProactiveFeedbackValue(): boolean {
+  return getOptionGroupValue(proactiveFeedbackSelect, "on") === "on";
+}
+
 function renderProactiveDeliveryVisibility(): void {
-  proactiveDeliveryRow.hidden = getProactiveChatValue() !== "on";
+  const enabled = getProactiveChatValue() === "on";
+  proactiveDeliveryRow.hidden = !enabled;
+  proactiveFeedbackRow.hidden = !enabled;
 }
 
 function renderProactiveDeliveryAvailability(statuses: Record<string, { phase?: string }>): void {
@@ -1190,6 +1204,7 @@ async function loadGeneralSettings(): Promise<void> {
     applyMobileMessageSegmentationSelection(normalizeMobileMessageSegmentationMode(cfg.mobileMessageSegmentation));
     applyProactiveChatSelection(normalizeProactiveChatMode(cfg.proactiveChatMode));
     applyProactiveDeliverySelection(normalizeProactiveDeliveryTarget(cfg.proactiveDeliveryTarget));
+    applyProactiveFeedbackSelection(cfg.proactiveFeedbackEnabled ?? true);
     renderProactiveDeliveryVisibility();
     void window.settings!.channelsGetStatus()
       .then((status: unknown) => renderProactiveDeliveryAvailability(status as Record<string, { phase?: string }>))
@@ -1363,6 +1378,13 @@ proactiveDeliverySelect.querySelectorAll<HTMLButtonElement>(".option-block").for
   });
 });
 
+proactiveFeedbackSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
+  button.addEventListener("click", () => {
+    applyProactiveFeedbackSelection(button.dataset.value === "on");
+    setPreferencesSaveStatus("有未保存的更改");
+  });
+});
+
 preferencesForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   setPreferencesSaveStatus("保存中…");
@@ -1373,6 +1395,7 @@ preferencesForm.addEventListener("submit", async (e) => {
       mobileMessageSegmentation: getMobileMessageSegmentationValue(),
       proactiveChatMode: getProactiveChatValue(),
       proactiveDeliveryTarget: getProactiveDeliveryValue(),
+      proactiveFeedbackEnabled: getProactiveFeedbackValue(),
     });
     setPreferencesSaveStatus("已保存", "is-ok");
   } catch {
@@ -1982,6 +2005,8 @@ clearChatHistoryBtn.addEventListener("click", async () => {
       for (const s of sessions) {
         await window.chatStore?.delete(s.id);
       }
+      // 来源隔离后本窗口收不到自己写操作的广播，需显式刷新列表
+      void renderChatSessions();
     }
     setGeneralSaveStatus("所有聊天会话已清空", "is-ok");
   } catch (err) {
@@ -4507,8 +4532,10 @@ function enterRenameMode(
     const newTitle = (titleEl.textContent || "").trim();
     cleanup();
     if (newTitle && newTitle !== original) {
-      void window.chatStore?.rename(session.id, newTitle);
-      // rename 成功后 main 广播 chats:changed → 列表重渲，无需手动改 DOM
+      // 来源隔离后本窗口收不到自己 rename 的广播，成功后显式重渲列表
+      void window.chatStore?.rename(session.id, newTitle)?.then(() => {
+        void renderChatSessions();
+      });
     } else {
       titleEl.textContent = original; // 空内容或未变：还原
     }
@@ -4553,8 +4580,9 @@ async function deleteChatSession(session: ChatSessionMetaUI): Promise<void> {
   if (!window.confirm(prompt)) return;
   try {
     await window.chatStore?.delete(session.id);
-    // 删除成功后 main 广播 chats:changed → 列表重渲；
-    // 聊天窗口若在显示该会话也会通过 onChanged 自动 fallback。
+    // 来源隔离后本窗口收不到自己 delete 的广播，需显式刷新列表；
+    // 聊天窗口若在显示该会话，仍会通过广播的 onChanged 自动 fallback。
+    void renderChatSessions();
   } catch (err) {
     console.warn("[settings] 删除会话失败:", err);
     window.alert("删除失败，请查看终端日志。");
@@ -4568,6 +4596,8 @@ chatNewBtn?.addEventListener("click", async () => {
   try {
     const session = await window.chatStore.create({ identityId: null });
     if (session?.id) await window.chatStore.openInChatWindow(session.id);
+    // 来源隔离后本窗口收不到自己 create 的广播，需显式刷新列表
+    void renderChatSessions();
   } catch (err) {
     console.warn("[settings] 新建会话失败:", err);
     window.alert("新建会话失败，请查看终端日志。");

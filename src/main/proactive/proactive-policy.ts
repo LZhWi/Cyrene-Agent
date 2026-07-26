@@ -28,6 +28,7 @@ export function createDefaultProactiveState(): ProactiveState {
     lastProactiveScene: null,
     lastNormalConversationEndedAt: null,
     lastSilentAt: null,
+    lastFeedbackJudgedAt: null,
     globalDesire: 0,
     affinity: {},
     lastFiredAt: {},

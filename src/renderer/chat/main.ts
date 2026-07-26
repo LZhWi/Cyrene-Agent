@@ -19,6 +19,7 @@ import {
   shouldSegmentAssistantReply,
 } from "./message-segmentation";
 import { buildDocumentContextLines, processDocumentsWithWait, type RetrievedDocumentChunk } from "./document-processing";
+import { decideReloadCurrentSession } from "./session-reload-policy";
 import {
   canCancelDocumentIndexStatus,
   getDocumentIndexStatusLabel,
@@ -449,6 +450,16 @@ declare global {
   }
 }
 
+/** LLM 主动消息反馈闭环（preload 的 openerBridge，用 cast 访问避免跨窗口全局声明冲突）。 */
+interface OpenerFeedbackBridge {
+  proactiveReplyFeedback: () => Promise<boolean>;
+  proactiveIgnoreFeedback: () => Promise<boolean>;
+  proactivePendingFeedback: () => Promise<boolean>;
+}
+function getOpenerBridge(): OpenerFeedbackBridge | undefined {
+  return (window as unknown as { openerBridge?: OpenerFeedbackBridge }).openerBridge;
+}
+
 // 把渲染端 Message 数组归一化为后端能持久化的形态：
 // - 过滤空 content / 渲染中的 thinking 占位（thinking=true 时通常 content 为空，但保险起见双重过滤）
 // - 丢弃仅用于本轮模型调用的 modelContext 与 thinking 等瞬态字段
@@ -492,6 +503,7 @@ async function saveSession(): Promise<void> {
 // 把 store 里的 ChatStoreSession 装载到当前窗口（替换 messages 数组并 render）。
 function loadSessionIntoUI(session: ChatStoreSession): void {
   currentSessionId = session.id;
+  currentSessionPurpose = session.purpose ?? null;
   seenSessionUpdatedAt.set(session.id, session.updatedAt);
   unreadProactiveSessionIds.delete(session.id);
   // 重置 sessionTailStart：loadSessionIntoUI 加载的是完整 session（非分页），
@@ -514,6 +526,8 @@ function loadSessionIntoUI(session: ChatStoreSession): void {
   // 上报活跃 sessionId（设置面板“删除当前会话”差异化提示用）
   void window.chatStore?.setActiveSession(session.id);
   render();
+  // 刷新"忽略"按钮显隐（仅 proactive-chat 会话会真正发起查询）
+  void refreshProactivePendingFeedback();
   // 切换会话后刷新侧栏列表的活跃高亮
   void renderRailList();
 }
@@ -547,6 +561,24 @@ async function loadEarlierMessages(): Promise<void> {
 
 const unreadProactiveSessionIds = new Set<string>();
 const seenSessionUpdatedAt = new Map<string, number>();
+
+// 当前会话的 purpose（loadSessionIntoUI 时同步）；反馈闭环只对 proactive-chat 会话生效。
+let currentSessionPurpose: "proactive-chat" | null = null;
+// 主进程确认的"存在待判定反馈的主动消息"；控制最后一条 model 消息下"忽略"按钮的显隐。
+let proactivePendingFeedback = false;
+
+async function refreshProactivePendingFeedback(): Promise<void> {
+  let next = false;
+  if (currentSessionPurpose === "proactive-chat") {
+    try {
+      next = (await getOpenerBridge()?.proactivePendingFeedback()) ?? false;
+    } catch { next = false; }
+  }
+  if (next !== proactivePendingFeedback) {
+    proactivePendingFeedback = next;
+    render();
+  }
+}
 
 async function renderRailList(): Promise<void> {
   if (!chatRailList || !window.chatStore) return;
@@ -1540,6 +1572,31 @@ function render(preserveScroll = false): void {
         }
       });
       actions.appendChild(deleteBtn);
+      hasActionItem = true;
+    }
+
+    // "忽略"按钮：仅 proactive-chat 会话、最后一条 model 消息、且主进程确认有待判定的主动消息。
+    // 点击 = 负反馈（affinity 下调，她会少发类似场景的主动消息）；消息本身保留，
+    // 与"删除"（回退冷却、不记反馈）语义正交。
+    if (!m.transient && !m.thinking && m.role === "model"
+        && currentSessionPurpose === "proactive-chat" && proactivePendingFeedback
+        && m === messages[messages.length - 1]) {
+      const ignoreBtn = document.createElement("button");
+      ignoreBtn.type = "button";
+      ignoreBtn.className = "msg__ignore";
+      ignoreBtn.title = "忽略这条主动消息（她会少发点类似的）";
+      ignoreBtn.setAttribute("aria-label", "忽略这条主动消息");
+      ignoreBtn.textContent = "忽略";
+      ignoreBtn.addEventListener("click", () => {
+        ignoreBtn.disabled = true;
+        void getOpenerBridge()?.proactiveIgnoreFeedback()
+          .then(() => {
+            proactivePendingFeedback = false;
+            render();
+          })
+          .catch(() => { ignoreBtn.disabled = false; });
+      });
+      actions.appendChild(ignoreBtn);
       hasActionItem = true;
     }
 
@@ -2592,6 +2649,28 @@ async function getModelReply(): Promise<ChatReplyPayload> {
 let sending = false;
 let deleting = false;  // 删除操作进行中标志，阻止 onChanged 并发重载和用户输入竞态
 
+// 发送期间到达的 proactive-chat 外部变更（如昔涟又发了一条主动消息）不立刻重载，
+// 否则会清掉 transient 思考消息 / 冲掉刚落库的回复。记下 sessionId，等发送结束、
+// 最终 saveSession 落盘后再 flush 重载。
+let pendingProactiveReloadId: string | null = null;
+
+/**
+ * 发送结束后调用：若有排队的外部变更，重载当前会话。
+ *
+ * 依赖 IPC 有序处理：发送的最终 saveSession（replaceTail）在 finally 之前已同步
+ * 发出 IPC，flush 这里的 getPage IPC 一定排在它之后被主进程处理，所以重载读到的
+ * 是已落库的回复，不会把它冲掉。
+ */
+async function flushPendingProactiveReload(): Promise<void> {
+  const pendingId = pendingProactiveReloadId;
+  if (!pendingId) return;
+  pendingProactiveReloadId = null;
+  // 重载前再确认仍是当前会话；用户可能已手动切走。
+  if (pendingId === currentSessionId) {
+    await loadSessionTailIntoUI(pendingId);
+  }
+}
+
 // ── 快捷预设胶囊 ──────────────────────────────────────────
 // 空对话时在 empty-state 下方显示的半透明胶囊，点击后：
 // - fill 模式：预设提示词填入输入框，用户修改后发送
@@ -2887,6 +2966,7 @@ async function triggerCyreneGreeting(): Promise<void> {
     sendBtn.disabled = false;
     chatHintEl.textContent = formatModelHint(currentModelConfig);
     inputEl.focus();
+    void flushPendingProactiveReload();
   }
 }
 
@@ -2941,6 +3021,13 @@ async function send(): Promise<void> {
     sticker: userStickerId,
   };
   messages.push(userMsg);
+  // 回复主动消息 = 正反馈。必须赶在 chat.sendMessage 之前发出（IPC 按序处理）：
+  // CHAT_SEND_MESSAGE 会触发 invalidateForUserMessage 清零 unansweredCount，之后就判不到了。
+  // 判定去重在主进程（lastFeedbackJudgedAt），重复上报无副作用。
+  if (currentSessionPurpose === "proactive-chat") {
+    proactivePendingFeedback = false;
+    void getOpenerBridge()?.proactiveReplyFeedback();
+  }
   inputEl.value = "";
   autosize();
   removeAttachedFiles();
@@ -3405,6 +3492,7 @@ async function send(): Promise<void> {
     sendBtn.disabled = false;
     chatHintEl.textContent = formatModelHint(currentModelConfig);
     inputEl.focus();
+    void flushPendingProactiveReload();
   }
 }
 function clearChat(): void {
@@ -3901,20 +3989,19 @@ window.chatStore?.onChanged(async () => {
   if (chatRail && !chatRail.hidden) void renderRailList();
   const stillExists = await window.chatStore.get(currentSessionId);
   if (stillExists) {
-    if (
-      stillExists.purpose === "proactive-chat" &&
-      stillExists.updatedAt > (seenSessionUpdatedAt.get(stillExists.id) ?? 0)
-    ) {
-      if (!sending && !deleting) {
-        // 发送中跳过重载：loadSessionIntoUI 会清空 messages 数组（messages.length = 0），
-        // 把正在流式渲染的 streamMsg 一起清掉，导致 AG-UI 事件到达时找不到消息、
-        // 回复不显示在 UI（TTS 仍正常播放）。
-        await loadSessionTailIntoUI(stillExists.id);
-      } else {
-        // 发送中：更新 seenAt，避免发送结束后 saveSession 触发的 onChanged 重复重载导致 UI 闪烁。
-        // 若期间有新主动消息到达，其 updatedAt 更大，下次 onChanged 仍会检测到并重载。
-        seenSessionUpdatedAt.set(stillExists.id, stillExists.updatedAt);
-      }
+    const decision = decideReloadCurrentSession({
+      purpose: stillExists.purpose,
+      updatedAt: stillExists.updatedAt,
+      seenAt: seenSessionUpdatedAt.get(stillExists.id) ?? 0,
+      sending,
+    });
+    if (decision === "reload") {
+      await loadSessionTailIntoUI(stillExists.id);
+    } else if (decision === "defer") {
+      // 发送期间到达的外部变更：排队，等发送结束 flush（见 send/triggerCyreneGreeting 的 finally）。
+      // 不能立刻重载（会清掉流式渲染中的 streamMsg），也不能只更新 seenAt
+      // （会把发送期间到达的外部主动消息标成"已见"、永不重载）。
+      pendingProactiveReloadId = stillExists.id;
     }
     return;
   }

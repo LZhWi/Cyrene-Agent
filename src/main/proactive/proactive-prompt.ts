@@ -16,6 +16,8 @@ export interface BuildProactiveMessagesInput {
   localNow: Date;
   idleSec: number;
   unansweredCount: 0 | 1 | 2;
+  /** tone-rules.md 内容：注入 system 末尾（历史之后），确保行为规则的近因权重高于历史中的旧样本。 */
+  toneRules?: string;
 }
 
 export type ProactiveModelDecision =
@@ -36,8 +38,9 @@ const PROACTIVE_SYSTEM = `[proactive_system]
 
 const NIGHT_SYSTEM = `[night_system]
 当前处于深夜，用户仍在使用电脑。
-生成内容时可以更倾向于温柔关心用户的休息状态，适度提醒不要熬得太晚，但不要说教、催促或制造压力。
-不要每次都提睡觉；如果上下文中有更自然、更重要的话题，可以先回应那个话题，再轻轻带到休息。
+你可以自然地陪伴用户、分享你自己的状态（比如你此刻在想什么）、或轻轻好奇用户在忙什么。
+如果你想关心用户，用分享你自己的感受的方式说，而不是叮嘱用户去睡觉。不要说教、催促或制造压力。
+不要每次都提睡觉；如果上下文中有更自然、更重要的话题，可以优先回应那个话题。
 不要透露你检测到了用户的键盘、鼠标、屏幕或系统状态。
 如果此刻没有值得主动说的话，请选择保持安静。`;
 
@@ -76,6 +79,7 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
   systemParts.push(formatHistory("主动聊天专用会话", input.proactiveHistory));
   if (isActiveNight(input.localNow, input.idleSec)) systemParts.push(NIGHT_SYSTEM);
   if (input.unansweredCount === 1) systemParts.push(FOLLOWUP_SYSTEM);
+  if (input.toneRules?.trim()) systemParts.push(input.toneRules.trim());
 
   const trigger = `[本次主动聊天候选]
 电脑本地时间：${formatLocalTime(input.localNow)}

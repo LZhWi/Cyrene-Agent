@@ -214,6 +214,45 @@ describe("runTwoPhaseFcLoop", () => {
       .map((m) => (typeof m.content === "string" ? m.content : ""))
       .join("\n");
     expect(allSoulContent).not.toContain("UNSEEN_TOOL_TEXT");
+
+    // 未传 soulTailAnchorContent 时，soul 请求末尾不追加 system 锚点
+    expect(soulReq.messages[soulReq.messages.length - 1].role).not.toBe("system");
+  });
+
+  it("soulTailAnchorContent 作为独立 system 消息追加在 conversation 之后", async () => {
+    const adapter = new FakeAdapter();
+    // TOOL_PHASE: 无 tool_calls → 切 SOUL_PHASE
+    adapter.enqueueText("");
+    // SOUL_PHASE
+    adapter.enqueueText("最终回复");
+
+    await runTwoPhaseFcLoop({
+      ...baseOptions,
+      soulTailAnchorContent: "TAIL_ANCHOR_MARKER",
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      executeTool: async () => "ok",
+    });
+
+    expect(adapter.requests).toHaveLength(2);
+    const soulReq = adapter.requests[1];
+
+    // 首条仍是 soul 阶段基础 system
+    expect(soulReq.messages[0].role).toBe("system");
+    expect(soulReq.messages[0].content).toBe("SOUL_SYSTEM_BASE");
+
+    // 锚点是最后一条消息，且位于对话消息（user）之后
+    const last = soulReq.messages[soulReq.messages.length - 1];
+    expect(last.role).toBe("system");
+    expect(last.content).toBe("TAIL_ANCHOR_MARKER");
+    expect(soulReq.messages[soulReq.messages.length - 2].role).toBe("user");
+
+    // tool 阶段请求不受锚点影响
+    const toolReq = adapter.requests[0];
+    const toolContents = toolReq.messages
+      .map((m) => (typeof m.content === "string" ? m.content : ""))
+      .join("\n");
+    expect(toolContents).not.toContain("TAIL_ANCHOR_MARKER");
   });
 
   it("工具阶段：模型调用工具 → 执行 → 继续 TOOL_PHASE", async () => {
