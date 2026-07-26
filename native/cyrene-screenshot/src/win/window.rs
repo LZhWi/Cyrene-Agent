@@ -67,6 +67,9 @@ struct WindowState {
     toolbar: Option<ToolbarLayout>,
     input: InputState,
     action: Option<OverlayAction>,
+    /// Synchronous WM_PAINT failure captured for `present_first_frame`.
+    /// Storing text avoids requiring the Win32/COM error types to be Clone.
+    paint_error: Option<String>,
     /// Non-owning pointer to the active [`OverlayRenderer`]. Set by
     /// [`OverlayWindow::attach_renderer`] for the duration of a capture and
     /// cleared on hide. Used by WM_PAINT / mouse-move repaints so the frozen
@@ -103,6 +106,7 @@ impl OverlayWindow {
             toolbar: None,
             input: InputState::Idle,
             action: None,
+            paint_error: None,
             renderer: None,
         }));
         let state = NonNull::new(Box::into_raw(state)).expect("Box pointer is never null");
@@ -140,8 +144,9 @@ impl OverlayWindow {
     /// Bind a live [`OverlayRenderer`] for paint callbacks. The pointer must
     /// remain valid until [`Self::detach_renderer`] or [`Self::hide`].
     pub fn attach_renderer(&self, renderer: &mut OverlayRenderer) {
-        unsafe { self.state.as_ref() }.borrow_mut().renderer =
-            NonNull::new(renderer as *mut OverlayRenderer);
+        let mut state = unsafe { self.state.as_ref() }.borrow_mut();
+        state.paint_error = None;
+        state.renderer = NonNull::new(renderer as *mut OverlayRenderer);
     }
 
     pub fn detach_renderer(&self) {
@@ -165,6 +170,7 @@ impl OverlayWindow {
         state.toolbar = None;
         state.input = InputState::Idle;
         state.action = None;
+        state.paint_error = None;
         state.renderer = None;
         Ok(())
     }
@@ -198,6 +204,14 @@ impl OverlayWindow {
 
     pub fn take_action(&self) -> Option<OverlayAction> {
         unsafe { self.state.as_ref() }.borrow_mut().action.take()
+    }
+
+    pub fn take_paint_error(&self) -> Option<HelperError> {
+        unsafe { self.state.as_ref() }
+            .borrow_mut()
+            .paint_error
+            .take()
+            .map(HelperError::CaptureFailed)
     }
 
     pub fn selection(&self) -> Option<RectI> {
@@ -245,21 +259,25 @@ unsafe extern "system" fn window_proc(
             let point = clamp_client_point(hwnd, point_from_lparam(lparam));
             let mut state = unsafe { &*raw }.borrow_mut();
             // Hit-test toolbar buttons when a selection is already active.
-            if matches!(state.input, InputState::Selected) {
-                if let Some(toolbar) = state.toolbar {
-                    if contains(toolbar.confirm, point) {
-                        state.action = Some(OverlayAction::Commit);
-                        return LRESULT(0);
-                    }
-                    if contains(toolbar.cancel, point) {
-                        state.action = Some(OverlayAction::Cancel);
-                        return LRESULT(0);
-                    }
+            if matches!(state.input, InputState::Selected)
+                && let Some(toolbar) = state.toolbar
+            {
+                if contains(toolbar.confirm, point) {
+                    state.action = Some(OverlayAction::Commit);
+                    return LRESULT(0);
+                }
+                if contains(toolbar.cancel, point) {
+                    state.action = Some(OverlayAction::Cancel);
+                    return LRESULT(0);
                 }
             }
             state.selection = None;
             state.toolbar = None;
             state.input = InputState::Dragging { anchor: point };
+            drop(state);
+            // SetCapture may synchronously deliver WM_CAPTURECHANGED. Release
+            // the RefCell borrow first so that reentrant message can mutate
+            // WindowState without panicking across the extern "system" frame.
             unsafe { SetCapture(hwnd) };
             LRESULT(0)
         }
@@ -359,7 +377,7 @@ unsafe extern "system" fn window_proc(
             let mut paint = PAINTSTRUCT::default();
             let hdc = unsafe { BeginPaint(hwnd, &mut paint) };
             {
-                let state = unsafe { &*raw }.borrow();
+                let mut state = unsafe { &*raw }.borrow_mut();
                 let display = DisplayInfo {
                     bounds: state.display_bounds,
                     dpi: state.display_dpi,
@@ -374,8 +392,12 @@ unsafe extern "system" fn window_proc(
                     // caller briefly holds &OverlayRenderer on the same thread
                     // (present_first_frame intentionally holds none across UpdateWindow).
                     let renderer = unsafe { &*renderer_ptr.as_ptr() };
-                    let _ =
-                        renderer.paint_on_hdc(hdc, hwnd, state.selection, &display, state.toolbar);
+                    if let Err(error) =
+                        renderer.paint_on_hdc(hdc, hwnd, state.selection, &display, state.toolbar)
+                    {
+                        eprintln!("cyrene-screenshot: overlay paint failed: {error}");
+                        state.paint_error = Some(error.to_string());
+                    }
                 } else {
                     let _ = crate::win::renderer::paint_hdc(hdc, state.selection, &display);
                 }

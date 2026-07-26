@@ -209,7 +209,7 @@ impl DibGuard {
         // BITMAPINFO contains a single RGBQUAD slot for the color table;
         // for 32-bit BI_RGB images the color table is unused, so we only
         // need the header.
-        let mut bitmap_info = BITMAPINFO {
+        let bitmap_info = BITMAPINFO {
             bmiHeader: BITMAPINFOHEADER {
                 biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
                 biWidth: width_i32,
@@ -236,7 +236,7 @@ impl DibGuard {
         let result = unsafe {
             CreateDIBSection(
                 Some(memory_dc),
-                &mut bitmap_info,
+                &bitmap_info,
                 DIB_RGB_COLORS,
                 &mut bits,
                 None,

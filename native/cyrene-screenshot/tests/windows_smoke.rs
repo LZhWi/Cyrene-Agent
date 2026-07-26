@@ -15,12 +15,13 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::{HANDLE, HWND, LPARAM, WPARAM},
+        Foundation::{HANDLE, HWND, LPARAM, RECT, WPARAM},
+        Graphics::Gdi::{GetDC, GetPixel, ReleaseDC},
         System::Threading::{OpenThread, ResumeThread, SuspendThread, THREAD_SUSPEND_RESUME},
         UI::{
             Input::KeyboardAndMouse::{VK_ESCAPE, VK_RETURN},
             WindowsAndMessaging::{
-                FindWindowExW, GetWindowThreadProcessId, HWND_MESSAGE, PostMessageW,
+                FindWindowExW, GetWindowRect, GetWindowThreadProcessId, HWND_MESSAGE, PostMessageW,
                 WM_DISPLAYCHANGE, WM_KEYDOWN, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
             },
         },
@@ -404,6 +405,71 @@ fn start_emits_accepted_then_selecting_then_overlay_visible() {
         "freezeDurationMs {freeze_ms} must be < 5000 (current implementation should be well under one second)"
     );
     assert!(!helper.overlay_hwnd().is_invalid());
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
+}
+
+#[test]
+fn overlay_visible_presents_the_frozen_desktop_instead_of_the_empty_cache_fill() {
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    helper.send_command(start_command("visible-pixels"));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
+
+    let hwnd = helper.overlay_hwnd();
+    let mut bounds = RECT::default();
+    unsafe { GetWindowRect(hwnd, &mut bounds) }.expect("get overlay bounds");
+    let desktop_dc = unsafe { GetDC(None) };
+    assert!(!desktop_dc.is_invalid(), "get desktop DC");
+
+    let width = bounds.right - bounds.left;
+    let height = bounds.bottom - bounds.top;
+    let mut colors = Vec::new();
+    for x_fraction in [1, 2, 3] {
+        for y_fraction in [1, 2, 3] {
+            colors.push(
+                unsafe {
+                    GetPixel(
+                        desktop_dc,
+                        bounds.left + width * x_fraction / 4,
+                        bounds.top + height * y_fraction / 4,
+                    )
+                }
+                .0,
+            );
+        }
+    }
+    let _ = unsafe { ReleaseDC(None, desktop_dc) };
+
+    assert!(
+        colors.iter().any(|&color| color != 0x0030_3030),
+        "overlay remained the solid empty-cache fill instead of presenting the frozen desktop: {colors:?}"
+    );
+
+    helper.send_command(serde_json::json!({"type": "shutdown"}));
+    assert!(helper.finish(EXIT_TIMEOUT).0.success());
+}
+
+#[test]
+fn mouse_capture_reentrancy_does_not_abort_the_helper() {
+    let mut helper = Helper::spawn(std::process::id(), 1);
+    helper.expect_ready();
+    helper.send_command(start_command("capture-reentrancy"));
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "accepted");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
+
+    let hwnd = helper.overlay_hwnd();
+    let point = |x: i32, y: i32| LPARAM(((y as u32 & 0xffff) << 16 | (x as u32 & 0xffff)) as isize);
+    unsafe {
+        PostMessageW(Some(hwnd), WM_LBUTTONDOWN, WPARAM(1), point(64, 64)).unwrap();
+        PostMessageW(Some(hwnd), WM_MOUSEMOVE, WPARAM(1), point(256, 192)).unwrap();
+        PostMessageW(Some(hwnd), WM_LBUTTONUP, WPARAM(0), point(256, 192)).unwrap();
+    }
+    assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selected");
+
     helper.send_command(serde_json::json!({"type": "shutdown"}));
     assert!(helper.finish(EXIT_TIMEOUT).0.success());
 }
@@ -980,17 +1046,24 @@ fn clipboard_and_file_enqueues_encode_job_and_completes_after_encode() {
 
     let mut completed: Option<serde_json::Value> = None;
     let mut accepted_after_release = false;
+    let mut overlay_visible_after_release = false;
     let drain_deadline = Instant::now() + Duration::from_secs(15);
     while Instant::now() < drain_deadline {
-        if completed.is_some() && accepted_after_release {
+        if completed.is_some() && overlay_visible_after_release {
             break;
         }
         let event = helper.next_event(EXIT_TIMEOUT);
         match event["type"].as_str() {
             Some("accepted") if event["requestId"] == "after-release" => {
                 accepted_after_release = true;
-                assert_eq!(helper.next_event(EXIT_TIMEOUT)["state"], "selecting");
-                assert_eq!(helper.next_event(EXIT_TIMEOUT)["type"], "overlay-visible");
+            }
+            Some("interaction-state")
+                if event["state"] == "selecting" && accepted_after_release =>
+            {
+                // ok
+            }
+            Some("overlay-visible") if accepted_after_release => {
+                overlay_visible_after_release = true;
             }
             Some("completed") if event["requestId"] == "file-mode" => {
                 completed = Some(event);
@@ -1002,6 +1075,10 @@ fn clipboard_and_file_enqueues_encode_job_and_completes_after_encode() {
     assert!(
         accepted_after_release,
         "a new start must be accepted while an encode is pending"
+    );
+    assert!(
+        overlay_visible_after_release,
+        "overlay-visible must be received for after-release"
     );
     let completed = completed.expect("expected completed event for file-mode");
     assert_eq!(completed["width"].as_u64(), Some(released_width));
@@ -1069,11 +1146,11 @@ fn capture_released_returns_clipboard_written_and_dimensions() {
     let width = released["width"].as_u64().expect("width is u32");
     let height = released["height"].as_u64().expect("height is u64");
     assert!(
-        width >= 4 && width < 100_000,
+        (4..100_000).contains(&width),
         "width must be in a sane range"
     );
     assert!(
-        height >= 4 && height < 100_000,
+        (4..100_000).contains(&height),
         "height must be in a sane range"
     );
 

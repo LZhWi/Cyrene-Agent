@@ -8,11 +8,12 @@ use std::{
 
 use windows::{
     Win32::{
-        Foundation::{HWND, LPARAM, LRESULT, WPARAM},
+        Foundation::{HWND, LPARAM, LRESULT, WAIT_FAILED, WPARAM},
         UI::WindowsAndMessaging::{
-            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetMessageW,
-            HWND_MESSAGE, MSG, RegisterClassW, TranslateMessage, UnregisterClassW, WINDOW_EX_STYLE,
-            WINDOW_STYLE, WNDCLASSW,
+            CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, HWND_MESSAGE, MSG,
+            MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, PM_REMOVE, PeekMessageW, QS_ALLINPUT,
+            RegisterClassW, TranslateMessage, UnregisterClassW, WINDOW_EX_STYLE, WINDOW_STYLE,
+            WM_QUIT, WNDCLASSW,
         },
     },
     core::{Error as WindowsError, PCWSTR, w},
@@ -21,7 +22,7 @@ use windows::{
 use crate::{
     WM_APP_COMMAND, WM_APP_SHUTDOWN,
     cli::CliOptions,
-    error::AppError,
+    error::{AppError, HelperError},
     ipc::{
         InputGate, MessageTarget, RuntimeChannels, create_runtime_channels, spawn_stdin_reader,
         spawn_stdout_writer,
@@ -30,7 +31,8 @@ use crate::{
     protocol::{CaptureMode, Command, Event, InteractionStateEvent, PROTOCOL_VERSION},
     request::RequestRegistry,
     win::{
-        capture::{CaptureBackend, FrozenFrame},
+        capture::{CaptureBackend, FrozenFrame, RefreshOutcome},
+        capture_dxgi::DxgiCaptureBackend,
         capture_gdi::GdiCaptureBackend,
         clipboard::write_cf_dibv5,
         display::{DisplayInfo, query_primary_display},
@@ -42,6 +44,7 @@ use crate::{
 
 const WINDOW_CLASS: PCWSTR = w!("CyreneScreenshotRuntimeWindow");
 const INPUT_BATCH_LIMIT: usize = 64;
+const CAPTURE_PUMP_TIMEOUT_MS: u32 = 16;
 
 pub fn run(options: CliOptions) -> Result<(), AppError> {
     let window = MessageWindow::create()?;
@@ -88,40 +91,86 @@ fn run_message_loop(
 ) -> Result<(), AppError> {
     let display = query_primary_display()?;
     let overlay = OverlayWindow::create(&display)?;
-    let capture: Box<dyn CaptureBackend> = Box::new(GdiCaptureBackend::new()?);
+    let capture: Box<dyn CaptureBackend> = match DxgiCaptureBackend::new(&display, false) {
+        Ok(c) => {
+            eprintln!("cyrene-screenshot: using DXGI capture backend");
+            Box::new(c)
+        }
+        Err(error) => {
+            eprintln!("cyrene-screenshot: DXGI init failed ({error}), falling back to GDI");
+            Box::new(GdiCaptureBackend::new()?)
+        }
+    };
     let mut app_state = OverlayApp::new(display, overlay, capture, output_dir)?;
     let mut message = MSG::default();
     loop {
-        // SAFETY: message points to initialized writable storage and the window
-        // remains alive for the duration of this loop.
-        let result = unsafe { GetMessageW(&mut message, None, 0, 0) }.0;
-        if result == -1 {
-            return Err(WindowsError::from_thread().into());
-        }
-        if result == 0 || message.message == WM_APP_SHUTDOWN {
-            return Ok(());
-        }
-        if message.hwnd == window.hwnd && message.message == WM_APP_COMMAND {
-            let batch =
-                input_gate.drain_batch(&channels.command_rx, input_event_rx, INPUT_BATCH_LIMIT);
-            for event in batch.events {
-                let _ = channels.event_tx.send(event);
+        // Drain all currently-pending messages without blocking. The DXGI
+        // capture pump below owns the bounded wait while the overlay is idle,
+        // so Windows messages and fresh desktop frames share this UI thread.
+        while unsafe { PeekMessageW(&mut message, None, 0, 0, PM_REMOVE).as_bool() } {
+            if message.message == WM_QUIT || message.message == WM_APP_SHUTDOWN {
+                return Ok(());
             }
-            for command in batch.commands {
-                if !app_state.handle_command(command, &channels.event_tx) {
-                    return Ok(());
+            if message.hwnd == window.hwnd && message.message == WM_APP_COMMAND {
+                let batch =
+                    input_gate.drain_batch(&channels.command_rx, input_event_rx, INPUT_BATCH_LIMIT);
+                for event in batch.events {
+                    let _ = channels.event_tx.send(event);
                 }
+                for command in batch.commands {
+                    if !app_state.handle_command(command, &channels.event_tx) {
+                        return Ok(());
+                    }
+                }
+                continue;
             }
-            continue;
+
+            // SAFETY: PeekMessageW populated message with a valid record.
+            unsafe {
+                let _ = TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
+            app_state.process_overlay_action(&channels.event_tx);
         }
 
-        // SAFETY: GetMessageW populated message with a valid message record.
-        unsafe {
-            let _ = TranslateMessage(&message);
-            DispatchMessageW(&message);
+        match pump_capture_if_idle(app_state.active.is_some(), |timeout_ms| {
+            app_state.capture.refresh_latest(timeout_ms)
+        }) {
+            Ok(Some(RefreshOutcome::Lost)) => app_state.recover_capture()?,
+            Ok(Some(RefreshOutcome::Updated | RefreshOutcome::Unchanged) | None) => {}
+            Err(error) => {
+                eprintln!(
+                    "cyrene-screenshot: idle DXGI refresh failed ({error}); rebuilding capture"
+                );
+                app_state.recover_capture()?;
+            }
         }
-        app_state.process_overlay_action(&channels.event_tx);
+
+        // Avoid a busy loop for the pull-on-demand GDI fallback and yield to
+        // input between DXGI refresh attempts. The wait is bounded and wakes
+        // immediately as soon as any message enters this thread's queue.
+        let wait_result = unsafe {
+            MsgWaitForMultipleObjectsEx(
+                None,
+                CAPTURE_PUMP_TIMEOUT_MS,
+                QS_ALLINPUT,
+                MWMO_INPUTAVAILABLE,
+            )
+        };
+        if wait_result == WAIT_FAILED {
+            return Err(WindowsError::from_thread().into());
+        }
     }
+}
+
+fn pump_capture_if_idle(
+    overlay_active: bool,
+    refresh: impl FnOnce(u32) -> Result<RefreshOutcome, HelperError>,
+) -> Result<Option<RefreshOutcome>, HelperError> {
+    if overlay_active {
+        return Ok(None);
+    }
+    refresh(CAPTURE_PUMP_TIMEOUT_MS).map(Some)
 }
 
 fn drain_closed_input_events(
@@ -266,7 +315,24 @@ impl OverlayApp {
                 // Re-query display so a prior display-changed recovery sees
                 // the latest topology before freezing.
                 match query_primary_display() {
-                    Ok(display) => self.display = display,
+                    Ok(display) => {
+                        let capture_geometry_changed = display.bounds.width
+                            != self.display.bounds.width
+                            || display.bounds.height != self.display.bounds.height
+                            || display.rotation != self.display.rotation;
+                        self.display = display;
+                        if capture_geometry_changed && let Err(error) = self.recover_capture() {
+                            finalize_request(&self.requests, &request_id, "cancel");
+                            send_error(
+                                event_tx,
+                                Some(request_id),
+                                error.code(),
+                                &error.to_string(),
+                                true,
+                            );
+                            return true;
+                        }
+                    }
                     Err(error) => {
                         finalize_request(&self.requests, &request_id, "cancel");
                         send_error(
@@ -280,7 +346,7 @@ impl OverlayApp {
                     }
                 }
 
-                let frame = match self.capture.freeze(&self.display) {
+                let frame = match self.freeze_with_recovery() {
                     Ok(frame) => frame,
                     Err(error) => {
                         finalize_request(&self.requests, &request_id, "cancel");
@@ -294,18 +360,6 @@ impl OverlayApp {
                         return true;
                     }
                 };
-
-                if matches!(frame, FrozenFrame::Gpu(_)) {
-                    finalize_request(&self.requests, &request_id, "cancel");
-                    send_error(
-                        event_tx,
-                        Some(request_id),
-                        "not-implemented",
-                        "gpu frozen frames are not supported yet",
-                        true,
-                    );
-                    return true;
-                }
 
                 self.active = Some(ActiveRequest {
                     request_id: request_id.clone(),
@@ -392,13 +446,8 @@ impl OverlayApp {
             active,
             ..
         } = self;
-        let cpu = match active.as_ref().map(|a| &a.frame) {
-            Some(FrozenFrame::Cpu(cpu)) => cpu,
-            Some(FrozenFrame::Gpu(_)) => {
-                return Err(crate::error::HelperError::CaptureFailed(
-                    "gpu frozen frames are not supported yet".into(),
-                ));
-            }
+        let frame_ref = match active.as_ref().map(|a| &a.frame) {
+            Some(frame) => frame,
             None => {
                 return Err(crate::error::HelperError::CaptureFailed(
                     "present_overlay called without an active request".into(),
@@ -411,9 +460,31 @@ impl OverlayApp {
         // Show first so the HWND is mapped, then size resources to it.
         overlay.show(display)?;
         renderer.resize(overlay.hwnd(), display)?;
+
+        match frame_ref {
+            FrozenFrame::Gpu(gpu) => {
+                // Upload GPU frozen frame → D2D bitmap
+                match renderer.upload_frozen_gpu(gpu, overlay.hwnd(), display) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        // GPU upload failed; fall back to GDI for this request
+                        eprintln!(
+                            "cyrene-screenshot: GPU upload failed ({error}), falling back to GDI for this session"
+                        );
+                        // Read the GPU texture back to CPU, then use GDI path
+                        let cpu_bgra = gpu.readback_to_cpu()?;
+                        renderer.upload_frozen(&cpu_bgra)?;
+                    }
+                }
+            }
+            FrozenFrame::Cpu(cpu) => {
+                // Upload CPU BGRA → GDI cache
+                renderer.upload_frozen(cpu)?;
+            }
+        }
+
         // Exclusive borrow ends after upload; present_first_frame must not hold
         // &mut OverlayRenderer across UpdateWindow (WM_PAINT re-enters via NonNull).
-        renderer.upload_frozen(cpu)?;
         present_first_frame(overlay)?;
         Ok(())
     }
@@ -422,6 +493,20 @@ impl OverlayApp {
         let Some(action) = self.overlay.take_action() else {
             return;
         };
+        if action == OverlayAction::DisplayChanged {
+            if self.active.is_some() {
+                self.finish_error(
+                    event_tx,
+                    "display-changed",
+                    "display topology or DPI changed during capture",
+                    true,
+                );
+            }
+            if let Err(error) = self.recover_capture() {
+                eprintln!("cyrene-screenshot: display-change recovery failed: {error}");
+            }
+            return;
+        }
         let Some(active) = self.active.as_ref() else {
             return;
         };
@@ -441,15 +526,68 @@ impl OverlayApp {
                 self.commit(event_tx);
             }
             OverlayAction::Cancel => self.cancel(event_tx, "user-cancelled"),
-            OverlayAction::DisplayChanged => {
-                self.finish_error(
-                    event_tx,
-                    "display-changed",
-                    "display topology or DPI changed during capture",
-                    true,
+            OverlayAction::DisplayChanged => unreachable!("display change handled above"),
+        }
+    }
+
+    fn recover_capture(&mut self) -> Result<(), HelperError> {
+        let display = query_primary_display()?;
+        self.overlay.detach_renderer();
+        self.renderer.reset_gpu_resources();
+        match self.capture.recover(&display) {
+            Ok(()) => {
+                self.display = display;
+                Ok(())
+            }
+            Err(error) => {
+                eprintln!(
+                    "cyrene-screenshot: {} recovery failed ({error}), falling back to GDI",
+                    self.capture.name()
                 );
+                self.capture = Box::new(GdiCaptureBackend::new()?);
+                self.display = display;
+                Ok(())
             }
         }
+    }
+
+    fn freeze_with_recovery(&mut self) -> Result<FrozenFrame, HelperError> {
+        let first = self.capture.freeze(&self.display);
+        let frame = match first {
+            Ok(frame) => frame,
+            Err(error) if self.capture.name() == "dxgi" => {
+                eprintln!(
+                    "cyrene-screenshot: DXGI freeze failed ({error}); rebuilding before retry"
+                );
+                self.overlay.detach_renderer();
+                self.renderer.reset_gpu_resources();
+                if let Err(rebuild_error) = self.capture.recover(&self.display) {
+                    eprintln!(
+                        "cyrene-screenshot: DXGI rebuild failed ({rebuild_error}); using GDI"
+                    );
+                    self.capture = Box::new(GdiCaptureBackend::new()?);
+                }
+                match self.capture.freeze(&self.display) {
+                    Ok(frame) => frame,
+                    Err(retry_error) if self.capture.name() == "dxgi" => {
+                        eprintln!(
+                            "cyrene-screenshot: rebuilt DXGI freeze failed ({retry_error}); using GDI"
+                        );
+                        self.capture = Box::new(GdiCaptureBackend::new()?);
+                        self.capture.freeze(&self.display)?
+                    }
+                    Err(retry_error) => return Err(retry_error),
+                }
+            }
+            Err(error) => return Err(error),
+        };
+
+        if self.capture.should_fallback_to_gdi() {
+            eprintln!("cyrene-screenshot: DXGI cursor policy requires GDI for the current session");
+            self.capture = Box::new(GdiCaptureBackend::new()?);
+            return self.capture.freeze(&self.display);
+        }
+        Ok(frame)
     }
 
     /// Execute the real commit path described in the T6 plan:
@@ -474,7 +612,11 @@ impl OverlayApp {
             width: self.display.bounds.width,
             height: self.display.bounds.height,
         });
-        let selection = match self.renderer.extract_selection(selection) {
+        let gpu_frame = self.active.as_ref().and_then(|active| match &active.frame {
+            FrozenFrame::Gpu(gpu) => Some(gpu),
+            FrozenFrame::Cpu(_) => None,
+        });
+        let selection = match self.renderer.extract_selection(selection, gpu_frame) {
             Ok(selection) => {
                 self.capture.record_selection_readback();
                 selection
@@ -751,4 +893,31 @@ unsafe extern "system" fn window_proc(
 ) -> LRESULT {
     // SAFETY: This procedure forwards untouched parameters supplied by Windows.
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::win::capture::RefreshOutcome;
+
+    #[test]
+    fn idle_capture_pump_refreshes_with_a_bounded_timeout() {
+        let outcome = pump_capture_if_idle(false, |timeout_ms| {
+            assert_eq!(timeout_ms, 16);
+            Ok(RefreshOutcome::Updated)
+        })
+        .expect("idle pump should propagate a successful refresh");
+
+        assert_eq!(outcome, Some(RefreshOutcome::Updated));
+    }
+
+    #[test]
+    fn visible_overlay_never_advances_the_live_capture_texture() {
+        let outcome = pump_capture_if_idle(true, |_| {
+            panic!("capture refresh must not run while a frozen overlay is active")
+        })
+        .expect("active overlay should be a successful no-op");
+
+        assert_eq!(outcome, None);
+    }
 }

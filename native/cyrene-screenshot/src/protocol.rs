@@ -91,7 +91,7 @@ pub enum Event {
 }
 
 pub fn parse_command_line(line: &str) -> Result<Command, ProtocolError> {
-    if line.as_bytes().len() > MAX_NDJSON_LINE_BYTES {
+    if line.len() > MAX_NDJSON_LINE_BYTES {
         return Err(ProtocolError::LineTooLong);
     }
 

@@ -24,8 +24,14 @@
 
 use windows::{
     Win32::{
-        Foundation::HMODULE,
+        Foundation::{HMODULE, RECT},
         Graphics::{
+            Direct2D::{
+                Common as D2D, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_NONE,
+                D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
+                D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                D2D1CreateDevice, ID2D1Bitmap1, ID2D1Image,
+            },
             Direct3D::{
                 D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL_9_1, D3D_FEATURE_LEVEL_9_2,
                 D3D_FEATURE_LEVEL_9_3, D3D_FEATURE_LEVEL_10_0, D3D_FEATURE_LEVEL_10_1,
@@ -42,13 +48,14 @@ use windows::{
                 DXGI_ERROR_ACCESS_LOST, DXGI_ERROR_DEVICE_REMOVED, DXGI_ERROR_DEVICE_RESET,
                 DXGI_ERROR_UNSUPPORTED, DXGI_ERROR_WAIT_TIMEOUT, DXGI_OUTDUPL_FRAME_INFO,
                 IDXGIAdapter, IDXGIDevice, IDXGIOutput, IDXGIOutput1, IDXGIOutputDuplication,
-                IDXGIResource,
+                IDXGIResource, IDXGISurface,
             },
         },
         UI::WindowsAndMessaging::{CURSOR_SHOWING, CURSORINFO, GetCursorInfo},
     },
     core::Interface,
 };
+use windows_numerics::Matrix3x2;
 
 use crate::{
     error::HelperError,
@@ -166,12 +173,24 @@ impl DxgiCaptureBackend {
         }
 
         let (device, context) = create_d3d11_device()?;
-        let duplication = create_duplication(&device)?;
+        let duplication = create_duplication(&device, display)?;
+        let duplication_desc = unsafe { duplication.GetDesc() };
 
         let (physical_width, physical_height) = physical_dimensions(display);
         let (canonical_width, canonical_height) = (display.bounds.width, display.bounds.height);
+        if duplication_desc.ModeDesc.Width != physical_width
+            || duplication_desc.ModeDesc.Height != physical_height
+        {
+            return Err(HelperError::CaptureFailed(format!(
+                "DXGI output dimensions {}x{} do not match primary display {}x{}",
+                duplication_desc.ModeDesc.Width,
+                duplication_desc.ModeDesc.Height,
+                physical_width,
+                physical_height
+            )));
+        }
 
-        let latest_texture = create_staging_texture(&device, physical_width, physical_height)?;
+        let latest_texture = create_default_texture(&device, physical_width, physical_height, 0)?;
         let frozen_texture = create_default_texture(
             &device,
             physical_width,
@@ -248,12 +267,7 @@ impl DxgiCaptureBackend {
     /// prefer a GDI freeze (which uses `BitBlt` with `CAPTUREBLT` and
     /// therefore captures the cursor layer too).
     pub fn should_fallback_to_gdi(&self) -> bool {
-        let cursor = self.cursor_visibility();
-        let Some(frame) = self.last_frame_info else {
-            return false;
-        };
-        let pointer_visible = pointer_position_was_visible(&frame);
-        cursor != CursorVisibility::Hidden && !pointer_visible
+        requires_gdi_for_cursor(self.cursor_visibility(), self.last_frame_info.as_ref())
     }
 
     /// Extract a CPU BGRA buffer for `rect` (display-local coordinates,
@@ -382,15 +396,37 @@ fn create_d3d11_device() -> Result<(ID3D11Device, ID3D11DeviceContext), HelperEr
     Ok((device, context))
 }
 
-fn create_duplication(device: &ID3D11Device) -> Result<IDXGIOutputDuplication, HelperError> {
+fn create_duplication(
+    device: &ID3D11Device,
+    display: &DisplayInfo,
+) -> Result<IDXGIOutputDuplication, HelperError> {
     let dxgi_device: IDXGIDevice = device.cast().map_err(|error| {
         HelperError::CaptureFailed(format!("ID3D11Device.cast to IDXGIDevice failed: {error}"))
     })?;
     let adapter: IDXGIAdapter = unsafe { dxgi_device.GetParent() }.map_err(|error| {
         HelperError::CaptureFailed(format!("IDXGIDevice::GetParent(adapter) failed: {error}"))
     })?;
-    let output: IDXGIOutput = unsafe { adapter.EnumOutputs(0) }.map_err(|error| {
-        HelperError::CaptureFailed(format!("IDXGIAdapter::EnumOutputs(0) failed: {error}"))
+    let mut matching_output = None;
+    for index in 0..16 {
+        let output: IDXGIOutput = match unsafe { adapter.EnumOutputs(index) } {
+            Ok(output) => output,
+            Err(_) => break,
+        };
+        let desc = unsafe { output.GetDesc() }.map_err(|error| {
+            HelperError::CaptureFailed(format!("IDXGIOutput::GetDesc({index}) failed: {error}"))
+        })?;
+        if desc.AttachedToDesktop.as_bool()
+            && output_bounds_match_display(desc.DesktopCoordinates, display)
+        {
+            matching_output = Some(output);
+            break;
+        }
+    }
+    let output = matching_output.ok_or_else(|| {
+        HelperError::CaptureFailed(format!(
+            "D3D11 adapter has no output matching primary display at ({}, {}) {}x{}",
+            display.bounds.x, display.bounds.y, display.bounds.width, display.bounds.height
+        ))
     })?;
     let output1: IDXGIOutput1 = output.cast().map_err(|error| {
         HelperError::CaptureFailed(format!("IDXGIOutput.cast to IDXGIOutput1 failed: {error}"))
@@ -415,6 +451,15 @@ fn create_duplication(device: &ID3D11Device) -> Result<IDXGIOutputDuplication, H
     })
 }
 
+fn output_bounds_match_display(output: RECT, display: &DisplayInfo) -> bool {
+    let right = i64::from(display.bounds.x) + i64::from(display.bounds.width);
+    let bottom = i64::from(display.bounds.y) + i64::from(display.bounds.height);
+    i64::from(output.left) == i64::from(display.bounds.x)
+        && i64::from(output.top) == i64::from(display.bounds.y)
+        && i64::from(output.right) == right
+        && i64::from(output.bottom) == bottom
+}
+
 fn create_staging_texture(
     device: &ID3D11Device,
     width: u32,
@@ -436,14 +481,7 @@ fn create_default_texture(
     height: u32,
     bind_flags: u32,
 ) -> Result<ID3D11Texture2D, HelperError> {
-    create_texture(
-        device,
-        width,
-        height,
-        D3D11_USAGE_DEFAULT,
-        D3D11_CPU_ACCESS_READ.0 as u32,
-        bind_flags,
-    )
+    create_texture(device, width, height, D3D11_USAGE_DEFAULT, 0, bind_flags)
 }
 
 fn create_texture(
@@ -481,12 +519,16 @@ fn create_texture(
     texture.ok_or_else(|| HelperError::CaptureFailed("CreateTexture2D returned no texture".into()))
 }
 
-/// Per the DXGI documentation, `DXGI_OUTDUPL_POINTER_POSITION::Visible` is
-/// stored in the high bit of the `x` coordinate when the struct is
-/// reinterpreted as a packed POINT. We extract the high bit without exposing
-/// the layout to call sites.
 fn pointer_position_was_visible(frame: &DXGI_OUTDUPL_FRAME_INFO) -> bool {
-    (frame.PointerPosition.Position.x & 0x8000_0000u32 as i32) != 0
+    frame.PointerPosition.Visible.as_bool()
+}
+
+fn requires_gdi_for_cursor(
+    cursor: CursorVisibility,
+    frame: Option<&DXGI_OUTDUPL_FRAME_INFO>,
+) -> bool {
+    cursor != CursorVisibility::Hidden
+        && frame.is_some_and(|frame| !pointer_position_was_visible(frame))
 }
 
 // --- Geometry helpers ------------------------------------------------------
@@ -500,6 +542,125 @@ fn physical_dimensions(display: &DisplayInfo) -> (u32, u32) {
             (display.bounds.height, display.bounds.width)
         }
     }
+}
+
+fn rotation_transform(
+    physical_width: u32,
+    physical_height: u32,
+    rotation: DisplayRotation,
+) -> [f32; 6] {
+    let width = physical_width as f32;
+    let height = physical_height as f32;
+    match rotation {
+        DisplayRotation::Identity => [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+        DisplayRotation::Rotate90 => [0.0, 1.0, -1.0, 0.0, height, 0.0],
+        DisplayRotation::Rotate180 => [-1.0, 0.0, 0.0, -1.0, width, height],
+        DisplayRotation::Rotate270 => [0.0, -1.0, 1.0, 0.0, 0.0, width],
+    }
+}
+
+fn render_rotated_texture(
+    device: &ID3D11Device,
+    source: &ID3D11Texture2D,
+    target: &ID3D11Texture2D,
+    physical_width: u32,
+    physical_height: u32,
+    rotation: DisplayRotation,
+) -> Result<(), HelperError> {
+    let dxgi_device: IDXGIDevice = device.cast().map_err(|error| {
+        HelperError::CaptureFailed(format!(
+            "D3D11 device cast to IDXGIDevice for rotation failed: {error}"
+        ))
+    })?;
+    let d2d_device = unsafe { D2D1CreateDevice(&dxgi_device, None) }.map_err(|error| {
+        HelperError::CaptureFailed(format!(
+            "D2D1CreateDevice for rotated freeze failed: {error}"
+        ))
+    })?;
+    let context = unsafe { d2d_device.CreateDeviceContext(D2D1_DEVICE_CONTEXT_OPTIONS_NONE) }
+        .map_err(|error| {
+            HelperError::CaptureFailed(format!(
+                "CreateDeviceContext for rotated freeze failed: {error}"
+            ))
+        })?;
+
+    let source_surface: IDXGISurface = source.cast().map_err(|error| {
+        HelperError::CaptureFailed(format!(
+            "source texture cast to IDXGISurface for rotation failed: {error}"
+        ))
+    })?;
+    let target_surface: IDXGISurface = target.cast().map_err(|error| {
+        HelperError::CaptureFailed(format!(
+            "target texture cast to IDXGISurface for rotation failed: {error}"
+        ))
+    })?;
+    let pixel_format = D2D::D2D1_PIXEL_FORMAT {
+        format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        alphaMode: D2D::D2D1_ALPHA_MODE_IGNORE,
+    };
+    let source_properties = D2D1_BITMAP_PROPERTIES1 {
+        pixelFormat: pixel_format,
+        dpiX: 96.0,
+        dpiY: 96.0,
+        bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+        colorContext: core::mem::ManuallyDrop::new(None),
+    };
+    let target_properties = D2D1_BITMAP_PROPERTIES1 {
+        pixelFormat: pixel_format,
+        dpiX: 96.0,
+        dpiY: 96.0,
+        bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+        colorContext: core::mem::ManuallyDrop::new(None),
+    };
+    let source_bitmap: ID2D1Bitmap1 =
+        unsafe { context.CreateBitmapFromDxgiSurface(&source_surface, Some(&source_properties)) }
+            .map_err(|error| {
+            HelperError::CaptureFailed(format!(
+                "CreateBitmapFromDxgiSurface(source) for rotation failed: {error}"
+            ))
+        })?;
+    let target_bitmap: ID2D1Bitmap1 =
+        unsafe { context.CreateBitmapFromDxgiSurface(&target_surface, Some(&target_properties)) }
+            .map_err(|error| {
+            HelperError::CaptureFailed(format!(
+                "CreateBitmapFromDxgiSurface(target) for rotation failed: {error}"
+            ))
+        })?;
+
+    let [m11, m12, m21, m22, m31, m32] =
+        rotation_transform(physical_width, physical_height, rotation);
+    let transform = Matrix3x2 {
+        M11: m11,
+        M12: m12,
+        M21: m21,
+        M22: m22,
+        M31: m31,
+        M32: m32,
+    };
+    let source_rect = D2D::D2D_RECT_F {
+        left: 0.0,
+        top: 0.0,
+        right: physical_width as f32,
+        bottom: physical_height as f32,
+    };
+    unsafe {
+        context.SetTarget(&target_bitmap);
+        context.BeginDraw();
+        context.SetTransform(&transform);
+        context.DrawBitmap(
+            &source_bitmap,
+            Some(&source_rect),
+            1.0,
+            D2D1_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+            None,
+            None,
+        );
+    }
+    let draw_result = unsafe { context.EndDraw(None, None) }.map_err(|error| {
+        HelperError::CaptureFailed(format!("EndDraw for rotated freeze failed: {error}"))
+    });
+    unsafe { context.SetTarget(None::<&ID2D1Image>) };
+    draw_result
 }
 
 impl CaptureBackend for DxgiCaptureBackend {
@@ -519,21 +680,59 @@ impl CaptureBackend for DxgiCaptureBackend {
         };
         match result {
             Ok(()) => {
-                let resource = resource.expect("AcquireNextFrame returned Ok with no resource");
-                let acquired: ID3D11Texture2D = resource.cast().map_err(|error| {
-                    HelperError::CaptureFailed(format!(
-                        "IDXGIResource.cast to ID3D11Texture2D failed: {error}"
-                    ))
-                })?;
-                // CopyResource(latest_texture ← acquired). CopyResource is
-                // the cheap GPU path; no CPU readback.
-                unsafe {
-                    self.context.CopyResource(&self.latest_texture, &acquired);
+                let frame_result = (|| {
+                    self.last_frame_info = Some(info);
+                    if info.LastPresentTime == 0 {
+                        return Ok(RefreshOutcome::Unchanged);
+                    }
+
+                    let resource = resource.ok_or_else(|| {
+                        HelperError::CaptureFailed(
+                            "AcquireNextFrame succeeded without a desktop resource".into(),
+                        )
+                    })?;
+                    let acquired: ID3D11Texture2D = resource.cast().map_err(|error| {
+                        HelperError::CaptureFailed(format!(
+                            "IDXGIResource.cast to ID3D11Texture2D failed: {error}"
+                        ))
+                    })?;
+                    let mut acquired_desc = D3D11_TEXTURE2D_DESC::default();
+                    let mut latest_desc = D3D11_TEXTURE2D_DESC::default();
+                    unsafe {
+                        acquired.GetDesc(&mut acquired_desc);
+                        self.latest_texture.GetDesc(&mut latest_desc);
+                    }
+                    if acquired_desc.Width != latest_desc.Width
+                        || acquired_desc.Height != latest_desc.Height
+                        || acquired_desc.Format != latest_desc.Format
+                        || acquired_desc.SampleDesc.Count != latest_desc.SampleDesc.Count
+                    {
+                        return Err(HelperError::CaptureFailed(format!(
+                            "DXGI acquired texture {}x{} {:?} is incompatible with latest texture {}x{} {:?}",
+                            acquired_desc.Width,
+                            acquired_desc.Height,
+                            acquired_desc.Format,
+                            latest_desc.Width,
+                            latest_desc.Height,
+                            latest_desc.Format
+                        )));
+                    }
+
+                    // CopyResource(latest_texture ← acquired). Both are
+                    // same-device DEFAULT GPU textures with matching geometry.
+                    unsafe {
+                        self.context.CopyResource(&self.latest_texture, &acquired);
+                    }
+                    self.latest_copies = self.latest_copies.saturating_add(1);
+                    Ok(RefreshOutcome::Updated)
+                })();
+                let release_result = unsafe { self.duplication.ReleaseFrame() };
+                if let Err(error) = release_result {
+                    return Err(HelperError::CaptureFailed(format!(
+                        "ReleaseFrame failed: {error}"
+                    )));
                 }
-                self.last_frame_info = Some(info);
-                self.latest_copies = self.latest_copies.saturating_add(1);
-                let _ = unsafe { self.duplication.ReleaseFrame() };
-                Ok(RefreshOutcome::Updated)
+                frame_result
             }
             Err(error) => {
                 let code = error.code();
@@ -553,22 +752,35 @@ impl CaptureBackend for DxgiCaptureBackend {
         }
     }
 
+    fn recover(&mut self, display: &DisplayInfo) -> Result<(), HelperError> {
+        *self = DxgiCaptureBackend::rebuild(self, display)?;
+        Ok(())
+    }
+
     fn freeze(&mut self, display: &DisplayInfo) -> Result<FrozenFrame, HelperError> {
         // Trigger at least one refresh so we have a freshest frame in
         // `latest_texture`. The renderer holds the GPU texture for the
         // duration of the overlay, so this MUST be the only place a copy
         // is read back to the CPU — and we explicitly do NOT do that here.
-        match self.refresh_latest(50)? {
-            RefreshOutcome::Lost => {
-                // Caller is responsible for rebuilding the backend before
-                // the next freeze attempt; surface a structured error so
-                // the app layer can fall back to GDI.
-                self.duplication_rebuilds = self.duplication_rebuilds.saturating_add(1);
-                return Err(HelperError::CaptureFailed(
-                    "DXGI duplication lost; rebuild required".into(),
-                ));
+        for _ in 0..5 {
+            match self.refresh_latest(50)? {
+                RefreshOutcome::Lost => {
+                    // Caller is responsible for rebuilding the backend before
+                    // the next freeze attempt; surface a structured error so
+                    // the app layer can fall back to GDI.
+                    return Err(HelperError::CaptureFailed(
+                        "DXGI duplication lost; rebuild required".into(),
+                    ));
+                }
+                RefreshOutcome::Updated => break,
+                RefreshOutcome::Unchanged if self.latest_copies > 0 => break,
+                RefreshOutcome::Unchanged => {}
             }
-            RefreshOutcome::Updated | RefreshOutcome::Unchanged => {}
+        }
+        if self.latest_copies == 0 {
+            return Err(HelperError::CaptureFailed(
+                "DXGI did not produce an initial desktop frame within 250 ms".into(),
+            ));
         }
 
         // GPU copy: `frozen_texture ← latest_texture`. No CPU readback.
@@ -587,12 +799,21 @@ impl CaptureBackend for DxgiCaptureBackend {
         if matches!(display.rotation, DisplayRotation::Identity) {
             self.frozen_oriented = None;
         } else {
-            self.frozen_oriented = Some(create_default_texture(
+            let oriented = create_default_texture(
                 &self.device,
                 canonical_w,
                 canonical_h,
                 (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE).0 as u32,
-            )?);
+            )?;
+            render_rotated_texture(
+                &self.device,
+                &self.frozen_texture,
+                &oriented,
+                self.physical_width,
+                self.physical_height,
+                display.rotation,
+            )?;
+            self.frozen_oriented = Some(oriented);
         }
 
         self.canonical_width = canonical_w;
@@ -627,6 +848,32 @@ impl CaptureBackend for DxgiCaptureBackend {
 
     fn record_selection_readback(&mut self) {
         self.selection_cpu_readbacks = self.selection_cpu_readbacks.saturating_add(1);
+    }
+
+    fn should_fallback_to_gdi(&self) -> bool {
+        DxgiCaptureBackend::should_fallback_to_gdi(self)
+    }
+}
+
+// Force the windows crate to keep some symbols linked even when we only use
+// them via macros / constants.
+#[allow(dead_code)]
+const _DXGI_ERROR_REFERENCED: () = {
+    let _ = DXGI_ERROR_ACCESS_LOST.0;
+    let _ = DXGI_ERROR_DEVICE_REMOVED.0;
+    let _ = DXGI_ERROR_DEVICE_RESET.0;
+    let _ = DXGI_ERROR_UNSUPPORTED.0;
+    let _ = DXGI_ERROR_WAIT_TIMEOUT.0;
+};
+
+fn physical_to_canonical(
+    physical_w: u32,
+    physical_h: u32,
+    rotation: DisplayRotation,
+) -> (u32, u32) {
+    match rotation {
+        DisplayRotation::Identity | DisplayRotation::Rotate180 => (physical_w, physical_h),
+        DisplayRotation::Rotate90 | DisplayRotation::Rotate270 => (physical_h, physical_w),
     }
 }
 
@@ -670,34 +917,148 @@ mod tests {
     }
 
     #[test]
-    fn pointer_position_visibility_high_bit_extracts() {
+    fn pointer_position_visibility_uses_the_documented_visible_field() {
         let mut frame = DXGI_OUTDUPL_FRAME_INFO::default();
         frame.PointerPosition.Position.x = 0;
         frame.PointerPosition.Position.y = 0;
         assert!(!pointer_position_was_visible(&frame));
         frame.PointerPosition.Position.x = 0x8000_0000u32 as i32;
+        assert!(
+            !pointer_position_was_visible(&frame),
+            "pointer coordinates do not encode visibility"
+        );
+        frame.PointerPosition.Visible = true.into();
         assert!(pointer_position_was_visible(&frame));
     }
-}
 
-// Force the windows crate to keep some symbols linked even when we only use
-// them via macros / constants.
-#[allow(dead_code)]
-const _DXGI_ERROR_REFERENCED: () = {
-    let _ = DXGI_ERROR_ACCESS_LOST.0;
-    let _ = DXGI_ERROR_DEVICE_REMOVED.0;
-    let _ = DXGI_ERROR_DEVICE_RESET.0;
-    let _ = DXGI_ERROR_UNSUPPORTED.0;
-    let _ = DXGI_ERROR_WAIT_TIMEOUT.0;
-};
+    #[test]
+    fn rotation_transforms_map_physical_pixels_into_canonical_bounds() {
+        assert_eq!(
+            rotation_transform(2, 3, DisplayRotation::Identity),
+            [1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+        );
+        assert_eq!(
+            rotation_transform(2, 3, DisplayRotation::Rotate90),
+            [0.0, 1.0, -1.0, 0.0, 3.0, 0.0]
+        );
+        assert_eq!(
+            rotation_transform(2, 3, DisplayRotation::Rotate180),
+            [-1.0, 0.0, 0.0, -1.0, 2.0, 3.0]
+        );
+        assert_eq!(
+            rotation_transform(2, 3, DisplayRotation::Rotate270),
+            [0.0, -1.0, 1.0, 0.0, 0.0, 2.0]
+        );
+    }
 
-fn physical_to_canonical(
-    physical_w: u32,
-    physical_h: u32,
-    rotation: DisplayRotation,
-) -> (u32, u32) {
-    match rotation {
-        DisplayRotation::Identity | DisplayRotation::Rotate180 => (physical_w, physical_h),
-        DisplayRotation::Rotate90 | DisplayRotation::Rotate270 => (physical_h, physical_w),
+    #[test]
+    fn gpu_rotation_renders_source_pixels_into_the_oriented_texture() {
+        let (device, context) = create_d3d11_device().expect("test D3D11 device");
+        let source = create_default_texture(&device, 2, 3, D3D11_BIND_SHADER_RESOURCE.0 as u32)
+            .expect("source texture");
+        let target = create_default_texture(
+            &device,
+            3,
+            2,
+            (D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE).0 as u32,
+        )
+        .expect("oriented target texture");
+        let pixels = [
+            1u8, 0, 0, 255, 2, 0, 0, 255, // source row 0
+            3, 0, 0, 255, 4, 0, 0, 255, // source row 1
+            5, 0, 0, 255, 6, 0, 0, 255, // source row 2
+        ];
+        unsafe {
+            context.UpdateSubresource(
+                &source,
+                0,
+                None,
+                pixels.as_ptr().cast(),
+                2 * 4,
+                pixels.len() as u32,
+            );
+        }
+
+        render_rotated_texture(&device, &source, &target, 2, 3, DisplayRotation::Rotate90)
+            .expect("GPU rotation");
+
+        let staging = create_staging_texture(&device, 3, 2).expect("staging texture");
+        unsafe { context.CopyResource(&staging, &target) };
+        let mut mapped = Default::default();
+        unsafe { context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped)) }
+            .expect("map oriented texture");
+        let mut blue_values = Vec::with_capacity(6);
+        for y in 0..2usize {
+            let row = unsafe {
+                std::slice::from_raw_parts(
+                    (mapped.pData as *const u8).add(y * mapped.RowPitch as usize),
+                    3 * 4,
+                )
+            };
+            blue_values.extend([row[0], row[4], row[8]]);
+        }
+        unsafe { context.Unmap(&staging, 0) };
+
+        assert_eq!(blue_values, [5, 3, 1, 6, 4, 2]);
+    }
+
+    #[test]
+    fn cursor_policy_only_falls_back_when_dxgi_omits_a_visible_cursor() {
+        let mut frame = DXGI_OUTDUPL_FRAME_INFO::default();
+        assert!(!requires_gdi_for_cursor(
+            CursorVisibility::Hidden,
+            Some(&frame)
+        ));
+        assert!(requires_gdi_for_cursor(
+            CursorVisibility::VisibleInside,
+            Some(&frame)
+        ));
+        assert!(requires_gdi_for_cursor(
+            CursorVisibility::VisibleOutside,
+            Some(&frame)
+        ));
+
+        frame.PointerPosition.Visible = true.into();
+        assert!(!requires_gdi_for_cursor(
+            CursorVisibility::VisibleInside,
+            Some(&frame)
+        ));
+        assert!(!requires_gdi_for_cursor(
+            CursorVisibility::VisibleInside,
+            None
+        ));
+    }
+
+    #[test]
+    fn duplication_output_must_match_the_primary_monitor_bounds() {
+        let display = DisplayInfo {
+            bounds: RectI {
+                x: 0,
+                y: 0,
+                width: 1920,
+                height: 1080,
+            },
+            dpi: 96.0,
+            rotation: DisplayRotation::Identity,
+            is_primary: true,
+        };
+        assert!(output_bounds_match_display(
+            windows::Win32::Foundation::RECT {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1080,
+            },
+            &display
+        ));
+        assert!(!output_bounds_match_display(
+            windows::Win32::Foundation::RECT {
+                left: 1920,
+                top: 0,
+                right: 3840,
+                bottom: 1080,
+            },
+            &display
+        ));
     }
 }

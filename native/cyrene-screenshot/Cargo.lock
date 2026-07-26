@@ -23,6 +23,7 @@ dependencies = [
  "thiserror",
  "uuid",
  "windows",
+ "windows-numerics",
 ]
 
 [[package]]

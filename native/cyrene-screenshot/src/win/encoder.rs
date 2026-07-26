@@ -340,7 +340,7 @@ fn encode_to_path(
     // Write the BGRA pixels. Pitch is the row stride in bytes; the encoder
     // will pack them in PNG without padding because we supply exactly
     // width*4 bytes per row.
-    let pitch = (frame.width * 4) as u32;
+    let pitch = frame.width * 4;
     let expected_bytes = frame.height.checked_mul(pitch).ok_or_else(|| {
         HelperError::EncodeFailed(format!(
             "encoder pixel buffer overflow computing {}*{}",
