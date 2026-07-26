@@ -3,6 +3,10 @@ import { AgentRuntimeError } from "./agent-runtime-error";
 import { perf } from "../perf-trace";
 import type { ToolCallResult } from "./types";
 import type { ChatMessage } from "./vendors/types";
+import type {
+  AskMissingField,
+  AskUserAnswer,
+} from "../../shared/ask-clarification";
 
 export type ActionDecision =
   | {
@@ -20,7 +24,7 @@ export type ActionDecision =
   | {
       decision: "ask_user";
       reason: string;
-      missingInformation: string[];
+      missingFields: AskMissingField[];
     }
   | {
       /** Local trusted failure fact. It is never produced by a model. */
@@ -32,6 +36,7 @@ export type ActionDecision =
     };
 
 export type ActDecision = Extract<ActionDecision, { decision: "act" }>;
+export type AskUserDecision = Extract<ActionDecision, { decision: "ask_user" }>;
 
 export interface AgentGraphInput {
   originalQuery: string;
@@ -39,6 +44,7 @@ export interface AgentGraphInput {
   citaContextBlock: string;
   messages: ChatMessage[];
   availableCapabilities: string[];
+  clarificationAnswers?: AskUserAnswer[];
 }
 
 export interface AgentGraphState extends AgentGraphInput {
@@ -48,11 +54,13 @@ export interface AgentGraphState extends AgentGraphInput {
   toolResults: ToolCallResult[];
   iterationCount: number;
   reply: string;
+  clarificationAnswers: AskUserAnswer[];
 }
 
 export interface AgentGraphDeps {
   decide: (state: AgentGraphState) => Promise<ActionDecision>;
   execute: (state: AgentGraphState, decision: ActDecision) => Promise<ToolCallResult[]>;
+  askUser?: (state: AgentGraphState, decision: AskUserDecision) => Promise<AskUserAnswer>;
   respond: (state: AgentGraphState, decision: Exclude<ActionDecision, { decision: "act" }>) => Promise<string>;
   maxIterations?: number;
   trace?: (node: string, state: AgentGraphState) => void;
@@ -69,6 +77,7 @@ const GraphState = Annotation.Root({
   toolResults: Annotation<ToolCallResult[]>,
   iterationCount: Annotation<number>,
   reply: Annotation<string>,
+  clarificationAnswers: Annotation<AskUserAnswer[]>,
 });
 
 export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps): Promise<AgentGraphState> {
@@ -128,6 +137,30 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
         : {};
       return new Command({ update, goto });
     })
+    .addNode("askUser", async (state) => {
+      deps.trace?.("askUser", state);
+      if (state.decision?.decision !== "ask_user" || !deps.askUser) {
+        return new Command({ goto: "soul" });
+      }
+      if (state.iterationCount >= maxIterations) {
+        throw new AgentRuntimeError(
+          "E_AGENT_GRAPH_ITERATION_LIMIT",
+          `Agent graph exceeded ${maxIterations} iterations.`,
+        );
+      }
+      const answer = await deps.askUser(state, state.decision);
+      if (answer.answers.length === 0) {
+        return new Command({ goto: "soul" });
+      }
+      return new Command({
+        update: {
+          clarificationAnswers: [...state.clarificationAnswers, answer],
+          decision: undefined,
+          iterationCount: state.iterationCount + 1,
+        },
+        goto: "decide",
+      });
+    })
     .addNode("soul", async (state) => {
       deps.trace?.("soul", state);
       if (!state.decision || state.decision.decision === "act") {
@@ -136,7 +169,11 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
       return { reply: await deps.respond(state, state.decision) };
     })
     .addEdge(START, "decide")
-    .addConditionalEdges("decide", (state) => state.decision?.decision === "act" ? "execute" : "soul")
+    .addConditionalEdges("decide", (state) => {
+      if (state.decision?.decision === "act") return "execute";
+      if (state.decision?.decision === "ask_user" && deps.askUser) return "askUser";
+      return "soul";
+    })
     .addEdge("execute", "routeAfterTool")
     .addEdge("soul", END)
     .compile();
@@ -148,6 +185,7 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
     decision: undefined,
     currentAction: undefined,
     toolResults: [],
+    clarificationAnswers: input.clarificationAnswers ?? [],
     iterationCount: 0,
     reply: "",
   }, {

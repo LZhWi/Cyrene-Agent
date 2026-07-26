@@ -144,8 +144,11 @@ contextBridge.exposeInMainWorld("schedulerEvents", schedulerEventsApi);
 // 用户选择卡片（歧义消解器）：渲染端回传用户选择给主进程
 // 卡片展示走 AGUI_EVENT 的 CUSTOM 事件（与天气卡片同通道），resolve 走独立 IPC
 const choiceApi = {
-  resolve: (id: string, value: string) =>
-    ipcRenderer.invoke(IPC.CHOICE_RESOLVE, { id, value }),
+  resolve: (id: string, value: unknown) =>
+    ipcRenderer.invoke(
+      IPC.CHOICE_RESOLVE,
+      typeof value === "string" ? { id, value } : { id, answer: value },
+    ),
 };
 contextBridge.exposeInMainWorld("choice", choiceApi);
 

@@ -3,6 +3,7 @@ import { stripLeakedChatTimeContext } from "../chat-time-context";
 import {
   runActionGate,
   type ActionCapability,
+  type ActionReferencePolicy,
 } from "./action-gate";
 import { runAgentGraph, type AgentGraphState } from "./agent-graph";
 import { AgentRuntimeError } from "./agent-runtime-error";
@@ -23,8 +24,25 @@ import type { ToolCallResult, ToolExecutionOutcome } from "./types";
 import type { TwoPhaseEvent, TwoPhaseFcResult, AgentLoopSettings } from "./two-phase-fc-loop";
 import type { ChatMessage, ChatRequest, ChatVendorAdapter, ToolCall } from "./vendors/types";
 import { perf } from "../perf-trace";
+import {
+  debugLog,
+  debugWarn,
+  flowLog,
+  summarizeArgumentKeys,
+  summarizeObjective,
+} from "../agent-log";
 import { contextRefRegistry } from "./tool-context";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
+import type {
+  AskClarificationCard,
+  AskUserAnswer,
+  TrustedAskUserProfile,
+} from "../../shared/ask-clarification";
+import {
+  detectRecentAddressedUser,
+  resolveAskClarification,
+} from "./ask-soul";
+import { buildAskCard } from "./ask-card";
 
 export interface LangGraphAgentLoopOptions {
   settings: AgentLoopSettings;
@@ -51,6 +69,10 @@ export interface LangGraphAgentLoopOptions {
   nativeFcSystemContent?: string;
   responseContext?: string;
   conversationId?: string;
+  runtimeEnvironmentContext?: string;
+  askSystemContent?: string;
+  trustedAskUserProfile?: TrustedAskUserProfile;
+  requestUserClarification?: (card: AskClarificationCard) => Promise<AskUserAnswer>;
 }
 
 const LOG_PREFIX = "[AgentGraph/Trace]";
@@ -123,6 +145,14 @@ function errorCodeOf(error: unknown): string {
   return token.startsWith("E_") ? token : "E_TOOL_EXECUTION_FAILED";
 }
 
+function referencePolicyFor(tool: ToolDefinition): ActionReferencePolicy {
+  const policies = new Set(Object.values(tool.controlledInput ?? {}));
+  if (policies.has("context_ref_array")) return "context_ref_array";
+  if (policies.has("context_ref")) return "context_ref";
+  if (policies.has("tool_result")) return "tool_result";
+  return "none";
+}
+
 export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions): Promise<TwoPhaseFcResult> {
   const startedAt = Date.now();
   const perCallTimeout = Math.max(1_000, Math.min(75_000, options.timeoutMs));
@@ -132,6 +162,8 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     capability: tool.capability ?? tool.id,
     toolId: tool.id,
     description: tool.catalogHint?.trim() || tool.description.split("\n")[0]?.trim() || tool.description,
+    requiredInputs: tool.inputSchema.required ?? [],
+    referencePolicy: referencePolicyFor(tool),
   }));
   let usageInput = 0;
   let usageOutput = 0;
@@ -140,7 +172,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
   let duplicateTerminalStreak = 0;
   const executionLedger = options.executionLedger ?? new ExecutionLedger();
   const usageRecorder = options.recordUsage ?? ((input, output, calls) => recordUsage(input, output, calls));
-  console.log(
+  debugLog(
     `${LOG_PREFIX} runtime=start adapter=${options.adapter.id} transport=${options.adapter.transport} capabilities=${capabilities.length}`,
   );
 
@@ -180,7 +212,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       if (usedImageCaptionFallback || !options.imageCaptionFallback) throw error;
       usedImageCaptionFallback = true;
       fallbackMessages = await options.imageCaptionFallback();
-      console.warn(`${LOG_PREFIX} image_fallback=true`);
+      debugWarn(`${LOG_PREFIX} image_fallback=true`);
       return await callAdapter(
         options.adapter,
         buildRequest(fallbackMessages),
@@ -195,12 +227,12 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     originalQuery: options.originalQuery,
     contextualizedQuery: options.contextualizedQuery,
     citaContextBlock: options.citaContextBlock,
-    messages: options.messages,
+    messages: options.cleanMessages ?? options.messages,
     availableCapabilities: capabilities.map((item) => item.capability),
   }, {
     maxIterations: options.maxIterations,
     trace: (node, state) => {
-      console.log(`${LOG_PREFIX} node=${node} iteration=${state.iterationCount} decision=${state.decision?.decision ?? "pending"}`);
+      debugLog(`${LOG_PREFIX} node=${node} iteration=${state.iterationCount} decision=${state.decision?.decision ?? "pending"}`);
     },
     decide: async (state) => {
       ensureBudget();
@@ -209,7 +241,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       // 模型又重复同一已完成动作时才触发。主路径不依赖此检查。
       const lastResult = state.toolResults[state.toolResults.length - 1];
       if (lastResult?.deduplicated) {
-        console.log(`${LOG_PREFIX} node=decide forced_respond reason=duplicate_terminal_action`);
+        debugLog(`${LOG_PREFIX} node=decide forced_respond reason=duplicate_terminal_action`);
         return { decision: "respond", reason: "duplicate_terminal_action" };
       }
       options.onEvent?.({ type: "step_started", stepName: "agent-graph-action-gate" });
@@ -227,7 +259,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         const actionGateSettings = profile.reasoning === "disabled"
           ? { ...options.settings, reasoning: { mode: "off" as const } }
           : options.settings;
-        console.log(
+        debugLog(
           `${LOG_PREFIX} node=action-gate provider=${options.adapter.id} transport=${options.adapter.transport} model=${options.settings.model} mode=${profile.mode} profile=${profile.id}`,
         );
         const trustedRefs = new Set(options.trustedRefs ?? []);
@@ -236,8 +268,10 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           originalQuery: state.originalQuery,
           contextualizedQuery: state.contextualizedQuery,
           citaContextBlock: state.citaContextBlock,
-          messages: options.cleanMessages ?? options.messages,
+          messages: state.messages,
           availableCapabilities: capabilities,
+          runtimeEnvironmentContext: options.runtimeEnvironmentContext,
+          clarificationAnswers: state.clarificationAnswers,
           trustedRefs: [...trustedRefs],
           toolResults: state.toolResults,
           profile,
@@ -253,7 +287,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
               ],
             }),
             actionGateSettings,
-            options.cleanMessages,
+            state.messages,
             signal,
           ),
           onResponse: (response) => trackUsage(response.usage),
@@ -267,7 +301,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             }
           },
           recordMetric: (metric) => {
-            console.log(`[StructuredOutput] ${JSON.stringify({
+            debugLog(`[StructuredOutput] ${JSON.stringify({
               provider: options.adapter.id,
               model: options.settings.model,
               profile: profile.id,
@@ -277,9 +311,11 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           },
         }));
         if (gate.outcome === "failure") {
-          console.warn(
+          debugWarn(
             `${LOG_PREFIX} node=action-gate failure=${gate.failure.code} disposition=${gate.failure.disposition} toolExecuted=false`,
           );
+          flowLog(`3. 动作校验失败：${gate.failure.code}`);
+          flowLog("   工具未执行；转入失败回复");
           return {
             decision: "failure",
             reason: "action_gate_failed",
@@ -289,14 +325,51 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           };
         }
         const decision = gate.decision;
-        console.log(
+        debugLog(
           `${LOG_PREFIX} decision=${decision.decision}${decision.decision === "act" ? ` capability=${decision.capability}` : ""} repairs=${gate.repairCount}`,
         );
+        if (decision.decision === "act") {
+          const toolId = capabilities.find((item) => item.capability === decision.capability)?.toolId
+            ?? decision.capability;
+          flowLog(`3. 选择动作：调用 ${toolId}`);
+          flowLog(`   目标：${summarizeObjective(decision.objective)}`);
+        } else if (decision.decision === "ask_user") {
+          flowLog("3. 选择动作：向用户确认信息");
+        } else {
+          flowLog("3. 选择动作：直接回复");
+        }
         return decision;
       } finally {
         options.onEvent?.({ type: "step_finished", stepName: "agent-graph-action-gate" });
       }
     },
+    ...(options.requestUserClarification
+      ? {
+          askUser: async (_state: AgentGraphState, decision) => {
+            const clarification = await perf.track("ask_soul_llm", () => resolveAskClarification({
+              model: options.settings.model,
+              askSystemContent: options.askSystemContent ?? "",
+              input: {
+                userRequest: _state.originalQuery,
+                missingFields: decision.missingFields,
+                trustedUserProfile: options.trustedAskUserProfile,
+                recentAddressedUser: detectRecentAddressedUser(
+                  _state.messages,
+                  options.trustedAskUserProfile,
+                ),
+              },
+            }, async (request) => {
+              const response = await invokeWithFallback(() => ({
+                ...request,
+                ...(options.soulSampling ?? {}),
+              }));
+              trackUsage(response.usage);
+              return response;
+            }));
+            return options.requestUserClarification!(buildAskCard(clarification));
+          },
+        }
+      : {}),
     execute: async (state, decision) => {
       ensureBudget();
       const selectedTool = resolveToolForCapability(enabledTools, decision.capability);
@@ -343,6 +416,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
               model: options.settings.model,
               nativeFcSystemPrompt: options.nativeFcSystemContent ?? "",
               executionBrief,
+              runtimeEnvironmentContext: options.runtimeEnvironmentContext,
               toolResults: state.toolResults,
               tool: selectedTool,
               ...(lastError instanceof Error ? { protocolFeedback: lastError.message } : {}),
@@ -361,10 +435,12 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             break;
           } catch (error) {
             lastError = error;
-            console.warn(`${LOG_PREFIX} node=native-tool tool=${selectedTool.id} protocol_retry=${attempt} error=${errorCodeOf(error)}`);
+            debugWarn(`${LOG_PREFIX} node=native-tool tool=${selectedTool.id} protocol_retry=${attempt} error=${errorCodeOf(error)}`);
           }
         }
         if (!args || !toolCall) {
+          flowLog(`4. 工具参数生成失败：${errorCodeOf(lastError)}`);
+          flowLog("   工具未执行；转入失败回复");
           return [{
             toolId: selectedTool.id,
             args: {},
@@ -376,6 +452,8 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             toolExecuted: false,
           }];
         }
+        flowLog(`4. 生成工具参数：完成（${summarizeArgumentKeys(args)}）`);
+        flowLog(`5. 执行工具：${selectedTool.id}`);
 
         const toolCallId = toolCall.id;
         options.onEvent?.({ type: "tool_call_start", toolCallId, toolCallName: selectedTool.name });
@@ -419,7 +497,12 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           retryable: outcome.retryable,
           ...(deduplicated ? { deduplicated: true } : {}),
         };
-        console.log(`${LOG_PREFIX} node=tool-result tool=${selectedTool.id} status=${outcome.status} cached=${execution.cached} deduplicated=${deduplicated}${outcome.errorCode ? ` errorCode=${outcome.errorCode}` : ""}`);
+        debugLog(`${LOG_PREFIX} node=tool-result tool=${selectedTool.id} status=${outcome.status} cached=${execution.cached} deduplicated=${deduplicated}${outcome.errorCode ? ` errorCode=${outcome.errorCode}` : ""}`);
+        flowLog(
+          outcome.status === "succeeded"
+            ? `6. 工具结果：成功${execution.cached ? "（使用已有结果）" : ""}`
+            : `6. 工具结果：失败${outcome.errorCode ? `（${outcome.errorCode}）` : ""}`,
+        );
         const messageId = `tool-result-${Date.now()}`;
         options.onEvent?.({ type: "tool_call_result", toolCallId, messageId, content: outcome.output });
         options.onEvent?.({ type: "tool_call_end", toolCallId });
@@ -432,6 +515,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       ensureBudget();
       options.onEvent?.({ type: "step_started", stepName: "agent-graph-soul" });
       try {
+        flowLog("7. 生成最终回复");
         const localNonExecutionFact = state.toolResults
           .slice()
           .reverse()
@@ -453,14 +537,21 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           options.responseContext ?? "",
           failureInstruction,
           `[ACTION_DECISION]\n${JSON.stringify(decision)}\n[/ACTION_DECISION]`,
+          state.clarificationAnswers.length > 0
+            ? `[CLARIFICATION_ANSWERS]\n${JSON.stringify(state.clarificationAnswers)}\n[/CLARIFICATION_ANSWERS]`
+            : "",
           buildToolExecutionContext(state.toolResults),
         ].filter(Boolean).join("\n\n");
-        const response = await perf.track("respond_soul_llm", () => invokeWithFallback((messages) => ({
-          model: options.settings.model,
-          messages: [{ role: "system", content: system }, ...messages],
-          stream: false,
-          ...(options.soulSampling ?? {}),
-        })));
+        const response = await perf.track("respond_soul_llm", () => invokeWithFallback(
+          (messages) => ({
+            model: options.settings.model,
+            messages: [{ role: "system", content: system }, ...messages],
+            stream: false,
+            ...(options.soulSampling ?? {}),
+          }),
+          undefined,
+          state.messages,
+        ));
         trackUsage(response.usage);
         const reply = stripLeakedChatTimeContext(stripToolProtocol(response.text))
           || "刚才没有生成正常回复，请再试一次。";

@@ -4,6 +4,8 @@
 dist/main/
 dist/preload/
 dist/renderer/assets
+dist/renderer/feeling/
+dist/renderer/status/
 dist/renderer/call/index.html
 dist/renderer/chat/index.html
 dist/renderer/settings/index.html

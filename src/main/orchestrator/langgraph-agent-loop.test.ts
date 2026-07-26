@@ -68,6 +68,17 @@ function musicPlayTool(): ToolDefinition {
   };
 }
 
+function weatherTool(): ToolDefinition {
+  return {
+    id: "weather", capability: "weather.lookup", name: "查询天气",
+    description: "查询指定城市的天气", enabled: true,
+    inputSchema: {
+      type: "object", properties: { city: { type: "string" } }, required: [],
+    },
+    execute: async () => "unused",
+  };
+}
+
 function options(adapter: FakeAdapter, executeTool = vi.fn(async () => ({
   status: "succeeded" as const,
   output: JSON.stringify({ kind: "playback", dispatch: { state: "dispatched" } }),
@@ -97,7 +108,70 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("runLangGraphAgentLoop native Function Calling runtime", () => {
+  it("executes a non-reference tool after discarding an invented target ref", async () => {
+    vi.mocked(contextRefRegistry.resolve).mockImplementation(() => {
+      throw new Error("unknown ref");
+    });
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({
+      decision: "act",
+      capability: "weather.lookup",
+      objective: "查询杭州天气",
+      targetRefs: ["杭州"],
+      afterSuccess: "respond",
+    });
+    adapter.enqueueToolCall("weather", { city: "杭州" });
+    adapter.enqueueText("杭州今天晴。");
+    const executeTool = vi.fn(async () => ({
+      status: "succeeded" as const,
+      output: JSON.stringify({ city: "杭州", condition: "晴" }),
+    }));
+
+    const result = await runLangGraphAgentLoop({
+      ...options(adapter, executeTool),
+      messages: [{ role: "user", content: "查一下杭州天气" }],
+      tools: [weatherTool()],
+      originalQuery: "查一下杭州天气",
+      contextualizedQuery: "查询杭州当前天气",
+      citaContextBlock: "",
+      trustedRefs: [],
+      runtimeEnvironmentContext: "默认城市：淄博\n桌面：C:\\Users\\13575\\Desktop",
+    });
+
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(executeTool).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "weather", arguments: '{"city":"杭州"}' }),
+      expect.any(Set),
+    );
+    const actionGatePayload = JSON.parse(
+      String(adapter.requests[0].messages.at(-1)?.content),
+    ) as {
+      machineInput: {
+        availableCapabilities: Array<{
+          capability: string;
+          referencePolicy: string;
+          requiredInputs: string[];
+        }>;
+        runtimeEnvironmentContext: string;
+      };
+    };
+    expect(actionGatePayload.machineInput.availableCapabilities).toEqual([
+      expect.objectContaining({
+        capability: "weather.lookup",
+        referencePolicy: "none",
+        requiredInputs: [],
+      }),
+    ]);
+    expect(actionGatePayload.machineInput.runtimeEnvironmentContext).toContain("默认城市：淄博");
+    const nativeRequest = adapter.requests.find(
+      (request) => request.toolChoiceIntent?.toolName === "weather",
+    );
+    expect(nativeRequest?.messages[0]?.content).toContain("C:\\Users\\13575\\Desktop");
+    expect(result.reply).toBe("杭州今天晴。");
+  });
+
   it("decides an action, resolves one native ToolCall, then Runtime executes it", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
     const adapter = new FakeAdapter();
     adapter.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
     adapter.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
@@ -121,18 +195,90 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
       toolChoiceIntent: { mode: "must_call", toolName: "music_play_track" },
     });
     expect(result.reply).toBe("已向网易云发送播放请求。");
+    const lines = log.mock.calls.map((call) => call.join(" ")).join("\n");
+    expect(lines).toContain("[AgentFlow] 3. 选择动作：调用 music_play_track");
+    expect(lines).toContain("[AgentFlow] 4. 生成工具参数：完成（candidateRef）");
+    expect(lines).toContain("[AgentFlow] 5. 执行工具：music_play_track");
+    expect(lines).toContain("[AgentFlow] 6. 工具结果：成功");
+    expect(lines).toContain("[AgentFlow] 7. 生成最终回复");
+    expect(lines).not.toContain("[AgentGraph/Trace]");
+    expect(lines).not.toContain("[StructuredOutput]");
   });
 
-  it("routes ask_user to Soul without executing a tool", async () => {
+  it("shows an Action Gate validation failure and that no tool ran", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.mocked(contextRefRegistry.resolve).mockImplementation(() => {
+      throw new Error("stale ref");
+    });
     const adapter = new FakeAdapter();
-    adapter.enqueueDecision({ decision: "ask_user", reason: "版本不明确", missingInformation: ["歌曲版本"] });
-    adapter.enqueueText("你想听哪个版本？");
+    adapter.enqueueDecision({
+      decision: "act",
+      capability: "music.play_track",
+      objective: "播放第一首",
+      targetRefs: ["stale-ref"],
+      afterSuccess: "respond",
+    });
+    adapter.enqueueText("工具没有执行。");
     const executeTool = vi.fn();
 
-    const result = await runLangGraphAgentLoop(options(adapter, executeTool));
+    await runLangGraphAgentLoop(options(adapter, executeTool));
 
     expect(executeTool).not.toHaveBeenCalled();
-    expect(result.reply).toBe("你想听哪个版本？");
+    const lines = log.mock.calls.map((call) => call.join(" ")).join("\n");
+    expect(lines).toContain("[AgentFlow] 3. 动作校验失败：TARGET_REF_INVALID");
+    expect(lines).toContain("[AgentFlow]    工具未执行；转入失败回复");
+  });
+
+  it("uses the choice-card answer to continue from ask_user to tool execution", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({
+      decision: "ask_user",
+      reason: "版本不明确",
+      missingFields: [{
+        field: "version",
+        reason: "歌曲版本不明确",
+        required: true,
+        questionHint: "希望播放哪个版本？",
+        typeHint: "single_select",
+        allowedOptions: [],
+        candidateHints: ["Live 版", "录音室版"],
+        allowCustom: true,
+      }],
+    });
+    adapter.enqueueJson({
+      intro: "伙伴，想播放得更合你心意，还需要选一下版本呀。",
+      questions: [{
+        field: "version",
+        question: "希望播放哪个版本？",
+        type: "single_select",
+        options: [{ value: "Live 版", label: "Live 版" }],
+        allowCustom: true,
+        freeTextPlaceholder: "填写其他版本",
+      }],
+      deferredFields: [],
+    });
+    adapter.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放用户选择的版本", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
+    adapter.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
+    adapter.enqueueText("已按你的选择播放。");
+    const executeTool = vi.fn(async () => ({ status: "succeeded" as const, output: "playing" }));
+    const requestUserClarification = vi.fn(async () => ({
+      requestId: "choice-1",
+      answers: [{ field: "version", selectedValues: ["Live 版"] }],
+    }));
+
+    const result = await runLangGraphAgentLoop(({
+      ...options(adapter, executeTool),
+      askSystemContent: "ASK_SYSTEM\n\nASK_PERSONA\n\nASK_QUOTES",
+      trustedAskUserProfile: { callPreference: "伙伴", gender: "male" },
+      requestUserClarification,
+    } as Parameters<typeof runLangGraphAgentLoop>[0]));
+
+    expect(requestUserClarification).toHaveBeenCalledWith(expect.objectContaining({
+      intro: "伙伴，想播放得更合你心意，还需要选一下版本呀。",
+      questions: [expect.objectContaining({ field: "version" })],
+    }));
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(result.reply).toBe("已按你的选择播放。");
   });
 
   it("applies style sampling only to the final Soul request", async () => {
@@ -328,7 +474,20 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
 
   it("preserves image-caption fallback for the first JSON decision request", async () => {
     const adapter = new FakeAdapter();
-    adapter.enqueueDecision({ decision: "ask_user", reason: "图片信息不足", missingInformation: ["图片细节"] });
+    adapter.enqueueDecision({
+      decision: "ask_user",
+      reason: "图片信息不足",
+      missingFields: [{
+        field: "image_detail",
+        reason: "图片细节不足",
+        required: true,
+        questionHint: "可以再描述一下图片吗？",
+        typeHint: "text",
+        allowedOptions: [],
+        candidateHints: [],
+        allowCustom: false,
+      }],
+    });
     adapter.enqueueText("你可以再描述一下图片吗？");
     globalThis.fetch = vi.fn()
       .mockResolvedValueOnce(new Response("unsupported image", { status: 400 }))

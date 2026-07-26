@@ -46,8 +46,36 @@ describe("runAgentGraph", () => {
     expect(result.iterationCount).toBe(1);
   });
 
-  it("routes ask_user directly to Soul without executing a tool", async () => {
+  it("collects an ask_user answer and re-enters decision routing without using Soul", async () => {
+    const decisions: ActionDecision[] = [
+      {
+        decision: "ask_user",
+        reason: "存在多个版本",
+        missingFields: [{
+          field: "version",
+          reason: "歌曲版本不明确",
+          required: true,
+          typeHint: "single_select",
+          candidateHints: ["Live 版", "录音室版"],
+          allowCustom: true,
+        }],
+      },
+      { decision: "respond", reason: "已获得用户选择" },
+    ];
+    const decide = vi.fn(async () => decisions.shift()!);
     const execute = vi.fn();
+    const askUser = vi.fn(async () => ({
+      requestId: "choice-1",
+      answers: [{ field: "version", selectedValues: ["Live 版"] }],
+    }));
+    const respond = vi.fn(async (state) => {
+      expect(state.clarificationAnswers).toEqual([{
+        requestId: "choice-1",
+        answers: [{ field: "version", selectedValues: ["Live 版"] }],
+      }]);
+      expect(state.messages.at(-1)).toEqual({ role: "user", content: "播放左转灯" });
+      return "好的，按 Live 版继续。";
+    });
 
     const result = await runAgentGraph({
       originalQuery: "播放左转灯",
@@ -55,18 +83,17 @@ describe("runAgentGraph", () => {
       citaContextBlock: "[CITA_CONTEXT]",
       messages: [{ role: "user", content: "播放左转灯" }],
       availableCapabilities: ["music.search", "music.play_track"],
-    }, {
-      decide: async () => ({
-        decision: "ask_user",
-        reason: "存在多个版本",
-        missingInformation: ["歌曲版本"],
-      }),
+    }, ({
+      decide,
       execute,
-      respond: async () => "你想听哪个版本？",
-    });
+      askUser,
+      respond,
+    } as Parameters<typeof runAgentGraph>[1]));
 
     expect(execute).not.toHaveBeenCalled();
-    expect(result.reply).toBe("你想听哪个版本？");
+    expect(askUser).toHaveBeenCalledTimes(1);
+    expect(decide).toHaveBeenCalledTimes(2);
+    expect(result.reply).toBe("好的，按 Live 版继续。");
   });
 
   it("stops an endless act loop at the configured iteration limit", async () => {

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { CitaService } from "./cita-service";
 import { ContextStore } from "./context-store";
 import type { CitaSemanticEngine } from "./semantic-engine";
@@ -16,6 +16,10 @@ const unsafeProjectionPatches: Array<Partial<ModelVisibleContext>> = [
   { attributes: { cookie: "MUSIC_U=secret" } },
   { label: "Authorization: Bearer secret-value" },
 ];
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 function turnInput(overrides: Partial<Parameters<CitaService["prepareTurn"]>[0]> = {}) {
   return {
@@ -145,6 +149,7 @@ describe("CitaService", () => {
   });
 
   it("reports the number of supporting contexts in the CITA trace", async () => {
+    vi.stubEnv("CYRENE_DEBUG_LOGS", "1");
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       const service = createService({ understandTurn: vi.fn(async () => validUnderstanding) });
@@ -175,6 +180,7 @@ describe("CitaService", () => {
   });
 
   it("emits a readable prepare and result trace", async () => {
+    vi.stubEnv("CYRENE_DEBUG_LOGS", "1");
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       const service = createService({ understandTurn: vi.fn(async () => validUnderstanding) });
@@ -183,6 +189,19 @@ describe("CitaService", () => {
 
       expect(lines).toContain("[CITA/Trace] prepare conversation=conversation-a");
       expect(lines).toContain("status=accepted rewrite=unchanged refs=[]");
+    } finally {
+      log.mockRestore();
+    }
+  });
+
+  it("hides the CITA trace by default", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const service = createService({ understandTurn: vi.fn(async () => validUnderstanding) });
+      await service.prepareTurn(turnInput());
+      const lines = log.mock.calls.map((call) => call.join(" ")).join("\n");
+
+      expect(lines).not.toContain("[CITA/Trace]");
     } finally {
       log.mockRestore();
     }

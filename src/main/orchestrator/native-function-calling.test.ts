@@ -23,6 +23,25 @@ function response(toolCalls: ChatResponse["toolCalls"], text = ""): ChatResponse
 }
 
 describe("resolveNativeToolCall", () => {
+  it("passes trusted runtime paths and defaults to native argument generation", async () => {
+    const invoke = vi.fn(async (_request: ChatRequest) => response([{
+      id: "call-1", name: "music_search", arguments: '{"keyword":"左转灯"}',
+    }]));
+
+    await resolveNativeToolCall(({
+      model: "m",
+      nativeFcSystemPrompt: "test",
+      executionBrief: "test",
+      runtimeEnvironmentContext: "默认城市：淄博\n桌面：C:\\Users\\13575\\Desktop",
+      toolResults: [],
+      tool: tool({ keyword: { type: "string" } }),
+    } as unknown) as Parameters<typeof resolveNativeToolCall>[0], invoke);
+
+    const system = String(invoke.mock.calls[0]?.[0].messages[0]?.content);
+    expect(system).toContain("[TRUSTED_RUNTIME_ENVIRONMENT]");
+    expect(system).toContain("C:\\Users\\13575\\Desktop");
+  });
+
   it("executes a zero-argument action without another model request", async () => {
     const invoke = vi.fn<(_: ChatRequest) => Promise<ChatResponse>>();
     const result = await resolveNativeToolCall({

@@ -7,6 +7,16 @@ import { buildEnvironmentContext } from "./environment";
 // 3) 时间格式化：用 Intl.DateTimeFormat(...).formatToParts() 组装成 YYYY-MM-DD 周X HH:MM，不依赖本地化标点/顺序
 
 describe("buildEnvironmentContext timezone", () => {
+  it("treats the preferred address and gender as trusted wording constraints", () => {
+    const ctx = buildEnvironmentContext(undefined, {
+      callPreference: "伙伴",
+      gender: "male",
+    });
+
+    expect(ctx).toContain("重要提问或确认时，可以自然使用一次「伙伴」");
+    expect(ctx).toContain("不得使用女性指向称呼");
+  });
+
   it("uses profile.timezone when valid and includes time label", () => {
     const ctx = buildEnvironmentContext(
       undefined,

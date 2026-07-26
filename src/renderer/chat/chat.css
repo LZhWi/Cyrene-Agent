@@ -1831,6 +1831,41 @@ body {
   margin-bottom: 10px;
 }
 
+.choice-card--structured {
+  width: min(420px, calc(100% - 58px));
+}
+
+.choice-card__question {
+  padding: 10px 0;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+
+.choice-card__question-title {
+  margin-bottom: 7px;
+  color: rgba(255,255,255,0.82);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.choice-card__question--invalid {
+  border-color: rgba(255, 110, 130, 0.72);
+}
+
+.choice-card__question--invalid .choice-card__question-title {
+  color: rgba(255, 150, 165, 0.96);
+}
+
+.choice-card__custom-input--standalone {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 7px;
+}
+
+.choice-card__submit {
+  display: block;
+  margin: 10px 0 0 auto;
+}
+
 .choice-card__list {
   display: flex;
   flex-direction: column;

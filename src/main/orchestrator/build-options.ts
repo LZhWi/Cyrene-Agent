@@ -37,6 +37,7 @@ import {
   type ChatContextMessage,
 } from "../chat-time-context";
 import { perf } from "../perf-trace";
+import { debugLog } from "../agent-log";
 import { buildResponseContext } from "../cita/context-package";
 import {
   STYLE_IDS,
@@ -49,6 +50,7 @@ import type {
   SocialAtom,
   SocialExtractionInput,
 } from "../social-context/types";
+import type { TrustedAskUserProfile } from "../../shared/ask-clarification";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
@@ -97,6 +99,9 @@ export interface BuildOptionsDeps {
   captionImageForFallback?: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
   loadActionGateSystemPrompt: () => string;
   loadNativeFcSystemPrompt: () => string;
+  loadAskSystemPrompt: () => string;
+  loadAskPersonaPrompt: () => string;
+  loadAskQuotesPrompt: () => string;
   prepareCitaTurn?: (input: {
     conversationId: string;
     turnId: string;
@@ -465,11 +470,11 @@ export async function buildAgentRunOptions(
           prepared.contextPackage.resolvedReferences,
         );
       }
-      console.log(
+      debugLog(
         `[CITA/Trace] injection conversation=${conversationId} tool=${citaContextBlock.length > 0} soul=${citaContextBlock.length > 0} blockChars=${citaContextBlock.length}`,
       );
     } catch {
-      console.warn(`[CITA/Trace] injection conversation=${conversationId} tool=false soul=false reason=prepare_failed`);
+      console.warn(`[CITA] injection conversation=${conversationId} tool=false soul=false reason=prepare_failed`);
     }
   }
 
@@ -545,6 +550,22 @@ export async function buildAgentRunOptions(
 
   const nativeFcSystemContent = deps.loadNativeFcSystemPrompt();
   const actionGateSystemPrompt = deps.loadActionGateSystemPrompt();
+  const askSystemContent = [
+    deps.loadAskSystemPrompt(),
+    deps.loadAskPersonaPrompt(),
+    deps.loadAskQuotesPrompt(),
+  ].filter(Boolean).join("\n\n");
+  const profileGender: NonNullable<TrustedAskUserProfile["gender"]> = profile.gender === "male"
+    || profile.gender === "female"
+    || profile.gender === "nonbinary"
+    || profile.gender === "secret"
+    ? profile.gender
+    : "unknown";
+  const trustedAskUserProfile = {
+    ...(profile.callPreference?.trim() ? { callPreference: profile.callPreference.trim() } : {}),
+    ...(profile.nickname?.trim() ? { nickname: profile.nickname.trim() } : {}),
+    gender: profileGender,
+  };
 
   deps.logWorldbookInjection(alwaysOnContext, systemContent);
 
@@ -579,6 +600,9 @@ export async function buildAgentRunOptions(
       citaContextBlock,
       trustedRefs,
       responseContext,
+      runtimeEnvironmentContext: environmentContext,
+      askSystemContent,
+      trustedAskUserProfile,
       nativeFcSystemContent,
       actionGateSystemPrompt,
       timeoutMs: deps.chatRequestTimeoutMs,

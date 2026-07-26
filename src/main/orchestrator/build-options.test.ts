@@ -41,10 +41,51 @@ function createBuildDeps(): BuildOptionsDeps {
     chatRequestTimeoutMs: 1000,
     loadActionGateSystemPrompt: () => "",
     loadNativeFcSystemPrompt: () => "",
+    loadAskSystemPrompt: () => "ASK_SYSTEM",
+    loadAskPersonaPrompt: () => "ASK_PERSONA",
+    loadAskQuotesPrompt: () => "ASK_QUOTES",
   }
 }
 
 describe("build-options", () => {
+  it("builds the lightweight Ask Soul prompt in the approved order with trusted identity only", async () => {
+    const deps = createBuildDeps()
+    deps.loadUserProfile = () => ({
+      nickname: "小王",
+      callPreference: "伙伴",
+      gender: "male",
+      birthday: "2000-01-01",
+      defaultCity: "淄博",
+    })
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "生成一份文档" }],
+      style: "01_default.md",
+    }, deps)
+    const askOptions = result.options as typeof result.options & {
+      askSystemContent?: string
+      trustedAskUserProfile?: Record<string, unknown>
+    }
+
+    expect(askOptions.askSystemContent).toBe("ASK_SYSTEM\n\nASK_PERSONA\n\nASK_QUOTES")
+    expect(askOptions.trustedAskUserProfile).toEqual({
+      nickname: "小王",
+      callPreference: "伙伴",
+      gender: "male",
+    })
+  })
+
+  it("passes the trusted runtime environment to the agent decision stages", async () => {
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "帮我查一下今天的天气" }],
+      style: "01_default.md",
+    }, createBuildDeps())
+
+    expect((result.options as typeof result.options & {
+      runtimeEnvironmentContext?: string
+    }).runtimeEnvironmentContext).toBe("ENV")
+  })
+
   it("passes the saved reasoning preference into the Agent Runtime", async () => {
     const deps = createBuildDeps()
     deps.loadModelSettings = () => ({

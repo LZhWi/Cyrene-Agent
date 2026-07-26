@@ -7,6 +7,8 @@ export interface NativeToolCallInput {
   model: string;
   nativeFcSystemPrompt: string;
   executionBrief: string;
+  /** 本地主进程提供的可信默认值与绝对路径。 */
+  runtimeEnvironmentContext?: string;
   toolResults: ToolCallResult[];
   tool: ToolDefinition;
   protocolFeedback?: string;
@@ -21,6 +23,9 @@ function directToolCall(tool: ToolDefinition): ToolCall {
 function buildRequest(input: NativeToolCallInput): ChatRequest {
   const systemContent = [
     input.nativeFcSystemPrompt,
+    input.runtimeEnvironmentContext
+      ? `[TRUSTED_RUNTIME_ENVIRONMENT]\n${input.runtimeEnvironmentContext}\n[/TRUSTED_RUNTIME_ENVIRONMENT]`
+      : "",
     input.executionBrief,
     buildToolExecutionContext(input.toolResults),
     input.protocolFeedback ? `上一次工具参数未通过 Runtime 校验：${input.protocolFeedback}` : "",

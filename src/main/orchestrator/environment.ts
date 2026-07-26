@@ -193,6 +193,17 @@ export function buildEnvironmentContext(modelInfo?: ModelInfo, userInfo?: UserIn
     if (userInfo.defaultCity) lines.push(`- 默认城市：${userInfo.defaultCity}（用户问天气/位置且没指定其他城市时，默认用这个）`);
     if (userInfo.gender === "male") lines.push(`- 性别：男`);
     else if (userInfo.gender === "female") lines.push(`- 性别：女`);
+    const preferredAddress = userInfo.callPreference?.trim() || userInfo.nickname?.trim();
+    if (preferredAddress) {
+      lines.push(`- 称呼使用：在重要提问或确认时，可以自然使用一次「${preferredAddress}」；不要每句话重复称呼。`);
+    }
+    if (userInfo.gender === "male") {
+      lines.push("- 性别约束：不得使用女性指向称呼；性别只用于防止误称，不要求主动提及。");
+    } else if (userInfo.gender === "female") {
+      lines.push("- 性别约束：不得使用男性指向称呼；性别只用于防止误称，不要求主动提及。");
+    } else {
+      lines.push("- 性别约束：性别未知或保密时只使用中性称呼，不得根据昵称、头像或语气推断。");
+    }
     lines.push("");
     // 时区≠地点：明确告知模型 timezone 与 defaultCity 是两个独立维度，不得交叉推断。
     lines.push("> 用户时区仅用于时间计算，不代表用户所在地，不得根据时区推断用户所在城市。默认城市仅用于天气等需要定位的工具。");

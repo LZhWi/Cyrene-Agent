@@ -758,8 +758,21 @@
 [data-ui-theme="pearl-white"] .todo-panel__title,
 [data-ui-theme="pearl-white"] .todo-item__text,
 [data-ui-theme="pearl-white"] .choice-card__title,
+[data-ui-theme="pearl-white"] .choice-card__question-title,
 [data-ui-theme="pearl-white"] .choice-card__option-label {
   color: var(--rb-text-strong);
+}
+
+[data-ui-theme="pearl-white"] .choice-card__question {
+  border-color: var(--rb-border-soft);
+}
+
+[data-ui-theme="pearl-white"] .choice-card__question--invalid {
+  border-color: #e11d48;
+}
+
+[data-ui-theme="pearl-white"] .choice-card__question--invalid .choice-card__question-title {
+  color: #be123c;
 }
 
 [data-ui-theme="pearl-white"] .sticker-field input,

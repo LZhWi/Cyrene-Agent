@@ -15,6 +15,8 @@
 //   const t = perf.begin("cita_prepare"); ...; t.end();
 //   perf.dump();  // 在 complete 回调或 finally 中调用
 
+import { debugLog, debugWarn } from "./agent-log";
+
 const PREFIX = "[Perf]";
 
 interface PhaseMark {
@@ -39,13 +41,13 @@ export const perf = {
   /** 开始追踪一个 turn。如果上一个 turn 未 dump，自动先 dump。 */
   beginTurn(label = ""): void {
     if (turnStart > 0) {
-      console.warn(`${PREFIX} previous turn "${turnLabel}" not dumped, auto-dumping before new turn`);
+      debugWarn(`${PREFIX} previous turn "${turnLabel}" not dumped, auto-dumping before new turn`);
       this.dump();
     }
     turnStart = now();
     turnLabel = label;
     phases = [];
-    console.log(`${PREFIX} ===== TURN START${label ? ` (${label})` : ""} =====`);
+    debugLog(`${PREFIX} ===== TURN START${label ? ` (${label})` : ""} =====`);
   },
 
   /**
@@ -55,14 +57,14 @@ export const perf = {
   begin(name: string): { end: (extra?: string) => void } {
     const start = now();
     const t0 = start - turnStart;
-    console.log(`${PREFIX} >>> ${name} t+${t0}ms`);
+    debugLog(`${PREFIX} >>> ${name} t+${t0}ms`);
     return {
       end(extra) {
         const endTime = now();
         const elapsed = endTime - start;
         const t1 = endTime - turnStart;
         phases.push({ name, start, end: endTime });
-        console.log(`${PREFIX} <<< ${name} elapsed=${elapsed}ms t+${t1}ms${extra ? ` ${extra}` : ""}`);
+        debugLog(`${PREFIX} <<< ${name} elapsed=${elapsed}ms t+${t1}ms${extra ? ` ${extra}` : ""}`);
       },
     };
   },
@@ -79,24 +81,24 @@ export const perf = {
 
   /** 标记一个时间点（不计时，仅记录）。 */
   mark(name: string): void {
-    console.log(`${PREFIX} --- ${name} t+${tPlus()}ms`);
+    debugLog(`${PREFIX} --- ${name} t+${tPlus()}ms`);
   },
 
   /** 打印汇总表并重置。在 turn 结束时调用。 */
   dump(): void {
     if (turnStart === 0) return;
     const total = now() - turnStart;
-    console.log(`${PREFIX} ===== TURN SUMMARY (total=${total}ms) =====`);
+    debugLog(`${PREFIX} ===== TURN SUMMARY (total=${total}ms) =====`);
     if (phases.length === 0) {
-      console.log(`${PREFIX}   (no phases recorded)`);
+      debugLog(`${PREFIX}   (no phases recorded)`);
     } else {
       for (const p of phases) {
         const elapsed = (p.end ?? now()) - p.start;
         const pct = total > 0 ? ((elapsed / total) * 100).toFixed(1) : "0.0";
-        console.log(`${PREFIX}   ${p.name.padEnd(48)} ${String(elapsed).padStart(6)}ms  (${pct}%)`);
+        debugLog(`${PREFIX}   ${p.name.padEnd(48)} ${String(elapsed).padStart(6)}ms  (${pct}%)`);
       }
     }
-    console.log(`${PREFIX} ===== END SUMMARY =====`);
+    debugLog(`${PREFIX} ===== END SUMMARY =====`);
     turnStart = 0;
     phases = [];
     turnLabel = "";

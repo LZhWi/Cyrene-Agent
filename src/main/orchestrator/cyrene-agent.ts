@@ -29,7 +29,10 @@ import { runChatLoop } from "./chat-loop";
 import type { SocialAtom } from "../social-context/types";
 import { ExecutionLedgerStore } from "./execution-ledger";
 import { perf } from "../perf-trace";
+import { debugLog, flowLog } from "../agent-log";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
+import { requestUserClarification } from "../user-choice";
+import type { TrustedAskUserProfile } from "../../shared/ask-clarification";
 
 const executionLedgers = new ExecutionLedgerStore();
 
@@ -81,6 +84,12 @@ export interface CyreneRunOptions {
   actionGateSystemPrompt?: string;
   /** [RESPONSE_CONTEXT] 文本，从 CITA 结果生成，给 Soul 动态追加。 */
   responseContext?: string;
+  /** 本地主进程生成的可信默认城市、桌面等运行环境信息。 */
+  runtimeEnvironmentContext?: string;
+  /** Ask Soul 专用轻量提示词。 */
+  askSystemContent?: string;
+  /** Ask Soul 只使用称呼、昵称和性别约束。 */
+  trustedAskUserProfile?: TrustedAskUserProfile;
   /** 仅 Chat：异步社交原子抽取所需的已校验证据元数据。 */
   socialContext?: {
     enabled: true;
@@ -250,12 +259,19 @@ export class CyreneAgent extends AbstractAgent {
           };
           const executionMode = resolveExecutionMode(options.executionMode);
           const runtime = resolveAgentRuntime(options.agentRuntime);
-          console.log(
+          debugLog(
             `${LOG_PREFIX} executionMode=${executionMode} agentRuntime=${runtime} provider=${options.settings.provider} model=${options.settings.model}`,
           );
+          const enabledToolCount = executionMode === "chat"
+            ? 0
+            : (options.tools ?? toolRegistry.getEnabledTools()).filter((tool) => tool.enabled).length;
+          flowLog("── 新请求 ─────────────────────────");
+          flowLog(`1. 准备上下文：${executionMode === "chat" ? "Chat" : "Work"} 模式，模型 ${options.settings.model}，${enabledToolCount} 个工具可用`);
+          flowLog(`2. 理解用户请求：${executionMode === "chat" ? "Chat 模式无需工具上下文" : `完成，可信引用 ${(options.trustedRefs ?? []).length} 个`}`);
 
           let result: TwoPhaseFcResult;
           if (executionMode === "chat") {
+            flowLog("3. Chat 模式：生成回复");
             result = await perf.track("chat_loop", () => runChatLoop({
               settings: options.settings,
               adapter,
@@ -286,7 +302,11 @@ export class CyreneAgent extends AbstractAgent {
               nativeFcSystemContent: options.nativeFcSystemContent,
               actionGateSystemPrompt: options.actionGateSystemPrompt,
               responseContext: options.responseContext,
+              runtimeEnvironmentContext: options.runtimeEnvironmentContext,
+              askSystemContent: options.askSystemContent,
+              trustedAskUserProfile: options.trustedAskUserProfile,
               conversationId: options.conversationId ?? "default",
+              requestUserClarification,
               timeoutMs: options.timeoutMs,
               executeTool,
               onEvent,
@@ -318,6 +338,7 @@ export class CyreneAgent extends AbstractAgent {
             executionMode,
             socialContext: options.socialContext,
           };
+          flowLog("── 本轮完成 ────────────────────────");
 
           if (cancelled) return;
           subscriber.next({

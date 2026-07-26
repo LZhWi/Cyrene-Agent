@@ -10,6 +10,7 @@ import type { ContextStore } from "./context-store";
 import type { CitaSemanticEngine } from "./semantic-engine";
 import { validateUnderstanding } from "./understanding-validator";
 import { perf } from "../perf-trace";
+import { debugLog } from "../agent-log";
 
 export interface CitaPrepareTurnInput {
   conversationId: string;
@@ -64,17 +65,17 @@ export class CitaService {
   async prepareTurn(input: CitaPrepareTurnInput, signal?: AbortSignal): Promise<CitaPrepareTurnResult> {
     const settings = this.getSettings();
     if (!settings.enabled) {
-      console.log(`[CITA/Trace] bypass conversation=${input.conversationId} reason=disabled`);
+      debugLog(`[CITA/Trace] bypass conversation=${input.conversationId} reason=disabled`);
       return { contextBlock: "" };
     }
 
     const state = this.store.snapshot(input.conversationId);
     const recentEvents = this.store.recentEvents(input.conversationId);
-    console.log(
+    debugLog(
       `[CITA/Trace] prepare conversation=${input.conversationId} turn=${input.turnId} revision=${state.revision} contexts=${state.contexts.length} events=${recentEvents.length} queryChars=${input.originalQuery.length}`,
     );
     if (settings.semanticEngine === "local") {
-      console.log(`[CITA/Trace] unavailable conversation=${input.conversationId} reason=local_engine_deferred`);
+      debugLog(`[CITA/Trace] unavailable conversation=${input.conversationId} reason=local_engine_deferred`);
       return this.buildUnavailablePackage(input, state.revision);
     }
 
@@ -104,13 +105,13 @@ export class CitaService {
       const blockTimer = perf.begin("cita_build_context_block");
       const contextBlock = buildCitaContextBlock(contextPackage);
       blockTimer.end();
-      console.log(
+      debugLog(
         `[CITA/Trace] result conversation=${input.conversationId} status=${validation.status} rewrite=${validation.understanding.rewriteStatus} refs=${this.formatRefs(validation.understanding.resolvedReferences.map((reference) => reference.targetRef))} focused=${validation.understanding.focusedEntityRefs.length} supporting=${contextPackage.supportingContexts?.length ?? 0} blockChars=${contextBlock.length}`,
       );
       return { contextPackage, contextBlock };
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error || "unknown_error");
-      console.warn(`[CITA/Trace] unavailable conversation=${input.conversationId} reason=${reason}`);
+      console.warn(`[CITA] unavailable conversation=${input.conversationId} reason=${reason}`);
       return this.buildUnavailablePackage(input, state.revision);
     }
   }

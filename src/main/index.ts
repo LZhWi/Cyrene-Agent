@@ -5010,6 +5010,9 @@ app.whenReady().then(async () => {
     },
     loadActionGateSystemPrompt: () => loadPromptFile("action_gate_system.md"),
     loadNativeFcSystemPrompt: () => loadPromptFile("native_fc_system.md"),
+    loadAskSystemPrompt: () => loadPromptFile("ask_system.md"),
+    loadAskPersonaPrompt: () => loadPromptFile("ask_persona.md"),
+    loadAskQuotesPrompt: () => loadPromptFile("ask_quotes.md"),
     prepareCitaTurn: (input) => citaService.prepareTurn(input),
     buildChatSocialContext: async ({ conversationId, query }) => {
       const now = Date.now();

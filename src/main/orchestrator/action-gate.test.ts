@@ -13,6 +13,8 @@ const capabilities: ActionCapability[] = [{
   capability: "music.play_track",
   toolId: "music_play_track",
   description: "播放歌曲",
+  requiredInputs: ["candidateRef"],
+  referencePolicy: "context_ref",
 }];
 
 const schemaProfile = resolveStructuredOutputProfile({
@@ -73,6 +75,22 @@ function baseInput(
 }
 
 describe("buildActionGateRequest", () => {
+  it("includes trusted runtime defaults and machine-derived required inputs", () => {
+    const request = buildActionGateRequest(({
+      ...baseInput(async () => response({ decision: "respond", reason: "done" })),
+      runtimeEnvironmentContext: "默认城市：淄博\n桌面：C:\\Users\\13575\\Desktop",
+      availableCapabilities: [{
+        ...capabilities[0],
+        requiredInputs: ["candidateRef"],
+      }],
+      repair: { attempt: 0, minimal: false, errors: [] },
+    } as unknown) as Parameters<typeof buildActionGateRequest>[0]);
+    const payload = JSON.parse(String(request.messages.at(-1)?.content));
+
+    expect(payload.machineInput.runtimeEnvironmentContext).toContain("默认城市：淄博");
+    expect(payload.machineInput.availableCapabilities[0].requiredInputs).toEqual(["candidateRef"]);
+  });
+
   it("uses provider JSON Schema without declaring a virtual decision tool", () => {
     const request = buildActionGateRequest({
       ...baseInput(async () => response({ decision: "respond", reason: "done" })),
@@ -135,7 +153,7 @@ describe("runActionGate", () => {
       targetRefs: ["ctx-song-1"],
       afterSuccess: "respond",
       reason: "目标、能力和引用已经明确，可以执行。",
-      missingInformation: [],
+      missingFields: [],
     })).toEqual({
       decision: "act",
       capability: "music.play_track",
@@ -217,11 +235,68 @@ describe("runActionGate", () => {
     expect(generate).toHaveBeenCalledTimes(1);
   });
 
-  it("accepts ask_user only when concrete missing information is supplied", async () => {
+  it("discards invented target refs for a capability that does not use context refs", async () => {
+    const generate = vi.fn(async () => response(actDecision({
+      capability: "weather.lookup",
+      objective: "查询杭州天气",
+      targetRefs: ["杭州"],
+    })));
+
+    const result = await runActionGate(baseInput(generate, {
+      originalQuery: "查一下杭州天气",
+      contextualizedQuery: "查询杭州当前天气",
+      availableCapabilities: [{
+        capability: "weather.lookup",
+        toolId: "weather",
+        description: "查询天气",
+        requiredInputs: [],
+        referencePolicy: "none",
+      } as ActionCapability],
+      trustedRefs: [],
+      validateTargetRef: () => false,
+    }));
+
+    expect(result).toEqual({
+      outcome: "success",
+      decision: {
+        decision: "act",
+        capability: "weather.lookup",
+        objective: "查询杭州天气",
+        targetRefs: [],
+        afterSuccess: "respond",
+      },
+      repairCount: 0,
+    });
+    expect(generate).toHaveBeenCalledTimes(1);
+  });
+
+  it("accepts structured ask_user fields and candidate choices", async () => {
     const generate = vi.fn(async () => response({
       decision: "ask_user",
-      reason: "缺少城市",
-      missingInformation: ["目标城市"],
+      reason: "需要确认文档主题和格式",
+      missingFields: [
+        {
+          field: "topic",
+          reason: "文档内容未知",
+          required: true,
+          questionHint: "这份文档主要写什么？",
+          typeHint: "text",
+          candidateHints: ["项目说明", "学习总结"],
+          allowCustom: false,
+        },
+        {
+          field: "format",
+          reason: "输出格式未知",
+          required: true,
+          questionHint: "希望生成哪种格式？",
+          typeHint: "single_select",
+          allowedOptions: [
+            { value: "word", label: "Word 文档" },
+            { value: "markdown", label: "Markdown 文档" },
+          ],
+          allowCustom: true,
+        },
+      ],
     }));
 
     const result = await runActionGate(baseInput(generate));
@@ -230,8 +305,18 @@ describe("runActionGate", () => {
       outcome: "success",
       decision: {
         decision: "ask_user",
-        reason: "缺少城市",
-        missingInformation: ["目标城市"],
+        reason: "需要确认文档主题和格式",
+        missingFields: [
+          expect.objectContaining({ field: "topic", typeHint: "text" }),
+          expect.objectContaining({
+            field: "format",
+            typeHint: "single_select",
+            allowedOptions: [
+              { value: "word", label: "Word 文档" },
+              { value: "markdown", label: "Markdown 文档" },
+            ],
+          }),
+        ],
       },
     });
   });
