@@ -15,7 +15,7 @@ describe("screenshot helper protocol", () => {
       '{"type":"overlay-visible","requestId":"r1","freezeDurationMs":0}',
       '{"type":"interaction-state","requestId":"r1","state":"selecting"}',
       '{"type":"capture-released","requestId":"r1","clipboardWritten":true,"width":1,"height":1}',
-      '{"type":"completed","requestId":"r1","fileName":null,"width":1,"height":1,"mime":"image/png","clipboardWritten":true}',
+      '{"type":"completed","requestId":"r1","fileName":null,"width":1,"height":1,"mime":"image/png","clipboardWritten":true,"hasAnnotations":false}',
       '{"type":"cancelled","requestId":"r1","reason":"escape"}',
       '{"type":"error","requestId":null,"code":"capture-failed","message":"no display","recoverable":false}',
     ];
@@ -30,6 +30,9 @@ describe("screenshot helper protocol", () => {
       .toThrow("INVALID_HELPER_EVENT");
     expect(() => parseHelperEvent('{"type":"completed","requestId":"r1","fileName":"..\\\\evil.png","width":1,"height":1,"mime":"image/png","clipboardWritten":true}'))
       .toThrow("INVALID_HELPER_EVENT");
+    expect(parseHelperEvent(
+      '{"type":"completed","requestId":"r1","fileName":null,"width":1,"height":1,"mime":"image/png","clipboardWritten":true,"hasAnnotations":true}',
+    )).toMatchObject({ type: "completed", hasAnnotations: true });
   });
 
   it("rejects path traversal file names", () => {

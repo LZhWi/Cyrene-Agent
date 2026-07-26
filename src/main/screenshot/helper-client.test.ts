@@ -112,9 +112,9 @@ describe("ElectronScreenshotHelperClient", () => {
     expect(client.captureState).toBe("selected");
     child.emitStdout('{"type":"interaction-state","requestId":"r1","state":"committing"}');
     expect(client.captureState).toBe("committing");
-    child.emitStdout('{"type":"completed","requestId":"r1","fileName":null,"width":10,"height":20,"mime":"image/png","clipboardWritten":true}');
+    child.emitStdout('{"type":"completed","requestId":"r1","fileName":null,"width":10,"height":20,"mime":"image/png","clipboardWritten":true,"hasAnnotations":true}');
 
-    await expect(result).resolves.toMatchObject({ requestId: "r1", filePath: null, width: 10, height: 20 });
+    await expect(result).resolves.toMatchObject({ requestId: "r1", filePath: null, width: 10, height: 20, hasAnnotations: true });
     expect(client.pendingRequests.size).toBe(0);
     expect(client.captureState).toBe("idle");
   });
@@ -129,7 +129,7 @@ describe("ElectronScreenshotHelperClient", () => {
     expect(client.captureState).toBe("idle");
     expect(client.pendingRequests.get("r1")).toMatchObject({ captureReleased: true, source: "chat-button" });
 
-    child.emitStdout('{"type":"completed","requestId":"r1","fileName":"00000000-0000-4000-8000-000000000001.png","width":800,"height":600,"mime":"image/png","clipboardWritten":true}');
+    child.emitStdout('{"type":"completed","requestId":"r1","fileName":"00000000-0000-4000-8000-000000000001.png","width":800,"height":600,"mime":"image/png","clipboardWritten":true,"hasAnnotations":false}');
     await expect(result).resolves.toMatchObject({ filePath: "C:\\shots\\00000000-0000-4000-8000-000000000001.png" });
     expect(client.pendingRequests.size).toBe(0);
   });
@@ -147,7 +147,7 @@ describe("ElectronScreenshotHelperClient", () => {
     await expect(first).rejects.toThrow("encode-failed");
     expect(client.captureState).toBe("freezing");
 
-    child.emitStdout('{"type":"completed","requestId":"r2","fileName":null,"width":1,"height":1,"mime":"image/png","clipboardWritten":true}');
+    child.emitStdout('{"type":"completed","requestId":"r2","fileName":null,"width":1,"height":1,"mime":"image/png","clipboardWritten":true,"hasAnnotations":false}');
     await expect(second).resolves.toMatchObject({ requestId: "r2" });
   });
 

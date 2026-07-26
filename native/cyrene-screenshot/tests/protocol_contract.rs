@@ -1,6 +1,6 @@
 use cyrene_screenshot::cli::parse_arguments;
 use cyrene_screenshot::protocol::{
-    CaptureMode, Command, MAX_NDJSON_LINE_BYTES, parse_command_line,
+    CaptureMode, Command, Event, MAX_NDJSON_LINE_BYTES, parse_command_line,
 };
 use std::path::PathBuf;
 
@@ -77,4 +77,21 @@ fn rejects_relative_output_directory() {
     .unwrap_err();
 
     assert_eq!(error.code(), "invalid-arguments");
+}
+
+#[test]
+fn completed_event_reports_only_whether_annotations_exist() {
+    let event = Event::Completed {
+        request_id: "r1".into(),
+        file_name: None,
+        width: 10,
+        height: 20,
+        mime: "image/png",
+        clipboard_written: true,
+        has_annotations: true,
+    };
+    let json = serde_json::to_value(event).unwrap();
+
+    assert_eq!(json["hasAnnotations"], true);
+    assert!(json.get("annotations").is_none());
 }

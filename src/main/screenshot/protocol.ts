@@ -8,7 +8,7 @@ export type HelperEvent =
   | { type: "overlay-visible"; requestId: string; freezeDurationMs: number }
   | { type: "interaction-state"; requestId: string; state: "selecting" | "selected" | "committing" }
   | { type: "capture-released"; requestId: string; clipboardWritten: boolean; width: number; height: number }
-  | { type: "completed"; requestId: string; fileName: string | null; width: number; height: number; mime: "image/png"; clipboardWritten: boolean }
+  | { type: "completed"; requestId: string; fileName: string | null; width: number; height: number; mime: "image/png"; clipboardWritten: boolean; hasAnnotations: boolean }
   | { type: "cancelled"; requestId: string; reason: string }
   | { type: "error"; requestId?: string | null; code: string; message: string; recoverable: boolean };
 
@@ -75,7 +75,8 @@ export function parseHelperEvent(line: string): HelperEvent {
         || !isU32(parsed.width, 1)
         || !isU32(parsed.height, 1)
         || parsed.mime !== "image/png"
-        || typeof parsed.clipboardWritten !== "boolean") return invalidEvent();
+        || typeof parsed.clipboardWritten !== "boolean"
+        || typeof parsed.hasAnnotations !== "boolean") return invalidEvent();
       return {
         type: "completed",
         requestId: requireRequestId(parsed),
@@ -84,6 +85,7 @@ export function parseHelperEvent(line: string): HelperEvent {
         height: parsed.height,
         mime: "image/png",
         clipboardWritten: parsed.clipboardWritten,
+        hasAnnotations: parsed.hasAnnotations,
       };
     case "cancelled":
       if (!isNonEmptyString(parsed.reason)) return invalidEvent();

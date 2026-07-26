@@ -37,7 +37,9 @@ use crate::{
         clipboard::write_cf_dibv5,
         display::{DisplayInfo, query_primary_display},
         encoder::{self, EncodeJob},
-        renderer::{OverlayRenderer, present_first_frame, qpc_elapsed_ms, qpc_now},
+        renderer::{
+            OverlayRenderer, burn_annotations, present_first_frame, qpc_elapsed_ms, qpc_now,
+        },
         window::{OverlayAction, OverlayWindow},
     },
 };
@@ -612,11 +614,13 @@ impl OverlayApp {
             width: self.display.bounds.width,
             height: self.display.bounds.height,
         });
+        let annotations = self.overlay.annotations();
+        let has_annotations = !annotations.is_empty();
         let gpu_frame = self.active.as_ref().and_then(|active| match &active.frame {
             FrozenFrame::Gpu(gpu) => Some(gpu),
             FrozenFrame::Cpu(_) => None,
         });
-        let selection = match self.renderer.extract_selection(selection, gpu_frame) {
+        let mut frame = match self.renderer.extract_selection(selection, gpu_frame) {
             Ok(selection) => {
                 self.capture.record_selection_readback();
                 selection
@@ -631,11 +635,19 @@ impl OverlayApp {
                 return;
             }
         };
-        let selection_width = selection.width;
-        let selection_height = selection.height;
+        burn_annotations(
+            &mut frame,
+            &annotations,
+            crate::geometry::PointI {
+                x: selection.x,
+                y: selection.y,
+            },
+        );
+        let selection_width = frame.width;
+        let selection_height = frame.height;
 
         // Step 2: clipboard (best effort — capture-released records the flag).
-        let clipboard_written = write_cf_dibv5(self.overlay.hwnd(), &selection)
+        let clipboard_written = write_cf_dibv5(self.overlay.hwnd(), &frame)
             .map(|()| true)
             .unwrap_or_else(|error| {
                 eprintln!("cyrene-screenshot: clipboard write failed: {error}");
@@ -693,6 +705,7 @@ impl OverlayApp {
                     height: selection_height,
                     mime: "image/png",
                     clipboard_written,
+                    has_annotations,
                 });
                 // Terminal event: remove the requestId from the registry so a
                 // future Start with the same ID can succeed.
@@ -704,7 +717,8 @@ impl OverlayApp {
                     request_id: active.request_id,
                     file_name,
                     output_dir: self.output_dir.clone(),
-                    frame: selection,
+                    frame,
+                    has_annotations,
                 };
                 // The encoder worker is the producer of the terminal
                 // `Completed`/`Error` event for this requestId. It will

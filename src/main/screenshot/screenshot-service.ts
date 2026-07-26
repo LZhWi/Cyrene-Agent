@@ -96,6 +96,7 @@ export function createScreenshotService(deps: ScreenshotServiceDeps): Screenshot
         height: result.height,
         mime: result.mime,
         previewUrl: pathToFileURL(result.filePath).toString(),
+        hasAnnotations: result.hasAnnotations,
       });
       return { ok: true };
     } catch (error) {

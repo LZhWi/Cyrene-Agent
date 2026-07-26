@@ -28,6 +28,7 @@ export interface ScreenshotResult {
   height: number;
   mime: "image/png";
   clipboardWritten: boolean;
+  hasAnnotations: boolean;
 }
 
 export interface ScreenshotHelperClient {
@@ -240,6 +241,7 @@ export class ElectronScreenshotHelperClient implements ScreenshotHelperClient {
         height: event.height,
         mime: event.mime,
         clipboardWritten: event.clipboardWritten,
+        hasAnnotations: event.hasAnnotations,
       });
     } catch (error) {
       deferred.reject(error instanceof Error ? error : new Error("INVALID_SCREENSHOT_FILE_NAME"));

@@ -5,6 +5,7 @@ export interface ScreenshotInsertPayload {
   height: number;
   filePath: string;
   previewUrl: string;
+  hasAnnotations: boolean;
 }
 
 export const IPC = {

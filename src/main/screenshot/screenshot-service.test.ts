@@ -13,6 +13,7 @@ function result(overrides: Partial<ScreenshotResult> = {}): ScreenshotResult {
     height: 600,
     mime: "image/png",
     clipboardWritten: true,
+    hasAnnotations: false,
     ...overrides,
   };
 }
@@ -70,6 +71,7 @@ describe("createScreenshotService", () => {
       result({
         requestId: "request-2",
         filePath: "C:\\shots\\valid.png",
+        hasAnnotations: true,
       }),
     );
 
@@ -82,6 +84,7 @@ describe("createScreenshotService", () => {
       height: 600,
       mime: "image/png",
       previewUrl: "file:///C:/shots/valid.png",
+      hasAnnotations: true,
     });
   });
 
@@ -172,6 +175,7 @@ describe("validateScreenshotInsert", () => {
       width: 800,
       height: 600,
       mime: "image/png" as const,
+      hasAnnotations: false,
     };
 
     expect(
@@ -198,6 +202,7 @@ describe("validateScreenshotInsert", () => {
           width: 800,
           height: 600,
           mime: "image/png",
+          hasAnnotations: false,
         },
         "C:\\user-data\\screenshots",
         loadImage,
@@ -212,6 +217,7 @@ describe("validateScreenshotInsert", () => {
           width: 800,
           height: 600,
           mime: "image/png",
+          hasAnnotations: false,
         },
         "C:\\user-data\\screenshots",
         loadImage,
@@ -225,6 +231,7 @@ describe("validateScreenshotInsert", () => {
       width: 20,
       height: 10,
       mime: "image/png" as const,
+      hasAnnotations: false,
     };
 
     expect(

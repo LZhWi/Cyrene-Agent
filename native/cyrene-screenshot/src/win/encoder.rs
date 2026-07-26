@@ -62,6 +62,7 @@ pub struct EncodeJob {
     pub file_name: String,
     pub output_dir: PathBuf,
     pub frame: CpuBgraFrame,
+    pub has_annotations: bool,
 }
 
 /// Spawn a worker thread that runs [`run_encode_job`] with `job` and posts
@@ -100,6 +101,7 @@ pub fn spawn_encode_job(
                     height: job.frame.height,
                     mime: "image/png",
                     clipboard_written: true,
+                    has_annotations: job.has_annotations,
                 },
                 Err(error) => Event::Error {
                     request_id: Some(job.request_id.clone()),

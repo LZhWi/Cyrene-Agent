@@ -62,7 +62,8 @@ const chatApi = {
   },
   cancelDocumentIndex: (jobId: string) =>
     ipcRenderer.invoke(IPC.CHAT_CANCEL_DOCUMENT_INDEX, { jobId }) as Promise<boolean>,
-  captionImage: (filePath: string) => ipcRenderer.invoke(IPC.CHAT_CAPTION_IMAGE, { filePath }),
+  captionImage: (filePath: string, hasAnnotations = false) =>
+    ipcRenderer.invoke(IPC.CHAT_CAPTION_IMAGE, { filePath, hasAnnotations }),
   getImageSendStrategy: () => ipcRenderer.invoke(IPC.CHAT_GET_IMAGE_SEND_STRATEGY),
   getGeneralSettings: () => ipcRenderer.invoke(IPC.SETTINGS_GET_GENERAL),
   getReasoningState: () => ipcRenderer.invoke(IPC.CHAT_GET_REASONING_STATE),

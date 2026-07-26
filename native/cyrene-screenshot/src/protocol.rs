@@ -75,6 +75,8 @@ pub enum Event {
         mime: &'static str,
         #[serde(rename = "clipboardWritten")]
         clipboard_written: bool,
+        #[serde(rename = "hasAnnotations")]
+        has_annotations: bool,
     },
     Cancelled {
         #[serde(rename = "requestId")]

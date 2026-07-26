@@ -17,11 +17,21 @@ use windows::Win32::{
     Graphics::{
         Direct2D::{
             Common as D2D, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_NONE,
-            D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-            D2D1_INTERPOLATION_MODE_LINEAR, D2D1CreateDevice, D2D1CreateFactory, ID2D1Bitmap1,
-            ID2D1Device, ID2D1DeviceContext, ID2D1Factory, ID2D1Image,
+            D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_CAP_STYLE_ROUND,
+            D2D1_DASH_STYLE_SOLID, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
+            D2D1_FEATURE_LEVEL_DEFAULT, D2D1_INTERPOLATION_MODE_LINEAR, D2D1_LINE_JOIN_ROUND,
+            D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
+            D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT, D2D1_STROKE_STYLE_PROPERTIES,
+            D2D1CreateDevice, D2D1CreateFactory, ID2D1Bitmap1, ID2D1DCRenderTarget, ID2D1Device,
+            ID2D1DeviceContext, ID2D1Factory, ID2D1Image, ID2D1RenderTarget, ID2D1SolidColorBrush,
+            ID2D1StrokeStyle,
         },
         Direct3D11::{ID3D11Device, ID3D11Texture2D},
+        DirectWrite::{
+            DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL, DWriteCreateFactory,
+            IDWriteFactory, IDWriteFontCollection, IDWriteTextFormat,
+        },
         Dwm::DwmFlush,
         Dxgi::{
             Common::{DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC},
@@ -30,19 +40,21 @@ use windows::Win32::{
             IDXGIDevice, IDXGISurface, IDXGISwapChain1,
         },
         Gdi::{
-            AC_SRC_OVER, AlphaBlend, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLENDFUNCTION, BitBlt,
-            CreateCompatibleBitmap, CreateCompatibleDC, CreateDIBSection, CreatePen,
+            AC_SRC_ALPHA, AC_SRC_OVER, AlphaBlend, BI_RGB, BITMAPINFO, BITMAPINFOHEADER,
+            BLENDFUNCTION, BitBlt, CreateCompatibleDC, CreateDIBSection, CreatePen,
             CreateSolidBrush, DIB_RGB_COLORS, DeleteDC, DeleteObject, FillRect, GetDC,
-            GetStockObject, HBITMAP, HDC, HGDIOBJ, HPEN, NULL_BRUSH, PS_SOLID, Rectangle,
-            ReleaseDC, SRCCOPY, SelectObject, UpdateWindow,
+            GetStockObject, HBITMAP, HDC, HGDIOBJ, HPEN, LineTo, MoveToEx, NULL_BRUSH, PS_SOLID,
+            Rectangle, ReleaseDC, SRCCOPY, SelectObject, SetBkMode, SetTextColor, TRANSPARENT,
+            TextOutW, UpdateWindow,
         },
     },
 };
-use windows::core::Interface;
+use windows::core::{Interface, w};
+use windows_numerics::Vector2;
 
 use crate::{
     error::HelperError,
-    geometry::{RectI, place_toolbar},
+    geometry::{AnnotationColor, AnnotationTool, Mark, RectI, place_toolbar},
     win::{
         capture::{CpuBgraFrame, GpuFrozenFrame},
         display::DisplayInfo,
@@ -54,8 +66,12 @@ use crate::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ToolbarLayout {
     pub toolbar: RectI,
+    pub rectangle: RectI,
+    pub arrow: RectI,
+    pub undo: RectI,
     pub confirm: RectI,
     pub cancel: RectI,
+    pub colors: [RectI; 4],
 }
 
 /// Overlay paint backend. Owns a single cached frozen-frame bitmap backed by
@@ -88,6 +104,7 @@ pub struct OverlayRenderer {
     /// mouse-move repaints.
     pub upload_count: u64,
     _d2d_factory: Option<ID2D1Factory>,
+    text_format: Option<IDWriteTextFormat>,
 }
 
 /// Long-lived GDI cache of the frozen frame. `Drop` restores the previous
@@ -98,6 +115,15 @@ struct GdiFrameCache {
     dib: HBITMAP,
     mem_dc: HDC,
     old_obj: HGDIOBJ,
+    composition_dib: HBITMAP,
+    composition_dc: HDC,
+    composition_old_obj: HGDIOBJ,
+}
+
+impl GdiFrameCache {
+    fn composition_hdc(&self) -> HDC {
+        self.composition_dc
+    }
 }
 
 impl Drop for GdiFrameCache {
@@ -106,6 +132,9 @@ impl Drop for GdiFrameCache {
         // and `old_obj` is the object that was selected before the DIB. Restoring
         // first satisfies Win32's rule that a selected bitmap must not be deleted.
         unsafe {
+            let _ = SelectObject(self.composition_dc, self.composition_old_obj);
+            let _ = DeleteObject(HGDIOBJ(self.composition_dib.0));
+            let _ = DeleteDC(self.composition_dc);
             let _ = SelectObject(self.mem_dc, self.old_obj);
             let _ = DeleteObject(HGDIOBJ(self.dib.0));
             let _ = DeleteDC(self.mem_dc);
@@ -120,6 +149,22 @@ impl OverlayRenderer {
         let d2d_factory = unsafe {
             D2D1CreateFactory::<ID2D1Factory>(D2D1_FACTORY_TYPE_SINGLE_THREADED, None).ok()
         };
+        let text_format =
+            unsafe { DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) }
+                .ok()
+                .and_then(|factory| unsafe {
+                    factory
+                        .CreateTextFormat(
+                            w!("Segoe UI"),
+                            None::<&IDWriteFontCollection>,
+                            DWRITE_FONT_WEIGHT_NORMAL,
+                            DWRITE_FONT_STYLE_NORMAL,
+                            DWRITE_FONT_STRETCH_NORMAL,
+                            16.0,
+                            w!("zh-CN"),
+                        )
+                        .ok()
+                });
         Ok(Self {
             gdi_cache: None,
             d2d_device_context: None,
@@ -130,6 +175,7 @@ impl OverlayRenderer {
             d2d_available: d2d_factory.is_some(),
             upload_count: 0,
             _d2d_factory: d2d_factory,
+            text_format,
         })
     }
 
@@ -334,7 +380,17 @@ impl OverlayRenderer {
         toolbar: Option<ToolbarLayout>,
     ) -> Result<(), HelperError> {
         if self.gpu_bitmap.is_some() && self.swap_chain.is_some() {
-            self.paint_d2d(hwnd, selection, display, toolbar)
+            self.paint_d2d(
+                hwnd,
+                selection,
+                display,
+                toolbar,
+                &[],
+                None,
+                false,
+                None,
+                AnnotationColor::Red,
+            )
         } else {
             self.paint_gdi_fallback(hwnd, selection, display, toolbar)
         }
@@ -348,21 +404,96 @@ impl OverlayRenderer {
         selection: Option<RectI>,
         display: &DisplayInfo,
         toolbar: Option<ToolbarLayout>,
+        marks: &[Mark],
+        draft: Option<Mark>,
+        show_colors: bool,
+        active_tool: Option<AnnotationTool>,
+        active_color: AnnotationColor,
     ) -> Result<(), HelperError> {
         if self.gpu_bitmap.is_some() && self.swap_chain.is_some() {
-            self.paint_d2d(hwnd, selection, display, toolbar)
+            self.paint_d2d(
+                hwnd,
+                selection,
+                display,
+                toolbar,
+                marks,
+                draft,
+                show_colors,
+                active_tool,
+                active_color,
+            )
         } else {
-            paint_gdi_on_hdc(hdc, self.gdi_cache.as_ref(), selection, display, toolbar)
+            let paint_hdc = self
+                .gdi_cache
+                .as_ref()
+                .map_or(hdc, GdiFrameCache::composition_hdc);
+            paint_gdi_on_hdc(
+                paint_hdc,
+                self.gdi_cache.as_ref(),
+                selection,
+                display,
+                toolbar,
+            )?;
+            if let Err(error) = self.draw_overlay_details_d2d_on_hdc(
+                paint_hdc,
+                display,
+                selection,
+                toolbar,
+                marks,
+                draft,
+                show_colors,
+                active_tool,
+                active_color,
+            ) {
+                eprintln!(
+                    "cyrene-screenshot: D2D-on-GDI overlay details failed ({error}), using basic GDI"
+                );
+                if let Some(layout) = toolbar {
+                    draw_toolbar_gdi(paint_hdc, layout)?;
+                }
+                draw_overlay_details_gdi(
+                    paint_hdc,
+                    selection,
+                    toolbar,
+                    marks,
+                    draft,
+                    show_colors,
+                    active_tool,
+                    active_color,
+                )?;
+            }
+            if let Some(cache) = self.gdi_cache.as_ref() {
+                unsafe {
+                    let _ = BitBlt(
+                        hdc,
+                        0,
+                        0,
+                        cache.width,
+                        cache.height,
+                        Some(cache.composition_dc),
+                        0,
+                        0,
+                        SRCCOPY,
+                    );
+                }
+            }
+            Ok(())
         }
     }
 
     /// Paint via Direct2D using the cached GPU bitmap and swap chain.
+    #[allow(clippy::too_many_arguments)]
     fn paint_d2d(
         &self,
         _hwnd: HWND,
         selection: Option<RectI>,
         display: &DisplayInfo,
         toolbar: Option<ToolbarLayout>,
+        marks: &[Mark],
+        draft: Option<Mark>,
+        show_colors: bool,
+        active_tool: Option<AnnotationTool>,
+        active_color: AnnotationColor,
     ) -> Result<(), HelperError> {
         let context = self
             .d2d_device_context
@@ -411,44 +542,13 @@ impl OverlayRenderer {
         let dark_brush = unsafe { context.CreateSolidColorBrush(&dark_color, None) }
             .map_err(HelperError::from)?;
         let border_color = D2D::D2D1_COLOR_F {
-            r: 0.0,
-            g: 1.0,
-            b: 1.0,
+            r: 0x3e as f32 / 255.0,
+            g: 0xea as f32 / 255.0,
+            b: 0x96 as f32 / 255.0,
             a: 1.0,
         };
         let border_brush = unsafe { context.CreateSolidColorBrush(&border_color, None) }
             .map_err(HelperError::from)?;
-        let toolbar_brushes = if toolbar.is_some() {
-            let toolbar_color = D2D::D2D1_COLOR_F {
-                r: 0x24 as f32 / 255.0,
-                g: 0x20 as f32 / 255.0,
-                b: 0x20 as f32 / 255.0,
-                a: 1.0,
-            };
-            let confirm_color = D2D::D2D1_COLOR_F {
-                r: 0x55 as f32 / 255.0,
-                g: 0xa5 as f32 / 255.0,
-                b: 0x35 as f32 / 255.0,
-                a: 1.0,
-            };
-            let cancel_color = D2D::D2D1_COLOR_F {
-                r: 0xa5 as f32 / 255.0,
-                g: 0x35 as f32 / 255.0,
-                b: 0x35 as f32 / 255.0,
-                a: 1.0,
-            };
-            Some((
-                unsafe { context.CreateSolidColorBrush(&toolbar_color, None) }
-                    .map_err(HelperError::from)?,
-                unsafe { context.CreateSolidColorBrush(&confirm_color, None) }
-                    .map_err(HelperError::from)?,
-                unsafe { context.CreateSolidColorBrush(&cancel_color, None) }
-                    .map_err(HelperError::from)?,
-            ))
-        } else {
-            None
-        };
-
         // Begin render
         unsafe {
             context.SetTarget(&target_bitmap);
@@ -487,95 +587,33 @@ impl OverlayRenderer {
             }
         }
 
-        // Draw the dim overlay on the whole frame before selection, or on the
-        // four bands surrounding the selection once dragging begins.
+        for region in dim_regions(display.bounds.width, display.bounds.height, selection) {
+            unsafe {
+                context.FillRectangle(&d2d_rect(region), &dark_brush);
+            }
+        }
+
         if let Some(sel) = selection {
-            let sx = sel.x as f32;
-            let sy = sel.y as f32;
-            let sw = sel.width as f32;
-            let sh = sel.height as f32;
-
-            // Top, bottom, left, right bands.
             unsafe {
-                context.FillRectangle(
-                    &D2D::D2D_RECT_F {
-                        left: 0.0,
-                        top: 0.0,
-                        right: gw,
-                        bottom: sy,
-                    },
-                    &dark_brush,
-                );
-                context.FillRectangle(
-                    &D2D::D2D_RECT_F {
-                        left: 0.0,
-                        top: sy + sh,
-                        right: gw,
-                        bottom: gh,
-                    },
-                    &dark_brush,
-                );
-                context.FillRectangle(
-                    &D2D::D2D_RECT_F {
-                        left: 0.0,
-                        top: sy,
-                        right: sx,
-                        bottom: sy + sh,
-                    },
-                    &dark_brush,
-                );
-                context.FillRectangle(
-                    &D2D::D2D_RECT_F {
-                        left: sx + sw,
-                        top: sy,
-                        right: gw,
-                        bottom: sy + sh,
-                    },
-                    &dark_brush,
-                );
-            }
-
-            // Draw selection border (cyan)
-            let border = D2D::D2D_RECT_F {
-                left: sx,
-                top: sy,
-                right: sx + sw,
-                bottom: sy + sh,
-            };
-            unsafe {
-                context.DrawRectangle(&border, &border_brush, 2.0, None);
-            }
-        } else {
-            unsafe {
-                context.FillRectangle(
-                    &D2D::D2D_RECT_F {
-                        left: 0.0,
-                        top: 0.0,
-                        right: gw,
-                        bottom: gh,
-                    },
-                    &dark_brush,
+                context.DrawRectangle(
+                    &d2d_rect(sel),
+                    &border_brush,
+                    2.0,
+                    None::<&ID2D1StrokeStyle>,
                 );
             }
         }
 
-        if let (Some(layout), Some((toolbar_brush, confirm_brush, cancel_brush))) =
-            (toolbar, toolbar_brushes.as_ref())
-        {
-            let draw_toolbar_rect =
-                |rect: RectI, brush: &windows::Win32::Graphics::Direct2D::ID2D1SolidColorBrush| {
-                    let rect = D2D::D2D_RECT_F {
-                        left: rect.x as f32,
-                        top: rect.y as f32,
-                        right: rect.x.saturating_add_unsigned(rect.width) as f32,
-                        bottom: rect.y.saturating_add_unsigned(rect.height) as f32,
-                    };
-                    unsafe { context.FillRectangle(&rect, brush) };
-                };
-            draw_toolbar_rect(layout.toolbar, toolbar_brush);
-            draw_toolbar_rect(layout.confirm, confirm_brush);
-            draw_toolbar_rect(layout.cancel, cancel_brush);
-        }
+        self.draw_overlay_details_d2d(
+            context,
+            selection,
+            toolbar,
+            marks,
+            draft,
+            show_colors,
+            active_tool,
+            active_color,
+        )?;
 
         // End draw and present
         let draw_result = unsafe {
@@ -593,6 +631,237 @@ impl OverlayRenderer {
             })?;
 
         Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_overlay_details_d2d(
+        &self,
+        context: &ID2D1RenderTarget,
+        selection: Option<RectI>,
+        toolbar: Option<ToolbarLayout>,
+        marks: &[Mark],
+        draft: Option<Mark>,
+        show_colors: bool,
+        active_tool: Option<AnnotationTool>,
+        active_color: AnnotationColor,
+    ) -> Result<(), HelperError> {
+        let factory = self._d2d_factory.as_ref().ok_or_else(|| {
+            HelperError::CaptureFailed("D2D factory missing while drawing overlay".into())
+        })?;
+        let round_style = unsafe {
+            factory.CreateStrokeStyle(
+                &D2D1_STROKE_STYLE_PROPERTIES {
+                    startCap: D2D1_CAP_STYLE_ROUND,
+                    endCap: D2D1_CAP_STYLE_ROUND,
+                    dashCap: D2D1_CAP_STYLE_ROUND,
+                    lineJoin: D2D1_LINE_JOIN_ROUND,
+                    miterLimit: 10.0,
+                    dashStyle: D2D1_DASH_STYLE_SOLID,
+                    dashOffset: 0.0,
+                },
+                None,
+            )
+        }
+        .map_err(HelperError::from)?;
+        let selection_brush = d2d_brush(context, 0x3e, 0xea, 0x96, 0xff)?;
+
+        for mark in marks.iter().copied().chain(draft) {
+            draw_mark_d2d(context, mark, &round_style)?;
+        }
+
+        if let Some(selection) = selection {
+            let right = selection.x.saturating_add_unsigned(selection.width);
+            let bottom = selection.y.saturating_add_unsigned(selection.height);
+            let center_x = selection.x + i32::try_from(selection.width / 2).unwrap_or_default();
+            let center_y = selection.y + i32::try_from(selection.height / 2).unwrap_or_default();
+            for (x, y) in [
+                (selection.x, selection.y),
+                (center_x, selection.y),
+                (right, selection.y),
+                (right, center_y),
+                (right, bottom),
+                (center_x, bottom),
+                (selection.x, bottom),
+                (selection.x, center_y),
+            ] {
+                let handle = D2D::D2D_RECT_F {
+                    left: x as f32 - 4.0,
+                    top: y as f32 - 4.0,
+                    right: x as f32 + 5.0,
+                    bottom: y as f32 + 5.0,
+                };
+                unsafe { context.FillRectangle(&handle, &selection_brush) };
+            }
+
+            if let Some(text_format) = self.text_format.as_ref() {
+                let label: Vec<u16> = format!("{} x {}", selection.width, selection.height)
+                    .encode_utf16()
+                    .collect();
+                let text_y = if selection.y >= 24 {
+                    selection.y as f32 - 24.0
+                } else {
+                    selection.y as f32 + 6.0
+                };
+                let text_rect = D2D::D2D_RECT_F {
+                    left: selection.x as f32,
+                    top: text_y,
+                    right: selection.x as f32 + 180.0,
+                    bottom: text_y + 22.0,
+                };
+                let text_brush = d2d_brush(context, 0xff, 0xff, 0xff, 0xff)?;
+                unsafe {
+                    context.DrawText(
+                        &label,
+                        text_format,
+                        &text_rect,
+                        &text_brush,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                        DWRITE_MEASURING_MODE_NATURAL,
+                    );
+                }
+            }
+        }
+
+        if let Some(layout) = toolbar {
+            let toolbar_brush = d2d_brush(context, 0xf7, 0xf7, 0xf7, 0xff)?;
+            let toolbar_border = d2d_brush(context, 0xd8, 0xd8, 0xd8, 0xff)?;
+            let toolbar_rect = D2D1_ROUNDED_RECT {
+                rect: d2d_rect(layout.toolbar),
+                radiusX: 8.0,
+                radiusY: 8.0,
+            };
+            unsafe {
+                context.FillRoundedRectangle(&toolbar_rect, &toolbar_brush);
+                context.DrawRoundedRectangle(
+                    &toolbar_rect,
+                    &toolbar_border,
+                    1.0,
+                    None::<&ID2D1StrokeStyle>,
+                );
+            }
+
+            if let Some(active) = match active_tool {
+                Some(AnnotationTool::Rectangle) => Some(layout.rectangle),
+                Some(AnnotationTool::Arrow) => Some(layout.arrow),
+                None => None,
+            } {
+                let active_brush = d2d_brush(context, 0xe8, 0xe8, 0xe8, 0xff)?;
+                let active_rect = D2D1_ROUNDED_RECT {
+                    rect: d2d_rect(inset(active, 4)),
+                    radiusX: 6.0,
+                    radiusY: 6.0,
+                };
+                unsafe { context.FillRoundedRectangle(&active_rect, &active_brush) };
+            }
+
+            let icon_brush = d2d_brush(context, 0x33, 0x33, 0x33, 0xff)?;
+            draw_svg_toolbar_icons_d2d(context, factory, layout, &icon_brush, &round_style)?;
+
+            if show_colors {
+                let popover = RectI {
+                    x: layout.colors[0].x - 8,
+                    y: layout.colors[0].y - 8,
+                    width: u32::try_from(
+                        layout.colors[3]
+                            .x
+                            .saturating_add_unsigned(layout.colors[3].width)
+                            .saturating_sub(layout.colors[0].x)
+                            .saturating_add(16),
+                    )
+                    .unwrap_or_default(),
+                    height: layout.colors[0].height + 16,
+                };
+                let popover_rect = D2D1_ROUNDED_RECT {
+                    rect: d2d_rect(popover),
+                    radiusX: 8.0,
+                    radiusY: 8.0,
+                };
+                unsafe { context.FillRoundedRectangle(&popover_rect, &toolbar_brush) };
+                for (rect, color) in layout.colors.into_iter().zip([
+                    AnnotationColor::Red,
+                    AnnotationColor::Yellow,
+                    AnnotationColor::Green,
+                    AnnotationColor::Blue,
+                ]) {
+                    let color_brush = d2d_annotation_brush(context, color)?;
+                    let swatch = D2D1_ROUNDED_RECT {
+                        rect: d2d_rect(inset(rect, 4)),
+                        radiusX: 10.0,
+                        radiusY: 10.0,
+                    };
+                    unsafe { context.FillRoundedRectangle(&swatch, &color_brush) };
+                    if color == active_color {
+                        unsafe {
+                            context.DrawRoundedRectangle(
+                                &swatch,
+                                &icon_brush,
+                                2.0,
+                                None::<&ID2D1StrokeStyle>,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn draw_overlay_details_d2d_on_hdc(
+        &self,
+        hdc: HDC,
+        display: &DisplayInfo,
+        selection: Option<RectI>,
+        toolbar: Option<ToolbarLayout>,
+        marks: &[Mark],
+        draft: Option<Mark>,
+        show_colors: bool,
+        active_tool: Option<AnnotationTool>,
+        active_color: AnnotationColor,
+    ) -> Result<(), HelperError> {
+        let factory = self._d2d_factory.as_ref().ok_or_else(|| {
+            HelperError::CaptureFailed("D2D factory unavailable for GDI overlay details".into())
+        })?;
+        let target: ID2D1DCRenderTarget = unsafe {
+            factory.CreateDCRenderTarget(&D2D1_RENDER_TARGET_PROPERTIES {
+                r#type: D2D1_RENDER_TARGET_TYPE_DEFAULT,
+                pixelFormat: D2D::D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D::D2D1_ALPHA_MODE_IGNORE,
+                },
+                dpiX: 96.0,
+                dpiY: 96.0,
+                usage: D2D1_RENDER_TARGET_USAGE_NONE,
+                minLevel: D2D1_FEATURE_LEVEL_DEFAULT,
+            })
+        }
+        .map_err(HelperError::from)?;
+        let bounds = RECT {
+            left: 0,
+            top: 0,
+            right: i32::try_from(display.bounds.width).map_err(|_| {
+                HelperError::InvalidDisplay("D2D DC target width does not fit i32".into())
+            })?,
+            bottom: i32::try_from(display.bounds.height).map_err(|_| {
+                HelperError::InvalidDisplay("D2D DC target height does not fit i32".into())
+            })?,
+        };
+        unsafe {
+            target.BindDC(hdc, &bounds).map_err(HelperError::from)?;
+            target.BeginDraw();
+        }
+        let draw_result = self.draw_overlay_details_d2d(
+            &target,
+            selection,
+            toolbar,
+            marks,
+            draft,
+            show_colors,
+            active_tool,
+            active_color,
+        );
+        let end_result = unsafe { target.EndDraw(None, None) }.map_err(HelperError::from);
+        draw_result.and(end_result)
     }
 
     /// Fallback paint path using GDI (used when no GPU bitmap is set).
@@ -781,6 +1050,405 @@ impl Drop for OverlayRenderer {
     }
 }
 
+fn d2d_rect(rect: RectI) -> D2D::D2D_RECT_F {
+    D2D::D2D_RECT_F {
+        left: rect.x as f32,
+        top: rect.y as f32,
+        right: rect.x.saturating_add_unsigned(rect.width) as f32,
+        bottom: rect.y.saturating_add_unsigned(rect.height) as f32,
+    }
+}
+
+fn d2d_brush(
+    context: &ID2D1RenderTarget,
+    red: u8,
+    green: u8,
+    blue: u8,
+    alpha: u8,
+) -> Result<ID2D1SolidColorBrush, HelperError> {
+    unsafe {
+        context.CreateSolidColorBrush(
+            &D2D::D2D1_COLOR_F {
+                r: f32::from(red) / 255.0,
+                g: f32::from(green) / 255.0,
+                b: f32::from(blue) / 255.0,
+                a: f32::from(alpha) / 255.0,
+            },
+            None,
+        )
+    }
+    .map_err(HelperError::from)
+}
+
+fn d2d_annotation_brush(
+    context: &ID2D1RenderTarget,
+    color: AnnotationColor,
+) -> Result<ID2D1SolidColorBrush, HelperError> {
+    match color {
+        AnnotationColor::Red => d2d_brush(context, 0xff, 0x4d, 0x4f, 0xff),
+        AnnotationColor::Yellow => d2d_brush(context, 0xff, 0xd4, 0x3b, 0xff),
+        AnnotationColor::Green => d2d_brush(context, 0x3e, 0xea, 0x96, 0xff),
+        AnnotationColor::Blue => d2d_brush(context, 0x4c, 0x8d, 0xff, 0xff),
+    }
+}
+
+fn vector(x: f32, y: f32) -> Vector2 {
+    Vector2 { X: x, Y: y }
+}
+
+fn draw_mark_d2d(
+    context: &ID2D1RenderTarget,
+    mark: Mark,
+    round_style: &ID2D1StrokeStyle,
+) -> Result<(), HelperError> {
+    let (start, end, color, arrow) = match mark {
+        Mark::Rect { start, end, color } => (start, end, color, false),
+        Mark::Arrow { start, end, color } => (start, end, color, true),
+    };
+    let brush = d2d_annotation_brush(context, color)?;
+    unsafe {
+        if arrow {
+            context.DrawLine(
+                vector(start.x as f32, start.y as f32),
+                vector(end.x as f32, end.y as f32),
+                &brush,
+                3.0,
+                round_style,
+            );
+            let dx = f64::from(end.x - start.x);
+            let dy = f64::from(end.y - start.y);
+            let length = (dx * dx + dy * dy).sqrt().max(1.0);
+            let ux = dx / length;
+            let uy = dy / length;
+            for side in [-1.0, 1.0] {
+                context.DrawLine(
+                    vector(end.x as f32, end.y as f32),
+                    vector(
+                        (f64::from(end.x) - ux * 12.0 + (-uy) * 6.0 * side) as f32,
+                        (f64::from(end.y) - uy * 12.0 + ux * 6.0 * side) as f32,
+                    ),
+                    &brush,
+                    3.0,
+                    round_style,
+                );
+            }
+        } else {
+            context.DrawRectangle(
+                &D2D::D2D_RECT_F {
+                    left: start.x.min(end.x) as f32,
+                    top: start.y.min(end.y) as f32,
+                    right: start.x.max(end.x) as f32,
+                    bottom: start.y.max(end.y) as f32,
+                },
+                &brush,
+                3.0,
+                round_style,
+            );
+        }
+    }
+    Ok(())
+}
+
+fn svg_icon_point(button: RectI, x: f32, y: f32) -> Vector2 {
+    let origin_x = button.x as f32 + (button.width as f32 - 24.0) / 2.0;
+    let origin_y = button.y as f32 + (button.height as f32 - 24.0) / 2.0;
+    vector(origin_x + x * 0.5, origin_y + y * 0.5)
+}
+
+fn draw_svg_toolbar_icons_d2d(
+    context: &ID2D1RenderTarget,
+    factory: &ID2D1Factory,
+    layout: ToolbarLayout,
+    brush: &ID2D1SolidColorBrush,
+    round_style: &ID2D1StrokeStyle,
+) -> Result<(), HelperError> {
+    unsafe {
+        // Rectangle SVG: M42 8 H6 C4.89543 8 4 8.89543 4 10 V38
+        // C4 39.1046 4.89543 40 6 40 H42 C43.1046 40 44 39.1046 44 38 V10
+        // C44 8.89543 43.1046 8 42 8 Z
+        let rectangle = D2D1_ROUNDED_RECT {
+            rect: D2D::D2D_RECT_F {
+                left: svg_icon_point(layout.rectangle, 4.0, 8.0).X,
+                top: svg_icon_point(layout.rectangle, 4.0, 8.0).Y,
+                right: svg_icon_point(layout.rectangle, 44.0, 40.0).X,
+                bottom: svg_icon_point(layout.rectangle, 44.0, 40.0).Y,
+            },
+            radiusX: 1.0,
+            radiusY: 1.0,
+        };
+        context.DrawRoundedRectangle(&rectangle, brush, 2.0, round_style);
+
+        // Arrow SVG paths.
+        context.DrawLine(
+            svg_icon_point(layout.arrow, 19.0, 11.0),
+            svg_icon_point(layout.arrow, 37.0, 11.0),
+            brush,
+            2.0,
+            round_style,
+        );
+        context.DrawLine(
+            svg_icon_point(layout.arrow, 37.0, 11.0),
+            svg_icon_point(layout.arrow, 37.0, 29.0),
+            brush,
+            2.0,
+            round_style,
+        );
+        context.DrawLine(
+            svg_icon_point(layout.arrow, 11.5439, 36.4559),
+            svg_icon_point(layout.arrow, 36.9997, 11.0),
+            brush,
+            2.0,
+            round_style,
+        );
+
+        draw_undo_svg_d2d(context, factory, layout.undo, brush, round_style)?;
+
+        // Close SVG paths.
+        context.DrawLine(
+            svg_icon_point(layout.cancel, 8.0, 8.0),
+            svg_icon_point(layout.cancel, 40.0, 40.0),
+            brush,
+            2.0,
+            round_style,
+        );
+        context.DrawLine(
+            svg_icon_point(layout.cancel, 8.0, 40.0),
+            svg_icon_point(layout.cancel, 40.0, 8.0),
+            brush,
+            2.0,
+            round_style,
+        );
+
+        // Confirm SVG path.
+        context.DrawLine(
+            svg_icon_point(layout.confirm, 43.0, 11.0),
+            svg_icon_point(layout.confirm, 16.875, 37.0),
+            brush,
+            2.0,
+            round_style,
+        );
+        context.DrawLine(
+            svg_icon_point(layout.confirm, 16.875, 37.0),
+            svg_icon_point(layout.confirm, 5.0, 25.1818),
+            brush,
+            2.0,
+            round_style,
+        );
+    }
+    Ok(())
+}
+
+fn draw_undo_svg_d2d(
+    context: &ID2D1RenderTarget,
+    factory: &ID2D1Factory,
+    button: RectI,
+    brush: &ID2D1SolidColorBrush,
+    round_style: &ID2D1StrokeStyle,
+) -> Result<(), HelperError> {
+    let geometry = unsafe { factory.CreatePathGeometry() }.map_err(HelperError::from)?;
+    let sink = unsafe { geometry.Open() }.map_err(HelperError::from)?;
+    unsafe {
+        sink.BeginFigure(
+            svg_icon_point(button, 11.2721, 36.7279),
+            D2D::D2D1_FIGURE_BEGIN_HOLLOW,
+        );
+        for (p1, p2, p3) in [
+            ((14.5294, 39.9853), (19.0294, 42.0), (24.0, 42.0)),
+            ((33.9411, 42.0), (42.0, 33.9411), (42.0, 24.0)),
+            ((42.0, 14.0589), (33.9411, 6.0), (24.0, 6.0)),
+            ((19.0294, 6.0), (14.5294, 8.01472), (11.2721, 11.2721)),
+            ((9.61407, 12.9301), (6.0, 17.0), (6.0, 17.0)),
+        ] {
+            sink.AddBezier(&D2D::D2D1_BEZIER_SEGMENT {
+                point1: svg_icon_point(button, p1.0, p1.1),
+                point2: svg_icon_point(button, p2.0, p2.1),
+                point3: svg_icon_point(button, p3.0, p3.1),
+            });
+        }
+        sink.EndFigure(D2D::D2D1_FIGURE_END_OPEN);
+        sink.BeginFigure(
+            svg_icon_point(button, 6.0, 9.0),
+            D2D::D2D1_FIGURE_BEGIN_HOLLOW,
+        );
+        sink.AddLines(&[
+            svg_icon_point(button, 6.0, 17.0),
+            svg_icon_point(button, 14.0, 17.0),
+        ]);
+        sink.EndFigure(D2D::D2D1_FIGURE_END_OPEN);
+        sink.Close().map_err(HelperError::from)?;
+        context.DrawGeometry(&geometry, brush, 2.0, round_style);
+    }
+    Ok(())
+}
+
+pub fn burn_annotations(
+    frame: &mut CpuBgraFrame,
+    marks: &[Mark],
+    selection_origin: crate::geometry::PointI,
+) {
+    for mark in marks {
+        let (start, end, color, arrow) = match *mark {
+            Mark::Rect { start, end, color } => (start, end, color, false),
+            Mark::Arrow { start, end, color } => (start, end, color, true),
+        };
+        let start = (
+            start.x.saturating_sub(selection_origin.x),
+            start.y.saturating_sub(selection_origin.y),
+        );
+        let end = (
+            end.x.saturating_sub(selection_origin.x),
+            end.y.saturating_sub(selection_origin.y),
+        );
+        let bgra = annotation_bgra(color);
+        if arrow {
+            draw_bgra_line(frame, start, end, bgra, 3);
+            let dx = f64::from(end.0 - start.0);
+            let dy = f64::from(end.1 - start.1);
+            let length = (dx * dx + dy * dy).sqrt().max(1.0);
+            let ux = dx / length;
+            let uy = dy / length;
+            for side in [-1.0, 1.0] {
+                let wing = (
+                    (f64::from(end.0) - ux * 12.0 + (-uy) * 6.0 * side).round() as i32,
+                    (f64::from(end.1) - uy * 12.0 + ux * 6.0 * side).round() as i32,
+                );
+                draw_bgra_line(frame, end, wing, bgra, 3);
+            }
+        } else {
+            let left = start.0.min(end.0);
+            let top = start.1.min(end.1);
+            let right = start.0.max(end.0);
+            let bottom = start.1.max(end.1);
+            draw_bgra_line(frame, (left, top), (right, top), bgra, 3);
+            draw_bgra_line(frame, (right, top), (right, bottom), bgra, 3);
+            draw_bgra_line(frame, (right, bottom), (left, bottom), bgra, 3);
+            draw_bgra_line(frame, (left, bottom), (left, top), bgra, 3);
+        }
+    }
+}
+
+fn draw_bgra_line(
+    frame: &mut CpuBgraFrame,
+    start: (i32, i32),
+    end: (i32, i32),
+    color: [u8; 4],
+    thickness: i32,
+) {
+    let radius = thickness.max(1) as f64 / 2.0;
+    let padding = radius.ceil() as i32 + 1;
+    let left = start.0.min(end.0).saturating_sub(padding);
+    let top = start.1.min(end.1).saturating_sub(padding);
+    let right = start.0.max(end.0).saturating_add(padding);
+    let bottom = start.1.max(end.1).saturating_add(padding);
+    let dx = f64::from(end.0 - start.0);
+    let dy = f64::from(end.1 - start.1);
+    let length_squared = dx * dx + dy * dy;
+
+    for y in top..=bottom {
+        for x in left..=right {
+            let px = f64::from(x) + 0.5;
+            let py = f64::from(y) + 0.5;
+            let t = if length_squared <= f64::EPSILON {
+                0.0
+            } else {
+                (((px - f64::from(start.0)) * dx + (py - f64::from(start.1)) * dy) / length_squared)
+                    .clamp(0.0, 1.0)
+            };
+            let closest_x = f64::from(start.0) + t * dx;
+            let closest_y = f64::from(start.1) + t * dy;
+            let distance = ((px - closest_x).powi(2) + (py - closest_y).powi(2)).sqrt();
+            let coverage = (radius + 0.5 - distance).clamp(0.0, 1.0);
+            if coverage > 0.0 {
+                blend_bgra_pixel(frame, x, y, color, coverage);
+            }
+        }
+    }
+}
+
+fn blend_bgra_pixel(frame: &mut CpuBgraFrame, x: i32, y: i32, color: [u8; 4], coverage: f64) {
+    if x < 0 || y < 0 || x >= frame.width as i32 || y >= frame.height as i32 {
+        return;
+    }
+    let offset = usize::try_from(y).unwrap_or_default() * frame.pitch as usize
+        + usize::try_from(x).unwrap_or_default() * 4;
+    if let Some(pixel) = frame.pixels.get_mut(offset..offset + 4) {
+        let source_alpha = (f64::from(color[3]) / 255.0) * coverage;
+        let inverse = 1.0 - source_alpha;
+        for channel in 0..3 {
+            pixel[channel] = (f64::from(color[channel]) * source_alpha
+                + f64::from(pixel[channel]) * inverse)
+                .round() as u8;
+        }
+        pixel[3] = 0xff;
+    }
+}
+
+fn annotation_bgra(color: AnnotationColor) -> [u8; 4] {
+    match color {
+        AnnotationColor::Red => [0x4f, 0x4d, 0xff, 0xff],
+        AnnotationColor::Yellow => [0x3b, 0xd4, 0xff, 0xff],
+        AnnotationColor::Green => [0x96, 0xea, 0x3e, 0xff],
+        AnnotationColor::Blue => [0xff, 0x8d, 0x4c, 0xff],
+    }
+}
+
+fn dim_regions(width: u32, height: u32, selection: Option<RectI>) -> Vec<RectI> {
+    let full = RectI {
+        x: 0,
+        y: 0,
+        width,
+        height,
+    };
+    let Some(selection) = selection.and_then(|selection| {
+        let left = i64::from(selection.x).clamp(0, i64::from(width));
+        let top = i64::from(selection.y).clamp(0, i64::from(height));
+        let right =
+            (i64::from(selection.x) + i64::from(selection.width)).clamp(0, i64::from(width));
+        let bottom =
+            (i64::from(selection.y) + i64::from(selection.height)).clamp(0, i64::from(height));
+        (right > left && bottom > top).then_some(RectI {
+            x: i32::try_from(left).ok()?,
+            y: i32::try_from(top).ok()?,
+            width: u32::try_from(right - left).ok()?,
+            height: u32::try_from(bottom - top).ok()?,
+        })
+    }) else {
+        return vec![full];
+    };
+
+    let right = selection.x.saturating_add_unsigned(selection.width);
+    let bottom = selection.y.saturating_add_unsigned(selection.height);
+    [
+        RectI {
+            x: 0,
+            y: 0,
+            width,
+            height: u32::try_from(selection.y).unwrap_or_default(),
+        },
+        RectI {
+            x: 0,
+            y: bottom,
+            width,
+            height: height.saturating_sub(u32::try_from(bottom).unwrap_or(height)),
+        },
+        RectI {
+            x: 0,
+            y: selection.y,
+            width: u32::try_from(selection.x).unwrap_or_default(),
+            height: selection.height,
+        },
+        RectI {
+            x: right,
+            y: selection.y,
+            width: width.saturating_sub(u32::try_from(right).unwrap_or(width)),
+            height: selection.height,
+        },
+    ]
+    .into_iter()
+    .filter(|region| region.width > 0 && region.height > 0)
+    .collect()
+}
+
 /// Compute confirm/cancel toolbar placement for a selection inside `display`.
 pub fn compute_toolbar(selection: RectI, display: &DisplayInfo) -> Option<ToolbarLayout> {
     // place_toolbar expects display-relative bounds; selection in the overlay is
@@ -798,28 +1466,51 @@ pub fn compute_toolbar(selection: RectI, display: &DisplayInfo) -> Option<Toolba
         TOOLBAR_HEIGHT,
         TOOLBAR_GAP,
     )?;
-    let button_width = (toolbar.width.saturating_sub(TOOLBAR_BUTTON_GAP)) / 2;
-    if button_width == 0 {
+    let button_width = 40;
+    if toolbar.width < button_width * 5 + TOOLBAR_BUTTON_GAP * 4 {
         return None;
     }
-    let confirm = RectI {
-        x: toolbar.x,
-        y: toolbar.y,
-        width: button_width,
-        height: toolbar.height,
-    };
-    let cancel = RectI {
+    let button = |index: u32| RectI {
         x: toolbar
             .x
-            .saturating_add_unsigned(button_width + TOOLBAR_BUTTON_GAP),
+            .saturating_add_unsigned(index * (button_width + TOOLBAR_BUTTON_GAP)),
         y: toolbar.y,
         width: button_width,
         height: toolbar.height,
     };
+    let rectangle = button(0);
+    let arrow = button(1);
+    let undo = button(2);
+    let cancel = button(3);
+    let confirm = button(4);
+    let color_size = 28;
+    let color_gap = 6;
+    let colors_width = color_size * 4 + color_gap * 3;
+    let desired_color_x = toolbar.x
+        + i32::try_from((toolbar.width.saturating_sub(colors_width)) / 2).unwrap_or_default();
+    let color_y = if toolbar.y >= i32::try_from(color_size + color_gap).unwrap_or_default() {
+        toolbar.y - i32::try_from(color_size + color_gap).unwrap_or_default()
+    } else {
+        toolbar
+            .y
+            .saturating_add_unsigned(toolbar.height + color_gap)
+    };
+    let colors = std::array::from_fn(|index| RectI {
+        x: desired_color_x.saturating_add_unsigned(
+            u32::try_from(index).unwrap_or_default() * (color_size + color_gap),
+        ),
+        y: color_y,
+        width: color_size,
+        height: color_size,
+    });
     Some(ToolbarLayout {
         toolbar,
+        rectangle,
+        arrow,
+        undo,
         confirm,
         cancel,
+        colors,
     })
 }
 
@@ -948,8 +1639,7 @@ impl Drop for MemoryDcGuard {
     }
 }
 
-/// Owns an HBITMAP from `CreateDIBSection` (or `CreateCompatibleBitmap`) and
-/// deletes it via `DeleteObject`.
+/// Owns an HBITMAP from `CreateDIBSection` and deletes it via `DeleteObject`.
 struct BitmapGuard {
     bitmap: HBITMAP,
     /// Non-null only for DIB sections created via `CreateDIBSection`.
@@ -994,19 +1684,6 @@ impl BitmapGuard {
         Ok(Self { bitmap: dib, bits })
     }
 
-    fn create_compatible(screen_dc: HDC, width: i32, height: i32) -> Result<Self, HelperError> {
-        // SAFETY: `screen_dc` is a valid DC; the bitmap must be freed with
-        // `DeleteObject`.
-        let bmp = unsafe { CreateCompatibleBitmap(screen_dc, width, height) };
-        if bmp.is_invalid() {
-            return Err(windows::core::Error::from_thread().into());
-        }
-        Ok(Self {
-            bitmap: bmp,
-            bits: std::ptr::null_mut(),
-        })
-    }
-
     fn bits(&self) -> *mut core::ffi::c_void {
         self.bits
     }
@@ -1021,9 +1698,8 @@ impl BitmapGuard {
 
 impl Drop for BitmapGuard {
     fn drop(&mut self) {
-        // SAFETY: `self.bitmap` was acquired via CreateDIBSection or
-        // CreateCompatibleBitmap and is not currently selected into a DC
-        // (SelectionGuard restores first when used).
+        // SAFETY: `self.bitmap` was acquired via CreateDIBSection and is not
+        // currently selected into a DC (SelectionGuard restores first).
         let _ = unsafe { DeleteObject(HGDIOBJ(self.bitmap.0)) };
     }
 }
@@ -1101,11 +1777,25 @@ fn create_gdi_frame_cache(frame: &CpuBgraFrame) -> Result<GdiFrameCache, HelperE
     let selection = SelectionGuard::new(mem_dc.handle(), old_obj);
     selection.disarm();
 
-    // Transfer DC + bitmap ownership into the long-lived cache. Screen DC
-    // drops here (ReleaseDC). Memory DC and DIB guards are disarmed via
-    // into_* so their Drop does not free the transferred handles.
+    // Keep a second same-size DIB as the composition target. Background,
+    // dimming, SVG details, and annotations are rendered here first; the
+    // window receives one final BitBlt and never observes intermediate frames.
+    let composition_dc = MemoryDcGuard::create(screen_dc.handle())?;
+    let composition_dib = BitmapGuard::create_dib_top_down(composition_dc.handle(), width, height)?;
+    let composition_old_obj =
+        unsafe { SelectObject(composition_dc.handle(), HGDIOBJ(composition_dib.bitmap.0)) };
+    if composition_old_obj.0.is_null() || composition_old_obj.0 as isize == -1 {
+        return Err(windows::core::Error::from_thread().into());
+    }
+    let composition_selection = SelectionGuard::new(composition_dc.handle(), composition_old_obj);
+    composition_selection.disarm();
+
+    // Transfer both DC/bitmap pairs into the long-lived cache. Screen DC drops
+    // here (ReleaseDC); the guards are disarmed via into_*.
     let mem_dc_handle = mem_dc.into_handle();
     let dib_handle = dib.into_bitmap();
+    let composition_dc_handle = composition_dc.into_handle();
+    let composition_dib_handle = composition_dib.into_bitmap();
     drop(screen_dc);
 
     Ok(GdiFrameCache {
@@ -1114,6 +1804,9 @@ fn create_gdi_frame_cache(frame: &CpuBgraFrame) -> Result<GdiFrameCache, HelperE
         dib: dib_handle,
         mem_dc: mem_dc_handle,
         old_obj,
+        composition_dib: composition_dib_handle,
+        composition_dc: composition_dc_handle,
+        composition_old_obj,
     })
 }
 
@@ -1184,9 +1877,7 @@ fn paint_gdi_on_hdc(
         }
     }
 
-    if let Some(layout) = toolbar {
-        draw_toolbar_gdi(hdc, layout)?;
-    }
+    let _ = toolbar;
     Ok(())
 }
 
@@ -1201,7 +1892,13 @@ fn alpha_dim(
     // RAII guards release every handle if FillRect / AlphaBlend panics.
     let screen_dc = ScreenDcGuard::acquire()?;
     let mem_dc = MemoryDcGuard::create(screen_dc.handle())?;
-    let bmp = BitmapGuard::create_compatible(screen_dc.handle(), 1, 1)?;
+    let bmp = BitmapGuard::create_dib_top_down(mem_dc.handle(), 1, 1)?;
+    // A premultiplied 32-bit BGRA source pixel makes AlphaBlend deterministic
+    // across window/screen DC formats. Black RGB with alpha 115 darkens the
+    // destination by roughly 45% while preserving the frozen desktop detail.
+    unsafe {
+        std::ptr::copy_nonoverlapping([0u8, 0, 0, 115].as_ptr(), bmp.bits() as *mut u8, 4);
+    }
     // SAFETY: select the 1x1 bitmap into mem_dc; SelectionGuard restores on drop.
     let old = unsafe { SelectObject(mem_dc.handle(), HGDIOBJ(bmp.bitmap.0)) };
     if old.0.is_null() || old.0 as isize == -1 {
@@ -1209,24 +1906,11 @@ fn alpha_dim(
     }
     let _selection = SelectionGuard::new(mem_dc.handle(), old);
 
-    let brush = unsafe { CreateSolidBrush(COLORREF(0x00000000)) };
-    if !brush.is_invalid() {
-        let r = RECT {
-            left: 0,
-            top: 0,
-            right: 1,
-            bottom: 1,
-        };
-        unsafe {
-            FillRect(mem_dc.handle(), &r, brush);
-            let _ = DeleteObject(HGDIOBJ(brush.0));
-        }
-    }
     let blend = BLENDFUNCTION {
         BlendOp: AC_SRC_OVER as u8,
         BlendFlags: 0,
-        SourceConstantAlpha: 115, // ~45% black
-        AlphaFormat: 0,
+        SourceConstantAlpha: 0xff,
+        AlphaFormat: AC_SRC_ALPHA as u8,
     };
 
     let dim_rect = |hdc: HDC, x: i32, y: i32, w: i32, h: i32| {
@@ -1237,17 +1921,18 @@ fn alpha_dim(
         let _ = unsafe { AlphaBlend(hdc, x, y, w, h, mem_dc.handle(), 0, 0, 1, 1, blend) };
     };
 
-    if let Some(sel) = selection {
-        let sx = sel.x;
-        let sy = sel.y;
-        let sw = i32::try_from(sel.width).unwrap_or(0);
-        let sh = i32::try_from(sel.height).unwrap_or(0);
-        dim_rect(hdc, 0, 0, width, sy);
-        dim_rect(hdc, 0, sy + sh, width, height - (sy + sh));
-        dim_rect(hdc, 0, sy, sx, sh);
-        dim_rect(hdc, sx + sw, sy, width - (sx + sw), sh);
-    } else {
-        dim_rect(hdc, 0, 0, width, height);
+    for region in dim_regions(
+        u32::try_from(width).unwrap_or_default(),
+        u32::try_from(height).unwrap_or_default(),
+        selection,
+    ) {
+        dim_rect(
+            hdc,
+            region.x,
+            region.y,
+            i32::try_from(region.width).unwrap_or_default(),
+            i32::try_from(region.height).unwrap_or_default(),
+        );
     }
 
     // Guards drop in reverse order: selection restores, then bitmap, mem DC,
@@ -1257,7 +1942,7 @@ fn alpha_dim(
 
 fn draw_selection_border(hdc: HDC, rect: RectI) -> Result<(), HelperError> {
     // SAFETY: GDI pen/brush selection for a simple rectangle outline.
-    let pen: HPEN = unsafe { CreatePen(PS_SOLID, 2, COLORREF(0x0000ffff)) };
+    let pen: HPEN = unsafe { CreatePen(PS_SOLID, 2, COLORREF(0x0096ea3e)) };
     if pen.is_invalid() {
         return Err(windows::core::Error::from_thread().into());
     }
@@ -1279,6 +1964,268 @@ fn draw_selection_border(hdc: HDC, rect: RectI) -> Result<(), HelperError> {
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn draw_overlay_details_gdi(
+    hdc: HDC,
+    selection: Option<RectI>,
+    toolbar: Option<ToolbarLayout>,
+    marks: &[Mark],
+    draft: Option<Mark>,
+    show_colors: bool,
+    active_tool: Option<AnnotationTool>,
+    active_color: AnnotationColor,
+) -> Result<(), HelperError> {
+    for mark in marks.iter().copied().chain(draft) {
+        draw_mark_gdi(hdc, mark)?;
+    }
+    if let Some(selection) = selection {
+        draw_selection_handles_and_size(hdc, selection)?;
+    }
+    if let Some(layout) = toolbar {
+        draw_toolbar_icons_gdi(hdc, layout, active_tool)?;
+        if show_colors {
+            draw_color_choices_gdi(hdc, layout.colors, active_color)?;
+        }
+    }
+    Ok(())
+}
+
+fn draw_mark_gdi(hdc: HDC, mark: Mark) -> Result<(), HelperError> {
+    let (start, end, color, arrow) = match mark {
+        Mark::Rect { start, end, color } => (start, end, color, false),
+        Mark::Arrow { start, end, color } => (start, end, color, true),
+    };
+    let pen = unsafe { CreatePen(PS_SOLID, 3, annotation_colorref(color)) };
+    if pen.is_invalid() {
+        return Err(windows::core::Error::from_thread().into());
+    }
+    let old_pen = unsafe { SelectObject(hdc, HGDIOBJ(pen.0)) };
+    let null_brush = unsafe { GetStockObject(NULL_BRUSH) };
+    let old_brush = unsafe { SelectObject(hdc, null_brush) };
+    unsafe {
+        if arrow {
+            let _ = MoveToEx(hdc, start.x, start.y, None);
+            let _ = LineTo(hdc, end.x, end.y);
+            let dx = f64::from(end.x - start.x);
+            let dy = f64::from(end.y - start.y);
+            let length = (dx * dx + dy * dy).sqrt().max(1.0);
+            let ux = dx / length;
+            let uy = dy / length;
+            let wing = 12.0;
+            let spread = 6.0;
+            for side in [-1.0, 1.0] {
+                let wing_x = f64::from(end.x) - ux * wing + (-uy) * spread * side;
+                let wing_y = f64::from(end.y) - uy * wing + ux * spread * side;
+                let _ = MoveToEx(hdc, end.x, end.y, None);
+                let _ = LineTo(hdc, wing_x.round() as i32, wing_y.round() as i32);
+            }
+        } else {
+            let left = start.x.min(end.x);
+            let top = start.y.min(end.y);
+            let right = start.x.max(end.x);
+            let bottom = start.y.max(end.y);
+            let _ = Rectangle(hdc, left, top, right, bottom);
+        }
+        let _ = SelectObject(hdc, old_brush);
+        let _ = SelectObject(hdc, old_pen);
+        let _ = DeleteObject(HGDIOBJ(pen.0));
+    }
+    Ok(())
+}
+
+fn draw_selection_handles_and_size(hdc: HDC, rect: RectI) -> Result<(), HelperError> {
+    let brush = unsafe { CreateSolidBrush(COLORREF(0x0096ea3e)) };
+    if brush.is_invalid() {
+        return Err(windows::core::Error::from_thread().into());
+    }
+    let right = rect.x.saturating_add_unsigned(rect.width);
+    let bottom = rect.y.saturating_add_unsigned(rect.height);
+    let center_x = rect.x + i32::try_from(rect.width / 2).unwrap_or_default();
+    let center_y = rect.y + i32::try_from(rect.height / 2).unwrap_or_default();
+    for (x, y) in [
+        (rect.x, rect.y),
+        (center_x, rect.y),
+        (right, rect.y),
+        (right, center_y),
+        (right, bottom),
+        (center_x, bottom),
+        (rect.x, bottom),
+        (rect.x, center_y),
+    ] {
+        let handle = RECT {
+            left: x - 4,
+            top: y - 4,
+            right: x + 5,
+            bottom: y + 5,
+        };
+        unsafe { FillRect(hdc, &handle, brush) };
+    }
+    unsafe {
+        let _ = DeleteObject(HGDIOBJ(brush.0));
+        let _ = SetBkMode(hdc, TRANSPARENT);
+        let _ = SetTextColor(hdc, COLORREF(0x00ffffff));
+    }
+    let label = format!("{} x {}", rect.width, rect.height);
+    let wide: Vec<u16> = label.encode_utf16().collect();
+    let text_y = if rect.y >= 22 {
+        rect.y - 22
+    } else {
+        rect.y + 6
+    };
+    unsafe {
+        let _ = TextOutW(hdc, rect.x, text_y, &wide);
+    }
+    Ok(())
+}
+
+fn draw_toolbar_icons_gdi(
+    hdc: HDC,
+    layout: ToolbarLayout,
+    active_tool: Option<AnnotationTool>,
+) -> Result<(), HelperError> {
+    if active_tool == Some(AnnotationTool::Rectangle) {
+        fill_gdi_rect(hdc, layout.rectangle, 0x00505055);
+    } else if active_tool == Some(AnnotationTool::Arrow) {
+        fill_gdi_rect(hdc, layout.arrow, 0x00505055);
+    }
+    let white = COLORREF(0x00ffffff);
+    let pen = unsafe { CreatePen(PS_SOLID, 3, white) };
+    if pen.is_invalid() {
+        return Err(windows::core::Error::from_thread().into());
+    }
+    let old_pen = unsafe { SelectObject(hdc, HGDIOBJ(pen.0)) };
+    let null_brush = unsafe { GetStockObject(NULL_BRUSH) };
+    let old_brush = unsafe { SelectObject(hdc, null_brush) };
+    unsafe {
+        let r = inset(layout.rectangle, 11);
+        let _ = Rectangle(
+            hdc,
+            r.x,
+            r.y,
+            r.x.saturating_add_unsigned(r.width),
+            r.y.saturating_add_unsigned(r.height),
+        );
+
+        let a = layout.arrow;
+        let _ = MoveToEx(hdc, a.x + 10, a.y + 29, None);
+        let _ = LineTo(hdc, a.x + 29, a.y + 10);
+        let _ = MoveToEx(hdc, a.x + 20, a.y + 10, None);
+        let _ = LineTo(hdc, a.x + 29, a.y + 10);
+        let _ = LineTo(hdc, a.x + 29, a.y + 19);
+
+        let u = layout.undo;
+        let _ = MoveToEx(hdc, u.x + 28, u.y + 12, None);
+        let _ = LineTo(hdc, u.x + 14, u.y + 12);
+        let _ = LineTo(hdc, u.x + 9, u.y + 18);
+        let _ = MoveToEx(hdc, u.x + 14, u.y + 12, None);
+        let _ = LineTo(hdc, u.x + 14, u.y + 23);
+        let _ = LineTo(hdc, u.x + 27, u.y + 27);
+
+        let _ = SelectObject(hdc, old_brush);
+        let _ = SelectObject(hdc, old_pen);
+        let _ = DeleteObject(HGDIOBJ(pen.0));
+    }
+    draw_x_or_check(hdc, layout.cancel, false)?;
+    draw_x_or_check(hdc, layout.confirm, true)
+}
+
+fn draw_x_or_check(hdc: HDC, rect: RectI, check: bool) -> Result<(), HelperError> {
+    let color = if check { 0x0096ea3e } else { 0x005f5aff };
+    let pen = unsafe { CreatePen(PS_SOLID, 4, COLORREF(color)) };
+    if pen.is_invalid() {
+        return Err(windows::core::Error::from_thread().into());
+    }
+    let old = unsafe { SelectObject(hdc, HGDIOBJ(pen.0)) };
+    unsafe {
+        if check {
+            let _ = MoveToEx(hdc, rect.x + 9, rect.y + 21, None);
+            let _ = LineTo(hdc, rect.x + 17, rect.y + 29);
+            let _ = LineTo(hdc, rect.x + 31, rect.y + 11);
+        } else {
+            let _ = MoveToEx(hdc, rect.x + 10, rect.y + 10, None);
+            let _ = LineTo(hdc, rect.x + 30, rect.y + 30);
+            let _ = MoveToEx(hdc, rect.x + 30, rect.y + 10, None);
+            let _ = LineTo(hdc, rect.x + 10, rect.y + 30);
+        }
+        let _ = SelectObject(hdc, old);
+        let _ = DeleteObject(HGDIOBJ(pen.0));
+    }
+    Ok(())
+}
+
+fn draw_color_choices_gdi(
+    hdc: HDC,
+    choices: [RectI; 4],
+    active: AnnotationColor,
+) -> Result<(), HelperError> {
+    let colors = [
+        AnnotationColor::Red,
+        AnnotationColor::Yellow,
+        AnnotationColor::Green,
+        AnnotationColor::Blue,
+    ];
+    for (rect, color) in choices.into_iter().zip(colors) {
+        fill_gdi_rect(hdc, rect, annotation_colorref(color).0);
+        if color == active {
+            let pen = unsafe { CreatePen(PS_SOLID, 2, COLORREF(0x00ffffff)) };
+            if pen.is_invalid() {
+                return Err(windows::core::Error::from_thread().into());
+            }
+            let old_pen = unsafe { SelectObject(hdc, HGDIOBJ(pen.0)) };
+            let null_brush = unsafe { GetStockObject(NULL_BRUSH) };
+            let old_brush = unsafe { SelectObject(hdc, null_brush) };
+            unsafe {
+                let _ = Rectangle(
+                    hdc,
+                    rect.x - 2,
+                    rect.y - 2,
+                    rect.x.saturating_add_unsigned(rect.width) + 2,
+                    rect.y.saturating_add_unsigned(rect.height) + 2,
+                );
+                let _ = SelectObject(hdc, old_brush);
+                let _ = SelectObject(hdc, old_pen);
+                let _ = DeleteObject(HGDIOBJ(pen.0));
+            }
+        }
+    }
+    Ok(())
+}
+
+fn annotation_colorref(color: AnnotationColor) -> COLORREF {
+    COLORREF(match color {
+        AnnotationColor::Red => 0x004f4dff,
+        AnnotationColor::Yellow => 0x003bd4ff,
+        AnnotationColor::Green => 0x0096ea3e,
+        AnnotationColor::Blue => 0x00ff8d4c,
+    })
+}
+
+fn fill_gdi_rect(hdc: HDC, rect: RectI, color: u32) {
+    let brush = unsafe { CreateSolidBrush(COLORREF(color)) };
+    if brush.is_invalid() {
+        return;
+    }
+    let raw = RECT {
+        left: rect.x,
+        top: rect.y,
+        right: rect.x.saturating_add_unsigned(rect.width),
+        bottom: rect.y.saturating_add_unsigned(rect.height),
+    };
+    unsafe {
+        FillRect(hdc, &raw, brush);
+        let _ = DeleteObject(HGDIOBJ(brush.0));
+    }
+}
+
+fn inset(rect: RectI, amount: u32) -> RectI {
+    RectI {
+        x: rect.x.saturating_add_unsigned(amount),
+        y: rect.y.saturating_add_unsigned(amount),
+        width: rect.width.saturating_sub(amount * 2),
+        height: rect.height.saturating_sub(amount * 2),
+    }
+}
+
 fn draw_toolbar_gdi(hdc: HDC, layout: ToolbarLayout) -> Result<(), HelperError> {
     let fill = |hdc: HDC, rect: RectI, color: u32| {
         let brush = unsafe { CreateSolidBrush(COLORREF(color)) };
@@ -1297,8 +2244,6 @@ fn draw_toolbar_gdi(hdc: HDC, layout: ToolbarLayout) -> Result<(), HelperError> 
         }
     };
     fill(hdc, layout.toolbar, 0x00202024);
-    fill(hdc, layout.confirm, 0x0035a555);
-    fill(hdc, layout.cancel, 0x003535a5); // BGR: reddish
     Ok(())
 }
 
@@ -1356,6 +2301,18 @@ mod tests {
     }
 
     #[test]
+    fn gdi_frame_cache_uses_a_separate_composition_surface() {
+        let frame = sample_frame(8, 8);
+        let cache = create_gdi_frame_cache(&frame).expect("create_gdi_frame_cache");
+
+        assert_ne!(
+            cache.mem_dc,
+            cache.composition_hdc(),
+            "drawing directly into the frozen source would expose intermediate frames"
+        );
+    }
+
+    #[test]
     fn gdi_selection_extracts_pixels_from_the_frozen_frame() {
         let width = 4;
         let height = 3;
@@ -1401,6 +2358,120 @@ mod tests {
                 11, 22, 33, 255, 12, 22, 34, 255, // source row y=2
             ],
             "selection pixels must come from the requested frozen-frame rectangle"
+        );
+    }
+
+    #[test]
+    fn toolbar_contains_five_buttons_in_required_order() {
+        let display = DisplayInfo {
+            bounds: RectI {
+                x: 0,
+                y: 0,
+                width: 800,
+                height: 600,
+            },
+            dpi: 96.0,
+            rotation: crate::geometry::DisplayRotation::Identity,
+            is_primary: true,
+        };
+        let layout = compute_toolbar(
+            RectI {
+                x: 100,
+                y: 100,
+                width: 400,
+                height: 300,
+            },
+            &display,
+        )
+        .expect("toolbar");
+
+        assert!(layout.rectangle.x < layout.arrow.x);
+        assert!(layout.arrow.x < layout.undo.x);
+        assert!(layout.undo.x < layout.cancel.x);
+        assert!(layout.cancel.x < layout.confirm.x);
+        assert_eq!(layout.colors.len(), 4);
+    }
+
+    #[test]
+    fn burning_a_mark_changes_pixels_relative_to_the_selection() {
+        let mut frame = sample_frame(20, 20);
+        burn_annotations(
+            &mut frame,
+            &[Mark::Rect {
+                start: crate::geometry::PointI { x: 12, y: 13 },
+                end: crate::geometry::PointI { x: 18, y: 17 },
+                color: AnnotationColor::Red,
+            }],
+            crate::geometry::PointI { x: 10, y: 10 },
+        );
+
+        let offset = ((3 * frame.pitch) + 2 * 4) as usize;
+        assert_eq!(&frame.pixels[offset..offset + 4], &[0x4f, 0x4d, 0xff, 0xff]);
+    }
+
+    #[test]
+    fn dim_regions_cover_only_the_area_outside_the_selection() {
+        let regions = dim_regions(
+            100,
+            80,
+            Some(RectI {
+                x: 20,
+                y: 10,
+                width: 40,
+                height: 30,
+            }),
+        );
+
+        assert_eq!(
+            regions,
+            vec![
+                RectI {
+                    x: 0,
+                    y: 0,
+                    width: 100,
+                    height: 10,
+                },
+                RectI {
+                    x: 0,
+                    y: 40,
+                    width: 100,
+                    height: 40,
+                },
+                RectI {
+                    x: 0,
+                    y: 10,
+                    width: 20,
+                    height: 30,
+                },
+                RectI {
+                    x: 60,
+                    y: 10,
+                    width: 40,
+                    height: 30,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn diagonal_annotations_blend_edge_pixels_for_antialiasing() {
+        let mut frame = sample_frame(24, 24);
+        burn_annotations(
+            &mut frame,
+            &[Mark::Arrow {
+                start: crate::geometry::PointI { x: 2, y: 3 },
+                end: crate::geometry::PointI { x: 20, y: 15 },
+                color: AnnotationColor::Red,
+            }],
+            crate::geometry::PointI { x: 0, y: 0 },
+        );
+
+        assert!(
+            frame
+                .pixels
+                .chunks_exact(4)
+                .any(|pixel| pixel[2] > 0 && pixel[2] < 0xff),
+            "a diagonal edge should contain partially covered pixels"
         );
     }
 }

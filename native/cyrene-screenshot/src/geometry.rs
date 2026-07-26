@@ -7,11 +7,237 @@ pub struct RectI {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PointI {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SelectionHandle {
+    TopLeft,
+    Top,
+    TopRight,
+    Right,
+    BottomRight,
+    Bottom,
+    BottomLeft,
+    Left,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationColor {
+    Red,
+    Yellow,
+    Green,
+    Blue,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotationTool {
+    Rectangle,
+    Arrow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mark {
+    Rect {
+        start: PointI,
+        end: PointI,
+        color: AnnotationColor,
+    },
+    Arrow {
+        start: PointI,
+        end: PointI,
+        color: AnnotationColor,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct AnnotationState {
+    pub tool: Option<AnnotationTool>,
+    pub color: AnnotationColor,
+    marks: Vec<Mark>,
+}
+
+impl Default for AnnotationState {
+    fn default() -> Self {
+        Self {
+            tool: None,
+            color: AnnotationColor::Red,
+            marks: Vec::new(),
+        }
+    }
+}
+
+impl AnnotationState {
+    pub fn push(&mut self, mark: Mark) {
+        self.marks.push(mark);
+    }
+
+    pub fn undo(&mut self) -> Option<Mark> {
+        self.marks.pop()
+    }
+
+    pub fn clear(&mut self) {
+        self.marks.clear();
+    }
+
+    pub fn len(&self) -> usize {
+        self.marks.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.marks.is_empty()
+    }
+
+    pub fn marks(&self) -> &[Mark] {
+        &self.marks
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DisplayRotation {
     Identity,
     Rotate90,
     Rotate180,
     Rotate270,
+}
+
+pub fn localize_window_rect(window: RectI, display: RectI) -> Option<RectI> {
+    let clamped = clamp_to_rect(window, display)?;
+    Some(RectI {
+        x: clamped.x.checked_sub(display.x)?,
+        y: clamped.y.checked_sub(display.y)?,
+        width: clamped.width,
+        height: clamped.height,
+    })
+}
+
+pub fn hit_test_selection_handle(
+    selection: RectI,
+    point: PointI,
+    handle_size: u32,
+) -> Option<SelectionHandle> {
+    if handle_size == 0 {
+        return None;
+    }
+    let right = selection.x.saturating_add_unsigned(selection.width);
+    let bottom = selection.y.saturating_add_unsigned(selection.height);
+    let center_x = selection.x + i32::try_from(selection.width / 2).unwrap_or(i32::MAX);
+    let center_y = selection.y + i32::try_from(selection.height / 2).unwrap_or(i32::MAX);
+    let candidates = [
+        (
+            SelectionHandle::TopLeft,
+            PointI {
+                x: selection.x,
+                y: selection.y,
+            },
+        ),
+        (
+            SelectionHandle::Top,
+            PointI {
+                x: center_x,
+                y: selection.y,
+            },
+        ),
+        (
+            SelectionHandle::TopRight,
+            PointI {
+                x: right,
+                y: selection.y,
+            },
+        ),
+        (
+            SelectionHandle::Right,
+            PointI {
+                x: right,
+                y: center_y,
+            },
+        ),
+        (
+            SelectionHandle::BottomRight,
+            PointI {
+                x: right,
+                y: bottom,
+            },
+        ),
+        (
+            SelectionHandle::Bottom,
+            PointI {
+                x: center_x,
+                y: bottom,
+            },
+        ),
+        (
+            SelectionHandle::BottomLeft,
+            PointI {
+                x: selection.x,
+                y: bottom,
+            },
+        ),
+        (
+            SelectionHandle::Left,
+            PointI {
+                x: selection.x,
+                y: center_y,
+            },
+        ),
+    ];
+    let half = i32::try_from(handle_size.div_ceil(2)).unwrap_or(i32::MAX);
+    candidates.into_iter().find_map(|(handle, center)| {
+        ((point.x - center.x).abs() <= half && (point.y - center.y).abs() <= half).then_some(handle)
+    })
+}
+
+pub fn resize_selection(
+    selection: RectI,
+    handle: SelectionHandle,
+    point: PointI,
+    bounds: RectI,
+    minimum_size: u32,
+) -> Option<RectI> {
+    let bounds_right = i64::from(bounds.x) + i64::from(bounds.width);
+    let bounds_bottom = i64::from(bounds.y) + i64::from(bounds.height);
+    let point_x = i64::from(point.x).clamp(i64::from(bounds.x), bounds_right);
+    let point_y = i64::from(point.y).clamp(i64::from(bounds.y), bounds_bottom);
+    let mut left = i64::from(selection.x);
+    let mut top = i64::from(selection.y);
+    let mut right = left + i64::from(selection.width);
+    let mut bottom = top + i64::from(selection.height);
+
+    match handle {
+        SelectionHandle::TopLeft => {
+            left = point_x;
+            top = point_y;
+        }
+        SelectionHandle::Top => top = point_y,
+        SelectionHandle::TopRight => {
+            right = point_x;
+            top = point_y;
+        }
+        SelectionHandle::Right => right = point_x,
+        SelectionHandle::BottomRight => {
+            right = point_x;
+            bottom = point_y;
+        }
+        SelectionHandle::Bottom => bottom = point_y,
+        SelectionHandle::BottomLeft => {
+            left = point_x;
+            bottom = point_y;
+        }
+        SelectionHandle::Left => left = point_x,
+    }
+
+    if left > right {
+        std::mem::swap(&mut left, &mut right);
+    }
+    if top > bottom {
+        std::mem::swap(&mut top, &mut bottom);
+    }
+    if right - left < i64::from(minimum_size) || bottom - top < i64::from(minimum_size) {
+        return None;
+    }
+    rect_from_i64(left, top, right - left, bottom - top)
 }
 
 pub fn rotate_rect_to_display(

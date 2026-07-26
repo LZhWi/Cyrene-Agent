@@ -23,6 +23,17 @@ function mainScreenshotSources(): Array<{ relativePath: string; source: string }
 }
 
 describe("legacy screenshot overlay removal", () => {
+  it("keeps the native screenshot button enabled in the chat composer", () => {
+    const chatHtml = fs.readFileSync(
+      path.join(repoRoot, "src", "renderer", "chat", "index.html"),
+      "utf8",
+    );
+
+    expect(chatHtml).not.toContain("截图功能重构中，暂时禁用");
+    expect(chatHtml).toMatch(/<button[^>]+id="screenshot-btn"/);
+    expect(chatHtml).toMatch(/id="file-input"[^>]+accept="[^"]*\.png/);
+  });
+
   it("does not expose superseded overlay IPC channels", () => {
     for (const key of [
       "SCREENSHOT_OVERLAY_READY",

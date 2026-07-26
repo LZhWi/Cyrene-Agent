@@ -50,7 +50,11 @@ import { describePendingAttachment } from "./rag/file-ingest";
 import { cancelDocumentIndexJob, configureDocumentIndexQueue, enqueueDocumentIndexJob } from "./rag/document-index-queue";
 import { retrieveQueuedDocumentChunks, runDocumentIndexJob } from "./rag/document-index-worker";
 import { processDocumentIndexRequest } from "./rag/document-index-ipc";
-import { IMAGE_CAPTION_PROMPT, validateCaptionImagePath } from "./chat/image-caption";
+import {
+  IMAGE_CAPTION_PROMPT,
+  buildImageCaptionPrompt,
+  validateCaptionImagePath,
+} from "./chat/image-caption";
 import { decideImageSendStrategy } from "./chat/image-send-strategy";
 import { buildAlwaysOnContext, buildMemoryInjection, scheduleMemoryWrite } from "./orchestrator";
 import { CyreneAgent } from "./orchestrator/cyrene-agent";
@@ -3397,6 +3401,9 @@ ipcMain.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {
   const filePath = payload && typeof payload === "object"
     ? (payload as { filePath?: unknown }).filePath
     : undefined;
+  const hasAnnotations = payload && typeof payload === "object"
+    ? (payload as { hasAnnotations?: unknown }).hasAnnotations === true
+    : false;
   const validated = validateCaptionImagePath(filePath);
   if (!validated.ok) return { ok: false, error: validated.error };
 
@@ -3409,7 +3416,7 @@ ipcMain.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {
     const { captionImage } = await import("./orchestrator/vision-captioner");
     const caption = await captionImage(
       { base64: validated.buffer.toString("base64"), mime: validated.mime },
-      IMAGE_CAPTION_PROMPT,
+      buildImageCaptionPrompt(hasAnnotations),
       visionCfg,
     );
     if (caption.startsWith("[错误")) {

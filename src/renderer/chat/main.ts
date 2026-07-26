@@ -10,6 +10,7 @@ import {
 import { normalizeDefaultChatMode, type DefaultChatMode } from "../../shared/preferences";
 import { normalizeStyleId, type StyleId } from "../../shared/style-sampling";
 import type { ScreenshotInsertPayload } from "../../shared/ipc-channels";
+import { userAnnotationNotice } from "../../shared/chat-context";
 import { canUseMinimaxStreamingEarly, extractEarlyTtsSegment } from "../../shared/tts-early-playback";
 import { getStickerSrcForId } from "./sticker-src";
 import { formatAttachmentTagDetail, getAttachmentIcon } from "./attachment-labels";
@@ -56,6 +57,7 @@ interface ImageMessageAttachment {
   mime: string;
   previewUrl?: string;
   caption?: string;
+  hasAnnotations?: boolean;
   status: "pending" | "done" | "error";
 }
 
@@ -93,7 +95,7 @@ interface ChatApi {
     processDocuments: (filePaths: string[], query: string) => Promise<Attachment[]>;
     onDocumentIndexProgress?: (callback: (progress: DocumentIndexProgress) => void) => () => void;
     cancelDocumentIndex: (jobId: string) => Promise<boolean>;
-    captionImage: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
+    captionImage: (filePath: string, hasAnnotations?: boolean) => Promise<{ ok: boolean; caption?: string; error?: string }>;
     getImageSendStrategy: () => Promise<{ mode: "direct" | "caption" }>;
     getGeneralSettings?: () => Promise<{ defaultChatMode?: DefaultChatMode; segmentedOutputMode?: "all" | "chat" | "off"; currentStyleId?: StyleId }>;
     getEnabledStickers?: () => Promise<Array<{ id: string; src: string; description?: string }>>;
@@ -219,6 +221,7 @@ interface Attachment {
   mime?: string;
   previewUrl?: string;
   caption?: string;
+  hasAnnotations?: boolean;
   status?: DocumentIndexCardStatus;
   text?: string;
   chunks?: number;
@@ -3012,6 +3015,7 @@ async function send(): Promise<void> {
           mime: f.mime || "application/octet-stream",
           previewUrl: f.previewUrl,
           caption: f.caption,
+          hasAnnotations: f.hasAnnotations,
           status: f.status || "pending",
         };
       }
@@ -3047,6 +3051,7 @@ async function send(): Promise<void> {
   let hasDocumentContext = false;
   let hasImageCaptionContext = false;
   let hasDirectImageContext = false;
+  let hasUserAnnotationContext = false;
   const appendDocumentContext = (lines: string[]) => {
     if (lines.length === 0) return;
     if (!hasDocumentContext) {
@@ -3071,6 +3076,12 @@ async function send(): Promise<void> {
       return;
     }
     modelContextParts.push(line);
+  };
+  const appendUserAnnotationContext = () => {
+    if (hasUserAnnotationContext) return;
+    const notice = userAnnotationNotice(true);
+    if (notice) modelContextParts.push(`【用户截图标注】\n${notice}`);
+    hasUserAnnotationContext = true;
   };
   const directImageAttachments: { name: string; filePath: string; mime?: string }[] = [];
   let budgetUsed = 0;
@@ -3204,6 +3215,7 @@ async function send(): Promise<void> {
           break;
         case "image": {
           const msgAtt = userMsg.attachments?.find((att) => att.filePath === f.filePath);
+          if (f.hasAnnotations) appendUserAnnotationContext();
           if (!f.filePath) {
             f.status = "error";
             f.reason = "缺少图片路径";
@@ -3218,7 +3230,7 @@ async function send(): Promise<void> {
             appendDirectImageContext(`- ${f.name}：图片已随本轮消息直接发送给主模型。`);
             break;
           }
-          const result = await window.chat?.captionImage(f.filePath);
+          const result = await window.chat?.captionImage(f.filePath, f.hasAnnotations === true);
           if (result?.ok && result.caption) {
             f.status = "done";
             f.caption = result.caption;
@@ -3590,6 +3602,13 @@ async function ingestDroppedFiles(files: File[]): Promise<void> {
 	  attachedFiles.forEach((f, i) => {
 	    const tag = document.createElement("div");
 	    tag.className = "chat__file-tag";
+	    if (f.kind === "image" && f.previewUrl) {
+	      const preview = document.createElement("img");
+	      preview.className = "chat__file-tag-preview";
+	      preview.src = f.previewUrl;
+	      preview.alt = f.name;
+	      tag.appendChild(preview);
+	    }
 	    const label = document.createElement("span");
 	    const icon = getAttachmentIcon(f.kind);
 	    const detail = formatAttachmentTagDetail(f);
@@ -3627,6 +3646,7 @@ async function insertImageAttachment(input: {
   filePath?: string;
   previewUrl?: string;
   name?: string;
+  hasAnnotations?: boolean;
 }): Promise<void> {
   const filePath = input.filePath
     ?? (input.base64
@@ -3642,6 +3662,7 @@ async function insertImageAttachment(input: {
     previewUrl: input.base64
       ? `data:${input.mime};base64,${input.base64}`
       : input.previewUrl,
+    hasAnnotations: input.hasAnnotations,
     status: "pending",
   });
   updateFileTags();
@@ -3658,6 +3679,7 @@ window.chat?.onScreenshotInsert?.((data) => {
     mime: data.mime,
     filePath: data.filePath,
     previewUrl: data.previewUrl,
+    hasAnnotations: data.hasAnnotations,
     name: `截图_${Date.now()}.png`,
   });
 });
