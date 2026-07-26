@@ -2134,10 +2134,10 @@ function buildSystemPrompt(styleFile: string, includeStyle = true): string {
 
   // Chat 模式使用独立基础规则；仍兼容旧调用方传入的 "talk"。
   const isChatMode = styleFile.startsWith("chat") || styleFile.startsWith("talk");
-  const system = loadPromptFile(isChatMode ? "chat_system.md" : "system.md");
+  const system = loadPromptFile(isChatMode ? "chat_system.md" : "work_system.md");
   if (system) parts.push(system);
 
-  const identity = loadPromptFile("identity.md");
+  const identity = loadPromptFile(isChatMode ? "chat_identity.md" : "work_identity.md");
   if (identity) parts.push(identity);
 
   const soul = loadPromptFile("soul.md");
@@ -2408,7 +2408,7 @@ function buildToolSystemPrompt(enabledTools: ReadonlyArray<ToolDefinition>): str
 
 /**
  * Soul 阶段使用的基础 system prompt。
- * 包含：人设（system.md + identity.md + soul.md + canon + style）+ 后续可追加的环境/记忆等。
+ * 包含：人设（work_system.md/chat_system.md + work_identity.md/chat_identity.md + soul.md + canon + style）+ 后续可追加的环境/记忆等。
  * 注意：工具结果（`role: "tool"` 消息）在 conversation 中已携带，本函数不重复注入。
  * 第一期：build-options 会把 environmentContext / skillCatalog / toneInjection /
  * alwaysOnContext / relationshipContext / attachmentContext 等都拼到 baseContent 末尾，
