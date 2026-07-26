@@ -718,6 +718,16 @@ impl OverlayRenderer {
         let screen_dc = ScreenDcGuard::acquire()?;
         let mem_dc = MemoryDcGuard::create(screen_dc.handle())?;
         let dib = BitmapGuard::create_dib_top_down(mem_dc.handle(), dst_w, dst_h)?;
+        let previous = unsafe { SelectObject(mem_dc.handle(), HGDIOBJ(dib.bitmap.0)) };
+        if previous.0.is_null() || previous.0 as isize == -1 {
+            return Err(HelperError::CaptureFailed(format!(
+                "SelectObject for selection extraction failed (last error: {})",
+                windows::core::Error::from_thread().message()
+            )));
+        }
+        // Declared after `dib`, so it restores the previous bitmap before the
+        // destination DIB is deleted on every return path.
+        let _selection = SelectionGuard::new(mem_dc.handle(), previous);
 
         // SAFETY: cache.mem_dc has the frozen DIB selected for its lifetime;
         // mem_dc holds our destination DIB. BitBlt parameters match both
@@ -1343,5 +1353,54 @@ mod tests {
         let cache = create_gdi_frame_cache(&frame).expect("create_gdi_frame_cache");
         // Explicit drop exercises GdiFrameCache::drop (SelectObject + Delete*).
         drop(cache);
+    }
+
+    #[test]
+    fn gdi_selection_extracts_pixels_from_the_frozen_frame() {
+        let width = 4;
+        let height = 3;
+        let pitch = width * 4;
+        let mut pixels = Vec::with_capacity((pitch * height) as usize);
+        for y in 0..height {
+            for x in 0..width {
+                pixels.extend_from_slice(&[
+                    (10 + x) as u8,
+                    (20 + y) as u8,
+                    (30 + x + y) as u8,
+                    255,
+                ]);
+            }
+        }
+        let frame = CpuBgraFrame {
+            width,
+            height,
+            pitch,
+            pixels,
+        };
+        let mut renderer = OverlayRenderer::new().expect("OverlayRenderer::new");
+        renderer
+            .upload_frozen(&frame)
+            .expect("upload_frozen must cache the source pixels");
+
+        let selection = renderer
+            .extract_selection(
+                RectI {
+                    x: 1,
+                    y: 1,
+                    width: 2,
+                    height: 2,
+                },
+                None,
+            )
+            .expect("extract_selection must succeed");
+
+        assert_eq!(
+            selection.pixels,
+            vec![
+                11, 21, 32, 255, 12, 21, 33, 255, // source row y=1
+                11, 22, 33, 255, 12, 22, 34, 255, // source row y=2
+            ],
+            "selection pixels must come from the requested frozen-frame rectangle"
+        );
     }
 }
