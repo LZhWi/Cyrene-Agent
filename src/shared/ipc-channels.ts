@@ -1,4 +1,11 @@
 // IPC channel names shared between main and renderer
+export interface ScreenshotInsertPayload {
+  mime: "image/png";
+  width: number;
+  height: number;
+  filePath: string;
+}
+
 export const IPC = {
   // pet window
   WINDOW_MINIMIZE: "window:minimize",
