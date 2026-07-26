@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { IPC } from "../shared/ipc-channels";
+import type { ScreenshotInsertPayload } from "../shared/ipc-channels";
 import type { UiTheme } from "../shared/ui-theme";
 import type { UiFont } from "../shared/ui-font";
 import type { ReasoningPreference } from "../shared/reasoning";
@@ -69,11 +70,11 @@ const chatApi = {
   // 截图
   startScreenshot: () => ipcRenderer.invoke(IPC.SCREENSHOT_START),
   onScreenshotInsert: (
-    callback: (data: { base64: string; mime: string; width: number; height: number; filePath: string }) => void,
+    callback: (data: ScreenshotInsertPayload) => void,
   ) => {
     const listener = (
       _e: unknown,
-      data: { base64: string; mime: string; width: number; height: number; filePath: string },
+      data: ScreenshotInsertPayload,
     ) => callback(data);
     ipcRenderer.on(IPC.SCREENSHOT_INSERT, listener);
     return () => ipcRenderer.removeListener(IPC.SCREENSHOT_INSERT, listener);

@@ -9,6 +9,7 @@ import {
 } from "../../shared/chat-ui";
 import { normalizeDefaultChatMode, type DefaultChatMode } from "../../shared/preferences";
 import { normalizeStyleId, type StyleId } from "../../shared/style-sampling";
+import type { ScreenshotInsertPayload } from "../../shared/ipc-channels";
 import { canUseMinimaxStreamingEarly, extractEarlyTtsSegment } from "../../shared/tts-early-playback";
 import { getStickerSrcForId } from "./sticker-src";
 import { formatAttachmentTagDetail, getAttachmentIcon } from "./attachment-labels";
@@ -97,7 +98,7 @@ interface ChatApi {
     getGeneralSettings?: () => Promise<{ defaultChatMode?: DefaultChatMode; segmentedOutputMode?: "all" | "chat" | "off"; currentStyleId?: StyleId }>;
     getEnabledStickers?: () => Promise<Array<{ id: string; src: string; description?: string }>>;
     startScreenshot: () => Promise<{ ok: boolean; reason?: string }>;
-    onScreenshotInsert: (callback: (data: { base64: string; mime: string; width: number; height: number; filePath: string }) => void) => () => void;
+    onScreenshotInsert: (callback: (data: ScreenshotInsertPayload) => void) => () => void;
     saveScreenshotTemp: (base64: string, mime: string) => Promise<{ filePath: string }>;
   }
 
@@ -3621,20 +3622,26 @@ async function ingestDroppedFiles(files: File[]): Promise<void> {
 
 /** 统一插入图片附件（粘贴和截图按钮共用） */
 async function insertImageAttachment(input: {
-  base64: string;
+  base64?: string;
   mime: string;
   filePath?: string;
+  previewUrl?: string;
   name?: string;
 }): Promise<void> {
   const filePath = input.filePath
-    ?? (await window.chat?.saveScreenshotTemp(input.base64, input.mime))?.filePath;
+    ?? (input.base64
+      ? (await window.chat?.saveScreenshotTemp(input.base64, input.mime))?.filePath
+      : undefined);
+  if (!filePath) throw new Error("SCREENSHOT_FILE_PATH_REQUIRED");
 
   attachedFiles.push({
     kind: "image",
     name: input.name ?? `截图_${Date.now()}.png`,
     filePath,
     mime: input.mime,
-    previewUrl: `data:${input.mime};base64,${input.base64}`,
+    previewUrl: input.base64
+      ? `data:${input.mime};base64,${input.base64}`
+      : input.previewUrl,
     status: "pending",
   });
   updateFileTags();
@@ -3648,9 +3655,9 @@ screenshotBtn?.addEventListener("click", () => {
 // 按钮模式回调：主进程裁剪完直接发图片过来
 window.chat?.onScreenshotInsert?.((data) => {
   void insertImageAttachment({
-    base64: data.base64,
     mime: data.mime,
     filePath: data.filePath,
+    previewUrl: data.previewUrl,
     name: `截图_${Date.now()}.png`,
   });
 });

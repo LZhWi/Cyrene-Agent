@@ -1,4 +1,12 @@
 // IPC channel names shared between main and renderer
+export interface ScreenshotInsertPayload {
+  mime: "image/png";
+  width: number;
+  height: number;
+  filePath: string;
+  previewUrl: string;
+}
+
 export const IPC = {
   // pet window
   WINDOW_MINIMIZE: "window:minimize",
@@ -282,18 +290,8 @@ export const IPC = {
   // screenshot
   SCREENSHOT_START: "screenshot:start",
   SCREENSHOT_SAVE_TEMP: "screenshot:save-temp",
-  SCREENSHOT_OVERLAY_READY: "screenshot:overlay-ready",
-  SCREENSHOT_DATA: "screenshot:data",
-  SCREENSHOT_RENDERED: "screenshot:rendered",
-  SCREENSHOT_REGION: "screenshot:region",
-  SCREENSHOT_CANCEL: "screenshot:cancel",
   SCREENSHOT_INSERT: "screenshot:insert",
   SCREENSHOT_HOTKEY_CAPTURE_START: "screenshot:hotkey-capture-start",
   SCREENSHOT_HOTKEY_CAPTURE_END: "screenshot:hotkey-capture-end",
-  // 屏幕流架构（v2）
-  SCREENSHOT_START_SESSION: "screenshot:start-session",
-  SCREENSHOT_FRAME_READY: "screenshot:frame-ready",
-  SCREENSHOT_CONFIRM: "screenshot:confirm",
-  SCREENSHOT_SHOWN: "screenshot:shown",
 } as const;
 

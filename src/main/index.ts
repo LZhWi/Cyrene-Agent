@@ -1,4 +1,5 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, protocol, net, powerMonitor } from "electron";
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, protocol, net, powerMonitor, globalShortcut } from "electron";
+import { spawn } from "node:child_process";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
@@ -82,7 +83,13 @@ import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from ".
 import { buildEnvironmentContext } from "./orchestrator/environment";
 import { initPermissionFromDisk, registerPermissionIpc, getCurrentLevel } from "./permission";
 import { registerChoiceIpc, setChoiceCardSender } from "./user-choice";
-import { initScreenshotIpc, registerScreenshotHotkey, unregisterScreenshotHotkey, replaceScreenshotHotkey, cleanupOnQuit as cleanupScreenshotOnQuit } from "./screenshot/screenshot-manager";
+import { ElectronScreenshotHelperClient } from "./screenshot/helper-client";
+import { resolveScreenshotHelperPath } from "./screenshot/helper-path";
+import {
+  createScreenshotService,
+  validateScreenshotInsert,
+  type ScreenshotService,
+} from "./screenshot/screenshot-service";
 import { enqueueLLMTask } from "./llm-queue";
 import { compileSocialContextBlock } from "./social-context/context";
 import {
@@ -207,6 +214,7 @@ let settingsWindow: BrowserWindow | null = null;
 let stickerManagerWindow: BrowserWindow | null = null;
 let callWindow: BrowserWindow | null = null;
 let schedulerEngine: SchedulerEngine | null = null;
+let screenshotService: ScreenshotService | null = null;
 let proactiveChatService: ProactiveChatService | null = null;
 let normalConversationBusyCount = 0;
 let proactiveScreenLocked = false;
@@ -219,6 +227,83 @@ const petWindowMoveController = new PetWindowMoveController(
     saveGeneralSettings({ petWindowX: x, petWindowY: y });
   },
 );
+
+const MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024;
+
+function getScreenshotDirectory(): string {
+  return path.join(app.getPath("userData"), "screenshots");
+}
+
+async function saveScreenshotPasteTemp(
+  base64: string,
+  _mime: string,
+): Promise<{ filePath: string }> {
+  const raw = Buffer.from(base64, "base64");
+  if (raw.byteLength > MAX_SCREENSHOT_BYTES) {
+    throw new Error("SCREENSHOT_TOO_LARGE");
+  }
+  const image = nativeImage.createFromBuffer(raw);
+  if (image.isEmpty()) {
+    throw new Error("INVALID_SCREENSHOT_IMAGE");
+  }
+  const screenshotDirectory = getScreenshotDirectory();
+  await fs.promises.mkdir(screenshotDirectory, { recursive: true });
+  const filePath = path.join(screenshotDirectory, `${randomUUID()}.png`);
+  await fs.promises.writeFile(filePath, image.toPNG());
+  return { filePath };
+}
+
+function initializeScreenshotService(initialHotkey: string): ScreenshotService {
+  const screenshotDirectory = getScreenshotDirectory();
+  const client = new ElectronScreenshotHelperClient({
+    spawnImpl: (command, args) => spawn(command, args, {
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    }),
+    resolveHelperPath: () => resolveScreenshotHelperPath({
+      isPackaged: app.isPackaged,
+      appPath: app.getAppPath(),
+      resourcesPath: process.resourcesPath,
+      envOverride: process.env.CYRENE_SCREENSHOT_HELPER_PATH,
+    }),
+    screenshotDirectory,
+    logger: console,
+  });
+  const service = createScreenshotService({
+    client,
+    registerShortcut: (accelerator, callback) =>
+      globalShortcut.register(accelerator, callback),
+    unregisterShortcut: (accelerator) => globalShortcut.unregister(accelerator),
+    sendInsert: (data) => {
+      const validated = validateScreenshotInsert(
+        data,
+        screenshotDirectory,
+        (filePath) => nativeImage.createFromPath(filePath),
+      );
+      if (!validated) {
+        throw new Error(`INVALID_SCREENSHOT_RESULT:${data.filePath}`);
+      }
+      if (chatWindow && !chatWindow.isDestroyed()) {
+        chatWindow.webContents.send(IPC.SCREENSHOT_INSERT, validated);
+      }
+    },
+  });
+
+  ipcMain.handle(IPC.SCREENSHOT_START, () => service.startFromChatButton());
+  ipcMain.handle(IPC.SCREENSHOT_SAVE_TEMP, (_event, base64: string, mime: string) =>
+    saveScreenshotPasteTemp(base64, mime));
+  ipcMain.handle(IPC.SCREENSHOT_HOTKEY_CAPTURE_START, () => {
+    service.suspendHotkey();
+    return true;
+  });
+  ipcMain.handle(IPC.SCREENSHOT_HOTKEY_CAPTURE_END, () => {
+    service.resumeHotkey();
+    return true;
+  });
+
+  service.init(initialHotkey);
+  return service;
+}
 // 聊天窗口当前活跃的会话 id（通过 IPC 由聊天窗口上报）；
 // 设置面板"删除当前会话"差异化提示用。聊天窗口关闭时由 closed 事件置 null。
 let activeChatSessionId: string | null = null;
@@ -1315,13 +1400,12 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   if (before.uiIcon !== normalized.uiIcon) {
     applyUiIcon(normalized.uiIcon);
   }
-  // TODO: 截图功能重构中，暂时禁用
-  // if (before.screenshotHotkey !== normalized.screenshotHotkey) {
-  //   const result = replaceScreenshotHotkey(normalized.screenshotHotkey);
-  //   if (!result.ok) {
-  //     console.warn("[Cyrene] 截图热键注册失败，可能被其他应用占用:", normalized.screenshotHotkey);
-  //   }
-  // }
+  if (before.screenshotHotkey !== normalized.screenshotHotkey) {
+    const result = screenshotService?.replaceHotkey(normalized.screenshotHotkey);
+    if (result && !result.ok) {
+      console.warn("[Cyrene] 截图热键注册失败，可能被其他应用占用:", normalized.screenshotHotkey);
+    }
+  }
   return normalized;
 }
 
@@ -4498,9 +4582,11 @@ app.whenReady().then(async () => {
     console.error("[Cyrene] playwright MCP sync failed:", e)
   );
 
-  // TODO: 截图功能重构中，暂时禁用
-  // initScreenshotIpc();
-  // registerScreenshotHotkey(initialSettings.screenshotHotkey ?? "Alt+Shift+S");
+  // 截图：原生 helper IPC、全局热键和后台预热。预热失败不会阻止应用启动。
+  screenshotService = initializeScreenshotService(
+    initialSettings.screenshotHotkey ?? "Alt+Shift+S",
+  );
+  void screenshotService.prewarm();
 
   // Cloud Music MCP wiring (MusicService + IPC + 5 Agent tools + shutdown latch)
   const musicPaths = resolveMusicPaths();
@@ -5023,7 +5109,7 @@ app.on("before-quit", () => {
   stopProactiveTrigger();
   flushTokenUsage();
   void shutdownChannels();
-  cleanupScreenshotOnQuit();
+  void screenshotService?.shutdown();
 });
 
 app.on("activate", () => {

@@ -14,8 +14,12 @@ dist/renderer/index.html
 dist/renderer/live2dcubismcore.min.js
 dist/sim/
 dist/skills/
+release/
 *.js.map
 *.tsbuildinfo
+
+# Native screenshot helper is built locally and staged for electron-builder.
+resources/bin/*.exe
 
 # NOTE: dist/renderer/audio, dist/renderer/avatars, dist/renderer/models,
 # dist/renderer/stickers are intentionally NOT ignored (product assets).
