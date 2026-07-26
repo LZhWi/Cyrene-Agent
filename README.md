@@ -36,11 +36,27 @@
 
 ### 前置条件
 
-- **Windows 10 / 11**
+- **Windows 10 / 11 64 位**
 - **Node.js 24 LTS**
 - **npm 10+**（推荐 npm 11）
+- **[Rust stable](https://www.rust-lang.org/tools/install)**（源码构建截图功能必需）
+- **[Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)**
 
-> 飞书、微信 iLink 与 `nut-js` 键鼠自动化等部分功能依赖 Windows 环境。
+安装 Visual Studio Build Tools 时，请勾选：
+
+- **使用 C++ 的桌面开发**
+- **MSVC v143**
+- **Windows 10 / 11 SDK**
+
+安装 Rust 后，建议确认使用 MSVC 工具链：
+
+```powershell
+rustup default stable-x86_64-pc-windows-msvc
+```
+
+> 飞书、微信 iLink、`nut-js` 键鼠自动化及原生截图功能依赖 Windows 环境。
+>
+> 如果直接安装 Releases 中的打包版本，无需另外安装 Rust 和 Visual Studio Build Tools。
 
 ### 1. 克隆项目
 
@@ -50,6 +66,14 @@ cd Cyrene-Agent
 ```
 
 ### 2. 安装依赖
+
+推荐使用锁定版本安装：
+
+```bash
+npm ci
+```
+
+也可以使用：
 
 ```bash
 npm install
@@ -74,7 +98,7 @@ Cyrene 无需本地大语言模型即可正常聊天，但建议安装 **BGE-M3 
 
 ### 4. 音乐功能（可选）
 
-如需使用网易云音乐功能，需额外安装：
+音乐工具基于 [Code-MonkeyZhang/cloud-music-mcp](https://github.com/Code-MonkeyZhang/cloud-music-mcp) 集成。如需使用网易云音乐功能，需额外安装：
 
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — Python 包管理器，首次运行音乐工具时会自动下载 Python 并安装依赖
 - **[网易云音乐桌面客户端](https://music.163.com/)** — 用于播放歌曲，需注册 `orpheus://` 协议
@@ -85,20 +109,38 @@ Cyrene 无需本地大语言模型即可正常聊天，但建议安装 **BGE-M3 
 
 ### 5. 构建并启动
 
+首次从源码运行时，需要先构建 Rust 原生截图助手：
+
 ```bash
+npm run build:screenshot-helper
 npm run build
 npm start
 ```
 
+> [!IMPORTANT]
+>
+> 原生截图助手不会以 `.exe` 形式提交到 Git 仓库，因此首次克隆后必须执行一次 `npm run build:screenshot-helper`。
+
 开发模式：
 
 ```bash
+npm run build:screenshot-helper
 npm run dev
 ```
 
-开发模式会同时启动 Electron 主进程、Preload 编译、Vite 渲染进程与 Electron 应用。
+修改 Rust 截图助手代码后，需要重新执行：
 
-主进程代码修改后会自动重启 Electron，渲染层修改则通过 Vite HMR 热更新。
+```bash
+npm run build:screenshot-helper
+```
+
+构建 Windows 可分发版本：
+
+```bash
+npm run package:win:dir
+```
+
+打包命令会自动构建 Electron 应用和 Rust 截图助手。
 
 ---
 
