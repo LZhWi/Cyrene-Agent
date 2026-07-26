@@ -1,5 +1,8 @@
 #![cfg(windows)]
 
+// These process-level smoke tests share desktop-global DXGI duplication,
+// clipboard, foreground-window, and output-directory state.
+use serial_test::serial;
 use std::{
     io::{BufRead, BufReader, Write},
     os::windows::io::{AsRawHandle, FromRawHandle, OwnedHandle},
@@ -373,6 +376,7 @@ fn drive_to_committing(helper: &mut Helper, request_id: &str) {
 }
 
 #[test]
+#[serial]
 fn start_emits_accepted_then_selecting_then_overlay_visible() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
@@ -410,6 +414,7 @@ fn start_emits_accepted_then_selecting_then_overlay_visible() {
 }
 
 #[test]
+#[serial]
 fn overlay_visible_presents_the_frozen_desktop_instead_of_the_empty_cache_fill() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
@@ -453,6 +458,7 @@ fn overlay_visible_presents_the_frozen_desktop_instead_of_the_empty_cache_fill()
 }
 
 #[test]
+#[serial]
 fn mouse_capture_reentrancy_does_not_abort_the_helper() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
@@ -475,6 +481,7 @@ fn mouse_capture_reentrancy_does_not_abort_the_helper() {
 }
 
 #[test]
+#[serial]
 fn overlay_visible_freeze_duration_is_non_negative() {
     // T5c invariant: the `OverlayVisible` event carries a measured
     // freeze_duration_ms derived from QueryPerformanceCounter between the
@@ -502,6 +509,7 @@ fn overlay_visible_freeze_duration_is_non_negative() {
 }
 
 #[test]
+#[serial]
 fn display_change_during_active_capture_errors() {
     // T5c: while an overlay capture is active, WM_DISPLAYCHANGE (and
     // WM_DPICHANGED) must abort the interaction with a recoverable
@@ -536,6 +544,7 @@ fn display_change_during_active_capture_errors() {
 }
 
 #[test]
+#[serial]
 fn escape_after_selecting_cancels() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
@@ -572,6 +581,7 @@ fn escape_after_selecting_cancels() {
 }
 
 #[test]
+#[serial]
 fn enter_after_valid_selection_emits_committing_then_release_and_completed() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
@@ -600,6 +610,7 @@ fn enter_after_valid_selection_emits_committing_then_release_and_completed() {
 }
 
 #[test]
+#[serial]
 fn busy_start_returns_error() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
@@ -631,6 +642,7 @@ fn busy_start_returns_error() {
 }
 
 #[test]
+#[serial]
 fn valid_arguments_emit_ready_within_three_seconds() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
@@ -647,6 +659,7 @@ fn valid_arguments_emit_ready_within_three_seconds() {
 }
 
 #[test]
+#[serial]
 fn shutdown_command_exits_successfully() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
@@ -661,6 +674,7 @@ fn shutdown_command_exits_successfully() {
 }
 
 #[test]
+#[serial]
 fn stdin_eof_exits_within_two_seconds() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
@@ -673,6 +687,7 @@ fn stdin_eof_exits_within_two_seconds() {
 }
 
 #[test]
+#[serial]
 fn protocol_version_mismatch_emits_structured_error_and_exits_nonzero() {
     let mut helper = Helper::spawn(std::process::id(), 2);
 
@@ -690,6 +705,7 @@ fn protocol_version_mismatch_emits_structured_error_and_exits_nonzero() {
 }
 
 #[test]
+#[serial]
 fn parent_exit_stops_helper_within_two_seconds() {
     let parent = Command::new("powershell.exe")
         .args([
@@ -717,6 +733,7 @@ fn parent_exit_stops_helper_within_two_seconds() {
 }
 
 #[test]
+#[serial]
 fn malformed_input_emits_recoverable_error_and_keeps_running() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
@@ -744,6 +761,7 @@ fn malformed_input_emits_recoverable_error_and_keeps_running() {
 }
 
 #[test]
+#[serial]
 fn oversized_input_emits_recoverable_error_and_keeps_running() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
@@ -777,6 +795,7 @@ fn oversized_input_emits_recoverable_error_and_keeps_running() {
 }
 
 #[test]
+#[serial]
 fn missing_parent_is_recoverable_and_stdin_eof_still_stops_helper() {
     let mut helper = Helper::spawn(u32::MAX, 1);
     helper.expect_ready();
@@ -789,6 +808,7 @@ fn missing_parent_is_recoverable_and_stdin_eof_still_stops_helper() {
 }
 
 #[test]
+#[serial]
 fn parent_shutdown_closes_a_continuous_error_producer_and_drains_stdout() {
     let parent = Command::new("powershell.exe")
         .args([
@@ -862,6 +882,7 @@ fn parent_shutdown_closes_a_continuous_error_producer_and_drains_stdout() {
 }
 
 #[test]
+#[serial]
 fn parent_shutdown_closes_a_continuous_command_producer_and_drains_stdout() {
     let parent = Command::new("powershell.exe")
         .args([
@@ -963,6 +984,7 @@ fn parent_shutdown_closes_a_continuous_command_producer_and_drains_stdout() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[serial]
 fn clipboard_only_does_not_generate_png() {
     let dir = ensure_clean_output_dir();
     assert_eq!(count_pngs(&dir), 0, "smoke dir must start empty");
@@ -1002,6 +1024,7 @@ fn clipboard_only_does_not_generate_png() {
 }
 
 #[test]
+#[serial]
 fn clipboard_and_file_enqueues_encode_job_and_completes_after_encode() {
     let dir = ensure_clean_output_dir();
     assert_eq!(count_pngs(&dir), 0);
@@ -1129,6 +1152,7 @@ fn clipboard_and_file_enqueues_encode_job_and_completes_after_encode() {
 }
 
 #[test]
+#[serial]
 fn capture_released_returns_clipboard_written_and_dimensions() {
     let mut helper = Helper::spawn(std::process::id(), 1);
     helper.expect_ready();
@@ -1162,6 +1186,7 @@ fn capture_released_returns_clipboard_written_and_dimensions() {
 }
 
 #[test]
+#[serial]
 fn encode_failure_removes_temp_file_and_emits_error() {
     // Make the helper's output dir point at an existing *regular file* so
     // that the WIC stream init (which calls CreateFile on the .tmp path)
@@ -1313,6 +1338,7 @@ fn commit_clipboard_and_file_to_release(helper: &mut Helper, request_id: &str) -
 }
 
 #[test]
+#[serial]
 fn start_while_clipboard_and_file_request_encodes_is_allowed() {
     // Spec requirement: a new Start with a different requestId must succeed
     // while a previous `clipboard-and-file` request is still between
@@ -1386,6 +1412,7 @@ fn start_while_clipboard_and_file_request_encodes_is_allowed() {
 }
 
 #[test]
+#[serial]
 fn start_duplicate_request_id_emits_busy() {
     // Spec requirement: a second `Start` with the same `requestId` while the
     // first request is still in the registry must be rejected with
@@ -1425,6 +1452,7 @@ fn start_duplicate_request_id_emits_busy() {
 }
 
 #[test]
+#[serial]
 fn cancel_during_encode_emits_cancelled() {
     // Spec requirement: `Command::Cancel` on a pending-but-released
     // (encode-in-flight) request must produce `Cancelled`. Because the
@@ -1524,6 +1552,7 @@ fn diagnostics_field(event: &serde_json::Value, field: &str) -> u64 {
 }
 
 #[test]
+#[serial]
 fn start_to_overlay_visible_has_no_full_frame_cpu_readback() {
     // Task 7 invariant: when the DXGI capture path is active (the documented
     // primary path on a healthy desktop), the helper must produce a frozen
@@ -1582,6 +1611,7 @@ fn start_to_overlay_visible_has_no_full_frame_cpu_readback() {
 }
 
 #[test]
+#[serial]
 fn commit_has_selection_cpu_readback() {
     // Task 7 invariant: after commit, the helper's diagnostics MUST record
     // at least one selection CPU readback regardless of backend (both DXGI
@@ -1611,6 +1641,7 @@ fn commit_has_selection_cpu_readback() {
 }
 
 #[test]
+#[serial]
 fn overlay_visible_diagnostics_reports_backend_and_counters() {
     // Sanity check: the wire payload must contain every documented
     // diagnostics field with the right shape, regardless of which backend
