@@ -33,6 +33,7 @@ import { debugLog, flowLog } from "../agent-log";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 import { requestUserClarification } from "../user-choice";
 import type { TrustedAskUserProfile } from "../../shared/ask-clarification";
+import type { SkillRouteInfo } from "./task-router";
 
 const executionLedgers = new ExecutionLedgerStore();
 
@@ -99,6 +100,8 @@ export interface CyreneRunOptions {
     retrievedAtoms: SocialAtom[];
     now: number;
   };
+  /** Task Router 可用 Skill 列表（feature flag 开启时使用）。Router 不依赖该字段是否存在。 */
+  availableSkills?: SkillRouteInfo[];
 }
 
 /** FC 循环最终结果（供桥层做副作用用）。 */
@@ -160,6 +163,8 @@ function toAguiEvent(event: TwoPhaseEvent): BaseEvent {
       };
     case "text_message_end":
       return { type: EventType.TEXT_MESSAGE_END, messageId: event.messageId };
+    case "task_plan_update":
+      return { type: EventType.CUSTOM, name: "cyrene.taskPlan", value: event.snapshot };
   }
 }
 
@@ -240,7 +245,16 @@ export class CyreneAgent extends AbstractAgent {
   runWithEvents(options: CyreneRunOptions): Observable<BaseEvent> {
     const threadId = this.threadId;
     const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const conversationId = options.conversationId ?? "default";
     const abortController = new AbortController();
+
+    // first-source-wins：谁先触发 abort，谁就是最终分类
+    let abortSource: AbortSource | undefined;
+    const markAbort = (source: AbortSource) => {
+      if (abortSource) return; // 已有来源，不覆盖
+      abortSource = source;
+      abortController.abort({ source });
+    };
 
     return new Observable<BaseEvent>((subscriber) => {
       let cancelled = false;
@@ -311,6 +325,8 @@ export class CyreneAgent extends AbstractAgent {
               executeTool,
               onEvent,
               signal: abortController.signal,
+              markAbort,
+              availableSkills: options.availableSkills ?? [],
             };
             const conversationId = options.conversationId ?? "default";
             const executionLedger = executionLedgers.forScope(`${conversationId}:messages-${options.messages.length}`);
@@ -349,14 +365,28 @@ export class CyreneAgent extends AbstractAgent {
           subscriber.complete();
         } catch (err) {
           if (cancelled) return;
-          console.error(LOG_PREFIX, "run 失败:", err);
-          subscriber.error(err instanceof Error ? err : new Error(String(err)));
+          const hasToolResults = false; // LangGraph/legacy 内部有自己的 toolResults，这里简化
+          const classification = classifyAbortError(
+            err, abortSource, runId, conversationId, "unknown", hasToolResults,
+          );
+          console.error(LOG_PREFIX, `run 失败 [${classification.source}]:`, classification.diagnostics);
+          if (classification.source === "user_cancelled") {
+            subscriber.next({
+              type: EventType.RUN_FINISHED,
+              threadId,
+              runId,
+            });
+            subscriber.complete();
+            return;
+          }
+          const safeErr = new Error(classification.userMessage);
+          subscriber.error(safeErr);
         }
       })();
 
       return () => {
         cancelled = true;
-        abortController.abort();
+        markAbort("user_cancelled");
       };
     });
   }
@@ -373,4 +403,95 @@ export class CyreneAgent extends AbstractAgent {
     void input;
     return this.runWithEvents(this._runOptions);
   }
+}
+
+/** Abort 来源分类 */
+export type AbortSource =
+  | "user_cancelled"
+  | "call_timeout"
+  | "run_timeout"
+  | "window_destroyed"
+  | "upstream_cleanup";
+
+/** 执行阶段 */
+export type AbortPhase =
+  | "cita"
+  | "route"
+  | "plan"
+  | "decide"
+  | "native_fc"
+  | "execute"
+  | "soul"
+  | "unknown";
+
+export interface AbortDiagnostic {
+  source: AbortSource;
+  phase: AbortPhase;
+  userMessage: string;
+  diagnostics: Record<string, unknown>;
+}
+
+/** 分类 abort/error 来源，返回用户安全消息和诊断信息 */
+export function classifyAbortError(
+  err: unknown,
+  abortSource: AbortSource | undefined,
+  runId: string,
+  conversationId: string,
+  phase: AbortPhase,
+  hasToolResults: boolean,
+): AbortDiagnostic {
+  const diagnostics: Record<string, unknown> = {
+    runId,
+    conversationId,
+    abortSource,
+    phase,
+    hasToolResults,
+    errorName: err instanceof Error ? err.name : undefined,
+    errorMessage: err instanceof Error ? err.message : String(err),
+  };
+
+  // 图级超时（ensureBudget 抛 E_AGENT_GRAPH_TIMEOUT，不是 AbortError）
+  if (err instanceof Error && err.message === "E_AGENT_GRAPH_TIMEOUT") {
+    const userMessage = phase === "soul" && hasToolResults
+      ? "工具结果已获得，但最终回复生成超时，请重试。"
+      : "请求处理超时，请重试。";
+    return { source: "run_timeout", phase, userMessage, diagnostics };
+  }
+
+  // 图级取消（ensureBudget 抛 E_AGENT_GRAPH_CANCELLED）
+  if (err instanceof Error && err.message === "E_AGENT_GRAPH_CANCELLED") {
+    if (abortSource === "user_cancelled") {
+      return { source: "user_cancelled", phase, userMessage: "", diagnostics };
+    }
+    return { source: abortSource ?? "upstream_cleanup", phase, userMessage: "操作已中断，请重试。", diagnostics };
+  }
+
+  // 判断是否是 AbortError
+  const isAbort =
+    (err instanceof DOMException && err.name === "AbortError") ||
+    (err instanceof Error && err.name === "AbortError") ||
+    (typeof err === "object" && err !== null && "name" in err && (err as { name: string }).name === "AbortError");
+
+  if (!isAbort) {
+    return {
+      source: abortSource ?? "upstream_cleanup",
+      phase,
+      userMessage: err instanceof Error ? err.message : String(err),
+      diagnostics,
+    };
+  }
+
+  // AbortError：使用触发时记录的 abortSource
+  const source = abortSource ?? "unknown_abort" as AbortSource;
+
+  if (source === "user_cancelled") {
+    return { source, phase, userMessage: "", diagnostics };
+  }
+  if (source === "call_timeout") {
+    const userMessage = phase === "soul" && hasToolResults
+      ? "工具结果已获得，但最终回复生成超时，请重试。"
+      : "请求处理超时，请重试。";
+    return { source, phase, userMessage, diagnostics };
+  }
+  return { source, phase, userMessage: "操作已中断，请重试。", diagnostics };
 }

@@ -21,9 +21,10 @@ import {
 import { buildExecutionBrief } from "./tool-execution-context";
 import { buildSoulExecutionContext, formatSoulExecutionContext } from "./soul-execution-context";
 import { runTaskRouter, ENABLE_TASK_ROUTER, buildRouterCapabilities, type TaskRoute, type SkillRouteInfo } from "./task-router";
+import type { AbortSource } from "./cyrene-agent";
 import {
   runCreatePlan, runReplan, verifyStep, computeMaxIterations,
-  generateExecutionId, generateAttemptId, findStep,
+  generateExecutionId, generateAttemptId, findStep, buildPlanSnapshot,
   DEFAULT_MAX_REPLANS, HARD_MAX_ITERATIONS,
   type TaskPlan, type PlanStep,
 } from "./task-plan";
@@ -73,6 +74,8 @@ export interface LangGraphAgentLoopOptions {
   onEvent?: (event: TwoPhaseEvent) => void;
   recordUsage?: (input: number, output: number, calls: number) => void;
   signal?: AbortSignal;
+  /** 标记 abort 来源（first-source-wins），由 CyreneAgent 注入 */
+  markAbort?: (source: AbortSource) => void;
   cleanMessages?: ChatMessage[];
   actionGateSystemPrompt?: string;
   nativeFcSystemContent?: string;
@@ -94,6 +97,7 @@ async function callAdapter(
   settings: AgentLoopSettings,
   timeoutMs: number,
   signal?: AbortSignal,
+  markAbort?: (source: AbortSource) => void,
 ): Promise<ReturnType<ChatVendorAdapter["parseResponse"]>> {
   if (signal?.aborted) throw new Error("E_AGENT_GRAPH_CANCELLED");
   const effectiveRequest = adapter.applyCacheHints?.(request, settings) ?? request;
@@ -101,7 +105,10 @@ async function callAdapter(
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal?.addEventListener("abort", abort, { once: true });
-  const timer = setTimeout(abort, timeoutMs);
+  const timer = setTimeout(() => {
+    markAbort?.("call_timeout");
+    controller.abort();
+  }, timeoutMs);
   try {
     const fetchTimer = perf.begin(`llm_http_fetch[${adapter.id}]`);
     const response = await fetch(http.url, {
@@ -137,7 +144,7 @@ function emitText(onEvent: LangGraphAgentLoopOptions["onEvent"], text: string): 
   onEvent?.({ type: "text_message_end", messageId });
 }
 
-const SOUL_NO_TOOL_DIRECTIVE = [
+export const SOUL_NO_TOOL_DIRECTIVE = [
   "[SOUL_PHASE_RULES]",
   "你当前处于回复阶段，本轮不会再调用任何工具。",
   "禁止生成工具调用、函数调用或任何工具协议文本（包括 [系统提示]、[工具调用]、[工具结果]、<tool_call>、[tool_call] 等标记）。",
@@ -165,6 +172,10 @@ const SOUL_NO_TOOL_DIRECTIVE = [
   "- 歌曲、人物、作品、发布日期、热度、榜单、传播事件等可验证事实，只有明确出现在 projections、用户消息、可信记忆中时，才允许陈述。",
   "- 模型自身训练知识、联想和概率推测均不得作为事实来源。",
   "- 字段未提供时视为未知，不得猜测、补全或暗示。",
+  "",
+  "投影缺失兜底：",
+  "- 工具执行成功但 projections 中没有对应条目时，只能说明操作已执行，不能编造具体业务数据。",
+  "- 不得使用模型自身训练知识补全工具未返回的字段。",
   "",
   "角色化表达只能添加主观感受，不得新增可验证事实。",
   "",
@@ -225,8 +236,16 @@ function expectedRefKindsFor(tool: ToolDefinition): Set<string> | undefined {
 
 export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions): Promise<TwoPhaseFcResult> {
   const startedAt = Date.now();
+  if (ENABLE_TASK_ROUTER) {
+    flowLog(`Task Router enabled: skills=${(options.availableSkills ?? []).length}`);
+  } else {
+    flowLog("Task Router disabled: feature_flag=false");
+  }
   const perCallTimeout = Math.max(1_000, Math.min(75_000, options.timeoutMs));
   const enabledTools = options.tools.filter((tool) => tool.enabled);
+  // 过滤后的版本（按 inPlanMode 动态切换）
+  let enabledToolsFiltered = enabledTools;
+  let runnableToolIdsFiltered: Set<string> = new Set(enabledTools.map((t) => t.id));
   const runnableToolIds = new Set(enabledTools.map((tool) => tool.id));
   const capabilities: ActionCapability[] = enabledTools.map((tool) => ({
     capability: tool.capability ?? tool.id,
@@ -235,6 +254,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     requiredInputs: tool.inputSchema.required ?? [],
     referencePolicy: referencePolicyFor(tool),
   }));
+  let capabilitiesFiltered: ActionCapability[] = capabilities;
   let usageInput = 0;
   let usageOutput = 0;
   let fallbackMessages: ChatMessage[] | undefined;
@@ -276,6 +296,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         effectiveSettings,
         Math.min(perCallTimeout, remainingBudget()),
         activeSignal,
+        options.markAbort,
       );
     } catch (error) {
       if (activeSignal?.aborted) throw error;
@@ -289,6 +310,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         effectiveSettings,
         Math.min(perCallTimeout, remainingBudget()),
         activeSignal,
+        options.markAbort,
       );
     }
   };
@@ -302,7 +324,8 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
   }, {
     maxIterations: ENABLE_TASK_ROUTER ? HARD_MAX_ITERATIONS : (options.maxIterations ?? 12),
     maxReplans: DEFAULT_MAX_REPLANS,
-    ...(ENABLE_TASK_ROUTER && options.availableSkills ? {
+    ...(ENABLE_TASK_ROUTER
+      ? {
       route: async (state) => {
         const profile = resolveStructuredOutputProfile({
           provider: options.adapter.id,
@@ -319,7 +342,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           originalQuery: state.originalQuery,
           contextualizedQuery: state.contextualizedQuery,
           messages: state.messages,
-          availableSkills: options.availableSkills!,
+          availableSkills: options.availableSkills ?? [],
           availableCapabilities: buildRouterCapabilities(options.tools),
           profile,
           generate: (request, signal) => invokeWithFallback(
@@ -338,6 +361,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           signal: options.signal,
         });
         debugLog(`${LOG_PREFIX} node=route mode=${route.executionMode} skills=${route.skillIds.join(",")} reason=${route.reason}`);
+        flowLog(`Router decision: executionMode=${route.executionMode} skillIds=[${route.skillIds.join(", ")}]`);
         return route;
       },
       createPlan: async (state) => {
@@ -378,7 +402,9 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           firstStep.executionId = generateExecutionId();
           firstStep.status = "running";
         }
-        flowLog(`3. 创建计划：${plan.steps.length} 步`);
+        flowLog(`2.6 创建计划：${plan.steps.length} 步`);
+        flowLog(`   目标：${plan.goal}`);
+        plan.steps.forEach((s, i) => flowLog(`   ${i + 1}. ${s.objective}`));
         return plan;
       },
       planVerify: async (state) => {
@@ -390,7 +416,15 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         const stepResults = state.toolResults.filter(
           (r) => r.stepExecutionId === step.executionId,
         );
-        return verifyStep(step, stepResults, options.tools);
+        const result = verifyStep(step, stepResults, options.tools);
+        const stepIndex = state.taskPlan.steps.indexOf(step) + 1;
+        const totalSteps = state.taskPlan.steps.length;
+        if (result.status === "completed") {
+          flowLog(`6.5 步骤验证：完成（${stepIndex}/${totalSteps}）`);
+        } else if (result.status === "failed") {
+          flowLog(`6.5 步骤验证：失败（${result.failureReason ?? "未知"}）`);
+        }
+        return result;
       },
       planReplan: async (state) => {
         if (!state.taskPlan || !state.currentStepId) return [];
@@ -413,7 +447,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             description: t.description,
             completionEvidence: t.completionEvidence ?? [],
           }));
-        return runReplan({
+        const replacementSteps = await runReplan({
           model: options.settings.model,
           plan: state.taskPlan,
           failedStep: step,
@@ -426,6 +460,13 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           ),
           signal: options.signal,
         });
+        flowLog(`6.6 重规划：替换 ${replacementSteps.length} 步`);
+        replacementSteps.forEach((s, i) => flowLog(`   新步骤 ${i + 1}. ${s.objective}`));
+        return replacementSteps;
+      },
+      onPlanUpdate: (plan, replanCount) => {
+        const snapshot = buildPlanSnapshot(plan, replanCount);
+        options.onEvent?.({ type: "task_plan_update", snapshot });
       },
     } : {}),
     trace: (node, state) => {
@@ -451,6 +492,33 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       // 不会走到这里。只有 routeAfterTool 路由回 decide（replan 或可重试失败）后，
       // 模型又重复同一已完成动作时才触发。主路径不依赖此检查。
       const lastResult = state.toolResults[state.toolResults.length - 1];
+
+      // Plan 模式工具过滤：隐藏 hideInPlanMode 工具，确保 Action Gate 和 Native FC 都看不到
+      const inPlanMode = state.taskPlan != null
+        && !["completed", "failed", "cancelled"].includes(state.taskPlan.status);
+      if (inPlanMode) {
+        const hidden = enabledTools.filter((t) => t.hideInPlanMode).map((t) => t.id);
+        if (hidden.length > 0) {
+          flowLog(`Plan tool filtering: ${hidden.join(", ")} hidden`);
+          enabledToolsFiltered = enabledTools.filter((t) => !t.hideInPlanMode);
+          runnableToolIdsFiltered = new Set(enabledToolsFiltered.map((t) => t.id));
+          capabilitiesFiltered = enabledToolsFiltered.map((tool) => ({
+            capability: tool.capability ?? tool.id,
+            toolId: tool.id,
+            description: tool.catalogHint?.trim() || tool.description.split("\n")[0]?.trim() || tool.description,
+            requiredInputs: tool.inputSchema.required ?? [],
+            referencePolicy: referencePolicyFor(tool),
+          }));
+        } else {
+          enabledToolsFiltered = enabledTools;
+          runnableToolIdsFiltered = runnableToolIds;
+          capabilitiesFiltered = capabilities;
+        }
+      } else {
+        enabledToolsFiltered = enabledTools;
+        runnableToolIdsFiltered = runnableToolIds;
+        capabilitiesFiltered = capabilities;
+      }
       if (lastResult?.deduplicated) {
         debugLog(`${LOG_PREFIX} node=decide forced_respond reason=duplicate_terminal_action`);
         return { decision: "respond", reason: "duplicate_terminal_action" };
@@ -483,7 +551,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           contextualizedQuery: state.contextualizedQuery,
           citaContextBlock: state.citaContextBlock,
           messages: state.messages,
-          availableCapabilities: capabilities,
+          availableCapabilities: capabilitiesFiltered,
           runtimeEnvironmentContext: options.runtimeEnvironmentContext,
           clarificationAnswers: state.clarificationAnswers,
           trustedRefs: [...trustedRefs],
@@ -546,7 +614,18 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         if (decision.decision === "act") {
           const toolId = capabilities.find((item) => item.capability === decision.capability)?.toolId
             ?? decision.capability;
-          flowLog(`3. 选择动作：调用 ${toolId}`);
+          // plan 模式下显示当前步骤进度
+          if (state.taskPlan && state.currentStepId) {
+            const step = findStep(state.taskPlan, state.currentStepId);
+            if (step) {
+              const stepIndex = state.taskPlan.steps.indexOf(step) + 1;
+              const totalSteps = state.taskPlan.steps.length;
+              flowLog(`3. 执行步骤 ${stepIndex}/${totalSteps}：${step.objective}`);
+            }
+            flowLog(`   选择动作：调用 ${toolId}`);
+          } else {
+            flowLog(`3. 选择动作：调用 ${toolId}`);
+          }
           flowLog(`   目标：${summarizeObjective(decision.objective)}`);
           flowLog(`   成功后：${decision.afterSuccess ?? "respond(默认)"}`);
         } else if (decision.decision === "ask_user") {
@@ -588,7 +667,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       : {}),
     execute: async (state, decision) => {
       ensureBudget();
-      const selectedTool = resolveToolForCapability(enabledTools, decision.capability);
+      const selectedTool = resolveToolForCapability(enabledToolsFiltered, decision.capability);
       options.onEvent?.({ type: "step_started", stepName: `agent-graph-tool-${selectedTool.id}` });
       try {
         // 引用验证：检查需要可信引用的工具的 targetRefs 是否有效（含类型检查）
