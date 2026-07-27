@@ -69,6 +69,8 @@ export interface ToolDefinition {
   soulErrorMessages?: Record<string, string>;
   /** 完成证据元数据：供 Planner 和 planVerify 使用。未配置的工具不能进入 Plan 步骤。 */
   completionEvidence?: CapabilityCompletionEvidence[];
+  /** Plan 模式下不暴露给 Action Gate 和 Native FC（防止 Plan 步骤降级到旧 Loop）。 */
+  hideInPlanMode?: boolean;
   // 执行器：内置工具指向本地函数，外部 MCP 工具指向 transport 调用
   execute: (args: Record<string, unknown>, ctx?: ToolContext) => Promise<string>;
 }

@@ -48,7 +48,7 @@ export interface RunTaskRouterInput {
 
 // ── Feature flag ─────────────────────────
 
-export const ENABLE_TASK_ROUTER = false;
+export const ENABLE_TASK_ROUTER = true;
 
 // ── 快捷路径：精确 Skill 匹配 ─────────────
 

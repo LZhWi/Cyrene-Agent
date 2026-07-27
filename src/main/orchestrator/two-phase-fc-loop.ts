@@ -46,6 +46,7 @@ import type {
 } from "./vendors/types";
 import type { ToolDefinition } from "./tool-registry";
 import { buildSoulExecutionContext, formatSoulExecutionContext } from "./soul-execution-context";
+import type { TaskPlanSnapshot } from "./task-plan";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 
@@ -67,7 +68,8 @@ export type TwoPhaseEvent =
   | { type: "tool_call_end"; toolCallId: string }
   | { type: "text_message_start"; messageId: string; role: "assistant" }
   | { type: "text_message_content"; messageId: string; delta: string }
-  | { type: "text_message_end"; messageId: string };
+  | { type: "text_message_end"; messageId: string }
+  | { type: "task_plan_update"; snapshot: TaskPlanSnapshot };
 
 export type SoulPhaseReason = "no_tool" | "max_rounds" | "timeout" | "tool_error";
 
@@ -185,6 +187,10 @@ const SOUL_NO_TOOL_DIRECTIVE = [
   "- 歌曲、人物、作品、发布日期、热度、榜单、传播事件等可验证事实，只有明确出现在 projections、用户消息、可信记忆中时，才允许陈述。",
   "- 模型自身训练知识、联想和概率推测均不得作为事实来源。",
   "- 字段未提供时视为未知，不得猜测、补全或暗示。",
+  "",
+  "投影缺失兜底：",
+  "- 工具执行成功但 projections 中没有对应条目时，只能说明操作已执行，不能编造具体业务数据。",
+  "- 不得使用模型自身训练知识补全工具未返回的字段。",
   "",
   "角色化表达只能添加主观感受，不得新增可验证事实。",
   "",

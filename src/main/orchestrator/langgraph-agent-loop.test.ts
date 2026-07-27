@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("./task-router", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./task-router")>();
+  return { ...actual, ENABLE_TASK_ROUTER: false };
+});
 import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
 import { ExecutionLedger } from "./execution-ledger";
 import { contextRefRegistry } from "./tool-context";

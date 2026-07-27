@@ -825,6 +825,181 @@ function formatTime(at: number): string {
   return `${hh}:${mm}`;
 }
 
+/** 渲染 Task Plan 进度卡（只读浮动面板，可拖动）。 */
+interface PlanStepSnapshot {
+  stepId: string;
+  objective: string;
+  status: "pending" | "running" | "completed" | "failed" | "skipped" | "superseded";
+  failureMessage?: string;
+}
+interface PlanSnapshot {
+  planId: string;
+  goal: string;
+  planStatus: string;
+  steps: PlanStepSnapshot[];
+  replanCount: number;
+  timestamp: number;
+}
+const PLAN_CARD_KEY = "cyrene_plan_card_position";
+const TERMINAL_STATUSES = ["completed", "failed", "cancelled"];
+let planCardFadeTimer: number | null = null;
+
+function clampPlanCardPosition(x: number, y: number, card: HTMLElement): { x: number; y: number } {
+  const chatEl = document.querySelector(".chat") as HTMLElement;
+  if (!chatEl) return { x, y };
+  const bounds = chatEl.getBoundingClientRect();
+  const cardRect = card.getBoundingClientRect();
+  const maxX = bounds.width - cardRect.width;
+  const maxY = bounds.height - cardRect.height;
+  return {
+    x: Math.max(0, Math.min(x, maxX)),
+    y: Math.max(0, Math.min(y, maxY)),
+  };
+}
+
+function renderPlanCard(snapshot: PlanSnapshot): void {
+  const chatEl = document.querySelector(".chat") as HTMLElement;
+  if (!chatEl) return;
+
+  let card = document.querySelector(".plan-card") as HTMLElement | null;
+
+  // 首次创建
+  if (!card) {
+    card = document.createElement("div");
+    card.className = "plan-card";
+    chatEl.appendChild(card);
+
+    // 恢复位置
+    let savedPos: { x: number; y: number } | null = null;
+    try { savedPos = JSON.parse(localStorage.getItem(PLAN_CARD_KEY) || "null"); } catch { /* ignore */ }
+    const defaultX = chatEl.clientWidth - 340;
+    const pos = clampPlanCardPosition(savedPos?.x ?? defaultX, savedPos?.y ?? 60, card);
+    card.style.left = pos.x + "px";
+    card.style.top = pos.y + "px";
+
+    // 拖动逻辑
+    let dragging = false;
+    let dragOffsetX = 0;
+    let dragOffsetY = 0;
+    card.addEventListener("mousedown", (e) => {
+      const header = (e.target as HTMLElement).closest(".plan-card__header");
+      if (!header) return;
+      dragging = true;
+      const rect = card!.getBoundingClientRect();
+      dragOffsetX = e.clientX - rect.left;
+      dragOffsetY = e.clientY - rect.top;
+      e.preventDefault();
+    });
+    document.addEventListener("mousemove", (e) => {
+      if (!dragging || !card) return;
+      const chatBounds = chatEl.getBoundingClientRect();
+      const x = e.clientX - chatBounds.left - dragOffsetX;
+      const y = e.clientY - chatBounds.top - dragOffsetY;
+      const clamped = clampPlanCardPosition(x, y, card);
+      card.style.left = clamped.x + "px";
+      card.style.top = clamped.y + "px";
+    });
+    document.addEventListener("mouseup", () => {
+      if (!dragging || !card) return;
+      dragging = false;
+      try {
+        localStorage.setItem(PLAN_CARD_KEY, JSON.stringify({
+          x: parseInt(card.style.left) || 0,
+          y: parseInt(card.style.top) || 0,
+        }));
+      } catch { /* ignore */ }
+    });
+
+    // 悬停暂停淡出
+    card.addEventListener("mouseenter", () => {
+      if (planCardFadeTimer) { clearTimeout(planCardFadeTimer); planCardFadeTimer = null; }
+      card!.classList.remove("plan-card--fading");
+    });
+    card.addEventListener("mouseleave", () => {
+      startPlanCardFadeIfTerminal(card!);
+    });
+
+    // 窗口 resize 时纠正越界
+    window.addEventListener("resize", () => {
+      if (!card || card.classList.contains("plan-card--fading")) return;
+      const clamped = clampPlanCardPosition(
+        parseInt(card.style.left) || 0,
+        parseInt(card.style.top) || 0,
+        card,
+      );
+      card.style.left = clamped.x + "px";
+      card.style.top = clamped.y + "px";
+    });
+  }
+
+  // 更新内容
+  card.classList.remove("plan-card--fading");
+
+  const statusLabels: Record<string, string> = {
+    running: "执行中", completed: "完成", failed: "失败", cancelled: "已取消",
+    awaiting_user: "等待用户", paused: "已暂停",
+  };
+  const statusLabel = statusLabels[snapshot.planStatus] ?? snapshot.planStatus;
+  const badgeClass = snapshot.planStatus === "running" ? "running"
+    : snapshot.planStatus === "completed" ? "completed"
+    : snapshot.planStatus === "failed" ? "failed"
+    : snapshot.planStatus === "cancelled" ? "cancelled"
+    : snapshot.planStatus === "awaiting_user" ? "awaiting_user"
+    : "paused";
+
+  const stepIcons: Record<string, string> = {
+    pending: "⬜", running: "🔄", completed: "✅",
+    failed: "❌", skipped: "⏭️", superseded: "──",
+  };
+
+  const stepsHtml = snapshot.steps.map((s) => {
+    const icon = stepIcons[s.status] ?? "⬜";
+    const failureHtml = s.failureMessage
+      ? `<div class="plan-card__step-failure">${escapeHtml(s.failureMessage)}</div>`
+      : "";
+    return `<div class="plan-card__step plan-card__step--${s.status}">
+      <span class="plan-card__step-icon">${icon}</span>
+      <span class="plan-card__step-text">${escapeHtml(s.objective)}</span>
+    </div>${failureHtml}`;
+  }).join("");
+
+  const footerHtml = snapshot.replanCount > 0
+    ? `<div class="plan-card__footer">重规划 ${snapshot.replanCount} 次</div>`
+    : "";
+
+  card.innerHTML = `
+    <div class="plan-card__header">
+      <span class="plan-card__icon">📋</span>
+      <span class="plan-card__goal">${escapeHtml(snapshot.goal)}</span>
+      <span class="plan-card__badge plan-card__badge--${badgeClass}">${statusLabel}</span>
+    </div>
+    <div class="plan-card__steps">${stepsHtml}</div>
+    ${footerHtml}
+  `;
+
+  // 终态淡出
+  if (TERMINAL_STATUSES.includes(snapshot.planStatus)) {
+    startPlanCardFadeIfTerminal(card);
+  } else {
+    if (planCardFadeTimer) { clearTimeout(planCardFadeTimer); planCardFadeTimer = null; }
+  }
+}
+
+function startPlanCardFadeIfTerminal(card: HTMLElement): void {
+  const snapshot = (card.querySelector(".plan-card__badge")?.textContent ?? "");
+  if (!TERMINAL_STATUSES.some(s => {
+    const labels: Record<string, string> = { completed: "完成", failed: "失败", cancelled: "已取消" };
+    return labels[s] === snapshot;
+  })) return;
+  if (planCardFadeTimer) clearTimeout(planCardFadeTimer);
+  planCardFadeTimer = window.setTimeout(() => {
+    card.classList.add("plan-card--fading");
+    setTimeout(() => {
+      if (card.classList.contains("plan-card--fading")) card.remove();
+    }, 400);
+  }, 5000);
+}
+
 /** 渲染左上角任务进度面板。todos 为空时收起并稍后移除。
  *  面板可收缩/展开：点击 header 或 toggle 按钮切换。 */
 function renderTodoPanel(state: TodoState | null): void {
@@ -3603,6 +3778,8 @@ async function send(): Promise<void> {
                   });
               messagesEl.appendChild(card);
               messagesEl.scrollTop = messagesEl.scrollHeight;
+            } else if (event.name === "cyrene.taskPlan") {
+              renderPlanCard(event.value);
             }
             break;
           case "RUN_FINISHED":

@@ -122,9 +122,8 @@ describe("buildRouterCapabilities", () => {
 // ── runTaskRouter 测试 ────────────────────
 
 describe("runTaskRouter", () => {
-  it("returns direct when feature flag is off (no route callback provided)", () => {
-    // ENABLE_TASK_ROUTER is false by default
-    expect(ENABLE_TASK_ROUTER).toBe(false);
+  it("has feature flag enabled", () => {
+    expect(ENABLE_TASK_ROUTER).toBe(true);
   });
 
   it("uses shortcut path with defaultExecutionMode from metadata", async () => {
