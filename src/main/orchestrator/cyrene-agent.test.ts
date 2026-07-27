@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { CyreneAgent, classifyAbortError } from "./cyrene-agent";
+import { CyreneAgent, classifyRunError } from "./cyrene-agent";
 import { AgentRuntimeError } from "./agent-runtime-error";
+import { AgentExecutionError } from "./run-execution-status";
 import { runTwoPhaseFcLoop } from "./two-phase-fc-loop";
 import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
 import { requestUserClarification } from "../user-choice";
@@ -102,9 +103,9 @@ describe("CyreneAgent", () => {
   });
 });
 
-describe("classifyAbortError", () => {
+describe("classifyRunError", () => {
   it("returns user_cancelled with empty message when source is user_cancelled", () => {
-    const result = classifyAbortError(
+    const result = classifyRunError(
       new DOMException("aborted", "AbortError"),
       "user_cancelled",
       "run-1", "conv-1", "soul", true,
@@ -114,7 +115,7 @@ describe("classifyAbortError", () => {
   });
 
   it("returns call_timeout with phase-aware message when in soul with tool results", () => {
-    const result = classifyAbortError(
+    const result = classifyRunError(
       new DOMException("aborted", "AbortError"),
       "call_timeout",
       "run-2", "conv-2", "soul", true,
@@ -125,7 +126,7 @@ describe("classifyAbortError", () => {
   });
 
   it("returns call_timeout with generic message when before soul (no tool results)", () => {
-    const result = classifyAbortError(
+    const result = classifyRunError(
       new DOMException("aborted", "AbortError"),
       "call_timeout",
       "run-3", "conv-3", "decide", false,
@@ -136,7 +137,7 @@ describe("classifyAbortError", () => {
   });
 
   it("returns run_timeout for E_AGENT_GRAPH_TIMEOUT", () => {
-    const result = classifyAbortError(
+    const result = classifyRunError(
       new Error("E_AGENT_GRAPH_TIMEOUT"),
       undefined,
       "run-4", "conv-4", "execute", false,
@@ -146,7 +147,7 @@ describe("classifyAbortError", () => {
   });
 
   it("returns run_timeout with tool-result message when in soul phase", () => {
-    const result = classifyAbortError(
+    const result = classifyRunError(
       new Error("E_AGENT_GRAPH_TIMEOUT"),
       undefined,
       "run-5", "conv-5", "soul", true,
@@ -156,7 +157,7 @@ describe("classifyAbortError", () => {
   });
 
   it("returns unknown_abort when abortSource is undefined and error is AbortError", () => {
-    const result = classifyAbortError(
+    const result = classifyRunError(
       new DOMException("aborted", "AbortError"),
       undefined,
       "run-6", "conv-6", "unknown", false,
@@ -165,18 +166,23 @@ describe("classifyAbortError", () => {
     expect(result.userMessage).toBe("操作已中断，请重试。");
   });
 
-  it("returns not_abort for non-abort errors", () => {
-    const result = classifyAbortError(
-      new Error("E_MODEL_REQUEST_FAILED"),
+  it("returns fixed safe message for unknown plain Error (no raw message leak)", () => {
+    const result = classifyRunError(
+      new Error("模型请求失败：HTTP 529 - {\"error\":{\"message\":\"overloaded\"}}"),
       undefined,
       "run-7", "conv-7", "decide", false,
     );
     expect(result.source).toBe("upstream_cleanup");
-    expect(result.userMessage).toBe("E_MODEL_REQUEST_FAILED");
+    // 白名单策略：未知 plain Error 使用固定安全消息，绝不展示原始 message
+    expect(result.userMessage).toBe("请求处理失败，请重试。");
+    expect(result.userMessage).not.toContain("HTTP");
+    expect(result.userMessage).not.toContain("overloaded");
+    // 原始 message 保留在 diagnostics 供内部日志
+    expect(result.diagnostics.errorMessage).toContain("HTTP 529");
   });
 
   it("includes runId, conversationId, phase in diagnostics", () => {
-    const result = classifyAbortError(
+    const result = classifyRunError(
       new DOMException("aborted", "AbortError"),
       "call_timeout",
       "run-xyz", "conv-abc", "soul", true,
@@ -188,7 +194,7 @@ describe("classifyAbortError", () => {
   });
 
   it("never contains raw English AbortError text in userMessage", () => {
-    const result = classifyAbortError(
+    const result = classifyRunError(
       new DOMException("This operation was aborted", "AbortError"),
       "upstream_cleanup",
       "run-8", "conv-8", "soul", true,
@@ -201,7 +207,7 @@ describe("classifyAbortError", () => {
   it("call timeout after unsubscribe still classifies as call_timeout (first-source-wins)", () => {
     // 模拟：先 call_timeout，然后 user_cancelled
     // 由于 first-source-wins，abortSource 应该是 call_timeout
-    const result = classifyAbortError(
+    const result = classifyRunError(
       new DOMException("aborted", "AbortError"),
       "call_timeout",  // 第一个来源
       "run-9", "conv-9", "soul", true,
@@ -215,7 +221,7 @@ describe("classifyAbortError", () => {
       "E_MODEL_REQUEST_FAILED",
       "模型请求失败：HTTP 529 - {\"error\":{\"message\":\"overloaded\",\"type\":\"too_many_requests\"}}",
     );
-    const result = classifyAbortError(
+    const result = classifyRunError(
       err, undefined, "run-10", "conv-10", "soul", false,
     );
     expect(result.userMessage).toBe("模型服务暂时不可用，请稍后重试。");
@@ -228,7 +234,7 @@ describe("classifyAbortError", () => {
 
   it("AgentRuntimeError E_AGENT_NO_PROGRESS returns safe message", () => {
     const err = new AgentRuntimeError("E_AGENT_NO_PROGRESS", "no progress after 3 attempts");
-    const result = classifyAbortError(
+    const result = classifyRunError(
       err, undefined, "run-11", "conv-11", "execute", false,
     );
     expect(result.userMessage).toBe("请求处理遇到问题，请重试。");
@@ -237,7 +243,7 @@ describe("classifyAbortError", () => {
 
   it("AgentRuntimeError E_AGENT_GRAPH_ITERATION_LIMIT returns safe message", () => {
     const err = new AgentRuntimeError("E_AGENT_GRAPH_ITERATION_LIMIT", "iteration limit reached");
-    const result = classifyAbortError(
+    const result = classifyRunError(
       err, undefined, "run-12", "conv-12", "decide", false,
     );
     expect(result.userMessage).toBe("请求处理步骤过多，请简化问题后重试。");
@@ -249,7 +255,7 @@ describe("classifyAbortError", () => {
       "E_MODEL_REQUEST_FAILED",
       "模型请求失败：HTTP 429 - rate limited",
     );
-    const result = classifyAbortError(
+    const result = classifyRunError(
       err, undefined, "run-13", "conv-13", "decide", false,
     );
     expect(result.userMessage).toBe("模型服务暂时不可用，请稍后重试。");
@@ -261,11 +267,44 @@ describe("classifyAbortError", () => {
       "E_MODEL_REQUEST_FAILED",
       "模型请求失败：connection refused",
     );
-    const result = classifyAbortError(
+    const result = classifyRunError(
       err, undefined, "run-14", "conv-14", "soul", true,
     );
     expect(result.userMessage).toBe("模型服务暂时不可用，请稍后重试。");
     expect(result.diagnostics.httpStatus).toBeUndefined();
+    expect(result.diagnostics.errorCode).toBe("E_MODEL_REQUEST_FAILED");
+  });
+
+  it("unknown plain Error with HTTP body → fixed safe message, no leak", () => {
+    const err = new Error(
+      '模型请求失败：HTTP 529 - {"error":{"message":"overloaded","request_id":"abc-123"}} Authorization: Bearer xxx',
+    );
+    const result = classifyRunError(err, undefined, "run-15", "conv-15", "decide", false);
+    expect(result.userMessage).toBe("请求处理失败，请重试。");
+    expect(result.userMessage).not.toContain("HTTP");
+    expect(result.userMessage).not.toContain("overloaded");
+    expect(result.userMessage).not.toContain("request_id");
+    expect(result.userMessage).not.toContain("Authorization");
+    expect(result.userMessage).not.toContain("Bearer");
+    // 原始信息保留在 diagnostics
+    expect(result.diagnostics.errorMessage).toContain("HTTP 529");
+  });
+
+  it("AgentExecutionError passes through cause to diagnostics (cause chain intact)", () => {
+    const innerErr = new AgentRuntimeError(
+      "E_MODEL_REQUEST_FAILED",
+      "模型请求失败：HTTP 500 - internal",
+    );
+    const execStatus = {
+      phase: "soul" as const,
+      successfulTools: [],
+      createdArtifacts: [],
+      taskCompletionConfirmed: false,
+    };
+    const execErr = new AgentExecutionError("LangGraph execution failed", execStatus, { cause: innerErr });
+    const result = classifyRunError(execErr, undefined, "run-16", "conv-16", "soul", false);
+    expect(result.userMessage).toBe("模型服务暂时不可用，请稍后重试。");
+    expect(result.diagnostics.httpStatus).toBe(500);
     expect(result.diagnostics.errorCode).toBe("E_MODEL_REQUEST_FAILED");
   });
 });

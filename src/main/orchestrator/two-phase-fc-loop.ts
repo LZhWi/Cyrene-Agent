@@ -35,6 +35,7 @@
 
 import { recordUsage } from "../token-usage-store";
 import { stripLeakedChatTimeContext } from "../chat-time-context";
+import { AgentRuntimeError } from "./agent-runtime-error";
 import { compressConversation } from "./context-manager";
 import { truncateToolResult } from "./context-manager";
 import type {
@@ -291,7 +292,10 @@ async function callAdapter(
     });
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
-      throw new Error("模型请求失败：HTTP " + response.status + (errorText ? " — " + errorText.slice(0, 200) : ""));
+      throw new AgentRuntimeError(
+        "E_MODEL_REQUEST_FAILED",
+        `模型请求失败：HTTP ${response.status}${errorText ? ` - ${errorText.slice(0, 200)}` : ""}`,
+      );
     }
     return await response.json();
   } finally {

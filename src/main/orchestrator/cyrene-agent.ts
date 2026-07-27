@@ -371,7 +371,7 @@ export class CyreneAgent extends AbstractAgent {
           const execStatus = err instanceof AgentExecutionError ? err.executionStatus : undefined;
           const hasToolResults = (execStatus?.successfulTools.length ?? 0) > 0;
           const phase = execStatus?.phase ?? "unknown";
-          const classification = classifyAbortError(
+          const classification = classifyRunError(
             err, abortSource, runId, conversationId, phase, hasToolResults,
           );
           console.error(LOG_PREFIX, `run 失败 [${classification.source}]:`, classification.diagnostics);
@@ -429,7 +429,7 @@ export interface AbortDiagnostic {
 }
 
 /** 分类 abort/error 来源，返回用户安全消息和诊断信息 */
-export function classifyAbortError(
+export function classifyRunError(
   err: unknown,
   abortSource: AbortSource | undefined,
   runId: string,
@@ -469,6 +469,15 @@ export function classifyAbortError(
     (err instanceof Error && err.name === "AbortError") ||
     (typeof err === "object" && err !== null && "name" in err && (err as { name: string }).name === "AbortError");
 
+  // AgentExecutionError：解包 cause 找真实错误类型（保留 diagnostics 中的 status 和 cause 链）
+  if (err instanceof AgentExecutionError) {
+    if (err.cause instanceof Error) {
+      return classifyRunError(
+        err.cause, abortSource, runId, conversationId, phase, hasToolResults,
+      );
+    }
+  }
+
   // AgentRuntimeError（E_MODEL_REQUEST_FAILED 等）：映射为用户安全消息，避免泄露 HTTP 原始响应
   if (err instanceof AgentRuntimeError) {
     const safeMessages: Record<string, string> = {
@@ -490,10 +499,12 @@ export function classifyAbortError(
   }
 
   if (!isAbort) {
+    // 未知 plain Error：使用白名单固定安全消息，绝不展示原始 message
+    // （message 可能含 HTTP body、request_id、Authorization 等内部信息）
     return {
       source: abortSource ?? "upstream_cleanup",
       phase,
-      userMessage: err instanceof Error ? err.message : String(err),
+      userMessage: "请求处理失败，请重试。",
       diagnostics,
     };
   }
