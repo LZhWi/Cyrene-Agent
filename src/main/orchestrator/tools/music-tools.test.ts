@@ -193,7 +193,7 @@ describe("music Agent tools", () => {
     ));
 
     expect(tool.inputSchema).toEqual(expect.objectContaining({ required: ["candidateRef"] }));
-    expect(tool.controlledInput).toEqual({ candidateRef: "context_ref" });
+    expect(tool.controlledInput).toEqual({ candidateRef: { type: "context_ref", kind: "candidate" } });
     expect(service.playTrack).toHaveBeenCalledWith({
       provider: "netease-cloud-music",
       setId: "daily-raw-id",
@@ -260,7 +260,7 @@ describe("music Agent tools", () => {
     const tool = buildMusicTools(service as never, { contextRefs, sendCard: vi.fn(() => true) })
       .find((candidate) => candidate.id === "music_present_tracks")!;
 
-    expect(tool.controlledInput).toEqual({ candidateRefs: "context_ref_array" });
+    expect(tool.controlledInput).toEqual({ candidateRefs: { type: "context_ref_array", kind: "candidate" } });
 
     await tool.execute({ candidateRefs: [second, first] }, { userQuery: "展示", conversationId: "c1", contextRefs });
 
