@@ -13,6 +13,7 @@
 // - 错误用 observer.error() 抛，桥层捕获。
 import { AbstractAgent, type RunAgentInput } from "@ag-ui/client";
 import { EventType, type BaseEvent } from "@ag-ui/core";
+import { AgentRuntimeError } from "./agent-runtime-error";
 import { Observable } from "rxjs";
 import { toolRegistry, type ToolDefinition } from "./tool-registry";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
@@ -471,6 +472,26 @@ export function classifyAbortError(
     (err instanceof DOMException && err.name === "AbortError") ||
     (err instanceof Error && err.name === "AbortError") ||
     (typeof err === "object" && err !== null && "name" in err && (err as { name: string }).name === "AbortError");
+
+  // AgentRuntimeError（E_MODEL_REQUEST_FAILED 等）：映射为用户安全消息，避免泄露 HTTP 原始响应
+  if (err instanceof AgentRuntimeError) {
+    const safeMessages: Record<string, string> = {
+      E_MODEL_REQUEST_FAILED: "模型服务暂时不可用，请稍后重试。",
+      E_AGENT_NO_PROGRESS: "请求处理遇到问题，请重试。",
+      E_AGENT_GRAPH_ITERATION_LIMIT: "请求处理步骤过多，请简化问题后重试。",
+    };
+    const userMessage = safeMessages[err.code] ?? "请求处理出错，请重试。";
+    // 从消息中提取 HTTP 状态码供诊断（不暴露给用户）
+    const httpMatch = err.message.match(/HTTP\s+(\d{3})/);
+    if (httpMatch) diagnostics.httpStatus = Number(httpMatch[1]);
+    diagnostics.errorCode = err.code;
+    return {
+      source: abortSource ?? "upstream_cleanup",
+      phase,
+      userMessage,
+      diagnostics,
+    };
+  }
 
   if (!isAbort) {
     return {

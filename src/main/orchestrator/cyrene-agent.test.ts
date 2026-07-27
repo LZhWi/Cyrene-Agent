@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { CyreneAgent, classifyAbortError } from "./cyrene-agent";
+import { AgentRuntimeError } from "./agent-runtime-error";
 import { runTwoPhaseFcLoop } from "./two-phase-fc-loop";
 import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
 import { requestUserClarification } from "../user-choice";
@@ -207,5 +208,64 @@ describe("classifyAbortError", () => {
     );
     expect(result.source).toBe("call_timeout");
     expect(result.userMessage).toContain("超时");
+  });
+
+  it("AgentRuntimeError E_MODEL_REQUEST_FAILED returns safe message, not raw HTTP body", () => {
+    const err = new AgentRuntimeError(
+      "E_MODEL_REQUEST_FAILED",
+      "模型请求失败：HTTP 529 - {\"error\":{\"message\":\"overloaded\",\"type\":\"too_many_requests\"}}",
+    );
+    const result = classifyAbortError(
+      err, undefined, "run-10", "conv-10", "soul", false,
+    );
+    expect(result.userMessage).toBe("模型服务暂时不可用，请稍后重试。");
+    expect(result.userMessage).not.toContain("529");
+    expect(result.userMessage).not.toContain("overloaded");
+    expect(result.userMessage).not.toContain("HTTP");
+    expect(result.diagnostics.httpStatus).toBe(529);
+    expect(result.diagnostics.errorCode).toBe("E_MODEL_REQUEST_FAILED");
+  });
+
+  it("AgentRuntimeError E_AGENT_NO_PROGRESS returns safe message", () => {
+    const err = new AgentRuntimeError("E_AGENT_NO_PROGRESS", "no progress after 3 attempts");
+    const result = classifyAbortError(
+      err, undefined, "run-11", "conv-11", "execute", false,
+    );
+    expect(result.userMessage).toBe("请求处理遇到问题，请重试。");
+    expect(result.diagnostics.errorCode).toBe("E_AGENT_NO_PROGRESS");
+  });
+
+  it("AgentRuntimeError E_AGENT_GRAPH_ITERATION_LIMIT returns safe message", () => {
+    const err = new AgentRuntimeError("E_AGENT_GRAPH_ITERATION_LIMIT", "iteration limit reached");
+    const result = classifyAbortError(
+      err, undefined, "run-12", "conv-12", "decide", false,
+    );
+    expect(result.userMessage).toBe("请求处理步骤过多，请简化问题后重试。");
+    expect(result.diagnostics.errorCode).toBe("E_AGENT_GRAPH_ITERATION_LIMIT");
+  });
+
+  it("AgentRuntimeError with HTTP 429 extracts status to diagnostics", () => {
+    const err = new AgentRuntimeError(
+      "E_MODEL_REQUEST_FAILED",
+      "模型请求失败：HTTP 429 - rate limited",
+    );
+    const result = classifyAbortError(
+      err, undefined, "run-13", "conv-13", "decide", false,
+    );
+    expect(result.userMessage).toBe("模型服务暂时不可用，请稍后重试。");
+    expect(result.diagnostics.httpStatus).toBe(429);
+  });
+
+  it("AgentRuntimeError without HTTP status still returns safe message", () => {
+    const err = new AgentRuntimeError(
+      "E_MODEL_REQUEST_FAILED",
+      "模型请求失败：connection refused",
+    );
+    const result = classifyAbortError(
+      err, undefined, "run-14", "conv-14", "soul", true,
+    );
+    expect(result.userMessage).toBe("模型服务暂时不可用，请稍后重试。");
+    expect(result.diagnostics.httpStatus).toBeUndefined();
+    expect(result.diagnostics.errorCode).toBe("E_MODEL_REQUEST_FAILED");
   });
 });
