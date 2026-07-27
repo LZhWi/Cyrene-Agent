@@ -1,9 +1,22 @@
 import { describe, expect, it } from "vitest";
 import { parseAndValidateToolCallArguments, resolveToolForCapability } from "./tool-argument-validator";
+import { controlledInputType, controlledInputKind } from "./tool-registry";
 import type { ToolDefinition } from "./tool-registry";
 import type { ToolCallResult } from "./types";
 
 function trackTool(): ToolDefinition {
+  return {
+    id: "music_play_track", capability: "music.play_track", name: "播放歌曲",
+    description: "播放可信歌曲候选", enabled: true,
+    inputSchema: {
+      type: "object", properties: { candidateRef: { type: "string" } }, required: ["candidateRef"],
+    },
+    controlledInput: { candidateRef: { type: "context_ref", kind: "candidate" } },
+    execute: async () => "ok",
+  };
+}
+
+function trackToolLegacy(): ToolDefinition {
   return {
     id: "music_play_track", capability: "music.play_track", name: "播放歌曲",
     description: "播放可信歌曲候选", enabled: true,
@@ -24,6 +37,13 @@ describe("tool argument validator", () => {
     expect(parseAndValidateToolCallArguments(
       { id: "call-1", name: "music_play_track", arguments: '{"candidateRef":"ctx_song_1"}' },
       trackTool(), ["ctx_song_1"], [],
+    )).toEqual({ candidateRef: "ctx_song_1" });
+  });
+
+  it("accepts arguments with legacy string controlledInput format", () => {
+    expect(parseAndValidateToolCallArguments(
+      { id: "call-1", name: "music_play_track", arguments: '{"candidateRef":"ctx_song_1"}' },
+      trackToolLegacy(), ["ctx_song_1"], [],
     )).toEqual({ candidateRef: "ctx_song_1" });
   });
 
@@ -53,5 +73,33 @@ describe("tool argument validator", () => {
       { id: "call-1", name: "music_play_playlist", arguments: '{"playlistId":"playlist-42"}' },
       playlistTool, [], results,
     )).toEqual({ playlistId: "playlist-42" });
+  });
+});
+
+describe("controlledInput helpers", () => {
+  it("controlledInputType extracts type from string policy", () => {
+    expect(controlledInputType("context_ref")).toBe("context_ref");
+    expect(controlledInputType("context_ref_array")).toBe("context_ref_array");
+    expect(controlledInputType("tool_result")).toBe("tool_result");
+  });
+
+  it("controlledInputType extracts type from object policy", () => {
+    expect(controlledInputType({ type: "context_ref", kind: "candidate" })).toBe("context_ref");
+    expect(controlledInputType({ type: "context_ref_array", kind: "candidate" })).toBe("context_ref_array");
+    expect(controlledInputType({ type: "tool_result" })).toBe("tool_result");
+  });
+
+  it("controlledInputKind returns undefined for string policy", () => {
+    expect(controlledInputKind("context_ref")).toBeUndefined();
+    expect(controlledInputKind("tool_result")).toBeUndefined();
+  });
+
+  it("controlledInputKind extracts kind from object policy", () => {
+    expect(controlledInputKind({ type: "context_ref", kind: "candidate" })).toBe("candidate");
+    expect(controlledInputKind({ type: "context_ref_array", kind: "selection_set" })).toBe("selection_set");
+  });
+
+  it("controlledInputKind returns undefined for tool_result object", () => {
+    expect(controlledInputKind({ type: "tool_result" })).toBeUndefined();
   });
 });

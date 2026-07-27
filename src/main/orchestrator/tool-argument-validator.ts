@@ -1,4 +1,5 @@
-import type { JsonSchemaProp, ToolDefinition } from "./tool-registry";
+import type { JsonSchemaProp, ToolDefinition, ControlledInputPolicy } from "./tool-registry";
+import { controlledInputType, controlledInputKind } from "./tool-registry";
 import type { ToolCallResult } from "./types";
 import type { ToolCall } from "./vendors/types";
 
@@ -74,12 +75,13 @@ function validateControlledInputs(
   for (const [key, policy] of Object.entries(tool.controlledInput ?? {})) {
     const value = args[key];
     if (value === undefined) continue;
-    if (policy === "context_ref" || policy === "context_ref_array") {
+    const policyType = controlledInputType(policy);
+    if (policyType === "context_ref" || policyType === "context_ref_array") {
       const allowed = new Set<unknown>(targetRefs);
       for (const output of successful) {
         for (const refKey of [key, "contextRef", "candidateRef", "setRef"]) collectNamedValues(output, refKey, allowed);
       }
-      const values = policy === "context_ref_array" && Array.isArray(value) ? value : [value];
+      const values = policyType === "context_ref_array" && Array.isArray(value) ? value : [value];
       if (values.some((item) => !allowed.has(item))) throw new Error("E_TOOL_ARGUMENT_SOURCE");
       continue;
     }
