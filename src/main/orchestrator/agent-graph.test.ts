@@ -243,4 +243,84 @@ describe("runAgentGraph", () => {
     expect(respond).toHaveBeenCalledTimes(1);
     expect(result.reply).toBe("完成。");
   });
+
+  it("routes refresh_state failure to refresh, then back to decide for re-decision", async () => {
+    const decisions: ActionDecision[] = [
+      { decision: "failure", reason: "action_gate_failed", code: "TARGET_REF_INVALID", disposition: "refresh_state", toolExecuted: false },
+      { decision: "respond", reason: "recovered" },
+    ];
+    const decide = vi.fn(async (state) => {
+      // 第二次 decide 应该能看到上一次失败信息
+      if (decide.mock.calls.length === 2) {
+        expect(state.lastGateFailure).toEqual({ code: "TARGET_REF_INVALID", disposition: "refresh_state" });
+      }
+      return decisions.shift()!;
+    });
+    const execute = vi.fn();
+    const respond = vi.fn(async () => "已恢复");
+
+    const result = await runAgentGraph({
+      originalQuery: "播放第三首",
+      contextualizedQuery: "播放第三首",
+      citaContextBlock: "",
+      messages: [{ role: "user", content: "播放第三首" }],
+      availableCapabilities: ["music.play_track"],
+    }, { decide, execute, respond });
+
+    expect(decide).toHaveBeenCalledTimes(2);
+    expect(execute).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(result.reply).toBe("已恢复");
+    expect(result.refreshCount).toBe(1);
+  });
+
+  it("routes refresh_state to soul when refresh budget is exhausted", async () => {
+    const decisions: ActionDecision[] = [
+      { decision: "failure", reason: "action_gate_failed", code: "TARGET_REF_INVALID", disposition: "refresh_state", toolExecuted: false },
+      { decision: "failure", reason: "action_gate_failed", code: "TARGET_REF_INVALID", disposition: "refresh_state", toolExecuted: false },
+    ];
+    const decide = vi.fn(async () => decisions.shift()!);
+    const execute = vi.fn();
+    const respond = vi.fn(async () => "失败");
+
+    const result = await runAgentGraph({
+      originalQuery: "播放第三首",
+      contextualizedQuery: "播放第三首",
+      citaContextBlock: "",
+      messages: [{ role: "user", content: "播放第三首" }],
+      availableCapabilities: ["music.play_track"],
+    }, { decide, execute, respond, maxRefresh: 1 });
+
+    // 第一次 failure -> refresh；第二次 failure -> refreshCount 已达上限 -> soul
+    expect(decide).toHaveBeenCalledTimes(2);
+    expect(execute).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(result.reply).toBe("失败");
+    expect(result.refreshCount).toBe(1);
+  });
+
+  it("routes fail_closed directly to soul without refresh", async () => {
+    const decide = vi.fn(async () => ({
+      decision: "failure" as const,
+      reason: "action_gate_failed" as const,
+      code: "REPAIR_EXHAUSTED",
+      disposition: "fail_closed" as const,
+      toolExecuted: false as const,
+    }));
+    const execute = vi.fn();
+    const respond = vi.fn(async () => "失败");
+
+    const result = await runAgentGraph({
+      originalQuery: "测试",
+      contextualizedQuery: "测试",
+      citaContextBlock: "",
+      messages: [{ role: "user", content: "测试" }],
+      availableCapabilities: ["music.play_track"],
+    }, { decide, execute, respond });
+
+    // fail_closed 不走 refresh，直接进 soul
+    expect(decide).toHaveBeenCalledTimes(1);
+    expect(respond).toHaveBeenCalledTimes(1);
+    expect(result.refreshCount).toBe(0);
+  });
 });

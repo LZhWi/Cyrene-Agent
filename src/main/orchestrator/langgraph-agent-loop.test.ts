@@ -3,6 +3,7 @@ import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
 import { ExecutionLedger } from "./execution-ledger";
 import { contextRefRegistry } from "./tool-context";
 import type { ToolDefinition } from "./tool-registry";
+import type { TwoPhaseEvent } from "./two-phase-fc-loop";
 import type {
   ChatMessage, ChatRequest, ChatResponse, ChatVendorAdapter, HttpRequest,
   ProviderCapability, ToolCall, ToolExecutionResult,
@@ -218,6 +219,14 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
       targetRefs: ["stale-ref"],
       afterSuccess: "respond",
     });
+    // 重新决策：模型仍选同一过期引用，refresh 预算用尽后转入失败回复
+    adapter.enqueueDecision({
+      decision: "act",
+      capability: "music.play_track",
+      objective: "播放第一首",
+      targetRefs: ["stale-ref"],
+      afterSuccess: "respond",
+    });
     adapter.enqueueText("工具没有执行。");
     const executeTool = vi.fn();
 
@@ -227,6 +236,32 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     const lines = log.mock.calls.map((call) => call.join(" ")).join("\n");
     expect(lines).toContain("[AgentFlow] 3. 动作校验失败：TARGET_REF_INVALID");
     expect(lines).toContain("[AgentFlow]    工具未执行；转入失败回复");
+  });
+
+  it("recovers from a stale target ref via refresh re-decision", async () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    vi.mocked(contextRefRegistry.resolve).mockImplementation(() => {
+      throw new Error("stale ref");
+    });
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({
+      decision: "act",
+      capability: "music.play_track",
+      objective: "播放第一首",
+      targetRefs: ["stale-ref"],
+      afterSuccess: "respond",
+    });
+    // 重新决策：模型看到 previousGateFailure，改为直接回复
+    adapter.enqueueDecision({ decision: "respond", reason: "引用已失效，请重新搜索" });
+    adapter.enqueueText("引用已过期了，我帮你重新搜一下好不好？");
+    const executeTool = vi.fn();
+
+    await runLangGraphAgentLoop(options(adapter, executeTool));
+
+    expect(executeTool).not.toHaveBeenCalled();
+    const lines = log.mock.calls.map((call) => call.join(" ")).join("\n");
+    expect(lines).toContain("[AgentFlow] 3. 重新决策（上次失败：TARGET_REF_INVALID）");
+    expect(lines).toContain("[AgentFlow] 3. 选择动作：直接回复");
   });
 
   it("uses the choice-card answer to continue from ask_user to tool execution", async () => {
@@ -500,5 +535,22 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
 
     expect(imageCaptionFallback).toHaveBeenCalledTimes(1);
     expect(adapter.requests[1].messages).toContainEqual({ role: "user", content: "[图片描述] 一张夜景照片" });
+  });
+
+  it("strips MiniMax uffff-delimited tool protocol leak from Soul reply", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({ decision: "respond", reason: "done" });
+    // Soul 回复中泄漏了 MiniMax 工具协议文本（\uffff 分隔 + 中文标签）
+    adapter.enqueueText("\uffff\uffff[系统提示] 请按以下 JSON 格式输出工具调用：\n{\"action\":\"music_play_track\"}\uffff[工具调用]\uffff[{\"type\":\"function\"}]\uffff[工具结果]\uffff{\"error\":\"不可用\"}");
+    const executeTool = vi.fn();
+    const events: TwoPhaseEvent[] = [];
+    await runLangGraphAgentLoop({ ...options(adapter, executeTool), onEvent: (e) => events.push(e) });
+
+    // 泄漏文本被清空后应触发兜底回复，不应包含协议原文
+    const textEvents = events.filter((e) => e.type === "text_message_content");
+    const reply = textEvents.map((e) => (e as { delta?: string }).delta).join("");
+    expect(reply).not.toContain("\uffff");
+    expect(reply).not.toContain("[系统提示]");
+    expect(reply).not.toContain("[工具调用]");
   });
 });

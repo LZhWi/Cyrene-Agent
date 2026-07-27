@@ -228,7 +228,7 @@ describe("runTwoPhaseFcLoop", () => {
     // soul 阶段 system
     expect(soulReq.messages[0].role).toBe("system");
     expect(String(soulReq.messages[0].content)).toContain("SOUL_SYSTEM_BASE");
-    expect(String(soulReq.messages[0].content)).toContain('"calls":[]');
+    expect(String(soulReq.messages[0].content)).toContain('"actions":[]');
     // soul 阶段不携带 tools
     expect(soulReq.tools).toBeUndefined();
 
@@ -279,7 +279,7 @@ describe("runTwoPhaseFcLoop", () => {
     expect(soulReq.tools).toBeUndefined();
     // soul 阶段 system 同时包含 soul base 与本轮执行事实
     expect(String(soulReq.messages[0].content)).toContain("SOUL_SYSTEM_BASE");
-    expect(String(soulReq.messages[0].content)).toContain('"toolId":"weather"');
+    expect(String(soulReq.messages[0].content)).toContain('"executionStatus":"succeeded"');
   });
 
   it("纯聊天场景：tool 阶段 no_tool → soul 阶段回复", async () => {
@@ -389,7 +389,7 @@ describe("runTwoPhaseFcLoop", () => {
       errorCode: "E_CONTEXT_REF_NOT_FOUND",
     });
     const sysContent = String(adapter.requests.at(-1)!.messages[0].content);
-    expect(sysContent).toContain('"status":"failed"');
+    expect(sysContent).toContain('"executionStatus":"failed"');
     expect(sysContent).toContain('"errorCode":"E_CONTEXT_REF_NOT_FOUND"');
   });
 
@@ -443,10 +443,9 @@ describe("runTwoPhaseFcLoop", () => {
     const soulReq = adapter.requests[adapter.requests.length - 1];
     const sysContent = String(soulReq.messages[0].content);
     expect(sysContent).toContain("SOUL_SYSTEM_BASE");
-    expect(sysContent).toContain("[TOOL_EXECUTION_CONTEXT]");
-    expect(sysContent).toContain('"toolId":"weather"');
-    expect(sysContent).toContain('"status":"succeeded"');
-    expect(sysContent).toContain("北京：晴 25°C");
+    expect(sysContent).toContain("[SOUL_EXECUTION_CONTEXT]");
+    expect(sysContent).toContain('"executionStatus":"succeeded"');
+    expect(sysContent).not.toContain('"toolId"');
     expect(soulReq.messages).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: "tool", name: "weather", content: "北京：晴 25°C" }),
     ]));
@@ -604,9 +603,9 @@ describe("runTwoPhaseFcLoop", () => {
     expect(result.reply).toBe("今天的推荐已经整理好啦，看看卡片里有没有喜欢的♪");
     const soulReq = adapter.requests.at(-1)!;
     const sysContent = String(soulReq.messages[0].content);
-    expect(sysContent).toContain('"kind":"recommendations"');
-    expect(sysContent).toContain('"name":"最初的记忆"');
-    expect(sysContent).toContain('"artists":["徐佳莹"]');
+    expect(sysContent).toContain('[SOUL_EXECUTION_CONTEXT]');
+    expect(sysContent).toContain('"executionStatus":"succeeded"');
+    expect(sysContent).not.toContain('"kind":"recommendations"');
   });
 
   it("tells Soul explicitly when no tool ran instead of using a reply regex", async () => {
@@ -623,7 +622,7 @@ describe("runTwoPhaseFcLoop", () => {
 
     expect(result.reply).toBe("正在为你播放♪");
     const sysContent = String(adapter.requests.at(-1)!.messages[0].content);
-    expect(sysContent).toContain('"calls":[]');
+    expect(sysContent).toContain('"actions":[]');
   });
 
   it("provides dispatched playback as a runtime fact and leaves wording to Soul", async () => {
@@ -649,9 +648,9 @@ describe("runTwoPhaseFcLoop", () => {
 
     expect(result.reply).toBe("已经开始播放了♪");
     const sysContent = String(adapter.requests.at(-1)!.messages[0].content);
-    expect(sysContent).toContain('"toolId":"music_play_track"');
-    expect(sysContent).toContain('"state":"dispatched"');
-    expect(sysContent).toContain("effect.state=dispatched");
+    expect(sysContent).toContain('"executionStatus":"succeeded"');
+    expect(sysContent).not.toContain('"toolId"');
+    expect(sysContent).not.toContain('effect.state');
   });
 
   it("keeps style sampling out of tool requests and applies it to Soul only", async () => {

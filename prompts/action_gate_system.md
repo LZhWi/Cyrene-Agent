@@ -57,11 +57,39 @@
 - respond：单步任务，工具成功后直接进入 Soul 生成回复
 - replan：多步任务，工具成功后回到 Action Gate 重新决策
 
+判断规则：如果用户请求需要多个工具调用才能完成，必须使用 `replan`。
+
+多步任务示例（必须 replan）：
+- "搜索并播放"：先 `music_search` 获取候选，再 `music_play_track` 播放
+- "查天气然后设置提醒"：先查天气，再设提醒
+- "搜索歌曲并加入歌单"：先搜索，再加歌单
+
+单步任务示例（用 respond）：
+- "查杭州天气"：一次天气查询即完成
+- "搜索左转灯"：只需搜索并展示结果，等待用户选择
+- "播放第一首"：已有候选引用，直接播放
+
 ## insufficient_context 处理
 
 CITA 的 rewriteStatus="insufficient_context" 是上下文不足的证据。
 只有缺失信息确实阻止响应或工具执行时，才选择 ask_user。
 有时即使指代不完全明确，也可能依靠 Runtime 状态唯一确定答案。
+
+## 重新决策规则
+
+当 `previousGateFailure` 存在时，说明上一次决策失败了，你获得了重新决策的机会。
+
+如果 `previousGateFailure.code` 为 `TARGET_REF_INVALID`，说明你上次选择的 targetRefs 已过期或不存在。
+
+**禁止生成、猜测或编造新的引用。** targetRefs 只能从 `trustedRefs` 中选择已经存在的引用。
+
+你只能选以下三种之一：
+
+1. 改选 `trustedRefs` 中另一个仍然有效的引用
+2. 改选不需要引用的能力（`referencePolicy=none` 或 `tool_result`，返回 `targetRefs: []`，例如重新搜索）
+3. 转为 `respond` 或 `ask_user`
+
+不得重复选择刚才失效的同一引用。
 
 ## 安全声明
 

@@ -1,4 +1,4 @@
-import type { ActionDecision } from "./agent-graph";
+import type { ActionDecision, GateFailureInfo } from "./agent-graph";
 import { buildToolExecutionContext } from "./tool-execution-context";
 import type { ToolCallResult } from "./types";
 import type {
@@ -69,6 +69,8 @@ export interface RunActionGateInput {
   toolResults: ToolCallResult[];
   profile: StructuredOutputProfile;
   actionGateSystemPrompt?: string;
+  /** 图级 refresh 节点传入的上一次 Action Gate 失败信息，供模型在重新决策时参考。 */
+  lastGateFailure?: GateFailureInfo;
   generate: (request: ChatRequest, signal: AbortSignal) => Promise<ChatResponse>;
   validateTargetRef: (ref: string) => boolean;
   signal?: AbortSignal;
@@ -204,6 +206,7 @@ function fullMachineInput(input: BuildActionGateRequestInput): object {
     trustedRefs: input.trustedRefs,
     citaContext: input.citaContextBlock,
     toolExecutionContext: buildToolExecutionContext(input.toolResults),
+    ...(input.lastGateFailure ? { previousGateFailure: input.lastGateFailure } : {}),
   };
 }
 
