@@ -37,10 +37,20 @@ function validateValue(value: unknown, schema: JsonSchemaProp): boolean {
 
 function validateRoot(args: Record<string, unknown>, tool: ToolDefinition): void {
   const schema = tool.inputSchema;
-  if (Object.keys(args).some((key) => !(key in schema.properties))) throw new Error("E_TOOL_ARGUMENT_SCHEMA");
-  if (schema.required?.some((key) => !(key in args))) throw new Error("E_TOOL_ARGUMENT_SCHEMA");
+  const extraKeys = Object.keys(args).filter((key) => !(key in schema.properties));
+  if (extraKeys.length > 0) {
+    throw new Error(`E_TOOL_ARGUMENT_SCHEMA: unknown fields: ${extraKeys.join(", ")}`);
+  }
+  const missingKeys = schema.required?.filter((key) => !(key in args)) ?? [];
+  if (missingKeys.length > 0) {
+    throw new Error(`E_TOOL_ARGUMENT_SCHEMA: missing required fields: ${missingKeys.join(", ")}`);
+  }
   for (const [key, value] of Object.entries(args)) {
-    if (!validateValue(value, schema.properties[key])) throw new Error("E_TOOL_ARGUMENT_SCHEMA");
+    if (!validateValue(value, schema.properties[key])) {
+      const expected = schema.properties[key].type;
+      const actual = Array.isArray(value) ? "array" : typeof value;
+      throw new Error(`E_TOOL_ARGUMENT_SCHEMA: field '${key}' expected ${expected}, got ${actual}`);
+    }
   }
 }
 
