@@ -242,6 +242,40 @@ function expectedRefKindsFor(tool: ToolDefinition): Set<string> | undefined {
   return kinds.size > 0 ? kinds : undefined;
 }
 
+/** Soul 失败时的确定性部分成功回复（不调用模型） */
+function buildPartialSuccessReply(status: RunExecutionStatus): string {
+  const lines: string[] = [];
+
+  if (status.taskCompletionConfirmed && status.createdArtifacts.length > 0) {
+    // 任务已确认完成 + 有文件产物
+    lines.push("任务步骤已经完成，并生成了以下文件：");
+    for (const a of status.createdArtifacts) {
+      lines.push(`- ${a.path}`);
+    }
+    lines.push("");
+    lines.push("但最终回复生成失败，你可以先查看上面的文件。");
+  } else if (status.successfulTools.length > 0) {
+    // 有成功工具但任务未确认完成
+    lines.push("部分操作已经完成：");
+    for (const t of status.successfulTools) {
+      lines.push(`- ${t.actionLabel}`);
+    }
+    if (status.createdArtifacts.length > 0) {
+      lines.push("");
+      lines.push("生成的文件：");
+      for (const a of status.createdArtifacts) {
+        lines.push(`  ${a.path}`);
+      }
+    }
+    lines.push("");
+    lines.push("但整个任务尚未确认完成，最终回复生成失败。");
+  } else {
+    lines.push("部分工具步骤已经执行成功，但最终回复生成失败。");
+  }
+
+  return lines.join("\n");
+}
+
 export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions): Promise<TwoPhaseFcResult> {
   const startedAt = Date.now();
   if (ENABLE_TASK_ROUTER) {
@@ -972,9 +1006,26 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
   } catch (error) {
     // 不重复包装
     if (error instanceof AgentExecutionError) throw error;
+
+    const snapshot = snapshotRunExecutionStatus(executionStatus);
+
+    // ── Soul 阶段失败 + 有成功工具 → 部分成功 fallback ──
+    // 用户取消（E_AGENT_GRAPH_CANCELLED）不触发
+    const isUserCancel = error instanceof Error && error.message === "E_AGENT_GRAPH_CANCELLED";
+    if (snapshot.phase === "soul" && snapshot.successfulTools.length > 0 && !isUserCancel) {
+      const partialReply = buildPartialSuccessReply(snapshot);
+      flowLog("7. Soul 失败，降级返回部分成功结果");
+      return {
+        reply: partialReply,
+        toolResults: [],  // 部分成功时不返回完整工具结果（已在 snapshot 中）
+        totalUsage: usageInput || usageOutput ? { input: usageInput, output: usageOutput } : undefined,
+        soulPhaseReason: "tool_error",
+      };
+    }
+
     throw new AgentExecutionError(
       "LangGraph execution failed",
-      snapshotRunExecutionStatus(executionStatus),
+      snapshot,
       { cause: error },
     );
   }

@@ -497,7 +497,10 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
       .mockResolvedValueOnce(new Response("{}", { status: 200 }))
       .mockResolvedValueOnce(new Response("soul failed", { status: 500 })) as unknown as typeof fetch;
 
-    await expect(runLangGraphAgentLoop({ ...options(first, executeTool), executionLedger: ledger })).rejects.toThrow("LangGraph execution failed");
+    // Soul 失败但工具成功 → 部分成功 fallback（不抛错）
+    const firstResult = await runLangGraphAgentLoop({ ...options(first, executeTool), executionLedger: ledger });
+    expect(firstResult.reply).toContain("部分操作已经完成");
+    expect(firstResult.soulPhaseReason).toBe("tool_error");
 
     const retry = new FakeAdapter();
     retry.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
@@ -591,5 +594,96 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
       const execErr = err as AgentExecutionError;
       expect(execErr.cause).not.toBeInstanceOf(AgentExecutionError);
     }
+  });
+
+  it("Soul failure + successful tool → partial success fallback (not throw)", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({ decision: "act", capability: "weather.lookup", objective: "查天气", targetRefs: [], afterSuccess: "respond" });
+    adapter.enqueueToolCall("weather", { city: "杭州" });
+    adapter.enqueueText("Soul 会失败");
+    const executeTool = vi.fn(async () => ({
+      status: "succeeded" as const,
+      output: JSON.stringify({ city: "杭州", weather: "晴", temperature: "25°C" }),
+    }));
+    // Action Gate(1) 成功, Native FC(2) 成功, Soul(3) 失败
+    let fetchCount = 0;
+    globalThis.fetch = vi.fn(async () => {
+      fetchCount++;
+      if (fetchCount === 3) return new Response("soul failed", { status: 529 });
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const result = await runLangGraphAgentLoop({
+      ...options(adapter, executeTool),
+      tools: [weatherTool()],
+    });
+
+    // 应返回部分成功回复，不抛错
+    expect(result.reply).toContain("部分操作已经完成");
+    expect(result.reply).toContain("查询天气");
+    expect(result.soulPhaseReason).toBe("tool_error");
+  });
+
+  it("Soul failure + file artifact → partial success mentions file path", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({ decision: "act", capability: "write_word", objective: "写文档", targetRefs: [], afterSuccess: "respond" });
+    adapter.enqueueToolCall("write_word", { filename: "test.docx", title: "测试", paragraphs: ["内容"] });
+    adapter.enqueueText("Soul 会失败");
+    const writeWordTool: ToolDefinition = {
+      id: "write_word", capability: "write_word", name: "写 Word",
+      description: "生成文档", enabled: true,
+      inputSchema: { type: "object", properties: { filename: { type: "string" }, title: { type: "string" }, paragraphs: { type: "array" } }, required: ["filename", "title", "paragraphs"] },
+      completionEvidence: [{ kind: "tool_succeeded" }],
+      execute: async () => "unused",
+    };
+    const executeTool = vi.fn(async () => ({
+      status: "succeeded" as const,
+      output: "[write_word] 已生成：C:\\Users\\test\\Desktop\\test.docx",
+    }));
+    // Action Gate(1) 成功, Native FC(2) 成功, Soul(3) 失败
+    let fetchCount = 0;
+    globalThis.fetch = vi.fn(async () => {
+      fetchCount++;
+      if (fetchCount === 3) return new Response("soul failed", { status: 529 });
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const result = await runLangGraphAgentLoop({
+      ...options(adapter, executeTool),
+      tools: [writeWordTool],
+    });
+
+    expect(result.reply).toContain("部分操作已经完成");
+    expect(result.reply).toContain("test.docx");
+  });
+
+  it("Soul failure + no successful tools → throws AgentExecutionError (no fallback)", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({ decision: "respond", reason: "done" });
+    // Soul 直接失败，没有工具执行
+    globalThis.fetch = vi.fn(async () => new Response("soul failed", { status: 529 })) as unknown as typeof fetch;
+
+    await expect(runLangGraphAgentLoop(options(adapter))).rejects.toThrow("LangGraph execution failed");
+  });
+
+  it("user cancel → does not trigger partial fallback", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({ decision: "act", capability: "weather.lookup", objective: "查天气", targetRefs: [], afterSuccess: "respond" });
+    adapter.enqueueToolCall("weather", { city: "杭州" });
+    adapter.enqueueText("Soul 会失败");
+    const executeTool = vi.fn(async () => ({
+      status: "succeeded" as const,
+      output: JSON.stringify({ city: "杭州", weather: "晴" }),
+    }));
+    // 模拟用户取消：signal 在 Soul 调用前已 abort → ensureBudget 抛 E_AGENT_GRAPH_CANCELLED
+    const abortController = new AbortController();
+    abortController.abort();
+    globalThis.fetch = vi.fn(async () => new Response("{}", { status: 200 })) as unknown as typeof fetch;
+
+    await expect(runLangGraphAgentLoop({
+      ...options(adapter, executeTool),
+      tools: [weatherTool()],
+      signal: abortController.signal,
+    })).rejects.toThrow();
   });
 });
