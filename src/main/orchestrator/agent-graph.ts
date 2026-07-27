@@ -95,6 +95,8 @@ export interface AgentGraphDeps {
   maxRefresh?: number;
   /** 最大重规划次数，默认 2 */
   maxReplans?: number;
+  /** Plan 状态变化时调用，发送快照给前端 */
+  onPlanUpdate?: (plan: import("./task-plan").TaskPlan, replanCount: number) => void;
   trace?: (node: string, state: AgentGraphState) => void;
 }
 
@@ -227,17 +229,42 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
     .addNode("createPlan", async (state) => {
       deps.trace?.("createPlan", state);
       if (!deps.createPlan) {
+        console.warn("[AgentGraph] CreatePlan: dep missing, skipping");
         return new Command({ goto: "decide" });
       }
+      console.log("[AgentGraph] CreatePlan entered");
       try {
         const plan = await deps.createPlan(state);
         const firstStep = plan.steps.find((s) => s.status === "pending");
+        if (firstStep) {
+          firstStep.executionId = `exec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          firstStep.status = "running";
+        }
+        console.log(`[AgentGraph] CreatePlan succeeded: steps=${plan.steps.length} goal=${plan.goal.slice(0, 80)}`);
+        deps.onPlanUpdate?.(plan, 0);
         return {
           taskPlan: plan,
           currentStepId: firstStep?.id,
         };
-      } catch {
-        // Plan 创建失败：回退到 direct 模式
+      } catch (error) {
+        // 分类错误原因，不泄漏敏感内容
+        const errStr = error instanceof Error ? error.message : String(error);
+        const errName = error instanceof Error ? error.name : "Unknown";
+        let errorType = "unknown";
+        if (errStr.includes("MODEL_REQUEST_FAILED") || errStr.includes("HTTP 5") || errStr.includes("HTTP 4")) {
+          errorType = "model_request_failed";
+        } else if (errName === "AbortError" || errStr.includes("aborted")) {
+          errorType = "abort";
+        } else if (errStr.includes("timeout") || errStr.includes("TIMEOUT")) {
+          errorType = "timeout";
+        } else if (errStr.includes("NO_JSON_OBJECT") || errStr.includes("NO_SCHEMA_VALID_OBJECT") || errStr.includes("AMBIGUOUS")) {
+          errorType = "structured_output_parse_failed";
+        } else if (errStr.includes("REPAIR_EXHAUSTED")) {
+          errorType = "repair_exhausted";
+        } else if (errStr.includes("REFUSED") || errStr.includes("CONTENT_FILTERED")) {
+          errorType = "model_refused";
+        }
+        console.error(`[AgentGraph] CreatePlan failed: type=${errorType} name=${errName} message=${errStr.slice(0, 200)}`);
         return new Command({
           update: { taskRoute: { executionMode: "direct" as const, skillIds: state.taskRoute?.skillIds ?? [], reason: "Plan creation failed, fallback to direct" } },
           goto: "decide",
@@ -262,6 +289,7 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
         if (nextStep) {
           nextStep.executionId = `exec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
           nextStep.status = "running";
+          deps.onPlanUpdate?.(plan, state.replanCount);
           return new Command({
             update: { taskPlan: plan, currentStepId: nextStep.id },
             goto: "decide",
@@ -269,6 +297,7 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
         }
         // 全部完成
         plan.status = "completed";
+        deps.onPlanUpdate?.(plan, state.replanCount);
         return new Command({
           update: { taskPlan: plan, decision: { decision: "respond" as const, reason: "plan_completed" } },
           goto: "soul",
@@ -278,6 +307,7 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
         step.status = "failed";
         step.failure = { message: result.failureReason ?? "步骤失败", failedAt: Date.now() };
         plan.updatedAt = Date.now();
+        deps.onPlanUpdate?.(plan, state.replanCount);
         return new Command({
           update: { taskPlan: plan },
           goto: "planReplan",
@@ -294,6 +324,7 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
         if (plan) {
           plan.status = "failed";
           plan.updatedAt = Date.now();
+          deps.onPlanUpdate?.(plan, state.replanCount);
         }
         return new Command({
           update: { taskPlan: plan, decision: { decision: "respond" as const, reason: "plan_failed" } },
@@ -322,6 +353,11 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
         plan.updatedAt = Date.now();
 
         const nextStep = replacementSteps[0];
+        if (nextStep) {
+          nextStep.executionId = `exec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+          nextStep.status = "running";
+        }
+        deps.onPlanUpdate?.(plan, state.replanCount + 1);
         return new Command({
           update: {
             taskPlan: plan,
@@ -352,7 +388,15 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
     })
     .addEdge(START, "route")
     .addConditionalEdges("route", (state) => {
-      if (state.taskRoute?.executionMode === "plan" && deps.createPlan) return "createPlan";
+      const mode = state.taskRoute?.executionMode;
+      const hasCreatePlan = !!deps.createPlan;
+      if (mode === "plan" && hasCreatePlan) {
+        console.log("[AgentGraph] Route transition: executionMode=plan next=createPlan");
+        return "createPlan";
+      }
+      if (mode === "plan" && !hasCreatePlan) {
+        console.warn("[AgentGraph] Route transition: executionMode=plan but createPlan dep missing, falling back to decide");
+      }
       return "decide";
     })
     .addEdge("createPlan", "decide")

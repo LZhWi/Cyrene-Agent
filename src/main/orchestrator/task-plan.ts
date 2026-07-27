@@ -82,6 +82,41 @@ export interface PendingTaskSwitch {
   createdAt: number;
 }
 
+// ── 前端进度卡快照 ────────────────────────
+
+export interface TaskPlanSnapshot {
+  planId: string;
+  goal: string;
+  planStatus: TaskPlan["status"];
+  steps: Array<{
+    stepId: string;
+    objective: string;
+    status: PlanStep["status"];
+    failureMessage?: string;
+  }>;
+  replanCount: number;
+  timestamp: number;
+}
+
+export function buildPlanSnapshot(
+  plan: TaskPlan,
+  replanCount: number,
+): TaskPlanSnapshot {
+  return {
+    planId: plan.id,
+    goal: plan.goal,
+    planStatus: plan.status,
+    steps: plan.steps.map((s) => ({
+      stepId: s.id,
+      objective: s.objective,
+      status: s.status,
+      ...(s.failure?.message ? { failureMessage: s.failure.message } : {}),
+    })),
+    replanCount,
+    timestamp: Date.now(),
+  };
+}
+
 // ── 动态 maxIterations ────────────────────
 
 export function computeMaxIterations(plan: TaskPlan | undefined): number {
@@ -453,7 +488,9 @@ export async function runCreatePlan(input: RunCreatePlanInput): Promise<TaskPlan
   });
 
   if (result.outcome === "success") return result.value;
-  throw new Error("Plan creation failed");
+  const failCode = result.failure.code;
+  const failDisp = result.failure.disposition;
+  throw new Error(`Plan creation failed: code=${failCode} disposition=${failDisp} attempts=${result.failure.attempts}`);
 }
 
 // ── replan：重规划 ────────────────────────
