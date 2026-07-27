@@ -494,8 +494,10 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       const lastResult = state.toolResults[state.toolResults.length - 1];
 
       // Plan 模式工具过滤：隐藏 hideInPlanMode 工具，确保 Action Gate 和 Native FC 都看不到
-      const inPlanMode = state.taskPlan != null
-        && !["completed", "failed", "cancelled"].includes(state.taskPlan.status);
+      // 包括 Plan 创建失败降级后的 direct 模式（requestedExecutionMode === "plan"）
+      const inPlanMode = (state.taskPlan != null
+        && !["completed", "failed", "cancelled"].includes(state.taskPlan.status))
+        || state.taskRoute?.requestedExecutionMode === "plan";
       if (inPlanMode) {
         const hidden = enabledTools.filter((t) => t.hideInPlanMode).map((t) => t.id);
         if (hidden.length > 0) {

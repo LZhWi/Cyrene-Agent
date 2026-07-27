@@ -18,6 +18,10 @@ import type { ToolDefinition } from "./tool-registry";
 
 export interface TaskRoute {
   executionMode: "direct" | "plan";
+  /** Plan 创建失败降级后保留原始意图 */
+  requestedExecutionMode?: "plan";
+  /** 降级原因 */
+  fallbackReason?: string;
   skillIds: string[];
   reason: string;
 }

@@ -223,6 +223,7 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
       }
 
       // plan 模式下，终态路由到 planVerify 而非 soul
+      // 只有真正进入 plan 模式（taskPlan 存在且 running）才走 planVerify
       const inPlanMode = state.taskRoute?.executionMode === "plan"
         && state.taskPlan?.status === "running";
       if (goto === "soul" && inPlanMode) {
@@ -317,10 +318,16 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
         }
       }
 
-      // 降级：清理 plan 状态，确保无残留
+      // 降级：清理 plan 状态，但保留原始路由意图
       return new Command({
         update: {
-          taskRoute: { executionMode: "direct" as const, skillIds: state.taskRoute?.skillIds ?? [], reason: "Plan creation failed, fallback to direct" },
+          taskRoute: {
+            executionMode: "direct" as const,
+            requestedExecutionMode: "plan" as const,
+            fallbackReason: "create_plan_failed",
+            skillIds: state.taskRoute?.skillIds ?? [],
+            reason: "Plan creation failed, fallback to direct",
+          },
           taskPlan: undefined,
           currentStepId: undefined,
         },
