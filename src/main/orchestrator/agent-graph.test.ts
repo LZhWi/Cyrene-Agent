@@ -323,4 +323,129 @@ describe("runAgentGraph", () => {
     expect(respond).toHaveBeenCalledTimes(1);
     expect(result.refreshCount).toBe(0);
   });
+
+  describe("createPlan retry on temporary request errors", () => {
+    function makePlanGoal(goal: string) {
+      return {
+        id: "plan_1",
+        conversationId: "c1",
+        goal,
+        steps: [{ id: "s1", objective: "步骤一", status: "pending" as const, completionPolicy: { allOf: [{ kind: "tool_succeeded" as const, capabilityId: "x" }] }, toolCallCount: 0, retryCount: 0 }],
+        status: "running" as const,
+        skillIds: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+    }
+
+    const planRoute = async () => ({
+      executionMode: "plan" as const,
+      skillIds: [],
+      reason: "test",
+    });
+
+    it("retries once on HTTP 529 then succeeds", async () => {
+      let callCount = 0;
+      const createPlan = vi.fn(async () => {
+        callCount++;
+        if (callCount === 1) throw new Error("Plan creation failed: code=MODEL_REQUEST_FAILED HTTP 529");
+        return makePlanGoal("成功目标");
+      });
+      const decide = vi.fn(async () => ({ decision: "respond" as const, reason: "done" }));
+      const execute = vi.fn(async () => []);
+      const respond = vi.fn(async () => "计划已创建");
+
+      const result = await runAgentGraph({
+        originalQuery: "搜索新闻整理文档",
+        contextualizedQuery: "搜索新闻整理文档",
+        citaContextBlock: "",
+        messages: [{ role: "user", content: "搜索新闻整理文档" }],
+        availableCapabilities: ["web_search"],
+      }, { decide, execute, createPlan, route: planRoute, respond });
+
+      expect(createPlan).toHaveBeenCalledTimes(2);
+      expect(result.taskPlan).toBeDefined();
+      expect(result.taskPlan!.goal).toBe("成功目标");
+    });
+
+    it("does not retry on HTTP 401 (auth failure)", async () => {
+      const createPlan = vi.fn(async () => {
+        throw new Error("Plan creation failed: code=MODEL_REQUEST_FAILED HTTP 401");
+      });
+      const decide = vi.fn(async () => ({ decision: "respond" as const, reason: "done" }));
+      const execute = vi.fn(async () => []);
+      const respond = vi.fn(async () => "降级");
+
+      await runAgentGraph({
+        originalQuery: "测试",
+        contextualizedQuery: "测试",
+        citaContextBlock: "",
+        messages: [{ role: "user", content: "测试" }],
+        availableCapabilities: ["x"],
+      }, { decide, execute, createPlan, route: planRoute, respond });
+
+      expect(createPlan).toHaveBeenCalledTimes(1);
+      expect(decide).toHaveBeenCalledTimes(1);
+    });
+
+    it("falls back to direct after two consecutive 529s", async () => {
+      const createPlan = vi.fn(async () => {
+        throw new Error("Plan creation failed: code=MODEL_REQUEST_FAILED HTTP 529");
+      });
+      const decide = vi.fn(async () => ({ decision: "respond" as const, reason: "done" }));
+      const execute = vi.fn(async () => []);
+      const respond = vi.fn(async () => "降级");
+
+      const result = await runAgentGraph({
+        originalQuery: "测试",
+        contextualizedQuery: "测试",
+        citaContextBlock: "",
+        messages: [{ role: "user", content: "测试" }],
+        availableCapabilities: ["x"],
+      }, { decide, execute, createPlan, route: planRoute, respond });
+
+      expect(createPlan).toHaveBeenCalledTimes(2);
+      expect(result.taskPlan).toBeUndefined();
+      expect(result.taskRoute?.executionMode).toBe("direct");
+    });
+
+    it("does not retry on user abort", async () => {
+      const abortErr = new Error("E_AGENT_GRAPH_CANCELLED");
+      abortErr.name = "AbortError";
+      const createPlan = vi.fn(async () => { throw abortErr; });
+      const decide = vi.fn(async () => ({ decision: "respond" as const, reason: "done" }));
+      const execute = vi.fn(async () => []);
+      const respond = vi.fn(async () => "取消");
+
+      await runAgentGraph({
+        originalQuery: "测试",
+        contextualizedQuery: "测试",
+        citaContextBlock: "",
+        messages: [{ role: "user", content: "测试" }],
+        availableCapabilities: ["x"],
+      }, { decide, execute, createPlan, route: planRoute, respond });
+
+      expect(createPlan).toHaveBeenCalledTimes(1);
+    });
+
+    it("clears taskPlan on failure so delegate_task is not hidden", async () => {
+      const createPlan = vi.fn(async () => {
+        throw new Error("Plan creation failed: code=MODEL_REQUEST_FAILED HTTP 529");
+      });
+      const decide = vi.fn(async () => ({ decision: "respond" as const, reason: "done" }));
+      const execute = vi.fn(async () => []);
+      const respond = vi.fn(async () => "降级");
+
+      const result = await runAgentGraph({
+        originalQuery: "测试",
+        contextualizedQuery: "测试",
+        citaContextBlock: "",
+        messages: [{ role: "user", content: "测试" }],
+        availableCapabilities: ["x"],
+      }, { decide, execute, createPlan, route: planRoute, respond });
+
+      expect(result.taskPlan).toBeUndefined();
+      expect(result.taskRoute?.executionMode).toBe("direct");
+    });
+  });
 });

@@ -121,6 +121,48 @@ const GraphState = Annotation.Root({
   resumePlanAfterDirect: Annotation<boolean | undefined>,
 });
 
+// ── createPlan 错误分类 ──────────────────────
+
+function extractHttpStatus(message: string): number | undefined {
+  const match = message.match(/HTTP\s+(\d{3})/);
+  return match ? parseInt(match[1], 10) : undefined;
+}
+
+function classifyCreatePlanError(error: unknown): { errorType: string; retryable: boolean } {
+  const errStr = error instanceof Error ? error.message : String(error);
+  const errName = error instanceof Error ? error.name : "Unknown";
+  const httpStatus = extractHttpStatus(errStr);
+
+  // 用户主动取消
+  if (errName === "AbortError" || errStr.includes("aborted") || errStr.includes("E_AGENT_GRAPH_CANCELLED")) {
+    return { errorType: "abort", retryable: false };
+  }
+  // 鉴权失败
+  if (errStr.includes("401") || errStr.includes("403") || errStr.includes("AUTH") || errStr.includes("API key")) {
+    return { errorType: "auth_failed", retryable: false };
+  }
+  // 内容拒绝
+  if (errStr.includes("REFUSED") || errStr.includes("CONTENT_FILTERED")) {
+    return { errorType: "model_refused", retryable: false };
+  }
+  // schema 错误（结构化输出 repair 预算已用完）
+  if (errStr.includes("REPAIR_EXHAUSTED") || errStr.includes("NO_JSON_OBJECT") || errStr.includes("NO_SCHEMA_VALID_OBJECT")) {
+    return { errorType: "structured_output_failed", retryable: false };
+  }
+  // 可重试的临时错误
+  if (httpStatus === 429 || httpStatus === 502 || httpStatus === 503 || httpStatus === 504 || httpStatus === 529) {
+    return { errorType: "temporary_server_error", retryable: true };
+  }
+  if (errStr.includes("overloaded") || errStr.includes("timeout") || errStr.includes("TIMEOUT")) {
+    return { errorType: "temporary_server_error", retryable: true };
+  }
+  if (errStr.includes("MODEL_REQUEST_FAILED") && !httpStatus) {
+    // 无 HTTP 状态码的请求失败，可能是网络问题
+    return { errorType: "request_failed", retryable: true };
+  }
+  return { errorType: "unknown", retryable: false };
+}
+
 export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps): Promise<AgentGraphState> {
   const maxIterations = Math.max(1, deps.maxIterations ?? 12);
   const maxRefresh = Math.max(0, deps.maxRefresh ?? 1);
@@ -233,43 +275,57 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
         return new Command({ goto: "decide" });
       }
       console.log("[AgentGraph] CreatePlan entered");
-      try {
-        const plan = await deps.createPlan(state);
-        const firstStep = plan.steps.find((s) => s.status === "pending");
-        if (firstStep) {
-          firstStep.executionId = `exec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-          firstStep.status = "running";
+
+      const MAX_REQUEST_RETRIES = 1;
+      let lastError: unknown;
+
+      for (let attempt = 1; attempt <= 1 + MAX_REQUEST_RETRIES; attempt++) {
+        try {
+          const plan = await deps.createPlan(state);
+          const firstStep = plan.steps.find((s) => s.status === "pending");
+          if (firstStep) {
+            firstStep.executionId = `exec_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            firstStep.status = "running";
+          }
+          if (attempt > 1) {
+            console.log(`[AgentGraph] CreatePlan retry succeeded: attempt=${attempt} steps=${plan.steps.length}`);
+          } else {
+            console.log(`[AgentGraph] CreatePlan succeeded: steps=${plan.steps.length} goal=${plan.goal.slice(0, 80)}`);
+          }
+          deps.onPlanUpdate?.(plan, 0);
+          return {
+            taskPlan: plan,
+            currentStepId: firstStep?.id,
+          };
+        } catch (error) {
+          lastError = error;
+          const errStr = error instanceof Error ? error.message : String(error);
+          const errName = error instanceof Error ? error.name : "Unknown";
+          const { errorType, retryable } = classifyCreatePlanError(error);
+          const httpStatus = extractHttpStatus(errStr);
+
+          if (retryable && attempt <= MAX_REQUEST_RETRIES) {
+            // 短退避后重试
+            console.log(`[AgentGraph] CreatePlan request failed: attempt=${attempt}/${1 + MAX_REQUEST_RETRIES} type=${errorType} httpStatus=${httpStatus ?? "n/a"} retryable=true next=retry`);
+            await new Promise((r) => setTimeout(r, 300 + Math.random() * 300));
+            continue;
+          }
+
+          // 最终失败
+          console.error(`[AgentGraph] CreatePlan failed: attempts=${attempt} type=${errorType} httpStatus=${httpStatus ?? "n/a"} retryable=${retryable} fallback=direct`);
+          break;
         }
-        console.log(`[AgentGraph] CreatePlan succeeded: steps=${plan.steps.length} goal=${plan.goal.slice(0, 80)}`);
-        deps.onPlanUpdate?.(plan, 0);
-        return {
-          taskPlan: plan,
-          currentStepId: firstStep?.id,
-        };
-      } catch (error) {
-        // 分类错误原因，不泄漏敏感内容
-        const errStr = error instanceof Error ? error.message : String(error);
-        const errName = error instanceof Error ? error.name : "Unknown";
-        let errorType = "unknown";
-        if (errStr.includes("MODEL_REQUEST_FAILED") || errStr.includes("HTTP 5") || errStr.includes("HTTP 4")) {
-          errorType = "model_request_failed";
-        } else if (errName === "AbortError" || errStr.includes("aborted")) {
-          errorType = "abort";
-        } else if (errStr.includes("timeout") || errStr.includes("TIMEOUT")) {
-          errorType = "timeout";
-        } else if (errStr.includes("NO_JSON_OBJECT") || errStr.includes("NO_SCHEMA_VALID_OBJECT") || errStr.includes("AMBIGUOUS")) {
-          errorType = "structured_output_parse_failed";
-        } else if (errStr.includes("REPAIR_EXHAUSTED")) {
-          errorType = "repair_exhausted";
-        } else if (errStr.includes("REFUSED") || errStr.includes("CONTENT_FILTERED")) {
-          errorType = "model_refused";
-        }
-        console.error(`[AgentGraph] CreatePlan failed: type=${errorType} name=${errName} message=${errStr.slice(0, 200)}`);
-        return new Command({
-          update: { taskRoute: { executionMode: "direct" as const, skillIds: state.taskRoute?.skillIds ?? [], reason: "Plan creation failed, fallback to direct" } },
-          goto: "decide",
-        });
       }
+
+      // 降级：清理 plan 状态，确保无残留
+      return new Command({
+        update: {
+          taskRoute: { executionMode: "direct" as const, skillIds: state.taskRoute?.skillIds ?? [], reason: "Plan creation failed, fallback to direct" },
+          taskPlan: undefined,
+          currentStepId: undefined,
+        },
+        goto: "decide",
+      });
     })
     .addNode("planVerify", async (state) => {
       deps.trace?.("planVerify", state);
