@@ -270,6 +270,18 @@ interface ModelSettings {
   stickerSimilarityThreshold: number;
   /** 整个聊天请求的超时（秒）。30-1800，默认 300。 */
   chatRequestTimeoutSec: number;
+  /** 总轮数。5-30，默认 12。 */
+  maxIterations: number;
+  /** Plan 步骤失败后重规划次数。1-5，默认 2。 */
+  maxReplans: number;
+  /** 引用过期重新决策次数。0-3，默认 1。 */
+  maxRefresh: number;
+  /** 单次 LLM 调用超时（秒）。30-120，默认 75。 */
+  perCallTimeoutSec: number;
+  /** CITA 结构化输出重试总预算（秒）。4-30，默认 8。 */
+  citaRepairBudgetSec: number;
+  /** Action Gate 结构化输出重试总预算（秒）。5-40，默认 10。 */
+  actionGateRepairBudgetSec: number;
   vision?: {
     baseUrl: string;
     apiKey: string;
@@ -639,6 +651,12 @@ if (!window.settings) {
         stickerEnabled: true,
         stickerSize: "standard",
         chatRequestTimeoutSec: 300,
+        maxIterations: 12,
+        maxReplans: 2,
+        maxRefresh: 1,
+        perCallTimeoutSec: 75,
+        citaRepairBudgetSec: 8,
+        actionGateRepairBudgetSec: 10,
       }),
     saveConfig: (c) => Promise.resolve(c as ModelSettings),
     getGeneral: () => Promise.resolve({
@@ -793,6 +811,14 @@ const visionTestStatus = document.getElementById("vision-test-status") as HTMLEl
 
 // 高级运行设置
 const chatRequestTimeoutSecInput = document.getElementById("chat-request-timeout-sec") as HTMLInputElement;
+const maxIterationsInput = document.getElementById("max-iterations") as HTMLInputElement;
+const maxReplansInput = document.getElementById("max-replans") as HTMLInputElement;
+const maxRefreshInput = document.getElementById("max-refresh") as HTMLInputElement;
+const perCallTimeoutSecInput = document.getElementById("per-call-timeout-sec") as HTMLInputElement;
+const citaRepairBudgetSecInput = document.getElementById("cita-repair-budget-sec") as HTMLInputElement;
+const actionGateRepairBudgetSecInput = document.getElementById("action-gate-repair-budget-sec") as HTMLInputElement;
+const advancedToggle = document.getElementById("advanced-toggle") as HTMLButtonElement;
+const advancedFieldsWrap = document.getElementById("advanced-fields-wrap") as HTMLElement;
 
 // 渲染端内存缓存：保存每个厂商上一次填写的 baseUrl / model / apiKey
 // 切厂商时从这里读，保存时同步进去；持久化由 main 进程的 saveModelSettings 负责（perProvider 字段）。
@@ -1470,6 +1496,12 @@ async function loadConfig(): Promise<void> {
     stickerThresholdInput.value = String(threshold);
     stickerThresholdVal.textContent = threshold.toFixed(2);
     chatRequestTimeoutSecInput.value = String(cfg.chatRequestTimeoutSec ?? 300);
+    maxIterationsInput.value = String(cfg.maxIterations ?? 12);
+    maxReplansInput.value = String(cfg.maxReplans ?? 2);
+    maxRefreshInput.value = String(cfg.maxRefresh ?? 1);
+    perCallTimeoutSecInput.value = String(cfg.perCallTimeoutSec ?? 75);
+    citaRepairBudgetSecInput.value = String(cfg.citaRepairBudgetSec ?? 8);
+    actionGateRepairBudgetSecInput.value = String(cfg.actionGateRepairBudgetSec ?? 10);
 
     // 视觉模型配置已并入 applyPreset（preferredVision 参数）。
 
@@ -1545,6 +1577,23 @@ runtimeSyncSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((
 
 stickerEnabledInput.addEventListener("change", () => {
   setCyreneSaveStatus("有未保存的更改");
+});
+
+// 高级运行设置折叠
+advancedToggle.addEventListener("click", () => {
+  const expanded = advancedToggle.getAttribute("aria-expanded") === "true";
+  const next = !expanded;
+  advancedToggle.setAttribute("aria-expanded", String(next));
+  if (next) advancedFieldsWrap.removeAttribute("hidden");
+  else advancedFieldsWrap.setAttribute("hidden", "");
+});
+
+// 任何高级字段改动都标记"有未保存的更改"
+[
+  chatRequestTimeoutSecInput, maxIterationsInput, maxReplansInput, maxRefreshInput,
+  perCallTimeoutSecInput, citaRepairBudgetSecInput, actionGateRepairBudgetSecInput,
+].forEach((el) => {
+  el.addEventListener("input", () => setCyreneSaveStatus("有未保存的更改"));
 });
 
 stickerSizeSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
@@ -2782,12 +2831,24 @@ cyrenePanel.addEventListener("submit", async (e) => {
   setCyreneSaveStatus("保存中…");
   try {
     const parsedTimeoutSec = Math.max(30, Math.min(1800, parseInt(chatRequestTimeoutSecInput.value, 10) || 300));
+    const parsedMaxIterations = Math.max(5, Math.min(30, parseInt(maxIterationsInput.value, 10) || 12));
+    const parsedMaxReplans = Math.max(1, Math.min(5, parseInt(maxReplansInput.value, 10) || 2));
+    const parsedMaxRefresh = Math.max(0, Math.min(3, parseInt(maxRefreshInput.value, 10) || 1));
+    const parsedPerCallSec = Math.max(30, Math.min(120, parseInt(perCallTimeoutSecInput.value, 10) || 75));
+    const parsedCitaSec = Math.max(4, Math.min(30, parseInt(citaRepairBudgetSecInput.value, 10) || 8));
+    const parsedAgSec = Math.max(5, Math.min(40, parseInt(actionGateRepairBudgetSecInput.value, 10) || 10));
     await window.settings!.saveConfig({
       runtimeSync: getRuntimeSyncValue(),
       stickerEnabled: stickerEnabledInput.checked,
       stickerSize: getStickerSizeValue(),
       stickerSimilarityThreshold: parseFloat(stickerThresholdInput.value),
       chatRequestTimeoutSec: parsedTimeoutSec,
+      maxIterations: parsedMaxIterations,
+      maxReplans: parsedMaxReplans,
+      maxRefresh: parsedMaxRefresh,
+      perCallTimeoutSec: parsedPerCallSec,
+      citaRepairBudgetSec: parsedCitaSec,
+      actionGateRepairBudgetSec: parsedAgSec,
     });
     setCyreneSaveStatus("已保存", "is-ok");
   } catch {

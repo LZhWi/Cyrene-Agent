@@ -570,6 +570,18 @@ interface ModelSettings {
   stickerSimilarityThreshold: number;
   /** 整个聊天请求的总超时（秒）。30-1800，默认 300。 */
   chatRequestTimeoutSec: number;
+  /** 总轮数。5-30，默认 12。 */
+  maxIterations: number;
+  /** Plan 步骤失败后重规划次数。1-5，默认 2。 */
+  maxReplans: number;
+  /** 引用过期重新决策次数。0-3，默认 1。 */
+  maxRefresh: number;
+  /** 单次 LLM 调用超时（秒）。30-120，默认 75。 */
+  perCallTimeoutSec: number;
+  /** CITA 结构化输出重试总预算（秒）。4-30，默认 8。 */
+  citaRepairBudgetSec: number;
+  /** Action Gate 结构化输出重试总预算（秒）。5-40，默认 10。 */
+  actionGateRepairBudgetSec: number;
   rerankerMode: "light" | "standard" | "none";
   embeddingModel: "minilm" | "bgem3";
   // 视觉模型配置（可选）。undefined 或未启用 = 不支持看图，read_image 诚实拒绝。
@@ -835,6 +847,12 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   stickerSize: "standard",
   stickerSimilarityThreshold: 0.55,
   chatRequestTimeoutSec: 300,
+  maxIterations: 12,
+  maxReplans: 2,
+  maxRefresh: 1,
+  perCallTimeoutSec: 75,
+  citaRepairBudgetSec: 8,
+  actionGateRepairBudgetSec: 10,
   rerankerMode: "light",
   embeddingModel: "minilm",
   multimodal: false,
@@ -1135,6 +1153,24 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
       && Number.isFinite(input.chatRequestTimeoutSec)
       ? Math.max(30, Math.min(1800, Math.round(input.chatRequestTimeoutSec)))
       : 300,
+    maxIterations: typeof input?.maxIterations === "number" && Number.isFinite(input.maxIterations)
+      ? Math.max(5, Math.min(30, Math.round(input.maxIterations)))
+      : 12,
+    maxReplans: typeof input?.maxReplans === "number" && Number.isFinite(input.maxReplans)
+      ? Math.max(1, Math.min(5, Math.round(input.maxReplans)))
+      : 2,
+    maxRefresh: typeof input?.maxRefresh === "number" && Number.isFinite(input.maxRefresh)
+      ? Math.max(0, Math.min(3, Math.round(input.maxRefresh)))
+      : 1,
+    perCallTimeoutSec: typeof input?.perCallTimeoutSec === "number" && Number.isFinite(input.perCallTimeoutSec)
+      ? Math.max(30, Math.min(120, Math.round(input.perCallTimeoutSec)))
+      : 75,
+    citaRepairBudgetSec: typeof input?.citaRepairBudgetSec === "number" && Number.isFinite(input.citaRepairBudgetSec)
+      ? Math.max(4, Math.min(30, Math.round(input.citaRepairBudgetSec)))
+      : 8,
+    actionGateRepairBudgetSec: typeof input?.actionGateRepairBudgetSec === "number" && Number.isFinite(input.actionGateRepairBudgetSec)
+      ? Math.max(5, Math.min(40, Math.round(input.actionGateRepairBudgetSec)))
+      : 10,
     rerankerMode: input?.rerankerMode === "standard" || input?.rerankerMode === "none" ? input.rerankerMode : "light",
     embeddingModel: input?.embeddingModel === "bgem3" ? "bgem3" : "minilm",
     vision: normalizeVisionConfig(rawVision),
