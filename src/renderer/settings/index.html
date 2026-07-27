@@ -186,6 +186,26 @@
             </div>
           </div>
 
+          <!-- 高级运行设置 -->
+          <div class="vision-config-section">
+            <div class="vision-config-heading">
+              <span class="vision-config-icon" aria-hidden="true">⏱</span>
+              <div>
+                <h2>高级运行设置</h2>
+                <p>调整整个请求的总时间预算。推理模型较慢时建议增大此值。</p>
+              </div>
+            </div>
+            <div id="advanced-fields-wrap">
+              <div class="form-grid vision-fields">
+                <label class="field">
+                  <span>请求总超时（秒）</span>
+                  <input id="chat-request-timeout-sec" type="number" min="30" max="1800" step="10" placeholder="300" autocomplete="off" />
+                </label>
+              </div>
+              <p class="vision-hint">ⓘ 范围 30-1800 秒，默认 300 秒。整个对话工具调用 + 最终回复都在此预算内</p>
+            </div>
+          </div>
+
           <div class="form-actions">
             <div class="save-status" id="save-status">等待保存</div>
             <!--

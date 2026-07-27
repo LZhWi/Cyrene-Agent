@@ -568,6 +568,8 @@ interface ModelSettings {
   stickerEnabled: boolean;
   stickerSize: StickerSize;
   stickerSimilarityThreshold: number;
+  /** 整个聊天请求的总超时（秒）。30-1800，默认 300。 */
+  chatRequestTimeoutSec: number;
   rerankerMode: "light" | "standard" | "none";
   embeddingModel: "minilm" | "bgem3";
   // 视觉模型配置（可选）。undefined 或未启用 = 不支持看图，read_image 诚实拒绝。
@@ -832,6 +834,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   stickerEnabled: true,
   stickerSize: "standard",
   stickerSimilarityThreshold: 0.55,
+  chatRequestTimeoutSec: 300,
   rerankerMode: "light",
   embeddingModel: "minilm",
   multimodal: false,
@@ -1128,6 +1131,10 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
     stickerSimilarityThreshold: typeof input?.stickerSimilarityThreshold === "number"
       ? Math.max(0.3, Math.min(0.9, input.stickerSimilarityThreshold))
       : 0.55,
+    chatRequestTimeoutSec: typeof input?.chatRequestTimeoutSec === "number"
+      && Number.isFinite(input.chatRequestTimeoutSec)
+      ? Math.max(30, Math.min(1800, Math.round(input.chatRequestTimeoutSec)))
+      : 300,
     rerankerMode: input?.rerankerMode === "standard" || input?.rerankerMode === "none" ? input.rerankerMode : "light",
     embeddingModel: input?.embeddingModel === "bgem3" ? "bgem3" : "minilm",
     vision: normalizeVisionConfig(rawVision),
@@ -5009,7 +5016,14 @@ app.whenReady().then(async () => {
     logWorldbookInjection,
     normalizeChatMessages: ((raw: ReadonlyArray<unknown>) =>
       normalizeChatMessages(raw as any)) as BuildOptionsDeps["normalizeChatMessages"],
-    chatRequestTimeoutMs: CHAT_REQUEST_TIMEOUT_MS,
+    chatRequestTimeoutMs: (() => {
+      const cfg = loadModelSettings();
+      const sec = cfg.chatRequestTimeoutSec;
+      if (typeof sec === "number" && Number.isFinite(sec) && sec >= 30 && sec <= 1800) {
+        return Math.round(sec * 1000);
+      }
+      return CHAT_REQUEST_TIMEOUT_MS;
+    })(),
     captionImageForFallback: async (filePath: string) => {
       const validated = validateCaptionImagePath(filePath);
       if (!validated.ok) return { ok: false, error: validated.error };

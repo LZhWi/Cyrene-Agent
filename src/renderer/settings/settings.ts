@@ -268,6 +268,8 @@ interface ModelSettings {
   stickerEnabled: boolean;
   stickerSize: "small" | "standard" | "large";
   stickerSimilarityThreshold: number;
+  /** 整个聊天请求的超时（秒）。30-1800，默认 300。 */
+  chatRequestTimeoutSec: number;
   vision?: {
     baseUrl: string;
     apiKey: string;
@@ -636,6 +638,7 @@ if (!window.settings) {
         runtimeSync: "off",
         stickerEnabled: true,
         stickerSize: "standard",
+        chatRequestTimeoutSec: 300,
       }),
     saveConfig: (c) => Promise.resolve(c as ModelSettings),
     getGeneral: () => Promise.resolve({
@@ -787,6 +790,9 @@ const visionModelInput = document.getElementById("vision-model") as HTMLInputEle
 const visionFieldsWrap = document.getElementById("vision-fields-wrap") as HTMLElement;
 const testVisionBtn = document.getElementById("test-vision-btn") as HTMLButtonElement;
 const visionTestStatus = document.getElementById("vision-test-status") as HTMLElement;
+
+// 高级运行设置
+const chatRequestTimeoutSecInput = document.getElementById("chat-request-timeout-sec") as HTMLInputElement;
 
 // 渲染端内存缓存：保存每个厂商上一次填写的 baseUrl / model / apiKey
 // 切厂商时从这里读，保存时同步进去；持久化由 main 进程的 saveModelSettings 负责（perProvider 字段）。
@@ -1463,6 +1469,7 @@ async function loadConfig(): Promise<void> {
     const threshold = cfg.stickerSimilarityThreshold ?? 0.55;
     stickerThresholdInput.value = String(threshold);
     stickerThresholdVal.textContent = threshold.toFixed(2);
+    chatRequestTimeoutSecInput.value = String(cfg.chatRequestTimeoutSec ?? 300);
 
     // 视觉模型配置已并入 applyPreset（preferredVision 参数）。
 
@@ -2774,7 +2781,14 @@ cyrenePanel.addEventListener("submit", async (e) => {
   e.preventDefault();
   setCyreneSaveStatus("保存中…");
   try {
-    await window.settings!.saveConfig({ runtimeSync: getRuntimeSyncValue(), stickerEnabled: stickerEnabledInput.checked, stickerSize: getStickerSizeValue(), stickerSimilarityThreshold: parseFloat(stickerThresholdInput.value) });
+    const parsedTimeoutSec = Math.max(30, Math.min(1800, parseInt(chatRequestTimeoutSecInput.value, 10) || 300));
+    await window.settings!.saveConfig({
+      runtimeSync: getRuntimeSyncValue(),
+      stickerEnabled: stickerEnabledInput.checked,
+      stickerSize: getStickerSizeValue(),
+      stickerSimilarityThreshold: parseFloat(stickerThresholdInput.value),
+      chatRequestTimeoutSec: parsedTimeoutSec,
+    });
     setCyreneSaveStatus("已保存", "is-ok");
   } catch {
     setCyreneSaveStatus("保存失败", "is-error");
