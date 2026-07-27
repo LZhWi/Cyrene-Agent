@@ -96,6 +96,12 @@ const ROUTER_SYSTEM_PROMPT = `你是 Task Router，负责判断当前任务的�
 - 是否存在不可逆写操作
 - 是否需要用户中途确认
 
+## 关键规则
+1. 1-2 个独立动作、无依赖 → direct
+2. 3+ 个动作或存在依赖链 → plan
+3. 只是搜索/查询类（不写文件）→ direct
+4. 不确定时 → direct（宁可漏判，不要误判）
+
 "句子长"不等于复杂，"句子短"不等于简单。
 
 ## 输出
@@ -182,6 +188,7 @@ function buildRouterRequest(input: RunTaskRouterInput): ChatRequest {
     ],
     stream: false,
     maxTokens: 300,
+    temperature: 0,
     structuredOutput,
   };
 }
