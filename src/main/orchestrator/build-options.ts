@@ -51,6 +51,8 @@ import type {
   SocialExtractionInput,
 } from "../social-context/types";
 import type { TrustedAskUserProfile } from "../../shared/ask-clarification";
+import type { SkillRouteInfo } from "./task-router";
+import { filterToolsBySearchBackend, type SearchBackend } from "./search-backend-filter";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
@@ -420,6 +422,15 @@ export async function buildAgentRunOptions(
   const skillCatalog = deps.buildSkillCatalog(enabledSkills);
   const autoInjectedSkillContext = deps.buildAutoInjectedSkillContext(enabledSkills);
   const autoInjectedSoulContext = deps.buildAutoInjectedSoulContext?.(enabledSkills) ?? "";
+
+  // Task Router 可用 Skill 列表（Router 判断 direct/plan 和 Skill 加载用）
+  const availableSkills: SkillRouteInfo[] = (enabledSkills as Array<Record<string, unknown>>).map((s) => ({
+    id: String(s.id ?? ""),
+    description: String(s.description ?? ""),
+    ...((s.manifest as Record<string, unknown>)?.defaultExecutionMode
+      ? { defaultExecutionMode: (s.manifest as Record<string, unknown>).defaultExecutionMode as "direct" | "plan" }
+      : {}),
+  })).filter((s) => s.id);
   const channelSystem = buildChannelSystem(input.channel);
 
   let chatSocialContextBlock = "";
@@ -509,7 +520,20 @@ export async function buildAgentRunOptions(
   // 运行模式只决定基础 system；表达 style 始终单独注入 Soul。
   const basePromptMode = isChatMode ? "chat" : "work";
   const enabledTools = deps.toolRegistry.getEnabled();
-  const runTools = isChatMode ? [] : enabledTools;
+
+  // 搜索后端互斥过滤：每轮只暴露当前后端对应的搜索工具
+  const generalSettings = deps.loadGeneralSettings();
+  const activeSearchBackend = ((generalSettings as Record<string, unknown>).searchEngine as string ?? "off") as SearchBackend;
+  const filteredBySearch = isChatMode ? [] : filterToolsBySearchBackend(
+    enabledTools as unknown as Array<{ id: string }>,
+    activeSearchBackend,
+  );
+
+  const runTools = filteredBySearch as unknown as typeof enabledTools;
+  const searchToolIds = filteredBySearch
+    .filter((t) => t.id === "web_search" || t.id.startsWith("minimax-web-search-"))
+    .map((t) => t.id);
+  console.log(`[Cyrene] 搜索后端=${activeSearchBackend} 暴露搜索工具=[${searchToolIds.join(", ") || "无"}]`);
   // 第一期：保留旧 systemContent 兼容（已不再使用，保留字段是为了 logger 诊断）。
   // 同时新增 toolSystemContent / soulSystemBaseContent 两套。
   const systemContent =
@@ -621,6 +645,7 @@ export async function buildAgentRunOptions(
       } : {}),
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
       ...(isChatMode ? { tools: runTools as ToolDefinition[] } : {}),
+      ...(availableSkills.length > 0 ? { availableSkills } : {}),
     },
     latestUserText,
   };
