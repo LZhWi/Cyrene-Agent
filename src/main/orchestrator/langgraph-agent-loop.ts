@@ -23,6 +23,14 @@ import { buildSoulExecutionContext, formatSoulExecutionContext } from "./soul-ex
 import { runTaskRouter, ENABLE_TASK_ROUTER, buildRouterCapabilities, type TaskRoute, type SkillRouteInfo } from "./task-router";
 import type { AbortSource } from "./cyrene-agent";
 import {
+  AgentExecutionError,
+  snapshotRunExecutionStatus,
+  type RunExecutionStatus,
+  type RunPhase,
+  type SuccessfulToolExecution,
+  type CreatedArtifact,
+} from "./run-execution-status";
+import {
   runCreatePlan, runReplan, verifyStep, computeMaxIterations,
   generateExecutionId, generateAttemptId, findStep, buildPlanSnapshot,
   DEFAULT_MAX_REPLANS, HARD_MAX_ITERATIONS,
@@ -262,6 +270,14 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
   let duplicateTerminalStreak = 0;
   const executionLedger = options.executionLedger ?? new ExecutionLedger();
   const usageRecorder = options.recordUsage ?? ((input, output, calls) => recordUsage(input, output, calls));
+
+  // ── 执行状态追踪 ────────────────────────
+  const executionStatus: RunExecutionStatus = {
+    phase: "context",
+    successfulTools: [],
+    createdArtifacts: [],
+    taskCompletionConfirmed: false,
+  };
   debugLog(
     `${LOG_PREFIX} runtime=start adapter=${options.adapter.id} transport=${options.adapter.transport} capabilities=${capabilities.length}`,
   );
@@ -315,18 +331,21 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     }
   };
 
-  const result = await perf.track("agent_graph_invoke", () => runAgentGraph({
-    originalQuery: options.originalQuery,
-    contextualizedQuery: options.contextualizedQuery,
-    citaContextBlock: options.citaContextBlock,
-    messages: options.cleanMessages ?? options.messages,
-    availableCapabilities: capabilities.map((item) => item.capability),
-  }, {
+  let result: Awaited<ReturnType<typeof runAgentGraph>>;
+  try {
+    result = await perf.track("agent_graph_invoke", () => runAgentGraph({
+      originalQuery: options.originalQuery,
+      contextualizedQuery: options.contextualizedQuery,
+      citaContextBlock: options.citaContextBlock,
+      messages: options.cleanMessages ?? options.messages,
+      availableCapabilities: capabilities.map((item) => item.capability),
+    }, {
     maxIterations: ENABLE_TASK_ROUTER ? HARD_MAX_ITERATIONS : (options.maxIterations ?? 12),
     maxReplans: DEFAULT_MAX_REPLANS,
     ...(ENABLE_TASK_ROUTER
       ? {
       route: async (state) => {
+        executionStatus.phase = "router";
         const profile = resolveStructuredOutputProfile({
           provider: options.adapter.id,
           transport: options.adapter.transport,
@@ -365,6 +384,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         return route;
       },
       createPlan: async (state) => {
+        executionStatus.phase = "create_plan";
         const profile = resolveStructuredOutputProfile({
           provider: options.adapter.id,
           transport: options.adapter.transport,
@@ -408,6 +428,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         return plan;
       },
       planVerify: async (state) => {
+        executionStatus.phase = "plan_verify";
         if (!state.taskPlan || !state.currentStepId) {
           return { status: "completed" as const };
         }
@@ -427,6 +448,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         return result;
       },
       planReplan: async (state) => {
+        executionStatus.phase = "plan_replan";
         if (!state.taskPlan || !state.currentStepId) return [];
         const step = findStep(state.taskPlan, state.currentStepId);
         if (!step) return [];
@@ -487,6 +509,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       }
     },
     decide: async (state) => {
+      executionStatus.phase = "action_gate";
       ensureBudget();
       // 异常兜底：正常路径下 routeAfterTool 已经在工具成功后确定性路由到 soul，
       // 不会走到这里。只有 routeAfterTool 路由回 decide（replan 或可重试失败）后，
@@ -668,6 +691,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         }
       : {}),
     execute: async (state, decision) => {
+      executionStatus.phase = "tool_execute";
       ensureBudget();
       const selectedTool = resolveToolForCapability(enabledToolsFiltered, decision.capability);
       options.onEvent?.({ type: "step_started", stepName: `agent-graph-tool-${selectedTool.id}` });
@@ -833,12 +857,53 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         const messageId = `tool-result-${Date.now()}`;
         options.onEvent?.({ type: "tool_call_result", toolCallId, messageId, content: outcome.output });
         options.onEvent?.({ type: "tool_call_end", toolCallId });
+
+        // ── 记录成功的工具到 executionStatus ──
+        if (result.status === "succeeded") {
+          const toolExec: SuccessfulToolExecution = {
+            capabilityId: result.capabilityId ?? selectedTool.id,
+            actionLabel: selectedTool.soulActionLabel ?? selectedTool.name ?? selectedTool.id,
+            completionClaims: [],
+          };
+          // 从 completionEvidence 提取 claims
+          if (selectedTool.completionEvidence) {
+            for (const ev of selectedTool.completionEvidence) {
+              if (ev.kind === "tool_succeeded") {
+                toolExec.completionClaims.push("tool_succeeded");
+              } else if (ev.kind === "projection_claim" && ev.claimKind) {
+                toolExec.completionClaims.push(ev.claimKind);
+              }
+            }
+          }
+          executionStatus.successfulTools.push(toolExec);
+
+          // 从可信 completionEvidence 提取文件产物
+          if (selectedTool.completionEvidence?.some((e) => e.kind === "tool_succeeded")) {
+            const artifactKinds: Record<string, CreatedArtifact["kind"]> = {
+              write_word: "docx", write_excel: "xlsx", write_pdf: "pdf", write_markdown: "markdown",
+            };
+            const kind = artifactKinds[selectedTool.id];
+            if (kind) {
+              // 从工具输出中提取路径（只接受声明了产物的工具）
+              const pathMatch = result.output.match(/已生成[：:]\s*(.+)$/);
+              if (pathMatch) {
+                executionStatus.createdArtifacts.push({
+                  path: pathMatch[1].trim(),
+                  kind,
+                  capabilityId: result.capabilityId ?? selectedTool.id,
+                });
+              }
+            }
+          }
+        }
+
         return [result];
       } finally {
         options.onEvent?.({ type: "step_finished", stepName: `agent-graph-tool-${selectedTool.id}` });
       }
     },
     respond: async (state: AgentGraphState, decision) => {
+      executionStatus.phase = "soul";
       ensureBudget();
       options.onEvent?.({ type: "step_started", stepName: "agent-graph-soul" });
       try {
@@ -901,6 +966,18 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       }
     },
   }));
+
+    // 图执行成功，标记 taskCompletionConfirmed
+    executionStatus.taskCompletionConfirmed = true;
+  } catch (error) {
+    // 不重复包装
+    if (error instanceof AgentExecutionError) throw error;
+    throw new AgentExecutionError(
+      "LangGraph execution failed",
+      snapshotRunExecutionStatus(executionStatus),
+      { cause: error },
+    );
+  }
 
   return {
     reply: result.reply,

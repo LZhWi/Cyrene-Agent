@@ -4,6 +4,7 @@ vi.mock("./task-router", async (importOriginal) => {
   return { ...actual, ENABLE_TASK_ROUTER: false };
 });
 import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
+import { AgentExecutionError } from "./run-execution-status";
 import { ExecutionLedger } from "./execution-ledger";
 import { contextRefRegistry } from "./tool-context";
 import type { ToolDefinition } from "./tool-registry";
@@ -496,7 +497,7 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
       .mockResolvedValueOnce(new Response("{}", { status: 200 }))
       .mockResolvedValueOnce(new Response("soul failed", { status: 500 })) as unknown as typeof fetch;
 
-    await expect(runLangGraphAgentLoop({ ...options(first, executeTool), executionLedger: ledger })).rejects.toThrow("HTTP 500");
+    await expect(runLangGraphAgentLoop({ ...options(first, executeTool), executionLedger: ledger })).rejects.toThrow("LangGraph execution failed");
 
     const retry = new FakeAdapter();
     retry.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
@@ -556,5 +557,39 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     expect(reply).not.toContain("\uffff");
     expect(reply).not.toContain("[系统提示]");
     expect(reply).not.toContain("[工具调用]");
+  });
+
+  it("AgentExecutionError preserves cause and executionStatus on Soul failure", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({ decision: "respond", reason: "done" });
+    // Soul LLM 返回 500
+    globalThis.fetch = vi.fn(async () => new Response("soul failed", { status: 500 })) as unknown as typeof fetch;
+
+    try {
+      await runLangGraphAgentLoop(options(adapter));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AgentExecutionError);
+      const execErr = err as AgentExecutionError;
+      expect(execErr.executionStatus.phase).toBe("soul");
+      // cause 应保留原始错误
+      expect(execErr.cause).toBeDefined();
+    }
+  });
+
+  it("AgentExecutionError does not double-wrap", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({ decision: "respond", reason: "done" });
+    globalThis.fetch = vi.fn(async () => new Response("soul failed", { status: 500 })) as unknown as typeof fetch;
+
+    try {
+      await runLangGraphAgentLoop(options(adapter));
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(AgentExecutionError);
+      // cause 不应该是另一个 AgentExecutionError
+      const execErr = err as AgentExecutionError;
+      expect(execErr.cause).not.toBeInstanceOf(AgentExecutionError);
+    }
   });
 });

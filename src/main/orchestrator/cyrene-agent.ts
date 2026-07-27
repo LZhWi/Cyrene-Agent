@@ -14,6 +14,7 @@
 import { AbstractAgent, type RunAgentInput } from "@ag-ui/client";
 import { EventType, type BaseEvent } from "@ag-ui/core";
 import { AgentRuntimeError } from "./agent-runtime-error";
+import { AgentExecutionError, type RunPhase } from "./run-execution-status";
 import { Observable } from "rxjs";
 import { toolRegistry, type ToolDefinition } from "./tool-registry";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
@@ -366,9 +367,12 @@ export class CyreneAgent extends AbstractAgent {
           subscriber.complete();
         } catch (err) {
           if (cancelled) return;
-          const hasToolResults = false; // LangGraph/legacy 内部有自己的 toolResults，这里简化
+          // 从 AgentExecutionError 提取真实执行状态
+          const execStatus = err instanceof AgentExecutionError ? err.executionStatus : undefined;
+          const hasToolResults = (execStatus?.successfulTools.length ?? 0) > 0;
+          const phase = execStatus?.phase ?? "unknown";
           const classification = classifyAbortError(
-            err, abortSource, runId, conversationId, "unknown", hasToolResults,
+            err, abortSource, runId, conversationId, phase, hasToolResults,
           );
           console.error(LOG_PREFIX, `run 失败 [${classification.source}]:`, classification.diagnostics);
           if (classification.source === "user_cancelled") {
@@ -414,16 +418,8 @@ export type AbortSource =
   | "window_destroyed"
   | "upstream_cleanup";
 
-/** 执行阶段 */
-export type AbortPhase =
-  | "cita"
-  | "route"
-  | "plan"
-  | "decide"
-  | "native_fc"
-  | "execute"
-  | "soul"
-  | "unknown";
+/** 执行阶段（Abort 诊断用，引用 RunPhase + 旧节点名） */
+export type AbortPhase = RunPhase | "decide" | "execute";
 
 export interface AbortDiagnostic {
   source: AbortSource;
