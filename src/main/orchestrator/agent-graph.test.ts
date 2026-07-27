@@ -448,4 +448,149 @@ describe("runAgentGraph", () => {
       expect(result.taskRoute?.executionMode).toBe("direct");
     });
   });
+
+  describe("full Plan chain: createPlan → execute → planVerify → soul", () => {
+    function makePlanResult(steps: Array<{ id: string; objective: string; capabilityId: string }>) {
+      return {
+        id: "plan_1",
+        conversationId: "c1",
+        goal: "测试计划",
+        steps: steps.map((s) => ({
+          id: s.id,
+          objective: s.objective,
+          status: "pending" as const,
+          completionPolicy: { allOf: [{ kind: "tool_succeeded" as const, capabilityId: s.capabilityId }] },
+          toolCallCount: 0,
+          retryCount: 0,
+        })),
+        status: "running" as const,
+        skillIds: [],
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+    }
+
+    const planRoute = async () => ({
+      executionMode: "plan" as const,
+      skillIds: [],
+      reason: "test",
+    });
+
+    it("completes multi-step plan: step1 → step2 → plan completed → soul", async () => {
+      const plan = makePlanResult([
+        { id: "s1", objective: "搜索", capabilityId: "web_search" },
+        { id: "s2", objective: "整理", capabilityId: "write_word" },
+      ]);
+      // s1 先 pending，s2 先 pending；planVerify 会依次推进
+      let currentStep = "s1";
+      let step1Done = false;
+
+      const createPlan = vi.fn(async () => plan);
+      const execute = vi.fn(async (_state: unknown, _decision: unknown) => {
+        if (currentStep === "s1") return [succeeded("web_search")];
+        return [succeeded("write_word")];
+      });
+      const decide = vi.fn(async () => {
+        // Plan 模式下 decide 为当前步骤选择工具
+        if (currentStep === "s1") {
+          return { decision: "act" as const, capability: "web_search", objective: "搜索", targetRefs: [] as string[], afterSuccess: "respond" as const };
+        }
+        return { decision: "act" as const, capability: "write_word", objective: "整理", targetRefs: [] as string[], afterSuccess: "respond" as const };
+      });
+      const planVerify = vi.fn(async () => {
+        // 模拟 verifyStep：检查当前步骤是否完成
+        if (currentStep === "s1") {
+          step1Done = true;
+          return { status: "completed" as const };
+        }
+        return { status: "completed" as const };
+      });
+      const respond = vi.fn(async () => "计划已完成");
+
+      // 重写 execute 以根据 currentStepId 切换
+      const originalExecute = execute;
+      const wrappedExecute = vi.fn(async (state, _decision) => {
+        currentStep = state.currentStepId ?? "s1";
+        return originalExecute(state, _decision);
+      });
+
+      const result = await runAgentGraph({
+        originalQuery: "搜索新闻整理成文档",
+        contextualizedQuery: "搜索新闻整理成文档",
+        citaContextBlock: "",
+        messages: [{ role: "user", content: "搜索新闻整理成文档" }],
+        availableCapabilities: ["web_search", "write_word"],
+      }, { decide, execute: wrappedExecute, createPlan, route: planRoute, planVerify, respond });
+
+      // createPlan 应被调用
+      expect(createPlan).toHaveBeenCalledTimes(1);
+      // planVerify 应被调用2次（每个步骤一次）
+      expect(planVerify).toHaveBeenCalledTimes(2);
+      // plan 应标记为 completed
+      expect(result.taskPlan?.status).toBe("completed");
+      // 最终应进入 soul 生成回复
+      expect(respond).toHaveBeenCalledTimes(1);
+    });
+
+    it("handles step failure → replan → continue with replacement steps", async () => {
+      const plan = makePlanResult([
+        { id: "s1", objective: "搜索", capabilityId: "web_search" },
+        { id: "s2", objective: "失败步骤", capabilityId: "failing_tool" },
+        { id: "s3", objective: "整理", capabilityId: "write_word" },
+      ]);
+
+      let verifyCallCount = 0;
+      let currentStep = "s1";
+
+      const createPlan = vi.fn(async () => plan);
+      const execute = vi.fn(async (_state: unknown, _decision: unknown) => {
+        if (currentStep === "s1") return [succeeded("web_search")];
+        if (currentStep === "s2") return [failed("failing_tool")];
+        return [succeeded("write_word")];
+      });
+      const decide = vi.fn(async () => {
+        if (currentStep === "s1") return { decision: "act" as const, capability: "web_search", objective: "搜索", targetRefs: [] as string[], afterSuccess: "respond" as const };
+        if (currentStep === "s2") return { decision: "act" as const, capability: "failing_tool", objective: "失败步骤", targetRefs: [] as string[], afterSuccess: "respond" as const };
+        return { decision: "act" as const, capability: "write_word", objective: "整理", targetRefs: [] as string[], afterSuccess: "respond" as const };
+      });
+      const planVerify = vi.fn(async () => {
+        verifyCallCount++;
+        if (verifyCallCount === 1) return { status: "completed" as const }; // s1 completed
+        if (verifyCallCount === 2) return { status: "failed" as const, failureReason: "E_FAIL" }; // s2 failed
+        return { status: "completed" as const }; // replacement step completed
+      });
+      const planReplan = vi.fn(async () => {
+        // 返回替代步骤
+        return [{
+          id: "r1",
+          objective: "替代步骤",
+          status: "pending" as const,
+          completionPolicy: { allOf: [{ kind: "tool_succeeded" as const, capabilityId: "write_word" }] },
+          toolCallCount: 0,
+          retryCount: 0,
+        }];
+      });
+      const respond = vi.fn(async () => "计划已完成（含重规划）");
+
+      const wrappedExecute = vi.fn(async (state, decision) => {
+        currentStep = state.currentStepId ?? "s1";
+        return execute(state, decision);
+      });
+
+      const result = await runAgentGraph({
+        originalQuery: "测试",
+        contextualizedQuery: "测试",
+        citaContextBlock: "",
+        messages: [{ role: "user", content: "测试" }],
+        availableCapabilities: ["web_search", "write_word"],
+      }, { decide, execute: wrappedExecute, createPlan, route: planRoute, planVerify, planReplan, respond });
+
+      // planReplan 应被调用1次（s2 失败后）
+      expect(planReplan).toHaveBeenCalledTimes(1);
+      // plan 最终应 completed
+      expect(result.taskPlan?.status).toBe("completed");
+      // replanCount 应为1
+      expect(result.replanCount).toBe(1);
+    });
+  });
 });
