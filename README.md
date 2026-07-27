@@ -462,6 +462,7 @@ Cyrene 内置和扩展的工具较多，主要覆盖以下类别：
 | 中文检索 | `@node-rs/jieba` |
 | 浏览器与桌面自动化 | Playwright + `@nut-tree-fork/nut-js` |
 | 语音与媒体 | TTS / ASR + `silk-wasm` |
+| 原生截图助手 | Rust + DXGI Desktop Duplication / Direct2D / GDI + WIC PNG + NDJSON IPC |
 | 自研核心 | CITA、Action Gate、DMAE Worldbook、统一 Structured Output Pipeline |
 | 外部渠道 | 飞书 OpenAPI、微信 iLink |
 | 文档与邮件 | ExcelJS、docx、PDFKit、Nodemailer |

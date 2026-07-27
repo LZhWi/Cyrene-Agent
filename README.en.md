@@ -36,11 +36,27 @@
 
 ### Prerequisites
 
-- **Windows 10 / 11**
+- **Windows 10 / 11 64-bit**
 - **Node.js 24 LTS**
 - **npm 10+** (npm 11 recommended)
+- **[Rust stable](https://www.rust-lang.org/tools/install)** (required for building the screenshot helper from source)
+- **[Visual Studio 2022 Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/)**
 
-> Some features, including Feishu, WeChat iLink, and `nut-js` keyboard and mouse automation, depend on the Windows environment.
+When installing Visual Studio Build Tools, select:
+
+- **Desktop development with C++**
+- **MSVC v143**
+- **Windows 10 / 11 SDK**
+
+After installing Rust, it is recommended to confirm the MSVC toolchain:
+
+```powershell
+rustup default stable-x86_64-pc-windows-msvc
+```
+
+> Feishu, WeChat iLink, `nut-js` keyboard/mouse automation, and the native screenshot feature depend on the Windows environment.
+>
+> If you install a packaged release directly, you do not need to install Rust or Visual Studio Build Tools.
 
 ### 1. Clone the Project
 
@@ -74,7 +90,7 @@ Cyrene can chat normally without running a local large language model. However, 
 
 ### 4. Music Feature (Optional)
 
-To use the NetEase Cloud Music feature, install the following additional dependencies:
+The music tool is integrated via [Code-MonkeyZhang/cloud-music-mcp](https://github.com/Code-MonkeyZhang/cloud-music-mcp). To use the NetEase Cloud Music feature, install the following additional dependencies:
 
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — A Python package manager that will automatically download Python and install all dependencies when the music tool is first used
 - **[NetEase Cloud Music Desktop Client](https://music.163.com/)** — Required for music playback; the `orpheus://` protocol must be registered
@@ -85,20 +101,42 @@ To use the NetEase Cloud Music feature, install the following additional depende
 
 ### 5. Build and Start
 
+When running from source for the first time, you need to build the Rust native screenshot helper:
+
 ```bash
+npm run build:screenshot-helper
 npm run build
 npm start
 ```
 
+> [!IMPORTANT]
+>
+> The native screenshot helper is not committed to the Git repository as an `.exe` file. You must run `npm run build:screenshot-helper` once after cloning.
+
 Development mode:
 
 ```bash
+npm run build:screenshot-helper
 npm run dev
+```
+
+After modifying the Rust screenshot helper code, re-run:
+
+```bash
+npm run build:screenshot-helper
 ```
 
 Development mode starts the Electron main process, Preload compilation, the Vite renderer, and the Electron application together.
 
 Changes to the main process automatically restart Electron, while renderer changes are applied through Vite HMR.
+
+Building a distributable Windows version:
+
+```bash
+npm run package:win:dir
+```
+
+The packaging command automatically builds both the Electron application and the Rust screenshot helper.
 
 ---
 
@@ -421,6 +459,7 @@ Cyrene includes many built-in and extensible tools, primarily covering the follo
 | Chinese Retrieval | `@node-rs/jieba` |
 | Browser and Desktop Automation | Playwright + `@nut-tree-fork/nut-js` |
 | Voice and Media | TTS / ASR + `silk-wasm` |
+| Native Screenshot Helper | Rust + DXGI Desktop Duplication / Direct2D / GDI + WIC PNG + NDJSON IPC |
 | Self-Developed Core | CITA, Action Gate, DMAE Worldbook, unified Structured Output Pipeline |
 | External Channels | Feishu OpenAPI, WeChat iLink |
 | Documents and Email | ExcelJS, docx, PDFKit, Nodemailer |
