@@ -60,6 +60,45 @@ describe("tool argument validator", () => {
     )).toThrow("E_TOOL_ARGUMENT_SOURCE");
   });
 
+  it("E_TOOL_ARGUMENT_SCHEMA includes specific missing required fields", () => {
+    const tool: ToolDefinition = {
+      id: "write_word", capability: "write_word", name: "写 Word", description: "生成文档", enabled: true,
+      inputSchema: {
+        type: "object",
+        properties: { filename: { type: "string" }, title: { type: "string" }, paragraphs: { type: "array" } },
+        required: ["filename", "title", "paragraphs"],
+      },
+      execute: async () => "",
+    };
+    expect(() => parseAndValidateToolCallArguments(
+      { id: "call-1", name: "write_word", arguments: '{}' },
+      tool, [], [],
+    )).toThrow(/missing required fields: filename, title, paragraphs/);
+  });
+
+  it("E_TOOL_ARGUMENT_SCHEMA includes specific unknown fields", () => {
+    expect(() => parseAndValidateToolCallArguments(
+      { id: "call-1", name: "music_play_track", arguments: '{"candidateRef":"ctx_song_1","foo":"bar"}' },
+      trackTool(), ["ctx_song_1"], [],
+    )).toThrow(/unknown fields: foo/);
+  });
+
+  it("E_TOOL_ARGUMENT_SCHEMA includes field name and type mismatch", () => {
+    const tool: ToolDefinition = {
+      id: "test_tool", capability: "test", name: "test", description: "test", enabled: true,
+      inputSchema: {
+        type: "object",
+        properties: { count: { type: "number" }, name: { type: "string" } },
+        required: ["count", "name"],
+      },
+      execute: async () => "",
+    };
+    expect(() => parseAndValidateToolCallArguments(
+      { id: "call-1", name: "test_tool", arguments: '{"count":"not_a_number","name":"ok"}' },
+      tool, [], [],
+    )).toThrow(/field 'count' expected number, got string/);
+  });
+
   it("accepts controlled ids only from successful prior tool results", () => {
     const playlistTool: ToolDefinition = {
       ...trackTool(), id: "music_play_playlist", capability: "music.play_playlist",
