@@ -912,9 +912,39 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         const runExecution = async (): Promise<ToolExecutionOutcome> => {
           if (isSubAgent) {
             const taskId = `subagent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-            const profile = selectedTool.subAgentProfile ?? "unknown";
-            const outcome = await runSubAgent(profile, taskId, args);
-            return toSubAgentToolOutcome(outcome);
+            const profile = selectedTool.subAgentProfile;
+            if (!profile) {
+              return {
+                status: "failed" as const,
+                output: "SUBAGENT_PROFILE_MISSING: executionKind=subagent but subAgentProfile not set",
+                errorCode: "SUBAGENT_PROFILE_MISSING",
+                terminal: true,
+                retryable: false,
+              };
+            }
+            try {
+              const outcome = await runSubAgent({
+                profile,
+                taskId,
+                args,
+                parentContext: {
+                  runId: "default",
+                  planId: state.taskPlan?.id,
+                  stepId: state.currentStepId,
+                },
+              });
+              return toSubAgentToolOutcome(outcome);
+            } catch (error) {
+              // AbortError 重新抛出，不包装为工具失败
+              if (error instanceof Error && (error.name === "AbortError" || error.message.includes("aborted"))) {
+                throw error;
+              }
+              return {
+                status: "failed",
+                errorCode: errorCodeOf(error),
+                output: error instanceof Error ? error.message : String(error),
+              };
+            }
           }
           try {
             const executed = await perf.track(`execute_tool[${selectedTool.id}]`, () => options.executeTool(toolCall, runnableToolIds));

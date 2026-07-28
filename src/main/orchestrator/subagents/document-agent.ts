@@ -5,9 +5,20 @@
 // 后续需要动态规划时再引入 LLM 决策节点。
 
 import { existsSync, statSync } from "fs";
-import { toolRegistry } from "../tool-registry";
+import { toolRegistry, type ToolDefinition } from "../tool-registry";
 import { registerSubAgentProfile } from "./runner";
-import type { SubAgentPublicResultV1, SubAgentRunOutcome, SubAgentArtifact, CompletionEvidenceRecord } from "./types";
+import type { SubAgentPublicResultV1, SubAgentRunContext, SubAgentRunOutcome, SubAgentArtifact, CompletionEvidenceRecord } from "./types";
+
+/** Document Agent 工具白名单 */
+const DOCUMENT_ALLOWED_TOOLS = new Set([
+  "write_word",
+  "write_excel",
+  "write_pdf",
+  "write_markdown",
+  "write_file",
+  "read_file",
+  "list_dir",
+]);
 
 /** Document Agent 任务参数（由主 Agent Native FC 生成） */
 export interface DocumentTaskInput {
@@ -25,7 +36,30 @@ function extractFilePath(output: string): string | undefined {
 }
 
 /**
- * 验证文件：存在 + 是文件 + 大小 > 0 + 修改时间不早于运行开始时间。
+ * 通过统一原子工具执行边界调用工具。
+ * 继承工具白名单校验、enabled 校验和统一执行语义。
+ * 不允许调用白名单外或 disabled 的工具。
+ */
+async function executeAllowedTool(
+  toolId: string,
+  args: Record<string, unknown>,
+  allowedTools: Set<string>,
+): Promise<string> {
+  const tool: ToolDefinition | undefined = toolRegistry.getById(toolId);
+  if (!tool) {
+    throw new Error(`工具未注册: ${toolId}`);
+  }
+  if (!tool.enabled) {
+    throw new Error(`工具已禁用: ${toolId}`);
+  }
+  if (!allowedTools.has(toolId)) {
+    throw new Error(`工具不在白名单中: ${toolId}`);
+  }
+  return tool.execute(args);
+}
+
+/**
+ * 验证文件：存在 + 是文件 + 大小 > 0 + 修改时间不早于运行开始时间（含 2s 容差）。
  * 文件名复用时通过 mtime 检查防止误判旧文件。
  */
 function verifyFile(filePath: string, runStartMs: number): {
@@ -43,20 +77,24 @@ function verifyFile(filePath: string, runStartMs: number): {
   if (stat.size === 0) {
     return { verified: false, reason: "文件大小为零" };
   }
-  if (stat.mtimeMs < runStartMs) {
+  // Windows 文件系统和 rename 可能产生小幅误差，使用 2s 容差
+  if (stat.mtimeMs < runStartMs - 2000) {
     return { verified: false, reason: "文件修改时间早于本次运行开始时间，可能是旧文件" };
   }
   return { verified: true, sizeBytes: stat.size };
+}
+
+/** 判断是否为 AbortError */
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && (err.name === "AbortError" || err.message.includes("aborted"));
 }
 
 /**
  * 运行 Document Agent。
  * 确定性执行：调 write_word -> 验证文件 -> 返回结构化结果。
  */
-async function runDocumentAgent(
-  taskId: string,
-  args: Record<string, unknown>,
-): Promise<SubAgentRunOutcome> {
+async function runDocumentAgent(ctx: SubAgentRunContext): Promise<SubAgentRunOutcome> {
+  const args = ctx.args;
   const input: DocumentTaskInput = {
     objective: String(args.objective ?? ""),
     filename: String(args.filename ?? ""),
@@ -65,40 +103,34 @@ async function runDocumentAgent(
     ...(args.style ? { style: String(args.style) } : {}),
   };
 
-  const writeWordTool = toolRegistry.getById("write_word");
-  if (!writeWordTool) {
-    return {
-      invocationStatus: "crashed",
-      error: { code: "TOOL_NOT_FOUND", message: "write_word 工具未注册" },
-    };
-  }
-
   const runStartMs = Date.now();
 
   try {
-    // 1. 调用 write_word 生成文档
-    const output = await writeWordTool.execute({
-      filename: input.filename,
-      title: input.title,
-      paragraphs: input.paragraphs,
-      ...(input.style ? { style: input.style } : {}),
-    });
+    // 1. 通过统一执行边界调用 write_word
+    const output = await executeAllowedTool(
+      "write_word",
+      {
+        filename: input.filename,
+        title: input.title,
+        paragraphs: input.paragraphs,
+        ...(input.style ? { style: input.style } : {}),
+      },
+      DOCUMENT_ALLOWED_TOOLS,
+    );
 
     // 2. 从 write_word 结构化返回中提取文件路径
     const filePath = extractFilePath(output);
     if (!filePath) {
       return {
         invocationStatus: "completed",
-        result: buildFailedResult(taskId, "无法从 write_word 输出中提取文件路径", "FILE_PATH_NOT_FOUND", true),
+        result: buildFailedResult(ctx.taskId, "无法从 write_word 输出中提取文件路径", "FILE_PATH_NOT_FOUND", true),
       };
     }
 
-    // 3. 验证文件：存在 + isFile + size>0 + mtime >= runStart
+    // 3. 验证文件：存在 + isFile + size>0 + mtime >= runStart - 2s
     const verification = verifyFile(filePath, runStartMs);
 
-    // 4. 构建结构化结果
-    // Document Profile 是 artifacts_only：不返回 findings，
-    // 新闻信息继续来自之前的 web_search 投影。
+    // 4. 构建结构化结果（artifacts_only：findings 为空）
     const artifacts: SubAgentArtifact[] = [{
       id: "artifact_1",
       name: input.filename,
@@ -117,37 +149,28 @@ async function runDocumentAgent(
     const result: SubAgentPublicResultV1 = {
       kind: "subagent_result",
       version: 1,
-      taskId,
+      taskId: ctx.taskId,
       profile: "document",
       status: verification.verified ? "succeeded" : "failed",
       summary: verification.verified
         ? `文档已生成：${filePath}`
         : `文档验证失败：${verification.reason}`,
-      findings: [],  // artifacts_only：新闻来自 web_search 投影
+      findings: [],
       artifacts,
       completionEvidence,
       ...(verification.verified
-        ? {
-            primaryArtifact: {
-              name: input.filename,
-              path: filePath,
-              verified: true,
-            },
-          }
+        ? { primaryArtifact: { name: input.filename, path: filePath, verified: true } }
         : {}),
       ...(!verification.verified
-        ? {
-            error: {
-              code: "FILE_VERIFICATION_FAILED",
-              message: verification.reason ?? "文件验证失败",
-              recoverable: true,
-            },
-          }
+        ? { error: { code: "FILE_VERIFICATION_FAILED", message: verification.reason ?? "文件验证失败", recoverable: true } }
         : {}),
     };
 
     return { invocationStatus: "completed", result };
   } catch (err) {
+    // AbortError 重新抛出，不包装为工具失败
+    if (isAbortError(err)) throw err;
+
     const message = err instanceof Error ? err.message : String(err);
     return {
       invocationStatus: "crashed",
@@ -176,5 +199,7 @@ function buildFailedResult(
   };
 }
 
-// 注册 Document Profile
-registerSubAgentProfile("document", runDocumentAgent);
+/** 显式注册 Document Profile。由 registerBuiltInSubAgentProfiles() 调用。 */
+export function registerDocumentProfile(): void {
+  registerSubAgentProfile("document", runDocumentAgent);
+}

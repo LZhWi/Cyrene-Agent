@@ -1207,8 +1207,10 @@ export { loadTodos, onTodosChange, getTodos as getCurrentTodos } from "./todo-st
 import { requestUserChoice, type ChoiceOption } from "../user-choice";
 import { runSubAgent, setDelegateSettings } from "./sub-agent";
 import { getTimeoutSettings } from "../timeout-manager";
-// 导入子代理模块以触发 Profile 注册（document-agent.ts 在模块加载时注册到 runner）
-import "./subagents/document-agent";
+// 显式注册内置子代理 Profile（不依赖模块加载副作用）
+import { registerBuiltInSubAgentProfiles } from "./subagents/init";
+import { parseSubAgentResult } from "./subagents/result-parser";
+registerBuiltInSubAgentProfiles();
 
 export { setDelegateSettings };
 // 把重任务委托给独立 FC 循环执行，子代理有自己的 conversation（用完即弃）。
@@ -1368,6 +1370,17 @@ toolRegistry.register({
     },
   },
   completionEvidence: [{ kind: "tool_succeeded" }],
+  completionEvidenceVerifier: (result) => {
+    try {
+      const parsed = parseSubAgentResult(result.output);
+      return parsed.status === "succeeded"
+        && parsed.artifacts.length > 0
+        && parsed.artifacts.every(a => a.verified)
+        && parsed.artifacts.some(a => !!a.path);
+    } catch {
+      return false;
+    }
+  },
   inputSchema: {
     type: "object",
     properties: {

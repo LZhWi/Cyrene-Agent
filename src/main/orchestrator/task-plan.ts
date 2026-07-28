@@ -235,7 +235,16 @@ function checkCriterion(
 ): boolean {
   if (criterion.kind === "tool_succeeded") {
     return results.some(
-      (r) => r.status === "succeeded" && (r.capabilityId === criterion.capabilityId || r.toolId === criterion.capabilityId),
+      (r) => {
+        if (r.status !== "succeeded") return false;
+        if (r.capabilityId !== criterion.capabilityId && r.toolId !== criterion.capabilityId) return false;
+        // 子代理工具：调用自定义完成证据验证器，从 SubAgentPublicResult 中确认 artifact 已验证
+        const tool = toolMap.get(r.toolId);
+        if (tool?.completionEvidenceVerifier) {
+          return tool.completionEvidenceVerifier(r);
+        }
+        return true;
+      },
     );
   }
   // projection_claim: 用共享投影函数检查

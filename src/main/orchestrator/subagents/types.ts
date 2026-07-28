@@ -1,5 +1,26 @@
 // 子代理公共类型定义
 
+/** 子代理 Profile ID 联合类型 */
+export type SubAgentProfileId = "document" | "search" | "crawler";
+
+/** 子代理运行上下文（由主 Agent 执行节点构造） */
+export interface SubAgentRunContext {
+  profile: SubAgentProfileId;
+  taskId: string;
+  args: Record<string, unknown>;
+  parentContext: {
+    runId: string;
+    planId?: string;
+    stepId?: string;
+    stepExecutionId?: string;
+    stepAttemptId?: string;
+  };
+  /** 父运行取消信号，子代理内部工具执行时应传播此信号 */
+  signal?: AbortSignal;
+  /** 子代理运行截止时间戳（ms） */
+  deadlineAt?: number;
+}
+
 /** 子代理 Finding：一条结构化发现 */
 export interface SubAgentFinding {
   id: string;
