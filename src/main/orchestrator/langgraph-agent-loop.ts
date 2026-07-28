@@ -164,6 +164,33 @@ async function callAdapter(
         fetchTimer.end(`status=${response.status}`);
         if (!response.ok) {
           const body = await response.text().catch(() => "");
+          // 结构化诊断日志：打印最终 wire-level 请求关键字段 + HTTP 响应
+          // 不打印 API Key、完整 messages、完整工具 schema
+          try {
+            const wireBody = JSON.parse(http.body as string) as Record<string, unknown>;
+            console.error("[LLM-HTTP] failed request", {
+              provider: adapter.id,
+              model: wireBody.model,
+              tool_choice: wireBody.tool_choice,
+              thinking: wireBody.thinking,
+              enable_thinking: wireBody.enable_thinking,
+              reasoning_effort: wireBody.reasoning_effort,
+              toolNames: Array.isArray(wireBody.tools)
+                ? (wireBody.tools as Array<Record<string, unknown>>).map(
+                    (t) => (t.function as Record<string, unknown> | undefined)?.name ?? t.name,
+                  )
+                : undefined,
+              messageCount: Array.isArray(wireBody.messages) ? wireBody.messages.length : undefined,
+              httpStatus: response.status,
+              responseBody: body.slice(0, 500),
+            });
+          } catch {
+            console.error("[LLM-HTTP] failed request (non-JSON body)", {
+              provider: adapter.id,
+              httpStatus: response.status,
+              responseBody: body.slice(0, 500),
+            });
+          }
           throw new AgentRuntimeError(
             "E_MODEL_REQUEST_FAILED",
             `模型请求失败：HTTP ${response.status}${body ? ` - ${body.slice(0, 200)}` : ""}`,
@@ -838,18 +865,9 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
                 trackUsage(response.usage);
                 return response;
               } catch (err) {
-                // 诊断日志：HTTP 失败时打印 model / tool_choice / tools 数量，方便定位 vendor-specific 问题
-                const httpStatus = err instanceof Error && /HTTP\s+(\d{3})/.test(err.message)
-                  ? Number(err.message.match(/HTTP\s+(\d{3})/)![1])
-                  : null;
-                console.error(
-                  `[NativeFC] HTTP failed: tool=${selectedTool.id} `
-                  + `model=${request.model} `
-                  + `tools=${request.tools?.length ?? 0} `
-                  + `toolChoiceIntent=${JSON.stringify(request.toolChoiceIntent)} `
-                  + `systemLen=${(request.messages[0]?.content as string)?.length ?? 0} `
-                  + `httpStatus=${httpStatus} err=${err instanceof Error ? err.message : String(err)}`,
-                );
+                // HTTP 失败的详细诊断已在 callAdapter 中打印（[LLM-HTTP] failed request）
+                // 这里只标记 Native FC 上下文
+                console.error(`[NativeFC] invoke failed: tool=${selectedTool.id} model=${request.model} tools=${request.tools?.length ?? 0}`);
                 throw err;
               }
             });
