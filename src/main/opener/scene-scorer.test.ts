@@ -30,6 +30,14 @@ describe("scoreScene", () => {
     const snap: UserStateSnapshot = { hour: 22, idleSec: 5, mouseResumeEvent: false, lastChatAgoMs: 0, keyboardAccumMin: 60 };
     expect(scoreScene("late_night", snap, emptyWeather, state, Date.now())).toBe(0);
   });
+  it("late_night: 凌晨 1 点 + 1h 活跃 = 100（跨零点窗口）", () => {
+    const snap: UserStateSnapshot = { hour: 1, idleSec: 5, mouseResumeEvent: false, lastChatAgoMs: 0, keyboardAccumMin: 60 };
+    expect(scoreScene("late_night", snap, emptyWeather, state, Date.now())).toBe(100);
+  });
+  it("late_night: 凌晨 3 点 = 0（超出窗口）", () => {
+    const snap: UserStateSnapshot = { hour: 3, idleSec: 5, mouseResumeEvent: false, lastChatAgoMs: 0, keyboardAccumMin: 60 };
+    expect(scoreScene("late_night", snap, emptyWeather, state, Date.now())).toBe(0);
+  });
   it("idle_daze: 白天 + 空闲 10min = 80", () => {
     const snap: UserStateSnapshot = { hour: 14, idleSec: 600, mouseResumeEvent: false, lastChatAgoMs: 0, keyboardAccumMin: 0 };
     expect(scoreScene("idle_daze", snap, emptyWeather, state, Date.now())).toBe(80);

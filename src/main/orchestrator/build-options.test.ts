@@ -103,6 +103,33 @@ describe("build-options", () => {
     expect(result.options.soulSystemBaseContent).toContain("SOUL_SYSTEM_BASE")
   })
 
+  it("soul 阶段在 environmentContext 后追加工具不可调纠正，工具阶段不受影响", async () => {
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "你好" }],
+      style: "01_default.md",
+    }, createBuildDeps())
+
+    // soul 侧：纠正句紧跟 environmentContext 之后
+    expect(result.options.soulSystemBaseContent).toContain("当前回复阶段工具调用环节已经结束")
+    expect(result.options.soulSystemBaseContent.indexOf("ENV"))
+      .toBeLessThan(result.options.soulSystemBaseContent.indexOf("当前回复阶段工具调用环节已经结束"))
+    // 工具侧：绝不能注入（否则会阻止 TOOL_PHASE 正常调工具）
+    expect(result.options.toolSystemContent).not.toContain("当前回复阶段工具调用环节已经结束")
+  })
+
+  it("environmentContext 构建失败（空）时，soul 阶段不注入孤立的纠正句", async () => {
+    const deps = createBuildDeps()
+    deps.buildEnvironmentContext = () => ""
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "你好" }],
+      style: "01_default.md",
+    }, deps)
+
+    // 纠正句的存在与 environmentContext 绑定：没有工具清单就没有“谎言”，不需要纠正
+    expect(result.options.soulSystemBaseContent).not.toContain("当前回复阶段工具调用环节已经结束")
+  })
+
   it("keeps enabled music and weather tools available in Talk mode and hides unrelated tools", async () => {
     const deps = createBuildDeps()
     deps.toolRegistry.getEnabled = () => [

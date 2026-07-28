@@ -198,8 +198,8 @@ export class MemoryManager {
   }
 
   /**
-   * 手动触发的 L2 权重衰减。当前尚未挂载到生产调度；
-   * 后续会由 memory-scheduler 统一决定触发策略。
+   * L2 生命周期衰减。由 memory-scheduler 挂载：记忆写入队列中每 24 小时最多触发一次，
+   * 具体衰减规则见 memoryStore.decayL2Weights。
    */
   async runDecay(): Promise<void> {
     const changed = await memoryStore.decayL2Weights()

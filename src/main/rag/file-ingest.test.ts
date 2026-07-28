@@ -9,6 +9,8 @@ import {
   ingestPaths,
   describePendingAttachment,
   isBinary,
+  hasUtf16Bom,
+  decodeTextBuffer,
   isImageExt,
   isTextExt,
   isUnsupportedExt,
@@ -54,6 +56,54 @@ describe("isBinary", () => {
   });
   it("只含第一个 null → true", () => {
     expect(isBinary(Buffer.from([0x48, 0x00, 0x69]))).toBe(true);
+  });
+});
+
+// ── BOM 探测与解码 ──
+describe("hasUtf16Bom / decodeTextBuffer", () => {
+  const utf16le = (s: string) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(s, "utf16le")]);
+  const utf16be = (s: string) => {
+    const body = Buffer.from(s, "utf16le");
+    return Buffer.concat([Buffer.from([0xfe, 0xff]), Buffer.from(body).swap16()]);
+  };
+
+  it("UTF-16 LE/BE BOM → true，普通文本与空 buffer → false", () => {
+    expect(hasUtf16Bom(utf16le("hi"))).toBe(true);
+    expect(hasUtf16Bom(utf16be("hi"))).toBe(true);
+    expect(hasUtf16Bom(Buffer.from("hi"))).toBe(false);
+    expect(hasUtf16Bom(Buffer.alloc(0))).toBe(false);
+  });
+
+  it("UTF-16 LE 中文解码正确", () => {
+    expect(decodeTextBuffer(utf16le("副院长谈话\r\n记录"))).toBe("副院长谈话\r\n记录");
+  });
+
+  it("UTF-16 BE 中文解码正确", () => {
+    expect(decodeTextBuffer(utf16be("会议纪要"))).toBe("会议纪要");
+  });
+
+  it("UTF-16 BE 奇数长度不抛错", () => {
+    const buf = Buffer.concat([utf16be("ok"), Buffer.from([0x41])]);
+    expect(decodeTextBuffer(buf)).toBe("ok");
+  });
+
+  it("UTF-8 BOM 被剥掉", () => {
+    const buf = Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from("你好", "utf-8")]);
+    expect(decodeTextBuffer(buf)).toBe("你好");
+  });
+
+  it("无 BOM 按 UTF-8 解码", () => {
+    expect(decodeTextBuffer(Buffer.from("plain text"))).toBe("plain text");
+  });
+
+  it("ingestOneFile：UTF-16 LE 的 txt 不再被误判为二进制，正常读出文本", async () => {
+    const fp = write("谈话记录.txt", utf16le("这是一份用记事本 Unicode 编码保存的谈话记录。"));
+    const result = await ingestOneFile(fp, async () => ({ importId: "x", chunkCount: 1 }));
+    expect(result).toMatchObject({
+      name: "谈话记录.txt",
+      kind: "text",
+      text: "这是一份用记事本 Unicode 编码保存的谈话记录。",
+    });
   });
 });
 

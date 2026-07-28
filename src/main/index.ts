@@ -39,7 +39,7 @@ import { describePendingAttachment } from "./rag/file-ingest";
 import { cancelDocumentIndexJob, configureDocumentIndexQueue, enqueueDocumentIndexJob } from "./rag/document-index-queue";
 import { retrieveQueuedDocumentChunks, runDocumentIndexJob } from "./rag/document-index-worker";
 import { processDocumentIndexRequest } from "./rag/document-index-ipc";
-import { IMAGE_CAPTION_PROMPT, validateCaptionImagePath } from "./chat/image-caption";
+import { IMAGE_CAPTION_MAX_BYTES, IMAGE_CAPTION_PROMPT, validateCaptionImagePath } from "./chat/image-caption";
 import { decideImageSendStrategy } from "./chat/image-send-strategy";
 import { buildAlwaysOnContext, buildMemoryInjection, runFunctionCallingLoop, scheduleMemoryWrite } from "./orchestrator";
 import { CyreneAgent } from "./orchestrator/cyrene-agent";
@@ -151,6 +151,7 @@ import {
 } from "./proactive/proactive-service";
 import { routeProactiveDelivery } from "./proactive/proactive-delivery-routing";
 import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive/proactive-prompt";
+import { buildLifeContext, getCurrentActivity } from "./life-context";
 import { runProactiveModel } from "./proactive/proactive-model";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/proactive-types";
 import { canCommitProactiveMessage } from "./proactive/proactive-policy";
@@ -1893,6 +1894,8 @@ async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
     basePersona: buildProactivePersonaPrompt(),
     userProfile: profileContext,
     relevantMemory: memoryContext,
+    // [你的生活] 拟态日程：主动消息分享生活时的唯一合法素材源。
+    lifeContext: buildLifeContext(new Date(snapshot.now), app.getPath("userData")),
     ordinaryHistory: histories.ordinary,
     proactiveHistory: histories.proactive,
     sceneId: candidate.sceneId,
@@ -3266,6 +3269,30 @@ ipcMain.handle(IPC.CHAT_INGEST_FILES, async (_event, paths: unknown) => {
   }
 });
 
+// 粘贴图片摄入：剪贴板图像无文件路径，先落盘到 userData\pasted-images 再复用 path-based 摄入链。
+ipcMain.handle(IPC.CHAT_INGEST_PASTED_IMAGE, async (_event, payload: unknown) => {
+  const p = payload as { base64?: unknown; mime?: unknown } | null;
+  if (!p || typeof p.base64 !== "string" || p.base64.length === 0) return null;
+  const mime = typeof p.mime === "string" ? p.mime : "image/png";
+  const ext = mime === "image/jpeg" ? ".jpg"
+    : mime === "image/gif" ? ".gif"
+    : mime === "image/webp" ? ".webp"
+    : mime === "image/bmp" ? ".bmp"
+    : ".png";
+  try {
+    const buffer = Buffer.from(p.base64, "base64");
+    if (buffer.length === 0 || buffer.length > IMAGE_CAPTION_MAX_BYTES) return null;
+    const dir = path.join(app.getPath("userData"), "pasted-images");
+    fs.mkdirSync(dir, { recursive: true });
+    const filePath = path.join(dir, `paste-${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`);
+    fs.writeFileSync(filePath, buffer);
+    return describePendingAttachment(filePath);
+  } catch (err: any) {
+    console.error("[Cyrene] ingestPastedImage ERROR:", err?.message || err);
+    return null;
+  }
+});
+
 ipcMain.handle(IPC.CHAT_PROCESS_DOCUMENTS, async (event, payload: unknown) => {
   const filePaths = payload && typeof payload === "object" && Array.isArray((payload as { filePaths?: unknown }).filePaths)
     ? (payload as { filePaths: unknown[] }).filePaths.filter((p): p is string => typeof p === "string")
@@ -3482,6 +3509,11 @@ ipcMain.handle(IPC.MODEL_CONFIG_GET, () => {
 
 ipcMain.handle(IPC.RUNTIME_STATE_GET, () => {
   return runtimeState;
+});
+
+// [你的生活] 当前活动：UI 状态位与注入 LLM 的「你现在正在做」同源同值（纯函数，日程空窗返回 null）
+ipcMain.handle(IPC.LIFE_GET_CURRENT_ACTIVITY, () => {
+  return getCurrentActivity(new Date());
 });
 
 ipcMain.handle(IPC.SETTINGS_SAVE_CONFIG, (_event, settings: Partial<ModelSettings>) => {
@@ -5019,6 +5051,8 @@ app.whenReady().then(async () => {
     chatRequestTimeoutMs: CHAT_REQUEST_TIMEOUT_MS,
     // 尾部锚点：热加载，文件不存在时返回空串=不启用。
     loadToneAnchor: () => loadPromptFile("tone-anchor.md"),
+    // [你的生活] 拟态日程：按日期确定性生成，异常时返回空串=不启用。
+    buildLifeContext: () => buildLifeContext(new Date(), app.getPath("userData")),
     captionImageForFallback: async (filePath: string) => {
       const validated = validateCaptionImagePath(filePath);
       if (!validated.ok) return { ok: false, error: validated.error };

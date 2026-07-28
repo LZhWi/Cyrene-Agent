@@ -40,6 +40,16 @@ function createScheduler(overrides: Partial<MemorySchedulerDeps> = {}) {
     runResolverQueueOnce: vi.fn(async () => {
       calls.push("resolver")
     }),
+    // 默认“刚刚跑过”，避免无关用例触发 decay
+    getLastDecayAt: vi.fn(async () => Date.now()),
+    runDecay: vi.fn(async () => {
+      calls.push("decay")
+    }),
+    // 默认无残余轮次；用例可覆盖模拟重启恢复
+    loadPendingTurns: vi.fn(async () => [] as MemoryJudgeTurn[]),
+    savePendingTurns: vi.fn(async () => {
+      calls.push("savePending")
+    }),
     ...overrides,
   }
 
@@ -167,5 +177,106 @@ describe("MemoryScheduler", () => {
     await vi.waitFor(() => expect(deps.runResolverQueueOnce).toHaveBeenCalled())
 
     expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 5)
+  })
+
+  it("runs decay when the last run is older than 24 hours", async () => {
+    const { scheduler, deps } = createScheduler({
+      getLastDecayAt: vi.fn(async () => 0),
+    })
+
+    scheduler.scheduleMemoryWrite("user", "assistant")
+    await vi.waitFor(() => expect(deps.runDecay).toHaveBeenCalledTimes(1))
+  })
+
+  it("skips decay when it already ran within 24 hours", async () => {
+    const { scheduler, deps } = createScheduler({
+      getLastDecayAt: vi.fn(async () => Date.now() - 60 * 1000),
+    })
+
+    scheduler.scheduleMemoryWrite("user", "assistant")
+    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 1))
+
+    expect(deps.runDecay).not.toHaveBeenCalled()
+  })
+
+  it("keeps counting rounds when decay fails", async () => {
+    const { scheduler, deps } = createScheduler({
+      getLastDecayAt: vi.fn(async () => 0),
+      runDecay: vi.fn(async () => {
+        throw new Error("decay failed")
+      }),
+    })
+
+    scheduler.scheduleMemoryWrite("user 1", "assistant 1")
+    scheduler.scheduleMemoryWrite("user 2", "assistant 2")
+    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 2))
+  })
+
+  it("restores persisted pending turns into the first judge window after restart", async () => {
+    let roundCount = 5
+    const persisted: MemoryJudgeTurn[] = Array.from({ length: 5 }, (_, i) => ({
+      userInput: `old user ${i + 1}`,
+      assistantReply: `old assistant ${i + 1}`,
+    }))
+    const { scheduler, deps } = createScheduler({
+      loadPendingTurns: vi.fn(async () => persisted),
+      getL1: vi.fn(async () => ({
+        recentGoals: "",
+        recentPreferences: "",
+        currentProject: "",
+        generatedAt: 0,
+        roundCount,
+      })),
+      replaceL1Field: vi.fn(async (_field: "roundCount", value: number) => {
+        roundCount = value
+      }),
+    })
+
+    // 重启后第一轮就凑满 6 轮，触发 judge
+    scheduler.scheduleMemoryWrite("new user", "new assistant")
+    await vi.waitFor(() => expect(deps.judgeMemory).toHaveBeenCalledTimes(1))
+
+    const turns = (deps.judgeMemory as ReturnType<typeof vi.fn>).mock.calls[0][0] as MemoryJudgeTurn[]
+    expect(turns).toHaveLength(6)
+    expect(turns[0]).toEqual({ userInput: "old user 1", assistantReply: "old assistant 1" })
+    expect(turns[5]).toEqual({ userInput: "new user", assistantReply: "new assistant" })
+  })
+
+  it("persists residue every round and clears it after a successful judge", async () => {
+    const savedBatches: MemoryJudgeTurn[][] = []
+    const { scheduler, deps } = createScheduler({
+      savePendingTurns: vi.fn(async (turns: MemoryJudgeTurn[]) => {
+        savedBatches.push(turns)
+      }),
+    })
+
+    for (let i = 1; i <= 6; i++) {
+      scheduler.scheduleMemoryWrite(`user ${i}`, `assistant ${i}`)
+    }
+    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 6))
+
+    // 轮次一入缓冲即被固化（后到的轮次也提前受保护）；第 6 轮 judge 成功后水位线推进，残余清空
+    expect(savedBatches[4]).toHaveLength(6)
+    expect(savedBatches[5]).toEqual([])
+  })
+
+  it("keeps residue when judge fails so a restart can retry extraction", async () => {
+    const savedBatches: MemoryJudgeTurn[][] = []
+    const { scheduler, deps } = createScheduler({
+      judgeMemory: vi.fn(async () => {
+        throw new Error("judge failed")
+      }),
+      savePendingTurns: vi.fn(async (turns: MemoryJudgeTurn[]) => {
+        savedBatches.push(turns)
+      }),
+    })
+
+    for (let i = 1; i <= 6; i++) {
+      scheduler.scheduleMemoryWrite(`user ${i}`, `assistant ${i}`)
+    }
+    await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 6))
+
+    // judge 失败不推水位线，6 轮全部保留待重试
+    expect(savedBatches[5]).toHaveLength(6)
   })
 })

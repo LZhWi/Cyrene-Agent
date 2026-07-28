@@ -45,6 +45,7 @@ declare global {
     sidebar?: SidebarApi;
     modelConfig?: ModelConfigApi;
     runtimeState?: RuntimeStateApi;
+    lifeStatus?: { getCurrentActivity: () => Promise<string | null> };
   }
 }
 
@@ -77,6 +78,10 @@ const feedingModelEl = document.getElementById("feeding-model") as HTMLElement;
 const onlineBadge = onlineStatusLabel.closest(".profile__online") as HTMLElement | null;
 let runtimeSyncEnabled = false;
 let latestRuntimeState: RuntimeState | null = null;
+// [你的生活] 当前活动：空闲态（陪伴中）时替换状态位文本，与注入 LLM 的日程同源。
+// null = 接口不可用（preload 缺失/主进程异常），回退显示原「陪伴中」。
+let lifeStatusText: string | null = null;
+let lifeStatusResting = false;
 
 const STATUS_EMOJI: Record<RuntimeStatus, string> = {
   陪伴中: "🌸",
@@ -114,10 +119,37 @@ function applyRuntimeState(state: RuntimeState | null): void {
   }
   const status = state?.status ?? "陪伴中";
   const feeling = state?.feeling ?? "平静";
-  statusEmojiEl.textContent = STATUS_EMOJI[status] ?? "💬";
-  statusLabelEl.textContent = status;
+  if (status === "陪伴中" && lifeStatusText != null) {
+    // 空闲态显示她当前的日程活动；深夜日程空窗显示「休息中」
+    statusEmojiEl.textContent = lifeStatusResting ? "🌙" : "🌸";
+    statusLabelEl.textContent = lifeStatusText;
+  } else {
+    statusEmojiEl.textContent = STATUS_EMOJI[status] ?? "💬";
+    statusLabelEl.textContent = status;
+  }
   feelingEmojiEl.textContent = FEELING_EMOJI[feeling] ?? "🌿";
   feelingLabelEl.textContent = feeling;
+}
+
+// 「正在」前缀：以"在"开头的条目（如"在心里给今天的心情打个分"）用"正"避免"正在在"
+function formatLifeStatus(activity: string | null): string {
+  if (activity == null) return "休息中";
+  return activity.startsWith("在") ? `正${activity}` : `正在${activity}`;
+}
+
+async function refreshLifeStatus(): Promise<void> {
+  try {
+    const activity = await window.lifeStatus?.getCurrentActivity();
+    if (activity === undefined) {
+      lifeStatusText = null; // preload 未暴露，回退「陪伴中」
+    } else {
+      lifeStatusResting = activity == null;
+      lifeStatusText = formatLifeStatus(activity);
+    }
+  } catch {
+    lifeStatusText = null;
+  }
+  applyRuntimeState(latestRuntimeState);
 }
 
 async function initRuntimeState(): Promise<void> {
@@ -207,3 +239,5 @@ openChatBtn.addEventListener("click", async () => {
 
 void initModelConfig();
 void initRuntimeState();
+void refreshLifeStatus();
+setInterval(() => void refreshLifeStatus(), 60_000);

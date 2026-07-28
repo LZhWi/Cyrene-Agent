@@ -138,6 +138,34 @@ export function isBinary(buf: Buffer): boolean {
   return false;
 }
 
+/**
+ * UTF-16 文本天然含 null 字节（如记事本"Unicode"另存的 txt），
+ * 必须在 isBinary 检查之前先认 BOM，否则会被误判为二进制。
+ */
+export function hasUtf16Bom(buf: Buffer): boolean {
+  if (buf.length < 2) return false;
+  return (buf[0] === 0xff && buf[1] === 0xfe) || (buf[0] === 0xfe && buf[1] === 0xff);
+}
+
+/**
+ * 按 BOM 解码文本 Buffer：UTF-16 LE / UTF-16 BE / UTF-8 BOM，无 BOM 按 UTF-8。
+ */
+export function decodeTextBuffer(buf: Buffer): string {
+  if (buf.length >= 2 && buf[0] === 0xff && buf[1] === 0xfe) {
+    return buf.subarray(2).toString("utf16le");
+  }
+  if (buf.length >= 2 && buf[0] === 0xfe && buf[1] === 0xff) {
+    // BE → 拷贝后按字节对交换成 LE；奇数长度去掉残尾字节，避免 swap16 抛错
+    let body = buf.subarray(2);
+    if (body.length % 2 !== 0) body = body.subarray(0, body.length - 1);
+    return Buffer.from(body).swap16().toString("utf16le");
+  }
+  if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+    return buf.subarray(3).toString("utf-8");
+  }
+  return buf.toString("utf-8");
+}
+
 async function indexLargeText(
   text: string,
   name: string,
@@ -227,11 +255,11 @@ export async function ingestOneFile(
   // 类型判断与内容提取
   // 文本扩展名
   if (isTextExt(ext)) {
-    // 二进制兜底：标题是文本但实际含 null 字节
-    if (isBinary(buf)) {
+    // 二进制兜底：标题是文本但实际含 null 字节。UTF-16 BOM 文件例外（null 字节是编码特征）。
+    if (!hasUtf16Bom(buf) && isBinary(buf)) {
       return { name, kind: "unsupported", reason: `文件 ${ext} 含二进制数据，暂不支持` };
     }
-    const text = buf.toString("utf-8");
+    const text = decodeTextBuffer(buf);
     if (!text.trim()) {
       return { name, kind: "empty" };
     }
@@ -242,12 +270,12 @@ export async function ingestOneFile(
     return { name, kind: "text", text };
   }
 
-  // 无扩展名或未知扩展名：用 null 字节检测
-  if (isBinary(buf)) {
+  // 无扩展名或未知扩展名：用 null 字节检测（UTF-16 BOM 文件例外）
+  if (!hasUtf16Bom(buf) && isBinary(buf)) {
     return { name, kind: "unsupported", reason: "二进制文件，暂不支持" };
   }
   // 无扩展名的文本文件
-  const text = buf.toString("utf-8");
+  const text = decodeTextBuffer(buf);
   if (!text.trim()) {
     return { name, kind: "empty" };
   }

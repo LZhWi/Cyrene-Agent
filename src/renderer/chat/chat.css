@@ -119,6 +119,16 @@ body {
   white-space: nowrap;
 }
 
+/* 当前活动（[你的生活] 日程）：与 hint 同级弱化，长条目省略号截断 */
+.chat__activity {
+  font: var(--rb-text-micro);
+  color: var(--rb-text-muted);
+  white-space: nowrap;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* 左上角触发按钮：内嵌旋转 loader 动画，点击调出会话侧栏（侧栏逻辑后续接入）。
    loader 来自 Uiverse.io，配色改成粉紫系跟主题统一，用 --size 缩到 30px 塞进标题栏。 */
 .chat__status-btn {

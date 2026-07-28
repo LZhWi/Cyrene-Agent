@@ -3,6 +3,7 @@
 // 工具的选择和执行由 function-calling.ts 的 runFunctionCallingLoop 处理
 import { updateWorldbookActivation, getPermanentWorldbookEntries, getActiveWorldbookEntries, getCascadeWorldbookEntries, searchMemory, searchMemoryEntries, INJECTION_HEADER, INJECTION_PREAMBLE } from "../rag";
 import { memoryStore } from "../memory/memory-store";
+import { isL1Fresh } from "../memory/memory-types";
 import { entityGraph } from "../memory/entity-graph";
 import { recordRecentMemorySearchEntries } from "../memory/recent-injected-memory";
 import { toolRegistry } from "./tool-registry";
@@ -29,17 +30,33 @@ export async function buildMemoryInjection(
     const userMemoryEntries = await searchMemoryEntries(userInput, "user_memory", 5);
     if (userMemoryEntries.length > 0) {
       recordRecentMemorySearchEntries(userMemoryEntries);
-      // 标注可能存在冲突的记忆
+      // 按数据信号分档措辞：冲突条目需求证；aging（久未提及）条目用不确定语气；active 正常引用
       const allL2 = await memoryStore.getAllL2();
-      const conflictAnnotated = userMemoryEntries.map((entry) => {
+      const l2ById = new Map(allL2.map((l) => [l.id, l]));
+      let hasConflict = false;
+      let hasAging = false;
+      const annotated = userMemoryEntries.map((entry) => {
         const m = entry.text;
-        const l2Entry = allL2.find((l) => l.content === m && l.conflictWith && l.conflictWith.length > 0);
-        if (l2Entry) {
+        const l2Id = entry.metadata?.l2Id;
+        const l2Entry = (typeof l2Id === "string" ? l2ById.get(l2Id) : undefined)
+          ?? allL2.find((l) => l.content === m);
+        if (l2Entry?.conflictWith && l2Entry.conflictWith.length > 0) {
+          hasConflict = true;
           return `· ${m} ⚠️（该信息可能存在矛盾记录）`;
+        }
+        if (l2Entry?.status === "aging") {
+          hasAging = true;
+          return `· ${m}（较久远的印象）`;
         }
         return `· ${m}`;
       });
-      parts.push("【相关记忆】\n" + conflictAnnotated.join("\n"));
+      const notes: string[] = [];
+      if (hasConflict) notes.push("带 ⚠️ 的条目存在矛盾记录，引用前先向用户求证，不要当作事实。");
+      if (hasAging) notes.push("标注「较久远的印象」的条目可能已过时，提及时用不确定的语气，不要断言。");
+      parts.push(
+        "【相关记忆】\n" + annotated.join("\n") +
+        (notes.length > 0 ? "\n（" + notes.join("") + "）" : "")
+      );
     }
   } catch (err) {
     console.warn("[Orchestrator] user_memory search failed:", err);
@@ -136,11 +153,12 @@ export async function buildAlwaysOnContext(
       l0.permanentNote && `备注：${l0.permanentNote}`,
     ].filter(Boolean);
 
-    const l1Lines = [
+    // L1 超过新鲜期（30 天未更新）就不再注入，避免陈旧“近期状态”污染上下文
+    const l1Lines = isL1Fresh(l1) ? [
       l1.recentGoals && `最近目标：${l1.recentGoals}`,
       l1.recentPreferences && `近期偏好：${l1.recentPreferences}`,
       l1.currentProject && `当前项目：${l1.currentProject}`,
-    ].filter(Boolean);
+    ].filter(Boolean) : [];
 
     if (l0Lines.length > 0 || l1Lines.length > 0) {
       let memoryContext = "";

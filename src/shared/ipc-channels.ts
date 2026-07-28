@@ -20,6 +20,7 @@ export const IPC = {
   CHAT_IS_MAXIMIZED: "chat:is-maximized",
   CHAT_SEND_MESSAGE: "chat:send-message",
   CHAT_INGEST_FILES: "chat:ingest-files",
+  CHAT_INGEST_PASTED_IMAGE: "chat:ingest-pasted-image",
   CHAT_PROCESS_DOCUMENTS: "chat:process-documents",
   CHAT_DOCUMENT_INDEX_PROGRESS: "chat:document-index-progress",
   CHAT_CANCEL_DOCUMENT_INDEX: "chat:cancel-document-index",
@@ -122,6 +123,9 @@ export const IPC = {
   // runtime state updates (status / feeling / expression)
   RUNTIME_STATE_GET: "runtime-state:get",
   RUNTIME_STATE_CHANGED: "runtime-state:changed",
+
+  // [你的生活] 当前活动（UI 状态显示，与注入 LLM 的日程同源）
+  LIFE_GET_CURRENT_ACTIVITY: "life:get-current-activity",
 
   // Live2D speech / mouth sync
   LIVE2D_SPEECH_PREPARE: "live2d:speech-prepare",

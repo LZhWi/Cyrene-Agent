@@ -56,6 +56,48 @@ describe("buildMemoryInjection", () => {
     expect(wasRecentlyInjectedMemory("l2_run")).toBe(true)
     expect(ragMock.searchMemoryEntries).toHaveBeenCalledWith("跑步", "user_memory", 5)
   })
+
+  it("annotates aging and conflicted memories with citation guidance", async () => {
+    ragMock.searchMemoryEntries.mockResolvedValue([
+      { id: "rag_a", text: "用户喜欢冰淇淋", createdAt: Date.now(), score: 0.9, metadata: { l2Id: "l2_a" } },
+      { id: "rag_b", text: "用户在学法语", createdAt: Date.now(), score: 0.8, metadata: { l2Id: "l2_b" } },
+      { id: "rag_c", text: "用户住在上海", createdAt: Date.now(), score: 0.7, metadata: { l2Id: "l2_c" } },
+    ])
+    memoryStoreMock.getAllL2.mockResolvedValue([
+      { id: "l2_a", content: "用户喜欢冰淇淋", status: "active", conflictWith: [] },
+      { id: "l2_b", content: "用户在学法语", status: "aging", conflictWith: [] },
+      { id: "l2_c", content: "用户住在上海", status: "active", conflictWith: ["rag_x"] },
+    ])
+    const { buildMemoryInjection } = await import("./index")
+
+    const context = await buildMemoryInjection("随便聊聊")
+
+    // active 正常引用，不带标注
+    expect(context).toContain("· 用户喜欢冰淇淋\n")
+    // aging 标注久远印象
+    expect(context).toContain("用户在学法语（较久远的印象）")
+    // 冲突条目保留 ⚠️ 标注
+    expect(context).toContain("用户住在上海 ⚠️（该信息可能存在矛盾记录）")
+    // 尾部引用指引只在命中对应档位时出现
+    expect(context).toContain("提及时用不确定的语气")
+    expect(context).toContain("引用前先向用户求证")
+  })
+
+  it("omits citation guidance when all memories are active and conflict-free", async () => {
+    ragMock.searchMemoryEntries.mockResolvedValue([
+      { id: "rag_a", text: "用户喜欢冰淇淋", createdAt: Date.now(), score: 0.9, metadata: { l2Id: "l2_a" } },
+    ])
+    memoryStoreMock.getAllL2.mockResolvedValue([
+      { id: "l2_a", content: "用户喜欢冰淇淋", status: "active", conflictWith: [] },
+    ])
+    const { buildMemoryInjection } = await import("./index")
+
+    const context = await buildMemoryInjection("随便聊聊")
+
+    expect(context).toContain("· 用户喜欢冰淇淋")
+    expect(context).not.toContain("较久远的印象")
+    expect(context).not.toContain("求证")
+  })
 })
 
 describe("buildAlwaysOnContext", () => {

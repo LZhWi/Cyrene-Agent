@@ -35,6 +35,7 @@
 
 import { recordUsage } from "../token-usage-store";
 import { stripLeakedChatTimeContext } from "../chat-time-context";
+import type { ReasoningPreference } from "../../shared/reasoning";
 import { compressConversation } from "./context-manager";
 import { truncateToolResult } from "./context-manager";
 import type {
@@ -53,6 +54,8 @@ export interface AgentLoopSettings {
   model: string;
   apiKey: string;
   explicitTransport?: "openai" | "anthropic" | "auto";
+  /** 思考模式偏好（perProvider 镜像）。adapter buildRequest 读取，缺省按 auto 处理。 */
+  reasoning?: ReasoningPreference;
 }
 
 /** FC 循环中性事件。CyreneAgent 把它包成 AG-UI BaseEvent。 */
@@ -265,6 +268,11 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
   const runnableToolIds = new Set(tools.filter((t) => t.enabled).map((t) => t.id));
   const allToolResults: ToolCallResult[] = [];
 
+  // TOOL_PHASE 专用 settings：思考模式强制关闭。工具阶段只做机械的工具路由决策，
+  // 不需要深思考；关掉还能避免交织思考 token（如 MiniMax M3 的特殊标记）干扰 tool_calls 解析。
+  // SOUL_PHASE 沿用用户设置里的 reasoning 偏好（不支持关闭的模型由 shared/reasoning 能力层自行降级）。
+  const toolPhaseSettings: AgentLoopSettings = { ...options.settings, reasoning: { mode: "off" } };
+
   console.log(LOG_PREFIX, `可用工具: ${toolSpecs.map((t) => t.name).join(", ") || "(无)"}`);
   console.log(LOG_PREFIX, "原始消息数:", messages.length, "最后一角色:", messages[messages.length - 1]?.role);
 
@@ -306,11 +314,11 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     if (round === 0 && options.requiredToolName && runnableToolIds.has(options.requiredToolName)) {
       req = { ...req, toolChoice: { name: options.requiredToolName } };
     }
-    if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, options.settings);
+    if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, toolPhaseSettings);
 
     let data: unknown;
     try {
-      data = await callAdapter(adapter, req, options.settings, perRoundTimeoutMs);
+      data = await callAdapter(adapter, req, toolPhaseSettings, perRoundTimeoutMs);
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         consecutiveTimeouts++;

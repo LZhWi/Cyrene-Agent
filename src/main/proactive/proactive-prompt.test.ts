@@ -103,6 +103,53 @@ describe("proactive prompt", () => {
     expect(system.indexOf("TONE_RULES_MARKER")).toBeGreaterThan(system.indexOf("[最近使用的普通聊天会话]"));
     expect(system.indexOf("TONE_RULES_MARKER")).toBeGreaterThan(system.indexOf("[主动聊天专用会话]"));
   });
+
+  it("bans fabricated real-world experiences and injects life context when provided", () => {
+    const withLife = buildProactiveMessages({
+      basePersona: "P",
+      relevantMemory: "MEMORY",
+      lifeContext: "[你的生活]\n今天你的日程：上午听了会儿歌。",
+      ordinaryHistory: [],
+      proactiveHistory: [],
+      sceneId: "work_break",
+      localNow: new Date(2026, 6, 13, 14, 0),
+      idleSec: 0,
+      unansweredCount: 0,
+    });
+    const system = String(withLife[0].content);
+    expect(system).toContain("不要编造你在现实世界的行动或见闻");
+    // 用日程内容做唯一标记（PROACTIVE_SYSTEM 规则行里也含 "[你的生活]" 字面量，不能直接 indexOf 标题）
+    const lifeMarker = "今天你的日程：上午听了会儿歌";
+    expect(system).toContain(lifeMarker);
+    // 生活日程排在长期记忆之后、历史之前
+    expect(system.indexOf(lifeMarker)).toBeGreaterThan(system.indexOf("[相关长期记忆]"));
+    expect(system.indexOf(lifeMarker)).toBeLessThan(system.indexOf("[最近使用的普通聊天会话]"));
+
+    const withoutLife = buildProactiveMessages({
+      basePersona: "P",
+      ordinaryHistory: [],
+      proactiveHistory: [],
+      sceneId: "work_break",
+      localNow: new Date(2026, 6, 13, 14, 0),
+      idleSec: 0,
+      unansweredCount: 0,
+    });
+    expect(String(withoutLife[0].content)).not.toContain(lifeMarker);
+  });
+
+  it("night system shares feelings without fabricating recent activities", () => {
+    const night = buildProactiveMessages({
+      basePersona: "P",
+      ordinaryHistory: [],
+      proactiveHistory: [],
+      sceneId: "late_night",
+      localNow: new Date(2026, 6, 13, 23, 0),
+      idleSec: 20,
+      unansweredCount: 0,
+    });
+    const system = String(night[0].content);
+    expect(system).toContain("不要编造你刚刚做过的现实活动或见闻");
+  });
 });
 
 describe("parseProactiveDecision", () => {

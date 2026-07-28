@@ -52,6 +52,9 @@ const chatApi = {
     if (paths.length === 0) return [];
     return ipcRenderer.invoke(IPC.CHAT_INGEST_FILES, paths);
   },
+  /** 粘贴图片摄入：剪贴板图像无文件路径，传 base64 由 main 落盘后复用摄入链。 */
+  ingestPastedImage: (base64: string, mime: string) =>
+    ipcRenderer.invoke(IPC.CHAT_INGEST_PASTED_IMAGE, { base64, mime }),
   processDocuments: (filePaths: string[], query: string) =>
     ipcRenderer.invoke(IPC.CHAT_PROCESS_DOCUMENTS, { filePaths, query }),
   onDocumentIndexProgress: (callback: (progress: DocumentIndexProgress) => void) => {
@@ -372,6 +375,12 @@ const memoryPanelApi = {
 contextBridge.exposeInMainWorld("user", userApi);
 contextBridge.exposeInMainWorld("memoryPanel", memoryPanelApi);
 contextBridge.exposeInMainWorld("runtimeState", runtimeStateApi);
+
+// [你的生活] 当前活动查询（chat 标题栏 / sidebar 状态位显示用）
+const lifeStatusApi = {
+  getCurrentActivity: (): Promise<string | null> => ipcRenderer.invoke(IPC.LIFE_GET_CURRENT_ACTIVITY),
+};
+contextBridge.exposeInMainWorld("lifeStatus", lifeStatusApi);
 
 const live2dSpeechApi = {
   prepare: () => ipcRenderer.send(IPC.LIVE2D_SPEECH_PREPARE),

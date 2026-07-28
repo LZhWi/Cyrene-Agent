@@ -8,7 +8,7 @@ import {
   createOpenAIEmbeddingProvider,
   type EmbeddingWorkerConfig,
 } from "./embedding";
-import { isBinary, isTextExt, isUnsupportedExt, SMALL_THRESHOLD } from "./file-ingest";
+import { decodeTextBuffer, hasUtf16Bom, isBinary, isTextExt, isUnsupportedExt, SMALL_THRESHOLD } from "./file-ingest";
 import type { DocumentIndexJobResult, QueuedDocumentIndexJob } from "./document-index-queue";
 
 export type PreparedDocumentChunk = { text: string; index: number };
@@ -275,8 +275,8 @@ function prepareFile(filePath: string): WorkerPrepareFileResult {
   } catch (error) {
     return { kind: "unsupported", name, reason: error instanceof Error ? error.message : String(error) };
   }
-  if (isBinary(buffer)) return { kind: "unsupported", name, reason: "二进制文件，暂不支持" };
-  const text = buffer.toString("utf-8");
+  if (!hasUtf16Bom(buffer) && isBinary(buffer)) return { kind: "unsupported", name, reason: "二进制文件，暂不支持" };
+  const text = decodeTextBuffer(buffer);
   if (!text.trim()) return { kind: "empty", name };
   if (text.length <= SMALL_THRESHOLD) return { kind: "text", name, text };
   return {

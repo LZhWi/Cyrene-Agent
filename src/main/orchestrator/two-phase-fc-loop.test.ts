@@ -10,6 +10,7 @@ import type {
   ProviderCapability,
   ToolCall,
   ToolExecutionResult,
+  VendorConfig,
 } from "./vendors/types";
 import { runTwoPhaseFcLoop } from "./two-phase-fc-loop";
 
@@ -45,6 +46,8 @@ class FakeAdapter implements ChatVendorAdapter {
   private callIndex = 0;
   /** 记录所有发出的请求体，便于断言。 */
   readonly requests: ChatRequest[] = [];
+  /** 记录每次请求携带的 cfg，便于断言分阶段 reasoning。 */
+  readonly configs: VendorConfig[] = [];
 
   enqueueText(text: string) {
     this.scripts.push({ kind: "text", text });
@@ -56,8 +59,9 @@ class FakeAdapter implements ChatVendorAdapter {
     this.scripts.push({ kind: "error", message });
   }
 
-  buildRequest(req: ChatRequest): HttpRequest {
+  buildRequest(req: ChatRequest, cfg: VendorConfig): HttpRequest {
     this.requests.push(req);
+    this.configs.push(cfg);
     return {
       url: "https://fake/",
       method: "POST",
@@ -97,8 +101,8 @@ class FakeAdapter implements ChatVendorAdapter {
     }
     return next;
   }
-  buildStreamRequest(req: ChatRequest): HttpRequest {
-    return this.buildRequest({ ...req, stream: true });
+  buildStreamRequest(req: ChatRequest, cfg: VendorConfig): HttpRequest {
+    return this.buildRequest({ ...req, stream: true }, cfg);
   }
   parseStreamEvent(): null {
     return null;
@@ -480,5 +484,50 @@ describe("runTwoPhaseFcLoop", () => {
 
     expect(result.reply).toBe("怎么啦，看起来不太高兴的样子…");
     expect(streamed).toBe("怎么啦，看起来不太高兴的样子…");
+  });
+
+  it("分阶段 reasoning：TOOL_PHASE 强制 off，SOUL_PHASE 沿用用户设置", async () => {
+    const adapter = new FakeAdapter();
+    // 第 1 轮：调工具；第 2 轮：不调 → 切 SOUL_PHASE
+    adapter.enqueueToolCalls([{ id: "tc-1", name: "weather", arguments: "{}" }]);
+    adapter.enqueueText("");
+    adapter.enqueueText("最终回复");
+
+    await runTwoPhaseFcLoop({
+      ...baseOptions,
+      settings: {
+        provider: "test",
+        baseUrl: "https://test",
+        model: "m",
+        apiKey: "k",
+        reasoning: { mode: "on", effort: "high" },
+      },
+      adapter,
+      executeTool: async () => "ok",
+    });
+
+    expect(adapter.configs).toHaveLength(3);
+    // 两轮 TOOL_PHASE：reasoning 被强制覆盖为 off
+    expect(adapter.configs[0].reasoning).toEqual({ mode: "off" });
+    expect(adapter.configs[1].reasoning).toEqual({ mode: "off" });
+    // SOUL_PHASE：透传用户设置里的偏好，不被工具阶段的覆盖污染
+    expect(adapter.configs[2].reasoning).toEqual({ mode: "on", effort: "high" });
+  });
+
+  it("分阶段 reasoning：用户未设置 reasoning 时，SOUL_PHASE 保持缺省（auto 语义）", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueText("");
+    adapter.enqueueText("最终回复");
+
+    await runTwoPhaseFcLoop({
+      ...baseOptions,
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      executeTool: async () => "ok",
+    });
+
+    expect(adapter.configs).toHaveLength(2);
+    expect(adapter.configs[0].reasoning).toEqual({ mode: "off" });
+    expect(adapter.configs[1].reasoning).toBeUndefined();
   });
 });

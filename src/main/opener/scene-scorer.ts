@@ -50,7 +50,7 @@ function baseScore(
     case "morning":
       return (snap.hour >= 7 && snap.hour <= 10) ? 100 : 0;
     case "late_night":
-      if (snap.hour < 23) return 0;
+      if (!(snap.hour >= 23 || snap.hour < 3)) return 0;
       return 50 + MIN(snap.keyboardAccumMin, 60) * 50;
     case "idle_daze":
       if (snap.hour < 9 || snap.hour > 18) return 0;

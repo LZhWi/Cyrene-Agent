@@ -1,11 +1,16 @@
 import * as fs from "fs"
 import * as path from "path"
 import { getUserDataDir } from "../runtime/runtime-paths"
-import { ConflictLog, L0Profile, L1Profile, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryStore, ReflectionLog } from "./memory-types"
+import { ConflictLog, L0Profile, L1Profile, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryJudgeTurn, MemoryStore, ReflectionLog } from "./memory-types"
 import { appendMemoryTrace } from "./memory-trace"
 
 const CURRENT_SCHEMA_VERSION = 2
 const QUOTE_SNIPPET_MAX = 300
+const DAY_MS = 24 * 60 * 60 * 1000
+/** active 闲置满 30 天降为 aging */
+const DECAY_AGING_IDLE_MS = 30 * DAY_MS
+/** aging 闲置满 90 天降为 archived */
+const DECAY_ARCHIVE_IDLE_MS = 90 * DAY_MS
 const RESOLVER_PRIORITY_RANK: Record<string, number> = {
   high: 3,
   normal: 2,
@@ -40,6 +45,8 @@ const DEFAULT_STORE: MemoryStore = {
   evidence: [],
   reflectionLogs: [],
   conflictLogs: [],
+  lastDecayAt: 0,
+  pendingTurns: [],
   version: 1,
 }
 
@@ -60,6 +67,7 @@ function cloneDefaultStore(): MemoryStore {
     evidence: [],
     reflectionLogs: [],
     conflictLogs: [],
+    pendingTurns: [],
   }
 }
 
@@ -77,10 +85,16 @@ function backupMemoryFile(filePath: string): void {
 }
 
 export function repairMigrations(store: Partial<MemoryStore>): MemoryStore {
+  const l1 = { ...DEFAULT_L1, ...store.l1 }
+  // 历史数据没有写过 generatedAt：有内容但时间戳为 0 时从当前时刻起算新鲜期，
+  // 避免存量 L1 被立刻判为过期。
+  if (!l1.generatedAt && (l1.recentGoals || l1.recentPreferences || l1.currentProject)) {
+    l1.generatedAt = Date.now()
+  }
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     l0: { ...DEFAULT_L0, ...store.l0 },
-    l1: { ...DEFAULT_L1, ...store.l1 },
+    l1,
     l2: Array.isArray(store.l2) ? store.l2.map((memory) => ({
       ...memory,
       syncStatus: memory.syncStatus ?? (memory.ragId ? "synced" : "pending_sync"),
@@ -93,6 +107,10 @@ export function repairMigrations(store: Partial<MemoryStore>): MemoryStore {
       resolverStatus: log.resolverStatus ?? (log.resolverPriority && log.resolverPriority !== "none" ? "queued" : "not_queued"),
       resolverAttemptCount: typeof log.resolverAttemptCount === "number" ? log.resolverAttemptCount : 0,
     })) : [],
+    lastDecayAt: typeof store.lastDecayAt === "number" ? store.lastDecayAt : 0,
+    pendingTurns: Array.isArray(store.pendingTurns) ? store.pendingTurns.filter(
+      (turn) => turn && typeof turn.userInput === "string" && typeof turn.assistantReply === "string",
+    ) : [],
     version: typeof store.version === "number" ? store.version : 1,
   }
 }
@@ -187,6 +205,10 @@ class MemoryStoreManager {
   async replaceL1Field(field: L1WritableField, value: L1Profile[L1WritableField]): Promise<void> {
     const store = await this.load()
     store.l1 = { ...store.l1, [field]: value }
+    // 内容字段更新时刷新新鲜度时间戳；roundCount 等计数字段不算内容更新。
+    if (field === "recentGoals" || field === "recentPreferences" || field === "currentProject") {
+      store.l1.generatedAt = Date.now()
+    }
     await this.save(store)
     appendMemoryTrace({
       op: "l1.update",
@@ -638,27 +660,40 @@ class MemoryStoreManager {
     await this.updateL2Status(ids, "archived")
   }
 
-  async decayL2Weights(delta = 1): Promise<number> {
+  /**
+   * L2 生命周期衰减：weight 逐次递减（仅作召回热度信号，不再驱动状态），
+   * 状态降级只看闲置时长且一次最多降一级：active 闲置满 30 天转 aging，
+   * aging 闲置满 90 天转 archived。召回会刷新 lastAccessedAt，常用记忆不受影响。
+   * 只处理 active/aging；superseded/merged/archived 一律不碰，避免已废弃条目被复活。
+   */
+  async decayL2Weights(delta = 1, now = Date.now()): Promise<number> {
     const store = await this.load()
     let changed = 0
 
     for (const mem of store.l2) {
-      if (mem.isPinned || mem.status === "archived" || mem.weight <= 0) continue
+      if (mem.isPinned || (mem.status !== "active" && mem.status !== "aging")) continue
 
-      mem.weight = Math.max(0, mem.weight - delta)
-      if (mem.weight >= 30) {
-        mem.status = "active"
-      } else if (mem.weight >= 10) {
-        mem.status = "aging"
-      } else {
-        mem.status = "archived"
+      let touched = false
+      if (mem.weight > 0) {
+        mem.weight = Math.max(0, mem.weight - delta)
+        touched = true
       }
-      changed += 1
+
+      const idleMs = now - Math.max(mem.lastAccessedAt || 0, mem.createdAt || 0)
+      if (mem.status === "active" && idleMs >= DECAY_AGING_IDLE_MS) {
+        mem.status = "aging"
+        touched = true
+      } else if (mem.status === "aging" && idleMs >= DECAY_ARCHIVE_IDLE_MS) {
+        mem.status = "archived"
+        touched = true
+      }
+
+      if (touched) changed += 1
     }
 
-    if (changed > 0) {
-      await this.save(store)
-    }
+    // 无论本轮是否有条目变化，都记录运行时间，供调度层每日限频。
+    store.lastDecayAt = now
+    await this.save(store)
     appendMemoryTrace({
       op: "l2.decay",
       layer: "L2",
@@ -666,6 +701,27 @@ class MemoryStoreManager {
       details: { delta, changed },
     })
     return changed
+  }
+
+  async getLastDecayAt(): Promise<number> {
+    const store = await this.load()
+    return store.lastDecayAt ?? 0
+  }
+
+  /** 读取重启前尚未提取的残余轮次 */
+  async getPendingTurns(): Promise<MemoryJudgeTurn[]> {
+    const store = await this.load()
+    return (store.pendingTurns ?? []).map((turn) => ({ ...turn }))
+  }
+
+  /** 固化尚未提取的残余轮次；单段文本截断，避免长文档粘贴撞大 memory.json 体积 */
+  async setPendingTurns(turns: MemoryJudgeTurn[]): Promise<void> {
+    const store = await this.load()
+    store.pendingTurns = turns.map((turn) => ({
+      userInput: snippet(turn.userInput, 4000) ?? "",
+      assistantReply: snippet(turn.assistantReply, 4000) ?? "",
+    }))
+    await this.save(store)
   }
 
   /** 批量插入新的 L2 条目（压缩总结用） */

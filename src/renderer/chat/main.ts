@@ -112,6 +112,7 @@ interface ChatApi {
     isMaximized: () => Promise<boolean>;
     sendMessage: (messages: Array<{ role: "user" | "model"; content: string }>, style: string) => Promise<ChatReplyPayload>;
     ingestDroppedFiles: (files: File[]) => Promise<Attachment[]>;
+    ingestPastedImage?: (base64: string, mime: string) => Promise<Attachment | null>;
     processDocuments: (filePaths: string[], query: string) => Promise<Attachment[]>;
     onDocumentIndexProgress?: (callback: (progress: DocumentIndexProgress) => void) => () => void;
     cancelDocumentIndex: (jobId: string) => Promise<boolean>;
@@ -240,6 +241,7 @@ declare global {
     modelConfig?: ModelConfigApi;
     choice?: ChoiceApi;
     music?: ChatMusicApi;
+    lifeStatus?: { getCurrentActivity: () => Promise<string | null> };
   }
 }
 
@@ -255,11 +257,37 @@ const minBtn = document.getElementById("min-btn") as HTMLButtonElement;
 const maxBtn = document.getElementById("max-btn") as HTMLButtonElement;
 const closeBtn = document.getElementById("close-btn") as HTMLButtonElement;
 const chatHintEl = document.getElementById("chat-hint") as HTMLElement;
+const chatActivityEl = document.getElementById("chat-activity") as HTMLElement | null;
+const chatActivitySepEl = document.getElementById("chat-activity-sep") as HTMLElement | null;
 const chatStatusBtn = document.getElementById("chat-status-btn") as HTMLButtonElement;
 const chatRail = document.getElementById("chat-rail") as HTMLElement | null;
 const chatRailNew = document.getElementById("chat-rail-new") as HTMLButtonElement | null;
 const chatRailList = document.getElementById("chat-rail-list") as HTMLElement | null;
 const chatRailEmpty = document.getElementById("chat-rail-empty") as HTMLElement | null;
+
+// [你的生活] 当前活动：标题栏「昔涟 · 正在××」，与注入 LLM 的日程同源（life:get-current-activity）。
+// 深夜日程空窗（22:00-7:00）返回 null → 显示「休息中」；以"在"开头的条目前缀用"正"避免"正在在"。
+function formatLifeStatus(activity: string | null): string {
+  if (activity == null) return "休息中";
+  return activity.startsWith("在") ? `正${activity}` : `正在${activity}`;
+}
+
+async function refreshLifeActivity(): Promise<void> {
+  if (!chatActivityEl || !chatActivitySepEl || !window.lifeStatus) return;
+  try {
+    const activity = await window.lifeStatus.getCurrentActivity();
+    chatActivityEl.textContent = formatLifeStatus(activity);
+    chatActivityEl.hidden = false;
+    chatActivitySepEl.hidden = false;
+  } catch {
+    // preload 未暴露或主进程异常：保持隐藏，不影响标题栏其他部分
+    chatActivityEl.hidden = true;
+    chatActivitySepEl.hidden = true;
+  }
+}
+
+void refreshLifeActivity();
+setInterval(() => void refreshLifeActivity(), 60_000);
 
 // 旧版 localStorage key——首次启动时检测到老数据会迁移到主进程 chats 存储再清掉。
 const LEGACY_STORAGE_KEY = "cyrene.chat.history.v1";
@@ -3633,6 +3661,40 @@ document.addEventListener("drop", async (e) => {
   const files = e.dataTransfer?.files;
   if (files && files.length > 0) {
     void ingestDroppedFiles(Array.from(files));
+  }
+});
+
+/* ===== Paste image（Win+Shift+S 等剪贴板图像）===== */
+// 剪贴板图像无文件路径，走 base64 → main 落盘 → 复用现有摄入链。
+// 仅在剪贴板包含图像时接管；纯文本粘贴不受影响。
+document.addEventListener("paste", async (e) => {
+  const items = e.clipboardData?.items;
+  if (!items || !window.chat?.ingestPastedImage) return;
+  const imageFiles: File[] = [];
+  for (const item of Array.from(items)) {
+    if (item.kind === "file" && item.type.startsWith("image/")) {
+      const f = item.getAsFile();
+      if (f) imageFiles.push(f);
+    }
+  }
+  if (imageFiles.length === 0) return;
+  e.preventDefault();
+  for (const f of imageFiles) {
+    try {
+      const buf = new Uint8Array(await f.arrayBuffer());
+      let binary = "";
+      const CHUNK = 0x8000;
+      for (let i = 0; i < buf.length; i += CHUNK) {
+        binary += String.fromCharCode(...buf.subarray(i, i + CHUNK));
+      }
+      const att = await window.chat.ingestPastedImage(btoa(binary), f.type);
+      if (att) {
+        attachedFiles = [...attachedFiles, att];
+        updateFileTags();
+      }
+    } catch (err: unknown) {
+      window.alert("粘贴图片失败：" + ((err as Error)?.message || String(err)));
+    }
   }
 });
 

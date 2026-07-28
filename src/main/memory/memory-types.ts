@@ -26,6 +26,14 @@ export interface L1Profile {
   roundCount: number
 }
 
+/** L1 内容的新鲜期：超过 30 天未更新就不再注入 [近期状态]（与 L2 active→aging 边界对齐） */
+export const L1_FRESHNESS_WINDOW_MS = 30 * 24 * 60 * 60 * 1000
+
+export function isL1Fresh(l1: L1Profile, now = Date.now()): boolean {
+  if (!l1.generatedAt) return false
+  return now - l1.generatedAt < L1_FRESHNESS_WINDOW_MS
+}
+
 export type L2SyncStatus = "pending_sync" | "synced" | "sync_failed"
 
 export interface L2Memory {
@@ -174,6 +182,10 @@ export interface MemoryStore {
   evidence?: MemoryEvidence[]
   reflectionLogs?: ReflectionLog[]
   conflictLogs?: ConflictLog[]
+  /** 上次 L2 生命周期衰减的时间戳，用于每日限频 */
+  lastDecayAt?: number
+  /** 尚未被 MemoryJudge 提取的残余轮次，重启后恢复，避免丢轮 */
+  pendingTurns?: MemoryJudgeTurn[]
   /** @deprecated Use schemaVersion for memory.json migrations. */
   version: number
 }

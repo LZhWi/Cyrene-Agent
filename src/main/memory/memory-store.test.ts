@@ -71,7 +71,7 @@ describe("memoryStore", () => {
     expect(marked?.status).toBe("active")
   })
 
-  it("decays only unpinned active L2 memories with positive weight", async () => {
+  it("decays weight without changing status for recently used memories", async () => {
     const { memoryStore } = await import("./memory-store")
     const active = await memoryStore.addL2Memory({
       content: "用户正在练琴",
@@ -101,10 +101,102 @@ describe("memoryStore", () => {
     )
 
     expect(changed).toBe(1)
+    // 刚写入/刚召回的记忆只掉 weight，状态不受 weight 影响
     expect(persisted.l2.find((m: { id: string }) => m.id === active.id).weight).toBe(9)
-    expect(persisted.l2.find((m: { id: string }) => m.id === active.id).status).toBe("archived")
+    expect(persisted.l2.find((m: { id: string }) => m.id === active.id).status).toBe("active")
     expect(persisted.l2.find((m: { id: string }) => m.id === pinned.id).weight).toBe(10)
     expect(persisted.l2.find((m: { id: string }) => m.id === pinned.id).status).toBe("active")
+  })
+
+  it("downgrades idle memories one stage at a time and never touches superseded entries", async () => {
+    const { memoryStore } = await import("./memory-store")
+    const DAY = 24 * 60 * 60 * 1000
+    const now = Date.now()
+    const staleActive = await memoryStore.addL2Memory({
+      content: "用户去年在学法语",
+      triggerText: "我在学法语",
+      sourceConversationId: "test",
+      ragId: "rag_stale_active",
+      isPinned: false,
+    })
+    const staleAging = await memoryStore.addL2Memory({
+      content: "用户曾经想养鸟",
+      triggerText: "我想养鸟",
+      sourceConversationId: "test",
+      ragId: "rag_stale_aging",
+      isPinned: false,
+    })
+    const superseded = await memoryStore.addL2Memory({
+      content: "用户住在旧城区",
+      triggerText: "我住旧城区",
+      sourceConversationId: "test",
+      ragId: "rag_superseded",
+      isPinned: false,
+    })
+
+    const store = await memoryStore.load()
+    const a = store.l2.find((m) => m.id === staleActive.id)!
+    a.createdAt = now - 120 * DAY
+    a.lastAccessedAt = now - 120 * DAY
+    const b = store.l2.find((m) => m.id === staleAging.id)!
+    b.status = "aging"
+    b.createdAt = now - 200 * DAY
+    b.lastAccessedAt = now - 120 * DAY
+    const c = store.l2.find((m) => m.id === superseded.id)!
+    c.status = "superseded"
+    c.weight = 35
+    c.lastAccessedAt = now - 120 * DAY
+    await memoryStore.save(store)
+
+    await memoryStore.decayL2Weights(1, now)
+    const persisted = JSON.parse(
+      fs.readFileSync(path.join(electronMock.userDataDir, "memory.json"), "utf8"),
+    )
+
+    // active 闲置超 90 天也只降一级到 aging，不跳级归档
+    expect(persisted.l2.find((m: { id: string }) => m.id === staleActive.id).status).toBe("aging")
+    // aging 闲置超 90 天才归档
+    expect(persisted.l2.find((m: { id: string }) => m.id === staleAging.id).status).toBe("archived")
+    // superseded 不参与衰减，也不会被复活
+    expect(persisted.l2.find((m: { id: string }) => m.id === superseded.id).status).toBe("superseded")
+    expect(persisted.l2.find((m: { id: string }) => m.id === superseded.id).weight).toBe(35)
+    // 运行时间持久化，供调度层限频
+    expect(persisted.lastDecayAt).toBe(now)
+    expect(await memoryStore.getLastDecayAt()).toBe(now)
+  })
+
+  it("refreshes L1 freshness timestamp on content updates but not on roundCount", async () => {
+    const { memoryStore } = await import("./memory-store")
+
+    await memoryStore.replaceL1Field("roundCount", 3)
+    expect((await memoryStore.getL1()).generatedAt).toBe(0)
+
+    await memoryStore.replaceL1Field("recentGoals", "学法语")
+    const l1 = await memoryStore.getL1()
+    expect(l1.generatedAt).toBeGreaterThan(0)
+    expect(l1.recentGoals).toBe("学法语")
+  })
+
+  it("grants legacy L1 content a fresh window during migration repair", async () => {
+    const { repairMigrations } = await import("./memory-store")
+
+    const legacy = repairMigrations({
+      l1: { recentGoals: "旧目标", recentPreferences: "", currentProject: "", generatedAt: 0, roundCount: 10 },
+    })
+    expect(legacy.l1.generatedAt).toBeGreaterThan(0)
+
+    // 没有内容的 L1 不伪造时间戳
+    const empty = repairMigrations({})
+    expect(empty.l1.generatedAt).toBe(0)
+  })
+
+  it("treats stale or unset L1 as not fresh", async () => {
+    const { isL1Fresh, L1_FRESHNESS_WINDOW_MS } = await import("./memory-types")
+    const base = { recentGoals: "g", recentPreferences: "", currentProject: "", roundCount: 0 }
+
+    expect(isL1Fresh({ ...base, generatedAt: 0 })).toBe(false)
+    expect(isL1Fresh({ ...base, generatedAt: Date.now() })).toBe(true)
+    expect(isL1Fresh({ ...base, generatedAt: Date.now() - L1_FRESHNESS_WINDOW_MS - 1 })).toBe(false)
   })
 
   it("updates L0 and L2 through atomic write APIs", async () => {
@@ -576,5 +668,32 @@ describe("memoryStore", () => {
     expect(store.conflictLogs).toEqual([])
     expect(backups).toHaveLength(1)
     expect(readTraceEvents().some((event) => event.op === "migration.upgrade")).toBe(true)
+  })
+
+  it("round-trips pending turns and truncates oversized text", async () => {
+    const { memoryStore } = await import("./memory-store")
+
+    // 默认为空（含存量数据无 pendingTurns 字段的情况）
+    expect(await memoryStore.getPendingTurns()).toEqual([])
+
+    await memoryStore.setPendingTurns([
+      { userInput: "我在学钢琴", assistantReply: "好厉害！" },
+      { userInput: "x".repeat(5000), assistantReply: "ok" },
+    ])
+
+    const restored = await memoryStore.getPendingTurns()
+    expect(restored).toHaveLength(2)
+    expect(restored[0]).toEqual({ userInput: "我在学钢琴", assistantReply: "好厉害！" })
+    expect(restored[1].userInput).toHaveLength(4000)
+
+    // 落盘验证：重启（重新 import）后仍能读到
+    const persisted = JSON.parse(
+      fs.readFileSync(path.join(electronMock.userDataDir, "memory.json"), "utf8"),
+    )
+    expect(persisted.pendingTurns).toHaveLength(2)
+
+    // 清空
+    await memoryStore.setPendingTurns([])
+    expect(await memoryStore.getPendingTurns()).toEqual([])
   })
 })

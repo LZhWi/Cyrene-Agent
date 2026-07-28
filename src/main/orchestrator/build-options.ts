@@ -72,6 +72,8 @@ export interface BuildOptionsDeps {
   buildMusicCompanionContext?: (conversationId: string, userText: string) => string;
   /** 可选：加载尾部锚点（prompts/tone-anchor.md，压缩版硬行为规则）。文件不存在时返回空串=不启用。 */
   loadToneAnchor?: () => string;
+  /** 可选：构造 [你的生活] 拟态日程（life-context.ts）。缺省或异常时返回空串=不启用。 */
+  buildLifeContext?: () => string;
 }
 
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
@@ -376,10 +378,20 @@ export async function buildAgentRunOptions(
     new Set(runTools.map((tool) => String((tool as { id?: unknown }).id ?? ""))),
   );
 
+  // [你的生活] 拟态日程：生活背景属于环境类信息，紧跟 environmentContext 注入。
+  // 工具阶段（toolSystemContent）不注入——工具决策不需要拟态生活。
+  let lifeContext = "";
+  try {
+    lifeContext = deps.buildLifeContext?.()?.trim() ?? "";
+  } catch (err) {
+    console.warn("[Cyrene] life context build failed:", err);
+  }
+
   // 第一期：保留旧 systemContent 兼容（已不再使用，保留字段是为了 logger 诊断）。
   // 同时新增 toolSystemContent / soulSystemBaseContent 两套。
   const systemContent =
     (environmentContext ? environmentContext + "\n\n" : "") +
+    (lifeContext ? lifeContext + "\n\n" : "") +
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
     deps.buildSystemPrompt(styleFile) +
@@ -404,8 +416,14 @@ export async function buildAgentRunOptions(
   // 工具结果（role: tool 消息）已在 conversation 中携带，本字段不重复注入；
   // FC 循环 Soul 阶段执行前会按需动态追加 soulToolResultsSummary。
   // 注入顺序与旧路径（requestModelReply）保持一致：记忆 → 世界书（世界书放最后，最靠近 user message）
+  // soul 阶段的请求不带 tools，environmentContext 里“可直接调用的工具”在本阶段不成立；
+  // 紧跟其后补一句纠正，避免模型在正文阶段徒手写工具调用文本泄给用户。
+  const soulPhaseToolCorrection =
+    "注意：当前回复阶段工具调用环节已经结束，上面列出的工具现在不能也不需要调用——" +
+    "直接用对话里已有的工具结果（如有）自然回复即可，绝不要输出 <tool_call>、<invoke> 之类的调用指令文本。";
   const soulSystemBaseContent =
-    (environmentContext ? environmentContext + "\n\n" : "") +
+    (environmentContext ? environmentContext + "\n\n" + soulPhaseToolCorrection + "\n\n" : "") +
+    (lifeContext ? lifeContext + "\n\n" : "") +
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
     deps.buildSoulSystemBasePrompt(styleFile) +
@@ -437,6 +455,8 @@ export async function buildAgentRunOptions(
         model: settings.model,
         apiKey: settings.apiKey,
         explicitTransport: settings.explicitTransport,
+        // reasoning 必须透传：丢掉它会让设置里的思考模式开关对主聊天管线失效
+        ...(settings.reasoning ? { reasoning: settings.reasoning } : {}),
       },
       messages: fcMessages,
       conversationId,
