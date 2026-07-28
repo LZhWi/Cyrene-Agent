@@ -1,34 +1,30 @@
-// Document Agent -- 最小垂直切片
+// Document Agent -- 通过通用子代理 Graph 骨架运行
 //
-// 确定性流水线：write_word -> 验证文件 -> 构建 SubAgentPublicResult
-// 第一版不使用 LLM 驱动的子图循环，直接按模板执行。
-// 后续需要动态规划时再引入 LLM 决策节点。
+// Profile 配置：模板计划 + 确定性决策（不调用 LLM）
+// 模板步骤：验证输入 -> 调用 write_word -> 验证 artifact -> 构建结果
 
 import { existsSync, statSync } from "fs";
-import { toolRegistry, type ToolDefinition } from "../tool-registry";
 import { registerSubAgentProfile } from "./runner";
-import type { ToolContext } from "../tool-context";
-import type { SubAgentPublicResultV1, SubAgentRunContext, SubAgentRunOutcome, SubAgentArtifact, CompletionEvidenceRecord } from "./types";
+import { runSubAgentGraph, buildFailedResult } from "./graph";
+import type {
+  SubAgentRunContext,
+  SubAgentRunOutcome,
+  SubAgentState,
+  SubAgentProfileConfig,
+  SubAgentPlan,
+  SubAgentPublicResultV1,
+  SubAgentArtifact,
+  CompletionEvidenceRecord,
+  SubAgentDecision,
+} from "./types";
+import type { PlanStep, StepVerificationResult } from "../task-plan";
+import { generatePlanId, generateStepId } from "../task-plan";
 
 /** Document Agent 工具白名单 */
 const DOCUMENT_ALLOWED_TOOLS = new Set([
-  "write_word",
-  "write_excel",
-  "write_pdf",
-  "write_markdown",
-  "write_file",
-  "read_file",
-  "list_dir",
+  "write_word", "write_excel", "write_pdf", "write_markdown",
+  "write_file", "read_file", "list_dir",
 ]);
-
-/** Document Agent 任务参数（由主 Agent Native FC 生成） */
-export interface DocumentTaskInput {
-  objective: string;
-  filename: string;
-  title: string;
-  paragraphs: string[];
-  style?: string;
-}
 
 /** 从 write_word 输出中提取文件路径 */
 function extractFilePath(output: string): string | undefined {
@@ -36,111 +32,119 @@ function extractFilePath(output: string): string | undefined {
   return match?.[1]?.trim();
 }
 
-/**
- * 通过统一原子工具执行边界调用工具。
- * 继承工具白名单校验、enabled 校验和统一执行语义。
- * 不允许调用白名单外或 disabled 的工具。
- * signal 通过 ToolContext 传播到 tool.execute()，工具应检查 signal.aborted。
- */
-async function executeAllowedTool(
-  toolId: string,
-  args: Record<string, unknown>,
-  allowedTools: Set<string>,
-  signal?: AbortSignal,
-): Promise<string> {
-  const tool: ToolDefinition | undefined = toolRegistry.getById(toolId);
-  if (!tool) {
-    throw new Error(`工具未注册: ${toolId}`);
-  }
-  if (!tool.enabled) {
-    throw new Error(`工具已禁用: ${toolId}`);
-  }
-  if (!allowedTools.has(toolId)) {
-    throw new Error(`工具不在白名单中: ${toolId}`);
-  }
-  const ctx: ToolContext | undefined = signal
-    ? { userQuery: "", conversationId: "subagent", signal }
-    : undefined;
-  return tool.execute(args, ctx);
-}
-
-/**
- * 验证文件：存在 + 是文件 + 大小 > 0 + 修改时间不早于运行开始时间（含 2s 容差）。
- * 文件名复用时通过 mtime 检查防止误判旧文件。
- */
+/** 验证文件：存在 + isFile + size>0 + mtime >= runStart - 2s */
 function verifyFile(filePath: string, runStartMs: number): {
-  verified: boolean;
-  sizeBytes?: number;
-  reason?: string;
+  verified: boolean; sizeBytes?: number; reason?: string;
 } {
-  if (!existsSync(filePath)) {
-    return { verified: false, reason: "文件不存在" };
-  }
+  if (!existsSync(filePath)) return { verified: false, reason: "文件不存在" };
   const stat = statSync(filePath);
-  if (!stat.isFile()) {
-    return { verified: false, reason: "路径不是文件" };
-  }
-  if (stat.size === 0) {
-    return { verified: false, reason: "文件大小为零" };
-  }
-  // Windows 文件系统和 rename 可能产生小幅误差，使用 2s 容差
-  if (stat.mtimeMs < runStartMs - 2000) {
-    return { verified: false, reason: "文件修改时间早于本次运行开始时间，可能是旧文件" };
-  }
+  if (!stat.isFile()) return { verified: false, reason: "路径不是文件" };
+  if (stat.size === 0) return { verified: false, reason: "文件大小为零" };
+  if (stat.mtimeMs < runStartMs - 2000) return { verified: false, reason: "文件修改时间早于本次运行开始时间" };
   return { verified: true, sizeBytes: stat.size };
 }
 
-/** 判断是否为 AbortError */
-function isAbortError(err: unknown): boolean {
-  return err instanceof Error && (err.name === "AbortError" || err.message.includes("aborted"));
-}
+/** Document Profile 配置 */
+const documentProfile: SubAgentProfileConfig = {
+  id: "document",
+  allowedTools: DOCUMENT_ALLOWED_TOOLS,
+  budget: { maxSteps: 5, maxToolCalls: 10, timeoutMs: 60_000, maxReplans: 1 },
 
-/**
- * 运行 Document Agent。
- * 确定性执行：调 write_word -> 验证文件 -> 返回结构化结果。
- */
-async function runDocumentAgent(ctx: SubAgentRunContext): Promise<SubAgentRunOutcome> {
-  const args = ctx.args;
-  const input: DocumentTaskInput = {
-    objective: String(args.objective ?? ""),
-    filename: String(args.filename ?? ""),
-    title: String(args.title ?? ""),
-    paragraphs: Array.isArray(args.paragraphs) ? args.paragraphs.map(String) : [],
-    ...(args.style ? { style: String(args.style) } : {}),
-  };
+  createInitialPlan(ctx: SubAgentRunContext): SubAgentPlan {
+    const now = Date.now();
+    return {
+      id: generatePlanId(),
+      goal: String(ctx.args.objective ?? "生成文档"),
+      steps: [
+        {
+          id: generateStepId(),
+          objective: "调用 write_word 生成文档",
+          status: "pending",
+          completionPolicy: { allOf: [{ kind: "tool_succeeded", capabilityId: "write_word" }] },
+          toolCallCount: 0, retryCount: 0,
+        },
+        {
+          id: generateStepId(),
+          objective: "验证文件已生成",
+          status: "pending",
+          completionPolicy: { allOf: [{ kind: "tool_succeeded", capabilityId: "write_word" }] },
+          toolCallCount: 0, retryCount: 0,
+        },
+      ],
+      status: "running",
+      createdAt: now,
+      updatedAt: now,
+    };
+  },
 
-  const runStartMs = Date.now();
+  decide(state: SubAgentState): SubAgentDecision {
+    const step = state.plan.steps.find(s => s.id === state.currentStepId);
+    if (!step) return { action: "fail", reason: "无当前步骤", code: "NO_STEP", recoverable: false };
 
-  try {
-    // 1. 通过统一执行边界调用 write_word（signal 传播到 tool.execute）
-    const output = await executeAllowedTool(
-      "write_word",
-      {
-        filename: input.filename,
-        title: input.title,
-        paragraphs: input.paragraphs,
-        ...(input.style ? { style: input.style } : {}),
-      },
-      DOCUMENT_ALLOWED_TOOLS,
-      ctx.signal,
-    );
-
-    // 2. 从 write_word 结构化返回中提取文件路径
-    const filePath = extractFilePath(output);
-    if (!filePath) {
+    // 步骤 1：调用 write_word
+    if (step.objective.includes("调用 write_word")) {
+      const args = state.ctx.args;
       return {
-        invocationStatus: "completed",
-        result: buildFailedResult(ctx.taskId, "无法从 write_word 输出中提取文件路径", "FILE_PATH_NOT_FOUND", true),
+        action: "call_tool",
+        toolId: "write_word",
+        args: {
+          filename: String(args.filename ?? ""),
+          title: String(args.title ?? ""),
+          paragraphs: Array.isArray(args.paragraphs) ? args.paragraphs.map(String) : [],
+          ...(args.style ? { style: String(args.style) } : {}),
+        },
       };
     }
 
-    // 3. 验证文件：存在 + isFile + size>0 + mtime >= runStart - 2s
-    const verification = verifyFile(filePath, runStartMs);
+    // 步骤 2：验证文件（不需要调用工具）
+    return { action: "skip" };
+  },
 
-    // 4. 构建结构化结果（artifacts_only：findings 为空）
+  verifyStep(state: SubAgentState): StepVerificationResult {
+    const step = state.plan.steps.find(s => s.id === state.currentStepId);
+    if (!step) return { status: "failed", failureReason: "无当前步骤" };
+
+    // 步骤 1：检查 write_word 是否成功调用
+    if (step.objective.includes("调用 write_word")) {
+      const writeResult = state.toolResults.find(r => r.toolId === "write_word");
+      if (!writeResult) return { status: "running" };
+      if (writeResult.status !== "succeeded") return { status: "failed", failureReason: "write_word 调用失败" };
+      return { status: "completed" };
+    }
+
+    // 步骤 2：验证文件
+    if (step.objective.includes("验证文件")) {
+      const writeResult = state.toolResults.find(r => r.toolId === "write_word");
+      if (!writeResult) return { status: "failed", failureReason: "未找到 write_word 结果" };
+      const filePath = extractFilePath(writeResult.output);
+      if (!filePath) return { status: "failed", failureReason: "无法提取文件路径" };
+      const verification = verifyFile(filePath, state.budgetUsage.startedAt);
+      if (verification.verified) return { status: "completed" };
+      return { status: "failed", failureReason: verification.reason ?? "文件验证失败" };
+    }
+
+    return { status: "failed", failureReason: "未知步骤" };
+  },
+
+  buildResult(state: SubAgentState): SubAgentPublicResultV1 {
+    const writeResult = state.toolResults.find(r => r.toolId === "write_word");
+    const args = state.ctx.args;
+    const filename = String(args.filename ?? "");
+
+    if (!writeResult || writeResult.status !== "succeeded") {
+      return buildFailedResult(state.ctx.taskId, "document", "文档生成失败", "WRITE_WORD_FAILED", true);
+    }
+
+    const filePath = extractFilePath(writeResult.output);
+    if (!filePath) {
+      return buildFailedResult(state.ctx.taskId, "document", "无法提取文件路径", "FILE_PATH_NOT_FOUND", true);
+    }
+
+    const verification = verifyFile(filePath, state.budgetUsage.startedAt);
+
     const artifacts: SubAgentArtifact[] = [{
       id: "artifact_1",
-      name: input.filename,
+      name: filename,
       path: filePath,
       mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
       sizeBytes: verification.sizeBytes,
@@ -153,57 +157,26 @@ async function runDocumentAgent(ctx: SubAgentRunContext): Promise<SubAgentRunOut
       evidenceRefs: verification.verified ? [filePath] : [],
     }];
 
-    const result: SubAgentPublicResultV1 = {
+    return {
       kind: "subagent_result",
       version: 1,
-      taskId: ctx.taskId,
+      taskId: state.ctx.taskId,
       profile: "document",
       status: verification.verified ? "succeeded" : "failed",
-      summary: verification.verified
-        ? `文档已生成：${filePath}`
-        : `文档验证失败：${verification.reason}`,
-      findings: [],
+      summary: verification.verified ? `文档已生成：${filePath}` : `文档验证失败：${verification.reason}`,
+      findings: [], // artifacts_only
       artifacts,
       completionEvidence,
       ...(verification.verified
-        ? { primaryArtifact: { name: input.filename, path: filePath, verified: true } }
-        : {}),
-      ...(!verification.verified
-        ? { error: { code: "FILE_VERIFICATION_FAILED", message: verification.reason ?? "文件验证失败", recoverable: true } }
-        : {}),
+        ? { primaryArtifact: { name: filename, path: filePath, verified: true } }
+        : { error: { code: "FILE_VERIFICATION_FAILED", message: verification.reason ?? "文件验证失败", recoverable: true } }),
     };
+  },
+};
 
-    return { invocationStatus: "completed", result };
-  } catch (err) {
-    // AbortError 重新抛出，不包装为工具失败
-    if (isAbortError(err)) throw err;
-
-    const message = err instanceof Error ? err.message : String(err);
-    return {
-      invocationStatus: "crashed",
-      error: { code: "DOCUMENT_AGENT_ERROR", message },
-    };
-  }
-}
-
-function buildFailedResult(
-  taskId: string,
-  message: string,
-  code: string,
-  recoverable: boolean,
-): SubAgentPublicResultV1 {
-  return {
-    kind: "subagent_result",
-    version: 1,
-    taskId,
-    profile: "document",
-    status: "failed",
-    summary: message,
-    findings: [],
-    artifacts: [],
-    completionEvidence: [],
-    error: { code, message, recoverable },
-  };
+/** 子代理执行入口（注册到 runner） */
+async function runDocumentAgent(ctx: SubAgentRunContext): Promise<SubAgentRunOutcome> {
+  return runSubAgentGraph(ctx, documentProfile);
 }
 
 /** 显式注册 Document Profile。由 registerBuiltInSubAgentProfiles() 调用。 */

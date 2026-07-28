@@ -1,5 +1,8 @@
 // 子代理公共类型定义
 
+import type { PlanStep, StepVerificationResult } from "../task-plan";
+import type { ToolCallResult } from "../types";
+
 /** 子代理 Profile ID 联合类型 */
 export type SubAgentProfileId = "document" | "search" | "crawler";
 
@@ -19,6 +22,75 @@ export interface SubAgentRunContext {
   signal?: AbortSignal;
   /** 子代理运行截止时间戳（ms） */
   deadlineAt?: number;
+}
+
+/** 子代理预算 */
+export interface SubAgentBudget {
+  maxSteps: number;
+  maxToolCalls: number;
+  timeoutMs: number;
+  maxReplans: number;
+}
+
+/** 子代理简化计划（复用 PlanStep，不复用 TaskPlan） */
+export interface SubAgentPlan {
+  id: string;
+  goal: string;
+  steps: PlanStep[];
+  status: "running" | "completed" | "failed";
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** 子代理决策：当前步骤要做什么 */
+export type SubAgentDecision =
+  | { action: "call_tool"; toolId: string; args: Record<string, unknown> }
+  | { action: "skip" }
+  | { action: "fail"; reason: string; code: string; recoverable: boolean };
+
+/**
+ * 子代理独立状态。不共享 AgentGraphState。
+ * 内部 Tool Trace 存储在此，不进入主 Graph。
+ */
+export interface SubAgentState {
+  ctx: SubAgentRunContext;
+  budget: SubAgentBudget;
+  plan: SubAgentPlan;
+  currentStepId?: string;
+  toolResults: ToolCallResult[];
+  iterationCount: number;
+  budgetUsage: {
+    toolCallsUsed: number;
+    replanCount: number;
+    startedAt: number;
+  };
+  /** 无进展检测预留字段（第一阶段不触发） */
+  lastActionFingerprint?: string;
+  lastResultFingerprint?: string;
+  /** 最终结果（finalize 后填充） */
+  result?: SubAgentPublicResultV1;
+}
+
+/**
+ * Profile 配置：提供工具白名单、计划策略、预算、决策和结果构建。
+ * 每种 Profile（document/search/crawler）实现此接口。
+ */
+export interface SubAgentProfileConfig {
+  id: SubAgentProfileId;
+  allowedTools: Set<string>;
+  budget: SubAgentBudget;
+
+  /** 创建初始计划（模板或 LLM 生成） */
+  createInitialPlan(ctx: SubAgentRunContext): SubAgentPlan;
+
+  /** 决策：当前步骤要调用什么工具（或 skip/fail） */
+  decide(state: SubAgentState): SubAgentDecision;
+
+  /** 验证当前步骤是否完成 */
+  verifyStep(state: SubAgentState): StepVerificationResult;
+
+  /** 构建最终 SubAgentPublicResult */
+  buildResult(state: SubAgentState): SubAgentPublicResultV1;
 }
 
 /** 子代理 Finding：一条结构化发现 */
@@ -93,32 +165,4 @@ export interface SubAgentRunOutcome {
     code: string;
     message: string;
   };
-}
-
-/** 子代理任务契约 */
-export interface SubAgentTask {
-  taskId: string;
-  profile: "search" | "crawler" | "document";
-  objective: string;
-  /** 主 Agent Native FC 生成的参数 */
-  args: Record<string, unknown>;
-  /** 从主图 state 组装的上下文 */
-  context?: Array<{
-    refId: string;
-    type: "tool_result" | "text" | "entity";
-    value: unknown;
-  }>;
-  parent: {
-    runId: string;
-    planId?: string;
-    stepId?: string;
-  };
-}
-
-/** 子代理预算 */
-export interface SubAgentBudget {
-  maxSteps: number;
-  maxToolCalls: number;
-  timeoutMs: number;
-  maxReplans: number;
 }
