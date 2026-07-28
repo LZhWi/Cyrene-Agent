@@ -833,9 +833,25 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
               tool: selectedTool,
               ...(lastError instanceof Error ? { protocolFeedback: lastError.message } : {}),
             }, async (request) => {
-              const response = await perf.track("execute_native_tool_llm", () => invokeWithFallback(() => request));
-              trackUsage(response.usage);
-              return response;
+              try {
+                const response = await perf.track("execute_native_tool_llm", () => invokeWithFallback(() => request));
+                trackUsage(response.usage);
+                return response;
+              } catch (err) {
+                // 诊断日志：HTTP 失败时打印 model / tool_choice / tools 数量，方便定位 vendor-specific 问题
+                const httpStatus = err instanceof Error && /HTTP\s+(\d{3})/.test(err.message)
+                  ? Number(err.message.match(/HTTP\s+(\d{3})/)![1])
+                  : null;
+                console.error(
+                  `[NativeFC] HTTP failed: tool=${selectedTool.id} `
+                  + `model=${request.model} `
+                  + `tools=${request.tools?.length ?? 0} `
+                  + `toolChoiceIntent=${JSON.stringify(request.toolChoiceIntent)} `
+                  + `systemLen=${(request.messages[0]?.content as string)?.length ?? 0} `
+                  + `httpStatus=${httpStatus} err=${err instanceof Error ? err.message : String(err)}`,
+                );
+                throw err;
+              }
             });
             args = parseAndValidateToolCallArguments(
               resolved,
