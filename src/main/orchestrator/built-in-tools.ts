@@ -7,6 +7,7 @@ import { addMcpServer } from "./mcp-manager";
 import { sendToLive2DWindow } from "../index";
 import { createPlayLive2DActionTool } from "./tools/play-live2d-action";
 import { resolveChatContextTimezone } from "../chat-time-context";
+import type { ToolContext } from "./tool-context";
 
 const LOG_PREFIX = "[BuiltinTools]";
 
@@ -62,7 +63,7 @@ function stripHtml(html: string): string {
   }
 }
 
-async function executeFetchUrl(args: Record<string, unknown>): Promise<string> {
+async function executeFetchUrl(args: Record<string, unknown>, ctx?: ToolContext): Promise<string> {
   const url = String(args.url || "").trim();
   if (!/^https?:\/\//i.test(url)) {
     return "[错误] url 必须以 http:// 或 https:// 开头";
@@ -72,9 +73,11 @@ async function executeFetchUrl(args: Record<string, unknown>): Promise<string> {
 
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  // 组合父 signal 和超时 signal
+  const combinedSignal = ctx?.signal ? AbortSignal.any([ctx.signal, ac.signal]) : ac.signal;
   try {
     const resp = await fetch(url, {
-      signal: ac.signal,
+      signal: combinedSignal,
       headers: {
         "User-Agent": "Mozilla/5.0 (Cyrene Agent) Chrome/120 Safari/537.36",
         Accept: "text/html,text/markdown,text/plain,*/*;q=0.8",
@@ -909,14 +912,16 @@ function truncateSnippet(text: string): string {
 }
 
 /** 博查搜索：调 /v1/web-search，返回结构化 JSON。 */
-async function bochaSearch(query: string, key: string): Promise<string> {
+async function bochaSearch(query: string, key: string, signal?: AbortSignal): Promise<string> {
   const url = "https://api.bochaai.com/v1/web-search";
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), getTimeoutSettings().searchTimeout);
+  // 组合父 signal 和超时 signal
+  const combinedSignal = signal ? AbortSignal.any([signal, ctrl.signal]) : ctrl.signal;
   try {
     const resp = await fetch(url, {
       method: "POST",
-      signal: ctrl.signal,
+      signal: combinedSignal,
       headers: {
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
@@ -957,14 +962,16 @@ async function bochaSearch(query: string, key: string): Promise<string> {
 }
 
 /** Tavily 搜索：调 /search，返回结构化 JSON。 */
-async function tavilySearch(query: string, key: string): Promise<string> {
+async function tavilySearch(query: string, key: string, signal?: AbortSignal): Promise<string> {
   const url = "https://api.tavily.com/search";
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), getTimeoutSettings().searchTimeout);
+  // 组合父 signal 和超时 signal
+  const combinedSignal = signal ? AbortSignal.any([signal, ctrl.signal]) : ctrl.signal;
   try {
     const resp = await fetch(url, {
       method: "POST",
-      signal: ctrl.signal,
+      signal: combinedSignal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_key: key,
@@ -1001,16 +1008,18 @@ async function tavilySearch(query: string, key: string): Promise<string> {
   }
 }
 
-async function anySearchSearch(query: string, key: string): Promise<string> {
+async function anySearchSearch(query: string, key: string, signal?: AbortSignal): Promise<string> {
   const url = "https://api.anysearch.com/v1/search";
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), getTimeoutSettings().searchTimeout);
+  // 组合父 signal 和超时 signal
+  const combinedSignal = signal ? AbortSignal.any([signal, ctrl.signal]) : ctrl.signal;
   const headers: any = { "Content-Type": "application/json" };
   if (key) headers.Authorization = `Bearer ${key}`;
   try {
     const resp = await fetch(url, {
       method: "POST",
-      signal: ctrl.signal,
+      signal: combinedSignal,
       headers: headers,
       body: JSON.stringify({
         query,
@@ -1044,7 +1053,7 @@ async function anySearchSearch(query: string, key: string): Promise<string> {
   }
 }
 
-async function executeWebSearch(args: Record<string, unknown>): Promise<string> {
+async function executeWebSearch(args: Record<string, unknown>, ctx?: ToolContext): Promise<string> {
   const engine = searchEngineGetter?.() ?? "off";
   if (engine === "off") {
     throw new Error("E_SEARCH_NOT_ENABLED");
@@ -1060,7 +1069,7 @@ async function executeWebSearch(args: Record<string, unknown>): Promise<string> 
     if (!key) {
       throw new Error("E_SEARCH_KEY_MISSING");
     }
-    return bochaSearch(query, key);
+    return bochaSearch(query, key, ctx?.signal);
   }
 
   if (engine === "tavily") {
@@ -1068,12 +1077,12 @@ async function executeWebSearch(args: Record<string, unknown>): Promise<string> 
     if (!key) {
       throw new Error("E_SEARCH_KEY_MISSING");
     }
-    return tavilySearch(query, key);
+    return tavilySearch(query, key, ctx?.signal);
   }
 
   if (engine === "anySearch") {
     const key = searchAnySearchKeyGetter?.() ?? "";
-    return anySearchSearch(query, key);
+    return anySearchSearch(query, key, ctx?.signal);
   }
   
   // 其他搜索引擎暂未接入
