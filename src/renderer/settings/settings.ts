@@ -393,6 +393,8 @@ interface GeneralSettings {
   petAlwaysOnTop: boolean;
   petVisible: boolean;
   petZoom: number;
+  chatLineHeight: number;
+  chatParaSpacing: number;
   sidebarVisible: boolean;
   tasksVisible: boolean;
   launchAtLogin: boolean;
@@ -667,6 +669,8 @@ if (!window.settings) {
       petAlwaysOnTop: true,
       petVisible: true,
       petZoom: 1,
+      chatLineHeight: 1.75,
+      chatParaSpacing: 0.5,
       sidebarVisible: true,
       tasksVisible: true,
       launchAtLogin: false,
@@ -839,6 +843,10 @@ const petAlwaysOnTopInput = document.getElementById("pet-always-on-top") as HTML
 const petVisibleInput = document.getElementById("pet-visible") as HTMLInputElement;
 const petZoomInput = document.getElementById("pet-zoom") as HTMLInputElement;
 const petZoomVal = document.getElementById("pet-zoom-val") as HTMLElement;
+const chatLineHeightInput = document.getElementById("chat-line-height") as HTMLInputElement;
+const chatLineHeightVal = document.getElementById("chat-line-height-val") as HTMLElement;
+const chatParaSpacingInput = document.getElementById("chat-para-spacing") as HTMLInputElement;
+const chatParaSpacingVal = document.getElementById("chat-para-spacing-val") as HTMLElement;
 const launchAtLoginInput = document.getElementById("launch-at-login") as HTMLInputElement;
 const uiThemeSelect = document.getElementById("ui-theme-select") as HTMLElement;
 const uiFontCurrent = document.getElementById("ui-font-current") as HTMLElement;
@@ -1536,6 +1544,12 @@ async function loadGeneralSettings(): Promise<void> {
     petVisibleInput.checked = cfg.petVisible;
     petZoomInput.value = String(cfg.petZoom ?? 1);
     petZoomVal.textContent = Math.round((cfg.petZoom ?? 1) * 100) + "%";
+    chatLineHeightInput.value = String(cfg.chatLineHeight ?? 1.75);
+    chatLineHeightVal.textContent = (cfg.chatLineHeight ?? 1.75).toFixed(2);
+    document.documentElement.style.setProperty("--rb-chat-line-height", String(cfg.chatLineHeight ?? 1.75));
+    chatParaSpacingInput.value = String(cfg.chatParaSpacing ?? 0.5);
+    chatParaSpacingVal.textContent = (cfg.chatParaSpacing ?? 0.5).toFixed(2) + "em";
+    document.documentElement.style.setProperty("--rb-chat-para-spacing", (cfg.chatParaSpacing ?? 0.5) + "em");
     sidebarVisibleInput.checked = cfg.sidebarVisible ?? true;
     tasksVisibleInput.checked = cfg.tasksVisible ?? true;
     launchAtLoginInput.checked = cfg.launchAtLogin;
@@ -1694,6 +1708,19 @@ petZoomInput.addEventListener("input", () => {
 petZoomInput.addEventListener("change", () => {
   window.settings?.setPetZoom(Number(petZoomInput.value));
   setAppearanceSaveStatus("已应用", "is-ok");
+});
+
+// 行间距滑块
+chatLineHeightInput.addEventListener("input", () => {
+  const val = Number(chatLineHeightInput.value);
+  chatLineHeightVal.textContent = val.toFixed(2);
+  document.documentElement.style.setProperty("--rb-chat-line-height", String(val));
+});
+// 段间距滑块
+chatParaSpacingInput.addEventListener("input", () => {
+  const val = Number(chatParaSpacingInput.value);
+  chatParaSpacingVal.textContent = val.toFixed(2) + "em";
+  document.documentElement.style.setProperty("--rb-chat-para-spacing", val + "em");
 });
 
 uiThemeSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
@@ -2799,6 +2826,8 @@ appearanceForm.addEventListener("submit", async (e) => {
       petAlwaysOnTop: petAlwaysOnTopInput.checked,
       petVisible: petVisibleInput.checked,
       petZoom: Number(petZoomInput.value),
+      chatLineHeight: Number(chatLineHeightInput.value),
+      chatParaSpacing: Number(chatParaSpacingInput.value),
     }));
     setAppearanceSaveStatus("已保存", "is-ok");
   } catch {
