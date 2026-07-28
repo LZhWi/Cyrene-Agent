@@ -657,6 +657,14 @@
               </div>
 
               <div class="agent-setting-subgroup" style="margin-top:12px">
+                <strong>Embedding 维度 <span style="font-weight:400;font-size:12px;color:var(--text-muted)">（仅 Cloud 模式）</span></strong>
+                <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+                  <input type="number" id="embedding-dimensions-input" class="agent-input" placeholder="留空自动探测" min="1" max="65536" step="1" style="width:160px">
+                  <span style="font-size:12px;color:var(--text-muted)">留空 = 首次请求自动检测；填写 = 严格校验</span>
+                </div>
+              </div>
+
+              <div class="agent-setting-subgroup" style="margin-top:12px">
                 <strong>Rerank 重排序</strong>
                 <div class="rag-model-options">
                   <button type="button" class="rag-model-card is-active" data-value="light" data-reranker="1">
@@ -1221,6 +1229,7 @@
                       <option value="bocha">博查 Bocha（国内，AI 友好）</option>
                       <option value="tavily">Tavily（海外，AI 友好）</option>
                       <option value="minimax">MiniMax（需 uvx）</option>
+                      <option value="anySearch">AnySearch</option>
                     </select>
                   </div>
                   <div class="tts-field" id="search-bocha-row" style="display:none">
@@ -1234,6 +1243,10 @@
                   <div class="tts-field" id="search-minimax-row" style="display:none">
                     <label for="search-minimax-key">MiniMax Key</label>
                     <input type="password" id="search-minimax-key" placeholder="MiniMax 平台 API Key" autocomplete="off" />
+                  </div>
+                  <div class="tts-field" id="search-anysearch-row" style="display:none">
+                    <label for="search-anysearch-key">AnySearch Key</label>
+                    <input type="password" id="search-anysearch-key" placeholder="anysearch.com 注册获取" autocomplete="off" />
                   </div>
                   <p class="user-field-hint" id="search-engine-hint">选择搜索源后填入对应 Key。MiniMax 需先安装 uvx（Python）。</p>
                 </div>

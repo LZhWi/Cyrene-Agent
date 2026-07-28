@@ -18,6 +18,7 @@ import type { ToolCallResult } from "./types";
 import type { ToolDefinition } from "./tool-registry";
 import type { SoulClaimKind } from "./soul-execution-context";
 import { projectToolResult } from "./soul-execution-context";
+import { resolveMaxOutputTokens } from "../runtime-policy";
 
 // ── 预算默认值 ────────────────────────────
 
@@ -499,7 +500,7 @@ export async function runCreatePlan(input: RunCreatePlanInput): Promise<TaskPlan
       { role: "user", content: userContent },
     ],
     stream: false,
-    maxTokens: 1200,
+    maxTokens: resolveMaxOutputTokens({ stage: "task-plan" }),
     structuredOutput,
   };
 

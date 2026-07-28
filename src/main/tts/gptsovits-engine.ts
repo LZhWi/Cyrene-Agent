@@ -2,6 +2,7 @@
 // 接口：官方 api_v2 (POST /api/tts)，返回 wav 字节
 // 参考：https://github.com/RVC-Boss/GPT-SoVITS
 import * as fs from "fs";
+import { resolveTimeoutPolicy } from "../runtime-policy";
 
 export interface GptsovitsSynthesizeOptions {
   baseUrl: string;          // 形如 "http://localhost:9880"，不含路径
@@ -19,7 +20,7 @@ export interface GptsovitsSynthesizeResult {
   format: "wav" | "mp3";
 }
 
-const DEFAULT_TIMEOUT_MS = 60000;
+const DEFAULT_TIMEOUT_MS = resolveTimeoutPolicy({ stage: "tts-gptsovits" }).totalMs;
 const TTS_PATH = "/tts";
 
 /**

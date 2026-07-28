@@ -1,13 +1,9 @@
-import { getAdapterForConfig } from "../orchestrator/vendors"
-import type { ChatMessage, VendorConfig } from "../orchestrator/vendors"
-import { recordUsage } from "../token-usage-store"
 import { addL2MemoryVector } from "../rag/index"
 import { appendMemoryTrace } from "./memory-trace"
 import { memoryStore } from "./memory-store"
 import type { ConflictLog, L2Memory, MemoryEvidence } from "./memory-types"
-import * as fs from "fs"
-import * as path from "path"
-import { app } from "electron"
+import { invokeMemoryStructuredOutput, getDefaultMaxOutputTokens } from "./memory-llm-client"
+import { parseMemoryResolveResult, validateMemoryResolveBusiness } from "./memory-schemas"
 
 export type MemoryConflictResolutionType =
   | "unrelated"
@@ -43,18 +39,6 @@ export interface ResolverPayload {
   scoringSignals: ConflictLog["scoringSignals"]
 }
 
-export interface ResolverModelSettings {
-  provider: string
-  baseUrl: string
-  model: string
-  apiKey: string
-  explicitTransport?: "openai" | "anthropic" | "auto"
-}
-
-export interface ResolverDeps {
-  callLLM: (messages: Array<{ role: "system" | "user"; content: string }>, maxTokens: number) => Promise<string>
-}
-
 export interface ResolverRunResult {
   status: "skip" | "resolved" | "failed" | "rate_limited"
   conflictLogId?: string
@@ -66,96 +50,8 @@ export interface ResolverRunOptions {
   minIntervalMs?: number
 }
 
-const DEFAULT_MODEL_SETTINGS: ResolverModelSettings = {
-  provider: "DeepSeek（深度求索）",
-  baseUrl: "https://api.deepseek.com",
-  model: "deepseek-v4-pro",
-  apiKey: "",
-}
-
 const DEFAULT_RESOLVER_MIN_INTERVAL_MS = 60_000
 let lastResolverRunAt: number | null = null
-
-function loadResolverModelSettings(): ResolverModelSettings {
-  try {
-    const filePath = path.join(app.getPath("userData"), "model-settings.json")
-    if (!fs.existsSync(filePath)) return DEFAULT_MODEL_SETTINGS
-    const parsed = JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<ResolverModelSettings>
-    return {
-      provider: typeof parsed.provider === "string" && parsed.provider.trim() ? parsed.provider.trim() : DEFAULT_MODEL_SETTINGS.provider,
-      baseUrl: typeof parsed.baseUrl === "string" && parsed.baseUrl.trim() ? parsed.baseUrl.trim() : DEFAULT_MODEL_SETTINGS.baseUrl,
-      model: typeof parsed.model === "string" && parsed.model.trim() ? parsed.model.trim() : DEFAULT_MODEL_SETTINGS.model,
-      apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "",
-      explicitTransport: parsed.explicitTransport === "openai" || parsed.explicitTransport === "anthropic" || parsed.explicitTransport === "auto" ? parsed.explicitTransport : undefined,
-    }
-  } catch {
-    return DEFAULT_MODEL_SETTINGS
-  }
-}
-
-function stripThinkBlocks(text: string): string {
-  return text
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/<think>[\s\S]*$/gi, "")
-    .trim()
-}
-
-function extractJsonObject(raw: string): Record<string, unknown> | null {
-  const text = stripThinkBlocks(raw)
-    .replace(/```json\s*/gi, "")
-    .replace(/```\s*/gi, "")
-    .trim()
-  const start = text.indexOf("{")
-  const end = text.lastIndexOf("}")
-  if (start === -1 || end <= start) return null
-  try {
-    const parsed = JSON.parse(text.slice(start, end + 1))
-    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null
-  } catch {
-    return null
-  }
-}
-
-function normalizeResolution(input: Record<string, unknown>): MemoryConflictResolution | null {
-  const resolutionType = input.resolutionType
-  const reason = input.reason
-  const confidence = input.confidence
-  const actions = input.actions
-  if (
-    resolutionType !== "unrelated" &&
-    resolutionType !== "context_difference" &&
-    resolutionType !== "preference_evolution" &&
-    resolutionType !== "direct_conflict" &&
-    resolutionType !== "uncertain"
-  ) return null
-  if (typeof reason !== "string" || !reason.trim()) return null
-  if (typeof confidence !== "number" || !Number.isFinite(confidence)) return null
-  if (!actions || typeof actions !== "object") return null
-  const actionRecord = actions as Record<string, unknown>
-  return {
-    resolutionType,
-    resolvedSummary: typeof input.resolvedSummary === "string" ? input.resolvedSummary.trim() : undefined,
-    currentSummary: typeof input.currentSummary === "string" ? input.currentSummary.trim() : undefined,
-    historicalSummary: typeof input.historicalSummary === "string" ? input.historicalSummary.trim() : undefined,
-    reason: reason.trim(),
-    confidence,
-    actions: {
-      createResolvedMemory: actionRecord.createResolvedMemory === true,
-      oldMemoryStatus: normalizeMemoryStatus(actionRecord.oldMemoryStatus),
-      newMemoryStatus: normalizeMemoryStatus(actionRecord.newMemoryStatus),
-      shouldUpdateCoreMemory: actionRecord.shouldUpdateCoreMemory === true,
-      shouldAskUser: actionRecord.shouldAskUser === true,
-      clarificationNeeded: actionRecord.clarificationNeeded === true,
-    },
-  }
-}
-
-function normalizeMemoryStatus(value: unknown): MemoryConflictResolution["actions"]["oldMemoryStatus"] {
-  if (value === "active" || value === "aging" || value === "archived" || value === "superseded" || value === "merged") {
-    return value
-  }
-  return undefined
-}
 
 export async function buildResolverPayload(conflictLogId: string): Promise<ResolverPayload> {
   const store = await memoryStore.load()
@@ -178,7 +74,7 @@ export async function buildResolverPayload(conflictLogId: string): Promise<Resol
   }
 }
 
-export function buildResolverMessages(payload: ResolverPayload): Array<{ role: "system" | "user"; content: string }> {
+export function buildResolverMessages(payload: ResolverPayload): { systemPrompt: string; userPrompt: string } {
   const evidenceLines = (items: MemoryEvidence[]) => items.map((item) => (
     `- quote: ${item.quoteSnippet}\n  conversationId: ${item.conversationId ?? "unknown"}\n  sourceStatus: ${item.sourceStatus}`
   )).join("\n")
@@ -202,53 +98,35 @@ export function buildResolverMessages(payload: ResolverPayload): Array<{ role: "
     '{"resolutionType":"unrelated|context_difference|preference_evolution|direct_conflict|uncertain","resolvedSummary":"可选","currentSummary":"可选","historicalSummary":"可选","reason":"原因","confidence":0.0,"actions":{"createResolvedMemory":false,"oldMemoryStatus":"active|aging|archived|superseded|merged","newMemoryStatus":"active|aging|archived|superseded|merged","shouldUpdateCoreMemory":false,"shouldAskUser":false,"clarificationNeeded":false}}',
   ].join("\n")
 
+  return {
+    systemPrompt: "你是谨慎的用户记忆冲突 Resolver。你只根据 summary 和 evidence 判断，不要编造事实，只输出 JSON。",
+    userPrompt,
+  }
+}
+
+/**
+ * 兼容旧签名：将 buildResolverMessages 的新格式转为数组格式。
+ */
+export function buildResolverMessagesAsArray(payload: ResolverPayload): Array<{ role: "system" | "user"; content: string }> {
+  const { systemPrompt, userPrompt } = buildResolverMessages(payload)
   return [
-    { role: "system", content: "你是谨慎的用户记忆冲突 Resolver。你只根据 summary 和 evidence 判断，不要编造事实，只输出 JSON。" },
+    { role: "system", content: systemPrompt },
     { role: "user", content: userPrompt },
   ]
 }
 
-export async function callResolverLLM(
-  settings: ResolverModelSettings,
-  messages: Array<{ role: "system" | "user"; content: string }>,
-  maxTokens = 700,
-): Promise<string> {
-  if (!settings.apiKey) throw new Error("missing api key")
-  const cfg: VendorConfig = {
-    provider: settings.provider,
-    baseUrl: settings.baseUrl,
-    model: settings.model,
-    apiKey: settings.apiKey,
-    explicitTransport: settings.explicitTransport,
-  }
-  const adapter = getAdapterForConfig(cfg)
-  const http = adapter.buildRequest({
-    model: cfg.model,
-    messages: messages as ChatMessage[],
-    maxTokens,
-    stream: false,
-  }, cfg)
-  const response = await fetch(http.url, {
-    method: "POST",
-    headers: http.headers,
-    body: http.body,
-  })
-  if (!response.ok) throw new Error(`resolver request failed: HTTP ${response.status}`)
-  const data = await response.json()
-  const parsed = adapter.parseResponse(data)
-  if (parsed.usage) recordUsage(parsed.usage.input, parsed.usage.output, 1)
-  return parsed.text ?? ""
-}
-
 export async function resolvePayload(
   payload: ResolverPayload,
-  deps: ResolverDeps,
 ): Promise<MemoryConflictResolution> {
-  const raw = await deps.callLLM(buildResolverMessages(payload), 700)
-  const parsed = extractJsonObject(raw)
-  const resolution = parsed ? normalizeResolution(parsed) : null
-  if (!resolution) throw new Error("invalid resolver json")
-  return resolution
+  const { systemPrompt, userPrompt } = buildResolverMessages(payload)
+  return invokeMemoryStructuredOutput<MemoryConflictResolution>({
+    operation: "resolve",
+    systemPrompt,
+    userPrompt,
+    maxOutputTokens: getDefaultMaxOutputTokens("resolve"),
+    parseSchema: parseMemoryResolveResult,
+    validateBusiness: validateMemoryResolveBusiness,
+  })
 }
 
 async function markResolverProcessing(conflictLogId: string): Promise<void> {
@@ -303,55 +181,43 @@ async function syncResolvedMemoryToRag(log: ConflictLog): Promise<void> {
     })
     await memoryStore.markL2SyncStatus(resolvedMemory.id, "synced", ragId)
   } catch (err) {
-    await memoryStore.markL2SyncStatus(resolvedMemory.id, "sync_failed", undefined, err)
+    console.warn("[MemoryResolver] sync resolved memory to RAG failed:", err)
+    await memoryStore.markL2SyncStatus(resolvedMemory.id, "sync_failed", undefined, err instanceof Error ? err : new Error(String(err)))
   }
 }
 
-export async function runResolverQueueOnce(deps?: ResolverDeps, options: ResolverRunOptions = {}): Promise<ResolverRunResult> {
-  const [next] = await memoryStore.getResolverQueue(1)
+export async function resolveNextConflict(
+  options?: ResolverRunOptions,
+): Promise<ResolverRunResult> {
+  const now = options?.now ?? Date.now()
+  const minInterval = options?.minIntervalMs ?? DEFAULT_RESOLVER_MIN_INTERVAL_MS
+
+  if (lastResolverRunAt !== null && now - lastResolverRunAt < minInterval) {
+    appendMemoryTrace({
+      op: "resolver.queue.rate_limited",
+      layer: "L2",
+      status: "ok",
+      l2Id: "",
+      ragId: "",
+      details: { lastRunAt: lastResolverRunAt, now, minInterval },
+    })
+    return { status: "rate_limited" }
+  }
+
+  const store = await memoryStore.load()
+  const pending = (store.conflictLogs ?? [])
+    .filter((log) => log.resolverStatus === "queued")
+    .sort((a, b) => (b.conflictScore ?? 0) - (a.conflictScore ?? 0))
+
+  const next = pending[0]
   if (!next) return { status: "skip" }
 
-  const now = options.now ?? Date.now()
-  const minIntervalMs = options.minIntervalMs ?? DEFAULT_RESOLVER_MIN_INTERVAL_MS
-  if (lastResolverRunAt !== null && now - lastResolverRunAt < minIntervalMs) {
-    appendMemoryTrace({
-      op: "resolver.run.rate_limited",
-      layer: "L2",
-      status: "skip",
-      l2Id: next.sourceL2Id,
-      ragId: next.sourceRagId,
-      details: {
-        conflictLogId: next.id,
-        elapsedMs: now - lastResolverRunAt,
-        minIntervalMs,
-      },
-    })
-    return { status: "rate_limited", conflictLogId: next.id }
-  }
   lastResolverRunAt = now
 
   try {
-    appendMemoryTrace({
-      op: "resolver.run.start",
-      layer: "L2",
-      status: "ok",
-      l2Id: next.sourceL2Id,
-      ragId: next.sourceRagId,
-      details: {
-        conflictLogId: next.id,
-        resolverPriority: next.resolverPriority,
-        conflictScore: next.conflictScore,
-        resolverAttemptCount: next.resolverAttemptCount ?? 0,
-      },
-    })
     await markResolverProcessing(next.id)
     const payload = await buildResolverPayload(next.id)
-    const runner = deps ?? {
-      callLLM: (messages: Array<{ role: "system" | "user"; content: string }>, maxTokens: number) => (
-        callResolverLLM(loadResolverModelSettings(), messages, maxTokens)
-      ),
-    }
-    const resolution = await resolvePayload(payload, runner)
+    const resolution = await resolvePayload(payload)
     const appliedLog = await memoryStore.applyResolverResolution(next.id, resolution)
     if (appliedLog) await syncResolvedMemoryToRag(appliedLog)
     appendMemoryTrace({
@@ -385,3 +251,6 @@ export async function runResolverQueueOnce(deps?: ResolverDeps, options: Resolve
     }
   }
 }
+
+/** @deprecated Use resolveNextConflict instead. */
+export const runResolverQueueOnce = resolveNextConflict;

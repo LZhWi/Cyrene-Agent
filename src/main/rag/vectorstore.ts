@@ -1,6 +1,8 @@
 import * as fs from "fs";
 import * as path from "path";
-import { getEmbeddingProvider, EmbeddingProvider } from "./embedding";
+import { getEmbeddingProvider, EmbeddingProvider, type EmbeddingIndexMetadata } from "./embedding";
+
+export type { EmbeddingIndexMetadata };
 
 // ── 类型 ──
 export interface MemoryEntry {
@@ -159,8 +161,10 @@ function buildIvfIndex(
 // ── JSON 向量存储 ──
 export class JsonVectorStore {
   private filePath: string;
+  private metaFilePath: string;
   private entries: MemoryEntry[] = [];
   private dirty = false;
+  private indexMeta: EmbeddingIndexMetadata | null = null;
 
   /** IVF 索引，null = 未构建或需要重建 */
   private ivf: IvfIndex | null = null;
@@ -169,7 +173,9 @@ export class JsonVectorStore {
 
   constructor(dbPath: string) {
     this.filePath = path.join(dbPath, "memory-store.json");
+    this.metaFilePath = path.join(dbPath, "memory-store-meta.json");
     this.load();
+    this.loadIndexMeta();
   }
 
   private load(): void {
@@ -184,6 +190,29 @@ export class JsonVectorStore {
     }
   }
 
+  private loadIndexMeta(): void {
+    try {
+      if (fs.existsSync(this.metaFilePath)) {
+        const raw = fs.readFileSync(this.metaFilePath, "utf8");
+        this.indexMeta = JSON.parse(raw) as EmbeddingIndexMetadata;
+      }
+    } catch {
+      this.indexMeta = null;
+    }
+  }
+
+  private saveIndexMeta(): void {
+    try {
+      const dir = path.dirname(this.metaFilePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const tmp = this.metaFilePath + ".tmp";
+      fs.writeFileSync(tmp, JSON.stringify(this.indexMeta, null, 2), "utf8");
+      fs.renameSync(tmp, this.metaFilePath);
+    } catch (err) {
+      console.warn("[RAG] failed to save index metadata:", err);
+    }
+  }
+
   private save(): void {
     try {
       const dir = path.dirname(this.filePath);
@@ -193,6 +222,77 @@ export class JsonVectorStore {
     } catch (err) {
       console.warn("[RAG] failed to save vector store:", err);
     }
+  }
+
+  // ── 索引元数据校验 ──
+
+  /**
+   * 校验 provider 的维度与索引元数据是否一致。
+   * - 无元数据 + 有旧数据：尝试从现有向量推断并补写元数据（兼容迁移）
+   * - 无元数据 + 无数据：首次写入时创建元数据
+   * - 有元数据：严格校验维度一致性
+   */
+  private validateDimensionsForProvider(provider: EmbeddingProvider): void {
+    const providerDims = provider.resolvedDimensions ?? provider.declaredDimensions;
+    if (providerDims === undefined) {
+      // 维度尚未解析（cloud provider 首次调用前），允许通过
+      // 后续 embed() 调用会自行解析并校验
+      return;
+    }
+
+    if (!this.indexMeta) {
+      // 无元数据：尝试兼容迁移
+      if (this.entries.length > 0) {
+        const inferredDims = this.entries[0].embedding.length;
+        if (inferredDims !== providerDims) {
+          throw new Error(
+            `[RAG] Index dimension mismatch: existing index has ${inferredDims}-dim vectors, ` +
+            `but provider declares ${providerDims}-dim. Rebuild the index first.`
+          );
+        }
+        // 维度一致，补写元数据
+        this.indexMeta = this.buildIndexMeta(provider, providerDims);
+        this.saveIndexMeta();
+        console.log("[RAG] migrated index metadata (inferred from existing vectors):", this.indexMeta);
+      }
+      return;
+    }
+
+    // 有元数据：严格校验
+    if (this.indexMeta.dimensions !== providerDims) {
+      throw new Error(
+        `[RAG] Index dimension mismatch: index was built with ${this.indexMeta.dimensions}-dim ` +
+        `(model: ${this.indexMeta.model}), but current provider declares ${providerDims}-dim. ` +
+        `Rebuild the index or switch back to the original model.`
+      );
+    }
+  }
+
+  /**
+   * 首次写入时，如果还没有元数据，根据 provider 创建并保存。
+   */
+  private ensureIndexMeta(provider: EmbeddingProvider, resolvedDims: number): void {
+    if (this.indexMeta) return;
+    this.indexMeta = this.buildIndexMeta(provider, resolvedDims);
+    this.saveIndexMeta();
+    console.log("[RAG] created index metadata:", this.indexMeta);
+  }
+
+  private buildIndexMeta(provider: EmbeddingProvider, dimensions: number): EmbeddingIndexMetadata {
+    const identity = provider.cacheIdentity;
+    return {
+      provider: identity?.provider ?? provider.name,
+      model: identity?.model ?? provider.name,
+      dimensions,
+      cacheIdentity: identity ? JSON.stringify(identity) : provider.name,
+    };
+  }
+
+  /**
+   * 获取当前索引元数据（只读）。
+   */
+  getIndexMeta(): Readonly<EmbeddingIndexMetadata> | null {
+    return this.indexMeta;
   }
 
   // ── IVF 索引管理 ──
@@ -233,6 +333,8 @@ export class JsonVectorStore {
     provider: EmbeddingProvider,
     metadata?: Record<string, unknown>
   ): Promise<MemoryEntry> {
+    this.validateDimensionsForProvider(provider);
+
     // 去重检查
     const existing = await this.search(text, source, provider, 1, 0.95);
     if (existing.length > 0) {
@@ -245,6 +347,8 @@ export class JsonVectorStore {
     }
 
     const embedding = await provider.embed(text);
+    // 首次成功写入后记录索引元数据
+    this.ensureIndexMeta(provider, embedding.length);
     const entry: MemoryEntry = {
       id: `${source}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
       text,
@@ -269,7 +373,9 @@ export class JsonVectorStore {
     provider: EmbeddingProvider,
     metadata?: Record<string, unknown>,
   ): Promise<MemoryEntry> {
+    this.validateDimensionsForProvider(provider);
     const embedding = await provider.embed(text);
+    this.ensureIndexMeta(provider, embedding.length);
     return this.addPreparedBatch([{ text, source, embedding, metadata }])[0];
   }
 
@@ -279,6 +385,7 @@ export class JsonVectorStore {
     provider: EmbeddingProvider,
     options?: { isCancelled?: () => boolean },
   ): Promise<MemoryEntry[]> {
+    this.validateDimensionsForProvider(provider);
     const results: MemoryEntry[] = [];
     const batchSize = 16;
     for (let start = 0; start < items.length; start += batchSize) {
@@ -286,6 +393,10 @@ export class JsonVectorStore {
       const batch = items.slice(start, start + batchSize);
       const embeddings = await provider.embedBatch(batch.map((item) => item.text));
       if (options?.isCancelled?.()) throw new Error("cancelled");
+      // 首次成功批量写入后记录索引元数据
+      if (embeddings.length > 0) {
+        this.ensureIndexMeta(provider, embeddings[0].length);
+      }
       results.push(...this.addPreparedBatch(batch.map((item, index) => ({ ...item, embedding: embeddings[index] }))));
     }
     return results;
@@ -330,6 +441,8 @@ export class JsonVectorStore {
 
     const embeddingProvider = provider ?? getEmbeddingProvider();
     if (!embeddingProvider) return [];
+
+    this.validateDimensionsForProvider(embeddingProvider);
 
     const queryEmbedding = await embeddingProvider.embed(query);
 

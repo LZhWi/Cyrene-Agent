@@ -1,7 +1,8 @@
 import * as path from "path";
 import * as fs from "fs";
 import { app } from "electron";
-import { getEmbeddingProvider, resetEmbeddingProvider, EmbeddingProvider, switchEmbeddingModel as switchModel, getCurrentModelDims } from "./embedding";
+import { getEmbeddingProvider, resetEmbeddingProvider, EmbeddingProvider, switchEmbeddingModel as switchModel, getCurrentModelDims, EmbeddingDimensionMismatchError } from "./embedding";
+import type { EmbeddingIndexMetadata } from "./vectorstore";
 import { JsonVectorStore } from "./vectorstore";
 import type { MemoryEntry } from "./vectorstore";
 import { HybridRetriever } from "./retriever";
@@ -27,10 +28,11 @@ export async function initRAG(
   ragMode: "auto" | "local" | "cloud" = "auto",
   cloudBaseUrl?: string,
   cloudApiKey?: string,
-  embeddingModel?: string
+  embeddingModel?: string,
+  cloudDimensions?: number,
 ): Promise<void> {
   const dataDir = getDataDir();
-  provider = getEmbeddingProvider(ragMode, cloudBaseUrl, cloudApiKey, embeddingModel);
+  provider = getEmbeddingProvider(ragMode, cloudBaseUrl, cloudApiKey, embeddingModel, cloudDimensions);
   store = new JsonVectorStore(dataDir);
   // 只有 provider 存在时才创建 retriever（向量检索依赖 embedding）
   if (provider) {
@@ -69,8 +71,6 @@ export async function switchEmbeddingModel(modelKey: string): Promise<{ ok: bool
         const { getModelInstallStatusDetail } = require("./model-status") as typeof import("./model-status");
         const detail = getModelInstallStatusDetail("embedding", modelKey);
         if (detail.existingProjectDir) {
-          // Project-side directory exists but is incomplete — explicit warning,
-          // do NOT silently fall back to HuggingFace cache.
           console.error(
             `[Cyrene] embedding model "${modelKey}" project directory exists but is incomplete.\n` +
             `  existingProjectDir: ${detail.existingProjectDir}\n` +
@@ -92,7 +92,7 @@ export async function switchEmbeddingModel(modelKey: string): Promise<{ ok: bool
       }
       return { ok: false, clearedEntries: 0, error: "Local embedding model not found. Cannot switch." };
     }
-    
+
     const newDims = newProvider.dims;
 
     // Check existing entries for dimension mismatch
@@ -102,13 +102,18 @@ export async function switchEmbeddingModel(modelKey: string): Promise<{ ok: bool
       if (entries && entries.length > 0) {
         const oldDims = entries[0].embedding.length;
         if (oldDims !== newDims) {
-          // Dimension mismatch — clear the vector store
+          // Dimension mismatch — clear the vector store and metadata
           const dataDir = getDataDir();
           const storePath = path.join(dataDir, "memory-store.json");
+          const metaPath = path.join(dataDir, "memory-store-meta.json");
           if (fs.existsSync(storePath)) {
             clearedEntries = entries.length;
             fs.writeFileSync(storePath, "[]", "utf8");
             console.log("[RAG] dimension mismatch (" + oldDims + " → " + newDims + "), cleared " + clearedEntries + " entries");
+          }
+          // 清除旧的索引元数据，下次写入时会自动创建新的
+          if (fs.existsSync(metaPath)) {
+            fs.unlinkSync(metaPath);
           }
           // Reload store from the now-empty file
           store = new JsonVectorStore(dataDir);
@@ -129,6 +134,14 @@ export async function switchEmbeddingModel(modelKey: string): Promise<{ ok: bool
     console.error("[RAG] switch embedding model failed:", message);
     return { ok: false, clearedEntries: 0, error: message };
   }
+}
+
+/**
+ * 获取当前向量索引的元数据（只读）。
+ * 用于设置 UI 展示或诊断。
+ */
+export function getIndexMetadata(): Readonly<EmbeddingIndexMetadata> | null {
+  return store?.getIndexMeta() ?? null;
 }
 
 // ── Memory write ──

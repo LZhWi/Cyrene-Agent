@@ -11,6 +11,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { WebSocket } from "ws";
+import { resolveTimeoutPolicy } from "../runtime-policy";
 
 const BASE_URL = "https://api.minimaxi.com";
 const WS_URL = "wss://api.minimaxi.com/ws/v1/t2a_v2";
@@ -219,7 +220,7 @@ export async function synthesize(opts: SynthesizeOptions): Promise<Buffer> {
         log({ phase: "error", error: "语音合成超时（30秒）", durationMs: Date.now() - startedAt });
         reject(new Error("语音合成超时（30秒）"));
       }
-    }, 30000);
+    }, resolveTimeoutPolicy({ stage: "tts-minimax" }).totalMs);
 
     const ws = new WebSocket(WS_URL, {
       headers: { Authorization: `Bearer ${opts.apiKey}` },

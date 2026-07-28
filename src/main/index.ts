@@ -151,6 +151,7 @@ import {
   resolveChatContextTimezone,
   type ChatContextMessage,
 } from "./chat-time-context";
+import { getDateLocale, updateLocaleContext } from "./locale-context";
 import { setAsrConfig } from "./asr/volcano-asr-engine";
 import { setCallWindow, registerCallIpc, setCallSettings, stopCall } from "./call/call-manager";
 import { initSkills, skillRegistry, buildAutoInjectedSkillContext, buildAutoInjectedSoulContext, buildSkillCatalog, parseSlashCommand, setSkillEnabled, listSkillsForUi } from "./skills";
@@ -590,6 +591,11 @@ interface ModelSettings {
   actionGateRepairBudgetSec: number;
   rerankerMode: "light" | "standard" | "none";
   embeddingModel: "minilm" | "bgem3";
+  /**
+   * Embedding 维度（可选，仅 cloud 模式有效）。
+   * 留空 = 首次请求自动探测；填写 = 作为严格声明并与实际响应校验。
+   */
+  embeddingDimensions?: number;
   // 视觉模型配置（可选）。undefined 或未启用 = 不支持看图，read_image 诚实拒绝。
   vision?: VisionModelConfig;
   /** 主模型是否多模态。true 时图片直发主模型（direct），vision 配置保留但忽略。 */
@@ -692,10 +698,11 @@ interface GeneralSettings {
   /** 🖥️ 浏览器自动化（Playwright MCP）是否启用。默认 false，需用户手动开启。 */
   playwrightMcpEnabled: boolean;
   // 联网搜索：选哪个搜索源 + 对应 key
-  searchEngine: "off" | "bocha" | "tavily" | "minimax";
+  searchEngine: "off" | "bocha" | "tavily" | "minimax" | "anySearch";
   searchBochaKey: string;
   searchTavilyKey: string;
   searchMinimaxKey: string;
+  searchAnySearchKey: string;
   /** ✉️邮件发送插件是否启用 */
   emailEnabled: boolean;
   /** SMTP 主机，如 smtp.qq.com */
@@ -918,6 +925,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   searchBochaKey: "",
   searchTavilyKey: "",
   searchMinimaxKey: "",
+  searchAnySearchKey: "",
   emailEnabled: false,
   emailSmtpHost: "",
   emailSmtpPort: 465,
@@ -1179,6 +1187,11 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
       : 10,
     rerankerMode: input?.rerankerMode === "standard" || input?.rerankerMode === "none" ? input.rerankerMode : "light",
     embeddingModel: input?.embeddingModel === "bgem3" ? "bgem3" : "minilm",
+    embeddingDimensions: typeof input?.embeddingDimensions === "number"
+      && Number.isFinite(input.embeddingDimensions)
+      && input.embeddingDimensions > 0
+      ? Math.round(input.embeddingDimensions)
+      : undefined,
     vision: normalizeVisionConfig(rawVision),
     multimodal,
   };
@@ -1356,12 +1369,13 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     amapKey: typeof input?.amapKey === "string" ? input.amapKey : "",
     travelEnabled: Boolean(input?.travelEnabled),
     playwrightMcpEnabled: Boolean(input?.playwrightMcpEnabled),
-    searchEngine: ["off", "bocha", "tavily", "minimax"].includes(String(input?.searchEngine))
-      ? (input!.searchEngine as "off" | "bocha" | "tavily" | "minimax")
+    searchEngine: ["off", "bocha", "tavily", "minimax", "anySearch"].includes(String(input?.searchEngine))
+      ? (input!.searchEngine as "off" | "bocha" | "tavily" | "minimax" | "anySearch")
       : "off",
     searchBochaKey: typeof input?.searchBochaKey === "string" ? input.searchBochaKey : "",
     searchTavilyKey: typeof input?.searchTavilyKey === "string" ? input.searchTavilyKey : "",
     searchMinimaxKey: typeof input?.searchMinimaxKey === "string" ? input.searchMinimaxKey : "",
+    searchAnySearchKey: typeof input?.searchAnySearchKey === "string" ? input.searchAnySearchKey : "",
     // 邮件（SMTP）配置
     emailEnabled: Boolean(input?.emailEnabled),
     emailSmtpHost: typeof input?.emailSmtpHost === "string" ? input.emailSmtpHost : "",
@@ -1445,6 +1459,14 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   fs.writeFileSync(filePath, JSON.stringify(normalized, null, 2), "utf8");
   applyGeneralSettings(normalized);
   syncBuiltInToolToggles(normalized);
+  // 同步语言设置到 Locale Context
+  if (before.language !== normalized.language || before.asrLanguage !== normalized.asrLanguage) {
+    updateLocaleContext({
+      uiLocale: normalized.language,
+      dateLocale: normalized.language,
+      asrLanguage: normalized.asrLanguage,
+    });
+  }
   if (before.uiTheme !== normalized.uiTheme) {
     broadcastUiThemeChanged(normalized.uiTheme);
   }
@@ -2801,6 +2823,7 @@ function createWindow(): void {
     () => loadGeneralSettings().searchEngine,
     () => loadGeneralSettings().searchBochaKey,
     () => loadGeneralSettings().searchTavilyKey,
+    () => loadGeneralSettings().searchAnySearchKey,
   );
 
   // 注入出行工具 amapKey 获取器（复用 GeneralSettings 中的 amapKey）
@@ -2858,7 +2881,7 @@ function createWindow(): void {
       // ① 时间日期（用用户时区，禁止直接喂未校验的 profile.timezone 给 Intl）
       const now = new Date();
       const userTz = resolveChatContextTimezone(loadUserProfile().timezone);
-      const timeStr = `当前时间：${now.toLocaleDateString("zh-CN", { timeZone: userTz })} ${now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: userTz })}`;
+      const timeStr = `当前时间：${now.toLocaleDateString(getDateLocale(), { timeZone: userTz })} ${now.toLocaleTimeString(getDateLocale(), { hour: "2-digit", minute: "2-digit", timeZone: userTz })}`;
 
       // ② 常驻上下文（世界书 + L0/L1 画像）
       let alwaysOnContext = "";
@@ -5191,6 +5214,12 @@ app.whenReady().then(async () => {
   ipcMain.handle(IPC.CHATS_GET_ACTIVE_SESSION, () => activeChatSessionId);
 
   const generalSettings = loadGeneralSettings();
+  // 初始化 Locale Context（从 GeneralSettings 的语言配置同步）
+  updateLocaleContext({
+    uiLocale: generalSettings.language,
+    dateLocale: generalSettings.language,
+    asrLanguage: generalSettings.asrLanguage,
+  });
   createWindow();
   createChatWindow();
   if (generalSettings.sidebarVisible) createSidebarWindow();
@@ -5204,7 +5233,7 @@ app.whenReady().then(async () => {
   console.log("[Cyrene] 当前 agent 权限档位:", getCurrentLevel());
   try {
     const modelSettings = loadModelSettings();
-    await initRAG("auto", undefined, undefined, modelSettings.embeddingModel);
+    await initRAG("auto", undefined, undefined, modelSettings.embeddingModel, modelSettings.embeddingDimensions);
     try {
       await reconcileUserMemoryIndex();
     } catch (err) {

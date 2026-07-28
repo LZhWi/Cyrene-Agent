@@ -14,6 +14,7 @@ import type {
   StructuredRepairContext,
 } from "./structured-output/runner";
 import { runStructuredOutput } from "./structured-output/runner";
+import { resolveMaxOutputTokens } from "../runtime-policy";
 import type { RecordStructuredOutputMetric } from "./structured-output/metrics";
 import type {
   AskFieldType,
@@ -259,7 +260,10 @@ export function buildActionGateRequest(input: BuildActionGateRequestInput): Chat
     model: input.model,
     messages,
     stream: false,
-    maxTokens: input.repair.attempt > 0 ? 2_400 : 1_200,
+    maxTokens: resolveMaxOutputTokens({
+      stage: "action-gate",
+      override: input.repair.attempt > 0 ? 2_400 : undefined,
+    }),
     structuredOutput: structuredOutputFor(input.profile, schema),
     ...(input.profile.requestHints.reasoningSplit
       ? { extraBody: { reasoning_split: true } }

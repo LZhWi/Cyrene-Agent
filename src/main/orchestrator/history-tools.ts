@@ -10,6 +10,7 @@
 import { addMemory, searchHistoryEntries } from "../rag";
 import { toolRegistry } from "./tool-registry";
 import { currentUserTimezone } from "./built-in-tools";
+import { getDateLocale } from "../locale-context";
 
 const LOG_PREFIX = "[History]";
 
@@ -86,7 +87,7 @@ export function registerRecallHistoryTool(): void {
       const sorted = [...filtered].sort((a, b) => a.createdAt - b.createdAt);
 
       const lines = sorted.map(h => {
-        const date = new Date(h.createdAt).toLocaleString("zh-CN", { timeZone: currentUserTimezone() });
+        const date = new Date(h.createdAt).toLocaleString(getDateLocale(), { timeZone: currentUserTimezone() });
         const role = h.metadata?.role === "user" ? "用户" : "昔涟";
         // 截断过长内容，避免吃太多 token
         const text = h.text.length > 300 ? h.text.slice(0, 300) + "..." : h.text;

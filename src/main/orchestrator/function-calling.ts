@@ -15,11 +15,12 @@ import { extractLastUserQuery, type ToolContext } from "./tool-context";
 import { recordUsage } from "../token-usage-store";
 import { resetReadRefs } from "../skills/skill-tools";
 import { truncateToolResult, compressConversation } from "./context-manager";
+import { resolveTimeoutPolicy } from "../runtime-policy";
 
 const LOG_PREFIX = "[FunctionCalling]";
 const MAX_TOOL_ROUNDS = 20; // 多步任务（写 Excel 多 sheet、生成图片等）可能耗多轮；到顶强制无工具总结兜底
-const PER_ROUND_TIMEOUT_MS = 75000; // 推理模型带 thinking，30s 偏紧，放宽到 75s
-const FORCE_SUMMARY_TIMEOUT_MS = 90000; // 强制总结兜底：对话历史此时已很长，30s 不够，放宽到 90s
+const PER_ROUND_TIMEOUT_MS = resolveTimeoutPolicy({ stage: "native-function-calling" }).totalMs;
+const FORCE_SUMMARY_TIMEOUT_MS = resolveTimeoutPolicy({ stage: "native-function-calling", override: { totalMs: 90_000 } }).totalMs;
 // 连续超时即退出：超时后重试只会让上下文更长更慢，形成"超时→加消息→更慢→再超时"死循环。
 // 连续 MAX_CONSECUTIVE_TIMEOUTS 次超时直接跳出走强制总结，不再空转浪费时间。
 const MAX_CONSECUTIVE_TIMEOUTS = 2;

@@ -1,0 +1,312 @@
+/**
+ * Memory LLM Client — 统一 Memory 子系统的网络 LLM 调用层。
+ *
+ * 提供两种调用模式：
+ *   1. invokeMemoryLlm()          — 旧链路：直接调用，返回原始文本
+ *   2. invokeMemoryStructuredOutput() — 新链路：接入现有 A/B/D/M Structured Output Pipeline
+ *
+ * 业务模块应优先使用 invokeMemoryStructuredOutput，
+ * 它会自动处理：厂商请求格式、JSON Schema/JSON Object/Prompt JSON 选择、
+ * <think> 清理、JSON 候选提取、Repair、reasoning 关闭、temperature 兼容等。
+ */
+
+import { getAdapterForConfig } from "../orchestrator/vendors";
+import type { VendorConfig, ChatMessage, ChatRequest } from "../orchestrator/vendors";
+import { recordUsage } from "../token-usage-store";
+import { resolveTimeoutPolicy, resolveMaxOutputTokens } from "../runtime-policy";
+import type { RuntimeStage } from "../runtime-policy";
+import { runStructuredOutput } from "../orchestrator/structured-output/runner";
+import type { BusinessValidationResult } from "../orchestrator/structured-output/runner";
+import type { StructuredOutputProfile, StructuredOutputStage } from "../orchestrator/structured-output/types";
+import { resolveStructuredOutputProfile, classifyStructuredOutputEndpoint } from "../orchestrator/structured-output/profiles";
+import { getCapability } from "../orchestrator/vendors/capabilities";
+import { loadMemoryModelConfig, stripThinkBlocks } from "./memory-llm-shared";
+import type { MemoryModelConfig, MemoryModelConfigSource } from "./memory-llm-shared";
+import {
+  MemoryLlmTimeoutError,
+  MemoryLlmHttpError,
+  MemoryLlmProtocolError,
+  MemoryLlmConfigurationError,
+} from "./memory-llm-errors";
+
+// ── 类型 ──
+
+export type MemoryLlmOperation = "judge" | "compress" | "resolve";
+
+export interface MemoryLlmRequest {
+  operation: MemoryLlmOperation;
+  messages: Array<{ role: "system" | "user"; content: string }>;
+  maxOutputTokens: number;
+  signal?: AbortSignal;
+  config?: MemoryModelConfig;
+}
+
+export interface MemoryLlmResponse {
+  text: string;
+  provider: string;
+  model: string;
+}
+
+export interface InvokeMemoryStructuredOutputOptions<T> {
+  operation: MemoryLlmOperation;
+  systemPrompt: string;
+  userPrompt: string;
+  maxOutputTokens: number;
+  parseSchema: (value: unknown) => T;
+  validateBusiness: (value: T) => BusinessValidationResult<T>;
+  signal?: AbortSignal;
+  config?: MemoryModelConfig;
+}
+
+// ── 操作 → 运行时阶段映射 ──
+
+const OPERATION_TO_TOKEN_STAGE: Record<MemoryLlmOperation, RuntimeStage> = {
+  judge: "memory-judge",
+  compress: "memory-compressor",
+  resolve: "memory-resolver",
+};
+
+const OPERATION_TO_SO_STAGE: Record<MemoryLlmOperation, StructuredOutputStage> = {
+  judge: "memory_judge",
+  compress: "memory_compress",
+  resolve: "memory_resolve",
+};
+
+export function getDefaultMaxOutputTokens(operation: MemoryLlmOperation): number {
+  return resolveMaxOutputTokens({ stage: OPERATION_TO_TOKEN_STAGE[operation] });
+}
+
+// ── 配置解析 ──
+
+function resolveMemoryProfile(config: MemoryModelConfig): StructuredOutputProfile {
+  const cap = getCapability(config.provider);
+  const endpointKind = cap
+    ? classifyStructuredOutputEndpoint({
+        providerId: cap.id,
+        configuredBaseUrl: config.baseUrl,
+        officialBaseUrl: cap.baseUrl,
+      })
+    : "custom";
+
+  return resolveStructuredOutputProfile({
+    provider: cap?.id ?? config.provider,
+    model: config.model,
+    transport: cap?.transport ?? "openai",
+    endpointKind,
+  });
+}
+
+function buildVendorConfig(config: MemoryModelConfig): VendorConfig {
+  return {
+    provider: config.provider,
+    baseUrl: config.baseUrl,
+    model: config.model,
+    apiKey: config.apiKey,
+    explicitTransport: config.explicitTransport,
+  };
+}
+
+// ── Structured Output 调用入口 ──
+
+/**
+ * 通过现有 A/B/D/M Structured Output Pipeline 调用 Memory LLM。
+ *
+ * 业务模块拿到的直接是校验过的结构化对象，不再自行 JSON.parse。
+ */
+export async function invokeMemoryStructuredOutput<T>(options: InvokeMemoryStructuredOutputOptions<T>): Promise<T> {
+  const { operation, systemPrompt, userPrompt, maxOutputTokens, parseSchema, validateBusiness, signal } = options;
+  const config = options.config ?? loadMemoryModelConfig();
+
+  if (!config.apiKey) {
+    throw new MemoryLlmConfigurationError(`missing API key for Memory LLM (source: ${config.source})`);
+  }
+
+  const profile = resolveMemoryProfile(config);
+  const cfg = buildVendorConfig(config);
+  const adapter = getAdapterForConfig(cfg);
+  const soStage = OPERATION_TO_SO_STAGE[operation];
+
+  const result = await runStructuredOutput<T, ChatRequest>({
+    stage: soStage,
+    profile,
+    signal,
+    buildRequest: (repair) => {
+      const structuredOutput = buildStructuredOutputRequest(profile, operation);
+      const messages: ChatMessage[] = [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ];
+      return {
+        model: cfg.model,
+        messages,
+        stream: false,
+        maxTokens: maxOutputTokens,
+        structuredOutput,
+        ...(profile.requestHints.reasoningSplit ? { extraBody: { reasoning_split: true } } : {}),
+      };
+    },
+    generate: async (request, generateSignal) => {
+      const http = adapter.buildRequest(request, cfg);
+
+      const timeoutMs = resolveTimeoutPolicy({ stage: "memory-llm" }).totalMs;
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+      // 合并外部 signal
+      if (generateSignal.aborted) controller.abort();
+      const onExternalAbort = () => controller.abort();
+      generateSignal.addEventListener("abort", onExternalAbort);
+
+      let response: Response;
+      try {
+        response = await fetch(http.url, {
+          method: "POST",
+          signal: controller.signal,
+          headers: http.headers,
+          body: http.body,
+        });
+      } catch (err) {
+        if (err instanceof Error && err.name === "AbortError") {
+          if (generateSignal.aborted) {
+            throw new Error(`Memory LLM [${operation}] cancelled by external signal`);
+          }
+          throw new MemoryLlmTimeoutError(timeoutMs, operation);
+        }
+        throw err;
+      } finally {
+        clearTimeout(timer);
+        generateSignal.removeEventListener("abort", onExternalAbort);
+      }
+
+      if (!response.ok) {
+        let responseBody: string | undefined;
+        try {
+          const errorData = await response.json() as Record<string, unknown>;
+          const rawMessage = (errorData as { error?: { message?: string } }).error?.message;
+          responseBody = rawMessage && rawMessage.length > 1500 ? rawMessage.slice(0, 1500) + "…(truncated)" : rawMessage;
+        } catch { /* ignore */ }
+        throw new MemoryLlmHttpError(response.status, operation, responseBody);
+      }
+
+      let data: unknown;
+      try {
+        data = await response.json();
+      } catch {
+        throw new MemoryLlmProtocolError(operation, "failed to parse response JSON");
+      }
+
+      const parsed = adapter.parseResponse(data);
+
+      // best-effort usage recording
+      if (parsed.usage) {
+        try { recordUsage(parsed.usage.input, parsed.usage.output, 1); } catch { /* ignore */ }
+      }
+
+      return {
+        text: parsed.text ?? "",
+        finishReason: parsed.finishReason,
+        refusal: parsed.refusal,
+        structuredValue: parsed.structuredValue,
+      };
+    },
+    parseSchema,
+    validateBusiness,
+  });
+
+  if (result.outcome === "failure") {
+    throw new MemoryLlmProtocolError(
+      operation,
+      `structured output failed: ${result.failure.code} (stage: ${result.failure.stage})`,
+    );
+  }
+
+  return result.value;
+}
+
+function buildStructuredOutputRequest(
+  profile: StructuredOutputProfile,
+  operation: MemoryLlmOperation,
+): ChatRequest["structuredOutput"] {
+  const name = `memory_${operation}`;
+  if (profile.mode === "provider_json_schema") {
+    return { mode: "json_schema", name, schema: {}, strict: true };
+  }
+  if (profile.mode === "provider_json_object") {
+    return { mode: "json_object", name };
+  }
+  return { mode: "prompt_json", sendJsonObjectHint: profile.requestHints.sendJsonObject };
+}
+
+// ── 旧链路兼容 ──
+// 以下保留 invokeMemoryLlm 供尚未迁移到 Structured Output 的调用方使用。
+
+export async function invokeMemoryLlm(request: MemoryLlmRequest): Promise<MemoryLlmResponse> {
+  const { operation, messages, maxOutputTokens, signal } = request;
+  const config = request.config ?? loadMemoryModelConfig();
+
+  if (!config.apiKey) {
+    throw new MemoryLlmConfigurationError(`missing API key for Memory LLM (source: ${config.source})`);
+  }
+
+  const cfg = buildVendorConfig(config);
+  const adapter = getAdapterForConfig(cfg);
+  const http = adapter.buildRequest({
+    model: cfg.model,
+    messages: messages as ChatMessage[],
+    maxTokens: maxOutputTokens,
+    stream: false,
+  }, cfg);
+
+  const timeoutMs = resolveTimeoutPolicy({ stage: "memory-llm" }).totalMs;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  if (signal?.aborted) controller.abort();
+  const onExternalAbort = () => controller.abort();
+  signal?.addEventListener("abort", onExternalAbort);
+
+  let response: Response;
+  try {
+    response = await fetch(http.url, {
+      method: "POST",
+      signal: controller.signal,
+      headers: http.headers,
+      body: http.body,
+    });
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      if (signal?.aborted) throw new Error(`Memory LLM [${operation}] cancelled by external signal`);
+      throw new MemoryLlmTimeoutError(timeoutMs, operation);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onExternalAbort);
+  }
+
+  if (!response.ok) {
+    let responseBody: string | undefined;
+    try {
+      const errorData = await response.json() as Record<string, unknown>;
+      const rawMessage = (errorData as { error?: { message?: string } }).error?.message;
+      responseBody = rawMessage && rawMessage.length > 1500 ? rawMessage.slice(0, 1500) + "…(truncated)" : rawMessage;
+    } catch { /* ignore */ }
+    throw new MemoryLlmHttpError(response.status, operation, responseBody);
+  }
+
+  let data: unknown;
+  try { data = await response.json(); } catch {
+    throw new MemoryLlmProtocolError(operation, "failed to parse response JSON");
+  }
+
+  const parsed = adapter.parseResponse(data);
+  if (parsed.usage) {
+    try { recordUsage(parsed.usage.input, parsed.usage.output, 1); } catch { /* ignore */ }
+  }
+
+  return {
+    text: stripThinkBlocks(parsed.text ?? ""),
+    provider: config.provider,
+    model: config.model,
+  };
+}

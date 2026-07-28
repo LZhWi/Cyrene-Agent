@@ -3,6 +3,29 @@ import { checkEmbeddingModelInstalled, getProjectModelsDir } from "./model-statu
 import * as path from "path";
 import * as os from "os";
 
+// ── 错误类型 ──
+export class EmbeddingDimensionMismatchError extends Error {
+  constructor(
+    public readonly declared: number,
+    public readonly actual: number,
+    public readonly context: string,
+  ) {
+    super(`Embedding dimension mismatch: ${context} — declared ${declared}, got ${actual}`);
+    this.name = "EmbeddingDimensionMismatchError";
+  }
+}
+
+export class EmbeddingBatchDimensionInconsistencyError extends Error {
+  constructor(
+    public readonly expected: number,
+    public readonly actual: number,
+    public readonly index: number,
+  ) {
+    super(`Embedding batch inconsistency at index ${index}: expected ${expected} dimensions, got ${actual}`);
+    this.name = "EmbeddingBatchDimensionInconsistencyError";
+  }
+}
+
 // ── 类型 ──
 export type EmbeddingProviderIdentity = {
   provider: string;
@@ -10,6 +33,16 @@ export type EmbeddingProviderIdentity = {
   dimensions: number;
   endpoint?: string;
 };
+
+/**
+ * 索引元数据 — 写入向量索引时记录，用于后续一致性校验。
+ */
+export interface EmbeddingIndexMetadata {
+  provider: string;
+  model: string;
+  dimensions: number;
+  cacheIdentity: string;
+}
 
 export type EmbeddingWorkerConfig =
   | { provider: "local"; modelKey: string }
@@ -22,6 +55,10 @@ export interface EmbeddingProvider {
   readonly name: string;
   readonly cacheIdentity?: EmbeddingProviderIdentity;
   readonly workerConfig?: EmbeddingWorkerConfig;
+  /** 用户声明的维度（可能为 undefined，表示未配置） */
+  readonly declaredDimensions?: number;
+  /** 实际探测到的维度（首次 embed 后才有值） */
+  readonly resolvedDimensions?: number;
 }
 
 // ── 模型注册表 ──
@@ -94,6 +131,8 @@ export function createLocalEmbeddingProvider(modelKey?: string): EmbeddingProvid
   return {
     name: "local-" + config.hfName.split("/").pop(),
     dims: config.dims,
+    declaredDimensions: config.dims,
+    resolvedDimensions: config.dims,
     cacheIdentity: {
       provider: "local",
       model: config.hfName,
@@ -120,28 +159,90 @@ export function createLocalEmbeddingProvider(modelKey?: string): EmbeddingProvid
 }
 
 // ── OpenAI 兼容 Provider ──
+/**
+ * 创建 OpenAI 兼容的 embedding provider。
+ *
+ * @param baseUrl - API 基础 URL
+ * @param apiKey - API 密钥
+ * @param model - 模型名称
+ * @param declaredDimensions - 用户声明的维度（可选）。
+ *   留空时首次 embed 自动探测；填写时与实际响应严格校验。
+ */
 export function createOpenAIEmbeddingProvider(
   baseUrl: string,
   apiKey: string,
-  model = "text-embedding-ada-002"
+  model = "text-embedding-ada-002",
+  declaredDimensions?: number,
 ): EmbeddingProvider {
   const normalizedBaseUrl = baseUrl.replace(/\/+$/, "");
   const endpoint = normalizedBaseUrl + "/embeddings";
 
+  // 维度状态：可能由用户声明，也可能在首次调用后自动探测
+  let resolvedDims: number | undefined = declaredDimensions;
+  let resolved = false;
+
+  function getDims(): number {
+    if (resolvedDims !== undefined) return resolvedDims;
+    throw new Error("Embedding dimensions not yet resolved — call embed() first");
+  }
+
+  function validateAndResolveDimensions(embedding: number[], context: string): void {
+    const actual = embedding.length;
+    if (declaredDimensions !== undefined && declaredDimensions !== actual) {
+      throw new EmbeddingDimensionMismatchError(declaredDimensions, actual, context);
+    }
+    if (!resolved) {
+      resolvedDims = actual;
+      resolved = true;
+    } else if (resolvedDims !== actual) {
+      throw new EmbeddingDimensionMismatchError(resolvedDims!, actual, context);
+    }
+  }
+
+  function validateBatchConsistency(embeddings: number[][]): void {
+    if (embeddings.length === 0) return;
+    const firstDim = embeddings[0].length;
+    for (let i = 1; i < embeddings.length; i++) {
+      if (embeddings[i].length !== firstDim) {
+        throw new EmbeddingBatchDimensionInconsistencyError(firstDim, embeddings[i].length, i);
+      }
+    }
+  }
+
   return {
     name: "openai-compat-" + model,
-    dims: 1536,
-    cacheIdentity: {
-      provider: "openai-compat",
-      model,
-      dimensions: 1536,
-      endpoint: normalizedBaseUrl,
+
+    get dims() {
+      return getDims();
     },
-    workerConfig: {
-      provider: "openai-compat",
-      baseUrl: normalizedBaseUrl,
-      apiKey,
-      model,
+
+    get declaredDimensions() {
+      return declaredDimensions;
+    },
+
+    get resolvedDimensions() {
+      return resolvedDims;
+    },
+
+    get cacheIdentity(): EmbeddingProviderIdentity | undefined {
+      // 维度未探测前返回 base identity（不含 dimensions）
+      // 维度已探测后返回完整 identity
+      if (resolvedDims === undefined) return undefined;
+      return {
+        provider: "openai-compat",
+        model,
+        dimensions: resolvedDims,
+        endpoint: normalizedBaseUrl,
+      };
+    },
+
+    get workerConfig(): EmbeddingWorkerConfig {
+      return {
+        provider: "openai-compat",
+        baseUrl: normalizedBaseUrl,
+        apiKey,
+        model,
+      };
     },
 
     async embed(text: string): Promise<number[]> {
@@ -157,7 +258,9 @@ export function createOpenAIEmbeddingProvider(
         throw new Error("Embedding API error: " + res.status + " " + await res.text());
       }
       const data = await res.json() as { data: Array<{ embedding: number[] }> };
-      return data.data[0].embedding;
+      const embedding = data.data[0].embedding;
+      validateAndResolveDimensions(embedding, `embed() for model "${model}"`);
+      return embedding;
     },
 
     async embedBatch(texts: string[]): Promise<number[][]> {
@@ -173,7 +276,12 @@ export function createOpenAIEmbeddingProvider(
         throw new Error("Embedding API error: " + res.status + " " + await res.text());
       }
       const data = await res.json() as { data: Array<{ embedding: number[] }> };
-      return data.data.map((d) => d.embedding);
+      const embeddings = data.data.map((d) => d.embedding);
+      validateBatchConsistency(embeddings);
+      for (const emb of embeddings) {
+        validateAndResolveDimensions(emb, `embedBatch() for model "${model}"`);
+      }
+      return embeddings;
     },
   };
 }
@@ -185,21 +293,22 @@ export function getEmbeddingProvider(
   mode: "auto" | "local" | "cloud" = "auto",
   cloudBaseUrl?: string,
   cloudApiKey?: string,
-  modelKey?: string
+  modelKey?: string,
+  cloudDimensions?: number,
 ): EmbeddingProvider | null {
   if (cachedProvider) return cachedProvider;
 
   if (mode === "local") {
     cachedProvider = createLocalEmbeddingProvider(modelKey);
   } else if (mode === "cloud" && cloudBaseUrl && cloudApiKey) {
-    cachedProvider = createOpenAIEmbeddingProvider(cloudBaseUrl, cloudApiKey);
+    cachedProvider = createOpenAIEmbeddingProvider(cloudBaseUrl, cloudApiKey, modelKey, cloudDimensions);
   } else {
     // auto 模式：优先 local，local 不存在且 cloud 配置完整时用 cloud，否则 null
     const local = createLocalEmbeddingProvider(modelKey);
     if (local) {
       cachedProvider = local;
     } else if (cloudBaseUrl && cloudApiKey) {
-      cachedProvider = createOpenAIEmbeddingProvider(cloudBaseUrl, cloudApiKey);
+      cachedProvider = createOpenAIEmbeddingProvider(cloudBaseUrl, cloudApiKey, modelKey, cloudDimensions);
     } else {
       cachedProvider = null;
     }
@@ -208,12 +317,18 @@ export function getEmbeddingProvider(
   return cachedProvider;
 }
 
+/**
+ * 获取当前 embedding provider 的 identity。
+ * 注意：对于 cloud provider 且未声明维度的情况，需要先调用 embed() 解析维度。
+ * 此函数要求 provider 的维度已解析（resolvedDimensions !== undefined）。
+ */
 export async function getEmbeddingProviderIdentity(): Promise<EmbeddingProviderIdentity> {
   const provider = getEmbeddingProvider();
   if (!provider) throw new Error("Embedding provider is not available");
 
   if (provider.cacheIdentity) return provider.cacheIdentity;
 
+  // 对于 local provider，dims 始终已知
   const localModel = Object.values(LOCAL_MODELS).find(
     (model) => provider.name === "local-" + model.hfName.split("/").pop(),
   );
@@ -225,19 +340,31 @@ export async function getEmbeddingProviderIdentity(): Promise<EmbeddingProviderI
     };
   }
 
+  // cloud provider：如果维度已解析，返回 identity
   const cloudModelPrefix = "openai-compat-";
   if (provider.name.startsWith(cloudModelPrefix)) {
+    const dims = provider.resolvedDimensions ?? provider.declaredDimensions;
+    if (dims === undefined) {
+      throw new Error(
+        "Embedding dimensions not yet resolved for cloud provider. " +
+        "Call embed() first, or declare dimensions in settings."
+      );
+    }
     return {
       provider: "openai-compat",
       model: provider.name.slice(cloudModelPrefix.length),
-      dimensions: provider.dims,
+      dimensions: dims,
     };
   }
 
+  const dims = provider.resolvedDimensions ?? provider.declaredDimensions;
+  if (dims === undefined) {
+    throw new Error("Embedding dimensions not yet resolved for provider: " + provider.name);
+  }
   return {
     provider: provider.name,
     model: provider.name,
-    dimensions: provider.dims,
+    dimensions: dims,
   };
 }
 

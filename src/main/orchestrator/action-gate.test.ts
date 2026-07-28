@@ -78,7 +78,7 @@ describe("buildActionGateRequest", () => {
   it("includes trusted runtime defaults and machine-derived required inputs", () => {
     const request = buildActionGateRequest(({
       ...baseInput(async () => response({ decision: "respond", reason: "done" })),
-      runtimeEnvironmentContext: "默认城市：淄博\n桌面：C:\\Users\\13575\\Desktop",
+      runtimeEnvironmentContext: "默认城市：淄博\n桌面：C:\\Users\\testuser\\Desktop",
       availableCapabilities: [{
         ...capabilities[0],
         requiredInputs: ["candidateRef"],

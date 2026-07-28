@@ -3,6 +3,7 @@
 
 import { spawn } from "child_process";
 import { toolRegistry } from "./tool-registry";
+import { getDateLocale, getWeatherLanguage } from "../locale-context";
 import { addMcpServer } from "./mcp-manager";
 import { sendToLive2DWindow } from "../index";
 import { createPlayLive2DActionTool } from "./tools/play-live2d-action";
@@ -499,7 +500,8 @@ interface OMCity { name: string; latitude: number; longitude: number; country: s
 
 /** Open-Meteo 城市查询（Geocoding API，免费免 key）。 */
 async function omResolveCity(city: string): Promise<OMCity | null> {
-  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=zh&format=json`;
+  const params = new URLSearchParams({ name: city, count: "1", language: getWeatherLanguage(), format: "json" });
+  const url = `https://geocoding-api.open-meteo.com/v1/search?${params}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), WEATHER_TIMEOUT_MS);
   try {
@@ -591,7 +593,7 @@ async function omFetchWeather(city: string): Promise<string> {
       uv: c.uv_index,
       visibility: Math.round(c.visibility / 1000), // m → km
       source: "Open-Meteo",
-      updateTime: new Date().toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: currentUserTimezone() }),
+      updateTime: new Date().toLocaleString(getDateLocale(), { hour: "2-digit", minute: "2-digit", timeZone: currentUserTimezone() }),
     };
 
     // 发送天气卡片数据给渲染端
@@ -732,7 +734,7 @@ async function amapFetchWeather(city: string, key: string): Promise<string> {
       windDirection: w.winddirection,
       windSpeed: `${w.windpower}级`,
       source: "高德天气",
-      updateTime: w.reporttime.slice(11, 16) || new Date().toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
+      updateTime: w.reporttime.slice(11, 16) || new Date().toLocaleString(getDateLocale(), { hour: "2-digit", minute: "2-digit" }),
     };
 
     // 发送天气卡片数据给渲染端
@@ -855,6 +857,7 @@ const SEARCH_TIMEOUT_MS = 20_000;
 let searchEngineGetter: (() => string) | null = null;
 let searchBochaKeyGetter: (() => string) | null = null;
 let searchTavilyKeyGetter: (() => string) | null = null;
+let searchAnySearchKeyGetter: (() => string) | null = null;
 
 /**
  * index.ts 启动时调用，注入搜索引擎/各源key 的读取器。
@@ -864,10 +867,12 @@ export function setSearchConfig(
   engineGetter: () => string,
   bochaKeyGetter: () => string,
   tavilyKeyGetter: () => string,
+  anySearchKeyGetter: () => string,
 ): void {
   searchEngineGetter = engineGetter;
   searchBochaKeyGetter = bochaKeyGetter;
   searchTavilyKeyGetter = tavilyKeyGetter;
+  searchAnySearchKeyGetter = anySearchKeyGetter;
 }
 
 interface BochaResult {
@@ -998,6 +1003,50 @@ async function tavilySearch(query: string, key: string): Promise<string> {
   }
 }
 
+/** AnySearch 搜索：调 /v1/search，返回结构化 JSON。 */
+async function anySearchSearch(query: string, key: string): Promise<string> {
+  const url = "https://api.anysearch.com/v1/search";
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), SEARCH_TIMEOUT_MS);
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (key) headers.Authorization = `Bearer ${key}`;
+    const resp = await fetch(url, {
+      method: "POST",
+      signal: ctrl.signal,
+      headers,
+      body: JSON.stringify({
+        query,
+        max_results: 8,
+      }),
+    });
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    const data = await resp.json() as {
+      data: { results?: Array<{ title: string; url: string; content: string; snippet: string }> };
+    };
+    const rawResults = data.data.results ?? [];
+    const results: WebSearchResult[] = rawResults.map((r) => ({
+      title: r.title,
+      url: r.url,
+      snippet: truncateSnippet(r.content || r.snippet || ""),
+    }));
+    const output: WebSearchOutput = {
+      success: true,
+      query,
+      resultCount: results.length,
+      results,
+    };
+    return JSON.stringify(output);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`搜索失败：${msg}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function executeWebSearch(args: Record<string, unknown>): Promise<string> {
   const engine = searchEngineGetter?.() ?? "off";
   if (engine === "off") {
@@ -1023,6 +1072,11 @@ async function executeWebSearch(args: Record<string, unknown>): Promise<string> 
       throw new Error("E_SEARCH_KEY_MISSING");
     }
     return tavilySearch(query, key);
+  }
+
+  if (engine === "anySearch") {
+    const key = searchAnySearchKeyGetter?.() ?? "";
+    return anySearchSearch(query, key);
   }
 
   throw new Error(`E_SEARCH_ENGINE_NOT_SUPPORTED:${engine}`);

@@ -15,9 +15,10 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { resolveTimeoutPolicy } from "../runtime-policy";
 
 const BASE_URL = "https://api.mosi.cn";
-const DEFAULT_TIMEOUT_MS = 30_000;
+const DEFAULT_TIMEOUT_MS = resolveTimeoutPolicy({ stage: "tts-mossland" }).totalMs;
 
 /**
  * 错误码 → 中文友好消息。Mossland 文档列出的常见 code 都覆盖上；

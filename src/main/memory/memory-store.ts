@@ -3,6 +3,7 @@ import * as path from "path"
 import { app } from "electron"
 import { ConflictLog, L0Profile, L1Profile, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryStore, ReflectionLog } from "./memory-types"
 import { appendMemoryTrace } from "./memory-trace"
+import { getMemoryLanguage } from "../locale-context"
 
 const CURRENT_SCHEMA_VERSION = 2
 const QUOTE_SNIPPET_MAX = 300
@@ -13,15 +14,17 @@ const RESOLVER_PRIORITY_RANK: Record<string, number> = {
   none: 0,
 }
 
-const DEFAULT_L0: L0Profile = {
-  nickname: "",
-  preferredName: "",
-  occupation: "",
-  longTermInterests: "",
-  language: "zh-CN",
-  permanentNote: "",
-  isPinned: false,
-  updatedAt: 0,
+function createDefaultL0(): L0Profile {
+  return {
+    nickname: "",
+    preferredName: "",
+    occupation: "",
+    longTermInterests: "",
+    language: getMemoryLanguage(),
+    permanentNote: "",
+    isPinned: false,
+    updatedAt: 0,
+  };
 }
 
 const DEFAULT_L1: L1Profile = {
@@ -34,7 +37,7 @@ const DEFAULT_L1: L1Profile = {
 
 const DEFAULT_STORE: MemoryStore = {
   schemaVersion: CURRENT_SCHEMA_VERSION,
-  l0: { ...DEFAULT_L0 },
+  l0: { ...createDefaultL0() },
   l1: { ...DEFAULT_L1 },
   l2: [],
   evidence: [],
@@ -54,7 +57,7 @@ function getMemoryPath(): string {
 function cloneDefaultStore(): MemoryStore {
   return {
     ...DEFAULT_STORE,
-    l0: { ...DEFAULT_L0 },
+    l0: { ...createDefaultL0() },
     l1: { ...DEFAULT_L1 },
     l2: [],
     evidence: [],
@@ -79,7 +82,7 @@ function backupMemoryFile(filePath: string): void {
 export function repairMigrations(store: Partial<MemoryStore>): MemoryStore {
   return {
     schemaVersion: CURRENT_SCHEMA_VERSION,
-    l0: { ...DEFAULT_L0, ...store.l0 },
+    l0: { ...createDefaultL0(), ...store.l0 },
     l1: { ...DEFAULT_L1, ...store.l1 },
     l2: Array.isArray(store.l2) ? store.l2.map((memory) => ({
       ...memory,
