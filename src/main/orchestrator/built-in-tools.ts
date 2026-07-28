@@ -1329,4 +1329,64 @@ toolRegistry.register({
   },
 });
 
+// ── 工具：delegate_document（文档子代理入口）─────────────────────
+// 虚拟工具：对 Action Gate 是普通工具，执行时走专用子代理 Executor。
+// 旧 delegate_task 保留为 deprecated 兼容入口，新链路使用 delegate_document。
+toolRegistry.register({
+  id: "delegate_document",
+  name: "委托文档生成",
+  description:
+    "把文档生成任务委托给文档子代理。子代理独立调用 write_word 生成文档，" +
+    "验证文件存在，返回结构化结果（文件路径 + 验证状态 + 内容摘要）。\n\n" +
+    "何时用：\n" +
+    "- 用户要生成 Word 文档（报告/简报/总结等）\n" +
+    "- 需要确认文件已成功生成并验证路径\n\n" +
+    "不要用于：\n" +
+    "- 简单的单步写文件（直接用 write_word）\n" +
+    "- Excel/PDF/Markdown（后续版本支持）\n\n" +
+    "参数：objective（任务目标），filename（.docx 文件名），title（标题），" +
+    "paragraphs（段落数组），style（可选预设风格）。",
+  enabled: true,
+  risk: "safe",
+  capability: "delegate_document",
+  executionKind: "subagent",
+  ledgerPolicy: "bypass",
+  hideInPlanMode: false,
+  soulActionLabel: "生成文档",
+  soulProjection: {
+    projector: "entity_detail",
+    source: "trusted_internal",
+    fields: {
+      title: "summary",
+      artifactName: "primaryArtifact.name",
+      artifactPath: "primaryArtifact.path",
+      artifactVerified: "primaryArtifact.verified",
+    },
+  },
+  completionEvidence: [{ kind: "tool_succeeded" }],
+  inputSchema: {
+    type: "object",
+    properties: {
+      objective: { type: "string", description: "任务目标描述，如「将新闻资料生成 Word 简报」" },
+      filename: { type: "string", description: "文件名，必须以 .docx 结尾，如 AI新闻简报.docx" },
+      title: { type: "string", description: "文档标题" },
+      paragraphs: {
+        type: "array",
+        description: "段落内容数组，每项是一段文本",
+        items: { type: "string" },
+      },
+      style: {
+        type: "string",
+        description: "预设风格：default(商务) / academic(学术) / clean(极简) / elegant(优雅) / formal(公文)",
+      },
+    },
+    required: ["objective", "filename", "title", "paragraphs"],
+  },
+  // 子代理虚拟工具的 execute 不会被直接调用——executionKind=subagent 时
+  // 主图 execute 节点会走专用 Executor。保留防误调用保护。
+  execute: async () => {
+    throw new Error("SUBAGENT_MUST_USE_SPECIAL_EXECUTOR");
+  },
+});
+
 toolRegistry.register(createPlayLive2DActionTool({ sendToLive2DWindow }));

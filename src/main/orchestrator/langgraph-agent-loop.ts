@@ -41,6 +41,8 @@ import {
 import type { ToolDefinition } from "./tool-registry";
 import { controlledInputType, controlledInputKind } from "./tool-registry";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
+import { runDocumentAgent } from "./subagents/document-agent";
+import { toSubAgentToolOutcome } from "./subagents/outcome-adapter";
 import type { TwoPhaseEvent, TwoPhaseFcResult, AgentLoopSettings } from "./two-phase-fc-loop";
 import type {
   ChatMessage,
@@ -904,11 +906,21 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
 
         const toolCallId = toolCall.id;
         options.onEvent?.({ type: "tool_call_start", toolCallId, toolCallName: selectedTool.name });
-        const execution = await executionLedger.execute({
-          capability: decision.capability,
-          targetRefs: decision.targetRefs,
-          args,
-        }, async () => {
+
+        // ── 执行分发：子代理工具走专用 Executor，普通工具走 ExecutionLedger ──
+        const isSubAgent = selectedTool.executionKind === "subagent";
+        const runExecution = async (): Promise<ToolExecutionOutcome> => {
+          if (isSubAgent) {
+            const taskId = `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const outcome = await runDocumentAgent(taskId, {
+              objective: String(args.objective ?? ""),
+              filename: String(args.filename ?? ""),
+              title: String(args.title ?? ""),
+              paragraphs: Array.isArray(args.paragraphs) ? args.paragraphs.map(String) : [],
+              ...(args.style ? { style: String(args.style) } : {}),
+            });
+            return toSubAgentToolOutcome(outcome);
+          }
           try {
             const executed = await perf.track(`execute_tool[${selectedTool.id}]`, () => options.executeTool(toolCall, runnableToolIds));
             return typeof executed === "string" ? { status: "succeeded", output: executed } : executed;
@@ -919,7 +931,15 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
               output: error instanceof Error ? error.message : String(error),
             };
           }
-        });
+        };
+
+        const execution = selectedTool.ledgerPolicy === "bypass" || isSubAgent
+          ? { outcome: await runExecution(), cached: false }
+          : await executionLedger.execute({
+              capability: decision.capability,
+              targetRefs: decision.targetRefs,
+              args,
+            }, runExecution);
         const outcome = normalizeToolExecutionOutcome(execution.outcome);
         const deduplicated = execution.cached && outcome.terminal;
         if (deduplicated) {

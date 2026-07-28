@@ -71,6 +71,10 @@ export interface ToolDefinition {
   completionEvidence?: CapabilityCompletionEvidence[];
   /** Plan 模式下不暴露给 Action Gate 和 Native FC（防止 Plan 步骤降级到旧 Loop）。 */
   hideInPlanMode?: boolean;
+  /** 执行类型：atomic 走普通 executeTool，subagent 走子代理 Executor。默认 atomic。 */
+  executionKind?: "atomic" | "subagent";
+  /** Ledger 策略：success_terminal 缓存终态成功（默认），bypass 不缓存。子代理默认 bypass。 */
+  ledgerPolicy?: "success_terminal" | "bypass";
   // 执行器：内置工具指向本地函数，外部 MCP 工具指向 transport 调用
   execute: (args: Record<string, unknown>, ctx?: ToolContext) => Promise<string>;
 }
