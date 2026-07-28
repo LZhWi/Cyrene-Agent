@@ -974,12 +974,43 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             .filter(r => r.toolId === selectedTool.id && r.status === "succeeded")
             .pop();
           if (lastSubAgentResult) {
-            const currentOutput = outcome.output.slice(0, 200);
-            const lastOutput = lastSubAgentResult.output.slice(0, 200);
-            const currentArgs = JSON.stringify(args);
-            const lastArgs = JSON.stringify(lastSubAgentResult.args);
-            if (currentArgs === lastArgs && currentOutput === lastOutput) {
-              // 相同参数 + 相同结果 → 无进展
+            // 使用稳定序列化比较 args（忽略 key 顺序）
+            const stableArgs = (obj: unknown): string => {
+              if (Array.isArray(obj)) return `[${obj.map(stableArgs).join(",")}]`;
+              if (obj && typeof obj === "object") {
+                return `{${Object.keys(obj as Record<string, unknown>).sort().map(k => `${k}:${stableArgs((obj as Record<string, unknown>)[k])}`).join(",")}}`;
+              }
+              return JSON.stringify(obj);
+            };
+
+            // 从输出中提取语义字段（排除 taskId、traceRef、时间戳、随机 ID）
+            const extractSemanticFingerprint = (output: string): string => {
+              try {
+                const parsed = parseSubAgentResult(output);
+                return JSON.stringify({
+                  profile: parsed.profile,
+                  status: parsed.status,
+                  findingsCount: parsed.findings.length,
+                  findingsContent: parsed.findings.map(f => f.content?.slice(0, 100)).sort(),
+                  artifactsCount: parsed.artifacts.length,
+                  artifactsPaths: parsed.artifacts.map(a => a.path).sort(),
+                  completionEvidence: parsed.completionEvidence.map(e => ({ criterion: e.criterion, satisfied: e.satisfied })),
+                  missingInformation: parsed.missingInformation?.sort(),
+                  errorCode: parsed.error?.code,
+                });
+              } catch {
+                // 解析失败时回退到输出前缀
+                return output.slice(0, 200);
+              }
+            };
+
+            const currentArgsFingerprint = stableArgs(args);
+            const lastArgsFingerprint = stableArgs(lastSubAgentResult.args);
+            const currentResultFingerprint = extractSemanticFingerprint(outcome.output);
+            const lastResultFingerprint = extractSemanticFingerprint(lastSubAgentResult.output);
+
+            if (currentArgsFingerprint === lastArgsFingerprint && currentResultFingerprint === lastResultFingerprint) {
+              // 相同参数 + 相同语义结果 → 无进展
               outcome.status = "failed";
               outcome.output = JSON.stringify({
                 kind: "subagent_result", version: 1,

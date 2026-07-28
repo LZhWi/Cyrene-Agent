@@ -152,8 +152,9 @@ function checkGuards(
 
 /**
  * 预算耗尽时的结果构建：
- * - 有已验证结果 -> partial
- * - 无有效结果 -> failed
+ * - plan.status === "failed" → 保持 failed，不覆盖
+ * - 有经过验证的 finding、artifact 或 completion evidence → partial
+ * - 没有任何有效结果 → failed
  * - 永远不返回 blocked
  */
 function buildBudgetOutcome(
@@ -161,20 +162,40 @@ function buildBudgetOutcome(
   profile: SubAgentProfileConfig,
   invocationStatus: "completed" | "timed_out",
 ): SubAgentRunOutcome {
-  const hasResults = state.toolResults.some(r => r.status === "succeeded");
-  const hasCompletedSteps = state.plan.steps.some(s => s.status === "completed");
+  // 如果 plan 已经标记为 failed，直接返回失败结果
+  if (state.plan.status === "failed") {
+    return {
+      invocationStatus,
+      result: profile.buildResult(state),
+    };
+  }
 
-  if (hasResults || hasCompletedSteps) {
-    // 有部分结果 -> partial
+  // 检查是否有经过验证的有效结果
+  const hasValidFindings = state.toolResults.some(r =>
+    r.status === "succeeded" && r.output && r.output.length > 0
+  );
+  const hasCompletedSteps = state.plan.steps.some(s => s.status === "completed");
+  const hasResults = hasValidFindings || hasCompletedSteps;
+
+  if (hasResults) {
+    // 有部分结果但任务未全部完成 -> partial
     const result = profile.buildResult(state);
     result.status = "partial";
+    result.error = {
+      code: "SUBAGENT_BUDGET_EXHAUSTED",
+      message: "预算耗尽但有部分有效结果",
+      recoverable: true,
+    };
     return { invocationStatus, result };
   }
 
   // 无有效结果 -> failed
   return {
     invocationStatus,
-    error: { code: "SUBAGENT_BUDGET_EXHAUSTED", message: "预算耗尽且无有效结果" },
+    error: {
+      code: "SUBAGENT_BUDGET_EXHAUSTED_NO_RESULT",
+      message: "预算耗尽且无有效结果",
+    },
   };
 }
 

@@ -236,6 +236,78 @@ describe("budget semantics", () => {
     const outcome = await runSubAgentGraph(testCtx(), profile);
     // 无工具结果、无完成步骤 -> error
     expect(outcome.invocationStatus).toBe("completed");
-    expect(outcome.error?.code).toBe("SUBAGENT_BUDGET_EXHAUSTED");
+    expect(outcome.error?.code).toBe("SUBAGENT_BUDGET_EXHAUSTED_NO_RESULT");
+  });
+
+  it("budget exhaustion with results -> partial with SUBAGENT_BUDGET_EXHAUSTED", async () => {
+    let calls = 0;
+    ensureMockTool("mock_tool", async () => { calls++; return `output-${calls}`; });
+
+    // 多步骤、不同 args，确保预算守卫触发
+    const steps = [
+      { id: "s1", objective: "step1", status: "pending" as const, completionPolicy: {}, toolCallCount: 0, retryCount: 0 },
+      { id: "s2", objective: "step2", status: "pending" as const, completionPolicy: {}, toolCallCount: 0, retryCount: 0 },
+      { id: "s3", objective: "step3", status: "pending" as const, completionPolicy: {}, toolCallCount: 0, retryCount: 0 },
+      { id: "s4", objective: "step4", status: "pending" as const, completionPolicy: {}, toolCallCount: 0, retryCount: 0 },
+    ];
+    const profile = mockProfile({
+      decisions: [
+        { action: "call_tool" as const, toolId: "mock_tool", args: { step: 1 } },
+        { action: "call_tool" as const, toolId: "mock_tool", args: { step: 2 } },
+        { action: "call_tool" as const, toolId: "mock_tool", args: { step: 3 } },
+        { action: "call_tool" as const, toolId: "mock_tool", args: { step: 4 } },
+      ],
+      verifyResults: [
+        { status: "completed" as const },
+        { status: "completed" as const },
+        { status: "completed" as const },
+        { status: "completed" as const },
+      ],
+      steps,
+      budget: { maxSteps: 10, maxToolCalls: 3, timeoutMs: 60_000, maxReplans: 2 },
+    });
+    const outcome = await runSubAgentGraph(testCtx(), profile);
+    // 3 tool calls used, then guard triggers on 4th iteration
+    expect(outcome.result?.status).toBe("partial");
+    expect(outcome.result?.error?.code).toBe("SUBAGENT_BUDGET_EXHAUSTED");
+  });
+
+  it("failed plan with results -> failed (not overridden to partial)", async () => {
+    let calls = 0;
+    ensureMockTool("mock_tool", async () => { calls++; return `output-${calls}`; });
+
+    const steps = [
+      { id: "s1", objective: "step1", status: "pending" as const, completionPolicy: {}, toolCallCount: 0, retryCount: 0 },
+      { id: "s2", objective: "step2", status: "pending" as const, completionPolicy: {}, toolCallCount: 0, retryCount: 0 },
+    ];
+    const profile = mockProfile({
+      decisions: [
+        { action: "call_tool" as const, toolId: "mock_tool", args: { step: 1 } },
+        { action: "skip" as const },
+      ],
+      verifyResults: [
+        { status: "completed" as const },
+        { status: "failed" as const, failureReason: "verification failed" },
+      ],
+      steps,
+      budget: { maxSteps: 5, maxToolCalls: 10, timeoutMs: 60_000, maxReplans: 0 },
+    });
+    const outcome = await runSubAgentGraph(testCtx(), profile);
+    // plan failed, but has results -> should be failed (not partial)
+    expect(outcome.result!.status).toBe("failed");
+  });
+
+  it("failed plan with no results -> failed", async () => {
+    const steps = [
+      { id: "s1", objective: "step1", status: "pending" as const, completionPolicy: {}, toolCallCount: 0, retryCount: 0 },
+    ];
+    const profile = mockProfile({
+      decisions: [{ action: "skip" as const }],
+      verifyResults: [{ status: "failed" as const, failureReason: "verification failed" }],
+      steps,
+      budget: { maxSteps: 5, maxToolCalls: 10, timeoutMs: 60_000, maxReplans: 0 },
+    });
+    const outcome = await runSubAgentGraph(testCtx(), profile);
+    expect(outcome.result!.status).toBe("failed");
   });
 });

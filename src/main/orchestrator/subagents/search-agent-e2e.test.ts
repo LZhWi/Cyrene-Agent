@@ -16,6 +16,7 @@ import { toSubAgentToolOutcome } from "./outcome-adapter";
 import { parseSubAgentResult } from "./result-parser";
 import { buildSoulExecutionContext, projectToolResult } from "../soul-execution-context";
 import type { ToolCallResult } from "../types";
+import type { ToolDefinition } from "../tool-registry";
 
 const mockSearchResults = {
   success: true,
@@ -319,7 +320,7 @@ describe("Search Agent end-to-end projection", () => {
     };
 
     // 构建联合投影
-    vi.mocked(toolRegistry.getById).mockImplementation((id: string) => {
+    vi.mocked(toolRegistry.getById).mockImplementation((id: string): ToolDefinition | undefined => {
       if (id === "delegate_search") {
         return {
           id: "delegate_search",

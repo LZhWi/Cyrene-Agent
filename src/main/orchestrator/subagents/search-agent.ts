@@ -1,8 +1,16 @@
 // Search Agent -- 搜索子代理 Profile
 //
-// 使用 LLM 规划动态搜索策略，通过 web_search 和 fetch_url 收集信息。
+// 第一版垂直切片：使用模板计划（planStrategy: "template"），不调用 LLM。
+// 根据目标自动生成 3 步计划：搜索 → 读取 → 验证。
 // 工具白名单严格限制：只允许 web_search 和 fetch_url。
-// 计划 Schema 受限：只允许生成搜索问题、来源覆盖目标、是否需要读取原网页、完成条件。
+//
+// 后续版本可升级为 LLM 动态规划（planStrategy: "llm"），支持：
+// - 受限 Plan Schema（只允许搜索问题、来源覆盖目标、是否需要读取原网页、完成条件）
+// - 禁止任意工具 ID
+// - maxSteps 校验
+// - 空计划和重复计划校验
+// - Structured Output 失败与 Repair
+// - 规划失败后的安全降级
 
 import { registerSubAgentProfile } from "./runner";
 import { runSubAgentGraph, buildFailedResult } from "./graph";
