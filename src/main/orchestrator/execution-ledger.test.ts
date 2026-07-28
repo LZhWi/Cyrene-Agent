@@ -35,3 +35,41 @@ describe("ExecutionLedgerStore", () => {
     expect(store.forScope("conversation-1:turn-5")).not.toBe(store.forScope("conversation-1:turn-4"));
   });
 });
+
+describe("ExecutionLedger terminal-aware caching", () => {
+  const input = { capability: "cap", targetRefs: [], args: {} };
+
+  it("caches succeeded + terminal:true", async () => {
+    const ledger = new ExecutionLedger();
+    const run = vi.fn(async () => ({ status: "succeeded" as const, output: "ok", terminal: true }));
+    await ledger.execute(input, run);
+    await ledger.execute(input, run);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("caches succeeded + terminal:undefined (default terminal semantics)", async () => {
+    const ledger = new ExecutionLedger();
+    const run = vi.fn(async () => ({ status: "succeeded" as const, output: "ok" }));
+    await ledger.execute(input, run);
+    await ledger.execute(input, run);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache succeeded + terminal:false, second call re-executes", async () => {
+    const ledger = new ExecutionLedger();
+    const run = vi.fn(async () => ({ status: "succeeded" as const, output: "partial", terminal: false }));
+    const first = await ledger.execute(input, run);
+    const second = await ledger.execute(input, run);
+    expect(first.cached).toBe(false);
+    expect(second.cached).toBe(false);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not cache failed outcomes", async () => {
+    const ledger = new ExecutionLedger();
+    const run = vi.fn(async () => ({ status: "failed" as const, output: "err", errorCode: "E_FAIL" }));
+    await ledger.execute(input, run);
+    await ledger.execute(input, run);
+    expect(run).toHaveBeenCalledTimes(2);
+  });
+});

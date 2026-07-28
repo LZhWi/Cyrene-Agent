@@ -31,7 +31,12 @@ export class ExecutionLedger {
     const existing = this.succeeded.get(key);
     if (existing) return { outcome: existing, cached: true };
     const outcome = await run();
-    if (outcome.status === "succeeded") this.succeeded.set(key, outcome);
+    // 只缓存终态成功：terminal:false 的中间结果不缓存，
+    // 避免非终态结果命中缓存后形成无限循环。
+    // terminal 未显式提供时按默认终态语义（true）缓存。
+    if (outcome.status === "succeeded" && outcome.terminal !== false) {
+      this.succeeded.set(key, outcome);
+    }
     return { outcome, cached: false };
   }
 }
