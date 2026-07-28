@@ -17,6 +17,9 @@ export interface ToolContext {
   runId?: string;
   /** Tool Runtime-owned opaque reference registry. */
   contextRefs?: ContextRefRegistry;
+  /** 父运行取消信号。工具应在长操作中检查 signal.aborted 并抛出 AbortError。
+   *  子代理通过统一工具执行边界传入；直接调用的工具（主 Agent Loop）当前不传。 */
+  signal?: AbortSignal;
   /** 未来扩展兜底；当前为空对象，不预设字段。遵循"地基通用，上层克制"。 */
   metadata?: Record<string, unknown>;
 }

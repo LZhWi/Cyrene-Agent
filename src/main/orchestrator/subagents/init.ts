@@ -4,7 +4,19 @@
 
 import { registerDocumentProfile } from "./document-agent";
 
-/** 显式注册所有内置子代理 Profile。 */
+let initialized = false;
+
+/**
+ * 显式注册所有内置子代理 Profile。
+ * 幂等：多次调用安全，第二次起为 no-op。
+ */
 export function registerBuiltInSubAgentProfiles(): void {
+  if (initialized) return;
   registerDocumentProfile();
+  initialized = true;
+}
+
+/** 重置初始化状态（仅供测试使用） */
+export function _resetSubAgentInit(): void {
+  initialized = false;
 }

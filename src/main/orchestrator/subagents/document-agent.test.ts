@@ -10,7 +10,8 @@ import { existsSync, statSync } from "fs";
 import { toolRegistry } from "../tool-registry";
 import { registerDocumentProfile } from "./document-agent";
 import { runSubAgent, isProfileRegistered } from "./runner";
-import { registerBuiltInSubAgentProfiles } from "./init";
+import { registerBuiltInSubAgentProfiles, _resetSubAgentInit } from "./init";
+import { resolveRouteAfterTool } from "../agent-graph";
 import { toSubAgentToolOutcome } from "./outcome-adapter";
 import { parseSubAgentResult, serializeSubAgentResult, SubAgentProtocolError } from "./result-parser";
 import { projectToolResult, buildSoulExecutionContext } from "../soul-execution-context";
@@ -20,19 +21,17 @@ import type { PlanStep } from "../task-plan";
 
 const MOCK_FILE_PATH = "C:\\Users\\Test\\Desktop\\AI新闻简报.docx";
 
-/** 注册测试所需的 mock 工具 */
+/** 注册测试所需的 mock 工具（总是覆盖，防止前序测试修改残留） */
 function ensureTestTools() {
-  if (!toolRegistry.getById("write_word")) {
-    toolRegistry.register({
-      id: "write_word",
-      name: "写 Word",
-      description: "test",
-      enabled: true,
-      risk: "fs-write",
-      inputSchema: { type: "object", properties: {} },
-      execute: async () => `[write_word] 已生成：${MOCK_FILE_PATH}`,
-    });
-  }
+  toolRegistry.register({
+    id: "write_word",
+    name: "写 Word",
+    description: "test",
+    enabled: true,
+    risk: "fs-write",
+    inputSchema: { type: "object", properties: {} },
+    execute: async () => `[write_word] 已生成：${MOCK_FILE_PATH}`,
+  });
 
   if (!toolRegistry.getById("web_search")) {
     toolRegistry.register({
@@ -441,5 +440,135 @@ describe("Document Agent vertical slice", () => {
     // getById 仍可查询
     expect(toolRegistry.getById("test_deprecated_tool")).toBeDefined();
     expect(toolRegistry.getById("test_deprecated_tool")!.deprecated).toBe(true);
+  });
+
+  // ── Fix 1: AbortSignal 传播到 tool.execute() ──
+
+  it("AbortSignal propagates to tool.execute and AbortError is re-thrown", async () => {
+    // 用一个可控的 pending 工具模拟长操作
+    const controller = new AbortController();
+    let signalReceived: AbortSignal | undefined;
+    let resolveTool!: () => void;
+    const pendingPromise = new Promise<string>((resolve, reject) => {
+      resolveTool = () => resolve("done");
+      signalReceived = controller.signal;
+      controller.signal.addEventListener("abort", () => {
+        reject(new DOMException("aborted", "AbortError"));
+      });
+    });
+
+    // 覆盖 write_word 为 pending 工具
+    toolRegistry.register({
+      id: "write_word", name: "写 Word", description: "test", enabled: true, risk: "fs-write",
+      inputSchema: { type: "object", properties: {} },
+      execute: async (_args, ctx) => {
+        // 确认 signal 通过 ToolContext 传入
+        signalReceived = ctx?.signal;
+        return pendingPromise;
+      },
+    });
+
+    // 启动子代理（不 await）
+    const subAgentPromise = runSubAgent({
+      profile: "document", taskId: "task-abort",
+      args: { objective: "t", filename: "t.docx", title: "T", paragraphs: ["c"] },
+      parentContext: { runId: "test-run" },
+      signal: controller.signal,
+    });
+
+    // 给 microtask 一个机会让 execute 启动
+    await new Promise(resolve => setImmediate(resolve));
+
+    // 确认 signal 传到了 tool.execute
+    expect(signalReceived).toBe(controller.signal);
+
+    // abort 父 signal
+    controller.abort();
+
+    // 子代理应抛出 AbortError（不包装为 crashed）
+    await expect(subAgentPromise).rejects.toThrow("aborted");
+  });
+
+  // ── Fix 2: 真实主图路由集成测试 ──
+
+  it("full routing chain: delegate_document succeeded -> resolveRouteAfterTool -> planVerify -> verifyStep -> completed", async () => {
+    // 1. 运行 Document Agent 获取真实 ToolCallResult
+    const outcome = await runSubAgent({
+      profile: "document", taskId: "task-routing",
+      args: { objective: "生成文档", filename: "routing-test.docx", title: "Routing Test", paragraphs: ["content"] },
+      parentContext: { runId: "test-run" },
+    });
+    const toolOutcome = toSubAgentToolOutcome(outcome);
+
+    const toolResult: ToolCallResult = {
+      toolId: "delegate_document", args: {}, output: toolOutcome.output,
+      status: "succeeded", terminal: true, capabilityId: "delegate_document",
+      stepExecutionId: "exec_routing", stepAttemptId: "att_routing",
+    };
+
+    // 2. routeAfterTool 路由决策（使用从 agent-graph.ts 提取的纯函数）
+    const action = { afterSuccess: "respond" as const };
+    const inPlanMode = true;
+    const route = resolveRouteAfterTool(toolResult, action, inPlanMode);
+
+    // 在 Plan 模式下，终态成功应路由到 planVerify（而非 soul）
+    expect(route).toBe("planVerify");
+
+    // 3. planVerify 验证（使用真实 verifyStep + completionEvidenceVerifier）
+    const step: PlanStep = {
+      id: "s1", objective: "生成 Word 文档", status: "running",
+      completionPolicy: { allOf: [{ kind: "tool_succeeded", capabilityId: "delegate_document" }] },
+      executionId: "exec_routing", toolCallCount: 1, retryCount: 0,
+    };
+
+    const tool = toolRegistry.getById("delegate_document")!;
+    const verification = verifyStep(step, [toolResult], [tool]);
+
+    // completionEvidenceVerifier 确认 artifact 已验证
+    expect(verification.status).toBe("completed");
+  });
+
+  it("full routing chain: delegate_document failed -> resolveRouteAfterTool -> planVerify -> verifyStep -> failed", async () => {
+    vi.mocked(existsSync).mockReturnValue(false);
+    const outcome = await runSubAgent({
+      profile: "document", taskId: "task-routing-fail",
+      args: { objective: "t", filename: "fail.docx", title: "F", paragraphs: ["c"] },
+      parentContext: { runId: "test-run" },
+    });
+    const toolOutcome = toSubAgentToolOutcome(outcome);
+
+    const toolResult: ToolCallResult = {
+      toolId: "delegate_document", args: {}, output: toolOutcome.output,
+      status: "failed", terminal: true, retryable: false, capabilityId: "delegate_document",
+      stepExecutionId: "exec_rf", stepAttemptId: "att_rf",
+    };
+
+    // 失败 + 不可重试 -> 路由到 soul（plan 模式下 -> planVerify）
+    const route = resolveRouteAfterTool(toolResult, { afterSuccess: "respond" }, true);
+    expect(route).toBe("planVerify");
+
+    const step: PlanStep = {
+      id: "s1", objective: "生成 Word 文档", status: "running",
+      completionPolicy: { allOf: [{ kind: "tool_succeeded", capabilityId: "delegate_document" }] },
+      executionId: "exec_rf", toolCallCount: 1, retryCount: 0,
+    };
+
+    const tool = toolRegistry.getById("delegate_document")!;
+    const verification = verifyStep(step, [toolResult], [tool]);
+    expect(verification.status).toBe("failed");
+  });
+
+  // ── Fix 3: registerBuiltInSubAgentProfiles 幂等 ──
+
+  it("registerBuiltInSubAgentProfiles is idempotent: double call does not error or duplicate", () => {
+    _resetSubAgentInit();
+
+    // 第一次调用
+    registerBuiltInSubAgentProfiles();
+    expect(isProfileRegistered("document")).toBe(true);
+
+    // 第二次调用：不应报错，不应影响已注册的 Profile
+    expect(() => registerBuiltInSubAgentProfiles()).not.toThrow();
+    expect(isProfileRegistered("document")).toBe(true);
   });
 });

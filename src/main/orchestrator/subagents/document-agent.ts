@@ -7,6 +7,7 @@
 import { existsSync, statSync } from "fs";
 import { toolRegistry, type ToolDefinition } from "../tool-registry";
 import { registerSubAgentProfile } from "./runner";
+import type { ToolContext } from "../tool-context";
 import type { SubAgentPublicResultV1, SubAgentRunContext, SubAgentRunOutcome, SubAgentArtifact, CompletionEvidenceRecord } from "./types";
 
 /** Document Agent 工具白名单 */
@@ -39,11 +40,13 @@ function extractFilePath(output: string): string | undefined {
  * 通过统一原子工具执行边界调用工具。
  * 继承工具白名单校验、enabled 校验和统一执行语义。
  * 不允许调用白名单外或 disabled 的工具。
+ * signal 通过 ToolContext 传播到 tool.execute()，工具应检查 signal.aborted。
  */
 async function executeAllowedTool(
   toolId: string,
   args: Record<string, unknown>,
   allowedTools: Set<string>,
+  signal?: AbortSignal,
 ): Promise<string> {
   const tool: ToolDefinition | undefined = toolRegistry.getById(toolId);
   if (!tool) {
@@ -55,7 +58,10 @@ async function executeAllowedTool(
   if (!allowedTools.has(toolId)) {
     throw new Error(`工具不在白名单中: ${toolId}`);
   }
-  return tool.execute(args);
+  const ctx: ToolContext | undefined = signal
+    ? { userQuery: "", conversationId: "subagent", signal }
+    : undefined;
+  return tool.execute(args, ctx);
 }
 
 /**
@@ -106,7 +112,7 @@ async function runDocumentAgent(ctx: SubAgentRunContext): Promise<SubAgentRunOut
   const runStartMs = Date.now();
 
   try {
-    // 1. 通过统一执行边界调用 write_word
+    // 1. 通过统一执行边界调用 write_word（signal 传播到 tool.execute）
     const output = await executeAllowedTool(
       "write_word",
       {
@@ -116,6 +122,7 @@ async function runDocumentAgent(ctx: SubAgentRunContext): Promise<SubAgentRunOut
         ...(input.style ? { style: input.style } : {}),
       },
       DOCUMENT_ALLOWED_TOOLS,
+      ctx.signal,
     );
 
     // 2. 从 write_word 结构化返回中提取文件路径

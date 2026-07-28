@@ -10,7 +10,10 @@ export type SubAgentExecutor = (ctx: SubAgentRunContext) => Promise<SubAgentRunO
 
 const profiles = new Map<SubAgentProfileId, SubAgentExecutor>();
 
-/** 注册一个子代理 Profile 执行器。 */
+/**
+ * 注册一个子代理 Profile 执行器。
+ * 幂等：重复注册同一 Profile 会静默替换，允许热重载和测试重置。
+ */
 export function registerSubAgentProfile(profile: SubAgentProfileId, executor: SubAgentExecutor): void {
   profiles.set(profile, executor);
 }

@@ -39,6 +39,27 @@ export type ActDecision = Extract<ActionDecision, { decision: "act" }>;
 export type AskUserDecision = Extract<ActionDecision, { decision: "ask_user" }>;
 export type FailureDecision = Extract<ActionDecision, { decision: "failure" }>;
 
+/** routeAfterTool 的纯路由决策逻辑，提取为可测试函数。 */
+export function resolveRouteAfterTool(
+  result: ToolCallResult | undefined,
+  action: { afterSuccess?: "respond" | "replan" } | undefined,
+  inPlanMode: boolean,
+): "decide" | "soul" | "planVerify" {
+  if (!result || !action) return "decide";
+  let goto: "decide" | "soul" | "planVerify";
+  if (result.status === "failed") {
+    goto = result.retryable ? "decide" : "soul";
+  } else if (!result.terminal) {
+    goto = "decide";
+  } else {
+    goto = action.afterSuccess === "replan" ? "decide" : "soul";
+  }
+  if (goto === "soul" && inPlanMode) {
+    goto = "planVerify";
+  }
+  return goto;
+}
+
 export interface GateFailureInfo {
   code: string;
   disposition: string;
@@ -208,28 +229,9 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
       deps.trace?.("routeAfterTool", state);
       const result = state.toolResults[state.toolResults.length - 1];
       const action = state.currentAction;
-      if (!result || !action) {
-        return new Command({ goto: "decide" });
-      }
-
-      // 路由逻辑（纯代码，不调 LLM）
-      let goto: "decide" | "soul" | "planVerify";
-      if (result.status === "failed") {
-        goto = result.retryable ? "decide" : "soul";
-      } else if (!result.terminal) {
-        goto = "decide";
-      } else {
-        goto = action.afterSuccess === "replan" ? "decide" : "soul";
-      }
-
-      // plan 模式下，终态路由到 planVerify 而非 soul
-      // 只有真正进入 plan 模式（taskPlan 存在且 running）才走 planVerify
       const inPlanMode = state.taskRoute?.executionMode === "plan"
         && state.taskPlan?.status === "running";
-      if (goto === "soul" && inPlanMode) {
-        goto = "planVerify";
-      }
-
+      const goto = resolveRouteAfterTool(result, action, inPlanMode);
       // 去 soul 时把 decision 改写成 respond
       const update = goto === "soul"
         ? { decision: { decision: "respond" as const, reason: "tool_complete" } }
