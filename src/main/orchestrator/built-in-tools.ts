@@ -855,6 +855,7 @@ const SEARCH_TIMEOUT_MS = 20_000;
 let searchEngineGetter: (() => string) | null = null;
 let searchBochaKeyGetter: (() => string) | null = null;
 let searchTavilyKeyGetter: (() => string) | null = null;
+let searchAnySearchKeyGetter: (() => string) | null = null;
 
 /**
  * index.ts 启动时调用，注入搜索引擎/各源key 的读取器。
@@ -864,10 +865,12 @@ export function setSearchConfig(
   engineGetter: () => string,
   bochaKeyGetter: () => string,
   tavilyKeyGetter: () => string,
+  anySearchKeyGetter: () => string,
 ): void {
   searchEngineGetter = engineGetter;
   searchBochaKeyGetter = bochaKeyGetter;
   searchTavilyKeyGetter = tavilyKeyGetter;
+  searchAnySearchKeyGetter = anySearchKeyGetter;
 }
 
 interface BochaResult {
@@ -998,6 +1001,50 @@ async function tavilySearch(query: string, key: string): Promise<string> {
   }
 }
 
+/** AnySearch 搜索：调 /v1/search，返回结构化 JSON。 */
+async function anySearchSearch(query: string, key: string): Promise<string> {
+  const url = "https://api.anysearch.com/v1/search";
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), SEARCH_TIMEOUT_MS);
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    if (key) headers.Authorization = `Bearer ${key}`;
+    const resp = await fetch(url, {
+      method: "POST",
+      signal: ctrl.signal,
+      headers,
+      body: JSON.stringify({
+        query,
+        max_results: 8,
+      }),
+    });
+    if (!resp.ok) {
+      throw new Error(`HTTP ${resp.status}`);
+    }
+    const data = await resp.json() as {
+      data: { results?: Array<{ title: string; url: string; content: string; snippet: string }> };
+    };
+    const rawResults = data.data.results ?? [];
+    const results: WebSearchResult[] = rawResults.map((r) => ({
+      title: r.title,
+      url: r.url,
+      snippet: truncateSnippet(r.content || r.snippet || ""),
+    }));
+    const output: WebSearchOutput = {
+      success: true,
+      query,
+      resultCount: results.length,
+      results,
+    };
+    return JSON.stringify(output);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`搜索失败：${msg}`);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 async function executeWebSearch(args: Record<string, unknown>): Promise<string> {
   const engine = searchEngineGetter?.() ?? "off";
   if (engine === "off") {
@@ -1023,6 +1070,11 @@ async function executeWebSearch(args: Record<string, unknown>): Promise<string> 
       throw new Error("E_SEARCH_KEY_MISSING");
     }
     return tavilySearch(query, key);
+  }
+
+  if (engine === "anySearch") {
+    const key = searchAnySearchKeyGetter?.() ?? "";
+    return anySearchSearch(query, key);
   }
 
   throw new Error(`E_SEARCH_ENGINE_NOT_SUPPORTED:${engine}`);
