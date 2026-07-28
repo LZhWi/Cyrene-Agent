@@ -3,6 +3,7 @@
 // 由 Orchestrator 启动阶段调用一次，不依赖模块加载副作用。
 
 import { registerDocumentProfile } from "./document-agent";
+import { registerSearchProfile } from "./search-agent";
 
 let initialized = false;
 
@@ -13,6 +14,7 @@ let initialized = false;
 export function registerBuiltInSubAgentProfiles(): void {
   if (initialized) return;
   registerDocumentProfile();
+  registerSearchProfile();
   initialized = true;
 }
 

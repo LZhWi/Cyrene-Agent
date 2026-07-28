@@ -325,7 +325,7 @@ describe("Document Agent vertical slice", () => {
 
   it("runSubAgent returns crashed for unregistered profile", async () => {
     const outcome = await runSubAgent({
-      profile: "search" as never, // search 尚未实现
+      profile: "crawler" as never, // crawler 尚未实现
       taskId: "task-unregistered",
       args: {},
       parentContext: { runId: "test-run" },
