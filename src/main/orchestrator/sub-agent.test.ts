@@ -21,6 +21,22 @@ function testTool(id: string) {
   };
 }
 
+/** 快照所有工具的 enabled 状态。 */
+function snapshotEnabled(): Map<string, boolean> {
+  const map = new Map<string, boolean>();
+  for (const tool of toolRegistry.getAllTools()) {
+    map.set(tool.id, tool.enabled);
+  }
+  return map;
+}
+
+/** 断言所有工具的 enabled 与快照一致。 */
+function assertEnabledUnchanged(before: Map<string, boolean>, label: string) {
+  for (const tool of toolRegistry.getAllTools()) {
+    expect(tool.enabled, `tool "${tool.id}" enabled was mutated ${label}`).toBe(before.get(tool.id));
+  }
+}
+
 describe("SubAgent concurrency isolation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -38,24 +54,30 @@ describe("SubAgent concurrency isolation", () => {
     }
   });
 
-  it("does not mutate global toolRegistry enabled flags during execution", async () => {
-    // 快照所有工具的 enabled 状态
-    const before = new Map<string, boolean>();
-    for (const tool of toolRegistry.getAllTools()) {
-      before.set(tool.id, tool.enabled);
-    }
+  it("does not mutate global toolRegistry enabled flags while sub-agent is still running", async () => {
+    const before = snapshotEnabled();
 
-    vi.mocked(runFunctionCallingLoop).mockResolvedValue({
-      reply: "任务完成",
-      toolResults: [],
-    });
+    // 用可控 Promise 模拟子代理运行中（不立即 resolve）
+    let resolveFn!: () => void;
+    vi.mocked(runFunctionCallingLoop).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveFn = () => resolve({ reply: "任务完成", toolResults: [] });
+        }),
+    );
 
-    await runSubAgent("测试任务");
+    // 启动子代理但不 await——此时 runFunctionCallingLoop 正挂起
+    const subAgentPromise = runSubAgent("测试任务");
 
-    // 断言：没有任何工具的 enabled 标志被修改
-    for (const tool of toolRegistry.getAllTools()) {
-      expect(tool.enabled, `tool "${tool.id}" enabled was mutated`).toBe(before.get(tool.id));
-    }
+    // 子代理仍在运行期间，断言全局 registry 未被修改
+    assertEnabledUnchanged(before, "during execution (sub-agent pending)");
+
+    // resolve 并完成
+    resolveFn();
+    await subAgentPromise;
+
+    // 完成后再次断言
+    assertEnabledUnchanged(before, "after execution (sub-agent resolved)");
   });
 
   it("passes allowedToolIds excluding delegate_task and ask_user_choice", async () => {

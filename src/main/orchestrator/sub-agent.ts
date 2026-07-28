@@ -11,7 +11,7 @@
 //   需要 ≥2 步工具调用且中间结果不需要用户确认 → 子代理化
 //
 // 子代理限制：
-//   - 最多 20 轮（与主 agent 相同，由 function-calling.ts MAX_TOOL_ROUNDS 控制）
+//   - 工具调用轮次由 runFunctionCallingLoop 统一控制（参见 function-calling.ts MAX_TOOL_ROUNDS）
 //   - 超时 60s（主 agent 由 timeout-manager 控制）
 //   - 通过 allowedToolIds 白名单屏蔽 delegate_task（防递归）和 ask_user_choice（禁交互）
 //   - 不修改全局 toolRegistry 状态，避免并发 Run 互相影响
