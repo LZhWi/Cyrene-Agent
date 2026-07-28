@@ -43,6 +43,7 @@ import { controlledInputType, controlledInputKind } from "./tool-registry";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
 import { runSubAgent } from "./subagents/runner";
 import { toSubAgentToolOutcome } from "./subagents/outcome-adapter";
+import { parseSubAgentResult } from "./subagents/result-parser";
 import type { TwoPhaseEvent, TwoPhaseFcResult, AgentLoopSettings } from "./two-phase-fc-loop";
 import type {
   ChatMessage,
@@ -966,6 +967,34 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
               args,
             }, runExecution);
         const outcome = normalizeToolExecutionOutcome(execution.outcome);
+
+        // 子代理重复委托保护：比较当前结果与上一次相同子代理的结果
+        if (isSubAgent && outcome.status === "succeeded") {
+          const lastSubAgentResult = state.toolResults
+            .filter(r => r.toolId === selectedTool.id && r.status === "succeeded")
+            .pop();
+          if (lastSubAgentResult) {
+            const currentOutput = outcome.output.slice(0, 200);
+            const lastOutput = lastSubAgentResult.output.slice(0, 200);
+            const currentArgs = JSON.stringify(args);
+            const lastArgs = JSON.stringify(lastSubAgentResult.args);
+            if (currentArgs === lastArgs && currentOutput === lastOutput) {
+              // 相同参数 + 相同结果 → 无进展
+              outcome.status = "failed";
+              outcome.output = JSON.stringify({
+                kind: "subagent_result", version: 1,
+                taskId: "no_progress", profile: selectedTool.subAgentProfile ?? "unknown",
+                status: "failed", summary: "子代理重复委托：相同参数返回相同结果",
+                findings: [], artifacts: [], completionEvidence: [],
+                error: { code: "SUBAGENT_NO_PROGRESS", message: "子代理重复委托：相同参数返回相同结果", recoverable: false },
+              });
+              outcome.errorCode = "SUBAGENT_NO_PROGRESS";
+              outcome.terminal = true;
+              outcome.retryable = false;
+            }
+          }
+        }
+
         const deduplicated = execution.cached && outcome.terminal;
         if (deduplicated) {
           duplicateTerminalStreak += 1;
