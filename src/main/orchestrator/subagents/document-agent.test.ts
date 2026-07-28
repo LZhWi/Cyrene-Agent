@@ -9,7 +9,7 @@ vi.mock("fs", () => ({
 import { existsSync, statSync } from "fs";
 import { toolRegistry } from "../tool-registry";
 import { registerDocumentProfile } from "./document-agent";
-import { runSubAgent, isProfileRegistered } from "./runner";
+import { runSubAgent, isProfileRegistered, registerSubAgentProfile } from "./runner";
 import { registerBuiltInSubAgentProfiles, _resetSubAgentInit } from "./init";
 import { resolveRouteAfterTool } from "../agent-graph";
 import { toSubAgentToolOutcome } from "./outcome-adapter";
@@ -570,5 +570,23 @@ describe("Document Agent vertical slice", () => {
     // 第二次调用：不应报错，不应影响已注册的 Profile
     expect(() => registerBuiltInSubAgentProfiles()).not.toThrow();
     expect(isProfileRegistered("document")).toBe(true);
+  });
+
+  it("registerSubAgentProfile: same runner re-register is idempotent no-op", () => {
+    // registerDocumentProfile 已在 beforeEach 调用
+    // 再次调用同一函数引用 -> 幂等 no-op
+    expect(() => registerDocumentProfile()).not.toThrow();
+    expect(isProfileRegistered("document")).toBe(true);
+  });
+
+  it("registerSubAgentProfile: different runner for same profile throws conflict", () => {
+    // document Profile 已注册，尝试用不同 runner 注册
+    const fakeRunner = async () => ({ invocationStatus: "crashed" as const, error: { code: "FAKE", message: "fake" } });
+    expect(() => registerSubAgentProfile("document", fakeRunner)).toThrow("SUBAGENT_PROFILE_CONFLICT");
+
+    // 原 runner 未被替换
+    expect(isProfileRegistered("document")).toBe(true);
+    // 确认原 runner 仍可正常执行
+    // (不需要实际运行，只需确认 profile 仍然可用)
   });
 });
