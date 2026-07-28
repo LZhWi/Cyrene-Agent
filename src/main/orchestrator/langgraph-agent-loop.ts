@@ -41,7 +41,7 @@ import {
 import type { ToolDefinition } from "./tool-registry";
 import { controlledInputType, controlledInputKind } from "./tool-registry";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
-import { runDocumentAgent } from "./subagents/document-agent";
+import { runSubAgent } from "./subagents/runner";
 import { toSubAgentToolOutcome } from "./subagents/outcome-adapter";
 import type { TwoPhaseEvent, TwoPhaseFcResult, AgentLoopSettings } from "./two-phase-fc-loop";
 import type {
@@ -352,7 +352,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     flowLog("Task Router disabled: feature_flag=false");
   }
   const perCallTimeout = options.perCallTimeoutMs;
-  const enabledTools = options.tools.filter((tool) => tool.enabled);
+  const enabledTools = options.tools.filter((tool) => tool.enabled && !tool.deprecated);
   // 过滤后的版本（按 inPlanMode 动态切换）
   let enabledToolsFiltered = enabledTools;
   let runnableToolIdsFiltered: Set<string> = new Set(enabledTools.map((t) => t.id));
@@ -911,14 +911,9 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         const isSubAgent = selectedTool.executionKind === "subagent";
         const runExecution = async (): Promise<ToolExecutionOutcome> => {
           if (isSubAgent) {
-            const taskId = `doc_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
-            const outcome = await runDocumentAgent(taskId, {
-              objective: String(args.objective ?? ""),
-              filename: String(args.filename ?? ""),
-              title: String(args.title ?? ""),
-              paragraphs: Array.isArray(args.paragraphs) ? args.paragraphs.map(String) : [],
-              ...(args.style ? { style: String(args.style) } : {}),
-            });
+            const taskId = `subagent_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            const profile = selectedTool.subAgentProfile ?? "unknown";
+            const outcome = await runSubAgent(profile, taskId, args);
             return toSubAgentToolOutcome(outcome);
           }
           try {

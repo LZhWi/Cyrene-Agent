@@ -6,7 +6,8 @@
 
 import { existsSync, statSync } from "fs";
 import { toolRegistry } from "../tool-registry";
-import type { SubAgentPublicResultV1, SubAgentRunOutcome, SubAgentFinding, SubAgentArtifact, CompletionEvidenceRecord } from "./types";
+import { registerSubAgentProfile } from "./runner";
+import type { SubAgentPublicResultV1, SubAgentRunOutcome, SubAgentArtifact, CompletionEvidenceRecord } from "./types";
 
 /** Document Agent 任务参数（由主 Agent Native FC 生成） */
 export interface DocumentTaskInput {
@@ -24,13 +25,46 @@ function extractFilePath(output: string): string | undefined {
 }
 
 /**
+ * 验证文件：存在 + 是文件 + 大小 > 0 + 修改时间不早于运行开始时间。
+ * 文件名复用时通过 mtime 检查防止误判旧文件。
+ */
+function verifyFile(filePath: string, runStartMs: number): {
+  verified: boolean;
+  sizeBytes?: number;
+  reason?: string;
+} {
+  if (!existsSync(filePath)) {
+    return { verified: false, reason: "文件不存在" };
+  }
+  const stat = statSync(filePath);
+  if (!stat.isFile()) {
+    return { verified: false, reason: "路径不是文件" };
+  }
+  if (stat.size === 0) {
+    return { verified: false, reason: "文件大小为零" };
+  }
+  if (stat.mtimeMs < runStartMs) {
+    return { verified: false, reason: "文件修改时间早于本次运行开始时间，可能是旧文件" };
+  }
+  return { verified: true, sizeBytes: stat.size };
+}
+
+/**
  * 运行 Document Agent。
  * 确定性执行：调 write_word -> 验证文件 -> 返回结构化结果。
  */
-export async function runDocumentAgent(
+async function runDocumentAgent(
   taskId: string,
-  input: DocumentTaskInput,
+  args: Record<string, unknown>,
 ): Promise<SubAgentRunOutcome> {
+  const input: DocumentTaskInput = {
+    objective: String(args.objective ?? ""),
+    filename: String(args.filename ?? ""),
+    title: String(args.title ?? ""),
+    paragraphs: Array.isArray(args.paragraphs) ? args.paragraphs.map(String) : [],
+    ...(args.style ? { style: String(args.style) } : {}),
+  };
+
   const writeWordTool = toolRegistry.getById("write_word");
   if (!writeWordTool) {
     return {
@@ -38,6 +72,8 @@ export async function runDocumentAgent(
       error: { code: "TOOL_NOT_FOUND", message: "write_word 工具未注册" },
     };
   }
+
+  const runStartMs = Date.now();
 
   try {
     // 1. 调用 write_word 生成文档
@@ -48,59 +84,49 @@ export async function runDocumentAgent(
       ...(input.style ? { style: input.style } : {}),
     });
 
-    // 2. 从输出提取文件路径
+    // 2. 从 write_word 结构化返回中提取文件路径
     const filePath = extractFilePath(output);
     if (!filePath) {
       return {
         invocationStatus: "completed",
-        result: buildFailedResult(
-          taskId,
-          "无法从 write_word 输出中提取文件路径",
-          "FILE_PATH_NOT_FOUND",
-          true,
-        ),
+        result: buildFailedResult(taskId, "无法从 write_word 输出中提取文件路径", "FILE_PATH_NOT_FOUND", true),
       };
     }
 
-    // 3. 验证文件存在
-    const fileExists = existsSync(filePath);
-    const stat = fileExists ? statSync(filePath) : undefined;
+    // 3. 验证文件：存在 + isFile + size>0 + mtime >= runStart
+    const verification = verifyFile(filePath, runStartMs);
 
     // 4. 构建结构化结果
+    // Document Profile 是 artifacts_only：不返回 findings，
+    // 新闻信息继续来自之前的 web_search 投影。
     const artifacts: SubAgentArtifact[] = [{
       id: "artifact_1",
       name: input.filename,
       path: filePath,
       mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-      sizeBytes: stat?.size,
-      verified: fileExists,
+      sizeBytes: verification.sizeBytes,
+      verified: verification.verified,
     }];
 
     const completionEvidence: CompletionEvidenceRecord[] = [{
-      criterion: "Word 文档已成功生成",
-      satisfied: fileExists,
-      evidenceRefs: fileExists ? [filePath] : [],
+      criterion: "Word 文档已成功生成并验证",
+      satisfied: verification.verified,
+      evidenceRefs: verification.verified ? [filePath] : [],
     }];
-
-    // findings：把段落内容作为新闻信息传给 Soul
-    const findings: SubAgentFinding[] = input.paragraphs.slice(0, 10).map((content, i) => ({
-      id: `finding_${i + 1}`,
-      content: content.length > 500 ? content.slice(0, 500) : content,
-    }));
 
     const result: SubAgentPublicResultV1 = {
       kind: "subagent_result",
       version: 1,
       taskId,
       profile: "document",
-      status: fileExists ? "succeeded" : "failed",
-      summary: fileExists
+      status: verification.verified ? "succeeded" : "failed",
+      summary: verification.verified
         ? `文档已生成：${filePath}`
-        : "文档生成失败：文件未找到",
-      findings,
+        : `文档验证失败：${verification.reason}`,
+      findings: [],  // artifacts_only：新闻来自 web_search 投影
       artifacts,
       completionEvidence,
-      ...(fileExists
+      ...(verification.verified
         ? {
             primaryArtifact: {
               name: input.filename,
@@ -109,11 +135,11 @@ export async function runDocumentAgent(
             },
           }
         : {}),
-      ...(!fileExists
+      ...(!verification.verified
         ? {
             error: {
-              code: "FILE_NOT_FOUND",
-              message: "生成的文件不存在",
+              code: "FILE_VERIFICATION_FAILED",
+              message: verification.reason ?? "文件验证失败",
               recoverable: true,
             },
           }
@@ -149,3 +175,6 @@ function buildFailedResult(
     error: { code, message, recoverable },
   };
 }
+
+// 注册 Document Profile
+registerSubAgentProfile("document", runDocumentAgent);

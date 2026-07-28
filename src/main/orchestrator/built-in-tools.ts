@@ -1207,6 +1207,8 @@ export { loadTodos, onTodosChange, getTodos as getCurrentTodos } from "./todo-st
 import { requestUserChoice, type ChoiceOption } from "../user-choice";
 import { runSubAgent, setDelegateSettings } from "./sub-agent";
 import { getTimeoutSettings } from "../timeout-manager";
+// 导入子代理模块以触发 Profile 注册（document-agent.ts 在模块加载时注册到 runner）
+import "./subagents/document-agent";
 
 export { setDelegateSettings };
 // 把重任务委托给独立 FC 循环执行，子代理有自己的 conversation（用完即弃）。
@@ -1229,6 +1231,7 @@ toolRegistry.register({
   enabled: true,
   risk: "safe",
   hideInPlanMode: true,  // 子代理走旧 FC Loop，避免在 Plan 步骤里降级
+  deprecated: true,      // 新运行使用 delegate_document，旧入口仅保留兼容
   inputSchema: {
     type: "object",
     properties: {
@@ -1350,6 +1353,7 @@ toolRegistry.register({
   risk: "safe",
   capability: "delegate_document",
   executionKind: "subagent",
+  subAgentProfile: "document",
   ledgerPolicy: "bypass",
   hideInPlanMode: false,
   soulActionLabel: "生成文档",
