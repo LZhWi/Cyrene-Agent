@@ -21,7 +21,7 @@ describe("structured generation dispatcher", () => {
   test("routes a supported official provider to LangChain", async () => {
     const result = await dispatchChatGeneration({
       request: structuredRequest,
-      provider: "deepseek",
+      provider: "chatgpt",
       endpointKind: "official",
       environment: {},
       langchain: async () => "langchain",

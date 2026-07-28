@@ -5,7 +5,7 @@ export interface StructuredOutputBackendContext {
   endpointKind: "official" | "custom" | "local";
 }
 
-const LANGCHAIN_PROVIDERS = new Set(["chatgpt", "claude", "deepseek"]);
+const LANGCHAIN_PROVIDERS = new Set(["chatgpt", "claude"]);
 
 export function resolveStructuredOutputBackend(
   context: StructuredOutputBackendContext,

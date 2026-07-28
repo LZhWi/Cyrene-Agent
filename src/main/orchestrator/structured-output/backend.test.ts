@@ -8,7 +8,7 @@ describe("structured output backend", () => {
   test.each([
     ["chatgpt", "langchain"],
     ["claude", "langchain"],
-    ["deepseek", "langchain"],
+    ["deepseek", "legacy"],
     ["minimax", "legacy"],
     ["kimi", "legacy"],
     ["doubao", "legacy"],
@@ -65,7 +65,7 @@ describe("structured output backend", () => {
 
     await expect(runStructuredGeneration({
       backend: resolveStructuredOutputBackend({
-        provider: "deepseek",
+        provider: "chatgpt",
         endpointKind: "official",
       }, {}),
       langchain: async () => {
