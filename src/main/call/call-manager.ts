@@ -12,6 +12,7 @@ import { synthesizeByEngine } from "../tts/tts-dispatcher";
 import type { TtsEngine } from "../../shared/tts-types";
 import { runFunctionCallingLoop } from "../orchestrator";
 import { getAdapter, buildVendorUrlByProvider } from "../orchestrator/vendors";
+import { resolveTimeoutPolicy } from "../runtime-policy";
 import type { ChatMessage } from "../orchestrator/vendors/types";
 
 const LOG_PREFIX = "[CallManager]";
@@ -344,7 +345,7 @@ async function runAgentTurn(userText: string): Promise<string | null> {
       method: "POST",
       headers: { ...req.headers, "Content-Type": "application/json" },
       body: req.body,
-      signal: AbortSignal.timeout(30000),
+      signal: AbortSignal.timeout(resolveTimeoutPolicy({ stage: "call-management" }).totalMs),
     });
 
     if (!httpResp.ok) {

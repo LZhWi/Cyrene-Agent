@@ -8,6 +8,10 @@ import { recordRecentMemorySearchEntries } from "../memory/recent-injected-memor
 import { toolRegistry } from "./tool-registry";
 
 export { ToolCallResult } from "./types";
+
+function isDimensionMismatchError(err: unknown): boolean {
+  return err instanceof Error && /dimension mismatch/i.test(err.message);
+}
 export { scheduleMemoryWrite } from "./context-builder";
 export { buildToneInjection } from "./tone-injector";
 export { runFunctionCallingLoop } from "./function-calling";
@@ -42,7 +46,12 @@ export async function buildMemoryInjection(
       parts.push("【相关记忆】\n" + conflictAnnotated.join("\n"));
     }
   } catch (err) {
-    console.warn("[Orchestrator] user_memory search failed:", err);
+    if (isDimensionMismatchError(err)) {
+      console.error("[Orchestrator] user_memory search blocked: embedding dimension mismatch. Index rebuild required.", err);
+      parts.push("【记忆系统】\n⚠️ 向量索引维度不一致，记忆检索已暂停。请在设置中切换 Embedding 模型以重建索引。");
+    } else {
+      console.warn("[Orchestrator] user_memory search failed:", err);
+    }
   }
 
   try {
@@ -52,7 +61,12 @@ export async function buildMemoryInjection(
       parts.push("【相关文档】\n" + docResults.map((d) => "· " + d).join("\n"));
     }
   } catch (err) {
-    console.warn("[Orchestrator] imported_doc search failed:", err);
+    if (isDimensionMismatchError(err)) {
+      console.error("[Orchestrator] imported_doc search blocked: embedding dimension mismatch. Index rebuild required.", err);
+      parts.push("【文档检索】\n⚠️ 向量索引维度不一致，文档检索已暂停。请在设置中切换 Embedding 模型以重建索引。");
+    } else {
+      console.warn("[Orchestrator] imported_doc search failed:", err);
+    }
   }
 
   try {

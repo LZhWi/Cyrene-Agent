@@ -4,7 +4,9 @@
 // 永远走 OpenAI 兼容 image_url 格式，不分 transport。
 //
 // 判断全交给视觉模型：不本地判断"具体vs泛泛"，把用户原话+图片一起发，
-// 配框架指令让视觉模型自己理解任务。
+// 用框架指令让视觉模型自己理解任务。
+
+import { resolveTimeoutPolicy } from "../runtime-policy";
 
 /** 视觉模型配置（OpenAI 兼容）。 */
 export interface VisionConfig {
@@ -19,7 +21,7 @@ export interface VisionImage {
   mime: string;  // 如 "image/png"
 }
 
-const VISION_TIMEOUT_MS = 30_000;
+const VISION_TIMEOUT_MS = resolveTimeoutPolicy({ stage: "vision-caption" }).totalMs;
 
 /**
  * 构造框架指令。判断全交给视觉模型——它本身是语言模型，

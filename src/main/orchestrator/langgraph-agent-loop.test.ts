@@ -145,7 +145,7 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
       contextualizedQuery: "查询杭州当前天气",
       citaContextBlock: "",
       trustedRefs: [],
-      runtimeEnvironmentContext: "默认城市：淄博\n桌面：C:\\Users\\13575\\Desktop",
+      runtimeEnvironmentContext: "默认城市：淄博\n桌面：C:\\Users\\testuser\\Desktop",
     });
 
     expect(executeTool).toHaveBeenCalledTimes(1);
@@ -176,7 +176,7 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     const nativeRequest = adapter.requests.find(
       (request) => request.toolChoiceIntent?.toolName === "weather",
     );
-    expect(nativeRequest?.messages[0]?.content).toContain("C:\\Users\\13575\\Desktop");
+    expect(nativeRequest?.messages[0]?.content).toContain("C:\\Users\\testuser\\Desktop");
     expect(result.reply).toBe("杭州今天晴。");
   });
 

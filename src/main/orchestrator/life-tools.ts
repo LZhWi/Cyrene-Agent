@@ -13,6 +13,8 @@ import * as path from "path";
 import { app } from "electron";
 import { toolRegistry } from "./tool-registry";
 import { currentUserTimezone } from "./built-in-tools";
+import { resolveTimeoutPolicy } from "../runtime-policy";
+import { getDateLocale } from "../locale-context";
 
 const LOG_PREFIX = "[LifeTools]";
 
@@ -126,7 +128,7 @@ function registerExpenseTools(): void {
         return `[query_expense] 最近 ${days} 天共 ${records.length} 笔，合计 ${total.toFixed(2)} 元\n分类：${JSON.stringify(byCat)}`;
       }
       const lines = records.map(r => {
-        const d = new Date(r.ts).toLocaleDateString("zh-CN", { timeZone: currentUserTimezone() });
+        const d = new Date(r.ts).toLocaleDateString(getDateLocale(), { timeZone: currentUserTimezone() });
         return `${d} ${r.amount}元 ${r.category} ${r.note}`;
       });
       return `[query_expense] 最近 ${days} 天 ${records.length} 笔：\n${lines.join("\n")}`;
@@ -181,7 +183,7 @@ function registerExchangeRateTool(): void {
         return `[exchange_rate] 查不到 ${from} → ${to}，可能是不支持的币种`;
       }
       const result = (amount * rate).toFixed(2);
-      return `[exchange_rate] ${amount} ${from} = ${result} ${to}（汇率 ${rate}，更新于 ${new Date().toLocaleDateString("zh-CN", { timeZone: currentUserTimezone() })}）`;
+      return `[exchange_rate] ${amount} ${from} = ${result} ${to}（汇率 ${rate}，更新于 ${new Date().toLocaleDateString(getDateLocale(), { timeZone: currentUserTimezone() })}）`;
     },
   });
 }
@@ -237,7 +239,7 @@ function registerTranslateTool(): void {
       const fromHint = args.from ? `（源语言：${args.from}）` : "（自动检测源语言）";
       const sysPrompt = `你是翻译器${fromHint}。把以下文本翻译成${to}，只输出译文，不要任何解释或额外文字。`;
       const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 30000);
+      const timer = setTimeout(() => ctrl.abort(), resolveTimeoutPolicy({ stage: "external-http" }).totalMs);
       try {
         const resp = await fetch(buildVendorUrlByProvider(settings.provider, settings.baseUrl), {
           method: "POST",

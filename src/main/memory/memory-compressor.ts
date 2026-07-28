@@ -12,129 +12,12 @@ import { addL2MemoryVector, deleteUserMemoryVectors, getEntriesBySource } from "
 import { cosineSimilarity } from "../rag/vectorstore";
 import { L0_FIELD_DESCRIPTIONS } from "./memory-types";
 import type { L2Memory } from "./memory-types";
-import * as fs from "fs";
-import * as path from "path";
-import { app } from "electron";
-import { getAdapterForConfig } from "../orchestrator/vendors";
-import { recordUsage } from "../token-usage-store";
 import { commitMemoryCompression } from "./memory-compression-transaction";
+import { invokeMemoryLlm, invokeMemoryStructuredOutput, getDefaultMaxOutputTokens } from "./memory-llm-client";
+import { parseMemoryReflectionResult, validateMemoryReflectionBusiness } from "./memory-schemas";
+import type { MemoryReflectionItem } from "./memory-schemas";
 
-// ── LLM 调用（复用与 MemoryJudge 相同的 API 模式） ──
-
-interface ModelSettings {
-  provider: string;
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-  explicitTransport?: "openai" | "anthropic" | "auto";
-}
-
-function loadModelSettings(): ModelSettings {
-  const defaults = { provider: "DeepSeek（深度求索）", baseUrl: "https://api.deepseek.com", model: "deepseek-v4-pro", apiKey: "" };
-  try {
-    const filePath = path.join(app.getPath("userData"), "model-settings.json");
-    if (!fs.existsSync(filePath)) return defaults;
-    const raw = fs.readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as Partial<ModelSettings>;
-    const explicitTransport: ModelSettings["explicitTransport"] =
-      parsed.explicitTransport === "openai" || parsed.explicitTransport === "anthropic" || parsed.explicitTransport === "auto"
-        ? parsed.explicitTransport
-        : undefined;
-    return {
-      provider: typeof parsed.provider === "string" && parsed.provider.trim() ? parsed.provider.trim() : defaults.provider,
-      baseUrl: typeof parsed.baseUrl === "string" && parsed.baseUrl.trim() ? parsed.baseUrl.trim() : defaults.baseUrl,
-      model: typeof parsed.model === "string" && parsed.model.trim() ? parsed.model.trim() : defaults.model,
-      apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "",
-      explicitTransport,
-    };
-  } catch { return defaults; }
-}
-
-async function callLLM(messages: Array<{ role: "system" | "user"; content: string }>, maxTokens = 500): Promise<string> {
-  const settings = loadModelSettings();
-  if (!settings.apiKey) throw new Error("missing api key");
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
-
-  const cfg = {
-    provider: settings.provider,
-    baseUrl: settings.baseUrl,
-    model: settings.model,
-    apiKey: settings.apiKey,
-    explicitTransport: settings.explicitTransport,
-  };
-
-  try {
-    // 走 adapter（之前直接写 OpenAI body / Bearer / choices 解析，anthropic 端点会拿到空串）
-    const adapter = getAdapterForConfig(cfg);
-    const http = adapter.buildRequest({
-      model: cfg.model,
-      messages,
-      maxTokens,
-      stream: false,
-    }, cfg);
-
-    const response = await fetch(http.url, {
-      method: "POST",
-      signal: controller.signal,
-      headers: http.headers,
-      body: http.body,
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as Record<string, unknown>;
-      const errMsg = (errorData as { error?: { message?: string } }).error?.message;
-      throw new Error(errMsg || `HTTP ${response.status}`);
-    }
-
-    const data = await response.json();
-    const parsed = adapter.parseResponse(data);
-
-    if (parsed.usage) {
-      recordUsage(parsed.usage.input, parsed.usage.output, 1);
-    }
-
-    return parsed.text ?? "";
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-// ── 工具函数 ──
-
-/** 从文本中提取 JSON 对象数组（容错：截断、markdown 包裹） */
-function extractJsonArray(raw: string): unknown[] | null {
-  let text = raw.replace(/```json\s*/gi, "").replace(/```\s*/gi, "").trim();
-  const start = text.indexOf("[");
-  if (start === -1) return null;
-  text = text.slice(start);
-
-  try { const parsed = JSON.parse(text); if (Array.isArray(parsed)) return parsed; } catch { /* fall through */ }
-
-  // 截断救场：逐个捞取完整对象
-  const results: unknown[] = [];
-  let i = 0;
-  while (i < text.length) {
-    if (text[i] !== "{") { i++; continue; }
-    let depth = 0, inStr = false, esc = false, j = i;
-    for (; j < text.length; j++) {
-      const c = text[j];
-      if (esc) { esc = false; continue; }
-      if (c === "\\") { esc = true; continue; }
-      if (c === '"') { inStr = !inStr; continue; }
-      if (inStr) continue;
-      if (c === "{") depth++;
-      else if (c === "}") { depth--; if (depth === 0) break; }
-    }
-    if (depth !== 0) break;
-    try { const obj = JSON.parse(text.slice(i, j + 1)); if (obj && typeof obj === "object") results.push(obj); } catch { /* skip */ }
-    i = j + 1;
-  }
-  return results.length > 0 ? results : null;
-}
-
-// ── 阶段 A：记忆压缩 ──
+// ── 阶段 A：记忆压缩（纯文本总结，不需要结构化输出） ──
 
 const SIMILARITY_THRESHOLD = 0.85;
 const MIN_GROUP_SIZE = 3;
@@ -155,55 +38,38 @@ async function compressMemories(): Promise<number> {
 
   // 从 RAG 库获取 user_memory 条目，建立 ragId → embedding 映射
   const ragEntries = getEntriesBySource("user_memory");
-  const embeddingMap = new Map<string, number[]>();
-  for (const re of ragEntries) {
-    embeddingMap.set(re.id, re.embedding);
-  }
 
-  // 为每个 L2 条目配对 embedding
-  const withEmbedding: GroupedEntry[] = [];
-  for (const l2 of activeL2) {
-    if (l2.ragId) {
-      const emb = embeddingMap.get(l2.ragId);
-      if (emb) withEmbedding.push({ l2, embedding: emb });
-    }
-  }
-
-  if (withEmbedding.length < MIN_GROUP_SIZE) {
-    console.log("[MemoryCompressor] 带 embedding 的条目不足，跳过压缩");
-    return 0;
-  }
-
-  // 贪心聚类：取一条作为种子，找所有与其相似度 >= 阈值的条目
-  const used = new Set<string>();
+  // 分组
   const groups: GroupedEntry[][] = [];
+  const used = new Set<string>();
 
-  for (let i = 0; i < withEmbedding.length; i++) {
-    if (used.has(withEmbedding[i].l2.id)) continue;
+  for (const l2 of activeL2) {
+    if (used.has(l2.id)) continue;
+    const ragEntry = ragEntries.find((e) => e.id === l2.ragId);
+    if (!ragEntry) continue;
 
-    const group: GroupedEntry[] = [withEmbedding[i]];
-    used.add(withEmbedding[i].l2.id);
+    const group: GroupedEntry[] = [{ l2, embedding: ragEntry.embedding }];
+    used.add(l2.id);
 
-    for (let j = i + 1; j < withEmbedding.length; j++) {
-      if (used.has(withEmbedding[j].l2.id)) continue;
-      const sim = cosineSimilarity(withEmbedding[i].embedding, withEmbedding[j].embedding);
+    for (const other of activeL2) {
+      if (used.has(other.id)) continue;
+      const otherRag = ragEntries.find((e) => e.id === other.ragId);
+      if (!otherRag) continue;
+
+      const sim = cosineSimilarity(ragEntry.embedding, otherRag.embedding);
       if (sim >= SIMILARITY_THRESHOLD) {
-        group.push(withEmbedding[j]);
-        used.add(withEmbedding[j].l2.id);
+        group.push({ l2: other, embedding: otherRag.embedding });
+        used.add(other.id);
       }
     }
 
-    if (group.length >= MIN_GROUP_SIZE) {
-      groups.push(group);
-    }
+    if (group.length >= MIN_GROUP_SIZE) groups.push(group);
   }
 
   if (groups.length === 0) {
-    console.log("[MemoryCompressor] 未找到可压缩的条目组");
+    console.log("[MemoryCompressor] 无需压缩的组");
     return 0;
   }
-
-  console.log(`[MemoryCompressor] 发现 ${groups.length} 个可压缩组`);
 
   // 对每组调 LLM 生成总结
   let totalCompressed = 0;
@@ -222,12 +88,16 @@ async function compressMemories(): Promise<number> {
         ...texts,
       ].join("\n");
 
-      const summary = await callLLM([
-        { role: "system", content: "你是一个简洁的记忆总结助手。" },
-        { role: "user", content: prompt },
-      ], 300);
+      const result = await invokeMemoryLlm({
+        operation: "compress",
+        messages: [
+          { role: "system", content: "你是一个简洁的记忆总结助手。" },
+          { role: "user", content: prompt },
+        ],
+        maxOutputTokens: 300,
+      });
 
-      const cleanSummary = summary.replace(/^["「『]|["」』]$/g, "").trim();
+      const cleanSummary = result.text.replace(/^["「『]|["」』]$/g, "").trim();
       if (!cleanSummary || cleanSummary.length < 5) continue;
 
       const subEntryIds = group.map((g) => g.l2.id);
@@ -306,7 +176,8 @@ async function runReflection(): Promise<void> {
       .map(([field, desc]) => `  ${field}：${desc}`)
       .join("\n");
 
-    const prompt = [
+    const systemPrompt = "你是一个谨慎的用户画像反思助手。只输出 JSON 数组。";
+    const userPrompt = [
       "你是一个用户画像反思助手。",
       "回顾与用户的长期互动，判断是否需要更新用户画像或近期状态。",
       "",
@@ -324,13 +195,16 @@ async function runReflection(): Promise<void> {
       "只输出 JSON，不要额外解释。",
     ].join("\n");
 
-    const raw = await callLLM([
-      { role: "system", content: "你是一个谨慎的用户画像反思助手。只输出 JSON 数组。" },
-      { role: "user", content: prompt },
-    ], 500);
+    const items = await invokeMemoryStructuredOutput<MemoryReflectionItem[]>({
+      operation: "compress",
+      systemPrompt,
+      userPrompt,
+      maxOutputTokens: 500,
+      parseSchema: parseMemoryReflectionResult,
+      validateBusiness: validateMemoryReflectionBusiness,
+    });
 
-    const parsed = extractJsonArray(raw);
-    if (!parsed || parsed.length === 0) {
+    if (items.length === 0) {
       console.log("[Reflection] 无 L0/L1 更新建议");
       return;
     }
@@ -338,32 +212,26 @@ async function runReflection(): Promise<void> {
     const validFields = Object.keys(L0_FIELD_DESCRIPTIONS);
     let updateCount = 0;
 
-    for (const item of parsed) {
-      const rec = item as Record<string, unknown>;
-      const layer = rec.layer;
-      const field = rec.field as string | undefined;
-      const content = rec.content as string | undefined;
-      const confidence = rec.confidence as number | undefined;
+    for (const item of items) {
+      if (!item.content || !item.confidence || item.confidence < 0.6) continue;
 
-      if (!content || !confidence || confidence < 0.6) continue;
-
-      if (layer === "L0" && field && validFields.includes(field) && !l0.isPinned) {
-        await memoryStore.upsertL0Field(field as L0WritableField, content.trim());
+      if (item.layer === "L0" && item.field && validFields.includes(item.field) && !l0.isPinned) {
+        await memoryStore.upsertL0Field(item.field as L0WritableField, item.content.trim());
         await memoryStore.appendReflectionLog({
           type: "l0_update",
-          summary: `L0.${field} 更新为 "${content.slice(0, 30)}"（置信度 ${confidence.toFixed(2)}）`,
+          summary: `L0.${item.field} 更新为 "${item.content.slice(0, 30)}"（置信度 ${item.confidence.toFixed(2)}）`,
         });
         updateCount++;
-        console.log(`[Reflection] L0.${field} 更新: "${content.slice(0, 30)}"`);
-      } else if (layer === "L1") {
-        const l1Field = /目标|想要|计划|打算/.test(content) ? "recentGoals" : "recentPreferences";
-        await memoryStore.replaceL1Field(l1Field, content.trim());
+        console.log(`[Reflection] L0.${item.field} 更新: "${item.content.slice(0, 30)}"`);
+      } else if (item.layer === "L1") {
+        const l1Field = /目标|想要|计划|打算/.test(item.content) ? "recentGoals" : "recentPreferences";
+        await memoryStore.replaceL1Field(l1Field, item.content.trim());
         await memoryStore.appendReflectionLog({
           type: "l1_update",
-          summary: `L1.${l1Field} 更新为 "${content.slice(0, 30)}"（置信度 ${confidence.toFixed(2)}）`,
+          summary: `L1.${l1Field} 更新为 "${item.content.slice(0, 30)}"（置信度 ${item.confidence.toFixed(2)}）`,
         });
         updateCount++;
-        console.log(`[Reflection] L1.${l1Field} 更新: "${content.slice(0, 30)}"`);
+        console.log(`[Reflection] L1.${l1Field} 更新: "${item.content.slice(0, 30)}"`);
       }
     }
 
@@ -379,23 +247,11 @@ async function runReflection(): Promise<void> {
  * 运行记忆压缩 + Reflection。
  * 由 scheduleMemoryWrite 在每 20 轮时触发。
  */
-export async function runReflectionAndCompression(): Promise<void> {
-  console.log("[Memory] 开始 20 轮 Reflection + 记忆压缩...");
-
-  // 阶段 A：记忆压缩
-  const compressed = await compressMemories();
-  console.log(`[Memory] 压缩完成，共压缩 ${compressed} 条原始记忆`);
-
-  // 阶段 B：Reflection（L0/L1 元认知更新）
+export async function runMemoryCompression(): Promise<void> {
+  console.log("[Memory] 达到 20 轮，触发 Reflection + 记忆压缩");
   await runReflection();
-
-  // 重建 RAG 索引（数据有变化）
-  try {
-    const { JsonVectorStore } = await import("../rag/vectorstore");
-    // 通过重新 import 触发不了实例方法，下面通过公开方法访问
-    // 实际会在下次 search 时惰性重建
-    console.log("[Memory] 向量索引已标记脏，下次搜索时自动重建");
-  } catch { /* ignore */ }
-
-  console.log("[Memory] Reflection + 压缩流程完成");
+  await compressMemories();
 }
+
+/** @deprecated Use runMemoryCompression instead. */
+export const runReflectionAndCompression = runMemoryCompression;

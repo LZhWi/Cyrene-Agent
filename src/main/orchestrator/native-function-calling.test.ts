@@ -32,14 +32,14 @@ describe("resolveNativeToolCall", () => {
       model: "m",
       nativeFcSystemPrompt: "test",
       executionBrief: "test",
-      runtimeEnvironmentContext: "默认城市：淄博\n桌面：C:\\Users\\13575\\Desktop",
+      runtimeEnvironmentContext: "默认城市：淄博\n桌面：C:\\Users\\testuser\\Desktop",
       toolResults: [],
       tool: tool({ keyword: { type: "string" } }),
     } as unknown) as Parameters<typeof resolveNativeToolCall>[0], invoke);
 
     const system = String(invoke.mock.calls[0]?.[0].messages[0]?.content);
     expect(system).toContain("[TRUSTED_RUNTIME_ENVIRONMENT]");
-    expect(system).toContain("C:\\Users\\13575\\Desktop");
+    expect(system).toContain("C:\\Users\\testuser\\Desktop");
   });
 
   it("executes a zero-argument action without another model request", async () => {

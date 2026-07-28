@@ -9,6 +9,7 @@ import type {
 import type { ChatRequest, ChatResponse } from "./vendors/types";
 import type { ChatMessage } from "./vendors/types";
 import type { TrustedAskUserProfile } from "../../shared/ask-clarification";
+import { resolveMaxOutputTokens } from "../runtime-policy";
 
 const ASK_CLARIFICATION_SCHEMA = {
   type: "object",
@@ -240,7 +241,7 @@ export async function resolveAskClarification(
         },
       ],
       stream: false,
-      maxTokens: 1_600,
+      maxTokens: resolveMaxOutputTokens({ stage: "ask-soul" }),
       structuredOutput: {
         mode: "prompt_json",
         name: "ask_clarification",

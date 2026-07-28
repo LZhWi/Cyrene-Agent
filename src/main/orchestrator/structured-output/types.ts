@@ -1,6 +1,6 @@
 import type { Transport } from "../vendors/types";
 
-export type StructuredOutputStage = "cita" | "action_gate";
+export type StructuredOutputStage = "cita" | "action_gate" | "memory_judge" | "memory_compress" | "memory_resolve";
 
 export type StructuredOutputMode =
   | "provider_json_schema"

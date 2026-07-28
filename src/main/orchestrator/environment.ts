@@ -16,6 +16,7 @@ import { ACCESS_LEVEL_LABEL, getCurrentLevel, policyFor } from "../permission";
 import type { ToolRiskLevel } from "../permission";
 import { getCapability } from "./vendors/capabilities";
 import { resolveChatContextTimezone } from "../chat-time-context";
+import { getDateLocale } from "../locale-context";
 
 const LOG_PREFIX = "[Env]";
 
@@ -53,7 +54,7 @@ function safeGetPath(name: "desktop" | "documents" | "downloads" | "home"): stri
 function formatDate(d: Date, tz: string): string {
   let parts: Intl.DateTimeFormatPart[];
   try {
-    parts = new Intl.DateTimeFormat("zh-CN", {
+    parts = new Intl.DateTimeFormat(getDateLocale(), {
       timeZone: tz,
       year: "numeric",
       month: "2-digit",

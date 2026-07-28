@@ -104,6 +104,13 @@ const DEFINITIONS: readonly ProfileDefinition[] = [
   },
 ];
 
+const MEMORY_REPAIR: StructuredOutputProfile["repair"]["memory_judge"] = {
+  maxAttempts: 2,
+  totalBudgetMs: 15_000,
+  perAttemptTimeoutMs: 8_000,
+  minimumRemainingBudgetMs: 500,
+};
+
 const REPAIR: StructuredOutputProfile["repair"] = {
   cita: {
     maxAttempts: 2,
@@ -117,6 +124,9 @@ const REPAIR: StructuredOutputProfile["repair"] = {
     perAttemptTimeoutMs: 5_000,
     minimumRemainingBudgetMs: 800,
   },
+  memory_judge: MEMORY_REPAIR,
+  memory_compress: MEMORY_REPAIR,
+  memory_resolve: MEMORY_REPAIR,
 };
 
 const A_REPAIR: StructuredOutputProfile["repair"] = {
@@ -132,6 +142,9 @@ const A_REPAIR: StructuredOutputProfile["repair"] = {
     perAttemptTimeoutMs: 12_500,
     minimumRemainingBudgetMs: 800,
   },
+  memory_judge: MEMORY_REPAIR,
+  memory_compress: MEMORY_REPAIR,
+  memory_resolve: MEMORY_REPAIR,
 };
 
 const KIMI_SLOW_REPAIR: StructuredOutputProfile["repair"] = {
@@ -142,6 +155,9 @@ const KIMI_SLOW_REPAIR: StructuredOutputProfile["repair"] = {
     minimumRemainingBudgetMs: 500,
   },
   action_gate: A_REPAIR.action_gate,
+  memory_judge: MEMORY_REPAIR,
+  memory_compress: MEMORY_REPAIR,
+  memory_resolve: MEMORY_REPAIR,
 };
 
 const B_REPAIR: StructuredOutputProfile["repair"] = {
@@ -157,6 +173,9 @@ const B_REPAIR: StructuredOutputProfile["repair"] = {
     perAttemptTimeoutMs: 10_000,
     minimumRemainingBudgetMs: 800,
   },
+  memory_judge: MEMORY_REPAIR,
+  memory_compress: MEMORY_REPAIR,
+  memory_resolve: MEMORY_REPAIR,
 };
 
 const MINIMAX_REPAIR: StructuredOutputProfile["repair"] = {
@@ -172,6 +191,9 @@ const MINIMAX_REPAIR: StructuredOutputProfile["repair"] = {
     perAttemptTimeoutMs: 7_000,
     minimumRemainingBudgetMs: 800,
   },
+  memory_judge: MEMORY_REPAIR,
+  memory_compress: MEMORY_REPAIR,
+  memory_resolve: MEMORY_REPAIR,
 };
 
 function repairFor(

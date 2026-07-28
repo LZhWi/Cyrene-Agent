@@ -287,6 +287,8 @@ interface ModelSettings {
     apiKey: string;
     model: string;
   };
+  /** Embedding 维度（可选，仅 cloud 模式）。留空 = 自动探测。 */
+  embeddingDimensions?: number;
   multimodal: boolean;
 }
 
@@ -823,6 +825,9 @@ const citaRepairBudgetSecInput = document.getElementById("cita-repair-budget-sec
 const actionGateRepairBudgetSecInput = document.getElementById("action-gate-repair-budget-sec") as HTMLInputElement;
 const advancedToggle = document.getElementById("advanced-toggle") as HTMLButtonElement;
 const advancedFieldsWrap = document.getElementById("advanced-fields-wrap") as HTMLElement;
+
+// Embedding 维度（可选，仅 cloud 模式）
+const embeddingDimensionsInput = document.getElementById("embedding-dimensions-input") as HTMLInputElement | null;
 
 // 渲染端内存缓存：保存每个厂商上一次填写的 baseUrl / model / apiKey
 // 切厂商时从这里读，保存时同步进去；持久化由 main 进程的 saveModelSettings 负责（perProvider 字段）。
@@ -1510,6 +1515,9 @@ async function loadConfig(): Promise<void> {
     perCallTimeoutSecInput.value = String(cfg.perCallTimeoutSec ?? 75);
     citaRepairBudgetSecInput.value = String(cfg.citaRepairBudgetSec ?? 8);
     actionGateRepairBudgetSecInput.value = String(cfg.actionGateRepairBudgetSec ?? 10);
+    if (embeddingDimensionsInput) {
+      embeddingDimensionsInput.value = cfg.embeddingDimensions ? String(cfg.embeddingDimensions) : "";
+    }
 
     // 视觉模型配置已并入 applyPreset（preferredVision 参数）。
 
@@ -2872,6 +2880,11 @@ cyrenePanel.addEventListener("submit", async (e) => {
     const parsedPerCallSec = Math.max(30, Math.min(120, parseInt(perCallTimeoutSecInput.value, 10) || 75));
     const parsedCitaSec = Math.max(4, Math.min(30, parseInt(citaRepairBudgetSecInput.value, 10) || 8));
     const parsedAgSec = Math.max(5, Math.min(40, parseInt(actionGateRepairBudgetSecInput.value, 10) || 10));
+    const rawDim = embeddingDimensionsInput?.value?.trim();
+    const parsedNum = rawDim ? Number(rawDim) : NaN;
+    const parsedDim = Number.isFinite(parsedNum) && parsedNum > 0
+      ? Math.max(1, Math.min(65536, Math.round(parsedNum)))
+      : undefined;
     await window.settings!.saveConfig({
       runtimeSync: getRuntimeSyncValue(),
       stickerEnabled: stickerEnabledInput.checked,
@@ -2884,6 +2897,7 @@ cyrenePanel.addEventListener("submit", async (e) => {
       perCallTimeoutSec: parsedPerCallSec,
       citaRepairBudgetSec: parsedCitaSec,
       actionGateRepairBudgetSec: parsedAgSec,
+      embeddingDimensions: parsedDim && parsedDim > 0 ? parsedDim : undefined,
     });
     setCyreneSaveStatus("已保存", "is-ok");
   } catch {
@@ -6359,7 +6373,6 @@ document.getElementById("tts-clone-start")?.addEventListener("click", async () =
 });
 
 // ── 音色快速复刻：规格说明模态框 ──
-// 摘要见 C:\Users\13575\Desktop\minimax-tts文档摘要.md（音色快速复刻 / Voice Clone）
 // 字段顺序：file_id → voice_id → clone_prompt(prompt_audio / prompt_text) → text(试听)
 const CLONE_SPEC_BODY = [
   '<div class="tts-clone-spec-block">',

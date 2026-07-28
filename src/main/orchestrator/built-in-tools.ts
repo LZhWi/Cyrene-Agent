@@ -3,6 +3,7 @@
 
 import { spawn } from "child_process";
 import { toolRegistry } from "./tool-registry";
+import { getDateLocale, getWeatherLanguage } from "../locale-context";
 import { addMcpServer } from "./mcp-manager";
 import { sendToLive2DWindow } from "../index";
 import { createPlayLive2DActionTool } from "./tools/play-live2d-action";
@@ -499,7 +500,8 @@ interface OMCity { name: string; latitude: number; longitude: number; country: s
 
 /** Open-Meteo 城市查询（Geocoding API，免费免 key）。 */
 async function omResolveCity(city: string): Promise<OMCity | null> {
-  const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}&count=1&language=zh&format=json`;
+  const params = new URLSearchParams({ name: city, count: "1", language: getWeatherLanguage(), format: "json" });
+  const url = `https://geocoding-api.open-meteo.com/v1/search?${params}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), WEATHER_TIMEOUT_MS);
   try {
@@ -591,7 +593,7 @@ async function omFetchWeather(city: string): Promise<string> {
       uv: c.uv_index,
       visibility: Math.round(c.visibility / 1000), // m → km
       source: "Open-Meteo",
-      updateTime: new Date().toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit", timeZone: currentUserTimezone() }),
+      updateTime: new Date().toLocaleString(getDateLocale(), { hour: "2-digit", minute: "2-digit", timeZone: currentUserTimezone() }),
     };
 
     // 发送天气卡片数据给渲染端
@@ -732,7 +734,7 @@ async function amapFetchWeather(city: string, key: string): Promise<string> {
       windDirection: w.winddirection,
       windSpeed: `${w.windpower}级`,
       source: "高德天气",
-      updateTime: w.reporttime.slice(11, 16) || new Date().toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
+      updateTime: w.reporttime.slice(11, 16) || new Date().toLocaleString(getDateLocale(), { hour: "2-digit", minute: "2-digit" }),
     };
 
     // 发送天气卡片数据给渲染端

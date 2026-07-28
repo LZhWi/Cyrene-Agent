@@ -657,6 +657,14 @@
               </div>
 
               <div class="agent-setting-subgroup" style="margin-top:12px">
+                <strong>Embedding 维度 <span style="font-weight:400;font-size:12px;color:var(--text-muted)">（仅 Cloud 模式）</span></strong>
+                <div style="display:flex;align-items:center;gap:8px;margin-top:4px">
+                  <input type="number" id="embedding-dimensions-input" class="agent-input" placeholder="留空自动探测" min="1" max="65536" step="1" style="width:160px">
+                  <span style="font-size:12px;color:var(--text-muted)">留空 = 首次请求自动检测；填写 = 严格校验</span>
+                </div>
+              </div>
+
+              <div class="agent-setting-subgroup" style="margin-top:12px">
                 <strong>Rerank 重排序</strong>
                 <div class="rag-model-options">
                   <button type="button" class="rag-model-card is-active" data-value="light" data-reranker="1">
