@@ -62,12 +62,18 @@ import { validateSearchApiKey } from "./orchestrator/search-backend-filter";
 import { indexConversationTurn } from "./orchestrator/history-tools";
 import { buildToneInjection } from "./orchestrator/tone-injector";
 import { getAdapter, buildVendorUrl, getAdapterForConfig, createSseReader } from "./orchestrator/vendors";
-import type { StructuredOutputRequest, VendorConfig } from "./orchestrator/vendors";
+import type {
+  ChatResponse,
+  StructuredOutputRequest,
+  VendorConfig,
+} from "./orchestrator/vendors";
 import {
   classifyStructuredOutputEndpoint,
   resolveStructuredOutputProfile,
 } from "./orchestrator/structured-output/profiles";
 import { normalizeFinishReason } from "./orchestrator/structured-output/finish-reason";
+import { dispatchChatGeneration } from "./orchestrator/structured-output/dispatcher";
+import { invokeLangChainStructured } from "./orchestrator/structured-output/langchain-invoker";
 import { testVendorConnection } from "./orchestrator/vendors/test-connection";
 import { migrateLegacyMinimaxDefaults } from "./orchestrator/vendors/minimax-defaults";
 import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
@@ -1999,6 +2005,7 @@ async function callChatCompletionsNonStream(
   thinking?: string;
   finishReason: string;
   refusal?: string;
+  structuredValue?: unknown;
 }> {
   const cfg: VendorConfig = {
     provider: settings.provider,
@@ -2009,7 +2016,7 @@ async function callChatCompletionsNonStream(
     reasoning: reasoningOverride ?? settings.reasoning,
   };
   const adapter = getAdapterForConfig(cfg);
-  const http = adapter.buildRequest({
+  const chatRequest = {
     model: cfg.model,
     messages,
     ...(temperature !== undefined ? { temperature } : {}),
@@ -2017,7 +2024,7 @@ async function callChatCompletionsNonStream(
     ...(options?.structuredOutput ? { structuredOutput: options.structuredOutput } : {}),
     ...(options?.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
     ...(options?.extraBody ? { extraBody: options.extraBody } : {}),
-  }, cfg);
+  };
 
   const controller = new AbortController();
   const abort = (): void => controller.abort(signal?.reason);
@@ -2027,19 +2034,49 @@ async function callChatCompletionsNonStream(
   console.log(`[TIMING] ${label} START (non-stream) timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`);
 
   try {
-    const response = await fetch(http.url, {
-      method: "POST",
-      headers: http.headers,
-      body: http.body,
-      signal: controller.signal,
+    const parsed = await dispatchChatGeneration<ChatResponse>({
+      request: chatRequest,
+      provider: adapter.id,
+      endpointKind: classifyStructuredOutputEndpoint({
+        providerId: adapter.id,
+        configuredBaseUrl: cfg.baseUrl,
+        officialBaseUrl: adapter.capability.baseUrl,
+      }),
+      langchain: async () => {
+        const generated = await invokeLangChainStructured(
+          chatRequest,
+          {
+            ...cfg,
+            provider: adapter.id,
+            explicitTransport: adapter.transport,
+          },
+          controller.signal,
+        );
+        return {
+          assistantMessage: { role: "assistant" as const, content: generated.text },
+          text: generated.text,
+          toolCalls: [],
+          finishReason: generated.finishReason,
+          raw: { backend: "langchain" },
+          structuredValue: generated.structuredValue,
+        };
+      },
+      legacy: async () => {
+        const http = adapter.buildRequest(chatRequest, cfg);
+        const response = await fetch(http.url, {
+          method: "POST",
+          headers: http.headers,
+          body: http.body,
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({})) as Record<string, unknown>;
+          const errMsg = (errorData as { error?: { message?: string } }).error?.message;
+          throw new Error(errMsg || `模型请求失败：HTTP ${response.status}`);
+        }
+        return adapter.parseResponse(await response.json());
+      },
     });
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as Record<string, unknown>;
-      const errMsg = (errorData as { error?: { message?: string } }).error?.message;
-      throw new Error(errMsg || `模型请求失败：HTTP ${response.status}`);
-    }
-    const json = await response.json();
-    const parsed = adapter.parseResponse(json);
     if (parsed.usage) {
       recordUsage(parsed.usage.input, parsed.usage.output, 1);
     }
@@ -2050,6 +2087,7 @@ async function callChatCompletionsNonStream(
       thinking: parsed.thinking,
       finishReason: parsed.finishReason,
       refusal: parsed.refusal,
+      structuredValue: parsed.structuredValue,
     };
   } catch (error) {
     const totalTime = Date.now() - startTime;
@@ -4983,9 +5021,15 @@ app.whenReady().then(async () => {
             strict: true,
           }
         : profile.mode === "provider_json_object"
-          ? { mode: "json_object" }
+          ? {
+              mode: "json_object",
+              name: "chat_social_atoms",
+              schema: SOCIAL_EXTRACTION_SCHEMA,
+            }
           : {
               mode: "prompt_json",
+              name: "chat_social_atoms",
+              schema: SOCIAL_EXTRACTION_SCHEMA,
               sendJsonObjectHint: profile.requestHints.sendJsonObject,
             };
       const response = await callChatCompletionsNonStream(
