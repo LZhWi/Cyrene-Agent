@@ -19,10 +19,13 @@ export interface ToolChoicePolicyInput {
 export type AutomaticToolChoicePolicyInput = Omit<ToolChoicePolicyInput, "requestedToolName">;
 
 function isThinkingEnabled(input: AutomaticToolChoicePolicyInput): boolean {
-  return resolveEffectiveReasoning(
+  // reasoning=auto 时不排除 thinking -- 服务端可能默认开启
+  // 只有明确 mode="off" 才认为 thinking 关闭
+  const resolved = resolveEffectiveReasoning(
     input.reasoning,
     resolveReasoningCapability(input.providerId, input.model),
-  ).mode === "on";
+  );
+  return resolved.mode === "on" || resolved.mode === "auto";
 }
 
 /** Map an ordinary optional Function Calling turn to auto, unless the active mode rejects tool_choice. */
