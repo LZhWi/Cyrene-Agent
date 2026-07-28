@@ -297,8 +297,8 @@ describe("Document Agent vertical slice", () => {
     expect(emailSpy).not.toHaveBeenCalled();
   });
 
-  it("Document Agent cannot call disabled tools", async () => {
-    // 禁用 write_word，Document Agent 应返回 crashed
+  it("Document Agent cannot call disabled tools (graph handles as failed step)", async () => {
+    // 禁用 write_word，graph 骨架将错误作为 failed tool result 处理，计划优雅失败
     const writeWord = toolRegistry.getById("write_word")!;
     const originalEnabled = writeWord.enabled;
     writeWord.enabled = false;
@@ -309,7 +309,9 @@ describe("Document Agent vertical slice", () => {
       parentContext: { runId: "test-run" },
     });
 
-    expect(outcome.invocationStatus).toBe("crashed");
+    // graph 将执行错误作为 failed tool result，最终计划失败
+    expect(outcome.invocationStatus).toBe("completed");
+    expect(outcome.result!.status).toBe("failed");
     writeWord.enabled = originalEnabled;
   });
 
