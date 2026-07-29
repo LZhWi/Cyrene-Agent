@@ -1418,4 +1418,68 @@ toolRegistry.register({
   },
 });
 
+// ── 工具：delegate_search（搜索子代理入口）─────────────────────
+// 虚拟工具：对 Action Gate 是工具，执行时走搜索子代理 Executor。
+// 与原子 web_search 的区别：
+//   web_search = 一次搜索，返回结果列表
+//   delegate_search = 多来源研究任务，子代理自主搜索+读取+验证+整理
+toolRegistry.register({
+  id: "delegate_search",
+  name: "委托搜索研究",
+  description:
+    "把多来源搜索研究任务委托给搜索子代理。子代理自主执行多轮搜索、读取原网页、" +
+    "验证来源、去重并整理为结构化 findings。\n\n" +
+    "何时用：\n" +
+    "- 需要从多个来源收集和对比信息\n" +
+    "- 需要读取搜索结果中的原网页获取详细内容\n" +
+    "- 需要验证来源、去重和整理精选结果\n" +
+    "- 例如：「调查最近AI框架变化，对比多个来源」\n\n" +
+    "不要用于：\n" +
+    "- 只需要一次简单搜索（直接用 web_search）\n" +
+    "- 只需要读取一个已知网址（直接用 fetch_url）\n" +
+    "- 生成文档（用 delegate_document）\n\n" +
+    "参数：objective（研究目标描述），requiresDeepReading（可选，是否需要读取原网页）。",
+  enabled: true,
+  risk: "safe",
+  capability: "delegate_search",
+  executionKind: "subagent",
+  subAgentProfile: "search",
+  ledgerPolicy: "bypass",
+  hideInPlanMode: false,
+  soulActionLabel: "搜索研究",
+  soulProjection: {
+    projector: "entity_list",
+    source: "external_untrusted",
+    itemsPath: "findings",
+    fields: {
+      title: "title",
+      content: "content",
+      source: "source",
+    },
+    maxItems: 10,
+  },
+  completionEvidence: [{ kind: "tool_succeeded" }],
+  completionEvidenceVerifier: (result) => {
+    try {
+      const parsed = parseSubAgentResult(result.output);
+      return parsed.status === "succeeded"
+        && parsed.findings.length > 0
+        && parsed.findings.every(f => !!f.source);
+    } catch {
+      return false;
+    }
+  },
+  inputSchema: {
+    type: "object",
+    properties: {
+      objective: { type: "string", description: "研究目标描述，如「调查最近AI框架变化，对比多个来源」" },
+      requiresDeepReading: { type: "boolean", description: "是否需要读取原网页获取详细内容（默认 false）" },
+    },
+    required: ["objective"],
+  },
+  execute: async () => {
+    throw new Error("SUBAGENT_MUST_USE_SPECIAL_EXECUTOR");
+  },
+});
+
 toolRegistry.register(createPlayLive2DActionTool({ sendToLive2DWindow }));

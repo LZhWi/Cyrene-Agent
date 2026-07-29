@@ -63,52 +63,42 @@ function actionFingerprint(stepId: string | undefined, decision: SubAgentDecisio
   return `${stepId ?? ""}:${decision.toolId}:${JSON.stringify(stable(decision.args))}`;
 }
 
-/**
- * 生成 outcome 指纹：status + errorCode + output 摘要
- * 排除时间戳、taskId、traceRef、随机 ID
- * 包含 output 内容摘要以检测相同调用是否产生不同结果
- */
-function outcomeFingerprint(toolResults: SubAgentState["toolResults"]): string {
-  const last = toolResults[toolResults.length - 1];
-  if (!last) return "none";
-  const outputSummary = last.output.length > 200 ? last.output.slice(0, 200) : last.output;
-  return `${last.status}:${last.errorCode ?? ""}:${outputSummary}`;
-}
-
 interface NoProgressState {
   lastActionFingerprint?: string;
-  lastOutcomeFingerprint?: string;
+  lastProgressEvidence?: string;
   repeatCount: number;
 }
 
 /**
  * 无进展检测（在 observe 节点调用，execute 之后）。
- * 比较当前 action+outcome 与上一次。
+ * 使用 Profile 提供的 extractProgressEvidence 基于语义字段判断进展，
+ * 不使用字符串截断或原始输出前缀。
  * 不同 stepId 或不同 action 不算同一循环。
- * 相同 outcome（包含 output 内容）意味着没有新发现。
  */
 function detectNoProgress(
   state: SubAgentState,
   noProgress: NoProgressState,
   decision: SubAgentDecision,
+  profile: SubAgentProfileConfig,
 ): { noProgress: boolean; isFirstRepeat: boolean } {
   // 只在有实际工具结果时检测（skip 不消耗预算，不应被误判为无进展）
   if (decision.action !== "call_tool") return { noProgress: false, isFirstRepeat: false };
   if (state.toolResults.length === 0) return { noProgress: false, isFirstRepeat: false };
 
   const currentAction = actionFingerprint(state.currentStepId, decision);
-  const currentOutcome = outcomeFingerprint(state.toolResults);
+  // 使用 Profile 的语义进展证据替代字符串截断
+  const currentEvidence = profile.extractProgressEvidence(state);
 
   if (
     noProgress.lastActionFingerprint === currentAction
-    && noProgress.lastOutcomeFingerprint === currentOutcome
+    && noProgress.lastProgressEvidence === currentEvidence
   ) {
     noProgress.repeatCount++;
     return { noProgress: true, isFirstRepeat: noProgress.repeatCount === 1 };
   }
 
   noProgress.lastActionFingerprint = currentAction;
-  noProgress.lastOutcomeFingerprint = currentOutcome;
+  noProgress.lastProgressEvidence = currentEvidence;
   noProgress.repeatCount = 0;
   return { noProgress: false, isFirstRepeat: false };
 }
@@ -308,7 +298,7 @@ export async function runSubAgentGraph(
         }
 
         // ── observe: 无进展检测（execute 之后） ──
-        const np = detectNoProgress(state, noProgress, decision);
+        const np = detectNoProgress(state, noProgress, decision, profile);
         if (np.noProgress) {
           if (np.isFirstRepeat && state.budgetUsage.replanCount < profile.budget.maxReplans) {
             // 第一次重复 -> replan
@@ -317,7 +307,7 @@ export async function runSubAgentGraph(
             // 重置指纹以允许 replan 后重新检测
             noProgress.repeatCount = 0;
             noProgress.lastActionFingerprint = undefined;
-            noProgress.lastOutcomeFingerprint = undefined;
+            noProgress.lastProgressEvidence = undefined;
             continue; // 重新进入循环
           } else {
             // replan 后仍重复或无 replan 预算 -> 终止

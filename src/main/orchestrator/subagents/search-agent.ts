@@ -219,6 +219,24 @@ const searchProfile: SubAgentProfileConfig = {
     const findings = extractFindings(state);
     return findings.some(f => f.content.length > 0 && !!f.source);
   },
+
+  extractProgressEvidence(state: SubAgentState): string {
+    // Search Profile 进展证据：规范化 URL 集合 + findings 内容摘要 + 完成步骤数
+    // 不包含 toolCallsUsed（每次都变，无法反映真实进展）
+    const findings = extractFindings(state);
+    const urls = findings.map(f => f.source).filter(Boolean).sort();
+    const findingsSummary = findings
+      .map(f => `${f.title ?? ""}:${f.content.slice(0, 50)}`)
+      .sort();
+    const completedSteps = state.plan.steps.filter(s => s.status === "completed").length;
+    return JSON.stringify({
+      urlCount: [...new Set(urls)].length,
+      urls: [...new Set(urls)],
+      findingsCount: findings.length,
+      findingsSummary,
+      completedSteps,
+    });
+  },
 };
 
 /** 从工具结果中提取搜索结果 */

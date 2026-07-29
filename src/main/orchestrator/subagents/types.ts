@@ -98,6 +98,14 @@ export interface SubAgentProfileConfig {
    * 不能只判断 findings.length > 0；Search finding 至少应满足内容非空、来源有效。
    */
   hasValidResults(state: SubAgentState): boolean;
+
+  /**
+   * 提取进展证据指纹，用于子图内部无进展检测。
+   * 应基于规范化 URL、findings、artifact 和 completion evidence 的增长判断，
+   * 不能使用字符串截断或原始输出前缀。
+   * 排除 taskId、traceRef、时间戳、随机 ID。
+   */
+  extractProgressEvidence(state: SubAgentState): string;
 }
 
 /** 子代理 Finding：一条结构化发现 */

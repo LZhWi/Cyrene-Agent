@@ -180,6 +180,19 @@ const documentProfile: SubAgentProfileConfig = {
     const filePath = extractFilePath(writeResult.output);
     return !!filePath;
   },
+
+  extractProgressEvidence(state: SubAgentState): string {
+    // Document Profile 进展证据：工具调用次数 + 文件路径 + 完成步骤数
+    const writeResult = state.toolResults.find(r => r.toolId === "write_word" && r.status === "succeeded");
+    const filePath = writeResult ? extractFilePath(writeResult.output) : undefined;
+    const completedSteps = state.plan.steps.filter(s => s.status === "completed").length;
+    return JSON.stringify({
+      toolCalls: state.budgetUsage.toolCallsUsed,
+      hasFile: !!filePath,
+      filePath: filePath ?? "",
+      completedSteps,
+    });
+  },
 };
 
 /** 子代理执行入口（注册到 runner） */

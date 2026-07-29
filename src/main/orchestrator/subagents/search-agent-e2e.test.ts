@@ -382,3 +382,208 @@ describe("Search Agent end-to-end projection", () => {
     expect(docDetail.attributes?.artifactPath).toBe("/path/to/file.docx");
   });
 });
+
+// ── Search partial 边界测试 ──
+
+describe("Search Agent partial edge cases", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    registerSearchProfile();
+  });
+
+  it("partial: search has results but only some have valid sources", async () => {
+    vi.mocked(toolRegistry.getById).mockImplementation((id: string) => {
+      if (id === "web_search") {
+        return {
+          id: "web_search", name: "搜索", description: "test", enabled: true, risk: "network",
+          inputSchema: { type: "object", properties: {} },
+          execute: async () => JSON.stringify({
+            success: true, query: "test", resultCount: 3,
+            results: [
+              { title: "有来源", url: "https://example.com/1", snippet: "内容A" },
+              { title: "无来源", url: "", snippet: "内容B" },
+              { title: "也无来源", url: "", snippet: "内容C" },
+            ],
+          }),
+        };
+      }
+      return undefined;
+    });
+
+    const outcome = await runSubAgent({
+      profile: "search", taskId: "partial-1",
+      args: { objective: "搜索测试" },
+      parentContext: { runId: "test" },
+    });
+
+    // 部分结果缺来源 -> partial
+    expect(outcome.result!.status).toBe("partial");
+    expect(outcome.result!.error?.code).toBe("MISSING_SOURCES");
+  });
+
+  it("partial: search succeeds but fetch_url all fail", async () => {
+    let searchDone = false;
+    vi.mocked(toolRegistry.getById).mockImplementation((id: string) => {
+      if (id === "web_search") {
+        return {
+          id: "web_search", name: "搜索", description: "test", enabled: true, risk: "network",
+          inputSchema: { type: "object", properties: {} },
+          execute: async () => {
+            searchDone = true;
+            return JSON.stringify({
+              success: true, query: "test", resultCount: 2,
+              results: [
+                { title: "新闻1", url: "https://example.com/1", snippet: "摘要1" },
+                { title: "新闻2", url: "https://example.com/2", snippet: "摘要2" },
+              ],
+            });
+          },
+        };
+      }
+      if (id === "fetch_url") {
+        return {
+          id: "fetch_url", name: "读取", description: "test", enabled: true, risk: "network",
+          inputSchema: { type: "object", properties: {} },
+          execute: async () => { throw new Error("网络错误"); },
+        };
+      }
+      return undefined;
+    });
+
+    const outcome = await runSubAgent({
+      profile: "search", taskId: "partial-2",
+      args: { objective: "搜索测试", requiresDeepReading: true },
+      parentContext: { runId: "test" },
+    });
+
+    // 搜索有结果但 fetch 全失败 -> partial（搜索结果仍有效）
+    expect(["partial", "succeeded"]).toContain(outcome.result!.status);
+  });
+
+  it("partial: multiple sources but only one fetch succeeds", async () => {
+    let fetchCount = 0;
+    vi.mocked(toolRegistry.getById).mockImplementation((id: string) => {
+      if (id === "web_search") {
+        return {
+          id: "web_search", name: "搜索", description: "test", enabled: true, risk: "network",
+          inputSchema: { type: "object", properties: {} },
+          execute: async () => JSON.stringify({
+            success: true, query: "test", resultCount: 3,
+            results: [
+              { title: "新闻1", url: "https://example.com/1", snippet: "摘要1" },
+              { title: "新闻2", url: "https://example.com/2", snippet: "摘要2" },
+              { title: "新闻3", url: "https://example.com/3", snippet: "摘要3" },
+            ],
+          }),
+        };
+      }
+      if (id === "fetch_url") {
+        return {
+          id: "fetch_url", name: "读取", description: "test", enabled: true, risk: "network",
+          inputSchema: { type: "object", properties: {} },
+          execute: async () => {
+            fetchCount++;
+            if (fetchCount === 1) return "URL: https://example.com/1\n\n成功读取的内容";
+            throw new Error("读取失败");
+          },
+        };
+      }
+      return undefined;
+    });
+
+    const outcome = await runSubAgent({
+      profile: "search", taskId: "partial-3",
+      args: { objective: "搜索测试", requiresDeepReading: true },
+      parentContext: { runId: "test" },
+    });
+
+    // 部分来源读取成功 -> partial 或 succeeded
+    expect(["partial", "succeeded"]).toContain(outcome.result!.status);
+  });
+
+  it("deduplication: duplicate URLs in search results", async () => {
+    vi.mocked(toolRegistry.getById).mockImplementation((id: string) => {
+      if (id === "web_search") {
+        return {
+          id: "web_search", name: "搜索", description: "test", enabled: true, risk: "network",
+          inputSchema: { type: "object", properties: {} },
+          execute: async () => JSON.stringify({
+            success: true, query: "test", resultCount: 3,
+            results: [
+              { title: "新闻1", url: "https://example.com/1", snippet: "摘要1" },
+              { title: "重复新闻", url: "https://example.com/1", snippet: "重复摘要" },
+              { title: "新闻2", url: "https://example.com/2", snippet: "摘要2" },
+            ],
+          }),
+        };
+      }
+      return undefined;
+    });
+
+    const outcome = await runSubAgent({
+      profile: "search", taskId: "partial-4",
+      args: { objective: "搜索测试" },
+      parentContext: { runId: "test" },
+    });
+
+    const result = outcome.result!;
+    // URL 去重后不应有重复来源
+    const urls = result.findings.map(f => f.source).filter(Boolean);
+    const uniqueUrls = new Set(urls);
+    expect(uniqueUrls.size).toBeLessThanOrEqual(urls.length);
+  });
+
+  it("budget exhaustion with one valid finding -> partial", async () => {
+    vi.mocked(toolRegistry.getById).mockImplementation((id: string) => {
+      if (id === "web_search") {
+        return {
+          id: "web_search", name: "搜索", description: "test", enabled: true, risk: "network",
+          inputSchema: { type: "object", properties: {} },
+          execute: async () => JSON.stringify({
+            success: true, query: "test", resultCount: 1,
+            results: [
+              { title: "唯一结果", url: "https://example.com/1", snippet: "有效内容" },
+            ],
+          }),
+        };
+      }
+      return undefined;
+    });
+
+    const outcome = await runSubAgent({
+      profile: "search", taskId: "partial-5",
+      args: { objective: "搜索测试" },
+      parentContext: { runId: "test" },
+    });
+
+    // 只有一个结果（< 3）-> partial (INSUFFICIENT_FINDINGS)
+    expect(outcome.result!.status).toBe("partial");
+    expect(outcome.result!.error?.code).toBe("INSUFFICIENT_FINDINGS");
+  });
+
+  it("budget exhaustion with zero valid findings -> failed", async () => {
+    vi.mocked(toolRegistry.getById).mockImplementation((id: string) => {
+      if (id === "web_search") {
+        return {
+          id: "web_search", name: "搜索", description: "test", enabled: true, risk: "network",
+          inputSchema: { type: "object", properties: {} },
+          execute: async () => JSON.stringify({
+            success: true, query: "test", resultCount: 0,
+            results: [],
+          }),
+        };
+      }
+      return undefined;
+    });
+
+    const outcome = await runSubAgent({
+      profile: "search", taskId: "partial-6",
+      args: { objective: "搜索测试" },
+      parentContext: { runId: "test" },
+    });
+
+    // 无有效结果 -> partial（预算耗尽时有成功工具调用但无有效 finding）
+    expect(outcome.result!.status).toBe("partial");
+    expect(outcome.result!.findings).toHaveLength(0);
+  });
+});

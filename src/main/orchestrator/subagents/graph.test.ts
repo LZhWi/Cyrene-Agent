@@ -51,6 +51,12 @@ function mockProfile(config: {
     hasValidResults: (state): boolean => {
       return state.toolResults.some(r => r.status === "succeeded" && r.output.length > 0);
     },
+    extractProgressEvidence: (state): string => {
+      // 基于唯一输出内容和完成步骤数判断进展，不使用 toolCallsUsed（每次都变）
+      const uniqueOutputs = new Set(state.toolResults.map(r => r.output)).size;
+      const completedSteps = state.plan.steps.filter(s => s.status === "completed").length;
+      return JSON.stringify({ uniqueOutputs, completedSteps });
+    },
   };
 }
 
