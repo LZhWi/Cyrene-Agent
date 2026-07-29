@@ -275,14 +275,18 @@ async function executeRunShell(args: Record<string, unknown>): Promise<string> {
   const result = await runShellOnce(cmd, cmdArgs, cwd);
   console.log(LOG_PREFIX, "run_shell 完成 exitCode=" + result.exitCode + " stdout.len=" + result.stdout.length + " stderr.len=" + result.stderr.length);
 
-  const lines: string[] = [];
-  lines.push("$ " + cmd + (cmdArgs.length ? " " + cmdArgs.join(" ") : ""));
-  if (cwd) lines.push("(cwd: " + cwd + ")");
-  lines.push("exitCode: " + result.exitCode);
-  if (result.stdout) lines.push("--- stdout ---\n" + result.stdout.trimEnd());
-  if (result.stderr) lines.push("--- stderr ---\n" + result.stderr.trimEnd());
-  if (result.truncated) lines.push("[输出已截断]");
-  return lines.join("\n");
+  // 结构化返回（保留 ShellResult 字段，供证据收集器解析）
+  return JSON.stringify({
+    command: cmd,
+    args: cmdArgs,
+    cwd,
+    exitCode: result.exitCode,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    timedOut: false,  // runShellOnce 超时时通过 kill 处理，此处为正常返回
+    truncated: result.truncated,
+    policy: "read_only",
+  });
 }
 
 toolRegistry.register({

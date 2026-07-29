@@ -252,8 +252,13 @@ async function executeWriteFile(args: Record<string, unknown>): Promise<string> 
   }
 
   const st = safeStat(filePath);
-  return "[OK] 已" + (append ? "追加" : "写入") + ": " + filePath +
-    (st ? "\nsize: " + humanBytes(st.size) : "");
+  return JSON.stringify({
+    tool: "write_file",
+    filePath,
+    action: append ? "appended" : "written",
+    sizeBytes: st?.size,
+    success: true,
+  });
 }
 
 function resolveWriteFilePolicy(args: Record<string, unknown>): VerificationPolicy {

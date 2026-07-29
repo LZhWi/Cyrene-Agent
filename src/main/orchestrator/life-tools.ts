@@ -329,8 +329,15 @@ function registerApplyPatchTool(): void {
 
       const newContent = content.replace(oldStr, newStr);
       fs.writeFileSync(filePath, newContent, "utf8");
-      console.log(LOG_PREFIX, "apply_patch:", filePath);
-      return `[apply_patch] 已更新 ${filePath}`;
+      const size = fs.statSync(filePath).size;
+      console.log(LOG_PREFIX, "apply_patch:", filePath, "size=" + size);
+      return JSON.stringify({
+        tool: "apply_patch",
+        filePath,
+        action: "modified",
+        sizeBytes: size,
+        success: true,
+      });
     },
   });
 }
