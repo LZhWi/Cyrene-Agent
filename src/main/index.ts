@@ -4765,13 +4765,13 @@ app.whenReady().then(async () => {
   registerEmailTools();
   syncBuiltInToolToggles(loadGeneralSettings());
 
-  // Cline Coding Agent（Feature Flag 控制，默认关闭）
+  // Cline Coding Agent（实验分支默认开启，合并 master 前改为 false）
   registerClineCodingAgent(
     () => {
       const s = loadModelSettings();
       return s.apiKey ? { providerId: "openai-compatible", modelId: s.model, apiKey: s.apiKey, baseUrl: s.baseUrl } : null;
     },
-    false, // TODO: 从 GeneralSettings.enableClineCodingAgent 读取
+    true,
   );
 
   // 内置 MCP 自动连接：Playwright (默认关闭,选项控制)

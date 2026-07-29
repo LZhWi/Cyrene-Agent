@@ -1,0 +1,6 @@
+{
+  "name": "cline-integration-fixture",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "临时 TypeScript 项目，用于 Cline 集成验收。验收后可删除。"
+}
