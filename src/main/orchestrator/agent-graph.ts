@@ -152,6 +152,131 @@ export function resolveCompletionStatus(
   return { status: "completed", reason: "无代码修改" };
 }
 
+// ── Finalization Guard（纯函数，四态） ──────────────────────
+
+export type FinalizationDisposition =
+  | { kind: "allow_success"; update?: Partial<AgentGraphState> }
+  | { kind: "allow_unverified"; update: Partial<AgentGraphState> }
+  | { kind: "allow_failure"; reason: string }
+  | { kind: "block"; redirectTo: "decide" | "planVerify" | "replan"; reason: string; update?: Partial<AgentGraphState> };
+
+/**
+ * 纯函数 Finalization Guard：检查是否允许成功收尾。
+ * 不修改输入 state，返回 disposition 和可选 update 由调用节点应用。
+ *
+ * 覆盖三处调用：routeAfterTool -> soul, planVerify -> soul, decide -> respond
+ */
+export function checkFinalizationGuard(state: AgentGraphState): FinalizationDisposition {
+  // ── Rule 1: Plan 状态检查（如果有 Plan）──
+  if (state.taskPlan) {
+    const planStatus = state.taskPlan.status;
+    if (planStatus === "running") {
+      return {
+        kind: "block",
+        redirectTo: "planVerify",
+        reason: "计划仍在运行中",
+      };
+    }
+    if (planStatus === "failed") {
+      return { kind: "allow_failure", reason: "计划执行失败" };
+    }
+    if (planStatus === "cancelled") {
+      return { kind: "allow_failure", reason: "计划已取消" };
+    }
+    if (planStatus === "paused" || planStatus === "awaiting_user") {
+      return { kind: "block", redirectTo: "decide", reason: "计划暂停或等待用户输入" };
+    }
+    // planStatus === "completed" -> 继续检查代码验证
+  }
+
+  // ── Rule 2: 代码验证状态检查 ──
+  const cv = state.codeVerification;
+
+  // 无代码修改 -> 正常完成
+  if (!cv || cv.mutationRevision === 0) {
+    return { kind: "allow_success" };
+  }
+
+  // 用户明确授权跳过验证
+  if (cv.status === "pending" && state.verificationWaiver) {
+    return {
+      kind: "allow_unverified",
+      update: {
+        codeVerification: { ...cv, status: "skipped" as const },
+      },
+    };
+  }
+
+  // 当前 revision 已验证
+  if (cv.status === "passed" && cv.verifiedRevision === cv.mutationRevision) {
+    return { kind: "allow_success" };
+  }
+
+  // 有未验证修改
+  if (cv.status === "pending") {
+    if (hasRemainingVerificationBudget(state)) {
+      return {
+        kind: "block",
+        redirectTo: "decide",
+        reason: "存在未验证的代码修改",
+        update: {
+          lastGateFailure: {
+            code: "E_VERIFICATION_REQUIRED",
+            disposition: "execution_policy",
+          },
+          requiredNextAction: {
+            capabilityId: "run_verification",
+            reason: "代码修改后必须运行验证",
+          },
+        },
+      };
+    }
+    return { kind: "allow_failure", reason: "验证预算耗尽，修改未经验证" };
+  }
+
+  // 验证失败
+  if (cv.status === "failed") {
+    if (state.requiredNextAction?.capabilityId === "run_verification") {
+      // 瞬时故障：保留约束，允许重试
+      if (hasRemainingVerificationBudget(state)) {
+        return { kind: "block", redirectTo: "decide", reason: "验证超时，请重试" };
+      }
+      return { kind: "allow_failure", reason: "验证持续超时且预算耗尽" };
+    }
+    // 非瞬时故障：约束已清除，允许修复
+    if (hasRemainingRepairBudget(state)) {
+      return { kind: "block", redirectTo: "decide", reason: "验证失败，需要修复代码" };
+    }
+    return { kind: "allow_failure", reason: "验证失败且修复预算耗尽" };
+  }
+
+  // skipped
+  if (cv.status === "skipped") {
+    return { kind: "allow_unverified", update: {} };
+  }
+
+  return { kind: "allow_success" };
+}
+
+function hasRemainingVerificationBudget(state: AgentGraphState): boolean {
+  if (state.iterationCount >= 30) return false;  // HARD_MAX_ITERATIONS
+  if (state.taskPlan) {
+    const hasPendingVerification = state.taskPlan.steps.some(s =>
+      (s.status === "pending" || s.status === "running") &&
+      s.completionPolicy.allOf?.some(c => c.kind === "verification_passed")
+    );
+    if (hasPendingVerification) return true;
+  }
+  if (state.replanCount < 2) return true;  // DEFAULT_MAX_REPLANS
+  return false;
+}
+
+function hasRemainingRepairBudget(state: AgentGraphState): boolean {
+  if (state.iterationCount >= 30) return false;
+  if (state.replanCount < 2) return true;
+  return false;
+}
+
 export interface CodeVerificationState {
   /** 当前代码修改版本号（只在 verificationPolicy=code 的 mutation 成功时 +1） */
   mutationRevision: number;
@@ -320,6 +445,86 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
     .addNode("decide", async (state) => {
       deps.trace?.("decide", state);
       const decision = await deps.decide(state);
+
+      // ── requiredNextAction 硬约束：代码修改后必须验证 ──
+      if (state.requiredNextAction && decision.decision === "act") {
+        if (decision.capability !== state.requiredNextAction.capabilityId) {
+          // Action Gate 选择了其他能力 -> 拒绝，重新决策
+          return {
+            decision: {
+              decision: "failure" as const,
+              reason: "action_gate_failed",
+              code: "E_REQUIRED_CAPABILITY_NOT_SELECTED",
+              disposition: "execution_policy",
+              toolExecuted: false,
+            },
+            lastGateFailure: {
+              code: "E_REQUIRED_CAPABILITY_NOT_SELECTED",
+              disposition: "execution_policy",
+            },
+          };
+        }
+      }
+      if (state.requiredNextAction && decision.decision === "respond") {
+        // 试图 respond 但有 requiredNextAction -> 阻止
+        return {
+          decision: {
+            decision: "failure" as const,
+            reason: "action_gate_failed",
+            code: "E_VERIFICATION_REQUIRED",
+            disposition: "execution_policy",
+            toolExecuted: false,
+          },
+          lastGateFailure: {
+            code: "E_VERIFICATION_REQUIRED",
+            disposition: "execution_policy",
+          },
+        };
+      }
+
+      // ── Finalization Guard：Action Gate 返回 respond 时检查 ──
+      if (decision.decision === "respond") {
+        const guard = checkFinalizationGuard(state);
+        if (guard.kind === "block") {
+          // 阻止 respond，注入失败信息并重新决策
+          return {
+            decision: {
+              decision: "failure" as const,
+              reason: "action_gate_failed",
+              code: "E_FINALIZATION_BLOCKED",
+              disposition: "execution_policy",
+              toolExecuted: false,
+            },
+            lastGateFailure: {
+              code: "E_FINALIZATION_BLOCKED",
+              disposition: "execution_policy",
+            },
+            ...(guard.update ?? {}),
+          };
+        }
+        if (guard.kind === "allow_failure") {
+          return {
+            decision,
+            finalizationOutcome: resolveCompletionStatus(state, guard),
+            lastGateFailure: undefined,
+          };
+        }
+        if (guard.kind === "allow_unverified") {
+          return {
+            decision,
+            ...(guard.update ?? {}),
+            finalizationOutcome: resolveCompletionStatus(state, guard),
+            lastGateFailure: undefined,
+          };
+        }
+        // allow_success
+        return {
+          decision,
+          finalizationOutcome: resolveCompletionStatus(state, guard),
+          lastGateFailure: undefined,
+        };
+      }
+
       // act decision 同步写入 currentAction，供 routeAfterTool 读取 afterSuccess
       // lastGateFailure 在 decide 回调读取后清空，避免跨轮残留
       return {
@@ -426,12 +631,59 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
         }
       }
 
-      // 去 soul 时把 decision 改写成 respond
-      const gotoSoul = goto === "soul";
-      const update = {
-        ...(gotoSoul ? { decision: { decision: "respond" as const, reason: "tool_complete" } } : {}),
-        ...codeVerificationUpdate,
-      };
+      // ── Finalization Guard（当路由目标为 soul 时检查）──
+      if (goto === "soul") {
+        // 先应用证据收集更新，再检查 Guard
+        const stateWithEvidence = { ...state, ...codeVerificationUpdate };
+        const guard = checkFinalizationGuard(stateWithEvidence);
+
+        if (guard.kind === "block") {
+          return new Command({
+            update: {
+              ...codeVerificationUpdate,
+              ...(guard.update ?? {}),
+              ...(goto === "soul" ? { decision: undefined } : {}),
+            },
+            goto: guard.redirectTo,
+          });
+        }
+
+        if (guard.kind === "allow_failure") {
+          return new Command({
+            update: {
+              ...codeVerificationUpdate,
+              decision: { decision: "respond" as const, reason: "verification_failed" },
+              finalizationOutcome: resolveCompletionStatus(stateWithEvidence, guard),
+            },
+            goto: "soul",
+          });
+        }
+
+        if (guard.kind === "allow_unverified") {
+          return new Command({
+            update: {
+              ...codeVerificationUpdate,
+              ...(guard.update ?? {}),
+              decision: { decision: "respond" as const, reason: "tool_complete" },
+              finalizationOutcome: resolveCompletionStatus(stateWithEvidence, guard),
+            },
+            goto: "soul",
+          });
+        }
+
+        // allow_success
+        return new Command({
+          update: {
+            ...codeVerificationUpdate,
+            decision: { decision: "respond" as const, reason: "tool_complete" },
+            finalizationOutcome: resolveCompletionStatus(stateWithEvidence, guard),
+          },
+          goto: "soul",
+        });
+      }
+
+      // 非 soul 路由（decide/planVerify），直接转发
+      const update = { ...codeVerificationUpdate };
       return new Command({ update, goto });
     })
     .addNode("askUser", async (state) => {
@@ -559,8 +811,20 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
         // 全部完成
         plan.status = "completed";
         deps.onPlanUpdate?.(plan, state.replanCount);
+        // Finalization Guard：Plan 完成后检查代码验证状态
+        const guard = checkFinalizationGuard({ ...state, taskPlan: plan });
+        if (guard.kind === "block") {
+          return new Command({
+            update: { taskPlan: plan, ...(guard.update ?? {}) },
+            goto: guard.redirectTo,
+          });
+        }
         return new Command({
-          update: { taskPlan: plan, decision: { decision: "respond" as const, reason: "plan_completed" } },
+          update: {
+            taskPlan: plan,
+            decision: { decision: "respond" as const, reason: "plan_completed" },
+            finalizationOutcome: resolveCompletionStatus({ ...state, taskPlan: plan }, guard),
+          },
           goto: "soul",
         });
       }
