@@ -1032,19 +1032,22 @@ async function anySearchSearch(query: string, key: string, signal?: AbortSignal)
     const data = await resp.json() as {
       data: { results?: Array<{ title: string; url: string; content: string; snippet: string }> };
     };
-    const results = data.data.results ?? [];
-    if (results.length === 0) {
+    const anySearchResults = data.data.results ?? [];
+    if (anySearchResults.length === 0) {
       return `[提示] 搜索"${query}"没有找到结果。`;
     }
-    const lines: string[] = [`搜索"${query}"的结果（共 ${results.length} 条）：`, ""];
-    for (let i = 0; i < results.length; i++) {
-      const r = results[i];
-      lines.push(`【${i + 1}】${r.title}`);
-      lines.push(`  链接：${r.url}`);
-      lines.push(`  摘要：${r.content || r.snippet || "（无摘要）"}`);
-      lines.push("");
-    }
-    return lines.join("\n");
+    const results: WebSearchResult[] = anySearchResults.map((r) => ({
+      title: r.title,
+      url: r.url,
+      snippet: truncateSnippet(r.content || r.snippet || ""),
+    }));
+    const output: WebSearchOutput = {
+      success: true,
+      query,
+      resultCount: results.length,
+      results,
+    };
+    return JSON.stringify(output);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`搜索失败：${msg}`);

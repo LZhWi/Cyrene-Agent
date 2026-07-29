@@ -92,16 +92,21 @@ body {
   gap: 5px;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   overflow-y: auto;
-  scrollbar-width: thin;
+  overflow-x: hidden;
+  scrollbar-width: none;            /* Gecko: hide scrollbar */
   scrollbar-color: var(--rb-border-strong) transparent;
 }
+
+.settings-nav__list::-webkit-scrollbar { width: 0; height: 0; }
 
 .nav-item {
   display: flex;
   align-items: center;
   gap: 8px;
   width: 100%;
+  min-width: 0;
   padding: 8px 10px;
   border-radius: 12px;
   color: rgba(235, 229, 245, 0.70);
