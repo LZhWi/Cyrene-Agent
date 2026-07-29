@@ -8,9 +8,14 @@ export type TimeoutSettings = {
   userChoiceTimeout: number,
   testTimeout: number,
   searchTimeout: number,
+  /** @deprecated 使用 modelRequestTimeoutSec 替代 */
   profileTotalBudgetMs: number,
+  /** @deprecated 使用 modelRequestTimeoutSec 替代 */
   profilePerAttemptTimeoutMs: number,
+  /** @deprecated 使用 modelRequestTimeoutSec 替代 */
   profileMinimumRemainingBudgetMs: number,
+  /** 模型请求超时（秒），所有非流式 Structured Output 调用统一使用 */
+  modelRequestTimeoutSec?: number,
 }
 export const DEFAULT_CALL_TIMEOUT_MS = 30000;
 export const DEFAULT_PER_ROUND_TIMEOUT_MS = 75_000;

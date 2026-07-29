@@ -11,6 +11,7 @@ import type {
   StructuredOutputStage,
 } from "./types";
 import { getTimeoutSettings } from "../../timeout-manager";
+import { resolveModelRequestTimeoutMs, resolveTotalBudgetMs } from "../config/model-timeout";
 
 export interface StructuredGenerationResponse {
   text: string;
@@ -90,17 +91,29 @@ export async function runStructuredOutput<T, TRequest>(
       policyOverride = true;
     }
   };
-  if (timeoutSettings.profileTotalBudgetMs !== -1) {
+
+  // 统一模型请求超时：优先使用 modelRequestTimeoutSec（新配置）
+  // 否则回退到旧的 profilePerAttemptTimeoutMs/profileTotalBudgetMs
+  if (timeoutSettings.modelRequestTimeoutSec != null) {
+    const perAttempt = resolveModelRequestTimeoutMs(timeoutSettings);
+    const totalBudget = resolveTotalBudgetMs(perAttempt, policy.maxAttempts);
     clonePolicyIfNeeded();
-    policy.totalBudgetMs = timeoutSettings.profileTotalBudgetMs;
-  }
-  if (timeoutSettings.profilePerAttemptTimeoutMs !== -1) {
-    clonePolicyIfNeeded();
-    policy.perAttemptTimeoutMs = timeoutSettings.profilePerAttemptTimeoutMs;
-  }
-  if (timeoutSettings.profileMinimumRemainingBudgetMs !== -1) {
-    clonePolicyIfNeeded();
-    policy.minimumRemainingBudgetMs = timeoutSettings.profileMinimumRemainingBudgetMs;
+    policy.perAttemptTimeoutMs = perAttempt;
+    policy.totalBudgetMs = totalBudget;
+  } else {
+    // 兼容旧配置
+    if (timeoutSettings.profileTotalBudgetMs !== -1) {
+      clonePolicyIfNeeded();
+      policy.totalBudgetMs = timeoutSettings.profileTotalBudgetMs;
+    }
+    if (timeoutSettings.profilePerAttemptTimeoutMs !== -1) {
+      clonePolicyIfNeeded();
+      policy.perAttemptTimeoutMs = timeoutSettings.profilePerAttemptTimeoutMs;
+    }
+    if (timeoutSettings.profileMinimumRemainingBudgetMs !== -1) {
+      clonePolicyIfNeeded();
+      policy.minimumRemainingBudgetMs = timeoutSettings.profileMinimumRemainingBudgetMs;
+    }
   }
 
   const finish = (

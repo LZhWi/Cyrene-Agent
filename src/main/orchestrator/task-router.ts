@@ -235,7 +235,7 @@ export async function runTaskRouter(input: RunTaskRouterInput): Promise<TaskRout
   // 2. LLM 调用
   try {
     const result = await runStructuredOutput<TaskRoute, ChatRequest>({
-      stage: "action_gate", // 复用 action_gate stage 的 repair 策略
+      stage: "task_router",
       profile: input.profile,
       signal: input.signal,
       buildRequest: () => buildRouterRequest(input),

@@ -907,6 +907,8 @@ const timeoutProfilePerAttemptInput = document.getElementById("timeout-profile-p
 const timeoutProfilePerAttemptReset = document.getElementById("timeout-profile-per-attempt-reset-btn") as HTMLButtonElement;
 const timeoutProfileRemainingInput = document.getElementById("timeout-profile-remaining") as HTMLInputElement;
 const timeoutProfileRemainingReset = document.getElementById("timeout-profile-remaining-reset-btn") as HTMLButtonElement;
+const modelRequestTimeoutSecInput = document.getElementById("model-request-timeout-sec") as HTMLInputElement;
+const modelRequestTimeoutSecReset = document.getElementById("model-request-timeout-sec-reset-btn") as HTMLButtonElement;
 
 const fcModeLangGraphButton = document.getElementById("fc-mode-langgraph") as HTMLButtonElement;
 const fcModeEnableOptimizationButton = document.getElementById("fc-mode-enable-optimization") as HTMLButtonElement;
@@ -1669,6 +1671,7 @@ async function loadTimeoutSettings() {
     timeoutProfileTotalBudgetInput.value = cfg.profileTotalBudgetMs === -1 ? "" : String(cfg.profileTotalBudgetMs / 1000);
     timeoutProfilePerAttemptInput.value = cfg.profilePerAttemptTimeoutMs === -1 ? "" : String(cfg.profilePerAttemptTimeoutMs / 1000);
     timeoutProfileRemainingInput.value = cfg.profileMinimumRemainingBudgetMs === -1 ? "" : String(cfg.profileMinimumRemainingBudgetMs / 1000);
+    modelRequestTimeoutSecInput.value = cfg.modelRequestTimeoutSec != null ? String(cfg.modelRequestTimeoutSec) : "";
     setTimeoutSaveStatus("时间设置保存后，对后续请求生效．");
   } catch {
     setTimeoutSaveStatus("读取偏好失败", "is-error");
@@ -1726,6 +1729,7 @@ async function saveTimeoutSettings(saveTestTimeout: boolean) {
         profileTotalBudgetMs: parseN1SecToMsOrThrow(timeoutProfileTotalBudgetInput.value, "阶段总时间预算"),
         profilePerAttemptTimeoutMs: parseN1SecToMsOrThrow(timeoutProfilePerAttemptInput.value, "单次尝试超时"),
         profileMinimumRemainingBudgetMs: parseN1SecToMsOrThrow(timeoutProfileRemainingInput.value, "最小剩余时间"),
+        modelRequestTimeoutSec: modelRequestTimeoutSecInput.value === "" ? undefined : parsePositiveIntOrThrow(modelRequestTimeoutSecInput.value, "模型请求超时"),
       };
     } else {
       settings = {
@@ -1767,6 +1771,7 @@ timeoutUserChoiceReset.addEventListener("click", () => { timeoutUserChoiceInput.
 timeoutProfileTotalBudgetReset.addEventListener("click", () => { timeoutProfileTotalBudgetInput.value = "" });
 timeoutProfilePerAttemptReset.addEventListener("click", () => { timeoutProfilePerAttemptInput.value = "" });
 timeoutProfileRemainingReset.addEventListener("click", () => { timeoutProfileRemainingInput.value = "" });
+modelRequestTimeoutSecReset.addEventListener("click", () => { modelRequestTimeoutSecInput.value = "" });
 
 fcModeLangGraphButton.addEventListener("click", async () => {
   await window.settings!.saveConfig({ disableLangGraph: false });

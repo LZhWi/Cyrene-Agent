@@ -620,7 +620,7 @@ export async function runCreatePlan(input: RunCreatePlanInput): Promise<TaskPlan
   };
 
   const result = await runStructuredOutput<TaskPlan, ChatRequest>({
-    stage: "action_gate",
+    stage: "planner",
     profile: input.profile,
     signal: input.signal,
     buildRequest: () => request,
@@ -717,7 +717,7 @@ export async function runReplan(input: RunReplanInput): Promise<PlanStep[]> {
   };
 
   const result = await runStructuredOutput<{ replacementSteps: PlanStep[] }, ChatRequest>({
-    stage: "action_gate",
+    stage: "planner",
     profile: input.profile,
     signal: input.signal,
     buildRequest: () => request,

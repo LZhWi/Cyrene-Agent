@@ -315,6 +315,14 @@
                 <button type="button" class="timeout-reset" id="timeout-profile-remaining-reset-btn" title="重置为默认">↻</button>
               </div>
             </label>
+            <label class="field field--full" data-mode="langgraph">
+              <span>模型请求超时（秒）：所有 Structured Output 调用统一使用</span>
+              <div class="timeout-row">
+                <input id="model-request-timeout-sec" type="number" min="10" max="600" step="5" placeholder="60" autocomplete="off" />
+                <button type="button" class="timeout-reset" id="model-request-timeout-sec-reset-btn" title="重置为默认（60秒）">↻</button>
+              </div>
+              <span class="field-hint">范围：10~600 秒，默认 60 秒。影响 Task Router、Planner、Action Gate 等所有模型调用。</span>
+            </label>
           </div>
           <div class="form-actions">
             <div class="save-status" id="runtime-save-status">等待保存</div>
