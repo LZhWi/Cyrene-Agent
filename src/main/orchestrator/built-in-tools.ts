@@ -186,13 +186,13 @@ function killTree(child: ReturnType<typeof spawn>): void {
   }
 }
 
-function runShellOnce(command: string, args: string[], cwd?: string): Promise<ShellResult> {
+function runShellOnce(command: string, args: string[], cwd?: string, extraEnv?: Record<string, string>): Promise<ShellResult> {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: cwd || undefined,
       shell: false,
       windowsHide: true,
-      env: process.env,
+      env: { ...process.env, ...extraEnv },
       // stdin→/dev/null(NUL)：误启动交互式进程(python/node REPL)时让它读到 EOF 立即退出，
       // 不再卡在"等 stdin 输入"上耗满超时。stdout/stderr 仍 pipe 来收集输出。
       stdio: ["ignore", "pipe", "pipe"],
@@ -373,42 +373,105 @@ toolRegistry.register({
     const cwd = args.cwd ? String(args.cwd) : undefined;
 
     if (!verificationType) return JSON.stringify({
+      success: false, errorCode: "INVALID_INPUT", error: "verificationType 不能为空",
       verificationType: "", command: "", exitCode: -1,
       stdout: "", stderr: "[错误] verificationType 不能为空",
-      timedOut: false, passed: false, truncated: false, durationMs: 0,
+      timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
     });
 
     // 根据验证类型选择命令（白名单，不接受任意命令）
-    const verificationCommands: Record<string, { cmd: string; args: string[] }> = {
-      typecheck: { cmd: "npx", args: ["tsc", "-p", "tsconfig.main.json", "--noEmit"] },
-      test: { cmd: "npx", args: ["vitest", "run", "--reporter=verbose"] },
-      build: { cmd: "npm", args: ["run", "build:main"] },
-      lint: { cmd: "npx", args: ["eslint", "src/main", "--max-warnings=0"] },
-    };
+    const fs = require("fs");
+    const path = require("path");
+
+    // typecheck: 用 node + require.resolve 替代 npx（避免 Windows spawn 失败）
+    let verificationCommands: Record<string, { cmd: string; args: string[]; env?: Record<string, string> }>;
+
+    if (verificationType === "typecheck") {
+      // 1. 确定 tsconfig 路径
+      let tsconfigPath: string;
+      if (cwd) {
+        const hasMain = fs.existsSync(path.join(cwd, "tsconfig.main.json"));
+        const hasDefault = fs.existsSync(path.join(cwd, "tsconfig.json"));
+        if (hasMain) {
+          tsconfigPath = path.join(cwd, "tsconfig.main.json");
+        } else if (hasDefault) {
+          tsconfigPath = path.join(cwd, "tsconfig.json");
+        } else {
+          return JSON.stringify({
+            success: false, errorCode: "VERIFICATION_CONFIG_NOT_FOUND",
+            error: `cwd 下未找到 tsconfig.main.json 或 tsconfig.json: ${cwd}`,
+            verificationType, command: "", exitCode: -1,
+            stdout: "", stderr: `[错误] 未找到 TypeScript 配置文件: ${cwd}`,
+            timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
+            actualCwd: cwd,
+          });
+        }
+      } else {
+        tsconfigPath = "tsconfig.main.json";
+      }
+
+      // 2. 用 require.resolve 找本地 tsc（禁止 npx 在线安装）
+      let tscPath: string;
+      try {
+        tscPath = require.resolve("typescript/bin/tsc", { paths: cwd ? [cwd] : [process.cwd()] });
+      } catch {
+        return JSON.stringify({
+          success: false, errorCode: "TYPESCRIPT_NOT_FOUND",
+          error: `本地 TypeScript 未安装: ${cwd ?? process.cwd()}`,
+          verificationType, command: "", exitCode: -1,
+          stdout: "", stderr: `[TYPESCRIPT_NOT_FOUND] require.resolve("typescript/bin/tsc") failed in ${cwd ?? process.cwd()}`,
+          timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
+          actualCwd: cwd,
+        });
+      }
+
+      // 3. 用 node 直接执行 tsc（ELECTRON_RUN_AS_NODE=1）
+      verificationCommands = {
+        typecheck: {
+          cmd: process.execPath,
+          args: [tscPath, "-p", tsconfigPath, "--noEmit"],
+          env: { ELECTRON_RUN_AS_NODE: "1" },
+        },
+      };
+    } else {
+      verificationCommands = {
+        test: { cmd: "npx", args: ["vitest", "run", "--reporter=verbose"] },
+        build: { cmd: "npm", args: ["run", "build:main"] },
+        lint: { cmd: "npx", args: ["eslint", "src/main", "--max-warnings=0"] },
+      };
+    }
 
     const command = verificationCommands[verificationType];
     if (!command) return JSON.stringify({
+      success: false, errorCode: "INVALID_INPUT",
+      error: `不支持的验证类型: ${verificationType}，支持: typecheck/test/build/lint`,
       verificationType, command: "", exitCode: -1,
-      stdout: "", stderr: `[错误] 不支持的验证类型: ${verificationType}，支持: typecheck/test/build/lint`,
-      timedOut: false, passed: false, truncated: false, durationMs: 0,
+      stdout: "", stderr: `[错误] 不支持的验证类型: ${verificationType}`,
+      timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
     });
 
     const startMs = Date.now();
-    console.log(LOG_PREFIX, "run_verification:", verificationType, command.cmd, command.args.join(" "), cwd ? "cwd=" + cwd : "");
+    const actualCommand = `${command.cmd} ${command.args.join(" ")}`;
+    console.log(LOG_PREFIX, "run_verification:", verificationType, actualCommand, cwd ? "cwd=" + cwd : "");
 
     try {
-      const result = await runShellOnce(command.cmd, command.args, cwd);
+      const result = await runShellOnce(command.cmd, command.args, cwd, command.env);
       const durationMs = Date.now() - startMs;
       const passed = result.exitCode === 0;
 
-      console.log(LOG_PREFIX, "run_verification 完成:", verificationType, "exitCode=" + result.exitCode, "passed=" + passed, "durationMs=" + durationMs);
+      console.log(LOG_PREFIX, "run_verification 完成:", verificationType,
+        "exitCode=" + result.exitCode, "passed=" + passed, "durationMs=" + durationMs,
+        "stdoutLen=" + result.stdout.length, "stderrLen=" + result.stderr.length);
 
       return JSON.stringify({
+        success: true,
         verificationType,
-        command: `${command.cmd} ${command.args.join(" ")}`,
+        command: actualCommand,
+        actualCwd: cwd || process.cwd(),
         exitCode: result.exitCode,
         stdout: result.stdout,
         stderr: result.stderr,
+        spawnError: null,
         timedOut: false,
         passed,
         truncated: result.truncated,
@@ -417,20 +480,32 @@ toolRegistry.register({
     } catch (err) {
       const durationMs = Date.now() - startMs;
       const msg = err instanceof Error ? err.message : String(err);
-      // 超时或 spawn 失败
+      const errCode = err instanceof Error && (err as any).code ? String((err as any).code) : undefined;
       const isTimeout = err instanceof Error && err.name === "AbortError";
-      console.error(LOG_PREFIX, "run_verification 失败:", verificationType, msg);
+      const errorCode = isTimeout ? "VERIFICATION_TIMEOUT" : "VERIFICATION_SPAWN_FAILED";
+      console.error(LOG_PREFIX, "run_verification 失败:", verificationType,
+        "errorCode:", errorCode,
+        "spawnErrorCode:", errCode,
+        "spawnErrorMsg:", msg,
+        "command:", actualCommand,
+        "cwd:", cwd);
 
       return JSON.stringify({
+        success: false,
+        errorCode,
+        error: `命令启动失败: ${msg}`,
         verificationType,
-        command: `${command.cmd} ${command.args.join(" ")}`,
+        command: actualCommand,
+        actualCwd: cwd || process.cwd(),
         exitCode: -1,
         stdout: "",
-        stderr: msg,
+        stderr: `[${errorCode}] command=${actualCommand} cwd=${cwd || process.cwd()} spawnErrorCode=${errCode ?? "n/a"} spawnErrorMsg=${msg}`,
+        spawnError: { code: errCode, message: msg },
         timedOut: isTimeout,
         passed: false,
         truncated: false,
         durationMs,
+        retryable: isTimeout,
       });
     }
   },

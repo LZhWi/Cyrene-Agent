@@ -34,6 +34,7 @@ export const DEFAULT_COMMAND_ALLOW_LIST: CommandAllowList = {
       allowedArgs: [
         ["tsc", "--noEmit"],
         ["tsc", "-p", "tsconfig.json", "--noEmit"],
+        ["tsc", "-p", "tsconfig.main.json", "--noEmit"],
         ["vitest", "run"],
         ["eslint", "src", "--max-warnings=0"],
       ],
@@ -44,6 +45,10 @@ export const DEFAULT_COMMAND_ALLOW_LIST: CommandAllowList = {
         ["test"],
         ["run", "test"],
       ],
+    },
+    {
+      name: "pwd",
+      allowedArgs: [[]],  // 无参数，只读
     },
   ],
 };

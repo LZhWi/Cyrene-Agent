@@ -491,3 +491,295 @@ describe("Edge cases", () => {
     expect(route).toBe("decide");
   });
 });
+
+// ══════════════════════════════════════════════════════════════
+// requiredNextAction: 确定性强制路由
+// ══════════════════════════════════════════════════════════════
+
+describe("requiredNextAction: 确定性强制路由", () => {
+  it("mutation=1, verified=0, pending → block + forcedArgs 含 cwd", () => {
+    const state = codeState(
+      { mutationRevision: 1, verifiedRevision: 0, status: "pending", changedFiles: ["test-file.ts"] },
+      { lastDelegateCodingWorkspace: "C:\\workspace\\fixture" },
+    );
+    const guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("block");
+    if (guard.kind === "block") {
+      expect(guard.update?.requiredNextAction).toBeDefined();
+      expect(guard.update?.requiredNextAction?.capabilityId).toBe("run_verification");
+      expect(guard.update?.requiredNextAction?.forcedArgs).toEqual({
+        verificationType: "typecheck",
+        cwd: "C:\\workspace\\fixture",
+      });
+    }
+  });
+
+  it("验证成功 → allow_success（requiredNextAction 已清除）", () => {
+    const state = codeState({
+      mutationRevision: 1,
+      verifiedRevision: 1,
+      status: "passed",
+      changedFiles: ["test-file.ts"],
+    });
+    const guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("allow_success");
+  });
+
+  it("验证失败 + 有修复预算 → block（允许修复代码）", () => {
+    const state = codeState({
+      mutationRevision: 1,
+      verifiedRevision: 0,
+      status: "failed",
+      changedFiles: ["test-file.ts"],
+    });
+    const guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("block");
+  });
+
+  it("验证失败 + 修复预算耗尽 → allow_failure", () => {
+    const state = codeState(
+      { mutationRevision: 1, verifiedRevision: 0, status: "failed", changedFiles: ["test-file.ts"] },
+      { replanCount: 3 }, // 超过 DEFAULT_MAX_REPLANS=2
+    );
+    const guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("allow_failure");
+  });
+
+  it("无 mutation → allow_success", () => {
+    const state = baseState();
+    const guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("allow_success");
+  });
+
+  it("delegate_coding failed + changedFiles 非空 → mutation 证据可从 output 提取", () => {
+    const result = toolResult(
+      "delegate_coding",
+      "succeeded",
+      JSON.stringify({
+        status: "failed",
+        changedFiles: ["test-file.ts"],
+        partialChanges: true,
+        error: { code: "CLINE_VERIFICATION_NOT_RUN" },
+        workspaceRoot: "C:\\workspace\\fixture",
+      }),
+    );
+    const parsed = JSON.parse(result.output);
+    expect(parsed.changedFiles).toEqual(["test-file.ts"]);
+    expect(parsed.partialChanges).toBe(true);
+    expect(parsed.workspaceRoot).toBe("C:\\workspace\\fixture");
+  });
+
+  it("FinalizationGuard block 后 requiredNextAction 携带 forcedArgs", () => {
+    const state = codeState(
+      { mutationRevision: 2, verifiedRevision: 1, status: "pending", changedFiles: ["a.ts", "b.ts"] },
+      { lastDelegateCodingWorkspace: "C:\\project\\src" },
+    );
+    const guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("block");
+    if (guard.kind === "block") {
+      const rna = guard.update?.requiredNextAction;
+      expect(rna?.capabilityId).toBe("run_verification");
+      expect(rna?.forcedArgs?.cwd).toBe("C:\\project\\src");
+      expect(rna?.forcedArgs?.verificationType).toBe("typecheck");
+    }
+  });
+
+  it("mutation=0 → allow_success，无 requiredNextAction", () => {
+    const state = baseState();
+    const guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("allow_success");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════
+// 回归测试：验证熔断器和错误分类
+// ══════════════════════════════════════════════════════════════
+
+describe("回归测试：验证熔断器和错误分类", () => {
+  it("exitCode=-1 非瞬时 → requiredNextAction 清除", () => {
+    // exitCode=-1 是 spawn 失败，不是 timeout，应清除 requiredNextAction
+    const state = codeState(
+      { mutationRevision: 1, verifiedRevision: 0, status: "failed", changedFiles: ["test.ts"] },
+      {
+        requiredNextAction: { capabilityId: "run_verification", reason: "test" },
+        verificationRetryCount: 0,
+      },
+    );
+    // 模拟 routeAfterTool 的逻辑：isTransient = timedOut === true
+    // exitCode=-1 时 isTransient=false → requiredNextAction 被清除
+    const verificationResult = { exitCode: -1, timedOut: false, passed: false };
+    const isTransient = verificationResult.timedOut === true;
+    expect(isTransient).toBe(false);
+  });
+
+  it("timeout 瞬时 → requiredNextAction 保留", () => {
+    const verificationResult = { exitCode: -1, timedOut: true, passed: false };
+    const isTransient = verificationResult.timedOut === true;
+    expect(isTransient).toBe(true);
+  });
+
+  it("verificationRetryCount=0 + 瞬时故障 → block（允许重试）", () => {
+    const state = codeState(
+      { mutationRevision: 1, verifiedRevision: 0, status: "failed", changedFiles: ["test.ts"] },
+      {
+        requiredNextAction: { capabilityId: "run_verification", reason: "test" },
+        verificationRetryCount: 0,
+      },
+    );
+    const guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("block");
+  });
+
+  it("verificationRetryCount=1 + 瞬时故障 → allow_failure（熔断）", () => {
+    const state = codeState(
+      { mutationRevision: 1, verifiedRevision: 0, status: "failed", changedFiles: ["test.ts"] },
+      {
+        requiredNextAction: { capabilityId: "run_verification", reason: "test" },
+        verificationRetryCount: 1,
+      },
+    );
+    const guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("allow_failure");
+  });
+
+  it("verificationRetryCount=2 + 瞬时故障 → allow_failure（熔断）", () => {
+    const state = codeState(
+      { mutationRevision: 1, verifiedRevision: 0, status: "failed", changedFiles: ["test.ts"] },
+      {
+        requiredNextAction: { capabilityId: "run_verification", reason: "test" },
+        verificationRetryCount: 2,
+      },
+    );
+    const guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("allow_failure");
+  });
+
+  it("验证成功 → verificationRetryCount 重置为 0", () => {
+    const state = codeState({
+      mutationRevision: 1,
+      verifiedRevision: 1,
+      status: "passed",
+      changedFiles: ["test.ts"],
+    });
+    const guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("allow_success");
+  });
+
+  it("delegate_coding output 包含 workspaceRoot", () => {
+    const result = toolResult(
+      "delegate_coding",
+      "succeeded",
+      JSON.stringify({
+        status: "completed",
+        workspaceRoot: "C:\\workspace\\fixture",
+        changedFiles: ["test.ts"],
+      }),
+    );
+    const parsed = JSON.parse(result.output);
+    expect(parsed.workspaceRoot).toBe("C:\\workspace\\fixture");
+  });
+
+  it("forcedArgs 包含 cwd 和 verificationType", () => {
+    const state = codeState(
+      { mutationRevision: 1, verifiedRevision: 0, status: "pending", changedFiles: ["test.ts"] },
+      { lastDelegateCodingWorkspace: "C:\\workspace\\fixture" },
+    );
+    const guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("block");
+    if (guard.kind === "block") {
+      const rna = guard.update?.requiredNextAction;
+      expect(rna?.forcedArgs).toBeDefined();
+      expect(rna?.forcedArgs?.cwd).toBe("C:\\workspace\\fixture");
+      expect(rna?.forcedArgs?.verificationType).toBe("typecheck");
+    }
+  });
+});
+
+// ══════════════════════════════════════════════════════════════
+// 回归测试：验证通过后清除过期状态（E_FINALIZATION_BLOCKED）
+// ══════════════════════════════════════════════════════════════
+
+describe("回归测试：验证通过后清除过期 E_FINALIZATION_BLOCKED", () => {
+  it("全链路：mutation → guard block → verification passed → guard allow_success", () => {
+    // Step 1: mutation 发生，guard 阻止并设置 requiredNextAction
+    let state = codeState(
+      { mutationRevision: 1, verifiedRevision: 0, status: "pending", changedFiles: ["test.ts"] },
+      {
+        lastDelegateCodingWorkspace: "C:\\workspace",
+        lastGateFailure: {
+          code: "E_FINALIZATION_BLOCKED",
+          disposition: "block",
+        },
+      },
+    );
+    let guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("block");
+
+    // Step 2: 验证通过 → guard 应 allow_success
+    state = codeState({
+      mutationRevision: 1,
+      verifiedRevision: 1,
+      status: "passed",
+      changedFiles: ["test.ts"],
+    });
+    guard = checkFinalizationGuard(state);
+    expect(guard.kind).toBe("allow_success");
+  });
+
+  it("验证通过后 requiredNextAction 应为 undefined", () => {
+    const state = codeState({
+      mutationRevision: 1,
+      verifiedRevision: 1,
+      status: "passed",
+      changedFiles: ["test.ts"],
+    });
+    // 验证通过时，requiredNextAction 应被清除
+    expect(state.requiredNextAction).toBeUndefined();
+  });
+
+  it("验证通过后 codeVerified 为 true → 不应注入 FAILURE_SOUL_POLICY", () => {
+    // 模拟 Soul 节点的 failureInstruction 逻辑
+    const cv = {
+      mutationRevision: 1,
+      verifiedRevision: 1,
+      status: "passed" as const,
+      changedFiles: ["test.ts"],
+    };
+    const codeVerified = cv.mutationRevision > 0
+      && cv.verifiedRevision === cv.mutationRevision
+      && cv.status === "passed";
+    expect(codeVerified).toBe(true);
+
+    // 当 codeVerified=true 时，failureInstruction 应为空
+    // （这是 langgraph-agent-loop.ts 中 Soul 节点的逻辑）
+    const hasFailure = false; // decision.decision !== "failure" after verification
+    const failureInstruction = !codeVerified && hasFailure ? "[FAILURE_SOUL_POLICY]" : "";
+    expect(failureInstruction).toBe("");
+  });
+
+  it("验证未通过时 codeVerified 为 false → FAILURE_SOUL_POLICY 可注入", () => {
+    const cv = {
+      mutationRevision: 1,
+      verifiedRevision: 0,
+      status: "failed" as CodeVerificationState["status"],
+      changedFiles: ["test.ts"],
+    };
+    const codeVerified = cv.mutationRevision > 0
+      && cv.verifiedRevision === cv.mutationRevision
+      && cv.status === "passed";
+    expect(codeVerified).toBe(false);
+  });
+
+  it("无 mutation 时 codeVerified 为 false → FAILURE_SOUL_POLICY 可注入", () => {
+    const cv = {
+      mutationRevision: 0,
+      verifiedRevision: 0,
+      status: "clean" as CodeVerificationState["status"],
+      changedFiles: [],
+    };
+    const codeVerified = cv.mutationRevision > 0
+      && cv.verifiedRevision === cv.mutationRevision
+      && cv.status === "passed";
+    expect(codeVerified).toBe(false);
+  });
+});

@@ -299,16 +299,43 @@ function errorCodeOf(error: unknown): string {
 function formatCodeVerificationContext(
   cv: import("./agent-graph").CodeVerificationState | undefined,
   outcome: import("./agent-graph").FinalizationOutcome | undefined,
+  toolResults: import("./types").ToolCallResult[] = [],
 ): string {
   if (!cv || cv.mutationRevision === 0) return "";
 
+  // 从工具结果中提取验证详情（闭世界投影）
+  const lastVerification = [...toolResults]
+    .reverse()
+    .find((r) => r.toolId === "run_verification");
+  let verificationDetail: Record<string, unknown> | undefined;
+  if (lastVerification) {
+    try {
+      const parsed = JSON.parse(lastVerification.output);
+      verificationDetail = {
+        command: parsed.command,
+        cwd: parsed.actualCwd,
+        started: true,
+        exitCode: parsed.exitCode,
+        passed: parsed.passed,
+        errorCode: parsed.errorCode ?? null,
+        spawnError: parsed.spawnError ?? null,
+        durationMs: parsed.durationMs,
+      };
+    } catch { /* 非 JSON */ }
+  }
+
   const context: Record<string, unknown> = {
-    changedFiles: cv.changedFiles,
+    changedFilesUnion: cv.changedFiles,
+    mutationOccurred: cv.mutationRevision > 0,
     mutationRevision: cv.mutationRevision,
     verifiedRevision: cv.verifiedRevision,
     verificationStatus: cv.status,
     completionStatus: outcome?.status ?? "completed",
   };
+
+  if (verificationDetail) {
+    context.verification = verificationDetail;
+  }
 
   if (outcome?.reason) {
     context.completionReason = outcome.reason;
@@ -326,6 +353,10 @@ function formatCodeVerificationContext(
 
   if (cv.status === "pending" && cv.mutationRevision > cv.verifiedRevision) {
     instructions.push("存在未验证的代码修改。如果要声明代码正确，必须先通过验证。");
+  }
+
+  if (cv.status === "failed" && cv.mutationRevision > cv.verifiedRevision) {
+    instructions.push("文件修改已完成但验证失败。如实报告：哪些文件被修改了、验证命令是什么、验证结果如何。不要猜测原因。");
   }
 
   if (instructions.length > 0) {
@@ -394,6 +425,37 @@ function buildPartialSuccessReply(status: RunExecutionStatus): string {
   return lines.join("\n");
 }
 
+/** Soul LLM 返回空白时的确定性 fallback（不调用模型） */
+function buildSoulBlankFallback(state: AgentGraphState): string {
+  const succeeded = state.toolResults.filter((r) => r.status === "succeeded");
+  const failed = state.toolResults.filter((r) => r.status === "failed");
+  const lines: string[] = [];
+
+  if (succeeded.length === 0 && failed.length === 0) {
+    return "刚才没有生成正常回复，请再试一次。";
+  }
+
+  if (succeeded.length > 0) {
+    lines.push("操作已完成：");
+    for (const r of succeeded) {
+      const label = r.capabilityId || r.toolId;
+      lines.push(`- ${label}`);
+    }
+  }
+  if (failed.length > 0) {
+    lines.push("");
+    lines.push("以下操作失败：");
+    for (const r of failed) {
+      const label = r.capabilityId || r.toolId;
+      const reason = r.errorCode || "执行失败";
+      lines.push(`- ${label}（${reason}）`);
+    }
+  }
+  lines.push("");
+  lines.push("（回复生成异常，以上为工具执行摘要）");
+  return lines.join("\n");
+}
+
 export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions): Promise<TwoPhaseFcResult> {
   const startedAt = Date.now();
   if (ENABLE_TASK_ROUTER) {
@@ -403,7 +465,16 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
   }
   const perCallTimeout = options.perCallTimeoutMs;
   // 过滤掉 deprecated 和 effectKind=unknown 的工具（后者会被 ExecutionPolicyGuard 拒绝，不应暴露给模型）
-  const enabledTools = options.tools.filter((tool) => tool.enabled && !tool.deprecated && tool.effectKind !== "unknown");
+  let enabledTools = options.tools.filter((tool) => tool.enabled && !tool.deprecated && tool.effectKind !== "unknown");
+
+  // CYRENE_CLINE_ACCEPTANCE_MODE: 开发环境验收模式
+  // 隐藏旧 Coding 工具，只暴露 delegate_coding + run_verification
+  const CLINE_ACCEPTANCE_MODE = process.env.CYRENE_CLINE_ACCEPTANCE_MODE === "1";
+  if (CLINE_ACCEPTANCE_MODE) {
+    const HIDDEN_IN_ACCEPTANCE = new Set(["apply_patch", "search_code", "write_file", "run_shell"]);
+    enabledTools = enabledTools.filter((tool) => !HIDDEN_IN_ACCEPTANCE.has(tool.id));
+    console.log("[AgentFlow] CLINE_ACCEPTANCE_MODE=1, hidden tools:", Array.from(HIDDEN_IN_ACCEPTANCE).filter(id => enabledTools.some(t => t.id === id)).join(", ") || "(none to hide)");
+  }
   // 过滤后的版本（按 inPlanMode 动态切换）
   let enabledToolsFiltered = enabledTools;
   let runnableToolIdsFiltered: Set<string> = new Set(enabledTools.map((t) => t.id));
@@ -416,6 +487,15 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     referencePolicy: referencePolicyFor(tool),
   }));
   let capabilitiesFiltered: ActionCapability[] = capabilities;
+
+  // 启动诊断日志：验收模式状态 + 工具列表
+  if (CLINE_ACCEPTANCE_MODE) {
+    const delegateCoding = enabledTools.find((t) => t.id === "delegate_coding");
+    console.log("[AgentFlow] acceptanceMode=true");
+    console.log("[AgentFlow] availableTools=[" + capabilities.map((c) => c.capability).join(", ") + "]");
+    console.log("[AgentFlow] delegate_coding registered=" + !!delegateCoding + " enabled=" + (delegateCoding?.enabled ?? false));
+  }
+
   let usageInput = 0;
   let usageOutput = 0;
   let fallbackMessages: ChatMessage[] | undefined;
@@ -548,8 +628,8 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             officialBaseUrl: options.adapter.capability.baseUrl,
           }),
         });
-        const capabilitiesWithEvidence = options.tools
-          .filter((t) => t.enabled)
+        // 必须用 enabledTools（已过 acceptance mode 过滤），不能用 options.tools
+        const capabilitiesWithEvidence = enabledTools
           .map((t) => ({
             capabilityId: t.capability ?? t.id,
             description: t.catalogHint?.trim() || t.description.split("\n")[0]?.trim() || t.description,
@@ -679,6 +759,20 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       executionStatus.phase = "action_gate";
       ensureBudget();
 
+      // ── 确定性强制路由：requiredNextAction 存在时跳过 Action Gate LLM ──
+      if (state.requiredNextAction) {
+        const rna = state.requiredNextAction;
+        flowLog(`3. 强制动作：${rna.capabilityId}（${rna.reason}）`);
+        console.log(LOG_PREFIX, `requiredNextAction 强制路由: capability=${rna.capabilityId} args=${JSON.stringify(rna.forcedArgs ?? {})}`);
+        return {
+          decision: "act" as const,
+          capability: rna.capabilityId,
+          objective: rna.reason,
+          targetRefs: [],
+          afterSuccess: "respond" as const,
+        };
+      }
+
       // 检测用户是否明确授权跳过验证
       if (!state.verificationWaiver) {
         const waiver = detectVerificationWaiver(state.messages, options.conversationId ?? "default");
@@ -719,6 +813,22 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         enabledToolsFiltered = enabledTools;
         runnableToolIdsFiltered = runnableToolIds;
         capabilitiesFiltered = capabilities;
+      }
+      // 最终可见性层：验收模式强制过滤（覆盖 plan/direct/fallback 全路径）
+      if (CLINE_ACCEPTANCE_MODE) {
+        const HIDDEN_FINAL = new Set(["apply_patch", "search_code", "write_file", "run_shell"]);
+        const beforeIds = capabilitiesFiltered.map(c => c.capability);
+        enabledToolsFiltered = enabledToolsFiltered.filter((t) => !HIDDEN_FINAL.has(t.id));
+        runnableToolIdsFiltered = new Set(enabledToolsFiltered.map((t) => t.id));
+        capabilitiesFiltered = enabledToolsFiltered.map((tool) => ({
+          capability: tool.capability ?? tool.id,
+          toolId: tool.id,
+          description: tool.catalogHint?.trim() || tool.description.split("\n")[0]?.trim() || tool.description,
+          requiredInputs: tool.inputSchema.required ?? [],
+          referencePolicy: referencePolicyFor(tool),
+        }));
+        const removed = beforeIds.filter(id => HIDDEN_FINAL.has(id));
+        if (removed.length > 0) flowLog(`Acceptance mode: removed from Action Gate: ${removed.join(", ")}`);
       }
       if (lastResult?.deduplicated) {
         debugLog(`${LOG_PREFIX} node=decide forced_respond reason=duplicate_terminal_action`);
@@ -925,57 +1035,72 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
 
         let args: Record<string, unknown> | undefined;
         let toolCall: ToolCall | undefined;
-        let lastError: unknown;
-        for (let attempt = 1; attempt <= 2; attempt++) {
-          try {
-            const resolved = await resolveNativeToolCall({
-              model: options.settings.model,
-              nativeFcSystemPrompt: options.nativeFcSystemContent ?? "",
-              executionBrief,
-              runtimeEnvironmentContext: options.runtimeEnvironmentContext,
-              toolResults: state.toolResults,
-              tool: selectedTool,
-              ...(lastError instanceof Error ? { protocolFeedback: lastError.message } : {}),
-            }, async (request) => {
-              try {
-                const response = await perf.track("execute_native_tool_llm", () => invokeWithFallback(() => request));
-                trackUsage(response.usage);
-                return response;
-              } catch (err) {
-                // HTTP 失败的详细诊断已在 callAdapter 中打印（[LLM-HTTP] failed request）
-                // 这里只标记 Native FC 上下文
-                console.error(`[NativeFC] invoke failed: tool=${selectedTool.id} model=${request.model} tools=${request.tools?.length ?? 0}`);
-                throw err;
-              }
-            });
-            args = parseAndValidateToolCallArguments(
-              resolved,
-              selectedTool,
-              decision.targetRefs,
-              state.toolResults,
-            );
-            toolCall = { ...resolved, arguments: JSON.stringify(args) };
-            break;
-          } catch (error) {
-            lastError = error;
-            debugWarn(`${LOG_PREFIX} node=native-tool tool=${selectedTool.id} protocol_retry=${attempt} error=${errorCodeOf(error)}`);
-          }
+
+        // ── 强制动作：跳过 Native FC，直接构造 tool call ──
+        const rna = state.requiredNextAction;
+        if (rna && rna.capabilityId === selectedTool.id && rna.forcedArgs) {
+          args = { ...rna.forcedArgs };
+          toolCall = {
+            id: `forced_${Date.now()}`,
+            name: selectedTool.id,
+            arguments: JSON.stringify(args),
+          };
+          flowLog(`4. 强制参数：${Object.keys(args).join(", ")}（跳过 Native FC）`);
+          console.log(LOG_PREFIX, `forced action: tool=${selectedTool.id} args=${JSON.stringify(args)}`);
         }
+
+        // ── 正常路径：Native FC 参数生成 ──
         if (!args || !toolCall) {
-          flowLog(`4. 工具参数生成失败：${errorCodeOf(lastError)}`);
-          flowLog("   工具未执行；转入失败回复");
-          return [{
-            toolId: selectedTool.id,
-            args: {},
-            output: "Native Function Calling did not return one valid tool call after one repair. Tool Runtime was not invoked.",
-            status: "failed",
-            errorCode: errorCodeOf(lastError),
-            terminal: true,
-            retryable: false,
-            toolExecuted: false,
-          }];
+          let lastError: unknown;
+          for (let attempt = 1; attempt <= 2; attempt++) {
+            try {
+              const resolved = await resolveNativeToolCall({
+                model: options.settings.model,
+                nativeFcSystemPrompt: options.nativeFcSystemContent ?? "",
+                executionBrief,
+                runtimeEnvironmentContext: options.runtimeEnvironmentContext,
+                toolResults: state.toolResults,
+                tool: selectedTool,
+                ...(lastError instanceof Error ? { protocolFeedback: lastError.message } : {}),
+              }, async (request) => {
+                try {
+                  const response = await perf.track("execute_native_tool_llm", () => invokeWithFallback(() => request));
+                  trackUsage(response.usage);
+                  return response;
+                } catch (err) {
+                  console.error(`[NativeFC] invoke failed: tool=${selectedTool.id} model=${request.model} tools=${request.tools?.length ?? 0}`);
+                  throw err;
+                }
+              });
+              args = parseAndValidateToolCallArguments(
+                resolved,
+                selectedTool,
+                decision.targetRefs,
+                state.toolResults,
+              );
+              toolCall = { ...resolved, arguments: JSON.stringify(args) };
+              break;
+            } catch (error) {
+              lastError = error;
+              debugWarn(`${LOG_PREFIX} node=native-tool tool=${selectedTool.id} protocol_retry=${attempt} error=${errorCodeOf(error)}`);
+            }
+          }
+          if (!args || !toolCall) {
+            flowLog(`4. 工具参数生成失败：${errorCodeOf(lastError)}`);
+            flowLog("   工具未执行；转入失败回复");
+            return [{
+              toolId: selectedTool.id,
+              args: {},
+              output: "Native Function Calling did not return one valid tool call after one repair. Tool Runtime was not invoked.",
+              status: "failed",
+              errorCode: errorCodeOf(lastError),
+              terminal: true,
+              retryable: false,
+              toolExecuted: false,
+            }];
+          }
+          flowLog(`4. 生成工具参数：完成（${summarizeArgumentKeys(args)}）`);
         }
-        flowLog(`4. 生成工具参数：完成（${summarizeArgumentKeys(args)}）`);
 
         // ── 执行前策略守卫：在工具实际执行前检查 effectKind 和 verificationPolicy ──
         const effectKind = resolveEffectKind(selectedTool, args);
@@ -996,6 +1121,17 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         }
 
         flowLog(`5. 执行工具：${selectedTool.id}`);
+
+        // run_verification 兜底：继承 delegate_coding 的可信 workspaceRoot
+        // （强制动作路径已在上方跳过 Native FC 并直接使用 forcedArgs，此处仅处理非强制路径）
+        if (selectedTool.id === "run_verification" && !rna?.forcedArgs && state.lastDelegateCodingWorkspace) {
+          const origCwd = args.cwd;
+          args = { ...args, cwd: state.lastDelegateCodingWorkspace };
+          toolCall = { ...toolCall, arguments: JSON.stringify(args) };
+          if (origCwd !== state.lastDelegateCodingWorkspace) {
+            flowLog(`   workspace 覆盖：${origCwd ?? "(无)"} → ${state.lastDelegateCodingWorkspace}`);
+          }
+        }
 
         const toolCallId = toolCall.id;
         options.onEvent?.({ type: "tool_call_start", toolCallId, toolCallName: selectedTool.name });
@@ -1228,7 +1364,13 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           .slice()
           .reverse()
           .find((item) => item.toolExecuted === false);
-        const failureInstruction = decision.decision === "failure" || localNonExecutionFact
+        // 代码已验证通过时，不注入 FAILURE_SOUL_POLICY（避免使用过期的 E_FINALIZATION_BLOCKED）
+        const cv = state.codeVerification;
+        const codeVerified = cv
+          && cv.mutationRevision > 0
+          && cv.verifiedRevision === cv.mutationRevision
+          && cv.status === "passed";
+        const failureInstruction = !codeVerified && (decision.decision === "failure" || localNonExecutionFact)
           ? [
               "[FAILURE_SOUL_POLICY]",
               "A local trusted failure occurred before Tool Runtime execution.",
@@ -1240,17 +1382,24 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
               "[/FAILURE_SOUL_POLICY]",
             ].join("\n")
           : "";
+        // 闭世界投影：mutation 证据优先于控制信号
+        const codeVerificationContext = formatCodeVerificationContext(
+          state.codeVerification, state.finalizationOutcome, state.toolResults,
+        );
         const system = [
           options.soulSystemBaseContent,
           options.responseContext ?? "",
+          // 第一优先：代码验证上下文（mutation 证据 + 验证状态）
+          codeVerificationContext,
+          // 第二优先：执行上下文（工具执行摘要）
+          formatSoulExecutionContext(buildSoulExecutionContext(state.toolResults, options.tools)),
+          SOUL_NO_TOOL_DIRECTIVE,
+          // 第三优先：失败指令（控制信号，不覆盖 mutation 证据）
           failureInstruction,
           `[ACTION_DECISION]\n${JSON.stringify(decision)}\n[/ACTION_DECISION]`,
           state.clarificationAnswers.length > 0
             ? `[CLARIFICATION_ANSWERS]\n${JSON.stringify(state.clarificationAnswers)}\n[/CLARIFICATION_ANSWERS]`
             : "",
-          SOUL_NO_TOOL_DIRECTIVE,
-          formatSoulExecutionContext(buildSoulExecutionContext(state.toolResults, options.tools)),
-          formatCodeVerificationContext(state.codeVerification, state.finalizationOutcome),
         ].filter(Boolean).join("\n\n");
         const soulMessages = [{ role: "system" as const, content: system }, ...state.messages];
         const soulRequest = {
@@ -1274,8 +1423,20 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           state.messages,
         ));
         trackUsage(response.usage);
-        const reply = stripLeakedChatTimeContext(stripToolProtocol(response.text))
-          || "刚才没有生成正常回复，请再试一次。";
+        const rawText = response.text ?? "";
+        const stripped = stripToolProtocol(rawText);
+        const visibleText = stripLeakedChatTimeContext(stripped);
+        // 诊断日志：追踪空白气泡根因
+        if (!visibleText.trim()) {
+          console.warn(LOG_PREFIX, "Soul 回复为空",
+            "rawText.length=" + rawText.length,
+            "afterStripTool=" + stripped.length,
+            "afterStripTime=" + visibleText.length,
+            "toolResults=" + state.toolResults.length,
+            "successful=" + state.toolResults.filter((r) => r.status === "succeeded").length,
+          );
+        }
+        const reply = visibleText.trim() || buildSoulBlankFallback(state);
         emitText(options.onEvent, reply);
         return reply;
       } finally {

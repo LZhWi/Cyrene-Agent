@@ -23,6 +23,13 @@ import { isWithinWorkspace } from "./workspace-guard";
 import { checkCommands, DEFAULT_COMMAND_ALLOW_LIST } from "./command-guard";
 import { resolveModelRequestTimeoutMs } from "../config/model-timeout";
 import * as path from "path";
+import { pathToFileURL } from "url";
+
+// ── Think 块过滤（用于最终 summary） ─────────────────────
+
+function stripThinkBlocks(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+}
 
 // ── 配置 ──────────────────────────────────────────────────
 
@@ -78,7 +85,14 @@ function buildBeforeToolHook(
 
       // run_commands: 逐条检查命令白名单
       if (toolName === "run_commands") {
+        const commands = Array.isArray(input?.commands) ? input.commands : [];
         const result = checkCommands(input?.commands, allowedCommands);
+        // 诊断日志：逐条记录命令审批
+        console.log("[delegate_coding] beforeTool run_commands",
+          "count=" + commands.length,
+          "approved=" + !result?.skip,
+          "commands=" + JSON.stringify(commands.map((c: any) => typeof c === "string" ? c : c?.command || String(c))),
+        );
         if (result?.skip) return result;
         // 保守标记 hasPotentialSideEffects
         state.hasPotentialSideEffects = true;
@@ -117,6 +131,9 @@ function classifyError(err: Error): ClineErrorCode {
 
   if (name === "AgentRuntimeAbortError" || msg.includes("abort")) {
     return "CLINE_CANCELLED";
+  }
+  if (msg.includes("CLINE_MODULE_LOAD_FAILED") || msg.includes("ERR_PACKAGE_PATH_NOT_EXPORTED")) {
+    return "CLINE_MODULE_LOAD_FAILED";
   }
   if (msg.includes("WORKSPACE_LOCKED")) {
     return "WORKSPACE_LOCKED";
@@ -192,12 +209,24 @@ export async function delegateCoding(
     // 1. 获取 workspace 锁
     lockKey = acquireWorkspaceLock(input.workspaceRoot, sessionId);
 
-    // 2. 动态导入 ClineCore 并创建实例
-    const { ClineCore } = await import("@cline/sdk");
-    cline = await ClineCore.create({
+    // 2. 通过 ESM Bridge 加载 ClineCore（绕过 TypeScript 的 import→require 转换）
+    const bridgePath = path.join(__dirname, "cline-esm-bridge.mjs");
+    const bridgeUrl = pathToFileURL(bridgePath).href;
+    const nativeImport = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<any>;
+    let bridge: any;
+    try {
+      bridge = await nativeImport(bridgeUrl);
+      console.log("[delegate_coding] Cline ESM bridge loaded");
+    } catch (bridgeErr) {
+      const msg = bridgeErr instanceof Error ? bridgeErr.message : String(bridgeErr);
+      console.error("[delegate_coding] ESM bridge load failed:", msg);
+      throw new Error(`CLINE_MODULE_LOAD_FAILED: ${msg}`);
+    }
+    cline = await bridge.createClineCore({
       clientName: "cyrene",
       backendMode: "local",
     });
+    console.log("[delegate_coding] ClineCore created");
 
     // 3. 先订阅事件
     unsubscribe = cline.subscribe((event: CoreSessionEvent) => {
@@ -241,7 +270,15 @@ export async function delegateCoding(
         baseUrl: modelConfig.baseUrl,
         cwd: input.workspaceRoot,
         workspaceRoot: input.workspaceRoot,
-        systemPrompt: "你是一个代码助手。请帮助用户完成代码任务。",
+        systemPrompt: [
+          "你是一个代码助手。请帮助用户完成代码任务。",
+          "",
+          "重要约束：",
+          "- 当前 cwd 已经是目标工作区，不要执行 pwd/cd/dir/ls/Get-ChildItem/Test-Path",
+          "- 文件查看使用 read_files 和 search_codebase 工具",
+          "- 验证命令只允许 npx tsc --noEmit（或指定 -p 参数）",
+          "- 不要尝试安装依赖或运行任意命令",
+        ].join("\n"),
         enableTools: true,
         enableSpawnAgent: false,
         enableAgentTeams: false,
@@ -307,6 +344,7 @@ async function handlePendingPrompt(
 
 function collectResult(state: StreamState, workspaceRoot: string, agentResult: any): CodingAgentResult {
   const verification = buildVerification(state);
+  const changedFiles = Array.from(state.changedFiles);
 
   // 从 agentResult 提取摘要
   if (agentResult?.text) state.summary = agentResult.text;
@@ -316,11 +354,45 @@ function collectResult(state: StreamState, workspaceRoot: string, agentResult: a
     state.usage.totalCost = agentResult.usage.totalCost || state.usage.totalCost;
   }
 
+  // 过滤 <think> 块，生成确定性摘要
+  let summary = stripThinkBlocks(state.summary);
+  if (!summary) {
+    if (changedFiles.length > 0) {
+      summary = `已修改 ${changedFiles.length} 个文件：${changedFiles.join(", ")}`;
+    } else {
+      summary = "任务完成";
+    }
+  }
+
+  // 归一化业务完成状态：
+  // Cline 会话自然结束 ≠ 业务任务完成。
+  // 有文件修改但未运行验证 → 业务 status=failed，但 envelope success=true（工具正常返回）。
+  // routeAfterTool 从 output JSON 提取 changedFiles，不依赖 result.status。
+  const hasChanges = changedFiles.length > 0 || state.hasPotentialSideEffects;
+  const verificationNotRun = !verification.attempted && hasChanges;
+
+  if (verificationNotRun) {
+    console.log("[delegate_coding] 验证未运行，业务 status=failed",
+      "changedFiles=" + JSON.stringify(changedFiles),
+    );
+    return {
+      status: "failed",
+      summary: summary + "（验证未运行，需要 run_verification）",
+      workspaceRoot,
+      changedFiles,
+      commands: state.commands,
+      verification: { attempted: false, passed: false },
+      error: { code: "CLINE_VERIFICATION_NOT_RUN", message: "代码修改已完成但验证未运行" },
+      usage: state.usage,
+      partialChanges: true,
+    };
+  }
+
   return {
     status: "completed",
-    summary: state.summary || "任务完成",
+    summary,
     workspaceRoot,
-    changedFiles: Array.from(state.changedFiles),
+    changedFiles,
     commands: state.commands,
     verification,
     usage: state.usage,
@@ -333,18 +405,29 @@ function handleError(err: unknown, state: StreamState, workspaceRoot: string, se
   const errorCode = classifyError(error);
   const isAbort = errorCode === "CLINE_CANCELLED";
   const status = isAbort ? "cancelled" : "failed";
+  const changedFiles = Array.from(state.changedFiles);
+
+  // 过滤 think 块
+  const rawSummary = isAbort ? "任务已取消" : `错误: ${error.message}`;
+  let summary = stripThinkBlocks(rawSummary);
+  if (!summary) summary = rawSummary;
+
+  // 有文件修改但会话失败 → partialChanges + 需要验证
+  if (changedFiles.length > 0 && !isAbort) {
+    summary += `（已修改 ${changedFiles.length} 个文件，但任务未完成）`;
+  }
 
   return {
     status,
-    summary: isAbort ? "任务已取消" : `错误: ${error.message}`,
+    summary,
     workspaceRoot,
-    changedFiles: Array.from(state.changedFiles),
+    changedFiles,
     commands: state.commands,
     verification: { attempted: false, passed: false },
     error: {
       code: errorCode,
       message: error.message.slice(0, 200),
     },
-    partialChanges: state.hasPotentialSideEffects,
+    partialChanges: state.hasPotentialSideEffects || changedFiles.length > 0,
   };
 }

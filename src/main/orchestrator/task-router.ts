@@ -283,8 +283,15 @@ export async function runTaskRouter(input: RunTaskRouterInput): Promise<TaskRout
 // ── 辅助：从 ToolDefinition 构建能力列表 ──
 
 export function buildRouterCapabilities(tools: ToolDefinition[]): RunTaskRouterInput["availableCapabilities"] {
-  return tools
-    .filter((t) => t.enabled && !t.deprecated && t.effectKind !== "unknown")
+  let filtered = tools.filter((t) => t.enabled && !t.deprecated && t.effectKind !== "unknown");
+
+  // CYRENE_CLINE_ACCEPTANCE_MODE: 同步隐藏旧 Coding 工具
+  if (process.env.CYRENE_CLINE_ACCEPTANCE_MODE === "1") {
+    const HIDDEN = new Set(["apply_patch", "search_code", "write_file", "run_shell"]);
+    filtered = filtered.filter((t) => !HIDDEN.has(t.id));
+  }
+
+  return filtered
     .map((t) => ({
       capabilityId: t.capability ?? t.id,
       description: t.catalogHint?.trim() || t.description.split("\n")[0]?.trim() || t.description,

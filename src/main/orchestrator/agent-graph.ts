@@ -80,12 +80,35 @@ export interface AgentGraphInput {
 function extractChangedFilePathFromResult(result: ToolCallResult): string {
   try {
     const parsed = JSON.parse(result.output);
+    // delegate_coding 返回 changedFiles 数组
+    if (Array.isArray(parsed.changedFiles) && parsed.changedFiles.length > 0) {
+      return parsed.changedFiles[0];
+    }
     if (parsed.filePath) return String(parsed.filePath);
   } catch {
     // 非 JSON 输出，回退到正则
   }
   const match = result.output.match(/已更新\s+(.+?)$/m) || result.output.match(/已写入[:\s]+(.+?)$/m);
   return match ? match[1].trim() : "";
+}
+
+/** 从工具结果提取全部变更文件（delegate_coding 返回 changedFiles 数组） */
+function extractAllChangedFiles(result: ToolCallResult): string[] {
+  try {
+    const parsed = JSON.parse(result.output);
+    if (Array.isArray(parsed.changedFiles)) return parsed.changedFiles;
+  } catch { /* 非 JSON */ }
+  const single = extractChangedFilePathFromResult(result);
+  return single ? [single] : [];
+}
+
+/** 从工具结果提取 workspaceRoot（delegate_coding 返回 workspaceRoot） */
+function extractWorkspaceRoot(result: ToolCallResult): string | undefined {
+  try {
+    const parsed = JSON.parse(result.output);
+    if (parsed.workspaceRoot) return String(parsed.workspaceRoot);
+  } catch { /* 非 JSON */ }
+  return undefined;
 }
 
 /**
@@ -227,6 +250,10 @@ export function checkFinalizationGuard(state: AgentGraphState): FinalizationDisp
           requiredNextAction: {
             capabilityId: "run_verification",
             reason: "代码修改后必须运行验证",
+            forcedArgs: {
+              verificationType: "typecheck",
+              cwd: state.lastDelegateCodingWorkspace,
+            },
           },
         },
       };
@@ -237,11 +264,13 @@ export function checkFinalizationGuard(state: AgentGraphState): FinalizationDisp
   // 验证失败
   if (cv.status === "failed") {
     if (state.requiredNextAction?.capabilityId === "run_verification") {
-      // 瞬时故障：保留约束，允许重试
-      if (hasRemainingVerificationBudget(state)) {
+      // 瞬时故障：保留约束，允许重试（但有熔断上限）
+      const retryCount = state.verificationRetryCount ?? 0;
+      const MAX_VERIFICATION_RETRIES = 1;
+      if (retryCount < MAX_VERIFICATION_RETRIES && hasRemainingVerificationBudget(state)) {
         return { kind: "block", redirectTo: "decide", reason: "验证超时，请重试" };
       }
-      return { kind: "allow_failure", reason: "验证持续超时且预算耗尽" };
+      return { kind: "allow_failure", reason: "验证重试耗尽，修改未经验证" };
     }
     // 非瞬时故障：约束已清除，允许修复
     if (hasRemainingRepairBudget(state)) {
@@ -333,8 +362,17 @@ export interface AgentGraphState extends AgentGraphInput {
   verificationWaiver?: VerificationWaiver;
   /** 最终确定化结果（路由阶段固化，Soul 只读取不重新计算） */
   finalizationOutcome?: FinalizationOutcome;
-  /** 验证完成后要求执行的下一个能力（如 run_verification） */
-  requiredNextAction?: { capabilityId: string; reason: string };
+  /** 确定性强制下一步（跳过 Action Gate LLM） */
+  requiredNextAction?: {
+    capabilityId: string;
+    reason: string;
+    /** 预构造的工具参数（如 run_verification 的 cwd） */
+    forcedArgs?: Record<string, unknown>;
+  };
+  /** delegate_coding 返回的可信 workspaceRoot（run_verification 继承） */
+  lastDelegateCodingWorkspace?: string;
+  /** 验证重试计数（熔断器：防止无限重试） */
+  verificationRetryCount?: number;
 }
 
 export interface AgentGraphDeps {
@@ -384,7 +422,9 @@ const GraphState = Annotation.Root({
   codeVerification: Annotation<CodeVerificationState | undefined>,
   verificationWaiver: Annotation<VerificationWaiver | undefined>,
   finalizationOutcome: Annotation<FinalizationOutcome | undefined>,
-  requiredNextAction: Annotation<{ capabilityId: string; reason: string } | undefined>,
+  requiredNextAction: Annotation<{ capabilityId: string; reason: string; forcedArgs?: Record<string, unknown> } | undefined>,
+  lastDelegateCodingWorkspace: Annotation<string | undefined>,
+  verificationRetryCount: Annotation<number | undefined>,
 });
 
 // ── createPlan 错误分类 ──────────────────────
@@ -458,7 +498,8 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
       // ── requiredNextAction 硬约束：代码修改后必须验证 ──
       if (state.requiredNextAction && decision.decision === "act") {
         if (decision.capability !== state.requiredNextAction.capabilityId) {
-          // Action Gate 选择了其他能力 -> 拒绝，重新决策
+          // Action Gate 选择了其他能力（如 delegate_coding）-> 拒绝，强制 run_verification
+          console.log("[AgentGraph]", `requiredNextAction 拦截: 模型选了 ${decision.capability}，要求 ${state.requiredNextAction.capabilityId}`);
           return {
             decision: {
               decision: "failure" as const,
@@ -567,39 +608,67 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
         && state.taskPlan?.status === "running";
       const goto = resolveRouteAfterTool(result, action, inPlanMode);
 
-      // ── 代码验证证据收集 ──
+      // ── 代码验证证据收集（两层语义） ──
+      // 第一层：mutation 证据 — 从 output JSON 提取 changedFiles，不依赖 result.status
+      // 第二层：verification 结果 — 依赖 result.status === "succeeded"
       let codeVerificationUpdate: Partial<AgentGraphState> = {};
-      if (result && result.status === "succeeded") {
+      if (result) {
         const effectKind = result.capabilityId
           ? resolveEffectKind(deps.getToolById?.(result.capabilityId), result.args)
           : "unknown";
-        const verificationPolicy = result.capabilityId
-          ? resolveVerificationPolicy(deps.getToolById?.(result.capabilityId), result.args)
-          : "none";
 
-        if (effectKind === "mutation" && verificationPolicy === "code") {
-          // 代码修改成功 -> 增加 mutationRevision，标记 pending
-          const cv = state.codeVerification;
-          const newRevision = (cv?.mutationRevision ?? 0) + 1;
-          const filePath = extractChangedFilePathFromResult(result);
-          codeVerificationUpdate = {
-            codeVerification: {
-              mutationRevision: newRevision,
-              verifiedRevision: cv?.verifiedRevision ?? 0,
-              status: "pending",
-              changedFiles: [...(cv?.changedFiles ?? []), filePath].filter(Boolean) as string[],
-              lastMutationStepAttemptId: result.stepAttemptId,
-              lastVerificationStepAttemptId: cv?.lastVerificationStepAttemptId,
-            },
-          };
-          // 清除之前的验证通过状态（新修改需要重新验证）
-          if (cv?.status === "passed") {
-            (codeVerificationUpdate.codeVerification as CodeVerificationState).status = "pending";
+        // ── 第一层：mutation 证据收集 ──
+        // 只要工具返回了可解析的 CodingAgentResult，就检查 changedFiles
+        // 不依赖 result.status（业务 failed 不影响 mutation 证据）
+        if (effectKind === "mutation") {
+          const allChanged = extractAllChangedFiles(result);
+          const hasPartialChanges = (() => {
+            try { return JSON.parse(result.output)?.partialChanges === true; }
+            catch { return false; }
+          })();
+
+          if (allChanged.length > 0 || hasPartialChanges) {
+            const cv = state.codeVerification;
+            const newRevision = (cv?.mutationRevision ?? 0) + 1;
+            const prevFiles = cv?.changedFiles ?? [];
+            const mergedFiles = [...new Set([...prevFiles, ...allChanged])].filter(Boolean);
+            const ws = extractWorkspaceRoot(result);
+
+            codeVerificationUpdate = {
+              codeVerification: {
+                mutationRevision: newRevision,
+                verifiedRevision: cv?.verifiedRevision ?? 0,
+                status: "pending",
+                changedFiles: mergedFiles,
+                lastMutationStepAttemptId: result.stepAttemptId,
+                lastVerificationStepAttemptId: cv?.lastVerificationStepAttemptId,
+              },
+              requiredNextAction: {
+                capabilityId: "run_verification",
+                reason: "delegate_coding 产生了文件修改，必须验证",
+                forcedArgs: {
+                  verificationType: "typecheck",
+                  cwd: ws ?? state.lastDelegateCodingWorkspace,
+                },
+              },
+              ...(ws ? { lastDelegateCodingWorkspace: ws } : {}),
+            };
+            // 清除之前的验证通过状态
+            if (cv?.status === "passed") {
+              (codeVerificationUpdate.codeVerification as CodeVerificationState).status = "pending";
+            }
+
+            console.log("[AgentGraph] mutation 证据收集:",
+              "changedFiles=" + JSON.stringify(allChanged),
+              "partialChanges=" + hasPartialChanges,
+              "mutationRevision=" + newRevision,
+            );
           }
         }
 
-        if (effectKind === "verification" && result.toolId === "run_verification") {
-          // 验证操作 -> 检查 revisionAtStart === mutationRevision
+        // ── 第二层：verification 结果 ──
+        // 仅当工具成功返回时处理
+        if (result.status === "succeeded" && effectKind === "verification" && result.toolId === "run_verification") {
           const cv = state.codeVerification;
           if (cv) {
             try {
@@ -608,7 +677,6 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
               const passed = verificationResult.passed === true;
 
               if (passed && revisionAtStart === cv.mutationRevision) {
-                // 验证通过且验证的是当前最新修改
                 codeVerificationUpdate = {
                   codeVerification: {
                     ...cv,
@@ -616,37 +684,51 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
                     status: "passed",
                     lastVerificationStepAttemptId: result.stepAttemptId,
                   },
-                  requiredNextAction: undefined,  // 清除验证要求
+                  requiredNextAction: undefined,
+                  verificationRetryCount: 0,
+                  lastGateFailure: undefined, // 验证通过后清除过期的 E_FINALIZATION_BLOCKED
                 };
+                console.log("[AgentGraph] 验证通过: verifiedRevision=" + revisionAtStart);
               } else if (passed && revisionAtStart < cv.mutationRevision) {
-                // 验证期间发生了新修改 -> 验证只证明旧 revision，不更新
+                // 验证期间发生了新修改 -> 验证只证明旧 revision
               } else {
-                // 验证失败
-                const isTransient = verificationResult.timedOut === true || verificationResult.exitCode === -1;
+                // 只有 timeout 才是瞬时故障；exitCode=-1 是 spawn 失败，非瞬时
+                const isTransient = verificationResult.timedOut === true;
+                const retryCount = (state.verificationRetryCount ?? 0) + 1;
                 codeVerificationUpdate = {
                   codeVerification: {
                     ...cv,
                     status: "failed",
                     lastVerificationStepAttemptId: result.stepAttemptId,
                   },
-                  // 瞬时故障保留 requiredNextAction 允许重试；非瞬时故障清除
                   requiredNextAction: isTransient ? state.requiredNextAction : undefined,
+                  verificationRetryCount: retryCount,
                 };
+                console.log("[AgentGraph] 验证失败: exitCode=" + verificationResult.exitCode
+                  + " errorCode=" + (verificationResult.errorCode ?? "none")
+                  + " transient=" + isTransient
+                  + " retryCount=" + retryCount);
+                console.log("[AgentGraph] 验证失败: exitCode=" + verificationResult.exitCode + " transient=" + isTransient);
               }
             } catch {
-              // 解析失败，不更新验证状态
+              // 解析失败
             }
           }
         }
       }
 
-      // ── Finalization Guard（当路由目标为 soul 时检查）──
-      if (goto === "soul") {
-        // 先应用证据收集更新，再检查 Guard
+      // ── Finalization Guard ──
+      // 执行条件：goto === "soul"（正常完成路径）或有 requiredNextAction（mutation 已收集）
+      // 不执行条件：goto === "decide"（retryable 失败重试）且无 requiredNextAction
+      const hasRequiredAction = codeVerificationUpdate.requiredNextAction != null;
+      const shouldCheckGuard = goto === "soul" || hasRequiredAction;
+
+      if (shouldCheckGuard) {
         const stateWithEvidence = { ...state, ...codeVerificationUpdate };
         const guard = checkFinalizationGuard(stateWithEvidence);
 
         if (guard.kind === "block") {
+          console.log("[AgentGraph] FinalizationGuard block: goto=" + goto + " → " + guard.redirectTo + " reason=" + guard.reason);
           return new Command({
             update: {
               ...codeVerificationUpdate,

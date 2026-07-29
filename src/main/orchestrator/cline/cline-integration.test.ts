@@ -520,9 +520,14 @@ describe("Electron 打包依赖检查", () => {
   });
 
   it("不依赖 scripts/cline-poc/node_modules", () => {
-    // 生产代码使用动态 import() 加载 @cline/sdk（ESM-only）
+    // 生产代码通过 ESM bridge 加载 @cline/sdk（绕过 TypeScript 的 import→require 转换）
     const delegateCode = fs.readFileSync(path.join(__dirname, "delegate-coding.ts"), "utf8");
-    expect(delegateCode).toContain('import("@cline/sdk")');
+    expect(delegateCode).toContain("cline-esm-bridge.mjs");
+    // ESM bridge 文件应存在
+    const bridgePath = path.join(__dirname, "cline-esm-bridge.mjs");
+    expect(fs.existsSync(bridgePath)).toBe(true);
+    const bridgeContent = fs.readFileSync(bridgePath, "utf8");
+    expect(bridgeContent).toContain('@cline/sdk');
     // 不应包含相对路径到 PoC
     expect(delegateCode).not.toContain("scripts/cline-poc");
     expect(delegateCode).not.toContain("../../cline-poc");

@@ -55,14 +55,22 @@ export function registerDelegateCodingTool(
       required: ["task", "workspaceRoot"],
     },
     execute: async (args: Record<string, unknown>): Promise<string> => {
+      // 验收模式：使用可信 workspaceRoot，忽略模型参数
+      const acceptanceWorkspace = process.env.CYRENE_CLINE_ACCEPTANCE_WORKSPACE;
+      const isAcceptance = process.env.CYRENE_CLINE_ACCEPTANCE_MODE === "1" && acceptanceWorkspace;
+
       const input: DelegateCodingInput = {
         task: String(args.task || ""),
-        workspaceRoot: String(args.workspaceRoot || ""),
+        workspaceRoot: isAcceptance ? acceptanceWorkspace : String(args.workspaceRoot || ""),
       };
 
+      if (isAcceptance) {
+        console.log("[delegate_coding] acceptance mode: workspaceRoot=" + input.workspaceRoot);
+      }
+
       if (!input.task) {
-        return JSON.stringify({
-          status: "failed" as const,
+        return buildToolResult({
+          status: "failed",
           summary: "task 不能为空",
           workspaceRoot: input.workspaceRoot || "",
           changedFiles: [],
@@ -74,8 +82,8 @@ export function registerDelegateCodingTool(
       }
 
       if (!input.workspaceRoot) {
-        return JSON.stringify({
-          status: "failed" as const,
+        return buildToolResult({
+          status: "failed",
           summary: "workspaceRoot 不能为空",
           workspaceRoot: "",
           changedFiles: [],
@@ -87,11 +95,69 @@ export function registerDelegateCodingTool(
       }
 
       const result = await delegateCoding(input);
-      return JSON.stringify(result);
+
+      // 诊断日志：内部真实结果
+      console.log("[delegate_coding] result",
+        "status=" + result.status,
+        "errorCode=" + (result.error?.code ?? "none"),
+        "changedFiles=" + JSON.stringify(result.changedFiles),
+        "partialChanges=" + result.partialChanges,
+        "summary=" + (result.summary ?? "").slice(0, 80),
+      );
+
+      return buildToolResult(result);
     },
   });
 
   console.log("[ClineAdapter] delegate_coding 工具已注册, enabled:", enabled);
+}
+
+// ── 统一 Tool Result 转换 ─────────────────────────────────
+
+/**
+ * 将 CodingAgentResult 转换为统一 Tool Result JSON 字符串。
+ *
+ * executeToolCall 会解析返回 JSON 的 success 字段：
+ * - success === false → Runtime 标记 status: "failed"
+ * - success === true 或无 success 字段 → Runtime 标记 status: "succeeded"
+ *
+ * 规则：
+ * - completed → success: true
+ * - failed → success: false + errorCode
+ * - cancelled → success: false + CLINE_CANCELLED
+ */
+function buildToolResult(result: CodingAgentResult): string {
+  const envelope: Record<string, unknown> = {
+    status: result.status,
+    summary: result.summary,
+    workspaceRoot: result.workspaceRoot,
+    changedFiles: result.changedFiles,
+    commands: result.commands,
+    verification: result.verification,
+    partialChanges: result.partialChanges,
+    ...(result.usage ? { usage: result.usage } : {}),
+  };
+
+  if (result.status === "completed") {
+    return JSON.stringify({ success: true, ...envelope });
+  }
+
+  if (result.status === "cancelled") {
+    return JSON.stringify({
+      success: false,
+      errorCode: "CLINE_CANCELLED",
+      error: "任务已取消",
+      ...envelope,
+    });
+  }
+
+  // status === "failed"
+  return JSON.stringify({
+    success: false,
+    errorCode: result.error?.code || "CLINE_UNKNOWN",
+    error: result.error?.message || "Cline 任务失败",
+    ...envelope,
+  });
 }
 
 /**
