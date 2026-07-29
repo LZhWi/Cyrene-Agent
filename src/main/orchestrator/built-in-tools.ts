@@ -321,6 +321,121 @@ toolRegistry.register({
   execute: executeRunShell,
 });
 
+// ── 工具：run_verification（受限验证工具）─────────────────────
+// 唯一能产生可信 verification evidence 的工具。
+// 只执行预定义的验证命令（typecheck/test/build/lint），不接受任意命令。
+// ledgerPolicy=bypass：不缓存验证结果（相同参数在新 revision 下必须重新执行）。
+toolRegistry.register({
+  id: "run_verification",
+  name: "运行验证",
+  description:
+    "执行代码验证（类型检查/测试/构建/lint）。是唯一能产生可信验证证据的工具。\n\n" +
+    "何时用：\n" +
+    "- 代码修改后需要验证编译是否通过\n" +
+    "- 需要运行测试确认修改正确\n" +
+    "- 需要 lint 检查代码风格\n\n" +
+    "不要用于：\n" +
+    "- 读取文件内容 → read_file\n" +
+    "- 执行任意命令 → run_shell\n" +
+    "- 修改代码 → apply_patch/write_file\n\n" +
+    "参数：verificationType（验证类型：typecheck/test/build/lint），cwd（可选工作目录）。",
+  enabled: true,
+  risk: "shell",
+  effectKind: "verification" as const,
+  ledgerPolicy: "bypass" as const,
+  completionEvidence: [{ kind: "tool_succeeded" }],
+  soulActionLabel: "代码验证",
+  soulProjection: {
+    projector: "entity_detail",
+    source: "trusted_internal",
+    fields: {
+      title: "verificationType",
+      passed: "passed",
+      exitCode: "exitCode",
+      command: "command",
+      durationMs: "durationMs",
+    },
+  },
+  inputSchema: {
+    type: "object",
+    properties: {
+      verificationType: {
+        type: "string",
+        enum: ["typecheck", "test", "build", "lint"],
+        description: "验证类型：typecheck=类型检查，test=运行测试，build=构建，lint=代码风格检查",
+      },
+      cwd: { type: "string", description: "工作目录绝对路径，可选" },
+    },
+    required: ["verificationType"],
+  },
+  execute: async (args) => {
+    const verificationType = String(args.verificationType || "").trim();
+    const cwd = args.cwd ? String(args.cwd) : undefined;
+
+    if (!verificationType) return JSON.stringify({
+      verificationType: "", command: "", exitCode: -1,
+      stdout: "", stderr: "[错误] verificationType 不能为空",
+      timedOut: false, passed: false, truncated: false, durationMs: 0,
+    });
+
+    // 根据验证类型选择命令（白名单，不接受任意命令）
+    const verificationCommands: Record<string, { cmd: string; args: string[] }> = {
+      typecheck: { cmd: "npx", args: ["tsc", "-p", "tsconfig.main.json", "--noEmit"] },
+      test: { cmd: "npx", args: ["vitest", "run", "--reporter=verbose"] },
+      build: { cmd: "npm", args: ["run", "build:main"] },
+      lint: { cmd: "npx", args: ["eslint", "src/main", "--max-warnings=0"] },
+    };
+
+    const command = verificationCommands[verificationType];
+    if (!command) return JSON.stringify({
+      verificationType, command: "", exitCode: -1,
+      stdout: "", stderr: `[错误] 不支持的验证类型: ${verificationType}，支持: typecheck/test/build/lint`,
+      timedOut: false, passed: false, truncated: false, durationMs: 0,
+    });
+
+    const startMs = Date.now();
+    console.log(LOG_PREFIX, "run_verification:", verificationType, command.cmd, command.args.join(" "), cwd ? "cwd=" + cwd : "");
+
+    try {
+      const result = await runShellOnce(command.cmd, command.args, cwd);
+      const durationMs = Date.now() - startMs;
+      const passed = result.exitCode === 0;
+
+      console.log(LOG_PREFIX, "run_verification 完成:", verificationType, "exitCode=" + result.exitCode, "passed=" + passed, "durationMs=" + durationMs);
+
+      return JSON.stringify({
+        verificationType,
+        command: `${command.cmd} ${command.args.join(" ")}`,
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        timedOut: false,
+        passed,
+        truncated: result.truncated,
+        durationMs,
+      });
+    } catch (err) {
+      const durationMs = Date.now() - startMs;
+      const msg = err instanceof Error ? err.message : String(err);
+      // 超时或 spawn 失败
+      const isTimeout = err instanceof Error && err.name === "AbortError";
+      console.error(LOG_PREFIX, "run_verification 失败:", verificationType, msg);
+
+      return JSON.stringify({
+        verificationType,
+        command: `${command.cmd} ${command.args.join(" ")}`,
+        exitCode: -1,
+        stdout: "",
+        stderr: msg,
+        timedOut: isTimeout,
+        passed: false,
+        truncated: false,
+        durationMs,
+      });
+    }
+  },
+});
+
 // ── 工具 3：install_mcp_server ────────────────────────────
 // 把一个 {command, args, env} 注册成新的 MCP server。
 // agent 读完 README 的 mcpServers 配置后，调这个工具一次性写盘 + 启动 + 发现工具
