@@ -64,6 +64,8 @@ export function registerSkillTools(): void {
       "返回：该 skill 的指令正文 + 可用的 references 文件清单。若正文引用了 references/xxx，需要详情时再用 read_skill_reference 读取。",
     enabled: true,
     risk: "safe",
+    effectKind: "read" as const,
+    verificationPolicy: "none" as const,
     inputSchema: {
       type: "object",
       properties: {
@@ -105,6 +107,8 @@ export function registerSkillTools(): void {
       "参数：skill_id（必填），ref（必填，references 文件名，必须是 invoke_skill 返回清单里的）。",
     enabled: true,
     risk: "safe",
+    effectKind: "read" as const,
+    verificationPolicy: "none" as const,
     inputSchema: {
       type: "object",
       properties: {

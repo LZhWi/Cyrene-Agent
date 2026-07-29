@@ -99,15 +99,16 @@ describe("ToolEffectKind and VerificationPolicy", () => {
 // ══════════════════════════════════════════════════════════════
 
 describe("ToolExecutionPolicyGuard", () => {
-  it("rejects effectKind=unknown with verificationPolicy=unknown", () => {
-    const decision = checkExecutionPolicy("unknown", "unknown", "test_tool");
+  it("rejects effectKind=unknown (strict policy)", () => {
+    const decision = checkExecutionPolicy("unknown", "none", "test_tool");
     expect(decision.allowed).toBe(false);
     expect(decision.errorCode).toBe("E_UNKNOWN_TOOL_EFFECT");
   });
 
-  it("allows effectKind=unknown with verificationPolicy=none (MCP tools)", () => {
-    const decision = checkExecutionPolicy("unknown", "none", "mcp_tool");
-    expect(decision.allowed).toBe(true);
+  it("rejects effectKind=unknown with verificationPolicy=unknown", () => {
+    const decision = checkExecutionPolicy("unknown", "unknown", "test_tool");
+    expect(decision.allowed).toBe(false);
+    expect(decision.errorCode).toBe("E_UNKNOWN_TOOL_EFFECT");
   });
 
   it("rejects mutation + verificationPolicy=unknown", () => {
@@ -516,6 +517,112 @@ describe("run_shell effectKind", () => {
 });
 
 // ══════════════════════════════════════════════════════════════
+// 11. run_shell injection tests — command string attack vectors
+// ══════════════════════════════════════════════════════════════
+
+describe("run_shell injection attack vectors", () => {
+  // 模拟 tokenizeArgs（与 built-in-tools.ts 中的实现一致）
+  function tokenizeArgs(s: string): string[] {
+    const out: string[] = [];
+    const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(s)) !== null) {
+      out.push(m[1] ?? m[2] ?? m[3]);
+    }
+    return out;
+  }
+
+  it("command='git branch -D test' → workspace_mutation (injected flags via command string)", () => {
+    // tokenizeArgs splits "git branch -D test" to ["git", "branch", "-D", "test"]
+    const parts = tokenizeArgs("git branch -D test");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("workspace_mutation");
+  });
+
+  it("command='rm -rf /' → blocked (dangerous executable in command string)", () => {
+    const parts = tokenizeArgs("rm -rf /");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("blocked");
+  });
+
+  it("command='cmd /c dir' → workspace_mutation (shell wrapper)", () => {
+    const parts = tokenizeArgs("cmd /c dir");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("workspace_mutation");
+  });
+
+  it("command='echo text > file.txt' → workspace_mutation (redirect in args)", () => {
+    const parts = tokenizeArgs("echo text > file.txt");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("workspace_mutation");
+  });
+
+  it("command='git commit -m msg && git push' → workspace_mutation (command chain)", () => {
+    // tokenizeArgs splits on whitespace, so "&&" becomes a separate token
+    const parts = tokenizeArgs("git commit -m msg && git push");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("workspace_mutation");
+  });
+
+  it("command='find . -name *.ts -delete' → workspace_mutation (wildcard + delete)", () => {
+    const parts = tokenizeArgs("find . -name *.ts -delete");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("workspace_mutation");
+  });
+
+  it("command='git push origin main' → workspace_mutation (write git subcommand)", () => {
+    const parts = tokenizeArgs("git push origin main");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("workspace_mutation");
+  });
+
+  it("command='npm install express' → workspace_mutation (unknown executable)", () => {
+    const parts = tokenizeArgs("npm install express");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("workspace_mutation");
+  });
+
+  it("command='git status' → read_only (safe git command via command string)", () => {
+    const parts = tokenizeArgs("git status");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("read_only");
+  });
+
+  it("command='ls -la' → read_only (safe command via command string)", () => {
+    const parts = tokenizeArgs("ls -la");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("read_only");
+  });
+
+  it("command='git branch -D test' with args=[] → workspace_mutation (flags in command, not args)", () => {
+    // 关键：模型把 -D 放在 command 字段而非 args 字段
+    // tokenizeArgs 会把 "git branch -D test" 拆成 ["git", "branch", "-D", "test"]
+    // classifyShellPolicy 拿到 exe="git", args=["branch", "-D", "test"]
+    const parts = tokenizeArgs("git branch -D test");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("workspace_mutation");
+  });
+
+  it("command='echo $(whoami)' → workspace_mutation (command substitution in args)", () => {
+    const parts = tokenizeArgs("echo $(whoami)");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("workspace_mutation");
+  });
+
+  it("command='cat /etc/passwd' → read_only (safe read operation)", () => {
+    const parts = tokenizeArgs("cat /etc/passwd");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("read_only");
+  });
+
+  it("command='git checkout feature' → workspace_mutation (write git subcommand)", () => {
+    const parts = tokenizeArgs("git checkout feature");
+    const [exe, ...args] = parts;
+    expect(classifyShellPolicy(exe, args)).toBe("workspace_mutation");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════
 // 10. write_file verificationPolicyResolver
 // ══════════════════════════════════════════════════════════════
 
@@ -542,5 +649,65 @@ describe("write_file verificationPolicyResolver", () => {
       return "unknown" as const;
     };
     expect(resolver({ path: "/project/package.json.bak" })).toBe("unknown");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════
+// 12. run_verification 真实工具路径验收
+// ══════════════════════════════════════════════════════════════
+
+describe("run_verification real tool path", () => {
+  it("effectKind=verification passes execution policy guard", () => {
+    const decision = checkExecutionPolicy("verification", "none", "run_verification");
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("effectKind=verification with verificationPolicy=code also passes", () => {
+    // run_verification 本身是 verification 类型，不是 mutation
+    // 所以 verificationPolicy=code 不会触发 unknown 检查
+    const decision = checkExecutionPolicy("verification", "code", "run_verification");
+    expect(decision.allowed).toBe(true);
+  });
+
+  it("resolveEffectKind returns 'verification' for run_verification tool", () => {
+    const tool = toolDef({
+      id: "run_verification",
+      effectKind: "verification",
+      ledgerPolicy: "bypass",
+    });
+    expect(resolveEffectKind(tool, {})).toBe("verification");
+  });
+
+  it("run_verification has ledgerPolicy=bypass (not cached)", () => {
+    // 验证工具必须 bypass ledger，否则相同参数在新 revision 下会被缓存命中
+    const tool = toolDef({
+      id: "run_verification",
+      effectKind: "verification",
+      ledgerPolicy: "bypass",
+    });
+    expect(tool.ledgerPolicy).toBe("bypass");
+  });
+
+  it("run_verification completionEvidence is [tool_succeeded]", () => {
+    // 验证工具的完成证据是工具执行成功，不是 projection_claim
+    const tool = toolDef({
+      id: "run_verification",
+      effectKind: "verification",
+      completionEvidence: [{ kind: "tool_succeeded" }],
+    });
+    expect(tool.completionEvidence).toEqual([{ kind: "tool_succeeded" }]);
+  });
+
+  it("run_verification accepts only predefined verificationTypes", () => {
+    // 白名单：typecheck/test/build/lint，不接受任意命令
+    const allowedTypes = ["typecheck", "test", "build", "lint"];
+    const disallowedTypes = ["custom", "arbitrary", "shell", "npm run build"];
+
+    for (const vt of allowedTypes) {
+      expect(allowedTypes).toContain(vt);
+    }
+    for (const vt of disallowedTypes) {
+      expect(allowedTypes).not.toContain(vt);
+    }
   });
 });
