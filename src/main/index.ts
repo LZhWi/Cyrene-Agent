@@ -89,6 +89,8 @@ import { canStartProactiveChannelDelivery, sendProactiveChannelMessage } from ".
 import "./orchestrator/built-in-tools";
 // 触发 fs-tools 的副作用注册（read_file / list_dir / write_file / read_image）
 import "./orchestrator/fs-tools";
+// 触发 search-code-tools 的副作用注册（search_code）
+import "./orchestrator/search-code-tools";
 import { initMcpManager, addMcpServer, removeMcpServer, listMcpServers, pruneMcpServersByIds } from "./orchestrator/mcp-manager";
 import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from "./sync-mcp-builtin";
 import { buildEnvironmentContext } from "./orchestrator/environment";
