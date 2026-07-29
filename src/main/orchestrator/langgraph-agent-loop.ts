@@ -612,6 +612,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         flowLog(`   路由：${route}`);
       }
     },
+    getToolById: (id: string) => enabledToolsFiltered.find(t => t.id === id),
     decide: async (state) => {
       executionStatus.phase = "action_gate";
       ensureBudget();

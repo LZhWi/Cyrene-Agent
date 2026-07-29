@@ -2,6 +2,8 @@ import { Annotation, Command, END, START, StateGraph } from "@langchain/langgrap
 import { AgentRuntimeError } from "./agent-runtime-error";
 import { perf } from "../perf-trace";
 import type { ToolCallResult } from "./types";
+import type { ToolDefinition } from "./tool-registry";
+import { resolveEffectKind, resolveVerificationPolicy } from "./tool-registry";
 import type { ChatMessage } from "./vendors/types";
 import type {
   AskMissingField,
@@ -74,6 +76,46 @@ export interface AgentGraphInput {
   clarificationAnswers?: AskUserAnswer[];
 }
 
+/** 从工具结果中提取变更文件路径（结构化 JSON 或正则回退） */
+function extractChangedFilePathFromResult(result: ToolCallResult): string {
+  try {
+    const parsed = JSON.parse(result.output);
+    if (parsed.filePath) return String(parsed.filePath);
+  } catch {
+    // 非 JSON 输出，回退到正则
+  }
+  const match = result.output.match(/已更新\s+(.+?)$/m) || result.output.match(/已写入[:\s]+(.+?)$/m);
+  return match ? match[1].trim() : "";
+}
+
+export interface CodeVerificationState {
+  /** 当前代码修改版本号（只在 verificationPolicy=code 的 mutation 成功时 +1） */
+  mutationRevision: number;
+  /** 已验证的代码修改版本号（验证通过且 revisionAtStart === mutationRevision 时更新） */
+  verifiedRevision: number;
+  /** 代码验证状态 */
+  status: "clean" | "pending" | "passed" | "failed" | "skipped";
+  /** 已修改的代码文件列表 */
+  changedFiles: string[];
+  /** 最后一次代码修改的 stepAttemptId */
+  lastMutationStepAttemptId?: string;
+  /** 最后一次验证的 stepAttemptId */
+  lastVerificationStepAttemptId?: string;
+}
+
+export interface VerificationWaiver {
+  source: "explicit_user_instruction";
+  messageId: string;
+  runId: string;
+  scope: "current_run";
+  evidenceText: string;
+}
+
+export interface FinalizationOutcome {
+  status: "completed" | "completed_verified" | "completed_unverified" | "failed";
+  reason?: string;
+}
+
 export interface AgentGraphState extends AgentGraphInput {
   decision?: ActionDecision;
   /** 当前正在执行的 act 决策（含 afterSuccess），供 routeAfterTool 读取。 */
@@ -96,6 +138,14 @@ export interface AgentGraphState extends AgentGraphInput {
   replanCount: number;
   /** 临时 direct 完成后恢复旧 Plan */
   resumePlanAfterDirect?: boolean;
+  /** 代码修改验证状态 */
+  codeVerification?: CodeVerificationState;
+  /** 用户验证跳过授权 */
+  verificationWaiver?: VerificationWaiver;
+  /** 最终确定化结果（路由阶段固化，Soul 只读取不重新计算） */
+  finalizationOutcome?: FinalizationOutcome;
+  /** 验证完成后要求执行的下一个能力（如 run_verification） */
+  requiredNextAction?: { capabilityId: string; reason: string };
 }
 
 export interface AgentGraphDeps {
@@ -103,6 +153,8 @@ export interface AgentGraphDeps {
   execute: (state: AgentGraphState, decision: ActDecision) => Promise<ToolCallResult[]>;
   askUser?: (state: AgentGraphState, decision: AskUserDecision) => Promise<AskUserAnswer>;
   respond: (state: AgentGraphState, decision: Exclude<ActionDecision, { decision: "act" }>) => Promise<string>;
+  /** 根据 capabilityId 获取工具定义（供证据收集器解析 effectKind/verificationPolicy） */
+  getToolById?: (id: string) => ToolDefinition | undefined;
   /** Task Router 回调（feature flag 开启时提供） */
   route?: (state: AgentGraphState) => Promise<import("./task-router").TaskRoute>;
   /** 计划创建回调（plan 模式） */
@@ -140,6 +192,10 @@ const GraphState = Annotation.Root({
   currentStepId: Annotation<string | undefined>,
   replanCount: Annotation<number>,
   resumePlanAfterDirect: Annotation<boolean | undefined>,
+  codeVerification: Annotation<CodeVerificationState | undefined>,
+  verificationWaiver: Annotation<VerificationWaiver | undefined>,
+  finalizationOutcome: Annotation<FinalizationOutcome | undefined>,
+  requiredNextAction: Annotation<{ capabilityId: string; reason: string } | undefined>,
 });
 
 // ── createPlan 错误分类 ──────────────────────
@@ -232,10 +288,86 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
       const inPlanMode = state.taskRoute?.executionMode === "plan"
         && state.taskPlan?.status === "running";
       const goto = resolveRouteAfterTool(result, action, inPlanMode);
+
+      // ── 代码验证证据收集 ──
+      let codeVerificationUpdate: Partial<AgentGraphState> = {};
+      if (result && result.status === "succeeded") {
+        const effectKind = result.capabilityId
+          ? resolveEffectKind(deps.getToolById?.(result.capabilityId), result.args)
+          : "unknown";
+        const verificationPolicy = result.capabilityId
+          ? resolveVerificationPolicy(deps.getToolById?.(result.capabilityId), result.args)
+          : "none";
+
+        if (effectKind === "mutation" && verificationPolicy === "code") {
+          // 代码修改成功 -> 增加 mutationRevision，标记 pending
+          const cv = state.codeVerification;
+          const newRevision = (cv?.mutationRevision ?? 0) + 1;
+          const filePath = extractChangedFilePathFromResult(result);
+          codeVerificationUpdate = {
+            codeVerification: {
+              mutationRevision: newRevision,
+              verifiedRevision: cv?.verifiedRevision ?? 0,
+              status: "pending",
+              changedFiles: [...(cv?.changedFiles ?? []), filePath].filter(Boolean) as string[],
+              lastMutationStepAttemptId: result.stepAttemptId,
+              lastVerificationStepAttemptId: cv?.lastVerificationStepAttemptId,
+            },
+          };
+          // 清除之前的验证通过状态（新修改需要重新验证）
+          if (cv?.status === "passed") {
+            (codeVerificationUpdate.codeVerification as CodeVerificationState).status = "pending";
+          }
+        }
+
+        if (effectKind === "verification" && result.toolId === "run_verification") {
+          // 验证操作 -> 检查 revisionAtStart === mutationRevision
+          const cv = state.codeVerification;
+          if (cv) {
+            try {
+              const verificationResult = JSON.parse(result.output);
+              const revisionAtStart = verificationResult.revisionAtStart ?? cv.mutationRevision;
+              const passed = verificationResult.passed === true;
+
+              if (passed && revisionAtStart === cv.mutationRevision) {
+                // 验证通过且验证的是当前最新修改
+                codeVerificationUpdate = {
+                  codeVerification: {
+                    ...cv,
+                    verifiedRevision: revisionAtStart,
+                    status: "passed",
+                    lastVerificationStepAttemptId: result.stepAttemptId,
+                  },
+                  requiredNextAction: undefined,  // 清除验证要求
+                };
+              } else if (passed && revisionAtStart < cv.mutationRevision) {
+                // 验证期间发生了新修改 -> 验证只证明旧 revision，不更新
+              } else {
+                // 验证失败
+                const isTransient = verificationResult.timedOut === true || verificationResult.exitCode === -1;
+                codeVerificationUpdate = {
+                  codeVerification: {
+                    ...cv,
+                    status: "failed",
+                    lastVerificationStepAttemptId: result.stepAttemptId,
+                  },
+                  // 瞬时故障保留 requiredNextAction 允许重试；非瞬时故障清除
+                  requiredNextAction: isTransient ? state.requiredNextAction : undefined,
+                };
+              }
+            } catch {
+              // 解析失败，不更新验证状态
+            }
+          }
+        }
+      }
+
       // 去 soul 时把 decision 改写成 respond
-      const update = goto === "soul"
-        ? { decision: { decision: "respond" as const, reason: "tool_complete" } }
-        : {};
+      const gotoSoul = goto === "soul";
+      const update = {
+        ...(gotoSoul ? { decision: { decision: "respond" as const, reason: "tool_complete" } } : {}),
+        ...codeVerificationUpdate,
+      };
       return new Command({ update, goto });
     })
     .addNode("askUser", async (state) => {
