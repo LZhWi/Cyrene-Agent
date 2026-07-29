@@ -42,7 +42,9 @@ export function registerDelegateCodingTool(
     risk: "fs-write",
     effectKind: "mutation",
     verificationPolicy: "code",
-    executionKind: "subagent",
+    // 不使用 executionKind: "subagent"——那会进入现有 Profile 型子代理 runner。
+    // delegate_coding 有独立的 ClineCore 运行时，通过 execute() 直接调用。
+    ledgerPolicy: "bypass",
     inputSchema: {
       type: "object",
       properties: {
