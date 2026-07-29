@@ -39,11 +39,11 @@ function humanBytes(n: number): string {
 async function executeReadFile(args: Record<string, unknown>): Promise<string> {
   const raw = String(args.path || "").trim();
   const filePath = ensureAbsolute(raw);
-  if (!filePath) return "[错误] path 必须是绝对路径";
+  if (!filePath) return JSON.stringify({ error: "path 必须是绝对路径" });
 
   const stat = safeStat(filePath);
-  if (!stat) return "[错误] 文件不存在或无法访问: " + filePath;
-  if (!stat.isFile()) return "[错误] 不是文件（是目录或其它）: " + filePath;
+  if (!stat) return JSON.stringify({ error: "文件不存在或无法访问: " + filePath });
+  if (!stat.isFile()) return JSON.stringify({ error: "不是文件（是目录或其它）: " + filePath });
 
   const startLine = Math.max(1, Number(args.startLine) || 1);
   const maxLines = Math.max(1, Math.min(2000, Number(args.maxLines) || 500));
@@ -55,7 +55,7 @@ async function executeReadFile(args: Record<string, unknown>): Promise<string> {
     buf = fs.readFileSync(filePath);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return "[错误] 读取失败: " + msg;
+    return JSON.stringify({ error: "读取失败: " + msg });
   }
 
   const truncatedSize = buf.length > READ_MAX_BYTES;
@@ -66,26 +66,34 @@ async function executeReadFile(args: Record<string, unknown>): Promise<string> {
   let nullCount = 0;
   for (let i = 0; i < head.length; i++) if (head[i] === 0) nullCount++;
   if (nullCount > head.length * 0.05) {
-    return "[错误] 这看起来是二进制文件，read_file 只支持文本。如果是图片，请改用 read_image。\n" +
-      "path: " + filePath + "\nsize: " + humanBytes(stat.size);
+    return JSON.stringify({
+      error: "这看起来是二进制文件，read_file 只支持文本。如果是图片，请改用 read_image。",
+      path: filePath,
+      size: humanBytes(stat.size),
+    });
   }
 
   const text = slice.toString("utf8");
   const lines = text.split(/\r?\n/);
-  const total = lines.length;
+  const totalLines = lines.length;
   const sliceLines = lines.slice(startLine - 1, startLine - 1 + maxLines);
+  const endLine = startLine + sliceLines.length - 1;
 
-  const head2 = "path: " + filePath + "\nsize: " + humanBytes(stat.size) +
-    "\ntotal_lines: ~" + total + (truncatedSize ? "  [文件已按 256KB 截断]" : "") +
-    "\nshowing: line " + startLine + " ~ " + (startLine + sliceLines.length - 1) + "\n\n";
+  // 结构化输出
+  const result = {
+    path: filePath,
+    startLine,
+    endLine,
+    totalLines,
+    content: sliceLines.map((line, i) => {
+      const ln = startLine + i;
+      return String(ln).padStart(5, " ") + " | " + line;
+    }).join("\n"),
+    truncated: truncatedSize,
+  };
 
-  // 带行号方便 agent 后续精确引用
-  const numbered = sliceLines.map((line, i) => {
-    const ln = startLine + i;
-    return String(ln).padStart(5, " ") + " | " + line;
-  }).join("\n");
-
-  return head2 + numbered;
+  console.log(LOG_PREFIX, "read_file 完成: lines=" + startLine + ".." + endLine + "/" + totalLines + " truncated=" + truncatedSize);
+  return JSON.stringify(result);
 }
 
 toolRegistry.register({
