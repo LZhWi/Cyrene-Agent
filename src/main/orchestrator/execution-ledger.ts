@@ -31,9 +31,10 @@ export class ExecutionLedger {
     const existing = this.succeeded.get(key);
     if (existing) return { outcome: existing, cached: true };
     const outcome = await run();
-    // 只缓存终态成功：terminal:false 的中间结果不缓存，
-    // 避免非终态结果命中缓存后形成无限循环。
-    // terminal 未显式提供时按默认终态语义（true）缓存。
+    // 只缓存终态成功结果：非终态成功结果（terminal=false）不得写入 ExecutionLedger。
+    // 原因：非终态结果是中间状态，如果被缓存，后续相同输入会命中缓存返回中间结果，
+    // 导致 Agent 认为工具已成功完成而跳过实际执行，形成无限循环。
+    // terminal 未显式提供时按默认终态语义（true）处理。
     if (outcome.status === "succeeded" && outcome.terminal !== false) {
       this.succeeded.set(key, outcome);
     }
