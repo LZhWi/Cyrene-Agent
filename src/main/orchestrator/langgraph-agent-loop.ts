@@ -292,6 +292,53 @@ function errorCodeOf(error: unknown): string {
   return token.startsWith("E_") ? token : "E_TOOL_EXECUTION_FAILED";
 }
 
+/**
+ * 格式化代码验证上下文注入 Soul 系统提示。
+ * Soul 只读取已固化的 FinalizationOutcome，不重新计算完成状态。
+ */
+function formatCodeVerificationContext(
+  cv: import("./agent-graph").CodeVerificationState | undefined,
+  outcome: import("./agent-graph").FinalizationOutcome | undefined,
+): string {
+  if (!cv || cv.mutationRevision === 0) return "";
+
+  const context: Record<string, unknown> = {
+    changedFiles: cv.changedFiles,
+    mutationRevision: cv.mutationRevision,
+    verifiedRevision: cv.verifiedRevision,
+    verificationStatus: cv.status,
+    completionStatus: outcome?.status ?? "completed",
+  };
+
+  if (outcome?.reason) {
+    context.completionReason = outcome.reason;
+  }
+
+  const instructions: string[] = [];
+
+  if (outcome?.status === "completed_unverified") {
+    instructions.push("用户选择跳过验证。不得声称代码已通过测试或编译。必须明确说明修改未经验证。");
+  }
+
+  if (outcome?.status === "failed") {
+    instructions.push("任务失败。不得声称 Bug 已修复或任务已完成。必须汇报失败原因。");
+  }
+
+  if (cv.status === "pending" && cv.mutationRevision > cv.verifiedRevision) {
+    instructions.push("存在未验证的代码修改。如果要声明代码正确，必须先通过验证。");
+  }
+
+  if (instructions.length > 0) {
+    context.instructions = instructions;
+  }
+
+  return [
+    "[CODE_VERIFICATION_CONTEXT]",
+    JSON.stringify(context, null, 2),
+    "[/CODE_VERIFICATION_CONTEXT]",
+  ].join("\n");
+}
+
 function referencePolicyFor(tool: ToolDefinition): ActionReferencePolicy {
   const policies = new Set(Object.values(tool.controlledInput ?? {}).map(controlledInputType));
   if (policies.has("context_ref_array")) return "context_ref_array";
@@ -1202,6 +1249,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             : "",
           SOUL_NO_TOOL_DIRECTIVE,
           formatSoulExecutionContext(buildSoulExecutionContext(state.toolResults, options.tools)),
+          formatCodeVerificationContext(state.codeVerification, state.finalizationOutcome),
         ].filter(Boolean).join("\n\n");
         const soulMessages = [{ role: "system" as const, content: system }, ...state.messages];
         const soulRequest = {
