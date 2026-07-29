@@ -20,10 +20,30 @@ import { createStreamState, handleClineEvent, buildVerification, type StreamEven
 import { ThinkFilter } from "./think-filter";
 import { acquireWorkspaceLock, releaseWorkspaceLock } from "./workspace-lock";
 import { isWithinWorkspace } from "./workspace-guard";
-import { checkCommands, DEFAULT_COMMAND_ALLOW_LIST } from "./command-guard";
+import { checkCommands, checkCommandsForMode, DEFAULT_COMMAND_ALLOW_LIST, type ClinePermissionMode } from "./command-guard";
+import { getCurrentLevel, type AgentFileAccessLevel } from "../../permission";
 import { resolveModelRequestTimeoutMs } from "../config/model-timeout";
 import * as path from "path";
 import { pathToFileURL } from "url";
+
+// ── 权限档位映射 ──────────────────────────────────────────
+
+/**
+ * 将系统四档权限映射为 Cline 三档模式：
+ * - read-only → read-only
+ * - scoped → per-action（指定目录 = 审批模式）
+ * - per-action → per-action
+ * - full → full
+ */
+function mapPermissionLevel(level: AgentFileAccessLevel): ClinePermissionMode {
+  switch (level) {
+    case "read-only": return "read-only";
+    case "scoped": return "per-action";
+    case "per-action": return "per-action";
+    case "full": return "full";
+    default: return "read-only";
+  }
+}
 
 // ── Think 块过滤（用于最终 summary） ─────────────────────
 
@@ -61,41 +81,69 @@ function buildBeforeToolHook(
   workspaceRoot: string,
   allowedCommands: import("./types").CommandAllowList | undefined,
   state: StreamState,
+  commandStats: { approved: number; denied: number },
 ) {
   return (ctx: any): any => {
     const toolName = ctx?.tool?.name || "unknown";
     const input = ctx?.input;
 
+    // 动态读取当前权限档位（支持运行时切换）
+    const level = getCurrentLevel();
+    const mode = mapPermissionLevel(level);
+
     try {
-      // read_files / search_codebase: 自动允许，但仍做 workspaceRoot 检查
+      // read_files / search_codebase: 所有模式自动允许，但仍做 workspaceRoot 检查
       if (toolName === "read_files" || toolName === "search_codebase") {
         return undefined;
       }
 
-      // editor / apply_patch: workspaceRoot 边界检查
+      // editor / apply_patch: workspaceRoot 边界检查（所有模式）
       if (toolName === "editor" || toolName === "apply_patch") {
         const filePath = extractFilePath(input);
         if (filePath && !isWithinWorkspace(filePath, workspaceRoot)) {
           return { skip: true, reason: `file outside workspaceRoot: ${filePath}` };
         }
+
+        // read-only 模式：拒绝写操作
+        if (mode === "read-only") {
+          commandStats.denied++;
+          return { skip: true, reason: `只读模式不允许写操作: ${toolName}` };
+        }
+
         // 保守标记 hasPotentialSideEffects
         state.hasPotentialSideEffects = true;
+        commandStats.approved++;
         return undefined;
       }
 
-      // run_commands: 逐条检查命令白名单
+      // run_commands: 根据权限模式检查
       if (toolName === "run_commands") {
         const commands = Array.isArray(input?.commands) ? input.commands : [];
-        const result = checkCommands(input?.commands, allowedCommands);
-        // 诊断日志：逐条记录命令审批
-        console.log("[delegate_coding] beforeTool run_commands",
-          "count=" + commands.length,
-          "approved=" + !result?.skip,
-          "commands=" + JSON.stringify(commands.map((c: any) => typeof c === "string" ? c : c?.command || String(c))),
-        );
-        if (result?.skip) return result;
+        const result = checkCommandsForMode(input?.commands, mode, workspaceRoot);
+
+        if (result?.skip) {
+          commandStats.denied++;
+          console.log("[delegate_coding] command denied",
+            "mode=" + mode,
+            "reason=" + result.reason,
+            "commands=" + JSON.stringify(commands.map((c: any) => typeof c === "string" ? c : c?.command || String(c))),
+          );
+          return result;
+        }
+
+        // per-action 模式：需要审批
+        if (result?.needApproval) {
+          commandStats.denied++;
+          console.log("[delegate_coding] command needs approval",
+            "mode=" + mode,
+            "commands=" + JSON.stringify(commands.map((c: any) => typeof c === "string" ? c : c?.command || String(c))),
+          );
+          return { skip: true, reason: `审批模式需要用户确认: ${result.approvalDescription || "命令操作"}` };
+        }
+
         // 保守标记 hasPotentialSideEffects
         state.hasPotentialSideEffects = true;
+        commandStats.approved++;
         return undefined;
       }
 
@@ -104,12 +152,21 @@ function buildBeforeToolHook(
         return undefined;
       }
 
-      // 其他工具：拒绝
-      return { skip: true, reason: "tool not in allowlist" };
+      // 其他工具：根据模式决定
+      if (mode === "full") {
+        // 完全模式：放行其他工具（workspace 检查已在上面处理）
+        commandStats.approved++;
+        return undefined;
+      }
+
+      // read-only / per-action：拒绝未知工具
+      commandStats.denied++;
+      return { skip: true, reason: `tool not allowed in ${mode} mode: ${toolName}` };
     } catch (err) {
       // fail-closed：hook 异常时拒绝副作用工具
       if (isSideEffectTool(toolName)) {
         console.error("[delegate_coding] beforeTool error, fail-closed:", err);
+        commandStats.denied++;
         return { skip: true, reason: "approval error: tool denied (fail-closed)" };
       }
       return undefined;
@@ -194,6 +251,13 @@ export async function delegateCoding(
   const timeoutMs = input.budget?.timeoutMs ?? 300_000;
   const allowedCommands = input.allowedCommands ?? DEFAULT_COMMAND_ALLOW_LIST;
 
+  // 命令统计（用于汇总日志）
+  const commandStats = { approved: 0, denied: 0 };
+
+  // 动态读取当前权限档位
+  const permissionLevel = getCurrentLevel();
+  const permissionMode = mapPermissionLevel(permissionLevel);
+
   let cline: any = null;
   let unsubscribe: (() => void) | null = null;
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
@@ -210,6 +274,9 @@ export async function delegateCoding(
     lockKey = acquireWorkspaceLock(input.workspaceRoot, sessionId);
 
     // 2. 通过 ESM Bridge 加载 ClineCore（绕过 TypeScript 的 import→require 转换）
+    // 抑制 AI SDK 重复弃用警告（默认关闭，CYRENE_AI_SDK_WARNINGS=1 时开启）
+    (globalThis as Record<string, unknown>).AI_SDK_LOG_WARNINGS =
+      process.env.CYRENE_AI_SDK_WARNINGS === "1";
     const bridgePath = path.join(__dirname, "cline-esm-bridge.mjs");
     const bridgeUrl = pathToFileURL(bridgePath).href;
     const nativeImport = new Function("specifier", "return import(specifier)") as (specifier: string) => Promise<any>;
@@ -261,6 +328,34 @@ export async function delegateCoding(
     }
 
     // 6. 启动会话
+    // 根据权限模式构建系统提示
+    const systemPromptParts = [
+      "你是一个代码助手。请帮助用户完成代码任务。",
+      "",
+      "重要约束：",
+      "- 当前 cwd 已经是目标工作区，不要执行 pwd/cd/dir/ls/Get-ChildItem/Test-Path",
+      "- 文件查看使用 read_files 和 search_codebase 工具",
+    ];
+
+    if (permissionMode === "read-only") {
+      systemPromptParts.push(
+        "- 当前为只读模式，只能读取文件和查看代码，不能修改任何文件",
+        "- 不能运行测试、构建或安装依赖",
+      );
+    } else if (permissionMode === "per-action") {
+      systemPromptParts.push(
+        "- 当前为审批模式，写操作需要用户确认",
+        "- 验证命令只允许 npx tsc --noEmit（或指定 -p 参数）",
+      );
+    } else {
+      // full mode
+      systemPromptParts.push(
+        "- 当前为完全模式，可以在工作区内自由执行操作",
+        "- 可以运行测试、构建、安装依赖等项目脚本",
+        "- 不要执行危险的系统级操作",
+      );
+    }
+
     const result = await cline.start({
       config: {
         sessionId,
@@ -270,20 +365,12 @@ export async function delegateCoding(
         baseUrl: modelConfig.baseUrl,
         cwd: input.workspaceRoot,
         workspaceRoot: input.workspaceRoot,
-        systemPrompt: [
-          "你是一个代码助手。请帮助用户完成代码任务。",
-          "",
-          "重要约束：",
-          "- 当前 cwd 已经是目标工作区，不要执行 pwd/cd/dir/ls/Get-ChildItem/Test-Path",
-          "- 文件查看使用 read_files 和 search_codebase 工具",
-          "- 验证命令只允许 npx tsc --noEmit（或指定 -p 参数）",
-          "- 不要尝试安装依赖或运行任意命令",
-        ].join("\n"),
+        systemPrompt: systemPromptParts.join("\n"),
         enableTools: true,
         enableSpawnAgent: false,
         enableAgentTeams: false,
         hooks: {
-          beforeTool: buildBeforeToolHook(input.workspaceRoot, allowedCommands, state),
+          beforeTool: buildBeforeToolHook(input.workspaceRoot, allowedCommands, state, commandStats),
         },
       },
       toolPolicies: {
@@ -302,6 +389,9 @@ export async function delegateCoding(
   } catch (err) {
     return handleError(err, state, input.workspaceRoot, sessionId);
   } finally {
+    // 命令策略汇总日志（默认只输出一行汇总）
+    console.log(`[delegate_coding] command policy: mode=${permissionMode} approved=${commandStats.approved} denied=${commandStats.denied}`);
+
     // 严格按顺序清理
     if (timeoutTimer) clearTimeout(timeoutTimer);
     if (unsubscribe) unsubscribe();
