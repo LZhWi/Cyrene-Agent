@@ -55,18 +55,12 @@ export function registerDelegateCodingTool(
       required: ["task", "workspaceRoot"],
     },
     execute: async (args: Record<string, unknown>): Promise<string> => {
-      // 验收模式：使用可信 workspaceRoot，忽略模型参数
-      const acceptanceWorkspace = process.env.CYRENE_CLINE_ACCEPTANCE_WORKSPACE;
-      const isAcceptance = process.env.CYRENE_CLINE_ACCEPTANCE_MODE === "1" && acceptanceWorkspace;
-
+      // workspaceRoot 来自 Conversation Workspace Binding（通过 langgraph-agent-loop 注入 args）
+      // 不再从环境变量读取——环境变量不能覆盖用户绑定的工作区
       const input: DelegateCodingInput = {
         task: String(args.task || ""),
-        workspaceRoot: isAcceptance ? acceptanceWorkspace : String(args.workspaceRoot || ""),
+        workspaceRoot: String(args.workspaceRoot || ""),
       };
-
-      if (isAcceptance) {
-        console.log("[delegate_coding] acceptance mode: workspaceRoot=" + input.workspaceRoot);
-      }
 
       if (!input.task) {
         return buildToolResult({

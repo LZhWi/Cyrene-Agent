@@ -285,10 +285,10 @@ export async function runTaskRouter(input: RunTaskRouterInput): Promise<TaskRout
 export function buildRouterCapabilities(tools: ToolDefinition[]): RunTaskRouterInput["availableCapabilities"] {
   let filtered = tools.filter((t) => t.enabled && !t.deprecated && t.effectKind !== "unknown");
 
-  // CYRENE_CLINE_ACCEPTANCE_MODE: 同步隐藏旧 Coding 工具
-  if (process.env.CYRENE_CLINE_ACCEPTANCE_MODE === "1") {
-    const HIDDEN = new Set(["apply_patch", "search_code", "write_file", "run_shell"]);
-    filtered = filtered.filter((t) => !HIDDEN.has(t.id));
+  // CYRENE_HIDE_LEGACY_CODING_TOOLS: 同步隐藏旧 Coding 工具
+  if (process.env.CYRENE_HIDE_LEGACY_CODING_TOOLS === "1") {
+    const HIDDEN_LEGACY = new Set(["apply_patch", "search_code", "write_file", "run_shell"]);
+    filtered = filtered.filter((t) => !HIDDEN_LEGACY.has(t.id));
   }
 
   return filtered

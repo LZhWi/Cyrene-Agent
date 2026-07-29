@@ -467,13 +467,12 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
   // 过滤掉 deprecated 和 effectKind=unknown 的工具（后者会被 ExecutionPolicyGuard 拒绝，不应暴露给模型）
   let enabledTools = options.tools.filter((tool) => tool.enabled && !tool.deprecated && tool.effectKind !== "unknown");
 
-  // CYRENE_CLINE_ACCEPTANCE_MODE: 开发环境验收模式
-  // 隐藏旧 Coding 工具，只暴露 delegate_coding + run_verification
-  const CLINE_ACCEPTANCE_MODE = process.env.CYRENE_CLINE_ACCEPTANCE_MODE === "1";
-  if (CLINE_ACCEPTANCE_MODE) {
-    const HIDDEN_IN_ACCEPTANCE = new Set(["apply_patch", "search_code", "write_file", "run_shell"]);
-    enabledTools = enabledTools.filter((tool) => !HIDDEN_IN_ACCEPTANCE.has(tool.id));
-    console.log("[AgentFlow] CLINE_ACCEPTANCE_MODE=1, hidden tools:", Array.from(HIDDEN_IN_ACCEPTANCE).filter(id => enabledTools.some(t => t.id === id)).join(", ") || "(none to hide)");
+  // CYRENE_HIDE_LEGACY_CODING_TOOLS: 隐藏旧 Coding 工具，只暴露 delegate_coding + run_verification
+  const HIDE_LEGACY_TOOLS = process.env.CYRENE_HIDE_LEGACY_CODING_TOOLS === "1";
+  if (HIDE_LEGACY_TOOLS) {
+    const HIDDEN_LEGACY = new Set(["apply_patch", "search_code", "write_file", "run_shell"]);
+    enabledTools = enabledTools.filter((tool) => !HIDDEN_LEGACY.has(tool.id));
+    console.log("[AgentFlow] CYRENE_HIDE_LEGACY_CODING_TOOLS=1, hidden:", Array.from(HIDDEN_LEGACY).filter(id => enabledTools.some(t => t.id === id)).join(", ") || "(none to hide)");
   }
   // 过滤后的版本（按 inPlanMode 动态切换）
   let enabledToolsFiltered = enabledTools;
@@ -488,10 +487,10 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
   }));
   let capabilitiesFiltered: ActionCapability[] = capabilities;
 
-  // 启动诊断日志：验收模式状态 + 工具列表
-  if (CLINE_ACCEPTANCE_MODE) {
+  // 启动诊断日志：工具列表
+  if (HIDE_LEGACY_TOOLS) {
     const delegateCoding = enabledTools.find((t) => t.id === "delegate_coding");
-    console.log("[AgentFlow] acceptanceMode=true");
+    console.log("[AgentFlow] hideLegacyCodingTools=true");
     console.log("[AgentFlow] availableTools=[" + capabilities.map((c) => c.capability).join(", ") + "]");
     console.log("[AgentFlow] delegate_coding registered=" + !!delegateCoding + " enabled=" + (delegateCoding?.enabled ?? false));
   }
@@ -814,8 +813,8 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         runnableToolIdsFiltered = runnableToolIds;
         capabilitiesFiltered = capabilities;
       }
-      // 最终可见性层：验收模式强制过滤（覆盖 plan/direct/fallback 全路径）
-      if (CLINE_ACCEPTANCE_MODE) {
+      // 最终可见性层：隐藏旧 Coding 工具（覆盖 plan/direct/fallback 全路径）
+      if (HIDE_LEGACY_TOOLS) {
         const HIDDEN_FINAL = new Set(["apply_patch", "search_code", "write_file", "run_shell"]);
         const beforeIds = capabilitiesFiltered.map(c => c.capability);
         enabledToolsFiltered = enabledToolsFiltered.filter((t) => !HIDDEN_FINAL.has(t.id));
@@ -828,7 +827,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           referencePolicy: referencePolicyFor(tool),
         }));
         const removed = beforeIds.filter(id => HIDDEN_FINAL.has(id));
-        if (removed.length > 0) flowLog(`Acceptance mode: removed from Action Gate: ${removed.join(", ")}`);
+        if (removed.length > 0) flowLog(`Legacy tools hidden: removed from Action Gate: ${removed.join(", ")}`);
       }
       if (lastResult?.deduplicated) {
         debugLog(`${LOG_PREFIX} node=decide forced_respond reason=duplicate_terminal_action`);

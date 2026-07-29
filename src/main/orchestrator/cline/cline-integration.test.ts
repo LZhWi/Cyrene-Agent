@@ -570,3 +570,84 @@ describe("Electron 打包依赖检查", () => {
     expect(nodeFiles.length).toBe(0);
   });
 });
+
+// ══════════════════════════════════════════════════════════════
+// 环境变量不能覆盖用户绑定的工作区
+// ══════════════════════════════════════════════════════════════
+
+describe("环境变量不能覆盖用户绑定的工作区", () => {
+  const originalEnv = process.env;
+
+  beforeEach(() => {
+    process.env = { ...originalEnv };
+  });
+
+  afterEach(() => {
+    process.env = originalEnv;
+  });
+
+  it("CYRENE_CLINE_ACCEPTANCE_WORKSPACE 不再影响 delegate_coding", () => {
+    // 设置旧的 acceptance 环境变量
+    process.env.CYRENE_CLINE_ACCEPTANCE_MODE = "1";
+    process.env.CYRENE_CLINE_ACCEPTANCE_WORKSPACE = "/evil/workspace";
+
+    // 验证环境变量已设置
+    expect(process.env.CYRENE_CLINE_ACCEPTANCE_WORKSPACE).toBe("/evil/workspace");
+
+    // 但 tool-registration.ts 不再读取这些变量
+    // workspaceRoot 应该来自 args（由 langgraph-agent-loop 从 conversation binding 注入）
+    // 而不是来自环境变量
+    const toolRegistrationSource = require("fs").readFileSync(
+      require("path").join(__dirname, "tool-registration.ts"),
+      "utf8",
+    );
+    // 确保不再包含 CYRENE_CLINE_ACCEPTANCE_WORKSPACE 的引用
+    expect(toolRegistrationSource).not.toContain("CYRENE_CLINE_ACCEPTANCE_WORKSPACE");
+    expect(toolRegistrationSource).not.toContain("acceptanceWorkspace");
+  });
+
+  it("CYRENE_CLINE_ACCEPTANCE_MODE 不再影响 workspaceRoot", () => {
+    process.env.CYRENE_CLINE_ACCEPTANCE_MODE = "1";
+
+    // 验证 tool-registration.ts 不再使用 CYRENE_CLINE_ACCEPTANCE_MODE
+    const toolRegistrationSource = require("fs").readFileSync(
+      require("path").join(__dirname, "tool-registration.ts"),
+      "utf8",
+    );
+    expect(toolRegistrationSource).not.toContain("CYRENE_CLINE_ACCEPTANCE_MODE");
+  });
+
+  it("CYRENE_HIDE_LEGACY_CODING_TOOLS 只影响工具过滤，不影响工作区", () => {
+    process.env.CYRENE_HIDE_LEGACY_CODING_TOOLS = "1";
+
+    // 验证 langgraph-agent-loop.ts 使用新变量名
+    const agentLoopSource = require("fs").readFileSync(
+      require("path").join(__dirname, "..", "langgraph-agent-loop.ts"),
+      "utf8",
+    );
+    expect(agentLoopSource).toContain("CYRENE_HIDE_LEGACY_CODING_TOOLS");
+    expect(agentLoopSource).not.toContain("CYRENE_CLINE_ACCEPTANCE_MODE");
+
+    // 验证 task-router.ts 使用新变量名
+    const taskRouterSource = require("fs").readFileSync(
+      require("path").join(__dirname, "..", "task-router.ts"),
+      "utf8",
+    );
+    expect(taskRouterSource).toContain("CYRENE_HIDE_LEGACY_CODING_TOOLS");
+    expect(taskRouterSource).not.toContain("CYRENE_CLINE_ACCEPTANCE_MODE");
+  });
+
+  it("无工作区绑定时返回 WORKSPACE_NOT_BOUND", () => {
+    // 模拟 delegate_coding 被调用但没有 workspaceRoot
+    const args = { task: "test task", workspaceRoot: "" };
+    expect(args.workspaceRoot).toBe("");
+
+    // 验证 tool-registration.ts 会返回 WORKSPACE_NOT_BOUND 错误
+    const toolRegistrationSource = require("fs").readFileSync(
+      require("path").join(__dirname, "tool-registration.ts"),
+      "utf8",
+    );
+    expect(toolRegistrationSource).toContain("WORKSPACE_NOT_BOUND");
+    expect(toolRegistrationSource).toContain("当前对话未绑定工作区目录");
+  });
+});
