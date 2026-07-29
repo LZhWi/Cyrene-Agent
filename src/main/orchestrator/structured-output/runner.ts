@@ -92,28 +92,20 @@ export async function runStructuredOutput<T, TRequest>(
     }
   };
 
-  // 统一模型请求超时：优先使用 modelRequestTimeoutSec（新配置）
-  // 否则回退到旧的 profilePerAttemptTimeoutMs/profileTotalBudgetMs
-  if (timeoutSettings.modelRequestTimeoutSec != null) {
-    const perAttempt = resolveModelRequestTimeoutMs(timeoutSettings);
-    const totalBudget = resolveTotalBudgetMs(perAttempt, policy.maxAttempts);
+  // 统一模型请求超时：始终使用新配置模块
+  // resolveModelRequestTimeoutMs 内部会处理未设置的情况，返回默认值 60s
+  const perAttempt = resolveModelRequestTimeoutMs(timeoutSettings);
+  const totalBudget = resolveTotalBudgetMs(perAttempt, policy.maxAttempts);
+  clonePolicyIfNeeded();
+  policy.perAttemptTimeoutMs = perAttempt;
+  policy.totalBudgetMs = totalBudget;
+
+  console.log(`[StructuredOutput] stage=${input.stage} perAttempt=${perAttempt}ms totalBudget=${totalBudget}ms maxAttempts=${policy.maxAttempts}`);
+
+  // 最小剩余时间仍从旧配置读取（暂不统一）
+  if (timeoutSettings.profileMinimumRemainingBudgetMs !== -1) {
     clonePolicyIfNeeded();
-    policy.perAttemptTimeoutMs = perAttempt;
-    policy.totalBudgetMs = totalBudget;
-  } else {
-    // 兼容旧配置
-    if (timeoutSettings.profileTotalBudgetMs !== -1) {
-      clonePolicyIfNeeded();
-      policy.totalBudgetMs = timeoutSettings.profileTotalBudgetMs;
-    }
-    if (timeoutSettings.profilePerAttemptTimeoutMs !== -1) {
-      clonePolicyIfNeeded();
-      policy.perAttemptTimeoutMs = timeoutSettings.profilePerAttemptTimeoutMs;
-    }
-    if (timeoutSettings.profileMinimumRemainingBudgetMs !== -1) {
-      clonePolicyIfNeeded();
-      policy.minimumRemainingBudgetMs = timeoutSettings.profileMinimumRemainingBudgetMs;
-    }
+    policy.minimumRemainingBudgetMs = timeoutSettings.profileMinimumRemainingBudgetMs;
   }
 
   const finish = (

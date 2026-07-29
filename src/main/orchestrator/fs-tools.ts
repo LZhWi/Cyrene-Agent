@@ -39,10 +39,21 @@ function humanBytes(n: number): string {
 async function executeReadFile(args: Record<string, unknown>): Promise<string> {
   const raw = String(args.path || "").trim();
   const filePath = ensureAbsolute(raw);
-  if (!filePath) return JSON.stringify({ success: false, errorCode: "INVALID_PATH", error: "path 必须是绝对路径", retryable: false });
+  if (!filePath) {
+    console.log(LOG_PREFIX, "read_file 非绝对路径:", raw, "cwd=", process.cwd());
+    return JSON.stringify({ success: false, errorCode: "INVALID_PATH", error: "path 必须是绝对路径: " + raw, retryable: false });
+  }
 
   const stat = safeStat(filePath);
-  if (!stat) return JSON.stringify({ success: false, errorCode: "FILE_NOT_FOUND", error: "文件不存在或无法访问: " + filePath, retryable: false });
+  if (!stat) {
+    console.log(LOG_PREFIX, "read_file 文件不存在:", filePath, "raw=", raw, "cwd=", process.cwd());
+    return JSON.stringify({
+      success: false,
+      errorCode: "FILE_NOT_FOUND",
+      error: "文件不存在或无法访问: " + filePath + "。不要重复读取相同路径，请先用 search_code 或 list_dir 重新定位文件。",
+      retryable: true,
+    });
+  }
   if (!stat.isFile()) return JSON.stringify({ success: false, errorCode: "NOT_A_FILE", error: "不是文件（是目录或其它）: " + filePath, retryable: false });
 
   const startLine = Math.max(1, Number(args.startLine) || 1);
