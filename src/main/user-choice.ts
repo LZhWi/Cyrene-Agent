@@ -149,6 +149,7 @@ export function registerChoiceIpc(): void {
       return { ok: false };
     }
     const resolved = payload.answer ?? payload.value ?? "";
+    console.log(LOG_PREFIX, "用户回答 payload:", JSON.stringify({ id: payload.id, hasAnswer: !!payload.answer, valueType: typeof payload.value, resolved: JSON.stringify(resolved).slice(0, 200) }));
     const accepted = pending.resolve(resolved);
     if (!accepted) {
       console.warn(LOG_PREFIX, "用户选择校验失败:", payload.id);

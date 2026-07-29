@@ -201,12 +201,16 @@ function structuredOutputFor(
 }
 
 function fullMachineInput(input: BuildActionGateRequestInput): object {
+  const clarificationAnswers = input.clarificationAnswers ?? [];
+  if (clarificationAnswers.length > 0) {
+    console.log("[ActionGate] clarificationAnswers count=", clarificationAnswers.length, "answers=", JSON.stringify(clarificationAnswers).slice(0, 200));
+  }
   return {
     originalQuery: input.originalQuery,
     rewrittenQuery: input.contextualizedQuery,
     availableCapabilities: input.availableCapabilities,
     runtimeEnvironmentContext: input.runtimeEnvironmentContext ?? "",
-    clarificationAnswers: input.clarificationAnswers ?? [],
+    clarificationAnswers,
     trustedRefs: input.trustedRefs,
     citaContext: input.citaContextBlock,
     toolExecutionContext: buildToolExecutionContext(input.toolResults),
