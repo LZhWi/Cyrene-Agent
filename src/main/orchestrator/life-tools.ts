@@ -281,6 +281,95 @@ function registerTranslateTool(): void {
 // 代码补丁
 // ══════════════════════════════════════════════════════════
 
+interface MatchPosition {
+  line: number;       // 1-based 行号
+  context: string;    // 匹配位置前后各 2 行上下文
+}
+
+/** 计算两个字符串的相似度（0-1） */
+function similarity(a: string, b: string): number {
+  if (a === b) return 1;
+  if (!a || !b) return 0;
+  const maxLen = Math.max(a.length, b.length);
+  if (maxLen === 0) return 1;
+
+  // 简单的字符集相似度
+  const setA = new Set(a);
+  const setB = new Set(b);
+  let intersection = 0;
+  for (const c of setA) {
+    if (setB.has(c)) intersection++;
+  }
+  return intersection / Math.max(setA.size, setB.size);
+}
+
+/** 在文件行中查找最接近 old_string 的位置 */
+function findNearestMatch(
+  lines: string[],
+  oldStr: string,
+): { line: number; similarity: number; context: string } | null {
+  const oldLines = oldStr.split("\n");
+  const firstLine = oldLines[0]?.trim() || "";
+  if (!firstLine) return null;
+
+  let bestMatch: { line: number; sim: number } | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const sim = similarity(firstLine, line.trim());
+    if (sim > 0.5 && (!bestMatch || sim > bestMatch.sim)) {
+      bestMatch = { line: i + 1, sim };
+    }
+  }
+
+  if (!bestMatch) return null;
+
+  // 收集上下文（前后各 2 行）
+  const contextStart = Math.max(0, bestMatch.line - 3);
+  const contextEnd = Math.min(lines.length, bestMatch.line + 2);
+  const contextLines = lines.slice(contextStart, contextEnd).map((l, idx) => {
+    const ln = contextStart + idx + 1;
+    const marker = ln === bestMatch!.line ? ">" : " ";
+    return `${marker} ${String(ln).padStart(4)} | ${l}`;
+  });
+
+  return {
+    line: bestMatch.line,
+    similarity: bestMatch.sim,
+    context: contextLines.join("\n"),
+  };
+}
+
+/** 查找所有匹配位置和上下文 */
+function findAllMatchPositions(lines: string[], oldStr: string): MatchPosition[] {
+  const positions: MatchPosition[] = [];
+  const oldLines = oldStr.split("\n");
+  const firstLine = oldLines[0] || "";
+
+  for (let i = 0; i < lines.length; i++) {
+    if (lines[i].includes(firstLine)) {
+      // 检查完整匹配
+      const candidate = lines.slice(i, i + oldLines.length).join("\n");
+      if (candidate === oldStr) {
+        const contextStart = Math.max(0, i - 2);
+        const contextEnd = Math.min(lines.length, i + oldLines.length + 2);
+        const contextLines = lines.slice(contextStart, contextEnd).map((l, idx) => {
+          const ln = contextStart + idx + 1;
+          const marker = (ln >= i + 1 && ln <= i + oldLines.length) ? ">" : " ";
+          return `${marker} ${String(ln).padStart(4)} | ${l}`;
+        });
+
+        positions.push({
+          line: i + 1,
+          context: contextLines.join("\n"),
+        });
+      }
+    }
+  }
+
+  return positions;
+}
+
 function registerApplyPatchTool(): void {
   toolRegistry.register({
     id: "apply_patch",
@@ -310,20 +399,52 @@ function registerApplyPatchTool(): void {
     },
     execute: async (args) => {
       const filePath = String(args.file_path || "");
-      if (!filePath) return "[错误] file_path 不能为空";
-      if (!fs.existsSync(filePath)) return `[错误] 文件不存在：${filePath}`;
+      if (!filePath) return JSON.stringify({ error: "file_path 不能为空", success: false });
+      if (!fs.existsSync(filePath)) return JSON.stringify({ error: `文件不存在：${filePath}`, success: false });
 
       const content = fs.readFileSync(filePath, "utf8");
       const oldStr = String(args.old_string ?? "");
       const newStr = String(args.new_string ?? "");
-      if (!oldStr) return "[错误] old_string 不能为空";
+      if (!oldStr) return JSON.stringify({ error: "old_string 不能为空", success: false });
 
+      const lines = content.split("\n");
       const count = content.split(oldStr).length - 1;
+
       if (count === 0) {
-        return "[错误] old_string 在文件中未找到。请确认内容（包括缩进、换行）是否精确匹配。";
+        // old_string 未找到：提供最近似候选和上下文
+        const nearest = findNearestMatch(lines, oldStr);
+        return JSON.stringify({
+          error: "old_string 在文件中未找到。请确认内容（包括缩进、换行）是否精确匹配。",
+          success: false,
+          diagnostic: {
+            kind: "not_found",
+            filePath,
+            oldStringLength: oldStr.length,
+            nearestMatch: nearest ? {
+              line: nearest.line,
+              similarity: nearest.similarity,
+              context: nearest.context,
+            } : null,
+          },
+        });
       }
+
       if (count > 1) {
-        return `[错误] old_string 在文件中匹配 ${count} 处，需要更长的上下文使其唯一。`;
+        // 多处匹配：提供所有匹配位置和上下文
+        const positions = findAllMatchPositions(lines, oldStr);
+        return JSON.stringify({
+          error: `old_string 在文件中匹配 ${count} 处，需要更长的上下文使其唯一。`,
+          success: false,
+          diagnostic: {
+            kind: "multiple_matches",
+            filePath,
+            matchCount: count,
+            positions: positions.slice(0, 5).map(pos => ({
+              line: pos.line,
+              context: pos.context,
+            })),
+          },
+        });
       }
 
       const newContent = content.replace(oldStr, newStr);
