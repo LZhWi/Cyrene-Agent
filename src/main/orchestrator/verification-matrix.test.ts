@@ -99,10 +99,15 @@ describe("ToolEffectKind and VerificationPolicy", () => {
 // ══════════════════════════════════════════════════════════════
 
 describe("ToolExecutionPolicyGuard", () => {
-  it("rejects effectKind=unknown", () => {
-    const decision = checkExecutionPolicy("unknown", "none", "test_tool");
+  it("rejects effectKind=unknown with verificationPolicy=unknown", () => {
+    const decision = checkExecutionPolicy("unknown", "unknown", "test_tool");
     expect(decision.allowed).toBe(false);
     expect(decision.errorCode).toBe("E_UNKNOWN_TOOL_EFFECT");
+  });
+
+  it("allows effectKind=unknown with verificationPolicy=none (MCP tools)", () => {
+    const decision = checkExecutionPolicy("unknown", "none", "mcp_tool");
+    expect(decision.allowed).toBe(true);
   });
 
   it("rejects mutation + verificationPolicy=unknown", () => {
@@ -260,7 +265,9 @@ describe("Plan Normalizer", () => {
       { id: "s1", objective: "修改代码", capabilities: ["apply_patch"] },
       { id: "s2", objective: "验证", capabilities: ["run_verification"] },
     ]);
-    plan.steps[1].completionPolicy = { allOf: [{ kind: "verification_passed" }] };
+    plan.steps[1].completionPolicy = {
+      allOf: [{ kind: "verification_passed", verificationType: "typecheck" }],
+    } as any;
 
     const caps = makeCapabilities([{ id: "apply_patch", effectKind: "mutation", verificationPolicy: "code" }]);
 
@@ -424,13 +431,13 @@ describe("FinalizationOutcome resolution", () => {
 
   it("user waiver -> completed_unverified", () => {
     const state = stateWithCodeVerification({ mutationRevision: 1 });
-    const outcome = resolveCompletionStatus(state, { kind: "allow_unverified", update: {} });
+    const outcome = resolveCompletionStatus(state, { kind: "allow_unverified", update: {} } as any);
     expect(outcome.status).toBe("completed_unverified");
   });
 
   it("allow_failure -> failed", () => {
     const state = stateWithCodeVerification({ mutationRevision: 1 });
-    const outcome = resolveCompletionStatus(state, { kind: "allow_failure", reason: "测试失败" });
+    const outcome = resolveCompletionStatus(state, { kind: "allow_failure", reason: "测试失败" } as any);
     expect(outcome.status).toBe("failed");
     expect(outcome.reason).toBe("测试失败");
   });

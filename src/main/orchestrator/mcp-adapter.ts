@@ -120,6 +120,10 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
       name: "[" + config.name + "] " + mt.name,
       description: mt.description || mt.name,
       enabled: true,
+      // MCP 动态工具默认为 unknown，需要由工具清单或配置覆盖
+      // Phase 1: unknown 工具会被 ToolExecutionPolicyGuard 拒绝
+      // Phase 2: 需要为 MCP 工具提供 effectKind 配置机制
+      effectKind: "unknown",
       inputSchema: {
         type: "object",
         properties: mt.inputSchema?.properties as Record<string, { type: string; description: string }> || {},

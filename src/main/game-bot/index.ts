@@ -172,6 +172,7 @@ export function initGameBot(): void {
       "无需参数。调用后引擎独立运行，进度实时回传。返回启动结果。",
     enabled: initialSettings.enabled,
     risk: "input-control",
+    effectKind: "external_side_effect" as const,
     inputSchema: { type: "object", properties: {}, required: [] },
     execute: async () => {
       const r = await startGameBot();

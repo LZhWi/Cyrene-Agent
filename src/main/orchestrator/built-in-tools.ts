@@ -504,6 +504,8 @@ toolRegistry.register({
     "args (字符串数组)，env (键值对，环境变量)，cwd (可选工作目录)。",
   enabled: true,
   risk: "fs-write",
+  effectKind: "mutation" as const,
+  verificationPolicy: "artifact" as const,
   inputSchema: {
     type: "object",
     properties: {

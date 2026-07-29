@@ -164,18 +164,24 @@ export interface ExecutionPolicyDecision {
  * 执行前策略守卫：在工具实际执行前检查是否允许。
  * 覆盖 Plan 和 Direct 模式。
  * Evidence Collector 只收集已合法执行的结果，不负责发现配置错误。
+ *
+ * 策略：
+ * - effectKind=unknown 且 verificationPolicy=unknown -> 拒绝（配置缺失）
+ * - effectKind=unknown 但 verificationPolicy 有值 -> 允许但不产生验证证据
+ * - effectKind=mutation + verificationPolicy=unknown -> 拒绝
+ * - 其他组合 -> 允许
  */
 export function checkExecutionPolicy(
   effectKind: string,
   verificationPolicy: string,
   toolId: string,
 ): ExecutionPolicyDecision {
-  // 未配置工具或 effectKind=unknown -> 拒绝
-  if (effectKind === "unknown") {
+  // effectKind=unknown 且 verificationPolicy=unknown -> 拒绝（配置缺失）
+  if (effectKind === "unknown" && verificationPolicy === "unknown") {
     return {
       allowed: false,
       errorCode: "E_UNKNOWN_TOOL_EFFECT",
-      message: `工具 ${toolId} 的 effectKind 为 unknown，系统无法确定工具效果类型，拒绝执行。请为该工具配置 effectKind。`,
+      message: `工具 ${toolId} 的 effectKind 和 verificationPolicy 均为 unknown，系统无法确定工具效果类型，拒绝执行。请为该工具配置 effectKind。`,
     };
   }
 
