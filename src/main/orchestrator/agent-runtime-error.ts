@@ -7,7 +7,10 @@
 export type AgentErrorCode =
   | "E_AGENT_NO_PROGRESS"
   | "E_AGENT_GRAPH_ITERATION_LIMIT"
-  | "E_MODEL_REQUEST_FAILED";
+  | "E_MODEL_REQUEST_FAILED"
+  | "E_MODEL_REQUEST_TIMEOUT"
+  | "E_MODEL_HTTP_ERROR"
+  | "E_MODEL_RESPONSE_PARSE_FAILED";
 
 export class AgentRuntimeError extends Error {
   constructor(

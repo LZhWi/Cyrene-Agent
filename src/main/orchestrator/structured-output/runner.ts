@@ -154,6 +154,7 @@ export async function runStructuredOutput<T, TRequest>(
     const timeoutMs = Math.min(policy.perAttemptTimeoutMs, remaining);
     let timer: ReturnType<typeof setTimeout> | undefined;
     let response: StructuredGenerationResponse;
+    const attemptStart = now();
     attempts += 1;
     try {
       response = await Promise.race([
@@ -165,8 +166,34 @@ export async function runStructuredOutput<T, TRequest>(
           }, timeoutMs);
         }),
       ]);
-    } catch {
-      return fail("MODEL_REQUEST_FAILED", "fail_closed");
+    } catch (err) {
+      const elapsedMs = now() - attemptStart;
+      const errorName = err instanceof Error ? err.name : typeof err;
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const isTimeout = errorMessage.includes("STRUCTURED_OUTPUT_TIMEOUT") || errorMessage.includes("timeout") || errorName === "AbortError";
+      const isAborted = controller.signal.aborted;
+
+      // 分类错误码
+      let errorCode = "MODEL_REQUEST_FAILED";
+      if (isTimeout || isAborted) {
+        errorCode = "MODEL_REQUEST_TIMEOUT";
+      } else if (errorMessage.includes("HTTP") || errorMessage.includes("status")) {
+        errorCode = "MODEL_HTTP_ERROR";
+      } else if (errorMessage.includes("JSON") || errorMessage.includes("parse")) {
+        errorCode = "MODEL_RESPONSE_PARSE_FAILED";
+      }
+
+      console.error("[StructuredOutput] request failed", {
+        stage: input.stage,
+        errorCode,
+        errorName,
+        errorMessage: errorMessage.slice(0, 200),
+        elapsedMs,
+        timeoutMs,
+        aborted: isAborted,
+        attempt: attempts,
+      });
+      return fail(errorCode, "fail_closed");
     } finally {
       if (timer) clearTimeout(timer);
       input.signal?.removeEventListener("abort", abort);

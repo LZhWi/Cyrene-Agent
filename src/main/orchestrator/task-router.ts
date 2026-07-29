@@ -102,6 +102,18 @@ const ROUTER_SYSTEM_PROMPT = `你是 Task Router，负责判断当前任务的�
 3. 只是搜索/查询类（不写文件）→ direct
 4. 不确定时 → direct（宁可漏判，不要误判）
 
+## 多步骤识别
+如果任务描述中包含以下任意两种动作的组合，则判定为 plan：
+- 搜索/查找/定位
+- 读取/查看/检查
+- 修改/编辑/更新
+- 验证/测试/检查/编译
+
+例如：
+- "搜索代码，然后修改" → plan（搜索+修改）
+- "读取文件，修改注释，运行测试" → plan（读取+修改+验证）
+- "查找函数位置，读取代码，修改逻辑" → plan（搜索+读取+修改）
+
 "句子长"不等于复杂，"句子短"不等于简单。
 
 ## 输出
@@ -114,7 +126,8 @@ const ROUTER_SYSTEM_PROMPT = `你是 Task Router，负责判断当前任务的�
 "查杭州天气" -> {"executionMode":"direct","skillIds":[],"reason":"单次查询"}
 "搜索歌曲然后播放" -> {"executionMode":"direct","skillIds":["cyrene-music-companion"],"reason":"固定续链"}
 "生成Excel月度报表" -> {"executionMode":"plan","skillIds":["xlsx"],"reason":"多步+需要校验"}
-"搜索AI新闻，筛选重复，比较来源，整理成文档" -> {"executionMode":"plan","skillIds":[],"reason":"多步依赖+多领域"}`;
+"搜索AI新闻，筛选重复，比较来源，整理成文档" -> {"executionMode":"plan","skillIds":[],"reason":"多步依赖+多领域"}
+"查找代码位置，读取文件，修改注释，运行类型检查" -> {"executionMode":"plan","skillIds":[],"reason":"搜索+读取+修改+验证四步依赖链"}`;
 
 function routerSchema(): object {
   return {

@@ -422,6 +422,15 @@ function classifyCreatePlanError(error: unknown): { errorType: string; retryable
   if (errStr.includes("overloaded") || errStr.includes("timeout") || errStr.includes("TIMEOUT")) {
     return { errorType: "temporary_server_error", retryable: true };
   }
+  if (errStr.includes("MODEL_REQUEST_TIMEOUT") || errStr.includes("STRUCTURED_OUTPUT_TIMEOUT")) {
+    return { errorType: "timeout", retryable: true };
+  }
+  if (errStr.includes("MODEL_HTTP_ERROR")) {
+    return { errorType: "http_error", retryable: httpStatus === 429 || httpStatus === 502 || httpStatus === 503 || httpStatus === 504 || httpStatus === 529 };
+  }
+  if (errStr.includes("MODEL_RESPONSE_PARSE_FAILED")) {
+    return { errorType: "parse_failed", retryable: false };
+  }
   if (errStr.includes("MODEL_REQUEST_FAILED") && !httpStatus) {
     // 无 HTTP 状态码的请求失败，可能是网络问题
     return { errorType: "request_failed", retryable: true };

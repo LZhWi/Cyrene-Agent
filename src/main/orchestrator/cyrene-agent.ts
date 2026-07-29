@@ -217,9 +217,29 @@ async function executeToolCall(
   }
 
   try {
+    const output = await tool.execute(args, tool.needsContext ? ctx : undefined);
+    // 检查工具返回的 JSON 是否包含业务错误
+    if (typeof output === "string") {
+      try {
+        const parsed = JSON.parse(output);
+        if (parsed && typeof parsed === "object" && (parsed.error || parsed.success === false)) {
+          const errorMsg = parsed.error || "工具执行失败";
+          const errorCode = parsed.errorCode || "E_TOOL_BUSINESS_FAILED";
+          return {
+            status: "failed",
+            errorCode,
+            output: typeof errorMsg === "string" ? errorMsg : JSON.stringify(errorMsg),
+            terminal: true,
+            retryable: false,
+          };
+        }
+      } catch {
+        // 不是 JSON，正常返回
+      }
+    }
     return {
       status: "succeeded",
-      output: await tool.execute(args, tool.needsContext ? ctx : undefined),
+      output,
     };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -490,6 +510,9 @@ export function classifyRunError(
   if (err instanceof AgentRuntimeError) {
     const safeMessages: Record<string, string> = {
       E_MODEL_REQUEST_FAILED: "模型服务暂时不可用，请稍后重试。",
+      E_MODEL_REQUEST_TIMEOUT: "模型响应超时，请稍后重试。",
+      E_MODEL_HTTP_ERROR: "模型服务请求失败，请稍后重试。",
+      E_MODEL_RESPONSE_PARSE_FAILED: "模型返回格式异常，请重试。",
       E_AGENT_NO_PROGRESS: "请求处理遇到问题，请重试。",
       E_AGENT_GRAPH_ITERATION_LIMIT: "请求处理步骤过多，请简化问题后重试。",
     };
