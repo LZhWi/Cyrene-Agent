@@ -35,6 +35,7 @@ import {
 import {
   runCreatePlan, runReplan, verifyStep, computeMaxIterations,
   generateExecutionId, generateAttemptId, findStep, buildPlanSnapshot,
+  normalizePlan,
   DEFAULT_MAX_REPLANS, HARD_MAX_ITERATIONS,
   type TaskPlan, type PlanStep,
 } from "./task-plan";
@@ -520,6 +521,19 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           ),
           signal: options.signal,
         });
+
+        // Plan 规范化：检测 mutation 步骤，按 verificationPolicy 追加验证步骤
+        const capEffectMap = enabledToolsFiltered.map(t => ({
+          capabilityId: t.capability ?? t.id,
+          effectKind: t.effectKind ?? "unknown" as const,
+          verificationPolicy: t.verificationPolicy ?? "none" as const,
+        }));
+        const { accepted, rejectReason } = normalizePlan(plan, capEffectMap);
+        if (!accepted) {
+          flowLog(`2.7 计划规范化失败：${rejectReason}`);
+          throw new Error(`Plan normalization rejected: ${rejectReason}`);
+        }
+
         // 初始化第一个步骤
         const firstStep = plan.steps.find((s) => s.status === "pending");
         if (firstStep) {

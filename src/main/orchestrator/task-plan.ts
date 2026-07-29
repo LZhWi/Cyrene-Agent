@@ -30,9 +30,12 @@ export const ITERATIONS_PER_STEP = 3;
 
 // ── 数据结构 ──────────────────────────────
 
+export type VerificationType = "typecheck" | "test" | "build" | "lint";
+
 export type CompletionCriterion =
   | { kind: "tool_succeeded"; capabilityId: string }
-  | { kind: "projection_claim"; capabilityId?: string; claimKind: SoulClaimKind };
+  | { kind: "projection_claim"; capabilityId?: string; claimKind: SoulClaimKind }
+  | { kind: "verification_passed"; verificationType?: VerificationType };
 
 export interface StepCompletionPolicy {
   /** 必须全部满足 */
@@ -248,19 +251,30 @@ function checkCriterion(
     );
   }
   // projection_claim: 用共享投影函数检查
-  for (const result of results) {
-    if (result.status !== "succeeded") continue;
-    const tool = toolMap.get(result.toolId);
-    const projection = projectToolResult(result, tool);
-    if (!projection) continue;
-    if (projection.kind === "action_dispatch" || projection.kind === "action_completed") {
-      if (projection.claim.kind === criterion.claimKind) {
-        if (!criterion.capabilityId) return true;
-        if (result.capabilityId === criterion.capabilityId || result.toolId === criterion.capabilityId) {
-          return true;
+  if (criterion.kind === "projection_claim") {
+    for (const result of results) {
+      if (result.status !== "succeeded") continue;
+      const tool = toolMap.get(result.toolId);
+      const projection = projectToolResult(result, tool);
+      if (!projection) continue;
+      if (projection.kind === "action_dispatch" || projection.kind === "action_completed") {
+        if (projection.claim.kind === criterion.claimKind) {
+          if (!criterion.capabilityId) return true;
+          if (result.capabilityId === criterion.capabilityId || result.toolId === criterion.capabilityId) {
+            return true;
+          }
         }
       }
     }
+    return false;
+  }
+  // verification_passed: 检查本步骤是否有通过的验证记录
+  if (criterion.kind === "verification_passed") {
+    // 由 planVerify 回调在 langgraph-agent-loop.ts 中检查
+    // 这里只做结构性检查：是否有 run_verification 工具的成功结果
+    return results.some(r =>
+      r.status === "succeeded" && r.toolId === "run_verification"
+    );
   }
   return false;
 }
@@ -294,6 +308,8 @@ const PLANNER_SYSTEM_PROMPT = `你是 Planner，负责为当前任务创建执�
 - 每个步骤的 objective 要具体、可验证。
 - completionPolicy 使用 allOf（全部满足）和 anyOf（每组至少满足一项）。
 - 互斥证据（如 dispatched 和 web_fallback）放在同一个 anyOf 分组中。
+- **编码修改任务（apply_patch/write_file）必须包含验证步骤**，使用 kind: "verification_passed"。
+- 搜索/读取/文档生成等任务不需要验证步骤。
 
 ## 输出格式
 返回 JSON：
@@ -303,7 +319,10 @@ const PLANNER_SYSTEM_PROMPT = `你是 Planner，负责为当前任务创建执�
     {
       "objective": "步骤目标",
       "completionPolicy": {
-        "allOf": [{ "kind": "tool_succeeded", "capabilityId": "..." }],
+        "allOf": [
+          { "kind": "tool_succeeded", "capabilityId": "..." },
+          { "kind": "verification_passed", "verificationType": "typecheck" }
+        ],
         "anyOf": [[{ "kind": "projection_claim", "capabilityId": "...", "claimKind": "..." }]]
       }
     }
@@ -333,9 +352,10 @@ function planSchema(): object {
                   items: {
                     type: "object",
                     properties: {
-                      kind: { type: "string", enum: ["tool_succeeded", "projection_claim"] },
+                      kind: { type: "string", enum: ["tool_succeeded", "projection_claim", "verification_passed"] },
                       capabilityId: { type: "string" },
                       claimKind: { type: "string" },
+                      verificationType: { type: "string", enum: ["typecheck", "test", "build", "lint"] },
                     },
                     required: ["kind"],
                   },
@@ -469,7 +489,94 @@ function parseCriterion(value: unknown): CompletionCriterion {
       claimKind: obj.claimKind as SoulClaimKind,
     };
   }
+  if (obj.kind === "verification_passed") {
+    return {
+      kind: "verification_passed",
+      ...(typeof obj.verificationType === "string" ? { verificationType: obj.verificationType as VerificationType } : {}),
+    };
+  }
   throw new Error("criterion kind is invalid");
+}
+
+// ── Plan Normalizer：根据 verificationPolicy 自动追加验证步骤 ──
+
+export interface CapabilityWithEffect {
+  capabilityId: string;
+  effectKind: import("./tool-registry").ToolEffectKind;
+  verificationPolicy: import("./tool-registry").VerificationPolicy;
+}
+
+/**
+ * Plan 规范化：检测计划中的 mutation 步骤，按 verificationPolicy 追加验证。
+ * - code mutation -> 追加 run_verification(typecheck) 步骤
+ * - artifact mutation -> 不追加（由 completionEvidenceVerifier 处理）
+ * - unknown mutation -> 拒绝计划
+ * - 无 mutation -> 不修改
+ */
+export function normalizePlan(
+  plan: TaskPlan,
+  capabilities: CapabilityWithEffect[],
+): { plan: TaskPlan; accepted: boolean; rejectReason?: string } {
+  const capMap = new Map(capabilities.map(c => [c.capabilityId, c]));
+
+  // 1. 收集计划中所有 mutation 能力的验证策略
+  const mutationPolicies = new Set<string>();
+  const hasExistingVerification = plan.steps.some(step =>
+    step.completionPolicy.allOf?.some(c => c.kind === "verification_passed")
+  );
+
+  for (const step of plan.steps) {
+    const stepCapIds = extractCapabilityIdsFromPolicy(step.completionPolicy);
+    for (const capId of stepCapIds) {
+      const cap = capMap.get(capId);
+      if (cap?.effectKind === "mutation") {
+        if (!cap.verificationPolicy || cap.verificationPolicy === "none") {
+          return { plan, accepted: false, rejectReason: `能力 ${capId} 是 mutation 但未配置 verificationPolicy` };
+        }
+        if (cap.verificationPolicy === "unknown") {
+          return { plan, accepted: false, rejectReason: `能力 ${capId} 的 verificationPolicy 为 unknown` };
+        }
+        mutationPolicies.add(cap.verificationPolicy);
+      }
+    }
+  }
+
+  // 2. 有 code mutation 但没有验证步骤 -> 自动追加
+  if (mutationPolicies.has("code") && !hasExistingVerification) {
+    plan.steps.push({
+      id: generateStepId(),
+      objective: "运行类型检查验证代码修改",
+      status: "pending",
+      completionPolicy: {
+        allOf: [{ kind: "verification_passed", verificationType: "typecheck" }],
+      },
+      toolCallCount: 0,
+      retryCount: 0,
+    });
+    plan.updatedAt = Date.now();
+  }
+
+  // 3. artifact mutation 不追加 -> 由 completionEvidenceVerifier 在步骤完成时验证
+
+  return { plan, accepted: true };
+}
+
+/** 从 completionPolicy 中提取所有 capabilityId */
+function extractCapabilityIdsFromPolicy(policy: StepCompletionPolicy): string[] {
+  const ids: string[] = [];
+  if (policy.allOf) {
+    for (const c of policy.allOf) {
+      if ("capabilityId" in c && c.capabilityId) ids.push(c.capabilityId);
+    }
+  }
+  if (policy.anyOf) {
+    for (const group of policy.anyOf) {
+      for (const c of group) {
+        if ("capabilityId" in c && c.capabilityId) ids.push(c.capabilityId);
+      }
+    }
+  }
+  return ids;
 }
 
 export async function runCreatePlan(input: RunCreatePlanInput): Promise<TaskPlan> {
