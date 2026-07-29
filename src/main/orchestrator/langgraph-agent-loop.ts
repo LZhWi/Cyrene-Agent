@@ -39,7 +39,8 @@ import {
   type TaskPlan, type PlanStep,
 } from "./task-plan";
 import type { ToolDefinition } from "./tool-registry";
-import { controlledInputType, controlledInputKind } from "./tool-registry";
+import { controlledInputType, controlledInputKind, resolveEffectKind, resolveVerificationPolicy } from "./tool-registry";
+import { checkExecutionPolicy } from "./shell-execution-policy";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
 import { runSubAgent } from "./subagents/runner";
 import { toSubAgentToolOutcome } from "./subagents/outcome-adapter";
@@ -903,6 +904,25 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           }];
         }
         flowLog(`4. 生成工具参数：完成（${summarizeArgumentKeys(args)}）`);
+
+        // ── 执行前策略守卫：在工具实际执行前检查 effectKind 和 verificationPolicy ──
+        const effectKind = resolveEffectKind(selectedTool, args);
+        const verificationPolicy = resolveVerificationPolicy(selectedTool, args);
+        const policyDecision = checkExecutionPolicy(effectKind, verificationPolicy, selectedTool.id);
+        if (!policyDecision.allowed) {
+          flowLog(`5. 执行工具：${selectedTool.id} → 拒绝（${policyDecision.errorCode}）`);
+          return [{
+            toolId: selectedTool.id,
+            args,
+            output: policyDecision.message ?? `[拒绝] ${selectedTool.id} 执行前策略检查失败`,
+            status: "failed",
+            errorCode: policyDecision.errorCode,
+            terminal: true,
+            retryable: false,
+            toolExecuted: false,
+          }];
+        }
+
         flowLog(`5. 执行工具：${selectedTool.id}`);
 
         const toolCallId = toolCall.id;

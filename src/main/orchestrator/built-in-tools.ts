@@ -250,6 +250,27 @@ async function executeRunShell(args: Record<string, unknown>): Promise<string> {
   const cwd = args.cwd ? String(args.cwd) : undefined;
   if (!cmd) return "[错误] command 不能为空";
 
+  // 系统侧 shell policy 分类（不信任模型 purpose）
+  const { classifyShellPolicy } = require("./shell-execution-policy");
+  const policy = classifyShellPolicy(cmd, cmdArgs);
+
+  if (policy === "blocked") {
+    return JSON.stringify({
+      command: cmd, args: cmdArgs, cwd,
+      exitCode: -1, stdout: "", stderr: "[拒绝] 该命令被系统禁止执行",
+      timedOut: false, passed: false, policy, truncated: false,
+    });
+  }
+
+  if (policy === "workspace_mutation") {
+    return JSON.stringify({
+      command: cmd, args: cmdArgs, cwd,
+      exitCode: -1, stdout: "",
+      stderr: "[拒绝] 该命令可能修改工作区，请使用专用工具：代码修改用 apply_patch/write_file，验证用 run_verification",
+      timedOut: false, passed: false, policy, truncated: false,
+    });
+  }
+
   console.log(LOG_PREFIX, "run_shell:", cmd, JSON.stringify(cmdArgs), cwd ? "cwd=" + cwd : "");
   const result = await runShellOnce(cmd, cmdArgs, cwd);
   console.log(LOG_PREFIX, "run_shell 完成 exitCode=" + result.exitCode + " stdout.len=" + result.stdout.length + " stderr.len=" + result.stderr.length);
