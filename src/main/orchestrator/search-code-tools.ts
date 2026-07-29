@@ -239,7 +239,7 @@ function safeStat(p: string): fs.Stats | null {
 
 async function executeSearchCode(args: Record<string, unknown>, ctx?: ToolContext): Promise<string> {
   const query = String(args.query || "").trim();
-  if (!query) return JSON.stringify({ error: "query 不能为空", matches: [], totalMatches: 0, returnedMatches: 0, truncated: false });
+  if (!query) return JSON.stringify({ success: false, errorCode: "INVALID_QUERY", error: "query 不能为空", retryable: false, matches: [], totalMatches: 0, returnedMatches: 0, truncated: false });
 
   const mode = (args.mode === "regex" ? "regex" : "literal") as "literal" | "regex";
   const maxMatches = Math.min(MAX_MATCHES, Math.max(1, Number(args.maxMatches) || 20));
@@ -321,7 +321,7 @@ async function executeSearchCode(args: Record<string, unknown>, ctx?: ToolContex
     if (timeoutId) clearTimeout(timeoutId);
     const msg = err instanceof Error ? err.message : String(err);
     console.error(LOG_PREFIX, "搜索失败:", msg);
-    return JSON.stringify({ error: msg, matches: [], totalMatches: 0, returnedMatches: 0, truncated: false });
+    return JSON.stringify({ success: false, errorCode: "SEARCH_FAILED", error: msg, retryable: false, matches: [], totalMatches: 0, returnedMatches: 0, truncated: false });
   }
 }
 

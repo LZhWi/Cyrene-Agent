@@ -170,16 +170,30 @@ export async function runStructuredOutput<T, TRequest>(
       const elapsedMs = now() - attemptStart;
       const errorName = err instanceof Error ? err.name : typeof err;
       const errorMessage = err instanceof Error ? err.message : String(err);
-      const isTimeout = errorMessage.includes("STRUCTURED_OUTPUT_TIMEOUT") || errorMessage.includes("timeout") || errorName === "AbortError";
       const isAborted = controller.signal.aborted;
 
-      // 分类错误码
+      // 基于明确异常类型分类，不靠文本模糊匹配
       let errorCode = "MODEL_REQUEST_FAILED";
-      if (isTimeout || isAborted) {
+
+      // 1. 超时：我们自己抛的 STRUCTURED_OUTPUT_TIMEOUT，或 AbortError
+      if (err instanceof Error && err.message === "STRUCTURED_OUTPUT_TIMEOUT") {
         errorCode = "MODEL_REQUEST_TIMEOUT";
-      } else if (errorMessage.includes("HTTP") || errorMessage.includes("status")) {
+      } else if (err instanceof Error && err.name === "AbortError") {
+        errorCode = "MODEL_REQUEST_TIMEOUT";
+      } else if (isAborted) {
+        errorCode = "MODEL_REQUEST_TIMEOUT";
+      }
+      // 2. HTTP 错误：AgentRuntimeError 带 httpStatus，或 Response 对象带 status
+      else if (err instanceof Error && "status" in err && typeof (err as any).status === "number") {
         errorCode = "MODEL_HTTP_ERROR";
-      } else if (errorMessage.includes("JSON") || errorMessage.includes("parse")) {
+      } else if (err instanceof Error && "statusCode" in err && typeof (err as any).statusCode === "number") {
+        errorCode = "MODEL_HTTP_ERROR";
+      } else if (err instanceof Error && err.message.startsWith("E_MODEL_REQUEST_FAILED")) {
+        // AgentRuntimeError from callAdapter
+        errorCode = "MODEL_HTTP_ERROR";
+      }
+      // 3. 解析失败：SyntaxError（JSON.parse 失败）
+      else if (err instanceof SyntaxError) {
         errorCode = "MODEL_RESPONSE_PARSE_FAILED";
       }
 

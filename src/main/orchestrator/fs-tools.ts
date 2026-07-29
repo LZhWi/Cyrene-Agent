@@ -39,11 +39,11 @@ function humanBytes(n: number): string {
 async function executeReadFile(args: Record<string, unknown>): Promise<string> {
   const raw = String(args.path || "").trim();
   const filePath = ensureAbsolute(raw);
-  if (!filePath) return JSON.stringify({ error: "path 必须是绝对路径" });
+  if (!filePath) return JSON.stringify({ success: false, errorCode: "INVALID_PATH", error: "path 必须是绝对路径", retryable: false });
 
   const stat = safeStat(filePath);
-  if (!stat) return JSON.stringify({ error: "文件不存在或无法访问: " + filePath });
-  if (!stat.isFile()) return JSON.stringify({ error: "不是文件（是目录或其它）: " + filePath });
+  if (!stat) return JSON.stringify({ success: false, errorCode: "FILE_NOT_FOUND", error: "文件不存在或无法访问: " + filePath, retryable: false });
+  if (!stat.isFile()) return JSON.stringify({ success: false, errorCode: "NOT_A_FILE", error: "不是文件（是目录或其它）: " + filePath, retryable: false });
 
   const startLine = Math.max(1, Number(args.startLine) || 1);
   const maxLines = Math.max(1, Math.min(2000, Number(args.maxLines) || 500));
@@ -55,7 +55,7 @@ async function executeReadFile(args: Record<string, unknown>): Promise<string> {
     buf = fs.readFileSync(filePath);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return JSON.stringify({ error: "读取失败: " + msg });
+    return JSON.stringify({ success: false, errorCode: "READ_FAILED", error: "读取失败: " + msg, retryable: false });
   }
 
   const truncatedSize = buf.length > READ_MAX_BYTES;
@@ -67,9 +67,12 @@ async function executeReadFile(args: Record<string, unknown>): Promise<string> {
   for (let i = 0; i < head.length; i++) if (head[i] === 0) nullCount++;
   if (nullCount > head.length * 0.05) {
     return JSON.stringify({
+      success: false,
+      errorCode: "BINARY_FILE",
       error: "这看起来是二进制文件，read_file 只支持文本。如果是图片，请改用 read_image。",
       path: filePath,
       size: humanBytes(stat.size),
+      retryable: false,
     });
   }
 

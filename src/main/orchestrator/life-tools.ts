@@ -399,13 +399,13 @@ function registerApplyPatchTool(): void {
     },
     execute: async (args) => {
       const filePath = String(args.file_path || "");
-      if (!filePath) return JSON.stringify({ error: "file_path 不能为空", success: false });
-      if (!fs.existsSync(filePath)) return JSON.stringify({ error: `文件不存在：${filePath}`, success: false });
+      if (!filePath) return JSON.stringify({ success: false, errorCode: "INVALID_PATH", error: "file_path 不能为空", retryable: false });
+      if (!fs.existsSync(filePath)) return JSON.stringify({ success: false, errorCode: "FILE_NOT_FOUND", error: `文件不存在：${filePath}`, retryable: false });
 
       const content = fs.readFileSync(filePath, "utf8");
       const oldStr = String(args.old_string ?? "");
       const newStr = String(args.new_string ?? "");
-      if (!oldStr) return JSON.stringify({ error: "old_string 不能为空", success: false });
+      if (!oldStr) return JSON.stringify({ success: false, errorCode: "INVALID_INPUT", error: "old_string 不能为空", retryable: false });
 
       const lines = content.split("\n");
       const count = content.split(oldStr).length - 1;
@@ -414,8 +414,10 @@ function registerApplyPatchTool(): void {
         // old_string 未找到：提供最近似候选和上下文
         const nearest = findNearestMatch(lines, oldStr);
         return JSON.stringify({
-          error: "old_string 在文件中未找到。请确认内容（包括缩进、换行）是否精确匹配。",
           success: false,
+          errorCode: "OLD_STRING_NOT_FOUND",
+          error: "old_string 在文件中未找到。请确认内容（包括缩进、换行）是否精确匹配。",
+          retryable: false,
           diagnostic: {
             kind: "not_found",
             filePath,
@@ -433,8 +435,10 @@ function registerApplyPatchTool(): void {
         // 多处匹配：提供所有匹配位置和上下文
         const positions = findAllMatchPositions(lines, oldStr);
         return JSON.stringify({
-          error: `old_string 在文件中匹配 ${count} 处，需要更长的上下文使其唯一。`,
           success: false,
+          errorCode: "MULTIPLE_MATCHES",
+          error: `old_string 在文件中匹配 ${count} 处，需要更长的上下文使其唯一。`,
+          retryable: false,
           diagnostic: {
             kind: "multiple_matches",
             filePath,

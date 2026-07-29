@@ -218,11 +218,12 @@ async function executeToolCall(
 
   try {
     const output = await tool.execute(args, tool.needsContext ? ctx : undefined);
-    // 检查工具返回的 JSON 是否包含业务错误
+    // 检查工具返回的 JSON 是否明确标记为业务失败
+    // 只认 success === false，不认 error 字段（避免误判包含 error 描述的成功结果）
     if (typeof output === "string") {
       try {
         const parsed = JSON.parse(output);
-        if (parsed && typeof parsed === "object" && (parsed.error || parsed.success === false)) {
+        if (parsed && typeof parsed === "object" && parsed.success === false) {
           const errorMsg = parsed.error || "工具执行失败";
           const errorCode = parsed.errorCode || "E_TOOL_BUSINESS_FAILED";
           return {
@@ -230,7 +231,7 @@ async function executeToolCall(
             errorCode,
             output: typeof errorMsg === "string" ? errorMsg : JSON.stringify(errorMsg),
             terminal: true,
-            retryable: false,
+            retryable: parsed.retryable === true,
           };
         }
       } catch {
