@@ -840,3 +840,154 @@ describe("Action Gate audit: no unknown effectKind in visible tools", () => {
     expect(true).toBe(true);
   });
 });
+
+// ══════════════════════════════════════════════════════════════
+// 15. 动态工具元数据：mutation 必须声明 verificationPolicy
+// ══════════════════════════════════════════════════════════════
+
+describe("Dynamic tool metadata: mutation requires verificationPolicy", () => {
+  // 统一元数据接口
+  interface ToolEffectMetadata {
+    effectKind: string;
+    verificationPolicy?: string;
+  }
+
+  /** 模拟动态元数据解析：mutation 缺失 verificationPolicy → unknown */
+  function resolveMetadata(meta: ToolEffectMetadata): { effectKind: string; verificationPolicy: string } {
+    if (meta.effectKind === "mutation" && !meta.verificationPolicy) {
+      // mutation 缺失 verificationPolicy → 回退到 unknown（会被拒绝）
+      return { effectKind: "unknown", verificationPolicy: "unknown" };
+    }
+    return {
+      effectKind: meta.effectKind,
+      verificationPolicy: meta.verificationPolicy ?? "none",
+    };
+  }
+
+  it("mutation + code → 允许", () => {
+    const result = resolveMetadata({ effectKind: "mutation", verificationPolicy: "code" });
+    expect(result.effectKind).toBe("mutation");
+    expect(result.verificationPolicy).toBe("code");
+  });
+
+  it("mutation + artifact → 允许", () => {
+    const result = resolveMetadata({ effectKind: "mutation", verificationPolicy: "artifact" });
+    expect(result.effectKind).toBe("mutation");
+    expect(result.verificationPolicy).toBe("artifact");
+  });
+
+  it("mutation 缺失 verificationPolicy → unknown（被拒绝）", () => {
+    const result = resolveMetadata({ effectKind: "mutation" });
+    expect(result.effectKind).toBe("unknown");
+    expect(result.verificationPolicy).toBe("unknown");
+  });
+
+  it("read 不需要 verificationPolicy", () => {
+    const result = resolveMetadata({ effectKind: "read" });
+    expect(result.effectKind).toBe("read");
+    expect(result.verificationPolicy).toBe("none");
+  });
+
+  it("external_side_effect 不需要 verificationPolicy", () => {
+    const result = resolveMetadata({ effectKind: "external_side_effect" });
+    expect(result.effectKind).toBe("external_side_effect");
+    expect(result.verificationPolicy).toBe("none");
+  });
+
+  it("mutation + verificationPolicy=none → 允许（显式声明不需要验证）", () => {
+    const result = resolveMetadata({ effectKind: "mutation", verificationPolicy: "none" });
+    expect(result.effectKind).toBe("mutation");
+    expect(result.verificationPolicy).toBe("none");
+  });
+
+  it("检查执行策略：mutation + missing verificationPolicy → 被拒绝", () => {
+    const resolved = resolveMetadata({ effectKind: "mutation" });
+    const decision = checkExecutionPolicy(resolved.effectKind, resolved.verificationPolicy, "test_tool");
+    expect(decision.allowed).toBe(false);
+    expect(decision.errorCode).toBe("E_UNKNOWN_TOOL_EFFECT");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════
+// 16. MCP annotation 优先级：override > destructive > readOnly > unknown
+// ══════════════════════════════════════════════════════════════
+
+describe("MCP annotation priority: override > destructive > readOnly > unknown", () => {
+  type McpToolAnnotations = { readOnlyHint?: boolean; destructiveHint?: boolean; [key: string]: unknown };
+
+  /** 模拟 resolveMcpEffectKind（与 mcp-adapter.ts 一致） */
+  function resolveMcpEffectKind(
+    annotations: McpToolAnnotations | undefined,
+    overrides: Record<string, string> | undefined,
+    toolName: string,
+  ): string {
+    // 优先级 1：本地显式 override
+    if (overrides && overrides[toolName]) return overrides[toolName];
+    if (!annotations) return "unknown";
+    // 优先级 2：destructiveHint=true（保守策略，不放行）
+    if (annotations.destructiveHint === true) return "external_side_effect";
+    // 优先级 3：readOnlyHint=true
+    if (annotations.readOnlyHint === true) return "read";
+    // 优先级 4：无匹配 → unknown
+    return "unknown";
+  }
+
+  it("override 优先于 destructiveHint", () => {
+    const result = resolveMcpEffectKind(
+      { destructiveHint: true },
+      { delete_item: "read" },
+      "delete_item",
+    );
+    expect(result).toBe("read");
+  });
+
+  it("override 优先于 readOnlyHint", () => {
+    const result = resolveMcpEffectKind(
+      { readOnlyHint: true },
+      { get_data: "external_side_effect" },
+      "get_data",
+    );
+    expect(result).toBe("external_side_effect");
+  });
+
+  it("destructiveHint 优先于 readOnlyHint（矛盾时保守策略）", () => {
+    // 第三方 annotations 矛盾：同时声明 readOnly 和 destructive
+    // 保守策略：destructive 优先，不放行
+    const result = resolveMcpEffectKind(
+      { readOnlyHint: true, destructiveHint: true },
+      undefined,
+      "ambiguous_tool",
+    );
+    expect(result).toBe("external_side_effect");
+  });
+
+  it("readOnlyHint=true → read（无 destructive）", () => {
+    const result = resolveMcpEffectKind({ readOnlyHint: true }, undefined, "get_data");
+    expect(result).toBe("read");
+  });
+
+  it("destructiveHint=true → external_side_effect（无 readOnly）", () => {
+    const result = resolveMcpEffectKind({ destructiveHint: true }, undefined, "delete_item");
+    expect(result).toBe("external_side_effect");
+  });
+
+  it("无 annotations → unknown", () => {
+    const result = resolveMcpEffectKind(undefined, undefined, "mystery");
+    expect(result).toBe("unknown");
+  });
+
+  it("空 annotations → unknown", () => {
+    const result = resolveMcpEffectKind({}, undefined, "mystery");
+    expect(result).toBe("unknown");
+  });
+
+  it("destructiveHint=false 不等于 readOnly（不放行）", () => {
+    const result = resolveMcpEffectKind({ destructiveHint: false }, undefined, "maybe_write");
+    expect(result).toBe("unknown");
+  });
+
+  it("readOnlyHint=false 不等于 destructive（不标记为危险）", () => {
+    const result = resolveMcpEffectKind({ readOnlyHint: false }, undefined, "maybe_write");
+    expect(result).toBe("unknown");
+  });
+});

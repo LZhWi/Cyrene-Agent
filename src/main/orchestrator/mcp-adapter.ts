@@ -38,25 +38,30 @@ interface McpServerState {
 /**
  * 从 MCP Tool annotations 推导 effectKind。
  *
- * 规则：
- * - readOnlyHint === true → read
- * - destructiveHint === true → external_side_effect
- * - 无 annotations 或两者都未设置 → unknown（会被 ExecutionPolicyGuard 拒绝）
+ * 优先级（保守策略）：
+ * 1. 本地显式 override（最高优先级）
+ * 2. destructiveHint=true → external_side_effect（第三方 annotations 矛盾时采用保守策略）
+ * 3. readOnlyHint=true → read
+ * 4. 无匹配 → unknown（会被 ExecutionPolicyGuard 拒绝）
  *
  * 注意：destructiveHint=false 不等于 readOnlyHint=true。
+ * 第三方 annotations 同时设置 readOnlyHint + destructiveHint 时，destructive 优先（不放行）。
  */
 function resolveMcpEffectKind(
   annotations: McpToolAnnotations | undefined,
   overrides: Record<string, ToolEffectKind> | undefined,
   toolName: string,
 ): ToolEffectKind {
-  // 显式 override 优先
+  // 优先级 1：本地显式 override
   if (overrides && overrides[toolName]) {
     return overrides[toolName];
   }
   if (!annotations) return "unknown";
-  if (annotations.readOnlyHint === true) return "read";
+  // 优先级 2：destructiveHint=true（保守策略，不放行）
   if (annotations.destructiveHint === true) return "external_side_effect";
+  // 优先级 3：readOnlyHint=true
+  if (annotations.readOnlyHint === true) return "read";
+  // 优先级 4：无匹配 → unknown
   return "unknown";
 }
 
