@@ -336,8 +336,10 @@ async function runAgentTurn(userText: string): Promise<string | null> {
       { role: "user", content: userText },
     ];
 
+    // Kimi k2.6 只允许特定 temperature，省略让服务端用默认值
+    const callTemperature = ms.model.match(/^kimi-k2\.6(?:$|-)/i) ? undefined : 0.8;
     const req = adapter.buildRequest(
-      { model: ms.model, messages, temperature: 0.8 },
+      { model: ms.model, messages, ...(callTemperature !== undefined ? { temperature: callTemperature } : {}) },
       { provider: ms.provider, baseUrl: ms.baseUrl, model: ms.model, apiKey: ms.apiKey },
     );
 

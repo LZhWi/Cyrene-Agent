@@ -2151,23 +2151,29 @@ async function callChatCompletionsNonStream(
 const citaService = new CitaService({
   store: new ContextStore(),
   engine: new RemoteSemanticEngine(
-    async (request, signal) => callChatCompletionsNonStream(
-      loadModelSettings(),
-      [
-        { role: "system", content: request.systemPrompt },
-        { role: "user", content: request.userPrompt },
-      ],
-      0,
-      6_000,
-      "CITA understandTurn",
-      { mode: "off" as const },
-      {
-        structuredOutput: request.structuredOutput,
-        maxTokens: request.maxTokens,
-        extraBody: request.extraBody,
-      },
-      signal,
-    ),
+    async (request, signal) => {
+      const settings = loadModelSettings();
+      // Kimi k2.6 只允许特定 temperature（0.6），传 0 会被拒。
+      // 省略让服务端用默认值，其他模型继续 temperature=0 保证确定性。
+      const citaTemp = settings.model.match(/^kimi-k2\.6(?:$|-)/i) ? undefined : 0;
+      return callChatCompletionsNonStream(
+        settings,
+        [
+          { role: "system", content: request.systemPrompt },
+          { role: "user", content: request.userPrompt },
+        ],
+        citaTemp,
+        6_000,
+        "CITA understandTurn",
+        { mode: "off" as const },
+        {
+          structuredOutput: request.structuredOutput,
+          maxTokens: request.maxTokens,
+          extraBody: request.extraBody,
+        },
+        signal,
+      );
+    },
     {
       timeoutMs: 8_000,
       systemPrompt: loadPromptFile("cita_system.md"),
@@ -5120,7 +5126,8 @@ app.whenReady().then(async () => {
           },
           { role: "user", content: buildSocialExtractionPrompt(input, repair) },
         ],
-        0,
+        // Kimi k2.6 只允许特定 temperature，省略让服务端用默认值
+        settings.model.match(/^kimi-k2\.6(?:$|-)/i) ? undefined : 0,
         12_000,
         "Chat social context extraction",
         { mode: "off" },
