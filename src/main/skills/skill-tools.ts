@@ -4,7 +4,7 @@
 //   read_skill_reference：按需读 references 附件（带路径穿越防护）
 // 注册进现有 toolRegistry，两处 LLM 路径都从 registry 取，自动生效。
 
-import { toolRegistry } from "../orchestrator/tool-registry";
+import { toolRegistry, type ToolEffectKind } from "../orchestrator/tool-registry";
 import { skillRegistry } from "./skill-registry";
 
 const LOG_PREFIX = "[SkillTools]";
@@ -64,8 +64,14 @@ export function registerSkillTools(): void {
       "返回：该 skill 的指令正文 + 可用的 references 文件清单。若正文引用了 references/xxx，需要详情时再用 read_skill_reference 读取。",
     enabled: true,
     risk: "safe",
-    effectKind: "read" as const,
-    verificationPolicy: "none" as const,
+    effectKind: "read" as const, // 默认值，effectResolver 会根据实际 skill 覆盖
+    effectResolver: (args: Record<string, unknown>): ToolEffectKind => {
+      const id = String(args.skill_id || "");
+      const skill = skillRegistry.getById(id);
+      if (!skill) return "unknown";
+      // skill 未声明 effectKind → unknown（会被 ExecutionPolicyGuard 拒绝）
+      return skill.effectKind ?? "unknown";
+    },
     inputSchema: {
       type: "object",
       properties: {

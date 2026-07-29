@@ -402,7 +402,8 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     flowLog("Task Router disabled: feature_flag=false");
   }
   const perCallTimeout = options.perCallTimeoutMs;
-  const enabledTools = options.tools.filter((tool) => tool.enabled && !tool.deprecated);
+  // 过滤掉 deprecated 和 effectKind=unknown 的工具（后者会被 ExecutionPolicyGuard 拒绝，不应暴露给模型）
+  const enabledTools = options.tools.filter((tool) => tool.enabled && !tool.deprecated && tool.effectKind !== "unknown");
   // 过滤后的版本（按 inPlanMode 动态切换）
   let enabledToolsFiltered = enabledTools;
   let runnableToolIdsFiltered: Set<string> = new Set(enabledTools.map((t) => t.id));

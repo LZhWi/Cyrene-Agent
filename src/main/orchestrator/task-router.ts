@@ -271,7 +271,7 @@ export async function runTaskRouter(input: RunTaskRouterInput): Promise<TaskRout
 
 export function buildRouterCapabilities(tools: ToolDefinition[]): RunTaskRouterInput["availableCapabilities"] {
   return tools
-    .filter((t) => t.enabled)
+    .filter((t) => t.enabled && !t.deprecated && t.effectKind !== "unknown")
     .map((t) => ({
       capabilityId: t.capability ?? t.id,
       description: t.catalogHint?.trim() || t.description.split("\n")[0]?.trim() || t.description,

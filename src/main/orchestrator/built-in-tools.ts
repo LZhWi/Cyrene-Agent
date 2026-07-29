@@ -1313,8 +1313,7 @@ toolRegistry.register({
     "完成所有步骤后调一次空列表清空，表示任务结束。",
   enabled: true,
   risk: "safe",
-  effectKind: "read" as const,
-  verificationPolicy: "none" as const,
+  effectKind: "external_side_effect" as const,
   inputSchema: {
     type: "object",
     properties: {

@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ToolDefinition, toolRegistry } from "./tool-registry";
+import { ToolDefinition, toolRegistry, type ToolEffectKind } from "./tool-registry";
 
 const LOG_PREFIX = "[MCP Adapter]";
 
@@ -16,6 +16,15 @@ export interface McpServerConfig {
   env?: Record<string, string>;
   cwd?: string;
   url?: string;            // sse 必填,stdio 不用
+  /** 按 toolName 显式覆盖 effectKind（serverId + toolName 作为 key） */
+  effectKindOverrides?: Record<string, ToolEffectKind>;
+}
+
+/** MCP Tool annotations（MCP 协议 2025-03-26 版） */
+interface McpToolAnnotations {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  [key: string]: unknown;
 }
 
 interface McpServerState {
@@ -24,6 +33,31 @@ interface McpServerState {
   transport: Transport;
   connected: boolean;
   toolIds: string[];       // 已注册到 ToolRegistry 的工具 ID 列表
+}
+
+/**
+ * 从 MCP Tool annotations 推导 effectKind。
+ *
+ * 规则：
+ * - readOnlyHint === true → read
+ * - destructiveHint === true → external_side_effect
+ * - 无 annotations 或两者都未设置 → unknown（会被 ExecutionPolicyGuard 拒绝）
+ *
+ * 注意：destructiveHint=false 不等于 readOnlyHint=true。
+ */
+function resolveMcpEffectKind(
+  annotations: McpToolAnnotations | undefined,
+  overrides: Record<string, ToolEffectKind> | undefined,
+  toolName: string,
+): ToolEffectKind {
+  // 显式 override 优先
+  if (overrides && overrides[toolName]) {
+    return overrides[toolName];
+  }
+  if (!annotations) return "unknown";
+  if (annotations.readOnlyHint === true) return "read";
+  if (annotations.destructiveHint === true) return "external_side_effect";
+  return "unknown";
 }
 
 /**
@@ -76,6 +110,7 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
   let mcpTools: Array<{
     name: string;
     description?: string;
+    annotations?: McpToolAnnotations;
     inputSchema: {
       type: "object";
       properties: Record<string, unknown>;
@@ -88,6 +123,7 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
     mcpTools = result.tools as Array<{
       name: string;
       description?: string;
+      annotations?: McpToolAnnotations;
       inputSchema: {
         type: "object";
         properties: Record<string, unknown>;
@@ -115,15 +151,18 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
       continue;
     }
 
+    // 从 annotations 或 override 解析 effectKind
+    const resolvedEffectKind = resolveMcpEffectKind(mt.annotations, config.effectKindOverrides, mt.name);
+    if (resolvedEffectKind === "unknown") {
+      console.warn(LOG_PREFIX, `工具 ${toolId} 的 effectKind 为 unknown（无 annotations 且无 override），将被 ExecutionPolicyGuard 拒绝`);
+    }
+
     const toolDef: ToolDefinition = {
       id: toolId,
       name: "[" + config.name + "] " + mt.name,
       description: mt.description || mt.name,
       enabled: true,
-      // MCP 动态工具默认为 unknown，需要由工具清单或配置覆盖
-      // Phase 1: unknown 工具会被 ToolExecutionPolicyGuard 拒绝
-      // Phase 2: 需要为 MCP 工具提供 effectKind 配置机制
-      effectKind: "unknown",
+      effectKind: resolvedEffectKind,
       inputSchema: {
         type: "object",
         properties: mt.inputSchema?.properties as Record<string, { type: string; description: string }> || {},

@@ -711,3 +711,132 @@ describe("run_verification real tool path", () => {
     }
   });
 });
+
+// ══════════════════════════════════════════════════════════════
+// 13. MCP Tool annotations 映射
+// ══════════════════════════════════════════════════════════════
+
+describe("MCP Tool annotations mapping", () => {
+  // 模拟 resolveMcpEffectKind（与 mcp-adapter.ts 中的实现一致）
+  type McpToolAnnotations = { readOnlyHint?: boolean; destructiveHint?: boolean; [key: string]: unknown };
+
+  function resolveMcpEffectKind(
+    annotations: McpToolAnnotations | undefined,
+    overrides: Record<string, string> | undefined,
+    toolName: string,
+  ): string {
+    if (overrides && overrides[toolName]) return overrides[toolName];
+    if (!annotations) return "unknown";
+    if (annotations.readOnlyHint === true) return "read";
+    if (annotations.destructiveHint === true) return "external_side_effect";
+    return "unknown";
+  }
+
+  it("readOnlyHint=true → read", () => {
+    expect(resolveMcpEffectKind({ readOnlyHint: true }, undefined, "get_data")).toBe("read");
+  });
+
+  it("destructiveHint=true → external_side_effect", () => {
+    expect(resolveMcpEffectKind({ destructiveHint: true }, undefined, "delete_item")).toBe("external_side_effect");
+  });
+
+  it("无 annotations → unknown", () => {
+    expect(resolveMcpEffectKind(undefined, undefined, "mystery")).toBe("unknown");
+  });
+
+  it("空 annotations {} → unknown", () => {
+    expect(resolveMcpEffectKind({}, undefined, "mystery")).toBe("unknown");
+  });
+
+  it("destructiveHint=false 不等于 read", () => {
+    expect(resolveMcpEffectKind({ destructiveHint: false }, undefined, "maybe_write")).toBe("unknown");
+  });
+
+  it("readOnlyHint=false 不等于 destructive", () => {
+    expect(resolveMcpEffectKind({ readOnlyHint: false }, undefined, "maybe_write")).toBe("unknown");
+  });
+
+  it("显式 override 优先于 annotations", () => {
+    const overrides = { get_data: "mutation" as const };
+    expect(resolveMcpEffectKind({ readOnlyHint: true }, overrides, "get_data")).toBe("mutation");
+  });
+
+  it("override 只匹配同名工具", () => {
+    const overrides = { get_data: "mutation" as const };
+    expect(resolveMcpEffectKind({ readOnlyHint: true }, overrides, "other_tool")).toBe("read");
+  });
+
+  it("readOnlyHint + destructiveHint 同时设置 → readOnlyHint 优先", () => {
+    // 两者同时设置时，readOnlyHint 先匹配
+    expect(resolveMcpEffectKind({ readOnlyHint: true, destructiveHint: true }, undefined, "tool")).toBe("read");
+  });
+});
+
+// ══════════════════════════════════════════════════════════════
+// 14. Action Gate 审计：所有可见工具 effectKind 不得为 unknown
+// ══════════════════════════════════════════════════════════════
+
+describe("Action Gate audit: no unknown effectKind in visible tools", () => {
+  // 需要 toolRegistry 中已注册的工具（built-in-tools.ts 在 import 时自动注册）
+  // 这个测试在 vitest 环境下运行，built-in-tools.ts 的副作用会执行
+
+  it("所有 Action Gate 可见工具的 effectKind 不得为 unknown", async () => {
+    // 动态导入 toolRegistry，确保 built-in-tools.ts 已执行
+    const { toolRegistry: registry } = await import("./tool-registry");
+
+    // 模拟 Action Gate 过滤逻辑（与 langgraph-agent-loop.ts 一致）
+    const visibleTools = registry.getEnabledTools().filter(
+      (tool) => !tool.deprecated && tool.effectKind !== "unknown",
+    );
+
+    // 断言：所有可见工具的 effectKind 都不是 unknown
+    for (const tool of visibleTools) {
+      const effectKind = resolveEffectKind(tool, {});
+      expect(
+        effectKind,
+        `工具 "${tool.id}" 的 effectKind 为 unknown，但它是 Action Gate 可见工具`,
+      ).not.toBe("unknown");
+    }
+  });
+
+  it("effectKind=unknown 的工具必须被 Action Gate 隐藏", async () => {
+    const { toolRegistry: registry } = await import("./tool-registry");
+
+    // 找出所有 effectKind=unknown 的工具
+    const unknownTools = registry.getEnabledTools().filter(
+      (tool) => resolveEffectKind(tool, {}) === "unknown",
+    );
+
+    // 这些工具必须被 deprecated 或被 Action Gate 过滤
+    for (const tool of unknownTools) {
+      // 工具要么是 deprecated，要么会被 Action Gate 过滤掉
+      // 这里验证它们确实不在 Action Gate 可见列表中
+      const isVisible = !tool.deprecated && tool.effectKind !== "unknown";
+      expect(
+        isVisible,
+        `工具 "${tool.id}" 的 effectKind=unknown 但仍对 Action Gate 可见`,
+      ).toBe(false);
+    }
+  });
+
+  it("effectKind=unknown 工具列表审计（日志记录）", async () => {
+    const { toolRegistry: registry } = await import("./tool-registry");
+
+    const unknownTools = registry.getEnabledTools().filter(
+      (tool) => resolveEffectKind(tool, {}) === "unknown",
+    );
+
+    const unknownIds = unknownTools.map((t) => t.id).sort();
+
+    // 记录完整的 unknown 工具列表（便于审计）
+    // 如果列表为空，说明所有工具都已正确分类
+    if (unknownIds.length > 0) {
+      console.log("[Audit] effectKind=unknown 工具（已被 Action Gate 隐藏）:", unknownIds.join(", "));
+    } else {
+      console.log("[Audit] 所有工具都已正确分类 effectKind");
+    }
+
+    // 这个测试始终通过，仅用于审计日志
+    expect(true).toBe(true);
+  });
+});

@@ -58,8 +58,7 @@ function registerExpenseTools(): void {
       "参数：amount（金额，数字），category（分类：餐饮/交通/购物/娱乐/生活/其他），note（备注）。",
     enabled: true,
     risk: "safe",
-    effectKind: "read" as const,
-    verificationPolicy: "none" as const,
+    effectKind: "external_side_effect" as const,
     inputSchema: {
       type: "object",
       properties: {
