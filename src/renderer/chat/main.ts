@@ -659,6 +659,8 @@ function loadSessionIntoUI(session: ChatStoreSession): void {
   render();
   // 切换会话后刷新侧栏列表的活跃高亮
   void renderRailList();
+  // 切换会话后刷新工作区指示器
+  void loadWorkspaceIndicator();
 }
 
 async function loadSessionTailIntoUI(id: string): Promise<boolean> {
@@ -4237,6 +4239,61 @@ async function insertImageAttachment(input: {
 // 截图按钮 -> 触发主进程截图流程（按钮模式：选区后直接插入，不需要粘贴）
 screenshotBtn?.addEventListener("click", () => {
   void window.chat?.startScreenshot();
+});
+
+/* ===== Workspace Binding ===== */
+const workspaceBtn = document.getElementById("workspace-btn") as HTMLButtonElement | null;
+const workspaceIndicator = document.getElementById("workspace-indicator") as HTMLSpanElement | null;
+
+async function loadWorkspaceIndicator(): Promise<void> {
+  if (!currentSessionId || !window.chatStore) return;
+  try {
+    const binding = await window.chatStore.getWorkspace(currentSessionId);
+    if (binding && workspaceIndicator) {
+      workspaceIndicator.textContent = binding.displayName;
+      workspaceIndicator.title = `工作区: ${binding.workspaceRoot}\n点击更换`;
+      workspaceIndicator.hidden = false;
+      workspaceBtn?.classList.add("has-workspace");
+    } else if (workspaceIndicator) {
+      workspaceIndicator.hidden = true;
+      workspaceBtn?.classList.remove("has-workspace");
+    }
+  } catch {
+    // ignore
+  }
+}
+
+workspaceBtn?.addEventListener("click", async () => {
+  if (!currentSessionId || !window.chatStore) return;
+  try {
+    const result = await window.chatStore.pickWorkspaceFolder();
+    if (result?.ok && result.path) {
+      const setResult = await window.chatStore.setWorkspace(currentSessionId, result.path);
+      if (setResult?.ok) {
+        await loadWorkspaceIndicator();
+      } else {
+        window.alert("设置工作区失败：" + (setResult?.error || "未知错误"));
+      }
+    }
+  } catch (err) {
+    window.alert("选择工作区失败：" + ((err as Error)?.message || String(err)));
+  }
+});
+
+workspaceIndicator?.addEventListener("click", async () => {
+  if (!currentSessionId || !window.chatStore) return;
+  // 右键或点击可清除/更换
+  const action = window.confirm("是否更换工作区目录？\n确定 = 更换，取消 = 保持");
+  if (action) {
+    workspaceBtn?.click();
+  }
+});
+
+// 监听工作区变更广播
+window.chatStore?.onWorkspaceChanged?.((payload) => {
+  if (payload.sessionId === currentSessionId) {
+    void loadWorkspaceIndicator();
+  }
 });
 
 // 按钮模式回调：主进程裁剪完直接发图片过来

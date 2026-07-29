@@ -74,6 +74,11 @@ export interface AgentGraphInput {
   messages: ChatMessage[];
   availableCapabilities: string[];
   clarificationAnswers?: AskUserAnswer[];
+  /**
+   * 可信工作区根目录（来自 Conversation Workspace Binding）。
+   * delegate_coding 和 run_verification 必须使用此目录。
+   */
+  resolvedWorkspaceRoot?: string;
 }
 
 /** 从工具结果中提取变更文件路径（结构化 JSON 或正则回退） */

@@ -117,6 +117,18 @@ export const IPC = {
   // main → 所有窗口：活跃 sessionId 变化时广播
   CHATS_ACTIVE_SESSION_CHANGED: "chats:active-session-changed",
 
+  // 对话工作区绑定
+  // renderer → main：设置当前对话的工作区目录
+  CHATS_SET_WORKSPACE: "chats:set-workspace",
+  // renderer → main：获取当前对话的工作区绑定
+  CHATS_GET_WORKSPACE: "chats:get-workspace",
+  // renderer → main：清除当前对话的工作区绑定
+  CHATS_CLEAR_WORKSPACE: "chats:clear-workspace",
+  // renderer → main：打开文件夹选择器
+  CHATS_PICK_WORKSPACE_FOLDER: "chats:pick-workspace-folder",
+  // main → 所有窗口：工作区绑定变更广播
+  CHATS_WORKSPACE_CHANGED: "chats:workspace-changed",
+
 // sticker manager window
 	  STICKERS_MINIMIZE: "stickers:minimize",
 	  STICKERS_CLOSE: "stickers:close",

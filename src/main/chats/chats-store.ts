@@ -317,3 +317,46 @@ export async function openStorageFolder(): Promise<void> {
   ensureDirs();
   await shell.openPath(rootDir);
 }
+
+// ── 对话工作区绑定 ────────────────────────────────────────
+
+import type { ConversationWorkspaceBinding } from "../../shared/chat-types";
+
+/**
+ * 设置对话的工作区绑定。
+ * 返回更新后的 session，失败返回 null。
+ */
+export function setWorkspaceBinding(
+  sessionId: string,
+  binding: ConversationWorkspaceBinding,
+): ChatSession | null {
+  const session = readSessionFile(sessionId);
+  if (!session) return null;
+  session.workspaceBinding = binding;
+  session.updatedAt = Date.now();
+  writeSessionFile(session);
+  // workspaceBinding 不影响 index.json，无需 upsertMeta
+  return session;
+}
+
+/**
+ * 获取对话的工作区绑定。
+ * 未绑定返回 undefined。
+ */
+export function getWorkspaceBinding(sessionId: string): ConversationWorkspaceBinding | undefined {
+  const session = readSessionFile(sessionId);
+  return session?.workspaceBinding;
+}
+
+/**
+ * 清除对话的工作区绑定。
+ * 返回更新后的 session，失败返回 null。
+ */
+export function clearWorkspaceBinding(sessionId: string): ChatSession | null {
+  const session = readSessionFile(sessionId);
+  if (!session) return null;
+  session.workspaceBinding = undefined;
+  session.updatedAt = Date.now();
+  writeSessionFile(session);
+  return session;
+}

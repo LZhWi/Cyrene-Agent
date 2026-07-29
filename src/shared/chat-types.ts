@@ -64,6 +64,16 @@ export interface DocumentMessageAttachment {
   reason?: string;
 }
 
+/** 对话工作区绑定：将一个可信目录绑定到对话 */
+export interface ConversationWorkspaceBinding {
+  /** 规范化后的绝对路径（realpath + Windows 标准化） */
+  workspaceRoot: string;
+  /** 用户可见的显示名（通常是文件夹名或缩短路径） */
+  displayName: string;
+  /** 绑定时间戳 */
+  boundAt: number;
+}
+
 export interface ChatSession {
   id: string;
   title: string;
@@ -77,6 +87,8 @@ export interface ChatSession {
   // 用户是否手动改过名；true 时不再根据消息内容自动派生 title。
   // 没有此字段的老数据视为 false（向后兼容）。
   titleIsCustom?: boolean;
+  /** 对话工作区绑定（Coding Agent 使用的可信目录） */
+  workspaceBinding?: ConversationWorkspaceBinding;
 }
 
 // index.json 里的轻量元数据（列表渲染用）。

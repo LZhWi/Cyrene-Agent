@@ -81,15 +81,20 @@ export function registerDelegateCodingTool(
         });
       }
 
+      // 无工作区绑定：不能让模型猜目录，也不能默认使用应用源码目录
       if (!input.workspaceRoot) {
+        console.log("[delegate_coding] WORKSPACE_NOT_BOUND: no workspace binding for current conversation");
         return buildToolResult({
           status: "failed",
-          summary: "workspaceRoot 不能为空",
+          summary: "当前对话未绑定工作区目录。请先点击输入栏左侧的 📁 按钮选择工作区，然后再执行代码任务。",
           workspaceRoot: "",
           changedFiles: [],
           commands: [],
           verification: { attempted: false, passed: false },
-          error: { code: "INVALID_WORKSPACE", message: "workspaceRoot 不能为空" },
+          error: {
+            code: "WORKSPACE_NOT_BOUND",
+            message: "当前对话未绑定工作区目录。请先选择工作区目录，然后再执行代码任务。",
+          },
           partialChanges: false,
         });
       }

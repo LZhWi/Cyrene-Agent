@@ -1054,6 +1054,43 @@ body {
   color: var(--rb-text-on-pink);
 }
 
+/* ── 工作区指示器 ── */
+.chat__workspace-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  color: #a5b4fc;
+  font-size: 12px;
+  line-height: 1;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.chat__workspace-indicator:hover {
+  background: rgba(99, 102, 241, 0.25);
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+.chat__workspace-indicator::before {
+  content: "📁";
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.chat__workspace-indicator[hidden] {
+  display: none;
+}
+
 /* ── 表情包选择面板 ── */
 .sticker-picker {
   position: absolute;

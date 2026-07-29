@@ -1122,6 +1122,17 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
 
         flowLog(`5. 执行工具：${selectedTool.id}`);
 
+        // delegate_coding 信任边界：强制使用 Conversation Workspace Binding 的可信目录
+        // 忽略模型生成的 workspaceRoot（用户消息/Planner/Action Gate/Native FC 都可能注入错误路径）
+        if (selectedTool.id === "delegate_coding" && state.resolvedWorkspaceRoot) {
+          const origWorkspace = args.workspaceRoot;
+          args = { ...args, workspaceRoot: state.resolvedWorkspaceRoot };
+          toolCall = { ...toolCall, arguments: JSON.stringify(args) };
+          if (origWorkspace !== state.resolvedWorkspaceRoot) {
+            flowLog(`   workspace 信任覆盖：${origWorkspace ?? "(无)"} → ${state.resolvedWorkspaceRoot}`);
+          }
+        }
+
         // run_verification 兜底：继承 delegate_coding 的可信 workspaceRoot
         // （强制动作路径已在上方跳过 Native FC 并直接使用 forcedArgs，此处仅处理非强制路径）
         if (selectedTool.id === "run_verification" && !rna?.forcedArgs && state.lastDelegateCodingWorkspace) {

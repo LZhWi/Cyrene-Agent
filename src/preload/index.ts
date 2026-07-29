@@ -490,6 +490,21 @@ const chatStoreApi = {
     ipcRenderer.on(IPC.CHATS_SWITCH_SESSION, listener);
     return () => ipcRenderer.removeListener(IPC.CHATS_SWITCH_SESSION, listener);
   },
+  // ── 对话工作区绑定 ──────────────────────────────────────
+  setWorkspace: (sessionId: string, workspaceRoot: string) =>
+    ipcRenderer.invoke(IPC.CHATS_SET_WORKSPACE, { sessionId, workspaceRoot }),
+  getWorkspace: (sessionId: string) =>
+    ipcRenderer.invoke(IPC.CHATS_GET_WORKSPACE, sessionId),
+  clearWorkspace: (sessionId: string) =>
+    ipcRenderer.invoke(IPC.CHATS_CLEAR_WORKSPACE, sessionId),
+  pickWorkspaceFolder: () =>
+    ipcRenderer.invoke(IPC.CHATS_PICK_WORKSPACE_FOLDER),
+  onWorkspaceChanged: (callback: (payload: { sessionId: string; binding: unknown }) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, payload: { sessionId: string; binding: unknown }) =>
+      callback(payload);
+    ipcRenderer.on(IPC.CHATS_WORKSPACE_CHANGED, listener);
+    return () => ipcRenderer.removeListener(IPC.CHATS_WORKSPACE_CHANGED, listener);
+  },
 };
 
 contextBridge.exposeInMainWorld("chatStore", chatStoreApi);
