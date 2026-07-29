@@ -984,6 +984,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             };
 
             // 从输出中提取语义字段（排除 taskId、traceRef、时间戳、随机 ID）
+            // 所有数组都进行稳定排序，确保顺序差异不被误判为新进展
             const extractSemanticFingerprint = (output: string): string => {
               try {
                 const parsed = parseSubAgentResult(output);
@@ -991,16 +992,21 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
                   profile: parsed.profile,
                   status: parsed.status,
                   findingsCount: parsed.findings.length,
-                  findingsContent: parsed.findings.map(f => f.content?.slice(0, 100)).sort(),
+                  findingsContent: parsed.findings
+                    .map(f => ({ content: f.content?.slice(0, 100), source: f.source }))
+                    .sort((a, b) => (a.content ?? "").localeCompare(b.content ?? "")),
                   artifactsCount: parsed.artifacts.length,
-                  artifactsPaths: parsed.artifacts.map(a => a.path).sort(),
-                  completionEvidence: parsed.completionEvidence.map(e => ({ criterion: e.criterion, satisfied: e.satisfied })),
-                  missingInformation: parsed.missingInformation?.sort(),
+                  artifactsPaths: parsed.artifacts.map(a => a.path).filter(Boolean).sort(),
+                  completionEvidence: parsed.completionEvidence
+                    .map(e => ({ criterion: e.criterion, satisfied: e.satisfied }))
+                    .sort((a, b) => a.criterion.localeCompare(b.criterion)),
+                  missingInformation: parsed.missingInformation?.slice().sort(),
                   errorCode: parsed.error?.code,
                 });
               } catch {
-                // 解析失败时回退到输出前缀
-                return output.slice(0, 200);
+                // 解析失败时使用完整输出的长度+前缀+后缀作为指纹
+                // 不使用 slice(0, 200)，因为它无法区分前缀相同但后续不同的结果
+                return `len:${output.length}|head:${output.slice(0, 50)}|tail:${output.slice(-50)}`;
               }
             };
 

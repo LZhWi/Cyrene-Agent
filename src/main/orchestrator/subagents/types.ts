@@ -91,6 +91,13 @@ export interface SubAgentProfileConfig {
 
   /** 构建最终 SubAgentPublicResult */
   buildResult(state: SubAgentState): SubAgentPublicResultV1;
+
+  /**
+   * 判断当前状态是否存在经过验证的有效结果。
+   * 预算耗尽时使用：有有效结果 -> partial，无有效结果 -> failed。
+   * 不能只判断 findings.length > 0；Search finding 至少应满足内容非空、来源有效。
+   */
+  hasValidResults(state: SubAgentState): boolean;
 }
 
 /** 子代理 Finding：一条结构化发现 */

@@ -213,6 +213,12 @@ const searchProfile: SubAgentProfileConfig = {
       error,
     };
   },
+
+  hasValidResults(state: SubAgentState): boolean {
+    // Search Profile: 有效结果 = 至少一个 finding 内容非空且来源有效
+    const findings = extractFindings(state);
+    return findings.some(f => f.content.length > 0 && !!f.source);
+  },
 };
 
 /** 从工具结果中提取搜索结果 */

@@ -48,6 +48,9 @@ function mockProfile(config: {
       status: state.plan.status === "failed" ? "failed" : "succeeded",
       summary: "test", findings: [], artifacts: [], completionEvidence: [],
     }),
+    hasValidResults: (state): boolean => {
+      return state.toolResults.some(r => r.status === "succeeded" && r.output.length > 0);
+    },
   };
 }
 

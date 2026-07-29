@@ -170,12 +170,10 @@ function buildBudgetOutcome(
     };
   }
 
-  // 检查是否有经过验证的有效结果
-  const hasValidFindings = state.toolResults.some(r =>
-    r.status === "succeeded" && r.output && r.output.length > 0
-  );
+  // 检查是否有经过验证的有效结果（由 Profile 定义有效性标准）
+  const hasValidResults = profile.hasValidResults(state);
   const hasCompletedSteps = state.plan.steps.some(s => s.status === "completed");
-  const hasResults = hasValidFindings || hasCompletedSteps;
+  const hasResults = hasValidResults || hasCompletedSteps;
 
   if (hasResults) {
     // 有部分结果但任务未全部完成 -> partial

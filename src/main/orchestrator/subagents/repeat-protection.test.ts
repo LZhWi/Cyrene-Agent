@@ -9,6 +9,7 @@ vi.mock("./runner", () => ({
 
 import { runSubAgent } from "./runner";
 import { toSubAgentToolOutcome } from "./outcome-adapter";
+import { parseSubAgentResult } from "./result-parser";
 import type { SubAgentRunOutcome } from "./types";
 
 describe("main graph repeated sub-agent protection", () => {
@@ -209,5 +210,142 @@ describe("main graph repeated sub-agent protection", () => {
     // 不应转换为 no-progress
     expect(outcome2.status).toBe("succeeded");
     expect(outcome2.errorCode).toBeUndefined();
+  });
+
+  it("same first 200 chars but different findings -> NOT a repeat (old slice behavior eliminated)", () => {
+    // 两个结果前 200 字符完全相同，但后续 finding 不同
+    const commonPrefix = '{"kind":"subagent_result","version":1,"taskId":"task-x","profile":"search","status":"succeeded","summary":"搜索完成","findings":[{"id":"f1","content":"';
+    const result1: SubAgentRunOutcome = {
+      invocationStatus: "completed",
+      result: {
+        kind: "subagent_result", version: 1, taskId: "task-x", profile: "search",
+        status: "succeeded", summary: "搜索完成",
+        findings: [{ id: "f1", content: commonPrefix + "AAA-unique-finding-content-that-makes-this-different-from-the-second-result", source: "https://example.com/1" }],
+        artifacts: [], completionEvidence: [],
+      },
+    };
+    const result2: SubAgentRunOutcome = {
+      invocationStatus: "completed",
+      result: {
+        kind: "subagent_result", version: 1, taskId: "task-x", profile: "search",
+        status: "succeeded", summary: "搜索完成",
+        findings: [{ id: "f1", content: commonPrefix + "BBB-different-finding-content-that-should-not-be-detected-as-repeat", source: "https://example.com/2" }],
+        artifacts: [], completionEvidence: [],
+      },
+    };
+
+    const outcome1 = toSubAgentToolOutcome(result1);
+    const outcome2 = toSubAgentToolOutcome(result2);
+
+    // 前 200 字符相同（证明旧的 slice 行为已消除）
+    expect(outcome1.output.slice(0, 200)).toBe(outcome2.output.slice(0, 200));
+
+    // 但语义指纹不同 -> 不应触发 NO_PROGRESS
+    const args = { objective: "搜索AI新闻" };
+
+    // 使用 parseSubAgentResult 提取语义字段比较
+    const parsed1 = parseSubAgentResult(outcome1.output);
+    const parsed2 = parseSubAgentResult(outcome2.output);
+
+    // findings 内容不同
+    expect(parsed1.findings[0].content).not.toBe(parsed2.findings[0].content);
+    expect(parsed1.findings[0].source).not.toBe(parsed2.findings[0].source);
+
+    // 不应被视为重复
+    expect(outcome2.status).toBe("succeeded");
+    expect(outcome2.errorCode).toBeUndefined();
+  });
+
+  it("same semantic result with different taskId -> IS a repeat", () => {
+    // 两个结果除了 taskId 外完全相同
+    const baseResult = {
+      kind: "subagent_result" as const, version: 1 as const,
+      profile: "search" as const, status: "succeeded" as const,
+      summary: "搜索完成",
+      findings: [{ id: "f1", content: "新闻内容", source: "https://example.com/1" }],
+      artifacts: [], completionEvidence: [{ criterion: "搜索完成", satisfied: true, evidenceRefs: ["https://example.com/1"] }],
+    };
+
+    const result1: SubAgentRunOutcome = {
+      invocationStatus: "completed",
+      result: { ...baseResult, taskId: "task-aaa-111" },
+    };
+    const result2: SubAgentRunOutcome = {
+      invocationStatus: "completed",
+      result: { ...baseResult, taskId: "task-bbb-222" },
+    };
+
+    const outcome1 = toSubAgentToolOutcome(result1);
+    const outcome2 = toSubAgentToolOutcome(result2);
+
+    // taskId 不同
+    const parsed1 = parseSubAgentResult(outcome1.output);
+    const parsed2 = parseSubAgentResult(outcome2.output);
+    expect(parsed1.taskId).not.toBe(parsed2.taskId);
+
+    // 但语义指纹相同 -> 应被检测为重复
+    // 模拟主图指纹比较逻辑
+    const fingerprint = (parsed: typeof parsed1) => JSON.stringify({
+      profile: parsed.profile, status: parsed.status,
+      findingsCount: parsed.findings.length,
+      findingsContent: parsed.findings.map(f => ({ content: f.content?.slice(0, 100), source: f.source }))
+        .sort((a, b) => (a.content ?? "").localeCompare(b.content ?? "")),
+      artifactsPaths: parsed.artifacts.map(a => a.path).filter(Boolean).sort(),
+      completionEvidence: parsed.completionEvidence.map(e => ({ criterion: e.criterion, satisfied: e.satisfied }))
+        .sort((a, b) => a.criterion.localeCompare(b.criterion)),
+    });
+
+    expect(fingerprint(parsed1)).toBe(fingerprint(parsed2));
+  });
+
+  it("same content but different array order -> IS a repeat (normalized)", () => {
+    // 两个结果的 findings/artifacts/evidence 顺序不同但内容相同
+    const baseFindings = [
+      { id: "f1", content: "新闻A", source: "https://a.com" },
+      { id: "f2", content: "新闻B", source: "https://b.com" },
+    ];
+    const baseEvidence = [
+      { criterion: "搜索完成", satisfied: true, evidenceRefs: ["https://a.com"] },
+      { criterion: "来源验证", satisfied: true, evidenceRefs: ["https://b.com"] },
+    ];
+
+    const result1: SubAgentRunOutcome = {
+      invocationStatus: "completed",
+      result: {
+        kind: "subagent_result", version: 1, taskId: "task-1", profile: "search",
+        status: "succeeded", summary: "搜索完成",
+        findings: [...baseFindings],
+        artifacts: [],
+        completionEvidence: [...baseEvidence],
+      },
+    };
+    const result2: SubAgentRunOutcome = {
+      invocationStatus: "completed",
+      result: {
+        kind: "subagent_result", version: 1, taskId: "task-2", profile: "search",
+        status: "succeeded", summary: "搜索完成",
+        findings: [...baseFindings].reverse(),
+        artifacts: [],
+        completionEvidence: [...baseEvidence].reverse(),
+      },
+    };
+
+    const outcome1 = toSubAgentToolOutcome(result1);
+    const outcome2 = toSubAgentToolOutcome(result2);
+    const parsed1 = parseSubAgentResult(outcome1.output);
+    const parsed2 = parseSubAgentResult(outcome2.output);
+
+    // 原始顺序不同
+    expect(parsed1.findings[0].content).not.toBe(parsed2.findings[0].content);
+
+    // 但排序后指纹相同 -> 应被检测为重复
+    const fingerprint = (parsed: typeof parsed1) => JSON.stringify({
+      findingsContent: parsed.findings.map(f => ({ content: f.content?.slice(0, 100), source: f.source }))
+        .sort((a, b) => (a.content ?? "").localeCompare(b.content ?? "")),
+      completionEvidence: parsed.completionEvidence.map(e => ({ criterion: e.criterion, satisfied: e.satisfied }))
+        .sort((a, b) => a.criterion.localeCompare(b.criterion)),
+    });
+
+    expect(fingerprint(parsed1)).toBe(fingerprint(parsed2));
   });
 });

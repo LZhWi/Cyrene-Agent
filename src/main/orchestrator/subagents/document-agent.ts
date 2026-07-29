@@ -172,6 +172,14 @@ const documentProfile: SubAgentProfileConfig = {
         : { error: { code: "FILE_VERIFICATION_FAILED", message: verification.reason ?? "文件验证失败", recoverable: true } }),
     };
   },
+
+  hasValidResults(state: SubAgentState): boolean {
+    // Document Profile: 有效结果 = write_word 成功且文件路径可提取
+    const writeResult = state.toolResults.find(r => r.toolId === "write_word" && r.status === "succeeded");
+    if (!writeResult) return false;
+    const filePath = extractFilePath(writeResult.output);
+    return !!filePath;
+  },
 };
 
 /** 子代理执行入口（注册到 runner） */
