@@ -399,12 +399,20 @@ function registerApplyPatchTool(): void {
     },
     execute: async (args) => {
       const filePath = String(args.file_path || "");
-      if (!filePath) return JSON.stringify({ success: false, errorCode: "INVALID_PATH", error: "file_path 不能为空", retryable: false });
-      if (!fs.existsSync(filePath)) return JSON.stringify({ success: false, errorCode: "FILE_NOT_FOUND", error: `文件不存在：${filePath}`, retryable: false });
-
-      const content = fs.readFileSync(filePath, "utf8");
       const oldStr = String(args.old_string ?? "");
       const newStr = String(args.new_string ?? "");
+      console.log(LOG_PREFIX, "apply_patch:", filePath, "old_len=" + oldStr.length, "new_len=" + newStr.length);
+      if (!filePath) return JSON.stringify({ success: false, errorCode: "INVALID_PATH", error: "file_path 不能为空", retryable: false });
+      if (!fs.existsSync(filePath)) {
+        return JSON.stringify({
+          success: false,
+          errorCode: "FILE_NOT_FOUND",
+          error: `文件不存在：${filePath}。不要重复相同路径，请先用 read_file 或 search_code 确认文件存在。`,
+          retryable: true,
+        });
+      }
+
+      const content = fs.readFileSync(filePath, "utf8");
       if (!oldStr) return JSON.stringify({ success: false, errorCode: "INVALID_INPUT", error: "old_string 不能为空", retryable: false });
 
       const lines = content.split("\n");
