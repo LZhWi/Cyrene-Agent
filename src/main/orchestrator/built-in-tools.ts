@@ -123,6 +123,8 @@ toolRegistry.register({
     "参数：url (必填，完整 http(s) 地址)，format (可选 markdown|raw，默认 markdown)。",
   enabled: true,
   risk: "network",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -281,6 +283,7 @@ toolRegistry.register({
     "参数：command (可执行文件名或绝对路径)，args (字符串数组)，cwd (可选工作目录)。",
   enabled: true,
   risk: "shell",
+  effectKind: "unknown" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -820,6 +823,8 @@ toolRegistry.register({
     "参数：city（可选，城市名中文或拼音；不传则用用户设置的默认城市）。",
   enabled: true,
   risk: "network",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -1108,6 +1113,8 @@ toolRegistry.register({
     "参数：query（必填，搜索关键词）。",
   enabled: true,
   risk: "network",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -1164,6 +1171,8 @@ toolRegistry.register({
     "完成所有步骤后调一次空列表清空，表示任务结束。",
   enabled: true,
   risk: "safe",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -1299,6 +1308,8 @@ toolRegistry.register({
     "default（可选，超时时的默认选择值）。",
   enabled: true,
   risk: "safe",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -1369,6 +1380,8 @@ toolRegistry.register({
   executionKind: "subagent",
   subAgentProfile: "document",
   ledgerPolicy: "bypass",
+  effectKind: "mutation" as const,
+  verificationPolicy: "artifact" as const,
   hideInPlanMode: false,
   soulActionLabel: "生成文档",
   soulProjection: {
@@ -1445,6 +1458,8 @@ toolRegistry.register({
   executionKind: "subagent",
   subAgentProfile: "search",
   ledgerPolicy: "bypass",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   hideInPlanMode: false,
   soulActionLabel: "搜索研究",
   soulProjection: {

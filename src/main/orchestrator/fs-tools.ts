@@ -6,6 +6,7 @@ import * as path from "path";
 import { toolRegistry } from "./tool-registry";
 import { captionImage } from "./vision-captioner";
 import type { ToolContext } from "./tool-context";
+import type { VerificationPolicy } from "./tool-registry";
 
 const LOG_PREFIX = "[FsTools]";
 
@@ -104,6 +105,8 @@ toolRegistry.register({
     "参数：path (必填，绝对路径)，startLine (可选，默认 1)，maxLines (可选，默认 500)。",
   enabled: true,
   risk: "fs-read",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -202,6 +205,8 @@ toolRegistry.register({
     "参数：path (必填，绝对路径)，showHidden (可选，是否显示以 . 开头的隐藏项，默认 false)。",
   enabled: true,
   risk: "fs-read",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -251,6 +256,40 @@ async function executeWriteFile(args: Record<string, unknown>): Promise<string> 
     (st ? "\nsize: " + humanBytes(st.size) : "");
 }
 
+function resolveWriteFilePolicy(args: Record<string, unknown>): VerificationPolicy {
+  const rawPath = String(args.path ?? "");
+  const normalizedPath = rawPath.replace(/\\/g, "/").toLowerCase();
+  const fileName = normalizedPath.split("/").pop() ?? "";
+  const ext = normalizedPath.slice(normalizedPath.lastIndexOf("."));
+
+  // 配置文件名 -> code（精确匹配）
+  const codeConfigFiles = new Set([
+    "package.json", "tsconfig.json", "tsconfig.main.json", "tsconfig.preload.json",
+    "tsconfig.skills.json", "vite.config.ts", "vite.config.js", "vitest.config.ts",
+    ".eslintrc", ".eslintrc.js", ".eslintrc.json", ".prettierrc",
+    "babel.config.js", "babel.config.json", "webpack.config.js",
+  ]);
+  if (codeConfigFiles.has(fileName)) return "code";
+
+  // 明确代码扩展名 -> code
+  const codeExtensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".cs", ".rb", ".php", ".swift", ".kt"];
+  if (codeExtensions.includes(ext)) return "code";
+
+  // 明确产物扩展名 -> artifact
+  const artifactExtensions = [".docx", ".xlsx", ".pdf", ".csv", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".ico", ".mp3", ".mp4", ".zip", ".tar", ".gz"];
+  if (artifactExtensions.includes(ext)) return "artifact";
+
+  // 模糊扩展名 -> 检查路径上下文
+  const ambiguousExtensions = [".json", ".md", ".html", ".htm", ".yml", ".yaml", ".xml", ".toml", ".ini", ".env"];
+  if (ambiguousExtensions.includes(ext)) {
+    if (/\/src\/|\/test[s]?\//.test(normalizedPath)) return "code";
+    if (/\/dist\/|\/build\/|\/output\//.test(normalizedPath)) return "artifact";
+    return "unknown";
+  }
+
+  return "unknown";
+}
+
 toolRegistry.register({
   id: "write_file",
   name: "写入文件",
@@ -267,6 +306,8 @@ toolRegistry.register({
     "参数：path (绝对路径)，content (要写的字符串)，append (可选，true=追加，默认 false=覆盖)，createDirs (可选，默认 true)。",
   enabled: true,
   risk: "fs-write",
+  effectKind: "mutation" as const,
+  verificationPolicyResolver: resolveWriteFilePolicy,
   inputSchema: {
     type: "object",
     properties: {
@@ -364,6 +405,8 @@ toolRegistry.register({
     "参数：path (必填，绝对路径)。",
   enabled: true,
   risk: "fs-read",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   needsContext: true,
   inputSchema: {
     type: "object",

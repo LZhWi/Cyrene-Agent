@@ -6,6 +6,23 @@ import type { ToolRiskLevel } from "../permission";
 import type { ToolContext } from "./tool-context";
 import type { SoulProjectionConfig, SoulClaimKind } from "./soul-execution-context";
 
+/** 工具效果类型：决定工具对系统状态的影响分类。未配置默认 "unknown"。 */
+export type ToolEffectKind =
+  | "read"
+  | "mutation"
+  | "verification"
+  | "external_side_effect"
+  | "unknown";
+
+/** 验证策略：决定 mutation 工具需要何种验证。 */
+export type VerificationPolicy = "none" | "artifact" | "code" | "unknown";
+
+/** 动态效果解析器：根据参数判断效果类型（如 run_shell 根据 purpose）。 */
+export type ToolEffectResolver = (args: Record<string, unknown>) => ToolEffectKind;
+
+/** 动态验证策略解析器：根据参数判断验证策略（如 write_file 根据文件扩展名）。 */
+export type VerificationPolicyResolver = (args: Record<string, unknown>) => VerificationPolicy;
+
 /** 工具完成证据元数据：供 Planner 生成 completionCriteria 和 planVerify 校验 */
 export interface CapabilityCompletionEvidence {
   kind: "tool_succeeded" | "projection_claim";
@@ -81,6 +98,14 @@ export interface ToolDefinition {
   deprecated?: boolean;
   /** 自定义完成证据验证器：对子代理工具，从结构化输出中验证 artifact 等条件。 */
   completionEvidenceVerifier?: (result: import("./types").ToolCallResult) => boolean;
+  /** 工具效果类型。未配置默认 "unknown"，不静默放行。 */
+  effectKind?: ToolEffectKind;
+  /** 动态效果解析器（覆盖 effectKind）。用于 run_shell 等根据参数判断效果的工具。 */
+  effectResolver?: ToolEffectResolver;
+  /** 验证策略。mutation 工具必须显式配置；未配置视为 "unknown"。 */
+  verificationPolicy?: VerificationPolicy;
+  /** 动态验证策略解析器（覆盖 verificationPolicy）。用于 write_file 根据文件扩展名判断。 */
+  verificationPolicyResolver?: VerificationPolicyResolver;
   // 执行器：内置工具指向本地函数，外部 MCP 工具指向 transport 调用
   execute: (args: Record<string, unknown>, ctx?: ToolContext) => Promise<string>;
 }
@@ -119,6 +144,28 @@ export class ToolRegistry {
 // 全局单例
 export const toolRegistry = new ToolRegistry();
 
+// ── 效果与验证策略解析 ────────────────────────────────────
+
+/** 解析工具效果类型：优先使用 effectResolver，其次 effectKind，默认 "unknown"。 */
+export function resolveEffectKind(
+  tool: ToolDefinition | undefined,
+  args: Record<string, unknown>,
+): ToolEffectKind {
+  if (!tool) return "unknown";
+  if (tool.effectResolver) return tool.effectResolver(args);
+  return tool.effectKind ?? "unknown";
+}
+
+/** 解析验证策略：优先使用 verificationPolicyResolver，其次 verificationPolicy，默认 "none"。 */
+export function resolveVerificationPolicy(
+  tool: ToolDefinition | undefined,
+  args: Record<string, unknown>,
+): VerificationPolicy {
+  if (!tool) return "none";
+  if (tool.verificationPolicyResolver) return tool.verificationPolicyResolver(args);
+  return tool.verificationPolicy ?? "none";
+}
+
 // ── 注册内置工具 ──────────────────────────────────────────
 
 function formatMemoryResult(result: unknown): string {
@@ -145,6 +192,8 @@ toolRegistry.register({
     '- 联网信息（那是 web_search）\n\n' +
     '参数：query (必填，搜索关键词)，topK (可选，返回条数，默认5)。',
   enabled: true,
+  effectKind: "read",
+  verificationPolicy: "none",
   inputSchema: {
     type: 'object',
     properties: {
@@ -174,6 +223,8 @@ toolRegistry.register({
     '- 用户从没提过的信息（查不到就老实说不知道）\n\n' +
     '参数：query (必填，搜索关键词)，topK (可选，返回条数，默认5)。',
   enabled: true,
+  effectKind: "read",
+  verificationPolicy: "none",
   inputSchema: {
     type: 'object',
     properties: {

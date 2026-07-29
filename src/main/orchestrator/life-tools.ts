@@ -58,6 +58,8 @@ function registerExpenseTools(): void {
       "参数：amount（金额，数字），category（分类：餐饮/交通/购物/娱乐/生活/其他），note（备注）。",
     enabled: true,
     risk: "safe",
+    effectKind: "read" as const,
+    verificationPolicy: "none" as const,
     inputSchema: {
       type: "object",
       properties: {
@@ -99,6 +101,8 @@ function registerExpenseTools(): void {
       "参数：days（最近 N 天，默认 30），category（可选，按分类过滤），summary（可选，true 只返回汇总）。",
     enabled: true,
     risk: "safe",
+    effectKind: "read" as const,
+    verificationPolicy: "none" as const,
     inputSchema: {
       type: "object",
       properties: {
@@ -153,6 +157,8 @@ function registerExchangeRateTool(): void {
       "参数：from（源货币代码，如 USD/EUR/JPY/CNY），to（目标货币），amount（金额，默认 1）。",
     enabled: true,
     risk: "network",
+    effectKind: "read" as const,
+    verificationPolicy: "none" as const,
     inputSchema: {
       type: "object",
       properties: {
@@ -213,6 +219,8 @@ function registerTranslateTool(): void {
       "参数：text（要翻译的文本），to（目标语言，如「英文」「中文」「日文」），from（可选，源语言，默认自动检测）。",
     enabled: true,
     risk: "network",
+    effectKind: "read" as const,
+    verificationPolicy: "none" as const,
     inputSchema: {
       type: "object",
       properties: {
@@ -290,6 +298,8 @@ function registerApplyPatchTool(): void {
       "old_string 必须在文件中唯一；匹配多处会报错，需要更长的上下文使其唯一。",
     enabled: true,
     risk: "fs-write",
+    effectKind: "mutation" as const,
+    verificationPolicy: "code" as const,
     inputSchema: {
       type: "object",
       properties: {
