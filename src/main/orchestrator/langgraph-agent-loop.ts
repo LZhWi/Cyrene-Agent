@@ -5,7 +5,7 @@ import {
   type ActionCapability,
   type ActionReferencePolicy,
 } from "./action-gate";
-import { runAgentGraph, type AgentGraphState } from "./agent-graph";
+import { runAgentGraph, type AgentGraphState, detectVerificationWaiver, resolveCompletionStatus } from "./agent-graph";
 import { AgentRuntimeError } from "./agent-runtime-error";
 import {
   classifyStructuredOutputEndpoint,
@@ -630,6 +630,15 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     decide: async (state) => {
       executionStatus.phase = "action_gate";
       ensureBudget();
+
+      // 检测用户是否明确授权跳过验证
+      if (!state.verificationWaiver) {
+        const waiver = detectVerificationWaiver(state.messages, options.conversationId ?? "default");
+        if (waiver) {
+          state.verificationWaiver = waiver;
+        }
+      }
+
       // 异常兜底：正常路径下 routeAfterTool 已经在工具成功后确定性路由到 soul，
       // 不会走到这里。只有 routeAfterTool 路由回 decide（replan 或可重试失败）后，
       // 模型又重复同一已完成动作时才触发。主路径不依赖此检查。
@@ -1159,6 +1168,12 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       executionStatus.phase = "soul";
       ensureBudget();
       options.onEvent?.({ type: "step_started", stepName: "agent-graph-soul" });
+
+      // 固化 FinalizationOutcome（如果 Guard 未设置则防御性计算）
+      if (!state.finalizationOutcome) {
+        state.finalizationOutcome = resolveCompletionStatus(state, { kind: "allow_success" });
+      }
+
       try {
         flowLog("7. 生成最终回复");
         const localNonExecutionFact = state.toolResults

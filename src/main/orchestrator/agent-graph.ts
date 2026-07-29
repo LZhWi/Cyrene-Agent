@@ -88,6 +88,70 @@ function extractChangedFilePathFromResult(result: ToolCallResult): string {
   return match ? match[1].trim() : "";
 }
 
+/**
+ * 检测用户消息是否包含跳过验证的明确授权。
+ * 只有用户消息中包含以下含义时才能创建 waiver：
+ * - "不要运行测试" / "不用验证" / "只修改，不要编译" / "直接改完即可"
+ * Action Gate 的 reason 不能创建 waiver。
+ */
+export function detectVerificationWaiver(
+  messages: ChatMessage[],
+  runId: string,
+): VerificationWaiver | undefined {
+  // 只检查最近的用户消息
+  const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
+  if (!lastUserMsg || typeof lastUserMsg.content !== "string") return undefined;
+
+  const text = lastUserMsg.content.toLowerCase();
+  const skipPatterns = [
+    /不要(运行|跑|执行)?(测试|test)/,
+    /不用(验证|检查|编译|构建)/,
+    /只(修改|改|写)(代码|文件)?[，,]?\s*不要(运行|跑|执行)?(测试|编译|验证)/,
+    /直接(改|写|修改)(完|好|掉)(就行|即可|就好)/,
+    /skip\s*(test|verify|build|compile)/,
+    /no\s*(test|verify|build|compile)/,
+  ];
+
+  if (skipPatterns.some(p => p.test(text))) {
+    return {
+      source: "explicit_user_instruction",
+      messageId: `msg_${Date.now()}`,
+      runId,
+      scope: "current_run",
+      evidenceText: lastUserMsg.content.slice(0, 200),
+    };
+  }
+  return undefined;
+}
+
+/**
+ * 分辨 RunCompletionStatus：根据 FinalizationDisposition 和代码验证状态确定最终完成状态。
+ * 由路由节点调用，结果固化到 FinalizationOutcome，Soul 只读取不重新计算。
+ */
+export function resolveCompletionStatus(
+  state: AgentGraphState,
+  disposition: { kind: string },
+): FinalizationOutcome {
+  if (disposition.kind === "allow_unverified") {
+    return { status: "completed_unverified", reason: "用户授权跳过验证" };
+  }
+  if (disposition.kind === "allow_failure") {
+    return { status: "failed", reason: (disposition as { reason?: string }).reason ?? "验证失败或预算耗尽" };
+  }
+  // allow_success
+  const cv = state.codeVerification;
+  if (!cv || cv.mutationRevision === 0) {
+    // 无代码修改 -> completed（搜索、读取、文档生成等）
+    return { status: "completed" };
+  }
+  if (cv.verifiedRevision === cv.mutationRevision) {
+    // 代码修改已验证 -> completed_verified
+    return { status: "completed_verified" };
+  }
+  // 不应到达此处（Guard 已验证），防御性返回
+  return { status: "completed", reason: "无代码修改" };
+}
+
 export interface CodeVerificationState {
   /** 当前代码修改版本号（只在 verificationPolicy=code 的 mutation 成功时 +1） */
   mutationRevision: number;
