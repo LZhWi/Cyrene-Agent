@@ -520,10 +520,9 @@ describe("Electron 打包依赖检查", () => {
   });
 
   it("不依赖 scripts/cline-poc/node_modules", () => {
-    // 生产代码只从项目根 node_modules 导入
-    const importLine = "from \"@cline/sdk\"";
+    // 生产代码使用动态 import() 加载 @cline/sdk（ESM-only）
     const delegateCode = fs.readFileSync(path.join(__dirname, "delegate-coding.ts"), "utf8");
-    expect(delegateCode).toContain(importLine);
+    expect(delegateCode).toContain('import("@cline/sdk")');
     // 不应包含相对路径到 PoC
     expect(delegateCode).not.toContain("scripts/cline-poc");
     expect(delegateCode).not.toContain("../../cline-poc");

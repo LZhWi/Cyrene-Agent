@@ -3,9 +3,11 @@
  *
  * delegateCoding() 返回 CodingAgentResult。
  * 生命周期：subscribe -> start，预生成 sessionId，finally 清理。
+ *
+ * 注意：@cline/sdk 是 ESM-only 包，Electron 主进程使用 CommonJS，
+ * 必须用动态 import() 加载，不能用静态 import。
  */
 
-import { ClineCore } from "@cline/sdk";
 import type { CoreSessionEvent } from "@cline/core";
 import { randomUUID } from "crypto";
 import type {
@@ -175,7 +177,7 @@ export async function delegateCoding(
   const timeoutMs = input.budget?.timeoutMs ?? 300_000;
   const allowedCommands = input.allowedCommands ?? DEFAULT_COMMAND_ALLOW_LIST;
 
-  let cline: ClineCore | null = null;
+  let cline: any = null;
   let unsubscribe: (() => void) | null = null;
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
   let lockKey: string | null = null;
@@ -190,7 +192,8 @@ export async function delegateCoding(
     // 1. 获取 workspace 锁
     lockKey = acquireWorkspaceLock(input.workspaceRoot, sessionId);
 
-    // 2. 创建 ClineCore
+    // 2. 动态导入 ClineCore 并创建实例
+    const { ClineCore } = await import("@cline/sdk");
     cline = await ClineCore.create({
       clientName: "cyrene",
       backendMode: "local",
@@ -276,7 +279,7 @@ export async function delegateCoding(
 // ── pending_prompts 处理 ─────────────────────────────────
 
 async function handlePendingPrompt(
-  cline: ClineCore,
+  cline: any,
   sessionId: string,
   prompt: { id: string; prompt: string },
   onAskUser: DelegateCodingOptions["onAskUser"],
