@@ -47,6 +47,7 @@
   "dependencies": {
     "@ag-ui/client": "^0.0.57",
     "@ag-ui/core": "^0.0.57",
+    "@cline/sdk": "0.0.66",
     "@lancedb/lancedb": "^0.30.0",
     "@langchain/anthropic": "^1.5.2",
     "@langchain/core": "^1.2.3",
