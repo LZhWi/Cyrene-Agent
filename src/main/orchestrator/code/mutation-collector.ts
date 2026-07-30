@@ -108,19 +108,21 @@ export class MutationCollector {
   private preExistingChanges: Set<string> = new Set();
   private preExistingHashes: Map<string, string> = new Map();
   private candidateFiles: Set<string> = new Set();
+  private watcherCaptured: Set<string> = new Set(); // watcher 捕获的变更
   private ignoredPaths: Set<string> = new Set();
   private rejectedPaths: Set<string> = new Set();
   private startTime: number = 0;
   private baselineTime: number = 0;
   private startGitStatus: Map<string, string> = new Map();
   private watcherReady: boolean = false;
+  private watcherHandle: fs.FSWatcher | null = null;
 
   constructor(workspaceRoot: string) {
     this.workspaceRoot = path.resolve(workspaceRoot);
     this.isGit = isGitRepo(this.workspaceRoot);
   }
 
-  /** 记录基线（任务开始前调用） */
+  /** 记录基线 + 启动 watcher（任务开始前调用） */
   recordBaseline(): void {
     this.startTime = Date.now();
     if (this.isGit) {
@@ -136,8 +138,38 @@ export class MutationCollector {
       }
     }
     this.baselineTime = Date.now() - this.startTime;
-    this.watcherReady = true; // 简化：Git baseline 完成后视为 watcher ready
+    // 启动真实 watcher（即使 Git 项目也启动，用于捕获命令生成的文件）
+    this.startWatcher();
+    this.watcherReady = true;
     console.log(`[Mutation] baseline: git=${this.isGit}, preExisting=${this.preExistingChanges.size}, hashCount=${this.preExistingHashes.size}, baselineMs=${this.baselineTime}`);
+  }
+
+  /** 启动真实 fs.watch watcher */
+  private startWatcher(): void {
+    try {
+      // 递归监听，但忽略 IGNORE_PATTERNS
+      this.watcherHandle = fs.watch(
+        this.workspaceRoot,
+        { recursive: true, persistent: false },
+        (eventType, filename) => {
+          if (!filename) return;
+          const filePath = path.resolve(this.workspaceRoot, filename);
+          if (isIgnoredInternal(filePath, this.workspaceRoot)) return;
+          if (!isWithinWorkspaceInternal(filePath, this.workspaceRoot)) return;
+          this.watcherCaptured.add(filePath);
+        },
+      );
+    } catch (err) {
+      console.warn("[Mutation] fs.watch failed:", err);
+    }
+  }
+
+  /** 关闭 watcher */
+  closeWatcher(): void {
+    if (this.watcherHandle) {
+      try { this.watcherHandle.close(); } catch { /* ignore */ }
+      this.watcherHandle = null;
+    }
   }
 
   /** 添加候选文件（来自 Cline 事件） */
@@ -146,13 +178,13 @@ export class MutationCollector {
     const resolved = path.resolve(filePath);
 
     // 工作区外拒绝
-    if (!isWithinWorkspace(resolved, this.workspaceRoot)) {
+    if (!isWithinWorkspaceInternal(resolved, this.workspaceRoot)) {
       this.rejectedPaths.add(resolved);
       return;
     }
 
     // 忽略规则
-    if (isIgnored(resolved, this.workspaceRoot)) {
+    if (isIgnoredInternal(resolved, this.workspaceRoot)) {
       this.ignoredPaths.add(resolved);
       return;
     }
@@ -160,19 +192,30 @@ export class MutationCollector {
     this.candidateFiles.add(resolved);
   }
 
-  /** 检查 watcher 是否 ready（Git baseline 完成） */
+  /** 检查 watcher 是否 ready */
   isReady(): boolean {
     return this.watcherReady;
   }
 
   /** 收集证据（任务结束后调用） */
   collect(): { evidence: MutationEvidence; timing: MutationCollectorTiming } {
+    // 收集前关闭 watcher（避免事件继续进入）
+    this.closeWatcher();
+
     const collectStart = Date.now();
     const createdFiles: string[] = [];
     const modifiedFiles: string[] = [];
     const deletedFiles: string[] = [];
     const touchedPreExistingFiles: string[] = [];
     const evidenceSources = new Set<"cline_event" | "workspace_watch" | "file_snapshot" | "git_diff">();
+
+    // 合并 watcher 捕获到 candidateFiles
+    if (this.watcherCaptured.size > 0) {
+      evidenceSources.add("workspace_watch");
+      for (const f of this.watcherCaptured) {
+        this.candidateFiles.add(f);
+      }
+    }
 
     if (this.isGit) {
         evidenceSources.add("git_diff");

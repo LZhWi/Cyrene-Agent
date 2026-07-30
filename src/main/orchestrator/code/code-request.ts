@@ -16,43 +16,34 @@
  * 10. 释放 watcher 和事件订阅
  */
 
-import * as fs from "fs";
-import * as path from "path";
 import * as chatsStore from "../../chats/chats-store";
 import type { ChatSession } from "../../../shared/chat-types";
 import { clineRuntime } from "./cline-runtime-manager";
 import { codeRunCoordinator } from "./code-run-coordinator";
-import { createAskQuestionExecutor, rejectAllAsksOnShutdown } from "./code-ask-bridge";
+import { codeRunWorker } from "./code-run-worker";
+import { rejectAllAsksOnShutdown } from "./code-ask-bridge";
 import { getOrCreateClineSession } from "./code-session-manager";
 import { MutationCollector } from "./mutation-collector";
 import { normalizeClineEvent, NormalizedClineEvent } from "./code-event-normalizer";
-import { buildClineSystemPrompt } from "./code-prompt-composer";
+import { buildClineSystemPromptWithPreferences } from "./code-user-preferences";
 import { routeCommand, updateSessionClineMode } from "./code-command-router";
 import { getCurrentLevel } from "../../permission";
+import { loadModelSettings } from "../../index";
+import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "../model-config";
+import { ClineResultAdapter, CodeRunFacts } from "./cline-result-adapter";
 
-/** 读取模型配置（简化版，避免依赖 index.ts 内部函数） */
-function loadModelConfig() {
-  const userData = process.env.APPDATA || path.join(require("os").homedir(), "AppData", "Roaming");
-  const candidates = [
-    path.join(userData, "live2d-cyrene", "model-settings.json"),
-    path.join(userData, "Cyrene", "model-settings.json"),
-  ];
-  for (const p of candidates) {
-    if (fs.existsSync(p)) {
-      try {
-        const raw = JSON.parse(fs.readFileSync(p, "utf8"));
-        const provider = raw.provider ?? "MiniMax（稀宇科技）";
-        const profile = raw.perProvider?.[provider] ?? {};
-        return {
-          model: profile.model || raw.model || "MiniMax-M3",
-          apiKey: profile.apiKey || raw.apiKey || "",
-          baseUrl: profile.baseUrl || raw.baseUrl || "https://api.minimaxi.com/v1",
-          contextWindowTokens: raw.contextWindowTokens ?? 256000,
-        };
-      } catch { /* ignore */ }
-    }
-  }
-  return { model: "MiniMax-M3", apiKey: "", baseUrl: "", contextWindowTokens: 256000 };
+/**
+ * 从统一 ModelSettings 读取运行时配置。
+ * 禁止在 Code 模块本地复制 JSON 解析或硬编码默认值。
+ */
+function loadModelRuntimeConfig() {
+  const s = loadModelSettings();
+  return {
+    model: s.model,
+    apiKey: s.apiKey,
+    baseUrl: s.baseUrl,
+    contextWindowTokens: s.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
+  };
 }
 
 export interface CodeRequestContext {
@@ -85,7 +76,7 @@ interface CodeRequestConfig {
  * 读取确定性配置
  */
 function readConfig(session: ChatSession): CodeRequestConfig {
-  const modelConfig = loadModelConfig();
+  const modelConfig = loadModelRuntimeConfig();
   const permissionMode = getCurrentLevel();
   const clineMode = session.codeSession?.clineMode ?? "act";
   const workspaceBinding = session.workspaceBinding;
@@ -100,7 +91,7 @@ function readConfig(session: ChatSession): CodeRequestConfig {
     contextWindowTokens: modelConfig.contextWindowTokens,
     permissionMode,
     clineMode,
-    systemPrompt: buildClineSystemPrompt(),
+    systemPrompt: buildClineSystemPromptWithPreferences(),
   };
 }
 
@@ -262,82 +253,79 @@ export async function runCodeRequest(
     return;
   }
 
-  // 3. 建立 Mutation baseline
+  // 3. 建立 Mutation baseline + 启动 watcher
   const mutationCollector = new MutationCollector(config.workspaceRoot);
   mutationCollector.recordBaseline();
 
-  // 4. 注册 per-run 事件订阅
-  const collectedEvents: NormalizedClineEvent[] = [];
-  let unsubscribe: (() => void) | null = null;
+  // 4. 准备 ClineResultAdapter 用于结构化事实累计
+  //（注：事实 adapter 在获取 clineSessionId 后实例化）
 
-  // 5. 创建 CodeRun 记录
-  const runRecord = codeRunCoordinator.createRun(ctx.runId, ctx.sessionId, "");
-  runRecord.status = "running";
-
+  // 5. 通过 codeRunWorker 提交后台任务
   try {
-    // 6. 获取或重建 Cline Session
-    const clineConfig = buildClineConfig(config, config.workspaceRoot);
+    await codeRunWorker.submit(ctx.runId, ctx.sessionId, "", async () => {
+      // 6. 获取或重建 Cline Session
+      const clineConfig = buildClineConfig(config, config.workspaceRoot);
 
-    const sessionResult = await getOrCreateClineSession(session, input.text, clineConfig);
-    const clineSessionId = sessionResult.sessionId;
+      const sessionResult = await getOrCreateClineSession(session, input.text, clineConfig);
+      const clineSessionId = sessionResult.sessionId;
 
-    runRecord.clineSessionId = clineSessionId;
-    console.log(`[CodeRequest] session: ${clineSessionId}, recovery=${sessionResult.recovery.recoveryMode}`);
+      // 更新 clineSessionId 到 record
+      codeRunCoordinator.getRun(ctx.runId)!.clineSessionId = clineSessionId;
 
-    // 7. 订阅事件
-    unsubscribe = clineRuntime.subscribe(clineSessionId, (event: any) => {
-      const normalized = normalizeClineEvent(event);
-      for (const ne of normalized) {
-        collectedEvents.push(ne);
-        // 收集 mutation candidates
-        if (ne.type === "file_candidate") {
-          mutationCollector.addCandidate(ne.path);
+      // 创建 result adapter
+      const resultAdapter = new ClineResultAdapter(ctx.runId, ctx.sessionId, clineSessionId);
+
+      console.log(`[CodeRequest] session: ${clineSessionId}, recovery=${sessionResult.recovery.recoveryMode}`);
+
+      // 7. 订阅事件
+      const unsubscribe = clineRuntime.subscribe(clineSessionId, (event: any) => {
+        const normalized = normalizeClineEvent(event);
+        for (const ne of normalized) {
+          resultAdapter.ingest(ne);
+          // 收集 mutation candidates
+          if (ne.type === "file_candidate") {
+            mutationCollector.addCandidate(ne.path);
+          }
         }
-      }
-      // 转发 AG-UI 事件
-      emitAgUiEvent(ctx, event);
-    });
-
-    // 8. 提交 Cline turn（后台）
-    if (sessionResult.recovery.recoveryMode === "fresh_session") {
-      // 新 Session：start 时已传 prompt，不需要 send
-      // 但 start 是同步的，所以 turn 已经在 start() 中执行
-      // 实际上，对于 active_session 和 message_reconstruction，需要 send
-      // 而 fresh_session 已经在 start() 中执行了 prompt
-      // 这里不需要再 send
-    } else {
-      // 恢复的 Session：需要 send 用户原始消息
-      await clineRuntime.send({
-        sessionId: clineSessionId,
-        prompt: input.text,
-        mode: config.clineMode,
+        // 转发 AG-UI 事件
+        emitAgUiEvent(ctx, event);
       });
-    }
 
-    // 9. 收集 Mutation evidence
-    const { evidence, timing } = mutationCollector.collect();
-    console.log(`[CodeRequest] mutation: baseline=${timing.baselineMs}ms collect=${timing.collectMs}ms total=${timing.totalMs}ms`);
-    console.log(`[CodeRequest] mutationEvidence: created=${evidence.createdFiles.length} modified=${evidence.modifiedFiles.length} deleted=${evidence.deletedFiles.length}`);
+      try {
+        // 8. 提交 Cline turn（后台）
+        if (sessionResult.recovery.recoveryMode === "fresh_session") {
+          // 新 Session：start 时已传 prompt，不需要 send
+        } else {
+          // 恢复的 Session：需要 send 用户原始消息（只提交一次）
+          await clineRuntime.send({
+            sessionId: clineSessionId,
+            prompt: input.text,
+            mode: config.clineMode,
+          });
+        }
 
-    // 10. 发送 mutation 结果
-    emitAgUiEvent(ctx, {
-      type: "code_mutation_evidence",
-      payload: evidence,
-      runId: ctx.runId,
+        const facts = resultAdapter.getFacts();
+        console.log(`[CodeRequest] facts: status=${facts.status} commands=${facts.commands.length} hostCancelled=${facts.hostCancelled} hostInterrupted=${facts.hostInterrupted}`);
+
+        // 9. 收集 Mutation evidence（close watcher 在 collect 内部）
+        const { evidence, timing } = mutationCollector.collect();
+        console.log(`[CodeRequest] mutation: baseline=${timing.baselineMs}ms collect=${timing.collectMs}ms total=${timing.totalMs}ms`);
+        console.log(`[CodeRequest] mutationEvidence: created=${evidence.createdFiles.length} modified=${evidence.modifiedFiles.length} deleted=${evidence.deletedFiles.length}`);
+
+        // 10. 发送 mutation 结果
+        emitAgUiEvent(ctx, {
+          type: "code_mutation_evidence",
+          payload: { mutation: evidence, facts },
+          runId: ctx.runId,
+        });
+      } finally {
+        unsubscribe();
+      }
     });
-
-    // 11. 标记完成
-    runRecord.status = "completed";
-    runRecord.finishedAt = Date.now();
-    codeRunCoordinator.complete(ctx.runId, "completed");
 
   } catch (err) {
     console.error(`[CodeRequest] failed:`, err);
-    runRecord.status = "failed";
-    runRecord.finishedAt = Date.now();
-    runRecord.errorCode = (err as Error).message;
-    codeRunCoordinator.complete(ctx.runId, "failed", (err as Error).message);
-
+    const errMsg = (err as Error).message ?? String(err);
     emitAgUiEvent(ctx, {
       type: "text_message_start",
       messageId: `err-${ctx.runId}`,
@@ -347,7 +335,7 @@ export async function runCodeRequest(
     emitAgUiEvent(ctx, {
       type: "text_message_content",
       messageId: `err-${ctx.runId}`,
-      delta: `错误: ${(err as Error).message}`,
+      delta: `错误: ${errMsg}`,
       runId: ctx.runId,
     });
     emitAgUiEvent(ctx, {
@@ -356,12 +344,6 @@ export async function runCodeRequest(
       runId: ctx.runId,
     });
   } finally {
-    // 12. 释放事件订阅
-    if (unsubscribe) {
-      try {
-        unsubscribe();
-      } catch { /* ignore */ }
-    }
     emitAgUiEvent(ctx, { type: "run_finished", runId: ctx.runId, threadId: ctx.sessionId });
   }
 }

@@ -2679,7 +2679,11 @@ const PROVIDER_SHORT_NAMES: Record<string, string> = {
   "Claude（Anthropic）": "Claude",
 };
 
-function getPublicModelConfig(settings = loadModelSettings()): PublicModelConfig {
+/**
+ * 统一模型配置入口：所有模块（包括 Code 模式）必须通过此函数读取。
+ * 禁止在 Code 模块本地复制读取 JSON 逻辑。
+ */
+export function getPublicModelConfig(settings = loadModelSettings()): PublicModelConfig {
   return {
     mode: settings.mode,
     provider: settings.provider,
