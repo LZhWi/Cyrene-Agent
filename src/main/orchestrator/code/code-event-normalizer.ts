@@ -2,7 +2,7 @@
  * Cline 事件归一化层
  *
  * 将 SDK CoreSessionEvent 归一化为内部事件类型，
- * 避免 event-handler / ClineResultAdapter / MutationCollector 等模块各自维护一套解析逻辑。
+ * 避免 ClineResultAdapter / MutationCollector 等 Code 模块各自维护一套解析逻辑。
  */
 
 export type NormalizedClineEvent =

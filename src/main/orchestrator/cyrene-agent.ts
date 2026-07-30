@@ -110,7 +110,7 @@ export interface CyreneRunOptions {
   availableSkills?: SkillRouteInfo[];
   /**
    * 可信工作区根目录（来自 Conversation Workspace Binding）。
-   * delegate_coding 和 run_verification 必须使用此目录。
+   * Work 工具和 run_verification 必须使用此目录。
    * 不能从用户消息、模型输出或 process.cwd() 推导。
    */
   resolvedWorkspaceRoot?: string;

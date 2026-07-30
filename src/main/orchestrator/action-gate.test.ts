@@ -208,9 +208,9 @@ describe("runActionGate", () => {
       .toContain("AMBIGUOUS_MULTIPLE_VALID_OBJECTS");
   });
 
-  it("repairs a capability not present in the current available set", async () => {
+  it("does not allow the removed coding delegate when it is absent from Work capabilities", async () => {
     const generate = vi.fn()
-      .mockResolvedValueOnce(response(actDecision({ capability: "shell.execute" })))
+      .mockResolvedValueOnce(response(actDecision({ capability: "delegate_coding" })))
       .mockResolvedValueOnce(response({ decision: "respond", reason: "能力不可用" }));
 
     const result = await runActionGate(baseInput(generate));

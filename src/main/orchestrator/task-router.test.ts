@@ -117,6 +117,27 @@ describe("buildRouterCapabilities", () => {
     ];
     expect(buildRouterCapabilities(tools)).toHaveLength(1);
   });
+
+  it("never exposes the removed coding delegate while keeping general coding tools", () => {
+    const tools: ToolDefinition[] = [
+      { id: "delegate_coding", name: "legacy", description: "legacy", enabled: true, effectKind: "mutation", inputSchema: { type: "object", properties: {} }, execute: async () => "" },
+      { id: "apply_patch", name: "patch", description: "patch", enabled: true, effectKind: "mutation", inputSchema: { type: "object", properties: {} }, execute: async () => "" },
+      { id: "search_code", name: "search", description: "search", enabled: true, effectKind: "read", inputSchema: { type: "object", properties: {} }, execute: async () => "" },
+      { id: "write_file", name: "write", description: "write", enabled: true, effectKind: "mutation", inputSchema: { type: "object", properties: {} }, execute: async () => "" },
+      { id: "run_shell", name: "shell", description: "shell", enabled: true, effectKind: "external_side_effect", inputSchema: { type: "object", properties: {} }, execute: async () => "" },
+      { id: "read_file", name: "read", description: "read", enabled: true, effectKind: "read", inputSchema: { type: "object", properties: {} }, execute: async () => "" },
+      { id: "list_dir", name: "list", description: "list", enabled: true, effectKind: "read", inputSchema: { type: "object", properties: {} }, execute: async () => "" },
+    ];
+
+    expect(buildRouterCapabilities(tools).map((item) => item.capabilityId)).toEqual([
+      "apply_patch",
+      "search_code",
+      "write_file",
+      "run_shell",
+      "read_file",
+      "list_dir",
+    ]);
+  });
 });
 
 // ── runTaskRouter 测试 ────────────────────

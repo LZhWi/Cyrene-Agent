@@ -283,13 +283,12 @@ export async function runTaskRouter(input: RunTaskRouterInput): Promise<TaskRout
 // ── 辅助：从 ToolDefinition 构建能力列表 ──
 
 export function buildRouterCapabilities(tools: ToolDefinition[]): RunTaskRouterInput["availableCapabilities"] {
-  let filtered = tools.filter((t) => t.enabled && !t.deprecated && t.effectKind !== "unknown");
-
-  // CYRENE_HIDE_LEGACY_CODING_TOOLS: 同步隐藏旧 Coding 工具
-  if (process.env.CYRENE_HIDE_LEGACY_CODING_TOOLS === "1") {
-    const HIDDEN_LEGACY = new Set(["apply_patch", "search_code", "write_file", "run_shell"]);
-    filtered = filtered.filter((t) => !HIDDEN_LEGACY.has(t.id));
-  }
+  const filtered = tools.filter(
+    (t) => t.id !== "delegate_coding"
+      && t.enabled
+      && !t.deprecated
+      && t.effectKind !== "unknown",
+  );
 
   return filtered
     .map((t) => ({

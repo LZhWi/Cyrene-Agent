@@ -29,9 +29,8 @@ export interface ToolContext {
    * - Planner
    * - Action Gate
    * - Native FC 生成的 workspaceRoot
-   * - Cline 自己推断的路径
    *
-   * delegate_coding 和 run_verification 必须使用此目录。
+   * Work 工具和 run_verification 必须使用此目录。
    */
   resolvedWorkspaceRoot?: string;
   /** 未来扩展兜底；当前为空对象，不预设字段。遵循"地基通用，上层克制"。 */

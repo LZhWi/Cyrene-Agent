@@ -500,7 +500,7 @@ describe("requiredNextAction: 确定性强制路由", () => {
   it("mutation=1, verified=0, pending → block + forcedArgs 含 cwd", () => {
     const state = codeState(
       { mutationRevision: 1, verifiedRevision: 0, status: "pending", changedFiles: ["test-file.ts"] },
-      { lastDelegateCodingWorkspace: "C:\\workspace\\fixture" },
+      { resolvedWorkspaceRoot: "C:\\workspace\\fixture" },
     );
     const guard = checkFinalizationGuard(state);
     expect(guard.kind).toBe("block");
@@ -551,28 +551,10 @@ describe("requiredNextAction: 确定性强制路由", () => {
     expect(guard.kind).toBe("allow_success");
   });
 
-  it("delegate_coding failed + changedFiles 非空 → mutation 证据可从 output 提取", () => {
-    const result = toolResult(
-      "delegate_coding",
-      "succeeded",
-      JSON.stringify({
-        status: "failed",
-        changedFiles: ["test-file.ts"],
-        partialChanges: true,
-        error: { code: "CLINE_VERIFICATION_NOT_RUN" },
-        workspaceRoot: "C:\\workspace\\fixture",
-      }),
-    );
-    const parsed = JSON.parse(result.output);
-    expect(parsed.changedFiles).toEqual(["test-file.ts"]);
-    expect(parsed.partialChanges).toBe(true);
-    expect(parsed.workspaceRoot).toBe("C:\\workspace\\fixture");
-  });
-
   it("FinalizationGuard block 后 requiredNextAction 携带 forcedArgs", () => {
     const state = codeState(
       { mutationRevision: 2, verifiedRevision: 1, status: "pending", changedFiles: ["a.ts", "b.ts"] },
-      { lastDelegateCodingWorkspace: "C:\\project\\src" },
+      { resolvedWorkspaceRoot: "C:\\project\\src" },
     );
     const guard = checkFinalizationGuard(state);
     expect(guard.kind).toBe("block");
@@ -665,24 +647,10 @@ describe("回归测试：验证熔断器和错误分类", () => {
     expect(guard.kind).toBe("allow_success");
   });
 
-  it("delegate_coding output 包含 workspaceRoot", () => {
-    const result = toolResult(
-      "delegate_coding",
-      "succeeded",
-      JSON.stringify({
-        status: "completed",
-        workspaceRoot: "C:\\workspace\\fixture",
-        changedFiles: ["test.ts"],
-      }),
-    );
-    const parsed = JSON.parse(result.output);
-    expect(parsed.workspaceRoot).toBe("C:\\workspace\\fixture");
-  });
-
   it("forcedArgs 包含 cwd 和 verificationType", () => {
     const state = codeState(
       { mutationRevision: 1, verifiedRevision: 0, status: "pending", changedFiles: ["test.ts"] },
-      { lastDelegateCodingWorkspace: "C:\\workspace\\fixture" },
+      { resolvedWorkspaceRoot: "C:\\workspace\\fixture" },
     );
     const guard = checkFinalizationGuard(state);
     expect(guard.kind).toBe("block");
@@ -705,7 +673,7 @@ describe("回归测试：验证通过后清除过期 E_FINALIZATION_BLOCKED", ()
     let state = codeState(
       { mutationRevision: 1, verifiedRevision: 0, status: "pending", changedFiles: ["test.ts"] },
       {
-        lastDelegateCodingWorkspace: "C:\\workspace",
+        resolvedWorkspaceRoot: "C:\\workspace",
         lastGateFailure: {
           code: "E_FINALIZATION_BLOCKED",
           disposition: "block",

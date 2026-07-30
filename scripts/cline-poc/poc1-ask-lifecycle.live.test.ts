@@ -81,7 +81,7 @@ function rejectAllAsks(reason: string): number {
 // ── Cline ESM Bridge 加载 ────────────────────────────────
 
 async function loadClineCore(): Promise<any> {
-  const bridgePath = path.join(__dirname, "..", "..", "src", "main", "orchestrator", "cline", "cline-esm-bridge.mjs");
+  const bridgePath = path.join(__dirname, "..", "..", "src", "main", "orchestrator", "code", "cline-esm-bridge.mjs");
   const bridgeUrl = require("url").pathToFileURL(bridgePath).href;
   // Vitest 支持 ESM dynamic import
   const bridge = await import(bridgeUrl);

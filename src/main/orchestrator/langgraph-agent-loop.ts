@@ -111,7 +111,7 @@ export interface LangGraphAgentLoopOptions {
   availableSkills?: SkillRouteInfo[];
   /**
    * 可信工作区根目录（来自 Conversation Workspace Binding）。
-   * delegate_coding 和 run_verification 必须使用此目录。
+   * Work 工具和 run_verification 必须使用此目录。
    */
   resolvedWorkspaceRoot?: string;
 }
@@ -475,7 +475,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     const fs = require("fs") as typeof import("fs");
     if (!fs.existsSync(options.resolvedWorkspaceRoot)) {
       console.error("[AgentFlow] WORKSPACE_NOT_FOUND: workspace directory does not exist:", options.resolvedWorkspaceRoot);
-      // 不直接拒绝——让 delegate_coding 返回具体错误
+      // 不直接拒绝——由具体 Work 工具返回可操作的路径错误
     }
   }
 
@@ -486,15 +486,12 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
   }
   const perCallTimeout = options.perCallTimeoutMs;
   // 过滤掉 deprecated 和 effectKind=unknown 的工具（后者会被 ExecutionPolicyGuard 拒绝，不应暴露给模型）
-  let enabledTools = options.tools.filter((tool) => tool.enabled && !tool.deprecated && tool.effectKind !== "unknown");
-
-  // CYRENE_HIDE_LEGACY_CODING_TOOLS: 隐藏旧 Coding 工具，只暴露 delegate_coding + run_verification
-  const HIDE_LEGACY_TOOLS = process.env.CYRENE_HIDE_LEGACY_CODING_TOOLS === "1";
-  if (HIDE_LEGACY_TOOLS) {
-    const HIDDEN_LEGACY = new Set(["apply_patch", "search_code", "write_file", "run_shell"]);
-    enabledTools = enabledTools.filter((tool) => !HIDDEN_LEGACY.has(tool.id));
-    console.log("[AgentFlow] CYRENE_HIDE_LEGACY_CODING_TOOLS=1, hidden:", Array.from(HIDDEN_LEGACY).filter(id => enabledTools.some(t => t.id === id)).join(", ") || "(none to hide)");
-  }
+  const enabledTools = options.tools.filter(
+    (tool) => tool.id !== "delegate_coding"
+      && tool.enabled
+      && !tool.deprecated
+      && tool.effectKind !== "unknown",
+  );
   // 过滤后的版本（按 inPlanMode 动态切换）
   let enabledToolsFiltered = enabledTools;
   let runnableToolIdsFiltered: Set<string> = new Set(enabledTools.map((t) => t.id));
@@ -507,14 +504,6 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     referencePolicy: referencePolicyFor(tool),
   }));
   let capabilitiesFiltered: ActionCapability[] = capabilities;
-
-  // 启动诊断日志：工具列表
-  if (HIDE_LEGACY_TOOLS) {
-    const delegateCoding = enabledTools.find((t) => t.id === "delegate_coding");
-    console.log("[AgentFlow] hideLegacyCodingTools=true");
-    console.log("[AgentFlow] availableTools=[" + capabilities.map((c) => c.capability).join(", ") + "]");
-    console.log("[AgentFlow] delegate_coding registered=" + !!delegateCoding + " enabled=" + (delegateCoding?.enabled ?? false));
-  }
 
   let usageInput = 0;
   let usageOutput = 0;
@@ -835,22 +824,6 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         runnableToolIdsFiltered = runnableToolIds;
         capabilitiesFiltered = capabilities;
       }
-      // 最终可见性层：隐藏旧 Coding 工具（覆盖 plan/direct/fallback 全路径）
-      if (HIDE_LEGACY_TOOLS) {
-        const HIDDEN_FINAL = new Set(["apply_patch", "search_code", "write_file", "run_shell"]);
-        const beforeIds = capabilitiesFiltered.map(c => c.capability);
-        enabledToolsFiltered = enabledToolsFiltered.filter((t) => !HIDDEN_FINAL.has(t.id));
-        runnableToolIdsFiltered = new Set(enabledToolsFiltered.map((t) => t.id));
-        capabilitiesFiltered = enabledToolsFiltered.map((tool) => ({
-          capability: tool.capability ?? tool.id,
-          toolId: tool.id,
-          description: tool.catalogHint?.trim() || tool.description.split("\n")[0]?.trim() || tool.description,
-          requiredInputs: tool.inputSchema.required ?? [],
-          referencePolicy: referencePolicyFor(tool),
-        }));
-        const removed = beforeIds.filter(id => HIDDEN_FINAL.has(id));
-        if (removed.length > 0) flowLog(`Legacy tools hidden: removed from Action Gate: ${removed.join(", ")}`);
-      }
       if (lastResult?.deduplicated) {
         debugLog(`${LOG_PREFIX} node=decide forced_respond reason=duplicate_terminal_action`);
         return { decision: "respond", reason: "duplicate_terminal_action" };
@@ -1142,46 +1115,6 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         }
 
         flowLog(`5. 执行工具：${selectedTool.id}`);
-
-        // delegate_coding 信任边界：强制使用 Conversation Workspace Binding 的可信目录
-        // 忽略模型生成的 workspaceRoot（用户消息/Planner/Action Gate/Native FC 都可能注入错误路径）
-        if (selectedTool.id === "delegate_coding") {
-          if (!state.resolvedWorkspaceRoot) {
-            // 未绑定工作区 → 拒绝执行
-            flowLog(`   WORKSPACE_NOT_BOUND: 未绑定工作区，拒绝 delegate_coding`);
-            return [{
-              toolId: selectedTool.id,
-              args,
-              output: JSON.stringify({
-                success: false,
-                errorCode: "WORKSPACE_NOT_BOUND",
-                error: "当前对话未绑定工作区目录。请先选择工作区目录，然后再执行代码任务。",
-              }),
-              status: "failed",
-              errorCode: "WORKSPACE_NOT_BOUND",
-              terminal: true,
-              retryable: false,
-              toolExecuted: false,
-            }];
-          }
-          const origWorkspace = args.workspaceRoot;
-          args = { ...args, workspaceRoot: state.resolvedWorkspaceRoot };
-          toolCall = { ...toolCall, arguments: JSON.stringify(args) };
-          if (origWorkspace !== state.resolvedWorkspaceRoot) {
-            flowLog(`   workspace 信任覆盖：${origWorkspace ?? "(无)"} → ${state.resolvedWorkspaceRoot}`);
-          }
-        }
-
-        // run_verification 兜底：继承 delegate_coding 的可信 workspaceRoot
-        // （强制动作路径已在上方跳过 Native FC 并直接使用 forcedArgs，此处仅处理非强制路径）
-        if (selectedTool.id === "run_verification" && !rna?.forcedArgs && state.lastDelegateCodingWorkspace) {
-          const origCwd = args.cwd;
-          args = { ...args, cwd: state.lastDelegateCodingWorkspace };
-          toolCall = { ...toolCall, arguments: JSON.stringify(args) };
-          if (origCwd !== state.lastDelegateCodingWorkspace) {
-            flowLog(`   workspace 覆盖：${origCwd ?? "(无)"} → ${state.lastDelegateCodingWorkspace}`);
-          }
-        }
 
         const toolCallId = toolCall.id;
         options.onEvent?.({ type: "tool_call_start", toolCallId, toolCallName: selectedTool.name });

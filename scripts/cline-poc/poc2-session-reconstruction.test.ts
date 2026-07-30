@@ -110,7 +110,7 @@ function reconstructSession(rawMessages: Message[]): SessionReconstructionResult
 // ── Cline ESM Bridge 加载 ────────────────────────────────
 
 async function loadClineCore(): Promise<any> {
-  const bridgePath = path.join(__dirname, "..", "..", "src", "main", "orchestrator", "cline", "cline-esm-bridge.mjs");
+  const bridgePath = path.join(__dirname, "..", "..", "src", "main", "orchestrator", "code", "cline-esm-bridge.mjs");
   const bridgeUrl = require("url").pathToFileURL(bridgePath).href;
   const bridge = await import(bridgeUrl);
   return bridge.createClineCore({ clientName: "cyrene-poc2", backendMode: "local" });

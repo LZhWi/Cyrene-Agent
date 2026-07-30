@@ -146,7 +146,6 @@ import { registerDocumentTools } from "./orchestrator/document-tools";
 import { registerLifeTools, setTranslateConfig } from "./orchestrator/life-tools";
 import { registerTravelTools, setTravelConfig } from "./orchestrator/travel-tools";
 import { registerEmailTools, setEmailConfig } from "./orchestrator/email-tools";
-import { registerClineCodingAgent } from "./orchestrator/cline/integration";
 import { resolveMusicPaths } from "./music/paths";
 import { bootstrapMusicService } from "./music/bootstrap";
 import { installShutdownLatch } from "./music/shutdown-latch";
@@ -4777,15 +4776,6 @@ app.whenReady().then(async () => {
   // 邮件发送工具（SMTP 直发，需在设置里配置 SMTP 授权码）
   registerEmailTools();
   syncBuiltInToolToggles(loadGeneralSettings());
-
-  // Cline Coding Agent（实验分支默认开启，合并 master 前改为 false）
-  registerClineCodingAgent(
-    () => {
-      const s = loadModelSettings();
-      return s.apiKey ? { providerId: "openai-compatible", modelId: s.model, apiKey: s.apiKey, baseUrl: s.baseUrl } : null;
-    },
-    true,
-  );
 
   // 内置 MCP 自动连接：Playwright (默认关闭,选项控制)
   const initialSettings = loadGeneralSettings();

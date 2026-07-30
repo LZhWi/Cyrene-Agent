@@ -4,7 +4,7 @@
   "description": "Live2D desktop pet — Cyrene",
   "main": "dist/main/main/index.js",
   "scripts": {
-    "build:main": "tsc -p tsconfig.main.json && node -e \"require('fs').cpSync('src/main/orchestrator/cline/cline-esm-bridge.mjs','dist/main/main/orchestrator/cline/cline-esm-bridge.mjs')\"",
+    "build:main": "tsc -p tsconfig.main.json && node -e \"require('fs').cpSync('src/main/orchestrator/code/cline-esm-bridge.mjs','dist/main/main/orchestrator/code/cline-esm-bridge.mjs')\"",
     "build:preload": "tsc -p tsconfig.preload.json",
     "build:renderer": "vite build",
     "build:skills": "tsc -p tsconfig.skills.json",
@@ -13,7 +13,6 @@
     "build": "npm run build:skills && npm run build:main && npm run build:preload && npm run build:renderer",
     "package:win:dir": "npm run build && npm run build:screenshot-helper && electron-builder --win --dir",
     "dev": "npm run build:skills && npm run build:main && npm run build:preload && concurrently \"vite\" \"cross-env VITE_DEV=1 electron .\"",
-    "dev:cline": "npm run build:skills && npm run build:main && npm run build:preload && concurrently \"vite\" \"cross-env VITE_DEV=1 CYRENE_HIDE_LEGACY_CODING_TOOLS=1 electron .\"",
     "start": "electron .",
     "test": "vitest run",
     "test:watch": "vitest",

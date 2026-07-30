@@ -70,7 +70,7 @@ function hasModelConfig() {
 // ── Cline ESM Bridge ────────────────────────────────────────
 
 async function loadClineCore(): Promise<any> {
-  const bridgePath = path.join(__dirname, "..", "cline", "cline-esm-bridge.mjs");
+  const bridgePath = path.join(__dirname, "cline-esm-bridge.mjs");
   const bridgeUrl = require("url").pathToFileURL(bridgePath).href;
   const bridge = await import(bridgeUrl);
   return bridge.createClineCore({ clientName: "cyrene-commit3-test", backendMode: "local" });

@@ -76,16 +76,15 @@ export interface AgentGraphInput {
   clarificationAnswers?: AskUserAnswer[];
   /**
    * 可信工作区根目录（来自 Conversation Workspace Binding）。
-   * delegate_coding 和 run_verification 必须使用此目录。
+   * Work 工具和 run_verification 必须使用此目录。
    */
   resolvedWorkspaceRoot?: string;
 }
 
-/** 从工具结果中提取变更文件路径（结构化 JSON 或正则回退） */
+/** 从工具结果中提取变更文件路径（结构化 JSON 或正则回退）。 */
 function extractChangedFilePathFromResult(result: ToolCallResult): string {
   try {
     const parsed = JSON.parse(result.output);
-    // delegate_coding 返回 changedFiles 数组
     if (Array.isArray(parsed.changedFiles) && parsed.changedFiles.length > 0) {
       return parsed.changedFiles[0];
     }
@@ -97,7 +96,7 @@ function extractChangedFilePathFromResult(result: ToolCallResult): string {
   return match ? match[1].trim() : "";
 }
 
-/** 从工具结果提取全部变更文件（delegate_coding 返回 changedFiles 数组） */
+/** 从工具结果提取全部变更文件。 */
 function extractAllChangedFiles(result: ToolCallResult): string[] {
   try {
     const parsed = JSON.parse(result.output);
@@ -105,15 +104,6 @@ function extractAllChangedFiles(result: ToolCallResult): string[] {
   } catch { /* 非 JSON */ }
   const single = extractChangedFilePathFromResult(result);
   return single ? [single] : [];
-}
-
-/** 从工具结果提取 workspaceRoot（delegate_coding 返回 workspaceRoot） */
-function extractWorkspaceRoot(result: ToolCallResult): string | undefined {
-  try {
-    const parsed = JSON.parse(result.output);
-    if (parsed.workspaceRoot) return String(parsed.workspaceRoot);
-  } catch { /* 非 JSON */ }
-  return undefined;
 }
 
 /**
@@ -257,7 +247,7 @@ export function checkFinalizationGuard(state: AgentGraphState): FinalizationDisp
             reason: "代码修改后必须运行验证",
             forcedArgs: {
               verificationType: "typecheck",
-              cwd: state.lastDelegateCodingWorkspace,
+              cwd: state.resolvedWorkspaceRoot,
             },
           },
         },
@@ -374,8 +364,6 @@ export interface AgentGraphState extends AgentGraphInput {
     /** 预构造的工具参数（如 run_verification 的 cwd） */
     forcedArgs?: Record<string, unknown>;
   };
-  /** delegate_coding 返回的可信 workspaceRoot（run_verification 继承） */
-  lastDelegateCodingWorkspace?: string;
   /** 验证重试计数（熔断器：防止无限重试） */
   verificationRetryCount?: number;
 }
@@ -428,7 +416,6 @@ const GraphState = Annotation.Root({
   verificationWaiver: Annotation<VerificationWaiver | undefined>,
   finalizationOutcome: Annotation<FinalizationOutcome | undefined>,
   requiredNextAction: Annotation<{ capabilityId: string; reason: string; forcedArgs?: Record<string, unknown> } | undefined>,
-  lastDelegateCodingWorkspace: Annotation<string | undefined>,
   verificationRetryCount: Annotation<number | undefined>,
   /** 可信工作区根目录（来自 Conversation Workspace Binding） */
   resolvedWorkspaceRoot: Annotation<string | undefined>,
@@ -505,7 +492,7 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
       // ── requiredNextAction 硬约束：代码修改后必须验证 ──
       if (state.requiredNextAction && decision.decision === "act") {
         if (decision.capability !== state.requiredNextAction.capabilityId) {
-          // Action Gate 选择了其他能力（如 delegate_coding）-> 拒绝，强制 run_verification
+          // Action Gate 选择了其他能力 -> 拒绝，强制 run_verification
           console.log("[AgentGraph]", `requiredNextAction 拦截: 模型选了 ${decision.capability}，要求 ${state.requiredNextAction.capabilityId}`);
           return {
             decision: {
@@ -625,8 +612,8 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
           : "unknown";
 
         // ── 第一层：mutation 证据收集 ──
-        // 只要工具返回了可解析的 CodingAgentResult，就检查 changedFiles
-        // 不依赖 result.status（业务 failed 不影响 mutation 证据）
+        // 只要 mutation 工具返回可解析的文件证据，就记录变更。
+        // 不依赖 result.status（业务失败不代表一定没有部分修改）。
         if (effectKind === "mutation") {
           const allChanged = extractAllChangedFiles(result);
           const hasPartialChanges = (() => {
@@ -639,8 +626,6 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
             const newRevision = (cv?.mutationRevision ?? 0) + 1;
             const prevFiles = cv?.changedFiles ?? [];
             const mergedFiles = [...new Set([...prevFiles, ...allChanged])].filter(Boolean);
-            const ws = extractWorkspaceRoot(result);
-
             codeVerificationUpdate = {
               codeVerification: {
                 mutationRevision: newRevision,
@@ -652,22 +637,12 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
               },
               requiredNextAction: {
                 capabilityId: "run_verification",
-                reason: "delegate_coding 产生了文件修改，必须验证",
+                reason: "Work 工具产生了代码文件修改，必须验证",
                 forcedArgs: {
                   verificationType: "typecheck",
-                  // 优先使用 Conversation Workspace Binding（不可变可信源）
-                  // 回退到 delegate_coding 返回的 workspaceRoot
-                  cwd: state.resolvedWorkspaceRoot ?? ws ?? state.lastDelegateCodingWorkspace,
+                  cwd: state.resolvedWorkspaceRoot,
                 },
               },
-              lastDelegateCodingWorkspace: state.resolvedWorkspaceRoot ?? ws ?? state.lastDelegateCodingWorkspace,
-              // 运行时 invariant：如果设置了 resolvedWorkspaceRoot，delegate_coding 返回的 workspaceRoot 必须一致
-              ...(state.resolvedWorkspaceRoot && ws && ws !== state.resolvedWorkspaceRoot ? {
-                lastGateFailure: {
-                  code: "WORKSPACE_CONTEXT_MISMATCH",
-                  disposition: "block",
-                },
-              } : {}),
             };
             // 清除之前的验证通过状态
             if (cv?.status === "passed") {

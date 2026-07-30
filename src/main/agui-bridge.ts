@@ -1,15 +1,12 @@
-// AG-UI IPC 桥：把 CyreneAgent 的事件流透传给渲染进程。
+// AG-UI IPC 桥：按会话模式选择执行链并把事件透传给渲染进程。
 //
 // 架构：
-//   渲染进程  ──invoke(AGUI_RUN, input)──>  本桥  ──>  CyreneAgent.runWithEvents()
-//     ▲                                        │ 订阅 Observable<BaseEvent>
-//     └── send(AGUI_EVENT, baseEvent) ─────────┘ 每个 AG-UI 事件转发给渲染进程
+//   Chat / Work ──> CyreneAgent.runWithEvents()
+//   Code        ──> runCodeRequest() ──> 原生 Cline Runtime
+//   两条链路的事件都由本桥通过 AGUI_EVENT 转发给渲染进程。
 //
-// Observable 是内存流、跨不过进程边界，所以必须这层桥：
-// 主进程订阅 agent 的 events$，每个 BaseEvent 通过 webContents.send 推给渲染进程。
-//
-// 本桥只管"跑 agent + 转发事件 + 跑完后做副作用"。
-// 上下文构建和副作用由调用方（index.ts）注入回调，保持本模块不依赖 index.ts 内部函数。
+// Chat / Work 的 Observable 是内存流、跨不过进程边界；Code 的后台任务也不能依赖
+// WebContents 生命周期。因此主进程统一持有运行并仅把事件发送给 Renderer。
 import { ipcMain, IpcMainInvokeEvent, WebContents } from "electron";
 import { IPC } from "../shared/ipc-channels";
 import { Subscription } from "rxjs";
