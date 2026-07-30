@@ -108,6 +108,12 @@ export interface CyreneRunOptions {
   };
   /** Task Router 可用 Skill 列表（feature flag 开启时使用）。Router 不依赖该字段是否存在。 */
   availableSkills?: SkillRouteInfo[];
+  /**
+   * 可信工作区根目录（来自 Conversation Workspace Binding）。
+   * delegate_coding 和 run_verification 必须使用此目录。
+   * 不能从用户消息、模型输出或 process.cwd() 推导。
+   */
+  resolvedWorkspaceRoot?: string;
 }
 
 /** FC 循环最终结果（供桥层做副作用用）。 */
@@ -368,6 +374,7 @@ export class CyreneAgent extends AbstractAgent {
                 imageCaptionFallback: options.imageCaptionFallback,
                 executionLedger,
                 perCallTimeoutMs: timeoutSettings.perRoundTimeout,
+                resolvedWorkspaceRoot: options.resolvedWorkspaceRoot,
               }))
               : await perf.track("legacy_agent_loop", () => runTwoPhaseFcLoop({
                 ...commonOptions,

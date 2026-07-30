@@ -430,6 +430,8 @@ const GraphState = Annotation.Root({
   requiredNextAction: Annotation<{ capabilityId: string; reason: string; forcedArgs?: Record<string, unknown> } | undefined>,
   lastDelegateCodingWorkspace: Annotation<string | undefined>,
   verificationRetryCount: Annotation<number | undefined>,
+  /** 可信工作区根目录（来自 Conversation Workspace Binding） */
+  resolvedWorkspaceRoot: Annotation<string | undefined>,
 });
 
 // ── createPlan 错误分类 ──────────────────────
@@ -653,10 +655,12 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
                 reason: "delegate_coding 产生了文件修改，必须验证",
                 forcedArgs: {
                   verificationType: "typecheck",
-                  cwd: ws ?? state.lastDelegateCodingWorkspace,
+                  // 优先使用 Conversation Workspace Binding（不可变可信源）
+                  // 回退到 delegate_coding 返回的 workspaceRoot
+                  cwd: state.resolvedWorkspaceRoot ?? ws ?? state.lastDelegateCodingWorkspace,
                 },
               },
-              ...(ws ? { lastDelegateCodingWorkspace: ws } : {}),
+              lastDelegateCodingWorkspace: state.resolvedWorkspaceRoot ?? ws ?? state.lastDelegateCodingWorkspace,
             };
             // 清除之前的验证通过状态
             if (cv?.status === "passed") {
@@ -718,6 +722,32 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
             } catch {
               // 解析失败
             }
+          }
+        }
+
+        // ── run_verification 工具执行失败（非 succeeded） ──
+        // 例如：VERIFICATION_CONFIG_NOT_FOUND、spawn 失败等
+        // 必须递增 verificationRetryCount 以触发熔断器
+        if (result.status !== "succeeded" && result.toolId === "run_verification") {
+          const cv = state.codeVerification;
+          if (cv && cv.mutationRevision > cv.verifiedRevision) {
+            const retryCount = (state.verificationRetryCount ?? 0) + 1;
+            const errorCode = result.errorCode || "VERIFICATION_TOOL_FAILED";
+            codeVerificationUpdate = {
+              codeVerification: {
+                ...cv,
+                status: "failed",
+                lastVerificationStepAttemptId: result.stepAttemptId,
+              },
+              // 工具执行失败 → 清除 requiredNextAction，让 guard 根据 retryCount 决定
+              requiredNextAction: undefined,
+              verificationRetryCount: retryCount,
+            };
+            console.log("[AgentGraph] run_verification 工具执行失败:",
+              "errorCode=" + errorCode,
+              "retryCount=" + retryCount,
+              "output=" + (result.output ?? "").slice(0, 100),
+            );
           }
         }
       }

@@ -109,6 +109,11 @@ export interface LangGraphAgentLoopOptions {
   requestUserClarification?: (card: AskClarificationCard) => Promise<AskUserAnswer>;
   /** Task Router 可用 Skill 列表（feature flag 开启时由 build-options 传入） */
   availableSkills?: SkillRouteInfo[];
+  /**
+   * 可信工作区根目录（来自 Conversation Workspace Binding）。
+   * delegate_coding 和 run_verification 必须使用此目录。
+   */
+  resolvedWorkspaceRoot?: string;
 }
 
 const LOG_PREFIX = "[AgentGraph/Trace]";
@@ -458,6 +463,13 @@ function buildSoulBlankFallback(state: AgentGraphState): string {
 
 export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions): Promise<TwoPhaseFcResult> {
   const startedAt = Date.now();
+
+  // 工作区诊断日志
+  console.log("[AgentFlow] workspace binding:",
+    "conversationId=" + (options.conversationId ?? "default"),
+    "resolvedWorkspaceRoot=" + (options.resolvedWorkspaceRoot ?? "(未绑定)"),
+  );
+
   if (ENABLE_TASK_ROUTER) {
     flowLog(`Task Router enabled: skills=${(options.availableSkills ?? []).length}`);
   } else {
@@ -571,6 +583,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       citaContextBlock: options.citaContextBlock,
       messages: options.cleanMessages ?? options.messages,
       availableCapabilities: capabilities.map((item) => item.capability),
+      resolvedWorkspaceRoot: options.resolvedWorkspaceRoot,
     }, {
     maxIterations: ENABLE_TASK_ROUTER ? HARD_MAX_ITERATIONS : (options.maxIterations ?? 12),
     maxReplans: DEFAULT_MAX_REPLANS,
