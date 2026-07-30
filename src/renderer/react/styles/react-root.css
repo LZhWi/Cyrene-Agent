@@ -1,0 +1,38 @@
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+}
+
+#cyrene-react-root {
+  width: 100%;
+  height: 100%;
+}
+
+.cy-page {
+  height: 100vh;
+  width: 100vw;
+  background: #FBFAF9;
+  box-sizing: border-box;
+  padding: 50px 10px 10px 200px;
+  position: relative;
+  transition: padding 0.25s ease;
+}
+
+.cy-page.is-collapsed {
+  padding-left: 10px;
+}
+
+.cy-page-toggle {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+}
+
+.cy-workspace {
+  width: 100%;
+  height: 100%;
+  background: #ffffff;
+  border-radius: 10px;
+}

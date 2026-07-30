@@ -1,0 +1,28 @@
+.cy-sidebar-toggle {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  color: #8e8e93;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.cy-sidebar-toggle:hover {
+  background: rgba(0, 0, 0, 0.04);
+  color: #1d1d1f;
+}
+
+.cy-sidebar-toggle-line {
+  transition: transform 0.2s ease, opacity 0.2s ease;
+  transform-origin: center;
+}
+
+.cy-sidebar-toggle svg.is-collapsed .cy-sidebar-toggle-line {
+  transform: scaleX(0);
+  opacity: 0;
+}

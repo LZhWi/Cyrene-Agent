@@ -1,7 +1,9 @@
 import { defineConfig } from "vite";
 import { resolve } from "path";
+import react from "@vitejs/plugin-react";
 
 export default defineConfig({
+  plugins: [react()],
   root: resolve(__dirname, "src/renderer"),
   base: "./",
   build: {
@@ -16,6 +18,7 @@ export default defineConfig({
         settings: resolve(__dirname, "src/renderer/settings/index.html"),
         stickers: resolve(__dirname, "src/renderer/sticker-manager/index.html"),
         call: resolve(__dirname, "src/renderer/call/index.html"),
+        "chat-react": resolve(__dirname, "src/renderer/react/index.html"),
       },
     },
   },
