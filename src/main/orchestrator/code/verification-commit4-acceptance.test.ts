@@ -66,6 +66,14 @@ let tmpDir: string;
 beforeEach(() => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cline-vfy-"));
 });
+
+describe("Commit 4 应用生命周期接线", () => {
+  it("应用退出会清理 pending Ask、approval 与 active Code Run", () => {
+    const indexSource = fs.readFileSync(path.join(__dirname, "..", "..", "index.ts"), "utf8");
+    expect(indexSource).toContain('import { codeRunWorker } from "./orchestrator/code/code-run-worker"');
+    expect(indexSource).toMatch(/app\.on\("before-quit"[\s\S]*?codeRunWorker\.cleanup\(\)/);
+  });
+});
 afterEach(() => {
   fs.rmSync(tmpDir, { recursive: true, force: true });
 });
@@ -342,7 +350,27 @@ describe("VerificationRunner", () => {
       onApprovalRequest: async () => false, // 拒绝
     });
     expect(result.skipped).toBe(true);
+    expect(result.errorCode).toBe("VERIFICATION_APPROVAL_REJECTED");
+  });
+
+  it("16a. 需要审批但未提供审批入口时绝不执行命令", async () => {
+    const markerPath = path.join(tmpDir, "should-not-exist.txt");
+    const result = await runner.runStep({
+      id: "s1-no-approval-handler",
+      type: "test",
+      packageRoot: tmpDir,
+      cwd: tmpDir,
+      trust: "workspace_script",
+      executable: process.execPath,
+      args: ["-e", `require("fs").writeFileSync(${JSON.stringify(markerPath)}, "executed")`],
+      source: "package_script",
+    }, {
+      permissionLevel: "per-action",
+    });
+
+    expect(result.skipped).toBe(true);
     expect(result.errorCode).toBe("VERIFICATION_APPROVAL_REQUIRED");
+    expect(fs.existsSync(markerPath)).toBe(false);
   });
 
   it("17. timeout", async () => {
@@ -411,6 +439,53 @@ describe("VerificationRunner", () => {
     }, { permissionLevel: "full" });
     expect(result.passed).toBe(true);
     expect(result.stdout).toContain("hello world");
+  });
+
+  it("20a. builtin CLI 解析公开为可测试的本地绝对入口", async () => {
+    const module = await import("./verification-runner");
+    expect(typeof module.resolveBuiltinExecutable).toBe("function");
+
+    const tsc = module.resolveBuiltinExecutable("builtin:tsc", process.cwd());
+    expect(tsc?.executable).toBe(process.execPath);
+    expect(path.isAbsolute(tsc?.args[0] ?? "")).toBe(true);
+    expect(fs.existsSync(tsc?.args[0] ?? "")).toBe(true);
+    expect(tsc?.args[0].replaceAll("\\", "/")).toContain("/node_modules/typescript/bin/tsc");
+
+    const vitest = module.resolveBuiltinExecutable("builtin:vitest", process.cwd());
+    expect(vitest?.executable).toBe(process.execPath);
+    expect(path.isAbsolute(vitest?.args[0] ?? "")).toBe(true);
+    expect(fs.existsSync(vitest?.args[0] ?? "")).toBe(true);
+    expect(vitest?.args[0].replaceAll("\\", "/")).toContain("/node_modules/vitest/vitest.mjs");
+    expect(vitest?.args).toContain("run");
+  });
+
+  it("20b. builtin CLI 使用 executable + args，并保留 VerificationStep 参数", async () => {
+    const localTmp = fs.mkdtempSync(path.join(process.cwd(), ".tmp-builtin-cli-"));
+    try {
+      writePackageJson(localTmp, {});
+      fs.writeFileSync(path.join(localTmp, "tsconfig.json"), JSON.stringify({
+        compilerOptions: { noEmit: true },
+        files: ["sample.ts"],
+      }));
+      fs.writeFileSync(path.join(localTmp, "sample.ts"), "export const sample = 1;\n");
+
+      const result = await runner.runStep({
+        id: "builtin-tsc-version",
+        type: "typecheck",
+        packageRoot: localTmp,
+        cwd: localTmp,
+        configPath: path.join(localTmp, "tsconfig.json"),
+        trust: "builtin",
+        executable: "builtin:tsc",
+        args: ["--version"],
+        source: "tsconfig",
+      }, { permissionLevel: "read-only" });
+
+      expect(result.passed).toBe(true);
+      expect(result.stdout).toMatch(/Version \d+/);
+    } finally {
+      fs.rmSync(localTmp, { recursive: true, force: true });
+    }
   });
 });
 
@@ -511,6 +586,231 @@ describe("集成与回归", () => {
     expect(codeRunCoordinator.getActiveRunByChatSession("c1")?.runId).toBe("r1");
     expect(codeRunCoordinator.getActiveRunByClineSession("s1")?.runId).toBe("r1");
     codeRunCoordinator.reset();
+  });
+
+  it("30a. Renderer 刷新后可恢复 verifying 与 approval_required", async () => {
+    const { codeRunCoordinator } = await import("./code-run-coordinator");
+    codeRunCoordinator.reset();
+    const verifying = codeRunCoordinator.createRun("r-verifying", "c-verifying", "s-verifying");
+    codeRunCoordinator.activate(verifying.runId);
+    codeRunCoordinator.setVerifying(verifying.runId);
+    expect(codeRunCoordinator.getActiveRunByChatSession("c-verifying")?.status).toBe("verifying");
+
+    const approval = codeRunCoordinator.createRun("r-approval", "c-approval", "s-approval");
+    codeRunCoordinator.activate(approval.runId);
+    approval.status = "approval_required" as typeof approval.status;
+    expect(codeRunCoordinator.getActiveRunByChatSession("c-approval")?.status).toBe("approval_required");
+    codeRunCoordinator.reset();
+  });
+
+  it("30b. Run 绑定真实 Cline Session 后查询映射保持一致", async () => {
+    const { codeRunCoordinator } = await import("./code-run-coordinator");
+    codeRunCoordinator.reset();
+    const run = codeRunCoordinator.createRun("r-bind", "c-bind", "");
+    codeRunCoordinator.activate(run.runId);
+    expect(typeof (codeRunCoordinator as unknown as { bindClineSession?: unknown }).bindClineSession).toBe("function");
+    codeRunCoordinator.reset();
+  });
+
+  it("30c. Approval Store 提供可等待的 Deferred 审批入口", async () => {
+    const { codeRunStore } = await import("./code-run-store");
+    expect(typeof (codeRunStore as unknown as { requestApproval?: unknown }).requestApproval).toBe("function");
+  });
+
+  it("30d. 批准后执行原 step，并按原计划继续后续 step", async () => {
+    const { codeRunCoordinator } = await import("./code-run-coordinator");
+    const { codeRunStore } = await import("./code-run-store");
+    codeRunCoordinator.reset();
+    codeRunStore.reset();
+    codeRunCoordinator.createRun("r-approve", "c-approve", "s-approve");
+    codeRunCoordinator.activate("r-approve");
+    codeRunCoordinator.setVerifying("r-approve");
+
+    const markerPath = path.join(tmpDir, "approval-order.txt");
+    const steps = [
+      {
+        id: "approval-step",
+        type: "test" as const,
+        packageRoot: tmpDir,
+        cwd: tmpDir,
+        trust: "workspace_script" as const,
+        executable: process.execPath,
+        args: ["-e", `require("fs").appendFileSync(${JSON.stringify(markerPath)}, "approved\\n")`],
+        source: "package_script" as const,
+      },
+      {
+        id: "next-step",
+        type: "test" as const,
+        packageRoot: tmpDir,
+        cwd: tmpDir,
+        trust: "builtin" as const,
+        executable: process.execPath,
+        args: ["-e", `require("fs").appendFileSync(${JSON.stringify(markerPath)}, "next\\n")`],
+        source: "builtin_fallback" as const,
+      },
+    ];
+    const runner = new VerificationRunner();
+    const summaryPromise = runner.runPlan(steps, {
+      permissionLevel: "per-action",
+      onApprovalRequest: async (step) => {
+        codeRunCoordinator.setApprovalRequired("r-approve");
+        const { decision } = codeRunStore.requestApproval({
+          runId: "r-approve",
+          chatSessionId: "c-approve",
+          clineSessionId: "s-approve",
+          stepId: step.id,
+          trust: step.trust as "workspace_script" | "custom",
+          executable: step.executable,
+          args: step.args,
+          cwd: step.cwd,
+          source: step.source,
+        });
+        const approved = await decision;
+        codeRunCoordinator.setVerifying("r-approve");
+        return approved;
+      },
+    });
+
+    await expect.poll(() => codeRunStore.getPendingApprovalsByRun("r-approve").length).toBe(1);
+    expect(codeRunCoordinator.getRun("r-approve")?.status).toBe("approval_required");
+    expect(fs.existsSync(markerPath)).toBe(false);
+    const pending = codeRunStore.getPendingApprovalsByRun("r-approve")[0];
+    codeRunStore.approve(pending.approvalId);
+    codeRunStore.approve(pending.approvalId);
+
+    const summary = await summaryPromise;
+    expect(summary.status).toBe("passed");
+    expect(fs.readFileSync(markerPath, "utf8")).toBe("approved\nnext\n");
+    codeRunCoordinator.reset();
+    codeRunStore.reset();
+  });
+
+  it("30e. 拒绝后不执行命令，也不能得到 completed_verified", async () => {
+    const { codeRunCoordinator } = await import("./code-run-coordinator");
+    const { codeRunStore } = await import("./code-run-store");
+    codeRunCoordinator.reset();
+    codeRunStore.reset();
+    codeRunCoordinator.createRun("r-reject", "c-reject", "s-reject");
+    codeRunCoordinator.activate("r-reject");
+
+    const markerPath = path.join(tmpDir, "rejected-command.txt");
+    const runner = new VerificationRunner();
+    const summaryPromise = runner.runPlan([{
+      id: "rejected-step",
+      type: "test",
+      packageRoot: tmpDir,
+      cwd: tmpDir,
+      trust: "workspace_script",
+      executable: process.execPath,
+      args: ["-e", `require("fs").writeFileSync(${JSON.stringify(markerPath)}, "executed")`],
+      source: "package_script",
+    }], {
+      permissionLevel: "per-action",
+      onApprovalRequest: async (step) => {
+        codeRunCoordinator.setApprovalRequired("r-reject");
+        const { decision } = codeRunStore.requestApproval({
+          runId: "r-reject",
+          chatSessionId: "c-reject",
+          clineSessionId: "s-reject",
+          stepId: step.id,
+          trust: "workspace_script",
+          executable: step.executable,
+          args: step.args,
+          cwd: step.cwd,
+          source: step.source,
+        });
+        return decision;
+      },
+    });
+
+    await expect.poll(() => codeRunStore.getPendingApprovalsByRun("r-reject").length).toBe(1);
+    const pending = codeRunStore.getPendingApprovalsByRun("r-reject")[0];
+    codeRunStore.reject(pending.approvalId);
+    const summary = await summaryPromise;
+
+    expect(summary.status).toBe("failed");
+    expect(summary.steps[0].errorCode).toBe("VERIFICATION_APPROVAL_REJECTED");
+    expect(fs.existsSync(markerPath)).toBe(false);
+    codeRunCoordinator.reset();
+    codeRunStore.reset();
+  });
+
+  it("30f. CodeRequest 使用 Deferred 审批并保持原 VerificationPlan 顺序", () => {
+    const source = fs.readFileSync(path.join(__dirname, "code-request.ts"), "utf8");
+    expect(source).toContain("onApprovalRequest");
+    expect(source).toContain("codeRunStore.requestApproval");
+    expect(source).toContain("codeRunCoordinator.bindClineSession");
+    expect(source).not.toContain("const builtinSteps = plan.steps.filter");
+    expect(source).not.toContain("const approvalSteps = plan.steps.filter");
+  });
+
+  it("30g. 重复批准幂等，只解析一次 Deferred", async () => {
+    const { codeRunStore } = await import("./code-run-store");
+    codeRunStore.reset();
+    const { approval, decision } = codeRunStore.requestApproval({
+      runId: "r-idempotent",
+      chatSessionId: "c-idempotent",
+      clineSessionId: "s-idempotent",
+      stepId: "step-idempotent",
+      trust: "workspace_script",
+      executable: process.execPath,
+      args: [],
+      cwd: tmpDir,
+      source: "package_script",
+    });
+    const first = codeRunStore.approve(approval.approvalId);
+    const second = codeRunStore.approve(approval.approvalId);
+    await expect(decision).resolves.toBe(true);
+    expect(first).toBe(second);
+    expect(second?.status).toBe("approved");
+    codeRunStore.reset();
+  });
+
+  it("30h. Approval IPC 拒绝终态 Run 的新审批", () => {
+    const source = fs.readFileSync(path.join(__dirname, "..", "..", "agui-bridge.ts"), "utf8");
+    expect(source).toContain("codeRunCoordinator.isActive(a.runId)");
+    expect(source).toContain('a.status !== "pending"');
+  });
+
+  it("30i. Code 模式 IPC 立即返回 ack，后台任务不绑定 WebContents 生命周期", () => {
+    const source = fs.readFileSync(path.join(__dirname, "..", "..", "agui-bridge.ts"), "utf8");
+    expect(source).toContain("void runCodeRequest(");
+    expect(source).not.toContain("await runCodeRequest(");
+    expect(source).toContain("return { success: true, runId }");
+  });
+
+  it("30j. 应用退出会取消 pending approval，且 Run 保持 interrupted 终态", async () => {
+    const { codeRunCoordinator } = await import("./code-run-coordinator");
+    const { codeRunStore } = await import("./code-run-store");
+    const { codeRunWorker } = await import("./code-run-worker");
+    codeRunCoordinator.reset();
+    codeRunStore.reset();
+
+    let approvalId = "";
+    const task = codeRunWorker.submit("r-shutdown", "c-shutdown", "s-shutdown", async () => {
+      const { approval, decision } = codeRunStore.requestApproval({
+        runId: "r-shutdown",
+        chatSessionId: "c-shutdown",
+        clineSessionId: "s-shutdown",
+        stepId: "step-shutdown",
+        trust: "workspace_script",
+        executable: process.execPath,
+        args: [],
+        cwd: tmpDir,
+        source: "package_script",
+      });
+      approvalId = approval.approvalId;
+      codeRunCoordinator.setApprovalRequired("r-shutdown");
+      await decision;
+    });
+    await expect.poll(() => approvalId).not.toBe("");
+
+    codeRunWorker.cleanup();
+    await expect(task).rejects.toThrow("VERIFICATION_APPROVAL_CANCELLED:shutdown");
+    expect(codeRunStore.getApproval(approvalId)?.status).toBe("cancelled");
+    expect(codeRunCoordinator.getRun("r-shutdown")?.status).toBe("interrupted");
+    codeRunCoordinator.reset();
+    codeRunStore.reset();
   });
 
   it("31. 失败指纹去重", async () => {

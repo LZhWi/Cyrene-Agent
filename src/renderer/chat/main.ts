@@ -36,6 +36,16 @@ import type {
   AskQuestion,
   AskUserAnswer,
 } from "../../shared/ask-clarification";
+import {
+  applyCodeRunEvent,
+  createCodeRunViewModel,
+  restoreCodeRunViewModel,
+  type CodeRunApi,
+  type CodeRunRecord,
+  type CodeRunViewModel,
+  type CodeVerificationCard,
+  type VerificationApproval,
+} from "./code-run-view-model";
 
 type Role = "user" | "model";
 
@@ -115,6 +125,8 @@ interface ChatSettingsApi {
 
 /** AG-UI 事件流 API（window.agui）。 */
 const BUDGET_CHARS = 60000;
+const CODE_VERIFICATION_CARD_EVENT = "code_verification_card";
+const CODE_VERIFICATION_APPROVAL_EVENT = "code_verification_approval";
 
 /* ===== TTS 朗读按钮 SVG =====
    静态版用单条弧线表示喇叭外溢，播放版换成三条音波竖线 + CSS 动画做波浪。
@@ -146,7 +158,7 @@ interface AguiApi {
     userTurnId?: string;
     assistantTurnId?: string;
     styleId: StyleId;
-    executionMode: "work" | "chat";
+    executionMode: "work" | "chat" | "code";
     sessionId?: string;
     attachments?: { name: string; text: string }[];
     imageAttachments?: { name: string; filePath: string; mime?: string }[];
@@ -191,6 +203,7 @@ interface AguiBaseEvent {
   schedulerTaskId?: string;
   name?: string;   // CUSTOM 事件的 name
   value?: unknown; // CUSTOM 事件的 value
+  payload?: unknown;
 }
 
 /**
@@ -260,6 +273,7 @@ declare global {
     modelConfig?: ModelConfigApi;
     choice?: ChoiceApi;
     music?: ChatMusicApi;
+    codeRun?: CodeRunApi;
     user?: UserApi;
     settings?: ChatSettingsApi;
   }
@@ -513,6 +527,7 @@ function getStickerSrc(id: string): string | undefined {
 // 启动期间 currentSessionId 为 null，发送按钮通过 sending 标志兜底（bootstrap 极快）。
 const messages: Message[] = [];
 let currentSessionId: string | null = null;
+let codeRunViewModel: CodeRunViewModel = createCodeRunViewModel();
 let sessionTailStart = 0;
 let segmentedOutputMode: "all" | "chat" | "off" = "off";
 const CHAT_WINDOW_SIZE = 100;
@@ -665,6 +680,7 @@ function loadSessionIntoUI(session: ChatStoreSession): void {
   // 切换会话后同步模式切换按钮（会话模式锁定，不允许切换）
   const sessionMode = session.mode ?? "work";
   selectModeOption(sessionMode);
+  void refreshCodeRunViewModel(session.id);
 }
 
 async function loadSessionTailIntoUI(id: string): Promise<boolean> {
@@ -1736,6 +1752,243 @@ function buildMusicCardEl(data: MusicCardData): HTMLElement {
   return card;
 }
 
+const CODE_RUN_STATUS_LABELS: Record<CodeRunRecord["status"], string> = {
+  queued: "准备中",
+  running: "正在执行",
+  waiting_for_user: "等待你的回答",
+  verifying: "正在验证",
+  approval_required: "等待验证授权",
+  completed: "已完成",
+  failed: "执行失败",
+  cancelled: "已取消",
+  interrupted: "已中断",
+};
+
+const VERIFICATION_CARD_LABELS: Record<CodeVerificationCard["status"], string> = {
+  completed_verified: "已完成并通过验证",
+  completed_no_changes: "已完成，无文件变更",
+  failed_verification: "验证未通过",
+  unverified: "尚未验证",
+  approval_required: "等待验证授权",
+  cancelled: "已取消",
+  interrupted: "已中断",
+  failed: "执行失败",
+};
+
+function appendCodeRunMeta(parent: HTMLElement, label: string, value: string): void {
+  const row = document.createElement("div");
+  row.className = "code-run-card__meta";
+  const key = document.createElement("span");
+  key.textContent = label;
+  const detail = document.createElement("strong");
+  detail.textContent = value;
+  detail.title = value;
+  row.append(key, detail);
+  parent.appendChild(row);
+}
+
+function buildCodeRunHeader(titleText: string, badgeText: string): HTMLElement {
+  const header = document.createElement("div");
+  header.className = "code-run-card__header";
+  const title = document.createElement("strong");
+  title.textContent = titleText;
+  const badge = document.createElement("span");
+  badge.className = "code-run-card__badge";
+  badge.textContent = badgeText;
+  header.append(title, badge);
+  return header;
+}
+
+function buildCodeRunStatusCardEl(run: CodeRunRecord): HTMLElement {
+  const card = document.createElement("section");
+  card.className = `code-run-card code-run-card--${run.status}`;
+  card.appendChild(buildCodeRunHeader("Code 任务", CODE_RUN_STATUS_LABELS[run.status]));
+  const body = document.createElement("div");
+  body.className = "code-run-card__body";
+  appendCodeRunMeta(body, "运行", run.runId);
+  if (run.errorCode) appendCodeRunMeta(body, "错误", run.errorCode);
+  card.appendChild(body);
+  return card;
+}
+
+function buildCodeVerificationCardEl(data: CodeVerificationCard): HTMLElement {
+  const card = document.createElement("section");
+  card.className = `code-run-card code-run-card--${data.status}`;
+  card.appendChild(buildCodeRunHeader("Code 验证结果", VERIFICATION_CARD_LABELS[data.status]));
+
+  const body = document.createElement("div");
+  body.className = "code-run-card__body";
+  appendCodeRunMeta(body, "工作区", data.workspaceRoot);
+  const mutationCount = data.mutations.created.length
+    + data.mutations.modified.length
+    + data.mutations.deleted.length;
+  appendCodeRunMeta(body, "文件变更", `${mutationCount} 项`);
+
+  if (data.verification.steps.length > 0) {
+    const steps = document.createElement("div");
+    steps.className = "code-run-card__steps";
+    for (const [index, step] of data.verification.steps.entries()) {
+      const row = document.createElement("div");
+      row.className = `code-run-card__step ${step.passed ? "is-passed" : "is-failed"}`;
+      const icon = document.createElement("span");
+      icon.className = "code-run-card__step-icon";
+      icon.textContent = step.skipped ? "—" : step.passed ? "✓" : "!";
+      const label = document.createElement("span");
+      label.textContent = `${index + 1}. ${step.type}`;
+      const duration = document.createElement("span");
+      duration.textContent = `${step.durationMs} ms`;
+      row.append(icon, label, duration);
+      steps.appendChild(row);
+    }
+    body.appendChild(steps);
+  }
+
+  if (data.warnings.length > 0) {
+    const warnings = document.createElement("ul");
+    warnings.className = "code-run-card__warnings";
+    for (const warning of data.warnings) {
+      const item = document.createElement("li");
+      item.textContent = warning;
+      warnings.appendChild(item);
+    }
+    body.appendChild(warnings);
+  }
+  card.appendChild(body);
+  return card;
+}
+
+function buildCodeApprovalCardEl(approval: VerificationApproval): HTMLElement {
+  const card = document.createElement("section");
+  card.className = `code-run-card code-run-card--approval code-run-card--${approval.status}`;
+  card.appendChild(buildCodeRunHeader("验证命令待确认", approval.trust === "custom" ? "自定义命令" : "工作区脚本"));
+
+  const body = document.createElement("div");
+  body.className = "code-run-card__body";
+  const command = document.createElement("code");
+  command.className = "code-run-card__command";
+  command.textContent = [approval.executable, ...approval.args].join(" ");
+  body.appendChild(command);
+  appendCodeRunMeta(body, "目录", approval.cwd);
+  appendCodeRunMeta(body, "来源", approval.source);
+
+  const feedback = document.createElement("p");
+  feedback.className = "code-run-card__feedback";
+  feedback.setAttribute("aria-live", "polite");
+
+  if (approval.status === "pending") {
+    const actions = document.createElement("div");
+    actions.className = "code-run-card__actions";
+    const reject = document.createElement("button");
+    reject.type = "button";
+    reject.className = "code-run-card__button code-run-card__button--reject";
+    reject.textContent = "拒绝";
+    const approve = document.createElement("button");
+    approve.type = "button";
+    approve.className = "code-run-card__button code-run-card__button--approve";
+    approve.textContent = "允许并继续";
+
+    const decide = async (decision: "approve" | "reject"): Promise<void> => {
+      if (!window.codeRun) return;
+      approve.disabled = true;
+      reject.disabled = true;
+      feedback.textContent = decision === "approve" ? "正在授权…" : "正在拒绝…";
+      try {
+        const result = decision === "approve"
+          ? await window.codeRun.approveVerification(approval.approvalId)
+          : await window.codeRun.rejectVerification(approval.approvalId);
+        if (!result.ok || !result.approval) {
+          throw new Error(result.error || "无法提交验证决定");
+        }
+        consumeCodeRunEvent({
+          type: CODE_VERIFICATION_APPROVAL_EVENT,
+          payload: result.approval,
+        });
+      } catch (err) {
+        approve.disabled = false;
+        reject.disabled = false;
+        feedback.textContent = err instanceof Error ? err.message : String(err);
+      }
+    };
+    reject.addEventListener("click", () => void decide("reject"));
+    approve.addEventListener("click", () => void decide("approve"));
+    actions.append(reject, approve);
+    body.append(actions, feedback);
+  } else {
+    feedback.textContent = approval.status === "approved"
+      ? "已允许，正在继续验证。"
+      : approval.status === "rejected"
+        ? "已拒绝，这条命令没有执行。"
+        : "审批已取消。";
+    body.appendChild(feedback);
+  }
+  card.appendChild(body);
+  return card;
+}
+
+function renderCodeRunPanel(): void {
+  messagesEl.querySelector('[data-code-run-panel="true"]')?.remove();
+  const pendingApproval = codeRunViewModel.approval?.status === "pending"
+    ? codeRunViewModel.approval
+    : null;
+  const content = pendingApproval
+    ? buildCodeApprovalCardEl(pendingApproval)
+    : codeRunViewModel.card
+      ? buildCodeVerificationCardEl(codeRunViewModel.card)
+      : codeRunViewModel.run
+        ? buildCodeRunStatusCardEl(codeRunViewModel.run)
+        : null;
+  if (!content) return;
+
+  const panel = document.createElement("div");
+  panel.className = "code-run-panel";
+  panel.dataset.codeRunPanel = "true";
+  panel.appendChild(content);
+  messagesEl.appendChild(panel);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function consumeCodeRunEvent(rawEvent: unknown): boolean {
+  if (!rawEvent || typeof rawEvent !== "object") return false;
+  const event = rawEvent as { type?: string; name?: string };
+  const eventType = event.type === "CUSTOM" ? event.name : event.type;
+  if (
+    eventType !== CODE_VERIFICATION_CARD_EVENT
+    && eventType !== CODE_VERIFICATION_APPROVAL_EVENT
+  ) return false;
+  const next = applyCodeRunEvent(codeRunViewModel, rawEvent);
+  if (next === codeRunViewModel) return false;
+  codeRunViewModel = next;
+  renderCodeRunPanel();
+  if (
+    eventType === CODE_VERIFICATION_APPROVAL_EVENT
+    && codeRunViewModel.approval?.status !== "pending"
+    && currentSessionId
+  ) {
+    void refreshCodeRunViewModel(currentSessionId);
+  }
+  return true;
+}
+
+async function refreshCodeRunViewModel(chatSessionId: string): Promise<void> {
+  if (!window.codeRun) {
+    codeRunViewModel = createCodeRunViewModel();
+    renderCodeRunPanel();
+    return;
+  }
+  try {
+    const restored = await restoreCodeRunViewModel(
+      createCodeRunViewModel(),
+      window.codeRun,
+      chatSessionId,
+    );
+    if (currentSessionId !== chatSessionId) return;
+    codeRunViewModel = restored;
+    renderCodeRunPanel();
+  } catch (err) {
+    console.warn("[Cyrene Chat] 恢复 Code 运行状态失败:", err);
+  }
+}
+
 /** AQI → 颜文字。 */
 function aqiKaomojiText(aqi: number): string {
   if (aqi <= 50) return "(◕‿◕)";
@@ -2135,6 +2388,7 @@ function render(preserveScroll = false): void {
     messagesEl.appendChild(row);
   }
 
+  renderCodeRunPanel();
   if (!preserveScroll) messagesEl.scrollTop = messagesEl.scrollHeight;
 
   // 历史消息渐进渲染：纯文本占位 -> Markdown HTML
@@ -3374,6 +3628,7 @@ async function triggerCyreneGreeting(): Promise<void> {
     };
     const offEvent = registerAguiListener((rawEvent) => {
       try {
+        if (consumeCodeRunEvent(rawEvent)) return;
         const event = rawEvent as AguiBaseEvent;
         const msg = messages.find(m => m.id === streamMsgId);
         switch (event.type) {
@@ -3909,6 +4164,7 @@ async function send(): Promise<void> {
     };
     const offEvent = registerAguiListener((rawEvent) => {
       try {
+        if (consumeCodeRunEvent(rawEvent)) return;
         const event = rawEvent as AguiBaseEvent;
         const msg = messages.find(m => m.id === streamMsgId);
         switch (event.type) {

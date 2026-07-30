@@ -139,6 +139,7 @@ import { synthesize as mimoSynthesize } from "./tts/mimo-engine";
 import { synthesize as mosslandSynthesize, cloneVoice as mosslandCloneVoice, listVoices as mosslandListVoices } from "./tts/mossland-engine";
 import { synthesizeByEngine } from "./tts/tts-dispatcher";
 import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
+import { codeRunWorker } from "./orchestrator/code/code-run-worker";
 import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegateSettings, setUserTimezoneConfig } from "./orchestrator/built-in-tools";
 import { registerRecallHistoryTool } from "./orchestrator/history-tools";
 import { registerDocumentTools } from "./orchestrator/document-tools";
@@ -5337,6 +5338,7 @@ app.on("before-quit", () => {
   petWindowMoveController.dispose();
   schedulerEngine?.stop();
   stopProactiveTrigger();
+  codeRunWorker.cleanup();
   flushTokenUsage();
   void shutdownChannels();
   void screenshotService?.shutdown();

@@ -509,6 +509,24 @@ const chatStoreApi = {
 
 contextBridge.exposeInMainWorld("chatStore", chatStoreApi);
 
+// Code run 状态查询 + 验证审批
+const codeRunApi = {
+  getRun: (runId: string) =>
+    ipcRenderer.invoke(IPC.CODE_RUN_GET, runId),
+  getActiveRun: (params: { chatSessionId?: string; clineSessionId?: string }) =>
+    ipcRenderer.invoke(IPC.CODE_RUN_GET_ACTIVE, params),
+  listRuns: (chatSessionId?: string) =>
+    ipcRenderer.invoke(IPC.CODE_RUN_LIST, chatSessionId),
+  getPendingApprovals: (params: { chatSessionId?: string; runId?: string }) =>
+    ipcRenderer.invoke(IPC.CODE_VERIFICATION_GET_PENDING, params),
+  approveVerification: (approvalId: string) =>
+    ipcRenderer.invoke(IPC.CODE_VERIFICATION_APPROVE, approvalId),
+  rejectVerification: (approvalId: string) =>
+    ipcRenderer.invoke(IPC.CODE_VERIFICATION_REJECT, approvalId),
+};
+
+contextBridge.exposeInMainWorld("codeRun", codeRunApi);
+
 // Token 用量查询（设置中心 Token 面板用）
 const tokenUsageApi = {
   get: (days: number) => ipcRenderer.invoke(IPC.TOKEN_USAGE_GET, days),

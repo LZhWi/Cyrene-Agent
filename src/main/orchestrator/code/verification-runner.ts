@@ -18,6 +18,7 @@
 import { spawn } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
+import { policyFor, type AgentFileAccessLevel } from "../../permission-policy";
 
 // ── 类型 ──────────────────────────────────────────────────
 
@@ -68,6 +69,8 @@ export interface VerificationSummary {
     | "VERIFICATION_PLAN_NOT_FOUND"
     | "VERIFICATION_CONFIG_INVALID"
     | "VERIFICATION_APPROVAL_REQUIRED"
+    | "VERIFICATION_APPROVAL_REJECTED"
+    | "VERIFICATION_PERMISSION_DENIED"
     | "VERIFICATION_TIMEOUT"
     | "VERIFICATION_EXECUTION_FAILED";
 }
@@ -78,20 +81,55 @@ export interface VerificationPermissionDecision {
   reason?: string;
 }
 
-export type PermissionLevel = "read-only" | "scoped" | "per-action" | "full";
+export type PermissionLevel = AgentFileAccessLevel;
 
 // ── 工具函数 ──────────────────────────────────────────────
 
 /** 解析 builtin 可执行文件为本地 tsc/vitest/jest 路径 */
-function resolveBuiltinExecutable(
+function isWithinPath(candidate: string, root: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function isLocalDependencyCli(cliPath: string, cwd: string): boolean {
+  if (!path.isAbsolute(cliPath) || !fs.existsSync(cliPath)) return false;
+  let resolvedCli: string;
+  let cursor: string;
+  try {
+    resolvedCli = fs.realpathSync(cliPath);
+    cursor = fs.realpathSync(cwd);
+  } catch {
+    return false;
+  }
+
+  while (true) {
+    const packageJson = path.join(cursor, "package.json");
+    const dependencyRoot = path.join(cursor, "node_modules");
+    if (fs.existsSync(packageJson) && fs.existsSync(dependencyRoot)) {
+      try {
+        if (isWithinPath(resolvedCli, fs.realpathSync(dependencyRoot))) return true;
+      } catch {
+        // 继续检查更上层 package 边界。
+      }
+    }
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return false;
+    cursor = parent;
+  }
+}
+
+export function resolveBuiltinExecutable(
   executable: string,
   cwd: string,
   configPath?: string,
 ): { executable: string; args: string[] } | null {
   // builtin:tsc -> node + typescript/bin/tsc
+  // 必须解析到本地 node_modules/typescript/bin/tsc（绝对路径）
   if (executable === "builtin:tsc") {
     try {
       const tscCliPath = require.resolve("typescript/bin/tsc", { paths: [cwd] });
+      // 验证文件存在且为绝对路径
+      if (!isLocalDependencyCli(tscCliPath, cwd)) return null;
       return { executable: process.execPath, args: [tscCliPath] };
     } catch {
       return null;
@@ -99,15 +137,26 @@ function resolveBuiltinExecutable(
   }
   if (executable === "builtin:vitest") {
     try {
-      const vitestCliPath = require.resolve("vitest/vitest", { paths: [cwd] });
-      return { executable: process.execPath, args: [vitestCliPath] };
+      // vitest 提供 vitest.mjs 作为入口
+      const vitestCliPath = require.resolve("vitest/vitest.mjs", { paths: [cwd] });
+      if (!isLocalDependencyCli(vitestCliPath, cwd)) return null;
+      return { executable: process.execPath, args: [vitestCliPath, "run"] };
     } catch {
-      return null;
+      // fallback: 尝试 vitest 包
+      try {
+        const vitestPkgPath = require.resolve("vitest/package.json", { paths: [cwd] });
+        const vitestBinPath = path.join(path.dirname(vitestPkgPath), "vitest.mjs");
+        if (!isLocalDependencyCli(vitestBinPath, cwd)) return null;
+        return { executable: process.execPath, args: [vitestBinPath, "run"] };
+      } catch {
+        return null;
+      }
     }
   }
   if (executable === "builtin:jest") {
     try {
-      const jestCliPath = require.resolve("jest/bin/jest", { paths: [cwd] });
+      const jestCliPath = require.resolve("jest/bin/jest.js", { paths: [cwd] });
+      if (!isLocalDependencyCli(jestCliPath, cwd)) return null;
       return { executable: process.execPath, args: [jestCliPath] };
     } catch {
       return null;
@@ -151,15 +200,22 @@ export class VerificationRunner {
     if (step.trust === "builtin") {
       return { allowed: true, requiresApproval: false };
     }
+    if (step.trust === "custom") {
+      // 显式自定义验证不是普通 workspace script；无论全局档位如何都要逐步确认。
+      return { allowed: true, requiresApproval: true, reason: "custom 命令需要审批" };
+    }
+
     if (step.trust === "workspace_script") {
-      // per-action 需要审批
-      if (permissionLevel === "per-action") {
+      // 权限档位到 allow/ask/deny 的映射只由 permission.ts 维护。
+      const policy = policyFor(permissionLevel, "shell");
+      if (policy === "allow") return { allowed: true, requiresApproval: false };
+      if (policy === "ask") {
         return { allowed: true, requiresApproval: true, reason: "workspace_script 需要审批" };
       }
-      return { allowed: true, requiresApproval: false };
+      return { allowed: false, requiresApproval: false, reason: "当前权限档位不允许执行 workspace script" };
     }
-    // custom 总是需要审批
-    return { allowed: false, requiresApproval: true, reason: "custom 命令需要审批" };
+
+    return { allowed: false, requiresApproval: false, reason: "未知验证命令信任级别" };
   }
 
   /** 执行单个 step */
@@ -178,6 +234,27 @@ export class VerificationRunner {
         exitCode: null,
         stdout: "",
         stderr: decision.reason ?? "permission denied",
+        timedOut: false,
+        durationMs: 0,
+        errorCode: decision.requiresApproval
+          ? "VERIFICATION_APPROVAL_REQUIRED"
+          : "VERIFICATION_PERMISSION_DENIED",
+      };
+    }
+
+    if (decision.requiresApproval && !options.onApprovalRequest) {
+      return {
+        stepId: step.id,
+        type: step.type,
+        passed: false,
+        skipped: true,
+        trust: step.trust,
+        executable: step.executable,
+        args: step.args,
+        cwd: step.cwd,
+        exitCode: null,
+        stdout: "",
+        stderr: decision.reason ?? "需要用户审批",
         timedOut: false,
         durationMs: 0,
         errorCode: "VERIFICATION_APPROVAL_REQUIRED",
@@ -201,7 +278,7 @@ export class VerificationRunner {
           stderr: "用户拒绝审批",
           timedOut: false,
           durationMs: 0,
-          errorCode: "VERIFICATION_APPROVAL_REQUIRED",
+          errorCode: "VERIFICATION_APPROVAL_REJECTED",
         };
       }
     }
@@ -228,14 +305,9 @@ export class VerificationRunner {
     }
 
     const exec = resolved ?? { executable: step.executable, args: step.args };
-    const allArgs = [...exec.args];
-    // builtin 模式：args 已经包含 tsc/vitest 自身的 args
-    // 普通模式：executable 是命令，args 是参数
-    if (step.executable.startsWith("builtin:")) {
-      // builtin: args 在 resolveBuiltinExecutable 已经合并
-    } else {
-      allArgs.push(...step.args);
-    }
+    // builtin resolver 只提供 “node + 本地 CLI 入口”等前缀；
+    // VerificationStep 自身参数必须原样追加，不能在解析时丢失。
+    const allArgs = [...exec.args, ...step.args];
 
     return this.executeCommand(step, exec.executable, allArgs, options);
   }
@@ -278,8 +350,7 @@ export class VerificationRunner {
       this.executedFingerprints.add(fingerprint);
     }
 
-    const allPassed = results.every(r => r.passed || r.skipped);
-    const anyFailed = results.some(r => !r.passed && !r.skipped);
+    const allPassed = results.every(r => r.passed);
     const anyApprovalRequired = results.some(r => r.errorCode === "VERIFICATION_APPROVAL_REQUIRED");
 
     let status: VerificationSummaryStatus;
@@ -287,10 +358,10 @@ export class VerificationRunner {
     if (anyApprovalRequired) {
       status = "approval_required";
       errorCode = "VERIFICATION_APPROVAL_REQUIRED";
-    } else if (anyFailed) {
-      status = "failed";
-    } else {
+    } else if (allPassed) {
       status = "passed";
+    } else {
+      status = "failed";
     }
 
     return { status, passed: allPassed, steps: results, errorCode };

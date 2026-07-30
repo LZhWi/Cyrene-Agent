@@ -7,6 +7,8 @@
  * - AskQuestionExecutor 会阻塞 turn，需要 Deferred + 跨 IPC 桥接
  */
 
+import { codeRunCoordinator } from "./code-run-coordinator";
+
 interface ActiveAsk {
   chatSessionId: string;
   clineSessionId: string;
@@ -138,8 +140,13 @@ export function createAskQuestionExecutor(
 ): (question: string, options: string[]) => Promise<string> {
   return async (question: string, options: string[]): Promise<string> => {
     const { promptId, promise } = createAskDeferred(chatSessionId, clineSessionId, runId, question, options);
+    codeRunCoordinator.setWaitingForUser(runId);
     console.log(`[CodeAsk] Ask created: promptId=${promptId} question=${question.slice(0, 50)}`);
     // 持久化 pendingPrompt（应在 ChatSession.codeSession.pendingPrompt 中保存）
-    return promise;
+    try {
+      return await promise;
+    } finally {
+      codeRunCoordinator.setRunning(runId);
+    }
   };
 }

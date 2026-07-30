@@ -13,9 +13,9 @@
  * - 应用退出时统一清理
  */
 
-import { codeRunCoordinator, CodeRunRecord } from "./code-run-coordinator";
-import { clineRuntime } from "./cline-runtime-manager";
+import { codeRunCoordinator } from "./code-run-coordinator";
 import { rejectAllAsksOnShutdown } from "./code-ask-bridge";
+import { codeRunStore } from "./code-run-store";
 
 class CodeRunWorker {
   private cleanupHandlers: Array<() => void> = [];
@@ -34,7 +34,7 @@ class CodeRunWorker {
     clineSessionId: string,
     task: () => Promise<T>,
   ): Promise<T> {
-    const record = codeRunCoordinator.createRun(runId, chatSessionId, clineSessionId);
+    codeRunCoordinator.createRun(runId, chatSessionId, clineSessionId);
 
     // 尝试激活（同一 session 已有 active run 时返回 false）
     if (!codeRunCoordinator.activate(runId)) {
@@ -66,7 +66,7 @@ class CodeRunWorker {
     this.cleanupHandlers.push(handler);
   }
 
-  /** 应用退出清理：reject 所有 Ask，标记所有 active run 为 interrupted */
+  /** 应用退出清理：reject 所有 Ask，标记所有 active run 为 interrupted，cancel 所有 pending approval */
   cleanup(): void {
     const count = rejectAllAsksOnShutdown();
     // 标记所有未完成的 run 为 interrupted
@@ -75,6 +75,8 @@ class CodeRunWorker {
         codeRunCoordinator.complete(run.runId, "interrupted", "shutdown");
       }
     }
+    // 取消所有 pending approval
+    codeRunStore.cleanup();
     for (const handler of this.cleanupHandlers) {
       try { handler(); } catch { /* ignore */ }
     }

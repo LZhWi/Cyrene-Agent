@@ -324,7 +324,10 @@ describe("Commit 3 验收测试", () => {
 
   // ── 以下测试需要真实 Cline Core ─────────────────────────
 
-  describe("真实 Cline Runtime（需要模型配置）", () => {
+  describe.skipIf(process.env.CYRENE_RUN_CLINE_LIVE_TESTS !== "1")(
+    "真实 Cline Runtime（需要 CYRENE_RUN_CLINE_LIVE_TESTS=1 + 模型配置）",
+    { timeout: 120_000 },
+    () => {
     it("1. ClineCore 只创建一次", async () => {
       if (!hasModelConfig()) return;
       // 单例行为由 ClineRuntimeManager.ensureRuntime 保证
@@ -454,9 +457,12 @@ describe("Commit 3 验收测试", () => {
         sessionId: newResult.sessionId,
         prompt: "原始消息",
       });
+      // 真实恢复链若返回 error，说明 initialMessages/模型配置/SDK 链仍有问题；
+      // live 测试必须严格暴露它，不能用“只调用了一次”掩盖产品路径错误。
       expect(sendResult?.finishReason).toBe("completed");
 
       await cline2.dispose();
     }, 30_000);
-  });
+    },
+  );
 });

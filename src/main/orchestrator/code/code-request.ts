@@ -21,18 +21,18 @@ import type { ChatSession } from "../../../shared/chat-types";
 import { clineRuntime } from "./cline-runtime-manager";
 import { codeRunCoordinator } from "./code-run-coordinator";
 import { codeRunWorker } from "./code-run-worker";
-import { rejectAllAsksOnShutdown } from "./code-ask-bridge";
 import { getOrCreateClineSession } from "./code-session-manager";
 import { MutationCollector } from "./mutation-collector";
-import { normalizeClineEvent, NormalizedClineEvent } from "./code-event-normalizer";
+import { normalizeClineEvent } from "./code-event-normalizer";
 import { buildClineSystemPromptWithPreferences } from "./code-user-preferences";
 import { routeCommand, updateSessionClineMode } from "./code-command-router";
 import { getCurrentLevel } from "../../permission";
 import { loadModelSettings } from "../../index";
 import { ClineResultAdapter, CodeRunFacts } from "./cline-result-adapter";
-import { VerificationPlanResolver, type VerificationPlan } from "./verification-plan-resolver";
+import { VerificationPlanResolver } from "./verification-plan-resolver";
 import { VerificationRunner } from "./verification-runner";
 import { resolveCodeRunFinalState, type CodeVerificationCard } from "./code-final-state";
+import { codeRunStore } from "./code-run-store";
 
 /**
  * 从统一 ModelSettings 读取运行时配置。
@@ -271,8 +271,10 @@ export async function runCodeRequest(
       const sessionResult = await getOrCreateClineSession(session, input.text, clineConfig);
       const clineSessionId = sessionResult.sessionId;
 
-      // 更新 clineSessionId 到 record
-      codeRunCoordinator.getRun(ctx.runId)!.clineSessionId = clineSessionId;
+      // 原子更新 clineSessionId 与活跃映射，避免查询仍指向占位 Session。
+      if (!codeRunCoordinator.bindClineSession(ctx.runId, clineSessionId)) {
+        throw new Error(`CLINE_SESSION_BIND_FAILED:${clineSessionId}`);
+      }
 
       // 创建 result adapter
       const resultAdapter = new ClineResultAdapter(ctx.runId, ctx.sessionId, clineSessionId);
@@ -336,11 +338,49 @@ export async function runCodeRequest(
         let verificationSummary = null;
         if (plan.errorCode === "VERIFICATION_PLAN_NOT_FOUND") {
           console.log(`[CodeRequest] VERIFICATION_PLAN_NOT_FOUND, diagnostics:`, plan.diagnostics);
+          verificationSummary = {
+            status: "plan_not_found" as const,
+            passed: false,
+            steps: [],
+            errorCode: "VERIFICATION_PLAN_NOT_FOUND" as const,
+          };
         } else if (plan.steps.length > 0) {
           const runner = new VerificationRunner();
           verificationSummary = await runner.runPlan(plan.steps, {
             permissionLevel: config.permissionMode,
             signal: ctx.signal,
+            onApprovalRequest: async (step) => {
+              codeRunCoordinator.setApprovalRequired(ctx.runId);
+              const { approval, decision } = codeRunStore.requestApproval({
+                runId: ctx.runId,
+                chatSessionId: ctx.sessionId,
+                clineSessionId,
+                stepId: step.id,
+                trust: step.trust as "workspace_script" | "custom",
+                executable: step.executable,
+                args: step.args,
+                cwd: step.cwd,
+                source: step.source,
+              });
+              emitAgUiEvent(ctx, {
+                type: "code_verification_approval",
+                payload: approval,
+                runId: ctx.runId,
+              });
+
+              try {
+                return await decision;
+              } finally {
+                if (codeRunCoordinator.isActive(ctx.runId)) {
+                  codeRunCoordinator.setVerifying(ctx.runId);
+                }
+                emitAgUiEvent(ctx, {
+                  type: "code_verification_approval",
+                  payload: codeRunStore.getApproval(approval.approvalId) ?? approval,
+                  runId: ctx.runId,
+                });
+              }
+            },
           });
           console.log(`[CodeRequest] verification: status=${verificationSummary.status} steps=${verificationSummary.steps.length}`);
         }

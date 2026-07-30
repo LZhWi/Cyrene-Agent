@@ -8,6 +8,7 @@ import { sendToLive2DWindow } from "../index";
 import { createPlayLive2DActionTool } from "./tools/play-live2d-action";
 import { resolveChatContextTimezone } from "../chat-time-context";
 import type { ToolContext } from "./tool-context";
+import { VerificationRunner, resolveBuiltinExecutable } from "./code/verification-runner";
 
 const LOG_PREFIX = "[BuiltinTools]";
 
@@ -383,8 +384,15 @@ toolRegistry.register({
     const fs = require("fs");
     const path = require("path");
 
-    // typecheck: 用 node + require.resolve 替代 npx（避免 Windows spawn 失败）
-    let verificationCommands: Record<string, { cmd: string; args: string[]; env?: Record<string, string> }>;
+    type WorkVerificationCommand = {
+      cmd: string;
+      args: string[];
+      trust: "builtin" | "workspace_script";
+      source: "tsconfig" | "vitest" | "package_script";
+      configPath?: string;
+    };
+    let verificationCommands: Record<string, WorkVerificationCommand>;
+    const actualCwd = cwd || process.cwd();
 
     if (verificationType === "typecheck") {
       // 1. 确定 tsconfig 路径
@@ -410,34 +418,47 @@ toolRegistry.register({
         tsconfigPath = "tsconfig.main.json";
       }
 
-      // 2. 用 require.resolve 找本地 tsc（禁止 npx 在线安装）
-      let tscPath: string;
-      try {
-        tscPath = require.resolve("typescript/bin/tsc", { paths: cwd ? [cwd] : [process.cwd()] });
-      } catch {
+      // 2. 复用 VerificationRunner 的本地 CLI 解析（禁止 npx / 全局 PATH）
+      if (!resolveBuiltinExecutable("builtin:tsc", actualCwd, tsconfigPath)) {
         return JSON.stringify({
           success: false, errorCode: "TYPESCRIPT_NOT_FOUND",
-          error: `本地 TypeScript 未安装: ${cwd ?? process.cwd()}`,
+          error: `本地 TypeScript 未安装: ${actualCwd}`,
           verificationType, command: "", exitCode: -1,
-          stdout: "", stderr: `[TYPESCRIPT_NOT_FOUND] require.resolve("typescript/bin/tsc") failed in ${cwd ?? process.cwd()}`,
+          stdout: "", stderr: `[TYPESCRIPT_NOT_FOUND] local typescript CLI not found in ${actualCwd}`,
           timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
           actualCwd: cwd,
         });
       }
 
-      // 3. 用 node 直接执行 tsc（ELECTRON_RUN_AS_NODE=1）
       verificationCommands = {
         typecheck: {
-          cmd: process.execPath,
-          args: [tscPath, "-p", tsconfigPath, "--noEmit"],
-          env: { ELECTRON_RUN_AS_NODE: "1" },
+          cmd: "builtin:tsc",
+          args: ["-p", tsconfigPath, "--noEmit"],
+          trust: "builtin",
+          source: "tsconfig",
+          configPath: tsconfigPath,
         },
       };
     } else {
       verificationCommands = {
-        test: { cmd: "npx", args: ["vitest", "run", "--reporter=verbose"] },
-        build: { cmd: "npm", args: ["run", "build:main"] },
-        lint: { cmd: "npx", args: ["eslint", "src/main", "--max-warnings=0"] },
+        test: {
+          cmd: "builtin:vitest",
+          args: ["--reporter=verbose"],
+          trust: "builtin",
+          source: "vitest",
+        },
+        build: {
+          cmd: process.execPath,
+          args: [path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), "run", "build:main"],
+          trust: "workspace_script",
+          source: "package_script",
+        },
+        lint: {
+          cmd: process.execPath,
+          args: [],
+          trust: "workspace_script",
+          source: "package_script",
+        },
       };
     }
 
@@ -450,62 +471,119 @@ toolRegistry.register({
       timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
     });
 
+    if (verificationType === "test" && !resolveBuiltinExecutable("builtin:vitest", actualCwd)) {
+      return JSON.stringify({
+        success: false, errorCode: "VITEST_NOT_FOUND",
+        error: `本地 Vitest 未安装: ${actualCwd}`,
+        verificationType, command: "", exitCode: -1,
+        stdout: "", stderr: `[VITEST_NOT_FOUND] local vitest CLI not found in ${actualCwd}`,
+        timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
+        actualCwd,
+      });
+    }
+    if (verificationType === "build" && !fs.existsSync(command.args[0])) {
+      return JSON.stringify({
+        success: false, errorCode: "NPM_CLI_NOT_FOUND",
+        error: `本地 npm CLI 不存在: ${command.args[0]}`,
+        verificationType, command: "", exitCode: -1,
+        stdout: "", stderr: `[NPM_CLI_NOT_FOUND] ${command.args[0]}`,
+        timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
+        actualCwd,
+      });
+    }
+    if (verificationType === "lint") {
+      try {
+        const eslintPath = require.resolve("eslint/bin/eslint.js", { paths: [actualCwd] });
+        if (!fs.existsSync(eslintPath) || !path.isAbsolute(eslintPath)) throw new Error("invalid eslint path");
+        command.args = [eslintPath, "src/main", "--max-warnings=0"];
+      } catch {
+        return JSON.stringify({
+          success: false, errorCode: "ESLINT_NOT_FOUND",
+          error: `本地 ESLint 未安装: ${actualCwd}`,
+          verificationType, command: "", exitCode: -1,
+          stdout: "", stderr: `[ESLINT_NOT_FOUND] local eslint CLI not found in ${actualCwd}`,
+          timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
+          actualCwd,
+        });
+      }
+    }
+
+    const resolvedForDisplay = resolveBuiltinExecutable(command.cmd, actualCwd, command.configPath);
+    const displayExecutable = resolvedForDisplay?.executable ?? command.cmd;
+    const displayArgs = [...(resolvedForDisplay?.args ?? []), ...command.args];
     const startMs = Date.now();
-    const actualCommand = `${command.cmd} ${command.args.join(" ")}`;
+    const actualCommand = `${displayExecutable} ${displayArgs.join(" ")}`;
     console.log(LOG_PREFIX, "run_verification:", verificationType, actualCommand, cwd ? "cwd=" + cwd : "");
 
+    // 复用 Code 模式的 VerificationRunner（同一个执行核心）
+    // 旧协议 JSON 输出格式保持不变
+    const runner = new VerificationRunner();
     try {
-      const result = await runShellOnce(command.cmd, command.args, cwd, command.env);
-      const durationMs = Date.now() - startMs;
-      const passed = result.exitCode === 0;
+      const result = await runner.runStep({
+        id: `run_verification_${verificationType}`,
+        type: verificationType as any,
+        packageRoot: cwd || process.cwd(),
+        cwd: cwd || process.cwd(),
+        configPath: command.configPath,
+        trust: command.trust,
+        executable: command.cmd,
+        args: command.args,
+        source: command.source,
+      }, {
+        // 仅在工具真实执行时读取宿主档位；模块加载阶段保持 VerificationRunner 纯净。
+        permissionLevel: (await import("../permission")).getCurrentLevel(),
+        signal: undefined,
+      });
 
+      const durationMs = Date.now() - startMs;
+      const passed = result.passed;
       console.log(LOG_PREFIX, "run_verification 完成:", verificationType,
         "exitCode=" + result.exitCode, "passed=" + passed, "durationMs=" + durationMs,
         "stdoutLen=" + result.stdout.length, "stderrLen=" + result.stderr.length);
 
+      // 兼容旧协议 JSON：errorCode 来自 result.errorCode
+      const errorCode = result.errorCode;
+      const isApprovalRequired = errorCode === "VERIFICATION_APPROVAL_REQUIRED";
+      const isTimeout = errorCode === "VERIFICATION_TIMEOUT" || result.timedOut;
+
       return JSON.stringify({
-        success: true,
+        // 旧协议中 success 表示“命令已被 Runner 正常接管”，退出码由 passed 表示。
+        success: !isApprovalRequired && !isTimeout,
         verificationType,
         command: actualCommand,
         actualCwd: cwd || process.cwd(),
-        exitCode: result.exitCode,
+        exitCode: result.exitCode ?? -1,
         stdout: result.stdout,
         stderr: result.stderr,
         spawnError: null,
-        timedOut: false,
+        timedOut: result.timedOut,
         passed,
-        truncated: result.truncated,
+        truncated: result.stdout.includes("... (truncated") || result.stderr.includes("... (truncated"),
         durationMs,
+        errorCode,
+        retryable: isTimeout,
+        ...(isApprovalRequired ? { approvalRequired: true } : {}),
       });
     } catch (err) {
       const durationMs = Date.now() - startMs;
       const msg = err instanceof Error ? err.message : String(err);
-      const errCode = err instanceof Error && (err as any).code ? String((err as any).code) : undefined;
-      const isTimeout = err instanceof Error && err.name === "AbortError";
-      const errorCode = isTimeout ? "VERIFICATION_TIMEOUT" : "VERIFICATION_SPAWN_FAILED";
-      console.error(LOG_PREFIX, "run_verification 失败:", verificationType,
-        "errorCode:", errorCode,
-        "spawnErrorCode:", errCode,
-        "spawnErrorMsg:", msg,
-        "command:", actualCommand,
-        "cwd:", cwd);
-
+      console.error(LOG_PREFIX, "run_verification 失败:", verificationType, "error:", msg);
       return JSON.stringify({
         success: false,
-        errorCode,
+        errorCode: "VERIFICATION_SPAWN_FAILED",
         error: `命令启动失败: ${msg}`,
         verificationType,
         command: actualCommand,
         actualCwd: cwd || process.cwd(),
         exitCode: -1,
         stdout: "",
-        stderr: `[${errorCode}] command=${actualCommand} cwd=${cwd || process.cwd()} spawnErrorCode=${errCode ?? "n/a"} spawnErrorMsg=${msg}`,
-        spawnError: { code: errCode, message: msg },
-        timedOut: isTimeout,
+        stderr: `[VERIFICATION_SPAWN_FAILED] ${msg}`,
+        spawnError: { code: undefined, message: msg },
+        timedOut: false,
         passed: false,
         truncated: false,
         durationMs,
-        retryable: isTimeout,
+        retryable: false,
       });
     }
   },

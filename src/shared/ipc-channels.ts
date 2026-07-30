@@ -129,6 +129,17 @@ export const IPC = {
   // main → 所有窗口：工作区绑定变更广播
   CHATS_WORKSPACE_CHANGED: "chats:workspace-changed",
 
+  // Code run 状态查询
+  CODE_RUN_GET: "code:run:get",
+  CODE_RUN_GET_ACTIVE: "code:run:get-active",
+  CODE_RUN_LIST: "code:run:list",
+  // Code 验证审批
+  CODE_VERIFICATION_GET_PENDING: "code:verification:get-pending",
+  CODE_VERIFICATION_APPROVE: "code:verification:approve",
+  CODE_VERIFICATION_REJECT: "code:verification:reject",
+  // main → renderer：验证审批广播
+  CODE_VERIFICATION_APPROVAL_REQUESTED: "code:verification:approval-requested",
+
 // sticker manager window
 	  STICKERS_MINIMIZE: "stickers:minimize",
 	  STICKERS_CLOSE: "stickers:close",

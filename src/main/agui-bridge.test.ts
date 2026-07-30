@@ -4,6 +4,8 @@ import { IPC } from "../shared/ipc-channels";
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => unknown>(),
+  getSession: vi.fn(),
+  runCodeRequest: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
@@ -36,6 +38,14 @@ vi.mock("./orchestrator/cyrene-agent", () => ({
 
 vi.mock("./orchestrator/history-tools", () => ({
   indexConversationTurn: vi.fn(),
+}));
+
+vi.mock("./chats/chats-store", () => ({
+  getSession: mocks.getSession,
+}));
+
+vi.mock("./orchestrator/code/code-request", () => ({
+  runCodeRequest: mocks.runCodeRequest,
 }));
 
 describe("agui-bridge sticker event ordering", () => {
@@ -113,5 +123,44 @@ describe("agui-bridge sticker event ordering", () => {
       styleId: "lively",
       executionMode: "chat",
     }));
+  });
+
+  it("Code verification event send failure does not stop the background run", async () => {
+    vi.resetModules();
+    mocks.handlers.clear();
+    mocks.getSession.mockReturnValue({ id: "code-chat", mode: "code" });
+    let continuedAfterEvent = false;
+    mocks.runCodeRequest.mockImplementation(async (_input, _session, context) => {
+      context.emitEvent({
+        type: "code_verification_card",
+        payload: { status: "completed_verified" },
+      });
+      continuedAfterEvent = true;
+    });
+
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    registerAgUiIpc(
+      vi.fn(),
+      vi.fn(),
+      () => null,
+    );
+    const handler = mocks.handlers.get(IPC.AGUI_RUN);
+    if (!handler) throw new Error("AGUI_RUN handler was not registered");
+
+    const ack = await handler({
+      sender: {
+        isDestroyed: () => false,
+        send: () => { throw new Error("webContents destroyed during send"); },
+      },
+    }, {
+      messages: [{ role: "user", content: "修复代码" }],
+      sessionId: "code-chat",
+      styleId: "default",
+      executionMode: "code",
+    });
+
+    expect(ack).toMatchObject({ success: true });
+    await expect.poll(() => mocks.runCodeRequest).toHaveBeenCalledOnce();
+    expect(continuedAfterEvent).toBe(true);
   });
 });
