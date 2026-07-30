@@ -1,74 +1,95 @@
 /**
  * CodeUserPreferencesProvider - 稳定的代码偏好
  *
- * 生成时机：
- * - 创建 Code 会话
- * - 创建新 Cline Session
- * - 用户修改相关设置或记忆
- * - 用户主动执行刷新命令
+ * 职责：
+ * - 从明确来源（用户档案/设置）读取
+ * - 只提取代码相关偏好
+ * - 过滤、稳定排序、格式化
+ * - 版本化缓存
+ * - 创建新 Cline Task 时注入
  *
- * 不每轮调用动态 RAG。
- * 不注入 WorldBook、DMAE、CAE、社交情绪内容。
- *
- * 内容只包含代码工作相关偏好。
+ * 不每轮动态 RAG。不注入 WorldBook/DMAE/CAE/社交情绪。
+ * 当前无可用档案时 content="" 正常创建 Session。
  */
 
-import * as fs from "fs";
-import * as path from "path";
+/** 代码偏好事实条目 */
+export interface CodePreferenceFact {
+  key: string;
+  value: string;
+}
+
+/** 偏好来源接口（由外部注入，如用户档案读取器） */
+export interface CodeUserPreferencesSource {
+  /** 返回当前档案版本（变化时触发刷新） */
+  getProfileVersion(): number;
+  /** 读取代码相关偏好事实 */
+  readCodeRelevantPreferences(): CodePreferenceFact[];
+}
+
+/** 空来源（当前无可用档案时的默认行为） */
+class EmptyPreferencesSource implements CodeUserPreferencesSource {
+  getProfileVersion(): number { return 0; }
+  readCodeRelevantPreferences(): CodePreferenceFact[] { return []; }
+}
 
 interface CodeUserPreferences {
   version: number;
   content: string;
 }
 
-/** 默认的代码偏好（与用户期望对齐） */
-const DEFAULT_PREFERENCES_LINES = [
-  "用户使用 Windows 操作系统。",
-  "项目主要使用 TypeScript、Electron、Node。",
-  "用户偏好中文沟通。",
-  "优先复用成熟库和官方能力。",
-  "避免重复造轮子，优先复用现有实现。",
-  "重要修改前先检查真实调用链，避免遗漏影响面。",
-  "避免散落硬编码和多点同步，统一入口读取。",
-  "复杂修改拆分为可回滚提交。",
-  "Code 会话运行前必须验证工作区绑定。",
-  "任务理解、项目探索和规划由 Cline 负责。",
-];
-
-let cachedPreferences: CodeUserPreferences | null = null;
-
 class CodeUserPreferencesProvider {
-  /** 获取当前 preferences（带缓存） */
-  get(forceRefresh = false): CodeUserPreferences {
-    if (cachedPreferences && !forceRefresh) {
-      return cachedPreferences;
-    }
-    cachedPreferences = this.generate();
-    return cachedPreferences;
+  private source: CodeUserPreferencesSource = new EmptyPreferencesSource();
+  private cached: CodeUserPreferences | null = null;
+  private cachedProfileVersion: number = -1;
+
+  /** 注入偏好来源 */
+  setSource(source: CodeUserPreferencesSource): void {
+    this.source = source;
+    this.cached = null;
+    this.cachedProfileVersion = -1;
   }
 
-  /** 生成稳定的 preferences 字符串 */
+  /** 获取 preferences（带缓存，版本未变时复用） */
+  get(): CodeUserPreferences {
+    const profileVersion = this.source.getProfileVersion();
+    if (this.cached && profileVersion === this.cachedProfileVersion) {
+      return this.cached;
+    }
+    this.cachedProfileVersion = profileVersion;
+    this.cached = this.generate();
+    return this.cached;
+  }
+
+  /** 强制刷新 */
+  refresh(): CodeUserPreferences {
+    this.cached = null;
+    return this.get();
+  }
+
+  /** 生成稳定字符串 */
   private generate(): CodeUserPreferences {
-    const lines: string[] = [
-      "【代码工作偏好（来自 CodeUserPreferencesProvider）】",
+    const facts = this.source.readCodeRelevantPreferences();
+    if (facts.length === 0) {
+      return { version: 0, content: "" };
+    }
+    // 稳定排序：按 key 排序
+    const sorted = [...facts].sort((a, b) => a.key.localeCompare(b.key));
+    const lines = [
+      "【代码工作偏好】",
       "",
-      ...DEFAULT_PREFERENCES_LINES,
+      ...sorted.map(f => `- ${f.key}: ${f.value}`),
     ];
     return {
-      version: 1,
+      version: this.source.getProfileVersion(),
       content: lines.join("\n"),
     };
   }
 
-  /** 强制刷新（设置变更或用户主动刷新时调用） */
-  refresh(): CodeUserPreferences {
-    cachedPreferences = null;
-    return this.get(true);
-  }
-
-  /** 重置缓存（测试用） */
+  /** 重置（测试用） */
   reset(): void {
-    cachedPreferences = null;
+    this.source = new EmptyPreferencesSource();
+    this.cached = null;
+    this.cachedProfileVersion = -1;
   }
 }
 
@@ -76,28 +97,26 @@ export const codeUserPreferences = new CodeUserPreferencesProvider();
 
 /** 构建 Cline systemPrompt：CodeIdentityAddon + CodeUserPreferences */
 export function buildClineSystemPromptWithPreferences(): string {
-  const identityResult = loadPromptFromFile("code_identity.md");
+  const identity = loadPromptFromFile("code_identity.md");
   const userPrefs = codeUserPreferences.get();
-
   const parts: string[] = [];
-  if (identityResult.content) {
-    parts.push(identityResult.content);
-  }
-  if (userPrefs.content) {
-    parts.push(userPrefs.content);
-  }
+  if (identity.content) parts.push(identity.content);
+  if (userPrefs.content) parts.push(userPrefs.content);
   return parts.join("\n\n");
 }
 
-interface PromptLoadResult {
+// ── Prompt 文件读取 ──────────────────────────────────────
+
+export interface PromptLoadResult {
   content: string;
   source: "empty_file" | "loaded" | "missing" | "load_error";
 }
 
 function loadPromptFromFile(filename: string): PromptLoadResult {
+  const fs = require("fs") as typeof import("fs");
+  const path = require("path") as typeof import("path");
   const candidates = [
     path.join(process.cwd(), "prompts", filename),
-    path.join(process.cwd(), "src", "main", "orchestrator", "code", "prompts", filename),
   ];
   for (const filePath of candidates) {
     try {
@@ -110,4 +129,4 @@ function loadPromptFromFile(filename: string): PromptLoadResult {
   return { content: "", source: "missing" };
 }
 
-export type { CodeUserPreferences, PromptLoadResult };
+export type { CodeUserPreferences };

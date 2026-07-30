@@ -84,6 +84,23 @@ class CodeRunCoordinator {
     return this.runs.get(runId);
   }
 
+  /** 根据 chatSessionId 获取活跃 run */
+  getActiveRunByChatSession(chatSessionId: string): CodeRunRecord | undefined {
+    for (const run of this.runs.values()) {
+      if (run.chatSessionId === chatSessionId && this.isRunning(run.runId)) {
+        return run;
+      }
+    }
+    return undefined;
+  }
+
+  /** 根据 clineSessionId 获取活跃 run */
+  getActiveRunByClineSession(clineSessionId: string): CodeRunRecord | undefined {
+    const runId = this.activeRunsBySession.get(clineSessionId);
+    if (!runId) return undefined;
+    return this.runs.get(runId);
+  }
+
   /** 检查 Session 是否有活跃 run */
   isSessionBusy(clineSessionId: string): boolean {
     return this.activeRunsBySession.has(clineSessionId);

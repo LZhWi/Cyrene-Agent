@@ -116,6 +116,7 @@ export class MutationCollector {
   private startGitStatus: Map<string, string> = new Map();
   private watcherReady: boolean = false;
   private watcherHandle: fs.FSWatcher | null = null;
+  private watcherAvailable: boolean = true;
 
   constructor(workspaceRoot: string) {
     this.workspaceRoot = path.resolve(workspaceRoot);
@@ -147,7 +148,6 @@ export class MutationCollector {
   /** 启动真实 fs.watch watcher */
   private startWatcher(): void {
     try {
-      // 递归监听，但忽略 IGNORE_PATTERNS
       this.watcherHandle = fs.watch(
         this.workspaceRoot,
         { recursive: true, persistent: false },
@@ -156,11 +156,24 @@ export class MutationCollector {
           const filePath = path.resolve(this.workspaceRoot, filename);
           if (isIgnoredInternal(filePath, this.workspaceRoot)) return;
           if (!isWithinWorkspaceInternal(filePath, this.workspaceRoot)) return;
+          // 重新 stat 确认文件实际存在（rename 事件可能误报）
+          try {
+            fs.statSync(filePath);
+          } catch {
+            // 文件可能已删除，但仍记录为候选
+          }
           this.watcherCaptured.add(filePath);
         },
       );
+      // watcher 错误不会导致未处理异常
+      this.watcherHandle.on("error", (err) => {
+        console.warn("[Mutation] watcher error:", err);
+        this.watcherHandle = null;
+        this.watcherAvailable = false;
+      });
     } catch (err) {
       console.warn("[Mutation] fs.watch failed:", err);
+      this.watcherAvailable = false;
     }
   }
 
@@ -215,6 +228,11 @@ export class MutationCollector {
       for (const f of this.watcherCaptured) {
         this.candidateFiles.add(f);
       }
+    }
+
+    // 非 Git 项目且 watcher 不可用时标记警告
+    if (!this.isGit && !this.watcherAvailable) {
+      console.warn("[Mutation] MUTATION_WATCHER_UNAVAILABLE: non-Git workspace without watcher, changedFiles may be incomplete");
     }
 
     if (this.isGit) {

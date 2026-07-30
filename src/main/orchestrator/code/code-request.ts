@@ -29,12 +29,11 @@ import { buildClineSystemPromptWithPreferences } from "./code-user-preferences";
 import { routeCommand, updateSessionClineMode } from "./code-command-router";
 import { getCurrentLevel } from "../../permission";
 import { loadModelSettings } from "../../index";
-import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "../model-config";
 import { ClineResultAdapter, CodeRunFacts } from "./cline-result-adapter";
 
 /**
  * 从统一 ModelSettings 读取运行时配置。
- * 禁止在 Code 模块本地复制 JSON 解析或硬编码默认值。
+ * 默认值补全由 ModelSettingsStore/normalizeModelSettings 负责，Code 层不做二次兜底。
  */
 function loadModelRuntimeConfig() {
   const s = loadModelSettings();
@@ -42,7 +41,7 @@ function loadModelRuntimeConfig() {
     model: s.model,
     apiKey: s.apiKey,
     baseUrl: s.baseUrl,
-    contextWindowTokens: s.contextWindowTokens ?? DEFAULT_CONTEXT_WINDOW_TOKENS,
+    contextWindowTokens: s.contextWindowTokens,
   };
 }
 

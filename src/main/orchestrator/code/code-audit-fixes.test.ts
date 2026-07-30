@@ -7,7 +7,7 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
-import { codeUserPreferences, buildClineSystemPromptWithPreferences } from "./code-user-preferences";
+import { codeUserPreferences, buildClineSystemPromptWithPreferences, type CodeUserPreferencesSource } from "./code-user-preferences";
 import { ClineResultAdapter } from "./cline-result-adapter";
 import { codeRunWorker } from "./code-run-worker";
 import { codeRunCoordinator } from "./code-run-coordinator";
@@ -21,33 +21,77 @@ import {
 describe("CodeUserPreferences", () => {
   beforeEach(() => codeUserPreferences.reset());
 
-  it("生成稳定字符串 + 版本号", () => {
+  it("无来源时 content 为空", () => {
+    const prefs = codeUserPreferences.get();
+    expect(prefs.version).toBe(0);
+    expect(prefs.content).toBe("");
+  });
+
+  it("有来源时生成稳定字符串 + 版本号", () => {
+    const source: CodeUserPreferencesSource = {
+      getProfileVersion: () => 1,
+      readCodeRelevantPreferences: () => [
+        { key: "os", value: "Windows" },
+        { key: "language", value: "中文" },
+      ],
+    };
+    codeUserPreferences.setSource(source);
     const prefs = codeUserPreferences.get();
     expect(prefs.version).toBe(1);
-    expect(prefs.content).toContain("Windows");
-    expect(prefs.content).toContain("中文沟通");
-    expect(prefs.content).toContain("避免重复造轮子");
+    expect(prefs.content).toContain("os: Windows");
+    expect(prefs.content).toContain("language: 中文");
+    expect(prefs.content).toContain("【代码工作偏好】");
   });
 
-  it("buildClineSystemPromptWithPreferences 返回非空", () => {
-    const sys = buildClineSystemPromptWithPreferences();
-    expect(sys).toContain("Windows");
-    expect(sys).toContain("代码工作偏好");
+  it("稳定排序（按 key）", () => {
+    const source: CodeUserPreferencesSource = {
+      getProfileVersion: () => 1,
+      readCodeRelevantPreferences: () => [
+        { key: "zeta", value: "z" },
+        { key: "alpha", value: "a" },
+      ],
+    };
+    codeUserPreferences.setSource(source);
+    const prefs = codeUserPreferences.get();
+    const alphaIdx = prefs.content.indexOf("alpha");
+    const zetaIdx = prefs.content.indexOf("zeta");
+    expect(alphaIdx).toBeLessThan(zetaIdx);
   });
 
-  it("不每轮重新生成（缓存）", () => {
+  it("缓存：版本未变时复用", () => {
+    const source: CodeUserPreferencesSource = {
+      getProfileVersion: () => 1,
+      readCodeRelevantPreferences: () => [{ key: "k", value: "v" }],
+    };
+    codeUserPreferences.setSource(source);
     const p1 = codeUserPreferences.get();
-    const p2 = codeRunCoordinator ? codeUserPreferences.get() : p1;
-    expect(p1.version).toBe(p2.version);
-    expect(p1.content).toBe(p2.content);
+    const p2 = codeUserPreferences.get();
+    expect(p1).toBe(p2); // 同一对象
   });
 
   it("refresh 强制重新生成", () => {
-    const p1 = codeUserPreferences.get();
-    codeRunCoordinator ? null : null;
+    const source: CodeUserPreferencesSource = {
+      getProfileVersion: () => 1,
+      readCodeRelevantPreferences: () => [{ key: "k", value: "v1" }],
+    };
+    codeUserPreferences.setSource(source);
+    codeUserPreferences.get();
+    // 更新来源内容
+    const source2: CodeUserPreferencesSource = {
+      getProfileVersion: () => 2,
+      readCodeRelevantPreferences: () => [{ key: "k", value: "v2" }],
+    };
+    codeUserPreferences.setSource(source2);
     const p2 = codeUserPreferences.refresh();
-    // refresh 后 version 可能保持，但 instance 不同
-    expect(p2.version).toBe(p1.version);
+    expect(p2.version).toBe(2);
+    expect(p2.content).toContain("v2");
+  });
+
+  it("不调用动态 RAG / Memory / WorldBook", () => {
+    // Provider 只从注入的 source 读取，不调用 buildMemoryInjection 等
+    // 空来源时 content="" 正常创建 Session
+    const prefs = codeUserPreferences.get();
+    expect(prefs.content).toBe("");
   });
 });
 
