@@ -10,7 +10,7 @@
 
 ## 前置条件
 
-1. `npm run dev:cline`
+1. `npm run dev`
 2. 在聊天窗口点击 📁 按钮
 3. 选择 `scripts/cline-integration-fixture` 作为工作区
 4. 确认工作区指示器显示 `cline-integration-fixture`
