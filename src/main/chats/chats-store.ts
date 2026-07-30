@@ -21,6 +21,7 @@ import {
   type ChatSession,
   type ChatSessionMeta,
   type ChatSessionPurpose,
+  type ConversationMode,
 } from "../../shared/chat-types";
 
 const ROOT_DIR_NAME = "cyrene-chats";
@@ -86,6 +87,10 @@ function readSessionFile(id: string): ChatSession | null {
     const parsed = JSON.parse(raw) as ChatSession;
     if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.messages)) {
       return null;
+    }
+    // 旧会话迁移：无 mode 字段时根据 purpose 推断
+    if (!parsed.mode) {
+      parsed.mode = parsed.purpose === "proactive-chat" ? "chat" : "work";
     }
     return parsed;
   } catch (err) {
@@ -178,9 +183,11 @@ export function createSession(opts?: {
   identityId?: string | null;
   initialMessages?: ChatMessage[];
   purpose?: ChatSessionPurpose;
+  mode?: ConversationMode;
 }): ChatSession {
   const now = Date.now();
   const messages = opts?.initialMessages ?? [];
+  const mode = opts?.mode ?? (opts?.purpose === "proactive-chat" ? "chat" : "work");
   const session: ChatSession = {
     id: randomUUID(),
     title: opts?.title?.trim() || (messages.length > 0 ? deriveTitle(messages) : "新对话"),
@@ -191,6 +198,8 @@ export function createSession(opts?: {
     schemaVersion: CHAT_SCHEMA_VERSION,
     purpose: opts?.purpose,
     titleIsCustom: opts?.purpose ? true : undefined,
+    mode,
+    ...(mode === "code" ? { codeSession: { clineMode: "act", tasks: [] } } : {}),
   };
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));

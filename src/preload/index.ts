@@ -96,7 +96,7 @@ const aguiApi = {
     assistantTurnId?: string;
     style?: string;
     styleId?: string;
-    executionMode?: "work" | "chat";
+    executionMode?: "work" | "chat" | "code";
     sessionId?: string;
     attachments?: { name: string; text: string }[];
     imageAttachments?: { name: string; filePath: string; mime?: string }[];
@@ -453,7 +453,7 @@ const chatStoreApi = {
   get: (id: string) => ipcRenderer.invoke(IPC.CHATS_GET, id),
   getPage: (id: string, before: number | null, limit: number) =>
     ipcRenderer.invoke(IPC.CHATS_GET_PAGE, { id, before, limit }),
-  create: (payload?: { title?: string; identityId?: string | null }) =>
+  create: (payload?: { title?: string; identityId?: string | null; mode?: "chat" | "work" | "code" }) =>
     ipcRenderer.invoke(IPC.CHATS_CREATE, payload ?? {}),
   append: (id: string, message: unknown) =>
     ipcRenderer.invoke(IPC.CHATS_APPEND, { id, message }),

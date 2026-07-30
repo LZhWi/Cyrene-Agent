@@ -48,11 +48,12 @@ export function registerChatsIpc(): void {
     IPC.CHATS_CREATE,
     (
       event,
-      payload?: { title?: string; identityId?: string | null },
+      payload?: { title?: string; identityId?: string | null; mode?: "chat" | "work" | "code" },
     ) => {
       const session = chatsStore.createSession({
         title: payload?.title,
         identityId: payload?.identityId ?? null,
+        mode: payload?.mode,
       });
       broadcastChanged(event.sender);
       return session;

@@ -1,4 +1,4 @@
-export type DefaultChatMode = "work" | "chat";
+export type DefaultChatMode = "work" | "chat" | "code";
 export type SegmentedOutputMode = "all" | "chat" | "off";
 export type MobileMessageSegmentationMode = "on" | "off";
 export type ProactiveChatMode = "on" | "off";
@@ -12,7 +12,9 @@ export function normalizeChatSocialContextEnabled(value: unknown): boolean {
 
 export function normalizeDefaultChatMode(value: unknown): DefaultChatMode {
   // 兼容旧版磁盘值：talk -> chat，collab -> work。
-  return value === "chat" || value === "talk" ? "chat" : "work";
+  if (value === "chat" || value === "talk") return "chat";
+  if (value === "code") return "code";
+  return "work";
 }
 
 export function normalizeSegmentedOutputMode(value: unknown): SegmentedOutputMode {

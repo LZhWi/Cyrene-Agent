@@ -574,13 +574,14 @@ interface ChatStoreSession {
   updatedAt: number;
   schemaVersion: 1;
   purpose?: "proactive-chat";
+  mode?: "chat" | "work" | "code";
 }
 
 interface ChatStoreApi {
   list: () => Promise<ChatSessionMetaUI[]>;
   get: (id: string) => Promise<ChatStoreSession | null>;
   getPage: (id: string, before: number | null, limit: number) => Promise<{ session: Omit<ChatStoreSession, "messages">; messages: ChatStoreSession["messages"]; hasMore: boolean } | null>;
-  create: (payload?: { title?: string; identityId?: string | null }) => Promise<ChatStoreSession>;
+  create: (payload?: { title?: string; identityId?: string | null; mode?: "chat" | "work" | "code" }) => Promise<ChatStoreSession>;
   append: (id: string, message: unknown) => Promise<ChatStoreSession | null>;
   replaceMessages: (id: string, messages: unknown[]) => Promise<ChatStoreSession | null>;
   replaceTail: (id: string, startIndex: number, messages: unknown[]) => Promise<ChatStoreSession | null>;
@@ -661,6 +662,9 @@ function loadSessionIntoUI(session: ChatStoreSession): void {
   void renderRailList();
   // 切换会话后刷新工作区指示器
   void loadWorkspaceIndicator();
+  // 切换会话后同步模式切换按钮（会话模式锁定，不允许切换）
+  const sessionMode = session.mode ?? "work";
+  selectModeOption(sessionMode);
 }
 
 async function loadSessionTailIntoUI(id: string): Promise<boolean> {
@@ -757,7 +761,7 @@ chatStatusBtn?.addEventListener("click", () => {
 chatRailNew?.addEventListener("click", async () => {
   if (!window.chatStore) return;
   try {
-    const session = await window.chatStore.create({ identityId: null });
+    const session = await window.chatStore.create({ identityId: null, mode: getConversationMode() });
     if (session?.id) {
       const full = await window.chatStore.get(session.id);
       if (full) loadSessionIntoUI(full as ChatStoreSession);
@@ -822,7 +826,7 @@ async function bootstrap(): Promise<void> {
   }
 
   if (!await loadSessionTailIntoUI(sessionId)) {
-    const session = await window.chatStore.create({ identityId: null });
+    const session = await window.chatStore.create({ identityId: null, mode: getConversationMode() });
     sessionTailStart = 0;
     loadSessionIntoUI(session);
   }
@@ -3180,9 +3184,14 @@ function clearModelContexts(): boolean {
   return changed;
 }
 
-function isChatMode(): boolean {
+function getConversationMode(): "chat" | "work" | "code" {
   const active = document.querySelector(".mode-switch__option.is-active") as HTMLElement | null;
-  return active?.dataset?.modeValue === "chat";
+  const value = active?.dataset?.modeValue;
+  return value === "chat" || value === "code" ? value : "work";
+}
+
+function isChatMode(): boolean {
+  return getConversationMode() === "chat";
 }
 
 function getCurrentStyleId(): StyleId {
@@ -3467,7 +3476,7 @@ async function triggerCyreneGreeting(): Promise<void> {
     const ack = await window.agui!.run({
       messages: [{ role: "user", content: "[internal] 用户点击了「和昔涟聊天」，请你主动开口聊几句，像朋友打招呼一样自然开场。" }],
       styleId: getCurrentStyleId(),
-      executionMode: isChatMode() ? "chat" : "work",
+      executionMode: getConversationMode(),
       sessionId: currentSessionId || undefined,
     });
     if (!ack.success) {
@@ -4020,7 +4029,7 @@ async function send(): Promise<void> {
       userTurnId: userMsg.id,
       assistantTurnId: streamMsgId,
       styleId: getCurrentStyleId(),
-      executionMode: isChatMode() ? "chat" : "work",
+      executionMode: getConversationMode(),
       sessionId: currentSessionId || undefined,
       imageAttachments: directImageAttachments.length > 0 ? directImageAttachments : undefined,
     });

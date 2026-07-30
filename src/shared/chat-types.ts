@@ -13,6 +13,30 @@ export type ChatRole = "user" | "model";
 
 export type ChatSessionPurpose = "proactive-chat";
 
+/** 会话模式：创建时绑定，整个会话生命周期不变 */
+export type ConversationMode = "chat" | "work" | "code";
+
+/** Code 会话专属元数据 */
+export interface CodeSessionMetadata {
+  activeClineSessionId?: string;
+  clineMode: "plan" | "act";
+  codePreferencesVersion?: number;
+  tasks: Array<{
+    clineSessionId: string;
+    createdAt: number;
+    closedAt?: number;
+    title?: string;
+  }>;
+  pendingPrompt?: {
+    chatSessionId: string;
+    clineSessionId: string;
+    promptId: string;
+    status: "pending" | "answered" | "cancelled";
+    createdAt: number;
+    answeredAt?: number;
+  };
+}
+
 export type ChatStickerId =
   | "playful"
   | "love-happy"
@@ -89,6 +113,10 @@ export interface ChatSession {
   titleIsCustom?: boolean;
   /** 对话工作区绑定（Coding Agent 使用的可信目录） */
   workspaceBinding?: ConversationWorkspaceBinding;
+  /** 会话模式：创建时绑定，整个会话生命周期不变。旧会话无此字段时默认 "work"。 */
+  mode?: ConversationMode;
+  /** Code 会话专属元数据（mode === "code" 时使用） */
+  codeSession?: CodeSessionMetadata;
 }
 
 // index.json 里的轻量元数据（列表渲染用）。
