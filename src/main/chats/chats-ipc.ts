@@ -137,6 +137,10 @@ export function registerChatsIpc(): void {
         };
         const session = chatsStore.setWorkspaceBinding(payload.sessionId, binding);
         if (!session) return { ok: false, error: "session not found" };
+        console.log("[Workspace] 绑定成功:",
+          "sessionId=" + payload.sessionId.slice(0, 8) + "...",
+          "workspaceRoot=" + resolved,
+        );
         // 广播工作区变更
         for (const win of BrowserWindow.getAllWindows()) {
           if (win.isDestroyed()) continue;
