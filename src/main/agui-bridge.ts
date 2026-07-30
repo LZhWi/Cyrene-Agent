@@ -25,6 +25,8 @@ import type { RelationshipChannel } from "./relationship/relationship-log";
 import { createThinkFilter, type ThinkStreamFilter, type ThinkFilterMode } from "./chat/think-filter";
 import { perf } from "./perf-trace";
 import type { StyleId } from "../shared/style-sampling";
+import * as chatsStore from "./chats/chats-store";
+import { runCodeRequest } from "./orchestrator/code/code-request";
 
 /** 渲染进程发起 run 时传的输入。 */
 export interface AguiRunInput {
@@ -98,22 +100,10 @@ export function registerAgUiIpc(
     lifecycle?.onConversationStarted();
     perf.beginTurn("desktop");
     const input = rawInput as AguiRunInput;
-    let built;
-    try {
-      built = await perf.track("build_options", () => buildOptionsFn!(input));
-    } catch (error) {
-      perf.dump();
-      lifecycle?.onConversationEnded();
-      throw error;
-    }
-    const { options, latestUserText } = built;
-
-    const threadId = `thread-${Date.now()}`;
-    const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const agent = new CyreneAgent({ threadId, description: "Cyrene 主聊天" });
 
     // 事件转发目标：优先用 invoke 的 sender（发起 run 的窗口），兜底用聊天窗口
     const sender = event.sender;
+    const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const send = (baseEvent: unknown): void => {
       const targets: WebContents[] = [];
@@ -130,6 +120,49 @@ export function registerAgUiIpc(
         }
       }
     };
+
+    // ── 顶层模式分流：读取 ChatSession.mode（唯一可信来源） ──
+    // Code 模式完全绕过 CyreneAgent、CITA、WorkLoop
+    const sessionId = input.sessionId;
+    if (sessionId) {
+      const session = chatsStore.getSession(sessionId);
+      const mode = session?.mode ?? "work";
+      if (mode === "code") {
+        console.log("[AgUiBridge] mode=code, dispatching to runCodeRequest (bypass CyreneAgent)");
+        try {
+          const userText = (() => {
+            const msgs = input.messages;
+            for (let i = msgs.length - 1; i >= 0; i--) {
+              const m = msgs[i] as { role?: string; content?: string };
+              if (m?.role === "user") return m.content ?? "";
+            }
+            return "";
+          })();
+          await runCodeRequest(
+            { text: userText, sessionId },
+            session!,
+            { runId, sessionId, signal: new AbortController().signal, emitEvent: send },
+          );
+        } finally {
+          lifecycle?.onConversationEnded();
+        }
+        return;
+      }
+    }
+
+    // ── chat / work 模式：现有 CyreneAgent 路径 ──
+    let built;
+    try {
+      built = await perf.track("build_options", () => buildOptionsFn!(input));
+    } catch (error) {
+      perf.dump();
+      lifecycle?.onConversationEnded();
+      throw error;
+    }
+    const { options, latestUserText } = built;
+
+    const threadId = `thread-${Date.now()}`;
+    const agent = new CyreneAgent({ threadId, description: "Cyrene 主聊天" });
 
     let pendingRunFinishedEvent: unknown | null = null;
     let lifecycleEnded = false;
