@@ -5228,6 +5228,9 @@ app.whenReady().then(async () => {
         retrievedAtoms,
       };
     },
+    getWorkspaceBinding: (conversationId: string) => {
+      return chatsStore.getWorkspaceBinding(conversationId);
+    },
   };
   const onRunFinishedDeps: OnRunFinishedDeps = {
     loadModelSettings: () => loadModelSettings(),

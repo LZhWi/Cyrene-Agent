@@ -661,6 +661,13 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
                 },
               },
               lastDelegateCodingWorkspace: state.resolvedWorkspaceRoot ?? ws ?? state.lastDelegateCodingWorkspace,
+              // 运行时 invariant：如果设置了 resolvedWorkspaceRoot，delegate_coding 返回的 workspaceRoot 必须一致
+              ...(state.resolvedWorkspaceRoot && ws && ws !== state.resolvedWorkspaceRoot ? {
+                lastGateFailure: {
+                  code: "WORKSPACE_CONTEXT_MISMATCH",
+                  disposition: "block",
+                },
+              } : {}),
             };
             // 清除之前的验证通过状态
             if (cv?.status === "passed") {

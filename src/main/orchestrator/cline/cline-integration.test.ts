@@ -651,3 +651,62 @@ describe("环境变量不能覆盖用户绑定的工作区", () => {
     expect(toolRegistrationSource).toContain("当前对话未绑定工作区目录");
   });
 });
+
+// ══════════════════════════════════════════════════════════════
+// 工作区绑定链路验证
+// ══════════════════════════════════════════════════════════════
+
+describe("工作区绑定链路验证", () => {
+  it("BuildOptionsDeps 包含 getWorkspaceBinding", () => {
+    const source = require("fs").readFileSync(
+      require("path").join(__dirname, "..", "build-options.ts"),
+      "utf8",
+    );
+    expect(source).toContain("getWorkspaceBinding?:");
+    expect(source).toContain("conversationId: string");
+  });
+
+  it("buildAgentRunOptions 调用 getWorkspaceBinding", () => {
+    const source = require("fs").readFileSync(
+      require("path").join(__dirname, "..", "build-options.ts"),
+      "utf8",
+    );
+    expect(source).toContain("deps.getWorkspaceBinding?.(conversationId)");
+    expect(source).toContain("resolvedWorkspaceRoot");
+  });
+
+  it("langgraph-agent-loop 在 delegate_coding 前检查 resolvedWorkspaceRoot", () => {
+    const source = require("fs").readFileSync(
+      require("path").join(__dirname, "..", "langgraph-agent-loop.ts"),
+      "utf8",
+    );
+    expect(source).toContain("WORKSPACE_NOT_BOUND");
+    expect(source).toContain("!state.resolvedWorkspaceRoot");
+  });
+
+  it("agent-graph 使用 state.resolvedWorkspaceRoot 作为 forcedArgs.cwd 主源", () => {
+    const source = require("fs").readFileSync(
+      require("path").join(__dirname, "..", "agent-graph.ts"),
+      "utf8",
+    );
+    expect(source).toContain("state.resolvedWorkspaceRoot ?? ws ?? state.lastDelegateCodingWorkspace");
+  });
+
+  it("agent-graph 包含 WORKSPACE_CONTEXT_MISMATCH 检查", () => {
+    const source = require("fs").readFileSync(
+      require("path").join(__dirname, "..", "agent-graph.ts"),
+      "utf8",
+    );
+    expect(source).toContain("WORKSPACE_CONTEXT_MISMATCH");
+  });
+
+  it("run_verification 工具执行失败也会递增 verificationRetryCount", () => {
+    const source = require("fs").readFileSync(
+      require("path").join(__dirname, "..", "agent-graph.ts"),
+      "utf8",
+    );
+    // 检查是否有处理 run_verification 工具执行失败的代码块
+    expect(source).toContain("run_verification 工具执行失败");
+    expect(source).toContain("verificationRetryCount");
+  });
+});

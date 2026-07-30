@@ -126,6 +126,11 @@ export interface BuildOptionsDeps {
     contextBlock: string;
     retrievedAtoms: SocialAtom[];
   }>;
+  /**
+   * 获取对话的工作区绑定（来自 Conversation Workspace Binding）。
+   * 返回 undefined 表示当前对话未绑定工作区。
+   */
+  getWorkspaceBinding?: (conversationId: string) => { workspaceRoot: string; displayName: string; boundAt: number } | undefined;
 }
 
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
@@ -381,6 +386,19 @@ export async function buildAgentRunOptions(
   );
   const isChatMode = executionMode === "chat";
   const conversationId = input.sessionId || "default";
+
+  // 读取可信工作区绑定（来自 Conversation Workspace Binding）
+  const workspaceBinding = conversationId
+    ? deps.getWorkspaceBinding?.(conversationId)
+    : undefined;
+  const resolvedWorkspaceRoot = workspaceBinding?.workspaceRoot;
+  if (resolvedWorkspaceRoot) {
+    console.log("[BuildOptions] workspace binding loaded:",
+      "conversationId=" + conversationId.slice(0, 8) + "...",
+      "workspaceRoot=" + resolvedWorkspaceRoot,
+    );
+  }
+
   const socialContextEnabled = isChatMode
     && styleSettings.chatSocialContextEnabled === true
     && Boolean(deps.buildChatSocialContext);
@@ -661,6 +679,7 @@ export async function buildAgentRunOptions(
       ...(availableSkills.length > 0 ? { availableSkills } : {}),
       agentRuntime: settings.disableLangGraph ? "legacy" : "langgraph",
       optimizeFirstRound: settings.optimizeFirstRound,
+      resolvedWorkspaceRoot,
     },
     latestUserText,
   };

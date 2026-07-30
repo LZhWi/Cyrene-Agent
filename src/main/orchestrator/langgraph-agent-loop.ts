@@ -470,6 +470,15 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     "resolvedWorkspaceRoot=" + (options.resolvedWorkspaceRoot ?? "(未绑定)"),
   );
 
+  // 路径验证：检查工作区目录是否仍然存在
+  if (options.resolvedWorkspaceRoot) {
+    const fs = require("fs") as typeof import("fs");
+    if (!fs.existsSync(options.resolvedWorkspaceRoot)) {
+      console.error("[AgentFlow] WORKSPACE_NOT_FOUND: workspace directory does not exist:", options.resolvedWorkspaceRoot);
+      // 不直接拒绝——让 delegate_coding 返回具体错误
+    }
+  }
+
   if (ENABLE_TASK_ROUTER) {
     flowLog(`Task Router enabled: skills=${(options.availableSkills ?? []).length}`);
   } else {
@@ -1136,7 +1145,25 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
 
         // delegate_coding 信任边界：强制使用 Conversation Workspace Binding 的可信目录
         // 忽略模型生成的 workspaceRoot（用户消息/Planner/Action Gate/Native FC 都可能注入错误路径）
-        if (selectedTool.id === "delegate_coding" && state.resolvedWorkspaceRoot) {
+        if (selectedTool.id === "delegate_coding") {
+          if (!state.resolvedWorkspaceRoot) {
+            // 未绑定工作区 → 拒绝执行
+            flowLog(`   WORKSPACE_NOT_BOUND: 未绑定工作区，拒绝 delegate_coding`);
+            return [{
+              toolId: selectedTool.id,
+              args,
+              output: JSON.stringify({
+                success: false,
+                errorCode: "WORKSPACE_NOT_BOUND",
+                error: "当前对话未绑定工作区目录。请先选择工作区目录，然后再执行代码任务。",
+              }),
+              status: "failed",
+              errorCode: "WORKSPACE_NOT_BOUND",
+              terminal: true,
+              retryable: false,
+              toolExecuted: false,
+            }];
+          }
           const origWorkspace = args.workspaceRoot;
           args = { ...args, workspaceRoot: state.resolvedWorkspaceRoot };
           toolCall = { ...toolCall, arguments: JSON.stringify(args) };
