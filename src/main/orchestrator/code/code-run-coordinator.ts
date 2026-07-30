@@ -9,6 +9,7 @@ export type CodeRunStatus =
   | "queued"
   | "running"
   | "waiting_for_user"
+  | "verifying"
   | "completed"
   | "failed"
   | "cancelled"
@@ -63,6 +64,12 @@ class CodeRunCoordinator {
   setWaitingForUser(runId: string): void {
     const record = this.runs.get(runId);
     if (record) record.status = "waiting_for_user";
+  }
+
+  /** 标记 run 进入 verifying 状态 */
+  setVerifying(runId: string): void {
+    const record = this.runs.get(runId);
+    if (record) record.status = "verifying";
   }
 
   /** 标记 run 完成 */

@@ -30,6 +30,9 @@ import { routeCommand, updateSessionClineMode } from "./code-command-router";
 import { getCurrentLevel } from "../../permission";
 import { loadModelSettings } from "../../index";
 import { ClineResultAdapter, CodeRunFacts } from "./cline-result-adapter";
+import { VerificationPlanResolver, type VerificationPlan } from "./verification-plan-resolver";
+import { VerificationRunner } from "./verification-runner";
+import { resolveCodeRunFinalState, type CodeVerificationCard } from "./code-final-state";
 
 /**
  * 从统一 ModelSettings 读取运行时配置。
@@ -315,6 +318,49 @@ export async function runCodeRequest(
         emitAgUiEvent(ctx, {
           type: "code_mutation_evidence",
           payload: { mutation: evidence, facts },
+          runId: ctx.runId,
+        });
+
+        // 11. 验证阶段：解析 + 执行 + 最终裁决
+        codeRunCoordinator.setVerifying(ctx.runId);
+
+        const planResolver = new VerificationPlanResolver();
+        const plan = planResolver.resolve({
+          workspaceRoot: config.workspaceRoot,
+          createdFiles: evidence.createdFiles,
+          modifiedFiles: evidence.modifiedFiles,
+          deletedFiles: evidence.deletedFiles,
+          touchedPreExistingFiles: evidence.touchedPreExistingFiles,
+        });
+
+        let verificationSummary = null;
+        if (plan.errorCode === "VERIFICATION_PLAN_NOT_FOUND") {
+          console.log(`[CodeRequest] VERIFICATION_PLAN_NOT_FOUND, diagnostics:`, plan.diagnostics);
+        } else if (plan.steps.length > 0) {
+          const runner = new VerificationRunner();
+          verificationSummary = await runner.runPlan(plan.steps, {
+            permissionLevel: config.permissionMode,
+            signal: ctx.signal,
+          });
+          console.log(`[CodeRequest] verification: status=${verificationSummary.status} steps=${verificationSummary.steps.length}`);
+        }
+
+        // 12. 最终状态裁决
+        const finalState = resolveCodeRunFinalState({
+          codeRunFacts: facts,
+          mutationEvidence: evidence,
+          verificationSummary,
+        });
+        console.log(`[CodeRequest] final: status=${finalState.status}`);
+
+        // 13. 发送确定性结果卡片
+        const card: CodeVerificationCard = {
+          ...finalState.card,
+          workspaceRoot: config.workspaceRoot,
+        };
+        emitAgUiEvent(ctx, {
+          type: "code_verification_card",
+          payload: card,
           runId: ctx.runId,
         });
       } finally {
