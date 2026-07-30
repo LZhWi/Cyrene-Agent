@@ -291,6 +291,8 @@ interface ModelSettings {
   disableLangGraph?: boolean;
   optimizeFirstRound?: boolean;
   thinkingOverride?: -1 | 0 | 1;
+  /** 上下文窗口大小（Token）。默认 256000。 */
+  contextWindowTokens?: number;
 }
 
 type ScheduleConfig =
@@ -807,6 +809,7 @@ const baseUrlInput = document.getElementById("base-url") as HTMLInputElement;
 const baseUrlResetBtn = document.getElementById("base-url-reset-btn") as HTMLButtonElement;
 const modelInput = document.getElementById("model-input") as HTMLInputElement;
 const modelInputSuggestions = document.getElementById("model-input-suggestions") as HTMLDataListElement;
+const contextWindowInput = document.getElementById("context-window-input") as HTMLInputElement;
 const apiKeyInput = document.getElementById("api-key") as HTMLInputElement;
 const apiKeyLabel = document.getElementById("api-key-label") as HTMLElement;
 const apiKeyHint = document.getElementById("api-key-hint") as HTMLElement;
@@ -1584,6 +1587,7 @@ async function loadConfig(): Promise<void> {
     toggleEnableThinking.checked = cfg.thinkingOverride === 1;
     toggleDisableThinking.checked = cfg.thinkingOverride === -1;
     toggleDisableMaxToken.checked = !!cfg.disableMaxToken;
+    contextWindowInput.value = String(cfg.contextWindowTokens ?? 256000);
 
     // 视觉模型配置已并入 applyPreset（preferredVision 参数）。
 
@@ -3185,6 +3189,7 @@ apiForm.addEventListener("submit", async (e) => {
       },
       thinkingOverride: toggleEnableThinking.checked ? 1 : toggleDisableThinking.checked ? -1 : 0,
       disableMaxToken: toggleDisableMaxToken.checked,
+      contextWindowTokens: Math.max(4096, parseInt(contextWindowInput.value, 10) || 256000),
     });
     setSaveStatus("已保存", "is-ok");
   } catch {

@@ -61,6 +61,7 @@ import { CyreneAgent } from "./orchestrator/cyrene-agent";
 import { validateSearchApiKey } from "./orchestrator/search-backend-filter";
 import { indexConversationTurn } from "./orchestrator/history-tools";
 import { buildToneInjection } from "./orchestrator/tone-injector";
+import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "./orchestrator/model-config";
 import { getAdapter, buildVendorUrl, getAdapterForConfig, createSseReader } from "./orchestrator/vendors";
 import type {
   ChatResponse,
@@ -603,6 +604,8 @@ interface ModelSettings {
   optimizeFirstRound?: boolean;
   thinkingOverride?: -1 | 0 | 1;
   disableMaxToken?: boolean;
+  /** 上下文窗口大小（Token）。默认 256000，来自 DEFAULT_CONTEXT_WINDOW_TOKENS。唯一定义点。 */
+  contextWindowTokens: number;
 }
 
 /** 视觉模型配置（独立视觉模型，非多模态直发场景）。全空 = 未启用。 */
@@ -874,6 +877,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   rerankerMode: "light",
   embeddingModel: "minilm",
   multimodal: false,
+  contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
 };
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
@@ -1199,6 +1203,10 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
     disableLangGraph: input?.disableLangGraph,
     thinkingOverride: input?.thinkingOverride,
     disableMaxToken: input?.disableMaxToken,
+    contextWindowTokens: typeof input?.contextWindowTokens === "number" && Number.isFinite(input.contextWindowTokens)
+      && input.contextWindowTokens > 0
+      ? Math.round(input.contextWindowTokens)
+      : DEFAULT_CONTEXT_WINDOW_TOKENS,
   };
 }
 

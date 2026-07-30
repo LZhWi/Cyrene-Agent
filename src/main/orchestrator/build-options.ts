@@ -181,6 +181,8 @@ export interface ModelSettingsLite {
   stickerSimilarityThreshold?: number;
   disableLangGraph?: boolean;
   optimizeFirstRound?: boolean;
+  /** 上下文窗口大小（Token）。来自 ModelSettings.contextWindowTokens。 */
+  contextWindowTokens?: number;
 }
 
 export interface StyleSettingsLite {

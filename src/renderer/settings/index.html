@@ -135,6 +135,12 @@
               <input id="model-input" type="text" placeholder="选厂商后自动填入，可手填覆盖" autocomplete="off" list="model-input-suggestions" />
               <datalist id="model-input-suggestions"></datalist>
             </label>
+
+            <label class="field">
+              <span>上下文窗口（Token）</span>
+              <input id="context-window-input" type="number" min="4096" step="1000" placeholder="256000" autocomplete="off" />
+              <span class="form-hint">默认 256000，请按当前模型的实际上下文上限调整。</span>
+            </label>
           </div>
 
           <div class="api-note">
