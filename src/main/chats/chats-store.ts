@@ -34,6 +34,14 @@ let indexPath = "";
 let indexCache: ChatSessionMeta[] = [];
 let initialized = false;
 
+function isConversationMode(value: unknown): value is ConversationMode {
+  return value === "chat" || value === "work" || value === "code";
+}
+
+function inferLegacyMode(purpose: ChatSessionPurpose | undefined): ConversationMode {
+  return purpose === "proactive-chat" ? "chat" : "work";
+}
+
 function ensureDirs(): void {
   if (!fs.existsSync(rootDir)) fs.mkdirSync(rootDir, { recursive: true });
   if (!fs.existsSync(sessionsDir)) fs.mkdirSync(sessionsDir, { recursive: true });
@@ -51,10 +59,12 @@ function readIndexFromDisk(): ChatSessionMeta[] {
     const raw = fs.readFileSync(indexPath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is ChatSessionMeta => {
-      if (!item || typeof item !== "object") return false;
+    let migrated = false;
+    const normalized: ChatSessionMeta[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue;
       const meta = item as Partial<ChatSessionMeta>;
-      return (
+      const valid = (
         typeof meta.id === "string" &&
         typeof meta.title === "string" &&
         typeof meta.createdAt === "number" &&
@@ -62,7 +72,25 @@ function readIndexFromDisk(): ChatSessionMeta[] {
         typeof meta.messageCount === "number" &&
         (meta.purpose === undefined || meta.purpose === "proactive-chat")
       );
-    });
+      if (!valid) continue;
+      const indexedMode = meta.mode;
+      const mode = isConversationMode(indexedMode)
+        ? indexedMode
+        : readSessionFile(meta.id!)?.mode ?? inferLegacyMode(meta.purpose);
+      if (mode !== indexedMode) migrated = true;
+      normalized.push({
+        id: meta.id!,
+        title: meta.title!,
+        identityId: meta.identityId ?? null,
+        createdAt: meta.createdAt!,
+        updatedAt: meta.updatedAt!,
+        messageCount: meta.messageCount!,
+        purpose: meta.purpose,
+        mode,
+      });
+    }
+    if (migrated) atomicWriteJson(indexPath, normalized);
+    return normalized;
   } catch (err) {
     console.warn("[chats-store] index.json 解析失败，重置为空:", err);
     return [];
@@ -89,8 +117,8 @@ function readSessionFile(id: string): ChatSession | null {
       return null;
     }
     // 旧会话迁移：无 mode 字段时根据 purpose 推断
-    if (!parsed.mode) {
-      parsed.mode = parsed.purpose === "proactive-chat" ? "chat" : "work";
+    if (!isConversationMode(parsed.mode)) {
+      parsed.mode = inferLegacyMode(parsed.purpose);
     }
     return parsed;
   } catch (err) {
@@ -112,6 +140,7 @@ function metaFromSession(session: ChatSession): ChatSessionMeta {
     updatedAt: session.updatedAt,
     messageCount: session.messages.length,
     purpose: session.purpose,
+    mode: isConversationMode(session.mode) ? session.mode : inferLegacyMode(session.purpose),
   };
 }
 
@@ -151,9 +180,12 @@ export function getRootDir(): string {
   return rootDir;
 }
 
-export function listSessions(): ChatSessionMeta[] {
+export function listSessions(options?: { mode?: ConversationMode }): ChatSessionMeta[] {
   // 返回深拷贝，避免外部修改影响缓存
-  return indexCache.map((m) => ({ ...m }));
+  const sessions = options?.mode
+    ? indexCache.filter((session) => session.mode === options.mode)
+    : indexCache;
+  return sessions.map((m) => ({ ...m }));
 }
 
 export function getSession(id: string): ChatSession | null {

@@ -54,6 +54,7 @@ describe("agui-bridge sticker event ordering", () => {
   it("delivers sticker side effects before RUN_FINISHED so renderer keeps listening", async () => {
     vi.resetModules();
     mocks.handlers.clear();
+    mocks.getSession.mockReturnValue({ id: "chat-sticker", mode: "chat" });
     const { registerAgUiIpc } = await import("./agui-bridge");
     const sent: unknown[] = [];
     const sender = {
@@ -86,16 +87,20 @@ describe("agui-bridge sticker event ordering", () => {
 
     const handler = mocks.handlers.get(IPC.AGUI_RUN);
     if (!handler) throw new Error("AGUI_RUN handler was not registered");
-    await handler({ sender }, { messages: [{ role: "user", content: "累了" }], style: "01_default.md" });
+    await handler(
+      { sender },
+      { messages: [{ role: "user", content: "累了" }], sessionId: "chat-sticker", style: "01_default.md" },
+    );
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const eventTypes = sent.map((event) => (event as { type?: string; name?: string }).name ?? (event as { type?: string }).type);
     expect(eventTypes).toEqual(["RUN_STARTED", "cyrene.sticker", "RUN_FINISHED"]);
   });
 
-  it("passes renderer styleId through to build options", async () => {
+  it("uses the Chat session mode while preserving renderer styleId", async () => {
     vi.resetModules();
     mocks.handlers.clear();
+    mocks.getSession.mockReturnValue({ id: "chat-style", mode: "chat" });
     const { registerAgUiIpc } = await import("./agui-bridge");
     const buildOptions = vi.fn(async () => ({
       options: {
@@ -118,7 +123,12 @@ describe("agui-bridge sticker event ordering", () => {
     if (!handler) throw new Error("AGUI_RUN handler was not registered");
     await handler(
       { sender },
-      { messages: [{ role: "user", content: "hi" }], styleId: "lively", executionMode: "chat" },
+      {
+        messages: [{ role: "user", content: "hi" }],
+        sessionId: "chat-style",
+        styleId: "lively",
+        executionMode: "work",
+      },
     );
 
     expect(buildOptions).toHaveBeenCalledWith(expect.objectContaining({
@@ -154,10 +164,13 @@ describe("agui-bridge sticker event ordering", () => {
     }, {
       messages: [{ role: "user", content: "修改项目文件" }],
       sessionId: "work-chat",
-      executionMode: "work",
+      executionMode: "chat",
     });
 
-    expect(buildOptions).toHaveBeenCalledOnce();
+    expect(buildOptions).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "work-chat",
+      executionMode: "work",
+    }));
     expect(mocks.runCyreneAgent).toHaveBeenCalledOnce();
     expect(mocks.runCodeRequest).not.toHaveBeenCalled();
   });
@@ -195,7 +208,7 @@ describe("agui-bridge sticker event ordering", () => {
       messages: [{ role: "user", content: "修复代码" }],
       sessionId: "code-chat",
       styleId: "default",
-      executionMode: "code",
+      executionMode: "work",
     });
 
     expect(ack).toMatchObject({ success: true });

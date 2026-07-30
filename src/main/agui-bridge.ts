@@ -63,11 +63,11 @@ export interface AguiRunInput {
   style?: string;
   /** 本轮表达风格，与 executionMode 正交。 */
   styleId?: StyleId | string;
-  sessionId?: string;    // 会话 ID，用于历史召回按会话隔离（可选，默认 "default"）
+  sessionId?: string;    // 会话 ID；桌面运行模式只信任该会话持久化的 mode
   /** 外部渠道入口。桌面聊天不传；微信/飞书用于注入渠道语气规则。 */
   channel?: RelationshipChannel;
-  /** 显式运行模式；桌面聊天始终显式传入。 */
-  executionMode?: AgentExecutionMode | "soul-only" | "collaboration";
+  /** @deprecated 仅保留 Renderer 兼容；主进程按 ChatSession.mode 分流并忽略该值。 */
+  executionMode?: AgentExecutionMode | "code" | "soul-only" | "collaboration";
   /** 本轮附件（文本内容，临时注入系统上下文，不存历史）。 */
   attachments?: { name: string; text: string }[];
   /** 本轮图片附件。主进程会安全读取并转成 OpenAI-compatible image_url content block。 */
@@ -148,40 +148,49 @@ export function registerAgUiIpc(
     // ── 顶层模式分流：读取 ChatSession.mode（唯一可信来源） ──
     // Code 模式完全绕过 CyreneAgent、CITA、WorkLoop
     const sessionId = input.sessionId;
-    if (sessionId) {
-      const session = chatsStore.getSession(sessionId);
-      const mode = session?.mode ?? "work";
-      if (mode === "code") {
-        console.log("[AgUiBridge] mode=code, dispatching to runCodeRequest (bypass CyreneAgent)");
-        const userText = (() => {
-          const msgs = input.messages;
-          for (let i = msgs.length - 1; i >= 0; i--) {
-            const m = msgs[i] as { role?: string; content?: string };
-            if (m?.role === "user") return m.content ?? "";
-          }
-          return "";
-        })();
-        const codeSend = (codeEvent: unknown): void => send(normalizeCodeRendererEvent(codeEvent));
-        void runCodeRequest(
-          { text: userText, sessionId },
-          session!,
-          { runId, sessionId, signal: new AbortController().signal, emitEvent: codeSend },
-        ).catch((err) => {
-          const message = err instanceof Error ? err.message : String(err);
-          codeSend({ type: "run_error", message, runId, threadId: sessionId });
-        }).finally(() => {
-          lifecycle?.onConversationEnded();
-        });
+    if (!sessionId) {
+      lifecycle?.onConversationEnded();
+      throw new Error("AGUI_RUN 缺少 sessionId");
+    }
+    const session = chatsStore.getSession(sessionId);
+    if (!session) {
+      lifecycle?.onConversationEnded();
+      throw new Error(`AGUI_RUN 会话不存在: ${sessionId}`);
+    }
+    const mode = session.mode ?? (session.purpose === "proactive-chat" ? "chat" : "work");
+    if (mode === "code") {
+      console.log("[AgUiBridge] mode=code, dispatching to runCodeRequest (bypass CyreneAgent)");
+      const userText = (() => {
+        const msgs = input.messages;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i] as { role?: string; content?: string };
+          if (m?.role === "user") return m.content ?? "";
+        }
+        return "";
+      })();
+      const codeSend = (codeEvent: unknown): void => send(normalizeCodeRendererEvent(codeEvent));
+      void runCodeRequest(
+        { text: userText, sessionId },
+        session,
+        { runId, sessionId, signal: new AbortController().signal, emitEvent: codeSend },
+      ).catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        codeSend({ type: "run_error", message, runId, threadId: sessionId });
+      }).finally(() => {
+        lifecycle?.onConversationEnded();
+      });
 
-        // CodeRunWorker 持有后台任务；Renderer/WebContents 仅接收事件，不拥有任务生命周期。
-        return { success: true, runId };
-      }
+      // CodeRunWorker 持有后台任务；Renderer/WebContents 仅接收事件，不拥有任务生命周期。
+      return { success: true, runId };
     }
 
     // ── chat / work 模式：现有 CyreneAgent 路径 ──
     let built;
     try {
-      built = await perf.track("build_options", () => buildOptionsFn!(input));
+      built = await perf.track("build_options", () => buildOptionsFn!({
+        ...input,
+        executionMode: mode,
+      }));
     } catch (error) {
       perf.dump();
       lifecycle?.onConversationEnded();

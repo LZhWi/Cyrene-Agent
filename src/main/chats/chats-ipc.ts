@@ -15,7 +15,7 @@
 
 import { BrowserWindow, ipcMain, type WebContents, dialog } from "electron";
 import { IPC } from "../../shared/ipc-channels";
-import type { ChatMessage, ConversationWorkspaceBinding } from "../../shared/chat-types";
+import type { ChatMessage, ConversationMode, ConversationWorkspaceBinding } from "../../shared/chat-types";
 import * as chatsStore from "./chats-store";
 import * as fs from "fs";
 import * as path from "path";
@@ -36,7 +36,10 @@ function broadcastChanged(senderWebContents?: WebContents | null): void {
 export function registerChatsIpc(): void {
   chatsStore.initialize();
 
-  ipcMain.handle(IPC.CHATS_LIST, () => chatsStore.listSessions());
+  ipcMain.handle(
+    IPC.CHATS_LIST,
+    (_event, options?: { mode?: ConversationMode }) => chatsStore.listSessions(options),
+  );
 
   ipcMain.handle(IPC.CHATS_GET, (_event, id: string) => chatsStore.getSession(id));
   ipcMain.handle(IPC.CHATS_GET_PAGE, (_event, payload: { id: string; before?: number | null; limit?: number }) => {

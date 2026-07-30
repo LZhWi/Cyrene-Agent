@@ -40,6 +40,98 @@ describe("chats store", () => {
     expect(page?.session.messageCount).toBe(3);
   });
 
+  it("includes the immutable session mode in every list item", async () => {
+    const { createSession, initialize, listSessions } = await import("./chats-store");
+    initialize();
+
+    createSession({ mode: "chat" });
+    createSession({ mode: "work" });
+    createSession({ mode: "code" });
+
+    expect(listSessions().map((session) => session.mode).sort()).toEqual(["chat", "code", "work"]);
+  });
+
+  it("filters session metadata by mode without changing the unfiltered result", async () => {
+    const { createSession, initialize, listSessions } = await import("./chats-store");
+    initialize();
+
+    const chat = createSession({ mode: "chat" });
+    const work = createSession({ mode: "work" });
+    const code = createSession({ mode: "code" });
+
+    expect(listSessions({ mode: "code" })).toEqual([
+      expect.objectContaining({ id: code.id, mode: "code" }),
+    ]);
+    expect(new Set(listSessions().map((session) => session.id))).toEqual(
+      new Set([chat.id, work.id, code.id]),
+    );
+  });
+
+  it("backfills legacy index modes from the session before applying legacy defaults", async () => {
+    const root = path.join(electronMock.userDataDir, "cyrene-chats");
+    const sessionsDir = path.join(root, "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const baseMeta = {
+      title: "旧对话",
+      identityId: null,
+      createdAt: 1,
+      updatedAt: 1,
+      messageCount: 0,
+    };
+    fs.writeFileSync(path.join(root, "index.json"), JSON.stringify([
+      { ...baseMeta, id: "legacy-work" },
+      { ...baseMeta, id: "legacy-proactive", purpose: "proactive-chat" },
+      { ...baseMeta, id: "existing-code" },
+      { ...baseMeta, id: "invalid-mode" },
+    ]));
+    const baseSession = {
+      title: "旧对话",
+      identityId: null,
+      messages: [],
+      createdAt: 1,
+      updatedAt: 1,
+      schemaVersion: 1,
+    };
+    fs.writeFileSync(path.join(sessionsDir, "legacy-work.json"), JSON.stringify({
+      ...baseSession,
+      id: "legacy-work",
+    }));
+    fs.writeFileSync(path.join(sessionsDir, "legacy-proactive.json"), JSON.stringify({
+      ...baseSession,
+      id: "legacy-proactive",
+      purpose: "proactive-chat",
+    }));
+    fs.writeFileSync(path.join(sessionsDir, "existing-code.json"), JSON.stringify({
+      ...baseSession,
+      id: "existing-code",
+      mode: "code",
+      codeSession: { clineMode: "act", tasks: [] },
+    }));
+    fs.writeFileSync(path.join(sessionsDir, "invalid-mode.json"), JSON.stringify({
+      ...baseSession,
+      id: "invalid-mode",
+      mode: "invalid",
+    }));
+
+    const { initialize, listSessions } = await import("./chats-store");
+    initialize();
+
+    expect(listSessions().map(({ id, mode }) => ({ id, mode }))).toEqual([
+      { id: "legacy-work", mode: "work" },
+      { id: "legacy-proactive", mode: "chat" },
+      { id: "existing-code", mode: "code" },
+      { id: "invalid-mode", mode: "work" },
+    ]);
+    expect(JSON.parse(fs.readFileSync(path.join(root, "index.json"), "utf8"))).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "legacy-work", mode: "work" }),
+        expect.objectContaining({ id: "legacy-proactive", mode: "chat" }),
+        expect.objectContaining({ id: "existing-code", mode: "code" }),
+        expect.objectContaining({ id: "invalid-mode", mode: "work" }),
+      ]),
+    );
+  });
+
   it("persists and indexes a session purpose", async () => {
     let store = await import("./chats-store");
     store.initialize();

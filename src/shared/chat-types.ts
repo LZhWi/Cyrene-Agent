@@ -128,6 +128,7 @@ export interface ChatSessionMeta {
   updatedAt: number;
   messageCount: number;
   purpose?: ChatSessionPurpose;
+  mode: ConversationMode;
 }
 
 export const CHAT_SCHEMA_VERSION = 1 as const;

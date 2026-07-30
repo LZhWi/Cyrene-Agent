@@ -593,7 +593,7 @@ interface ChatStoreSession {
 }
 
 interface ChatStoreApi {
-  list: () => Promise<ChatSessionMetaUI[]>;
+  list: (options?: { mode?: "chat" | "work" | "code" }) => Promise<ChatSessionMetaUI[]>;
   get: (id: string) => Promise<ChatStoreSession | null>;
   getPage: (id: string, before: number | null, limit: number) => Promise<{ session: Omit<ChatStoreSession, "messages">; messages: ChatStoreSession["messages"]; hasMore: boolean } | null>;
   create: (payload?: { title?: string; identityId?: string | null; mode?: "chat" | "work" | "code" }) => Promise<ChatStoreSession>;
