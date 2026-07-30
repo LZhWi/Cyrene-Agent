@@ -200,6 +200,8 @@ export function registerDocumentTools(): void {
       "参数：filename（.xlsx 结尾，可含子目录），sheets（工作表数组），style（可选），colors（可选）。",
     enabled: true,
     risk: "fs-write",
+    effectKind: "mutation" as const,
+    verificationPolicy: "artifact" as const,
     inputSchema: {
       type: "object",
       properties: {
@@ -381,6 +383,10 @@ export function registerDocumentTools(): void {
       "参数：filename（只传文件名，如 AI新闻汇总.docx，不要传绝对路径；输出目录由系统固定为桌面），title（标题），paragraphs（段落数组），style（可选预设风格）。",
     enabled: true,
     risk: "fs-write",
+    effectKind: "mutation" as const,
+    verificationPolicy: "artifact" as const,
+    soulActionLabel: "生成 Word 文档",
+    completionEvidence: [{ kind: "tool_succeeded" }],
     inputSchema: {
       type: "object",
       properties: {
@@ -468,6 +474,8 @@ export function registerDocumentTools(): void {
       "参数：filename（.pdf 结尾），title（标题），paragraphs（段落数组）。",
     enabled: true,
     risk: "fs-write",
+    effectKind: "mutation" as const,
+    verificationPolicy: "artifact" as const,
     inputSchema: {
       type: "object",
       properties: {
@@ -534,6 +542,8 @@ export function registerDocumentTools(): void {
       "参数：filename（.md 结尾），content（markdown 内容字符串）。",
     enabled: true,
     risk: "fs-write",
+    effectKind: "mutation" as const,
+    verificationPolicy: "artifact" as const,
     inputSchema: {
       type: "object",
       properties: {

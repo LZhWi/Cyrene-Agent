@@ -6,6 +6,7 @@ import * as path from "path";
 import { toolRegistry } from "./tool-registry";
 import { captionImage } from "./vision-captioner";
 import type { ToolContext } from "./tool-context";
+import type { VerificationPolicy } from "./tool-registry";
 
 const LOG_PREFIX = "[FsTools]";
 
@@ -38,11 +39,22 @@ function humanBytes(n: number): string {
 async function executeReadFile(args: Record<string, unknown>): Promise<string> {
   const raw = String(args.path || "").trim();
   const filePath = ensureAbsolute(raw);
-  if (!filePath) return "[错误] path 必须是绝对路径";
+  if (!filePath) {
+    console.log(LOG_PREFIX, "read_file 非绝对路径:", raw, "cwd=", process.cwd());
+    return JSON.stringify({ success: false, errorCode: "INVALID_PATH", error: "path 必须是绝对路径: " + raw, retryable: false });
+  }
 
   const stat = safeStat(filePath);
-  if (!stat) return "[错误] 文件不存在或无法访问: " + filePath;
-  if (!stat.isFile()) return "[错误] 不是文件（是目录或其它）: " + filePath;
+  if (!stat) {
+    console.log(LOG_PREFIX, "read_file 文件不存在:", filePath, "raw=", raw, "cwd=", process.cwd());
+    return JSON.stringify({
+      success: false,
+      errorCode: "FILE_NOT_FOUND",
+      error: "文件不存在或无法访问: " + filePath + "。不要重复读取相同路径，请先用 search_code 或 list_dir 重新定位文件。",
+      retryable: true,
+    });
+  }
+  if (!stat.isFile()) return JSON.stringify({ success: false, errorCode: "NOT_A_FILE", error: "不是文件（是目录或其它）: " + filePath, retryable: false });
 
   const startLine = Math.max(1, Number(args.startLine) || 1);
   const maxLines = Math.max(1, Math.min(2000, Number(args.maxLines) || 500));
@@ -54,7 +66,7 @@ async function executeReadFile(args: Record<string, unknown>): Promise<string> {
     buf = fs.readFileSync(filePath);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return "[错误] 读取失败: " + msg;
+    return JSON.stringify({ success: false, errorCode: "READ_FAILED", error: "读取失败: " + msg, retryable: false });
   }
 
   const truncatedSize = buf.length > READ_MAX_BYTES;
@@ -65,26 +77,37 @@ async function executeReadFile(args: Record<string, unknown>): Promise<string> {
   let nullCount = 0;
   for (let i = 0; i < head.length; i++) if (head[i] === 0) nullCount++;
   if (nullCount > head.length * 0.05) {
-    return "[错误] 这看起来是二进制文件，read_file 只支持文本。如果是图片，请改用 read_image。\n" +
-      "path: " + filePath + "\nsize: " + humanBytes(stat.size);
+    return JSON.stringify({
+      success: false,
+      errorCode: "BINARY_FILE",
+      error: "这看起来是二进制文件，read_file 只支持文本。如果是图片，请改用 read_image。",
+      path: filePath,
+      size: humanBytes(stat.size),
+      retryable: false,
+    });
   }
 
   const text = slice.toString("utf8");
   const lines = text.split(/\r?\n/);
-  const total = lines.length;
+  const totalLines = lines.length;
   const sliceLines = lines.slice(startLine - 1, startLine - 1 + maxLines);
+  const endLine = startLine + sliceLines.length - 1;
 
-  const head2 = "path: " + filePath + "\nsize: " + humanBytes(stat.size) +
-    "\ntotal_lines: ~" + total + (truncatedSize ? "  [文件已按 256KB 截断]" : "") +
-    "\nshowing: line " + startLine + " ~ " + (startLine + sliceLines.length - 1) + "\n\n";
+  // 结构化输出
+  const result = {
+    path: filePath,
+    startLine,
+    endLine,
+    totalLines,
+    content: sliceLines.map((line, i) => {
+      const ln = startLine + i;
+      return String(ln).padStart(5, " ") + " | " + line;
+    }).join("\n"),
+    truncated: truncatedSize,
+  };
 
-  // 带行号方便 agent 后续精确引用
-  const numbered = sliceLines.map((line, i) => {
-    const ln = startLine + i;
-    return String(ln).padStart(5, " ") + " | " + line;
-  }).join("\n");
-
-  return head2 + numbered;
+  console.log(LOG_PREFIX, "read_file 完成: lines=" + startLine + ".." + endLine + "/" + totalLines + " truncated=" + truncatedSize);
+  return JSON.stringify(result);
 }
 
 toolRegistry.register({
@@ -104,6 +127,8 @@ toolRegistry.register({
     "参数：path (必填，绝对路径)，startLine (可选，默认 1)，maxLines (可选，默认 500)。",
   enabled: true,
   risk: "fs-read",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -202,6 +227,8 @@ toolRegistry.register({
     "参数：path (必填，绝对路径)，showHidden (可选，是否显示以 . 开头的隐藏项，默认 false)。",
   enabled: true,
   risk: "fs-read",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -247,8 +274,47 @@ async function executeWriteFile(args: Record<string, unknown>): Promise<string> 
   }
 
   const st = safeStat(filePath);
-  return "[OK] 已" + (append ? "追加" : "写入") + ": " + filePath +
-    (st ? "\nsize: " + humanBytes(st.size) : "");
+  return JSON.stringify({
+    tool: "write_file",
+    filePath,
+    action: append ? "appended" : "written",
+    sizeBytes: st?.size,
+    success: true,
+  });
+}
+
+function resolveWriteFilePolicy(args: Record<string, unknown>): VerificationPolicy {
+  const rawPath = String(args.path ?? "");
+  const normalizedPath = rawPath.replace(/\\/g, "/").toLowerCase();
+  const fileName = normalizedPath.split("/").pop() ?? "";
+  const ext = normalizedPath.slice(normalizedPath.lastIndexOf("."));
+
+  // 配置文件名 -> code（精确匹配）
+  const codeConfigFiles = new Set([
+    "package.json", "tsconfig.json", "tsconfig.main.json", "tsconfig.preload.json",
+    "tsconfig.skills.json", "vite.config.ts", "vite.config.js", "vitest.config.ts",
+    ".eslintrc", ".eslintrc.js", ".eslintrc.json", ".prettierrc",
+    "babel.config.js", "babel.config.json", "webpack.config.js",
+  ]);
+  if (codeConfigFiles.has(fileName)) return "code";
+
+  // 明确代码扩展名 -> code
+  const codeExtensions = [".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".go", ".rs", ".java", ".c", ".cpp", ".h", ".cs", ".rb", ".php", ".swift", ".kt"];
+  if (codeExtensions.includes(ext)) return "code";
+
+  // 明确产物扩展名 -> artifact
+  const artifactExtensions = [".docx", ".xlsx", ".pdf", ".csv", ".png", ".jpg", ".jpeg", ".gif", ".svg", ".bmp", ".ico", ".mp3", ".mp4", ".zip", ".tar", ".gz"];
+  if (artifactExtensions.includes(ext)) return "artifact";
+
+  // 模糊扩展名 -> 检查路径上下文
+  const ambiguousExtensions = [".json", ".md", ".html", ".htm", ".yml", ".yaml", ".xml", ".toml", ".ini", ".env"];
+  if (ambiguousExtensions.includes(ext)) {
+    if (/\/src\/|\/test[s]?\//.test(normalizedPath)) return "code";
+    if (/\/dist\/|\/build\/|\/output\//.test(normalizedPath)) return "artifact";
+    return "unknown";
+  }
+
+  return "unknown";
 }
 
 toolRegistry.register({
@@ -267,6 +333,8 @@ toolRegistry.register({
     "参数：path (绝对路径)，content (要写的字符串)，append (可选，true=追加，默认 false=覆盖)，createDirs (可选，默认 true)。",
   enabled: true,
   risk: "fs-write",
+  effectKind: "mutation" as const,
+  verificationPolicyResolver: resolveWriteFilePolicy,
   inputSchema: {
     type: "object",
     properties: {
@@ -364,6 +432,8 @@ toolRegistry.register({
     "参数：path (必填，绝对路径)。",
   enabled: true,
   risk: "fs-read",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   needsContext: true,
   inputSchema: {
     type: "object",

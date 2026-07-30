@@ -96,7 +96,7 @@ const aguiApi = {
     assistantTurnId?: string;
     style?: string;
     styleId?: string;
-    executionMode?: "work" | "chat";
+    executionMode?: "work" | "chat" | "code";
     sessionId?: string;
     attachments?: { name: string; text: string }[];
     imageAttachments?: { name: string; filePath: string; mime?: string }[];
@@ -211,6 +211,12 @@ const cyreneThemeApi = {
     ipcRenderer.on(IPC.UI_THEME_CHANGED, listener);
     return () => ipcRenderer.off(IPC.UI_THEME_CHANGED, listener);
   },
+  getRadius: () => ipcRenderer.invoke(IPC.UI_THEME_RADIUS_GET) as Promise<boolean>,
+  onRadiusChanged: (callback: (theme: boolean) => void) => {
+    const listener = (_e: unknown, theme: boolean) => callback(theme);
+    ipcRenderer.on(IPC.UI_THEME_RADIUS_CHANGED, listener);
+    return () => ipcRenderer.off(IPC.UI_THEME_RADIUS_CHANGED, listener);
+  },
 };
 
 contextBridge.exposeInMainWorld("cyreneTheme", cyreneThemeApi);
@@ -241,6 +247,8 @@ const settingsApi = {
   },
   getGeneral: () => ipcRenderer.invoke(IPC.SETTINGS_GET_GENERAL),
   saveGeneral: (config: unknown) => ipcRenderer.invoke(IPC.SETTINGS_SAVE_GENERAL, config),
+  getTimeoutSettings: () => ipcRenderer.invoke(IPC.SETTINGS_GET_TIMEOUT_SETTINGS),
+  saveTimeoutSettings: (config: unknown) => ipcRenderer.invoke(IPC.SETTINGS_SAVE_TIMEOUT_SETTINGS, config),
   pickUiFont: () => ipcRenderer.invoke(IPC.SETTINGS_PICK_UI_FONT) as Promise<string | null>,
   importUiFont: (sourcePath: string) => ipcRenderer.invoke(IPC.SETTINGS_IMPORT_UI_FONT, sourcePath) as Promise<UiFont>,
   resetUiFont: () => ipcRenderer.invoke(IPC.SETTINGS_RESET_UI_FONT) as Promise<UiFont>,
@@ -248,6 +256,7 @@ const settingsApi = {
   closeSidebar: () => ipcRenderer.send(IPC.SETTINGS_CLOSE_SIDEBAR),
   openTasks: () => ipcRenderer.send(IPC.SETTINGS_OPEN_TASKS),
   closeTasks: () => ipcRenderer.send(IPC.SETTINGS_CLOSE_TASKS),
+  openChromeGpu: () => ipcRenderer.send(IPC.SETTINGS_OPEN_CHROME_GPU),
   setPetAlwaysOnTop: (value: boolean) => ipcRenderer.send(IPC.SETTINGS_SET_PET_ALWAYS_ON_TOP, value),
   setPetVisible: (value: boolean) => ipcRenderer.send(IPC.SETTINGS_SET_PET_VISIBLE, value),
   setPetZoom: (value: number) => ipcRenderer.send(IPC.SETTINGS_SET_PET_ZOOM, value),
@@ -440,11 +449,11 @@ contextBridge.exposeInMainWorld("live2dDiagnostics", live2dDiagnosticsApi);
 
 // 聊天会话存储（多对话历史）
 const chatStoreApi = {
-  list: () => ipcRenderer.invoke(IPC.CHATS_LIST),
+  list: (options?: { mode?: "chat" | "work" | "code" }) => ipcRenderer.invoke(IPC.CHATS_LIST, options),
   get: (id: string) => ipcRenderer.invoke(IPC.CHATS_GET, id),
   getPage: (id: string, before: number | null, limit: number) =>
     ipcRenderer.invoke(IPC.CHATS_GET_PAGE, { id, before, limit }),
-  create: (payload?: { title?: string; identityId?: string | null }) =>
+  create: (payload?: { title?: string; identityId?: string | null; mode?: "chat" | "work" | "code" }) =>
     ipcRenderer.invoke(IPC.CHATS_CREATE, payload ?? {}),
   append: (id: string, message: unknown) =>
     ipcRenderer.invoke(IPC.CHATS_APPEND, { id, message }),
@@ -481,9 +490,42 @@ const chatStoreApi = {
     ipcRenderer.on(IPC.CHATS_SWITCH_SESSION, listener);
     return () => ipcRenderer.removeListener(IPC.CHATS_SWITCH_SESSION, listener);
   },
+  // ── 对话工作区绑定 ──────────────────────────────────────
+  setWorkspace: (sessionId: string, workspaceRoot: string) =>
+    ipcRenderer.invoke(IPC.CHATS_SET_WORKSPACE, { sessionId, workspaceRoot }),
+  getWorkspace: (sessionId: string) =>
+    ipcRenderer.invoke(IPC.CHATS_GET_WORKSPACE, sessionId),
+  clearWorkspace: (sessionId: string) =>
+    ipcRenderer.invoke(IPC.CHATS_CLEAR_WORKSPACE, sessionId),
+  pickWorkspaceFolder: () =>
+    ipcRenderer.invoke(IPC.CHATS_PICK_WORKSPACE_FOLDER),
+  onWorkspaceChanged: (callback: (payload: { sessionId: string; binding: unknown }) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, payload: { sessionId: string; binding: unknown }) =>
+      callback(payload);
+    ipcRenderer.on(IPC.CHATS_WORKSPACE_CHANGED, listener);
+    return () => ipcRenderer.removeListener(IPC.CHATS_WORKSPACE_CHANGED, listener);
+  },
 };
 
 contextBridge.exposeInMainWorld("chatStore", chatStoreApi);
+
+// Code run 状态查询 + 验证审批
+const codeRunApi = {
+  getRun: (runId: string) =>
+    ipcRenderer.invoke(IPC.CODE_RUN_GET, runId),
+  getActiveRun: (params: { chatSessionId?: string; clineSessionId?: string }) =>
+    ipcRenderer.invoke(IPC.CODE_RUN_GET_ACTIVE, params),
+  listRuns: (chatSessionId?: string) =>
+    ipcRenderer.invoke(IPC.CODE_RUN_LIST, chatSessionId),
+  getPendingApprovals: (params: { chatSessionId?: string; runId?: string }) =>
+    ipcRenderer.invoke(IPC.CODE_VERIFICATION_GET_PENDING, params),
+  approveVerification: (approvalId: string) =>
+    ipcRenderer.invoke(IPC.CODE_VERIFICATION_APPROVE, approvalId),
+  rejectVerification: (approvalId: string) =>
+    ipcRenderer.invoke(IPC.CODE_VERIFICATION_REJECT, approvalId),
+};
+
+contextBridge.exposeInMainWorld("codeRun", codeRunApi);
 
 // Token 用量查询（设置中心 Token 面板用）
 const tokenUsageApi = {

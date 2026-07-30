@@ -13,6 +13,30 @@ export type ChatRole = "user" | "model";
 
 export type ChatSessionPurpose = "proactive-chat";
 
+/** 会话模式：创建时绑定，整个会话生命周期不变 */
+export type ConversationMode = "chat" | "work" | "code";
+
+/** Code 会话专属元数据 */
+export interface CodeSessionMetadata {
+  activeClineSessionId?: string;
+  clineMode: "plan" | "act";
+  codePreferencesVersion?: number;
+  tasks: Array<{
+    clineSessionId: string;
+    createdAt: number;
+    closedAt?: number;
+    title?: string;
+  }>;
+  pendingPrompt?: {
+    chatSessionId: string;
+    clineSessionId: string;
+    promptId: string;
+    status: "pending" | "answered" | "cancelled";
+    createdAt: number;
+    answeredAt?: number;
+  };
+}
+
 export type ChatStickerId =
   | "playful"
   | "love-happy"
@@ -64,6 +88,16 @@ export interface DocumentMessageAttachment {
   reason?: string;
 }
 
+/** 对话工作区绑定：将一个可信目录绑定到对话 */
+export interface ConversationWorkspaceBinding {
+  /** 规范化后的绝对路径（realpath + Windows 标准化） */
+  workspaceRoot: string;
+  /** 用户可见的显示名（通常是文件夹名或缩短路径） */
+  displayName: string;
+  /** 绑定时间戳 */
+  boundAt: number;
+}
+
 export interface ChatSession {
   id: string;
   title: string;
@@ -77,6 +111,12 @@ export interface ChatSession {
   // 用户是否手动改过名；true 时不再根据消息内容自动派生 title。
   // 没有此字段的老数据视为 false（向后兼容）。
   titleIsCustom?: boolean;
+  /** 对话工作区绑定（Coding Agent 使用的可信目录） */
+  workspaceBinding?: ConversationWorkspaceBinding;
+  /** 会话模式：创建时绑定，整个会话生命周期不变。旧会话无此字段时默认 "work"。 */
+  mode?: ConversationMode;
+  /** Code 会话专属元数据（mode === "code" 时使用） */
+  codeSession?: CodeSessionMetadata;
 }
 
 // index.json 里的轻量元数据（列表渲染用）。
@@ -88,6 +128,7 @@ export interface ChatSessionMeta {
   updatedAt: number;
   messageCount: number;
   purpose?: ChatSessionPurpose;
+  mode: ConversationMode;
 }
 
 export const CHAT_SCHEMA_VERSION = 1 as const;

@@ -8,6 +8,8 @@ import { addMcpServer } from "./mcp-manager";
 import { sendToLive2DWindow } from "../index";
 import { createPlayLive2DActionTool } from "./tools/play-live2d-action";
 import { resolveChatContextTimezone } from "../chat-time-context";
+import type { ToolContext } from "./tool-context";
+import { VerificationRunner, resolveBuiltinExecutable } from "./code/verification-runner";
 
 const LOG_PREFIX = "[BuiltinTools]";
 
@@ -63,7 +65,7 @@ function stripHtml(html: string): string {
   }
 }
 
-async function executeFetchUrl(args: Record<string, unknown>): Promise<string> {
+async function executeFetchUrl(args: Record<string, unknown>, ctx?: ToolContext): Promise<string> {
   const url = String(args.url || "").trim();
   if (!/^https?:\/\//i.test(url)) {
     return "[错误] url 必须以 http:// 或 https:// 开头";
@@ -73,9 +75,11 @@ async function executeFetchUrl(args: Record<string, unknown>): Promise<string> {
 
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
+  // 组合父 signal 和超时 signal
+  const combinedSignal = ctx?.signal ? AbortSignal.any([ctx.signal, ac.signal]) : ac.signal;
   try {
     const resp = await fetch(url, {
-      signal: ac.signal,
+      signal: combinedSignal,
       headers: {
         "User-Agent": "Mozilla/5.0 (Cyrene Agent) Chrome/120 Safari/537.36",
         Accept: "text/html,text/markdown,text/plain,*/*;q=0.8",
@@ -121,6 +125,8 @@ toolRegistry.register({
     "参数：url (必填，完整 http(s) 地址)，format (可选 markdown|raw，默认 markdown)。",
   enabled: true,
   risk: "network",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -182,13 +188,13 @@ function killTree(child: ReturnType<typeof spawn>): void {
   }
 }
 
-function runShellOnce(command: string, args: string[], cwd?: string): Promise<ShellResult> {
+function runShellOnce(command: string, args: string[], cwd?: string, extraEnv?: Record<string, string>): Promise<ShellResult> {
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: cwd || undefined,
       shell: false,
       windowsHide: true,
-      env: process.env,
+      env: { ...process.env, ...extraEnv },
       // stdin→/dev/null(NUL)：误启动交互式进程(python/node REPL)时让它读到 EOF 立即退出，
       // 不再卡在"等 stdin 输入"上耗满超时。stdout/stderr 仍 pipe 来收集输出。
       stdio: ["ignore", "pipe", "pipe"],
@@ -246,18 +252,43 @@ async function executeRunShell(args: Record<string, unknown>): Promise<string> {
   const cwd = args.cwd ? String(args.cwd) : undefined;
   if (!cmd) return "[错误] command 不能为空";
 
+  // 系统侧 shell policy 分类（不信任模型 purpose）
+  const { classifyShellPolicy } = require("./shell-execution-policy");
+  const policy = classifyShellPolicy(cmd, cmdArgs);
+
+  if (policy === "blocked") {
+    return JSON.stringify({
+      command: cmd, args: cmdArgs, cwd,
+      exitCode: -1, stdout: "", stderr: "[拒绝] 该命令被系统禁止执行",
+      timedOut: false, passed: false, policy, truncated: false,
+    });
+  }
+
+  if (policy === "workspace_mutation") {
+    return JSON.stringify({
+      command: cmd, args: cmdArgs, cwd,
+      exitCode: -1, stdout: "",
+      stderr: "[拒绝] 该命令可能修改工作区，请使用专用工具：代码修改用 apply_patch/write_file，验证用 run_verification",
+      timedOut: false, passed: false, policy, truncated: false,
+    });
+  }
+
   console.log(LOG_PREFIX, "run_shell:", cmd, JSON.stringify(cmdArgs), cwd ? "cwd=" + cwd : "");
   const result = await runShellOnce(cmd, cmdArgs, cwd);
   console.log(LOG_PREFIX, "run_shell 完成 exitCode=" + result.exitCode + " stdout.len=" + result.stdout.length + " stderr.len=" + result.stderr.length);
 
-  const lines: string[] = [];
-  lines.push("$ " + cmd + (cmdArgs.length ? " " + cmdArgs.join(" ") : ""));
-  if (cwd) lines.push("(cwd: " + cwd + ")");
-  lines.push("exitCode: " + result.exitCode);
-  if (result.stdout) lines.push("--- stdout ---\n" + result.stdout.trimEnd());
-  if (result.stderr) lines.push("--- stderr ---\n" + result.stderr.trimEnd());
-  if (result.truncated) lines.push("[输出已截断]");
-  return lines.join("\n");
+  // 结构化返回（保留 ShellResult 字段，供证据收集器解析）
+  return JSON.stringify({
+    command: cmd,
+    args: cmdArgs,
+    cwd,
+    exitCode: result.exitCode,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    timedOut: false,  // runShellOnce 超时时通过 kill 处理，此处为正常返回
+    truncated: result.truncated,
+    policy: "read_only",
+  });
 }
 
 toolRegistry.register({
@@ -279,6 +310,7 @@ toolRegistry.register({
     "参数：command (可执行文件名或绝对路径)，args (字符串数组)，cwd (可选工作目录)。",
   enabled: true,
   risk: "shell",
+  effectKind: "unknown" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -289,6 +321,273 @@ toolRegistry.register({
     required: ["command"],
   },
   execute: executeRunShell,
+});
+
+// ── 工具：run_verification（受限验证工具）─────────────────────
+// 唯一能产生可信 verification evidence 的工具。
+// 只执行预定义的验证命令（typecheck/test/build/lint），不接受任意命令。
+// ledgerPolicy=bypass：不缓存验证结果（相同参数在新 revision 下必须重新执行）。
+toolRegistry.register({
+  id: "run_verification",
+  name: "运行验证",
+  description:
+    "执行代码验证（类型检查/测试/构建/lint）。是唯一能产生可信验证证据的工具。\n\n" +
+    "何时用：\n" +
+    "- 代码修改后需要验证编译是否通过\n" +
+    "- 需要运行测试确认修改正确\n" +
+    "- 需要 lint 检查代码风格\n\n" +
+    "不要用于：\n" +
+    "- 读取文件内容 → read_file\n" +
+    "- 执行任意命令 → run_shell\n" +
+    "- 修改代码 → apply_patch/write_file\n\n" +
+    "参数：verificationType（验证类型：typecheck/test/build/lint），cwd（可选工作目录）。",
+  enabled: true,
+  risk: "shell",
+  effectKind: "verification" as const,
+  ledgerPolicy: "bypass" as const,
+  completionEvidence: [{ kind: "tool_succeeded" }],
+  soulActionLabel: "代码验证",
+  soulProjection: {
+    projector: "entity_detail",
+    source: "trusted_internal",
+    fields: {
+      title: "verificationType",
+      passed: "passed",
+      exitCode: "exitCode",
+      command: "command",
+      durationMs: "durationMs",
+    },
+  },
+  inputSchema: {
+    type: "object",
+    properties: {
+      verificationType: {
+        type: "string",
+        enum: ["typecheck", "test", "build", "lint"],
+        description: "验证类型：typecheck=类型检查，test=运行测试，build=构建，lint=代码风格检查",
+      },
+      cwd: { type: "string", description: "工作目录绝对路径，可选" },
+    },
+    required: ["verificationType"],
+  },
+  execute: async (args) => {
+    const verificationType = String(args.verificationType || "").trim();
+    const cwd = args.cwd ? String(args.cwd) : undefined;
+
+    if (!verificationType) return JSON.stringify({
+      success: false, errorCode: "INVALID_INPUT", error: "verificationType 不能为空",
+      verificationType: "", command: "", exitCode: -1,
+      stdout: "", stderr: "[错误] verificationType 不能为空",
+      timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
+    });
+
+    // 根据验证类型选择命令（白名单，不接受任意命令）
+    const fs = require("fs");
+    const path = require("path");
+
+    type WorkVerificationCommand = {
+      cmd: string;
+      args: string[];
+      trust: "builtin" | "workspace_script";
+      source: "tsconfig" | "vitest" | "package_script";
+      configPath?: string;
+    };
+    let verificationCommands: Record<string, WorkVerificationCommand>;
+    const actualCwd = cwd || process.cwd();
+
+    if (verificationType === "typecheck") {
+      // 1. 确定 tsconfig 路径
+      let tsconfigPath: string;
+      if (cwd) {
+        const hasMain = fs.existsSync(path.join(cwd, "tsconfig.main.json"));
+        const hasDefault = fs.existsSync(path.join(cwd, "tsconfig.json"));
+        if (hasMain) {
+          tsconfigPath = path.join(cwd, "tsconfig.main.json");
+        } else if (hasDefault) {
+          tsconfigPath = path.join(cwd, "tsconfig.json");
+        } else {
+          return JSON.stringify({
+            success: false, errorCode: "VERIFICATION_CONFIG_NOT_FOUND",
+            error: `cwd 下未找到 tsconfig.main.json 或 tsconfig.json: ${cwd}`,
+            verificationType, command: "", exitCode: -1,
+            stdout: "", stderr: `[错误] 未找到 TypeScript 配置文件: ${cwd}`,
+            timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
+            actualCwd: cwd,
+          });
+        }
+      } else {
+        tsconfigPath = "tsconfig.main.json";
+      }
+
+      // 2. 复用 VerificationRunner 的本地 CLI 解析（禁止 npx / 全局 PATH）
+      if (!resolveBuiltinExecutable("builtin:tsc", actualCwd, tsconfigPath)) {
+        return JSON.stringify({
+          success: false, errorCode: "TYPESCRIPT_NOT_FOUND",
+          error: `本地 TypeScript 未安装: ${actualCwd}`,
+          verificationType, command: "", exitCode: -1,
+          stdout: "", stderr: `[TYPESCRIPT_NOT_FOUND] local typescript CLI not found in ${actualCwd}`,
+          timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
+          actualCwd: cwd,
+        });
+      }
+
+      verificationCommands = {
+        typecheck: {
+          cmd: "builtin:tsc",
+          args: ["-p", tsconfigPath, "--noEmit"],
+          trust: "builtin",
+          source: "tsconfig",
+          configPath: tsconfigPath,
+        },
+      };
+    } else {
+      verificationCommands = {
+        test: {
+          cmd: "builtin:vitest",
+          args: ["--reporter=verbose"],
+          trust: "builtin",
+          source: "vitest",
+        },
+        build: {
+          cmd: process.execPath,
+          args: [path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), "run", "build:main"],
+          trust: "workspace_script",
+          source: "package_script",
+        },
+        lint: {
+          cmd: process.execPath,
+          args: [],
+          trust: "workspace_script",
+          source: "package_script",
+        },
+      };
+    }
+
+    const command = verificationCommands[verificationType];
+    if (!command) return JSON.stringify({
+      success: false, errorCode: "INVALID_INPUT",
+      error: `不支持的验证类型: ${verificationType}，支持: typecheck/test/build/lint`,
+      verificationType, command: "", exitCode: -1,
+      stdout: "", stderr: `[错误] 不支持的验证类型: ${verificationType}`,
+      timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
+    });
+
+    if (verificationType === "test" && !resolveBuiltinExecutable("builtin:vitest", actualCwd)) {
+      return JSON.stringify({
+        success: false, errorCode: "VITEST_NOT_FOUND",
+        error: `本地 Vitest 未安装: ${actualCwd}`,
+        verificationType, command: "", exitCode: -1,
+        stdout: "", stderr: `[VITEST_NOT_FOUND] local vitest CLI not found in ${actualCwd}`,
+        timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
+        actualCwd,
+      });
+    }
+    if (verificationType === "build" && !fs.existsSync(command.args[0])) {
+      return JSON.stringify({
+        success: false, errorCode: "NPM_CLI_NOT_FOUND",
+        error: `本地 npm CLI 不存在: ${command.args[0]}`,
+        verificationType, command: "", exitCode: -1,
+        stdout: "", stderr: `[NPM_CLI_NOT_FOUND] ${command.args[0]}`,
+        timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
+        actualCwd,
+      });
+    }
+    if (verificationType === "lint") {
+      try {
+        const eslintPath = require.resolve("eslint/bin/eslint.js", { paths: [actualCwd] });
+        if (!fs.existsSync(eslintPath) || !path.isAbsolute(eslintPath)) throw new Error("invalid eslint path");
+        command.args = [eslintPath, "src/main", "--max-warnings=0"];
+      } catch {
+        return JSON.stringify({
+          success: false, errorCode: "ESLINT_NOT_FOUND",
+          error: `本地 ESLint 未安装: ${actualCwd}`,
+          verificationType, command: "", exitCode: -1,
+          stdout: "", stderr: `[ESLINT_NOT_FOUND] local eslint CLI not found in ${actualCwd}`,
+          timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
+          actualCwd,
+        });
+      }
+    }
+
+    const resolvedForDisplay = resolveBuiltinExecutable(command.cmd, actualCwd, command.configPath);
+    const displayExecutable = resolvedForDisplay?.executable ?? command.cmd;
+    const displayArgs = [...(resolvedForDisplay?.args ?? []), ...command.args];
+    const startMs = Date.now();
+    const actualCommand = `${displayExecutable} ${displayArgs.join(" ")}`;
+    console.log(LOG_PREFIX, "run_verification:", verificationType, actualCommand, cwd ? "cwd=" + cwd : "");
+
+    // 复用 Code 模式的 VerificationRunner（同一个执行核心）
+    // 旧协议 JSON 输出格式保持不变
+    const runner = new VerificationRunner();
+    try {
+      const result = await runner.runStep({
+        id: `run_verification_${verificationType}`,
+        type: verificationType as any,
+        packageRoot: cwd || process.cwd(),
+        cwd: cwd || process.cwd(),
+        configPath: command.configPath,
+        trust: command.trust,
+        executable: command.cmd,
+        args: command.args,
+        source: command.source,
+      }, {
+        // 仅在工具真实执行时读取宿主档位；模块加载阶段保持 VerificationRunner 纯净。
+        permissionLevel: (await import("../permission")).getCurrentLevel(),
+        signal: undefined,
+      });
+
+      const durationMs = Date.now() - startMs;
+      const passed = result.passed;
+      console.log(LOG_PREFIX, "run_verification 完成:", verificationType,
+        "exitCode=" + result.exitCode, "passed=" + passed, "durationMs=" + durationMs,
+        "stdoutLen=" + result.stdout.length, "stderrLen=" + result.stderr.length);
+
+      // 兼容旧协议 JSON：errorCode 来自 result.errorCode
+      const errorCode = result.errorCode;
+      const isApprovalRequired = errorCode === "VERIFICATION_APPROVAL_REQUIRED";
+      const isTimeout = errorCode === "VERIFICATION_TIMEOUT" || result.timedOut;
+
+      return JSON.stringify({
+        // 旧协议中 success 表示“命令已被 Runner 正常接管”，退出码由 passed 表示。
+        success: !isApprovalRequired && !isTimeout,
+        verificationType,
+        command: actualCommand,
+        actualCwd: cwd || process.cwd(),
+        exitCode: result.exitCode ?? -1,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        spawnError: null,
+        timedOut: result.timedOut,
+        passed,
+        truncated: result.stdout.includes("... (truncated") || result.stderr.includes("... (truncated"),
+        durationMs,
+        errorCode,
+        retryable: isTimeout,
+        ...(isApprovalRequired ? { approvalRequired: true } : {}),
+      });
+    } catch (err) {
+      const durationMs = Date.now() - startMs;
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error(LOG_PREFIX, "run_verification 失败:", verificationType, "error:", msg);
+      return JSON.stringify({
+        success: false,
+        errorCode: "VERIFICATION_SPAWN_FAILED",
+        error: `命令启动失败: ${msg}`,
+        verificationType,
+        command: actualCommand,
+        actualCwd: cwd || process.cwd(),
+        exitCode: -1,
+        stdout: "",
+        stderr: `[VERIFICATION_SPAWN_FAILED] ${msg}`,
+        spawnError: { code: undefined, message: msg },
+        timedOut: false,
+        passed: false,
+        truncated: false,
+        durationMs,
+        retryable: false,
+      });
+    }
+  },
 });
 
 // ── 工具 3：install_mcp_server ────────────────────────────
@@ -359,6 +658,8 @@ toolRegistry.register({
     "args (字符串数组)，env (键值对，环境变量)，cwd (可选工作目录)。",
   enabled: true,
   risk: "fs-write",
+  effectKind: "mutation" as const,
+  verificationPolicy: "artifact" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -819,6 +1120,8 @@ toolRegistry.register({
     "参数：city（可选，城市名中文或拼音；不传则用用户设置的默认城市）。",
   enabled: true,
   risk: "network",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -911,14 +1214,16 @@ function truncateSnippet(text: string): string {
 }
 
 /** 博查搜索：调 /v1/web-search，返回结构化 JSON。 */
-async function bochaSearch(query: string, key: string): Promise<string> {
+async function bochaSearch(query: string, key: string, signal?: AbortSignal): Promise<string> {
   const url = "https://api.bochaai.com/v1/web-search";
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), SEARCH_TIMEOUT_MS);
+  // 组合父 signal 和超时 signal
+  const combinedSignal = signal ? AbortSignal.any([signal, ctrl.signal]) : ctrl.signal;
   try {
     const resp = await fetch(url, {
       method: "POST",
-      signal: ctrl.signal,
+      signal: combinedSignal,
       headers: {
         Authorization: `Bearer ${key}`,
         "Content-Type": "application/json",
@@ -959,14 +1264,16 @@ async function bochaSearch(query: string, key: string): Promise<string> {
 }
 
 /** Tavily 搜索：调 /search，返回结构化 JSON。 */
-async function tavilySearch(query: string, key: string): Promise<string> {
+async function tavilySearch(query: string, key: string, signal?: AbortSignal): Promise<string> {
   const url = "https://api.tavily.com/search";
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), SEARCH_TIMEOUT_MS);
+  // 组合父 signal 和超时 signal
+  const combinedSignal = signal ? AbortSignal.any([signal, ctrl.signal]) : ctrl.signal;
   try {
     const resp = await fetch(url, {
       method: "POST",
-      signal: ctrl.signal,
+      signal: combinedSignal,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         api_key: key,
@@ -1004,16 +1311,18 @@ async function tavilySearch(query: string, key: string): Promise<string> {
 }
 
 /** AnySearch 搜索：调 /v1/search，返回结构化 JSON。 */
-async function anySearchSearch(query: string, key: string): Promise<string> {
+async function anySearchSearch(query: string, key: string, signal?: AbortSignal): Promise<string> {
   const url = "https://api.anysearch.com/v1/search";
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), SEARCH_TIMEOUT_MS);
+  // 组合父 signal 和超时 signal
+  const combinedSignal = signal ? AbortSignal.any([signal, ctrl.signal]) : ctrl.signal;
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (key) headers.Authorization = `Bearer ${key}`;
   try {
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (key) headers.Authorization = `Bearer ${key}`;
     const resp = await fetch(url, {
       method: "POST",
-      signal: ctrl.signal,
+      signal: combinedSignal,
       headers,
       body: JSON.stringify({
         query,
@@ -1047,7 +1356,7 @@ async function anySearchSearch(query: string, key: string): Promise<string> {
   }
 }
 
-async function executeWebSearch(args: Record<string, unknown>): Promise<string> {
+async function executeWebSearch(args: Record<string, unknown>, ctx?: ToolContext): Promise<string> {
   const engine = searchEngineGetter?.() ?? "off";
   if (engine === "off") {
     throw new Error("E_SEARCH_NOT_ENABLED");
@@ -1063,7 +1372,7 @@ async function executeWebSearch(args: Record<string, unknown>): Promise<string> 
     if (!key) {
       throw new Error("E_SEARCH_KEY_MISSING");
     }
-    return bochaSearch(query, key);
+    return bochaSearch(query, key, ctx?.signal);
   }
 
   if (engine === "tavily") {
@@ -1071,14 +1380,13 @@ async function executeWebSearch(args: Record<string, unknown>): Promise<string> 
     if (!key) {
       throw new Error("E_SEARCH_KEY_MISSING");
     }
-    return tavilySearch(query, key);
+    return tavilySearch(query, key, ctx?.signal);
   }
 
   if (engine === "anySearch") {
     const key = searchAnySearchKeyGetter?.() ?? "";
-    return anySearchSearch(query, key);
+    return anySearchSearch(query, key, ctx?.signal);
   }
-
   throw new Error(`E_SEARCH_ENGINE_NOT_SUPPORTED:${engine}`);
 }
 
@@ -1098,6 +1406,8 @@ toolRegistry.register({
     "参数：query（必填，搜索关键词）。",
   enabled: true,
   risk: "network",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -1154,6 +1464,7 @@ toolRegistry.register({
     "完成所有步骤后调一次空列表清空，表示任务结束。",
   enabled: true,
   risk: "safe",
+  effectKind: "external_side_effect" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -1208,6 +1519,10 @@ export { loadTodos, onTodosChange, getTodos as getCurrentTodos } from "./todo-st
 
 import { requestUserChoice, type ChoiceOption } from "../user-choice";
 import { runSubAgent, setDelegateSettings } from "./sub-agent";
+// 显式注册内置子代理 Profile（不依赖模块加载副作用）
+import { registerBuiltInSubAgentProfiles } from "./subagents/init";
+import { parseSubAgentResult } from "./subagents/result-parser";
+registerBuiltInSubAgentProfiles();
 
 export { setDelegateSettings };
 // 把重任务委托给独立 FC 循环执行，子代理有自己的 conversation（用完即弃）。
@@ -1230,6 +1545,7 @@ toolRegistry.register({
   enabled: true,
   risk: "safe",
   hideInPlanMode: true,  // 子代理走旧 FC Loop，避免在 Plan 步骤里降级
+  deprecated: true,      // 新运行使用 delegate_document，旧入口仅保留兼容
   inputSchema: {
     type: "object",
     properties: {
@@ -1283,6 +1599,8 @@ toolRegistry.register({
     "default（可选，超时时的默认选择值）。",
   enabled: true,
   risk: "safe",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
     properties: {
@@ -1327,6 +1645,146 @@ toolRegistry.register({
     }
     // 用户自定义输入（value 不在预设选项里）
     return `[ask_user_choice] 用户自定义输入：${userChoice}。请按此要求执行。`;
+  },
+});
+
+// ── 工具：delegate_document（文档子代理入口）─────────────────────
+// 虚拟工具：对 Action Gate 是普通工具，执行时走专用子代理 Executor。
+// 旧 delegate_task 保留为 deprecated 兼容入口，新链路使用 delegate_document。
+toolRegistry.register({
+  id: "delegate_document",
+  name: "委托文档生成",
+  description:
+    "把文档生成任务委托给文档子代理。子代理独立调用 write_word 生成文档，" +
+    "验证文件存在，返回结构化结果（文件路径 + 验证状态 + 内容摘要）。\n\n" +
+    "何时用：\n" +
+    "- 用户要生成 Word 文档（报告/简报/总结等）\n" +
+    "- 需要确认文件已成功生成并验证路径\n\n" +
+    "不要用于：\n" +
+    "- 简单的单步写文件（直接用 write_word）\n" +
+    "- Excel/PDF/Markdown（后续版本支持）\n\n" +
+    "参数：objective（任务目标），filename（.docx 文件名），title（标题），" +
+    "paragraphs（段落数组），style（可选预设风格）。",
+  enabled: true,
+  risk: "safe",
+  capability: "delegate_document",
+  executionKind: "subagent",
+  subAgentProfile: "document",
+  ledgerPolicy: "bypass",
+  effectKind: "mutation" as const,
+  verificationPolicy: "artifact" as const,
+  hideInPlanMode: false,
+  soulActionLabel: "生成文档",
+  soulProjection: {
+    projector: "entity_detail",
+    source: "trusted_internal",
+    fields: {
+      title: "summary",
+      artifactName: "primaryArtifact.name",
+      artifactPath: "primaryArtifact.path",
+      artifactVerified: "primaryArtifact.verified",
+    },
+  },
+  completionEvidence: [{ kind: "tool_succeeded" }],
+  completionEvidenceVerifier: (result) => {
+    try {
+      const parsed = parseSubAgentResult(result.output);
+      return parsed.status === "succeeded"
+        && parsed.artifacts.length > 0
+        && parsed.artifacts.every(a => a.verified)
+        && parsed.artifacts.some(a => !!a.path);
+    } catch {
+      return false;
+    }
+  },
+  inputSchema: {
+    type: "object",
+    properties: {
+      objective: { type: "string", description: "任务目标描述，如「将新闻资料生成 Word 简报」" },
+      filename: { type: "string", description: "文件名，必须以 .docx 结尾，如 AI新闻简报.docx" },
+      title: { type: "string", description: "文档标题" },
+      paragraphs: {
+        type: "array",
+        description: "段落内容数组，每项是一段文本",
+        items: { type: "string" },
+      },
+      style: {
+        type: "string",
+        description: "预设风格：default(商务) / academic(学术) / clean(极简) / elegant(优雅) / formal(公文)",
+      },
+    },
+    required: ["objective", "filename", "title", "paragraphs"],
+  },
+  // 子代理虚拟工具的 execute 不会被直接调用——executionKind=subagent 时
+  // 主图 execute 节点会走专用 Executor。保留防误调用保护。
+  execute: async () => {
+    throw new Error("SUBAGENT_MUST_USE_SPECIAL_EXECUTOR");
+  },
+});
+
+// ── 工具：delegate_search（搜索子代理入口）─────────────────────
+// 虚拟工具：对 Action Gate 是工具，执行时走搜索子代理 Executor。
+// 与原子 web_search 的区别：
+//   web_search = 一次搜索，返回结果列表
+//   delegate_search = 多来源研究任务，子代理自主搜索+读取+验证+整理
+toolRegistry.register({
+  id: "delegate_search",
+  name: "委托搜索研究",
+  description:
+    "把多来源搜索研究任务委托给搜索子代理。子代理自主执行多轮搜索、读取原网页、" +
+    "验证来源、去重并整理为结构化 findings。\n\n" +
+    "何时用：\n" +
+    "- 需要从多个来源收集和对比信息\n" +
+    "- 需要读取搜索结果中的原网页获取详细内容\n" +
+    "- 需要验证来源、去重和整理精选结果\n" +
+    "- 例如：「调查最近AI框架变化，对比多个来源」\n\n" +
+    "不要用于：\n" +
+    "- 只需要一次简单搜索（直接用 web_search）\n" +
+    "- 只需要读取一个已知网址（直接用 fetch_url）\n" +
+    "- 生成文档（用 delegate_document）\n\n" +
+    "参数：objective（研究目标描述），requiresDeepReading（可选，是否需要读取原网页）。",
+  enabled: true,
+  risk: "safe",
+  capability: "delegate_search",
+  executionKind: "subagent",
+  subAgentProfile: "search",
+  ledgerPolicy: "bypass",
+  effectKind: "read" as const,
+  verificationPolicy: "none" as const,
+  hideInPlanMode: false,
+  soulActionLabel: "搜索研究",
+  soulProjection: {
+    projector: "entity_list",
+    source: "external_untrusted",
+    itemsPath: "findings",
+    fields: {
+      title: "title",
+      content: "content",
+      source: "source",
+    },
+    maxItems: 10,
+  },
+  completionEvidence: [{ kind: "tool_succeeded" }],
+  completionEvidenceVerifier: (result) => {
+    try {
+      const parsed = parseSubAgentResult(result.output);
+      return parsed.status === "succeeded"
+        && parsed.findings.length > 0
+        && parsed.findings.every(f => !!f.source);
+    } catch {
+      return false;
+    }
+  },
+  inputSchema: {
+    type: "object",
+    properties: {
+      objective: { type: "string", description: "研究目标描述，如「调查最近AI框架变化，对比多个来源」" },
+      requiresDeepReading: { type: "boolean", description: "是否需要读取原网页获取详细内容（默认 false）" },
+    },
+    required: ["objective"],
+  },
+  execute: async () => {
+    throw new Error("SUBAGENT_MUST_USE_SPECIAL_EXECUTOR");
   },
 });
 

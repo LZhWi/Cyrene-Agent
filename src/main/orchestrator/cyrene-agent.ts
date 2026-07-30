@@ -26,6 +26,7 @@ import {
   type TwoPhaseEvent,
   type TwoPhaseFcResult,
 } from "./two-phase-fc-loop";
+import { getTimeoutSettings } from "../timeout-manager";
 import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
 import { runChatLoop } from "./chat-loop";
 import type { SocialAtom } from "../social-context/types";
@@ -75,8 +76,11 @@ export interface CyreneRunOptions {
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
   /** 工具阶段使用的 system prompt（仅含工具调度规则 + 自动生成的工具目录）。 */
   toolSystemContent: string;
+  toolSystemContentOptimizedForFirstRound?: string;
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。 */
   soulSystemBaseContent: string;
+  disableLangGraph?: boolean;
+  optimizeFirstRound?: boolean;
   /** 只应用到 Soul 最终自然语言回复，禁止影响 CITA、Action Gate 与 Native FC。 */
   soulSampling?: ApprovedStyleSampling;
   /** 不带时间戳前缀的 messages，给 Action Gate 用。未传时回退到 messages。 */
@@ -104,6 +108,12 @@ export interface CyreneRunOptions {
   };
   /** Task Router 可用 Skill 列表（feature flag 开启时使用）。Router 不依赖该字段是否存在。 */
   availableSkills?: SkillRouteInfo[];
+  /**
+   * 可信工作区根目录（来自 Conversation Workspace Binding）。
+   * Work 工具和 run_verification 必须使用此目录。
+   * 不能从用户消息、模型输出或 process.cwd() 推导。
+   */
+  resolvedWorkspaceRoot?: string;
 }
 
 /** FC 循环最终结果（供桥层做副作用用）。 */
@@ -213,9 +223,30 @@ async function executeToolCall(
   }
 
   try {
+    const output = await tool.execute(args, tool.needsContext ? ctx : undefined);
+    // 检查工具返回的 JSON 是否明确标记为业务失败
+    // 只认 success === false，不认 error 字段（避免误判包含 error 描述的成功结果）
+    if (typeof output === "string") {
+      try {
+        const parsed = JSON.parse(output);
+        if (parsed && typeof parsed === "object" && parsed.success === false) {
+          const errorMsg = parsed.error || "工具执行失败";
+          const errorCode = parsed.errorCode || "E_TOOL_BUSINESS_FAILED";
+          return {
+            status: "failed",
+            errorCode,
+            output: typeof errorMsg === "string" ? errorMsg : JSON.stringify(errorMsg),
+            terminal: true,
+            retryable: parsed.retryable === true,
+          };
+        }
+      } catch {
+        // 不是 JSON，正常返回
+      }
+    }
     return {
       status: "succeeded",
-      output: await tool.execute(args, tool.needsContext ? ctx : undefined),
+      output,
     };
   } catch (err) {
     const errMsg = err instanceof Error ? err.message : String(err);
@@ -249,6 +280,7 @@ export class CyreneAgent extends AbstractAgent {
     const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const conversationId = options.conversationId ?? "default";
     const abortController = new AbortController();
+    const timeoutSettings = getTimeoutSettings();
 
     // first-source-wins：谁先触发 abort，谁就是最终分类
     let abortSource: AbortSource | undefined;
@@ -341,10 +373,14 @@ export class CyreneAgent extends AbstractAgent {
                 trustedRefs: options.trustedRefs ?? [],
                 imageCaptionFallback: options.imageCaptionFallback,
                 executionLedger,
+                perCallTimeoutMs: timeoutSettings.perRoundTimeout,
+                resolvedWorkspaceRoot: options.resolvedWorkspaceRoot,
               }))
               : await perf.track("legacy_agent_loop", () => runTwoPhaseFcLoop({
                 ...commonOptions,
                 imageCaptionFallback: options.imageCaptionFallback,
+                perRoundTimeoutMs: timeoutSettings.perRoundTimeout,
+                forceSummaryTimeoutMs: timeoutSettings.forceSummaryTimeout,
               }));
           }
 
@@ -482,6 +518,9 @@ export function classifyRunError(
   if (err instanceof AgentRuntimeError) {
     const safeMessages: Record<string, string> = {
       E_MODEL_REQUEST_FAILED: "模型服务暂时不可用，请稍后重试。",
+      E_MODEL_REQUEST_TIMEOUT: "模型响应超时，请稍后重试。",
+      E_MODEL_HTTP_ERROR: "模型服务请求失败，请稍后重试。",
+      E_MODEL_RESPONSE_PARSE_FAILED: "模型返回格式异常，请重试。",
       E_AGENT_NO_PROGRESS: "请求处理遇到问题，请重试。",
       E_AGENT_GRAPH_ITERATION_LIMIT: "请求处理步骤过多，请简化问题后重试。",
     };

@@ -27,7 +27,7 @@ interface MatterResult {
 }
 
 /**
- * 解析 SKILL.md 文本：frontmatter（name/description/tools?/version?/autoInject?）+ 正文。
+ * 解析 SKILL.md 文本：frontmatter（name/description/tools?/version?/effectKind?/autoInject?）+ 正文。
  * 纯函数，不碰 fs/electron。
  * 返回 null 表示不合规（缺 name/description、tools 非 array、或无 frontmatter）。
  */
@@ -42,11 +42,16 @@ export function parseSkillFrontmatter(content: string): ParsedSkill | null {
   if (typeof d.name !== "string" || !d.name) return null;
   if (typeof d.description !== "string" || !d.description) return null;
   if (d.tools !== undefined && !Array.isArray(d.tools)) return null;
+  const VALID_EFFECT_KINDS = new Set(["read", "mutation", "verification", "external_side_effect"]);
+  const effectKind = typeof d.effectKind === "string" && VALID_EFFECT_KINDS.has(d.effectKind)
+    ? d.effectKind as import("../orchestrator/tool-registry").ToolEffectKind
+    : undefined;
   return {
     name: d.name,
     description: d.description,
     tools: Array.isArray(d.tools) ? d.tools.map(String) : undefined,
     version: d.version !== undefined ? String(d.version) : undefined,
+    effectKind,
     body: parsed.content.trim(),
   };
 }
@@ -116,6 +121,7 @@ export function scanSkills(dir: string, source: "builtin" | "user"): SkillEntry[
       enabled: manifest?.defaultEnabled ?? true,
       source,
       manifest,
+      effectKind: parsed.effectKind,
     });
   }
   return result;

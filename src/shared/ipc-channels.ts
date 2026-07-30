@@ -66,8 +66,12 @@ export const IPC = {
   SETTINGS_TEST_VISION: "settings:test-vision",
   SETTINGS_GET_GENERAL: "settings:get-general",
   SETTINGS_SAVE_GENERAL: "settings:save-general",
+  SETTINGS_GET_TIMEOUT_SETTINGS: "settings:get-timeout-settings",
+  SETTINGS_SAVE_TIMEOUT_SETTINGS: "settings:save-timeout-settings",
   UI_THEME_GET: "ui-theme:get",
   UI_THEME_CHANGED: "ui-theme:changed",
+  UI_THEME_RADIUS_GET: "ui-theme-radius:get",
+  UI_THEME_RADIUS_CHANGED: "ui-theme-radius:changed",
   UI_FONT_GET: "ui-font:get",
   UI_FONT_CHANGED: "ui-font:changed",
   SETTINGS_PICK_UI_FONT: "settings:pick-ui-font",
@@ -80,6 +84,8 @@ export const IPC = {
   SETTINGS_SET_PET_ALWAYS_ON_TOP: "settings:set-pet-always-on-top",
   SETTINGS_SET_PET_VISIBLE: "settings:set-pet-visible",
   SETTINGS_SET_PET_ZOOM: "settings:set-pet-zoom",
+  // debugging
+  SETTINGS_OPEN_CHROME_GPU: "settings:open-chrome-gpu",
   // main → pet window：推送当前 zoom 因子，渲染进程据此重算 scale
   PET_ZOOM: "pet:zoom",
   SETTINGS_PREVIEW_RUNTIME_SYNC: "settings:preview-runtime-sync",
@@ -110,6 +116,29 @@ export const IPC = {
   CHATS_GET_ACTIVE_SESSION: "chats:get-active-session",
   // main → 所有窗口：活跃 sessionId 变化时广播
   CHATS_ACTIVE_SESSION_CHANGED: "chats:active-session-changed",
+
+  // 对话工作区绑定
+  // renderer → main：设置当前对话的工作区目录
+  CHATS_SET_WORKSPACE: "chats:set-workspace",
+  // renderer → main：获取当前对话的工作区绑定
+  CHATS_GET_WORKSPACE: "chats:get-workspace",
+  // renderer → main：清除当前对话的工作区绑定
+  CHATS_CLEAR_WORKSPACE: "chats:clear-workspace",
+  // renderer → main：打开文件夹选择器
+  CHATS_PICK_WORKSPACE_FOLDER: "chats:pick-workspace-folder",
+  // main → 所有窗口：工作区绑定变更广播
+  CHATS_WORKSPACE_CHANGED: "chats:workspace-changed",
+
+  // Code run 状态查询
+  CODE_RUN_GET: "code:run:get",
+  CODE_RUN_GET_ACTIVE: "code:run:get-active",
+  CODE_RUN_LIST: "code:run:list",
+  // Code 验证审批
+  CODE_VERIFICATION_GET_PENDING: "code:verification:get-pending",
+  CODE_VERIFICATION_APPROVE: "code:verification:approve",
+  CODE_VERIFICATION_REJECT: "code:verification:reject",
+  // main → renderer：验证审批广播
+  CODE_VERIFICATION_APPROVAL_REQUESTED: "code:verification:approval-requested",
 
 // sticker manager window
 	  STICKERS_MINIMIZE: "stickers:minimize",

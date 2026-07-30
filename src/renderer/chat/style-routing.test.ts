@@ -6,9 +6,10 @@ const source = fs.readFileSync(fileURLToPath(new URL("./main.ts", import.meta.ur
 const markup = fs.readFileSync(fileURLToPath(new URL("./index.html", import.meta.url)), "utf8");
 
 describe("chat style routing contract", () => {
-  it("sends selected style independently from chat or work mode", () => {
+  it("sends selected style independently from chat, work, or code mode", () => {
     expect(source).toContain("styleId: getCurrentStyleId()");
-    expect(source).toContain('executionMode: isChatMode() ? "chat" : "work"');
+    expect(source).toContain("executionMode: getConversationMode()");
+    expect(source).toContain('function getConversationMode(): "chat" | "work" | "code"');
     expect(source).not.toContain('return isChatMode() ? "chat" : style');
   });
 

@@ -13,10 +13,12 @@
 // 注意：`chats:open-in-chat-window` 涉及 BrowserWindow 创建逻辑，
 // 由 src/main/index.ts 自行注册，不在本模块；本模块只管纯数据操作。
 
-import { BrowserWindow, ipcMain, type WebContents } from "electron";
+import { BrowserWindow, ipcMain, type WebContents, dialog } from "electron";
 import { IPC } from "../../shared/ipc-channels";
-import type { ChatMessage } from "../../shared/chat-types";
+import type { ChatMessage, ConversationMode, ConversationWorkspaceBinding } from "../../shared/chat-types";
 import * as chatsStore from "./chats-store";
+import * as fs from "fs";
+import * as path from "path";
 
 function broadcastChanged(senderWebContents?: WebContents | null): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -34,7 +36,10 @@ function broadcastChanged(senderWebContents?: WebContents | null): void {
 export function registerChatsIpc(): void {
   chatsStore.initialize();
 
-  ipcMain.handle(IPC.CHATS_LIST, () => chatsStore.listSessions());
+  ipcMain.handle(
+    IPC.CHATS_LIST,
+    (_event, options?: { mode?: ConversationMode }) => chatsStore.listSessions(options),
+  );
 
   ipcMain.handle(IPC.CHATS_GET, (_event, id: string) => chatsStore.getSession(id));
   ipcMain.handle(IPC.CHATS_GET_PAGE, (_event, payload: { id: string; before?: number | null; limit?: number }) => {
@@ -46,11 +51,12 @@ export function registerChatsIpc(): void {
     IPC.CHATS_CREATE,
     (
       event,
-      payload?: { title?: string; identityId?: string | null },
+      payload?: { title?: string; identityId?: string | null; mode?: "chat" | "work" | "code" },
     ) => {
       const session = chatsStore.createSession({
         title: payload?.title,
         identityId: payload?.identityId ?? null,
+        mode: payload?.mode,
       });
       broadcastChanged(event.sender);
       return session;
@@ -116,6 +122,121 @@ export function registerChatsIpc(): void {
       return session;
     },
   );
+
+  // ── 对话工作区绑定 ──────────────────────────────────────
+
+  ipcMain.handle(
+    IPC.CHATS_SET_WORKSPACE,
+    (event, payload: { sessionId: string; workspaceRoot: string }) => {
+      if (!payload?.sessionId || !payload?.workspaceRoot) {
+        return { ok: false, error: "missing sessionId or workspaceRoot" };
+      }
+      // 路径验证：目录存在 + realpath 解析
+      try {
+        const resolved = validateAndNormalizeWorkspace(payload.workspaceRoot);
+        const binding: ConversationWorkspaceBinding = {
+          workspaceRoot: resolved,
+          displayName: path.basename(resolved),
+          boundAt: Date.now(),
+        };
+        const session = chatsStore.setWorkspaceBinding(payload.sessionId, binding);
+        if (!session) return { ok: false, error: "session not found" };
+        console.log("[Workspace] 绑定成功:",
+          "sessionId=" + payload.sessionId.slice(0, 8) + "...",
+          "workspaceRoot=" + resolved,
+        );
+        // 广播工作区变更
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (win.isDestroyed()) continue;
+          try {
+            win.webContents.send(IPC.CHATS_WORKSPACE_CHANGED, {
+              sessionId: payload.sessionId,
+              binding,
+            });
+          } catch { /* ignore */ }
+        }
+        return { ok: true, binding };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: msg };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    IPC.CHATS_GET_WORKSPACE,
+    (_event, sessionId: string) => {
+      if (!sessionId) return null;
+      return chatsStore.getWorkspaceBinding(sessionId) ?? null;
+    },
+  );
+
+  ipcMain.handle(
+    IPC.CHATS_CLEAR_WORKSPACE,
+    (event, sessionId: string) => {
+      if (!sessionId) return { ok: false, error: "missing sessionId" };
+      const session = chatsStore.clearWorkspaceBinding(sessionId);
+      if (!session) return { ok: false, error: "session not found" };
+      // 广播工作区变更
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (win.isDestroyed()) continue;
+        try {
+          win.webContents.send(IPC.CHATS_WORKSPACE_CHANGED, {
+            sessionId,
+            binding: null,
+          });
+        } catch { /* ignore */ }
+      }
+      return { ok: true };
+    },
+  );
+
+  ipcMain.handle(
+    IPC.CHATS_PICK_WORKSPACE_FOLDER,
+    async (event) => {
+      const win = BrowserWindow.fromWebContents(event.sender);
+      if (!win) return { ok: false, error: "no window" };
+      const result = await dialog.showOpenDialog(win, {
+        properties: ["openDirectory"],
+        title: "选择工作区目录",
+      });
+      if (result.canceled || result.filePaths.length === 0) {
+        return { ok: false, canceled: true };
+      }
+      const selected = result.filePaths[0];
+      try {
+        const resolved = validateAndNormalizeWorkspace(selected);
+        return { ok: true, path: resolved, displayName: path.basename(resolved) };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { ok: false, error: msg };
+      }
+    },
+  );
+}
+
+// ── 路径验证 ──────────────────────────────────────────────
+
+/**
+ * 验证并规范化工作区路径：
+ * - 目录存在
+ * - realpath 解析（消除 symlink/junction）
+ * - Windows 路径标准化
+ */
+function validateAndNormalizeWorkspace(inputPath: string): string {
+  // 1. 检查目录存在
+  if (!fs.existsSync(inputPath)) {
+    throw new Error(`目录不存在: ${inputPath}`);
+  }
+  const stat = fs.statSync(inputPath);
+  if (!stat.isDirectory()) {
+    throw new Error(`不是目录: ${inputPath}`);
+  }
+  // 2. realpath 解析（消除 symlink/junction）
+  const resolved = fs.realpathSync(inputPath);
+  // 3. Windows 路径标准化（正斜杠 → 反斜杠，统一大小写盘符）
+  const normalized = path.resolve(resolved);
+  return normalized;
 }
 
 // 给 main/index.ts 用的便捷 broadcast（删除当前活跃会话后由 index.ts 调一次；

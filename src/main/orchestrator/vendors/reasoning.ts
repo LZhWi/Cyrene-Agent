@@ -22,6 +22,7 @@ import {
   type ReasoningCapability,
   type ReasoningPreference,
 } from "../../../shared/reasoning";
+import { getVendorRuntimeSettings } from "./runtime-settings";
 
 export interface ApplyReasoningContext {
   hasTools: boolean;
@@ -35,7 +36,11 @@ export function applyReasoningPreference(
   capability: ReasoningCapability,
   context: ApplyReasoningContext,
 ): Record<string, unknown> {
-  const effective = resolveEffectiveReasoning(preference, capability);
+  const effective = resolveEffectiveReasoning(
+    preference,
+    capability,
+    getVendorRuntimeSettings().thinkingOverride,
+  );
   const result: Record<string, unknown> = { ...body };
 
   // 日志（用户 spec §六 #7）

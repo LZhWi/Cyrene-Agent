@@ -55,6 +55,8 @@ export function registerRecallHistoryTool(): void {
       "参数：query（必填，检索关键词或自然语言问题），days（可选，限制最近 N 天，默认 30）。",
     enabled: true,
     risk: "safe",
+    effectKind: "read" as const,
+    verificationPolicy: "none" as const,
     inputSchema: {
       type: "object",
       properties: {

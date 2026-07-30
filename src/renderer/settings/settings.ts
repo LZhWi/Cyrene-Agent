@@ -290,6 +290,11 @@ interface ModelSettings {
   /** Embedding 维度（可选，仅 cloud 模式）。留空 = 自动探测。 */
   embeddingDimensions?: number;
   multimodal: boolean;
+  disableLangGraph?: boolean;
+  optimizeFirstRound?: boolean;
+  thinkingOverride?: -1 | 0 | 1;
+  /** 上下文窗口大小（Token）。默认 256000。 */
+  contextWindowTokens?: number;
 }
 
 type ScheduleConfig =
@@ -397,11 +402,13 @@ interface GeneralSettings {
   petZoom: number;
   chatLineHeight: number;
   chatParaSpacing: number;
+  disableGpuElectron?: boolean;
   sidebarVisible: boolean;
   tasksVisible: boolean;
   launchAtLogin: boolean;
   language: "zh-CN";
   uiTheme: UiTheme;
+  uiThemeRadius: boolean;
   uiFont: UiFont;
   uiIcon: UiIcon;
   defaultChatMode: DefaultChatMode;
@@ -472,6 +479,8 @@ interface SettingsApi {
   getGeneral: () => Promise<GeneralSettings>;
   saveGeneral: (config: Partial<GeneralSettings>) => Promise<GeneralSettings>;
   openCustomStylePrompt?: () => Promise<{ ok: boolean; filePath?: string; error?: string }>;
+  getTimeoutSettings: () => Promise<TimeoutSettings>;
+  saveTimeoutSettings: (config: Partial<TimeoutSettings>) => Promise<TimeoutSettings>;
   pickUiFont: () => Promise<string | null>;
   importUiFont: (sourcePath: string) => Promise<UiFont>;
   resetUiFont: () => Promise<UiFont>;
@@ -479,6 +488,7 @@ interface SettingsApi {
   closeSidebar: () => void;
   openTasks: () => void;
   closeTasks: () => void;
+  openChromeGpu: () => void;
   setPetAlwaysOnTop: (value: boolean) => void;
   setPetVisible: (value: boolean) => void;
   setPetZoom: (value: number) => void;
@@ -698,6 +708,7 @@ if (!window.settings) {
     closeSidebar: () => {},
     openTasks: () => {},
     closeTasks: () => {},
+    openChromeGpu: () => {},
     setPetAlwaysOnTop: () => {},
     setPetVisible: () => {},
     setPetZoom: () => {},
@@ -711,6 +722,8 @@ if (!window.settings) {
     addMcpServer: async () => ({ ok: false, error: "settings api unavailable" }),
     removeMcpServer: async () => ({ ok: false, error: "settings api unavailable" }),
     listMcpServers: async () => [],
+    getTimeoutSettings: async () => DEFAULT_TIMEOUT_SETTINGS,
+    saveTimeoutSettings: async c => (c as TimeoutSettings),
   };
 }
 
@@ -736,6 +749,9 @@ const bgmAudio = new Audio("/audio/bgm.mp3");
 bgmAudio.preload = "auto";
 bgmAudio.loop = true;
 const apiForm = document.getElementById("api-form") as HTMLFormElement;
+const apiRuntimeForm = document.getElementById("api-runtime-form") as HTMLFormElement;
+const apiTimeoutForm = document.getElementById("api-timeout-form") as HTMLFormElement;
+const apiFcModeForm = document.getElementById("api-fc-mode-form") as HTMLFormElement;
 const appearanceForm = document.getElementById("appearance-form") as HTMLFormElement;
 const generalForm = document.getElementById("general-form") as HTMLFormElement;
 const preferencesForm = document.getElementById("preferences-form") as HTMLFormElement;
@@ -754,6 +770,8 @@ const placeholderCopy = document.getElementById("placeholder-copy") as HTMLEleme
 const saveStatus = document.getElementById("save-status") as HTMLElement;
 const appearanceSaveStatus = document.getElementById("appearance-save-status") as HTMLElement;
 const generalSaveStatus = document.getElementById("general-save-status") as HTMLElement;
+const timeoutSaveStatus = document.getElementById("timeout-save-status") as HTMLElement;
+const runtimeSaveStatus = document.getElementById("runtime-save-status") as HTMLElement;
 const preferencesSaveStatus = document.getElementById("preferences-save-status") as HTMLElement;
 const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLElement;
 
@@ -793,6 +811,7 @@ const baseUrlInput = document.getElementById("base-url") as HTMLInputElement;
 const baseUrlResetBtn = document.getElementById("base-url-reset-btn") as HTMLButtonElement;
 const modelInput = document.getElementById("model-input") as HTMLInputElement;
 const modelInputSuggestions = document.getElementById("model-input-suggestions") as HTMLDataListElement;
+const contextWindowInput = document.getElementById("context-window-input") as HTMLInputElement;
 const apiKeyInput = document.getElementById("api-key") as HTMLInputElement;
 const apiKeyLabel = document.getElementById("api-key-label") as HTMLElement;
 const apiKeyHint = document.getElementById("api-key-hint") as HTMLElement;
@@ -823,8 +842,6 @@ const maxRefreshInput = document.getElementById("max-refresh") as HTMLInputEleme
 const perCallTimeoutSecInput = document.getElementById("per-call-timeout-sec") as HTMLInputElement;
 const citaRepairBudgetSecInput = document.getElementById("cita-repair-budget-sec") as HTMLInputElement;
 const actionGateRepairBudgetSecInput = document.getElementById("action-gate-repair-budget-sec") as HTMLInputElement;
-const advancedToggle = document.getElementById("advanced-toggle") as HTMLButtonElement;
-const advancedFieldsWrap = document.getElementById("advanced-fields-wrap") as HTMLElement;
 
 // Embedding 维度（可选，仅 cloud 模式）
 const embeddingDimensionsInput = document.getElementById("embedding-dimensions-input") as HTMLInputElement | null;
@@ -844,6 +861,7 @@ const musicEnabledInput = document.getElementById("music-enabled") as HTMLInputE
 const musicVolumeInput = document.getElementById("music-volume") as HTMLInputElement;
 const soundEnabledInput = document.getElementById("sound-enabled") as HTMLInputElement;
 const soundVolumeInput = document.getElementById("sound-volume") as HTMLInputElement;
+const disableRadiusInput = document.getElementById("disable-radius") as HTMLInputElement;
 const petAlwaysOnTopInput = document.getElementById("pet-always-on-top") as HTMLInputElement;
 const petVisibleInput = document.getElementById("pet-visible") as HTMLInputElement;
 const petZoomInput = document.getElementById("pet-zoom") as HTMLInputElement;
@@ -871,6 +889,8 @@ const citaEngineSelect = document.getElementById("cita-engine-select") as HTMLEl
 const screenshotHotkeyInput = document.getElementById("screenshot-hotkey-input") as HTMLInputElement | null;
 const customStyleSamplingBtn = document.getElementById("custom-style-sampling-btn") as HTMLButtonElement | null;
 const customStylePromptBtn = document.getElementById("custom-style-prompt-btn") as HTMLButtonElement | null;
+const openChromeGpu = document.getElementById("open-chrome-gpu") as HTMLElement;
+const disableGpuInput = document.getElementById("disable-gpu-electron") as HTMLInputElement;
 const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
 const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputElement;
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
@@ -878,18 +898,46 @@ const openStickerManagerBtn = document.getElementById("open-sticker-manager-btn"
 const addStickerBtn = document.getElementById("add-sticker-btn") as HTMLButtonElement;
 const stickerThresholdInput = document.getElementById("sticker-threshold") as HTMLInputElement;
 const stickerThresholdVal = document.getElementById("sticker-threshold-val") as HTMLElement;
+const timeoutSummaryInput = document.getElementById("timeout-summary") as HTMLInputElement;
+const timeoutSummaryReset = document.getElementById("timeout-summary-reset-btn") as HTMLButtonElement;
+const timeoutVisionInput = document.getElementById("timeout-vision") as HTMLInputElement;
+const timeoutVisionReset = document.getElementById("timeout-vision-reset-btn") as HTMLButtonElement;
+const timeoutUserChoiceInput = document.getElementById("timeout-user-choice") as HTMLInputElement;
+const timeoutUserChoiceReset = document.getElementById("timeout-user-choice-reset-btn") as HTMLButtonElement;
+const timeoutTestInput = document.getElementById("timeout-test") as HTMLInputElement;
+const timeoutTestReset = document.getElementById("timeout-test-reset-btn") as HTMLButtonElement;
+const timeoutMemoryJudgeInput = document.getElementById("timeout-memory-judge") as HTMLInputElement;
+const timeoutMemoryJudgeReset = document.getElementById("timeout-memory-judge-reset-btn") as HTMLButtonElement;
+
+const timeoutProfileTotalBudgetInput = document.getElementById("timeout-profile-total-budget") as HTMLInputElement;
+const timeoutProfileTotalBudgetReset = document.getElementById("timeout-profile-total-budget-reset-btn") as HTMLButtonElement;
+const timeoutProfilePerAttemptInput = document.getElementById("timeout-profile-per-attempt") as HTMLInputElement;
+const timeoutProfilePerAttemptReset = document.getElementById("timeout-profile-per-attempt-reset-btn") as HTMLButtonElement;
+const timeoutProfileRemainingInput = document.getElementById("timeout-profile-remaining") as HTMLInputElement;
+const timeoutProfileRemainingReset = document.getElementById("timeout-profile-remaining-reset-btn") as HTMLButtonElement;
+const modelRequestTimeoutSecInput = document.getElementById("model-request-timeout-sec") as HTMLInputElement;
+const modelRequestTimeoutSecReset = document.getElementById("model-request-timeout-sec-reset-btn") as HTMLButtonElement;
+
+const fcModeLangGraphButton = document.getElementById("fc-mode-langgraph") as HTMLButtonElement;
+const fcModeEnableOptimizationButton = document.getElementById("fc-mode-enable-optimization") as HTMLButtonElement;
+const fcModeDisableOptimizationButton = document.getElementById("fc-mode-disable-optimization") as HTMLButtonElement;
+
+const toggleEnableThinking = document.getElementById("toggle-enable-thinking") as HTMLInputElement;
+const toggleDisableThinking = document.getElementById("toggle-disable-thinking") as HTMLInputElement;
+const toggleDisableMaxToken = document.getElementById("toggle-disable-max-token") as HTMLInputElement;
 
 const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }> = {
   memory: { emoji: `<img src="../icons/mimi.png" width="24" height="24" alt="" aria-hidden="true" style="vertical-align:-3px" />`, title: "记忆", hint: "管理长期记忆与画像" },
   chat: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M33 38H22V30H36V22H44V38H39L36 41L33 38Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 6H36V30H17L13 34L9 30H4V6Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 18H20" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M26 18H27" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 18H13" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>`, title: "聊天", hint: "管理聊天窗口与会话" },
   user: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M44 8H4V38H19L24 43L29 38H44V8Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24" cy="19" r="5" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M33 32C33 27.5817 28.9706 24 24 24C19.0294 24 15 27.5817 15 32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "用户信息", hint: "编辑你的个人资料" },
   tasks: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M23.9998 44.3332C34.1251 44.3332 42.3332 36.1251 42.3332 25.9999C42.3332 15.8747 34.1251 7.66656 23.9998 7.66656C13.8746 7.66656 5.6665 15.8747 5.6665 25.9999C5.6665 36.1251 13.8746 44.3332 23.9998 44.3332Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M23.7594 15.3536L23.7582 26.3624L31.5305 34.1347" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9.00001L11 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M44 9.00001L37 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "定时任务", hint: "管理定时提醒与日程" },
-	  skills: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>Skills</title><rect x="9" y="8" width="30" height="36" rx="2" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M18 4V10" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M30 4V10" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 19L32 19" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 27L28 27" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 35H24" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "Skills", hint: "管理 agent 的 skill 指令（约束如何用工具）" },
+  skills: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>Skills</title><rect x="9" y="8" width="30" height="36" rx="2" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M18 4V10" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M30 4V10" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 19L32 19" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 27L28 27" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 35H24" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "Skills", hint: "管理 agent 的 skill 指令（约束如何用工具）" },
   plugins: { emoji: "🔌", title: "MCP", hint: "扩展功能与第三方集成" },
-	  preferences: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>偏好设置</title><path d="M12 35.0137H9H4V8.01273C4 6.90868 4.89543 6.01367 6 6.01367H42C43.1046 6.01367 44 6.90868 44 8.01273V35.0137H36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 32L14 42H34L24 32Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "偏好设置", hint: "设置聊天窗口和输出行为的默认偏好" },
-	  appearance: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>外观设置</title><path d="M24 44C29.9601 44 26.3359 35.136 30 31C33.1264 27.4709 44 29.0856 44 24C44 12.9543 35.0457 4 24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M28 17C29.6569 17 31 15.6569 31 14C31 12.3431 29.6569 11 28 11C26.3431 11 25 12.3431 25 14C25 15.6569 26.3431 17 28 17Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M16 21C17.6569 21 19 19.6569 19 18C19 16.3431 17.6569 15 16 15C14.3431 15 13 16.3431 13 18C13 19.6569 14.3431 21 16 21Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M17 34C18.6569 34 20 32.6569 20 31C20 29.3431 18.6569 28 17 28C15.3431 28 14 29.3431 14 31C14 32.6569 15.3431 34 17 34Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "外观设置", hint: "调整窗口布局、界面主题与昔涟桌宠" },
-	  general: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>通用设置</title><path d="M18.2838 43.1713C14.9327 42.1736 11.9498 40.3213 9.58787 37.867C10.469 36.8227 11 35.4734 11 34.0001C11 30.6864 8.31371 28.0001 5 28.0001C4.79955 28.0001 4.60139 28.01 4.40599 28.0292C4.13979 26.7277 4 25.3803 4 24.0001C4 21.9095 4.32077 19.8938 4.91579 17.9995C4.94381 17.9999 4.97188 18.0001 5 18.0001C8.31371 18.0001 11 15.3138 11 12.0001C11 11.0488 10.7786 10.1493 10.3846 9.35011C12.6975 7.1995 15.5205 5.59002 18.6521 4.72314C19.6444 6.66819 21.6667 8.00013 24 8.00013C26.3333 8.00013 28.3556 6.66819 29.3479 4.72314C32.4795 5.59002 35.3025 7.1995 37.6154 9.35011C37.2214 10.1493 37 11.0488 37 12.0001C37 15.3138 39.6863 18.0001 43 18.0001C43.0281 18.0001 43.0562 17.9999 43.0842 17.9995C43.6792 19.8938 44 21.9095 44 24.0001C44 25.3803 43.8602 26.7277 43.594 28.0292C43.3986 28.01 43.2005 28.0001 43 28.0001C39.6863 28.0001 37 30.6864 37 34.0001C37 35.4734 37.531 36.8227 38.4121 37.867C36.0502 40.3213 33.0673 42.1736 29.7162 43.1713C28.9428 40.752 26.676 39.0001 24 39.0001C21.324 39.0001 19.0572 40.752 18.2838 43.1713Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M24 31C27.866 31 31 27.866 31 24C31 20.134 27.866 17 24 17C20.134 17 17 20.134 17 24C17 27.866 20.134 31 24 31Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "通用设置", hint: "管理窗口、音频和系统行为" },
-	  api: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>API 设置</title><g clip-path="url(#api-key-nav-clip)"><circle cx="15" cy="33" r="8" fill="none" stroke="currentColor" stroke-width="4"/><path d="M29 16L35.5 22" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 26L37 7" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M35 11L42 17.5" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></g><defs><clipPath id="api-key-nav-clip"><rect width="48" height="48" fill="none"/></clipPath></defs></svg>`, title: "API 设置", hint: "选择预设后只需要填写 API Key。" },
+  preferences: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>偏好设置</title><path d="M12 35.0137H9H4V8.01273C4 6.90868 4.89543 6.01367 6 6.01367H42C43.1046 6.01367 44 6.90868 44 8.01273V35.0137H36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 32L14 42H34L24 32Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "偏好设置", hint: "设置聊天窗口和输出行为的默认偏好" },
+  appearance: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>外观设置</title><path d="M24 44C29.9601 44 26.3359 35.136 30 31C33.1264 27.4709 44 29.0856 44 24C44 12.9543 35.0457 4 24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M28 17C29.6569 17 31 15.6569 31 14C31 12.3431 29.6569 11 28 11C26.3431 11 25 12.3431 25 14C25 15.6569 26.3431 17 28 17Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M16 21C17.6569 21 19 19.6569 19 18C19 16.3431 17.6569 15 16 15C14.3431 15 13 16.3431 13 18C13 19.6569 14.3431 21 16 21Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M17 34C18.6569 34 20 32.6569 20 31C20 29.3431 18.6569 28 17 28C15.3431 28 14 29.3431 14 31C14 32.6569 15.3431 34 17 34Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "外观设置", hint: "调整窗口布局、界面主题与昔涟桌宠" },
+  general: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>通用设置</title><path d="M18.2838 43.1713C14.9327 42.1736 11.9498 40.3213 9.58787 37.867C10.469 36.8227 11 35.4734 11 34.0001C11 30.6864 8.31371 28.0001 5 28.0001C4.79955 28.0001 4.60139 28.01 4.40599 28.0292C4.13979 26.7277 4 25.3803 4 24.0001C4 21.9095 4.32077 19.8938 4.91579 17.9995C4.94381 17.9999 4.97188 18.0001 5 18.0001C8.31371 18.0001 11 15.3138 11 12.0001C11 11.0488 10.7786 10.1493 10.3846 9.35011C12.6975 7.1995 15.5205 5.59002 18.6521 4.72314C19.6444 6.66819 21.6667 8.00013 24 8.00013C26.3333 8.00013 28.3556 6.66819 29.3479 4.72314C32.4795 5.59002 35.3025 7.1995 37.6154 9.35011C37.2214 10.1493 37 11.0488 37 12.0001C37 15.3138 39.6863 18.0001 43 18.0001C43.0281 18.0001 43.0562 17.9999 43.0842 17.9995C43.6792 19.8938 44 21.9095 44 24.0001C44 25.3803 43.8602 26.7277 43.594 28.0292C43.3986 28.01 43.2005 28.0001 43 28.0001C39.6863 28.0001 37 30.6864 37 34.0001C37 35.4734 37.531 36.8227 38.4121 37.867C36.0502 40.3213 33.0673 42.1736 29.7162 43.1713C28.9428 40.752 26.676 39.0001 24 39.0001C21.324 39.0001 19.0572 40.752 18.2838 43.1713Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M24 31C27.866 31 31 27.866 31 24C31 20.134 27.866 17 24 17C20.134 17 17 20.134 17 24C17 27.866 20.134 31 24 31Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "通用设置", hint: "管理窗口、音频和系统行为" },
+  api: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>API 设置</title><g clip-path="url(#api-key-nav-clip)"><circle cx="15" cy="33" r="8" fill="none" stroke="currentColor" stroke-width="4"/><path d="M29 16L35.5 22" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 26L37 7" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M35 11L42 17.5" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></g><defs><clipPath id="api-key-nav-clip"><rect width="48" height="48" fill="none"/></clipPath></defs></svg>`, title: "API 设置", hint: "选择预设后只需要填写 API Key。" },
+  "api-advanced": { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>高级设置</title><path d="M34.0003 41L44 24L34.0003 7H14.0002L4 24L14.0002 41H34.0003Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M24 29C26.7614 29 29 26.7614 29 24C29 21.2386 26.7614 19 24 19C21.2386 19 19 21.2386 19 24C19 26.7614 21.2386 29 24 29Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "高级设置", hint: "配置 API 超时时间、调用模式．" },
   cyrene: { emoji: "🌸", title: "昔涟设置", hint: "管理 Agent 行为、记忆、RAG 与权限" },
   tts: { emoji: "🎙️", title: "TTS 设置", hint: "语音合成与朗读偏好" },
   asr: { emoji: "🎧", title: "ASR 设置", hint: "语音识别与通话配置" },
@@ -1193,6 +1241,19 @@ function applyUiThemeSelection(theme: GeneralSettings["uiTheme"]): void {
   document.documentElement.dataset.uiTheme = theme;
 }
 
+function applyFcOptimizeSelection(optimizeFirstRound?: boolean, disableLangGraph?: boolean) {
+  fcModeLangGraphButton.className = !disableLangGraph ? "fc-mode-option is-active" : "fc-mode-option";
+  fcModeEnableOptimizationButton.className = (disableLangGraph && optimizeFirstRound) ? "fc-mode-option is-active" : "fc-mode-option";
+  fcModeDisableOptimizationButton.className = (disableLangGraph && !optimizeFirstRound) ? "fc-mode-option is-active" : "fc-mode-option";
+  // 根据模式显隐相关参数
+  const isLangGraph = !disableLangGraph;
+  document.querySelectorAll<HTMLElement>("[data-mode]").forEach(el => {
+    const mode = el.dataset.mode;
+    if (mode === "langgraph") el.classList.toggle("is-hidden-mode", !isLangGraph);
+    else if (mode === "twophase") el.classList.toggle("is-hidden-mode", isLangGraph);
+  });
+}
+
 function renderUiFont(font: UiFont): void {
   uiFontCurrent.textContent = font.kind === "custom" ? font.displayName : "思源黑体（默认）";
   uiFontResetButton.hidden = font.kind !== "custom";
@@ -1214,6 +1275,18 @@ function setGeneralSaveStatus(text: string, cls?: string): void {
   generalSaveStatus.textContent = text;
   generalSaveStatus.className = "save-status";
   if (cls) generalSaveStatus.classList.add(cls);
+}
+
+function setTimeoutSaveStatus(text: string, cls?: string): void {
+  timeoutSaveStatus.textContent = text;
+  timeoutSaveStatus.className = "save-status";
+  if (cls) timeoutSaveStatus.classList.add(cls);
+}
+
+function setRuntimeSaveStatus(text: string, cls?: string): void {
+  runtimeSaveStatus.textContent = text;
+  runtimeSaveStatus.className = "save-status";
+  if (cls) runtimeSaveStatus.classList.add(cls);
 }
 
 function fillPresetOptions(): void {
@@ -1518,6 +1591,11 @@ async function loadConfig(): Promise<void> {
     if (embeddingDimensionsInput) {
       embeddingDimensionsInput.value = cfg.embeddingDimensions ? String(cfg.embeddingDimensions) : "";
     }
+    applyFcOptimizeSelection(cfg.optimizeFirstRound, cfg.disableLangGraph);
+    toggleEnableThinking.checked = cfg.thinkingOverride === 1;
+    toggleDisableThinking.checked = cfg.thinkingOverride === -1;
+    toggleDisableMaxToken.checked = !!cfg.disableMaxToken;
+    contextWindowInput.value = String(cfg.contextWindowTokens ?? 256000);
 
     // 视觉模型配置已并入 applyPreset（preferredVision 参数）。
 
@@ -1548,6 +1626,7 @@ async function loadGeneralSettings(): Promise<void> {
     syncMusicPlayback();
     soundEnabledInput.checked = cfg.soundEnabled;
     soundVolumeInput.value = String(cfg.soundVolume);
+    disableRadiusInput.checked = !cfg.uiThemeRadius;
     petAlwaysOnTopInput.checked = cfg.petAlwaysOnTop;
     petVisibleInput.checked = cfg.petVisible;
     petZoomInput.value = String(cfg.petZoom ?? 1);
@@ -1558,6 +1637,7 @@ async function loadGeneralSettings(): Promise<void> {
     chatParaSpacingInput.value = String(cfg.chatParaSpacing ?? 0.5);
     chatParaSpacingVal.textContent = (cfg.chatParaSpacing ?? 0.5).toFixed(2) + "em";
     document.documentElement.style.setProperty("--rb-chat-para-spacing", (cfg.chatParaSpacing ?? 0.5) + "em");
+    disableGpuInput.checked = cfg.disableGpuElectron ?? false;
     sidebarVisibleInput.checked = cfg.sidebarVisible ?? true;
     tasksVisibleInput.checked = cfg.tasksVisible ?? true;
     launchAtLoginInput.checked = cfg.launchAtLogin;
@@ -1588,6 +1668,147 @@ async function loadGeneralSettings(): Promise<void> {
   }
 }
 
+function timeoutToString(timeout: number) {
+  return timeout === -1 ? "" : String(timeout);
+}
+
+async function loadTimeoutSettings() {
+  try {
+    const cfg = await window.settings!.getTimeoutSettings();
+    timeoutSummaryInput.value = String(cfg.forceSummaryTimeout);
+    timeoutVisionInput.value = String(cfg.visionTimeout);
+    timeoutUserChoiceInput.value = String(cfg.userChoiceTimeout / 1000);
+    timeoutTestInput.value = String(cfg.testTimeout);
+    timeoutMemoryJudgeInput.value = String(cfg.memoryJudgeTimeout);
+    timeoutProfileTotalBudgetInput.value = cfg.profileTotalBudgetMs === -1 ? "" : String(cfg.profileTotalBudgetMs / 1000);
+    timeoutProfilePerAttemptInput.value = cfg.profilePerAttemptTimeoutMs === -1 ? "" : String(cfg.profilePerAttemptTimeoutMs / 1000);
+    timeoutProfileRemainingInput.value = cfg.profileMinimumRemainingBudgetMs === -1 ? "" : String(cfg.profileMinimumRemainingBudgetMs / 1000);
+    modelRequestTimeoutSecInput.value = cfg.modelRequestTimeoutSec != null ? String(cfg.modelRequestTimeoutSec) : "";
+    setTimeoutSaveStatus("时间设置保存后，对后续请求生效．");
+  } catch {
+    setTimeoutSaveStatus("读取偏好失败", "is-error");
+  }
+}
+
+function parsePositiveIntOrThrow(input: string, th: any) {
+  if (!/^[0-9]+$/.test(input)){
+    throw th;
+  }
+  if (isNaN(input as any)){
+    throw th;
+  }
+  const result = parseInt(input);
+  if (Number.isNaN(result) || result <= 0) {
+    throw th;
+  }
+  return result;
+}
+
+function parseN1IntOrThrow(input: string, th: any) {
+  if (input === "") return -1;
+  if (!/^[0-9]+$/.test(input)){
+    throw th;
+  }
+  if (isNaN(input as any)){
+    throw th;
+  }
+  const result = parseInt(input);
+  if (Number.isNaN(result) || result <= 0) {
+    throw th;
+  }
+  return result;
+}
+
+/** 解析秒数（支持小数），返回毫秒；空串返回 -1 */
+function parseN1SecToMsOrThrow(input: string, th: any): number {
+  if (input === "") return -1;
+  const result = parseFloat(input);
+  if (Number.isNaN(result) || result <= 0) {
+    throw th;
+  }
+  return Math.round(result * 1000);
+}
+
+async function saveTimeoutSettings(saveTestTimeout: boolean) {
+  let settings: Partial<TimeoutSettings>;
+  try {
+    if (!saveTestTimeout) {
+      settings = {
+        forceSummaryTimeout: parsePositiveIntOrThrow(timeoutSummaryInput.value, "工具总结阶段 API 超时"),
+        visionTimeout: parsePositiveIntOrThrow(timeoutVisionInput.value, "视觉模型单次 API 超时"),
+        userChoiceTimeout: 1000 * parsePositiveIntOrThrow(timeoutUserChoiceInput.value, "工具请求确认时间限制"),
+        memoryJudgeTimeout: parsePositiveIntOrThrow(timeoutMemoryJudgeInput.value, "记忆总结阶段 API 超时"),
+        profileTotalBudgetMs: parseN1SecToMsOrThrow(timeoutProfileTotalBudgetInput.value, "阶段总时间预算"),
+        profilePerAttemptTimeoutMs: parseN1SecToMsOrThrow(timeoutProfilePerAttemptInput.value, "单次尝试超时"),
+        profileMinimumRemainingBudgetMs: parseN1SecToMsOrThrow(timeoutProfileRemainingInput.value, "最小剩余时间"),
+        modelRequestTimeoutSec: modelRequestTimeoutSecInput.value === "" ? undefined : parsePositiveIntOrThrow(modelRequestTimeoutSecInput.value, "模型请求超时"),
+      };
+    } else {
+      settings = {
+        testTimeout: parsePositiveIntOrThrow(timeoutTestInput.value, "测试超时"),
+      };
+    }
+  } catch (e) {
+    if (saveTestTimeout) {
+      setSaveStatus("无效输入：" + e, "is-error");
+    } else {
+      setTimeoutSaveStatus("无效输入：" + e, "is-error");
+    }
+    return false;
+  }
+  try {
+    await window.settings!.saveTimeoutSettings(settings);
+    if (saveTestTimeout) {
+      setSaveStatus("已保存", "is-ok");
+    } else {
+      setTimeoutSaveStatus("已保存", "is-ok");
+    }
+    return true;
+  } catch {
+    if (saveTestTimeout) {
+      setSaveStatus("保存失败", "is-error");
+    } else {
+      setTimeoutSaveStatus("保存失败", "is-error");
+    }
+  }
+  return false;
+}
+
+timeoutTestReset.addEventListener("click", () => { timeoutTestInput.value = "15000" });
+timeoutSummaryReset.addEventListener("click", () => { timeoutSummaryInput.value = String(DEFAULT_FORCE_SUMMARY_TIMEOUT_MS) });
+timeoutVisionReset.addEventListener("click", () => { timeoutVisionInput.value = String(DEFAULT_VISION_TIMEOUT_MS) });
+timeoutMemoryJudgeReset.addEventListener("click", () => { timeoutMemoryJudgeInput.value = String(DEFAULT_MEMORY_JUDGE_MS) });
+timeoutUserChoiceReset.addEventListener("click", () => { timeoutUserChoiceInput.value = "60" });
+
+timeoutProfileTotalBudgetReset.addEventListener("click", () => { timeoutProfileTotalBudgetInput.value = "" });
+timeoutProfilePerAttemptReset.addEventListener("click", () => { timeoutProfilePerAttemptInput.value = "" });
+timeoutProfileRemainingReset.addEventListener("click", () => { timeoutProfileRemainingInput.value = "" });
+modelRequestTimeoutSecReset.addEventListener("click", () => { modelRequestTimeoutSecInput.value = "" });
+
+fcModeLangGraphButton.addEventListener("click", async () => {
+  await window.settings!.saveConfig({ disableLangGraph: false });
+  applyFcOptimizeSelection(false, false);
+});
+fcModeEnableOptimizationButton.addEventListener("click", async () => {
+  await window.settings!.saveConfig({ optimizeFirstRound: true, disableLangGraph: true });
+  applyFcOptimizeSelection(true, true);
+});
+fcModeDisableOptimizationButton.addEventListener("click", async () => {
+  await window.settings!.saveConfig({ optimizeFirstRound: false, disableLangGraph: true });
+  applyFcOptimizeSelection(false, true);
+});
+
+toggleEnableThinking.addEventListener("change", () => {
+  if (toggleEnableThinking.checked) {
+    toggleDisableThinking.checked = false;
+  }
+});
+toggleDisableThinking.addEventListener("change", () => {
+  if (toggleDisableThinking.checked) {
+    toggleEnableThinking.checked = false;
+  }
+});
+
 runtimeSyncSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
   button.addEventListener("click", () => {
     const value = button.dataset.value as "off" | "local" | "llm";
@@ -1599,15 +1820,6 @@ runtimeSyncSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((
 
 stickerEnabledInput.addEventListener("change", () => {
   setCyreneSaveStatus("有未保存的更改");
-});
-
-// 高级运行设置折叠
-advancedToggle.addEventListener("click", () => {
-  const expanded = advancedToggle.getAttribute("aria-expanded") === "true";
-  const next = !expanded;
-  advancedToggle.setAttribute("aria-expanded", String(next));
-  if (next) advancedFieldsWrap.removeAttribute("hidden");
-  else advancedFieldsWrap.setAttribute("hidden", "");
 });
 
 // 任何高级字段改动都标记"有未保存的更改"
@@ -1629,6 +1841,14 @@ stickerSizeSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((
 stickerThresholdInput.addEventListener("input", () => {
   stickerThresholdVal.textContent = parseFloat(stickerThresholdInput.value).toFixed(2);
   setCyreneSaveStatus("有未保存的更改");
+});
+
+openChromeGpu.addEventListener("click", () => {
+  window.settings?.openChromeGpu();
+});
+
+disableGpuInput.addEventListener("change", () => {
+  void window.settings?.saveGeneral({ disableGpuElectron: disableGpuInput.checked });
 });
 
 sidebarVisibleInput.addEventListener("change", () => {
@@ -1655,6 +1875,11 @@ musicVolumeInput.addEventListener("input", () => {
 
 soundEnabledInput.addEventListener("change", () => setGeneralSaveStatus("有未保存的更改"));
 soundVolumeInput.addEventListener("input", () => setGeneralSaveStatus("有未保存的更改"));
+
+disableRadiusInput.addEventListener("change", async () => {
+  await window.settings!.saveGeneral({ uiThemeRadius: !disableRadiusInput.checked });
+  setAppearanceSaveStatus("已应用", "is-ok");
+});
 
 petAlwaysOnTopInput.addEventListener("change", () => {
   window.settings?.setPetAlwaysOnTop(petAlwaysOnTopInput.checked);
@@ -2660,8 +2885,11 @@ if (testConnectionBtn) {
       return;
     }
     const apiKey = getApiKeyForRequest();
-    if (!apiKey) { setSaveStatus("请先填写 API Key 再测试", "is-error"); return; }
+    if (!baseUrl) { setSaveStatus("请先填写 API URL 再测试", "is-error"); return; }
     if (!model) { setSaveStatus("请先选择/填写模型再测试", "is-error"); return; }
+    if (!await saveTimeoutSettings(true)) {
+      return;
+    }
     setSaveStatus("测试连接中…");
     testConnectionBtn.disabled = true;
     try {
@@ -2701,10 +2929,11 @@ baseUrlResetBtn.addEventListener("click", () => {
 
 // 测试视觉模型按钮（仅在多模态开关 OFF 时可见）
 testVisionBtn.addEventListener("click", async () => {
-  const baseUrl = visionBaseUrlInput.value;
-  const apiKey = visionApiKeyInput.value;
-  const model = visionModelInput.value;
-  if (!apiKey) { visionTestStatus.textContent = "请先填写 API Key"; return; }
+  const synced = isVisionSynced();
+  const baseUrl = synced ? baseUrlInput.value : visionBaseUrlInput.value;
+  const apiKey = synced ? apiKeyInput.value : visionApiKeyInput.value;
+  const model = synced ? getCurrentModelValue() : visionModelInput.value;
+  if (!baseUrl) { visionTestStatus.textContent = "请先填写 API URL"; return; }
   if (!model) { visionTestStatus.textContent = "请先填写视觉型号"; return; }
   visionTestStatus.textContent = "测试中…";
   testVisionBtn.disabled = true;
@@ -2830,6 +3059,51 @@ async function renderSchedulerList(): Promise<void> {
   }
 }
 
+apiRuntimeForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  setRuntimeSaveStatus("保存中…");
+  try {
+    const parsedTimeoutSec = Math.max(30, Math.min(1800, parseInt(chatRequestTimeoutSecInput.value, 10) || 300));
+    const parsedMaxIterations = Math.max(5, Math.min(30, parseInt(maxIterationsInput.value, 10) || 12));
+    const parsedMaxReplans = Math.max(1, Math.min(5, parseInt(maxReplansInput.value, 10) || 2));
+    const parsedMaxRefresh = Math.max(0, Math.min(3, parseInt(maxRefreshInput.value, 10) || 1));
+    const parsedPerCallSec = Math.max(30, Math.min(120, parseInt(perCallTimeoutSecInput.value, 10) || 75));
+    const parsedCitaSec = Math.max(4, Math.min(30, parseInt(citaRepairBudgetSecInput.value, 10) || 8));
+    const parsedAgSec = Math.max(5, Math.min(40, parseInt(actionGateRepairBudgetSecInput.value, 10) || 10));
+    await window.settings!.saveConfig({
+      chatRequestTimeoutSec: parsedTimeoutSec,
+      maxIterations: parsedMaxIterations,
+      maxReplans: parsedMaxReplans,
+      maxRefresh: parsedMaxRefresh,
+      perCallTimeoutSec: parsedPerCallSec,
+      citaRepairBudgetSec: parsedCitaSec,
+      actionGateRepairBudgetSec: parsedAgSec,
+    });
+    // 同步超时到 TimeoutSettings（秒→毫秒）
+    await window.settings!.saveTimeoutSettings({
+      chatRequestTimeout: parsedTimeoutSec * 1000,
+      perRoundTimeout: parsedPerCallSec * 1000,
+      profileTotalBudgetMs: parseN1SecToMsOrThrow(timeoutProfileTotalBudgetInput.value, "Action Gate 总阶段时限"),
+      profilePerAttemptTimeoutMs: parseN1SecToMsOrThrow(timeoutProfilePerAttemptInput.value, "阶段内单次尝试超时"),
+      profileMinimumRemainingBudgetMs: parseN1SecToMsOrThrow(timeoutProfileRemainingInput.value, "最小剩余时间"),
+    });
+    setRuntimeSaveStatus("已保存", "is-ok");
+  } catch {
+    setRuntimeSaveStatus("保存失败", "is-error");
+  }
+});
+
+apiTimeoutForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  setTimeoutSaveStatus("保存中…");
+  try {
+    await saveTimeoutSettings(false);
+    setTimeoutSaveStatus("已保存", "is-ok");
+  } catch {
+    setTimeoutSaveStatus("保存失败", "is-error");
+  }
+});
+
 appearanceForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   setAppearanceSaveStatus("保存中…");
@@ -2837,6 +3111,7 @@ appearanceForm.addEventListener("submit", async (e) => {
     await window.settings!.saveGeneral(buildAppearanceSettingsPatch({
       uiTheme: getUiThemeValue(),
       uiIcon: getUiIconValue(),
+      uiThemeRadius: !disableRadiusInput.checked,
       petAlwaysOnTop: petAlwaysOnTopInput.checked,
       petVisible: petVisibleInput.checked,
       petZoom: Number(petZoomInput.value),
@@ -2858,6 +3133,7 @@ generalForm.addEventListener("submit", async (e) => {
       musicVolume: Number(musicVolumeInput.value),
       soundEnabled: soundEnabledInput.checked,
       soundVolume: Number(soundVolumeInput.value),
+      disableGpuElectron: disableGpuInput.checked,
       sidebarVisible: sidebarVisibleInput.checked,
       tasksVisible: tasksVisibleInput.checked,
       launchAtLogin: launchAtLoginInput.checked,
@@ -2914,6 +3190,9 @@ apiForm.addEventListener("submit", async (e) => {
   }
   setSaveStatus("保存中…");
   try {
+    if (!await saveTimeoutSettings(true)) {
+      return;
+    }
     // 保存前把当前输入快照进 perProvider 缓存（main 进程也会做一次，但渲染端先做一遍，
     // 是为了下一次切厂商再切回来不依赖磁盘往返）
     captureActiveProviderProfile();
@@ -2936,6 +3215,9 @@ apiForm.addEventListener("submit", async (e) => {
         apiKey: visionApiKeyInput.value.trim(),
         model: visionModelInput.value.trim(),
       },
+      thinkingOverride: toggleEnableThinking.checked ? 1 : toggleDisableThinking.checked ? -1 : 0,
+      disableMaxToken: toggleDisableMaxToken.checked,
+      contextWindowTokens: Math.max(4096, parseInt(contextWindowInput.value, 10) || 256000),
     });
     setSaveStatus("已保存", "is-ok");
   } catch {
@@ -3110,6 +3392,7 @@ function switchSection(section: string): void {
   sectionHint.textContent = label.hint;
 
   const isApi = section === "api";
+  const isApiAdvanced = section === "api-advanced";
   const isAppearance = section === "appearance";
   const isGeneral = section === "general";
   const isPreferences = section === "preferences";
@@ -3127,6 +3410,9 @@ function switchSection(section: string): void {
   const isAsr = section === "asr";
   const isMusic = section === "music";
   apiForm.classList.toggle("is-hidden", !isApi);
+  apiRuntimeForm.classList.toggle("is-hidden", !isApiAdvanced);
+  apiTimeoutForm.classList.toggle("is-hidden", !isApiAdvanced);
+  apiFcModeForm.classList.toggle("is-hidden", !isApiAdvanced);
   appearanceForm.classList.toggle("is-hidden", !isAppearance);
   generalForm.classList.toggle("is-hidden", !isGeneral);
   preferencesForm.classList.toggle("is-hidden", !isPreferences);
@@ -3162,11 +3448,12 @@ function switchSection(section: string): void {
   else disposeMusicPanel();
   placeholderPanel.classList.toggle(
     "is-hidden",
-    isApi || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr || isMusic,
+    isApi || isApiAdvanced || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr || isMusic,
   );
 
   if (
     !isApi &&
+    !isApiAdvanced &&
     !isAppearance &&
     !isGeneral &&
     !isPreferences &&
@@ -3309,6 +3596,7 @@ function initGameBotPluginCard(): void {
 initGameBotPluginCard();
 void loadConfig();
 void loadGeneralSettings();
+void loadTimeoutSettings();
 window.settings?.onChannelsStatusChanged((status) => {
   renderProactiveDeliveryAvailability(status as Record<string, { phase?: string }>);
 });
@@ -5317,6 +5605,7 @@ window.chatStore?.onActiveSessionChanged((sessionId) => {
    ============================================================ */
 
 import { Chart, registerables, type ChartConfiguration } from "chart.js";
+import { DEFAULT_CHAT_REQUEST_TIMEOUT_MS, DEFAULT_FORCE_SUMMARY_TIMEOUT_MS, DEFAULT_MEMORY_JUDGE_MS, DEFAULT_PER_ROUND_TIMEOUT_MS, DEFAULT_TIMEOUT_SETTINGS, DEFAULT_VISION_TIMEOUT_MS, TimeoutSettings } from "../../shared/timeout-types";
 
 Chart.register(...registerables);
 

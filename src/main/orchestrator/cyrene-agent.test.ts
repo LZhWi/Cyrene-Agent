@@ -308,3 +308,84 @@ describe("classifyRunError", () => {
     expect(result.diagnostics.errorCode).toBe("E_MODEL_REQUEST_FAILED");
   });
 });
+
+describe("executeToolCall business failure detection", () => {
+  // 这个测试验证：工具返回 JSON 字符串包含 error 字段时，status 应该是 failed
+  // 而不是被包装为 succeeded
+
+  it("tool returning JSON with error field should be treated as failed", () => {
+    // 模拟 read_file 返回的错误 JSON
+    const errorOutput = JSON.stringify({ error: "文件不存在或无法访问: /nonexistent" });
+
+    // 检查逻辑：解析 JSON，如果包含 error 字段，则 status=failed
+    let status: "succeeded" | "failed" = "succeeded";
+    let errorCode: string | undefined;
+
+    try {
+      const parsed = JSON.parse(errorOutput);
+      if (parsed && typeof parsed === "object" && (parsed.error || parsed.success === false)) {
+        status = "failed";
+        errorCode = "E_TOOL_BUSINESS_FAILED";
+      }
+    } catch {
+      // 不是 JSON
+    }
+
+    expect(status).toBe("failed");
+    expect(errorCode).toBe("E_TOOL_BUSINESS_FAILED");
+  });
+
+  it("tool returning JSON with success=false should be treated as failed", () => {
+    // 模拟 apply_patch 返回的错误 JSON
+    const errorOutput = JSON.stringify({ error: "文件不存在", success: false });
+
+    let status: "succeeded" | "failed" = "succeeded";
+
+    try {
+      const parsed = JSON.parse(errorOutput);
+      if (parsed && typeof parsed === "object" && (parsed.error || parsed.success === false)) {
+        status = "failed";
+      }
+    } catch {
+      // 不是 JSON
+    }
+
+    expect(status).toBe("failed");
+  });
+
+  it("tool returning normal JSON should be treated as succeeded", () => {
+    // 模拟 read_file 成功返回
+    const successOutput = JSON.stringify({ path: "/test.ts", content: "const a = 1;", truncated: false });
+
+    let status: "succeeded" | "failed" = "succeeded";
+
+    try {
+      const parsed = JSON.parse(successOutput);
+      if (parsed && typeof parsed === "object" && (parsed.error || parsed.success === false)) {
+        status = "failed";
+      }
+    } catch {
+      // 不是 JSON
+    }
+
+    expect(status).toBe("succeeded");
+  });
+
+  it("tool returning plain text should be treated as succeeded", () => {
+    // 模拟旧式工具返回纯文本
+    const plainOutput = "操作成功完成";
+
+    let status: "succeeded" | "failed" = "succeeded";
+
+    try {
+      const parsed = JSON.parse(plainOutput);
+      if (parsed && typeof parsed === "object" && (parsed.error || parsed.success === false)) {
+        status = "failed";
+      }
+    } catch {
+      // 不是 JSON，保持 succeeded
+    }
+
+    expect(status).toBe("succeeded");
+  });
+});

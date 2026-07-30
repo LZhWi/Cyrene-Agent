@@ -21,6 +21,7 @@ import {
   type ChatSession,
   type ChatSessionMeta,
   type ChatSessionPurpose,
+  type ConversationMode,
 } from "../../shared/chat-types";
 
 const ROOT_DIR_NAME = "cyrene-chats";
@@ -32,6 +33,14 @@ let sessionsDir = "";
 let indexPath = "";
 let indexCache: ChatSessionMeta[] = [];
 let initialized = false;
+
+function isConversationMode(value: unknown): value is ConversationMode {
+  return value === "chat" || value === "work" || value === "code";
+}
+
+function inferLegacyMode(purpose: ChatSessionPurpose | undefined): ConversationMode {
+  return purpose === "proactive-chat" ? "chat" : "work";
+}
 
 function ensureDirs(): void {
   if (!fs.existsSync(rootDir)) fs.mkdirSync(rootDir, { recursive: true });
@@ -50,10 +59,12 @@ function readIndexFromDisk(): ChatSessionMeta[] {
     const raw = fs.readFileSync(indexPath, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return [];
-    return parsed.filter((item): item is ChatSessionMeta => {
-      if (!item || typeof item !== "object") return false;
+    let migrated = false;
+    const normalized: ChatSessionMeta[] = [];
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue;
       const meta = item as Partial<ChatSessionMeta>;
-      return (
+      const valid = (
         typeof meta.id === "string" &&
         typeof meta.title === "string" &&
         typeof meta.createdAt === "number" &&
@@ -61,7 +72,25 @@ function readIndexFromDisk(): ChatSessionMeta[] {
         typeof meta.messageCount === "number" &&
         (meta.purpose === undefined || meta.purpose === "proactive-chat")
       );
-    });
+      if (!valid) continue;
+      const indexedMode = meta.mode;
+      const mode = isConversationMode(indexedMode)
+        ? indexedMode
+        : readSessionFile(meta.id!)?.mode ?? inferLegacyMode(meta.purpose);
+      if (mode !== indexedMode) migrated = true;
+      normalized.push({
+        id: meta.id!,
+        title: meta.title!,
+        identityId: meta.identityId ?? null,
+        createdAt: meta.createdAt!,
+        updatedAt: meta.updatedAt!,
+        messageCount: meta.messageCount!,
+        purpose: meta.purpose,
+        mode,
+      });
+    }
+    if (migrated) atomicWriteJson(indexPath, normalized);
+    return normalized;
   } catch (err) {
     console.warn("[chats-store] index.json 解析失败，重置为空:", err);
     return [];
@@ -87,6 +116,10 @@ function readSessionFile(id: string): ChatSession | null {
     if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.messages)) {
       return null;
     }
+    // 旧会话迁移：无 mode 字段时根据 purpose 推断
+    if (!isConversationMode(parsed.mode)) {
+      parsed.mode = inferLegacyMode(parsed.purpose);
+    }
     return parsed;
   } catch (err) {
     console.warn("[chats-store] session 文件解析失败:", id, err);
@@ -107,6 +140,7 @@ function metaFromSession(session: ChatSession): ChatSessionMeta {
     updatedAt: session.updatedAt,
     messageCount: session.messages.length,
     purpose: session.purpose,
+    mode: isConversationMode(session.mode) ? session.mode : inferLegacyMode(session.purpose),
   };
 }
 
@@ -146,9 +180,12 @@ export function getRootDir(): string {
   return rootDir;
 }
 
-export function listSessions(): ChatSessionMeta[] {
+export function listSessions(options?: { mode?: ConversationMode }): ChatSessionMeta[] {
   // 返回深拷贝，避免外部修改影响缓存
-  return indexCache.map((m) => ({ ...m }));
+  const sessions = options?.mode
+    ? indexCache.filter((session) => session.mode === options.mode)
+    : indexCache;
+  return sessions.map((m) => ({ ...m }));
 }
 
 export function getSession(id: string): ChatSession | null {
@@ -178,9 +215,11 @@ export function createSession(opts?: {
   identityId?: string | null;
   initialMessages?: ChatMessage[];
   purpose?: ChatSessionPurpose;
+  mode?: ConversationMode;
 }): ChatSession {
   const now = Date.now();
   const messages = opts?.initialMessages ?? [];
+  const mode = opts?.mode ?? (opts?.purpose === "proactive-chat" ? "chat" : "work");
   const session: ChatSession = {
     id: randomUUID(),
     title: opts?.title?.trim() || (messages.length > 0 ? deriveTitle(messages) : "新对话"),
@@ -191,6 +230,8 @@ export function createSession(opts?: {
     schemaVersion: CHAT_SCHEMA_VERSION,
     purpose: opts?.purpose,
     titleIsCustom: opts?.purpose ? true : undefined,
+    mode,
+    ...(mode === "code" ? { codeSession: { clineMode: "act", tasks: [] } } : {}),
   };
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));
@@ -316,4 +357,47 @@ export function migrateLegacyMessages(messages: ChatMessage[]): ChatSession | nu
 export async function openStorageFolder(): Promise<void> {
   ensureDirs();
   await shell.openPath(rootDir);
+}
+
+// ── 对话工作区绑定 ────────────────────────────────────────
+
+import type { ConversationWorkspaceBinding } from "../../shared/chat-types";
+
+/**
+ * 设置对话的工作区绑定。
+ * 返回更新后的 session，失败返回 null。
+ */
+export function setWorkspaceBinding(
+  sessionId: string,
+  binding: ConversationWorkspaceBinding,
+): ChatSession | null {
+  const session = readSessionFile(sessionId);
+  if (!session) return null;
+  session.workspaceBinding = binding;
+  session.updatedAt = Date.now();
+  writeSessionFile(session);
+  // workspaceBinding 不影响 index.json，无需 upsertMeta
+  return session;
+}
+
+/**
+ * 获取对话的工作区绑定。
+ * 未绑定返回 undefined。
+ */
+export function getWorkspaceBinding(sessionId: string): ConversationWorkspaceBinding | undefined {
+  const session = readSessionFile(sessionId);
+  return session?.workspaceBinding;
+}
+
+/**
+ * 清除对话的工作区绑定。
+ * 返回更新后的 session，失败返回 null。
+ */
+export function clearWorkspaceBinding(sessionId: string): ChatSession | null {
+  const session = readSessionFile(sessionId);
+  if (!session) return null;
+  session.workspaceBinding = undefined;
+  session.updatedAt = Date.now();
+  writeSessionFile(session);
+  return session;
 }

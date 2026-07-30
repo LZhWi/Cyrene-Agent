@@ -8,6 +8,7 @@ export default defineConfig({
       "src/renderer/**/*.test.ts",
       "src/shared/**/*.test.ts",
       "skills/**/tests/**/*.test.ts",
+      "scripts/cline-poc/**/*.test.ts",
     ],
   },
 });

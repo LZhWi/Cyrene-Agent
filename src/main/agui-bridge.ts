@@ -1,15 +1,12 @@
-// AG-UI IPC 桥：把 CyreneAgent 的事件流透传给渲染进程。
+// AG-UI IPC 桥：按会话模式选择执行链并把事件透传给渲染进程。
 //
 // 架构：
-//   渲染进程  ──invoke(AGUI_RUN, input)──>  本桥  ──>  CyreneAgent.runWithEvents()
-//     ▲                                        │ 订阅 Observable<BaseEvent>
-//     └── send(AGUI_EVENT, baseEvent) ─────────┘ 每个 AG-UI 事件转发给渲染进程
+//   Chat / Work ──> CyreneAgent.runWithEvents()
+//   Code        ──> runCodeRequest() ──> 原生 Cline Runtime
+//   两条链路的事件都由本桥通过 AGUI_EVENT 转发给渲染进程。
 //
-// Observable 是内存流、跨不过进程边界，所以必须这层桥：
-// 主进程订阅 agent 的 events$，每个 BaseEvent 通过 webContents.send 推给渲染进程。
-//
-// 本桥只管"跑 agent + 转发事件 + 跑完后做副作用"。
-// 上下文构建和副作用由调用方（index.ts）注入回调，保持本模块不依赖 index.ts 内部函数。
+// Chat / Work 的 Observable 是内存流、跨不过进程边界；Code 的后台任务也不能依赖
+// WebContents 生命周期。因此主进程统一持有运行并仅把事件发送给 Renderer。
 import { ipcMain, IpcMainInvokeEvent, WebContents } from "electron";
 import { IPC } from "../shared/ipc-channels";
 import { Subscription } from "rxjs";
@@ -25,6 +22,35 @@ import type { RelationshipChannel } from "./relationship/relationship-log";
 import { createThinkFilter, type ThinkStreamFilter, type ThinkFilterMode } from "./chat/think-filter";
 import { perf } from "./perf-trace";
 import type { StyleId } from "../shared/style-sampling";
+import { codeRunStore } from "./orchestrator/code/code-run-store";
+import { codeRunCoordinator } from "./orchestrator/code/code-run-coordinator";
+import * as chatsStore from "./chats/chats-store";
+
+type RunCodeRequest = typeof import("./orchestrator/code/code-request").runCodeRequest;
+
+/**
+ * Code 模式才加载完整 Cline 链。
+ * 避免普通 Work/Chat 启动和 AG-UI 单测沿 code-request -> index 形成循环导入。
+ */
+async function runCodeRequest(...args: Parameters<RunCodeRequest>): Promise<void> {
+  const codeRequest = await import("./orchestrator/code/code-request");
+  return codeRequest.runCodeRequest(...args);
+}
+
+const CODE_RENDERER_EVENT_TYPES: Record<string, string> = {
+  text_message_start: "TEXT_MESSAGE_START",
+  text_message_content: "TEXT_MESSAGE_CONTENT",
+  text_message_end: "TEXT_MESSAGE_END",
+  run_finished: "RUN_FINISHED",
+  run_error: "RUN_ERROR",
+};
+
+function normalizeCodeRendererEvent(event: unknown): unknown {
+  if (!event || typeof event !== "object") return event;
+  const typed = event as { type?: string };
+  const normalizedType = typed.type ? CODE_RENDERER_EVENT_TYPES[typed.type] : undefined;
+  return normalizedType ? { ...typed, type: normalizedType } : event;
+}
 
 /** 渲染进程发起 run 时传的输入。 */
 export interface AguiRunInput {
@@ -37,11 +63,11 @@ export interface AguiRunInput {
   style?: string;
   /** 本轮表达风格，与 executionMode 正交。 */
   styleId?: StyleId | string;
-  sessionId?: string;    // 会话 ID，用于历史召回按会话隔离（可选，默认 "default"）
+  sessionId?: string;    // 会话 ID；桌面运行模式只信任该会话持久化的 mode
   /** 外部渠道入口。桌面聊天不传；微信/飞书用于注入渠道语气规则。 */
   channel?: RelationshipChannel;
-  /** 显式运行模式；桌面聊天始终显式传入。 */
-  executionMode?: AgentExecutionMode | "soul-only" | "collaboration";
+  /** @deprecated 仅保留 Renderer 兼容；主进程按 ChatSession.mode 分流并忽略该值。 */
+  executionMode?: AgentExecutionMode | "code" | "soul-only" | "collaboration";
   /** 本轮附件（文本内容，临时注入系统上下文，不存历史）。 */
   attachments?: { name: string; text: string }[];
   /** 本轮图片附件。主进程会安全读取并转成 OpenAI-compatible image_url content block。 */
@@ -98,22 +124,10 @@ export function registerAgUiIpc(
     lifecycle?.onConversationStarted();
     perf.beginTurn("desktop");
     const input = rawInput as AguiRunInput;
-    let built;
-    try {
-      built = await perf.track("build_options", () => buildOptionsFn!(input));
-    } catch (error) {
-      perf.dump();
-      lifecycle?.onConversationEnded();
-      throw error;
-    }
-    const { options, latestUserText } = built;
-
-    const threadId = `thread-${Date.now()}`;
-    const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const agent = new CyreneAgent({ threadId, description: "Cyrene 主聊天" });
 
     // 事件转发目标：优先用 invoke 的 sender（发起 run 的窗口），兜底用聊天窗口
     const sender = event.sender;
+    const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const send = (baseEvent: unknown): void => {
       const targets: WebContents[] = [];
@@ -130,6 +144,62 @@ export function registerAgUiIpc(
         }
       }
     };
+
+    // ── 顶层模式分流：读取 ChatSession.mode（唯一可信来源） ──
+    // Code 模式完全绕过 CyreneAgent、CITA、WorkLoop
+    const sessionId = input.sessionId;
+    if (!sessionId) {
+      lifecycle?.onConversationEnded();
+      throw new Error("AGUI_RUN 缺少 sessionId");
+    }
+    const session = chatsStore.getSession(sessionId);
+    if (!session) {
+      lifecycle?.onConversationEnded();
+      throw new Error(`AGUI_RUN 会话不存在: ${sessionId}`);
+    }
+    const mode = session.mode ?? (session.purpose === "proactive-chat" ? "chat" : "work");
+    if (mode === "code") {
+      console.log("[AgUiBridge] mode=code, dispatching to runCodeRequest (bypass CyreneAgent)");
+      const userText = (() => {
+        const msgs = input.messages;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          const m = msgs[i] as { role?: string; content?: string };
+          if (m?.role === "user") return m.content ?? "";
+        }
+        return "";
+      })();
+      const codeSend = (codeEvent: unknown): void => send(normalizeCodeRendererEvent(codeEvent));
+      void runCodeRequest(
+        { text: userText, sessionId },
+        session,
+        { runId, sessionId, signal: new AbortController().signal, emitEvent: codeSend },
+      ).catch((err) => {
+        const message = err instanceof Error ? err.message : String(err);
+        codeSend({ type: "run_error", message, runId, threadId: sessionId });
+      }).finally(() => {
+        lifecycle?.onConversationEnded();
+      });
+
+      // CodeRunWorker 持有后台任务；Renderer/WebContents 仅接收事件，不拥有任务生命周期。
+      return { success: true, runId };
+    }
+
+    // ── chat / work 模式：现有 CyreneAgent 路径 ──
+    let built;
+    try {
+      built = await perf.track("build_options", () => buildOptionsFn!({
+        ...input,
+        executionMode: mode,
+      }));
+    } catch (error) {
+      perf.dump();
+      lifecycle?.onConversationEnded();
+      throw error;
+    }
+    const { options, latestUserText } = built;
+
+    const threadId = `thread-${Date.now()}`;
+    const agent = new CyreneAgent({ threadId, description: "Cyrene 主聊天" });
 
     let pendingRunFinishedEvent: unknown | null = null;
     let lifecycleEnded = false;
@@ -246,6 +316,60 @@ export function registerAgUiIpc(
     // 终态（RUN_FINISHED/RUN_ERROR）由事件流承载，渲染端据此 offEvent + 收尾。
     // 这样避免 invoke reply 与 send 事件的投递顺序竞争导致 offEvent 提前取消监听。
     return { success: true, runId };
+  });
+
+  // ── Code run 状态查询 IPC ────────────────────────────
+
+  ipcMain.handle(IPC.CODE_RUN_GET, (_event, runId: string) => {
+    return codeRunStore.getRun(runId) ?? null;
+  });
+
+  ipcMain.handle(IPC.CODE_RUN_GET_ACTIVE, (_event, params: { chatSessionId?: string; clineSessionId?: string } = {}) => {
+    if (params.chatSessionId) {
+      return codeRunStore.getActiveRunByChatSession(params.chatSessionId) ?? null;
+    }
+    if (params.clineSessionId) {
+      return codeRunStore.getActiveRunByClineSession(params.clineSessionId) ?? null;
+    }
+    return null;
+  });
+
+  ipcMain.handle(IPC.CODE_RUN_LIST, (_event, chatSessionId?: string) => {
+    return codeRunStore.listRuns(chatSessionId);
+  });
+
+  // ── Code 验证审批 IPC ────────────────────────────
+
+  ipcMain.handle(IPC.CODE_VERIFICATION_GET_PENDING, (_event, params: { chatSessionId?: string; runId?: string } = {}) => {
+    if (params.runId) {
+      return codeRunStore.getPendingApprovalsByRun(params.runId);
+    }
+    if (params.chatSessionId) {
+      return codeRunStore.getPendingApprovalsByChatSession(params.chatSessionId);
+    }
+    return [];
+  });
+
+  ipcMain.handle(IPC.CODE_VERIFICATION_APPROVE, (_event, approvalId: string) => {
+    const a = codeRunStore.getApproval(approvalId);
+    if (!a) return { ok: false, error: "approval not found" };
+    if (a.status === "approved") return { ok: true, approval: a };
+    if (a.status !== "pending") return { ok: false, error: `approval already ${a.status}`, approval: a };
+    if (!codeRunCoordinator.isActive(a.runId)) {
+      return { ok: false, error: "run is terminal", approval: a };
+    }
+    return { ok: true, approval: codeRunStore.approve(approvalId) };
+  });
+
+  ipcMain.handle(IPC.CODE_VERIFICATION_REJECT, (_event, approvalId: string) => {
+    const a = codeRunStore.getApproval(approvalId);
+    if (!a) return { ok: false, error: "approval not found" };
+    if (a.status === "rejected") return { ok: true, approval: a };
+    if (a.status !== "pending") return { ok: false, error: `approval already ${a.status}`, approval: a };
+    if (!codeRunCoordinator.isActive(a.runId)) {
+      return { ok: false, error: "run is terminal", approval: a };
+    }
+    return { ok: true, approval: codeRunStore.reject(approvalId) };
   });
 
   ipcMain.handle(IPC.AGUI_CANCEL, () => {

@@ -7,10 +7,17 @@ import { app } from "electron";
 import * as fs from "fs";
 import * as path from "path";
 import { IPC } from "../shared/ipc-channels";
+import { getTimeoutSettings } from "./timeout-manager";
+import {
+  policyFor,
+  type AgentFileAccessLevel,
+  type ToolRiskLevel,
+} from "./permission-policy";
+
+export { policyFor };
+export type { AgentFileAccessLevel, ToolRiskLevel };
 
 const LOG_PREFIX = "[Permission]";
-
-export type AgentFileAccessLevel = "read-only" | "scoped" | "per-action" | "full";
 
 export const ACCESS_LEVEL_LABEL: Record<AgentFileAccessLevel, string> = {
   "read-only": "只读",
@@ -18,35 +25,6 @@ export const ACCESS_LEVEL_LABEL: Record<AgentFileAccessLevel, string> = {
   "per-action": "每次审批",
   "full": "完全访问",
 };
-
-// 工具危险等级：决定该工具在哪些档位下可用
-// input-control（键鼠/截屏控制）按 shell 同档处理：read-only/scoped 拒绝，per-action 审批，full 允许
-export type ToolRiskLevel = "safe" | "fs-read" | "fs-write" | "shell" | "network" | "input-control";
-
-/**
- * 给定档位 + 工具危险等级 → 返回授权策略：
- *   - "allow"       直接放行
- *   - "ask"         弹审批 UI，用户点同意才放行
- *   - "deny"        直接拒绝（agent 会收到拒绝原因）
- */
-export function policyFor(level: AgentFileAccessLevel, risk: ToolRiskLevel): "allow" | "ask" | "deny" {
-  // safe 工具（纯计算、纯检索本地内置数据）任何档位都允许
-  if (risk === "safe") return "allow";
-
-  switch (level) {
-    case "read-only":
-      return risk === "fs-read" || risk === "network" ? "allow" : "deny";
-    case "scoped":
-      // 指定目录档：fs 读写允许（具体路径校验在工具内部做），shell 拒绝
-      if (risk === "fs-read" || risk === "fs-write" || risk === "network") return "allow";
-      return "deny";
-    case "per-action":
-      // 每次审批：除 safe 外都弹审批
-      return "ask";
-    case "full":
-      return "allow";
-  }
-}
 
 // ── 当前档位的内存缓存（main 进程持有） ───────────────────
 let currentLevel: AgentFileAccessLevel = "read-only";
@@ -121,6 +99,7 @@ export interface ApprovalRequest {
   toolDescription: string;
   args: Record<string, unknown>;
   risk: ToolRiskLevel;
+  timeoutMs: number;
 }
 
 /**
@@ -130,11 +109,12 @@ export interface ApprovalRequest {
 export function requestApproval(request: Omit<ApprovalRequest, "id">): Promise<boolean> {
   return new Promise<boolean>((resolve, reject) => {
     const id = "approve-" + (++approvalCounter) + "-" + Date.now();
+    const timeout = getTimeoutSettings().userChoiceTimeout;
     const timer = setTimeout(() => {
       pendingApprovals.delete(id);
-      console.warn(LOG_PREFIX, "审批超时（60s 未响应），自动拒绝:", request.toolId);
+      console.warn(LOG_PREFIX, `审批超时（${timeout}ms 未响应），自动拒绝:`, request.toolId);
       resolve(false);
-    }, 60_000);
+    }, timeout);
     pendingApprovals.set(id, { resolve, reject, timer });
 
     const payload: ApprovalRequest = { id, ...request };
@@ -223,6 +203,7 @@ export async function checkPermission(input: {
     toolDescription: input.toolDescription,
     args: input.args,
     risk: input.risk,
+    timeoutMs: getTimeoutSettings().userChoiceTimeout,
   });
   if (approved) return { allowed: true };
   return { allowed: false, reason: "用户拒绝了此次操作。" };

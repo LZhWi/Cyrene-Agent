@@ -17,9 +17,10 @@ import type {
   AskUserAnswer,
 } from "../shared/ask-clarification";
 import { validateAskUserAnswer } from "./orchestrator/ask-card";
+import { getTimeoutSettings } from "./timeout-manager";
 
 const LOG_PREFIX = "[UserChoice]";
-const CHOICE_TIMEOUT_MS = 120_000; // 2 分钟超时，给用户足够思考时间
+const DEFAULT_CHOICE_TIMEOUT_MS = 120_000; // 2 分钟超时，给用户足够思考时间
 
 /** 选项结构。 */
 export interface ChoiceOption {
@@ -69,12 +70,13 @@ export function requestUserChoice(
 ): Promise<string> {
   return new Promise<string>((resolve) => {
     const id = "choice-" + (++choiceCounter) + "-" + Date.now();
+    const choiceTimeout = getTimeoutSettings().userChoiceTimeout;
 
     const timer = setTimeout(() => {
       pendingChoices.delete(id);
-      console.warn(LOG_PREFIX, "选择超时（" + CHOICE_TIMEOUT_MS + "ms），使用默认值:", defaultValue ?? "(空)");
+      console.warn(LOG_PREFIX, "选择超时（" + choiceTimeout + "ms），使用默认值:", defaultValue ?? "(空)");
       resolve(defaultValue ?? "");
-    }, CHOICE_TIMEOUT_MS);
+    }, choiceTimeout);
 
     pendingChoices.set(id, {
       resolve: (value) => {
@@ -105,11 +107,12 @@ export function requestUserClarification(
   return new Promise<AskUserAnswer>((resolve) => {
     const id = "choice-" + (++choiceCounter) + "-" + Date.now();
     const emptyAnswer: AskUserAnswer = { requestId: id, answers: [] };
+    const timeout = getTimeoutSettings().userChoiceTimeout;
     const timer = setTimeout(() => {
       pendingChoices.delete(id);
-      console.warn(LOG_PREFIX, "澄清超时（" + CHOICE_TIMEOUT_MS + "ms）");
+      console.warn(LOG_PREFIX, "澄清超时（" + timeout + "ms）");
       resolve(emptyAnswer);
-    }, CHOICE_TIMEOUT_MS);
+    }, timeout);
     pendingChoices.set(id, {
       resolve: (value) => {
         try {
@@ -146,6 +149,7 @@ export function registerChoiceIpc(): void {
       return { ok: false };
     }
     const resolved = payload.answer ?? payload.value ?? "";
+    console.log(LOG_PREFIX, "用户回答 payload:", JSON.stringify({ id: payload.id, hasAnswer: !!payload.answer, valueType: typeof payload.value, resolved: JSON.stringify(resolved).slice(0, 200) }));
     const accepted = pending.resolve(resolved);
     if (!accepted) {
       console.warn(LOG_PREFIX, "用户选择校验失败:", payload.id);

@@ -4,7 +4,7 @@
   "description": "Live2D desktop pet — Cyrene",
   "main": "dist/main/main/index.js",
   "scripts": {
-    "build:main": "tsc -p tsconfig.main.json",
+    "build:main": "tsc -p tsconfig.main.json && node -e \"require('fs').cpSync('src/main/orchestrator/code/cline-esm-bridge.mjs','dist/main/main/orchestrator/code/cline-esm-bridge.mjs')\"",
     "build:preload": "tsc -p tsconfig.preload.json",
     "build:renderer": "vite build",
     "build:skills": "tsc -p tsconfig.skills.json",
@@ -47,6 +47,7 @@
   "dependencies": {
     "@ag-ui/client": "^0.0.57",
     "@ag-ui/core": "^0.0.57",
+    "@cline/sdk": "0.0.66",
     "@lancedb/lancedb": "^0.30.0",
     "@langchain/anthropic": "^1.5.2",
     "@langchain/core": "^1.2.3",

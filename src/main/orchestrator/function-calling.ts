@@ -33,9 +33,14 @@ interface LoopSettings {
   apiKey: string;
 }
 
-/** 把 ToolRegistry 里的工具转成统一 ToolSpec（与 wire 格式解耦）。 */
-function buildToolSpecs(): ToolSpec[] {
-  return toolRegistry.getEnabledTools().map(t => ({
+/** 把 ToolRegistry 里的工具转成统一 ToolSpec（与 wire 格式解耦）。
+ *  传入 allowedToolIds 时只暴露白名单内的工具，不修改全局 registry 状态。 */
+function buildToolSpecs(allowedToolIds?: string[]): ToolSpec[] {
+  const enabled = toolRegistry.getEnabledTools();
+  const filtered = allowedToolIds
+    ? enabled.filter(t => allowedToolIds.includes(t.id))
+    : enabled;
+  return filtered.map(t => ({
     name: t.id,
     description: t.description,
     parameters: {
@@ -83,13 +88,15 @@ export async function runFunctionCallingLoop(
   settings: LoopSettings,
   messages: ChatMessage[],
   timeoutMs: number = 60000,
+  allowedToolIds?: string[],
 ): Promise<{
   reply: string;
   toolResults: ToolCallResult[];
   totalUsage?: { input: number; output: number };
 }> {
   const adapter = getAdapter(settings.provider);
-  const tools = buildToolSpecs();
+  const allowedSet = allowedToolIds ? new Set(allowedToolIds) : undefined;
+  const tools = buildToolSpecs(allowedToolIds);
   const allToolResults: ToolCallResult[] = [];
   const startTime = Date.now();
   // 累加所有轮次的 token 用量（工具循环可能多轮，每轮都有 usage）
@@ -129,7 +136,8 @@ export async function runFunctionCallingLoop(
     console.log(LOG_PREFIX, "请求:", http.url);
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PER_ROUND_TIMEOUT_MS);
+    const timeout = PER_ROUND_TIMEOUT_MS;
+    const timer = setTimeout(() => controller.abort(), timeout);
     let response: Response;
     try {
       response = await fetch(http.url, {
@@ -141,7 +149,7 @@ export async function runFunctionCallingLoop(
     } catch (err) {
       if (err instanceof Error && err.name === "AbortError") {
         consecutiveTimeouts++;
-        console.warn(LOG_PREFIX, "第 " + (round + 1) + " 轮 LLM 请求超时（" + PER_ROUND_TIMEOUT_MS + "ms），连续第 " + consecutiveTimeouts + " 次");
+        console.warn(LOG_PREFIX, "第 " + (round + 1) + " 轮 LLM 请求超时（" + timeout + "ms），连续第 " + consecutiveTimeouts + " 次");
         clearTimeout(timer);
         // 连续超时即退出：再重试只会让上下文更长更慢，注定超时。
         // 不再往 conversation 塞"超时提示"消息（雪上加霜），直接跳出走强制总结。
@@ -209,7 +217,7 @@ export async function runFunctionCallingLoop(
         let output: string;
         let status: ToolCallResult["status"] = "failed";
         let errorCode: string | undefined;
-        if (!tool || !tool.enabled) {
+        if (!tool || !tool.enabled || (allowedSet && !allowedSet.has(tc.name))) {
           output = "[错误] 工具不可用: " + tc.name;
           errorCode = "E_TOOL_UNAVAILABLE";
           console.warn(LOG_PREFIX, output);

@@ -111,6 +111,14 @@ const MEMORY_REPAIR: StructuredOutputProfile["repair"]["memory_judge"] = {
   minimumRemainingBudgetMs: 500,
 };
 
+// 默认 repair 策略（所有新 stage 复用 action_gate 的配置）
+const DEFAULT_GATE_REPAIR = {
+  maxAttempts: 2,
+  totalBudgetMs: 10_000,
+  perAttemptTimeoutMs: 5_000,
+  minimumRemainingBudgetMs: 800,
+};
+
 const REPAIR: StructuredOutputProfile["repair"] = {
   cita: {
     maxAttempts: 2,
@@ -118,15 +126,21 @@ const REPAIR: StructuredOutputProfile["repair"] = {
     perAttemptTimeoutMs: 4_000,
     minimumRemainingBudgetMs: 500,
   },
-  action_gate: {
-    maxAttempts: 2,
-    totalBudgetMs: 10_000,
-    perAttemptTimeoutMs: 5_000,
-    minimumRemainingBudgetMs: 800,
-  },
+  action_gate: DEFAULT_GATE_REPAIR,
+  task_router: DEFAULT_GATE_REPAIR,
+  planner: DEFAULT_GATE_REPAIR,
+  native_fc: DEFAULT_GATE_REPAIR,
+  memory: DEFAULT_GATE_REPAIR,
   memory_judge: MEMORY_REPAIR,
   memory_compress: MEMORY_REPAIR,
   memory_resolve: MEMORY_REPAIR,
+};
+
+const A_GATE_REPAIR = {
+  maxAttempts: 2,
+  totalBudgetMs: 25_000,
+  perAttemptTimeoutMs: 12_500,
+  minimumRemainingBudgetMs: 800,
 };
 
 const A_REPAIR: StructuredOutputProfile["repair"] = {
@@ -136,12 +150,11 @@ const A_REPAIR: StructuredOutputProfile["repair"] = {
     perAttemptTimeoutMs: 10_000,
     minimumRemainingBudgetMs: 500,
   },
-  action_gate: {
-    maxAttempts: 2,
-    totalBudgetMs: 25_000,
-    perAttemptTimeoutMs: 12_500,
-    minimumRemainingBudgetMs: 800,
-  },
+  action_gate: A_GATE_REPAIR,
+  task_router: A_GATE_REPAIR,
+  planner: A_GATE_REPAIR,
+  native_fc: A_GATE_REPAIR,
+  memory: A_GATE_REPAIR,
   memory_judge: MEMORY_REPAIR,
   memory_compress: MEMORY_REPAIR,
   memory_resolve: MEMORY_REPAIR,
@@ -154,10 +167,21 @@ const KIMI_SLOW_REPAIR: StructuredOutputProfile["repair"] = {
     perAttemptTimeoutMs: 20_000,
     minimumRemainingBudgetMs: 500,
   },
-  action_gate: A_REPAIR.action_gate,
+  action_gate: A_GATE_REPAIR,
+  task_router: A_GATE_REPAIR,
+  planner: A_GATE_REPAIR,
+  native_fc: A_GATE_REPAIR,
+  memory: A_GATE_REPAIR,
   memory_judge: MEMORY_REPAIR,
   memory_compress: MEMORY_REPAIR,
   memory_resolve: MEMORY_REPAIR,
+};
+
+const B_GATE_REPAIR = {
+  maxAttempts: 2,
+  totalBudgetMs: 20_000,
+  perAttemptTimeoutMs: 10_000,
+  minimumRemainingBudgetMs: 800,
 };
 
 const B_REPAIR: StructuredOutputProfile["repair"] = {
@@ -167,15 +191,21 @@ const B_REPAIR: StructuredOutputProfile["repair"] = {
     perAttemptTimeoutMs: 8_000,
     minimumRemainingBudgetMs: 500,
   },
-  action_gate: {
-    maxAttempts: 2,
-    totalBudgetMs: 20_000,
-    perAttemptTimeoutMs: 10_000,
-    minimumRemainingBudgetMs: 800,
-  },
+  action_gate: B_GATE_REPAIR,
+  task_router: B_GATE_REPAIR,
+  planner: B_GATE_REPAIR,
+  native_fc: B_GATE_REPAIR,
+  memory: B_GATE_REPAIR,
   memory_judge: MEMORY_REPAIR,
   memory_compress: MEMORY_REPAIR,
   memory_resolve: MEMORY_REPAIR,
+};
+
+const MINIMAX_GATE_REPAIR = {
+  maxAttempts: 2,
+  totalBudgetMs: 12_000,
+  perAttemptTimeoutMs: 7_000,
+  minimumRemainingBudgetMs: 800,
 };
 
 const MINIMAX_REPAIR: StructuredOutputProfile["repair"] = {
@@ -185,12 +215,11 @@ const MINIMAX_REPAIR: StructuredOutputProfile["repair"] = {
     perAttemptTimeoutMs: 5_500,
     minimumRemainingBudgetMs: 500,
   },
-  action_gate: {
-    maxAttempts: 2,
-    totalBudgetMs: 12_000,
-    perAttemptTimeoutMs: 7_000,
-    minimumRemainingBudgetMs: 800,
-  },
+  action_gate: MINIMAX_GATE_REPAIR,
+  task_router: MINIMAX_GATE_REPAIR,
+  planner: MINIMAX_GATE_REPAIR,
+  native_fc: MINIMAX_GATE_REPAIR,
+  memory: MINIMAX_GATE_REPAIR,
   memory_judge: MEMORY_REPAIR,
   memory_compress: MEMORY_REPAIR,
   memory_resolve: MEMORY_REPAIR,

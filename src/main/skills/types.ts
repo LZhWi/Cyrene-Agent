@@ -1,6 +1,8 @@
 // Skill 系统 —— 类型定义。
 // id 永远 = 目录名（kebab-case），是唯一对外标识；name 仅展示，不参与匹配。
 
+import type { ToolEffectKind } from "../orchestrator/tool-registry";
+
 /** 一个 skill 的完整内存表示。 */
 export interface SkillEntry {
   id: string;            // = 目录名，kebab-case，唯一对外标识
@@ -14,6 +16,8 @@ export interface SkillEntry {
   enabled: boolean;      // 运行时状态，持久化到 settings.json
   source: "builtin" | "user";  // 来源
   manifest?: SkillManifest;
+  /** Skill 声明的工具效果类型。未声明时 invoke_skill 会被 ExecutionPolicyGuard 拒绝。 */
+  effectKind?: ToolEffectKind;
 }
 
 export interface SkillManifest {
@@ -34,5 +38,6 @@ export interface ParsedSkill {
   description: string;
   tools?: string[];
   version?: string;
+  effectKind?: ToolEffectKind;
   body: string;  // SKILL.md 正文（frontmatter 之后）
 }

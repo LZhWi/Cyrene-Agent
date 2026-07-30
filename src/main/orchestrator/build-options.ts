@@ -82,7 +82,7 @@ export interface BuildOptionsDeps {
   buildRelationshipContext: () => Promise<string>;
   buildSystemPrompt: (styleFile: string) => string;
   /** 第一期：工具阶段 system prompt。仅含工具调度规则 + 自动生成的工具目录。 */
-  buildToolSystemPrompt: (enabledTools: ReadonlyArray<unknown>) => string;
+  buildToolSystemPrompt: (enabledTools: ReadonlyArray<unknown>, isOptimizedFirstRound?: boolean) => string;
   /** 第一期：Soul 阶段使用的基础 system prompt。工具结果在 FC 循环 Soul 阶段执行前动态追加。 */
   buildSoulSystemBasePrompt: (styleFile: string) => string;
   /** 已由 main 侧解析好的 style Markdown；build-options 只负责注入边界。 */
@@ -126,6 +126,11 @@ export interface BuildOptionsDeps {
     contextBlock: string;
     retrievedAtoms: SocialAtom[];
   }>;
+  /**
+   * 获取对话的工作区绑定（来自 Conversation Workspace Binding）。
+   * 返回 undefined 表示当前对话未绑定工作区。
+   */
+  getWorkspaceBinding?: (conversationId: string) => { workspaceRoot: string; displayName: string; boundAt: number } | undefined;
 }
 
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
@@ -174,6 +179,16 @@ export interface ModelSettingsLite {
   runtimeSync?: string;
   stickerEnabled?: boolean;
   stickerSimilarityThreshold?: number;
+  disableLangGraph?: boolean;
+  optimizeFirstRound?: boolean;
+  /** 上下文窗口大小（Token）。来自 ModelSettings.contextWindowTokens。 */
+  contextWindowTokens?: number;
+}
+
+export interface StyleSettingsLite {
+  currentStyleId?: unknown;
+  customStyle?: unknown;
+  chatSocialContextEnabled?: unknown;
 }
 
 export interface StyleSettingsLite {
@@ -358,8 +373,8 @@ export async function buildAgentRunOptions(
 ): Promise<{ options: CyreneRunOptions; latestUserText: string }> {
   const settings = deps.loadModelSettings();
   const styleSettings = deps.loadGeneralSettings();
-  if (!settings.apiKey) {
-    throw new Error("还没有填写 API Key，请先在设置里保存 API 配置。");
+  if (!settings.baseUrl) {
+    throw new Error("还没有填写 API URL，请先在设置里保存 API 配置。");
   }
   const messages = deps.normalizeChatMessages(input.messages);
   if (messages.length === 0) {
@@ -373,6 +388,19 @@ export async function buildAgentRunOptions(
   );
   const isChatMode = executionMode === "chat";
   const conversationId = input.sessionId || "default";
+
+  // 读取可信工作区绑定（来自 Conversation Workspace Binding）
+  const workspaceBinding = conversationId
+    ? deps.getWorkspaceBinding?.(conversationId)
+    : undefined;
+  const resolvedWorkspaceRoot = workspaceBinding?.workspaceRoot;
+  if (resolvedWorkspaceRoot) {
+    console.log("[BuildOptions] workspace binding loaded:",
+      "conversationId=" + conversationId.slice(0, 8) + "...",
+      "workspaceRoot=" + resolvedWorkspaceRoot,
+    );
+  }
+
   const socialContextEnabled = isChatMode
     && styleSettings.chatSocialContextEnabled === true
     && Boolean(deps.buildChatSocialContext);
@@ -554,6 +582,10 @@ export async function buildAgentRunOptions(
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
     + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "")
     + (citaContextBlock ? "\n\n" + citaContextBlock : "");
+  const toolSystemContentOptimizedForFirstRound = deps.buildToolSystemPrompt(runTools, true)
+    + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
+    + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "")
+    + (citaContextBlock ? "\n\n" + citaContextBlock : "");
 
   // Soul 阶段基础 system：人设 + 环境/记忆/关系/附件/渠道（这些是"表达"所需）。
   // FC 循环在 Soul 阶段追加通用 ToolExecutionContext，并保留 role:tool 协议消息。
@@ -631,6 +663,7 @@ export async function buildAgentRunOptions(
       actionGateSystemPrompt,
       timeoutMs: deps.chatRequestTimeoutMs,
       toolSystemContent,
+      toolSystemContentOptimizedForFirstRound,
       soulSystemBaseContent,
       soulSampling,
       ...(socialContextEnabled && input.userTurnId && input.assistantTurnId ? {
@@ -646,6 +679,9 @@ export async function buildAgentRunOptions(
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
       ...(isChatMode ? { tools: runTools as ToolDefinition[] } : {}),
       ...(availableSkills.length > 0 ? { availableSkills } : {}),
+      agentRuntime: settings.disableLangGraph ? "legacy" : "langgraph",
+      optimizeFirstRound: settings.optimizeFirstRound,
+      resolvedWorkspaceRoot,
     },
     latestUserText,
   };

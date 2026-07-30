@@ -12,7 +12,9 @@ import {
 import { authHeaderFor } from "./auth";
 import { resolveReasoningCapability } from "../../../shared/reasoning";
 import { applyReasoningPreference } from "./reasoning";
+import { getTimeoutSettings } from "../../timeout-manager";
 import { resolveAutomaticToolChoicePolicy, resolveToolChoicePolicy } from "./tool-choice-policy";
+import { getVendorRuntimeSettings } from "./runtime-settings";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_MAX_TOKENS = 4096;
@@ -96,7 +98,7 @@ export class AnthropicAdapter implements ChatVendorAdapter {
     const { system, messages } = toWireMessages(req.messages);
     const body: Record<string, unknown> = {
       model: req.model,
-      max_tokens: req.maxTokens ?? DEFAULT_MAX_TOKENS,
+      max_tokens: getVendorRuntimeSettings().disableMaxToken ? undefined : req.maxTokens ?? DEFAULT_MAX_TOKENS,
       messages,
       stream: req.stream ?? false,
     };
@@ -313,7 +315,7 @@ export class AnthropicAdapter implements ChatVendorAdapter {
   async testConnection(cfg: VendorConfig): Promise<TestConnectionResult> {
     const start = Date.now();
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 15000);
+    const timer = setTimeout(() => controller.abort(), getTimeoutSettings().testTimeout);
     try {
       const req: ChatRequest = {
         model: cfg.model,

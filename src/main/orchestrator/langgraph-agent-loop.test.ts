@@ -66,6 +66,7 @@ function musicPlayTool(): ToolDefinition {
   return {
     id: "music_play_track", capability: "music.play_track", name: "播放歌曲",
     description: "播放可信歌曲候选", enabled: true,
+    effectKind: "external_side_effect",
     inputSchema: {
       type: "object", properties: { candidateRef: { type: "string" } }, required: ["candidateRef"],
     },
@@ -78,6 +79,7 @@ function weatherTool(): ToolDefinition {
   return {
     id: "weather", capability: "weather.lookup", name: "查询天气",
     description: "查询指定城市的天气", enabled: true,
+    effectKind: "read",
     inputSchema: {
       type: "object", properties: { city: { type: "string" } }, required: [],
     },
@@ -102,6 +104,7 @@ function options(adapter: FakeAdapter, executeTool = vi.fn(async () => ({
     trustedRefs: ["ctx_song_1", "ctx_song_2"],
     timeoutMs: 30_000,
     executeTool,
+    perCallTimeoutMs: 75000,
   };
 }
 
@@ -636,6 +639,8 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     const writeWordTool: ToolDefinition = {
       id: "write_word", capability: "write_word", name: "写 Word",
       description: "生成文档", enabled: true,
+      effectKind: "mutation",
+      verificationPolicy: "artifact",
       inputSchema: { type: "object", properties: { filename: { type: "string" }, title: { type: "string" }, paragraphs: { type: "array" } }, required: ["filename", "title", "paragraphs"] },
       completionEvidence: [{ kind: "tool_succeeded" }],
       execute: async () => "unused",

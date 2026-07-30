@@ -4,6 +4,9 @@ import { IPC } from "../shared/ipc-channels";
 
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => unknown>(),
+  getSession: vi.fn(),
+  runCodeRequest: vi.fn(),
+  runCyreneAgent: vi.fn(),
 }));
 
 vi.mock("electron", () => ({
@@ -24,6 +27,7 @@ vi.mock("./orchestrator/cyrene-agent", () => ({
     }
 
     runWithEvents() {
+      mocks.runCyreneAgent();
       return new Observable((subscriber) => {
         this.lastResult = { reply: "抱抱你", toolResults: [] };
         subscriber.next({ type: "RUN_STARTED" });
@@ -38,10 +42,19 @@ vi.mock("./orchestrator/history-tools", () => ({
   indexConversationTurn: vi.fn(),
 }));
 
+vi.mock("./chats/chats-store", () => ({
+  getSession: mocks.getSession,
+}));
+
+vi.mock("./orchestrator/code/code-request", () => ({
+  runCodeRequest: mocks.runCodeRequest,
+}));
+
 describe("agui-bridge sticker event ordering", () => {
   it("delivers sticker side effects before RUN_FINISHED so renderer keeps listening", async () => {
     vi.resetModules();
     mocks.handlers.clear();
+    mocks.getSession.mockReturnValue({ id: "chat-sticker", mode: "chat" });
     const { registerAgUiIpc } = await import("./agui-bridge");
     const sent: unknown[] = [];
     const sender = {
@@ -74,16 +87,20 @@ describe("agui-bridge sticker event ordering", () => {
 
     const handler = mocks.handlers.get(IPC.AGUI_RUN);
     if (!handler) throw new Error("AGUI_RUN handler was not registered");
-    await handler({ sender }, { messages: [{ role: "user", content: "累了" }], style: "01_default.md" });
+    await handler(
+      { sender },
+      { messages: [{ role: "user", content: "累了" }], sessionId: "chat-sticker", style: "01_default.md" },
+    );
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     const eventTypes = sent.map((event) => (event as { type?: string; name?: string }).name ?? (event as { type?: string }).type);
     expect(eventTypes).toEqual(["RUN_STARTED", "cyrene.sticker", "RUN_FINISHED"]);
   });
 
-  it("passes renderer styleId through to build options", async () => {
+  it("uses the Chat session mode while preserving renderer styleId", async () => {
     vi.resetModules();
     mocks.handlers.clear();
+    mocks.getSession.mockReturnValue({ id: "chat-style", mode: "chat" });
     const { registerAgUiIpc } = await import("./agui-bridge");
     const buildOptions = vi.fn(async () => ({
       options: {
@@ -106,12 +123,97 @@ describe("agui-bridge sticker event ordering", () => {
     if (!handler) throw new Error("AGUI_RUN handler was not registered");
     await handler(
       { sender },
-      { messages: [{ role: "user", content: "hi" }], styleId: "lively", executionMode: "chat" },
+      {
+        messages: [{ role: "user", content: "hi" }],
+        sessionId: "chat-style",
+        styleId: "lively",
+        executionMode: "work",
+      },
     );
 
     expect(buildOptions).toHaveBeenCalledWith(expect.objectContaining({
       styleId: "lively",
       executionMode: "chat",
     }));
+    expect(mocks.runCodeRequest).not.toHaveBeenCalled();
+  });
+
+  it("keeps Work requests on CyreneAgent and never dispatches the Code runtime", async () => {
+    vi.resetModules();
+    mocks.handlers.clear();
+    mocks.runCodeRequest.mockClear();
+    mocks.runCyreneAgent.mockClear();
+    mocks.getSession.mockReturnValue({ id: "work-chat", mode: "work" });
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    const buildOptions = vi.fn(async () => ({
+      options: {
+        settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
+        messages: [],
+        timeoutMs: 1000,
+        toolSystemContent: "TOOL",
+        soulSystemBaseContent: "SOUL",
+      },
+      latestUserText: "修改项目文件",
+    }));
+    registerAgUiIpc(buildOptions, async () => {}, () => null);
+    const handler = mocks.handlers.get(IPC.AGUI_RUN);
+    if (!handler) throw new Error("AGUI_RUN handler was not registered");
+
+    await handler({
+      sender: { isDestroyed: () => false, send: () => {} },
+    }, {
+      messages: [{ role: "user", content: "修改项目文件" }],
+      sessionId: "work-chat",
+      executionMode: "chat",
+    });
+
+    expect(buildOptions).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: "work-chat",
+      executionMode: "work",
+    }));
+    expect(mocks.runCyreneAgent).toHaveBeenCalledOnce();
+    expect(mocks.runCodeRequest).not.toHaveBeenCalled();
+  });
+
+  it("Code verification event send failure does not stop the background run", async () => {
+    vi.resetModules();
+    mocks.handlers.clear();
+    mocks.runCodeRequest.mockClear();
+    mocks.runCyreneAgent.mockClear();
+    mocks.getSession.mockReturnValue({ id: "code-chat", mode: "code" });
+    let continuedAfterEvent = false;
+    mocks.runCodeRequest.mockImplementation(async (_input, _session, context) => {
+      context.emitEvent({
+        type: "code_verification_card",
+        payload: { status: "completed_verified" },
+      });
+      continuedAfterEvent = true;
+    });
+
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    registerAgUiIpc(
+      vi.fn(),
+      vi.fn(),
+      () => null,
+    );
+    const handler = mocks.handlers.get(IPC.AGUI_RUN);
+    if (!handler) throw new Error("AGUI_RUN handler was not registered");
+
+    const ack = await handler({
+      sender: {
+        isDestroyed: () => false,
+        send: () => { throw new Error("webContents destroyed during send"); },
+      },
+    }, {
+      messages: [{ role: "user", content: "修复代码" }],
+      sessionId: "code-chat",
+      styleId: "default",
+      executionMode: "work",
+    });
+
+    expect(ack).toMatchObject({ success: true });
+    await expect.poll(() => mocks.runCodeRequest).toHaveBeenCalledOnce();
+    expect(mocks.runCyreneAgent).not.toHaveBeenCalled();
+    expect(continuedAfterEvent).toBe(true);
   });
 });

@@ -10,6 +10,8 @@ import type {
   StructuredOutputProfile,
   StructuredOutputStage,
 } from "./types";
+import { getTimeoutSettings } from "../../timeout-manager";
+import { resolveModelRequestTimeoutMs, resolveTotalBudgetMs } from "../config/model-timeout";
 
 export interface StructuredGenerationResponse {
   text: string;
@@ -73,13 +75,38 @@ export async function runStructuredOutput<T, TRequest>(
 ): Promise<StructuredOutputRunResult<T>> {
   const now = input.now ?? Date.now;
   const startedAt = now();
-  const policy = input.profile.repair[input.stage];
+  let policy = input.profile.repair[input.stage];
   let attempts = 0;
   let repairCount = 0;
   let errors: StructuredValidationError[] = [];
   let lastFinishReason = "unknown";
   let candidateCount = 0;
   let validCandidateCount = 0;
+
+  const timeoutSettings = getTimeoutSettings();
+  let policyOverride = false;
+  const clonePolicyIfNeeded = () => {
+    if (!policyOverride) {
+      policy = { ...policy };
+      policyOverride = true;
+    }
+  };
+
+  // 统一模型请求超时：始终使用新配置模块
+  // resolveModelRequestTimeoutMs 内部会处理未设置的情况，返回默认值 60s
+  const perAttempt = resolveModelRequestTimeoutMs(timeoutSettings);
+  const totalBudget = resolveTotalBudgetMs(perAttempt, policy.maxAttempts);
+  clonePolicyIfNeeded();
+  policy.perAttemptTimeoutMs = perAttempt;
+  policy.totalBudgetMs = totalBudget;
+
+  console.log(`[StructuredOutput] stage=${input.stage} perAttempt=${perAttempt}ms totalBudget=${totalBudget}ms maxAttempts=${policy.maxAttempts}`);
+
+  // 最小剩余时间仍从旧配置读取（暂不统一）
+  if (timeoutSettings.profileMinimumRemainingBudgetMs !== -1) {
+    clonePolicyIfNeeded();
+    policy.minimumRemainingBudgetMs = timeoutSettings.profileMinimumRemainingBudgetMs;
+  }
 
   const finish = (
     result: StructuredOutputRunResult<T>,
@@ -132,6 +159,7 @@ export async function runStructuredOutput<T, TRequest>(
     const timeoutMs = Math.min(policy.perAttemptTimeoutMs, remaining);
     let timer: ReturnType<typeof setTimeout> | undefined;
     let response: StructuredGenerationResponse;
+    const attemptStart = now();
     attempts += 1;
     try {
       response = await Promise.race([
@@ -143,8 +171,48 @@ export async function runStructuredOutput<T, TRequest>(
           }, timeoutMs);
         }),
       ]);
-    } catch {
-      return fail("MODEL_REQUEST_FAILED", "fail_closed");
+    } catch (err) {
+      const elapsedMs = now() - attemptStart;
+      const errorName = err instanceof Error ? err.name : typeof err;
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      const isAborted = controller.signal.aborted;
+
+      // 基于明确异常类型分类，不靠文本模糊匹配
+      let errorCode = "MODEL_REQUEST_FAILED";
+
+      // 1. 超时：我们自己抛的 STRUCTURED_OUTPUT_TIMEOUT，或 AbortError
+      if (err instanceof Error && err.message === "STRUCTURED_OUTPUT_TIMEOUT") {
+        errorCode = "MODEL_REQUEST_TIMEOUT";
+      } else if (err instanceof Error && err.name === "AbortError") {
+        errorCode = "MODEL_REQUEST_TIMEOUT";
+      } else if (isAborted) {
+        errorCode = "MODEL_REQUEST_TIMEOUT";
+      }
+      // 2. HTTP 错误：AgentRuntimeError 带 httpStatus，或 Response 对象带 status
+      else if (err instanceof Error && "status" in err && typeof (err as any).status === "number") {
+        errorCode = "MODEL_HTTP_ERROR";
+      } else if (err instanceof Error && "statusCode" in err && typeof (err as any).statusCode === "number") {
+        errorCode = "MODEL_HTTP_ERROR";
+      } else if (err instanceof Error && err.message.startsWith("E_MODEL_REQUEST_FAILED")) {
+        // AgentRuntimeError from callAdapter
+        errorCode = "MODEL_HTTP_ERROR";
+      }
+      // 3. 解析失败：SyntaxError（JSON.parse 失败）
+      else if (err instanceof SyntaxError) {
+        errorCode = "MODEL_RESPONSE_PARSE_FAILED";
+      }
+
+      console.error("[StructuredOutput] request failed", {
+        stage: input.stage,
+        errorCode,
+        errorName,
+        errorMessage: errorMessage.slice(0, 200),
+        elapsedMs,
+        timeoutMs,
+        aborted: isAborted,
+        attempt: attempts,
+      });
+      return fail(errorCode, "fail_closed");
     } finally {
       if (timer) clearTimeout(timer);
       input.signal?.removeEventListener("abort", abort);

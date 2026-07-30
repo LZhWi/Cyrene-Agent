@@ -33,10 +33,10 @@ body {
     radial-gradient(circle at 50% 112%, var(--rb-bg-2) 0%, transparent 36%),
     linear-gradient(135deg, var(--rb-bg-3) 0%, var(--rb-bg-1) 68%, var(--rb-bg-2) 100%);
   border: 1px solid var(--rb-border-strong);
-  box-shadow:
-    0 0 26px rgba(236, 72, 153, 0.16),
-    inset 0 1px 0 rgba(255, 255, 255, 0.15),
-    inset 0 0 0 1px rgba(236, 72, 153, 0.11);
+}
+
+[data-ui-radius="false"] .chat {
+  border-radius: 0px;
 }
 
 .chat::before {
@@ -1052,6 +1052,43 @@ body {
   background: linear-gradient(135deg, rgba(236, 72, 153, 0.3), rgba(157, 127, 234, 0.25));
   border-color: var(--rb-pink-glow);
   color: var(--rb-text-on-pink);
+}
+
+/* ── 工作区指示器 ── */
+.chat__workspace-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 8px;
+  background: rgba(99, 102, 241, 0.15);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  color: #a5b4fc;
+  font-size: 12px;
+  line-height: 1;
+  max-width: 140px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: all 0.2s;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.chat__workspace-indicator:hover {
+  background: rgba(99, 102, 241, 0.25);
+  border-color: rgba(99, 102, 241, 0.5);
+}
+
+.chat__workspace-indicator::before {
+  content: "📁";
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.chat__workspace-indicator[hidden] {
+  display: none;
 }
 
 /* ── 表情包选择面板 ── */
@@ -2577,6 +2614,251 @@ body {
 [data-ui-theme="pearl-white"] .music-agui-card__header span,
 [data-ui-theme="pearl-white"] .music-agui-card__order,
 [data-ui-theme="pearl-white"] .music-agui-card__meta span { color: #8b7180; }
+
+/* ── Code 任务与可信验证卡片 ── */
+.code-run-panel {
+  display: flex;
+  width: 100%;
+  padding: 2px 16px 10px 52px;
+  box-sizing: border-box;
+}
+
+.code-run-card {
+  width: min(440px, calc(100vw - 112px));
+  overflow: hidden;
+  border: 1px solid rgba(255, 185, 218, 0.24);
+  border-radius: 17px;
+  color: rgba(255, 255, 255, 0.9);
+  background:
+    radial-gradient(circle at 100% 0, rgba(208, 132, 255, 0.16), transparent 42%),
+    linear-gradient(145deg, rgba(47, 34, 57, 0.97), rgba(26, 22, 35, 0.97));
+  box-shadow: 0 12px 32px rgba(12, 8, 18, 0.24);
+}
+
+.code-run-card--completed_verified,
+.code-run-card--completed_no_changes {
+  border-color: rgba(116, 224, 177, 0.34);
+}
+
+.code-run-card--failed_verification,
+.code-run-card--failed,
+.code-run-card--rejected {
+  border-color: rgba(255, 111, 140, 0.38);
+}
+
+.code-run-card--approval,
+.code-run-card--approval_required {
+  border-color: rgba(255, 191, 111, 0.42);
+}
+
+.code-run-card__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 13px 15px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.09);
+}
+
+.code-run-card__header strong {
+  min-width: 0;
+  font-size: 14px;
+  letter-spacing: 0.01em;
+}
+
+.code-run-card__badge {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border-radius: 999px;
+  color: #ffc0db;
+  background: rgba(255, 122, 178, 0.13);
+  font-size: 10px;
+  line-height: 1.2;
+}
+
+.code-run-card__body {
+  display: grid;
+  gap: 10px;
+  padding: 13px 15px 15px;
+}
+
+.code-run-card__meta {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+  font-size: 11px;
+}
+
+.code-run-card__meta > span {
+  color: rgba(255, 255, 255, 0.46);
+}
+
+.code-run-card__meta > strong {
+  min-width: 0;
+  overflow: hidden;
+  color: rgba(255, 255, 255, 0.78);
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.code-run-card__command {
+  display: block;
+  overflow-x: auto;
+  padding: 10px 11px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  border-radius: 10px;
+  color: #ffd5e8;
+  background: rgba(7, 5, 11, 0.32);
+  font: 11px/1.55 ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.code-run-card__steps {
+  display: grid;
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.code-run-card__step {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  color: rgba(255, 255, 255, 0.7);
+  background: rgba(255, 255, 255, 0.045);
+  font-size: 11px;
+}
+
+.code-run-card__step-icon {
+  color: #ff9bbb;
+  text-align: center;
+}
+
+.code-run-card__step.is-passed .code-run-card__step-icon {
+  color: #74dfb0;
+}
+
+.code-run-card__step > :last-child {
+  color: rgba(255, 255, 255, 0.4);
+  font-variant-numeric: tabular-nums;
+}
+
+.code-run-card__warnings {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 10px 8px 27px;
+  border-radius: 9px;
+  color: #ffd0a6;
+  background: rgba(255, 162, 74, 0.09);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.code-run-card__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 2px;
+}
+
+.code-run-card__button {
+  min-height: 32px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 6px 13px;
+  color: rgba(255, 255, 255, 0.84);
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.code-run-card__button:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.code-run-card__button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.code-run-card__button--approve {
+  border-color: rgba(255, 132, 181, 0.46);
+  color: #fff1f7;
+  background: linear-gradient(135deg, rgba(235, 94, 157, 0.8), rgba(172, 102, 230, 0.76));
+}
+
+.code-run-card__button--reject {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.code-run-card__feedback {
+  min-height: 16px;
+  margin: 0;
+  color: rgba(255, 255, 255, 0.54);
+  font-size: 10px;
+  text-align: right;
+}
+
+[data-ui-theme="pearl-white"] .code-run-card {
+  border-color: rgba(222, 122, 173, 0.25);
+  color: #382737;
+  background:
+    radial-gradient(circle at 100% 0, rgba(213, 152, 241, 0.12), transparent 45%),
+    rgba(255, 255, 255, 0.94);
+  box-shadow: 0 10px 28px rgba(178, 92, 136, 0.12);
+}
+
+[data-ui-theme="pearl-white"] .code-run-card__header {
+  border-color: rgba(85, 48, 72, 0.09);
+}
+
+[data-ui-theme="pearl-white"] .code-run-card__badge {
+  color: #a33d70;
+  background: rgba(231, 105, 163, 0.11);
+}
+
+[data-ui-theme="pearl-white"] .code-run-card__meta > span,
+[data-ui-theme="pearl-white"] .code-run-card__step > :last-child,
+[data-ui-theme="pearl-white"] .code-run-card__feedback {
+  color: #997d8e;
+}
+
+[data-ui-theme="pearl-white"] .code-run-card__meta > strong,
+[data-ui-theme="pearl-white"] .code-run-card__step {
+  color: #513b4b;
+}
+
+[data-ui-theme="pearl-white"] .code-run-card__command {
+  border-color: rgba(91, 54, 77, 0.1);
+  color: #87365f;
+  background: rgba(98, 63, 84, 0.055);
+}
+
+[data-ui-theme="pearl-white"] .code-run-card__step {
+  background: rgba(100, 65, 87, 0.045);
+}
+
+@media (max-width: 560px) {
+  .code-run-panel {
+    padding-right: 10px;
+    padding-left: 42px;
+  }
+
+  .code-run-card {
+    width: min(440px, calc(100vw - 60px));
+  }
+
+  .code-run-card__header {
+    align-items: flex-start;
+  }
+}
 
 /* ── Task Plan 进度卡 ───────────────────── */
 .plan-card {

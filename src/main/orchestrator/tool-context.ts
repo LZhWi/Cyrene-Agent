@@ -17,6 +17,22 @@ export interface ToolContext {
   runId?: string;
   /** Tool Runtime-owned opaque reference registry. */
   contextRefs?: ContextRefRegistry;
+  /** 父运行取消信号。工具应在长操作中检查 signal.aborted 并抛出 AbortError。
+   *  子代理通过统一工具执行边界传入；直接调用的工具（主 Agent Loop）当前不传。 */
+  signal?: AbortSignal;
+  /**
+   * 可信工作区根目录（来自 Conversation Workspace Binding）。
+   *
+   * 信任边界：这是唯一可信的 workspaceRoot 来源。
+   * 以下来源都不能覆盖它：
+   * - 用户消息中的路径
+   * - Planner
+   * - Action Gate
+   * - Native FC 生成的 workspaceRoot
+   *
+   * Work 工具和 run_verification 必须使用此目录。
+   */
+  resolvedWorkspaceRoot?: string;
   /** 未来扩展兜底；当前为空对象，不预设字段。遵循"地基通用，上层克制"。 */
   metadata?: Record<string, unknown>;
 }
