@@ -185,6 +185,7 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
 
   it("decides an action, resolves one native ToolCall, then Runtime executes it", async () => {
     const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => {});
     const adapter = new FakeAdapter();
     adapter.enqueueDecision({ decision: "act", capability: "music.play_track", objective: "播放第一首", targetRefs: ["ctx_song_1"], afterSuccess: "respond" });
     adapter.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
@@ -215,7 +216,10 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     expect(lines).toContain("[AgentFlow] 6. 工具结果：成功");
     expect(lines).toContain("[AgentFlow] 7. 生成最终回复");
     expect(lines).not.toContain("[AgentGraph/Trace]");
-    expect(lines).not.toContain("[StructuredOutput]");
+    const structuredOutputErrors = errorLog.mock.calls.filter(
+      ([message]) => String(message).startsWith("[StructuredOutput] request failed"),
+    );
+    expect(structuredOutputErrors).toEqual([]);
   });
 
   it("shows an Action Gate validation failure and that no tool ran", async () => {

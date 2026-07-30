@@ -22,12 +22,14 @@ import { toolRegistry } from "./tool-registry";
 let tmpDir: string;
 
 beforeEach(() => {
+  vi.clearAllMocks();
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "search-code-test-"));
+  vi.spyOn(process, "cwd").mockReturnValue(tmpDir);
 });
 
 afterEach(() => {
-  fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.restoreAllMocks();
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 });
 
 describe("search_code tool", () => {
@@ -53,15 +55,12 @@ describe("search_code tool", () => {
     }
     const tool = vi.mocked(toolRegistry.register).mock.calls[0][0];
 
-    // 通过 cwd 参数传入临时目录
     const result = JSON.parse(await tool.execute({ query: "foo", paths: ["."] }, { userQuery: "test" } as any));
 
-    // 注意：实际搜索是在 process.cwd() 下，不是 tmpDir
-    // 这里测试的是工具注册和参数解析
-    expect(result).toHaveProperty("matches");
-    expect(result).toHaveProperty("totalMatches");
-    expect(result).toHaveProperty("returnedMatches");
-    expect(result).toHaveProperty("truncated");
+    expect(result.matches).toHaveLength(2);
+    expect(result.totalMatches).toBe(2);
+    expect(result.returnedMatches).toBe(2);
+    expect(result.truncated).toBe(false);
   });
 
   it("returns error for empty query", async () => {
@@ -73,13 +72,14 @@ describe("search_code tool", () => {
     expect(result.matches).toEqual([]);
   });
 
-  it("handles regex mode", async () => {
+  it("returns no matches for an invalid regular expression", async () => {
     registerSearchCodeTool();
     const tool = vi.mocked(toolRegistry.register).mock.calls[0][0];
+    fs.writeFileSync(path.join(tmpDir, "regex.ts"), "const value = 1;");
 
-    // 测试无效正则不会崩溃
     const result = JSON.parse(await tool.execute({ query: "[invalid", mode: "regex" }, { userQuery: "test" } as any));
-    expect(result).toHaveProperty("matches");
+    expect(result.matches).toEqual([]);
+    expect(result.totalMatches).toBe(0);
   });
 
   it("respects maxMatches limit", async () => {

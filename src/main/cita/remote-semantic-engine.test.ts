@@ -207,13 +207,28 @@ describe("RemoteSemanticEngine (Structured Output)", () => {
   });
 
   it("aborts a semantic call that exceeds its time budget", async () => {
+    vi.useFakeTimers();
+    const onAbort = vi.fn();
     const generate = vi.fn<SemanticTextGenerator>(
       (_request, signal?: AbortSignal) => new Promise<SemanticGeneratorResult>((_resolve, reject) => {
-        signal?.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+        signal?.addEventListener("abort", () => {
+          onAbort();
+          reject(new Error("aborted"));
+        }, { once: true });
       }),
     );
-    const engine = new RemoteSemanticEngine(generate, { profile, timeoutMs: 5 });
+    const engine = new RemoteSemanticEngine(generate, { profile });
 
-    await expect(engine.understandTurn(input)).rejects.toThrow(/MODEL_REQUEST_FAILED/);
+    try {
+      const rejection = expect(engine.understandTurn(input)).rejects.toThrow(/MODEL_REQUEST_TIMEOUT/);
+      await vi.advanceTimersByTimeAsync(60_000);
+
+      await rejection;
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(onAbort).toHaveBeenCalledTimes(1);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
