@@ -97,12 +97,164 @@
   padding: 0;
 }
 
+.cy-composer__file-input {
+  display: none;
+}
+
+.cy-composer__prefix-actions {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.cy-composer__icon-button:disabled {
+  color: #aaa;
+  cursor: wait;
+}
+
 .cy-composer__icon-button svg {
   width: 20px;
   fill: none;
   stroke: currentColor;
   stroke-width: 1.8;
   stroke-linecap: round;
+}
+
+.cy-composer__icon-button .cy-composer__screenshot-icon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: #333;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cy-composer__sticker-button img {
+  width: 22px;
+  height: 22px;
+  object-fit: contain;
+}
+
+.cy-composer__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px 0;
+}
+
+.cy-composer__attachment {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 240px;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 8px;
+  border: 1px solid var(--cy-border);
+  border-radius: 10px;
+  background: #f7f7f7;
+  color: var(--cy-text);
+  font: 500 12px/1.2 var(--rb-font-sans, sans-serif);
+}
+
+.cy-composer__attachment img {
+  width: 36px;
+  height: 30px;
+  flex: none;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.cy-composer__attachment.is-image {
+  position: relative;
+  display: block;
+  width: 76px;
+  height: 58px;
+  padding: 0;
+  overflow: hidden;
+  background: #eee;
+}
+
+.cy-composer__attachment.is-image img {
+  width: 100%;
+  height: 100%;
+  border-radius: 9px;
+}
+
+.cy-composer__attachment.is-image button {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 52%);
+  color: #fff;
+}
+
+.cy-composer__attachment span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cy-composer__attachment button {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #888;
+  font: 500 16px/18px sans-serif;
+  cursor: pointer;
+}
+
+.cy-composer__attachment button:hover {
+  color: var(--cy-accent);
+}
+
+.cy-sticker-popover .ant-popover-inner {
+  padding: 10px;
+  border: 1px solid var(--cy-border);
+  border-radius: 16px;
+}
+
+.cy-sticker-picker {
+  display: grid;
+  width: min(360px, 70vw);
+  max-height: 270px;
+  grid-template-columns: repeat(4, minmax(64px, 1fr));
+  gap: 7px;
+  overflow-y: auto;
+}
+
+.cy-sticker-picker button {
+  display: grid;
+  aspect-ratio: 1;
+  place-items: center;
+  padding: 5px;
+  border: 1px solid transparent;
+  border-radius: 11px;
+  background: #f7f7f7;
+  cursor: pointer;
+}
+
+.cy-sticker-picker button:hover {
+  border-color: #ffc0d2;
+  background: #fff1f5;
+}
+
+.cy-sticker-picker img {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  -webkit-user-drag: none;
+}
+
+.cy-sticker-picker__empty {
+  grid-column: 1 / -1;
+  padding: 24px;
+  color: var(--cy-text-muted);
+  text-align: center;
 }
 
 .cy-composer__footer {

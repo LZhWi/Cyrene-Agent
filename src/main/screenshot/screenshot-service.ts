@@ -12,7 +12,7 @@ export interface ScreenshotService {
   init(initialHotkey: string): void;
   prewarm(): Promise<void>;
   startFromHotkey(): Promise<{ ok: boolean; reason?: string }>;
-  startFromChatButton(): Promise<{ ok: boolean; reason?: string }>;
+  startFromChatButton(sendInsert?: (data: ScreenshotInsertData) => void): Promise<{ ok: boolean; reason?: string }>;
   replaceHotkey(next: string): { ok: boolean; activeHotkey: string | null };
   suspendHotkey(): void;
   resumeHotkey(): void;
@@ -84,13 +84,15 @@ export function createScreenshotService(deps: ScreenshotServiceDeps): Screenshot
     }
   };
 
-  const startFromChatButton = async (): Promise<{ ok: boolean; reason?: string }> => {
+  const startFromChatButton = async (
+    sendInsert: (data: ScreenshotInsertData) => void = deps.sendInsert,
+  ): Promise<{ ok: boolean; reason?: string }> => {
     try {
       const result = await deps.client.start("clipboard-and-file", "chat-button");
       if (!result.filePath) {
         return { ok: false, reason: "SCREENSHOT_FILE_PATH_REQUIRED" };
       }
-      deps.sendInsert({
+      sendInsert({
         filePath: result.filePath,
         width: result.width,
         height: result.height,

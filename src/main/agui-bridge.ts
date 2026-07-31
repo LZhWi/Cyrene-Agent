@@ -1,9 +1,12 @@
 // AG-UI IPC 桥：按会话模式选择执行链并把事件透传给渲染进程。
 //
 // 架构：
-//   Chat / Work ──> CyreneAgent.runWithEvents()
-//   Code        ──> runCodeRequest() ──> 原生 Cline Runtime
-//   两条链路的事件都由本桥通过 AGUI_EVENT 转发给渲染进程。
+//   Chat  ──> CyreneAgent ──> 无工具 ChatLoop
+//   Work  ──> CyreneAgent ──> LangGraph Runtime
+//   Daily ──> CyreneAgent ──> legacy TwoPhaseFC Runtime
+//   Code  ──> runCodeRequest() ──> 原生 Cline Runtime
+//   Learn ──> 预留给 Obsidian 学习链路（当前明确拒绝运行）
+//   各链路事件都由本桥通过 AGUI_EVENT 转发给渲染进程。
 //
 // Chat / Work 的 Observable 是内存流、跨不过进程边界；Code 的后台任务也不能依赖
 // WebContents 生命周期。因此主进程统一持有运行并仅把事件发送给 Renderer。
@@ -25,12 +28,13 @@ import type { StyleId } from "../shared/style-sampling";
 import { codeRunStore } from "./orchestrator/code/code-run-store";
 import { codeRunCoordinator } from "./orchestrator/code/code-run-coordinator";
 import * as chatsStore from "./chats/chats-store";
+import type { ConversationMode } from "../shared/chat-types";
 
 type RunCodeRequest = typeof import("./orchestrator/code/code-request").runCodeRequest;
 
 /**
  * Code 模式才加载完整 Cline 链。
- * 避免普通 Work/Chat 启动和 AG-UI 单测沿 code-request -> index 形成循环导入。
+ * 避免其他模式启动和 AG-UI 单测沿 code-request -> index 形成循环导入。
  */
 async function runCodeRequest(...args: Parameters<RunCodeRequest>): Promise<void> {
   const codeRequest = await import("./orchestrator/code/code-request");
@@ -67,7 +71,7 @@ export interface AguiRunInput {
   /** 外部渠道入口。桌面聊天不传；微信/飞书用于注入渠道语气规则。 */
   channel?: RelationshipChannel;
   /** @deprecated 仅保留 Renderer 兼容；主进程按 ChatSession.mode 分流并忽略该值。 */
-  executionMode?: AgentExecutionMode | "code" | "soul-only" | "collaboration";
+  executionMode?: ConversationMode | "soul-only" | "collaboration";
   /** 本轮附件（文本内容，临时注入系统上下文，不存历史）。 */
   attachments?: { name: string; text: string }[];
   /** 本轮图片附件。主进程会安全读取并转成 OpenAI-compatible image_url content block。 */
@@ -158,6 +162,16 @@ export function registerAgUiIpc(
       throw new Error(`AGUI_RUN 会话不存在: ${sessionId}`);
     }
     const mode = session.mode ?? (session.purpose === "proactive-chat" ? "chat" : "work");
+    if (mode === "learn") {
+      lifecycle?.onConversationEnded();
+      throw new Error("Learn 模式尚未接入 Obsidian 项目库");
+    }
+
+    if ((mode === "work" || mode === "code" || mode === "daily") && !session.workspaceBinding?.workspaceRoot) {
+      lifecycle?.onConversationEnded();
+      throw new Error(`${mode} 模式需要先绑定项目工作区`);
+    }
+
     if (mode === "code") {
       console.log("[AgUiBridge] mode=code, dispatching to runCodeRequest (bypass CyreneAgent)");
       const userText = (() => {
@@ -184,12 +198,14 @@ export function registerAgUiIpc(
       return { success: true, runId };
     }
 
-    // ── chat / work 模式：现有 CyreneAgent 路径 ──
+    // ── Chat / Work / Daily：共用 CyreneAgent 外壳，固定选择各自 runtime ──
+    // Chat 走无工具 chat-loop；Work 强制 LangGraph；Daily 强制 legacy TwoPhaseFC。
+    const agentExecutionMode: AgentExecutionMode = mode === "chat" ? "chat" : "work";
     let built;
     try {
       built = await perf.track("build_options", () => buildOptionsFn!({
         ...input,
-        executionMode: mode,
+        executionMode: agentExecutionMode,
       }));
     } catch (error) {
       perf.dump();
@@ -197,6 +213,8 @@ export function registerAgUiIpc(
       throw error;
     }
     const { options, latestUserText } = built;
+    options.executionMode = agentExecutionMode;
+    options.agentRuntime = mode === "daily" ? "legacy" : "langgraph";
 
     const threadId = `thread-${Date.now()}`;
     const agent = new CyreneAgent({ threadId, description: "Cyrene 主聊天" });

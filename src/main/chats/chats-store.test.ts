@@ -47,8 +47,12 @@ describe("chats store", () => {
     createSession({ mode: "chat" });
     createSession({ mode: "work" });
     createSession({ mode: "code" });
+    createSession({ mode: "learn" });
+    createSession({ mode: "daily" });
 
-    expect(listSessions().map((session) => session.mode).sort()).toEqual(["chat", "code", "work"]);
+    expect(listSessions().map((session) => session.mode).sort()).toEqual([
+      "chat", "code", "daily", "learn", "work",
+    ]);
   });
 
   it("filters session metadata by mode without changing the unfiltered result", async () => {
@@ -58,13 +62,17 @@ describe("chats store", () => {
     const chat = createSession({ mode: "chat" });
     const work = createSession({ mode: "work" });
     const code = createSession({ mode: "code" });
+    const daily = createSession({ mode: "daily" });
 
     expect(listSessions({ mode: "code" })).toEqual([
       expect.objectContaining({ id: code.id, mode: "code" }),
     ]);
     expect(new Set(listSessions().map((session) => session.id))).toEqual(
-      new Set([chat.id, work.id, code.id]),
+      new Set([chat.id, work.id, code.id, daily.id]),
     );
+    expect(listSessions({ mode: "daily" })).toEqual([
+      expect.objectContaining({ id: daily.id, mode: "daily" }),
+    ]);
   });
 
   it("backfills legacy index modes from the session before applying legacy defaults", async () => {

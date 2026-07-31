@@ -51,7 +51,7 @@ export function registerChatsIpc(): void {
     IPC.CHATS_CREATE,
     (
       event,
-      payload?: { title?: string; identityId?: string | null; mode?: "chat" | "work" | "code" },
+      payload?: { title?: string; identityId?: string | null; mode?: ConversationMode },
     ) => {
       const session = chatsStore.createSession({
         title: payload?.title,
@@ -130,6 +130,11 @@ export function registerChatsIpc(): void {
     (event, payload: { sessionId: string; workspaceRoot: string }) => {
       if (!payload?.sessionId || !payload?.workspaceRoot) {
         return { ok: false, error: "missing sessionId or workspaceRoot" };
+      }
+      const existing = chatsStore.getSession(payload.sessionId);
+      if (!existing) return { ok: false, error: "session not found" };
+      if (existing.mode !== "work" && existing.mode !== "code" && existing.mode !== "daily") {
+        return { ok: false, error: `${existing.mode ?? "unknown"} mode does not support workspace binding` };
       }
       // 路径验证：目录存在 + realpath 解析
       try {

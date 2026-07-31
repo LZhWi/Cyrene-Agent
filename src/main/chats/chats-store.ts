@@ -35,7 +35,8 @@ let indexCache: ChatSessionMeta[] = [];
 let initialized = false;
 
 function isConversationMode(value: unknown): value is ConversationMode {
-  return value === "chat" || value === "work" || value === "code";
+  return value === "chat" || value === "work" || value === "code"
+    || value === "learn" || value === "daily";
 }
 
 function inferLegacyMode(purpose: ChatSessionPurpose | undefined): ConversationMode {

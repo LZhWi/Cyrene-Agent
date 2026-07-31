@@ -26,8 +26,8 @@ vi.mock("./orchestrator/cyrene-agent", () => ({
       this.threadId = input.threadId;
     }
 
-    runWithEvents() {
-      mocks.runCyreneAgent();
+    runWithEvents(options: unknown) {
+      mocks.runCyreneAgent(options);
       return new Observable((subscriber) => {
         this.lastResult = { reply: "抱抱你", toolResults: [] };
         subscriber.next({ type: "RUN_STARTED" });
@@ -143,7 +143,11 @@ describe("agui-bridge sticker event ordering", () => {
     mocks.handlers.clear();
     mocks.runCodeRequest.mockClear();
     mocks.runCyreneAgent.mockClear();
-    mocks.getSession.mockReturnValue({ id: "work-chat", mode: "work" });
+    mocks.getSession.mockReturnValue({
+      id: "work-chat",
+      mode: "work",
+      workspaceBinding: { workspaceRoot: "C:\\workspace", displayName: "workspace", boundAt: 1 },
+    });
     const { registerAgUiIpc } = await import("./agui-bridge");
     const buildOptions = vi.fn(async () => ({
       options: {
@@ -172,7 +176,69 @@ describe("agui-bridge sticker event ordering", () => {
       executionMode: "work",
     }));
     expect(mocks.runCyreneAgent).toHaveBeenCalledOnce();
+    expect(mocks.runCyreneAgent).toHaveBeenCalledWith(expect.objectContaining({
+      executionMode: "work",
+      agentRuntime: "langgraph",
+    }));
     expect(mocks.runCodeRequest).not.toHaveBeenCalled();
+  });
+
+  it("dispatches Daily sessions to the legacy TwoPhaseFC runtime", async () => {
+    vi.resetModules();
+    mocks.handlers.clear();
+    mocks.runCyreneAgent.mockClear();
+    mocks.getSession.mockReturnValue({
+      id: "daily-chat",
+      mode: "daily",
+      workspaceBinding: { workspaceRoot: "C:\\daily", displayName: "daily", boundAt: 1 },
+    });
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    const buildOptions = vi.fn(async () => ({
+      options: {
+        settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
+        messages: [],
+        timeoutMs: 1000,
+        toolSystemContent: "TOOL",
+        soulSystemBaseContent: "SOUL",
+      },
+      latestUserText: "整理今天的项目记录",
+    }));
+    registerAgUiIpc(buildOptions, async () => {}, () => null);
+    const handler = mocks.handlers.get(IPC.AGUI_RUN);
+    if (!handler) throw new Error("AGUI_RUN handler was not registered");
+
+    await handler({
+      sender: { isDestroyed: () => false, send: () => {} },
+    }, {
+      messages: [{ role: "user", content: "整理今天的项目记录" }],
+      sessionId: "daily-chat",
+      executionMode: "chat",
+    });
+
+    expect(buildOptions).toHaveBeenCalledWith(expect.objectContaining({ executionMode: "work" }));
+    expect(mocks.runCyreneAgent).toHaveBeenCalledWith(expect.objectContaining({
+      executionMode: "work",
+      agentRuntime: "legacy",
+    }));
+  });
+
+  it("rejects project modes without a trusted workspace binding", async () => {
+    vi.resetModules();
+    mocks.handlers.clear();
+    mocks.runCyreneAgent.mockClear();
+    mocks.getSession.mockReturnValue({ id: "daily-no-workspace", mode: "daily" });
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    registerAgUiIpc(vi.fn(), async () => {}, () => null);
+    const handler = mocks.handlers.get(IPC.AGUI_RUN);
+    if (!handler) throw new Error("AGUI_RUN handler was not registered");
+
+    await expect(handler({
+      sender: { isDestroyed: () => false, send: () => {} },
+    }, {
+      messages: [{ role: "user", content: "开始" }],
+      sessionId: "daily-no-workspace",
+    })).rejects.toThrow("需要先绑定项目工作区");
+    expect(mocks.runCyreneAgent).not.toHaveBeenCalled();
   });
 
   it("Code verification event send failure does not stop the background run", async () => {
@@ -180,7 +246,11 @@ describe("agui-bridge sticker event ordering", () => {
     mocks.handlers.clear();
     mocks.runCodeRequest.mockClear();
     mocks.runCyreneAgent.mockClear();
-    mocks.getSession.mockReturnValue({ id: "code-chat", mode: "code" });
+    mocks.getSession.mockReturnValue({
+      id: "code-chat",
+      mode: "code",
+      workspaceBinding: { workspaceRoot: "C:\\code", displayName: "code", boundAt: 1 },
+    });
     let continuedAfterEvent = false;
     mocks.runCodeRequest.mockImplementation(async (_input, _session, context) => {
       context.emitEvent({

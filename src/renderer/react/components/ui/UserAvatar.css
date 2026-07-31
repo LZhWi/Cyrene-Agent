@@ -26,6 +26,15 @@
   font-weight: 600;
 }
 
+.cy-user-avatar-circle img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  pointer-events: none;
+}
+
 .cy-user-avatar-label {
   font-size: 13px;
   color: var(--cy-text-muted);

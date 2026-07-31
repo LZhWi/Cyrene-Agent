@@ -58,6 +58,28 @@ html, body {
   app-region: no-drag;
 }
 
+.cy-file-drop-overlay {
+  position: absolute;
+  z-index: 20;
+  inset: 10px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed var(--cy-accent);
+  border-radius: max(8px, calc(var(--cy-window-radius, 12px) - 2px));
+  background: rgb(255 255 255 / 88%);
+  color: var(--cy-accent);
+  font: 600 15px/1.4 var(--rb-font-sans, sans-serif);
+  pointer-events: none;
+  backdrop-filter: blur(3px);
+}
+
+.cy-file-drop-overlay span {
+  padding: 10px 16px;
+  border-radius: 999px;
+  background: #fff;
+  box-shadow: 0 8px 24px rgb(255 91 138 / 16%);
+}
+
 .cy-page.is-collapsed {
   padding-left: 10px;
 }
@@ -160,25 +182,4 @@ html, body {
 
 .cy-workspace.has-messages .cy-workspace-composer {
   padding: 22px 24px;
-}
-
-.cy-message-list {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  flex-direction: column;
-  gap: 12px;
-  overflow-y: auto;
-  padding: 28px;
-}
-
-.cy-message-bubble {
-  align-self: flex-end;
-  max-width: min(78%, 680px);
-  padding: 11px 14px;
-  border-radius: 16px 16px 4px;
-  background: #fff1f6;
-  color: var(--cy-text);
-  font: 400 14px/1.55 var(--rb-font-sans, sans-serif);
-  white-space: pre-wrap;
 }

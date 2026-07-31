@@ -21,6 +21,10 @@
   background: var(--cy-bg-active);
 }
 
+.cy-sidebar-toggle > svg {
+  transform: scaleY(0.88);
+}
+
 /* 竖线 */
 .cy-sidebar-line {
   transition: d 0.25s ease;

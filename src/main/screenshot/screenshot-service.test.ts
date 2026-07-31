@@ -88,6 +88,19 @@ describe("createScreenshotService", () => {
     });
   });
 
+  it("can return a button capture to the renderer that requested it", async () => {
+    const harness = createHarness();
+    const requestSender = vi.fn();
+    vi.mocked(harness.client.start).mockResolvedValueOnce(
+      result({ filePath: "C:\\shots\\react-preview.png" }),
+    );
+
+    await expect(harness.service.startFromChatButton(requestSender)).resolves.toEqual({ ok: true });
+
+    expect(requestSender).toHaveBeenCalledOnce();
+    expect(harness.sendInsert).not.toHaveBeenCalled();
+  });
+
   it("rejects a chat result that completed without a file path", async () => {
     const harness = createHarness();
     vi.mocked(harness.client.start).mockResolvedValueOnce(result());

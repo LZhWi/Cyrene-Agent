@@ -107,6 +107,7 @@ import { resolveScreenshotHelperPath } from "./screenshot/helper-path";
 import {
   createScreenshotService,
   validateScreenshotInsert,
+  type ScreenshotInsertData,
   type ScreenshotService,
 } from "./screenshot/screenshot-service";
 import { enqueueLLMTask } from "./llm-queue";
@@ -279,6 +280,26 @@ async function saveScreenshotPasteTemp(
 
 function initializeScreenshotService(initialHotkey: string): ScreenshotService {
   const screenshotDirectory = getScreenshotDirectory();
+  const validateInsert = (data: ScreenshotInsertData): ScreenshotInsertData => {
+    let previewImage: Electron.NativeImage | null = null;
+    const validated = validateScreenshotInsert(
+      data,
+      screenshotDirectory,
+      (filePath) => {
+        previewImage = nativeImage.createFromPath(filePath);
+        return previewImage;
+      },
+    );
+    if (!validated) {
+      throw new Error(`INVALID_SCREENSHOT_RESULT:${data.filePath}`);
+    }
+    // React 开发预览运行在 http://，Chromium 会拦截 file:// 图片。
+    // 截图体积有限，直接回传 data URL，旧 Chat 与 React 都能稳定显示。
+    return {
+      ...validated,
+      previewUrl: previewImage ? (previewImage as Electron.NativeImage).toDataURL() : validated.previewUrl,
+    };
+  };
   const client = new ElectronScreenshotHelperClient({
     spawnImpl: (command, args) => spawn(command, args, {
       stdio: ["pipe", "pipe", "pipe"],
@@ -299,21 +320,18 @@ function initializeScreenshotService(initialHotkey: string): ScreenshotService {
       globalShortcut.register(accelerator, callback),
     unregisterShortcut: (accelerator) => globalShortcut.unregister(accelerator),
     sendInsert: (data) => {
-      const validated = validateScreenshotInsert(
-        data,
-        screenshotDirectory,
-        (filePath) => nativeImage.createFromPath(filePath),
-      );
-      if (!validated) {
-        throw new Error(`INVALID_SCREENSHOT_RESULT:${data.filePath}`);
-      }
+      const validated = validateInsert(data);
       if (chatWindow && !chatWindow.isDestroyed()) {
         chatWindow.webContents.send(IPC.SCREENSHOT_INSERT, validated);
       }
     },
   });
 
-  ipcMain.handle(IPC.SCREENSHOT_START, () => service.startFromChatButton());
+  ipcMain.handle(IPC.SCREENSHOT_START, (event) => service.startFromChatButton((data) => {
+    if (!event.sender.isDestroyed()) {
+      event.sender.send(IPC.SCREENSHOT_INSERT, validateInsert(data));
+    }
+  }));
   ipcMain.handle(IPC.SCREENSHOT_SAVE_TEMP, (_event, base64: string, mime: string) =>
     saveScreenshotPasteTemp(base64, mime));
   ipcMain.handle(IPC.SCREENSHOT_HOTKEY_CAPTURE_START, () => {
