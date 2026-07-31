@@ -18,6 +18,7 @@ html, body {
   padding: 50px 10px 10px 200px;
   position: relative;
   transition: padding 0.25s ease;
+  border: 1px solid #F2F2F2;
 }
 
 .cy-page.is-collapsed {
@@ -35,4 +36,5 @@ html, body {
   height: 100%;
   background: #ffffff;
   border-radius: 10px;
+  border: 1px solid #F2F2F2;
 }
