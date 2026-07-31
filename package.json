@@ -54,7 +54,6 @@
     "@ant-design/icons": "^6.3.2",
     "@ant-design/x": "^2.9.0",
     "@cline/sdk": "0.0.66",
-    "@icon-park/react": "^1.4.2",
     "@lancedb/lancedb": "^0.30.0",
     "@langchain/anthropic": "^1.5.2",
     "@langchain/core": "^1.2.3",
