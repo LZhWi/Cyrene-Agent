@@ -125,7 +125,23 @@ function StickerPicker({ onChoose }: { onChoose: (id: string) => void }) {
 }
 
 function FolderIcon() {
-  return <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M4 9V41L9 21H39.5V15C39.5 13.8954 38.6046 13 37.5 13H24L19 7H6C4.89543 7 4 7.89543 4 9Z" /><path d="M40 41L44 21H8.8125L4 41H40Z" /></svg>;
+  return (
+    <svg className="cy-composer__terminal-folder-icon" width="24" height="24" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M5 8C5 6.89543 5.89543 6 7 6H19L24 12H41C42.1046 12 43 12.8954 43 14V40C43 41.1046 42.1046 42 41 42H7C5.89543 42 5 41.1046 5 40V8Z" />
+      <path d="M14 22L19 27L14 32" />
+      <path d="M26 32H34" />
+    </svg>
+  );
+}
+
+function CodeFolderIcon() {
+  return (
+    <svg className="cy-composer__code-folder-icon" width="24" height="24" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <path d="M43 23V14C43 12.8954 42.1046 12 41 12H24L19 6H7C5.89543 6 5 6.89543 5 8V40C5 41.1046 5.89543 42 7 42H22" />
+      <path d="M38 29L43 34L38 39" />
+      <path d="M30 29L25 34L30 39" />
+    </svg>
+  );
 }
 
 function ChevronIcon() {
@@ -230,7 +246,7 @@ export function ChatComposer({
         <div className="cy-composer__footer">
         {supportsWorkFiles && (
           <button type="button" className="cy-composer__footer-button" aria-label="选择工作文件夹" onClick={onChooseWorkspace}>
-            <FolderIcon />
+            {mode === "code" ? <CodeFolderIcon /> : <FolderIcon />}
             <span>{workspaceName ?? (docked ? "工作文件夹" : "进入项目工作")}</span>
             <ChevronIcon />
           </button>

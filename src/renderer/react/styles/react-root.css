@@ -132,8 +132,26 @@ html, body {
   transition: left 0.25s ease;
 }
 
+.cy-page-conversations {
+  position: absolute;
+  top: 114px;
+  bottom: 62px;
+  left: 8px;
+  width: 184px;
+  min-height: 0;
+  overflow: hidden;
+  app-region: no-drag;
+  transition: left 0.25s ease, opacity 0.2s ease;
+}
+
 .cy-page.is-collapsed .cy-page-newtask {
   left: -162px;
+}
+
+.cy-page.is-collapsed .cy-page-conversations {
+  left: -190px;
+  opacity: 0;
+  pointer-events: none;
 }
 
 /* 收起状态：组件向左移 */

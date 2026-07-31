@@ -7,6 +7,7 @@ import { IPC } from "../../shared/ipc-channels";
 const mocks = vi.hoisted(() => ({
   userDataDir: "",
   handlers: new Map<string, (...args: any[]) => unknown>(),
+  openPath: vi.fn(async () => ""),
 }));
 
 vi.mock("electron", () => ({
@@ -14,7 +15,7 @@ vi.mock("electron", () => ({
     getPath: () => mocks.userDataDir,
   },
   shell: {
-    openPath: vi.fn(),
+    openPath: mocks.openPath,
   },
   BrowserWindow: {
     getAllWindows: () => [],
@@ -33,6 +34,7 @@ describe("chats IPC mode filtering", () => {
   beforeEach(() => {
     vi.resetModules();
     mocks.handlers.clear();
+    mocks.openPath.mockClear();
     mocks.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-chats-ipc-"));
   });
 
@@ -52,5 +54,33 @@ describe("chats IPC mode filtering", () => {
     expect(await list(event, { mode: "code" })).toEqual([
       expect.objectContaining({ id: code.id, mode: "code" }),
     ]);
+  });
+
+  it("opens only a workspace already bound to a project conversation", async () => {
+    const { registerChatsIpc } = await import("./chats-ipc");
+    registerChatsIpc();
+
+    const create = mocks.handlers.get(IPC.CHATS_CREATE);
+    const setWorkspace = mocks.handlers.get(IPC.CHATS_SET_WORKSPACE);
+    const openWorkspace = mocks.handlers.get(IPC.CHATS_OPEN_WORKSPACE);
+    if (!create || !setWorkspace || !openWorkspace) {
+      throw new Error("workspace IPC handlers were not registered");
+    }
+
+    const workspaceRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-workspace-"));
+    const unrelatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-unrelated-"));
+    const event = { sender: {} };
+    const session = await create(event, { mode: "work" }) as { id: string };
+    await setWorkspace(event, { sessionId: session.id, workspaceRoot });
+
+    expect(await openWorkspace(event, unrelatedRoot)).toEqual({
+      ok: false,
+      error: "workspace is not bound to a conversation",
+    });
+    expect(mocks.openPath).not.toHaveBeenCalled();
+
+    expect(await openWorkspace(event, workspaceRoot)).toEqual({ ok: true });
+    expect(mocks.openPath).toHaveBeenCalledOnce();
+    expect(mocks.openPath).toHaveBeenCalledWith(fs.realpathSync(workspaceRoot));
   });
 });

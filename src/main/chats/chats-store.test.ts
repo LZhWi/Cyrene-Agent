@@ -75,7 +75,7 @@ describe("chats store", () => {
     ]);
   });
 
-  it("backfills legacy index modes from the session before applying legacy defaults", async () => {
+  it("moves unclassified legacy sessions into the Daily migration project", async () => {
     const root = path.join(electronMock.userDataDir, "cyrene-chats");
     const sessionsDir = path.join(root, "sessions");
     fs.mkdirSync(sessionsDir, { recursive: true });
@@ -120,24 +120,113 @@ describe("chats store", () => {
       id: "invalid-mode",
       mode: "invalid",
     }));
+    fs.writeFileSync(path.join(sessionsDir, "backfilled-work.json"), JSON.stringify({
+      ...baseSession,
+      id: "backfilled-work",
+      mode: "work",
+    }));
+    const index = JSON.parse(fs.readFileSync(path.join(root, "index.json"), "utf8"));
+    index.push({ ...baseMeta, id: "backfilled-work", mode: "work" });
+    fs.writeFileSync(path.join(root, "index.json"), JSON.stringify(index));
 
     const { initialize, listSessions } = await import("./chats-store");
     initialize();
 
     expect(listSessions().map(({ id, mode }) => ({ id, mode }))).toEqual([
-      { id: "legacy-work", mode: "work" },
+      { id: "legacy-work", mode: "daily" },
       { id: "legacy-proactive", mode: "chat" },
       { id: "existing-code", mode: "code" },
-      { id: "invalid-mode", mode: "work" },
+      { id: "invalid-mode", mode: "daily" },
+      { id: "backfilled-work", mode: "daily" },
     ]);
+    const migrationRoot = path.join(electronMock.userDataDir, "迁移文件夹");
+    expect(fs.existsSync(migrationRoot)).toBe(true);
+    expect(fs.readdirSync(migrationRoot)).toEqual([]);
+    expect(JSON.parse(fs.readFileSync(path.join(sessionsDir, "legacy-work.json"), "utf8"))).toEqual(
+      expect.objectContaining({
+        mode: "daily",
+        workspaceBinding: expect.objectContaining({
+          workspaceRoot: migrationRoot,
+          displayName: "迁移文件夹",
+        }),
+      }),
+    );
     expect(JSON.parse(fs.readFileSync(path.join(root, "index.json"), "utf8"))).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: "legacy-work", mode: "work" }),
+        expect.objectContaining({ id: "legacy-work", mode: "daily", workspaceDisplayName: "迁移文件夹" }),
         expect.objectContaining({ id: "legacy-proactive", mode: "chat" }),
         expect.objectContaining({ id: "existing-code", mode: "code" }),
-        expect.objectContaining({ id: "invalid-mode", mode: "work" }),
+        expect.objectContaining({ id: "invalid-mode", mode: "daily", workspaceDisplayName: "迁移文件夹" }),
       ]),
     );
+  });
+
+  it("keeps the legacy migration idempotent on restart", async () => {
+    const root = path.join(electronMock.userDataDir, "cyrene-chats");
+    const sessionsDir = path.join(root, "sessions");
+    fs.mkdirSync(sessionsDir, { recursive: true });
+    const session = {
+      id: "legacy",
+      title: "旧对话",
+      identityId: null,
+      messages: [],
+      createdAt: 1,
+      updatedAt: 1,
+      schemaVersion: 1,
+    };
+    fs.writeFileSync(path.join(root, "index.json"), JSON.stringify([{
+      id: "legacy", title: "旧对话", identityId: null, createdAt: 1, updatedAt: 1, messageCount: 0,
+    }]));
+    fs.writeFileSync(path.join(sessionsDir, "legacy.json"), JSON.stringify(session));
+
+    let store = await import("./chats-store");
+    store.initialize();
+    const first = store.getSession("legacy");
+    vi.resetModules();
+    store = await import("./chats-store");
+    store.initialize();
+    const second = store.getSession("legacy");
+
+    expect(second?.mode).toBe("daily");
+    expect(second?.workspaceBinding).toEqual(first?.workspaceBinding);
+  });
+
+  it("indexes workspace metadata for grouped conversation lists", async () => {
+    const store = await import("./chats-store");
+    store.initialize();
+    const session = store.createSession({ mode: "work" });
+    const workspaceRoot = path.join(electronMock.userDataDir, "project-a");
+    fs.mkdirSync(workspaceRoot);
+
+    store.setWorkspaceBinding(session.id, {
+      workspaceRoot,
+      displayName: "project-a",
+      boundAt: 10,
+    });
+
+    expect(store.listSessions({ mode: "work" })).toContainEqual(expect.objectContaining({
+      id: session.id,
+      workspaceRoot,
+      workspaceDisplayName: "project-a",
+    }));
+  });
+
+  it("imports renderer legacy history into the Daily migration project", async () => {
+    const store = await import("./chats-store");
+    store.initialize();
+
+    const session = store.migrateLegacyMessages([
+      { id: "old-1", role: "user", content: "以前的消息", at: 1 },
+    ]);
+
+    expect(session).toEqual(expect.objectContaining({
+      mode: "daily",
+      workspaceBinding: expect.objectContaining({ displayName: "迁移文件夹" }),
+    }));
+    expect(store.listSessions({ mode: "daily" })).toContainEqual(expect.objectContaining({
+      id: session?.id,
+      workspaceDisplayName: "迁移文件夹",
+    }));
   });
 
   it("persists and indexes a session purpose", async () => {

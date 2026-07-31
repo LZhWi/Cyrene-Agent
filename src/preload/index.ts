@@ -64,6 +64,8 @@ const chatApi = {
     ipcRenderer.invoke(IPC.CHAT_CANCEL_DOCUMENT_INDEX, { jobId }) as Promise<boolean>,
   captionImage: (filePath: string, hasAnnotations = false) =>
     ipcRenderer.invoke(IPC.CHAT_CAPTION_IMAGE, { filePath, hasAnnotations }),
+  getImagePreview: (filePath: string) =>
+    ipcRenderer.invoke(IPC.CHAT_GET_IMAGE_PREVIEW, { filePath }),
   getImageSendStrategy: () => ipcRenderer.invoke(IPC.CHAT_GET_IMAGE_SEND_STRATEGY),
   getGeneralSettings: () => ipcRenderer.invoke(IPC.SETTINGS_GET_GENERAL),
   getReasoningState: () => ipcRenderer.invoke(IPC.CHAT_GET_REASONING_STATE),
@@ -402,6 +404,11 @@ const runtimeStateApi = {
 const userApi = {
   getProfile: () => ipcRenderer.invoke(IPC.USER_GET_PROFILE),
   saveProfile: (profile: unknown) => ipcRenderer.invoke(IPC.USER_SAVE_PROFILE, profile),
+  onProfileChanged: (callback: (profile: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, profile: unknown) => callback(profile);
+    ipcRenderer.on(IPC.USER_PROFILE_CHANGED, listener);
+    return () => ipcRenderer.off(IPC.USER_PROFILE_CHANGED, listener);
+  },
   uploadAvatar: () => ipcRenderer.invoke(IPC.USER_UPLOAD_AVATAR),
   getAvatar: () => ipcRenderer.invoke(IPC.USER_GET_AVATAR),
   onAvatarChanged: (callback: () => void) => {
@@ -477,6 +484,8 @@ const chatStoreApi = {
     ipcRenderer.invoke(IPC.CHATS_RENAME, { id, title }),
   delete: (id: string) => ipcRenderer.invoke(IPC.CHATS_DELETE, id),
   openFolder: () => ipcRenderer.invoke(IPC.CHATS_OPEN_FOLDER),
+  openWorkspace: (workspaceRoot: string) =>
+    ipcRenderer.invoke(IPC.CHATS_OPEN_WORKSPACE, workspaceRoot),
   migrateLegacy: (messages: unknown[]) =>
     ipcRenderer.invoke(IPC.CHATS_MIGRATE_LEGACY, messages),
   openInChatWindow: (sessionId: string) =>

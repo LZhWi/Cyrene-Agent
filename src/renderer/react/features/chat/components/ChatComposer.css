@@ -310,6 +310,15 @@
   stroke-linejoin: round;
 }
 
+.cy-composer__footer .cy-composer__code-folder-icon,
+.cy-composer__footer .cy-composer__terminal-folder-icon {
+  fill: none;
+  stroke: #333;
+  stroke-width: 4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .cy-composer__footer .cy-composer__footer-button svg:last-child,
 .cy-composer__agent-button svg {
   width: 13px;

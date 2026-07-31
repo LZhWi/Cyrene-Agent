@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { ChatComposer, type ComposerAttachment } from "../components/ChatComposer";
 import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessageList";
+import { ConversationSidebar } from "../components/ConversationSidebar";
+import type { ChatMessage, ChatSession, ChatSessionMeta, ConversationMode } from "../../../../../shared/chat-types";
 import { SidebarToggle } from "../../../components/ui/SidebarToggle";
 import { ModeSwitch } from "../../../components/ui/ModeSwitch";
 import { CharacterStatusPill } from "../../../components/ui/CharacterStatusPill";
@@ -20,11 +22,9 @@ import "../components/ReasoningControl.css";
 import "../components/StyleControl.css";
 import "../components/PermissionControl.css";
 import "../components/ChatMessageList.css";
+import "../components/ConversationSidebar.css";
 
-import avatarDark from "../../../assets/avatars/avatar-dark.png";
 import avatarLight from "../../../assets/avatars/avatar-light.png";
-
-type ConversationMode = "chat" | "work" | "code" | "learn" | "daily";
 
 const CONVERSATION_MODES: readonly ConversationMode[] = ["chat", "work", "code", "learn", "daily"];
 
@@ -87,33 +87,71 @@ const DEMO_STICKERS: Readonly<Record<string, string>> = {
 };
 
 interface ChatStoreApi {
-  create: (input: { identityId: null; mode: ConversationMode }) => Promise<{ id: string }>;
+  list: (options?: { mode?: ConversationMode }) => Promise<ChatSessionMeta[]>;
+  get: (id: string) => Promise<ChatSession | null>;
+  create: (input: { identityId: null; mode: ConversationMode; title?: string }) => Promise<ChatSession>;
+  append: (id: string, message: ChatMessage) => Promise<ChatSession | null>;
+  delete: (id: string) => Promise<boolean>;
   pickWorkspaceFolder: () => Promise<{ ok: boolean; path?: string; displayName?: string; error?: string }>;
   setWorkspace: (sessionId: string, workspaceRoot: string) => Promise<{ ok: boolean; error?: string }>;
+  openWorkspace: (workspaceRoot: string) => Promise<{ ok: boolean; error?: string }>;
+  setActiveSession: (sessionId: string | null) => Promise<unknown>;
+  onChanged: (callback: () => void) => () => void;
+}
+
+interface SidebarApi {
+  openSettings: (section?: string) => void;
+}
+
+function chatStore(): ChatStoreApi | undefined {
+  return (window as typeof window & { chatStore?: ChatStoreApi }).chatStore;
+}
+
+function sidebarApi(): SidebarApi | undefined {
+  return (window as typeof window & { sidebar?: SidebarApi }).sidebar;
+}
+
+function toUiMessages(session: ChatSession): ChatMessageItem[] {
+  return session.messages.map((message) => ({
+    id: message.id,
+    role: message.role === "model" ? "assistant" : "user",
+    content: message.content,
+    sticker: message.sticker,
+    attachments: message.attachments,
+  }));
 }
 
 export function ChatPage() {
   const [collapsed, setCollapsed] = useState(false);
   const [mode, setMode] = useState<ConversationMode>("chat");
-  const [drafts, setDrafts] = useState<Partial<Record<ConversationMode, string>>>({});
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [messagesByMode, setMessagesByMode] = useState<Partial<Record<ConversationMode, ChatMessageItem[]>>>({});
   const [workspaceNames, setWorkspaceNames] = useState<Partial<Record<ConversationMode, string>>>({});
-  const [attachmentsByMode, setAttachmentsByMode] = useState<Partial<Record<ConversationMode, ComposerAttachment[]>>>({});
+  const [attachmentsByScope, setAttachmentsByScope] = useState<Record<string, ComposerAttachment[]>>({});
+  const [sessionsByMode, setSessionsByMode] = useState<Partial<Record<ConversationMode, ChatSessionMeta[]>>>({});
+  const [activeSessionIds, setActiveSessionIds] = useState<Partial<Record<ConversationMode, string>>>({});
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  const sessionIds = useRef<Partial<Record<ConversationMode, string>>>({});
   const activeModeRef = useRef(mode);
+  const activeSessionIdsRef = useRef(activeSessionIds);
+  const activeScopeRef = useRef(`mode:${mode}`);
+  const sessionSelectionGeneration = useRef(0);
   const dragDepthRef = useRef(0);
   const localPreviewUrlsRef = useRef(new Set<string>());
   const demoTimers = useRef(new Set<number>());
 
   const taskLabel = ["work", "daily", "code"].includes(mode) ? "新建任务" : "新建对话";
-  const draft = drafts[mode] ?? "";
+  const activeSessionId = activeSessionIds[mode];
+  const scopeKey = activeSessionId ?? `mode:${mode}`;
+  const draft = drafts[scopeKey] ?? "";
   const messages = messagesByMode[mode] ?? [];
   const hasMessages = messages.length > 0;
-  const attachments = attachmentsByMode[mode] ?? [];
+  const attachments = attachmentsByScope[scopeKey] ?? [];
+  const sessions = sessionsByMode[mode] ?? [];
 
   activeModeRef.current = mode;
+  activeSessionIdsRef.current = activeSessionIds;
+  activeScopeRef.current = scopeKey;
 
   useEffect(() => () => {
     for (const timer of demoTimers.current) {
@@ -126,7 +164,7 @@ export function ChatPage() {
   }, []);
 
   useEffect(() => window.chat?.onScreenshotInsert?.((data) => {
-    const targetMode = activeModeRef.current;
+    const targetScope = activeScopeRef.current;
     const attachment: ComposerAttachment = {
       kind: "image",
       name: `截图_${Date.now()}.png`,
@@ -135,11 +173,23 @@ export function ChatPage() {
       previewUrl: data.previewUrl,
       hasAnnotations: data.hasAnnotations,
     };
-    setAttachmentsByMode((current) => ({
+    setAttachmentsByScope((current) => ({
       ...current,
-      [targetMode]: [...(current[targetMode] ?? []), attachment],
+      [targetScope]: [...(current[targetScope] ?? []), attachment],
     }));
   }), []);
+
+  useEffect(() => {
+    const store = chatStore();
+    if (!store) return;
+    const refresh = () => void refreshSessions(activeModeRef.current, true);
+    const off = store.onChanged(refresh);
+    return off;
+  }, []);
+
+  useEffect(() => {
+    void refreshSessions(mode, true);
+  }, [mode]);
 
   function updateMessage(targetMode: ConversationMode, id: string, patch: Partial<ChatMessageItem>) {
     setMessagesByMode((current) => ({
@@ -150,7 +200,49 @@ export function ChatPage() {
     }));
   }
 
-  function streamDemoResponse(targetMode: ConversationMode, id: string, response: string) {
+  async function selectSession(sessionId: string, targetMode: ConversationMode = mode) {
+    const store = chatStore();
+    if (!store) return;
+    const generation = ++sessionSelectionGeneration.current;
+    const session = await store.get(sessionId);
+    if (!session || generation !== sessionSelectionGeneration.current) return;
+    setActiveSessionIds((current) => {
+      const next = { ...current, [targetMode]: sessionId };
+      activeSessionIdsRef.current = next;
+      return next;
+    });
+    setMessagesByMode((current) => ({ ...current, [targetMode]: toUiMessages(session) }));
+    setWorkspaceNames((current) => ({
+      ...current,
+      [targetMode]: session.workspaceBinding?.displayName,
+    }));
+    if (targetMode === activeModeRef.current) void store.setActiveSession(sessionId);
+  }
+
+  async function refreshSessions(targetMode: ConversationMode, selectCurrent: boolean) {
+    const store = chatStore();
+    if (!store) return;
+    const listed = await store.list({ mode: targetMode });
+    setSessionsByMode((current) => ({ ...current, [targetMode]: listed }));
+    if (!selectCurrent) return;
+    const currentId = activeSessionIdsRef.current[targetMode];
+    const nextId = listed.some((session) => session.id === currentId) ? currentId : listed[0]?.id;
+    if (nextId) {
+      await selectSession(nextId, targetMode);
+      return;
+    }
+    setActiveSessionIds((current) => {
+      const next = { ...current };
+      delete next[targetMode];
+      activeSessionIdsRef.current = next;
+      return next;
+    });
+    setMessagesByMode((current) => ({ ...current, [targetMode]: [] }));
+    setWorkspaceNames((current) => ({ ...current, [targetMode]: undefined }));
+    if (targetMode === activeModeRef.current) void store.setActiveSession(null);
+  }
+
+  function streamDemoResponse(targetMode: ConversationMode, id: string, response: string, sessionId?: string) {
     const loadingTimer = window.setTimeout(() => {
       demoTimers.current.delete(loadingTimer);
       updateMessage(targetMode, id, { loading: false, streaming: true });
@@ -168,6 +260,14 @@ export function ChatPage() {
         if (finished) {
           window.clearInterval(streamTimer);
           demoTimers.current.delete(streamTimer);
+          if (sessionId) {
+            void chatStore()?.append(sessionId, {
+              id,
+              role: "model",
+              content: response,
+              at: Date.now(),
+            }).then(() => refreshSessions(targetMode, false));
+          }
         }
       }, 30);
       demoTimers.current.add(streamTimer);
@@ -176,33 +276,66 @@ export function ChatPage() {
   }
 
   async function ensureSession(targetMode: ConversationMode): Promise<string> {
-    const existing = sessionIds.current[targetMode];
+    const existing = activeSessionIdsRef.current[targetMode];
     if (existing) return existing;
-    const chatStore = (window as typeof window & { chatStore?: ChatStoreApi }).chatStore;
-    if (!chatStore) throw new Error("聊天会话服务尚未就绪");
-    const session = await chatStore.create({ identityId: null, mode: targetMode });
-    sessionIds.current[targetMode] = session.id;
+    const store = chatStore();
+    if (!store) throw new Error("聊天会话服务尚未就绪");
+    const session = await store.create({
+      identityId: null,
+      mode: targetMode,
+      title: targetMode === "work" || targetMode === "code" || targetMode === "daily" ? "新任务" : "新对话",
+    });
+    await refreshSessions(targetMode, false);
+    await selectSession(session.id, targetMode);
     return session.id;
   }
 
   async function chooseWorkspace() {
     const targetMode = mode;
     if (targetMode === "chat" || targetMode === "learn") return;
-    const chatStore = (window as typeof window & { chatStore?: ChatStoreApi }).chatStore;
-    if (!chatStore) return;
-    const picked = await chatStore.pickWorkspaceFolder();
+    const store = chatStore();
+    if (!store) return;
+    const picked = await store.pickWorkspaceFolder();
     if (!picked.ok || !picked.path) return;
     const sessionId = await ensureSession(targetMode);
-    const result = await chatStore.setWorkspace(sessionId, picked.path);
+    const result = await store.setWorkspace(sessionId, picked.path);
     if (!result.ok) {
       window.alert(`设置工作区失败：${result.error ?? "未知错误"}`);
       return;
     }
     setWorkspaceNames((current) => ({ ...current, [targetMode]: picked.displayName ?? "工作文件夹" }));
+    await refreshSessions(targetMode, false);
+  }
+
+  async function createNewTask() {
+    const targetMode = mode;
+    const store = chatStore();
+    if (!store) return;
+    let workspace: { path: string; displayName?: string } | undefined;
+    if (targetMode === "work" || targetMode === "code" || targetMode === "daily") {
+      const picked = await store.pickWorkspaceFolder();
+      if (!picked.ok || !picked.path) return;
+      workspace = { path: picked.path, displayName: picked.displayName };
+    }
+    const session = await store.create({
+      identityId: null,
+      mode: targetMode,
+      title: workspace ? "新任务" : "新对话",
+    });
+    if (workspace) {
+      const result = await store.setWorkspace(session.id, workspace.path);
+      if (!result.ok) {
+        await store.delete(session.id);
+        window.alert(`设置工作区失败：${result.error ?? "未知错误"}`);
+        return;
+      }
+    }
+    await refreshSessions(targetMode, false);
+    await selectSession(session.id, targetMode);
   }
 
   async function chooseFiles(files: File[]) {
-    const targetMode = mode;
+    const targetScope = scopeKey;
     if (!window.chat || files.length === 0) return;
     setAttachmentBusy(true);
     const previewsByName = new Map<string, string[]>();
@@ -221,9 +354,9 @@ export function ChatPage() {
           const localPreview = previews?.shift();
           return localPreview ? { ...attachment, previewUrl: localPreview } : attachment;
         });
-        setAttachmentsByMode((current) => ({
+        setAttachmentsByScope((current) => ({
           ...current,
-          [targetMode]: [...(current[targetMode] ?? []), ...hydratedResults],
+          [targetScope]: [...(current[targetScope] ?? []), ...hydratedResults],
         }));
       }
     } catch (error) {
@@ -296,10 +429,10 @@ export function ChatPage() {
   }
 
   function removeAttachment(index: number) {
-    const targetMode = mode;
-    setAttachmentsByMode((current) => ({
+    const targetScope = scopeKey;
+    setAttachmentsByScope((current) => ({
       ...current,
-      [targetMode]: (current[targetMode] ?? []).filter((_, itemIndex) => itemIndex !== index),
+      [targetScope]: (current[targetScope] ?? []).filter((_, itemIndex) => itemIndex !== index),
     }));
   }
 
@@ -336,7 +469,7 @@ export function ChatPage() {
     if (files.length > 0) void chooseFiles(files);
   }
 
-  function sendMessage(content: string) {
+  async function sendMessage(content: string) {
     const message = content.trim();
     if (!message) return;
     const stickerMatch = message.match(/\[sticker:([^\]]+)\]/);
@@ -347,10 +480,12 @@ export function ChatPage() {
     const assistantId = demoResponse || demoSticker ? crypto.randomUUID() : undefined;
     const userMessageId = crypto.randomUUID();
     const attachmentsForMessage = attachments.map((attachment) => ({ ...attachment }));
+    const targetMode = mode;
+    const sessionId = await ensureSession(targetMode);
     setMessagesByMode((current) => ({
       ...current,
-      [mode]: [
-        ...(current[mode] ?? []),
+      [targetMode]: [
+        ...(current[targetMode] ?? []),
         {
           id: userMessageId,
           role: "user",
@@ -368,12 +503,35 @@ export function ChatPage() {
         }] : []),
       ],
     }));
-    setDrafts((current) => ({ ...current, [mode]: "" }));
-    setAttachmentsByMode((current) => ({ ...current, [mode]: [] }));
+    setDrafts((current) => ({ ...current, [scopeKey]: "" }));
+    setAttachmentsByScope((current) => ({ ...current, [scopeKey]: [] }));
+    await chatStore()?.append(sessionId, {
+      id: userMessageId,
+      role: "user",
+      content: message,
+      at: Date.now(),
+      sticker: userSticker,
+      attachments: attachmentsForMessage
+        .filter((attachment) => (attachment.kind === "image" || attachment.kind === "document") && attachment.filePath)
+        .map((attachment) => attachment.kind === "image" ? {
+          kind: "image" as const,
+          name: attachment.name,
+          filePath: attachment.filePath!,
+          mime: attachment.mime ?? "application/octet-stream",
+          caption: attachment.caption,
+          status: "pending" as const,
+        } : {
+          kind: "document" as const,
+          name: attachment.name,
+          filePath: attachment.filePath!,
+          status: "pending" as const,
+        }),
+    });
+    void refreshSessions(targetMode, false);
     if (attachmentsForMessage.length > 0) {
-      void prepareImageAttachments(mode, userMessageId, attachmentsForMessage);
+      void prepareImageAttachments(targetMode, userMessageId, attachmentsForMessage);
     }
-    if (demoResponse && assistantId) streamDemoResponse(mode, assistantId, demoResponse);
+    if (demoResponse && assistantId) streamDemoResponse(targetMode, assistantId, demoResponse, sessionId);
   }
 
   return (
@@ -390,16 +548,33 @@ export function ChatPage() {
         <CharacterStatusPill avatarPath={avatarLight} />
       </div>
       <div className="cy-page-windows">
-        <WindowControls />
+        <WindowControls
+          onMinimize={() => window.chat?.minimize()}
+          onMaximize={() => window.chat?.toggleMaximize()}
+          onClose={() => window.chat?.close()}
+        />
       </div>
       <div className="cy-page-settings">
-        <SettingsButton />
+        <SettingsButton onClick={() => sidebarApi()?.openSettings("appearance")} />
       </div>
       <div className="cy-page-user">
         <UserAvatar />
       </div>
       <div className="cy-page-newtask">
-        <NewTaskButton label={taskLabel} />
+        <NewTaskButton label={taskLabel} onClick={() => void createNewTask()} />
+      </div>
+      <div className="cy-page-conversations">
+        <ConversationSidebar
+          mode={mode}
+          sessions={sessions}
+          activeSessionId={activeSessionId}
+          onSelect={(sessionId) => void selectSession(sessionId)}
+          onOpenProject={(workspaceRoot) => {
+            void chatStore()?.openWorkspace(workspaceRoot).then((result) => {
+              if (!result.ok) window.alert(`无法打开项目文件夹：${result.error ?? "未知错误"}`);
+            });
+          }}
+        />
       </div>
       <main
         className={`cy-workspace ${hasMessages ? "has-messages" : "is-empty"} ${isDraggingFiles ? "is-dragging-files" : ""}`}
@@ -422,15 +597,15 @@ export function ChatPage() {
             workspaceName={workspaceNames[mode]}
             attachments={attachments}
             attachmentBusy={attachmentBusy}
-            onChange={(value) => setDrafts((current) => ({ ...current, [mode]: value }))}
-            onSubmit={sendMessage}
+            onChange={(value) => setDrafts((current) => ({ ...current, [scopeKey]: value }))}
+            onSubmit={(value) => void sendMessage(value)}
             onChooseWorkspace={() => void chooseWorkspace()}
             onChooseFiles={(files) => void chooseFiles(files)}
             onRemoveAttachment={removeAttachment}
             onScreenshot={() => void window.chat?.startScreenshot()}
             onChooseSticker={(id) => {
               const separator = draft && !draft.endsWith(" ") ? " " : "";
-              setDrafts((current) => ({ ...current, [mode]: `${draft}${separator}[sticker:${id}]` }));
+              setDrafts((current) => ({ ...current, [scopeKey]: `${draft}${separator}[sticker:${id}]` }));
             }}
           />
         </div>

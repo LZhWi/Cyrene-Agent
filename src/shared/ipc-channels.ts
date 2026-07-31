@@ -32,6 +32,7 @@ export const IPC = {
   CHAT_DOCUMENT_INDEX_PROGRESS: "chat:document-index-progress",
   CHAT_CANCEL_DOCUMENT_INDEX: "chat:cancel-document-index",
   CHAT_CAPTION_IMAGE: "chat:caption-image",
+  CHAT_GET_IMAGE_PREVIEW: "chat:get-image-preview",
   CHAT_GET_IMAGE_SEND_STRATEGY: "chat:get-image-send-strategy",
   // 推理下拉（chat 窗口：原子读 + providerKey 写）
   CHAT_GET_REASONING_STATE: "chat:get-reasoning-state",
@@ -105,6 +106,7 @@ export const IPC = {
   CHATS_RENAME: "chats:rename",
   CHATS_DELETE: "chats:delete",
   CHATS_OPEN_FOLDER: "chats:open-folder",
+  CHATS_OPEN_WORKSPACE: "chats:open-workspace",
   CHATS_MIGRATE_LEGACY: "chats:migrate-legacy",
   // 任意会话变动后 main → 所有渲染窗口 broadcast，触发列表/标题刷新
   CHATS_CHANGED: "chats:changed",
@@ -183,6 +185,7 @@ export const IPC = {
   USER_SAVE_PROFILE: "user:save-profile",
   USER_UPLOAD_AVATAR: "user:upload-avatar",
   USER_GET_AVATAR: "user:get-avatar",
+  USER_PROFILE_CHANGED: "user:profile-changed",
   USER_AVATAR_CHANGED: "user:avatar-changed",
 
   // memory panel

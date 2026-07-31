@@ -129,6 +129,9 @@ export interface ChatSessionMeta {
   messageCount: number;
   purpose?: ChatSessionPurpose;
   mode: ConversationMode;
+  /** 列表分组所需的轻量工作区信息，避免为每一项读取完整 session 文件。 */
+  workspaceRoot?: string;
+  workspaceDisplayName?: string;
 }
 
 export const CHAT_SCHEMA_VERSION = 1 as const;

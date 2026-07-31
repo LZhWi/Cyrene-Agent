@@ -103,10 +103,10 @@ function UserAttachments({ attachments }: { attachments: ChatMessageAttachment[]
     <div className="cy-message__attachments">
       {attachments.map((attachment, index) => {
         const status = attachmentStatus(attachment);
-        if (attachment.kind === "image" && attachment.previewUrl) {
+        if (attachment.kind === "image" && (attachment.previewUrl || attachment.filePath)) {
           return (
             <figure className="cy-message__image-attachment" key={`${attachment.filePath ?? attachment.name}-${index}`}>
-              <img src={attachment.previewUrl} alt={attachment.name} draggable={false} />
+              <AttachmentImage attachment={attachment} />
               {status && <figcaption className={attachment.status === "error" ? "is-error" : ""}>{status}</figcaption>}
             </figure>
           );
@@ -115,6 +115,25 @@ function UserAttachments({ attachments }: { attachments: ChatMessageAttachment[]
       })}
     </div>
   );
+}
+
+function AttachmentImage({ attachment }: { attachment: ChatMessageAttachment }) {
+  const [src, setSrc] = useState(attachment.previewUrl);
+
+  useEffect(() => {
+    setSrc(attachment.previewUrl);
+    if ((!attachment.previewUrl || attachment.previewUrl.startsWith("file:")) && attachment.filePath) {
+      let active = true;
+      void window.chat?.getImagePreview?.(attachment.filePath).then((result) => {
+        if (active && result.ok && result.dataUrl) setSrc(result.dataUrl);
+      });
+      return () => {
+        active = false;
+      };
+    }
+  }, [attachment.filePath, attachment.previewUrl]);
+
+  return <img src={src} alt={attachment.name} draggable={false} />;
 }
 
 function UserContent({

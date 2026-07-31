@@ -3727,6 +3727,18 @@ ipcMain.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {
   }
 });
 
+ipcMain.handle(IPC.CHAT_GET_IMAGE_PREVIEW, (_event, payload: unknown) => {
+  const filePath = payload && typeof payload === "object"
+    ? (payload as { filePath?: unknown }).filePath
+    : undefined;
+  const validated = validateCaptionImagePath(filePath);
+  if (!validated.ok) return { ok: false, error: validated.error };
+  return {
+    ok: true,
+    dataUrl: `data:${validated.mime};base64,${validated.buffer.toString("base64")}`,
+  };
+});
+
 ipcMain.handle(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, () => {
   const settings = loadModelSettings();
   return decideImageSendStrategy({
@@ -4148,7 +4160,11 @@ ipcMain.handle(IPC.MEMORY_PANEL_SAVE_L1, async (_event, raw: Record<string, unkn
   return { ok: true };
 });
 ipcMain.handle(IPC.USER_GET_PROFILE, () => loadUserProfile());
-ipcMain.handle(IPC.USER_SAVE_PROFILE, (_event, profile: Partial<UserProfile>) => saveUserProfile(profile));
+ipcMain.handle(IPC.USER_SAVE_PROFILE, (_event, profile: Partial<UserProfile>) => {
+  const saved = saveUserProfile(profile);
+  broadcastToAuxWindows(IPC.USER_PROFILE_CHANGED, saved);
+  return saved;
+});
 ipcMain.handle(IPC.USER_UPLOAD_AVATAR, async () => {
   const { dialog } = await import("electron");
   const result = await dialog.showOpenDialog({

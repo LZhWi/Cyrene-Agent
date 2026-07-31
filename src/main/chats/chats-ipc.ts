@@ -13,7 +13,7 @@
 // 注意：`chats:open-in-chat-window` 涉及 BrowserWindow 创建逻辑，
 // 由 src/main/index.ts 自行注册，不在本模块；本模块只管纯数据操作。
 
-import { BrowserWindow, ipcMain, type WebContents, dialog } from "electron";
+import { BrowserWindow, ipcMain, type WebContents, dialog, shell } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import type { ChatMessage, ConversationMode, ConversationWorkspaceBinding } from "../../shared/chat-types";
 import * as chatsStore from "./chats-store";
@@ -112,6 +112,25 @@ export function registerChatsIpc(): void {
   ipcMain.handle(IPC.CHATS_OPEN_FOLDER, async () => {
     await chatsStore.openStorageFolder();
     return true;
+  });
+
+  ipcMain.handle(IPC.CHATS_OPEN_WORKSPACE, async (_event, workspaceRoot: unknown) => {
+    if (typeof workspaceRoot !== "string" || !workspaceRoot.trim()) {
+      return { ok: false, error: "missing workspaceRoot" };
+    }
+    try {
+      const resolved = validateAndNormalizeWorkspace(workspaceRoot);
+      const isBoundWorkspace = chatsStore.listSessions().some((session) =>
+        session.workspaceRoot === resolved,
+      );
+      if (!isBoundWorkspace) {
+        return { ok: false, error: "workspace is not bound to a conversation" };
+      }
+      const error = await shell.openPath(resolved);
+      return error ? { ok: false, error } : { ok: true };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   ipcMain.handle(

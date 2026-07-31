@@ -4759,13 +4759,24 @@ async function loadUserProfile(): Promise<void> {
 }
 
 // 用户字段：失焦/回车保存（每个字段独立原子保存）
-function bindUserProfileSave(input: HTMLInputElement | null, field: string): void {
+function bindUserProfileSave(input: HTMLInputElement | null, field: string, live = false): void {
   if (!input) return;
-  const save = (): void => { void window.user?.saveProfile({ [field]: input.value.trim() }); };
+  let saveTimer: number | undefined;
+  const save = (): void => {
+    if (saveTimer !== undefined) window.clearTimeout(saveTimer);
+    saveTimer = undefined;
+    void window.user?.saveProfile({ [field]: input.value.trim() });
+  };
+  if (live) {
+    input.addEventListener("input", () => {
+      if (saveTimer !== undefined) window.clearTimeout(saveTimer);
+      saveTimer = window.setTimeout(save, 180);
+    });
+  }
   input.addEventListener("change", save);
   input.addEventListener("blur", save);
 }
-bindUserProfileSave(userNicknameInput, "nickname");
+bindUserProfileSave(userNicknameInput, "nickname", true);
 bindUserProfileSave(userCallPrefInput, "callPreference");
 bindUserProfileSave(userBirthdayInput, "birthday");
 // 默认城市复用上面的 saveCity（保持原逻辑）

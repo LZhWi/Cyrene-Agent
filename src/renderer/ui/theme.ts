@@ -1,4 +1,3 @@
-import "./theme.css";
 import "./window-corner-radius";
 import { normalizeUiTheme, type UiTheme } from "../../shared/ui-theme";
 import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-font";
