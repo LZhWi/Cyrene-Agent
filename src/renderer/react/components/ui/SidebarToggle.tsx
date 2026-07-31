@@ -7,6 +7,7 @@ interface SidebarToggleProps {
 
 export function SidebarToggle({ collapsed: controlledCollapsed, onToggle }: SidebarToggleProps) {
   const [internalCollapsed, setInternalCollapsed] = useState(false);
+  const [hovered, setHovered] = useState(false);
   const collapsed = controlledCollapsed ?? internalCollapsed;
 
   const handleClick = () => {
@@ -15,10 +16,41 @@ export function SidebarToggle({ collapsed: controlledCollapsed, onToggle }: Side
   };
 
   return (
-    <button className="cy-sidebar-toggle" onClick={handleClick} aria-label="切换侧栏">
-      <svg width="20" height="20" viewBox="0 0 20 20" fill="none" className={collapsed ? "is-collapsed" : ""}>
-        <rect x="2" y="3" width="16" height="14" rx="2" stroke="currentColor" strokeWidth="1.5" />
-        <line x1="7" y1="3" x2="7" y2="17" stroke="currentColor" strokeWidth="1.5" className="cy-sidebar-toggle-line" />
+    <button
+      className={`cy-sidebar-toggle ${collapsed ? "is-collapsed" : ""} ${hovered ? "is-hovered" : ""}`}
+      onClick={handleClick}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
+      aria-label="切换侧栏"
+    >
+      <svg width="20" height="20" viewBox="0 0 48 48" fill="none">
+        {/* 框 - 不变 */}
+        <rect x="6" y="6" width="36" height="36" rx="3" stroke="currentColor" strokeWidth="4.5" strokeLinejoin="round" />
+
+        {/* 竖线 */}
+        <path
+          className="cy-sidebar-line"
+          d="M24 6V42"
+          stroke="currentColor"
+          strokeWidth="4.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+
+        {/* 上横线 */}
+        <path d="M11 6H36" stroke="currentColor" strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round" />
+        {/* 下横线 */}
+        <path d="M11 42H36" stroke="currentColor" strokeWidth="4.5" strokeLinecap="round" strokeLinejoin="round" />
+
+        {/* Chevron */}
+        <path
+          className="cy-sidebar-chevron"
+          d="M32 20L28 24L32 28"
+          stroke="currentColor"
+          strokeWidth="4.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       </svg>
     </button>
   );

@@ -17,12 +17,27 @@
   color: #1d1d1f;
 }
 
-.cy-sidebar-toggle-line {
-  transition: transform 0.2s ease, opacity 0.2s ease;
-  transform-origin: center;
+/* 竖线：默认居中，悬停时缩短+左移到30%位置 */
+.cy-sidebar-line {
+  transition: d 0.25s ease;
 }
 
-.cy-sidebar-toggle svg.is-collapsed .cy-sidebar-toggle-line {
-  transform: scaleX(0);
+.cy-sidebar-toggle.is-hovered .cy-sidebar-line {
+  d: path("M16.8 14V34");
+}
+
+/* Chevron：默认透明，悬停时渐显 */
+.cy-sidebar-chevron {
   opacity: 0;
+  transform-origin: 30px 24px;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.cy-sidebar-toggle.is-hovered .cy-sidebar-chevron {
+  opacity: 1;
+}
+
+/* 收起状态悬停：以 Chevron 中心为轴镜像翻转 */
+.cy-sidebar-toggle.is-collapsed.is-hovered .cy-sidebar-chevron {
+  transform: scaleX(-1);
 }
