@@ -1,0 +1,33 @@
+.cy-user-avatar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.cy-user-avatar:hover .cy-user-avatar-label {
+  color: var(--cy-text);
+}
+
+.cy-user-avatar-circle {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: #ffe8f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.cy-user-avatar-circle span {
+  color: #c46a8a;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.cy-user-avatar-label {
+  font-size: 13px;
+  color: var(--cy-text-muted);
+  transition: color 0.15s;
+}
