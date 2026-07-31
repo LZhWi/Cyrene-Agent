@@ -515,7 +515,7 @@
             <div class="panel-heading__icon"><svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><title>外观设置</title><path d="M24 44C29.9601 44 26.3359 35.136 30 31C33.1264 27.4709 44 29.0856 44 24C44 12.9543 35.0457 4 24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M28 17C29.6569 17 31 15.6569 31 14C31 12.3431 29.6569 11 28 11C26.3431 11 25 12.3431 25 14C25 15.6569 26.3431 17 28 17Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M16 21C17.6569 21 19 19.6569 19 18C19 16.3431 17.6569 15 16 15C14.3431 15 13 16.3431 13 18C13 19.6569 14.3431 21 16 21Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M17 34C18.6569 34 20 32.6569 20 31C20 29.3431 18.6569 28 17 28C15.3431 28 14 29.3431 14 31C14 32.6569 15.3431 34 17 34Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg></div>
             <div>
               <h1>外观设置</h1>
-              <p>调整窗口布局、界面主题和昔涟桌宠的显示方式。</p>
+              <p>调整白调界面的窗口布局与昔涟桌宠显示方式。</p>
             </div>
           </div>
 
@@ -539,30 +539,16 @@
 
           <div class="appearance-section">
             <div class="appearance-section__heading">
-              <h2>外观主题</h2>
-              <p>主题会立即预览，保存后应用到所有窗口。</p>
-            </div>
-            <div class="option-blocks theme-options" id="ui-theme-select" role="radiogroup" aria-label="界面主题">
-              <button type="button" class="option-block is-active" data-theme="classic" aria-pressed="true">
-                <span class="theme-swatch theme-swatch--classic" aria-hidden="true"></span>
-                <span>默认</span>
-              </button>
-              <button type="button" class="option-block" data-theme="pearl-white" aria-pressed="false">
-                <span class="theme-swatch theme-swatch--white" aria-hidden="true"></span>
-                <span>白调</span>
-              </button>
-            </div>
-          </div>
-
-          <div class="appearance-section">
-            <div class="appearance-section__heading">
               <h2>个性化</h2>
               <p>字体和图标会立即应用；请仅导入你有权使用的字体文件。</p>
             </div>
             <div class="appearance-placeholder-list">
               <label class="setting-row">
-                <div><strong>窗口圆角由系统提供（允许窗口调整大小）</strong><span>在部分平台（如 Linux）需要开启此选项以允许窗口调整大小．窗口圆角（如有）将由系统提供．<br />修改后 <b>完全退出并重启客户端</b> 才可生效．</span></div>
-                <span class="switch"><input id="disable-radius" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+                <div><strong>窗口圆角</strong><span>统一调整所有应用窗口的四角弧度（0 ~ 40px）。</span></div>
+                <div class="range-row">
+                  <input id="window-corner-radius" type="range" min="0" max="40" step="1" value="24" />
+                  <span id="window-corner-radius-val" class="range-val">24px</span>
+                </div>
               </label>
               <div class="appearance-font-control">
                 <div class="appearance-font-control__copy"><strong>界面字体</strong><small id="ui-font-current">思源黑体（默认）</small></div>
@@ -621,8 +607,7 @@
           </div>
 
           <div class="form-actions">
-            <div class="save-status" id="appearance-save-status">等待保存</div>
-            <button type="submit" class="save-btn">保存外观设置</button>
+            <div class="save-status" id="appearance-save-status">修改后自动应用</div>
           </div>
         </form>
 

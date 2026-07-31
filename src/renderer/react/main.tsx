@@ -1,5 +1,6 @@
 import React from "react";
 import { createRoot } from "react-dom/client";
+import "../ui/theme";
 import { App } from "./App";
 import { AppProviders } from "./app/providers/AppProviders";
 

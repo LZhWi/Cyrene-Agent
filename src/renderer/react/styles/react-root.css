@@ -43,6 +43,19 @@ html, body {
   position: relative;
   transition: padding 0.25s ease;
   border: 1px solid var(--cy-border);
+  border-radius: var(--cy-window-radius, 24px);
+  overflow: hidden;
+  user-select: none;
+  app-region: drag;
+}
+
+.cy-page button,
+.cy-page a,
+.cy-page input,
+.cy-page select,
+.cy-page textarea,
+.cy-workspace {
+  app-region: no-drag;
 }
 
 .cy-page.is-collapsed {

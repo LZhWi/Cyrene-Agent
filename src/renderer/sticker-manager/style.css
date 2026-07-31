@@ -12,7 +12,7 @@ body {
   width: 100vw;
   height: 100vh;
   padding: 14px;
-  border-radius: 28px;
+  border-radius: var(--cy-window-radius, 24px);
   background: radial-gradient(circle at 12% 0%, rgba(255, 110, 199, 0.20), transparent 38%), linear-gradient(145deg, rgba(43, 30, 68, 0.94), rgba(22, 18, 38, 0.92));
   border: 1px solid var(--rb-border-soft);
   box-shadow: 0 22px 60px rgba(0, 0, 0, 0.32), inset 0 1px 0 rgba(255, 255, 255, 0.10);

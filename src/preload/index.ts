@@ -221,6 +221,18 @@ const cyreneThemeApi = {
 
 contextBridge.exposeInMainWorld("cyreneTheme", cyreneThemeApi);
 
+const cyreneWindowAppearanceApi = {
+  getCornerRadius: () =>
+    ipcRenderer.invoke(IPC.UI_WINDOW_CORNER_RADIUS_GET) as Promise<number>,
+  onCornerRadiusChanged: (callback: (radius: number) => void) => {
+    const listener = (_e: unknown, radius: number) => callback(radius);
+    ipcRenderer.on(IPC.UI_WINDOW_CORNER_RADIUS_CHANGED, listener);
+    return () => ipcRenderer.off(IPC.UI_WINDOW_CORNER_RADIUS_CHANGED, listener);
+  },
+};
+
+contextBridge.exposeInMainWorld("cyreneWindowAppearance", cyreneWindowAppearanceApi);
+
 const cyreneFontApi = {
   get: () => ipcRenderer.invoke(IPC.UI_FONT_GET) as Promise<UiFont>,
   onChanged: (callback: (font: UiFont) => void) => {

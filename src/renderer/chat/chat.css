@@ -25,7 +25,7 @@ body {
   height: 100vh;
   width: 100vw;
   margin: 0;
-  border-radius: 32px;
+  border-radius: var(--cy-window-radius, 24px);
   overflow: hidden;
   background:
     radial-gradient(circle at 12% 10%, var(--rb-bg-3) 0%, transparent 34%),
@@ -33,10 +33,6 @@ body {
     radial-gradient(circle at 50% 112%, var(--rb-bg-2) 0%, transparent 36%),
     linear-gradient(135deg, var(--rb-bg-3) 0%, var(--rb-bg-1) 68%, var(--rb-bg-2) 100%);
   border: 1px solid var(--rb-border-strong);
-}
-
-[data-ui-radius="false"] .chat {
-  border-radius: 0px;
 }
 
 .chat::before {

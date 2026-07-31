@@ -1,4 +1,5 @@
 import "./theme.css";
+import "./window-corner-radius";
 import { normalizeUiTheme, type UiTheme } from "../../shared/ui-theme";
 import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-font";
 
@@ -44,11 +45,11 @@ function applyFont(value: unknown): void {
   document.documentElement.dataset.uiFont = "custom";
 }
 
-applyTheme("classic");
+applyTheme("pearl-white");
 
 void window.cyreneTheme?.get()
   .then(applyTheme)
-  .catch(() => applyTheme("classic"));
+  .catch(() => applyTheme("pearl-white"));
 
 window.cyreneTheme?.onChanged((theme) => {
   applyTheme(theme);

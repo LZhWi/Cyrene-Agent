@@ -9,6 +9,10 @@ import { IPC } from "../shared/ipc-channels";
 import { normalizeUiTheme, type UiTheme } from "../shared/ui-theme";
 import { DEFAULT_UI_FONT, isSupportedFontFileName, normalizeUiFont, type UiFont } from "../shared/ui-font";
 import { normalizeUiIcon, UI_ICON_PRESETS, type UiIcon } from "../shared/ui-icon";
+import {
+  DEFAULT_WINDOW_CORNER_RADIUS,
+  normalizeWindowCornerRadius,
+} from "../shared/window-corner-radius";
 import { foldReasoning, normalizeReasoningPreference, type ReasoningPreference } from "../shared/reasoning";
 import { getUiFontResponseHeaders, isSafeUiFontRequest } from "./ui-font-protocol";
 import {
@@ -227,6 +231,7 @@ async function reconcileUserMemoryIndex(): Promise<void> {
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let chatWindow: BrowserWindow | null = null;
+let reactPreviewWindow: BrowserWindow | null = null;
 let sidebarWindow: BrowserWindow | null = null;
 let tasksWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
@@ -658,6 +663,8 @@ interface GeneralSettings {
   launchAtLogin: boolean;
   language: "zh-CN";
   uiTheme: UiTheme;
+  windowCornerRadius: number;
+  /** @deprecated 旧版透明窗口开关，仅保留用于配置兼容。 */
   uiThemeRadius: boolean;
   uiFont: UiFont;
   uiIcon: UiIcon;
@@ -902,7 +909,8 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   tasksVisible: true,
   launchAtLogin: false,
   language: "zh-CN",
-  uiTheme: "classic",
+  uiTheme: "pearl-white",
+  windowCornerRadius: DEFAULT_WINDOW_CORNER_RADIUS,
   uiThemeRadius: false,
   uiFont: DEFAULT_UI_FONT,
   uiIcon: "cyrene-sun",
@@ -1378,6 +1386,7 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     launchAtLogin: Boolean(input?.launchAtLogin),
     language: "zh-CN",
     uiTheme: normalizeUiTheme(input?.uiTheme),
+    windowCornerRadius: normalizeWindowCornerRadius(input?.windowCornerRadius),
     uiThemeRadius: input?.uiThemeRadius ?? true,
     uiFont: normalizeUiFont(input?.uiFont),
     uiIcon: normalizeUiIcon(input?.uiIcon),
@@ -1514,6 +1523,9 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   }
   if (before.uiThemeRadius !== normalized.uiThemeRadius) {
     broadcastUiThemeRadiusChanged(normalized.uiThemeRadius);
+  }
+  if (before.windowCornerRadius !== normalized.windowCornerRadius) {
+    broadcastWindowCornerRadiusChanged(normalized.windowCornerRadius);
   }
   if (JSON.stringify(before.uiFont) !== JSON.stringify(normalized.uiFont)) {
     broadcastUiFontChanged(normalized.uiFont);
@@ -2741,6 +2753,23 @@ function broadcastUiThemeRadiusChanged(theme: GeneralSettings["uiThemeRadius"]):
   }
 }
 
+function broadcastWindowCornerRadiusChanged(radius: GeneralSettings["windowCornerRadius"]): void {
+  for (const win of [
+    mainWindow,
+    chatWindow,
+    reactPreviewWindow,
+    sidebarWindow,
+    tasksWindow,
+    settingsWindow,
+    stickerManagerWindow,
+    callWindow,
+  ]) {
+    if (win && !win.isDestroyed()) {
+      win.webContents.send(IPC.UI_WINDOW_CORNER_RADIUS_CHANGED, radius);
+    }
+  }
+}
+
 function broadcastUiFontChanged(font: GeneralSettings["uiFont"]): void {
   for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
@@ -2784,7 +2813,7 @@ function attachExternalLinkHandler(win: BrowserWindow): void {
 }
 function createWindow(): void {
   const settings = loadGeneralSettings();
-  const transparent = settings.uiThemeRadius;
+  const transparent = true;
   let restoreX: number | undefined;
   let restoreY: number | undefined;
 
@@ -3062,7 +3091,7 @@ function createChatWindow(sessionId?: string): void {
     autoHideMenuBar: true,
     show: false,
     frame: false,
-    transparent: loadGeneralSettings().uiThemeRadius,
+    transparent: true,
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
@@ -3100,6 +3129,51 @@ function createChatWindow(sessionId?: string): void {
   });
 }
 
+function createReactPreviewWindow(): void {
+  if (!isDev) return;
+
+  if (reactPreviewWindow && !reactPreviewWindow.isDestroyed()) {
+    reactPreviewWindow.show();
+    reactPreviewWindow.focus();
+    return;
+  }
+
+  const layout = computeLayout();
+  reactPreviewWindow = new BrowserWindow({
+    x: layout.chat.x,
+    y: layout.chat.y,
+    width: 1280,
+    height: 760,
+    minWidth: 960,
+    minHeight: 540,
+    title: "Cyrene · React 预览",
+    icon: getCurrentAppIconPath(),
+    backgroundColor: "#00000000",
+    autoHideMenuBar: true,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: true,
+    webPreferences: {
+      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  reactPreviewWindow.loadURL("http://localhost:5173/react/");
+
+  reactPreviewWindow.once("ready-to-show", () => {
+    reactPreviewWindow?.show();
+    reactPreviewWindow?.focus();
+  });
+
+  reactPreviewWindow.on("closed", () => {
+    reactPreviewWindow = null;
+  });
+}
+
 function createSidebarWindow(): void {
   if (sidebarWindow && !sidebarWindow.isDestroyed()) {
     sidebarWindow.show();
@@ -3121,7 +3195,7 @@ function createSidebarWindow(): void {
     autoHideMenuBar: true,
     show: false,
     frame: false,
-    transparent: loadGeneralSettings().uiThemeRadius,
+    transparent: true,
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
@@ -3168,7 +3242,7 @@ function createTasksWindow(): void {
     autoHideMenuBar: true,
     show: false,
     frame: false,
-    transparent: loadGeneralSettings().uiThemeRadius,
+    transparent: true,
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
@@ -3223,7 +3297,7 @@ function createSettingsWindow(section?: string): void {
     autoHideMenuBar: true,
     show: false,
     frame: false,
-    transparent: loadGeneralSettings().uiThemeRadius,
+    transparent: true,
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
@@ -3707,6 +3781,10 @@ ipcMain.handle(IPC.UI_THEME_GET, () => {
 
 ipcMain.handle(IPC.UI_THEME_RADIUS_GET, () => {
   return loadGeneralSettings().uiThemeRadius;
+});
+
+ipcMain.handle(IPC.UI_WINDOW_CORNER_RADIUS_GET, () => {
+  return loadGeneralSettings().windowCornerRadius;
 });
 
 ipcMain.handle(IPC.UI_FONT_GET, () => {
@@ -5325,6 +5403,7 @@ app.whenReady().then(async () => {
   });
   createWindow();
   createChatWindow();
+  createReactPreviewWindow();
   if (generalSettings.sidebarVisible) createSidebarWindow();
   if (generalSettings.tasksVisible) createTasksWindow();
   createTray();

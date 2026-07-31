@@ -24,7 +24,7 @@ body {
   height: 100vh;
   width: 100vw;
   margin: 0;
-  border-radius: 24px;
+  border-radius: var(--cy-window-radius, 24px);
   overflow: hidden;
   /* 与 sidebar 一致：经典主题下三层暗紫微光，避免"两坨紫"挤左上/右上 */
   background:
@@ -33,10 +33,6 @@ body {
     radial-gradient(circle at 50% 110%, var(--rb-bg-3) 0%, transparent 38%),
     linear-gradient(155deg, var(--rb-bg-3) 0%, var(--rb-bg-1) 60%, var(--rb-bg-2) 100%);
   border: 1px solid rgba(255, 190, 226, 0.36);
-}
-
-[data-ui-radius="false"] .tasks {
-  border-radius: 0px;
 }
 
 .tasks::before {

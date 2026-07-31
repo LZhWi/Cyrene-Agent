@@ -72,6 +72,8 @@ export const IPC = {
   UI_THEME_CHANGED: "ui-theme:changed",
   UI_THEME_RADIUS_GET: "ui-theme-radius:get",
   UI_THEME_RADIUS_CHANGED: "ui-theme-radius:changed",
+  UI_WINDOW_CORNER_RADIUS_GET: "ui-window-corner-radius:get",
+  UI_WINDOW_CORNER_RADIUS_CHANGED: "ui-window-corner-radius:changed",
   UI_FONT_GET: "ui-font:get",
   UI_FONT_CHANGED: "ui-font:changed",
   SETTINGS_PICK_UI_FONT: "settings:pick-ui-font",

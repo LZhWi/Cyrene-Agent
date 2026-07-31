@@ -21,10 +21,14 @@ import {
 } from "../../shared/preferences";
 import { isProactiveDeliveryTargetSelectable } from "../../shared/proactive-delivery";
 import { TIMEZONE_OPTIONS, FALLBACK_TIMEZONE, normalizeTimezoneOptionValue } from "./timezone-options";
-import { normalizeUiTheme, type UiTheme } from "../../shared/ui-theme";
+import type { UiTheme } from "../../shared/ui-theme";
 import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-font";
 import { normalizeUiIcon, type UiIcon } from "../../shared/ui-icon";
-import { buildAppearanceSettingsPatch } from "./appearance-settings-state";
+import {
+  DEFAULT_WINDOW_CORNER_RADIUS,
+  normalizeWindowCornerRadius,
+} from "../../shared/window-corner-radius";
+import { applyWindowCornerRadius } from "../ui/window-corner-radius";
 import { getCitaUiState } from "./cita-settings-state";
 import { requestTrackPlayback } from "./music-playback";
 import { type ReasoningPreference } from "../../shared/reasoning";
@@ -408,6 +412,7 @@ interface GeneralSettings {
   launchAtLogin: boolean;
   language: "zh-CN";
   uiTheme: UiTheme;
+  windowCornerRadius: number;
   uiThemeRadius: boolean;
   uiFont: UiFont;
   uiIcon: UiIcon;
@@ -687,7 +692,8 @@ if (!window.settings) {
       tasksVisible: true,
       launchAtLogin: false,
       language: "zh-CN",
-      uiTheme: "classic",
+      uiTheme: "pearl-white",
+      windowCornerRadius: DEFAULT_WINDOW_CORNER_RADIUS,
       defaultChatMode: "work",
       currentStyleId: "default",
       customStyle: DEFAULT_CUSTOM_STYLE,
@@ -861,7 +867,8 @@ const musicEnabledInput = document.getElementById("music-enabled") as HTMLInputE
 const musicVolumeInput = document.getElementById("music-volume") as HTMLInputElement;
 const soundEnabledInput = document.getElementById("sound-enabled") as HTMLInputElement;
 const soundVolumeInput = document.getElementById("sound-volume") as HTMLInputElement;
-const disableRadiusInput = document.getElementById("disable-radius") as HTMLInputElement;
+const windowCornerRadiusInput = document.getElementById("window-corner-radius") as HTMLInputElement;
+const windowCornerRadiusVal = document.getElementById("window-corner-radius-val") as HTMLElement;
 const petAlwaysOnTopInput = document.getElementById("pet-always-on-top") as HTMLInputElement;
 const petVisibleInput = document.getElementById("pet-visible") as HTMLInputElement;
 const petZoomInput = document.getElementById("pet-zoom") as HTMLInputElement;
@@ -871,7 +878,6 @@ const chatLineHeightVal = document.getElementById("chat-line-height-val") as HTM
 const chatParaSpacingInput = document.getElementById("chat-para-spacing") as HTMLInputElement;
 const chatParaSpacingVal = document.getElementById("chat-para-spacing-val") as HTMLElement;
 const launchAtLoginInput = document.getElementById("launch-at-login") as HTMLInputElement;
-const uiThemeSelect = document.getElementById("ui-theme-select") as HTMLElement;
 const uiFontCurrent = document.getElementById("ui-font-current") as HTMLElement;
 const uiFontImportButton = document.getElementById("ui-font-import") as HTMLButtonElement;
 const uiFontResetButton = document.getElementById("ui-font-reset") as HTMLButtonElement;
@@ -980,6 +986,17 @@ function setAppearanceSaveStatus(text: string, cls?: string): void {
   if (cls) appearanceSaveStatus.classList.add(cls);
 }
 
+async function saveAppearancePatch(patch: Partial<GeneralSettings>, successText = "已自动应用"): Promise<void> {
+  try {
+    setAppearanceSaveStatus("应用中…");
+    await window.settings!.saveGeneral(patch);
+    setAppearanceSaveStatus(successText, "is-ok");
+  } catch (error) {
+    console.error("自动应用外观设置失败:", error);
+    setAppearanceSaveStatus("自动应用失败", "is-error");
+  }
+}
+
 function playSettingsClickSound(): void {
   if (!soundEnabledInput.checked) return;
   clickSound.pause();
@@ -1033,11 +1050,6 @@ function applyLanguageSelection(language: "zh-CN"): void {
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
   });
-}
-
-function getUiThemeValue(): GeneralSettings["uiTheme"] {
-  const value = uiThemeSelect.querySelector<HTMLButtonElement>(".option-block.is-active")?.dataset.theme;
-  return normalizeUiTheme(value);
 }
 
 function applyOptionGroupValue(group: HTMLElement, value: string): void {
@@ -1232,15 +1244,6 @@ function renderProactiveDeliveryAvailability(statuses: Record<string, { phase?: 
   });
 }
 
-function applyUiThemeSelection(theme: GeneralSettings["uiTheme"]): void {
-  uiThemeSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
-    const active = button.dataset.theme === theme;
-    button.classList.toggle("is-active", active);
-    button.setAttribute("aria-pressed", String(active));
-  });
-  document.documentElement.dataset.uiTheme = theme;
-}
-
 function applyFcOptimizeSelection(optimizeFirstRound?: boolean, disableLangGraph?: boolean) {
   fcModeLangGraphButton.className = !disableLangGraph ? "fc-mode-option is-active" : "fc-mode-option";
   fcModeEnableOptimizationButton.className = (disableLangGraph && optimizeFirstRound) ? "fc-mode-option is-active" : "fc-mode-option";
@@ -1257,10 +1260,6 @@ function applyFcOptimizeSelection(optimizeFirstRound?: boolean, disableLangGraph
 function renderUiFont(font: UiFont): void {
   uiFontCurrent.textContent = font.kind === "custom" ? font.displayName : "思源黑体（默认）";
   uiFontResetButton.hidden = font.kind !== "custom";
-}
-
-function getUiIconValue(): UiIcon {
-  return normalizeUiIcon(uiIconSelect.querySelector<HTMLButtonElement>(".is-active")?.dataset.icon);
 }
 
 function renderUiIcon(icon: UiIcon): void {
@@ -1626,7 +1625,10 @@ async function loadGeneralSettings(): Promise<void> {
     syncMusicPlayback();
     soundEnabledInput.checked = cfg.soundEnabled;
     soundVolumeInput.value = String(cfg.soundVolume);
-    disableRadiusInput.checked = !cfg.uiThemeRadius;
+    const windowCornerRadius = normalizeWindowCornerRadius(cfg.windowCornerRadius);
+    windowCornerRadiusInput.value = String(windowCornerRadius);
+    windowCornerRadiusVal.textContent = `${windowCornerRadius}px`;
+    applyWindowCornerRadius(windowCornerRadius);
     petAlwaysOnTopInput.checked = cfg.petAlwaysOnTop;
     petVisibleInput.checked = cfg.petVisible;
     petZoomInput.value = String(cfg.petZoom ?? 1);
@@ -1641,7 +1643,6 @@ async function loadGeneralSettings(): Promise<void> {
     sidebarVisibleInput.checked = cfg.sidebarVisible ?? true;
     tasksVisibleInput.checked = cfg.tasksVisible ?? true;
     launchAtLoginInput.checked = cfg.launchAtLogin;
-    applyUiThemeSelection(normalizeUiTheme(cfg.uiTheme));
     renderUiFont(normalizeUiFont(cfg.uiFont));
     renderUiIcon(normalizeUiIcon(cfg.uiIcon));
     applyDefaultChatModeSelection(normalizeDefaultChatMode(cfg.defaultChatMode));
@@ -1876,9 +1877,15 @@ musicVolumeInput.addEventListener("input", () => {
 soundEnabledInput.addEventListener("change", () => setGeneralSaveStatus("有未保存的更改"));
 soundVolumeInput.addEventListener("input", () => setGeneralSaveStatus("有未保存的更改"));
 
-disableRadiusInput.addEventListener("change", async () => {
-  await window.settings!.saveGeneral({ uiThemeRadius: !disableRadiusInput.checked });
-  setAppearanceSaveStatus("已应用", "is-ok");
+windowCornerRadiusInput.addEventListener("input", () => {
+  const radius = applyWindowCornerRadius(windowCornerRadiusInput.value);
+  windowCornerRadiusVal.textContent = `${radius}px`;
+  setAppearanceSaveStatus("松开后自动应用");
+});
+
+windowCornerRadiusInput.addEventListener("change", () => {
+  const windowCornerRadius = normalizeWindowCornerRadius(windowCornerRadiusInput.value);
+  void saveAppearancePatch({ windowCornerRadius });
 });
 
 petAlwaysOnTopInput.addEventListener("change", () => {
@@ -1948,20 +1955,20 @@ chatLineHeightInput.addEventListener("input", () => {
   const val = Number(chatLineHeightInput.value);
   chatLineHeightVal.textContent = val.toFixed(2);
   document.documentElement.style.setProperty("--rb-chat-line-height", String(val));
+  setAppearanceSaveStatus("松开后自动应用");
+});
+chatLineHeightInput.addEventListener("change", () => {
+  void saveAppearancePatch({ chatLineHeight: Number(chatLineHeightInput.value) });
 });
 // 段间距滑块
 chatParaSpacingInput.addEventListener("input", () => {
   const val = Number(chatParaSpacingInput.value);
   chatParaSpacingVal.textContent = val.toFixed(2) + "em";
   document.documentElement.style.setProperty("--rb-chat-para-spacing", val + "em");
+  setAppearanceSaveStatus("松开后自动应用");
 });
-
-uiThemeSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
-  button.addEventListener("click", () => {
-    const theme = normalizeUiTheme(button.dataset.theme);
-    applyUiThemeSelection(theme);
-    setAppearanceSaveStatus("有未保存的更改");
-  });
+chatParaSpacingInput.addEventListener("change", () => {
+  void saveAppearancePatch({ chatParaSpacing: Number(chatParaSpacingInput.value) });
 });
 
 defaultChatModeSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
@@ -3104,24 +3111,8 @@ apiTimeoutForm.addEventListener("submit", async (e) => {
   }
 });
 
-appearanceForm.addEventListener("submit", async (e) => {
+appearanceForm.addEventListener("submit", (e) => {
   e.preventDefault();
-  setAppearanceSaveStatus("保存中…");
-  try {
-    await window.settings!.saveGeneral(buildAppearanceSettingsPatch({
-      uiTheme: getUiThemeValue(),
-      uiIcon: getUiIconValue(),
-      uiThemeRadius: !disableRadiusInput.checked,
-      petAlwaysOnTop: petAlwaysOnTopInput.checked,
-      petVisible: petVisibleInput.checked,
-      petZoom: Number(petZoomInput.value),
-      chatLineHeight: Number(chatLineHeightInput.value),
-      chatParaSpacing: Number(chatParaSpacingInput.value),
-    }));
-    setAppearanceSaveStatus("已保存", "is-ok");
-  } catch {
-    setAppearanceSaveStatus("保存失败", "is-error");
-  }
 });
 
 generalForm.addEventListener("submit", async (e) => {

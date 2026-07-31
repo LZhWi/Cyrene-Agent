@@ -6,7 +6,7 @@ body { overflow: hidden; }
 
 .call {
   width: 100vw; height: 100vh; position: relative; overflow: hidden;
-  border-radius: 20px;
+  border-radius: var(--cy-window-radius, 24px);
   background: radial-gradient(ellipse at 30% 20%, rgba(120, 40, 100, 0.35) 0%, transparent 50%),
               radial-gradient(ellipse at 70% 80%, rgba(80, 30, 120, 0.3) 0%, transparent 50%),
               linear-gradient(180deg, var(--rb-bg-0) 0%, var(--rb-bg-1) 50%, var(--rb-bg-1) 100%);
