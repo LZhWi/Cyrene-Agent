@@ -14,7 +14,7 @@
   --cy-text-muted: #8e8e93;
   
   /* 强调色 */
-  --cy-accent: #ec4899;
+  --cy-accent: #FF5B8A;
   
   /* 胶囊组件 */
   --cy-pill-bg: #fff9fb;
@@ -137,12 +137,48 @@ html, body {
   background: var(--cy-bg-workspace);
   border-radius: 10px;
   border: 1px solid var(--cy-border);
+  position: relative;
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
 }
 
-.cy-workspace-center {
+.cy-workspace-composer {
   display: flex;
+  width: 100%;
+  box-sizing: border-box;
+  justify-content: center;
+  padding: 22px 28px;
+  transition: padding 240ms ease;
+}
+
+.cy-workspace.is-empty .cy-workspace-composer {
+  flex: 1;
   align-items: center;
-  justify-content: flex-start;
-  padding-left: 8px;
-  height: 100%;
+}
+
+.cy-workspace.has-messages .cy-workspace-composer {
+  padding: 22px 24px;
+}
+
+.cy-message-list {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 12px;
+  overflow-y: auto;
+  padding: 28px;
+}
+
+.cy-message-bubble {
+  align-self: flex-end;
+  max-width: min(78%, 680px);
+  padding: 11px 14px;
+  border-radius: 16px 16px 4px;
+  background: #fff1f6;
+  color: var(--cy-text);
+  font: 400 14px/1.55 var(--rb-font-sans, sans-serif);
+  white-space: pre-wrap;
 }

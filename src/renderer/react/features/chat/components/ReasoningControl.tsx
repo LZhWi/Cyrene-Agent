@@ -1,0 +1,110 @@
+import { Popover, Segmented } from "antd";
+import { useEffect, useState } from "react";
+import {
+  computeReasoningDropdown,
+  type ReasoningDropdownView,
+} from "../../../../chat/reasoning-dropdown";
+import type { ReasoningPreference } from "../../../../shared/reasoning";
+import thinkingIconUrl from "../../../assets/status-moods/思考强度.png?url";
+
+interface ReasoningState {
+  providerKey: string;
+  providerId: string;
+  model: string;
+  preference?: ReasoningPreference;
+  thinkingOverride?: -1 | 0 | 1;
+}
+
+interface ChatReasoningApi {
+  getReasoningState: () => Promise<ReasoningState>;
+  setReasoning: (payload: { providerKey: string; preference: ReasoningPreference }) => Promise<void>;
+}
+
+function reasoningApi(): ChatReasoningApi | undefined {
+  return (window as typeof window & { chat?: ChatReasoningApi }).chat;
+}
+
+function preferenceKey(preference: ReasoningPreference): string {
+  return `${preference.mode}:${preference.effort ?? ""}`;
+}
+
+function preferenceLabel(preference: ReasoningPreference): string {
+  if (preference.mode === "auto") return "auto";
+  if (preference.mode === "off") return "off";
+  return preference.effort ?? "on";
+}
+
+function ChevronIcon() {
+  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>;
+}
+
+export function ReasoningControl() {
+  const [providerKey, setProviderKey] = useState("");
+  const [view, setView] = useState<ReasoningDropdownView>();
+  const [open, setOpen] = useState(false);
+
+  async function refresh() {
+    const api = reasoningApi();
+    if (!api) return;
+    try {
+      const state = await api.getReasoningState();
+      setProviderKey(state.providerKey);
+      setView(computeReasoningDropdown(state.providerId, state.model, state.preference, state.thinkingOverride));
+    } catch {
+      setView(undefined);
+    }
+  }
+
+  useEffect(() => { void refresh(); }, []);
+
+  const activeKey = view ? preferenceKey(view.activePreference) : "auto:";
+  const label = `thinking · ${preferenceLabel(view?.activePreference ?? { mode: "auto" })}`;
+
+  async function select(value: string | number) {
+    const item = view?.items.find((candidate) => preferenceKey(candidate.preference) === value);
+    const api = reasoningApi();
+    if (!item || item.disabled || !api || !providerKey) return;
+    await api.setReasoning({ providerKey, preference: item.preference });
+    await refresh();
+    setOpen(false);
+  }
+
+  const panel = (
+    <div className="cy-reasoning-panel">
+      <strong>thinking intensity</strong>
+      <span>available levels for the current model</span>
+      <Segmented
+        block
+        size="small"
+        disabled={!view || view.disabled}
+        value={activeKey}
+        options={(view?.items ?? [{ label: "跟随模型", preference: { mode: "auto" as const }, disabled: true }]).map((item) => ({
+          label: preferenceLabel(item.preference),
+          value: preferenceKey(item.preference),
+          disabled: item.disabled,
+        }))}
+        onChange={select}
+      />
+    </div>
+  );
+
+  return (
+    <Popover
+      content={panel}
+      trigger="click"
+      placement="topRight"
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (nextOpen) void refresh();
+      }}
+      overlayClassName="cy-reasoning-popover"
+    >
+      <button type="button" className="cy-composer__agent-button cy-reasoning-control" disabled={view?.disabled}>
+        <img className="cy-reasoning-icon" src={thinkingIconUrl} alt="" />
+        <span>{label}</span>
+        <ChevronIcon />
+      </button>
+    </Popover>
+  );
+}

@@ -1,0 +1,172 @@
+.cy-composer-stack {
+  display: flex;
+  width: min(100%, 770px);
+  flex-direction: column;
+  transition: transform 240ms ease, width 320ms ease;
+}
+
+.cy-composer-stack.is-centered {
+  transform: translateY(45px);
+}
+
+.cy-composer-stack.is-docked {
+  width: 100%;
+}
+
+.cy-composer-welcome {
+  display: block;
+  width: min(100%, 520px);
+  height: auto;
+  align-self: center;
+  margin-bottom: 10px;
+  object-fit: contain;
+}
+
+.cy-composer-shell {
+  display: flex;
+  width: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border-radius: 22px;
+  background: #f7f7f7;
+}
+
+.cy-composer-stack.is-centered .cy-composer-shell {
+  transform: translateY(-15px);
+}
+
+.cy-composer.ant-sender {
+  position: relative;
+  z-index: 1;
+  border: 1px solid #dedede;
+  border-radius: 22px;
+  background: #fff;
+  box-shadow: 0 8px 18px rgba(29, 29, 31, 0.07);
+}
+
+.cy-composer .ant-sender-content {
+  min-height: 100px;
+  padding: 16px 16px 9px;
+  align-items: flex-end;
+}
+
+.cy-composer .ant-sender-input {
+  min-height: 70px;
+  color: var(--cy-text);
+  font: 400 15px/1.6 var(--rb-font-sans, sans-serif);
+  resize: none;
+}
+
+.cy-composer .ant-sender-input::placeholder {
+  color: #969696;
+}
+
+.cy-composer .ant-sender-actions-list {
+  align-self: flex-end;
+}
+
+.cy-composer .ant-sender-actions-btn {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  color: #fff;
+  background: var(--cy-accent);
+}
+
+.cy-composer .ant-sender-actions-btn:disabled {
+  color: #aaa;
+  background: #e7e7e7;
+}
+
+.cy-composer__icon-button,
+.cy-composer__footer-button,
+.cy-composer__agent-button {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: #363636;
+  font: 500 13px/1 var(--rb-font-sans, sans-serif);
+  cursor: pointer;
+}
+
+.cy-composer__icon-button {
+  display: grid;
+  width: 28px;
+  height: 38px;
+  place-items: center;
+  padding: 0;
+}
+
+.cy-composer__icon-button svg {
+  width: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+}
+
+.cy-composer__footer {
+  display: flex;
+  position: relative;
+  z-index: 0;
+  min-height: 55px;
+  align-items: center;
+  gap: 8px;
+  margin-top: -14px;
+  padding: 14px 15px 0;
+}
+
+
+.cy-composer__footer-button,
+.cy-composer__agent-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 4px;
+}
+
+.cy-composer__footer-button:hover,
+.cy-composer__agent-button:hover,
+.cy-composer__icon-button:hover {
+  color: var(--cy-accent);
+}
+
+.cy-composer__footer-button:disabled {
+  color: #828282;
+  cursor: default;
+}
+
+.cy-composer__footer-button--placeholder small {
+  padding: 2px 4px;
+  border-radius: 5px;
+  background: #ececec;
+  color: #898989;
+  font: 600 9px/1 var(--rb-font-sans, sans-serif);
+  letter-spacing: .04em;
+}
+
+.cy-composer__footer svg,
+.cy-composer__agent-button svg {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.cy-composer__footer .cy-composer__footer-button svg:last-child,
+.cy-composer__agent-button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.cy-composer__footer-separator {
+  width: 1px;
+  height: 16px;
+  margin: 0 2px;
+  background: #ddd;
+}
