@@ -521,9 +521,7 @@ interface ProviderProfile {
   apiKey: string;
   displayName?: string;
   /**
-   * 用户在 settings 显式指定的 transport；"auto" = 按 baseUrl 启发式 + capabilities fallback。
-   * resolveTransport() 负责把 "auto" 解析为具体 transport。
-   * 不存 = 等价于 "auto"。
+   * 用户在 settings 显式选择的协议。"auto" 只用于读取旧配置，规范化后会固化为具体值。
    */
   explicitTransport?: "openai" | "anthropic" | "auto";
   /**
@@ -894,6 +892,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   baseUrl: "https://api.minimaxi.com/v1",
   model: "MiniMax-M3",
   apiKey: "",
+  explicitTransport: "openai",
   perProvider: {},
   runtimeSync: "off",
   stickerEnabled: true,
@@ -1118,11 +1117,30 @@ function getStickerSettingsPath(): string {
  *   4. 用 perProvider[currentProvider] 反向展开成顶层 baseUrl/model/apiKey 镜像
  *      → 真值（source of truth）是 perProvider；顶层只是当前厂商配置的视图
  */
-function normalizeProviderProfile(input: Partial<ProviderProfile> | null | undefined): ProviderProfile {
+function migrateLegacyExplicitTransport(
+  input: Partial<ProviderProfile> | null | undefined,
+  provider: string,
+): "openai" | "anthropic" {
+  if (input?.explicitTransport === "openai" || input?.explicitTransport === "anthropic") {
+    return input.explicitTransport;
+  }
+
+  // 仅用于把旧版 auto/缺失值一次性固化；运行时不会再根据 URL 猜协议。
+  const baseUrl = typeof input?.baseUrl === "string"
+    ? input.baseUrl.trim().replace(/\/+$/, "").toLowerCase()
+    : "";
+  if (/\/anthropic($|\/)|\/v1\/messages($|\?)/.test(baseUrl)) return "anthropic";
+  if (/\/chat\/completions($|\?)|\/completions($|\?)|\/v1\/chat/.test(baseUrl)) return "openai";
+  if (baseUrl.endsWith("/v1")) return "openai";
+  return getCapabilityOrOpenAI(provider).transport;
+}
+
+function normalizeProviderProfile(
+  input: Partial<ProviderProfile> | null | undefined,
+  provider = DEFAULT_MODEL_SETTINGS.provider,
+): ProviderProfile {
   const explicitTransport: ProviderProfile["explicitTransport"] =
-    input?.explicitTransport === "openai" || input?.explicitTransport === "anthropic" || input?.explicitTransport === "auto"
-      ? input.explicitTransport
-      : undefined;
+    migrateLegacyExplicitTransport(input, provider);
   return {
     baseUrl: typeof input?.baseUrl === "string" ? input.baseUrl.trim() : "",
     model: typeof input?.model === "string" ? input.model.trim() : "",
@@ -1156,25 +1174,25 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
   if (rawPerProvider && typeof rawPerProvider === "object") {
     for (const [key, value] of Object.entries(rawPerProvider)) {
       if (typeof key !== "string" || !key.trim()) continue;
-      perProvider[key.trim()] = normalizeProviderProfile(value as Partial<ProviderProfile>);
+      const providerName = key.trim();
+      const migrated = migrateLegacyMinimaxDefaults(providerName, value as Partial<ProviderProfile> & { baseUrl: string });
+      perProvider[providerName] = normalizeProviderProfile(migrated, providerName);
     }
   }
 
   // 厂商重命名迁移：把旧 provider 名在字典里和当前 provider 字段一并改成新名。
   // 必须在"旧 schema 兼容回填"之前做，否则会用旧名先创建一份僵尸数据。
   ({ provider, perProvider } = migrateProviderRenames(provider, perProvider));
-  for (const [providerName, profile] of Object.entries(perProvider)) {
-    perProvider[providerName] = migrateLegacyMinimaxDefaults(providerName, profile);
-  }
-
   // 旧 schema 兼容：v1 之前的 model-config.json 没有 perProvider 字段，
   // 但有顶层 baseUrl/model/apiKey 三件套。首次升级时把它们当作 currentProvider 那一份回填。
   if (!perProvider[provider]) {
-    perProvider[provider] = normalizeProviderProfile({
+    const legacyProfile = migrateLegacyMinimaxDefaults(provider, {
       baseUrl: typeof input?.baseUrl === "string" ? input.baseUrl : "",
       model: typeof input?.model === "string" ? input.model : "",
       apiKey: typeof input?.apiKey === "string" ? input.apiKey : "",
+      explicitTransport: input?.explicitTransport,
     });
+    perProvider[provider] = normalizeProviderProfile(legacyProfile, provider);
     // 如果迁移后这一份完全是空的（用户从来没配过），再给个默认 baseUrl/model（便于 UI 第一次显示）
     if (!perProvider[provider].baseUrl) perProvider[provider].baseUrl = DEFAULT_MODEL_SETTINGS.baseUrl;
     if (!perProvider[provider].model) perProvider[provider].model = DEFAULT_MODEL_SETTINGS.model;
@@ -1313,15 +1331,15 @@ function saveModelSettings(settings: Partial<ModelSettings>): ModelSettings {
   const perProvider: Record<string, ProviderProfile> = { ...(existing.perProvider ?? {}) };
   if (settings.perProvider && typeof settings.perProvider === "object") {
     for (const [key, value] of Object.entries(settings.perProvider)) {
-      perProvider[key] = normalizeProviderProfile(value as Partial<ProviderProfile>);
+      perProvider[key] = normalizeProviderProfile(value as Partial<ProviderProfile>, key);
     }
   }
 
   // 把传入的顶层三件套折叠到 currentProvider 下（这是渲染端目前主要的写入路径）
-  const incomingProfile = perProvider[currentProvider] ?? normalizeProviderProfile(null);
-  // explicitTransport：渲染端新下拉框字段。传 "openai" | "anthropic" | "auto" 都接受；传 undefined 视为 "auto"。
+  const incomingProfile = perProvider[currentProvider] ?? normalizeProviderProfile(null, currentProvider);
+  // 协议只接受用户明确选择的 OpenAI / Anthropic；旧 auto 不再进入运行时。
   const incomingExplicitTransport: ProviderProfile["explicitTransport"] =
-    settings.explicitTransport === "openai" || settings.explicitTransport === "anthropic" || settings.explicitTransport === "auto"
+    settings.explicitTransport === "openai" || settings.explicitTransport === "anthropic"
       ? settings.explicitTransport
       : incomingProfile.explicitTransport;
   // reasoning 折叠（用户第三轮修订 #4）：优先级 perProvider > 顶层 > existing
@@ -2007,7 +2025,7 @@ async function callChatCompletionsStream(
   };
 
   try {
-    // adapter 三层 transport 解析（explicitTransport → baseUrl 启发式 → capabilities fallback）
+    // adapter 按用户保存的 explicitTransport 选择协议；旧配置才回退厂商默认。
     const adapter = getAdapterForConfig(cfg);
     // adapter 的 buildStreamRequest 内部已写 stream=true + 拼 transport 相关的 headers/body
     const http = adapter.buildStreamRequest({

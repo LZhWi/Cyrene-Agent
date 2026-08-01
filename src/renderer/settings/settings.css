@@ -2113,6 +2113,9 @@ body {
   flex: 1;
   min-width: 0;
 }
+.endpoint-preview {
+  overflow-wrap: anywhere;
+}
 .base-url-reset {
   flex-shrink: 0;
   width: 36px;

@@ -7,6 +7,8 @@ import type {
   ChatVendorAdapter,
   HttpRequest,
   ProviderCapability,
+  StreamChunk,
+  StreamEvent,
   ToolExecutionResult,
 } from "./vendors/types";
 
@@ -36,10 +38,17 @@ class FakeAdapter implements ChatVendorAdapter {
     return { url: "https://fake/", method: "POST", headers: {}, body: "{}" };
   }
 
-  parseResponse(): ChatResponse {
+  parseResponse(raw?: unknown): ChatResponse {
+    const text = typeof (raw as { text?: unknown })?.text === "string"
+      ? String((raw as { text: string }).text)
+      : "只是陪你聊聊。";
+    const thinking = typeof (raw as { thinking?: unknown })?.thinking === "string"
+      ? String((raw as { thinking: string }).thinking)
+      : undefined;
     return {
-      assistantMessage: { role: "assistant", content: "只是陪你聊聊。" },
-      text: "只是陪你聊聊。",
+      assistantMessage: { role: "assistant", content: text, thinking },
+      text,
+      thinking,
       toolCalls: [],
       finishReason: "stop",
       raw: {},
@@ -55,8 +64,18 @@ class FakeAdapter implements ChatVendorAdapter {
     return this.buildRequest(req);
   }
 
-  parseStreamEvent(): null {
-    return null;
+  parseStreamEvent(event: StreamEvent): StreamChunk | null {
+    if (event.data === "[DONE]") return { done: true };
+    const parsed = JSON.parse(event.data) as {
+      delta?: string;
+      thinking?: string;
+      usage?: { input: number; output: number };
+    };
+    return {
+      ...(parsed.delta ? { deltaText: parsed.delta } : {}),
+      ...(parsed.thinking ? { deltaThinking: parsed.thinking } : {}),
+      ...(parsed.usage ? { usage: parsed.usage } : {}),
+    };
   }
 
   async testConnection() {
@@ -65,7 +84,10 @@ class FakeAdapter implements ChatVendorAdapter {
 }
 
 beforeEach(() => {
-  globalThis.fetch = vi.fn(async () => new Response("{}", { status: 200 })) as unknown as typeof fetch;
+  globalThis.fetch = vi.fn(async () => new Response("{}", {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  })) as unknown as typeof fetch;
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -88,6 +110,7 @@ describe("runChatLoop", () => {
     });
 
     expect(adapter.requests).toHaveLength(1);
+    expect(adapter.requests[0].stream).toBe(true);
     expect(adapter.requests[0].messages[0]).toEqual({ role: "system", content: "SOUL_SYSTEM" });
     expect(adapter.requests[0].messages[1]).toEqual({ role: "user", content: "陪我聊聊" });
     expect(adapter.requests[0].tools).toBeUndefined();
@@ -100,5 +123,200 @@ describe("runChatLoop", () => {
     expect(recordUsage).toHaveBeenCalledWith(12, 6, 1);
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "text_message_start" }));
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "text_message_end" }));
+  });
+
+  it("forwards real provider stream chunks as they arrive", async () => {
+    const adapter = new FakeAdapter();
+    const onEvent = vi.fn();
+    globalThis.fetch = vi.fn(async () => new Response([
+      'data: {"delta":"昔涟"}',
+      "",
+      'data: {"delta":"来啦♪","usage":{"input":4,"output":3}}',
+      "",
+      "data: [DONE]",
+      "",
+    ].join("\n"), {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as unknown as typeof fetch;
+
+    const result = await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      messages: [{ role: "user", content: "在吗" }],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      timeoutMs: 30_000,
+      onEvent,
+      recordUsage: vi.fn(),
+    });
+
+    const deltas = onEvent.mock.calls
+      .map(([event]) => event as { type: string; delta?: string })
+      .filter((event) => event.type === "text_message_content")
+      .map((event) => event.delta)
+      .join("");
+    expect(deltas).toBe("昔涟来啦♪");
+    expect(result.reply).toBe("昔涟来啦♪");
+    expect(result.totalUsage).toEqual({ input: 4, output: 3 });
+    expect(adapter.requests).toHaveLength(1);
+    expect(adapter.requests[0].stream).toBe(true);
+  });
+
+  it("emits reasoning before creating the visible assistant message", async () => {
+    const adapter = new FakeAdapter();
+    const events: Array<{ type: string; delta?: string }> = [];
+    globalThis.fetch = vi.fn(async () => new Response([
+      'data: {"thinking":"先分析"}', "",
+      'data: {"thinking":"问题"}', "",
+      'data: {"delta":"正式回答"}', "",
+      "data: [DONE]", "",
+    ].join("\n"), { status: 200, headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
+
+    await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      messages: [{ role: "user", content: "为什么" }],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      timeoutMs: 30_000,
+      onEvent: (event) => events.push(event),
+      recordUsage: vi.fn(),
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "step_started",
+      "reasoning_message_start",
+      "reasoning_message_content",
+      "reasoning_message_content",
+      "reasoning_message_end",
+      "text_message_start",
+      "text_message_content",
+      "text_message_end",
+      "step_finished",
+    ]);
+    expect(events.filter((event) => event.type === "reasoning_message_content").map((event) => event.delta).join(""))
+      .toBe("先分析问题");
+  });
+
+  it("exposes non-stream reasoning before paced fallback text", async () => {
+    const adapter = new FakeAdapter();
+    const events: Array<{ type: string; delta?: string }> = [];
+    globalThis.fetch = vi.fn(async () => new Response('{"text":"答案","thinking":"非流式分析"}', {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    })) as unknown as typeof fetch;
+
+    await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      messages: [{ role: "user", content: "为什么" }],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      timeoutMs: 30_000,
+      fallbackRevealIntervalMs: 0,
+      onEvent: (event) => events.push(event),
+      recordUsage: vi.fn(),
+    });
+
+    expect(events.map((event) => event.type)).toEqual([
+      "step_started",
+      "reasoning_message_start",
+      "reasoning_message_content",
+      "reasoning_message_end",
+      "text_message_start",
+      "text_message_content",
+      "text_message_end",
+      "step_finished",
+    ]);
+  });
+
+  it("falls back to a non-stream request before the first visible chunk", async () => {
+    const adapter = new FakeAdapter();
+    const onEvent = vi.fn();
+    globalThis.fetch = vi.fn()
+      .mockResolvedValueOnce(new Response("stream unsupported", { status: 400 }))
+      .mockResolvedValueOnce(new Response('{"text":"降级回复"}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      })) as unknown as typeof fetch;
+
+    const result = await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      messages: [{ role: "user", content: "在吗" }],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      timeoutMs: 30_000,
+      fallbackRevealIntervalMs: 0,
+      onEvent,
+      recordUsage: vi.fn(),
+    });
+
+    expect(result.reply).toBe("降级回复");
+    expect(adapter.requests.map((request) => request.stream)).toEqual([true, false]);
+    expect(globalThis.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry after a stream has already emitted visible text", async () => {
+    const adapter = new FakeAdapter();
+    let pulls = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pulls += 1;
+        if (pulls === 1) {
+          controller.enqueue(new TextEncoder().encode('data: {"delta":"已经开始"}\n\n'));
+          return;
+        }
+        controller.error(new Error("connection dropped"));
+      },
+    });
+    globalThis.fetch = vi.fn(async () => new Response(body, {
+      status: 200,
+      headers: { "content-type": "text/event-stream" },
+    })) as unknown as typeof fetch;
+
+    await expect(runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      messages: [{ role: "user", content: "在吗" }],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      timeoutMs: 30_000,
+    })).rejects.toThrow("connection dropped");
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(adapter.requests).toHaveLength(1);
+  });
+
+  it.each([401, 429, 500])("does not retry HTTP %s as a non-stream request", async (status) => {
+    const adapter = new FakeAdapter();
+    globalThis.fetch = vi.fn(async () => new Response("request failed", { status })) as unknown as typeof fetch;
+
+    await expect(runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      messages: [{ role: "user", content: "在吗" }],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      timeoutMs: 30_000,
+    })).rejects.toThrow(`HTTP ${status}`);
+
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    expect(adapter.requests.map((request) => request.stream)).toEqual([true]);
+  });
+
+  it("merges Anthropic-style usage split across stream events", async () => {
+    const adapter = new FakeAdapter();
+    globalThis.fetch = vi.fn(async () => new Response([
+      'data: {"usage":{"input":9,"output":0}}', "",
+      'data: {"delta":"完成","usage":{"input":0,"output":5}}', "",
+      "data: [DONE]", "",
+    ].join("\n"), { status: 200, headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
+
+    const result = await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      messages: [{ role: "user", content: "在吗" }],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      timeoutMs: 30_000,
+      recordUsage: vi.fn(),
+    });
+
+    expect(result.totalUsage).toEqual({ input: 9, output: 5 });
   });
 });

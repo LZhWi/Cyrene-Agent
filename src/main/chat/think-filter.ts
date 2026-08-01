@@ -19,6 +19,8 @@ export interface ThinkStreamFilter {
   push(chunk: string): string;
   /** 消息结束时 flush 残留的可见文本（可能为空字符串）。 */
   flush(): string;
+  /** 取出自上次读取后捕获到的公开 <think> 文本。 */
+  takeThinking(): string;
 }
 
 const OPEN_TAG = "<think>";
@@ -31,6 +33,7 @@ const CLOSE_TAG = "</think>";
 function createStrictFilter(): ThinkStreamFilter {
   let pending = "";
   let insideThink = false;
+  let thinking = "";
 
   return {
     push(chunk: string): string {
@@ -44,9 +47,12 @@ function createStrictFilter(): ThinkStreamFilter {
           const closeIndex = lower.indexOf(CLOSE_TAG);
           if (closeIndex < 0) {
             // 保留末尾可能跨 chunk 的部分
-            pending = pending.slice(Math.max(0, pending.length - (CLOSE_TAG.length - 1)));
+            const safeLength = Math.max(0, pending.length - (CLOSE_TAG.length - 1));
+            thinking += pending.slice(0, safeLength);
+            pending = pending.slice(safeLength);
             break;
           }
+          thinking += pending.slice(0, closeIndex);
           pending = pending.slice(closeIndex + CLOSE_TAG.length);
           insideThink = false;
           continue;
@@ -72,13 +78,20 @@ function createStrictFilter(): ThinkStreamFilter {
 
     flush(): string {
       if (insideThink) {
-        // 未闭合的 <think>：丢弃内容
+        // 未闭合的 <think> 不进入正文，但仍可作为已公开的思考过程展示。
+        thinking += pending;
         pending = "";
         return "";
       }
       const rest = pending;
       pending = "";
       return rest;
+    },
+
+    takeThinking(): string {
+      const value = thinking;
+      thinking = "";
+      return value;
     },
   };
 }
@@ -147,6 +160,10 @@ function createLeadingOnlyFilter(): ThinkStreamFilter {
       // state === "filtering"
       return inner.flush();
     },
+
+    takeThinking(): string {
+      return state === "filtering" ? inner.takeThinking() : "";
+    },
   };
 }
 
@@ -160,7 +177,7 @@ function createLeadingOnlyFilter(): ThinkStreamFilter {
  */
 export function createThinkFilter(mode: ThinkFilterMode = "leading-only"): ThinkStreamFilter {
   if (mode === "disabled") {
-    return { push: (s: string) => s, flush: () => "" };
+    return { push: (s: string) => s, flush: () => "", takeThinking: () => "" };
   }
   if (mode === "strict") {
     return createStrictFilter();

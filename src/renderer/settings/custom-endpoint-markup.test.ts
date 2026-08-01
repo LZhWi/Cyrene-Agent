@@ -22,6 +22,8 @@ describe("custom endpoint API settings UI", () => {
     expect(html).toContain('id="api-key-label"');
     expect(html).toContain('id="api-key-hint"');
     expect(html).toContain('id="transport-hint"');
+    expect(html).toContain('id="endpoint-preview"');
+    expect(html).not.toContain('value="auto"');
   });
 
   it("ships a local custom endpoint icon", () => {
@@ -38,6 +40,14 @@ describe("custom endpoint API settings UI", () => {
 
   it("persists the inactive custom profile together with the active one", () => {
     expect(source).toContain("perProvider: { ...providerProfileCache }");
+  });
+
+  it("keeps confirmed Anthropic-compatible preset URLs explicit", () => {
+    expect(source).toContain('anthropicBaseUrl: "https://api.minimaxi.com/anthropic"');
+    expect(source).toContain('anthropicBaseUrl: "https://api.deepseek.com/anthropic"');
+    expect(source).toContain('anthropicBaseUrl: "https://open.bigmodel.cn/api/anthropic"');
+    expect(source).toContain('anthropicBaseUrl: "https://api.xiaomimimo.com/anthropic"');
+    expect(source).toContain("该厂商的 A口地址未内置");
   });
 
   it("top-aligns fields with different amounts of helper text", () => {

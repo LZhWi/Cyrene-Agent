@@ -223,6 +223,27 @@ describe("OpenAICompatAdapter", () => {
     expect(chunk?.usage).toEqual({ input: 10, output: 20 });
   });
 
+  test("parseStreamEvent: usage 与空 delta 同一事件时不会丢失", () => {
+    const adapter = new OpenAICompatAdapter("test-openai", capability);
+    const chunk = adapter.parseStreamEvent({
+      eventType: "data",
+      data: JSON.stringify({ choices: [{ delta: {}, finish_reason: "stop" }], usage: { prompt_tokens: 3, completion_tokens: 7 } }),
+    });
+    expect(chunk).toMatchObject({ usage: { input: 3, output: 7 }, finishReason: "stop" });
+  });
+
+  test("parseStreamEvent: thinking 兼容字段与协议内 error", () => {
+    const adapter = new OpenAICompatAdapter("test-openai", capability);
+    expect(adapter.parseStreamEvent({
+      eventType: "data",
+      data: JSON.stringify({ choices: [{ delta: { thinking: "MiniMax thinking" } }] }),
+    })?.deltaThinking).toBe("MiniMax thinking");
+    expect(adapter.parseStreamEvent({
+      eventType: "data",
+      data: JSON.stringify({ error: { message: "bad stream" } }),
+    })?.error).toBe("bad stream");
+  });
+
   test("parseResponse: 同时返回 reasoning_content 与 content → assistantMessage 双字段", () => {
     const adapter = new OpenAICompatAdapter("test-openai", capability);
     const resp = adapter.parseResponse({

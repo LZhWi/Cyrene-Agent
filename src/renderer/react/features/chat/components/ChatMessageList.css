@@ -123,6 +123,30 @@
   color: var(--cy-text);
 }
 
+.cy-message--reasoning {
+  width: min(82%, 760px);
+  max-width: min(82%, 760px);
+}
+
+.cy-message--reasoning .ant-bubble-content {
+  width: 100%;
+  padding: 0;
+  background: transparent;
+}
+
+.cy-message-reasoning {
+  color: var(--cy-text-muted);
+}
+
+.cy-message-reasoning .ant-think-content {
+  padding-block-start: 8px;
+}
+
+.cy-message-reasoning .cy-message-markdown {
+  color: var(--cy-text-muted);
+  font-size: 13px;
+}
+
 .cy-message--assistant:has(.cy-message__sticker:only-child) .ant-bubble-content {
   padding: 0;
   background: transparent;

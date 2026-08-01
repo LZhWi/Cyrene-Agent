@@ -18,6 +18,7 @@ interface ChatComposerProps {
   workspaceName?: string;
   attachments: ComposerAttachment[];
   attachmentBusy?: boolean;
+  modelBusy?: boolean;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   onChooseWorkspace: () => void;
@@ -159,6 +160,7 @@ export function ChatComposer({
   workspaceName,
   attachments,
   attachmentBusy = false,
+  modelBusy = false,
   onChange,
   onSubmit,
   onChooseWorkspace,
@@ -200,7 +202,7 @@ export function ChatComposer({
         rootClassName="cy-composer"
         value={value}
         placeholder={placeholder}
-        disabled={requiresWorkspace && !workspaceName}
+        disabled={(requiresWorkspace && !workspaceName) || modelBusy}
         autoSize={{ minRows: 3, maxRows: 7 }}
         onChange={onChange}
         onSubmit={onSubmit}

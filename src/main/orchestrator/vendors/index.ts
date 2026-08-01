@@ -4,6 +4,7 @@ import { OpenAICompatAdapter } from "./openai-adapter";
 import { AnthropicAdapter } from "./anthropic-adapter";
 import { getCapability, getCapabilityOrOpenAI, PROVIDER_CAPABILITIES } from "./capabilities";
 import { resolveTransport } from "./transport-detector";
+import { resolveApiEndpoint } from "../../../shared/api-endpoint";
 import type {
   ChatMessage, ChatRequest, ChatResponse, ChatVendorAdapter, HttpRequest,
   ProviderCapability, StreamChunk, StreamEvent, TestConnectionResult, ToolCall, ToolExecutionResult,
@@ -16,7 +17,7 @@ export type {
   StructuredOutputRequest, ToolSpec, Transport, VendorConfig,
 };
 export { getCapability, getCapabilityOrOpenAI, PROVIDER_CAPABILITIES };
-export { detectTransport, resolveTransport } from "./transport-detector";
+export { resolveTransport } from "./transport-detector";
 
 const cache = new Map<string, ChatVendorAdapter>();
 
@@ -34,10 +35,7 @@ export function getAdapter(provider: string): ChatVendorAdapter {
 }
 
 /**
- * 按运行时配置取适配器实例。三层 transport 解析：
- *   1. cfg.explicitTransport（用户显式）
- *   2. baseUrl 启发式（detectTransport）
- *   3. capabilities 表默认
+ * 按运行时配置取适配器实例。协议由用户显式选择；旧配置才回退厂商默认。
  * cache key 用 `${provider}::${transport}`，避免显式切 transport 后命中旧实例。
  */
 export function getAdapterForConfig(cfg: VendorConfig): ChatVendorAdapter {
@@ -64,15 +62,7 @@ export function getAdapterForConfig(cfg: VendorConfig): ChatVendorAdapter {
  * - Anthropic transport → {baseUrl}/v1/messages（baseUrl 已含 /v1 时只加 /messages）
  */
 export function buildVendorUrl(baseUrl: string, transport: Transport): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/, "");
-  if (transport === "anthropic") {
-    if (trimmed.endsWith("/messages")) return trimmed;
-    if (trimmed.endsWith("/v1")) return `${trimmed}/messages`;
-    return `${trimmed}/v1/messages`;
-  }
-  // OpenAI transport
-  if (trimmed.endsWith("/chat/completions")) return trimmed;
-  return `${trimmed}/chat/completions`;
+  return resolveApiEndpoint(baseUrl, transport).url;
 }
 
 /**
@@ -111,10 +101,10 @@ export function createSseReader(
           // 循环：一直读到能切出一个完整 event 块为止
           // （半行数据跨多个 chunk 时会继续 read + append buffer）
           while (true) {
-            const splitAt = buffer.indexOf("\n\n");
-            if (splitAt !== -1) {
-              const raw = buffer.slice(0, splitAt);
-              buffer = buffer.slice(splitAt + 2);
+            const boundary = findSseBoundary(buffer);
+            if (boundary) {
+              const raw = buffer.slice(0, boundary.index);
+              buffer = buffer.slice(boundary.index + boundary.length);
               const event = parseSseBlock(raw);
               if (event) return { value: event, done: false };
               // 空注释块（OpenAI 心跳）跳过，继续找下一个
@@ -123,6 +113,7 @@ export function createSseReader(
             // buffer 里没有完整 event 块，需要更多字节
             const { value, done } = await reader.read();
             if (done) {
+              buffer += decoder.decode();
               // 流结束：把 buffer 残余（如果有）当最后一个 event 处理；否则返回 done
               if (buffer.trim().length > 0) {
                 const event = parseSseBlock(buffer);
@@ -149,8 +140,7 @@ export function createSseReader(
  */
 function parseSseBlock(block: string): StreamEvent | null {
   let eventType = "data"; // OpenAI 默认
-  let dataLine = "";
-  let hasData = false;
+  const dataLines: string[] = [];
   for (const rawLine of block.split("\n")) {
     const line = rawLine.replace(/\r$/, "");
     if (!line || line.startsWith(":")) continue; // 空行 / 注释行
@@ -159,11 +149,15 @@ function parseSseBlock(block: string): StreamEvent | null {
       continue;
     }
     if (line.startsWith("data:")) {
-      dataLine = line.slice(5).trimStart();
-      hasData = true;
+      dataLines.push(line.slice(5).replace(/^ /, ""));
     }
     // 其他字段（id: / retry:）当前用不到，忽略
   }
-  if (!hasData) return null;
-  return { eventType, data: dataLine };
+  if (dataLines.length === 0) return null;
+  return { eventType, data: dataLines.join("\n") };
+}
+
+function findSseBoundary(buffer: string): { index: number; length: number } | null {
+  const match = /\r?\n\r?\n/.exec(buffer);
+  return match ? { index: match.index, length: match[0].length } : null;
 }

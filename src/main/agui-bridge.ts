@@ -231,6 +231,41 @@ export function registerAgUiIpc(
     // leading-only 模式：只在消息开头以 <think> 开头时才过滤，避免误删正文中的 <think> 讨论
     let thinkFilter: ThinkStreamFilter | null = null;
     const thinkFilterMode: ThinkFilterMode = "leading-only";
+    let pendingTextStart: { type: string; messageId?: string; [key: string]: unknown } | null = null;
+    let textStartForwarded = false;
+    let embeddedReasoningStarted = false;
+    let embeddedReasoningMessageId = "";
+    const forwardTextStart = (): void => {
+      if (!pendingTextStart || textStartForwarded) return;
+      textStartForwarded = true;
+      send(pendingTextStart);
+    };
+    const forwardEmbeddedReasoning = (delta: string): void => {
+      if (!delta) return;
+      if (!embeddedReasoningStarted) {
+        embeddedReasoningStarted = true;
+        embeddedReasoningMessageId = `${pendingTextStart?.messageId ?? runId}-reasoning`;
+        send({
+          type: "REASONING_MESSAGE_START",
+          messageId: embeddedReasoningMessageId,
+          role: "reasoning",
+          threadId,
+          runId,
+        });
+      }
+      send({
+        type: "REASONING_MESSAGE_CONTENT",
+        messageId: embeddedReasoningMessageId,
+        delta,
+        threadId,
+        runId,
+      });
+    };
+    const endEmbeddedReasoning = (): void => {
+      if (!embeddedReasoningStarted) return;
+      send({ type: "REASONING_MESSAGE_END", messageId: embeddedReasoningMessageId, threadId, runId });
+      embeddedReasoningStarted = false;
+    };
 
     // 订阅 agent 事件流：每个事件透传渲染端；
     // TEXT_MESSAGE_CONTENT 经 <think> 过滤后再转发；
@@ -244,7 +279,10 @@ export function registerAgUiIpc(
         // 所以必须把 RUN_FINISHED 延后到副作用事件之后发送，否则 cyrene.sticker 会晚到而被丢掉。
         if (eventType === "RUN_FINISHED") {
           // 兜底清理：如果 filter 仍存在（TEXT_MESSAGE_END 缺失），销毁
+          endEmbeddedReasoning();
           thinkFilter = null;
+          pendingTextStart = null;
+          textStartForwarded = false;
           pendingRunFinishedEvent = baseEvent;
           return;
         }
@@ -252,7 +290,10 @@ export function registerAgUiIpc(
         // <think> 过滤：拦截 TEXT_MESSAGE_* 事件
         if (eventType === "TEXT_MESSAGE_START") {
           thinkFilter = createThinkFilter(thinkFilterMode);
-          send(baseEvent);
+          pendingTextStart = baseEvent as typeof pendingTextStart;
+          textStartForwarded = false;
+          embeddedReasoningStarted = false;
+          embeddedReasoningMessageId = "";
           return;
         }
 
@@ -265,7 +306,10 @@ export function registerAgUiIpc(
           const event = baseEvent as { type: string; delta?: string };
           const rawDelta = typeof event.delta === "string" ? event.delta : "";
           const visibleDelta = thinkFilter.push(rawDelta);
+          forwardEmbeddedReasoning(thinkFilter.takeThinking());
           if (visibleDelta) {
+            endEmbeddedReasoning();
+            forwardTextStart();
             send({ ...event, delta: visibleDelta });
           }
           // visibleDelta 为空时跳过发送（不产生空 CONTENT 事件）
@@ -275,13 +319,19 @@ export function registerAgUiIpc(
         if (eventType === "TEXT_MESSAGE_END") {
           if (thinkFilter) {
             const tail = thinkFilter.flush();
+            forwardEmbeddedReasoning(thinkFilter.takeThinking());
             if (tail) {
+              endEmbeddedReasoning();
+              forwardTextStart();
               // flush 出的尾部文本作为最后一个 CONTENT 发送，确保在 END 之前到达
               send({ type: "TEXT_MESSAGE_CONTENT", delta: tail, threadId, runId });
             }
             thinkFilter = null;
           }
-          send(baseEvent);
+          endEmbeddedReasoning();
+          if (textStartForwarded) send(baseEvent);
+          pendingTextStart = null;
+          textStartForwarded = false;
           return;
         }
 
@@ -289,7 +339,10 @@ export function registerAgUiIpc(
         send(baseEvent);
       },
       error: (err) => {
+        endEmbeddedReasoning();
         thinkFilter = null; // 错误时丢弃残留 filter 状态
+        pendingTextStart = null;
+        textStartForwarded = false;
         let message = err instanceof Error ? err.message : String(err);
         // 安全兜底：确保不泄漏原始 DOMException / AbortError 文本
         if (!message || message.includes("This operation was aborted") || message.includes("AbortError")) {

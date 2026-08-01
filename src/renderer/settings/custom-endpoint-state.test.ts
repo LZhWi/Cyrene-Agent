@@ -25,7 +25,6 @@ describe("custom endpoint settings state", () => {
       displayName: "自定义云端",
       apiKeyOptional: false,
       baseUrlPlaceholder: "https://your-provider.example/v1",
-      transport: "openai",
     });
   });
 
@@ -34,7 +33,6 @@ describe("custom endpoint settings state", () => {
       displayName: "本地模型",
       apiKeyOptional: true,
       baseUrlPlaceholder: "http://127.0.0.1:11434/v1",
-      transport: "openai",
     });
   });
 

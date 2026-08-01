@@ -162,6 +162,30 @@ describe("AnthropicAdapter", () => {
     expect(chunk?.deltaThinking).toBeUndefined();
   });
 
+  test("parseStreamEvent: data-only compatible event uses JSON type and merges usage", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    expect(adapter.parseStreamEvent({
+      eventType: "data",
+      data: JSON.stringify({ type: "content_block_delta", delta: { type: "text_delta", text: "兼容流" } }),
+    })?.deltaText).toBe("兼容流");
+    expect(adapter.parseStreamEvent({
+      eventType: "message_start",
+      data: JSON.stringify({ message: { usage: { input_tokens: 11, output_tokens: 0 } } }),
+    })?.usage).toEqual({ input: 11, output: 0 });
+    expect(adapter.parseStreamEvent({
+      eventType: "message_delta",
+      data: JSON.stringify({ delta: { stop_reason: "end_turn" }, usage: { output_tokens: 8 } }),
+    })).toMatchObject({ finishReason: "end_turn", usage: { input: 0, output: 8 } });
+  });
+
+  test("parseStreamEvent: protocol error is surfaced", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    expect(adapter.parseStreamEvent({
+      eventType: "error",
+      data: JSON.stringify({ type: "error", error: { message: "overloaded" } }),
+    })?.error).toBe("overloaded");
+  });
+
   test("parseResponse: thinking block + text block + tool_use block 完整解析", () => {
     const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
     const resp = adapter.parseResponse({

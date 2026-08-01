@@ -1,14 +1,22 @@
-import { Bubble, CodeHighlighter, type BubbleItemType } from "@ant-design/x";
+import { Bubble, CodeHighlighter, Think, type BubbleItemType } from "@ant-design/x";
 import { XMarkdown, type ComponentProps } from "@ant-design/x-markdown";
 import Latex from "@ant-design/x-markdown/plugins/Latex";
-import { useEffect, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
 import { useUserAvatar } from "../../../hooks/useUserAvatar";
+import {
+  assistantRenderStages,
+  resolveReasoningExpanded,
+  updateReasoningExpanded,
+} from "./message-visibility";
 
 export interface ChatMessageItem {
   id: string;
   role: "user" | "assistant" | "system";
   content: string;
+  reasoning?: string;
+  reasoningStreaming?: boolean;
+  responseStarted?: boolean;
   streaming?: boolean;
   loading?: boolean;
   sticker?: string | null;
@@ -89,6 +97,32 @@ function AssistantContent({
   );
 }
 
+function ReasoningContent({
+  content,
+  loading,
+  expanded,
+  onExpand,
+}: {
+  content: string;
+  loading: boolean;
+  expanded: boolean;
+  onExpand: (expanded: boolean) => void;
+}) {
+  return (
+    <Think
+      rootClassName="cy-message-reasoning"
+      title={loading ? "正在思考…" : "思考完成"}
+      loading={loading}
+      blink={loading}
+      expanded={expanded}
+      onExpand={onExpand}
+      destroyOnHidden
+    >
+      {content && <MarkdownContent content={content} streaming={loading} />}
+    </Think>
+  );
+}
+
 function attachmentStatus(attachment: ChatMessageAttachment): string | undefined {
   if (attachment.status === "processing") return "视觉分析中…";
   if (attachment.status === "error") return attachment.reason ?? "图片分析失败";
@@ -163,7 +197,11 @@ function UserMessageAvatar({ src }: { src: string | null }) {
   return <span className="cy-message-avatar__user" aria-label="用户" />;
 }
 
-function createRoles(userAvatarUrl: string | null) {
+function createRoles(
+  userAvatarUrl: string | null,
+  reasoningExpanded: Readonly<Record<string, boolean>>,
+  onReasoningExpand: (id: string, expanded: boolean) => void,
+) {
   return {
   user: {
     placement: "end" as const,
@@ -191,6 +229,23 @@ function createRoles(userAvatarUrl: string | null) {
       />
     ),
   },
+  reasoning: {
+    placement: "start" as const,
+    variant: "borderless" as const,
+    rootClassName: "cy-message cy-message--reasoning",
+    contentRender: (_content: string, info: { extraInfo?: { reasoningId?: string; reasoning?: string; reasoningStreaming?: boolean } }) => (
+      <ReasoningContent
+        content={info.extraInfo?.reasoning ?? ""}
+        loading={Boolean(info.extraInfo?.reasoningStreaming)}
+        expanded={info.extraInfo?.reasoningId
+          ? resolveReasoningExpanded(reasoningExpanded, info.extraInfo.reasoningId)
+          : false}
+        onExpand={(expanded) => {
+          if (info.extraInfo?.reasoningId) onReasoningExpand(info.extraInfo.reasoningId, expanded);
+        }}
+      />
+    ),
+  },
   system: {
     placement: "start" as const,
     variant: "borderless" as const,
@@ -199,10 +254,61 @@ function createRoles(userAvatarUrl: string | null) {
   };
 }
 
+export function createMessageItems(messages: ChatMessageItem[], enabledStickers: EnabledSticker[]): BubbleItemType[] {
+  return messages.flatMap((message) => {
+    if (message.role !== "assistant") {
+      return [{
+        key: message.id,
+        role: message.role,
+        content: message.content,
+        extraInfo: {
+          stickerUrl: message.sticker ? resolveStickerUrl(message.sticker, enabledStickers) : undefined,
+          attachments: message.attachments,
+        },
+      }];
+    }
+
+    const assistantItems: BubbleItemType[] = [];
+    const stages = assistantRenderStages(message);
+    if (stages.includes("reasoning")) {
+      assistantItems.push({
+        key: `${message.id}-reasoning`,
+        role: "reasoning",
+        content: "",
+        extraInfo: {
+          reasoningId: message.id,
+          reasoning: message.reasoning,
+          reasoningStreaming: message.loading || message.reasoningStreaming,
+        },
+      });
+    }
+    if (stages.includes("assistant")) {
+      assistantItems.push({
+        key: message.id,
+        role: "assistant",
+        content: message.content,
+        streaming: message.streaming,
+        extraInfo: {
+          streaming: message.streaming,
+          stickerUrl: message.sticker ? resolveStickerUrl(message.sticker, enabledStickers) : undefined,
+        },
+      });
+    }
+    return assistantItems;
+  });
+}
+
 export function ChatMessageList({ messages }: ChatMessageListProps) {
   const userAvatarUrl = useUserAvatar();
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
-  const roles = createRoles(userAvatarUrl);
+  const [reasoningExpanded, setReasoningExpanded] = useState<Record<string, boolean>>({});
+  const onReasoningExpand = useCallback((id: string, expanded: boolean) => {
+    setReasoningExpanded((current) => updateReasoningExpanded(current, id, expanded));
+  }, []);
+  const roles = useMemo(
+    () => createRoles(userAvatarUrl, reasoningExpanded, onReasoningExpand),
+    [onReasoningExpand, reasoningExpanded, userAvatarUrl],
+  );
 
   useEffect(() => {
     let active = true;
@@ -216,18 +322,7 @@ export function ChatMessageList({ messages }: ChatMessageListProps) {
     };
   }, []);
 
-  const items: BubbleItemType[] = messages.map((message) => ({
-    key: message.id,
-    role: message.role,
-    content: message.content,
-    loading: message.loading,
-    streaming: message.streaming,
-    extraInfo: {
-      streaming: message.streaming,
-      stickerUrl: message.sticker ? resolveStickerUrl(message.sticker, enabledStickers) : undefined,
-      attachments: message.attachments,
-    },
-  }));
+  const items = createMessageItems(messages, enabledStickers);
 
   return (
     <div className="cy-message-list" aria-live="polite">

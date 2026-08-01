@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { CyreneAgent, classifyRunError } from "./cyrene-agent";
+import { CyreneAgent, classifyRunError, toAguiEvent } from "./cyrene-agent";
 import { AgentRuntimeError } from "./agent-runtime-error";
 import { AgentExecutionError } from "./run-execution-status";
 import { runTwoPhaseFcLoop } from "./two-phase-fc-loop";
@@ -42,6 +42,15 @@ vi.mock("../user-choice", () => ({
 }));
 
 describe("CyreneAgent", () => {
+  it("maps reasoning lifecycle onto the standard AG-UI events", () => {
+    expect(toAguiEvent({ type: "reasoning_message_start", messageId: "r1", role: "reasoning" }))
+      .toMatchObject({ type: "REASONING_MESSAGE_START", messageId: "r1", role: "reasoning" });
+    expect(toAguiEvent({ type: "reasoning_message_content", messageId: "r1", delta: "分析中" }))
+      .toMatchObject({ type: "REASONING_MESSAGE_CONTENT", messageId: "r1", delta: "分析中" });
+    expect(toAguiEvent({ type: "reasoning_message_end", messageId: "r1" }))
+      .toMatchObject({ type: "REASONING_MESSAGE_END", messageId: "r1" });
+  });
+
   it("passes CyreneRunOptions.soulSampling through to runTwoPhaseFcLoop", async () => {
     const agent = new CyreneAgent({ threadId: "test-thread" });
     const soulSampling = { temperature: 0.9, frequencyPenalty: 0.2 };

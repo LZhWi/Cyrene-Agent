@@ -70,6 +70,9 @@ export type TwoPhaseEvent =
   | { type: "text_message_start"; messageId: string; role: "assistant" }
   | { type: "text_message_content"; messageId: string; delta: string }
   | { type: "text_message_end"; messageId: string }
+  | { type: "reasoning_message_start"; messageId: string; role: "reasoning" }
+  | { type: "reasoning_message_content"; messageId: string; delta: string }
+  | { type: "reasoning_message_end"; messageId: string }
   | { type: "task_plan_update"; snapshot: TaskPlanSnapshot };
 
 export type SoulPhaseReason = "no_tool" | "max_rounds" | "timeout" | "tool_error";

@@ -85,7 +85,7 @@
                 <span>自定义端点</span>
                 <span class="custom-endpoint-controls__badge">高级</span>
               </div>
-              <p id="custom-endpoint-summary">接入 OpenAI 兼容的云端服务，能力由服务提供方决定。</p>
+              <p id="custom-endpoint-summary">接入兼容 OpenAI 或 Anthropic 协议的云端服务，能力由服务提供方决定。</p>
             </div>
             <div class="custom-endpoint-controls__actions">
               <div class="custom-endpoint-mode" role="group" aria-label="自定义端点类型">
@@ -119,16 +119,16 @@
                 <input id="base-url" type="url" placeholder="https://api.deepseek.com" autocomplete="off" />
                 <button type="button" class="base-url-reset" id="base-url-reset-btn" title="重置为厂商默认 URL">↻</button>
               </div>
+              <span class="form-hint endpoint-preview" id="endpoint-preview" aria-live="polite"></span>
             </label>
 
             <label class="field field--full">
               <span>API 协议</span>
               <select id="transport-select">
-                <option value="auto">自动（按 Base URL 推断）</option>
-                <option value="openai">OpenAI 兼容</option>
-                <option value="anthropic">Anthropic 兼容</option>
+                <option value="openai">OpenAI 兼容（O 口）</option>
+                <option value="anthropic">Anthropic 兼容（A 口）</option>
               </select>
-              <span class="form-hint" id="transport-hint">默认按 Base URL 推断；如有歧义可手动指定</span>
+              <span class="form-hint" id="transport-hint">请按服务商提供的接口类型明确选择，程序不会自动识别协议。</span>
             </label>
 
             <label class="field field--full">

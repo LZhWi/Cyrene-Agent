@@ -11,6 +11,7 @@ export const PROVIDER_CAPABILITIES = [
     transport: "openai",
     baseUrl: "https://api.minimaxi.com/v1",
     authStyle: "bearer",
+    anthropicAuthStyle: "x-api-key",
     defaultModel: "MiniMax-M3",
     supportsTools: true,
     supportsThinking: true,
@@ -28,6 +29,7 @@ export const PROVIDER_CAPABILITIES = [
     transport: "openai",
     baseUrl: "https://api.deepseek.com",
     authStyle: "bearer",
+    anthropicAuthStyle: "x-api-key",
     defaultModel: "deepseek-v4-pro",
     supportsTools: true,
     supportsThinking: true,
@@ -130,7 +132,7 @@ export const PROVIDER_CAPABILITIES = [
   {
     id: "mimo",
     displayName: "MiMo（小米）",
-    // 默认入口：用户切 /anthropic 时由 detectTransport 自动推断
+    // 默认使用 OpenAI 入口；Anthropic 入口由用户在设置中明确选择。
     transport: "openai",
     baseUrl: "https://api.xiaomimimo.com/v1",
     // 官方文档：/v1 与 /anthropic 都支持 Authorization: Bearer

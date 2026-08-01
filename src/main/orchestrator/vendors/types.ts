@@ -17,8 +17,7 @@ export interface VendorConfig {
   model: string;
   apiKey: string;
   /**
-   * 用户在 settings UI 显式指定的 transport；"auto" 走 baseUrl 启发式 + capabilities fallback。
-   * resolveTransport(cfg) 负责把 auto 解析为具体 transport。
+   * 用户在 settings UI 显式选择的协议。"auto" 仅作为旧配置兼容输入，运行时不按 URL 推断。
    */
   explicitTransport?: Transport | "auto";
   /**
@@ -152,6 +151,10 @@ export interface StreamEvent {
 export interface StreamChunk {
   deltaText?: string;
   deltaThinking?: string;
+  /** Provider-side terminal reason. Usage may still arrive in a later SSE event. */
+  finishReason?: string;
+  /** A protocol-level error delivered inside an otherwise successful SSE response. */
+  error?: string;
   deltaToolCalls?: ToolCall[];
   done?: boolean;
   usage?: { input: number; output: number };
@@ -204,6 +207,8 @@ export interface ProviderCapability {
   transport: Transport;
   baseUrl: string;
   authStyle: AuthStyle;
+  /** Anthropic-compatible endpoints sometimes require a different auth header. */
+  anthropicAuthStyle?: AuthStyle;
   defaultModel: string;
   supportsTools: boolean;
   supportsThinking: boolean;

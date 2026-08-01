@@ -33,6 +33,7 @@ import { getCitaUiState } from "./cita-settings-state";
 import { requestTrackPlayback } from "./music-playback";
 import { type ReasoningPreference } from "../../shared/reasoning";
 import { type LoginFlowState } from "../../shared/music-types";
+import { resolveApiEndpoint, type ApiTransport } from "../../shared/api-endpoint";
 import { renderMarkdown } from "../chat/markdown/markdown-renderer";
 import workFlowDocMd from "../../../docs/model-work-test/work-flow-test-results-2026-07-24.md?raw";
 import {
@@ -244,10 +245,9 @@ interface ProviderProfile {
   apiKey: string;
   displayName?: string;
   /**
-   * 用户在 settings 显式指定的 transport；"auto" = 按 baseUrl 启发式 + capabilities fallback。
-   * main 进程的 resolveTransport() 负责把 "auto" 解析为具体 transport。
+   * 用户在 settings 显式选择的协议。旧配置中的 auto 会由 main 进程迁移为具体值。
    */
-  explicitTransport?: "openai" | "anthropic" | "auto";
+  explicitTransport?: ApiTransport;
   reasoning?: ReasoningPreference;
 }
 
@@ -263,7 +263,7 @@ interface ModelSettings {
    * 当前厂商的 explicitTransport 镜像（顶层字段是 main 进程 perProvider[currentProvider] 的视图）。
    * UI 改动 transport-select 时，saveConfig 把这个值带给 main 进程折叠回 perProvider。
    */
-  explicitTransport?: "openai" | "anthropic" | "auto";
+  explicitTransport?: ApiTransport;
   /** 当前厂商 reasoning 偏好的顶层镜像。 */
   reasoning?: ReasoningPreference;
   // 按厂商缓存：切回该厂商时，从这里恢复 baseUrl / model / apiKey
@@ -369,6 +369,10 @@ interface ModelPreset {
   // 如 "MiniMax（稀宇科技）" → shortName "MiniMax"。
   shortName: string;
   baseUrl: string;
+  /** 已由厂商官方确认的 Anthropic 兼容 Base URL；没有就不猜。 */
+  anthropicBaseUrl?: string;
+  /** 预设首次使用时选中的明确协议；用户之后可以手动修改。 */
+  transport: ApiTransport;
   mainModels: string[];
   iconUrl: string;
   // 厂商官网链接，显示在预设下拉框旁边，方便用户直接跳转注册/查看文档。
@@ -515,7 +519,7 @@ interface SettingsApi {
   listMcpServers?: () => Promise<Array<{ id: string; name: string; connected: boolean; toolCount: number; toolIds: string[] }>>;
   getPermissionLevel?: () => Promise<{ level: "read-only" | "scoped" | "per-action" | "full" }>;
   setPermissionLevel?: (level: string) => Promise<{ ok: boolean; level?: string; error?: string }>;
-  testConnection?: (config: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: "openai" | "anthropic" | "auto"; reasoning?: ReasoningPreference }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
+  testConnection?: (config: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: ApiTransport; reasoning?: ReasoningPreference }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
   testVision?: (config: { baseUrl: string; apiKey: string; model: string }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
   // main → settings：要求切到指定标签（窗口已打开时由 main 发这个事件）
   onSwitchSection?: (callback: (section: string) => void) => (() => void) | void;
@@ -547,6 +551,8 @@ const MODEL_PRESETS: ModelPreset[] = [
     providerName: "MiniMax（稀宇科技）",
     shortName: "MiniMax",
     baseUrl: "https://api.minimaxi.com/v1",
+    anthropicBaseUrl: "https://api.minimaxi.com/anthropic",
+    transport: "openai",
     mainModels: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
     iconUrl: "../icons/providers/minimax.svg",
     websiteUrl: "https://platform.minimaxi.com/",
@@ -561,6 +567,8 @@ const MODEL_PRESETS: ModelPreset[] = [
     providerName: "DeepSeek（深度求索）",
     shortName: "DeepSeek",
     baseUrl: "https://api.deepseek.com",
+    anthropicBaseUrl: "https://api.deepseek.com/anthropic",
+    transport: "openai",
     mainModels: ["deepseek-v4-pro", "deepseek-v4-flash"],
     iconUrl: "../icons/providers/deepseek.svg",
     websiteUrl: "https://platform.deepseek.com/",
@@ -569,6 +577,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     providerName: "豆包（火山方舟）",
     shortName: "豆包",
     baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
+    transport: "openai",
     mainModels: [
       "doubao-seed-2-1-pro-260628",
       "doubao-seed-2-0-pro-260215",
@@ -583,6 +592,8 @@ const MODEL_PRESETS: ModelPreset[] = [
     providerName: "GLM（智谱）",
     shortName: "GLM",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+    anthropicBaseUrl: "https://open.bigmodel.cn/api/anthropic",
+    transport: "openai",
     mainModels: ["glm-5.1", "glm-5-turbo", "glm-4.7"],
     iconUrl: "../icons/providers/glm.svg",
     websiteUrl: "https://open.bigmodel.cn/",
@@ -591,6 +602,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     providerName: "Kimi（月之暗面）",
     shortName: "Kimi",
     baseUrl: "https://api.moonshot.cn/v1",
+    transport: "openai",
     mainModels: ["kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking"],
     iconUrl: "../icons/providers/kimi.svg",
     websiteUrl: "https://platform.moonshot.cn/",
@@ -601,6 +613,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     providerName: "Qwen（通义千问）",
     shortName: "Qwen",
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    transport: "openai",
     mainModels: ["qwen-max", "qwen-plus", "qwen-turbo"],
     iconUrl: "../icons/providers/qwen.svg",
     websiteUrl: "https://bailian.console.aliyun.com/",
@@ -609,6 +622,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     providerName: "ChatGPT（OpenAI）",
     shortName: "ChatGPT",
     baseUrl: "https://api.openai.com/v1",
+    transport: "openai",
     // 官方入口只推荐已纳入结构化输出 Profile 的型号；代理与自定义型号走“自定义端点”。
     mainModels: ["gpt-5.6"],
     iconUrl: "../icons/providers/openai.svg",
@@ -618,6 +632,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     providerName: "Claude（Anthropic）",
     shortName: "Claude",
     baseUrl: "https://api.anthropic.com/v1",
+    transport: "anthropic",
     mainModels: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6"],
     iconUrl: "../icons/providers/claude.svg",
     websiteUrl: "https://console.anthropic.com/",
@@ -626,6 +641,8 @@ const MODEL_PRESETS: ModelPreset[] = [
     providerName: "MiMo（小米）",
     shortName: "MiMo",
     baseUrl: "https://api.xiaomimimo.com/v1",
+    anthropicBaseUrl: "https://api.xiaomimimo.com/anthropic",
+    transport: "openai",
     mainModels: ["mimo-v2.5-pro"],
     iconUrl: "../icons/providers/xiaomimimo.svg",
     websiteUrl: "https://mimo.mi.com/",
@@ -640,6 +657,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     providerName: CUSTOM_ENDPOINT_PROVIDERS.cloud,
     shortName: "自定义",
     baseUrl: "",
+    transport: "openai",
     mainModels: [],
     iconUrl: "../icons/providers/custom-endpoint.svg",
     customEndpointMode: "cloud",
@@ -648,6 +666,7 @@ const MODEL_PRESETS: ModelPreset[] = [
     providerName: CUSTOM_ENDPOINT_PROVIDERS.local,
     shortName: "本地模型",
     baseUrl: "",
+    transport: "openai",
     mainModels: [],
     iconUrl: "../icons/providers/custom-endpoint.svg",
     customEndpointMode: "local",
@@ -822,9 +841,10 @@ const apiKeyInput = document.getElementById("api-key") as HTMLInputElement;
 const apiKeyLabel = document.getElementById("api-key-label") as HTMLElement;
 const apiKeyHint = document.getElementById("api-key-hint") as HTMLElement;
 const testConnectionBtn = document.getElementById("test-connection-btn") as HTMLButtonElement | null;
-// API 协议下拉（auto / openai / anthropic）—— 用户显式 override transport
+// API 协议下拉（openai / anthropic）—— 不根据 URL 自动猜测。
 const transportSelect = document.getElementById("transport-select") as HTMLSelectElement;
 const transportHint = document.getElementById("transport-hint") as HTMLElement;
+const endpointPreview = document.getElementById("endpoint-preview") as HTMLElement;
 const customEndpointControls = document.getElementById("custom-endpoint-controls") as HTMLElement;
 const customEndpointSummary = document.getElementById("custom-endpoint-summary") as HTMLElement;
 const customEndpointGuideBtn = document.getElementById("custom-endpoint-guide-btn") as HTMLButtonElement;
@@ -1424,10 +1444,26 @@ function validateActiveCustomEndpoint(): string | null {
   });
 }
 
+function updateEndpointPreview(): void {
+  const transport = transportSelect.value as ApiTransport;
+  const baseUrl = baseUrlInput.value.trim();
+  const defaultSuffix = transport === "anthropic" ? "/v1/messages" : "/chat/completions";
+
+  if (!baseUrl) {
+    endpointPreview.textContent = `程序会按所选协议自动追加请求路径（默认 ${defaultSuffix}）。`;
+    return;
+  }
+
+  const endpoint = resolveApiEndpoint(baseUrl, transport);
+  endpointPreview.textContent = endpoint.appendedSuffix
+    ? `程序会自动追加 ${endpoint.appendedSuffix}；最终请求地址：${endpoint.url}`
+    : `已填写完整接口地址，不再追加后缀；最终请求地址：${endpoint.url}`;
+}
+
 function applyCustomEndpointUI(preset: ModelPreset): void {
   const mode = getCustomEndpointMode(preset.providerName);
   customEndpointControls.hidden = mode === null;
-  transportSelect.disabled = mode !== null;
+  transportSelect.disabled = false;
 
   if (!mode) {
     apiKeyLabel.textContent = "API Key";
@@ -1435,7 +1471,7 @@ function applyCustomEndpointUI(preset: ModelPreset): void {
     apiKeyInput.placeholder = "sk-...";
     baseUrlInput.placeholder = "https://api.deepseek.com";
     modelInput.placeholder = "选厂商后自动填入，可手填覆盖";
-    transportHint.textContent = "默认按 Base URL 推断；如有歧义可手动指定";
+    transportHint.textContent = "请按服务商提供的接口类型明确选择，程序不会自动识别协议。";
     baseUrlResetBtn.title = "重置为厂商默认 URL";
     apiNoteText.textContent = "选择模型预设后会自动填入 Provider、Base URL 和模型名；你只需要填写对应平台的 API Key。配置只保存在本机 Electron 用户数据目录。";
     return;
@@ -1450,8 +1486,8 @@ function applyCustomEndpointUI(preset: ModelPreset): void {
   });
 
   customEndpointSummary.textContent = mode === "local"
-    ? "填写本机 OpenAI 兼容服务地址；不扫描端口，也不探测模型能力。"
-    : "接入 OpenAI 兼容的云端服务或第三方代理，能力由服务提供方决定。";
+    ? "填写本机模型服务地址并明确选择接口协议；不扫描端口，也不探测模型能力。"
+    : "接入兼容 OpenAI 或 Anthropic 协议的云端服务，能力由服务提供方决定。";
   apiKeyLabel.textContent = presentation.apiKeyOptional ? "API Key（可选）" : "API Key";
   apiKeyHint.textContent = presentation.apiKeyOptional
     ? "本地服务无需鉴权时可留空；如网关要求令牌，请在此填写"
@@ -1459,8 +1495,7 @@ function applyCustomEndpointUI(preset: ModelPreset): void {
   apiKeyInput.placeholder = presentation.apiKeyOptional ? "无需鉴权时留空" : "sk-...";
   baseUrlInput.placeholder = presentation.baseUrlPlaceholder;
   modelInput.placeholder = "填写服务实际提供的模型 ID";
-  transportSelect.value = presentation.transport;
-  transportHint.textContent = "自定义端点仅提供 OpenAI 兼容协议；不会探测或自动升级能力档位";
+  transportHint.textContent = "请按自定义服务实际提供的 O 口或 A 口选择；程序不会自动探测。";
   baseUrlResetBtn.title = "清空自定义 Base URL";
   apiNoteText.textContent = "自定义端点按保守兼容模式运行。保存后请先测试连接；连接成功不代表结构化输出、工具调用或思考模式一定可用。";
 }
@@ -1471,7 +1506,7 @@ function applyPreset(
   preferredApiKey?: string,
   preferredBaseUrl?: string,
   preferredDisplayName?: string,
-  preferredExplicitTransport?: "openai" | "anthropic" | "auto",
+  preferredExplicitTransport?: ApiTransport,
   preferredVision?: { baseUrl: string; apiKey: string; model: string },
   preferredMultimodal?: boolean,
 ): void {
@@ -1486,8 +1521,18 @@ function applyPreset(
   // 留空显示厂商短名——但这里主动填 shortName 让用户看到默认值，可改可清。
   displayNameInput.value = preferredDisplayName ?? preset.shortName;
 
-  // baseUrl：优先用缓存（用户自定义过），其次用 preset 默认
-  baseUrlInput.value = preferredBaseUrl ?? preset.baseUrl;
+  // baseUrl：仅对官方已确认的 A 口预设做协议配套切换；自定义 URL 永远不猜、不覆盖。
+  const selectedTransport = preferredExplicitTransport ?? preset.transport;
+  const restoredBaseUrl = preferredBaseUrl ?? preset.baseUrl;
+  baseUrlInput.value = selectedTransport === "anthropic"
+    && restoredBaseUrl === preset.baseUrl
+    && preset.anthropicBaseUrl
+      ? preset.anthropicBaseUrl
+      : selectedTransport === "openai"
+        && preset.anthropicBaseUrl
+        && restoredBaseUrl === preset.anthropicBaseUrl
+          ? preset.baseUrl
+          : restoredBaseUrl;
 
   fillModelOptions(preset, preferredModel);
 
@@ -1498,10 +1543,10 @@ function applyPreset(
     ? ""
     : (preferredApiKey ?? "");
 
-  // explicitTransport：优先用缓存（用户自定义过），其次默认 "auto"
-  // （切厂商时上一家的 explicitTransport 不应该延续，preset 自带 capabilities transport 兜底）
-  transportSelect.value = preferredExplicitTransport ?? "auto";
+  // 协议优先恢复用户保存值，否则使用预设的明确默认值；永远不按 URL 猜测。
+  transportSelect.value = selectedTransport;
   applyCustomEndpointUI(preset);
+  updateEndpointPreview();
 
   if (preferredMultimodal !== undefined) {
     multimodalToggle.checked = preset.independentVision === true ? false : preferredMultimodal;
@@ -1551,7 +1596,7 @@ async function loadConfig(): Promise<void> {
             displayName: typeof (value as { displayName?: unknown }).displayName === "string"
               ? (value as { displayName: string }).displayName
               : undefined,
-            explicitTransport: (value as { explicitTransport?: "openai" | "anthropic" | "auto" }).explicitTransport,
+            explicitTransport: (value as { explicitTransport?: ApiTransport }).explicitTransport,
             reasoning: (value as { reasoning?: ReasoningPreference }).reasoning,
           };
         }
@@ -2768,7 +2813,7 @@ const CUSTOM_ENDPOINT_GUIDE_BODY = [
   '</section>',
   '<section class="custom-endpoint-guide-section">',
   '  <h4>自定义端点 <span>高级</span></h4>',
-  '  <p>可接入提供 OpenAI 兼容接口的云端服务、本地推理服务或第三方代理。请自行填写完整 Base URL 和服务实际提供的模型 ID。</p>',
+  '  <p>可接入提供 OpenAI 或 Anthropic 兼容接口的云端服务、本地推理服务或第三方代理。请明确选择 API 协议，并填写 Base URL 和服务实际提供的模型 ID。</p>',
   '  <div class="custom-endpoint-guide-warning"><strong>本地模型与自定义端点不在官方技术支持范围内。</strong>实际能力取决于推理服务的具体实现，系统不会扫描端口、探测模型或自动升级能力档位。接入第三方代理前，请自行评估隐私和数据安全风险。</div>',
   '  <p>建议保存后点击“<strong>测试连接</strong>”进行基础验证。连接成功仅表示服务能够响应，不代表结构化输出、工具调用和思考模式一定可用。</p>',
   '  <p class="custom-endpoint-guide-security">🔒 你的 API Key 仅存储在本地设备，不会上传至昔涟的服务器。</p>',
@@ -2929,9 +2974,33 @@ multimodalToggle.addEventListener("change", () => {
 baseUrlResetBtn.addEventListener("click", () => {
   const preset = findPreset(activeProvider);
   if (preset) {
-    baseUrlInput.value = preset.baseUrl;
+    baseUrlInput.value = transportSelect.value === "anthropic" && preset.anthropicBaseUrl
+      ? preset.anthropicBaseUrl
+      : preset.baseUrl;
+    updateEndpointPreview();
     setSaveStatus("已重置为厂商默认 URL");
   }
+});
+
+baseUrlInput.addEventListener("input", updateEndpointPreview);
+transportSelect.addEventListener("change", () => {
+  const preset = findPreset(activeProvider);
+  const currentBaseUrl = baseUrlInput.value.trim().replace(/\/$/, "");
+  const knownPresetUrls = [preset.baseUrl, preset.anthropicBaseUrl]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => value.replace(/\/$/, ""));
+  if (knownPresetUrls.includes(currentBaseUrl)) {
+    if (transportSelect.value === "anthropic" && preset.anthropicBaseUrl) {
+      baseUrlInput.value = preset.anthropicBaseUrl;
+    } else if (transportSelect.value === "openai") {
+      baseUrlInput.value = preset.baseUrl;
+    }
+  }
+  updateEndpointPreview();
+  if (transportSelect.value === "anthropic" && !preset.anthropicBaseUrl && preset.transport !== "anthropic") {
+    transportHint.textContent = "该厂商的 A口地址未内置；请按服务商文档填写 A口 Base URL，程序只追加 /v1/messages。";
+  }
+  setSaveStatus("有未保存的更改");
 });
 
 // 测试视觉模型按钮（仅在多模态开关 OFF 时可见）
@@ -3196,7 +3265,7 @@ apiForm.addEventListener("submit", async (e) => {
       baseUrl: baseUrlInput.value.trim(),
       model: getCurrentModelValue().trim(),
       apiKey: getApiKeyForRequest(),
-      explicitTransport: transportSelect.value as "openai" | "anthropic" | "auto",
+      explicitTransport: transportSelect.value as ApiTransport,
       reasoning: providerProfileCache[activeProvider]?.reasoning,
       perProvider: { ...providerProfileCache },
       multimodal: multimodalToggle.checked,

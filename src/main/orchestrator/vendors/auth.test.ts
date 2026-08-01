@@ -28,6 +28,12 @@ describe("authHeaderFor", () => {
     expect(h).toEqual({ "x-api-key": "sk-test" });
   });
 
+  test("Anthropic transport can override the provider default auth style", () => {
+    const cap = { ...baseCap, authStyle: "bearer" as const, anthropicAuthStyle: "x-api-key" as const };
+    expect(authHeaderFor(cap, "sk-test", "openai")).toEqual({ Authorization: "Bearer sk-test" });
+    expect(authHeaderFor(cap, "sk-test", "anthropic")).toEqual({ "x-api-key": "sk-test" });
+  });
+
   test("输出对象不暴露 apiKey 之外的敏感字符串", () => {
     const h = authHeaderFor({ ...baseCap, authStyle: "bearer" }, "sk-very-secret-123");
     // 输出序列化后必须只包含 apiKey 本身，不含其他秘密字段

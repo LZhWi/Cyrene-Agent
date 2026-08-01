@@ -36,6 +36,19 @@ describe("think-filter - leading-only mode (默认)", () => {
     expect(result).toBe("这是回答");
   });
 
+  test("逐块捕获公开 think 文本，同时保持正文分离", () => {
+    const filter = createThinkFilter(mode);
+    let visible = filter.push("<thi");
+    expect(filter.takeThinking()).toBe("");
+    visible += filter.push("nk>先分析");
+    const firstThinking = filter.takeThinking();
+    visible += filter.push("问题</think>回答");
+    const secondThinking = filter.takeThinking();
+    visible += filter.flush();
+    expect(firstThinking + secondThinking).toBe("先分析问题");
+    expect(visible).toBe("回答");
+  });
+
   test("消息不以 <think> 开头：原样透传", () => {
     const filter = createThinkFilter(mode);
     const result = feedByChar(filter, "这是普通回答");

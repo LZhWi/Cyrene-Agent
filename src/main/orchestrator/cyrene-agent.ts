@@ -140,7 +140,7 @@ export function resolveExecutionMode(mode: unknown): AgentExecutionMode {
 /**
  * 把 TwoPhaseEvent 包装成 AG-UI BaseEvent。
  */
-function toAguiEvent(event: TwoPhaseEvent): BaseEvent {
+export function toAguiEvent(event: TwoPhaseEvent): BaseEvent {
   switch (event.type) {
     case "step_started":
       return { type: EventType.STEP_STARTED, stepName: event.stepName };
@@ -175,6 +175,12 @@ function toAguiEvent(event: TwoPhaseEvent): BaseEvent {
       };
     case "text_message_end":
       return { type: EventType.TEXT_MESSAGE_END, messageId: event.messageId };
+    case "reasoning_message_start":
+      return { type: EventType.REASONING_MESSAGE_START, messageId: event.messageId, role: event.role };
+    case "reasoning_message_content":
+      return { type: EventType.REASONING_MESSAGE_CONTENT, messageId: event.messageId, delta: event.delta };
+    case "reasoning_message_end":
+      return { type: EventType.REASONING_MESSAGE_END, messageId: event.messageId };
     case "task_plan_update":
       return { type: EventType.CUSTOM, name: "cyrene.taskPlan", value: event.snapshot };
   }

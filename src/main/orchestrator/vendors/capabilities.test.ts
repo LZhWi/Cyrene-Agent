@@ -68,6 +68,21 @@ describe("PROVIDER_CAPABILITIES — 已知条目存在性回归", () => {
     expect(request.headers["x-api-key"]).toBeUndefined();
   });
 
+  test.each([
+    ["MiniMax（稀宇科技）", "https://api.minimaxi.com/anthropic", "MiniMax-M3"],
+    ["DeepSeek（深度求索）", "https://api.deepseek.com/anthropic", "deepseek-v4-pro"],
+  ])("%s 的 A口使用 messages 与 x-api-key", (provider, baseUrl, model) => {
+    const cfg = { provider, baseUrl, model, apiKey: "test-key", explicitTransport: "anthropic" as const };
+    const request = getAdapterForConfig(cfg).buildStreamRequest(
+      { model, messages: [{ role: "user", content: "ping" }], stream: true },
+      cfg,
+    );
+    expect(request.url).toBe(`${baseUrl}/v1/messages`);
+    expect(request.headers["x-api-key"]).toBe("test-key");
+    expect(request.headers.Authorization).toBeUndefined();
+    expect(JSON.parse(request.body)).toMatchObject({ stream: true });
+  });
+
   test("9 家 provider 的 displayName 都在表中", () => {
     const names = new Set(PROVIDER_CAPABILITIES.map((c) => c.displayName));
     for (const expected of [

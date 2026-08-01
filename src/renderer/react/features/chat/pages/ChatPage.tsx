@@ -103,6 +103,28 @@ interface SidebarApi {
   openSettings: (section?: string) => void;
 }
 
+interface AguiEvent {
+  type?: string;
+  delta?: string;
+  message?: string;
+  error?: string;
+  content?: string;
+  name?: string;
+  value?: unknown;
+}
+
+interface AguiApi {
+  run: (input: {
+    messages: Array<{ role: "user" | "model"; content: string; at?: number }>;
+    userTurnId: string;
+    assistantTurnId: string;
+    styleId?: string;
+    sessionId: string;
+    imageAttachments?: Array<{ name: string; filePath: string; mime?: string }>;
+  }) => Promise<{ success: boolean; error?: string }>;
+  onEvent: (callback: (event: AguiEvent) => void) => () => void;
+}
+
 function chatStore(): ChatStoreApi | undefined {
   return (window as typeof window & { chatStore?: ChatStoreApi }).chatStore;
 }
@@ -111,11 +133,17 @@ function sidebarApi(): SidebarApi | undefined {
   return (window as typeof window & { sidebar?: SidebarApi }).sidebar;
 }
 
+function aguiApi(): AguiApi | undefined {
+  return (window as typeof window & { agui?: AguiApi }).agui;
+}
+
 function toUiMessages(session: ChatSession): ChatMessageItem[] {
   return session.messages.map((message) => ({
     id: message.id,
     role: message.role === "model" ? "assistant" : "user",
     content: message.content,
+    reasoning: message.reasoning,
+    responseStarted: message.role === "model",
     sticker: message.sticker,
     attachments: message.attachments,
   }));
@@ -131,6 +159,7 @@ export function ChatPage() {
   const [sessionsByMode, setSessionsByMode] = useState<Partial<Record<ConversationMode, ChatSessionMeta[]>>>({});
   const [activeSessionIds, setActiveSessionIds] = useState<Partial<Record<ConversationMode, string>>>({});
   const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const [modelBusy, setModelBusy] = useState(false);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const activeModeRef = useRef(mode);
   const activeSessionIdsRef = useRef(activeSessionIds);
@@ -139,6 +168,8 @@ export function ChatPage() {
   const dragDepthRef = useRef(0);
   const localPreviewUrlsRef = useRef(new Set<string>());
   const demoTimers = useRef(new Set<number>());
+  const modelBusyRef = useRef(false);
+  const activeAguiOffRef = useRef<(() => void) | null>(null);
 
   const taskLabel = ["work", "daily", "code"].includes(mode) ? "新建任务" : "新建对话";
   const activeSessionId = activeSessionIds[mode];
@@ -159,6 +190,8 @@ export function ChatPage() {
       window.clearInterval(timer);
     }
     demoTimers.current.clear();
+    activeAguiOffRef.current?.();
+    activeAguiOffRef.current = null;
     for (const url of localPreviewUrlsRef.current) URL.revokeObjectURL(url);
     localPreviewUrlsRef.current.clear();
   }, []);
@@ -245,7 +278,7 @@ export function ChatPage() {
   function streamDemoResponse(targetMode: ConversationMode, id: string, response: string, sessionId?: string) {
     const loadingTimer = window.setTimeout(() => {
       demoTimers.current.delete(loadingTimer);
-      updateMessage(targetMode, id, { loading: false, streaming: true });
+      updateMessage(targetMode, id, { loading: false, streaming: true, responseStarted: true });
 
       const characters = Array.from(response);
       const chunkSize = Math.max(1, Math.min(4, Math.ceil(characters.length / 120)));
@@ -273,6 +306,160 @@ export function ChatPage() {
       demoTimers.current.add(streamTimer);
     }, 450);
     demoTimers.current.add(loadingTimer);
+  }
+
+  async function runModel(input: {
+    targetMode: "chat" | "work";
+    sessionId: string;
+    userMessageId: string;
+    assistantId: string;
+    session: ChatSession;
+    attachments: ComposerAttachment[];
+  }) {
+    const api = aguiApi();
+    const store = chatStore();
+    if (!api || !store) {
+      const visibleError = "模型请求失败：AG-UI 模型服务尚未就绪";
+      updateMessage(input.targetMode, input.assistantId, {
+        content: visibleError,
+        loading: false,
+        streaming: false,
+        responseStarted: true,
+      });
+      await store?.append(input.sessionId, {
+        id: input.assistantId,
+        role: "model",
+        content: visibleError,
+        at: Date.now(),
+      });
+      return;
+    }
+
+    modelBusyRef.current = true;
+    setModelBusy(true);
+    let streamContent = "";
+    let reasoningContent = "";
+    let sticker: string | null = null;
+    let runStarted = false;
+    let resolveTerminal!: (error?: Error) => void;
+    const terminal = new Promise<Error | undefined>((resolve) => {
+      resolveTerminal = resolve;
+    });
+
+    const off = api.onEvent((event) => {
+      if (event.type === "RUN_STARTED") {
+        runStarted = true;
+        return;
+      }
+      if (!runStarted) return;
+      if (event.type === "REASONING_MESSAGE_START") {
+        updateMessage(input.targetMode, input.assistantId, {
+          loading: false,
+          reasoningStreaming: true,
+        });
+      } else if (event.type === "REASONING_MESSAGE_CONTENT" && event.delta) {
+        reasoningContent += event.delta;
+        updateMessage(input.targetMode, input.assistantId, {
+          reasoning: reasoningContent,
+          loading: false,
+          reasoningStreaming: true,
+        });
+      } else if (event.type === "REASONING_MESSAGE_END") {
+        updateMessage(input.targetMode, input.assistantId, { reasoningStreaming: false, loading: false });
+      } else if (event.type === "TEXT_MESSAGE_START") {
+        updateMessage(input.targetMode, input.assistantId, {
+          loading: false,
+          reasoningStreaming: false,
+          responseStarted: true,
+          streaming: true,
+        });
+      } else if (event.type === "TEXT_MESSAGE_CONTENT" && event.delta) {
+        streamContent += event.delta;
+        updateMessage(input.targetMode, input.assistantId, {
+          content: streamContent,
+          loading: false,
+          streaming: true,
+          responseStarted: true,
+        });
+      } else if (event.type === "TEXT_MESSAGE_END") {
+        updateMessage(input.targetMode, input.assistantId, { streaming: false });
+      } else if (event.type === "CUSTOM" && event.name === "cyrene.sticker") {
+        sticker = typeof event.value === "string" ? event.value : null;
+        updateMessage(input.targetMode, input.assistantId, { sticker });
+      } else if (event.type === "RUN_FINISHED") {
+        resolveTerminal();
+      } else if (event.type === "RUN_ERROR") {
+        resolveTerminal(new Error(event.message ?? event.error ?? event.content ?? "模型请求失败"));
+      }
+    });
+    activeAguiOffRef.current?.();
+    activeAguiOffRef.current = off;
+
+    try {
+      const general = await window.chat?.getGeneralSettings?.();
+      const ack = await api.run({
+        messages: input.session.messages.slice(-16).map((item) => ({
+          role: item.role,
+          content: item.content,
+          at: item.at,
+        })),
+        userTurnId: input.userMessageId,
+        assistantTurnId: input.assistantId,
+        styleId: general?.currentStyleId,
+        sessionId: input.sessionId,
+        imageAttachments: input.attachments
+          .filter((attachment) => attachment.kind === "image" && attachment.filePath)
+          .map((attachment) => ({
+            name: attachment.name,
+            filePath: attachment.filePath!,
+            mime: attachment.mime,
+          })),
+      });
+      if (!ack.success) throw new Error(ack.error ?? "模型请求发起失败");
+      const terminalError = await terminal;
+      if (terminalError) throw terminalError;
+
+      const finalContent = streamContent.trim() ? streamContent : "任务已完成。";
+      updateMessage(input.targetMode, input.assistantId, {
+        content: finalContent,
+        loading: false,
+        streaming: false,
+        reasoning: reasoningContent || undefined,
+        reasoningStreaming: false,
+        responseStarted: true,
+        sticker,
+      });
+      await store.append(input.sessionId, {
+        id: input.assistantId,
+        role: "model",
+        content: finalContent,
+        reasoning: reasoningContent || undefined,
+        at: Date.now(),
+        sticker,
+      });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      const visibleError = `模型请求失败：${errorMessage}`;
+      updateMessage(input.targetMode, input.assistantId, {
+        content: visibleError,
+        loading: false,
+        streaming: false,
+        reasoningStreaming: false,
+        responseStarted: true,
+      });
+      await store.append(input.sessionId, {
+        id: input.assistantId,
+        role: "model",
+        content: visibleError,
+        at: Date.now(),
+      });
+    } finally {
+      off();
+      if (activeAguiOffRef.current === off) activeAguiOffRef.current = null;
+      modelBusyRef.current = false;
+      setModelBusy(false);
+      void refreshSessions(input.targetMode, false);
+    }
   }
 
   async function ensureSession(targetMode: ConversationMode): Promise<string> {
@@ -477,7 +664,9 @@ export function ChatPage() {
     const visibleMessage = message.replace(/\[sticker:[^\]]+\]/g, "").trim();
     const demoResponse = DEMO_RESPONSES[message];
     const demoSticker = DEMO_STICKERS[message];
-    const assistantId = demoResponse || demoSticker ? crypto.randomUUID() : undefined;
+    const shouldRunModel = (mode === "chat" || mode === "work") && !demoResponse && !demoSticker;
+    if (shouldRunModel && modelBusyRef.current) return;
+    const assistantId = demoResponse || demoSticker || shouldRunModel ? crypto.randomUUID() : undefined;
     const userMessageId = crypto.randomUUID();
     const attachmentsForMessage = attachments.map((attachment) => ({ ...attachment }));
     const targetMode = mode;
@@ -497,15 +686,16 @@ export function ChatPage() {
           id: assistantId!,
           role: "assistant" as const,
           content: "",
-          loading: Boolean(demoResponse),
+          loading: Boolean(demoResponse || shouldRunModel),
           streaming: false,
+          responseStarted: Boolean(demoSticker),
           sticker: demoSticker,
         }] : []),
       ],
     }));
     setDrafts((current) => ({ ...current, [scopeKey]: "" }));
     setAttachmentsByScope((current) => ({ ...current, [scopeKey]: [] }));
-    await chatStore()?.append(sessionId, {
+    const updatedSession = await chatStore()?.append(sessionId, {
       id: userMessageId,
       role: "user",
       content: message,
@@ -532,6 +722,23 @@ export function ChatPage() {
       void prepareImageAttachments(targetMode, userMessageId, attachmentsForMessage);
     }
     if (demoResponse && assistantId) streamDemoResponse(targetMode, assistantId, demoResponse, sessionId);
+    if (shouldRunModel && assistantId && !updatedSession) {
+      updateMessage(targetMode, assistantId, {
+        content: "模型请求失败：用户消息未能写入当前会话",
+        loading: false,
+        streaming: false,
+        responseStarted: true,
+      });
+    } else if (shouldRunModel && assistantId && updatedSession) {
+      await runModel({
+        targetMode,
+        sessionId,
+        userMessageId,
+        assistantId,
+        session: updatedSession,
+        attachments: attachmentsForMessage,
+      });
+    }
   }
 
   return (
@@ -597,6 +804,7 @@ export function ChatPage() {
             workspaceName={workspaceNames[mode]}
             attachments={attachments}
             attachmentBusy={attachmentBusy}
+            modelBusy={modelBusy && (mode === "chat" || mode === "work")}
             onChange={(value) => setDrafts((current) => ({ ...current, [scopeKey]: value }))}
             onSubmit={(value) => void sendMessage(value)}
             onChooseWorkspace={() => void chooseWorkspace()}

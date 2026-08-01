@@ -9,7 +9,6 @@ export interface CustomEndpointPresentation {
   displayName: string;
   apiKeyOptional: boolean;
   baseUrlPlaceholder: string;
-  transport: "openai";
 }
 
 export interface CustomEndpointConfigInput {
@@ -23,13 +22,11 @@ const PRESENTATION: Record<CustomEndpointMode, CustomEndpointPresentation> = {
     displayName: "自定义云端",
     apiKeyOptional: false,
     baseUrlPlaceholder: "https://your-provider.example/v1",
-    transport: "openai",
   },
   local: {
     displayName: "本地模型",
     apiKeyOptional: true,
     baseUrlPlaceholder: "http://127.0.0.1:11434/v1",
-    transport: "openai",
   },
 };
 

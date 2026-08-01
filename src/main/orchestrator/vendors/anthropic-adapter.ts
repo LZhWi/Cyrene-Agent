@@ -15,16 +15,10 @@ import { applyReasoningPreference } from "./reasoning";
 import { getTimeoutSettings } from "../../timeout-manager";
 import { resolveAutomaticToolChoicePolicy, resolveToolChoicePolicy } from "./tool-choice-policy";
 import { getVendorRuntimeSettings } from "./runtime-settings";
+import { resolveApiEndpoint } from "../../../shared/api-endpoint";
 
 const ANTHROPIC_VERSION = "2023-06-01";
 const DEFAULT_MAX_TOKENS = 4096;
-
-function buildUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/, "");
-  if (trimmed.endsWith("/messages")) return trimmed;
-  if (trimmed.endsWith("/v1")) return `${trimmed}/messages`;
-  return `${trimmed}/v1/messages`;
-}
 
 interface ContentBlock {
   type: string;
@@ -189,11 +183,11 @@ export class AnthropicAdapter implements ChatVendorAdapter {
       },
     );
     return {
-      url: buildUrl(cfg.baseUrl),
+      url: resolveApiEndpoint(cfg.baseUrl, "anthropic").url,
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        ...authHeaderFor(this.capability, cfg.apiKey),
+        ...authHeaderFor(this.capability, cfg.apiKey, "anthropic"),
         "anthropic-version": ANTHROPIC_VERSION,
       },
       body: JSON.stringify(finalBody),
@@ -260,14 +254,34 @@ export class AnthropicAdapter implements ChatVendorAdapter {
 
   parseStreamEvent(event: StreamEvent): StreamChunk | null {
     // Anthropic 流式：eventType 是事件名，data 是 JSON
-    let parsed: { delta?: { type?: string; text?: string; thinking?: string; partial_json?: string }; usage?: { input_tokens?: number; output_tokens?: number } };
+    let parsed: {
+      type?: string;
+      error?: { message?: unknown };
+      message?: { usage?: { input_tokens?: number; output_tokens?: number } };
+      delta?: { type?: string; text?: string; thinking?: string; partial_json?: string; stop_reason?: string };
+      usage?: { input_tokens?: number; output_tokens?: number };
+    };
     try {
       parsed = JSON.parse(event.data);
     } catch {
       return null;
     }
 
-    switch (event.eventType) {
+    const eventType = event.eventType === "data" && typeof parsed.type === "string"
+      ? parsed.type
+      : event.eventType;
+    switch (eventType) {
+      case "error":
+        return { error: typeof parsed.error?.message === "string" ? parsed.error.message : "模型流式响应返回错误" };
+      case "message_start": {
+        const startUsage = parsed.message?.usage;
+        return startUsage ? {
+          usage: {
+            input: startUsage.input_tokens ?? 0,
+            output: startUsage.output_tokens ?? 0,
+          },
+        } : null;
+      }
       case "content_block_delta": {
         const d = parsed.delta;
         if (!d) return null;
@@ -279,15 +293,13 @@ export class AnthropicAdapter implements ChatVendorAdapter {
         return Object.keys(chunk).length > 0 ? chunk : null;
       }
       case "message_delta": {
-        if (parsed.usage) {
-          return {
-            usage: {
-              input: parsed.usage.input_tokens ?? 0,
-              output: parsed.usage.output_tokens ?? 0,
-            },
-          };
-        }
-        return null;
+        const chunk: StreamChunk = {};
+        if (typeof parsed.delta?.stop_reason === "string") chunk.finishReason = parsed.delta.stop_reason;
+        if (parsed.usage) chunk.usage = {
+          input: parsed.usage.input_tokens ?? 0,
+          output: parsed.usage.output_tokens ?? 0,
+        };
+        return Object.keys(chunk).length > 0 ? chunk : null;
       }
       case "message_stop":
         return { done: true };

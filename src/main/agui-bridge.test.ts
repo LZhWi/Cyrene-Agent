@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   runCodeRequest: vi.fn(),
   runCyreneAgent: vi.fn(),
+  agentEvents: [] as unknown[],
 }));
 
 vi.mock("electron", () => ({
@@ -31,6 +32,7 @@ vi.mock("./orchestrator/cyrene-agent", () => ({
       return new Observable((subscriber) => {
         this.lastResult = { reply: "抱抱你", toolResults: [] };
         subscriber.next({ type: "RUN_STARTED" });
+        for (const event of mocks.agentEvents) subscriber.next(event);
         subscriber.next({ type: "RUN_FINISHED" });
         subscriber.complete();
       });
@@ -51,6 +53,57 @@ vi.mock("./orchestrator/code/code-request", () => ({
 }));
 
 describe("agui-bridge sticker event ordering", () => {
+  it("turns leading <think> text into reasoning events before forwarding the assistant start", async () => {
+    vi.resetModules();
+    mocks.handlers.clear();
+    mocks.agentEvents = [
+      { type: "TEXT_MESSAGE_START", messageId: "m1", role: "assistant" },
+      { type: "TEXT_MESSAGE_CONTENT", messageId: "m1", delta: "<think>先分析" },
+      { type: "TEXT_MESSAGE_CONTENT", messageId: "m1", delta: "问题</think>正式回答" },
+      { type: "TEXT_MESSAGE_END", messageId: "m1" },
+    ];
+    mocks.getSession.mockReturnValue({ id: "chat-think", mode: "chat" });
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    const sent: Array<{ type?: string; delta?: string }> = [];
+    const sender = {
+      isDestroyed: () => false,
+      send: (_channel: string, event: { type?: string; delta?: string }) => sent.push(event),
+    };
+    registerAgUiIpc(
+      async () => ({
+        options: {
+          settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
+          messages: [],
+          timeoutMs: 1000,
+          toolSystemContent: "TOOL",
+          soulSystemBaseContent: "SOUL",
+        },
+        latestUserText: "解释一下",
+      }),
+      async () => {},
+      () => null,
+    );
+
+    const handler = mocks.handlers.get(IPC.AGUI_RUN);
+    if (!handler) throw new Error("AGUI_RUN handler was not registered");
+    await handler({ sender }, { messages: [{ role: "user", content: "解释一下" }], sessionId: "chat-think" });
+    await expect.poll(() => sent.some((event) => event.type === "RUN_FINISHED")).toBe(true);
+
+    expect(sent.map((event) => event.type)).toEqual([
+      "RUN_STARTED",
+      "REASONING_MESSAGE_START",
+      "REASONING_MESSAGE_CONTENT",
+      "REASONING_MESSAGE_END",
+      "TEXT_MESSAGE_START",
+      "TEXT_MESSAGE_CONTENT",
+      "TEXT_MESSAGE_END",
+      "RUN_FINISHED",
+    ]);
+    expect(sent.find((event) => event.type === "REASONING_MESSAGE_CONTENT")?.delta).toBe("先分析问题");
+    expect(sent.find((event) => event.type === "TEXT_MESSAGE_CONTENT")?.delta).toBe("正式回答");
+    mocks.agentEvents = [];
+  });
+
   it("delivers sticker side effects before RUN_FINISHED so renderer keeps listening", async () => {
     vi.resetModules();
     mocks.handlers.clear();

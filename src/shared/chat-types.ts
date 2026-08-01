@@ -54,6 +54,8 @@ export interface ChatMessage {
   id: string;
   role: ChatRole;
   content: string;
+  /** 模型公开返回的推理过程；不包含隐藏或加密思考。 */
+  reasoning?: string;
   at: number;
   /** 不直接显示在聊天气泡里，但会拼入模型上下文。 */
   modelContext?: string;
