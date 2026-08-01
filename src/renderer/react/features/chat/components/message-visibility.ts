@@ -9,7 +9,9 @@ export interface AssistantVisibilityState {
 
 export function assistantRenderStages(message: AssistantVisibilityState): Array<"reasoning" | "assistant"> {
   const stages: Array<"reasoning" | "assistant"> = [];
-  if (message.loading || message.reasoning || message.reasoningStreaming) stages.push("reasoning");
+  // `loading` only means the run is pending. It must not fabricate a visible
+  // chain of thought for tool-capable models that do not return reasoning.
+  if (message.reasoning || message.reasoningStreaming) stages.push("reasoning");
   if (message.responseStarted || message.content || message.sticker) stages.push("assistant");
   return stages;
 }

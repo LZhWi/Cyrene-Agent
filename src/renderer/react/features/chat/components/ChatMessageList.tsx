@@ -1,11 +1,12 @@
-import { Bubble, CodeHighlighter, Think, type BubbleItemType } from "@ant-design/x";
+import { Bubble, CodeHighlighter, Think, ThoughtChain, type BubbleItemType } from "@ant-design/x";
 import { XMarkdown, type ComponentProps } from "@ant-design/x-markdown";
 import Latex from "@ant-design/x-markdown/plugins/Latex";
 import { Component, useCallback, useEffect, useMemo, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
-import type { ConversationMode } from "../../../../../shared/chat-types";
+import type { ConversationMode, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import thinkingMoodUrl from "../../../assets/status-moods/思考中.png?url";
 import completedThinkingMoodUrl from "../../../assets/status-moods/提醒.png?url";
+import offlineMoodUrl from "../../../assets/status-moods/离线.png?url";
 import { useUserAvatar } from "../../../hooks/useUserAvatar";
 import {
   assistantRenderStages,
@@ -28,9 +29,12 @@ export interface ChatMessageItem {
   responseStarted?: boolean;
   streaming?: boolean;
   loading?: boolean;
+  /** 请求已发出但尚未收到 Think、工具或正文等首个可视事件。 */
+  waitingForFirstEvent?: boolean;
   ttsCacheKey?: string;
   ttsCacheVersion?: string;
   sticker?: string | null;
+  toolExecutions?: ToolExecutionRecord[];
   attachments?: ChatMessageAttachment[];
 }
 
@@ -146,6 +150,26 @@ function AssistantContent({
   );
 }
 
+function DotSpinner() {
+  return (
+    <span className="cy-dot-spinner" aria-label="加载中" role="status">
+      {Array.from({ length: 8 }, (_, index) => <span className="cy-dot-spinner__dot" key={index} />)}
+    </span>
+  );
+}
+
+function ModelWaitContent() {
+  return (
+    <section className="cy-model-wait" aria-label="等待模型响应">
+      <span className="cy-model-wait__art" aria-hidden="true">
+        <img src={offlineMoodUrl} alt="" draggable={false} />
+        <DotSpinner />
+      </span>
+      <span>昔涟正在等模型回应…</span>
+    </section>
+  );
+}
+
 function ReasoningContent({
   content,
   loading,
@@ -165,22 +189,7 @@ function ReasoningContent({
       icon={
         <span className={`cy-reasoning-status-art${loading ? " is-thinking" : " is-complete"}`} aria-hidden="true">
           <img src={statusArt} alt="" draggable={false} />
-          {loading && (
-            <svg className="cy-reasoning-status-art__orbit" viewBox="0 0 34 20" fill="none">
-              <circle cx="5" cy="12" r="2.2" fill="currentColor">
-                <animate attributeName="opacity" values=".28;1;.28" dur="1.15s" repeatCount="indefinite" />
-                <animate attributeName="cy" values="12;8;12" dur="1.15s" repeatCount="indefinite" />
-              </circle>
-              <circle cx="17" cy="7" r="2.8" fill="currentColor">
-                <animate attributeName="opacity" values=".28;1;.28" dur="1.15s" begin=".16s" repeatCount="indefinite" />
-                <animate attributeName="cy" values="7;3;7" dur="1.15s" begin=".16s" repeatCount="indefinite" />
-              </circle>
-              <circle cx="29" cy="11" r="2.2" fill="currentColor">
-                <animate attributeName="opacity" values=".28;1;.28" dur="1.15s" begin=".32s" repeatCount="indefinite" />
-                <animate attributeName="cy" values="11;7;11" dur="1.15s" begin=".32s" repeatCount="indefinite" />
-              </circle>
-            </svg>
-          )}
+          {loading && <DotSpinner />}
         </span>
       }
       blink={loading}
@@ -190,6 +199,26 @@ function ReasoningContent({
     >
       {content && <MarkdownContent content={content} streaming={loading} />}
     </Think>
+  );
+}
+
+function ToolExecutionContent({ tools }: { tools: ToolExecutionRecord[] }) {
+  return (
+    <section className="cy-tool-executions" aria-label="工具执行过程">
+      <ThoughtChain
+        rootClassName="cy-tool-executions__chain"
+        line="dashed"
+        items={tools.map((tool) => ({
+          key: tool.id,
+          title: tool.name,
+          description: tool.status === "running" ? "正在执行…" : tool.status === "error" ? "执行失败" : "执行完成",
+          status: tool.status === "running" ? "loading" : tool.status === "error" ? "error" : "success",
+          blink: tool.status === "running",
+          collapsible: Boolean(tool.result),
+          content: tool.result ? <pre className="cy-tool-executions__result">{tool.result}</pre> : undefined,
+        }))}
+      />
+    </section>
   );
 }
 
@@ -420,6 +449,22 @@ function createRoles(
       />
     ),
   },
+  tool: {
+    placement: "start" as const,
+    variant: "borderless" as const,
+    avatar: null,
+    rootClassName: "cy-message cy-message--tool",
+    contentRender: (_content: string, info: { extraInfo?: { tools?: ToolExecutionRecord[] } }) => (
+      info.extraInfo?.tools?.length ? <ToolExecutionContent tools={info.extraInfo.tools} /> : null
+    ),
+  },
+  waiting: {
+    placement: "start" as const,
+    variant: "borderless" as const,
+    avatar: null,
+    rootClassName: "cy-message cy-message--waiting",
+    contentRender: () => <ModelWaitContent />,
+  },
   system: {
     placement: "start" as const,
     variant: "borderless" as const,
@@ -446,6 +491,13 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
 
     const assistantItems: BubbleItemType[] = [];
     const stages = assistantRenderStages(message);
+    if (message.waitingForFirstEvent) {
+      assistantItems.push({
+        key: `${message.id}-waiting`,
+        role: "waiting",
+        content: "",
+      });
+    }
     if (stages.includes("reasoning")) {
       assistantItems.push({
         key: `${message.id}-reasoning`,
@@ -454,8 +506,16 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
         extraInfo: {
           reasoningId: message.id,
           reasoning: message.reasoning,
-          reasoningStreaming: message.loading || message.reasoningStreaming,
+          reasoningStreaming: message.reasoningStreaming,
         },
+      });
+    }
+    if (message.toolExecutions?.length) {
+      assistantItems.push({
+        key: `${message.id}-tools`,
+        role: "tool",
+        content: "",
+        extraInfo: { tools: message.toolExecutions },
       });
     }
     if (stages.includes("assistant")) {

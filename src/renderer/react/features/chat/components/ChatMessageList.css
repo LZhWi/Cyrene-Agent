@@ -152,6 +152,148 @@
   background: transparent;
 }
 
+.cy-message--tool {
+  width: min(82%, 760px);
+  max-width: min(82%, 760px);
+}
+
+.cy-message--tool .ant-bubble-avatar {
+  display: none;
+}
+
+.cy-message--tool .ant-bubble-body {
+  width: 100%;
+  max-width: none;
+}
+
+.cy-message--tool .ant-bubble-content {
+  padding: 0;
+  min-height: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.cy-message--waiting {
+  width: min(82%, 760px);
+  max-width: min(82%, 760px);
+}
+
+.cy-message--waiting .ant-bubble-avatar {
+  display: none;
+}
+
+.cy-message--waiting .ant-bubble-body {
+  width: 100%;
+  max-width: none;
+}
+
+.cy-message--waiting .ant-bubble-content {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.cy-model-wait {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 52px;
+  color: var(--cy-text-muted);
+  font: 500 13px/1.4 var(--rb-font-sans, sans-serif);
+}
+
+.cy-model-wait__art,
+.cy-reasoning-status-art {
+  position: relative;
+}
+
+.cy-model-wait__art {
+  display: block;
+  width: 58px;
+  height: 52px;
+}
+
+.cy-model-wait__art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.cy-dot-spinner {
+  --uib-size: 18px;
+  --uib-speed: 0.9s;
+  --uib-color: #183153;
+  position: absolute;
+  top: -1px;
+  left: -2px;
+  display: block;
+  width: var(--uib-size);
+  height: var(--uib-size);
+}
+
+.cy-dot-spinner__dot {
+  position: absolute;
+  inset: 0;
+}
+
+.cy-dot-spinner__dot::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 20%;
+  height: 20%;
+  content: "";
+  border-radius: 50%;
+  background: var(--uib-color);
+  box-shadow: 0 0 8px rgb(24 49 83 / 28%);
+  opacity: 0.5;
+  transform: scale(0);
+  animation: cy-dot-spinner-pulse calc(var(--uib-speed) * 1.111) ease-in-out infinite;
+}
+
+.cy-dot-spinner__dot:nth-child(2) { transform: rotate(45deg); }
+.cy-dot-spinner__dot:nth-child(3) { transform: rotate(90deg); }
+.cy-dot-spinner__dot:nth-child(4) { transform: rotate(135deg); }
+.cy-dot-spinner__dot:nth-child(5) { transform: rotate(180deg); }
+.cy-dot-spinner__dot:nth-child(6) { transform: rotate(225deg); }
+.cy-dot-spinner__dot:nth-child(7) { transform: rotate(270deg); }
+.cy-dot-spinner__dot:nth-child(8) { transform: rotate(315deg); }
+.cy-dot-spinner__dot:nth-child(2)::before { animation-delay: calc(var(--uib-speed) * -0.875); }
+.cy-dot-spinner__dot:nth-child(3)::before { animation-delay: calc(var(--uib-speed) * -0.75); }
+.cy-dot-spinner__dot:nth-child(4)::before { animation-delay: calc(var(--uib-speed) * -0.625); }
+.cy-dot-spinner__dot:nth-child(5)::before { animation-delay: calc(var(--uib-speed) * -0.5); }
+.cy-dot-spinner__dot:nth-child(6)::before { animation-delay: calc(var(--uib-speed) * -0.375); }
+.cy-dot-spinner__dot:nth-child(7)::before { animation-delay: calc(var(--uib-speed) * -0.25); }
+.cy-dot-spinner__dot:nth-child(8)::before { animation-delay: calc(var(--uib-speed) * -0.125); }
+
+@keyframes cy-dot-spinner-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(0); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+.cy-tool-executions {
+  padding: 3px 2px 4px;
+}
+
+.cy-tool-executions__chain .ant-thought-chain-item {
+  padding-block: 4px;
+}
+
+.cy-tool-executions__result {
+  max-height: 180px;
+  margin: 7px 0 2px;
+  overflow: auto;
+  padding: 8px;
+  border-radius: 8px;
+  background: #f4f4f5;
+  color: var(--cy-text-muted);
+  font: 12px/1.55 var(--rb-font-mono, monospace);
+  white-space: pre-wrap;
+}
+
 .cy-message-reasoning {
   color: var(--cy-text-muted);
 }
@@ -163,7 +305,6 @@
 }
 
 .cy-reasoning-status-art {
-  position: relative;
   display: block;
   width: 38px;
   height: 38px;
@@ -179,16 +320,6 @@
 
 .cy-reasoning-status-art.is-thinking img {
   transform: translateY(1px);
-}
-
-.cy-reasoning-status-art__orbit {
-  position: absolute;
-  top: -2px;
-  left: -4px;
-  width: 30px;
-  height: 18px;
-  overflow: visible;
-  filter: drop-shadow(0 1px 1px rgb(255 255 255 / 72%));
 }
 
 .cy-reasoning-status-art.is-complete {

@@ -158,7 +158,9 @@ export function toAguiEvent(event: TwoPhaseEvent): BaseEvent {
         toolCallId: event.toolCallId,
         messageId: event.messageId,
         content: event.content,
-      };
+        // AG-UI 标准事件不定义执行成败；保留扩展字段给本地 React 工具卡使用。
+        status: event.status,
+      } as BaseEvent;
     case "tool_call_end":
       return { type: EventType.TOOL_CALL_END, toolCallId: event.toolCallId };
     case "text_message_start":

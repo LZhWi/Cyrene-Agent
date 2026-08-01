@@ -8,10 +8,18 @@ import {
 } from "./message-visibility";
 
 describe("assistantRenderStages", () => {
-  it("renders only standalone reasoning before the reply starts", () => {
+  it("does not render a Think component for a pending response without real reasoning", () => {
     expect(assistantRenderStages({
       content: "",
       loading: true,
+      responseStarted: false,
+    })).toEqual([]);
+  });
+
+  it("renders standalone reasoning once the model has actually started it", () => {
+    expect(assistantRenderStages({
+      content: "",
+      reasoningStreaming: true,
       responseStarted: false,
     })).toEqual(["reasoning"]);
   });

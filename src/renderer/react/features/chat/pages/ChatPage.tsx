@@ -4,7 +4,7 @@ import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessage
 import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
 import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
 import { ConversationSidebar } from "../components/ConversationSidebar";
-import type { ChatMessage, ChatSession, ChatSessionMeta, ConversationMode } from "../../../../../shared/chat-types";
+import type { ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import { SidebarToggle } from "../../../components/ui/SidebarToggle";
 import { ModeSwitch } from "../../../components/ui/ModeSwitch";
 import { CharacterStatusPill } from "../../../components/ui/CharacterStatusPill";
@@ -117,6 +117,9 @@ interface AguiEvent {
   content?: string;
   name?: string;
   value?: unknown;
+  toolCallId?: string;
+  toolCallName?: string;
+  status?: string;
 }
 
 interface AguiApi {
@@ -163,6 +166,7 @@ function toUiMessages(session: ChatSession): ChatMessageItem[] {
     ttsCacheVersion: message.ttsCacheVersion,
     responseStarted: message.role === "model",
     sticker: message.sticker,
+    toolExecutions: message.toolExecutions,
     attachments: message.attachments,
   }));
 }
@@ -426,7 +430,7 @@ export function ChatPage() {
   }
 
   async function runModel(input: {
-    targetMode: "chat" | "work";
+    targetMode: "chat" | "work" | "daily";
     sessionId: string;
     userMessageId: string;
     assistantId: string;
@@ -440,6 +444,7 @@ export function ChatPage() {
       updateMessage(input.targetMode, input.assistantId, {
         content: visibleError,
         loading: false,
+        waitingForFirstEvent: false,
         streaming: false,
         responseStarted: true,
       });
@@ -458,11 +463,22 @@ export function ChatPage() {
     let streamContent = "";
     let reasoningContent = "";
     let sticker: string | null = null;
+    let toolExecutions: ToolExecutionRecord[] = [];
     let runStarted = false;
     let resolveTerminal!: (error?: Error) => void;
     const terminal = new Promise<Error | undefined>((resolve) => {
       resolveTerminal = resolve;
     });
+    const updateRunTool = (toolId: string, patch: Partial<ToolExecutionRecord>) => {
+      const index = toolExecutions.findIndex((tool) => tool.id === toolId);
+      toolExecutions = index === -1
+        ? [...toolExecutions, { id: toolId, name: patch.name ?? "工具调用", status: patch.status ?? "running", result: patch.result }]
+        : toolExecutions.map((tool, toolIndex) => toolIndex === index ? { ...tool, ...patch } : tool);
+      updateMessage(input.targetMode, input.assistantId, { toolExecutions });
+    };
+    const markFirstResponse = () => {
+      updateMessage(input.targetMode, input.assistantId, { waitingForFirstEvent: false });
+    };
 
     const off = api.onEvent((event) => {
       if (event.type === "RUN_STARTED") {
@@ -470,6 +486,18 @@ export function ChatPage() {
         return;
       }
       if (!runStarted) return;
+      if (
+        event.type === "REASONING_MESSAGE_START"
+        || event.type === "REASONING_MESSAGE_CONTENT"
+        || event.type === "REASONING_MESSAGE_END"
+        || event.type === "TOOL_CALL_START"
+        || event.type === "TOOL_CALL_RESULT"
+        || event.type === "TOOL_CALL_END"
+        || event.type === "TEXT_MESSAGE_START"
+        || event.type === "TEXT_MESSAGE_CONTENT"
+        || event.type === "TEXT_MESSAGE_END"
+        || event.type === "CUSTOM"
+      ) markFirstResponse();
       if (event.type === "REASONING_MESSAGE_START") {
         updateMessage(input.targetMode, input.assistantId, {
           loading: false,
@@ -484,6 +512,18 @@ export function ChatPage() {
         });
       } else if (event.type === "REASONING_MESSAGE_END") {
         updateMessage(input.targetMode, input.assistantId, { reasoningStreaming: false, loading: false });
+        } else if (event.type === "TOOL_CALL_START" && event.toolCallId) {
+          updateRunTool(event.toolCallId, {
+            name: event.toolCallName ?? "工具调用",
+            status: "running",
+          });
+        } else if (event.type === "TOOL_CALL_RESULT" && event.toolCallId) {
+        updateRunTool(event.toolCallId, {
+          status: event.status === "failed" ? "error" : "success",
+          result: (event.content ?? "").slice(0, 4000),
+        });
+      } else if (event.type === "TOOL_CALL_END" && event.toolCallId) {
+        updateRunTool(event.toolCallId, {});
       } else if (event.type === "TEXT_MESSAGE_START") {
         updateMessage(input.targetMode, input.assistantId, {
           loading: false,
@@ -542,11 +582,13 @@ export function ChatPage() {
       updateMessage(input.targetMode, input.assistantId, {
         content: finalContent,
         loading: false,
+        waitingForFirstEvent: false,
         streaming: false,
         reasoning: reasoningContent || undefined,
         reasoningStreaming: false,
         responseStarted: true,
         sticker,
+        toolExecutions,
       });
       const savedAssistant = await store.append(input.sessionId, {
         id: input.assistantId,
@@ -555,6 +597,7 @@ export function ChatPage() {
         reasoning: reasoningContent || undefined,
         at: Date.now(),
         sticker,
+        toolExecutions,
       });
       if (savedAssistant) {
         finishEarlyTtsQueue(earlyTtsQueue, finalContent);
@@ -566,6 +609,7 @@ export function ChatPage() {
       updateMessage(input.targetMode, input.assistantId, {
         content: visibleError,
         loading: false,
+        waitingForFirstEvent: false,
         streaming: false,
         reasoningStreaming: false,
         responseStarted: true,
@@ -637,6 +681,7 @@ export function ChatPage() {
             role: "assistant",
             content: "",
             loading: true,
+            waitingForFirstEvent: true,
             streaming: false,
             responseStarted: false,
           },
@@ -877,7 +922,7 @@ export function ChatPage() {
     const visibleMessage = message.replace(/\[sticker:[^\]]+\]/g, "").trim();
     const demoResponse = DEMO_RESPONSES[message];
     const demoSticker = DEMO_STICKERS[message];
-    const shouldRunModel = (mode === "chat" || mode === "work") && !demoResponse && !demoSticker;
+    const shouldRunModel = (mode === "chat" || mode === "work" || mode === "daily") && !demoResponse && !demoSticker;
     if (shouldRunModel && modelBusyRef.current) return;
     const assistantId = demoResponse || demoSticker || shouldRunModel ? crypto.randomUUID() : undefined;
     const userMessageId = crypto.randomUUID();
@@ -900,6 +945,7 @@ export function ChatPage() {
           role: "assistant" as const,
           content: "",
           loading: Boolean(demoResponse || shouldRunModel),
+          waitingForFirstEvent: Boolean(shouldRunModel),
           streaming: false,
           responseStarted: Boolean(demoSticker),
           sticker: demoSticker,
@@ -939,6 +985,7 @@ export function ChatPage() {
       updateMessage(targetMode, assistantId, {
         content: "模型请求失败：用户消息未能写入当前会话",
         loading: false,
+        waitingForFirstEvent: false,
         streaming: false,
         responseStarted: true,
       });
@@ -1037,7 +1084,7 @@ export function ChatPage() {
             workspaceName={workspaceNames[mode]}
             attachments={attachments}
             attachmentBusy={attachmentBusy}
-            modelBusy={modelBusy && (mode === "chat" || mode === "work")}
+            modelBusy={modelBusy && (mode === "chat" || mode === "work" || mode === "daily")}
             onChange={(value) => setDrafts((current) => ({ ...current, [scopeKey]: value }))}
             onSubmit={(value) => void sendMessage(value)}
             onChooseWorkspace={() => void chooseWorkspace()}

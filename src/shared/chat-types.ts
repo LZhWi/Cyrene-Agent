@@ -50,6 +50,14 @@ export type ChatStickerId =
 /** 任意表情包 ID（内置 + 用户自定义） */
 export type AnyStickerId = string;
 
+/** 一次模型回复中已展示的工具执行记录，供 React Daily/Work 会话恢复执行过程。 */
+export interface ToolExecutionRecord {
+  id: string;
+  name: string;
+  status: "running" | "success" | "error";
+  result?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -62,6 +70,8 @@ export interface ChatMessage {
   attachments?: MessageAttachment[];
   /** 表情包 ID（内置或用户自定义） */
   sticker?: string | null;
+  /** 工具调用过程；与模型推理 reasoning 分开保存和展示。 */
+  toolExecutions?: ToolExecutionRecord[];
   /** TTS 缓存 key。只存 key，不存绝对路径，避免 userData 路径变化后 session JSON 失效。 */
   ttsCacheKey?: string;
   /** 生成缓存时使用的朗读文本转换器版本；版本变化时旧缓存自然失效。 */

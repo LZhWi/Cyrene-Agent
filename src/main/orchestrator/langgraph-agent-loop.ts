@@ -1284,7 +1284,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
             : `6. 工具结果：失败${outcome.errorCode ? `（${outcome.errorCode}）` : ""}`,
         );
         const messageId = `tool-result-${Date.now()}`;
-        options.onEvent?.({ type: "tool_call_result", toolCallId, messageId, content: outcome.output });
+        options.onEvent?.({ type: "tool_call_result", toolCallId, messageId, content: outcome.output, status: outcome.status });
         options.onEvent?.({ type: "tool_call_end", toolCallId });
 
         // ── 记录成功的工具到 executionStatus ──
