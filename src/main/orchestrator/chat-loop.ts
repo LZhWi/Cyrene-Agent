@@ -1,4 +1,5 @@
 import { stripLeakedChatTimeContext } from "../chat-time-context";
+import { ChatTimeStreamPrefixFilter } from "../chat-time-stream-filter";
 import { recordUsage } from "../token-usage-store";
 import { AgentRuntimeError } from "./agent-runtime-error";
 import type {
@@ -221,6 +222,18 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<TwoPhaseFcR
       if (!response.body) throw new AgentRuntimeError("E_MODEL_RESPONSE_PARSE_FAILED", "模型流式响应体为空");
 
       let text = "";
+      const timePrefixFilter = new ChatTimeStreamPrefixFilter();
+      const emitTextDelta = (delta: string) => {
+        if (!delta) return;
+        text += delta;
+        emittedStreamContent = true;
+        startText();
+        options.onEvent?.({
+          type: "text_message_content",
+          messageId,
+          delta,
+        });
+      };
       let usage: { input: number; output: number } | undefined;
       for await (const event of createSseReader(options.adapter, response.body)) {
         const chunk = options.adapter.parseStreamEvent(event);
@@ -238,14 +251,7 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<TwoPhaseFcR
           });
         }
         if (chunk.deltaText) {
-          text += chunk.deltaText;
-          emittedStreamContent = true;
-          startText();
-          options.onEvent?.({
-            type: "text_message_content",
-            messageId,
-            delta: chunk.deltaText,
-          });
+          emitTextDelta(timePrefixFilter.push(chunk.deltaText));
         }
         if (chunk.usage) {
           usage = {
@@ -255,6 +261,7 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<TwoPhaseFcR
         }
         if (chunk.done) break;
       }
+      emitTextDelta(timePrefixFilter.finish());
       if (!text.trim()) {
         throw new AgentRuntimeError("E_MODEL_RESPONSE_PARSE_FAILED", "模型流式响应没有返回可见文本");
       }

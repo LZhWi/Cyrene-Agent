@@ -12,6 +12,7 @@ import { WindowControls } from "../../../components/ui/WindowControls";
 import { SettingsButton } from "../../../components/ui/SettingsButton";
 import { UserAvatar } from "../../../components/ui/UserAvatar";
 import { useUserCallPreference } from "../../../hooks/useUserNickname";
+import { resolveRevisableLastTurn } from "../components/last-turn-actions";
 import { NewTaskButton } from "../../../components/ui/NewTaskButton";
 import "../../../components/ui/SidebarToggle.css";
 import "../../../components/ui/ModeSwitch.css";
@@ -94,6 +95,7 @@ interface ChatStoreApi {
   get: (id: string) => Promise<ChatSession | null>;
   create: (input: { identityId: null; mode: ConversationMode; title?: string }) => Promise<ChatSession>;
   append: (id: string, message: ChatMessage) => Promise<ChatSession | null>;
+  replaceTail: (id: string, startIndex: number, messages: ChatMessage[]) => Promise<ChatSession | null>;
   setMessageTtsCacheKey: (id: string, messageId: string, cacheKey: string, converterVersion: string) => Promise<ChatSession | null>;
   delete: (id: string) => Promise<boolean>;
   pickWorkspaceFolder: () => Promise<{ ok: boolean; path?: string; displayName?: string; error?: string }>;
@@ -167,6 +169,7 @@ export function ChatPage() {
   const [activeSessionIds, setActiveSessionIds] = useState<Partial<Record<ConversationMode, string>>>({});
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
+  const [lastTurnRevisionStarting, setLastTurnRevisionStarting] = useState(false);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const activeModeRef = useRef(mode);
   const activeSessionIdsRef = useRef(activeSessionIds);
@@ -176,6 +179,7 @@ export function ChatPage() {
   const localPreviewUrlsRef = useRef(new Set<string>());
   const demoTimers = useRef(new Set<number>());
   const modelBusyRef = useRef(false);
+  const lastTurnRevisionStartingRef = useRef(false);
   const activeAguiOffRef = useRef<(() => void) | null>(null);
   const activeEarlyTtsRef = useRef<{
     queue: EarlyTtsPlaybackQueue;
@@ -550,6 +554,94 @@ export function ChatPage() {
     }
   }
 
+  async function restartLastChatTurn(
+    expectedUserMessageId: string,
+    expectedAssistantMessageId: string,
+    editedContent?: string,
+  ): Promise<boolean> {
+    if (
+      activeModeRef.current !== "chat"
+      || modelBusyRef.current
+      || lastTurnRevisionStartingRef.current
+    ) return false;
+    const store = chatStore();
+    const sessionId = activeSessionIdsRef.current.chat;
+    if (!store || !sessionId) return false;
+    lastTurnRevisionStartingRef.current = true;
+    setLastTurnRevisionStarting(true);
+    try {
+      const session = await store.get(sessionId);
+      if (!session || session.mode !== "chat") return false;
+      const lastTurn = resolveRevisableLastTurn(session.messages, "chat");
+      if (
+        !lastTurn
+        || lastTurn.userMessageId !== expectedUserMessageId
+        || lastTurn.assistantMessageId !== expectedAssistantMessageId
+      ) return false;
+
+      const nextContent = editedContent === undefined ? undefined : editedContent.trim();
+      if (editedContent !== undefined && !nextContent) return false;
+      const userIndex = session.messages.length - 2;
+      const previousUserMessage = session.messages[userIndex];
+      const nextUserMessage: ChatMessage = nextContent === undefined
+        ? previousUserMessage
+        : {
+            ...previousUserMessage,
+            content: nextContent,
+            at: Date.now(),
+          };
+      const truncatedSession = await store.replaceTail(sessionId, userIndex, [nextUserMessage]);
+      if (!truncatedSession) return false;
+
+      activeEarlyTtsRef.current?.queue.cancel();
+      activeEarlyTtsRef.current = null;
+      stopTtsPlayback();
+      const assistantId = crypto.randomUUID();
+      setMessagesByMode((current) => ({
+        ...current,
+        chat: [
+          ...toUiMessages(truncatedSession),
+          {
+            id: assistantId,
+            role: "assistant",
+            content: "",
+            loading: true,
+            streaming: false,
+            responseStarted: false,
+          },
+        ],
+      }));
+      void runModel({
+        targetMode: "chat",
+        sessionId,
+        userMessageId: nextUserMessage.id,
+        assistantId,
+        session: truncatedSession,
+        attachments: (nextUserMessage.attachments ?? []).map((attachment) => ({ ...attachment })),
+      });
+      return true;
+    } catch (error) {
+      console.error("[Cyrene React] 重建最后一轮对话失败:", error);
+      return false;
+    } finally {
+      lastTurnRevisionStartingRef.current = false;
+      setLastTurnRevisionStarting(false);
+    }
+  }
+
+  async function editLastChatUserMessage(messageId: string, content: string): Promise<boolean> {
+    const lastTurn = resolveRevisableLastTurn(messagesByMode.chat ?? [], "chat");
+    if (!lastTurn || lastTurn.userMessageId !== messageId) return false;
+    return restartLastChatTurn(lastTurn.userMessageId, lastTurn.assistantMessageId, content);
+  }
+
+  async function regenerateLastChatResponse(
+    userMessageId: string,
+    assistantMessageId: string,
+  ): Promise<boolean> {
+    return restartLastChatTurn(userMessageId, assistantMessageId);
+  }
+
   async function ensureSession(targetMode: ConversationMode): Promise<string> {
     const existing = activeSessionIdsRef.current[targetMode];
     if (existing) return existing;
@@ -891,6 +983,9 @@ export function ChatPage() {
             conversationId={activeSessionId}
             mode={mode}
             preferredAddress={preferredAddress}
+            revisionBusy={modelBusy || lastTurnRevisionStarting}
+            onEditLastUserMessage={mode === "chat" ? editLastChatUserMessage : undefined}
+            onRegenerateLastResponse={mode === "chat" ? regenerateLastChatResponse : undefined}
             onTtsCacheKey={activeSessionId
               ? (messageId, cacheKey, converterVersion) => handleTtsCacheKey(
                 mode,

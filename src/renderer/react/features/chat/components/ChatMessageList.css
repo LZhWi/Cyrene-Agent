@@ -284,6 +284,97 @@
   transition: color 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
 }
 
+.cy-last-turn-action {
+  display: inline-flex;
+  width: 16px;
+  height: 16px;
+  margin-top: 6px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #8e8e93;
+  cursor: pointer;
+  opacity: 0;
+  transition: color 0.2s ease, opacity 0.2s ease, transform 0.2s ease;
+}
+
+.cy-last-turn-action:hover {
+  color: var(--cy-accent);
+  transform: scale(1.08);
+}
+
+.cy-last-turn-action:disabled {
+  cursor: default;
+  opacity: 0.35;
+}
+
+.cy-last-turn-action__regenerate-icon {
+  transform-origin: center;
+  transition: transform 0.45s cubic-bezier(0.2, 0.75, 0.25, 1);
+}
+
+.cy-last-turn-action--regenerate:hover .cy-last-turn-action__regenerate-icon {
+  transform: rotate(-135deg);
+}
+
+.cy-last-message-editor {
+  display: grid;
+  width: min(420px, 52vw);
+  min-width: 260px;
+  gap: 10px;
+}
+
+.cy-last-message-editor textarea {
+  width: 100%;
+  min-height: 82px;
+  resize: vertical;
+  padding: 10px 12px;
+  border: 1px solid rgb(255 255 255 / 65%);
+  border-radius: 12px;
+  outline: none;
+  background: rgb(255 255 255 / 92%);
+  color: #282828;
+  font: inherit;
+  line-height: 1.55;
+  box-sizing: border-box;
+}
+
+.cy-last-message-editor textarea:focus {
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgb(255 255 255 / 28%);
+}
+
+.cy-last-message-editor__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.cy-last-message-editor__actions button {
+  padding: 5px 11px;
+  border: 1px solid rgb(255 255 255 / 68%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 82%);
+  color: #555;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.cy-last-message-editor__actions button.is-primary {
+  border-color: #fff;
+  background: #fff;
+  color: var(--cy-accent);
+  font-weight: 600;
+}
+
+.cy-last-message-editor__actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
+
 .cy-tts-button:hover {
   color: var(--cy-accent) !important;
   transform: scale(1.08);
@@ -341,14 +432,18 @@
 
 .cy-message:hover .cy-copy-button,
 .cy-message:hover .cy-tts-button,
+.cy-message:hover .cy-last-turn-action,
 .cy-message:focus-within .cy-copy-button,
-.cy-message:focus-within .cy-tts-button {
+.cy-message:focus-within .cy-tts-button,
+.cy-message:focus-within .cy-last-turn-action {
   opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
   .cy-tts-button,
-  .cy-tts-button__wave {
+  .cy-tts-button__wave,
+  .cy-last-turn-action,
+  .cy-last-turn-action__regenerate-icon {
     animation: none !important;
     transition: none;
   }

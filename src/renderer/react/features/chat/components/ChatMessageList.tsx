@@ -1,7 +1,7 @@
 import { Bubble, CodeHighlighter, Think, type BubbleItemType } from "@ant-design/x";
 import { XMarkdown, type ComponentProps } from "@ant-design/x-markdown";
 import Latex from "@ant-design/x-markdown/plugins/Latex";
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
 import type { ConversationMode } from "../../../../../shared/chat-types";
 import { useUserAvatar } from "../../../hooks/useUserAvatar";
@@ -13,6 +13,8 @@ import {
 import { CopyButton } from "./CopyButton";
 import { TtsButton } from "./TtsButton";
 import { stopTtsPlayback } from "./tts-playback";
+import { LastTurnActionButton } from "./LastTurnActionButton";
+import { resolveRevisableLastTurn, type RevisableLastTurn } from "./last-turn-actions";
 
 export interface ChatMessageItem {
   id: string;
@@ -47,6 +49,9 @@ interface ChatMessageListProps {
   mode: ConversationMode;
   preferredAddress: string;
   onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void;
+  revisionBusy?: boolean;
+  onEditLastUserMessage?: (messageId: string, content: string) => Promise<boolean>;
+  onRegenerateLastResponse?: (userMessageId: string, assistantMessageId: string) => Promise<boolean>;
 }
 
 const markdownConfig = { extensions: Latex() };
@@ -198,6 +203,48 @@ function UserContent({
   );
 }
 
+function LastUserMessageEditor({
+  value,
+  busy,
+  onChange,
+  onCancel,
+  onSubmit,
+}: {
+  value: string;
+  busy: boolean;
+  onChange: (value: string) => void;
+  onCancel: () => void;
+  onSubmit: () => void;
+}) {
+  const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onCancel();
+    } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+      event.preventDefault();
+      onSubmit();
+    }
+  };
+  return (
+    <div className="cy-last-message-editor">
+      <textarea
+        autoFocus
+        value={value}
+        disabled={busy}
+        aria-label="编辑最后一条消息"
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={handleKeyDown}
+      />
+      <div className="cy-last-message-editor__actions">
+        <button type="button" disabled={busy} onClick={onCancel}>取消</button>
+        <button type="button" className="is-primary" disabled={busy || !value.trim()} onClick={onSubmit}>
+          保存并重新生成
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function CyreneMessageAvatar() {
   return <img className="cy-message-avatar__image" src={cyreneAvatarUrl} alt="昔涟" draggable={false} />;
 }
@@ -212,6 +259,15 @@ function createRoles(
   conversationId: string | undefined,
   mode: ConversationMode,
   preferredAddress: string,
+  lastTurn: RevisableLastTurn | null,
+  editingMessageId: string | null,
+  editDraft: string,
+  revisionBusy: boolean,
+  onBeginEdit: (messageId: string, content: string) => void,
+  onEditDraftChange: (value: string) => void,
+  onCancelEdit: () => void,
+  onSubmitEdit: () => void,
+  onRegenerate: () => void,
   reasoningExpanded: Readonly<Record<string, boolean>>,
   onReasoningExpand: (id: string, expanded: boolean) => void,
   onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void,
@@ -222,16 +278,37 @@ function createRoles(
     variant: "filled" as const,
     rootClassName: "cy-message cy-message--user",
     avatar: <UserMessageAvatar src={userAvatarUrl} />,
-    contentRender: (content: string, info: { extraInfo?: { stickerUrl?: string; attachments?: ChatMessageAttachment[] } }) => (
-      <UserContent
-        content={content}
-        stickerUrl={info.extraInfo?.stickerUrl}
-        attachments={info.extraInfo?.attachments}
-      />
+    contentRender: (content: string, info: { extraInfo?: { messageId?: string; stickerUrl?: string; attachments?: ChatMessageAttachment[] } }) => (
+      info.extraInfo?.messageId === editingMessageId
+        ? <LastUserMessageEditor
+            value={editDraft}
+            busy={revisionBusy}
+            onChange={onEditDraftChange}
+            onCancel={onCancelEdit}
+            onSubmit={onSubmitEdit}
+          />
+        : <UserContent
+            content={content}
+            stickerUrl={info.extraInfo?.stickerUrl}
+            attachments={info.extraInfo?.attachments}
+          />
     ),
-    footer: (content: string) => {
+    footer: (content: string, info: { extraInfo?: { messageId?: string } }) => {
       const cleanText = content.replace(/\[sticker:[^\]]+\]/g, "").trim();
-      return cleanText ? <CopyButton text={cleanText} /> : null;
+      const messageId = info.extraInfo?.messageId;
+      if (!cleanText || messageId === editingMessageId) return null;
+      return (
+        <div className="cy-message-actions">
+          {messageId === lastTurn?.userMessageId && (
+            <LastTurnActionButton
+              kind="edit"
+              disabled={revisionBusy}
+              onClick={() => onBeginEdit(messageId, cleanText)}
+            />
+          )}
+          <CopyButton text={cleanText} />
+        </div>
+      );
     },
   },
   assistant: {
@@ -248,11 +325,12 @@ function createRoles(
     ),
     footer: (content: string, info: { extraInfo?: { messageId?: string; streaming?: boolean; ttsCacheKey?: string } }) => {
       const cleanText = content.trim();
-      if (!cleanText || info.extraInfo?.streaming) return null;
       const messageId = info.extraInfo?.messageId;
+      const canRegenerate = messageId === lastTurn?.assistantMessageId;
+      if (info.extraInfo?.streaming || (!cleanText && !canRegenerate)) return null;
       return (
         <div className="cy-message-actions">
-          {messageId && conversationId && (
+          {cleanText && messageId && conversationId && (
             <TtsButton
               conversationId={conversationId}
               messageId={messageId}
@@ -262,7 +340,10 @@ function createRoles(
               onCacheKey={(cacheKey, converterVersion) => onTtsCacheKey?.(messageId, cacheKey, converterVersion)}
             />
           )}
-          <CopyButton text={cleanText} />
+          {cleanText && <CopyButton text={cleanText} />}
+          {canRegenerate && (
+            <LastTurnActionButton kind="regenerate" disabled={revisionBusy} onClick={onRegenerate} />
+          )}
         </div>
       );
     },
@@ -302,6 +383,7 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
         extraInfo: {
           stickerUrl: message.sticker ? resolveStickerUrl(message.sticker, enabledStickers) : undefined,
           attachments: message.attachments,
+          messageId: message.id,
         },
       }];
     }
@@ -338,17 +420,74 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
   });
 }
 
-export function ChatMessageList({ messages, conversationId, mode, preferredAddress, onTtsCacheKey }: ChatMessageListProps) {
+export function ChatMessageList({
+  messages,
+  conversationId,
+  mode,
+  preferredAddress,
+  onTtsCacheKey,
+  revisionBusy = false,
+  onEditLastUserMessage,
+  onRegenerateLastResponse,
+}: ChatMessageListProps) {
   const userAvatarUrl = useUserAvatar();
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
   const [reasoningExpanded, setReasoningExpanded] = useState<Record<string, boolean>>({});
+  const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState("");
+  const lastTurn = resolveRevisableLastTurn(messages, mode);
   const onReasoningExpand = useCallback((id: string, expanded: boolean) => {
     setReasoningExpanded((current) => updateReasoningExpanded(current, id, expanded));
   }, []);
+  const beginEdit = useCallback((messageId: string, content: string) => {
+    setEditingMessageId(messageId);
+    setEditDraft(content);
+  }, []);
+  const cancelEdit = useCallback(() => {
+    if (revisionBusy) return;
+    setEditingMessageId(null);
+    setEditDraft("");
+  }, [revisionBusy]);
+  const submitEdit = useCallback(() => {
+    if (!editingMessageId || !editDraft.trim() || !onEditLastUserMessage || revisionBusy) return;
+    void onEditLastUserMessage(editingMessageId, editDraft.trim()).then((accepted) => {
+      if (!accepted) return;
+      setEditingMessageId(null);
+      setEditDraft("");
+    });
+  }, [editDraft, editingMessageId, onEditLastUserMessage, revisionBusy]);
+  const regenerate = useCallback(() => {
+    if (!lastTurn || !onRegenerateLastResponse || revisionBusy) return;
+    void onRegenerateLastResponse(lastTurn.userMessageId, lastTurn.assistantMessageId);
+  }, [lastTurn, onRegenerateLastResponse, revisionBusy]);
   const roles = useMemo(
-    () => createRoles(userAvatarUrl, conversationId, mode, preferredAddress, reasoningExpanded, onReasoningExpand, onTtsCacheKey),
-    [conversationId, mode, onReasoningExpand, onTtsCacheKey, preferredAddress, reasoningExpanded, userAvatarUrl],
+    () => createRoles(
+      userAvatarUrl,
+      conversationId,
+      mode,
+      preferredAddress,
+      lastTurn,
+      editingMessageId,
+      editDraft,
+      revisionBusy,
+      beginEdit,
+      setEditDraft,
+      cancelEdit,
+      submitEdit,
+      regenerate,
+      reasoningExpanded,
+      onReasoningExpand,
+      onTtsCacheKey,
+    ),
+    [beginEdit, cancelEdit, conversationId, editDraft, editingMessageId, lastTurn, mode, onReasoningExpand, onTtsCacheKey, preferredAddress, reasoningExpanded, regenerate, revisionBusy, submitEdit, userAvatarUrl],
   );
+
+  useEffect(() => {
+    if (editingMessageId && editingMessageId !== lastTurn?.userMessageId) {
+      setEditingMessageId(null);
+      setEditDraft("");
+    }
+  }, [editingMessageId, lastTurn?.userMessageId]);
 
   useEffect(() => stopTtsPlayback, [conversationId]);
 
