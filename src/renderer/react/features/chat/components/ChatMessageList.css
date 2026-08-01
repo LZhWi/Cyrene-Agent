@@ -10,7 +10,9 @@
 }
 
 .cy-message {
-  max-width: min(82%, 760px);
+  width: 100%;
+  max-width: none;
+  min-width: 0;
 }
 
 .cy-message .ant-bubble-avatar {
@@ -123,6 +125,11 @@
   color: var(--cy-text);
 }
 
+.cy-message--assistant .ant-bubble-body {
+  min-width: 0;
+  max-width: 760px;
+}
+
 .cy-message--reasoning {
   width: min(82%, 760px);
   max-width: min(82%, 760px);
@@ -169,7 +176,7 @@
 }
 
 .cy-message--assistant:has(pre, .katex-display, table) {
-  width: min(82%, 760px);
+  width: 100%;
 }
 
 .cy-message--assistant:has(pre, .katex-display, table) .ant-bubble-content {
