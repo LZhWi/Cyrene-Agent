@@ -170,6 +170,7 @@ export function ChatComposer({
   onChooseSticker,
 }: ChatComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
   const supportsWorkFiles = ["work", "code", "daily"].includes(mode);
   const supportsObsidianLibrary = mode === "learn";
   const supportsPermission = supportsWorkFiles || supportsObsidianLibrary;
@@ -181,6 +182,43 @@ export function ChatComposer({
     : requiresWorkspace && !workspaceName
       ? "有什么问题 / 任务，来找昔涟♪（ps：请先选中一个项目路径哦♪）"
       : "有什么问题 / 任务，来找昔涟♪";
+  const selectedStickerIds = [...value.matchAll(/\[sticker:([^\]]+)\]/gi)]
+    .map((match) => match[1].trim())
+    .filter(Boolean);
+  const stickerOccurrences = new Map<string, number>();
+  const selectedStickers = selectedStickerIds.map((id) => {
+    const occurrence = stickerOccurrences.get(id) ?? 0;
+    stickerOccurrences.set(id, occurrence + 1);
+    return {
+      id,
+      occurrence,
+      sticker: enabledStickers.find((item) => item.id === id),
+    };
+  }).filter((item): item is { id: string; occurrence: number; sticker: EnabledSticker } => Boolean(item.sticker));
+
+  useEffect(() => {
+    let active = true;
+    void window.chat?.getEnabledStickers?.().then((items) => {
+      if (active) setEnabledStickers(items);
+    }).catch(() => {
+      if (active) setEnabledStickers([]);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const removeSelectedSticker = (id: string, targetIndex: number) => {
+    let index = -1;
+    const nextValue = value.replace(/\[sticker:([^\]]+)\]/gi, (marker, rawId: string) => {
+      if (rawId.trim() !== id) return marker;
+      index += 1;
+      return index === targetIndex ? "" : marker;
+    });
+    onChange(nextValue.replace(/ {2,}/g, " ").trim());
+  };
+
+  const hasComposerHeader = attachments.length > 0 || selectedStickers.length > 0;
 
   return (
     <div className={`cy-composer-stack ${docked ? "is-docked" : "is-centered"}`}>
@@ -206,7 +244,7 @@ export function ChatComposer({
         autoSize={{ minRows: 3, maxRows: 7 }}
         onChange={onChange}
         onSubmit={onSubmit}
-        header={attachments.length > 0 ? (
+        header={hasComposerHeader ? (
           <div className="cy-composer__attachments" aria-label="待发送附件">
             {attachments.map((attachment, index) => (
               <div className={`cy-composer__attachment ${attachment.kind === "image" && attachment.previewUrl ? "is-image" : ""}`} key={`${attachment.filePath ?? attachment.name}-${index}`}>
@@ -216,6 +254,12 @@ export function ChatComposer({
                   <span title={attachment.name}>{attachment.name}</span>
                 )}
                 <button type="button" aria-label={`移除 ${attachment.name}`} onClick={() => onRemoveAttachment(index)}>×</button>
+              </div>
+            ))}
+            {selectedStickers.map(({ id, occurrence, sticker }) => (
+              <div className="cy-composer__attachment cy-composer__attachment--sticker" key={`${id}-${occurrence}`}>
+                <img src={stickerUrl(sticker.src)} alt={sticker.description ?? "已选表情包"} draggable={false} />
+                <button type="button" aria-label="移除表情包" onClick={() => removeSelectedSticker(id, occurrence)}>×</button>
               </div>
             ))}
           </div>

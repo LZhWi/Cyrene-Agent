@@ -224,11 +224,26 @@
 
 .cy-message__sticker {
   display: block;
-  width: min(160px, 32vw);
-  max-height: 176px;
+  width: min(var(--cy-sticker-width, 160px), 32vw);
+  max-height: var(--cy-sticker-height, 176px);
   object-fit: contain;
   border-radius: 18px;
   -webkit-user-drag: none;
+}
+
+.cy-message-list--stickers-small {
+  --cy-sticker-width: 112px;
+  --cy-sticker-height: 124px;
+}
+
+.cy-message-list--stickers-standard {
+  --cy-sticker-width: 160px;
+  --cy-sticker-height: 176px;
+}
+
+.cy-message-list--stickers-large {
+  --cy-sticker-width: 212px;
+  --cy-sticker-height: 232px;
 }
 
 .cy-message--assistant:has(pre, .katex-display, table) {

@@ -2946,7 +2946,7 @@ export function getPublicModelConfig(settings = loadModelSettings()): PublicMode
 }
 
 function broadcastToAuxWindows(channel: string, payload: unknown): void {
-  for (const win of [chatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
+  for (const win of [chatWindow, reactPreviewWindow, sidebarWindow, tasksWindow, settingsWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(channel, payload);
     }
@@ -5621,12 +5621,11 @@ app.whenReady().then(async () => {
     observeRuntimeState: (async (settings, history, userText, reply) =>
       observeRuntimeState(settings as any, history as any, userText, reply)) as OnRunFinishedDeps["observeRuntimeState"],
     recordRelationshipTurn,
-    getChatWindow: () => chatWindow,
   };
   registerAgUiIpc(
     async (input: AguiRunInput) => buildAgentRunOptions(input, buildOptionsDeps),
-    // 桌面 IPC 路径不消费 sticker（sticker 由 onAgentRunFinished 内部 IPC 广播承担）
-    async (result, latestUserText) => { await onAgentRunFinished(result, latestUserText, onRunFinishedDeps); },
+    // sticker 由 bridge 发送回本次 run 的发起窗口（React 或旧 chatWindow）。
+    async (result, latestUserText) => onAgentRunFinished(result, latestUserText, onRunFinishedDeps),
     () => chatWindow,
     proactiveConversationLifecycle,
   );

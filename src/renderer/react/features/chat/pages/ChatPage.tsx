@@ -131,6 +131,16 @@ interface AguiApi {
   onEvent: (callback: (event: AguiEvent) => void) => () => void;
 }
 
+interface PublicModelConfig {
+  model?: unknown;
+  stickerSize?: "small" | "standard" | "large";
+}
+
+interface ModelConfigApi {
+  get: () => Promise<PublicModelConfig>;
+  onChanged: (callback: (config: PublicModelConfig) => void) => () => void;
+}
+
 function chatStore(): ChatStoreApi | undefined {
   return (window as typeof window & { chatStore?: ChatStoreApi }).chatStore;
 }
@@ -170,6 +180,8 @@ export function ChatPage() {
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
   const [lastTurnRevisionStarting, setLastTurnRevisionStarting] = useState(false);
+  const [modelName, setModelName] = useState("模型未连接");
+  const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const activeModeRef = useRef(mode);
   const activeSessionIdsRef = useRef(activeSessionIds);
@@ -178,6 +190,25 @@ export function ChatPage() {
   const dragDepthRef = useRef(0);
   const localPreviewUrlsRef = useRef(new Set<string>());
   const demoTimers = useRef(new Set<number>());
+
+  useEffect(() => {
+    const modelConfig = (window as typeof window & { modelConfig?: ModelConfigApi }).modelConfig;
+    if (!modelConfig) return;
+    let active = true;
+    const apply = (config: PublicModelConfig) => {
+      if (!active) return;
+      setModelName(typeof config.model === "string" && config.model.trim() ? config.model.trim() : "模型未连接");
+      setStickerSize(config.stickerSize === "small" || config.stickerSize === "large" ? config.stickerSize : "standard");
+    };
+    void modelConfig.get().then(apply).catch(() => {
+      if (active) setModelName("模型未连接");
+    });
+    const off = modelConfig.onChanged(apply);
+    return () => {
+      active = false;
+      off();
+    };
+  }, []);
   const modelBusyRef = useRef(false);
   const lastTurnRevisionStartingRef = useRef(false);
   const activeAguiOffRef = useRef<(() => void) | null>(null);
@@ -934,7 +965,7 @@ export function ChatPage() {
         }} />
       </div>
       <div className="cy-page-status">
-        <CharacterStatusPill avatarPath={avatarLight} />
+        <CharacterStatusPill avatarPath={avatarLight} status={modelName} />
       </div>
       <div className="cy-page-windows">
         <WindowControls
@@ -983,6 +1014,7 @@ export function ChatPage() {
             conversationId={activeSessionId}
             mode={mode}
             preferredAddress={preferredAddress}
+            stickerSize={stickerSize}
             revisionBusy={modelBusy || lastTurnRevisionStarting}
             onEditLastUserMessage={mode === "chat" ? editLastChatUserMessage : undefined}
             onRegenerateLastResponse={mode === "chat" ? regenerateLastChatResponse : undefined}

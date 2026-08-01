@@ -189,6 +189,32 @@
   background: #eee;
 }
 
+.cy-composer__attachment--sticker {
+  position: relative;
+  display: block;
+  width: 62px;
+  height: 58px;
+  padding: 0;
+  overflow: hidden;
+  background: #fff8fa;
+}
+
+.cy-composer__attachment--sticker img {
+  width: 100%;
+  height: 100%;
+  border-radius: 9px;
+  object-fit: contain;
+}
+
+.cy-composer__attachment--sticker button {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  border-radius: 50%;
+  background: rgb(0 0 0 / 52%);
+  color: #fff;
+}
+
 .cy-composer__attachment.is-image img {
   width: 100%;
   height: 100%;

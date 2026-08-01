@@ -17,6 +17,7 @@ import { TtsButton } from "./TtsButton";
 import { stopTtsPlayback } from "./tts-playback";
 import { LastTurnActionButton } from "./LastTurnActionButton";
 import { resolveRevisableLastTurn, type RevisableLastTurn } from "./last-turn-actions";
+import { extractMessageStickerId, stripMessageStickerMarkers } from "./message-sticker";
 
 export interface ChatMessageItem {
   id: string;
@@ -50,6 +51,7 @@ interface ChatMessageListProps {
   conversationId?: string;
   mode: ConversationMode;
   preferredAddress: string;
+  stickerSize?: "small" | "standard" | "large";
   onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void;
   revisionBusy?: boolean;
   onEditLastUserMessage?: (messageId: string, content: string) => Promise<boolean>;
@@ -429,12 +431,13 @@ function createRoles(
 export function createMessageItems(messages: ChatMessageItem[], enabledStickers: EnabledSticker[]): BubbleItemType[] {
   return messages.flatMap((message) => {
     if (message.role !== "assistant") {
+      const stickerId = extractMessageStickerId(message.content, message.sticker);
       return [{
         key: message.id,
         role: message.role,
-        content: message.content,
+        content: stripMessageStickerMarkers(message.content),
         extraInfo: {
-          stickerUrl: message.sticker ? resolveStickerUrl(message.sticker, enabledStickers) : undefined,
+          stickerUrl: stickerId ? resolveStickerUrl(stickerId, enabledStickers) : undefined,
           attachments: message.attachments,
           messageId: message.id,
         },
@@ -478,6 +481,7 @@ export function ChatMessageList({
   conversationId,
   mode,
   preferredAddress,
+  stickerSize = "standard",
   onTtsCacheKey,
   revisionBusy = false,
   onEditLastUserMessage,
@@ -559,7 +563,7 @@ export function ChatMessageList({
   const items = createMessageItems(messages, enabledStickers);
 
   return (
-    <div className="cy-message-list" aria-live="polite">
+    <div className={`cy-message-list cy-message-list--stickers-${stickerSize}`} aria-live="polite">
       <Bubble.List items={items} role={roles} autoScroll />
     </div>
   );

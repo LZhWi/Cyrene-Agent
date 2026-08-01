@@ -506,7 +506,6 @@ describe("build-options", () => {
       broadcastRuntimeStateChanged: () => {},
       observeRuntimeState: async () => {},
       recordRelationshipTurn,
-      getChatWindow: () => null,
     }
 
     await onAgentRunFinished({ reply: "好呀", toolResults: [] }, "今天有点累", deps, "wechat")
@@ -521,7 +520,6 @@ describe("build-options", () => {
 
   it("uses the latest sticker embedding index when agent run finishes", async () => {
     const matchSticker = vi.fn(async () => ({ id: "hugtight" }))
-    const send = vi.fn()
     const latestIndex = [{ id: "hugtight", embedding: [1, 0] }]
     const deps: OnRunFinishedDeps & { getStickerEmbeddingIndex: () => unknown } = {
       loadModelSettings: () => ({
@@ -546,16 +544,9 @@ describe("build-options", () => {
       broadcastRuntimeStateChanged: () => {},
       observeRuntimeState: async () => {},
       recordRelationshipTurn: async () => {},
-      getChatWindow: () => ({
-        isDestroyed: () => false,
-        webContents: {
-          isDestroyed: () => false,
-          send,
-        },
-      }),
     }
 
-    await onAgentRunFinished({ reply: "来，抱抱你", toolResults: [] }, "今天好累", deps)
+    const effects = await onAgentRunFinished({ reply: "来，抱抱你", toolResults: [] }, "今天好累", deps)
 
     expect(matchSticker).toHaveBeenCalledWith(
       "来，抱抱你\n今天好累",
@@ -563,10 +554,7 @@ describe("build-options", () => {
       latestIndex,
       0.55,
     )
-    expect(send).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
-      name: "cyrene.sticker",
-      value: "hugtight",
-    }))
+    expect(effects).toEqual({ sticker: "hugtight" })
   })
 
   it("does not send document model context into memory or sticker embedding side effects", async () => {
@@ -601,7 +589,6 @@ describe("build-options", () => {
       broadcastRuntimeStateChanged: () => {},
       observeRuntimeState: async () => {},
       recordRelationshipTurn: async () => {},
-      getChatWindow: () => null,
     }
 
     await onAgentRunFinished({ reply: "总结好了", toolResults: [] }, latestUserText, deps)
@@ -613,6 +600,34 @@ describe("build-options", () => {
       latestIndex,
       0.55,
     )
+  })
+
+  it("skips sticker embedding when reply and user content contain only code or math", async () => {
+    const matchSticker = vi.fn(async () => ({ id: "hugtight" }))
+    const deps: OnRunFinishedDeps = {
+      loadModelSettings: () => ({ provider: "test", baseUrl: "", model: "", apiKey: "", runtimeSync: "off", stickerEnabled: true }),
+      scheduleMemoryWrite: () => {},
+      inferRuntimeState: () => ({ status: "陪伴中" }),
+      runtimeState: { status: "陪伴中", feeling: "温柔", expression: 0, updatedAt: 0 },
+      feelingToExpression: { "温柔": 0 },
+      setRuntimeState: () => {},
+      stickerEmbeddingIndex: [{ id: "hugtight", embedding: [1, 0] }],
+      getEmbeddingProvider: () => ({ embed: async () => [1, 0] }),
+      matchSticker,
+      loadStickerSettings: () => ({}),
+      broadcastRuntimeStateChanged: () => {},
+      observeRuntimeState: async () => {},
+      recordRelationshipTurn: async () => {},
+    }
+
+    const effects = await onAgentRunFinished(
+      { reply: "```ts\nconst onlyCode = true\n```\n$$x^2$$", toolResults: [] },
+      "$E=mc^2$",
+      deps,
+    )
+
+    expect(matchSticker).not.toHaveBeenCalled()
+    expect(effects).toEqual({ sticker: null })
   })
 
   it("schedules one social extraction instead of legacy memory for an enabled Chat result", async () => {
@@ -634,7 +649,6 @@ describe("build-options", () => {
       broadcastRuntimeStateChanged: () => {},
       observeRuntimeState,
       recordRelationshipTurn: async () => {},
-      getChatWindow: () => null,
     }
     const retrievedAtoms: SocialAtom[] = []
 

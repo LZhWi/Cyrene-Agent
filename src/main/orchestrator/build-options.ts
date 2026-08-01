@@ -17,7 +17,7 @@
 //   scheduleMemoryWrite / inferRuntimeState / runtimeState / feelingToExpression
 //   matchSticker / stickerEmbeddingIndex / getEmbeddingProvider / loadStickerSettings
 //   broadcastRuntimeStateChanged / observeRuntimeState
-//   IPC.AGUI_EVENT / chatWindow（用于推 sticker）
+//   sticker 文本预处理 / stickerEmbeddingIndex / getEmbeddingProvider / loadStickerSettings
 //
 // 这些全部塞到 BuildOptionsDeps 里。dispatcher 在 Phase 1 注入同样的 deps 即可。
 import {
@@ -28,7 +28,6 @@ import {
 import type { ToolDefinition } from "./tool-registry";
 import type { ChatMessage, OpenAIContentBlock } from "./vendors/types";
 import type { AguiRunInput } from "../agui-bridge";
-import { IPC } from "../../shared/ipc-channels";
 import type { RelationshipChannel, RelationshipTurnInput } from "../relationship/relationship-log";
 import { validateCaptionImagePath } from "../chat/image-caption";
 import {
@@ -53,6 +52,7 @@ import type {
 import type { TrustedAskUserProfile } from "../../shared/ask-clarification";
 import type { SkillRouteInfo } from "./task-router";
 import { filterToolsBySearchBackend, type SearchBackend } from "./search-backend-filter";
+import { buildStickerEmbeddingQuery } from "../sticker-query";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
@@ -165,7 +165,6 @@ export interface OnRunFinishedDeps {
     reply: string,
   ) => Promise<void>;
   recordRelationshipTurn: (input: RelationshipTurnInput) => Promise<unknown> | unknown;
-  getChatWindow: () => { webContents: { isDestroyed(): boolean; send: (channel: string, ...args: unknown[]) => void }; isDestroyed(): boolean } | null;
 }
 
 export interface ModelSettingsLite {
@@ -694,8 +693,8 @@ export async function buildAgentRunOptions(
  * 注意：feeling 字段由 inferRuntimeState 内部副作用更新；本函数只同步 status/expression/updatedAt。
  *
  * 渠道（wechat/feishu/...）的 sticker 走 OutgoingMessage.parts（统一消息模型）；
- * 桌面聊天窗保留 IPC 广播（向后兼容 + 桌面渲染端 sticker 选择器依赖此事件）。
- * 两者从同一份 sticker 决定出发，不会重复。
+ * 桌面聊天窗由 AG-UI bridge 把本函数返回的 sticker 决定发回本次 run 的发起窗口；
+ * 渠道则由 dispatcher 收下后纳入 OutgoingMessage.parts。
  */
 export async function onAgentRunFinished(
   result: CyreneRunResult,
@@ -747,9 +746,10 @@ export async function onAgentRunFinished(
   });
 
   const stickerIndex = deps.getStickerEmbeddingIndex?.() ?? deps.stickerEmbeddingIndex;
-  const stickerQuery = (chatContent + "\n" + sideEffectUserText).slice(0, 1000);
+  const stickerQuery = buildStickerEmbeddingQuery(chatContent, sideEffectUserText);
   let stickerCandidate: string | null = null;
-  if (settings.stickerEnabled && stickerIndex) {
+  // 只有代码/公式时 stickerQuery 为空：不请求 embedding，避免技术内容误触发表情。
+  if (settings.stickerEnabled && stickerIndex && stickerQuery) {
     const matched = await perf.track("match_sticker", () =>
       deps.matchSticker(
         stickerQuery,
@@ -763,14 +763,6 @@ export async function onAgentRunFinished(
   const stickerSettings = deps.loadStickerSettings();
   const sticker = stickerCandidate && stickerSettings[stickerCandidate] !== false ? stickerCandidate : null;
 
-  const chatWin = deps.getChatWindow();
-  if (chatWin && !chatWin.isDestroyed()) {
-    chatWin.webContents.send(IPC.AGUI_EVENT, {
-      type: "CUSTOM",
-      name: "cyrene.sticker",
-      value: sticker,
-    });
-  }
   if (settings.runtimeSync === "local") {
     deps.broadcastRuntimeStateChanged();
   } else if (settings.runtimeSync === "llm") {
@@ -783,7 +775,7 @@ export async function onAgentRunFinished(
   }
 
   // 返回 sticker 决定：
-  // - 桌面聊天窗的 sticker 由 IPC 广播（上面 chatWin.webContents.send）继续承担
+  // - 桌面聊天窗由 AG-UI bridge 发到本次 run 的源窗口，避免只投递旧 chatWindow
   // - 渠道（wechat/feishu/...）的 sticker 由 dispatcher 收下，纳入 OutgoingMessage.parts
   // - 桌面路径也返回 sticker 以保持签名一致；dispatcher 路径下 channel !== undefined 才会消费它
   return { sticker };

@@ -86,7 +86,14 @@ export type BuildOptionsFn = (input: AguiRunInput) => Promise<{
 }>;
 
 /** 调用方注入：agent 跑完后的副作用（记忆/sticker/表情/广播）。 */
-export type OnRunFinishedFn = (result: CyreneRunResult, latestUserText: string) => Promise<void> | void;
+export interface RunFinishedEffects {
+  /** 由 bridge 发给本次 AG-UI run 的发起窗口，保证不会落到旧 chatWindow。 */
+  sticker?: string | null;
+}
+export type OnRunFinishedFn = (
+  result: CyreneRunResult,
+  latestUserText: string,
+) => Promise<void | RunFinishedEffects> | void | RunFinishedEffects;
 
 /** 调用方注入：拿聊天窗口（广播副作用用，可空）。 */
 export type GetChatWindowFn = () => { webContents: WebContents; isDestroyed(): boolean } | null;
@@ -362,7 +369,16 @@ export function registerAgUiIpc(
         try {
           if (agent.lastResult) {
             const lastResult = agent.lastResult;
-            await perf.track("on_run_finished", async () => { await onFinished(lastResult, latestUserText); });
+            const effects = await perf.track("on_run_finished", async () => onFinished(lastResult, latestUserText));
+            if (effects?.sticker !== undefined) {
+              send({
+                type: "CUSTOM",
+                name: "cyrene.sticker",
+                value: effects.sticker,
+                threadId,
+                runId,
+              });
+            }
             // 历史召回用：把这轮对话存入向量库（异步，不阻塞，失败不影响主流程）
             // 放在 onFinished 之后，确保记忆/sticker 等副作用先跑完
             void indexConversationTurn(

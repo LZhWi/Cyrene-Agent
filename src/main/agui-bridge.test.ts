@@ -128,13 +128,7 @@ describe("agui-bridge sticker event ordering", () => {
         },
         latestUserText: "累了",
       }),
-      async () => {
-        sender.send(IPC.AGUI_EVENT, {
-          type: "CUSTOM",
-          name: "cyrene.sticker",
-          value: "hugtight",
-        });
-      },
+      async () => ({ sticker: "hugtight" }),
       () => null,
     );
 
