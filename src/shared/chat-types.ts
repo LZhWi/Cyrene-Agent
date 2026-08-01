@@ -64,6 +64,8 @@ export interface ChatMessage {
   sticker?: string | null;
   /** TTS 缓存 key。只存 key，不存绝对路径，避免 userData 路径变化后 session JSON 失效。 */
   ttsCacheKey?: string;
+  /** 生成缓存时使用的朗读文本转换器版本；版本变化时旧缓存自然失效。 */
+  ttsCacheVersion?: string;
   /** 已实际展示的音乐候选卡片；持久化展示不延长 Skill 候选状态 TTL。 */
   musicCard?: MusicCardData;
 }

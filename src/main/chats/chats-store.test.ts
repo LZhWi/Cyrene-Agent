@@ -266,6 +266,26 @@ describe("chats store", () => {
     expect(store.getSession(sessions[0].id)?.title).toBe("昔涟的主动消息");
   });
 
+  it("persists a valid TTS cache key only on model messages without changing updatedAt", async () => {
+    const store = await import("./chats-store");
+    store.initialize();
+    const session = store.createSession({
+      initialMessages: [
+        { id: "user-1", role: "user", content: "你好", at: 1 },
+        { id: "model-1", role: "model", content: "你好呀", at: 2 },
+      ],
+    });
+    const cacheKey = `minimax-${"a".repeat(64)}`;
+    const converterVersion = "markdown-v1";
+
+    expect(store.setMessageTtsCacheKey(session.id, "model-1", cacheKey, converterVersion)?.updatedAt).toBe(session.updatedAt);
+    expect(store.getSession(session.id)?.messages[1].ttsCacheKey).toBe(cacheKey);
+    expect(store.getSession(session.id)?.messages[1].ttsCacheVersion).toBe(converterVersion);
+    expect(store.setMessageTtsCacheKey(session.id, "user-1", cacheKey, converterVersion)).toBeNull();
+    expect(store.setMessageTtsCacheKey(session.id, "model-1", "invalid-key", converterVersion)).toBeNull();
+    expect(store.setMessageTtsCacheKey(session.id, "model-1", cacheKey, "invalid version!")).toBeNull();
+  });
+
   it("recreates the proactive singleton after it is deleted", async () => {
     const store = await import("./chats-store");
     store.initialize();

@@ -146,6 +146,10 @@ import { synthesize as customCloudSynthesize } from "./tts/custom-cloud-engine";
 import { synthesize as mimoSynthesize } from "./tts/mimo-engine";
 import { synthesize as mosslandSynthesize, cloneVoice as mosslandCloneVoice, listVoices as mosslandListVoices } from "./tts/mossland-engine";
 import { synthesizeByEngine } from "./tts/tts-dispatcher";
+import { TtsSessionService, type TtsSessionExecution } from "./tts/tts-session-service";
+import { versionTtsCacheKey } from "./tts/tts-cache-key";
+import { runTtsStreamingWithFallback } from "./tts/tts-streaming-fallback";
+import type { StartTtsRequest, TtsAudioFormat, TtsSessionEvent, TtsStartResult } from "../shared/tts-session";
 import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
 import { codeRunWorker } from "./orchestrator/code/code-run-worker";
 import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegateSettings, setUserTimezoneConfig } from "./orchestrator/built-in-tools";
@@ -403,7 +407,7 @@ function getTtsCacheDir(): string {
 }
 
 function assertTtsCacheKey(cacheKey: string): string {
-  if (!/^(minimax|gptsovits|custom-cloud|mimo)-[a-f0-9]{64}$/.test(cacheKey)) {
+  if (!/^(minimax|gptsovits|custom-cloud|mimo|mossland)-[a-f0-9]{64}$/.test(cacheKey)) {
     throw new Error("非法 TTS 缓存 key");
   }
   return cacheKey;
@@ -701,7 +705,7 @@ interface GeneralSettings extends ChatAppearanceSettings {
   /** 主动消息最终投递到本地、微信或飞书。 */
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
   // TTS 配置
-  ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo";
+  ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo" | "mossland";
   ttsAutoRead: boolean;
   ttsSpeed: number;
   ttsVolume: number;
@@ -727,6 +731,12 @@ interface GeneralSettings extends ChatAppearanceSettings {
   ttsMimoKey: string;
   ttsMimoVoiceAudioPath: string;
   ttsMimoStylePrompt: string;
+  // Mossland TTS
+  ttsMosslandKey: string;
+  ttsMosslandVoiceId: string;
+  ttsMosslandModel: string;
+  ttsMosslandTestText: string;
+  ttsMosslandFormat: "mp3" | "wav" | "pcm";
   /** 天气源：open-meteo(免配置默认) | amap(高德,需填key) */
   weatherSource: "open-meteo" | "amap";
   /** 天气插件是否启用（开关） */
@@ -960,6 +970,11 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   ttsMimoKey: "",
   ttsMimoVoiceAudioPath: "",
   ttsMimoStylePrompt: "温柔、自然、略带亲近感，像在轻声陪用户聊天。",
+  ttsMosslandKey: "",
+  ttsMosslandVoiceId: "",
+  ttsMosslandModel: "moss-tts",
+  ttsMosslandTestText: "你好呀，我是昔涟。今天也请多多关照♪",
+  ttsMosslandFormat: "mp3",
   weatherSource: "open-meteo",
   weatherEnabled: false,
   amapKey: "",
@@ -1438,7 +1453,7 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     proactiveChatMode: normalizeProactiveChatMode(input?.proactiveChatMode),
     proactiveDeliveryTarget: normalizeProactiveDeliveryTarget(input?.proactiveDeliveryTarget),
     // TTS 配置
-    ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo"].includes(input?.ttsEngine as string) ? input?.ttsEngine : "off") as GeneralSettings["ttsEngine"],
+    ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo", "mossland"].includes(input?.ttsEngine as string) ? input?.ttsEngine : "off") as GeneralSettings["ttsEngine"],
     ttsAutoRead: input?.ttsAutoRead === undefined ? DEFAULT_GENERAL_SETTINGS.ttsAutoRead : Boolean(input.ttsAutoRead),
     ttsSpeed: typeof input?.ttsSpeed === "number" ? Math.max(0.5, Math.min(2, input.ttsSpeed)) : DEFAULT_GENERAL_SETTINGS.ttsSpeed,
     ttsVolume: typeof input?.ttsVolume === "number" ? Math.max(0, Math.min(1, input.ttsVolume)) : DEFAULT_GENERAL_SETTINGS.ttsVolume,
@@ -1501,6 +1516,11 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     ttsMimoKey: typeof input?.ttsMimoKey === "string" ? input.ttsMimoKey : "",
     ttsMimoVoiceAudioPath: typeof input?.ttsMimoVoiceAudioPath === "string" ? input.ttsMimoVoiceAudioPath : "",
     ttsMimoStylePrompt: typeof input?.ttsMimoStylePrompt === "string" ? input.ttsMimoStylePrompt : DEFAULT_GENERAL_SETTINGS.ttsMimoStylePrompt,
+    ttsMosslandKey: typeof input?.ttsMosslandKey === "string" ? input.ttsMosslandKey : "",
+    ttsMosslandVoiceId: typeof input?.ttsMosslandVoiceId === "string" ? input.ttsMosslandVoiceId : "",
+    ttsMosslandModel: typeof input?.ttsMosslandModel === "string" ? input.ttsMosslandModel : DEFAULT_GENERAL_SETTINGS.ttsMosslandModel,
+    ttsMosslandTestText: typeof input?.ttsMosslandTestText === "string" ? input.ttsMosslandTestText : DEFAULT_GENERAL_SETTINGS.ttsMosslandTestText,
+    ttsMosslandFormat: input?.ttsMosslandFormat === "wav" || input?.ttsMosslandFormat === "pcm" ? input.ttsMosslandFormat : "mp3",
     ...normalizeChatAppearance(input),
   };
 }
@@ -1522,6 +1542,156 @@ function loadGeneralSettings(): GeneralSettings {
   if (generalSettingsCache !== null) return generalSettingsCache;
   return generalSettingsCache = loadGeneralSettings0();
 }
+
+function readTtsCacheByKey(cacheKey: string): { audio: Buffer; format: TtsAudioFormat } | null {
+  for (const format of ["mp3", "wav", "pcm"] as const) {
+    let cachePath: string;
+    try {
+      cachePath = getTtsCachePath(cacheKey, format);
+    } catch {
+      return null;
+    }
+    if (fs.existsSync(cachePath)) return { audio: fs.readFileSync(cachePath), format };
+  }
+  return null;
+}
+
+async function synthesizeTtsSession(
+  request: StartTtsRequest,
+  signal: AbortSignal,
+  emit: (event: TtsSessionEvent) => void,
+): Promise<TtsStartResult | TtsSessionExecution> {
+  const settings = loadGeneralSettings();
+  if (request.automatic && !settings.ttsAutoRead) return { requestId: request.requestId, status: "skipped" };
+
+  const historicalMessage = chatsStore.getSession(request.conversationId)?.messages
+    .find((message) => message.id === request.messageId && message.role === "model");
+  if (historicalMessage?.ttsCacheKey && historicalMessage.ttsCacheVersion === request.converterVersion) {
+    const cached = readTtsCacheByKey(historicalMessage.ttsCacheKey);
+    if (cached) {
+      return {
+        requestId: request.requestId,
+        status: "ready",
+        base64: cached.audio.toString("base64"),
+        cacheKey: historicalMessage.ttsCacheKey,
+        format: cached.format,
+        cached: true,
+      };
+    }
+  }
+
+  if (settings.ttsEngine === "off") {
+    if (request.automatic) return { requestId: request.requestId, status: "skipped" };
+    throw new Error("请先在设置中启用 TTS 引擎");
+  }
+  if (signal.aborted) return { requestId: request.requestId, status: "cancelled" };
+
+  let audio: Buffer;
+  let format: TtsAudioFormat;
+  let cacheKey: string;
+  if (settings.ttsEngine === "minimax") {
+    if (!settings.ttsMinimaxKey || !settings.ttsMinimaxVoiceId) throw new Error("MiniMax TTS 配置不完整");
+    format = "mp3";
+    const payload = {
+      apiKey: settings.ttsMinimaxKey, voiceId: settings.ttsMinimaxVoiceId, text: request.speechText,
+      speed: settings.ttsSpeed, volume: settings.ttsVolume, model: settings.ttsMinimaxModel, format,
+    };
+    cacheKey = buildTtsCacheKey(payload);
+    if (settings.ttsStreaming) {
+      cacheKey = versionTtsCacheKey(cacheKey, request.converterVersion);
+      const cachePath = getTtsCachePath(cacheKey, format);
+      const persist = (buffer: Buffer) => {
+        fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+        fs.writeFileSync(cachePath, buffer);
+        appendMinimaxTtsLog({
+          requestId: request.requestId,
+          ts: new Date().toISOString(),
+          phase: "session.stream.cache.write",
+          cacheKey,
+          audioBytes: buffer.length,
+        });
+      };
+      const completion = runTtsStreamingWithFallback({
+        requestId: request.requestId,
+        cacheKey,
+        format,
+        signal,
+        stream: (onChunk) => ttsSynthesize({
+          ...payload,
+          signal,
+          onChunk,
+          debugLog: appendMinimaxTtsLog,
+        }),
+        fallback: () => ttsSynthesize({
+          ...payload,
+          signal,
+          debugLog: appendMinimaxTtsLog,
+        }),
+        persist,
+        emit,
+      });
+      return {
+        result: { requestId: request.requestId, status: "streaming", cacheKey, format },
+        completion,
+      };
+    }
+    audio = await ttsSynthesize({ ...payload, signal, debugLog: appendMinimaxTtsLog });
+  } else if (settings.ttsEngine === "gptsovits") {
+    if (!settings.ttsGptsovitsBaseUrl || !settings.ttsGptsovitsRefAudioPath || !settings.ttsGptsovitsPromptText) {
+      throw new Error("GPT-SoVITS TTS 配置不完整");
+    }
+    format = settings.ttsGptsovitsFormat;
+    const payload = {
+      baseUrl: settings.ttsGptsovitsBaseUrl, refAudioPath: settings.ttsGptsovitsRefAudioPath,
+      promptText: settings.ttsGptsovitsPromptText, text: request.speechText, speed: settings.ttsSpeed, format,
+    };
+    cacheKey = buildGptsovitsCacheKey(payload);
+    audio = (await gptsovitsSynthesize({ ...payload, debugLog: appendGptsovitsTtsLog })).audio;
+  } else if (settings.ttsEngine === "custom-cloud") {
+    if (!settings.ttsCustomCloudEndpointUrl) throw new Error("自定义云端 TTS 配置不完整");
+    format = settings.ttsCustomCloudFormat;
+    const payload = {
+      endpointUrl: settings.ttsCustomCloudEndpointUrl, apiKey: settings.ttsCustomCloudApiKey,
+      voiceId: settings.ttsCustomCloudVoiceId, text: request.speechText, speed: settings.ttsSpeed,
+      volume: settings.ttsVolume, format, timeoutMs: settings.ttsCustomCloudTimeoutMs,
+    };
+    cacheKey = buildCustomCloudCacheKey(payload);
+    audio = (await customCloudSynthesize({ ...payload, debugLog: appendCustomCloudTtsLog })).audio;
+  } else if (settings.ttsEngine === "mimo") {
+    if (!settings.ttsMimoKey || !settings.ttsMimoVoiceAudioPath) throw new Error("MiMo TTS 配置不完整");
+    format = "wav";
+    const payload = {
+      apiKey: settings.ttsMimoKey, voiceAudioPath: settings.ttsMimoVoiceAudioPath,
+      text: request.speechText, stylePrompt: settings.ttsMimoStylePrompt,
+    };
+    cacheKey = buildMimoCacheKey(payload);
+    audio = (await mimoSynthesize({ ...payload, debugLog: appendMimoTtsLog })).audio;
+  } else {
+    if (!settings.ttsMosslandKey || !settings.ttsMosslandVoiceId) throw new Error("Mossland TTS 配置不完整");
+    format = "mp3";
+    const payload = {
+      apiKey: settings.ttsMosslandKey, voiceId: settings.ttsMosslandVoiceId, text: request.speechText,
+      speed: settings.ttsSpeed, volume: settings.ttsVolume, model: settings.ttsMosslandModel, format,
+    };
+    cacheKey = buildMosslandCacheKey(payload);
+    audio = (await mosslandSynthesize(payload)).audio;
+  }
+
+  cacheKey = versionTtsCacheKey(cacheKey, request.converterVersion);
+  const cachePath = getTtsCachePath(cacheKey, format);
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(cachePath, audio);
+  return {
+    requestId: request.requestId,
+    status: "ready",
+    base64: audio.toString("base64"),
+    cacheKey,
+    format,
+    cached: false,
+  };
+}
+
+const ttsSessionService = new TtsSessionService(synthesizeTtsSession);
 
 function applyGeneralSettings(settings: GeneralSettings): void {
   mainWindow?.setAlwaysOnTop(settings.petAlwaysOnTop, settings.petAlwaysOnTop ? "screen-saver" : "normal");
@@ -3642,25 +3812,26 @@ ipcMain.on(IPC.APP_QUIT, () => {
   app.quit();
 });
 
-ipcMain.on(IPC.CHAT_MINIMIZE, () => {
-  chatWindow?.minimize();
+ipcMain.on(IPC.CHAT_MINIMIZE, (event) => {
+  BrowserWindow.fromWebContents(event.sender)?.minimize();
 });
 
-ipcMain.on(IPC.CHAT_CLOSE, () => {
-  chatWindow?.close();
+ipcMain.on(IPC.CHAT_CLOSE, (event) => {
+  BrowserWindow.fromWebContents(event.sender)?.close();
 });
 
-ipcMain.on(IPC.CHAT_TOGGLE_MAXIMIZE, () => {
-  if (!chatWindow) return;
-  if (chatWindow.isMaximized()) {
-    chatWindow.unmaximize();
+ipcMain.on(IPC.CHAT_TOGGLE_MAXIMIZE, (event) => {
+  const senderWindow = BrowserWindow.fromWebContents(event.sender);
+  if (!senderWindow) return;
+  if (senderWindow.isMaximized()) {
+    senderWindow.unmaximize();
   } else {
-    chatWindow.maximize();
+    senderWindow.maximize();
   }
 });
 
-ipcMain.handle(IPC.CHAT_IS_MAXIMIZED, () => {
-  return chatWindow?.isMaximized() ?? false;
+ipcMain.handle(IPC.CHAT_IS_MAXIMIZED, (event) => {
+  return BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false;
 });
 
 // 推理下拉原子读：{ providerKey, providerId, model, preference }
@@ -4355,6 +4526,26 @@ app.whenReady().then(async () => {
   });
   ipcMain.handle(IPC.TTS_LOAD_SETTINGS, () => {
     return loadGeneralSettings();
+  });
+  ipcMain.handle(IPC.TTS_SESSION_START, async (event, request: StartTtsRequest) => {
+    if (
+      !request?.requestId
+      || !request.conversationId
+      || !request.messageId
+      || !request.speechText.trim()
+      || !/^[a-z\d][a-z\d._-]{0,63}$/i.test(request.converterVersion)
+    ) {
+      throw new Error("TTS 会话请求不完整");
+    }
+    const sender = event.sender;
+    return await ttsSessionService.start(request, (sessionEvent) => {
+      if (!sender.isDestroyed()) sender.send(IPC.TTS_SESSION_EVENT, sessionEvent);
+    });
+  });
+  ipcMain.handle(IPC.TTS_SESSION_CANCEL, (_event, requestId: string) => {
+    return typeof requestId === "string" && requestId.length > 0
+      ? ttsSessionService.cancel(requestId)
+      : false;
   });
 
   // 上传音频文件 → file_id

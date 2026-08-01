@@ -9,6 +9,7 @@ import {
 // ── Hoisted mock state ──
 const mockConfig = vi.hoisted(() => ({
   value: { provider: "test", baseUrl: "https://test.api/v1", model: "test-model", apiKey: "sk-test" },
+  requests: [] as Array<Record<string, unknown>>,
 }));
 
 // ── Mocks ──
@@ -39,26 +40,61 @@ vi.mock("../token-usage-store", () => ({
 
 vi.mock("../orchestrator/vendors", () => ({
   getAdapterForConfig: () => ({
-    buildRequest: (_req: unknown, cfg: { model: string }) => ({
-      url: `https://test.api/v1/chat/completions`,
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ model: cfg.model }),
-    }),
+    buildRequest: (req: Record<string, unknown>, cfg: { model: string }) => {
+      mockConfig.requests.push(req);
+      return {
+        url: `https://test.api/v1/chat/completions`,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: cfg.model }),
+      };
+    },
     parseResponse: (data: unknown) => {
-      const d = data as { text?: string; usage?: { input: number; output: number } };
-      return { text: d.text ?? "", usage: d.usage };
+      const d = data as { text?: string; finishReason?: string; usage?: { input: number; output: number } };
+      return { text: d.text ?? "", finishReason: d.finishReason ?? "stop", usage: d.usage };
     },
   }),
 }));
 
 // ── Import after mocks ──
-import { getDefaultMaxOutputTokens, invokeMemoryLlm } from "./memory-llm-client";
+import {
+  getDefaultMaxOutputTokens,
+  invokeMemoryLlm,
+  invokeMemoryStructuredOutput,
+} from "./memory-llm-client";
+import { parseMemoryJudgeResult, validateMemoryJudgeBusiness } from "./memory-schemas";
 
 // ── Tests ──
 
 beforeEach(() => {
   vi.restoreAllMocks();
   mockConfig.value = { provider: "test", baseUrl: "https://test.api/v1", model: "test-model", apiKey: "sk-test" };
+  mockConfig.requests = [];
+});
+
+describe("invokeMemoryStructuredOutput — repair context", () => {
+  it("adds validation feedback to a repair request", async () => {
+    const responses = [
+      { text: "not json", finishReason: "stop" },
+      { text: '{"candidates":[]}', finishReason: "stop" },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => responses.shift(),
+    })));
+
+    await expect(invokeMemoryStructuredOutput({
+      operation: "judge",
+      systemPrompt: "system",
+      userPrompt: "conversation",
+      maxOutputTokens: 800,
+      parseSchema: parseMemoryJudgeResult,
+      validateBusiness: validateMemoryJudgeBusiness,
+    })).resolves.toEqual([]);
+
+    const repairMessages = mockConfig.requests[1]?.messages as Array<{ role: string; content: string }>;
+    expect(repairMessages.at(-1)?.content).toContain("NO_JSON_OBJECT");
+    expect(repairMessages.at(-1)?.content).toContain('{"candidates":[]}');
+  });
 });
 
 describe("getDefaultMaxOutputTokens", () => {

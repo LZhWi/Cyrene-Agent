@@ -163,6 +163,8 @@ export interface SynthesizeOptions {
   debugLog?: (entry: Record<string, unknown>) => void; // 本地诊断日志（不上传）
   /** 流式回调：每收到一段 audio chunk 就调一次（传 base64）。不传 = 完整合成模式。 */
   onChunk?: (chunkBase64: string) => void;
+  /** 所属 TTS 会话被替换时关闭当前 WebSocket。 */
+  signal?: AbortSignal;
 }
 
 /**
@@ -216,6 +218,7 @@ export async function synthesize(opts: SynthesizeOptions): Promise<Buffer> {
     const timeout = setTimeout(() => {
       if (!resolved) {
         resolved = true;
+        removeAbortListener();
         try { ws.close(); } catch { /* ignore */ }
         log({ phase: "error", error: "语音合成超时（30秒）", durationMs: Date.now() - startedAt });
         reject(new Error("语音合成超时（30秒）"));
@@ -225,6 +228,22 @@ export async function synthesize(opts: SynthesizeOptions): Promise<Buffer> {
     const ws = new WebSocket(WS_URL, {
       headers: { Authorization: `Bearer ${opts.apiKey}` },
     });
+    const removeAbortListener = () => opts.signal?.removeEventListener("abort", onAbort);
+    const onAbort = () => {
+      if (resolved) return;
+      resolved = true;
+      clearTimeout(timeout);
+      removeAbortListener();
+      try { ws.close(); } catch { /* ignore */ }
+      const error = new Error("语音合成已取消");
+      error.name = "AbortError";
+      reject(error);
+    };
+    if (opts.signal?.aborted) {
+      onAbort();
+      return;
+    }
+    opts.signal?.addEventListener("abort", onAbort, { once: true });
 
     ws.on("open", () => {
       log({ phase: "ws.open" });
@@ -291,6 +310,7 @@ export async function synthesize(opts: SynthesizeOptions): Promise<Buffer> {
           if (!resolved) {
             resolved = true;
             clearTimeout(timeout);
+            removeAbortListener();
             try { ws.send(JSON.stringify({ event: "task_finish" })); } catch { /* ignore */ }
             const audioBuffer = Buffer.concat(audioChunks);
             log({
@@ -312,6 +332,7 @@ export async function synthesize(opts: SynthesizeOptions): Promise<Buffer> {
           if (!resolved) {
             resolved = true;
             clearTimeout(timeout);
+            removeAbortListener();
             ws.close();
             log({ phase: "error", base_resp: msg.base_resp, durationMs: Date.now() - startedAt });
             reject(new Error(`合成失败: ${msg.base_resp.status_msg} (code: ${msg.base_resp.status_code})`));
@@ -327,6 +348,7 @@ export async function synthesize(opts: SynthesizeOptions): Promise<Buffer> {
       if (!resolved) {
         resolved = true;
         clearTimeout(timeout);
+        removeAbortListener();
         log({ phase: "error", error: `WebSocket 连接失败: ${err.message}`, durationMs: Date.now() - startedAt });
         reject(new Error(`WebSocket 连接失败: ${err.message}`));
       }
@@ -337,6 +359,7 @@ export async function synthesize(opts: SynthesizeOptions): Promise<Buffer> {
       if (!resolved) {
         resolved = true;
         clearTimeout(timeout);
+        removeAbortListener();
         // 连接关闭时如果已有音频块，返回；否则报错
         if (audioChunks.length > 0) {
           const audioBuffer = Buffer.concat(audioChunks);

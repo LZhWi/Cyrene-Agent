@@ -74,6 +74,21 @@ export function registerChatsIpc(): void {
   );
 
   ipcMain.handle(
+    IPC.CHATS_SET_MESSAGE_TTS_CACHE,
+    (event, payload: { id: string; messageId: string; cacheKey: string; converterVersion: string }) => {
+      if (!payload?.id || !payload.messageId || !payload.cacheKey || !payload.converterVersion) return null;
+      const session = chatsStore.setMessageTtsCacheKey(
+        payload.id,
+        payload.messageId,
+        payload.cacheKey,
+        payload.converterVersion,
+      );
+      if (session) broadcastChanged(event.sender);
+      return session;
+    },
+  );
+
+  ipcMain.handle(
     IPC.CHATS_REPLACE_MESSAGES,
     (event, payload: { id: string; messages: ChatMessage[] }) => {
       if (!payload || !payload.id || !Array.isArray(payload.messages)) return null;

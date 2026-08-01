@@ -104,10 +104,7 @@ export function parseMemoryJudgeResult(value: unknown): MemoryCandidate[] {
 export function validateMemoryJudgeBusiness(
   candidates: MemoryCandidate[],
 ): BusinessValidationResult<MemoryCandidate[]> {
-  // 基本业务校验：至少有一个 candidate
-  if (candidates.length === 0) {
-    return { status: "rejected", error: { layer: "schema", code: "EMPTY_CANDIDATES", disposition: "fail_closed" } };
-  }
+  // 空数组是合法结果：表示最近对话没有值得写入的记忆。
   return { status: "accepted", value: candidates };
 }
 

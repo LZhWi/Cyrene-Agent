@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { ChatComposer, type ComposerAttachment } from "../components/ChatComposer";
 import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessageList";
+import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
+import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
 import { ConversationSidebar } from "../components/ConversationSidebar";
 import type { ChatMessage, ChatSession, ChatSessionMeta, ConversationMode } from "../../../../../shared/chat-types";
 import { SidebarToggle } from "../../../components/ui/SidebarToggle";
@@ -91,6 +93,7 @@ interface ChatStoreApi {
   get: (id: string) => Promise<ChatSession | null>;
   create: (input: { identityId: null; mode: ConversationMode; title?: string }) => Promise<ChatSession>;
   append: (id: string, message: ChatMessage) => Promise<ChatSession | null>;
+  setMessageTtsCacheKey: (id: string, messageId: string, cacheKey: string, converterVersion: string) => Promise<ChatSession | null>;
   delete: (id: string) => Promise<boolean>;
   pickWorkspaceFolder: () => Promise<{ ok: boolean; path?: string; displayName?: string; error?: string }>;
   setWorkspace: (sessionId: string, workspaceRoot: string) => Promise<{ ok: boolean; error?: string }>;
@@ -143,6 +146,8 @@ function toUiMessages(session: ChatSession): ChatMessageItem[] {
     role: message.role === "model" ? "assistant" : "user",
     content: message.content,
     reasoning: message.reasoning,
+    ttsCacheKey: message.ttsCacheKey,
+    ttsCacheVersion: message.ttsCacheVersion,
     responseStarted: message.role === "model",
     sticker: message.sticker,
     attachments: message.attachments,
@@ -170,6 +175,12 @@ export function ChatPage() {
   const demoTimers = useRef(new Set<number>());
   const modelBusyRef = useRef(false);
   const activeAguiOffRef = useRef<(() => void) | null>(null);
+  const activeEarlyTtsRef = useRef<{
+    queue: EarlyTtsPlaybackQueue;
+    mode: ConversationMode;
+    sessionId: string;
+    messageId: string;
+  } | null>(null);
 
   const taskLabel = ["work", "daily", "code"].includes(mode) ? "新建任务" : "新建对话";
   const activeSessionId = activeSessionIds[mode];
@@ -192,6 +203,8 @@ export function ChatPage() {
     demoTimers.current.clear();
     activeAguiOffRef.current?.();
     activeAguiOffRef.current = null;
+    activeEarlyTtsRef.current?.queue.cancel();
+    activeEarlyTtsRef.current = null;
     for (const url of localPreviewUrlsRef.current) URL.revokeObjectURL(url);
     localPreviewUrlsRef.current.clear();
   }, []);
@@ -224,6 +237,14 @@ export function ChatPage() {
     void refreshSessions(mode, true);
   }, [mode]);
 
+  useEffect(() => {
+    const active = activeEarlyTtsRef.current;
+    if (active && (active.mode !== mode || active.sessionId !== activeSessionId)) {
+      active.queue.cancel();
+      activeEarlyTtsRef.current = null;
+    }
+  }, [activeSessionId, mode]);
+
   function updateMessage(targetMode: ConversationMode, id: string, patch: Partial<ChatMessageItem>) {
     setMessagesByMode((current) => ({
       ...current,
@@ -231,6 +252,54 @@ export function ChatPage() {
         item.id === id ? { ...item, ...patch } : item
       )),
     }));
+  }
+
+  function handleTtsCacheKey(
+    targetMode: ConversationMode,
+    sessionId: string,
+    messageId: string,
+    cacheKey: string,
+    converterVersion: string,
+  ) {
+    updateMessage(targetMode, messageId, { ttsCacheKey: cacheKey, ttsCacheVersion: converterVersion });
+    void chatStore()?.setMessageTtsCacheKey(sessionId, messageId, cacheKey, converterVersion);
+  }
+
+  function createEarlyTtsQueue(
+    targetMode: ConversationMode,
+    sessionId: string,
+    messageId: string,
+  ): EarlyTtsPlaybackQueue {
+    activeEarlyTtsRef.current?.queue.cancel();
+    const queue = new EarlyTtsPlaybackQueue(
+      async (segment) => {
+        if (
+          activeModeRef.current !== targetMode
+          || activeSessionIdsRef.current[targetMode] !== sessionId
+          || activeEarlyTtsRef.current?.queue !== queue
+        ) return "interrupted";
+        return await playTtsToCompletion({
+          conversationId: sessionId,
+          messageId,
+          text: segment,
+          speechMode: targetMode === "learn" ? "learn" : "default",
+          automatic: true,
+        });
+      },
+      stopTtsPlayback,
+    );
+    activeEarlyTtsRef.current = { queue, mode: targetMode, sessionId, messageId };
+    return queue;
+  }
+
+  function finishEarlyTtsQueue(queue: EarlyTtsPlaybackQueue, fullText: string): void {
+    void queue.finish(fullText).finally(() => {
+      const active = activeEarlyTtsRef.current;
+      if (active?.queue !== queue) return;
+      const playback = getTtsPlaybackSnapshot();
+      if (playback.messageId === active.messageId && playback.status === "completed") stopTtsPlayback();
+      activeEarlyTtsRef.current = null;
+    });
   }
 
   async function selectSession(sessionId: string, targetMode: ConversationMode = mode) {
@@ -276,6 +345,7 @@ export function ChatPage() {
   }
 
   function streamDemoResponse(targetMode: ConversationMode, id: string, response: string, sessionId?: string) {
+    const earlyTtsQueue = sessionId ? createEarlyTtsQueue(targetMode, sessionId, id) : null;
     const loadingTimer = window.setTimeout(() => {
       demoTimers.current.delete(loadingTimer);
       updateMessage(targetMode, id, { loading: false, streaming: true, responseStarted: true });
@@ -283,9 +353,12 @@ export function ChatPage() {
       const characters = Array.from(response);
       const chunkSize = Math.max(1, Math.min(4, Math.ceil(characters.length / 120)));
       let cursor = 0;
+      let spokenCursor = 0;
       const streamTimer = window.setInterval(() => {
         cursor = Math.min(characters.length, cursor + chunkSize);
         const finished = cursor >= characters.length;
+        earlyTtsQueue?.append(characters.slice(spokenCursor, cursor).join(""));
+        spokenCursor = cursor;
         updateMessage(targetMode, id, {
           content: characters.slice(0, cursor).join(""),
           streaming: !finished,
@@ -299,7 +372,13 @@ export function ChatPage() {
               role: "model",
               content: response,
               at: Date.now(),
-            }).then(() => refreshSessions(targetMode, false));
+            }).then((saved) => {
+              void refreshSessions(targetMode, false);
+              if (saved) finishEarlyTtsQueue(earlyTtsQueue!, response);
+              else earlyTtsQueue?.cancel();
+            });
+          } else {
+            earlyTtsQueue?.cancel();
           }
         }
       }, 30);
@@ -337,6 +416,7 @@ export function ChatPage() {
 
     modelBusyRef.current = true;
     setModelBusy(true);
+    const earlyTtsQueue = createEarlyTtsQueue(input.targetMode, input.sessionId, input.assistantId);
     let streamContent = "";
     let reasoningContent = "";
     let sticker: string | null = null;
@@ -375,6 +455,7 @@ export function ChatPage() {
         });
       } else if (event.type === "TEXT_MESSAGE_CONTENT" && event.delta) {
         streamContent += event.delta;
+        earlyTtsQueue.append(event.delta);
         updateMessage(input.targetMode, input.assistantId, {
           content: streamContent,
           loading: false,
@@ -429,7 +510,7 @@ export function ChatPage() {
         responseStarted: true,
         sticker,
       });
-      await store.append(input.sessionId, {
+      const savedAssistant = await store.append(input.sessionId, {
         id: input.assistantId,
         role: "model",
         content: finalContent,
@@ -437,7 +518,11 @@ export function ChatPage() {
         at: Date.now(),
         sticker,
       });
+      if (savedAssistant) {
+        finishEarlyTtsQueue(earlyTtsQueue, finalContent);
+      } else earlyTtsQueue.cancel();
     } catch (error) {
+      earlyTtsQueue.cancel();
       const errorMessage = error instanceof Error ? error.message : String(error);
       const visibleError = `模型请求失败：${errorMessage}`;
       updateMessage(input.targetMode, input.assistantId, {
@@ -659,6 +744,8 @@ export function ChatPage() {
   async function sendMessage(content: string) {
     const message = content.trim();
     if (!message) return;
+    activeEarlyTtsRef.current?.queue.cancel();
+    activeEarlyTtsRef.current = null;
     const stickerMatch = message.match(/\[sticker:([^\]]+)\]/);
     const userSticker = stickerMatch?.[1];
     const visibleMessage = message.replace(/\[sticker:[^\]]+\]/g, "").trim();
@@ -795,7 +882,22 @@ export function ChatPage() {
             <span>松开即可添加到当前对话</span>
           </div>
         )}
-        {hasMessages && <ChatMessageList messages={messages} />}
+        {hasMessages && (
+          <ChatMessageList
+            messages={messages}
+            conversationId={activeSessionId}
+            mode={mode}
+            onTtsCacheKey={activeSessionId
+              ? (messageId, cacheKey, converterVersion) => handleTtsCacheKey(
+                mode,
+                activeSessionId,
+                messageId,
+                cacheKey,
+                converterVersion,
+              )
+              : undefined}
+          />
+        )}
         <div className="cy-workspace-composer">
           <ChatComposer
             value={draft}

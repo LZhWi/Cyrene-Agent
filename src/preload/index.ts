@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { IPC } from "../shared/ipc-channels";
+import type { StartTtsRequest, TtsSessionEvent, TtsStartResult } from "../shared/tts-session";
 import type { ScreenshotInsertPayload } from "../shared/ipc-channels";
 import type { UiTheme } from "../shared/ui-theme";
 import type { UiFont } from "../shared/ui-font";
@@ -495,6 +496,8 @@ const chatStoreApi = {
     ipcRenderer.invoke(IPC.CHATS_CREATE, payload ?? {}),
   append: (id: string, message: unknown) =>
     ipcRenderer.invoke(IPC.CHATS_APPEND, { id, message }),
+  setMessageTtsCacheKey: (id: string, messageId: string, cacheKey: string, converterVersion: string) =>
+    ipcRenderer.invoke(IPC.CHATS_SET_MESSAGE_TTS_CACHE, { id, messageId, cacheKey, converterVersion }),
   replaceMessages: (id: string, messages: unknown[]) =>
     ipcRenderer.invoke(IPC.CHATS_REPLACE_MESSAGES, { id, messages }),
   replaceTail: (id: string, startIndex: number, messages: unknown[]) =>
@@ -575,6 +578,15 @@ contextBridge.exposeInMainWorld("tokenUsage", tokenUsageApi);
 
 // TTS 语音合成（设置中心 TTS 面板 + 聊天窗口朗读用）
 const ttsApi = {
+  startSession: (payload: StartTtsRequest): Promise<TtsStartResult> =>
+    ipcRenderer.invoke(IPC.TTS_SESSION_START, payload),
+  cancelSession: (requestId: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.TTS_SESSION_CANCEL, requestId),
+  onSessionEvent: (callback: (event: TtsSessionEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: TtsSessionEvent) => callback(payload);
+    ipcRenderer.on(IPC.TTS_SESSION_EVENT, listener);
+    return () => ipcRenderer.removeListener(IPC.TTS_SESSION_EVENT, listener);
+  },
   upload: (apiKey: string, filePath: string, purpose: "voice_clone" | "prompt_audio") =>
     ipcRenderer.invoke(IPC.TTS_UPLOAD, { apiKey, filePath, purpose }),
   pickAudio: () => ipcRenderer.invoke(IPC.TTS_PICK_AUDIO),

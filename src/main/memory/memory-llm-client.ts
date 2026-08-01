@@ -16,7 +16,10 @@ import { recordUsage } from "../token-usage-store";
 import { resolveTimeoutPolicy, resolveMaxOutputTokens } from "../runtime-policy";
 import type { RuntimeStage } from "../runtime-policy";
 import { runStructuredOutput } from "../orchestrator/structured-output/runner";
-import type { BusinessValidationResult } from "../orchestrator/structured-output/runner";
+import type {
+  BusinessValidationResult,
+  StructuredRepairContext,
+} from "../orchestrator/structured-output/runner";
 import type { StructuredOutputProfile, StructuredOutputStage } from "../orchestrator/structured-output/types";
 import { resolveStructuredOutputProfile, classifyStructuredOutputEndpoint } from "../orchestrator/structured-output/profiles";
 import { getCapability } from "../orchestrator/vendors/capabilities";
@@ -71,6 +74,28 @@ const OPERATION_TO_SO_STAGE: Record<MemoryLlmOperation, StructuredOutputStage> =
   compress: "memory_compress",
   resolve: "memory_resolve",
 };
+
+const OPERATION_REPAIR_FORMAT: Record<MemoryLlmOperation, string> = {
+  judge: '顶层必须是 JSON 对象，格式为 {"candidates":[...]}；没有候选时返回 {"candidates":[]}。',
+  compress: '顶层必须是 JSON 对象，格式为 {"groups":[...]}。',
+  resolve: "顶层必须是一个符合原始字段要求的 JSON 对象。",
+};
+
+function buildRepairMessage(
+  operation: MemoryLlmOperation,
+  repair: StructuredRepairContext,
+): ChatMessage | undefined {
+  if (repair.attempt === 0) return undefined;
+  const errorCodes = repair.errors.map((error) => error.code).join(", ") || "UNKNOWN_VALIDATION_ERROR";
+  return {
+    role: "user",
+    content: [
+      `上一次输出未通过结构化校验，错误代码：${errorCodes}。`,
+      OPERATION_REPAIR_FORMAT[operation],
+      "请重新生成完整结果，只输出 JSON，不要附加 Markdown 代码围栏或解释文字。",
+    ].join("\n"),
+  };
+}
 
 export function getDefaultMaxOutputTokens(operation: MemoryLlmOperation): number {
   return resolveMaxOutputTokens({ stage: OPERATION_TO_TOKEN_STAGE[operation] });
@@ -136,6 +161,8 @@ export async function invokeMemoryStructuredOutput<T>(options: InvokeMemoryStruc
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
       ];
+      const repairMessage = buildRepairMessage(operation, repair);
+      if (repairMessage) messages.push(repairMessage);
       return {
         model: cfg.model,
         messages,

@@ -3,12 +3,16 @@ import { XMarkdown, type ComponentProps } from "@ant-design/x-markdown";
 import Latex from "@ant-design/x-markdown/plugins/Latex";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
+import type { ConversationMode } from "../../../../../shared/chat-types";
 import { useUserAvatar } from "../../../hooks/useUserAvatar";
 import {
   assistantRenderStages,
   resolveReasoningExpanded,
   updateReasoningExpanded,
 } from "./message-visibility";
+import { CopyButton } from "./CopyButton";
+import { TtsButton } from "./TtsButton";
+import { stopTtsPlayback } from "./tts-playback";
 
 export interface ChatMessageItem {
   id: string;
@@ -19,6 +23,8 @@ export interface ChatMessageItem {
   responseStarted?: boolean;
   streaming?: boolean;
   loading?: boolean;
+  ttsCacheKey?: string;
+  ttsCacheVersion?: string;
   sticker?: string | null;
   attachments?: ChatMessageAttachment[];
 }
@@ -37,6 +43,9 @@ export interface ChatMessageAttachment {
 
 interface ChatMessageListProps {
   messages: ChatMessageItem[];
+  conversationId?: string;
+  mode: ConversationMode;
+  onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void;
 }
 
 const markdownConfig = { extensions: Latex() };
@@ -199,8 +208,11 @@ function UserMessageAvatar({ src }: { src: string | null }) {
 
 function createRoles(
   userAvatarUrl: string | null,
+  conversationId: string | undefined,
+  mode: ConversationMode,
   reasoningExpanded: Readonly<Record<string, boolean>>,
   onReasoningExpand: (id: string, expanded: boolean) => void,
+  onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void,
 ) {
   return {
   user: {
@@ -215,6 +227,10 @@ function createRoles(
         attachments={info.extraInfo?.attachments}
       />
     ),
+    footer: (content: string) => {
+      const cleanText = content.replace(/\[sticker:[^\]]+\]/g, "").trim();
+      return cleanText ? <CopyButton text={cleanText} /> : null;
+    },
   },
   assistant: {
     placement: "start" as const,
@@ -228,6 +244,25 @@ function createRoles(
         stickerUrl={info.extraInfo?.stickerUrl}
       />
     ),
+    footer: (content: string, info: { extraInfo?: { messageId?: string; streaming?: boolean; ttsCacheKey?: string } }) => {
+      const cleanText = content.trim();
+      if (!cleanText || info.extraInfo?.streaming) return null;
+      const messageId = info.extraInfo?.messageId;
+      return (
+        <div className="cy-message-actions">
+          {messageId && conversationId && (
+            <TtsButton
+              conversationId={conversationId}
+              messageId={messageId}
+              text={cleanText}
+              speechMode={mode === "learn" ? "learn" : "default"}
+              onCacheKey={(cacheKey, converterVersion) => onTtsCacheKey?.(messageId, cacheKey, converterVersion)}
+            />
+          )}
+          <CopyButton text={cleanText} />
+        </div>
+      );
+    },
   },
   reasoning: {
     placement: "start" as const,
@@ -289,7 +324,9 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
         content: message.content,
         streaming: message.streaming,
         extraInfo: {
+          messageId: message.id,
           streaming: message.streaming,
+          ttsCacheKey: message.ttsCacheKey,
           stickerUrl: message.sticker ? resolveStickerUrl(message.sticker, enabledStickers) : undefined,
         },
       });
@@ -298,7 +335,7 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
   });
 }
 
-export function ChatMessageList({ messages }: ChatMessageListProps) {
+export function ChatMessageList({ messages, conversationId, mode, onTtsCacheKey }: ChatMessageListProps) {
   const userAvatarUrl = useUserAvatar();
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
   const [reasoningExpanded, setReasoningExpanded] = useState<Record<string, boolean>>({});
@@ -306,9 +343,11 @@ export function ChatMessageList({ messages }: ChatMessageListProps) {
     setReasoningExpanded((current) => updateReasoningExpanded(current, id, expanded));
   }, []);
   const roles = useMemo(
-    () => createRoles(userAvatarUrl, reasoningExpanded, onReasoningExpand),
-    [onReasoningExpand, reasoningExpanded, userAvatarUrl],
+    () => createRoles(userAvatarUrl, conversationId, mode, reasoningExpanded, onReasoningExpand, onTtsCacheKey),
+    [conversationId, mode, onReasoningExpand, onTtsCacheKey, reasoningExpanded, userAvatarUrl],
   );
+
+  useEffect(() => stopTtsPlayback, [conversationId]);
 
   useEffect(() => {
     let active = true;

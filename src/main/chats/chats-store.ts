@@ -346,6 +346,25 @@ export function appendMessage(id: string, message: ChatMessage): ChatSession | n
   return session;
 }
 
+/** 仅回写模型消息的 TTS 缓存引用，不改变会话的业务修改时间。 */
+export function setMessageTtsCacheKey(
+  id: string,
+  messageId: string,
+  cacheKey: string,
+  converterVersion: string,
+): ChatSession | null {
+  if (!/^(minimax|gptsovits|custom-cloud|mimo|mossland)-[a-f0-9]{64}$/.test(cacheKey)) return null;
+  if (!/^[a-z\d][a-z\d._-]{0,63}$/i.test(converterVersion)) return null;
+  const session = readSessionFile(id);
+  if (!session) return null;
+  const message = session.messages.find((item) => item.id === messageId && item.role === "model");
+  if (!message) return null;
+  message.ttsCacheKey = cacheKey;
+  message.ttsCacheVersion = converterVersion;
+  writeSessionFile(session);
+  return session;
+}
+
 // 批量覆盖整个 messages 数组（聊天窗口流式结束/清空/错误等场景用）。
 // updatedAt 一并刷新；用户没手动改名时根据新内容重新派生。
 export function replaceMessages(id: string, messages: ChatMessage[]): ChatSession | null {

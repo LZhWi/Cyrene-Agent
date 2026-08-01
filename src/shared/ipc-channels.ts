@@ -102,6 +102,7 @@ export const IPC = {
   CHATS_GET_PAGE: "chats:get-page",
   CHATS_CREATE: "chats:create",
   CHATS_APPEND: "chats:append",
+  CHATS_SET_MESSAGE_TTS_CACHE: "chats:set-message-tts-cache",
   CHATS_REPLACE_MESSAGES: "chats:replace-messages",
   CHATS_REPLACE_TAIL: "chats:replace-tail",
   CHATS_RENAME: "chats:rename",
@@ -242,6 +243,9 @@ export const IPC = {
   TTS_AUDIO_CHUNK: "tts:audio-chunk",             // main → 渲染端：推一段音频 base64
   TTS_STREAM_END: "tts:stream-end",               // main → 渲染端：流式结束（含 cacheKey）
   TTS_STREAM_ERROR: "tts:stream-error",           // main → 渲染端：流式错误
+  TTS_SESSION_START: "tts:session-start",
+  TTS_SESSION_CANCEL: "tts:session-cancel",
+  TTS_SESSION_EVENT: "tts:session-event",
   TTS_SAVE_SETTINGS: "tts:save-settings",   // 保存 TTS 配置
   TTS_LOAD_SETTINGS: "tts:load-settings",   // 加载 TTS 配置
   TTS_PICK_AUDIO: "tts:pick-audio",         // 选择音频文件（dialog）
