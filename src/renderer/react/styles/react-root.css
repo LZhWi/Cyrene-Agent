@@ -1,7 +1,7 @@
 /* ===== 设计变量 ===== */
 :root {
   /* 背景 */
-  --cy-bg-page: #FBFAF9;
+  --cy-bg-page: #F8F7F6;
   --cy-bg-workspace: #ffffff;
   --cy-bg-hover: #fff1f6;
   --cy-bg-active: #fde0ed;
@@ -23,10 +23,10 @@
 
   /* 投影 */
   --cy-shadow-workspace: inset 0 2px 8px rgba(31, 35, 48, 0.04), inset 0 0 2px rgba(31, 35, 48, 0.03);
-  --cy-shadow-bubble-neutral: 0 1px 3px rgba(31, 35, 48, 0.06), 0 4px 16px rgba(31, 35, 48, 0.055);
-  --cy-shadow-bubble-accent: 0 2px 4px rgba(255, 91, 138, 0.12), 0 6px 16px rgba(255, 91, 138, 0.16);
-  --cy-shadow-control-hover: 0 2px 5px rgba(31, 35, 48, 0.075), 0 7px 18px rgba(31, 35, 48, 0.065);
-  --cy-shadow-control-focus: 0 0 0 3px rgba(255, 91, 138, 0.10), 0 5px 16px rgba(31, 35, 48, 0.08);
+  --cy-shadow-bubble-neutral: 2px 2px 3px rgba(31, 35, 48, 0.06), 3px 5px 16px rgba(31, 35, 48, 0.055);
+  --cy-shadow-bubble-accent: 2px 2px 4px rgba(255, 91, 138, 0.12), 3px 7px 16px rgba(255, 91, 138, 0.16);
+  --cy-shadow-control-hover: 2px 2px 5px rgba(31, 35, 48, 0.075), 3px 8px 18px rgba(31, 35, 48, 0.065);
+  --cy-shadow-control-focus: 0 0 0 3px rgba(255, 91, 138, 0.10), 2px 6px 16px rgba(31, 35, 48, 0.08);
 }
 
 html, body {

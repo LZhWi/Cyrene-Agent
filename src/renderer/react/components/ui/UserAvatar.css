@@ -18,7 +18,7 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
-  filter: drop-shadow(0 2px 5px rgba(76, 55, 98, 0.16));
+  filter: drop-shadow(0 2px 8px rgba(76, 55, 98, 0.22));
 }
 
 .cy-user-avatar-circle span {
