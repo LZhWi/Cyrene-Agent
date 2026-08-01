@@ -1,9 +1,11 @@
 import { Bubble, CodeHighlighter, Think, type BubbleItemType } from "@ant-design/x";
 import { XMarkdown, type ComponentProps } from "@ant-design/x-markdown";
 import Latex from "@ant-design/x-markdown/plugins/Latex";
-import { useCallback, useEffect, useMemo, useState, type KeyboardEvent, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useMemo, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
 import type { ConversationMode } from "../../../../../shared/chat-types";
+import thinkingMoodUrl from "../../../assets/status-moods/思考中.png?url";
+import completedThinkingMoodUrl from "../../../assets/status-moods/提醒.png?url";
 import { useUserAvatar } from "../../../hooks/useUserAvatar";
 import {
   assistantRenderStages,
@@ -66,21 +68,51 @@ function MarkdownCode({ children, lang, block }: ComponentProps<{ children?: Rea
   );
 }
 
+class MarkdownRenderBoundary extends Component<{
+  content: string;
+  children: ReactNode;
+}, { failed: boolean }> {
+  state = { failed: false };
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo): void {
+    console.error("[ReactChat] Markdown/KaTeX 渲染失败，已降级为原始文本", error, info);
+  }
+
+  componentDidUpdate(previousProps: Readonly<{ content: string }>): void {
+    if (previousProps.content !== this.props.content && this.state.failed) {
+      this.setState({ failed: false });
+    }
+  }
+
+  render(): ReactNode {
+    if (this.state.failed) {
+      return <pre className="cy-message-markdown-fallback">{this.props.content}</pre>;
+    }
+    return this.props.children;
+  }
+}
+
 function MarkdownContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
   return (
-    <XMarkdown
-      content={content}
-      config={markdownConfig}
-      components={{ code: MarkdownCode }}
-      openLinksInNewTab
-      escapeRawHtml
-      rootClassName="cy-message-markdown"
-      streaming={{
-        hasNextChunk: streaming,
-        enableAnimation: streaming,
-        tail: streaming ? { content: "●" } : false,
-      }}
-    />
+    <MarkdownRenderBoundary content={content}>
+      <XMarkdown
+        content={content}
+        config={markdownConfig}
+        components={{ code: MarkdownCode }}
+        openLinksInNewTab
+        escapeRawHtml
+        rootClassName="cy-message-markdown"
+        streaming={{
+          hasNextChunk: streaming,
+          enableAnimation: streaming,
+          tail: streaming ? { content: "●" } : false,
+        }}
+      />
+    </MarkdownRenderBoundary>
   );
 }
 
@@ -123,11 +155,32 @@ function ReasoningContent({
   expanded: boolean;
   onExpand: (expanded: boolean) => void;
 }) {
+  const statusArt = loading ? thinkingMoodUrl : completedThinkingMoodUrl;
   return (
     <Think
       rootClassName="cy-message-reasoning"
       title={loading ? "正在思考…" : "思考完成"}
-      loading={loading}
+      icon={
+        <span className={`cy-reasoning-status-art${loading ? " is-thinking" : " is-complete"}`} aria-hidden="true">
+          <img src={statusArt} alt="" draggable={false} />
+          {loading && (
+            <svg className="cy-reasoning-status-art__orbit" viewBox="0 0 34 20" fill="none">
+              <circle cx="5" cy="12" r="2.2" fill="currentColor">
+                <animate attributeName="opacity" values=".28;1;.28" dur="1.15s" repeatCount="indefinite" />
+                <animate attributeName="cy" values="12;8;12" dur="1.15s" repeatCount="indefinite" />
+              </circle>
+              <circle cx="17" cy="7" r="2.8" fill="currentColor">
+                <animate attributeName="opacity" values=".28;1;.28" dur="1.15s" begin=".16s" repeatCount="indefinite" />
+                <animate attributeName="cy" values="7;3;7" dur="1.15s" begin=".16s" repeatCount="indefinite" />
+              </circle>
+              <circle cx="29" cy="11" r="2.2" fill="currentColor">
+                <animate attributeName="opacity" values=".28;1;.28" dur="1.15s" begin=".32s" repeatCount="indefinite" />
+                <animate attributeName="cy" values="11;7;11" dur="1.15s" begin=".32s" repeatCount="indefinite" />
+              </circle>
+            </svg>
+          )}
+        </span>
+      }
       blink={loading}
       expanded={expanded}
       onExpand={onExpand}

@@ -156,6 +156,51 @@
   color: var(--cy-text-muted);
 }
 
+.cy-message-reasoning .ant-think-status-icon {
+  width: 38px;
+  height: 38px;
+  overflow: visible;
+}
+
+.cy-reasoning-status-art {
+  position: relative;
+  display: block;
+  width: 38px;
+  height: 38px;
+  color: #b15b8a;
+}
+
+.cy-reasoning-status-art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.cy-reasoning-status-art.is-thinking img {
+  transform: translateY(1px);
+}
+
+.cy-reasoning-status-art__orbit {
+  position: absolute;
+  top: -2px;
+  left: -4px;
+  width: 30px;
+  height: 18px;
+  overflow: visible;
+  filter: drop-shadow(0 1px 1px rgb(255 255 255 / 72%));
+}
+
+.cy-reasoning-status-art.is-complete {
+  animation: cy-reasoning-complete-pop 360ms cubic-bezier(0.22, 0.8, 0.32, 1) both;
+}
+
+@keyframes cy-reasoning-complete-pop {
+  0% { transform: scale(0.84) rotate(-4deg); opacity: 0.35; }
+  70% { transform: scale(1.08) rotate(2deg); opacity: 1; }
+  100% { transform: scale(1) rotate(0); opacity: 1; }
+}
+
 .cy-message-reasoning .ant-think-content {
   padding-block-start: 8px;
 }
@@ -212,6 +257,20 @@
 .cy-message-markdown pre {
   max-width: 100%;
   overflow-x: auto;
+}
+
+.cy-message-markdown-fallback {
+  max-width: min(760px, 100%);
+  margin: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 1px solid rgb(31 35 48 / 10%);
+  border-radius: 10px;
+  background: #f2f2f3;
+  color: var(--cy-text);
+  font: 12px/1.6 Consolas, "Cascadia Code", monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .cy-message-markdown .katex-display {
@@ -446,5 +505,9 @@
   .cy-last-turn-action__regenerate-icon {
     animation: none !important;
     transition: none;
+  }
+
+  .cy-reasoning-status-art.is-complete {
+    animation: none;
   }
 }
