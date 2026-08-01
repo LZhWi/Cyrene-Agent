@@ -20,6 +20,13 @@
   --cy-pill-bg: #fff9fb;
   --cy-pill-border: #ff9fbd;
   --cy-pill-status: #7d3557;
+
+  /* 投影 */
+  --cy-shadow-workspace: 0 2px 6px rgba(31, 35, 48, 0.05), 0 16px 40px rgba(31, 35, 48, 0.10);
+  --cy-shadow-bubble-neutral: 0 1px 3px rgba(31, 35, 48, 0.06), 0 4px 16px rgba(31, 35, 48, 0.055);
+  --cy-shadow-bubble-accent: 0 2px 4px rgba(255, 91, 138, 0.12), 0 6px 16px rgba(255, 91, 138, 0.16);
+  --cy-shadow-control-hover: 0 2px 5px rgba(31, 35, 48, 0.075), 0 7px 18px rgba(31, 35, 48, 0.065);
+  --cy-shadow-control-focus: 0 0 0 3px rgba(255, 91, 138, 0.10), 0 5px 16px rgba(31, 35, 48, 0.08);
 }
 
 html, body {
@@ -177,6 +184,7 @@ html, body {
   background: var(--cy-bg-workspace);
   border-radius: 10px;
   border: 1px solid var(--cy-border);
+  box-shadow: var(--cy-shadow-workspace);
   position: relative;
   display: flex;
   min-height: 0;

@@ -16,16 +16,16 @@
 }
 
 .cy-message .ant-bubble-avatar {
-  width: 46px;
-  height: 46px;
-  flex: 0 0 46px;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
 }
 
 .cy-message-avatar__image,
 .cy-message-avatar__user {
   display: flex;
-  width: 46px;
-  height: 46px;
+  width: 38px;
+  height: 38px;
   box-sizing: border-box;
   align-items: center;
   justify-content: center;
@@ -34,6 +34,7 @@
 
 .cy-message-avatar__image {
   object-fit: cover;
+  filter: drop-shadow(0 2px 5px rgba(76, 55, 98, 0.16));
 }
 
 .cy-message-avatar__user {
@@ -48,6 +49,7 @@
   border-radius: 16px 16px 4px;
   background: var(--cy-accent);
   color: #fff;
+  box-shadow: var(--cy-shadow-bubble-accent);
 }
 
 .cy-message--user:has(.cy-message__sticker:only-child) .ant-bubble-content {
@@ -123,6 +125,8 @@
   border-radius: 4px 16px 16px;
   background: #f7f7f7;
   color: var(--cy-text);
+  border: 1px solid rgba(31, 35, 48, 0.065);
+  box-shadow: var(--cy-shadow-bubble-neutral);
 }
 
 .cy-message--assistant .ant-bubble-body {

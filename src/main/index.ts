@@ -2774,7 +2774,7 @@ function broadcastToAuxWindows(channel: string, payload: unknown): void {
 }
 
 function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
-  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, chatWindow, reactPreviewWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_THEME_CHANGED, theme);
     }
@@ -2782,7 +2782,7 @@ function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
 }
 
 function broadcastUiThemeRadiusChanged(theme: GeneralSettings["uiThemeRadius"]): void {
-  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
+  for (const win of [mainWindow, chatWindow, reactPreviewWindow, sidebarWindow, tasksWindow, settingsWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_THEME_RADIUS_CHANGED, theme);
     }
@@ -2807,7 +2807,7 @@ function broadcastWindowCornerRadiusChanged(radius: GeneralSettings["windowCorne
 }
 
 function broadcastUiFontChanged(font: GeneralSettings["uiFont"]): void {
-  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, chatWindow, reactPreviewWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_FONT_CHANGED, font);
     }
