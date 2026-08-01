@@ -202,7 +202,10 @@
 .cy-message-markdown {
   min-width: 0;
   color: inherit;
-  font: 400 14px/1.65 var(--rb-font-sans, sans-serif);
+  font-weight: 400;
+  font-size: 14px;
+  line-height: var(--cy-chat-line-height, 1.75);
+  font-family: var(--rb-font-sans, sans-serif);
   user-select: text;
 }
 

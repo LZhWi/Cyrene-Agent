@@ -9,6 +9,8 @@ import { IPC } from "../shared/ipc-channels";
 import { normalizeUiTheme, type UiTheme } from "../shared/ui-theme";
 import { DEFAULT_UI_FONT, isSupportedFontFileName, normalizeUiFont, type UiFont } from "../shared/ui-font";
 import { normalizeUiIcon, UI_ICON_PRESETS, type UiIcon } from "../shared/ui-icon";
+import { normalizeChatAppearance, type ChatAppearanceSettings } from "../shared/chat-appearance";
+import { broadcastToAllWindows } from "./windows/broadcast";
 import {
   DEFAULT_WINDOW_CORNER_RADIUS,
   normalizeWindowCornerRadius,
@@ -656,7 +658,7 @@ interface UserProfile {
   gender: string;
 }
 
-interface GeneralSettings {
+interface GeneralSettings extends ChatAppearanceSettings {
   citaEnabled: boolean;
   citaSemanticEngine: "remote";
   /** Chat 模式的轻量社交上下文；默认关闭，开启后每轮最多多一次异步抽取调用。 */
@@ -984,6 +986,8 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   asrVadThreshold: 0.01,
   asrShowTranscript: false,
   screenshotHotkey: "Alt+Shift+S",
+  // Chat 排版（来自 ChatAppearanceSettings）
+  chatLineHeight: 1.75,
 };
 
 function getSettingsPath(): string {
@@ -1497,6 +1501,7 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     ttsMimoKey: typeof input?.ttsMimoKey === "string" ? input.ttsMimoKey : "",
     ttsMimoVoiceAudioPath: typeof input?.ttsMimoVoiceAudioPath === "string" ? input.ttsMimoVoiceAudioPath : "",
     ttsMimoStylePrompt: typeof input?.ttsMimoStylePrompt === "string" ? input.ttsMimoStylePrompt : DEFAULT_GENERAL_SETTINGS.ttsMimoStylePrompt,
+    ...normalizeChatAppearance(input),
   };
 }
 
@@ -1565,6 +1570,11 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   }
   if (JSON.stringify(before.uiFont) !== JSON.stringify(normalized.uiFont)) {
     broadcastUiFontChanged(normalized.uiFont);
+  }
+  const prevTypography = normalizeChatAppearance(before);
+  const nextTypography = normalizeChatAppearance(normalized);
+  if (prevTypography.chatLineHeight !== nextTypography.chatLineHeight) {
+    broadcastToAllWindows(IPC.CHAT_TYPOGRAPHY_CHANGED, nextTypography);
   }
   if (before.uiIcon !== normalized.uiIcon) {
     applyUiIcon(normalized.uiIcon);

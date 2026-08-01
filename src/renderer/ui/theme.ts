@@ -1,6 +1,7 @@
 import "./window-corner-radius";
 import { normalizeUiTheme, type UiTheme } from "../../shared/ui-theme";
 import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-font";
+import type { ChatAppearanceSettings } from "../../shared/chat-appearance";
 
 declare global {
   interface Window {
@@ -13,6 +14,10 @@ declare global {
     cyreneFont?: {
       get: () => Promise<UiFont>;
       onChanged: (callback: (font: UiFont) => void) => () => void;
+    };
+    cyreneAppearance?: {
+      get: () => Promise<ChatAppearanceSettings>;
+      onChanged: (callback: (settings: ChatAppearanceSettings) => void) => () => void;
     };
   }
 }

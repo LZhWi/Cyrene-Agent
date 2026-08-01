@@ -77,6 +77,7 @@ export const IPC = {
   UI_WINDOW_CORNER_RADIUS_CHANGED: "ui-window-corner-radius:changed",
   UI_FONT_GET: "ui-font:get",
   UI_FONT_CHANGED: "ui-font:changed",
+  CHAT_TYPOGRAPHY_CHANGED: "chat-typography:changed",
   SETTINGS_PICK_UI_FONT: "settings:pick-ui-font",
   SETTINGS_IMPORT_UI_FONT: "settings:import-ui-font",
   SETTINGS_RESET_UI_FONT: "settings:reset-ui-font",

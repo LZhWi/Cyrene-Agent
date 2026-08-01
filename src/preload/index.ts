@@ -7,6 +7,7 @@ import type { ReasoningPreference } from "../shared/reasoning";
 import type { DocumentIndexProgress } from "../main/rag/document-index-queue";
 import { getLive2DIpcListenerCounts } from "./live2d-listener-diagnostics";
 import { exposeMusicApi } from "./music";
+import { normalizeChatAppearance, type ChatAppearanceSettings } from "../shared/chat-appearance";
 
 const cyreneApi = {
   minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
@@ -245,6 +246,24 @@ const cyreneFontApi = {
 };
 
 contextBridge.exposeInMainWorld("cyreneFont", cyreneFontApi);
+
+const cyreneAppearanceApi = {
+  get: async () => {
+    const settings = await ipcRenderer.invoke(IPC.SETTINGS_GET_GENERAL);
+    return normalizeChatAppearance(settings);
+  },
+  onChanged: (callback: (settings: ChatAppearanceSettings) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: unknown) => {
+      callback(normalizeChatAppearance(payload));
+    };
+    ipcRenderer.on(IPC.CHAT_TYPOGRAPHY_CHANGED, listener);
+    return () => {
+      ipcRenderer.off(IPC.CHAT_TYPOGRAPHY_CHANGED, listener);
+    };
+  },
+};
+
+contextBridge.exposeInMainWorld("cyreneAppearance", cyreneAppearanceApi);
 
 const settingsApi = {
   minimize: () => ipcRenderer.send(IPC.SETTINGS_MINIMIZE),

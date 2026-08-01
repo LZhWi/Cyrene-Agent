@@ -34,6 +34,7 @@ import { requestTrackPlayback } from "./music-playback";
 import { type ReasoningPreference } from "../../shared/reasoning";
 import { type LoginFlowState } from "../../shared/music-types";
 import { resolveApiEndpoint, type ApiTransport } from "../../shared/api-endpoint";
+import type { ChatAppearanceSettings } from "../../shared/chat-appearance";
 import { renderMarkdown } from "../chat/markdown/markdown-renderer";
 import workFlowDocMd from "../../../docs/model-work-test/work-flow-test-results-2026-07-24.md?raw";
 import {
@@ -397,7 +398,7 @@ interface ModelPreset {
   hiddenInPresetList?: boolean;
 }
 
-interface GeneralSettings {
+interface GeneralSettings extends ChatAppearanceSettings {
   citaEnabled: boolean;
   citaSemanticEngine: "remote" | "local";
   chatSocialContextEnabled: boolean;
@@ -408,8 +409,6 @@ interface GeneralSettings {
   petAlwaysOnTop: boolean;
   petVisible: boolean;
   petZoom: number;
-  chatLineHeight: number;
-  chatParaSpacing: number;
   disableGpuElectron?: boolean;
   sidebarVisible: boolean;
   tasksVisible: boolean;
