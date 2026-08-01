@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 
 interface UserProfile {
   nickname?: string;
+  callPreference?: string;
 }
 
 interface UserProfileApi {
@@ -13,12 +14,17 @@ function userProfileApi(): UserProfileApi | undefined {
   return (window as typeof window & { user?: UserProfileApi }).user;
 }
 
-function normalizeNickname(profile?: UserProfile | null): string {
-  return typeof profile?.nickname === "string" ? profile.nickname.trim() : "";
+function normalizeProfileField(
+  profile: UserProfile | null | undefined,
+  field: keyof UserProfile,
+  fallback: string,
+): string {
+  const value = profile?.[field];
+  return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
 
-export function useUserNickname(): string {
-  const [nickname, setNickname] = useState("");
+function useUserProfileField(field: keyof UserProfile, fallback: string): string {
+  const [value, setValue] = useState(fallback);
 
   useEffect(() => {
     let active = true;
@@ -26,20 +32,28 @@ export function useUserNickname(): string {
 
     void api?.getProfile()
       .then((profile) => {
-        if (active) setNickname(normalizeNickname(profile));
+        if (active) setValue(normalizeProfileField(profile, field, fallback));
       })
       .catch(() => {
-        if (active) setNickname("");
+        if (active) setValue(fallback);
       });
 
     const unsubscribe = api?.onProfileChanged((profile) => {
-      if (active) setNickname(normalizeNickname(profile));
+      if (active) setValue(normalizeProfileField(profile, field, fallback));
     });
     return () => {
       active = false;
       unsubscribe?.();
     };
-  }, []);
+  }, [fallback, field]);
 
-  return nickname;
+  return value;
+}
+
+export function useUserNickname(): string {
+  return useUserProfileField("nickname", "");
+}
+
+export function useUserCallPreference(): string {
+  return useUserProfileField("callPreference", "伙伴");
 }

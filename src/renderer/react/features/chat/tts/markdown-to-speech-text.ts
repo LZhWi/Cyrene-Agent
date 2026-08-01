@@ -1,10 +1,11 @@
 import { marked, type Token, type Tokens } from "marked";
 
-export const SPEECH_TEXT_CONVERTER_VERSION = "markdown-v1";
+export const SPEECH_TEXT_CONVERTER_VERSION = "markdown-v2";
 
 export interface SpeechTextOptions {
   mode?: "default" | "learn";
   maxTableRows?: number;
+  preferredAddress?: string;
 }
 
 export interface SpeechTextResult {
@@ -35,6 +36,10 @@ const LANGUAGE_NAMES: Record<string, string> = {
   rust: "Rust",
   go: "Go",
 };
+
+function preferredAddress(options: SpeechTextOptions): string {
+  return options.preferredAddress?.trim() || "伙伴";
+}
 
 function addWarning(warnings: string[], warning: string): void {
   if (!warnings.includes(warning)) warnings.push(warning);
@@ -107,7 +112,7 @@ function replaceMath(text: string, options: SpeechTextOptions, warnings: string[
   const convert = (_match: string, latex: string): string => {
     if (isComplexLatex(latex) && options.mode !== "learn") {
       addWarning(warnings, "complex-formula-skipped");
-      return "伙伴，请查看下面的公式";
+      return `${preferredAddress(options)}，请查看下面的公式`;
     }
     return latexToSpeech(latex);
   };
@@ -174,7 +179,7 @@ function tableText(token: Tokens.Table, options: SpeechTextOptions, warnings: st
   const maxRows = Math.max(1, options.maxTableRows ?? 4);
   if (token.rows.length > maxRows) {
     addWarning(warnings, "large-table-skipped");
-    return "伙伴，请查看下面的表格。";
+    return `${preferredAddress(options)}，请查看下面的表格。`;
   }
   const headers = token.header.map((cell) => stripTerminalPunctuation(inlineText(cell.tokens, options, warnings)));
   return token.rows.map((row, rowIndex) => {
@@ -215,7 +220,7 @@ function blockText(tokens: Token[], options: SpeechTextOptions, warnings: string
       case "code": {
         const language = token.lang?.trim().split(/\s+/)[0].toLowerCase() ?? "";
         const label = LANGUAGE_NAMES[language] ?? (language ? spokenIdentifier(language) : "");
-        blocks.push(`伙伴，请查看下面的${label ? ` ${label} ` : ""}代码块。`);
+        blocks.push(`${preferredAddress(options)}，请查看下面的${label ? ` ${label} ` : ""}代码块。`);
         break;
       }
       case "table":

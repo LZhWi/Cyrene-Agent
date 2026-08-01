@@ -11,6 +11,7 @@ import { CharacterStatusPill } from "../../../components/ui/CharacterStatusPill"
 import { WindowControls } from "../../../components/ui/WindowControls";
 import { SettingsButton } from "../../../components/ui/SettingsButton";
 import { UserAvatar } from "../../../components/ui/UserAvatar";
+import { useUserCallPreference } from "../../../hooks/useUserNickname";
 import { NewTaskButton } from "../../../components/ui/NewTaskButton";
 import "../../../components/ui/SidebarToggle.css";
 import "../../../components/ui/ModeSwitch.css";
@@ -155,6 +156,7 @@ function toUiMessages(session: ChatSession): ChatMessageItem[] {
 }
 
 export function ChatPage() {
+  const preferredAddress = useUserCallPreference();
   const [collapsed, setCollapsed] = useState(false);
   const [mode, setMode] = useState<ConversationMode>("chat");
   const [drafts, setDrafts] = useState<Record<string, string>>({});
@@ -283,6 +285,7 @@ export function ChatPage() {
           messageId,
           text: segment,
           speechMode: targetMode === "learn" ? "learn" : "default",
+          preferredAddress,
           automatic: true,
         });
       },
@@ -887,6 +890,7 @@ export function ChatPage() {
             messages={messages}
             conversationId={activeSessionId}
             mode={mode}
+            preferredAddress={preferredAddress}
             onTtsCacheKey={activeSessionId
               ? (messageId, cacheKey, converterVersion) => handleTtsCacheKey(
                 mode,

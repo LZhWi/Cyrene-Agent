@@ -11,6 +11,7 @@ interface TtsButtonProps {
   messageId: string;
   text: string;
   speechMode?: "default" | "learn";
+  preferredAddress?: string;
   onCacheKey?: (cacheKey: string, converterVersion: string) => void;
   size?: number;
   color?: string;
@@ -30,6 +31,7 @@ export function TtsButton({
   messageId,
   text,
   speechMode,
+  preferredAddress,
   onCacheKey,
   size = 16,
   color = "#8e8e93",
@@ -46,7 +48,14 @@ export function TtsButton({
     <button
       type="button"
       className={`cy-tts-button is-${status}`}
-      onClick={() => void toggleTtsPlayback({ conversationId, messageId, text, speechMode, onCacheKey })}
+      onClick={() => void toggleTtsPlayback({
+        conversationId,
+        messageId,
+        text,
+        speechMode,
+        preferredAddress,
+        onCacheKey,
+      })}
       aria-label={label}
       title={status === "error" ? playback.error ?? label : label}
       disabled={status === "synthesizing"}

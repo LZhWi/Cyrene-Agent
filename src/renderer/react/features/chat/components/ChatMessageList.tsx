@@ -45,6 +45,7 @@ interface ChatMessageListProps {
   messages: ChatMessageItem[];
   conversationId?: string;
   mode: ConversationMode;
+  preferredAddress: string;
   onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void;
 }
 
@@ -210,6 +211,7 @@ function createRoles(
   userAvatarUrl: string | null,
   conversationId: string | undefined,
   mode: ConversationMode,
+  preferredAddress: string,
   reasoningExpanded: Readonly<Record<string, boolean>>,
   onReasoningExpand: (id: string, expanded: boolean) => void,
   onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void,
@@ -256,6 +258,7 @@ function createRoles(
               messageId={messageId}
               text={cleanText}
               speechMode={mode === "learn" ? "learn" : "default"}
+              preferredAddress={preferredAddress}
               onCacheKey={(cacheKey, converterVersion) => onTtsCacheKey?.(messageId, cacheKey, converterVersion)}
             />
           )}
@@ -335,7 +338,7 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
   });
 }
 
-export function ChatMessageList({ messages, conversationId, mode, onTtsCacheKey }: ChatMessageListProps) {
+export function ChatMessageList({ messages, conversationId, mode, preferredAddress, onTtsCacheKey }: ChatMessageListProps) {
   const userAvatarUrl = useUserAvatar();
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
   const [reasoningExpanded, setReasoningExpanded] = useState<Record<string, boolean>>({});
@@ -343,8 +346,8 @@ export function ChatMessageList({ messages, conversationId, mode, onTtsCacheKey 
     setReasoningExpanded((current) => updateReasoningExpanded(current, id, expanded));
   }, []);
   const roles = useMemo(
-    () => createRoles(userAvatarUrl, conversationId, mode, reasoningExpanded, onReasoningExpand, onTtsCacheKey),
-    [conversationId, mode, onReasoningExpand, onTtsCacheKey, reasoningExpanded, userAvatarUrl],
+    () => createRoles(userAvatarUrl, conversationId, mode, preferredAddress, reasoningExpanded, onReasoningExpand, onTtsCacheKey),
+    [conversationId, mode, onReasoningExpand, onTtsCacheKey, preferredAddress, reasoningExpanded, userAvatarUrl],
   );
 
   useEffect(() => stopTtsPlayback, [conversationId]);

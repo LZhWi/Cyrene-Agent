@@ -30,6 +30,27 @@ describe("markdownToSpeechText", () => {
     expect(result.text).not.toContain("do not read");
   });
 
+  it("uses the preferred address for visual-only code, formula, and table prompts", () => {
+    const code = markdownToSpeechText("```ts\nconst value = 1;\n```", { preferredAddress: "P宝" });
+    const formula = markdownToSpeechText(
+      "$$\\int_{-\\infty}^{\\infty} e^{-x^2} dx = \\sqrt{\\pi}$$",
+      { preferredAddress: "P宝" },
+    );
+    const table = markdownToSpeechText(
+      "|列|\n|-|\n|1|\n|2|\n|3|\n|4|\n|5|",
+      { preferredAddress: "P宝", maxTableRows: 4 },
+    );
+
+    expect(code.text).toContain("P宝，请查看下面的 TypeScript 代码块");
+    expect(formula.text).toContain("P宝，请查看下面的公式");
+    expect(table.text).toContain("P宝，请查看下面的表格");
+  });
+
+  it("falls back to 伙伴 when the preferred address is blank", () => {
+    const result = markdownToSpeechText("```ts\nconst value = 1;\n```", { preferredAddress: "   " });
+    expect(result.text).toContain("伙伴，请查看下面的 TypeScript 代码块");
+  });
+
   it("keeps short inline code but replaces paths and hashes", () => {
     const result = markdownToSpeechText(
       "调用 `useState`，打开 C:\\Users\\Cyrene\\project\\index.ts，提交 0123456789abcdef0123456789abcdef01234567。",

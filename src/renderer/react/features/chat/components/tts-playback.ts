@@ -21,6 +21,7 @@ export interface TtsPlaybackRequest {
   messageId: string;
   text: string;
   speechMode?: SpeechTextOptions["mode"];
+  preferredAddress?: string;
   automatic?: boolean;
   onCacheKey?: (cacheKey: string, converterVersion: string) => void;
 }
@@ -317,7 +318,10 @@ export async function startTtsPlayback(request: TtsPlaybackRequest): Promise<voi
   stopTtsPlayback();
   const generation = ++requestGeneration;
   const requestId = crypto.randomUUID();
-  const speech = markdownToSpeechText(request.text, { mode: request.speechMode });
+  const speech = markdownToSpeechText(request.text, {
+    mode: request.speechMode,
+    preferredAddress: request.preferredAddress,
+  });
   if (!speech.text) {
     if (!request.automatic) publish({ messageId: request.messageId, status: "error", error: "这条消息没有可朗读的内容" });
     return;
