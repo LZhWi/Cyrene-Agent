@@ -5,6 +5,19 @@
   flex-direction: column;
   overflow: hidden;
   color: var(--cy-text);
+  font-family: var(--rb-font-sans, sans-serif);
+}
+
+.cy-conversation-sidebar .ant-conversations {
+  font: inherit;
+}
+
+.cy-conversation-sidebar .ant-conversations-item {
+  font: inherit;
+}
+
+.cy-conversation-sidebar .ant-conversations-label {
+  font: inherit;
 }
 
 .cy-conversation-sidebar__title {
