@@ -84,7 +84,7 @@ import { invokeLangChainStructured } from "./orchestrator/structured-output/lang
 import { testVendorConnection } from "./orchestrator/vendors/test-connection";
 import { migrateLegacyMinimaxDefaults } from "./orchestrator/vendors/minimax-defaults";
 import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
-import { setVendorRuntimeSettingsGetter } from "./orchestrator/vendors/runtime-settings";
+import { resolveVendorRuntimeSettings, setVendorRuntimeSettingsGetter } from "./orchestrator/vendors/runtime-settings";
 import { resolveApprovedStyleSampling } from "./orchestrator/vendors/style-sampling";
 import type { VisionConfig } from "./orchestrator/vision-captioner";
 import { toolRegistry, type ToolDefinition } from "./orchestrator/tool-registry";
@@ -3104,13 +3104,9 @@ function createWindow(): void {
   applyGeneralSettings(loadGeneralSettings());
 
   // 厂商适配层保持独立可测试；通过 getter 实时读取全局模型开关，避免反向依赖主进程入口。
-  setVendorRuntimeSettingsGetter(() => {
-    const modelSettings = loadModelSettings();
-    return {
-      thinkingOverride: modelSettings.thinkingOverride,
-      disableMaxToken: modelSettings.disableMaxToken,
-    };
-  });
+  // thinkingOverride / disableMaxToken 仅对自定义端点生效（preset 厂商由 capability 表 + chat 下拉控制），
+  // 详见 resolveVendorRuntimeSettings 的实现与单元测试。
+  setVendorRuntimeSettingsGetter(() => resolveVendorRuntimeSettings(loadModelSettings()));
 
   // 注入天气工具配置获取器：每次工具执行时实时读 key/默认城市
   // （用户改了设置不用重启就能生效）
