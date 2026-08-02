@@ -67,7 +67,8 @@ export function normalizeChatMessagesWithTime(input: unknown): ChatContextMessag
     .slice(-24);
 }
 
-function formatLocalTime(timestamp: number, timezone: string): string {
+/** 格式化本地时间（分钟精度）：与消息时间戳前缀同格式，供尾部动态区的当前时钟复用（build-options）。 */
+export function formatLocalTime(timestamp: number, timezone: string): string {
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: resolveChatContextTimezone(timezone),
     year: "numeric",

@@ -130,6 +130,36 @@ describe("build-options", () => {
     expect(result.options.soulSystemBaseContent).not.toContain("当前回复阶段工具调用环节已经结束")
   })
 
+  it("尾部动态区携带当前时钟：无 tone-anchor 时也存在，有时则时钟在前锚点在后", async () => {
+    // 无 loadToneAnchor：soulTailAnchorContent 仍应携带时钟（时钟已从 system 前缀头部移出，不能丢）
+    const bare = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "你好" }],
+      style: "01_default.md",
+    }, createBuildDeps())
+    expect(bare.options.soulTailAnchorContent).toContain("[当前时间]")
+
+    // 有 tone-anchor：时钟在前，硬规则锚点更靠近生成点
+    const deps = createBuildDeps()
+    deps.loadToneAnchor = () => "ANCHOR_RULES"
+    const withAnchor = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "你好" }],
+      style: "01_default.md",
+    }, deps)
+    const tail = withAnchor.options.soulTailAnchorContent ?? ""
+    expect(tail).toContain("ANCHOR_RULES")
+    expect(tail.indexOf("[当前时间]")).toBeLessThan(tail.indexOf("ANCHOR_RULES"))
+  })
+
+  it("system 前缀不再含分钟级时钟（prompt 缓存前缀稳定性）", async () => {
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "你好" }],
+      style: "01_default.md",
+    }, createBuildDeps())
+    // 时钟只允许出现在尾部动态区，两套 system 前缀都不应有 [当前时间] 段
+    expect(result.options.soulSystemBaseContent).not.toContain("[当前时间]")
+    expect(result.options.toolSystemContent).not.toContain("[当前时间]")
+  })
+
   it("keeps enabled music and weather tools available in Talk mode and hides unrelated tools", async () => {
     const deps = createBuildDeps()
     deps.toolRegistry.getEnabled = () => [

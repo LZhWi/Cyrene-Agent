@@ -124,6 +124,15 @@ describe("OpenAICompatAdapter", () => {
     expect(chunk?.usage).toEqual({ input: 10, output: 20 });
   });
 
+  test("parseStreamEvent: usage 块带 cached_tokens（Kimi 顶层字段）→ chunk.usage.cachedInput", () => {
+    const adapter = new OpenAICompatAdapter("test-openai", capability);
+    const chunk = adapter.parseStreamEvent({
+      eventType: "data",
+      data: JSON.stringify({ usage: { prompt_tokens: 100, completion_tokens: 20, cached_tokens: 80 } }),
+    });
+    expect(chunk?.usage).toEqual({ input: 100, output: 20, cachedInput: 80 });
+  });
+
   test("parseResponse: 同时返回 reasoning_content 与 content → assistantMessage 双字段", () => {
     const adapter = new OpenAICompatAdapter("test-openai", capability);
     const resp = adapter.parseResponse({
@@ -166,6 +175,56 @@ describe("OpenAICompatAdapter", () => {
     ]);
     expect(resp.finishReason).toBe("tool_calls");
     expect(resp.assistantMessage.toolCalls).toEqual(resp.toolCalls);
+  });
+
+  // ─── 缓存命中数解析 + 缓存 key 分阶段 ───
+
+  test("parseResponse: Kimi 顶层 cached_tokens → usage.cachedInput；未上报时无该字段", () => {
+    const adapter = new OpenAICompatAdapter("test-openai", capability);
+    const withCached = adapter.parseResponse({
+      choices: [{ message: { role: "assistant", content: "hi" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1000, completion_tokens: 50, cached_tokens: 900 },
+    });
+    expect(withCached.usage).toEqual({ input: 1000, output: 50, cachedInput: 900 });
+
+    const noCached = adapter.parseResponse({
+      choices: [{ message: { role: "assistant", content: "hi" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1000, completion_tokens: 50 },
+    });
+    expect(noCached.usage).toEqual({ input: 1000, output: 50 });
+    expect(noCached.usage).not.toHaveProperty("cachedInput");
+  });
+
+  test("parseResponse: OpenAI 官方格式 prompt_tokens_details.cached_tokens 优先于顶层字段", () => {
+    const adapter = new OpenAICompatAdapter("test-openai", capability);
+    const resp = adapter.parseResponse({
+      choices: [{ message: { role: "assistant", content: "hi" }, finish_reason: "stop" }],
+      usage: { prompt_tokens: 1000, completion_tokens: 50, prompt_tokens_details: { cached_tokens: 768 } },
+    });
+    expect(resp.usage?.cachedInput).toBe(768);
+  });
+
+  test("applyCacheHints: 按阶段拆 key（带 tools → :tool，不带 → :soul）；非 prompt_cache_key 厂商不动请求", () => {
+    const kimiLike = new OpenAICompatAdapter("kimi", { ...capability, id: "kimi", cacheStrategy: "prompt_cache_key" });
+    const toolReq = kimiLike.applyCacheHints(
+      { model: "m", messages: [], tools: [{ name: "t", description: "d", parameters: {} }] },
+      { provider: "p", baseUrl: "u", model: "m", apiKey: "k" },
+    );
+    expect(toolReq.extraBody?.prompt_cache_key).toBe("cyrene:kimi:tool");
+
+    const soulReq = kimiLike.applyCacheHints(
+      { model: "m", messages: [] },
+      { provider: "p", baseUrl: "u", model: "m", apiKey: "k" },
+    );
+    expect(soulReq.extraBody?.prompt_cache_key).toBe("cyrene:kimi:soul");
+
+    // cacheStrategy=none（默认 capability）：原样返回，不注入 extraBody
+    const plain = new OpenAICompatAdapter("test-openai", capability);
+    const untouched = plain.applyCacheHints(
+      { model: "m", messages: [] },
+      { provider: "p", baseUrl: "u", model: "m", apiKey: "k" },
+    );
+    expect(untouched.extraBody).toBeUndefined();
   });
 
   // ─── 多轮工具调用：appendToolResults + buildRequest 端到端 ───

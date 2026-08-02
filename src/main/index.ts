@@ -1734,7 +1734,7 @@ async function callChatCompletionsStream(
       }
       // thinking 累积但不入可见流（stripThinkBlocks 末尾统一剥）
       if (chunk.usage) {
-        recordUsage(chunk.usage.input, chunk.usage.output, 1);
+        recordUsage(chunk.usage.input, chunk.usage.output, 1, chunk.usage.cachedInput);
       }
       if (chunk.done) break;
     }
@@ -2066,7 +2066,9 @@ function initializeProactiveChatService(): void {
           reasoning: settings.reasoning,
         },
         messages,
-        timeoutMs: 45_000,
+        // 非流式请求：45s 内必须拿到整个响应。开思考后思考 token 拉长墙钟时间容易撞墙，
+        // 放宽到 90s 覆盖长尾。纯后台判断没人等待，且等待期间用户活动会 +epoch 丢弃过期结果。
+        timeoutMs: 90_000,
       });
     },
     getFallback: async (candidate) => getPresetFallback(candidate.sceneId, new Date().getHours()),

@@ -6,9 +6,9 @@ import { toolRegistry } from "./tool-registry";
 import { addMcpServer } from "./mcp-manager";
 import { sendToLive2DWindow } from "../index";
 import { createPlayLive2DActionTool } from "./tools/play-live2d-action";
-import type { WeatherCardData } from "../../shared/weather-card";
+import type { WeatherCardData, WeatherForecastDay } from "../../shared/weather-card";
 
-export type { WeatherCardData };
+export type { WeatherCardData, WeatherForecastDay };
 
 const LOG_PREFIX = "[BuiltinTools]";
 
@@ -472,12 +472,13 @@ async function omFetchWeather(city: string): Promise<string> {
   if (!loc) {
     return `[错误] 找不到城市"${city}"，请确认城市名（支持中文/拼音）。`;
   }
-  const params = [
+  const currentParams = [
     "temperature_2m", "relative_humidity_2m", "apparent_temperature",
     "precipitation", "weather_code", "wind_speed_10m", "wind_direction_10m",
-    "surface_pressure",
+    "surface_pressure", "uv_index", "visibility",
   ].join(",");
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&current=${params}`;
+  const dailyParams = ["temperature_2m_max", "temperature_2m_min", "weather_code", "wind_speed_10m_max", "wind_direction_10m_dominant"].join(",");
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&current=${currentParams}&daily=${dailyParams}&timezone=auto`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), WEATHER_TIMEOUT_MS);
   try {
@@ -488,6 +489,15 @@ async function omFetchWeather(city: string): Promise<string> {
         temperature_2m: number; relative_humidity_2m: number; apparent_temperature: number;
         precipitation: number; weather_code: number; wind_speed_10m: number;
         wind_direction_10m: number; surface_pressure: number;
+        uv_index: number; visibility: number;
+      };
+      daily?: {
+        time: string[];
+        temperature_2m_max: number[];
+        temperature_2m_min: number[];
+        weather_code: number[];
+        wind_speed_10m_max: number[];
+        wind_direction_10m_dominant: number[];
       };
     };
     const c = data.current;
@@ -497,6 +507,27 @@ async function omFetchWeather(city: string): Promise<string> {
     const adm = loc.admin1 ? `${loc.admin1}` : loc.country;
     const icon = weatherIconFromCode(c.weather_code);
 
+    // 解析 3 天预报（今天 + 未来 2 天）
+    const weekNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
+    const forecast: WeatherForecastDay[] = [];
+    if (data.daily?.time) {
+      const d = data.daily;
+      const count = Math.min(d.time.length, 3);
+      for (let i = 0; i < count; i++) {
+        const dt = new Date(d.time[i] + "T00:00:00");
+        forecast.push({
+          date: `${dt.getMonth() + 1}月${dt.getDate()}日`,
+          weekDay: i === 0 ? "今天" : weekNames[dt.getDay()],
+          textDay: omWeatherCodeText(d.weather_code[i]),
+          textNight: omWeatherCodeText(d.weather_code[i]),
+          hi: Math.round(d.temperature_2m_max[i]),
+          lo: Math.round(d.temperature_2m_min[i]),
+          windDir: omWindDir(d.wind_direction_10m_dominant[i]),
+          windScale: `${Math.round(d.wind_speed_10m_max[i])}km/h`,
+        });
+      }
+    }
+
     // 发送天气卡片数据给渲染端
     if (weatherCardCallback) {
       weatherCardCallback({
@@ -504,6 +535,9 @@ async function omFetchWeather(city: string): Promise<string> {
         text: wmoText, icon,
         humidity: c.relative_humidity_2m, windDir, windScale: `${c.wind_speed_10m}km/h`,
         precip: c.precipitation, pressure: Math.round(c.surface_pressure),
+        uv: c.uv_index, visibility: Math.round(c.visibility / 1000), // m → km
+        hi: forecast[0]?.hi, lo: forecast[0]?.lo,
+        ...(forecast.length > 0 ? { forecast } : {}),
         source: "Open-Meteo", updateTime: new Date().toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
       });
     }
@@ -572,35 +606,70 @@ async function amapResolveAdcode(city: string, key: string): Promise<AmapDistric
   }
 }
 
-/** 高德实时天气查询。 */
+/** 高德实时天气查询（实况 + 3 天预报并行请求）。 */
 async function amapFetchWeather(city: string, key: string): Promise<string> {
   const district = await amapResolveAdcode(city, key);
   if (!district) {
     return `[错误] 找不到城市"${city}"，请确认城市名（支持中文，如"无锡"）。`;
   }
-  const url = `https://restapi.amap.com/v3/weather/weatherInfo?city=${district.adcode}&extensions=base&key=${key}`;
+  const baseUrl = `https://restapi.amap.com/v3/weather/weatherInfo?city=${district.adcode}&key=${key}`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), WEATHER_TIMEOUT_MS);
   try {
-    const resp = await fetch(url, { signal: ctrl.signal });
-    if (!resp.ok) return `[错误] 天气查询失败：HTTP ${resp.status}`;
-    const data = await resp.json() as { status?: string; lives?: Array<{
+    const [baseResp, forecastResp] = await Promise.all([
+      fetch(`${baseUrl}&extensions=base`, { signal: ctrl.signal }),
+      fetch(`${baseUrl}&extensions=all`, { signal: ctrl.signal }),
+    ]);
+
+    // 解析实况
+    if (!baseResp.ok) return `[错误] 天气查询失败：HTTP ${baseResp.status}`;
+    const baseData = await baseResp.json() as { status?: string; lives?: Array<{
       province: string; city: string; weather: string; temperature: string;
       winddirection: string; windpower: string; humidity: string; reporttime: string;
     }> };
-    if (data.status !== "1" || !data.lives || data.lives.length === 0) {
-      return `[错误] 天气查询失败：高德返回 status=${data.status ?? "?"}`;
+    if (baseData.status !== "1" || !baseData.lives || baseData.lives.length === 0) {
+      return `[错误] 天气查询失败：高德返回 status=${baseData.status ?? "?"}`;
     }
-    const w = data.lives[0];
+    const w = baseData.lives[0];
     const icon = weatherIconFromText(w.weather);
 
-    // 发送天气卡片数据给渲染端
+    // 解析 3 天预报（预报失败不影响实况展示）
+    const forecast: WeatherForecastDay[] = [];
+    if (forecastResp.ok) {
+      const fcData = await forecastResp.json() as { status?: string; forecasts?: Array<{
+        casts: Array<{
+          date: string; week: string; dayweather: string; nightweather: string;
+          daytemp: string; nighttemp: string; daywind: string; nightwind: string;
+          daypower: string; nightpower: string;
+        }>;
+      }> };
+      if (fcData.status === "1" && fcData.forecasts?.[0]?.casts) {
+        const weekMap: Record<string, string> = { "1": "周一", "2": "周二", "3": "周三", "4": "周四", "5": "周五", "6": "周六", "7": "周日" };
+        const today = new Date().toISOString().slice(0, 10);
+        for (const cast of fcData.forecasts[0].casts.slice(0, 3)) {
+          const dt = new Date(cast.date + "T00:00:00");
+          forecast.push({
+            date: `${dt.getMonth() + 1}月${dt.getDate()}日`,
+            weekDay: cast.date === today ? "今天" : (weekMap[cast.week] ?? `周${cast.week}`),
+            textDay: cast.dayweather,
+            textNight: cast.nightweather,
+            hi: Number(cast.daytemp),
+            lo: Number(cast.nighttemp),
+            windDir: cast.daywind,
+            windScale: `${cast.daypower}级`,
+          });
+        }
+      }
+    }
+
+    // 发送天气卡片数据给渲染端（高德实况没有体感/降水/气压，字段留空由卡片按需隐藏）
     if (weatherCardCallback) {
       weatherCardCallback({
-        city: w.city, adm: w.province, temp: Number(w.temperature), feelsLike: Number(w.temperature),
+        city: w.city, adm: w.province, temp: Number(w.temperature),
         text: w.weather, icon,
         humidity: Number(w.humidity), windDir: w.winddirection, windScale: `${w.windpower}级`,
-        precip: 0, pressure: 0,
+        hi: forecast[0]?.hi, lo: forecast[0]?.lo,
+        ...(forecast.length > 0 ? { forecast } : {}),
         source: "高德天气", updateTime: w.reporttime.slice(11, 16) || new Date().toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit" }),
       });
     }

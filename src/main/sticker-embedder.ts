@@ -95,6 +95,10 @@ export async function matchSticker(
     }
   }
 
-  if (bestId === null || bestScore < threshold) return null;
+  if (bestId === null) return null;
+  // 取证日志：无论是否达到阈值都打印最高分，覆盖所有调用路径（排查"每条都命中同一张"）
+  const accepted = bestScore >= threshold;
+  console.log(`[sticker] best=${bestId} score=${bestScore.toFixed(3)} 阈值=${threshold} -> ${accepted ? "命中" : "低于阈值不发"}`);
+  if (!accepted) return null;
   return { id: bestId, score: bestScore };
 }

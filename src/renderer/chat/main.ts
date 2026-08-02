@@ -1089,6 +1089,25 @@ function buildApprovalCardEl(req: {
   return card;
 }
 
+/** 中文天气描述 → CSS 插画类别（5 种：weather-clear / cloudy / rain / snow / thunder）。 */
+function weatherIllustrationClass(text: string): string {
+  if (/雷/.test(text)) return "weather-thunder";
+  if (/大雪|暴雪|中雪|小雪|阵雪|雪/.test(text)) return "weather-snow";
+  if (/大雨|暴雨|中雨|小雨|阵雨|强阵雨|冻雨|雨/.test(text)) return "weather-rain";
+  if (/晴/.test(text)) return "weather-clear";
+  return "weather-cloudy"; // 多云、阴、雾、霾、扬沙等兜底
+}
+
+/** 天气卡片内联 SVG 图标。 */
+const W_SVG = {
+  humidity: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.7s6.5 7 6.5 11.3a6.5 6.5 0 0 1-13 0C5.5 9.7 12 2.7 12 2.7z"/></svg>`,
+  wind: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M15.5 8.5l-2 5-5 2 2-5z"/></svg>`,
+  windDir: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9.6 4.1A2 2 0 1 1 11 8H2M12.6 19.9A2 2 0 1 0 14 16H2M17.7 7.7A2.5 2.5 0 1 1 19.5 12H2"/></svg>`,
+  precip: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 16.6A5 5 0 0 0 18 7a7 7 0 1 0-13.9 1.6A4.5 4.5 0 0 0 5.5 17H17"/><path d="M8 19v2M12 18v2M16 19v2"/></svg>`,
+  pressure: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15l3.5-3.5"/><path d="M20.2 15.5a8.5 8.5 0 1 0-16.4 0"/></svg>`,
+  feels: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4a2 2 0 1 0-4 0v9.3a4.5 4.5 0 1 0 4 0z"/></svg>`,
+};
+
 /** 构建天气卡片 DOM 元素（不插入，由调用方决定位置）。 */
 function buildWeatherCardEl(data: WeatherCardData): HTMLElement {
   const card = document.createElement("div");
@@ -1099,59 +1118,197 @@ function buildWeatherCardEl(data: WeatherCardData): HTMLElement {
   const timeStr = formatTime(Date.now());
 
   const temp = data.temp;
-  const feelsLike = data.feelsLike;
+  const feelsLike = data.feelsLike ?? null;
   const humidity = data.humidity;
-  const precip = data.precip;
-  const pressure = data.pressure;
-  const icon = data.icon;
-  const windDir = data.windDir;
-  const windScale = data.windScale;
-  const visibility = data.visibility != null ? `${data.visibility}km` : "—";
-  const uv = data.uv ?? "—";
-  const aqi = data.aqi != null ? data.aqi : null;
-  const aqiText = data.aqiText ?? "";
-  const kaomoji = aqi != null ? aqiKaomojiText(Number(aqi)) : "";
+  const precip = data.precip ?? null;
+  const pressure = data.pressure ?? null;
+  const windDir = escapeHtml(data.windDir);
+  const windScale = escapeHtml(data.windScale);
+  const visibility = data.visibility ?? null;
+  const uv = data.uv ?? null;
+  const aqi = data.aqi ?? null;
+  const aqiText = data.aqiText ? escapeHtml(data.aqiText) : "";
+  const kaomoji = aqi != null ? escapeHtml(aqiKaomojiText(aqi)) : "";
+  const city = escapeHtml(String(data.city ?? ""));
+  const adm = escapeHtml(String(data.adm ?? ""));
+  const desc = escapeHtml(String(data.text ?? ""));
+  const source = escapeHtml(String(data.source ?? ""));
+  const illClass = weatherIllustrationClass(desc);
+  const forecast = data.forecast ?? [];
+
+  // 主网格：有降水/气压 → 4格，否则 → 3格
+  const hasPrecipOrPressure = precip != null || pressure != null;
+  // 高级区：只展示有数据的字段
+  const advItems: string[] = [];
+  if (pressure != null && pressure > 0) {
+    advItems.push(`<div class="adv-item"><div class="adv-icon">${W_SVG.pressure}</div><div class="adv-text"><span class="adv-label">气压</span><span class="adv-value">${Math.round(pressure)} hPa</span></div></div>`);
+  }
+  if (feelsLike != null) {
+    advItems.push(`<div class="adv-item"><div class="adv-icon">${W_SVG.feels}</div><div class="adv-text"><span class="adv-label">体感温度</span><span class="adv-value">${feelsLike}°C</span></div></div>`);
+  }
+  if (uv != null) {
+    advItems.push(`<div class="adv-item"><div class="adv-icon">${W_SVG.humidity}</div><div class="adv-text"><span class="adv-label">紫外线</span><span class="adv-value">${uv}</span></div></div>`);
+  }
+  if (visibility != null) {
+    advItems.push(`<div class="adv-item"><div class="adv-icon">${W_SVG.humidity}</div><div class="adv-text"><span class="adv-label">能见度</span><span class="adv-value">${visibility} km</span></div></div>`);
+  }
+  if (aqi != null) {
+    advItems.push(`<div class="adv-item"><div class="adv-icon">${W_SVG.humidity}</div><div class="adv-text"><span class="adv-label">空气质量</span><span class="adv-value">${aqi} ${aqiText} ${kaomoji}</span></div></div>`);
+  }
+  const hasAdv = advItems.length > 0;
+
+  // 预报区
+  const hasForecast = forecast.length > 0;
+  const forecastRows = forecast.map((d) => {
+    const hi = d.hi;
+    const lo = d.lo;
+    const textDay = escapeHtml(d.textDay);
+    const weekDay = escapeHtml(d.weekDay);
+    const dateLabel = escapeHtml(d.date);
+    // 简化插画：预报行只用 emoji，避免太占空间
+    const fcIcon = textDay.includes("雷") ? "⛈️" : textDay.includes("雪") ? "❄️" : textDay.includes("雨") ? "🌧️" : textDay.includes("晴") ? "☀️" : "⛅";
+    return `<div class="forecast-row">
+      <span class="forecast-date">${dateLabel} ${weekDay}</span>
+      <span class="forecast-icon">${fcIcon}</span>
+      <span class="forecast-text">${textDay}</span>
+      <span class="forecast-lo">${lo}°</span>
+      <span class="forecast-bar"><span class="forecast-bar-fill" style="width:${Math.min(100, Math.max(10, (lo + 20) * 1.5))}%"></span></span>
+      <span class="forecast-hi">${hi}°</span>
+    </div>`;
+  }).join("");
 
   card.innerHTML = `
-    <div class="w-header">
-      <div class="w-datetime"><span class="w-date">${dateStr}</span><span class="w-time">${timeStr} 更新</span></div>
-      <div class="w-loc"><span class="w-city">${String(data.city ?? "")}</span><span class="w-adm">${String(data.adm ?? "")}</span></div>
-    </div>
-    <div class="w-main">
-      <div class="w-icon-box"><span class="w-icon">${icon}</span><span class="w-desc">${String(data.text ?? "")}</span></div>
-      <div class="w-temp-box">
-        <div class="w-temp">${temp}<span class="w-deg">°</span></div>
-        ${data.hi != null ? `<div class="w-hilo"><span class="w-hi">↑${data.hi}°</span><span class="w-sep">|</span><span class="w-lo">↓${data.lo}°</span></div>` : ""}
+    <header class="card-header">
+      <div class="date-block">
+        <span class="date-text">${dateStr}</span>
+        <span class="update-text"><span class="update-dot"></span><span>${timeStr} 更新</span></span>
+      </div>
+      <div class="location">
+        <div class="location-row">
+          <span class="province">${adm}</span>
+          <span class="city">${city}</span>
+        </div>
+        <span class="source-tag">${source}</span>
+      </div>
+    </header>
+
+    <section class="current-weather">
+      <div class="illustration ${illClass}">
+        <div class="sun">
+          <div class="sun-rays">
+            <span></span><span></span><span></span><span></span>
+            <span></span><span></span><span></span><span></span>
+          </div>
+          <div class="sun-core"></div>
+        </div>
+        <div class="cloud"></div>
+        <div class="rain"><span></span><span></span><span></span></div>
+        <div class="snow"><span>❄</span><span>❄</span><span>❄</span></div>
+        <div class="bolt"></div>
+      </div>
+      <div class="current-info">
+        <div class="temp-row">
+          <span class="temp-value">${temp}</span>
+          <span class="temp-unit">°C</span>
+        </div>
+        <div class="weather-desc">${desc}</div>
+        ${feelsLike != null ? `<span class="feels-like">体感 ${feelsLike}°C</span>` : ""}
+      </div>
+    </section>
+
+    <section class="details-grid${hasPrecipOrPressure ? "" : " three"}">
+      <div class="detail-item">
+        <div class="detail-icon">${W_SVG.humidity}</div>
+        <div class="detail-text">
+          <span class="detail-label">湿度</span>
+          <span class="detail-value">${humidity}%</span>
+        </div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-icon">${W_SVG.windDir}</div>
+        <div class="detail-text">
+          <span class="detail-label">风向</span>
+          <span class="detail-value">${windDir}</span>
+        </div>
+      </div>
+      ${hasPrecipOrPressure ? `
+      <div class="detail-item">
+        <div class="detail-icon">${W_SVG.wind}</div>
+        <div class="detail-text">
+          <span class="detail-label">风速</span>
+          <span class="detail-value">${windScale}</span>
+        </div>
+      </div>
+      <div class="detail-item">
+        <div class="detail-icon">${W_SVG.precip}</div>
+        <div class="detail-text">
+          <span class="detail-label">降水量</span>
+          <span class="detail-value">${precip != null ? precip.toFixed(1) : "0"} mm</span>
+        </div>
+      </div>
+      ` : `
+      <div class="detail-item">
+        <div class="detail-icon">${W_SVG.wind}</div>
+        <div class="detail-text">
+          <span class="detail-label">风力</span>
+          <span class="detail-value">${windScale}</span>
+        </div>
+      </div>
+      `}
+    </section>
+
+    ${hasAdv ? `
+    <button class="advanced-toggle" type="button" aria-expanded="false">
+      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 9l6 6 6-6"/>
+      </svg>
+      <span class="toggle-label">展开高级数据</span>
+    </button>
+    <div class="advanced-panel">
+      <div class="advanced-panel-inner">
+        <div class="advanced-content">
+          ${advItems.join("\n")}
+        </div>
       </div>
     </div>
-    <div class="w-feels">体感 ${feelsLike}°C</div>
-    <div class="w-quick">
-      <div class="w-qitem"><div class="w-qicon">💧</div><div class="w-qlabel">湿度</div><div class="w-qvalue">${humidity}%</div></div>
-      <div class="w-qitem"><div class="w-qicon">💨</div><div class="w-qlabel">风力</div><div class="w-qvalue">${windScale}</div></div>
-      <div class="w-qitem"><div class="w-qicon">🌧️</div><div class="w-qlabel">降水</div><div class="w-qvalue">${precip}mm</div></div>
-      <div class="w-qitem"><div class="w-qicon">📊</div><div class="w-qlabel">气压</div><div class="w-qvalue">${pressure || "—"}</div></div>
-    </div>
-    <button class="w-expand" type="button">查看更多 <span class="w-arrow">▼</span></button>
-    <div class="w-details">
-      <div class="w-detail-grid">
-        <div class="w-ditem"><span class="w-dicon">🌡️</span><div><div class="w-dlabel">体感温度</div><div class="w-dvalue">${feelsLike}°C</div></div></div>
-        <div class="w-ditem"><span class="w-dicon">💨</span><div><div class="w-dlabel">风向风力</div><div class="w-dvalue">${windDir} ${windScale}</div></div></div>
-        <div class="w-ditem"><span class="w-dicon">🔆</span><div><div class="w-dlabel">紫外线</div><div class="w-dvalue">${uv}</div></div></div>
-        <div class="w-ditem"><span class="w-dicon">👁️</span><div><div class="w-dlabel">能见度</div><div class="w-dvalue">${visibility}</div></div></div>
-        ${aqi != null ? `<div class="w-ditem"><span class="w-dicon">🌿</span><div><div class="w-dlabel">空气质量</div><div class="w-dvalue">${aqi} ${aqiText} <span class="w-kaomoji">${kaomoji}</span></div></div></div>` : ""}
+    ` : ""}
+
+    ${hasForecast ? `
+    <button class="forecast-toggle" type="button" aria-expanded="false">
+      <svg class="chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+           stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 9l6 6 6-6"/>
+      </svg>
+      <span class="fc-toggle-label">未来预报</span>
+    </button>
+    <div class="forecast-panel">
+      <div class="forecast-panel-inner">
+        <div class="forecast-content">
+          ${forecastRows}
+        </div>
       </div>
     </div>
-    <div class="w-source"><span>${icon} ${String(data.source ?? "")}</span><span>${timeStr} 更新</span></div>
+    ` : ""}
+
+    <footer class="card-footer">${source} · ${timeStr} 更新</footer>
   `;
 
-  // 展开按钮点击切换
-  const expandBtn = card.querySelector(".w-expand") as HTMLButtonElement | null;
-  if (expandBtn) {
-    expandBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      card.classList.toggle("expanded");
-    });
-  }
+  // 折叠切换绑定
+  const bindToggle = (selector: string, openClass: string, labelSelector: string, openText: string, closeText: string) => {
+    const btn = card.querySelector(selector) as HTMLButtonElement | null;
+    if (btn) {
+      btn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const open = card.classList.toggle(openClass);
+        btn.setAttribute("aria-expanded", String(open));
+        const label = card.querySelector(labelSelector);
+        if (label) label.textContent = open ? closeText : openText;
+      });
+    }
+  };
+  bindToggle(".advanced-toggle", "advanced-open", ".toggle-label", "展开高级数据", "收起高级数据");
+  bindToggle(".forecast-toggle", "forecast-open", ".fc-toggle-label", "未来预报", "收起预报");
 
   return card;
 }

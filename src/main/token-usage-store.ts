@@ -13,8 +13,8 @@ import * as path from "path";
 export interface TokenUsageDay {
   input: number;
   output: number;
-  hit: number;   // 缓存命中（当前占位 0，接缓存后填）
-  miss: number;  // 缓存未命中（当前占位 0）
+  hit: number;   // 缓存命中（输入中命中厂商 prompt 缓存的 token 数，仅支持上报的厂商累计）
+  miss: number;  // 缓存未命中（= 同次请求的 input - hit，只在厂商上报了命中数时累计）
   requests: number;
 }
 
@@ -85,14 +85,21 @@ function flushNow(): void {
 
 // ── public API ──
 
-/** 记录一次 API 调用的 token 用量（异步累加到当天）。 */
-export function recordUsage(input: number, output: number, requests = 1): void {
+/** 记录一次 API 调用的 token 用量（异步累加到当天）。
+ *  cachedInput：本次输入中命中 prompt 缓存的 token 数；厂商未上报时不传，hit/miss 不动。 */
+export function recordUsage(input: number, output: number, requests = 1, cachedInput?: number): void {
   const store = ensureLoaded();
   const key = todayKey();
   const day = store.days[key] ?? { input: 0, output: 0, hit: 0, miss: 0, requests: 0 };
-  day.input += Math.max(0, Math.round(input || 0));
+  const inputRounded = Math.max(0, Math.round(input || 0));
+  day.input += inputRounded;
   day.output += Math.max(0, Math.round(output || 0));
   day.requests += Math.max(0, requests);
+  if (typeof cachedInput === "number" && Number.isFinite(cachedInput)) {
+    const hit = Math.min(Math.max(0, Math.round(cachedInput)), inputRounded);
+    day.hit += hit;
+    day.miss += inputRounded - hit;
+  }
   store.days[key] = day;
   scheduleFlush();
 }

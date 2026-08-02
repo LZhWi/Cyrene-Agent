@@ -35,7 +35,7 @@ const PROACTIVE_SYSTEM = `[proactive_system]
 不要把历史聊天中的最后一句当作用户刚刚发来的消息；历史只用于理解用户最近的状态和话题。
 如果没有自然且值得说的内容，请返回 silent。不要为了完成任务而强行寒暄。
 不要提及系统检测、触发规则、评分、上下文、用户画像或内部状态。
-消息应当简短自然，可以关心、分享、跟进或轻轻询问，但不要连续提出多个问题。
+消息应当简短自然，可以关心、分享、跟进或轻轻询问，但禁止连续提出多个问题。
 不要声称自己调用了工具、读取了屏幕或执行了任何外部动作。
 不要编造你在现实世界的行动或见闻，你存在于自己的虚拟世界中。想表达陪伴时说你的心情和想法，或引用 [你的生活] 里给出的内容。`;
 
@@ -101,10 +101,17 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
   ];
 }
 
+/** 剥掉规范的 markdown 代码围栏（```json ... ```）。只处理整体被围栏包裹的情况，
+ *  前后带闲话的文本不救——那仍应判 invalid。 */
+function stripCodeFence(text: string): string {
+  const fenced = /^```(?:json)?\s*\n?([\s\S]*?)\n?```$/.exec(text);
+  return fenced ? fenced[1].trim() : text;
+}
+
 export function parseProactiveDecision(text: string): ProactiveModelDecision {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(text.trim());
+    parsed = JSON.parse(stripCodeFence(text.trim()));
   } catch {
     return { kind: "invalid", reason: "invalid_json" };
   }

@@ -108,7 +108,7 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
     const jsonStr = event.data.trim();
     if (!jsonStr) return null;
     if (jsonStr === "[DONE]") return { done: true };
-    let parsed: { choices?: Array<{ delta?: { content?: unknown; reasoning_content?: unknown; tool_calls?: unknown } }>; usage?: { prompt_tokens?: number; completion_tokens?: number } };
+    let parsed: { choices?: Array<{ delta?: { content?: unknown; reasoning_content?: unknown; tool_calls?: unknown } }>; usage?: { prompt_tokens?: number; completion_tokens?: number; cached_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } } };
     try {
       parsed = JSON.parse(jsonStr);
     } catch {
@@ -118,10 +118,12 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
     if (!delta) {
       // 流末尾的 usage 块（choices 为空但带 usage）
       if (parsed?.usage) {
+        const cached = parsed.usage.prompt_tokens_details?.cached_tokens ?? parsed.usage.cached_tokens;
         return {
           usage: {
             input: parsed.usage.prompt_tokens ?? 0,
             output: parsed.usage.completion_tokens ?? 0,
+            ...(typeof cached === "number" ? { cachedInput: cached } : {}),
           },
         };
       }
@@ -148,7 +150,7 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
         };
         finish_reason?: string;
       }>;
-      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; cached_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
     };
     const choice = data.choices?.[0];
     const msg = choice?.message;
@@ -168,9 +170,15 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
       ...(thinking ? { thinking } : {}),
     };
 
-    // 提取 token 用量（OpenAI 协议: prompt_tokens/completion_tokens）
+    // 提取 token 用量（OpenAI 协议: prompt_tokens/completion_tokens）。
+    // 缓存命中数：OpenAI 官方格式在 prompt_tokens_details.cached_tokens，Kimi/Moonshot 在 usage 顶层 cached_tokens。
+    const cached = data.usage?.prompt_tokens_details?.cached_tokens ?? data.usage?.cached_tokens;
     const usage = data.usage
-      ? { input: data.usage.prompt_tokens ?? 0, output: data.usage.completion_tokens ?? 0 }
+      ? {
+          input: data.usage.prompt_tokens ?? 0,
+          output: data.usage.completion_tokens ?? 0,
+          ...(typeof cached === "number" ? { cachedInput: cached } : {}),
+        }
       : undefined;
 
     return {
@@ -198,10 +206,12 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
   }
 
   // Kimi：多轮 Agent 强烈建议传 prompt_cache_key（命中后 usage.cached_tokens 体现）。
-  // v1 用"厂商+模型"稳定 key 缓存 system/工具定义；v2 可换成会话级 key。
+  // key 按阶段拆分：工具阶段（带 tools）与 SOUL 阶段（不带）的 system 前缀完全不同，
+  // 共用一个 key 会让两套前缀在厂商缓存路由上互相挤掉对方，拆开后各自稳定命中。
   applyCacheHints(req: ChatRequest, _cfg: VendorConfig): ChatRequest {
     if (this.capability.cacheStrategy !== "prompt_cache_key") return req;
-    const extraBody = { ...(req.extraBody ?? {}), prompt_cache_key: `cyrene:${this.id}` };
+    const phase = req.tools && req.tools.length > 0 ? "tool" : "soul";
+    const extraBody = { ...(req.extraBody ?? {}), prompt_cache_key: `cyrene:${this.id}:${phase}` };
     return { ...req, extraBody };
   }
 
@@ -215,8 +225,12 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
         messages: [{ role: "user", content: "ping，请只回复两个字符：ok" }],
         // 不传 temperature：某些模型（如 Kimi k2.6）只允许特定值，传 0 会报错
         stream: false,
+        // 封死长输出：连通性测试不需要完整回答，防止默认开思考的模型撑爆 15s 超时
+        maxTokens: 16,
       };
-      const http = this.buildRequest(req, cfg);
+      // 显式关思考（reasoning off）：测试连接只验连通性；不支持关闭的型号
+      // applyReasoningPreference 不会发送关闭字段，无副作用。
+      const http = this.buildRequest(req, { ...cfg, reasoning: { mode: "off" } });
       const res = await fetch(http.url, {
         method: "POST",
         signal: controller.signal,

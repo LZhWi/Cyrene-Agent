@@ -166,4 +166,12 @@ describe("parseProactiveDecision", () => {
     expect(parseProactiveDecision('{"decision":"send","text":"   "}').kind).toBe("invalid");
     expect(parseProactiveDecision(JSON.stringify({ decision: "send", text: "x".repeat(501) })).kind).toBe("invalid");
   });
+
+  it("accepts decisions wrapped in markdown code fences", () => {
+    expect(parseProactiveDecision('```json\n{"decision":"send","text":"喝口水休息一下呀♪"}\n```')).toEqual({
+      kind: "send",
+      text: "喝口水休息一下呀♪",
+    });
+    expect(parseProactiveDecision('```\n{"decision":"silent"}\n```')).toEqual({ kind: "silent" });
+  });
 });

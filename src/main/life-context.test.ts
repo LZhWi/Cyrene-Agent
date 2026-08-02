@@ -57,7 +57,8 @@ describe("buildLifeContext", () => {
     expect(text).toContain("上午：");
     expect(text).toContain("下午：");
     expect(text).toContain("晚上：");
-    expect(text).toContain("使用规则：当你主动给用户发消息时，最多自然地提到一条你的日程");
+    expect(text).toContain("使用规则：这份日程是你的背景设定");
+    expect(text).toContain("当你主动给用户发消息时，最多自然地提到一条你的日程");
     expect(text).toContain("不得声称发生在现实世界或用户所在的城市");
     expect(text).toContain("以「你现在正在做」为准");
   });

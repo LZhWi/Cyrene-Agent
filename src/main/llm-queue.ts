@@ -21,10 +21,14 @@ const RATE_LIMIT_KEYWORDS = [
   "429",
   "rate_limit",
   "ratelimit",
+  // 服务端过载（如 Kimi engine_overloaded_error）：HTTP 状态码本是 429，
+  // 但链路中只剩 message 文本，靠这两个词兼容。语义同限流：退避后重试大概率成功。
+  "overloaded",
+  "try again later",
 ];
 
-/** 判断错误是否为限流（可退避重试）。 */
-function isRateLimitError(err: unknown): boolean {
+/** 判断错误是否为限流（可退避重试）。导出仅供测试。 */
+export function isRateLimitError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   const lower = msg.toLowerCase();
   return RATE_LIMIT_KEYWORDS.some(k => lower.includes(k.toLowerCase()));

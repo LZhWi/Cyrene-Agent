@@ -4646,8 +4646,8 @@ interface TokenDayData {
   weekday: string;    // "周日"
   input: number;
   output: number;
-  hit: number;        // 缓存命中（占位 0）
-  miss: number;       // 缓存未命中（占位 0）
+  hit: number;        // 缓存命中（输入中命中厂商 prompt 缓存的 token 数）
+  miss: number;       // 缓存未命中（同次请求 input - hit）
   requests: number;
 }
 
@@ -4870,6 +4870,7 @@ function updateTokenStats(data: TokenDayData[]): void {
   const totalOutput = data.reduce((s, d) => s + d.output, 0);
   const total = totalInput + totalOutput;
   const requests = data.reduce((s, d) => s + d.requests, 0);
+  const totalHit = data.reduce((s, d) => s + d.hit, 0);
 
   const set = (id: string, val: string) => {
     const el = document.getElementById(id);
@@ -4879,7 +4880,8 @@ function updateTokenStats(data: TokenDayData[]): void {
   set("token-requests", requests.toLocaleString());
   set("token-input", totalInput.toLocaleString());
   set("token-output", totalOutput.toLocaleString());
-  set("token-hit", "N/A");
+  // 命中 = 输入中命中厂商 prompt 缓存的 token 数（仅支持上报的厂商有值，如 Kimi）；从未命中过显示 N/A
+  set("token-hit", totalHit > 0 ? totalHit.toLocaleString() : "N/A");
 }
 
 // 刷新整个面板：调 IPC 拉真实数据 → 有数据渲染图表，无数据显示空态

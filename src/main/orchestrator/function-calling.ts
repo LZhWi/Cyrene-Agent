@@ -168,7 +168,7 @@ export async function runFunctionCallingLoop(
     if (chat.usage) {
       accInput += chat.usage.input;
       accOutput += chat.usage.output;
-      recordUsage(chat.usage.input, chat.usage.output, 1);
+      recordUsage(chat.usage.input, chat.usage.output, 1, chat.usage.cachedInput);
     }
 
     console.log(
@@ -301,7 +301,7 @@ export async function runFunctionCallingLoop(
     if (chat.usage) {
       accInput += chat.usage.input;
       accOutput += chat.usage.output;
-      recordUsage(chat.usage.input, chat.usage.output, 1);
+      recordUsage(chat.usage.input, chat.usage.output, 1, chat.usage.cachedInput);
     }
     const totalUsage = (accInput > 0 || accOutput > 0) ? { input: accInput, output: accOutput } : undefined;
     return { reply: chat.text, toolResults: allToolResults, totalUsage };

@@ -266,8 +266,12 @@ export class AnthropicAdapter implements ChatVendorAdapter {
         messages: [{ role: "user", content: "ping，请只回复两个字符：ok" }],
         // 不传 temperature：某些模型只允许特定值，传 0 会报错
         stream: false,
+        // 封死长输出：连通性测试不需要完整回答，防止默认开思考的模型撑爆 15s 超时
+        maxTokens: 16,
       };
-      const http = this.buildRequest(req, cfg);
+      // 显式关思考（reasoning off）：测试连接只验连通性；不支持关闭的型号
+      // applyReasoningPreference 不会发送关闭字段，无副作用。
+      const http = this.buildRequest(req, { ...cfg, reasoning: { mode: "off" } });
       const res = await fetch(http.url, {
         method: "POST",
         signal: controller.signal,

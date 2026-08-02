@@ -111,7 +111,7 @@ export interface StreamChunk {
   deltaThinking?: string;
   deltaToolCalls?: ToolCall[];
   done?: boolean;
-  usage?: { input: number; output: number };
+  usage?: { input: number; output: number; cachedInput?: number };
 }
 
 /** 适配器解析后的统一响应，调度层只看这个。 */
@@ -124,8 +124,8 @@ export interface ChatResponse {
   finishReason: string;
   raw: unknown;
   /** API 返回的 token 用量（OpenAI: prompt_tokens/completion_tokens；Anthropic: input_tokens/output_tokens）。
-   *  未上报时为 undefined，由调用方兜底。 */
-  usage?: { input: number; output: number };
+   *  未上报时为 undefined，由调用方兜底。cachedInput = 输入中命中 prompt 缓存的部分（仅支持上报的厂商有）。 */
+  usage?: { input: number; output: number; cachedInput?: number };
 }
 
 export interface HttpRequest {

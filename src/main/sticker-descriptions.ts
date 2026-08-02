@@ -10,7 +10,7 @@ export const BUILT_IN_STICKER_DESCRIPTIONS: Record<string, StickerDescription> =
   playful: { phrases: ["你看人家嘛"] },
   "love-happy": { phrases: ["好开心，喜欢你"] },
   confident: { phrases: ["交给人家，放心"] },
-  serious: { phrases: ["说正经的，听好了"] },
+  serious: { phrases: ["现在要很严肃地批评你，不许打岔"] },
   calm: { phrases: ["静静陪着你就好"] },
   peek: { phrases: ["偷偷看一眼"] },
   "clingy-confused": { phrases: ["等等人家嘛"] },

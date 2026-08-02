@@ -42,14 +42,14 @@ function safeGetPath(name: "desktop" | "documents" | "downloads" | "home"): stri
   }
 }
 
+// 只到日期粒度：环境上下文位于 system 前缀头部，分钟级时钟会让 prompt 缓存每分钟失效。
+// 精确到分钟的当前时间由尾部动态区（build-options 的 soulTailAnchorContent）和消息时间戳前缀提供。
 function formatDate(d: Date): string {
   const yyyy = d.getFullYear();
   const mm = String(d.getMonth() + 1).padStart(2, "0");
   const dd = String(d.getDate()).padStart(2, "0");
   const week = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"][d.getDay()];
-  const hh = String(d.getHours()).padStart(2, "0");
-  const min = String(d.getMinutes()).padStart(2, "0");
-  return `${yyyy}-${mm}-${dd} ${week} ${hh}:${min}`;
+  return `${yyyy}-${mm}-${dd} ${week}`;
 }
 
 function platformLabel(): string {
@@ -107,7 +107,7 @@ export function buildEnvironmentContext(modelInfo?: ModelInfo, userInfo?: UserIn
   const lines: string[] = [];
   lines.push("## 运行环境（机器实际状态，不要再凭印象猜）");
   lines.push("");
-  lines.push(`- 当前时间：${dateStr}（时区 ${tz}）`);
+  lines.push(`- 今天日期：${dateStr}（时区 ${tz}；精确的当前时间以对话消息的时间戳为准）`);
   lines.push(`- 操作系统：${platformLabel()}`);
   lines.push(`- 当前用户名：${username}`);
   if (home) lines.push(`- 用户主目录：${home}`);

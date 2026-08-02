@@ -29,6 +29,7 @@ import type { RelationshipChannel, RelationshipTurnInput } from "../relationship
 import { validateCaptionImagePath } from "../chat/image-caption";
 import {
   buildConversationTimeContext,
+  formatLocalTime,
   resolveChatContextTimezone,
   type ChatContextMessage,
 } from "../chat-time-context";
@@ -97,7 +98,7 @@ export interface OnRunFinishedDeps {
     provider: unknown,
     index: unknown,
     threshold: number,
-  ) => Promise<{ id: string } | null | undefined>;
+  ) => Promise<{ id: string; score?: number } | null | undefined>;
   loadStickerSettings: () => Record<string, boolean>;
   broadcastRuntimeStateChanged: () => void;
   observeRuntimeState: (
@@ -423,7 +424,6 @@ export async function buildAgentRunOptions(
     "直接用对话里已有的工具结果（如有）自然回复即可，绝不要输出 <tool_call>、<invoke> 之类的调用指令文本。";
   const soulSystemBaseContent =
     (environmentContext ? environmentContext + "\n\n" + soulPhaseToolCorrection + "\n\n" : "") +
-    (lifeContext ? lifeContext + "\n\n" : "") +
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
     deps.buildSoulSystemBasePrompt(styleFile) +
@@ -431,6 +431,9 @@ export async function buildAgentRunOptions(
     (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "") +
     skillActivation +
     toneInjection +
+    // lifeContext 一天内随活动切换几次，放头部会在每次切换时从前缀起点切断 prompt 缓存；
+    // 挂到尾部动态区（每轮必变的 memoryInjection 之前），切换轮只损尾部零头。
+    (lifeContext ? lifeContext + "\n\n" : "") +
     (memoryInjection ? memoryInjection + "\n\n" : "") +
     (alwaysOnContext ? alwaysOnContext + "\n\n" : "") +
     (relationshipContext ? "\n\n" + relationshipContext + "\n\n" : "") +
@@ -441,7 +444,11 @@ export async function buildAgentRunOptions(
 
   // 尾部锚点：SOUL 阶段追加在 conversation 之后的压缩版硬规则，
   // 解决 tone-rules 在 system 内部被 16 条历史消息压住的近因劣势（热加载，每轮现读）。
-  const soulTailAnchorContent = deps.loadToneAnchor?.()?.trim() ?? "";
+  // 当前时钟一并放在这里：分钟级时间若留在 system 前缀头部会每分钟切断 prompt 缓存；
+  // 挪到生成点附近后时间感知反而更强，格式与消息时间戳前缀一致，模型无需适应第二套时间格式。
+  const clockLine = `[当前时间] ${formatLocalTime(Date.now(), resolveChatContextTimezone(profile.timezone))}（仅供你感知当下时刻，不要复述）`;
+  const toneAnchor = deps.loadToneAnchor?.()?.trim() ?? "";
+  const soulTailAnchorContent = toneAnchor ? clockLine + "\n\n" + toneAnchor : clockLine;
 
   // 第一期：原始 messages 不再携带 system。FC 循环按阶段动态注入。
   const fcMessages: ChatMessage[] = withDirectImageAttachments(llmMessages as unknown as ChatMessage[], input);
@@ -509,17 +516,20 @@ export async function onAgentRunFinished(
 
   const stickerIndex = deps.getStickerEmbeddingIndex?.() ?? deps.stickerEmbeddingIndex;
   const stickerQuery = (chatContent + "\n" + sideEffectUserText).slice(0, 1000);
-  const stickerCandidate =
+  const stickerMatch =
     settings.stickerEnabled && stickerIndex
-      ? (
-          await deps.matchSticker(
-            stickerQuery,
-            deps.getEmbeddingProvider(),
-            stickerIndex,
-            settings.stickerSimilarityThreshold ?? 0.55,
-          )
-        )?.id ?? null
+      ? await deps.matchSticker(
+          stickerQuery,
+          deps.getEmbeddingProvider(),
+          stickerIndex,
+          settings.stickerSimilarityThreshold ?? 0.55,
+        )
       : null;
+  // 取证日志：观察匹配分布（排查"每条都命中同一张"时看分数离阈值多远）
+  if (stickerMatch) {
+    console.log(`[sticker] 匹配 ${stickerMatch.id} score=${stickerMatch.score?.toFixed(3) ?? "?"} 阈值=${settings.stickerSimilarityThreshold ?? 0.55}`);
+  }
+  const stickerCandidate = stickerMatch?.id ?? null;
   const stickerSettings = deps.loadStickerSettings();
   const sticker = stickerCandidate && stickerSettings[stickerCandidate] !== false ? stickerCandidate : null;
 

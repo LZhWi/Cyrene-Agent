@@ -35,7 +35,9 @@ export async function runProactiveModel(input: RunProactiveModelInput): Promise<
     model: input.settings.model,
     messages: input.messages,
     stream: false,
-    maxTokens: 600,
+    // 思考 token 计入 completion 预算（实测单次思考约 700）：600 会被思考烧光导致
+    // JSON 截断报 invalid_json。放宽到 2048 给思考留足空间，决策 JSON 本身只要几十 token。
+    maxTokens: 2048,
   }, input.settings);
 
   const controller = new AbortController();

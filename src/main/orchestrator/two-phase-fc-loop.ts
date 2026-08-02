@@ -102,8 +102,8 @@ export interface TwoPhaseFcOptions {
   buildSoulToolResultsSummary?: (results: ToolCallResult[]) => string;
   /** 事件回调。 */
   onEvent?: (event: TwoPhaseEvent) => void;
-  /** 记录 token 用量的回调（默认走 recordUsage）。 */
-  recordUsage?: (input: number, output: number, calls: number) => void;
+  /** 记录 token 用量的回调（默认走 recordUsage）。cachedInput = 本次命中 prompt 缓存的输入 token 数。 */
+  recordUsage?: (input: number, output: number, calls: number, cachedInput?: number) => void;
   /** 用户取消信号。 */
   signal?: AbortSignal;
 }
@@ -262,7 +262,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
   const maxConsecutiveTimeouts = options.maxConsecutiveTimeouts ?? DEFAULT_MAX_CONSECUTIVE_TIMEOUTS;
   const forceSummaryTimeoutMs = options.forceSummaryTimeoutMs ?? DEFAULT_FORCE_SUMMARY_TIMEOUT_MS;
   const buildSoulToolResultsSummary = options.buildSoulToolResultsSummary ?? (() => "");
-  const recordUsageFn = options.recordUsage ?? ((input, output, calls) => recordUsage(input, output, calls));
+  const recordUsageFn = options.recordUsage ?? ((input, output, calls, cachedInput) => recordUsage(input, output, calls, cachedInput));
 
   const toolSpecs = buildToolSpecs(tools);
   const runnableToolIds = new Set(tools.filter((t) => t.enabled).map((t) => t.id));
@@ -341,7 +341,9 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     if (chat.usage) {
       accInput += chat.usage.input;
       accOutput += chat.usage.output;
-      recordUsageFn(chat.usage.input, chat.usage.output, 1);
+      recordUsageFn(chat.usage.input, chat.usage.output, 1, chat.usage.cachedInput);
+      // 取证日志：厂商原始 usage（确认 cached_tokens 是否上报及字段位置）
+      console.log(LOG_PREFIX, "usage(tool) =", JSON.stringify((data as { usage?: unknown }).usage));
     }
 
     console.log(
@@ -467,7 +469,7 @@ async function runSoulPhase(args: {
   forceSummaryTimeoutMs: number;
   signal: AbortSignal | undefined;
   onEvent: ((e: TwoPhaseEvent) => void) | undefined;
-  recordUsageFn: (input: number, output: number, calls: number) => void;
+  recordUsageFn: (input: number, output: number, calls: number, cachedInput?: number) => void;
 }): Promise<TwoPhaseFcResult> {
   const {
     adapter,
@@ -524,7 +526,9 @@ async function runSoulPhase(args: {
     if (chat.usage) {
       const finalInput = accInput + chat.usage.input;
       const finalOutput = accOutput + chat.usage.output;
-      recordUsageFn(chat.usage.input, chat.usage.output, 1);
+      recordUsageFn(chat.usage.input, chat.usage.output, 1, chat.usage.cachedInput);
+      // 取证日志：同上，SOUL 阶段的原始 usage
+      console.log(LOG_PREFIX, "usage(soul) =", JSON.stringify((data as { usage?: unknown }).usage));
 
       const textMessageId = `msg-${Date.now()}`;
       emitTextMessage(onEvent, textMessageId, reply);
