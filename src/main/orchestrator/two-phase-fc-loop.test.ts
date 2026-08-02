@@ -314,6 +314,34 @@ describe("runTwoPhaseFcLoop", () => {
     expect(streamed).toBe("干净回复");
   });
 
+  it("falls back to Soul when an optimized first round has no tool calls or text", async () => {
+    const adapter = new FakeAdapter();
+    let calls = 0;
+    const streamChat = async (): Promise<ChatResponse> => {
+      calls += 1;
+      const text = calls === 1 ? "" : "Soul fallback";
+      return {
+        assistantMessage: { role: "assistant", ...(text ? { content: text } : {}) },
+        text,
+        toolCalls: [],
+        finishReason: "stop",
+        raw: {},
+      };
+    };
+
+    const result = await runTwoPhaseFcLoop({
+      ...baseOptions,
+      optimizeFirstRound: true,
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      streamChat,
+      executeTool: async () => "unused",
+    });
+
+    expect(calls).toBe(2);
+    expect(result.reply).toBe("Soul fallback");
+  });
+
   it("emits streamed tool lifecycle once before execution result", async () => {
     const adapter = new FakeAdapter();
     const events: Array<{ type: string; toolCallId?: string; delta?: string }> = [];

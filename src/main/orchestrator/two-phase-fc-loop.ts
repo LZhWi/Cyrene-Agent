@@ -704,9 +704,10 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     }
 
     // 情况 2：模型没有调工具 → 切 SOUL_PHASE
-    if (optimizeFirstRound && realIsFirstRound) {
+    const directFirstRoundReply = stripLeakedChatTimeContext(chat.text);
+    if (optimizeFirstRound && realIsFirstRound && directFirstRoundReply.trim()) {
       // 提示词连接了soulSystemBaseContent，因此直接返回结果，不需要二次总结．
-      return sendSoulPhaseDirectly(options, allToolResults, accInput, accOutput, stripLeakedChatTimeContext(chat.text));
+      return sendSoulPhaseDirectly(options, allToolResults, accInput, accOutput, directFirstRoundReply);
     }
     // 情况 2：模型没有调工具 → 切 SOUL_PHASE
     // 关键：工具阶段的 chat.text **不写入 conversation**，不发给用户。

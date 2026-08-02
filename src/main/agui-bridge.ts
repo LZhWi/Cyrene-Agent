@@ -222,6 +222,9 @@ export function registerAgUiIpc(
     const { options, latestUserText } = built;
     options.executionMode = agentExecutionMode;
     options.agentRuntime = mode === "daily" ? "legacy" : "langgraph";
+    if (mode === "daily") {
+      options.optimizeFirstRound = true;
+    }
 
     const threadId = `thread-${Date.now()}`;
     const agent = new CyreneAgent({ threadId, description: "Cyrene 主聊天" });
