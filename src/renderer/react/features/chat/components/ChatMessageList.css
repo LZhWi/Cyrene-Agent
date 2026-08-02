@@ -747,6 +747,14 @@
   justify-content: flex-start;
 }
 
+:root[data-assistant-bubble="off"] .cy-message--assistant .ant-bubble-content {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+
 .cy-message:hover .cy-copy-button,
 .cy-message:hover .cy-tts-button,
 .cy-message:hover .cy-last-turn-action,

@@ -705,6 +705,7 @@ if (!window.settings) {
       petVisible: true,
       petZoom: 1,
       chatLineHeight: 1.75,
+      assistantBubbleEnabled: true,
       chatParaSpacing: 0.5,
       sidebarVisible: true,
       tasksVisible: true,
@@ -894,6 +895,7 @@ const petZoomInput = document.getElementById("pet-zoom") as HTMLInputElement;
 const petZoomVal = document.getElementById("pet-zoom-val") as HTMLElement;
 const chatLineHeightInput = document.getElementById("chat-line-height") as HTMLInputElement;
 const chatLineHeightVal = document.getElementById("chat-line-height-val") as HTMLElement;
+const assistantBubbleEnabledInput = document.getElementById("assistant-bubble-enabled") as HTMLInputElement;
 const chatParaSpacingInput = document.getElementById("chat-para-spacing") as HTMLInputElement;
 const chatParaSpacingVal = document.getElementById("chat-para-spacing-val") as HTMLElement;
 const launchAtLoginInput = document.getElementById("launch-at-login") as HTMLInputElement;
@@ -1680,6 +1682,7 @@ async function loadGeneralSettings(): Promise<void> {
     chatLineHeightInput.value = String(cfg.chatLineHeight ?? 1.75);
     chatLineHeightVal.textContent = (cfg.chatLineHeight ?? 1.75).toFixed(2);
     document.documentElement.style.setProperty("--rb-chat-line-height", String(cfg.chatLineHeight ?? 1.75));
+    assistantBubbleEnabledInput.checked = cfg.assistantBubbleEnabled ?? true;
     chatParaSpacingInput.value = String(cfg.chatParaSpacing ?? 0.5);
     chatParaSpacingVal.textContent = (cfg.chatParaSpacing ?? 0.5).toFixed(2) + "em";
     document.documentElement.style.setProperty("--rb-chat-para-spacing", (cfg.chatParaSpacing ?? 0.5) + "em");
@@ -2003,6 +2006,9 @@ chatLineHeightInput.addEventListener("input", () => {
 });
 chatLineHeightInput.addEventListener("change", () => {
   void saveAppearancePatch({ chatLineHeight: Number(chatLineHeightInput.value) });
+});
+assistantBubbleEnabledInput.addEventListener("change", () => {
+  void saveAppearancePatch({ assistantBubbleEnabled: assistantBubbleEnabledInput.checked });
 });
 // 段间距滑块
 chatParaSpacingInput.addEventListener("input", () => {

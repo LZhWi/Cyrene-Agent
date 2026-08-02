@@ -4,12 +4,14 @@ import {
   type ChatAppearanceSettings,
 } from "../../../shared/chat-appearance";
 
-function applyAppearance(input: unknown): void {
+export function applyChatAppearance(input: unknown): void {
   const settings = normalizeChatAppearance(input);
   document.documentElement.style.setProperty(
     "--cy-chat-line-height",
     String(settings.chatLineHeight),
   );
+  document.documentElement.dataset.assistantBubble =
+    settings.assistantBubbleEnabled ? "on" : "off";
 }
 
 export function useChatAppearance(): void {
@@ -26,7 +28,7 @@ export function useChatAppearance(): void {
         if (disposed) return;
 
         receivedRealtimeChange = true;
-        applyAppearance(settings);
+        applyChatAppearance(settings);
       },
     );
 
@@ -35,7 +37,7 @@ export function useChatAppearance(): void {
       .then((settings) => {
         // 若 get 期间已经收到更新，不让旧快照覆盖新值
         if (!disposed && !receivedRealtimeChange) {
-          applyAppearance(settings);
+          applyChatAppearance(settings);
         }
       })
       .catch((error: unknown) => {

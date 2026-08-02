@@ -1003,6 +1003,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   screenshotHotkey: "Alt+Shift+S",
   // Chat 排版（来自 ChatAppearanceSettings）
   chatLineHeight: 1.75,
+  assistantBubbleEnabled: true,
 };
 
 function getSettingsPath(): string {
@@ -1741,10 +1742,13 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   if (JSON.stringify(before.uiFont) !== JSON.stringify(normalized.uiFont)) {
     broadcastUiFontChanged(normalized.uiFont);
   }
-  const prevTypography = normalizeChatAppearance(before);
-  const nextTypography = normalizeChatAppearance(normalized);
-  if (prevTypography.chatLineHeight !== nextTypography.chatLineHeight) {
-    broadcastToAllWindows(IPC.CHAT_TYPOGRAPHY_CHANGED, nextTypography);
+  const prevAppearance = normalizeChatAppearance(before);
+  const nextAppearance = normalizeChatAppearance(normalized);
+  if (
+    prevAppearance.chatLineHeight !== nextAppearance.chatLineHeight
+    || prevAppearance.assistantBubbleEnabled !== nextAppearance.assistantBubbleEnabled
+  ) {
+    broadcastToAllWindows(IPC.CHAT_TYPOGRAPHY_CHANGED, nextAppearance);
   }
   if (before.uiIcon !== normalized.uiIcon) {
     applyUiIcon(normalized.uiIcon);
