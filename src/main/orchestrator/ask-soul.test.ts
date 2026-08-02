@@ -49,7 +49,10 @@ describe("Ask Soul clarification contract", () => {
           field: "topic",
           question: "这份文档主要写什么？",
           type: "text",
-          options: [],
+          options: [
+            { value: "项目说明", label: "项目说明" },
+            { value: "学习总结", label: "学习总结" },
+          ],
           allowCustom: false,
           freeTextPlaceholder: "例如：项目说明",
         },
@@ -71,11 +74,86 @@ describe("Ask Soul clarification contract", () => {
     }, input);
 
     expect(result.questions).toHaveLength(2);
+    expect(result.questions[0]).toMatchObject({
+      options: [
+        { value: "项目说明", label: "项目说明" },
+        { value: "学习总结", label: "学习总结" },
+      ],
+      allowCustom: true,
+    });
     expect(result.questions[1].options).toEqual([
       { value: "word", label: "Word 文档" },
       { value: "markdown", label: "Markdown 文档" },
       { value: "pdf", label: "PDF 文档" },
     ]);
+  });
+
+  it("rejects an Ask Soul result that has fewer than two suggestions", () => {
+    expect(() => normalizeAskClarificationOutput({
+      intro: "还需要确认一下。",
+      questions: [{
+        field: "topic",
+        question: "这份文档主要写什么？",
+        type: "text",
+        options: [{ value: "项目说明", label: "项目说明" }],
+        allowCustom: true,
+        freeTextPlaceholder: "填写其他主题",
+      }],
+      deferredFields: ["format"],
+    }, input)).toThrow("question.options requires at least two choices");
+  });
+
+  it("repairs one insufficient option result before accepting the card", async () => {
+    let calls = 0;
+    const result = await resolveAskClarification({
+      model: "m",
+      askSystemContent: "ASK_SYSTEM",
+      input,
+    }, async (): Promise<ChatResponse> => {
+      calls += 1;
+      const options = calls === 1
+        ? [{ value: "项目说明", label: "项目说明" }]
+        : [
+            { value: "项目说明", label: "项目说明" },
+            { value: "学习总结", label: "学习总结" },
+          ];
+      return {
+        assistantMessage: { role: "assistant", content: "{}" },
+        text: JSON.stringify({
+          intro: "还需要确认一下。",
+          questions: [{
+            field: "topic",
+            question: "这份文档主要写什么？",
+            type: "text",
+            options,
+            allowCustom: true,
+            freeTextPlaceholder: "填写其他主题",
+          }],
+          deferredFields: ["format"],
+        }),
+        toolCalls: [],
+        finishReason: "stop",
+        raw: {},
+      };
+    });
+
+    expect(calls).toBe(2);
+    expect(result.questions[0].options).toHaveLength(2);
+  });
+
+  it("does not treat a transport failure as a structured-output repair", async () => {
+    let calls = 0;
+    const result = await resolveAskClarification({
+      model: "m",
+      askSystemContent: "ASK_SYSTEM",
+      input,
+    }, async () => {
+      calls += 1;
+      throw new Error("network unavailable");
+    });
+
+    expect(calls).toBe(1);
+    expect(result.questions.map((question) => question.field)).toEqual(["topic", "format"]);
   });
 
   it("builds a usable local fallback without inventing choices", () => {

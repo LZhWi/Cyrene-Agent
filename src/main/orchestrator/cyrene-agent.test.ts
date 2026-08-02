@@ -87,8 +87,9 @@ describe("CyreneAgent", () => {
     }));
   });
 
-  it("wires the AG-UI choice-card callback into the LangGraph runtime", async () => {
+  it("wires the current run's choice-card callback into the LangGraph runtime", async () => {
     const agent = new CyreneAgent({ threadId: "test-thread" });
+    const runChoiceSender = vi.fn();
 
     await new Promise<void>((resolve, reject) => {
       agent.runWithEvents({
@@ -105,6 +106,7 @@ describe("CyreneAgent", () => {
         soulSystemBaseContent: "SOUL",
         executionMode: "work",
         agentRuntime: "langgraph",
+        requestUserClarification: runChoiceSender,
       }).subscribe({
         complete: resolve,
         error: reject,
@@ -112,7 +114,7 @@ describe("CyreneAgent", () => {
     });
 
     expect(runLangGraphAgentLoop).toHaveBeenCalledWith(expect.objectContaining({
-      requestUserClarification,
+      requestUserClarification: runChoiceSender,
     }));
   });
 });

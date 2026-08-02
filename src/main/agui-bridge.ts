@@ -29,6 +29,7 @@ import { codeRunStore } from "./orchestrator/code/code-run-store";
 import { codeRunCoordinator } from "./orchestrator/code/code-run-coordinator";
 import * as chatsStore from "./chats/chats-store";
 import type { ConversationMode } from "../shared/chat-types";
+import { requestUserClarification } from "./user-choice";
 
 type RunCodeRequest = typeof import("./orchestrator/code/code-request").runCodeRequest;
 
@@ -222,6 +223,11 @@ export function registerAgUiIpc(
     const { options, latestUserText } = built;
     options.executionMode = agentExecutionMode;
     options.agentRuntime = mode === "daily" ? "legacy" : "langgraph";
+    options.requestUserClarification = (card) => requestUserClarification(card, (cardData) => {
+      send({ type: "CUSTOM", name: "cyrene.choice", value: cardData, threadId, runId });
+    }, (settlement) => {
+      send({ type: "CUSTOM", name: "cyrene.choice.dismiss", value: settlement, threadId, runId });
+    }, { runId, revision: 1 });
     if (mode === "daily") {
       options.optimizeFirstRound = true;
     }

@@ -1,3 +1,5 @@
+import type { AskCardSubmission } from "../../../../../shared/ask-clarification";
+
 export type AgentRunStageKind =
   | "understanding"
   | "planning"
@@ -27,6 +29,9 @@ export interface TaskPlanPresentation {
 export interface AskUserInteraction {
   kind: "ask";
   id: string;
+  runId?: string;
+  revision?: number;
+  intro?: string;
   question: string;
   options: Array<{
     id: string;
@@ -36,13 +41,13 @@ export interface AskUserInteraction {
   allowCustomInput?: boolean;
   /** Structured clarification cards advance through these questions in the same bottom slot. */
   questions?: AskUserQuestion[];
-  responseKind?: "choice" | "clarification";
+  responseKind?: "choice" | "clarification" | "submission";
   currentQuestion?: number;
   totalQuestions?: number;
 }
 
 export interface AskUserQuestion {
-  field: string;
+  id: string;
   question: string;
   options: Array<{
     id: string;
@@ -54,6 +59,14 @@ export interface AskUserQuestion {
   multiple?: boolean;
 }
 
+export interface AskQuestionDraft {
+  source: "option" | "custom" | null;
+  optionIds: string[];
+  customText: string;
+}
+
+export type AskDrafts = Record<string, AskQuestionDraft>;
+
 export interface PermissionInteraction {
   kind: "permission";
   id: string;
@@ -63,12 +76,58 @@ export interface PermissionInteraction {
   targetPath?: string;
 }
 
+export interface PermissionRequestDescription {
+  toolId: string;
+  toolName: string;
+  args: Record<string, unknown>;
+}
+
 export type ComposerInteraction = AskUserInteraction | PermissionInteraction;
 
 export type ComposerSlotKind = "composer" | ComposerInteraction["kind"];
 
 export function resolveComposerSlot(interaction?: ComposerInteraction): ComposerSlotKind {
   return interaction?.kind ?? "composer";
+}
+
+function readPermissionString(args: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+function shortenPermissionText(value: string, maxLength = 48): string {
+  return value.length > maxLength ? `${value.slice(0, maxLength - 1)}…` : value;
+}
+
+/** Converts a runtime permission request into the concise action the user approves. */
+export function describePermissionRequest(request: PermissionRequestDescription): string {
+  switch (request.toolId) {
+    case "weather": {
+      const city = readPermissionString(request.args, ["city"]);
+      return city ? `查询${shortenPermissionText(city, 24)}天气` : "查询天气";
+    }
+    case "web_search": {
+      const query = readPermissionString(request.args, ["query", "keyword"]);
+      return query ? `搜索“${shortenPermissionText(query)}”` : "搜索网页";
+    }
+    case "write_word": {
+      const filename = readPermissionString(request.args, ["filename"]);
+      return filename ? `创建 Word 文档：${shortenPermissionText(filename)}` : "创建 Word 文档";
+    }
+    case "write_excel": {
+      const filename = readPermissionString(request.args, ["filename"]);
+      return filename ? `创建 Excel 表格：${shortenPermissionText(filename)}` : "创建 Excel 表格";
+    }
+    case "write_powerpoint": {
+      const filename = readPermissionString(request.args, ["filename"]);
+      return filename ? `创建演示文稿：${shortenPermissionText(filename)}` : "创建演示文稿";
+    }
+    default:
+      return `执行「${request.toolName || request.toolId}」`;
+  }
 }
 
 export function describeRunStage(stage: AgentRunStage): string {
@@ -113,12 +172,59 @@ function normalizeOptions(value: unknown): AskUserQuestion["options"] {
   });
 }
 
+function normalizePublicOptions(value: unknown): AskUserQuestion["options"] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    const option = asRecord(item);
+    const id = asNonEmptyString(option?.id);
+    const label = asNonEmptyString(option?.label);
+    if (!id || !label) return [];
+    return [{ id, label, description: asNonEmptyString(option?.description) }];
+  });
+}
+
 /**
  * Accepts the two card payloads already emitted by main. Keeping this at the
  * renderer boundary makes malformed CUSTOM events inert instead of interactive.
  */
 export function normalizeChoiceInteraction(value: unknown): AskUserInteraction | undefined {
   const card = asRecord(value);
+  const interactionId = asNonEmptyString(card?.interactionId);
+  const runId = asNonEmptyString(card?.runId);
+  const revision = typeof card?.revision === "number" && Number.isInteger(card.revision)
+    ? card.revision
+    : undefined;
+  if (interactionId && runId && revision !== undefined && Array.isArray(card.questions)) {
+    const questions = card.questions.flatMap((item) => {
+      const question = asRecord(item);
+      const customInput = asRecord(question?.customInput);
+      const id = asNonEmptyString(question?.id);
+      const prompt = asNonEmptyString(question?.prompt);
+      const options = normalizePublicOptions(question?.options);
+      if (!id || !prompt || options.length < 2 || customInput?.enabled !== true) return [];
+      return [{
+        id,
+        question: prompt,
+        options,
+        allowCustomInput: true,
+        freeTextPlaceholder: asNonEmptyString(customInput.placeholder),
+        multiple: question.multiple === true,
+      } satisfies AskUserQuestion];
+    });
+    if (questions.length !== card.questions.length || questions.length === 0) return undefined;
+    return {
+      kind: "ask",
+      id: interactionId,
+      runId,
+      revision,
+      intro: asNonEmptyString(card.intro),
+      responseKind: "submission",
+      question: questions[0].question,
+      options: questions[0].options,
+      questions,
+    };
+  }
+
   const id = asNonEmptyString(card?.id);
   if (!id) return undefined;
 
@@ -128,7 +234,7 @@ export function normalizeChoiceInteraction(value: unknown): AskUserInteraction |
     const text = asNonEmptyString(question?.question);
     if (!field || !text) return [];
     return [{
-      field,
+      id: field,
       question: text,
       options: normalizeOptions(question.options),
       allowCustomInput: question.allowCustom !== false,
@@ -159,6 +265,90 @@ export function normalizeChoiceInteraction(value: unknown): AskUserInteraction |
     allowCustomInput: true,
     responseKind: "choice",
   };
+}
+
+export function createAskDrafts(questions: AskUserQuestion[]): AskDrafts {
+  return Object.fromEntries(questions.map((question) => [question.id, {
+    source: null,
+    optionIds: [],
+    customText: "",
+  } satisfies AskQuestionDraft]));
+}
+
+export function selectAskOption(
+  drafts: AskDrafts,
+  question: AskUserQuestion,
+  optionId: string,
+): AskDrafts {
+  if (!question.options.some((option) => option.id === optionId)) return drafts;
+  const current = drafts[question.id] ?? { source: null, optionIds: [], customText: "" };
+  const optionIds = question.multiple
+    ? (current.optionIds.includes(optionId)
+        ? current.optionIds.filter((id) => id !== optionId)
+        : [...current.optionIds, optionId])
+    : [optionId];
+  return {
+    ...drafts,
+    [question.id]: {
+      source: optionIds.length > 0 ? "option" : null,
+      optionIds,
+      customText: "",
+    },
+  };
+}
+
+export function updateAskCustomText(drafts: AskDrafts, questionId: string, text: string): AskDrafts {
+  return {
+    ...drafts,
+    [questionId]: {
+      source: text.trim() ? "custom" : null,
+      optionIds: [],
+      customText: text,
+    },
+  };
+}
+
+export function isAskComplete(questions: AskUserQuestion[], drafts: AskDrafts): boolean {
+  return questions.every((question) => {
+    const draft = drafts[question.id];
+    return draft?.source === "option" && draft.optionIds.length > 0
+      || draft?.source === "custom" && Boolean(draft.customText.trim());
+  });
+}
+
+export function buildAskSubmission(
+  interaction: AskUserInteraction,
+  drafts: AskDrafts,
+): AskCardSubmission {
+  const questions = interaction.questions ?? [];
+  if (interaction.responseKind !== "submission"
+    || !interaction.runId
+    || interaction.revision === undefined
+    || !isAskComplete(questions, drafts)) {
+    throw new Error("E_ASK_SUBMISSION_INCOMPLETE");
+  }
+  return {
+    interactionId: interaction.id,
+    runId: interaction.runId,
+    revision: interaction.revision,
+    answers: questions.map((question) => {
+      const draft = drafts[question.id];
+      if (draft.source === "custom") {
+        return { questionId: question.id, source: "custom" as const, text: draft.customText.trim() };
+      }
+      return question.multiple
+        ? { questionId: question.id, source: "option" as const, optionIds: draft.optionIds }
+        : { questionId: question.id, source: "option" as const, optionId: draft.optionIds[0] };
+    }),
+  };
+}
+
+export function shouldDismissAsk(interaction: AskUserInteraction, value: unknown): boolean {
+  const settlement = asRecord(value);
+  if (asNonEmptyString(settlement?.id) !== interaction.id) return false;
+  if (!interaction.runId || interaction.revision === undefined) return true;
+  return asNonEmptyString(settlement?.runId) === interaction.runId
+    && settlement?.revision === interaction.revision;
 }
 
 /** Converts the existing LangGraph CUSTOM payload into the small UI-only plan shape. */

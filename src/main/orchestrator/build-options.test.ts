@@ -191,6 +191,24 @@ describe("build-options", () => {
     expect(result.options.toolSystemContent).not.toContain("STYLE_PROMPT:lively")
   })
 
+  it("injects the trusted session workspace into tool instructions", async () => {
+    const deps = createBuildDeps()
+    deps.getWorkspaceBinding = (conversationId) => conversationId === "daily-session"
+      ? { workspaceRoot: "C:\\projects\\daily", displayName: "daily", boundAt: 1 }
+      : undefined
+
+    const result = await buildAgentRunOptions({
+      sessionId: "daily-session",
+      messages: [{ role: "user", content: "搜索后写一份 Markdown 报告" }],
+      style: "01_default.md",
+      executionMode: "work",
+    }, deps)
+
+    expect(result.options.resolvedWorkspaceRoot).toBe("C:\\projects\\daily")
+    expect(result.options.toolSystemContent).toContain("可信根目录：C:\\projects\\daily")
+    expect(result.options.toolSystemContent).toContain("不得写入桌面")
+  })
+
   it("adds a bounded social background only to enabled Chat runs", async () => {
     const deps = createBuildDeps()
     const retrievedAtom: SocialAtom = {

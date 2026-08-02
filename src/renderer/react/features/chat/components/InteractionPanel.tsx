@@ -1,6 +1,15 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
-import type { AskUserInteraction, AskUserQuestion, PermissionInteraction } from "./run-presentation";
+import {
+  buildAskSubmission,
+  createAskDrafts,
+  isAskComplete,
+  selectAskOption,
+  updateAskCustomText,
+  type AskUserInteraction,
+  type AskUserQuestion,
+  type PermissionInteraction,
+} from "./run-presentation";
 import "./RunExperience.css";
 
 function PanelShell({ children, title }: { children: ReactNode; title: string }) {
@@ -23,64 +32,66 @@ export function AskUserPanel({
   onIgnore?: () => void;
 }) {
   const questions: AskUserQuestion[] = interaction.questions ?? [{
-    field: "choice",
+    id: "choice",
     question: interaction.question,
     options: interaction.options,
     allowCustomInput: interaction.allowCustomInput,
   }];
   const [page, setPage] = useState(0);
-  const [selectedByField, setSelectedByField] = useState<Record<string, string[]>>({});
-  const [customByField, setCustomByField] = useState<Record<string, string>>({});
+  const [drafts, setDrafts] = useState(() => createAskDrafts(questions));
+  useEffect(() => {
+    setPage(0);
+    setDrafts(createAskDrafts(questions));
+  }, [interaction.id]);
   const current = questions[Math.min(page, questions.length - 1)];
-  const selected = selectedByField[current.field] ?? [];
-  const customAnswer = customByField[current.field] ?? "";
-  const selectedValues = selected.filter((value) => value !== "__custom__");
-  const canContinue = selectedValues.length > 0 || Boolean(customAnswer.trim());
-  const isLastQuestion = page === questions.length - 1;
+  const currentDraft = drafts[current.id] ?? { source: null, optionIds: [], customText: "" };
+  const canSubmit = isAskComplete(questions, drafts);
   const submit = () => {
-    if (!isLastQuestion) {
-      setPage((currentPage) => Math.min(currentPage + 1, questions.length - 1));
+    if (!canSubmit) return;
+    if (interaction.responseKind === "submission") {
+      onAnswer?.(buildAskSubmission(interaction, drafts));
       return;
     }
     if (interaction.responseKind === "clarification") {
       onAnswer?.({
         requestId: interaction.id,
-        answers: questions.flatMap((question) => {
-          const selectedValues = (selectedByField[question.field] ?? []).filter((value) => value !== "__custom__");
-          const customText = customByField[question.field]?.trim();
-          if (customText) return [{ field: question.field, customText }];
-          return selectedValues.length ? [{ field: question.field, selectedValues }] : [];
+        answers: questions.map((question) => {
+          const draft = drafts[question.id];
+          return draft.source === "custom"
+            ? { field: question.id, customText: draft.customText.trim() }
+            : { field: question.id, selectedValues: draft.optionIds };
         }),
       });
       return;
     }
-    onAnswer?.(customAnswer.trim() || selectedValues[0]);
+    onAnswer?.(currentDraft.source === "custom" ? currentDraft.customText.trim() : currentDraft.optionIds[0]);
   };
 
   return (
     <PanelShell title="昔涟正在询问">
       <div className="cy-interaction-panel__heading">
         <span className="cy-interaction-panel__status">昔涟正在询问</span>
-        {questions.length > 1 && <span className="cy-interaction-panel__page">{page + 1} / {questions.length}</span>}
+        {questions.length > 1 && (
+          <nav className="cy-interaction-panel__pager" aria-label="切换问题">
+            <button type="button" aria-label="上一个问题" disabled={disabled || page === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>‹</button>
+            <span className="cy-interaction-panel__page">{page + 1} / {questions.length}</span>
+            <button type="button" aria-label="下一个问题" disabled={disabled || page === questions.length - 1} onClick={() => setPage((value) => Math.min(questions.length - 1, value + 1))}>›</button>
+          </nav>
+        )}
       </div>
+      {interaction.intro && <p className="cy-interaction-panel__intro">{interaction.intro}</p>}
       <p className="cy-interaction-panel__question">{current.question}</p>
       <div className="cy-interaction-panel__options" role={current.multiple ? "group" : "radiogroup"} aria-label={current.question}>
         {current.options.map((option, index) => (
           <button
             type="button"
             key={option.id}
-            className={selected.includes(option.id) ? "is-selected" : ""}
+            className={currentDraft.optionIds.includes(option.id) ? "is-selected" : ""}
             role={current.multiple ? "checkbox" : "radio"}
-            aria-checked={selected.includes(option.id)}
+            aria-checked={currentDraft.optionIds.includes(option.id)}
             disabled={disabled}
             onClick={() => {
-              setCustomByField((values) => ({ ...values, [current.field]: "" }));
-              setSelectedByField((values) => ({
-                ...values,
-                [current.field]: current.multiple
-                  ? (selected.includes(option.id) ? selected.filter((value) => value !== option.id) : [...selected, option.id])
-                  : [option.id],
-              }));
+              setDrafts((values) => selectAskOption(values, current, option.id));
             }}
           >
             <span className="cy-interaction-panel__option-index">{index + 1}.</span>
@@ -91,23 +102,27 @@ export function AskUserPanel({
           </button>
         ))}
       </div>
-      {current.allowCustomInput !== false && (
-        <label className="cy-interaction-panel__custom-answer">
-          <span>其他回答</span>
-          <input
-            value={customAnswer}
-            disabled={disabled}
-            placeholder={current.freeTextPlaceholder ?? "输入你的回答…"}
-            onChange={(event) => {
-              setCustomByField((values) => ({ ...values, [current.field]: event.target.value }));
-              if (event.target.value.trim()) setSelectedByField((values) => ({ ...values, [current.field]: [] }));
-            }}
-          />
-        </label>
+      <label className="cy-interaction-panel__custom-answer">
+        <span>其他回答</span>
+        <input
+          value={currentDraft.customText}
+          disabled={disabled}
+          placeholder={current.freeTextPlaceholder ?? "输入你的回答…"}
+          onChange={(event) => setDrafts((values) => updateAskCustomText(values, current.id, event.target.value))}
+        />
+      </label>
+      {questions.length > 1 && (
+        <div className="cy-interaction-panel__question-index" aria-label="问题完成情况">
+          {questions.map((question, index) => {
+            const draft = drafts[question.id];
+            const answered = draft?.source === "option" || draft?.source === "custom";
+            return <button type="button" key={question.id} className={page === index ? "is-current" : ""} disabled={disabled} onClick={() => setPage(index)}>{answered ? "✓" : "○"} {index + 1}</button>;
+          })}
+        </div>
       )}
       <div className="cy-interaction-panel__actions">
-        {interaction.responseKind !== "clarification" && <button type="button" disabled={disabled} onClick={onIgnore}>忽略</button>}
-        <button type="button" className="is-primary" disabled={disabled || !canContinue} onClick={submit}>{isLastQuestion ? "提交" : "下一项"}</button>
+        {interaction.responseKind === "choice" && <button type="button" disabled={disabled} onClick={onIgnore}>忽略</button>}
+        <button type="button" className="is-primary" disabled={disabled || !canSubmit} onClick={submit}>{questions.length > 1 ? "提交全部" : "提交"}</button>
       </div>
     </PanelShell>
   );
@@ -126,7 +141,6 @@ export function PermissionPanel({
     <PanelShell title="昔涟正在获取审批">
       <div className="cy-interaction-panel__heading">
         <span className="cy-interaction-panel__status">昔涟正在获取审批</span>
-        <code>{interaction.toolName}</code>
       </div>
       <p className="cy-interaction-panel__question">{interaction.summary}</p>
       <dl className="cy-interaction-panel__metadata">

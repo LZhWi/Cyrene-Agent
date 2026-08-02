@@ -3132,12 +3132,16 @@ function createWindow(): void {
 
   // 注入用户选择卡片回调：工具调 ask_user_choice 时发 Custom 事件给聊天窗口
   setChoiceCardSender((cardData) => {
-    if (chatWindow && !chatWindow.isDestroyed()) {
-      chatWindow.webContents.send(IPC.AGUI_EVENT, {
-        type: "CUSTOM",
-        name: "cyrene.choice",
-        value: cardData,
-      });
+    // 旧 ask_user_choice 还没有本轮 sender；迁移期同时投递旧聊天窗口和 React 预览。
+    // LangGraph 的结构化 Ask 走 agui-bridge 中的定向 sender，不会依赖此回退。
+    for (const win of [chatWindow, reactPreviewWindow]) {
+      if (win && !win.isDestroyed()) {
+        win.webContents.send(IPC.AGUI_EVENT, {
+          type: "CUSTOM",
+          name: "cyrene.choice",
+          value: cardData,
+        });
+      }
     }
   });
 

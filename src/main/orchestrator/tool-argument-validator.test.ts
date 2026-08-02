@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { parseAndValidateToolCallArguments, resolveToolForCapability } from "./tool-argument-validator";
+import {
+  inspectToolCallArguments,
+  parseAndValidateToolCallArguments,
+  resolveToolForCapability,
+} from "./tool-argument-validator";
 import { controlledInputType, controlledInputKind } from "./tool-registry";
 import type { ToolDefinition } from "./tool-registry";
 import type { ToolCallResult } from "./types";
@@ -74,6 +78,72 @@ describe("tool argument validator", () => {
       { id: "call-1", name: "write_word", arguments: '{}' },
       tool, [], [],
     )).toThrow(/missing required fields: filename, title, paragraphs/);
+  });
+
+  it("returns a validated partial snapshot and only the missing required fields", () => {
+    const tool: ToolDefinition = {
+      id: "write_word", capability: "write_word", name: "写 Word", description: "生成文档", enabled: true,
+      inputSchema: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          format: { type: "string", enum: ["docx", "pdf"] },
+          copies: { type: "integer" },
+        },
+        required: ["title", "format", "copies"],
+      },
+      execute: async () => "",
+    };
+
+    expect(inspectToolCallArguments(
+      { id: "call-1", name: "write_word", arguments: '{"title":"日报"}' },
+      tool, [], [],
+    )).toEqual({
+      kind: "missing_required",
+      args: { title: "日报" },
+      missingFields: ["format", "copies"],
+    });
+  });
+
+  it("applies an explicit schema default and a sole enum value before reporting missing fields", () => {
+    const tool: ToolDefinition = {
+      id: "write_word", capability: "write_word", name: "写 Word", description: "生成文档", enabled: true,
+      inputSchema: {
+        type: "object",
+        properties: {
+          title: { type: "string" },
+          format: { type: "string", enum: ["docx"] },
+          copies: { type: "integer", default: 1 },
+        },
+        required: ["title", "format", "copies"],
+      },
+      execute: async () => "",
+    };
+
+    expect(inspectToolCallArguments(
+      { id: "call-1", name: "write_word", arguments: '{"title":"日报"}' },
+      tool, [], [],
+    )).toEqual({
+      kind: "complete",
+      args: { title: "日报", format: "docx", copies: 1 },
+    });
+  });
+
+  it("does not preserve a partial snapshot with invalid present arguments", () => {
+    const tool: ToolDefinition = {
+      id: "write_word", capability: "write_word", name: "写 Word", description: "生成文档", enabled: true,
+      inputSchema: {
+        type: "object",
+        properties: { title: { type: "string" }, copies: { type: "integer" } },
+        required: ["title", "copies"],
+      },
+      execute: async () => "",
+    };
+
+    expect(() => inspectToolCallArguments(
+      { id: "call-1", name: "write_word", arguments: '{"title":"日报","copies":1.5}' },
+      tool, [], [],
+    )).toThrow(/field 'copies' expected integer/);
   });
 
   it("E_TOOL_ARGUMENT_SCHEMA includes specific unknown fields", () => {

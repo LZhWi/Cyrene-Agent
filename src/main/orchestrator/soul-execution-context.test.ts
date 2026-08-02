@@ -146,6 +146,29 @@ describe("buildSoulExecutionContext", () => {
     });
   });
 
+  it("projects the verified path of a locally generated file without exposing raw tool output", () => {
+    const documentTool = tool("write_word", {
+      soulActionLabel: "生成 Word 文档",
+      soulProjection: {
+        projector: "artifact_path",
+        source: "trusted_internal",
+        kind: "docx",
+      } as SoulProjectionConfig,
+    });
+
+    const ctx = buildSoulExecutionContext(
+      [succeeded("write_word", "[write_word] 已生成：D:\\33\\今日新闻速览.docx")],
+      [documentTool],
+    );
+
+    expect(ctx.projections).toEqual([{
+      kind: "entity_detail",
+      source: "trusted_internal",
+      title: "今日新闻速览.docx",
+      attributes: { path: "D:\\33\\今日新闻速览.docx", kind: "docx" },
+    }]);
+  });
+
   describe("entity_list projection", () => {
     it("extracts candidates without candidateRef", () => {
       const ctx = buildSoulExecutionContext(

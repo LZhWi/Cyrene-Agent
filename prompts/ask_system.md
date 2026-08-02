@@ -50,7 +50,7 @@ interface AskClarificationOutput {
     question: string;
     type: "single_select" | "multi_select" | "text";
     options: Array<{ value: string; label: string }>;
-    allowCustom: boolean;
+    allowCustom: true;
     freeTextPlaceholder: string;
   }>;
   deferredFields: string[];
@@ -91,19 +91,11 @@ interface AskClarificationOutput {
 
 ## 候选项规则
 
-- `text` 类型的 `options` 必须为空。
-- 选择题最多输出 3 个候选项。
+- 每个问题必须输出 2～3 个可点击建议项，包括 `text` 类型问题。
 - 若提供 `allowedOptions`，只能从中选择，不得创造其他值。
-- 若没有 `allowedOptions`，只能使用 `candidateHints`；两者都没有时改为 `text`。
+- 若没有 `allowedOptions` 或 `candidateHints`，可生成与问题语义直接相关的普通建议项；这些建议只作为澄清答案返回 Agent，不具有工具执行权限。
 - 不凑数量，不提供系统无法执行的选项。
-- `allowCustom` 按上游值输出；未提供时，选择题默认为 `true`，文本题为 `false`。
-- Runtime 会在 `allowCustom=true` 时自动追加最后一项：
-
-```json
-{ "value": "__custom__", "label": "其他，我自己填写" }
-```
-
-因此模型不得自行输出该选项。Runtime 追加后，每题总选项不得超过 4 个。
+- `allowCustom` 始终输出 `true`。自定义输入框由 Runtime 单独展示，不得把“其他”作为 options 项输出。
 
 ## 边界
 
@@ -124,8 +116,12 @@ interface AskClarificationOutput {
       "field": "topic",
       "question": "这份文档主要写什么？",
       "type": "text",
-      "options": [],
-      "allowCustom": false,
+      "options": [
+        { "value": "project_brief", "label": "项目说明" },
+        { "value": "study_summary", "label": "学习总结" },
+        { "value": "event_plan", "label": "活动方案" }
+      ],
+      "allowCustom": true,
       "freeTextPlaceholder": "例如：项目说明、学习总结或活动方案"
     },
     {

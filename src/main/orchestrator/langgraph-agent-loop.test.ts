@@ -110,6 +110,23 @@ function options(adapter: FakeAdapter, executeTool = vi.fn(async () => ({
   };
 }
 
+function reportTool(): ToolDefinition {
+  return {
+    id: "write_report", capability: "report.write", name: "生成报告",
+    description: "根据标题和格式生成报告", enabled: true,
+    effectKind: "mutation", verificationPolicy: "artifact",
+    inputSchema: {
+      type: "object",
+      properties: {
+        title: { type: "string", description: "报告标题" },
+        format: { type: "string", description: "报告格式", enum: ["docx", "pdf", "md"] },
+      },
+      required: ["title", "format"],
+    },
+    execute: async () => "unused",
+  };
+}
+
 function fakeSdkTransport(adapter: FakeAdapter, failAtCall?: number) {
   let calls = 0;
   return async ({ request }: SdkStreamRunInput): Promise<ChatResponse> => {
@@ -356,7 +373,10 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
         field: "version",
         question: "希望播放哪个版本？",
         type: "single_select",
-        options: [{ value: "Live 版", label: "Live 版" }],
+        options: [
+          { value: "Live 版", label: "Live 版" },
+          { value: "录音室版", label: "录音室版" },
+        ],
         allowCustom: true,
         freeTextPlaceholder: "填写其他版本",
       }],
@@ -384,6 +404,170 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     }));
     expect(executeTool).toHaveBeenCalledTimes(1);
     expect(result.reply).toBe("已按你的选择播放。");
+  });
+
+  it("resumes the selected action after a parameter Ask without consulting Action Gate again", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({
+      decision: "act",
+      capability: "report.write",
+      objective: "生成今日新闻报告",
+      targetRefs: [],
+      afterSuccess: "respond",
+    });
+    adapter.enqueueToolCall("write_report", { title: "今日新闻" });
+    adapter.enqueueToolCall("write_report", { title: "今日新闻" });
+    adapter.enqueueJson({
+      intro: "还需要确认报告格式。",
+      questions: [{
+        field: "format",
+        question: "希望生成哪种格式？",
+        type: "single_select",
+        options: [
+          { value: "docx", label: "Word" },
+          { value: "pdf", label: "PDF" },
+          { value: "md", label: "Markdown" },
+        ],
+        allowCustom: true,
+        freeTextPlaceholder: "填写其他格式",
+      }],
+      deferredFields: [],
+    });
+    adapter.enqueueText("报告已经生成。 ");
+    const executeTool = vi.fn(async () => ({
+      status: "succeeded" as const,
+      output: JSON.stringify({ filePath: "D:\\33\\今日新闻.pdf" }),
+    }));
+    const requestUserClarification = vi.fn(async (card) => {
+      expect(card.mode).toBe("action_parameters");
+      return {
+        requestId: "choice-parameter-1",
+        answers: [{ field: "format", selectedValues: ["pdf"] }],
+      };
+    });
+
+    const result = await runLangGraphAgentLoop({
+      ...options(adapter, executeTool),
+      messages: [{ role: "user", content: "生成今日新闻报告" }],
+      tools: [reportTool()],
+      originalQuery: "生成今日新闻报告",
+      contextualizedQuery: "生成今日新闻报告",
+      citaContextBlock: "",
+      trustedRefs: [],
+      askSystemContent: "ASK_SYSTEM",
+      conversationId: "run-parameter-1",
+      requestUserClarification,
+    });
+
+    expect(requestUserClarification).toHaveBeenCalledTimes(1);
+    expect(executeTool).toHaveBeenCalledTimes(1);
+    expect(executeTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "write_report",
+        arguments: '{"title":"今日新闻","format":"pdf"}',
+      }),
+      expect.any(Set),
+    );
+    expect(adapter.requests.filter((request) => request.messages[0]?.content === "TOOL_SYSTEM")).toHaveLength(0);
+    expect(adapter.requests.filter((request) => String(request.messages.at(-1)?.content).includes("machineInput"))).toHaveLength(1);
+    expect(result.reply).toContain("报告已经生成");
+  });
+
+  it("returns an ambiguous parameter answer to Action Gate without executing the pending tool", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({
+      decision: "act",
+      capability: "report.write",
+      objective: "生成今日新闻报告",
+      targetRefs: [],
+      afterSuccess: "respond",
+    });
+    adapter.enqueueToolCall("write_report", { title: "今日新闻" });
+    adapter.enqueueToolCall("write_report", { title: "今日新闻" });
+    adapter.enqueueJson({
+      intro: "还需要确认报告格式。",
+      questions: [{
+        field: "format",
+        question: "希望生成哪种格式？",
+        type: "single_select",
+        options: [
+          { value: "docx", label: "Word" },
+          { value: "pdf", label: "PDF" },
+          { value: "md", label: "Markdown" },
+        ],
+        allowCustom: true,
+        freeTextPlaceholder: "填写其他格式",
+      }],
+      deferredFields: [],
+    });
+    adapter.enqueueDecision({ decision: "respond", reason: "需要理解用户的自定义格式要求" });
+    adapter.enqueueText("我明白你的风格要求了，我们再确认具体输出格式。 ");
+    const executeTool = vi.fn();
+
+    const result = await runLangGraphAgentLoop({
+      ...options(adapter, executeTool),
+      messages: [{ role: "user", content: "生成今日新闻报告" }],
+      tools: [reportTool()],
+      originalQuery: "生成今日新闻报告",
+      contextualizedQuery: "生成今日新闻报告",
+      citaContextBlock: "",
+      trustedRefs: [],
+      askSystemContent: "ASK_SYSTEM",
+      runId: "run-parameter-2",
+      requestUserClarification: async () => ({
+        requestId: "choice-parameter-2",
+        answers: [{ field: "format", customText: "做成适合朋友圈的东西" }],
+      }),
+    });
+
+    expect(executeTool).not.toHaveBeenCalled();
+    const gateRequests = adapter.requests.filter((request) => String(request.messages.at(-1)?.content).includes("machineInput"));
+    expect(gateRequests).toHaveLength(2);
+    expect(String(gateRequests[1].messages.at(-1)?.content)).toContain("做成适合朋友圈的东西");
+    expect(result.reply).toContain("明白你的风格要求");
+  });
+
+  it("returns to Soul instead of rendering an Ask with insufficient options", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({
+      decision: "ask_user",
+      reason: "主题不明确",
+      missingFields: [{
+        field: "topic",
+        reason: "主题不明确",
+        required: true,
+        questionHint: "想写什么主题？",
+        typeHint: "text",
+        allowedOptions: [],
+        candidateHints: [],
+        allowCustom: true,
+      }],
+    });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      adapter.enqueueJson({
+        intro: "还需要确认一下。",
+        questions: [{
+          field: "topic",
+          question: "想写什么主题？",
+          type: "text",
+          options: [{ value: "项目说明", label: "项目说明" }],
+          allowCustom: true,
+          freeTextPlaceholder: "填写其他主题",
+        }],
+        deferredFields: [],
+      });
+    }
+    adapter.enqueueText("你可以直接告诉我想写的主题，我再继续帮你。 ");
+    const requestUserClarification = vi.fn();
+
+    const result = await runLangGraphAgentLoop({
+      ...options(adapter),
+      askSystemContent: "ASK_SYSTEM",
+      requestUserClarification,
+    });
+
+    expect(requestUserClarification).not.toHaveBeenCalled();
+    expect(result.reply).toContain("告诉我想写的主题");
   });
 
   it("applies style sampling only to the final Soul request", async () => {

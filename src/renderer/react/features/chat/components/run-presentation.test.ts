@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildAskSubmission,
+  createAskDrafts,
+  describePermissionRequest,
   describeRunStage,
+  isAskComplete,
   normalizeChoiceInteraction,
   normalizeTaskPlanPresentation,
   resolveComposerSlot,
+  selectAskOption,
+  shouldDismissAsk,
+  updateAskCustomText,
   type ComposerInteraction,
 } from "./run-presentation";
 
@@ -37,6 +44,29 @@ describe("work run presentation", () => {
     expect(describeRunStage({ kind: "responding" })).toBe("昔涟正在组织回复…");
   });
 
+  it("reduces permission requests to the action a person needs to approve", () => {
+    expect(describePermissionRequest({
+      toolId: "weather",
+      toolName: "查天气",
+      args: { city: "淄博" },
+    })).toBe("查询淄博天气");
+    expect(describePermissionRequest({
+      toolId: "web_search",
+      toolName: "搜索网页",
+      args: { query: "今天的科技新闻" },
+    })).toBe("搜索“今天的科技新闻”");
+    expect(describePermissionRequest({
+      toolId: "write_word",
+      toolName: "写入 Word",
+      args: { filename: "日报.docx" },
+    })).toBe("创建 Word 文档：日报.docx");
+    expect(describePermissionRequest({
+      toolId: "unknown_tool",
+      toolName: "自定义操作",
+      args: {},
+    })).toBe("执行「自定义操作」");
+  });
+
   it("normalizes both legacy choices and structured clarification into the same composer slot", () => {
     expect(normalizeChoiceInteraction({
       id: "choice-1",
@@ -64,8 +94,130 @@ describe("work run presentation", () => {
       kind: "ask",
       id: "choice-2",
       responseKind: "clarification",
-      questions: [{ field: "format", options: [{ id: "docx", label: "Word" }] }],
+      questions: [{ id: "format", options: [{ id: "docx", label: "Word" }] }],
     });
+  });
+
+  it("normalizes the opaque public Ask payload without requiring canonical option values", () => {
+    expect(normalizeChoiceInteraction({
+      interactionId: "choice-3",
+      runId: "run-7",
+      revision: 2,
+      mode: "semantic_clarification",
+      intro: "还需要确认两个细节。",
+      questions: [{
+        id: "question-1",
+        prompt: "希望生成哪种格式？",
+        required: true,
+        multiple: false,
+        options: [
+          { id: "option-word", label: "Word" },
+          { id: "option-pdf", label: "PDF" },
+        ],
+        customInput: { enabled: true, placeholder: "填写其他格式" },
+      }],
+    })).toEqual({
+      kind: "ask",
+      id: "choice-3",
+      runId: "run-7",
+      revision: 2,
+      intro: "还需要确认两个细节。",
+      responseKind: "submission",
+      question: "希望生成哪种格式？",
+      options: [
+        { id: "option-word", label: "Word" },
+        { id: "option-pdf", label: "PDF" },
+      ],
+      questions: [{
+        id: "question-1",
+        question: "希望生成哪种格式？",
+        options: [
+          { id: "option-word", label: "Word" },
+          { id: "option-pdf", label: "PDF" },
+        ],
+        allowCustomInput: true,
+        freeTextPlaceholder: "填写其他格式",
+        multiple: false,
+      }],
+    });
+  });
+
+  it("keeps unordered multi-question drafts and enforces option XOR custom", () => {
+    const interaction = normalizeChoiceInteraction({
+      interactionId: "choice-4",
+      runId: "run-8",
+      revision: 1,
+      mode: "semantic_clarification",
+      intro: "确认两件事。",
+      questions: [
+        {
+          id: "q1",
+          prompt: "格式？",
+          required: true,
+          multiple: false,
+          options: [{ id: "word", label: "Word" }, { id: "pdf", label: "PDF" }],
+          customInput: { enabled: true },
+        },
+        {
+          id: "q2",
+          prompt: "语气？",
+          required: true,
+          multiple: false,
+          options: [{ id: "formal", label: "正式" }, { id: "light", label: "轻松" }],
+          customInput: { enabled: true },
+        },
+      ],
+    })!;
+    let drafts = createAskDrafts(interaction.questions!);
+    drafts = updateAskCustomText(drafts, "q2", "  活泼一点  ");
+    expect(isAskComplete(interaction.questions!, drafts)).toBe(false);
+    drafts = selectAskOption(drafts, interaction.questions![0], "word");
+    drafts = selectAskOption(drafts, interaction.questions![1], "formal");
+    expect(drafts.q2).toEqual({ source: "option", optionIds: ["formal"], customText: "" });
+    expect(isAskComplete(interaction.questions!, drafts)).toBe(true);
+    drafts = updateAskCustomText(drafts, "q2", "活泼一点");
+    expect(drafts.q2).toEqual({ source: "custom", optionIds: [], customText: "活泼一点" });
+
+    expect(buildAskSubmission(interaction, drafts)).toEqual({
+      interactionId: "choice-4",
+      runId: "run-8",
+      revision: 1,
+      answers: [
+        { questionId: "q1", source: "option", optionId: "word" },
+        { questionId: "q2", source: "custom", text: "活泼一点" },
+      ],
+    });
+  });
+
+  it("dismisses an Ask only for the matching run and revision", () => {
+    const interaction = normalizeChoiceInteraction({
+      interactionId: "choice-5",
+      runId: "run-current",
+      revision: 4,
+      mode: "semantic_clarification",
+      intro: "确认一下。",
+      questions: [{
+        id: "q1",
+        prompt: "选择？",
+        required: true,
+        multiple: false,
+        options: [{ id: "a", label: "A" }, { id: "b", label: "B" }],
+        customInput: { enabled: true },
+      }],
+    })!;
+
+    expect(shouldDismissAsk(interaction, {
+      id: "choice-5",
+      runId: "run-old",
+      revision: 4,
+      reason: "timeout",
+    })).toBe(false);
+    expect(shouldDismissAsk(interaction, {
+      id: "choice-5",
+      runId: "run-current",
+      revision: 4,
+      reason: "timeout",
+    })).toBe(true);
   });
 
   it("keeps one plan card updated from task-plan snapshots", () => {

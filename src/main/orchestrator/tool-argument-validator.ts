@@ -29,20 +29,25 @@ function validateValue(value: unknown, schema: JsonSchemaProp): boolean {
     return Object.entries(record).every(([key, item]) => validateValue(item, schema.properties[key]));
   }
   if (schema.type === "number" && typeof value !== "number") return false;
+  if (schema.type === "integer" && (!Number.isInteger(value) || typeof value !== "number")) return false;
   if (schema.type === "string" && typeof value !== "string") return false;
   if (schema.type === "boolean" && typeof value !== "boolean") return false;
   return !("enum" in schema) || schema.enum === undefined
     || (typeof value === "string" && schema.enum.includes(value));
 }
 
-function validateRoot(args: Record<string, unknown>, tool: ToolDefinition): void {
+function validateRoot(
+  args: Record<string, unknown>,
+  tool: ToolDefinition,
+  allowMissingRequired = false,
+): string[] {
   const schema = tool.inputSchema;
   const extraKeys = Object.keys(args).filter((key) => !(key in schema.properties));
   if (extraKeys.length > 0) {
     throw new Error(`E_TOOL_ARGUMENT_SCHEMA: unknown fields: ${extraKeys.join(", ")}`);
   }
   const missingKeys = schema.required?.filter((key) => !(key in args)) ?? [];
-  if (missingKeys.length > 0) {
+  if (missingKeys.length > 0 && !allowMissingRequired) {
     throw new Error(`E_TOOL_ARGUMENT_SCHEMA: missing required fields: ${missingKeys.join(", ")}`);
   }
   for (const [key, value] of Object.entries(args)) {
@@ -52,6 +57,23 @@ function validateRoot(args: Record<string, unknown>, tool: ToolDefinition): void
       throw new Error(`E_TOOL_ARGUMENT_SCHEMA: field '${key}' expected ${expected}, got ${actual}`);
     }
   }
+  return missingKeys;
+}
+
+function applyDeterministicDefaults(
+  args: Record<string, unknown>,
+  tool: ToolDefinition,
+): Record<string, unknown> {
+  const resolved = { ...args };
+  for (const key of tool.inputSchema.required ?? []) {
+    if (key in resolved) continue;
+    const schema = tool.inputSchema.properties[key];
+    const candidate = schema.default !== undefined
+      ? schema.default
+      : ("enum" in schema && schema.enum?.length === 1 ? schema.enum[0] : undefined);
+    if (candidate !== undefined && validateValue(candidate, schema)) resolved[key] = candidate;
+  }
+  return resolved;
 }
 
 function parsedSuccessfulOutputs(results: ToolCallResult[]): unknown[] {
@@ -108,8 +130,32 @@ export function parseAndValidateToolCallArguments(
   toolResults: ToolCallResult[],
 ): Record<string, unknown> {
   if (toolCall.name !== tool.id) throw new Error("E_NATIVE_TOOL_PROTOCOL");
-  const args = parseArguments(toolCall);
+  const args = applyDeterministicDefaults(parseArguments(toolCall), tool);
   validateRoot(args, tool);
   validateControlledInputs(args, tool, targetRefs, toolResults);
   return args;
+}
+
+export type ToolArgumentInspection =
+  | { kind: "complete"; args: Record<string, unknown> }
+  | { kind: "missing_required"; args: Record<string, unknown>; missingFields: string[] };
+
+/**
+ * Parses and validates every argument that is present while allowing required
+ * fields to be absent. This is the sole entry used to create a PendingAction;
+ * malformed, unknown, or untrusted present values still fail closed.
+ */
+export function inspectToolCallArguments(
+  toolCall: ToolCall,
+  tool: ToolDefinition,
+  targetRefs: string[],
+  toolResults: ToolCallResult[],
+): ToolArgumentInspection {
+  if (toolCall.name !== tool.id) throw new Error("E_NATIVE_TOOL_PROTOCOL");
+  const args = applyDeterministicDefaults(parseArguments(toolCall), tool);
+  const missingFields = validateRoot(args, tool, true);
+  validateControlledInputs(args, tool, targetRefs, toolResults);
+  return missingFields.length > 0
+    ? { kind: "missing_required", args, missingFields }
+    : { kind: "complete", args };
 }

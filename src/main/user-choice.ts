@@ -13,10 +13,16 @@
 import { ipcMain } from "electron";
 import { IPC } from "../shared/ipc-channels";
 import type {
+  AskCardPayload,
+  AskCardSubmission,
   AskClarificationCard,
   AskUserAnswer,
 } from "../shared/ask-clarification";
-import { validateAskUserAnswer } from "./orchestrator/ask-card";
+import {
+  publishAskCard,
+  resolveAskCardSubmission,
+  validateAskUserAnswer,
+} from "./orchestrator/ask-card";
 import { getTimeoutSettings } from "./timeout-manager";
 
 const LOG_PREFIX = "[UserChoice]";
@@ -37,15 +43,21 @@ export interface LegacyChoiceCardData {
   default?: string;
 }
 
-export interface AskChoiceCardData extends AskClarificationCard {
-  id: string;
-}
+export type ChoiceCardData = LegacyChoiceCardData | AskCardPayload;
 
-export type ChoiceCardData = LegacyChoiceCardData | AskChoiceCardData;
+export type ChoiceSettlementReason = "answered" | "timeout" | "unavailable";
+
+export interface ChoiceSettlement {
+  id: string;
+  runId: string;
+  revision: number;
+  reason: ChoiceSettlementReason;
+}
 
 interface PendingChoice {
   resolve: (value: unknown) => boolean;
   timer: NodeJS.Timeout;
+  status: "open" | "resolving";
 }
 
 const pendingChoices = new Map<string, PendingChoice>();
@@ -84,6 +96,7 @@ export function requestUserChoice(
         return true;
       },
       timer,
+      status: "open",
     });
 
     const payload: ChoiceCardData = { id, question, options, default: defaultValue };
@@ -103,35 +116,49 @@ export function requestUserChoice(
 
 export function requestUserClarification(
   card: AskClarificationCard,
+  sender?: (card: ChoiceCardData) => void,
+  onSettled?: (settlement: ChoiceSettlement) => void,
+  identity: { runId: string; revision: number } = { runId: "legacy", revision: 1 },
 ): Promise<AskUserAnswer> {
   return new Promise<AskUserAnswer>((resolve) => {
     const id = "choice-" + (++choiceCounter) + "-" + Date.now();
     const emptyAnswer: AskUserAnswer = { requestId: id, answers: [] };
     const timeout = getTimeoutSettings().userChoiceTimeout;
+    const publication = publishAskCard(card, { interactionId: id, ...identity });
     const timer = setTimeout(() => {
+      const pending = pendingChoices.get(id);
+      if (!pending || pending.status !== "open") return;
       pendingChoices.delete(id);
       console.warn(LOG_PREFIX, "澄清超时（" + timeout + "ms）");
+      onSettled?.({ id, ...identity, reason: "timeout" });
       resolve(emptyAnswer);
     }, timeout);
     pendingChoices.set(id, {
       resolve: (value) => {
         try {
-          resolve(validateAskUserAnswer(card, id, value as AskUserAnswer));
+          const submitted = value as Record<string, unknown> | null;
+          const answer = submitted && typeof submitted === "object" && "interactionId" in submitted
+            ? resolveAskCardSubmission(publication, value as AskCardSubmission)
+            : validateAskUserAnswer(card, id, value as AskUserAnswer);
+          resolve(answer);
+          onSettled?.({ id, ...identity, reason: "answered" });
           return true;
         } catch {
           return false;
         }
       },
       timer,
+      status: "open",
     });
-    const payload: AskChoiceCardData = { id, ...card };
     console.log(LOG_PREFIX, "发送结构化澄清:", id);
-    if (choiceCardSender) {
-      choiceCardSender(payload);
+    const cardSender = sender ?? choiceCardSender;
+    if (cardSender) {
+      cardSender(publication.payload);
     } else {
       clearTimeout(timer);
       pendingChoices.delete(id);
       console.warn(LOG_PREFIX, "未注入卡片回调，返回空澄清");
+      onSettled?.({ id, ...identity, reason: "unavailable" });
       resolve(emptyAnswer);
     }
   });
@@ -141,17 +168,19 @@ export function requestUserClarification(
 export function registerChoiceIpc(): void {
   ipcMain.handle(IPC.CHOICE_RESOLVE, (
     _event,
-    payload: { id: string; value?: string; answer?: AskUserAnswer },
+    payload: { id: string; value?: string; answer?: AskUserAnswer | AskCardSubmission },
   ) => {
     const pending = pendingChoices.get(payload?.id);
-    if (!pending) {
+    if (!pending || pending.status !== "open") {
       console.warn(LOG_PREFIX, "选择回传未匹配到 pending:", payload?.id);
       return { ok: false };
     }
+    pending.status = "resolving";
     const resolved = payload.answer ?? payload.value ?? "";
     console.log(LOG_PREFIX, "用户回答 payload:", JSON.stringify({ id: payload.id, hasAnswer: !!payload.answer, valueType: typeof payload.value, resolved: JSON.stringify(resolved).slice(0, 200) }));
     const accepted = pending.resolve(resolved);
     if (!accepted) {
+      pending.status = "open";
       console.warn(LOG_PREFIX, "用户选择校验失败:", payload.id);
       return { ok: false };
     }

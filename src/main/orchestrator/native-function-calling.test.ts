@@ -69,6 +69,23 @@ describe("resolveNativeToolCall", () => {
     expect(result).toEqual({ id: "call-1", name: "music_search", arguments: '{"keyword":"左转灯"}' });
   });
 
+  it("makes a native parameter turn closed-world to the selected tool", async () => {
+    const invoke = vi.fn(async (request: ChatRequest) => response([{
+      id: "call-1", name: "music_search", arguments: '{"keyword":"左转灯"}',
+    }]));
+
+    await resolveNativeToolCall({
+      model: "m", nativeFcSystemPrompt: "test", executionBrief: "test",
+      toolResults: [], tool: tool({ keyword: { type: "string" } }),
+      protocolFeedback: "E_NATIVE_TOOL_PROTOCOL:WRONG_TOOL_NAME: expected=music_search got=ask_user_choice",
+    }, invoke);
+
+    const system = String(invoke.mock.calls[0]?.[0].messages[0]?.content);
+    expect(system).toContain("唯一允许调用的工具是 music_search");
+    expect(system).toContain("不得调用 ask_user_choice 或任何其他工具");
+    expect(system).toContain("ask_user_choice 不在本轮工具列表");
+  });
+
   it("rejects text pretending to be a function call", async () => {
     const invoke = vi.fn(async () => response([], '{"name":"music_search","arguments":{"keyword":"左转灯"}}'));
     await expect(resolveNativeToolCall({

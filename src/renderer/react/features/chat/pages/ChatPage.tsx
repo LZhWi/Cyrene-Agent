@@ -2,8 +2,10 @@ import { useEffect, useRef, useState, type DragEvent } from "react";
 import { ChatComposer, type ComposerAttachment } from "../components/ChatComposer";
 import { ComposerSlot } from "../components/ComposerSlot";
 import {
+  describePermissionRequest,
   normalizeChoiceInteraction,
   normalizeTaskPlanPresentation,
+  shouldDismissAsk,
   type AgentRunStage,
   type ComposerInteraction,
 } from "../components/run-presentation";
@@ -192,13 +194,13 @@ function settingsApprovalApi(): SettingsApprovalApi | undefined {
 }
 
 function permissionInteraction(request: PermissionApprovalRequest): ComposerInteraction {
-  const target = [request.args.path, request.args.filePath, request.args.filename]
+  const target = [request.args.path, request.args.filePath]
     .find((value): value is string => typeof value === "string" && value.trim().length > 0);
   return {
     kind: "permission",
     id: request.id,
     toolName: request.toolName || request.toolId,
-    summary: request.toolDescription || `${request.toolName || request.toolId} 请求执行`,
+    summary: describePermissionRequest(request),
     targetPath: target,
   };
 }
@@ -705,6 +707,11 @@ export function ChatPage() {
           setComposerInteraction(interaction);
           updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "waiting_user" } });
         }
+      } else if (event.type === "CUSTOM" && event.name === "cyrene.choice.dismiss") {
+        setComposerInteraction((current) => {
+          if (current?.kind !== "ask" || !shouldDismissAsk(current, event.value)) return current;
+          return undefined;
+        });
       } else if (event.type === "CUSTOM" && event.name === "cyrene.taskPlan") {
         const taskPlan = normalizeTaskPlanPresentation(event.value);
         if (taskPlan) {
@@ -939,9 +946,20 @@ export function ChatPage() {
     if (!store) return;
     let workspace: { path: string; displayName?: string } | undefined;
     if (targetMode === "work" || targetMode === "code" || targetMode === "daily") {
-      const picked = await store.pickWorkspaceFolder();
-      if (!picked.ok || !picked.path) return;
-      workspace = { path: picked.path, displayName: picked.displayName };
+      // 同一项目下的新任务应继承当前会话的可信工作区；只有还未选择
+      // 任何项目时才打开目录选择器，避免用户为每个任务重复选一次。
+      const activeId = activeSessionIdsRef.current[targetMode];
+      const activeSession = activeId ? await store.get(activeId) : null;
+      if (activeSession?.workspaceBinding?.workspaceRoot) {
+        workspace = {
+          path: activeSession.workspaceBinding.workspaceRoot,
+          displayName: activeSession.workspaceBinding.displayName,
+        };
+      } else {
+        const picked = await store.pickWorkspaceFolder();
+        if (!picked.ok || !picked.path) return;
+        workspace = { path: picked.path, displayName: picked.displayName };
+      }
     }
     const session = await store.create({
       identityId: null,

@@ -31,9 +31,9 @@ export interface CapabilityCompletionEvidence {
 
 /** JSON Schema 片段：参数可以是简单类型，也可以是 array/object（含 items/properties）。 */
 export type JsonSchemaProp =
-  | { type: string; description?: string; enum?: string[] }
-  | { type: "array"; description?: string; items: JsonSchemaProp }
-  | { type: "object"; description?: string; properties: Record<string, JsonSchemaProp>; required?: string[] };
+  | { type: string; description?: string; enum?: string[]; default?: unknown; askAliases?: Record<string, unknown> }
+  | { type: "array"; description?: string; items: JsonSchemaProp; default?: unknown; askAliases?: Record<string, unknown> }
+  | { type: "object"; description?: string; properties: Record<string, JsonSchemaProp>; required?: string[]; default?: unknown; askAliases?: Record<string, unknown> };
 
 /** 控制输入策略：简单字符串或带 kind 的对象形式 */
 export type ControlledInputPolicy =

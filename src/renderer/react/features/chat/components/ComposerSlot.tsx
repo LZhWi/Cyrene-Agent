@@ -14,7 +14,7 @@ export function ComposerSlot({
   composer: ReactNode;
   interaction?: ComposerInteraction;
   interactionBusy?: boolean;
-  onAnswer?: (interactionId: string, answer: string) => void;
+  onAnswer?: (interactionId: string, answer: unknown) => void;
   onIgnore?: (interactionId: string) => void;
   onPermissionDecision?: (interactionId: string, allowed: boolean) => void;
 }) {

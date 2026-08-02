@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   getSession: vi.fn(),
   runCodeRequest: vi.fn(),
   runCyreneAgent: vi.fn(),
+  requestUserClarification: vi.fn(),
   agentEvents: [] as unknown[],
 }));
 
@@ -52,7 +53,73 @@ vi.mock("./orchestrator/code/code-request", () => ({
   runCodeRequest: mocks.runCodeRequest,
 }));
 
+vi.mock("./user-choice", () => ({
+  requestUserClarification: mocks.requestUserClarification,
+}));
+
 describe("agui-bridge sticker event ordering", () => {
+  it("routes structured Ask cards to the AG-UI run sender", async () => {
+    vi.resetModules();
+    mocks.handlers.clear();
+    mocks.runCyreneAgent.mockClear();
+    mocks.requestUserClarification.mockReset();
+    mocks.getSession.mockReturnValue({
+      id: "work-ask",
+      mode: "work",
+      workspaceBinding: { workspaceRoot: "C:\\workspace", displayName: "workspace", boundAt: 1 },
+    });
+    mocks.requestUserClarification.mockImplementation(async (_card, send, onSettled, identity) => {
+      send({
+        interactionId: "choice-1",
+        runId: identity.runId,
+        revision: identity.revision,
+        mode: "semantic_clarification",
+        intro: "需要确认",
+        questions: [{
+          id: "question-1",
+          prompt: "选择格式？",
+          required: true,
+          multiple: false,
+          options: [{ id: "word", label: "Word" }, { id: "pdf", label: "PDF" }],
+          customInput: { enabled: true },
+        }],
+      });
+      onSettled({ id: "choice-1", runId: identity.runId, revision: identity.revision, reason: "timeout" });
+      return { requestId: "choice-1", answers: [] };
+    });
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    const sent: unknown[] = [];
+    const sender = { isDestroyed: () => false, send: (_channel: string, event: unknown) => sent.push(event) };
+    registerAgUiIpc(async () => ({
+      options: {
+        settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
+        messages: [], timeoutMs: 1000, toolSystemContent: "TOOL", soulSystemBaseContent: "SOUL",
+      },
+      latestUserText: "帮我生成一份文档",
+    }), async () => {}, () => null);
+
+    const handler = mocks.handlers.get(IPC.AGUI_RUN);
+    if (!handler) throw new Error("AGUI_RUN handler was not registered");
+    await handler({ sender }, { messages: [{ role: "user", content: "帮我生成一份文档" }], sessionId: "work-ask" });
+
+    const options = mocks.runCyreneAgent.mock.calls[0]?.[0] as {
+      requestUserClarification: (card: unknown) => Promise<unknown>;
+    };
+    await options.requestUserClarification({ intro: "需要确认", questions: [], deferredFields: [] });
+
+    expect(mocks.requestUserClarification).toHaveBeenCalledOnce();
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: "CUSTOM",
+      name: "cyrene.choice",
+      value: expect.objectContaining({ interactionId: "choice-1", runId: expect.any(String), revision: 1 }),
+    }));
+    expect(sent).toContainEqual(expect.objectContaining({
+      type: "CUSTOM",
+      name: "cyrene.choice.dismiss",
+      value: expect.objectContaining({ id: "choice-1", runId: expect.any(String), revision: 1, reason: "timeout" }),
+    }));
+  });
+
   it("turns leading <think> text into reasoning events before forwarding the assistant start", async () => {
     vi.resetModules();
     mocks.handlers.clear();

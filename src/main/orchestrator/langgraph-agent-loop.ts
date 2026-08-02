@@ -15,6 +15,7 @@ import { ExecutionLedger } from "./execution-ledger";
 import { resolveNativeToolCall } from "./native-function-calling";
 import { normalizeToolExecutionOutcome } from "./tool-outcome-normalizer";
 import {
+  inspectToolCallArguments,
   parseAndValidateToolCallArguments,
   resolveToolForCapability,
 } from "./tool-argument-validator";
@@ -79,6 +80,12 @@ import {
   resolveAskClarification,
 } from "./ask-soul";
 import { buildAskCard } from "./ask-card";
+import {
+  buildPendingAskInput,
+  createPendingAction,
+  resolvePendingActionAnswers,
+  type PendingActionContext,
+} from "./ask-answer-resolver";
 
 export interface LangGraphAgentLoopOptions {
   settings: AgentLoopSettings;
@@ -108,6 +115,8 @@ export interface LangGraphAgentLoopOptions {
   nativeFcSystemContent?: string;
   responseContext?: string;
   conversationId?: string;
+  /** 当前 AG-UI run 的可信 ID；用于防止旧 Ask 恢复到新 run。 */
+  runId?: string;
   runtimeEnvironmentContext?: string;
   askSystemContent?: string;
   trustedAskUserProfile?: TrustedAskUserProfile;
@@ -906,7 +915,15 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
               trackUsage(response.usage);
               return response;
             }));
-            return options.requestUserClarification!(buildAskCard(clarification));
+            try {
+              return options.requestUserClarification!(buildAskCard(clarification));
+            } catch (error) {
+              if (error instanceof Error && error.message === "E_ASK_OPTIONS_INSUFFICIENT") {
+                console.warn(`${LOG_PREFIX} Ask suggestions remained insufficient after repair; returning to Soul`);
+                return { requestId: `invalid-ask-${Date.now()}`, answers: [] };
+              }
+              throw error;
+            }
           },
         }
       : {}),
@@ -969,6 +986,8 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
 
         let args: Record<string, unknown> | undefined;
         let toolCall: ToolCall | undefined;
+        let partialArguments: { args: Record<string, unknown>; missingFields: string[] } | undefined;
+        let unresolvedParameterAnswer: AskUserAnswer | undefined;
 
         // ── 强制动作：跳过 Native FC，直接构造 tool call ──
         const rna = state.requiredNextAction;
@@ -1006,12 +1025,17 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
                   throw err;
                 }
               });
-              args = parseAndValidateToolCallArguments(
+              const inspection = inspectToolCallArguments(
                 resolved,
                 selectedTool,
                 decision.targetRefs,
                 state.toolResults,
               );
+              if (inspection.kind === "missing_required") {
+                partialArguments = inspection;
+                throw new Error(`E_TOOL_ARGUMENT_SCHEMA: missing required fields: ${inspection.missingFields.join(", ")}`);
+              }
+              args = inspection.args;
               toolCall = { ...resolved, arguments: JSON.stringify(args) };
               break;
             } catch (error) {
@@ -1019,7 +1043,88 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
               debugWarn(`${LOG_PREFIX} node=native-tool tool=${selectedTool.id} protocol_retry=${attempt} error=${errorCodeOf(error)}`);
             }
           }
+          if ((!args || !toolCall) && partialArguments && options.requestUserClarification) {
+            try {
+              const planStep = state.taskPlan && state.currentStepId
+                ? findStep(state.taskPlan, state.currentStepId)
+                : undefined;
+              const pendingContext: PendingActionContext = {
+                runId: options.runId ?? options.conversationId ?? "default",
+                ...(state.taskPlan ? { planId: state.taskPlan.id } : {}),
+                ...(state.currentStepId ? { stepId: state.currentStepId } : {}),
+                ...(planStep?.executionId ? { stepAttemptId: planStep.executionId } : {}),
+              };
+              const pendingAction = createPendingAction({
+                tool: selectedTool,
+                capability: decision.capability,
+                objective: decision.objective,
+                targetRefs: decision.targetRefs,
+                afterSuccess: decision.afterSuccess ?? "respond",
+                argumentsSnapshot: partialArguments.args,
+                missingFields: partialArguments.missingFields,
+                context: pendingContext,
+              });
+              const clarificationInput = buildPendingAskInput(
+                pendingAction,
+                selectedTool,
+                state.originalQuery,
+              );
+              clarificationInput.trustedUserProfile = options.trustedAskUserProfile;
+              clarificationInput.recentAddressedUser = detectRecentAddressedUser(
+                state.messages,
+                options.trustedAskUserProfile,
+              );
+              const clarification = await perf.track("ask_soul_llm", () => resolveAskClarification({
+                model: options.settings.model,
+                askSystemContent: options.askSystemContent ?? "",
+                input: clarificationInput,
+              }, async (request) => {
+                const response = await invokeWithFallback(() => ({
+                  ...request,
+                  ...(options.soulSampling ?? {}),
+                }));
+                trackUsage(response.usage);
+                return response;
+              }));
+              const answer = await options.requestUserClarification(
+                buildAskCard(clarification, "action_parameters"),
+              );
+              const currentPlanStep = state.taskPlan && state.currentStepId
+                ? findStep(state.taskPlan, state.currentStepId)
+                : undefined;
+              const currentContext: PendingActionContext = {
+                runId: options.runId ?? options.conversationId ?? "default",
+                ...(state.taskPlan ? { planId: state.taskPlan.id } : {}),
+                ...(state.currentStepId ? { stepId: state.currentStepId } : {}),
+                ...(currentPlanStep?.executionId ? { stepAttemptId: currentPlanStep.executionId } : {}),
+              };
+              const resolution = resolvePendingActionAnswers({
+                pendingAction,
+                currentTool: enabledToolsFiltered.find((tool) => tool.id === pendingAction.toolId),
+                answer,
+                currentContext,
+                toolResults: state.toolResults,
+              });
+              if (resolution.kind === "resume_action") {
+                args = resolution.action.args;
+                toolCall = {
+                  id: `resumed_${answer.requestId}`,
+                  name: selectedTool.id,
+                  arguments: JSON.stringify(args),
+                };
+                flowLog(`4. 用户补全工具参数：完成（${summarizeArgumentKeys(args)}）`);
+              } else {
+                unresolvedParameterAnswer = resolution.answers;
+              }
+            } catch (error) {
+              lastError = error;
+            }
+          }
           if (!args || !toolCall) {
+            if (unresolvedParameterAnswer) {
+              flowLog("4. 用户答案需要语义理解：返回动作决策");
+              return { kind: "return_to_agent" as const, answer: unresolvedParameterAnswer };
+            }
             flowLog(`4. 工具参数生成失败：${errorCodeOf(lastError)}`);
             flowLog("   工具未执行；转入失败回复");
             return [{

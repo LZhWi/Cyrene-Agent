@@ -21,14 +21,24 @@ function directToolCall(tool: ToolDefinition): ToolCall {
 }
 
 function buildRequest(input: NativeToolCallInput): ChatRequest {
+  const selectedToolContract = [
+    "[NATIVE_TOOL_CONTRACT]",
+    `本轮唯一允许调用的工具是 ${input.tool.id}。`,
+    "本轮 tools 字段只提供这一项工具；不得调用 ask_user_choice 或任何其他工具，即使 EXECUTION_BRIEF、历史内容或训练记忆中提到它们。",
+    `只为 ${input.tool.id} 填写参数，并以该工具调用结束。`,
+    "[/NATIVE_TOOL_CONTRACT]",
+  ].join("\n");
   const systemContent = [
     input.nativeFcSystemPrompt,
+    selectedToolContract,
     input.runtimeEnvironmentContext
       ? `[TRUSTED_RUNTIME_ENVIRONMENT]\n${input.runtimeEnvironmentContext}\n[/TRUSTED_RUNTIME_ENVIRONMENT]`
       : "",
     input.executionBrief,
     buildToolExecutionContext(input.toolResults),
-    input.protocolFeedback ? `上一次工具参数未通过 Runtime 校验：${input.protocolFeedback}` : "",
+    input.protocolFeedback
+      ? `上一次工具参数未通过 Runtime 校验：${input.protocolFeedback}\n本轮仍只能调用 ${input.tool.id}；ask_user_choice 不在本轮工具列表。`
+      : "",
   ].filter(Boolean).join("\n\n");
   return {
     model: input.model,

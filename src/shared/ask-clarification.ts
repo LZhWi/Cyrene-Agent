@@ -46,6 +46,7 @@ export interface AskClarificationOutput {
 }
 
 export interface AskClarificationCard {
+  mode?: AskCardMode;
   intro: string;
   questions: AskQuestion[];
   deferredFields: string[];
@@ -58,4 +59,54 @@ export interface AskUserAnswer {
     selectedValues?: string[];
     customText?: string;
   }>;
+}
+
+export type AskCardMode = "action_parameters" | "semantic_clarification";
+
+/** Renderer-visible Ask contract. It intentionally contains no tool binding or canonical value. */
+export interface AskCardPayload {
+  interactionId: string;
+  runId: string;
+  revision: number;
+  mode: AskCardMode;
+  intro: string;
+  questions: AskQuestionView[];
+}
+
+export interface AskQuestionView {
+  id: string;
+  prompt: string;
+  required: true;
+  multiple: boolean;
+  options: AskOptionView[];
+  customInput: {
+    enabled: true;
+    placeholder?: string;
+  };
+}
+
+export interface AskOptionView {
+  id: string;
+  label: string;
+  description?: string;
+}
+
+export type AskAnswerSubmission =
+  | {
+      questionId: string;
+      source: "option";
+      optionId?: string;
+      optionIds?: string[];
+    }
+  | {
+      questionId: string;
+      source: "custom";
+      text: string;
+    };
+
+export interface AskCardSubmission {
+  interactionId: string;
+  runId: string;
+  revision: number;
+  answers: AskAnswerSubmission[];
 }

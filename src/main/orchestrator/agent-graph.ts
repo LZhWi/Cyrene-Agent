@@ -366,11 +366,13 @@ export interface AgentGraphState extends AgentGraphInput {
   };
   /** 验证重试计数（熔断器：防止无限重试） */
   verificationRetryCount?: number;
+  /** execute 节点未执行工具、而是把参数答案交回 Agent 时的瞬时路由标记。 */
+  returnToAgentAfterExecute?: boolean;
 }
 
 export interface AgentGraphDeps {
   decide: (state: AgentGraphState) => Promise<ActionDecision>;
-  execute: (state: AgentGraphState, decision: ActDecision) => Promise<ToolCallResult[]>;
+  execute: (state: AgentGraphState, decision: ActDecision) => Promise<AgentGraphExecuteResult>;
   askUser?: (state: AgentGraphState, decision: AskUserDecision) => Promise<AskUserAnswer>;
   respond: (state: AgentGraphState, decision: Exclude<ActionDecision, { decision: "act" }>) => Promise<string>;
   /** 根据 capabilityId 获取工具定义（供证据收集器解析 effectKind/verificationPolicy） */
@@ -392,6 +394,11 @@ export interface AgentGraphDeps {
   onPlanUpdate?: (plan: import("./task-plan").TaskPlan, replanCount: number) => void;
   trace?: (node: string, state: AgentGraphState) => void;
 }
+
+export type AgentGraphExecuteResult = ToolCallResult[] | {
+  kind: "return_to_agent";
+  answer: AskUserAnswer;
+};
 
 const GraphState = Annotation.Root({
   originalQuery: Annotation<string>,
@@ -417,6 +424,7 @@ const GraphState = Annotation.Root({
   finalizationOutcome: Annotation<FinalizationOutcome | undefined>,
   requiredNextAction: Annotation<{ capabilityId: string; reason: string; forcedArgs?: Record<string, unknown> } | undefined>,
   verificationRetryCount: Annotation<number | undefined>,
+  returnToAgentAfterExecute: Annotation<boolean | undefined>,
   /** 可信工作区根目录（来自 Conversation Workspace Binding） */
   resolvedWorkspaceRoot: Annotation<string | undefined>,
 });
@@ -589,9 +597,19 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
         throw new Error("E_AGENT_GRAPH_INVALID_ACT_STATE");
       }
       const results = await deps.execute(state, state.decision);
+      if (!Array.isArray(results)) {
+        return {
+          clarificationAnswers: [...state.clarificationAnswers, results.answer],
+          decision: undefined,
+          currentAction: undefined,
+          iterationCount: state.iterationCount + 1,
+          returnToAgentAfterExecute: true,
+        };
+      }
       return {
         toolResults: [...state.toolResults, ...results],
         iterationCount: state.iterationCount + 1,
+        returnToAgentAfterExecute: false,
       };
     })
     .addNode("routeAfterTool", async (state) => {
@@ -1043,7 +1061,7 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
       }
       return "soul";
     })
-    .addEdge("execute", "routeAfterTool")
+    .addConditionalEdges("execute", (state) => state.returnToAgentAfterExecute ? "decide" : "routeAfterTool")
     .addEdge("refresh", "decide")
     .addEdge("soul", END)
     .compile();
@@ -1058,6 +1076,7 @@ export async function runAgentGraph(input: AgentGraphInput, deps: AgentGraphDeps
     clarificationAnswers: input.clarificationAnswers ?? [],
     iterationCount: 0,
     refreshCount: 0,
+    returnToAgentAfterExecute: false,
     lastGateFailure: undefined,
     taskRoute: undefined,
     taskPlan: undefined,

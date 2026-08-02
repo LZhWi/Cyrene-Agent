@@ -132,6 +132,12 @@ export type SoulProjectionConfig =
       source: ProjectionSource;
       claim: SoulClaim;
       confirmation: { kind: "output_field"; path: string; values: Array<string | number | boolean> };
+    }
+  | {
+      /** Extracts the established local "已生成：<absolute path>" document-tool contract. */
+      projector: "artifact_path";
+      source: "trusted_internal";
+      kind?: string;
     };
 
 export type SoulProjection =
@@ -318,10 +324,33 @@ function projectActionCompleted(
   };
 }
 
+function projectArtifactPath(
+  result: ToolCallResult,
+  config: Extract<SoulProjectionConfig, { projector: "artifact_path" }>,
+): SoulProjection | undefined {
+  const match = result.output.match(/^\[[\w-]+\]\s*已生成[：:]\s*(.+?)\s*$/);
+  const path = match?.[1]?.trim();
+  if (!path) return undefined;
+
+  const safePath = sanitizeString(path);
+  const filename = safePath.split(/[\\/]/).filter(Boolean).at(-1);
+  const attributes: Record<string, ProjectionValue> = { path: safePath };
+  if (config.kind) attributes.kind = config.kind;
+  return {
+    kind: "entity_detail",
+    source: config.source,
+    ...(filename ? { title: filename } : {}),
+    attributes,
+  };
+}
+
 function projectResult(
   result: ToolCallResult,
   config: SoulProjectionConfig,
 ): SoulProjection | undefined {
+  if (config.projector === "artifact_path") {
+    return projectArtifactPath(result, config);
+  }
   // action_completed with tool_status 不需要解析 output
   if (config.projector === "action_completed" && config.confirmation.kind === "tool_status") {
     return projectActionCompleted(result, undefined, config);

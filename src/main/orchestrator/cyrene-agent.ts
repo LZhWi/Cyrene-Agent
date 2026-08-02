@@ -97,6 +97,8 @@ export interface CyreneRunOptions {
   askSystemContent?: string;
   /** Ask Soul 只使用称呼、昵称和性别约束。 */
   trustedAskUserProfile?: TrustedAskUserProfile;
+  /** 由 AG-UI bridge 注入，确保 Ask 卡片回到实际发起本轮的渲染窗口。 */
+  requestUserClarification?: (card: import("../../shared/ask-clarification").AskClarificationCard) => Promise<import("../../shared/ask-clarification").AskUserAnswer>;
   /** 仅 Chat：异步社交原子抽取所需的已校验证据元数据。 */
   socialContext?: {
     enabled: true;
@@ -351,6 +353,7 @@ export class CyreneAgent extends AbstractAgent {
               conversationId: options.conversationId ?? "default",
               runId,
               contextRefs: contextRefRegistry,
+              resolvedWorkspaceRoot: options.resolvedWorkspaceRoot,
             });
             const commonOptions = {
               settings: options.settings,
@@ -368,7 +371,8 @@ export class CyreneAgent extends AbstractAgent {
               askSystemContent: options.askSystemContent,
               trustedAskUserProfile: options.trustedAskUserProfile,
               conversationId: options.conversationId ?? "default",
-              requestUserClarification,
+              runId,
+              requestUserClarification: options.requestUserClarification ?? requestUserClarification,
               timeoutMs: options.timeoutMs,
               executeTool,
               onEvent,

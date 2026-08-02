@@ -1,4 +1,6 @@
 import type {
+  AskCardPayload,
+  AskCardSubmission,
   AskClarificationCard,
   AskClarificationOutput,
   AskUserAnswer,
@@ -9,26 +11,120 @@ const CUSTOM_OPTION = {
   label: "其他，我自己填写",
 } as const;
 
-export function buildAskCard(output: AskClarificationOutput): AskClarificationCard {
+export function buildAskCard(
+  output: AskClarificationOutput,
+  mode: AskClarificationCard["mode"] = "semantic_clarification",
+): AskClarificationCard {
   return {
+    mode,
     intro: output.intro,
-    questions: output.questions.slice(0, 3).map((question) => ({
-      ...question,
-      options: question.type === "text"
-        ? []
-        : [
-            ...question.options
-              .filter((option) => option.value !== CUSTOM_OPTION.value)
-              .slice(0, 3),
-            ...(question.allowCustom ? [CUSTOM_OPTION] : []),
-          ].slice(0, 4),
-    })),
+    questions: output.questions.slice(0, 3).map((question) => {
+      const options = question.options
+        .filter((option) => option.value !== CUSTOM_OPTION.value)
+        .slice(0, 3);
+      if (options.length < 2) throw new Error("E_ASK_OPTIONS_INSUFFICIENT");
+      return {
+        ...question,
+        options,
+        allowCustom: true,
+      };
+    }),
     deferredFields: output.deferredFields,
   };
 }
 
 function invalidAnswer(): never {
   throw new Error("E_ASK_ANSWER_INVALID");
+}
+
+interface PublishedQuestion {
+  field: string;
+  type: AskClarificationCard["questions"][number]["type"];
+  options: Map<string, string>;
+}
+
+/** Main-process-only publication state. Never send this object to Renderer. */
+export interface AskCardPublication {
+  payload: AskCardPayload;
+  privateQuestions: Map<string, PublishedQuestion>;
+}
+
+export function publishAskCard(
+  card: AskClarificationCard,
+  identity: Pick<AskCardPayload, "interactionId" | "runId" | "revision">,
+): AskCardPublication {
+  const privateQuestions = new Map<string, PublishedQuestion>();
+  const questions = card.questions.map((question, questionIndex) => {
+    const questionId = `question-${questionIndex + 1}`;
+    const canonicalOptions = question.options.filter((option) => option.value !== CUSTOM_OPTION.value);
+    const options = new Map<string, string>();
+    const publicOptions = canonicalOptions.map((option, optionIndex) => {
+      const id = `${questionId}-option-${optionIndex + 1}`;
+      options.set(id, option.value);
+      return {
+        id,
+        label: option.label,
+        ...(option.description ? { description: option.description } : {}),
+      };
+    });
+    privateQuestions.set(questionId, { field: question.field, type: question.type, options });
+    return {
+      id: questionId,
+      prompt: question.question,
+      multiple: question.type === "multi_select",
+      required: true as const,
+      options: publicOptions,
+      customInput: {
+        enabled: true as const,
+        ...(question.freeTextPlaceholder ? { placeholder: question.freeTextPlaceholder } : {}),
+      },
+    };
+  });
+  return {
+    payload: {
+      ...identity,
+      mode: card.mode ?? "semantic_clarification",
+      intro: card.intro,
+      questions,
+    },
+    privateQuestions,
+  };
+}
+
+export function resolveAskCardSubmission(
+  publication: AskCardPublication,
+  submission: AskCardSubmission,
+): AskUserAnswer {
+  const payload = publication.payload;
+  if (submission.interactionId !== payload.interactionId
+    || submission.runId !== payload.runId
+    || submission.revision !== payload.revision
+    || !Array.isArray(submission.answers)
+    || submission.answers.length !== payload.questions.length) invalidAnswer();
+
+  const seen = new Set<string>();
+  const answers = submission.answers.map((answer) => {
+    if (!answer || seen.has(answer.questionId)) invalidAnswer();
+    seen.add(answer.questionId);
+    const question = publication.privateQuestions.get(answer.questionId);
+    if (!question) invalidAnswer();
+    if (answer.source === "custom") {
+      if ("optionId" in answer || "optionIds" in answer) invalidAnswer();
+      const customText = answer.text?.trim();
+      if (!customText) invalidAnswer();
+      return { field: question.field, customText };
+    }
+    if (answer.source !== "option" || "text" in answer) invalidAnswer();
+    const optionIds = answer.optionIds ?? (answer.optionId ? [answer.optionId] : []);
+    if (optionIds.length === 0 || (!question.type.startsWith("multi") && optionIds.length !== 1)) invalidAnswer();
+    const values = optionIds.map((optionId) => question.options.get(optionId));
+    if (values.some((value) => value === undefined)) invalidAnswer();
+    const canonicalValues = values as string[];
+    return question.type === "text"
+      ? { field: question.field, customText: canonicalValues[0] }
+      : { field: question.field, selectedValues: canonicalValues };
+  });
+  return { requestId: payload.interactionId, answers };
 }
 
 export function validateAskUserAnswer(
@@ -56,7 +152,6 @@ export function validateAskUserAnswer(
     if (selectedValues?.some((value) => !allowed.has(value))) invalidAnswer();
     if (question.type === "single_select" && (selectedValues?.length ?? 0) > 1) invalidAnswer();
     if ((!selectedValues || selectedValues.length === 0) && !customText) invalidAnswer();
-    if (customText && !question.allowCustom) invalidAnswer();
     return {
       field: item.field,
       ...(selectedValues?.length ? { selectedValues } : {}),

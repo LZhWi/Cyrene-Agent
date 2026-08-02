@@ -96,6 +96,42 @@ describe("runAgentGraph", () => {
     expect(result.reply).toBe("好的，按 Live 版继续。");
   });
 
+  it("returns unresolved parameter answers from execute to decide without recording a tool result", async () => {
+    const decisions: ActionDecision[] = [
+      { decision: "act", capability: "report.write", objective: "生成报告", targetRefs: [], afterSuccess: "respond" },
+      { decision: "respond", reason: "需要理解自定义格式" },
+    ];
+    const decide = vi.fn(async () => decisions.shift()!);
+    const execute = vi.fn(async () => ({
+      kind: "return_to_agent" as const,
+      answer: {
+        requestId: "choice-parameter-1",
+        answers: [{ field: "format", customText: "适合朋友圈的东西" }],
+      },
+    }));
+    const respond = vi.fn(async (state) => {
+      expect(state.toolResults).toEqual([]);
+      expect(state.clarificationAnswers).toEqual([{
+        requestId: "choice-parameter-1",
+        answers: [{ field: "format", customText: "适合朋友圈的东西" }],
+      }]);
+      return "请再确认具体格式";
+    });
+
+    const result = await runAgentGraph({
+      originalQuery: "生成报告",
+      contextualizedQuery: "生成报告",
+      citaContextBlock: "",
+      messages: [{ role: "user", content: "生成报告" }],
+      availableCapabilities: ["report.write"],
+    }, { decide, execute, respond });
+
+    expect(decide).toHaveBeenCalledTimes(2);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(result.toolResults).toEqual([]);
+    expect(result.reply).toBe("请再确认具体格式");
+  });
+
   it("stops an endless act loop at the configured iteration limit", async () => {
     await expect(runAgentGraph({
       originalQuery: "继续尝试",
