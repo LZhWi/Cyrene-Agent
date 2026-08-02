@@ -13,6 +13,7 @@ import type {
   ChatMessage, ChatRequest, ChatResponse, ChatVendorAdapter, HttpRequest,
   ProviderCapability, ToolCall, ToolExecutionResult,
 } from "./vendors/types";
+import type { SdkStreamRunInput } from "./vendors/sdk-stream/runtime";
 
 const capability: ProviderCapability = {
   id: "test", displayName: "test", transport: "openai", baseUrl: "https://test/",
@@ -105,6 +106,17 @@ function options(adapter: FakeAdapter, executeTool = vi.fn(async () => ({
     timeoutMs: 30_000,
     executeTool,
     perCallTimeoutMs: 75000,
+    streamChat: fakeSdkTransport(adapter),
+  };
+}
+
+function fakeSdkTransport(adapter: FakeAdapter, failAtCall?: number) {
+  let calls = 0;
+  return async ({ request }: SdkStreamRunInput): Promise<ChatResponse> => {
+    calls += 1;
+    adapter.buildStreamRequest(request);
+    if (calls === failAtCall) throw new Error("SDK transport simulated failure");
+    return adapter.parseResponse();
   };
 }
 
@@ -121,6 +133,48 @@ afterEach(() => {
 });
 
 describe("runLangGraphAgentLoop native Function Calling runtime", () => {
+  it("forwards final Soul text deltas to AG-UI without replaying the completed response", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({ decision: "respond", reason: "无需工具" });
+    adapter.enqueueText("实时片段继续");
+    const events: TwoPhaseEvent[] = [];
+    let calls = 0;
+
+    const result = await runLangGraphAgentLoop({
+      ...options(adapter),
+      onEvent: (event) => events.push(event),
+      streamChat: async (input) => {
+        calls += 1;
+        adapter.buildStreamRequest(input.request);
+        const response = adapter.parseResponse();
+        if (calls === 2) {
+          input.onDelta?.({ type: "text_delta", delta: "实时片段" });
+          input.onDelta?.({ type: "text_delta", delta: "继续" });
+        }
+        return response;
+      },
+    });
+
+    expect(result.reply).toBe("实时片段继续");
+    expect(events.filter((event) => event.type === "text_message_content"))
+      .toEqual([
+        expect.objectContaining({ delta: "实时片段" }),
+        expect.objectContaining({ delta: "继续" }),
+      ]);
+  });
+
+  it("routes structured and soul completions through the injected SDK transport", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueDecision({ decision: "respond", reason: "无需工具" });
+    adapter.enqueueText("直接回复。");
+
+    const result = await runLangGraphAgentLoop(options(adapter));
+
+    expect(result.reply).toBe("直接回复。");
+    expect(adapter.requests).toHaveLength(2);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   it("executes a non-reference tool after discarding an invented target ref", async () => {
     vi.mocked(contextRefRegistry.resolve).mockImplementation(() => {
       throw new Error("unknown ref");
@@ -503,13 +557,12 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     // routeAfterTool 在工具成功后直接路由到 soul，不调 Action Gate
     first.enqueueText("不会送达的 Soul 回复");
     const executeTool = vi.fn(async () => ({ status: "succeeded" as const, output: "{\"ok\":true}" }));
-    globalThis.fetch = vi.fn()
-      .mockResolvedValueOnce(new Response("{}", { status: 200 }))
-      .mockResolvedValueOnce(new Response("{}", { status: 200 }))
-      .mockResolvedValueOnce(new Response("soul failed", { status: 500 })) as unknown as typeof fetch;
-
     // Soul 失败但工具成功 → 部分成功 fallback（不抛错）
-    const firstResult = await runLangGraphAgentLoop({ ...options(first, executeTool), executionLedger: ledger });
+    const firstResult = await runLangGraphAgentLoop({
+      ...options(first, executeTool),
+      executionLedger: ledger,
+      streamChat: fakeSdkTransport(first, 3),
+    });
     expect(firstResult.reply).toContain("部分操作已经完成");
     expect(firstResult.soulPhaseReason).toBe("tool_error");
 
@@ -518,8 +571,6 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
     retry.enqueueToolCall("music_play_track", { candidateRef: "ctx_song_1" });
     // 重试时 execute 命中 ledger 缓存 -> deduplicated=true -> forced_respond 不调 LLM -> soul
     retry.enqueueText("已向网易云发送播放请求。");
-    globalThis.fetch = vi.fn(async () => new Response("{}", { status: 200 })) as unknown as typeof fetch;
-
     const result = await runLangGraphAgentLoop({ ...options(retry, executeTool), executionLedger: ledger });
 
     expect(executeTool).toHaveBeenCalledTimes(1);
@@ -543,14 +594,15 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
       }],
     });
     adapter.enqueueText("你可以再描述一下图片吗？");
-    globalThis.fetch = vi.fn()
-      .mockResolvedValueOnce(new Response("unsupported image", { status: 400 }))
-      .mockImplementation(async () => new Response("{}", { status: 200 })) as unknown as typeof fetch;
     const imageCaptionFallback = vi.fn(async (): Promise<ChatMessage[]> => [
       { role: "user", content: "[图片描述] 一张夜景照片" },
     ]);
 
-    await runLangGraphAgentLoop({ ...options(adapter), imageCaptionFallback });
+    await runLangGraphAgentLoop({
+      ...options(adapter),
+      imageCaptionFallback,
+      streamChat: fakeSdkTransport(adapter, 1),
+    });
 
     expect(imageCaptionFallback).toHaveBeenCalledTimes(1);
     expect(adapter.requests[1].messages).toContainEqual({ role: "user", content: "[图片描述] 一张夜景照片" });
@@ -576,11 +628,8 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
   it("AgentExecutionError preserves cause and executionStatus on Soul failure", async () => {
     const adapter = new FakeAdapter();
     adapter.enqueueDecision({ decision: "respond", reason: "done" });
-    // Soul LLM 返回 500
-    globalThis.fetch = vi.fn(async () => new Response("soul failed", { status: 500 })) as unknown as typeof fetch;
-
     try {
-      await runLangGraphAgentLoop(options(adapter));
+      await runLangGraphAgentLoop({ ...options(adapter), streamChat: fakeSdkTransport(adapter, 2) });
       expect.fail("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(AgentExecutionError);
@@ -594,10 +643,8 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
   it("AgentExecutionError does not double-wrap", async () => {
     const adapter = new FakeAdapter();
     adapter.enqueueDecision({ decision: "respond", reason: "done" });
-    globalThis.fetch = vi.fn(async () => new Response("soul failed", { status: 500 })) as unknown as typeof fetch;
-
     try {
-      await runLangGraphAgentLoop(options(adapter));
+      await runLangGraphAgentLoop({ ...options(adapter), streamChat: fakeSdkTransport(adapter, 2) });
       expect.fail("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(AgentExecutionError);
@@ -616,17 +663,10 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
       status: "succeeded" as const,
       output: JSON.stringify({ city: "杭州", weather: "晴", temperature: "25°C" }),
     }));
-    // Action Gate(1) 成功, Native FC(2) 成功, Soul(3) 失败
-    let fetchCount = 0;
-    globalThis.fetch = vi.fn(async () => {
-      fetchCount++;
-      if (fetchCount === 3) return new Response("soul failed", { status: 529 });
-      return new Response("{}", { status: 200 });
-    }) as unknown as typeof fetch;
-
     const result = await runLangGraphAgentLoop({
       ...options(adapter, executeTool),
       tools: [weatherTool()],
+      streamChat: fakeSdkTransport(adapter, 3),
     });
 
     // 应返回部分成功回复，不抛错
@@ -653,17 +693,10 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
       status: "succeeded" as const,
       output: "[write_word] 已生成：C:\\Users\\test\\Desktop\\test.docx",
     }));
-    // Action Gate(1) 成功, Native FC(2) 成功, Soul(3) 失败
-    let fetchCount = 0;
-    globalThis.fetch = vi.fn(async () => {
-      fetchCount++;
-      if (fetchCount === 3) return new Response("soul failed", { status: 529 });
-      return new Response("{}", { status: 200 });
-    }) as unknown as typeof fetch;
-
     const result = await runLangGraphAgentLoop({
       ...options(adapter, executeTool),
       tools: [writeWordTool],
+      streamChat: fakeSdkTransport(adapter, 3),
     });
 
     expect(result.reply).toContain("部分操作已经完成");
@@ -673,10 +706,8 @@ describe("runLangGraphAgentLoop native Function Calling runtime", () => {
   it("Soul failure + no successful tools → throws AgentExecutionError (no fallback)", async () => {
     const adapter = new FakeAdapter();
     adapter.enqueueDecision({ decision: "respond", reason: "done" });
-    // Soul 直接失败，没有工具执行
-    globalThis.fetch = vi.fn(async () => new Response("soul failed", { status: 529 })) as unknown as typeof fetch;
-
-    await expect(runLangGraphAgentLoop(options(adapter))).rejects.toThrow("LangGraph execution failed");
+    await expect(runLangGraphAgentLoop({ ...options(adapter), streamChat: fakeSdkTransport(adapter, 2) }))
+      .rejects.toThrow("LangGraph execution failed");
   });
 
   it("user cancel → does not trigger partial fallback", async () => {

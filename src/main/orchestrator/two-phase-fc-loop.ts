@@ -276,7 +276,7 @@ interface StreamedToolUiState {
   ended: boolean;
 }
 
-class WorkStreamEventBridge {
+export class WorkStreamEventBridge {
   private reasoningOpened = false;
   private reasoningEnded = false;
   private readonly reasoningMessageId: string;
@@ -288,6 +288,7 @@ class WorkStreamEventBridge {
     private readonly onEvent: ((event: TwoPhaseEvent) => void) | undefined,
     private readonly tools: ReadonlyArray<ToolDefinition>,
     callId: string,
+    private readonly streamToolCalls = true,
   ) {
     this.reasoningMessageId = `${callId}-reasoning`;
     this.textEmitter = phase === "soul" ? new SafeSoulTextEmitter(onEvent, `${callId}-text`) : undefined;
@@ -307,12 +308,14 @@ class WorkStreamEventBridge {
         this.textEmitter?.push(delta.delta);
         return;
       case "tool_call_start": {
+        if (!this.streamToolCalls) return;
         const state = this.toolState(delta.index);
         if (delta.id) state.id ??= delta.id;
         state.name += delta.nameDelta ?? "";
         return;
       }
       case "tool_call_arguments_delta": {
+        if (!this.streamToolCalls) return;
         const state = this.toolState(delta.index);
         if (delta.id) state.id ??= delta.id;
         state.arguments += delta.delta;
@@ -321,6 +324,7 @@ class WorkStreamEventBridge {
         return;
       }
       case "tool_call_end": {
+        if (!this.streamToolCalls) return;
         const state = this.toolState(delta.index);
         if (delta.id) state.id ??= delta.id;
         this.openTool(state);
@@ -341,15 +345,17 @@ class WorkStreamEventBridge {
     }
     this.endReasoning();
 
-    response.toolCalls.forEach((toolCall, index) => {
-      const state = this.toolState(index);
-      state.id ??= toolCall.id;
-      if (!state.name) state.name = toolCall.name;
-      if (!state.arguments) state.arguments = toolCall.arguments;
-      this.openTool(state);
-      this.emitPendingArguments(state);
-      this.endTool(state);
-    });
+    if (this.streamToolCalls) {
+      response.toolCalls.forEach((toolCall, index) => {
+        const state = this.toolState(index);
+        state.id ??= toolCall.id;
+        if (!state.name) state.name = toolCall.name;
+        if (!state.arguments) state.arguments = toolCall.arguments;
+        this.openTool(state);
+        this.emitPendingArguments(state);
+        this.endTool(state);
+      });
+    }
     this.textEmitter?.finish(authoritativeText);
   }
 

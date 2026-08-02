@@ -11,8 +11,6 @@ import {
   classifyStructuredOutputEndpoint,
   resolveStructuredOutputProfile,
 } from "./structured-output/profiles";
-import { dispatchChatGeneration } from "./structured-output/dispatcher";
-import { invokeLangChainStructured } from "./structured-output/langchain-invoker";
 import { ExecutionLedger } from "./execution-ledger";
 import { resolveNativeToolCall } from "./native-function-calling";
 import { normalizeToolExecutionOutcome } from "./tool-outcome-normalizer";
@@ -46,7 +44,12 @@ import type { ToolCallResult, ToolExecutionOutcome } from "./types";
 import { runSubAgent } from "./subagents/runner";
 import { toSubAgentToolOutcome } from "./subagents/outcome-adapter";
 import { parseSubAgentResult } from "./subagents/result-parser";
-import type { TwoPhaseEvent, TwoPhaseFcResult, AgentLoopSettings } from "./two-phase-fc-loop";
+import {
+  WorkStreamEventBridge,
+  type TwoPhaseEvent,
+  type TwoPhaseFcResult,
+  type AgentLoopSettings,
+} from "./two-phase-fc-loop";
 import type {
   ChatMessage,
   ChatRequest,
@@ -54,6 +57,8 @@ import type {
   ChatVendorAdapter,
   ToolCall,
 } from "./vendors/types";
+import { streamChatWithSdk, type SdkStreamRunInput } from "./vendors/sdk-stream/runtime";
+import type { UnifiedStreamDelta } from "./vendors/sdk-stream/types";
 import { perf } from "../perf-trace";
 import {
   debugLog,
@@ -109,6 +114,8 @@ export interface LangGraphAgentLoopOptions {
   requestUserClarification?: (card: AskClarificationCard) => Promise<AskUserAnswer>;
   /** Task Router 可用 Skill 列表（feature flag 开启时由 build-options 传入） */
   availableSkills?: SkillRouteInfo[];
+  /** 测试可注入的协议 transport；生产统一走 OpenAI / Anthropic SDK runtime。 */
+  streamChat?: (input: SdkStreamRunInput) => Promise<ChatResponse>;
   /**
    * 可信工作区根目录（来自 Conversation Workspace Binding）。
    * Work 工具和 run_verification 必须使用此目录。
@@ -125,6 +132,8 @@ async function callAdapter(
   timeoutMs: number,
   signal?: AbortSignal,
   markAbort?: (source: AbortSource) => void,
+  streamChat: (input: SdkStreamRunInput) => Promise<ChatResponse> = streamChatWithSdk,
+  onDelta?: (delta: UnifiedStreamDelta) => void,
 ): Promise<ReturnType<ChatVendorAdapter["parseResponse"]>> {
   if (signal?.aborted) throw new Error("E_AGENT_GRAPH_CANCELLED");
   const effectiveRequest = adapter.applyCacheHints?.(request, settings) ?? request;
@@ -136,96 +145,18 @@ async function callAdapter(
     controller.abort();
   }, timeoutMs);
   try {
-    return await dispatchChatGeneration<ChatResponse>({
+    return await streamChat({
+      adapter,
       request: effectiveRequest,
-      provider: adapter.id,
-      endpointKind: classifyStructuredOutputEndpoint({
-        providerId: adapter.id,
-        configuredBaseUrl: settings.baseUrl,
-        officialBaseUrl: adapter.capability.baseUrl,
-      }),
-      langchain: async () => {
-        const generated = await invokeLangChainStructured(
-          effectiveRequest,
-          {
-            ...settings,
-            provider: adapter.id,
-            explicitTransport: adapter.transport,
-          },
-          controller.signal,
-        );
-        return {
-          assistantMessage: { role: "assistant", content: generated.text },
-          text: generated.text,
-          toolCalls: [],
-          finishReason: generated.finishReason,
-          raw: { backend: "langchain" },
-          structuredValue: generated.structuredValue,
-        };
-      },
-      legacy: async () => {
-        const http = adapter.buildRequest(effectiveRequest, settings);
-        const fetchTimer = perf.begin(`llm_http_fetch[${adapter.id}]`);
-        const response = await fetch(http.url, {
-          method: "POST",
-          headers: http.headers,
-          body: http.body,
-          signal: controller.signal,
-        });
-        fetchTimer.end(`status=${response.status}`);
-        if (!response.ok) {
-          const body = await response.text().catch(() => "");
-          // 结构化诊断日志：打印最终 wire-level 请求关键字段 + HTTP 响应
-          // 不打印 API Key、完整 messages、完整工具 schema
-          try {
-            const wireBody = JSON.parse(http.body as string) as Record<string, unknown>;
-            console.error("[LLM-HTTP] failed request", {
-              provider: adapter.id,
-              model: wireBody.model,
-              tool_choice: wireBody.tool_choice,
-              thinking: wireBody.thinking,
-              enable_thinking: wireBody.enable_thinking,
-              reasoning_effort: wireBody.reasoning_effort,
-              toolNames: Array.isArray(wireBody.tools)
-                ? (wireBody.tools as Array<Record<string, unknown>>).map(
-                    (t) => (t.function as Record<string, unknown> | undefined)?.name ?? t.name,
-                  )
-                : undefined,
-              messageCount: Array.isArray(wireBody.messages) ? wireBody.messages.length : undefined,
-              httpStatus: response.status,
-              responseBody: body.slice(0, 500),
-            });
-          } catch {
-            console.error("[LLM-HTTP] failed request (non-JSON body)", {
-              provider: adapter.id,
-              httpStatus: response.status,
-              responseBody: body.slice(0, 500),
-            });
-          }
-          throw new AgentRuntimeError(
-            "E_MODEL_REQUEST_FAILED",
-            `模型请求失败：HTTP ${response.status}${body ? ` - ${body.slice(0, 200)}` : ""}`,
-          );
-        }
-        const parseTimer = perf.begin("llm_parse_response");
-        const result = adapter.parseResponse(await response.json());
-        parseTimer.end();
-        return result;
-      },
+      config: settings,
+      timeoutMs,
+      signal: controller.signal,
+      onDelta,
     });
   } finally {
     clearTimeout(timer);
     signal?.removeEventListener("abort", abort);
   }
-}
-
-function emitText(onEvent: LangGraphAgentLoopOptions["onEvent"], text: string): void {
-  const messageId = `msg-${Date.now()}`;
-  onEvent?.({ type: "text_message_start", messageId, role: "assistant" });
-  for (const char of Array.from(text)) {
-    onEvent?.({ type: "text_message_content", messageId, delta: char });
-  }
-  onEvent?.({ type: "text_message_end", messageId });
 }
 
 export const SOUL_NO_TOOL_DIRECTIVE = [
@@ -485,6 +416,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     flowLog("Task Router disabled: feature_flag=false");
   }
   const perCallTimeout = options.perCallTimeoutMs;
+  const streamChat = options.streamChat ?? streamChatWithSdk;
   // 过滤掉 deprecated 和 effectKind=unknown 的工具（后者会被 ExecutionPolicyGuard 拒绝，不应暴露给模型）
   const enabledTools = options.tools.filter(
     (tool) => tool.id !== "delegate_coding"
@@ -543,6 +475,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
     settingsOverride?: AgentLoopSettings,
     messagesOverride?: ChatMessage[],
     requestSignal?: AbortSignal,
+    onDelta?: (delta: UnifiedStreamDelta) => void,
   ) => {
     const activeMessages = messagesOverride ?? fallbackMessages ?? options.messages;
     const effectiveSettings = settingsOverride ?? options.settings;
@@ -555,6 +488,8 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         Math.min(perCallTimeout, remainingBudget()),
         activeSignal,
         options.markAbort,
+        streamChat,
+        onDelta,
       );
     } catch (error) {
       if (activeSignal?.aborted) throw error;
@@ -569,6 +504,8 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         Math.min(perCallTimeout, remainingBudget()),
         activeSignal,
         options.markAbort,
+        streamChat,
+        onDelta,
       );
     }
   };
@@ -1341,6 +1278,13 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
         state.finalizationOutcome = resolveCompletionStatus(state, { kind: "allow_success" });
       }
 
+      const streamBridge = new WorkStreamEventBridge(
+        "soul",
+        options.onEvent,
+        options.tools,
+        `agent-graph-soul-${Date.now()}`,
+        false,
+      );
       try {
         flowLog("7. 生成最终回复");
         const localNonExecutionFact = state.toolResults
@@ -1404,6 +1348,8 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           () => soulRequest,
           undefined,
           state.messages,
+          undefined,
+          streamBridge.onDelta,
         ));
         trackUsage(response.usage);
         const rawText = response.text ?? "";
@@ -1420,8 +1366,11 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
           );
         }
         const reply = visibleText.trim() || buildSoulBlankFallback(state);
-        emitText(options.onEvent, reply);
+        streamBridge.finish(response, reply);
         return reply;
+      } catch (error) {
+        streamBridge.abort();
+        throw error;
       } finally {
         options.onEvent?.({ type: "step_finished", stepName: "agent-graph-soul" });
       }

@@ -22,6 +22,7 @@ import type {
   ChatMessage, ChatRequest, ChatResponse, ChatVendorAdapter, HttpRequest,
   ProviderCapability, ToolCall, ToolExecutionResult,
 } from "./vendors/types";
+import type { SdkStreamRunInput } from "./vendors/sdk-stream/runtime";
 
 const capability: ProviderCapability = {
   id: "test", displayName: "test", transport: "openai", baseUrl: "https://test/",
@@ -122,6 +123,17 @@ function defaultOptions(adapter: FakeAdapter, tools = allTools) {
       output: JSON.stringify({ ok: true }),
     })),
     perCallTimeoutMs: 75000,
+    streamChat: fakeSdkTransport(adapter),
+  };
+}
+
+function fakeSdkTransport(adapter: FakeAdapter, failAtCalls: number[] = []) {
+  let calls = 0;
+  return async ({ request }: SdkStreamRunInput): Promise<ChatResponse> => {
+    calls += 1;
+    adapter.buildStreamRequest(request);
+    if (failAtCalls.includes(calls)) throw new Error("SDK transport simulated failure");
+    return adapter.parseResponse();
   };
 }
 
@@ -197,7 +209,7 @@ describe("Plan 模式 delegate_task 过滤", () => {
       return new Response("{}", { status: 200 });
     }) as unknown as typeof fetch;
 
-    await runLangGraphAgentLoop(defaultOptions(adapter));
+    await runLangGraphAgentLoop({ ...defaultOptions(adapter), streamChat: fakeSdkTransport(adapter, [2, 3]) });
 
     // 从 Action Gate 请求中提取 capabilities
     const caps = extractCapabilities(adapter);
@@ -241,7 +253,7 @@ describe("Plan 模式 delegate_task 过滤", () => {
       return new Response("{}", { status: 200 });
     }) as unknown as typeof fetch;
 
-    await runLangGraphAgentLoop(defaultOptions(adapter));
+    await runLangGraphAgentLoop({ ...defaultOptions(adapter), streamChat: fakeSdkTransport(adapter, [2, 3]) });
 
     // 从 Native FC 请求中提取 tools
     const nativeTools = extractNativeFcTools(adapter);
@@ -291,7 +303,7 @@ describe("Plan 模式 delegate_task 过滤", () => {
       return new Response("{}", { status: 200 });
     }) as unknown as typeof fetch;
 
-    await runLangGraphAgentLoop(defaultOptions(adapter1));
+    await runLangGraphAgentLoop({ ...defaultOptions(adapter1), streamChat: fakeSdkTransport(adapter1, [2, 3]) });
 
     // 第一轮：delegate_task 应被隐藏
     const caps1 = extractCapabilities(adapter1);
@@ -338,6 +350,7 @@ describe("Plan 模式 delegate_task 过滤", () => {
     await runLangGraphAgentLoop({
       ...defaultOptions(adapter),
       tools: toolsCopy,
+      streamChat: fakeSdkTransport(adapter, [2, 3]),
     });
 
     // 原始数组不应被修改（filter 创建新数组，不改原数组）
