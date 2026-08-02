@@ -73,11 +73,18 @@ const cyreneAvatarUrl = resolveAsset("avatars/cyrene-avatar.png");
 function MarkdownCode({ children, lang, block }: ComponentProps<{ children?: ReactNode }>) {
   if (!block) return <code>{children}</code>;
   return (
-    <CodeHighlighter lang={(lang ?? "text").split(/\s+/)[0]}>
+    <CodeHighlighter lang={(lang ?? "text").split(/\s+/)[0]} prismLightMode={false}>
       {String(children ?? "").replace(/\n$/, "")}
     </CodeHighlighter>
   );
 }
+
+const markdownComponents = { code: MarkdownCode };
+const completedMarkdownOptions = {
+  hasNextChunk: false,
+  enableAnimation: false,
+  tail: false,
+};
 
 class MarkdownRenderBoundary extends Component<{
   content: string;
@@ -93,12 +100,6 @@ class MarkdownRenderBoundary extends Component<{
     console.error("[ReactChat] Markdown/KaTeX 渲染失败，已降级为原始文本", error, info);
   }
 
-  componentDidUpdate(previousProps: Readonly<{ content: string }>): void {
-    if (previousProps.content !== this.props.content && this.state.failed) {
-      this.setState({ failed: false });
-    }
-  }
-
   render(): ReactNode {
     if (this.state.failed) {
       return <pre className="cy-message-markdown-fallback">{this.props.content}</pre>;
@@ -107,21 +108,17 @@ class MarkdownRenderBoundary extends Component<{
   }
 }
 
-function MarkdownContent({ content, streaming = false }: { content: string; streaming?: boolean }) {
+function MarkdownContent({ content }: { content: string; streaming?: boolean }) {
   return (
     <MarkdownRenderBoundary content={content}>
       <XMarkdown
         content={content}
         config={markdownConfig}
-        components={{ code: MarkdownCode }}
+        components={markdownComponents}
         openLinksInNewTab
         escapeRawHtml
         rootClassName="cy-message-markdown"
-        streaming={{
-          hasNextChunk: streaming,
-          enableAnimation: streaming,
-          tail: streaming ? { content: "●" } : false,
-        }}
+        streaming={completedMarkdownOptions}
       />
     </MarkdownRenderBoundary>
   );

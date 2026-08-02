@@ -70,4 +70,17 @@ describe("assistantRenderStages", () => {
     expect(source).toMatch(/<Think[\s\S]*?destroyOnHidden[\s\S]*?>/);
     expect(source).not.toContain("destroyOnHidden={false}");
   });
+
+  it("keeps Markdown renderer options stable and leaves streaming state to AG-UI", () => {
+    const source = fs.readFileSync(
+      fileURLToPath(new URL("./ChatMessageList.tsx", import.meta.url)),
+      "utf8",
+    );
+    expect(source).toContain("const markdownComponents = { code: MarkdownCode };");
+    expect(source).toContain("components={markdownComponents}");
+    expect(source).toContain("streaming={completedMarkdownOptions}");
+    expect(source).not.toContain("streaming={streaming ? streamingMarkdownOptions : completedMarkdownOptions}");
+    expect(source).not.toContain("componentDidUpdate(previousProps");
+    expect(source).toContain("prismLightMode={false}");
+  });
 });
