@@ -96,6 +96,23 @@
                 <span aria-hidden="true">ⓘ</span> 接入说明与 FAQ
               </button>
             </div>
+            <div class="settings-list">
+              <label class="setting-row">
+                <div>
+                  <strong>删除 max_token 限制</strong>
+                  <span>删除所有请求的 max_token 限制，适用于本地模型．</span>
+                </div>
+                <span class="switch"><input id="toggle-disable-max-token" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
+              <label class="vision-multimodal-row">
+                <span>强制启用模型思考（仅自定义端点生效）</span>
+                <span class="switch"><input id="toggle-enable-thinking" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
+              <label class="vision-multimodal-row">
+                <span>强制禁用模型思考（仅自定义端点生效）</span>
+                <span class="switch"><input id="toggle-disable-thinking" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
+            </div>
           </div>
 
           <div class="form-grid">
@@ -153,23 +170,6 @@
             <button type="button" class="custom-endpoint-guide-btn" id="work-flow-adapt-btn">
               <span aria-hidden="true">ⓘ</span> 模型厂商 Work 流程适配
             </button>
-            <label class="vision-multimodal-row">
-              <span>强制启用模型思考</span>
-              <span class="switch"><input id="toggle-enable-thinking" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
-            </label>
-            <label class="vision-multimodal-row">
-              <span>强制禁用模型思考</span>
-              <span class="switch"><input id="toggle-disable-thinking" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
-            </label>
-          </div>
-          <div class="settings-list">
-            <label class="setting-row">
-              <div>
-                <strong>删除 max_token 限制</strong>
-                <span>删除所有请求的 max_token 限制，适用于本地模型．</span>
-              </div>
-              <span class="switch"><input id="toggle-disable-max-token" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
-            </label>
           </div>
 
           <hr class="api-section-divider" />
