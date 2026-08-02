@@ -23,6 +23,22 @@ export interface StreamAccumulatorSnapshot {
   usage?: { input: number; output: number };
 }
 
+export interface StreamDiagnostic {
+  code: "E_STREAM_TERMINAL_MISMATCH";
+  transport: "anthropic";
+  differences: string[];
+  live: {
+    text_length: number;
+    reasoning_length: number;
+    tool_call_ids: string[];
+  };
+  terminal: {
+    text_length: number;
+    reasoning_length: number;
+    tool_call_ids: string[];
+  };
+}
+
 export type ProviderProtocolErrorCode =
   | "E_TOOL_CALL_ID_CHANGED"
   | "E_TOOL_CALL_INCOMPLETE"
