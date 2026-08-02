@@ -50,6 +50,8 @@ import { buildSoulExecutionContext, formatSoulExecutionContext } from "./soul-ex
 import type { TaskPlanSnapshot } from "./task-plan";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
+import { streamChatWithSdk, type SdkStreamRunInput } from "./vendors/sdk-stream/runtime";
+import type { UnifiedStreamDelta } from "./vendors/sdk-stream/types";
 
 export interface AgentLoopSettings {
   provider: string;
@@ -112,6 +114,8 @@ export interface TwoPhaseFcOptions {
   /** 用户取消信号。 */
   signal?: AbortSignal;
   optimizeFirstRound?: boolean;
+  /** 测试可注入的模型流；生产默认使用官方 SDK runtime。 */
+  streamChat?: (input: SdkStreamRunInput) => Promise<import("./vendors/types").ChatResponse>;
 }
 
 export interface TwoPhaseFcResult {
@@ -148,6 +152,256 @@ function emitTextMessage(
     send({ type: "text_message_content", messageId, delta });
   }
   send({ type: "text_message_end", messageId });
+}
+
+const STREAM_BLOCK_MARKERS = [
+  "\uffff",
+  "]<]minimax[>[",
+  "[系统提示]",
+  "[工具调用]",
+  "[工具结果]",
+  "<tool_call",
+  "[tool_call]",
+  "<invoke",
+];
+
+class SafeSoulTextEmitter {
+  private pending = "";
+  private emitted = "";
+  private opened = false;
+  private stopped = false;
+  private leadingMetadataResolved = false;
+
+  constructor(
+    private readonly onEvent: ((event: TwoPhaseEvent) => void) | undefined,
+    private readonly messageId: string,
+  ) {}
+
+  push(delta: string): void {
+    if (!delta || this.stopped) return;
+    this.pending += delta;
+    if (!this.resolveLeadingMetadata()) return;
+    this.flushSafePrefix(false);
+  }
+
+  finish(authoritativeText: string): void {
+    if (!this.stopped) {
+      this.resolveLeadingMetadata(true);
+      this.flushSafePrefix(true);
+    }
+    if (authoritativeText.startsWith(this.emitted)) {
+      this.emit(authoritativeText.slice(this.emitted.length));
+    } else if (!this.opened) {
+      this.emit(authoritativeText);
+    }
+    if (this.opened) this.onEvent?.({ type: "text_message_end", messageId: this.messageId });
+  }
+
+  abort(): void {
+    if (this.opened) this.onEvent?.({ type: "text_message_end", messageId: this.messageId });
+  }
+
+  private resolveLeadingMetadata(force = false): boolean {
+    if (this.leadingMetadataResolved) return true;
+    if (!this.pending.startsWith("[")) {
+      this.leadingMetadataResolved = true;
+      return true;
+    }
+    // 时间戳很可能被拆成 `[`、日期、时区、换行四个 chunk。只有确认不是时间戳后才允许首个
+    // 方括号透传，避免 Renderer 已经展示系统元数据而终态无法回滚。
+    if (!force && (this.pending === "[" || (/^\[\d/.test(this.pending) && !this.pending.includes("\n")))) {
+      return false;
+    }
+    if (/^\[\d{4}-\d{2}-\d{2} /.test(this.pending)) {
+      this.pending = stripLeakedChatTimeContext(this.pending);
+    }
+    this.leadingMetadataResolved = true;
+    return true;
+  }
+
+  private flushSafePrefix(force: boolean): void {
+    const lower = this.pending.toLowerCase();
+    let markerIndex = -1;
+    for (const marker of STREAM_BLOCK_MARKERS) {
+      const index = lower.indexOf(marker.toLowerCase());
+      if (index >= 0 && (markerIndex < 0 || index < markerIndex)) markerIndex = index;
+    }
+    if (markerIndex >= 0) {
+      this.emit(this.pending.slice(0, markerIndex));
+      this.pending = "";
+      this.stopped = true;
+      return;
+    }
+    if (force) {
+      this.emit(this.pending);
+      this.pending = "";
+      return;
+    }
+
+    let heldSuffix = 0;
+    for (const marker of STREAM_BLOCK_MARKERS) {
+      const normalizedMarker = marker.toLowerCase();
+      const max = Math.min(lower.length, normalizedMarker.length - 1);
+      for (let length = max; length > heldSuffix; length -= 1) {
+        if (lower.endsWith(normalizedMarker.slice(0, length))) {
+          heldSuffix = length;
+          break;
+        }
+      }
+    }
+    const safeLength = this.pending.length - heldSuffix;
+    if (safeLength > 0) {
+      this.emit(this.pending.slice(0, safeLength));
+      this.pending = this.pending.slice(safeLength);
+    }
+  }
+
+  private emit(delta: string): void {
+    if (!delta) return;
+    if (!this.opened) {
+      this.opened = true;
+      this.onEvent?.({ type: "text_message_start", messageId: this.messageId, role: "assistant" });
+    }
+    this.emitted += delta;
+    this.onEvent?.({ type: "text_message_content", messageId: this.messageId, delta });
+  }
+}
+
+interface StreamedToolUiState {
+  id?: string;
+  name: string;
+  arguments: string;
+  emittedArgumentLength: number;
+  opened: boolean;
+  ended: boolean;
+}
+
+class WorkStreamEventBridge {
+  private reasoningOpened = false;
+  private reasoningEnded = false;
+  private readonly reasoningMessageId: string;
+  private readonly textEmitter: SafeSoulTextEmitter | undefined;
+  private readonly toolStates = new Map<number, StreamedToolUiState>();
+
+  constructor(
+    phase: "tool" | "soul",
+    private readonly onEvent: ((event: TwoPhaseEvent) => void) | undefined,
+    private readonly tools: ReadonlyArray<ToolDefinition>,
+    callId: string,
+  ) {
+    this.reasoningMessageId = `${callId}-reasoning`;
+    this.textEmitter = phase === "soul" ? new SafeSoulTextEmitter(onEvent, `${callId}-text`) : undefined;
+  }
+
+  onDelta = (delta: UnifiedStreamDelta): void => {
+    switch (delta.type) {
+      case "reasoning_delta":
+        if (!delta.delta) return;
+        if (!this.reasoningOpened) {
+          this.reasoningOpened = true;
+          this.onEvent?.({ type: "reasoning_message_start", messageId: this.reasoningMessageId, role: "reasoning" });
+        }
+        this.onEvent?.({ type: "reasoning_message_content", messageId: this.reasoningMessageId, delta: delta.delta });
+        return;
+      case "text_delta":
+        this.textEmitter?.push(delta.delta);
+        return;
+      case "tool_call_start": {
+        const state = this.toolState(delta.index);
+        if (delta.id) state.id ??= delta.id;
+        state.name += delta.nameDelta ?? "";
+        return;
+      }
+      case "tool_call_arguments_delta": {
+        const state = this.toolState(delta.index);
+        if (delta.id) state.id ??= delta.id;
+        state.arguments += delta.delta;
+        this.openTool(state);
+        this.emitPendingArguments(state);
+        return;
+      }
+      case "tool_call_end": {
+        const state = this.toolState(delta.index);
+        if (delta.id) state.id ??= delta.id;
+        this.openTool(state);
+        this.emitPendingArguments(state);
+        this.endTool(state);
+        return;
+      }
+      case "usage":
+      case "finish":
+      case "refusal":
+        return;
+    }
+  };
+
+  finish(response: import("./vendors/types").ChatResponse, authoritativeText = response.text): void {
+    if (!this.reasoningOpened && response.thinking?.trim()) {
+      this.onDelta({ type: "reasoning_delta", delta: response.thinking });
+    }
+    this.endReasoning();
+
+    response.toolCalls.forEach((toolCall, index) => {
+      const state = this.toolState(index);
+      state.id ??= toolCall.id;
+      if (!state.name) state.name = toolCall.name;
+      if (!state.arguments) state.arguments = toolCall.arguments;
+      this.openTool(state);
+      this.emitPendingArguments(state);
+      this.endTool(state);
+    });
+    this.textEmitter?.finish(authoritativeText);
+  }
+
+  abort(): void {
+    this.endReasoning();
+    for (const state of this.toolStates.values()) this.endTool(state);
+    this.textEmitter?.abort();
+  }
+
+  private toolState(index: number): StreamedToolUiState {
+    const existing = this.toolStates.get(index);
+    if (existing) return existing;
+    const created: StreamedToolUiState = {
+      name: "",
+      arguments: "",
+      emittedArgumentLength: 0,
+      opened: false,
+      ended: false,
+    };
+    this.toolStates.set(index, created);
+    return created;
+  }
+
+  private openTool(state: StreamedToolUiState): void {
+    if (state.opened || !state.id || !state.name) return;
+    state.opened = true;
+    const displayTool = this.tools.find((tool) => tool.id === state.name);
+    this.onEvent?.({
+      type: "tool_call_start",
+      toolCallId: state.id,
+      toolCallName: displayTool?.name ?? state.name,
+    });
+  }
+
+  private emitPendingArguments(state: StreamedToolUiState): void {
+    if (!state.opened || !state.id || state.emittedArgumentLength >= state.arguments.length) return;
+    const delta = state.arguments.slice(state.emittedArgumentLength);
+    state.emittedArgumentLength = state.arguments.length;
+    this.onEvent?.({ type: "tool_call_args", toolCallId: state.id, delta });
+  }
+
+  private endTool(state: StreamedToolUiState): void {
+    if (!state.opened || state.ended || !state.id) return;
+    state.ended = true;
+    this.onEvent?.({ type: "tool_call_end", toolCallId: state.id });
+  }
+
+  private endReasoning(): void {
+    if (!this.reasoningOpened || this.reasoningEnded) return;
+    this.reasoningEnded = true;
+    this.onEvent?.({ type: "reasoning_message_end", messageId: this.reasoningMessageId });
+  }
 }
 
 function buildFallbackReply(toolResults: ToolCallResult[], reason: string): string {
@@ -253,65 +507,6 @@ function withSystem(conv: ChatMessage[], systemContent: string): ChatMessage[] {
 }
 
 /**
- * 执行一轮 LLM 调用，返回解析后的 ChatResponse。处理 abort / 超时 / HTTP 错误。
- */
-async function callOnce(
-  adapter: ChatVendorAdapter,
-  req: ChatRequest,
-  cfg: AgentLoopSettings,
-  timeoutMs: number,
-): Promise<{ response: Response; abort: () => void }> {
-  const http = adapter.buildRequest(req, cfg);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(http.url, {
-      method: "POST",
-      signal: controller.signal,
-      headers: http.headers,
-      body: http.body,
-    });
-    clearTimeout(timer);
-    return { response, abort: () => controller.abort() };
-  } catch (err) {
-    clearTimeout(timer);
-    throw err;
-  }
-}
-
-/**
- * 把 ChatVendorAdapter + VendorConfig 包成可调用的 fetch helper。
- */
-async function callAdapter(
-  adapter: ChatVendorAdapter,
-  req: ChatRequest,
-  cfg: AgentLoopSettings,
-  perRoundTimeoutMs: number,
-): Promise<unknown> {
-  const http = adapter.buildRequest(req, cfg);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), perRoundTimeoutMs);
-  try {
-    const response = await fetch(http.url, {
-      method: "POST",
-      signal: controller.signal,
-      headers: http.headers,
-      body: http.body,
-    });
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      throw new AgentRuntimeError(
-        "E_MODEL_REQUEST_FAILED",
-        `模型请求失败：HTTP ${response.status}${errorText ? ` - ${errorText.slice(0, 200)}` : ""}`,
-      );
-    }
-    return await response.json();
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-/**
  * 主入口：两阶段 FC 循环。
  */
 export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<TwoPhaseFcResult> {
@@ -336,6 +531,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
   const forceSummaryTimeoutMs = options.forceSummaryTimeoutMs ?? DEFAULT_FORCE_SUMMARY_TIMEOUT_MS;
   const buildSoulToolResultsSummary = options.buildSoulToolResultsSummary ?? (() => "");
   const recordUsageFn = options.recordUsage ?? ((input, output, calls) => recordUsage(input, output, calls));
+  const streamChat = options.streamChat ?? streamChatWithSdk;
 
   const toolSpecs = buildToolSpecs(tools);
   const runnableToolIds = new Set(tools.filter((t) => t.enabled).map((t) => t.id));
@@ -352,6 +548,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
   let consecutiveTimeouts = 0;
   let usedImageCaptionFallback = false;
   let isFirstRound = true;
+  let loopExitReason: SoulPhaseReason = "max_rounds";
 
   const switchToImageCaptionFallback = async (reason: string): Promise<boolean> => {
     if (usedImageCaptionFallback || !imageCaptionFallback) return false;
@@ -368,6 +565,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     }
     if (Date.now() - startTime > timeoutMs) {
       console.warn(LOG_PREFIX, "Function Calling 超时，在第 " + (round + 1) + " 轮退出");
+      loopExitReason = "timeout";
       break;
     }
     const realIsFirstRound = isFirstRound;
@@ -386,21 +584,34 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     let req: ChatRequest = {
       model: options.settings.model,
       messages: withSystem(conversation, systemContent),
-      stream: false,
+      stream: true,
     };
     if (toolSpecs.length > 0) req = { ...req, tools: toolSpecs };
     if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, options.settings);
 
-    let data: unknown;
+    const bridge = new WorkStreamEventBridge("tool", onEvent, tools, `tool-round-${round + 1}-${Date.now()}`);
+    let chat: import("./vendors/types").ChatResponse;
     try {
-      data = await callAdapter(adapter, req, options.settings, perRoundTimeoutMs);
+      chat = await streamChat({
+        adapter,
+        request: req,
+        config: options.settings,
+        timeoutMs: perRoundTimeoutMs,
+        signal,
+        onDelta: bridge.onDelta,
+        onDiagnostic: (diagnostic) => console.warn(LOG_PREFIX, "流终态核对告警:", diagnostic),
+      });
+      bridge.finish(chat);
     } catch (err) {
-      if (err instanceof Error && err.name === "AbortError") {
+      bridge.abort();
+      if (signal?.aborted) throw err;
+      if (err instanceof AgentRuntimeError && err.code === "E_MODEL_REQUEST_TIMEOUT") {
         consecutiveTimeouts++;
         console.warn(LOG_PREFIX, "第 " + (round + 1) + " 轮 LLM 请求超时，连续第 " + consecutiveTimeouts + " 次");
         onEvent?.({ type: "step_finished", stepName: `tool-round-${round + 1}` });
         if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
           console.warn(LOG_PREFIX, "连续 " + maxConsecutiveTimeouts + " 次超时，触发 SOUL_PHASE");
+          loopExitReason = "timeout";
           break;
         }
         continue;
@@ -412,7 +623,6 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
       throw err;
     }
 
-    const chat = adapter.parseResponse(data);
     if (chat.usage) {
       accInput += chat.usage.input;
       accOutput += chat.usage.output;
@@ -436,14 +646,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
 
       const execResults: ToolExecutionResult[] = [];
       for (const tc of chat.toolCalls) {
-        const toolCallId = tc.id || `${tc.name}-${Date.now()}`;
-        const displayTool = tools.find((t) => t.id === tc.name);
-
-        onEvent?.({
-          type: "tool_call_start",
-          toolCallId,
-          toolCallName: displayTool?.name ?? tc.name,
-        });
+        const toolCallId = tc.id;
 
         let args: Record<string, unknown> = {};
         try {
@@ -491,7 +694,6 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
           content: output,
           status: outcome.status,
         });
-        onEvent?.({ type: "tool_call_end", toolCallId });
       }
 
       conversation = adapter.appendToolResults(conversation, execResults);
@@ -504,7 +706,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     // 情况 2：模型没有调工具 → 切 SOUL_PHASE
     if (optimizeFirstRound && realIsFirstRound) {
       // 提示词连接了soulSystemBaseContent，因此直接返回结果，不需要二次总结．
-      return sendSoulPhaseDirectly(options, allToolResults,  accInput, accOutput, stripLeakedChatTimeContext(chat.text));
+      return sendSoulPhaseDirectly(options, allToolResults, accInput, accOutput, stripLeakedChatTimeContext(chat.text));
     }
     // 情况 2：模型没有调工具 → 切 SOUL_PHASE
     // 关键：工具阶段的 chat.text **不写入 conversation**，不发给用户。
@@ -525,6 +727,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
       signal,
       onEvent,
       recordUsageFn,
+      streamChat,
     });
   }
 
@@ -532,7 +735,9 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
   if (signal?.aborted) {
     throw new Error("run cancelled");
   }
-  console.warn(LOG_PREFIX, "达到最大轮数 " + maxToolRounds + "，触发 SOUL_PHASE 强制总结");
+  if (loopExitReason === "max_rounds") {
+    console.warn(LOG_PREFIX, "达到最大轮数 " + maxToolRounds + "，触发 SOUL_PHASE 强制总结");
+  }
   return await runSoulPhase({
     adapter,
     cfg: options.settings,
@@ -544,11 +749,12 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     tools,
     accInput,
     accOutput,
-    reason: "max_rounds",
+    reason: loopExitReason,
     forceSummaryTimeoutMs,
     signal,
     onEvent,
     recordUsageFn,
+    streamChat,
   });
 }
 
@@ -585,6 +791,7 @@ async function runSoulPhase(args: {
   signal: AbortSignal | undefined;
   onEvent: ((e: TwoPhaseEvent) => void) | undefined;
   recordUsageFn: (input: number, output: number, calls: number) => void;
+  streamChat: (input: SdkStreamRunInput) => Promise<import("./vendors/types").ChatResponse>;
 }): Promise<TwoPhaseFcResult> {
   const {
     adapter,
@@ -602,6 +809,7 @@ async function runSoulPhase(args: {
     signal,
     onEvent,
     recordUsageFn,
+    streamChat,
   } = args;
 
   onEvent?.({ type: "step_started", stepName: `soul-phase-${reason}` });
@@ -618,31 +826,33 @@ async function runSoulPhase(args: {
   let req: ChatRequest = {
     model: cfg.model,
     messages: withSystem(conversation, finalSystemContent),
-    stream: false,
+    stream: true,
     ...(soulSampling ?? {}),
   };
   if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, cfg);
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), forceSummaryTimeoutMs);
-  if (signal) {
-    signal.addEventListener("abort", () => controller.abort());
-  }
+  const bridge = new WorkStreamEventBridge("soul", onEvent, tools, `soul-${reason}-${Date.now()}`);
 
   try {
-    const data = await callAdapter(adapter, req, cfg, forceSummaryTimeoutMs);
-    const chat = adapter.parseResponse(data);
+    const chat = await streamChat({
+      adapter,
+      request: req,
+      config: cfg,
+      timeoutMs: forceSummaryTimeoutMs,
+      signal,
+      onDelta: bridge.onDelta,
+      onDiagnostic: (diagnostic) => console.warn(LOG_PREFIX, "流终态核对告警:", diagnostic),
+    });
     const withoutProtocol = stripTextualToolProtocol(chat.text);
     const reply = stripLeakedChatTimeContext(
       withoutProtocol || buildTextualToolProtocolFallback(allToolResults),
     );
+    bridge.finish(chat, reply);
     if (chat.usage) {
       const finalInput = accInput + chat.usage.input;
       const finalOutput = accOutput + chat.usage.output;
       recordUsageFn(chat.usage.input, chat.usage.output, 1);
 
-      const textMessageId = `msg-${Date.now()}`;
-      emitTextMessage(onEvent, textMessageId, reply);
       onEvent?.({ type: "step_finished", stepName: `soul-phase-${reason}` });
 
       return {
@@ -653,8 +863,6 @@ async function runSoulPhase(args: {
       };
     }
 
-    const textMessageId = `msg-${Date.now()}`;
-    emitTextMessage(onEvent, textMessageId, reply);
     onEvent?.({ type: "step_finished", stepName: `soul-phase-${reason}` });
 
     return {
@@ -664,8 +872,10 @@ async function runSoulPhase(args: {
       soulPhaseReason: reason,
     };
   } catch (err) {
+    bridge.abort();
+    if (signal?.aborted) throw err;
     // 兜底再失败也别让整个 run 崩掉。用已收集的工具结果拼一个"任务中断"文案降级返回。
-    const errReason = err instanceof Error && err.name === "AbortError"
+    const errReason = err instanceof AgentRuntimeError && err.code === "E_MODEL_REQUEST_TIMEOUT"
       ? "总结请求超时"
       : (err instanceof Error ? err.message : String(err));
     console.error(LOG_PREFIX, "SOUL_PHASE 也失败，降级返回已有结果:", errReason);
@@ -679,7 +889,5 @@ async function runSoulPhase(args: {
       totalUsage: accInput > 0 || accOutput > 0 ? { input: accInput, output: accOutput } : undefined,
       soulPhaseReason: reason,
     };
-  } finally {
-    clearTimeout(timer);
   }
 }
