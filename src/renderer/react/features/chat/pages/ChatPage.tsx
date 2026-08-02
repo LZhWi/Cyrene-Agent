@@ -1,5 +1,12 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { ChatComposer, type ComposerAttachment } from "../components/ChatComposer";
+import { ComposerSlot } from "../components/ComposerSlot";
+import {
+  normalizeChoiceInteraction,
+  normalizeTaskPlanPresentation,
+  type AgentRunStage,
+  type ComposerInteraction,
+} from "../components/run-presentation";
 import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessageList";
 import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
 import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
@@ -120,6 +127,7 @@ interface AguiEvent {
   value?: unknown;
   toolCallId?: string;
   toolCallName?: string;
+  stepName?: string;
   status?: string;
 }
 
@@ -133,6 +141,24 @@ interface AguiApi {
     imageAttachments?: Array<{ name: string; filePath: string; mime?: string }>;
   }) => Promise<{ success: boolean; error?: string }>;
   onEvent: (callback: (event: AguiEvent) => void) => () => void;
+}
+
+interface ChoiceApi {
+  resolve: (id: string, value: unknown) => Promise<{ ok: boolean }>;
+}
+
+interface PermissionApprovalRequest {
+  id: string;
+  toolId: string;
+  toolName: string;
+  toolDescription: string;
+  args: Record<string, unknown>;
+  risk: string;
+}
+
+interface SettingsApprovalApi {
+  onPermissionApprovalRequest: (callback: (request: PermissionApprovalRequest) => void) => () => void;
+  resolvePermissionApproval: (id: string, allowed: boolean) => Promise<{ ok: boolean }>;
 }
 
 interface PublicModelConfig {
@@ -155,6 +181,36 @@ function sidebarApi(): SidebarApi | undefined {
 
 function aguiApi(): AguiApi | undefined {
   return (window as typeof window & { agui?: AguiApi }).agui;
+}
+
+function choiceApi(): ChoiceApi | undefined {
+  return (window as typeof window & { choice?: ChoiceApi }).choice;
+}
+
+function settingsApprovalApi(): SettingsApprovalApi | undefined {
+  return (window as typeof window & { settings?: SettingsApprovalApi }).settings;
+}
+
+function permissionInteraction(request: PermissionApprovalRequest): ComposerInteraction {
+  const target = [request.args.path, request.args.filePath, request.args.filename]
+    .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return {
+    kind: "permission",
+    id: request.id,
+    toolName: request.toolName || request.toolId,
+    summary: request.toolDescription || `${request.toolName || request.toolId} 请求执行`,
+    targetPath: target,
+  };
+}
+
+function stageForStep(stepName: string | undefined): AgentRunStage | undefined {
+  if (stepName === "agent-graph-action-gate") return { kind: "understanding" };
+  if (stepName === "agent-graph-plan") return { kind: "planning" };
+  if (stepName === "agent-graph-soul") return { kind: "responding" };
+  if (stepName?.startsWith("agent-graph-tool-")) {
+    return { kind: "executing", detail: stepName.slice("agent-graph-tool-".length) };
+  }
+  return undefined;
 }
 
 function toUiMessages(session: ChatSession): ChatMessageItem[] {
@@ -186,6 +242,8 @@ export function ChatPage() {
   const [activeSessionIds, setActiveSessionIds] = useState<Partial<Record<ConversationMode, string>>>({});
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [modelBusy, setModelBusy] = useState(false);
+  const [composerInteraction, setComposerInteraction] = useState<ComposerInteraction>();
+  const [interactionBusy, setInteractionBusy] = useState(false);
   const [lastTurnRevisionStarting, setLastTurnRevisionStarting] = useState(false);
   const [modelName, setModelName] = useState("模型未连接");
   const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
@@ -197,6 +255,20 @@ export function ChatPage() {
   const dragDepthRef = useRef(0);
   const localPreviewUrlsRef = useRef(new Set<string>());
   const demoTimers = useRef(new Set<number>());
+  const activeRunRef = useRef<{ mode: ConversationMode; assistantId: string } | null>(null);
+
+  useEffect(() => {
+    const settings = settingsApprovalApi();
+    if (!settings) return;
+    return settings.onPermissionApprovalRequest((request) => {
+      setInteractionBusy(false);
+      setComposerInteraction(permissionInteraction(request));
+      const activeRun = activeRunRef.current;
+      if (activeRun) {
+        updateMessage(activeRun.mode, activeRun.assistantId, { runStage: { kind: "waiting_permission" } });
+      }
+    });
+  }, []);
 
   useEffect(() => {
     const modelConfig = (window as typeof window & { modelConfig?: ModelConfigApi }).modelConfig;
@@ -461,6 +533,7 @@ export function ChatPage() {
     }
 
     modelBusyRef.current = true;
+    activeRunRef.current = { mode: input.targetMode, assistantId: input.assistantId };
     setModelBusy(true);
     const earlyTtsQueue = createEarlyTtsQueue(input.targetMode, input.sessionId, input.assistantId);
     let streamContent = "";
@@ -532,6 +605,7 @@ export function ChatPage() {
         updateMessage(input.targetMode, input.assistantId, {
           waitingForFirstEvent: false,
           runActivity: { ...runActivity },
+          runStage: { kind: "understanding" },
         });
         return;
       }
@@ -558,6 +632,7 @@ export function ChatPage() {
         updateMessage(input.targetMode, input.assistantId, {
           loading: false,
           reasoningStreaming: true,
+          runStage: { kind: "responding" },
         });
       } else if (event.type === "REASONING_MESSAGE_CONTENT" && event.delta) {
         const reasoningId = event.messageId ?? currentReasoningId ?? crypto.randomUUID();
@@ -586,10 +661,16 @@ export function ChatPage() {
         }
         currentReasoningId = undefined;
         updateMessage(input.targetMode, input.assistantId, { reasoningStreaming: false, loading: false });
+        } else if (event.type === "STEP_STARTED") {
+          const stage = stageForStep(event.stepName);
+          if (stage) updateMessage(input.targetMode, input.assistantId, { runStage: stage });
         } else if (event.type === "TOOL_CALL_START" && event.toolCallId) {
           updateRunTool(event.toolCallId, {
             name: event.toolCallName ?? "工具调用",
             status: "running",
+          });
+          updateMessage(input.targetMode, input.assistantId, {
+            runStage: { kind: "executing", detail: event.toolCallName ?? "工具调用" },
           });
         } else if (event.type === "TOOL_CALL_RESULT" && event.toolCallId) {
         updateRunTool(event.toolCallId, {
@@ -604,6 +685,7 @@ export function ChatPage() {
           reasoningStreaming: false,
           responseStarted: true,
           streaming: true,
+          runStage: { kind: "responding" },
         });
       } else if (event.type === "TEXT_MESSAGE_CONTENT" && event.delta) {
         streamContent += event.delta;
@@ -616,14 +698,31 @@ export function ChatPage() {
         });
       } else if (event.type === "TEXT_MESSAGE_END") {
         updateMessage(input.targetMode, input.assistantId, { streaming: false });
+      } else if (event.type === "CUSTOM" && event.name === "cyrene.choice") {
+        const interaction = normalizeChoiceInteraction(event.value);
+        if (interaction) {
+          setInteractionBusy(false);
+          setComposerInteraction(interaction);
+          updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "waiting_user" } });
+        }
+      } else if (event.type === "CUSTOM" && event.name === "cyrene.taskPlan") {
+        const taskPlan = normalizeTaskPlanPresentation(event.value);
+        if (taskPlan) {
+          updateMessage(input.targetMode, input.assistantId, {
+            taskPlan,
+            runStage: { kind: "executing" },
+          });
+        }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.sticker") {
         sticker = typeof event.value === "string" ? event.value : null;
         updateMessage(input.targetMode, input.assistantId, { sticker });
       } else if (event.type === "RUN_FINISHED") {
         completeRunActivity();
+        updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "completed" } });
         resolveTerminal();
       } else if (event.type === "RUN_ERROR") {
         completeRunActivity();
+        updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "failed" } });
         resolveTerminal(new Error(event.message ?? event.error ?? event.content ?? "模型请求失败"));
       }
     });
@@ -706,6 +805,7 @@ export function ChatPage() {
     } finally {
       off();
       if (activeAguiOffRef.current === off) activeAguiOffRef.current = null;
+      if (activeRunRef.current?.assistantId === input.assistantId) activeRunRef.current = null;
       modelBusyRef.current = false;
       setModelBusy(false);
       void refreshSessions(input.targetMode, false);
@@ -1160,7 +1260,8 @@ export function ChatPage() {
           />
         )}
         <div className="cy-workspace-composer">
-          <ChatComposer
+          <ComposerSlot
+            composer={<ChatComposer
             value={draft}
             mode={mode}
             docked={hasMessages}
@@ -1177,6 +1278,36 @@ export function ChatPage() {
             onChooseSticker={(id) => {
               const separator = draft && !draft.endsWith(" ") ? " " : "";
               setDrafts((current) => ({ ...current, [scopeKey]: `${draft}${separator}[sticker:${id}]` }));
+            }}
+            />}
+            interaction={composerInteraction}
+            interactionBusy={interactionBusy}
+            onAnswer={(id, answer) => {
+              const choice = choiceApi();
+              if (!choice) return;
+              setInteractionBusy(true);
+              void choice.resolve(id, answer).then((result) => {
+                if (result.ok) setComposerInteraction(undefined);
+                setInteractionBusy(false);
+              }).catch(() => setInteractionBusy(false));
+            }}
+            onIgnore={(id) => {
+              const choice = choiceApi();
+              if (!choice) return;
+              setInteractionBusy(true);
+              void choice.resolve(id, "").then((result) => {
+                if (result.ok) setComposerInteraction(undefined);
+                setInteractionBusy(false);
+              }).catch(() => setInteractionBusy(false));
+            }}
+            onPermissionDecision={(id, allowed) => {
+              const settings = settingsApprovalApi();
+              if (!settings) return;
+              setInteractionBusy(true);
+              void settings.resolvePermissionApproval(id, allowed).then((result) => {
+                if (result.ok) setComposerInteraction(undefined);
+                setInteractionBusy(false);
+              }).catch(() => setInteractionBusy(false));
             }}
           />
         </div>

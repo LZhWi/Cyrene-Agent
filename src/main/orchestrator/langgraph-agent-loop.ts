@@ -565,6 +565,9 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       },
       createPlan: async (state) => {
         executionStatus.phase = "create_plan";
+        // UI-only lifecycle marker: the renderer keeps this as one replacing
+        // stage indicator, rather than exposing raw structured-output logs.
+        options.onEvent?.({ type: "step_started", stepName: "agent-graph-plan" });
         const profile = resolveStructuredOutputProfile({
           provider: options.adapter.id,
           transport: options.adapter.transport,

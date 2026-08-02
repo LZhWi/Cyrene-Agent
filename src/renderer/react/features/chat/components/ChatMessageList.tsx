@@ -16,6 +16,9 @@ import {
   updateReasoningExpanded,
 } from "./message-visibility";
 import { formatElapsed, resolveRunActivityExpanded, resolveRunActivitySnapshot, shouldAutoCollapseRunActivity } from "./run-activity";
+import { RunStageIndicator } from "./RunStageIndicator";
+import { TaskPlanCard } from "./TaskPlanCard";
+import type { AgentRunStage, TaskPlanPresentation } from "./run-presentation";
 import { CopyButton } from "./CopyButton";
 import { TtsButton } from "./TtsButton";
 import { stopTtsPlayback } from "./tts-playback";
@@ -40,6 +43,8 @@ export interface ChatMessageItem {
   sticker?: string | null;
   toolExecutions?: ToolExecutionRecord[];
   runActivity?: RunActivityRecord;
+  runStage?: AgentRunStage;
+  taskPlan?: TaskPlanPresentation;
   attachments?: ChatMessageAttachment[];
 }
 
@@ -261,6 +266,8 @@ function RunActivityContent({
   activity,
   reasoningBlocks,
   tools,
+  stage,
+  taskPlan,
   expanded,
   onExpand,
 }: {
@@ -268,6 +275,8 @@ function RunActivityContent({
   activity: RunActivityRecord;
   reasoningBlocks: ReasoningBlock[];
   tools: ToolExecutionRecord[];
+  stage?: AgentRunStage;
+  taskPlan?: TaskPlanPresentation;
   expanded: boolean;
   onExpand: (expanded: boolean) => void;
 }) {
@@ -299,6 +308,7 @@ function RunActivityContent({
               {snapshot.processing && <DotSpinner />}
             </span>
             <span>{title}</span>
+            {stage && <RunStageIndicator stage={stage} />}
         </span>
         <svg className={`cy-run-activity__chevron${expanded ? " is-expanded" : ""}`} viewBox="0 0 16 16" aria-hidden="true">
           <path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" />
@@ -306,6 +316,7 @@ function RunActivityContent({
       </button>
       {expanded && (
         <div className="cy-run-activity__expanded" id={`${activityId}-details`}>
+          {taskPlan && <TaskPlanCard plan={taskPlan} />}
           <div className="cy-run-activity__divider" />
           <RunActivityDetail reasoningBlocks={reasoningBlocks} tools={tools} />
           <div className="cy-run-activity__divider" />
@@ -573,6 +584,8 @@ function createRoles(
         activity?: RunActivityRecord;
         reasoningBlocks?: ReasoningBlock[];
         tools?: ToolExecutionRecord[];
+        runStage?: AgentRunStage;
+        taskPlan?: TaskPlanPresentation;
       };
     }) => {
       const activityId = info.extraInfo?.activityId;
@@ -584,6 +597,8 @@ function createRoles(
           activity={activity}
           reasoningBlocks={info.extraInfo?.reasoningBlocks ?? []}
           tools={info.extraInfo?.tools ?? []}
+          stage={info.extraInfo?.runStage}
+          taskPlan={info.extraInfo?.taskPlan}
           expanded={resolveRunActivityExpanded(reasoningExpanded, activityId, activity)}
           onExpand={(expanded) => onReasoningExpand(activityId, expanded)}
         />
@@ -665,6 +680,8 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
           activity: message.runActivity,
           reasoningBlocks,
           tools,
+          runStage: message.runStage,
+          taskPlan: message.taskPlan,
         },
       });
     } else {
