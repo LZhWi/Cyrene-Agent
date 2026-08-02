@@ -4,6 +4,7 @@ import {
   getVendorRuntimeSettings,
   resolveVendorRuntimeSettings,
   setVendorRuntimeSettingsGetter,
+  type VendorRuntimeSettings,
   type VendorRuntimeSettingsSource,
 } from "./runtime-settings";
 
@@ -154,7 +155,10 @@ describe("getVendorRuntimeSettings / setVendorRuntimeSettingsGetter", () => {
   });
 
   test("注入 getter 后实时读取最新值", () => {
-    let snapshot = { thinkingOverride: 1 as const, disableMaxToken: true };
+    let snapshot: VendorRuntimeSettings = {
+      thinkingOverride: 1,
+      disableMaxToken: true,
+    };
     setVendorRuntimeSettingsGetter(() => snapshot);
 
     expect(getVendorRuntimeSettings()).toEqual({
