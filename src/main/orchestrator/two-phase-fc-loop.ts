@@ -65,6 +65,7 @@ export type TwoPhaseEvent =
   | { type: "step_started"; stepName: string }
   | { type: "step_finished"; stepName: string }
   | { type: "tool_call_start"; toolCallId: string; toolCallName: string }
+  | { type: "tool_call_args"; toolCallId: string; delta: string }
   | { type: "tool_call_result"; toolCallId: string; messageId: string; content: string; status: "succeeded" | "failed" }
   | { type: "tool_call_end"; toolCallId: string }
   | { type: "text_message_start"; messageId: string; role: "assistant" }

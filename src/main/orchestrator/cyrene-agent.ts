@@ -152,6 +152,12 @@ export function toAguiEvent(event: TwoPhaseEvent): BaseEvent {
         toolCallId: event.toolCallId,
         toolCallName: event.toolCallName,
       };
+    case "tool_call_args":
+      return {
+        type: EventType.TOOL_CALL_ARGS,
+        toolCallId: event.toolCallId,
+        delta: event.delta,
+      };
     case "tool_call_result":
       return {
         type: EventType.TOOL_CALL_RESULT,

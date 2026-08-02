@@ -51,6 +51,11 @@ describe("CyreneAgent", () => {
       .toMatchObject({ type: "REASONING_MESSAGE_END", messageId: "r1" });
   });
 
+  it("maps incremental tool arguments onto the standard AG-UI event", () => {
+    expect(toAguiEvent({ type: "tool_call_args", toolCallId: "call-1", delta: "{\"path\":" }))
+      .toMatchObject({ type: "TOOL_CALL_ARGS", toolCallId: "call-1", delta: "{\"path\":" });
+  });
+
   it("passes CyreneRunOptions.soulSampling through to runTwoPhaseFcLoop", async () => {
     const agent = new CyreneAgent({ threadId: "test-thread" });
     const soulSampling = { temperature: 0.9, frequencyPenalty: 0.2 };
