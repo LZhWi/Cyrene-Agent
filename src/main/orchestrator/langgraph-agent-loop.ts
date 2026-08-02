@@ -1080,6 +1080,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
                   runId: "default",
                   planId: state.taskPlan?.id,
                   stepId: state.currentStepId,
+                  resolvedWorkspaceRoot: options.resolvedWorkspaceRoot,
                 },
               });
               return toSubAgentToolOutcome(outcome);

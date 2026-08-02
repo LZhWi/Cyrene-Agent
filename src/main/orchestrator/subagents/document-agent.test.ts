@@ -18,6 +18,7 @@ import { projectToolResult, buildSoulExecutionContext } from "../soul-execution-
 import { verifyStep } from "../task-plan";
 import type { ToolCallResult } from "../types";
 import type { PlanStep } from "../task-plan";
+import type { ToolContext } from "../tool-context";
 
 const MOCK_FILE_PATH = "C:\\Users\\Test\\Desktop\\AI新闻简报.docx";
 
@@ -158,6 +159,36 @@ describe("Document Agent vertical slice", () => {
     expect(result.artifacts[0].sizeBytes).toBe(4096);
     expect(result.completionEvidence[0].satisfied).toBe(true);
     expect(result.primaryArtifact!.path).toBe(MOCK_FILE_PATH);
+  });
+
+  it("inherits the parent workspace binding when it executes write_word", async () => {
+    let receivedContext: ToolContext | undefined;
+    toolRegistry.register({
+      id: "write_word",
+      name: "写 Word",
+      description: "test",
+      enabled: true,
+      risk: "fs-write",
+      inputSchema: { type: "object", properties: {} },
+      execute: async (_args, context) => {
+        receivedContext = context;
+        return `[write_word] 已生成：C:\\projects\\bound-workspace\\brief.docx`;
+      },
+    });
+
+    await runSubAgent({
+      profile: "document",
+      taskId: "workspace-bound-document",
+      args: { objective: "生成简报", filename: "brief.docx", title: "简报", paragraphs: ["内容"] },
+      parentContext: {
+        runId: "parent-run",
+        resolvedWorkspaceRoot: "C:\\projects\\bound-workspace",
+      },
+    });
+
+    expect(receivedContext).toEqual(expect.objectContaining({
+      resolvedWorkspaceRoot: "C:\\projects\\bound-workspace",
+    }));
   });
 
   it("toSubAgentToolOutcome maps succeeded to terminal success", async () => {

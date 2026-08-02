@@ -17,6 +17,8 @@ export interface SubAgentRunContext {
     stepId?: string;
     stepExecutionId?: string;
     stepAttemptId?: string;
+    /** 从父 Work 会话继承的可信工作区；子代理不得自行选择或覆盖。 */
+    resolvedWorkspaceRoot?: string;
   };
   /** 父运行取消信号，子代理内部工具执行时应传播此信号 */
   signal?: AbortSignal;

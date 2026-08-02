@@ -42,13 +42,14 @@ async function executeAllowedTool(
   args: Record<string, unknown>,
   allowedTools: Set<string>,
   signal?: AbortSignal,
+  resolvedWorkspaceRoot?: string,
 ): Promise<string> {
   const tool: ToolDefinition | undefined = toolRegistry.getById(toolId);
   if (!tool) throw new Error(`工具未注册: ${toolId}`);
   if (!tool.enabled) throw new Error(`工具已禁用: ${toolId}`);
   if (!allowedTools.has(toolId)) throw new Error(`工具不在白名单中: ${toolId}`);
-  const ctx: ToolContext | undefined = signal
-    ? { userQuery: "", conversationId: "subagent", signal }
+  const ctx: ToolContext | undefined = signal || resolvedWorkspaceRoot
+    ? { userQuery: "", conversationId: "subagent", signal, resolvedWorkspaceRoot }
     : undefined;
   return tool.execute(args, ctx);
 }
@@ -270,6 +271,7 @@ export async function runSubAgentGraph(
             decision.args,
             profile.allowedTools,
             ctx.signal,
+            ctx.parentContext.resolvedWorkspaceRoot,
           );
           state.toolResults.push({
             toolId: decision.toolId,
