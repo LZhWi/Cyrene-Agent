@@ -24,6 +24,13 @@ describe("assistantRenderStages", () => {
     })).toEqual(["reasoning"]);
   });
 
+  it("renders a live run activity before model reasoning arrives", () => {
+    expect(assistantRenderStages({
+      content: "",
+      runActivity: { startedAt: 1_000, reasoningMs: 0 },
+    })).toEqual(["activity"]);
+  });
+
   it("adds Cyrene's bubble only after visible reply content starts", () => {
     expect(assistantRenderStages({
       content: "正式回答",
@@ -42,6 +49,17 @@ describe("assistantRenderStages", () => {
 
   it("defaults every new reasoning chain to collapsed", () => {
     expect(resolveReasoningExpanded({}, "assistant-new")).toBe(false);
+  });
+
+  it("groups a run's reasoning and tools under one activity item with unique keys", () => {
+    const source = fs.readFileSync(
+      fileURLToPath(new URL("./ChatMessageList.tsx", import.meta.url)),
+      "utf8",
+    );
+    expect(source).toContain('role: "activity"');
+    expect(source).toContain('key: `${message.id}-activity`');
+    expect(source).toContain('key: `${message.id}-tool-${tools[index].id}`');
+    expect(source).not.toContain('key: `${message.id}-tools`');
   });
 
   it("removes hidden streaming Markdown from the DOM after collapse", () => {

@@ -58,12 +58,33 @@ export interface ToolExecutionRecord {
   result?: string;
 }
 
+/** 一次 assistant run 的可恢复展示指标。 */
+export interface RunActivityRecord {
+  /** Renderer 收到 RUN_STARTED 时的时间戳。 */
+  startedAt: number;
+  /** RUN_FINISHED 或终态错误到达后写入；缺失表示仍在处理。 */
+  completedAt?: number;
+  /** 已完成 reasoning 段的累计时长，不包含工具执行等待。 */
+  reasoningMs: number;
+  /** 当前仍在流式输出的 reasoning 段起点；终态时必须清除。 */
+  activeReasoningStartedAt?: number;
+}
+
+export interface ReasoningBlock {
+  id: string;
+  content: string;
+  streaming?: boolean;
+  /** 已完成的工具数，用于恢复 Think 与工具链的真实顺序。 */
+  afterToolCount?: number;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
   content: string;
   /** 模型公开返回的推理过程；不包含隐藏或加密思考。 */
   reasoning?: string;
+  reasoningBlocks?: ReasoningBlock[];
   at: number;
   /** 不直接显示在聊天气泡里，但会拼入模型上下文。 */
   modelContext?: string;
@@ -72,6 +93,8 @@ export interface ChatMessage {
   sticker?: string | null;
   /** 工具调用过程；与模型推理 reasoning 分开保存和展示。 */
   toolExecutions?: ToolExecutionRecord[];
+  /** 本轮处理与公开推理的展示指标。 */
+  runActivity?: RunActivityRecord;
   /** TTS 缓存 key。只存 key，不存绝对路径，避免 userData 路径变化后 session JSON 失效。 */
   ttsCacheKey?: string;
   /** 生成缓存时使用的朗读文本转换器版本；版本变化时旧缓存自然失效。 */

@@ -1,11 +1,13 @@
 import { Bubble, CodeHighlighter, Think, ThoughtChain, type BubbleItemType } from "@ant-design/x";
 import { XMarkdown, type ComponentProps } from "@ant-design/x-markdown";
 import Latex from "@ant-design/x-markdown/plugins/Latex";
-import { Component, useCallback, useEffect, useMemo, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
+import { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
-import type { ConversationMode, ToolExecutionRecord } from "../../../../../shared/chat-types";
+import type { ConversationMode, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import thinkingMoodUrl from "../../../assets/status-moods/思考中.png?url";
 import completedThinkingMoodUrl from "../../../assets/status-moods/提醒.png?url";
+import workingMoodUrl from "../../../assets/status-moods/工作中.png?url";
+import companionMoodUrl from "../../../assets/status-moods/陪伴中.png?url";
 import offlineMoodUrl from "../../../assets/status-moods/离线.png?url";
 import { useUserAvatar } from "../../../hooks/useUserAvatar";
 import {
@@ -13,6 +15,7 @@ import {
   resolveReasoningExpanded,
   updateReasoningExpanded,
 } from "./message-visibility";
+import { formatElapsed, resolveRunActivityExpanded, resolveRunActivitySnapshot, shouldAutoCollapseRunActivity } from "./run-activity";
 import { CopyButton } from "./CopyButton";
 import { TtsButton } from "./TtsButton";
 import { stopTtsPlayback } from "./tts-playback";
@@ -25,6 +28,7 @@ export interface ChatMessageItem {
   role: "user" | "assistant" | "system";
   content: string;
   reasoning?: string;
+  reasoningBlocks?: ReasoningBlock[];
   reasoningStreaming?: boolean;
   responseStarted?: boolean;
   streaming?: boolean;
@@ -35,6 +39,7 @@ export interface ChatMessageItem {
   ttsCacheVersion?: string;
   sticker?: string | null;
   toolExecutions?: ToolExecutionRecord[];
+  runActivity?: RunActivityRecord;
   attachments?: ChatMessageAttachment[];
 }
 
@@ -199,6 +204,117 @@ function ReasoningContent({
     >
       {content && <MarkdownContent content={content} streaming={loading} />}
     </Think>
+  );
+}
+
+function useRunActivityNow(processing: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!processing) return;
+    setNow(Date.now());
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [processing]);
+  return now;
+}
+
+function RunActivityReasoningBlock({ block }: { block: ReasoningBlock }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <ReasoningContent
+      content={block.content}
+      loading={Boolean(block.streaming)}
+      expanded={expanded}
+      onExpand={setExpanded}
+    />
+  );
+}
+
+function RunActivityDetail({
+  reasoningBlocks,
+  tools,
+}: {
+  reasoningBlocks: ReasoningBlock[];
+  tools: ToolExecutionRecord[];
+}) {
+  const timeline: ReactNode[] = [];
+  for (let index = 0; index <= tools.length; index += 1) {
+    reasoningBlocks
+      .filter((block) => (block.afterToolCount ?? 0) === index)
+      .forEach((block) => {
+        if (!block.content.trim()) return;
+        timeline.push(
+          <RunActivityReasoningBlock
+            key={`reasoning-${block.id}`}
+            block={block}
+          />,
+        );
+      });
+    if (index < tools.length) {
+      timeline.push(<ToolExecutionContent key={`tool-${tools[index].id}`} tools={[tools[index]]} />);
+    }
+  }
+  return timeline.length
+    ? <div className="cy-run-activity__detail">{timeline}</div>
+    : <div className="cy-run-activity__empty">昔涟正在整理这一轮回复…</div>;
+}
+
+function RunActivityContent({
+  activityId,
+  activity,
+  reasoningBlocks,
+  tools,
+  expanded,
+  onExpand,
+}: {
+  activityId: string;
+  activity: RunActivityRecord;
+  reasoningBlocks: ReasoningBlock[];
+  tools: ToolExecutionRecord[];
+  expanded: boolean;
+  onExpand: (expanded: boolean) => void;
+}) {
+  const now = useRunActivityNow(activity.completedAt === undefined);
+  const snapshot = resolveRunActivitySnapshot(activity, now);
+  const wasProcessingRef = useRef(snapshot.processing);
+  useEffect(() => {
+    if (shouldAutoCollapseRunActivity(wasProcessingRef.current, snapshot.processing)) onExpand(false);
+    wasProcessingRef.current = snapshot.processing;
+  }, [onExpand, snapshot.processing]);
+
+  const title = snapshot.processing
+    ? `昔涟正在处理中 ${formatElapsed(snapshot.processingMs)}`
+    : `昔涟已处理 ${formatElapsed(snapshot.processingMs)}`;
+  const image = snapshot.processing ? workingMoodUrl : companionMoodUrl;
+
+  return (
+    <section className={`cy-run-activity${snapshot.processing ? " is-processing" : " is-complete"}`}>
+      <button
+        type="button"
+        className="cy-run-activity__header"
+        onClick={() => onExpand(!expanded)}
+        aria-expanded={expanded}
+        aria-controls={`${activityId}-details`}
+      >
+        <span className="cy-run-activity__title">
+            <span className="cy-run-activity__art" aria-hidden="true">
+              <img src={image} alt="" draggable={false} />
+              {snapshot.processing && <DotSpinner />}
+            </span>
+            <span>{title}</span>
+        </span>
+        <svg className={`cy-run-activity__chevron${expanded ? " is-expanded" : ""}`} viewBox="0 0 16 16" aria-hidden="true">
+          <path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" />
+        </svg>
+      </button>
+      {expanded && (
+        <div className="cy-run-activity__expanded" id={`${activityId}-details`}>
+          <div className="cy-run-activity__divider" />
+          <RunActivityDetail reasoningBlocks={reasoningBlocks} tools={tools} />
+          <div className="cy-run-activity__divider" />
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -449,6 +565,34 @@ function createRoles(
       />
     ),
   },
+  activity: {
+    placement: "start" as const,
+    variant: "borderless" as const,
+    avatar: null,
+    rootClassName: "cy-message cy-message--activity",
+    contentRender: (_content: string, info: {
+      extraInfo?: {
+        activityId?: string;
+        activity?: RunActivityRecord;
+        reasoningBlocks?: ReasoningBlock[];
+        tools?: ToolExecutionRecord[];
+      };
+    }) => {
+      const activityId = info.extraInfo?.activityId;
+      const activity = info.extraInfo?.activity;
+      if (!activityId || !activity) return null;
+      return (
+        <RunActivityContent
+          activityId={activityId}
+          activity={activity}
+          reasoningBlocks={info.extraInfo?.reasoningBlocks ?? []}
+          tools={info.extraInfo?.tools ?? []}
+          expanded={resolveRunActivityExpanded(reasoningExpanded, activityId, activity)}
+          onExpand={(expanded) => onReasoningExpand(activityId, expanded)}
+        />
+      );
+    },
+  },
   tool: {
     placement: "start" as const,
     variant: "borderless" as const,
@@ -491,32 +635,52 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
 
     const assistantItems: BubbleItemType[] = [];
     const stages = assistantRenderStages(message);
-    if (message.waitingForFirstEvent) {
+    if (message.waitingForFirstEvent && !message.runActivity) {
       assistantItems.push({
         key: `${message.id}-waiting`,
         role: "waiting",
         content: "",
       });
     }
-    if (stages.includes("reasoning")) {
+    const reasoningBlocks = message.reasoningBlocks?.length
+      ? message.reasoningBlocks
+      : (stages.includes("reasoning") ? [{ id: `${message.id}-legacy`, content: message.reasoning ?? "", streaming: message.reasoningStreaming }] : []);
+    const appendReasoning = (block: ReasoningBlock) => {
       assistantItems.push({
-        key: `${message.id}-reasoning`,
+        key: `${message.id}-reasoning-${block.id}`,
         role: "reasoning",
         content: "",
         extraInfo: {
-          reasoningId: message.id,
-          reasoning: message.reasoning,
-          reasoningStreaming: message.reasoningStreaming,
+          reasoningId: block.id,
+          reasoning: block.content,
+          reasoningStreaming: block.streaming,
         },
       });
-    }
-    if (message.toolExecutions?.length) {
+    };
+    const tools = message.toolExecutions ?? [];
+    if (message.runActivity) {
       assistantItems.push({
-        key: `${message.id}-tools`,
-        role: "tool",
+        key: `${message.id}-activity`,
+        role: "activity",
         content: "",
-        extraInfo: { tools: message.toolExecutions },
+        extraInfo: {
+          activityId: `${message.id}-activity`,
+          activity: message.runActivity,
+          reasoningBlocks,
+          tools,
+        },
       });
+    } else {
+      for (let index = 0; index <= tools.length; index += 1) {
+        reasoningBlocks.filter((block) => (block.afterToolCount ?? 0) === index).forEach(appendReasoning);
+        if (index === tools.length) continue;
+        assistantItems.push({
+          key: `${message.id}-tool-${tools[index].id}`,
+          role: "tool",
+          content: "",
+          extraInfo: { tools: [tools[index]] },
+        });
+      }
     }
     if (stages.includes("assistant")) {
       assistantItems.push({

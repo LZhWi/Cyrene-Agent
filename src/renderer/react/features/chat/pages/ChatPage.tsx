@@ -4,7 +4,7 @@ import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessage
 import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
 import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
 import { ConversationSidebar } from "../components/ConversationSidebar";
-import type { ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ToolExecutionRecord } from "../../../../../shared/chat-types";
+import type { ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import { SidebarToggle } from "../../../components/ui/SidebarToggle";
 import { ModeSwitch } from "../../../components/ui/ModeSwitch";
 import { CharacterStatusPill } from "../../../components/ui/CharacterStatusPill";
@@ -111,6 +111,7 @@ interface SidebarApi {
 
 interface AguiEvent {
   type?: string;
+  messageId?: string;
   delta?: string;
   message?: string;
   error?: string;
@@ -162,6 +163,8 @@ function toUiMessages(session: ChatSession): ChatMessageItem[] {
     role: message.role === "model" ? "assistant" : "user",
     content: message.content,
     reasoning: message.reasoning,
+    reasoningBlocks: message.reasoningBlocks,
+    runActivity: message.runActivity,
     ttsCacheKey: message.ttsCacheKey,
     ttsCacheVersion: message.ttsCacheVersion,
     responseStarted: message.role === "model",
@@ -462,9 +465,13 @@ export function ChatPage() {
     const earlyTtsQueue = createEarlyTtsQueue(input.targetMode, input.sessionId, input.assistantId);
     let streamContent = "";
     let reasoningContent = "";
+    let reasoningBlocks: ReasoningBlock[] = [];
     let sticker: string | null = null;
     let toolExecutions: ToolExecutionRecord[] = [];
     let runStarted = false;
+    let runActivity: RunActivityRecord | undefined;
+    const activeReasoningStarts = new Map<string, number>();
+    let currentReasoningId: string | undefined;
     let resolveTerminal!: (error?: Error) => void;
     const terminal = new Promise<Error | undefined>((resolve) => {
       resolveTerminal = resolve;
@@ -476,13 +483,56 @@ export function ChatPage() {
         : toolExecutions.map((tool, toolIndex) => toolIndex === index ? { ...tool, ...patch } : tool);
       updateMessage(input.targetMode, input.assistantId, { toolExecutions });
     };
+    const publishRunActivity = () => {
+      if (!runActivity) return;
+      updateMessage(input.targetMode, input.assistantId, { runActivity: { ...runActivity } });
+    };
+    const updateActiveReasoningStart = () => {
+      const starts = [...activeReasoningStarts.values()];
+      if (!runActivity) return;
+      runActivity = {
+        ...runActivity,
+        activeReasoningStartedAt: starts.length ? Math.min(...starts) : undefined,
+      };
+    };
+    const completeRunActivity = () => {
+      if (!runActivity || runActivity.completedAt === undefined) {
+        const completedAt = Date.now();
+        for (const startedAt of activeReasoningStarts.values()) {
+          runActivity = {
+            ...(runActivity ?? { startedAt: completedAt, reasoningMs: 0 }),
+            reasoningMs: (runActivity?.reasoningMs ?? 0) + Math.max(0, completedAt - startedAt),
+          };
+        }
+        activeReasoningStarts.clear();
+        runActivity = {
+          ...(runActivity ?? { startedAt: completedAt, reasoningMs: 0 }),
+          completedAt,
+          activeReasoningStartedAt: undefined,
+        };
+        publishRunActivity();
+      }
+    };
     const markFirstResponse = () => {
       updateMessage(input.targetMode, input.assistantId, { waitingForFirstEvent: false });
+    };
+    const updateReasoningBlock = (id: string, patch: Partial<ReasoningBlock>) => {
+      const index = reasoningBlocks.findIndex((block) => block.id === id);
+      reasoningBlocks = index < 0
+        ? [...reasoningBlocks, { id, content: "", afterToolCount: toolExecutions.length, ...patch }]
+        : reasoningBlocks.map((block, blockIndex) => blockIndex === index ? { ...block, ...patch } : block);
+      reasoningContent = reasoningBlocks.map((block) => block.content).filter(Boolean).join("\n\n");
+      updateMessage(input.targetMode, input.assistantId, { reasoning: reasoningContent || undefined, reasoningBlocks });
     };
 
     const off = api.onEvent((event) => {
       if (event.type === "RUN_STARTED") {
         runStarted = true;
+        runActivity = { startedAt: Date.now(), reasoningMs: 0 };
+        updateMessage(input.targetMode, input.assistantId, {
+          waitingForFirstEvent: false,
+          runActivity: { ...runActivity },
+        });
         return;
       }
       if (!runStarted) return;
@@ -499,18 +549,42 @@ export function ChatPage() {
         || event.type === "CUSTOM"
       ) markFirstResponse();
       if (event.type === "REASONING_MESSAGE_START") {
+        const reasoningId = event.messageId ?? crypto.randomUUID();
+        currentReasoningId = reasoningId;
+        activeReasoningStarts.set(reasoningId, Date.now());
+        updateActiveReasoningStart();
+        publishRunActivity();
+        updateReasoningBlock(reasoningId, { streaming: true });
         updateMessage(input.targetMode, input.assistantId, {
           loading: false,
           reasoningStreaming: true,
         });
       } else if (event.type === "REASONING_MESSAGE_CONTENT" && event.delta) {
-        reasoningContent += event.delta;
+        const reasoningId = event.messageId ?? currentReasoningId ?? crypto.randomUUID();
+        currentReasoningId = reasoningId;
+        const current = reasoningBlocks.find((block) => block.id === reasoningId)?.content ?? "";
+        updateReasoningBlock(reasoningId, { content: current + event.delta, streaming: true });
         updateMessage(input.targetMode, input.assistantId, {
           reasoning: reasoningContent,
           loading: false,
           reasoningStreaming: true,
         });
       } else if (event.type === "REASONING_MESSAGE_END") {
+        const reasoningId = event.messageId ?? currentReasoningId;
+        if (reasoningId) {
+          const startedAt = activeReasoningStarts.get(reasoningId);
+          if (startedAt && runActivity) {
+            runActivity = {
+              ...runActivity,
+              reasoningMs: runActivity.reasoningMs + Math.max(0, Date.now() - startedAt),
+            };
+          }
+          activeReasoningStarts.delete(reasoningId);
+          updateActiveReasoningStart();
+          publishRunActivity();
+          updateReasoningBlock(reasoningId, { streaming: false });
+        }
+        currentReasoningId = undefined;
         updateMessage(input.targetMode, input.assistantId, { reasoningStreaming: false, loading: false });
         } else if (event.type === "TOOL_CALL_START" && event.toolCallId) {
           updateRunTool(event.toolCallId, {
@@ -546,8 +620,10 @@ export function ChatPage() {
         sticker = typeof event.value === "string" ? event.value : null;
         updateMessage(input.targetMode, input.assistantId, { sticker });
       } else if (event.type === "RUN_FINISHED") {
+        completeRunActivity();
         resolveTerminal();
       } else if (event.type === "RUN_ERROR") {
+        completeRunActivity();
         resolveTerminal(new Error(event.message ?? event.error ?? event.content ?? "模型请求失败"));
       }
     });
@@ -585,7 +661,9 @@ export function ChatPage() {
         waitingForFirstEvent: false,
         streaming: false,
         reasoning: reasoningContent || undefined,
+        reasoningBlocks,
         reasoningStreaming: false,
+        runActivity,
         responseStarted: true,
         sticker,
         toolExecutions,
@@ -595,6 +673,8 @@ export function ChatPage() {
         role: "model",
         content: finalContent,
         reasoning: reasoningContent || undefined,
+        reasoningBlocks,
+        runActivity,
         at: Date.now(),
         sticker,
         toolExecutions,
@@ -604,6 +684,7 @@ export function ChatPage() {
       } else earlyTtsQueue.cancel();
     } catch (error) {
       earlyTtsQueue.cancel();
+      completeRunActivity();
       const errorMessage = error instanceof Error ? error.message : String(error);
       const visibleError = `模型请求失败：${errorMessage}`;
       updateMessage(input.targetMode, input.assistantId, {
@@ -612,12 +693,14 @@ export function ChatPage() {
         waitingForFirstEvent: false,
         streaming: false,
         reasoningStreaming: false,
+        runActivity,
         responseStarted: true,
       });
       await store.append(input.sessionId, {
         id: input.assistantId,
         role: "model",
         content: visibleError,
+        runActivity,
         at: Date.now(),
       });
     } finally {

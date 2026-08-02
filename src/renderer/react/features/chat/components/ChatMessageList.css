@@ -195,6 +195,118 @@
   box-shadow: none;
 }
 
+.cy-message--activity {
+  width: min(82%, 760px);
+  max-width: min(82%, 760px);
+}
+
+.cy-message--activity .ant-bubble-avatar {
+  display: none;
+}
+
+.cy-message--activity .ant-bubble-body,
+.cy-message--activity .ant-bubble-content {
+  width: 100%;
+  max-width: none;
+}
+
+.cy-message--activity .ant-bubble-content {
+  padding: 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
+.cy-run-activity {
+  width: 100%;
+}
+
+.cy-run-activity__header {
+  display: flex;
+  width: 100%;
+  min-height: 50px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px 2px;
+  border: 0;
+  background: transparent;
+  color: var(--cy-text);
+  font: 600 13px/1.4 var(--rb-font-sans, sans-serif);
+  text-align: start;
+  cursor: pointer;
+}
+
+.cy-run-activity__header:hover {
+  color: #a5527d;
+}
+
+.cy-run-activity__header:focus-visible {
+  outline: 2px solid rgb(200 116 155 / 55%);
+  outline-offset: 3px;
+  border-radius: 7px;
+}
+
+.cy-run-activity__title {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.cy-run-activity__art {
+  position: relative;
+  display: block;
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+}
+
+.cy-run-activity__art img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.cy-run-activity.is-processing .cy-run-activity__art img {
+  animation: cy-run-activity-breathe 1.7s ease-in-out infinite;
+}
+
+.cy-run-activity__chevron {
+  width: 18px;
+  height: 18px;
+  flex: 0 0 18px;
+  color: #b7688e;
+  transition: transform 180ms ease;
+}
+
+.cy-run-activity__chevron.is-expanded {
+  transform: rotate(180deg);
+}
+
+@keyframes cy-run-activity-breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-2px) scale(1.045); }
+}
+
+.cy-run-activity__detail {
+  display: grid;
+  gap: 7px;
+  padding: 8px 0;
+}
+
+.cy-run-activity__divider {
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(209 144 173 / 38%), transparent);
+}
+
+.cy-run-activity__empty {
+  padding: 6px 2px;
+  color: var(--cy-text-muted);
+  font: 500 12px/1.45 var(--rb-font-sans, sans-serif);
+}
+
 .cy-model-wait {
   display: inline-flex;
   align-items: center;
@@ -654,6 +766,10 @@
   }
 
   .cy-reasoning-status-art.is-complete {
+    animation: none;
+  }
+
+  .cy-run-activity.is-processing .cy-run-activity__art img {
     animation: none;
   }
 }
