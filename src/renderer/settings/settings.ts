@@ -5401,6 +5401,7 @@ declare global {
       rename: (id: string, title: string) => Promise<unknown>;
       openFolder: () => Promise<boolean>;
       openInChatWindow: (sessionId: string) => Promise<boolean>;
+      openInReactChatWindow: (sessionId: string) => Promise<boolean>;
       getActiveSession: () => Promise<string | null>;
       onChanged: (cb: () => void) => () => void;
       onActiveSessionChanged: (cb: (sessionId: string | null) => void) => () => void;
@@ -5509,7 +5510,7 @@ function buildChatSessionItem(session: ChatSessionMetaUI): HTMLLIElement {
     const target = e.target as HTMLElement;
     if (target.closest(".chat-sessions__actions")) return;
     if (titleEl.isContentEditable) return;
-    void window.chatStore?.openInChatWindow(session.id);
+    void window.chatStore?.openInReactChatWindow(session.id);
   });
 
   // ✏️ 按钮进入改名态
@@ -5640,7 +5641,7 @@ chatNewBtn?.addEventListener("click", async () => {
   if (!window.chatStore) return;
   try {
     const session = await window.chatStore.create({ identityId: null });
-    if (session?.id) await window.chatStore.openInChatWindow(session.id);
+    if (session?.id) await window.chatStore.openInReactChatWindow(session.id);
   } catch (err) {
     console.warn("[settings] 新建会话失败:", err);
     window.alert("新建会话失败，请查看终端日志。");
