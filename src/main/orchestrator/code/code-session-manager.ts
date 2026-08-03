@@ -8,7 +8,7 @@
  */
 
 import type { ChatSession, ConversationWorkspaceBinding } from "../../../shared/chat-types";
-import { clineRuntime, type StartSessionInput } from "./cline-runtime-manager";
+import { clineRuntime, type StartSessionInput, type AgentResult } from "./cline-runtime-manager";
 
 export type RecoveryMode = "active_session" | "message_reconstruction" | "fresh_session";
 
@@ -111,7 +111,7 @@ export async function getOrCreateClineSession(
   userMessage: string,
   config: Record<string, unknown>,
   capabilities?: StartSessionInput["capabilities"],
-): Promise<{ sessionId: string; recovery: CodeTaskRecovery }> {
+): Promise<{ sessionId: string; recovery: CodeTaskRecovery; firstTurnResult?: AgentResult }> {
   const oldSessionId = session.codeSession?.activeClineSessionId;
   const workspaceRoot = session.workspaceBinding?.workspaceRoot;
 
@@ -152,6 +152,8 @@ export async function getOrCreateClineSession(
               droppedTrailingMessages: reconstruction.droppedTrailingMessages,
               interruptedTurnDetected: reconstruction.interruptedTurnDetected,
             },
+            // message_reconstruction 没有 prompt，不会跑第一个 turn
+            firstTurnResult: undefined,
           };
         }
       }
@@ -177,6 +179,9 @@ export async function getOrCreateClineSession(
       recoveredAt: Date.now(),
       lostRuntimeState: true,
     },
+    // fresh_session 在 start({ prompt }) 期间会同步跑第一个 turn，
+    // 这里把 AgentResult 透传出去给 code-request 用于构建 facts
+    firstTurnResult: result.result,
   };
 }
 

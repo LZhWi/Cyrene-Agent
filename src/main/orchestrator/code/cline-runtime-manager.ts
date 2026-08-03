@@ -13,6 +13,19 @@
 import * as path from "path";
 import { pathToFileURL } from "url";
 
+/**
+ * 原生动态 import()。
+ *
+ * TypeScript 的 module: "commonjs" 会把 `await import(specifier)` 编译成
+ * `require(specifier)`，而 require() 无法解析 `file://` URL，也无法加载
+ * ESM-only 包。用 Function 构造器绕过编译器改写，保留运行时原生 import()，
+ * 这样才能正确加载 cline-esm-bridge.mjs（及其 ESM-only 依赖 @cline/sdk）。
+ */
+const nativeImport = new Function(
+  "specifier",
+  "return import(specifier)",
+) as (specifier: string) => Promise<any>;
+
 export interface StartSessionInput {
   config: Record<string, unknown>;
   prompt?: string;
@@ -63,8 +76,9 @@ class ClineRuntimeManager {
   private async createRuntime(): Promise<any> {
     const bridgePath = path.join(__dirname, "cline-esm-bridge.mjs");
     const bridgeUrl = pathToFileURL(bridgePath).href;
-    const bridge = await import(bridgeUrl);
-    return bridge.createClineCore({
+    const bridge = await nativeImport(bridgeUrl);
+    // createClineCore 返回 Promise<ClineCore>，需要显式 await
+    return await bridge.createClineCore({
       clientName: "cyrene",
       backendMode: "local",
     });
@@ -144,13 +158,18 @@ class ClineRuntimeManager {
     }
   }
 
-  /** 订阅 Session 事件 */
-  subscribe(sessionId: string, listener: (event: CoreSessionEvent) => void): () => void {
-    // 直接调用 cline.subscribe；filter by sessionId
+  /** 订阅 Session 事件（sessionId 省略时订阅全部 session 的事件） */
+  subscribe(listener: (event: CoreSessionEvent) => void): () => void;
+  subscribe(sessionId: string, listener: (event: CoreSessionEvent) => void): () => void;
+  subscribe(sessionIdOrListener: string | ((event: CoreSessionEvent) => void), listener?: (event: CoreSessionEvent) => void): () => void {
     if (!this.cline) {
       return () => {};
     }
-    return this.cline.subscribe(listener, { sessionId });
+    if (typeof sessionIdOrListener === "function") {
+      // 全局订阅（不按 sessionId 过滤），由调用方自行过滤
+      return this.cline.subscribe(sessionIdOrListener, {});
+    }
+    return this.cline.subscribe(listener!, { sessionId: sessionIdOrListener });
   }
 
   /** 销毁整个 Runtime */

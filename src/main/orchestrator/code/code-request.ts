@@ -18,7 +18,7 @@
 
 import * as chatsStore from "../../chats/chats-store";
 import type { ChatSession } from "../../../shared/chat-types";
-import { clineRuntime } from "./cline-runtime-manager";
+import { clineRuntime, type AgentResult } from "./cline-runtime-manager";
 import { codeRunCoordinator } from "./code-run-coordinator";
 import { codeRunWorker } from "./code-run-worker";
 import { getOrCreateClineSession } from "./code-session-manager";
@@ -279,6 +279,76 @@ export async function runCodeRequest(
           runId: ctx.runId,
         }),
       );
+
+      // 重要：必须在 getOrCreateClineSession 之前订阅，因为 Cline 的 start(prompt)
+      // 会在 startSession() 内部同步执行第一个 turn（executeTurn），turn 期间发出的事件
+      // 若此时还没有 listener 就会被丢弃。这里用全局订阅（不按 sessionId 过滤），拿到
+      // sessionId 后再在 listener 内按 event.payload.sessionId 过滤。
+      let resolvedClineSessionId = "";
+      const pendingEvents: any[] = [];
+      let capturing = true;
+      let resultAdapter: ClineResultAdapter | null = null;
+      // assistant 流式输出状态：start/end 必须配对，renderer 才能正确闭合气泡
+      const assistantMessageId = `assistant-${ctx.runId}`;
+      let assistantStreamStarted = false;
+      let assistantStreamEnded = false;
+      const startAssistantStream = () => {
+        if (assistantStreamStarted) return;
+        assistantStreamStarted = true;
+        emitAgUiEvent(ctx, {
+          type: "text_message_start",
+          messageId: assistantMessageId,
+          role: "assistant",
+          runId: ctx.runId,
+        });
+      };
+      const emitAssistantText = (delta: string) => {
+        if (!delta) return;
+        startAssistantStream();
+        emitAgUiEvent(ctx, {
+          type: "text_message_content",
+          messageId: assistantMessageId,
+          delta,
+          runId: ctx.runId,
+        });
+      };
+      const endAssistantStream = () => {
+        if (!assistantStreamStarted || assistantStreamEnded) return;
+        assistantStreamEnded = true;
+        emitAgUiEvent(ctx, {
+          type: "text_message_end",
+          messageId: assistantMessageId,
+          runId: ctx.runId,
+        });
+      };
+      const unsubscribe = clineRuntime.subscribe((event: any) => {
+        // sessionId 解析前先缓冲，解析后回放并切到直通模式
+        if (capturing || !resultAdapter) {
+          pendingEvents.push(event);
+          return;
+        }
+        const evtSessionId = event?.payload?.sessionId ?? event?.sessionId;
+        if (evtSessionId && evtSessionId !== resolvedClineSessionId) return;
+        const normalized = normalizeClineEvent(event);
+        for (const ne of normalized) {
+          resultAdapter.ingest(ne);
+          if (ne.type === "file_candidate") {
+            mutationCollector.addCandidate(ne.path);
+          }
+          if (ne.type === "text_delta") {
+            // 把 Cline 的文本增量直接转成 AG-UI 流式事件，让 renderer 实时看到
+            emitAssistantText(ne.text);
+          }
+        }
+        // 监听 agent_event 的 content_end(text)：标记 assistant 流结束
+        const ae = event?.payload?.event;
+        if (event?.type === "agent_event" && ae?.type === "content_end" && ae?.contentType === "text") {
+          endAssistantStream();
+        }
+        emitAgUiEvent(ctx, event);
+      });
+
+      try {
       const sessionResult = await getOrCreateClineSession(
         session,
         input.text,
@@ -287,6 +357,7 @@ export async function runCodeRequest(
       );
       const clineSessionId = sessionResult.sessionId;
       activeClineSessionId = clineSessionId;
+      resolvedClineSessionId = clineSessionId;
 
       const persistedSession = chatsStore.getSession(ctx.sessionId) ?? session;
       const previousTasks = persistedSession.codeSession?.tasks ?? [];
@@ -311,36 +382,54 @@ export async function runCodeRequest(
       }
 
       // 创建 result adapter
-      const resultAdapter = new ClineResultAdapter(ctx.runId, ctx.sessionId, clineSessionId);
+      resultAdapter = new ClineResultAdapter(ctx.runId, ctx.sessionId, clineSessionId);
 
-      console.log(`[CodeRequest] session: ${clineSessionId}, recovery=${sessionResult.recovery.recoveryMode}`);
-
-      // 7. 订阅事件
-      const unsubscribe = clineRuntime.subscribe(clineSessionId, (event: any) => {
+      // 回放在订阅注册后、sessionId 解析前缓冲的事件（仅保留本 session 的）
+      capturing = false;
+      for (const event of pendingEvents) {
+        const evtSessionId = event?.payload?.sessionId ?? event?.sessionId;
+        if (evtSessionId && evtSessionId !== resolvedClineSessionId) continue;
         const normalized = normalizeClineEvent(event);
         for (const ne of normalized) {
           resultAdapter.ingest(ne);
-          // 收集 mutation candidates
           if (ne.type === "file_candidate") {
             mutationCollector.addCandidate(ne.path);
           }
+          if (ne.type === "text_delta") {
+            emitAssistantText(ne.text);
+          }
         }
-        // 转发 AG-UI 事件
+        const ae = event?.payload?.event;
+        if (event?.type === "agent_event" && ae?.type === "content_end" && ae?.contentType === "text") {
+          endAssistantStream();
+        }
         emitAgUiEvent(ctx, event);
-      });
+      }
+      pendingEvents.length = 0;
 
-      try {
-        // 8. 提交 Cline turn（后台）
+      // 8. 提交 Cline turn（后台）
+        let turnResult: AgentResult | undefined;
         if (sessionResult.recovery.recoveryMode === "fresh_session") {
-          // 新 Session：start 时已传 prompt，不需要 send
+          // 新 Session：start 时已传 prompt，第一个 turn 已经在 getOrCreateClineSession 内部跑完
+          turnResult = sessionResult.firstTurnResult;
         } else {
-          // 恢复的 Session：需要 send 用户原始消息（只提交一次）
-          await clineRuntime.send({
+          // 恢复的 Session：需要 send 用户原始消息
+          turnResult = await clineRuntime.send({
             sessionId: clineSessionId,
             prompt: input.text,
             mode: config.clineMode,
           });
         }
+        // 把 turn 结果应用到 facts（finishReason/usage）
+        resultAdapter.applyTurnResult(turnResult);
+
+        // Fallback：如果 Cline 没产出 text_delta（例如非流式 provider）但 turnResult 有 text，
+        // 就用 AgentResult.text 一次性发给 renderer。
+        if (turnResult?.text && !assistantStreamStarted) {
+          emitAssistantText(turnResult.text);
+        }
+        // 收尾 assistant 流（如果 Cline 没通过 content_end(text) 关闭）
+        endAssistantStream();
 
         const facts = resultAdapter.getFacts();
         console.log(`[CodeRequest] facts: status=${facts.status} commands=${facts.commands.length} hostCancelled=${facts.hostCancelled} hostInterrupted=${facts.hostInterrupted}`);
