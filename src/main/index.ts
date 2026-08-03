@@ -5666,9 +5666,9 @@ app.whenReady().then(async () => {
   };
   registerAgUiIpc(
     async (input: AguiRunInput) => buildAgentRunOptions(input, buildOptionsDeps),
-    // sticker 由 bridge 发送回本次 run 的发起窗口（React 或旧 chatWindow）。
+    // sticker 由 bridge 发送回本次 run 的发起窗口；默认兜底目标为 reactChatWindow。
     async (result, latestUserText) => onAgentRunFinished(result, latestUserText, onRunFinishedDeps),
-    () => chatWindow,
+    () => reactChatWindow,
     proactiveConversationLifecycle,
   );
 
@@ -5714,8 +5714,7 @@ app.whenReady().then(async () => {
     asrLanguage: generalSettings.asrLanguage,
   });
   createWindow();
-  createChatWindow();
-  // reactChatWindow 由状态栏通过 IPC.CHATS_OPEN_IN_REACT_WINDOW 按需触发，不再自动启动
+  createReactChatWindow();
   if (generalSettings.sidebarVisible) createSidebarWindow();
   if (generalSettings.tasksVisible) createTasksWindow();
   createTray();
