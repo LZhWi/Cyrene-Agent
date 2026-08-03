@@ -114,8 +114,16 @@ export const IPC = {
   CHATS_CHANGED: "chats:changed",
   // 设置中心 → main：要求打开聊天窗口并加载指定 sessionId
   CHATS_OPEN_IN_CHAT_WINDOW: "chats:open-in-chat-window",
-  // main → 聊天窗口：要求切到指定 sessionId（窗口已存在时用）
+  // 状态栏 → main：要求打开/复用 reactChatWindow 并加载指定 sessionId
+  // 仅服务于 reactChatWindow（旧 chatWindow 仍走 CHATS_OPEN_IN_CHAT_WINDOW）
+  CHATS_OPEN_IN_REACT_WINDOW: "chats:open-in-react-window",
+  // main → 聊天窗口：要求切到指定 sessionId（窗口已存在时用；服务于旧 chatWindow）
   CHATS_SWITCH_SESSION: "chats:switch-session",
+  // main → reactChatWindow：要求切到指定 sessionId（窗口已存在时用）
+  // 与 CHATS_SWITCH_SESSION 独立，避免新旧窗口相互误触
+  CHATS_REACT_SWITCH_SESSION: "chats:react-switch-session",
+  // reactChatWindow → main：ChatPage 已挂好 IPC 监听，允许 flush pending sessionId
+  CHATS_REACT_READY: "chats:react-ready",
   // 聊天窗口 → main：声明当前活跃 sessionId（用于设置面板"删除当前会话"时差异化提示）
   CHATS_SET_ACTIVE_SESSION: "chats:set-active-session",
   // renderer → main: 查询当前活跃 sessionId（设置面板初次打开时用）
@@ -134,6 +142,8 @@ export const IPC = {
   CHATS_PICK_WORKSPACE_FOLDER: "chats:pick-workspace-folder",
   // main → 所有窗口：工作区绑定变更广播
   CHATS_WORKSPACE_CHANGED: "chats:workspace-changed",
+  // Code 会话级 Cline plan/act 模式
+  CHATS_SET_CODE_MODE: "chats:set-code-mode",
 
   // Code run 状态查询
   CODE_RUN_GET: "code:run:get",
@@ -145,6 +155,11 @@ export const IPC = {
   CODE_VERIFICATION_REJECT: "code:verification:reject",
   // main → renderer：验证审批广播
   CODE_VERIFICATION_APPROVAL_REQUESTED: "code:verification:approval-requested",
+  // Code / Cline AskQuestionExecutor bridge
+  CODE_ASK_GET_PENDING: "code:ask:get-pending",
+  CODE_ASK_RESPOND: "code:ask:respond",
+  CODE_ASK_CANCEL: "code:ask:cancel",
+  CODE_SESSION_NEW_TASK: "code:session:new-task",
 
 // sticker manager window
 	  STICKERS_MINIMIZE: "stickers:minimize",

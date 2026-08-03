@@ -6,6 +6,10 @@ import * as os from "os";
 import { createHash, randomUUID } from "crypto";
 import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
+import {
+  createReactChatSessionDispatcher,
+  type ReactChatSessionDispatcher,
+} from "./react-chat-session-dispatcher";
 import { normalizeUiTheme, type UiTheme } from "../shared/ui-theme";
 import { DEFAULT_UI_FONT, isSupportedFontFileName, normalizeUiFont, type UiFont } from "../shared/ui-font";
 import { normalizeUiIcon, UI_ICON_PRESETS, type UiIcon } from "../shared/ui-icon";
@@ -238,7 +242,9 @@ async function reconcileUserMemoryIndex(): Promise<void> {
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let chatWindow: BrowserWindow | null = null;
-let reactPreviewWindow: BrowserWindow | null = null;
+let reactChatWindow: BrowserWindow | null = null;
+const reactChatSession: ReactChatSessionDispatcher =
+  createReactChatSessionDispatcher();
 let sidebarWindow: BrowserWindow | null = null;
 let tasksWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
@@ -2950,7 +2956,7 @@ export function getPublicModelConfig(settings = loadModelSettings()): PublicMode
 }
 
 function broadcastToAuxWindows(channel: string, payload: unknown): void {
-  for (const win of [chatWindow, reactPreviewWindow, sidebarWindow, tasksWindow, settingsWindow]) {
+  for (const win of [chatWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(channel, payload);
     }
@@ -2958,7 +2964,7 @@ function broadcastToAuxWindows(channel: string, payload: unknown): void {
 }
 
 function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
-  for (const win of [mainWindow, chatWindow, reactPreviewWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, chatWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_THEME_CHANGED, theme);
     }
@@ -2966,7 +2972,7 @@ function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
 }
 
 function broadcastUiThemeRadiusChanged(theme: GeneralSettings["uiThemeRadius"]): void {
-  for (const win of [mainWindow, chatWindow, reactPreviewWindow, sidebarWindow, tasksWindow, settingsWindow]) {
+  for (const win of [mainWindow, chatWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_THEME_RADIUS_CHANGED, theme);
     }
@@ -2977,7 +2983,7 @@ function broadcastWindowCornerRadiusChanged(radius: GeneralSettings["windowCorne
   for (const win of [
     mainWindow,
     chatWindow,
-    reactPreviewWindow,
+    reactChatWindow,
     sidebarWindow,
     tasksWindow,
     settingsWindow,
@@ -2991,7 +2997,7 @@ function broadcastWindowCornerRadiusChanged(radius: GeneralSettings["windowCorne
 }
 
 function broadcastUiFontChanged(font: GeneralSettings["uiFont"]): void {
-  for (const win of [mainWindow, chatWindow, reactPreviewWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, chatWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_FONT_CHANGED, font);
     }
@@ -3136,9 +3142,9 @@ function createWindow(): void {
 
   // 注入用户选择卡片回调：工具调 ask_user_choice 时发 Custom 事件给聊天窗口
   setChoiceCardSender((cardData) => {
-    // 旧 ask_user_choice 还没有本轮 sender；迁移期同时投递旧聊天窗口和 React 预览。
+    // 旧 ask_user_choice 还没有本轮 sender；迁移期同时投递旧聊天窗口和 reactChatWindow。
     // LangGraph 的结构化 Ask 走 agui-bridge 中的定向 sender，不会依赖此回退。
-    for (const win of [chatWindow, reactPreviewWindow]) {
+    for (const win of [chatWindow, reactChatWindow]) {
       if (win && !win.isDestroyed()) {
         win.webContents.send(IPC.AGUI_EVENT, {
           type: "CUSTOM",
@@ -3349,24 +3355,27 @@ function createChatWindow(sessionId?: string): void {
   });
 }
 
-function createReactPreviewWindow(): void {
-  if (!isDev) return;
-
-  if (reactPreviewWindow && !reactPreviewWindow.isDestroyed()) {
-    reactPreviewWindow.show();
-    reactPreviewWindow.focus();
+function createReactChatWindow(sessionId?: string): void {
+  // 已有窗口 → 复用；dispatcher 决定立即 send 还是等 ready 后 flush
+  if (reactChatWindow && !reactChatWindow.isDestroyed()) {
+    reactChatWindow.show();
+    reactChatWindow.focus();
+    if (sessionId) dispatchOrQueueReactSession(sessionId);
     return;
   }
 
+  // 新建窗口：dispatcher 重置；URL 负责 cold start，pending 仅服务于"未 ready 期间又收到请求"
+  reactChatSession.reset();
+
   const layout = computeLayout();
-  reactPreviewWindow = new BrowserWindow({
+  const window = new BrowserWindow({
     x: layout.chat.x,
     y: layout.chat.y,
     width: 1280,
     height: 760,
     minWidth: 960,
     minHeight: 540,
-    title: "Cyrene · React 预览",
+    title: "Cyrene · 聊天",
     icon: getCurrentAppIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
@@ -3381,17 +3390,46 @@ function createReactPreviewWindow(): void {
       sandbox: false,
     },
   });
+  reactChatWindow = window;
 
-  reactPreviewWindow.loadURL("http://localhost:5173/react/");
-
-  reactPreviewWindow.once("ready-to-show", () => {
-    reactPreviewWindow?.show();
-    reactPreviewWindow?.focus();
+  window.webContents.on("did-start-loading", () => {
+    reactChatSession.markLoading();
   });
 
-  reactPreviewWindow.on("closed", () => {
-    reactPreviewWindow = null;
+  // search 字段必须含前导 "?"（Electron url.format() 要求）
+  const search = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : undefined;
+  const indexPath = path.join(__dirname, "..", "..", "renderer", "react", "index.html");
+
+  if (isDev) {
+    void window
+      .loadURL(`http://localhost:5173/react/${search ?? ""}`)
+      .catch((error) => console.error("[ReactChatWindow] loadURL failed:", error));
+  } else {
+    void window
+      .loadFile(indexPath, search ? { search } : undefined)
+      .catch((error) => console.error("[ReactChatWindow] loadFile failed:", error));
+  }
+
+  window.once("ready-to-show", () => {
+    if (!window.isDestroyed()) window.show();
   });
+
+  window.on("closed", () => {
+    // 闭包引用 + 仅当当前全局仍指向自己时才清理，避免旧窗口 closed 误清新窗口
+    if (reactChatWindow === window) {
+      reactChatWindow = null;
+      reactChatSession.reset();
+    }
+  });
+}
+
+function dispatchOrQueueReactSession(sessionId: string): void {
+  const win = reactChatWindow;
+  if (!win?.webContents) return;
+  const immediate = reactChatSession.queueOrTake(sessionId);
+  if (immediate) {
+    win.webContents.send(IPC.CHATS_REACT_SWITCH_SESSION, immediate);
+  }
 }
 
 function createSidebarWindow(): void {
@@ -5638,6 +5676,24 @@ app.whenReady().then(async () => {
     createChatWindow(sessionId);
     return true;
   });
+  // 状态栏专用入口：打开/复用 reactChatWindow（不复用旧 chatWindow）
+  ipcMain.handle(IPC.CHATS_OPEN_IN_REACT_WINDOW, (_event, sessionId: string) => {
+    if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
+      return false;
+    }
+    createReactChatWindow(sessionId);
+    return true;
+  });
+  // reactChatWindow → main：声明 ChatPage 已挂好 IPC 监听
+  ipcMain.on(IPC.CHATS_REACT_READY, (event) => {
+    const win = reactChatWindow;
+    if (!win || win.isDestroyed()) return;
+    if (event.sender !== win.webContents) return;
+    const pending = reactChatSession.markReady();
+    if (pending) {
+      win.webContents.send(IPC.CHATS_REACT_SWITCH_SESSION, pending);
+    }
+  });
   // 聊天窗口启动/切换会话时上报当前活跃 sessionId；main 广播给所有窗口
   // 用途：设置面板"删除当前会话"时差异化提示文案
   ipcMain.handle(IPC.CHATS_SET_ACTIVE_SESSION, (_event, sessionId: string | null) => {
@@ -5659,7 +5715,7 @@ app.whenReady().then(async () => {
   });
   createWindow();
   createChatWindow();
-  createReactPreviewWindow();
+  // reactChatWindow 由状态栏通过 IPC.CHATS_OPEN_IN_REACT_WINDOW 按需触发，不再自动启动
   if (generalSettings.sidebarVisible) createSidebarWindow();
   if (generalSettings.tasksVisible) createTasksWindow();
   createTray();

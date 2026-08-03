@@ -3,6 +3,8 @@ import { ChatComposer, type ComposerAttachment } from "../components/ChatCompose
 import { ComposerSlot } from "../components/ComposerSlot";
 import {
   describePermissionRequest,
+  normalizeCodeAskInteraction,
+  normalizeCodeVerificationInteraction,
   normalizeChoiceInteraction,
   normalizeTaskPlanPresentation,
   shouldDismissAsk,
@@ -23,6 +25,14 @@ import { UserAvatar } from "../../../components/ui/UserAvatar";
 import { useUserCallPreference } from "../../../hooks/useUserNickname";
 import { resolveRevisableLastTurn } from "../components/last-turn-actions";
 import { NewTaskButton } from "../../../components/ui/NewTaskButton";
+import { shouldRunModelForMode } from "./conversation-run-policy";
+import {
+  applyCodeRunEvent,
+  createCodeRunViewModel,
+  restoreCodeRunViewModel,
+  type CodeRunApi,
+  type CodeRunViewModel,
+} from "../../../../chat/code-run-view-model";
 import "../../../components/ui/SidebarToggle.css";
 import "../../../components/ui/ModeSwitch.css";
 import "../../../components/ui/CharacterStatusPill.css";
@@ -112,6 +122,15 @@ interface ChatStoreApi {
   openWorkspace: (workspaceRoot: string) => Promise<{ ok: boolean; error?: string }>;
   setActiveSession: (sessionId: string | null) => Promise<unknown>;
   onChanged: (callback: () => void) => () => void;
+  setCodeMode: (sessionId: string, clineMode: "plan" | "act") => Promise<{
+    ok: boolean;
+    error?: string;
+    session?: ChatSession;
+  }>;
+  // main → reactChatWindow：通知 ChatPage 切换到指定 sessionId
+  onReactSwitchSession: (callback: (sessionId: string) => void) => () => void;
+  // reactChatWindow → main：ChatPage 已挂好 IPC 监听，允许 flush pending sessionId
+  notifyReactReady: () => void;
 }
 
 interface SidebarApi {
@@ -120,6 +139,7 @@ interface SidebarApi {
 
 interface AguiEvent {
   type?: string;
+  runId?: string;
   messageId?: string;
   delta?: string;
   message?: string;
@@ -193,6 +213,10 @@ function settingsApprovalApi(): SettingsApprovalApi | undefined {
   return (window as typeof window & { settings?: SettingsApprovalApi }).settings;
 }
 
+function codeRunApi(): CodeRunApi | undefined {
+  return (window as typeof window & { codeRun?: CodeRunApi }).codeRun;
+}
+
 function permissionInteraction(request: PermissionApprovalRequest): ComposerInteraction {
   const target = [request.args.path, request.args.filePath]
     .find((value): value is string => typeof value === "string" && value.trim().length > 0);
@@ -232,6 +256,18 @@ function toUiMessages(session: ChatSession): ChatMessageItem[] {
   }));
 }
 
+/**
+ * React 窗口会话打开的纯函数 helper：
+ * 从同目录的 openSessionByDeps 模块 re-export 出来，便于 ChatPage 内部组件与
+ * 独立测试文件共享同一份实现。
+ */
+export {
+  normalizeSessionMode,
+  openSessionByIdWithDeps,
+  type ReactSessionMode,
+  type OpenSessionArgs,
+} from "./openSessionByDeps";
+
 export function ChatPage() {
   const preferredAddress = useUserCallPreference();
   const [collapsed, setCollapsed] = useState(false);
@@ -248,6 +284,7 @@ export function ChatPage() {
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [lastTurnRevisionStarting, setLastTurnRevisionStarting] = useState(false);
   const [modelName, setModelName] = useState("模型未连接");
+  const [selectedClineMode, setSelectedClineMode] = useState<"plan" | "act">("act");
   const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const activeModeRef = useRef(mode);
@@ -258,6 +295,15 @@ export function ChatPage() {
   const localPreviewUrlsRef = useRef(new Set<string>());
   const demoTimers = useRef(new Set<number>());
   const activeRunRef = useRef<{ mode: ConversationMode; assistantId: string } | null>(null);
+  // bootstrap 标志：只由 cold-start finally 写入；模式切换 effect 仅检查
+  const bootstrapCompletedRef = useRef(false);
+  // 长期持有的会话操作 ref：避免 IPC 回调捕获陈旧闭包
+  const openSessionByIdRef = useRef<(id: string) => Promise<boolean>>(async () => false);
+  const refreshSessionsRef = useRef<
+    (targetMode: ConversationMode, selectCurrent: boolean) => Promise<void>
+  >(async () => {});
+  // IPC 切换串行链：保证 Ready 后连续切换按顺序完成
+  const reactSessionSwitchChainRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     const settings = settingsApprovalApi();
@@ -351,9 +397,72 @@ export function ChatPage() {
     return off;
   }, []);
 
+  // 模式 effect：bootstrap 完成后才刷新；bootstrap 自身由下方合并 effect 接管
   useEffect(() => {
-    void refreshSessions(mode, true);
+    if (!bootstrapCompletedRef.current) return;
+    void refreshSessionsRef.current(mode, true).catch((error) => {
+      console.error("[ChatPage] Failed to refresh sessions after mode change:", error);
+    });
   }, [mode]);
+
+  // 合并 effect：注册 IPC → cold-start → finally 置 bootstrap + 通知 ready
+  useEffect(() => {
+    const store = chatStore();
+    if (!store?.onReactSwitchSession) return;
+
+    let disposed = false;
+
+    const unsubscribe = store.onReactSwitchSession((sessionId) => {
+      if (!sessionId) return;
+      reactSessionSwitchChainRef.current = reactSessionSwitchChainRef.current
+        .then(async () => {
+          const opened = await openSessionById(sessionId);
+          if (!opened) {
+            await refreshSessionsRef.current(activeModeRef.current, true);
+          }
+        })
+        .catch(async (error) => {
+          console.error("[ChatPage] Failed to switch React session:", error);
+          try {
+            await refreshSessionsRef.current(activeModeRef.current, true);
+          } catch (fallbackError) {
+            console.error("[ChatPage] Switch fallback failed:", fallbackError);
+          }
+        });
+    });
+
+    void (async () => {
+      try {
+        const urlSessionId = new URLSearchParams(window.location.search).get("sessionId");
+        if (urlSessionId) {
+          const opened = await openSessionById(urlSessionId);
+          if (!opened) {
+            await refreshSessionsRef.current(activeModeRef.current, true);
+          }
+        } else {
+          await refreshSessionsRef.current(activeModeRef.current, true);
+        }
+      } catch (error) {
+        console.error("[ChatPage] Failed to bootstrap React session:", error);
+        try {
+          await refreshSessionsRef.current(activeModeRef.current, true);
+        } catch (fallbackError) {
+          console.error("[ChatPage] Bootstrap fallback failed:", fallbackError);
+        }
+      } finally {
+        // cold-start 全程完成才标记 bootstrap 完成；只有该标志置位后
+        // mode 切换 effect 才会触发 refreshSessions
+        bootstrapCompletedRef.current = true;
+        if (!disposed) store.notifyReactReady?.();
+      }
+    })();
+
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const active = activeEarlyTtsRef.current;
@@ -432,13 +541,90 @@ export function ChatPage() {
       activeSessionIdsRef.current = next;
       return next;
     });
-    setMessagesByMode((current) => ({ ...current, [targetMode]: toUiMessages(session) }));
+    const uiMessages = toUiMessages(session);
+    if (targetMode === "code") {
+      setSelectedClineMode(session.codeSession?.clineMode ?? "act");
+      const api = codeRunApi();
+      if (api) {
+        try {
+          const restored = await restoreCodeRunViewModel(createCodeRunViewModel(), api, sessionId);
+          if (generation !== sessionSelectionGeneration.current) return;
+          if (restored.run || restored.card) {
+            const assistantIndex = uiMessages.findLastIndex((message) => message.role === "assistant");
+            if (assistantIndex >= 0) uiMessages[assistantIndex] = { ...uiMessages[assistantIndex], codeRun: restored };
+            else uiMessages.push({
+              id: `code-run-${restored.run?.runId ?? sessionId}`,
+              role: "assistant",
+              content: "",
+              responseStarted: false,
+              codeRun: restored,
+            });
+          }
+          const verificationInteraction = normalizeCodeVerificationInteraction(restored.approval);
+          if (verificationInteraction) {
+            setComposerInteraction(verificationInteraction);
+          } else {
+            const pendingAsks = await api.getPendingAsks(sessionId);
+            const askInteraction = normalizeCodeAskInteraction(pendingAsks[0]);
+            setComposerInteraction(askInteraction);
+          }
+        } catch (error) {
+          console.warn("[Cyrene React] 恢复 Code 运行状态失败:", error);
+        }
+      }
+    }
+    setMessagesByMode((current) => ({ ...current, [targetMode]: uiMessages }));
     setWorkspaceNames((current) => ({
       ...current,
       [targetMode]: session.workspaceBinding?.displayName,
     }));
     if (targetMode === activeModeRef.current) void store.setActiveSession(sessionId);
   }
+
+  /**
+   * 通过 ref 暴露给 IPC 切换链和初始化 effect；成功切换后同步写回 URL，
+   * 不触发页面重新加载。
+   */
+  async function openSessionById(sessionId: string): Promise<boolean> {
+    const opened = await openSessionByIdRef.current(sessionId);
+    if (opened && typeof window !== "undefined") {
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.set("sessionId", sessionId);
+        window.history.replaceState(
+          null,
+          "",
+          `${url.pathname}${url.search}${url.hash}`,
+        );
+      } catch {
+        // 忽略 URL 同步失败，不影响会话切换
+      }
+    }
+    return opened;
+  }
+
+  // 同步 openSessionByIdRef：每次 chatStore / selectSession 变更时重新打包
+  useEffect(() => {
+    openSessionByIdRef.current = (sessionId: string) =>
+      openSessionByIdWithDeps({
+        sessionId,
+        getSession: async (id) => {
+          const store = chatStore();
+          if (!store) return null;
+          const result = await store.get(id);
+          return (result ?? null) as { mode?: string } | null;
+        },
+        selectSession: async (id, mode) => {
+          // ReactSessionMode ⊂ ConversationMode，可直接传
+          await selectSession(id, mode as ConversationMode);
+        },
+      });
+  }, [chatStore, selectSession]);
+
+  // 同步 refreshSessionsRef
+  useEffect(() => {
+    refreshSessionsRef.current = refreshSessions;
+  }, [refreshSessions]);
 
   async function refreshSessions(targetMode: ConversationMode, selectCurrent: boolean) {
     const store = chatStore();
@@ -507,7 +693,7 @@ export function ChatPage() {
   }
 
   async function runModel(input: {
-    targetMode: "chat" | "work" | "daily";
+    targetMode: "chat" | "work" | "daily" | "code";
     sessionId: string;
     userMessageId: string;
     assistantId: string;
@@ -545,6 +731,7 @@ export function ChatPage() {
     let toolExecutions: ToolExecutionRecord[] = [];
     let runStarted = false;
     let runActivity: RunActivityRecord | undefined;
+    let codeRunViewModel: CodeRunViewModel = createCodeRunViewModel();
     const activeReasoningStarts = new Map<string, number>();
     let currentReasoningId: string | undefined;
     let resolveTerminal!: (error?: Error) => void;
@@ -561,6 +748,10 @@ export function ChatPage() {
     const publishRunActivity = () => {
       if (!runActivity) return;
       updateMessage(input.targetMode, input.assistantId, { runActivity: { ...runActivity } });
+    };
+    const publishCodeRun = () => {
+      if (input.targetMode !== "code") return;
+      updateMessage(input.targetMode, input.assistantId, { codeRun: { ...codeRunViewModel } });
     };
     const updateActiveReasoningStart = () => {
       const starts = [...activeReasoningStarts.values()];
@@ -604,6 +795,19 @@ export function ChatPage() {
       if (event.type === "RUN_STARTED") {
         runStarted = true;
         runActivity = { startedAt: Date.now(), reasoningMs: 0 };
+        if (input.targetMode === "code" && event.runId) {
+          codeRunViewModel = {
+            ...codeRunViewModel,
+            run: {
+              runId: event.runId,
+              chatSessionId: input.sessionId,
+              clineSessionId: "",
+              status: "running",
+              startedAt: Date.now(),
+            },
+          };
+          publishCodeRun();
+        }
         updateMessage(input.targetMode, input.assistantId, {
           waitingForFirstEvent: false,
           runActivity: { ...runActivity },
@@ -723,6 +927,38 @@ export function ChatPage() {
       } else if (event.type === "CUSTOM" && event.name === "cyrene.sticker") {
         sticker = typeof event.value === "string" ? event.value : null;
         updateMessage(input.targetMode, input.assistantId, { sticker });
+      } else if (event.type === "CUSTOM" && event.name === "code_ask") {
+        const interaction = normalizeCodeAskInteraction(event.value);
+        if (interaction) {
+          setInteractionBusy(false);
+          setComposerInteraction(interaction);
+          updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "waiting_user" } });
+        }
+      } else if (event.type === "CUSTOM" && (
+        event.name === "code_verification_approval"
+        || event.name === "code_verification_card"
+      )) {
+        const next = applyCodeRunEvent(codeRunViewModel, event);
+        if (next !== codeRunViewModel) {
+          codeRunViewModel = next;
+          publishCodeRun();
+        }
+        if (event.name === "code_verification_approval") {
+          const interaction = normalizeCodeVerificationInteraction(codeRunViewModel.approval);
+          if (interaction) {
+            setInteractionBusy(false);
+            setComposerInteraction(interaction);
+            updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "waiting_permission" } });
+          } else {
+            setComposerInteraction((current) => (
+              current?.kind === "permission"
+              && current.source === "code_verification"
+              && current.id === codeRunViewModel.approval?.approvalId
+                ? undefined
+                : current
+            ));
+          }
+        }
       } else if (event.type === "RUN_FINISHED") {
         completeRunActivity();
         updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "completed" } });
@@ -978,6 +1214,36 @@ export function ChatPage() {
     await selectSession(session.id, targetMode);
   }
 
+  async function changeClineMode(clineMode: "plan" | "act") {
+    const store = chatStore();
+    if (!store) return;
+    const sessionId = await ensureSession("code");
+    const previous = selectedClineMode;
+    setSelectedClineMode(clineMode);
+    try {
+      const result = await store.setCodeMode(sessionId, clineMode);
+      if (!result.ok) {
+        setSelectedClineMode(previous);
+        window.alert(`切换 Cline 模式失败：${result.error ?? "未知错误"}`);
+      }
+    } catch (error) {
+      setSelectedClineMode(previous);
+      console.warn("[Cyrene React] 切换 Cline 模式失败:", error);
+    }
+  }
+
+  async function createNewClineTask() {
+    const api = codeRunApi();
+    const sessionId = activeSessionIdsRef.current.code;
+    if (!api || !sessionId) return;
+    try {
+      const result = await api.createNewTask(sessionId);
+      if (!result.ok) window.alert(`创建 Cline Task 失败：${result.error ?? "未知错误"}`);
+    } catch (error) {
+      console.warn("[Cyrene React] 创建 Cline Task 失败:", error);
+    }
+  }
+
   async function chooseFiles(files: File[]) {
     const targetScope = scopeKey;
     if (!window.chat || files.length === 0) return;
@@ -1123,7 +1389,7 @@ export function ChatPage() {
     const visibleMessage = message.replace(/\[sticker:[^\]]+\]/g, "").trim();
     const demoResponse = DEMO_RESPONSES[message];
     const demoSticker = DEMO_STICKERS[message];
-    const shouldRunModel = (mode === "chat" || mode === "work" || mode === "daily") && !demoResponse && !demoSticker;
+    const shouldRunModel = shouldRunModelForMode(mode, Boolean(demoResponse), Boolean(demoSticker));
     if (shouldRunModel && modelBusyRef.current) return;
     const assistantId = demoResponse || demoSticker || shouldRunModel ? crypto.randomUUID() : undefined;
     const userMessageId = crypto.randomUUID();
@@ -1286,7 +1552,8 @@ export function ChatPage() {
             workspaceName={workspaceNames[mode]}
             attachments={attachments}
             attachmentBusy={attachmentBusy}
-            modelBusy={modelBusy && (mode === "chat" || mode === "work" || mode === "daily")}
+            modelBusy={modelBusy && (mode === "chat" || mode === "work" || mode === "daily" || mode === "code")}
+            clineMode={selectedClineMode}
             onChange={(value) => setDrafts((current) => ({ ...current, [scopeKey]: value }))}
             onSubmit={(value) => void sendMessage(value)}
             onChooseWorkspace={() => void chooseWorkspace()}
@@ -1297,10 +1564,22 @@ export function ChatPage() {
               const separator = draft && !draft.endsWith(" ") ? " " : "";
               setDrafts((current) => ({ ...current, [scopeKey]: `${draft}${separator}[sticker:${id}]` }));
             }}
+            onClineModeChange={(nextMode) => void changeClineMode(nextMode)}
+            onNewClineTask={() => void createNewClineTask()}
             />}
             interaction={composerInteraction}
             interactionBusy={interactionBusy}
             onAnswer={(id, answer) => {
+              if (composerInteraction?.kind === "ask" && composerInteraction.source === "code") {
+                const api = codeRunApi();
+                if (!api || typeof answer !== "string" || !answer.trim()) return;
+                setInteractionBusy(true);
+                void api.respondAsk(id, answer).then((result) => {
+                  if (result.ok) setComposerInteraction(undefined);
+                  setInteractionBusy(false);
+                }).catch(() => setInteractionBusy(false));
+                return;
+              }
               const choice = choiceApi();
               if (!choice) return;
               setInteractionBusy(true);
@@ -1310,6 +1589,16 @@ export function ChatPage() {
               }).catch(() => setInteractionBusy(false));
             }}
             onIgnore={(id) => {
+              if (composerInteraction?.kind === "ask" && composerInteraction.source === "code") {
+                const api = codeRunApi();
+                if (!api) return;
+                setInteractionBusy(true);
+                void api.cancelAsk(id).then((result) => {
+                  if (result.ok) setComposerInteraction(undefined);
+                  setInteractionBusy(false);
+                }).catch(() => setInteractionBusy(false));
+                return;
+              }
               const choice = choiceApi();
               if (!choice) return;
               setInteractionBusy(true);
@@ -1319,6 +1608,17 @@ export function ChatPage() {
               }).catch(() => setInteractionBusy(false));
             }}
             onPermissionDecision={(id, allowed) => {
+              if (composerInteraction?.kind === "permission" && composerInteraction.source === "code_verification") {
+                const api = codeRunApi();
+                if (!api) return;
+                setInteractionBusy(true);
+                const request = allowed ? api.approveVerification(id) : api.rejectVerification(id);
+                void request.then((result) => {
+                  if (result.ok) setComposerInteraction(undefined);
+                  setInteractionBusy(false);
+                }).catch(() => setInteractionBusy(false));
+                return;
+              }
               const settings = settingsApprovalApi();
               if (!settings) return;
               setInteractionBusy(true);

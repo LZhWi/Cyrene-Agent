@@ -191,7 +191,7 @@ openChatBtn.addEventListener("click", async () => {
     chatStore?: {
       list: () => Promise<Array<{ id: string }>>;
       create: (payload?: { identityId?: string | null }) => Promise<{ id: string } | null>;
-      openInChatWindow: (sessionId: string) => Promise<unknown>;
+      openInReactChatWindow: (sessionId: string) => Promise<unknown>;
     };
   }).chatStore;
   if (!chatStore) return;
@@ -202,7 +202,7 @@ openChatBtn.addEventListener("click", async () => {
       const created = await chatStore.create({ identityId: null });
       latestId = created?.id ?? "";
     }
-    if (latestId) await chatStore.openInChatWindow(latestId);
+    if (latestId) await chatStore.openInReactChatWindow(latestId);
   } catch (err) {
     console.warn("[sidebar] 打开聊天失败:", err);
   }

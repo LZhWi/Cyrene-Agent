@@ -548,6 +548,19 @@ const chatStoreApi = {
     ipcRenderer.on(IPC.CHATS_WORKSPACE_CHANGED, listener);
     return () => ipcRenderer.removeListener(IPC.CHATS_WORKSPACE_CHANGED, listener);
   },
+  setCodeMode: (sessionId: string, clineMode: "plan" | "act") =>
+    ipcRenderer.invoke(IPC.CHATS_SET_CODE_MODE, { sessionId, clineMode }),
+  // 状态栏专用入口：要求 main 打开/复用 reactChatWindow 并加载指定 sessionId
+  openInReactChatWindow: (sessionId: string) =>
+    ipcRenderer.invoke(IPC.CHATS_OPEN_IN_REACT_WINDOW, sessionId),
+  // main → reactChatWindow：通知 ChatPage 切换到指定 sessionId
+  onReactSwitchSession: (callback: (sessionId: string) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, sessionId: string) => callback(sessionId);
+    ipcRenderer.on(IPC.CHATS_REACT_SWITCH_SESSION, listener);
+    return () => ipcRenderer.removeListener(IPC.CHATS_REACT_SWITCH_SESSION, listener);
+  },
+  // reactChatWindow → main：ChatPage 已挂好 IPC 监听，允许 flush pending sessionId
+  notifyReactReady: () => ipcRenderer.send(IPC.CHATS_REACT_READY),
 };
 
 contextBridge.exposeInMainWorld("chatStore", chatStoreApi);
@@ -564,9 +577,17 @@ const codeRunApi = {
     ipcRenderer.invoke(IPC.CODE_VERIFICATION_GET_PENDING, params),
   approveVerification: (approvalId: string) =>
     ipcRenderer.invoke(IPC.CODE_VERIFICATION_APPROVE, approvalId),
-  rejectVerification: (approvalId: string) =>
-    ipcRenderer.invoke(IPC.CODE_VERIFICATION_REJECT, approvalId),
-};
+    rejectVerification: (approvalId: string) =>
+      ipcRenderer.invoke(IPC.CODE_VERIFICATION_REJECT, approvalId),
+    getPendingAsks: (chatSessionId?: string) =>
+      ipcRenderer.invoke(IPC.CODE_ASK_GET_PENDING, chatSessionId),
+    respondAsk: (promptId: string, answer: string) =>
+      ipcRenderer.invoke(IPC.CODE_ASK_RESPOND, { promptId, answer }),
+    cancelAsk: (promptId: string) =>
+      ipcRenderer.invoke(IPC.CODE_ASK_CANCEL, promptId),
+    createNewTask: (chatSessionId: string) =>
+      ipcRenderer.invoke(IPC.CODE_SESSION_NEW_TASK, chatSessionId),
+  };
 
 contextBridge.exposeInMainWorld("codeRun", codeRunApi);
 
