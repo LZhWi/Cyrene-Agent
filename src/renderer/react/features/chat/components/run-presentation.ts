@@ -29,6 +29,7 @@ export interface TaskPlanPresentation {
 export interface AskUserInteraction {
   kind: "ask";
   id: string;
+  source?: "agent" | "code";
   runId?: string;
   revision?: number;
   intro?: string;
@@ -70,6 +71,8 @@ export type AskDrafts = Record<string, AskQuestionDraft>;
 export interface PermissionInteraction {
   kind: "permission";
   id: string;
+  source?: "agent" | "code_verification";
+  sessionId?: string;
   toolName: string;
   summary: string;
   workspaceName?: string;
@@ -159,6 +162,52 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function normalizeCodeVerificationInteraction(value: unknown): PermissionInteraction | undefined {
+  const approval = asRecord(value);
+  const id = asNonEmptyString(approval?.approvalId);
+  const sessionId = asNonEmptyString(approval?.chatSessionId);
+  const executable = asNonEmptyString(approval?.executable);
+  const cwd = asNonEmptyString(approval?.cwd);
+  if (!id || !sessionId || !executable || !cwd || approval?.status !== "pending") return undefined;
+  const args = Array.isArray(approval.args)
+    ? approval.args.filter((arg): arg is string => typeof arg === "string")
+    : [];
+  return {
+    kind: "permission",
+    id,
+    source: "code_verification",
+    sessionId,
+    toolName: "验证命令",
+    summary: [executable, ...args].join(" "),
+    workspaceName: cwd,
+    targetPath: asNonEmptyString(approval.source),
+  };
+}
+
+export function normalizeCodeAskInteraction(value: unknown): AskUserInteraction | undefined {
+  const ask = asRecord(value);
+  const id = asNonEmptyString(ask?.promptId);
+  const runId = asNonEmptyString(ask?.runId);
+  const question = asNonEmptyString(ask?.question);
+  const options = Array.isArray(ask?.options)
+    ? [...new Set(ask.options.flatMap((option) => {
+        const normalized = asNonEmptyString(option);
+        return normalized ? [normalized] : [];
+      }))]
+    : [];
+  if (!id || !runId || !question || options.length < 2) return undefined;
+  return {
+    kind: "ask",
+    id,
+    source: "code",
+    runId,
+    question,
+    options: options.map((option) => ({ id: option, label: option })),
+    allowCustomInput: true,
+    responseKind: "choice",
+  };
 }
 
 function normalizeOptions(value: unknown): AskUserQuestion["options"] {

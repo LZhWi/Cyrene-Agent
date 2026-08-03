@@ -21,6 +21,7 @@ import {
   type ChatSession,
   type ChatSessionMeta,
   type ChatSessionPurpose,
+  type CodeSessionMetadata,
   type ConversationMode,
 } from "../../shared/chat-types";
 
@@ -341,6 +342,25 @@ export function appendMessage(id: string, message: ChatMessage): ChatSession | n
   if (!session.titleIsCustom) {
     session.title = deriveTitle(session.messages);
   }
+  writeSessionFile(session);
+  upsertMeta(metaFromSession(session));
+  return session;
+}
+
+/** 持久化 Code/Cline 的宿主会话元数据；Conversation mode 始终保持不变。 */
+export function updateCodeSession(
+  sessionId: string,
+  patch: Partial<CodeSessionMetadata>,
+): ChatSession | null {
+  const session = readSessionFile(sessionId);
+  if (!session || session.mode !== "code") return null;
+  const current: CodeSessionMetadata = session.codeSession ?? { clineMode: "act", tasks: [] };
+  session.codeSession = {
+    ...current,
+    ...patch,
+    tasks: patch.tasks ? [...patch.tasks] : current.tasks,
+  };
+  session.updatedAt = Date.now();
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));
   return session;

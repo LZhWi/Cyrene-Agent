@@ -61,15 +61,10 @@ export async function routeCommand(
 
   if (trimmed === "/newtask") {
     const oldSessionId = session.codeSession?.activeClineSessionId;
-    if (oldSessionId) {
-      try {
-        await clineRuntime.stop(oldSessionId);
-      } catch { /* ignore */ }
-    }
-    // 新 Task 由 caller 处理：调用 createNewTask
+    if (session.id) await beginNewCodeTask(session.id);
     return {
       type: "newtask",
-      sessionId: oldSessionId ?? "", // 占位，实际 sessionId 由 code-session-manager 生成
+      sessionId: oldSessionId ?? "",
       taskTitle: "New Task",
     };
   }
@@ -96,9 +91,30 @@ export function updateSessionClineMode(
   sessionId: string,
   clineMode: "plan" | "act",
 ): void {
+  chatsStore.updateCodeSession(sessionId, { clineMode });
+}
+
+/** 结束当前 Cline Task；下一条 Code 消息会创建全新的 Cline Session。 */
+export async function beginNewCodeTask(sessionId: string): Promise<{ ok: boolean; error?: string }> {
   const session = chatsStore.getSession(sessionId);
-  if (!session || !session.codeSession) return;
-  session.codeSession.clineMode = clineMode;
-  // 注意：实际持久化需要 chatsStore 提供 updateCodeSession 方法
-  // 这里仅更新内存中的对象，持久化留给后续 commit
+  if (!session || session.mode !== "code") return { ok: false, error: "Code session not found" };
+  const activeClineSessionId = session.codeSession?.activeClineSessionId;
+  if (activeClineSessionId) {
+    try {
+      await clineRuntime.stop(activeClineSessionId);
+    } catch (error) {
+      console.warn("[CodeCommand] stop previous Cline task failed:", error);
+    }
+  }
+  const closedAt = Date.now();
+  const tasks = (session.codeSession?.tasks ?? []).map((task) => (
+    task.clineSessionId === activeClineSessionId && !task.closedAt
+      ? { ...task, closedAt }
+      : task
+  ));
+  const updated = chatsStore.updateCodeSession(sessionId, {
+    activeClineSessionId: undefined,
+    tasks,
+  });
+  return updated ? { ok: true } : { ok: false, error: "Code session not found" };
 }

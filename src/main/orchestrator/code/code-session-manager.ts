@@ -8,7 +8,7 @@
  */
 
 import type { ChatSession, ConversationWorkspaceBinding } from "../../../shared/chat-types";
-import { clineRuntime } from "./cline-runtime-manager";
+import { clineRuntime, type StartSessionInput } from "./cline-runtime-manager";
 
 export type RecoveryMode = "active_session" | "message_reconstruction" | "fresh_session";
 
@@ -110,6 +110,7 @@ export async function getOrCreateClineSession(
   session: ChatSession,
   userMessage: string,
   config: Record<string, unknown>,
+  capabilities?: StartSessionInput["capabilities"],
 ): Promise<{ sessionId: string; recovery: CodeTaskRecovery }> {
   const oldSessionId = session.codeSession?.activeClineSessionId;
   const workspaceRoot = session.workspaceBinding?.workspaceRoot;
@@ -138,6 +139,7 @@ export async function getOrCreateClineSession(
           config,
           initialMessages: reconstruction.messages,
           interactive: true,
+          capabilities,
         });
         if (result.sessionId) {
           return {
@@ -163,6 +165,7 @@ export async function getOrCreateClineSession(
     config,
     prompt: userMessage,
     interactive: true,
+    capabilities,
   });
   if (!result.sessionId) {
     throw new Error("Failed to create new session");
@@ -184,10 +187,12 @@ export async function createNewTask(
   session: ChatSession,
   workspaceBinding: ConversationWorkspaceBinding,
   config: Record<string, unknown>,
+  capabilities?: StartSessionInput["capabilities"],
 ): Promise<{ sessionId: string; recovery: CodeTaskRecovery }> {
   const result = await clineRuntime.start({
     config,
     interactive: true,
+    capabilities,
   });
   if (!result.sessionId) {
     throw new Error("Failed to create new task");

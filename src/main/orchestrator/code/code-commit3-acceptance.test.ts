@@ -36,7 +36,8 @@ import { buildClineSystemPrompt, loadCodeIdentityPrompt } from "./code-prompt-co
 import { codeRunCoordinator } from "./code-run-coordinator";
 import {
   createAskDeferred, respondToAsk, cancelAsk, rejectAllAsksOnShutdown,
-  resetAskRegistry, listPendingAsks, getAskCancellation,
+  resetAskRegistry, listPendingAsks, getAskCancellation, createAskQuestionExecutor,
+  listPendingAskPresentations,
 } from "./code-ask-bridge";
 import { routeCommand } from "./code-command-router";
 
@@ -243,6 +244,62 @@ describe("Commit 3 验收测试", () => {
   // ── Ask Bridge 测试 ────────────────────────────────────
 
   describe("CodeAskBridge", () => {
+    it("publishes a Cline Ask before waiting for the same turn answer", async () => {
+      codeRunCoordinator.createRun("run-ask", "chat-ask", "cline-ask");
+      codeRunCoordinator.activate("run-ask");
+      const onAsk = vi.fn();
+      const executor = createAskQuestionExecutor("chat-ask", "cline-ask", "run-ask", onAsk);
+
+      const answerPromise = executor("最喜欢什么水果？", ["草莓", "西瓜"]);
+      const pending = listPendingAsks("chat-ask")[0];
+
+      expect(onAsk).toHaveBeenCalledWith(expect.objectContaining({
+        promptId: pending.promptId,
+        question: "最喜欢什么水果？",
+        options: ["草莓", "西瓜"],
+      }));
+      expect(listPendingAskPresentations("chat-ask")).toEqual([
+        expect.objectContaining({
+          promptId: pending.promptId,
+          question: "最喜欢什么水果？",
+          options: ["草莓", "西瓜"],
+        }),
+      ]);
+      respondToAsk(pending.promptId, "草莓");
+      await expect(answerPromise).resolves.toBe("草莓");
+    });
+
+    it("resolves the Cline session id lazily for a freshly started session", async () => {
+      codeRunCoordinator.createRun("run-late", "chat-late", "");
+      codeRunCoordinator.activate("run-late");
+      let clineSessionId = "";
+      const executor = createAskQuestionExecutor("chat-late", () => clineSessionId, "run-late");
+      clineSessionId = "cline-late";
+
+      const answerPromise = executor("继续吗？", ["继续", "停止"]);
+      const pending = listPendingAsks("chat-late")[0];
+
+      expect(pending.clineSessionId).toBe("cline-late");
+      respondToAsk(pending.promptId, "继续");
+      await expect(answerPromise).resolves.toBe("继续");
+    });
+
+    it("keeps a Cline Ask actionable when the SDK provides no options", async () => {
+      codeRunCoordinator.createRun("run-open", "chat-open", "cline-open");
+      codeRunCoordinator.activate("run-open");
+      const onAsk = vi.fn();
+      const executor = createAskQuestionExecutor("chat-open", "cline-open", "run-open", onAsk);
+
+      const answerPromise = executor("请补充说明", []);
+      const pending = listPendingAsks("chat-open")[0];
+
+      expect(onAsk).toHaveBeenCalledWith(expect.objectContaining({
+        options: ["继续", "暂不处理"],
+      }));
+      respondToAsk(pending.promptId, "我的自定义回答");
+      await expect(answerPromise).resolves.toBe("我的自定义回答");
+    });
+
     it("7. Ask 卡片能跨 IPC 回答并继续同一 turn", async () => {
       const { promptId, promise } = createAskDeferred("chat-1", "session-A", "run-1", "你喜欢什么颜色?", ["红", "蓝"]);
 

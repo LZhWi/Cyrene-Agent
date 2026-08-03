@@ -161,6 +161,25 @@ describe("chats store", () => {
     );
   });
 
+  it("persists Code session runtime metadata without changing its conversation mode", async () => {
+    const store = await import("./chats-store");
+    store.initialize();
+    const session = store.createSession({ mode: "code" });
+
+    const updated = store.updateCodeSession(session.id, {
+      clineMode: "plan",
+      activeClineSessionId: "cline-1",
+      tasks: [{ clineSessionId: "cline-1", createdAt: 123 }],
+    });
+
+    expect(updated?.mode).toBe("code");
+    expect(store.getSession(session.id)?.codeSession).toEqual(expect.objectContaining({
+      clineMode: "plan",
+      activeClineSessionId: "cline-1",
+      tasks: [{ clineSessionId: "cline-1", createdAt: 123 }],
+    }));
+  });
+
   it("keeps the legacy migration idempotent on restart", async () => {
     const root = path.join(electronMock.userDataDir, "cyrene-chats");
     const sessionsDir = path.join(root, "sessions");

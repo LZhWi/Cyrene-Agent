@@ -121,7 +121,7 @@ export function AskUserPanel({
         </div>
       )}
       <div className="cy-interaction-panel__actions">
-        {interaction.responseKind === "choice" && <button type="button" disabled={disabled} onClick={onIgnore}>忽略</button>}
+        {interaction.responseKind === "choice" && interaction.source !== "code" && <button type="button" disabled={disabled} onClick={onIgnore}>忽略</button>}
         <button type="button" className="is-primary" disabled={disabled || !canSubmit} onClick={submit}>{questions.length > 1 ? "提交全部" : "提交"}</button>
       </div>
     </PanelShell>

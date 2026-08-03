@@ -33,6 +33,7 @@ import { VerificationPlanResolver } from "./verification-plan-resolver";
 import { VerificationRunner } from "./verification-runner";
 import { resolveCodeRunFinalState, type CodeVerificationCard } from "./code-final-state";
 import { codeRunStore } from "./code-run-store";
+import { createAskQuestionExecutor } from "./code-ask-bridge";
 
 /**
  * 从统一 ModelSettings 读取运行时配置。
@@ -267,9 +268,42 @@ export async function runCodeRequest(
     await codeRunWorker.submit(ctx.runId, ctx.sessionId, "", async () => {
       // 6. 获取或重建 Cline Session
       const clineConfig = buildClineConfig(config, config.workspaceRoot);
-
-      const sessionResult = await getOrCreateClineSession(session, input.text, clineConfig);
+      let activeClineSessionId = session.codeSession?.activeClineSessionId ?? "";
+      const askQuestion = createAskQuestionExecutor(
+        ctx.sessionId,
+        () => activeClineSessionId,
+        ctx.runId,
+        (ask) => emitAgUiEvent(ctx, {
+          type: "code_ask",
+          payload: ask,
+          runId: ctx.runId,
+        }),
+      );
+      const sessionResult = await getOrCreateClineSession(
+        session,
+        input.text,
+        clineConfig,
+        { toolExecutors: { askQuestion } },
+      );
       const clineSessionId = sessionResult.sessionId;
+      activeClineSessionId = clineSessionId;
+
+      const persistedSession = chatsStore.getSession(ctx.sessionId) ?? session;
+      const previousTasks = persistedSession.codeSession?.tasks ?? [];
+      const now = Date.now();
+      const tasks = previousTasks.map((task) => (
+        task.clineSessionId !== clineSessionId && !task.closedAt
+          ? { ...task, closedAt: now }
+          : task
+      ));
+      if (!tasks.some((task) => task.clineSessionId === clineSessionId)) {
+        tasks.push({ clineSessionId, createdAt: now });
+      }
+      chatsStore.updateCodeSession(ctx.sessionId, {
+        activeClineSessionId: clineSessionId,
+        clineMode: config.clineMode,
+        tasks,
+      });
 
       // 原子更新 clineSessionId 与活跃映射，避免查询仍指向占位 Session。
       if (!codeRunCoordinator.bindClineSession(ctx.runId, clineSessionId)) {

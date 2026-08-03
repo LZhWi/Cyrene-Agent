@@ -27,6 +27,16 @@ interface AskCancellationFact {
   cancelledAt: number;
 }
 
+export interface CodeAskPresentation {
+  chatSessionId: string;
+  clineSessionId: string;
+  runId: string;
+  promptId: string;
+  question: string;
+  options: string[];
+  createdAt: number;
+}
+
 const askRegistry: Map<string, ActiveAsk> = new Map();
 const cancelledAsks: Map<string, AskCancellationFact> = new Map();
 let askCounter = 0;
@@ -122,6 +132,28 @@ export function listPendingAsks(chatSessionId?: string): ActiveAsk[] {
   return all.filter(a => a.chatSessionId === chatSessionId);
 }
 
+function normalizeAskOptions(options: string[]): string[] {
+  const normalized = Array.from(new Set(options.map((option) => option.trim()).filter(Boolean)));
+  for (const fallback of ["继续", "暂不处理"]) {
+    if (normalized.length >= 2) break;
+    if (!normalized.includes(fallback)) normalized.push(fallback);
+  }
+  return normalized;
+}
+
+/** 返回可安全暴露给 Renderer 的 pending Ask 快照。 */
+export function listPendingAskPresentations(chatSessionId?: string): CodeAskPresentation[] {
+  return listPendingAsks(chatSessionId).map((ask) => ({
+    chatSessionId: ask.chatSessionId,
+    clineSessionId: ask.clineSessionId,
+    runId: ask.runId,
+    promptId: ask.promptId,
+    question: ask.question,
+    options: [...(ask.options ?? [])],
+    createdAt: ask.createdAt,
+  }));
+}
+
 /** 重置（测试用） */
 export function resetAskRegistry(): void {
   for (const ask of askRegistry.values()) {
@@ -135,13 +167,25 @@ export function resetAskRegistry(): void {
 /** 创建 AskQuestionExecutor，注入到 Cline */
 export function createAskQuestionExecutor(
   chatSessionId: string,
-  clineSessionId: string,
+  clineSessionId: string | (() => string),
   runId: string,
+  onAsk?: (ask: CodeAskPresentation) => void,
 ): (question: string, options: string[]) => Promise<string> {
   return async (question: string, options: string[]): Promise<string> => {
-    const { promptId, promise } = createAskDeferred(chatSessionId, clineSessionId, runId, question, options);
+    const resolvedClineSessionId = typeof clineSessionId === "function" ? clineSessionId() : clineSessionId;
+    const normalizedOptions = normalizeAskOptions(options ?? []);
+    const { promptId, promise } = createAskDeferred(chatSessionId, resolvedClineSessionId, runId, question, normalizedOptions);
     codeRunCoordinator.setWaitingForUser(runId);
     console.log(`[CodeAsk] Ask created: promptId=${promptId} question=${question.slice(0, 50)}`);
+    onAsk?.({
+      chatSessionId,
+      clineSessionId: resolvedClineSessionId,
+      runId,
+      promptId,
+      question,
+      options: normalizedOptions,
+      createdAt: Date.now(),
+    });
     // 持久化 pendingPrompt（应在 ChatSession.codeSession.pendingPrompt 中保存）
     try {
       return await promise;

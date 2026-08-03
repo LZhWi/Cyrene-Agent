@@ -5,6 +5,7 @@ import { resolveAsset } from "../../../../../shared/renderer-base";
 import { ReasoningControl } from "./ReasoningControl";
 import { StyleControl } from "./StyleControl";
 import { PermissionControl } from "./PermissionControl";
+import { ClineModeSwitch, type ClineMode } from "./ClineModeSwitch";
 import chatWelcomeUrl from "../../../assets/welcome/chat.png?url";
 import codeWelcomeUrl from "../../../assets/welcome/code.png?url";
 import dailyWelcomeUrl from "../../../assets/welcome/daily.png?url";
@@ -19,6 +20,7 @@ interface ChatComposerProps {
   attachments: ComposerAttachment[];
   attachmentBusy?: boolean;
   modelBusy?: boolean;
+  clineMode?: ClineMode;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   onChooseWorkspace: () => void;
@@ -26,6 +28,8 @@ interface ChatComposerProps {
   onRemoveAttachment: (index: number) => void;
   onScreenshot: () => void;
   onChooseSticker: (id: string) => void;
+  onClineModeChange?: (mode: ClineMode) => void;
+  onNewClineTask?: () => void;
 }
 
 export interface ComposerAttachment {
@@ -161,6 +165,7 @@ export function ChatComposer({
   attachments,
   attachmentBusy = false,
   modelBusy = false,
+  clineMode = "act",
   onChange,
   onSubmit,
   onChooseWorkspace,
@@ -168,6 +173,8 @@ export function ChatComposer({
   onRemoveAttachment,
   onScreenshot,
   onChooseSticker,
+  onClineModeChange,
+  onNewClineTask,
 }: ChatComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
@@ -307,6 +314,20 @@ export function ChatComposer({
         {supportsPermission && <span className="cy-composer__footer-separator" />}
         {supportsPermission && (
           <PermissionControl />
+        )}
+        {mode === "code" && onClineModeChange && (
+          <ClineModeSwitch value={clineMode} disabled={modelBusy} onChange={onClineModeChange} />
+        )}
+        {mode === "code" && onNewClineTask && (
+          <button
+            type="button"
+            className="cy-composer__footer-button cy-composer__cline-task-button"
+            disabled={modelBusy}
+            title="结束当前 Cline Task；下一条消息从新上下文开始"
+            onClick={onNewClineTask}
+          >
+            新 Cline Task
+          </button>
         )}
         {supportsStyle && <StyleControl />}
           <ReasoningControl />

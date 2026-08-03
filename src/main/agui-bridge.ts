@@ -30,6 +30,11 @@ import { codeRunCoordinator } from "./orchestrator/code/code-run-coordinator";
 import * as chatsStore from "./chats/chats-store";
 import type { ConversationMode } from "../shared/chat-types";
 import { requestUserClarification } from "./user-choice";
+import {
+  cancelAsk,
+  listPendingAskPresentations,
+  respondToAsk,
+} from "./orchestrator/code/code-ask-bridge";
 
 type RunCodeRequest = typeof import("./orchestrator/code/code-request").runCodeRequest;
 
@@ -50,9 +55,66 @@ const CODE_RENDERER_EVENT_TYPES: Record<string, string> = {
   run_error: "RUN_ERROR",
 };
 
-function normalizeCodeRendererEvent(event: unknown): unknown {
+export function normalizeCodeRendererEvent(event: unknown, runId?: string): unknown {
   if (!event || typeof event !== "object") return event;
-  const typed = event as { type?: string };
+  const typed = event as { type?: string; payload?: unknown };
+  if (typed.type === "code_verification_card" || typed.type === "code_verification_approval" || typed.type === "code_mutation_evidence" || typed.type === "code_ask") {
+    return {
+      type: "CUSTOM",
+      name: typed.type,
+      value: typed.payload,
+      ...("runId" in typed ? { runId: typed.runId } : {}),
+    };
+  }
+  if (typed.type === "agent_event" && typed.payload && typeof typed.payload === "object") {
+    const agentEvent = (typed.payload as { event?: unknown }).event;
+    if (agentEvent && typeof agentEvent === "object") {
+      const content = agentEvent as {
+        type?: string;
+        contentType?: string;
+        text?: string;
+        reasoning?: string;
+        toolName?: string;
+        toolCallId?: string;
+        output?: unknown;
+        error?: string;
+      };
+      if (content.type === "content_start" || content.type === "content_update") {
+        if (content.contentType === "text" && content.text) {
+          return { type: "TEXT_MESSAGE_CONTENT", messageId: runId ? `code-text-${runId}` : undefined, delta: content.text };
+        }
+        if (content.contentType === "reasoning" && content.reasoning) {
+          return { type: "REASONING_MESSAGE_CONTENT", messageId: runId ? `code-reasoning-${runId}` : undefined, delta: content.reasoning };
+        }
+        if (content.type === "content_start" && content.contentType === "tool") {
+          return {
+            type: "TOOL_CALL_START",
+            toolCallId: content.toolCallId,
+            toolCallName: content.toolName,
+          };
+        }
+      }
+      if (content.type === "content_end") {
+        if (content.contentType === "text") return { type: "TEXT_MESSAGE_END" };
+        if (content.contentType === "reasoning") return { type: "REASONING_MESSAGE_END" };
+        if (content.contentType === "tool") {
+          const result = content.error ?? (
+            typeof content.output === "string"
+              ? content.output
+              : content.output === undefined
+                ? ""
+                : JSON.stringify(content.output)
+          );
+          return {
+            type: "TOOL_CALL_RESULT",
+            toolCallId: content.toolCallId,
+            content: result,
+            status: content.error ? "failed" : "success",
+          };
+        }
+      }
+    }
+  }
   const normalizedType = typed.type ? CODE_RENDERER_EVENT_TYPES[typed.type] : undefined;
   return normalizedType ? { ...typed, type: normalizedType } : event;
 }
@@ -190,7 +252,8 @@ export function registerAgUiIpc(
         }
         return "";
       })();
-      const codeSend = (codeEvent: unknown): void => send(normalizeCodeRendererEvent(codeEvent));
+      send({ type: "RUN_STARTED", runId, threadId: sessionId });
+      const codeSend = (codeEvent: unknown): void => send(normalizeCodeRendererEvent(codeEvent, runId));
       void runCodeRequest(
         { text: userText, sessionId },
         session,
@@ -466,6 +529,36 @@ export function registerAgUiIpc(
       return { ok: false, error: "run is terminal", approval: a };
     }
     return { ok: true, approval: codeRunStore.reject(approvalId) };
+  });
+
+  // ── Code / Cline Ask IPC ────────────────────────────
+
+  ipcMain.handle(IPC.CODE_ASK_GET_PENDING, (_event, chatSessionId?: string) => {
+    return listPendingAskPresentations(chatSessionId);
+  });
+
+  ipcMain.handle(IPC.CODE_ASK_RESPOND, (_event, input: { promptId?: string; answer?: string } = {}) => {
+    const promptId = input.promptId?.trim();
+    const answer = input.answer?.trim();
+    if (!promptId || !answer) return { ok: false, error: "promptId and answer are required" };
+    return respondToAsk(promptId, answer)
+      ? { ok: true }
+      : { ok: false, error: "ask not found" };
+  });
+
+  ipcMain.handle(IPC.CODE_ASK_CANCEL, (_event, promptId: string) => {
+    const normalized = promptId?.trim();
+    if (!normalized) return { ok: false, error: "promptId is required" };
+    return cancelAsk(normalized, "user")
+      ? { ok: true }
+      : { ok: false, error: "ask not found" };
+  });
+
+  ipcMain.handle(IPC.CODE_SESSION_NEW_TASK, async (_event, chatSessionId: string) => {
+    const normalized = chatSessionId?.trim();
+    if (!normalized) return { ok: false, error: "chatSessionId is required" };
+    const { beginNewCodeTask } = await import("./orchestrator/code/code-command-router");
+    return beginNewCodeTask(normalized);
   });
 
   ipcMain.handle(IPC.AGUI_CANCEL, () => {

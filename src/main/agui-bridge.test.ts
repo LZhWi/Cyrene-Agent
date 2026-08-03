@@ -58,6 +58,48 @@ vi.mock("./user-choice", () => ({
 }));
 
 describe("agui-bridge sticker event ordering", () => {
+  it("maps Cline text and reasoning deltas onto the AG-UI stream contract", async () => {
+    const { normalizeCodeRendererEvent } = await import("./agui-bridge");
+
+    expect(normalizeCodeRendererEvent({
+      type: "agent_event",
+      payload: { event: { type: "content_start", contentType: "text", text: "完成" } },
+    })).toMatchObject({ type: "TEXT_MESSAGE_CONTENT", delta: "完成" });
+    expect(normalizeCodeRendererEvent({
+      type: "agent_event",
+      payload: { event: { type: "content_start", contentType: "reasoning", reasoning: "分析" } },
+    })).toMatchObject({ type: "REASONING_MESSAGE_CONTENT", delta: "分析" });
+    expect(normalizeCodeRendererEvent({
+      type: "agent_event",
+      payload: { event: { type: "content_update", contentType: "text", text: "继续" } },
+    })).toMatchObject({ type: "TEXT_MESSAGE_CONTENT", delta: "继续" });
+  });
+
+  it("maps Cline tool lifecycle events onto visible AG-UI tool states", async () => {
+    const { normalizeCodeRendererEvent } = await import("./agui-bridge");
+
+    expect(normalizeCodeRendererEvent({
+      type: "agent_event",
+      payload: { event: { type: "content_start", contentType: "tool", toolName: "apply_patch", toolCallId: "tool-1" } },
+    })).toMatchObject({ type: "TOOL_CALL_START", toolCallName: "apply_patch", toolCallId: "tool-1" });
+    expect(normalizeCodeRendererEvent({
+      type: "agent_event",
+      payload: { event: { type: "content_end", contentType: "tool", toolName: "apply_patch", toolCallId: "tool-1", output: "done" } },
+    })).toMatchObject({ type: "TOOL_CALL_RESULT", toolCallId: "tool-1", content: "done", status: "success" });
+  });
+
+  it("maps Cline Ask presentations onto a React-consumable custom event", async () => {
+    const { normalizeCodeRendererEvent } = await import("./agui-bridge");
+    const ask = { promptId: "ask-1", question: "选择方案？", options: ["A", "B"] };
+
+    expect(normalizeCodeRendererEvent({ type: "code_ask", payload: ask, runId: "run-1" })).toEqual({
+      type: "CUSTOM",
+      name: "code_ask",
+      value: ask,
+      runId: "run-1",
+    });
+  });
+
   it("routes structured Ask cards to the AG-UI run sender", async () => {
     vi.resetModules();
     mocks.handlers.clear();
@@ -400,5 +442,43 @@ describe("agui-bridge sticker event ordering", () => {
     await expect.poll(() => mocks.runCodeRequest).toHaveBeenCalledOnce();
     expect(mocks.runCyreneAgent).not.toHaveBeenCalled();
     expect(continuedAfterEvent).toBe(true);
+  });
+
+  it("starts a Code AG-UI run before forwarding deterministic Code cards", async () => {
+    vi.resetModules();
+    mocks.handlers.clear();
+    mocks.runCodeRequest.mockReset();
+    mocks.getSession.mockReturnValue({
+      id: "code-react",
+      mode: "code",
+      workspaceBinding: { workspaceRoot: "C:\\code", displayName: "code", boundAt: 1 },
+    });
+    mocks.runCodeRequest.mockImplementation(async (_input, _session, context) => {
+      context.emitEvent({
+        type: "code_verification_card",
+        payload: { runId: context.runId, status: "completed_verified" },
+      });
+    });
+    const sent: unknown[] = [];
+
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    registerAgUiIpc(vi.fn(), vi.fn(), () => null);
+    const handler = mocks.handlers.get(IPC.AGUI_RUN);
+    if (!handler) throw new Error("AGUI_RUN handler was not registered");
+
+    const ack = await handler({
+      sender: { isDestroyed: () => false, send: (_channel: string, event: unknown) => sent.push(event) },
+    }, {
+      messages: [{ role: "user", content: "修复代码" }],
+      sessionId: "code-react",
+    }) as { runId: string };
+
+    await expect.poll(() => sent.length).toBeGreaterThanOrEqual(2);
+    expect(sent[0]).toMatchObject({ type: "RUN_STARTED", runId: ack.runId, threadId: "code-react" });
+    expect(sent[1]).toMatchObject({
+      type: "CUSTOM",
+      name: "code_verification_card",
+      value: { runId: ack.runId, status: "completed_verified" },
+    });
   });
 });

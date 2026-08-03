@@ -89,6 +89,18 @@ export interface CodeRunApi {
     approval?: VerificationApproval;
     error?: string;
   }>;
+  getPendingAsks: (chatSessionId?: string) => Promise<Array<{
+    chatSessionId: string;
+    clineSessionId: string;
+    runId: string;
+    promptId: string;
+    question: string;
+    options: string[];
+    createdAt: number;
+  }>>;
+  respondAsk: (promptId: string, answer: string) => Promise<{ ok: boolean; error?: string }>;
+  cancelAsk: (promptId: string) => Promise<{ ok: boolean; error?: string }>;
+  createNewTask: (chatSessionId: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export function createCodeRunViewModel(): CodeRunViewModel {

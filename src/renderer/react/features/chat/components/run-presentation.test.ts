@@ -13,6 +13,7 @@ import {
   updateAskCustomText,
   type ComposerInteraction,
 } from "./run-presentation";
+import * as runPresentation from "./run-presentation";
 
 describe("work run presentation", () => {
   it("replaces the composer only while an ask or permission interaction is pending", () => {
@@ -65,6 +66,64 @@ describe("work run presentation", () => {
       toolName: "自定义操作",
       args: {},
     })).toBe("执行「自定义操作」");
+  });
+
+  it("turns a pending Code verification command into the shared approval slot", () => {
+    const normalize = (runPresentation as typeof runPresentation & {
+      normalizeCodeVerificationInteraction?: (value: unknown) => ComposerInteraction | undefined;
+    }).normalizeCodeVerificationInteraction;
+
+    expect(normalize?.({
+      approvalId: "verification-1",
+      runId: "run-1",
+      chatSessionId: "chat-1",
+      clineSessionId: "cline-1",
+      stepId: "step-1",
+      trust: "workspace_script",
+      executable: "npm",
+      args: ["test"],
+      cwd: "C:\\repo",
+      source: "package_script",
+      status: "pending",
+      createdAt: 1,
+    })).toEqual({
+      kind: "permission",
+      id: "verification-1",
+      source: "code_verification",
+      sessionId: "chat-1",
+      toolName: "验证命令",
+      summary: "npm test",
+      workspaceName: "C:\\repo",
+      targetPath: "package_script",
+    });
+  });
+
+  it("turns a Cline Ask into the shared Ask slot with custom input", () => {
+    const normalize = (runPresentation as typeof runPresentation & {
+      normalizeCodeAskInteraction?: (value: unknown) => ComposerInteraction | undefined;
+    }).normalizeCodeAskInteraction;
+
+    expect(normalize?.({
+      promptId: "ask-1",
+      chatSessionId: "chat-1",
+      clineSessionId: "cline-1",
+      runId: "run-1",
+      question: "最喜欢什么水果？",
+      options: ["草莓", "西瓜"],
+      createdAt: 1,
+    })).toEqual({
+      kind: "ask",
+      id: "ask-1",
+      source: "code",
+      runId: "run-1",
+      question: "最喜欢什么水果？",
+      options: [
+        { id: "草莓", label: "草莓" },
+        { id: "西瓜", label: "西瓜" },
+      ],
+      allowCustomInput: true,
+      responseKind: "choice",
+    });
   });
 
   it("normalizes both legacy choices and structured clarification into the same composer slot", () => {

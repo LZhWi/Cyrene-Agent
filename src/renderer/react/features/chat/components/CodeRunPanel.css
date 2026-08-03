@@ -1,0 +1,77 @@
+.cy-code-run-card {
+  width: min(100%, 760px);
+  padding: 14px 16px;
+  border: 1px solid rgb(214 218 229 / 78%);
+  border-radius: 16px;
+  background: rgb(255 255 255 / 78%);
+  box-shadow: 0 8px 24px rgb(31 35 48 / 6%);
+  color: var(--cy-text);
+}
+
+.cy-code-run-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.cy-code-run-card header span {
+  color: var(--cy-accent);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.cy-code-run-card dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 14px;
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
+.cy-code-run-card dt {
+  color: var(--cy-text-muted);
+}
+
+.cy-code-run-card dd {
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cy-code-run-card__steps,
+.cy-code-run-card__warnings {
+  display: grid;
+  gap: 7px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.cy-code-run-card__steps li {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) max-content;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.cy-code-run-card__steps li.is-passed > span {
+  color: #2e9b65;
+}
+
+.cy-code-run-card__steps li.is-failed > span,
+.cy-code-run-card__error,
+.cy-code-run-card__warnings {
+  color: #b94a5a;
+}
+
+.cy-code-run-card__steps small {
+  color: var(--cy-text-muted);
+}
+
+.cy-code-run-card__warnings {
+  font-size: 12px;
+}
