@@ -3466,7 +3466,7 @@ function switchSection(section: string): void {
   else disposeMusicPanel();
   placeholderPanel.classList.toggle(
     "is-hidden",
-    isApi || isApiAdvanced || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr || isMusic,
+    isApi || isApiAdvanced || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isTasks || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr || isMusic,
   );
 
   if (
@@ -3479,9 +3479,8 @@ function switchSection(section: string): void {
     !isDisclaimer &&
     !isMemory &&
     !isUser &&
-	    !isChat &&
-	    !isTasks &&
-	    !isPlugins &&
+    !isTasks &&
+    !isPlugins &&
     !isSkills &&
     !isTokens &&
     !isChannels &&
@@ -3495,8 +3494,11 @@ function switchSection(section: string): void {
   }
 
   document.querySelectorAll(".nav-item").forEach((el) => {
-    el.classList.toggle("is-active", (el as HTMLElement).dataset.section === section);
+    const isMatch = (el as HTMLElement).dataset.section === section;
+    el.classList.toggle("is-active", isMatch);
   });
+  const activeNav = document.querySelector(".nav-item.is-active");
+  console.log("[Settings/Trace] switchSection section=", section, "activeNav=", activeNav ? (activeNav as HTMLElement).dataset.section : null);
 }
 
 document.querySelectorAll(".nav-item").forEach((el) => {
