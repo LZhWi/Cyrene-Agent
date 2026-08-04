@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="./preview.png" alt="Cyrene Agent" width="800">
+<img src="./docs/image/preview.png" alt="Cyrene Agent" width="800">
 
 # Cyrene-Agent
 
@@ -13,7 +13,7 @@
 > 基于 Electron + TypeScript 开发的桌面端 Live2D 智能对话 Agent。  
 > 项目围绕昔涟（Cyrene）的角色设定，结合自研 DMAE 记忆引擎，  
 > 将角色化聊天、个性化记忆、语音交互、工具调用与多平台接入整合在同一个桌面 Agent 中，  
-> 同时支持日常聊天（Chat）与辅助工作（Work）两种模式。
+> 支持日常聊天（Chat）、辅助工作（Work）、代码协作（Code）、学习陪伴（Learn）与日常事务（Daily）五种对话模式。
 
 ---
 
@@ -22,6 +22,9 @@
 - 🌸 **趣味桌面陪伴** — Live2D 角色常驻桌面，支持表情、动作、状态、心情、气泡互动与智能表情包
 - 💬 **日常聊天（Chat）** — 专注角色化交流，结合会话历史、用户风格与长期记忆自然回应
 - 🛠️ **辅助工作（Work）** — 通过完整 Agent 工作流理解请求、调用工具，并根据真实执行结果回复
+- 💻 **代码协作（Code）** — 绑定可信代码目录，使用 Coding Agent 读取、修改、验证代码并执行命令
+- 📚 **学习陪伴（Learn）** — 绑定 Obsidian Vault，陪伴用户理解材料、整理笔记、生成练习与维护进度
+- 📅 **日常事务（Daily）** — 通用工具会话，处理日常问答、信息整理与轻度任务
 - 🧠 **个性化记忆** — L0 / L1 / L2 分层记忆，结合自研 DMAE Worldbook 沉淀长期互动
 - 🔊 **语音交互** — 集成 TTS、ASR 与语音通话，让昔涟能够听见并回应用户
 - 🧰 **丰富工具生态** — 覆盖联网搜索、文件处理、文档生成、生活服务、音乐与 MCP 扩展
@@ -102,6 +105,8 @@ cyrene run        # 在项目根目录启动桌面端（开发模式）
 ```
 
 > 首次欢迎语仅在第一次执行 `cyrene` 时出现，状态记录在 `~/.cyrene/state.json`；之后默认只输出 `Cyrene Agent <version>` 与 `Ready.`。`cyrene run` 目前为开发模式，需要当前目录存在 `package.json`；正式安装版的 `cyrene desktop` 入口将在 1.x 提供。
+>
+> `npm run build` 已经包含 `npm run build:cli`，因此构建项目后无需再单独执行 `build:cli`。但 `npm link` 仍需单独运行，才能在任意目录使用 `cyrene` 命令。
 
 ### 4. 安装 BGE-M3（推荐）
 
@@ -142,6 +147,8 @@ npm start
 > [!IMPORTANT]
 >
 > 原生截图助手不会以 `.exe` 形式提交到 Git 仓库，因此首次克隆后必须执行一次 `npm run build:screenshot-helper`。
+>
+> **Windows 用户**也可以直接双击项目根目录的 `setup.bat` 完成依赖安装、构建和 `npm link`，之后双击 `start.bat` 即可启动。
 
 开发模式：
 
@@ -190,6 +197,9 @@ npm run package:win:dir
 | 🌸 Live2D 桌面陪伴 | ✅ 可用 | 支持桌宠置顶、多窗口、表情动作、心情状态、气泡互动与智能表情包 |
 | 💬 日常聊天（Chat） | ✅ 可用 | 独立角色聊天流程，不暴露或执行工具，结合近期消息、社交上下文与用户风格生成回复 |
 | 🛠️ 辅助工作（Work） | ✅ 可用 | 完整 Agent 工作流：CITA → Action Gate → Native FC → Execution Policy → Tool Runtime → Soul |
+| 💻 代码协作（Code） | ✅ 可用 | 绑定可信代码目录，Coding Agent 读取、修改、验证代码并执行命令 |
+| 📚 学习陪伴（Learn） | ✅ 可用 | 绑定 Obsidian Vault，陪伴理解材料、整理笔记、生成练习与维护进度 |
+| 📅 日常事务（Daily） | ✅ 可用 | 通用工具会话，处理日常问答、信息整理与轻度任务 |
 | 🧠 个性化记忆 | ✅ 可用 | L0 / L1 / L2 分层记忆、自研 DMAE Worldbook、关系画像与长期互动沉淀 |
 | 🔊 语音交互 | ✅ 可用 | 支持多 TTS 引擎、实时 ASR、语音通话与 VAD 静默检测，部分功能需要额外配置 |
 | 🧰 内置工具 | ✅ 可用 | 支持联网搜索、网页读取、文件操作、文档生成、生活服务、音乐等工具 |
@@ -342,31 +352,39 @@ Embedding 索引已采用后台 Worker、批处理和缓存机制，以降低文
 
 #### 🛠️ 辅助工作（Work）
 
-- **完整 Agent 工作流** - 使用以下可信执行链路处理工具任务：
+- **LangGraph 运行时** — 使用 LangGraph `StateGraph` 编排多轮决策-执行循环，支持 direct 模式与 plan 模式两种执行策略。
+- **完整 Agent 工作流** — 使用以下可信执行链路处理工具任务：
 
-```text
-用户请求
-  ↓
-CITA 上下文理解
-  ↓
-Action Gate 行动决策
-  ↓
-Native Function Calling 参数生成
-  ↓
-Execution Policy 权限与风险检查
-  ↓
-Tool Runtime 工具执行
-  ↓
-RouteAfterTool ──┬── 失败 / 需复规划 → 回到 Action Gate 重试
-                  └── 成功 → 继续
-  ↓
-Soul 根据真实结果回复
-```
+<img src="./docs/image/work-langgraph-flow.png" alt="Work 模式 LangGraph 执行流程" width="900">
 
-- **本地可信校验** - 模型输出必须通过格式、Schema 与业务可信校验，模型本身不是最终信任边界。
-- **失败安全降级** - Action Gate、Native FC 或执行策略任意阶段不可信时，均禁止执行工具，并由 Soul 根据本地失败事实诚实回复。
-- **多模型厂商适配** - 根据厂商能力自动选择 A / B / M / D Structured Output Profile，并统一处理 reasoning、JSON 提取、Repair 与失败路由。
-- **AG-UI 事件流** - 统一传递文本、工具调用、执行状态和最终结果，支持逐字流式输出与工具卡片展示。
+- **代码验证闭环** — mutation 工具修改文件后，routeAfterTool 会生成 `requiredNextAction=run_verification`，强制下一轮执行验证；FinalizationGuard 在 respond 前检查计划状态与代码验证状态，未通过则 block。
+- **本地可信校验** — 模型输出必须通过格式、Schema 与业务可信校验，模型本身不是最终信任边界。
+- **失败安全降级** — Action Gate、Native FC 或执行策略任意阶段不可信时，均禁止执行工具，并由 Soul 根据本地失败事实诚实回复。
+- **多模型厂商适配** — 根据厂商能力自动选择 A / B / M / D Structured Output Profile，并统一处理 reasoning、JSON 提取、Repair 与失败路由。
+- **AG-UI 事件流** — 统一传递文本、工具调用、执行状态和最终结果，支持逐字流式输出与工具卡片展示。
+
+#### 💻 代码协作（Code）
+
+- **Cline 运行时** — 基于 Cline SDK 的 Coding Agent 运行时，支持多轮工具调用、文件修改与命令执行。
+- **可信工作区绑定** — 将会话绑定到指定代码目录，所有文件操作、命令执行和工具调用均限制在该目录内。
+- **Coding Agent 工作流** — 理解工程需求，读取与修改代码、分析日志与架构、运行命令和测试，并给出可验证的结果。
+- **变更审查与验证** — 代码修改需经过变更证据收集、人工确认（可选）与验证运行，降低自动改代码的风险。
+- **AG-UI 事件流** — 与 Work 模式一致的文本、工具卡片和运行状态展示，支持代码运行过程的实时跟踪。
+
+#### 📚 学习陪伴（Learn）
+
+- **Obsidian Vault 工作区** — 绑定一个 Vault 作为学习工作区，约定 `materials/`、`notes/`、`exercises/`、`templates/` 与 `learn/progress.md` 目录结构。
+- **陪伴式理解** — 通过提问、拆解、类比和讨论帮助用户理解材料，而非代替用户完成学习任务。
+- **笔记与练习** — 在 Vault 内共同整理概念、生成练习与记录复盘，并自动维护学习进度总览。
+- **尊重学习节奏** — 用户没懂时换种方式解释，用户已懂时推进到下一步，不因答错而责备。
+
+#### 📅 日常事务（Daily）
+
+- **TwoPhaseFC 运行时** — 使用 legacy TwoPhaseFC Agent 执行链，基于原生函数调用进行多轮工具执行与结果汇总。
+- **通用工具会话** — 默认的通用对话模式，可调用工具处理日常问答、信息整理与轻度任务。
+- **工作区绑定** — 需要绑定一个可信目录作为上下文根，文件操作和工具执行在该目录内进行。
+- **灵活的 Agent 执行链** — 使用与 Work 相同的 Agent 外壳，根据任务需要调用搜索、文件、生活服务等工具。
+- **旧会话兼容** — 未分类的历史会话默认归入 Daily 模式并绑定到迁移工作区，保证升级平滑。
 
 #### 📝 富文本与代码渲染
 
@@ -474,8 +492,8 @@ Cyrene 内置和扩展的工具较多，主要覆盖以下类别：
 |---|---|
 | 运行环境 | Node.js 24 LTS + Electron 43 |
 | 开发语言 | TypeScript 5 |
-| 构建工具 | Vite 5 |
-| 界面渲染 | HTML / CSS + Pixi.js 7 + Chart.js |
+| 构建工具 | Vite 7 |
+| 界面渲染 | HTML / CSS + React 19 + Pixi.js 7 + Ant Design X + Chart.js |
 | Live2D | `pixi-live2d-display` 0.5.0-beta + Cubism Core |
 | Agent 工作流 | LangGraph + Structured Output + Native Function Calling |
 | Agent 事件协议 | `@ag-ui/core`、`@ag-ui/client` |
@@ -483,6 +501,7 @@ Cyrene 内置和扩展的工具较多，主要覆盖以下类别：
 | 记忆与检索 | Embedding（`@xenova/transformers`）+ BM25 + 自研 Cross-Encoder Reranker + 自研索引管线 |
 | 中文检索 | `@node-rs/jieba` |
 | 浏览器与桌面自动化 | Playwright + `@nut-tree-fork/nut-js` |
+| 富文本渲染 | `@ant-design/x-markdown`（Markdown / 代码高亮 / KaTeX 公式） |
 | 语音与媒体 | TTS / ASR + `silk-wasm` |
 | 原生截图助手 | Rust + DXGI Desktop Duplication / Direct2D / GDI + WIC PNG + NDJSON IPC |
 | 自研核心 | CITA、Action Gate、DMAE Worldbook、统一 Structured Output Pipeline |
