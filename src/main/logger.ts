@@ -17,13 +17,10 @@ function resolveDefaultLevel(): LogLevel {
   if (env === "debug" || env === "info" || env === "warn" || env === "error") {
     return env;
   }
-  // dev: noisy so the developer sees what is happening.
-  // release: warn-only so end users do not get spammed.
-  try {
-    return app.isPackaged ? "warn" : "info";
-  } catch {
-    return "info";
-  }
+  // Both dev and release: warn by default. Startup prints the banner plus
+  // whatever warn/error fires during init; set CYRENE_LOG_LEVEL=info to see
+  // the full startup trace.
+  return "warn";
 }
 
 setLogLevel(resolveDefaultLevel());

@@ -200,7 +200,7 @@ export async function startInboundServer(): Promise<InboundServerHandle> {
       break;
     } catch (err) {
       lastErr = err;
-      console.warn(LOG, `端口 ${port === 0 ? "(random)" : port} 占用, 尝试下一个`);
+      logger.warn(LogTag.InboundServer, `port ${port === 0 ? "(random)" : port} in use, trying next`);
       continue;
     }
   }
