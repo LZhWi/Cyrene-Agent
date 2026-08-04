@@ -205,6 +205,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
         itemsPath: "context.candidates",
         fields: { title: "name", artists: "artists", album: "album", position: "position" },
       },
+      effectKind: "read" as const,
+      verificationPolicy: "none" as const,
       soulErrorMessages: {
         E_ACCOUNT_REQUIRED: "需要登录网易云音乐账号",
         E_BACKEND_NOT_READY: "音乐服务未就绪",
@@ -257,6 +259,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
         itemsPath: "context.candidates",
         fields: { title: "name", artists: "artists", album: "album", position: "position" },
       },
+      effectKind: "read" as const,
+      verificationPolicy: "none" as const,
       soulErrorMessages: {
         E_BACKEND_NOT_READY: "音乐服务未就绪",
         E_INVALID_KEYWORD_EMPTY: "搜索关键词为空",
@@ -309,6 +313,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       controlledInput: { candidateRefs: { type: "context_ref_array", kind: "candidate" } },
       needsContext: true,
       soulActionLabel: "展示歌曲列表",
+      effectKind: "read" as const,
+      verificationPolicy: "none" as const,
       soulErrorMessages: {
         E_MUSIC_MIXED_CONTEXT_SET: "候选歌曲不属于同一列表",
         E_SET_NOT_FOUND: "候选列表不存在",
@@ -360,6 +366,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
           web_fallback: { kind: "browser_opened" },
         },
       },
+      effectKind: "external_side_effect" as const,
+      verificationPolicy: "none" as const,
       soulErrorMessages: {
         E_TRACK_NOT_PLAYABLE: "该歌曲不可播放",
         E_TRACK_NOT_IN_SET: "歌曲不在当前候选列表中",
@@ -405,6 +413,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
           web_fallback: { kind: "browser_opened" },
         },
       },
+      effectKind: "external_side_effect" as const,
+      verificationPolicy: "none" as const,
       soulErrorMessages: {
         E_INVALID_ID_FORMAT: "歌单 ID 格式无效",
         E_PLAYBACK_DISPATCH_FAILED: "播放请求发送失败",
