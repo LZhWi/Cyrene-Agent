@@ -31,6 +31,25 @@ export interface MusicTrack {
   coverUrl?: string;
 }
 
+export interface MusicPlaylist {
+  id: string;
+  name: string;
+  coverUrl?: string;
+  trackCount: number;
+  creator?: string;
+}
+
+export interface MusicPlaylistDetail extends MusicPlaylist {
+  description?: string;
+  tracks: MusicTrack[];
+}
+
+export interface MusicSubscription {
+  id: string;
+  name: string;
+  coverUrl?: string;
+}
+
 export interface MusicSelectionSet {
   setId: string;
   provider: string;

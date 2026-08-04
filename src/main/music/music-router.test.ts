@@ -9,6 +9,11 @@ function provider(id: string): MusicProvider {
     searchTracks: vi.fn(),
     playTrack: vi.fn(),
     playPlaylist: vi.fn(),
+    getMyPlaylists: vi.fn(),
+    getPlaylistDetail: vi.fn(),
+    createPlaylist: vi.fn(),
+    addToPlaylist: vi.fn(),
+    getMySubscriptions: vi.fn(),
   };
 }
 

@@ -6,6 +6,11 @@ const DATA_TOOL_ALLOWLIST = new Set([
   "cloud_music_get_daily_recommend",
   "cloud_music_search",
   "cloud_music_play",
+  "cloud_music_my_playlists",
+  "cloud_music_playlist_detail",
+  "cloud_music_create_playlist",
+  "cloud_music_add_to_playlist",
+  "cloud_music_my_subscriptions",
 ]);
 
 const AUTH_TOOL_ALLOWLIST = new Set([
@@ -19,6 +24,11 @@ const DATA_TOOL_CONTRACT = [
   { name: "cloud_music_get_daily_recommend", required: [] as string[] },
   { name: "cloud_music_search", required: ["keyword"] },
   { name: "cloud_music_play", required: ["id"] },
+  { name: "cloud_music_my_playlists", required: [] as string[] },
+  { name: "cloud_music_playlist_detail", required: ["playlist_id"] },
+  { name: "cloud_music_create_playlist", required: ["name"] },
+  { name: "cloud_music_add_to_playlist", required: ["playlist_id", "track_ids"] },
+  { name: "cloud_music_my_subscriptions", required: ["category"] },
 ];
 
 const AUTH_TOOL_CONTRACT = [
@@ -88,7 +98,10 @@ export class MusicMcpClient {
   async callDataTool(name: string, args: Record<string, unknown>): Promise<unknown> {
     if (!DATA_TOOL_ALLOWLIST.has(name)) throw new Error(`E_TOOL_NOT_ALLOWED: ${name}`);
     if (!this.client) throw new Error("E_NOT_CONNECTED");
-    return this.unwrapMcpResult(await this.client.callTool({ name, arguments: args }));
+    console.log(`[MusicMCP/Trace] callDataTool name=${name} args=`, JSON.stringify(args).slice(0, 1000));
+    const result = await this.client.callTool({ name, arguments: args });
+    console.log(`[MusicMCP/Trace] callDataTool name=${name} result=`, JSON.stringify(result).slice(0, 2000));
+    return this.unwrapMcpResult(result);
   }
 
   async callAuthTool(name: string, args: Record<string, unknown>): Promise<unknown> {

@@ -20,6 +20,9 @@ import type {
   MusicProfile,
   MusicShutdownReport,
   CandidatePlaybackRequest,
+  MusicPlaylist,
+  MusicPlaylistDetail,
+  MusicSubscription,
 } from "./types";
 
 	import type { MusicStatusSnapshot } from "../../shared/music-view-state";
@@ -348,6 +351,65 @@ export class MusicService {
       throw new MusicInputError("E_TRACK_NOT_IN_SET");
     }
     this.cache.markPresented(setId, conversationId, trackIds);
+  }
+
+  async getMyPlaylists(options: { provider?: string } = {}): Promise<MusicPlaylist[]> {
+    this.requireReady();
+    this.requireSignedIn();
+    const provider = this.router.resolve(options.provider);
+    return provider.getMyPlaylists();
+  }
+
+  async getPlaylistDetail(playlistId: string, options: { provider?: string } = {}): Promise<MusicPlaylistDetail> {
+    this.requireReady();
+    this.requireSignedIn();
+    if (!/^\d+$/.test(playlistId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
+    const provider = this.router.resolve(options.provider);
+    return provider.getPlaylistDetail(playlistId);
+  }
+
+  async createPlaylist(
+    name: string,
+    options: { provider?: string; privacy?: boolean } = {},
+  ): Promise<MusicPlaylist> {
+    this.requireReady();
+    this.requireSignedIn();
+    const trimmed = (typeof name === "string" ? name : "").trim();
+    if (trimmed.length === 0) throw new MusicInputError("E_INVALID_PLAYLIST_NAME_EMPTY");
+    if (trimmed.length > 100) throw new MusicInputError("E_INVALID_PLAYLIST_NAME_TOO_LONG");
+    const provider = this.router.resolve(options.provider);
+    return provider.createPlaylist(trimmed, options.privacy);
+  }
+
+  async addToPlaylist(
+    playlistId: string,
+    trackIds: string[],
+    options: { provider?: string } = {},
+  ): Promise<{ added: number; playlistId: string }> {
+    this.requireReady();
+    this.requireSignedIn();
+    if (!/^\d+$/.test(playlistId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
+    if (!Array.isArray(trackIds) || trackIds.length === 0) {
+      throw new MusicInputError("E_TRACK_IDS_EMPTY");
+    }
+    if (trackIds.some((id) => !/^\d+$/.test(id))) {
+      throw new MusicInputError("E_INVALID_ID_FORMAT");
+    }
+    const provider = this.router.resolve(options.provider);
+    return provider.addToPlaylist(playlistId, trackIds);
+  }
+
+  async getMySubscriptions(
+    category: "artists" | "albums",
+    options: { provider?: string } = {},
+  ): Promise<MusicSubscription[]> {
+    this.requireReady();
+    this.requireSignedIn();
+    if (category !== "artists" && category !== "albums") {
+      throw new MusicInputError("E_INVALID_SUBSCRIPTION_CATEGORY");
+    }
+    const provider = this.router.resolve(options.provider);
+    return provider.getMySubscriptions(category);
   }
 
   // ── Playback ───────────────────────────────────────────────

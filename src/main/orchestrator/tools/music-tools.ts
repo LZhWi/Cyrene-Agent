@@ -428,5 +428,189 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
         return JSON.stringify({ kind: "playback", dispatch });
       },
     },
+    {
+      id: "music_my_playlists",
+      capability: "music.my_playlists",
+      name: "获取我的网易云歌单",
+      description: "获取当前登录用户的网易云音乐歌单列表，包括创建的和收藏的歌单。",
+      enabled: true,
+      risk: "safe",
+      inputSchema: { type: "object", properties: {}, required: [] },
+      needsContext: false,
+      soulActionLabel: "获取我的歌单",
+      soulProjection: {
+        projector: "entity_list",
+        source: "trusted_internal",
+        itemsPath: "playlists",
+        fields: { title: "name", trackCount: "trackCount", creator: "creator" },
+      },
+      effectKind: "read" as const,
+      verificationPolicy: "none" as const,
+      soulErrorMessages: {
+        E_ACCOUNT_REQUIRED: "需要登录网易云音乐账号",
+        E_BACKEND_NOT_READY: "音乐服务未就绪",
+      },
+      completionEvidence: [{ kind: "tool_succeeded" }],
+      execute: async () => {
+        const playlists = await service.getMyPlaylists();
+        return JSON.stringify({ kind: "my_playlists", playlists });
+      },
+    },
+    {
+      id: "music_playlist_detail",
+      capability: "music.playlist_detail",
+      name: "获取网易云歌单详情",
+      description: "获取指定网易云音乐歌单的详细信息，包括歌单名称和其中的歌曲列表。",
+      enabled: true,
+      risk: "safe",
+      inputSchema: {
+        type: "object",
+        properties: {
+          playlistId: { type: "string", description: "网易云音乐歌单 ID" },
+        },
+        required: ["playlistId"],
+      },
+      controlledInput: { playlistId: "tool_result" },
+      needsContext: false,
+      soulActionLabel: "查看歌单详情",
+      soulProjection: {
+        projector: "entity_list",
+        source: "trusted_internal",
+        itemsPath: "detail.tracks",
+        fields: { title: "name", artists: "artists", album: "album" },
+      },
+      effectKind: "read" as const,
+      verificationPolicy: "none" as const,
+      soulErrorMessages: {
+        E_ACCOUNT_REQUIRED: "需要登录网易云音乐账号",
+        E_BACKEND_NOT_READY: "音乐服务未就绪",
+        E_INVALID_ID_FORMAT: "歌单 ID 格式无效",
+      },
+      completionEvidence: [{ kind: "tool_succeeded" }],
+      execute: async (args) => {
+        const detail = await service.getPlaylistDetail(String(args.playlistId));
+        return JSON.stringify({ kind: "playlist_detail", detail });
+      },
+    },
+    {
+      id: "music_create_playlist",
+      capability: "music.create_playlist",
+      name: "创建网易云歌单",
+      description: "为当前登录用户创建一个新的网易云音乐歌单。",
+      enabled: true,
+      risk: "input-control",
+      inputSchema: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "新歌单名称 (1-100 字)" },
+          privacy: { type: "boolean", description: "是否为隐私歌单，默认否" },
+        },
+        required: ["name"],
+      },
+      needsContext: false,
+      soulActionLabel: "创建歌单",
+      soulProjection: {
+        projector: "entity_detail",
+        source: "trusted_internal",
+        entityPath: "playlist",
+        fields: { title: "name", trackCount: "trackCount" },
+      },
+      effectKind: "mutation" as const,
+      verificationPolicy: "none" as const,
+      soulErrorMessages: {
+        E_ACCOUNT_REQUIRED: "需要登录网易云音乐账号",
+        E_BACKEND_NOT_READY: "音乐服务未就绪",
+        E_INVALID_PLAYLIST_NAME_EMPTY: "歌单名称不能为空",
+        E_INVALID_PLAYLIST_NAME_TOO_LONG: "歌单名称过长",
+      },
+      completionEvidence: [{ kind: "tool_succeeded" }],
+      execute: async (args) => {
+        const playlist = await service.createPlaylist(String(args.name), { privacy: Boolean(args.privacy) });
+        return JSON.stringify({ kind: "create_playlist", playlist });
+      },
+    },
+    {
+      id: "music_add_to_playlist",
+      capability: "music.add_to_playlist",
+      name: "添加歌曲到网易云歌单",
+      description: "将一首或多首歌曲添加到指定的网易云音乐歌单。歌曲 ID 必须是纯数字。",
+      enabled: true,
+      risk: "input-control",
+      inputSchema: {
+        type: "object",
+        properties: {
+          playlistId: { type: "string", description: "目标歌单 ID" },
+          trackIds: { type: "array", items: { type: "string" }, description: "要添加的歌曲 ID 列表" },
+        },
+        required: ["playlistId", "trackIds"],
+      },
+      controlledInput: { playlistId: "tool_result" },
+      needsContext: false,
+      soulActionLabel: "添加歌曲到歌单",
+      soulProjection: {
+        projector: "action_completed",
+        source: "trusted_internal",
+        claim: { kind: "action_completed", action: "已将歌曲添加到网易云歌单" },
+        confirmation: { kind: "tool_status" },
+      },
+      effectKind: "mutation" as const,
+      verificationPolicy: "none" as const,
+      soulErrorMessages: {
+        E_ACCOUNT_REQUIRED: "需要登录网易云音乐账号",
+        E_BACKEND_NOT_READY: "音乐服务未就绪",
+        E_INVALID_ID_FORMAT: "歌单或歌曲 ID 格式无效",
+        E_TRACK_IDS_EMPTY: "未提供要添加的歌曲",
+      },
+      completionEvidence: [{ kind: "tool_succeeded" }],
+      execute: async (args) => {
+        const playlistId = String(args.playlistId ?? "");
+        const trackIds = Array.isArray(args.trackIds) ? args.trackIds.map(String) : [];
+        const result = await service.addToPlaylist(playlistId, trackIds);
+        return JSON.stringify({ kind: "add_to_playlist", ...result });
+      },
+    },
+    {
+      id: "music_my_subscriptions",
+      capability: "music.my_subscriptions",
+      name: "获取我的网易云收藏",
+      description: "获取当前登录用户收藏的歌手或专辑列表。category 为 'artists' 或 'albums'。",
+      enabled: true,
+      risk: "safe",
+      inputSchema: {
+        type: "object",
+        properties: {
+          category: {
+            type: "string",
+            enum: ["artists", "albums"],
+            description: "收藏类型：artists 表示歌手，albums 表示专辑",
+          },
+        },
+        required: ["category"],
+      },
+      needsContext: false,
+      soulActionLabel: "获取我的收藏",
+      soulProjection: {
+        projector: "entity_list",
+        source: "trusted_internal",
+        itemsPath: "subscriptions",
+        fields: { title: "name" },
+      },
+      effectKind: "read" as const,
+      verificationPolicy: "none" as const,
+      soulErrorMessages: {
+        E_ACCOUNT_REQUIRED: "需要登录网易云音乐账号",
+        E_BACKEND_NOT_READY: "音乐服务未就绪",
+        E_INVALID_SUBSCRIPTION_CATEGORY: "收藏类型必须是 artists 或 albums",
+      },
+      completionEvidence: [{ kind: "tool_succeeded" }],
+      execute: async (args) => {
+        const category = String(args.category ?? "");
+        if (category !== "artists" && category !== "albums") {
+          throw new Error("E_INVALID_SUBSCRIPTION_CATEGORY");
+        }
+        const subscriptions = await service.getMySubscriptions(category as "artists" | "albums");
+        return JSON.stringify({ kind: "my_subscriptions", category, subscriptions });
+      },
+    },
   ];
 }

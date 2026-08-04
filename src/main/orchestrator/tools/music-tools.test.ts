@@ -12,6 +12,11 @@ function serviceDouble() {
     getSelectionSet: vi.fn(),
     playTrack: vi.fn(),
     playPlaylist: vi.fn(),
+    getMyPlaylists: vi.fn(),
+    getPlaylistDetail: vi.fn(),
+    createPlaylist: vi.fn(),
+    addToPlaylist: vi.fn(),
+    getMySubscriptions: vi.fn(),
   };
 }
 
@@ -45,6 +50,11 @@ describe("music Agent tools", () => {
       music_present_tracks: "music.present_tracks",
       music_play_track: "music.play_track",
       music_play_playlist: "music.play_playlist",
+      music_my_playlists: "music.my_playlists",
+      music_playlist_detail: "music.playlist_detail",
+      music_create_playlist: "music.create_playlist",
+      music_add_to_playlist: "music.add_to_playlist",
+      music_my_subscriptions: "music.my_subscriptions",
     });
   });
 
@@ -310,5 +320,88 @@ describe("music Agent tools", () => {
     await tool.execute({ playlistId: "456" });
 
     expect(service.playPlaylist).toHaveBeenCalledWith("456");
+  });
+
+  it("music_my_playlists returns playlists from service", async () => {
+    const service = serviceDouble();
+    service.getMyPlaylists.mockResolvedValue([
+      { id: "123", name: "我的歌单", trackCount: 10, creator: "user" },
+    ]);
+    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_my_playlists")!;
+
+    const output = JSON.parse(await tool.execute({}, { userQuery: "test", conversationId: "c1" }));
+
+    expect(tool.effectKind).toBe("read");
+    expect(service.getMyPlaylists).toHaveBeenCalled();
+    expect(output).toEqual({
+      kind: "my_playlists",
+      playlists: [{ id: "123", name: "我的歌单", trackCount: 10, creator: "user" }],
+    });
+  });
+
+  it("music_playlist_detail returns detail for a playlist id", async () => {
+    const service = serviceDouble();
+    service.getPlaylistDetail.mockResolvedValue({
+      id: "123",
+      name: "我的歌单",
+      trackCount: 2,
+      tracks: [
+        { id: "1", name: "晴天", artists: ["周杰伦"] },
+        { id: "2", name: "夜曲", artists: ["周杰伦"] },
+      ],
+    });
+    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_playlist_detail")!;
+
+    const output = JSON.parse(await tool.execute({ playlistId: "123" }, { userQuery: "test", conversationId: "c1" }));
+
+    expect(service.getPlaylistDetail).toHaveBeenCalledWith("123");
+    expect(output.kind).toBe("playlist_detail");
+    expect(output.detail.name).toBe("我的歌单");
+  });
+
+  it("music_create_playlist creates a playlist with name and privacy", async () => {
+    const service = serviceDouble();
+    service.createPlaylist.mockResolvedValue({ id: "789", name: "新歌单", trackCount: 0 });
+    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_create_playlist")!;
+
+    expect(tool.effectKind).toBe("mutation");
+
+    const output = JSON.parse(await tool.execute({ name: "新歌单", privacy: true }, { userQuery: "test", conversationId: "c1" }));
+
+    expect(service.createPlaylist).toHaveBeenCalledWith("新歌单", { privacy: true });
+    expect(output).toEqual({ kind: "create_playlist", playlist: { id: "789", name: "新歌单", trackCount: 0 } });
+  });
+
+  it("music_add_to_playlist adds tracks to a playlist", async () => {
+    const service = serviceDouble();
+    service.addToPlaylist.mockResolvedValue({ added: 2, playlistId: "123" });
+    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_add_to_playlist")!;
+
+    expect(tool.effectKind).toBe("mutation");
+
+    const output = JSON.parse(await tool.execute({ playlistId: "123", trackIds: ["1", "2"] }, { userQuery: "test", conversationId: "c1" }));
+
+    expect(service.addToPlaylist).toHaveBeenCalledWith("123", ["1", "2"]);
+    expect(output).toEqual({ kind: "add_to_playlist", added: 2, playlistId: "123" });
+  });
+
+  it("music_my_subscriptions returns subscriptions by category", async () => {
+    const service = serviceDouble();
+    service.getMySubscriptions.mockResolvedValue([{ id: "1", name: "周杰伦" }]);
+    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_my_subscriptions")!;
+
+    const output = JSON.parse(await tool.execute({ category: "artists" }, { userQuery: "test", conversationId: "c1" }));
+
+    expect(service.getMySubscriptions).toHaveBeenCalledWith("artists");
+    expect(output).toEqual({ kind: "my_subscriptions", category: "artists", subscriptions: [{ id: "1", name: "周杰伦" }] });
+  });
+
+  it("music_my_subscriptions rejects invalid category", async () => {
+    const service = serviceDouble();
+    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_my_subscriptions")!;
+
+    await expect(tool.execute({ category: "songs" }, { userQuery: "test", conversationId: "c1" }))
+      .rejects.toThrow("E_INVALID_SUBSCRIPTION_CATEGORY");
+    expect(service.getMySubscriptions).not.toHaveBeenCalled();
   });
 });
