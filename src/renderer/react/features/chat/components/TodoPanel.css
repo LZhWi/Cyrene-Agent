@@ -11,21 +11,17 @@
   transition: opacity 0.25s ease, transform 0.25s ease, width 0.25s ease, height 0.25s ease;
 }
 
-.cy-todo--collapsed {
-  width: 64px;
-  height: 64px;
-  border-radius: 50%;
-  opacity: 0.95;
+.cy-todo:not(.cy-todo--collapsed) {
+  aspect-ratio: 3 / 4;
 }
 
 .cy-todo--collapsed .cy-todo__body {
+  max-height: 0;
   opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
   pointer-events: none;
-  transform: scale(0.92);
-}
-
-.cy-todo--collapsed .cy-todo__dragbar {
-  display: none;
+  overflow: hidden;
 }
 
 .cy-todo__dragbar {
@@ -75,7 +71,7 @@
 }
 
 .cy-todo--collapsed .cy-todo__toggle {
-  display: none;
+  transform: translateY(-50%) rotate(180deg);
 }
 
 .cy-todo__body {
