@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
+import { DownOutlined } from "@ant-design/icons";
 import { ChatComposer, type ComposerAttachment } from "../components/ChatComposer";
 import { ComposerSlot } from "../components/ComposerSlot";
 import { TodoPanel } from "../components/TodoPanel";
@@ -401,6 +402,9 @@ export function ChatPage() {
   >(async () => {});
   // IPC 切换串行链：保证 Ready 后连续切换按顺序完成
   const reactSessionSwitchChainRef = useRef<Promise<void>>(Promise.resolve());
+  // 滚动到底部按钮状态
+  const [scrollToBottomVisible, setScrollToBottomVisible] = useState(false);
+  const scrollToBottomRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const api = aguiApi();
@@ -1892,6 +1896,10 @@ export function ChatPage() {
                 converterVersion,
               )
               : undefined}
+            onScrollToBottomVisibilityChange={setScrollToBottomVisible}
+            onRegisterScrollToBottom={(scroll) => {
+              scrollToBottomRef.current = scroll;
+            }}
           />
         )}
         {isCompressingContext && (
@@ -1901,6 +1909,17 @@ export function ChatPage() {
           </div>
         )}
         <div className="cy-workspace-composer">
+          {scrollToBottomVisible && (
+            <button
+              type="button"
+              className="cy-workspace-composer__scroll-to-bottom"
+              onClick={() => scrollToBottomRef.current()}
+              aria-label="滚动到底部"
+              title="滚动到底部"
+            >
+              <DownOutlined />
+            </button>
+          )}
           <ComposerSlot
             composer={<ChatComposer
             value={draft}

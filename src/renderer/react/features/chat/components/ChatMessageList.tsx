@@ -1,7 +1,6 @@
 import { Bubble, CodeHighlighter, Think, ThoughtChain, type BubbleItemType } from "@ant-design/x";
 import { XMarkdown, type ComponentProps } from "@ant-design/x-markdown";
 import Latex from "@ant-design/x-markdown/plugins/Latex";
-import { DownOutlined } from "@ant-design/icons";
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
 import type { ConversationMode, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
@@ -77,6 +76,8 @@ interface ChatMessageListProps {
   revisionBusy?: boolean;
   onEditLastUserMessage?: (messageId: string, content: string) => Promise<boolean>;
   onRegenerateLastResponse?: (userMessageId: string, assistantMessageId: string) => Promise<boolean>;
+  onScrollToBottomVisibilityChange?: (visible: boolean) => void;
+  onRegisterScrollToBottom?: (scroll: () => void) => void;
 }
 
 const markdownConfig = { extensions: Latex() };
@@ -765,6 +766,8 @@ export function ChatMessageList({
   revisionBusy = false,
   onEditLastUserMessage,
   onRegenerateLastResponse,
+  onScrollToBottomVisibilityChange,
+  onRegisterScrollToBottom,
 }: ChatMessageListProps) {
   const userAvatarUrl = useUserAvatar();
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
@@ -798,7 +801,6 @@ export function ChatMessageList({
   }, [lastTurn, onRegenerateLastResponse, revisionBusy]);
 
   const containerRef = useRef<HTMLDivElement>(null);
-  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
   const isNearBottomRef = useRef(true);
 
   const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
@@ -807,14 +809,19 @@ export function ChatMessageList({
     el.scrollTo({ top: el.scrollHeight, behavior });
   }, []);
 
+  // 向父组件注册滚动到底部的回调
+  useEffect(() => {
+    onRegisterScrollToBottom?.(scrollToBottom);
+  }, [onRegisterScrollToBottom, scrollToBottom]);
+
   const updateScrollState = useCallback(() => {
     const el = containerRef.current;
     if (!el) return;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     const nearBottom = distance < 100;
     isNearBottomRef.current = nearBottom;
-    setShowScrollToBottom(!nearBottom);
-  }, []);
+    onScrollToBottomVisibilityChange?.(!nearBottom);
+  }, [onScrollToBottomVisibilityChange]);
 
   // 打开/切换会话时滚动到底部
   useEffect(() => {
@@ -822,9 +829,9 @@ export function ChatMessageList({
     // 内容渲染后再次兜底滚动
     const timer = window.setTimeout(() => scrollToBottom("auto"), 100);
     isNearBottomRef.current = true;
-    setShowScrollToBottom(false);
+    onScrollToBottomVisibilityChange?.(false);
     return () => window.clearTimeout(timer);
-  }, [conversationId, scrollToBottom]);
+  }, [conversationId, onScrollToBottomVisibilityChange, scrollToBottom]);
 
   const roles = useMemo(
     () => createRoles(
@@ -879,17 +886,6 @@ export function ChatMessageList({
       onScroll={updateScrollState}
     >
       <Bubble.List items={items} role={roles} autoScroll />
-      {showScrollToBottom && (
-        <button
-          type="button"
-          className="cy-message-list__scroll-to-bottom"
-          onClick={() => scrollToBottom("smooth")}
-          aria-label="滚动到底部"
-          title="滚动到底部"
-        >
-          <DownOutlined />
-        </button>
-      )}
     </div>
   );
 }

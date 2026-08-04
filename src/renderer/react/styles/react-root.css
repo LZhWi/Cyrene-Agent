@@ -193,12 +193,48 @@ html, body {
 }
 
 .cy-workspace-composer {
+  position: relative;
   display: flex;
   width: 100%;
   box-sizing: border-box;
   justify-content: center;
   padding: 22px 28px;
   transition: padding 240ms ease;
+}
+
+.cy-workspace-composer__scroll-to-bottom {
+  position: absolute;
+  top: -50px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--cy-surface, rgba(255, 255, 255, 0.92));
+  color: var(--cy-text-primary, #4c3762);
+  box-shadow: 0 4px 14px rgba(76, 55, 98, 0.18);
+  cursor: pointer;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+  backdrop-filter: blur(6px);
+}
+
+.cy-workspace-composer__scroll-to-bottom:hover {
+  transform: translate(-50%, -2px);
+  opacity: 0.92;
+}
+
+.cy-workspace-composer__scroll-to-bottom:active {
+  transform: translate(-50%, 0);
+}
+
+.cy-workspace-composer__scroll-to-bottom .anticon {
+  font-size: 16px;
 }
 
 .cy-workspace.is-empty .cy-workspace-composer {
