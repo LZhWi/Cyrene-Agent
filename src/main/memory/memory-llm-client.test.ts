@@ -23,6 +23,7 @@ vi.mock("../runtime-policy", () => ({
     const map: Record<string, number> = {
       "memory-judge": 800,
       "memory-compressor": 500,
+      "memory-reflect": 500,
       "memory-resolver": 700,
     };
     return map[stage] ?? 500;
@@ -61,7 +62,12 @@ import {
   invokeMemoryLlm,
   invokeMemoryStructuredOutput,
 } from "./memory-llm-client";
-import { parseMemoryJudgeResult, validateMemoryJudgeBusiness } from "./memory-schemas";
+import {
+  parseMemoryJudgeResult,
+  validateMemoryJudgeBusiness,
+  parseMemoryReflectionResult,
+  validateMemoryReflectionBusiness,
+} from "./memory-schemas";
 
 // ── Tests ──
 
@@ -72,7 +78,7 @@ beforeEach(() => {
 });
 
 describe("invokeMemoryStructuredOutput — repair context", () => {
-  it("adds validation feedback to a repair request", async () => {
+  it("adds validation feedback to a judge repair request", async () => {
     const responses = [
       { text: "not json", finishReason: "stop" },
       { text: '{"candidates":[]}', finishReason: "stop" },
@@ -95,12 +101,37 @@ describe("invokeMemoryStructuredOutput — repair context", () => {
     expect(repairMessages.at(-1)?.content).toContain("NO_JSON_OBJECT");
     expect(repairMessages.at(-1)?.content).toContain('{"candidates":[]}');
   });
+
+  it("reflect repair instructs updates format, not groups", async () => {
+    const responses = [
+      { text: "bad", finishReason: "stop" },
+      { text: '{"updates":[]}', finishReason: "stop" },
+    ];
+    vi.stubGlobal("fetch", vi.fn(async () => ({
+      ok: true,
+      json: async () => responses.shift(),
+    })));
+
+    await expect(invokeMemoryStructuredOutput({
+      operation: "reflect",
+      systemPrompt: "system",
+      userPrompt: "conversation",
+      maxOutputTokens: 500,
+      parseSchema: parseMemoryReflectionResult,
+      validateBusiness: validateMemoryReflectionBusiness,
+    })).resolves.toEqual([]);
+
+    const repairMessages = mockConfig.requests[1]?.messages as Array<{ role: string; content: string }>;
+    expect(repairMessages.at(-1)?.content).toContain('{"updates":[...]}');
+    expect(repairMessages.at(-1)?.content).not.toContain('{"groups":[...]}');
+  });
 });
 
 describe("getDefaultMaxOutputTokens", () => {
   it("returns correct defaults for each operation", () => {
     expect(getDefaultMaxOutputTokens("judge")).toBe(800);
     expect(getDefaultMaxOutputTokens("compress")).toBe(500);
+    expect(getDefaultMaxOutputTokens("reflect")).toBe(500);
     expect(getDefaultMaxOutputTokens("resolve")).toBe(700);
   });
 });

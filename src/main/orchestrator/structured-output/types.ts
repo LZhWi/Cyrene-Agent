@@ -9,6 +9,7 @@ export type StructuredOutputStage =
   | "memory"
   | "memory_judge"
   | "memory_compress"
+  | "memory_reflect"
   | "memory_resolve";
 
 export type StructuredOutputMode =

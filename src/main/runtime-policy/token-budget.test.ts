@@ -8,6 +8,7 @@ describe("resolveMaxOutputTokens", () => {
     expect(resolveMaxOutputTokens({ stage: "ask-soul" })).toBe(1600);
     expect(resolveMaxOutputTokens({ stage: "memory-judge" })).toBe(800);
     expect(resolveMaxOutputTokens({ stage: "memory-compressor" })).toBe(500);
+    expect(resolveMaxOutputTokens({ stage: "memory-reflect" })).toBe(500);
     expect(resolveMaxOutputTokens({ stage: "memory-resolver" })).toBe(700);
   });
 
@@ -33,7 +34,7 @@ describe("resolveMaxOutputTokens", () => {
 
 describe("getStageTokenPolicy", () => {
   it("returns policy with defaultMaxOutputTokens for all stages", () => {
-    const stages = ["task-plan", "action-gate", "ask-soul", "memory-judge", "memory-compressor", "memory-resolver"] as const;
+    const stages = ["task-plan", "action-gate", "ask-soul", "memory-judge", "memory-compressor", "memory-reflect", "memory-resolver"] as const;
     for (const stage of stages) {
       const policy = getStageTokenPolicy(stage);
       expect(policy.defaultMaxOutputTokens).toBeGreaterThan(0);

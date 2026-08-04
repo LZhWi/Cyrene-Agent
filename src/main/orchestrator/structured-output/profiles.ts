@@ -133,6 +133,7 @@ const REPAIR: StructuredOutputProfile["repair"] = {
   memory: DEFAULT_GATE_REPAIR,
   memory_judge: MEMORY_REPAIR,
   memory_compress: MEMORY_REPAIR,
+  memory_reflect: MEMORY_REPAIR,
   memory_resolve: MEMORY_REPAIR,
 };
 
@@ -157,6 +158,7 @@ const A_REPAIR: StructuredOutputProfile["repair"] = {
   memory: A_GATE_REPAIR,
   memory_judge: MEMORY_REPAIR,
   memory_compress: MEMORY_REPAIR,
+  memory_reflect: MEMORY_REPAIR,
   memory_resolve: MEMORY_REPAIR,
 };
 
@@ -174,6 +176,7 @@ const KIMI_SLOW_REPAIR: StructuredOutputProfile["repair"] = {
   memory: A_GATE_REPAIR,
   memory_judge: MEMORY_REPAIR,
   memory_compress: MEMORY_REPAIR,
+  memory_reflect: MEMORY_REPAIR,
   memory_resolve: MEMORY_REPAIR,
 };
 
@@ -198,6 +201,7 @@ const B_REPAIR: StructuredOutputProfile["repair"] = {
   memory: B_GATE_REPAIR,
   memory_judge: MEMORY_REPAIR,
   memory_compress: MEMORY_REPAIR,
+  memory_reflect: MEMORY_REPAIR,
   memory_resolve: MEMORY_REPAIR,
 };
 
@@ -222,6 +226,7 @@ const MINIMAX_REPAIR: StructuredOutputProfile["repair"] = {
   memory: MINIMAX_GATE_REPAIR,
   memory_judge: MEMORY_REPAIR,
   memory_compress: MEMORY_REPAIR,
+  memory_reflect: MEMORY_REPAIR,
   memory_resolve: MEMORY_REPAIR,
 };
 

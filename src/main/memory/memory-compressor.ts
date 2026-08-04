@@ -176,9 +176,16 @@ async function runReflection(): Promise<void> {
       .map(([field, desc]) => `  ${field}：${desc}`)
       .join("\n");
 
-    const systemPrompt = "你是一个谨慎的用户画像反思助手。只输出 JSON 数组。";
+    const systemPrompt = [
+      "你是一个谨慎的用户画像反思助手。",
+      "你只能输出 JSON，不要 Markdown 代码块、不要解释、不要注释。",
+      "输出必须是顶层 JSON 对象，唯一的顶层字段为 updates。",
+      "updates 是 JSON 数组，每个元素格式：",
+      '{ "layer": "L0" 或 "L1", "field": "字段名（可选）", "content": "新的用户画像内容", "confidence": 0.0 到 1.0 }',
+      "没有更新时输出 {\"updates\":[]}。",
+    ].join("\n");
+
     const userPrompt = [
-      "你是一个用户画像反思助手。",
       "回顾与用户的长期互动，判断是否需要更新用户画像或近期状态。",
       "",
       currentProfile,
@@ -188,18 +195,23 @@ async function runReflection(): Promise<void> {
       `   可用字段：\n${fieldDescriptions}`,
       "2. 是否有信息可以更新 L1 字段（近期目标/偏好/项目）？",
       "",
-      "如果没有需要更新的信息，返回空数组 []。",
-      "如果需要更新，以 JSON 数组格式返回，每个元素包含：",
-      '{ "layer": "L0"|"L1", "field": "字段名", "content": "新值", "confidence": 0.0~1.0 }',
+      "输出格式：",
+      "{",
+      '  "updates": [',
+      '    { "layer": "L1", "field": "recentGoals", "content": "想系统性学习 Transformer", "confidence": 0.85 }',
+      "  ]",
+      "}",
       "",
+      "L1 字段可以选择 recentGoals / recentPreferences / currentProject。",
+      "如果没有需要更新的信息，输出 {\"updates\":[]}。",
       "只输出 JSON，不要额外解释。",
     ].join("\n");
 
     const items = await invokeMemoryStructuredOutput<MemoryReflectionItem[]>({
-      operation: "compress",
+      operation: "reflect",
       systemPrompt,
       userPrompt,
-      maxOutputTokens: 500,
+      maxOutputTokens: getDefaultMaxOutputTokens("reflect"),
       parseSchema: parseMemoryReflectionResult,
       validateBusiness: validateMemoryReflectionBusiness,
     });

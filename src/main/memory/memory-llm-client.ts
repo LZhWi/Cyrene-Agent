@@ -31,10 +31,15 @@ import {
   MemoryLlmProtocolError,
   MemoryLlmConfigurationError,
 } from "./memory-llm-errors";
+import {
+  MEMORY_JUDGE_JSON_SCHEMA,
+  MEMORY_REFLECTION_JSON_SCHEMA,
+  MEMORY_RESOLVE_JSON_SCHEMA,
+} from "./memory-schemas";
 
 // ── 类型 ──
 
-export type MemoryLlmOperation = "judge" | "compress" | "resolve";
+export type MemoryLlmOperation = "judge" | "compress" | "reflect" | "resolve";
 
 export interface MemoryLlmRequest {
   operation: MemoryLlmOperation;
@@ -66,18 +71,21 @@ export interface InvokeMemoryStructuredOutputOptions<T> {
 const OPERATION_TO_TOKEN_STAGE: Record<MemoryLlmOperation, RuntimeStage> = {
   judge: "memory-judge",
   compress: "memory-compressor",
+  reflect: "memory-reflect",
   resolve: "memory-resolver",
 };
 
 const OPERATION_TO_SO_STAGE: Record<MemoryLlmOperation, StructuredOutputStage> = {
   judge: "memory_judge",
   compress: "memory_compress",
+  reflect: "memory_reflect",
   resolve: "memory_resolve",
 };
 
 const OPERATION_REPAIR_FORMAT: Record<MemoryLlmOperation, string> = {
   judge: '顶层必须是 JSON 对象，格式为 {"candidates":[...]}；没有候选时返回 {"candidates":[]}。',
   compress: '顶层必须是 JSON 对象，格式为 {"groups":[...]}。',
+  reflect: '顶层必须是 JSON 对象，格式为 {"updates":[...]}；没有更新时返回 {"updates":[]}。',
   resolve: "顶层必须是一个符合原始字段要求的 JSON 对象。",
 };
 
@@ -250,13 +258,23 @@ export async function invokeMemoryStructuredOutput<T>(options: InvokeMemoryStruc
   return result.value;
 }
 
+const OPERATION_JSON_SCHEMA: Record<
+  Exclude<MemoryLlmOperation, "compress">,
+  Record<string, unknown>
+> = {
+  judge: MEMORY_JUDGE_JSON_SCHEMA,
+  reflect: MEMORY_REFLECTION_JSON_SCHEMA,
+  resolve: MEMORY_RESOLVE_JSON_SCHEMA,
+};
+
 function buildStructuredOutputRequest(
   profile: StructuredOutputProfile,
   operation: MemoryLlmOperation,
 ): ChatRequest["structuredOutput"] {
   const name = `memory_${operation}`;
   if (profile.mode === "provider_json_schema") {
-    return { mode: "json_schema", name, schema: {}, strict: true };
+    const schema = operation === "compress" ? {} : OPERATION_JSON_SCHEMA[operation];
+    return { mode: "json_schema", name, schema, strict: true };
   }
   if (profile.mode === "provider_json_object") {
     return { mode: "json_object", name };

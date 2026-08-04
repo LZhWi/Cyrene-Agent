@@ -45,13 +45,104 @@ function stringArray(value: unknown, label: string): string[] {
   });
 }
 
-// ── Judge Schema ──
+// ── 公共常量 ──
 
 const VALID_LAYERS = new Set(["L0", "L1", "L2"]);
 const VALID_IMPORTANCE = new Set(["low", "medium", "high"]);
 const VALID_STABILITY = new Set(["one_off", "situational", "stable"]);
 const VALID_CERTAINTY = new Set(["explicit", "inferred", "uncertain"]);
 const VALID_ATTRIBUTION = new Set(["user_explicit", "assistant_inferred", "mixed"]);
+const VALID_RESOLUTION_TYPES = new Set([
+  "unrelated", "context_difference", "preference_evolution", "direct_conflict", "uncertain",
+]);
+const VALID_MEMORY_STATUS = new Set(["active", "aging", "archived", "superseded", "merged"]);
+
+// ── 用于 provider_json_schema 的 JSON Schema ──
+// A 档模型（GPT/Claude/Kimi/Doubao）会收到这些 schema，严格约束输出结构。
+
+export const MEMORY_JUDGE_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    candidates: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          layer: { type: "string", enum: ["L0", "L1", "L2"] },
+          field: { type: "string" },
+          summary: { type: "string" },
+          content: { type: "string" },
+          confidence: { type: "number" },
+          triggerText: { type: "string" },
+          importance: { type: "string", enum: ["low", "medium", "high"] },
+          stability: { type: "string", enum: ["one_off", "situational", "stable"] },
+          certainty: { type: "string", enum: ["explicit", "inferred", "uncertain"] },
+          attribution: { type: "string", enum: ["user_explicit", "assistant_inferred", "mixed"] },
+          evidenceQuotes: { type: "array", items: { type: "string" } },
+          contextSummary: { type: "string" },
+          shouldWrite: { type: "boolean" },
+          reason: { type: "string" },
+          forbiddenOverclaims: { type: "array", items: { type: "string" } },
+        },
+        required: ["layer", "content", "confidence", "triggerText"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["candidates"],
+  additionalProperties: false,
+};
+
+export const MEMORY_REFLECTION_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    updates: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          layer: { type: "string", enum: ["L0", "L1"] },
+          field: { type: "string" },
+          content: { type: "string" },
+          confidence: { type: "number" },
+        },
+        required: ["layer", "content", "confidence"],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ["updates"],
+  additionalProperties: false,
+};
+
+export const MEMORY_RESOLVE_JSON_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    resolutionType: { type: "string", enum: [...VALID_RESOLUTION_TYPES] },
+    resolvedSummary: { type: "string" },
+    currentSummary: { type: "string" },
+    historicalSummary: { type: "string" },
+    reason: { type: "string" },
+    confidence: { type: "number" },
+    actions: {
+      type: "object",
+      properties: {
+        createResolvedMemory: { type: "boolean" },
+        oldMemoryStatus: { type: "string", enum: [...VALID_MEMORY_STATUS] },
+        newMemoryStatus: { type: "string", enum: [...VALID_MEMORY_STATUS] },
+        shouldUpdateCoreMemory: { type: "boolean" },
+        shouldAskUser: { type: "boolean" },
+        clarificationNeeded: { type: "boolean" },
+      },
+      required: ["createResolvedMemory"],
+      additionalProperties: false,
+    },
+  },
+  required: ["resolutionType", "reason", "confidence", "actions"],
+  additionalProperties: false,
+};
+
+// ── Judge Schema ──
 
 function parseMemoryCandidate(value: unknown): MemoryCandidate {
   const obj = requiredObject(value, "candidate");
@@ -154,12 +245,6 @@ export function validateMemoryCompressBusiness(
 }
 
 // ── Resolve Schema ──
-
-const VALID_RESOLUTION_TYPES = new Set([
-  "unrelated", "context_difference", "preference_evolution", "direct_conflict", "uncertain",
-]);
-
-const VALID_MEMORY_STATUS = new Set(["active", "aging", "archived", "superseded", "merged"]);
 
 function parseResolutionActions(value: unknown): MemoryConflictResolution["actions"] {
   const obj = requiredObject(value, "actions");

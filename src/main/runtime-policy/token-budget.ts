@@ -18,6 +18,7 @@ export type RuntimeStage =
   | "ask-soul"
   | "memory-judge"
   | "memory-compressor"
+  | "memory-reflect"
   | "memory-resolver";
 
 export interface TokenBudgetPolicy {
@@ -55,6 +56,9 @@ const STAGE_DEFAULTS: Record<RuntimeStage, TokenBudgetPolicy> = {
     defaultMaxOutputTokens: 800,
   },
   "memory-compressor": {
+    defaultMaxOutputTokens: 500,
+  },
+  "memory-reflect": {
     defaultMaxOutputTokens: 500,
   },
   "memory-resolver": {
