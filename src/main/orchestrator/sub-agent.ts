@@ -42,10 +42,10 @@ export interface SubAgentResult {
 }
 
 /** LLM 配置注入器（由 index.ts 启动时调 setDelegateSettings 设置）。 */
-let delegateSettingsGetter: (() => { provider: string; baseUrl: string; model: string; apiKey: string }) | null = null;
+let delegateSettingsGetter: (() => { provider: string; baseUrl: string; model: string; apiKey: string; contextWindowTokens: number }) | null = null;
 
 /** index.ts 启动时调用，注入 LLM 配置获取器给子代理。 */
-export function setDelegateSettings(getter: () => { provider: string; baseUrl: string; model: string; apiKey: string }): void {
+export function setDelegateSettings(getter: () => { provider: string; baseUrl: string; model: string; apiKey: string; contextWindowTokens: number }): void {
   delegateSettingsGetter = getter;
 }
 

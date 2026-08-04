@@ -69,6 +69,7 @@ import {
   summarizeObjective,
 } from "../agent-log";
 import { contextRefRegistry } from "./tool-context";
+import { compressConversation } from "./context-manager";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 import type {
   AskClarificationCard,
@@ -123,6 +124,8 @@ export interface LangGraphAgentLoopOptions {
   requestUserClarification?: (card: AskClarificationCard) => Promise<AskUserAnswer>;
   /** Task Router 可用 Skill 列表（feature flag 开启时由 build-options 传入） */
   availableSkills?: SkillRouteInfo[];
+  /** 当前对话模式，用于上下文压缩保留的最近轮数。 */
+  mode?: string;
   /** 测试可注入的协议 transport；生产统一走 OpenAI / Anthropic SDK runtime。 */
   streamChat?: (input: SdkStreamRunInput) => Promise<ChatResponse>;
   /**
@@ -404,6 +407,17 @@ function buildSoulBlankFallback(state: AgentGraphState): string {
 export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions): Promise<TwoPhaseFcResult> {
   const startedAt = Date.now();
 
+  // 入口压缩：把历史消息中超过阈值的部分交给模型摘要，保留最近若干轮
+  const initialMessages = await compressConversation({
+    messages: options.cleanMessages ?? options.messages,
+    adapter: options.adapter,
+    settings: options.settings,
+    systemContent: [options.toolSystemContent, options.soulSystemBaseContent, options.citaContextBlock].filter(Boolean).join("\n\n"),
+    mode: options.mode,
+    onEvent: options.onEvent,
+    signal: options.signal,
+  });
+
   // 工作区诊断日志
   console.log("[AgentFlow] workspace binding:",
     "conversationId=" + (options.conversationId ?? "default"),
@@ -525,7 +539,7 @@ export async function runLangGraphAgentLoop(options: LangGraphAgentLoopOptions):
       originalQuery: options.originalQuery,
       contextualizedQuery: options.contextualizedQuery,
       citaContextBlock: options.citaContextBlock,
-      messages: options.cleanMessages ?? options.messages,
+      messages: initialMessages,
       availableCapabilities: capabilities.map((item) => item.capability),
       resolvedWorkspaceRoot: options.resolvedWorkspaceRoot,
     }, {

@@ -15,9 +15,9 @@ describe("preferences", () => {
     expect(normalizeChatSocialContextEnabled(true)).toBe(true);
   });
 
-  it("defaults to work and migrates legacy collab/talk values", () => {
-    expect(normalizeDefaultChatMode(undefined)).toBe("work");
-    expect(normalizeDefaultChatMode("bad")).toBe("work");
+  it("defaults to chat and migrates legacy collab/talk values", () => {
+    expect(normalizeDefaultChatMode(undefined)).toBe("chat");
+    expect(normalizeDefaultChatMode("bad")).toBe("chat");
     expect(normalizeDefaultChatMode("work")).toBe("work");
     expect(normalizeDefaultChatMode("chat")).toBe("chat");
     expect(normalizeDefaultChatMode("collab")).toBe("work");

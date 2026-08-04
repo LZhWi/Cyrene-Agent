@@ -45,6 +45,7 @@ describe("SubAgent concurrency isolation", () => {
       baseUrl: "https://test",
       model: "test-model",
       apiKey: "test-key",
+      contextWindowTokens: 256000,
     }));
     // 确保测试所需工具已注册（全局单例，register 幂等）
     for (const id of ["delegate_task", "ask_user_choice", "web_search"]) {

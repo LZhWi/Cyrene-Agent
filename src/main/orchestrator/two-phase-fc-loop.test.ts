@@ -197,7 +197,7 @@ describe("runTwoPhaseFcLoop", () => {
     const pending = runTwoPhaseFcLoop({
       ...baseOptions,
       optimizeFirstRound: true,
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       streamChat,
       executeTool: async () => "unused",
@@ -253,7 +253,7 @@ describe("runTwoPhaseFcLoop", () => {
 
     const pending = runTwoPhaseFcLoop({
       ...baseOptions,
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       streamChat,
       executeTool: async () => "unused",
@@ -301,7 +301,7 @@ describe("runTwoPhaseFcLoop", () => {
 
     const result = await runTwoPhaseFcLoop({
       ...baseOptions,
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       streamChat,
       executeTool: async () => "unused",
@@ -332,7 +332,7 @@ describe("runTwoPhaseFcLoop", () => {
     const result = await runTwoPhaseFcLoop({
       ...baseOptions,
       optimizeFirstRound: true,
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       streamChat,
       executeTool: async () => "unused",
@@ -381,7 +381,7 @@ describe("runTwoPhaseFcLoop", () => {
 
     await runTwoPhaseFcLoop({
       ...baseOptions,
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       streamChat,
       executeTool: async () => "晴",
@@ -415,7 +415,7 @@ describe("runTwoPhaseFcLoop", () => {
 
     const timeoutResult = await runTwoPhaseFcLoop({
       ...baseOptions,
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       streamChat: timeoutThenSoul,
       maxConsecutiveTimeouts: 2,
@@ -433,7 +433,7 @@ describe("runTwoPhaseFcLoop", () => {
     };
     await expect(runTwoPhaseFcLoop({
       ...baseOptions,
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       streamChat: cancelStream,
       signal: caller.signal,
@@ -450,7 +450,7 @@ describe("runTwoPhaseFcLoop", () => {
     await runTwoPhaseFcLoop({
       ...baseOptions,
       tools: [makeTool("music_search")],
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       executeTool: async (toolCall) => {
         executed.push(toolCall);
@@ -471,7 +471,7 @@ describe("runTwoPhaseFcLoop", () => {
 
     await runTwoPhaseFcLoop({
       ...baseOptions,
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       executeTool: async () => "ok",
     });
@@ -497,6 +497,7 @@ describe("runTwoPhaseFcLoop", () => {
         baseUrl: "https://test",
         model: "m",
         apiKey: "k",
+        contextWindowTokens: 256000,
       },
       adapter,
       executeTool: async (tc) => {
@@ -556,6 +557,7 @@ describe("runTwoPhaseFcLoop", () => {
         baseUrl: "https://test",
         model: "m",
         apiKey: "k",
+        contextWindowTokens: 256000,
       },
       adapter,
       executeTool: async (tc) => {
@@ -590,6 +592,7 @@ describe("runTwoPhaseFcLoop", () => {
         baseUrl: "https://test",
         model: "m",
         apiKey: "k",
+        contextWindowTokens: 256000,
       },
       adapter,
       executeTool: async () => {
@@ -620,6 +623,7 @@ describe("runTwoPhaseFcLoop", () => {
         baseUrl: "https://test",
         model: "m",
         apiKey: "k",
+        contextWindowTokens: 256000,
       },
       adapter,
       maxToolRounds: 3,
@@ -645,6 +649,7 @@ describe("runTwoPhaseFcLoop", () => {
         baseUrl: "https://test",
         model: "m",
         apiKey: "k",
+        contextWindowTokens: 256000,
       },
       adapter,
       executeTool: async () => {
@@ -670,7 +675,7 @@ describe("runTwoPhaseFcLoop", () => {
     const result = await runTwoPhaseFcLoop({
       ...baseOptions,
       tools: [makeTool("music_play_track")],
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       executeTool: async () => ({
         status: "failed" as const,
@@ -700,7 +705,7 @@ describe("runTwoPhaseFcLoop", () => {
       await runTwoPhaseFcLoop({
         ...baseOptions,
         tools: [makeTool("music_play_track")],
-        settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+        settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
         adapter,
         executeTool: async () => ({
           status: "failed",
@@ -731,6 +736,7 @@ describe("runTwoPhaseFcLoop", () => {
         baseUrl: "https://test",
         model: "m",
         apiKey: "k",
+        contextWindowTokens: 256000,
       },
       adapter,
       executeTool: async () => "北京：晴 25°C",
@@ -762,6 +768,7 @@ describe("runTwoPhaseFcLoop", () => {
         baseUrl: "https://test",
         model: "m",
         apiKey: "k",
+        contextWindowTokens: 256000,
       },
       adapter,
       executeTool: async () => "北京：晴 25°C",
@@ -787,6 +794,7 @@ describe("runTwoPhaseFcLoop", () => {
         baseUrl: "https://test",
         model: "m",
         apiKey: "k",
+        contextWindowTokens: 256000,
       },
       adapter,
       executeTool: async () => {
@@ -811,6 +819,7 @@ describe("runTwoPhaseFcLoop", () => {
         baseUrl: "https://test",
         model: "m",
         apiKey: "k",
+        contextWindowTokens: 256000,
       },
       adapter,
       executeTool: async () => {
@@ -833,7 +842,7 @@ describe("runTwoPhaseFcLoop", () => {
     let streamed = "";
     const result = await runTwoPhaseFcLoop({
       ...baseOptions,
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       executeTool: async () => "ok",
       onEvent: (event) => {
@@ -856,7 +865,7 @@ describe("runTwoPhaseFcLoop", () => {
     const result = await runTwoPhaseFcLoop({
       ...baseOptions,
       tools: [makeTool("music_get_daily_recommendations")],
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       executeTool: async () => JSON.stringify({
         kind: "recommendations",
@@ -878,7 +887,7 @@ describe("runTwoPhaseFcLoop", () => {
     const result = await runTwoPhaseFcLoop({
       ...baseOptions,
       tools: [makeTool("music_get_daily_recommendations")],
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       executeTool: async () => JSON.stringify({
         kind: "recommendations",
@@ -911,7 +920,7 @@ describe("runTwoPhaseFcLoop", () => {
 
     const result = await runTwoPhaseFcLoop({
       ...baseOptions,
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       executeTool: async () => "ok",
     });
@@ -934,7 +943,7 @@ describe("runTwoPhaseFcLoop", () => {
     const result = await runTwoPhaseFcLoop({
       ...baseOptions,
       tools: [makeTool("music_play_track")],
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       executeTool: async () => JSON.stringify({
         kind: "playback",
@@ -956,7 +965,7 @@ describe("runTwoPhaseFcLoop", () => {
 
     await runTwoPhaseFcLoop({
       ...baseOptions,
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       soulSampling: { temperature: 0.9, frequencyPenalty: 0.2 },
       executeTool: async () => {

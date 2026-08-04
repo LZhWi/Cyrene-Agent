@@ -93,7 +93,7 @@ function options(adapter: FakeAdapter, executeTool = vi.fn(async () => ({
   output: JSON.stringify({ kind: "playback", dispatch: { state: "dispatched" } }),
 }))) {
   return {
-    settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+    settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
     adapter,
     messages: [{ role: "user" as const, content: "播放第一首" }],
     tools: [musicPlayTool()],

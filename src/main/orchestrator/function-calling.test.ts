@@ -19,7 +19,7 @@ vi.mock("../skills/skill-tools", () => ({
 
 vi.mock("./context-manager", () => ({
   truncateToolResult: vi.fn((s: string) => s),
-  compressConversation: vi.fn((m: unknown[]) => m),
+  compressConversation: vi.fn(async (opts: { messages: unknown[] }) => opts.messages),
 }));
 
 vi.mock("../timeout-manager", () => ({
@@ -115,7 +115,7 @@ describe("runFunctionCallingLoop allowedToolIds guard", () => {
       });
 
     const result = await runFunctionCallingLoop(
-      { provider: "openai", baseUrl: "https://test", model: "test", apiKey: "key" },
+      { provider: "openai", baseUrl: "https://test", model: "test", apiKey: "key", contextWindowTokens: 256000 },
       [{ role: "user", content: "test" }],
       60000,
       [ALLOWED_TOOL_ID], // 白名单不包含 BLOCKED_TOOL_ID

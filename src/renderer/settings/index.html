@@ -138,7 +138,7 @@
 
             <label class="field">
               <span>上下文窗口（Token）</span>
-              <input id="context-window-input" type="number" min="4096" step="1000" placeholder="256000" autocomplete="off" />
+              <input id="context-window-input" type="number" min="4096" step="1" placeholder="256000" autocomplete="off" />
               <span class="form-hint">默认 256000，请按当前模型的实际上下文上限调整。</span>
             </label>
           </div>
@@ -380,26 +380,26 @@
           </div>
 
           <div class="settings-list">
-            <div class="setting-row" hidden>
+            <div class="setting-row">
               <div>
                 <strong>默认模式</strong>
                 <span>打开聊天窗口时默认使用的模式；窗口内仍可临时切换。</span>
               </div>
               <div class="option-blocks option-blocks--wide" id="default-chat-mode-select" role="radiogroup" aria-label="默认模式">
-                <button type="button" class="option-block is-active" data-value="work" aria-pressed="true">Work</button>
-                <button type="button" class="option-block" data-value="chat" aria-pressed="false">Chat</button>
+                <button type="button" class="option-block" data-value="work" aria-pressed="false" disabled>Work</button>
+                <button type="button" class="option-block is-active" data-value="chat" aria-pressed="true" disabled>Chat</button>
               </div>
             </div>
 
-            <div class="setting-row" hidden>
+            <div class="setting-row">
               <div>
                 <strong>分段输出</strong>
                 <span>控制昔涟回复在聊天气泡中的分段显示；不会改变模型实际回复内容。</span>
               </div>
               <div class="option-blocks option-blocks--wide" id="segmented-output-select" role="radiogroup" aria-label="分段输出">
-                <button type="button" class="option-block" data-value="all" aria-pressed="false">所有</button>
-                <button type="button" class="option-block" data-value="chat" aria-pressed="false">聊天</button>
-                <button type="button" class="option-block is-active" data-value="off" aria-pressed="true">关闭</button>
+                <button type="button" class="option-block" data-value="all" aria-pressed="false" disabled>所有</button>
+                <button type="button" class="option-block" data-value="chat" aria-pressed="false" disabled>聊天</button>
+                <button type="button" class="option-block is-active" data-value="off" aria-pressed="true" disabled>关闭</button>
               </div>
             </div>
 

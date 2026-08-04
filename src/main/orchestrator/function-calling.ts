@@ -13,6 +13,7 @@ import {
 } from "./vendors";
 import { extractLastUserQuery, type ToolContext } from "./tool-context";
 import { recordUsage } from "../token-usage-store";
+import type { AgentLoopSettings } from "./two-phase-fc-loop";
 import { resetReadRefs } from "../skills/skill-tools";
 import { truncateToolResult, compressConversation } from "./context-manager";
 import { resolveTimeoutPolicy } from "../runtime-policy";
@@ -31,6 +32,8 @@ interface LoopSettings {
   baseUrl: string;
   model: string;
   apiKey: string;
+  /** 用户设置的模型上下文窗口（Token），用于对话压缩触发阈值。 */
+  contextWindowTokens: number;
 }
 
 /** 把 ToolRegistry 里的工具转成统一 ToolSpec（与 wire 格式解耦）。
@@ -264,7 +267,14 @@ export async function runFunctionCallingLoop(
       conversation = adapter.appendToolResults(conversation, execResults);
 
       // 防线②：窗口级压缩——conversation 累积超阈值时摘要化旧轮次
-      conversation = compressConversation(conversation);
+      conversation = await compressConversation({
+        messages: conversation,
+        adapter,
+        settings: settings as AgentLoopSettings,
+        systemContent: "",
+        mode: "work",
+        signal: controller.signal,
+      });
 
       continue;
     }

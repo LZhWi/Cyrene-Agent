@@ -99,7 +99,7 @@ describe("runChatLoop", () => {
     const recordUsage = vi.fn();
 
     const result = await runChatLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       messages: [{ role: "user", content: "陪我聊聊" }],
       soulSystemBaseContent: "SOUL_SYSTEM",
@@ -141,7 +141,7 @@ describe("runChatLoop", () => {
     })) as unknown as typeof fetch;
 
     const result = await runChatLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       messages: [{ role: "user", content: "在吗" }],
       soulSystemBaseContent: "SOUL_SYSTEM",
@@ -173,7 +173,7 @@ describe("runChatLoop", () => {
     ].join("\n"), { status: 200, headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
 
     await runChatLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       messages: [{ role: "user", content: "为什么" }],
       soulSystemBaseContent: "SOUL_SYSTEM",
@@ -206,7 +206,7 @@ describe("runChatLoop", () => {
     })) as unknown as typeof fetch;
 
     await runChatLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       messages: [{ role: "user", content: "为什么" }],
       soulSystemBaseContent: "SOUL_SYSTEM",
@@ -239,7 +239,7 @@ describe("runChatLoop", () => {
       })) as unknown as typeof fetch;
 
     const result = await runChatLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       messages: [{ role: "user", content: "在吗" }],
       soulSystemBaseContent: "SOUL_SYSTEM",
@@ -273,7 +273,7 @@ describe("runChatLoop", () => {
     })) as unknown as typeof fetch;
 
     await expect(runChatLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       messages: [{ role: "user", content: "在吗" }],
       soulSystemBaseContent: "SOUL_SYSTEM",
@@ -289,7 +289,7 @@ describe("runChatLoop", () => {
     globalThis.fetch = vi.fn(async () => new Response("request failed", { status })) as unknown as typeof fetch;
 
     await expect(runChatLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       messages: [{ role: "user", content: "在吗" }],
       soulSystemBaseContent: "SOUL_SYSTEM",
@@ -309,7 +309,7 @@ describe("runChatLoop", () => {
     ].join("\n"), { status: 200, headers: { "content-type": "text/event-stream" } })) as unknown as typeof fetch;
 
     const result = await runChatLoop({
-      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       messages: [{ role: "user", content: "在吗" }],
       soulSystemBaseContent: "SOUL_SYSTEM",

@@ -563,13 +563,17 @@ export async function buildAgentRunOptions(
     .filter((t) => t.id === "web_search" || t.id.startsWith("minimax-web-search-"))
     .map((t) => t.id);
   console.log(`[Cyrene] 搜索后端=${activeSearchBackend} 暴露搜索工具=[${searchToolIds.join(", ") || "无"}]`);
+  const baseSystemPrompt = deps.buildSystemPrompt(basePromptMode);
+  const baseSoulSystemPrompt = deps.buildSoulSystemBasePrompt(basePromptMode);
+  const baseToolSystemPrompt = deps.buildToolSystemPrompt(runTools);
+
   // 第一期：保留旧 systemContent 兼容（已不再使用，保留字段是为了 logger 诊断）。
   // 同时新增 toolSystemContent / soulSystemBaseContent 两套。
   const systemContent =
     (environmentContext ? environmentContext + "\n\n" : "") +
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
-    deps.buildSystemPrompt(basePromptMode) +
+    baseSystemPrompt +
     (skillCatalog ? "\n\n---\n\n" + skillCatalog : "") +
     (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "") +
     skillActivation +
@@ -579,7 +583,7 @@ export async function buildAgentRunOptions(
     attachmentContext;
 
   // 工具阶段：工具规则 + 运行时工具目录 + 可用 Skill 路由清单。
-  const toolSystemContent = deps.buildToolSystemPrompt(runTools)
+  const toolSystemContent = baseToolSystemPrompt
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
     + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "")
     + (citaContextBlock ? "\n\n" + citaContextBlock : "")
@@ -600,7 +604,7 @@ export async function buildAgentRunOptions(
     (environmentContext ? environmentContext + "\n\n" : "") +
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
-    deps.buildSoulSystemBasePrompt(basePromptMode) +
+    baseSoulSystemPrompt +
     (chatSocialContextBlock ? "\n\n---\n\n" + chatSocialContextBlock : "") +
     (stylePromptBlock ? "\n\n---\n\n" + stylePromptBlock : "") +
     (autoInjectedSoulContext ? "\n\n---\n\n" + autoInjectedSoulContext : "") +
@@ -653,6 +657,7 @@ export async function buildAgentRunOptions(
         apiKey: settings.apiKey,
         explicitTransport: settings.explicitTransport,
         reasoning: settings.reasoning,
+        contextWindowTokens: settings.contextWindowTokens ?? 256000,
       },
       messages: fcMessages,
       cleanMessages: cleanFcMessages,

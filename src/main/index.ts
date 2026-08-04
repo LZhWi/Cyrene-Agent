@@ -956,7 +956,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   uiThemeRadius: false,
   uiFont: DEFAULT_UI_FONT,
   uiIcon: "cyrene-sun",
-  defaultChatMode: "work",
+  defaultChatMode: "chat",
   currentStyleId: "default",
   customStyle: DEFAULT_CUSTOM_STYLE,
   segmentedOutputMode: "off",
@@ -3298,7 +3298,7 @@ function createWindow(): void {
   // 注入子代理 LLM 配置（delegate_task 工具用，复用主模型配置）
   setDelegateSettings(() => {
     const s = loadModelSettings();
-    return { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey };
+    return { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey, contextWindowTokens: s.contextWindowTokens };
   });
 
   mainWindow.on("closed", () => {
@@ -5421,7 +5421,7 @@ app.whenReady().then(async () => {
         buildSystemPrompt("01_default.md") +
         (skillCatalog ? "\n\n---\n\n" + skillCatalog : "");
       return {
-        settings: { provider: settings.provider, baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey },
+        settings: { provider: settings.provider, baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey, contextWindowTokens: settings.contextWindowTokens },
         messages: [{ role: "system", content: systemContent }, ...messages],
         timeoutMs: getTimeoutSettings().chatRequestTimeout,
       };

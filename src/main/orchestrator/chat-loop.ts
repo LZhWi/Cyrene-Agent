@@ -17,6 +17,7 @@ import type {
 import { createSseReader } from "./vendors";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 import { getTimeoutSettings } from "../timeout-manager";
+import { compressConversation } from "./context-manager";
 
 export interface ChatLoopOptions {
   settings: AgentLoopSettings;
@@ -31,6 +32,8 @@ export interface ChatLoopOptions {
   signal?: AbortSignal;
   /** 非流式降级时的展示节奏；测试可设为 0，生产默认 20ms。 */
   fallbackRevealIntervalMs?: number;
+  /** 当前对话模式，用于上下文压缩保留的最近轮数。 */
+  mode?: string;
 }
 
 class StreamUnavailableError extends Error {
@@ -101,6 +104,16 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<TwoPhaseFcR
   const usageRecorder = options.recordUsage ?? ((input, output, calls) => recordUsage(input, output, calls));
   let usedImageCaptionFallback = false;
 
+  const messages = await compressConversation({
+    messages: options.messages,
+    adapter: options.adapter,
+    settings: options.settings,
+    systemContent: options.soulSystemBaseContent,
+    mode: options.mode,
+    onEvent: options.onEvent,
+    signal: options.signal,
+  });
+
   const timeout = getTimeoutSettings().chatRequestTimeout;
 
   const remainingBudget = (): number => {
@@ -119,9 +132,9 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<TwoPhaseFcR
     reasoning: options.settings.reasoning,
   };
 
-  const buildRequest = (messages: ChatMessage[], stream: boolean): ChatRequest => ({
+  const buildRequest = (reqMessages: ChatMessage[], stream: boolean): ChatRequest => ({
     model: options.settings.model,
-    messages: withSoulSystem(messages, options.soulSystemBaseContent),
+    messages: withSoulSystem(reqMessages, options.soulSystemBaseContent),
     stream,
     ...(options.soulSampling ?? {}),
   });

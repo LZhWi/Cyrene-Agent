@@ -1,134 +1,174 @@
-// 上下文管理器 —— 防止 FC 循环里 conversation 无限增长导致超时/爆窗。
-//
-// 两道防线（分层兜底）：
-//   ① 工具结果入队前截断（truncateToolResult）—— 防单条大结果爆窗
-//   ② 窗口级压缩（compressConversation）—— 防多轮累积爆窗
-//
-// 阈值设计（基于 128K context window 的云端大模型预算）：
-//   系统提示（人格+工具schema+策略段）  ≈ 6K tokens
-//   模型输出预留（thinking+回复）        ≈ 4K tokens
-//   安全余量                             ≈ 4K tokens
-//   ────────────────────────────
-//   FC 循环 tool results 可用空间        ≈ 114K tokens
-//
-//   单条截断 12000 字符（≈4K tokens）—— 不超过总窗口 3%，兜极端大结果
-//   窗口压缩 80000 字符（≈27K tokens）—— 约跑 6-8 轮重工具后触发，不频繁
+import type { ChatVendorAdapter, ChatMessage, ChatRequest } from "./vendors/types";
+import type { AgentLoopSettings, TwoPhaseEvent } from "./two-phase-fc-loop";
 
-const TOOL_RESULT_MAX_CHARS = 12000;
-const WINDOW_COMPRESS_THRESHOLD_TOKENS = 27000;
-const WINDOW_COMPRESS_THRESHOLD_CHARS = 80000;
-const KEEP_RECENT_ROUNDS = 6; // 压缩时保留最近 6 轮完整（system + 最近对话 + 工具结果）
+const COMPRESSION_PROMPT = `你正在帮"昔涟"整理对话记忆。请把下面这段较早的对话历史总结成一段简洁的摘要，供后续回复参考。
 
-/**
- * 截断单条工具返回内容。超长内容截断后标注原始长度。
- * 作用在 execResults（进 conversation 的那条），allToolResults 保留完整原文。
- */
-export function truncateToolResult(content: string, maxChars: number = TOOL_RESULT_MAX_CHARS): string {
-  if (content.length <= maxChars) return content;
-  return content.slice(0, maxChars) +
-    `\n[truncated: 原始 ${content.length} 字符，已截断至 ${maxChars} 字符]`;
+要求：
+1. 保留用户的核心目标、当前任务、未完成的待办事项。
+2. 保留用户明确表达过的偏好、禁忌、格式要求。
+3. 保留已确认的事实和数据（如路径、文件名、参数值）。
+4. 删除具体的寒暄、重复确认、过渡性语句。
+5. 如果对话中包含代码/命令，只保留最终生效的版本和用途说明，不保留中间试错。
+6. 摘要控制在 400~600 字以内，用中文输出。
+
+对话历史：
+{history}
+
+请直接输出摘要内容，不要加任何前缀说明。`;
+
+/** 每轮对话 = user + assistant 两条消息。 */
+function keepRecentCount(mode: string): number {
+  switch (mode) {
+    case "work":
+    case "daily":
+      return 6;
+    case "learn":
+      return 10;
+    case "chat":
+      return 20;
+    default:
+      return 6;
+  }
 }
 
-/**
- * 粗估 token 数。不引入 tiktoken，按字符数估算：
- *   中文 1 字符 ≈ 1 token，英文 4 字符 ≈ 1 token，混合取 chars/3 粗估。
- */
+/** 简单 token 估算：中文字符按 1 token / 1.5 字符，英文按 4 字符 / token。 */
 export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 3);
-}
-
-/**
- * 估算整个 conversation 数组的 token 总量。
- */
-function contentToText(content: unknown): string {
-  if (typeof content === "string") return content;
-  if (Array.isArray(content)) {
-    return content
-      .map((block) => {
-        if (block && typeof block === "object" && (block as { type?: unknown }).type === "text") {
-          return String((block as { text?: unknown }).text ?? "");
-        }
-        return "";
-      })
-      .filter(Boolean)
-      .join("\n");
+  if (!text) return 0;
+  let nonAscii = 0;
+  let ascii = 0;
+  for (const char of text) {
+    if (char.charCodeAt(0) > 127) nonAscii++;
+    else ascii++;
   }
-  return String(content ?? "");
+  return Math.ceil(nonAscii / 1.5 + ascii / 4);
 }
 
-export function estimateConversationTokens(messages: Array<{ content: unknown }>): number {
-  let total = 0;
+export function estimateMessageTokens(messages: ChatMessage[]): number {
+  return messages.reduce((sum, m) => {
+    const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+    return sum + estimateTokens(text) + 4; // +4 为角色/格式开销
+  }, 0);
+}
+
+/** 单条工具结果截断，保留摘要即可。 */
+export function truncateToolResult(output: string, maxChars = 2000): string {
+  if (!output || output.length <= maxChars) return output;
+  return output.slice(0, maxChars) + `\n...[截断，原长度 ${output.length}]`;
+}
+
+function formatConversation(messages: ChatMessage[]): string {
+  return messages
+    .map((m) => {
+      const prefix = m.role === "user" ? "用户" : m.role === "assistant" ? "昔涟" : m.role;
+      const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
+      return `--- ${prefix} ---\n${text}`;
+    })
+    .join("\n\n");
+}
+
+function splitMessages(messages: ChatMessage[]): { systems: ChatMessage[]; conversation: ChatMessage[] } {
+  const systems: ChatMessage[] = [];
+  const conversation: ChatMessage[] = [];
   for (const m of messages) {
-    total += estimateTokens(contentToText(m.content));
+    if (m.role === "system") systems.push(m);
+    else conversation.push(m);
   }
-  return total;
+  return { systems, conversation };
 }
 
-/**
- * 窗口级压缩：conversation 超阈值时，把旧的轮次摘要化。
- *
- * 策略：
- *   - system 消息（role=system）：永远保留
- *   - 最近 KEEP_RECENT_ROUNDS 轮：完整保留
- *   - 更早的轮次：
- *     - tool/assistant 消息内容超 500 字符 → 截断到 200 字符 + "[compressed]"
- *     - 短消息原样保留
- *   - 压缩后仍超阈值 → 从最早的非 system 消息开始丢弃
- *
- * 返回压缩后的新数组（不修改原数组）。
- */
-export function compressConversation<T extends { role?: string; content?: unknown }>(
-  messages: T[],
-  thresholdChars: number = WINDOW_COMPRESS_THRESHOLD_CHARS,
-  keepRecent: number = KEEP_RECENT_ROUNDS,
-): T[] {
-  const totalChars = messages.reduce((sum, m) => sum + contentToText(m.content).length, 0);
-  if (totalChars <= thresholdChars) return messages;
-
-  console.log(`[ContextManager] 触发压缩: ${totalChars} 字符 > 阈值 ${thresholdChars}`);
-
-  const result: T[] = [...messages];
-  const nonSystemIndices: number[] = [];
-
-  for (let i = 0; i < result.length; i++) {
-    if (result[i].role !== "system") {
-      nonSystemIndices.push(i);
-    }
-  }
-
-  // 需要压缩的：非 system 消息中，超出最近 keepRecent 条的部分
-  const compressFromIndex = nonSystemIndices.length > keepRecent
-    ? nonSystemIndices[nonSystemIndices.length - keepRecent]
-    : -1;
-
-  if (compressFromIndex > 0) {
-    for (let i = 0; i < compressFromIndex; i++) {
-      if (result[i].role === "system") continue;
-      const msg = result[i];
-      const content = contentToText(msg.content);
-      if (content.length > 500) {
-        result[i] = {
-          ...msg,
-          content: content.slice(0, 200) + "\n[compressed: 原始 " + content.length + " 字符]",
-        } as T;
-      }
-    }
-  }
-
-  // 压缩后仍超阈值 → 从最早的非 system 消息开始丢弃
-  let compressedChars = result.reduce((sum, m) => sum + contentToText(m.content).length, 0);
-  while (compressedChars > thresholdChars) {
-    const firstNonSystem = result.findIndex(m => m.role !== "system");
-    if (firstNonSystem === -1 || firstNonSystem >= result.length - keepRecent) break;
-    compressedChars -= contentToText(result[firstNonSystem].content).length;
-    result.splice(firstNonSystem, 1);
-    console.log("[ContextManager] 丢弃最早一条消息，剩余 " + compressedChars + " 字符");
-  }
-
-  const finalChars = result.reduce((sum, m) => sum + contentToText(m.content).length, 0);
-  console.log(`[ContextManager] 压缩完成: ${totalChars} → ${finalChars} 字符`);
-
-  return result;
+export interface CompressOptions {
+  messages: ChatMessage[];
+  adapter: ChatVendorAdapter;
+  settings: AgentLoopSettings;
+  /** 当前要附加到请求里的 system prompt（Tool/Soul 阶段不同）。 */
+  systemContent: string;
+  mode?: string;
+  onEvent?: (event: TwoPhaseEvent) => void;
+  signal?: AbortSignal;
 }
 
-export { WINDOW_COMPRESS_THRESHOLD_TOKENS, WINDOW_COMPRESS_THRESHOLD_CHARS };
+export async function compressConversation(options: CompressOptions): Promise<ChatMessage[]> {
+  const { messages, adapter, settings, systemContent, mode = "work", onEvent, signal } = options;
+  const contextWindow = settings.contextWindowTokens ?? 256000;
+  const threshold = Math.floor(contextWindow * 0.8);
+
+  const { systems, conversation } = splitMessages(messages);
+  const keepCount = keepRecentCount(mode) * 2;
+
+  // 消息太少，不需要压缩
+  if (conversation.length <= keepCount) return messages;
+
+  const systemTokens = estimateTokens(systemContent) + estimateMessageTokens(systems);
+  const conversationTokens = estimateMessageTokens(conversation);
+  const totalTokens = systemTokens + conversationTokens;
+
+  // 未超过阈值，不压缩
+  if (totalTokens < threshold) return messages;
+
+  const compressible = conversation.slice(0, -keepCount);
+  const recent = conversation.slice(-keepCount);
+
+  onEvent?.({ type: "compressing_context" });
+
+  try {
+    const summary = await callSummarizeModel(compressible, adapter, settings, signal);
+    const summaryMessage: ChatMessage = {
+      role: "assistant",
+      content: `[此前对话已压缩为记忆摘要]\n${summary}`,
+    };
+    return [...systems, summaryMessage, ...recent];
+  } catch (err) {
+    console.warn("[ContextManager] 模型压缩失败，回退到截断:", err);
+    // 压缩失败时兜底：直接丢弃最旧的消息，不调用模型
+    return [...systems, ...recent];
+  }
+}
+
+async function callSummarizeModel(
+  messages: ChatMessage[],
+  adapter: ChatVendorAdapter,
+  settings: AgentLoopSettings,
+  signal?: AbortSignal,
+): Promise<string> {
+  const prompt = COMPRESSION_PROMPT.replace("{history}", formatConversation(messages));
+  const request: ChatRequest = {
+    model: settings.model,
+    messages: [
+      { role: "system", content: prompt },
+      { role: "user", content: "请总结上面的对话历史。" },
+    ],
+    stream: false,
+  };
+
+  const vendorConfig = {
+    provider: settings.provider,
+    baseUrl: settings.baseUrl,
+    model: settings.model,
+    apiKey: settings.apiKey,
+    explicitTransport: settings.explicitTransport,
+    reasoning: settings.reasoning,
+  };
+
+  const effectiveRequest = adapter.applyCacheHints?.(request, vendorConfig) ?? request;
+  const http = adapter.buildRequest(effectiveRequest, settings);
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+
+  try {
+    const response = await fetch(http.url, {
+      method: "POST",
+      headers: http.headers,
+      body: http.body,
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const body = await response.text().catch(() => "");
+      throw new Error(`压缩请求失败：HTTP ${response.status}${body ? ` - ${body.slice(0, 200)}` : ""}`);
+    }
+    const parsed = adapter.parseResponse(await response.json());
+    return parsed.text.trim() || "[压缩结果为空]";
+  } finally {
+    signal?.removeEventListener("abort", abort);
+  }
+}

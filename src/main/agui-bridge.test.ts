@@ -134,7 +134,7 @@ describe("agui-bridge sticker event ordering", () => {
     const sender = { isDestroyed: () => false, send: (_channel: string, event: unknown) => sent.push(event) };
     registerAgUiIpc(async () => ({
       options: {
-        settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
+        settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
         messages: [], timeoutMs: 1000, toolSystemContent: "TOOL", soulSystemBaseContent: "SOUL",
       },
       latestUserText: "帮我生成一份文档",
@@ -181,7 +181,7 @@ describe("agui-bridge sticker event ordering", () => {
     registerAgUiIpc(
       async () => ({
         options: {
-          settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
+          settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
           messages: [],
           timeoutMs: 1000,
           toolSystemContent: "TOOL",
@@ -229,7 +229,7 @@ describe("agui-bridge sticker event ordering", () => {
     registerAgUiIpc(
       async () => ({
         options: {
-          settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
+          settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
           messages: [],
           timeoutMs: 1000,
           toolSystemContent: "TOOL",
@@ -260,7 +260,7 @@ describe("agui-bridge sticker event ordering", () => {
     const { registerAgUiIpc } = await import("./agui-bridge");
     const buildOptions = vi.fn(async () => ({
       options: {
-        settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
+        settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
         messages: [],
         timeoutMs: 1000,
         toolSystemContent: "TOOL",
@@ -307,7 +307,7 @@ describe("agui-bridge sticker event ordering", () => {
     const { registerAgUiIpc } = await import("./agui-bridge");
     const buildOptions = vi.fn(async () => ({
       options: {
-        settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
+        settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
         messages: [],
         timeoutMs: 1000,
         toolSystemContent: "TOOL",
@@ -351,7 +351,7 @@ describe("agui-bridge sticker event ordering", () => {
     const { registerAgUiIpc } = await import("./agui-bridge");
     const buildOptions = vi.fn(async () => ({
       options: {
-        settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
+        settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
         messages: [],
         timeoutMs: 1000,
         toolSystemContent: "TOOL",

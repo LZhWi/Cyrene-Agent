@@ -14,7 +14,7 @@ export function normalizeDefaultChatMode(value: unknown): DefaultChatMode {
   // 兼容旧版磁盘值：talk -> chat，collab -> work。
   if (value === "chat" || value === "talk") return "chat";
   if (value === "code") return "code";
-  return "work";
+  return "chat";
 }
 
 export function normalizeSegmentedOutputMode(value: unknown): SegmentedOutputMode {

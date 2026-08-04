@@ -708,7 +708,7 @@ if (!window.settings) {
       language: "zh-CN",
       uiTheme: "pearl-white",
       windowCornerRadius: DEFAULT_WINDOW_CORNER_RADIUS,
-      defaultChatMode: "work",
+      defaultChatMode: "chat",
       currentStyleId: "default",
       customStyle: DEFAULT_CUSTOM_STYLE,
       segmentedOutputMode: "off",
@@ -1080,7 +1080,7 @@ function applyDefaultChatModeSelection(mode: DefaultChatMode): void {
 }
 
 function getDefaultChatModeValue(): DefaultChatMode {
-  return normalizeDefaultChatMode(getOptionGroupValue(defaultChatModeSelect, "work"));
+  return normalizeDefaultChatMode(getOptionGroupValue(defaultChatModeSelect, "chat"));
 }
 
 function applySegmentedOutputSelection(mode: SegmentedOutputMode): void {
@@ -2097,7 +2097,7 @@ preferencesForm.addEventListener("submit", async (e) => {
       citaEnabled: citaEnabledInput.checked,
       citaSemanticEngine: "remote",
       chatSocialContextEnabled: chatSocialContextEnabledInput.checked,
-      defaultChatMode: "work",
+      defaultChatMode: "chat",
       segmentedOutputMode: "off",
       mobileMessageSegmentation: getMobileMessageSegmentationValue(),
       proactiveChatMode: getProactiveChatValue(),

@@ -107,7 +107,7 @@ const allTools = [delegateTaskTool(), webSearchTool(), writeWordTool()];
 
 function defaultOptions(adapter: FakeAdapter, tools = allTools) {
   return {
-    settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+    settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
     adapter,
     messages: [{ role: "user" as const, content: "搜索AI新闻" }],
     tools,

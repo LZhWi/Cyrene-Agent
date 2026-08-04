@@ -209,3 +209,39 @@ html, body {
 .cy-workspace.has-messages .cy-workspace-composer {
   padding: 22px 24px;
 }
+
+.cy-compressing-context {
+  position: absolute;
+  right: 24px;
+  bottom: 120px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+  color: var(--cy-text);
+  font-size: 13px;
+  pointer-events: none;
+  animation: cy-compressing-fade-in 0.25s ease;
+  z-index: 10;
+}
+
+.cy-compressing-context-icon {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  animation: cy-compressing-float 2.4s ease-in-out infinite;
+}
+
+@keyframes cy-compressing-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes cy-compressing-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-8px); }
+}
+

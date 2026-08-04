@@ -376,7 +376,7 @@ export function ChatComposer({
           </button>
         )}
         {supportsStyle && <StyleControl />}
-          <ReasoningControl />
+        <ReasoningControl />
         </div>
       </div>
     </div>

@@ -53,6 +53,7 @@ import "../components/ConversationSidebar.css";
 import "../components/StatusFloat.css";
 
 import avatarLight from "../../../assets/avatars/avatar-light.png";
+import compressingPng from "../../../assets/compressing.png";
 
 const CONVERSATION_MODES: readonly ConversationMode[] = ["chat", "work", "code", "learn", "daily"];
 
@@ -355,6 +356,7 @@ export function ChatPage() {
   const [activeSessionIds, setActiveSessionIds] = useState<Partial<Record<ConversationMode, string>>>({});
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [modelBusyByMode, setModelBusyByMode] = useState<Partial<Record<ConversationMode, boolean>>>({});
+  const [isCompressingContext, setIsCompressingContext] = useState(false);
   const [composerInteraction, setComposerInteraction] = useState<ComposerInteraction>();
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [lastTurnRevisionStarting, setLastTurnRevisionStarting] = useState(false);
@@ -911,6 +913,7 @@ export function ChatPage() {
       if (event.type === "RUN_STARTED") {
         runStarted = true;
         runActivity = { startedAt: Date.now(), reasoningMs: 0 };
+        setIsCompressingContext(false);
         if (event.runId) {
           const existing = activeRunsBySession.current[input.sessionId];
           activeRunsBySession.current = {
@@ -1048,6 +1051,8 @@ export function ChatPage() {
             runStage: { kind: "executing" },
           });
         }
+      } else if (event.type === "CUSTOM" && event.name === "cyrene.compressingContext") {
+        setIsCompressingContext(true);
       } else if (event.type === "CUSTOM" && event.name === "cyrene.sticker") {
         sticker = typeof event.value === "string" ? event.value : null;
         updateMessage(input.targetMode, input.assistantId, { sticker });
@@ -1841,6 +1846,12 @@ export function ChatPage() {
               )
               : undefined}
           />
+        )}
+        {isCompressingContext && (
+          <div className="cy-compressing-context" aria-live="polite" aria-busy="true">
+            <img src={compressingPng} className="cy-compressing-context-icon" alt="" aria-hidden="true" />
+            <span>昔涟正在压缩上下文…</span>
+          </div>
         )}
         <div className="cy-workspace-composer">
           <ComposerSlot

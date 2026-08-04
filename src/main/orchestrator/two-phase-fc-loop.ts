@@ -60,6 +60,8 @@ export interface AgentLoopSettings {
   apiKey: string;
   explicitTransport?: "openai" | "anthropic" | "auto";
   reasoning?: import("../../shared/reasoning").ReasoningPreference;
+  /** 用户设置的模型上下文窗口（Token）。用于非 code 模式的对话压缩触发阈值。 */
+  contextWindowTokens: number;
 }
 
 /** FC 循环中性事件。CyreneAgent 把它包成 AG-UI BaseEvent。 */
@@ -76,7 +78,8 @@ export type TwoPhaseEvent =
   | { type: "reasoning_message_start"; messageId: string; role: "reasoning" }
   | { type: "reasoning_message_content"; messageId: string; delta: string }
   | { type: "reasoning_message_end"; messageId: string }
-  | { type: "task_plan_update"; snapshot: TaskPlanSnapshot };
+  | { type: "task_plan_update"; snapshot: TaskPlanSnapshot }
+  | { type: "compressing_context" };
 
 export type SoulPhaseReason = "no_tool" | "max_rounds" | "timeout" | "tool_error";
 
@@ -116,6 +119,8 @@ export interface TwoPhaseFcOptions {
   optimizeFirstRound?: boolean;
   /** 测试可注入的模型流；生产默认使用官方 SDK runtime。 */
   streamChat?: (input: SdkStreamRunInput) => Promise<import("./vendors/types").ChatResponse>;
+  /** 当前对话模式，用于决定上下文压缩时保留的最近轮数。 */
+  mode?: string;
 }
 
 export interface TwoPhaseFcResult {
@@ -703,7 +708,15 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
       }
 
       conversation = adapter.appendToolResults(conversation, execResults);
-      conversation = compressConversation(conversation);
+      conversation = await compressConversation({
+        messages: conversation,
+        adapter,
+        settings: options.settings,
+        systemContent: options.toolSystemContent,
+        mode: options.mode,
+        onEvent,
+        signal: options.signal,
+      });
 
       onEvent?.({ type: "step_finished", stepName: `tool-round-${round + 1}` });
       continue;

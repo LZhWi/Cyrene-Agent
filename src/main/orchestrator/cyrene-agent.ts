@@ -48,6 +48,8 @@ export interface AgentLoopSettings {
   apiKey: string;
   explicitTransport?: "openai" | "anthropic" | "auto";
   reasoning?: import("../../shared/reasoning").ReasoningPreference;
+  /** 用户设置的模型上下文窗口（Token）。用于非 code 模式的对话压缩触发阈值。 */
+  contextWindowTokens: number;
 }
 
 export type AgentExecutionMode = "work" | "chat";
@@ -195,6 +197,8 @@ export function toAguiEvent(event: TwoPhaseEvent): BaseEvent {
       return { type: EventType.REASONING_MESSAGE_END, messageId: event.messageId };
     case "task_plan_update":
       return { type: EventType.CUSTOM, name: "cyrene.taskPlan", value: event.snapshot };
+    case "compressing_context":
+      return { type: EventType.CUSTOM, name: "cyrene.compressingContext", value: { text: "昔涟正在压缩上下文…" } };
   }
 }
 
@@ -348,6 +352,7 @@ export class CyreneAgent extends AbstractAgent {
               imageCaptionFallback: options.imageCaptionFallback,
               onEvent,
               signal: abortController.signal,
+              mode: options.conversationMode,
             }));
           } else {
             const executeTool = (tc: Parameters<typeof executeToolCall>[0], runnableToolIds: Set<string>) => executeToolCall(tc, runnableToolIds, {
@@ -382,6 +387,7 @@ export class CyreneAgent extends AbstractAgent {
               signal: abortController.signal,
               markAbort,
               availableSkills: options.availableSkills ?? [],
+              mode: options.conversationMode,
             };
             const conversationId = options.conversationId ?? "default";
             const executionLedger = executionLedgers.forScope(`${conversationId}:messages-${options.messages.length}`);
@@ -402,6 +408,7 @@ export class CyreneAgent extends AbstractAgent {
                 imageCaptionFallback: options.imageCaptionFallback,
                 perRoundTimeoutMs: timeoutSettings.perRoundTimeout,
                 forceSummaryTimeoutMs: timeoutSettings.forceSummaryTimeout,
+                mode: options.conversationMode,
               }));
           }
 
