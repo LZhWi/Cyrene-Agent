@@ -1,4 +1,4 @@
-import type { CodeRunRecord, CodeRunViewModel, CodeVerificationCard } from "../../../../chat/code-run-view-model";
+import type { CodeRunRecord, CodeRunViewModel, CodeVerificationCard } from "../../../../lib/code-run-view-model";
 import "./CodeRunPanel.css";
 
 const RUN_LABELS: Record<CodeRunRecord["status"], string> = {

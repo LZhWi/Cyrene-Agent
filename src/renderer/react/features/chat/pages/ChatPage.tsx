@@ -34,7 +34,7 @@ import {
   restoreCodeRunViewModel,
   type CodeRunApi,
   type CodeRunViewModel,
-} from "../../../../chat/code-run-view-model";
+} from "../../../../lib/code-run-view-model";
 import "../../../components/ui/SidebarToggle.css";
 import "../../../components/ui/ModeSwitch.css";
 import "../../../components/ui/CharacterStatusPill.css";
@@ -168,6 +168,7 @@ interface AguiApi {
     imageAttachments?: Array<{ name: string; filePath: string; mime?: string }>;
   }) => Promise<{ success: boolean; error?: string }>;
   onEvent: (callback: (event: AguiEvent) => void) => () => void;
+  cancel: (runId?: string) => Promise<unknown>;
 }
 
 interface ChoiceApi {
@@ -284,7 +285,7 @@ export function ChatPage() {
   const [sessionsByMode, setSessionsByMode] = useState<Partial<Record<ConversationMode, ChatSessionMeta[]>>>({});
   const [activeSessionIds, setActiveSessionIds] = useState<Partial<Record<ConversationMode, string>>>({});
   const [attachmentBusy, setAttachmentBusy] = useState(false);
-  const [modelBusy, setModelBusy] = useState(false);
+  const [modelBusyByMode, setModelBusyByMode] = useState<Partial<Record<ConversationMode, boolean>>>({});
   const [composerInteraction, setComposerInteraction] = useState<ComposerInteraction>();
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [lastTurnRevisionStarting, setLastTurnRevisionStarting] = useState(false);
@@ -300,7 +301,7 @@ export function ChatPage() {
   const dragDepthRef = useRef(0);
   const localPreviewUrlsRef = useRef(new Set<string>());
   const demoTimers = useRef(new Set<number>());
-  const activeRunRef = useRef<{ mode: ConversationMode; assistantId: string } | null>(null);
+  const activeRunsBySession = useRef<Record<string, { assistantId: string; runId?: string; mode: ConversationMode }>>({});
   // bootstrap 标志：只由 cold-start finally 写入；模式切换 effect 仅检查
   const bootstrapCompletedRef = useRef(false);
   // 长期持有的会话操作 ref：避免 IPC 回调捕获陈旧闭包
@@ -345,9 +346,11 @@ export function ChatPage() {
     return settings.onPermissionApprovalRequest((request) => {
       setInteractionBusy(false);
       setComposerInteraction(permissionInteraction(request));
-      const activeRun = activeRunRef.current;
+      const currentMode = activeModeRef.current;
+      const currentSessionId = activeSessionIdsRef.current[currentMode];
+      const activeRun = currentSessionId ? activeRunsBySessionRef.current[currentSessionId] : undefined;
       if (activeRun) {
-        updateMessage(activeRun.mode, activeRun.assistantId, { runStage: { kind: "waiting_permission" } });
+        updateMessage(currentMode, activeRun.assistantId, { runStage: { kind: "waiting_permission" } });
       }
     });
   }, []);
@@ -370,9 +373,15 @@ export function ChatPage() {
       off();
     };
   }, []);
-  const modelBusyRef = useRef(false);
+  const modelBusyByModeRef = useRef<Partial<Record<ConversationMode, boolean>>>({});
   const lastTurnRevisionStartingRef = useRef(false);
   const activeAguiOffRef = useRef<(() => void) | null>(null);
+  const activeRunsBySessionRef = useRef(activeRunsBySession);
+  const [pendingQueueBySession, setPendingQueueBySession] = useState<Record<string, { id: string; content: string; attachments: ComposerAttachment[]; userSticker?: string }[]>>({});
+  const pendingQueueBySessionRef = useRef(pendingQueueBySession);
+  useEffect(() => {
+    pendingQueueBySessionRef.current = pendingQueueBySession;
+  }, [pendingQueueBySession]);
   const activeEarlyTtsRef = useRef<{
     queue: EarlyTtsPlaybackQueue;
     mode: ConversationMode;
@@ -754,9 +763,13 @@ export function ChatPage() {
       return;
     }
 
-    modelBusyRef.current = true;
-    activeRunRef.current = { mode: input.targetMode, assistantId: input.assistantId };
-    setModelBusy(true);
+    modelBusyByModeRef.current = { ...modelBusyByModeRef.current, [input.targetMode]: true };
+    activeRunsBySession.current = {
+      ...activeRunsBySession.current,
+      [input.sessionId]: { assistantId: input.assistantId, mode: input.targetMode },
+    };
+    activeRunsBySessionRef.current = activeRunsBySession;
+    setModelBusyByMode((current) => ({ ...current, [input.targetMode]: true }));
     const earlyTtsQueue = createEarlyTtsQueue(input.targetMode, input.sessionId, input.assistantId);
     let streamContent = "";
     let reasoningContent = "";
@@ -829,6 +842,14 @@ export function ChatPage() {
       if (event.type === "RUN_STARTED") {
         runStarted = true;
         runActivity = { startedAt: Date.now(), reasoningMs: 0 };
+        if (event.runId) {
+          const existing = activeRunsBySession.current[input.sessionId];
+          activeRunsBySession.current = {
+            ...activeRunsBySession.current,
+            [input.sessionId]: { ...(existing ?? { assistantId: input.assistantId, mode: input.targetMode }), runId: event.runId },
+          };
+          activeRunsBySessionRef.current = activeRunsBySession;
+        }
         if (input.targetMode === "code" && event.runId) {
           codeRunViewModel = {
             ...codeRunViewModel,
@@ -1082,11 +1103,46 @@ export function ChatPage() {
     } finally {
       off();
       if (activeAguiOffRef.current === off) activeAguiOffRef.current = null;
-      if (activeRunRef.current?.assistantId === input.assistantId) activeRunRef.current = null;
-      modelBusyRef.current = false;
-      setModelBusy(false);
+      const currentActive = activeRunsBySession.current[input.sessionId];
+      if (currentActive?.assistantId === input.assistantId) {
+        const nextActive = { ...activeRunsBySession.current };
+        delete nextActive[input.sessionId];
+        activeRunsBySession.current = nextActive;
+        activeRunsBySessionRef.current = activeRunsBySession;
+      }
+      const nextBusy = { ...modelBusyByModeRef.current };
+      delete nextBusy[input.targetMode];
+      modelBusyByModeRef.current = nextBusy;
+      setModelBusyByMode((current) => {
+        const next = { ...current };
+        delete next[input.targetMode];
+        return next;
+      });
       void refreshSessions(input.targetMode, false);
+      // 当前 session 队列中的下一条消息自动消费
+      const queue = pendingQueueBySessionRef.current[input.sessionId] ?? [];
+      if (queue.length > 0) {
+        const [next, ...rest] = queue;
+        pendingQueueBySessionRef.current = { ...pendingQueueBySessionRef.current, [input.sessionId]: rest };
+        setPendingQueueBySession(pendingQueueBySessionRef.current);
+        const assistantId = crypto.randomUUID();
+        void dispatchUserMessage({
+          targetMode: input.targetMode,
+          sessionId: input.sessionId,
+          rawContent: next.content,
+          visibleContent: next.content.replace(/\[sticker:[^\]]+\]/g, "").trim(),
+          attachments: next.attachments,
+          userSticker: next.userSticker,
+          shouldRunModel: true,
+          assistantId,
+          userMessageId: next.id,
+        });
+      }
     }
+  }
+
+  function isSessionBusy(sessionId: string): boolean {
+    return Boolean(activeRunsBySessionRef.current[sessionId]);
   }
 
   async function restartLastChatTurn(
@@ -1096,7 +1152,7 @@ export function ChatPage() {
   ): Promise<boolean> {
     if (
       activeModeRef.current !== "chat"
-      || modelBusyRef.current
+      || modelBusyByModeRef.current.chat
       || lastTurnRevisionStartingRef.current
     ) return false;
     const store = chatStore();
@@ -1463,12 +1519,55 @@ export function ChatPage() {
     const demoResponse = DEMO_RESPONSES[message];
     const demoSticker = DEMO_STICKERS[message];
     const shouldRunModel = shouldRunModelForMode(mode, Boolean(demoResponse), Boolean(demoSticker));
-    if (shouldRunModel && modelBusyRef.current) return;
     const assistantId = demoResponse || demoSticker || shouldRunModel ? crypto.randomUUID() : undefined;
     const userMessageId = crypto.randomUUID();
     const attachmentsForMessage = attachments.map((attachment) => ({ ...attachment }));
     const targetMode = mode;
     const sessionId = await ensureSession(targetMode);
+    // 如果当前 session 正在跑模型，新消息进入 composer 上方队列，等当前 run 结束后自动发送
+    if (shouldRunModel && isSessionBusy(sessionId)) {
+      const nextQueue = {
+        ...pendingQueueBySessionRef.current,
+        [sessionId]: [
+          ...(pendingQueueBySessionRef.current[sessionId] ?? []),
+          { id: userMessageId, content: message, attachments: attachmentsForMessage, userSticker },
+        ],
+      };
+      pendingQueueBySessionRef.current = nextQueue;
+      setPendingQueueBySession(nextQueue);
+      setDrafts((current) => ({ ...current, [scopeKey]: "" }));
+      setAttachmentsByScope((current) => ({ ...current, [scopeKey]: [] }));
+      return;
+    }
+    await dispatchUserMessage({
+      targetMode,
+      sessionId,
+      rawContent: message,
+      visibleContent: visibleMessage,
+      attachments: attachmentsForMessage,
+      userSticker,
+      shouldRunModel,
+      demoResponse,
+      demoSticker,
+      assistantId,
+      userMessageId,
+    });
+  }
+
+  async function dispatchUserMessage(input: {
+    targetMode: ConversationMode;
+    sessionId: string;
+    rawContent: string;
+    visibleContent: string;
+    attachments: ComposerAttachment[];
+    userSticker?: string;
+    shouldRunModel: boolean;
+    demoResponse?: string;
+    demoSticker?: string;
+    assistantId?: string;
+    userMessageId: string;
+  }) {
+    const { targetMode, sessionId, rawContent, visibleContent, attachments, userSticker, shouldRunModel, demoResponse, demoSticker, assistantId, userMessageId } = input;
     setMessagesByMode((current) => ({
       ...current,
       [targetMode]: [
@@ -1476,9 +1575,9 @@ export function ChatPage() {
         {
           id: userMessageId,
           role: "user",
-          content: visibleMessage,
+          content: visibleContent,
           sticker: userSticker,
-          attachments: attachmentsForMessage.length > 0 ? attachmentsForMessage : undefined,
+          attachments: attachments.length > 0 ? attachments : undefined,
         },
         ...(assistantId ? [{
           id: assistantId!,
@@ -1497,10 +1596,10 @@ export function ChatPage() {
     const updatedSession = await chatStore()?.append(sessionId, {
       id: userMessageId,
       role: "user",
-      content: message,
+      content: rawContent,
       at: Date.now(),
       sticker: userSticker,
-      attachments: attachmentsForMessage
+      attachments: attachments
         .filter((attachment) => (attachment.kind === "image" || attachment.kind === "document") && attachment.filePath)
         .map((attachment) => attachment.kind === "image" ? {
           kind: "image" as const,
@@ -1517,8 +1616,8 @@ export function ChatPage() {
         }),
     });
     void refreshSessions(targetMode, false);
-    if (attachmentsForMessage.length > 0) {
-      void prepareImageAttachments(targetMode, userMessageId, attachmentsForMessage);
+    if (attachments.length > 0) {
+      void prepareImageAttachments(targetMode, userMessageId, attachments);
     }
     if (demoResponse && assistantId) streamDemoResponse(targetMode, assistantId, demoResponse, sessionId);
     if (shouldRunModel && assistantId && !updatedSession) {
@@ -1536,10 +1635,36 @@ export function ChatPage() {
         userMessageId,
         assistantId,
         session: updatedSession,
-        attachments: attachmentsForMessage,
+        attachments,
       });
     }
   }
+
+  async function cancelCurrentRun() {
+    const sessionId = activeSessionId;
+    if (!sessionId) return;
+    const activeRun = activeRunsBySession.current[sessionId];
+    if (!activeRun?.runId) return;
+    updateMessage(activeRun.mode, activeRun.assistantId, {
+      streaming: false,
+      loading: false,
+      waitingForFirstEvent: false,
+      responseStarted: true,
+    });
+    await aguiApi()?.cancel(activeRun.runId);
+  }
+
+  function removeQueuedMessage(sessionId: string, id: string) {
+    const next = {
+      ...pendingQueueBySessionRef.current,
+      [sessionId]: (pendingQueueBySessionRef.current[sessionId] ?? []).filter((item) => item.id !== id),
+    };
+    pendingQueueBySessionRef.current = next;
+    setPendingQueueBySession(next);
+  }
+
+  const isCurrentScopeRunning = Boolean(activeSessionId && activeRunsBySession.current[activeSessionId]);
+  const currentPendingQueue = activeSessionId ? (pendingQueueBySession[activeSessionId] ?? []) : [];
 
   return (
     <div className={`cy-page ${collapsed ? "is-collapsed" : ""}`}>
@@ -1605,7 +1730,7 @@ export function ChatPage() {
             mode={mode}
             preferredAddress={preferredAddress}
             stickerSize={stickerSize}
-            revisionBusy={modelBusy || lastTurnRevisionStarting}
+            revisionBusy={Boolean(modelBusyByMode[mode]) || lastTurnRevisionStarting}
             onEditLastUserMessage={mode === "chat" ? editLastChatUserMessage : undefined}
             onRegenerateLastResponse={mode === "chat" ? regenerateLastChatResponse : undefined}
             onTtsCacheKey={activeSessionId
@@ -1628,10 +1753,13 @@ export function ChatPage() {
             workspaceName={workspaceNames[mode]}
             attachments={attachments}
             attachmentBusy={attachmentBusy}
-            modelBusy={modelBusy && (mode === "chat" || mode === "work" || mode === "daily" || mode === "code")}
+            modelBusy={isCurrentScopeRunning}
+            pendingQueue={currentPendingQueue}
             clineMode={selectedClineMode}
             onChange={(value) => setDrafts((current) => ({ ...current, [scopeKey]: value }))}
             onSubmit={(value) => void sendMessage(value)}
+            onCancel={() => void cancelCurrentRun()}
+            onRemoveQueuedMessage={(id) => removeQueuedMessage(activeSessionId, id)}
             onChooseWorkspace={() => void chooseWorkspace()}
             onInitVaultStructure={mode === "learn" ? () => {
               const sessionId = activeSessionIdsRef.current[mode];

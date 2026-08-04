@@ -603,12 +603,21 @@ export function registerAgUiIpc(
     return beginNewCodeTask(normalized);
   });
 
-  ipcMain.handle(IPC.AGUI_CANCEL, () => {
-    for (const run of activeRuns.values()) {
-      run.subscription.unsubscribe();
-      run.endLifecycle();
+  ipcMain.handle(IPC.AGUI_CANCEL, (_event, runId?: string) => {
+    if (runId) {
+      const run = activeRuns.get(runId);
+      if (run) {
+        run.subscription.unsubscribe();
+        run.endLifecycle();
+        activeRuns.delete(runId);
+      }
+    } else {
+      for (const run of activeRuns.values()) {
+        run.subscription.unsubscribe();
+        run.endLifecycle();
+      }
+      activeRuns.clear();
     }
-    activeRuns.clear();
     return true;
   });
 }

@@ -35,7 +35,7 @@ import { type ReasoningPreference } from "../../shared/reasoning";
 import { type LoginFlowState } from "../../shared/music-types";
 import { resolveApiEndpoint, type ApiTransport } from "../../shared/api-endpoint";
 import type { ChatAppearanceSettings } from "../../shared/chat-appearance";
-import { renderMarkdown } from "../chat/markdown/markdown-renderer";
+import { renderMarkdown } from "../lib/markdown/markdown-renderer";
 import workFlowDocMd from "../../../docs/model-work-test/work-flow-test-results-2026-07-24.md?raw";
 import {
   DEFAULT_CUSTOM_STYLE,
@@ -5400,7 +5400,6 @@ declare global {
       delete: (id: string) => Promise<boolean>;
       rename: (id: string, title: string) => Promise<unknown>;
       openFolder: () => Promise<boolean>;
-      openInChatWindow: (sessionId: string) => Promise<boolean>;
       openInReactChatWindow: (sessionId: string) => Promise<boolean>;
       getActiveSession: () => Promise<string | null>;
       onChanged: (cb: () => void) => () => void;

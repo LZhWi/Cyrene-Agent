@@ -86,7 +86,7 @@ md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
 // ── fenced code 自定义 renderer ──────────────────────────────
 
 const defaultFenceRenderer = md.renderer.rules.fence
-  || function (tokens: MarkdownIt.Token[], idx: number, options, env, self) {
+  || function (tokens, idx, options, env, self) {
     return self.renderToken(tokens, idx, options);
   };
 
@@ -121,7 +121,7 @@ md.renderer.rules.fence = function (tokens, idx, options, env, self) {
 // 避免 overflow-x:auto + overflow-y:visible 冲突导致的纵向裁切
 
 const defaultMathBlockRenderer = md.renderer.rules.math_block
-  || function (tokens: MarkdownIt.Token[], idx: number, options, env, self) {
+  || function (tokens, idx, options, env, self) {
     return self.renderToken(tokens, idx, options);
   };
 
@@ -144,8 +144,6 @@ function escapeHtml(s: string): string {
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
 }
-
-// ── 公共 API ───────────────────────────────────────────────
 
 // ── 渲染常量 ──────────────────────────────────────────────
 
@@ -257,7 +255,7 @@ function renderEscapedPlainText(raw: string): MarkdownRenderResult {
 /**
  * 把 raw markdown 渲染为安全的 HTML。
  *
- * 管线：长度保护 → markdown-it → DOMPurify → 协议校验 → 缓存
+ * 管线：长度保护 -> markdown-it -> DOMPurify -> 协议校验 -> 缓存
  *
  * 返回判别联合 MarkdownRenderResult：
  * - { mode: "html", content }: 渲染成功，content 是 DOMPurify 净化后的 HTML

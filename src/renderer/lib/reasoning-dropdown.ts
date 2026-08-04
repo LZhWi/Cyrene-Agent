@@ -1,7 +1,7 @@
-// Chat 窗口推理下拉 —— 按 (providerId, model) capability 动态生成选项。
+// 推理下拉 —— 按 (providerId, model) capability 动态生成选项。
 //
 // 入口：computeReasoningDropdown(providerId, model, savedPreference)
-// 返回 ReasoningDropdownView，由 chat/main.ts 在真实 DOM 上构建选项。
+// 返回 ReasoningDropdownView，由 React Chat 在真实 DOM 上构建选项。
 //
 // 控件形态（按 capability.control）：
 // - fixed-on：始终开启，控件 disabled，单项 disabled

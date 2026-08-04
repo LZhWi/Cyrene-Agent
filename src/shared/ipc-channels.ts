@@ -112,15 +112,9 @@ export const IPC = {
   CHATS_MIGRATE_LEGACY: "chats:migrate-legacy",
   // 任意会话变动后 main → 所有渲染窗口 broadcast，触发列表/标题刷新
   CHATS_CHANGED: "chats:changed",
-  // 设置中心 → main：要求打开聊天窗口并加载指定 sessionId
-  CHATS_OPEN_IN_CHAT_WINDOW: "chats:open-in-chat-window",
   // 状态栏 → main：要求打开/复用 reactChatWindow 并加载指定 sessionId
-  // 仅服务于 reactChatWindow（旧 chatWindow 仍走 CHATS_OPEN_IN_CHAT_WINDOW）
   CHATS_OPEN_IN_REACT_WINDOW: "chats:open-in-react-window",
-  // main → 聊天窗口：要求切到指定 sessionId（窗口已存在时用；服务于旧 chatWindow）
-  CHATS_SWITCH_SESSION: "chats:switch-session",
   // main → reactChatWindow：要求切到指定 sessionId（窗口已存在时用）
-  // 与 CHATS_SWITCH_SESSION 独立，避免新旧窗口相互误触
   CHATS_REACT_SWITCH_SESSION: "chats:react-switch-session",
   // reactChatWindow → main：ChatPage 已挂好 IPC 监听，允许 flush pending sessionId
   CHATS_REACT_READY: "chats:react-ready",

@@ -117,7 +117,7 @@ const aguiApi = {
     ipcRenderer.on(IPC.AGUI_EVENT, listener);
     return () => ipcRenderer.off(IPC.AGUI_EVENT, listener);
   },
-  cancel: () => ipcRenderer.invoke(IPC.AGUI_CANCEL),
+  cancel: (runId?: string) => ipcRenderer.invoke(IPC.AGUI_CANCEL, runId),
 };
 
 contextBridge.exposeInMainWorld("agui", aguiApi);
@@ -510,8 +510,6 @@ const chatStoreApi = {
     ipcRenderer.invoke(IPC.CHATS_OPEN_WORKSPACE, workspaceRoot),
   migrateLegacy: (messages: unknown[]) =>
     ipcRenderer.invoke(IPC.CHATS_MIGRATE_LEGACY, messages),
-  openInChatWindow: (sessionId: string) =>
-    ipcRenderer.invoke(IPC.CHATS_OPEN_IN_CHAT_WINDOW, sessionId),
   // 聊天窗口加载 / 切换 session 时上报；其他窗口可查询/订阅
   setActiveSession: (sessionId: string | null) =>
     ipcRenderer.invoke(IPC.CHATS_SET_ACTIVE_SESSION, sessionId),
@@ -526,12 +524,6 @@ const chatStoreApi = {
     const listener = () => callback();
     ipcRenderer.on(IPC.CHATS_CHANGED, listener);
     return () => ipcRenderer.removeListener(IPC.CHATS_CHANGED, listener);
-  },
-  // main → 聊天窗口：要求切到指定 sessionId（窗口已打开时用）
-  onSwitchSession: (callback: (sessionId: string) => void) => {
-    const listener = (_e: Electron.IpcRendererEvent, sessionId: string) => callback(sessionId);
-    ipcRenderer.on(IPC.CHATS_SWITCH_SESSION, listener);
-    return () => ipcRenderer.removeListener(IPC.CHATS_SWITCH_SESSION, listener);
   },
   // ── 对话工作区绑定 ──────────────────────────────────────
   setWorkspace: (sessionId: string, workspaceRoot: string) =>
@@ -563,7 +555,7 @@ const chatStoreApi = {
   },
   // reactChatWindow → main：ChatPage 已挂好 IPC 监听，允许 flush pending sessionId
   notifyReactReady: () => ipcRenderer.send(IPC.CHATS_REACT_READY),
-  // 获取当前 TODO 状态，用于窗口初始加载和常驻显示
+  // 获取当前各模式 TODO 状态，用于窗口初始加载和常驻显示
   getCurrentTodos: () => ipcRenderer.invoke(IPC.TODOS_GET_CURRENT),
 };
 

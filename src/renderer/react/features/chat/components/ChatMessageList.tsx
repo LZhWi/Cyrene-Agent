@@ -26,7 +26,7 @@ import { LastTurnActionButton } from "./LastTurnActionButton";
 import { resolveRevisableLastTurn, type RevisableLastTurn } from "./last-turn-actions";
 import { extractMessageStickerId, stripMessageStickerMarkers } from "./message-sticker";
 import { CodeRunPanel } from "./CodeRunPanel";
-import type { CodeRunViewModel } from "../../../../chat/code-run-view-model";
+import type { CodeRunViewModel } from "../../../../lib/code-run-view-model";
 
 export interface ChatMessageItem {
   id: string;

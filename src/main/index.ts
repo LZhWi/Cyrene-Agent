@@ -250,7 +250,6 @@ async function reconcileUserMemoryIndex(): Promise<void> {
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
-let chatWindow: BrowserWindow | null = null;
 let reactChatWindow: BrowserWindow | null = null;
 const reactChatSession: ReactChatSessionDispatcher =
   createReactChatSessionDispatcher();
@@ -342,8 +341,8 @@ function initializeScreenshotService(initialHotkey: string): ScreenshotService {
     unregisterShortcut: (accelerator) => globalShortcut.unregister(accelerator),
     sendInsert: (data) => {
       const validated = validateInsert(data);
-      if (chatWindow && !chatWindow.isDestroyed()) {
-        chatWindow.webContents.send(IPC.SCREENSHOT_INSERT, validated);
+      if (reactChatWindow && !reactChatWindow.isDestroyed()) {
+        reactChatWindow.webContents.send(IPC.SCREENSHOT_INSERT, validated);
       }
     },
   });
@@ -2981,7 +2980,7 @@ export function getPublicModelConfig(settings = loadModelSettings()): PublicMode
 }
 
 function broadcastToAuxWindows(channel: string, payload: unknown): void {
-  for (const win of [chatWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
+  for (const win of [reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(channel, payload);
     }
@@ -2989,7 +2988,7 @@ function broadcastToAuxWindows(channel: string, payload: unknown): void {
 }
 
 function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
-  for (const win of [mainWindow, chatWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_THEME_CHANGED, theme);
     }
@@ -2997,7 +2996,7 @@ function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
 }
 
 function broadcastUiThemeRadiusChanged(theme: GeneralSettings["uiThemeRadius"]): void {
-  for (const win of [mainWindow, chatWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
+  for (const win of [mainWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_THEME_RADIUS_CHANGED, theme);
     }
@@ -3007,7 +3006,6 @@ function broadcastUiThemeRadiusChanged(theme: GeneralSettings["uiThemeRadius"]):
 function broadcastWindowCornerRadiusChanged(radius: GeneralSettings["windowCornerRadius"]): void {
   for (const win of [
     mainWindow,
-    chatWindow,
     reactChatWindow,
     sidebarWindow,
     tasksWindow,
@@ -3022,7 +3020,7 @@ function broadcastWindowCornerRadiusChanged(radius: GeneralSettings["windowCorne
 }
 
 function broadcastUiFontChanged(font: GeneralSettings["uiFont"]): void {
-  for (const win of [mainWindow, chatWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_FONT_CHANGED, font);
     }
@@ -3149,10 +3147,10 @@ function createWindow(): void {
     () => loadUserProfile().defaultCity,
     () => loadGeneralSettings().weatherSource,
     () => loadGeneralSettings().amapKey,
-    // 天气卡片回调：工具拿到结构化数据后，发 Custom 事件给聊天窗口渲染卡片
+    // 天气卡片回调：工具拿到结构化数据后，发 Custom 事件给 react 聊天窗口渲染卡片
     (card) => {
-      if (chatWindow && !chatWindow.isDestroyed()) {
-        chatWindow.webContents.send(IPC.AGUI_EVENT, {
+      if (reactChatWindow && !reactChatWindow.isDestroyed()) {
+        reactChatWindow.webContents.send(IPC.AGUI_EVENT, {
           type: "CUSTOM",
           name: "cyrene.weather",
           value: card,
@@ -3165,18 +3163,14 @@ function createWindow(): void {
   // 注入用户时区 getter：工具侧通过 currentUserTimezone() 统一拿用户时区（缺/非法回退 Asia/Shanghai）
   setUserTimezoneConfig(() => loadUserProfile().timezone);
 
-  // 注入用户选择卡片回调：工具调 ask_user_choice 时发 Custom 事件给聊天窗口
+  // 注入用户选择卡片回调：工具调 ask_user_choice 时发 Custom 事件给 react 聊天窗口
   setChoiceCardSender((cardData) => {
-    // 旧 ask_user_choice 还没有本轮 sender；迁移期同时投递旧聊天窗口和 reactChatWindow。
-    // LangGraph 的结构化 Ask 走 agui-bridge 中的定向 sender，不会依赖此回退。
-    for (const win of [chatWindow, reactChatWindow]) {
-      if (win && !win.isDestroyed()) {
-        win.webContents.send(IPC.AGUI_EVENT, {
-          type: "CUSTOM",
-          name: "cyrene.choice",
-          value: cardData,
-        });
-      }
+    if (reactChatWindow && !reactChatWindow.isDestroyed()) {
+      reactChatWindow.webContents.send(IPC.AGUI_EVENT, {
+        type: "CUSTOM",
+        name: "cyrene.choice",
+        value: cardData,
+      });
     }
   });
 
@@ -3316,69 +3310,6 @@ function createWindow(): void {
   });
 }
 
-
-function createChatWindow(sessionId?: string): void {
-  if (chatWindow && !chatWindow.isDestroyed()) {
-    chatWindow.show();
-    chatWindow.focus();
-    // 窗口已存在：通过事件让渲染进程切到目标会话（不重 load）
-    if (sessionId) {
-      chatWindow.webContents.send(IPC.CHATS_SWITCH_SESSION, sessionId);
-    }
-    return;
-  }
-
-  const layout = computeLayout();
-  chatWindow = new BrowserWindow({
-    x: layout.chat.x,
-    y: layout.chat.y,
-    width: 1280,
-    height: 760,
-    minWidth: 960,
-    minHeight: 540,
-    title: "Cyrene · 聊天",
-    icon: getCurrentAppIconPath(),
-    backgroundColor: "#00000000",
-    autoHideMenuBar: true,
-    show: false,
-    frame: false,
-    transparent: true,
-    resizable: true,
-    webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-
-  // 通过 URL query 把目标 sessionId 带给渲染进程（首次加载用），
-  // 后续切换走 CHATS_SWITCH_SESSION 事件，避免重新加载页面。
-  const queryString = sessionId ? "?sessionId=" + encodeURIComponent(sessionId) : "";
-  if (isDev) {
-    chatWindow.loadURL("http://localhost:5173/chat/" + queryString);
-  } else {
-    chatWindow.loadFile(
-      path.join(__dirname, "..", "..", "renderer", "chat", "index.html"),
-      sessionId ? { search: queryString } : undefined,
-    );
-  }
-
-  chatWindow.once("ready-to-show", () => {
-    chatWindow?.show();
-  });
-
-  chatWindow.on("closed", () => {
-    chatWindow = null;
-    // 聊天窗口关闭后清空活跃 sessionId 广播，让设置面板的"删除当前会话"
-    // 提示文案恢复成普通的"确定删除？"
-    activeChatSessionId = null;
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (win.isDestroyed()) continue;
-      try { win.webContents.send(IPC.CHATS_ACTIVE_SESSION_CHANGED, null); } catch { /* ignore */ }
-    }
-  });
-}
 
 function createReactChatWindow(sessionId?: string): void {
   // 已有窗口 → 复用；dispatcher 决定立即 send 还是等 ready 后 flush
@@ -3775,7 +3706,7 @@ function applyUiIcon(iconSetting: UiIcon): void {
     return;
   }
   tray?.setImage(icon);
-  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) win.setIcon(icon);
   }
 }
@@ -5229,8 +5160,8 @@ app.whenReady().then(async () => {
     contextRefs: contextRefRegistry,
     ingestContextEvent: (event) => citaService.ingest(event),
     sendCard: (card) => {
-      if (chatWindow && !chatWindow.isDestroyed()) {
-        chatWindow.webContents.send(IPC.AGUI_EVENT, {
+      if (reactChatWindow && !reactChatWindow.isDestroyed()) {
+        reactChatWindow.webContents.send(IPC.AGUI_EVENT, {
           type: "CUSTOM",
           name: "cyrene.music",
           value: card,
@@ -5423,9 +5354,9 @@ app.whenReady().then(async () => {
     }
   });
 
-  // Phase 3.2：注入桌面端镜像广播 —— 把 bot 入站/出站消息推到 chatWindow
+  // Phase 3.2：注入桌面端镜像广播 —— 把 bot 入站/出站消息推到 reactChatWindow
   setDispatcherBroadcastChat((event) => {
-    const win = chatWindow;
+    const win = reactChatWindow;
     if (!win || win.isDestroyed()) return;
     try {
       win.webContents.send(IPC.AGUI_EVENT, {
@@ -5497,7 +5428,7 @@ app.whenReady().then(async () => {
         timeoutMs: getTimeoutSettings().chatRequestTimeout,
       };
     },
-    getChatWebContents: () => (chatWindow && !chatWindow.isDestroyed() ? chatWindow.webContents : null),
+    getChatWebContents: () => (reactChatWindow && !reactChatWindow.isDestroyed() ? reactChatWindow.webContents : null),
     recordHistory: (entry) => schedulerStore.recordHistory(entry),
     id: () => `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     now: () => new Date(),
@@ -5699,11 +5630,7 @@ app.whenReady().then(async () => {
     proactiveConversationLifecycle,
   );
 
-  ipcMain.handle(IPC.CHATS_OPEN_IN_CHAT_WINDOW, (_event, sessionId: string) => {
-    createChatWindow(sessionId);
-    return true;
-  });
-  // 状态栏专用入口：打开/复用 reactChatWindow（不复用旧 chatWindow）
+  // 状态栏专用入口：打开/复用 reactChatWindow
   ipcMain.handle(IPC.CHATS_OPEN_IN_REACT_WINDOW, (_event, sessionId: string) => {
     if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
       return false;
