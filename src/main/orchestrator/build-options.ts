@@ -179,7 +179,6 @@ export interface ModelSettingsLite {
   runtimeSync?: string;
   stickerEnabled?: boolean;
   stickerSimilarityThreshold?: number;
-  disableLangGraph?: boolean;
   optimizeFirstRound?: boolean;
   /** 上下文窗口大小（Token）。来自 ModelSettings.contextWindowTokens。 */
   contextWindowTokens?: number;
@@ -687,7 +686,7 @@ export async function buildAgentRunOptions(
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
       ...(isChatMode ? { tools: runTools as ToolDefinition[] } : {}),
       ...(availableSkills.length > 0 ? { availableSkills } : {}),
-      agentRuntime: settings.disableLangGraph ? "legacy" : "langgraph",
+      agentRuntime: "langgraph",
       optimizeFirstRound: settings.optimizeFirstRound,
       resolvedWorkspaceRoot,
     },

@@ -82,7 +82,6 @@ export interface CyreneRunOptions {
   toolSystemContentOptimizedForFirstRound?: string;
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。 */
   soulSystemBaseContent: string;
-  disableLangGraph?: boolean;
   optimizeFirstRound?: boolean;
   /** 只应用到 Soul 最终自然语言回复，禁止影响 CITA、Action Gate 与 Native FC。 */
   soulSampling?: ApprovedStyleSampling;

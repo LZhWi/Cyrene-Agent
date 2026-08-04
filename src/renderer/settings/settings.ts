@@ -295,7 +295,6 @@ interface ModelSettings {
   /** Embedding 维度（可选，仅 cloud 模式）。留空 = 自动探测。 */
   embeddingDimensions?: number;
   multimodal: boolean;
-  disableLangGraph?: boolean;
   optimizeFirstRound?: boolean;
   thinkingOverride?: -1 | 0 | 1;
   /** 上下文窗口大小（Token）。默认 256000。 */
@@ -776,7 +775,6 @@ bgmAudio.loop = true;
 const apiForm = document.getElementById("api-form") as HTMLFormElement;
 const apiRuntimeForm = document.getElementById("api-runtime-form") as HTMLFormElement;
 const apiTimeoutForm = document.getElementById("api-timeout-form") as HTMLFormElement;
-const apiFcModeForm = document.getElementById("api-fc-mode-form") as HTMLFormElement;
 const appearanceForm = document.getElementById("appearance-form") as HTMLFormElement;
 const generalForm = document.getElementById("general-form") as HTMLFormElement;
 const preferencesForm = document.getElementById("preferences-form") as HTMLFormElement;
@@ -866,7 +864,6 @@ const maxIterationsInput = document.getElementById("max-iterations") as HTMLInpu
 const maxReplansInput = document.getElementById("max-replans") as HTMLInputElement;
 const maxRefreshInput = document.getElementById("max-refresh") as HTMLInputElement;
 const perCallTimeoutSecInput = document.getElementById("per-call-timeout-sec") as HTMLInputElement;
-const citaRepairBudgetSecInput = document.getElementById("cita-repair-budget-sec") as HTMLInputElement;
 const actionGateRepairBudgetSecInput = document.getElementById("action-gate-repair-budget-sec") as HTMLInputElement;
 
 // Embedding 维度（可选，仅 cloud 模式）
@@ -944,10 +941,6 @@ const timeoutProfileRemainingInput = document.getElementById("timeout-profile-re
 const timeoutProfileRemainingReset = document.getElementById("timeout-profile-remaining-reset-btn") as HTMLButtonElement;
 const modelRequestTimeoutSecInput = document.getElementById("model-request-timeout-sec") as HTMLInputElement;
 const modelRequestTimeoutSecReset = document.getElementById("model-request-timeout-sec-reset-btn") as HTMLButtonElement;
-
-const fcModeLangGraphButton = document.getElementById("fc-mode-langgraph") as HTMLButtonElement;
-const fcModeEnableOptimizationButton = document.getElementById("fc-mode-enable-optimization") as HTMLButtonElement;
-const fcModeDisableOptimizationButton = document.getElementById("fc-mode-disable-optimization") as HTMLButtonElement;
 
 const toggleEnableThinking = document.getElementById("toggle-enable-thinking") as HTMLInputElement;
 const toggleDisableThinking = document.getElementById("toggle-disable-thinking") as HTMLInputElement;
@@ -1262,19 +1255,6 @@ function renderProactiveDeliveryAvailability(statuses: Record<string, { phase?: 
     const target = normalizeProactiveDeliveryTarget(button.dataset.value);
     const status = target === "local" ? undefined : statuses[target];
     button.disabled = !isProactiveDeliveryTargetSelectable(target, status);
-  });
-}
-
-function applyFcOptimizeSelection(optimizeFirstRound?: boolean, disableLangGraph?: boolean) {
-  fcModeLangGraphButton.className = !disableLangGraph ? "fc-mode-option is-active" : "fc-mode-option";
-  fcModeEnableOptimizationButton.className = (disableLangGraph && optimizeFirstRound) ? "fc-mode-option is-active" : "fc-mode-option";
-  fcModeDisableOptimizationButton.className = (disableLangGraph && !optimizeFirstRound) ? "fc-mode-option is-active" : "fc-mode-option";
-  // 根据模式显隐相关参数
-  const isLangGraph = !disableLangGraph;
-  document.querySelectorAll<HTMLElement>("[data-mode]").forEach(el => {
-    const mode = el.dataset.mode;
-    if (mode === "langgraph") el.classList.toggle("is-hidden-mode", !isLangGraph);
-    else if (mode === "twophase") el.classList.toggle("is-hidden-mode", isLangGraph);
   });
 }
 
@@ -1631,12 +1611,10 @@ async function loadConfig(): Promise<void> {
     maxReplansInput.value = String(cfg.maxReplans ?? 2);
     maxRefreshInput.value = String(cfg.maxRefresh ?? 1);
     perCallTimeoutSecInput.value = String(cfg.perCallTimeoutSec ?? 75);
-    citaRepairBudgetSecInput.value = String(cfg.citaRepairBudgetSec ?? 8);
     actionGateRepairBudgetSecInput.value = String(cfg.actionGateRepairBudgetSec ?? 10);
     if (embeddingDimensionsInput) {
       embeddingDimensionsInput.value = cfg.embeddingDimensions ? String(cfg.embeddingDimensions) : "";
     }
-    applyFcOptimizeSelection(cfg.optimizeFirstRound, cfg.disableLangGraph);
     toggleEnableThinking.checked = cfg.thinkingOverride === 1;
     toggleDisableThinking.checked = cfg.thinkingOverride === -1;
     toggleDisableMaxToken.checked = !!cfg.disableMaxToken;
@@ -1833,19 +1811,6 @@ timeoutProfilePerAttemptReset.addEventListener("click", () => { timeoutProfilePe
 timeoutProfileRemainingReset.addEventListener("click", () => { timeoutProfileRemainingInput.value = "" });
 modelRequestTimeoutSecReset.addEventListener("click", () => { modelRequestTimeoutSecInput.value = "" });
 
-fcModeLangGraphButton.addEventListener("click", async () => {
-  await window.settings!.saveConfig({ disableLangGraph: false });
-  applyFcOptimizeSelection(false, false);
-});
-fcModeEnableOptimizationButton.addEventListener("click", async () => {
-  await window.settings!.saveConfig({ optimizeFirstRound: true, disableLangGraph: true });
-  applyFcOptimizeSelection(true, true);
-});
-fcModeDisableOptimizationButton.addEventListener("click", async () => {
-  await window.settings!.saveConfig({ optimizeFirstRound: false, disableLangGraph: true });
-  applyFcOptimizeSelection(false, true);
-});
-
 toggleEnableThinking.addEventListener("change", () => {
   if (toggleEnableThinking.checked) {
     toggleDisableThinking.checked = false;
@@ -1873,7 +1838,7 @@ stickerEnabledInput.addEventListener("change", () => {
 // 任何高级字段改动都标记"有未保存的更改"
 [
   chatRequestTimeoutSecInput, maxIterationsInput, maxReplansInput, maxRefreshInput,
-  perCallTimeoutSecInput, citaRepairBudgetSecInput, actionGateRepairBudgetSecInput,
+  perCallTimeoutSecInput, actionGateRepairBudgetSecInput,
 ].forEach((el) => {
   el.addEventListener("input", () => setCyreneSaveStatus("有未保存的更改"));
 });
@@ -3149,7 +3114,6 @@ apiRuntimeForm.addEventListener("submit", async (e) => {
     const parsedMaxReplans = Math.max(1, Math.min(5, parseInt(maxReplansInput.value, 10) || 2));
     const parsedMaxRefresh = Math.max(0, Math.min(3, parseInt(maxRefreshInput.value, 10) || 1));
     const parsedPerCallSec = Math.max(30, Math.min(120, parseInt(perCallTimeoutSecInput.value, 10) || 75));
-    const parsedCitaSec = Math.max(4, Math.min(30, parseInt(citaRepairBudgetSecInput.value, 10) || 8));
     const parsedAgSec = Math.max(5, Math.min(40, parseInt(actionGateRepairBudgetSecInput.value, 10) || 10));
     await window.settings!.saveConfig({
       chatRequestTimeoutSec: parsedTimeoutSec,
@@ -3157,7 +3121,6 @@ apiRuntimeForm.addEventListener("submit", async (e) => {
       maxReplans: parsedMaxReplans,
       maxRefresh: parsedMaxRefresh,
       perCallTimeoutSec: parsedPerCallSec,
-      citaRepairBudgetSec: parsedCitaSec,
       actionGateRepairBudgetSec: parsedAgSec,
     });
     // 同步超时到 TimeoutSettings（秒→毫秒）
@@ -3219,7 +3182,6 @@ cyrenePanel.addEventListener("submit", async (e) => {
     const parsedMaxReplans = Math.max(1, Math.min(5, parseInt(maxReplansInput.value, 10) || 2));
     const parsedMaxRefresh = Math.max(0, Math.min(3, parseInt(maxRefreshInput.value, 10) || 1));
     const parsedPerCallSec = Math.max(30, Math.min(120, parseInt(perCallTimeoutSecInput.value, 10) || 75));
-    const parsedCitaSec = Math.max(4, Math.min(30, parseInt(citaRepairBudgetSecInput.value, 10) || 8));
     const parsedAgSec = Math.max(5, Math.min(40, parseInt(actionGateRepairBudgetSecInput.value, 10) || 10));
     const rawDim = embeddingDimensionsInput?.value?.trim();
     const parsedNum = rawDim ? Number(rawDim) : NaN;
@@ -3236,7 +3198,6 @@ cyrenePanel.addEventListener("submit", async (e) => {
       maxReplans: parsedMaxReplans,
       maxRefresh: parsedMaxRefresh,
       perCallTimeoutSec: parsedPerCallSec,
-      citaRepairBudgetSec: parsedCitaSec,
       actionGateRepairBudgetSec: parsedAgSec,
       embeddingDimensions: parsedDim && parsedDim > 0 ? parsedDim : undefined,
     });
@@ -3477,7 +3438,6 @@ function switchSection(section: string): void {
   apiForm.classList.toggle("is-hidden", !isApi);
   apiRuntimeForm.classList.toggle("is-hidden", !isApiAdvanced);
   apiTimeoutForm.classList.toggle("is-hidden", !isApiAdvanced);
-  apiFcModeForm.classList.toggle("is-hidden", !isApiAdvanced);
   appearanceForm.classList.toggle("is-hidden", !isAppearance);
   generalForm.classList.toggle("is-hidden", !isGeneral);
   preferencesForm.classList.toggle("is-hidden", !isPreferences);

@@ -648,7 +648,6 @@ interface ModelSettings {
   vision?: VisionModelConfig;
   /** 主模型是否多模态。true 时图片直发主模型（direct），vision 配置保留但忽略。 */
   multimodal: boolean;
-  disableLangGraph?: boolean,
   optimizeFirstRound?: boolean;
   thinkingOverride?: -1 | 0 | 1;
   disableMaxToken?: boolean;
@@ -1290,7 +1289,6 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
     vision: normalizeVisionConfig(rawVision),
     multimodal,
     optimizeFirstRound: input?.optimizeFirstRound,
-    disableLangGraph: input?.disableLangGraph,
     thinkingOverride: input?.thinkingOverride,
     disableMaxToken: input?.disableMaxToken,
     contextWindowTokens: typeof input?.contextWindowTokens === "number" && Number.isFinite(input.contextWindowTokens)
