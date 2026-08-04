@@ -156,7 +156,15 @@ import { runTtsStreamingWithFallback } from "./tts/tts-streaming-fallback";
 import type { StartTtsRequest, TtsAudioFormat, TtsSessionEvent, TtsStartResult } from "../shared/tts-session";
 import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
 import { codeRunWorker } from "./orchestrator/code/code-run-worker";
-import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegateSettings, setUserTimezoneConfig } from "./orchestrator/built-in-tools";
+import {
+  setWeatherConfig,
+  setSearchConfig,
+  loadTodos,
+  onTodosChange,
+  getCurrentTodos,
+  setDelegateSettings,
+  setUserTimezoneConfig,
+} from "./orchestrator/built-in-tools";
 import { registerRecallHistoryTool } from "./orchestrator/history-tools";
 import { registerDocumentTools } from "./orchestrator/document-tools";
 import { registerLifeTools, setTranslateConfig } from "./orchestrator/life-tools";
@@ -2555,10 +2563,25 @@ function buildSystemPrompt(styleFile: string, includeStyle = true): string {
 
   // Chat 模式使用独立基础规则；仍兼容旧调用方传入的 "talk"。
   const isChatMode = styleFile.startsWith("chat") || styleFile.startsWith("talk");
-  const system = loadPromptFile(isChatMode ? "chat_system.md" : "work_system.md");
+  const isLearnMode = styleFile.startsWith("learn");
+
+  let systemFile: string;
+  let identityFile: string;
+  if (isChatMode) {
+    systemFile = "chat_system.md";
+    identityFile = "chat_identity.md";
+  } else if (isLearnMode) {
+    systemFile = "learn_system.md";
+    identityFile = "learn_identity.md";
+  } else {
+    systemFile = "work_system.md";
+    identityFile = "work_identity.md";
+  }
+
+  const system = loadPromptFile(systemFile);
   if (system) parts.push(system);
 
-  const identity = loadPromptFile(isChatMode ? "chat_identity.md" : "work_identity.md");
+  const identity = loadPromptFile(identityFile);
   if (identity) parts.push(identity);
 
   const soul = loadPromptFile("soul.md");
@@ -2568,7 +2591,8 @@ function buildSystemPrompt(styleFile: string, includeStyle = true): string {
   if (canon) parts.push(canon);
 
   // 新链路由 build-options 独立注入 style Prompt；旧调用方仍可选择在这里附加 style 文件。
-  if (includeStyle && !isChatMode) {
+  // Learn 模式使用独立的身份与人格体系，不附加 work 风格文件。
+  if (includeStyle && !isChatMode && !isLearnMode) {
     const style = loadPromptFile("styles/" + styleFile);
     if (style) parts.push(style);
   }
@@ -5705,6 +5729,7 @@ app.whenReady().then(async () => {
     return true;
   });
   ipcMain.handle(IPC.CHATS_GET_ACTIVE_SESSION, () => activeChatSessionId);
+  ipcMain.handle(IPC.TODOS_GET_CURRENT, () => getCurrentTodos());
 
   const generalSettings = loadGeneralSettings();
   // 初始化 Locale Context（从 GeneralSettings 的语言配置同步）

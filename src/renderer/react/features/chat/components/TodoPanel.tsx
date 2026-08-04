@@ -65,9 +65,6 @@ export function TodoPanel({ state, mode, workspaceName }: TodoPanelProps) {
   const todos = state?.todos ?? [];
   const total = todos.length;
   const completed = useMemo(() => todos.filter((t) => t.status === "completed").length, [todos]);
-
-  if (total === 0) return null;
-
   const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
 
   useEffect(() => {
@@ -155,20 +152,29 @@ export function TodoPanel({ state, mode, workspaceName }: TodoPanelProps) {
         <div className="cy-todo__divider" />
 
         <ul className="cy-todo__list">
-          {todos.map((todo) => {
-            const isCompleted = todo.status === "completed";
-            return (
-              <li
-                key={todo.id}
-                className={`cy-todo__item ${isCompleted ? "cy-todo__item--completed" : ""}`}
-              >
-                <span className="cy-todo__status" aria-hidden="true">
-                  {isCompleted ? <CheckedCircleIcon /> : <EmptyCircleIcon />}
-                </span>
-                <span className="cy-todo__content">{todo.content}</span>
-              </li>
-            );
-          })}
+          {total === 0 ? (
+            <li className="cy-todo__item cy-todo__item--empty">
+              <span className="cy-todo__status" aria-hidden="true">
+                <EmptyCircleIcon />
+              </span>
+              <span className="cy-todo__content">暂无任务</span>
+            </li>
+          ) : (
+            todos.map((todo) => {
+              const isCompleted = todo.status === "completed";
+              return (
+                <li
+                  key={todo.id}
+                  className={`cy-todo__item ${isCompleted ? "cy-todo__item--completed" : ""}`}
+                >
+                  <span className="cy-todo__status" aria-hidden="true">
+                    {isCompleted ? <CheckedCircleIcon /> : <EmptyCircleIcon />}
+                  </span>
+                  <span className="cy-todo__content">{todo.content}</span>
+                </li>
+              );
+            })
+          )}
         </ul>
 
         <div className="cy-todo__divider" />

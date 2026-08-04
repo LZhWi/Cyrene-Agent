@@ -201,6 +201,10 @@
   color: #999999;
 }
 
+.cy-todo__item--empty .cy-todo__content {
+  color: #aaaaaa;
+}
+
 /* Progress */
 .cy-todo__progress {
   position: relative;

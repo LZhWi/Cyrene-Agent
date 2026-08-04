@@ -140,6 +140,8 @@ export const IPC = {
   CHATS_CLEAR_WORKSPACE: "chats:clear-workspace",
   // renderer → main：打开文件夹选择器
   CHATS_PICK_WORKSPACE_FOLDER: "chats:pick-workspace-folder",
+  // renderer → main：为 Learn 模式初始化工作区结构（只创建缺失文件）
+  CHATS_INIT_LEARN_WORKSPACE: "chats:init-learn-workspace",
   // main → 所有窗口：工作区绑定变更广播
   CHATS_WORKSPACE_CHANGED: "chats:workspace-changed",
   // Code 会话级 Cline plan/act 模式
@@ -348,5 +350,8 @@ export const IPC = {
   SCREENSHOT_INSERT: "screenshot:insert",
   SCREENSHOT_HOTKEY_CAPTURE_START: "screenshot:hotkey-capture-start",
   SCREENSHOT_HOTKEY_CAPTURE_END: "screenshot:hotkey-capture-end",
+
+  // TODO 卡片：初始加载当前状态（常驻需求）
+  TODOS_GET_CURRENT: "todos:get-current",
 } as const;
 

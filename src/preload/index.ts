@@ -542,6 +542,8 @@ const chatStoreApi = {
     ipcRenderer.invoke(IPC.CHATS_CLEAR_WORKSPACE, sessionId),
   pickWorkspaceFolder: () =>
     ipcRenderer.invoke(IPC.CHATS_PICK_WORKSPACE_FOLDER),
+  initLearnWorkspace: (sessionId: string) =>
+    ipcRenderer.invoke(IPC.CHATS_INIT_LEARN_WORKSPACE, sessionId),
   onWorkspaceChanged: (callback: (payload: { sessionId: string; binding: unknown }) => void) => {
     const listener = (_e: Electron.IpcRendererEvent, payload: { sessionId: string; binding: unknown }) =>
       callback(payload);
@@ -561,6 +563,8 @@ const chatStoreApi = {
   },
   // reactChatWindow → main：ChatPage 已挂好 IPC 监听，允许 flush pending sessionId
   notifyReactReady: () => ipcRenderer.send(IPC.CHATS_REACT_READY),
+  // 获取当前 TODO 状态，用于窗口初始加载和常驻显示
+  getCurrentTodos: () => ipcRenderer.invoke(IPC.TODOS_GET_CURRENT),
 };
 
 contextBridge.exposeInMainWorld("chatStore", chatStoreApi);

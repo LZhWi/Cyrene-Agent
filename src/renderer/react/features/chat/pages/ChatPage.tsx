@@ -134,6 +134,8 @@ interface ChatStoreApi {
   onReactSwitchSession: (callback: (sessionId: string) => void) => () => void;
   // reactChatWindow → main：ChatPage 已挂好 IPC 监听，允许 flush pending sessionId
   notifyReactReady: () => void;
+  // 初始加载 TODO 状态，保证卡片常驻
+  getCurrentTodos: () => Promise<TodoState>;
 }
 
 interface SidebarApi {
@@ -290,7 +292,7 @@ export function ChatPage() {
   const [selectedClineMode, setSelectedClineMode] = useState<"plan" | "act">("act");
   const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  const [todoState, setTodoState] = useState<TodoState | null>(null);
+  const [todoState, setTodoState] = useState<TodoState>({ todos: [] });
   const activeModeRef = useRef(mode);
   const activeSessionIdsRef = useRef(activeSessionIds);
   const activeScopeRef = useRef(`mode:${mode}`);
@@ -312,9 +314,19 @@ export function ChatPage() {
   useEffect(() => {
     const api = aguiApi();
     if (!api) return;
+
+    // 初始同步：从 main 加载已持久化的 TODO，保证卡片常驻显示
+    const store = chatStore();
+    if (store?.getCurrentTodos) {
+      store
+        .getCurrentTodos()
+        .then((state) => setTodoState(state ?? { todos: [] }))
+        .catch(() => {});
+    }
+
     return api.onEvent((event) => {
       if (event.type === "CUSTOM" && event.name === "cyrene.todos") {
-        setTodoState((event.value as TodoState) ?? null);
+        setTodoState((event.value as TodoState) ?? { todos: [] });
       }
     });
   }, []);
