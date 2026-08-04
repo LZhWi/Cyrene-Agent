@@ -188,6 +188,7 @@ interface ChatStoreApi {
   append: (id: string, message: ChatMessage) => Promise<ChatSession | null>;
   replaceTail: (id: string, startIndex: number, messages: ChatMessage[]) => Promise<ChatSession | null>;
   setMessageTtsCacheKey: (id: string, messageId: string, cacheKey: string, converterVersion: string) => Promise<ChatSession | null>;
+  rename: (id: string, title: string) => Promise<ChatSession | null>;
   delete: (id: string) => Promise<boolean>;
   pickWorkspaceFolder: () => Promise<{ ok: boolean; path?: string; displayName?: string; error?: string }>;
   setWorkspace: (sessionId: string, workspaceRoot: string) => Promise<{ ok: boolean; error?: string; isEmpty?: boolean }>;
@@ -1422,6 +1423,23 @@ export function ChatPage() {
     await selectSession(session.id, targetMode);
   }
 
+  async function handleRenameSession(sessionId: string, newTitle: string) {
+    const store = chatStore();
+    if (!store?.rename) return;
+    const title = newTitle.trim();
+    if (!title) return;
+    await store.rename(sessionId, title);
+    await refreshSessionsRef.current(mode, false);
+  }
+
+  async function handleDeleteSession(sessionId: string) {
+    const store = chatStore();
+    if (!store) return;
+    const ok = await store.delete(sessionId);
+    if (!ok) return;
+    await refreshSessionsRef.current(mode, true);
+  }
+
   async function changeClineMode(clineMode: "plan" | "act") {
     const store = chatStore();
     if (!store) return;
@@ -1809,6 +1827,8 @@ export function ChatPage() {
               if (!result.ok) window.alert(`无法打开项目文件夹：${result.error ?? "未知错误"}`);
             });
           }}
+          onRename={(sessionId, newTitle) => void handleRenameSession(sessionId, newTitle)}
+          onDelete={(sessionId) => void handleDeleteSession(sessionId)}
         />
       </div>
       <main
