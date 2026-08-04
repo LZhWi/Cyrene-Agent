@@ -73,7 +73,29 @@ npm install
 
 The first installation downloads Electron, Pixi.js, Live2D, and related dependencies. The time required depends on your network connection.
 
-### 3. Install BGE-M3 (Recommended)
+### 3. Command-line Entry
+
+The project ships a `cyrene` command-line entry point for the first-time greeting, version checks, and launching the desktop app. From the project root:
+
+```bash
+npm run build:cli
+npm link
+```
+
+You can then use `cyrene` from any directory:
+
+```bash
+cyrene            # First run shows the welcome banner; later runs stay quiet
+cyrene hello      # Show the full welcome banner again
+cyrene about      # Banner plus project metadata
+cyrene version    # Print the version
+cyrene --help     # List all subcommands
+cyrene run        # Launch the desktop app from a project root (dev mode)
+```
+
+> The first-time greeting appears only once; the state is recorded in `~/.cyrene/state.json`. Subsequent default invocations print only `Cyrene Agent <version>` and `Ready.`. `cyrene run` is dev-only in v0.9 and requires a `package.json` in the current directory; the production `cyrene desktop` entry will arrive in 1.x.
+
+### 4. Install BGE-M3 (Recommended)
 
 Cyrene can chat normally without running a local large language model. However, installing the **BGE-M3 Embedding model** is recommended for the complete semantic-enhancement experience:
 
@@ -88,7 +110,7 @@ Cyrene can chat normally without running a local large language model. However, 
 >
 > Not installing BGE-M3 does not affect basic chat. Features that depend on Embedding will be disabled or degraded automatically.
 
-### 4. Music Feature (Optional)
+### 5. Music Feature (Optional)
 
 The music tool is integrated via [Code-MonkeyZhang/cloud-music-mcp](https://github.com/Code-MonkeyZhang/cloud-music-mcp). To use the NetEase Cloud Music feature, install the following additional dependencies:
 
@@ -99,7 +121,7 @@ The music tool is integrated via [Code-MonkeyZhang/cloud-music-mcp](https://gith
 >
 > The music feature is optional and does not affect chat or other core features. If `uv` is not installed, the music tool will be skipped automatically with a UI prompt.
 
-### 5. Build and Start
+### 6. Build and Start
 
 When running from source for the first time, you need to build the Rust native screenshot helper:
 

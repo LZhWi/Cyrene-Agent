@@ -81,7 +81,29 @@ npm install
 
 首次安装会下载 Electron、Pixi.js、Live2D 等相关依赖，具体耗时取决于网络环境。
 
-### 3. 安装 BGE-M3（推荐）
+### 3. 命令行入口
+
+项目附带 `cyrene` 命令行入口，可用于首次欢迎语、查看版本或启动桌面端。在项目根目录执行：
+
+```bash
+npm run build:cli
+npm link
+```
+
+之后即可在任意目录使用 `cyrene`：
+
+```bash
+cyrene            # 首次运行会显示欢迎 Banner，之后只输出简洁状态
+cyrene hello      # 重新查看完整欢迎 Banner
+cyrene about      # 查看 Banner 与项目元信息
+cyrene version    # 查看版本
+cyrene --help     # 查看全部子命令
+cyrene run        # 在项目根目录启动桌面端（开发模式）
+```
+
+> 首次欢迎语仅在第一次执行 `cyrene` 时出现，状态记录在 `~/.cyrene/state.json`；之后默认只输出 `Cyrene Agent <version>` 与 `Ready.`。`cyrene run` 目前为开发模式，需要当前目录存在 `package.json`；正式安装版的 `cyrene desktop` 入口将在 1.x 提供。
+
+### 4. 安装 BGE-M3（推荐）
 
 Cyrene 无需本地大语言模型即可正常聊天，但建议安装 **BGE-M3 Embedding 模型**，以获得更完整的语义增强体验：
 
@@ -96,7 +118,7 @@ Cyrene 无需本地大语言模型即可正常聊天，但建议安装 **BGE-M3 
 >
 > 未安装 BGE-M3 不会影响基础聊天，依赖 Embedding 的增强功能会自动关闭或降级。
 
-### 4. 音乐功能（可选）
+### 5. 音乐功能（可选）
 
 音乐工具基于 [Code-MonkeyZhang/cloud-music-mcp](https://github.com/Code-MonkeyZhang/cloud-music-mcp) 集成。如需使用网易云音乐功能，需额外安装：
 
@@ -107,7 +129,7 @@ Cyrene 无需本地大语言模型即可正常聊天，但建议安装 **BGE-M3 
 >
 > 音乐功能为可选组件，不影响聊天及其他核心功能。未安装 `uv` 时，音乐工具会自动跳过并在界面中提示。
 
-### 5. 构建并启动
+### 6. 构建并启动
 
 首次从源码运行时，需要先构建 Rust 原生截图助手：
 
