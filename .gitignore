@@ -24,6 +24,9 @@ release/
 # Native screenshot helper is built locally and staged for electron-builder.
 resources/bin/*.exe
 
+# OpenCode 二进制 distribution（按需本地下载，不进 git）
+resources/opencode/
+
 # NOTE: dist/renderer/audio, dist/renderer/avatars, dist/renderer/models,
 # dist/renderer/stickers are intentionally NOT ignored (product assets).
 # Lines above ignore Vite-bundled artifacts only.
@@ -58,6 +61,17 @@ sim-result/
 
 # Brainstorming visual companion mockups (local-only artifacts)
 .superpowers/
+
+# Codebuddy IDE scratch（plan 草稿等，会话级缓存）
+.codebuddy/
+
+# Agent / CLI 一次性验证目录（regenerated，每次 worktree 都不一样名字）
+.tmp-*/
+.tmp-builtin-cli-*
+.tmp-opencode-sdk/
+
+# OpenCode CLI 运行留痕
+.opencode*/
 
 # Windows quirk: 'nul' is a reserved device name, ignore if created by accident
 nul
