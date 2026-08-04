@@ -844,6 +844,7 @@ const transportSelect = document.getElementById("transport-select") as HTMLSelec
 const transportHint = document.getElementById("transport-hint") as HTMLElement;
 const endpointPreview = document.getElementById("endpoint-preview") as HTMLElement;
 const customEndpointControls = document.getElementById("custom-endpoint-controls") as HTMLElement;
+const customEndpointOverrides = document.getElementById("custom-endpoint-overrides") as HTMLElement;
 const customEndpointSummary = document.getElementById("custom-endpoint-summary") as HTMLElement;
 const customEndpointGuideBtn = document.getElementById("custom-endpoint-guide-btn") as HTMLButtonElement;
 const workFlowAdaptBtn = document.getElementById("work-flow-adapt-btn") as HTMLButtonElement | null;
@@ -1444,6 +1445,7 @@ function updateEndpointPreview(): void {
 function applyCustomEndpointUI(preset: ModelPreset): void {
   const mode = getCustomEndpointMode(preset.providerName);
   customEndpointControls.hidden = mode === null;
+  customEndpointOverrides.hidden = mode === null;
   transportSelect.disabled = false;
 
   if (!mode) {
