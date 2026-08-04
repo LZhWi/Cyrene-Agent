@@ -1,4 +1,5 @@
 .cy-message-list {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -496,6 +497,41 @@
 .cy-message--assistant:has(pre, .katex-display, table) .ant-bubble-content {
   width: 100%;
   box-sizing: border-box;
+}
+
+.cy-message-list__scroll-to-bottom {
+  position: absolute;
+  left: 50%;
+  bottom: 50px;
+  transform: translateX(-50%);
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--cy-surface, rgba(255, 255, 255, 0.92));
+  color: var(--cy-text-primary, #4c3762);
+  box-shadow: 0 4px 14px rgba(76, 55, 98, 0.18);
+  cursor: pointer;
+  transition: transform 0.2s ease, opacity 0.2s ease;
+  backdrop-filter: blur(6px);
+}
+
+.cy-message-list__scroll-to-bottom:hover {
+  transform: translateY(-2px);
+  opacity: 0.92;
+}
+
+.cy-message-list__scroll-to-bottom:active {
+  transform: translateY(0);
+}
+
+.cy-message-list__scroll-to-bottom .anticon {
+  font-size: 16px;
 }
 
 .cy-message--system {

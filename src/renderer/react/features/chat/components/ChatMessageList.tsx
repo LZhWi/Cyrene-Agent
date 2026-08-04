@@ -1,6 +1,7 @@
 import { Bubble, CodeHighlighter, Think, ThoughtChain, type BubbleItemType } from "@ant-design/x";
 import { XMarkdown, type ComponentProps } from "@ant-design/x-markdown";
 import Latex from "@ant-design/x-markdown/plugins/Latex";
+import { DownOutlined } from "@ant-design/icons";
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
 import type { ConversationMode, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
@@ -795,6 +796,36 @@ export function ChatMessageList({
     if (!lastTurn || !onRegenerateLastResponse || revisionBusy) return;
     void onRegenerateLastResponse(lastTurn.userMessageId, lastTurn.assistantMessageId);
   }, [lastTurn, onRegenerateLastResponse, revisionBusy]);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
+  const isNearBottomRef = useRef(true);
+
+  const scrollToBottom = useCallback((behavior: ScrollBehavior = "smooth") => {
+    const el = containerRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior });
+  }, []);
+
+  const updateScrollState = useCallback(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+    const nearBottom = distance < 100;
+    isNearBottomRef.current = nearBottom;
+    setShowScrollToBottom(!nearBottom);
+  }, []);
+
+  // 打开/切换会话时滚动到底部
+  useEffect(() => {
+    scrollToBottom("auto");
+    // 内容渲染后再次兜底滚动
+    const timer = window.setTimeout(() => scrollToBottom("auto"), 100);
+    isNearBottomRef.current = true;
+    setShowScrollToBottom(false);
+    return () => window.clearTimeout(timer);
+  }, [conversationId, scrollToBottom]);
+
   const roles = useMemo(
     () => createRoles(
       userAvatarUrl,
@@ -841,8 +872,24 @@ export function ChatMessageList({
   const items = createMessageItems(messages, enabledStickers);
 
   return (
-    <div className={`cy-message-list cy-message-list--stickers-${stickerSize}`} aria-live="polite">
+    <div
+      ref={containerRef}
+      className={`cy-message-list cy-message-list--stickers-${stickerSize}`}
+      aria-live="polite"
+      onScroll={updateScrollState}
+    >
       <Bubble.List items={items} role={roles} autoScroll />
+      {showScrollToBottom && (
+        <button
+          type="button"
+          className="cy-message-list__scroll-to-bottom"
+          onClick={() => scrollToBottom("smooth")}
+          aria-label="滚动到底部"
+          title="滚动到底部"
+        >
+          <DownOutlined />
+        </button>
+      )}
     </div>
   );
 }

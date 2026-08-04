@@ -351,10 +351,22 @@ export {
   type OpenSessionArgs,
 };
 
+const LAST_MODE_STORAGE_KEY = "cyrene-react-last-mode";
+
+function getInitialMode(): ConversationMode {
+  try {
+    const saved = localStorage.getItem(LAST_MODE_STORAGE_KEY);
+    if (saved && isConversationMode(saved)) return saved;
+  } catch {
+    // localStorage 不可用或数据异常时回退到默认值
+  }
+  return "chat";
+}
+
 export function ChatPage() {
   const preferredAddress = useUserCallPreference();
   const [collapsed, setCollapsed] = useState(false);
-  const [mode, setMode] = useState<ConversationMode>("chat");
+  const [mode, setMode] = useState<ConversationMode>(getInitialMode);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [messagesByMode, setMessagesByMode] = useState<Partial<Record<ConversationMode, ChatMessageItem[]>>>({});
   const [workspaceNames, setWorkspaceNames] = useState<Partial<Record<ConversationMode, string>>>({});
@@ -479,6 +491,15 @@ export function ChatPage() {
   activeModeRef.current = mode;
   activeSessionIdsRef.current = activeSessionIds;
   activeScopeRef.current = scopeKey;
+
+  // 缓存用户最后停留的模式，下次打开窗口时恢复
+  useEffect(() => {
+    try {
+      localStorage.setItem(LAST_MODE_STORAGE_KEY, mode);
+    } catch {
+      // 忽略写入失败
+    }
+  }, [mode]);
 
   useEffect(() => () => {
     for (const timer of demoTimers.current) {
