@@ -37,6 +37,7 @@ import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 import { requestUserClarification } from "../user-choice";
 import type { TrustedAskUserProfile } from "../../shared/ask-clarification";
 import type { SkillRouteInfo } from "./task-router";
+import type { ConversationMode } from "../../shared/chat-types";
 
 const executionLedgers = new ExecutionLedgerStore();
 
@@ -69,6 +70,8 @@ export interface CyreneRunOptions {
   agentRuntime?: "langgraph" | "legacy";
   /** Chat 跳过 CITA/Action Gate/Native FC；默认 Work。 */
   executionMode?: AgentExecutionMode;
+  /** 原始 UI 模式（work / daily / learn / chat / code），供工具做模式隔离。 */
+  conversationMode?: ConversationMode;
   timeoutMs: number;
   /** 可选：本次 run 的工具集合。未传时使用当前所有已启用工具。 */
   tools?: ToolDefinition[];
@@ -354,6 +357,7 @@ export class CyreneAgent extends AbstractAgent {
               runId,
               contextRefs: contextRefRegistry,
               resolvedWorkspaceRoot: options.resolvedWorkspaceRoot,
+              mode: options.conversationMode,
             });
             const commonOptions = {
               settings: options.settings,

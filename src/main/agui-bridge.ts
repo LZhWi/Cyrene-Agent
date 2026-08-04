@@ -5,7 +5,7 @@
 //   Work  ──> CyreneAgent ──> LangGraph Runtime
 //   Daily ──> CyreneAgent ──> legacy TwoPhaseFC Runtime
 //   Code  ──> runCodeRequest() ──> 原生 Cline Runtime
-//   Learn ──> 预留给 Obsidian 学习链路（当前明确拒绝运行）
+//   Learn ──> legacy TwoPhaseFC Runtime（同 Daily + Obsidian 工具）
 //   各链路事件都由本桥通过 AGUI_EVENT 转发给渲染进程。
 //
 // Chat / Work 的 Observable 是内存流、跨不过进程边界；Code 的后台任务也不能依赖
@@ -23,6 +23,10 @@ import {
 import { indexConversationTurn } from "./orchestrator/history-tools";
 import type { RelationshipChannel } from "./relationship/relationship-log";
 import { createThinkFilter, type ThinkStreamFilter, type ThinkFilterMode } from "./chat/think-filter";
+import { runLearnPostTurnHook } from "./learn/progress/learn-post-turn";
+import { obsidianWorkspace } from "./learn/obsidian/obsidian-workspace-service";
+import { registerObsidianTools, unregisterObsidianTools } from "./learn/obsidian/obsidian-tools";
+import { getAdapterForConfig } from "./orchestrator/vendors";
 import { perf } from "./perf-trace";
 import type { StyleId } from "../shared/style-sampling";
 import { codeRunStore } from "./orchestrator/code/code-run-store";
@@ -135,6 +139,8 @@ export interface AguiRunInput {
   channel?: RelationshipChannel;
   /** @deprecated 仅保留 Renderer 兼容；主进程按 ChatSession.mode 分流并忽略该值。 */
   executionMode?: ConversationMode | "soul-only" | "collaboration";
+  /** 主进程内部使用：由 ChatSession.mode 注入，用于选择对应模式的 system prompt。 */
+  mode?: ConversationMode;
   /** 本轮附件（文本内容，临时注入系统上下文，不存历史）。 */
   attachments?: { name: string; text: string }[];
   /** 本轮图片附件。主进程会安全读取并转成 OpenAI-compatible image_url content block。 */
@@ -232,12 +238,7 @@ export function registerAgUiIpc(
       throw new Error(`AGUI_RUN 会话不存在: ${sessionId}`);
     }
     const mode = session.mode ?? (session.purpose === "proactive-chat" ? "chat" : "work");
-    if (mode === "learn") {
-      lifecycle?.onConversationEnded();
-      throw new Error("Learn 模式尚未接入 Obsidian 项目库");
-    }
-
-    if ((mode === "work" || mode === "code" || mode === "daily") && !session.workspaceBinding?.workspaceRoot) {
+    if ((mode === "work" || mode === "code" || mode === "daily" || mode === "learn") && !session.workspaceBinding?.workspaceRoot) {
       lifecycle?.onConversationEnded();
       throw new Error(`${mode} 模式需要先绑定项目工作区`);
     }
@@ -269,15 +270,16 @@ export function registerAgUiIpc(
       return { success: true, runId };
     }
 
-    // ── Chat / Work / Daily：共用 CyreneAgent 外壳，固定选择各自 runtime ──
-    // Chat 走无工具 chat-loop；Work 强制 LangGraph；Daily 强制 legacy TwoPhaseFC。
+    // ── Chat / Work / Daily / Learn：共用 CyreneAgent 外壳，固定选择各自 runtime ──
+    // Chat 走无工具 chat-loop；Work 强制 LangGraph；Daily / Learn 强制 legacy TwoPhaseFC。
     const agentExecutionMode: AgentExecutionMode = mode === "chat" ? "chat" : "work";
     let built;
     try {
-      built = await perf.track("build_options", () => buildOptionsFn!({
-        ...input,
-        executionMode: agentExecutionMode,
-      }));
+    built = await perf.track("build_options", () => buildOptionsFn!({
+      ...input,
+      mode,
+      executionMode: agentExecutionMode,
+    }));
     } catch (error) {
       perf.dump();
       lifecycle?.onConversationEnded();
@@ -285,14 +287,28 @@ export function registerAgUiIpc(
     }
     const { options, latestUserText } = built;
     options.executionMode = agentExecutionMode;
-    options.agentRuntime = mode === "daily" ? "legacy" : "langgraph";
+    options.conversationMode = mode;
+    options.agentRuntime = (mode === "daily" || mode === "learn") ? "legacy" : "langgraph";
     options.requestUserClarification = (card) => requestUserClarification(card, (cardData) => {
       send({ type: "CUSTOM", name: "cyrene.choice", value: cardData, threadId, runId });
     }, (settlement) => {
       send({ type: "CUSTOM", name: "cyrene.choice.dismiss", value: settlement, threadId, runId });
     }, { runId, revision: 1 });
-    if (mode === "daily") {
+    if (mode === "daily" || mode === "learn") {
       options.optimizeFirstRound = true;
+    }
+
+    // Learn 模式：配置 Obsidian Vault 并注册工具
+    if (mode === "learn" && session.workspaceBinding?.workspaceRoot) {
+      obsidianWorkspace.configure({
+        enabled: true,
+        vaultPath: session.workspaceBinding.workspaceRoot,
+      });
+      try {
+        registerObsidianTools();
+      } catch (err) {
+        console.warn("[Learn] Obsidian 工具注册失败：", err);
+      }
     }
 
     const threadId = `thread-${Date.now()}`;
@@ -303,6 +319,10 @@ export function registerAgUiIpc(
     const endLifecycle = (): void => {
       if (lifecycleEnded) return;
       lifecycleEnded = true;
+      // Learn 模式：注销 Obsidian 工具
+      if (mode === "learn") {
+        try { unregisterObsidianTools(); } catch { /* ignore */ }
+      }
       lifecycle?.onConversationEnded();
     };
 
@@ -458,6 +478,28 @@ export function registerAgUiIpc(
               latestUserText,
               lastResult.reply,
             );
+
+            // Learn 模式：静默更新学习进度（异步，不阻塞，失败不影响主流程）
+            if (mode === "learn" && obsidianWorkspace.isReady()) {
+              const adapter = getAdapterForConfig({
+                provider: options.settings.provider,
+                baseUrl: options.settings.baseUrl,
+                model: options.settings.model,
+                apiKey: options.settings.apiKey,
+              });
+              void runLearnPostTurnHook({
+                adapter,
+                cfg: {
+                  provider: options.settings.provider,
+                  baseUrl: options.settings.baseUrl,
+                  model: options.settings.model,
+                  apiKey: options.settings.apiKey,
+                },
+                systemPrompt: options.soulSystemBaseContent ?? "",
+                userMessage: latestUserText,
+                assistantMessage: lastResult.reply,
+              });
+            }
           }
         } catch (err) {
           console.warn("[AgUiBridge] 副作用失败（不影响结果）:", err);

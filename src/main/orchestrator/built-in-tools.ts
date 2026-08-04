@@ -1443,7 +1443,14 @@ toolRegistry.register({
 // 任务拆解可视化工具。让昔涟能像 Claude Code 一样把复杂任务拆成步骤展示给用户。
 // 每次调用整体覆盖当前清单（不是增量）。store 持久化 + 通知主进程转发 CUSTOM 事件。
 
-import { setTodos, getTodos, clearTodos, type TodoItem } from "./todo-store";
+import {
+  setTodos,
+  getTodos,
+  clearTodos,
+  resolveTodoMode,
+  getCurrentTodos,
+  type TodoItem,
+} from "./todo-store";
 
 toolRegistry.register({
   id: "todo_write",
@@ -1484,16 +1491,22 @@ toolRegistry.register({
     },
     required: ["todos"],
   },
-  execute: async (args) => {
+  needsContext: true,
+  execute: async (args, ctx) => {
     const items = (args.todos || []) as TodoItem[];
+    const mode = resolveTodoMode(ctx?.mode);
+
+    if (!mode) {
+      return "[todo_write] 当前模式不维护任务清单，跳过更新";
+    }
 
     // 空列表 = 清空（任务结束）
     if (items.length === 0) {
-      clearTodos();
+      clearTodos(mode);
       return "[todo_write] 已清空任务清单（任务结束）";
     }
 
-    const state = setTodos(items);
+    const state = setTodos(mode, items);
 
     // 返回给 LLM 的简短摘要，不返回全部内容（避免 token 浪费）
     const counts = items.reduce((acc, t) => {
@@ -1501,7 +1514,7 @@ toolRegistry.register({
       return acc;
     }, {} as Record<string, number>);
 
-    return "[todo_write] 已更新任务清单：共 " + items.length + " 项，" +
+    return "[todo_write] 已更新「" + mode + "」任务清单：共 " + items.length + " 项，" +
       "进行中 " + (counts.in_progress || 0) + " / " +
       "已完成 " + (counts.completed || 0) + " / " +
       "待办 " + (counts.pending || 0) +
@@ -1510,7 +1523,7 @@ toolRegistry.register({
 });
 
 // 暴露给 index.ts 在 startup 调用，避免 tree-shake 掉
-export { loadTodos, onTodosChange, getTodos as getCurrentTodos } from "./todo-store";
+export { loadTodos, onTodosChange, getCurrentTodos } from "./todo-store";
 
 // ── 工具：ask_user_choice（歧义消解器）─────────────────────
 // 当用户需求模糊（"美观""好看""专业"）时，弹卡片让用户从选项中选择。

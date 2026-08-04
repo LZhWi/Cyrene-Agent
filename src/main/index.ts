@@ -165,6 +165,7 @@ import {
   setDelegateSettings,
   setUserTimezoneConfig,
 } from "./orchestrator/built-in-tools";
+import { TODO_MODES } from "./orchestrator/todo-store";
 import { registerRecallHistoryTool } from "./orchestrator/history-tools";
 import { registerDocumentTools } from "./orchestrator/document-tools";
 import { registerLifeTools, setTranslateConfig } from "./orchestrator/life-tools";
@@ -5441,23 +5442,25 @@ app.whenReady().then(async () => {
 
   // 任务清单（todo_write 工具的持久化 + 事件广播）：
   // - loadTodos 从磁盘恢复上次未完成的任务（跨重启延续）
-  // - onTodosChange 订阅变化，把 TodoState 作为 CUSTOM 事件转发给所有聊天窗口
-  //   渲染端收到 cyrene.todos 后渲染左上角进度面板
+  // - onTodosChange 按 mode 订阅变化，把 TodoState 作为 CUSTOM 事件转发给所有聊天窗口
+  //   渲染端收到 cyrene.todos 后根据 mode 更新对应模式的进度面板
   loadTodos();
-  onTodosChange((state) => {
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (win.isDestroyed()) continue;
-      try {
-        win.webContents.send(IPC.AGUI_EVENT, {
-          type: "CUSTOM",
-          name: "cyrene.todos",
-          value: state,
-        });
-      } catch (e) {
-        console.warn("[Cyrene] todos 广播失败:", e);
+  for (const mode of TODO_MODES) {
+    onTodosChange(mode, (state) => {
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (win.isDestroyed()) continue;
+        try {
+          win.webContents.send(IPC.AGUI_EVENT, {
+            type: "CUSTOM",
+            name: "cyrene.todos",
+            value: state,
+          });
+        } catch (e) {
+          console.warn("[Cyrene] todos 广播失败:", e);
+        }
       }
-    }
-  });
+    });
+  }
 
   const schedulerStore = getSchedulerStore();
   schedulerStore.load();

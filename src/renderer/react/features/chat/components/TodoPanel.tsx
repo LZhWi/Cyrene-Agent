@@ -13,6 +13,12 @@ const DEFAULT_WIDTH = 240;
 const DEFAULT_TOP = 80;
 const DEFAULT_RIGHT = 24;
 
+const MODE_LABELS: Record<TodoPanelProps["mode"], string> = {
+  work: "工作",
+  daily: "日常",
+  learn: "学习",
+};
+
 function EmptyCircleIcon() {
   return (
     <svg className="cy-todo__bullet" viewBox="0 0 24 24" aria-hidden="true">
@@ -45,6 +51,15 @@ function ToggleIcon() {
       <path d="M27 21L42 6" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M21 27L6 42" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
+  );
+}
+
+function ModeCapsule({ mode }: { mode: TodoPanelProps["mode"] }) {
+  return (
+    <div className="cy-todo__mode-capsule">
+      <span className="cy-todo__mode-dot" aria-hidden="true" />
+      <span className="cy-todo__mode-label">{MODE_LABELS[mode]}</span>
+    </div>
   );
 }
 
@@ -139,6 +154,10 @@ export function TodoPanel({ state, mode, workspaceName }: TodoPanelProps) {
       </button>
 
       <div className="cy-todo__body">
+        <div className="cy-todo__capsule-row">
+          <ModeCapsule mode={mode} />
+        </div>
+
         <div className="cy-todo__hero">
           <img className="cy-todo__mascot" src={reminderPngUrl} alt="提醒" />
           <div className="cy-todo__hero-text">

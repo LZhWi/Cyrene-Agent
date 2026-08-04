@@ -135,7 +135,7 @@ interface ChatStoreApi {
   // reactChatWindow → main：ChatPage 已挂好 IPC 监听，允许 flush pending sessionId
   notifyReactReady: () => void;
   // 初始加载 TODO 状态，保证卡片常驻
-  getCurrentTodos: () => Promise<TodoState>;
+  getCurrentTodos: () => Promise<Record<"work" | "daily" | "learn", TodoState>>;
 }
 
 interface SidebarApi {
@@ -292,7 +292,7 @@ export function ChatPage() {
   const [selectedClineMode, setSelectedClineMode] = useState<"plan" | "act">("act");
   const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  const [todoState, setTodoState] = useState<TodoState>({ todos: [] });
+  const [todoStateByMode, setTodoStateByMode] = useState<Partial<Record<"work" | "daily" | "learn", TodoState>>>({});
   const activeModeRef = useRef(mode);
   const activeSessionIdsRef = useRef(activeSessionIds);
   const activeScopeRef = useRef(`mode:${mode}`);
@@ -315,18 +315,26 @@ export function ChatPage() {
     const api = aguiApi();
     if (!api) return;
 
-    // 初始同步：从 main 加载已持久化的 TODO，保证卡片常驻显示
+    // 初始同步：从 main 加载各模式 TODO，保证卡片常驻显示
     const store = chatStore();
     if (store?.getCurrentTodos) {
       store
         .getCurrentTodos()
-        .then((state) => setTodoState(state ?? { todos: [] }))
+        .then((state) => {
+          if (state) {
+            setTodoStateByMode(state);
+          }
+        })
         .catch(() => {});
     }
 
     return api.onEvent((event) => {
       if (event.type === "CUSTOM" && event.name === "cyrene.todos") {
-        setTodoState((event.value as TodoState) ?? { todos: [] });
+        const incoming = (event.value as TodoState) ?? { todos: [] };
+        const mode = incoming.mode;
+        if (mode === "work" || mode === "daily" || mode === "learn") {
+          setTodoStateByMode((prev) => ({ ...prev, [mode]: incoming }));
+        }
       }
     });
   }, []);
@@ -1588,7 +1596,7 @@ export function ChatPage() {
           </div>
         )}
         {(mode === "work" || mode === "daily" || mode === "learn") && (
-          <TodoPanel state={todoState} mode={mode} workspaceName={workspaceNames[mode]} />
+          <TodoPanel state={todoStateByMode[mode]} mode={mode} workspaceName={workspaceNames[mode]} />
         )}
         {hasMessages && (
           <ChatMessageList
