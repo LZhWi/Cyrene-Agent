@@ -2,6 +2,7 @@
 
 # Build outputs (Electron + Vite + tsc)
 dist/main/
+dist/cli/
 dist/preload/
 dist/renderer/assets
 dist/renderer/feeling/
