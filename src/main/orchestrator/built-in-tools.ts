@@ -695,86 +695,29 @@ let weatherEnabledGetter: (() => boolean) | null = null;
 /** 天气卡片数据回调：工具拿到结构化数据后调这个，由桥层发 Custom 事件给渲染端。 */
 let weatherCardCallback: ((card: WeatherCardData) => void) | null = null;
 
-/** 天气卡片结构化数据（发给渲染端渲染 MBE 卡片用）。 */
-export interface WeatherForecastDay {
-  date: string;       // "7月29日"
-  weekDay: string;    // "周二"
-  textDay: string;    // "多云"
-  textNight: string;  // "晴"
-  hi: number;         // 最高温
-  lo: number;         // 最低温
-  windDir: string;    // 风向
-  windScale: string;  // 风力
-}
-
+/** 天气卡片结构化数据（发给渲染端渲染 WeatherCard 用）。
+ *  字段与 renderer 侧 weather-types.ts 中的 WeatherData 保持一致。
+ */
 export interface WeatherCardData {
-  city: string;
-  adm: string;
+  source: "open-meteo" | "amap";
+  location: {
+    province: string;
+    city: string;
+  };
+  // Open-Meteo 字段
+  weatherCode?: number;
   temp: number;
   feelsLike?: number;
-  text: string;
-  icon: string;
-  hi?: number;
-  lo?: number;
   humidity: number;
-  windDir: string;
-  windScale: string;
-  precip?: number;
+  windDeg?: number;
+  windSpeed?: number;
+  precipitation?: number;
   pressure?: number;
-  visibility?: number;
-  uv?: number;
-  aqi?: number;
-  aqiText?: string;
-  source: string;
-  updateTime: string;
-  forecast?: WeatherForecastDay[];
-}
-
-/** WMO 天气代码 → emoji 图标。 */
-function weatherIconFromCode(code: number): string {
-  if (code === 0) return "☀️";
-  if (code <= 2) return "⛅";
-  if (code === 3) return "☁️";
-  if (code >= 45 && code <= 48) return "🌫️";
-  if ((code >= 51 && code <= 57) || (code >= 61 && code <= 67)) return "🌧️";
-  if (code >= 71 && code <= 77) return "❄️";
-  if (code >= 80 && code <= 82) return "🌦️";
-  if (code >= 85 && code <= 86) return "🌨️";
-  if (code >= 95) return "⛈️";
-  return "🌤️";
-}
-
-/** 高德天气文字 → emoji 图标。 */
-function weatherIconFromText(text: string): string {
-  if (/晴/.test(text)) return "☀️";
-  if (/雷/.test(text)) return "⛈️";
-  if (/大雨|暴雨/.test(text)) return "🌧️";
-  if (/雨/.test(text)) return "🌦️";
-  if (/大雪|暴雪/.test(text)) return "❄️";
-  if (/雪/.test(text)) return "🌨️";
-  if (/雾|霾/.test(text)) return "🌫️";
-  if (/阴/.test(text)) return "☁️";
-  if (/云|多云/.test(text)) return "⛅";
-  if (/风/.test(text)) return "💨";
-  return "🌤️";
-}
-
-/** AQI → 等级文字 + 颜文字。 */
-function aqiKaomoji(aqi: number): { text: string; kaomoji: string } {
-  if (aqi <= 50) return { text: "优", kaomoji: "(◕‿◕)" };
-  if (aqi <= 100) return { text: "良", kaomoji: "(´ー`)" };
-  if (aqi <= 150) return { text: "轻度污染", kaomoji: "(´-ω-`)" };
-  if (aqi <= 200) return { text: "中度污染", kaomoji: "(；´д`)" };
-  return { text: "重度污染", kaomoji: "(╥﹏╥)" };
-}
-
-/** 紫外线指数 → 文字。 */
-function uvText(uv: number): string {
-  if (uv <= 2) return "弱";
-  if (uv <= 5) return "中等";
-  if (uv <= 7) return "强";
-  if (uv <= 10) return "很强";
-  return "极强";
+  // 高德字段
+  weather?: string;
+  windDirection?: string;
+  windPower?: string;
+  reporttime?: string;
 }
 
 /**
@@ -857,28 +800,6 @@ async function omFetchWeather(city: string): Promise<string> {
     const wmoText = omWeatherCodeText(c.weather_code);
     const windDir = omWindDir(c.wind_direction_10m);
     const adm = loc.admin1 ? `${loc.admin1}` : loc.country;
-    const icon = weatherIconFromCode(c.weather_code);
-
-    // 解析 3 天预报（今天 + 未来 2 天）
-    const weekNames = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
-    const forecast: WeatherForecastDay[] = [];
-    if (data.daily?.time) {
-      const d = data.daily;
-      const count = Math.min(d.time.length, 3);
-      for (let i = 0; i < count; i++) {
-        const dt = new Date(d.time[i] + "T00:00:00");
-        forecast.push({
-          date: `${dt.getMonth() + 1}月${dt.getDate()}日`,
-          weekDay: i === 0 ? "今天" : weekNames[dt.getDay()],
-          textDay: omWeatherCodeText(d.weather_code[i]),
-          textNight: omWeatherCodeText(d.weather_code[i]),
-          hi: Math.round(d.temperature_2m_max[i]),
-          lo: Math.round(d.temperature_2m_min[i]),
-          windDir: omWindDir(d.wind_direction_10m_dominant[i]),
-          windScale: `${Math.round(d.wind_speed_10m_max[i])}km/h`,
-        });
-      }
-    }
 
     const weatherData = {
       city: loc.name,
@@ -897,17 +818,19 @@ async function omFetchWeather(city: string): Promise<string> {
       updateTime: new Date().toLocaleString(getDateLocale(), { hour: "2-digit", minute: "2-digit", timeZone: currentUserTimezone() }),
     };
 
-    // 发送天气卡片数据给渲染端
+    // 发送天气卡片数据给渲染端（与 renderer 侧 WeatherData 结构对齐）
     if (weatherCardCallback) {
       weatherCardCallback({
-        city: weatherData.city, adm: weatherData.region, temp: weatherData.temperature,
-        feelsLike: weatherData.feelsLike, text: weatherData.weather, icon,
-        humidity: weatherData.humidity, windDir: weatherData.windDirection,
-        windScale: weatherData.windSpeed, precip: weatherData.precipitation,
-        pressure: weatherData.pressure, uv: weatherData.uv, visibility: weatherData.visibility,
-        source: weatherData.source, updateTime: weatherData.updateTime,
-        hi: forecast[0]?.hi, lo: forecast[0]?.lo,
-        forecast,
+        source: "open-meteo",
+        location: { province: adm, city: loc.name },
+        weatherCode: c.weather_code,
+        temp: c.temperature_2m,
+        feelsLike: c.apparent_temperature,
+        humidity: c.relative_humidity_2m,
+        windDeg: c.wind_direction_10m,
+        windSpeed: c.wind_speed_10m,
+        precipitation: c.precipitation,
+        pressure: Math.round(c.surface_pressure),
       });
     }
 
@@ -974,17 +897,12 @@ async function amapFetchWeather(city: string, key: string): Promise<string> {
     return `[错误] 找不到城市"${city}"，请确认城市名（支持中文，如"无锡"）。`;
   }
 
-  // 并行请求实况 + 预报
-  const baseUrl = `https://restapi.amap.com/v3/weather/weatherInfo?city=${district.adcode}&key=${key}`;
+  // 请求实况天气
+  const baseUrl = `https://restapi.amap.com/v3/weather/weatherInfo?city=${district.adcode}&key=${key}&extensions=base`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), WEATHER_TIMEOUT_MS);
   try {
-    const [baseResp, forecastResp] = await Promise.all([
-      fetch(`${baseUrl}&extensions=base`, { signal: ctrl.signal }),
-      fetch(`${baseUrl}&extensions=all`, { signal: ctrl.signal }),
-    ]);
-
-    // 解析实况
+    const baseResp = await fetch(baseUrl, { signal: ctrl.signal });
     if (!baseResp.ok) return `[错误] 天气查询失败：HTTP ${baseResp.status}`;
     const baseData = await baseResp.json() as { status?: string; lives?: Array<{
       province: string; city: string; weather: string; temperature: string;
@@ -994,37 +912,6 @@ async function amapFetchWeather(city: string, key: string): Promise<string> {
       return `[错误] 天气查询失败：高德返回 status=${baseData.status ?? "?"}`;
     }
     const w = baseData.lives[0];
-    const icon = weatherIconFromText(w.weather);
-
-    // 解析预报
-    const forecast: WeatherForecastDay[] = [];
-    if (forecastResp.ok) {
-      const fcData = await forecastResp.json() as { status?: string; forecasts?: Array<{
-        city: string; adcode: string; province: string;
-        casts: Array<{
-          date: string; week: string; dayweather: string; nightweather: string;
-          daytemp: string; nighttemp: string; daywind: string; nightwind: string;
-          daypower: string; nightpower: string;
-        }>;
-      }> };
-      if (fcData.status === "1" && fcData.forecasts?.[0]?.casts) {
-        const weekMap: Record<string, string> = { "1": "周一", "2": "周二", "3": "周三", "4": "周四", "5": "周五", "6": "周六", "7": "周日" };
-        const today = new Date().toISOString().slice(0, 10);
-        for (const c of fcData.forecasts[0].casts) {
-          const dt = new Date(c.date + "T00:00:00");
-          forecast.push({
-            date: `${dt.getMonth() + 1}月${dt.getDate()}日`,
-            weekDay: c.date === today ? "今天" : (weekMap[c.week] ?? `周${c.week}`),
-            textDay: c.dayweather,
-            textNight: c.nightweather,
-            hi: Number(c.daytemp),
-            lo: Number(c.nighttemp),
-            windDir: c.daywind,
-            windScale: `${c.daypower}级`,
-          });
-        }
-      }
-    }
 
     const weatherData = {
       city: w.city,
@@ -1038,16 +925,17 @@ async function amapFetchWeather(city: string, key: string): Promise<string> {
       updateTime: w.reporttime.slice(11, 16) || new Date().toLocaleString(getDateLocale(), { hour: "2-digit", minute: "2-digit" }),
     };
 
-    // 发送天气卡片数据给渲染端
+    // 发送天气卡片数据给渲染端（与 renderer 侧 WeatherData 结构对齐）
     if (weatherCardCallback) {
       weatherCardCallback({
-        city: weatherData.city, adm: weatherData.region, temp: weatherData.temperature,
-        text: weatherData.weather, icon,
-        humidity: weatherData.humidity, windDir: weatherData.windDirection,
-        windScale: weatherData.windSpeed,
-        source: weatherData.source, updateTime: weatherData.updateTime,
-        hi: forecast[0]?.hi, lo: forecast[0]?.lo,
-        forecast,
+        source: "amap",
+        location: { province: w.province, city: w.city },
+        weather: w.weather,
+        temp: Number(w.temperature),
+        humidity: Number(w.humidity),
+        windDirection: w.winddirection,
+        windPower: w.windpower,
+        reporttime: w.reporttime,
       });
     }
 

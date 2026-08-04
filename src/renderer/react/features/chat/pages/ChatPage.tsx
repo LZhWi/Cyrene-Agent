@@ -14,6 +14,7 @@ import {
   type ComposerInteraction,
 } from "../components/run-presentation";
 import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessageList";
+import type { WeatherData } from "../components/weather/weather-types";
 import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
 import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
 import { ConversationSidebar } from "../components/ConversationSidebar";
@@ -57,6 +58,72 @@ const CONVERSATION_MODES: readonly ConversationMode[] = ["chat", "work", "code",
 
 function isConversationMode(value: string): value is ConversationMode {
   return CONVERSATION_MODES.includes(value as ConversationMode);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/** 校验后端发来的 cyrene.weather 卡片数据，返回 renderer 侧 WeatherData。 */
+function normalizeWeatherData(value: unknown): WeatherData | undefined {
+  const card = asRecord(value);
+  if (!card) return undefined;
+
+  const source = asNonEmptyString(card.source);
+  const location = asRecord(card.location);
+  const province = asNonEmptyString(location?.province);
+  const city = asNonEmptyString(location?.city);
+  const temp = typeof card.temp === "number" ? card.temp : undefined;
+  const humidity = typeof card.humidity === "number" ? card.humidity : undefined;
+
+  if (!source || !province || !city || temp === undefined || humidity === undefined) {
+    return undefined;
+  }
+
+  if (source === "open-meteo") {
+    const weatherCode = typeof card.weatherCode === "number" ? card.weatherCode : undefined;
+    const windDeg = typeof card.windDeg === "number" ? card.windDeg : undefined;
+    const windSpeed = typeof card.windSpeed === "number" ? card.windSpeed : undefined;
+    if (weatherCode === undefined || windDeg === undefined || windSpeed === undefined) return undefined;
+    return {
+      source: "open-meteo",
+      location: { province, city },
+      weatherCode,
+      temp,
+      feelsLike: typeof card.feelsLike === "number" ? card.feelsLike : temp,
+      humidity,
+      windDeg,
+      windSpeed,
+      precipitation: typeof card.precipitation === "number" ? card.precipitation : 0,
+      pressure: typeof card.pressure === "number" ? card.pressure : 0,
+    };
+  }
+
+  if (source === "amap") {
+    const weather = asNonEmptyString(card.weather);
+    const windDirection = asNonEmptyString(card.windDirection);
+    const windPower = asNonEmptyString(card.windPower);
+    const reporttime = asNonEmptyString(card.reporttime);
+    if (!weather || !windDirection || !windPower || !reporttime) return undefined;
+    return {
+      source: "amap",
+      location: { province, city },
+      weather,
+      temp,
+      humidity,
+      windDirection,
+      windPower,
+      reporttime,
+    };
+  }
+
+  return undefined;
 }
 
 const DEMO_RESPONSES: Readonly<Record<string, string>> = {
@@ -984,6 +1051,11 @@ export function ChatPage() {
       } else if (event.type === "CUSTOM" && event.name === "cyrene.sticker") {
         sticker = typeof event.value === "string" ? event.value : null;
         updateMessage(input.targetMode, input.assistantId, { sticker });
+      } else if (event.type === "CUSTOM" && event.name === "cyrene.weather") {
+        const weather = normalizeWeatherData(event.value);
+        if (weather) {
+          updateMessage(input.targetMode, input.assistantId, { weather });
+        }
       } else if (event.type === "CUSTOM" && event.name === "code_ask") {
         const interaction = normalizeCodeAskInteraction(event.value);
         if (interaction) {

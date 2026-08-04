@@ -27,6 +27,8 @@ import { resolveRevisableLastTurn, type RevisableLastTurn } from "./last-turn-ac
 import { extractMessageStickerId, stripMessageStickerMarkers } from "./message-sticker";
 import { CodeRunPanel } from "./CodeRunPanel";
 import type { CodeRunViewModel } from "../../../../lib/code-run-view-model";
+import type { WeatherData } from "./weather/weather-types";
+import { WeatherCard } from "./weather/WeatherCard";
 
 export interface ChatMessageItem {
   id: string;
@@ -49,6 +51,7 @@ export interface ChatMessageItem {
   taskPlan?: TaskPlanPresentation;
   codeRun?: CodeRunViewModel;
   attachments?: ChatMessageAttachment[];
+  weather?: WeatherData;
 }
 
 export interface ChatMessageAttachment {
@@ -633,6 +636,15 @@ function createRoles(
       info.extraInfo?.codeRun ? <CodeRunPanel value={info.extraInfo.codeRun} /> : null
     ),
   },
+  weather: {
+    placement: "start" as const,
+    variant: "borderless" as const,
+    avatar: null,
+    rootClassName: "cy-message cy-message--weather",
+    contentRender: (_content: string, info: { extraInfo?: { weather?: WeatherData } }) => (
+      info.extraInfo?.weather ? <WeatherCard data={info.extraInfo.weather} /> : null
+    ),
+  },
   system: {
     placement: "start" as const,
     variant: "borderless" as const,
@@ -714,6 +726,14 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
         role: "codeRun",
         content: "",
         extraInfo: { codeRun: message.codeRun },
+      });
+    }
+    if (message.weather) {
+      assistantItems.push({
+        key: `${message.id}-weather`,
+        role: "weather",
+        content: "",
+        extraInfo: { weather: message.weather },
       });
     }
     if (stages.includes("assistant")) {
