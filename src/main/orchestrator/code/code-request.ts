@@ -78,7 +78,7 @@ interface CodeRequestConfig {
 /**
  * 读取确定性配置
  */
-function readConfig(session: ChatSession): CodeRequestConfig {
+async function readConfig(session: ChatSession): Promise<CodeRequestConfig> {
   const modelConfig = loadModelRuntimeConfig();
   const permissionMode = getCurrentLevel();
   const clineMode = session.codeSession?.clineMode ?? "act";
@@ -94,7 +94,7 @@ function readConfig(session: ChatSession): CodeRequestConfig {
     contextWindowTokens: modelConfig.contextWindowTokens,
     permissionMode,
     clineMode,
-    systemPrompt: buildClineSystemPromptWithPreferences(),
+    systemPrompt: await buildClineSystemPromptWithPreferences(),
   };
 }
 
@@ -231,7 +231,7 @@ export async function runCodeRequest(
   }
 
   // 2. 读取确定性配置
-  const config = readConfig(session);
+  const config = await readConfig(session);
 
   // 检查工作区绑定
   if (!config.workspaceBindingValid) {

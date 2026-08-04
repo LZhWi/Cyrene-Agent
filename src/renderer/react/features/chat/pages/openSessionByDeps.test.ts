@@ -12,8 +12,8 @@ describe("normalizeSessionMode", () => {
     expect(normalizeSessionMode("daily")).toBe("daily");
   });
 
-  it("'learn' 返回 null（不降级为 chat）", () => {
-    expect(normalizeSessionMode("learn")).toBeNull();
+  it("'learn' 返回 'learn'", () => {
+    expect(normalizeSessionMode("learn")).toBe("learn");
   });
 
   it("undefined / 未知 / 空串都返回 null", () => {
@@ -56,15 +56,15 @@ describe("openSessionByIdWithDeps", () => {
     expect(selectSession).toHaveBeenCalledWith("daily-1", "daily");
   });
 
-  it("learn 会话：selectSession 不被调用，返回 false（不静默降级）", async () => {
+  it("learn 会话：selectSession(id, 'learn') 被调用，返回 true", async () => {
     const selectSession = vi.fn(async () => {});
     const result = await openSessionByIdWithDeps({
       sessionId: "learn-1",
       getSession: async () => ({ mode: "learn" }),
       selectSession,
     });
-    expect(result).toBe(false);
-    expect(selectSession).not.toHaveBeenCalled();
+    expect(result).toBe(true);
+    expect(selectSession).toHaveBeenCalledWith("learn-1", "learn");
   });
 
   it("unknown / missing mode：selectSession 不被调用，返回 false", async () => {

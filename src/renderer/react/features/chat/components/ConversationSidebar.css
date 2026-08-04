@@ -4,6 +4,8 @@
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+  z-index: 1;
   color: var(--cy-text);
   font-family: var(--rb-font-sans, sans-serif);
 }

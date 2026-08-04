@@ -95,6 +95,105 @@ describe("CodeUserPreferences", () => {
   });
 });
 
+// ── Audit 3b: buildClineSystemPromptWithPreferences 装配 ─────────
+
+describe("buildClineSystemPromptWithPreferences 装配", () => {
+  let tmpDir: string;
+  let savedCwd: string;
+
+  beforeEach(() => {
+    // 把 prompts/ 目录隔离到 tmpdir，避免污染仓库里的两个 .md 文件
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cline-prompts-"));
+    fs.mkdirSync(path.join(tmpDir, "prompts"), { recursive: true });
+    savedCwd = process.cwd();
+    process.chdir(tmpDir);
+    codeUserPreferences.reset();
+  });
+
+  afterEach(() => {
+    process.chdir(savedCwd);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    codeUserPreferences.reset();
+  });
+
+  it("空文件 → 拼装结果为空字符串", async () => {
+    // tmpDir/prompts/code_identity.md 和 code_soul.md 都不存在 → 两个 loadPromptFromFile 都返回 missing
+    // 没有 userPrefs source → userPrefs.content 为空
+    // memoryStore 默认空 profile → L0/L1 块为空
+    const sysPrompt = await buildClineSystemPromptWithPreferences();
+    expect(sysPrompt).toBe("");
+  });
+
+  it("只有 identity → 拼装包含 identity 内容", async () => {
+    fs.writeFileSync(path.join(tmpDir, "prompts", "code_identity.md"), "我是 Code 模式下的昔涟", "utf8");
+    const sysPrompt = await buildClineSystemPromptWithPreferences();
+    expect(sysPrompt).toContain("我是 Code 模式下的昔涟");
+  });
+
+  it("identity 在 soul 之前,userPrefs 在 soul 之后", async () => {
+    fs.writeFileSync(path.join(tmpDir, "prompts", "code_identity.md"), "[[IDENTITY_MARK]]", "utf8");
+    fs.writeFileSync(path.join(tmpDir, "prompts", "code_soul.md"), "[[SOUL_MARK]]", "utf8");
+    codeUserPreferences.setSource({
+      getProfileVersion: () => 1,
+      readCodeRelevantPreferences: () => [{ key: "os", value: "Windows" }],
+    });
+
+    const sysPrompt = await buildClineSystemPromptWithPreferences();
+    const i = sysPrompt.indexOf("[[IDENTITY_MARK]]");
+    const s = sysPrompt.indexOf("[[SOUL_MARK]]");
+    const p = sysPrompt.indexOf("os: Windows");
+    expect(i).toBeGreaterThanOrEqual(0);
+    expect(s).toBeGreaterThan(i);
+    expect(p).toBeGreaterThan(s);
+  });
+
+  it("空 soul 文件不阻塞拼装", async () => {
+    fs.writeFileSync(path.join(tmpDir, "prompts", "code_identity.md"), "ID", "utf8");
+    fs.writeFileSync(path.join(tmpDir, "prompts", "code_soul.md"), "", "utf8"); // 空文件
+    const sysPrompt = await buildClineSystemPromptWithPreferences();
+    expect(sysPrompt).toContain("ID");
+    expect(sysPrompt).not.toContain("SOUL");
+  });
+
+  it("L0/L1 记忆在拼装末尾", async () => {
+    // mock memoryStore — 通过 dynamic import + spy 是最稳的；这里走真实路径
+    // 注入 identity + soul + userPrefs，验证 L0/L1 块（如果 memoryStore 返回非空）会附加在最后
+    fs.writeFileSync(path.join(tmpDir, "prompts", "code_identity.md"), "ID", "utf8");
+    const { memoryStore } = await import("../../memory");
+    const originalGetL0 = memoryStore.getL0.bind(memoryStore);
+    const originalGetL1 = memoryStore.getL1.bind(memoryStore);
+    memoryStore.getL0 = async () => ({
+      nickname: "",
+      preferredName: "测试用户",
+      occupation: "",
+      longTermInterests: "",
+      language: "中文",
+      permanentNote: "",
+      isPinned: false,
+      updatedAt: 0,
+    });
+    memoryStore.getL1 = async () => ({
+      recentGoals: "",
+      recentPreferences: "",
+      currentProject: "",
+      generatedAt: 0,
+      roundCount: 0,
+    });
+    try {
+      const sysPrompt = await buildClineSystemPromptWithPreferences();
+      expect(sysPrompt).toContain("测试用户");
+      expect(sysPrompt).toContain("[用户画像]");
+      // L0 块在 identity 之后
+      const i = sysPrompt.indexOf("ID");
+      const m = sysPrompt.indexOf("测试用户");
+      expect(m).toBeGreaterThan(i);
+    } finally {
+      memoryStore.getL0 = originalGetL0;
+      memoryStore.getL1 = originalGetL1;
+    }
+  });
+});
+
 // ── Audit 4: ClineResultAdapter ──────────────────────────
 
 describe("ClineResultAdapter", () => {

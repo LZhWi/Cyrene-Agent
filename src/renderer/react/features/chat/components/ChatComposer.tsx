@@ -20,9 +20,13 @@ interface ChatComposerProps {
   attachments: ComposerAttachment[];
   attachmentBusy?: boolean;
   modelBusy?: boolean;
+  pendingQueue?: Array<{ id: string; content: string }>;
   clineMode?: ClineMode;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
+  onCancel?: () => void;
+  onQueueMessage?: (value: string) => void;
+  onRemoveQueuedMessage?: (id: string) => void;
   onChooseWorkspace: () => void;
   onChooseFiles: (files: File[]) => void;
   onRemoveAttachment: (index: number) => void;
@@ -30,6 +34,7 @@ interface ChatComposerProps {
   onChooseSticker: (id: string) => void;
   onClineModeChange?: (mode: ClineMode) => void;
   onNewClineTask?: () => void;
+  onInitVaultStructure?: () => void;
 }
 
 export interface ComposerAttachment {
@@ -154,7 +159,14 @@ function ChevronIcon() {
 }
 
 function ObsidianVaultIcon() {
-  return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.2 4.5 3.8-2 3.8 2 3 6.4-3.2 8.1H8.4l-3.2-8.1 3-6.4Z" /><path d="m8.7 10.2 2.1 5.5M15.3 10.2l-2.1 5.5M8.7 10.2 12 8l3.3 2.2" /></svg>;
+  return (
+    <svg className="cy-composer__obsidian-icon" height="1em" style={{ flex: "none", lineHeight: 1 }} viewBox="0 0 24 24" width="1em" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      <title>Obsidian</title>
+      <path d="M9.643 14.012c.615-.183 1.605-.465 2.745-.534-.684-1.725-.849-3.235-.716-4.579.153-1.552.7-2.847 1.234-3.95.114-.235.223-.454.328-.664.149-.297.289-.577.42-.86.217-.47.378-.885.46-1.27.08-.38.08-.719-.014-1.044-.095-.325-.297-.675-.681-1.06a1.6 1.6 0 00-1.475.36l-4.95 4.453a1.602 1.602 0 00-.512.952l-.427 2.83c.67.592 2.327 2.317 3.335 4.71.09.213.174.432.253.656zM5.855 9.937c-.024.1-.057.197-.099.29L3.14 16.058a1.602 1.602 0 00.313 1.772l4.117 4.24c2.102-3.102 1.795-6.02.835-8.3-.728-1.73-1.832-3.083-2.55-3.833z" fill="#A88BFA" />
+      <path d="M8.52 22.57c.073.01.146.018.22.02.781.023 2.095.091 3.16.288.87.16 2.593.642 4.011 1.056 1.082.316 2.197-.548 2.354-1.664.115-.814.33-1.735.725-2.58l-.009.004c-.67-1.87-1.523-3.077-2.417-3.847a5.294 5.294 0 00-2.777-1.258c-1.541-.216-2.952.189-3.841.45.532 2.218.368 4.828-1.425 7.53z" fill="#A88BFA" />
+      <path d="M19.676 18.538a69.072 69.072 0 001.858-2.952.811.811 0 00-.061-.901c-.516-.684-1.504-2.075-2.042-3.362-.554-1.323-.636-3.378-.64-4.378a1.708 1.708 0 00-.359-1.051L15.235 1.83a3.757 3.757 0 01-.076.545c-.107.503-.307 1.004-.536 1.498-.135.29-.29.601-.446.915-.105.21-.21.42-.31.626-.517 1.068-.998 2.227-1.132 3.59-.125 1.262.046 2.73.814 4.484.128.01.257.025.386.043a6.364 6.364 0 013.327 1.506c.916.79 1.743 1.921 2.414 3.5z" fill="#A88BFA" />
+    </svg>
+  );
 }
 
 export function ChatComposer({
@@ -165,9 +177,13 @@ export function ChatComposer({
   attachments,
   attachmentBusy = false,
   modelBusy = false,
+  pendingQueue = [],
   clineMode = "act",
   onChange,
   onSubmit,
+  onCancel,
+  onQueueMessage,
+  onRemoveQueuedMessage,
   onChooseWorkspace,
   onChooseFiles,
   onRemoveAttachment,
@@ -175,6 +191,7 @@ export function ChatComposer({
   onChooseSticker,
   onClineModeChange,
   onNewClineTask,
+  onInitVaultStructure,
 }: ChatComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
@@ -225,7 +242,8 @@ export function ChatComposer({
     onChange(nextValue.replace(/ {2,}/g, " ").trim());
   };
 
-  const hasComposerHeader = attachments.length > 0 || selectedStickers.length > 0;
+  const hasComposerHeader = attachments.length > 0 || selectedStickers.length > 0 || pendingQueue.length > 0;
+  const shiftPressedRef = useRef(false);
 
   return (
     <div className={`cy-composer-stack ${docked ? "is-docked" : "is-centered"}`}>
@@ -246,13 +264,35 @@ export function ChatComposer({
         <Sender
         rootClassName="cy-composer"
         value={value}
-        placeholder={placeholder}
-        disabled={(requiresWorkspace && !workspaceName) || modelBusy}
+        placeholder={modelBusy ? "按 Enter 停止 · Shift+Enter 加入队列" : placeholder}
+        loading={modelBusy}
+        disabled={requiresWorkspace && !workspaceName}
         autoSize={{ minRows: 3, maxRows: 7 }}
         onChange={onChange}
-        onSubmit={onSubmit}
+        onKeyDown={(event) => { shiftPressedRef.current = event.shiftKey; }}
+        onSubmit={(submitValue) => {
+          if (modelBusy) {
+            if (shiftPressedRef.current) {
+              onQueueMessage?.(submitValue);
+            } else {
+              onCancel?.();
+            }
+          } else {
+            onSubmit(submitValue);
+          }
+        }}
         header={hasComposerHeader ? (
           <div className="cy-composer__attachments" aria-label="待发送附件">
+            {pendingQueue.length > 0 && (
+              <div className="cy-composer__queue" aria-label="待发送消息">
+                {pendingQueue.map((item) => (
+                  <div className="cy-composer__queue-item" key={item.id}>
+                    <span className="cy-composer__queue-text" title={item.content}>{item.content.slice(0, 40)}{item.content.length > 40 ? "..." : ""}</span>
+                    <button type="button" aria-label="移除" onClick={() => onRemoveQueuedMessage?.(item.id)}>×</button>
+                  </div>
+                ))}
+              </div>
+            )}
             {attachments.map((attachment, index) => (
               <div className={`cy-composer__attachment ${attachment.kind === "image" && attachment.previewUrl ? "is-image" : ""}`} key={`${attachment.filePath ?? attachment.name}-${index}`}>
                 {attachment.kind === "image" && attachment.previewUrl ? (
@@ -305,10 +345,16 @@ export function ChatComposer({
           </button>
         )}
         {supportsObsidianLibrary && (
-          <button type="button" className="cy-composer__footer-button cy-composer__footer-button--placeholder" disabled>
+          <button type="button" className="cy-composer__footer-button" aria-label="选择 Obsidian 项目库" onClick={onChooseWorkspace}>
             <ObsidianVaultIcon />
-            <span>Obsidian 项目库</span>
-            <small>SOON</small>
+            <span>{workspaceName ?? "Obsidian 项目库"}</span>
+            <ChevronIcon />
+          </button>
+        )}
+        {supportsObsidianLibrary && workspaceName && onInitVaultStructure && (
+          <button type="button" className="cy-composer__footer-button" aria-label="添加 Cyrene 学习结构" onClick={onInitVaultStructure}>
+            <PlusIcon />
+            <span>添加学习结构</span>
           </button>
         )}
         {supportsPermission && <span className="cy-composer__footer-separator" />}

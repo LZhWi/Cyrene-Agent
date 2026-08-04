@@ -1,5 +1,5 @@
 /**
- * CodeUserPreferencesProvider - 稳定的代码偏好
+ * CodeUserPreferencesProvider - 稳定的代码偏好 + systemPrompt 装配
  *
  * 职责：
  * - 从明确来源（用户档案/设置）读取
@@ -8,9 +8,20 @@
  * - 版本化缓存
  * - 创建新 Cline Task 时注入
  *
- * 不每轮动态 RAG。不注入 WorldBook/DMAE/CAE/社交情绪。
- * 当前无可用档案时 content="" 正常创建 Session。
+ * `buildClineSystemPromptWithPreferences()` 装配顺序：
+ *   1. code_identity.md — Code 模式下的角色定位（手动维护）
+ *   2. code_soul.md     — 精简版 Cyrene 人格（手动维护，避免与 chat 模式共享 soul.md）
+ *   3. codeUserPreferences — 版本化代码偏好事实（profile 注入）
+ *   4. L0/L1 记忆      — 用户画像 + 近期状态（结构化记忆，非 WorldBook）
+ *
+ * 明确不注入：
+ *   - WorldBook / DMAE / CAE / 社交情绪（会干扰代码任务专注度）
+ *   - 动态 RAG / 每轮检索
+ *
+ * 当前无可用档案时各 part 为空字符串，正常创建 Session。
  */
+
+import { memoryStore } from "../../memory";
 
 /** 代码偏好事实条目 */
 export interface CodePreferenceFact {
@@ -95,14 +106,57 @@ class CodeUserPreferencesProvider {
 
 export const codeUserPreferences = new CodeUserPreferencesProvider();
 
-/** 构建 Cline systemPrompt：CodeIdentityAddon + CodeUserPreferences */
-export function buildClineSystemPromptWithPreferences(): string {
+/** 构建 Cline systemPrompt：identity → soul → userPrefs → L0/L1 记忆 */
+export async function buildClineSystemPromptWithPreferences(): Promise<string> {
   const identity = loadPromptFromFile("code_identity.md");
+  const soul = loadPromptFromFile("code_soul.md");
   const userPrefs = codeUserPreferences.get();
+  const memory = await buildL0L1MemoryBlock();
   const parts: string[] = [];
   if (identity.content) parts.push(identity.content);
+  if (soul.content) parts.push(soul.content);
   if (userPrefs.content) parts.push(userPrefs.content);
+  if (memory) parts.push(memory);
   return parts.join("\n\n");
+}
+
+/**
+ * 把 L0（用户画像）和 L1（近期状态）拼成单个字符串块。
+ * 复用 chat 模式 `orchestrator/index.ts` 的成熟格式 —— 便于跨模式维护。
+ * L2 不注入（与 chat 模式行为一致，避免给 code 模式灌入过多背景）。
+ * 任一为空时跳过对应小节，整体为空时返回 ""。
+ */
+async function buildL0L1MemoryBlock(): Promise<string> {
+  let block = "";
+  try {
+    const l0 = await memoryStore.getL0();
+    const l0Lines = [
+      l0.preferredName && `称呼：${l0.preferredName}`,
+      l0.occupation && `职业：${l0.occupation}`,
+      l0.longTermInterests && `长期兴趣：${l0.longTermInterests}`,
+      l0.language && `常用语言：${l0.language}`,
+      l0.permanentNote && `备注：${l0.permanentNote}`,
+    ].filter(Boolean);
+    if (l0Lines.length > 0) {
+      block += `[用户画像]\n${l0Lines.join("\n")}\n\n`;
+    }
+  } catch (err) {
+    console.warn("[CodeUserPreferences] failed to load L0:", err);
+  }
+  try {
+    const l1 = await memoryStore.getL1();
+    const l1Lines = [
+      l1.recentGoals && `最近目标：${l1.recentGoals}`,
+      l1.recentPreferences && `近期偏好：${l1.recentPreferences}`,
+      l1.currentProject && `当前项目：${l1.currentProject}`,
+    ].filter(Boolean);
+    if (l1Lines.length > 0) {
+      block += `[近期状态]\n${l1Lines.join("\n")}\n\n`;
+    }
+  } catch (err) {
+    console.warn("[CodeUserPreferences] failed to load L1:", err);
+  }
+  return block.trim();
 }
 
 // ── Prompt 文件读取 ──────────────────────────────────────

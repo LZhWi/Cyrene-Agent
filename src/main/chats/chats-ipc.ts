@@ -19,6 +19,7 @@ import type { ChatMessage, ConversationMode, ConversationWorkspaceBinding } from
 import * as chatsStore from "./chats-store";
 import * as fs from "fs";
 import * as path from "path";
+import { ensureVaultStructure, isEmptyDirectory } from "../learn/obsidian/vault-init";
 
 function broadcastChanged(senderWebContents?: WebContents | null): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -174,13 +175,13 @@ export function registerChatsIpc(): void {
 
   ipcMain.handle(
     IPC.CHATS_SET_WORKSPACE,
-    (event, payload: { sessionId: string; workspaceRoot: string }) => {
+    async (event, payload: { sessionId: string; workspaceRoot: string }) => {
       if (!payload?.sessionId || !payload?.workspaceRoot) {
         return { ok: false, error: "missing sessionId or workspaceRoot" };
       }
       const existing = chatsStore.getSession(payload.sessionId);
       if (!existing) return { ok: false, error: "session not found" };
-      if (existing.mode !== "work" && existing.mode !== "code" && existing.mode !== "daily") {
+      if (existing.mode !== "work" && existing.mode !== "code" && existing.mode !== "daily" && existing.mode !== "learn") {
         return { ok: false, error: `${existing.mode ?? "unknown"} mode does not support workspace binding` };
       }
       // 路径验证：目录存在 + realpath 解析
@@ -207,11 +208,29 @@ export function registerChatsIpc(): void {
             });
           } catch { /* ignore */ }
         }
-        return { ok: true, binding };
+        // Learn 模式：检测目录是否为空，让 renderer 决定是否初始化结构
+        const empty = existing.mode === "learn" ? await isEmptyDirectory(resolved) : false;
+        return { ok: true, binding, isEmpty: empty };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         return { ok: false, error: msg };
       }
+    },
+  );
+
+  ipcMain.handle(
+    IPC.CHATS_INIT_LEARN_WORKSPACE,
+    async (_event, sessionId: string) => {
+      if (!sessionId) return { ok: false, error: "missing sessionId" };
+      const binding = chatsStore.getWorkspaceBinding(sessionId);
+      if (!binding) return { ok: false, error: "no workspace binding" };
+      const session = chatsStore.getSession(sessionId);
+      if (!session || session.mode !== "learn") {
+        return { ok: false, error: "session is not in learn mode" };
+      }
+      const result = await ensureVaultStructure(binding.workspaceRoot);
+      if (result.error) return { ok: false, error: result.error };
+      return { ok: true, created: result.created, skipped: result.skipped };
     },
   );
 

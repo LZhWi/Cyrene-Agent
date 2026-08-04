@@ -23,6 +23,7 @@
 }
 
 .cy-composer-shell {
+  position: relative;
   display: flex;
   width: 100%;
   flex-direction: column;
@@ -90,6 +91,54 @@
 .cy-composer .ant-sender-actions-btn:disabled {
   color: #aaa;
   background: #e7e7e7;
+}
+
+.cy-composer__queue {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 8px 12px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.cy-composer__queue-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 13px;
+  color: rgba(0, 0, 0, 0.65);
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 8px;
+  padding: 6px 8px;
+}
+
+.cy-composer__queue-text {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cy-composer__queue-item button {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  appearance: none;
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  background: transparent;
+  color: rgba(0, 0, 0, 0.45);
+  cursor: pointer;
+}
+
+.cy-composer__queue-item button:hover {
+  background: rgba(0, 0, 0, 0.06);
+  color: rgba(0, 0, 0, 0.75);
 }
 
 .cy-composer__icon-button,
@@ -357,6 +406,12 @@
   stroke-width: 4;
   stroke-linecap: round;
   stroke-linejoin: round;
+}
+
+.cy-composer__footer .cy-composer__obsidian-icon,
+.cy-composer__footer .cy-composer__obsidian-icon path {
+  stroke: none;
+  fill: #A88BFA;
 }
 
 .cy-composer__footer .cy-composer__footer-button svg:last-child,

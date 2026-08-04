@@ -50,6 +50,7 @@ import type {
   SocialExtractionInput,
 } from "../social-context/types";
 import type { TrustedAskUserProfile } from "../../shared/ask-clarification";
+import type { ConversationMode } from "../../shared/chat-types";
 import type { SkillRouteInfo } from "./task-router";
 import { filterToolsBySearchBackend, type SearchBackend } from "./search-backend-filter";
 import { buildStickerEmbeddingQuery } from "../sticker-query";
@@ -545,7 +546,9 @@ export async function buildAgentRunOptions(
     customStyle: styleSettings.customStyle as CustomStyleConfig,
   });
   // 运行模式只决定基础 system；表达 style 始终单独注入 Soul。
-  const basePromptMode = isChatMode ? "chat" : "work";
+  // 优先使用 AguiBridge 注入的真实会话模式，fallback 到执行模式（兼容旧调用方）。
+  const resolvedMode: ConversationMode | undefined = input.mode ?? (isChatMode ? "chat" : "work");
+  const basePromptMode = resolvedMode;
   const enabledTools = deps.toolRegistry.getEnabled();
 
   // 搜索后端互斥过滤：每轮只暴露当前后端对应的搜索工具

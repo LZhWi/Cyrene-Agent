@@ -4,12 +4,11 @@
  * 之所以独立成模块：便于 React ChatPage 与测试文件独立 import，
  * 避免测试文件触发 ChatPage.tsx 整模块的依赖副作用（antdx / 大量 hooks）。
  *
- * React 窗口仅支持 chat/work/code/daily 四种模式；
- * learn 会话拒绝打开（不静默降级为 chat）。
+ * React 窗口支持 chat/work/code/daily/learn 五种模式。
  * 返回 null 表示调用方应执行 fallback。
  */
 
-export type ReactSessionMode = "chat" | "work" | "code" | "daily";
+export type ReactSessionMode = "chat" | "work" | "code" | "daily" | "learn";
 
 export function normalizeSessionMode(mode: string | undefined): ReactSessionMode | null {
   switch (mode) {
@@ -17,6 +16,7 @@ export function normalizeSessionMode(mode: string | undefined): ReactSessionMode
     case "work":
     case "code":
     case "daily":
+    case "learn":
       return mode;
     default:
       return null;

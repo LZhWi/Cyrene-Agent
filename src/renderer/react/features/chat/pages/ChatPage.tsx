@@ -17,6 +17,7 @@ import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessage
 import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
 import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
 import { ConversationSidebar } from "../components/ConversationSidebar";
+import { StatusFloat } from "../components/StatusFloat";
 import type { ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import { SidebarToggle } from "../../../components/ui/SidebarToggle";
 import { ModeSwitch } from "../../../components/ui/ModeSwitch";
@@ -48,6 +49,7 @@ import "../components/StyleControl.css";
 import "../components/PermissionControl.css";
 import "../components/ChatMessageList.css";
 import "../components/ConversationSidebar.css";
+import "../components/StatusFloat.css";
 
 import avatarLight from "../../../assets/avatars/avatar-light.png";
 
@@ -377,7 +379,7 @@ export function ChatPage() {
   const lastTurnRevisionStartingRef = useRef(false);
   const activeAguiOffRef = useRef<(() => void) | null>(null);
   const activeRunsBySessionRef = useRef(activeRunsBySession);
-  const [pendingQueueBySession, setPendingQueueBySession] = useState<Record<string, { id: string; content: string; attachments: ComposerAttachment[]; userSticker?: string }[]>>({});
+  const [pendingQueueBySession, setPendingQueueBySession] = useState<Record<string, { id: string; rawContent: string; visibleContent: string; attachments: ComposerAttachment[]; userSticker?: string }[]>>({});
   const pendingQueueBySessionRef = useRef(pendingQueueBySession);
   useEffect(() => {
     pendingQueueBySessionRef.current = pendingQueueBySession;
@@ -1129,8 +1131,8 @@ export function ChatPage() {
         void dispatchUserMessage({
           targetMode: input.targetMode,
           sessionId: input.sessionId,
-          rawContent: next.content,
-          visibleContent: next.content.replace(/\[sticker:[^\]]+\]/g, "").trim(),
+          rawContent: next.rawContent,
+          visibleContent: next.visibleContent,
           attachments: next.attachments,
           userSticker: next.userSticker,
           shouldRunModel: true,
@@ -1530,7 +1532,7 @@ export function ChatPage() {
         ...pendingQueueBySessionRef.current,
         [sessionId]: [
           ...(pendingQueueBySessionRef.current[sessionId] ?? []),
-          { id: userMessageId, content: message, attachments: attachmentsForMessage, userSticker },
+          { id: userMessageId, rawContent: message, visibleContent, attachments: attachmentsForMessage, userSticker },
         ],
       };
       pendingQueueBySessionRef.current = nextQueue;
@@ -1663,8 +1665,31 @@ export function ChatPage() {
     setPendingQueueBySession(next);
   }
 
+  function queueCurrentDraft(value: string) {
+    if (!activeSessionId || !value.trim()) return;
+    const sessionId = activeSessionId;
+    const stickerMatch = value.match(/\[sticker:([^\]]+)\]/);
+    const userSticker = stickerMatch?.[1];
+    const visibleContent = value.replace(/\[sticker:[^\]]+\]/g, "").trim();
+    const attachmentsForMessage = attachments.map((attachment) => ({ ...attachment }));
+    const userMessageId = crypto.randomUUID();
+    const nextQueue = {
+      ...pendingQueueBySessionRef.current,
+      [sessionId]: [
+        ...(pendingQueueBySessionRef.current[sessionId] ?? []),
+        { id: userMessageId, rawContent: value, visibleContent, attachments: attachmentsForMessage, userSticker },
+      ],
+    };
+    pendingQueueBySessionRef.current = nextQueue;
+    setPendingQueueBySession(nextQueue);
+    setDrafts((current) => ({ ...current, [scopeKey]: "" }));
+    setAttachmentsByScope((current) => ({ ...current, [scopeKey]: [] }));
+  }
+
   const isCurrentScopeRunning = Boolean(activeSessionId && activeRunsBySession.current[activeSessionId]);
-  const currentPendingQueue = activeSessionId ? (pendingQueueBySession[activeSessionId] ?? []) : [];
+  const currentPendingQueue = activeSessionId
+    ? (pendingQueueBySession[activeSessionId] ?? []).map((item) => ({ id: item.id, content: item.visibleContent }))
+    : [];
 
   return (
     <div className={`cy-page ${collapsed ? "is-collapsed" : ""}`}>
@@ -1696,6 +1721,7 @@ export function ChatPage() {
         <NewTaskButton label={taskLabel} onClick={() => void createNewTask()} />
       </div>
       <div className="cy-page-conversations">
+        <StatusFloat />
         <ConversationSidebar
           mode={mode}
           sessions={sessions}
@@ -1759,6 +1785,7 @@ export function ChatPage() {
             onChange={(value) => setDrafts((current) => ({ ...current, [scopeKey]: value }))}
             onSubmit={(value) => void sendMessage(value)}
             onCancel={() => void cancelCurrentRun()}
+            onQueueMessage={(value) => queueCurrentDraft(value)}
             onRemoveQueuedMessage={(id) => removeQueuedMessage(activeSessionId, id)}
             onChooseWorkspace={() => void chooseWorkspace()}
             onInitVaultStructure={mode === "learn" ? () => {
