@@ -9,7 +9,7 @@
   border: 1px solid rgba(0, 0, 0, 0.06);
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
   color: #111111;
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.45;
   user-select: none;
   overflow: hidden;
@@ -24,53 +24,45 @@
   box-shadow: 0 16px 48px rgba(0, 0, 0, 0.16);
 }
 
-.cy-todo__header {
+/* Drag / collapse bar */
+.cy-todo__dragbar {
   flex: none;
+  position: relative;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 12px 14px;
+  justify-content: center;
+  height: 22px;
+  padding: 0 10px;
   border: none;
   background: transparent;
   cursor: grab;
-  text-align: left;
   font: inherit;
   color: inherit;
 }
 
-.cy-todo__header:active {
+.cy-todo__dragbar:active {
   cursor: grabbing;
 }
 
-.cy-todo__title-row {
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
-  min-width: 0;
-}
-
-.cy-todo__title {
-  font-weight: 600;
-  font-size: 15px;
-  color: #111111;
-}
-
-.cy-todo__count {
-  font-size: 12px;
-  color: #888888;
-  white-space: nowrap;
+.cy-todo__dragline {
+  width: 32px;
+  height: 4px;
+  border-radius: 2px;
+  background: #e5e5e5;
 }
 
 .cy-todo__toggle {
-  flex: none;
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 26px;
-  height: 26px;
-  border-radius: 8px;
-  color: #888888;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: #aaaaaa;
   cursor: pointer;
   transition: background 0.15s ease, color 0.15s ease, transform 0.3s ease;
 }
@@ -81,16 +73,17 @@
 }
 
 .cy-todo--collapsed .cy-todo__toggle {
-  transform: rotate(180deg);
+  transform: translateY(-50%) rotate(180deg);
 }
 
+/* Body */
 .cy-todo__body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 10px;
   padding: 0 14px 14px;
-  max-height: 600px;
+  max-height: 560px;
   opacity: 1;
   overflow: hidden;
   transition: max-height 0.3s ease, opacity 0.25s ease, padding 0.25s ease;
@@ -103,6 +96,112 @@
   padding-bottom: 0;
 }
 
+/* Hero: mascot + title */
+.cy-todo__hero {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 2px;
+}
+
+.cy-todo__mascot {
+  width: 52px;
+  height: 52px;
+  object-fit: contain;
+  animation: cy-todo-float 3s ease-in-out infinite;
+}
+
+@keyframes cy-todo-float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-6px);
+  }
+}
+
+.cy-todo__hero-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.cy-todo__hero-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: #111111;
+}
+
+.cy-todo__hero-sub {
+  font-size: 12px;
+  color: #888888;
+}
+
+/* Divider */
+.cy-todo__divider {
+  flex: none;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, #FF5B8A 20%, #FF5B8A 80%, transparent);
+  opacity: 0.35;
+}
+
+/* Task list */
+.cy-todo__list {
+  flex: 1;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  overflow-y: auto;
+}
+
+.cy-todo__list::-webkit-scrollbar {
+  width: 3px;
+}
+
+.cy-todo__list::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 2px;
+}
+
+.cy-todo__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.cy-todo__status {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 2px;
+}
+
+.cy-todo__bullet {
+  width: 14px;
+  height: 14px;
+}
+
+.cy-todo__content {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+  color: #111111;
+  transition: color 0.2s ease;
+}
+
+.cy-todo__item--completed .cy-todo__content {
+  text-decoration: line-through;
+  color: #999999;
+}
+
+/* Progress */
 .cy-todo__progress {
   position: relative;
   flex: none;
@@ -131,56 +230,24 @@
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 
-.cy-todo__list {
-  flex: 1;
-  list-style: none;
-  margin: 0;
-  padding: 0;
+/* Workspace path */
+.cy-todo__workspace {
+  flex: none;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  overflow-y: auto;
+  gap: 2px;
+  padding-top: 2px;
 }
 
-.cy-todo__list::-webkit-scrollbar {
-  width: 4px;
+.cy-todo__workspace-label {
+  font-size: 11px;
+  color: #aaaaaa;
 }
 
-.cy-todo__list::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.12);
-  border-radius: 2px;
-}
-
-.cy-todo__item {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-}
-
-.cy-todo__status {
-  flex: none;
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  margin-top: 1px;
-}
-
-.cy-todo__check {
-  width: 18px;
-  height: 18px;
-}
-
-.cy-todo__content {
-  flex: 1;
-  min-width: 0;
-  word-break: break-word;
+.cy-todo__workspace-path {
+  font-size: 12px;
   color: #111111;
-  transition: color 0.2s ease;
-}
-
-.cy-todo__item--completed .cy-todo__content {
-  text-decoration: line-through;
-  color: #999999;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

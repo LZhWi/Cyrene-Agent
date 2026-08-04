@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { ChatComposer, type ComposerAttachment } from "../components/ChatComposer";
 import { ComposerSlot } from "../components/ComposerSlot";
+import { TodoPanel } from "../components/TodoPanel";
+import type { TodoState } from "../../../../../shared/todo-types";
 import {
   describePermissionRequest,
   normalizeCodeAskInteraction,
@@ -118,7 +120,8 @@ interface ChatStoreApi {
   setMessageTtsCacheKey: (id: string, messageId: string, cacheKey: string, converterVersion: string) => Promise<ChatSession | null>;
   delete: (id: string) => Promise<boolean>;
   pickWorkspaceFolder: () => Promise<{ ok: boolean; path?: string; displayName?: string; error?: string }>;
-  setWorkspace: (sessionId: string, workspaceRoot: string) => Promise<{ ok: boolean; error?: string }>;
+  setWorkspace: (sessionId: string, workspaceRoot: string) => Promise<{ ok: boolean; error?: string; isEmpty?: boolean }>;
+  initLearnWorkspace: (sessionId: string) => Promise<{ ok: boolean; error?: string; created?: string[]; skipped?: string[] }>;
   openWorkspace: (workspaceRoot: string) => Promise<{ ok: boolean; error?: string }>;
   setActiveSession: (sessionId: string | null) => Promise<unknown>;
   onChanged: (callback: () => void) => () => void;
@@ -287,6 +290,7 @@ export function ChatPage() {
   const [selectedClineMode, setSelectedClineMode] = useState<"plan" | "act">("act");
   const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const [todoState, setTodoState] = useState<TodoState | null>(null);
   const activeModeRef = useRef(mode);
   const activeSessionIdsRef = useRef(activeSessionIds);
   const activeScopeRef = useRef(`mode:${mode}`);
@@ -304,6 +308,16 @@ export function ChatPage() {
   >(async () => {});
   // IPC 切换串行链：保证 Ready 后连续切换按顺序完成
   const reactSessionSwitchChainRef = useRef<Promise<void>>(Promise.resolve());
+
+  useEffect(() => {
+    const api = aguiApi();
+    if (!api) return;
+    return api.onEvent((event) => {
+      if (event.type === "CUSTOM" && event.name === "cyrene.todos") {
+        setTodoState((event.value as TodoState) ?? null);
+      }
+    });
+  }, []);
 
   useEffect(() => {
     const settings = settingsApprovalApi();
@@ -1159,9 +1173,28 @@ export function ChatPage() {
     return session.id;
   }
 
+
+
+  async function initVaultStructure(sessionId: string) {
+    const store = chatStore();
+    if (!store) return;
+    const confirmed = window.confirm(
+      "要在当前 Obsidian Vault 中添加 Cyrene 通用学习结构吗？只会创建缺失的文件，不会覆盖已有内容。"
+    );
+    if (!confirmed) return;
+    const result = await store.initLearnWorkspace(sessionId);
+    if (!result.ok) {
+      window.alert(`添加学习结构失败：${result.error ?? "未知错误"}`);
+    } else {
+      const created = result.created?.length ?? 0;
+      const skipped = result.skipped?.length ?? 0;
+      window.alert(`已创建 ${created} 个文件/目录${skipped > 0 ? `，跳过 ${skipped} 个已存在项` : ""}。`);
+    }
+  }
+
   async function chooseWorkspace() {
     const targetMode = mode;
-    if (targetMode === "chat" || targetMode === "learn") return;
+    if (targetMode === "chat") return;
     const store = chatStore();
     if (!store) return;
     const picked = await store.pickWorkspaceFolder();
@@ -1173,6 +1206,17 @@ export function ChatPage() {
       return;
     }
     setWorkspaceNames((current) => ({ ...current, [targetMode]: picked.displayName ?? "工作文件夹" }));
+
+    // Learn 模式：空目录询问是否初始化通用学习结构
+    if (targetMode === "learn" && result.isEmpty) {
+      const confirmed = window.confirm(
+        "这是一个空目录。Cyrene 可以在这里创建通用学习工作区结构（materials/、notes/、exercises/、templates/、learn/progress.md），方便你之后和 Cyrene 一起学习。\n\n是否创建？"
+      );
+      if (confirmed) {
+        await initVaultStructure(sessionId);
+      }
+    }
+
     await refreshSessions(targetMode, false);
   }
 
@@ -1181,7 +1225,7 @@ export function ChatPage() {
     const store = chatStore();
     if (!store) return;
     let workspace: { path: string; displayName?: string } | undefined;
-    if (targetMode === "work" || targetMode === "code" || targetMode === "daily") {
+    if (targetMode === "work" || targetMode === "code" || targetMode === "daily" || targetMode === "learn") {
       // 同一项目下的新任务应继承当前会话的可信工作区；只有还未选择
       // 任何项目时才打开目录选择器，避免用户为每个任务重复选一次。
       const activeId = activeSessionIdsRef.current[targetMode];
@@ -1208,6 +1252,15 @@ export function ChatPage() {
         await store.delete(session.id);
         window.alert(`设置工作区失败：${result.error ?? "未知错误"}`);
         return;
+      }
+      // Learn 模式：空目录询问是否初始化通用学习结构
+      if (targetMode === "learn" && result.isEmpty) {
+        const confirmed = window.confirm(
+          "这是一个空目录。Cyrene 可以在这里创建通用学习工作区结构（materials/、notes/、exercises/、templates/、learn/progress.md），方便你之后和 Cyrene 一起学习。\n\n是否创建？"
+        );
+        if (confirmed) {
+          await initVaultStructure(session.id);
+        }
       }
     }
     await refreshSessions(targetMode, false);
@@ -1522,6 +1575,9 @@ export function ChatPage() {
             <span>松开即可添加到当前对话</span>
           </div>
         )}
+        {(mode === "work" || mode === "daily" || mode === "learn") && (
+          <TodoPanel state={todoState} mode={mode} workspaceName={workspaceNames[mode]} />
+        )}
         {hasMessages && (
           <ChatMessageList
             messages={messages}
@@ -1557,6 +1613,10 @@ export function ChatPage() {
             onChange={(value) => setDrafts((current) => ({ ...current, [scopeKey]: value }))}
             onSubmit={(value) => void sendMessage(value)}
             onChooseWorkspace={() => void chooseWorkspace()}
+            onInitVaultStructure={mode === "learn" ? () => {
+              const sessionId = activeSessionIdsRef.current[mode];
+              if (sessionId) void initVaultStructure(sessionId);
+            } : undefined}
             onChooseFiles={(files) => void chooseFiles(files)}
             onRemoveAttachment={removeAttachment}
             onScreenshot={() => void window.chat?.startScreenshot()}

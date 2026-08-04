@@ -1,17 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { TodoState } from "../../../../shared/todo-types";
+import reminderPngUrl from "../../../assets/status-moods/提醒.png?url";
 import "./TodoPanel.css";
 
 export interface TodoPanelProps {
   state: TodoState | null;
   mode: "work" | "daily" | "learn";
+  workspaceName?: string;
 }
-
-const TITLES: Record<TodoPanelProps["mode"], string> = {
-  work: "任务进度",
-  daily: "今日任务",
-  learn: "学习进度",
-};
 
 const DEFAULT_WIDTH = 240;
 const DEFAULT_TOP = 80;
@@ -19,15 +15,15 @@ const DEFAULT_RIGHT = 24;
 
 function EmptyCircleIcon() {
   return (
-    <svg className="cy-todo__check" viewBox="0 0 24 24" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" fill="none" stroke="#FF5B8A" strokeWidth="2" />
+    <svg className="cy-todo__bullet" viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="8" fill="none" stroke="#FF5B8A" strokeWidth="2" />
     </svg>
   );
 }
 
 function CheckedCircleIcon() {
   return (
-    <svg className="cy-todo__check" viewBox="0 0 24 24" aria-hidden="true">
+    <svg className="cy-todo__bullet" viewBox="0 0 24 24" aria-hidden="true">
       <circle cx="12" cy="12" r="10" fill="#FF5B8A" />
       <path
         d="M7 12l3 3 5-6"
@@ -43,7 +39,7 @@ function CheckedCircleIcon() {
 
 function ToggleIcon() {
   return (
-    <svg width="18" height="18" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    <svg width="16" height="16" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       <path d="M27 9V21H39" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M21 39V27H9" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
       <path d="M27 21L42 6" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
@@ -52,7 +48,7 @@ function ToggleIcon() {
   );
 }
 
-export function TodoPanel({ state, mode }: TodoPanelProps) {
+export function TodoPanel({ state, mode, workspaceName }: TodoPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [pos, setPos] = useState({
     x: typeof window !== "undefined" ? window.innerWidth - DEFAULT_WIDTH - DEFAULT_RIGHT : 0,
@@ -82,19 +78,16 @@ export function TodoPanel({ state, mode }: TodoPanelProps) {
       if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
         setIsDragging(true);
       }
-      const minX = 0;
-      const minY = 0;
       const maxX = window.innerWidth - DEFAULT_WIDTH;
       const maxY = window.innerHeight - 48;
       setPos({
-        x: Math.min(Math.max(minX, dragRef.current.initialX + dx), maxX),
-        y: Math.min(Math.max(minY, dragRef.current.initialY + dy), maxY),
+        x: Math.min(Math.max(0, dragRef.current.initialX + dx), maxX),
+        y: Math.min(Math.max(0, dragRef.current.initialY + dy), maxY),
       });
     };
 
     const handleUp = () => {
       dragRef.current = null;
-      // Delay clearing drag flag so the subsequent click can be suppressed.
       window.setTimeout(() => setIsDragging(false), 0);
     };
 
@@ -126,22 +119,19 @@ export function TodoPanel({ state, mode }: TodoPanelProps) {
       className={`cy-todo ${collapsed ? "cy-todo--collapsed" : ""}`}
       style={{ left: pos.x, top: pos.y }}
       role="region"
-      aria-label={TITLES[mode]}
+      aria-label="当前任务"
     >
       <button
         type="button"
-        className="cy-todo__header"
+        className="cy-todo__dragbar"
         onMouseDown={handleHeaderMouseDown}
         onClick={handleHeaderClick}
         aria-expanded={!collapsed}
+        title="拖动"
       >
-        <div className="cy-todo__title-row">
-          <span className="cy-todo__title">{TITLES[mode]}</span>
-          <span className="cy-todo__count">{completed}/{total}</span>
-        </div>
+        <span className="cy-todo__dragline" />
         <span
           className="cy-todo__toggle"
-          aria-hidden="true"
           onClick={(e) => {
             e.stopPropagation();
             setCollapsed((c) => !c);
@@ -152,16 +142,17 @@ export function TodoPanel({ state, mode }: TodoPanelProps) {
       </button>
 
       <div className="cy-todo__body">
-        <div
-          className="cy-todo__progress"
-          role="progressbar"
-          aria-valuenow={progress}
-          aria-valuemin={0}
-          aria-valuemax={100}
-        >
-          <div className="cy-todo__progress-bar" style={{ width: `${progress}%` }} />
-          <span className="cy-todo__progress-text">{progress}%</span>
+        <div className="cy-todo__hero">
+          <img className="cy-todo__mascot" src={reminderPngUrl} alt="提醒" />
+          <div className="cy-todo__hero-text">
+            <div className="cy-todo__hero-title">当前任务</div>
+            <div className="cy-todo__hero-sub">
+              {completed}/{total} 已完成
+            </div>
+          </div>
         </div>
+
+        <div className="cy-todo__divider" />
 
         <ul className="cy-todo__list">
           {todos.map((todo) => {
@@ -179,6 +170,26 @@ export function TodoPanel({ state, mode }: TodoPanelProps) {
             );
           })}
         </ul>
+
+        <div className="cy-todo__divider" />
+
+        <div
+          className="cy-todo__progress"
+          role="progressbar"
+          aria-valuenow={progress}
+          aria-valuemin={0}
+          aria-valuemax={100}
+        >
+          <div className="cy-todo__progress-bar" style={{ width: `${progress}%` }} />
+          <span className="cy-todo__progress-text">{progress}%</span>
+        </div>
+
+        <div className="cy-todo__workspace">
+          <span className="cy-todo__workspace-label">当前工作路径</span>
+          <span className="cy-todo__workspace-path" title={workspaceName}>
+            {workspaceName ?? "未绑定工作区"}
+          </span>
+        </div>
       </div>
     </div>
   );
