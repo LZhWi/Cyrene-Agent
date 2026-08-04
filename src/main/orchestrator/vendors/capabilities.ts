@@ -79,7 +79,9 @@ export const PROVIDER_CAPABILITIES = [
     defaultModel: "kimi-k2.7-code",
     supportsTools: true,
     supportsThinking: true,
-    thinkingField: "thinking",
+    // OpenAI 兼容响应与历史 assistant 消息使用 reasoning_content；
+    // 请求顶层的 thinking 仅用于控制 K2.6 的思考开关，两者不是同一个字段。
+    thinkingField: "reasoning_content",
     cacheStrategy: "prompt_cache_key",
     testStrategy: "text",
     // k2.7-code 支持 image_url / video_url content block

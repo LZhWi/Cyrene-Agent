@@ -111,6 +111,7 @@ body {
 }
 
 .sidebar__winbtn svg { display: block; }
+.sidebar__icon-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 
 .sidebar__icon-btn:hover,
 .sidebar__winbtn:hover {
@@ -347,6 +348,18 @@ body {
   background: linear-gradient(135deg, rgba(236, 72, 153, 0.20), rgba(168, 85, 247, 0.18));
 }
 
+.model-switch-btn > svg,
+.settings-btn > svg {
+  width: 17px;
+  height: 17px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .model-switch-btn:hover,
 .settings-btn:hover {
   background: rgba(236, 72, 153, 0.20);
@@ -363,12 +376,7 @@ body {
   padding: 10px;
 }
 
-.settings-btn__icon {
-  font-size: 15px;
-  width: 18px;
-  text-align: center;
-  filter: drop-shadow(0 0 5px rgba(236, 72, 153, 0.45));
-}
+.settings-btn__icon { width: 18px; filter: drop-shadow(0 0 5px rgba(236, 72, 153, 0.45)); }
 
 .sidebar__version {
   font: var(--rb-text-micro);

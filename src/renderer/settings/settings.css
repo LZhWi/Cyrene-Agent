@@ -253,6 +253,16 @@ body {
   filter: drop-shadow(0 0 10px rgba(236, 72, 153, 0.35));
 }
 
+.panel-heading__icon svg {
+  width: 23px;
+  height: 23px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .panel-heading h1,
 .placeholder-card h1 {
   margin: 0;
@@ -1532,6 +1542,41 @@ body {
   display: grid;
   gap: 8px;
 }
+
+.api-target-switch {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-bottom: 10px;
+}
+
+.api-target-switch .option-block {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.api-target-switch svg {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.api-target-note {
+  margin: 0 0 18px;
+  color: var(--rb-text-muted);
+  font: var(--rb-text-small);
+}
+
+.inline-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 .user-field-hint {
   margin: 0;
   color: var(--rb-text-muted);
@@ -1868,11 +1913,64 @@ body {
   color: var(--rb-text-on-pink);
 }
 
-/* 预设下拉框 + 官网链接 */
+/* 供应商卡片 + 下拉框回退 + 官网链接 */
+.preset-cards {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 9px;
+  margin: 7px 0 10px;
+}
+
+.preset-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.preset-card {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  min-width: 0;
+  padding: 12px 8px 10px;
+  color: var(--rb-text-muted);
+  background: color-mix(in srgb, var(--rb-bg-3) 56%, transparent);
+  border: 1px solid var(--rb-border-faint);
+  border-radius: 14px;
+  cursor: pointer;
+  transition: transform 120ms ease, border-color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+
+.preset-card:hover:not(:disabled) {
+  transform: translateY(-1px);
+  color: var(--rb-text-default);
+  border-color: var(--rb-border-soft);
+  background: color-mix(in srgb, var(--rb-pink-500) 6%, var(--rb-bg-3));
+}
+
+.preset-card.is-active {
+  color: var(--rb-text-strong);
+  border-color: var(--rb-border-strong);
+  background: linear-gradient(145deg, rgba(236, 72, 153, 0.13), rgba(159, 122, 234, 0.10));
+  box-shadow: inset 0 -2px var(--rb-pink-400), var(--rb-glow-soft);
+}
+
+.preset-card:focus-visible { outline: 2px solid var(--rb-pink-400); outline-offset: 2px; }
+.preset-card:disabled { opacity: 0.42; cursor: not-allowed; }
+.preset-card__icon { position: relative; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 10px; background: rgba(255, 255, 255, 0.92); color: #241d30; font-size: 12px; font-weight: 700; overflow: hidden; }
+.preset-card__icon img { position: absolute; inset: 6px; width: calc(100% - 12px); height: calc(100% - 12px); object-fit: contain; }
+.preset-card__label { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; font-size: 11px; font-weight: 500; }
+
 .preset-select-row {
   display: flex;
   gap: 8px;
   align-items: stretch;
+}
+
+@media (max-width: 760px) {
+  .preset-cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 .preset-select-row select {
   flex: 1;
@@ -1883,7 +1981,8 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
+  width: 30px;
+  height: 30px;
   padding: 0;
   border-radius: 12px;
   color: var(--rb-text-muted);
@@ -3322,7 +3421,6 @@ body {
 .music-profile__avatar { width:42px; height:42px; border-radius:50%; object-fit:cover; }
 .music-search-card { margin-top:14px; }
 @media (max-width:600px) { .music-qr { grid-template-columns:1fr; } .music-qr__img { width:200px; height:200px; } }
- */
 .music-platform-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

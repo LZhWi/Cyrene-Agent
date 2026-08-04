@@ -16,7 +16,10 @@ function buildUrl(baseUrl: string): string {
 }
 
 /** 把统一消息翻译成 OpenAI wire messages。 */
-function toWireMessages(messages: ChatMessage[]): unknown[] {
+function toWireMessages(
+  messages: ChatMessage[],
+  thinkingField: ProviderCapability["thinkingField"],
+): unknown[] {
   return messages.map(m => {
     if (m.role === "system") return { role: "system", content: m.content ?? "" };
     if (m.role === "user") return { role: "user", content: m.content ?? "" };
@@ -31,6 +34,11 @@ function toWireMessages(messages: ChatMessage[]): unknown[] {
     }
     // assistant：回传 content + tool_calls（OpenAI 多轮要求 assistant 消息带 tool_calls）
     const wire: Record<string, unknown> = { role: "assistant", content: m.content || null };
+    // DeepSeek 等思考模型要求后续请求原样带回上一轮 assistant 的推理字段。
+    // 推理内容只作为隐藏协议元数据回传，不会进入用户可见的 content。
+    if (m.thinking && (thinkingField === "reasoning_content" || thinkingField === "thinking")) {
+      wire[thinkingField] = m.thinking;
+    }
     if (m.toolCalls && m.toolCalls.length > 0) {
       wire.tool_calls = m.toolCalls.map(tc => ({
         id: tc.id,
@@ -57,7 +65,7 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
   buildRequest(req: ChatRequest, cfg: VendorConfig): HttpRequest {
     const body: Record<string, unknown> = {
       model: req.model,
-      messages: toWireMessages(req.messages),
+      messages: toWireMessages(req.messages, this.capability.thinkingField),
       stream: req.stream ?? false,
     };
     // temperature 只在调用方显式传时才塞进 body。

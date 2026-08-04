@@ -73,8 +73,22 @@ body {
 }
 
 .tasks__icon {
-  font-size: 16px;
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
   filter: drop-shadow(var(--rb-glow-pink));
+}
+
+.tasks__icon svg,
+.schedule-settings-btn__icon {
+  width: 17px;
+  height: 17px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.65;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .tasks__name {

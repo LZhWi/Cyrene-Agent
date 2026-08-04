@@ -18,6 +18,36 @@ const anthropicCap: ProviderCapability = {
 };
 
 describe("AnthropicAdapter", () => {
+  test("cache_control：思考历史存在时仍只标记稳定的 system 前缀", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    const req = adapter.buildRequest(
+      {
+        model: "m",
+        messages: [
+          { role: "system", content: "稳定系统提示" },
+          { role: "user", content: "查询天气" },
+          {
+            role: "assistant",
+            rawAssistant: [
+              { type: "thinking", thinking: "需要查询天气", signature: "sig" },
+              { type: "tool_use", id: "t1", name: "weather", input: { city: "苏州" } },
+            ],
+          },
+          { role: "tool", toolCallId: "t1", content: "晴" },
+        ],
+      },
+      { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "sk-test" },
+    );
+    const body = JSON.parse(req.body) as Record<string, unknown>;
+
+    expect(body.system).toEqual([{
+      type: "text",
+      text: "稳定系统提示",
+      cache_control: { type: "ephemeral" },
+    }]);
+    expect(body).not.toHaveProperty("prompt_cache_key");
+  });
+
   test("maps an explicit required tool to Anthropic tool_choice", () => {
     const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
     const req = adapter.buildRequest({

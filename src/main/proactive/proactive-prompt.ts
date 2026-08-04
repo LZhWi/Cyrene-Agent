@@ -74,6 +74,21 @@ function formatHistory(label: string, history: ProactiveHistoryTurn[]): string {
   return `[${label}]\n${lines.length > 0 ? lines.join("\n") : "（暂无）"}`;
 }
 
+function proactiveSceneGuidance(sceneId: string): string {
+  switch (sceneId) {
+    case "morning":
+      return "早间轻量开场；优先结合已有话题或自然分享，不要机械说早安。";
+    case "evening_checkin":
+      return "晚间轻量联系；优先跟进白天聊过的话题或分享[你的生活]中的内容，不要每天固定问候。";
+    case "topic_followup":
+      return "基于近期普通聊天中仍值得延续的话题自然接续；没有具体可跟进内容就 silent，不要泛泛问‘在吗’或‘在干嘛’，不要假装用户刚刚发了消息。";
+    case "work_break":
+      return "用户已连续使用电脑较长时间；可以轻松转换话题或陪伴，不要声称检测到工作时长，也不要说教。";
+    default:
+      return "根据场景和上下文判断是否值得主动开口。";
+  }
+}
+
 export function buildProactiveMessages(input: BuildProactiveMessagesInput): ChatMessage[] {
   const systemParts = [input.basePersona.trim(), PROACTIVE_SYSTEM];
   if (input.userProfile?.trim()) systemParts.push(`[用户画像]\n${input.userProfile.trim()}`);
@@ -88,6 +103,7 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
   const trigger = `[本次主动聊天候选]
 电脑本地时间：${formatLocalTime(input.localNow)}
 候选场景：${input.sceneId}
+场景意图：${proactiveSceneGuidance(input.sceneId)}
 连续未回复次数：${input.unansweredCount}
 
 请只返回以下一种 JSON，不要使用 Markdown 代码块，也不要添加解释：

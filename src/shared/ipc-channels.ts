@@ -45,6 +45,26 @@ export const IPC = {
   SIDEBAR_OPEN_SETTINGS: "sidebar:open-settings",
   SIDEBAR_OPEN_TASKS: "sidebar:open-tasks",
   SIDEBAR_OPEN_CALL: "sidebar:open-call",
+  SIDEBAR_OPEN_WORK: "sidebar:open-work",
+
+  // isolated Work window/runtime
+  WORK_MINIMIZE: "work:minimize",
+  WORK_CLOSE: "work:close",
+  WORK_TOGGLE_MAXIMIZE: "work:toggle-maximize",
+  WORK_IS_MAXIMIZED: "work:is-maximized",
+  WORK_SESSIONS_LIST: "work:sessions:list",
+  WORK_SESSIONS_GET: "work:sessions:get",
+  WORK_SESSIONS_CREATE: "work:sessions:create",
+  WORK_SESSIONS_RENAME: "work:sessions:rename",
+  WORK_SESSIONS_DELETE: "work:sessions:delete",
+  WORK_OPEN_FOLDER: "work:open-folder",
+  WORK_MEMORY_LIST: "work:memory:list",
+  WORK_MEMORY_DELETE: "work:memory:delete",
+  WORK_PROCESS_DOCUMENTS: "work:process-documents",
+  WORK_CAPTION_IMAGE: "work:caption-image",
+  WORK_RUN: "work:run",
+  WORK_CANCEL: "work:cancel",
+  WORK_EVENT: "work:event",
 
   // tasks window (read-only display, no per-element interactions)
   TASKS_CLOSE: "tasks:close",
@@ -57,6 +77,8 @@ export const IPC = {
   SETTINGS_SWITCH_SECTION: "settings:switch-section",
   SETTINGS_GET_CONFIG: "settings:get-config",
   SETTINGS_SAVE_CONFIG: "settings:save-config",
+  SETTINGS_GET_WORK_CONFIG: "settings:get-work-config",
+  SETTINGS_SAVE_WORK_CONFIG: "settings:save-work-config",
   SETTINGS_TEST_CONNECTION: "settings:test-connection",
   SETTINGS_TEST_VISION: "settings:test-vision",
   SETTINGS_GET_GENERAL: "settings:get-general",
@@ -161,6 +183,9 @@ export const IPC = {
   USER_SAVE_PROFILE: "user:save-profile",
   USER_UPLOAD_AVATAR: "user:upload-avatar",
   USER_GET_AVATAR: "user:get-avatar",
+  LOCATION_UPDATE: "location:update",
+  LOCATION_GET_STATUS: "location:get-status",
+  LOCATION_CLEAR: "location:clear",
 
   // memory panel
   MEMORY_PANEL_GET_DATA: "memory-panel:get-data",

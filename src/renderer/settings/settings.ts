@@ -26,6 +26,7 @@ import { normalizeUiIcon, type UiIcon } from "../../shared/ui-icon";
 import { buildAppearanceSettingsPatch } from "./appearance-settings-state";
 import { requestTrackPlayback } from "./music-playback";
 import { type ReasoningPreference } from "../../shared/reasoning";
+import type { WorkModelSettings } from "../../shared/work-types";
 import { type LoginFlowState } from "../../shared/music-types";
 import {
   deriveNeteaseViewState,
@@ -319,10 +320,17 @@ interface GeneralSettings {
 }
 
 interface UserApi {
-  getProfile: () => Promise<{ nickname: string; callPreference: string; birthday: string; timezone: string; avatarPath: string; defaultCity: string }>;
+  getProfile: () => Promise<{ nickname: string; callPreference: string; birthday: string; timezone: string; timezoneMode: "system" | "manual"; avatarPath: string; defaultCity: string; weatherLocationMode: "auto" | "fixed" | "off" }>;
   saveProfile: (profile: Record<string, unknown>) => Promise<unknown>;
   uploadAvatar: () => Promise<{ avatarPath: string } | null>;
   getAvatar: () => Promise<string | null>;
+}
+
+interface LocationApi {
+  systemTimezone: () => string;
+  getStatus: () => Promise<{ latitude: number; longitude: number; accuracy: number; obtainedAt: number } | null>;
+  clear: () => Promise<{ ok: boolean }>;
+  refresh: () => Promise<{ ok: boolean; location?: { latitude: number; longitude: number; accuracy: number; obtainedAt: number }; error?: string }>;
 }
 
 interface MemoryPanelPayload {
@@ -372,6 +380,8 @@ interface SettingsApi {
   close: () => void;
   getConfig: () => Promise<ModelSettings>;
   saveConfig: (config: Partial<ModelSettings>) => Promise<ModelSettings>;
+  getWorkConfig: () => Promise<WorkModelSettings>;
+  saveWorkConfig: (config: Partial<WorkModelSettings>) => Promise<WorkModelSettings>;
   getGeneral: () => Promise<GeneralSettings>;
   saveGeneral: (config: Partial<GeneralSettings>) => Promise<GeneralSettings>;
   pickUiFont: () => Promise<string | null>;
@@ -402,7 +412,7 @@ interface SettingsApi {
   listMcpServers?: () => Promise<Array<{ id: string; name: string; connected: boolean; toolCount: number; toolIds: string[] }>>;
   getPermissionLevel?: () => Promise<{ level: "read-only" | "scoped" | "per-action" | "full" }>;
   setPermissionLevel?: (level: string) => Promise<{ ok: boolean; level?: string; error?: string }>;
-  testConnection?: (config: { provider: string; baseUrl: string; model: string; apiKey: string }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
+  testConnection?: (config: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: "openai" | "anthropic" | "auto" }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
   testVision?: (config: { baseUrl: string; apiKey: string; model: string }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
   // main → settings：要求切到指定标签（窗口已打开时由 main 发这个事件）
   onSwitchSection?: (callback: (section: string) => void) => (() => void) | void;
@@ -415,6 +425,7 @@ declare global {
     settings?: SettingsApi;
     cyreneScheduler?: SchedulerApi;
     user?: UserApi;
+    cyreneLocation?: LocationApi;
     memoryPanel?: MemoryPanelApi;
   }
 }
@@ -648,6 +659,7 @@ let schedulerTools: SchedulerToolInfo[] = [];
 let editingSchedulerTaskId: string | null = null;
 
 const presetSelect = document.getElementById("preset-select") as HTMLSelectElement;
+const presetCards = document.getElementById("preset-cards") as HTMLDivElement;
 const presetWebsiteLink = document.getElementById("preset-website-link") as HTMLAnchorElement;
 // 模式按钮已删除——baseUrl 永远可改、模型名永远可手填（datalist 出预设建议）
 // provider 不再暴露给用户（从预设内部拿，保证 capabilities 匹配不出错）。
@@ -661,6 +673,13 @@ const apiKeyInput = document.getElementById("api-key") as HTMLInputElement;
 const testConnectionBtn = document.getElementById("test-connection-btn") as HTMLButtonElement | null;
 // API 协议下拉（auto / openai / anthropic）—— 用户显式 override transport
 const transportSelect = document.getElementById("transport-select") as HTMLSelectElement;
+const reasoningModeSelect = document.getElementById("reasoning-mode-select") as HTMLSelectElement;
+const reasoningEffortSelect = document.getElementById("reasoning-effort-select") as HTMLSelectElement;
+const apiTargetSwitch = document.getElementById("api-target-switch") as HTMLElement;
+const apiTargetNote = document.getElementById("api-target-note") as HTMLElement;
+const visionConfigSection = document.getElementById("vision-config-section") as HTMLElement;
+const visionConfigDescription = document.getElementById("vision-config-description") as HTMLElement;
+const saveApiBtn = document.getElementById("save-api-btn") as HTMLButtonElement;
 
 // 视觉模型配置区元素
 // 同步主模型改为胶囊按钮组：[与主聊天模型相同] / [独立配置]
@@ -676,7 +695,25 @@ const visionTestStatus = document.getElementById("vision-test-status") as HTMLEl
 
 // 渲染端内存缓存：保存每个厂商上一次填写的 baseUrl / model / apiKey
 // 切厂商时从这里读，保存时同步进去；持久化由 main 进程的 saveModelSettings 负责（perProvider 字段）。
-const providerProfileCache: Record<string, ProviderProfile> = {};
+type ApiTarget = "chat" | "work";
+const providerProfileCaches: Record<ApiTarget, Record<string, ProviderProfile>> = {
+  chat: {},
+  work: {},
+};
+let activeApiTarget: ApiTarget = window.location.hash === "#api-work" ? "work" : "chat";
+let chatModelConfig: ModelSettings | null = null;
+let workModelConfig: WorkModelSettings | null = null;
+let chatVisionDraft: ModelSettings["vision"];
+let workVisionDraft: WorkModelSettings["vision"];
+const selectedProviderByTarget: Record<ApiTarget, string> = { chat: "", work: "" };
+const reasoningTouchedProviders: Record<ApiTarget, Set<string>> = {
+  chat: new Set(),
+  work: new Set(),
+};
+
+function activeProviderProfileCache(): Record<string, ProviderProfile> {
+  return providerProfileCaches[activeApiTarget];
+}
 
 // 当前激活的厂商：每次 applyPreset 后更新；用于"切到下一家厂商前先把当前那家的输入框值缓存住"
 let activeProvider: string = "";
@@ -937,6 +974,7 @@ function setGeneralSaveStatus(text: string, cls?: string): void {
 
 function fillPresetOptions(): void {
   presetSelect.replaceChildren();
+  presetCards.replaceChildren();
   for (const preset of MODEL_PRESETS) {
     const option = document.createElement("option");
     option.value = preset.providerName;
@@ -947,7 +985,50 @@ function fillPresetOptions(): void {
       option.textContent = preset.providerName;
     }
     presetSelect.appendChild(option);
+
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "preset-card";
+    card.dataset.provider = preset.providerName;
+    card.disabled = preset.disabled === true;
+    card.setAttribute("role", "radio");
+    card.setAttribute("aria-checked", "false");
+    card.title = preset.disabled ? `${preset.providerName}（暂未适配）` : `使用 ${preset.providerName}`;
+
+    const icon = document.createElement("span");
+    icon.className = "preset-card__icon";
+    const fallback = document.createElement("span");
+    fallback.textContent = preset.shortName.slice(0, 1).toUpperCase();
+    icon.appendChild(fallback);
+    if (preset.iconUrl) {
+      const image = document.createElement("img");
+      image.src = preset.iconUrl;
+      image.alt = "";
+      image.loading = "lazy";
+      image.addEventListener("load", () => fallback.setAttribute("hidden", ""));
+      image.addEventListener("error", () => image.remove());
+      icon.appendChild(image);
+    }
+
+    const label = document.createElement("span");
+    label.className = "preset-card__label";
+    label.textContent = preset.shortName;
+    card.append(icon, label);
+    card.addEventListener("click", () => {
+      if (presetSelect.value === preset.providerName) return;
+      presetSelect.value = preset.providerName;
+      presetSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    presetCards.appendChild(card);
   }
+}
+
+function syncPresetCards(providerName: string): void {
+  presetCards.querySelectorAll<HTMLButtonElement>(".preset-card").forEach((card) => {
+    const active = card.dataset.provider === providerName;
+    card.classList.toggle("is-active", active);
+    card.setAttribute("aria-checked", String(active));
+  });
 }
 
 function findPreset(providerName: string): ModelPreset {
@@ -982,15 +1063,23 @@ function fillModelOptions(preset: ModelPreset, preferredModel?: string): void {
  */
 function captureActiveProviderProfile(): void {
   if (!activeProvider) return;
-  const cached = providerProfileCache[activeProvider];
+  const cache = activeProviderProfileCache();
+  const cached = cache[activeProvider];
   // reasoning 仍由 renderReasoningControls 写入 cache；这里只保留它（不动 mode/effort）
-  providerProfileCache[activeProvider] = {
+  cache[activeProvider] = {
     baseUrl: baseUrlInput.value.trim(),
     model: getCurrentModelValue().trim(),
     apiKey: apiKeyInput.value.trim(),
     displayName: displayNameInput.value.trim(),
     explicitTransport: transportSelect.value as ProviderProfile["explicitTransport"],
-    reasoning: cached?.reasoning,
+    reasoning: reasoningTouchedProviders[activeApiTarget].has(activeProvider)
+      ? {
+          mode: reasoningModeSelect.value === "off" || reasoningModeSelect.value === "on"
+            ? reasoningModeSelect.value
+            : "auto",
+          effort: reasoningEffortSelect.value as ReasoningPreference["effort"],
+        }
+      : cached?.reasoning,
   };
 }
 
@@ -1057,7 +1146,9 @@ function applyPreset(
   preferredBaseUrl?: string,
   preferredDisplayName?: string,
   preferredExplicitTransport?: "openai" | "anthropic" | "auto",
+  preferredReasoning?: ReasoningPreference,
   preferredVision?: { baseUrl: string; apiKey: string; model: string; syncWithMain: boolean },
+  configureVision = true,
 ): void {
   const preset = findPreset(providerName);
 
@@ -1065,6 +1156,7 @@ function applyPreset(
   // datalist 没建议也不影响（用户知道自己型号）。
 
   presetSelect.value = preset.providerName;
+  syncPresetCards(preset.providerName);
 
   // 昵称：优先用传入的（用户自定义过）；否则用厂商 shortName 作默认。
   // 留空显示厂商短名——但这里主动填 shortName 让用户看到默认值，可改可清。
@@ -1082,12 +1174,16 @@ function applyPreset(
   // explicitTransport：优先用缓存（用户自定义过），其次默认 "auto"
   // （切厂商时上一家的 explicitTransport 不应该延续，preset 自带 capabilities transport 兜底）
   transportSelect.value = preferredExplicitTransport ?? "auto";
+  reasoningModeSelect.value = preferredReasoning?.mode ?? "auto";
+  reasoningEffortSelect.value = preferredReasoning?.effort ?? "medium";
 
   // —— 视觉字段初始化（一次性写入，避免反复覆盖用户编辑）——
   // 优先级：preferredVision（已保存） > preset 默认
   // 关键：independentVision=true 时，即使旧配置保存了 syncWithMain=true，
   // 也统一归一化为 false（与 applyVisionSyncUI 的"独立配置态"一致）。
-  if (preferredVision) {
+  if (!configureVision) {
+    // 保留参数以兼容现有调用点；当前聊天与 Work 都启用视觉配置。
+  } else if (preferredVision) {
     const synced = preset.independentVision === true ? false : preferredVision.syncWithMain;
     setVisionSyncState(synced);
     visionBaseUrlInput.value = preferredVision.baseUrl;
@@ -1107,7 +1203,7 @@ function applyPreset(
     visionModelInput.value = modelInput.value;
   }
 
-  fillVisionModelOptions(preset);
+  if (configureVision) fillVisionModelOptions(preset);
 
   // 官网链接：有 websiteUrl 就显示并指向，没有就隐藏。
   if (preset.websiteUrl) {
@@ -1119,48 +1215,94 @@ function applyPreset(
   }
 
   activeProvider = preset.providerName;
-  applyVisionSyncUI();
+  if (configureVision) applyVisionSyncUI();
+}
+
+function hydrateProviderProfiles(target: ApiTarget, profiles: Record<string, ProviderProfile> | undefined): void {
+  const cache = providerProfileCaches[target];
+  for (const key of Object.keys(cache)) delete cache[key];
+  if (!profiles || typeof profiles !== "object") return;
+  for (const [key, value] of Object.entries(profiles)) {
+    if (!value || typeof value !== "object") continue;
+    cache[key] = {
+      baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : "",
+      model: typeof value.model === "string" ? value.model : "",
+      apiKey: typeof value.apiKey === "string" ? value.apiKey : "",
+      displayName: typeof value.displayName === "string" ? value.displayName : undefined,
+      explicitTransport: value.explicitTransport,
+      reasoning: value.reasoning,
+    };
+  }
+}
+
+function captureVisionDraft(): void {
+  if (!activeProvider) return;
+  const draft = {
+    syncWithMain: isVisionSynced(),
+    baseUrl: visionBaseUrlInput.value.trim(),
+    apiKey: visionApiKeyInput.value.trim(),
+    model: visionModelInput.value.trim(),
+  };
+  if (activeApiTarget === "chat") chatVisionDraft = draft;
+  else workVisionDraft = draft;
+}
+
+function renderApiTarget(target: ApiTarget): void {
+  captureActiveProviderProfile();
+  if (activeProvider) selectedProviderByTarget[activeApiTarget] = activeProvider;
+  captureVisionDraft();
+  activeApiTarget = target;
+  apiTargetSwitch.querySelectorAll<HTMLButtonElement>("[data-api-target]").forEach((button) => {
+    const active = button.dataset.apiTarget === target;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  visionConfigSection.hidden = false;
+  visionSyncMainBtn.textContent = target === "chat" ? "与主聊天模型相同" : "与 Work 主模型相同";
+  visionConfigDescription.textContent = target === "chat"
+    ? "配置后昔涟能看懂图片。留空则遇到图片会诚实告知看不了。"
+    : "仅用于 Work 图片附件分析，不会读取或影响聊天视觉模型。";
+  apiTargetNote.textContent = target === "chat"
+    ? "用于 Chat、Collab、主动聊天和现有聊天相关管线。"
+    : "仅用于独立 Work 工作台，不会改变聊天和主动聊天模型。";
+  saveApiBtn.textContent = target === "chat" ? "保存聊天模型设置" : "保存 Work 模型设置";
+  const config = target === "chat" ? chatModelConfig : workModelConfig;
+  const provider = selectedProviderByTarget[target] || config?.provider || "MiniMax（稀宇科技）";
+  const cached = providerProfileCaches[target][provider];
+  applyPreset(
+    provider,
+    cached?.model ?? config?.model,
+    cached?.apiKey ?? config?.apiKey,
+    cached?.baseUrl ?? config?.baseUrl,
+    cached?.displayName ?? config?.displayName,
+    cached?.explicitTransport ?? config?.explicitTransport,
+    cached?.reasoning ?? config?.reasoning,
+    (target === "chat" ? chatVisionDraft : workVisionDraft)
+      ? { ...(target === "chat" ? chatVisionDraft : workVisionDraft)! }
+      : undefined,
+    true,
+  );
+  setSaveStatus("等待保存");
 }
 
 async function loadConfig(): Promise<void> {
   try {
     fillPresetOptions();
-    const cfg = await window.settings!.getConfig();
-    // 模式按钮已删除——mode 字段不再用 UI 控制，直接忽略 cfg.mode
-    // 把 main 进程返回的 perProvider 灌进渲染端内存缓存，切厂商时用到
-    if (cfg.perProvider && typeof cfg.perProvider === "object") {
-      for (const [key, value] of Object.entries(cfg.perProvider)) {
-        if (value && typeof value === "object") {
-          providerProfileCache[key] = {
-            baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : "",
-            model: typeof value.model === "string" ? value.model : "",
-            apiKey: typeof value.apiKey === "string" ? value.apiKey : "",
-            displayName: typeof (value as { displayName?: unknown }).displayName === "string"
-              ? (value as { displayName: string }).displayName
-              : undefined,
-            explicitTransport: (value as { explicitTransport?: "openai" | "anthropic" | "auto" }).explicitTransport,
-            reasoning: (value as { reasoning?: ReasoningPreference }).reasoning,
-          };
-        }
-      }
-    }
-    const vision = cfg.vision;
-    applyPreset(
-      cfg.provider,
-      cfg.model,
-      cfg.apiKey,
-      cfg.baseUrl,
-      cfg.displayName,
-      cfg.explicitTransport,
-      vision
-        ? {
-            baseUrl: vision.baseUrl,
-            apiKey: vision.apiKey,
-            model: vision.model,
-            syncWithMain: vision.syncWithMain,
-          }
-        : undefined,
-    );
+    const [cfg, workCfg] = await Promise.all([
+      window.settings!.getConfig(),
+      window.settings!.getWorkConfig(),
+    ]);
+    chatModelConfig = cfg;
+    workModelConfig = workCfg;
+    selectedProviderByTarget.chat = cfg.provider;
+    selectedProviderByTarget.work = workCfg.provider;
+    hydrateProviderProfiles("chat", cfg.perProvider);
+    hydrateProviderProfiles("work", workCfg.perProvider);
+    chatVisionDraft = cfg.vision;
+    workVisionDraft = workCfg.vision;
+    const initialApiTarget = activeApiTarget;
+    activeProvider = "";
+    renderApiTarget(initialApiTarget);
     applyRuntimeSyncSelection(cfg.runtimeSync);
     stickerEnabledInput.checked = cfg.stickerEnabled !== false;
     applyStickerSizeSelection(cfg.stickerSize);
@@ -1168,9 +1310,6 @@ async function loadConfig(): Promise<void> {
     stickerThresholdInput.value = String(threshold);
     stickerThresholdVal.textContent = threshold.toFixed(2);
 
-    // 视觉模型配置已并入 applyPreset（preferredVision 参数）。
-
-    setSaveStatus("等待保存");
     setCyreneSaveStatus("等待保存");
   } catch {
     fillPresetOptions();
@@ -2020,7 +2159,7 @@ presetSelect.addEventListener("change", () => {
   captureActiveProviderProfile();
 
   // 从缓存里取目标厂商的旧配置；没有缓存就用 preset 默认值
-  const cached = providerProfileCache[presetSelect.value];
+  const cached = activeProviderProfileCache()[presetSelect.value];
   applyPreset(
     presetSelect.value,
     cached?.model,
@@ -2028,9 +2167,26 @@ presetSelect.addEventListener("change", () => {
     cached?.baseUrl,
     cached?.displayName,
     cached?.explicitTransport,
+    cached?.reasoning,
+    undefined,
+    true,
   );
   setSaveStatus(cached ? "已切回上次配置" : "已应用预设，填写 API Key 后保存");
 });
+
+apiTargetSwitch.querySelectorAll<HTMLButtonElement>("[data-api-target]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const target = button.dataset.apiTarget === "work" ? "work" : "chat";
+    if (target !== activeApiTarget) renderApiTarget(target);
+  });
+});
+
+for (const select of [reasoningModeSelect, reasoningEffortSelect]) {
+  select.addEventListener("change", () => {
+    if (activeProvider) reasoningTouchedProviders[activeApiTarget].add(activeProvider);
+    setSaveStatus("有未保存的更改");
+  });
+}
 
 // 测试连接按钮：调用厂商 adapter 的真实连接测试
 if (testConnectionBtn) {
@@ -2044,7 +2200,13 @@ if (testConnectionBtn) {
     setSaveStatus("测试连接中…");
     testConnectionBtn.disabled = true;
     try {
-      const result = await window.settings!.testConnection({ provider, baseUrl, model, apiKey });
+      const result = await window.settings!.testConnection({
+        provider,
+        baseUrl,
+        model,
+        apiKey,
+        explicitTransport: transportSelect.value as "openai" | "anthropic" | "auto",
+      });
       if (result.ok) setSaveStatus("连接成功 " + result.latency + "ms · " + (result.sample ?? ""), "is-ok");
       else setSaveStatus("连接失败：" + (result.error ?? "未知错误"), "is-error");
     } catch (e) {
@@ -2079,7 +2241,9 @@ baseUrlInput.addEventListener("input", () => {
   const preset = findPreset(presetSelect.value);
   visionBaseUrlInput.value = preset?.visionBaseUrl || baseUrlInput.value;
 });
-apiKeyInput.addEventListener("input", () => { if (isVisionSynced()) visionApiKeyInput.value = apiKeyInput.value; });
+apiKeyInput.addEventListener("input", () => {
+  if (isVisionSynced()) visionApiKeyInput.value = apiKeyInput.value;
+});
 modelInput.addEventListener("input", () => {
   if (isVisionSynced()) visionModelInput.value = modelInput.value;
 });
@@ -2280,25 +2444,43 @@ apiForm.addEventListener("submit", async (e) => {
     // 保存前把当前输入快照进 perProvider 缓存（main 进程也会做一次，但渲染端先做一遍，
     // 是为了下一次切厂商再切回来不依赖磁盘往返）
     captureActiveProviderProfile();
-    // mode 字段在 UI 层已删除，但仍传给 main 进程保留向后兼容（旧配置文件可能有该字段）。
-    // 默认 "manual"（baseUrl 永远可改、模型名永远可填，行为等同原 Manual）。
-    await window.settings!.saveConfig({
-      mode: "manual",
+    selectedProviderByTarget[activeApiTarget] = activeProvider;
+    const cache = activeProviderProfileCache();
+    const common = {
       provider: activeProvider,
       displayName: displayNameInput.value.trim(),
       baseUrl: baseUrlInput.value.trim(),
       model: getCurrentModelValue().trim(),
       apiKey: apiKeyInput.value.trim(),
       explicitTransport: transportSelect.value as "openai" | "anthropic" | "auto",
-      reasoning: providerProfileCache[activeProvider]?.reasoning,
-      vision: {
+      reasoning: cache[activeProvider]?.reasoning,
+      perProvider: { ...cache },
+    };
+    if (activeApiTarget === "chat") {
+      chatVisionDraft = {
         syncWithMain: isVisionSynced(),
-        // syncWithMain=true 时三字段传空（main 进程不落盘，运行时从主配置读）
         baseUrl: isVisionSynced() ? "" : visionBaseUrlInput.value.trim(),
         apiKey: isVisionSynced() ? "" : visionApiKeyInput.value.trim(),
         model: isVisionSynced() ? "" : visionModelInput.value.trim(),
-      },
-    });
+      };
+      chatModelConfig = await window.settings!.saveConfig({
+        mode: "manual",
+        ...common,
+        vision: chatVisionDraft,
+      });
+    } else {
+      workVisionDraft = {
+        syncWithMain: isVisionSynced(),
+        baseUrl: isVisionSynced() ? "" : visionBaseUrlInput.value.trim(),
+        apiKey: isVisionSynced() ? "" : visionApiKeyInput.value.trim(),
+        model: isVisionSynced() ? "" : visionModelInput.value.trim(),
+      };
+      workModelConfig = await window.settings!.saveWorkConfig({
+        schemaVersion: 2,
+        ...common,
+        vision: workVisionDraft,
+      });
+    }
     setSaveStatus("已保存", "is-ok");
   } catch {
     setSaveStatus("保存失败", "is-error");
@@ -2467,6 +2649,12 @@ async function toggleSchedulerHistory(taskId: string, card: Element): Promise<vo
 }
 
 function switchSection(section: string): void {
+  const requestedWorkConfig = section === "api-work";
+  if (requestedWorkConfig) section = "api";
+  if (requestedWorkConfig) {
+    if (workModelConfig) renderApiTarget("work");
+    else activeApiTarget = "work";
+  }
   const label = NAV_LABELS[section] ?? NAV_LABELS.api;
   sectionTitle.textContent = label.title;
   sectionHint.textContent = label.hint;
@@ -3651,6 +3839,13 @@ const avatarImg = avatarEl?.querySelector("img") as HTMLImageElement | null;
 const avatarPlaceholder = avatarEl?.querySelector("span") as HTMLElement | null;
 const uploadAvatarBtn = document.getElementById("upload-avatar-btn") as HTMLButtonElement | null;
 const userDefaultCityInput = document.getElementById("user-default-city") as HTMLInputElement | null;
+const weatherLocationModeSelect = document.getElementById("weather-location-mode") as HTMLSelectElement | null;
+const locationStatusField = document.getElementById("location-status-field") as HTMLElement | null;
+const locationStatus = document.getElementById("location-status") as HTMLElement | null;
+const refreshLocationBtn = document.getElementById("refresh-location-btn") as HTMLButtonElement | null;
+const timezoneModeSelect = document.getElementById("timezone-mode") as HTMLSelectElement | null;
+const manualTimezoneField = document.getElementById("manual-timezone-field") as HTMLElement | null;
+const userTimezoneInput = document.getElementById("user-timezone") as HTMLInputElement | null;
 const userNicknameInput = document.getElementById("user-nickname") as HTMLInputElement | null;
 const userCallPrefInput = document.getElementById("user-call-pref") as HTMLInputElement | null;
 const userBirthdayInput = document.getElementById("user-birthday") as HTMLInputElement | null;
@@ -3811,6 +4006,46 @@ async function loadMemoryPanel(): Promise<void> {
   }
 }
 
+function syncLocationAndTimezoneFields(): void {
+  const automatic = weatherLocationModeSelect?.value === "auto";
+  if (locationStatusField) locationStatusField.style.display = automatic ? "block" : "none";
+  if (manualTimezoneField) manualTimezoneField.style.display = timezoneModeSelect?.value === "manual" ? "block" : "none";
+}
+
+function renderLocationStatus(location: { accuracy: number; obtainedAt: number } | null): void {
+  if (!locationStatus) return;
+  if (!location) {
+    locationStatus.textContent = "尚未获取；天气将回退到默认城市";
+    return;
+  }
+  const accuracyKm = Math.max(0.1, location.accuracy / 1000).toFixed(location.accuracy >= 10_000 ? 0 : 1);
+  locationStatus.textContent = `已获取，精度约 ${accuracyKm} km，更新于 ${new Date(location.obtainedAt).toLocaleString()}`;
+}
+
+async function refreshCurrentLocation(): Promise<void> {
+  if (!refreshLocationBtn) return;
+  refreshLocationBtn.disabled = true;
+  refreshLocationBtn.textContent = "定位中…";
+  if (locationStatus) locationStatus.textContent = "正在请求系统定位权限…";
+  try {
+    const result = await window.cyreneLocation?.refresh();
+    if (result?.ok && result.location) {
+      renderLocationStatus(result.location);
+    } else if (locationStatus) {
+      const messages: Record<string, string> = {
+        "permission-denied": "定位权限被拒绝，将使用默认城市",
+        timeout: "定位超时，将使用默认城市",
+        "position-unavailable": "系统暂时无法定位，将使用默认城市",
+        "geolocation-unavailable": "当前系统不支持定位，将使用默认城市",
+      };
+      locationStatus.textContent = messages[result?.error ?? ""] ?? "定位失败，将使用默认城市";
+    }
+  } finally {
+    refreshLocationBtn.disabled = false;
+    refreshLocationBtn.textContent = "重新定位";
+  }
+}
+
 async function loadUserProfile(): Promise<void> {
   try {
     const avatarDataUrl = await window.user?.getAvatar();
@@ -3823,7 +4058,15 @@ async function loadUserProfile(): Promise<void> {
       if (userCallPrefInput) userCallPrefInput.value = String(profile.callPreference ?? "");
       if (userBirthdayInput) userBirthdayInput.value = String(profile.birthday ?? "");
       if (userDefaultCityInput) userDefaultCityInput.value = String(profile.defaultCity ?? "");
+      if (weatherLocationModeSelect) weatherLocationModeSelect.value = profile.weatherLocationMode ?? "fixed";
+      if (timezoneModeSelect) timezoneModeSelect.value = profile.timezoneMode ?? "system";
+      if (userTimezoneInput) userTimezoneInput.value = String(profile.timezone ?? "");
     }
+    const systemTimezone = window.cyreneLocation?.systemTimezone() ?? "UTC";
+    const systemOption = timezoneModeSelect?.querySelector('option[value="system"]');
+    if (systemOption) systemOption.textContent = `跟随系统（${systemTimezone}）`;
+    renderLocationStatus(await window.cyreneLocation?.getStatus() ?? null);
+    syncLocationAndTimezoneFields();
   } catch {
     console.warn("[settings] load user profile failed");
   }
@@ -3847,6 +4090,27 @@ if (userDefaultCityInput) {
   };
   userDefaultCityInput.addEventListener("change", saveCity);
   userDefaultCityInput.addEventListener("blur", saveCity);
+}
+
+weatherLocationModeSelect?.addEventListener("change", () => {
+  const mode = weatherLocationModeSelect.value as "auto" | "fixed" | "off";
+  void window.user?.saveProfile({ weatherLocationMode: mode });
+  syncLocationAndTimezoneFields();
+  if (mode === "auto") void refreshCurrentLocation();
+  if (mode === "off") {
+    void window.cyreneLocation?.clear();
+    renderLocationStatus(null);
+  }
+});
+refreshLocationBtn?.addEventListener("click", () => void refreshCurrentLocation());
+timezoneModeSelect?.addEventListener("change", () => {
+  void window.user?.saveProfile({ timezoneMode: timezoneModeSelect.value });
+  syncLocationAndTimezoneFields();
+});
+if (userTimezoneInput) {
+  const saveTimezone = (): void => { void window.user?.saveProfile({ timezone: userTimezoneInput.value.trim() }); };
+  userTimezoneInput.addEventListener("change", saveTimezone);
+  userTimezoneInput.addEventListener("blur", saveTimezone);
 }
 
 if (uploadAvatarBtn) {

@@ -65,21 +65,29 @@
       <section class="settings-content">
         <form class="settings-panel is-hidden" id="api-form" data-panel="api">
           <div class="panel-heading">
-            <div class="panel-heading__icon">🔑</div>
+            <div class="panel-heading__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 10V7a5 5 0 0 1 10 0v3M6 10h12a2 2 0 0 1 2 2v7H4v-7a2 2 0 0 1 2-2Z" /></svg></div>
             <div>
               <h1>API 设置</h1>
-              <p>先配置一个模型服务，后面昔涟会用它进行聊天和状态判断。</p>
+              <p>聊天与 Work 使用完全独立的模型配置，可分别选择供应商和调用参数。</p>
             </div>
           </div>
 
+          <div class="api-target-switch option-blocks option-blocks--wide" id="api-target-switch" role="tablist" aria-label="API 配置对象">
+            <button type="button" class="option-block is-active" data-api-target="chat" role="tab" aria-selected="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4.7A2.5 2.5 0 0 1 4 13.5z" /></svg>聊天模型</button>
+            <button type="button" class="option-block" data-api-target="work" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h6M9 3h6v4H9zM7 5H5v16h14V5h-2M8 12h8M8 16h5" /></svg>Work 模型</button>
+          </div>
+
+          <p class="api-target-note" id="api-target-note">用于 Chat、Collab、主动聊天和现有聊天相关管线。</p>
+
           <div class="preset-row">
-            <label class="field field--full">
-              <span>模型预设</span>
-              <div class="preset-select-row">
-                <select id="preset-select"></select>
+            <div class="field field--full">
+              <div class="preset-heading">
+                <span>模型预设</span>
                 <a id="preset-website-link" class="preset-website-link" href="#" target="_blank" rel="noopener noreferrer" title="前往厂商官网">↗</a>
               </div>
-            </label>
+              <div class="preset-cards" id="preset-cards" role="radiogroup" aria-label="模型供应商"></div>
+              <select id="preset-select" aria-hidden="true" tabindex="-1" hidden></select>
+            </div>
           </div>
 
           <div class="form-grid">
@@ -116,6 +124,28 @@
               <input id="model-input" type="text" placeholder="选厂商后自动填入，可手填覆盖" autocomplete="off" list="model-input-suggestions" />
               <datalist id="model-input-suggestions"></datalist>
             </label>
+
+            <label class="field">
+              <span>推理模式</span>
+              <select id="reasoning-mode-select">
+                <option value="auto">自动</option>
+                <option value="off">关闭</option>
+                <option value="on">开启</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span>推理强度</span>
+              <select id="reasoning-effort-select">
+                <option value="minimal">Minimal</option>
+                <option value="low">Low</option>
+                <option value="medium">Medium</option>
+                <option value="high">High</option>
+                <option value="xhigh">XHigh</option>
+                <option value="max">Max</option>
+              </select>
+              <span class="form-hint">不支持的档位会由模型能力规则自动回退</span>
+            </label>
           </div>
 
           <div class="api-note">
@@ -126,19 +156,19 @@
           <hr class="api-section-divider" />
 
           <!-- 视觉模型配置区（可选） -->
-          <div class="vision-config-section">
+          <div class="vision-config-section" id="vision-config-section">
             <div class="vision-config-heading">
               <span class="vision-config-icon">🖼️</span>
               <div>
                 <h2>视觉模型（可选）</h2>
-                <p>配置后昔涟能看懂图片。留空则遇到图片会诚实告知看不了。</p>
+                <p id="vision-config-description">配置后昔涟能看懂图片。留空则遇到图片会诚实告知看不了。</p>
               </div>
             </div>
 
             <div class="vision-sync-row">
               <span class="field-label">配置方式</span>
               <div class="option-blocks option-blocks--wide" id="vision-sync-blocks" role="radiogroup" aria-label="视觉模型配置方式">
-                <button type="button" class="option-block is-active" data-vision-sync="main" aria-pressed="true">与主聊天模型相同</button>
+                <button type="button" class="option-block is-active" id="vision-sync-main" data-vision-sync="main" aria-pressed="true">与主聊天模型相同</button>
                 <button type="button" class="option-block" data-vision-sync="independent" aria-pressed="false">独立配置</button>
               </div>
             </div>
@@ -171,7 +201,7 @@
               等到 vendor adapter 接好后再接真实测试逻辑（替换 onclick 即可）。
             -->
             <button type="button" class="save-btn save-btn--ghost" id="test-connection-btn">测试连接</button>
-            <button type="submit" class="save-btn">保存 API 设置</button>
+            <button type="submit" class="save-btn" id="save-api-btn">保存聊天模型设置</button>
           </div>
         </form>
 
@@ -709,9 +739,35 @@
                 </div>
                 <div class="tts-field">
                   <label for="user-default-city">默认城市</label>
-                  <input type="text" id="user-default-city" placeholder="例如：上海、北京、广州（用于天气等）" />
+                  <input type="text" id="user-default-city" placeholder="自动定位失败时回退，例如：杭州" />
                 </div>
-                <p class="user-field-hint">这些信息会告诉昔涟，让她知道怎么称呼你、你在哪。默认城市用于天气等需要定位的工具。</p>
+                <div class="tts-field">
+                  <label for="weather-location-mode">天气位置</label>
+                  <select id="weather-location-mode">
+                    <option value="auto">自动定位（推荐）</option>
+                    <option value="fixed">固定使用默认城市</option>
+                    <option value="off">不提供位置天气</option>
+                  </select>
+                </div>
+                <div class="tts-field" id="location-status-field">
+                  <label>自动定位状态</label>
+                  <div class="inline-actions">
+                    <button type="button" class="ghost-btn" id="refresh-location-btn">获取当前位置</button>
+                    <span class="user-field-hint" id="location-status">尚未获取</span>
+                  </div>
+                </div>
+                <div class="tts-field">
+                  <label for="timezone-mode">时区</label>
+                  <select id="timezone-mode">
+                    <option value="system">跟随系统（推荐）</option>
+                    <option value="manual">手动指定</option>
+                  </select>
+                </div>
+                <div class="tts-field" id="manual-timezone-field" style="display:none">
+                  <label for="user-timezone">手动时区</label>
+                  <input type="text" id="user-timezone" placeholder="例如：Asia/Shanghai" />
+                </div>
+                <p class="user-field-hint">定位只用于天气查询，精确坐标不会写入聊天上下文；默认城市会在自动定位失败时回退使用。</p>
               </div>
             </div>
           </div>
@@ -1074,7 +1130,7 @@
                     </div>
                     <p class="user-field-hint">高德开放平台 → 控制台 → 应用管理 → 创建「Web服务」类型 Key。</p>
                   </div>
-                  <p class="user-field-hint">Open-Meteo 免配置直接用。默认城市在「我的信息」面板填。</p>
+                  <p class="user-field-hint">Open-Meteo 免配置直接用。自动定位天气使用 Open-Meteo 经纬度查询；固定地点可使用所选天气源。</p>
                 </div>
               </div>
               <label class="plugin-switch" aria-label="启用天气查询">

@@ -5,6 +5,21 @@ import { SCENE_CONFIGS } from "./scenes-config";
 
 const MIN = (v: number, max: number) => Math.min(v / max, 1);
 
+export function timeWindowMatchScore(
+  minuteOfDay: number,
+  startMinute: number,
+  centerMinute: number,
+  endMinute: number,
+  maxScore = 15,
+): number {
+  if (minuteOfDay < startMinute || minuteOfDay > endMinute) return 0;
+  if (minuteOfDay === centerMinute) return maxScore;
+  if (minuteOfDay < centerMinute) {
+    return maxScore * (minuteOfDay - startMinute) / Math.max(1, centerMinute - startMinute);
+  }
+  return maxScore * (endMinute - minuteOfDay) / Math.max(1, endMinute - centerMinute);
+}
+
 /**
  * 算单个场景的 finalScore = baseScore × affinity。
  * back_from_away 在 tick 内恒返回 0（事件驱动，由 runner 直通车处理）。
@@ -33,6 +48,9 @@ function isCoolingDown(scene: SceneId, state: OpenerState, now: number): boolean
 function isTodayFired(scene: SceneId, state: OpenerState): boolean {
   const cfg = SCENE_CONFIGS.find(c => c.id === scene);
   if (!cfg?.todayFiredFlag) return false;
+  if (cfg.todayFiredFlag === "daily_checkin") {
+    return Boolean(state.todayFired.daily_checkin || state.todayFired.morning || state.todayFired.evening_checkin);
+  }
   return Boolean(state.todayFired[cfg.todayFiredFlag]);
 }
 
@@ -45,10 +63,23 @@ function baseScore(
 ): number {
   if (isCoolingDown(scene, state, now)) return 0;
   if (isTodayFired(scene, state)) return 0;
+  const minuteOfDay = snap.hour * 60 + snap.minute;
 
   switch (scene) {
-    case "morning":
-      return (snap.hour >= 7 && snap.hour <= 10) ? 100 : 0;
+    case "morning": {
+      if (minuteOfDay < 7 * 60 || minuteOfDay > 10 * 60 + 30) return 0;
+      return 70 + timeWindowMatchScore(minuteOfDay, 7 * 60, 8 * 60 + 30, 10 * 60 + 30);
+    }
+    case "topic_followup": {
+      if (minuteOfDay < 11 * 60 + 30 || minuteOfDay > 17 * 60 + 30) return 0;
+      if (snap.idleSec >= 180) return 0;
+      if (snap.lastChatAgoMs < 60 * 60 * 1000 || snap.lastChatAgoMs > 6 * 60 * 60 * 1000) return 0;
+      return 35 + timeWindowMatchScore(minuteOfDay, 11 * 60 + 30, 14 * 60 + 30, 17 * 60 + 30, 10);
+    }
+    case "evening_checkin": {
+      if (minuteOfDay < 18 * 60 || minuteOfDay > 22 * 60) return 0;
+      return 50 + timeWindowMatchScore(minuteOfDay, 18 * 60, 20 * 60, 22 * 60);
+    }
     case "late_night":
       if (!(snap.hour >= 23 || snap.hour < 3)) return 0;
       return 50 + MIN(snap.keyboardAccumMin, 60) * 50;
@@ -57,7 +88,8 @@ function baseScore(
       if (snap.idleSec < 600) return 0;
       return 80 + MIN(snap.idleSec - 600, 1200) * 20;
     case "work_break":
-      return MIN(snap.keyboardAccumMin, 120) * 100;
+      if (snap.continuousActiveMin < 90) return 0;
+      return 70 + MIN(snap.continuousActiveMin - 90, 30) * 30;
     case "back_from_away":
       return 0;
     case "rainy_day":

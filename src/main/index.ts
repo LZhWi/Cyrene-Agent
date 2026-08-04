@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, protocol, net, powerMonitor } from "electron";
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, protocol, net, powerMonitor, session } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
@@ -130,6 +130,7 @@ import { describeMarkersForLlm, formatStickerMarker, formatImageMarker, stripSti
 import { saveBlob } from "./channels/mobile-blobs";
 import { DESKTOP_PROACTIVE_STEM } from "./sync/types";
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
+import { clearLocation, loadLocation, saveLocation } from "./location-store";
 import {
   buildAgentRunOptions,
   onAgentRunFinished,
@@ -155,6 +156,15 @@ import { buildLifeContext, getCurrentActivity } from "./life-context";
 import { runProactiveModel } from "./proactive/proactive-model";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/proactive-types";
 import { canCommitProactiveMessage } from "./proactive/proactive-policy";
+import type { WorkModelSettings } from "../shared/work-types";
+import { initializeWorkStore } from "./work/work-store";
+import { registerWorkIpc } from "./work/work-ipc";
+import { filterWorkTools } from "./work/work-tool-policy";
+import {
+  loadLegacyWorkModelSelection,
+  loadWorkModelSettings as loadStoredWorkModelSettings,
+  saveWorkModelSettings,
+} from "./work/work-model-store";
 
 configureDocumentIndexQueue(runDocumentIndexJob);
 
@@ -179,6 +189,7 @@ async function reconcileUserMemoryIndex(): Promise<void> {
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let chatWindow: BrowserWindow | null = null;
+let workWindow: BrowserWindow | null = null;
 let sidebarWindow: BrowserWindow | null = null;
 let tasksWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
@@ -470,9 +481,11 @@ interface UserProfile {
   callPreference: string;
   birthday: string;
   timezone: string;
+  timezoneMode: "system" | "manual";
   avatarPath: string;
   /** 默认城市（用于天气等需要地理定位的工具，没填则模型会问用户） */
   defaultCity: string;
+  weatherLocationMode: "auto" | "fixed" | "off";
 }
 
 interface GeneralSettings {
@@ -807,9 +820,11 @@ const DEFAULT_USER_PROFILE: UserProfile = {
   nickname: "",
   callPreference: "",
   birthday: "",
-  timezone: "Asia/Shanghai",
+  timezone: "",
+  timezoneMode: "system",
   avatarPath: "",
   defaultCity: "",
+  weatherLocationMode: "fixed",
 };
 
 function loadUserProfile(): UserProfile {
@@ -820,6 +835,14 @@ function loadUserProfile(): UserProfile {
   } catch {
     return DEFAULT_USER_PROFILE;
   }
+}
+
+function resolveUserTimezone(profile: UserProfile): string {
+  return profile.timezoneMode === "manual" ? profile.timezone : "";
+}
+
+function resolveUserDefaultCity(profile: UserProfile): string {
+  return profile.weatherLocationMode === "off" ? "" : profile.defaultCity;
 }
 
 function saveUserProfile(profile: Partial<UserProfile>): UserProfile {
@@ -1013,6 +1036,51 @@ function loadModelSettings(): ModelSettings {
   }
 }
 
+function loadWorkModelSettings(): WorkModelSettings {
+  const stored = loadStoredWorkModelSettings();
+  if (stored) return stored;
+  const chat = loadModelSettings();
+  const legacy = loadLegacyWorkModelSelection();
+  const provider = legacy?.provider && chat.perProvider[legacy.provider] ? legacy.provider : chat.provider;
+  const perProvider = Object.fromEntries(
+    Object.entries(chat.perProvider).map(([key, profile]) => [key, { ...profile }]),
+  );
+  if (legacy?.model && perProvider[provider]) perProvider[provider].model = legacy.model;
+  const profile = perProvider[provider] ?? {
+    baseUrl: chat.baseUrl,
+    model: legacy?.model || chat.model,
+    apiKey: chat.apiKey,
+    displayName: chat.displayName,
+    explicitTransport: chat.explicitTransport,
+    reasoning: chat.reasoning,
+  };
+  return saveWorkModelSettings({
+    schemaVersion: 2,
+    provider,
+    perProvider,
+    ...profile,
+    vision: chat.vision ? { ...chat.vision } : undefined,
+  });
+}
+
+function resolveWorkModelConfig(): VendorConfig {
+  const settings = loadWorkModelSettings();
+  const provider = settings.provider;
+  const profile = settings.perProvider[provider];
+  if (!profile) throw new Error(`Work 模型供应商不存在：${provider}`);
+  const model = profile.model;
+  if (!profile.apiKey || !profile.baseUrl) throw new Error(`Work 模型尚未配置 API：${provider}`);
+  if (!model) throw new Error("Work 模型名称不能为空");
+  return {
+    provider,
+    baseUrl: profile.baseUrl,
+    apiKey: profile.apiKey,
+    model,
+    explicitTransport: profile.explicitTransport,
+    reasoning: profile.reasoning,
+  };
+}
+
 /**
  * 加载视觉模型配置，解析 syncWithMain 并做 supportsVision 检查。
  * 返回 null = 未启用视觉（read_image 据此诚实拒绝）。
@@ -1040,6 +1108,31 @@ export function loadVisionConfig(): VisionConfig | null {
   }
 
   // 独立配置
+  if (!v.baseUrl || !v.apiKey || !v.model) return null;
+  return { baseUrl: v.baseUrl, apiKey: v.apiKey, model: v.model };
+}
+
+/** 解析 Work 独立视觉配置；不会读取或回退到聊天视觉设置。 */
+export function loadWorkVisionConfig(): VisionConfig | null {
+  const settings = loadWorkModelSettings();
+  const v = settings.vision;
+  if (!v) return null;
+
+  if (v.syncWithMain) {
+    const cap = getCapability(settings.provider);
+    if (!cap?.supportsVision) {
+      console.warn("[WorkVision] syncWithMain=true 但 Work 主模型不支持视觉，视为未启用");
+      return null;
+    }
+    const profile = settings.perProvider[settings.provider];
+    if (!profile?.apiKey || !profile.model) return null;
+    return {
+      baseUrl: cap.visionBaseUrl || profile.baseUrl,
+      apiKey: profile.apiKey,
+      model: profile.model,
+    };
+  }
+
   if (!v.baseUrl || !v.apiKey || !v.model) return null;
   return { baseUrl: v.baseUrl, apiKey: v.apiKey, model: v.model };
 }
@@ -2242,7 +2335,7 @@ async function requestModelReply(inputMessages: unknown, styleFile = "01_default
     throw new Error("没有可发送的聊天内容。");
   }
   const profile = loadUserProfile();
-  const chatContextTimezone = resolveChatContextTimezone(profile.timezone);
+  const chatContextTimezone = resolveChatContextTimezone(resolveUserTimezone(profile));
   const skillActivation = resolveSlashActivation(messages);
   const { messages: llmMessages, timeContext: conversationTimeContext } = buildConversationTimeContext(messages, chatContextTimezone);
   const latestUserText = messages.filter((message) => message.role === "user").at(-1)?.content ?? "";
@@ -2270,7 +2363,7 @@ async function requestModelReply(inputMessages: unknown, styleFile = "01_default
   try {
     environmentContext = buildEnvironmentContext(
       { provider: settings.provider, model: settings.model },
-      { nickname: profile.nickname, callPreference: profile.callPreference, birthday: profile.birthday, defaultCity: profile.defaultCity, timezone: profile.timezone },
+      { nickname: profile.nickname, callPreference: profile.callPreference, birthday: profile.birthday, defaultCity: resolveUserDefaultCity(profile), timezone: resolveUserTimezone(profile) },
     );
   } catch (err) {
     console.warn("[Cyrene] environment context build failed:", err);
@@ -2406,7 +2499,7 @@ function getPublicModelConfig(settings = loadModelSettings()): PublicModelConfig
 }
 
 function broadcastToAuxWindows(channel: string, payload: unknown): void {
-  for (const win of [chatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
+  for (const win of [chatWindow, workWindow, sidebarWindow, tasksWindow, settingsWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(channel, payload);
     }
@@ -2414,7 +2507,7 @@ function broadcastToAuxWindows(channel: string, payload: unknown): void {
 }
 
 function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
-  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, chatWindow, workWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_THEME_CHANGED, theme);
     }
@@ -2422,7 +2515,7 @@ function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
 }
 
 function broadcastUiFontChanged(font: GeneralSettings["uiFont"]): void {
-  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, chatWindow, workWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_FONT_CHANGED, font);
     }
@@ -2553,7 +2646,10 @@ function createWindow(): void {
   // 注入天气工具配置获取器：每次工具执行时实时读 key/默认城市
   // （用户改了设置不用重启就能生效）
   setWeatherConfig(
-    () => loadUserProfile().defaultCity,
+    () => {
+      const profile = loadUserProfile();
+      return profile.weatherLocationMode === "off" ? "" : profile.defaultCity;
+    },
     () => loadGeneralSettings().weatherSource,
     () => loadGeneralSettings().amapKey,
     // 天气卡片回调：工具拿到结构化数据后，发 Custom 事件给聊天窗口渲染卡片
@@ -2567,6 +2663,12 @@ function createWindow(): void {
       }
     },
     () => loadGeneralSettings().weatherEnabled,
+    () => {
+      const profile = loadUserProfile();
+      if (profile.weatherLocationMode !== "auto") return null;
+      const location = loadLocation();
+      return location ? { latitude: location.latitude, longitude: location.longitude } : null;
+    },
   );
 
   // 注入用户选择卡片回调：工具调 ask_user_choice 时发 Custom 事件给聊天窗口
@@ -2778,6 +2880,43 @@ function createChatWindow(sessionId?: string): void {
       try { win.webContents.send(IPC.CHATS_ACTIVE_SESSION_CHANGED, null); } catch { /* ignore */ }
     }
   });
+}
+
+function createWorkWindow(): void {
+  if (workWindow && !workWindow.isDestroyed()) {
+    workWindow.show();
+    workWindow.focus();
+    return;
+  }
+
+  workWindow = new BrowserWindow({
+    width: 1380,
+    height: 840,
+    minWidth: 980,
+    minHeight: 620,
+    title: "Cyrene Work",
+    icon: getCurrentAppIconPath(),
+    backgroundColor: "#00000000",
+    autoHideMenuBar: true,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: true,
+    webPreferences: {
+      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+  attachExternalLinkHandler(workWindow);
+  if (isDev) {
+    workWindow.loadURL("http://localhost:5173/work/");
+  } else {
+    workWindow.loadFile(path.join(__dirname, "..", "..", "renderer", "work", "index.html"));
+  }
+  workWindow.once("ready-to-show", () => workWindow?.show());
+  workWindow.on("closed", () => { workWindow = null; });
 }
 
 function createSidebarWindow(): void {
@@ -3098,7 +3237,7 @@ function applyUiIcon(iconSetting: UiIcon): void {
     return;
   }
   tray?.setImage(icon);
-  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, chatWindow, workWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) win.setIcon(icon);
   }
 }
@@ -3345,6 +3484,34 @@ ipcMain.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {
   }
 });
 
+ipcMain.handle(IPC.WORK_CAPTION_IMAGE, async (_event, payload: unknown) => {
+  const filePath = payload && typeof payload === "object"
+    ? (payload as { filePath?: unknown }).filePath
+    : undefined;
+  const validated = validateCaptionImagePath(filePath);
+  if (!validated.ok) return { ok: false, error: validated.error };
+
+  const visionCfg = loadWorkVisionConfig();
+  if (!visionCfg) {
+    return { ok: false, error: "未配置 Work 视觉模型，无法分析图片" };
+  }
+
+  try {
+    const { captionImage } = await import("./orchestrator/vision-captioner");
+    const caption = await captionImage(
+      { base64: validated.buffer.toString("base64"), mime: validated.mime },
+      IMAGE_CAPTION_PROMPT,
+      visionCfg,
+    );
+    if (caption.startsWith("[错误")) {
+      return { ok: false, error: caption };
+    }
+    return { ok: true, caption };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || String(err) };
+  }
+});
+
 ipcMain.handle(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, () => {
   const settings = loadModelSettings();
   return decideImageSendStrategy({
@@ -3401,6 +3568,10 @@ ipcMain.on(IPC.SETTINGS_CLOSE, () => {
 
 ipcMain.handle(IPC.SETTINGS_GET_CONFIG, () => {
   return loadModelSettings();
+});
+
+ipcMain.handle(IPC.SETTINGS_GET_WORK_CONFIG, () => {
+  return loadWorkModelSettings();
 });
 
 ipcMain.handle(IPC.SETTINGS_GET_GENERAL, () => {
@@ -3524,8 +3695,8 @@ ipcMain.handle(IPC.SETTINGS_SAVE_CONFIG, (_event, settings: Partial<ModelSetting
   return saved;
 });
 
-ipcMain.handle(IPC.SETTINGS_TEST_CONNECTION, async (_event, cfg: { provider: string; baseUrl: string; model: string; apiKey: string }) => {
-  const adapter = getAdapter(cfg.provider);
+ipcMain.handle(IPC.SETTINGS_TEST_CONNECTION, async (_event, cfg: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: "openai" | "anthropic" | "auto" }) => {
+  const adapter = getAdapterForConfig(cfg);
   console.log("[Cyrene] test connection: provider=" + cfg.provider + " transport=" + adapter.transport + " model=" + cfg.model);
   const result = await adapter.testConnection(cfg);
   console.log("[Cyrene] test connection result:", JSON.stringify(result));
@@ -3763,7 +3934,24 @@ ipcMain.handle(IPC.MEMORY_PANEL_SAVE_L1, async (_event, raw: Record<string, unkn
   return { ok: true };
 });
 ipcMain.handle(IPC.USER_GET_PROFILE, () => loadUserProfile());
-ipcMain.handle(IPC.USER_SAVE_PROFILE, (_event, profile: Partial<UserProfile>) => saveUserProfile(profile));
+ipcMain.handle(IPC.USER_SAVE_PROFILE, (_event, profile: Partial<UserProfile>) => {
+  const saved = saveUserProfile(profile);
+  if (saved.weatherLocationMode === "off") clearLocation();
+  return saved;
+});
+
+ipcMain.handle(IPC.SETTINGS_SAVE_WORK_CONFIG, (_event, settings: Partial<WorkModelSettings>) => {
+  return saveWorkModelSettings(settings);
+});
+ipcMain.handle(IPC.LOCATION_UPDATE, (_event, location: unknown) => {
+  const saved = saveLocation(location);
+  return saved ? { ok: true, location: saved } : { ok: false, error: "invalid-location" };
+});
+ipcMain.handle(IPC.LOCATION_GET_STATUS, () => loadLocation());
+ipcMain.handle(IPC.LOCATION_CLEAR, () => {
+  clearLocation();
+  return { ok: true };
+});
 ipcMain.handle(IPC.USER_UPLOAD_AVATAR, async () => {
   const { dialog } = await import("electron");
   const result = await dialog.showOpenDialog({
@@ -3848,6 +4036,23 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 app.whenReady().then(async () => {
+  const isTrustedLocationRequester = (urlString: string): boolean => {
+    try {
+      const url = new URL(urlString);
+      if (isDev) return url.protocol === "http:" && url.hostname === "localhost";
+      return url.protocol === "file:";
+    } catch {
+      return false;
+    }
+  };
+  session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
+    if (permission !== "geolocation" || !webContents) return false;
+    return isTrustedLocationRequester(details.requestingUrl ?? requestingOrigin ?? webContents.getURL());
+  });
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
+    const requestingUrl = details.requestingUrl ?? webContents.getURL();
+    callback(permission === "geolocation" && isTrustedLocationRequester(requestingUrl));
+  });
   // 注册 local-sticker:// 协议处理器：将请求映射到 userData/stickers/ 下的文件
   protocol.handle("local-sticker", (request) => {
     const file = parseLocalStickerFileFromUrl(request.url);
@@ -4438,6 +4643,23 @@ app.whenReady().then(async () => {
 
   // 聊天会话存储 IPC（chats-store.initialize 会建好 cyrene-chats 目录并加载 index）
   registerChatsIpc();
+  initializeWorkStore();
+  registerWorkIpc({
+    createWorkWindow,
+    getWorkWindow: () => workWindow,
+    resolveModelConfig: resolveWorkModelConfig,
+    getTools: () => filterWorkTools(toolRegistry.getEnabledTools()),
+    loadPrompt: (name) => {
+      const files = {
+        system: "work_system.md",
+        style: "styles/01_default.md",
+        router: "work_router_system.md",
+        plan: "work_plan_system.md",
+        actionGate: "work_action_gate_system.md",
+      } as const;
+      return loadPromptFile(files[name]);
+    },
+  });
   initializeProactiveChatService();
 
   // 历史召回工具（recall_history）——让模型能回忆滚出窗口的对话
@@ -4990,7 +5212,7 @@ app.whenReady().then(async () => {
         const profile = loadUserProfile();
         environmentContext = buildEnvironmentContext(
           { provider: settings.provider, model: settings.model },
-          { nickname: profile.nickname, callPreference: profile.callPreference, birthday: profile.birthday, defaultCity: profile.defaultCity, timezone: profile.timezone },
+          { nickname: profile.nickname, callPreference: profile.callPreference, birthday: profile.birthday, defaultCity: resolveUserDefaultCity(profile), timezone: resolveUserTimezone(profile) },
         );
       } catch (err) {
         console.warn("[Scheduler] environment context build failed:", err);

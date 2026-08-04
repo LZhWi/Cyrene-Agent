@@ -5,19 +5,37 @@ import { listSessions } from "../chats/chats-store";
 import type { UserStateSnapshot } from "./opener-types";
 
 const IDLE_ACTIVE_THRESHOLD_SEC = 60;   // idle < 60s 算"活跃"
+const CONTINUOUS_ACTIVITY_GRACE_SEC = 180; // 允许喝水、读屏等不超过 3 分钟的短暂空闲
+const MAX_CONTINUOUS_SAMPLE_GAP_MIN = 5;
 const AWAY_THRESHOLD_SEC = 1800;        // idle > 30min 算"离开"
 
 let keyboardAccumMin = 0;               // 非空闲累计分钟（内存，重启归零可接受）
+let continuousActiveMin = 0;
 let lastIdleSec = 0;                    // 上次 tick 的 idle，用于检测"离开→恢复"事件
+let lastSnapshotAt: number | null = null;
+
+export function nextContinuousActiveMinutes(
+  currentMinutes: number,
+  idleSec: number,
+  elapsedMinutes: number,
+): number {
+  if (idleSec >= CONTINUOUS_ACTIVITY_GRACE_SEC) return 0;
+  if (!Number.isFinite(elapsedMinutes) || elapsedMinutes > MAX_CONTINUOUS_SAMPLE_GAP_MIN) return 0;
+  const elapsed = Math.max(0, elapsedMinutes);
+  return Math.max(0, currentMinutes) + elapsed;
+}
 
 /**
  * 采集当前状态快照。每 tick 调一次。
  * mouseResumeEvent=true 表示刚刚发生"空闲>30min 后恢复活动"（事件打断直通车用）。
  */
-export function snapshot(): UserStateSnapshot {
+export function snapshot(now = Date.now()): UserStateSnapshot {
   const idleSec = powerMonitor.getSystemIdleTime();
-  const now = Date.now();
-  const hour = new Date(now).getHours();
+  const localNow = new Date(now);
+  const hour = localNow.getHours();
+  const minute = localNow.getMinutes();
+  const elapsedMinutes = lastSnapshotAt === null ? 0 : (now - lastSnapshotAt) / 60_000;
+  lastSnapshotAt = now;
 
   const mouseResumeEvent = lastIdleSec >= AWAY_THRESHOLD_SEC && idleSec < IDLE_ACTIVE_THRESHOLD_SEC;
   lastIdleSec = idleSec;
@@ -28,26 +46,33 @@ export function snapshot(): UserStateSnapshot {
     // 离开过久，活跃累计衰减
     keyboardAccumMin = Math.max(0, keyboardAccumMin - 1);
   }
+  continuousActiveMin = nextContinuousActiveMinutes(continuousActiveMin, idleSec, elapsedMinutes);
 
   let lastChatAgoMs = Infinity;
   try {
-    const sessions = listSessions();
-    if (sessions.length > 0 && typeof sessions[0].updatedAt === "number") {
-      lastChatAgoMs = now - sessions[0].updatedAt;
+    const latestOrdinarySession = listSessions()
+      .filter((session) => session.purpose !== "proactive-chat")
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    if (latestOrdinarySession && typeof latestOrdinarySession.updatedAt === "number") {
+      lastChatAgoMs = now - latestOrdinarySession.updatedAt;
     }
   } catch { /* chats-store 未初始化 */ }
 
   return {
     hour,
+    minute,
     idleSec,
     mouseResumeEvent,
     lastChatAgoMs,
     keyboardAccumMin,
+    continuousActiveMin,
   };
 }
 
 /** 供测试注入的 setter（重置内部累加器）。 */
 export function _resetForTest(): void {
   keyboardAccumMin = 0;
+  continuousActiveMin = 0;
   lastIdleSec = 0;
+  lastSnapshotAt = null;
 }

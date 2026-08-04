@@ -269,4 +269,135 @@ describe("OpenAICompatAdapter", () => {
     // 第 4 条 user 顺序在最后
     expect(body.messages[3]).toEqual({ role: "user", content: "那上海呢" });
   });
+
+  test("DeepSeek 多轮工具调用：assistant 的 reasoning_content 会原样回传", () => {
+    const deepSeekCapability: ProviderCapability = {
+      ...capability,
+      id: "deepseek",
+      displayName: "DeepSeek（深度求索）",
+      supportsThinking: true,
+      thinkingField: "reasoning_content",
+    };
+    const adapter = new OpenAICompatAdapter("deepseek", deepSeekCapability);
+    const messages = [
+      { role: "user" as const, content: "苏州天气如何" },
+      {
+        role: "assistant" as const,
+        content: undefined,
+        thinking: "需要调用天气工具查询苏州天气。",
+        toolCalls: [{ id: "tc-weather", name: "weather", arguments: '{"city":"苏州"}' }],
+      },
+      { role: "tool" as const, toolCallId: "tc-weather", name: "weather", content: "晴 37.6°C" },
+    ];
+
+    const req = adapter.buildRequest(
+      { model: "deepseek-v4-flash", messages },
+      {
+        provider: deepSeekCapability.displayName,
+        baseUrl: "https://api.deepseek.com",
+        model: "deepseek-v4-flash",
+        apiKey: "k",
+        reasoning: { mode: "off" },
+      },
+    );
+    const body = JSON.parse(req.body) as { messages: Array<Record<string, unknown>> };
+
+    expect(body.messages[1]).toEqual({
+      role: "assistant",
+      content: null,
+      reasoning_content: "需要调用天气工具查询苏州天气。",
+      tool_calls: [{
+        id: "tc-weather",
+        type: "function",
+        function: { name: "weather", arguments: '{"city":"苏州"}' },
+      }],
+    });
+  });
+
+  test("Kimi 多步工具调用：保留 reasoning_content 且不改变 prompt_cache_key", () => {
+    const kimiCapability: ProviderCapability = {
+      ...capability,
+      id: "kimi",
+      displayName: "Kimi（月之暗面）",
+      supportsThinking: true,
+      thinkingField: "reasoning_content",
+      cacheStrategy: "prompt_cache_key",
+    };
+    const adapter = new OpenAICompatAdapter("kimi", kimiCapability);
+    const messages = [
+      { role: "user" as const, content: "查询苏州天气" },
+      {
+        role: "assistant" as const,
+        content: undefined,
+        thinking: "需要查询实时天气。",
+        toolCalls: [{ id: "tc-weather", name: "weather", arguments: '{"city":"苏州"}' }],
+      },
+      { role: "tool" as const, toolCallId: "tc-weather", name: "weather", content: "晴 37.6°C" },
+    ];
+    const requestWithCache = adapter.applyCacheHints(
+      {
+        model: "kimi-k2.7-code",
+        messages,
+        tools: [{ name: "weather", description: "查询天气", parameters: { type: "object" } }],
+      },
+      {
+        provider: kimiCapability.displayName,
+        baseUrl: "https://api.moonshot.cn/v1",
+        model: "kimi-k2.7-code",
+        apiKey: "k",
+      },
+    );
+
+    const req = adapter.buildRequest(requestWithCache, {
+      provider: kimiCapability.displayName,
+      baseUrl: "https://api.moonshot.cn/v1",
+      model: "kimi-k2.7-code",
+      apiKey: "k",
+    });
+    const body = JSON.parse(req.body) as {
+      prompt_cache_key?: string;
+      messages: Array<Record<string, unknown>>;
+    };
+
+    expect(body.prompt_cache_key).toBe("cyrene:kimi:tool");
+    expect(body.messages[1].reasoning_content).toBe("需要查询实时天气。");
+    expect(body.messages[1]).not.toHaveProperty("thinking");
+  });
+
+  test.each(["deepseek", "glm", "qwen", "chatgpt", "mimo"])(
+    "%s 自动缓存：推理历史不注入显式缓存字段且稳定前缀不变",
+    (providerId) => {
+      const autoCapability: ProviderCapability = {
+        ...capability,
+        id: providerId,
+        displayName: providerId,
+        supportsThinking: true,
+        thinkingField: "reasoning_content",
+        cacheStrategy: "auto",
+      };
+      const adapter = new OpenAICompatAdapter(providerId, autoCapability);
+      const req = adapter.buildRequest(
+        {
+          model: "model",
+          messages: [
+            { role: "system", content: "稳定系统提示" },
+            { role: "user", content: "查询天气" },
+            { role: "assistant", content: "", thinking: "动态推理历史" },
+          ],
+        },
+        { provider: providerId, baseUrl: "https://e.test/v1", model: "model", apiKey: "k" },
+      );
+      const body = JSON.parse(req.body) as {
+        messages: Array<Record<string, unknown>>;
+      } & Record<string, unknown>;
+
+      expect(body.messages.slice(0, 2)).toEqual([
+        { role: "system", content: "稳定系统提示" },
+        { role: "user", content: "查询天气" },
+      ]);
+      expect(body.messages[2].reasoning_content).toBe("动态推理历史");
+      expect(body).not.toHaveProperty("prompt_cache_key");
+      expect(body).not.toHaveProperty("cache_control");
+    },
+  );
 });

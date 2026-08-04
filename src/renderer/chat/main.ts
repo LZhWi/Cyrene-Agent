@@ -29,6 +29,11 @@ import {
 import { normalizeMusicCardData, type MusicCardData } from "../../shared/music-card";
 import { normalizeWeatherCardData, type WeatherCardData } from "../../shared/weather-card";
 import { requestTrackPlayback } from "../settings/music-playback";
+import {
+  initCodeBlockController,
+  initMarkdownRenderer,
+  renderMarkdown,
+} from "./markdown/init";
 
 type Role = "user" | "model";
 
@@ -246,6 +251,8 @@ declare global {
 }
 
 const messagesEl = document.getElementById("messages") as HTMLElement;
+initMarkdownRenderer();
+initCodeBlockController(messagesEl);
 const formEl = document.getElementById("composer") as HTMLFormElement;
 const inputEl = document.getElementById("input") as HTMLTextAreaElement;
 const sendBtn = document.getElementById("send") as HTMLButtonElement;
@@ -1407,6 +1414,31 @@ function createMessageBubble(text?: string): HTMLElement {
   return item;
 }
 
+function renderMarkdownIntoBubble(bubble: HTMLElement, text: string): void {
+  const result = renderMarkdown(text);
+  if (result.mode === "html") {
+    // 普通文字经 markdown-it 处理后也会被包进 <p>。这类消息继续使用
+    // 原有纯文本排版，避免 Markdown 行高让气泡底部显得多出一行。
+    const nonParagraphMarkup = result.content
+      .replace(/<\/?p(?:\s[^>]*)?>/gi, "")
+      .replace(/<br\s*\/?>/gi, "");
+    if (!/<[a-z!/][^>]*>/i.test(nonParagraphMarkup)) {
+      bubble.dataset.mdMode = "text";
+      bubble.textContent = text;
+      return;
+    }
+    const template = document.createElement("template");
+    template.innerHTML = result.content;
+    bubble.replaceChildren(template.content.cloneNode(true));
+    if (bubble.querySelector(".katex-display, .code-block, table")) {
+      bubble.classList.add("has-rich-content");
+    }
+  } else {
+    bubble.dataset.mdMode = "text";
+    bubble.textContent = result.content;
+  }
+}
+
 function getLastBubbleForMessage(messageId: string): HTMLElement | null {
   const row = messagesEl.querySelector(`[data-msg-id="${messageId}"]`);
   if (!row) return null;
@@ -1623,7 +1655,12 @@ function render(preserveScroll = false): void {
       });
       for (const segment of segments) {
         const text = segment.trim();
-        if (text || m.transient) bubbles.push(createMessageBubble(text));
+        if (text || m.transient) {
+          const segmentBubble = createMessageBubble();
+          if (text && !m.transient) renderMarkdownIntoBubble(segmentBubble, text);
+          else segmentBubble.textContent = text;
+          bubbles.push(segmentBubble);
+        }
       }
     }
 

@@ -44,4 +44,27 @@ describe("PROVIDER_CAPABILITIES — 已知条目存在性回归", () => {
       expect(names.has(expected), `missing displayName: ${expected}`).toBe(true);
     }
   });
+
+  test("缓存策略矩阵保持稳定", () => {
+    const strategies = Object.fromEntries(
+      PROVIDER_CAPABILITIES.map((cap) => [cap.id, cap.cacheStrategy]),
+    );
+    expect(strategies).toMatchObject({
+      minimax: "cache_control",
+      deepseek: "auto",
+      volcengine: "none",
+      glm: "auto",
+      kimi: "prompt_cache_key",
+      qwen: "auto",
+      chatgpt: "auto",
+      claude: "cache_control",
+      mimo: "auto",
+    });
+  });
+
+  test("Kimi 的历史推理字段与缓存策略同时保持正确", () => {
+    const kimi = getCapability("Kimi（月之暗面）");
+    expect(kimi?.thinkingField).toBe("reasoning_content");
+    expect(kimi?.cacheStrategy).toBe("prompt_cache_key");
+  });
 });

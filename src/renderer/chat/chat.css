@@ -501,6 +501,16 @@ body {
   margin: 0;
 }
 
+.chat__rail-empty-icon svg {
+  width: 28px;
+  height: 28px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* ===== Messages ===== */
 .chat__messages {
   position: relative;
@@ -971,6 +981,17 @@ body {
   color: var(--rb-text-on-pink);
 }
 
+.chat__attach svg,
+.chat__sticker-btn svg {
+  width: 19px;
+  height: 19px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 /* ── 表情包按钮 ── */
 .chat__sticker-btn {
   flex: 0 0 auto;
@@ -1179,6 +1200,16 @@ body {
   cursor: not-allowed;
   transform: none;
   box-shadow: none;
+}
+
+.chat__send svg {
+  width: 21px;
+  height: 21px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.7;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 /* Drag & drop visual feedback */
@@ -1789,9 +1820,33 @@ body {
 }
 
 .chat__empty-icon {
-  font-size: 56px;
+  display: grid;
+  place-items: center;
+  width: 62px;
+  height: 62px;
+  color: var(--rb-pink-300);
+  border: 1px solid var(--rb-border-soft);
+  border-radius: 21px;
+  background: linear-gradient(145deg, rgba(236, 72, 153, 0.12), rgba(159, 122, 234, 0.10));
   opacity: 0.6;
   filter: drop-shadow(0 2px 12px var(--rb-border-strong));
+}
+
+.chat__empty-icon svg {
+  width: 30px;
+  height: 30px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.45;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.chat button:focus-visible,
+.dropdown-trigger:focus-visible,
+.dm-opt:focus-visible {
+  outline: 2px solid var(--rb-pink-400);
+  outline-offset: 2px;
 }
 
 .chat__empty-text {

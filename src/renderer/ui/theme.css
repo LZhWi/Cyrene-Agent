@@ -57,6 +57,20 @@
   --rb-scroll-thumb:   rgba(0, 0, 0, 0.18);
   --rb-scroll-thumb-hover: rgba(0, 0, 0, 0.32);
 
+  --md-code-bg: rgba(0, 0, 0, 0.03);
+  --md-code-border: var(--rb-pink-200);
+  --md-inline-code-bg: rgba(236, 72, 153, 0.08);
+  --md-inline-code-text: #1d1d1f;
+  --md-quote-border: var(--rb-pink-400);
+  --md-quote-bg: rgba(236, 72, 153, 0.04);
+  --md-table-border: var(--rb-pink-200);
+  --md-link-color: var(--rb-pink-600);
+  --md-link-hover: var(--rb-pink-700);
+  --md-copy-text: var(--rb-text-muted);
+  --md-copy-bg: rgba(0, 0, 0, 0.03);
+  --md-copy-border: var(--rb-border-soft);
+  --md-katex-text: var(--rb-text-default);
+
   /* Weather card: glass-morphism on white UI, dark text for contrast */
   --rb-weather-bg:          rgba(255, 255, 255, 0.62);
   --rb-weather-card-border: rgba(255, 255, 255, 0.85);

@@ -87,6 +87,23 @@ describe("proactive prompt", () => {
     expect(combined).not.toContain("Tool Calling");
   });
 
+  it("binds distinct guidance to evening and topic follow-up scenes", () => {
+    const build = (sceneId: string) => buildProactiveMessages({
+      basePersona: "P",
+      ordinaryHistory: [turn("user", 1)],
+      proactiveHistory: [],
+      sceneId,
+      localNow: new Date(2026, 6, 13, 14, 0),
+      idleSec: 0,
+      unansweredCount: 0,
+    }).map((message) => String(message.content)).join("\n");
+
+    expect(build("evening_checkin")).toContain("优先跟进白天聊过的话题或分享[你的生活]中的内容");
+    const topic = build("topic_followup");
+    expect(topic).toContain("没有具体可跟进内容就 silent");
+    expect(topic).toContain("不要泛泛问‘在吗’或‘在干嘛’");
+  });
+
   it("places tone rules after both histories so rules outweigh stale samples", () => {
     const messages = buildProactiveMessages({
       basePersona: "PERSONA",

@@ -10,6 +10,7 @@ dist/renderer/settings/index.html
 dist/renderer/sidebar/index.html
 dist/renderer/sticker-manager/index.html
 dist/renderer/tasks/index.html
+dist/renderer/work/index.html
 dist/renderer/index.html
 dist/renderer/live2dcubismcore.min.js
 dist/sim/

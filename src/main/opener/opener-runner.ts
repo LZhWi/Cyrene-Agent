@@ -12,37 +12,43 @@ import { NORMAL_QUIET_MS } from "../proactive/proactive-policy";
 import { scoreScene } from "./scene-scorer";
 import type { OpenerState, SceneId, ShowBubblePayload, WeatherSnapshot } from "./opener-types";
 import type { ProactiveCandidate } from "../proactive/proactive-types";
+import { loadLocation } from "../location-store";
 
 const TICK_MS = 60_000;
-const DEFAULT_LAT = 31.23;
-const DEFAULT_LON = 121.47;
+const MAX_DESIRE_ELAPSED_MINUTES = 5;
 
 let tickTimer: ReturnType<typeof setInterval> | null = null;
 let responseTimer: ReturnType<typeof setTimeout> | null = null;
 let live2dWindow: BrowserWindow | null = null;
 let manifest = loadManifest();
 let weatherCachedHour = -1;
+let lastDesireTickAt: number | null = null;
 // 缓存用户城市坐标，避免每 tick 都 geocoding
-let cachedCityCoords: { lat: number; lon: number } | null = null;
+let cachedCityCoords: { city: string; lat: number; lon: number } | null = null;
 let proactiveCandidateHandler: ((candidate: ProactiveCandidate) => Promise<void>) | null = null;
 
-/** 从用户配置的城市名解析坐标（通过 Open-Meteo Geocoding API），缓存结果。
- *  查不到或未配置城市时用上海兑底。 */
-async function resolveUserCityCoords(): Promise<{ lat: number; lon: number }> {
-  if (cachedCityCoords) return cachedCityCoords;
+/** 自动定位优先；不可用时回退默认地点。没有可靠地点时不生成天气场景。 */
+async function resolveWeatherCoords(): Promise<{ lat: number; lon: number } | null> {
   let cityName = "";
+  let mode: "auto" | "fixed" | "off" = "fixed";
   try {
-    // 直接读取用户配置文件，避免循环依赖
     const profilePath = path.join(app.getPath("userData"), "user-profile.json");
     if (fs.existsSync(profilePath)) {
-      const profile = JSON.parse(fs.readFileSync(profilePath, "utf8")) as { defaultCity?: string };
+      const profile = JSON.parse(fs.readFileSync(profilePath, "utf8")) as {
+        defaultCity?: string;
+        weatherLocationMode?: "auto" | "fixed" | "off";
+      };
       cityName = (profile.defaultCity ?? "").trim();
+      mode = profile.weatherLocationMode ?? "fixed";
     }
-  } catch { /* 读取失败，用兑底 */ }
-  if (!cityName) {
-    cachedCityCoords = { lat: DEFAULT_LAT, lon: DEFAULT_LON };
-    return cachedCityCoords;
+  } catch { /* 配置读取失败时不猜测位置。 */ }
+  if (mode === "off") return null;
+  if (mode === "auto") {
+    const location = loadLocation();
+    if (location) return { lat: location.latitude, lon: location.longitude };
   }
+  if (!cityName) return null;
+  if (cachedCityCoords?.city === cityName) return cachedCityCoords;
   try {
     const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(cityName)}&count=1&language=zh&format=json`;
     const ctrl = new AbortController();
@@ -52,16 +58,39 @@ async function resolveUserCityCoords(): Promise<{ lat: number; lon: number }> {
       if (resp.ok) {
         const data = await resp.json() as { results?: Array<{ latitude: number; longitude: number }> };
         if (data.results && data.results.length > 0) {
-          cachedCityCoords = { lat: data.results[0].latitude, lon: data.results[0].longitude };
+          cachedCityCoords = { city: cityName, lat: data.results[0].latitude, lon: data.results[0].longitude };
           return cachedCityCoords;
         }
       }
     } finally {
       clearTimeout(timer);
     }
-  } catch { /* geocoding 失败，用兑底 */ }
-  cachedCityCoords = { lat: DEFAULT_LAT, lon: DEFAULT_LON };
-  return cachedCityCoords;
+  } catch { /* 解析失败时不猜测位置。 */ }
+  return null;
+}
+
+function resolveOpenerLocalTime(now: number): { hour: number; minute: number } {
+  try {
+    const profilePath = path.join(app.getPath("userData"), "user-profile.json");
+    if (fs.existsSync(profilePath)) {
+      const profile = JSON.parse(fs.readFileSync(profilePath, "utf8")) as { timezone?: string; timezoneMode?: "system" | "manual" };
+      const timezone = profile.timezoneMode === "manual" ? profile.timezone?.trim() : "";
+      if (timezone) {
+        const parts = new Intl.DateTimeFormat("en-US", {
+          timeZone: timezone,
+          hour: "2-digit",
+          minute: "2-digit",
+          hourCycle: "h23",
+        }).formatToParts(new Date(now));
+        return {
+          hour: Number(parts.find((part) => part.type === "hour")?.value ?? 0),
+          minute: Number(parts.find((part) => part.type === "minute")?.value ?? 0),
+        };
+      }
+    }
+  } catch { /* Invalid or unreadable timezone falls back to system local time. */ }
+  const local = new Date(now);
+  return { hour: local.getHours(), minute: local.getMinutes() };
 }
 
 export function setProactiveCandidateHandler(
@@ -81,6 +110,8 @@ export function reloadManifest(): void {
 export function startOpener(mode: "quiet" | "normal" | "lively"): void {
   stopOpener();
   const rate = DESIRE_RATE[mode];
+  // App restart / mode switch establishes a fresh baseline: offline time is not desire time.
+  lastDesireTickAt = Date.now();
   tickTimer = setInterval(() => void tick(rate), TICK_MS);
   console.log(`[Opener] 启动，mode=${mode} rate=${rate}/min`);
 }
@@ -88,13 +119,19 @@ export function startOpener(mode: "quiet" | "normal" | "lively"): void {
 export function stopOpener(): void {
   if (tickTimer) { clearInterval(tickTimer); tickTimer = null; }
   if (responseTimer) { clearTimeout(responseTimer); responseTimer = null; }
+  lastDesireTickAt = null;
   console.log("[Opener] 停止");
 }
 
 async function tick(rate: number): Promise<void> {
   let state = loadState();
-  const snap = snapshot();
   const now = Date.now();
+  const snap = snapshot(now);
+  Object.assign(snap, resolveOpenerLocalTime(now));
+  const elapsedMinutes = lastDesireTickAt === null
+    ? 0
+    : Math.min(MAX_DESIRE_ELAPSED_MINUTES, Math.max(0, (now - lastDesireTickAt) / TICK_MS));
+  lastDesireTickAt = now;
 
   // 1. 事件打断直通车：离开后恢复
   if (snap.mouseResumeEvent) {
@@ -108,7 +145,7 @@ async function tick(rate: number): Promise<void> {
   const inQuietPeriod = state.lastNormalConversationEndedAt !== null
     && (now - state.lastNormalConversationEndedAt < NORMAL_QUIET_MS);
   if (!inQuietPeriod) {
-    state = accumulateDesire(state, rate);
+    state = accumulateDesire(state, rate, elapsedMinutes);
   }
 
   // 3. 概率门
@@ -185,11 +222,13 @@ async function getWeatherIfNeeded(hour: number): Promise<WeatherSnapshot> {
   const empty: WeatherSnapshot = { isRaining:false, precip:0, temp:0, tempDropFromYesterday:0, isSunny:false, tempComfortable:false };
   if (hour < 6 || hour > 22) return empty;
   if (hour === weatherCachedHour) {
-    const coords = await resolveUserCityCoords();
+    const coords = await resolveWeatherCoords();
+    if (!coords) return empty;
     return getWeather(coords.lat, coords.lon);
   }
   weatherCachedHour = hour;
-  const coords = await resolveUserCityCoords();
+  const coords = await resolveWeatherCoords();
+  if (!coords) return empty;
   return getWeather(coords.lat, coords.lon);
 }
 

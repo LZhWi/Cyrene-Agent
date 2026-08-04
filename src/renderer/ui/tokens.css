@@ -121,6 +121,23 @@
   --rb-scroll-thumb:   rgba(255, 255, 255, 0.20);
   --rb-scroll-thumb-hover: rgba(255, 255, 255, 0.32);
 
+  /* Markdown rendering */
+  --md-code-bg: rgba(255, 255, 255, 0.04);
+  --md-code-border: rgba(255, 182, 220, 0.18);
+  --md-inline-code-bg: rgba(255, 255, 255, 0.08);
+  --md-inline-code-text: #fef7ff;
+  --md-quote-border: var(--rb-pink-400);
+  --md-quote-bg: rgba(236, 72, 153, 0.06);
+  --md-table-border: rgba(255, 182, 220, 0.18);
+  --md-link-color: var(--rb-pink-400);
+  --md-link-hover: var(--rb-pink-300);
+  --md-copy-text: var(--rb-text-muted);
+  --md-copy-bg: rgba(255, 255, 255, 0.06);
+  --md-copy-border: var(--rb-border-soft);
+  --md-katex-text: var(--rb-text-default);
+  --rb-chat-line-height: 1.75;
+  --rb-chat-para-spacing: 0.5em;
+
   /* ===== Weather card (glass-morphism on dark UI) ===== */
   --rb-weather-bg:          rgba(34, 33, 56, 0.58);
   --rb-weather-card-border: rgba(255, 255, 255, 0.09);

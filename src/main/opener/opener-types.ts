@@ -1,9 +1,9 @@
 // Opener engine 共享类型。
 import type { ProactiveState } from "../proactive/proactive-types";
 
-/** 8 个场景 id（与 manifest packs 的 key 对应）。 */
+/** 主动消息场景 id。 */
 export type SceneId =
-  | "morning" | "late_night" | "idle_daze" | "work_break"
+  | "morning" | "topic_followup" | "evening_checkin" | "late_night" | "idle_daze" | "work_break"
   | "back_from_away" | "rainy_day" | "cold_drop" | "sunny_day";
 
 /** manifest.json 里的单条文案。 */
@@ -41,10 +41,12 @@ export interface OpenerState extends ProactiveState {
 /** 感知层采集的状态快照（每 tick 一次）。 */
 export interface UserStateSnapshot {
   hour: number;                  // 0-23
+  minute: number;                // 0-59
   idleSec: number;               // 系统空闲秒数（powerMonitor）
   mouseResumeEvent: boolean;     // 本 tick 是否发生"空闲>30min 后恢复活动"
   lastChatAgoMs: number;         // 距上次对话的毫秒数
   keyboardAccumMin: number;      // 非空闲累计分钟数（idleSec<60 算活跃，每 tick +1）
+  continuousActiveMin: number;   // 连续活动分钟数；允许不超过 3 分钟的短暂空闲
 }
 
 /** 天气快照。 */

@@ -22,7 +22,7 @@ export function defaultState(): OpenerState {
     lastSilentAt: null,
     lastFeedbackJudgedAt: null,
     affinity: {
-      morning: 1.0, late_night: 1.0, idle_daze: 1.0, work_break: 1.0,
+      morning: 1.0, topic_followup: 1.0, evening_checkin: 1.0, late_night: 1.0, idle_daze: 1.0, work_break: 1.0,
       back_from_away: 1.0, rainy_day: 1.0, cold_drop: 1.0, sunny_day: 1.0,
     },
     todayFired: {},
@@ -77,8 +77,9 @@ export function saveState(state: OpenerState): void {
   }
 }
 
-export function accumulateDesire(state: OpenerState, rate: number): OpenerState {
-  const inc = rate * (state.desireRateMultiplier ?? 1.0);
+export function accumulateDesire(state: OpenerState, ratePerMinute: number, elapsedMinutes = 1): OpenerState {
+  const safeElapsedMinutes = Number.isFinite(elapsedMinutes) ? Math.max(0, elapsedMinutes) : 0;
+  const inc = ratePerMinute * safeElapsedMinutes * (state.desireRateMultiplier ?? 1.0);
   state.globalDesire = Math.min(100, state.globalDesire + inc);
   return state;
 }

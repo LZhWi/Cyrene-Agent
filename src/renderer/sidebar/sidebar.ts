@@ -38,6 +38,7 @@ interface SidebarApi {
   openTasks: () => void;
   openSettings: (section?: string) => void;
   openCall: () => void;
+  openWork: () => void;
 }
 
 declare global {
@@ -58,6 +59,7 @@ if (!window.sidebar) {
     openTasks: () => {},
     openSettings: (_section?: string) => {},
     openCall: () => {},
+    openWork: () => {},
   };
 }
 
@@ -68,6 +70,7 @@ const pinBtn = document.getElementById("pin-btn") as HTMLButtonElement;
 const settingsBtn = document.getElementById("settings-btn") as HTMLButtonElement;
 const modelSwitchBtn = document.getElementById("model-switch-btn") as HTMLButtonElement;
 const openChatBtn = document.getElementById("open-chat-btn") as HTMLButtonElement;
+const openWorkBtn = document.getElementById("open-work-btn") as HTMLButtonElement;
 const callBtn = document.getElementById("call-btn") as HTMLButtonElement;
 const onlineStatusLabel = document.getElementById("online-status-label") as HTMLElement;
 const statusEmojiEl = document.getElementById("status-emoji") as HTMLElement;
@@ -235,6 +238,10 @@ openChatBtn.addEventListener("click", async () => {
   } catch (err) {
     console.warn("[sidebar] 打开聊天失败:", err);
   }
+});
+
+openWorkBtn.addEventListener("click", () => {
+  window.sidebar?.openWork();
 });
 
 void initModelConfig();

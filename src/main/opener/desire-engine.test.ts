@@ -15,6 +15,19 @@ describe("accumulateDesire", () => {
     s = accumulateDesire(s, 2);
     expect(s.globalDesire).toBe(3);
   });
+  it("按实际经过分钟数累积，支持不足或超过一分钟的 tick", () => {
+    let s = defaultState();
+    s = accumulateDesire(s, 2, 0.5);
+    expect(s.globalDesire).toBe(1);
+    s = accumulateDesire(s, 2, 1.5);
+    expect(s.globalDesire).toBe(4);
+  });
+  it("拒绝负数和非有限时长", () => {
+    let s = defaultState();
+    s = accumulateDesire(s, 2, -1);
+    s = accumulateDesire(s, 2, Number.POSITIVE_INFINITY);
+    expect(s.globalDesire).toBe(0);
+  });
 });
 
 describe("probabilityGate", () => {

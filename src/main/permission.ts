@@ -159,6 +159,8 @@ export interface ApprovalRequest {
   risk: ToolRiskLevel;
   /** 通知模式：true=已自动放行，卡片只用于通知和可阻止；false=等待用户审批 */
   notifyOnly?: boolean;
+  /** 指定审批只发送到某个窗口；缺省时保留现有广播行为。 */
+  targetWebContentsId?: number;
 }
 
 /**
@@ -179,7 +181,9 @@ export function requestApproval(request: Omit<ApprovalRequest, "id">): Promise<b
     console.log(LOG_PREFIX, "向渲染端发送审批请求:", id, request.toolId);
 
     // 广播给所有窗口（chat 窗口会优先显示卡片）
-    const wins = BrowserWindow.getAllWindows();
+    const wins = BrowserWindow.getAllWindows().filter((win) => (
+      request.targetWebContentsId === undefined || win.webContents.id === request.targetWebContentsId
+    ));
     if (wins.length === 0) {
       // 没有窗口可以审批 → 直接拒绝
       clearTimeout(timer);
@@ -217,7 +221,9 @@ export function notifyApproval(request: Omit<ApprovalRequest, "id">): Promise<bo
     }, NOTIFY_WAIT_MS);
     pendingNotifications.set(id, { resolve, timer });
 
-    const wins = BrowserWindow.getAllWindows();
+    const wins = BrowserWindow.getAllWindows().filter((win) => (
+      request.targetWebContentsId === undefined || win.webContents.id === request.targetWebContentsId
+    ));
     if (wins.length === 0) {
       clearTimeout(timer);
       pendingNotifications.delete(id);
@@ -295,6 +301,7 @@ export async function checkPermission(input: {
   toolDescription: string;
   args: Record<string, unknown>;
   risk: ToolRiskLevel;
+  targetWebContentsId?: number;
 }): Promise<{ allowed: boolean; reason?: string }> {
   const level = currentLevel;
   const policy = policyFor(level, input.risk);
@@ -310,6 +317,7 @@ export async function checkPermission(input: {
       toolDescription: input.toolDescription,
       args: input.args,
       risk: input.risk,
+      targetWebContentsId: input.targetWebContentsId,
     });
     if (allowed) return { allowed: true };
     return { allowed: false, reason: "用户阻止了此次操作。" };
@@ -323,6 +331,7 @@ export async function checkPermission(input: {
       toolDescription: input.toolDescription,
       args: input.args,
       risk: input.risk,
+      targetWebContentsId: input.targetWebContentsId,
     });
     if (approved) return { allowed: true };
     return { allowed: false, reason: "用户拒绝了此次操作。" };
@@ -342,6 +351,7 @@ export async function checkPermission(input: {
     toolDescription: input.toolDescription,
     args: input.args,
     risk: input.risk,
+    targetWebContentsId: input.targetWebContentsId,
   });
   if (approved) return { allowed: true };
   return { allowed: false, reason: "用户拒绝了此次操作。" };

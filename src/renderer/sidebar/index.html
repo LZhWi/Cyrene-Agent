@@ -12,7 +12,7 @@
 <body>
   <div class="sidebar">
     <header class="sidebar__titlebar">
-      <button type="button" class="sidebar__icon-btn" id="pin-btn" aria-label="置顶" title="置顶">📌</button>
+      <button type="button" class="sidebar__icon-btn" id="pin-btn" aria-label="置顶" title="置顶"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 3 6 6-2 2 3 5-1 1-5-3-2 2-1-1 2-2-3-5zM8 16l-4 4" /></svg></button>
       <div class="sidebar__title">
         <span class="sidebar__name">昔涟</span>
         <span class="sidebar__hint">状态面板</span>
@@ -69,29 +69,33 @@
           <span class="model-feed__name" id="feeding-model">DeepSeek Chat</span>
         </div>
         <button type="button" class="model-switch-btn" id="open-chat-btn" title="打开聊天">
-          <span aria-hidden="true">💬</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4.7A2.5 2.5 0 0 1 4 13.5z" /></svg>
           <span>打开聊天</span>
         </button>
+        <button type="button" class="model-switch-btn" id="open-work-btn" title="打开独立 Work 工作台">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h6M9 3h6v4H9zM7 5H5v16h14V5h-2M8 12h8M8 16h5" /></svg>
+          <span>Work</span>
+        </button>
         <button type="button" class="model-switch-btn" id="call-btn" title="语音通话">
-          <span aria-hidden="true">📞</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3 4 5c.6 7.6 6.4 13.4 14 14l2-3-4-3-2 2c-2.2-.8-4.2-2.8-5-5l2-2z" /></svg>
           <span>语音通话</span>
         </button>
         <button type="button" class="model-switch-btn" id="model-switch-btn" title="切换模型">
-          <span aria-hidden="true">⇄</span>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8h13M14 5l3 3-3 3M20 16H7M10 13l-3 3 3 3" /></svg>
           <span>切换模型</span>
         </button>
       </section>
 
       <section class="panel-card action-card">
         <button type="button" class="settings-btn" id="settings-btn" title="打开设置">
-          <span class="settings-btn__icon" aria-hidden="true">⚙</span>
+          <svg class="settings-btn__icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7ZM19 12l2-1-2-4-2 .5-1.5-1L15 4h-6l-.5 2.5-1.5 1L5 7l-2 4 2 1v2l-2 1 2 4 2-.5 1.5 1L9 22h6l.5-2.5 1.5-1 2 .5 2-4-2-1z" /></svg>
           <span class="settings-btn__text">设置</span>
         </button>
       </section>
 
       <hr class="sidebar__divider" />
 
-      <div class="sidebar__version">昔涟 v0.4.3</div>
+      <div class="sidebar__version">昔涟 v0.3.0</div>
     </main>
   </div>
   <script type="module" src="./sidebar.ts"></script>

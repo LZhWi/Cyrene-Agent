@@ -55,6 +55,17 @@ let petVisible = true;
 let live2dSpeechOffs: Array<() => void> = [];
 const live2dLifecycle = new Live2DRendererLifecycleTracker();
 
+void (async () => {
+  try {
+    const profile = await window.user?.getProfile();
+    if (profile?.weatherLocationMode === "auto") {
+      await window.cyreneLocation?.refresh();
+    }
+  } catch {
+    // Weather will fall back to the configured default city.
+  }
+})();
+
 function trackSubscription(label: string, off: () => void): () => void {
   return live2dLifecycle.track("subscription", label, off);
 }

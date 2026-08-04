@@ -77,6 +77,47 @@ const chatApi = {
 contextBridge.exposeInMainWorld("cyrene", cyreneApi);
 contextBridge.exposeInMainWorld("chat", chatApi);
 
+const workApi = {
+  minimize: () => ipcRenderer.send(IPC.WORK_MINIMIZE),
+  close: () => ipcRenderer.send(IPC.WORK_CLOSE),
+  toggleMaximize: () => ipcRenderer.send(IPC.WORK_TOGGLE_MAXIMIZE),
+  isMaximized: () => ipcRenderer.invoke(IPC.WORK_IS_MAXIMIZED),
+  listSessions: () => ipcRenderer.invoke(IPC.WORK_SESSIONS_LIST),
+  getSession: (id: string) => ipcRenderer.invoke(IPC.WORK_SESSIONS_GET, id),
+  createSession: (title?: string) => ipcRenderer.invoke(IPC.WORK_SESSIONS_CREATE, title),
+  renameSession: (id: string, title: string) => ipcRenderer.invoke(IPC.WORK_SESSIONS_RENAME, { id, title }),
+  deleteSession: (id: string) => ipcRenderer.invoke(IPC.WORK_SESSIONS_DELETE, id),
+  openFolder: () => ipcRenderer.invoke(IPC.WORK_OPEN_FOLDER),
+  openModelSettings: () => ipcRenderer.send(IPC.SIDEBAR_OPEN_SETTINGS, "api-work"),
+  listMemory: () => ipcRenderer.invoke(IPC.WORK_MEMORY_LIST),
+  deleteMemory: (id: string) => ipcRenderer.invoke(IPC.WORK_MEMORY_DELETE, id),
+  ingestDroppedFiles: async (files: File[]): Promise<unknown[]> => {
+    const paths: string[] = [];
+    for (const file of files) {
+      try {
+        const filePath = webUtils.getPathForFile(file);
+        if (filePath) paths.push(filePath);
+      } catch { /* Ignore files without a local path. */ }
+    }
+    return paths.length > 0 ? ipcRenderer.invoke(IPC.CHAT_INGEST_FILES, paths) : [];
+  },
+  ingestPastedImage: (base64: string, mime: string) =>
+    ipcRenderer.invoke(IPC.CHAT_INGEST_PASTED_IMAGE, { base64, mime }),
+  processDocuments: (filePaths: string[], query: string) =>
+    ipcRenderer.invoke(IPC.WORK_PROCESS_DOCUMENTS, { filePaths, query }),
+  captionImage: (filePath: string) => ipcRenderer.invoke(IPC.WORK_CAPTION_IMAGE, { filePath }),
+  run: (sessionId: string, text: string, attachments: unknown[] = []) =>
+    ipcRenderer.invoke(IPC.WORK_RUN, { sessionId, text, attachments }),
+  cancel: (sessionId: string) => ipcRenderer.invoke(IPC.WORK_CANCEL, sessionId),
+  onEvent: (callback: (event: unknown) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, workEvent: unknown) => callback(workEvent);
+    ipcRenderer.on(IPC.WORK_EVENT, listener);
+    return () => ipcRenderer.removeListener(IPC.WORK_EVENT, listener);
+  },
+};
+
+contextBridge.exposeInMainWorld("work", workApi);
+
 // AG-UI 事件流：发起一次 agent run，通过 onEvent 回调收 AG-UI 标准事件，
 // 返回 Promise<{success,error}> 表示整轮结束。onEvent 返回的取消订阅函数用于停止监听。
 const aguiApi = {
@@ -142,6 +183,7 @@ const sidebarApi = {
   openTasks: () => ipcRenderer.send(IPC.SIDEBAR_OPEN_TASKS),
   openSettings: (section?: string) => ipcRenderer.send(IPC.SIDEBAR_OPEN_SETTINGS, section),
   openCall: () => ipcRenderer.send(IPC.SIDEBAR_OPEN_CALL),
+  openWork: () => ipcRenderer.send(IPC.SIDEBAR_OPEN_WORK),
 };
 
 const tasksApi = {
@@ -214,7 +256,9 @@ const settingsApi = {
   close: () => ipcRenderer.send(IPC.SETTINGS_CLOSE),
   getConfig: () => ipcRenderer.invoke(IPC.SETTINGS_GET_CONFIG),
   saveConfig: (config: unknown) => ipcRenderer.invoke(IPC.SETTINGS_SAVE_CONFIG, config),
-  testConnection: (config: { provider: string; baseUrl: string; model: string; apiKey: string }) => ipcRenderer.invoke(IPC.SETTINGS_TEST_CONNECTION, config),
+  getWorkConfig: () => ipcRenderer.invoke(IPC.SETTINGS_GET_WORK_CONFIG),
+  saveWorkConfig: (config: unknown) => ipcRenderer.invoke(IPC.SETTINGS_SAVE_WORK_CONFIG, config),
+  testConnection: (config: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: "openai" | "anthropic" | "auto" }) => ipcRenderer.invoke(IPC.SETTINGS_TEST_CONNECTION, config),
   testVision: (config: { baseUrl: string; apiKey: string; model: string }) => ipcRenderer.invoke(IPC.SETTINGS_TEST_VISION, config),
   // main → settings：要求切到指定标签（窗口已打开时由 main 发这个事件）
   onSwitchSection: (callback: (section: string) => void) => {
@@ -365,6 +409,37 @@ const userApi = {
   getAvatar: () => ipcRenderer.invoke(IPC.USER_GET_AVATAR),
 };
 
+const locationApi = {
+  systemTimezone: (): string => Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
+  getStatus: () => ipcRenderer.invoke(IPC.LOCATION_GET_STATUS),
+  clear: () => ipcRenderer.invoke(IPC.LOCATION_CLEAR),
+  refresh: (): Promise<{ ok: boolean; location?: { latitude: number; longitude: number; accuracy: number; obtainedAt: number }; error?: string }> =>
+    new Promise((resolve) => {
+      if (!navigator.geolocation) {
+        resolve({ ok: false, error: "geolocation-unavailable" });
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        async (position) => {
+          const location = {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+            accuracy: position.coords.accuracy,
+            obtainedAt: position.timestamp || Date.now(),
+          };
+          try {
+            const result = await ipcRenderer.invoke(IPC.LOCATION_UPDATE, location) as { ok: boolean; location?: typeof location; error?: string };
+            resolve(result);
+          } catch {
+            resolve({ ok: false, error: "location-save-failed" });
+          }
+        },
+        (error) => resolve({ ok: false, error: error.code === error.PERMISSION_DENIED ? "permission-denied" : error.code === error.TIMEOUT ? "timeout" : "position-unavailable" }),
+        { enableHighAccuracy: false, timeout: 8000, maximumAge: 30 * 60 * 1000 },
+      );
+    }),
+};
+
 const memoryPanelApi = {
   getData: () => ipcRenderer.invoke(IPC.MEMORY_PANEL_GET_DATA),
   deleteImportedDoc: (importId: string, fileName?: string) => ipcRenderer.invoke(IPC.MEMORY_PANEL_DELETE_IMPORTED_DOC, { importId, fileName }),
@@ -373,6 +448,7 @@ const memoryPanelApi = {
 };
 
 contextBridge.exposeInMainWorld("user", userApi);
+contextBridge.exposeInMainWorld("cyreneLocation", locationApi);
 contextBridge.exposeInMainWorld("memoryPanel", memoryPanelApi);
 contextBridge.exposeInMainWorld("runtimeState", runtimeStateApi);
 
