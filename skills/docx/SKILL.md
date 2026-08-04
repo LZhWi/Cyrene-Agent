@@ -1,5 +1,5 @@
 ---
-name: minimax-docx
+name: docx
 license: MIT
 metadata:
   version: "1.0.0"

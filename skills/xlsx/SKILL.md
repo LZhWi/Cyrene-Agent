@@ -1,5 +1,5 @@
 ---
-name: minimax-xlsx
+name: xlsx
 description: "打开、创建、读取、分析、编辑或验证 Excel/电子表格文件（.xlsx、.xlsm、.csv、.tsv）。当用户要求创建、构建、修改、分析、读取、验证或格式化任何 Excel 电子表格、财务模型、数据透视表或表格数据文件时使用。涵盖：从零创建新的 xlsx、读取和分析已有文件、零格式丢失地编辑已有 xlsx、公式重算与验证，以及应用专业财务格式化标准。触发词：'spreadsheet'、'Excel'、'.xlsx'、'.csv'、'pivot table'、'financial model'、'formula'，或任何要求以 Excel 格式输出表格数据的请求。"
 license: MIT
 metadata:

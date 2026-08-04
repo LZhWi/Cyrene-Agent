@@ -1,5 +1,5 @@
 ---
-name: minimax-pdf
+name: pdf
 description: >
   当 PDF 的视觉质量和设计感很重要时，使用此 skill。
   CREATE（从零生成）："制作一个 PDF"、"生成一份报告"、"写一份建议书"、
