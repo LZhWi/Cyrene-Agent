@@ -1,6 +1,7 @@
 import { Conversations, type ConversationItemType } from "@ant-design/x";
-import { Popover } from "antd";
-import { useEffect, useMemo, useState } from "react";
+import { DeleteOutlined, EditOutlined } from "@ant-design/icons";
+import { Dropdown, Input, Modal, Popover } from "antd";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatSessionMeta, ConversationMode } from "../../../../../shared/chat-types";
 
 interface ConversationSidebarProps {
@@ -9,6 +10,8 @@ interface ConversationSidebarProps {
   activeSessionId?: string;
   onSelect: (sessionId: string) => void;
   onOpenProject: (workspaceRoot: string) => void;
+  onRename: (sessionId: string, newTitle: string) => void | Promise<void>;
+  onDelete: (sessionId: string) => void | Promise<void>;
 }
 
 interface ProjectSummary {
@@ -99,6 +102,8 @@ export function ConversationSidebar({
   activeSessionId,
   onSelect,
   onOpenProject,
+  onRename,
+  onDelete,
 }: ConversationSidebarProps) {
   const supportsProjects = mode === "work" || mode === "code" || mode === "daily";
   const projects = useMemo(() => {
@@ -127,10 +132,70 @@ export function ConversationSidebar({
     setExpandedKeys((current) => [...new Set([...current, ...projectKeys])]);
   }, [projectKeys]);
 
+  const [contextMenu, setContextMenu] = useState<{
+    open: boolean;
+    x: number;
+    y: number;
+    sessionId: string;
+    sessionTitle: string;
+  }>({ open: false, x: 0, y: 0, sessionId: "", sessionTitle: "" });
+
+  const [editing, setEditing] = useState<{
+    sessionId: string;
+    value: string;
+  } | null>(null);
+
+  const renameInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (!editing) return;
+    const input = renameInputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, [editing]);
+
   const items: ConversationItemType[] = sessions.map((session) => ({
     key: session.id,
-    label: session.title || "新对话",
+    label:
+      editing?.sessionId === session.id ? (
+        <Input
+          ref={renameInputRef}
+          size="small"
+          className="cy-session-rename-input"
+          value={editing.value}
+          onChange={(e) => setEditing({ ...editing, value: e.target.value })}
+          onPressEnter={() => {
+            const title = editing.value.trim();
+            if (title && title !== session.title) {
+              void onRename(session.id, title);
+            }
+            setEditing(null);
+          }}
+          onBlur={() => setEditing(null)}
+          onKeyDown={(e) => {
+            if (e.key === "Escape") {
+              setEditing(null);
+            }
+          }}
+          onClick={(e) => e.stopPropagation()}
+          onContextMenu={(e) => e.stopPropagation()}
+        />
+      ) : (
+        session.title || "新对话"
+      ),
     icon: <ConversationIcon />,
+    onContextMenu: (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setContextMenu({
+        open: true,
+        x: e.clientX,
+        y: e.clientY,
+        sessionId: session.id,
+        sessionTitle: session.title || "新对话",
+      });
+    },
     ...(supportsProjects ? { group: session.workspaceRoot ?? `unbound:${session.id}` } : {}),
   }));
 
@@ -142,41 +207,86 @@ export function ConversationSidebar({
           {supportsProjects ? "还没有项目任务" : "还没有对话"}
         </div>
       ) : (
-        <Conversations
-          rootClassName="cy-conversation-list"
-          items={items}
-          activeKey={activeSessionId}
-          onActiveChange={(key) => onSelect(String(key))}
-          groupable={supportsProjects ? {
-            collapsible: true,
-            expandedKeys,
-            onExpand: setExpandedKeys,
-            label: (group) => {
-              const project = projects.get(group);
-              if (!project) return null;
-              return (
-                <Popover
-                  placement="rightTop"
-                  mouseEnterDelay={0.25}
-                  mouseLeaveDelay={0.12}
-                  overlayClassName="cy-project-popover"
-                  content={(
-                    <ProjectInfoCard
-                      mode={mode}
-                      project={project}
-                      onOpen={() => project.workspaceRoot && onOpenProject(project.workspaceRoot)}
-                    />
-                  )}
-                >
-                  <span className="cy-conversation-project">
-                    <ProjectIcon mode={mode} />
-                    <span>{project.name}</span>
-                  </span>
-                </Popover>
-              );
-            },
-          } : false}
-        />
+        <>
+          <Conversations
+            rootClassName="cy-conversation-list"
+            items={items}
+            activeKey={activeSessionId}
+            onActiveChange={(key) => onSelect(String(key))}
+            groupable={supportsProjects ? {
+              collapsible: true,
+              expandedKeys,
+              onExpand: setExpandedKeys,
+              label: (group) => {
+                const project = projects.get(group);
+                if (!project) return null;
+                return (
+                  <Popover
+                    placement="rightTop"
+                    mouseEnterDelay={0.25}
+                    mouseLeaveDelay={0.12}
+                    overlayClassName="cy-project-popover"
+                    content={(
+                      <ProjectInfoCard
+                        mode={mode}
+                        project={project}
+                        onOpen={() => project.workspaceRoot && onOpenProject(project.workspaceRoot)}
+                      />
+                    )}
+                  >
+                    <span className="cy-conversation-project">
+                      <ProjectIcon mode={mode} />
+                      <span>{project.name}</span>
+                    </span>
+                  </Popover>
+                );
+              },
+            } : false}
+          />
+          <Dropdown
+            open={contextMenu.open}
+            onOpenChange={(open) => {
+              if (!open) setContextMenu((current) => ({ ...current, open: false }));
+            }}
+            trigger={[]}
+            menu={{
+              className: "cy-session-context-menu",
+              onClick: ({ key }) => {
+                setContextMenu((current) => ({ ...current, open: false }));
+                if (key === "rename") {
+                  const target = sessions.find((s) => s.id === contextMenu.sessionId);
+                  setEditing({
+                    sessionId: contextMenu.sessionId,
+                    value: target?.title ?? "",
+                  });
+                } else if (key === "delete") {
+                  Modal.confirm({
+                    title: `删除"${contextMenu.sessionTitle}"？`,
+                    content: "删除后无法恢复，确定要继续吗？",
+                    okText: "删除",
+                    okType: "danger",
+                    cancelText: "取消",
+                    onOk: () => void onDelete(contextMenu.sessionId),
+                  });
+                }
+              },
+              items: [
+                { key: "rename", label: "重命名", icon: <EditOutlined /> },
+                { key: "delete", label: "删除", icon: <DeleteOutlined />, danger: true },
+              ],
+            }}
+          >
+            <div
+              style={{
+                position: "fixed",
+                left: contextMenu.x,
+                top: contextMenu.y,
+                width: 0,
+                height: 0,
+              }}
+            />
+          </Dropdown>
+        </>
       )}
     </nav>
   );
