@@ -59,10 +59,6 @@ function useColor(): boolean {
   return Boolean(process.stdout.isTTY);
 }
 
-function ts(): string {
-  return new Date().toISOString().slice(11, 23);
-}
-
 function padTag(tag: string): string {
   return tag.length >= 16 ? tag.slice(0, 16) : tag + " ".repeat(16 - tag.length);
 }
@@ -80,16 +76,15 @@ function stringify(arg: unknown): string {
 function emit(level: LogLevel, tag: string, args: unknown[]): void {
   if (ORDER[level] < ORDER[currentLevel]) return;
   const message = args.map(stringify).join(" ");
-  const time = ts();
   const lvl = level.toUpperCase().padEnd(5);
   const tagCol = padTag(tag);
 
   if (useColor()) {
     const c = LEVEL_COLOR[level];
-    const line = `${ANSI.gray}${time}${ANSI.reset} ${c}${lvl}${ANSI.reset} ${tagCol} ${message}`;
+    const line = `${c}${lvl}${ANSI.reset} ${tagCol} ${message}`;
     (level === "error" || level === "warn" ? process.stderr : process.stdout).write(line + "\n");
   } else {
-    const line = `${time} ${lvl} ${tagCol} ${message}`;
+    const line = `${lvl} ${tagCol} ${message}`;
     (level === "error" || level === "warn" ? process.stderr : process.stdout).write(line + "\n");
   }
 }

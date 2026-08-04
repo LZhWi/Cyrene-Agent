@@ -77,14 +77,14 @@ describe("logger levels", () => {
 });
 
 describe("log format", () => {
-  it("line contains a timestamp, level, and tag", () => {
+  it("line starts with the level and tag (no timestamp)", () => {
     setLogLevel("info");
     logger.info(LogTag.Skills, "hello");
     const line = stdoutBuf;
-    // HH:MM:SS.mmm
-    expect(line).toMatch(/^\d{2}:\d{2}:\d{2}\.\d{3} /);
+    // No timestamp prefix.
+    expect(line).not.toMatch(/^\d{2}:\d{2}:\d{2}\.\d{3} /);
     // INFO (5 chars padded)
-    expect(line).toMatch(/INFO\s+/);
+    expect(line).toMatch(/^INFO\s+/);
     // Tag column, 16 chars wide
     expect(line).toMatch(/Skills\s+/);
     // Message
