@@ -8,6 +8,7 @@ import { scanSkills } from "./skill-scanner";
 import { skillRegistry } from "./skill-registry";
 import { registerSkillTools } from "./skill-tools";
 import type { SkillEntry } from "./types";
+import { logger, LogTag } from "../logger";
 
 const LOG_PREFIX = "[Skills]";
 
@@ -51,7 +52,7 @@ export function initSkills(): void {
   }
 
   registerSkillTools();
-  console.log(LOG_PREFIX, `已加载 ${map.size} 个 skill：`, Array.from(map.keys()).join(", ") || "(无)");
+  logger.info(LogTag.Skills, `loaded ${map.size} skills:`, Array.from(map.keys()).join(", ") || "(none)");
 }
 
 /** 持久化某 skill 的 enabled 状态。 */

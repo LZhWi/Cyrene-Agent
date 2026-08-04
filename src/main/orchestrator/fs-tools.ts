@@ -7,6 +7,7 @@ import { toolRegistry } from "./tool-registry";
 import { captionImage } from "./vision-captioner";
 import type { ToolContext } from "./tool-context";
 import type { VerificationPolicy } from "./tool-registry";
+import { logger, LogTag } from "../logger";
 
 const LOG_PREFIX = "[FsTools]";
 
@@ -445,4 +446,4 @@ toolRegistry.register({
   execute: executeReadImage,
 });
 
-console.log(LOG_PREFIX, "已注册：read_file / list_dir / write_file / read_image");
+logger.info(LogTag.FsTools, "registered: read_file / list_dir / write_file / read_image");

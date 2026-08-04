@@ -43,6 +43,7 @@ import type {
 } from "../../types";
 import { loadChannelsSettings } from "../../settings-store";
 import { getAudioDurationMs } from "./audio-duration";
+import { logger, LogTag } from "../../../logger";
 
 const LOG = "[FeishuAdapter]";
 
@@ -322,7 +323,7 @@ export class FeishuAdapter implements ChannelAdapter {
     try {
       await ch.connect();
       this.status = { enabled: true, phase: "running", message: "长连接已建立" };
-      console.log(LOG, "WS 长连接就绪");
+      logger.info(LogTag.Feishu, "WS long connection ready");
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error(LOG, "connect() failed:", msg);

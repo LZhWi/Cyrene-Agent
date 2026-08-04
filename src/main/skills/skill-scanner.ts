@@ -6,6 +6,8 @@ import * as fs from "fs";
 import * as path from "path";
 import matter from "gray-matter";
 import type { ParsedSkill, SkillEntry, SkillManifest } from "./types";
+import { logger } from "../../shared/logger";
+import { LogTag } from "../../shared/logger-tags";
 
 function readManifest(skillDir: string, id: string): SkillManifest | undefined {
   const manifestPath = path.join(skillDir, "manifest.json");
@@ -96,7 +98,7 @@ export function scanSkills(dir: string, source: "builtin" | "user"): SkillEntry[
       continue;
     }
     if (parsed.name !== id) {
-      console.warn(`[Skills] name(${parsed.name}) ≠ 目录名(${id})，id 用目录名`);
+      logger.warn(LogTag.Skills, `name(${parsed.name}) != dir(${id}), using dir as id`);
     }
     // 列 references 文件名清单（不含内容）
     let references: string[] = [];

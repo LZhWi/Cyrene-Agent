@@ -9,6 +9,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { app } from "electron";
 import { registerJiebaCustomWord, registerJiebaCustomWords } from "../rag/retriever";
+import { logger, LogTag } from "../logger";
 
 // ── 类型 ──
 
@@ -243,7 +244,7 @@ export async function feedEntityNamesToJieba(): Promise<void> {
   const names = getAllEntityNames();
   if (names.length === 0) return;
   registerJiebaCustomWords(names);
-  console.log(`[EntityGraph] 注册 ${names.length} 个实体名到 jieba 自定义词表`);
+  logger.info(LogTag.EntityGraph, `registered ${names.length} entity names into jieba custom dictionary`);
 }
 
 function typeLabel(type: EntityNode["type"]): string {

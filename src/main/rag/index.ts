@@ -7,6 +7,7 @@ import { JsonVectorStore } from "./vectorstore";
 import type { MemoryEntry } from "./vectorstore";
 import { HybridRetriever } from "./retriever";
 import { WorldbookManager } from "./worldbook";
+import { logger, LogTag } from "../logger";
 export { INJECTION_HEADER, INJECTION_PREAMBLE } from "./worldbook-constants";
 import { chunkText } from "./chunk";
 import { feedEntityNamesToJieba } from "../memory/entity-graph";
@@ -48,8 +49,9 @@ export async function initRAG(
   // 防止 "昔涟"、"小鹿" 等 AI 伴侣核心名词被错误切分
   await feedEntityNamesToJieba();
 
-  console.log(
-    "[RAG] initialized. Mode:", ragMode,
+  logger.info(
+    LogTag.RAG,
+    "initialized. Mode:", ragMode,
     "Provider:", provider?.name ?? "none",
     "Dims:", provider?.dims ?? "N/A",
     "Memories:", store.stats.total,

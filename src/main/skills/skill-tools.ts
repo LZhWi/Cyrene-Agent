@@ -6,6 +6,7 @@
 
 import { toolRegistry, type ToolEffectKind } from "../orchestrator/tool-registry";
 import { skillRegistry } from "./skill-registry";
+import { logger, LogTag } from "../logger";
 
 const LOG_PREFIX = "[SkillTools]";
 
@@ -151,5 +152,5 @@ export function registerSkillTools(): void {
     },
   });
 
-  console.log(LOG_PREFIX, "已注册：invoke_skill / read_skill_reference");
+  logger.info(LogTag.SkillTools, "registered: invoke_skill / read_skill_reference");
 }

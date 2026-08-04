@@ -8,6 +8,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { IPC } from "../shared/ipc-channels";
 import { getTimeoutSettings } from "./timeout-manager";
+import { logger, LogTag } from "./logger";
 import {
   policyFor,
   type AgentFileAccessLevel,
@@ -70,7 +71,7 @@ export function initPermissionFromDisk(): void {
     const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as { level?: unknown };
     if (isValidLevel(raw?.level)) {
       currentLevel = raw.level;
-      console.log(LOG_PREFIX, "从磁盘加载档位:", currentLevel);
+      logger.info(LogTag.Permission, "loaded level from disk:", currentLevel);
     } else {
       console.warn(LOG_PREFIX, "档位文件内容无效，回退默认");
     }
@@ -165,7 +166,7 @@ export function registerPermissionIpc(): void {
     return { ok: true };
   });
 
-  console.log(LOG_PREFIX, "IPC handlers 已注册");
+  logger.info(LogTag.Permission, "IPC handlers registered");
 }
 
 function isValidLevel(value: unknown): value is AgentFileAccessLevel {

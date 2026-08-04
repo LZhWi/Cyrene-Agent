@@ -17,6 +17,7 @@ import { startInboundServer, stopInboundServer } from "./inbound-server";
 import { FeishuAdapter } from "./adapters/feishu";
 import { ILinkBotAdapter, loadCredentials } from "./adapters/wechat/ilink-bot-adapter";
 import { getRecentLog, clearLog } from "./message-log";
+import { logger, LogTag } from "../logger";
 
 const LOG = "[ChannelsInit]";
 
@@ -55,7 +56,7 @@ export async function initChannels(): Promise<void> {
   // 启动 inbound-server
   try {
     const handle = await startInboundServer();
-    console.log(LOG, `入站 server 监听 http://127.0.0.1:${handle.port}`);
+    logger.info(LogTag.InboundServer, `listening on http://127.0.0.1:${handle.port}`);
   } catch (err) {
     console.error(LOG, "入站 server 启动失败:", err);
   }
@@ -72,7 +73,7 @@ export async function initChannels(): Promise<void> {
   // 启动所有已注册 adapter
   await channelManager.startAll();
 
-  console.log(LOG, "channels 模块就绪");
+  logger.info(LogTag.Channels, "channels module ready");
   broadcastChannelsStatus();
 }
 

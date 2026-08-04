@@ -12,6 +12,7 @@ import * as path from "path";
 import nodemailer from "nodemailer";
 import { toolRegistry } from "./tool-registry";
 import { requestUserChoice, type ChoiceOption } from "../user-choice";
+import { logger, LogTag } from "../logger";
 
 const LOG_PREFIX = "[EmailTools]";
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -195,5 +196,5 @@ export function registerEmailTools(): void {
     execute: executeSendEmail,
   });
 
-  console.log(LOG_PREFIX, "已注册：send_email（✉️邮件发送）");
+  logger.info(LogTag.EmailTools, "registered: send_email");
 }

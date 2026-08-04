@@ -49,6 +49,7 @@ import type {
   OutgoingMessage,
 } from "../../types";
 import type { ChannelAdapter } from "../base";
+import { logger, LogTag } from "../../../logger";
 
 const LOG_PREFIX = "[WechatBot]";
 const USER_PROFILE_FILE = "user-profile.json";
@@ -111,7 +112,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
 
   async start(): Promise<void> {
     this.status = { enabled: true, phase: "starting" };
-    console.log(LOG_PREFIX, "Starting...");
+    logger.info(LogTag.Wechat, "Starting...");
 
     // 1. 加载已存凭证
     const creds = await loadCredentials();
@@ -134,7 +135,7 @@ export class ILinkBotAdapter implements ChannelAdapter {
     this.pollLoopPromise = this.#pollLoop();
 
     this.status = { enabled: true, phase: "running", message: "微信已连接" };
-    console.log(LOG_PREFIX, `Connected as botId=${creds.ilinkBotId}`);
+    logger.info(LogTag.Wechat, `Connected as botId=${creds.ilinkBotId}`);
   }
 
   async stop(): Promise<void> {

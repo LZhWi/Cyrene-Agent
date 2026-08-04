@@ -7,6 +7,7 @@
 // - 不引入新依赖，复用全局 fetch
 
 import { toolRegistry } from "./tool-registry";
+import { logger, LogTag } from "../logger";
 
 const LOG_PREFIX = "[TravelTools]";
 const TRAVEL_TIMEOUT_MS = 15000;
@@ -295,5 +296,5 @@ export function registerTravelTools(): void {
     execute: executePlanTrip,
   });
 
-  console.log(LOG_PREFIX, "已注册：plan_trip（🚗出行工具）");
+  logger.info(LogTag.TravelTools, "registered: plan_trip");
 }

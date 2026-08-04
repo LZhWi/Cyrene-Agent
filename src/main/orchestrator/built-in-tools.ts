@@ -10,6 +10,7 @@ import { createPlayLive2DActionTool } from "./tools/play-live2d-action";
 import { resolveChatContextTimezone } from "../chat-time-context";
 import type { ToolContext } from "./tool-context";
 import { VerificationRunner, resolveBuiltinExecutable } from "./code/verification-runner";
+import { logger, LogTag } from "../logger";
 
 const LOG_PREFIX = "[BuiltinTools]";
 
@@ -675,7 +676,7 @@ toolRegistry.register({
   execute: executeInstallMcp,
 });
 
-console.log(LOG_PREFIX, "已注册：fetch_url / run_shell / install_mcp_server");
+logger.info(LogTag.BuiltinTools, "registered: fetch_url / run_shell / install_mcp_server");
 
 // ── 工具 4：weather（天气查询）─────────────────────────────
 // 查指定城市的实时天气。城市参数可选——没传就读用户信息的默认城市。
@@ -1480,7 +1481,7 @@ toolRegistry.register({
   },
 });
 
-console.log(LOG_PREFIX, "已注册：fetch_url / run_shell / install_mcp_server / weather / web_search / ask_user_choice / delegate_task");
+logger.info(LogTag.BuiltinTools, "registered: fetch_url / run_shell / install_mcp_server / weather / web_search / ask_user_choice / delegate_task");
 
 // ── 工具：ask_user_choice（歧义消解器）─────────────────────
 toolRegistry.register({

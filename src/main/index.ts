@@ -3,6 +3,8 @@ import { spawn } from "node:child_process";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
+import { logger, LogTag } from "./logger";
+import { renderBanner } from "../shared/banner";
 import { createHash, randomUUID } from "crypto";
 import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
@@ -245,7 +247,7 @@ async function reconcileUserMemoryIndex(): Promise<void> {
     deleteVectors: (ids) => deleteUserMemoryVectors(ids),
     warn: (message, error) => console.warn(`[Memory/RAG] ${message}:`, error),
   });
-  console.log("[Memory/RAG] reconciliation:", report);
+  logger.info(LogTag.RAG, "reconciliation:", report);
 }
 
 let mainWindow: BrowserWindow | null = null;
@@ -873,7 +875,7 @@ function refreshStickerEmbeddingIndexInBackground(reason: string): void {
       );
       if (seq !== stickerEmbeddingRefreshSeq) return;
       stickerEmbeddingIndex = index;
-      console.log(`[StickerEmbedding] index ready (${reason}): ${index.length} entries`);
+      logger.info(LogTag.StickerEmbed, `index ready (${reason}): ${index.length} entries`);
     } catch (err) {
       if (seq === stickerEmbeddingRefreshSeq) stickerEmbeddingIndex = null;
       console.error("[StickerEmbedding] refresh failed:", err instanceof Error ? err.message : String(err));
@@ -895,7 +897,7 @@ function refreshSceneEmbeddingIndexInBackground(reason: string): void {
       const index = await buildCachedSceneIndex(sceneProvider);
       if (seq !== sceneEmbeddingRefreshSeq) return;
       sceneEmbeddingIndex = index;
-      console.log("[SceneEmbedding] index ready:", Object.keys(index.scenes).length, "scenes", `(${reason})`);
+      logger.info(LogTag.SceneEmbed, "index ready:", Object.keys(index.scenes).length, "scenes", `(${reason})`);
     } catch (err) {
       if (seq === sceneEmbeddingRefreshSeq) sceneEmbeddingIndex = null;
       console.error("[SceneEmbedding] refresh failed:", err instanceof Error ? err.message : String(err));
@@ -4456,6 +4458,11 @@ if (loadGeneralSettings().disableGpuElectron) {
 }
 
 app.whenReady().then(async () => {
+  // Print the banner once at startup. It is plain text (no color, no log
+  // prefix) so it stands apart from logger output as a brand artifact.
+  process.stdout.write("\n" + renderBanner() + "\n\n");
+  logger.info(LogTag.Runtime, "starting Cyrene Agent");
+
   // 注册 local-sticker:// 协议处理器：将请求映射到 userData/stickers/ 下的文件
   protocol.handle("local-sticker", (request) => {
     const file = parseLocalStickerFileFromUrl(request.url);
@@ -5676,7 +5683,7 @@ app.whenReady().then(async () => {
   registerPermissionIpc();
   registerChoiceIpc();
   registerCallIpc();
-  console.log("[Cyrene] 当前 agent 权限档位:", getCurrentLevel());
+  logger.info(LogTag.Cyrene, "当前 agent 权限档位:", getCurrentLevel());
   try {
     const modelSettings = loadModelSettings();
     await initRAG("auto", undefined, undefined, modelSettings.embeddingModel, modelSettings.embeddingDimensions);
@@ -5687,9 +5694,9 @@ app.whenReady().then(async () => {
     }
     // 初始化 MCP Manager；scheduler 启动前等待一次，避免近即时任务早于 MCP 工具恢复。
     await initMcpManager();
-    console.log("[Cyrene] RAG initialized OK");
+    logger.info(LogTag.Cyrene, "RAG initialized OK");
 
-    console.log("[Reranker] startup preload skipped; reranker initializes when changed in settings.");
+    logger.info(LogTag.Reranker, "startup preload skipped; reranker initializes when changed in settings.");
   } catch (err) {
     console.error("[Cyrene] RAG init FAILED:", err);
   }

@@ -9,6 +9,7 @@
 import type { ChannelAdapter } from "./adapters/base";
 import type { ChannelId, ChannelStatus, IncomingMessage, OutgoingMessage } from "./types";
 import { setAdapterHandler } from "./adapters/base";
+import { logger, LogTag } from "../logger";
 
 const LOG = "[ChannelManager]";
 
@@ -48,7 +49,7 @@ export class ChannelManager {
         }
         await adapter.start();
         this.startedAdapters.add(adapter.id);
-        console.log(LOG, `渠道启动: ${adapter.id} (${adapter.displayName})`);
+        logger.info(LogTag.Channels, `started: ${adapter.id} (${adapter.displayName})`);
       } catch (err) {
         console.error(LOG, `渠道启动失败 [${adapter.id}]:`, err instanceof Error ? err.message : err);
       }

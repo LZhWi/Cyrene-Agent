@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { app } from "electron";
 import { connectMcpServer, disconnectMcpServer, getMcpServerStates, McpServerConfig } from "./mcp-adapter";
+import { logger, LogTag } from "../logger";
 
 const LOG_PREFIX = "[MCP Manager]";
 
@@ -16,7 +17,7 @@ function loadConfigs(): McpServerConfig[] {
     const raw = fs.readFileSync(getConfigPath(), "utf-8");
     const configs = JSON.parse(raw);
     if (Array.isArray(configs)) {
-      console.log(LOG_PREFIX, "加载了 " + configs.length + " 个 MCP server 配置");
+      logger.info(LogTag.MCP, `loaded ${configs.length} MCP server configs`);
       return configs;
     }
   } catch (err) {
@@ -74,11 +75,11 @@ export async function pruneMcpServersByIds(serverIds: string[]): Promise<string[
  * 启动时自动连接所有已保存的 MCP server。
  */
 export async function initMcpManager(): Promise<void> {
-  console.log(LOG_PREFIX, "初始化 MCP Manager...");
+  logger.info(LogTag.MCP, "initializing MCP Manager...");
   const configs = loadConfigs();
 
   if (configs.length === 0) {
-    console.log(LOG_PREFIX, "没有已配置的 MCP server，跳过");
+    logger.info(LogTag.MCP, "no MCP servers configured, skipping");
     return;
   }
 

@@ -15,6 +15,7 @@ import { toolRegistry } from "./tool-registry";
 import { currentUserTimezone } from "./built-in-tools";
 import { resolveTimeoutPolicy } from "../runtime-policy";
 import { getDateLocale } from "../locale-context";
+import { logger, LogTag } from "../logger";
 
 const LOG_PREFIX = "[LifeTools]";
 
@@ -482,5 +483,5 @@ export function registerLifeTools(): void {
   registerExchangeRateTool();
   registerTranslateTool();
   registerApplyPatchTool();
-  console.log(LOG_PREFIX, "已注册：record_expense / query_expense / exchange_rate / translate / apply_patch");
+  logger.info(LogTag.LifeTools, "registered: record_expense / query_expense / exchange_rate / translate / apply_patch");
 }

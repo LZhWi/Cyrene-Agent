@@ -10,6 +10,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { app } from "electron";
+import { logger, LogTag } from "../logger";
 
 import type { ConversationMode } from "../../shared/chat-types";
 export type TodoStatus = "pending" | "in_progress" | "completed";
@@ -87,7 +88,7 @@ export function loadTodos(): void {
       const parsed = JSON.parse(raw) as TodoState;
       if (parsed && Array.isArray(parsed.todos)) {
         stores[mode].current = { ...parsed, mode };
-        console.log(`[TodoStore] ${mode} 恢复 ${parsed.todos.length} 条未完成任务`);
+        logger.info(LogTag.TodoStore, `${mode} restored ${parsed.todos.length} incomplete tasks`);
       }
     } catch {
       stores[mode].current = { ...EMPTY_STATE, mode };

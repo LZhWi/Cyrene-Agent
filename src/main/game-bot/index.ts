@@ -13,6 +13,7 @@ import type { BotTools } from "./bot-tools";
 import type { GameRecipe } from "./types";
 import { loadGameBotSettings, saveGameBotSettings, type GameBotSettings } from "./settings-store";
 import { listRefs, readRef, refsDirPath } from "./refs-store";
+import { logger, LogTag } from "../logger";
 import { captureScreen } from "./screenshot";
 import * as input from "./input";
 import * as vlm from "./vlm-locator";
@@ -181,5 +182,5 @@ export function initGameBot(): void {
     },
   });
 
-  console.log(LOG, "已初始化：IPC + game_bot_start 工具，可用脚本:", listRecipes().map((r) => r.id).join(", ") || "(无)");
+  logger.info(LogTag.GameBot, "initialized: IPC + game_bot_start tool, scripts:", listRecipes().map((r) => r.id).join(", ") || "(none)");
 }

@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import { WORLDBOOK_CONSTANTS } from "./worldbook-constants";
+import { logger, LogTag } from "../logger";
 
 // ── Worldbook entry ──
 export interface WorldbookEntry {
@@ -203,7 +204,7 @@ export class WorldbookManager {
     // v1 持久化 seam：预留，暂为空（重启回 0）
     this.loadState();
 
-    console.log(`[Worldbook] loaded ${allEntries.length} entries from ${files.length} files; DMAE state initialized for ${this.state.size} non-permanent entries`);
+    logger.info(LogTag.Worldbook, `loaded ${allEntries.length} entries from ${files.length} files; DMAE state initialized for ${this.state.size} non-permanent entries`);
   }
 
   // 从内存 entries 加载（不读 fs）：simulator / 测试用。

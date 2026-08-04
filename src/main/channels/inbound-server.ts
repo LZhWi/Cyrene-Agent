@@ -11,6 +11,7 @@ import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 import { loadChannelsSettings, saveChannelsSettings } from "./settings-store";
 import { channelManager } from "./manager";
 import type { ChannelId, IncomingMessage } from "./types";
+import { logger, LogTag } from "../logger";
 
 const LOG = "[InboundServer]";
 
@@ -230,7 +231,7 @@ export async function startInboundServer(): Promise<InboundServerHandle> {
         }
       }),
   };
-  console.log(LOG, `启动于 http://127.0.0.1:${port}`);
+  logger.info(LogTag.InboundServer, `listening on http://127.0.0.1:${port}`);
   return currentHandle;
 }
 
