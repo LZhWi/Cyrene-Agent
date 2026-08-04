@@ -1,6 +1,6 @@
 import { Conversations, type ConversationItemType } from "@ant-design/x";
 import { DeleteOutlined, EditOutlined } from "@ant-design/icons";
-import { Dropdown, Input, Modal, Popover } from "antd";
+import { Input, Menu, Modal, Popover } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatSessionMeta, ConversationMode } from "../../../../../shared/chat-types";
 
@@ -157,6 +157,7 @@ export function ConversationSidebar({
 
   const items: ConversationItemType[] = sessions.map((session) => ({
     key: session.id,
+    "data-session-id": session.id,
     label:
       editing?.sessionId === session.id ? (
         <Input
@@ -179,25 +180,69 @@ export function ConversationSidebar({
             }
           }}
           onClick={(e) => e.stopPropagation()}
-          onContextMenu={(e) => e.stopPropagation()}
         />
       ) : (
         session.title || "新对话"
       ),
     icon: <ConversationIcon />,
-    onContextMenu: (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      setContextMenu({
-        open: true,
-        x: e.clientX,
-        y: e.clientY,
-        sessionId: session.id,
-        sessionTitle: session.title || "新对话",
-      });
-    },
     ...(supportsProjects ? { group: session.workspaceRoot ?? `unbound:${session.id}` } : {}),
   }));
+
+  function openContextMenu(event: React.MouseEvent, sessionId: string) {
+    const session = sessions.find((s) => s.id === sessionId);
+    if (!session) return;
+    event.preventDefault();
+    event.stopPropagation();
+    setContextMenu({
+      open: true,
+      x: event.clientX,
+      y: event.clientY,
+      sessionId,
+      sessionTitle: session.title || "新对话",
+    });
+  }
+
+  function closeContextMenu() {
+    setContextMenu((current) => ({ ...current, open: false }));
+  }
+
+  function handleMenuClick(key: string) {
+    closeContextMenu();
+    if (key === "rename") {
+      const target = sessions.find((s) => s.id === contextMenu.sessionId);
+      setEditing({
+        sessionId: contextMenu.sessionId,
+        value: target?.title ?? "",
+      });
+    } else if (key === "delete") {
+      Modal.confirm({
+        title: `删除"${contextMenu.sessionTitle}"？`,
+        content: "删除后无法恢复，确定要继续吗？",
+        okText: "删除",
+        okType: "danger",
+        cancelText: "取消",
+        onOk: () => void onDelete(contextMenu.sessionId),
+      });
+    }
+  }
+
+  useEffect(() => {
+    if (!contextMenu.open) return;
+    function onPointerDown(event: MouseEvent) {
+      const target = event.target as HTMLElement;
+      if (target.closest(".cy-session-context-menu")) return;
+      closeContextMenu();
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") closeContextMenu();
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [contextMenu.open]);
 
   return (
     <nav className="cy-conversation-sidebar" aria-label={supportsProjects ? "项目与对话" : "对话列表"}>
@@ -208,84 +253,70 @@ export function ConversationSidebar({
         </div>
       ) : (
         <>
-          <Conversations
-            rootClassName="cy-conversation-list"
-            items={items}
-            activeKey={activeSessionId}
-            onActiveChange={(key) => onSelect(String(key))}
-            groupable={supportsProjects ? {
-              collapsible: true,
-              expandedKeys,
-              onExpand: setExpandedKeys,
-              label: (group) => {
-                const project = projects.get(group);
-                if (!project) return null;
-                return (
-                  <Popover
-                    placement="rightTop"
-                    mouseEnterDelay={0.25}
-                    mouseLeaveDelay={0.12}
-                    overlayClassName="cy-project-popover"
-                    content={(
-                      <ProjectInfoCard
-                        mode={mode}
-                        project={project}
-                        onOpen={() => project.workspaceRoot && onOpenProject(project.workspaceRoot)}
-                      />
-                    )}
-                  >
-                    <span className="cy-conversation-project">
-                      <ProjectIcon mode={mode} />
-                      <span>{project.name}</span>
-                    </span>
-                  </Popover>
-                );
-              },
-            } : false}
-          />
-          <Dropdown
-            open={contextMenu.open}
-            onOpenChange={(open) => {
-              if (!open) setContextMenu((current) => ({ ...current, open: false }));
-            }}
-            trigger={[]}
-            menu={{
-              className: "cy-session-context-menu",
-              onClick: ({ key }) => {
-                setContextMenu((current) => ({ ...current, open: false }));
-                if (key === "rename") {
-                  const target = sessions.find((s) => s.id === contextMenu.sessionId);
-                  setEditing({
-                    sessionId: contextMenu.sessionId,
-                    value: target?.title ?? "",
-                  });
-                } else if (key === "delete") {
-                  Modal.confirm({
-                    title: `删除"${contextMenu.sessionTitle}"？`,
-                    content: "删除后无法恢复，确定要继续吗？",
-                    okText: "删除",
-                    okType: "danger",
-                    cancelText: "取消",
-                    onOk: () => void onDelete(contextMenu.sessionId),
-                  });
-                }
-              },
-              items: [
-                { key: "rename", label: "重命名", icon: <EditOutlined /> },
-                { key: "delete", label: "删除", icon: <DeleteOutlined />, danger: true },
-              ],
+          <div
+            className="cy-conversation-list-wrapper"
+            onContextMenu={(e) => {
+              const item = (e.target as HTMLElement).closest("[data-session-id]");
+              const sessionId = item?.getAttribute("data-session-id");
+              if (!sessionId) return;
+              openContextMenu(e, sessionId);
             }}
           >
+            <Conversations
+              rootClassName="cy-conversation-list"
+              items={items}
+              activeKey={activeSessionId}
+              onActiveChange={(key) => onSelect(String(key))}
+              groupable={supportsProjects ? {
+                collapsible: true,
+                expandedKeys,
+                onExpand: setExpandedKeys,
+                label: (group) => {
+                  const project = projects.get(group);
+                  if (!project) return null;
+                  return (
+                    <Popover
+                      placement="rightTop"
+                      mouseEnterDelay={0.25}
+                      mouseLeaveDelay={0.12}
+                      overlayClassName="cy-project-popover"
+                      content={(
+                        <ProjectInfoCard
+                          mode={mode}
+                          project={project}
+                          onOpen={() => project.workspaceRoot && onOpenProject(project.workspaceRoot)}
+                        />
+                      )}
+                    >
+                      <span className="cy-conversation-project">
+                        <ProjectIcon mode={mode} />
+                        <span>{project.name}</span>
+                      </span>
+                    </Popover>
+                  );
+                },
+              } : false}
+            />
+          </div>
+          {contextMenu.open && (
             <div
+              className="cy-session-context-menu"
               style={{
                 position: "fixed",
                 left: contextMenu.x,
                 top: contextMenu.y,
-                width: 0,
-                height: 0,
+                zIndex: 1050,
               }}
-            />
-          </Dropdown>
+            >
+              <Menu
+                items={[
+                  { key: "rename", label: "重命名", icon: <EditOutlined /> },
+                  { key: "delete", label: "删除", icon: <DeleteOutlined />, danger: true },
+                ]}
+                onClick={({ key }) => handleMenuClick(key)}
+              />
+            </div>
+          )}
         </>
       )}
     </nav>

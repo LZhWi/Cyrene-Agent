@@ -238,5 +238,43 @@
 .cy-session-context-menu {
   min-width: 120px;
   border-radius: 8px;
+  background: #fff;
   box-shadow: 0 6px 20px rgb(46 38 41 / 12%);
+}
+
+.cy-session-context-menu .ant-menu {
+  border-inline-end: none;
+  border-radius: 8px;
+}
+
+.cy-session-context-menu .ant-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  line-height: 32px;
+  margin: 0;
+  border-radius: 6px;
+  color: var(--cy-text, #292528);
+  font: 500 12px/32px var(--rb-font-sans, sans-serif);
+}
+
+.cy-session-context-menu .ant-menu-item:hover {
+  background: #fff6f8;
+  color: var(--cy-accent, #ff5b8a);
+}
+
+.cy-session-context-menu .ant-menu-item-danger {
+  color: #ff4d4f;
+}
+
+.cy-session-context-menu .ant-menu-item-danger:hover {
+  color: #ff7875;
+  background: #fff1f0;
+}
+
+.cy-conversation-list-wrapper {
+  flex: 1 1 0;
+  min-height: 0;
+  overflow: hidden;
 }
