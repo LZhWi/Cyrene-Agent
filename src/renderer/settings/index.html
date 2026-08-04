@@ -19,7 +19,6 @@
 
       <nav class="settings-nav__list">
         <button type="button" class="nav-item" data-section="memory"><span><img class="nav-item__avatar" src="../icons/mimi.png" width="18" height="18" alt="" aria-hidden="true" /></span>记忆</button>
-        <button type="button" class="nav-item" data-section="chat"><span><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M33 38H22V30H36V22H44V38H39L36 41L33 38Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 6H36V30H17L13 34L9 30H4V6Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 18H20" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M26 18H27" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 18H13" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg></span>聊天</button>
         <button type="button" class="nav-item" data-section="user"><span><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M44 8H4V38H19L24 43L29 38H44V8Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24" cy="19" r="5" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M33 32C33 27.5817 28.9706 24 24 24C19.0294 24 15 27.5817 15 32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>用户信息</button>
         <hr class="nav-divider" />
         <button type="button" class="nav-item" data-section="tasks"><span><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M23.9998 44.3332C34.1251 44.3332 42.3332 36.1251 42.3332 25.9999C42.3332 15.8747 34.1251 7.66656 23.9998 7.66656C13.8746 7.66656 5.6665 15.8747 5.6665 25.9999C5.6665 36.1251 13.8746 44.3332 23.9998 44.3332Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M23.7594 15.3536L23.7582 26.3624L31.5305 34.1347" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9.00001L11 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M44 9.00001L37 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>定时任务</button>
@@ -976,33 +975,6 @@
                 </div>
                 <p class="user-field-hint">这些信息会告诉昔涟，让她知道怎么称呼你、你在哪。默认城市用于天气等需要定位的工具；时区仅用于时间计算，不代表所在城市。</p>
               </div>
-            </div>
-          </div>
-        </section>
-
-        <section class="settings-panel is-hidden" id="chat-panel" data-panel="chat">
-          <div class="panel-heading">
-            <div class="panel-heading__icon"><svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M33 38H22V30H36V22H44V38H39L36 41L33 38Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 6H36V30H17L13 34L9 30H4V6Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 18H20" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M26 18H27" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 18H13" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg></div>
-            <div>
-              <h1>聊天</h1>
-              <p>管理聊天窗口与会话历史</p>
-            </div>
-          </div>
-          <div class="panel-body">
-            <div class="chat-sessions">
-              <button type="button" class="chat-sessions__new" id="chat-new-btn">
-                <span class="chat-sessions__new-icon" aria-hidden="true">＋</span>
-                <span>新对话</span>
-              </button>
-              <ul class="chat-sessions__list" id="chat-sessions-list" role="list"></ul>
-              <div class="chat-sessions__empty is-hidden" id="chat-sessions-empty">
-                <span class="chat-sessions__empty-icon" aria-hidden="true">📭</span>
-                <p>还没有对话，点上面的「＋ 新对话」开始吧</p>
-              </div>
-            </div>
-            <div class="chat-sessions__footer">
-              <button type="button" class="ghost-btn" id="chat-open-folder-btn">📂 打开存储位置</button>
-              <span class="chat-sessions__footer-hint">所有会话保存在 userData/cyrene-chats/ 下，可整体迁移</span>
             </div>
           </div>
         </section>
