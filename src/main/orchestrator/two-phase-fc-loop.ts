@@ -493,7 +493,7 @@ function buildTextualToolProtocolFallback(toolResults: ToolCallResult[]): string
 
 function buildToolSpecs(tools: ReadonlyArray<ToolDefinition>): Array<{ name: string; description: string; parameters: object }> {
   return tools
-    .filter((t) => t.enabled)
+    .filter((t) => t.enabled && !t.deprecated && t.effectKind !== "unknown")
     .map((t) => ({
       name: t.id,
       description: t.description,
@@ -540,7 +540,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
   const streamChat = options.streamChat ?? streamChatWithSdk;
 
   const toolSpecs = buildToolSpecs(tools);
-  const runnableToolIds = new Set(tools.filter((t) => t.enabled).map((t) => t.id));
+  const runnableToolIds = new Set(tools.filter((t) => t.enabled && !t.deprecated && t.effectKind !== "unknown").map((t) => t.id));
   const allToolResults: ToolCallResult[] = [];
 
   console.log(LOG_PREFIX, `可用工具: ${toolSpecs.map((t) => t.name).join(", ") || "(无)"}`);
