@@ -1,0 +1,186 @@
+.cy-todo {
+  position: fixed;
+  width: 240px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  background: #ffffff;
+  border-radius: 18px;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.12);
+  color: #111111;
+  font-size: 14px;
+  line-height: 1.45;
+  user-select: none;
+  overflow: hidden;
+  transition: box-shadow 0.2s ease;
+}
+
+.cy-todo:not(.cy-todo--collapsed) {
+  aspect-ratio: 3 / 4;
+}
+
+.cy-todo:hover {
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.16);
+}
+
+.cy-todo__header {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border: none;
+  background: transparent;
+  cursor: grab;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+
+.cy-todo__header:active {
+  cursor: grabbing;
+}
+
+.cy-todo__title-row {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.cy-todo__title {
+  font-weight: 600;
+  font-size: 15px;
+  color: #111111;
+}
+
+.cy-todo__count {
+  font-size: 12px;
+  color: #888888;
+  white-space: nowrap;
+}
+
+.cy-todo__toggle {
+  flex: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  color: #888888;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.3s ease;
+}
+
+.cy-todo__toggle:hover {
+  background: rgba(255, 91, 138, 0.08);
+  color: #FF5B8A;
+}
+
+.cy-todo--collapsed .cy-todo__toggle {
+  transform: rotate(180deg);
+}
+
+.cy-todo__body {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 14px 14px;
+  max-height: 600px;
+  opacity: 1;
+  overflow: hidden;
+  transition: max-height 0.3s ease, opacity 0.25s ease, padding 0.25s ease;
+}
+
+.cy-todo--collapsed .cy-todo__body {
+  max-height: 0;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.cy-todo__progress {
+  position: relative;
+  flex: none;
+  height: 18px;
+  border-radius: 9px;
+  background: #f5f5f5;
+  overflow: hidden;
+}
+
+.cy-todo__progress-bar {
+  height: 100%;
+  background: #FF5B8A;
+  border-radius: 9px;
+  transition: width 0.35s ease;
+}
+
+.cy-todo__progress-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: 600;
+  color: #ffffff;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+.cy-todo__list {
+  flex: 1;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  overflow-y: auto;
+}
+
+.cy-todo__list::-webkit-scrollbar {
+  width: 4px;
+}
+
+.cy-todo__list::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.12);
+  border-radius: 2px;
+}
+
+.cy-todo__item {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.cy-todo__status {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-top: 1px;
+}
+
+.cy-todo__check {
+  width: 18px;
+  height: 18px;
+}
+
+.cy-todo__content {
+  flex: 1;
+  min-width: 0;
+  word-break: break-word;
+  color: #111111;
+  transition: color 0.2s ease;
+}
+
+.cy-todo__item--completed .cy-todo__content {
+  text-decoration: line-through;
+  color: #999999;
+}
