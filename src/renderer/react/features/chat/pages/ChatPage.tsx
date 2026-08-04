@@ -37,6 +37,12 @@ import {
   type CodeRunApi,
   type CodeRunViewModel,
 } from "../../../../lib/code-run-view-model";
+import {
+  normalizeSessionMode,
+  openSessionByIdWithDeps,
+  type OpenSessionArgs,
+  type ReactSessionMode,
+} from "./openSessionByDeps";
 import "../../../components/ui/SidebarToggle.css";
 import "../../../components/ui/ModeSwitch.css";
 import "../../../components/ui/CharacterStatusPill.css";
@@ -343,7 +349,7 @@ export {
   openSessionByIdWithDeps,
   type ReactSessionMode,
   type OpenSessionArgs,
-} from "./openSessionByDeps";
+};
 
 export function ChatPage() {
   const preferredAddress = useUserCallPreference();
