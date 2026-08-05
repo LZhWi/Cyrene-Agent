@@ -31,8 +31,6 @@ import { type ReasoningPreference } from "../../shared/reasoning";
 import { type LoginFlowState } from "../../shared/music-types";
 import { resolveApiEndpoint, type ApiTransport } from "../../shared/api-endpoint";
 import type { ChatAppearanceSettings } from "../../shared/chat-appearance";
-import { renderMarkdown } from "../lib/markdown/markdown-renderer";
-import workFlowDocMd from "../../../docs/model-work-test/work-flow-test-results-2026-07-24.md?raw";
 import {
   DEFAULT_CUSTOM_STYLE,
   normalizeCustomStyleConfig,
@@ -2783,19 +2781,12 @@ const WORK_FLOW_COMPAT_MD = `
 `.trim();
 
 function buildWorkFlowAdaptBody(): string {
-  const rendered = renderMarkdown(WORK_FLOW_COMPAT_MD);
-  const tableHtml = rendered.mode === "html" ? rendered.content : "";
   return [
     '<div class="custom-endpoint-guide-warning work-flow-adapt-meta">',
     "  <strong>模型厂商 Work 流程适配</strong>",
     '  <span class="work-flow-adapt-date">最新更新于 2026/7/24</span>',
-    '  <p class="work-flow-adapt-disclaimer">本项目为个人业余开发项目，以下兼容性结论基于有限实测，仅供参考；完整测试方法与判定规则见详细文档。</p>',
     "</div>",
-    '<p class="work-flow-adapt-doc-line">',
-    '  完整实测链路与判定规则见',
-    '  <button type="button" class="work-flow-adapt-doc-link" id="work-flow-adapt-doc-link">详细文档 ↗</button>',
-    "</p>",
-    `<div class="work-flow-adapt-table">${tableHtml}</div>`,
+    `<div class="work-flow-adapt-table">${WORK_FLOW_COMPAT_MD}</div>`,
   ].join("\n");
 }
 
@@ -2804,36 +2795,6 @@ workFlowAdaptBtn?.addEventListener("click", () => {
     title: "模型厂商 Work 流程适配",
     icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 10.5V17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="7.25" r="1.1" fill="currentColor"/></svg>',
     htmlBody: buildWorkFlowAdaptBody(),
-  });
-  // 「详细文档」在 app 内本地渲染完整实测报告（?raw 内联 md + renderMarkdown）
-  const docLink = document.querySelector(
-    "#cy-html-modal-body #work-flow-adapt-doc-link",
-  ) as HTMLButtonElement | null;
-  docLink?.addEventListener("click", () => {
-    const rendered = renderMarkdown(workFlowDocMd);
-    const docHtml = rendered.mode === "html" ? rendered.content : "";
-    void showHtmlModal({
-      title: "详细文档",
-      icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 3h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
-      htmlBody: `<div class="work-flow-doc">${docHtml}</div>`,
-    });
-    // 代码块复制按钮（设置窗未初始化 chat 的 code-block controller，这里就近绑定）
-    const copyBtns = document.querySelectorAll<HTMLButtonElement>(
-      "#cy-html-modal-body .code-block__copy",
-    );
-    copyBtns.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const code =
-          btn.closest(".code-block")?.querySelector(".code-block__code")?.textContent ?? "";
-        void navigator.clipboard.writeText(code).then(() => {
-          const orig = btn.textContent;
-          btn.textContent = "已复制";
-          window.setTimeout(() => {
-            btn.textContent = orig;
-          }, 1200);
-        });
-      });
-    });
   });
 });
 
