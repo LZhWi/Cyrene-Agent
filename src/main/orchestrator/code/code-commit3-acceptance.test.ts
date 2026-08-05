@@ -340,14 +340,14 @@ describe("Commit 3 验收测试", () => {
   // ── CodePromptComposer 测试 ───────────────────────────
 
   describe("CodePromptComposer", () => {
-    it("15. Prompt 空文件不追加内容", () => {
+    it("15. Prompt 非空文件追加内容", () => {
       const result = loadCodeIdentityPrompt();
-      // 当前 prompts/code_identity.md 是空文件
-      expect(result.source).toBe("empty_file");
-      expect(result.content).toBe("");
+      // 当前 prompts/code_identity.md 已包含 Code 模式身份定义
+      expect(result.source).toBe("loaded");
+      expect(result.content.length).toBeGreaterThan(0);
 
       const sysPrompt = buildClineSystemPrompt();
-      expect(sysPrompt).toBe("");
+      expect(sysPrompt).toBe(result.content);
     });
   });
 

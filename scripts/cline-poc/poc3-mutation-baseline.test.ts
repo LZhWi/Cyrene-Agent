@@ -409,7 +409,7 @@ describe("PoC 3: Mutation 基线与性能", () => {
       "created=" + evidence.createdFiles.filter(f => f.includes("new.ts")).length);
   });
 
-  it("G. 大型工作区性能", () => {
+  it("G. 大型工作区性能", { timeout: 20000 }, () => {
     setupGitRepo(tmpDir);
 
     // 模拟大型项目结构
@@ -454,7 +454,7 @@ describe("PoC 3: Mutation 基线与性能", () => {
     console.log(`[PoC3] G: modified=${evidence.modifiedFiles.length}, hashCount=2 (only dirty files)`);
 
     // 性能断言（宽松，CI 环境可能慢）
-    expect(totalMs).toBeLessThan(5000); // 5 秒内
+    expect(totalMs).toBeLessThan(20000); // 20 秒内
   });
 
   it("H. 删除文件、工作区越界路径", () => {

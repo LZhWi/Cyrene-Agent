@@ -92,7 +92,7 @@ describe("buildToolExecutionContext", () => {
       status: "succeeded",
     }]);
 
-    expect(block).toContain("[truncated:");
+    expect(block).toContain("[截断，原长度");
     expect(block).not.toContain("UNBOUNDED_TAIL");
   });
 });
