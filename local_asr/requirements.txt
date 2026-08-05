@@ -1,0 +1,4 @@
+qwen-asr
+funasr==1.4.0
+modelscope
+numpy

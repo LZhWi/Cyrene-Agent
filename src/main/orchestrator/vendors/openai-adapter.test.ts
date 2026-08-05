@@ -218,6 +218,12 @@ describe("OpenAICompatAdapter", () => {
     );
     expect(soulReq.extraBody?.prompt_cache_key).toBe("cyrene:kimi:soul");
 
+    const phoneReq = kimiLike.applyCacheHints(
+      { model: "m", messages: [], tools: [{ name: "weather", description: "d", parameters: {} }] },
+      { provider: "p", baseUrl: "u", model: "m", apiKey: "k", cacheNamespace: "phone" },
+    );
+    expect(phoneReq.extraBody?.prompt_cache_key).toBe("cyrene:kimi:phone:tool");
+
     // cacheStrategy=none（默认 capability）：原样返回，不注入 extraBody
     const plain = new OpenAICompatAdapter("test-openai", capability);
     const untouched = plain.applyCacheHints(

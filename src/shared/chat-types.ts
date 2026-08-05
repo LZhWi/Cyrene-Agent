@@ -41,6 +41,14 @@ export interface ChatMessage {
   ttsCacheKey?: string;
   /** 已实际展示的音乐候选卡片；持久化展示不延长 Skill 候选状态 TTL。 */
   musicCard?: MusicCardData;
+  /** 通话记录标记。存在时渲染为通话气泡（用户侧），content 为空不参与 LLM 上下文。
+   *  callId 对应 CallContextEvent.id，删除消息时联动清理 call-context-store。 */
+  callEvent?: {
+    callId: string;
+    startedAt: number;
+    endedAt: number;
+    summary: string;
+  };
 }
 
 export type MessageAttachment = ImageMessageAttachment | DocumentMessageAttachment;

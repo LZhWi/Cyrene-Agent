@@ -20,6 +20,8 @@ export class VolcanoAsrStream {
   private audioBuffer = Buffer.alloc(0);
   private taskId = randomUUID().replace(/-/g, "");
   private appKey = "";
+  private finishPromise: Promise<void> | null = null;
+  private finishResolve: (() => void) | null = null;
 
   constructor(
     private readonly onPartial: (text: string) => void,
@@ -49,7 +51,10 @@ export class VolcanoAsrStream {
 
     this.ws.on("message", (raw: Buffer) => this.handleMessage(raw));
     this.ws.on("error", (err) => console.error(LOG_PREFIX, "WS 错误:", err.message));
-    this.ws.on("close", (code) => console.log(LOG_PREFIX, `WS 关闭: ${code}`));
+    this.ws.on("close", (code) => {
+      console.log(LOG_PREFIX, `WS 关闭: ${code}`);
+      this.resolveFinish();
+    });
   }
 
   /** 发送 StartTranscription 指令（JSON 文本帧） */
@@ -118,6 +123,23 @@ export class VolcanoAsrStream {
     setTimeout(() => { try { this.ws?.close(); } catch { /* ignore */ } }, 2000);
   }
 
+  /** 发送结束指令并等待服务端冲刷最后一句。 */
+  finish(): Promise<void> {
+    if (!this.finishPromise) {
+      this.finishPromise = new Promise<void>((resolve) => {
+        this.finishResolve = resolve;
+        setTimeout(() => this.resolveFinish(), 3000);
+      });
+    }
+    this.stop();
+    return this.finishPromise;
+  }
+
+  private resolveFinish(): void {
+    this.finishResolve?.();
+    this.finishResolve = null;
+  }
+
   /** 解析服务端 JSON 响应 */
   private handleMessage(raw: Buffer): void {
     try {
@@ -159,6 +181,7 @@ export class VolcanoAsrStream {
         }
       } else if (eventName === "TranscriptionCompleted") {
         console.log(LOG_PREFIX, "转写已完成");
+        this.resolveFinish();
       }
     } catch (err) {
       console.error(LOG_PREFIX, "解析响应失败:", err);
@@ -211,6 +234,8 @@ export interface AsrConfig {
   accessKeySecret: string;
   language: string;
   engine: string;
+  localProfile: "qwen17-stream" | "paraformer-qwen17" | "qwen06-stream";
+  hotwords: string[];
 }
 
 let asrConfigGetter: (() => AsrConfig | null) | null = null;

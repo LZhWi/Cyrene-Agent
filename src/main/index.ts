@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, protocol, net, powerMonitor, session } from "electron";
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, protocol, net, powerMonitor, session, type WebContents } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
@@ -65,6 +65,12 @@ import { buildEnvironmentContext } from "./orchestrator/environment";
 import { initPermissionFromDisk, registerPermissionIpc, getCurrentLevel } from "./permission";
 import { registerChoiceIpc, setChoiceCardSender } from "./user-choice";
 import { enqueueLLMTask } from "./llm-queue";
+import {
+  buildSocialContextBlock,
+  extractAndStoreSocialContext,
+  retrieveSocialContext,
+  retrieveSocialContextReadOnly,
+} from "./social-context";
 import { getEmbeddingStatus, downloadEmbeddingModel, deleteEmbeddingModel } from "./embedding-manager";
 import { BUILT_IN_STICKER_DESCRIPTIONS } from "./sticker-descriptions";
 import { buildCachedStickerEmbeddingIndex } from "./sticker-embedding-cache";
@@ -77,7 +83,8 @@ import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker
 import { normalizeWindowVisibilitySettings } from "./window-visibility-settings";
 import { PetWindowMoveController } from "./pet-window-movement";
 import type { StickerConfigItem } from "../shared/sticker-types";
-import type { ImageMessageAttachment } from "../shared/chat-types";
+import type { ImageMessageAttachment, ChatMessage } from "../shared/chat-types";
+import type { GptsovitsSynthesizeRequest, GptsovitsTextSplitMethod, GptsovitsVersion } from "../shared/tts-types";
 import { initReranker, getRerankerInstallStatus } from "./rag/reranker";
 import { memoryStore } from "./memory/memory-store"
 import { backupMemoryRagFiles, reconcileMemoryRag } from "./memory/memory-rag-reconciliation";
@@ -108,12 +115,18 @@ import { bootstrapMusicService } from "./music/bootstrap";
 import { installShutdownLatch } from "./music/shutdown-latch";
 import {
   buildConversationTimeContext,
+  formatLocalTime,
   normalizeChatMessagesWithTime,
   resolveChatContextTimezone,
   type ChatContextMessage,
 } from "./chat-time-context";
 import { setAsrConfig } from "./asr/volcano-asr-engine";
-import { setCallWindow, registerCallIpc, setCallSettings, stopCall } from "./call/call-manager";
+import { normalizeAsrHotwords, normalizeLocalAsrProfile } from "./asr/asr-settings";
+import { setCallWindow, registerCallIpc, setCallSettings, setCallEndedCallback, stopCall, isCallActive } from "./call/call-manager";
+import { findLatestChatContextSessionId, trimSoulForCall } from "./call/call-prompt";
+import { loadCallContextEvents } from "./call/call-context-store";
+import { callEventToContextMessage, type CallContextEvent } from "./call/call-context";
+import { registerAsrTestIpc, stopAsrTest } from "./asr/asr-test-manager";
 import { initSkills, skillRegistry, buildAutoInjectedSkillContext, buildSkillCatalog, parseSlashCommand, setSkillEnabled, listSkillsForUi } from "./skills";
 import {
   buildMusicCompanionContext,
@@ -131,6 +144,7 @@ import { saveBlob } from "./channels/mobile-blobs";
 import { DESKTOP_PROACTIVE_STEM } from "./sync/types";
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
 import { clearLocation, loadLocation, saveLocation } from "./location-store";
+import { isAudioMediaCheck, isAudioOnlyMediaRequest } from "./media-permission";
 import {
   buildAgentRunOptions,
   onAgentRunFinished,
@@ -157,6 +171,7 @@ import { runProactiveModel } from "./proactive/proactive-model";
 import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/proactive-types";
 import { canCommitProactiveMessage } from "./proactive/proactive-policy";
 import type { WorkModelSettings } from "../shared/work-types";
+import type { CallModelSettings } from "../shared/call-types";
 import { initializeWorkStore } from "./work/work-store";
 import { registerWorkIpc } from "./work/work-ipc";
 import { filterWorkTools } from "./work/work-tool-policy";
@@ -165,6 +180,10 @@ import {
   loadWorkModelSettings as loadStoredWorkModelSettings,
   saveWorkModelSettings,
 } from "./work/work-model-store";
+import {
+  loadCallModelSettings as loadStoredCallModelSettings,
+  saveCallModelSettings,
+} from "./call/call-model-store";
 
 configureDocumentIndexQueue(runDocumentIndexJob);
 
@@ -211,6 +230,9 @@ const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2
 // 聊天窗口当前活跃的会话 id（通过 IPC 由聊天窗口上报）；
 // 设置面板"删除当前会话"差异化提示用。聊天窗口关闭时由 closed 事件置 null。
 let activeChatSessionId: string | null = null;
+// 通话启动时的活跃会话 id（IPC.CALL_START 时快照）。通话结束后插入通话消息用这个，
+// 避免通话期间用户切换会话导致通话消息插到错误的会话。
+let callStartedChatSessionId: string | null = null;
 
 const isDev = process.env.VITE_DEV === "1";
 
@@ -304,25 +326,43 @@ function buildTtsCacheKey(payload: {
   return "minimax-" + createHash("sha256").update(source, "utf8").digest("hex");
 }
 
-function buildGptsovitsCacheKey(payload: {
-  baseUrl: string;
-  refAudioPath: string;
-  promptText: string;
-  text: string;
-  speed?: number;
-  format?: "wav" | "mp3";
-}): string {
+function buildGptsovitsCacheKey(payload: GptsovitsSynthesizeRequest): string {
   const source = JSON.stringify({
-    version: 1,
+    cacheVersion: 2,
     engine: "gptsovits",
     baseUrl: payload.baseUrl,
     refAudioPath: payload.refAudioPath,
     promptText: payload.promptText,
+    gsvVersion: payload.version ?? "auto",
+    gptWeightsPath: payload.gptWeightsPath ?? "",
+    sovitsWeightsPath: payload.sovitsWeightsPath ?? "",
+    textSplitMethod: payload.textSplitMethod ?? "cut5",
+    topK: payload.topK ?? 15,
+    topP: payload.topP ?? 1,
+    temperature: payload.temperature ?? 1,
+    repetitionPenalty: payload.repetitionPenalty ?? 1.35,
+    sampleSteps: payload.sampleSteps ?? 32,
     speed: payload.speed ?? 1,
     format: payload.format ?? "wav",
     text: payload.text,
   });
   return "gptsovits-" + createHash("sha256").update(source, "utf8").digest("hex");
+}
+
+function resolveGptsovitsRequest(payload: GptsovitsSynthesizeRequest): GptsovitsSynthesizeRequest {
+  const settings = loadGeneralSettings();
+  return {
+    ...payload,
+    version: payload.version ?? settings.ttsGptsovitsVersion,
+    gptWeightsPath: payload.gptWeightsPath ?? settings.ttsGptsovitsGptWeightsPath,
+    sovitsWeightsPath: payload.sovitsWeightsPath ?? settings.ttsGptsovitsSovitsWeightsPath,
+    textSplitMethod: payload.textSplitMethod ?? settings.ttsGptsovitsTextSplitMethod,
+    topK: payload.topK ?? settings.ttsGptsovitsTopK,
+    topP: payload.topP ?? settings.ttsGptsovitsTopP,
+    temperature: payload.temperature ?? settings.ttsGptsovitsTemperature,
+    repetitionPenalty: payload.repetitionPenalty ?? settings.ttsGptsovitsRepetitionPenalty,
+    sampleSteps: payload.sampleSteps ?? settings.ttsGptsovitsSampleSteps,
+  };
 }
 
 function buildCustomCloudCacheKey(payload: {
@@ -520,6 +560,7 @@ interface GeneralSettings {
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
   /** 主动消息回应反馈学习：根据回复/忽略微调各场景开口频率；关闭后不记录任何反馈。 */
   proactiveFeedbackEnabled: boolean;
+  socialContextEnabled: boolean;
   // TTS 配置
   ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo";
   ttsAutoRead: boolean;
@@ -537,6 +578,15 @@ interface GeneralSettings {
   ttsGptsovitsRefAudioPath: string;
   ttsGptsovitsPromptText: string;
   ttsGptsovitsFormat: "wav" | "mp3";
+  ttsGptsovitsVersion: GptsovitsVersion;
+  ttsGptsovitsGptWeightsPath: string;
+  ttsGptsovitsSovitsWeightsPath: string;
+  ttsGptsovitsTextSplitMethod: GptsovitsTextSplitMethod;
+  ttsGptsovitsTopK: number;
+  ttsGptsovitsTopP: number;
+  ttsGptsovitsTemperature: number;
+  ttsGptsovitsRepetitionPenalty: number;
+  ttsGptsovitsSampleSteps: number;
   // 自定义云端 TTS
   ttsCustomCloudEndpointUrl: string;
   ttsCustomCloudApiKey: string;
@@ -586,6 +636,10 @@ interface GeneralSettings {
   asrAliyunAccessKeySecret: string;
   /** ASR 识别语言：zh(中文) | en(英文) | auto(自动) */
   asrLanguage: "zh" | "en" | "auto";
+  /** 本地 ASR 方案：Qwen 单模型或 Paraformer + Qwen 双阶段 */
+  asrLocalProfile: "qwen17-stream" | "paraformer-qwen17" | "qwen06-stream";
+  /** 本地 ASR 热词，每行一个 */
+  asrHotwords: string[];
   /** VAD 静默检测阈值（毫秒），500~2000，默认 1000 */
   asrVadSilenceMs: number;
   /** VAD 音量阈值（0~1），默认 0.01。环境吵或麦克风音量低时可调 */
@@ -748,6 +802,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   proactiveChatMode: "off",
   proactiveDeliveryTarget: "local",
   proactiveFeedbackEnabled: true,
+  socialContextEnabled: false,
   ttsEngine: "off",
   ttsAutoRead: true,
   ttsSpeed: 1,
@@ -760,6 +815,15 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   ttsGptsovitsRefAudioPath: "",
   ttsGptsovitsPromptText: "",
   ttsGptsovitsFormat: "wav",
+  ttsGptsovitsVersion: "auto",
+  ttsGptsovitsGptWeightsPath: "",
+  ttsGptsovitsSovitsWeightsPath: "",
+  ttsGptsovitsTextSplitMethod: "cut5",
+  ttsGptsovitsTopK: 15,
+  ttsGptsovitsTopP: 1,
+  ttsGptsovitsTemperature: 1,
+  ttsGptsovitsRepetitionPenalty: 1.35,
+  ttsGptsovitsSampleSteps: 32,
   ttsCustomCloudEndpointUrl: "",
   ttsCustomCloudApiKey: "",
   ttsCustomCloudVoiceId: "",
@@ -789,6 +853,8 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   asrAliyunAccessKeyId: "",
   asrAliyunAccessKeySecret: "",
   asrLanguage: "zh",
+  asrLocalProfile: "paraformer-qwen17",
+  asrHotwords: [],
   asrVadSilenceMs: 1000,
   asrVadThreshold: 0.01,
   asrShowTranscript: false,
@@ -1063,6 +1129,47 @@ function loadWorkModelSettings(): WorkModelSettings {
   });
 }
 
+function loadCallModelSettings(): CallModelSettings {
+  const stored = loadStoredCallModelSettings();
+  if (stored) return stored;
+  const chat = loadModelSettings();
+  const provider = chat.provider;
+  const perProvider = Object.fromEntries(
+    Object.entries(chat.perProvider).map(([key, profile]) => [key, { ...profile }]),
+  );
+  const profile = perProvider[provider] ?? {
+    baseUrl: chat.baseUrl,
+    model: chat.model,
+    apiKey: chat.apiKey,
+    displayName: chat.displayName,
+    explicitTransport: chat.explicitTransport,
+    reasoning: chat.reasoning,
+  };
+  return saveCallModelSettings({
+    schemaVersion: 1,
+    provider,
+    perProvider,
+    ...profile,
+  });
+}
+
+function resolveCallModelConfig(): VendorConfig {
+  const settings = loadCallModelSettings();
+  const provider = settings.provider;
+  const profile = settings.perProvider[provider];
+  if (!profile) throw new Error(`语音通话模型供应商不存在：${provider}`);
+  if (!profile.apiKey || !profile.baseUrl) throw new Error(`语音通话模型尚未配置 API：${provider}`);
+  if (!profile.model) throw new Error("语音通话模型名称不能为空");
+  return {
+    provider,
+    baseUrl: profile.baseUrl,
+    apiKey: profile.apiKey,
+    model: profile.model,
+    explicitTransport: profile.explicitTransport,
+    reasoning: profile.reasoning,
+  };
+}
+
 function resolveWorkModelConfig(): VendorConfig {
   const settings = loadWorkModelSettings();
   const provider = settings.provider;
@@ -1249,6 +1356,9 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     proactiveFeedbackEnabled: input?.proactiveFeedbackEnabled === undefined
       ? DEFAULT_GENERAL_SETTINGS.proactiveFeedbackEnabled
       : Boolean(input.proactiveFeedbackEnabled),
+    socialContextEnabled: input?.socialContextEnabled === undefined
+      ? DEFAULT_GENERAL_SETTINGS.socialContextEnabled
+      : Boolean(input.socialContextEnabled),
     // TTS 配置
     ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo"].includes(input?.ttsEngine as string) ? input?.ttsEngine : "off") as GeneralSettings["ttsEngine"],
     ttsAutoRead: input?.ttsAutoRead === undefined ? DEFAULT_GENERAL_SETTINGS.ttsAutoRead : Boolean(input.ttsAutoRead),
@@ -1291,6 +1401,8 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     asrLanguage: ["zh", "en", "auto"].includes(String(input?.asrLanguage))
       ? (input!.asrLanguage as "zh" | "en" | "auto")
       : "zh",
+    asrLocalProfile: normalizeLocalAsrProfile(input?.asrLocalProfile),
+    asrHotwords: normalizeAsrHotwords(input?.asrHotwords),
     asrVadSilenceMs: typeof input?.asrVadSilenceMs === "number"
       ? Math.max(300, Math.min(30000, Math.round(input.asrVadSilenceMs)))
       : DEFAULT_GENERAL_SETTINGS.asrVadSilenceMs,
@@ -1305,6 +1417,19 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     ttsGptsovitsRefAudioPath: typeof input?.ttsGptsovitsRefAudioPath === "string" ? input.ttsGptsovitsRefAudioPath : "",
     ttsGptsovitsPromptText: typeof input?.ttsGptsovitsPromptText === "string" ? input.ttsGptsovitsPromptText : "",
     ttsGptsovitsFormat: input?.ttsGptsovitsFormat === "mp3" ? "mp3" : "wav",
+    ttsGptsovitsVersion: ["auto", "v1", "v2", "v2Pro", "v2ProPlus", "v3", "v4"].includes(String(input?.ttsGptsovitsVersion))
+      ? input!.ttsGptsovitsVersion as GptsovitsVersion
+      : "auto",
+    ttsGptsovitsGptWeightsPath: typeof input?.ttsGptsovitsGptWeightsPath === "string" ? input.ttsGptsovitsGptWeightsPath : "",
+    ttsGptsovitsSovitsWeightsPath: typeof input?.ttsGptsovitsSovitsWeightsPath === "string" ? input.ttsGptsovitsSovitsWeightsPath : "",
+    ttsGptsovitsTextSplitMethod: ["cut0", "cut1", "cut2", "cut3", "cut4", "cut5"].includes(String(input?.ttsGptsovitsTextSplitMethod))
+      ? input!.ttsGptsovitsTextSplitMethod as GptsovitsTextSplitMethod
+      : "cut5",
+    ttsGptsovitsTopK: typeof input?.ttsGptsovitsTopK === "number" ? Math.max(1, Math.min(1000, Math.round(input.ttsGptsovitsTopK))) : 15,
+    ttsGptsovitsTopP: typeof input?.ttsGptsovitsTopP === "number" ? Math.max(0, Math.min(1, input.ttsGptsovitsTopP)) : 1,
+    ttsGptsovitsTemperature: typeof input?.ttsGptsovitsTemperature === "number" ? Math.max(0.01, Math.min(2, input.ttsGptsovitsTemperature)) : 1,
+    ttsGptsovitsRepetitionPenalty: typeof input?.ttsGptsovitsRepetitionPenalty === "number" ? Math.max(0.1, Math.min(10, input.ttsGptsovitsRepetitionPenalty)) : 1.35,
+    ttsGptsovitsSampleSteps: typeof input?.ttsGptsovitsSampleSteps === "number" ? Math.max(1, Math.min(100, Math.round(input.ttsGptsovitsSampleSteps))) : 32,
     ttsCustomCloudEndpointUrl: typeof input?.ttsCustomCloudEndpointUrl === "string" ? input.ttsCustomCloudEndpointUrl : "",
     ttsCustomCloudApiKey: typeof input?.ttsCustomCloudApiKey === "string" ? input.ttsCustomCloudApiKey : "",
     ttsCustomCloudVoiceId: typeof input?.ttsCustomCloudVoiceId === "string" ? input.ttsCustomCloudVoiceId : "",
@@ -1327,10 +1452,16 @@ function loadGeneralSettings(): GeneralSettings {
   }
 }
 
-function applyGeneralSettings(settings: GeneralSettings): void {
+function applyGeneralSettings(settings: GeneralSettings, previous?: GeneralSettings): void {
   mainWindow?.setAlwaysOnTop(settings.petAlwaysOnTop, settings.petAlwaysOnTop ? "screen-saver" : "normal");
-  if (settings.petVisible) mainWindow?.show();
-  else mainWindow?.hide();
+  if (!previous || previous.petVisible !== settings.petVisible) {
+    if (settings.petVisible) {
+      if (previous) mainWindow?.showInactive();
+      else mainWindow?.show();
+    } else {
+      mainWindow?.hide();
+    }
+  }
   app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
   applyPetZoom(settings.petZoom);
 }
@@ -1353,7 +1484,7 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   const filePath = getGeneralSettingsPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   fs.writeFileSync(filePath, JSON.stringify(normalized, null, 2), "utf8");
-  applyGeneralSettings(normalized);
+  applyGeneralSettings(normalized, before);
   syncBuiltInToolToggles(normalized);
   if (before.uiTheme !== normalized.uiTheme) {
     broadcastUiThemeChanged(normalized.uiTheme);
@@ -1941,11 +2072,20 @@ function buildProactivePersonaPrompt(): string {
   return parts.join("\n\n---\n\n");
 }
 
-function toProactiveHistory(messages: Array<{ role: "user" | "model"; content: string; at: number }>): ProactiveHistoryTurn[] {
-  return messages
+function toProactiveHistory(
+  messages: Array<{ role: "user" | "model"; content: string; at: number }>,
+  callEvents: ReadonlyArray<CallContextEvent> = [],
+): ProactiveHistoryTurn[] {
+  const chatTurns: ProactiveHistoryTurn[] = messages
     .filter((message) => message.content.trim())
-    .slice(-16)
     .map((message) => ({ role: message.role, content: message.content, at: message.at }));
+  const callTurns: ProactiveHistoryTurn[] = callEvents.map((event) => {
+    const message = callEventToContextMessage(event);
+    return { role: "system", content: message.content, at: event.startedAt };
+  });
+  return [...chatTurns, ...callTurns]
+    .sort((a, b) => a.at - b.at)
+    .slice(-16);
 }
 
 function getProactiveHistories(): { ordinary: ProactiveHistoryTurn[]; proactive: ProactiveHistoryTurn[] } {
@@ -1953,7 +2093,7 @@ function getProactiveHistories(): { ordinary: ProactiveHistoryTurn[]; proactive:
   const ordinarySession = ordinaryMeta ? chatsStore.getSession(ordinaryMeta.id) : null;
   const proactiveSession = chatsStore.getSessionByPurpose("proactive-chat");
   return {
-    ordinary: toProactiveHistory(ordinarySession?.messages ?? []),
+    ordinary: toProactiveHistory(ordinarySession?.messages ?? [], loadCallContextEvents()),
     proactive: toProactiveHistory(proactiveSession?.messages ?? []),
   };
 }
@@ -2014,6 +2154,15 @@ async function synthesizeProactiveSpeech(text: string): Promise<{ audioBase64: s
       baseUrl: cfg.ttsGptsovitsBaseUrl,
       refAudioPath: cfg.ttsGptsovitsRefAudioPath,
       promptText: cfg.ttsGptsovitsPromptText,
+      version: cfg.ttsGptsovitsVersion,
+      gptWeightsPath: cfg.ttsGptsovitsGptWeightsPath,
+      sovitsWeightsPath: cfg.ttsGptsovitsSovitsWeightsPath,
+      textSplitMethod: cfg.ttsGptsovitsTextSplitMethod,
+      topK: cfg.ttsGptsovitsTopK,
+      topP: cfg.ttsGptsovitsTopP,
+      temperature: cfg.ttsGptsovitsTemperature,
+      repetitionPenalty: cfg.ttsGptsovitsRepetitionPenalty,
+      sampleSteps: cfg.ttsGptsovitsSampleSteps,
       endpointUrl: cfg.ttsCustomCloudEndpointUrl,
       timeoutMs: cfg.ttsCustomCloudTimeoutMs,
       voiceAudioPath: cfg.ttsMimoVoiceAudioPath,
@@ -2168,7 +2317,7 @@ function initializeProactiveChatService(): void {
     // 去重护栏数据源：普通会话与主动会话各自最后一条 assistant 文本（仅上一条，误杀最小）。
     getRecentTextsForDedup: () => {
       const { ordinary, proactive } = getProactiveHistories();
-      const lastModel = (turns: { role: "user" | "model"; content: string }[]): string | undefined =>
+      const lastModel = (turns: ProactiveHistoryTurn[]): string | undefined =>
         [...turns].reverse().find((turn) => turn.role === "model")?.content;
       return [lastModel(ordinary), lastModel(proactive)]
         .filter((text): text is string => typeof text === "string" && text.trim().length > 0);
@@ -2706,16 +2855,21 @@ function createWindow(): void {
   // 注入 ASR 配置获取器（通话功能用，实时读 GeneralSettings）
   setAsrConfig(() => {
     const s = loadGeneralSettings();
-    if (s.asrEngine !== "aliyun") return null;
-    return { appKey: s.asrAliyunAppKey, accessKeyId: s.asrAliyunAccessKeyId, accessKeySecret: s.asrAliyunAccessKeySecret, language: s.asrLanguage, engine: s.asrEngine };
+    if (s.asrEngine === "off") return null;
+    return {
+      appKey: s.asrAliyunAppKey,
+      accessKeyId: s.asrAliyunAccessKeyId,
+      accessKeySecret: s.asrAliyunAccessKeySecret,
+      language: s.asrLanguage,
+      engine: s.asrEngine,
+      localProfile: s.asrLocalProfile,
+      hotwords: s.asrHotwords,
+    };
   });
 
   // 注入通话模型/TTS 配置获取器
   setCallSettings(
-    () => {
-      const s = loadModelSettings();
-      return { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey };
-    },
+    resolveCallModelConfig,
     () => {
       const s = loadGeneralSettings();
       return {
@@ -2727,6 +2881,15 @@ function createWindow(): void {
         ttsGptsovitsRefAudioPath: s.ttsGptsovitsRefAudioPath,
         ttsGptsovitsPromptText: s.ttsGptsovitsPromptText,
         ttsGptsovitsFormat: s.ttsGptsovitsFormat,
+        ttsGptsovitsVersion: s.ttsGptsovitsVersion,
+        ttsGptsovitsGptWeightsPath: s.ttsGptsovitsGptWeightsPath,
+        ttsGptsovitsSovitsWeightsPath: s.ttsGptsovitsSovitsWeightsPath,
+        ttsGptsovitsTextSplitMethod: s.ttsGptsovitsTextSplitMethod,
+        ttsGptsovitsTopK: s.ttsGptsovitsTopK,
+        ttsGptsovitsTopP: s.ttsGptsovitsTopP,
+        ttsGptsovitsTemperature: s.ttsGptsovitsTemperature,
+        ttsGptsovitsRepetitionPenalty: s.ttsGptsovitsRepetitionPenalty,
+        ttsGptsovitsSampleSteps: s.ttsGptsovitsSampleSteps,
         ttsCustomCloudEndpointUrl: s.ttsCustomCloudEndpointUrl,
         ttsCustomCloudApiKey: s.ttsCustomCloudApiKey,
         ttsCustomCloudVoiceId: s.ttsCustomCloudVoiceId,
@@ -2737,71 +2900,106 @@ function createWindow(): void {
         ttsMimoStylePrompt: s.ttsMimoStylePrompt,
       };
     },
-    // 通话专用 system prompt 构建器（时间+常驻+记忆+phone人设+skill+语气，不要环境上下文）
+    // 通话专用 system prompt 构建器（时间+常驻+记忆+生活+phone人设+语气，不要环境上下文）
     async (userText: string) => {
       const messages = [{ role: "user" as const, content: userText }];
 
       // ① 时间日期
       const now = new Date();
-      const timeStr = `当前时间：${now.toLocaleDateString("zh-CN")} ${now.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}`;
+      const profile = loadUserProfile();
+      const contextTimezone = resolveChatContextTimezone(resolveUserTimezone(profile));
+      const timeStr = `[当前时间] ${formatLocalTime(now.getTime(), contextTimezone)}（仅供你感知当下时刻，不要复述）`;
 
       // ② 常驻上下文（世界书 + L0/L1 画像）
       let alwaysOnContext = "";
-      try { alwaysOnContext = await buildAlwaysOnContext(userText, messages); } catch { /* ignore */ }
+      try { alwaysOnContext = await buildAlwaysOnContext(userText, messages, { trackState: false }); } catch { /* ignore */ }
 
       // ③ 记忆注入
       let memoryInjection = "";
-      try { memoryInjection = await buildMemoryInjection(userText); } catch { /* ignore */ }
+      try { memoryInjection = await buildMemoryInjection(userText, { trackState: false }); } catch { /* ignore */ }
 
-      // ④ 通话专用人设 prompt
+      // ④ 最近 Chat/Collab/Proactive 会话的短期背景（严格只读，不改变条目状态）
+      let socialContextBlock = "";
+      if (loadGeneralSettings().socialContextEnabled) {
+        const conversationId = findLatestChatContextSessionId(chatsStore.listSessions());
+        if (conversationId) {
+          try {
+            const atoms = await retrieveSocialContextReadOnly(conversationId, userText, getEmbeddingProvider());
+            socialContextBlock = buildSocialContextBlock(atoms, contextTimezone);
+          } catch { /* ignore */ }
+        }
+      }
+
+      // ⑤ 昔涟自己的生活（只读上下文）
+      let lifeContext = "";
+      try { lifeContext = buildLifeContext(now, app.getPath("userData")).trim(); } catch { /* ignore */ }
+
+      // ⑥ 通话专用人设 prompt
       const phoneParts: string[] = [];
       const phoneSystem = loadPromptFile("phone_system.md");
       if (phoneSystem) phoneParts.push(phoneSystem);
       const phoneIdentity = loadPromptFile("phone_identity.md");
       if (phoneIdentity) phoneParts.push(phoneIdentity);
       const soul = loadPromptFile("soul.md");
-      if (soul) phoneParts.push(soul);
+      if (soul) phoneParts.push(trimSoulForCall(soul));
       const canon = loadPromptFile("canon_quotes.md");
       if (canon) phoneParts.push(canon);
       const phoneStyle = loadPromptFile("phone_style.md");
       if (phoneStyle) phoneParts.push(phoneStyle);
       const phonePrompt = phoneParts.join("\n\n---\n\n");
 
-      // ⑤ Skill 约束
-      const skillCatalog = buildSkillCatalog(skillRegistry.getEnabled());
-      const skillActivation = resolveSlashActivation(messages);
-
-      // ⑥ 语气注入
+      // ⑦ 语气注入
       let toneInjection = "";
       const sceneProvider = getSceneEmbeddingProvider();
       if (sceneProvider && sceneEmbeddingIndex) {
         try { toneInjection = await buildToneInjection(userText, messages, sceneProvider, sceneEmbeddingIndex); } catch { /* ignore */ }
       }
 
-      return timeStr + "\n\n" +
-        (alwaysOnContext ? alwaysOnContext + "\n\n" : "") +
-        (memoryInjection ? memoryInjection + "\n\n" : "") +
-        phonePrompt +
-        (skillCatalog ? "\n\n---\n\n" + skillCatalog : "") +
-        skillActivation +
-        toneInjection;
-    },
-    // 天气快捷处理：正则匹配到天气关键词 → 调 weather 工具的 execute
-    async (userText: string) => {
-      try {
-        const weatherTool = toolRegistry.getById("weather");
-        if (!weatherTool) return null;
-        // 提取城市名（简单匹配：XX天气 / XX的天气）
-        const cityMatch = userText.match(/([北京上海广州深圳成都杭州南京武汉西安重庆天津苏州长沙郑州青岛大连沈阳哈尔滨长春济南太原合肥南昌福州昆明贵阳拉萨乌鲁木齐呼和浩特]+)/);
-        const city = cityMatch?.[1] ?? "";
-        const result = await weatherTool.execute({ city }, undefined);
-        return result;
-      } catch (err) {
-        console.warn("[Call] 天气查询失败:", err);
-        return null;
-      }
+      return {
+        system: timeStr + "\n\n" +
+          (alwaysOnContext ? alwaysOnContext + "\n\n" : "") +
+          (memoryInjection ? memoryInjection + "\n\n" : "") +
+          (socialContextBlock ? socialContextBlock + "\n\n" : "") +
+          (lifeContext ? lifeContext + "\n\n" : "") +
+          phonePrompt +
+          toneInjection,
+        tailAnchor: loadPromptFile("tone-anchor.md").trim() || undefined,
+        toolSystem: buildToolSystemPrompt(
+          toolRegistry.getById("weather")?.enabled
+            ? [toolRegistry.getById("weather")!]
+            : [],
+        ),
+      };
     },
   );
+
+  // 通话结束回调：往聊天会话插入通话消息（用户侧气泡，content 为空不参与 LLM 上下文）。
+  // 插入"通话启动时使用的会话窗口"（通话启动时快照），没有则用主动会话窗口。
+  setCallEndedCallback((event) => {
+    const sessionId = callStartedChatSessionId
+      ?? chatsStore.getSessionByPurpose("proactive-chat")?.id
+      ?? null;
+    callStartedChatSessionId = null;
+    if (!sessionId) return;
+    const callMessage: ChatMessage = {
+      id: randomUUID(),
+      role: "user",
+      content: "",
+      at: event.startedAt,
+      callEvent: {
+        callId: event.id,
+        startedAt: event.startedAt,
+        endedAt: event.endedAt,
+        summary: event.summary,
+      },
+    };
+    const updated = chatsStore.appendMessage(sessionId, callMessage);
+    if (!updated) return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try { win.webContents.send(IPC.CHATS_CHANGED); } catch { /* ignore */ }
+    }
+  });
 
   // 注入子代理 LLM 配置（delegate_task 工具用，复用主模型配置）
   setDelegateSettings(() => {
@@ -3574,6 +3772,10 @@ ipcMain.handle(IPC.SETTINGS_GET_WORK_CONFIG, () => {
   return loadWorkModelSettings();
 });
 
+ipcMain.handle(IPC.SETTINGS_GET_CALL_CONFIG, () => {
+  return loadCallModelSettings();
+});
+
 ipcMain.handle(IPC.SETTINGS_GET_GENERAL, () => {
   return loadGeneralSettings();
 });
@@ -3943,6 +4145,9 @@ ipcMain.handle(IPC.USER_SAVE_PROFILE, (_event, profile: Partial<UserProfile>) =>
 ipcMain.handle(IPC.SETTINGS_SAVE_WORK_CONFIG, (_event, settings: Partial<WorkModelSettings>) => {
   return saveWorkModelSettings(settings);
 });
+ipcMain.handle(IPC.SETTINGS_SAVE_CALL_CONFIG, (_event, settings: Partial<CallModelSettings>) => {
+  return saveCallModelSettings(settings);
+});
 ipcMain.handle(IPC.LOCATION_UPDATE, (_event, location: unknown) => {
   const saved = saveLocation(location);
   return saved ? { ok: true, location: saved } : { ok: false, error: "invalid-location" };
@@ -4045,13 +4250,31 @@ app.whenReady().then(async () => {
       return false;
     }
   };
+  const isTrustedAudioRequester = (webContents: WebContents | null, urlString: string): boolean => {
+    if (!webContents || !isTrustedLocationRequester(urlString)) return false;
+    return webContents === settingsWindow?.webContents || webContents === callWindow?.webContents;
+  };
   session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
-    if (permission !== "geolocation" || !webContents) return false;
-    return isTrustedLocationRequester(details.requestingUrl ?? requestingOrigin ?? webContents.getURL());
+    if (!webContents) return false;
+    const requestingUrl = details.requestingUrl ?? requestingOrigin ?? webContents.getURL();
+    if (permission === "geolocation") return isTrustedLocationRequester(requestingUrl);
+    if (permission === "media") {
+      return isTrustedAudioRequester(webContents, requestingUrl) && isAudioMediaCheck(details.mediaType);
+    }
+    return false;
   });
   session.defaultSession.setPermissionRequestHandler((webContents, permission, callback, details) => {
     const requestingUrl = details.requestingUrl ?? webContents.getURL();
-    callback(permission === "geolocation" && isTrustedLocationRequester(requestingUrl));
+    if (permission === "geolocation") {
+      callback(isTrustedLocationRequester(requestingUrl));
+      return;
+    }
+    if (permission === "media") {
+      const mediaTypes = "mediaTypes" in details ? details.mediaTypes : undefined;
+      callback(isTrustedAudioRequester(webContents, requestingUrl) && isAudioOnlyMediaRequest(mediaTypes));
+      return;
+    }
+    callback(false);
   });
   // 注册 local-sticker:// 协议处理器：将请求映射到 userData/stickers/ 下的文件
   protocol.handle("local-sticker", (request) => {
@@ -4206,6 +4429,24 @@ app.whenReady().then(async () => {
     });
     if (result.canceled || result.filePaths.length === 0) return null;
     return result.filePaths[0];
+  });
+
+  ipcMain.handle(IPC.TTS_PICK_GPT_WEIGHT, async () => {
+    const result = await dialog.showOpenDialog({
+      title: "选择 GPT 权重",
+      filters: [{ name: "GPT 权重", extensions: ["ckpt"] }],
+      properties: ["openFile"],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
+  ipcMain.handle(IPC.TTS_PICK_SOVITS_WEIGHT, async () => {
+    const result = await dialog.showOpenDialog({
+      title: "选择 SoVITS 权重",
+      filters: [{ name: "SoVITS 权重", extensions: ["pth", "ckpt"] }],
+      properties: ["openFile"],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
   });
 
   // 音色快速复刻 → voice_id
@@ -4378,18 +4619,16 @@ app.whenReady().then(async () => {
   });
 
   // GPT-SoVITS 语音合成 → base64 音频（测试发音用，不缓存）
-  ipcMain.handle(IPC.TTS_SYNTHESIZE_GPTSOVITS, async (_event, payload: {
-    baseUrl: string; refAudioPath: string; promptText: string; text: string;
-    speed?: number; format?: "wav" | "mp3";
-  }) => {
+  ipcMain.handle(IPC.TTS_SYNTHESIZE_GPTSOVITS, async (_event, payload: GptsovitsSynthesizeRequest) => {
     if (!payload?.baseUrl || !payload?.refAudioPath || !payload?.promptText || !payload?.text) {
       throw new Error("缺少必要参数（baseUrl/refAudioPath/promptText/text）");
     }
+    const request = resolveGptsovitsRequest(payload);
     const result = await gptsovitsSynthesize({
-      ...payload,
+      ...request,
       debugLog: appendGptsovitsTtsLog,
     });
-    const cacheKey = buildGptsovitsCacheKey(payload);
+    const cacheKey = buildGptsovitsCacheKey(request);
     return {
       base64: result.audio.toString("base64"),
       cacheKey,
@@ -4399,9 +4638,7 @@ app.whenReady().then(async () => {
   });
 
   // GPT-SoVITS 语音合成 + 本地缓存（聊天朗读用）
-  ipcMain.handle(IPC.TTS_SYNTHESIZE_CACHED_GPTSOVITS, async (_event, payload: {
-    baseUrl: string; refAudioPath: string; promptText: string; text: string;
-    speed?: number; format?: "wav" | "mp3";
+  ipcMain.handle(IPC.TTS_SYNTHESIZE_CACHED_GPTSOVITS, async (_event, payload: GptsovitsSynthesizeRequest & {
     expectedCacheKey?: string;
   }) => {
     const format: "wav" | "mp3" = payload.format ?? "wav";
@@ -4436,16 +4673,13 @@ app.whenReady().then(async () => {
       throw new Error("缓存未命中且缺少必要参数（baseUrl/refAudioPath/promptText/text）");
     }
 
-    const cacheKey = buildGptsovitsCacheKey(payload);
+    const request = resolveGptsovitsRequest(payload);
+    const cacheKey = buildGptsovitsCacheKey(request);
     const audioPath = getTtsCachePath(cacheKey, format);
     fs.mkdirSync(path.dirname(audioPath), { recursive: true });
 
     const result = await gptsovitsSynthesize({
-      baseUrl: payload.baseUrl,
-      refAudioPath: payload.refAudioPath,
-      promptText: payload.promptText,
-      text: payload.text,
-      speed: payload.speed,
+      ...request,
       format,
       debugLog: appendGptsovitsTtsLog,
     });
@@ -5135,6 +5369,15 @@ app.whenReady().then(async () => {
         baseUrl: cfg.ttsGptsovitsBaseUrl,
         refAudioPath: cfg.ttsGptsovitsRefAudioPath,
         promptText: cfg.ttsGptsovitsPromptText,
+        version: cfg.ttsGptsovitsVersion,
+        gptWeightsPath: cfg.ttsGptsovitsGptWeightsPath,
+        sovitsWeightsPath: cfg.ttsGptsovitsSovitsWeightsPath,
+        textSplitMethod: cfg.ttsGptsovitsTextSplitMethod,
+        topK: cfg.ttsGptsovitsTopK,
+        topP: cfg.ttsGptsovitsTopP,
+        temperature: cfg.ttsGptsovitsTemperature,
+        repetitionPenalty: cfg.ttsGptsovitsRepetitionPenalty,
+        sampleSteps: cfg.ttsGptsovitsSampleSteps,
         // custom-cloud
         endpointUrl: cfg.ttsCustomCloudEndpointUrl,
         timeoutMs: cfg.ttsCustomCloudTimeoutMs,
@@ -5277,6 +5520,11 @@ app.whenReady().then(async () => {
     loadToneAnchor: () => loadPromptFile("tone-anchor.md"),
     // [你的生活] 拟态日程：按日期确定性生成，异常时返回空串=不启用。
     buildLifeContext: () => buildLifeContext(new Date(), app.getPath("userData")),
+    isSocialContextEnabled: () => loadGeneralSettings().socialContextEnabled,
+    getSocialEmbeddingProvider: () => getEmbeddingProvider(),
+    retrieveSocialContext,
+    getCallContextEvents: loadCallContextEvents,
+    isProactiveConversation: (conversationId) => chatsStore.getSession(conversationId)?.purpose === "proactive-chat",
     captionImageForFallback: async (filePath: string) => {
       const validated = validateCaptionImagePath(filePath);
       if (!validated.ok) return { ok: false, error: validated.error };
@@ -5323,11 +5571,26 @@ app.whenReady().then(async () => {
       observeRuntimeState(settings as any, history as any, userText, reply)) as OnRunFinishedDeps["observeRuntimeState"],
     recordRelationshipTurn,
     getChatWindow: () => chatWindow,
+    scheduleSocialContextWrite: (context, assistantText, settings) => {
+      void enqueueLLMTask("聊天上下文增强", () => extractAndStoreSocialContext(
+        context,
+        assistantText,
+        {
+          provider: settings.provider,
+          baseUrl: settings.baseUrl,
+          model: settings.model,
+          apiKey: settings.apiKey,
+          explicitTransport: settings.explicitTransport,
+        },
+      )).catch((err) => console.warn("[SocialContext] extraction failed:", err instanceof Error ? err.message : String(err)));
+    },
   };
   registerAgUiIpc(
     async (input: AguiRunInput) => buildAgentRunOptions(input, buildOptionsDeps),
     // 桌面 IPC 路径不消费 sticker（sticker 由 onAgentRunFinished 内部 IPC 广播承担）
-    async (result, latestUserText) => { await onAgentRunFinished(result, latestUserText, onRunFinishedDeps); },
+    async (result, latestUserText, memoryContextText) => {
+      await onAgentRunFinished(result, latestUserText, onRunFinishedDeps, undefined, memoryContextText);
+    },
     () => chatWindow,
     proactiveConversationLifecycle,
   );
@@ -5359,6 +5622,13 @@ app.whenReady().then(async () => {
   registerPermissionIpc();
   registerChoiceIpc();
   registerCallIpc();
+    // 通话启动时快照活跃会话 id，供通话结束后插入通话消息使用。
+    // 多个 ipcMain.on handler 都会执行，call-manager 的 handler 调 startCall()，本 handler 只记录。
+    // 只在通话未在进行中时记录——避免通话期间重复按通话按钮覆盖快照。
+    ipcMain.on(IPC.CALL_START, () => {
+      if (!isCallActive()) callStartedChatSessionId = activeChatSessionId;
+    });
+  registerAsrTestIpc(isCallActive);
   console.log("[Cyrene] 当前 agent 权限档位:", getCurrentLevel());
   try {
     const modelSettings = loadModelSettings();
@@ -5389,6 +5659,7 @@ app.on("before-quit", () => {
   petWindowMoveController.dispose();
   schedulerEngine?.stop();
   stopOpener();
+  stopAsrTest();
   flushTokenUsage();
   void shutdownChannels();
 });

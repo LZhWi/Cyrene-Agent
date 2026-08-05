@@ -57,6 +57,22 @@ describe("buildMemoryInjection", () => {
     expect(ragMock.searchMemoryEntries).toHaveBeenCalledWith("跑步", "user_memory", 5)
   })
 
+  it("can retrieve memory without changing recent-injection state", async () => {
+    ragMock.searchMemoryEntries.mockResolvedValue([{
+      id: "rag_phone",
+      text: "用户喜欢散步",
+      createdAt: Date.now(),
+      score: 0.8,
+      metadata: { l2Id: "l2_phone" },
+    }])
+    const { buildMemoryInjection } = await import("./index")
+
+    const context = await buildMemoryInjection("散步", { trackState: false })
+
+    expect(context).toContain("用户喜欢散步")
+    expect(wasRecentlyInjectedMemory("l2_phone")).toBe(false)
+  })
+
   it("annotates aging and conflicted memories with citation guidance", async () => {
     ragMock.searchMemoryEntries.mockResolvedValue([
       { id: "rag_a", text: "用户喜欢冰淇淋", createdAt: Date.now(), score: 0.9, metadata: { l2Id: "l2_a" } },
@@ -124,5 +140,18 @@ describe("buildAlwaysOnContext", () => {
     )
 
     expect(ragMock.updateWorldbookActivation).toHaveBeenCalledWith("请总结这个文档", "")
+  })
+
+  it("can read active worldbook context without updating activation or stale cascade", async () => {
+    ragMock.getActiveWorldbookEntries.mockReturnValue(["【当前条目】\n内容"])
+    ragMock.getCascadeWorldbookEntries.mockReturnValue(["【残留联动】\n不应注入"])
+    const { buildAlwaysOnContext } = await import("./index")
+
+    const context = await buildAlwaysOnContext("通话内容", [], { trackState: false })
+
+    expect(ragMock.updateWorldbookActivation).not.toHaveBeenCalled()
+    expect(ragMock.getCascadeWorldbookEntries).not.toHaveBeenCalled()
+    expect(context).toContain("当前条目")
+    expect(context).not.toContain("残留联动")
   })
 })

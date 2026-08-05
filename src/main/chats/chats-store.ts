@@ -275,7 +275,10 @@ export function deleteMessageRound(id: string, messageId: string): ChatSession |
   let end = index + 1;
 
   const target = session.messages[index];
-  if (target.role === "model" && index > 0 && session.messages[index - 1].role === "user") {
+  // 通话消息（callEvent 标记）是独立事件记录，不是对话轮次，删除时不连带相邻消息。
+  if (target.callEvent) {
+    // 只删通话消息本身
+  } else if (target.role === "model" && index > 0 && session.messages[index - 1].role === "user") {
     start = index - 1;
   } else if (target.role === "user" && index + 1 < session.messages.length && session.messages[index + 1].role === "model") {
     end = index + 2;

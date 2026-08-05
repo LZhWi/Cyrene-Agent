@@ -22,6 +22,7 @@ export { runFunctionCallingLoop } from "./function-calling";
  */
 export async function buildMemoryInjection(
   userInput: string,
+  options: { trackState?: boolean } = {},
 ): Promise<string> {
   const parts: string[] = [];
 
@@ -29,7 +30,9 @@ export async function buildMemoryInjection(
     // 检索 top-3 L2 用户记忆
     const userMemoryEntries = await searchMemoryEntries(userInput, "user_memory", 5);
     if (userMemoryEntries.length > 0) {
-      recordRecentMemorySearchEntries(userMemoryEntries);
+      if (options.trackState !== false) {
+        recordRecentMemorySearchEntries(userMemoryEntries);
+      }
       // 按数据信号分档措辞：冲突条目需求证；aging（久未提及）条目用不确定语气；active 正常引用
       const allL2 = await memoryStore.getAllL2();
       const l2ById = new Map(allL2.map((l) => [l.id, l]));
@@ -106,6 +109,7 @@ function getWorldbookTriggerText(userInput: string): string {
 export async function buildAlwaysOnContext(
   userInput: string,
   recentMessages: Array<{ role: string; content: string }>,
+  options: { trackState?: boolean } = {},
 ): Promise<string> {
   const parts: string[] = [];
 
@@ -118,13 +122,16 @@ export async function buildAlwaysOnContext(
       parts.push("【常驻背景】\n" + permanentWb.join("\n\n"));
     }
 
-    const lastAssistant = recentMessages
-      .filter(m => m.role === "assistant")
-      .slice(-1)[0]?.content ?? "";
-    updateWorldbookActivation(getWorldbookTriggerText(userInput), lastAssistant);  // 打分（本轮用户 + 上轮模型）
+    if (options.trackState !== false) {
+      const lastAssistant = recentMessages
+        .filter(m => m.role === "assistant")
+        .slice(-1)[0]?.content ?? "";
+      updateWorldbookActivation(getWorldbookTriggerText(userInput), lastAssistant);  // 打分（本轮用户 + 上轮模型）
+    }
     const active = getActiveWorldbookEntries();           // 阈值门控 + 注入
     // One-Shot cascade：用户命中后连带触发的条目（不入 DMAE 状态表，只本轮有效）
-    const cascade = getCascadeWorldbookEntries();
+    // 只读调用不能复用其他管线上一轮遗留的 cascade。
+    const cascade = options.trackState === false ? [] : getCascadeWorldbookEntries();
     const allInjected = active.length > 0 || cascade.length > 0;
     if (allInjected) {
       const sections: string[] = [];

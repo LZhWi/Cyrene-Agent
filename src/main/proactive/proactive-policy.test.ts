@@ -53,6 +53,8 @@ describe("proactive hard policy", () => {
 
   it("blocks inactive nights but allows a recently active night", () => {
     const state = createDefaultProactiveState();
+    expect(canStartProactiveGeneration(snapshot({ localHour: 22, idleSec: 600 }), state, candidate()).allowed)
+      .toBe(true);
     expect(canStartProactiveGeneration(snapshot({ localHour: 23, idleSec: 60 }), state, candidate()).reason)
       .toBe("night_inactive");
     expect(canStartProactiveGeneration(snapshot({ localHour: 7, idleSec: 59 }), state, candidate()).allowed)

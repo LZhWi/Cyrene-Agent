@@ -19,6 +19,8 @@ import type { ChatMessage } from "../../shared/chat-types";
 import * as chatsStore from "./chats-store";
 import { loadState as loadOpenerState, saveState as saveOpenerState } from "../opener/desire-engine";
 import { rollbackLastProactive } from "../proactive/proactive-policy";
+import { deleteSocialContextByTurnIds, deleteSocialContextForConversation } from "../social-context";
+import { deleteCallContextEvent } from "../call/call-context-store";
 
 function broadcastChanged(senderWebContents?: WebContents | null): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -101,7 +103,10 @@ export function registerChatsIpc(): void {
   ipcMain.handle(IPC.CHATS_DELETE, (event, id: string) => {
     if (!id) return false;
     const ok = chatsStore.deleteSession(id);
-    if (ok) broadcastChanged(event.sender);
+    if (ok) {
+      deleteSocialContextForConversation(id);
+      broadcastChanged(event.sender);
+    }
     return ok;
   });
 
@@ -122,6 +127,15 @@ export function registerChatsIpc(): void {
 
       const session = chatsStore.deleteMessageRound(payload.id, payload.messageId);
       if (session) {
+        const remainingIds = new Set(session.messages.map((message) => message.id));
+        const deletedMessages = beforeSession?.messages.filter((message) => !remainingIds.has(message.id)) ?? [];
+        const deletedTurnIds = deletedMessages.map((message) => message.id);
+        deleteSocialContextByTurnIds(payload.id, deletedTurnIds);
+        // 通话消息删除联动：从 call-context-store 移除对应事件，
+        // 这样 LLM 上下文（callContextBlock）也不会再注入这条通话梗概。
+        for (const deleted of deletedMessages) {
+          if (deleted.callEvent) deleteCallContextEvent(deleted.callEvent.callId);
+        }
         broadcastChanged(event.sender);
 
         // 删除的是 proactive-chat 会话中最后一条未回复的 AI 主动消息时，

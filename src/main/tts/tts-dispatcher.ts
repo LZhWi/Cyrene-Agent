@@ -5,9 +5,9 @@ import { synthesize as minimaxSynthesize } from "./minimax-engine";
 import { synthesize as gptsovitsSynthesize } from "./gptsovits-engine";
 import { synthesize as customCloudSynthesize } from "./custom-cloud-engine";
 import { synthesize as mimoSynthesize } from "./mimo-engine";
-import type { TtsEngine } from "../../shared/tts-types";
+import type { GptsovitsAdvancedOptions, TtsEngine } from "../../shared/tts-types";
 
-export interface SynthesizeByEnginePayload {
+export interface SynthesizeByEnginePayload extends GptsovitsAdvancedOptions {
   text: string;
   speed?: number;
   volume?: number;
@@ -69,6 +69,15 @@ export async function synthesizeByEngine(
       text: payload.text,
       speed: payload.speed,
       format: payload.format ?? "wav",
+      version: payload.version,
+      gptWeightsPath: payload.gptWeightsPath,
+      sovitsWeightsPath: payload.sovitsWeightsPath,
+      textSplitMethod: payload.textSplitMethod,
+      topK: payload.topK,
+      topP: payload.topP,
+      temperature: payload.temperature,
+      repetitionPenalty: payload.repetitionPenalty,
+      sampleSteps: payload.sampleSteps,
     });
     return { audio: result.audio, format: result.format };
   }

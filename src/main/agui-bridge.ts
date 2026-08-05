@@ -29,6 +29,8 @@ export interface AguiRunInput {
   /** 外部渠道入口。桌面聊天不传；微信/飞书用于注入渠道语气规则。 */
   channel?: RelationshipChannel;
   /** 本轮附件（文本内容，临时注入系统上下文，不存历史）。 */
+  userTurnId?: string;
+  assistantTurnId?: string;
   attachments?: { name: string; text: string }[];
   /** 本轮图片附件。主进程会安全读取并转成 OpenAI-compatible image_url content block。 */
   imageAttachments?: { name: string; filePath: string; mime?: string }[];
@@ -39,10 +41,16 @@ export type BuildOptionsFn = (input: AguiRunInput) => Promise<{
   options: CyreneRunOptions;
   /** 跑完后副作用需要的信息。 */
   latestUserText: string;
+  /** 仅供 MemoryJudge 的额外上下文，不参与其他聊天副作用。 */
+  memoryContextText?: string;
 }>;
 
 /** 调用方注入：agent 跑完后的副作用（记忆/sticker/表情/广播）。 */
-export type OnRunFinishedFn = (result: CyreneRunResult, latestUserText: string) => Promise<void> | void;
+export type OnRunFinishedFn = (
+  result: CyreneRunResult,
+  latestUserText: string,
+  memoryContextText?: string,
+) => Promise<void> | void;
 
 /** 调用方注入：拿聊天窗口（广播副作用用，可空）。 */
 export type GetChatWindowFn = () => { webContents: WebContents; isDestroyed(): boolean } | null;
@@ -90,7 +98,7 @@ export function registerAgUiIpc(
       lifecycle?.onConversationEnded();
       throw error;
     }
-    const { options, latestUserText } = built;
+    const { options, latestUserText, memoryContextText } = built;
 
     const threadId = `thread-${Date.now()}`;
     const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -147,7 +155,7 @@ export function registerAgUiIpc(
         activeRuns.delete(runId);
         try {
           if (agent.lastResult) {
-            await onFinished(agent.lastResult, latestUserText);
+            await onFinished(agent.lastResult, latestUserText, memoryContextText);
             // 历史召回用：把这轮对话存入向量库（异步，不阻塞，失败不影响主流程）
             // 放在 onFinished 之后，确保记忆/sticker 等副作用先跑完
             void indexConversationTurn(

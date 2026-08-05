@@ -27,6 +27,8 @@ import { buildAppearanceSettingsPatch } from "./appearance-settings-state";
 import { requestTrackPlayback } from "./music-playback";
 import { type ReasoningPreference } from "../../shared/reasoning";
 import type { WorkModelSettings } from "../../shared/work-types";
+import type { CallModelSettings } from "../../shared/call-types";
+import type { GptsovitsSynthesizeRequest } from "../../shared/tts-types";
 import { type LoginFlowState } from "../../shared/music-types";
 import {
   deriveNeteaseViewState,
@@ -317,6 +319,7 @@ interface GeneralSettings {
   proactiveChatMode: ProactiveChatMode;
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
   proactiveFeedbackEnabled: boolean;
+  socialContextEnabled: boolean;
 }
 
 interface UserApi {
@@ -382,6 +385,16 @@ interface SettingsApi {
   saveConfig: (config: Partial<ModelSettings>) => Promise<ModelSettings>;
   getWorkConfig: () => Promise<WorkModelSettings>;
   saveWorkConfig: (config: Partial<WorkModelSettings>) => Promise<WorkModelSettings>;
+  getCallConfig: () => Promise<CallModelSettings>;
+  saveCallConfig: (config: Partial<CallModelSettings>) => Promise<CallModelSettings>;
+  asrTestStart: () => Promise<{ ok: boolean; error?: string }>;
+  asrTestSendAudioFrame: (frame: ArrayBuffer) => void;
+  asrTestFlush: () => void;
+  asrTestTurnEnd: () => Promise<{ ok: boolean; error?: string }>;
+  asrTestStop: () => Promise<boolean>;
+  onAsrTestState: (callback: (data: { state: string; message?: string }) => void) => () => void;
+  onAsrTestResult: (callback: (data: { partial?: string; final?: string }) => void) => () => void;
+  onAsrTestError: (callback: (data: { message: string }) => void) => () => void;
   getGeneral: () => Promise<GeneralSettings>;
   saveGeneral: (config: Partial<GeneralSettings>) => Promise<GeneralSettings>;
   pickUiFont: () => Promise<string | null>;
@@ -546,6 +559,32 @@ if (!window.settings) {
         stickerSize: "standard",
       }),
     saveConfig: (c) => Promise.resolve(c as ModelSettings),
+    getWorkConfig: () => Promise.resolve({
+      schemaVersion: 2,
+      provider: "DeepSeek",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-pro",
+      apiKey: "",
+      perProvider: {},
+    }),
+    saveWorkConfig: (c) => Promise.resolve(c as WorkModelSettings),
+    getCallConfig: () => Promise.resolve({
+      schemaVersion: 1,
+      provider: "DeepSeek",
+      baseUrl: "https://api.deepseek.com",
+      model: "deepseek-v4-pro",
+      apiKey: "",
+      perProvider: {},
+    }),
+    saveCallConfig: (c) => Promise.resolve(c as CallModelSettings),
+    asrTestStart: () => Promise.resolve({ ok: false, error: "ASR 测试仅在桌面应用中可用" }),
+    asrTestSendAudioFrame: () => {},
+    asrTestFlush: () => {},
+    asrTestTurnEnd: () => Promise.resolve({ ok: false }),
+    asrTestStop: () => Promise.resolve(true),
+    onAsrTestState: () => () => {},
+    onAsrTestResult: () => () => {},
+    onAsrTestError: () => () => {},
     getGeneral: () => Promise.resolve({
       musicEnabled: false,
       musicVolume: 60,
@@ -565,6 +604,7 @@ if (!window.settings) {
       proactiveChatMode: "off",
       proactiveDeliveryTarget: "local",
       proactiveFeedbackEnabled: true,
+      socialContextEnabled: false,
     }),
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
     channelsGetStatus: () => Promise.resolve({}),
@@ -695,20 +735,25 @@ const visionTestStatus = document.getElementById("vision-test-status") as HTMLEl
 
 // 渲染端内存缓存：保存每个厂商上一次填写的 baseUrl / model / apiKey
 // 切厂商时从这里读，保存时同步进去；持久化由 main 进程的 saveModelSettings 负责（perProvider 字段）。
-type ApiTarget = "chat" | "work";
+type ApiTarget = "chat" | "work" | "call";
 const providerProfileCaches: Record<ApiTarget, Record<string, ProviderProfile>> = {
   chat: {},
   work: {},
+  call: {},
 };
-let activeApiTarget: ApiTarget = window.location.hash === "#api-work" ? "work" : "chat";
+let activeApiTarget: ApiTarget = window.location.hash === "#api-work"
+  ? "work"
+  : window.location.hash === "#api-call" ? "call" : "chat";
 let chatModelConfig: ModelSettings | null = null;
 let workModelConfig: WorkModelSettings | null = null;
+let callModelConfig: CallModelSettings | null = null;
 let chatVisionDraft: ModelSettings["vision"];
 let workVisionDraft: WorkModelSettings["vision"];
-const selectedProviderByTarget: Record<ApiTarget, string> = { chat: "", work: "" };
+const selectedProviderByTarget: Record<ApiTarget, string> = { chat: "", work: "", call: "" };
 const reasoningTouchedProviders: Record<ApiTarget, Set<string>> = {
   chat: new Set(),
   work: new Set(),
+  call: new Set(),
 };
 
 function activeProviderProfileCache(): Record<string, ProviderProfile> {
@@ -744,6 +789,7 @@ const proactiveDeliveryRow = document.getElementById("proactive-delivery-row") a
 const proactiveDeliverySelect = document.getElementById("proactive-delivery-select") as HTMLElement;
 const proactiveFeedbackRow = document.getElementById("proactive-feedback-row") as HTMLElement;
 const proactiveFeedbackSelect = document.getElementById("proactive-feedback-select") as HTMLElement;
+const socialContextSelect = document.getElementById("social-context-select") as HTMLElement;
 const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
 const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputElement;
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
@@ -924,6 +970,14 @@ function applyProactiveFeedbackSelection(enabled: boolean): void {
 
 function getProactiveFeedbackValue(): boolean {
   return getOptionGroupValue(proactiveFeedbackSelect, "on") === "on";
+}
+
+function applySocialContextSelection(enabled: boolean): void {
+  applyOptionGroupValue(socialContextSelect, enabled ? "on" : "off");
+}
+
+function getSocialContextValue(): boolean {
+  return getOptionGroupValue(socialContextSelect, "off") === "on";
 }
 
 function renderProactiveDeliveryVisibility(): void {
@@ -1236,6 +1290,7 @@ function hydrateProviderProfiles(target: ApiTarget, profiles: Record<string, Pro
 }
 
 function captureVisionDraft(): void {
+  if (activeApiTarget === "call") return;
   if (!activeProvider) return;
   const draft = {
     syncWithMain: isVisionSynced(),
@@ -1244,7 +1299,7 @@ function captureVisionDraft(): void {
     model: visionModelInput.value.trim(),
   };
   if (activeApiTarget === "chat") chatVisionDraft = draft;
-  else workVisionDraft = draft;
+  else if (activeApiTarget === "work") workVisionDraft = draft;
 }
 
 function renderApiTarget(target: ApiTarget): void {
@@ -1257,16 +1312,20 @@ function renderApiTarget(target: ApiTarget): void {
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-selected", String(active));
   });
-  visionConfigSection.hidden = false;
+  visionConfigSection.hidden = target === "call";
   visionSyncMainBtn.textContent = target === "chat" ? "与主聊天模型相同" : "与 Work 主模型相同";
   visionConfigDescription.textContent = target === "chat"
     ? "配置后昔涟能看懂图片。留空则遇到图片会诚实告知看不了。"
     : "仅用于 Work 图片附件分析，不会读取或影响聊天视觉模型。";
   apiTargetNote.textContent = target === "chat"
     ? "用于 Chat、Collab、主动聊天和现有聊天相关管线。"
-    : "仅用于独立 Work 工作台，不会改变聊天和主动聊天模型。";
-  saveApiBtn.textContent = target === "chat" ? "保存聊天模型设置" : "保存 Work 模型设置";
-  const config = target === "chat" ? chatModelConfig : workModelConfig;
+    : target === "work"
+      ? "仅用于独立 Work 工作台，不会改变聊天和主动聊天模型。"
+      : "仅用于语音通话，不会读取或影响 Chat、Collab、Work 与主动聊天的模型配置。";
+  saveApiBtn.textContent = target === "chat"
+    ? "保存聊天模型设置"
+    : target === "work" ? "保存 Work 模型设置" : "保存语音通话模型设置";
+  const config = target === "chat" ? chatModelConfig : target === "work" ? workModelConfig : callModelConfig;
   const provider = selectedProviderByTarget[target] || config?.provider || "MiniMax（稀宇科技）";
   const cached = providerProfileCaches[target][provider];
   applyPreset(
@@ -1277,10 +1336,10 @@ function renderApiTarget(target: ApiTarget): void {
     cached?.displayName ?? config?.displayName,
     cached?.explicitTransport ?? config?.explicitTransport,
     cached?.reasoning ?? config?.reasoning,
-    (target === "chat" ? chatVisionDraft : workVisionDraft)
+    target !== "call" && (target === "chat" ? chatVisionDraft : workVisionDraft)
       ? { ...(target === "chat" ? chatVisionDraft : workVisionDraft)! }
       : undefined,
-    true,
+    target !== "call",
   );
   setSaveStatus("等待保存");
 }
@@ -1288,16 +1347,20 @@ function renderApiTarget(target: ApiTarget): void {
 async function loadConfig(): Promise<void> {
   try {
     fillPresetOptions();
-    const [cfg, workCfg] = await Promise.all([
+    const [cfg, workCfg, callCfg] = await Promise.all([
       window.settings!.getConfig(),
       window.settings!.getWorkConfig(),
+      window.settings!.getCallConfig(),
     ]);
     chatModelConfig = cfg;
     workModelConfig = workCfg;
+    callModelConfig = callCfg;
     selectedProviderByTarget.chat = cfg.provider;
     selectedProviderByTarget.work = workCfg.provider;
+    selectedProviderByTarget.call = callCfg.provider;
     hydrateProviderProfiles("chat", cfg.perProvider);
     hydrateProviderProfiles("work", workCfg.perProvider);
+    hydrateProviderProfiles("call", callCfg.perProvider);
     chatVisionDraft = cfg.vision;
     workVisionDraft = workCfg.vision;
     const initialApiTarget = activeApiTarget;
@@ -1344,6 +1407,7 @@ async function loadGeneralSettings(): Promise<void> {
     applyProactiveChatSelection(normalizeProactiveChatMode(cfg.proactiveChatMode));
     applyProactiveDeliverySelection(normalizeProactiveDeliveryTarget(cfg.proactiveDeliveryTarget));
     applyProactiveFeedbackSelection(cfg.proactiveFeedbackEnabled ?? true);
+    applySocialContextSelection(cfg.socialContextEnabled ?? false);
     renderProactiveDeliveryVisibility();
     void window.settings!.channelsGetStatus()
       .then((status: unknown) => renderProactiveDeliveryAvailability(status as Record<string, { phase?: string }>))
@@ -1524,6 +1588,13 @@ proactiveFeedbackSelect.querySelectorAll<HTMLButtonElement>(".option-block").for
   });
 });
 
+socialContextSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
+  button.addEventListener("click", () => {
+    applySocialContextSelection(button.dataset.value === "on");
+    setPreferencesSaveStatus("有未保存的更改");
+  });
+});
+
 preferencesForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   setPreferencesSaveStatus("保存中…");
@@ -1535,6 +1606,7 @@ preferencesForm.addEventListener("submit", async (e) => {
       proactiveChatMode: getProactiveChatValue(),
       proactiveDeliveryTarget: getProactiveDeliveryValue(),
       proactiveFeedbackEnabled: getProactiveFeedbackValue(),
+      socialContextEnabled: getSocialContextValue(),
     });
     setPreferencesSaveStatus("已保存", "is-ok");
   } catch {
@@ -1834,6 +1906,9 @@ void loadEmailConfig();
 // ── 🎧ASR 设置 ──
 const asrEngineSelect = document.getElementById("asr-engine") as HTMLSelectElement | null;
 const asrAliyunConfig = document.getElementById("asr-aliyun-config");
+const asrLocalConfig = document.getElementById("asr-local-config");
+const asrProfileCards = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-asr-profile]"));
+const asrHotwordsInput = document.getElementById("asr-hotwords") as HTMLTextAreaElement | null;
 const asrAliyunAppKeyInput = document.getElementById("asr-aliyun-app-key") as HTMLInputElement | null;
 const asrAliyunAccessKeyIdInput = document.getElementById("asr-aliyun-access-key-id") as HTMLInputElement | null;
 const asrAliyunAccessKeySecretInput = document.getElementById("asr-aliyun-access-key-secret") as HTMLInputElement | null;
@@ -1842,10 +1917,31 @@ const asrVadSilenceInput = document.getElementById("asr-vad-silence") as HTMLInp
 const asrVadThresholdInput = document.getElementById("asr-vad-threshold") as HTMLInputElement | null;
 const asrVadThresholdValue = document.getElementById("asr-vad-threshold-value");
 const asrShowTranscriptCheckbox = document.getElementById("asr-show-transcript") as HTMLInputElement | null;
+const asrTestCard = document.getElementById("asr-test-card") as HTMLElement | null;
+const asrTestToggle = document.getElementById("asr-test-toggle") as HTMLButtonElement | null;
+const asrTestClear = document.getElementById("asr-test-clear") as HTMLButtonElement | null;
+const asrTestStatus = document.getElementById("asr-test-status") as HTMLElement | null;
+const asrTestStatusText = document.getElementById("asr-test-status-text");
+const asrTestLevel = document.getElementById("asr-test-level");
+const asrTestTranscript = document.getElementById("asr-test-transcript") as HTMLElement | null;
+const asrTestEmpty = document.getElementById("asr-test-empty") as HTMLElement | null;
+const asrTestFinal = document.getElementById("asr-test-final") as HTMLElement | null;
+const asrTestPartial = document.getElementById("asr-test-partial") as HTMLElement | null;
 
 function syncAsrVisibility(): void {
   if (asrAliyunConfig) {
     (asrAliyunConfig as HTMLElement).style.display = asrEngineSelect?.value === "aliyun" ? "block" : "none";
+  }
+  if (asrLocalConfig) {
+    (asrLocalConfig as HTMLElement).style.display = asrEngineSelect?.value === "local" ? "block" : "none";
+  }
+}
+
+function setAsrLocalProfile(profile: string): void {
+  for (const card of asrProfileCards) {
+    const active = card.dataset.asrProfile === profile;
+    card.classList.toggle("is-active", active);
+    card.setAttribute("aria-checked", String(active));
   }
 }
 
@@ -1857,10 +1953,31 @@ asrEngineSelect?.addEventListener("change", () => {
 let asrAliyunAppKeyTimer: ReturnType<typeof setTimeout> | undefined;
 let asrAliyunAccessKeyIdTimer: ReturnType<typeof setTimeout> | undefined;
 let asrAliyunAccessKeySecretTimer: ReturnType<typeof setTimeout> | undefined;
+let asrHotwordsTimer: ReturnType<typeof setTimeout> | undefined;
 
 asrAliyunAppKeyInput?.addEventListener("input", () => { clearTimeout(asrAliyunAppKeyTimer); asrAliyunAppKeyTimer = setTimeout(() => void saveAsrField("asrAliyunAppKey", asrAliyunAppKeyInput.value.trim()), 800); });
 asrAliyunAccessKeyIdInput?.addEventListener("input", () => { clearTimeout(asrAliyunAccessKeyIdTimer); asrAliyunAccessKeyIdTimer = setTimeout(() => void saveAsrField("asrAliyunAccessKeyId", asrAliyunAccessKeyIdInput.value.trim()), 800); });
 asrAliyunAccessKeySecretInput?.addEventListener("input", () => { clearTimeout(asrAliyunAccessKeySecretTimer); asrAliyunAccessKeySecretTimer = setTimeout(() => void saveAsrField("asrAliyunAccessKeySecret", asrAliyunAccessKeySecretInput.value.trim()), 800); });
+for (const card of asrProfileCards) {
+  card.addEventListener("click", () => {
+    const profile = card.dataset.asrProfile;
+    if (!profile) return;
+    setAsrLocalProfile(profile);
+    void saveAsrField("asrLocalProfile", profile);
+  });
+}
+asrHotwordsInput?.addEventListener("input", () => {
+  clearTimeout(asrHotwordsTimer);
+  asrHotwordsTimer = setTimeout(() => {
+    const hotwords = asrHotwordsInput.value
+      .split(/\r?\n/)
+      .map((item) => item.trim())
+      .filter(Boolean)
+      .slice(0, 200);
+    void saveAsrField("asrHotwords", hotwords);
+  }, 500);
+});
+
 asrLanguageSelect?.addEventListener("change", () => void saveAsrField("asrLanguage", asrLanguageSelect.value));
 asrVadSilenceInput?.addEventListener("input", () => {
   void saveAsrField("asrVadSilenceMs", Number(asrVadSilenceInput.value) || 1000);
@@ -1890,6 +2007,11 @@ async function loadAsrConfig(): Promise<void> {
       if (asrAliyunAccessKeyIdInput) asrAliyunAccessKeyIdInput.value = String(cfg.asrAliyunAccessKeyId ?? "");
       if (asrAliyunAccessKeySecretInput) asrAliyunAccessKeySecretInput.value = String(cfg.asrAliyunAccessKeySecret ?? "");
       if (asrLanguageSelect) asrLanguageSelect.value = String(cfg.asrLanguage ?? "zh");
+      setAsrLocalProfile(String(cfg.asrLocalProfile ?? "paraformer-qwen17"));
+      if (asrHotwordsInput) {
+        const hotwords = Array.isArray(cfg.asrHotwords) ? cfg.asrHotwords : [];
+        asrHotwordsInput.value = hotwords.filter((item): item is string => typeof item === "string").join("\n");
+      }
       if (asrVadSilenceInput) asrVadSilenceInput.value = String(cfg.asrVadSilenceMs ?? 1000);
       if (asrVadThresholdInput) {
         const v = Number(cfg.asrVadThreshold) || 0.01;
@@ -2169,14 +2291,16 @@ presetSelect.addEventListener("change", () => {
     cached?.explicitTransport,
     cached?.reasoning,
     undefined,
-    true,
+    activeApiTarget !== "call",
   );
   setSaveStatus(cached ? "已切回上次配置" : "已应用预设，填写 API Key 后保存");
 });
 
 apiTargetSwitch.querySelectorAll<HTMLButtonElement>("[data-api-target]").forEach((button) => {
   button.addEventListener("click", () => {
-    const target = button.dataset.apiTarget === "work" ? "work" : "chat";
+    const target: ApiTarget = button.dataset.apiTarget === "work"
+      ? "work"
+      : button.dataset.apiTarget === "call" ? "call" : "chat";
     if (target !== activeApiTarget) renderApiTarget(target);
   });
 });
@@ -2187,6 +2311,225 @@ for (const select of [reasoningModeSelect, reasoningEffortSelect]) {
     setSaveStatus("有未保存的更改");
   });
 }
+
+type AsrTestUiState = "loading" | "listening" | "finalizing" | "error" | "stopped";
+let asrTestRunning = false;
+let asrTestState: AsrTestUiState = "stopped";
+let asrTestSequence = 0;
+let asrTestAudioContext: AudioContext | null = null;
+let asrTestAnalyser: AnalyserNode | null = null;
+let asrTestWorklet: AudioWorkletNode | null = null;
+let asrTestMicStream: MediaStream | null = null;
+let asrTestAnalyserData: Uint8Array | null = null;
+let asrTestVadInterval: ReturnType<typeof setInterval> | null = null;
+let asrTestSilenceTimer: ReturnType<typeof setTimeout> | null = null;
+let asrTestPartialFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let asrTestHasSpoken = false;
+let asrTestPartialFlushed = false;
+const ASR_TEST_PARTIAL_FLUSH_MS = 250;
+
+function selectedAsrProfile(): string {
+  return asrProfileCards.find((card) => card.classList.contains("is-active"))?.dataset.asrProfile
+    ?? "paraformer-qwen17";
+}
+
+function currentAsrHotwords(): string[] {
+  return (asrHotwordsInput?.value ?? "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(0, 200);
+}
+
+function setAsrTestUiState(next: AsrTestUiState, message?: string): void {
+  asrTestState = next;
+  if (asrTestStatus) asrTestStatus.dataset.state = next;
+  if (asrTestStatusText) {
+    asrTestStatusText.textContent = message ?? ({
+      loading: "正在加载所选 ASR 模式…",
+      listening: "正在监听，请开始说话",
+      finalizing: "检测到停顿，正在确认本句…",
+      error: "测试出现错误",
+      stopped: "测试已停止",
+    } satisfies Record<AsrTestUiState, string>)[next];
+  }
+}
+
+function syncAsrTestControls(): void {
+  asrTestCard?.classList.toggle("is-running", asrTestRunning);
+  if (asrTestToggle) asrTestToggle.textContent = asrTestRunning ? "停止测试" : "开始测试";
+  if (asrEngineSelect) asrEngineSelect.disabled = asrTestRunning;
+  if (asrLanguageSelect) asrLanguageSelect.disabled = asrTestRunning;
+  if (asrHotwordsInput) asrHotwordsInput.disabled = asrTestRunning;
+  if (asrAliyunAppKeyInput) asrAliyunAppKeyInput.disabled = asrTestRunning;
+  if (asrAliyunAccessKeyIdInput) asrAliyunAccessKeyIdInput.disabled = asrTestRunning;
+  if (asrAliyunAccessKeySecretInput) asrAliyunAccessKeySecretInput.disabled = asrTestRunning;
+  for (const card of asrProfileCards) card.disabled = asrTestRunning;
+}
+
+function scrollAsrTestTranscript(): void {
+  if (asrTestTranscript) asrTestTranscript.scrollTop = asrTestTranscript.scrollHeight;
+}
+
+function clearAsrTestTranscript(): void {
+  asrTestFinal?.replaceChildren();
+  if (asrTestPartial) asrTestPartial.textContent = "";
+  if (asrTestEmpty) asrTestEmpty.hidden = false;
+}
+
+function appendAsrTestFinal(text: string): void {
+  const value = text.trim();
+  if (!value || !asrTestFinal) return;
+  const line = document.createElement("div");
+  line.className = "asr-test-transcript__final";
+  line.textContent = value;
+  asrTestFinal.appendChild(line);
+  if (asrTestPartial) asrTestPartial.textContent = "";
+  if (asrTestEmpty) asrTestEmpty.hidden = true;
+  scrollAsrTestTranscript();
+}
+
+function stopAsrTestMicrophone(): void {
+  if (asrTestVadInterval) clearInterval(asrTestVadInterval);
+  if (asrTestSilenceTimer) clearTimeout(asrTestSilenceTimer);
+  if (asrTestPartialFlushTimer) clearTimeout(asrTestPartialFlushTimer);
+  asrTestVadInterval = null;
+  asrTestSilenceTimer = null;
+  asrTestPartialFlushTimer = null;
+  asrTestHasSpoken = false;
+  asrTestPartialFlushed = false;
+  try { asrTestWorklet?.disconnect(); } catch { /* already disconnected */ }
+  try { asrTestAnalyser?.disconnect(); } catch { /* already disconnected */ }
+  void asrTestAudioContext?.close().catch(() => {});
+  asrTestMicStream?.getTracks().forEach((track) => track.stop());
+  asrTestWorklet = null;
+  asrTestAnalyser = null;
+  asrTestAnalyserData = null;
+  asrTestAudioContext = null;
+  asrTestMicStream = null;
+  if (asrTestLevel) asrTestLevel.textContent = "音量 0.000";
+}
+
+function startAsrTestVad(): void {
+  asrTestVadInterval = setInterval(() => {
+    if (!asrTestAnalyser || !asrTestAnalyserData || asrTestState !== "listening") return;
+    asrTestAnalyser.getByteFrequencyData(asrTestAnalyserData);
+    let sum = 0;
+    for (const value of asrTestAnalyserData) sum += value;
+    const average = sum / asrTestAnalyserData.length / 255;
+    if (asrTestLevel) asrTestLevel.textContent = `音量 ${average.toFixed(3)}`;
+    const threshold = Number(asrVadThresholdInput?.value) || 0.01;
+    if (average >= threshold) {
+      asrTestHasSpoken = true;
+      asrTestPartialFlushed = false;
+      if (asrTestSilenceTimer) clearTimeout(asrTestSilenceTimer);
+      asrTestSilenceTimer = null;
+      if (asrTestPartialFlushTimer) clearTimeout(asrTestPartialFlushTimer);
+      asrTestPartialFlushTimer = null;
+    } else if (asrTestHasSpoken && !asrTestSilenceTimer) {
+      const silenceMs = Number(asrVadSilenceInput?.value) || 1000;
+      asrTestSilenceTimer = setTimeout(() => {
+        asrTestSilenceTimer = null;
+        asrTestHasSpoken = false;
+        asrTestPartialFlushed = false;
+        if (asrTestState === "listening") void window.settings?.asrTestTurnEnd();
+      }, silenceMs);
+      if (!asrTestPartialFlushed && !asrTestPartialFlushTimer) {
+        asrTestPartialFlushTimer = setTimeout(() => {
+          if (asrTestState === "listening") window.settings?.asrTestFlush();
+          asrTestPartialFlushTimer = null;
+          asrTestPartialFlushed = true;
+        }, Math.min(ASR_TEST_PARTIAL_FLUSH_MS, Math.max(100, silenceMs - 100)));
+      }
+    }
+  }, 100);
+}
+
+async function startAsrTestMicrophone(): Promise<void> {
+  asrTestMicStream = await navigator.mediaDevices.getUserMedia({
+    audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true },
+  });
+  asrTestAudioContext = new AudioContext({ sampleRate: 16000 });
+  await asrTestAudioContext.audioWorklet.addModule(new URL("../call/pcm-processor.js", import.meta.url));
+  const source = asrTestAudioContext.createMediaStreamSource(asrTestMicStream);
+  asrTestAnalyser = asrTestAudioContext.createAnalyser();
+  asrTestAnalyser.fftSize = 256;
+  asrTestAnalyserData = new Uint8Array(asrTestAnalyser.frequencyBinCount);
+  source.connect(asrTestAnalyser);
+  asrTestWorklet = new AudioWorkletNode(asrTestAudioContext, "pcm-processor");
+  asrTestWorklet.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+    window.settings?.asrTestSendAudioFrame(event.data);
+  };
+  source.connect(asrTestWorklet);
+  startAsrTestVad();
+}
+
+async function stopAsrTestSession(message = "测试已停止"): Promise<void> {
+  if (!asrTestRunning && asrTestState === "stopped") return;
+  asrTestSequence += 1;
+  asrTestRunning = false;
+  stopAsrTestMicrophone();
+  syncAsrTestControls();
+  await window.settings?.asrTestStop().catch(() => false);
+  setAsrTestUiState("stopped", message);
+}
+
+async function startAsrTestSession(): Promise<void> {
+  if (asrEngineSelect?.value === "off") {
+    setAsrTestUiState("error", "请先选择 ASR 服务商");
+    return;
+  }
+  const sequence = ++asrTestSequence;
+  asrTestRunning = true;
+  syncAsrTestControls();
+  setAsrTestUiState("loading");
+  try {
+    await window.tts?.saveSettings({
+      asrEngine: asrEngineSelect?.value ?? "off",
+      asrLanguage: asrLanguageSelect?.value ?? "zh",
+      asrLocalProfile: selectedAsrProfile(),
+      asrHotwords: currentAsrHotwords(),
+      asrAliyunAppKey: asrAliyunAppKeyInput?.value.trim() ?? "",
+      asrAliyunAccessKeyId: asrAliyunAccessKeyIdInput?.value.trim() ?? "",
+      asrAliyunAccessKeySecret: asrAliyunAccessKeySecretInput?.value.trim() ?? "",
+    });
+    const result = await window.settings!.asrTestStart();
+    if (sequence !== asrTestSequence) return;
+    if (!result.ok) throw new Error(result.error || "ASR 启动失败");
+    await startAsrTestMicrophone();
+    if (sequence !== asrTestSequence) stopAsrTestMicrophone();
+  } catch (error) {
+    if (sequence !== asrTestSequence) return;
+    const message = error instanceof Error ? error.message : String(error);
+    asrTestRunning = false;
+    stopAsrTestMicrophone();
+    syncAsrTestControls();
+    await window.settings?.asrTestStop().catch(() => false);
+    setAsrTestUiState("error", message);
+  }
+}
+
+asrTestToggle?.addEventListener("click", () => {
+  if (asrTestRunning) void stopAsrTestSession();
+  else void startAsrTestSession();
+});
+asrTestClear?.addEventListener("click", clearAsrTestTranscript);
+window.settings?.onAsrTestState(({ state, message }) => {
+  if (["loading", "listening", "finalizing", "error", "stopped"].includes(state)) {
+    setAsrTestUiState(state as AsrTestUiState, message);
+  }
+});
+window.settings?.onAsrTestResult(({ partial, final }) => {
+  if (typeof partial === "string" && asrTestPartial) {
+    asrTestPartial.textContent = partial;
+    if (partial.trim() && asrTestEmpty) asrTestEmpty.hidden = true;
+    scrollAsrTestTranscript();
+  }
+  if (typeof final === "string") appendAsrTestFinal(final);
+});
+window.settings?.onAsrTestError(({ message }) => {
+  setAsrTestUiState("error", message);
+});
+window.addEventListener("beforeunload", () => {
+  stopAsrTestMicrophone();
+  void window.settings?.asrTestStop();
+});
 
 // 测试连接按钮：调用厂商 adapter 的真实连接测试
 if (testConnectionBtn) {
@@ -2468,7 +2811,7 @@ apiForm.addEventListener("submit", async (e) => {
         ...common,
         vision: chatVisionDraft,
       });
-    } else {
+    } else if (activeApiTarget === "work") {
       workVisionDraft = {
         syncWithMain: isVisionSynced(),
         baseUrl: isVisionSynced() ? "" : visionBaseUrlInput.value.trim(),
@@ -2479,6 +2822,11 @@ apiForm.addEventListener("submit", async (e) => {
         schemaVersion: 2,
         ...common,
         vision: workVisionDraft,
+      });
+    } else {
+      callModelConfig = await window.settings!.saveCallConfig({
+        schemaVersion: 1,
+        ...common,
       });
     }
     setSaveStatus("已保存", "is-ok");
@@ -2649,11 +2997,17 @@ async function toggleSchedulerHistory(taskId: string, card: Element): Promise<vo
 }
 
 function switchSection(section: string): void {
+  if (section !== "asr" && asrTestRunning) void stopAsrTestSession("离开 ASR 设置，测试已停止");
   const requestedWorkConfig = section === "api-work";
-  if (requestedWorkConfig) section = "api";
+  const requestedCallConfig = section === "api-call";
+  if (requestedWorkConfig || requestedCallConfig) section = "api";
   if (requestedWorkConfig) {
     if (workModelConfig) renderApiTarget("work");
     else activeApiTarget = "work";
+  }
+  if (requestedCallConfig) {
+    if (callModelConfig) renderApiTarget("call");
+    else activeApiTarget = "call";
   }
   const label = NAV_LABELS[section] ?? NAV_LABELS.api;
   sectionTitle.textContent = label.title;
@@ -5222,15 +5576,8 @@ interface TtsApi {
     model?: string; format?: "mp3" | "wav" | "pcm";
   }) => Promise<string>; // base64 音频
   // GPT-SoVITS（返回 base64 + cacheKey + cached + format）
-  synthesizeGptsovits: (payload: {
-    baseUrl: string; refAudioPath: string; promptText: string; text: string;
-    speed?: number; format?: "wav" | "mp3";
-  }) => Promise<{ base64: string; cacheKey: string; cached: boolean; format: "wav" | "mp3" }>;
-  synthesizeCachedGptsovits: (payload: {
-    baseUrl: string; refAudioPath: string; promptText: string; text: string;
-    speed?: number; format?: "wav" | "mp3";
-    expectedCacheKey?: string;
-  }) => Promise<{ base64: string; cacheKey: string; cached: boolean; format: "wav" | "mp3" }>;
+  synthesizeGptsovits: (payload: GptsovitsSynthesizeRequest) => Promise<{ base64: string; cacheKey: string; cached: boolean; format: "wav" | "mp3" }>;
+  synthesizeCachedGptsovits: (payload: GptsovitsSynthesizeRequest & { expectedCacheKey?: string }) => Promise<{ base64: string; cacheKey: string; cached: boolean; format: "wav" | "mp3" }>;
   // 自定义云端（返回 base64 + cacheKey + cached + format）
   synthesizeCustomCloud: (payload: {
     endpointUrl: string; apiKey?: string; voiceId?: string; text: string;
@@ -5250,6 +5597,8 @@ interface TtsApi {
     expectedCacheKey?: string;
   }) => Promise<{ base64: string; cacheKey: string; cached: boolean; format: "wav" }>;
   pickAudioFile: () => Promise<string | null>;
+  pickGptWeightFile: () => Promise<string | null>;
+  pickSovitsWeightFile: () => Promise<string | null>;
   saveSettings: (tts: Record<string, unknown>) => Promise<unknown>;
   loadSettings: () => Promise<Record<string, unknown>>;
 }
@@ -5312,6 +5661,15 @@ async function loadTtsConfig(): Promise<void> {
   ttsEl("tts-gptsovits-prompt-text").value = String(ttsConfig.ttsGptsovitsPromptText ?? "");
   (ttsEl("tts-gptsovits-format") as HTMLSelectElement).value =
     ttsConfig.ttsGptsovitsFormat === "mp3" ? "mp3" : "wav";
+  (ttsEl("tts-gptsovits-version") as HTMLSelectElement).value = String(ttsConfig.ttsGptsovitsVersion ?? "auto");
+  ttsEl("tts-gptsovits-gpt-weight").value = String(ttsConfig.ttsGptsovitsGptWeightsPath ?? "");
+  ttsEl("tts-gptsovits-sovits-weight").value = String(ttsConfig.ttsGptsovitsSovitsWeightsPath ?? "");
+  (ttsEl("tts-gptsovits-split-method") as HTMLSelectElement).value = String(ttsConfig.ttsGptsovitsTextSplitMethod ?? "cut5");
+  ttsEl("tts-gptsovits-top-k").value = String(ttsConfig.ttsGptsovitsTopK ?? 15);
+  ttsEl("tts-gptsovits-top-p").value = String(ttsConfig.ttsGptsovitsTopP ?? 1);
+  ttsEl("tts-gptsovits-temperature").value = String(ttsConfig.ttsGptsovitsTemperature ?? 1);
+  ttsEl("tts-gptsovits-repetition-penalty").value = String(ttsConfig.ttsGptsovitsRepetitionPenalty ?? 1.35);
+  ttsEl("tts-gptsovits-sample-steps").value = String(ttsConfig.ttsGptsovitsSampleSteps ?? 32);
 
   // 自定义云端
   ttsEl("tts-custom-cloud-url").value = String(ttsConfig.ttsCustomCloudEndpointUrl ?? "");
@@ -5486,6 +5844,15 @@ const TTS_FIELD_MAP: Record<string, string> = {
   "tts-gptsovits-url":        "ttsGptsovitsBaseUrl",
   "tts-gptsovits-ref-audio":  "ttsGptsovitsRefAudioPath",
   "tts-gptsovits-prompt-text":"ttsGptsovitsPromptText",
+  "tts-gptsovits-version":    "ttsGptsovitsVersion",
+  "tts-gptsovits-gpt-weight": "ttsGptsovitsGptWeightsPath",
+  "tts-gptsovits-sovits-weight":"ttsGptsovitsSovitsWeightsPath",
+  "tts-gptsovits-split-method":"ttsGptsovitsTextSplitMethod",
+  "tts-gptsovits-top-k":      "ttsGptsovitsTopK",
+  "tts-gptsovits-top-p":      "ttsGptsovitsTopP",
+  "tts-gptsovits-temperature":"ttsGptsovitsTemperature",
+  "tts-gptsovits-repetition-penalty":"ttsGptsovitsRepetitionPenalty",
+  "tts-gptsovits-sample-steps":"ttsGptsovitsSampleSteps",
   "tts-custom-cloud-url":     "ttsCustomCloudEndpointUrl",
   "tts-custom-cloud-key":     "ttsCustomCloudApiKey",
   "tts-custom-cloud-voice":   "ttsCustomCloudVoiceId",
@@ -5498,7 +5865,12 @@ const TTS_FIELD_MAP: Record<string, string> = {
 // 每个 Provider 自己负责的文本输入框列表（不含 switch/slider/select，复刻子区块也不在此）
 const TTS_PROVIDER_FIELDS: Record<string, string[]> = {
   minimax:        ["tts-minimax-key", "tts-minimax-voice"],
-  gptsovits:      ["tts-gptsovits-url", "tts-gptsovits-ref-audio", "tts-gptsovits-prompt-text"],
+  gptsovits:      [
+    "tts-gptsovits-url", "tts-gptsovits-ref-audio", "tts-gptsovits-prompt-text",
+    "tts-gptsovits-version", "tts-gptsovits-gpt-weight", "tts-gptsovits-sovits-weight",
+    "tts-gptsovits-split-method", "tts-gptsovits-top-k", "tts-gptsovits-top-p",
+    "tts-gptsovits-temperature", "tts-gptsovits-repetition-penalty", "tts-gptsovits-sample-steps",
+  ],
   "custom-cloud": ["tts-custom-cloud-url", "tts-custom-cloud-key", "tts-custom-cloud-voice", "tts-custom-cloud-timeout"],
   mimo:           ["tts-mimo-key", "tts-mimo-voice-audio", "tts-mimo-style"],
 };
@@ -5536,6 +5908,7 @@ for (const [provider, elIds] of Object.entries(TTS_PROVIDER_FIELDS)) {
   for (const elId of elIds) {
     const el = ttsEl(elId);
     el.addEventListener("input", () => markTtsProviderDirty(provider));
+    el.addEventListener("change", () => markTtsProviderDirty(provider));
   }
 }
 
@@ -5555,9 +5928,12 @@ async function saveTtsProvider(provider: string): Promise<void> {
       const el = ttsEl(elId);
       // 数字字段（timeout）转 Number；无效则跳过该字段但继续保存其他字段
       let value: unknown = el.value;
-      if (elId === "tts-custom-cloud-timeout") {
+      if (elId === "tts-custom-cloud-timeout" || [
+        "tts-gptsovits-top-k", "tts-gptsovits-top-p", "tts-gptsovits-temperature",
+        "tts-gptsovits-repetition-penalty", "tts-gptsovits-sample-steps",
+      ].includes(elId)) {
         const num = Number(el.value);
-        if (!Number.isFinite(num) || num <= 0) continue;
+        if (!Number.isFinite(num) || (elId === "tts-custom-cloud-timeout" && num <= 0)) continue;
         value = num;
       }
       payload[field] = value;
@@ -5611,6 +5987,37 @@ document.getElementById("tts-gptsovits-ref-pick")?.addEventListener("click", asy
   }
 });
 
+document.getElementById("tts-gptsovits-gpt-weight-pick")?.addEventListener("click", async () => {
+  const filePath = await window.tts?.pickGptWeightFile();
+  if (!filePath) return;
+  ttsEl("tts-gptsovits-gpt-weight").value = filePath;
+  markTtsProviderDirty("gptsovits");
+});
+
+document.getElementById("tts-gptsovits-sovits-weight-pick")?.addEventListener("click", async () => {
+  const filePath = await window.tts?.pickSovitsWeightFile();
+  if (!filePath) return;
+  ttsEl("tts-gptsovits-sovits-weight").value = filePath;
+  markTtsProviderDirty("gptsovits");
+});
+
+function readGptsovitsAdvancedOptions(): Pick<GptsovitsSynthesizeRequest,
+  "version" | "gptWeightsPath" | "sovitsWeightsPath" | "textSplitMethod" |
+  "topK" | "topP" | "temperature" | "repetitionPenalty" | "sampleSteps"
+> {
+  return {
+    version: (ttsEl("tts-gptsovits-version") as HTMLSelectElement).value as GptsovitsSynthesizeRequest["version"],
+    gptWeightsPath: ttsEl("tts-gptsovits-gpt-weight").value.trim(),
+    sovitsWeightsPath: ttsEl("tts-gptsovits-sovits-weight").value.trim(),
+    textSplitMethod: (ttsEl("tts-gptsovits-split-method") as HTMLSelectElement).value as GptsovitsSynthesizeRequest["textSplitMethod"],
+    topK: Number(ttsEl("tts-gptsovits-top-k").value),
+    topP: Number(ttsEl("tts-gptsovits-top-p").value),
+    temperature: Number(ttsEl("tts-gptsovits-temperature").value),
+    repetitionPenalty: Number(ttsEl("tts-gptsovits-repetition-penalty").value),
+    sampleSteps: Number(ttsEl("tts-gptsovits-sample-steps").value),
+  };
+}
+
 // GPT-SoVITS 测试发音
 document.getElementById("tts-gptsovits-test")?.addEventListener("click", async () => {
   if (!window.tts) return;
@@ -5627,7 +6034,10 @@ document.getElementById("tts-gptsovits-test")?.addEventListener("click", async (
   btn.textContent = "合成中…";
   try {
     const result = await window.tts.synthesizeGptsovits({
-      baseUrl, refAudioPath, promptText, text: TTS_TEST_TEXT, format,
+      baseUrl, refAudioPath, promptText, text: TTS_TEST_TEXT,
+      speed: Number(ttsEl("tts-speed").value),
+      format,
+      ...readGptsovitsAdvancedOptions(),
     });
     playTtsAudio(result.base64, result.format);
   } catch (err) {

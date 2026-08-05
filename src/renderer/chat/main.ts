@@ -50,6 +50,12 @@ interface Message {
   ttsCacheKey?: string;
   musicCard?: MusicCardData;
   weatherCard?: WeatherCardData;
+  callEvent?: {
+    callId: string;
+    startedAt: number;
+    endedAt: number;
+    summary: string;
+  };
 }
 
 type MessageAttachment = ImageMessageAttachment | DocumentMessageAttachment;
@@ -165,6 +171,8 @@ interface AguiApi {
     messages: unknown[];
     style: string;
     sessionId?: string;
+    userTurnId?: string;
+    assistantTurnId?: string;
     attachments?: { name: string; text: string }[];
     imageAttachments?: { name: string; filePath: string; mime?: string }[];
   }) => Promise<{ success: boolean; error?: string }>;
@@ -499,7 +507,7 @@ function getOpenerBridge(): OpenerFeedbackBridge | undefined {
 // - 过滤空 content / 渲染中的 thinking 占位（thinking=true 时通常 content 为空，但保险起见双重过滤）
 // - 丢弃仅用于本轮模型调用的 modelContext 与 thinking 等瞬态字段
 function toPersistableMessages(arr: Message[]): Array<{
-  id: string; role: Role; content: string; at: number; attachments?: MessageAttachment[]; sticker?: StickerId | null; ttsCacheKey?: string; musicCard?: MusicCardData; weatherCard?: WeatherCardData;
+  id: string; role: Role; content: string; at: number; attachments?: MessageAttachment[]; sticker?: StickerId | null; ttsCacheKey?: string; musicCard?: MusicCardData; weatherCard?: WeatherCardData; callEvent?: Message["callEvent"];
 }> {
   return arr
     .filter((m) => m && (m.role === "user" || m.role === "model") && !m.thinking && !m.transient && (
@@ -508,6 +516,7 @@ function toPersistableMessages(arr: Message[]): Array<{
       || Boolean(m.sticker)
       || Boolean(m.musicCard)
       || Boolean(m.weatherCard)
+      || Boolean(m.callEvent)
     ))
     .map((m) => ({
       id: m.id,
@@ -519,6 +528,7 @@ function toPersistableMessages(arr: Message[]): Array<{
       ttsCacheKey: m.ttsCacheKey,
       musicCard: m.musicCard,
       weatherCard: m.weatherCard,
+      callEvent: m.callEvent,
     }));
 }
 
@@ -1603,6 +1613,7 @@ function render(preserveScroll = false): void {
     || Boolean(m.sticker)
     || Boolean(m.musicCard)
     || Boolean(m.weatherCard)
+    || Boolean(m.callEvent)
   );
   if (emptyEl) emptyEl.toggleAttribute("hidden", hasMessages);
 
@@ -1641,6 +1652,31 @@ function render(preserveScroll = false): void {
       bubble.appendChild(dot1);
       bubble.appendChild(dot2);
       bubble.appendChild(dot3);
+      bubbles.push(bubble);
+    } else if (m.callEvent) {
+      // 通话记录气泡：用户侧特殊样式，点击展开摘要
+      bubble.classList.add("msg__bubble--call");
+      bubble.replaceChildren();
+      const header = document.createElement("div");
+      header.className = "msg__call-header";
+      header.textContent = "📞 语音通话";
+      const meta = document.createElement("div");
+      meta.className = "msg__call-meta";
+      const durationMin = Math.max(1, Math.round((m.callEvent.endedAt - m.callEvent.startedAt) / 60_000));
+      meta.textContent = `持续约 ${durationMin} 分钟 · ${formatTime(m.callEvent.startedAt)}`;
+      bubble.appendChild(header);
+      bubble.appendChild(meta);
+      bubble.addEventListener("click", () => {
+        const expanded = bubble.classList.toggle("is-expanded");
+        const existing = bubble.querySelector(".msg__call-summary");
+        if (existing) existing.remove();
+        if (expanded) {
+          const summary = document.createElement("div");
+          summary.className = "msg__call-summary";
+          summary.textContent = m.callEvent!.summary;
+          bubble.appendChild(summary);
+        }
+      });
       bubbles.push(bubble);
     } else if (m.role === "user") {
       // 用户消息：去掉 [sticker:xxx] 标记后显示纯文字
@@ -3660,6 +3696,8 @@ async function send(): Promise<void> {
       messages: modelMessages,
       style: getCurrentStyle(),
       sessionId: currentSessionId || undefined,
+      userTurnId: userMsg.id,
+      assistantTurnId: streamMsgId,
       imageAttachments: directImageAttachments.length > 0 ? directImageAttachments : undefined,
     });
     if (!ack.success) {

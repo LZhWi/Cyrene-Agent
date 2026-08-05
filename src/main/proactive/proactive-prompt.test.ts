@@ -31,6 +31,20 @@ describe("proactive prompt", () => {
     expect(system).toContain("不要把历史聊天中的最后一句当作用户刚刚发来的消息");
   });
 
+  it("accepts a timestamped Phone summary as one ordinary-history item", () => {
+    const messages = buildProactiveMessages({
+      basePersona: "PERSONA",
+      ordinaryHistory: [{ role: "system", content: "[语音通话梗概] 用户提到明天要考试。", at: 1_000 }],
+      proactiveHistory: [],
+      sceneId: "topic_followup",
+      localNow: new Date(2_000),
+      idleSec: 0,
+      unansweredCount: 0,
+    });
+
+    expect(String(messages[0].content)).toContain("system: [语音通话梗概] 用户提到明天要考试。");
+  });
+
   it("adds night system only during an active local night", () => {
     const night = buildProactiveMessages({
       basePersona: "P",

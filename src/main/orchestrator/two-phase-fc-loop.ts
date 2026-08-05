@@ -56,6 +56,8 @@ export interface AgentLoopSettings {
   explicitTransport?: "openai" | "anthropic" | "auto";
   /** 思考模式偏好（perProvider 镜像）。adapter buildRequest 读取，缺省按 auto 处理。 */
   reasoning?: ReasoningPreference;
+  /** 可选缓存隔离域；Phone 使用独立命名空间，其他管线缺省保持原键。 */
+  cacheNamespace?: string;
 }
 
 /** FC 循环中性事件。CyreneAgent 把它包成 AG-UI BaseEvent。 */

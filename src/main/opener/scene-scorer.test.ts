@@ -56,11 +56,19 @@ describe("scoreScene", () => {
     expect(scoreScene("topic_followup", snap({ hour: 14, minute: 30, lastChatAgoMs: twoHoursAgo, idleSec: 180 }), emptyWeather, state, Date.now())).toBe(0);
   });
 
-  it("topic_followup only runs in the afternoon window", () => {
+  it("topic_followup runs from 11:30 through 23:00", () => {
     const recentTopic = 2 * 60 * 60 * 1000;
     expect(scoreScene("topic_followup", snap({ hour: 11, minute: 29, lastChatAgoMs: recentTopic }), emptyWeather, state, Date.now())).toBe(0);
     expect(scoreScene("topic_followup", snap({ hour: 11, minute: 30, lastChatAgoMs: recentTopic }), emptyWeather, state, Date.now())).toBe(35);
-    expect(scoreScene("topic_followup", snap({ hour: 17, minute: 31, lastChatAgoMs: recentTopic }), emptyWeather, state, Date.now())).toBe(0);
+    expect(scoreScene("topic_followup", snap({ hour: 23, minute: 0, lastChatAgoMs: recentTopic }), emptyWeather, state, Date.now())).toBe(35);
+    expect(scoreScene("topic_followup", snap({ hour: 23, minute: 1, lastChatAgoMs: recentTopic }), emptyWeather, state, Date.now())).toBe(0);
+  });
+
+  it("topic_followup remains lower-weight than evening_checkin", () => {
+    const recentTopic = 2 * 60 * 60 * 1000;
+    const eveningSnap = snap({ hour: 20, lastChatAgoMs: recentTopic });
+    expect(scoreScene("topic_followup", eveningSnap, emptyWeather, state, Date.now()))
+      .toBeLessThan(scoreScene("evening_checkin", eveningSnap, emptyWeather, state, Date.now()));
   });
 
   it("late_night keeps its existing active-use weighting", () => {
@@ -70,8 +78,10 @@ describe("scoreScene", () => {
     expect(scoreScene("late_night", snap({ hour: 3, keyboardAccumMin: 60 }), emptyWeather, state, Date.now())).toBe(0);
   });
 
-  it("idle_daze remains available after ten idle minutes in daytime", () => {
+  it("idle_daze remains available after ten idle minutes through 23:00", () => {
     expect(scoreScene("idle_daze", snap({ idleSec: 600 }), emptyWeather, state, Date.now())).toBe(80);
+    expect(scoreScene("idle_daze", snap({ hour: 23, minute: 0, idleSec: 600 }), emptyWeather, state, Date.now())).toBe(80);
+    expect(scoreScene("idle_daze", snap({ hour: 23, minute: 1, idleSec: 600 }), emptyWeather, state, Date.now())).toBe(0);
   });
 
   it("work_break requires 90 minutes of continuous activity", () => {

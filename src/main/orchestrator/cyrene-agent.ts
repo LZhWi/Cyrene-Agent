@@ -52,6 +52,7 @@ export interface CyreneRunOptions {
   soulSystemBaseContent: string;
   /** 可选：Soul 阶段尾部锚点（压缩版硬行为规则，追加在对话之后）。 */
   soulTailAnchorContent?: string;
+  socialContext?: import("../social-context").SocialTurnContext;
 }
 
 /** FC 循环最终结果（供桥层做副作用用）。 */
@@ -60,6 +61,7 @@ export interface CyreneRunResult {
   toolResults: ToolCallResult[];
   totalUsage?: { input: number; output: number };
   soulPhaseReason?: "no_tool" | "max_rounds" | "timeout" | "tool_error";
+  socialContext?: import("../social-context").SocialTurnContext;
 }
 
 const LOG_PREFIX = "[CyreneAgent]";
@@ -206,6 +208,7 @@ export class CyreneAgent extends AbstractAgent {
             toolResults: result.toolResults,
             totalUsage: result.totalUsage,
             soulPhaseReason: result.soulPhaseReason,
+            socialContext: options.socialContext,
           };
 
           if (cancelled) return;

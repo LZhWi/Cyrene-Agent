@@ -36,7 +36,7 @@ export function createDefaultProactiveState(): ProactiveState {
 }
 
 function isNight(hour: number): boolean {
-  return hour >= 22 || hour < 8;
+  return hour >= 23 || hour < 8;
 }
 
 export function canStartProactiveGeneration(

@@ -79,6 +79,8 @@ export const IPC = {
   SETTINGS_SAVE_CONFIG: "settings:save-config",
   SETTINGS_GET_WORK_CONFIG: "settings:get-work-config",
   SETTINGS_SAVE_WORK_CONFIG: "settings:save-work-config",
+  SETTINGS_GET_CALL_CONFIG: "settings:get-call-config",
+  SETTINGS_SAVE_CALL_CONFIG: "settings:save-call-config",
   SETTINGS_TEST_CONNECTION: "settings:test-connection",
   SETTINGS_TEST_VISION: "settings:test-vision",
   SETTINGS_GET_GENERAL: "settings:get-general",
@@ -243,6 +245,8 @@ export const IPC = {
   TTS_SAVE_SETTINGS: "tts:save-settings",   // 保存 TTS 配置
   TTS_LOAD_SETTINGS: "tts:load-settings",   // 加载 TTS 配置
   TTS_PICK_AUDIO: "tts:pick-audio",         // 选择音频文件（dialog）
+  TTS_PICK_GPT_WEIGHT: "tts:pick-gpt-weight",
+  TTS_PICK_SOVITS_WEIGHT: "tts:pick-sovits-weight",
   TTS_SYNTHESIZE_GPTSOVITS: "tts:synthesize-gptsovits",             // GPT-SoVITS 合成 → base64
   TTS_SYNTHESIZE_CACHED_GPTSOVITS: "tts:synthesize-cached-gptsovits", // GPT-SoVITS 合成 + 本地缓存
   TTS_SYNTHESIZE_CUSTOM_CLOUD: "tts:synthesize-custom-cloud",             // 自定义云端 TTS 合成 → base64
@@ -267,6 +271,7 @@ export const IPC = {
   CALL_OPEN: "call:open",                 // sidebar → main：打开通话窗口
   CALL_START: "call:start",               // renderer → main：开始通话（初始化 ASR）
   CALL_AUDIO_FRAME: "call:audio-frame",    // renderer → main：PCM 音频帧
+  CALL_ASR_FLUSH: "call:asr-flush",         // renderer → main：短停顿时刷新流式尾部
   CALL_ASR_RESULT: "call:asr-result",     // main → renderer：ASR 识别结果
   CALL_TURN_END: "call:turn-end",         // renderer → main：VAD 静默，结束本轮
   CALL_TTS_AUDIO: "call:tts-audio",       // main → renderer：TTS 音频
@@ -274,6 +279,16 @@ export const IPC = {
   CALL_STATE: "call:state",               // main → renderer：状态变更
   CALL_ERROR: "call:error",               // main → renderer：错误
   CALL_STOP: "call:stop",                 // renderer → main：挂断
+
+  // ASR settings diagnostics (never enters call LLM/TTS pipeline)
+  ASR_TEST_START: "asr-test:start",
+  ASR_TEST_AUDIO_FRAME: "asr-test:audio-frame",
+  ASR_TEST_FLUSH: "asr-test:flush",
+  ASR_TEST_TURN_END: "asr-test:turn-end",
+  ASR_TEST_STOP: "asr-test:stop",
+  ASR_TEST_STATE: "asr-test:state",
+  ASR_TEST_RESULT: "asr-test:result",
+  ASR_TEST_ERROR: "asr-test:error",
 
   // 多渠道（Phase 0 骨架，Phase 1+ 实装微信/飞书）
   CHANNELS_GET_CONFIG: "channels:get-config",

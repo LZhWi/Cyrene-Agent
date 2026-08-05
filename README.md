@@ -107,7 +107,7 @@ npm run dev
    填写 API Key（**必填**，Agent 才能工作）。
 2. **🎙️ TTS 设置**：选语音合成引擎（默认 MiniMax，或 GPT-SoVITS /
    自定义云端 / MiMo）。
-3. **🎧 ASR 设置**：如需语音通话，填阿里云实时 ASR 的 AppKey / AccessKey。
+3. **🎧 ASR 设置**：如需语音通话，可配置阿里云实时 ASR，或选择本地 Qwen / Paraformer 方案。本地方案首次使用前运行 `powershell -ExecutionPolicy Bypass -File scripts/setup-local-asr.ps1`。
 4. **📱 连接手机**（可选）：要接入飞书 / 微信 iLink 时配置。
 
 配置保存在 `<userData>/settings.json`，无需重启应用。
@@ -158,7 +158,7 @@ bge-reranker-base（Reranker，标准排序）
 
 ### 不用 ASR 能用语音通话吗？
 
-**不能。** 当前语音通话强依赖阿里云 ASR（无麦克风权限 = 无法进入 LISTENING 状态；ASR 未配置 = 直接进 ERROR）。
+**不能。** 语音通话需要启用阿里云或本地 ASR（无麦克风权限 = 无法进入 LISTENING 状态；ASR 未配置 = 直接进 ERROR）。
 
 call 窗口**没有文本输入框**或 PTT（Push-To-Talk）按钮，所有对话完全走麦克风 → ASR → LLM → TTS 的链路。如果你想纯文本聊天，**用聊天窗口**即可（不需要 ASR）。
 
@@ -264,7 +264,7 @@ call 窗口**没有文本输入框**或 PTT（Push-To-Talk）按钮，所有对�
 
 #### 🔊 语音
 - **多 TTS 引擎** — MiniMax / GPT-SoVITS / 自定义云端 / MiMo / off。
-- **多 ASR 引擎** — 阿里云实时语音识别，token 自动获取 + JSON 协议 +
+- **多 ASR 引擎** — 阿里云实时语音识别，以及 Qwen3-ASR-1.7B、Paraformer streaming + Qwen3-ASR-1.7B、Qwen3-ASR-0.6B 三种本地方案；支持独立热词表。阿里云 token 自动获取 + JSON 协议 +
   纯 PCM。
 - **VAD 静默检测** — 通话期间检测用户停顿自动触发回复。
 
@@ -370,7 +370,7 @@ models/                # 本地 AI 模型（用户放置，见 docs/local-models
 
 src/
 ├── main/             # Electron 主进程
-│   ├── asr/          # 语音识别（阿里云实时 ASR）
+│   ├── asr/          # 语音识别（阿里云 + 本地 ASR sidecar）
 │   ├── call/         # 语音通话核心逻辑
 │   ├── channels/     # 外部渠道适配层（飞书 / 微信 iLink / ...）
 │   ├── chats/        # 多会话历史与持久化

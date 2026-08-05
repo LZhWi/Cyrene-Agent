@@ -33,6 +33,15 @@ import {
   resolveChatContextTimezone,
   type ChatContextMessage,
 } from "../chat-time-context";
+import type { EmbeddingProvider } from "../rag/embedding";
+import { buildSocialContextBlock, type SocialAtom, type SocialTurnContext } from "../social-context";
+import {
+  buildCallContextBlock,
+  buildCallMemoryContext,
+  mergeCallEventsIntoHistory,
+  selectNewCallEventsForMemory,
+  type CallContextEvent,
+} from "../call/call-context";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
@@ -75,6 +84,11 @@ export interface BuildOptionsDeps {
   loadToneAnchor?: () => string;
   /** 可选：构造 [你的生活] 拟态日程（life-context.ts）。缺省或异常时返回空串=不启用。 */
   buildLifeContext?: () => string;
+  isSocialContextEnabled?: () => boolean;
+  getSocialEmbeddingProvider?: () => EmbeddingProvider | null | undefined;
+  retrieveSocialContext?: (conversationId: string, query: string, provider?: EmbeddingProvider | null) => Promise<SocialAtom[]>;
+  getCallContextEvents?: () => CallContextEvent[];
+  isProactiveConversation?: (conversationId: string) => boolean;
 }
 
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
@@ -109,6 +123,7 @@ export interface OnRunFinishedDeps {
   ) => Promise<void>;
   recordRelationshipTurn: (input: RelationshipTurnInput) => Promise<unknown> | unknown;
   getChatWindow: () => { webContents: { isDestroyed(): boolean; send: (channel: string, ...args: unknown[]) => void }; isDestroyed(): boolean } | null;
+  scheduleSocialContextWrite?: (context: SocialTurnContext, assistantText: string, settings: ModelSettingsLite) => void;
 }
 
 export interface ModelSettingsLite {
@@ -275,7 +290,7 @@ function buildImageCaptionFallbackMessages(
 export async function buildAgentRunOptions(
   input: AguiRunInput,
   deps: BuildOptionsDeps,
-): Promise<{ options: CyreneRunOptions; latestUserText: string }> {
+): Promise<{ options: CyreneRunOptions; latestUserText: string; memoryContextText?: string }> {
   const settings = deps.loadModelSettings();
   if (!settings.apiKey) {
     throw new Error("还没有填写 API Key，请先在设置里保存 API 配置。");
@@ -289,9 +304,17 @@ export async function buildAgentRunOptions(
   const latestUserText = contentToText(messages.filter((m) => m.role === "user").at(-1)?.content) ?? "";
   const skillActivation = deps.resolveSlashActivation(slimMessages);
   const profile = deps.loadUserProfile();
+  const contextTimezone = resolveChatContextTimezone(profile.timezone);
+  const chatContextMessages = messages as unknown as ChatContextMessage[];
+  const includeCallContext = !input.channel
+    || Boolean(input.sessionId && deps.isProactiveConversation?.(input.sessionId));
+  const callEvents = includeCallContext ? deps.getCallContextEvents?.() ?? [] : [];
+  const mergedHistory = mergeCallEventsIntoHistory(chatContextMessages, callEvents, 16);
+  const newCallEventsForMemory = selectNewCallEventsForMemory(chatContextMessages, mergedHistory.visibleEvents);
+  const memoryContextText = buildCallMemoryContext(newCallEventsForMemory);
   const { messages: llmMessages, timeContext: conversationTimeContext } = buildConversationTimeContext(
-    messages as unknown as ChatContextMessage[],
-    resolveChatContextTimezone(profile.timezone),
+    mergedHistory.messages,
+    contextTimezone,
   );
   const slimLlmMessages = llmMessages as Array<{ role: string; content?: string }>;
 
@@ -361,6 +384,34 @@ export async function buildAgentRunOptions(
   }
 
   const isTalkMode = (input.style || "").startsWith("talk");
+  let socialContextBlock = "";
+  let socialContext: SocialTurnContext | undefined;
+  if (!input.channel && deps.isSocialContextEnabled?.() && input.userTurnId && input.assistantTurnId && deps.retrieveSocialContext) {
+    try {
+      const retrievedAtoms = await deps.retrieveSocialContext(
+        conversationId,
+        latestUserText,
+        deps.getSocialEmbeddingProvider?.(),
+      );
+      socialContextBlock = buildSocialContextBlock(retrievedAtoms, contextTimezone);
+      socialContext = {
+        conversationId,
+        userTurnId: input.userTurnId,
+        assistantTurnId: input.assistantTurnId,
+        userText: latestUserText,
+        retrievedAtoms,
+      };
+      // 重叠抑制：short_term 类型 social atom 与 user_memory 可能命中同一事实。
+      // 同时注入会让模型看到重复信息、消耗双份 token，且 social 过期后 user_memory 仍在会造成时间不一致。
+      // 命中时优先保留 social（更新、更带时间语义），从 memoryInjection 的【相关记忆】块移除重叠条目。
+      // open_loop 是话题延续，与长期事实不同维度，不参与抑制。
+      memoryInjection = suppressOverlappingMemoryEntries(memoryInjection, retrievedAtoms);
+    } catch (err) {
+      console.warn("[SocialContext] retrieval failed:", err);
+    }
+  }
+  // 通话事件改为 system prompt 里的只读数据块（不再作为 role 消息插历史，避免 Anthropic 合并）。
+  const callContextBlock = buildCallContextBlock(mergedHistory.visibleEvents, contextTimezone);
   const styleFile = input.style || "01_default.md";
   const enabledTools = deps.toolRegistry.getEnabled();
   // talk 模式白名单：只允许轻量、日常聊天场景常用的工具。
@@ -435,6 +486,8 @@ export async function buildAgentRunOptions(
     // 挂到尾部动态区（每轮必变的 memoryInjection 之前），切换轮只损尾部零头。
     (lifeContext ? lifeContext + "\n\n" : "") +
     (memoryInjection ? memoryInjection + "\n\n" : "") +
+    (socialContextBlock ? socialContextBlock + "\n\n" : "") +
+    (callContextBlock ? callContextBlock + "\n\n" : "") +
     (alwaysOnContext ? alwaysOnContext + "\n\n" : "") +
     (relationshipContext ? "\n\n" + relationshipContext + "\n\n" : "") +
     (musicCompanionContext ? "\n\n" + musicCompanionContext : "") +
@@ -474,8 +527,10 @@ export async function buildAgentRunOptions(
       ...(soulTailAnchorContent ? { soulTailAnchorContent } : {}),
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
       ...(isTalkMode ? { tools: runTools as ToolDefinition[] } : {}),
+      ...(socialContext ? { socialContext } : {}),
     },
     latestUserText,
+    ...(memoryContextText ? { memoryContextText } : {}),
   };
 }
 
@@ -494,10 +549,17 @@ export async function onAgentRunFinished(
   latestUserText: string,
   deps: OnRunFinishedDeps,
   channel?: "wechat" | "feishu" | "mobile",
+  memoryContextText?: string,
 ): Promise<{ sticker: string | null }> {
   const chatContent = result.reply;
   const sideEffectUserText = stripTurnModelContextForSideEffects(latestUserText);
-  deps.scheduleMemoryWrite(sideEffectUserText, chatContent);
+  const memoryUserText = memoryContextText
+    ? `${sideEffectUserText}\n\n${memoryContextText}`
+    : sideEffectUserText;
+  deps.scheduleMemoryWrite(memoryUserText, chatContent);
+  if (result.socialContext && deps.scheduleSocialContextWrite) {
+    deps.scheduleSocialContextWrite(result.socialContext, chatContent, deps.loadModelSettings());
+  }
 
   const settings = deps.loadModelSettings();
   const inferredStatus = deps.inferRuntimeState(sideEffectUserText, chatContent, false);
@@ -558,4 +620,57 @@ export async function onAgentRunFinished(
   // - 渠道（wechat/feishu/...）的 sticker 由 dispatcher 收下，纳入 OutgoingMessage.parts
   // - 桌面路径也返回 sticker 以保持签名一致；dispatcher 路径下 channel !== undefined 才会消费它
   return { sticker };
+}
+
+// ─── social ↔ user_memory 注入重叠抑制 ───────────────────────────────────
+// 同一事实可能同时被 social-context 抓成 short_term atom，又被 MemoryJudge 写进 L2 再由
+// RAG 注入【相关记忆】。同时注入会重复消耗 token，且 social 过期后 user_memory 仍在会造成
+// 时间不一致。命中时优先保留 social（更新、更带时间语义），从【相关记忆】块移除重叠条目。
+// 只抑制 short_term（临时状态）；open_loop 是话题延续，与长期事实不同维度，不参与。
+
+function lexicalOverlap(a: string, b: string): number {
+  const setA = new Set(a.toLowerCase().replace(/\s+/g, ""));
+  const setB = new Set(b.toLowerCase().replace(/\s+/g, ""));
+  if (!setA.size || !setB.size) return 0;
+  let intersection = 0;
+  for (const ch of setA) if (setB.has(ch)) intersection += 1;
+  // min 归一化：短句对长句的重叠率更宽容，适合"明天考试" vs "用户明天有考试"这类同义短句。
+  return intersection / Math.min(setA.size, setB.size);
+}
+
+const MEMORY_OVERLAP_THRESHOLD = 0.6;
+
+/** 从 memoryInjection 的【相关记忆】块移除与 short_term social atoms 高度重叠的条目。
+ *  只动【相关记忆】块；【相关文档】/【人物关系】不参与抑制。整块空了则移除整块。 */
+export function suppressOverlappingMemoryEntries(
+  memoryInjection: string,
+  socialAtoms: ReadonlyArray<SocialAtom>,
+): string {
+  if (!memoryInjection || socialAtoms.length === 0) return memoryInjection;
+  const shortTermContents = socialAtoms
+    .filter((atom) => atom.type === "short_term")
+    .map((atom) => atom.content.trim())
+    .filter(Boolean);
+  if (shortTermContents.length === 0) return memoryInjection;
+
+  // 块以 \n\n + 【 分隔。【相关记忆】块内部条目以 \n 分行，notes 行以（开头。
+  const blocks = memoryInjection.split(/\n\n(?=【)/);
+  const result = blocks.map((block) => {
+    if (!block.startsWith("【相关记忆】")) return block;
+    const lines = block.split("\n");
+    const entries: string[] = [];
+    const tail: string[] = [];
+    for (const line of lines.slice(1)) {
+      if (line.startsWith("· ")) entries.push(line);
+      else if (line.trim()) tail.push(line);
+    }
+    const kept = entries.filter((entry) => {
+      // 提取核心文本：去掉 · 前缀，去掉尾部标注（较久远的印象）/⚠️（...）
+      const text = entry.replace(/^·\s*/, "").replace(/\s*[（(].*$/, "").trim();
+      return !shortTermContents.some((atom) => lexicalOverlap(text, atom) >= MEMORY_OVERLAP_THRESHOLD);
+    });
+    if (kept.length === 0) return ""; // 整块移除
+    return [lines[0], ...kept, ...tail].filter((line) => line.trim()).join("\n");
+  }).filter(Boolean);
+  return result.join("\n\n");
 }

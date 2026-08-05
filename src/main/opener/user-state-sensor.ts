@@ -1,7 +1,7 @@
 // 采集用户状态向量。用 Electron powerMonitor.getSystemIdleTime() 同时覆盖键+鼠空闲。
 // 上次对话时间从 chats-store listSessions 拿。
 import { powerMonitor } from "electron";
-import { listSessions } from "../chats/chats-store";
+import { getSession, listSessions } from "../chats/chats-store";
 import type { UserStateSnapshot } from "./opener-types";
 
 const IDLE_ACTIVE_THRESHOLD_SEC = 60;   // idle < 60s 算"活跃"
@@ -13,6 +13,17 @@ let keyboardAccumMin = 0;               // 非空闲累计分钟（内存，重�
 let continuousActiveMin = 0;
 let lastIdleSec = 0;                    // 上次 tick 的 idle，用于检测"离开→恢复"事件
 let lastSnapshotAt: number | null = null;
+
+export function latestUserMessageAt(
+  messages: ReadonlyArray<{ role: string; at: number }>,
+): number | null {
+  let latest: number | null = null;
+  for (const message of messages) {
+    if (message.role !== "user" || !Number.isFinite(message.at)) continue;
+    latest = latest === null ? message.at : Math.max(latest, message.at);
+  }
+  return latest;
+}
 
 export function nextContinuousActiveMinutes(
   currentMinutes: number,
@@ -50,11 +61,19 @@ export function snapshot(now = Date.now()): UserStateSnapshot {
 
   let lastChatAgoMs = Infinity;
   try {
-    const latestOrdinarySession = listSessions()
-      .filter((session) => session.purpose !== "proactive-chat")
-      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
-    if (latestOrdinarySession && typeof latestOrdinarySession.updatedAt === "number") {
-      lastChatAgoMs = now - latestOrdinarySession.updatedAt;
+    let latestChatAt: number | null = null;
+    const sessions = listSessions().sort((a, b) => b.updatedAt - a.updatedAt);
+    for (const meta of sessions) {
+      if (latestChatAt !== null && meta.updatedAt <= latestChatAt) break;
+      const session = getSession(meta.id);
+      if (!session) continue;
+      const sessionLatest = latestUserMessageAt(session.messages);
+      if (sessionLatest !== null) {
+        latestChatAt = latestChatAt === null ? sessionLatest : Math.max(latestChatAt, sessionLatest);
+      }
+    }
+    if (latestChatAt !== null) {
+      lastChatAgoMs = now - latestChatAt;
     }
   } catch { /* chats-store 未初始化 */ }
 

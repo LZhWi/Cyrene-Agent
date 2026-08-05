@@ -117,8 +117,9 @@ the basics:
    work without it).
 2. **🎙️ TTS Settings**: Pick a TTS engine (default MiniMax, or switch to
    GPT-SoVITS / Custom Cloud / MiMo).
-3. **🎧 ASR Settings**: If you need voice calls, fill in Aliyun realtime
-   ASR AppKey / AccessKey.
+3. **🎧 ASR Settings**: For voice calls, configure Aliyun realtime ASR or
+   select a local Qwen / Paraformer profile. Before first local use, run
+   `powershell -ExecutionPolicy Bypass -File scripts/setup-local-asr.ps1`.
 4. **📱 Phone connection** (optional): For Lark / WeChat iLink integration.
 
 Settings are saved to `<userData>/settings.json` — no restart needed.
@@ -147,7 +148,7 @@ Troubleshooting:
 
 ### Can I use voice call without ASR?
 
-**No.** The voice call hard-depends on Aliyun ASR (no mic permission =
+**No.** Voice calls require either Aliyun or local ASR (no mic permission =
 can't enter LISTENING; ASR not configured = goes straight to ERROR).
 
 The call window has **no text input** or PTT button. All conversation
@@ -406,7 +407,7 @@ models/                # Local AI models (user-provided, see docs/local-models.m
 
 src/
 ├── main/             # Electron main process
-│   ├── asr/          # Automatic speech recognition (Aliyun realtime ASR)
+│   ├── asr/          # Automatic speech recognition (Aliyun + local sidecar)
 │   ├── call/         # Voice call core logic
 │   ├── channels/     # External channel adapters (Lark / WeChat iLink / ...)
 │   ├── chats/        # Multi-chat history and persistence

@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import { IPC } from "../shared/ipc-channels";
 import type { UiTheme } from "../shared/ui-theme";
 import type { UiFont } from "../shared/ui-font";
+import type { GptsovitsSynthesizeRequest } from "../shared/tts-types";
 import type { DocumentIndexProgress } from "../main/rag/document-index-queue";
 import { getLive2DIpcListenerCounts } from "./live2d-listener-diagnostics";
 import { exposeMusicApi } from "./music";
@@ -203,6 +204,7 @@ contextBridge.exposeInMainWorld("tasks", tasksApi);
 const callApi = {
   start: () => ipcRenderer.send(IPC.CALL_START),
   sendAudioFrame: (frame: ArrayBuffer) => ipcRenderer.send(IPC.CALL_AUDIO_FRAME, frame),
+  flushAsr: () => ipcRenderer.send(IPC.CALL_ASR_FLUSH),
   turnEnd: () => ipcRenderer.send(IPC.CALL_TURN_END),
   ttsDone: () => ipcRenderer.send(IPC.CALL_TTS_DONE),
   stop: () => ipcRenderer.send(IPC.CALL_STOP),
@@ -258,6 +260,28 @@ const settingsApi = {
   saveConfig: (config: unknown) => ipcRenderer.invoke(IPC.SETTINGS_SAVE_CONFIG, config),
   getWorkConfig: () => ipcRenderer.invoke(IPC.SETTINGS_GET_WORK_CONFIG),
   saveWorkConfig: (config: unknown) => ipcRenderer.invoke(IPC.SETTINGS_SAVE_WORK_CONFIG, config),
+  getCallConfig: () => ipcRenderer.invoke(IPC.SETTINGS_GET_CALL_CONFIG),
+  saveCallConfig: (config: unknown) => ipcRenderer.invoke(IPC.SETTINGS_SAVE_CALL_CONFIG, config),
+  asrTestStart: () => ipcRenderer.invoke(IPC.ASR_TEST_START),
+  asrTestSendAudioFrame: (frame: ArrayBuffer) => ipcRenderer.send(IPC.ASR_TEST_AUDIO_FRAME, frame),
+  asrTestFlush: () => ipcRenderer.send(IPC.ASR_TEST_FLUSH),
+  asrTestTurnEnd: () => ipcRenderer.invoke(IPC.ASR_TEST_TURN_END),
+  asrTestStop: () => ipcRenderer.invoke(IPC.ASR_TEST_STOP),
+  onAsrTestState: (callback: (data: { state: string }) => void) => {
+    const listener = (_event: unknown, data: { state: string }) => callback(data);
+    ipcRenderer.on(IPC.ASR_TEST_STATE, listener);
+    return () => ipcRenderer.removeListener(IPC.ASR_TEST_STATE, listener);
+  },
+  onAsrTestResult: (callback: (data: { partial?: string; final?: string }) => void) => {
+    const listener = (_event: unknown, data: { partial?: string; final?: string }) => callback(data);
+    ipcRenderer.on(IPC.ASR_TEST_RESULT, listener);
+    return () => ipcRenderer.removeListener(IPC.ASR_TEST_RESULT, listener);
+  },
+  onAsrTestError: (callback: (data: { message: string }) => void) => {
+    const listener = (_event: unknown, data: { message: string }) => callback(data);
+    ipcRenderer.on(IPC.ASR_TEST_ERROR, listener);
+    return () => ipcRenderer.removeListener(IPC.ASR_TEST_ERROR, listener);
+  },
   testConnection: (config: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: "openai" | "anthropic" | "auto" }) => ipcRenderer.invoke(IPC.SETTINGS_TEST_CONNECTION, config),
   testVision: (config: { baseUrl: string; apiKey: string; model: string }) => ipcRenderer.invoke(IPC.SETTINGS_TEST_VISION, config),
   // main → settings：要求切到指定标签（窗口已打开时由 main 发这个事件）
@@ -593,15 +617,10 @@ const ttsApi = {
     expectedCacheKey?: string;
   }) => ipcRenderer.invoke(IPC.TTS_SYNTHESIZE_CACHED, payload),
   // GPT-SoVITS 本地 TTS（独立通道，payload 与 minimax 不同）
-  synthesizeGptsovits: (payload: {
-    baseUrl: string; refAudioPath: string; promptText: string; text: string;
-    speed?: number; format?: "wav" | "mp3";
-  }) => ipcRenderer.invoke(IPC.TTS_SYNTHESIZE_GPTSOVITS, payload),
-  synthesizeCachedGptsovits: (payload: {
-    baseUrl: string; refAudioPath: string; promptText: string; text: string;
-    speed?: number; format?: "wav" | "mp3";
-    expectedCacheKey?: string;
-  }) => ipcRenderer.invoke(IPC.TTS_SYNTHESIZE_CACHED_GPTSOVITS, payload),
+  synthesizeGptsovits: (payload: GptsovitsSynthesizeRequest) =>
+    ipcRenderer.invoke(IPC.TTS_SYNTHESIZE_GPTSOVITS, payload),
+  synthesizeCachedGptsovits: (payload: GptsovitsSynthesizeRequest & { expectedCacheKey?: string }) =>
+    ipcRenderer.invoke(IPC.TTS_SYNTHESIZE_CACHED_GPTSOVITS, payload),
   // 自定义云端 TTS（固定 HTTP 合约）
   synthesizeCustomCloud: (payload: {
     endpointUrl: string; apiKey?: string; voiceId?: string; text: string;
@@ -622,6 +641,8 @@ const ttsApi = {
   }) => ipcRenderer.invoke(IPC.TTS_SYNTHESIZE_CACHED_MIMO, payload),
   // 选择音频文件（复用 TTS_PICK_AUDIO，gptsovits 选 ref audio 也用这个）
   pickAudioFile: () => ipcRenderer.invoke(IPC.TTS_PICK_AUDIO),
+  pickGptWeightFile: () => ipcRenderer.invoke(IPC.TTS_PICK_GPT_WEIGHT),
+  pickSovitsWeightFile: () => ipcRenderer.invoke(IPC.TTS_PICK_SOVITS_WEIGHT),
   // 流式语音合成（边合成边播）
   streamStart: (payload: {
     apiKey: string; voiceId: string; text: string;

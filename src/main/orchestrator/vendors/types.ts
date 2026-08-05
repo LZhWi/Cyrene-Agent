@@ -27,6 +27,8 @@ export interface VendorConfig {
    * commit 2 落地后由 ModelSettings 顶层镜像字段填充；commit 1 期间为可选。
    */
   reasoning?: ReasoningPreference;
+  /** 可选的服务端提示缓存命名空间；缺省保持现有 Chat/Collab 键。 */
+  cacheNamespace?: string;
 }
 
 export type OpenAIContentBlock =

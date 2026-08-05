@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { nextContinuousActiveMinutes } from "./user-state-sensor";
+import { latestUserMessageAt, nextContinuousActiveMinutes } from "./user-state-sensor";
 
 describe("nextContinuousActiveMinutes", () => {
   it("uses elapsed time and tolerates short idle periods", () => {
@@ -14,5 +14,19 @@ describe("nextContinuousActiveMinutes", () => {
 
   it("resets when sampling was paused for too long", () => {
     expect(nextContinuousActiveMinutes(10, 0, 30)).toBe(0);
+  });
+});
+
+describe("latestUserMessageAt", () => {
+  it("uses user replies from proactive conversations but ignores proactive model messages", () => {
+    expect(latestUserMessageAt([
+      { role: "user", at: 100 },
+      { role: "model", at: 300 },
+      { role: "user", at: 200 },
+    ])).toBe(200);
+  });
+
+  it("returns null when a conversation has no user message", () => {
+    expect(latestUserMessageAt([{ role: "model", at: 300 }])).toBeNull();
   });
 });

@@ -2,8 +2,23 @@
 
 export type TtsEngine = "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo";
 
+export type GptsovitsVersion = "auto" | "v1" | "v2" | "v2Pro" | "v2ProPlus" | "v3" | "v4";
+export type GptsovitsTextSplitMethod = "cut0" | "cut1" | "cut2" | "cut3" | "cut4" | "cut5";
+
+export interface GptsovitsAdvancedOptions {
+  version?: GptsovitsVersion;
+  gptWeightsPath?: string;
+  sovitsWeightsPath?: string;
+  textSplitMethod?: GptsovitsTextSplitMethod;
+  topK?: number;
+  topP?: number;
+  temperature?: number;
+  repetitionPenalty?: number;
+  sampleSteps?: number;
+}
+
 /** GPT-SoVITS 合成请求（渲染端 → 主进程 IPC payload）。 */
-export interface GptsovitsSynthesizeRequest {
+export interface GptsovitsSynthesizeRequest extends GptsovitsAdvancedOptions {
   baseUrl: string;             // 形如 "http://localhost:9880"，不含路径
   refAudioPath: string;        // 参考音频绝对路径
   promptText: string;          // 参考音频对应的文本

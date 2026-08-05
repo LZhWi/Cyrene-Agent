@@ -6,9 +6,11 @@ import {
   buildAgentRunOptions,
   buildChannelSystem,
   onAgentRunFinished,
+  suppressOverlappingMemoryEntries,
   type BuildOptionsDeps,
   type OnRunFinishedDeps,
 } from "./build-options"
+import type { SocialAtom } from "../social-context"
 
 function createBuildDeps(): BuildOptionsDeps {
   return {
@@ -60,6 +62,37 @@ describe("build-options", () => {
     expect(result.options.soulSystemBaseContent).not.toContain("你正在通过飞书回复用户")
   })
 
+  it.each(["talk-soft.md", "01_default.md"])("injects session social context in desktop Chat/Collab (%s)", async (style) => {
+    const deps = createBuildDeps()
+    deps.isSocialContextEnabled = () => true
+    deps.retrieveSocialContext = async () => [{
+      id: "atom-1", conversationId: "session-1", type: "short_term", content: "用户明天要去复诊",
+      evidenceTurnId: "old-user", evidenceQuote: "明天去复诊", createdAt: 1, updatedAt: 1,
+      expiresAt: Date.now() + 1000, status: "active",
+    }]
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "接着聊吧" }], style, sessionId: "session-1",
+      userTurnId: "user-2", assistantTurnId: "assistant-2",
+    }, deps)
+
+    expect(result.options.soulSystemBaseContent).toContain("【本轮可用的对话背景】")
+    expect(result.options.soulSystemBaseContent).toContain("用户明天要去复诊")
+    expect(result.options.socialContext?.conversationId).toBe("session-1")
+  })
+
+  it("keeps social context out of external channel runs", async () => {
+    const deps = createBuildDeps()
+    deps.isSocialContextEnabled = () => true
+    deps.retrieveSocialContext = vi.fn(async () => [])
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "继续" }], style: "talk-soft.md", sessionId: "session-1",
+      userTurnId: "user-2", assistantTurnId: "assistant-2", channel: "wechat",
+    }, deps)
+
+    expect(deps.retrieveSocialContext).not.toHaveBeenCalled()
+    expect(result.options.socialContext).toBeUndefined()
+  })
+
   it("messages 不含 system，FC 循环按阶段动态注入", async () => {
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "你好" }],
@@ -89,6 +122,51 @@ describe("build-options", () => {
     expect(result.options.soulSystemBaseContent).toContain("距离上一条有效聊天消息：约 14 小时 58 分钟")
     expect(result.options.soulSystemBaseContent.match(/距离上一条有效聊天消息/g)).toHaveLength(1)
     expect(result.options.toolSystemContent).not.toContain("[对话时间信息]")
+  })
+
+  it("keeps Phone summaries in the 16-item window for filtering, but renders them as a system-prompt block instead of history messages", async () => {
+    const deps = createBuildDeps()
+    deps.getCallContextEvents = () => [{
+      id: "call-1",
+      startedAt: 1_500,
+      endedAt: 1_700,
+      summary: "用户在通话里提到明天要考试。",
+    }]
+    const history = Array.from({ length: 15 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" as const : "assistant" as const,
+      content: `history-${index}`,
+      at: index * 100,
+    }))
+    const result = await buildAgentRunOptions({
+      messages: [...history, { role: "user", content: "接着聊", at: 2_000 }],
+      style: "01_default.md",
+    }, deps)
+
+    // 16 chat + 1 call = 17 项排序后 slice 16，淘汰 history-0；窗口内 15 chat + 1 call。
+    // call 不进 messages 数组（避免 Anthropic 合并 system 消息），messages 只含 15 条 chat。
+    expect(result.options.messages).toHaveLength(15)
+    expect(result.options.messages.some((message) => String(message.content).includes("明天要考试"))).toBe(false)
+    // 通话梗概改为 system prompt 里的只读数据块
+    expect(result.options.soulSystemBaseContent).toContain("【近期通话事件｜只读事实数据】")
+    expect(result.options.soulSystemBaseContent).toContain("明天要考试")
+    // MemoryJudge 仍拿到通话梗概（buildCallMemoryContext 未改）
+    expect(result.memoryContextText).toContain("明天要考试")
+  })
+
+  it("keeps Phone summaries out of unrelated external-channel conversations", async () => {
+    const deps = createBuildDeps()
+    deps.getCallContextEvents = () => [{
+      id: "call-1", startedAt: 1_000, endedAt: 1_100, summary: "本地通话私有摘要",
+    }]
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "微信消息", at: 2_000 }],
+      style: "01_default.md",
+      channel: "wechat",
+      sessionId: "channel:wechat:user",
+    }, deps)
+
+    expect(result.options.messages.some((message) => String(message.content).includes("本地通话私有摘要"))).toBe(false)
+    expect(result.memoryContextText).toBeUndefined()
   })
 
   it("toolSystemContent / soulSystemBaseContent 是分开的两套字符串", async () => {
@@ -425,14 +503,114 @@ describe("build-options", () => {
       getChatWindow: () => null,
     }
 
-    await onAgentRunFinished({ reply: "总结好了", toolResults: [] }, latestUserText, deps)
+    await onAgentRunFinished(
+      { reply: "总结好了", toolResults: [] },
+      latestUserText,
+      deps,
+      undefined,
+      "[此前语音通话梗概，仅作为记忆判定的事实来源]\n- 用户明天要考试",
+    )
 
-    expect(scheduleMemoryWrite).toHaveBeenCalledWith("帮我总结这个 md", "总结好了")
+    expect(scheduleMemoryWrite).toHaveBeenCalledWith(
+      "帮我总结这个 md\n\n[此前语音通话梗概，仅作为记忆判定的事实来源]\n- 用户明天要考试",
+      "总结好了",
+    )
     expect(matchSticker).toHaveBeenCalledWith(
       "总结好了\n帮我总结这个 md",
       expect.anything(),
       latestIndex,
       0.55,
     )
+  })
+})
+
+describe("suppressOverlappingMemoryEntries", () => {
+  function makeAtom(type: "short_term" | "open_loop", content: string): SocialAtom {
+    return {
+      id: `atom-${Math.random()}`,
+      conversationId: "conv",
+      type,
+      content,
+      evidenceTurnId: "turn-1",
+      evidenceQuote: content,
+      createdAt: 1_000,
+      updatedAt: 1_000,
+      expiresAt: 2_000,
+      status: "active",
+    }
+  }
+
+  it("removes user_memory entries that overlap with short_term social atoms", () => {
+    const memoryInjection = [
+      "【相关记忆】",
+      "· 用户明天要考试",
+      "· 用户喜欢跑步",
+      "· 用户在学法语（较久远的印象）",
+      "（标注「较久远的印象」的条目可能已过时，提及时用不确定的语气，不要断言。）",
+    ].join("\n")
+    const atoms = [makeAtom("short_term", "明天考试，需要复习")]
+
+    const result = suppressOverlappingMemoryEntries(memoryInjection, atoms)
+
+    expect(result).toContain("用户喜欢跑步")
+    expect(result).toContain("用户在学法语")
+    expect(result).not.toContain("用户明天要考试")
+    // notes 行保留（仍有未抑制的条目）
+    expect(result).toContain("较久远的印象")
+  })
+
+  it("removes the entire 【相关记忆】 block when all entries are suppressed", () => {
+    const memoryInjection = [
+      "【相关记忆】",
+      "· 用户明天要考试",
+    ].join("\n")
+    const atoms = [makeAtom("short_term", "明天考试")]
+
+    const result = suppressOverlappingMemoryEntries(memoryInjection, atoms)
+
+    expect(result).not.toContain("【相关记忆】")
+    expect(result).not.toContain("考试")
+  })
+
+  it("leaves 【相关文档】 and 【人物关系】 blocks untouched", () => {
+    const memoryInjection = [
+      "【相关记忆】",
+      "· 用户明天要考试",
+      "",
+      "【相关文档】",
+      "· 文档内容提到考试安排",
+      "",
+      "【人物关系】",
+      "· 小明是同学",
+    ].join("\n")
+    const atoms = [makeAtom("short_term", "明天考试")]
+
+    const result = suppressOverlappingMemoryEntries(memoryInjection, atoms)
+
+    // 【相关记忆】整块移除（唯一条目被抑制）
+    expect(result).not.toContain("【相关记忆】")
+    // 但【相关文档】/【人物关系】里即使有"考试"字样也不动
+    expect(result).toContain("【相关文档】")
+    expect(result).toContain("文档内容提到考试安排")
+    expect(result).toContain("【人物关系】")
+    expect(result).toContain("小明是同学")
+  })
+
+  it("does not suppress based on open_loop atoms", () => {
+    const memoryInjection = [
+      "【相关记忆】",
+      "· 用户喜欢跑步",
+    ].join("\n")
+    const atoms = [makeAtom("open_loop", "用户喜欢跑步")]
+
+    const result = suppressOverlappingMemoryEntries(memoryInjection, atoms)
+
+    expect(result).toContain("用户喜欢跑步")
+  })
+
+  it("passes through unchanged when there are no short_term atoms", () => {
+    const memoryInjection = "【相关记忆】\n· 用户喜欢跑步"
+    const result = suppressOverlappingMemoryEntries(memoryInjection, [])
+    expect(result).toBe(memoryInjection)
   })
 })

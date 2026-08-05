@@ -1,7 +1,7 @@
 import type { ChatMessage } from "../orchestrator/vendors/types";
 
 export interface ProactiveHistoryTurn {
-  role: "user" | "model";
+  role: "user" | "model" | "system";
   content: string;
   at: number;
 }
@@ -65,10 +65,10 @@ function formatLocalTime(date: Date): string {
 
 function formatHistory(label: string, history: ProactiveHistoryTurn[]): string {
   const recent = history
-    .filter((turn) => turn && (turn.role === "user" || turn.role === "model") && turn.content.trim())
+    .filter((turn) => turn && (turn.role === "user" || turn.role === "model" || turn.role === "system") && turn.content.trim())
     .slice(-MAX_HISTORY_MESSAGES);
   const lines = recent.map((turn) => {
-    const role = turn.role === "model" ? "assistant" : "user";
+    const role = turn.role === "model" ? "assistant" : turn.role;
     return `[${formatLocalTime(new Date(turn.at))}] ${role}: ${turn.content.trim()}`;
   });
   return `[${label}]\n${lines.length > 0 ? lines.join("\n") : "（暂无）"}`;

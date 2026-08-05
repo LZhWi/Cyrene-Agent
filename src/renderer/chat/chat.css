@@ -643,6 +643,31 @@ body {
   border-top-right-radius: 6px;
 }
 
+/* 通话记录气泡：用户侧，点击展开摘要 */
+.msg__bubble--call {
+  cursor: pointer;
+  user-select: none;
+  min-width: 180px;
+}
+.msg__call-header {
+  font-weight: 600;
+  font-size: 0.95em;
+  margin-bottom: 4px;
+}
+.msg__call-meta {
+  font-size: 0.82em;
+  opacity: 0.85;
+}
+.msg__call-summary {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid rgba(255, 255, 255, 0.2);
+  font-size: 0.88em;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
 :root {
   --sticker-width: 140px;
   --sticker-max-height: 180px;

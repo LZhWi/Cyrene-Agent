@@ -216,10 +216,12 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
   // Kimi：多轮 Agent 强烈建议传 prompt_cache_key（命中后 usage.cached_tokens 体现）。
   // key 按阶段拆分：工具阶段（带 tools）与 SOUL 阶段（不带）的 system 前缀完全不同，
   // 共用一个 key 会让两套前缀在厂商缓存路由上互相挤掉对方，拆开后各自稳定命中。
-  applyCacheHints(req: ChatRequest, _cfg: VendorConfig): ChatRequest {
+  applyCacheHints(req: ChatRequest, cfg: VendorConfig): ChatRequest {
     if (this.capability.cacheStrategy !== "prompt_cache_key") return req;
     const phase = req.tools && req.tools.length > 0 ? "tool" : "soul";
-    const extraBody = { ...(req.extraBody ?? {}), prompt_cache_key: `cyrene:${this.id}:${phase}` };
+    const namespace = cfg.cacheNamespace?.trim().replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 32);
+    const scope = namespace ? `${namespace}:${phase}` : phase;
+    const extraBody = { ...(req.extraBody ?? {}), prompt_cache_key: `cyrene:${this.id}:${scope}` };
     return { ...req, extraBody };
   }
 

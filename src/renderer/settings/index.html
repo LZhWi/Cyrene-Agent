@@ -68,13 +68,14 @@
             <div class="panel-heading__icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M7 10V7a5 5 0 0 1 10 0v3M6 10h12a2 2 0 0 1 2 2v7H4v-7a2 2 0 0 1 2-2Z" /></svg></div>
             <div>
               <h1>API 设置</h1>
-              <p>聊天与 Work 使用完全独立的模型配置，可分别选择供应商和调用参数。</p>
+              <p>聊天、Work 与语音通话使用完全独立的模型配置，可分别选择供应商和调用参数。</p>
             </div>
           </div>
 
           <div class="api-target-switch option-blocks option-blocks--wide" id="api-target-switch" role="tablist" aria-label="API 配置对象">
             <button type="button" class="option-block is-active" data-api-target="chat" role="tab" aria-selected="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4.7A2.5 2.5 0 0 1 4 13.5z" /></svg>聊天模型</button>
             <button type="button" class="option-block" data-api-target="work" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h6M9 3h6v4H9zM7 5H5v16h14V5h-2M8 12h8M8 16h5" /></svg>Work 模型</button>
+            <button type="button" class="option-block" data-api-target="call" role="tab" aria-selected="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7.2 3.8 10 8.2 8.3 10a14.8 14.8 0 0 0 5.7 5.7l1.8-1.7 4.4 2.8-.7 3A2 2 0 0 1 17.6 21C9.5 20.4 3.6 14.5 3 6.4a2 2 0 0 1 1.2-1.9z" /></svg>语音通话模型</button>
           </div>
 
           <p class="api-target-note" id="api-target-note">用于 Chat、Collab、主动聊天和现有聊天相关管线。</p>
@@ -281,6 +282,16 @@
               <div class="option-blocks option-blocks--wide" id="proactive-feedback-select" role="radiogroup" aria-label="回应反馈学习">
                 <button type="button" class="option-block" data-value="off" aria-pressed="false">关闭</button>
                 <button type="button" class="option-block is-active" data-value="on" aria-pressed="true">开启</button>
+              </div>
+            </div>
+            <div class="setting-row">
+              <div>
+                <strong>聊天上下文增强</strong>
+                <span>在 Chat 和 Collab 中按会话找回近期状态与未接话题。默认关闭；不会影响 Work、通话、主动聊天或长期记忆。</span>
+              </div>
+              <div class="option-blocks option-blocks--wide" id="social-context-select" role="radiogroup" aria-label="聊天上下文增强">
+                <button type="button" class="option-block is-active" data-value="off" aria-pressed="true">关闭</button>
+                <button type="button" class="option-block" data-value="on" aria-pressed="false">开启</button>
               </div>
             </div>
           </div>
@@ -1698,6 +1709,50 @@
                   <option value="mp3">mp3（需服务端支持）</option>
                 </select>
               </div>
+              <details class="tts-advanced">
+                <summary>高级推理与权重</summary>
+                <p class="tts-advanced__hint">语速使用上方“播放交互”中的全局语速；以下参数只影响 GPT-SoVITS。</p>
+                <div class="tts-field">
+                  <label>GSV 版本</label>
+                  <select id="tts-gptsovits-version">
+                    <option value="auto">自动（由权重判断）</option>
+                    <option value="v1">v1</option>
+                    <option value="v2">v2</option>
+                    <option value="v2Pro">v2Pro</option>
+                    <option value="v2ProPlus">v2ProPlus</option>
+                    <option value="v3">v3</option>
+                    <option value="v4">v4</option>
+                  </select>
+                </div>
+                <div class="tts-field">
+                  <label>GPT 权重</label>
+                  <input type="text" id="tts-gptsovits-gpt-weight" placeholder="可选；选择本机 .ckpt 文件" />
+                  <button type="button" class="ghost-btn tts-pick-btn" id="tts-gptsovits-gpt-weight-pick">选择</button>
+                </div>
+                <div class="tts-field">
+                  <label>SoVITS 权重</label>
+                  <input type="text" id="tts-gptsovits-sovits-weight" placeholder="可选；选择本机 .pth/.ckpt 文件" />
+                  <button type="button" class="ghost-btn tts-pick-btn" id="tts-gptsovits-sovits-weight-pick">选择</button>
+                </div>
+                <div class="tts-field">
+                  <label>分段方式</label>
+                  <select id="tts-gptsovits-split-method">
+                    <option value="cut0">不切分</option>
+                    <option value="cut1">凑四句一切</option>
+                    <option value="cut2">约 50 字一切</option>
+                    <option value="cut3">按中文句号切</option>
+                    <option value="cut4">按英文句号切</option>
+                    <option value="cut5">按标点符号切（推荐）</option>
+                  </select>
+                </div>
+                <div class="tts-parameter-grid">
+                  <div class="tts-field"><label>Top-K</label><input type="number" id="tts-gptsovits-top-k" min="1" max="1000" step="1" /></div>
+                  <div class="tts-field"><label>Top-P</label><input type="number" id="tts-gptsovits-top-p" min="0" max="1" step="0.05" /></div>
+                  <div class="tts-field"><label>Temperature</label><input type="number" id="tts-gptsovits-temperature" min="0.01" max="2" step="0.05" /></div>
+                  <div class="tts-field"><label>重复惩罚</label><input type="number" id="tts-gptsovits-repetition-penalty" min="0.1" max="10" step="0.05" /></div>
+                  <div class="tts-field"><label>Sample Steps</label><input type="number" id="tts-gptsovits-sample-steps" min="1" max="100" step="1" /></div>
+                </div>
+              </details>
               <button type="button" class="ghost-btn" id="tts-gptsovits-test">🔊 测试发音</button>
               <div class="tts-clone-status" id="tts-gptsovits-test-status"></div>
               <!-- GPT-SoVITS 配置保存 -->
@@ -1822,12 +1877,18 @@
                 <select id="asr-engine">
                   <option value="off">关闭</option>
                   <option value="aliyun">阿里云（实时语音识别）</option>
-                  <option value="local">本地（占位，敬请期待）</option>
+                  <option value="local">本地（GPU / CPU 混合推理）</option>
                 </select>
               </div>
-              <p class="tts-hint">选择「阿里云」后填入下方配置。</p>
+              <div class="tts-field">
+                <label for="asr-language">识别语言</label>
+                <select id="asr-language">
+                  <option value="zh">中文</option>
+                  <option value="en">英文</option>
+                  <option value="auto">自动识别</option>
+                </select>
+              </div>
             </div>
-
             <div class="tts-section" id="asr-aliyun-config">
               <h2 class="tts-section__title">☁️ 阿里云配置</h2>
               <div class="tts-field">
@@ -1842,14 +1903,57 @@
                 <label for="asr-aliyun-access-key-secret">AccessKey Secret</label>
                 <input type="password" id="asr-aliyun-access-key-secret" placeholder="创建 AccessKey 时显示的 Secret" autocomplete="off" />
               </div>
-              <div class="tts-field">
-                <label for="asr-language">识别语言</label>
-                <select id="asr-language">
-                  <option value="zh">中文</option>
-                  <option value="en">英文</option>
-                </select>
-              </div>
               <p class="tts-hint">阿里云 → 智能语音交互控制台 → 创建项目获取 AppKey。AccessKey 在 RAM 访问控制台获取（ram.console.aliyun.com/manage/ak）。Token 会自动获取，无需手动填写。</p>
+            </div>
+
+            <div class="tts-section" id="asr-local-config">
+              <h2 class="tts-section__title">🖥️ 本地识别方案</h2>
+              <div class="asr-profile-grid" id="asr-profile-grid" role="radiogroup" aria-label="本地语音识别方案">
+                <button type="button" class="asr-profile-card" data-asr-profile="qwen17-stream" role="radio" aria-checked="false">
+                  <strong>高质量单模型</strong>
+                  <span>Qwen3-ASR-1.7B</span>
+                  <small>GPU 滚动转写，结构简单</small>
+                </button>
+                <button type="button" class="asr-profile-card" data-asr-profile="paraformer-qwen17" role="radio" aria-checked="false">
+                  <strong>流式 + 高精度</strong>
+                  <span>Paraformer + Qwen 1.7B</span>
+                  <small>CPU 实时字幕，GPU 句末复核（推荐）</small>
+                </button>
+                <button type="button" class="asr-profile-card" data-asr-profile="qwen06-stream" role="radio" aria-checked="false">
+                  <strong>轻量单模型</strong>
+                  <span>Qwen3-ASR-0.6B</span>
+                  <small>显存占用更低，自动降级方案</small>
+                </button>
+              </div>
+              <div class="tts-field asr-hotword-field">
+                <label for="asr-hotwords">热词表</label>
+                <textarea id="asr-hotwords" rows="6" maxlength="4000" placeholder="每行一个词，例如：&#10;昔涟&#10;Cyrene&#10;DeepSeek"></textarea>
+              </div>
+              <p class="tts-hint">热词仅用于本地语音识别，不会注入聊天模型。最多保存 200 个非空词；首次使用会下载所选模型。</p>
+              <p class="tts-hint">本地运行环境尚未安装时，请先在项目终端执行 <code>powershell -ExecutionPolicy Bypass -File scripts/setup-local-asr.ps1</code>。</p>
+            </div>
+
+            <div class="tts-section asr-test-card" id="asr-test-card">
+              <div class="asr-test-card__header">
+                <div>
+                  <h2 class="tts-section__title">麦克风与识别测试</h2>
+                  <p class="tts-hint asr-test-card__hint">完全复用通话的 16kHz PCM、VAD 自动分句和当前 ASR 配置；只显示识别结果，不调用回复模型或 TTS。</p>
+                </div>
+                <div class="asr-test-card__actions">
+                  <button type="button" class="ghost-btn" id="asr-test-clear">清空文字</button>
+                  <button type="button" class="save-btn" id="asr-test-toggle">开始测试</button>
+                </div>
+              </div>
+              <div class="asr-test-status" id="asr-test-status" data-state="stopped">
+                <span class="asr-test-status__dot" aria-hidden="true"></span>
+                <span id="asr-test-status-text">尚未开始</span>
+                <span class="asr-test-status__level" id="asr-test-level">音量 0.000</span>
+              </div>
+              <div class="asr-test-transcript" id="asr-test-transcript" role="log" aria-live="polite">
+                <div class="asr-test-transcript__empty" id="asr-test-empty">开始后对着麦克风说话，识别文字会实时显示在这里。</div>
+                <div id="asr-test-final"></div>
+                <div class="asr-test-transcript__partial" id="asr-test-partial"></div>
+              </div>
             </div>
 
             <div class="tts-section">

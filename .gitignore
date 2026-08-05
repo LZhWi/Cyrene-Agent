@@ -87,6 +87,7 @@ models/Xenova/
 
 # Python (uv) 本地环境 — 虚拟环境与缓存不跟踪，pyproject.toml / uv.lock 保持跟踪
 .venv/
+.venv-asr/
 __pycache__/
 *.pyc
 

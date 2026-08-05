@@ -294,8 +294,11 @@ let analyser: AnalyserNode | null = null;
 let workletNode: AudioWorkletNode | null = null;
 let micStream: MediaStream | null = null;
 let vadSilenceTimer: ReturnType<typeof setTimeout> | null = null;
+let vadPartialFlushTimer: ReturnType<typeof setTimeout> | null = null;
+let vadPartialFlushed = false;
 let vadSilenceMs = 1000;
 let vadThreshold = 0.01; // 音量阈值，默认调低照顾安静环境/小声麦克风
+const VAD_PARTIAL_FLUSH_MS = 250;
 let hasSpoken = false; // 用户是否已开始说话（VAD 只在说过话后检测静默）
 
 async function startMicrophone(): Promise<void> {
@@ -360,9 +363,14 @@ function startVAD(): void {
       // 有声音：标记已开始说话，重置静默计时
       if (!hasSpoken) console.log("[Call VAD] 开始说话 detected, volume=", avg.toFixed(4));
       hasSpoken = true;
+      vadPartialFlushed = false;
       if (vadSilenceTimer) {
         clearTimeout(vadSilenceTimer);
         vadSilenceTimer = null;
+      }
+      if (vadPartialFlushTimer) {
+        clearTimeout(vadPartialFlushTimer);
+        vadPartialFlushTimer = null;
       }
     } else if (hasSpoken) {
       // 静默且之前说过话：开始静默计时
@@ -373,7 +381,15 @@ function startVAD(): void {
           window.call?.turnEnd();
           vadSilenceTimer = null;
           hasSpoken = false;
+          vadPartialFlushed = false;
         }, vadSilenceMs);
+      }
+      if (!vadPartialFlushed && !vadPartialFlushTimer) {
+        vadPartialFlushTimer = setTimeout(() => {
+          window.call?.flushAsr();
+          vadPartialFlushTimer = null;
+          vadPartialFlushed = true;
+        }, Math.min(VAD_PARTIAL_FLUSH_MS, Math.max(100, vadSilenceMs - 100)));
       }
     }
   }, 100);
@@ -381,6 +397,8 @@ function startVAD(): void {
 
 function stopMicrophone(): void {
   if (vadSilenceTimer) { clearTimeout(vadSilenceTimer); vadSilenceTimer = null; }
+  if (vadPartialFlushTimer) { clearTimeout(vadPartialFlushTimer); vadPartialFlushTimer = null; }
+  vadPartialFlushed = false;
   if (workletNode) { try { workletNode.disconnect(); } catch { /* ignore */ } workletNode = null; }
   if (analyser) { try { analyser.disconnect(); } catch { /* ignore */ } analyser = null; }
   if (audioContext) { try { audioContext.close(); } catch { /* ignore */ } audioContext = null; }
@@ -564,6 +582,7 @@ declare global {
     call?: {
       start: () => void;
       sendAudioFrame: (frame: ArrayBuffer) => void;
+      flushAsr: () => void;
       turnEnd: () => void;
       ttsDone: () => void;
       stop: () => void;

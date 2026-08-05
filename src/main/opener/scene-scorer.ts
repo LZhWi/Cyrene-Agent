@@ -71,10 +71,10 @@ function baseScore(
       return 70 + timeWindowMatchScore(minuteOfDay, 7 * 60, 8 * 60 + 30, 10 * 60 + 30);
     }
     case "topic_followup": {
-      if (minuteOfDay < 11 * 60 + 30 || minuteOfDay > 17 * 60 + 30) return 0;
+      if (minuteOfDay < 11 * 60 + 30 || minuteOfDay > 23 * 60) return 0;
       if (snap.idleSec >= 180) return 0;
       if (snap.lastChatAgoMs < 60 * 60 * 1000 || snap.lastChatAgoMs > 6 * 60 * 60 * 1000) return 0;
-      return 35 + timeWindowMatchScore(minuteOfDay, 11 * 60 + 30, 14 * 60 + 30, 17 * 60 + 30, 10);
+      return 35 + timeWindowMatchScore(minuteOfDay, 11 * 60 + 30, 14 * 60 + 30, 23 * 60, 10);
     }
     case "evening_checkin": {
       if (minuteOfDay < 18 * 60 || minuteOfDay > 22 * 60) return 0;
@@ -84,7 +84,7 @@ function baseScore(
       if (!(snap.hour >= 23 || snap.hour < 3)) return 0;
       return 50 + MIN(snap.keyboardAccumMin, 60) * 50;
     case "idle_daze":
-      if (snap.hour < 9 || snap.hour > 18) return 0;
+      if (minuteOfDay < 9 * 60 || minuteOfDay > 23 * 60) return 0;
       if (snap.idleSec < 600) return 0;
       return 80 + MIN(snap.idleSec - 600, 1200) * 20;
     case "work_break":

@@ -38,7 +38,8 @@ import {
   isWechatSaveIntent,
   type InboundMediaDescriptor,
 } from "./inbound-media";
-import { getAsrConfig, VolcanoAsrStream } from "../../../asr/volcano-asr-engine";
+import { getAsrConfig, type AsrConfig } from "../../../asr/volcano-asr-engine";
+import { createAsrStream } from "../../../asr/asr-factory";
 import type {
   ChannelAttachment,
   ChannelCapability,
@@ -664,7 +665,8 @@ async function transcribeInboundWechatVoice(
 ): Promise<string> {
   if (!item.media) throw new Error("缺少语音下载参数");
   const cfg = getAsrConfig();
-  if (!cfg || cfg.engine !== "aliyun" || !cfg.appKey || !cfg.accessKeyId || !cfg.accessKeySecret) {
+  const aliyunMissingKey = cfg?.engine === "aliyun" && (!cfg.appKey || !cfg.accessKeyId || !cfg.accessKeySecret);
+  if (!cfg || aliyunMissingKey) {
     throw new Error("ASR 未配置");
   }
 
@@ -679,45 +681,24 @@ async function transcribeInboundWechatVoice(
     const decoded = await decode(source, sampleRate);
     pcm = Buffer.from(decoded.data);
   }
-  return transcribePcmWithAliyun(pcm, cfg);
+  return transcribePcm(pcm, cfg);
 }
 
-function transcribePcmWithAliyun(
+async function transcribePcm(
   pcm: Buffer,
-  cfg: { appKey: string; accessKeyId: string; accessKeySecret: string; language: string },
+  cfg: AsrConfig,
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const finals: string[] = [];
-    const stream = new VolcanoAsrStream(
-      () => {},
-      (text) => {
-        if (text.trim()) finals.push(text.trim());
-      },
-    );
-    const timeout = setTimeout(() => {
-      stream.stop();
-      const result = finals.join("").trim();
-      if (result) resolve(result);
-      else reject(new Error("ASR timeout"));
-    }, 15_000);
-
-    stream.start(cfg.appKey, cfg.accessKeyId, cfg.accessKeySecret, cfg.language)
-      .then(async () => {
-        await delay(500);
-        stream.sendAudio(pcm);
-        stream.stop();
-        await delay(2500);
-        clearTimeout(timeout);
-        const result = finals.join("").trim();
-        if (result) resolve(result);
-        else reject(new Error("没有识别到文字"));
-      })
-      .catch((err) => {
-        clearTimeout(timeout);
-        stream.stop();
-        reject(err instanceof Error ? err : new Error(String(err)));
-      });
+  const finals: string[] = [];
+  const stream = createAsrStream(cfg, () => {}, (text) => {
+    if (text.trim()) finals.push(text.trim());
   });
+  await stream.start();
+  if (cfg.engine === "aliyun") await delay(500);
+  stream.sendAudio(pcm);
+  await stream.finish();
+  const result = finals.join("").trim();
+  if (!result) throw new Error("没有识别到文字");
+  return result;
 }
 
 function delay(ms: number): Promise<void> {

@@ -2,8 +2,9 @@
 // 接口：官方 api_v2 (POST /api/tts)，返回 wav 字节
 // 参考：https://github.com/RVC-Boss/GPT-SoVITS
 import * as fs from "fs";
+import type { GptsovitsAdvancedOptions } from "../../shared/tts-types";
 
-export interface GptsovitsSynthesizeOptions {
+export interface GptsovitsSynthesizeOptions extends GptsovitsAdvancedOptions {
   baseUrl: string;          // 形如 "http://localhost:9880"，不含路径
   refAudioPath: string;     // 参考音频绝对路径
   promptText: string;      // 参考音频对应的文本
@@ -21,6 +22,35 @@ export interface GptsovitsSynthesizeResult {
 
 const DEFAULT_TIMEOUT_MS = 60000;
 const TTS_PATH = "/tts";
+const activeWeights = new Map<string, string>();
+let operationQueue: Promise<void> = Promise.resolve();
+
+function enqueue<T>(operation: () => Promise<T>): Promise<T> {
+  const result = operationQueue.then(operation, operation);
+  operationQueue = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+async function applyWeight(baseUrl: string, endpoint: string, weightsPath: string, signal: AbortSignal): Promise<void> {
+  if (!fs.existsSync(weightsPath)) throw new Error(`GPT-SoVITS 权重文件不存在: ${weightsPath}`);
+  const url = `${baseUrl.replace(/\/+$/, "")}${endpoint}?weights_path=${encodeURIComponent(weightsPath)}`;
+  const resp = await fetch(url, { method: "GET", signal });
+  if (!resp.ok) {
+    const detail = (await resp.text().catch(() => "")).slice(0, 300);
+    throw new Error(`GPT-SoVITS 权重切换失败: ${resp.status} ${detail}`);
+  }
+}
+
+async function ensureWeights(opts: GptsovitsSynthesizeOptions, signal: AbortSignal): Promise<void> {
+  const baseUrl = opts.baseUrl.replace(/\/+$/, "");
+  const gpt = opts.gptWeightsPath?.trim() ?? "";
+  const sovits = opts.sovitsWeightsPath?.trim() ?? "";
+  const signature = JSON.stringify([opts.version ?? "auto", gpt, sovits]);
+  if ((!gpt && !sovits) || activeWeights.get(baseUrl) === signature) return;
+  if (gpt) await applyWeight(baseUrl, "/set_gpt_weights", gpt, signal);
+  if (sovits) await applyWeight(baseUrl, "/set_sovits_weights", sovits, signal);
+  activeWeights.set(baseUrl, signature);
+}
 
 /**
  * 调 GPT-SoVITS api_v2。
@@ -29,6 +59,10 @@ const TTS_PATH = "/tts";
  * 返回完整 wav（或 mp3）字节。
  */
 export async function synthesize(opts: GptsovitsSynthesizeOptions): Promise<GptsovitsSynthesizeResult> {
+  return enqueue(() => synthesizeLocked(opts));
+}
+
+async function synthesizeLocked(opts: GptsovitsSynthesizeOptions): Promise<GptsovitsSynthesizeResult> {
   const format: "wav" | "mp3" = opts.format ?? "wav";
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const requestId = `gptsovits-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -57,6 +91,12 @@ export async function synthesize(opts: GptsovitsSynthesizeOptions): Promise<Gpts
     prompt_text: opts.promptText,
     prompt_lang: "zh",
     speed_factor: opts.speed ?? 1,
+    text_split_method: opts.textSplitMethod ?? "cut5",
+    top_k: opts.topK ?? 15,
+    top_p: opts.topP ?? 1,
+    temperature: opts.temperature ?? 1,
+    repetition_penalty: opts.repetitionPenalty ?? 1.35,
+    sample_steps: opts.sampleSteps ?? 32,
     streaming_mode: false,
     media_type: format,
   });
@@ -78,6 +118,7 @@ export async function synthesize(opts: GptsovitsSynthesizeOptions): Promise<Gpts
 
   let resp: Response;
   try {
+    await ensureWeights(opts, controller.signal);
     resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
