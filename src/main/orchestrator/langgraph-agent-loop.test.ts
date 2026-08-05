@@ -1,4 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+vi.mock("electron", () => ({
+  app: {
+    getPath: vi.fn((name: string) => `/mock/${name}`),
+    getAppPath: vi.fn(() => "/mock/app"),
+    getVersion: vi.fn(() => "0.0.0"),
+    isPackaged: false,
+    whenReady: vi.fn(() => Promise.resolve()),
+    on: vi.fn(),
+  },
+}));
 vi.mock("./task-router", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./task-router")>();
   return { ...actual, ENABLE_TASK_ROUTER: false };
