@@ -154,6 +154,8 @@ export interface ChatSession {
   mode?: ConversationMode;
   /** Code 会话专属元数据（mode === "code" 时使用） */
   codeSession?: CodeSessionMetadata;
+  /** 用户是否置顶该会话；置顶项在列表中优先展示。 */
+  pinned?: boolean;
 }
 
 // index.json 里的轻量元数据（列表渲染用）。
@@ -169,6 +171,8 @@ export interface ChatSessionMeta {
   /** 列表分组所需的轻量工作区信息，避免为每一项读取完整 session 文件。 */
   workspaceRoot?: string;
   workspaceDisplayName?: string;
+  /** 用户是否置顶该会话；与 ChatSession.pinned 同步。 */
+  pinned?: boolean;
 }
 
 export const CHAT_SCHEMA_VERSION = 1 as const;

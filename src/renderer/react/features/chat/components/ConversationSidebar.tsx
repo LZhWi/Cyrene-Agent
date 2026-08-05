@@ -1,5 +1,5 @@
 import { Conversations, type ConversationItemType } from "@ant-design/x";
-import { DeleteOutlined, EditOutlined } from "@ant-design/icons";
+import { DeleteOutlined, EditOutlined, PushpinOutlined } from "@ant-design/icons";
 import { Input, Menu, Modal, Popover } from "antd";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatSessionMeta, ConversationMode } from "../../../../../shared/chat-types";
@@ -12,6 +12,7 @@ interface ConversationSidebarProps {
   onOpenProject: (workspaceRoot: string) => void;
   onRename: (sessionId: string, newTitle: string) => void | Promise<void>;
   onDelete: (sessionId: string) => void | Promise<void>;
+  onTogglePin: (sessionId: string, pinned: boolean) => void | Promise<void>;
 }
 
 interface ProjectSummary {
@@ -104,6 +105,7 @@ export function ConversationSidebar({
   onOpenProject,
   onRename,
   onDelete,
+  onTogglePin,
 }: ConversationSidebarProps) {
   const supportsProjects = mode === "work" || mode === "code" || mode === "daily";
   const projects = useMemo(() => {
@@ -138,7 +140,8 @@ export function ConversationSidebar({
     y: number;
     sessionId: string;
     sessionTitle: string;
-  }>({ open: false, x: 0, y: 0, sessionId: "", sessionTitle: "" });
+    pinned: boolean;
+  }>({ open: false, x: 0, y: 0, sessionId: "", sessionTitle: "", pinned: false });
 
   const [editing, setEditing] = useState<{
     sessionId: string;
@@ -155,9 +158,20 @@ export function ConversationSidebar({
     input.select();
   }, [editing]);
 
-  const items: ConversationItemType[] = sessions.map((session) => ({
+  const sortedSessions = useMemo(
+    () =>
+      [...sessions].sort((a, b) => {
+        if (a.pinned && !b.pinned) return -1;
+        if (!a.pinned && b.pinned) return 1;
+        return b.updatedAt - a.updatedAt;
+      }),
+    [sessions],
+  );
+
+  const items: ConversationItemType[] = sortedSessions.map((session) => ({
     key: session.id,
     "data-session-id": session.id,
+    "data-pinned": session.pinned ? "true" : undefined,
     label:
       editing?.sessionId === session.id ? (
         <Input
@@ -182,7 +196,10 @@ export function ConversationSidebar({
           onClick={(e) => e.stopPropagation()}
         />
       ) : (
-        session.title || "新对话"
+        <span className="cy-session-label">
+          <span className="cy-session-label__title">{session.title || "新对话"}</span>
+          {session.pinned && <PushpinOutlined className="cy-session-label__pin" />}
+        </span>
       ),
     icon: <ConversationIcon />,
     ...(supportsProjects ? { group: session.workspaceRoot ?? `unbound:${session.id}` } : {}),
@@ -199,6 +216,7 @@ export function ConversationSidebar({
       y: event.clientY,
       sessionId,
       sessionTitle: session.title || "新对话",
+      pinned: session.pinned ?? false,
     });
   }
 
@@ -214,6 +232,8 @@ export function ConversationSidebar({
         sessionId: contextMenu.sessionId,
         value: target?.title ?? "",
       });
+    } else if (key === "toggle-pin") {
+      void onTogglePin(contextMenu.sessionId, !contextMenu.pinned);
     } else if (key === "delete") {
       Modal.confirm({
         title: `删除"${contextMenu.sessionTitle}"？`,
@@ -313,6 +333,11 @@ export function ConversationSidebar({
               <Menu
                 items={[
                   { key: "rename", label: "重命名", icon: <EditOutlined /> },
+                  {
+                    key: "toggle-pin",
+                    label: contextMenu.pinned ? "取消置顶" : "置顶",
+                    icon: <PushpinOutlined />,
+                  },
                   { key: "delete", label: "删除", icon: <DeleteOutlined />, danger: true },
                 ]}
                 onClick={({ key }) => handleMenuClick(key)}

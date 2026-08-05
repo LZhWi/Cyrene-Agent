@@ -125,6 +125,13 @@ export function registerChatsIpc(): void {
     return ok;
   });
 
+  ipcMain.handle(IPC.CHATS_SET_PINNED, (event, payload: { id: string; pinned: boolean }) => {
+    if (!payload || typeof payload.id !== "string") return null;
+    const session = chatsStore.setSessionPinned(payload.id, Boolean(payload.pinned));
+    if (session) broadcastChanged(event.sender);
+    return session;
+  });
+
   ipcMain.handle(IPC.CHATS_OPEN_FOLDER, async () => {
     await chatsStore.openStorageFolder();
     return true;

@@ -107,6 +107,7 @@ export const IPC = {
   CHATS_REPLACE_TAIL: "chats:replace-tail",
   CHATS_RENAME: "chats:rename",
   CHATS_DELETE: "chats:delete",
+  CHATS_SET_PINNED: "chats:set-pinned",
   CHATS_OPEN_FOLDER: "chats:open-folder",
   CHATS_OPEN_WORKSPACE: "chats:open-workspace",
   CHATS_MIGRATE_LEGACY: "chats:migrate-legacy",

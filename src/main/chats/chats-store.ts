@@ -97,10 +97,12 @@ function readIndexFromDisk(): ChatSessionMeta[] {
       const workspaceDisplayName = typeof meta.workspaceDisplayName === "string"
         ? meta.workspaceDisplayName
         : session?.workspaceBinding?.displayName;
+      const pinned = Boolean(meta.pinned ?? session?.pinned);
       if (
         mode !== indexedMode
         || workspaceRoot !== meta.workspaceRoot
         || workspaceDisplayName !== meta.workspaceDisplayName
+        || pinned !== meta.pinned
       ) migrated = true;
       normalized.push({
         id: meta.id!,
@@ -113,6 +115,7 @@ function readIndexFromDisk(): ChatSessionMeta[] {
         mode,
         workspaceRoot,
         workspaceDisplayName,
+        pinned,
       });
     }
     if (migrated) atomicWriteJson(indexPath, normalized);
@@ -213,6 +216,7 @@ function metaFromSession(session: ChatSession): ChatSessionMeta {
     mode: isConversationMode(session.mode) ? session.mode : inferLegacyMode(session.purpose),
     workspaceRoot: session.workspaceBinding?.workspaceRoot,
     workspaceDisplayName: session.workspaceBinding?.displayName,
+    pinned: session.pinned,
   };
 }
 
@@ -254,11 +258,17 @@ export function getRootDir(): string {
 }
 
 export function listSessions(options?: { mode?: ConversationMode }): ChatSessionMeta[] {
-  // 返回深拷贝，避免外部修改影响缓存
+  // 返回深拷贝，避免外部修改影响缓存；置顶项优先，其余按 updatedAt 倒序
   const sessions = options?.mode
     ? indexCache.filter((session) => session.mode === options.mode)
     : indexCache;
-  return sessions.map((m) => ({ ...m }));
+  return [...sessions]
+    .sort((a, b) => {
+      if (a.pinned && !b.pinned) return -1;
+      if (!a.pinned && b.pinned) return 1;
+      return b.updatedAt - a.updatedAt;
+    })
+    .map((m) => ({ ...m }));
 }
 
 export function getSession(id: string): ChatSession | null {
@@ -419,6 +429,15 @@ export function renameSession(id: string, title: string): ChatSession | null {
   session.title = trimmed.slice(0, 80);
   session.titleIsCustom = true;
   session.updatedAt = Date.now();
+  writeSessionFile(session);
+  upsertMeta(metaFromSession(session));
+  return session;
+}
+
+export function setSessionPinned(id: string, pinned: boolean): ChatSession | null {
+  const session = readSessionFile(id);
+  if (!session) return null;
+  session.pinned = Boolean(pinned);
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));
   return session;

@@ -197,6 +197,7 @@ interface ChatStoreApi {
   setMessageTtsCacheKey: (id: string, messageId: string, cacheKey: string, converterVersion: string) => Promise<ChatSession | null>;
   rename: (id: string, title: string) => Promise<ChatSession | null>;
   delete: (id: string) => Promise<boolean>;
+  setPinned: (id: string, pinned: boolean) => Promise<ChatSession | null>;
   pickWorkspaceFolder: () => Promise<{ ok: boolean; path?: string; displayName?: string; error?: string }>;
   setWorkspace: (sessionId: string, workspaceRoot: string) => Promise<{ ok: boolean; error?: string; isEmpty?: boolean }>;
   initLearnWorkspace: (sessionId: string) => Promise<{ ok: boolean; error?: string; created?: string[]; skipped?: string[] }>;
@@ -1471,6 +1472,13 @@ export function ChatPage() {
     await refreshSessionsRef.current(mode, true);
   }
 
+  async function handleTogglePinSession(sessionId: string, pinned: boolean) {
+    const store = chatStore();
+    if (!store?.setPinned) return;
+    await store.setPinned(sessionId, pinned);
+    await refreshSessionsRef.current(mode, false);
+  }
+
   async function changeClineMode(clineMode: "plan" | "act") {
     const store = chatStore();
     if (!store) return;
@@ -1858,6 +1866,7 @@ export function ChatPage() {
           }}
           onRename={(sessionId, newTitle) => void handleRenameSession(sessionId, newTitle)}
           onDelete={(sessionId) => void handleDeleteSession(sessionId)}
+          onTogglePin={(sessionId, pinned) => void handleTogglePinSession(sessionId, pinned)}
         />
       </div>
       <main

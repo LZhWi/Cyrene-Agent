@@ -23,16 +23,16 @@
 }
 
 .cy-conversation-sidebar__title {
-  padding: 2px 10px 8px;
+  padding: 2px 10px 4px;
   color: #8b8b8b;
-  font: 600 11px/1.2 var(--rb-font-sans, sans-serif);
+  font: 600 10.5px/1.15 var(--rb-font-sans, sans-serif);
   letter-spacing: .12em;
 }
 
 .cy-conversation-sidebar__empty {
-  padding: 14px 10px;
+  padding: 8px;
   color: var(--cy-text-muted);
-  font: 400 12px/1.5 var(--rb-font-sans, sans-serif);
+  font: 400 11px/1.45 var(--rb-font-sans, sans-serif);
 }
 
 .cy-conversation-list-wrapper {
@@ -46,16 +46,17 @@
 
 .cy-conversation-list {
   margin: 0;
-  padding: 0 3px 12px;
+  padding: 0 3px 6px;
 }
 
 .cy-conversation-list .ant-conversations-item {
-  min-height: 34px;
-  margin-block: 2px;
-  padding-inline: 9px;
-  border-radius: 9px;
+  height: auto;
+  min-height: auto;
+  margin-block: 1px;
+  padding: 5px 7px;
+  border-radius: 6px;
   color: #5f5f5f;
-  font: 500 12px/1.35 var(--rb-font-sans, sans-serif);
+  font: 500 11.5px/1.25 var(--rb-font-sans, sans-serif);
 }
 
 .cy-conversation-list .ant-conversations-item:hover {
@@ -65,13 +66,13 @@
 .cy-conversation-list .ant-conversations-item-active {
   background: #fff;
   color: var(--cy-text);
-  box-shadow: 0 3px 12px rgb(46 38 41 / 7%);
+  box-shadow: 0 1px 5px rgb(46 38 41 / 7%);
 }
 
 .cy-conversation-list .ant-conversations-item-icon,
 .cy-conversation-project svg {
-  width: 15px;
-  height: 15px;
+  width: 13px;
+  height: 13px;
   flex: none;
   fill: none;
   stroke: currentColor;
@@ -81,15 +82,17 @@
 }
 
 .cy-conversation-list .ant-conversations-group-title {
-  padding: 5px 7px;
+  height: auto;
+  min-height: auto;
+  padding: 3px 5px;
   color: #393939;
   cursor: pointer;
 }
 
 .cy-conversation-list .ant-conversations-group-collapse-trigger {
   display: grid;
-  width: 20px;
-  height: 20px;
+  width: 16px;
+  height: 16px;
   flex: none;
   place-items: center;
 }
@@ -99,8 +102,8 @@
 }
 
 .cy-conversation-list .ant-conversations-group-collapse-trigger::before {
-  width: 6px;
-  height: 6px;
+  width: 4.5px;
+  height: 4.5px;
   border-right: 2px solid currentColor;
   border-bottom: 2px solid currentColor;
   content: "";
@@ -116,8 +119,29 @@
   display: flex;
   min-width: 0;
   align-items: center;
-  gap: 7px;
-  font: 650 11px/1.25 var(--rb-font-sans, sans-serif);
+  gap: 5px;
+  font: 650 10.5px/1.15 var(--rb-font-sans, sans-serif);
+}
+
+.cy-session-label {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 5px;
+}
+
+.cy-session-label__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cy-session-label__pin {
+  flex: none;
+  color: var(--cy-accent, #ff5b8a);
+  font-size: 10px;
+  opacity: 0.85;
 }
 
 .cy-conversation-project span {
@@ -232,7 +256,7 @@
   border-radius: 6px;
   background: #fff;
   color: var(--cy-text);
-  font: 500 12px/1.35 var(--rb-font-sans, sans-serif);
+  font: 500 11px/1.25 var(--rb-font-sans, sans-serif);
 }
 
 .cy-session-rename-input input {

@@ -505,6 +505,8 @@ const chatStoreApi = {
   rename: (id: string, title: string) =>
     ipcRenderer.invoke(IPC.CHATS_RENAME, { id, title }),
   delete: (id: string) => ipcRenderer.invoke(IPC.CHATS_DELETE, id),
+  setPinned: (id: string, pinned: boolean) =>
+    ipcRenderer.invoke(IPC.CHATS_SET_PINNED, { id, pinned }),
   openFolder: () => ipcRenderer.invoke(IPC.CHATS_OPEN_FOLDER),
   openWorkspace: (workspaceRoot: string) =>
     ipcRenderer.invoke(IPC.CHATS_OPEN_WORKSPACE, workspaceRoot),
