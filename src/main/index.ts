@@ -732,6 +732,8 @@ interface GeneralSettings extends ChatAppearanceSettings {
   ttsGptsovitsRefAudioPath: string;
   ttsGptsovitsPromptText: string;
   ttsGptsovitsFormat: "wav" | "mp3";
+  /** GPT-SoVITS 单次合成超时（毫秒）。本地推理长文本可能较慢，默认 3 分钟。 */
+  ttsGptsovitsTimeoutMs: number;
   // 自定义云端 TTS
   ttsCustomCloudEndpointUrl: string;
   ttsCustomCloudApiKey: string;
@@ -969,6 +971,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   ttsGptsovitsRefAudioPath: "",
   ttsGptsovitsPromptText: "",
   ttsGptsovitsFormat: "wav",
+  ttsGptsovitsTimeoutMs: 180_000,
   ttsCustomCloudEndpointUrl: "",
   ttsCustomCloudApiKey: "",
   ttsCustomCloudVoiceId: "",
@@ -1511,6 +1514,9 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     ttsGptsovitsRefAudioPath: typeof input?.ttsGptsovitsRefAudioPath === "string" ? input.ttsGptsovitsRefAudioPath : "",
     ttsGptsovitsPromptText: typeof input?.ttsGptsovitsPromptText === "string" ? input.ttsGptsovitsPromptText : "",
     ttsGptsovitsFormat: input?.ttsGptsovitsFormat === "mp3" ? "mp3" : "wav",
+    ttsGptsovitsTimeoutMs: typeof input?.ttsGptsovitsTimeoutMs === "number" && Number.isFinite(input.ttsGptsovitsTimeoutMs)
+      ? Math.max(10_000, Math.min(3_600_000, Math.round(input.ttsGptsovitsTimeoutMs)))
+      : DEFAULT_GENERAL_SETTINGS.ttsGptsovitsTimeoutMs,
     ttsCustomCloudEndpointUrl: typeof input?.ttsCustomCloudEndpointUrl === "string" ? input.ttsCustomCloudEndpointUrl : "",
     ttsCustomCloudApiKey: typeof input?.ttsCustomCloudApiKey === "string" ? input.ttsCustomCloudApiKey : "",
     ttsCustomCloudVoiceId: typeof input?.ttsCustomCloudVoiceId === "string" ? input.ttsCustomCloudVoiceId : "",
@@ -1647,6 +1653,7 @@ async function synthesizeTtsSession(
     const payload = {
       baseUrl: settings.ttsGptsovitsBaseUrl, refAudioPath: settings.ttsGptsovitsRefAudioPath,
       promptText: settings.ttsGptsovitsPromptText, text: request.speechText, speed: settings.ttsSpeed, format,
+      timeoutMs: settings.ttsGptsovitsTimeoutMs,
     };
     cacheKey = buildGptsovitsCacheKey(payload);
     audio = (await gptsovitsSynthesize({ ...payload, debugLog: appendGptsovitsTtsLog })).audio;
@@ -3208,6 +3215,7 @@ function createWindow(): void {
         ttsGptsovitsRefAudioPath: s.ttsGptsovitsRefAudioPath,
         ttsGptsovitsPromptText: s.ttsGptsovitsPromptText,
         ttsGptsovitsFormat: s.ttsGptsovitsFormat,
+        ttsGptsovitsTimeoutMs: s.ttsGptsovitsTimeoutMs,
         ttsCustomCloudEndpointUrl: s.ttsCustomCloudEndpointUrl,
         ttsCustomCloudApiKey: s.ttsCustomCloudApiKey,
         ttsCustomCloudVoiceId: s.ttsCustomCloudVoiceId,
@@ -4116,11 +4124,12 @@ ipcMain.handle(IPC.SETTINGS_TEST_CONNECTION, async (_event, cfg: VendorConfig) =
 
 /**
  * 测试视觉模型连通性。
- * 用一张 4x4 纯红 PNG（100 字节 base64）做测试图——纯色位图所有视觉模型都能识别，
+ * 用一张 32x32 纯红 PNG（约 100 字节 base64）做测试图——纯色位图所有视觉模型都能识别，
  * 比 SVG 兼容性好（SVG 是矢量，部分模型不支持）。
+ * 32x32 是折中：足够小保持 payload 轻，又满足千问等厂商对图片长宽 > 10 像素的限制。
  * 验连通性（HTTP 2xx + 有内容返回）而非对答案——模型可能只说"一张红色图片"也算成功。
  */
-const VISION_TEST_IMAGE_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAQAAAAECAYAAACp8Z5+AAAAEklEQVR4nGP4z8DwHxkzkC4AADxAH+HggXe0AAAAAElFTkSuQmCC";
+const VISION_TEST_IMAGE_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAAJ0lEQVR42u3NsQkAAAjAsP7/tF7hIASyp6lTCQQCgUAgEAgEgi/BAjLD/C5w/SM9AAAAAElFTkSuQmCC";
 
 ipcMain.handle(IPC.SETTINGS_TEST_VISION, async (_event, cfg: { baseUrl: string; apiKey: string; model: string }) => {
   const start = Date.now();
@@ -5327,7 +5336,7 @@ app.whenReady().then(async () => {
         promptText: cfg.ttsGptsovitsPromptText,
         // custom-cloud
         endpointUrl: cfg.ttsCustomCloudEndpointUrl,
-        timeoutMs: cfg.ttsCustomCloudTimeoutMs,
+        timeoutMs: cfg.ttsEngine === "gptsovits" ? cfg.ttsGptsovitsTimeoutMs : cfg.ttsCustomCloudTimeoutMs,
         // mimo
         voiceAudioPath: cfg.ttsMimoVoiceAudioPath,
         stylePrompt: cfg.ttsMimoStylePrompt,

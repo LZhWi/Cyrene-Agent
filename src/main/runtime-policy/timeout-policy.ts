@@ -63,8 +63,8 @@ const STAGE_DEFAULTS: Record<RuntimeTimeoutStage, TimeoutPolicy> = {
     totalMs: 30_000,
   },
   "tts-gptsovits": {
-    // gptsovits-engine.ts DEFAULT_TIMEOUT_MS：60s（本地推理可能较慢）
-    totalMs: 60_000,
+    // gptsovits-engine.ts DEFAULT_TIMEOUT_MS：3 分钟（本地推理可能较慢，长文本需要更久）
+    totalMs: 180_000,
   },
   "tts-custom-cloud": {
     // custom-cloud-engine.ts DEFAULT_TIMEOUT_MS：30s

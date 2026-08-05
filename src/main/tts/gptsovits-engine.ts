@@ -11,7 +11,7 @@ export interface GptsovitsSynthesizeOptions {
   text: string;             // 待合成文本
   speed?: number;           // 0.5~2，默认 1
   format?: "wav" | "mp3";   // 默认 wav
-  timeoutMs?: number;      // 默认 60000（本地推理可能较慢）
+  timeoutMs?: number;      // 默认由 ../runtime-policy 的 tts-gptsovits 阶段提供，当前 3 分钟
   debugLog?: (entry: Record<string, unknown>) => void;
 }
 

@@ -52,6 +52,7 @@ let ttsSettingsGetter: (() => {
   // GPT-SoVITS
   ttsGptsovitsBaseUrl: string; ttsGptsovitsRefAudioPath: string;
   ttsGptsovitsPromptText: string; ttsGptsovitsFormat: "wav" | "mp3";
+  ttsGptsovitsTimeoutMs: number;
   ttsCustomCloudEndpointUrl: string; ttsCustomCloudApiKey: string; ttsCustomCloudVoiceId: string;
   ttsCustomCloudFormat: "wav" | "mp3"; ttsCustomCloudTimeoutMs: number;
   ttsMimoKey: string; ttsMimoVoiceAudioPath: string; ttsMimoStylePrompt: string;
@@ -70,6 +71,7 @@ export function setCallSettings(
     ttsSpeed: number; ttsVolume: number;
     ttsGptsovitsBaseUrl: string; ttsGptsovitsRefAudioPath: string;
     ttsGptsovitsPromptText: string; ttsGptsovitsFormat: "wav" | "mp3";
+    ttsGptsovitsTimeoutMs: number;
     ttsCustomCloudEndpointUrl: string; ttsCustomCloudApiKey: string; ttsCustomCloudVoiceId: string;
     ttsCustomCloudFormat: "wav" | "mp3"; ttsCustomCloudTimeoutMs: number;
     ttsMimoKey: string; ttsMimoVoiceAudioPath: string; ttsMimoStylePrompt: string;
@@ -238,7 +240,7 @@ export async function endTurn(): Promise<void> {
         format: tts.ttsGptsovitsFormat,
         // custom-cloud
         endpointUrl: tts.ttsCustomCloudEndpointUrl,
-        timeoutMs: tts.ttsCustomCloudTimeoutMs,
+        timeoutMs: tts.ttsEngine === "gptsovits" ? tts.ttsGptsovitsTimeoutMs : tts.ttsCustomCloudTimeoutMs,
         voiceAudioPath: tts.ttsMimoVoiceAudioPath,
         stylePrompt: tts.ttsMimoStylePrompt,
         ...(tts.ttsEngine === "custom-cloud" ? { format: tts.ttsCustomCloudFormat } : {}),

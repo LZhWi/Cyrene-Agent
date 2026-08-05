@@ -1846,6 +1846,10 @@
                   <option value="mp3">mp3（需服务端支持）</option>
                 </select>
               </div>
+              <div class="tts-field">
+                <label>合成超时（毫秒）</label>
+                <input type="number" id="tts-gptsovits-timeout" placeholder="180000" min="10000" max="3600000" step="1000" />
+              </div>
               <button type="button" class="ghost-btn" id="tts-gptsovits-test"><svg width="14" height="14" viewBox="0 0 48 48" fill="none" aria-hidden="true"><title>测试发音</title><path d="M24 6V42C17 42 11.7985 32.8391 11.7985 32.8391H6C4.89543 32.8391 4 31.9437 4 30.8391V17.0108C4 15.9062 4.89543 15.0108 6 15.0108H11.7985C11.7985 15.0108 17 6 24 6Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M32 15L32 15C32.6232 15.5565 33.1881 16.1797 33.6841 16.8588C35.1387 18.8504 36 21.3223 36 24C36 26.6545 35.1535 29.1067 33.7218 31.0893C33.2168 31.7885 32.6391 32.4293 32 33" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 测试发音</button>
               <div class="tts-clone-status" id="tts-gptsovits-test-status"></div>
               <!-- GPT-SoVITS 配置保存 -->

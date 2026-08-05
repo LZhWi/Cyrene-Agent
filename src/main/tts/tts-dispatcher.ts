@@ -21,9 +21,9 @@ export interface SynthesizeByEnginePayload {
   refAudioPath?: string;
   promptText?: string;
   format?: "wav" | "mp3";
+  timeoutMs?: number; // gptsovits / custom-cloud 共用
   // custom-cloud 专用
   endpointUrl?: string;
-  timeoutMs?: number;
   // mimo 专用
   voiceAudioPath?: string;
   stylePrompt?: string;
@@ -72,6 +72,7 @@ export async function synthesizeByEngine(
       text: payload.text,
       speed: payload.speed,
       format: payload.format ?? "wav",
+      timeoutMs: payload.timeoutMs,
     });
     return { audio: result.audio, format: result.format };
   }

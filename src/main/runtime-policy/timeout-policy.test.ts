@@ -10,7 +10,7 @@ describe("resolveTimeoutPolicy", () => {
       ["native-function-calling", 75_000],
       ["tool-execution", 300_000],
       ["tts-minimax", 30_000],
-      ["tts-gptsovits", 60_000],
+      ["tts-gptsovits", 180_000],
       ["tts-custom-cloud", 30_000],
       ["tts-mossland", 30_000],
       ["external-http", 30_000],
@@ -39,7 +39,7 @@ describe("resolveTimeoutPolicy", () => {
       stage: "tts-gptsovits",
       override: { firstResponseMs: 10_000 },
     });
-    expect(policy.totalMs).toBe(60_000); // default preserved
+    expect(policy.totalMs).toBe(180_000); // default preserved
     expect(policy.firstResponseMs).toBe(10_000);
   });
 

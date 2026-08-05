@@ -5671,6 +5671,7 @@ async function loadTtsConfig(): Promise<void> {
   ttsEl("tts-gptsovits-prompt-text").value = String(ttsConfig.ttsGptsovitsPromptText ?? "");
   (ttsEl("tts-gptsovits-format") as HTMLSelectElement).value =
     ttsConfig.ttsGptsovitsFormat === "mp3" ? "mp3" : "wav";
+  ttsEl("tts-gptsovits-timeout").value = String(ttsConfig.ttsGptsovitsTimeoutMs ?? 180000);
 
   // 自定义云端
   ttsEl("tts-custom-cloud-url").value = String(ttsConfig.ttsCustomCloudEndpointUrl ?? "");
@@ -5775,6 +5776,15 @@ ttsEl("tts-speed").addEventListener("change", () => saveTtsField("ttsSpeed", Num
 ttsEl("tts-volume").addEventListener("input", updateTtsSliderLabels);
 ttsEl("tts-volume").addEventListener("change", () => saveTtsField("ttsVolume", Number(ttsEl("tts-volume").value)));
 
+// GPT-SoVITS 超时输入框（number，blur 时保存并做简单边界限制）
+ttsEl("tts-gptsovits-timeout").addEventListener("change", () => {
+  let value = Number(ttsEl("tts-gptsovits-timeout").value);
+  if (!Number.isFinite(value) || value < 10000) value = 10000;
+  if (value > 3600000) value = 3600000;
+  ttsEl("tts-gptsovits-timeout").value = String(value);
+  void saveTtsField("ttsGptsovitsTimeoutMs", value);
+});
+
 // ── TTS 文本输入框：按 Provider 分组 + 手动保存 ──
 // 之前这里有 input/change 自动 saveTtsField（settings.ts:4270–4295），
 // 但每次 input 都会触发 IPC，IME 组字过程会被打断，用户反馈"打着打着输入法被打断"。
@@ -5787,6 +5797,7 @@ const TTS_FIELD_MAP: Record<string, string> = {
   "tts-gptsovits-url":        "ttsGptsovitsBaseUrl",
   "tts-gptsovits-ref-audio":  "ttsGptsovitsRefAudioPath",
   "tts-gptsovits-prompt-text":"ttsGptsovitsPromptText",
+  "tts-gptsovits-timeout":    "ttsGptsovitsTimeoutMs",
   "tts-custom-cloud-url":     "ttsCustomCloudEndpointUrl",
   "tts-custom-cloud-key":     "ttsCustomCloudApiKey",
   "tts-custom-cloud-voice":   "ttsCustomCloudVoiceId",
@@ -5804,7 +5815,7 @@ const TTS_FIELD_MAP: Record<string, string> = {
 // 每个 Provider 自己负责的文本输入框列表（不含 switch/slider/select，复刻子区块也不在此）
 const TTS_PROVIDER_FIELDS: Record<string, string[]> = {
   minimax:        ["tts-minimax-key", "tts-minimax-voice"],
-  gptsovits:      ["tts-gptsovits-url", "tts-gptsovits-ref-audio", "tts-gptsovits-prompt-text"],
+  gptsovits:      ["tts-gptsovits-url", "tts-gptsovits-ref-audio", "tts-gptsovits-prompt-text", "tts-gptsovits-timeout"],
   "custom-cloud": ["tts-custom-cloud-url", "tts-custom-cloud-key", "tts-custom-cloud-voice", "tts-custom-cloud-timeout"],
   mimo:           ["tts-mimo-key", "tts-mimo-voice-audio", "tts-mimo-style"],
   mossland:       ["tts-mossland-key", "tts-mossland-voice", "tts-mossland-model", "tts-mossland-text", "tts-mossland-format"],
