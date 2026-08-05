@@ -27,5 +27,17 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Test
-        run: npx vitest run --reporter=verbose
+      - name: Test src/main
+        run: npx vitest run --reporter=verbose src/main
+
+      - name: Test src/renderer
+        run: npx vitest run --reporter=verbose src/renderer
+
+      - name: Test src/shared + src/cli
+        run: npx vitest run --reporter=verbose src/shared src/cli
+
+      - name: Test skills
+        run: npx vitest run --reporter=verbose skills
+
+      - name: Test scripts/cline-poc
+        run: npx vitest run --reporter=verbose scripts/cline-poc
