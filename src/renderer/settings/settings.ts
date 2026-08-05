@@ -2752,30 +2752,35 @@ customEndpointGuideBtn?.addEventListener("click", () => {
 
 // ── 模型厂商 Work 流程适配说明 ──────────────────────────────
 // 展示各厂商结构化输出档位与实测兼容性；「详细文档」在 app 内本地渲染完整实测报告。
-const WORK_FLOW_COMPAT_MD = `## 模型兼容性
-
-> Cyrene 会根据不同厂商自动选择对应的 Structured Output Profile。
-
-| 厂商 | 支持状态 | 档位 | 已实测模型 | 说明 |
-|------|:-------:|:---:|------------|------|
-| OpenAI | ⚠️ 文档适配 | A | - | 已完成官方协议适配，等待实测。 |
-| Claude | ⚠️ 文档适配 | A | - | 已完成官方协议适配，等待实测。 |
-| 豆包 | ✅ 已实测 | A | Seed 2.1 Turbo / Pro | 推荐使用，完整 Work 流程稳定。 |
-| Kimi | ✅ 已实测 | A | K2.6、K2.7 Code | 推荐普通 API，Coding 端点不建议用于 Work。 |
-| DeepSeek | ✅ 已实测 | B | V4 Flash、V4 Pro | 推荐，速度快、稳定。 |
-| Qwen | ✅ 已实测 | B | Qwen3.7 Max | 推荐，表现稳定。 |
-| GLM | ✅ 已实测 | B | GLM 5.1、5.2 | 推荐，4.7 不建议。 |
-| MiMo | ✅ 已实测 | B | MiMo 2.5、2.5 Pro | 推荐，表现稳定。 |
-| MiniMax | ✅ 已实测 | M | MiniMax M3 | 推荐，需使用 M 档适配。 |
-| 其他模型 | ⚠️ 文档适配 | D | - | 使用通用兼容模式，请自行验证。 |
-
-### 档位说明
-
-- **A**：原生 JSON Schema / Function Calling
-- **B**：JSON Object + 本地校验
-- **M**：MiniMax 专用适配
-- **D**：通用兼容模式（未知模型 / 自定义端点）
-`;
+// 模型厂商 Work 流程适配（手写 HTML，避免引入 markdown 渲染依赖）
+const WORK_FLOW_COMPAT_MD = `
+<h2>模型兼容性</h2>
+<blockquote>Cyrene 会根据不同厂商自动选择对应的 Structured Output Profile。</blockquote>
+<table>
+  <thead>
+    <tr><th>厂商</th><th>支持状态</th><th>档位</th><th>已实测模型</th><th>说明</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>OpenAI</td><td>⚠️ 文档适配</td><td>A</td><td>-</td><td>已完成官方协议适配，等待实测。</td></tr>
+    <tr><td>Claude</td><td>⚠️ 文档适配</td><td>A</td><td>-</td><td>已完成官方协议适配，等待实测。</td></tr>
+    <tr><td>豆包</td><td>✅ 已实测</td><td>A</td><td>Seed 2.1 Turbo / Pro</td><td>推荐使用，完整 Work 流程稳定。</td></tr>
+    <tr><td>Kimi</td><td>✅ 已实测</td><td>A</td><td>K2.6、K2.7 Code</td><td>推荐普通 API，Coding 端点不建议用于 Work。</td></tr>
+    <tr><td>DeepSeek</td><td>✅ 已实测</td><td>B</td><td>V4 Flash、V4 Pro</td><td>推荐，速度快、稳定。</td></tr>
+    <tr><td>Qwen</td><td>✅ 已实测</td><td>B</td><td>Qwen3.7 Max</td><td>推荐，表现稳定。</td></tr>
+    <tr><td>GLM</td><td>✅ 已实测</td><td>B</td><td>GLM 5.1、5.2</td><td>推荐，4.7 不建议。</td></tr>
+    <tr><td>MiMo</td><td>✅ 已实测</td><td>B</td><td>MiMo 2.5、2.5 Pro</td><td>推荐，表现稳定。</td></tr>
+    <tr><td>MiniMax</td><td>✅ 已实测</td><td>M</td><td>MiniMax M3</td><td>推荐，需使用 M 档适配。</td></tr>
+    <tr><td>其他模型</td><td>⚠️ 文档适配</td><td>D</td><td>-</td><td>使用通用兼容模式，请自行验证。</td></tr>
+  </tbody>
+</table>
+<h3>档位说明</h3>
+<ul>
+  <li><strong>A</strong>：原生 JSON Schema / Function Calling</li>
+  <li><strong>B</strong>：JSON Object + 本地校验</li>
+  <li><strong>M</strong>：MiniMax 专用适配</li>
+  <li><strong>D</strong>：通用兼容模式（未知模型 / 自定义端点）</li>
+</ul>
+`.trim();
 
 function buildWorkFlowAdaptBody(): string {
   const rendered = renderMarkdown(WORK_FLOW_COMPAT_MD);
