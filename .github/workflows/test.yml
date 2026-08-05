@@ -11,7 +11,6 @@ jobs:
     runs-on: windows-latest
     env:
       NODE_OPTIONS: --max-old-space-size=4096
-      VITEST_MAX_WORKERS: 2
     steps:
       - uses: actions/checkout@v4
 
@@ -28,16 +27,16 @@ jobs:
         run: npm run build
 
       - name: Test src/main
-        run: npx vitest run --reporter=verbose src/main
+        run: npx vitest run --reporter=verbose --maxWorkers=1 src/main
 
       - name: Test src/renderer
-        run: npx vitest run --reporter=verbose src/renderer
+        run: npx vitest run --reporter=verbose --maxWorkers=1 src/renderer
 
       - name: Test src/shared + src/cli
-        run: npx vitest run --reporter=verbose src/shared src/cli
+        run: npx vitest run --reporter=verbose --maxWorkers=1 src/shared src/cli
 
       - name: Test skills
-        run: npx vitest run --reporter=verbose skills
+        run: npx vitest run --reporter=verbose --maxWorkers=1 skills
 
       - name: Test scripts/cline-poc
-        run: npx vitest run --reporter=verbose scripts/cline-poc
+        run: npx vitest run --reporter=verbose --maxWorkers=1 scripts/cline-poc
