@@ -31,8 +31,6 @@ import { type ReasoningPreference } from "../../shared/reasoning";
 import { type LoginFlowState } from "../../shared/music-types";
 import { resolveApiEndpoint, type ApiTransport } from "../../shared/api-endpoint";
 import type { ChatAppearanceSettings } from "../../shared/chat-appearance";
-import { renderMarkdown } from "../lib/markdown/markdown-renderer";
-import workFlowDocMd from "../../../docs/model-work-test/work-flow-test-results-2026-07-24.md?raw";
 import {
   DEFAULT_CUSTOM_STYLE,
   normalizeCustomStyleConfig,
@@ -2752,45 +2750,43 @@ customEndpointGuideBtn?.addEventListener("click", () => {
 
 // ── 模型厂商 Work 流程适配说明 ──────────────────────────────
 // 展示各厂商结构化输出档位与实测兼容性；「详细文档」在 app 内本地渲染完整实测报告。
-const WORK_FLOW_COMPAT_MD = `## 模型兼容性
-
-> Cyrene 会根据不同厂商自动选择对应的 Structured Output Profile。
-
-| 厂商 | 支持状态 | 档位 | 已实测模型 | 说明 |
-|------|:-------:|:---:|------------|------|
-| OpenAI | ⚠️ 文档适配 | A | - | 已完成官方协议适配，等待实测。 |
-| Claude | ⚠️ 文档适配 | A | - | 已完成官方协议适配，等待实测。 |
-| 豆包 | ✅ 已实测 | A | Seed 2.1 Turbo / Pro | 推荐使用，完整 Work 流程稳定。 |
-| Kimi | ✅ 已实测 | A | K2.6、K2.7 Code | 推荐普通 API，Coding 端点不建议用于 Work。 |
-| DeepSeek | ✅ 已实测 | B | V4 Flash、V4 Pro | 推荐，速度快、稳定。 |
-| Qwen | ✅ 已实测 | B | Qwen3.7 Max | 推荐，表现稳定。 |
-| GLM | ✅ 已实测 | B | GLM 5.1、5.2 | 推荐，4.7 不建议。 |
-| MiMo | ✅ 已实测 | B | MiMo 2.5、2.5 Pro | 推荐，表现稳定。 |
-| MiniMax | ✅ 已实测 | M | MiniMax M3 | 推荐，需使用 M 档适配。 |
-| 其他模型 | ⚠️ 文档适配 | D | - | 使用通用兼容模式，请自行验证。 |
-
-### 档位说明
-
-- **A**：原生 JSON Schema / Function Calling
-- **B**：JSON Object + 本地校验
-- **M**：MiniMax 专用适配
-- **D**：通用兼容模式（未知模型 / 自定义端点）
-`;
+// 模型厂商 Work 流程适配（手写 HTML，避免引入 markdown 渲染依赖）
+const WORK_FLOW_COMPAT_MD = `
+<h2>模型兼容性</h2>
+<blockquote>Cyrene 会根据不同厂商自动选择对应的 Structured Output Profile。</blockquote>
+<table>
+  <thead>
+    <tr><th>厂商</th><th>支持状态</th><th>档位</th><th>已实测模型</th><th>说明</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>OpenAI</td><td>⚠️ 文档适配</td><td>A</td><td>-</td><td>已完成官方协议适配，等待实测。</td></tr>
+    <tr><td>Claude</td><td>⚠️ 文档适配</td><td>A</td><td>-</td><td>已完成官方协议适配，等待实测。</td></tr>
+    <tr><td>豆包</td><td>✅ 已实测</td><td>A</td><td>Seed 2.1 Turbo / Pro</td><td>推荐使用，完整 Work 流程稳定。</td></tr>
+    <tr><td>Kimi</td><td>✅ 已实测</td><td>A</td><td>K2.6、K2.7 Code</td><td>推荐普通 API，Coding 端点不建议用于 Work。</td></tr>
+    <tr><td>DeepSeek</td><td>✅ 已实测</td><td>B</td><td>V4 Flash、V4 Pro</td><td>推荐，速度快、稳定。</td></tr>
+    <tr><td>Qwen</td><td>✅ 已实测</td><td>B</td><td>Qwen3.7 Max</td><td>推荐，表现稳定。</td></tr>
+    <tr><td>GLM</td><td>✅ 已实测</td><td>B</td><td>GLM 5.1、5.2</td><td>推荐，4.7 不建议。</td></tr>
+    <tr><td>MiMo</td><td>✅ 已实测</td><td>B</td><td>MiMo 2.5、2.5 Pro</td><td>推荐，表现稳定。</td></tr>
+    <tr><td>MiniMax</td><td>✅ 已实测</td><td>M</td><td>MiniMax M3</td><td>推荐，需使用 M 档适配。</td></tr>
+    <tr><td>其他模型</td><td>⚠️ 文档适配</td><td>D</td><td>-</td><td>使用通用兼容模式，请自行验证。</td></tr>
+  </tbody>
+</table>
+<h3>档位说明</h3>
+<ul>
+  <li><strong>A</strong>：原生 JSON Schema / Function Calling</li>
+  <li><strong>B</strong>：JSON Object + 本地校验</li>
+  <li><strong>M</strong>：MiniMax 专用适配</li>
+  <li><strong>D</strong>：通用兼容模式（未知模型 / 自定义端点）</li>
+</ul>
+`.trim();
 
 function buildWorkFlowAdaptBody(): string {
-  const rendered = renderMarkdown(WORK_FLOW_COMPAT_MD);
-  const tableHtml = rendered.mode === "html" ? rendered.content : "";
   return [
     '<div class="custom-endpoint-guide-warning work-flow-adapt-meta">',
     "  <strong>模型厂商 Work 流程适配</strong>",
     '  <span class="work-flow-adapt-date">最新更新于 2026/7/24</span>',
-    '  <p class="work-flow-adapt-disclaimer">本项目为个人业余开发项目，以下兼容性结论基于有限实测，仅供参考；完整测试方法与判定规则见详细文档。</p>',
     "</div>",
-    '<p class="work-flow-adapt-doc-line">',
-    '  完整实测链路与判定规则见',
-    '  <button type="button" class="work-flow-adapt-doc-link" id="work-flow-adapt-doc-link">详细文档 ↗</button>',
-    "</p>",
-    `<div class="work-flow-adapt-table">${tableHtml}</div>`,
+    `<div class="work-flow-adapt-table">${WORK_FLOW_COMPAT_MD}</div>`,
   ].join("\n");
 }
 
@@ -2799,36 +2795,6 @@ workFlowAdaptBtn?.addEventListener("click", () => {
     title: "模型厂商 Work 流程适配",
     icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 10.5V17" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="7.25" r="1.1" fill="currentColor"/></svg>',
     htmlBody: buildWorkFlowAdaptBody(),
-  });
-  // 「详细文档」在 app 内本地渲染完整实测报告（?raw 内联 md + renderMarkdown）
-  const docLink = document.querySelector(
-    "#cy-html-modal-body #work-flow-adapt-doc-link",
-  ) as HTMLButtonElement | null;
-  docLink?.addEventListener("click", () => {
-    const rendered = renderMarkdown(workFlowDocMd);
-    const docHtml = rendered.mode === "html" ? rendered.content : "";
-    void showHtmlModal({
-      title: "详细文档",
-      icon: '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M14 3v4a1 1 0 0 0 1 1h4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/><path d="M6 3h9l5 5v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>',
-      htmlBody: `<div class="work-flow-doc">${docHtml}</div>`,
-    });
-    // 代码块复制按钮（设置窗未初始化 chat 的 code-block controller，这里就近绑定）
-    const copyBtns = document.querySelectorAll<HTMLButtonElement>(
-      "#cy-html-modal-body .code-block__copy",
-    );
-    copyBtns.forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const code =
-          btn.closest(".code-block")?.querySelector(".code-block__code")?.textContent ?? "";
-        void navigator.clipboard.writeText(code).then(() => {
-          const orig = btn.textContent;
-          btn.textContent = "已复制";
-          window.setTimeout(() => {
-            btn.textContent = orig;
-          }, 1200);
-        });
-      });
-    });
   });
 });
 

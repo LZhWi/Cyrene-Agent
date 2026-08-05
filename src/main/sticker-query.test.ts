@@ -14,7 +14,12 @@ describe("sticker embedding query", () => {
       "[查看文档](https://example.com/internal-only)",
     ].join("\n");
 
-    expect(extractStickerEmbeddingText(text)).toBe("太好了，问题解决啦！ 行内代码 也不能参与。 行内公式 与块公式： 查看文档");
+    // 新实现是纯正则 stripper：丢掉 fenced code / 行内 code / 数学公式 / 图片 / 链接 URL，
+    // 但保留 markdown 结构标记（## 标题、[链接方括号]）作为噪声 token — 对情绪类 fuzzy
+    // embedding 匹配影响极小，且省去维护一整套 markdown 解析规则的负担。
+    expect(extractStickerEmbeddingText(text)).toBe(
+      "## 太好了，问题解决啦！ 行内代码 也不能参与。 行内公式 与块公式： [查看文档]",
+    );
   });
 
   it("does not send formula or code content to the embedding provider query", () => {
