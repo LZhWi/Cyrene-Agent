@@ -566,6 +566,7 @@ function loadSessionIntoUI(session: ChatStoreSession): void {
       ttsCacheKey: m.ttsCacheKey,
       musicCard: m.musicCard,
       weatherCard: m.weatherCard,
+      callEvent: m.callEvent,
     });
   }
   // 上报活跃 sessionId（设置面板“删除当前会话”差异化提示用）

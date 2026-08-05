@@ -2955,6 +2955,17 @@ function createWindow(): void {
         try { toneInjection = await buildToneInjection(userText, messages, sceneProvider, sceneEmbeddingIndex); } catch { /* ignore */ }
       }
 
+      // 主动会话最近 8 条历史（转成通话 LLM 的 role 语义：model→assistant），拼在通话历史之前。
+      // 过滤空 content（通话消息 content="" 不该进 LLM 上下文）。
+      const proactiveSession = chatsStore.getSessionByPurpose("proactive-chat");
+      const proactiveHistory = (proactiveSession?.messages ?? [])
+        .filter((m) => m.content.trim())
+        .slice(-8)
+        .map((m) => ({
+          role: (m.role === "model" ? "assistant" : "user") as "user" | "assistant",
+          content: m.content,
+        }));
+
       return {
         system: timeStr + "\n\n" +
           (alwaysOnContext ? alwaysOnContext + "\n\n" : "") +
@@ -2969,6 +2980,7 @@ function createWindow(): void {
             ? [toolRegistry.getById("weather")!]
             : [],
         ),
+        proactiveHistory,
       };
     },
   );

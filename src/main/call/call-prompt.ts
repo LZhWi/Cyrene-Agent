@@ -4,6 +4,8 @@ export interface CallPromptContent {
   system: string;
   tailAnchor?: string;
   toolSystem?: string;
+  /** 主动会话（proactive-chat）最近 N 条历史，拼在通话历史之前作为额外上下文。 */
+  proactiveHistory?: ChatMessage[];
 }
 
 export function buildCallConversation(
