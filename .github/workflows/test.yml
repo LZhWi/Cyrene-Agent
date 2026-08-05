@@ -28,4 +28,4 @@ jobs:
         run: npm run build
 
       - name: Test
-        run: npm test
+        run: npx vitest run --reporter=verbose
