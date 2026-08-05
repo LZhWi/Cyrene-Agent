@@ -116,12 +116,12 @@ describe("buildClineSystemPromptWithPreferences 装配", () => {
     codeUserPreferences.reset();
   });
 
-  it("空文件 → 拼装结果为空字符串", async () => {
+  it("空文件 → 只包含默认语言用户画像", async () => {
     // tmpDir/prompts/code_identity.md 和 code_soul.md 都不存在 → 两个 loadPromptFromFile 都返回 missing
     // 没有 userPrefs source → userPrefs.content 为空
-    // memoryStore 默认空 profile → L0/L1 块为空
+    // memoryStore 默认 profile 只带系统语言 → L0 块保留常用语言
     const sysPrompt = await buildClineSystemPromptWithPreferences();
-    expect(sysPrompt).toBe("");
+    expect(sysPrompt).toBe("[用户画像]\n常用语言：zh-CN");
   });
 
   it("只有 identity → 拼装包含 identity 内容", async () => {
@@ -335,10 +335,19 @@ describe("CodeRunWorker Ask cancel/shutdown 状态", () => {
 
 describe("MutationCollector real watcher", () => {
   let tmpDir: string;
+  let collector: { closeWatcher(): void } | null = null;
+
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cline-mut-"));
+    collector = null;
   });
-  afterEach(() => {
+
+  afterEach(async () => {
+    // 必须先关闭 fs.watch，再删除临时目录；否则 Windows libuv 会断言崩溃
+    collector?.closeWatcher();
+    collector = null;
+    // 给 watcher 回调一点时间完全释放句柄
+    await new Promise(r => setTimeout(r, 50));
     fs.rmSync(tmpDir, { recursive: true, force: true });
   });
 
@@ -346,6 +355,7 @@ describe("MutationCollector real watcher", () => {
   it("watcher ready 后才能 collect", async () => {
     const { MutationCollector } = await import("./mutation-collector");
     const c = new MutationCollector(tmpDir);
+    collector = c;
     c.recordBaseline();
     expect(c.isReady()).toBe(true);
     const { timing } = c.collect();
@@ -356,6 +366,7 @@ describe("MutationCollector real watcher", () => {
   it("非 Git 场景 watcher 捕获命令生成文件", async () => {
     const { MutationCollector } = await import("./mutation-collector");
     const c = new MutationCollector(tmpDir); // 非 Git
+    collector = c;
     c.recordBaseline();
 
     // 模拟命令生成文件（在 watcher 启动后）

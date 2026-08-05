@@ -13,13 +13,19 @@ export interface MemoryTraceEvent {
   error?: string | null
 }
 
-function getTracePath(): string {
-  return path.join(app.getPath("userData"), "memory-trace.log")
+function getTracePath(): string | null {
+  // Electron 主进程外（如单测环境）app 可能不存在，直接跳过 trace 持久化
+  try {
+    return path.join(app.getPath("userData"), "memory-trace.log")
+  } catch {
+    return null
+  }
 }
 
 export function appendMemoryTrace(event: MemoryTraceEvent): void {
   try {
     const filePath = getTracePath()
+    if (!filePath) return
     const dir = path.dirname(filePath)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
     const entry = {

@@ -50,8 +50,13 @@ export type L0WritableField = Exclude<keyof L0Profile, "updatedAt">
 export type L1WritableField = keyof L1Profile
 export type L2Input = Omit<L2Memory, "id" | "createdAt" | "lastAccessedAt" | "accessCount" | "weight" | "status">
 
-function getMemoryPath(): string {
-  return path.join(app.getPath("userData"), "memory.json")
+function getMemoryPath(): string | null {
+  // Electron 主进程外（如单测环境）app 可能不存在，直接放弃持久化
+  try {
+    return path.join(app.getPath("userData"), "memory.json")
+  } catch {
+    return null
+  }
 }
 
 function cloneDefaultStore(): MemoryStore {
@@ -106,6 +111,10 @@ class MemoryStoreManager {
   async load(): Promise<MemoryStore> {
     if (this.cache) return this.cache
     const filePath = getMemoryPath()
+    if (!filePath) {
+      this.cache = cloneDefaultStore()
+      return this.cache
+    }
     try {
       if (fs.existsSync(filePath)) {
         const raw = fs.readFileSync(filePath, "utf8")
@@ -152,6 +161,10 @@ class MemoryStoreManager {
 
   async save(store: MemoryStore): Promise<void> {
     const filePath = getMemoryPath()
+    if (!filePath) {
+      this.cache = store
+      return
+    }
     const dir = path.dirname(filePath)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(filePath, JSON.stringify(store, null, 2), "utf8")

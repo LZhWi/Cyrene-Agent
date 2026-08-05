@@ -50,7 +50,11 @@ jobs:
 
       - name: Test src/main/orchestrator root files
         if: success() || failure()
-        run: npx vitest run --reporter=verbose --maxWorkers=1 "src/main/orchestrator/*.test.ts"
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path "src/main/orchestrator" -Filter "*.test.ts" | Select-Object -ExpandProperty FullName
+          if (-not $files) { Write-Host "No root test files found"; exit 0 }
+          npx vitest run --reporter=verbose --maxWorkers=1 $files
 
       - name: Test src/main/music
         if: success() || failure()
@@ -74,7 +78,11 @@ jobs:
 
       - name: Test src/main root files
         if: success() || failure()
-        run: npx vitest run --reporter=verbose --maxWorkers=1 "src/main/*.test.ts"
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem -Path "src/main" -Filter "*.test.ts" | Select-Object -ExpandProperty FullName
+          if (-not $files) { Write-Host "No root test files found"; exit 0 }
+          npx vitest run --reporter=verbose --maxWorkers=1 $files
 
       - name: Test src/renderer
         if: success() || failure()
