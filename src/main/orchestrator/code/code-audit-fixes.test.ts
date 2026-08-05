@@ -332,8 +332,23 @@ describe("CodeRunWorker Ask cancel/shutdown 状态", () => {
 });
 
 // ── Audit 5: MutationCollector 真实 watcher ──────────────────────────
+//
+// NOTE:
+// Windows + Node 24.x currently has an upstream fs.watch/libuv instability
+// affecting this integration test:
+//   Assertion failed: !_wcsnicmp(filename, dir, dirlen), src\win\fs-event.c:72
+// Tracked in nodejs/node#63638 (regression from libuv 1.52.1 bundled in
+// Node 24.16.0) and libuv/libuv#5010.
+//
+// MutationCollector 业务逻辑（addCandidate / collect 合并 / Git status /
+// Workspace 边界检查 / releaseWatchers 概念）由 code-commit3-acceptance
+// 中的 MutationCollector > 17/18/19/20 测试覆盖。本 describe 块只覆盖
+// 真实 fs.watch 的事件捕获，跨平台的非业务行为，与上游 bug 强耦合。
+//
+// 在上游修复 cherry-pick 到 Node 24.x LTS 之前，整个 suite 在 Windows 上
+// 跳过。Linux/macOS 继续跑，验证 fs.watch 集成。
 
-describe("MutationCollector real watcher", () => {
+describe.skipIf(process.platform === "win32")("MutationCollector real watcher", () => {
   let tmpDir: string;
   let collector: { closeWatcher(): void } | null = null;
 
