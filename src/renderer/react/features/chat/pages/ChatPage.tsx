@@ -383,7 +383,7 @@ export function ChatPage() {
   const [interactionBusy, setInteractionBusy] = useState(false);
   const [lastTurnRevisionStarting, setLastTurnRevisionStarting] = useState(false);
   const [modelName, setModelName] = useState("模型未连接");
-  const [modelDisplayName, setModelDisplayName] = useState("Cyrene");
+  const [modelDisplayName, setModelDisplayName] = useState("");
   const [selectedClineMode, setSelectedClineMode] = useState<"plan" | "act">("act");
   const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
@@ -459,7 +459,7 @@ export function ChatPage() {
     const apply = (config: PublicModelConfig) => {
       if (!active) return;
       setModelName(typeof config.model === "string" && config.model.trim() ? config.model.trim() : "模型未连接");
-      setModelDisplayName(typeof config.displayName === "string" && config.displayName.trim() ? config.displayName.trim() : "Cyrene");
+      setModelDisplayName(typeof config.displayName === "string" ? config.displayName.trim() : "");
       setStickerSize(config.stickerSize === "small" || config.stickerSize === "large" ? config.stickerSize : "standard");
     };
     void modelConfig.get().then(apply).catch(() => {
@@ -1834,7 +1834,7 @@ export function ChatPage() {
         <SidebarToggle collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
       </div>
       <div className="cy-page-top-center">
-        <CharacterStatusPill avatarPath={avatarLight} name={modelDisplayName} status={modelName} />
+        <CharacterStatusPill avatarPath={avatarLight} status={modelDisplayName || modelName} />
         <ModeSwitch value={mode} onChange={(nextMode) => {
           if (isConversationMode(nextMode)) setMode(nextMode);
         }} />
