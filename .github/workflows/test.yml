@@ -29,34 +29,45 @@ jobs:
         run: npm run build
 
       - name: Test src/main/orchestrator
+        if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/orchestrator
 
       - name: Test src/main/music
+        if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/music
 
       - name: Test src/main/memory
+        if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/memory
 
       - name: Test src/main/channels+chats+chat+cita
+        if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/channels src/main/chats src/main/chat src/main/cita
 
       - name: Test src/main/screenshot+rag+scheduler+proactive
+        if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/screenshot src/main/rag src/main/scheduler src/main/proactive
 
       - name: Test src/main/skills+social+relationship+runtime-policy+game-bot
+        if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/skills src/main/social-context src/main/relationship src/main/runtime-policy src/main/game-bot
 
       - name: Test src/main root files
+        if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 "src/main/*.test.ts"
 
       - name: Test src/renderer
+        if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 src/renderer
 
       - name: Test src/shared + src/cli
+        if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 src/shared src/cli
 
       - name: Test skills
+        if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 skills
 
       - name: Test scripts/cline-poc
+        if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 scripts/cline-poc
