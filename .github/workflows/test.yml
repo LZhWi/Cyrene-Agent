@@ -28,8 +28,26 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Test src/main
-        run: npx vitest run --reporter=verbose --maxWorkers=1 src/main
+      - name: Test src/main/orchestrator
+        run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/orchestrator
+
+      - name: Test src/main/music
+        run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/music
+
+      - name: Test src/main/memory
+        run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/memory
+
+      - name: Test src/main/channels+chats+chat+cita
+        run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/channels src/main/chats src/main/chat src/main/cita
+
+      - name: Test src/main/screenshot+rag+scheduler+proactive
+        run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/screenshot src/main/rag src/main/scheduler src/main/proactive
+
+      - name: Test src/main/skills+social+relationship+runtime-policy+game-bot
+        run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/skills src/main/social-context src/main/relationship src/main/runtime-policy src/main/game-bot
+
+      - name: Test src/main root files
+        run: npx vitest run --reporter=verbose --maxWorkers=1 "src/main/*.test.ts"
 
       - name: Test src/renderer
         run: npx vitest run --reporter=verbose --maxWorkers=1 src/renderer
