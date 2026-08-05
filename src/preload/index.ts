@@ -616,6 +616,7 @@ const ttsApi = {
     apiKey: string; voiceId: string; text: string;
     speed?: number; volume?: number; pitch?: number;
     model?: string; format?: "mp3" | "wav" | "pcm";
+    vocalEnhance?: { enabled: boolean };
   }) => ipcRenderer.invoke(IPC.TTS_SYNTHESIZE, payload),
   synthesizeCached: (payload: {
     apiKey: string; voiceId: string; text: string;

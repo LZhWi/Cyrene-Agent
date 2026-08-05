@@ -49,7 +49,8 @@ let ttsSettingsGetter: (() => {
   ttsMinimaxKey: string; ttsMinimaxVoiceId: string;
   ttsMinimaxModel: "speech-2.8-hd" | "speech-2.8-turbo";
   ttsSpeed: number; ttsVolume: number;
-  // GPT-SoVITS
+  // MiniMax
+  ttsMinimaxVocalEnhance: boolean;
   ttsGptsovitsBaseUrl: string; ttsGptsovitsRefAudioPath: string;
   ttsGptsovitsPromptText: string; ttsGptsovitsFormat: "wav" | "mp3";
   ttsGptsovitsTimeoutMs: number;
@@ -69,6 +70,7 @@ export function setCallSettings(
     ttsMinimaxKey: string; ttsMinimaxVoiceId: string;
     ttsMinimaxModel: "speech-2.8-hd" | "speech-2.8-turbo";
     ttsSpeed: number; ttsVolume: number;
+    ttsMinimaxVocalEnhance: boolean;
     ttsGptsovitsBaseUrl: string; ttsGptsovitsRefAudioPath: string;
     ttsGptsovitsPromptText: string; ttsGptsovitsFormat: "wav" | "mp3";
     ttsGptsovitsTimeoutMs: number;
@@ -241,6 +243,7 @@ export async function endTurn(): Promise<void> {
         // custom-cloud
         endpointUrl: tts.ttsCustomCloudEndpointUrl,
         timeoutMs: tts.ttsEngine === "gptsovits" ? tts.ttsGptsovitsTimeoutMs : tts.ttsCustomCloudTimeoutMs,
+        vocalEnhance: tts.ttsEngine === "minimax" ? { enabled: tts.ttsMinimaxVocalEnhance } : undefined,
         voiceAudioPath: tts.ttsMimoVoiceAudioPath,
         stylePrompt: tts.ttsMimoStylePrompt,
         ...(tts.ttsEngine === "custom-cloud" ? { format: tts.ttsCustomCloudFormat } : {}),

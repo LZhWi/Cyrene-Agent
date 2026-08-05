@@ -5664,6 +5664,7 @@ async function loadTtsConfig(): Promise<void> {
   (ttsEl("tts-minimax-model") as HTMLSelectElement).value =
     ttsConfig.ttsMinimaxModel === "speech-2.8-hd" ? "speech-2.8-hd" : "speech-2.8-turbo";
   ttsEl("tts-streaming").checked = ttsConfig.ttsStreaming !== false;
+  ttsEl("tts-minimax-vocal-enhance").checked = ttsConfig.ttsMinimaxVocalEnhance !== false;
 
   // GPT-SoVITS
   ttsEl("tts-gptsovits-url").value = String(ttsConfig.ttsGptsovitsBaseUrl ?? "http://localhost:9880");
@@ -5920,6 +5921,11 @@ for (const [provider, ui] of Object.entries(ttsProviderUi)) {
 // MiniMax 流式播放开关
 ttsEl("tts-streaming").addEventListener("change", () => {
   void saveTtsField("ttsStreaming", ttsEl("tts-streaming").checked);
+});
+
+// MiniMax 语音增强开关
+ttsEl("tts-minimax-vocal-enhance").addEventListener("change", () => {
+  void saveTtsField("ttsMinimaxVocalEnhance", ttsEl("tts-minimax-vocal-enhance").checked);
 });
 
 // GPT-SoVITS 选择参考音频
@@ -6215,7 +6221,8 @@ document.getElementById("tts-minimax-test")?.addEventListener("click", async () 
   btn.disabled = true;
   btn.textContent = "合成中…";
   try {
-    const base64 = await window.tts.synthesize({ apiKey, voiceId, text: TTS_TEST_TEXT, model });
+    const vocalEnhance = { enabled: ttsEl("tts-minimax-vocal-enhance").checked };
+    const base64 = await window.tts.synthesize({ apiKey, voiceId, text: TTS_TEST_TEXT, model, vocalEnhance });
     playTtsAudio(base64);
   } catch (err) {
     window.alert("测试失败: " + (err instanceof Error ? err.message : String(err)));

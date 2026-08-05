@@ -727,6 +727,8 @@ interface GeneralSettings extends ChatAppearanceSettings {
   ttsMinimaxModel: "speech-2.8-hd" | "speech-2.8-turbo";
   /** MiniMax 流式播放（边合成边播，首字延迟低）；false=完整合成收完再播 */
   ttsStreaming: boolean;
+  /** MiniMax 语音增强：自动插入 (laughs)、(breath) 等语气词标签 */
+  ttsMinimaxVocalEnhance: boolean;
   // GPT-SoVITS（本地）
   ttsGptsovitsBaseUrl: string;
   ttsGptsovitsRefAudioPath: string;
@@ -967,6 +969,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   ttsMinimaxVoiceId: "",
   ttsMinimaxModel: "speech-2.8-turbo",
   ttsStreaming: true,
+  ttsMinimaxVocalEnhance: true,
   ttsGptsovitsBaseUrl: "http://localhost:9880",
   ttsGptsovitsRefAudioPath: "",
   ttsGptsovitsPromptText: "",
@@ -1467,6 +1470,9 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     ttsMinimaxVoiceId: typeof input?.ttsMinimaxVoiceId === "string" ? input.ttsMinimaxVoiceId : "",
     ttsMinimaxModel: input?.ttsMinimaxModel === "speech-2.8-hd" ? "speech-2.8-hd" : "speech-2.8-turbo",
     ttsStreaming: input?.ttsStreaming === undefined ? true : Boolean(input.ttsStreaming),
+    ttsMinimaxVocalEnhance: input?.ttsMinimaxVocalEnhance === undefined
+      ? DEFAULT_GENERAL_SETTINGS.ttsMinimaxVocalEnhance
+      : Boolean(input.ttsMinimaxVocalEnhance),
     weatherSource: ["open-meteo", "amap"].includes(String(input?.weatherSource))
       ? (input!.weatherSource as "open-meteo" | "amap")
       : "open-meteo",
@@ -1604,6 +1610,7 @@ async function synthesizeTtsSession(
     const payload = {
       apiKey: settings.ttsMinimaxKey, voiceId: settings.ttsMinimaxVoiceId, text: request.speechText,
       speed: settings.ttsSpeed, volume: settings.ttsVolume, model: settings.ttsMinimaxModel, format,
+      vocalEnhance: { enabled: settings.ttsMinimaxVocalEnhance },
     };
     cacheKey = buildTtsCacheKey(payload);
     if (settings.ttsStreaming) {
@@ -3211,6 +3218,7 @@ function createWindow(): void {
         ttsMinimaxKey: s.ttsMinimaxKey, ttsMinimaxVoiceId: s.ttsMinimaxVoiceId,
         ttsMinimaxModel: s.ttsMinimaxModel,
         ttsSpeed: s.ttsSpeed, ttsVolume: s.ttsVolume,
+        ttsMinimaxVocalEnhance: s.ttsMinimaxVocalEnhance,
         ttsGptsovitsBaseUrl: s.ttsGptsovitsBaseUrl,
         ttsGptsovitsRefAudioPath: s.ttsGptsovitsRefAudioPath,
         ttsGptsovitsPromptText: s.ttsGptsovitsPromptText,
@@ -4584,6 +4592,7 @@ app.whenReady().then(async () => {
     apiKey: string; voiceId: string; text: string;
     speed?: number; volume?: number; pitch?: number;
     model?: string; format?: "mp3" | "wav" | "pcm";
+    vocalEnhance?: { enabled: boolean };
   }) => {
     if (!payload?.apiKey || !payload?.voiceId || !payload?.text) {
       throw new Error("缺少必要参数（apiKey/voiceId/text）");
@@ -4664,6 +4673,7 @@ app.whenReady().then(async () => {
     apiKey: string; voiceId: string; text: string;
     speed?: number; volume?: number; pitch?: number;
     model?: string; format?: "mp3" | "wav" | "pcm";
+    vocalEnhance?: { enabled: boolean };
     expectedCacheKey?: string;
   }) => {
     const format = payload.format ?? "mp3";
@@ -4710,6 +4720,7 @@ app.whenReady().then(async () => {
           pitch: payload.pitch,
           model: payload.model,
           format,
+          vocalEnhance: payload.vocalEnhance,
           debugLog: appendMinimaxTtsLog,
           onChunk: (chunkBase64) => {
             fullChunks.push(Buffer.from(chunkBase64, "base64"));

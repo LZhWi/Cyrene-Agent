@@ -12,6 +12,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { WebSocket } from "ws";
 import { resolveTimeoutPolicy } from "../runtime-policy";
+import { enhanceMiniMaxText, type MiniMaxVocalEnhanceOptions } from "./minimax-vocal-enhancer";
 
 const BASE_URL = "https://api.minimaxi.com";
 const WS_URL = "wss://api.minimaxi.com/ws/v1/t2a_v2";
@@ -163,6 +164,8 @@ export interface SynthesizeOptions {
   debugLog?: (entry: Record<string, unknown>) => void; // 本地诊断日志（不上传）
   /** 流式回调：每收到一段 audio chunk 就调一次（传 base64）。不传 = 完整合成模式。 */
   onChunk?: (chunkBase64: string) => void;
+  /** 语音增强：自动插入 (laughs)、(breath) 等 MiniMax 语气词标签 */
+  vocalEnhance?: MiniMaxVocalEnhanceOptions;
   /** 所属 TTS 会话被替换时关闭当前 WebSocket。 */
   signal?: AbortSignal;
 }
@@ -174,6 +177,8 @@ export interface SynthesizeOptions {
  */
 export async function synthesize(opts: SynthesizeOptions): Promise<Buffer> {
   return new Promise((resolve, reject) => {
+    const enhancedText = enhanceMiniMaxText(opts.text, opts.vocalEnhance);
+
     const audioChunks: Buffer[] = [];
     const requestId = `tts-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const startedAt = Date.now();
@@ -188,8 +193,9 @@ export async function synthesize(opts: SynthesizeOptions): Promise<Buffer> {
     log({
       phase: "request.begin",
       endpoint: WS_URL,
-      textChars: Array.from(opts.text).length,
-      textUtf8Bytes: Buffer.byteLength(opts.text, "utf8"),
+      textChars: Array.from(enhancedText).length,
+      textUtf8Bytes: Buffer.byteLength(enhancedText, "utf8"),
+      vocalEnhance: opts.vocalEnhance ?? null,
       request: {
         task_start: {
           event: "task_start",
@@ -210,7 +216,7 @@ export async function synthesize(opts: SynthesizeOptions): Promise<Buffer> {
         },
         task_continue: {
           event: "task_continue",
-          text: opts.text,
+          text: enhancedText,
         },
       },
     });
@@ -287,8 +293,8 @@ export async function synthesize(opts: SynthesizeOptions): Promise<Buffer> {
         // task 启动成功 → 发 task_continue(发文本)
         if (msg.event === "task_started") {
           log({ phase: "response.event", event: msg.event, base_resp: msg.base_resp ?? null });
-          ws.send(JSON.stringify({ event: "task_continue", text: opts.text }));
-          log({ phase: "request.sent", event: "task_continue", textChars: Array.from(opts.text).length });
+          ws.send(JSON.stringify({ event: "task_continue", text: enhancedText }));
+          log({ phase: "request.sent", event: "task_continue", textChars: Array.from(enhancedText).length });
           return;
         }
 
