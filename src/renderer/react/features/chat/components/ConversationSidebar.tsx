@@ -266,7 +266,9 @@ export function ConversationSidebar({
               rootClassName="cy-conversation-list"
               items={items}
               activeKey={activeSessionId}
-              onActiveChange={(key) => onSelect(String(key))}
+              onActiveChange={(key) => {
+                queueMicrotask(() => onSelect(String(key)));
+              }}
               groupable={supportsProjects ? {
                 collapsible: true,
                 expandedKeys,

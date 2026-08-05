@@ -97,18 +97,14 @@ html, body {
   left: 8px;
 }
 
-.cy-page-mode {
+.cy-page-top-center {
   position: absolute;
   top: 7px;
   left: 50%;
   transform: translateX(-50%);
-  transition: left 0.25s ease;
-}
-
-.cy-page-status {
-  position: absolute;
-  top: 9px;
-  left: 220px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
   transition: left 0.25s ease;
 }
 
@@ -162,12 +158,8 @@ html, body {
 }
 
 /* 收起状态：组件向左移 */
-.cy-page.is-collapsed .cy-page-mode {
-  left: calc(50% - 170px);
-}
-
-.cy-page.is-collapsed .cy-page-status {
-  left: 50px;
+.cy-page.is-collapsed .cy-page-top-center {
+  left: calc(50% - 85px);
 }
 
 .cy-page.is-collapsed .cy-page-settings {

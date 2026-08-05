@@ -35,13 +35,18 @@
   font: 400 12px/1.5 var(--rb-font-sans, sans-serif);
 }
 
-.cy-conversation-list {
+.cy-conversation-list-wrapper {
   flex: 1 1 0;
   min-height: 0;
-  margin: 0;
-  padding: 0 3px 12px;
   overflow-y: auto;
   overscroll-behavior: contain;
+  app-region: no-drag;
+  pointer-events: auto;
+}
+
+.cy-conversation-list {
+  margin: 0;
+  padding: 0 3px 12px;
 }
 
 .cy-conversation-list .ant-conversations-item {
@@ -121,11 +126,11 @@
   white-space: nowrap;
 }
 
-.cy-conversation-list::-webkit-scrollbar {
+.cy-conversation-list-wrapper::-webkit-scrollbar {
   width: 5px;
 }
 
-.cy-conversation-list::-webkit-scrollbar-thumb {
+.cy-conversation-list-wrapper::-webkit-scrollbar-thumb {
   border-radius: 999px;
   background: #ddd;
 }
@@ -273,8 +278,3 @@
   background: #fff1f0;
 }
 
-.cy-conversation-list-wrapper {
-  flex: 1 1 0;
-  min-height: 0;
-  overflow: hidden;
-}

@@ -1822,13 +1822,11 @@ export function ChatPage() {
       <div className="cy-page-toggle">
         <SidebarToggle collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
       </div>
-      <div className="cy-page-mode">
+      <div className="cy-page-top-center">
+        <CharacterStatusPill avatarPath={avatarLight} status={modelName} />
         <ModeSwitch value={mode} onChange={(nextMode) => {
           if (isConversationMode(nextMode)) setMode(nextMode);
         }} />
-      </div>
-      <div className="cy-page-status">
-        <CharacterStatusPill avatarPath={avatarLight} status={modelName} />
       </div>
       <div className="cy-page-windows">
         <WindowControls
