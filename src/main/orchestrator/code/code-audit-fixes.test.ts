@@ -2,7 +2,7 @@
  * Commit 3 收口审计后的补充测试
  */
 
-import { describe, expect, it, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach, afterAll } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
@@ -336,19 +336,33 @@ describe("CodeRunWorker Ask cancel/shutdown 状态", () => {
 describe("MutationCollector real watcher", () => {
   let tmpDir: string;
   let collector: { closeWatcher(): void } | null = null;
+  // 收集本 suite 创建的所有临时目录，挪到 afterAll 统一清理：
+  // rmSync 删除被 fs.watch 监听的目录时，Windows libuv 后台 fs-event 线程
+  // 可能在 watcher.close() 后仍未退出，命中 _wcsnicmp 断言。
+  // 把 watcher 生命周期（每个 test 结束 close）和目录生命周期（整个 suite 结束 rm）
+  // 彻底分开，是规避这个 C 层 race 最稳的方式。
+  const tmpDirs: string[] = [];
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cline-mut-"));
+    tmpDirs.push(tmpDir);
     collector = null;
   });
 
-  afterEach(async () => {
-    // 必须先关闭 fs.watch，再删除临时目录；否则 Windows libuv 会断言崩溃
+  afterEach(() => {
+    // 只关闭 watcher，不删除目录；目录在 afterAll 统一清理
     collector?.closeWatcher();
     collector = null;
-    // 给 watcher 回调一点时间完全释放句柄
-    await new Promise(r => setTimeout(r, 50));
-    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  afterAll(() => {
+    for (const dir of tmpDirs) {
+      try {
+        fs.rmSync(dir, { recursive: true, force: true });
+      } catch {
+        /* ignore — runner cleanup will sweep os.tmpdir() */
+      }
+    }
   });
 
   // 简单导入以避免重新引入路径问题
