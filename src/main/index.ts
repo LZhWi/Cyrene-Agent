@@ -3779,16 +3779,7 @@ ipcMain.handle(IPC.WINDOW_CAPTURE_FRAME, async () => {
   if (!mainWindow) return null;
   try {
     const image = await mainWindow.webContents.capturePage();
-    const { width, height } = image.getSize();
-    // Resize to 50% before encoding: the drag overlay is shown full-window
-    // via CSS, so we trade a small amount of sharpness for a ~4x smaller
-    // image and much faster encode/decode/transfer during the drag.
-    const resized = image.resize({
-      width: Math.max(1, Math.round(width / 2)),
-      height: Math.max(1, Math.round(height / 2)),
-      quality: "good",
-    });
-    return (resized ?? image).toDataURL();
+    return image.toDataURL();
   } catch (err) {
     console.error("[Cyrene] captureFrame failed:", err);
     return null;

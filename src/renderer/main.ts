@@ -212,20 +212,40 @@ let rafId: number | null = null;
 let dragOverlay: HTMLImageElement | null = null;
 let dragToken = 0;
 
+let dragOverlayUrl: string | null = null;
+
 function clearDragOverlay(): void {
   if (dragOverlay) {
     dragOverlay.remove();
     dragOverlay = null;
   }
+  if (dragOverlayUrl) {
+    URL.revokeObjectURL(dragOverlayUrl);
+    dragOverlayUrl = null;
+  }
   canvas.style.visibility = "";
 }
 
-async function showDragOverlay(token: number): Promise<void> {
-  const frame = await window.cyrene.captureFrame();
-  if (!frame || token !== dragToken || !isDragging) return;
+function captureCanvasBlob(): Promise<Blob | null> {
+  return new Promise((resolve) => {
+    try {
+      // preserveDrawingBuffer is enabled, so the last rendered frame is
+      // readable even after the PIXI ticker has been paused.
+      canvas.toBlob((blob) => resolve(blob), "image/png");
+    } catch (err) {
+      console.warn("[Cyrene] canvas.toBlob failed", err);
+      resolve(null);
+    }
+  });
+}
 
+async function showDragOverlay(token: number): Promise<void> {
+  const blob = await captureCanvasBlob();
+  if (!blob || token !== dragToken || !isDragging) return;
+
+  const url = URL.createObjectURL(blob);
   const img = document.createElement("img");
-  img.src = frame;
+  img.src = url;
   img.alt = "";
   img.draggable = false;
   img.style.position = "fixed";
@@ -237,10 +257,18 @@ async function showDragOverlay(token: number): Promise<void> {
   img.style.userSelect = "none";
   img.style.zIndex = "10";
 
-  dragOverlay?.remove();
-  dragOverlay = img;
-  document.body.appendChild(img);
-  canvas.style.visibility = "hidden";
+  img.onload = () => {
+    if (token !== dragToken || !isDragging) {
+      URL.revokeObjectURL(url);
+      return;
+    }
+    dragOverlay?.remove();
+    dragOverlay = img;
+    dragOverlayUrl = url;
+    document.body.appendChild(img);
+    canvas.style.visibility = "hidden";
+  };
+  img.onerror = () => URL.revokeObjectURL(url);
 }
 
 function scheduleMoveTo(screenX: number, screenY: number): void {
