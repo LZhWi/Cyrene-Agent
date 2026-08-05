@@ -682,10 +682,6 @@ interface GeneralSettings extends ChatAppearanceSettings {
   citaSemanticEngine: "remote";
   /** Chat 模式的轻量社交上下文；默认关闭，开启后每轮最多多一次异步抽取调用。 */
   chatSocialContextEnabled: boolean;
-  musicEnabled: boolean;
-  musicVolume: number;
-  soundEnabled: boolean;
-  soundVolume: number;
   petAlwaysOnTop: boolean;
   petVisible: boolean;
   /** 桌宠缩放因子：1.0=默认，0.5~2.0，窗口与模型同步等比缩放。 */
@@ -942,10 +938,6 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   citaEnabled: false,
   citaSemanticEngine: "remote",
   chatSocialContextEnabled: false,
-  musicEnabled: false,
-  musicVolume: 60,
-  soundEnabled: true,
-  soundVolume: 70,
   petAlwaysOnTop: true,
   petVisible: true,
   petZoom: 1,
@@ -1439,10 +1431,6 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     citaEnabled: cita.enabled,
     citaSemanticEngine: cita.semanticEngine,
     chatSocialContextEnabled: normalizeChatSocialContextEnabled(input?.chatSocialContextEnabled),
-    musicEnabled: Boolean(input?.musicEnabled),
-    musicVolume: clamp(input?.musicVolume, DEFAULT_GENERAL_SETTINGS.musicVolume),
-    soundEnabled: input?.soundEnabled === undefined ? DEFAULT_GENERAL_SETTINGS.soundEnabled : Boolean(input.soundEnabled),
-    soundVolume: clamp(input?.soundVolume, DEFAULT_GENERAL_SETTINGS.soundVolume),
     petAlwaysOnTop: input?.petAlwaysOnTop === undefined ? DEFAULT_GENERAL_SETTINGS.petAlwaysOnTop : Boolean(input.petAlwaysOnTop),
     petVisible: input?.petVisible === undefined ? DEFAULT_GENERAL_SETTINGS.petVisible : Boolean(input.petVisible),
     petZoom: typeof input?.petZoom === "number" ? Math.max(0.5, Math.min(2, input.petZoom)) : DEFAULT_GENERAL_SETTINGS.petZoom,

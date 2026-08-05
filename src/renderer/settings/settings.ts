@@ -397,10 +397,6 @@ interface GeneralSettings extends ChatAppearanceSettings {
   citaEnabled: boolean;
   citaSemanticEngine: "remote" | "local";
   chatSocialContextEnabled: boolean;
-  musicEnabled: boolean;
-  musicVolume: number;
-  soundEnabled: boolean;
-  soundVolume: number;
   petAlwaysOnTop: boolean;
   petVisible: boolean;
   petZoom: number;
@@ -692,10 +688,6 @@ if (!window.settings) {
       }),
     saveConfig: (c) => Promise.resolve(c as ModelSettings),
     getGeneral: () => Promise.resolve({
-      musicEnabled: false,
-      musicVolume: 60,
-      soundEnabled: true,
-      soundVolume: 70,
       petAlwaysOnTop: true,
       petVisible: true,
       petZoom: 1,
@@ -762,12 +754,6 @@ if (!window.cyreneScheduler) {
 
 const minBtn = document.getElementById("min-btn") as HTMLButtonElement;
 const closeBtn = document.getElementById("close-btn") as HTMLButtonElement;
-const clickSound = new Audio("/audio/click.mp3");
-clickSound.preload = "auto";
-
-const bgmAudio = new Audio("/audio/bgm.mp3");
-bgmAudio.preload = "auto";
-bgmAudio.loop = true;
 const apiForm = document.getElementById("api-form") as HTMLFormElement;
 const apiRuntimeForm = document.getElementById("api-runtime-form") as HTMLFormElement;
 const apiTimeoutForm = document.getElementById("api-timeout-form") as HTMLFormElement;
@@ -877,10 +863,6 @@ const runtimeSyncSelect = document.getElementById("runtime-sync") as HTMLElement
 const runtimeSyncNote = document.getElementById("runtime-sync-note") as HTMLElement;
 const stickerEnabledInput = document.getElementById("sticker-enabled") as HTMLInputElement;
 const stickerSizeSelect = document.getElementById("sticker-size") as HTMLElement;
-const musicEnabledInput = document.getElementById("music-enabled") as HTMLInputElement;
-const musicVolumeInput = document.getElementById("music-volume") as HTMLInputElement;
-const soundEnabledInput = document.getElementById("sound-enabled") as HTMLInputElement;
-const soundVolumeInput = document.getElementById("sound-volume") as HTMLInputElement;
 const windowCornerRadiusInput = document.getElementById("window-corner-radius") as HTMLInputElement;
 const windowCornerRadiusVal = document.getElementById("window-corner-radius-val") as HTMLElement;
 const petAlwaysOnTopInput = document.getElementById("pet-always-on-top") as HTMLInputElement;
@@ -965,14 +947,6 @@ const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }>
 minBtn.addEventListener("click", () => window.settings?.minimize());
 closeBtn.addEventListener("click", () => window.settings?.close());
 
-document.addEventListener("click", (event) => {
-  const target = event.target as HTMLElement | null;
-  if (!target) return;
-  if (target.closest("button, input, select, .switch, .option-block, .language-option, .nav-item")) {
-    playSettingsClickSound();
-  }
-}, true);
-
 function setSaveStatus(text: string, cls?: string): void {
   saveStatus.textContent = text;
   saveStatus.className = "save-status";
@@ -1005,23 +979,6 @@ async function saveAppearancePatch(patch: Partial<GeneralSettings>, successText 
   } catch (error) {
     console.error("自动应用外观设置失败:", error);
     setAppearanceSaveStatus("自动应用失败", "is-error");
-  }
-}
-
-function playSettingsClickSound(): void {
-  if (!soundEnabledInput.checked) return;
-  clickSound.pause();
-  clickSound.currentTime = 0;
-  clickSound.volume = Math.max(0, Math.min(1, Number(soundVolumeInput.value) / 100));
-  void clickSound.play().catch(() => {});
-}
-
-function syncMusicPlayback(): void {
-  bgmAudio.volume = Math.max(0, Math.min(1, Number(musicVolumeInput.value) / 100));
-  if (musicEnabledInput.checked) {
-    void bgmAudio.play().catch(() => {});
-  } else {
-    bgmAudio.pause();
   }
 }
 
@@ -1642,11 +1599,6 @@ async function loadGeneralSettings(): Promise<void> {
       button.classList.toggle("is-active", selected);
       button.setAttribute("aria-pressed", String(selected));
     });
-    musicEnabledInput.checked = cfg.musicEnabled;
-    musicVolumeInput.value = String(cfg.musicVolume);
-    syncMusicPlayback();
-    soundEnabledInput.checked = cfg.soundEnabled;
-    soundVolumeInput.value = String(cfg.soundVolume);
     const windowCornerRadius = normalizeWindowCornerRadius(cfg.windowCornerRadius);
     windowCornerRadiusInput.value = String(windowCornerRadius);
     windowCornerRadiusVal.textContent = `${windowCornerRadius}px`;
@@ -1873,19 +1825,6 @@ tasksVisibleInput.addEventListener("change", () => {
   else window.settings?.closeTasks();
   void window.settings?.saveGeneral({ tasksVisible: tasksVisibleInput.checked });
 });
-
-musicEnabledInput.addEventListener("change", () => {
-  syncMusicPlayback();
-  setGeneralSaveStatus("有未保存的更改");
-});
-
-musicVolumeInput.addEventListener("input", () => {
-  syncMusicPlayback();
-  setGeneralSaveStatus("有未保存的更改");
-});
-
-soundEnabledInput.addEventListener("change", () => setGeneralSaveStatus("有未保存的更改"));
-soundVolumeInput.addEventListener("input", () => setGeneralSaveStatus("有未保存的更改"));
 
 windowCornerRadiusInput.addEventListener("input", () => {
   const radius = applyWindowCornerRadius(windowCornerRadiusInput.value);
@@ -3155,10 +3094,6 @@ generalForm.addEventListener("submit", async (e) => {
   setGeneralSaveStatus("保存中…");
   try {
     await window.settings!.saveGeneral({
-      musicEnabled: musicEnabledInput.checked,
-      musicVolume: Number(musicVolumeInput.value),
-      soundEnabled: soundEnabledInput.checked,
-      soundVolume: Number(soundVolumeInput.value),
       disableGpuElectron: disableGpuInput.checked,
       sidebarVisible: sidebarVisibleInput.checked,
       tasksVisible: tasksVisibleInput.checked,
