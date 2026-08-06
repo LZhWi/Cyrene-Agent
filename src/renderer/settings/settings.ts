@@ -72,6 +72,7 @@ import type {
   MusicSelectionTrack,
 } from "./music/types";
 import { musicState } from "./music/state";
+import { channelsState } from "./channels/state";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -3163,8 +3164,6 @@ const channelsWechatRestartBtn = document.getElementById("channels-wechat-restar
 const channelsWechatFeedbackEl = document.getElementById("channels-wechat-feedback");
 const channelsFeishuFeedbackEl = document.getElementById("channels-feishu-feedback");
 
-let channelsInitialized = false;
-let channelsSaveTimer: number | null = null;
 
 function renderChannelStatus(el: HTMLElement | null, phase: string, message?: string): void {
   if (!el) return;
@@ -3182,8 +3181,8 @@ function renderChannelStatus(el: HTMLElement | null, phase: string, message?: st
 }
 
 async function loadChannelsPanel(): Promise<void> {
-  if (channelsInitialized) return;
-  channelsInitialized = true;
+  if (channelsState.initialized) return;
+  channelsState.initialized = true;
   try {
     const cfg = await window.settings.channelsGetConfig();
     if (channelsWechatEnabledEl) channelsWechatEnabledEl.checked = !!cfg.wechat.enabled;
@@ -3219,8 +3218,8 @@ async function loadChannelsPanel(): Promise<void> {
 
   // 自动保存（debounce 200ms）
   const scheduleSave = () => {
-    if (channelsSaveTimer != null) window.clearTimeout(channelsSaveTimer);
-    channelsSaveTimer = window.setTimeout(() => {
+    if (channelsState.saveTimer != null) window.clearTimeout(channelsState.saveTimer);
+    channelsState.saveTimer = window.setTimeout(() => {
       void window.settings.channelsSaveConfig({
         wechat: { enabled: channelsWechatEnabledEl?.checked ?? false },
         feishu: { enabled: channelsFeishuEnabledEl?.checked ?? false },
