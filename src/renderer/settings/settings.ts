@@ -87,6 +87,7 @@ import { modalState } from "./shared/modal-state";
 import { formatDateTime, escapeHtml } from "./shared/format";
 import { parsePositiveIntOrThrow, parseN1SecToMsOrThrow, parseCommandLine } from "./shared/parse";
 import { apiState } from "./api/state";
+import { apiForm, apiRuntimeForm, apiTimeoutForm, presetCards, presetWebsiteLink, displayNameInput, baseUrlInput, baseUrlResetBtn, modelInput, modelInputSuggestions, contextWindowInput, apiKeyInput, apiKeyLabel, apiKeyHint, testConnectionBtn, transportSelect, transportHint, endpointPreview, customEndpointControls, customEndpointOverrides, customEndpointSummary, customEndpointGuideBtn, workFlowAdaptBtn, apiNoteText, multimodalToggle, chatRequestTimeoutSecInput, maxIterationsInput, maxReplansInput, maxRefreshInput, perCallTimeoutSecInput, actionGateRepairBudgetSecInput, embeddingDimensionsInput, modelRequestTimeoutSecInput, modelRequestTimeoutSecReset, toggleEnableThinking, toggleDisableThinking, toggleDisableMaxToken } from "./api/dom";
 import { preferencesState } from "./preferences/state";
 import { stickerEnabledInput, stickerSizeSelect, stickerThresholdInput, stickerThresholdVal, stickerAddOverlay, stickerAddPickBtn, stickerAddFileName, stickerAddId, stickerAddDesc, stickerAddPhrases, stickerAddError, stickerAddConfirm, stickerAddCancel } from "./preferences/dom";
 import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
@@ -389,9 +390,6 @@ if (!window.cyreneScheduler) {
 
 const minBtn = document.getElementById("min-btn") as HTMLButtonElement;
 const closeBtn = document.getElementById("close-btn") as HTMLButtonElement;
-const apiForm = document.getElementById("api-form") as HTMLFormElement;
-const apiRuntimeForm = document.getElementById("api-runtime-form") as HTMLFormElement;
-const apiTimeoutForm = document.getElementById("api-timeout-form") as HTMLFormElement;
 const appearanceForm = document.getElementById("appearance-form") as HTMLFormElement;
 const generalForm = document.getElementById("general-form") as HTMLFormElement;
 const preferencesForm = document.getElementById("preferences-form") as HTMLFormElement;
@@ -416,34 +414,12 @@ const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLEl
 
 
 
-const presetCards = document.getElementById("preset-cards") as HTMLElement;
-const presetWebsiteLink = document.getElementById("preset-website-link") as HTMLAnchorElement;
 // 模式按钮已删除——baseUrl 永远可改、模型名永远可手填（datalist 出预设建议）
 // provider 不再暴露给用户（从预设内部拿，保证 capabilities 匹配不出错）。
 // 用户看到的是"昵称"框——给模型起自定义名字，状态栏"正在喂养"显示它。
-const displayNameInput = document.getElementById("display-name") as HTMLInputElement;
-const baseUrlInput = document.getElementById("base-url") as HTMLInputElement;
-const baseUrlResetBtn = document.getElementById("base-url-reset-btn") as HTMLButtonElement;
-const modelInput = document.getElementById("model-input") as HTMLInputElement;
-const modelInputSuggestions = document.getElementById("model-input-suggestions") as HTMLDataListElement;
-const contextWindowInput = document.getElementById("context-window-input") as HTMLInputElement;
-const apiKeyInput = document.getElementById("api-key") as HTMLInputElement;
-const apiKeyLabel = document.getElementById("api-key-label") as HTMLElement;
-const apiKeyHint = document.getElementById("api-key-hint") as HTMLElement;
-const testConnectionBtn = document.getElementById("test-connection-btn") as HTMLButtonElement | null;
 // API 协议下拉（openai / anthropic）—— 不根据 URL 自动猜测。
-const transportSelect = document.getElementById("transport-select") as HTMLSelectElement;
-const transportHint = document.getElementById("transport-hint") as HTMLElement;
-const endpointPreview = document.getElementById("endpoint-preview") as HTMLElement;
-const customEndpointControls = document.getElementById("custom-endpoint-controls") as HTMLElement;
-const customEndpointOverrides = document.getElementById("custom-endpoint-overrides") as HTMLElement;
-const customEndpointSummary = document.getElementById("custom-endpoint-summary") as HTMLElement;
-const customEndpointGuideBtn = document.getElementById("custom-endpoint-guide-btn") as HTMLButtonElement;
-const workFlowAdaptBtn = document.getElementById("work-flow-adapt-btn") as HTMLButtonElement | null;
-const apiNoteText = document.getElementById("api-note-text") as HTMLElement;
 
 // 视觉模型配置区元素
-const multimodalToggle = document.getElementById("multimodal-toggle") as HTMLInputElement;
 const visionBaseUrlInput = document.getElementById("vision-base-url") as HTMLInputElement;
 const visionApiKeyInput = document.getElementById("vision-api-key") as HTMLInputElement;
 const visionModelInput = document.getElementById("vision-model") as HTMLInputElement;
@@ -452,15 +428,8 @@ const testVisionBtn = document.getElementById("test-vision-btn") as HTMLButtonEl
 const visionTestStatus = document.getElementById("vision-test-status") as HTMLElement;
 
 // 高级运行设置
-const chatRequestTimeoutSecInput = document.getElementById("chat-request-timeout-sec") as HTMLInputElement;
-const maxIterationsInput = document.getElementById("max-iterations") as HTMLInputElement;
-const maxReplansInput = document.getElementById("max-replans") as HTMLInputElement;
-const maxRefreshInput = document.getElementById("max-refresh") as HTMLInputElement;
-const perCallTimeoutSecInput = document.getElementById("per-call-timeout-sec") as HTMLInputElement;
-const actionGateRepairBudgetSecInput = document.getElementById("action-gate-repair-budget-sec") as HTMLInputElement;
 
 // Embedding 维度（可选，仅 cloud 模式）
-const embeddingDimensionsInput = document.getElementById("embedding-dimensions-input") as HTMLInputElement | null;
 
 // 渲染端内存缓存：保存每个厂商上一次填写的 baseUrl / model / apiKey
 // 切厂商时从这里读，保存时同步进去；持久化由 main 进程的 saveModelSettings 负责（perProvider 字段）。
@@ -506,12 +475,7 @@ const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as
 const openStickerManagerBtn = document.getElementById("open-sticker-manager-btn") as HTMLButtonElement;
 const addStickerBtn = document.getElementById("add-sticker-btn") as HTMLButtonElement;
 
-const modelRequestTimeoutSecInput = document.getElementById("model-request-timeout-sec") as HTMLInputElement;
-const modelRequestTimeoutSecReset = document.getElementById("model-request-timeout-sec-reset-btn") as HTMLButtonElement;
 
-const toggleEnableThinking = document.getElementById("toggle-enable-thinking") as HTMLInputElement;
-const toggleDisableThinking = document.getElementById("toggle-disable-thinking") as HTMLInputElement;
-const toggleDisableMaxToken = document.getElementById("toggle-disable-max-token") as HTMLInputElement;
 
 const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }> = {
   memory: { emoji: `<img src="../icons/mimi.png" width="24" height="24" alt="" aria-hidden="true" style="vertical-align:-3px" />`, title: "记忆", hint: "管理长期记忆与画像" },
