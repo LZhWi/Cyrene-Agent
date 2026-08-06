@@ -79,6 +79,7 @@ import { tokensState } from "./tokens/state";
 import { ttsState } from "./tts/state";
 import { modalState } from "./shared/modal-state";
 import { apiState } from "./api/state";
+import { preferencesState } from "./preferences/state";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -686,8 +687,6 @@ function getProactiveDeliveryValue(): ProactiveDeliveryTarget {
   return normalizeProactiveDeliveryTarget(getOptionGroupValue(proactiveDeliverySelect, "local"));
 }
 
-let currentCustomStyleConfig: CustomStyleConfig = DEFAULT_CUSTOM_STYLE;
-let customStyleOverlay: HTMLElement | null = null;
 
 function diversityDriverOf(config: CustomStyleConfig): DiversityPreference["driver"] {
   return config.diversity.driver;
@@ -700,17 +699,17 @@ function diversityValueOf(config: CustomStyleConfig): number {
 }
 
 function buildCustomStyleConfigFromModal(): CustomStyleConfig {
-  if (!customStyleOverlay) return currentCustomStyleConfig;
+  if (!preferencesState.customStyleOverlay) return preferencesState.currentCustomStyleConfig;
   const diversityDriver = (
-    customStyleOverlay.querySelector<HTMLInputElement>('input[name="custom-diversity"]:checked')?.value
+    preferencesState.customStyleOverlay.querySelector<HTMLInputElement>('input[name="custom-diversity"]:checked')?.value
     ?? "model-default"
   ) as DiversityPreference["driver"];
   const rawValue = Number((
-    customStyleOverlay.querySelector<HTMLInputElement>("#custom-diversity-value")?.value
+    preferencesState.customStyleOverlay.querySelector<HTMLInputElement>("#custom-diversity-value")?.value
     ?? ""
   ).trim());
   const repetition = (
-    customStyleOverlay.querySelector<HTMLInputElement>('input[name="custom-repetition"]:checked')?.value
+    preferencesState.customStyleOverlay.querySelector<HTMLInputElement>('input[name="custom-repetition"]:checked')?.value
     ?? "model-default"
   ) as RepetitionLevel;
   return normalizeCustomStyleConfig({
@@ -722,11 +721,11 @@ function buildCustomStyleConfigFromModal(): CustomStyleConfig {
 }
 
 function ensureCustomStyleModal(): HTMLElement {
-  if (customStyleOverlay) return customStyleOverlay;
-  customStyleOverlay = document.createElement("div");
-  customStyleOverlay.id = "custom-style-overlay";
-  customStyleOverlay.className = "cy-modal-overlay is-hidden custom-style-overlay";
-  customStyleOverlay.innerHTML = [
+  if (preferencesState.customStyleOverlay) return preferencesState.customStyleOverlay;
+  preferencesState.customStyleOverlay = document.createElement("div");
+  preferencesState.customStyleOverlay.id = "custom-style-overlay";
+  preferencesState.customStyleOverlay.className = "cy-modal-overlay is-hidden custom-style-overlay";
+  preferencesState.customStyleOverlay.innerHTML = [
     '<div class="cy-modal custom-style-modal" role="dialog" aria-modal="true">',
     '  <div class="cy-modal__head"><span class="cy-modal__icon">🖊️</span><h3 class="cy-modal__title">自定义风格采样</h3></div>',
     '  <hr class="cy-modal__divider">',
@@ -751,41 +750,41 @@ function ensureCustomStyleModal(): HTMLElement {
     '  </div>',
     '</div>',
   ].join("\n");
-  document.body.appendChild(customStyleOverlay);
+  document.body.appendChild(preferencesState.customStyleOverlay);
 
   const updateDiversityRow = () => {
-    const driver = customStyleOverlay!.querySelector<HTMLInputElement>(
+    const driver = preferencesState.customStyleOverlay!.querySelector<HTMLInputElement>(
       'input[name="custom-diversity"]:checked',
     )?.value ?? "model-default";
-    const row = customStyleOverlay!.querySelector<HTMLElement>("#custom-diversity-row");
-    const label = customStyleOverlay!.querySelector<HTMLElement>("#custom-diversity-label");
-    const value = customStyleOverlay!.querySelector<HTMLInputElement>("#custom-diversity-value");
+    const row = preferencesState.customStyleOverlay!.querySelector<HTMLElement>("#custom-diversity-row");
+    const label = preferencesState.customStyleOverlay!.querySelector<HTMLElement>("#custom-diversity-label");
+    const value = preferencesState.customStyleOverlay!.querySelector<HTMLInputElement>("#custom-diversity-value");
     if (!row || !label || !value) return;
     row.hidden = driver === "model-default";
     label.textContent = driver === "top-p" ? "Top-P" : "Temperature";
     value.min = "0";
     value.max = driver === "top-p" ? "1" : "2";
   };
-  customStyleOverlay.querySelectorAll<HTMLInputElement>('input[name="custom-diversity"]').forEach((input) => {
+  preferencesState.customStyleOverlay.querySelectorAll<HTMLInputElement>('input[name="custom-diversity"]').forEach((input) => {
     input.addEventListener("change", updateDiversityRow);
   });
-  customStyleOverlay.querySelector<HTMLButtonElement>("#custom-style-cancel")?.addEventListener("click", () => {
-    customStyleOverlay?.classList.add("is-hidden");
+  preferencesState.customStyleOverlay.querySelector<HTMLButtonElement>("#custom-style-cancel")?.addEventListener("click", () => {
+    preferencesState.customStyleOverlay?.classList.add("is-hidden");
   });
-  customStyleOverlay.querySelector<HTMLButtonElement>("#custom-style-reset")?.addEventListener("click", () => {
+  preferencesState.customStyleOverlay.querySelector<HTMLButtonElement>("#custom-style-reset")?.addEventListener("click", () => {
     renderCustomStyleModal(DEFAULT_CUSTOM_STYLE);
   });
-  customStyleOverlay.querySelector<HTMLButtonElement>("#custom-style-save")?.addEventListener("click", async () => {
+  preferencesState.customStyleOverlay.querySelector<HTMLButtonElement>("#custom-style-save")?.addEventListener("click", async () => {
     try {
-      currentCustomStyleConfig = buildCustomStyleConfigFromModal();
-      await window.settings!.saveGeneral({ customStyle: currentCustomStyleConfig });
-      customStyleOverlay?.classList.add("is-hidden");
+      preferencesState.currentCustomStyleConfig = buildCustomStyleConfigFromModal();
+      await window.settings!.saveGeneral({ customStyle: preferencesState.currentCustomStyleConfig });
+      preferencesState.customStyleOverlay?.classList.add("is-hidden");
       setPreferencesSaveStatus("自定义风格已保存", "is-ok");
     } catch {
       setPreferencesSaveStatus("自定义风格保存失败", "is-error");
     }
   });
-  return customStyleOverlay;
+  return preferencesState.customStyleOverlay;
 }
 
 function renderCustomStyleModal(config: CustomStyleConfig): void {
@@ -810,7 +809,7 @@ function renderCustomStyleModal(config: CustomStyleConfig): void {
 
 function openCustomStyleModal(): void {
   const overlay = ensureCustomStyleModal();
-  renderCustomStyleModal(currentCustomStyleConfig);
+  renderCustomStyleModal(preferencesState.currentCustomStyleConfig);
   overlay.classList.remove("is-hidden");
 }
 
@@ -1235,7 +1234,7 @@ async function loadGeneralSettings(): Promise<void> {
     renderUiFont(normalizeUiFont(cfg.uiFont));
     renderUiIcon(normalizeUiIcon(cfg.uiIcon));
     applyDefaultChatModeSelection(normalizeDefaultChatMode(cfg.defaultChatMode));
-    currentCustomStyleConfig = normalizeCustomStyleConfig(cfg.customStyle);
+    preferencesState.currentCustomStyleConfig = normalizeCustomStyleConfig(cfg.customStyle);
     applySegmentedOutputSelection(normalizeSegmentedOutputMode(cfg.segmentedOutputMode));
     applyMobileMessageSegmentationSelection(normalizeMobileMessageSegmentationMode(cfg.mobileMessageSegmentation));
     applyProactiveChatSelection(normalizeProactiveChatMode(cfg.proactiveChatMode));
