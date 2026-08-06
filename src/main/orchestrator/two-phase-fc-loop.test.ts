@@ -196,7 +196,6 @@ describe("runTwoPhaseFcLoop", () => {
 
     const pending = runTwoPhaseFcLoop({
       ...baseOptions,
-      optimizeFirstRound: true,
       settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       streamChat,
@@ -212,7 +211,16 @@ describe("runTwoPhaseFcLoop", () => {
     ]);
     release?.();
     await pending;
-    expect(events.filter((event) => event.type === "reasoning_message_end")).toHaveLength(1);
+    // 每个 bridge 实例的 messageId 应恰好对应一次 end；多个 phase 各发一次是预期的，
+    // 但同一 phase 重复 end 就是 bug。optimizeFirstRound 移除后 no-tool 路径必然进 SOUL_PHASE，
+    // tool + soul 两个 bridge 各发一次。
+    const reasoningEnds = events.filter((event) => event.type === "reasoning_message_end") as Array<{ type: string; messageId: string }>;
+    const endsByMessageId = new Map<string, number>();
+    for (const event of reasoningEnds) {
+      endsByMessageId.set(event.messageId, (endsByMessageId.get(event.messageId) ?? 0) + 1);
+    }
+    expect(endsByMessageId.size).toBe(reasoningEnds.length);
+    expect(reasoningEnds.length).toBeGreaterThanOrEqual(1);
   });
 
   it("streams Soul text before terminal reconciliation resolves", async () => {
@@ -331,7 +339,6 @@ describe("runTwoPhaseFcLoop", () => {
 
     const result = await runTwoPhaseFcLoop({
       ...baseOptions,
-      optimizeFirstRound: true,
       settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
       adapter,
       streamChat,

@@ -81,10 +81,8 @@ export interface CyreneRunOptions {
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
   /** 工具阶段使用的 system prompt（仅含工具调度规则 + 自动生成的工具目录）。 */
   toolSystemContent: string;
-  toolSystemContentOptimizedForFirstRound?: string;
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。 */
   soulSystemBaseContent: string;
-  optimizeFirstRound?: boolean;
   /** 只应用到 Soul 最终自然语言回复，禁止影响 CITA、Action Gate 与 Native FC。 */
   soulSampling?: ApprovedStyleSampling;
   /** 不带时间戳前缀的 messages，给 Action Gate 用。未传时回退到 messages。 */

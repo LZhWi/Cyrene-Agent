@@ -294,9 +294,6 @@ export function registerAgUiIpc(
     }, (settlement) => {
       send({ type: "CUSTOM", name: "cyrene.choice.dismiss", value: settlement, threadId, runId });
     }, { runId, revision: 1 });
-    if (mode === "daily" || mode === "learn") {
-      options.optimizeFirstRound = true;
-    }
 
     // Learn 模式：配置 Obsidian Vault 并注册工具
     if (mode === "learn" && session.workspaceBinding?.workspaceRoot) {

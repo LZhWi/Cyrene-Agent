@@ -179,7 +179,6 @@ export interface ModelSettingsLite {
   runtimeSync?: string;
   stickerEnabled?: boolean;
   stickerSimilarityThreshold?: number;
-  optimizeFirstRound?: boolean;
   /** 上下文窗口大小（Token）。来自 ModelSettings.contextWindowTokens。 */
   contextWindowTokens?: number;
 }
@@ -590,13 +589,7 @@ export async function buildAgentRunOptions(
     + (resolvedWorkspaceRoot
       ? `\n\n[当前项目工作区]\n可信根目录：${resolvedWorkspaceRoot}\n所有本地文件的读取、创建与生成都必须以此目录为根；不得写入桌面、下载目录或其他目录。`
       : "");
-  const toolSystemContentOptimizedForFirstRound = deps.buildToolSystemPrompt(runTools, true)
-    + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
-    + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "")
-    + (citaContextBlock ? "\n\n" + citaContextBlock : "")
-    + (resolvedWorkspaceRoot
-      ? `\n\n[当前项目工作区]\n可信根目录：${resolvedWorkspaceRoot}\n所有本地文件的读取、创建与生成都必须以此目录为根；不得写入桌面、下载目录或其他目录。`
-      : "");
+
 
   // Soul 阶段基础 system：人设 + 环境/记忆/关系/附件/渠道（这些是"表达"所需）。
   // FC 循环在 Soul 阶段追加通用 ToolExecutionContext，并保留 role:tool 协议消息。
@@ -675,7 +668,6 @@ export async function buildAgentRunOptions(
       actionGateSystemPrompt,
       timeoutMs: deps.chatRequestTimeoutMs,
       toolSystemContent,
-      toolSystemContentOptimizedForFirstRound,
       soulSystemBaseContent,
       soulSampling,
       ...(socialContextEnabled && input.userTurnId && input.assistantTurnId ? {
@@ -692,7 +684,6 @@ export async function buildAgentRunOptions(
       ...(isChatMode ? { tools: runTools as ToolDefinition[] } : {}),
       ...(availableSkills.length > 0 ? { availableSkills } : {}),
       agentRuntime: "langgraph",
-      optimizeFirstRound: settings.optimizeFirstRound,
       resolvedWorkspaceRoot,
     },
     latestUserText,

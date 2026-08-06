@@ -92,7 +92,6 @@ export interface TwoPhaseFcOptions {
   tools: ToolDefinition[];
   /** 工具阶段使用的 system prompt（仅含工具调度规则 + 自动生成的工具目录）。 */
   toolSystemContent: string;
-  toolSystemContentOptimizedForFirstRound?: string;
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。
    *  工具结果（role: tool 消息）已在 conversation 中携带，本字段不重复注入。 */
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。 */
@@ -116,7 +115,6 @@ export interface TwoPhaseFcOptions {
   recordUsage?: (input: number, output: number, calls: number) => void;
   /** 用户取消信号。 */
   signal?: AbortSignal;
-  optimizeFirstRound?: boolean;
   /** 测试可注入的模型流；生产默认使用官方 SDK runtime。 */
   streamChat?: (input: SdkStreamRunInput) => Promise<import("./vendors/types").ChatResponse>;
   /** 当前对话模式，用于决定上下文压缩时保留的最近轮数。 */
@@ -526,14 +524,12 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     messages,
     tools,
     toolSystemContent,
-    toolSystemContentOptimizedForFirstRound,
     soulSystemBaseContent,
     timeoutMs,
     imageCaptionFallback,
     executeTool,
     onEvent,
     signal,
-    optimizeFirstRound,
   } = options;
 
   const maxToolRounds = options.maxToolRounds ?? DEFAULT_MAX_TOOL_ROUNDS;
@@ -584,13 +580,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     onEvent?.({ type: "step_started", stepName: `tool-round-${round + 1}` });
     console.log(LOG_PREFIX, "第 " + (round + 1) + " 轮 LLM 调用（TOOL_PHASE）...");
 
-    let systemContent;
-    if (optimizeFirstRound && realIsFirstRound) {
-      // 直接连接soulSystemBaseContent减少无用调用
-      systemContent = (toolSystemContentOptimizedForFirstRound || toolSystemContent) + "\n\n" + soulSystemBaseContent;
-    } else {
-      systemContent = toolSystemContent;
-    }
+    const systemContent = toolSystemContent;
 
     let req: ChatRequest = {
       model: options.settings.model,
@@ -723,12 +713,6 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     }
 
     // 情况 2：模型没有调工具 → 切 SOUL_PHASE
-    const directFirstRoundReply = stripLeakedChatTimeContext(chat.text);
-    if (optimizeFirstRound && realIsFirstRound && directFirstRoundReply.trim()) {
-      // 提示词连接了soulSystemBaseContent，因此直接返回结果，不需要二次总结．
-      return sendSoulPhaseDirectly(options, allToolResults, accInput, accOutput, directFirstRoundReply);
-    }
-    // 情况 2：模型没有调工具 → 切 SOUL_PHASE
     // 关键：工具阶段的 chat.text **不写入 conversation**，不发给用户。
     onEvent?.({ type: "step_finished", stepName: `tool-round-${round + 1}` });
     return await runSoulPhase({
@@ -776,20 +760,6 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     recordUsageFn,
     streamChat,
   });
-}
-
-function sendSoulPhaseDirectly(options: TwoPhaseFcOptions, allToolResults: ToolCallResult[], accInput: number, accOutput: number, reply: string): TwoPhaseFcResult {
-  const textMessageId = `msg-${Date.now()}`;
-  const reason = "no_tool";
-  emitTextMessage(options.onEvent, textMessageId, reply);
-  options.onEvent?.({ type: "step_finished", stepName: `soul-phase-${reason}` });
-
-  return {
-    reply,
-    toolResults: allToolResults,
-    totalUsage: { input: accInput, output: accOutput },
-    soulPhaseReason: reason,
-  };
 }
 
 /**

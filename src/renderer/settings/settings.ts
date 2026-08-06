@@ -289,7 +289,6 @@ interface ModelSettings {
   /** Embedding 维度（可选，仅 cloud 模式）。留空 = 自动探测。 */
   embeddingDimensions?: number;
   multimodal: boolean;
-  optimizeFirstRound?: boolean;
   thinkingOverride?: -1 | 0 | 1;
   /** 上下文窗口大小（Token）。默认 256000。 */
   contextWindowTokens?: number;

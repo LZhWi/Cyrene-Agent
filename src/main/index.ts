@@ -650,7 +650,6 @@ interface ModelSettings {
   vision?: VisionModelConfig;
   /** 主模型是否多模态。true 时图片直发主模型（direct），vision 配置保留但忽略。 */
   multimodal: boolean;
-  optimizeFirstRound?: boolean;
   thinkingOverride?: -1 | 0 | 1;
   disableMaxToken?: boolean;
   /** 上下文窗口大小（Token）。默认 256000，来自 DEFAULT_CONTEXT_WINDOW_TOKENS。唯一定义点。 */
@@ -1288,7 +1287,6 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
       : undefined,
     vision: normalizeVisionConfig(rawVision),
     multimodal,
-    optimizeFirstRound: input?.optimizeFirstRound,
     thinkingOverride: input?.thinkingOverride,
     disableMaxToken: input?.disableMaxToken,
     contextWindowTokens: typeof input?.contextWindowTokens === "number" && Number.isFinite(input.contextWindowTokens)

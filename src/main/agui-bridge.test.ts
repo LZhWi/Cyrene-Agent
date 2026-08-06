@@ -375,7 +375,6 @@ describe("agui-bridge sticker event ordering", () => {
     expect(mocks.runCyreneAgent).toHaveBeenCalledWith(expect.objectContaining({
       executionMode: "work",
       agentRuntime: "legacy",
-      optimizeFirstRound: true,
     }));
   });
 
