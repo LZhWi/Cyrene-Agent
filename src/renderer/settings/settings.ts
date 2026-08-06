@@ -92,6 +92,8 @@ import { visionBaseUrlInput, visionApiKeyInput, visionModelInput, visionFieldsWr
 import { avatarEl, uploadAvatarBtn, userDefaultCityInput, userNicknameInput, userCallPrefInput, userBirthdayInput, userTimezoneSelect, userGenderGroup } from "./user/dom";
 import { appearanceForm, appearanceSaveStatus, runtimeSyncSelect, runtimeSyncNote, windowCornerRadiusInput, windowCornerRadiusVal, petAlwaysOnTopInput, petVisibleInput, petZoomInput, petZoomVal, chatLineHeightInput, chatLineHeightVal, assistantBubbleEnabledInput, chatParaSpacingInput, chatParaSpacingVal, launchAtLoginInput, uiFontCurrent, uiFontImportButton, uiFontResetButton, uiIconSelect, screenshotHotkeyInput, openChromeGpu, disableGpuInput, sidebarVisibleInput, tasksVisibleInput } from "./appearance/dom";
 import { generalForm, generalSaveStatus, languageSelect, defaultChatModeSelect, segmentedOutputSelect, mobileMessageSegmentationSelect, proactiveChatSelect, proactiveDeliveryRow, proactiveDeliverySelect, chatSocialContextEnabledInput, citaEnabledInput, citaEngineSelect, clearChatHistoryBtn, customStyleSamplingBtn, customStylePromptBtn } from "./general/dom";
+import { minBtn, closeBtn, preferencesForm, sectionTitle, sectionHint, placeholderPanel, cyrenePanel, disclaimerPanel, pluginsPanel, placeholderIcon, placeholderTitle, placeholderCopy, saveStatus, runtimeSaveStatus, preferencesSaveStatus, cyreneSaveStatus, openStickerManagerBtn, addStickerBtn } from "./shared/shell";
+import { weatherEnabledCheckbox, weatherConfig, weatherSourceSelect, amapFields, amapKeyInput, travelEnabledCheckbox, travelConfig, travelAmapKeyInput, playwrightMcpCheckbox, pluginAddBtn, neteaseDetailView, permissionBlocksWrap, permissionNote, lifeToggle, lifeCard, lifeBody } from "./plugins/dom";
 import { preferencesState } from "./preferences/state";
 import { stickerEnabledInput, stickerSizeSelect, stickerThresholdInput, stickerThresholdVal, stickerAddOverlay, stickerAddPickBtn, stickerAddFileName, stickerAddId, stickerAddDesc, stickerAddPhrases, stickerAddError, stickerAddConfirm, stickerAddCancel } from "./preferences/dom";
 import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
@@ -392,25 +394,9 @@ if (!window.cyreneScheduler) {
   };
 }
 
-const minBtn = document.getElementById("min-btn") as HTMLButtonElement;
-const closeBtn = document.getElementById("close-btn") as HTMLButtonElement;
-const preferencesForm = document.getElementById("preferences-form") as HTMLFormElement;
-const sectionTitle = document.getElementById("section-title") as HTMLElement;
-const sectionHint = document.getElementById("section-hint") as HTMLElement;
-const placeholderPanel = document.getElementById("placeholder-panel") as HTMLElement;
-const cyrenePanel = document.getElementById("cyrene-panel") as HTMLFormElement;
-const disclaimerPanel = document.getElementById("disclaimer-panel") as HTMLElement;
-const pluginsPanel = document.getElementById("plugins-panel") as HTMLElement;
 document.querySelectorAll<HTMLImageElement>("[data-music-logo]").forEach((image) => {
   image.src = neteaseLogoUrl;
 });
-const placeholderIcon = document.getElementById("placeholder-icon") as HTMLElement;
-const placeholderTitle = document.getElementById("placeholder-title") as HTMLElement;
-const placeholderCopy = document.getElementById("placeholder-copy") as HTMLElement;
-const saveStatus = document.getElementById("save-status") as HTMLElement;
-const runtimeSaveStatus = document.getElementById("runtime-save-status") as HTMLElement;
-const preferencesSaveStatus = document.getElementById("preferences-save-status") as HTMLElement;
-const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLElement;
 
 
 
@@ -430,8 +416,6 @@ const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLEl
 const providerProfileCache: Record<string, ProviderProfile> = {};
 
 // 当前激活的厂商：每次 applyPreset 后更新；用于"切到下一家厂商前先把当前那家的输入框值缓存住"
-const openStickerManagerBtn = document.getElementById("open-sticker-manager-btn") as HTMLButtonElement;
-const addStickerBtn = document.getElementById("add-sticker-btn") as HTMLButtonElement;
 
 
 
@@ -1597,11 +1581,6 @@ stickerAddConfirm.addEventListener("click", async () => {
 // 天气查询/联网搜索有独立配置卡片（下方）。
 
 // ── 天气插件（Open-Meteo / 高德天气）──
-const weatherEnabledCheckbox = document.getElementById("plugin-weather-enabled") as HTMLInputElement | null;
-const weatherConfig = document.getElementById("plugin-weather-config") as HTMLElement | null;
-const weatherSourceSelect = document.getElementById("weather-source") as HTMLSelectElement | null;
-const amapFields = document.getElementById("amap-fields");
-const amapKeyInput = document.getElementById("amap-key") as HTMLInputElement | null;
 
 // 启用开关：勾上才展开配置区
 function syncWeatherConfigVisibility(): void {
@@ -1661,9 +1640,6 @@ async function loadWeatherConfig(): Promise<void> {
 void loadWeatherConfig();
 
 // ── 🚗出行工具 ──
-const travelEnabledCheckbox = document.getElementById("plugin-travel-enabled") as HTMLInputElement | null;
-const travelConfig = document.getElementById("plugin-travel-config") as HTMLElement | null;
-const travelAmapKeyInput = document.getElementById("travel-amap-key") as HTMLInputElement | null;
 
 function syncTravelConfigVisibility(): void {
   if (travelConfig) travelConfig.style.display = travelEnabledCheckbox?.checked ? "block" : "none";
@@ -1928,7 +1904,6 @@ void loadSearchConfig();
 // ── 🌐 内置 MCP 工具开关 ──────────────────────────────────────
 // Playwright MCP（浏览器自动化）通过 playwrightMcpEnabled 控制，
 // main 端的 syncPlaywrightMcp() 会监听字段变化自动注册 / 移除 MCP server。
-const playwrightMcpCheckbox = document.getElementById("plugin-playwright-mcp-enabled") as HTMLInputElement | null;
 
 async function saveBuiltinMcpField(field: string, value: unknown): Promise<void> {
   if (!window.tts) return;
@@ -1957,7 +1932,6 @@ async function loadBuiltinMcpToggles(): Promise<void> {
 void loadBuiltinMcpToggles();
 
 // ── MCP Server 管理 UI ──────────────────────────────────────
-const pluginAddBtn = document.querySelector(".plugin-add-btn") as HTMLButtonElement | null;
 console.log("[settings] plugin-add-btn 查询结果:", pluginAddBtn ? "找到" : "未找到");
 
 
@@ -3176,7 +3150,6 @@ function getMusicApi(): MusicApi | null {
   return w.music ?? null;
 }
 
-const neteaseDetailView = document.getElementById("netease-detail-view");
 
 
 
@@ -4203,8 +4176,6 @@ void loadUserProfile();
 // ── 权限档位 UI ───────────────────────────────────────────
 type PermissionLevel = "read-only" | "scoped" | "per-action" | "full";
 
-const permissionBlocksWrap = document.getElementById("plugin-file-permission") as HTMLElement | null;
-const permissionNote = document.getElementById("plugin-file-note") as HTMLElement | null;
 
 const PERMISSION_NOTES: Record<PermissionLevel, string> = {
   "read-only": "只读：昔涟不会修改本地任何文件，也不能为你安装新工具。",
@@ -4321,9 +4292,6 @@ if (permissionBlocksWrap) {
 }
 
 // ── 生活工具手风琴 ─────────────────────────────────────────
-const lifeToggle = document.getElementById("plugin-life-toggle") as HTMLButtonElement | null;
-const lifeCard = document.getElementById("plugin-life-card");
-const lifeBody = document.getElementById("plugin-life-body");
 lifeToggle?.addEventListener("click", () => {
   const expanded = lifeToggle.getAttribute("aria-expanded") === "true";
   lifeToggle.setAttribute("aria-expanded", String(!expanded));
