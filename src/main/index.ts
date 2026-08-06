@@ -133,7 +133,7 @@ import { loadMemoryPanelData } from "./memory/panel";
 import { type RuntimeState } from "./runtime-state";
 import { getAppIconPath } from "./app-icon";
 import { ensureCustomStylePrompt } from "./style-prompt";
-import type { StartTtsRequest, TtsSessionEvent, TtsStartResult } from "../shared/tts-session";
+import type { StartTtsRequest } from "../shared/tts-session";
 import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
 import { codeRunWorker } from "./orchestrator/code/code-run-worker";
 import {
