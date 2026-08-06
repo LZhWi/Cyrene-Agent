@@ -71,6 +71,7 @@ import type {
   MusicSelectionResult,
   MusicSelectionTrack,
 } from "./music/types";
+import { musicState } from "./music/state";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -3487,10 +3488,6 @@ const musicSearchInput = document.getElementById("music-search-input") as HTMLIn
 const musicSearchBtn = document.getElementById("music-search-btn") as HTMLButtonElement | null;
 const musicSearchResults = document.getElementById("music-search-results");
 
-let musicPanelInitialized = false;
-let musicStateUnsub: (() => void) | null = null;
-let musicLoginPollTimer: number | null = null;
-let musicLastQrDataUrl: string | null = null;
 
 function setMusicFeedback(kind: "info" | "ok" | "err", msg: string): void {
   if (!musicFeedbackEl) return;
@@ -3562,20 +3559,20 @@ function clearMusicQr(): void {
   if (musicQrImg) { musicQrImg.style.display = "none"; musicQrImg.src = ""; }
   if (musicQrBox) musicQrBox.classList.add("is-hidden");
   if (musicQrTip) musicQrTip.textContent = "请用网易云音乐 App 扫描二维码完成登录";
-  musicLastQrDataUrl = null;
+  musicState.lastQrDataUrl = null;
 }
 
 function showMusicQr(dataUrl: string, tip: string): void {
   if (musicQrImg) { musicQrImg.src = dataUrl; musicQrImg.style.display = "block"; }
   if (musicQrTip) musicQrTip.textContent = tip;
   if (musicQrBox) musicQrBox.classList.remove("is-hidden");
-  musicLastQrDataUrl = dataUrl;
+  musicState.lastQrDataUrl = dataUrl;
 }
 
 function stopMusicLoginPolling(): void {
-  if (musicLoginPollTimer != null) {
-    window.clearInterval(musicLoginPollTimer);
-    musicLoginPollTimer = null;
+  if (musicState.loginPollTimer != null) {
+    window.clearInterval(musicState.loginPollTimer);
+    musicState.loginPollTimer = null;
   }
 }
 
@@ -3583,7 +3580,7 @@ function startMusicLoginPolling(pollIntervalMs = 2000): void {
   stopMusicLoginPolling();
   const api = getMusicApi();
   if (!api) return;
-  musicLoginPollTimer = window.setInterval(async () => {
+  musicState.loginPollTimer = window.setInterval(async () => {
     try {
       const r = await api.getStatus();
       if (r.ok) {
@@ -3766,8 +3763,8 @@ async function runMusicSearch(): Promise<void> {
 }
 
 async function loadMusicPanel(): Promise<void> {
-  if (musicPanelInitialized) return;
-  musicPanelInitialized = true;
+  if (musicState.panelInitialized) return;
+  musicState.panelInitialized = true;
 
   // 平台按钮（网易云 → 切到 music panel）的点击处理在文件下方模块初始化时已绑定，
   // 这里不再重复 attach，避免多次进入面板造成重复监听。
@@ -3786,7 +3783,7 @@ async function loadMusicPanel(): Promise<void> {
   const api = getMusicApi();
   if (api && typeof api.onStateChanged === "function") {
     const unsub = api.onStateChanged((s) => renderMusicStatus(s));
-    if (typeof unsub === "function") musicStateUnsub = unsub;
+    if (typeof unsub === "function") musicState.stateUnsub = unsub;
   }
 
   // 首次拉一次状态
@@ -3836,9 +3833,9 @@ async function loadMusicPanel(): Promise<void> {
 function disposeMusicPanel(): void {
   // 离开面板时：停止轮询、取消订阅、清掉 QR dataURL 释放内存
   stopMusicLoginPolling();
-  if (musicStateUnsub) {
-    try { musicStateUnsub(); } catch { /* ignore */ }
-    musicStateUnsub = null;
+  if (musicState.stateUnsub) {
+    try { musicState.stateUnsub(); } catch { /* ignore */ }
+    musicState.stateUnsub = null;
   }
   clearMusicQr();
   setMusicFeedback("info", "");
