@@ -72,6 +72,7 @@ import type {
   MusicSelectionTrack,
 } from "./music/types";
 import { musicState } from "./music/state";
+import { musicHomeView, musicReturnBtn, musicSearchForm, musicSearchHint, musicQrStatus, musicProfileAvatar, musicLoginBtn, musicCancelBtn, musicDisconnectBtn, musicQrImg, musicQrTip, musicQrBox, musicFeedbackEl, musicAccountStatusText, musicSearchInput, musicSearchBtn, musicSearchResults, musicToggle, musicAccordionCard, musicAccordionBody } from "./music/dom";
 import { channelsState } from "./channels/state";
 import { channelsWechatEnabledEl, channelsFeishuEnabledEl, channelsWechatStatusEl, channelsFeishuStatusEl, channelsRateUserEl, channelsRateChannelEl, channelsTtsEl, channelsStickerEl, channelsMirrorEl, channelsToolSandboxOffEl, channelsToolSandboxAllEl, channelsToolSandboxSafeEl, channelsFeishuAppIdEl, channelsFeishuAppSecretEl, channelsFeishuAppSecretRevealBtn, channelsFeishuSaveBtn, channelsWechatLoginBtn, channelsWechatRestartBtn, channelsWechatFeedbackEl, channelsFeishuFeedbackEl, channelsLogListEl, channelsLogRefreshBtn, channelsLogClearBtn } from "./channels/dom";
 import { memoryState } from "./memory/state";
@@ -3306,25 +3307,8 @@ function getMusicApi(): MusicApi | null {
   return w.music ?? null;
 }
 
-const musicHomeView = document.getElementById("music-home-view");
 const neteaseDetailView = document.getElementById("netease-detail-view");
-const musicReturnBtn = document.getElementById("music-return-btn");
-const musicSearchForm = document.getElementById("music-search-form");
-const musicSearchHint = document.getElementById("music-search-hint");
-const musicQrStatus = document.getElementById("music-qr-status");
-const musicProfileAvatar = document.getElementById("music-profile-avatar") as HTMLImageElement | null;
-const musicLoginBtn = document.getElementById("music-login-btn") as HTMLButtonElement | null;
-const musicCancelBtn = document.createElement("button");
-const musicDisconnectBtn = document.createElement("button");
 
-const musicQrImg = document.getElementById("music-qr-img") as HTMLImageElement | null;
-const musicQrTip = document.getElementById("music-qr-tip");
-const musicQrBox = document.getElementById("music-qr") as HTMLElement | null;
-const musicFeedbackEl = document.getElementById("music-feedback");
-const musicAccountStatusText = document.getElementById("music-account-status-text");
-const musicSearchInput = document.getElementById("music-search-input") as HTMLInputElement | null;
-const musicSearchBtn = document.getElementById("music-search-btn") as HTMLButtonElement | null;
-const musicSearchResults = document.getElementById("music-search-results");
 
 
 function setMusicFeedback(kind: "info" | "ok" | "err", msg: string): void {
@@ -4503,9 +4487,6 @@ lifeToggle?.addEventListener("click", () => {
 });
 
 // ── 音乐工具手风琴（跟生活工具一样的折叠逻辑）────────────────
-const musicToggle = document.getElementById("plugin-music-toggle") as HTMLButtonElement | null;
-const musicAccordionCard = document.getElementById("plugin-music-card");
-const musicAccordionBody = document.getElementById("plugin-music-body");
 musicToggle?.addEventListener("click", () => {
   const expanded = musicToggle.getAttribute("aria-expanded") === "true";
   musicToggle.setAttribute("aria-expanded", String(!expanded));
