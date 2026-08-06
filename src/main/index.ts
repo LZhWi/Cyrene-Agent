@@ -42,7 +42,6 @@ import {
   addL2MemoryVector,
   addMemory,
   buildMemoryContext,
-  deleteImportedDoc,
   deleteUserMemoryVectors,
   getEntriesBySource,
   initRAG,
@@ -66,6 +65,7 @@ import { createLlmClient, type LlmClient } from "./services/llm/llm-client";
 import { createTtsSynthesisService, type TtsSynthesisService } from "./services/tts/tts-synthesis-service";
 import { createEmbeddingIndexService, type EmbeddingIndexService } from "./services/embedding/embedding-index-service";
 import { registerSettingsIpc } from "./settings/settings-ipc";
+import { registerMemoryUserToolIpc } from "./memory/memory-user-ipc";
 
 import { getAdapterForConfig } from "./orchestrator/vendors";
 import {
@@ -93,14 +93,13 @@ import { enqueueLLMTask } from "./llm-queue";
 
 import { createSocialContextService, type SocialContextService } from "./services/social-context/social-context-service";
 
-import { loadUserStickerManifest, addUserSticker, deleteUserSticker, isStickerIdTaken, getStickersDir } from "./sticker-storage";
+import { getStickersDir } from "./sticker-storage";
 import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
 import { normalizeWindowVisibilitySettings } from "./window-visibility-settings";
 import type { StickerConfigItem } from "../shared/sticker-types";
 
 import { memoryStore } from "./memory/memory-store"
 import { backupMemoryRagFiles, reconcileMemoryRag } from "./memory/memory-rag-reconciliation";
-import type { L0Profile, L1Profile } from "./memory/memory-types";
 import { registerChatsIpc } from "./chats/chats-ipc";
 import * as chatsStore from "./chats/chats-store";
 import { getUsage, flush as flushTokenUsage } from "./token-usage-store";
@@ -108,13 +107,11 @@ import { TtsSessionService } from "./tts/tts-session-service";
 import { registerTtsIpc } from "./tts/tts-ipc";
 import {
   type UserProfile,
-  getAvatarPath,
   getGeneralSettingsPath,
   getRagStorePath,
   getSettingsPath,
   getUserProfilePath,
   loadUserProfile,
-  saveUserProfile,
 } from "./settings-store";
 import {
   type ModelSettings,
@@ -127,7 +124,6 @@ import {
 } from "./settings/model-settings";
 import type { GeneralSettings } from "./settings/general-settings";
 import { bootstrapConfigGetters } from "./startup/bootstrap-config";
-import { loadMemoryPanelData } from "./memory/panel";
 import { type RuntimeState } from "./runtime-state";
 import { getAppIconPath } from "./app-icon";
 import type { StartTtsRequest } from "../shared/tts-session";
@@ -154,7 +150,7 @@ import {
 import { getDateLocale, updateLocaleContext } from "./locale-context";
 import { setAsrConfig } from "./asr/volcano-asr-engine";
 import { registerCallIpc, setCallSettings } from "./call/call-manager";
-import { initSkills, skillRegistry, setSkillEnabled, listSkillsForUi } from "./skills";
+import { initSkills, skillRegistry } from "./skills";
 import {
   isMusicCompanionAvailable,
   loadMusicCompanionHost,
@@ -167,10 +163,8 @@ import { createChannelsSubsystem, type ChannelsSubsystem } from "./channels/boot
 import { createAgentRuntime, type AgentRuntime } from "./orchestrator/agent-runtime";
 import { createRuntimeStateService } from "./orchestrator/runtime-state-service";
 import {
-  getStickerManagerConfig,
   loadStickerSettings,
   saveStickerSettings,
-  setStickerEnabled,
 } from "./orchestrator/sticker-settings";
 import { createProactiveLifecycle } from "./proactive/proactive-lifecycle";
 import { createCitaService } from "./services/cita/cita-service";
@@ -672,184 +666,11 @@ ipcMain.on(IPC.SETTINGS_CLOSE, () => {
   });
 
 
-ipcMain.handle(IPC.SETTINGS_OPEN_STICKER_MANAGER, async () => {
-  console.log("[stickers] open sticker manager requested");
-  return windowManager?.createStickerManagerWindow();
-});
-
-ipcMain.on(IPC.STICKERS_MINIMIZE, () => {
-  stickerManagerWindow?.minimize();
-});
-
-ipcMain.on(IPC.STICKERS_CLOSE, () => {
-  stickerManagerWindow?.close();
-});
-
-ipcMain.handle(IPC.STICKERS_GET_CONFIG, () => {
-  return getStickerManagerConfig();
-});
-
-ipcMain.handle(IPC.STICKERS_SET_ENABLED, (_event, payload: unknown) => {
-  const record = payload as { id?: unknown; enabled?: unknown };
-  const id = typeof record?.id === "string" ? record.id : null;
-  if (!id) return getStickerManagerConfig();
-  setStickerEnabled(id, Boolean(record.enabled));
-  return getStickerManagerConfig();
-});
-
-ipcMain.handle(IPC.STICKERS_PICK_FILE, async () => {
-  const result = await dialog.showOpenDialog({
-    properties: ["openFile"],
-    filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "gif", "webp"] }],
+  registerMemoryUserToolIpc({
+    get windowManager() { return windowManager; },
+    embeddingIndexService,
   });
-  return result.canceled ? null : result.filePaths[0];
-});
 
-ipcMain.handle(IPC.STICKERS_ADD, async (_event, payload: unknown) => {
-  const { sourcePath, id, description, phrases } = payload as {
-    sourcePath: string;
-    id: string;
-    description: string;
-    phrases: string[];
-  };
-  try {
-    await addUserSticker(sourcePath, id, description, phrases);
-    embeddingIndexService.invalidateStickerEmbeddingIndex();
-    embeddingIndexService.refreshStickerEmbeddingIndex("user-sticker-add");
-  } catch (err) {
-    console.error("[stickers] add failed:", err);
-    throw err;
-  }
-  return getStickerManagerConfig();
-});
-
-ipcMain.handle(IPC.STICKERS_DELETE, async (_event, id: string) => {
-  try {
-    await deleteUserSticker(id);
-    embeddingIndexService.invalidateStickerEmbeddingIndex();
-    embeddingIndexService.refreshStickerEmbeddingIndex("user-sticker-delete");
-  } catch (err) {
-    console.error("[stickers] delete failed:", err);
-    throw err;
-  }
-  return getStickerManagerConfig();
-});
-
-ipcMain.handle(IPC.STICKERS_GET_ENABLED, () => {
-  return getStickerManagerConfig().filter((s) => s.enabled);
-});
-
-
-
-ipcMain.handle(IPC.USER_GET_AVATAR, () => {
-  const avatarPath = getAvatarPath();
-  if (!fs.existsSync(avatarPath)) return null;
-  const buf = fs.readFileSync(avatarPath);
-  const ext = path.extname(avatarPath).toLowerCase();
-  const mime = ext === ".png" ? "image/png" : ext === ".jpg" || ext === ".jpeg" ? "image/jpeg" : ext === ".webp" ? "image/webp" : "image/png";
-  return "data:" + mime + ";base64," + buf.toString("base64");
-});
-
-ipcMain.handle(IPC.MEMORY_PANEL_GET_DATA, () => loadMemoryPanelData());
-ipcMain.handle(IPC.MEMORY_PANEL_DELETE_IMPORTED_DOC, (_event, payload: { importId: string; fileName?: string }) => {
-  const deleted = deleteImportedDoc(payload.importId, payload.fileName);
-  return { ok: true, deleted };
-});
-// L0/L1 editable fields whitelist
-const L0_EDITABLE_KEYS = ["preferredName", "occupation", "longTermInterests", "language", "permanentNote"];
-const L1_EDITABLE_KEYS = ["recentGoals", "recentPreferences", "currentProject"];
-
-ipcMain.handle(IPC.MEMORY_PANEL_SAVE_L0, async (_event, raw: Record<string, unknown>) => {
-  const patch: Partial<L0Profile> = {};
-  for (const key of L0_EDITABLE_KEYS) {
-    if (key in raw && typeof raw[key] === "string") {
-      (patch as Record<string, unknown>)[key] = (raw[key] as string).trim();
-    }
-  }
-  await memoryStore.updateL0(patch);
-  return { ok: true };
-});
-
-ipcMain.handle(IPC.MEMORY_PANEL_SAVE_L1, async (_event, raw: Record<string, unknown>) => {
-  const patch: Partial<L1Profile> = {};
-  for (const key of L1_EDITABLE_KEYS) {
-    if (key in raw && typeof raw[key] === "string") {
-      (patch as Record<string, unknown>)[key] = (raw[key] as string).trim();
-    }
-  }
-  await memoryStore.updateL1(patch);
-  return { ok: true };
-});
-ipcMain.handle(IPC.USER_GET_PROFILE, () => loadUserProfile());
-ipcMain.handle(IPC.USER_SAVE_PROFILE, (_event, profile: Partial<UserProfile>) => {
-  const saved = saveUserProfile(profile);
-  broadcastToAuxWindows(IPC.USER_PROFILE_CHANGED, saved);
-  return saved;
-});
-ipcMain.handle(IPC.USER_UPLOAD_AVATAR, async () => {
-  const { dialog } = await import("electron");
-  const result = await dialog.showOpenDialog({
-    properties: ["openFile"],
-    filters: [{ name: "图片", extensions: ["png", "jpg", "jpeg", "webp", "bmp"] }],
-  });
-  if (result.canceled || result.filePaths.length === 0) return null;
-  const srcPath = result.filePaths[0];
-  const avatarPath = getAvatarPath();
-  fs.mkdirSync(path.dirname(avatarPath), { recursive: true });
-  fs.copyFileSync(srcPath, avatarPath);
-  const profile = saveUserProfile({ avatarPath });
-  broadcastToAuxWindows(IPC.USER_AVATAR_CHANGED, null);
-  return { avatarPath, profile };
-});
-
-ipcMain.handle(IPC.MCP_ADD_SERVER, async (_event, config: unknown) => {
-  console.log('[MCP IPC] add-server:', JSON.stringify(config).slice(0, 200));
-  const result = await addMcpServer(config as Parameters<typeof addMcpServer>[0]);
-  console.log('[MCP IPC] add-server result:', JSON.stringify(result));
-  return result;
-});
-
-ipcMain.handle(IPC.MCP_REMOVE_SERVER, async (_event, serverId: string) => {
-  console.log('[MCP IPC] remove-server:', serverId);
-  const result = await removeMcpServer(serverId);
-  console.log('[MCP IPC] remove-server result:', JSON.stringify(result));
-  return result;
-});
-
-ipcMain.handle(IPC.MCP_LIST_SERVERS, () => {
-  const servers = listMcpServers();
-  console.log('[MCP IPC] list-servers:', servers.length + ' servers');
-  return servers;
-});
-
-ipcMain.handle(IPC.TOOL_SET_ENABLED, (_event, payload: unknown) => {
-  const p = payload as { id?: string; enabled?: boolean };
-  if (!p.id) return { ok: false, error: 'missing tool id' };
-  toolRegistry.setEnabled(p.id, p.enabled !== false);
-  console.log('[Tool] ' + p.id + ' enabled=' + (p.enabled !== false));
-  return { ok: true };
-});
-
-ipcMain.handle(IPC.TOOL_GET_ENABLED, () => {
-  const tools = toolRegistry.getAllTools();
-  const result: Record<string, boolean> = {};
-  for (const t of tools) {
-    result[t.id] = t.enabled;
-  }
-  return result;
-});
-
-ipcMain.handle(IPC.SKILL_LIST, () => {
-  return listSkillsForUi();
-});
-
-ipcMain.handle(IPC.SKILL_SET_ENABLED, (_event, payload: unknown) => {
-  const p = payload as { id?: string; enabled?: boolean };
-  if (!p.id) return { ok: false, error: "missing skill id" };
-  setSkillEnabled(p.id, p.enabled !== false);
-  console.log("[Skill] " + p.id + " enabled=" + (p.enabled !== false));
-  return { ok: true };
-});
 
 
 ipcMain.on(IPC.SETTINGS_OPEN_CHROME_GPU, async () => {
