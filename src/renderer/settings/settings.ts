@@ -16,7 +16,6 @@ import {
   type SegmentedOutputMode,
 } from "../../shared/preferences";
 import { isProactiveDeliveryTargetSelectable } from "../../shared/proactive-delivery";
-import { TIMEZONE_OPTIONS, FALLBACK_TIMEZONE, normalizeTimezoneOptionValue } from "./timezone-options";
 import type { UiTheme } from "../../shared/ui-theme";
 import { DEFAULT_UI_FONT, normalizeUiFont, type UiFont } from "../../shared/ui-font";
 import { normalizeUiIcon, type UiIcon } from "../../shared/ui-icon";
@@ -72,7 +71,7 @@ import { memoryState } from "./memory/state";
 import { memoryL0NameInput, memoryL0OccupationInput, memoryL0InterestsInput, memoryL0LanguageInput, memoryL0NoteInput, memoryL1GoalsInput, memoryL1PreferencesInput, memoryL1ProjectInput, memoryL2SearchInput, memoryL2List, memoryImportedList, memoryReflectionList, memoryL0EditBtn, memoryL0CancelBtn, memoryL1EditBtn, memoryL1CancelBtn } from "./memory/dom";
 import { schedulerState } from "./scheduler/state";
 import { schedulerNewBtn, schedulerEmpty, schedulerList, schedulerEditor, schedulerEditorTitle, schedulerEditorClose, schedulerTitleInput, schedulerPromptInput, schedulerEnabledInput, schedulerKindInput, schedulerOnceRunAtInput, schedulerTimeOfDayInput, schedulerDayOfWeekInput, schedulerIntervalEveryInput, schedulerIntervalUnitInput, schedulerToolLimitInput, schedulerToolPicker, schedulerToolEmptyHint, schedulerSaveStatus, schedulerCancelBtn, schedulerSaveBtn } from "./scheduler/dom";
-import { timeoutSaveStatus, timeoutSummaryInput, timeoutSummaryReset, timeoutVisionInput, timeoutVisionReset, timeoutUserChoiceInput, timeoutUserChoiceReset, timeoutTestInput, timeoutTestReset, timeoutMemoryJudgeInput, timeoutMemoryJudgeReset, timeoutProfileTotalBudgetInput, timeoutProfileTotalBudgetReset, timeoutProfilePerAttemptInput, timeoutProfilePerAttemptReset, timeoutProfileRemainingInput, timeoutProfileRemainingReset } from "./timeout/dom";
+import { timeoutProfileTotalBudgetInput, timeoutProfilePerAttemptInput, timeoutProfileRemainingInput } from "./timeout/dom";
 import { tokensState } from "./tokens/state";
 import { ttsState } from "./tts/state";
 import { modalState } from "./shared/modal-state";
@@ -81,19 +80,14 @@ import { parsePositiveIntOrThrow, parseN1SecToMsOrThrow, parseCommandLine } from
 import { apiState } from "./api/state";
 import { apiForm, apiRuntimeForm, apiTimeoutForm, presetCards, presetWebsiteLink, displayNameInput, baseUrlInput, baseUrlResetBtn, modelInput, modelInputSuggestions, contextWindowInput, apiKeyInput, apiKeyLabel, apiKeyHint, testConnectionBtn, transportSelect, transportHint, endpointPreview, customEndpointControls, customEndpointOverrides, customEndpointSummary, customEndpointGuideBtn, workFlowAdaptBtn, apiNoteText, multimodalToggle, chatRequestTimeoutSecInput, maxIterationsInput, maxReplansInput, maxRefreshInput, perCallTimeoutSecInput, actionGateRepairBudgetSecInput, embeddingDimensionsInput, modelRequestTimeoutSecInput, modelRequestTimeoutSecReset, toggleEnableThinking, toggleDisableThinking, toggleDisableMaxToken } from "./api/dom";
 import { visionBaseUrlInput, visionApiKeyInput, visionModelInput, visionFieldsWrap, testVisionBtn, visionTestStatus } from "./vision/dom";
-import { avatarEl, uploadAvatarBtn, userDefaultCityInput, userNicknameInput, userCallPrefInput, userBirthdayInput, userTimezoneSelect, userGenderGroup } from "./user/dom";
 import { appearanceForm, appearanceSaveStatus, runtimeSyncSelect, runtimeSyncNote, windowCornerRadiusInput, windowCornerRadiusVal, petAlwaysOnTopInput, petVisibleInput, petZoomInput, petZoomVal, chatLineHeightInput, chatLineHeightVal, assistantBubbleEnabledInput, chatParaSpacingInput, chatParaSpacingVal, launchAtLoginInput, uiFontCurrent, uiFontImportButton, uiFontResetButton, uiIconSelect, screenshotHotkeyInput, openChromeGpu, disableGpuInput, sidebarVisibleInput, tasksVisibleInput } from "./appearance/dom";
 import { generalForm, generalSaveStatus, languageSelect, defaultChatModeSelect, segmentedOutputSelect, mobileMessageSegmentationSelect, proactiveChatSelect, proactiveDeliveryRow, proactiveDeliverySelect, chatSocialContextEnabledInput, citaEnabledInput, citaEngineSelect, clearChatHistoryBtn, customStyleSamplingBtn, customStylePromptBtn } from "./general/dom";
 import { minBtn, closeBtn, preferencesForm, sectionTitle, sectionHint, placeholderPanel, cyrenePanel, disclaimerPanel, pluginsPanel, placeholderIcon, placeholderTitle, placeholderCopy, saveStatus, runtimeSaveStatus, preferencesSaveStatus, cyreneSaveStatus, openStickerManagerBtn, addStickerBtn } from "./shared/shell";
-import { weatherEnabledCheckbox, weatherConfig, weatherSourceSelect, amapFields, amapKeyInput, travelEnabledCheckbox, travelConfig, travelAmapKeyInput, playwrightMcpCheckbox, pluginAddBtn, neteaseDetailView, permissionBlocksWrap, permissionNote, lifeToggle, lifeCard, lifeBody } from "./plugins/dom";
+import { pluginAddBtn, neteaseDetailView, permissionBlocksWrap, permissionNote, lifeToggle, lifeCard, lifeBody } from "./plugins/dom";
 import { preferencesState } from "./preferences/state";
 import { stickerEnabledInput, stickerSizeSelect, stickerThresholdInput, stickerThresholdVal, stickerAddOverlay, stickerAddPickBtn, stickerAddFileName, stickerAddId, stickerAddDesc, stickerAddPhrases, stickerAddError, stickerAddConfirm, stickerAddCancel } from "./preferences/dom";
 import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
-import { asrState } from "./asr/state";
-import { asrEngineSelect, asrAliyunConfig, asrAliyunAppKeyInput, asrAliyunAccessKeyIdInput, asrAliyunAccessKeySecretInput, asrLanguageSelect, asrVadSilenceInput, asrVadThresholdInput, asrVadThresholdValue, asrShowTranscriptCheckbox } from "./asr/dom";
 import { pluginsState } from "./plugins/state";
-import { searchEnabledCheckbox, searchConfig, searchEngineSelect, searchBochaKeyInput, searchTavilyKeyInput, searchMinimaxKeyInput, searchAnySearchKeyInput, searchBochaRow, searchTavilyRow, searchMinimaxRow, searchAnySearchRow } from "./search/dom";
-import { emailEnabledCheckbox, emailConfig, emailSmtpHostInput, emailSmtpPortInput, emailSmtpSecureInput, emailSmtpUserInput, emailSmtpPassInput, emailFromNameInput } from "./email/dom";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -131,6 +125,10 @@ import { loadChannelsPanel } from "./channels/panel";
 import { renderProactiveDeliveryAvailability } from "./channels/panel";
 import "./asr/panel";  // 副作用导入：执行事件绑定 + 初始加载
 import "./email/panel";  // 副作用导入：执行事件绑定 + 初始加载
+import "./search/panel";  // 副作用导入：执行事件绑定 + 初始加载
+import { saveTimeoutSettings } from "./timeout/panel";  // saveTimeoutSettings 被 API 表单处理器调用
+import "./user/panel";  // 副作用导入：执行事件绑定 + 初始加载
+import "./plugins/panel";  // 副作用导入：执行事件绑定 + 初始加载
 
 // Inline modal (to avoid Vite tree-shaking)
 
@@ -943,79 +941,6 @@ async function loadGeneralSettings(): Promise<void> {
   }
 }
 
-async function loadTimeoutSettings() {
-  try {
-    const cfg = await window.settings!.getTimeoutSettings();
-    timeoutSummaryInput.value = String(cfg.forceSummaryTimeout);
-    timeoutVisionInput.value = String(cfg.visionTimeout);
-    timeoutUserChoiceInput.value = String(cfg.userChoiceTimeout / 1000);
-    timeoutTestInput.value = String(cfg.testTimeout);
-    timeoutMemoryJudgeInput.value = String(cfg.memoryJudgeTimeout);
-    timeoutProfileTotalBudgetInput.value = cfg.profileTotalBudgetMs === -1 ? "" : String(cfg.profileTotalBudgetMs / 1000);
-    timeoutProfilePerAttemptInput.value = cfg.profilePerAttemptTimeoutMs === -1 ? "" : String(cfg.profilePerAttemptTimeoutMs / 1000);
-    timeoutProfileRemainingInput.value = cfg.profileMinimumRemainingBudgetMs === -1 ? "" : String(cfg.profileMinimumRemainingBudgetMs / 1000);
-    modelRequestTimeoutSecInput.value = cfg.modelRequestTimeoutSec != null ? String(cfg.modelRequestTimeoutSec) : "";
-    setTimeoutSaveStatus("时间设置保存后，对后续请求生效．");
-  } catch {
-    setTimeoutSaveStatus("读取偏好失败", "is-error");
-  }
-}
-
-async function saveTimeoutSettings(saveTestTimeout: boolean) {
-  let settings: Partial<TimeoutSettings>;
-  try {
-    if (!saveTestTimeout) {
-      settings = {
-        forceSummaryTimeout: parsePositiveIntOrThrow(timeoutSummaryInput.value, "工具总结阶段 API 超时"),
-        visionTimeout: parsePositiveIntOrThrow(timeoutVisionInput.value, "视觉模型单次 API 超时"),
-        userChoiceTimeout: 1000 * parsePositiveIntOrThrow(timeoutUserChoiceInput.value, "工具请求确认时间限制"),
-        memoryJudgeTimeout: parsePositiveIntOrThrow(timeoutMemoryJudgeInput.value, "记忆总结阶段 API 超时"),
-        profileTotalBudgetMs: parseN1SecToMsOrThrow(timeoutProfileTotalBudgetInput.value, "阶段总时间预算"),
-        profilePerAttemptTimeoutMs: parseN1SecToMsOrThrow(timeoutProfilePerAttemptInput.value, "单次尝试超时"),
-        profileMinimumRemainingBudgetMs: parseN1SecToMsOrThrow(timeoutProfileRemainingInput.value, "最小剩余时间"),
-        modelRequestTimeoutSec: modelRequestTimeoutSecInput.value === "" ? undefined : parsePositiveIntOrThrow(modelRequestTimeoutSecInput.value, "模型请求超时"),
-      };
-    } else {
-      settings = {
-        testTimeout: parsePositiveIntOrThrow(timeoutTestInput.value, "测试超时"),
-      };
-    }
-  } catch (e) {
-    if (saveTestTimeout) {
-      setSaveStatus("无效输入：" + e, "is-error");
-    } else {
-      setTimeoutSaveStatus("无效输入：" + e, "is-error");
-    }
-    return false;
-  }
-  try {
-    await window.settings!.saveTimeoutSettings(settings);
-    if (saveTestTimeout) {
-      setSaveStatus("已保存", "is-ok");
-    } else {
-      setTimeoutSaveStatus("已保存", "is-ok");
-    }
-    return true;
-  } catch {
-    if (saveTestTimeout) {
-      setSaveStatus("保存失败", "is-error");
-    } else {
-      setTimeoutSaveStatus("保存失败", "is-error");
-    }
-  }
-  return false;
-}
-
-timeoutTestReset.addEventListener("click", () => { timeoutTestInput.value = "15000" });
-timeoutSummaryReset.addEventListener("click", () => { timeoutSummaryInput.value = String(DEFAULT_FORCE_SUMMARY_TIMEOUT_MS) });
-timeoutVisionReset.addEventListener("click", () => { timeoutVisionInput.value = String(DEFAULT_VISION_TIMEOUT_MS) });
-timeoutMemoryJudgeReset.addEventListener("click", () => { timeoutMemoryJudgeInput.value = String(DEFAULT_MEMORY_JUDGE_MS) });
-timeoutUserChoiceReset.addEventListener("click", () => { timeoutUserChoiceInput.value = "60" });
-
-timeoutProfileTotalBudgetReset.addEventListener("click", () => { timeoutProfileTotalBudgetInput.value = "" });
-timeoutProfilePerAttemptReset.addEventListener("click", () => { timeoutProfilePerAttemptInput.value = "" });
-timeoutProfileRemainingReset.addEventListener("click", () => { timeoutProfileRemainingInput.value = "" });
-modelRequestTimeoutSecReset.addEventListener("click", () => { modelRequestTimeoutSecInput.value = "" });
 
 toggleEnableThinking.addEventListener("change", () => {
   if (toggleEnableThinking.checked) {
@@ -1392,245 +1317,6 @@ stickerAddConfirm.addEventListener("click", async () => {
     stickerAddError.classList.remove("is-hidden");
   }
 });
-
-// ── 插件开关事件 ──────────────────────────────────────────
-// 文档检索/用户记忆/世界书/联网搜索为常驻工具，无开关，显示绿灯。
-// 天气查询/联网搜索有独立配置卡片（下方）。
-
-// ── 天气插件（Open-Meteo / 高德天气）──
-
-// 启用开关：勾上才展开配置区
-function syncWeatherConfigVisibility(): void {
-  if (weatherConfig) weatherConfig.style.display = weatherEnabledCheckbox?.checked ? "block" : "none";
-  syncWeatherFieldsVisibility();
-}
-function syncWeatherFieldsVisibility(): void {
-  const src = weatherSourceSelect?.value ?? "open-meteo";
-  // 选高德才显示高德 Key 输入框
-  if (amapFields) amapFields.style.display = src === "amap" ? "block" : "none";
-}
-weatherEnabledCheckbox?.addEventListener("change", () => {
-  syncWeatherConfigVisibility();
-  void saveWeatherField("weatherEnabled", weatherEnabledCheckbox.checked);
-});
-weatherSourceSelect?.addEventListener("change", () => {
-  syncWeatherFieldsVisibility();
-  void saveWeatherField("weatherSource", weatherSourceSelect.value);
-});
-amapKeyInput?.addEventListener("change", () => {
-  void saveWeatherField("amapKey", amapKeyInput.value.trim());
-});
-// 防抖保存：粘贴后 800ms 自动保存
-amapKeyInput?.addEventListener("input", () => {
-  clearTimeout(pluginsState.amapKeyDebounceTimer);
-  pluginsState.amapKeyDebounceTimer = setTimeout(() => {
-    void saveWeatherField("amapKey", amapKeyInput.value.trim());
-  }, 800);
-});
-
-async function saveWeatherField(field: string, value: unknown): Promise<void> {
-  if (!window.tts) return;
-  try {
-    await window.tts.saveSettings({ [field]: value });
-  } catch (err) {
-    console.warn("[plugins] 保存天气配置失败:", field, err);
-  }
-}
-
-async function loadWeatherConfig(): Promise<void> {
-  try {
-    const cfg = await window.tts?.loadSettings();
-    if (cfg && weatherEnabledCheckbox) {
-      weatherEnabledCheckbox.checked = Boolean(cfg.weatherEnabled);
-    }
-    if (cfg && weatherSourceSelect) {
-      weatherSourceSelect.value = cfg.weatherSource === "amap" ? "amap" : "open-meteo";
-    }
-    if (cfg && amapKeyInput) {
-      amapKeyInput.value = String(cfg.amapKey ?? "");
-    }
-    syncWeatherConfigVisibility();
-  } catch (err) {
-    console.warn("[plugins] 加载天气配置失败", err);
-  }
-}
-void loadWeatherConfig();
-
-// ── 🚗出行工具 ──
-
-function syncTravelConfigVisibility(): void {
-  if (travelConfig) travelConfig.style.display = travelEnabledCheckbox?.checked ? "block" : "none";
-}
-travelEnabledCheckbox?.addEventListener("change", () => {
-  syncTravelConfigVisibility();
-  void saveTravelField("travelEnabled", travelEnabledCheckbox.checked);
-});
-travelAmapKeyInput?.addEventListener("change", () => {
-  // 存到同一个 amapKey 字段（与天气查询共用）
-  void saveTravelField("amapKey", travelAmapKeyInput.value.trim());
-});
-// 防抖保存：粘贴后 800ms 自动保存
-travelAmapKeyInput?.addEventListener("input", () => {
-  clearTimeout(pluginsState.travelAmapKeyDebounceTimer);
-  pluginsState.travelAmapKeyDebounceTimer = setTimeout(() => {
-    void saveTravelField("amapKey", travelAmapKeyInput.value.trim());
-  }, 800);
-});
-
-async function saveTravelField(field: string, value: unknown): Promise<void> {
-  if (!window.tts) return;
-  try {
-    await window.tts.saveSettings({ [field]: value });
-  } catch (err) {
-    console.warn("[plugins] 保存出行配置失败:", field, err);
-  }
-}
-
-async function loadTravelConfig(): Promise<void> {
-  try {
-    const cfg = await window.tts?.loadSettings();
-    if (cfg && travelEnabledCheckbox) {
-      travelEnabledCheckbox.checked = Boolean(cfg.travelEnabled);
-    }
-    if (cfg && travelAmapKeyInput) {
-      travelAmapKeyInput.value = String(cfg.amapKey ?? "");
-    }
-    syncTravelConfigVisibility();
-  } catch (err) {
-    console.warn("[plugins] 加载出行配置失败", err);
-  }
-}
-void loadTravelConfig();
-
-
-// ── 🎧ASR 设置 ──
-
-
-// ── 联网搜索插件（博查/Tavily/火山/MiniMax）──
-
-const SEARCH_ROW_MAP: Record<string, HTMLElement | null> = {
-  bocha: searchBochaRow,
-  tavily: searchTavilyRow,
-  minimax: searchMinimaxRow,
-  anySearch: searchAnySearchRow,
-};
-
-const SEARCH_KEY_INPUT_MAP: Record<string, HTMLInputElement | null> = {
-  bocha: searchBochaKeyInput,
-  tavily: searchTavilyKeyInput,
-  minimax: searchMinimaxKeyInput,
-  anySearch: searchAnySearchKeyInput,
-};
-
-const SEARCH_KEY_FIELD_MAP: Record<string, string> = {
-  bocha: "searchBochaKey",
-  tavily: "searchTavilyKey",
-  minimax: "searchMinimaxKey",
-  anySearch: "searchAnySearchKey",
-};
-
-function syncSearchConfigVisibility(): void {
-  if (searchConfig) searchConfig.style.display = searchEnabledCheckbox?.checked ? "block" : "none";
-  syncSearchEngineRows();
-}
-
-function syncSearchEngineRows(): void {
-  const engine = searchEngineSelect?.value ?? "off";
-  for (const [key, row] of Object.entries(SEARCH_ROW_MAP)) {
-    if (row) row.style.display = key === engine ? "flex" : "none";
-  }
-}
-
-searchEnabledCheckbox?.addEventListener("change", () => {
-  syncSearchConfigVisibility();
-  // 开关变化时，若开启则把 searchEngine 从 off 改成第一个有 key 的源（或 bocha）
-  if (searchEnabledCheckbox.checked && searchEngineSelect?.value === "off") {
-    searchEngineSelect.value = "bocha";
-    syncSearchEngineRows();
-    void saveSearchField("searchEngine", "bocha");
-  } else {
-    void saveSearchField("searchEngine", searchEngineSelect?.value ?? "off");
-  }
-});
-
-searchEngineSelect?.addEventListener("change", () => {
-  syncSearchEngineRows();
-  void saveSearchField("searchEngine", searchEngineSelect.value);
-});
-
-// 各源 key 输入：失焦保存 + 输入时防抖保存（防粘贴后未失焦就丢失）
-const searchKeyDebounceTimers: Record<string, ReturnType<typeof setTimeout> | undefined> = {};
-for (const [engine, input] of Object.entries(SEARCH_KEY_INPUT_MAP)) {
-  if (!input) continue;
-  const field = SEARCH_KEY_FIELD_MAP[engine];
-  input.addEventListener("change", () => { void saveSearchField(field, input.value.trim()); });
-  input.addEventListener("blur", () => { void saveSearchField(field, input.value.trim()); });
-  // 输入时防抖保存：粘贴或打字后 800ms 自动保存，不依赖失焦
-  input.addEventListener("input", () => {
-    clearTimeout(searchKeyDebounceTimers[engine]);
-    searchKeyDebounceTimers[engine] = setTimeout(() => {
-      void saveSearchField(field, input.value.trim());
-    }, 800);
-  });
-}
-
-async function saveSearchField(field: string, value: unknown): Promise<void> {
-  if (!window.tts) return;
-  try {
-    await window.tts.saveSettings({ [field]: value });
-  } catch (err) {
-    console.warn("[plugins] 保存搜索配置失败:", field, err);
-  }
-}
-
-async function loadSearchConfig(): Promise<void> {
-  try {
-    const cfg = await window.tts?.loadSettings();
-    if (!cfg) return;
-    const engine = String(cfg.searchEngine ?? "off");
-    if (searchEngineSelect) searchEngineSelect.value = engine;
-    if (searchBochaKeyInput) searchBochaKeyInput.value = String(cfg.searchBochaKey ?? "");
-    if (searchTavilyKeyInput) searchTavilyKeyInput.value = String(cfg.searchTavilyKey ?? "");
-    if (searchMinimaxKeyInput) searchMinimaxKeyInput.value = String(cfg.searchMinimaxKey ?? "");
-    if (searchAnySearchKeyInput) searchAnySearchKeyInput.value = String(cfg.searchAnySearchKey ?? "");
-    // 开关状态：engine 不是 off 就算启用
-    if (searchEnabledCheckbox) searchEnabledCheckbox.checked = engine !== "off";
-    syncSearchConfigVisibility();
-  } catch (err) {
-    console.warn("[plugins] 加载搜索配置失败", err);
-  }
-}
-void loadSearchConfig();
-
-// ── 🌐 内置 MCP 工具开关 ──────────────────────────────────────
-// Playwright MCP（浏览器自动化）通过 playwrightMcpEnabled 控制，
-// main 端的 syncPlaywrightMcp() 会监听字段变化自动注册 / 移除 MCP server。
-
-async function saveBuiltinMcpField(field: string, value: unknown): Promise<void> {
-  if (!window.tts) return;
-  try {
-    await window.tts.saveSettings({ [field]: value });
-  } catch (err) {
-    console.warn(`[settings] 保存 ${field} 失败:`, err);
-  }
-}
-
-playwrightMcpCheckbox?.addEventListener("change", () => {
-  void saveBuiltinMcpField("playwrightMcpEnabled", playwrightMcpCheckbox.checked);
-});
-
-async function loadBuiltinMcpToggles(): Promise<void> {
-  try {
-    const cfg = await window.tts?.loadSettings();
-    if (cfg && playwrightMcpCheckbox) {
-      // 默认关闭 —— 启用会下载 Chromium，约 150MB
-      playwrightMcpCheckbox.checked = Boolean(cfg.playwrightMcpEnabled);
-    }
-  } catch (err) {
-    console.warn("[settings] 加载内置 MCP 开关失败:", err);
-  }
-}
-void loadBuiltinMcpToggles();
 
 // ── MCP Server 管理 UI ──────────────────────────────────────
 console.log("[settings] plugin-add-btn 查询结果:", pluginAddBtn ? "找到" : "未找到");
@@ -2312,7 +1998,6 @@ function initGameBotPluginCard(): void {
 initGameBotPluginCard();
 void loadConfig();
 void loadGeneralSettings();
-void loadTimeoutSettings();
 window.settings?.onChannelsStatusChanged((status) => {
   renderProactiveDeliveryAvailability(status as Record<string, { phase?: string }>);
 });
@@ -2627,134 +2312,6 @@ window.settings?.onSwitchSection?.((section) => {
     }, 2000);
   });
 })();
-// ── 用户信息面板 ──
-const avatarImg = avatarEl?.querySelector("img") as HTMLImageElement | null;
-const avatarPlaceholder = avatarEl?.querySelector("span") as HTMLElement | null;
-
-
-function showAvatar(dataUrl: string | null): void {
-  if (!dataUrl || !avatarEl) return;
-  if (!avatarEl) return;
-  let img = avatarEl.querySelector("img");
-  if (!img) {
-    img = document.createElement("img");
-    img.style.width = "100%";
-    img.style.height = "100%";
-    img.style.borderRadius = "50%";
-    img.style.objectFit = "cover";
-    avatarEl.appendChild(img);
-  }
-  img.src = dataUrl;
-  if (avatarPlaceholder) avatarPlaceholder.style.display = "none";
-}
-
-
-
-
-async function loadUserProfile(): Promise<void> {
-  try {
-    const avatarDataUrl = await window.user?.getAvatar();
-    if (avatarDataUrl) showAvatar(avatarDataUrl);
-    if (uploadAvatarBtn) uploadAvatarBtn.disabled = false;
-    // 加载用户字段（昵称/称呼偏好/生日/默认城市/时区）
-    const profile = await window.user?.getProfile();
-    if (profile) {
-      if (userNicknameInput) userNicknameInput.value = String(profile.nickname ?? "");
-      if (userCallPrefInput) userCallPrefInput.value = String(profile.callPreference ?? "");
-      if (userBirthdayInput) userBirthdayInput.value = String(profile.birthday ?? "");
-      if (userDefaultCityInput) userDefaultCityInput.value = String(profile.defaultCity ?? "");
-      // 时区：白名单校验，空/非法/不在白名单都回退 FALLBACK_TIMEZONE，不直接用 ?? 兜底
-      if (userTimezoneSelect) userTimezoneSelect.value = normalizeTimezoneOptionValue(profile.timezone);
-      // 性别：标记当前选中的按钮
-      const gender = String(profile.gender ?? "secret");
-      if (userGenderGroup) {
-        userGenderGroup.querySelectorAll(".gender-select__btn").forEach((btn) => {
-          btn.classList.toggle("is-active", (btn as HTMLElement).dataset.gender === gender);
-        });
-      }
-    }
-  } catch {
-    console.warn("[settings] load user profile failed");
-  }
-}
-
-// 用户字段：失焦/回车保存（每个字段独立原子保存）
-function bindUserProfileSave(input: HTMLInputElement | null, field: string, live = false): void {
-  if (!input) return;
-  let saveTimer: number | undefined;
-  const save = (): void => {
-    if (saveTimer !== undefined) window.clearTimeout(saveTimer);
-    saveTimer = undefined;
-    void window.user?.saveProfile({ [field]: input.value.trim() });
-  };
-  if (live) {
-    input.addEventListener("input", () => {
-      if (saveTimer !== undefined) window.clearTimeout(saveTimer);
-      saveTimer = window.setTimeout(save, 180);
-    });
-  }
-  input.addEventListener("change", save);
-  input.addEventListener("blur", save);
-}
-bindUserProfileSave(userNicknameInput, "nickname", true);
-bindUserProfileSave(userCallPrefInput, "callPreference");
-bindUserProfileSave(userBirthdayInput, "birthday");
-// 默认城市复用上面的 saveCity（保持原逻辑）
-if (userDefaultCityInput) {
-  const saveCity = (): void => {
-    const value = userDefaultCityInput.value.trim();
-    void window.user?.saveProfile({ defaultCity: value });
-  };
-  userDefaultCityInput.addEventListener("change", saveCity);
-  userDefaultCityInput.addEventListener("blur", saveCity);
-}
-
-// 时区：白名单填充 options；保存只接受白名单 value（select 只能选白名单项，天然受限）
-if (userTimezoneSelect) {
-  for (const opt of TIMEZONE_OPTIONS) {
-    const o = document.createElement("option");
-    o.value = opt.value;
-    o.textContent = opt.label;
-    userTimezoneSelect.appendChild(o);
-  }
-  userTimezoneSelect.addEventListener("change", () => {
-    const raw = userTimezoneSelect.value;
-    // 防御性二次校验：即便有人手动改 DOM，保存路径也只放行白名单 value
-    const safe = normalizeTimezoneOptionValue(raw);
-    if (safe !== raw) {
-      userTimezoneSelect.value = safe;
-      return; // 不发保存请求，等用户重新选
-    }
-    void window.user?.saveProfile({ timezone: safe });
-  });
-}
-
-// 性别：三档按钮，点击切换并原子保存
-if (userGenderGroup) {
-  userGenderGroup.querySelectorAll(".gender-select__btn").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const value = (btn as HTMLElement).dataset.gender;
-      if (!value) return;
-      userGenderGroup.querySelectorAll(".gender-select__btn").forEach((b) => b.classList.remove("is-active"));
-      btn.classList.add("is-active");
-      void window.user?.saveProfile({ gender: value });
-    });
-  });
-}
-
-if (uploadAvatarBtn) {
-  uploadAvatarBtn.addEventListener("click", async () => {
-    try {
-      const result = await window.user?.uploadAvatar();
-      if (result?.avatarPath) {
-        const avatarDataUrl = await window.user?.getAvatar();
-        if (avatarDataUrl) showAvatar(avatarDataUrl);
-      }
-    } catch (err) {
-      console.error("[settings] upload avatar failed", err);
-    }
-  });
-}
 // --- L0/L1 editable logic ---
 
 
@@ -2813,7 +2370,6 @@ memoryImportedList?.addEventListener("click", async (event) => {
 
 
 void loadMemoryPanel();
-void loadUserProfile();
 
 // ── 权限档位 UI ───────────────────────────────────────────
 type PermissionLevel = "read-only" | "scoped" | "per-action" | "full";
