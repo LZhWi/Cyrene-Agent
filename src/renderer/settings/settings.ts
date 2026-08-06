@@ -90,6 +90,7 @@ import { apiState } from "./api/state";
 import { apiForm, apiRuntimeForm, apiTimeoutForm, presetCards, presetWebsiteLink, displayNameInput, baseUrlInput, baseUrlResetBtn, modelInput, modelInputSuggestions, contextWindowInput, apiKeyInput, apiKeyLabel, apiKeyHint, testConnectionBtn, transportSelect, transportHint, endpointPreview, customEndpointControls, customEndpointOverrides, customEndpointSummary, customEndpointGuideBtn, workFlowAdaptBtn, apiNoteText, multimodalToggle, chatRequestTimeoutSecInput, maxIterationsInput, maxReplansInput, maxRefreshInput, perCallTimeoutSecInput, actionGateRepairBudgetSecInput, embeddingDimensionsInput, modelRequestTimeoutSecInput, modelRequestTimeoutSecReset, toggleEnableThinking, toggleDisableThinking, toggleDisableMaxToken } from "./api/dom";
 import { visionBaseUrlInput, visionApiKeyInput, visionModelInput, visionFieldsWrap, testVisionBtn, visionTestStatus } from "./vision/dom";
 import { avatarEl, uploadAvatarBtn, userDefaultCityInput, userNicknameInput, userCallPrefInput, userBirthdayInput, userTimezoneSelect, userGenderGroup } from "./user/dom";
+import { appearanceForm, appearanceSaveStatus, runtimeSyncSelect, runtimeSyncNote, windowCornerRadiusInput, windowCornerRadiusVal, petAlwaysOnTopInput, petVisibleInput, petZoomInput, petZoomVal, chatLineHeightInput, chatLineHeightVal, assistantBubbleEnabledInput, chatParaSpacingInput, chatParaSpacingVal, launchAtLoginInput, uiFontCurrent, uiFontImportButton, uiFontResetButton, uiIconSelect, screenshotHotkeyInput, openChromeGpu, disableGpuInput, sidebarVisibleInput, tasksVisibleInput } from "./appearance/dom";
 import { preferencesState } from "./preferences/state";
 import { stickerEnabledInput, stickerSizeSelect, stickerThresholdInput, stickerThresholdVal, stickerAddOverlay, stickerAddPickBtn, stickerAddFileName, stickerAddId, stickerAddDesc, stickerAddPhrases, stickerAddError, stickerAddConfirm, stickerAddCancel } from "./preferences/dom";
 import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
@@ -392,7 +393,6 @@ if (!window.cyreneScheduler) {
 
 const minBtn = document.getElementById("min-btn") as HTMLButtonElement;
 const closeBtn = document.getElementById("close-btn") as HTMLButtonElement;
-const appearanceForm = document.getElementById("appearance-form") as HTMLFormElement;
 const generalForm = document.getElementById("general-form") as HTMLFormElement;
 const preferencesForm = document.getElementById("preferences-form") as HTMLFormElement;
 const sectionTitle = document.getElementById("section-title") as HTMLElement;
@@ -408,7 +408,6 @@ const placeholderIcon = document.getElementById("placeholder-icon") as HTMLEleme
 const placeholderTitle = document.getElementById("placeholder-title") as HTMLElement;
 const placeholderCopy = document.getElementById("placeholder-copy") as HTMLElement;
 const saveStatus = document.getElementById("save-status") as HTMLElement;
-const appearanceSaveStatus = document.getElementById("appearance-save-status") as HTMLElement;
 const generalSaveStatus = document.getElementById("general-save-status") as HTMLElement;
 const runtimeSaveStatus = document.getElementById("runtime-save-status") as HTMLElement;
 const preferencesSaveStatus = document.getElementById("preferences-save-status") as HTMLElement;
@@ -432,24 +431,6 @@ const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLEl
 const providerProfileCache: Record<string, ProviderProfile> = {};
 
 // 当前激活的厂商：每次 applyPreset 后更新；用于"切到下一家厂商前先把当前那家的输入框值缓存住"
-const runtimeSyncSelect = document.getElementById("runtime-sync") as HTMLElement;
-const runtimeSyncNote = document.getElementById("runtime-sync-note") as HTMLElement;
-const windowCornerRadiusInput = document.getElementById("window-corner-radius") as HTMLInputElement;
-const windowCornerRadiusVal = document.getElementById("window-corner-radius-val") as HTMLElement;
-const petAlwaysOnTopInput = document.getElementById("pet-always-on-top") as HTMLInputElement;
-const petVisibleInput = document.getElementById("pet-visible") as HTMLInputElement;
-const petZoomInput = document.getElementById("pet-zoom") as HTMLInputElement;
-const petZoomVal = document.getElementById("pet-zoom-val") as HTMLElement;
-const chatLineHeightInput = document.getElementById("chat-line-height") as HTMLInputElement;
-const chatLineHeightVal = document.getElementById("chat-line-height-val") as HTMLElement;
-const assistantBubbleEnabledInput = document.getElementById("assistant-bubble-enabled") as HTMLInputElement;
-const chatParaSpacingInput = document.getElementById("chat-para-spacing") as HTMLInputElement;
-const chatParaSpacingVal = document.getElementById("chat-para-spacing-val") as HTMLElement;
-const launchAtLoginInput = document.getElementById("launch-at-login") as HTMLInputElement;
-const uiFontCurrent = document.getElementById("ui-font-current") as HTMLElement;
-const uiFontImportButton = document.getElementById("ui-font-import") as HTMLButtonElement;
-const uiFontResetButton = document.getElementById("ui-font-reset") as HTMLButtonElement;
-const uiIconSelect = document.getElementById("ui-icon-select") as HTMLElement;
 const languageSelect = document.getElementById("language-select") as HTMLElement;
 const defaultChatModeSelect = document.getElementById("default-chat-mode-select") as HTMLElement;
 const segmentedOutputSelect = document.getElementById("segmented-output-select") as HTMLElement;
@@ -460,13 +441,8 @@ const proactiveDeliverySelect = document.getElementById("proactive-delivery-sele
 const chatSocialContextEnabledInput = document.getElementById("chat-social-context-enabled") as HTMLInputElement;
 const citaEnabledInput = document.getElementById("cita-enabled") as HTMLInputElement;
 const citaEngineSelect = document.getElementById("cita-engine-select") as HTMLElement;
-const screenshotHotkeyInput = document.getElementById("screenshot-hotkey-input") as HTMLInputElement | null;
 const customStyleSamplingBtn = document.getElementById("custom-style-sampling-btn") as HTMLButtonElement | null;
 const customStylePromptBtn = document.getElementById("custom-style-prompt-btn") as HTMLButtonElement | null;
-const openChromeGpu = document.getElementById("open-chrome-gpu") as HTMLElement;
-const disableGpuInput = document.getElementById("disable-gpu-electron") as HTMLInputElement;
-const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
-const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputElement;
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
 const openStickerManagerBtn = document.getElementById("open-sticker-manager-btn") as HTMLButtonElement;
 const addStickerBtn = document.getElementById("add-sticker-btn") as HTMLButtonElement;
