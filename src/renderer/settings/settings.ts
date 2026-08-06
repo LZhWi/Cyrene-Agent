@@ -81,6 +81,7 @@ import { ttsState } from "./tts/state";
 import { modalState } from "./shared/modal-state";
 import { apiState } from "./api/state";
 import { preferencesState } from "./preferences/state";
+import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
 import { asrState } from "./asr/state";
 import { pluginsState } from "./plugins/state";
 import type {
@@ -690,16 +691,6 @@ function getProactiveDeliveryValue(): ProactiveDeliveryTarget {
   return normalizeProactiveDeliveryTarget(getOptionGroupValue(proactiveDeliverySelect, "local"));
 }
 
-
-function diversityDriverOf(config: CustomStyleConfig): DiversityPreference["driver"] {
-  return config.diversity.driver;
-}
-
-function diversityValueOf(config: CustomStyleConfig): number {
-  return config.diversity.driver === "temperature" || config.diversity.driver === "top-p"
-    ? config.diversity.value
-    : 0.65;
-}
 
 function buildCustomStyleConfigFromModal(): CustomStyleConfig {
   if (!preferencesState.customStyleOverlay) return preferencesState.currentCustomStyleConfig;
