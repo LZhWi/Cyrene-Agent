@@ -84,6 +84,7 @@ import {
   type ScreenshotService,
 } from "./screenshot/screenshot-lifecycle";
 import { createWindowManager, type WindowManager } from "./windows/window-manager";
+import { registerWindowSystemIpc } from "./windows/window-system-ipc";
 import { enqueueLLMTask } from "./llm-queue";
 
 import { createSocialContextService, type SocialContextService } from "./services/social-context/social-context-service";
@@ -98,7 +99,7 @@ import { backupMemoryRagFiles, reconcileMemoryRag } from "./memory/memory-rag-re
 import { registerChatsIpc } from "./chats/chats-ipc";
 import { registerChatUiIpc } from "./chats/chat-ui-ipc";
 import * as chatsStore from "./chats/chats-store";
-import { getUsage, flush as flushTokenUsage } from "./token-usage-store";
+import { flush as flushTokenUsage } from "./token-usage-store";
 import { TtsSessionService } from "./tts/tts-session-service";
 import { registerTtsIpc } from "./tts/tts-ipc";
 import {
@@ -284,71 +285,13 @@ function createTray(deps: {
   tray.setContextMenu(contextMenu);
 }
 
-ipcMain.handle(IPC.WINDOW_SET_INTERACTIVE, (_event, interactive: boolean) => {
-  windowManager?.setMainWindowInteractive(interactive);
+registerWindowSystemIpc({
+  get windowManager() { return windowManager; },
 });
-
-ipcMain.on(IPC.WINDOW_MOVE, (_event, dx: number, dy: number) => {
-  windowManager?.moveMainWindowRelative(dx, dy);
-});
-
-ipcMain.on(IPC.WINDOW_MOVE_TO, (_event, x: number, y: number) => {
-  windowManager?.moveMainWindowTo(x, y);
-});
-
-ipcMain.on(IPC.WINDOW_SET_DRAGGING, (_event, isDragging: boolean) => {
-  windowManager?.setMainWindowDragging(isDragging);
-});
-
-ipcMain.handle(IPC.WINDOW_CAPTURE_FRAME, async () => windowManager?.captureMainWindowFrame() ?? null);
-ipcMain.handle(IPC.WINDOW_GET_CURSOR_POSITION, () => windowManager?.getCursorScreenPosition() ?? { x: 0, y: 0 });
 
 registerChatUiIpc({
   live2dWindowLifecycle,
   get windowManager() { return windowManager; },
-});
-
-ipcMain.on(IPC.SIDEBAR_MINIMIZE, () => {
-  sidebarWindow?.minimize();
-});
-
-ipcMain.on(IPC.SIDEBAR_CLOSE, () => {
-  sidebarWindow?.close();
-});
-
-// 状态栏窗口置顶 toggle：返回切换后的新状态（true=已置顶）
-ipcMain.handle(IPC.SIDEBAR_TOGGLE_ALWAYS_ON_TOP, () => {
-  if (!sidebarWindow) return false;
-  const next = !sidebarWindow.isAlwaysOnTop();
-  sidebarWindow.setAlwaysOnTop(next, next ? "screen-saver" : "normal");
-  return next;
-});
-
-ipcMain.on(IPC.SIDEBAR_OPEN_TASKS, () => {
-  windowManager?.createTasksWindow();
-});
-
-ipcMain.on(IPC.SIDEBAR_OPEN_SETTINGS, (_event, section?: string) => {
-  windowManager?.createSettingsWindow(section);
-});
-
-ipcMain.on(IPC.SIDEBAR_OPEN_CALL, () => {
-  windowManager?.createCallWindow();
-});
-
-ipcMain.on(IPC.TASKS_MINIMIZE, () => {
-  tasksWindow?.minimize();
-});
-
-ipcMain.on(IPC.TASKS_CLOSE, () => {
-  tasksWindow?.close();
-});
-ipcMain.on(IPC.SETTINGS_MINIMIZE, () => {
-  settingsWindow?.minimize();
-});
-
-ipcMain.on(IPC.SETTINGS_CLOSE, () => {
-  settingsWindow?.close();
 });
 
   registerSettingsIpc({
@@ -370,12 +313,6 @@ ipcMain.on(IPC.SETTINGS_CLOSE, () => {
   });
 
 
-
-ipcMain.on(IPC.SETTINGS_OPEN_CHROME_GPU, async () => {
-  const win = new BrowserWindow({ width: 1024, height: 768 });
-  win.loadURL("chrome://gpu");
-  win.show();
-});
 
 // 注册本地用户资源协议（表情包图片与用户导入的字体）
 // 必须在 app.ready 之前调用
@@ -436,21 +373,6 @@ app.whenReady().then(async () => {
       headers: getUiFontResponseHeaders(fileName),
     }));
   });
-  // Token 用量查询 IPC
-  ipcMain.handle(IPC.TOKEN_USAGE_GET, (_event, days: number) => {
-    return getUsage(Math.max(1, Math.min(90, Number(days) || 7)));
-  });
-
-  ipcMain.on(IPC.LIVE2D_SPEECH_PREPARE, () => {
-    windowManager?.sendToMainWindow(IPC.LIVE2D_SPEECH_PREPARE);
-  });
-  ipcMain.on(IPC.LIVE2D_MOUTH_START, (_event, payload: { durationMs?: number }) => {
-    windowManager?.sendToMainWindow(IPC.LIVE2D_MOUTH_START, { durationMs: Number(payload?.durationMs ?? 0) });
-  });
-  ipcMain.on(IPC.LIVE2D_MOUTH_STOP, () => {
-    windowManager?.sendToMainWindow(IPC.LIVE2D_MOUTH_STOP);
-  });
-
   // ── TTS IPC ──
   // 保存/加载 TTS 配置（复用 general settings 存储）
   ipcMain.handle(IPC.TTS_SAVE_SETTINGS, async (_event, tts: Partial<GeneralSettings>) => {
