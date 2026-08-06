@@ -13,6 +13,28 @@ export interface VisionConfig {
   model: string;    // 如 gpt-4o / glm-5v-turbo / qwen-vl-max
 }
 
+/**
+ * 剥掉 thinking 模型（如 glm-4.1v-thinking-flash）的思考块。
+ * 这类模型的思考过程不走 reasoning_content，而是以 <think>…</think> 内联在
+ * content 里；不剥会把思考原文存进观测摘要、回灌给主模型，还会顶掉
+ * 结构化格式的首行导致类型解析失败。与 index.ts/memory 各处的剥离逻辑一致。
+ */
+export function stripThinkBlocks(text: string): string {
+  return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<think>[\s\S]*$/gi, "")
+    .trim();
+}
+
+/**
+ * 剥掉 <answer>…</answer> 包裹标签。
+ * 部分 thinking 模型在 think 块之后用 <answer> 包住真正的答案；不剥会
+ * 让结构化输出的首行带上标签前缀，导致"类型："等格式解析失败。
+ */
+export function stripWrapperTags(text: string): string {
+  return text.replace(/<\/?answer>/gi, "").trim();
+}
+
 /** 图片数据（不含 data: 前缀的纯 base64）。 */
 export interface VisionImage {
   base64: string;
@@ -45,12 +67,15 @@ function buildInstruction(userQuery: string): string {
  * @param image 图片数据
  * @param userQuery 用户当前问题；空串表示无明确问题（走通用描述）
  * @param config 视觉模型配置
+ * @param maxTokens 输出 token 上限。默认 1024——thinking 模型（如 glm-4.1v-thinking-flash）
+ *                  的思考 token 计入同一预算，512 会被思考挤占导致正文截断不完句。
  * @returns 视觉模型的文本回答；失败返回 [错误·...] 字符串
  */
 export async function captionImage(
   image: VisionImage,
   userQuery: string,
   config: VisionConfig,
+  maxTokens = 1024,
 ): Promise<string> {
   const instruction = buildInstruction(userQuery);
   const dataUrl = "data:" + image.mime + ";base64," + image.base64;
@@ -70,10 +95,10 @@ export async function captionImage(
     // 不传 temperature：不同模型约束不同（如 Kimi k2.6 只允许 1），
     // 传固定值会在某些模型上报错。让各家用自己的默认值，可用性优先于确定性。
     // 确定性由 buildInstruction 里的"简洁/直接"指令约束保证。
-    // 视觉描述用不到 4096 默认值，512 够用且防回灌撑爆主模型上下文。
+    // 视觉描述默认 1024 上限：thinking 模型思考 token 计入预算，太小会截断正文。
     // 只传 max_tokens（最通用）。不传 max_completion_tokens——火山不允许两者同时设，
     // MiniMax 虽标 max_tokens 弃用但仍兼容（弃用≠删除）。
-    max_tokens: 512,
+    max_tokens: maxTokens,
     stream: false,
   };
 
@@ -105,7 +130,9 @@ export async function captionImage(
     const data = await resp.json() as {
       choices?: Array<{ message?: { content?: string | null } }>;
     };
-    const text = data.choices?.[0]?.message?.content ?? "";
+    // thinking 模型的 <think> 块与 <answer> 包裹标签内联在 content 里，
+    // 必须先剥掉再判空——否则思考原文/标签前缀会进观测摘要和工具结果
+    const text = stripWrapperTags(stripThinkBlocks(data.choices?.[0]?.message?.content ?? ""));
     if (!text) {
       console.error("[Vision] 视觉模型未返回有效内容");
       return "[错误·运行时] 视觉模型未返回有效内容";

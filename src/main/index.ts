@@ -111,7 +111,7 @@ import { registerLifeTools, setTranslateConfig } from "./orchestrator/life-tools
 import { registerTravelTools, setTravelConfig } from "./orchestrator/travel-tools";
 import { registerEmailTools, setEmailConfig } from "./orchestrator/email-tools";
 import { registerScreenMonitorTool, setVisionConfigGetter } from "./screen-monitor/screen-monitor-tool";
-import { screenMonitorService } from "./screen-monitor/screen-monitor-service";
+import { screenMonitorService, formatActivityLine } from "./screen-monitor/screen-monitor-service";
 import { observationStore } from "./screen-monitor/observation-store";
 import { resolveMusicPaths } from "./music/paths";
 import { bootstrapMusicService } from "./music/bootstrap";
@@ -2139,13 +2139,17 @@ async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
     lifeContext: buildLifeContext(new Date(snapshot.now), app.getPath("userData")),
     // 最近屏幕观察：让 proactive 判断用户是否在忙，决定是否打扰。
     screenActivity: (() => {
+      // 自愈拉起：配置曾临时失效导致 stop() 后恢复的场景，在使用点补启动
+      screenMonitorService.ensureRunningIfEnabled(loadGeneralSettings().screenMonitorEnabled, loadVisionConfig());
       const latest = observationStore.getLatest();
       if (!latest) return undefined;
       const ageMin = Math.round((Date.now() - latest.timestamp) / 60000);
       // 超过 10 分钟的观测不注入（避免过时信息误导）
       if (ageMin > 10) return undefined;
-      // 加"用户"前缀防角色错位（VLM 摘要可能省略主语）
-      return "用户当前屏幕活动：" + latest.summary + (ageMin > 0 ? `（${ageMin} 分钟前观测）` : "");
+      // 加"用户"前缀防角色错位（VLM 摘要可能省略主语）；
+      // 统一格式化为"类型：……，内容：……"单行（对照行等判定元数据一并剥离）
+      const flat = formatActivityLine(latest.summary);
+      return "用户当前屏幕活动：" + flat + (ageMin > 0 ? `（${ageMin} 分钟前观测）` : "");
     })(),
     ordinaryHistory: histories.ordinary,
     proactiveHistory: histories.proactive,
@@ -4921,15 +4925,22 @@ app.whenReady().then(async () => {
     getWorkWindow: () => workWindow,
     resolveModelConfig: resolveWorkModelConfig,
     getTools: () => filterWorkTools(toolRegistry.getEnabledTools()),
-    loadPrompt: (name) => {
+    loadPrompt: (name, mode) => {
+      const systemFiles = {
+        work: "work_system.md",
+        code: "code_system.md",
+        learn: "learn_system.md",
+      } as const;
       const files = {
-        system: "work_system.md",
+        system: systemFiles[mode ?? "work"],
         style: "styles/01_default.md",
         router: "work_router_system.md",
         plan: "work_plan_system.md",
         actionGate: "work_action_gate_system.md",
       } as const;
-      return loadPromptFile(files[name]);
+      // 模式专属 prompt 缺失时回落到通用 work prompt，保证会话可用。
+      const content = loadPromptFile(files[name]);
+      return name === "system" && !content.trim() ? loadPromptFile("work_system.md") : content;
     },
   });
   initializeProactiveChatService();

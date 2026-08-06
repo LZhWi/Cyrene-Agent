@@ -3,8 +3,9 @@
 // 有缓存复用（默认 30s），避免频繁截图烧 token。
 
 import { toolRegistry, type ToolDefinition } from "../orchestrator/tool-registry";
-import { observationStore, textSimilarity } from "./observation-store";
+import { observationStore } from "./observation-store";
 import { captureAndAnalyze } from "./vlm-analyzer";
+import { parseIntentCategory, decideLowChange, formatActivityLine } from "./screen-monitor-service";
 import type { VisionConfig } from "../orchestrator/vision-captioner";
 
 const LOG_PREFIX = "[ScreenMonitor/Tool]";
@@ -31,7 +32,8 @@ async function executeGetScreenObservation(): Promise<string> {
   if (observationStore.isLatestFresh(CACHE_REUSE_MS)) {
     const latest = observationStore.getLatest()!;
     console.log(LOG_PREFIX, "复用缓存观测（" + new Date(latest.timestamp).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) + "）");
-    return latest.summary;
+    // 去掉判定元数据，统一"类型：……，内容：……"格式返回
+    return formatActivityLine(latest.summary);
   }
 
   // 2. 获取视觉模型配置
@@ -47,7 +49,7 @@ async function executeGetScreenObservation(): Promise<string> {
     // 4. 如果只有 1 条观测，直接返回
     const recent = observationStore.getRecent(RECENT_COUNT);
     if (recent.length <= 1) {
-      return observation.summary;
+      return formatActivityLine(observation.summary);
     }
 
     // 5. 整合近期观测（P2：加时间跨度标注 + 变化轨迹）
@@ -58,16 +60,14 @@ async function executeGetScreenObservation(): Promise<string> {
 
     const lines = recent.map((o, i) => {
       const time = new Date(o.timestamp).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-      let line = "[" + time + "] " + o.summary;
-      // 标注变化轨迹（i>0 时和前一条比较）
+      // 统一"类型：……，内容：……"单行格式（判定元数据已剥离）
+      let line = "[" + time + "] " + formatActivityLine(o.summary);
+      // 标注变化轨迹（i>0 时和前一条比较）：与服务端同一套两级判定。
+      // 标注自带参照物（"上次观测"），LLM 读单行也能明确语义，不依赖时间线惯例推断
       if (i > 0) {
         const prev = recent[i - 1].summary;
-        const sim = textSimilarity(prev, o.summary);
-        if (sim > 0.7) {
-          line += "（继续）";
-        } else {
-          line += "（发生变化）";
-        }
+        const decision = decideLowChange(prev, parseIntentCategory(prev), o.summary);
+        line += decision && !decision.lowChange ? "（较上次观测有变化）" : "（与上次观测一致）";
       }
       return line;
     });

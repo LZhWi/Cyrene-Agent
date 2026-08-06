@@ -38,7 +38,9 @@ async function chat(config: VlmConfig, instruction: string, images: ImgData[]): 
   const body = {
     model: config.model,
     messages: [{ role: "user", content }],
-    max_tokens: 512,
+    // 1024 而非 512：thinking 模型思考 token 计入同一预算，
+    // 太小会把 JSON 正文挤掉导致坐标/判断解析失败。
+    max_tokens: 1024,
     stream: false,
   };
   const controller = new AbortController();

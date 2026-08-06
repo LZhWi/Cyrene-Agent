@@ -10,11 +10,22 @@ export interface ScreenObservation {
 const MAX_OBSERVATIONS = 50;
 const RETENTION_MS = 7200 * 1000; // 2 小时
 
+/**
+ * 低变化兜底阈值（仅场景类目不可用时用文本相似度兜底）。
+ * 0.45 依据实测：结构化两行摘要下同场景相似度约 0.50，不同场景 0.28~0.31，
+ * 取中间值。旧值 0.7 是自由摘要时代定的，结构化格式下同场景也到不了，等于兜底失效。
+ * service 与 tool 共用此常量，避免两处漂移。
+ */
+export const LOW_CHANGE_SIMILARITY_THRESHOLD = 0.45;
+
 export class ScreenObservationStore {
   private observations: ScreenObservation[] = [];
 
   add(observation: ScreenObservation): void {
     this.observations.push(observation);
+    // 并发观测（工具调用与后台周期同时截图）可能乱序到达，
+    // 按时间戳排序保证 getLatest/getRecent 的时序正确。
+    this.observations.sort((a, b) => a.timestamp - b.timestamp);
     // 超容量删旧
     if (this.observations.length > MAX_OBSERVATIONS) {
       this.observations.shift();
