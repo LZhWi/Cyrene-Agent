@@ -80,13 +80,8 @@ import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/cap
 import { resolveVendorRuntimeSettings, setVendorRuntimeSettingsGetter } from "./orchestrator/vendors/runtime-settings";
 
 import { toolRegistry } from "./orchestrator/tool-registry";
-// 触发 built-in-tools 的副作用注册（fetch_url / run_shell / install_mcp_server）
 import { setLive2dWindowSender } from "./orchestrator/built-in-tools";
-import "./orchestrator/built-in-tools";
-// 触发 fs-tools 的副作用注册（read_file / list_dir / write_file / read_image）
-import "./orchestrator/fs-tools";
-// 触发 search-code-tools 的副作用注册（search_code）
-import "./orchestrator/search-code-tools";
+import { registerAllTools, syncBuiltInToolToggles } from "./orchestrator/tool-registration";
 import { initMcpManager, addMcpServer, removeMcpServer, listMcpServers, pruneMcpServersByIds } from "./orchestrator/mcp-manager";
 import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from "./sync-mcp-builtin";
 import { initPermissionFromDisk, registerPermissionIpc, getCurrentLevel } from "./permission";
@@ -169,11 +164,6 @@ import {
   setUserTimezoneConfig,
 } from "./orchestrator/built-in-tools";
 import { TODO_MODES } from "./orchestrator/todo-store";
-import { registerRecallHistoryTool } from "./orchestrator/history-tools";
-import { registerDocumentTools } from "./orchestrator/document-tools";
-import { registerLifeTools, setTranslateConfig } from "./orchestrator/life-tools";
-import { registerTravelTools, setTravelConfig } from "./orchestrator/travel-tools";
-import { registerEmailTools, setEmailConfig } from "./orchestrator/email-tools";
 import { resolveMusicPaths } from "./music/paths";
 import { bootstrapMusicService } from "./music/bootstrap";
 import { installShutdownLatch } from "./music/shutdown-latch";
@@ -313,11 +303,6 @@ function handleGeneralSettingsChanged(before: GeneralSettings, after: GeneralSet
   }
   setGetCurrentAppIconPath(() => getAppIconPath(after.uiIcon));
   void syncVolcanoSearchMcp(after);
-}
-
-function syncBuiltInToolToggles(settings: GeneralSettings): void {
-  toolRegistry.setEnabled("weather", settings.weatherEnabled);
-  toolRegistry.setEnabled("plan_trip", settings.travelEnabled);
 }
 
 /** MiniMax 搜索 MCP Server 的固定 ID。 */
@@ -1837,26 +1822,8 @@ app.whenReady().then(async () => {
   proactiveLifecycle.initializeProactiveChatService();
   proactiveLifecycle.initializeProactiveTrigger();
 
-  // 历史召回工具（recall_history）——让模型能回忆滚出窗口的对话
-  registerRecallHistoryTool();
-
-  // 文档生成工具（write_excel/write_word/write_pdf/write_markdown）
-  registerDocumentTools();
-
-  // 生活类工具（记账/汇率/翻译/代码补丁）
-  // 翻译需要主模型，注入 loadModelSettings getter
-  setTranslateConfig(() => {
-    const s = loadModelSettings();
-    return s.apiKey ? { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey } : null;
-  });
-  registerLifeTools();
-
-  // 出行工具（路线规划——驾车/步行/骑行/公交，复用 amapKey）
-  registerTravelTools();
-
-  // 邮件发送工具（SMTP 直发，需在设置里配置 SMTP 授权码）
-  registerEmailTools();
-  syncBuiltInToolToggles(loadGeneralSettings());
+  // 工具注册：集中到一个显式入口，取代 index.ts 中的副作用 import
+  registerAllTools();
 
   // 内置 MCP 自动连接：Playwright (默认关闭,选项控制)
   const initialSettings = loadGeneralSettings();
