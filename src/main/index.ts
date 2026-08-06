@@ -8,14 +8,30 @@ import { renderBanner } from "../shared/banner";
 import { createHash, randomUUID } from "crypto";
 import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
-import {
-  createReactChatSessionDispatcher,
-  type ReactChatSessionDispatcher,
-} from "./react-chat-session-dispatcher";
 import { normalizeUiTheme, type UiTheme } from "../shared/ui-theme";
 import { DEFAULT_UI_FONT, isSupportedFontFileName, normalizeUiFont, type UiFont } from "../shared/ui-font";
 import { normalizeUiIcon, UI_ICON_PRESETS, type UiIcon } from "../shared/ui-icon";
 import { normalizeChatAppearance, type ChatAppearanceSettings } from "../shared/chat-appearance";
+import { isDev } from "./env";
+import {
+  getCurrentAppIconPath,
+  setGetCurrentAppIconPath,
+  reactChatSession,
+  reactChatWindow,
+  sidebarWindow,
+  tasksWindow,
+  settingsWindow,
+  stickerManagerWindow,
+  callWindow,
+} from "./windows/window-state";
+import {
+  createReactChatWindow,
+  createSidebarWindow,
+  createTasksWindow,
+  createSettingsWindow,
+  createStickerManagerWindow,
+  createCallWindow,
+} from "./windows/create-aux-windows";
 import { broadcastToAllWindows } from "./windows/broadcast";
 import {
   DEFAULT_WINDOW_CORNER_RADIUS,
@@ -154,7 +170,56 @@ import { synthesize as mosslandSynthesize, cloneVoice as mosslandCloneVoice, lis
 import { synthesizeByEngine } from "./tts/tts-dispatcher";
 import { TtsSessionService, type TtsSessionExecution } from "./tts/tts-session-service";
 import { versionTtsCacheKey } from "./tts/tts-cache-key";
+import {
+  appendCustomCloudTtsLog,
+  appendGptsovitsTtsLog,
+  appendMinimaxTtsLog,
+  appendMimoTtsLog,
+  assertTtsCacheKey,
+  buildCustomCloudCacheKey,
+  buildGptsovitsCacheKey,
+  buildMimoCacheKey,
+  buildMosslandCacheKey,
+  buildTtsCacheKey,
+  getTtsCachePath,
+  readTtsCacheByKey,
+} from "./tts/tts-cache";
 import { runTtsStreamingWithFallback } from "./tts/tts-streaming-fallback";
+import {
+  type UserProfile,
+  getAvatarPath,
+  getGeneralSettingsPath,
+  getRagStorePath,
+  getSettingsPath,
+  getStickerSettingsPath,
+  getUserProfilePath,
+  loadUserProfile,
+  saveUserProfile,
+} from "./settings-store";
+import { loadMemoryPanelData } from "./memory/panel";
+import {
+  createVisibleStreamFilter,
+  extractJsonPayload,
+  parseObserverFeeling,
+  stripThinkBlocks,
+} from "./chat-stream-utils";
+import {
+  RUNTIME_FEELINGS,
+  RUNTIME_STATUSES,
+  feelingToExpression,
+  inferRuntimeState,
+  type RuntimeFeeling,
+  type RuntimeState,
+  type RuntimeStatus,
+} from "./runtime-state";
+import { getAppIconPath } from "./app-icon";
+import { ensureCustomStylePrompt } from "./style-prompt";
+import {
+  appendApiLog,
+  buildChatCompletionsUrl,
+  getApiLogPath,
+  normalizeChatMessages,
+} from "./chat-api-utils";
 import type { StartTtsRequest, TtsAudioFormat, TtsSessionEvent, TtsStartResult } from "../shared/tts-session";
 import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
 import { codeRunWorker } from "./orchestrator/code/code-run-worker";
@@ -184,7 +249,7 @@ import {
 } from "./chat-time-context";
 import { getDateLocale, updateLocaleContext } from "./locale-context";
 import { setAsrConfig } from "./asr/volcano-asr-engine";
-import { setCallWindow, registerCallIpc, setCallSettings, stopCall } from "./call/call-manager";
+import { registerCallIpc, setCallSettings } from "./call/call-manager";
 import { initSkills, skillRegistry, buildAutoInjectedSkillContext, buildAutoInjectedSoulContext, buildSkillCatalog, parseSlashCommand, setSkillEnabled, listSkillsForUi } from "./skills";
 import {
   isMusicCompanionAvailable,
@@ -252,14 +317,6 @@ async function reconcileUserMemoryIndex(): Promise<void> {
 
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
-let reactChatWindow: BrowserWindow | null = null;
-const reactChatSession: ReactChatSessionDispatcher =
-  createReactChatSessionDispatcher();
-let sidebarWindow: BrowserWindow | null = null;
-let tasksWindow: BrowserWindow | null = null;
-let settingsWindow: BrowserWindow | null = null;
-let stickerManagerWindow: BrowserWindow | null = null;
-let callWindow: BrowserWindow | null = null;
 let schedulerEngine: SchedulerEngine | null = null;
 let screenshotService: ScreenshotService | null = null;
 let proactiveChatService: ProactiveChatService | null = null;
@@ -371,170 +428,6 @@ function initializeScreenshotService(initialHotkey: string): ScreenshotService {
 // 聊天窗口当前活跃的会话 id（通过 IPC 由聊天窗口上报）；
 // 设置面板"删除当前会话"差异化提示用。聊天窗口关闭时由 closed 事件置 null。
 let activeChatSessionId: string | null = null;
-
-const isDev = process.env.VITE_DEV === "1";
-
-function appendMinimaxTtsLog(entry: Record<string, unknown>): void {
-  try {
-    const logDir = path.join(app.getPath("userData"), "logs");
-    fs.mkdirSync(logDir, { recursive: true });
-    const logFile = path.join(logDir, "minimax-tts.log");
-    fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
-  } catch (err) {
-    console.warn("[TTS MiniMax] 写诊断日志失败:", err);
-  }
-}
-
-function appendGptsovitsTtsLog(entry: Record<string, unknown>): void {
-  try {
-    const logDir = path.join(app.getPath("userData"), "logs");
-    fs.mkdirSync(logDir, { recursive: true });
-    const logFile = path.join(logDir, "gptsovits-tts.log");
-    fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
-  } catch (err) {
-    console.warn("[TTS GPT-SoVITS] 写诊断日志失败:", err);
-  }
-}
-
-function appendCustomCloudTtsLog(entry: Record<string, unknown>): void {
-  try {
-    const logDir = path.join(app.getPath("userData"), "logs");
-    fs.mkdirSync(logDir, { recursive: true });
-    const logFile = path.join(logDir, "custom-cloud-tts.log");
-    fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
-  } catch (err) {
-    console.warn("[TTS CustomCloud] 写诊断日志失败:", err);
-  }
-}
-
-function appendMimoTtsLog(entry: Record<string, unknown>): void {
-  try {
-    const logDir = path.join(app.getPath("userData"), "logs");
-    fs.mkdirSync(logDir, { recursive: true });
-    const logFile = path.join(logDir, "mimo-tts.log");
-    fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
-  } catch (err) {
-    console.warn("[TTS MiMo] 写诊断日志失败:", err);
-  }
-}
-
-function getTtsCacheDir(): string {
-  return path.join(app.getPath("userData"), "cyrene-tts-cache");
-}
-
-function assertTtsCacheKey(cacheKey: string): string {
-  if (!/^(minimax|gptsovits|custom-cloud|mimo|mossland)-[a-f0-9]{64}$/.test(cacheKey)) {
-    throw new Error("非法 TTS 缓存 key");
-  }
-  return cacheKey;
-}
-
-function buildTtsCacheKey(payload: {
-  voiceId: string;
-  text: string;
-  speed?: number;
-  volume?: number;
-  pitch?: number;
-  model?: string;
-  format?: "mp3" | "wav" | "pcm";
-}): string {
-  const source = JSON.stringify({
-    version: 1,
-    engine: "minimax",
-    model: payload.model ?? "speech-2.8-hd",
-    voiceId: payload.voiceId,
-    speed: payload.speed ?? 1,
-    volume: payload.volume ?? 1,
-    pitch: payload.pitch ?? 0,
-    format: payload.format ?? "mp3",
-    text: payload.text,
-  });
-  return "minimax-" + createHash("sha256").update(source, "utf8").digest("hex");
-}
-
-function buildGptsovitsCacheKey(payload: {
-  baseUrl: string;
-  refAudioPath: string;
-  promptText: string;
-  text: string;
-  speed?: number;
-  format?: "wav" | "mp3";
-}): string {
-  const source = JSON.stringify({
-    version: 1,
-    engine: "gptsovits",
-    baseUrl: payload.baseUrl,
-    refAudioPath: payload.refAudioPath,
-    promptText: payload.promptText,
-    speed: payload.speed ?? 1,
-    format: payload.format ?? "wav",
-    text: payload.text,
-  });
-  return "gptsovits-" + createHash("sha256").update(source, "utf8").digest("hex");
-}
-
-function buildCustomCloudCacheKey(payload: {
-  endpointUrl: string;
-  voiceId?: string;
-  text: string;
-  speed?: number;
-  volume?: number;
-  format?: "wav" | "mp3";
-}): string {
-  const source = JSON.stringify({
-    version: 1,
-    engine: "custom-cloud",
-    endpointUrl: payload.endpointUrl,
-    voiceId: payload.voiceId ?? "",
-    speed: payload.speed ?? 1,
-    volume: payload.volume ?? 1,
-    format: payload.format ?? "mp3",
-    text: payload.text,
-  });
-  return "custom-cloud-" + createHash("sha256").update(source, "utf8").digest("hex");
-}
-
-function buildMimoCacheKey(payload: {
-  voiceAudioPath?: string;
-  text: string;
-  stylePrompt?: string;
-}): string {
-  const source = JSON.stringify({
-    version: 1,
-    engine: "mimo",
-    model: "mimo-v2.5-tts-voiceclone",
-    voiceAudioPath: payload.voiceAudioPath ?? "",
-    stylePrompt: payload.stylePrompt ?? "",
-    format: "wav",
-    text: payload.text,
-  });
-  return "mimo-" + createHash("sha256").update(source, "utf8").digest("hex");
-}
-
-/** Mossland cache key：voice_id + model + format + text 哈希。
- *  因为 Mossland 没有"参考音频路径"作为天然 key 源，用 voice_id + model 区分。 */
-function buildMosslandCacheKey(payload: {
-  voiceId?: string;
-  text: string;
-  model?: string;
-  format?: "mp3" | "wav" | "pcm";
-}): string {
-  const source = JSON.stringify({
-    version: 1,
-    engine: "mossland",
-    model: payload.model ?? "moss-tts",
-    voiceId: payload.voiceId ?? "",
-    format: payload.format ?? "mp3",
-    text: payload.text,
-  });
-  return "mossland-" + createHash("sha256").update(source, "utf8").digest("hex");
-}
-
-function getTtsCachePath(cacheKey: string, format: "mp3" | "wav" | "pcm" = "mp3"): string {
-  const safeKey = assertTtsCacheKey(cacheKey);
-  const ext = format === "wav" ? "wav" : format === "pcm" ? "pcm" : "mp3";
-  return path.join(getTtsCacheDir(), `${safeKey}.${ext}`);
-}
 
 // 单个厂商的可缓存配置：用户切到别的厂商再切回来，这三个字段从这里恢复。
 interface ProviderProfile {
@@ -663,18 +556,6 @@ interface VisionModelConfig {
   model: string;
 }
 
-
-interface UserProfile {
-  nickname: string;
-  callPreference: string;
-  birthday: string;
-  timezone: string;
-  avatarPath: string;
-  /** 默认城市（用于天气等需要地理定位的工具，没填则模型会问用户） */
-  defaultCity: string;
-  /** 性别：secret(保密) | male(男) | female(女) */
-  gender: string;
-}
 
 interface GeneralSettings extends ChatAppearanceSettings {
   citaEnabled: boolean;
@@ -816,19 +697,8 @@ interface PublicModelConfig {
   rerankerMode: "light" | "standard" | "none";
 }
 
-type RuntimeStatus = "陪伴中" | "思考中" | "工作中" | "聆听中" | "提醒中" | "离线";
-type RuntimeFeeling = "平静" | "开心" | "温柔" | "激动" | "撒娇" | "担心" | "难过" | "感动" | "害羞";
 type StickerSize = "small" | "standard" | "large";
 
-interface RuntimeState {
-  status: RuntimeStatus;
-  feeling: RuntimeFeeling;
-  expression: number;
-  updatedAt: number;
-}
-
-const RUNTIME_STATUSES: RuntimeStatus[] = ["陪伴中", "思考中", "工作中", "聆听中", "提醒中", "离线"];
-const RUNTIME_FEELINGS: RuntimeFeeling[] = ["平静", "开心", "温柔", "激动", "撒娇", "担心", "难过", "感动", "害羞"];
 const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 300000; // FC 总预算：20 轮 × 推理模型 ~10-15s 需 300s 余量
 
 /** 桌宠窗口的基础尺寸（zoom=1.0 时）。缩放因子改变窗口与模型尺寸，二者同步。 */
@@ -836,14 +706,6 @@ const PET_WINDOW_BASE_WIDTH = 400;
 const PET_WINDOW_BASE_HEIGHT = 500;
 const STARTUP_EMBEDDING_REFRESH_DELAY_MS = 1500;
 
-function getAppIconPath(icon: UiIcon): string {
-  const preset = UI_ICON_PRESETS.find((item) => item.id === icon);
-  return path.join(__dirname, "..", "..", "..", "assets", "icon-presets", preset?.fileName ?? "cyrene-sun.png");
-}
-
-function getCurrentAppIconPath(): string {
-  return getAppIconPath(loadGeneralSettings().uiIcon);
-}
 let runtimeState: RuntimeState = {
     status: "陪伴中",
     feeling: "平静",
@@ -1017,129 +879,6 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   chatLineHeight: 1.75,
   assistantBubbleEnabled: true,
 };
-
-function getSettingsPath(): string {
-  return path.join(app.getPath("userData"), "model-settings.json");
-}
-
-function getGeneralSettingsPath(): string {
-  return path.join(app.getPath("userData"), "app-settings.json");
-}
-
-
-function getUserProfilePath(): string {
-  return path.join(app.getPath("userData"), "user-profile.json");
-}
-
-function getAvatarPath(): string {
-  return path.join(app.getPath("userData"), "avatar.png");
-}
-
-function getRagStorePath(): string {
-  return path.join(app.getPath("userData"), "rag-data", "memory-store.json");
-}
-
-const DEFAULT_USER_PROFILE: UserProfile = {
-  nickname: "",
-  callPreference: "",
-  birthday: "",
-  timezone: "Asia/Shanghai",
-  avatarPath: "",
-  defaultCity: "",
-  gender: "secret",
-};
-
-function loadUserProfile(): UserProfile {
-  try {
-    const filePath = getUserProfilePath();
-    if (!fs.existsSync(filePath)) return DEFAULT_USER_PROFILE;
-    return { ...DEFAULT_USER_PROFILE, ...JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<UserProfile> };
-  } catch {
-    return DEFAULT_USER_PROFILE;
-  }
-}
-
-function saveUserProfile(profile: Partial<UserProfile>): UserProfile {
-  const existing = loadUserProfile();
-  const merged = { ...existing, ...profile };
-  const filePath = getUserProfilePath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), "utf8");
-  return merged;
-}
-
-interface MemoryPanelItem {
-  id: string;
-  title: string;
-  body: string;
-  meta: string;
-}
-
-interface ImportedDocItem {
-  importId: string | null;
-  fileName: string;
-  chunkCount: number;
-  lastImportedAt: number;
-}
-
-async function loadMemoryPanelData() {
-  const [l0, l1, l2] = await Promise.all([
-    memoryStore.getL0(),
-    memoryStore.getL1(),
-    memoryStore.getAllL2(),
-  ]);
-
-  let importedDocs: ImportedDocItem[] = [];
-  const ragStorePath = getRagStorePath();
-
-  try {
-    if (fs.existsSync(ragStorePath)) {
-      const raw = fs.readFileSync(ragStorePath, "utf8");
-      const entries = JSON.parse(raw) as Array<{
-        source?: string;
-        createdAt?: number;
-        metadata?: { fileName?: string; importId?: string };
-      }>;
-
-      const docsMap = new Map<string, ImportedDocItem>();
-      for (const entry of entries) {
-        if (entry.source !== "imported_doc") continue;
-        const fileName = entry.metadata?.fileName || "未命名文档";
-        const importId = entry.metadata?.importId as string | undefined;
-        // 新数据按 importId 分组，旧数据按 fileName 分组
-        const key = importId || "legacy:" + fileName;
-        const existing = docsMap.get(key);
-        if (existing) {
-          existing.chunkCount += 1;
-          existing.lastImportedAt = Math.max(existing.lastImportedAt, entry.createdAt || 0);
-        } else {
-          docsMap.set(key, {
-            importId: importId || null,
-            fileName,
-            chunkCount: 1,
-            lastImportedAt: entry.createdAt || 0,
-          });
-        }
-      }
-
-      importedDocs = [...docsMap.values()].sort((a, b) => b.lastImportedAt - a.lastImportedAt);
-    }
-  } catch (error) {
-    console.warn("[settings] load imported docs failed:", error);
-  }
-
-  return {
-    l0,
-    l1,
-    l2: l2.sort((a, b) => b.createdAt - a.createdAt),
-    importedDocs,
-    reflections: [] as MemoryPanelItem[],
-  };
-}
-
-function getStickerSettingsPath(): string {
-  return path.join(app.getPath("userData"), "sticker-settings.json");
-}
 
 /**
  * normalize 流程：
@@ -1556,19 +1295,6 @@ function loadGeneralSettings(): GeneralSettings {
   return generalSettingsCache = loadGeneralSettings0();
 }
 
-function readTtsCacheByKey(cacheKey: string): { audio: Buffer; format: TtsAudioFormat } | null {
-  for (const format of ["mp3", "wav", "pcm"] as const) {
-    let cachePath: string;
-    try {
-      cachePath = getTtsCachePath(cacheKey, format);
-    } catch {
-      return null;
-    }
-    if (fs.existsSync(cachePath)) return { audio: fs.readFileSync(cachePath), format };
-  }
-  return null;
-}
-
 async function synthesizeTtsSession(
   request: StartTtsRequest,
   signal: AbortSignal,
@@ -1897,306 +1623,6 @@ function getStickerManagerConfig(): StickerConfigItem[] {
   return getAllStickerConfig(stickerSettings);
 }
 
-// ── 多面板自适应布局 ──────────────────────────────────────────────
-
-interface PanelLayout { x: number; y: number; }
-
-/**
- * 将窗口位置 clamp 到 workArea 内，保证至少 minVisibleW × minVisibleH 可见。
- * 允许窗口部分超出屏幕（可正可负），但可见区域不少于指定阈值。
- */
-function clampWindowToWorkArea(
-  pos: PanelLayout,
-  size: { width: number; height: number },
-  workArea: { x: number; y: number; width: number; height: number },
-  minVisibleW = 120,
-  minVisibleH = 80,
-): PanelLayout {
-  const minX = workArea.x - size.width + minVisibleW;
-  const maxX = workArea.x + workArea.width - minVisibleW;
-  const minY = workArea.y - size.height + minVisibleH;
-  const maxY = workArea.y + workArea.height - minVisibleH;
-
-  function clamp(value: number, lo: number, hi: number): number {
-    return Math.max(lo, Math.min(hi, value));
-  }
-
-  return {
-    x: clamp(pos.x, minX, maxX),
-    y: clamp(pos.y, minY, maxY),
-  };
-}
-
-/**
- * 计算多面板自适应布局。
- *
- * 策略：
- * - 水平排列：totalWidth <= workArea.width → 三面板水平居中
- * - 阶梯排列：totalWidth > workArea.width → sidebar/tasks 贴右边缘并垂直错开
- *
- * 所有窗口均 clampWindowToWorkArea 保证至少 120×80 可见。
- */
-function computePanelLayout(
-  workArea: { x: number; y: number; width: number; height: number },
-  panels: Array<{ width: number; height: number }>,
-  gap = 8,
-): PanelLayout[] {
-  const totalWidth = panels.reduce((sum, p, i) => sum + p.width + (i > 0 ? gap : 0), 0);
-  const maxPanelHeight = Math.max(...panels.map(p => p.height));
-  const baseY =
-    workArea.height >= maxPanelHeight
-      ? workArea.y + Math.floor((workArea.height - maxPanelHeight) / 2)
-      : workArea.y;
-
-  if (totalWidth <= workArea.width) {
-    // 水平居中排列
-    const startX = workArea.x + Math.floor((workArea.width - totalWidth) / 2);
-    const positions: PanelLayout[] = [];
-    let curX = startX;
-    for (let i = 0; i < panels.length; i++) {
-      const pos = clampWindowToWorkArea({ x: curX, y: baseY }, panels[i], workArea);
-      positions.push(pos);
-      curX += panels[i].width + gap;
-    }
-    return positions;
-  }
-
-  // 阶梯排列：总宽超屏
-  // chat: 居中（clamp 后）
-  const chatPos = clampWindowToWorkArea(
-    { x: workArea.x + Math.floor((workArea.width - panels[0].width) / 2), y: baseY },
-    panels[0],
-    workArea,
-  );
-
-  // sidebar: 优先 chat 右侧有 gap；不够则贴 workArea 右边缘
-  const sidebarMaxX = workArea.x + workArea.width - panels[1].width;
-  const sidebarX = Math.min(chatPos.x + panels[0].width + gap, sidebarMaxX);
-  const sidebarPos = clampWindowToWorkArea({ x: sidebarX, y: baseY }, panels[1], workArea);
-
-  // tasks: 贴右边缘，y 与 sidebar 错开 48px
-  const tasksX = Math.min(sidebarPos.x, sidebarMaxX);
-  const tasksY = clampWindowToWorkArea(
-    { x: tasksX, y: sidebarPos.y + 48 },
-    panels[2],
-    workArea,
-  );
-
-  return [chatPos, sidebarPos, tasksY];
-}
-
-// 计算 chat / sidebar / tasks 三个窗口的初始位置。
-// 规则：优先鼠标所在 display；窗口自适应 workArea，保证至少 120×80 可见。
-function computeLayout(): {
-  chat: PanelLayout;
-  sidebar: PanelLayout;
-  tasks: PanelLayout;
-} {
-  const cursor = screen.getCursorScreenPoint();
-  const displays = screen.getAllDisplays();
-  const display =
-    displays.find(d => {
-      const { x, y, width, height } = d.workArea;
-      return cursor.x >= x && cursor.x < x + width && cursor.y >= y && cursor.y < y + height;
-    }) ?? screen.getPrimaryDisplay();
-
-  const { workArea } = display;
-  const panels = [
-    { width: 1280, height: 760 }, // chat
-    { width: 320, height: 760 },  // sidebar
-    { width: 320, height: 760 },  // tasks
-  ];
-  const [chatPos, sidebarPos, tasksPos] = computePanelLayout(workArea, panels, 8);
-  return { chat: chatPos, sidebar: sidebarPos, tasks: tasksPos };
-}
-
-
-interface ChatRequestMessage {
-  role: "user" | "model" | "assistant" | "system";
-  content: string;
-  at?: number;
-}
-
-interface ChatCompletionChoice {
-  message?: {
-    content?: string;
-  };
-}
-
-interface ChatCompletionResponse {
-  choices?: ChatCompletionChoice[];
-  error?: {
-    message?: string;
-  };
-}
-
-
-function stripThinkBlocks(text: string): string {
-  return text
-    .replace(/<think>[\s\S]*?<\/think>/gi, "")
-    .replace(/<think>[\s\S]*$/gi, "")
-    .trim();
-}
-
-function createVisibleStreamFilter(): {
-  push: (chunk: string) => string;
-  flush: () => string;
-} {
-  let pending = "";
-  let insideThink = false;
-  const openTag = "<think>";
-  const closeTag = "</think>";
-
-  return {
-    push(chunk: string): string {
-      pending += chunk;
-      let visible = "";
-
-      while (pending) {
-        const lower = pending.toLowerCase();
-
-        if (insideThink) {
-          const closeIndex = lower.indexOf(closeTag);
-          if (closeIndex < 0) {
-            pending = pending.slice(Math.max(0, pending.length - (closeTag.length - 1)));
-            break;
-          }
-
-          pending = pending.slice(closeIndex + closeTag.length);
-          insideThink = false;
-          continue;
-        }
-
-        const openIndex = lower.indexOf(openTag);
-        if (openIndex < 0) {
-          const safeLength = Math.max(0, pending.length - (openTag.length - 1));
-          visible += pending.slice(0, safeLength);
-          pending = pending.slice(safeLength);
-          break;
-        }
-
-        visible += pending.slice(0, openIndex);
-        pending = pending.slice(openIndex + openTag.length);
-        insideThink = true;
-      }
-
-      return visible;
-    },
-    flush(): string {
-      if (insideThink) {
-        pending = "";
-        return "";
-      }
-
-      const rest = pending;
-      pending = "";
-      return rest;
-    },
-  };
-}
-
-function extractJsonPayload(text: string): unknown | null {
-  const cleaned = text
-    .replace(/^```(?:json)?\s*/i, "")
-    .replace(/```$/i, "")
-    .trim();
-
-  try {
-    return JSON.parse(cleaned) as unknown;
-  } catch {
-    const start = cleaned.indexOf("{");
-    const end = cleaned.lastIndexOf("}");
-    if (start < 0 || end <= start) return null;
-
-    try {
-      return JSON.parse(cleaned.slice(start, end + 1)) as unknown;
-    } catch {
-      return null;
-    }
-  }
-}
-
-// feeling → Live2D 表情索引
-const feelingToExpression: Record<string, number> = {
-  "平静": 0,
-  "开心": 6,
-  "温柔": 0,
-  "激动": 3,
-  "撒娇": 5,
-  "担心": 2,
-  "难过": 0,
-  "感动": 4,
-  "害羞": 5,
-};
-
-function inferRuntimeState(
-  userInput: string,
-  llmReply: string,
-  toolCalled: boolean
-): Pick<RuntimeState, "status"> {
-  if (toolCalled) return { status: "工作中" };
-
-  const text = userInput + llmReply;
-
-  if (STATUS_KEYWORDS["聆听中"].test(text)) {
-    return { status: "聆听中" };
-  }
-
-  if (STATUS_KEYWORDS["思考中"].test(text)) {
-    return { status: "思考中" };
-  }
-
-  return { status: "陪伴中" };
-}
-
-function parseObserverFeeling(text: string): string | null {
-  const payload = extractJsonPayload(text);
-  if (!payload || typeof payload !== "object") return null;
-  const record = payload as Record<string, unknown>;
-  const feeling = typeof record.feeling === "string" ? record.feeling : null;
-  const validFeelings = ["平静","开心","温柔","激动","撒娇","担心","难过","感动","害羞"];
-  return feeling && validFeelings.includes(feeling) ? feeling : null;
-}
-
-function buildChatCompletionsUrl(baseUrl: string): string {
-  const trimmed = baseUrl.trim().replace(/\/+$/, "");
-  if (trimmed.endsWith("/chat/completions")) return trimmed;
-  return `${trimmed}/chat/completions`;
-}
-
-function normalizeChatMessages(input: unknown): ChatContextMessage[] {
-  return normalizeChatMessagesWithTime(input);
-}
-
-function getApiLogPath(): string {
-  return path.join(app.getPath("userData"), "chat-api.log");
-}
-
-function appendApiLog(
-  label: string,
-  requestMessages: Array<{ role: string; content: string }>,
-  rawResponse: string,
-  cleanedResponse: string,
-): void {
-  try {
-    const now = new Date().toISOString();
-    const entry = [
-      "=".repeat(80),
-      `[${now}] ${label}`,
-      "-".repeat(40) + " REQUEST " + "-".repeat(40),
-      JSON.stringify(requestMessages, null, 2),
-      "-".repeat(40) + " RAW RESPONSE " + "-".repeat(40),
-      rawResponse,
-      "-".repeat(40) + " CLEANED " + "-".repeat(40),
-      cleanedResponse || "(empty)",
-      "=".repeat(80),
-      "",
-    ].join(os.EOL);
-    fs.appendFileSync(getApiLogPath(), entry, "utf8");
-  } catch {
-    // silent
-  }
-}
 
 async function callChatCompletionsStream(
   settings: ModelSettings,
@@ -2494,23 +1920,6 @@ function loadPromptFile(filename: string): string {
   }
 }
 
-function getCustomStylePromptPath(): string {
-  return path.join(app.getPath("userData"), "styles", "custom", "custom.md");
-}
-
-function ensureCustomStylePrompt(): string {
-  const targetPath = getCustomStylePromptPath();
-  if (fs.existsSync(targetPath)) return targetPath;
-  fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-  const templatePath = path.join(app.getAppPath(), "prompts", "styles", "custom", "custom.md");
-  if (fs.existsSync(templatePath)) {
-    fs.copyFileSync(templatePath, targetPath);
-  } else {
-    fs.writeFileSync(targetPath, "", "utf8");
-  }
-  return targetPath;
-}
-
 function readStylePrompt(styleId: StyleId): string {
   if (styleId === "custom") {
     const filePath = ensureCustomStylePrompt();
@@ -2532,30 +1941,6 @@ function resolveSoulSamplingForStyle(input: {
     reasoning: input.settings.reasoning ?? { mode: "auto" },
     preference,
   });
-}
-
-/**
- * 诊断：确认 WorldBook active entries 是否真正进入最终 system prompt，
- * 以及在什么位置。不预设结论——先看数据再判断是 lost-in-middle、
- * 被后续 prompt 覆盖、还是根本没拼进去。
- */
-function logWorldbookInjection(alwaysOnContext: string, systemContent: string): void {
-  const marker = "【已激活的世界知识】";
-  if (alwaysOnContext && alwaysOnContext.includes(marker)) {
-    const wbStart = systemContent.indexOf(marker);
-    console.log("[Worldbook/Diag] ────────────────────────");
-    console.log(`[Worldbook/Diag] systemContent total length: ${systemContent.length}`);
-    console.log(`[Worldbook/Diag] alwaysOnContext length: ${alwaysOnContext.length}`);
-    console.log(`[Worldbook/Diag] ${marker} 在 systemContent 中的偏移: ${wbStart} / ${systemContent.length} (${((wbStart / systemContent.length) * 100).toFixed(1)}%)`);
-    console.log(`[Worldbook/Diag] ${marker} 之后剩余内容: ${systemContent.length - wbStart} 字符`);
-    const beforeWb = systemContent.slice(Math.max(0, wbStart - 200), wbStart);
-    const wbSlice = systemContent.slice(wbStart, Math.min(wbStart + alwaysOnContext.length + 200, systemContent.length));
-    console.log(`[Worldbook/Diag] ── 注入前 200 字 ──\n${beforeWb.slice(-200)}`);
-    console.log(`[Worldbook/Diag] ── 注入内容 + 后 200 字 ──\n${wbSlice.slice(0, 800)}`);
-    console.log("[Worldbook/Diag] ────────────────────────");
-  } else {
-    console.log("[Worldbook/Diag] 本轮无世界知识注入（alwaysOnContext 为空或不含标记）");
-  }
 }
 
 function buildSystemPrompt(styleFile: string, includeStyle = true): string {
@@ -3042,24 +2427,6 @@ export function sendToLive2DWindow(channel: string, payload?: unknown): void {
   else win.webContents.send(channel, payload);
 }
 
-function openExternalUrl(url: string): boolean {
-  if (!url.startsWith("http://") && !url.startsWith("https://")) return false;
-  if (isDev && url.startsWith("http://localhost:5173")) return false;
-  void shell.openExternal(url);
-  return true;
-}
-
-function attachExternalLinkHandler(win: BrowserWindow): void {
-  win.webContents.setWindowOpenHandler(({ url }) => {
-    return openExternalUrl(url) ? { action: "deny" } : { action: "allow" };
-  });
-
-  win.webContents.on("will-navigate", (event, url) => {
-    if (openExternalUrl(url)) {
-      event.preventDefault();
-    }
-  });
-}
 function createWindow(): void {
   const settings = loadGeneralSettings();
   const transparent = true;
@@ -3312,362 +2679,6 @@ function createWindow(): void {
   });
 }
 
-
-function createReactChatWindow(sessionId?: string): void {
-  // 已有窗口 → 复用；dispatcher 决定立即 send 还是等 ready 后 flush
-  if (reactChatWindow && !reactChatWindow.isDestroyed()) {
-    reactChatWindow.show();
-    reactChatWindow.focus();
-    if (sessionId) dispatchOrQueueReactSession(sessionId);
-    return;
-  }
-
-  // 新建窗口：dispatcher 重置；URL 负责 cold start，pending 仅服务于"未 ready 期间又收到请求"
-  reactChatSession.reset();
-
-  const layout = computeLayout();
-  const window = new BrowserWindow({
-    x: layout.chat.x,
-    y: layout.chat.y,
-    width: 1280,
-    height: 760,
-    minWidth: 960,
-    minHeight: 540,
-    title: "Cyrene · 聊天",
-    icon: getCurrentAppIconPath(),
-    backgroundColor: "#00000000",
-    autoHideMenuBar: true,
-    show: false,
-    frame: false,
-    transparent: true,
-    resizable: true,
-    webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-  reactChatWindow = window;
-
-  window.webContents.on("did-start-loading", () => {
-    reactChatSession.markLoading();
-  });
-
-  // search 字段必须含前导 "?"（Electron url.format() 要求）
-  const search = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : undefined;
-  const indexPath = path.join(__dirname, "..", "..", "renderer", "react", "index.html");
-
-  if (isDev) {
-    void window
-      .loadURL(`http://localhost:5173/react/${search ?? ""}`)
-      .catch((error) => console.error("[ReactChatWindow] loadURL failed:", error));
-  } else {
-    void window
-      .loadFile(indexPath, search ? { search } : undefined)
-      .catch((error) => console.error("[ReactChatWindow] loadFile failed:", error));
-  }
-
-  window.once("ready-to-show", () => {
-    if (!window.isDestroyed()) window.show();
-  });
-
-  window.on("closed", () => {
-    // 闭包引用 + 仅当当前全局仍指向自己时才清理，避免旧窗口 closed 误清新窗口
-    if (reactChatWindow === window) {
-      reactChatWindow = null;
-      reactChatSession.reset();
-    }
-  });
-}
-
-function dispatchOrQueueReactSession(sessionId: string): void {
-  const win = reactChatWindow;
-  if (!win?.webContents) return;
-  const immediate = reactChatSession.queueOrTake(sessionId);
-  if (immediate) {
-    win.webContents.send(IPC.CHATS_REACT_SWITCH_SESSION, immediate);
-  }
-}
-
-function createSidebarWindow(): void {
-  if (sidebarWindow && !sidebarWindow.isDestroyed()) {
-    sidebarWindow.show();
-    sidebarWindow.focus();
-    return;
-  }
-
-  const layout = computeLayout();
-  sidebarWindow = new BrowserWindow({
-    x: layout.sidebar.x,
-    y: layout.sidebar.y,
-    width: 320,
-    height: 760,
-    minWidth: 56,
-    minHeight: 540,
-    title: "昔涟 · 状态",
-    icon: getCurrentAppIconPath(),
-    backgroundColor: "#00000000",
-    autoHideMenuBar: true,
-    show: false,
-    frame: false,
-    transparent: true,
-    resizable: true,
-    webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-
-  if (isDev) {
-    sidebarWindow.loadURL("http://localhost:5173/sidebar/");
-  } else {
-    sidebarWindow.loadFile(
-      path.join(__dirname, "..", "..", "renderer", "sidebar", "index.html")
-    );
-  }
-
-  sidebarWindow.once("ready-to-show", () => {
-    sidebarWindow?.show();
-  });
-
-  sidebarWindow.on("closed", () => {
-    sidebarWindow = null;
-  });
-}
-
-function createTasksWindow(): void {
-  if (tasksWindow && !tasksWindow.isDestroyed()) {
-    tasksWindow.show();
-    tasksWindow.focus();
-    return;
-  }
-
-  const layout = computeLayout();
-  tasksWindow = new BrowserWindow({
-    x: layout.tasks.x,
-    y: layout.tasks.y,
-    width: 320,
-    height: 760,
-    minHeight: 540,
-    title: "昔涟 · 今日日程",
-    icon: getCurrentAppIconPath(),
-    backgroundColor: "#00000000",
-    autoHideMenuBar: true,
-    show: false,
-    frame: false,
-    transparent: true,
-    resizable: true,
-    webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-
-  if (isDev) {
-    tasksWindow.loadURL("http://localhost:5173/tasks/");
-  } else {
-    tasksWindow.loadFile(
-      path.join(__dirname, "..", "..", "renderer", "tasks", "index.html")
-    );
-  }
-
-  tasksWindow.once("ready-to-show", () => {
-    tasksWindow?.show();
-  });
-
-  tasksWindow.on("closed", () => {
-    tasksWindow = null;
-  });
-}
-
-function createSettingsWindow(section?: string): void {
-  if (settingsWindow && !settingsWindow.isDestroyed()) {
-    settingsWindow.show();
-    settingsWindow.focus();
-    // 窗口已存在：发事件让 settings 页切标签（loadURL 不会重新触发）
-    if (section) {
-      settingsWindow.webContents.send(IPC.SETTINGS_SWITCH_SECTION, section);
-    }
-    return;
-  }
-
-  const display = screen.getPrimaryDisplay();
-  const { x: dx, y: dy, width: dw, height: dh } = display.workArea;
-  const width = 1060;
-  const height = 920;
-  settingsWindow = new BrowserWindow({
-    x: dx + Math.max(0, Math.floor((dw - width) / 2)),
-    y: dy + Math.max(0, Math.floor((dh - height) / 2)),
-    width,
-    height,
-    minWidth: 920,
-    minHeight: 580,
-    title: "昔涟 · 设置",
-    icon: getCurrentAppIconPath(),
-    backgroundColor: "#00000000",
-    autoHideMenuBar: true,
-    show: false,
-    frame: false,
-    transparent: true,
-    resizable: true,
-    webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-
-  attachExternalLinkHandler(settingsWindow);
-
-  const hash = section ? `#${section}` : "";
-  if (isDev) {
-    settingsWindow.loadURL("http://localhost:5173/settings/" + hash);
-  } else {
-    settingsWindow.loadFile(
-      path.join(__dirname, "..", "..", "renderer", "settings", "index.html"),
-      { hash: section || "" }
-    );
-  }
-
-  settingsWindow.once("ready-to-show", () => {
-    settingsWindow?.show();
-  });
-
-  settingsWindow.on("closed", () => {
-    settingsWindow = null;
-  });
-}
-async function createStickerManagerWindow(): Promise<{ ok: boolean; error?: string }> {
-  if (stickerManagerWindow && !stickerManagerWindow.isDestroyed()) {
-    stickerManagerWindow.show();
-    stickerManagerWindow.focus();
-    stickerManagerWindow.moveTop();
-    return { ok: true };
-  }
-
-  const parentBounds = settingsWindow?.getBounds();
-  const display = screen.getPrimaryDisplay();
-  const { x: dx, y: dy, width: dw, height: dh } = display.workArea;
-  const width = 520;
-  const height = 420;
-  stickerManagerWindow = new BrowserWindow({
-    x: parentBounds ? parentBounds.x + Math.max(24, Math.floor((parentBounds.width - width) / 2)) : dx + Math.max(0, Math.floor((dw - width) / 2)),
-    y: parentBounds ? parentBounds.y + 64 : dy + Math.max(0, Math.floor((dh - height) / 2)),
-    width,
-    height,
-    minWidth: 460,
-    minHeight: 360,
-    title: "表情包管理",
-    backgroundColor: "#00000000",
-    autoHideMenuBar: true,
-    show: false,
-    frame: false,
-    transparent: true,
-    resizable: true,
-    parent: settingsWindow ?? undefined,
-    webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-
-  stickerManagerWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
-    console.error("[stickers] did-fail-load", { errorCode, errorDescription, validatedURL });
-  });
-
-  try {
-    if (isDev) {
-      await stickerManagerWindow.loadURL("http://localhost:5173/sticker-manager/");
-    } else {
-      await stickerManagerWindow.loadFile(
-        path.join(__dirname, "..", "..", "renderer", "sticker-manager", "index.html")
-      );
-    }
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    console.error("[stickers] failed to load sticker manager window", error);
-    stickerManagerWindow?.close();
-    return { ok: false, error: message };
-  }
-
-  stickerManagerWindow.once("ready-to-show", () => {
-    stickerManagerWindow?.show();
-    stickerManagerWindow?.focus();
-    stickerManagerWindow?.moveTop();
-  });
-
-  stickerManagerWindow.on("closed", () => {
-    stickerManagerWindow = null;
-  });
-
-  return { ok: true };
-}
-
-/** 创建通话窗口（450×800 竖屏，语音通话）。 */
-function createCallWindow(): void {
-  if (callWindow && !callWindow.isDestroyed()) {
-    callWindow.show();
-    callWindow.focus();
-    return;
-  }
-
-  const display = screen.getPrimaryDisplay();
-  const { width: dw, height: dh } = display.workArea;
-  const CALL_W = 420;
-  const CALL_H = 800;
-  const cx = Math.max(0, Math.floor((dw - CALL_W) / 2));
-  const cy = Math.max(0, Math.floor((dh - CALL_H) / 2));
-
-  callWindow = new BrowserWindow({
-    x: display.workArea.x + cx,
-    y: display.workArea.y + cy,
-    width: CALL_W,
-    height: CALL_H,
-    minWidth: 420,
-    minHeight: 600,
-    title: "Cyrene · 语音通话",
-    icon: getCurrentAppIconPath(),
-    backgroundColor: "#00000000",
-    autoHideMenuBar: true,
-    show: false,
-    frame: false,
-    transparent: true,
-    resizable: true,
-    webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-
-  if (isDev) {
-    callWindow.loadURL("http://localhost:5173/call/");
-  } else {
-    callWindow.loadFile(path.join(__dirname, "..", "..", "renderer", "call", "index.html"));
-  }
-
-  callWindow.once("ready-to-show", () => {
-    callWindow?.show();
-  });
-
-  callWindow.on("closed", () => {
-    callWindow = null;
-    stopCall();
-    setCallWindow(null);
-  });
-
-  // 绑定给 call-manager
-  setCallWindow(callWindow);
-}
 
 function createTray(): void {
   const icon = nativeImage.createFromPath(getCurrentAppIconPath());
@@ -4465,6 +3476,9 @@ app.whenReady().then(async () => {
   // prefix) so it stands apart from logger output as a brand artifact.
   process.stdout.write("\n" + renderBanner() + "\n\n");
   logger.info(LogTag.Runtime, "starting Cyrene Agent");
+
+  // 注入应用图标路径 getter（窗口工厂统一从这里读取，避免与 index.ts 循环依赖）
+  setGetCurrentAppIconPath(() => getAppIconPath(loadGeneralSettings().uiIcon));
 
   // 注册 local-sticker:// 协议处理器：将请求映射到 userData/stickers/ 下的文件
   protocol.handle("local-sticker", (request) => {
@@ -5565,7 +4579,6 @@ app.whenReady().then(async () => {
     readStylePrompt,
     resolveSoulSampling: resolveSoulSamplingForStyle,
     toolRegistry: { getEnabled: () => toolRegistry.getEnabledTools() },
-    logWorldbookInjection,
     normalizeChatMessages: ((raw: ReadonlyArray<unknown>) =>
       normalizeChatMessages(raw as any)) as BuildOptionsDeps["normalizeChatMessages"],
     chatRequestTimeoutMs: getTimeoutSettings().chatRequestTimeout,

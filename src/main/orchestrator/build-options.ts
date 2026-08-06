@@ -12,7 +12,7 @@
 //   loadModelSettings / loadUserProfile / buildEnvironmentContext
 //   buildSkillCatalog / skillRegistry / resolveSlashActivation
 //   buildToneInjection / sceneEmbeddingIndex / getSceneEmbeddingProvider
-//   buildSystemPrompt / logWorldbookInjection / CHAT_REQUEST_TIMEOUT_MS
+//   buildSystemPrompt / CHAT_REQUEST_TIMEOUT_MS
 //   normalizeChatMessages / buildAlwaysOnContext / ToolDefinition
 //   scheduleMemoryWrite / inferRuntimeState / runtimeState / feelingToExpression
 //   matchSticker / stickerEmbeddingIndex / getEmbeddingProvider / loadStickerSettings
@@ -96,7 +96,6 @@ export interface BuildOptionsDeps {
   }) => ApprovedStyleSampling;
   /** 第一期：注入 toolRegistry（用于 buildToolSystemPrompt 自动生成目录）。 */
   toolRegistry: { getEnabled(): ReadonlyArray<unknown> };
-  logWorldbookInjection: (alwaysOnContext: string, systemContent: string) => void;
   normalizeChatMessages: (raw: ReadonlyArray<unknown>) => ChatMessage[];
   chatRequestTimeoutMs: number;
   captionImageForFallback?: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
@@ -626,8 +625,6 @@ export async function buildAgentRunOptions(
     ...(profile.nickname?.trim() ? { nickname: profile.nickname.trim() } : {}),
     gender: profileGender,
   };
-
-  deps.logWorldbookInjection(alwaysOnContext, systemContent);
 
   // 第一期：原始 messages 不再携带 system。FC 循环按阶段动态注入。
   const fcMessages: ChatMessage[] = withDirectImageAttachments(llmMessages as unknown as ChatMessage[], input);

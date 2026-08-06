@@ -36,7 +36,6 @@ function createBuildDeps(): BuildOptionsDeps {
     readStylePrompt: (styleId) => `STYLE_PROMPT:${styleId}`,
     resolveSoulSampling: () => ({}),
     toolRegistry: { getEnabled: () => [] },
-    logWorldbookInjection: () => {},
     normalizeChatMessages: (raw) => raw as never,
     chatRequestTimeoutMs: 1000,
     loadActionGateSystemPrompt: () => "",
