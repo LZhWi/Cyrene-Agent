@@ -75,6 +75,7 @@ import { musicState } from "./music/state";
 import { channelsState } from "./channels/state";
 import { memoryState } from "./memory/state";
 import { schedulerState } from "./scheduler/state";
+import { tokensState } from "./tokens/state";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -4940,14 +4941,13 @@ function hideTokenTooltip(): void {
 }
 
 // Chart.js 波浪面积图
-let tokenTrendChart: Chart | null = null;
 
 function renderTokenTrendChart(data: TokenDayData[]): void {
   const canvas = document.getElementById("token-trend-chart") as HTMLCanvasElement | null;
   if (!canvas) return;
 
   // 销毁旧实例避免重叠
-  if (tokenTrendChart) { tokenTrendChart.destroy(); tokenTrendChart = null; }
+  if (tokensState.trendChart) { tokensState.trendChart.destroy(); tokensState.trendChart = null; }
 
   const labels = data.map((d) => d.date);
   const inputData = data.map((d) => d.input);
@@ -5046,7 +5046,7 @@ function renderTokenTrendChart(data: TokenDayData[]): void {
     },
   };
 
-  tokenTrendChart = new Chart(canvas, config);
+  tokensState.trendChart = new Chart(canvas, config);
 }
 
 // 更新指标卡片
