@@ -79,6 +79,7 @@ import { toLocalDateTimeInputValue, isValidTimeOfDay, formatSchedulerDate, descr
 import { tokensState } from "./tokens/state";
 import { ttsState } from "./tts/state";
 import { modalState } from "./shared/modal-state";
+import { formatDateTime, escapeHtml } from "./shared/format";
 import { apiState } from "./api/state";
 import { preferencesState } from "./preferences/state";
 import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
@@ -4072,28 +4073,6 @@ function showAvatar(dataUrl: string | null): void {
   }
   img.src = dataUrl;
   if (avatarPlaceholder) avatarPlaceholder.style.display = "none";
-}
-
-function formatDateTime(timestamp: number): string {
-  if (!timestamp) return "暂无时间";
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return "暂无时间";
-  return date.toLocaleString("zh-CN", {
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/\"/g, "&quot;")
-    .replace(/'/g, "&#39;");
 }
 
 function renderEmptyState(container: HTMLElement | null, title: string, hint: string): void {
