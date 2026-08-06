@@ -78,6 +78,7 @@ import { schedulerState } from "./scheduler/state";
 import { tokensState } from "./tokens/state";
 import { ttsState } from "./tts/state";
 import { modalState } from "./shared/modal-state";
+import { apiState } from "./api/state";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -472,8 +473,6 @@ const embeddingDimensionsInput = document.getElementById("embedding-dimensions-i
 const providerProfileCache: Record<string, ProviderProfile> = {};
 
 // 当前激活的厂商：每次 applyPreset 后更新；用于"切到下一家厂商前先把当前那家的输入框值缓存住"
-let activeProvider: string = "";
-let customEndpointMode: CustomEndpointMode = "cloud";
 const runtimeSyncSelect = document.getElementById("runtime-sync") as HTMLElement;
 const runtimeSyncNote = document.getElementById("runtime-sync-note") as HTMLElement;
 const stickerEnabledInput = document.getElementById("sticker-enabled") as HTMLInputElement;
@@ -939,10 +938,10 @@ function fillModelOptions(preset: ModelPreset, preferredModel?: string): void {
  * 切厂商前调用一次，避免覆盖丢失。
  */
 function captureActiveProviderProfile(): void {
-  if (!activeProvider) return;
-  const cached = providerProfileCache[activeProvider];
+  if (!apiState.activeProvider) return;
+  const cached = providerProfileCache[apiState.activeProvider];
   // reasoning 仍由 renderReasoningControls 写入 cache；这里只保留它（不动 mode/effort）
-  providerProfileCache[activeProvider] = {
+  providerProfileCache[apiState.activeProvider] = {
     baseUrl: baseUrlInput.value.trim(),
     model: getCurrentModelValue().trim(),
     apiKey: apiKeyInput.value.trim(),
@@ -979,13 +978,13 @@ const LOCAL_ENDPOINT_AUTH_FALLBACK = "__CYRENE_LOCAL_NO_AUTH__";
 
 function getApiKeyForRequest(): string {
   const value = apiKeyInput.value.trim();
-  return getCustomEndpointMode(activeProvider) === "local" && !value
+  return getCustomEndpointMode(apiState.activeProvider) === "local" && !value
     ? LOCAL_ENDPOINT_AUTH_FALLBACK
     : value;
 }
 
 function validateActiveCustomEndpoint(): string | null {
-  const mode = getCustomEndpointMode(activeProvider);
+  const mode = getCustomEndpointMode(apiState.activeProvider);
   if (!mode) return null;
   return validateCustomEndpointConfig(mode, {
     baseUrl: baseUrlInput.value,
@@ -1028,10 +1027,10 @@ function applyCustomEndpointUI(preset: ModelPreset): void {
     return;
   }
 
-  customEndpointMode = mode;
+  apiState.customEndpointMode = mode;
   const presentation = getCustomEndpointPresentation(mode);
   customEndpointControls.querySelectorAll<HTMLButtonElement>("[data-custom-endpoint-mode]").forEach((button) => {
-    const active = button.dataset.customEndpointMode === mode;
+    const active = button.dataset.apiState.customEndpointMode === mode;
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
   });
@@ -1127,7 +1126,7 @@ function applyPreset(
     presetWebsiteLink.style.display = "none";
   }
 
-  activeProvider = preset.providerName;
+  apiState.activeProvider = preset.providerName;
   applyMultimodalUI();
 }
 
@@ -2290,7 +2289,7 @@ presetCards?.addEventListener("click", (e) => {
   captureActiveProviderProfile();
 
   const providerName = getCustomEndpointMode(cardProviderName)
-    ? getCustomEndpointProvider(customEndpointMode)
+    ? getCustomEndpointProvider(apiState.customEndpointMode)
     : cardProviderName;
   // 从缓存里取目标厂商的旧配置；没有缓存就用 preset 默认值
   const cached = providerProfileCache[providerName];
@@ -2307,11 +2306,11 @@ presetCards?.addEventListener("click", (e) => {
 
 customEndpointControls?.addEventListener("click", (e) => {
   const button = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-custom-endpoint-mode]");
-  const nextMode = button?.dataset.customEndpointMode as CustomEndpointMode | undefined;
-  if (!nextMode || nextMode === customEndpointMode) return;
+  const nextMode = button?.dataset.apiState.customEndpointMode as CustomEndpointMode | undefined;
+  if (!nextMode || nextMode === apiState.customEndpointMode) return;
 
   captureActiveProviderProfile();
-  customEndpointMode = nextMode;
+  apiState.customEndpointMode = nextMode;
   const providerName = getCustomEndpointProvider(nextMode);
   const cached = providerProfileCache[providerName];
   applyPreset(
@@ -2418,7 +2417,7 @@ workFlowAdaptBtn?.addEventListener("click", () => {
 // 测试连接按钮：调用厂商 adapter 的真实连接测试
 if (testConnectionBtn) {
   testConnectionBtn.addEventListener("click", async () => {
-    const provider = activeProvider;
+    const provider = apiState.activeProvider;
     const baseUrl = baseUrlInput.value;
     const model = getCurrentModelValue().trim();
     const customValidationError = validateActiveCustomEndpoint();
@@ -2441,7 +2440,7 @@ if (testConnectionBtn) {
         model,
         apiKey,
         explicitTransport: transportSelect.value as ProviderProfile["explicitTransport"],
-        reasoning: providerProfileCache[activeProvider]?.reasoning,
+        reasoning: providerProfileCache[apiState.activeProvider]?.reasoning,
       });
       if (result.ok) setSaveStatus("连接成功 " + result.latency + "ms · " + (result.sample ?? ""), "is-ok");
       else setSaveStatus("连接失败：" + (result.error ?? "未知错误"), "is-error");
@@ -2462,7 +2461,7 @@ multimodalToggle.addEventListener("change", () => {
 
 // Base URL 重置按钮：一键复原厂商默认 baseUrl
 baseUrlResetBtn.addEventListener("click", () => {
-  const preset = findPreset(activeProvider);
+  const preset = findPreset(apiState.activeProvider);
   if (preset) {
     baseUrlInput.value = transportSelect.value === "anthropic" && preset.anthropicBaseUrl
       ? preset.anthropicBaseUrl
@@ -2474,7 +2473,7 @@ baseUrlResetBtn.addEventListener("click", () => {
 
 baseUrlInput.addEventListener("input", updateEndpointPreview);
 transportSelect.addEventListener("change", () => {
-  const preset = findPreset(activeProvider);
+  const preset = findPreset(apiState.activeProvider);
   const currentBaseUrl = baseUrlInput.value.trim().replace(/\/$/, "");
   const knownPresetUrls = [preset.baseUrl, preset.anthropicBaseUrl]
     .filter((value): value is string => Boolean(value))
@@ -2742,13 +2741,13 @@ apiForm.addEventListener("submit", async (e) => {
     // 默认 "manual"（baseUrl 永远可改、模型名永远可填，行为等同原 Manual）。
     await window.settings!.saveConfig({
       mode: "manual",
-      provider: activeProvider,
+      provider: apiState.activeProvider,
       displayName: displayNameInput.value.trim(),
       baseUrl: baseUrlInput.value.trim(),
       model: getCurrentModelValue().trim(),
       apiKey: getApiKeyForRequest(),
       explicitTransport: transportSelect.value as ApiTransport,
-      reasoning: providerProfileCache[activeProvider]?.reasoning,
+      reasoning: providerProfileCache[apiState.activeProvider]?.reasoning,
       perProvider: { ...providerProfileCache },
       multimodal: multimodalToggle.checked,
       // 视觉配置始终传三框值，不论开关状态（开关 ON 时保留但不使用）
