@@ -8,8 +8,7 @@ import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
 import { type UiTheme } from "../shared/ui-theme";
 import { type UiFont } from "../shared/ui-font";
-import { type UiIcon } from "../shared/ui-icon";
-import { normalizeChatAppearance, type ChatAppearanceSettings } from "../shared/chat-appearance";
+import { type ChatAppearanceSettings } from "../shared/chat-appearance";
 import { isDev } from "./env";
 import {
   loadGeneralSettings,
@@ -52,11 +51,15 @@ import { getEmbeddingProvider, getSceneEmbeddingProvider } from "./rag/embedding
 import { configureDocumentIndexQueue } from "./rag/document-index-queue";
 import { runDocumentIndexJob } from "./rag/document-index-worker";
 import { CyreneAgent } from "./orchestrator/cyrene-agent";
-import { validateSearchApiKey } from "./orchestrator/search-backend-filter";
 import { createLlmClient, type LlmClient } from "./services/llm/llm-client";
 import { createTtsSynthesisService, type TtsSynthesisService } from "./services/tts/tts-synthesis-service";
 import { createEmbeddingIndexService, type EmbeddingIndexService } from "./services/embedding/embedding-index-service";
 import { registerSettingsIpc } from "./settings/settings-ipc";
+import {
+  applyGeneralSettings,
+  handleGeneralSettingsChanged,
+  syncVolcanoSearchMcp,
+} from "./settings/general-settings-lifecycle";
 import { registerMemoryUserToolIpc } from "./memory/memory-user-ipc";
 
 import { getAdapterForConfig } from "./orchestrator/vendors";
@@ -71,8 +74,8 @@ import { resolveVendorRuntimeSettings, setVendorRuntimeSettingsGetter } from "./
 
 import { toolRegistry } from "./orchestrator/tool-registry";
 import { setLive2dWindowSender } from "./orchestrator/built-in-tools";
-import { registerAllTools, syncBuiltInToolToggles } from "./orchestrator/tool-registration";
-import { initMcpManager, addMcpServer, removeMcpServer, listMcpServers, pruneMcpServersByIds } from "./orchestrator/mcp-manager";
+import { registerAllTools } from "./orchestrator/tool-registration";
+import { initMcpManager, pruneMcpServersByIds } from "./orchestrator/mcp-manager";
 import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from "./sync-mcp-builtin";
 import { initPermissionFromDisk, registerPermissionIpc, getCurrentLevel } from "./permission";
 import { registerChoiceIpc, setChoiceCardSender } from "./user-choice";
@@ -197,10 +200,16 @@ const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2
 const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 300000; // FC 总预算：20 轮 × 推理模型 ~10-15s 需 300s 余量
 
 const runtimeStateService = createRuntimeStateService();
+
+function broadcastRuntimeStateChanged(): void {
+  broadcastToAuxWindows(IPC.RUNTIME_STATE_CHANGED, runtimeStateService.getState());
+}
 runtimeStateService.onChange(() => broadcastRuntimeStateChanged());
+
 const llmClient = createLlmClient();
 const ttsSynthesisService = createTtsSynthesisService();
 const embeddingIndexService = createEmbeddingIndexService();
+const citaService = createCitaService({ llmClient });
 const socialContextService = createSocialContextService({ llmClient, enqueueLLMTask });
 
 const proactiveLifecycle = createProactiveLifecycle({ loadGeneralSettings });
@@ -209,135 +218,6 @@ const ttsSessionService = new TtsSessionService((request, signal, emit) =>
   ttsSynthesisService.synthesizeSession(request, signal, emit),
 );
 
-function applyGeneralSettings(settings: GeneralSettings): void {
-  windowManager?.setMainWindowAlwaysOnTop(settings.petAlwaysOnTop);
-  if (settings.petVisible) windowManager?.showMainWindow();
-  else windowManager?.hideMainWindow();
-  app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
-  windowManager?.applyMainWindowZoom(settings.petZoom);
-}
-
-function handleGeneralSettingsChanged(before: GeneralSettings, after: GeneralSettings): void {
-  applyGeneralSettings(after);
-  syncBuiltInToolToggles(after);
-  // 同步语言设置到 Locale Context
-  if (before.language !== after.language || before.asrLanguage !== after.asrLanguage) {
-    updateLocaleContext({
-      uiLocale: after.language,
-      dateLocale: after.language,
-      asrLanguage: after.asrLanguage,
-    });
-  }
-  if (before.uiTheme !== after.uiTheme) {
-    broadcastUiThemeChanged(after.uiTheme);
-  }
-  if (before.uiThemeRadius !== after.uiThemeRadius) {
-    broadcastUiThemeRadiusChanged(after.uiThemeRadius);
-  }
-  if (before.windowCornerRadius !== after.windowCornerRadius) {
-    broadcastWindowCornerRadiusChanged(after.windowCornerRadius);
-  }
-  if (JSON.stringify(before.uiFont) !== JSON.stringify(after.uiFont)) {
-    broadcastUiFontChanged(after.uiFont);
-  }
-  const prevAppearance = normalizeChatAppearance(before);
-  const nextAppearance = normalizeChatAppearance(after);
-  if (
-    prevAppearance.chatLineHeight !== nextAppearance.chatLineHeight
-    || prevAppearance.assistantBubbleEnabled !== nextAppearance.assistantBubbleEnabled
-  ) {
-    broadcastToAllWindows(IPC.CHAT_TYPOGRAPHY_CHANGED, nextAppearance);
-  }
-  if (before.uiIcon !== after.uiIcon) {
-    applyUiIcon(after.uiIcon);
-  }
-  if (before.screenshotHotkey !== after.screenshotHotkey) {
-    const result = screenshotService?.replaceHotkey(after.screenshotHotkey);
-    if (result && !result.ok) {
-      console.warn("[Cyrene] 截图热键注册失败，可能被其他应用占用:", after.screenshotHotkey);
-    }
-  }
-  if (
-    before.proactiveChatMode !== after.proactiveChatMode
-    || before.proactiveDeliveryTarget !== after.proactiveDeliveryTarget
-  ) {
-    proactiveLifecycle.getProactiveChatService()?.invalidate();
-  }
-  setGetCurrentAppIconPath(() => getAppIconPath(after.uiIcon));
-  void syncVolcanoSearchMcp(after);
-}
-
-/** MiniMax 搜索 MCP Server 的固定 ID。 */
-const MINIMAX_SEARCH_MCP_ID = "minimax-web-search";
-
-/**
- * 同步搜索 MCP Server：选 MiniMax+有key→注册连接，否则→移除断开。
- * 在 TTS_SAVE_SETTINGS 检测到搜索配置变化时调用。
- */
-async function syncVolcanoSearchMcp(settings: GeneralSettings): Promise<{ mcpSyncResult: string }> {
-  // ── MiniMax（PyPI包，不依赖GitHub，推荐）──
-  const minimaxEnable = settings.searchEngine === "minimax";
-  const minimaxExists = listMcpServers().some(s => s.id === MINIMAX_SEARCH_MCP_ID);
-
-  // Key 校验（不泄漏原始 Key）
-  if (minimaxEnable) {
-    const keyValidation = validateSearchApiKey(settings.searchMinimaxKey, "MiniMax API Key");
-    console.log(`[Cyrene] MiniMax Key 校验: length=${keyValidation.diagnostics.length} trimmed=${keyValidation.diagnostics.trimmed} nonAscii=${keyValidation.diagnostics.hasNonAscii} controlChars=${keyValidation.diagnostics.hasControlChars}`);
-    if (!keyValidation.valid) {
-      console.error(`[Cyrene] MiniMax Key 校验失败: ${keyValidation.error}`);
-      // Key 不合法时，如果 MCP 存在则清理
-      if (minimaxExists) {
-        try { await removeMcpServer(MINIMAX_SEARCH_MCP_ID); } catch (err) { console.error("[Cyrene] MiniMax 搜索 MCP 移除异常:", err); }
-      }
-      return { mcpSyncResult: `key_invalid: ${keyValidation.error}` };
-    }
-  }
-
-  if (minimaxEnable && !minimaxExists) {
-    console.log("[Cyrene] 注册 MiniMax 搜索 MCP Server...");
-    try {
-      const result = await addMcpServer({
-        id: MINIMAX_SEARCH_MCP_ID,
-        name: "MiniMax搜索",
-        transport: "stdio",
-        command: "uvx",
-        args: ["minimax-coding-plan-mcp", "-y"],
-        env: {
-          MINIMAX_API_KEY: settings.searchMinimaxKey.trim(),
-          MINIMAX_API_HOST: "https://api.minimaxi.com",
-        },
-      });
-      if (result.ok) {
-        console.log("[Cyrene] MiniMax 搜索 MCP 注册成功，工具:", result.toolIds?.join(", "));
-        return { mcpSyncResult: `registered: ${result.toolIds?.join(", ") ?? "none"}` };
-      } else {
-        console.error("[Cyrene] MiniMax 搜索 MCP 注册失败:", result.error);
-        return { mcpSyncResult: `register_failed: ${result.error}` };
-      }
-    } catch (err) {
-      console.error("[Cyrene] MiniMax 搜索 MCP 注册异常:", err);
-      return { mcpSyncResult: `register_exception: ${err}` };
-    }
-  } else if (!minimaxEnable && minimaxExists) {
-    console.log("[Cyrene] 移除 MiniMax 搜索 MCP Server...");
-    try { await removeMcpServer(MINIMAX_SEARCH_MCP_ID); return { mcpSyncResult: "removed" }; } catch (err) { console.error("[Cyrene] MiniMax 搜索 MCP 移除异常:", err); return { mcpSyncResult: `remove_exception: ${err}` }; }
-  } else if (minimaxEnable && minimaxExists) {
-    console.log("[Cyrene] MiniMax 搜索 key 变化，重新注册 MCP Server...");
-    try {
-      await removeMcpServer(MINIMAX_SEARCH_MCP_ID);
-      await addMcpServer({
-        id: MINIMAX_SEARCH_MCP_ID, name: "MiniMax搜索", transport: "stdio",
-        command: "uvx",
-        args: ["minimax-coding-plan-mcp", "-y"],
-        env: { MINIMAX_API_KEY: settings.searchMinimaxKey.trim(), MINIMAX_API_HOST: "https://api.minimaxi.com" },
-      });
-      return { mcpSyncResult: "reregistered" };
-    } catch (err) { console.error("[Cyrene] MiniMax 搜索 MCP 重新注册异常:", err); return { mcpSyncResult: `reregister_exception: ${err}` }; }
-  }
-  return { mcpSyncResult: "no_change" };
-}
-
-const citaService = createCitaService({ llmClient });
 
 function broadcastToAuxWindows(channel: string, payload: unknown): void {
   for (const win of [reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
@@ -345,30 +225,6 @@ function broadcastToAuxWindows(channel: string, payload: unknown): void {
       win.webContents.send(channel, payload);
     }
   }
-}
-
-function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
-  windowManager?.broadcast(IPC.UI_THEME_CHANGED, theme);
-}
-
-function broadcastUiThemeRadiusChanged(theme: GeneralSettings["uiThemeRadius"]): void {
-  windowManager?.broadcast(IPC.UI_THEME_RADIUS_CHANGED, theme);
-}
-
-function broadcastWindowCornerRadiusChanged(radius: GeneralSettings["windowCornerRadius"]): void {
-  windowManager?.broadcast(IPC.UI_WINDOW_CORNER_RADIUS_CHANGED, radius);
-}
-
-function broadcastUiFontChanged(font: GeneralSettings["uiFont"]): void {
-  windowManager?.broadcast(IPC.UI_FONT_CHANGED, font);
-}
-
-function broadcastModelConfigChanged(settings = loadModelSettings()): void {
-  broadcastToAuxWindows(IPC.MODEL_CONFIG_CHANGED, getPublicModelConfig(settings));
-}
-
-function broadcastRuntimeStateChanged(): void {
-  broadcastToAuxWindows(IPC.RUNTIME_STATE_CHANGED, runtimeStateService.getState());
 }
 
 function createWindow(manager: WindowManager): void {
@@ -381,7 +237,13 @@ function createWindow(manager: WindowManager): void {
     live2dWindowLifecycle.clear();
   });
 
-  applyGeneralSettings(loadGeneralSettings());
+  applyGeneralSettings(loadGeneralSettings(), {
+    get windowManager() { return manager; },
+    get tray() { return tray; },
+    get screenshotService() { return screenshotService; },
+    get proactiveLifecycle() { return proactiveLifecycle; },
+    broadcastToAuxWindows,
+  });
 
   bootstrapConfigGetters({
     loadGeneralSettings,
@@ -420,16 +282,6 @@ function createTray(deps: {
 
   tray.setToolTip("Cyrene");
   tray.setContextMenu(contextMenu);
-}
-
-function applyUiIcon(iconSetting: UiIcon): void {
-  const icon = nativeImage.createFromPath(getAppIconPath(iconSetting));
-  if (icon.isEmpty()) {
-    console.warn("[Cyrene] failed to load selected app icon:", iconSetting);
-    return;
-  }
-  tray?.setImage(icon);
-  windowManager?.setIconForAllWindows(icon);
 }
 
 ipcMain.handle(IPC.WINDOW_SET_INTERACTIVE, (_event, interactive: boolean) => {
@@ -543,7 +395,15 @@ app.whenReady().then(async () => {
   process.stdout.write("\n" + renderBanner() + "\n\n");
   logger.info(LogTag.Runtime, "starting Cyrene Agent");
 
-  onGeneralSettingsChanged(handleGeneralSettingsChanged);
+  onGeneralSettingsChanged((before, after) =>
+    handleGeneralSettingsChanged(before, after, {
+      get windowManager() { return windowManager; },
+      get tray() { return tray; },
+      get screenshotService() { return screenshotService; },
+      get proactiveLifecycle() { return proactiveLifecycle; },
+      broadcastToAuxWindows,
+    }),
+  );
 
   // 注入应用图标路径 getter（窗口工厂统一从这里读取，避免与 index.ts 循环依赖）
   setGetCurrentAppIconPath(() => getAppIconPath(loadGeneralSettings().uiIcon));
