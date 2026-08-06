@@ -81,6 +81,7 @@ import { modalState } from "./shared/modal-state";
 import { apiState } from "./api/state";
 import { preferencesState } from "./preferences/state";
 import { asrState } from "./asr/state";
+import { pluginsState } from "./plugins/state";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -1795,12 +1796,11 @@ amapKeyInput?.addEventListener("change", () => {
 });
 // 防抖保存：粘贴后 800ms 自动保存
 amapKeyInput?.addEventListener("input", () => {
-  clearTimeout(amapKeyDebounceTimer);
-  amapKeyDebounceTimer = setTimeout(() => {
+  clearTimeout(pluginsState.amapKeyDebounceTimer);
+  pluginsState.amapKeyDebounceTimer = setTimeout(() => {
     void saveWeatherField("amapKey", amapKeyInput.value.trim());
   }, 800);
 });
-let amapKeyDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 
 async function saveWeatherField(field: string, value: unknown): Promise<void> {
   if (!window.tts) return;
@@ -1847,10 +1847,9 @@ travelAmapKeyInput?.addEventListener("change", () => {
   void saveTravelField("amapKey", travelAmapKeyInput.value.trim());
 });
 // 防抖保存：粘贴后 800ms 自动保存
-let travelAmapKeyDebounceTimer: ReturnType<typeof setTimeout> | undefined;
 travelAmapKeyInput?.addEventListener("input", () => {
-  clearTimeout(travelAmapKeyDebounceTimer);
-  travelAmapKeyDebounceTimer = setTimeout(() => {
+  clearTimeout(pluginsState.travelAmapKeyDebounceTimer);
+  pluginsState.travelAmapKeyDebounceTimer = setTimeout(() => {
     void saveTravelField("amapKey", travelAmapKeyInput.value.trim());
   }, 800);
 });
@@ -1899,18 +1898,13 @@ emailEnabledCheckbox?.addEventListener("change", () => {
 });
 
 // 防抖保存：每个字段独立 timer，避免连续填写多个字段时只有最后一个被保存
-let emailSmtpHostTimer: ReturnType<typeof setTimeout> | undefined;
-let emailSmtpPortTimer: ReturnType<typeof setTimeout> | undefined;
-let emailSmtpUserTimer: ReturnType<typeof setTimeout> | undefined;
-let emailSmtpPassTimer: ReturnType<typeof setTimeout> | undefined;
-let emailFromNameTimer: ReturnType<typeof setTimeout> | undefined;
 
-emailSmtpHostInput?.addEventListener("input", () => { clearTimeout(emailSmtpHostTimer); emailSmtpHostTimer = setTimeout(() => void saveEmailField("emailSmtpHost", emailSmtpHostInput.value.trim()), 800); });
-emailSmtpPortInput?.addEventListener("input", () => { clearTimeout(emailSmtpPortTimer); emailSmtpPortTimer = setTimeout(() => void saveEmailField("emailSmtpPort", Number(emailSmtpPortInput.value) || 465), 800); });
+emailSmtpHostInput?.addEventListener("input", () => { clearTimeout(pluginsState.emailSmtpHostTimer); pluginsState.emailSmtpHostTimer = setTimeout(() => void saveEmailField("emailSmtpHost", emailSmtpHostInput.value.trim()), 800); });
+emailSmtpPortInput?.addEventListener("input", () => { clearTimeout(pluginsState.emailSmtpPortTimer); pluginsState.emailSmtpPortTimer = setTimeout(() => void saveEmailField("emailSmtpPort", Number(emailSmtpPortInput.value) || 465), 800); });
 emailSmtpSecureInput?.addEventListener("change", () => void saveEmailField("emailSmtpSecure", emailSmtpSecureInput.checked));
-emailSmtpUserInput?.addEventListener("input", () => { clearTimeout(emailSmtpUserTimer); emailSmtpUserTimer = setTimeout(() => void saveEmailField("emailSmtpUser", emailSmtpUserInput.value.trim()), 800); });
-emailSmtpPassInput?.addEventListener("input", () => { clearTimeout(emailSmtpPassTimer); emailSmtpPassTimer = setTimeout(() => void saveEmailField("emailSmtpPass", emailSmtpPassInput.value.trim()), 800); });
-emailFromNameInput?.addEventListener("input", () => { clearTimeout(emailFromNameTimer); emailFromNameTimer = setTimeout(() => void saveEmailField("emailFromName", emailFromNameInput.value.trim()), 800); });
+emailSmtpUserInput?.addEventListener("input", () => { clearTimeout(pluginsState.emailSmtpUserTimer); pluginsState.emailSmtpUserTimer = setTimeout(() => void saveEmailField("emailSmtpUser", emailSmtpUserInput.value.trim()), 800); });
+emailSmtpPassInput?.addEventListener("input", () => { clearTimeout(pluginsState.emailSmtpPassTimer); pluginsState.emailSmtpPassTimer = setTimeout(() => void saveEmailField("emailSmtpPass", emailSmtpPassInput.value.trim()), 800); });
+emailFromNameInput?.addEventListener("input", () => { clearTimeout(pluginsState.emailFromNameTimer); pluginsState.emailFromNameTimer = setTimeout(() => void saveEmailField("emailFromName", emailFromNameInput.value.trim()), 800); });
 
 async function saveEmailField(field: string, value: unknown): Promise<void> {
   if (!window.tts) return;
