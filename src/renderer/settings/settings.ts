@@ -88,6 +88,7 @@ import { formatDateTime, escapeHtml } from "./shared/format";
 import { parsePositiveIntOrThrow, parseN1SecToMsOrThrow, parseCommandLine } from "./shared/parse";
 import { apiState } from "./api/state";
 import { apiForm, apiRuntimeForm, apiTimeoutForm, presetCards, presetWebsiteLink, displayNameInput, baseUrlInput, baseUrlResetBtn, modelInput, modelInputSuggestions, contextWindowInput, apiKeyInput, apiKeyLabel, apiKeyHint, testConnectionBtn, transportSelect, transportHint, endpointPreview, customEndpointControls, customEndpointOverrides, customEndpointSummary, customEndpointGuideBtn, workFlowAdaptBtn, apiNoteText, multimodalToggle, chatRequestTimeoutSecInput, maxIterationsInput, maxReplansInput, maxRefreshInput, perCallTimeoutSecInput, actionGateRepairBudgetSecInput, embeddingDimensionsInput, modelRequestTimeoutSecInput, modelRequestTimeoutSecReset, toggleEnableThinking, toggleDisableThinking, toggleDisableMaxToken } from "./api/dom";
+import { visionBaseUrlInput, visionApiKeyInput, visionModelInput, visionFieldsWrap, testVisionBtn, visionTestStatus } from "./vision/dom";
 import { preferencesState } from "./preferences/state";
 import { stickerEnabledInput, stickerSizeSelect, stickerThresholdInput, stickerThresholdVal, stickerAddOverlay, stickerAddPickBtn, stickerAddFileName, stickerAddId, stickerAddDesc, stickerAddPhrases, stickerAddError, stickerAddConfirm, stickerAddCancel } from "./preferences/dom";
 import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
@@ -420,12 +421,6 @@ const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLEl
 // API 协议下拉（openai / anthropic）—— 不根据 URL 自动猜测。
 
 // 视觉模型配置区元素
-const visionBaseUrlInput = document.getElementById("vision-base-url") as HTMLInputElement;
-const visionApiKeyInput = document.getElementById("vision-api-key") as HTMLInputElement;
-const visionModelInput = document.getElementById("vision-model") as HTMLInputElement;
-const visionFieldsWrap = document.getElementById("vision-fields-wrap") as HTMLElement;
-const testVisionBtn = document.getElementById("test-vision-btn") as HTMLButtonElement;
-const visionTestStatus = document.getElementById("vision-test-status") as HTMLElement;
 
 // 高级运行设置
 
