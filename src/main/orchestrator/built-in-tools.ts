@@ -547,15 +547,13 @@ async function omFetchWeather(city: string, coordinates?: { latitude: number; lo
       });
     }
 
-    return [
-      `城市：${loc.name}（${adm}）`,
-      `天气：${wmoText}`,
-      `温度：${c.temperature_2m}°C（体感 ${c.apparent_temperature}°C）`,
-      `风向风速：${windDir} ${c.wind_speed_10m}km/h`,
-      `湿度：${c.relative_humidity_2m}%`,
-      `降水量：${c.precipitation}mm`,
-      `气压：${c.surface_pressure}hPa`,
-    ].join("\n");
+    return JSON.stringify({
+      city: loc.name, region: adm, weather: wmoText,
+      temperature: c.temperature_2m, feelsLike: c.apparent_temperature,
+      humidity: c.relative_humidity_2m, windDir, windSpeed: `${c.wind_speed_10m}km/h`,
+      precipitation: c.precipitation, pressure: Math.round(c.surface_pressure),
+      source: "Open-Meteo",
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return "[错误] 天气查询失败：" + msg;
@@ -679,14 +677,13 @@ async function amapFetchWeather(city: string, key: string): Promise<string> {
       });
     }
 
-    return [
-      `城市：${w.city}（${w.province}）`,
-      `天气：${w.weather}`,
-      `温度：${w.temperature}°C`,
-      `风向风速：${w.winddirection}风 ${w.windpower}级`,
-      `湿度：${w.humidity}%`,
-      `发布时间：${w.reporttime}`,
-    ].join("\n");
+    return JSON.stringify({
+      city: w.city, region: w.province, weather: w.weather,
+      temperature: Number(w.temperature),
+      humidity: Number(w.humidity), windDir: w.winddirection, windScale: `${w.windpower}级`,
+      reportTime: w.reporttime,
+      source: "高德天气",
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return "[错误] 天气查询失败：" + msg;

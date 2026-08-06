@@ -233,6 +233,14 @@ async function callAdapter(
     });
     if (!response.ok) {
       const errorText = await response.text().catch(() => "");
+      // wire-level 诊断：记录请求形状（model/tool_choice/reasoning 等），便于排查 400 类问题
+      console.warn(LOG_PREFIX, "HTTP", response.status, "请求形状:", {
+        model: req.model,
+        hasTools: Boolean(req.tools?.length),
+        toolChoice: req.toolChoice,
+        reasoning: cfg.reasoning,
+        stream: req.stream,
+      }, "body:", errorText.slice(0, 500));
       throw new Error("模型请求失败：HTTP " + response.status + (errorText ? " — " + errorText.slice(0, 200) : ""));
     }
     return await response.json();
@@ -314,7 +322,14 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     };
     if (toolSpecs.length > 0) req = { ...req, tools: toolSpecs };
     if (round === 0 && options.requiredToolName && runnableToolIds.has(options.requiredToolName)) {
-      req = { ...req, toolChoice: { name: options.requiredToolName } };
+      // Kimi k2.6 等模型开思考时不接受 tool_choice: specified（报 400
+      // "tool_choice 'specified' is incompatible with thinking enabled"）。
+      // 工具阶段默认强制 reasoning: off，但防御性检查：若 reasoning 不是 off，
+      // 不设 toolChoice 让厂商用 auto，避免 400。
+      const reasoningMode = toolPhaseSettings.reasoning?.mode;
+      if (reasoningMode === "off") {
+        req = { ...req, toolChoice: { name: options.requiredToolName } };
+      }
     }
     if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, toolPhaseSettings);
 

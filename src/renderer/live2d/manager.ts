@@ -127,7 +127,9 @@ export class Live2DManager {
       // under the cursor to decide transparent vs. opaque). Without this the
       // WebGL framebuffer is cleared after each frame and readPixels is UB.
       preserveDrawingBuffer: true,
-      resolution: window.devicePixelRatio || 1,
+      // Cap DPR to avoid an oversized WebGL drawing buffer on high-DPI
+      // displays; 2x is enough visual fidelity for the pet window.
+      resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
     });
     try {
@@ -310,8 +312,21 @@ export class Live2DManager {
       this.model = null;
     }
     if (this.app) {
-      this.app.destroy(false, { children: true, texture: true });
+      this.app.destroy(false, { children: true, texture: true, baseTexture: true });
       this.app = null;
+    }
+    // Explicitly clear PIXI global texture caches so a reload/reinit does not
+    // retain GPU memory from the previous model session.
+    const pixiUtils = (PIXI as unknown as { utils?: { TextureCache?: Record<string, unknown>; BaseTextureCache?: Record<string, unknown> } }).utils;
+    if (pixiUtils?.TextureCache) {
+      for (const key of Object.keys(pixiUtils.TextureCache)) {
+        delete pixiUtils.TextureCache[key];
+      }
+    }
+    if (pixiUtils?.BaseTextureCache) {
+      for (const key of Object.keys(pixiUtils.BaseTextureCache)) {
+        delete pixiUtils.BaseTextureCache[key];
+      }
     }
   }
 }
