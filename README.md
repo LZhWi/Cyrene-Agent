@@ -20,8 +20,10 @@
 
 - 🪟 **Live2D 桌宠** — 置顶陪伴，情感同步
 - 💬 **AI 对话** — 多会话历史，人格风格切换
+- 💼 **Work 模式** — Router→Plan→ActionGate 完整 Agent 工作流
 - 🧠 **记忆引擎** — L0/L1/L2 + 自研 DMAE Worldbook
 - 🔊 **语音通话** — TTS + ASR，解放双手
+- 🖥️ **屏幕监控** — VLM 分析屏幕活动，主动消息智能判断是否打扰
 - 🛠 **工具生态** — 文档生成、联网搜索、文件操作
 - 📱 **多平台接入** — 飞书、微信 iLink
 - 🌙 **主动聊天** — 路由可控 + 多渠道投递
@@ -215,6 +217,9 @@ call 窗口**没有文本输入框**或 PTT（Push-To-Talk）按钮，所有对�
 | --- | --- |
 | 🪟 桌宠 / 多窗口 / 表情互动 | ✅ 可用 |
 | 💬 日常聊天 / 语音通话 / 多会话历史 / 贴纸 | ✅ 可用 |
+| 💼 Work 模式（Router→Plan→ActionGate） | ✅ 可用 |
+| 🖥️ 屏幕监控（VLM 分析 + proactive 注入） | 🧪 实验性 |
+| 💬 社交上下文（对话连续性缓存） | 🧪 实验性 |
 | 🧠 记忆系统（L0/L1/L2 + 自研 DMAE Worldbook 引擎） | ✅ 可用 |
 | 🔊 TTS / ASR / 文档生成 / 联网搜索 / 文件操作 | ✅ 可用（部分需配置） |
 | 📱 飞书 Lark 长连接 | 🧪 实验性 |
@@ -244,6 +249,10 @@ call 窗口**没有文本输入框**或 PTT（Push-To-Talk）按钮，所有对�
 - **日常聊天 + 语音通话** — 桌面 / 手机 / 通话三种人格风格切换，
   状态机 `IDLE → LISTENING → THINKING → SPEAKING → ENDED`，
   24 轮滑动窗口上下文。
+- **通话记录 UI** — 通话结束后在聊天窗口显示通话气泡（时长+时间），
+  点击展开梗概，可删除，不参与 LLM 上下文。
+- **社交上下文** — short_term（14天TTL）/open_loop（72小时TTL）两类原子，
+  embedding+lexical+recency 混合检索，对话连续性缓存。
 - **多会话历史** — 每会话独立 JSON 持久化，自动派生标题、`updatedAt`
   排序，双击重命名。
 - **AG-UI 事件流** — 标准化事件（RUN_STARTED / TEXT_MESSAGE / TOOL_CALL /
@@ -276,6 +285,8 @@ call 窗口**没有文本输入框**或 PTT（Push-To-Talk）按钮，所有对�
 - **生活小工具** — 记账、汇率、翻译、行程规划、unified diff 应用。
 - **任务委派** — `delegate_task`（sub-agent）、`todo_write`（任务清单）、
   `ask_user_choice`（用户选择卡片）。
+- **屏幕观察** — `get_screen_observation` 工具让 LLM 按需截图并用视觉模型
+  分析用户屏幕活动，30 秒缓存复用，敏感信息模糊化。
 
 <details>
 <summary><b>🧩 高级功能</b>（点击展开）</summary>
@@ -316,6 +327,19 @@ call 窗口**没有文本输入框**或 PTT（Push-To-Talk）按钮，所有对�
 - **渠道化投递** —— 偏好设置可选「本地 / 微信 / 飞书」作为主动消息目的地；手机渠道不可用时取消发送，不会改投本地。
 - **运行时护栏** —— hard safety policy、guarded prompt、tool-free model runner、proactive session singleton 多层兜底。
 - **不打搅时段** —— 深夜无操作 / 正常聊天中 / 连续两次未回复不会触发。
+- **屏幕活动注入** —— 若启用屏幕监控，proactive 发起前注入最近屏幕观察摘要，让 LLM 判断用户是否在忙，决定是否打扰。
+
+#### 💼 Work 模式
+- **独立窗口** —— 独立 BrowserWindow，不干扰主聊天。
+- **Router→Plan→ActionGate** —— 任务路由→计划生成→动作门控，完整 Agent 工作流。
+- **独立记忆** —— Work memory 与主聊天 memory 完全隔离，不交叉污染。
+- **工具过滤** —— 排除 recall_history / user_memory / delegate_task / ask_user_choice，
+  只保留执行类工具。
+
+#### 🖥️ 屏幕监控
+- **后台状态机** —— 每 3 分钟截图+VLM 分析，文本相似度判断低变化，连续 2 次低变化自动停止。
+- **观测缓存** —— 进程内最多 50 条观测，2 小时保留，不存图片只存文本摘要。
+- **隐私保护** —— prompt 要求 VLM 模糊化敏感信息（账号/密码/证件号），默认关闭，需配置视觉模型。
 
 </details>
 
@@ -382,10 +406,12 @@ src/
 │   ├── rag/          # 检索增强生成 + worldbook 注入
 │   ├── relationship/ # 用户关系画像
 │   ├── scheduler/    # 定时任务（提醒 / 日程）
+│   ├── screen-monitor/ # 屏幕监控（截图+VLM分析+状态机）
 │   ├── sim/          # 场景模拟工具
 │   ├── skills/       # Agent skill 系统
 │   ├── sticker-*.ts  # 贴纸语义匹配（协议 / 存储 / 描述 / embedder）
-│   └── tts/          # 语音合成（多引擎）
+│   ├── tts/          # 语音合成（多引擎）
+│   └── work/         # Work 模式（Router→Plan→ActionGate）
 ├── preload/          # Electron preload 桥接
 ├── renderer/         # Vite 渲染层
 │   ├── call/         # 语音通话窗口
