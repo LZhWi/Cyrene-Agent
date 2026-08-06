@@ -75,6 +75,7 @@ import { musicState } from "./music/state";
 import { channelsState } from "./channels/state";
 import { memoryState } from "./memory/state";
 import { schedulerState } from "./scheduler/state";
+import { schedulerNewBtn, schedulerEmpty, schedulerList, schedulerEditor, schedulerEditorTitle, schedulerEditorClose, schedulerTitleInput, schedulerPromptInput, schedulerEnabledInput, schedulerKindInput, schedulerOnceRunAtInput, schedulerTimeOfDayInput, schedulerDayOfWeekInput, schedulerIntervalEveryInput, schedulerIntervalUnitInput, schedulerToolLimitInput, schedulerToolPicker, schedulerToolEmptyHint, schedulerSaveStatus, schedulerCancelBtn, schedulerSaveBtn } from "./scheduler/dom";
 import { toLocalDateTimeInputValue, isValidTimeOfDay, formatSchedulerDate, describeSchedule } from "./scheduler/utils";
 import { tokensState } from "./tokens/state";
 import { ttsState } from "./tts/state";
@@ -406,27 +407,6 @@ const runtimeSaveStatus = document.getElementById("runtime-save-status") as HTML
 const preferencesSaveStatus = document.getElementById("preferences-save-status") as HTMLElement;
 const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLElement;
 
-const schedulerNewBtn = document.getElementById("scheduler-new-btn") as HTMLButtonElement | null;
-const schedulerEmpty = document.getElementById("scheduler-empty") as HTMLDivElement | null;
-const schedulerList = document.getElementById("scheduler-list") as HTMLDivElement | null;
-const schedulerEditor = document.getElementById("scheduler-editor") as HTMLDivElement | null;
-const schedulerEditorTitle = document.getElementById("scheduler-editor-title") as HTMLHeadingElement | null;
-const schedulerEditorClose = document.getElementById("scheduler-editor-close") as HTMLButtonElement | null;
-const schedulerTitleInput = document.getElementById("scheduler-title") as HTMLInputElement | null;
-const schedulerPromptInput = document.getElementById("scheduler-prompt") as HTMLTextAreaElement | null;
-const schedulerEnabledInput = document.getElementById("scheduler-enabled") as HTMLInputElement | null;
-const schedulerKindInput = document.getElementById("scheduler-kind") as HTMLSelectElement | null;
-const schedulerOnceRunAtInput = document.getElementById("scheduler-once-run-at") as HTMLInputElement | null;
-const schedulerTimeOfDayInput = document.getElementById("scheduler-time-of-day") as HTMLInputElement | null;
-const schedulerDayOfWeekInput = document.getElementById("scheduler-day-of-week") as HTMLSelectElement | null;
-const schedulerIntervalEveryInput = document.getElementById("scheduler-interval-every") as HTMLInputElement | null;
-const schedulerIntervalUnitInput = document.getElementById("scheduler-interval-unit") as HTMLSelectElement | null;
-const schedulerToolLimitInput = document.getElementById("scheduler-tool-limit") as HTMLInputElement | null;
-const schedulerToolPicker = document.getElementById("scheduler-tool-picker") as HTMLDivElement | null;
-const schedulerToolEmptyHint = document.getElementById("scheduler-tool-empty-hint") as HTMLDivElement | null;
-const schedulerSaveStatus = document.getElementById("scheduler-save-status") as HTMLDivElement | null;
-const schedulerCancelBtn = document.getElementById("scheduler-cancel-btn") as HTMLButtonElement | null;
-const schedulerSaveBtn = document.getElementById("scheduler-save-btn") as HTMLButtonElement | null;
 
 
 const presetCards = document.getElementById("preset-cards") as HTMLElement;
