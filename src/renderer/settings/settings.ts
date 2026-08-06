@@ -91,6 +91,7 @@ import { preferencesState } from "./preferences/state";
 import { stickerEnabledInput, stickerSizeSelect, stickerThresholdInput, stickerThresholdVal, stickerAddOverlay, stickerAddPickBtn, stickerAddFileName, stickerAddId, stickerAddDesc, stickerAddPhrases, stickerAddError, stickerAddConfirm, stickerAddCancel } from "./preferences/dom";
 import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
 import { asrState } from "./asr/state";
+import { asrEngineSelect, asrAliyunConfig, asrAliyunAppKeyInput, asrAliyunAccessKeyIdInput, asrAliyunAccessKeySecretInput, asrLanguageSelect, asrVadSilenceInput, asrVadThresholdInput, asrVadThresholdValue, asrShowTranscriptCheckbox } from "./asr/dom";
 import { pluginsState } from "./plugins/state";
 import type {
   GeneralSettings,
@@ -1852,16 +1853,6 @@ async function loadEmailConfig(): Promise<void> {
 void loadEmailConfig();
 
 // ── 🎧ASR 设置 ──
-const asrEngineSelect = document.getElementById("asr-engine") as HTMLSelectElement | null;
-const asrAliyunConfig = document.getElementById("asr-aliyun-config");
-const asrAliyunAppKeyInput = document.getElementById("asr-aliyun-app-key") as HTMLInputElement | null;
-const asrAliyunAccessKeyIdInput = document.getElementById("asr-aliyun-access-key-id") as HTMLInputElement | null;
-const asrAliyunAccessKeySecretInput = document.getElementById("asr-aliyun-access-key-secret") as HTMLInputElement | null;
-const asrLanguageSelect = document.getElementById("asr-language") as HTMLSelectElement | null;
-const asrVadSilenceInput = document.getElementById("asr-vad-silence") as HTMLInputElement | null;
-const asrVadThresholdInput = document.getElementById("asr-vad-threshold") as HTMLInputElement | null;
-const asrVadThresholdValue = document.getElementById("asr-vad-threshold-value");
-const asrShowTranscriptCheckbox = document.getElementById("asr-show-transcript") as HTMLInputElement | null;
 
 function syncAsrVisibility(): void {
   if (asrAliyunConfig) {
