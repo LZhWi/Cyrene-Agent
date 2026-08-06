@@ -151,7 +151,6 @@ import {
   saveModelSettings,
 } from "./settings/model-settings";
 import type { GeneralSettings } from "./settings/general-settings";
-import { loadPromptFile } from "./prompts/prompt-loader";
 import { bootstrapConfigGetters } from "./startup/bootstrap-config";
 import { loadMemoryPanelData } from "./memory/panel";
 import { type RuntimeState } from "./runtime-state";
@@ -205,8 +204,7 @@ import {
   setStickerEnabled,
 } from "./orchestrator/sticker-settings";
 import { createProactiveLifecycle } from "./proactive/proactive-lifecycle";
-import { normalizeCitaSettings } from "./cita/settings";
-import { CitaService, ContextStore, RemoteSemanticEngine } from "./cita";
+import { createCitaService } from "./services/cita/cita-service";
 import { contextRefRegistry } from "./orchestrator/tool-context";
 import { getTimeoutSettings, saveTimeoutSettings } from "./timeout-manager";
 import { TimeoutSettings } from "../shared/timeout-types";
@@ -392,64 +390,7 @@ async function syncVolcanoSearchMcp(settings: GeneralSettings): Promise<{ mcpSyn
   return { mcpSyncResult: "no_change" };
 }
 
-const citaService = new CitaService({
-  store: new ContextStore(),
-  engine: new RemoteSemanticEngine(
-    async (request, signal) => {
-      const settings = loadModelSettings();
-      // Kimi k2.6 只允许特定 temperature（0.6），传 0 会被拒。
-      // 省略让服务端用默认值，其他模型继续 temperature=0 保证确定性。
-      const citaTemp = settings.model.match(/^kimi-k2\.6(?:$|-)/i) ? undefined : 0;
-      return llmClient.chatNonStream(
-        settings,
-        [
-          { role: "system", content: request.systemPrompt },
-          { role: "user", content: request.userPrompt },
-        ],
-        citaTemp,
-        6_000,
-        "CITA understandTurn",
-        { mode: "off" as const },
-        {
-          structuredOutput: request.structuredOutput,
-          maxTokens: request.maxTokens,
-          extraBody: request.extraBody,
-        },
-        signal,
-      );
-    },
-    {
-      timeoutMs: 8_000,
-      systemPrompt: loadPromptFile("cita_system.md"),
-      getProfile: () => {
-        const settings = loadModelSettings();
-        const cfg: VendorConfig = {
-          provider: settings.provider,
-          baseUrl: settings.baseUrl,
-          model: settings.model,
-          apiKey: settings.apiKey,
-          explicitTransport: settings.explicitTransport,
-          reasoning: { mode: "off" },
-        };
-        const adapter = getAdapterForConfig(cfg);
-        return resolveStructuredOutputProfile({
-          provider: adapter.id,
-          model: cfg.model,
-          transport: adapter.transport,
-          endpointKind: classifyStructuredOutputEndpoint({
-            providerId: adapter.id,
-            configuredBaseUrl: cfg.baseUrl,
-            officialBaseUrl: adapter.capability.baseUrl,
-          }),
-        });
-      },
-    },
-  ),
-  getSettings: () => normalizeCitaSettings({
-    enabled: loadGeneralSettings().citaEnabled,
-    semanticEngine: loadGeneralSettings().citaSemanticEngine,
-  }),
-});
+const citaService = createCitaService({ llmClient });
 
 function broadcastToAuxWindows(channel: string, payload: unknown): void {
   for (const win of [reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
