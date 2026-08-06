@@ -206,11 +206,7 @@ import { initChannels, shutdownChannels, setChannelsConversationLifecycle } from
 import { buildChannelAttachmentInputs } from "./channels/agent-input";
 import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadGeneralSettings, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
-import { getSchedulerStore } from "./scheduler/scheduler-store";
-import { SchedulerEngine } from "./scheduler/scheduler-engine";
-import { createSchedulerRunner } from "./scheduler/scheduler-runner";
-import { registerSchedulerIpc } from "./scheduler/scheduler-ipc";
-import type { ScheduledTask } from "./scheduler/types";
+import { createSchedulerSubsystem, type SchedulerSubsystem } from "./scheduler/bootstrap";
 import { createAgentRuntime, type AgentRuntime } from "./orchestrator/agent-runtime";
 import { createRuntimeStateService } from "./orchestrator/runtime-state-service";
 import {
@@ -247,7 +243,7 @@ async function reconcileUserMemoryIndex(): Promise<void> {
 }
 
 let tray: Tray | null = null;
-let schedulerEngine: SchedulerEngine | null = null;
+let schedulerSubsystem: SchedulerSubsystem | null = null;
 let screenshotService: ScreenshotService | null = null;
 let windowManager: WindowManager | null = null;
 const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
@@ -2139,9 +2135,6 @@ app.whenReady().then(async () => {
     });
   }
 
-  const schedulerStore = getSchedulerStore();
-  schedulerStore.load();
-
   // AG-UI 事件流桥：渲染进程 invoke(AGUI_RUN) → CyreneAgent 跑 FC 循环 → 事件透传
   // buildOptions 负责统一构建上下文；onRunFinished 复用副作用
   // Phase 0 重构：抽出到 orchestrator/build-options.ts，三处共用（桌面 / scheduler / bot）
@@ -2248,18 +2241,7 @@ app.whenReady().then(async () => {
     socialAtomStore,
   });
 
-  const schedulerRunner = createSchedulerRunner({
-    buildOptions: (task) => agentRuntime.buildSchedulerOptions(task),
-    getChatWebContents: () => (reactChatWindow && !reactChatWindow.isDestroyed() ? reactChatWindow.webContents : null),
-    recordHistory: (entry) => schedulerStore.recordHistory(entry),
-    id: () => `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    now: () => new Date(),
-  });
-  schedulerEngine = new SchedulerEngine({
-    store: schedulerStore,
-    runTask: schedulerRunner.runScheduledTask,
-  });
-  registerSchedulerIpc(schedulerStore, schedulerEngine, () => toolRegistry.getAllTools());
+  schedulerSubsystem = createSchedulerSubsystem(agentRuntime, () => reactChatWindow);
 
   registerAgUiIpc(
     (input) => agentRuntime.buildOptions(input),
@@ -2351,7 +2333,7 @@ app.whenReady().then(async () => {
 
   embeddingIndexService.scheduleStartupRefreshes();
 
-  schedulerEngine.start();
+  schedulerSubsystem.engine.start();
 });
 
 app.on("window-all-closed", () => {});
@@ -2359,7 +2341,7 @@ app.on("window-all-closed", () => {});
 // 应用退出前把 token 用量缓存落盘（防抖未触发的最后一次写）
 app.on("before-quit", () => {
   windowManager?.dispose();
-  schedulerEngine?.stop();
+  schedulerSubsystem?.engine.stop();
   proactiveLifecycle.stopProactiveTrigger();
   codeRunWorker.cleanup();
   flushTokenUsage();
