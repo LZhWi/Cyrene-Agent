@@ -46,6 +46,10 @@ export interface WorkArtifact {
   createdAt: number;
 }
 
+/** 会话模式：work=普通工作；code=绑定代码目录的只读分析；learn=绑定笔记库的学习陪伴。
+ *  旧会话 JSON 无此字段，读取时缺省视为 "work"。 */
+export type WorkSessionMode = "work" | "code" | "learn";
+
 export interface WorkSession {
   schemaVersion: 1;
   id: string;
@@ -54,6 +58,9 @@ export interface WorkSession {
   plan?: WorkPlan;
   artifacts: WorkArtifact[];
   status: "idle" | "running" | "awaiting_user" | "completed" | "failed" | "cancelled";
+  mode?: WorkSessionMode;
+  /** code/learn 会话绑定的目录（绝对路径）；文件工具沙箱根。 */
+  boundDir?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -63,6 +70,7 @@ export interface WorkSessionMeta {
   title: string;
   status: WorkSession["status"];
   messageCount: number;
+  mode?: WorkSessionMode;
   createdAt: number;
   updatedAt: number;
 }

@@ -8,6 +8,7 @@ import type {
   WorkPlan,
   WorkSession,
   WorkSessionMeta,
+  WorkSessionMode,
 } from "../../shared/work-types";
 
 const ROOT_DIR_NAME = "cyrene-work";
@@ -57,12 +58,19 @@ function sessionPath(id: string): string {
   return path.join(sessionsDir, `${id}.json`);
 }
 
+/** 旧会话 JSON 无 mode 字段，缺省视为普通工作会话。 */
+export function workSessionMode(session: WorkSession): WorkSessionMode {
+  return session.mode === "code" || session.mode === "learn" ? session.mode : "work";
+}
+
 function metaFromSession(session: WorkSession): WorkSessionMeta {
+  const mode = workSessionMode(session);
   return {
     id: session.id,
     title: session.title,
     status: session.status,
     messageCount: session.messages.length,
+    ...(mode !== "work" ? { mode } : {}),
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   };
@@ -111,15 +119,22 @@ export function getWorkSession(id: string): WorkSession | null {
   }
 }
 
-export function createWorkSession(title?: string): WorkSession {
+export function createWorkSession(
+  title?: string,
+  mode?: WorkSessionMode,
+  boundDir?: string,
+): WorkSession {
   const now = Date.now();
+  const normalizedMode = mode === "code" || mode === "learn" ? mode : "work";
   const session: WorkSession = {
     schemaVersion: 1,
     id: randomUUID(),
-    title: title?.trim() || "新工作",
+    title: title?.trim() || (normalizedMode === "code" ? "新代码会话" : normalizedMode === "learn" ? "新学习会话" : "新工作"),
     messages: [],
     artifacts: [],
     status: "idle",
+    ...(normalizedMode !== "work" ? { mode: normalizedMode } : {}),
+    ...(normalizedMode !== "work" && boundDir ? { boundDir } : {}),
     createdAt: now,
     updatedAt: now,
   };
@@ -127,10 +142,12 @@ export function createWorkSession(title?: string): WorkSession {
   return session;
 }
 
+const DEFAULT_SESSION_TITLES = new Set(["新工作", "新代码会话", "新学习会话"]);
+
 export function saveWorkSession(session: WorkSession): WorkSession {
   const next: WorkSession = {
     ...session,
-    title: session.title === "新工作" ? deriveTitle(session.messages) : session.title,
+    title: DEFAULT_SESSION_TITLES.has(session.title) ? deriveTitle(session.messages) : session.title,
     updatedAt: Date.now(),
   };
   persistSession(next);

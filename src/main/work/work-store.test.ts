@@ -56,4 +56,32 @@ describe("work store isolation", () => {
       artifacts: [expect.objectContaining({ name: "r.md" })],
     }));
   });
+
+  it("creates code/learn sessions with mode and bound directory", async () => {
+    const store = await import("./work-store");
+    store.initializeWorkStore();
+    const codeSession = store.createWorkSession(undefined, "code", "E:\\projects\\demo");
+    expect(codeSession.mode).toBe("code");
+    expect(codeSession.boundDir).toBe("E:\\projects\\demo");
+    expect(store.workSessionMode(codeSession)).toBe("code");
+
+    const learnSession = store.createWorkSession(undefined, "learn", "D:\\vault");
+    expect(store.listWorkSessions()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: learnSession.id, mode: "learn" }),
+      ]),
+    );
+  });
+
+  it("defaults legacy sessions without mode to work", async () => {
+    const store = await import("./work-store");
+    store.initializeWorkStore();
+    const session = store.createWorkSession("legacy");
+    expect(session.mode).toBeUndefined();
+    expect(store.workSessionMode(session)).toBe("work");
+    // 非法 mode 值归一化为 work 且不写 boundDir。
+    const bogus = store.createWorkSession("bogus", "hack" as never, "C:\\Windows");
+    expect(bogus.mode).toBeUndefined();
+    expect(bogus.boundDir).toBeUndefined();
+  });
 });

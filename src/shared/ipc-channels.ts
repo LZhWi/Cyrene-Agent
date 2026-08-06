@@ -58,6 +58,7 @@ export const IPC = {
   WORK_SESSIONS_RENAME: "work:sessions:rename",
   WORK_SESSIONS_DELETE: "work:sessions:delete",
   WORK_OPEN_FOLDER: "work:open-folder",
+  WORK_SELECT_DIR: "work:select-dir",
   WORK_MEMORY_LIST: "work:memory:list",
   WORK_MEMORY_DELETE: "work:memory:delete",
   WORK_PROCESS_DOCUMENTS: "work:process-documents",

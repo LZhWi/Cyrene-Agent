@@ -38,10 +38,11 @@ interface WorkApi {
   toggleMaximize(): void;
   listSessions(): Promise<WorkSessionMeta[]>;
   getSession(id: string): Promise<WorkSession | null>;
-  createSession(title?: string): Promise<WorkSession>;
+  createSession(options?: string | { title?: string; mode?: "work" | "code" | "learn"; boundDir?: string }): Promise<WorkSession>;
   renameSession(id: string, title: string): Promise<WorkSession | null>;
   deleteSession(id: string): Promise<boolean>;
   openFolder(): Promise<void>;
+  selectDir(): Promise<string | null>;
   openModelSettings(): void;
   listMemory(): Promise<Array<{ id: string; content: string; updatedAt: number }>>;
   deleteMemory(id: string): Promise<boolean>;
@@ -130,6 +131,13 @@ function renderSessionList(): void {
     button.className = `session-item${activeSession?.id === session.id ? " is-active" : ""}`;
     const title = document.createElement("strong");
     title.textContent = session.title;
+    if (session.mode === "code" || session.mode === "learn") {
+      const badge = document.createElement("span");
+      badge.className = "session-mode-badge";
+      badge.textContent = session.mode === "code" ? "💻" : "📖";
+      badge.title = session.mode === "code" ? "Code 模式" : "Learn 模式";
+      title.prepend(badge, " ");
+    }
     const meta = document.createElement("span");
     meta.textContent = `${session.status} · ${formatTime(session.updatedAt)}`;
     button.append(title, meta);
@@ -343,17 +351,59 @@ async function openSession(id: string): Promise<void> {
 
 function renderCurrentSession(): void {
   sessionTitle.textContent = activeSession?.title ?? "新工作";
+  renderSessionHint();
   renderMessages();
   renderPlan(activeSession?.plan);
   renderArtifacts(activeSession);
 }
 
-byId<HTMLButtonElement>("new-session-btn").addEventListener("click", async () => {
-  if (running) return;
-  activeSession = await api.createSession();
+function renderSessionHint(): void {
+  const mode = activeSession?.mode;
+  if (mode === "code" || mode === "learn") {
+    const label = mode === "code" ? "💻 Code 模式" : "📖 Learn 模式";
+    const dir = activeSession?.boundDir
+      ? `绑定：${activeSession.boundDir}`
+      : "未绑定目录（文件工具不可用）";
+    sessionHint.textContent = `${label} · 只读 · ${dir}`;
+    sessionHint.title = activeSession?.boundDir ?? "";
+  } else {
+    sessionHint.textContent = "独立历史 · 独立记忆 · 严格工作流";
+    sessionHint.title = "";
+  }
+}
+
+const modeDialog = byId<HTMLDialogElement>("mode-dialog");
+const sessionHint = byId<HTMLParagraphElement>("session-hint");
+
+async function createSessionWithMode(mode: "work" | "code" | "learn"): Promise<void> {
+  modeDialog.close();
+  let boundDir: string | undefined;
+  if (mode !== "work") {
+    const selected = await api.selectDir();
+    if (selected === null) {
+      // 用户取消选目录：仍创建会话，但不注入文件工具（LLM 会提示需要绑定目录）。
+      boundDir = undefined;
+    } else {
+      boundDir = selected;
+    }
+  }
+  activeSession = await api.createSession(mode === "work" ? undefined : { mode, ...(boundDir ? { boundDir } : {}) });
   await refreshSessions();
   inputEl.focus();
+}
+
+byId<HTMLButtonElement>("new-session-btn").addEventListener("click", () => {
+  if (running) return;
+  modeDialog.showModal();
 });
+
+modeDialog.querySelectorAll<HTMLButtonElement>(".mode-option").forEach((option) => {
+  option.addEventListener("click", () => {
+    const mode = option.dataset.mode;
+    if (mode === "work" || mode === "code" || mode === "learn") void createSessionWithMode(mode);
+  });
+});
+byId<HTMLButtonElement>("mode-close-btn").addEventListener("click", () => modeDialog.close());
 
 composer.addEventListener("submit", async (event) => {
   event.preventDefault();

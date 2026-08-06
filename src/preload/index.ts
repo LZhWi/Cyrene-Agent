@@ -85,10 +85,12 @@ const workApi = {
   isMaximized: () => ipcRenderer.invoke(IPC.WORK_IS_MAXIMIZED),
   listSessions: () => ipcRenderer.invoke(IPC.WORK_SESSIONS_LIST),
   getSession: (id: string) => ipcRenderer.invoke(IPC.WORK_SESSIONS_GET, id),
-  createSession: (title?: string) => ipcRenderer.invoke(IPC.WORK_SESSIONS_CREATE, title),
+  createSession: (options?: string | { title?: string; mode?: "work" | "code" | "learn"; boundDir?: string }) =>
+    ipcRenderer.invoke(IPC.WORK_SESSIONS_CREATE, options),
   renameSession: (id: string, title: string) => ipcRenderer.invoke(IPC.WORK_SESSIONS_RENAME, { id, title }),
   deleteSession: (id: string) => ipcRenderer.invoke(IPC.WORK_SESSIONS_DELETE, id),
   openFolder: () => ipcRenderer.invoke(IPC.WORK_OPEN_FOLDER),
+  selectDir: () => ipcRenderer.invoke(IPC.WORK_SELECT_DIR),
   openModelSettings: () => ipcRenderer.send(IPC.SIDEBAR_OPEN_SETTINGS, "api-work"),
   listMemory: () => ipcRenderer.invoke(IPC.WORK_MEMORY_LIST),
   deleteMemory: (id: string) => ipcRenderer.invoke(IPC.WORK_MEMORY_DELETE, id),

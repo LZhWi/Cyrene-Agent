@@ -211,6 +211,14 @@ dialog::backdrop { background: rgba(5, 3, 12, 0.68); backdrop-filter: blur(5px);
 .memory-item { display: flex; gap: 10px; align-items: flex-start; padding: 11px; border: 1px solid var(--rb-border-soft); border-radius: 11px; background: var(--rb-card-bg); }
 .memory-item p { flex: 1; white-space: pre-wrap; line-height: 1.6; font-size: 13px; }
 
+#mode-dialog { width: min(420px, 80vw); }
+.mode-list { display: flex; flex-direction: column; gap: 9px; padding: 16px; }
+.mode-option { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; padding: 12px 14px; border: 1px solid var(--rb-border-soft); border-radius: 11px; background: var(--rb-card-bg); text-align: left; cursor: pointer; transition: border-color 0.15s ease, background 0.15s ease; }
+.mode-option:hover { border-color: var(--rb-pink-400); }
+.mode-option strong { color: var(--rb-text-strong); font-size: 13px; }
+.mode-option span { color: var(--rb-text-muted); font-size: 11px; }
+.session-mode-badge { margin-right: 2px; font-size: 11px; }
+
 [data-ui-theme="pearl-white"] .work-shell { box-shadow: 0 14px 38px rgba(54, 42, 73, 0.12); }
 [data-ui-theme="pearl-white"] .message--user .message__body { color: #fff; }
 [data-ui-theme="pearl-white"] dialog::backdrop { background: rgba(45, 38, 52, 0.24); }

@@ -44,7 +44,7 @@
         <div>
           <span class="workspace__eyebrow">WORKSPACE</span>
           <h1 id="session-title">新工作</h1>
-          <p>独立历史 · 独立记忆 · 严格工作流</p>
+          <p id="session-hint">独立历史 · 独立记忆 · 严格工作流</p>
         </div>
         <div class="model-picker"><span>模型调用选项请在“设置 → API 设置 → Work 模型”中管理</span></div>
       </section>
@@ -98,6 +98,27 @@
       <button id="memory-close-btn" aria-label="关闭">×</button>
     </div>
     <div id="memory-list" class="memory-list"></div>
+  </dialog>
+
+  <dialog id="mode-dialog">
+    <div class="dialog-header">
+      <div><h2>选择会话模式</h2><p>Code / Learn 模式需要绑定一个本地目录（只读访问）。</p></div>
+      <button id="mode-close-btn" aria-label="关闭">×</button>
+    </div>
+    <div class="mode-list">
+      <button class="mode-option" data-mode="work">
+        <strong>🗂️ 普通工作</strong>
+        <span>通用任务工作流，不绑定目录</span>
+      </button>
+      <button class="mode-option" data-mode="code">
+        <strong>💻 代码（Code）</strong>
+        <span>绑定代码目录，只读分析与建议</span>
+      </button>
+      <button class="mode-option" data-mode="learn">
+        <strong>📖 学习（Learn）</strong>
+        <span>绑定笔记库 / 学习材料，讲解与练习</span>
+      </button>
+    </div>
   </dialog>
 
   <script type="module" src="./main.ts"></script>

@@ -1,12 +1,13 @@
-import { BrowserWindow, ipcMain, type WebContents } from "electron";
+import { BrowserWindow, dialog, ipcMain, type OpenDialogOptions, type WebContents } from "electron";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { IPC } from "../../shared/ipc-channels";
-import type { WorkAttachment, WorkMessage, WorkRunAttachment, WorkRunEvent } from "../../shared/work-types";
+import type { WorkAttachment, WorkMessage, WorkRunAttachment, WorkRunEvent, WorkSessionMode } from "../../shared/work-types";
 import type { ToolDefinition } from "../orchestrator/tool-registry";
 import type { VendorConfig } from "../orchestrator/vendors";
 import { decodeTextBuffer, hasUtf16Bom, isBinary, isDocumentExt } from "../rag/file-ingest";
+import { buildDirTools } from "./dir-tools";
 import { runWorkAgent } from "./work-agent";
 import { deleteWorkMemory, listWorkMemory } from "./work-memory-store";
 import {
@@ -18,6 +19,7 @@ import {
   openWorkFolder,
   renameWorkSession,
   updateWorkExecutionState,
+  workSessionMode,
 } from "./work-store";
 
 export interface RegisterWorkIpcDeps {
@@ -25,7 +27,8 @@ export interface RegisterWorkIpcDeps {
   getWorkWindow: () => BrowserWindow | null;
   resolveModelConfig: () => VendorConfig;
   getTools: () => ToolDefinition[];
-  loadPrompt: (name: "system" | "style" | "router" | "plan" | "actionGate") => string;
+  /** mode 用于选择模式专属 system prompt（code/learn），缺省走通用 work prompt。 */
+  loadPrompt: (name: "system" | "style" | "router" | "plan" | "actionGate", mode?: WorkSessionMode) => string;
 }
 
 const activeRuns = new Map<string, AbortController>();
@@ -97,6 +100,36 @@ function send(sender: WebContents, event: WorkRunEvent): void {
   if (!sender.isDestroyed()) sender.send(IPC.WORK_EVENT, event);
 }
 
+/** 把渲染层的创建入参归一化：兼容旧版字符串 title 调用。 */
+function normalizeCreateSessionPayload(payload: unknown): { title?: string; mode?: WorkSessionMode; boundDir?: string } {
+  if (typeof payload === "string") return { title: payload };
+  if (!payload || typeof payload !== "object") return {};
+  const source = payload as Record<string, unknown>;
+  const mode = source.mode === "code" || source.mode === "learn" ? source.mode : undefined;
+  const boundDir = typeof source.boundDir === "string" && source.boundDir.trim() ? source.boundDir.trim() : undefined;
+  return {
+    ...(typeof source.title === "string" && source.title.trim() ? { title: source.title } : {}),
+    ...(mode ? { mode } : {}),
+    ...(mode && boundDir ? { boundDir } : {}),
+  };
+}
+
+/** code/learn 会话的模式上下文块：告知绑定目录、可用文件工具与只读约束。 */
+function buildModeContextBlock(mode: WorkSessionMode, boundDir?: string): string {
+  if (mode === "work" || !boundDir) return "";
+  const role = mode === "code"
+    ? "当前是 Code 模式：你正在协助用户理解和分析一个代码项目。"
+    : "当前是 Learn 模式：你正在陪伴用户学习，这个目录是用户的笔记库（Obsidian Vault）和学习材料。";
+  return `[模式上下文]
+${role}
+本会话绑定目录：${boundDir}
+你可以使用以下只读文件工具访问该目录内的内容：
+- file_list：列出子目录结构
+- file_read：读取文本文件（可分段）
+- file_search：按内容搜索文件行
+注意：所有路径参数都使用相对绑定目录的路径。当前阶段你只能读取，不能创建、修改或删除任何文件；需要改动时只给出具体建议。`;
+}
+
 export function registerWorkIpc(deps: RegisterWorkIpcDeps): void {
   ipcMain.on(IPC.SIDEBAR_OPEN_WORK, () => deps.createWorkWindow());
   ipcMain.on(IPC.WORK_MINIMIZE, () => deps.getWorkWindow()?.minimize());
@@ -111,7 +144,10 @@ export function registerWorkIpc(deps: RegisterWorkIpcDeps): void {
 
   ipcMain.handle(IPC.WORK_SESSIONS_LIST, () => listWorkSessions());
   ipcMain.handle(IPC.WORK_SESSIONS_GET, (_event, id: string) => getWorkSession(id));
-  ipcMain.handle(IPC.WORK_SESSIONS_CREATE, (_event, title?: string) => createWorkSession(title));
+  ipcMain.handle(IPC.WORK_SESSIONS_CREATE, (_event, payload: unknown) => {
+    const { title, mode, boundDir } = normalizeCreateSessionPayload(payload);
+    return createWorkSession(title, mode, boundDir);
+  });
   ipcMain.handle(IPC.WORK_SESSIONS_RENAME, (_event, payload: { id: string; title: string }) => (
     renameWorkSession(payload.id, payload.title)
   ));
@@ -121,6 +157,17 @@ export function registerWorkIpc(deps: RegisterWorkIpcDeps): void {
     return deleteWorkSession(id);
   });
   ipcMain.handle(IPC.WORK_OPEN_FOLDER, () => openWorkFolder());
+  // 为 code/learn 会话选择绑定目录：返回选中的绝对路径，取消返回 null。
+  ipcMain.handle(IPC.WORK_SELECT_DIR, async () => {
+    const win = deps.getWorkWindow();
+    const options: OpenDialogOptions = { title: "选择要绑定的目录", properties: ["openDirectory"] };
+    const result = await (win && !win.isDestroyed()
+      ? dialog.showOpenDialog(win, options)
+      : dialog.showOpenDialog(options)
+    ).catch(() => null);
+    if (!result || result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
 
   ipcMain.handle(IPC.WORK_MEMORY_LIST, () => listWorkMemory());
   ipcMain.handle(IPC.WORK_MEMORY_DELETE, (_event, id: string) => deleteWorkMemory(id));
@@ -152,15 +199,27 @@ export function registerWorkIpc(deps: RegisterWorkIpcDeps): void {
     if (!nextSession) throw new Error("Unable to update Work session");
     const controller = new AbortController();
     activeRuns.set(session.id, controller);
+    // code/learn 会话：绑定目录有效时注入沙箱只读文件工具（不进全局注册表）。
+    const sessionMode = workSessionMode(nextSession);
+    const boundDirUsable = Boolean(nextSession.boundDir && fs.existsSync(nextSession.boundDir) && fs.statSync(nextSession.boundDir).isDirectory());
+    const tools: ToolDefinition[] = [
+      ...deps.getTools(),
+      ...(sessionMode !== "work" && boundDirUsable ? buildDirTools(nextSession.boundDir!) : []),
+    ];
+    const modeContext = sessionMode !== "work" && boundDirUsable
+      ? buildModeContextBlock(sessionMode, nextSession.boundDir)
+      : sessionMode !== "work"
+        ? `[模式上下文]\n本会话未绑定有效目录，文件工具不可用。请提醒用户在创建会话时选择要绑定的目录。`
+        : "";
     try {
       await runWorkAgent({
         session: nextSession,
         userText: text || "请处理附件",
         attachmentContext: buildAttachmentContext(attachments),
         config,
-        tools: deps.getTools(),
+        tools,
         prompts: {
-          system: deps.loadPrompt("system"),
+          system: [deps.loadPrompt("system", sessionMode), modeContext].filter(Boolean).join("\n\n"),
           style: deps.loadPrompt("style"),
           router: deps.loadPrompt("router"),
           plan: deps.loadPrompt("plan"),
