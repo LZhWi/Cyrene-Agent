@@ -353,10 +353,10 @@ toolRegistry.register({
 // 资源访问层：读图片→base64→交 vision-captioner 看图→返回文字。
 // 不懂视觉，看图的活外包给 captioner。
 
-// loadVisionConfig 在 index.ts，但 index.ts 也 import 本文件（副作用注册），形成循环。
-// 用懒加载规避：运行时才 require，此时 index.ts 已初始化完。
+// loadVisionConfig 已迁出到 settings/model-settings，但本文件仍被 index.ts 副作用注册。
+// 用懒加载规避：运行时才 require，此时相关模块已初始化完。
 function loadVisionConfigLazy() {
-  const mod = require("../index") as { loadVisionConfig: () => import("./vision-captioner").VisionConfig | null };
+  const mod = require("../settings/model-settings") as { loadVisionConfig: () => import("./vision-captioner").VisionConfig | null };
   return mod.loadVisionConfig();
 }
 

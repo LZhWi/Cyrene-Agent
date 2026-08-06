@@ -27,7 +27,7 @@ import { normalizeClineEvent } from "./code-event-normalizer";
 import { buildClineSystemPromptWithPreferences } from "./code-user-preferences";
 import { routeCommand, updateSessionClineMode } from "./code-command-router";
 import { getCurrentLevel } from "../../permission";
-import { loadModelSettings } from "../../index";
+import { loadModelSettings } from "../../settings/model-settings";
 import { ClineResultAdapter, CodeRunFacts } from "./cline-result-adapter";
 import { VerificationPlanResolver } from "./verification-plan-resolver";
 import { VerificationRunner } from "./verification-runner";

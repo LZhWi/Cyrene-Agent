@@ -1,4 +1,4 @@
-import { BrowserWindow, screen } from "electron";
+import { app, BrowserWindow, screen } from "electron";
 import * as path from "path";
 import { IPC } from "../../shared/ipc-channels";
 import { isDev } from "../env";
@@ -54,7 +54,7 @@ export function createReactChatWindow(sessionId?: string): void {
     transparent: true,
     resizable: true,
     webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      preload: path.join(app.getAppPath(), "dist", "preload", "preload", "index.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -129,7 +129,7 @@ export function createSidebarWindow(): void {
     transparent: true,
     resizable: true,
     webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      preload: path.join(app.getAppPath(), "dist", "preload", "preload", "index.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -180,7 +180,7 @@ export function createTasksWindow(): void {
     transparent: true,
     resizable: true,
     webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      preload: path.join(app.getAppPath(), "dist", "preload", "preload", "index.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -239,7 +239,7 @@ export function createSettingsWindow(section?: string): void {
     transparent: true,
     resizable: true,
     webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      preload: path.join(app.getAppPath(), "dist", "preload", "preload", "index.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -300,7 +300,7 @@ export async function createStickerManagerWindow(): Promise<{ ok: boolean; error
     resizable: true,
     parent: settingsWindow ?? undefined,
     webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      preload: path.join(app.getAppPath(), "dist", "preload", "preload", "index.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -373,7 +373,7 @@ export function createCallWindow(): void {
     transparent: true,
     resizable: true,
     webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      preload: path.join(app.getAppPath(), "dist", "preload", "preload", "index.js"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,

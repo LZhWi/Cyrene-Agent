@@ -37,7 +37,7 @@ import {
   DEFAULT_WINDOW_CORNER_RADIUS,
   normalizeWindowCornerRadius,
 } from "../shared/window-corner-radius";
-import { foldReasoning, normalizeReasoningPreference, type ReasoningPreference } from "../shared/reasoning";
+import { normalizeReasoningPreference, type ReasoningPreference } from "../shared/reasoning";
 import { getUiFontResponseHeaders, isSafeUiFontRequest } from "./ui-font-protocol";
 import {
   normalizeChatSocialContextEnabled,
@@ -89,7 +89,7 @@ import { CyreneAgent } from "./orchestrator/cyrene-agent";
 import { validateSearchApiKey } from "./orchestrator/search-backend-filter";
 import { indexConversationTurn } from "./orchestrator/history-tools";
 import { buildToneInjection } from "./orchestrator/tone-injector";
-import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "./orchestrator/model-config";
+
 import { getAdapter, buildVendorUrl, getAdapterForConfig, createSseReader } from "./orchestrator/vendors";
 import type {
   ChatResponse,
@@ -104,11 +104,11 @@ import { normalizeFinishReason } from "./orchestrator/structured-output/finish-r
 import { dispatchChatGeneration } from "./orchestrator/structured-output/dispatcher";
 import { invokeLangChainStructured } from "./orchestrator/structured-output/langchain-invoker";
 import { testVendorConnection } from "./orchestrator/vendors/test-connection";
-import { migrateLegacyMinimaxDefaults } from "./orchestrator/vendors/minimax-defaults";
+
 import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
 import { resolveVendorRuntimeSettings, setVendorRuntimeSettingsGetter } from "./orchestrator/vendors/runtime-settings";
 import { resolveApprovedStyleSampling } from "./orchestrator/vendors/style-sampling";
-import type { VisionConfig } from "./orchestrator/vision-captioner";
+
 import { toolRegistry, type ToolDefinition } from "./orchestrator/tool-registry";
 import { buildToolCatalog } from "./orchestrator/tool-catalog";
 import type { ToolRiskLevel } from "./permission";
@@ -196,6 +196,19 @@ import {
   loadUserProfile,
   saveUserProfile,
 } from "./settings-store";
+import {
+  type ModelSettings,
+  type PublicModelConfig,
+  getPublicModelConfig,
+  loadModelSettings,
+  loadVisionConfig,
+  normalizeModelSettings,
+  saveModelSettings,
+} from "./settings/model-settings";
+import type { GeneralSettings } from "./settings/general-settings";
+import { loadPromptFile } from "./prompts/prompt-loader";
+import { createMainWindow } from "./startup/create-main-window";
+import { bootstrapConfigGetters } from "./startup/bootstrap-config";
 import { loadMemoryPanelData } from "./memory/panel";
 import {
   createVisibleStreamFilter,
@@ -250,7 +263,8 @@ import {
 import { getDateLocale, updateLocaleContext } from "./locale-context";
 import { setAsrConfig } from "./asr/volcano-asr-engine";
 import { registerCallIpc, setCallSettings } from "./call/call-manager";
-import { initSkills, skillRegistry, buildAutoInjectedSkillContext, buildAutoInjectedSoulContext, buildSkillCatalog, parseSlashCommand, setSkillEnabled, listSkillsForUi } from "./skills";
+import { initSkills, skillRegistry, buildAutoInjectedSkillContext, buildAutoInjectedSoulContext, buildSkillCatalog, setSkillEnabled, listSkillsForUi } from "./skills";
+import { resolveSlashActivation } from "./skills/slash-activation";
 import {
   isMusicCompanionAvailable,
   loadMusicCompanionHost,
@@ -429,276 +443,6 @@ function initializeScreenshotService(initialHotkey: string): ScreenshotService {
 // 设置面板"删除当前会话"差异化提示用。聊天窗口关闭时由 closed 事件置 null。
 let activeChatSessionId: string | null = null;
 
-// 单个厂商的可缓存配置：用户切到别的厂商再切回来，这三个字段从这里恢复。
-interface ProviderProfile {
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-  displayName?: string;
-  /**
-   * 用户在 settings 显式选择的协议。"auto" 只用于读取旧配置，规范化后会固化为具体值。
-   */
-  explicitTransport?: "openai" | "anthropic" | "auto";
-  /**
-   * 用户保存的推理偏好（source of truth）。顶层 ModelSettings.reasoning 是当前厂商镜像。
-   * 当前模型不支持某个 effort 时仍保留 user preference，
-   * 实际请求时由 resolveEffectiveReasoning 决定 effective config。
-   */
-  reasoning?: ReasoningPreference;
-}
-
-/**
- * 厂商名变更映射：旧 providerName → 新 providerName。
- *
- * 触发时机：UI 上为了对齐"英文名（中文公司名）"格式重命名了 preset 后，
- * 已存盘的 model-settings.json 里 provider 字段（以及 perProvider 字典的键）
- * 仍是旧名；normalize 阶段做一次性迁移，把旧名的 perProvider 数据搬到新名下，
- * provider 字段也改写为新名。迁移后写盘一次即清除痕迹。
- *
- * 后续如果再次重命名，**只追加键值对**，不要删除老条目，避免回归。
- */
-const PROVIDER_RENAMES: Record<string, string> = {
-  "MiniMax": "MiniMax（稀宇科技）",
-  "DeepSeek": "DeepSeek（深度求索）",
-  "智谱 GLM": "GLM（智谱）",
-  "通义千问（DashScope）": "Qwen（通义千问）",
-};
-
-/**
- * 把 perProvider 字典 + currentProvider 字段一起套用 PROVIDER_RENAMES。
- * - 旧名 → 新名：直接搬数据；如果新名已存在数据，旧名的不覆盖（保护"已用新名存过"的情况）。
- * - 不在映射表里的键：原样保留。
- */
-function migrateProviderRenames(
-  currentProvider: string,
-  perProvider: Record<string, ProviderProfile>,
-): { provider: string; perProvider: Record<string, ProviderProfile> } {
-  const next: Record<string, ProviderProfile> = {};
-  for (const [key, value] of Object.entries(perProvider)) {
-    const newKey = PROVIDER_RENAMES[key] ?? key;
-    if (next[newKey]) {
-      // 新名已经有数据（说明用户已经在新名下存过），旧名的本地副本保留为最近一次更新优先：
-      // 这里取保守路线 → 不覆盖 next[newKey]，旧名直接丢弃。
-      console.log("[Cyrene] provider rename: drop legacy", key, "→ kept", newKey);
-      continue;
-    }
-    if (newKey !== key) {
-      console.log("[Cyrene] provider rename:", key, "→", newKey);
-    }
-    next[newKey] = value;
-  }
-  const newProvider = PROVIDER_RENAMES[currentProvider] ?? currentProvider;
-  return { provider: newProvider, perProvider: next };
-}
-
-interface ModelSettings {
-  mode: "auto" | "manual";
-  provider: string;
-  // 用户给模型起的自定义昵称，留空时状态栏用厂商 shortName。
-  displayName?: string;
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-  /**
-   * 当前厂商的 explicitTransport 镜像（顶层字段是 perProvider[currentProvider] 的视图）。
-   * 详见 ProviderProfile.explicitTransport。
-   */
-  explicitTransport?: "openai" | "anthropic" | "auto";
-  /**
-   * 当前厂商 reasoning 偏好的顶层镜像（与 explicitTransport 同思路）。
-   * 真值在 perProvider[currentProvider].reasoning；顶层字段是 view。
-   * 保存的是用户 preference（不覆盖）；effective config 由 capability 决定。
-   */
-  reasoning?: ReasoningPreference;
-  // 按厂商缓存：currentProvider 之外的厂商配置也保留在这里，切回来时回填。
-  // 真值（source of truth）是 perProvider；顶层 baseUrl/model/apiKey 是当前厂商那一份的展开镜像，
-  // 仅为兼容现有 main 进程里大量直接读 settings.baseUrl 等代码而保留。
-  perProvider: Record<string, ProviderProfile>;
-  runtimeSync: "off" | "local" | "llm";
-  stickerEnabled: boolean;
-  stickerSize: StickerSize;
-  stickerSimilarityThreshold: number;
-  /** 整个聊天请求的总超时（秒）。30-1800，默认 300。 */
-  chatRequestTimeoutSec: number;
-  /** 总轮数。5-30，默认 12。 */
-  maxIterations: number;
-  /** Plan 步骤失败后重规划次数。1-5，默认 2。 */
-  maxReplans: number;
-  /** 引用过期重新决策次数。0-3，默认 1。 */
-  maxRefresh: number;
-  /** 单次 LLM 调用超时（秒）。30-120，默认 75。 */
-  perCallTimeoutSec: number;
-  /** CITA 结构化输出重试总预算（秒）。4-30，默认 8。 */
-  citaRepairBudgetSec: number;
-  /** Action Gate 结构化输出重试总预算（秒）。5-40，默认 10。 */
-  actionGateRepairBudgetSec: number;
-  rerankerMode: "light" | "standard" | "none";
-  embeddingModel: "minilm" | "bgem3";
-  /**
-   * Embedding 维度（可选，仅 cloud 模式有效）。
-   * 留空 = 首次请求自动探测；填写 = 作为严格声明并与实际响应校验。
-   */
-  embeddingDimensions?: number;
-  // 视觉模型配置（可选）。undefined 或未启用 = 不支持看图，read_image 诚实拒绝。
-  vision?: VisionModelConfig;
-  /** 主模型是否多模态。true 时图片直发主模型（direct），vision 配置保留但忽略。 */
-  multimodal: boolean;
-  thinkingOverride?: -1 | 0 | 1;
-  disableMaxToken?: boolean;
-  /** 上下文窗口大小（Token）。默认 256000，来自 DEFAULT_CONTEXT_WINDOW_TOKENS。唯一定义点。 */
-  contextWindowTokens: number;
-}
-
-/** 视觉模型配置（独立视觉模型，非多模态直发场景）。全空 = 未启用。 */
-interface VisionModelConfig {
-  baseUrl: string;
-  apiKey: string;
-  model: string;
-}
-
-
-interface GeneralSettings extends ChatAppearanceSettings {
-  citaEnabled: boolean;
-  citaSemanticEngine: "remote";
-  /** Chat 模式的轻量社交上下文；默认关闭，开启后每轮最多多一次异步抽取调用。 */
-  chatSocialContextEnabled: boolean;
-  petAlwaysOnTop: boolean;
-  petVisible: boolean;
-  /** 桌宠缩放因子：1.0=默认，0.5~2.0，窗口与模型同步等比缩放。 */
-  petZoom: number;
-  /** 桌宠窗口 X 坐标，未保存时为 undefined */
-  petWindowX?: number;
-  /** 桌宠窗口 Y 坐标，未保存时为 undefined */
-  petWindowY?: number;
-  disableGpuElectron?: boolean;
-  sidebarVisible: boolean;
-  tasksVisible: boolean;
-  launchAtLogin: boolean;
-  language: "zh-CN";
-  uiTheme: UiTheme;
-  windowCornerRadius: number;
-  /** @deprecated 旧版透明窗口开关，仅保留用于配置兼容。 */
-  uiThemeRadius: boolean;
-  uiFont: UiFont;
-  uiIcon: UiIcon;
-  /** 聊天窗口打开时默认选中的模式。 */
-  defaultChatMode: DefaultChatMode;
-  /** 聊天窗口当前风格，启动时恢复；本轮请求仍以 renderer 显式 styleId 为准。 */
-  currentStyleId: StyleId;
-  /** 全局自定义风格采样配置。 */
-  customStyle: CustomStyleConfig;
-  /** 聊天气泡分段输出偏好。 */
-  segmentedOutputMode: SegmentedOutputMode;
-  /** 手机渠道文本消息分段发送偏好。 */
-  mobileMessageSegmentation: MobileMessageSegmentationMode;
-  /** 主动聊天功能开关占位；当前不接实际逻辑。 */
-  proactiveChatMode: ProactiveChatMode;
-  /** 主动消息最终投递到本地、微信或飞书。 */
-  proactiveDeliveryTarget: ProactiveDeliveryTarget;
-  // TTS 配置
-  ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo" | "mossland";
-  ttsAutoRead: boolean;
-  ttsSpeed: number;
-  ttsVolume: number;
-  // MiniMax
-  ttsMinimaxKey: string;
-  ttsMinimaxVoiceId: string;
-  /** MiniMax 合成模型：speech-2.8-hd(高保真¥3.5/万字符) | speech-2.8-turbo(极速¥2.0/万字符) */
-  ttsMinimaxModel: "speech-2.8-hd" | "speech-2.8-turbo";
-  /** MiniMax 流式播放（边合成边播，首字延迟低）；false=完整合成收完再播 */
-  ttsStreaming: boolean;
-  /** MiniMax 语音增强：自动插入 (laughs)、(breath) 等语气词标签 */
-  ttsMinimaxVocalEnhance: boolean;
-  // GPT-SoVITS（本地）
-  ttsGptsovitsBaseUrl: string;
-  ttsGptsovitsRefAudioPath: string;
-  ttsGptsovitsPromptText: string;
-  ttsGptsovitsFormat: "wav" | "mp3";
-  /** GPT-SoVITS 单次合成超时（毫秒）。本地推理长文本可能较慢，默认 3 分钟。 */
-  ttsGptsovitsTimeoutMs: number;
-  // 自定义云端 TTS
-  ttsCustomCloudEndpointUrl: string;
-  ttsCustomCloudApiKey: string;
-  ttsCustomCloudVoiceId: string;
-  ttsCustomCloudFormat: "wav" | "mp3";
-  ttsCustomCloudTimeoutMs: number;
-  // 小米 MiMo TTS
-  ttsMimoKey: string;
-  ttsMimoVoiceAudioPath: string;
-  ttsMimoStylePrompt: string;
-  // Mossland TTS
-  ttsMosslandKey: string;
-  ttsMosslandVoiceId: string;
-  ttsMosslandModel: string;
-  ttsMosslandTestText: string;
-  ttsMosslandFormat: "mp3" | "wav" | "pcm";
-  /** 天气源：open-meteo(免配置默认) | amap(高德,需填key) */
-  weatherSource: "open-meteo" | "amap";
-  /** 天气插件是否启用（开关） */
-  weatherEnabled: boolean;
-  /** 高德天气 key（https://lbs.amap.com 注册 Web服务 key） */
-  amapKey: string;
-  /** 🚗出行工具是否启用 */
-  travelEnabled: boolean;
-  /** 🖥️ 浏览器自动化（Playwright MCP）是否启用。默认 false，需用户手动开启。 */
-  playwrightMcpEnabled: boolean;
-  // 联网搜索：选哪个搜索源 + 对应 key
-  searchEngine: "off" | "bocha" | "tavily" | "minimax" | "anySearch";
-  searchBochaKey: string;
-  searchTavilyKey: string;
-  searchMinimaxKey: string;
-  searchAnySearchKey: string;
-  /** ✉️邮件发送插件是否启用 */
-  emailEnabled: boolean;
-  /** SMTP 主机，如 smtp.qq.com */
-  emailSmtpHost: string;
-  /** SMTP 端口，如 465（SSL）/ 587（STARTTLS） */
-  emailSmtpPort: number;
-  /** 使用 SSL/TLS（465 通常 true，587 通常 false；用户可覆盖） */
-  emailSmtpSecure: boolean;
-  /** 发件邮箱地址 */
-  emailSmtpUser: string;
-  /** SMTP 授权码（非邮箱登录密码） */
-  emailSmtpPass: string;
-  /** 发件人显示名（可选） */
-  emailFromName: string;
-  /** 🎧ASR 服务商：off(关闭) | aliyun(阿里云) | local(本地,占位) */
-  asrEngine: "off" | "aliyun" | "local";
-  /** 阿里云智能语音交互 AppKey */
-  asrAliyunAppKey: string;
-  /** 阿里云 RAM AccessKey ID */
-  asrAliyunAccessKeyId: string;
-  /** 阿里云 RAM AccessKey Secret */
-  asrAliyunAccessKeySecret: string;
-  /** ASR 识别语言：zh(中文) | en(英文) | auto(自动) */
-  asrLanguage: "zh" | "en" | "auto";
-  /** VAD 静默检测阈值（毫秒），500~2000，默认 1000 */
-  asrVadSilenceMs: number;
-  /** VAD 音量阈值（0~1），默认 0.01。环境吵或麦克风音量低时可调 */
-  asrVadThreshold: number;
-  /** 通话中显示文字转写 */
-  asrShowTranscript: boolean;
-  /** 截图全局热键（Electron Accelerator 格式，如 "Alt+Shift+S"） */
-  screenshotHotkey: string;
-}
-
-
-interface PublicModelConfig {
-  mode: "auto" | "manual";
-  provider: string;
-  // 用户自定义昵称；留空时状态栏用 shortName
-  displayName?: string;
-  // 厂商短名（去括号后缀），状态栏"正在喂养"的兜底显示
-  shortName: string;
-  model: string;
-  connected: boolean;
-  runtimeSync: "off" | "local" | "llm";
-  stickerSize: StickerSize;
-  rerankerMode: "light" | "standard" | "none";
-}
-
-type StickerSize = "small" | "standard" | "large";
-
 const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 300000; // FC 总预算：20 轮 × 推理模型 ~10-15s 需 300s 余量
 
 /** 桌宠窗口的基础尺寸（zoom=1.0 时）。缩放因子改变窗口与模型尺寸，二者同步。 */
@@ -772,32 +516,6 @@ function scheduleStartupEmbeddingRefreshes(): void {
     refreshSceneEmbeddingIndexInBackground("startup");
   }, STARTUP_EMBEDDING_REFRESH_DELAY_MS);
 }
-
-const DEFAULT_MODEL_SETTINGS: ModelSettings = {
-  mode: "auto",
-  // 默认厂商改为 MiniMax（v1 vendor adapter 第一个落地的），DeepSeek 已从 v1 清单移除。
-  provider: "MiniMax（稀宇科技）",
-  baseUrl: "https://api.minimaxi.com/v1",
-  model: "MiniMax-M3",
-  apiKey: "",
-  explicitTransport: "openai",
-  perProvider: {},
-  runtimeSync: "off",
-  stickerEnabled: true,
-  stickerSize: "standard",
-  stickerSimilarityThreshold: 0.55,
-  chatRequestTimeoutSec: 300,
-  maxIterations: 12,
-  maxReplans: 2,
-  maxRefresh: 1,
-  perCallTimeoutSec: 75,
-  citaRepairBudgetSec: 8,
-  actionGateRepairBudgetSec: 10,
-  rerankerMode: "light",
-  embeddingModel: "minilm",
-  multimodal: false,
-  contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
-};
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   citaEnabled: false,
@@ -879,278 +597,6 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   chatLineHeight: 1.75,
   assistantBubbleEnabled: true,
 };
-
-/**
- * normalize 流程：
- *   1. 先清洗顶层基础字段（mode/provider/runtimeSync/...）
- *   2. 再清洗 perProvider 字典：忽略非法键、缺失字段补默认值、apiKey 不在这里强制 trim 留作下一步
- *   3. 旧 schema 兼容：若 perProvider 中没有 currentProvider 那一份，把顶层 baseUrl/model/apiKey 当作首次迁移塞进去
- *   4. 用 perProvider[currentProvider] 反向展开成顶层 baseUrl/model/apiKey 镜像
- *      → 真值（source of truth）是 perProvider；顶层只是当前厂商配置的视图
- */
-function migrateLegacyExplicitTransport(
-  input: Partial<ProviderProfile> | null | undefined,
-  provider: string,
-): "openai" | "anthropic" {
-  if (input?.explicitTransport === "openai" || input?.explicitTransport === "anthropic") {
-    return input.explicitTransport;
-  }
-
-  // 仅用于把旧版 auto/缺失值一次性固化；运行时不会再根据 URL 猜协议。
-  const baseUrl = typeof input?.baseUrl === "string"
-    ? input.baseUrl.trim().replace(/\/+$/, "").toLowerCase()
-    : "";
-  if (/\/anthropic($|\/)|\/v1\/messages($|\?)/.test(baseUrl)) return "anthropic";
-  if (/\/chat\/completions($|\?)|\/completions($|\?)|\/v1\/chat/.test(baseUrl)) return "openai";
-  if (baseUrl.endsWith("/v1")) return "openai";
-  return getCapabilityOrOpenAI(provider).transport;
-}
-
-function normalizeProviderProfile(
-  input: Partial<ProviderProfile> | null | undefined,
-  provider = DEFAULT_MODEL_SETTINGS.provider,
-): ProviderProfile {
-  const explicitTransport: ProviderProfile["explicitTransport"] =
-    migrateLegacyExplicitTransport(input, provider);
-  return {
-    baseUrl: typeof input?.baseUrl === "string" ? input.baseUrl.trim() : "",
-    model: typeof input?.model === "string" ? input.model.trim() : "",
-    apiKey: typeof input?.apiKey === "string" ? input.apiKey.trim() : "",
-    displayName: typeof input?.displayName === "string" && input?.displayName.trim() ? input.displayName.trim() : undefined,
-    explicitTransport,
-    reasoning: normalizeReasoningPreference((input as { reasoning?: unknown })?.reasoning),
-  };
-}
-
-/** 清洗视觉模型配置。三字段全空 = 未启用，返回 undefined。 */
-function normalizeVisionConfig(input: Partial<VisionModelConfig> | undefined): VisionModelConfig | undefined {
-  if (!input || typeof input !== "object") return undefined;
-  const baseUrl = typeof input.baseUrl === "string" ? input.baseUrl.trim() : "";
-  const apiKey = typeof input.apiKey === "string" ? input.apiKey.trim() : "";
-  const model = typeof input.model === "string" ? input.model.trim() : "";
-  // 三项全空 = 未启用
-  if (!baseUrl && !apiKey && !model) return undefined;
-  return { baseUrl, apiKey, model };
-}
-
-function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined): ModelSettings {
-  const mode: "auto" | "manual" = input?.mode === "manual" ? "manual" : "auto";
-  let provider = typeof input?.provider === "string" && input.provider.trim()
-    ? input.provider.trim()
-    : DEFAULT_MODEL_SETTINGS.provider;
-
-  // perProvider 清洗：跳过非对象、非法键
-  const rawPerProvider = (input as ModelSettings | undefined)?.perProvider;
-  let perProvider: Record<string, ProviderProfile> = {};
-  if (rawPerProvider && typeof rawPerProvider === "object") {
-    for (const [key, value] of Object.entries(rawPerProvider)) {
-      if (typeof key !== "string" || !key.trim()) continue;
-      const providerName = key.trim();
-      const migrated = migrateLegacyMinimaxDefaults(providerName, value as Partial<ProviderProfile> & { baseUrl: string });
-      perProvider[providerName] = normalizeProviderProfile(migrated, providerName);
-    }
-  }
-
-  // 厂商重命名迁移：把旧 provider 名在字典里和当前 provider 字段一并改成新名。
-  // 必须在"旧 schema 兼容回填"之前做，否则会用旧名先创建一份僵尸数据。
-  ({ provider, perProvider } = migrateProviderRenames(provider, perProvider));
-  // 旧 schema 兼容：v1 之前的 model-config.json 没有 perProvider 字段，
-  // 但有顶层 baseUrl/model/apiKey 三件套。首次升级时把它们当作 currentProvider 那一份回填。
-  if (!perProvider[provider]) {
-    const legacyProfile = migrateLegacyMinimaxDefaults(provider, {
-      baseUrl: typeof input?.baseUrl === "string" ? input.baseUrl : "",
-      model: typeof input?.model === "string" ? input.model : "",
-      apiKey: typeof input?.apiKey === "string" ? input.apiKey : "",
-      explicitTransport: input?.explicitTransport,
-    });
-    perProvider[provider] = normalizeProviderProfile(legacyProfile, provider);
-    // 如果迁移后这一份完全是空的（用户从来没配过），再给个默认 baseUrl/model（便于 UI 第一次显示）
-    if (!perProvider[provider].baseUrl) perProvider[provider].baseUrl = DEFAULT_MODEL_SETTINGS.baseUrl;
-    if (!perProvider[provider].model) perProvider[provider].model = DEFAULT_MODEL_SETTINGS.model;
-  }
-
-  // 顶层镜像：用 perProvider[provider] 展开
-  const profile = perProvider[provider];
-
-  // 迁移旧配置：vision.syncWithMain === true -> multimodal: true
-  let multimodal = input?.multimodal === true;
-  const rawVision = input?.vision as Partial<VisionModelConfig> & { syncWithMain?: boolean } | undefined;
-  if (rawVision && rawVision.syncWithMain === true) {
-    multimodal = true;
-  }
-
-  return {
-    mode,
-    provider,
-    displayName: profile.displayName,
-    baseUrl: profile.baseUrl,
-    model: profile.model,
-    apiKey: profile.apiKey,
-    explicitTransport: profile.explicitTransport,
-    reasoning: profile.reasoning,  // 顶层镜像：与 explicitTransport 同源（perProvider[currentProvider].reasoning）
-    perProvider,
-    runtimeSync: input?.runtimeSync === "llm" ? "llm" : input?.runtimeSync === "local" ? "local" : "off",
-    stickerEnabled: input?.stickerEnabled !== false,
-    stickerSize: input?.stickerSize === "small" || input?.stickerSize === "large" ? input.stickerSize : "standard",
-    stickerSimilarityThreshold: typeof input?.stickerSimilarityThreshold === "number"
-      ? Math.max(0.3, Math.min(0.9, input.stickerSimilarityThreshold))
-      : 0.55,
-    chatRequestTimeoutSec: typeof input?.chatRequestTimeoutSec === "number"
-      && Number.isFinite(input.chatRequestTimeoutSec)
-      ? Math.max(30, Math.min(1800, Math.round(input.chatRequestTimeoutSec)))
-      : 300,
-    maxIterations: typeof input?.maxIterations === "number" && Number.isFinite(input.maxIterations)
-      ? Math.max(5, Math.min(30, Math.round(input.maxIterations)))
-      : 12,
-    maxReplans: typeof input?.maxReplans === "number" && Number.isFinite(input.maxReplans)
-      ? Math.max(1, Math.min(5, Math.round(input.maxReplans)))
-      : 2,
-    maxRefresh: typeof input?.maxRefresh === "number" && Number.isFinite(input.maxRefresh)
-      ? Math.max(0, Math.min(3, Math.round(input.maxRefresh)))
-      : 1,
-    perCallTimeoutSec: typeof input?.perCallTimeoutSec === "number" && Number.isFinite(input.perCallTimeoutSec)
-      ? Math.max(30, Math.min(120, Math.round(input.perCallTimeoutSec)))
-      : 75,
-    citaRepairBudgetSec: typeof input?.citaRepairBudgetSec === "number" && Number.isFinite(input.citaRepairBudgetSec)
-      ? Math.max(4, Math.min(30, Math.round(input.citaRepairBudgetSec)))
-      : 8,
-    actionGateRepairBudgetSec: typeof input?.actionGateRepairBudgetSec === "number" && Number.isFinite(input.actionGateRepairBudgetSec)
-      ? Math.max(5, Math.min(40, Math.round(input.actionGateRepairBudgetSec)))
-      : 10,
-    rerankerMode: input?.rerankerMode === "standard" || input?.rerankerMode === "none" ? input.rerankerMode : "light",
-    embeddingModel: input?.embeddingModel === "bgem3" ? "bgem3" : "minilm",
-    embeddingDimensions: typeof input?.embeddingDimensions === "number"
-      && Number.isFinite(input.embeddingDimensions)
-      && input.embeddingDimensions > 0
-      ? Math.round(input.embeddingDimensions)
-      : undefined,
-    vision: normalizeVisionConfig(rawVision),
-    multimodal,
-    thinkingOverride: input?.thinkingOverride,
-    disableMaxToken: input?.disableMaxToken,
-    contextWindowTokens: typeof input?.contextWindowTokens === "number" && Number.isFinite(input.contextWindowTokens)
-      && input.contextWindowTokens > 0
-      ? Math.round(input.contextWindowTokens)
-      : DEFAULT_CONTEXT_WINDOW_TOKENS,
-  };
-}
-
-let modelSettingsCache: ModelSettings | null = null;
-
-function loadModelSettings0(): ModelSettings {
-  try {
-    const filePath = getSettingsPath();
-    if (!fs.existsSync(filePath)) return { ...DEFAULT_MODEL_SETTINGS };
-    const raw = fs.readFileSync(filePath, "utf8");
-    return normalizeModelSettings(JSON.parse(raw) as Partial<ModelSettings>);
-  } catch (err) {
-    console.error("[Cyrene] load settings failed:", err);
-    return { ...DEFAULT_MODEL_SETTINGS };
-  }
-}
-
-export function loadModelSettings(): ModelSettings {
-  if (modelSettingsCache !== null) return modelSettingsCache;
-  return modelSettingsCache = loadModelSettings0();
-}
-
-/**
- * 加载视觉模型配置，解析 syncWithMain 并做 supportsVision 检查。
- * 返回 null = 未启用视觉（read_image 据此诚实拒绝）。
- *
- * syncWithMain=true 时：从主配置读 baseUrl/key/model，并检查主模型 supportsVision——
- * 若主模型非视觉，返回 null（避免把非视觉模型当视觉模型硬调导致运行时错误让用户困惑）。
- */
-/**
- * 运行时解析视觉配置。
- * multimodal=true：主模型本身支持视觉，返回主模型配置（让 read_image 等工具可用）。
- * multimodal=false：返回独立视觉模型配置（三字段齐全才有效），否则 null。
- */
-export function loadVisionConfig(): VisionConfig | null {
-  const settings = loadModelSettings();
-
-  if (settings.multimodal) {
-    if (!settings.apiKey || !settings.model) return null;
-    return { baseUrl: settings.baseUrl, apiKey: settings.apiKey, model: settings.model };
-  }
-
-  const v = settings.vision;
-  if (!v) return null;
-  if (!v.baseUrl || !v.apiKey || !v.model) return null;
-  return { baseUrl: v.baseUrl, apiKey: v.apiKey, model: v.model };
-}
-
-/**
- * 保存逻辑：
- *   - 渲染端发来的 settings 既可能带顶层 baseUrl/model/apiKey（旧调用方式），
- *     也可能带 perProvider（新调用方式，未来可扩展）。
- *   - 写盘前先把"顶层那三件套"折叠回 perProvider[provider]，保证真值落到字典里。
- *   - normalizeModelSettings 再把 perProvider[provider] 展开成顶层镜像，写盘 = 双视图一致。
- */
-function saveModelSettings(settings: Partial<ModelSettings>): ModelSettings {
-  const existing = loadModelSettings();
-  const merged: Partial<ModelSettings> = { ...existing, ...settings };
-
-  // currentProvider 优先取传入的、再取已有的
-  const currentProvider = (typeof settings.provider === "string" && settings.provider.trim())
-    ? settings.provider.trim()
-    : existing.provider;
-
-  // 起点：复制现有 perProvider，再 merge 传入的 perProvider
-  const perProvider: Record<string, ProviderProfile> = { ...(existing.perProvider ?? {}) };
-  if (settings.perProvider && typeof settings.perProvider === "object") {
-    for (const [key, value] of Object.entries(settings.perProvider)) {
-      perProvider[key] = normalizeProviderProfile(value as Partial<ProviderProfile>, key);
-    }
-  }
-
-  // 把传入的顶层三件套折叠到 currentProvider 下（这是渲染端目前主要的写入路径）
-  const incomingProfile = perProvider[currentProvider] ?? normalizeProviderProfile(null, currentProvider);
-  // 协议只接受用户明确选择的 OpenAI / Anthropic；旧 auto 不再进入运行时。
-  const incomingExplicitTransport: ProviderProfile["explicitTransport"] =
-    settings.explicitTransport === "openai" || settings.explicitTransport === "anthropic"
-      ? settings.explicitTransport
-      : incomingProfile.explicitTransport;
-  // reasoning 折叠（用户第三轮修订 #4）：优先级 perProvider > 顶层 > existing
-  const incomingProfileForReasoning = (settings.perProvider ?? {})[currentProvider];
-  const hasProfileReasoning = incomingProfileForReasoning
-    && Object.prototype.hasOwnProperty.call(incomingProfileForReasoning, "reasoning");
-  const hasTopLevelReasoning = Object.prototype.hasOwnProperty.call(settings, "reasoning");
-  let chosenReasoningRaw: unknown;
-  let chosenReasoningHasKey: boolean;
-  if (hasProfileReasoning) {
-    chosenReasoningRaw = (incomingProfileForReasoning as { reasoning?: unknown }).reasoning;
-    chosenReasoningHasKey = true;
-  } else if (hasTopLevelReasoning) {
-    chosenReasoningRaw = settings.reasoning;
-    chosenReasoningHasKey = true;
-  } else {
-    chosenReasoningRaw = undefined;
-    chosenReasoningHasKey = false;
-  }
-  const foldedReasoning = foldReasoning(chosenReasoningRaw, incomingProfile.reasoning, chosenReasoningHasKey);
-
-  perProvider[currentProvider] = {
-    baseUrl: typeof settings.baseUrl === "string" ? settings.baseUrl.trim() : incomingProfile.baseUrl,
-    model: typeof settings.model === "string" ? settings.model.trim() : incomingProfile.model,
-    apiKey: typeof settings.apiKey === "string" ? settings.apiKey.trim() : incomingProfile.apiKey,
-    displayName: typeof settings.displayName === "string" && settings.displayName.trim()
-      ? settings.displayName.trim()
-      : incomingProfile.displayName,
-    explicitTransport: incomingExplicitTransport,
-    reasoning: foldedReasoning,
-  };
-
-  merged.provider = currentProvider;
-  merged.perProvider = perProvider;
-
-  const final = normalizeModelSettings(merged);
-  const filePath = getSettingsPath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(final, null, 2), "utf8");
-  Object.assign(existing, final);
-  return final;
-}
 
 function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undefined): GeneralSettings {
   const windowVisibility = normalizeWindowVisibilitySettings(input);
@@ -1910,16 +1356,6 @@ const citaService = new CitaService({
   }),
 });
 
-function loadPromptFile(filename: string): string {
-  try {
-    const filePath = path.join(app.getAppPath(), "prompts", filename);
-    if (!fs.existsSync(filePath)) return "";
-    return fs.readFileSync(filePath, "utf8").trim();
-  } catch {
-    return "";
-  }
-}
-
 function readStylePrompt(styleId: StyleId): string {
   if (styleId === "custom") {
     const filePath = ensureCustomStylePrompt();
@@ -2248,38 +1684,6 @@ function buildSoulSystemBasePrompt(styleFile: string): string {
   return buildSystemPrompt(styleFile, false);
 }
 
-/**
- * /命令拦截：命中 /skill-id（且 skill 存在+启用）则返回 system 激活段
- * （正文注入 system，user message 原样，不污染 memory，见 spec 6.3）。
- * 命中但 skill 不存在/未启用 → 改写该 user 消息为提示，返回 ""。
- * 未命中 → 返回 ""（放行，不误吞其他 /命令）。
- */
-function resolveSlashActivation<T extends { role: string; content: string }>(messages: T[]): string {
-  let lastUserIdx = -1;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    if (messages[i].role === "user") { lastUserIdx = i; break; }
-  }
-  if (lastUserIdx < 0) return "";
-  const lastUser = messages[lastUserIdx];
-  if (typeof lastUser.content !== "string") return "";
-  const knownIds = skillRegistry.getAll().map(s => s.id);
-  const parsed = parseSlashCommand(lastUser.content, knownIds);
-  if (!parsed.hit || !parsed.skillId) return "";
-  const skill = skillRegistry.getById(parsed.skillId);
-  if (skill && skill.enabled && skillRegistry.isAvailable(parsed.skillId)) {
-    const body = skillRegistry.getBody(parsed.skillId);
-    if (body !== null) {
-      console.log("[Cyrene] /命令激活 skill:", parsed.skillId);
-      return `\n\n---\n\n[已激活 skill: ${parsed.skillId}]\n${body}`;
-    }
-    return "";
-  }
-  // skill 不存在/未启用：替换该 user 消息为提示
-  const available = skillRegistry.getEnabled().map(s => s.id).join(", ") || "(无)";
-  messages[lastUserIdx] = { ...lastUser, content: `[系统提示：skill 未启用或不存在: ${parsed.skillId}。可用 skill: ${available}]` } as T;
-  return "";
-}
-
 function loadSoulFeelingContext(): string {
   try {
     const soulPath = path.join(app.getAppPath(), "prompts", "soul.md");
@@ -2331,37 +1735,6 @@ async function observeRuntimeState(
   });
   // 标注未使用的参数，避免 lint 警告
   void latestUserText;
-}
-
-// 厂商短名映射（与 settings.ts 的 MODEL_PRESETS.shortName 镜像，需手动同步）。
-// 状态栏"正在喂养"在用户没填昵称时用这个兜底。
-const PROVIDER_SHORT_NAMES: Record<string, string> = {
-  "MiniMax（稀宇科技）": "MiniMax",
-  "DeepSeek（深度求索）": "DeepSeek",
-  "豆包（火山方舟）": "豆包",
-  "GLM（智谱）": "GLM",
-  "Kimi（月之暗面）": "Kimi",
-  "Qwen（通义千问）": "Qwen",
-  "ChatGPT（OpenAI）": "ChatGPT",
-  "Claude（Anthropic）": "Claude",
-};
-
-/**
- * 统一模型配置入口：所有模块（包括 Code 模式）必须通过此函数读取。
- * 禁止在 Code 模块本地复制读取 JSON 逻辑。
- */
-export function getPublicModelConfig(settings = loadModelSettings()): PublicModelConfig {
-  return {
-    mode: settings.mode,
-    provider: settings.provider,
-    displayName: settings.displayName,
-    shortName: PROVIDER_SHORT_NAMES[settings.provider] ?? settings.provider,
-    model: settings.model,
-    connected: Boolean(settings.apiKey),
-    runtimeSync: settings.runtimeSync,
-    stickerSize: settings.stickerSize,
-    rerankerMode: settings.rerankerMode,
-  };
 }
 
 function broadcastToAuxWindows(channel: string, payload: unknown): void {
@@ -2428,248 +1801,18 @@ export function sendToLive2DWindow(channel: string, payload?: unknown): void {
 }
 
 function createWindow(): void {
-  const settings = loadGeneralSettings();
-  const transparent = true;
-  let restoreX: number | undefined;
-  let restoreY: number | undefined;
-
-  if (settings.petWindowX !== undefined && settings.petWindowY !== undefined) {
-    const PET_W = PET_WINDOW_BASE_WIDTH;
-    const PET_H = PET_WINDOW_BASE_HEIGHT;
-    const targetBounds = {
-      x: settings.petWindowX,
-      y: settings.petWindowY,
-      width: PET_W,
-      height: PET_H,
-    };
-    const display = screen.getDisplayMatching(targetBounds);
-    const wa = display.workArea;
-
-    // 窗口与 workArea 交集至少 80x80 才使用保存的坐标
-    const interW =
-      Math.min(targetBounds.x + PET_W, wa.x + wa.width) -
-      Math.max(targetBounds.x, wa.x);
-    const interH =
-      Math.min(targetBounds.y + PET_H, wa.y + wa.height) -
-      Math.max(targetBounds.y, wa.y);
-
-    if (interW >= 80 && interH >= 80) {
-      restoreX = settings.petWindowX;
-      restoreY = settings.petWindowY;
-    } else {
-      console.log(
-        "[Cyrene] 桌宠保存位置已离屏（仅 " +
-          interW + "x" + interH + " 可见），使用默认位置",
-      );
-    }
-  }
-
-  mainWindow = new BrowserWindow({
-    x: restoreX,
-    y: restoreY,
-    width: PET_WINDOW_BASE_WIDTH,
-    height: PET_WINDOW_BASE_HEIGHT,
-    transparent: transparent,
-    frame: false,
-    skipTaskbar: true,
-    resizable: false,
-    hasShadow: false,
-    icon: getCurrentAppIconPath(),
-    webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
+  mainWindow = createMainWindow({
+    loadGeneralSettings,
+    getCurrentAppIconPath,
+    isDev,
   });
   live2dWindowLifecycle.attach(mainWindow);
 
-  if (isDev) {
-    mainWindow.loadURL("http://localhost:5173");
-  } else {
-    mainWindow.loadFile(path.join(__dirname, "..", "..", "renderer", "index.html"));
-  }
-
-  if (!isDev) {
-    mainWindow.setIgnoreMouseEvents(true, { forward: true });
-  }
-
-  mainWindow.on("hide", () => {
-    mainWindow?.webContents.send(IPC.PET_VISIBILITY_CHANGED, false);
-  });
-  mainWindow.on("show", () => {
-    mainWindow?.webContents.send(IPC.PET_VISIBILITY_CHANGED, true);
-  });
-
   applyGeneralSettings(loadGeneralSettings());
 
-  // 厂商适配层保持独立可测试；通过 getter 实时读取全局模型开关，避免反向依赖主进程入口。
-  // thinkingOverride / disableMaxToken 仅对自定义端点生效（preset 厂商由 capability 表 + chat 下拉控制），
-  // 详见 resolveVendorRuntimeSettings 的实现与单元测试。
-  setVendorRuntimeSettingsGetter(() => resolveVendorRuntimeSettings(loadModelSettings()));
-
-  // 注入天气工具配置获取器：每次工具执行时实时读 key/默认城市
-  // （用户改了设置不用重启就能生效）
-  setWeatherConfig(
-    () => loadUserProfile().defaultCity,
-    () => loadGeneralSettings().weatherSource,
-    () => loadGeneralSettings().amapKey,
-    // 天气卡片回调：工具拿到结构化数据后，发 Custom 事件给 react 聊天窗口渲染卡片
-    (card) => {
-      if (reactChatWindow && !reactChatWindow.isDestroyed()) {
-        reactChatWindow.webContents.send(IPC.AGUI_EVENT, {
-          type: "CUSTOM",
-          name: "cyrene.weather",
-          value: card,
-        });
-      }
-    },
-    () => loadGeneralSettings().weatherEnabled,
-  );
-
-  // 注入用户时区 getter：工具侧通过 currentUserTimezone() 统一拿用户时区（缺/非法回退 Asia/Shanghai）
-  setUserTimezoneConfig(() => loadUserProfile().timezone);
-
-  // 注入用户选择卡片回调：工具调 ask_user_choice 时发 Custom 事件给 react 聊天窗口
-  setChoiceCardSender((cardData) => {
-    if (reactChatWindow && !reactChatWindow.isDestroyed()) {
-      reactChatWindow.webContents.send(IPC.AGUI_EVENT, {
-        type: "CUSTOM",
-        name: "cyrene.choice",
-        value: cardData,
-      });
-    }
-  });
-
-  // 注入搜索配置获取器
-  setSearchConfig(
-    () => loadGeneralSettings().searchEngine,
-    () => loadGeneralSettings().searchBochaKey,
-    () => loadGeneralSettings().searchTavilyKey,
-    () => loadGeneralSettings().searchAnySearchKey,
-  );
-
-  // 注入出行工具 amapKey 获取器（复用 GeneralSettings 中的 amapKey）
-  setTravelConfig(() => loadGeneralSettings().amapKey, () => loadGeneralSettings().travelEnabled);
-
-  // 注入邮件工具 SMTP 配置获取器（每次执行实时读 GeneralSettings）
-  setEmailConfig(
-    () => loadGeneralSettings().emailEnabled,
-    () => loadGeneralSettings().emailSmtpHost,
-    () => loadGeneralSettings().emailSmtpPort,
-    () => loadGeneralSettings().emailSmtpSecure,
-    () => loadGeneralSettings().emailSmtpUser,
-    () => loadGeneralSettings().emailSmtpPass,
-    () => loadGeneralSettings().emailFromName,
-  );
-
-  // 注入 ASR 配置获取器（通话功能用，实时读 GeneralSettings）
-  setAsrConfig(() => {
-    const s = loadGeneralSettings();
-    if (s.asrEngine !== "aliyun") return null;
-    return { appKey: s.asrAliyunAppKey, accessKeyId: s.asrAliyunAccessKeyId, accessKeySecret: s.asrAliyunAccessKeySecret, language: s.asrLanguage, engine: s.asrEngine };
-  });
-
-  // 注入通话模型/TTS 配置获取器
-  setCallSettings(
-    () => {
-      const s = loadModelSettings();
-      return { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey };
-    },
-    () => {
-      const s = loadGeneralSettings();
-      return {
-        ttsEngine: s.ttsEngine,
-        ttsMinimaxKey: s.ttsMinimaxKey, ttsMinimaxVoiceId: s.ttsMinimaxVoiceId,
-        ttsMinimaxModel: s.ttsMinimaxModel,
-        ttsSpeed: s.ttsSpeed, ttsVolume: s.ttsVolume,
-        ttsMinimaxVocalEnhance: s.ttsMinimaxVocalEnhance,
-        ttsGptsovitsBaseUrl: s.ttsGptsovitsBaseUrl,
-        ttsGptsovitsRefAudioPath: s.ttsGptsovitsRefAudioPath,
-        ttsGptsovitsPromptText: s.ttsGptsovitsPromptText,
-        ttsGptsovitsFormat: s.ttsGptsovitsFormat,
-        ttsGptsovitsTimeoutMs: s.ttsGptsovitsTimeoutMs,
-        ttsCustomCloudEndpointUrl: s.ttsCustomCloudEndpointUrl,
-        ttsCustomCloudApiKey: s.ttsCustomCloudApiKey,
-        ttsCustomCloudVoiceId: s.ttsCustomCloudVoiceId,
-        ttsCustomCloudFormat: s.ttsCustomCloudFormat,
-        ttsCustomCloudTimeoutMs: s.ttsCustomCloudTimeoutMs,
-        ttsMimoKey: s.ttsMimoKey,
-        ttsMimoVoiceAudioPath: s.ttsMimoVoiceAudioPath,
-        ttsMimoStylePrompt: s.ttsMimoStylePrompt,
-      };
-    },
-    // 通话专用 system prompt 构建器（时间+常驻+记忆+phone人设+skill+语气，不要环境上下文）
-    async (userText: string) => {
-      const messages = [{ role: "user" as const, content: userText }];
-
-      // ① 时间日期（用用户时区，禁止直接喂未校验的 profile.timezone 给 Intl）
-      const now = new Date();
-      const userTz = resolveChatContextTimezone(loadUserProfile().timezone);
-      const timeStr = `当前时间：${now.toLocaleDateString(getDateLocale(), { timeZone: userTz })} ${now.toLocaleTimeString(getDateLocale(), { hour: "2-digit", minute: "2-digit", timeZone: userTz })}`;
-
-      // ② 常驻上下文（世界书 + L0/L1 画像）
-      let alwaysOnContext = "";
-      try { alwaysOnContext = await buildAlwaysOnContext(userText, messages); } catch { /* ignore */ }
-
-      // ③ 记忆注入
-      let memoryInjection = "";
-      try { memoryInjection = await buildMemoryInjection(userText); } catch { /* ignore */ }
-
-      // ④ 通话专用人设 prompt
-      const phoneParts: string[] = [];
-      const phoneSystem = loadPromptFile("phone_system.md");
-      if (phoneSystem) phoneParts.push(phoneSystem);
-      const phoneIdentity = loadPromptFile("phone_identity.md");
-      if (phoneIdentity) phoneParts.push(phoneIdentity);
-      const soul = loadPromptFile("soul.md");
-      if (soul) phoneParts.push(soul);
-      const canon = loadPromptFile("canon_quotes.md");
-      if (canon) phoneParts.push(canon);
-      const phoneStyle = loadPromptFile("phone_style.md");
-      if (phoneStyle) phoneParts.push(phoneStyle);
-      const phonePrompt = phoneParts.join("\n\n---\n\n");
-
-      // ⑤ Skill 约束
-      const skillCatalog = buildSkillCatalog(skillRegistry.getEnabled());
-      const skillActivation = resolveSlashActivation(messages);
-
-      // ⑥ 语气注入
-      let toneInjection = "";
-      const sceneProvider = getSceneEmbeddingProvider();
-      if (sceneProvider && sceneEmbeddingIndex) {
-        try { toneInjection = await buildToneInjection(userText, messages, sceneProvider, sceneEmbeddingIndex); } catch { /* ignore */ }
-      }
-
-      return timeStr + "\n\n" +
-        (alwaysOnContext ? alwaysOnContext + "\n\n" : "") +
-        (memoryInjection ? memoryInjection + "\n\n" : "") +
-        phonePrompt +
-        (skillCatalog ? "\n\n---\n\n" + skillCatalog : "") +
-        skillActivation +
-        toneInjection;
-    },
-    // 天气快捷处理：正则匹配到天气关键词 → 调 weather 工具的 execute
-    async (userText: string) => {
-      try {
-        const weatherTool = toolRegistry.getById("weather");
-        if (!weatherTool) return null;
-        // 提取城市名（简单匹配：XX天气 / XX的天气）
-        const cityMatch = userText.match(/([北京上海广州深圳成都杭州南京武汉西安重庆天津苏州长沙郑州青岛大连沈阳哈尔滨长春济南太原合肥南昌福州昆明贵阳拉萨乌鲁木齐呼和浩特]+)/);
-        const city = cityMatch?.[1] ?? "";
-        const result = await weatherTool.execute({ city }, undefined);
-        return result;
-      } catch (err) {
-        console.warn("[Call] 天气查询失败:", err);
-        return null;
-      }
-    },
-  );
-
-  // 注入子代理 LLM 配置（delegate_task 工具用，复用主模型配置）
-  setDelegateSettings(() => {
-    const s = loadModelSettings();
-    return { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey, contextWindowTokens: s.contextWindowTokens };
+  bootstrapConfigGetters({
+    loadGeneralSettings,
+    sceneEmbeddingIndex,
   });
 
   mainWindow.on("closed", () => {
