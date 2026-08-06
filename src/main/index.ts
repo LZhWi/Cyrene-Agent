@@ -98,12 +98,7 @@ import {
 import { createWindowManager, type WindowManager } from "./windows/window-manager";
 import { enqueueLLMTask } from "./llm-queue";
 
-import {
-  buildSocialExtractionPrompt,
-  SOCIAL_EXTRACTION_SCHEMA,
-} from "./social-context/extractor";
-import { createSocialContextScheduler } from "./social-context/scheduler";
-import { createSocialAtomStore } from "./social-context/store";
+import { createSocialContextService, type SocialContextService } from "./services/social-context/social-context-service";
 import { getEmbeddingStatus, downloadEmbeddingModel, deleteEmbeddingModel } from "./embedding-manager";
 import { loadUserStickerManifest, addUserSticker, deleteUserSticker, isStickerIdTaken, getStickersDir } from "./sticker-storage";
 import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
@@ -256,6 +251,7 @@ runtimeStateService.onChange(() => broadcastRuntimeStateChanged());
 const llmClient = createLlmClient();
 const ttsSynthesisService = createTtsSynthesisService();
 const embeddingIndexService = createEmbeddingIndexService();
+const socialContextService = createSocialContextService({ llmClient, enqueueLLMTask });
 
 const proactiveLifecycle = createProactiveLifecycle({ loadGeneralSettings });
 
@@ -2004,91 +2000,6 @@ app.whenReady().then(async () => {
   }
 
   // AG-UI 事件流桥：渲染进程 invoke(AGUI_RUN) → CyreneAgent 跑 FC 循环 → 事件透传
-  // buildOptions 负责统一构建上下文；onRunFinished 复用副作用
-  // Phase 0 重构：抽出到 orchestrator/build-options.ts，三处共用（桌面 / scheduler / bot）
-  // deps 函数签名故意宽 (unknown/ReadonlyArray)；这里做一次包装把强类型函数适配进去
-  const socialAtomStore = createSocialAtomStore(
-    path.join(app.getPath("userData"), "chat-social-atoms.json"),
-  );
-  const socialContextScheduler = createSocialContextScheduler({
-    store: socialAtomStore,
-    enqueue: (label, task) => enqueueLLMTask(label, task, {
-      log: false,
-      retryRateLimit: false,
-    }),
-    generate: async (input, repair) => {
-      const settings = loadModelSettings();
-      const config: VendorConfig = {
-        provider: settings.provider,
-        baseUrl: settings.baseUrl,
-        model: settings.model,
-        apiKey: settings.apiKey,
-        explicitTransport: settings.explicitTransport,
-        reasoning: { mode: "off" },
-      };
-      const adapter = getAdapterForConfig(config);
-      const profile = resolveStructuredOutputProfile({
-        provider: adapter.id,
-        model: config.model,
-        transport: adapter.transport,
-        endpointKind: classifyStructuredOutputEndpoint({
-          providerId: adapter.id,
-          configuredBaseUrl: config.baseUrl,
-          officialBaseUrl: adapter.capability.baseUrl,
-        }),
-      });
-      const structuredOutput: StructuredOutputRequest = profile.mode === "provider_json_schema"
-        ? {
-            mode: "json_schema",
-            name: "chat_social_atoms",
-            schema: SOCIAL_EXTRACTION_SCHEMA,
-            strict: true,
-          }
-        : profile.mode === "provider_json_object"
-          ? {
-              mode: "json_object",
-              name: "chat_social_atoms",
-              schema: SOCIAL_EXTRACTION_SCHEMA,
-            }
-          : {
-              mode: "prompt_json",
-              name: "chat_social_atoms",
-              schema: SOCIAL_EXTRACTION_SCHEMA,
-              sendJsonObjectHint: profile.requestHints.sendJsonObject,
-            };
-      const response = await llmClient.chatNonStream(
-        settings,
-        [
-          {
-            role: "system",
-            content: "Extract only directly supported chat continuity facts. Return exactly one JSON object and no prose.",
-          },
-          { role: "user", content: buildSocialExtractionPrompt(input, repair) },
-        ],
-        // Kimi k2.6 只允许特定 temperature，省略让服务端用默认值
-        settings.model.match(/^kimi-k2\.6(?:$|-)/i) ? undefined : 0,
-        12_000,
-        "Chat social context extraction",
-        { mode: "off" },
-        {
-          structuredOutput,
-          maxTokens: 1_000,
-          ...(profile.requestHints.reasoningSplit
-            ? { extraBody: { reasoning_split: true } }
-            : {}),
-        },
-      );
-      if (response.refusal || normalizeFinishReason(response.finishReason) !== "complete") {
-        throw new Error("CHAT_SOCIAL_EXTRACTION_INCOMPLETE");
-      }
-      return response.text;
-    },
-    recordMetric: (metric) => {
-      console.log(
-        `[ChatSocialContext] outcome=${metric.outcome} accepted=${metric.acceptedCount} rejected=${metric.rejectedCount} attempts=${metric.attempts} repairs=${metric.repairCount}`,
-      );
-    },
-  });
   const agentRuntime = createAgentRuntime({
     runtimeStateService,
     llmClient,
@@ -2104,9 +2015,9 @@ app.whenReady().then(async () => {
     getSceneEmbeddingProvider,
     broadcastRuntimeStateChanged,
     citaService,
-    socialContextScheduler,
+    socialContextScheduler: socialContextService.scheduler,
     chatsStore,
-    socialAtomStore,
+    socialAtomStore: socialContextService.store,
   });
 
   schedulerSubsystem = createSchedulerSubsystem(agentRuntime, () => reactChatWindow);
