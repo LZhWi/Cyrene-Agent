@@ -76,6 +76,7 @@ import { musicHomeView, musicReturnBtn, musicSearchForm, musicSearchHint, musicQ
 import { channelsState } from "./channels/state";
 import { channelsWechatEnabledEl, channelsFeishuEnabledEl, channelsWechatStatusEl, channelsFeishuStatusEl, channelsRateUserEl, channelsRateChannelEl, channelsTtsEl, channelsStickerEl, channelsMirrorEl, channelsToolSandboxOffEl, channelsToolSandboxAllEl, channelsToolSandboxSafeEl, channelsFeishuAppIdEl, channelsFeishuAppSecretEl, channelsFeishuAppSecretRevealBtn, channelsFeishuSaveBtn, channelsWechatLoginBtn, channelsWechatRestartBtn, channelsWechatFeedbackEl, channelsFeishuFeedbackEl, channelsLogListEl, channelsLogRefreshBtn, channelsLogClearBtn } from "./channels/dom";
 import { memoryState } from "./memory/state";
+import { memoryL0NameInput, memoryL0OccupationInput, memoryL0InterestsInput, memoryL0LanguageInput, memoryL0NoteInput, memoryL1GoalsInput, memoryL1PreferencesInput, memoryL1ProjectInput, memoryL2SearchInput, memoryL2List, memoryImportedList, memoryReflectionList, memoryL0EditBtn, memoryL0CancelBtn, memoryL1EditBtn, memoryL1CancelBtn } from "./memory/dom";
 import { schedulerState } from "./scheduler/state";
 import { schedulerNewBtn, schedulerEmpty, schedulerList, schedulerEditor, schedulerEditorTitle, schedulerEditorClose, schedulerTitleInput, schedulerPromptInput, schedulerEnabledInput, schedulerKindInput, schedulerOnceRunAtInput, schedulerTimeOfDayInput, schedulerDayOfWeekInput, schedulerIntervalEveryInput, schedulerIntervalUnitInput, schedulerToolLimitInput, schedulerToolPicker, schedulerToolEmptyHint, schedulerSaveStatus, schedulerCancelBtn, schedulerSaveBtn } from "./scheduler/dom";
 import { toLocalDateTimeInputValue, isValidTimeOfDay, formatSchedulerDate, describeSchedule } from "./scheduler/utils";
@@ -3895,22 +3896,6 @@ const userCallPrefInput = document.getElementById("user-call-pref") as HTMLInput
 const userBirthdayInput = document.getElementById("user-birthday") as HTMLInputElement | null;
 const userTimezoneSelect = document.getElementById("user-timezone") as HTMLSelectElement | null;
 const userGenderGroup = document.getElementById("user-gender") as HTMLElement | null;
-const memoryL0NameInput = document.getElementById("memory-l0-name") as HTMLInputElement | null;
-const memoryL0OccupationInput = document.getElementById("memory-l0-occupation") as HTMLInputElement | null;
-const memoryL0InterestsInput = document.getElementById("memory-l0-interests") as HTMLInputElement | null;
-const memoryL0LanguageInput = document.getElementById("memory-l0-language") as HTMLInputElement | null;
-const memoryL0NoteInput = document.getElementById("memory-l0-note") as HTMLTextAreaElement | null;
-const memoryL1GoalsInput = document.getElementById("memory-l1-goals") as HTMLTextAreaElement | null;
-const memoryL1PreferencesInput = document.getElementById("memory-l1-preferences") as HTMLTextAreaElement | null;
-const memoryL1ProjectInput = document.getElementById("memory-l1-project") as HTMLTextAreaElement | null;
-const memoryL2SearchInput = document.getElementById("memory-l2-search") as HTMLInputElement | null;
-const memoryL2List = document.getElementById("memory-l2-list") as HTMLElement | null;
-const memoryImportedList = document.getElementById("memory-imported-list") as HTMLElement | null;
-const memoryReflectionList = document.getElementById("memory-reflection-list") as HTMLElement | null;
-const memoryL0EditBtn = document.getElementById("memory-l0-edit-btn") as HTMLButtonElement | null;
-const memoryL0CancelBtn = document.getElementById("memory-l0-cancel-btn") as HTMLButtonElement | null;
-const memoryL1EditBtn = document.getElementById("memory-l1-edit-btn") as HTMLButtonElement | null;
-const memoryL1CancelBtn = document.getElementById("memory-l1-cancel-btn") as HTMLButtonElement | null;
 
 
 function showAvatar(dataUrl: string | null): void {
