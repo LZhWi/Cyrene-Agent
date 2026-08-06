@@ -73,6 +73,7 @@ import type {
 } from "./music/types";
 import { musicState } from "./music/state";
 import { channelsState } from "./channels/state";
+import { channelsWechatEnabledEl, channelsFeishuEnabledEl, channelsWechatStatusEl, channelsFeishuStatusEl, channelsRateUserEl, channelsRateChannelEl, channelsTtsEl, channelsStickerEl, channelsMirrorEl, channelsToolSandboxOffEl, channelsToolSandboxAllEl, channelsToolSandboxSafeEl, channelsFeishuAppIdEl, channelsFeishuAppSecretEl, channelsFeishuAppSecretRevealBtn, channelsFeishuSaveBtn, channelsWechatLoginBtn, channelsWechatRestartBtn, channelsWechatFeedbackEl, channelsFeishuFeedbackEl, channelsLogListEl, channelsLogRefreshBtn, channelsLogClearBtn } from "./channels/dom";
 import { memoryState } from "./memory/state";
 import { schedulerState } from "./scheduler/state";
 import { schedulerNewBtn, schedulerEmpty, schedulerList, schedulerEditor, schedulerEditorTitle, schedulerEditorClose, schedulerTitleInput, schedulerPromptInput, schedulerEnabledInput, schedulerKindInput, schedulerOnceRunAtInput, schedulerTimeOfDayInput, schedulerDayOfWeekInput, schedulerIntervalEveryInput, schedulerIntervalUnitInput, schedulerToolLimitInput, schedulerToolPicker, schedulerToolEmptyHint, schedulerSaveStatus, schedulerCancelBtn, schedulerSaveBtn } from "./scheduler/dom";
@@ -3002,28 +3003,8 @@ window.settings?.onChannelsStatusChanged((status) => {
 });
 
 // ===== channels panel (连接手机) =====
-const channelsWechatEnabledEl = document.getElementById("channels-wechat-enabled") as HTMLInputElement | null;
-const channelsFeishuEnabledEl = document.getElementById("channels-feishu-enabled") as HTMLInputElement | null;
-const channelsWechatStatusEl = document.getElementById("channels-wechat-status");
-const channelsFeishuStatusEl = document.getElementById("channels-feishu-status");
-const channelsRateUserEl = document.getElementById("channels-rate-user") as HTMLInputElement | null;
-const channelsRateChannelEl = document.getElementById("channels-rate-channel") as HTMLInputElement | null;
-const channelsTtsEl = document.getElementById("channels-tts-enabled") as HTMLInputElement | null;
-const channelsStickerEl = document.getElementById("channels-sticker-enabled") as HTMLInputElement | null;
-const channelsMirrorEl = document.getElementById("channels-mirror-desktop") as HTMLInputElement | null;
-const channelsToolSandboxOffEl = document.getElementById("channels-tool-sandbox-off") as HTMLInputElement | null;
-const channelsToolSandboxAllEl = document.getElementById("channels-tool-sandbox-all") as HTMLInputElement | null;
-const channelsToolSandboxSafeEl = document.getElementById("channels-tool-sandbox-safe") as HTMLInputElement | null;
 // 飞书配置输入框（Phase 2 长连接版：只需 App ID + App Secret）
-const channelsFeishuAppIdEl = document.getElementById("channels-feishu-app-id") as HTMLInputElement | null;
-const channelsFeishuAppSecretEl = document.getElementById("channels-feishu-app-secret") as HTMLInputElement | null;
-const channelsFeishuAppSecretRevealBtn = document.getElementById("channels-feishu-app-secret-reveal");
-const channelsFeishuSaveBtn = document.getElementById("channels-feishu-save");
 // 微信按钮
-const channelsWechatLoginBtn = document.getElementById("channels-wechat-login");
-const channelsWechatRestartBtn = document.getElementById("channels-wechat-restart");
-const channelsWechatFeedbackEl = document.getElementById("channels-wechat-feedback");
-const channelsFeishuFeedbackEl = document.getElementById("channels-feishu-feedback");
 
 
 function renderChannelStatus(el: HTMLElement | null, phase: string, message?: string): void {
@@ -3256,9 +3237,6 @@ function setFeishuFeedback(kind: "info" | "ok" | "err", msg: string): void {
 }
 
 // ===== Phase 3.4：消息日志 =====
-const channelsLogListEl = document.getElementById("channels-log-list");
-const channelsLogRefreshBtn = document.getElementById("channels-log-refresh");
-const channelsLogClearBtn = document.getElementById("channels-log-clear");
 
 interface LogEntry {
   at: string;
