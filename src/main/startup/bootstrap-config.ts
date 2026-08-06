@@ -22,8 +22,8 @@ import { reactChatWindow } from "../windows/window-state";
 
 export interface BootstrapConfigContext {
   loadGeneralSettings: () => GeneralSettings;
-  /** 场景嵌入索引，用于通话语气注入。 */
-  sceneEmbeddingIndex: SceneIndex | null;
+  /** 场景嵌入索引 getter，用于通话语气注入。 */
+  getSceneEmbeddingIndex: () => SceneIndex | null;
 }
 
 function getReactChatWindow(): BrowserWindow | null {
@@ -139,7 +139,7 @@ export function bootstrapConfigGetters(ctx: BootstrapConfigContext): void {
     async (userText: string) => {
       const messages = [{ role: "user" as const, content: userText }];
       return buildCallSystemPrompt(
-        { sceneEmbeddingIndex: ctx.sceneEmbeddingIndex },
+        { sceneEmbeddingIndex: ctx.getSceneEmbeddingIndex() },
         userText,
         messages,
       );

@@ -62,8 +62,8 @@ export interface AgentRuntimeDeps {
   loadUserProfile: () => UserProfile;
   toolRegistry: { getEnabledTools: () => ToolDefinition[] };
   skillRegistry: typeof skillRegistry;
-  sceneEmbeddingIndex: unknown;
-  stickerEmbeddingIndex: unknown;
+  getSceneEmbeddingIndex: () => unknown;
+  getStickerEmbeddingIndex: () => unknown;
   getEmbeddingProvider: () => unknown;
   getSceneEmbeddingProvider: () => unknown;
   broadcastRuntimeStateChanged: () => void;
@@ -148,7 +148,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         resolveSlashActivation(messages as any)) as BuildOptionsDeps["resolveSlashActivation"],
       buildToneInjection: ((userText, messages, provider, index) =>
         buildToneInjection(userText, messages as any, provider as any, index as any)) as BuildOptionsDeps["buildToneInjection"],
-      sceneEmbeddingIndex: rawDeps.sceneEmbeddingIndex,
+      sceneEmbeddingIndex: rawDeps.getSceneEmbeddingIndex(),
       getSceneEmbeddingProvider: (() =>
         rawDeps.getSceneEmbeddingProvider() as unknown) as BuildOptionsDeps["getSceneEmbeddingProvider"],
       buildAlwaysOnContext: ((userText, messages) =>
@@ -214,7 +214,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       feelingToExpression,
       setRuntimeState: ((next) =>
         runtimeStateService.setStateWithoutNotify(next as any)) as OnRunFinishedDeps["setRuntimeState"],
-      stickerEmbeddingIndex: rawDeps.stickerEmbeddingIndex,
+      stickerEmbeddingIndex: rawDeps.getStickerEmbeddingIndex(),
       getEmbeddingProvider: (() => rawDeps.getEmbeddingProvider() as unknown) as OnRunFinishedDeps["getEmbeddingProvider"],
       matchSticker: ((text, provider, index, threshold) =>
         matchSticker(text, provider as any, index as any, threshold) as Promise<{

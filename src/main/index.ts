@@ -66,6 +66,7 @@ import { validateSearchApiKey } from "./orchestrator/search-backend-filter";
 import { indexConversationTurn } from "./orchestrator/history-tools";
 import { createLlmClient, type LlmClient } from "./services/llm/llm-client";
 import { createTtsSynthesisService, type TtsSynthesisService } from "./services/tts/tts-synthesis-service";
+import { createEmbeddingIndexService, type EmbeddingIndexService } from "./services/embedding/embedding-index-service";
 
 import { getAdapterForConfig } from "./orchestrator/vendors";
 import type { StructuredOutputRequest, VendorConfig } from "./orchestrator/vendors";
@@ -109,11 +110,6 @@ import {
 import { createSocialContextScheduler } from "./social-context/scheduler";
 import { createSocialAtomStore } from "./social-context/store";
 import { getEmbeddingStatus, downloadEmbeddingModel, deleteEmbeddingModel } from "./embedding-manager";
-import { BUILT_IN_STICKER_DESCRIPTIONS } from "./sticker-descriptions";
-import { buildCachedStickerEmbeddingIndex } from "./sticker-embedding-cache";
-import type { StickerEmbeddingEntry } from "./sticker-embedder";
-import { buildCachedSceneIndex } from "./scene-embedding-cache";
-import type { SceneIndex } from "./scene-embedder";
 import { loadUserStickerManifest, addUserSticker, deleteUserSticker, isStickerIdTaken, getStickersDir } from "./sticker-storage";
 import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
 import { normalizeWindowVisibilitySettings } from "./window-visibility-settings";
@@ -264,71 +260,11 @@ let activeChatSessionId: string | null = null;
 
 const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 300000; // FC 总预算：20 轮 × 推理模型 ~10-15s 需 300s 余量
 
-const STARTUP_EMBEDDING_REFRESH_DELAY_MS = 1500;
-
 const runtimeStateService = createRuntimeStateService();
 runtimeStateService.onChange(() => broadcastRuntimeStateChanged());
 const llmClient = createLlmClient();
 const ttsSynthesisService = createTtsSynthesisService();
-let stickerEmbeddingIndex: StickerEmbeddingEntry[] | null = null;
-let stickerEmbeddingRefreshSeq = 0;
-let sceneEmbeddingIndex: SceneIndex | null = null;
-let sceneEmbeddingRefreshSeq = 0;
-
-function refreshStickerEmbeddingIndexInBackground(reason: string): void {
-  const seq = ++stickerEmbeddingRefreshSeq;
-  void (async () => {
-    try {
-      const provider = getEmbeddingProvider();
-      if (!provider) {
-        if (seq === stickerEmbeddingRefreshSeq) stickerEmbeddingIndex = null;
-        console.warn("[StickerEmbedding] Model not found. Sticker matching disabled.");
-        return;
-      }
-
-      const index = await buildCachedStickerEmbeddingIndex(
-        provider,
-        BUILT_IN_STICKER_DESCRIPTIONS,
-        loadUserStickerManifest(),
-      );
-      if (seq !== stickerEmbeddingRefreshSeq) return;
-      stickerEmbeddingIndex = index;
-      logger.info(LogTag.StickerEmbed, `index ready (${reason}): ${index.length} entries`);
-    } catch (err) {
-      if (seq === stickerEmbeddingRefreshSeq) stickerEmbeddingIndex = null;
-      console.error("[StickerEmbedding] refresh failed:", err instanceof Error ? err.message : String(err));
-    }
-  })();
-}
-
-function refreshSceneEmbeddingIndexInBackground(reason: string): void {
-  const seq = ++sceneEmbeddingRefreshSeq;
-  void (async () => {
-    try {
-      const sceneProvider = getSceneEmbeddingProvider();
-      if (!sceneProvider) {
-        if (seq === sceneEmbeddingRefreshSeq) sceneEmbeddingIndex = null;
-        console.warn("[SceneEmbedding] bge-m3 model not found. Scene embedding disabled.");
-        return;
-      }
-
-      const index = await buildCachedSceneIndex(sceneProvider);
-      if (seq !== sceneEmbeddingRefreshSeq) return;
-      sceneEmbeddingIndex = index;
-      logger.info(LogTag.SceneEmbed, "index ready:", Object.keys(index.scenes).length, "scenes", `(${reason})`);
-    } catch (err) {
-      if (seq === sceneEmbeddingRefreshSeq) sceneEmbeddingIndex = null;
-      console.error("[SceneEmbedding] refresh failed:", err instanceof Error ? err.message : String(err));
-    }
-  })();
-}
-
-function scheduleStartupEmbeddingRefreshes(): void {
-  setTimeout(() => {
-    refreshStickerEmbeddingIndexInBackground("startup");
-    refreshSceneEmbeddingIndexInBackground("startup");
-  }, STARTUP_EMBEDDING_REFRESH_DELAY_MS);
-}
+const embeddingIndexService = createEmbeddingIndexService();
 
 const proactiveLifecycle = createProactiveLifecycle({ loadGeneralSettings });
 
@@ -574,7 +510,7 @@ function createWindow(manager: WindowManager): void {
 
   bootstrapConfigGetters({
     loadGeneralSettings,
-    sceneEmbeddingIndex,
+    getSceneEmbeddingIndex: () => embeddingIndexService.getSceneEmbeddingIndex(),
   });
 }
 
@@ -1011,8 +947,8 @@ ipcMain.handle(IPC.EMBEDDING_SET_MODEL, async (_event, modelKey: string) => {
       await reconcileUserMemoryIndex();
       saveModelSettings({ embeddingModel: modelKey as "minilm" | "bgem3" });
       broadcastModelConfigChanged();
-      stickerEmbeddingIndex = null;
-      refreshStickerEmbeddingIndexInBackground("embedding-model-switch");
+      embeddingIndexService.invalidateStickerEmbeddingIndex();
+      embeddingIndexService.refreshStickerEmbeddingIndex("embedding-model-switch");
     }
     return result;
   } catch (err) {
@@ -1101,8 +1037,8 @@ ipcMain.handle(IPC.STICKERS_ADD, async (_event, payload: unknown) => {
   };
   try {
     await addUserSticker(sourcePath, id, description, phrases);
-    stickerEmbeddingIndex = null;
-    refreshStickerEmbeddingIndexInBackground("user-sticker-add");
+    embeddingIndexService.invalidateStickerEmbeddingIndex();
+    embeddingIndexService.refreshStickerEmbeddingIndex("user-sticker-add");
   } catch (err) {
     console.error("[stickers] add failed:", err);
     throw err;
@@ -1113,8 +1049,8 @@ ipcMain.handle(IPC.STICKERS_ADD, async (_event, payload: unknown) => {
 ipcMain.handle(IPC.STICKERS_DELETE, async (_event, id: string) => {
   try {
     await deleteUserSticker(id);
-    stickerEmbeddingIndex = null;
-    refreshStickerEmbeddingIndexInBackground("user-sticker-delete");
+    embeddingIndexService.invalidateStickerEmbeddingIndex();
+    embeddingIndexService.refreshStickerEmbeddingIndex("user-sticker-delete");
   } catch (err) {
     console.error("[stickers] delete failed:", err);
     throw err;
@@ -2301,8 +2237,8 @@ app.whenReady().then(async () => {
     loadUserProfile,
     toolRegistry,
     skillRegistry,
-    sceneEmbeddingIndex,
-    stickerEmbeddingIndex,
+    getSceneEmbeddingIndex: () => embeddingIndexService.getSceneEmbeddingIndex(),
+    getStickerEmbeddingIndex: () => embeddingIndexService.getStickerEmbeddingIndex(),
     getEmbeddingProvider,
     getSceneEmbeddingProvider,
     broadcastRuntimeStateChanged,
@@ -2413,7 +2349,7 @@ app.whenReady().then(async () => {
     console.error("[Cyrene] RAG init FAILED:", err);
   }
 
-  scheduleStartupEmbeddingRefreshes();
+  embeddingIndexService.scheduleStartupRefreshes();
 
   schedulerEngine.start();
 });
