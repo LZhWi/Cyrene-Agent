@@ -77,6 +77,7 @@ import { memoryState } from "./memory/state";
 import { schedulerState } from "./scheduler/state";
 import { tokensState } from "./tokens/state";
 import { ttsState } from "./tts/state";
+import { modalState } from "./shared/modal-state";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -91,13 +92,12 @@ import { TTS_FIELD_MAP, TTS_PROVIDER_FIELDS } from "./tts/field-map";
 import { MODEL_PRESETS } from "./api/presets";
 
 // Inline modal (to avoid Vite tree-shaking)
-let _cyModalOverlay: HTMLElement | null = null;
 function _initModalOverlay(): void {
-  if (_cyModalOverlay) return;
-  _cyModalOverlay = document.createElement("div");
-  _cyModalOverlay.id = "cy-modal-overlay";
-  _cyModalOverlay.className = "cy-modal-overlay is-hidden";
-  _cyModalOverlay.innerHTML = [
+  if (modalState.cyOverlay) return;
+  modalState.cyOverlay = document.createElement("div");
+  modalState.cyOverlay.id = "cy-modal-overlay";
+  modalState.cyOverlay.className = "cy-modal-overlay is-hidden";
+  modalState.cyOverlay.innerHTML = [
     '<div class="cy-modal" role="alertdialog" aria-modal="true">',
     '  <div class="cy-modal__head">',
     '    <span class="cy-modal__icon" id="cy-modal-icon">📌</span>',
@@ -111,26 +111,26 @@ function _initModalOverlay(): void {
     '  </div>',
     '</div>',
   ].join("\n");
-  document.body.appendChild(_cyModalOverlay);
+  document.body.appendChild(modalState.cyOverlay);
 }
 
 function showModal (options: { title: string; message: string; icon?: string; confirmText?: string; cancelText?: string }): Promise<boolean> {
   _initModalOverlay();
-  if (!_cyModalOverlay) return Promise.resolve(false);
-  var iconEl = _cyModalOverlay.querySelector("#cy-modal-icon") as HTMLElement;
-  var titleEl = _cyModalOverlay.querySelector("#cy-modal-title") as HTMLElement;
-  var msgEl = _cyModalOverlay.querySelector("#cy-modal-message") as HTMLElement;
-  var cancelBtn = _cyModalOverlay.querySelector("#cy-modal-cancel") as HTMLButtonElement;
-  var confirmBtn = _cyModalOverlay.querySelector("#cy-modal-confirm") as HTMLButtonElement;
+  if (!modalState.cyOverlay) return Promise.resolve(false);
+  var iconEl = modalState.cyOverlay.querySelector("#cy-modal-icon") as HTMLElement;
+  var titleEl = modalState.cyOverlay.querySelector("#cy-modal-title") as HTMLElement;
+  var msgEl = modalState.cyOverlay.querySelector("#cy-modal-message") as HTMLElement;
+  var cancelBtn = modalState.cyOverlay.querySelector("#cy-modal-cancel") as HTMLButtonElement;
+  var confirmBtn = modalState.cyOverlay.querySelector("#cy-modal-confirm") as HTMLButtonElement;
   iconEl.innerHTML = options.icon || "📌";
   titleEl.textContent = options.title;
   msgEl.textContent = options.message;
   cancelBtn.textContent = options.cancelText || "取消";
   confirmBtn.textContent = options.confirmText || "确定";
-  _cyModalOverlay.classList.remove("is-hidden");
+  modalState.cyOverlay.classList.remove("is-hidden");
   return new Promise(function (resolve) {
     var cleanup = function (result: boolean) {
-      _cyModalOverlay?.classList.add("is-hidden");
+      modalState.cyOverlay?.classList.add("is-hidden");
       cancelBtn.removeEventListener("click", onCancel);
       confirmBtn.removeEventListener("click", onConfirm);
       resolve(result);
@@ -147,13 +147,12 @@ function showModal (options: { title: string; message: string; icon?: string; co
  * 用于"音色快速复刻"这种需要展示多组说明（规格 / 费用 / 过期规则）的场景。
  * 调用方负责传入安全的 HTML（项目内固定字符串）；若内容来自用户/网络必须先 escapeHtml。
  */
-let _cyHtmlModalOverlay: HTMLElement | null = null;
 function _initHtmlModalOverlay(): void {
-  if (_cyHtmlModalOverlay) return;
-  _cyHtmlModalOverlay = document.createElement("div");
-  _cyHtmlModalOverlay.id = "cy-html-modal-overlay";
-  _cyHtmlModalOverlay.className = "cy-modal-overlay is-hidden";
-  _cyHtmlModalOverlay.innerHTML = [
+  if (modalState.cyHtmlOverlay) return;
+  modalState.cyHtmlOverlay = document.createElement("div");
+  modalState.cyHtmlOverlay.id = "cy-html-modal-overlay";
+  modalState.cyHtmlOverlay.className = "cy-modal-overlay is-hidden";
+  modalState.cyHtmlOverlay.innerHTML = [
     '<div class="cy-modal cy-html-modal" role="dialog" aria-modal="true">',
     '  <div class="cy-modal__head">',
     '    <span class="cy-modal__icon" id="cy-html-modal-icon">📌</span>',
@@ -166,24 +165,24 @@ function _initHtmlModalOverlay(): void {
     '  </div>',
     '</div>',
   ].join("\n");
-  document.body.appendChild(_cyHtmlModalOverlay);
+  document.body.appendChild(modalState.cyHtmlOverlay);
 }
 
 function showHtmlModal(options: { title: string; htmlBody: string; icon?: string; confirmText?: string }): Promise<void> {
   _initHtmlModalOverlay();
-  if (!_cyHtmlModalOverlay) return Promise.resolve();
-  const iconEl = _cyHtmlModalOverlay.querySelector("#cy-html-modal-icon") as HTMLElement;
-  const titleEl = _cyHtmlModalOverlay.querySelector("#cy-html-modal-title") as HTMLElement;
-  const bodyEl = _cyHtmlModalOverlay.querySelector("#cy-html-modal-body") as HTMLElement;
-  const confirmBtn = _cyHtmlModalOverlay.querySelector("#cy-html-modal-confirm") as HTMLButtonElement;
+  if (!modalState.cyHtmlOverlay) return Promise.resolve();
+  const iconEl = modalState.cyHtmlOverlay.querySelector("#cy-html-modal-icon") as HTMLElement;
+  const titleEl = modalState.cyHtmlOverlay.querySelector("#cy-html-modal-title") as HTMLElement;
+  const bodyEl = modalState.cyHtmlOverlay.querySelector("#cy-html-modal-body") as HTMLElement;
+  const confirmBtn = modalState.cyHtmlOverlay.querySelector("#cy-html-modal-confirm") as HTMLButtonElement;
   iconEl.innerHTML = options.icon || "📌";
   titleEl.textContent = options.title;
   bodyEl.innerHTML = options.htmlBody;
   confirmBtn.textContent = options.confirmText || "知道了";
-  _cyHtmlModalOverlay.classList.remove("is-hidden");
+  modalState.cyHtmlOverlay.classList.remove("is-hidden");
   return new Promise((resolve) => {
     const cleanup = () => {
-      _cyHtmlModalOverlay?.classList.add("is-hidden");
+      modalState.cyHtmlOverlay?.classList.add("is-hidden");
       confirmBtn.removeEventListener("click", onConfirm);
       resolve();
     };
@@ -195,13 +194,12 @@ function showHtmlModal(options: { title: string; htmlBody: string; icon?: string
 // escapeHtml() 已定义在文件下方（settings.ts:3738），此处复用即可。
 
 // Inline input modal (Electron 禁用了 window.prompt，所以自己实现)
-let _cyInputOverlay: HTMLElement | null = null;
 function _initInputOverlay(): void {
-  if (_cyInputOverlay) return;
-  _cyInputOverlay = document.createElement("div");
-  _cyInputOverlay.id = "cy-input-overlay";
-  _cyInputOverlay.className = "cy-modal-overlay is-hidden";
-  _cyInputOverlay.innerHTML = [
+  if (modalState.cyInputOverlay) return;
+  modalState.cyInputOverlay = document.createElement("div");
+  modalState.cyInputOverlay.id = "cy-input-overlay";
+  modalState.cyInputOverlay.className = "cy-modal-overlay is-hidden";
+  modalState.cyInputOverlay.innerHTML = [
     '<div class="cy-modal" role="dialog" aria-modal="true" style="width:min(420px,90vw);">',
     '  <div class="cy-modal__head">',
     '    <span class="cy-modal__icon" id="cy-input-icon"><svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M5.32497 43.4996L13.81 43.4998L44.9227 12.3871L36.4374 3.90186L5.32471 35.0146L5.32497 43.4996Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M27.9521 12.3872L36.4374 20.8725" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>',
@@ -217,7 +215,7 @@ function _initInputOverlay(): void {
     '  </div>',
     '</div>',
   ].join("\n");
-  document.body.appendChild(_cyInputOverlay);
+  document.body.appendChild(modalState.cyInputOverlay);
 }
 
 function showInputModal(options: {
@@ -230,13 +228,13 @@ function showInputModal(options: {
   cancelText?: string;
 }): Promise<string | null> {
   _initInputOverlay();
-  if (!_cyInputOverlay) return Promise.resolve(null);
-  const iconEl = _cyInputOverlay.querySelector("#cy-input-icon") as HTMLElement;
-  const titleEl = _cyInputOverlay.querySelector("#cy-input-title") as HTMLElement;
-  const msgEl = _cyInputOverlay.querySelector("#cy-input-message") as HTMLElement;
-  const inputEl = _cyInputOverlay.querySelector("#cy-input-field") as HTMLInputElement;
-  const cancelBtn = _cyInputOverlay.querySelector("#cy-input-cancel") as HTMLButtonElement;
-  const confirmBtn = _cyInputOverlay.querySelector("#cy-input-confirm") as HTMLButtonElement;
+  if (!modalState.cyInputOverlay) return Promise.resolve(null);
+  const iconEl = modalState.cyInputOverlay.querySelector("#cy-input-icon") as HTMLElement;
+  const titleEl = modalState.cyInputOverlay.querySelector("#cy-input-title") as HTMLElement;
+  const msgEl = modalState.cyInputOverlay.querySelector("#cy-input-message") as HTMLElement;
+  const inputEl = modalState.cyInputOverlay.querySelector("#cy-input-field") as HTMLInputElement;
+  const cancelBtn = modalState.cyInputOverlay.querySelector("#cy-input-cancel") as HTMLButtonElement;
+  const confirmBtn = modalState.cyInputOverlay.querySelector("#cy-input-confirm") as HTMLButtonElement;
   iconEl.textContent = options.icon || `<svg width="22" height="22" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M5.32497 43.4996L13.81 43.4998L44.9227 12.3871L36.4374 3.90186L5.32471 35.0146L5.32497 43.4996Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M27.9521 12.3872L36.4374 20.8725" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
   titleEl.textContent = options.title;
   msgEl.textContent = options.message;
@@ -244,11 +242,11 @@ function showInputModal(options: {
   inputEl.placeholder = options.placeholder || "";
   cancelBtn.textContent = options.cancelText || "取消";
   confirmBtn.textContent = options.confirmText || "确定";
-  _cyInputOverlay.classList.remove("is-hidden");
+  modalState.cyInputOverlay.classList.remove("is-hidden");
   setTimeout(() => inputEl.focus(), 30);
   return new Promise((resolve) => {
     const cleanup = (result: string | null) => {
-      _cyInputOverlay?.classList.add("is-hidden");
+      modalState.cyInputOverlay?.classList.add("is-hidden");
       cancelBtn.removeEventListener("click", onCancel);
       confirmBtn.removeEventListener("click", onConfirm);
       inputEl.removeEventListener("keydown", onKey);
@@ -4586,17 +4584,17 @@ function paintPermissionUI(level: PermissionLevel): void {
 async function confirmFullAccess(): Promise<boolean> {
   // 完全访问需要延迟确认 + 风险提示
   _initModalOverlay();
-  if (!_cyModalOverlay) return false;
-  const iconEl = _cyModalOverlay.querySelector("#cy-modal-icon") as HTMLElement;
-  const titleEl = _cyModalOverlay.querySelector("#cy-modal-title") as HTMLElement;
-  const msgEl = _cyModalOverlay.querySelector("#cy-modal-message") as HTMLElement;
-  const cancelBtn = _cyModalOverlay.querySelector("#cy-modal-cancel") as HTMLButtonElement;
-  const confirmBtn = _cyModalOverlay.querySelector("#cy-modal-confirm") as HTMLButtonElement;
+  if (!modalState.cyOverlay) return false;
+  const iconEl = modalState.cyOverlay.querySelector("#cy-modal-icon") as HTMLElement;
+  const titleEl = modalState.cyOverlay.querySelector("#cy-modal-title") as HTMLElement;
+  const msgEl = modalState.cyOverlay.querySelector("#cy-modal-message") as HTMLElement;
+  const cancelBtn = modalState.cyOverlay.querySelector("#cy-modal-cancel") as HTMLButtonElement;
+  const confirmBtn = modalState.cyOverlay.querySelector("#cy-modal-confirm") as HTMLButtonElement;
   iconEl.textContent = "⚠️";
   titleEl.textContent = "切换到完全访问？";
   msgEl.textContent = "这意味着昔涟可以在你的电脑上自由执行命令，包括 git clone、npm install、删除文件等。请只在你完全信任她的判断时启用。";
   cancelBtn.textContent = "再想想";
-  _cyModalOverlay.classList.remove("is-hidden");
+  modalState.cyOverlay.classList.remove("is-hidden");
 
   // 倒计时 5 秒强制等待
   let remain = 5;
@@ -4617,7 +4615,7 @@ async function confirmFullAccess(): Promise<boolean> {
     const cleanup = (result: boolean) => {
       clearInterval(tick);
       confirmBtn.disabled = false;
-      _cyModalOverlay?.classList.add("is-hidden");
+      modalState.cyOverlay?.classList.add("is-hidden");
       cancelBtn.removeEventListener("click", onCancel);
       confirmBtn.removeEventListener("click", onConfirm);
       resolve(result);
