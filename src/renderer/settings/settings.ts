@@ -129,6 +129,7 @@ import {
 import { loadMusicPanel, disposeMusicPanel } from "./music/panel";
 import { loadChannelsPanel } from "./channels/panel";
 import { renderProactiveDeliveryAvailability } from "./channels/panel";
+import "./asr/panel";  // 副作用导入：执行事件绑定 + 初始加载
 
 // Inline modal (to avoid Vite tree-shaking)
 
@@ -1561,64 +1562,6 @@ void loadEmailConfig();
 
 // ── 🎧ASR 设置 ──
 
-function syncAsrVisibility(): void {
-  if (asrAliyunConfig) {
-    (asrAliyunConfig as HTMLElement).style.display = asrEngineSelect?.value === "aliyun" ? "block" : "none";
-  }
-}
-
-asrEngineSelect?.addEventListener("change", () => {
-  syncAsrVisibility();
-  void saveAsrField("asrEngine", asrEngineSelect.value);
-});
-// 防抖保存：每个字段独立 timer，避免连续填写多个字段时只有最后一个被保存
-
-asrAliyunAppKeyInput?.addEventListener("input", () => { clearTimeout(asrState.aliyunAppKeyTimer); asrState.aliyunAppKeyTimer = setTimeout(() => void saveAsrField("asrAliyunAppKey", asrAliyunAppKeyInput.value.trim()), 800); });
-asrAliyunAccessKeyIdInput?.addEventListener("input", () => { clearTimeout(asrState.aliyunAccessKeyIdTimer); asrState.aliyunAccessKeyIdTimer = setTimeout(() => void saveAsrField("asrAliyunAccessKeyId", asrAliyunAccessKeyIdInput.value.trim()), 800); });
-asrAliyunAccessKeySecretInput?.addEventListener("input", () => { clearTimeout(asrState.aliyunAccessKeySecretTimer); asrState.aliyunAccessKeySecretTimer = setTimeout(() => void saveAsrField("asrAliyunAccessKeySecret", asrAliyunAccessKeySecretInput.value.trim()), 800); });
-asrLanguageSelect?.addEventListener("change", () => void saveAsrField("asrLanguage", asrLanguageSelect.value));
-asrVadSilenceInput?.addEventListener("input", () => {
-  void saveAsrField("asrVadSilenceMs", Number(asrVadSilenceInput.value) || 1000);
-});
-asrVadThresholdInput?.addEventListener("input", () => {
-  const v = Number(asrVadThresholdInput.value) || 0.01;
-  if (asrVadThresholdValue) asrVadThresholdValue.textContent = String(v);
-  void saveAsrField("asrVadThreshold", v);
-});
-asrShowTranscriptCheckbox?.addEventListener("change", () => void saveAsrField("asrShowTranscript", asrShowTranscriptCheckbox.checked));
-
-async function saveAsrField(field: string, value: unknown): Promise<void> {
-  if (!window.tts) return;
-  try {
-    await window.tts.saveSettings({ [field]: value });
-  } catch (err) {
-    console.warn("[asr] 保存 ASR 配置失败:", field, err);
-  }
-}
-
-async function loadAsrConfig(): Promise<void> {
-  try {
-    const cfg = await window.tts?.loadSettings();
-    if (cfg) {
-      if (asrEngineSelect) asrEngineSelect.value = String(cfg.asrEngine ?? "off");
-      if (asrAliyunAppKeyInput) asrAliyunAppKeyInput.value = String(cfg.asrAliyunAppKey ?? "");
-      if (asrAliyunAccessKeyIdInput) asrAliyunAccessKeyIdInput.value = String(cfg.asrAliyunAccessKeyId ?? "");
-      if (asrAliyunAccessKeySecretInput) asrAliyunAccessKeySecretInput.value = String(cfg.asrAliyunAccessKeySecret ?? "");
-      if (asrLanguageSelect) asrLanguageSelect.value = String(cfg.asrLanguage ?? "zh");
-      if (asrVadSilenceInput) asrVadSilenceInput.value = String(cfg.asrVadSilenceMs ?? 1000);
-      if (asrVadThresholdInput) {
-        const v = Number(cfg.asrVadThreshold) || 0.01;
-        asrVadThresholdInput.value = String(v);
-        if (asrVadThresholdValue) asrVadThresholdValue.textContent = String(v);
-      }
-      if (asrShowTranscriptCheckbox) asrShowTranscriptCheckbox.checked = Boolean(cfg.asrShowTranscript);
-    }
-    syncAsrVisibility();
-  } catch (err) {
-    console.warn("[asr] 加载 ASR 配置失败", err);
-  }
-}
-void loadAsrConfig();
 
 // ── 联网搜索插件（博查/Tavily/火山/MiniMax）──
 
