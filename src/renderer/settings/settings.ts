@@ -130,6 +130,7 @@ import { loadMusicPanel, disposeMusicPanel } from "./music/panel";
 import { loadChannelsPanel } from "./channels/panel";
 import { renderProactiveDeliveryAvailability } from "./channels/panel";
 import "./asr/panel";  // 副作用导入：执行事件绑定 + 初始加载
+import "./email/panel";  // 副作用导入：执行事件绑定 + 初始加载
 
 // Inline modal (to avoid Vite tree-shaking)
 
@@ -1501,64 +1502,6 @@ async function loadTravelConfig(): Promise<void> {
 }
 void loadTravelConfig();
 
-// ── ✉️邮件发送插件 ──
-
-function syncEmailConfigVisibility(): void {
-  if (emailConfig) emailConfig.style.display = emailEnabledCheckbox?.checked ? "block" : "none";
-}
-emailEnabledCheckbox?.addEventListener("change", () => {
-  syncEmailConfigVisibility();
-  void saveEmailField("emailEnabled", emailEnabledCheckbox.checked);
-});
-
-// 防抖保存：每个字段独立 timer，避免连续填写多个字段时只有最后一个被保存
-
-emailSmtpHostInput?.addEventListener("input", () => { clearTimeout(pluginsState.emailSmtpHostTimer); pluginsState.emailSmtpHostTimer = setTimeout(() => void saveEmailField("emailSmtpHost", emailSmtpHostInput.value.trim()), 800); });
-emailSmtpPortInput?.addEventListener("input", () => { clearTimeout(pluginsState.emailSmtpPortTimer); pluginsState.emailSmtpPortTimer = setTimeout(() => void saveEmailField("emailSmtpPort", Number(emailSmtpPortInput.value) || 465), 800); });
-emailSmtpSecureInput?.addEventListener("change", () => void saveEmailField("emailSmtpSecure", emailSmtpSecureInput.checked));
-emailSmtpUserInput?.addEventListener("input", () => { clearTimeout(pluginsState.emailSmtpUserTimer); pluginsState.emailSmtpUserTimer = setTimeout(() => void saveEmailField("emailSmtpUser", emailSmtpUserInput.value.trim()), 800); });
-emailSmtpPassInput?.addEventListener("input", () => { clearTimeout(pluginsState.emailSmtpPassTimer); pluginsState.emailSmtpPassTimer = setTimeout(() => void saveEmailField("emailSmtpPass", emailSmtpPassInput.value.trim()), 800); });
-emailFromNameInput?.addEventListener("input", () => { clearTimeout(pluginsState.emailFromNameTimer); pluginsState.emailFromNameTimer = setTimeout(() => void saveEmailField("emailFromName", emailFromNameInput.value.trim()), 800); });
-
-async function saveEmailField(field: string, value: unknown): Promise<void> {
-  if (!window.tts) return;
-  try {
-    await window.tts.saveSettings({ [field]: value });
-  } catch (err) {
-    console.warn("[plugins] 保存邮件配置失败:", field, err);
-  }
-}
-
-async function loadEmailConfig(): Promise<void> {
-  try {
-    const cfg = await window.tts?.loadSettings();
-    if (cfg && emailEnabledCheckbox) {
-      emailEnabledCheckbox.checked = Boolean(cfg.emailEnabled);
-    }
-    if (cfg && emailSmtpHostInput) {
-      emailSmtpHostInput.value = String(cfg.emailSmtpHost ?? "");
-    }
-    if (cfg && emailSmtpPortInput) {
-      emailSmtpPortInput.value = String(cfg.emailSmtpPort ?? 465);
-    }
-    if (cfg && emailSmtpSecureInput) {
-      emailSmtpSecureInput.checked = Boolean(cfg.emailSmtpSecure);
-    }
-    if (cfg && emailSmtpUserInput) {
-      emailSmtpUserInput.value = String(cfg.emailSmtpUser ?? "");
-    }
-    if (cfg && emailSmtpPassInput) {
-      emailSmtpPassInput.value = String(cfg.emailSmtpPass ?? "");
-    }
-    if (cfg && emailFromNameInput) {
-      emailFromNameInput.value = String(cfg.emailFromName ?? "");
-    }
-    syncEmailConfigVisibility();
-  } catch (err) {
-    console.warn("[plugins] 加载邮件配置失败", err);
-  }
-}
-void loadEmailConfig();
 
 // ── 🎧ASR 设置 ──
 
