@@ -28,7 +28,7 @@ import {
   callWindow,
 } from "./windows/window-state";
 import { broadcastToAllWindows } from "./windows/broadcast";
-import { normalizeReasoningPreference, type ReasoningPreference } from "../shared/reasoning";
+import { type ReasoningPreference } from "../shared/reasoning";
 import { getUiFontResponseHeaders, isSafeUiFontRequest } from "./ui-font-protocol";
 import {
   type DefaultChatMode,
@@ -49,16 +49,8 @@ import {
   switchEmbeddingModel,
 } from "./rag";
 import { getEmbeddingProvider, getSceneEmbeddingProvider } from "./rag/embedding";
-import { describePendingAttachment } from "./rag/file-ingest";
-import { cancelDocumentIndexJob, configureDocumentIndexQueue, enqueueDocumentIndexJob } from "./rag/document-index-queue";
-import { retrieveQueuedDocumentChunks, runDocumentIndexJob } from "./rag/document-index-worker";
-import { processDocumentIndexRequest } from "./rag/document-index-ipc";
-import {
-  IMAGE_CAPTION_PROMPT,
-  buildImageCaptionPrompt,
-  validateCaptionImagePath,
-} from "./chat/image-caption";
-import { decideImageSendStrategy } from "./chat/image-send-strategy";
+import { configureDocumentIndexQueue } from "./rag/document-index-queue";
+import { runDocumentIndexJob } from "./rag/document-index-worker";
 import { CyreneAgent } from "./orchestrator/cyrene-agent";
 import { validateSearchApiKey } from "./orchestrator/search-backend-filter";
 import { createLlmClient, type LlmClient } from "./services/llm/llm-client";
@@ -74,7 +66,7 @@ import {
 } from "./orchestrator/structured-output/profiles";
 import { normalizeFinishReason } from "./orchestrator/structured-output/finish-reason";
 
-import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
+import { getCapability } from "./orchestrator/vendors/capabilities";
 import { resolveVendorRuntimeSettings, setVendorRuntimeSettingsGetter } from "./orchestrator/vendors/runtime-settings";
 
 import { toolRegistry } from "./orchestrator/tool-registry";
@@ -101,6 +93,7 @@ import type { StickerConfigItem } from "../shared/sticker-types";
 import { memoryStore } from "./memory/memory-store"
 import { backupMemoryRagFiles, reconcileMemoryRag } from "./memory/memory-rag-reconciliation";
 import { registerChatsIpc } from "./chats/chats-ipc";
+import { registerChatUiIpc } from "./chats/chat-ui-ipc";
 import * as chatsStore from "./chats/chats-store";
 import { getUsage, flush as flushTokenUsage } from "./token-usage-store";
 import { TtsSessionService } from "./tts/tts-session-service";
@@ -118,8 +111,6 @@ import {
   type PublicModelConfig,
   getPublicModelConfig,
   loadModelSettings,
-  loadVisionConfig,
-  normalizeModelSettings,
   saveModelSettings,
 } from "./settings/model-settings";
 import type { GeneralSettings } from "./settings/general-settings";
@@ -202,7 +193,6 @@ const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2
 
 // 聊天窗口当前活跃的会话 id（通过 IPC 由聊天窗口上报）；
 // 设置面板"删除当前会话"差异化提示用。聊天窗口关闭时由 closed 事件置 null。
-let activeChatSessionId: string | null = null;
 
 const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 300000; // FC 总预算：20 轮 × 推理模型 ~10-15s 需 300s 余量
 
@@ -461,155 +451,11 @@ ipcMain.on(IPC.WINDOW_SET_DRAGGING, (_event, isDragging: boolean) => {
 ipcMain.handle(IPC.WINDOW_CAPTURE_FRAME, async () => windowManager?.captureMainWindowFrame() ?? null);
 ipcMain.handle(IPC.WINDOW_GET_CURSOR_POSITION, () => windowManager?.getCursorScreenPosition() ?? { x: 0, y: 0 });
 
-ipcMain.handle(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS, () => ({
-  window: live2dWindowLifecycle.getDiagnostics(),
-}));
-
-ipcMain.on(IPC.WINDOW_MINIMIZE, () => {
-  windowManager?.minimizeMainWindow();
+registerChatUiIpc({
+  live2dWindowLifecycle,
+  get windowManager() { return windowManager; },
 });
 
-ipcMain.on(IPC.WINDOW_CLOSE, () => {
-  windowManager?.hideMainWindow();
-});
-
-ipcMain.on(IPC.APP_QUIT, () => {
-  app.quit();
-});
-
-ipcMain.on(IPC.CHAT_MINIMIZE, (event) => {
-  BrowserWindow.fromWebContents(event.sender)?.minimize();
-});
-
-ipcMain.on(IPC.CHAT_CLOSE, (event) => {
-  BrowserWindow.fromWebContents(event.sender)?.close();
-});
-
-ipcMain.on(IPC.CHAT_TOGGLE_MAXIMIZE, (event) => {
-  const senderWindow = BrowserWindow.fromWebContents(event.sender);
-  if (!senderWindow) return;
-  if (senderWindow.isMaximized()) {
-    senderWindow.unmaximize();
-  } else {
-    senderWindow.maximize();
-  }
-});
-
-ipcMain.handle(IPC.CHAT_IS_MAXIMIZED, (event) => {
-  return BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false;
-});
-
-// 推理下拉原子读：{ providerKey, providerId, model, preference }
-// providerKey = settings.provider（displayName），用来防竞态；chat:setReasoning 需携带同 providerKey。
-ipcMain.handle(IPC.CHAT_GET_REASONING_STATE, () => {
-  const settings = loadModelSettings();
-  const cap = getCapabilityOrOpenAI(settings.provider);
-  return {
-    providerKey: settings.provider,
-    providerId: cap.id,
-    model: settings.model,
-    preference: settings.perProvider?.[settings.provider]?.reasoning,
-    thinkingOverride: settings.thinkingOverride,
-  };
-});
-
-// 推理下拉写：原子。payload 形如 { providerKey, preference }，providerKey 防竞态。
-ipcMain.handle(IPC.CHAT_SET_REASONING, (_event, payload: unknown) => {
-  if (!payload || typeof payload !== "object") return;
-  const p = payload as { providerKey?: unknown; preference?: unknown };
-  if (typeof p.providerKey !== "string" || typeof p.preference !== "object" || !p.preference) return;
-  const current = loadModelSettings();
-  if (current.provider !== p.providerKey) {
-    // 竞态：用户拿到 state 后、点选项前，provider 已切换。丢弃旧 providerKey 的写。
-    return;
-  }
-  const normalized = normalizeReasoningPreference(p.preference);
-  if (!normalized) return;
-  saveModelSettings({ reasoning: normalized });
-});
-ipcMain.handle(IPC.CHAT_INGEST_FILES, async (_event, paths: unknown) => {
-  const list = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === "string") : [];
-  if (list.length === 0) return [];
-  try {
-    return list.map((filePath) => describePendingAttachment(filePath));
-  } catch (err: any) {
-    console.error("[Cyrene] ingestFiles ERROR:", err?.message || err);
-    return [];
-  }
-});
-
-ipcMain.handle(IPC.CHAT_PROCESS_DOCUMENTS, async (event, payload: unknown) => {
-  const filePaths = payload && typeof payload === "object" && Array.isArray((payload as { filePaths?: unknown }).filePaths)
-    ? (payload as { filePaths: unknown[] }).filePaths.filter((p): p is string => typeof p === "string")
-    : [];
-  if (filePaths.length === 0) return [];
-  const query = typeof (payload as { query?: unknown }).query === "string"
-    ? (payload as { query: string }).query
-    : "";
-  return processDocumentIndexRequest({
-    filePaths,
-    query,
-    sender: event.sender,
-    enqueue: enqueueDocumentIndexJob,
-    retrieve: retrieveQueuedDocumentChunks,
-  });
-});
-
-ipcMain.handle(IPC.CHAT_CANCEL_DOCUMENT_INDEX, (_event, payload: unknown) => {
-  const jobId = payload && typeof payload === "object" ? (payload as { jobId?: unknown }).jobId : undefined;
-  return typeof jobId === "string" && cancelDocumentIndexJob(jobId);
-});
-
-ipcMain.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {
-  const filePath = payload && typeof payload === "object"
-    ? (payload as { filePath?: unknown }).filePath
-    : undefined;
-  const hasAnnotations = payload && typeof payload === "object"
-    ? (payload as { hasAnnotations?: unknown }).hasAnnotations === true
-    : false;
-  const validated = validateCaptionImagePath(filePath);
-  if (!validated.ok) return { ok: false, error: validated.error };
-
-  const visionCfg = loadVisionConfig();
-  if (!visionCfg) {
-    return { ok: false, error: "未配置视觉模型，无法分析图片" };
-  }
-
-  try {
-    const { captionImage } = await import("./orchestrator/vision-captioner");
-    const caption = await captionImage(
-      { base64: validated.buffer.toString("base64"), mime: validated.mime },
-      buildImageCaptionPrompt(hasAnnotations),
-      visionCfg,
-    );
-    if (caption.startsWith("[错误")) {
-      return { ok: false, error: caption };
-    }
-    return { ok: true, caption };
-  } catch (err: any) {
-    return { ok: false, error: err?.message || String(err) };
-  }
-});
-
-ipcMain.handle(IPC.CHAT_GET_IMAGE_PREVIEW, (_event, payload: unknown) => {
-  const filePath = payload && typeof payload === "object"
-    ? (payload as { filePath?: unknown }).filePath
-    : undefined;
-  const validated = validateCaptionImagePath(filePath);
-  if (!validated.ok) return { ok: false, error: validated.error };
-  return {
-    ok: true,
-    dataUrl: `data:${validated.mime};base64,${validated.buffer.toString("base64")}`,
-  };
-});
-
-ipcMain.handle(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, () => {
-  const settings = loadModelSettings();
-  return decideImageSendStrategy({
-    multimodal: settings.multimodal,
-    vision: loadVisionConfig(),
-  });
-});
 ipcMain.on(IPC.SIDEBAR_MINIMIZE, () => {
   sidebarWindow?.minimize();
 });
@@ -905,34 +751,6 @@ app.whenReady().then(async () => {
   );
 
   // 状态栏专用入口：打开/复用 reactChatWindow
-  ipcMain.handle(IPC.CHATS_OPEN_IN_REACT_WINDOW, (_event, sessionId: string) => {
-    if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
-      return false;
-    }
-    windowManager?.createReactChatWindow(sessionId);
-    return true;
-  });
-  // reactChatWindow → main：声明 ChatPage 已挂好 IPC 监听
-  ipcMain.on(IPC.CHATS_REACT_READY, (event) => {
-    const win = reactChatWindow;
-    if (!win || win.isDestroyed()) return;
-    if (event.sender !== win.webContents) return;
-    const pending = reactChatSession.markReady();
-    if (pending) {
-      win.webContents.send(IPC.CHATS_REACT_SWITCH_SESSION, pending);
-    }
-  });
-  // 聊天窗口启动/切换会话时上报当前活跃 sessionId；main 广播给所有窗口
-  // 用途：设置面板"删除当前会话"时差异化提示文案
-  ipcMain.handle(IPC.CHATS_SET_ACTIVE_SESSION, (_event, sessionId: string | null) => {
-    activeChatSessionId = sessionId ?? null;
-    for (const win of BrowserWindow.getAllWindows()) {
-      if (win.isDestroyed()) continue;
-      try { win.webContents.send(IPC.CHATS_ACTIVE_SESSION_CHANGED, activeChatSessionId); } catch { /* ignore */ }
-    }
-    return true;
-  });
-  ipcMain.handle(IPC.CHATS_GET_ACTIVE_SESSION, () => activeChatSessionId);
   ipcMain.handle(IPC.TODOS_GET_CURRENT, () => getCurrentTodos());
 
   const generalSettings = loadGeneralSettings();
