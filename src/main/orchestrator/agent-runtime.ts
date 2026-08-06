@@ -45,15 +45,7 @@ import {
 } from "./system-prompt-builder";
 import { loadStickerSettings } from "./sticker-settings";
 import type { RuntimeStateService } from "./runtime-state-service";
-
-type CallChatCompletions = (
-  settings: ModelSettings,
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
-  temperature: number | undefined,
-  timeoutMs: number,
-  label: string,
-  logTiming?: boolean,
-) => Promise<string>;
+import type { LlmClient } from "../services/llm/llm-client";
 
 type EnqueueLLMTask = <T>(
   label: string,
@@ -63,7 +55,7 @@ type EnqueueLLMTask = <T>(
 
 export interface AgentRuntimeDeps {
   runtimeStateService: RuntimeStateService;
-  callChatCompletions: CallChatCompletions;
+  llmClient: LlmClient;
   enqueueLLMTask: EnqueueLLMTask;
   loadModelSettings: () => ModelSettings;
   loadGeneralSettings: () => GeneralSettings;
@@ -103,7 +95,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
     await rawDeps.enqueueLLMTask(
       "心情观察器",
       async () => {
-        const observerContent = await rawDeps.callChatCompletions(
+        const observerContent = await rawDeps.llmClient.chat(
           settings as ModelSettings,
           [
             {

@@ -64,20 +64,15 @@ import { decideImageSendStrategy } from "./chat/image-send-strategy";
 import { CyreneAgent } from "./orchestrator/cyrene-agent";
 import { validateSearchApiKey } from "./orchestrator/search-backend-filter";
 import { indexConversationTurn } from "./orchestrator/history-tools";
+import { createLlmClient, type LlmClient } from "./services/llm/llm-client";
 
-import { getAdapter, buildVendorUrl, getAdapterForConfig, createSseReader } from "./orchestrator/vendors";
-import type {
-  ChatResponse,
-  StructuredOutputRequest,
-  VendorConfig,
-} from "./orchestrator/vendors";
+import { getAdapterForConfig } from "./orchestrator/vendors";
+import type { StructuredOutputRequest, VendorConfig } from "./orchestrator/vendors";
 import {
   classifyStructuredOutputEndpoint,
   resolveStructuredOutputProfile,
 } from "./orchestrator/structured-output/profiles";
 import { normalizeFinishReason } from "./orchestrator/structured-output/finish-reason";
-import { dispatchChatGeneration } from "./orchestrator/structured-output/dispatcher";
-import { invokeLangChainStructured } from "./orchestrator/structured-output/langchain-invoker";
 import { testVendorConnection } from "./orchestrator/vendors/test-connection";
 
 import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
@@ -128,7 +123,7 @@ import { backupMemoryRagFiles, reconcileMemoryRag } from "./memory/memory-rag-re
 import type { L0Profile, L1Profile } from "./memory/memory-types";
 import { registerChatsIpc } from "./chats/chats-ipc";
 import * as chatsStore from "./chats/chats-store";
-import { recordUsage, getUsage, flush as flushTokenUsage } from "./token-usage-store";
+import { getUsage, flush as flushTokenUsage } from "./token-usage-store";
 import { uploadFile as ttsUploadFile, cloneVoice as ttsCloneVoice, synthesize as ttsSynthesize } from "./tts/minimax-engine";
 import { synthesize as gptsovitsSynthesize } from "./tts/gptsovits-engine";
 import { synthesize as customCloudSynthesize } from "./tts/custom-cloud-engine";
@@ -175,19 +170,9 @@ import type { GeneralSettings } from "./settings/general-settings";
 import { loadPromptFile } from "./prompts/prompt-loader";
 import { bootstrapConfigGetters } from "./startup/bootstrap-config";
 import { loadMemoryPanelData } from "./memory/panel";
-import {
-  createVisibleStreamFilter,
-  extractJsonPayload,
-  stripThinkBlocks,
-} from "./chat-stream-utils";
 import { type RuntimeState } from "./runtime-state";
 import { getAppIconPath } from "./app-icon";
 import { ensureCustomStylePrompt } from "./style-prompt";
-import {
-  appendApiLog,
-  buildChatCompletionsUrl,
-  getApiLogPath,
-} from "./chat-api-utils";
 import type { StartTtsRequest, TtsAudioFormat, TtsSessionEvent, TtsStartResult } from "../shared/tts-session";
 import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
 import { codeRunWorker } from "./orchestrator/code/code-run-worker";
@@ -285,6 +270,7 @@ const STARTUP_EMBEDDING_REFRESH_DELAY_MS = 1500;
 
 const runtimeStateService = createRuntimeStateService();
 runtimeStateService.onChange(() => broadcastRuntimeStateChanged());
+const llmClient = createLlmClient();
 let stickerEmbeddingIndex: StickerEmbeddingEntry[] | null = null;
 let stickerEmbeddingRefreshSeq = 0;
 let sceneEmbeddingIndex: SceneIndex | null = null;
@@ -619,233 +605,6 @@ async function syncVolcanoSearchMcp(settings: GeneralSettings): Promise<{ mcpSyn
   return { mcpSyncResult: "no_change" };
 }
 
-async function callChatCompletionsStream(
-  settings: ModelSettings,
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
-  temperature: number | undefined,
-  timeoutMs: number,
-  label: string,
-  onChunk: (text: string) => void,
-  logTiming = true,
-): Promise<string> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const _startTime = Date.now();
-  if (logTiming) console.log(`[TIMING] ${label} START timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`);
-
-  // 拼 VendorConfig（settings 顶层三件套 + 镜像字段都参与）
-  const cfg: VendorConfig = {
-    provider: settings.provider,
-    baseUrl: settings.baseUrl,
-    model: settings.model,
-    apiKey: settings.apiKey,
-    explicitTransport: settings.explicitTransport,
-    reasoning: settings.reasoning,
-  };
-
-  try {
-    // adapter 按用户保存的 explicitTransport 选择协议；旧配置才回退厂商默认。
-    const adapter = getAdapterForConfig(cfg);
-    // adapter 的 buildStreamRequest 内部已写 stream=true + 拼 transport 相关的 headers/body
-    const http = adapter.buildStreamRequest({
-      model: cfg.model,
-      messages,
-      ...(temperature !== undefined ? { temperature } : {}),
-      stream: true,
-    }, cfg);
-
-    const response = await fetch(http.url, {
-      method: "POST",
-      signal: controller.signal,
-      headers: http.headers,
-      body: http.body,
-    });
-
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({})) as Record<string, unknown>;
-      const errMsg = (errorData as { error?: { message?: string } }).error?.message;
-      throw new Error(errMsg || `模型请求失败：HTTP ${response.status}`);
-    }
-
-    if (!response.body) {
-      throw new Error("响应体为空，不支持流式读取");
-    }
-
-    let fullText = "";
-    const visibleFilter = createVisibleStreamFilter();
-
-    // Reader 层切分字节流 → StreamEvent；adapter 解析为 StreamChunk
-    // 半行拼接、event 块切分等状态由 createSseReader 内部维护，adapter 保持纯函数无状态。
-    for await (const event of createSseReader(adapter, response.body)) {
-      const chunk = adapter.parseStreamEvent(event);
-      if (!chunk) continue;
-      if (chunk.deltaText) {
-        fullText += chunk.deltaText;
-        const visibleDelta = visibleFilter.push(chunk.deltaText);
-        if (visibleDelta) onChunk(visibleDelta);
-      }
-      // thinking 累积但不入可见流（stripThinkBlocks 末尾统一剥）
-      if (chunk.usage) {
-        recordUsage(chunk.usage.input, chunk.usage.output, 1);
-      }
-      if (chunk.done) break;
-    }
-
-    const visibleTail = visibleFilter.flush();
-    if (visibleTail) {
-      onChunk(visibleTail);
-    }
-
-    const result = stripThinkBlocks(fullText);
-    if (logTiming) console.log(`[TIMING] ${label} OK in ${Date.now() - _startTime}ms resultLen=${result.length}`);
-    appendApiLog(label, messages, fullText, result);
-    return result;
-  } catch (err) {
-    if (err instanceof Error && err.name === "AbortError") {
-      if (logTiming) console.log(`[TIMING] ${label} TIMEOUT at ${Date.now() - _startTime}ms`);
-      throw new Error("模型请求超时，请稍后重试。");
-    }
-    if (logTiming) console.log(`[TIMING] ${label} ERROR at ${Date.now() - _startTime}ms: ${err instanceof Error ? err.message : err}`);
-    throw err;
-  } finally {
-    clearTimeout(timer);
-  }
-}
-
-
-// Legacy wrapper for non-streaming calls (e.g. observer)
-async function callChatCompletions(
-  settings: ModelSettings,
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
-  temperature: number | undefined,
-  timeoutMs: number,
-  label: string,
-  logTiming = true,
-): Promise<string> {
-  return callChatCompletionsStream(settings, messages, temperature, timeoutMs, label, () => {}, logTiming);
-}
-
-/**
- * 非流式 chat completions 调用（CITA 专用）。
- * CITA 不需要流式输出（它只要完整 JSON），非流式比流式快 ~2 倍。
- * 支持 reasoningOverride 强制关闭 reasoning（CITA 不需要深度推理）。
- */
-async function callChatCompletionsNonStream(
-  settings: ModelSettings,
-  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
-  temperature: number | undefined,
-  timeoutMs: number,
-  label: string,
-  reasoningOverride?: ModelSettings["reasoning"],
-  options?: {
-    structuredOutput?: StructuredOutputRequest;
-    maxTokens?: number;
-    extraBody?: Record<string, unknown>;
-  },
-  signal?: AbortSignal,
-): Promise<{
-  text: string;
-  thinking?: string;
-  finishReason: string;
-  refusal?: string;
-  structuredValue?: unknown;
-}> {
-  const cfg: VendorConfig = {
-    provider: settings.provider,
-    baseUrl: settings.baseUrl,
-    model: settings.model,
-    apiKey: settings.apiKey,
-    explicitTransport: settings.explicitTransport,
-    reasoning: reasoningOverride ?? settings.reasoning,
-  };
-  const adapter = getAdapterForConfig(cfg);
-  const chatRequest = {
-    model: cfg.model,
-    messages,
-    ...(temperature !== undefined ? { temperature } : {}),
-    stream: false,
-    ...(options?.structuredOutput ? { structuredOutput: options.structuredOutput } : {}),
-    ...(options?.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
-    ...(options?.extraBody ? { extraBody: options.extraBody } : {}),
-  };
-
-  const controller = new AbortController();
-  const abort = (): void => controller.abort(signal?.reason);
-  signal?.addEventListener("abort", abort, { once: true });
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  const startTime = Date.now();
-  console.log(`[TIMING] ${label} START (non-stream) timeout=${timeoutMs}ms msgLen=${messages.length} sysLen=${messages[0]?.content?.length ?? 0}`);
-
-  try {
-    const parsed = await dispatchChatGeneration<ChatResponse>({
-      request: chatRequest,
-      provider: adapter.id,
-      endpointKind: classifyStructuredOutputEndpoint({
-        providerId: adapter.id,
-        configuredBaseUrl: cfg.baseUrl,
-        officialBaseUrl: adapter.capability.baseUrl,
-      }),
-      langchain: async () => {
-        const generated = await invokeLangChainStructured(
-          chatRequest,
-          {
-            ...cfg,
-            provider: adapter.id,
-            explicitTransport: adapter.transport,
-          },
-          controller.signal,
-        );
-        return {
-          assistantMessage: { role: "assistant" as const, content: generated.text },
-          text: generated.text,
-          toolCalls: [],
-          finishReason: generated.finishReason,
-          raw: { backend: "langchain" },
-          structuredValue: generated.structuredValue,
-        };
-      },
-      legacy: async () => {
-        const http = adapter.buildRequest(chatRequest, cfg);
-        const response = await fetch(http.url, {
-          method: "POST",
-          headers: http.headers,
-          body: http.body,
-          signal: controller.signal,
-        });
-        if (!response.ok) {
-          const errorData = await response.json().catch(() => ({})) as Record<string, unknown>;
-          const errMsg = (errorData as { error?: { message?: string } }).error?.message;
-          throw new Error(errMsg || `模型请求失败：HTTP ${response.status}`);
-        }
-        return adapter.parseResponse(await response.json());
-      },
-    });
-    if (parsed.usage) {
-      recordUsage(parsed.usage.input, parsed.usage.output, 1);
-    }
-    const totalTime = Date.now() - startTime;
-    console.log(`[TIMING] ${label} OK in ${totalTime}ms resultLen=${parsed.text.length}`);
-    return {
-      text: parsed.text,
-      thinking: parsed.thinking,
-      finishReason: parsed.finishReason,
-      refusal: parsed.refusal,
-      structuredValue: parsed.structuredValue,
-    };
-  } catch (error) {
-    const totalTime = Date.now() - startTime;
-    if (error instanceof Error && error.name === "AbortError") {
-      console.log(`[TIMING] ${label} TIMEOUT at ${totalTime}ms`);
-    } else {
-      console.log(`[TIMING] ${label} ERROR at ${totalTime}ms: ${error}`);
-    }
-    throw error;
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", abort);
-  }
-}
-
 const citaService = new CitaService({
   store: new ContextStore(),
   engine: new RemoteSemanticEngine(
@@ -854,7 +613,7 @@ const citaService = new CitaService({
       // Kimi k2.6 只允许特定 temperature（0.6），传 0 会被拒。
       // 省略让服务端用默认值，其他模型继续 temperature=0 保证确定性。
       const citaTemp = settings.model.match(/^kimi-k2\.6(?:$|-)/i) ? undefined : 0;
-      return callChatCompletionsNonStream(
+      return llmClient.chatNonStream(
         settings,
         [
           { role: "system", content: request.systemPrompt },
@@ -2684,7 +2443,7 @@ app.whenReady().then(async () => {
               schema: SOCIAL_EXTRACTION_SCHEMA,
               sendJsonObjectHint: profile.requestHints.sendJsonObject,
             };
-      const response = await callChatCompletionsNonStream(
+      const response = await llmClient.chatNonStream(
         settings,
         [
           {
@@ -2719,7 +2478,7 @@ app.whenReady().then(async () => {
   });
   const agentRuntime = createAgentRuntime({
     runtimeStateService,
-    callChatCompletions,
+    llmClient,
     enqueueLLMTask,
     loadModelSettings,
     loadGeneralSettings,
