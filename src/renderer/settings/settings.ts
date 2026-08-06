@@ -93,6 +93,7 @@ import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
 import { asrState } from "./asr/state";
 import { asrEngineSelect, asrAliyunConfig, asrAliyunAppKeyInput, asrAliyunAccessKeyIdInput, asrAliyunAccessKeySecretInput, asrLanguageSelect, asrVadSilenceInput, asrVadThresholdInput, asrVadThresholdValue, asrShowTranscriptCheckbox } from "./asr/dom";
 import { pluginsState } from "./plugins/state";
+import { searchEnabledCheckbox, searchConfig, searchEngineSelect, searchBochaKeyInput, searchTavilyKeyInput, searchMinimaxKeyInput, searchAnySearchKeyInput, searchBochaRow, searchTavilyRow, searchMinimaxRow, searchAnySearchRow } from "./search/dom";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -1914,17 +1915,6 @@ async function loadAsrConfig(): Promise<void> {
 void loadAsrConfig();
 
 // ── 联网搜索插件（博查/Tavily/火山/MiniMax）──
-const searchEnabledCheckbox = document.getElementById("plugin-search-enabled") as HTMLInputElement | null;
-const searchConfig = document.getElementById("plugin-search-config") as HTMLElement | null;
-const searchEngineSelect = document.getElementById("search-engine") as HTMLSelectElement | null;
-const searchBochaKeyInput = document.getElementById("search-bocha-key") as HTMLInputElement | null;
-const searchTavilyKeyInput = document.getElementById("search-tavily-key") as HTMLInputElement | null;
-const searchMinimaxKeyInput = document.getElementById("search-minimax-key") as HTMLInputElement | null;
-const searchAnySearchKeyInput = document.getElementById("search-anysearch-key") as HTMLInputElement | null;
-const searchBochaRow = document.getElementById("search-bocha-row");
-const searchTavilyRow = document.getElementById("search-tavily-row");
-const searchMinimaxRow = document.getElementById("search-minimax-row");
-const searchAnySearchRow = document.getElementById("search-anysearch-row");
 
 const SEARCH_ROW_MAP: Record<string, HTMLElement | null> = {
   bocha: searchBochaRow,
