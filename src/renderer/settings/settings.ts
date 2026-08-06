@@ -73,6 +73,7 @@ import type {
 } from "./music/types";
 import { musicState } from "./music/state";
 import { channelsState } from "./channels/state";
+import { memoryState } from "./memory/state";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -4105,11 +4106,6 @@ const memoryL0CancelBtn = document.getElementById("memory-l0-cancel-btn") as HTM
 const memoryL1EditBtn = document.getElementById("memory-l1-edit-btn") as HTMLButtonElement | null;
 const memoryL1CancelBtn = document.getElementById("memory-l1-cancel-btn") as HTMLButtonElement | null;
 
-let memoryPanelCache: MemoryPanelPayload | null = null;
-let l0Editing = false;
-let l1Editing = false;
-let l0Snapshot: Record<string, string> | null = null;
-let l1Snapshot: Record<string, string> | null = null;
 
 function showAvatar(dataUrl: string | null): void {
   if (!dataUrl || !avatarEl) return;
@@ -4187,7 +4183,7 @@ function renderInfoList(
 }
 
 function renderL2List(query = ""): void {
-  const list = memoryPanelCache?.l2 ?? [];
+  const list = memoryState.panelCache?.l2 ?? [];
   const normalized = query.trim().toLowerCase();
   const filtered = normalized
     ? list.filter((item) => {
@@ -4212,7 +4208,7 @@ async function loadMemoryPanel(): Promise<void> {
   try {
     const payload = await window.memoryPanel?.getData();
     if (!payload) return;
-    memoryPanelCache = payload;
+    memoryState.panelCache = payload;
 
     if (memoryL0NameInput) memoryL0NameInput.value = payload.l0.preferredName || "";
     if (memoryL0OccupationInput) memoryL0OccupationInput.value = payload.l0.occupation || "";
@@ -4393,17 +4389,17 @@ function setL1FieldsDisabled(disabled: boolean): void {
 }
 
 function enterL0EditMode(): void {
-  if (l0Editing) return;
-  l0Editing = true;
-  l0Snapshot = takeL0Snapshot();
+  if (memoryState.l0Editing) return;
+  memoryState.l0Editing = true;
+  memoryState.l0Snapshot = takeL0Snapshot();
   setL0FieldsDisabled(false);
   if (memoryL0EditBtn) memoryL0EditBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M6 9C6 7.34315 7.34315 6 9 6H30.3363C31.132 6 31.895 6.31607 32.4576 6.87868L36.3158 10.7368L41.1213 15.5424C41.6839 16.105 42 16.868 42 17.6637V39C42 40.6569 40.6569 42 39 42H9C7.34315 42 6 40.6569 6 39V9Z" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M31 26H17C15.3431 26 14 27.3431 14 29V42H34V29C34 27.3431 32.6569 26 31 26Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M29 16H17C15.3431 16 14 14.6569 14 13V6" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 保存`;
   if (memoryL0CancelBtn) memoryL0CancelBtn.classList.remove("is-hidden");
 }
 
 function exitL0EditMode(): void {
-  l0Editing = false;
-  l0Snapshot = null;
+  memoryState.l0Editing = false;
+  memoryState.l0Snapshot = null;
   setL0FieldsDisabled(true);
   if (memoryL0EditBtn) memoryL0EditBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M5.32497 43.4996L13.81 43.4998L44.9227 12.3871L36.4374 3.90186L5.32471 35.0146L5.32497 43.4996Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M27.9521 12.3872L36.4374 20.8725" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 编辑`;
   if (memoryL0CancelBtn) memoryL0CancelBtn.classList.add("is-hidden");
@@ -4411,7 +4407,7 @@ function exitL0EditMode(): void {
 
 async function saveL0(): Promise<void> {
   const current = takeL0Snapshot();
-  if (l0Snapshot && shallowEqual(current, l0Snapshot)) {
+  if (memoryState.l0Snapshot && shallowEqual(current, memoryState.l0Snapshot)) {
     exitL0EditMode();
     return;
   }
@@ -4421,7 +4417,7 @@ async function saveL0(): Promise<void> {
     exitL0EditMode();
     if (memoryL0EditBtn) {
       memoryL0EditBtn.textContent = "✅ 已保存";
-      setTimeout(() => { if (memoryL0EditBtn && !l0Editing) memoryL0EditBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M5.32497 43.4996L13.81 43.4998L44.9227 12.3871L36.4374 3.90186L5.32471 35.0146L5.32497 43.4996Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M27.9521 12.3872L36.4374 20.8725" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 编辑`; }, 2000);
+      setTimeout(() => { if (memoryL0EditBtn && !memoryState.l0Editing) memoryL0EditBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M5.32497 43.4996L13.81 43.4998L44.9227 12.3871L36.4374 3.90186L5.32471 35.0146L5.32497 43.4996Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M27.9521 12.3872L36.4374 20.8725" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 编辑`; }, 2000);
     }
   } catch (err) {
     console.error("[settings] save L0 failed", err);
@@ -4430,28 +4426,28 @@ async function saveL0(): Promise<void> {
 }
 
 function cancelL0Edit(): void {
-  if (l0Snapshot) {
-    if (memoryL0NameInput) memoryL0NameInput.value = l0Snapshot.preferredName;
-    if (memoryL0OccupationInput) memoryL0OccupationInput.value = l0Snapshot.occupation;
-    if (memoryL0InterestsInput) memoryL0InterestsInput.value = l0Snapshot.longTermInterests;
-    if (memoryL0LanguageInput) memoryL0LanguageInput.value = l0Snapshot.language;
-    if (memoryL0NoteInput) memoryL0NoteInput.value = l0Snapshot.permanentNote;
+  if (memoryState.l0Snapshot) {
+    if (memoryL0NameInput) memoryL0NameInput.value = memoryState.l0Snapshot.preferredName;
+    if (memoryL0OccupationInput) memoryL0OccupationInput.value = memoryState.l0Snapshot.occupation;
+    if (memoryL0InterestsInput) memoryL0InterestsInput.value = memoryState.l0Snapshot.longTermInterests;
+    if (memoryL0LanguageInput) memoryL0LanguageInput.value = memoryState.l0Snapshot.language;
+    if (memoryL0NoteInput) memoryL0NoteInput.value = memoryState.l0Snapshot.permanentNote;
   }
   exitL0EditMode();
 }
 
 function enterL1EditMode(): void {
-  if (l1Editing) return;
-  l1Editing = true;
-  l1Snapshot = takeL1Snapshot();
+  if (memoryState.l1Editing) return;
+  memoryState.l1Editing = true;
+  memoryState.l1Snapshot = takeL1Snapshot();
   setL1FieldsDisabled(false);
   if (memoryL1EditBtn) memoryL1EditBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M6 9C6 7.34315 7.34315 6 9 6H30.3363C31.132 6 31.895 6.31607 32.4576 6.87868L36.3158 10.7368L41.1213 15.5424C41.6839 16.105 42 16.868 42 17.6637V39C42 40.6569 40.6569 42 39 42H9C7.34315 42 6 40.6569 6 39V9Z" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M31 26H17C15.3431 26 14 27.3431 14 29V42H34V29C34 27.3431 32.6569 26 31 26Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M29 16H17C15.3431 16 14 14.6569 14 13V6" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 保存`;
   if (memoryL1CancelBtn) memoryL1CancelBtn.classList.remove("is-hidden");
 }
 
 function exitL1EditMode(): void {
-  l1Editing = false;
-  l1Snapshot = null;
+  memoryState.l1Editing = false;
+  memoryState.l1Snapshot = null;
   setL1FieldsDisabled(true);
   if (memoryL1EditBtn) memoryL1EditBtn.innerHTML = `<svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M5.32497 43.4996L13.81 43.4998L44.9227 12.3871L36.4374 3.90186L5.32471 35.0146L5.32497 43.4996Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M27.9521 12.3872L36.4374 20.8725" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 编辑`;
   if (memoryL1CancelBtn) memoryL1CancelBtn.classList.add("is-hidden");
@@ -4459,7 +4455,7 @@ function exitL1EditMode(): void {
 
 async function saveL1(): Promise<void> {
   const current = takeL1Snapshot();
-  if (l1Snapshot && shallowEqual(current, l1Snapshot)) {
+  if (memoryState.l1Snapshot && shallowEqual(current, memoryState.l1Snapshot)) {
     exitL1EditMode();
     return;
   }
@@ -4469,7 +4465,7 @@ async function saveL1(): Promise<void> {
     exitL1EditMode();
     if (memoryL1EditBtn) {
       memoryL1EditBtn.textContent = "✅ 已保存";
-      setTimeout(() => { if (memoryL1EditBtn && !l1Editing) memoryL1EditBtn.textContent = "✏️ 编辑"; }, 2000);
+      setTimeout(() => { if (memoryL1EditBtn && !memoryState.l1Editing) memoryL1EditBtn.textContent = "✏️ 编辑"; }, 2000);
     }
   } catch (err) {
     console.error("[settings] save L1 failed", err);
@@ -4478,28 +4474,28 @@ async function saveL1(): Promise<void> {
 }
 
 function cancelL1Edit(): void {
-  if (l1Snapshot) {
-    if (memoryL1GoalsInput) memoryL1GoalsInput.value = l1Snapshot.recentGoals;
-    if (memoryL1PreferencesInput) memoryL1PreferencesInput.value = l1Snapshot.recentPreferences;
-    if (memoryL1ProjectInput) memoryL1ProjectInput.value = l1Snapshot.currentProject;
+  if (memoryState.l1Snapshot) {
+    if (memoryL1GoalsInput) memoryL1GoalsInput.value = memoryState.l1Snapshot.recentGoals;
+    if (memoryL1PreferencesInput) memoryL1PreferencesInput.value = memoryState.l1Snapshot.recentPreferences;
+    if (memoryL1ProjectInput) memoryL1ProjectInput.value = memoryState.l1Snapshot.currentProject;
   }
   exitL1EditMode();
 }
 
 // Bind edit button events
 memoryL0EditBtn?.addEventListener("click", () => {
-  if (l0Editing) { saveL0(); } else { enterL0EditMode(); }
+  if (memoryState.l0Editing) { saveL0(); } else { enterL0EditMode(); }
 });
 memoryL0CancelBtn?.addEventListener("click", cancelL0Edit);
 
 memoryL1EditBtn?.addEventListener("click", () => {
-  if (l1Editing) { saveL1(); } else { enterL1EditMode(); }
+  if (memoryState.l1Editing) { saveL1(); } else { enterL1EditMode(); }
 });
 memoryL1CancelBtn?.addEventListener("click", cancelL1Edit);
 
 
 function renderImportedDocs(): void {
-  const list = memoryPanelCache?.importedDocs ?? [];
+  const list = memoryState.panelCache?.importedDocs ?? [];
   if (!memoryImportedList) return;
 
   if (list.length === 0) {
