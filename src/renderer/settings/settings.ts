@@ -94,6 +94,7 @@ import { asrState } from "./asr/state";
 import { asrEngineSelect, asrAliyunConfig, asrAliyunAppKeyInput, asrAliyunAccessKeyIdInput, asrAliyunAccessKeySecretInput, asrLanguageSelect, asrVadSilenceInput, asrVadThresholdInput, asrVadThresholdValue, asrShowTranscriptCheckbox } from "./asr/dom";
 import { pluginsState } from "./plugins/state";
 import { searchEnabledCheckbox, searchConfig, searchEngineSelect, searchBochaKeyInput, searchTavilyKeyInput, searchMinimaxKeyInput, searchAnySearchKeyInput, searchBochaRow, searchTavilyRow, searchMinimaxRow, searchAnySearchRow } from "./search/dom";
+import { emailEnabledCheckbox, emailConfig, emailSmtpHostInput, emailSmtpPortInput, emailSmtpSecureInput, emailSmtpUserInput, emailSmtpPassInput, emailFromNameInput } from "./email/dom";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -1787,14 +1788,6 @@ async function loadTravelConfig(): Promise<void> {
 void loadTravelConfig();
 
 // ── ✉️邮件发送插件 ──
-const emailEnabledCheckbox = document.getElementById("plugin-email-enabled") as HTMLInputElement | null;
-const emailConfig = document.getElementById("plugin-email-config") as HTMLElement | null;
-const emailSmtpHostInput = document.getElementById("email-smtp-host") as HTMLInputElement | null;
-const emailSmtpPortInput = document.getElementById("email-smtp-port") as HTMLInputElement | null;
-const emailSmtpSecureInput = document.getElementById("email-smtp-secure") as HTMLInputElement | null;
-const emailSmtpUserInput = document.getElementById("email-smtp-user") as HTMLInputElement | null;
-const emailSmtpPassInput = document.getElementById("email-smtp-pass") as HTMLInputElement | null;
-const emailFromNameInput = document.getElementById("email-from-name") as HTMLInputElement | null;
 
 function syncEmailConfigVisibility(): void {
   if (emailConfig) emailConfig.style.display = emailEnabledCheckbox?.checked ? "block" : "none";
