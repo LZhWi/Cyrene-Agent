@@ -63,7 +63,6 @@ import {
 import { decideImageSendStrategy } from "./chat/image-send-strategy";
 import { CyreneAgent } from "./orchestrator/cyrene-agent";
 import { validateSearchApiKey } from "./orchestrator/search-backend-filter";
-import { indexConversationTurn } from "./orchestrator/history-tools";
 import { createLlmClient, type LlmClient } from "./services/llm/llm-client";
 import { createTtsSynthesisService, type TtsSynthesisService } from "./services/tts/tts-synthesis-service";
 import { createEmbeddingIndexService, type EmbeddingIndexService } from "./services/embedding/embedding-index-service";
@@ -80,11 +79,7 @@ import { testVendorConnection } from "./orchestrator/vendors/test-connection";
 import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
 import { resolveVendorRuntimeSettings, setVendorRuntimeSettingsGetter } from "./orchestrator/vendors/runtime-settings";
 
-import { toolRegistry, type ToolDefinition } from "./orchestrator/tool-registry";
-import type { ToolRiskLevel } from "./permission";
-import { loadChannelsSettings } from "./channels/settings-store";
-import { channelManager } from "./channels/manager";
-import { canStartProactiveChannelDelivery, sendProactiveChannelMessage } from "./channels/proactive-delivery";
+import { toolRegistry } from "./orchestrator/tool-registry";
 // 触发 built-in-tools 的副作用注册（fetch_url / run_shell / install_mcp_server）
 import { setLive2dWindowSender } from "./orchestrator/built-in-tools";
 import "./orchestrator/built-in-tools";
@@ -202,11 +197,10 @@ import {
   loadMusicCompanionHost,
 } from "./skills/music-companion-host";
 import { initGameBot } from "./game-bot";
-import { initChannels, shutdownChannels, setChannelsConversationLifecycle } from "./channels/init";
-import { buildChannelAttachmentInputs } from "./channels/agent-input";
-import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadGeneralSettings, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
+
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
 import { createSchedulerSubsystem, type SchedulerSubsystem } from "./scheduler/bootstrap";
+import { createChannelsSubsystem, type ChannelsSubsystem } from "./channels/bootstrap";
 import { createAgentRuntime, type AgentRuntime } from "./orchestrator/agent-runtime";
 import { createRuntimeStateService } from "./orchestrator/runtime-state-service";
 import {
@@ -244,6 +238,7 @@ async function reconcileUserMemoryIndex(): Promise<void> {
 
 let tray: Tray | null = null;
 let schedulerSubsystem: SchedulerSubsystem | null = null;
+let channelsSubsystem: ChannelsSubsystem | null = null;
 let screenshotService: ScreenshotService | null = null;
 let windowManager: WindowManager | null = null;
 const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
@@ -1986,133 +1981,6 @@ app.whenReady().then(async () => {
   // 游戏代肝：IPC + game_bot_start 工具
   initGameBot();
 
-  // 多渠道（微信/飞书/...）：先注入 dispatcher 的 buildAndRunAgent + TTS + 镜像广播 + 最近历史读取，
-  // 让 channels 模块拿到真 agent + 出站增强能力 + 对话上下文。
-  setDispatcherLoadRecentHistory(async (sessionId, limit) => {
-    // 委托给 history-log：读 userData/channels/history/<sessionId>.jsonl 最新 N 条
-    const { loadRecentHistory } = await import("./channels/history-log");
-    return loadRecentHistory(sessionId, limit);
-  });
-  setDispatcherLoadGeneralSettings(loadGeneralSettings);
-
-  setDispatcherBuildAndRunAgent(async (msg, sessionId, priorMessages) => {
-    // 渠道响应结果：统一由 dispatcher 按 cap 降级到 OutgoingMessage.parts。
-    // 包含 sticker 决定（从 onAgentRunFinished 返回，避免在 dispatcher 端重新算一遍 embedding）。
-    const channelResult: { text: string; sticker: string | null } = { text: "", sticker: null };
-
-    // Phase 3.3：按 toolSandbox 过滤可用工具
-    const sandbox = loadChannelsSettings().toolSandbox;
-    const allTools = toolRegistry.getEnabledTools();
-    const filteredTools: ToolDefinition[] = sandbox === "off"
-      ? []
-      : sandbox === "safe-only"
-        ? allTools.filter((t) => (t.risk ?? "safe") === ("safe" as ToolRiskLevel))
-        : allTools;
-    console.log(
-      "[Channels] bot run:",
-      `msg.channel=${msg.channel} sandbox=${sandbox} tools=${filteredTools.length}/${allTools.length} priorMsgs=${priorMessages?.length ?? 0}`,
-    );
-
-    // Phase A：拼接历史 (同桌面端 buildModelMessages 行为: 上滑窗最近 N 条).
-    // history-log 统一存 role: "user"|"assistant", 直接用即可.
-    const historyMessages = (priorMessages ?? [])
-      .filter((m) => typeof m.content === "string" && m.content.trim().length > 0)
-      .map((m) => ({
-        role: m.role as "user" | "assistant" | "system",
-        content: m.content,
-      }));
-
-    // 把 IncomingMessage 转成 AguiRunInput，调 CyreneAgent
-    const channelModelSettings = loadModelSettings();
-    const imageSendStrategy = decideImageSendStrategy({
-      multimodal: channelModelSettings.multimodal,
-      vision: loadVisionConfig(),
-    });
-    const attachmentInputs = await buildChannelAttachmentInputs(msg, {
-      imageMode: imageSendStrategy.mode,
-      captionImage: async (filePath: string) => {
-        const validated = validateCaptionImagePath(filePath);
-        if (!validated.ok) return { ok: false, error: validated.error };
-        const visionCfg = loadVisionConfig();
-        if (!visionCfg) return { ok: false, error: "未配置视觉模型，无法分析图片" };
-        try {
-          const { captionImage } = await import("./orchestrator/vision-captioner");
-          const caption = await captionImage(
-            { base64: validated.buffer.toString("base64"), mime: validated.mime },
-            IMAGE_CAPTION_PROMPT,
-            visionCfg,
-          );
-          if (caption.startsWith("[错误")) return { ok: false, error: caption };
-          return { ok: true, caption };
-        } catch (err: any) {
-          return { ok: false, error: err?.message || String(err) };
-        }
-      },
-    });
-    const { options } = await agentRuntime.buildOptions({
-      messages: [
-        ...historyMessages,
-        { role: "user", content: msg.text },
-      ],
-      style: "01_default.md",
-      sessionId,
-      attachments: attachmentInputs.attachments,
-      imageAttachments: attachmentInputs.imageAttachments,
-      channel: msg.channel,
-      executionMode: sandbox === "off" ? "chat" : "work",
-      ...(sandbox === "off" ? {
-        userTurnId: `${msg.channel}:${msg.senderId}:${msg.at.toISOString()}:user`,
-        assistantTurnId: `${msg.channel}:${msg.senderId}:${msg.at.toISOString()}:assistant`,
-      } : {}),
-    });
-    // 把过滤后的 tools 注入 options（覆盖默认的 getEnabledTools）
-    options.tools = filteredTools;
-
-    const threadId = `thread-${sessionId}-${Date.now()}`;
-    const agent = new CyreneAgent({ threadId, description: `bot:${msg.channel}:${msg.senderId}` });
-    const reply = await new Promise<string>((resolve, reject) => {
-      agent.runWithEvents(options).subscribe({
-        complete: () => {
-          resolve(agent.lastResult?.reply ?? "");
-        },
-        error: (err) => reject(err instanceof Error ? err : new Error(String(err))),
-      });
-    });
-    channelResult.text = reply;
-    if (agent.lastResult) {
-      const finished = await agentRuntime.onRunFinished(agent.lastResult, msg.text, msg.channel);
-      // 把 sticker 决定透出给 dispatcher，让它纳入 OutgoingMessage.parts；
-      // 桌面聊天窗的 sticker 仍由 onAgentRunFinished 内部 IPC 广播承担，此处不重复。
-      channelResult.sticker = finished.sticker;
-    }
-    // 落历史
-    void indexConversationTurn(sessionId, msg.text, reply);
-    return channelResult;
-  });
-
-  // Phase 3.1：注入 TTS 合成 —— dispatcher 在 reply 后会用这个生成渠道音频
-  setDispatcherSynthesizeTts(async (text: string, context) => {
-    const cfg = loadGeneralSettings();
-    return await ttsSynthesisService.synthesizeChannelTts(text, cfg, context.channel);
-  });
-
-  // Phase 3.2：注入桌面端镜像广播 —— 把 bot 入站/出站消息推到 reactChatWindow
-  setDispatcherBroadcastChat((event) => {
-    const win = reactChatWindow;
-    if (!win || win.isDestroyed()) return;
-    try {
-      win.webContents.send(IPC.AGUI_EVENT, {
-        type: "CUSTOM",
-        name: "cyrene.botMessage",
-        value: event,
-      });
-    } catch (err) {
-      console.warn("[Channels] botMessage 广播失败:", err);
-    }
-  });
-
-  void initChannels();
-
   // 任务清单（todo_write 工具的持久化 + 事件广播）：
   // - loadTodos 从磁盘恢复上次未完成的任务（跨重启延续）
   // - onTodosChange 按 mode 订阅变化，把 TodoState 作为 CUSTOM 事件转发给所有聊天窗口
@@ -2243,6 +2111,13 @@ app.whenReady().then(async () => {
 
   schedulerSubsystem = createSchedulerSubsystem(agentRuntime, () => reactChatWindow);
 
+  // 多渠道（微信/飞书/...）：组装 dispatcher 依赖并启动 channels 模块。
+  channelsSubsystem = createChannelsSubsystem({
+    agentRuntime,
+    ttsSynthesisService,
+    getReactChatWindow: () => reactChatWindow,
+  });
+
   registerAgUiIpc(
     (input) => agentRuntime.buildOptions(input),
     // sticker 由 bridge 发送回本次 run 的发起窗口；默认兜底目标为 reactChatWindow。
@@ -2345,7 +2220,7 @@ app.on("before-quit", () => {
   proactiveLifecycle.stopProactiveTrigger();
   codeRunWorker.cleanup();
   flushTokenUsage();
-  void shutdownChannels();
+  void channelsSubsystem?.shutdown();
   void screenshotService?.shutdown();
 });
 
