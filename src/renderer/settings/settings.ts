@@ -88,6 +88,7 @@ import { formatDateTime, escapeHtml } from "./shared/format";
 import { parsePositiveIntOrThrow, parseN1SecToMsOrThrow, parseCommandLine } from "./shared/parse";
 import { apiState } from "./api/state";
 import { preferencesState } from "./preferences/state";
+import { stickerEnabledInput, stickerSizeSelect, stickerThresholdInput, stickerThresholdVal, stickerAddOverlay, stickerAddPickBtn, stickerAddFileName, stickerAddId, stickerAddDesc, stickerAddPhrases, stickerAddError, stickerAddConfirm, stickerAddCancel } from "./preferences/dom";
 import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
 import { asrState } from "./asr/state";
 import { pluginsState } from "./plugins/state";
@@ -465,8 +466,6 @@ const providerProfileCache: Record<string, ProviderProfile> = {};
 // 当前激活的厂商：每次 applyPreset 后更新；用于"切到下一家厂商前先把当前那家的输入框值缓存住"
 const runtimeSyncSelect = document.getElementById("runtime-sync") as HTMLElement;
 const runtimeSyncNote = document.getElementById("runtime-sync-note") as HTMLElement;
-const stickerEnabledInput = document.getElementById("sticker-enabled") as HTMLInputElement;
-const stickerSizeSelect = document.getElementById("sticker-size") as HTMLElement;
 const windowCornerRadiusInput = document.getElementById("window-corner-radius") as HTMLInputElement;
 const windowCornerRadiusVal = document.getElementById("window-corner-radius-val") as HTMLElement;
 const petAlwaysOnTopInput = document.getElementById("pet-always-on-top") as HTMLInputElement;
@@ -503,8 +502,6 @@ const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputE
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
 const openStickerManagerBtn = document.getElementById("open-sticker-manager-btn") as HTMLButtonElement;
 const addStickerBtn = document.getElementById("add-sticker-btn") as HTMLButtonElement;
-const stickerThresholdInput = document.getElementById("sticker-threshold") as HTMLInputElement;
-const stickerThresholdVal = document.getElementById("sticker-threshold-val") as HTMLElement;
 
 const modelRequestTimeoutSecInput = document.getElementById("model-request-timeout-sec") as HTMLInputElement;
 const modelRequestTimeoutSecReset = document.getElementById("model-request-timeout-sec-reset-btn") as HTMLButtonElement;
@@ -1597,15 +1594,6 @@ openStickerManagerBtn.addEventListener("click", async () => {
 });
 
 // ── 添加表情包弹窗 ──
-const stickerAddOverlay = document.getElementById("sticker-add-overlay") as HTMLElement;
-const stickerAddPickBtn = document.getElementById("sticker-add-pick-btn") as HTMLButtonElement;
-const stickerAddFileName = document.getElementById("sticker-add-file-name") as HTMLElement;
-const stickerAddId = document.getElementById("sticker-add-id") as HTMLInputElement;
-const stickerAddDesc = document.getElementById("sticker-add-desc") as HTMLInputElement;
-const stickerAddPhrases = document.getElementById("sticker-add-phrases") as HTMLTextAreaElement;
-const stickerAddError = document.getElementById("sticker-add-error") as HTMLElement;
-const stickerAddConfirm = document.getElementById("sticker-add-confirm") as HTMLButtonElement;
-const stickerAddCancel = document.getElementById("sticker-add-cancel") as HTMLButtonElement;
 
 
 function openStickerAddModal(): void {
