@@ -91,6 +91,7 @@ import { apiForm, apiRuntimeForm, apiTimeoutForm, presetCards, presetWebsiteLink
 import { visionBaseUrlInput, visionApiKeyInput, visionModelInput, visionFieldsWrap, testVisionBtn, visionTestStatus } from "./vision/dom";
 import { avatarEl, uploadAvatarBtn, userDefaultCityInput, userNicknameInput, userCallPrefInput, userBirthdayInput, userTimezoneSelect, userGenderGroup } from "./user/dom";
 import { appearanceForm, appearanceSaveStatus, runtimeSyncSelect, runtimeSyncNote, windowCornerRadiusInput, windowCornerRadiusVal, petAlwaysOnTopInput, petVisibleInput, petZoomInput, petZoomVal, chatLineHeightInput, chatLineHeightVal, assistantBubbleEnabledInput, chatParaSpacingInput, chatParaSpacingVal, launchAtLoginInput, uiFontCurrent, uiFontImportButton, uiFontResetButton, uiIconSelect, screenshotHotkeyInput, openChromeGpu, disableGpuInput, sidebarVisibleInput, tasksVisibleInput } from "./appearance/dom";
+import { generalForm, generalSaveStatus, languageSelect, defaultChatModeSelect, segmentedOutputSelect, mobileMessageSegmentationSelect, proactiveChatSelect, proactiveDeliveryRow, proactiveDeliverySelect, chatSocialContextEnabledInput, citaEnabledInput, citaEngineSelect, clearChatHistoryBtn, customStyleSamplingBtn, customStylePromptBtn } from "./general/dom";
 import { preferencesState } from "./preferences/state";
 import { stickerEnabledInput, stickerSizeSelect, stickerThresholdInput, stickerThresholdVal, stickerAddOverlay, stickerAddPickBtn, stickerAddFileName, stickerAddId, stickerAddDesc, stickerAddPhrases, stickerAddError, stickerAddConfirm, stickerAddCancel } from "./preferences/dom";
 import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
@@ -393,7 +394,6 @@ if (!window.cyreneScheduler) {
 
 const minBtn = document.getElementById("min-btn") as HTMLButtonElement;
 const closeBtn = document.getElementById("close-btn") as HTMLButtonElement;
-const generalForm = document.getElementById("general-form") as HTMLFormElement;
 const preferencesForm = document.getElementById("preferences-form") as HTMLFormElement;
 const sectionTitle = document.getElementById("section-title") as HTMLElement;
 const sectionHint = document.getElementById("section-hint") as HTMLElement;
@@ -408,7 +408,6 @@ const placeholderIcon = document.getElementById("placeholder-icon") as HTMLEleme
 const placeholderTitle = document.getElementById("placeholder-title") as HTMLElement;
 const placeholderCopy = document.getElementById("placeholder-copy") as HTMLElement;
 const saveStatus = document.getElementById("save-status") as HTMLElement;
-const generalSaveStatus = document.getElementById("general-save-status") as HTMLElement;
 const runtimeSaveStatus = document.getElementById("runtime-save-status") as HTMLElement;
 const preferencesSaveStatus = document.getElementById("preferences-save-status") as HTMLElement;
 const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLElement;
@@ -431,19 +430,6 @@ const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLEl
 const providerProfileCache: Record<string, ProviderProfile> = {};
 
 // 当前激活的厂商：每次 applyPreset 后更新；用于"切到下一家厂商前先把当前那家的输入框值缓存住"
-const languageSelect = document.getElementById("language-select") as HTMLElement;
-const defaultChatModeSelect = document.getElementById("default-chat-mode-select") as HTMLElement;
-const segmentedOutputSelect = document.getElementById("segmented-output-select") as HTMLElement;
-const mobileMessageSegmentationSelect = document.getElementById("mobile-message-segmentation-select") as HTMLElement;
-const proactiveChatSelect = document.getElementById("proactive-chat-select") as HTMLElement;
-const proactiveDeliveryRow = document.getElementById("proactive-delivery-row") as HTMLElement;
-const proactiveDeliverySelect = document.getElementById("proactive-delivery-select") as HTMLElement;
-const chatSocialContextEnabledInput = document.getElementById("chat-social-context-enabled") as HTMLInputElement;
-const citaEnabledInput = document.getElementById("cita-enabled") as HTMLInputElement;
-const citaEngineSelect = document.getElementById("cita-engine-select") as HTMLElement;
-const customStyleSamplingBtn = document.getElementById("custom-style-sampling-btn") as HTMLButtonElement | null;
-const customStylePromptBtn = document.getElementById("custom-style-prompt-btn") as HTMLButtonElement | null;
-const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
 const openStickerManagerBtn = document.getElementById("open-sticker-manager-btn") as HTMLButtonElement;
 const addStickerBtn = document.getElementById("add-sticker-btn") as HTMLButtonElement;
 
