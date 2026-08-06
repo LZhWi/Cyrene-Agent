@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const html = fs.readFileSync(fileURLToPath(new URL("./index.html", import.meta.url)), "utf8");
 const source = fs.readFileSync(fileURLToPath(new URL("./settings.ts", import.meta.url)), "utf8");
+const presetsSource = fs.readFileSync(fileURLToPath(new URL("./api/presets.ts", import.meta.url)), "utf8");
 const styles = fs.readFileSync(fileURLToPath(new URL("./settings.css", import.meta.url)), "utf8");
 const icon = fs.readFileSync(
   fileURLToPath(new URL("../public/icons/providers/custom-endpoint.svg", import.meta.url)),
@@ -43,10 +44,10 @@ describe("custom endpoint API settings UI", () => {
   });
 
   it("keeps confirmed Anthropic-compatible preset URLs explicit", () => {
-    expect(source).toContain('anthropicBaseUrl: "https://api.minimaxi.com/anthropic"');
-    expect(source).toContain('anthropicBaseUrl: "https://api.deepseek.com/anthropic"');
-    expect(source).toContain('anthropicBaseUrl: "https://open.bigmodel.cn/api/anthropic"');
-    expect(source).toContain('anthropicBaseUrl: "https://api.xiaomimimo.com/anthropic"');
+    expect(presetsSource).toContain('anthropicBaseUrl: "https://api.minimaxi.com/anthropic"');
+    expect(presetsSource).toContain('anthropicBaseUrl: "https://api.deepseek.com/anthropic"');
+    expect(presetsSource).toContain('anthropicBaseUrl: "https://open.bigmodel.cn/api/anthropic"');
+    expect(presetsSource).toContain('anthropicBaseUrl: "https://api.xiaomimimo.com/anthropic"');
     expect(source).toContain("该厂商的 A口地址未内置");
   });
 

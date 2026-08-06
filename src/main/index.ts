@@ -1,5 +1,4 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, protocol, net, powerMonitor, globalShortcut } from "electron";
-import { spawn } from "node:child_process";
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, protocol, net, globalShortcut } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
@@ -84,7 +83,7 @@ import {
   validateCaptionImagePath,
 } from "./chat/image-caption";
 import { decideImageSendStrategy } from "./chat/image-send-strategy";
-import { buildAlwaysOnContext, buildMemoryInjection, scheduleMemoryWrite } from "./orchestrator";
+import { buildAlwaysOnContext, scheduleMemoryWrite } from "./orchestrator";
 import { CyreneAgent } from "./orchestrator/cyrene-agent";
 import { validateSearchApiKey } from "./orchestrator/search-backend-filter";
 import { indexConversationTurn } from "./orchestrator/history-tools";
@@ -126,14 +125,10 @@ import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from ".
 import { buildEnvironmentContext } from "./orchestrator/environment";
 import { initPermissionFromDisk, registerPermissionIpc, getCurrentLevel } from "./permission";
 import { registerChoiceIpc, setChoiceCardSender } from "./user-choice";
-import { ElectronScreenshotHelperClient } from "./screenshot/helper-client";
-import { resolveScreenshotHelperPath } from "./screenshot/helper-path";
 import {
-  createScreenshotService,
-  validateScreenshotInsert,
-  type ScreenshotInsertData,
+  initializeScreenshotService,
   type ScreenshotService,
-} from "./screenshot/screenshot-service";
+} from "./screenshot/screenshot-lifecycle";
 import { enqueueLLMTask } from "./llm-queue";
 import { compileSocialContextBlock } from "./social-context/context";
 import {
@@ -159,7 +154,7 @@ import { initReranker, getRerankerInstallStatus } from "./rag/reranker";
 import { memoryStore } from "./memory/memory-store"
 import { backupMemoryRagFiles, reconcileMemoryRag } from "./memory/memory-rag-reconciliation";
 import type { L0Profile, L1Profile } from "./memory/memory-types";
-import { broadcastChatsChanged, registerChatsIpc } from "./chats/chats-ipc";
+import { registerChatsIpc } from "./chats/chats-ipc";
 import * as chatsStore from "./chats/chats-store";
 import { recordUsage, getUsage, flush as flushTokenUsage } from "./token-usage-store";
 import { uploadFile as ttsUploadFile, cloneVoice as ttsCloneVoice, synthesize as ttsSynthesize } from "./tts/minimax-engine";
@@ -257,7 +252,6 @@ import { installShutdownLatch } from "./music/shutdown-latch";
 import {
   buildConversationTimeContext,
   normalizeChatMessagesWithTime,
-  resolveChatContextTimezone,
   type ChatContextMessage,
 } from "./chat-time-context";
 import { getDateLocale, updateLocaleContext } from "./locale-context";
@@ -287,22 +281,7 @@ import { SchedulerEngine } from "./scheduler/scheduler-engine";
 import { createSchedulerRunner } from "./scheduler/scheduler-runner";
 import { registerSchedulerIpc } from "./scheduler/scheduler-ipc";
 import type { ScheduledTask } from "./scheduler/types";
-import {
-  createProactiveChatService,
-  type ProactiveChatService,
-  type ProactiveCommitInput,
-  type ProactiveCommitResult,
-} from "./proactive/proactive-service";
-import { routeProactiveDelivery } from "./proactive/proactive-delivery-routing";
-import { buildProactiveMessages, type ProactiveHistoryTurn } from "./proactive/proactive-prompt";
-import {
-  createProactiveTrigger,
-  type ProactiveTriggerController,
-} from "./proactive/proactive-trigger";
-import { runProactiveModel } from "./proactive/proactive-model";
-import type { ProactiveCandidate, ProactiveRuntimeSnapshot } from "./proactive/proactive-types";
-import { canCommitProactiveMessage } from "./proactive/proactive-policy";
-import { loadProactiveState, saveProactiveState } from "./proactive/proactive-state-store";
+import { createProactiveLifecycle } from "./proactive/proactive-lifecycle";
 import { normalizeCitaSettings } from "./cita/settings";
 import { CitaService, ContextStore, RemoteSemanticEngine } from "./cita";
 import { contextRefRegistry } from "./orchestrator/tool-context";
@@ -333,9 +312,6 @@ let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let schedulerEngine: SchedulerEngine | null = null;
 let screenshotService: ScreenshotService | null = null;
-let proactiveChatService: ProactiveChatService | null = null;
-let normalConversationBusyCount = 0;
-let proactiveScreenLocked = false;
 const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
   onClosed: () => { /* no-op：原 setLive2dWindow 已随 opener 子系统一起移除 */ },
 });
@@ -346,99 +322,6 @@ const petWindowMoveController = new PetWindowMoveController(
   },
 );
 
-const MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024;
-
-function getScreenshotDirectory(): string {
-  return path.join(app.getPath("userData"), "screenshots");
-}
-
-async function saveScreenshotPasteTemp(
-  base64: string,
-  _mime: string,
-): Promise<{ filePath: string }> {
-  const raw = Buffer.from(base64, "base64");
-  if (raw.byteLength > MAX_SCREENSHOT_BYTES) {
-    throw new Error("SCREENSHOT_TOO_LARGE");
-  }
-  const image = nativeImage.createFromBuffer(raw);
-  if (image.isEmpty()) {
-    throw new Error("INVALID_SCREENSHOT_IMAGE");
-  }
-  const screenshotDirectory = getScreenshotDirectory();
-  await fs.promises.mkdir(screenshotDirectory, { recursive: true });
-  const filePath = path.join(screenshotDirectory, `${randomUUID()}.png`);
-  await fs.promises.writeFile(filePath, image.toPNG());
-  return { filePath };
-}
-
-function initializeScreenshotService(initialHotkey: string): ScreenshotService {
-  const screenshotDirectory = getScreenshotDirectory();
-  const validateInsert = (data: ScreenshotInsertData): ScreenshotInsertData => {
-    let previewImage: Electron.NativeImage | null = null;
-    const validated = validateScreenshotInsert(
-      data,
-      screenshotDirectory,
-      (filePath) => {
-        previewImage = nativeImage.createFromPath(filePath);
-        return previewImage;
-      },
-    );
-    if (!validated) {
-      throw new Error(`INVALID_SCREENSHOT_RESULT:${data.filePath}`);
-    }
-    // React 开发预览运行在 http://，Chromium 会拦截 file:// 图片。
-    // 截图体积有限，直接回传 data URL，旧 Chat 与 React 都能稳定显示。
-    return {
-      ...validated,
-      previewUrl: previewImage ? (previewImage as Electron.NativeImage).toDataURL() : validated.previewUrl,
-    };
-  };
-  const client = new ElectronScreenshotHelperClient({
-    spawnImpl: (command, args) => spawn(command, args, {
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-    }),
-    resolveHelperPath: () => resolveScreenshotHelperPath({
-      isPackaged: app.isPackaged,
-      appPath: app.getAppPath(),
-      resourcesPath: process.resourcesPath,
-      envOverride: process.env.CYRENE_SCREENSHOT_HELPER_PATH,
-    }),
-    screenshotDirectory,
-    logger: console,
-  });
-  const service = createScreenshotService({
-    client,
-    registerShortcut: (accelerator, callback) =>
-      globalShortcut.register(accelerator, callback),
-    unregisterShortcut: (accelerator) => globalShortcut.unregister(accelerator),
-    sendInsert: (data) => {
-      const validated = validateInsert(data);
-      if (reactChatWindow && !reactChatWindow.isDestroyed()) {
-        reactChatWindow.webContents.send(IPC.SCREENSHOT_INSERT, validated);
-      }
-    },
-  });
-
-  ipcMain.handle(IPC.SCREENSHOT_START, (event) => service.startFromChatButton((data) => {
-    if (!event.sender.isDestroyed()) {
-      event.sender.send(IPC.SCREENSHOT_INSERT, validateInsert(data));
-    }
-  }));
-  ipcMain.handle(IPC.SCREENSHOT_SAVE_TEMP, (_event, base64: string, mime: string) =>
-    saveScreenshotPasteTemp(base64, mime));
-  ipcMain.handle(IPC.SCREENSHOT_HOTKEY_CAPTURE_START, () => {
-    service.suspendHotkey();
-    return true;
-  });
-  ipcMain.handle(IPC.SCREENSHOT_HOTKEY_CAPTURE_END, () => {
-    service.resumeHotkey();
-    return true;
-  });
-
-  service.init(initialHotkey);
-  return service;
-}
 // 聊天窗口当前活跃的会话 id（通过 IPC 由聊天窗口上报）；
 // 设置面板"删除当前会话"差异化提示用。聊天窗口关闭时由 closed 事件置 null。
 let activeChatSessionId: string | null = null;
@@ -740,6 +623,8 @@ function loadGeneralSettings(): GeneralSettings {
   if (generalSettingsCache !== null) return generalSettingsCache;
   return generalSettingsCache = loadGeneralSettings0();
 }
+
+const proactiveLifecycle = createProactiveLifecycle({ loadGeneralSettings });
 
 async function synthesizeTtsSession(
   request: StartTtsRequest,
@@ -1421,242 +1306,6 @@ function buildSystemPrompt(styleFile: string, includeStyle = true): string {
   return parts.join("\n\n---\n\n");
 }
 
-function buildProactivePersonaPrompt(): string {
-  const parts: string[] = [];
-  const chatSystem = loadPromptFile("chat_system.md");
-  if (chatSystem) parts.push(chatSystem);
-  const soul = loadPromptFile("soul.md");
-  if (soul) {
-    // 主动轮完全不携带工具说明；Soul 尾部的 Live2D/联网章节由正常聊天使用。
-    parts.push(soul.split("\n## Live2D 与聊天文字的分工")[0].trim());
-  }
-  const canon = loadPromptFile("canon_quotes.md");
-  if (canon) parts.push(canon);
-  const style = loadPromptFile("styles/01_default.md");
-  if (style) parts.push(style);
-  return parts.join("\n\n---\n\n");
-}
-
-function toProactiveHistory(messages: Array<{ role: "user" | "model"; content: string; at: number }>): ProactiveHistoryTurn[] {
-  return messages
-    .filter((message) => message.content.trim())
-    .slice(-16)
-    .map((message) => ({ role: message.role, content: message.content, at: message.at }));
-}
-
-function getProactiveHistories(): { ordinary: ProactiveHistoryTurn[]; proactive: ProactiveHistoryTurn[] } {
-  const ordinaryMeta = chatsStore.listSessions().find((session) => session.purpose !== "proactive-chat");
-  const ordinarySession = ordinaryMeta ? chatsStore.getSession(ordinaryMeta.id) : null;
-  const proactiveSession = chatsStore.getSessionByPurpose("proactive-chat");
-  return {
-    ordinary: toProactiveHistory(ordinarySession?.messages ?? []),
-    proactive: toProactiveHistory(proactiveSession?.messages ?? []),
-  };
-}
-
-function getProactiveRuntimeSnapshot(): ProactiveRuntimeSnapshot {
-  const now = Date.now();
-  let idleSec = Number.POSITIVE_INFINITY;
-  try { idleSec = powerMonitor.getSystemIdleTime(); } catch { /* app 尚未 ready */ }
-  return {
-    now,
-    localHour: new Date(now).getHours(),
-    idleSec,
-    enabled: loadGeneralSettings().proactiveChatMode === "on",
-    conversationBusy: normalConversationBusyCount > 0,
-    generationBusy: false,
-    screenLocked: proactiveScreenLocked,
-  };
-}
-
-async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
-  const histories = getProactiveHistories();
-  const recentTopic = histories.ordinary.slice(-4).map((turn) => turn.content).join("\n");
-  const retrievalQuery = `${candidate.sceneId}\n${recentTopic}`.trim();
-  const [profileContext, memoryContext] = await Promise.all([
-    buildAlwaysOnContext(retrievalQuery, histories.ordinary.map((turn) => ({ role: turn.role, content: turn.content }))).catch(() => ""),
-    buildMemoryInjection(retrievalQuery).catch(() => ""),
-  ]);
-  const state = loadProactiveState();
-  const snapshot = getProactiveRuntimeSnapshot();
-  // 用户有效时区：resolver 校验后传给 prompt，禁止未校验的 profile.timezone。
-  const profile = loadUserProfile();
-  const timezone = resolveChatContextTimezone(profile.timezone);
-  return buildProactiveMessages({
-    basePersona: buildProactivePersonaPrompt(),
-    userProfile: profileContext,
-    relevantMemory: memoryContext,
-    ordinaryHistory: histories.ordinary,
-    proactiveHistory: histories.proactive,
-    sceneId: candidate.sceneId,
-    localNow: new Date(snapshot.now),
-    idleSec: snapshot.idleSec,
-    unansweredCount: state.unansweredCount,
-    timezone,
-  });
-}
-
-function updateNormalConversationBusy(delta: 1 | -1): void {
-  normalConversationBusyCount = Math.max(0, normalConversationBusyCount + delta);
-}
-
-const proactiveConversationLifecycle = {
-  onUserMessage: () => proactiveChatService?.invalidateForUserMessage(),
-  onConversationStarted: () => {
-    updateNormalConversationBusy(1);
-    proactiveChatService?.normalConversationStarted();
-  },
-  onConversationEnded: () => {
-    updateNormalConversationBusy(-1);
-    if (normalConversationBusyCount === 0) proactiveChatService?.normalConversationEnded();
-  },
-};
-
-function getProactiveCommitDecision(candidate: ProactiveCandidate, generationEpoch: number) {
-  return canCommitProactiveMessage(
-    getProactiveRuntimeSnapshot(),
-    loadProactiveState(),
-    candidate,
-    generationEpoch,
-  );
-}
-
-function recordProactiveDeliveryMetadata(input: ProactiveCommitInput): void {
-  // Opener 的 todayFired/recentItems 字段已整体废弃（依赖的 SCENE_CONFIGS 与 ShowBubblePayload 来自旧 opener 子系统）。
-  // ProactiveChat 这边只需持久化 committed 副作用；当前 implementation 已无副作用，留空占位即可。
-  void input;
-}
-
-async function commitLocalProactiveMessage(input: ProactiveCommitInput): Promise<ProactiveCommitResult> {
-  const initialDecision = getProactiveCommitDecision(input.candidate, input.generationEpoch);
-  if (!initialDecision.allowed) return { kind: "cancelled", reason: initialDecision.reason };
-
-  const session = chatsStore.getOrCreateSessionByPurpose("proactive-chat", {
-    title: "昔涟的主动消息",
-    identityId: null,
-  });
-  const at = Date.now();
-  const appended = chatsStore.appendMessage(session.id, {
-    id: randomUUID(),
-    role: "model",
-    content: input.text,
-    at,
-  });
-  if (!appended) throw new Error("主动聊天会话写入失败");
-  broadcastChatsChanged();
-
-  // 文本已落库；上次落库后没有 panel/show 步骤要做（opener 气泡已被移除，fallback 路径没有了）。
-  void input;
-  void at;
-  return { kind: "committed" };
-}
-
-async function commitSelectedProactiveMessage(input: ProactiveCommitInput): Promise<ProactiveCommitResult> {
-  const settings = loadGeneralSettings();
-  const target = settings.proactiveDeliveryTarget;
-  const result = await routeProactiveDelivery(target, {
-    commitLocal: () => commitLocalProactiveMessage(input),
-    commitChannel: async (channel) => {
-      const channelResult = await sendProactiveChannelMessage({
-        channel,
-        text: input.text,
-        mobileMessageSegmentation: settings.mobileMessageSegmentation,
-        manager: channelManager,
-        canContinue: () => {
-          if (loadGeneralSettings().proactiveDeliveryTarget !== channel) return false;
-          return getProactiveCommitDecision(input.candidate, input.generationEpoch).allowed;
-        },
-      });
-      return channelResult.kind === "committed"
-        ? { kind: "committed" }
-        : { kind: "cancelled", reason: channelResult.reason };
-    },
-  });
-
-  if (result.kind === "committed") recordProactiveDeliveryMetadata(input);
-  return result;
-}
-
-function initializeProactiveChatService(): void {
-  proactiveChatService = createProactiveChatService({
-    loadState: loadProactiveState,
-    saveState: (state) => {
-      saveProactiveState(state);
-    },
-    getSnapshot: getProactiveRuntimeSnapshot,
-    buildMessages: async (candidate) => buildProactiveAgentMessages(candidate),
-    runModel: async (messages) => {
-      const settings = loadModelSettings();
-      if (!settings.apiKey) return { kind: "error", reason: "missing_api_key" };
-      return runProactiveModel({
-        settings: {
-          provider: settings.provider,
-          baseUrl: settings.baseUrl,
-          model: settings.model,
-          apiKey: settings.apiKey,
-          explicitTransport: settings.explicitTransport,
-          reasoning: settings.reasoning,
-        },
-        messages,
-        timeoutMs: 45_000,
-      });
-    },
-    // Opener 的 preset fallback 已移除：model 失败时由 proactive-service 自身走 cancel 路径。
-    getFallback: async () => null,
-    canStartDelivery: () => {
-      const target = loadGeneralSettings().proactiveDeliveryTarget;
-      return target === "local" || canStartProactiveChannelDelivery(target, channelManager);
-    },
-    commitMessage: commitSelectedProactiveMessage,
-    log: (event, detail) => console.log(`[Proactive] ${event}`, detail ?? ""),
-  });
-
-  setChannelsConversationLifecycle(proactiveConversationLifecycle);
-
-  powerMonitor.on("lock-screen", () => {
-    proactiveScreenLocked = true;
-    proactiveChatService?.invalidate();
-  });
-  powerMonitor.on("unlock-screen", () => { proactiveScreenLocked = false; });
-  powerMonitor.on("suspend", () => {
-    proactiveScreenLocked = true;
-    proactiveChatService?.invalidate();
-  });
-  powerMonitor.on("resume", () => { proactiveScreenLocked = false; });
-}
-
-// ── 主动聊天触发器（60s 周期扫描 → evaluateCandidate） ─────────────
-// 闭包持有的 evaluation backoff Map（仅内存，重启后由 policy 持久化冷却接续）
-let proactiveTrigger: ProactiveTriggerController | null = null;
-const proactiveBackoffMap = new Map<string, number>();
-
-function initializeProactiveTrigger(): void {
-  if (proactiveTrigger) return; // 幂等
-  if (!proactiveChatService) {
-    console.warn("[Proactive] trigger skipped: service not initialized");
-    return;
-  }
-  const service = proactiveChatService;
-  proactiveTrigger = createProactiveTrigger({
-    evaluateCandidate: (c) => service.evaluateCandidate(c),
-    getRuntimeSnapshot: getProactiveRuntimeSnapshot,
-    getProactiveState: loadProactiveState,
-    getTimezone: () => resolveChatContextTimezone(loadUserProfile().timezone),
-    // getWeatherContext 第一版不传：未来天气缓存接入后填，函数体无需改
-    getLastEvaluatedAtByScene: () => new Map(proactiveBackoffMap),
-    setLastEvaluatedAtByScene: (next) => {
-      proactiveBackoffMap.clear();
-      for (const [k, v] of next) proactiveBackoffMap.set(k, v);
-    },
-  });
-  proactiveTrigger.start();
-}
-
-function stopProactiveTrigger(): void {
-  proactiveTrigger?.stop();
-  proactiveTrigger = null;
-}
-
 /**
  * 工具阶段使用的 system prompt。
  * 第一期：固定 tools_system.md 规则 + 运行时生成的工具目录。
@@ -1945,15 +1594,6 @@ ipcMain.handle(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS, () => ({
   window: live2dWindowLifecycle.getDiagnostics(),
 }));
 
-ipcMain.handle("debug:screenshot", async () => {
-  if (!mainWindow) return null;
-  const image = await mainWindow.webContents.capturePage();
-  const png = image.toPNG();
-  const outPath = path.join(app.getPath("temp"), "cyrene-screenshot.png");
-  fs.writeFileSync(outPath, png);
-  return outPath;
-});
-
 ipcMain.on(IPC.WINDOW_MINIMIZE, () => {
   mainWindow?.minimize();
 });
@@ -2225,7 +1865,7 @@ ipcMain.handle(IPC.SETTINGS_RESET_UI_FONT, () => {
 ipcMain.handle(IPC.SETTINGS_SAVE_GENERAL, (_event, settings: Partial<GeneralSettings>) => {
   const saved = saveGeneralSettings(settings);
   if ("proactiveChatMode" in settings || "proactiveDeliveryTarget" in settings) {
-    proactiveChatService?.invalidate();
+    proactiveLifecycle.getProactiveChatService()?.invalidate();
   }
   return saved;
 });
@@ -2681,7 +2321,7 @@ app.whenReady().then(async () => {
 
     // 主动聊天总开关变化时使现有评估失效（频率档位由 ProactiveChat 内部判定，无需重启）。
     if ("proactiveChatMode" in tts) {
-      proactiveChatService?.invalidate();
+      proactiveLifecycle.getProactiveChatService()?.invalidate();
     }
 
     // 返回不含密钥明文的副本（前端展示用）
@@ -3279,8 +2919,8 @@ app.whenReady().then(async () => {
 
   // 聊天会话存储 IPC（chats-store.initialize 会建好 cyrene-chats 目录并加载 index）
   registerChatsIpc();
-  initializeProactiveChatService();
-  initializeProactiveTrigger();
+  proactiveLifecycle.initializeProactiveChatService();
+  proactiveLifecycle.initializeProactiveTrigger();
 
   // 历史召回工具（recall_history）——让模型能回忆滚出窗口的对话
   registerRecallHistoryTool();
@@ -3317,9 +2957,11 @@ app.whenReady().then(async () => {
   );
 
   // 截图：原生 helper IPC、全局热键和后台预热。预热失败不会阻止应用启动。
-  screenshotService = initializeScreenshotService(
-    initialSettings.screenshotHotkey ?? "Alt+Shift+S",
-  );
+  screenshotService = initializeScreenshotService({
+    initialHotkey: initialSettings.screenshotHotkey ?? "Alt+Shift+S",
+    getReactChatWindow: () => reactChatWindow,
+    getMainWindow: () => mainWindow,
+  });
   void screenshotService.prewarm();
 
   // Cloud Music MCP wiring (MusicService + IPC + 5 Agent tools + shutdown latch)
@@ -3794,7 +3436,7 @@ app.whenReady().then(async () => {
     // sticker 由 bridge 发送回本次 run 的发起窗口；默认兜底目标为 reactChatWindow。
     async (result, latestUserText) => onAgentRunFinished(result, latestUserText, onRunFinishedDeps),
     () => reactChatWindow,
-    proactiveConversationLifecycle,
+    proactiveLifecycle.proactiveConversationLifecycle,
   );
 
   // 状态栏专用入口：打开/复用 reactChatWindow
@@ -3874,7 +3516,7 @@ app.on("window-all-closed", () => {});
 app.on("before-quit", () => {
   petWindowMoveController.dispose();
   schedulerEngine?.stop();
-  stopProactiveTrigger();
+  proactiveLifecycle.stopProactiveTrigger();
   codeRunWorker.cleanup();
   flushTokenUsage();
   void shutdownChannels();

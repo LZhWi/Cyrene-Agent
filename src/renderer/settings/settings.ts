@@ -56,6 +56,33 @@ export {
   type MusicStatusSnapshot,
   type NeteaseViewState,
 } from "../../shared/music-view-state";
+import type {
+  ScheduleConfig,
+  SchedulerApi,
+  SchedulerResult,
+  SchedulerToolInfo,
+  SchedulerToolMode,
+  ScheduledTask,
+  ScheduledTaskHistoryEntry,
+} from "./scheduler/types";
+import type {
+  MusicApi,
+  MusicIpcResult,
+  MusicSelectionResult,
+  MusicSelectionTrack,
+} from "./music/types";
+import type {
+  GeneralSettings,
+  MemoryPanelApi,
+  MemoryPanelPayload,
+  ModelPreset,
+  ModelSettings,
+  ProviderProfile,
+  SettingsApi,
+  UserApi,
+} from "./shared/types";
+import { TTS_FIELD_MAP, TTS_PROVIDER_FIELDS } from "./tts/field-map";
+import { MODEL_PRESETS } from "./api/presets";
 
 // Inline modal (to avoid Vite tree-shaking)
 let _cyModalOverlay: HTMLElement | null = null;
@@ -234,287 +261,6 @@ function showInputModal(options: {
 }
 
 
-interface ProviderProfile {
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-  displayName?: string;
-  /**
-   * 用户在 settings 显式选择的协议。旧配置中的 auto 会由 main 进程迁移为具体值。
-   */
-  explicitTransport?: ApiTransport;
-  reasoning?: ReasoningPreference;
-}
-
-interface ModelSettings {
-  mode: "auto" | "manual";
-  provider: string;
-  // 用户给模型起的自定义昵称，留空时用厂商 shortName。状态栏"正在喂养"显示它。
-  displayName?: string;
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-  /**
-   * 当前厂商的 explicitTransport 镜像（顶层字段是 main 进程 perProvider[currentProvider] 的视图）。
-   * UI 改动 transport-select 时，saveConfig 把这个值带给 main 进程折叠回 perProvider。
-   */
-  explicitTransport?: ApiTransport;
-  /** 当前厂商 reasoning 偏好的顶层镜像。 */
-  reasoning?: ReasoningPreference;
-  // 按厂商缓存：切回该厂商时，从这里恢复 baseUrl / model / apiKey
-  perProvider?: Record<string, ProviderProfile>;
-  runtimeSync: "off" | "local" | "llm";
-  stickerEnabled: boolean;
-  stickerSize: "small" | "standard" | "large";
-  stickerSimilarityThreshold: number;
-  /** 整个聊天请求的超时（秒）。30-1800，默认 300。 */
-  chatRequestTimeoutSec: number;
-  /** 总轮数。5-30，默认 12。 */
-  maxIterations: number;
-  /** Plan 步骤失败后重规划次数。1-5，默认 2。 */
-  maxReplans: number;
-  /** 引用过期重新决策次数。0-3，默认 1。 */
-  maxRefresh: number;
-  /** 单次 LLM 调用超时（秒）。30-120，默认 75。 */
-  perCallTimeoutSec: number;
-  /** CITA 结构化输出重试总预算（秒）。4-30，默认 8。 */
-  citaRepairBudgetSec: number;
-  /** Action Gate 结构化输出重试总预算（秒）。5-40，默认 10。 */
-  actionGateRepairBudgetSec: number;
-  vision?: {
-    baseUrl: string;
-    apiKey: string;
-    model: string;
-  };
-  /** Embedding 维度（可选，仅 cloud 模式）。留空 = 自动探测。 */
-  embeddingDimensions?: number;
-  multimodal: boolean;
-  thinkingOverride?: -1 | 0 | 1;
-  /** 上下文窗口大小（Token）。默认 256000。 */
-  contextWindowTokens?: number;
-}
-
-type ScheduleConfig =
-  | { kind: "once"; runAt: string }
-  | { kind: "daily"; timeOfDay: string }
-  | { kind: "weekly"; dayOfWeek: 0 | 1 | 2 | 3 | 4 | 5 | 6; timeOfDay: string }
-  | { kind: "interval"; every: number; unit: "minutes" | "hours" };
-
-type SchedulerToolMode = "all-enabled" | "allow-list";
-
-interface ScheduledTask {
-  id: string;
-  title: string;
-  prompt: string;
-  enabled: boolean;
-  schedule: ScheduleConfig;
-  nextFireAt: string | null;
-  lastFiredAt?: string;
-  toolMode: SchedulerToolMode;
-  allowedToolIds: string[];
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface ScheduledTaskHistoryEntry {
-  id: string;
-  taskId: string;
-  taskTitle: string;
-  firedAt: string;
-  finishedAt?: string;
-  durationMs?: number;
-  status: "running" | "success" | "failed" | "skipped";
-  reason?: string;
-  outputPreview?: string;
-  errorMessage?: string;
-  effectiveToolIds: string[];
-}
-
-interface SchedulerToolInfo {
-  id: string;
-  name: string;
-  description: string;
-  enabled: boolean;
-  risk: string;
-}
-
-interface SchedulerResult<T> {
-  ok: boolean;
-  value?: T;
-  error?: string;
-  reason?: string;
-}
-
-interface SchedulerApi {
-  list: () => Promise<SchedulerResult<ScheduledTask[]>>;
-  add: (input: unknown) => Promise<SchedulerResult<ScheduledTask>>;
-  update: (id: string, patch: unknown) => Promise<SchedulerResult<ScheduledTask>>;
-  delete: (id: string) => Promise<SchedulerResult<boolean>>;
-  toggle: (id: string, enabled: boolean) => Promise<SchedulerResult<ScheduledTask>>;
-  fireNow: (id: string) => Promise<SchedulerResult<boolean>>;
-  getHistory: (taskId: string, limit?: number) => Promise<SchedulerResult<ScheduledTaskHistoryEntry[]>>;
-  getTools: () => Promise<SchedulerResult<SchedulerToolInfo[]>>;
-}
-
-interface ModelPreset {
-  providerName: string;
-  // 厂商短名（去括号后缀），用于状态栏"正在喂养"显示和昵称默认值。
-  // 如 "MiniMax（稀宇科技）" → shortName "MiniMax"。
-  shortName: string;
-  baseUrl: string;
-  /** 已由厂商官方确认的 Anthropic 兼容 Base URL；没有就不猜。 */
-  anthropicBaseUrl?: string;
-  /** 预设首次使用时选中的明确协议；用户之后可以手动修改。 */
-  transport: ApiTransport;
-  mainModels: string[];
-  iconUrl: string;
-  // 厂商官网链接，显示在预设下拉框旁边，方便用户直接跳转注册/查看文档。
-  websiteUrl?: string;
-  // 视觉模型的 OpenAI 兼容 baseUrl。主模型与视觉模型入口不同时使用。
-  visionBaseUrl?: string;
-  // 该厂商默认主模型是否支持视觉。true 时设置页加载默认勾选"同步主模型"，
-  // 多模态用户开箱即用。与 capabilities.ts 的 supportsVision 镜像，需手动同步。
-  supportsVision?: boolean;
-  // 标记为 true 时，该项在 <select> 里显示但不可选；
-  // 用于"已列出但 vendor adapter 还没接好"的情况，避免用户选到后调用直接报错。
-  disabled?: boolean;
-  // 视觉模型与主模型本质不同（如 MiMo 主 mimo-v2.5-pro、视觉 mimo-v2.5），
-  // 强制独立配置，无法"与主聊天模型相同"。与 supportsVision 正交。
-  independentVision?: boolean;
-  // 独立视觉模型的默认值（applyPreset 在没有保存值时使用）。
-  defaultVisionModel?: string;
-  // 独立视觉模型的候选列表（用于视觉模型输入框的 datalist）。
-  visionModels?: string[];
-  // 自定义端点的云端/本地变体共用一张可见卡片，但分别持久化配置。
-  customEndpointMode?: CustomEndpointMode;
-  hiddenInPresetList?: boolean;
-}
-
-interface GeneralSettings extends ChatAppearanceSettings {
-  citaEnabled: boolean;
-  citaSemanticEngine: "remote" | "local";
-  chatSocialContextEnabled: boolean;
-  petAlwaysOnTop: boolean;
-  petVisible: boolean;
-  petZoom: number;
-  disableGpuElectron?: boolean;
-  sidebarVisible: boolean;
-  tasksVisible: boolean;
-  launchAtLogin: boolean;
-  language: "zh-CN";
-  uiTheme: UiTheme;
-  windowCornerRadius: number;
-  uiThemeRadius: boolean;
-  uiFont: UiFont;
-  uiIcon: UiIcon;
-  defaultChatMode: DefaultChatMode;
-  currentStyleId?: string;
-  customStyle: CustomStyleConfig;
-  segmentedOutputMode: SegmentedOutputMode;
-  mobileMessageSegmentation: MobileMessageSegmentationMode;
-  proactiveChatMode: ProactiveChatMode;
-  proactiveDeliveryTarget: ProactiveDeliveryTarget;
-  screenshotHotkey?: string;
-}
-
-interface UserApi {
-  getProfile: () => Promise<{ nickname: string; callPreference: string; birthday: string; timezone: string; avatarPath: string; defaultCity: string; gender: string }>;
-  saveProfile: (profile: Record<string, unknown>) => Promise<unknown>;
-  uploadAvatar: () => Promise<{ avatarPath: string } | null>;
-  getAvatar: () => Promise<string | null>;
-  onAvatarChanged: (callback: () => void) => () => void;
-}
-
-interface MemoryPanelPayload {
-  l0: {
-    preferredName: string;
-    occupation: string;
-    longTermInterests: string;
-    language: string;
-    permanentNote: string;
-  };
-  l1: {
-    recentGoals: string;
-    recentPreferences: string;
-    currentProject: string;
-  };
-  l2: Array<{
-    id: string;
-    content: string;
-    triggerText: string;
-    status: "active" | "aging" | "archived";
-    weight: number;
-    createdAt: number;
-  }>;
-  importedDocs: Array<{
-    importId: string | null;
-    fileName: string;
-    chunkCount: number;
-    lastImportedAt: number;
-  }>;
-  reflections: Array<{
-    id: string;
-    title: string;
-    body: string;
-    meta: string;
-  }>;
-}
-
-interface MemoryPanelApi {
-  getData: () => Promise<MemoryPanelPayload>;
-  deleteImportedDoc: (importId: string, fileName?: string) => Promise<{ ok: boolean; deleted: number }>;
-  saveL0: (patch: Record<string, unknown>) => Promise<{ ok: boolean }>;
-  saveL1: (patch: Record<string, unknown>) => Promise<{ ok: boolean }>;
-}
-
-interface SettingsApi {
-  minimize: () => void;
-  close: () => void;
-  getConfig: () => Promise<ModelSettings>;
-  saveConfig: (config: Partial<ModelSettings>) => Promise<ModelSettings>;
-  getGeneral: () => Promise<GeneralSettings>;
-  saveGeneral: (config: Partial<GeneralSettings>) => Promise<GeneralSettings>;
-  openCustomStylePrompt?: () => Promise<{ ok: boolean; filePath?: string; error?: string }>;
-  getTimeoutSettings: () => Promise<TimeoutSettings>;
-  saveTimeoutSettings: (config: Partial<TimeoutSettings>) => Promise<TimeoutSettings>;
-  pickUiFont: () => Promise<string | null>;
-  importUiFont: (sourcePath: string) => Promise<UiFont>;
-  resetUiFont: () => Promise<UiFont>;
-  openSidebar: () => void;
-  closeSidebar: () => void;
-  openTasks: () => void;
-  closeTasks: () => void;
-  openChromeGpu: () => void;
-  setPetAlwaysOnTop: (value: boolean) => void;
-  setPetVisible: (value: boolean) => void;
-  setPetZoom: (value: number) => void;
-  previewRuntimeSync: (value: "off" | "local" | "llm") => void;
-  openStickerManager: () => Promise<{ ok: boolean; error?: string }>;
-  stickerPickFile?: () => Promise<string | null>;
-  stickerAdd?: (payload: { sourcePath: string; id: string; description: string; phrases: string[] }) => Promise<unknown>;
-  getEmbeddingStatus?: () => Promise<Record<string, { installed: boolean; sizeBytes: number }>>;
-  downloadEmbeddingModel?: (model: string, mirror: string) => Promise<{ ok: boolean; error?: string }>;
-  deleteEmbeddingModel?: (model: string) => Promise<{ ok: boolean; error?: string }>;
-  embeddingSetModel?: (model: string) => Promise<{ ok: boolean; clearedEntries?: number; error?: string }>;
-  rerankerSetMode?: (mode: string) => Promise<boolean>;
-  setToolEnabled?: (id: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
-  getToolEnabled?: () => Promise<Record<string, boolean>>;
-  listSkills?: () => Promise<Array<{ id: string; name: string; description: string; tools: string[]; enabled: boolean; source: string; version?: string; references: string[] }>>;
-  setSkillEnabled?: (id: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
-  addMcpServer?: (config: unknown) => Promise<{ ok: boolean; toolIds?: string[]; error?: string }>;
-  removeMcpServer?: (serverId: string) => Promise<{ ok: boolean; error?: string }>;
-  listMcpServers?: () => Promise<Array<{ id: string; name: string; connected: boolean; toolCount: number; toolIds: string[] }>>;
-  getPermissionLevel?: () => Promise<{ level: "read-only" | "scoped" | "per-action" | "full" }>;
-  setPermissionLevel?: (level: string) => Promise<{ ok: boolean; level?: string; error?: string }>;
-  testConnection?: (config: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: ApiTransport; reasoning?: ReasoningPreference }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
-  testVision?: (config: { baseUrl: string; apiKey: string; model: string }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
-  // main → settings：要求切到指定标签（窗口已打开时由 main 发这个事件）
-  onSwitchSection?: (callback: (section: string) => void) => (() => void) | void;
-  channelsGetStatus: () => Promise<Record<string, { phase?: string; message?: string }>>;
-  onChannelsStatusChanged: (callback: (status: unknown) => void) => (() => void) | void;
-  beginScreenshotHotkeyCapture: () => Promise<boolean>;
-  endScreenshotHotkeyCapture: () => Promise<boolean>;
-}
 
 declare global {
   interface Window {
@@ -531,135 +277,6 @@ declare global {
 const MIMO_ICON_URL =
   "https://raw.githubusercontent.com/lobehub/lobe-icons/refs/heads/master/packages/static-png/light/xiaomimimo.png";
 
-const MODEL_PRESETS: ModelPreset[] = [
-  // 当前已适配 9 家：MiniMax / DeepSeek / 豆包 / 智谱 GLM / Kimi / Qwen / ChatGPT / Claude / MiMo
-  // 顺序按使用频率 + 适配优先级；未在此清单内的厂商已硬删，需要时再补回。
-  {
-    providerName: "MiniMax（稀宇科技）",
-    shortName: "MiniMax",
-    baseUrl: "https://api.minimaxi.com/v1",
-    anthropicBaseUrl: "https://api.minimaxi.com/anthropic",
-    transport: "openai",
-    mainModels: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
-    iconUrl: "../icons/providers/minimax.svg",
-    websiteUrl: "https://platform.minimaxi.com/",
-    // 主模型和视觉模型默认都走 OpenAI 兼容入口。
-    visionBaseUrl: "https://api.minimaxi.com/v1",
-    supportsVision: true,
-  },
-  {
-    // DeepSeek：v1 vendor adapter 不为它做协议层强制，仅作为 OpenAI 兼容厂商列出。
-    // 已确认（来自官方定价文档）：支持 Tool Calls / JSON Output；后端原生缓存（命中后输入价跌至 1/50~1/120）。
-    // 缓存能力等 v2 vendor adapter 接入时再利用，v1 不动。
-    providerName: "DeepSeek（深度求索）",
-    shortName: "DeepSeek",
-    baseUrl: "https://api.deepseek.com",
-    anthropicBaseUrl: "https://api.deepseek.com/anthropic",
-    transport: "openai",
-    mainModels: ["deepseek-v4-pro", "deepseek-v4-flash"],
-    iconUrl: "../icons/providers/deepseek.svg",
-    websiteUrl: "https://platform.deepseek.com/",
-  },
-  {
-    providerName: "豆包（火山方舟）",
-    shortName: "豆包",
-    baseUrl: "https://ark.cn-beijing.volces.com/api/v3",
-    transport: "openai",
-    mainModels: [
-      "doubao-seed-2-1-pro-260628",
-      "doubao-seed-2-0-pro-260215",
-      "doubao-seed-2-0-lite-260428",
-      "doubao-seed-2-0-mini-260428",
-    ],
-    iconUrl: "../icons/providers/volcengine.svg",
-    websiteUrl: "https://www.volcengine.com/product/ark",
-    supportsVision: true,
-  },
-  {
-    providerName: "GLM（智谱）",
-    shortName: "GLM",
-    baseUrl: "https://open.bigmodel.cn/api/paas/v4",
-    anthropicBaseUrl: "https://open.bigmodel.cn/api/anthropic",
-    transport: "openai",
-    mainModels: ["glm-5.1", "glm-5-turbo", "glm-4.7"],
-    iconUrl: "../icons/providers/glm.svg",
-    websiteUrl: "https://open.bigmodel.cn/",
-  },
-  {
-    providerName: "Kimi（月之暗面）",
-    shortName: "Kimi",
-    baseUrl: "https://api.moonshot.cn/v1",
-    transport: "openai",
-    mainModels: ["kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking"],
-    iconUrl: "../icons/providers/kimi.svg",
-    websiteUrl: "https://platform.moonshot.cn/",
-    // k2.6 / k2.7-code 支持 image_url 多模态
-    supportsVision: true,
-  },
-  {
-    providerName: "Qwen（通义千问）",
-    shortName: "Qwen",
-    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
-    transport: "openai",
-    mainModels: ["qwen-max", "qwen-plus", "qwen-turbo"],
-    iconUrl: "../icons/providers/qwen.svg",
-    websiteUrl: "https://bailian.console.aliyun.com/",
-  },
-  {
-    providerName: "ChatGPT（OpenAI）",
-    shortName: "ChatGPT",
-    baseUrl: "https://api.openai.com/v1",
-    transport: "openai",
-    // 官方入口只推荐已纳入结构化输出 Profile 的型号；代理与自定义型号走“自定义端点”。
-    mainModels: ["gpt-5.6"],
-    iconUrl: "../icons/providers/openai.svg",
-    websiteUrl: "https://platform.openai.com/",
-  },
-  {
-    providerName: "Claude（Anthropic）",
-    shortName: "Claude",
-    baseUrl: "https://api.anthropic.com/v1",
-    transport: "anthropic",
-    mainModels: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-4-6"],
-    iconUrl: "../icons/providers/claude.svg",
-    websiteUrl: "https://console.anthropic.com/",
-  },
-  {
-    providerName: "MiMo（小米）",
-    shortName: "MiMo",
-    baseUrl: "https://api.xiaomimimo.com/v1",
-    anthropicBaseUrl: "https://api.xiaomimimo.com/anthropic",
-    transport: "openai",
-    mainModels: ["mimo-v2.5-pro"],
-    iconUrl: "../icons/providers/xiaomimimo.svg",
-    websiteUrl: "https://mimo.mi.com/",
-    visionBaseUrl: "https://api.xiaomimimo.com/v1",
-    supportsVision: true,
-    // 主模型 mimo-v2.5-pro 不适合做视觉（视觉模型是 mimo-v2.5），强制独立配置
-    independentVision: true,
-    defaultVisionModel: "mimo-v2.5",
-    visionModels: ["mimo-v2.5"],
-  },
-  {
-    providerName: CUSTOM_ENDPOINT_PROVIDERS.cloud,
-    shortName: "自定义",
-    baseUrl: "",
-    transport: "openai",
-    mainModels: [],
-    iconUrl: "../icons/providers/custom-endpoint.svg",
-    customEndpointMode: "cloud",
-  },
-  {
-    providerName: CUSTOM_ENDPOINT_PROVIDERS.local,
-    shortName: "本地模型",
-    baseUrl: "",
-    transport: "openai",
-    mainModels: [],
-    iconUrl: "../icons/providers/custom-endpoint.svg",
-    customEndpointMode: "local",
-    hiddenInPresetList: true,
-  },
-];
 
 if (!window.settings) {
   (window as unknown as { settings: SettingsApi }).settings = {
@@ -3844,34 +3461,6 @@ void loadChannelsPanel();
 // 由于 renderer 走 Vite 打包、main/preload 走 esbuild，两端类型不互通，
 // 这里直接用 (window as any).music 做弱类型化调用，避免给 global.d.ts 加一堆 cross-bundle 类型。
 
-interface MusicSelectionTrack {
-  id: string;
-  name: string;
-  artists: string[];
-  album?: string;
-  durationMs?: number;
-}
-
-interface MusicSelectionResult {
-  setId: string;
-  source: string;
-  query?: string;
-  tracks: MusicSelectionTrack[];
-}
-
-type MusicIpcResult<T> =
-  | { ok: true; data: T }
-  | { ok: false; errorCode: string; backendState?: string; accountState?: string; playerState?: string };
-
-interface MusicApi {
-  getStatus: () => Promise<MusicIpcResult<MusicStatusSnapshot>>;
-  beginLogin: () => Promise<MusicIpcResult<{ loginSessionId: string; qrContent: string; expiresAt: number; pollIntervalMs: number }>>;
-  cancelLogin: () => Promise<MusicIpcResult<unknown>>;
-  logout: () => Promise<MusicIpcResult<unknown>>;
-  search: (keyword: string, limit?: number) => Promise<MusicIpcResult<MusicSelectionResult>>;
-  playTrack: (trackId: string) => Promise<MusicIpcResult<{ state: "dispatched" | "web_fallback" | "client_unavailable" | "launch_failed" }>>;
-  onStateChanged: (h: (s: MusicStatusSnapshot) => void) => (() => void) | void;
-}
 
 function getMusicApi(): MusicApi | null {
   const w = window as unknown as { music?: MusicApi };
@@ -5790,36 +5379,6 @@ ttsEl("tts-gptsovits-timeout").addEventListener("change", () => {
 // 但每次 input 都会触发 IPC，IME 组字过程会被打断，用户反馈"打着打着输入法被打断"。
 // 现在改为：文本框只 mark dirty，真正保存只发生在用户点击 Provider 自己的"保存配置"按钮。
 // switch / slider / select / 引擎选择 / Opener 档位仍然走立即保存（保持即时反馈）。
-const TTS_FIELD_MAP: Record<string, string> = {
-  "tts-minimax-key":          "ttsMinimaxKey",
-  "tts-minimax-voice":        "ttsMinimaxVoiceId",
-  "tts-minimax-model":        "ttsMinimaxModel",
-  "tts-gptsovits-url":        "ttsGptsovitsBaseUrl",
-  "tts-gptsovits-ref-audio":  "ttsGptsovitsRefAudioPath",
-  "tts-gptsovits-prompt-text":"ttsGptsovitsPromptText",
-  "tts-gptsovits-timeout":    "ttsGptsovitsTimeoutMs",
-  "tts-custom-cloud-url":     "ttsCustomCloudEndpointUrl",
-  "tts-custom-cloud-key":     "ttsCustomCloudApiKey",
-  "tts-custom-cloud-voice":   "ttsCustomCloudVoiceId",
-  "tts-custom-cloud-timeout": "ttsCustomCloudTimeoutMs",
-  "tts-mimo-key":             "ttsMimoKey",
-  "tts-mimo-voice-audio":     "ttsMimoVoiceAudioPath",
-  "tts-mimo-style":           "ttsMimoStylePrompt",
-  "tts-mossland-key":         "ttsMosslandKey",
-  "tts-mossland-voice":       "ttsMosslandVoiceId",
-  "tts-mossland-model":       "ttsMosslandModel",
-  "tts-mossland-text":        "ttsMosslandTestText",
-  "tts-mossland-format":      "ttsMosslandFormat",
-};
-
-// 每个 Provider 自己负责的文本输入框列表（不含 switch/slider/select，复刻子区块也不在此）
-const TTS_PROVIDER_FIELDS: Record<string, string[]> = {
-  minimax:        ["tts-minimax-key", "tts-minimax-voice"],
-  gptsovits:      ["tts-gptsovits-url", "tts-gptsovits-ref-audio", "tts-gptsovits-prompt-text", "tts-gptsovits-timeout"],
-  "custom-cloud": ["tts-custom-cloud-url", "tts-custom-cloud-key", "tts-custom-cloud-voice", "tts-custom-cloud-timeout"],
-  mimo:           ["tts-mimo-key", "tts-mimo-voice-audio", "tts-mimo-style"],
-  mossland:       ["tts-mossland-key", "tts-mossland-voice", "tts-mossland-model", "tts-mossland-text", "tts-mossland-format"],
-};
 
 // Provider ID → { 保存按钮, 状态 div }
 // 用 ttsEl() 安全获取：拿不到时返回 null，不让整个 settings.ts 初始化崩。
