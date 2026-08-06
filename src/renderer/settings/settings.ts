@@ -80,6 +80,7 @@ import { tokensState } from "./tokens/state";
 import { ttsState } from "./tts/state";
 import { modalState } from "./shared/modal-state";
 import { formatDateTime, escapeHtml } from "./shared/format";
+import { parsePositiveIntOrThrow, parseN1SecToMsOrThrow, parseCommandLine } from "./shared/parse";
 import { apiState } from "./api/state";
 import { preferencesState } from "./preferences/state";
 import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
@@ -1252,10 +1253,6 @@ async function loadGeneralSettings(): Promise<void> {
   }
 }
 
-function timeoutToString(timeout: number) {
-  return timeout === -1 ? "" : String(timeout);
-}
-
 async function loadTimeoutSettings() {
   try {
     const cfg = await window.settings!.getTimeoutSettings();
@@ -1272,45 +1269,6 @@ async function loadTimeoutSettings() {
   } catch {
     setTimeoutSaveStatus("读取偏好失败", "is-error");
   }
-}
-
-function parsePositiveIntOrThrow(input: string, th: any) {
-  if (!/^[0-9]+$/.test(input)){
-    throw th;
-  }
-  if (isNaN(input as any)){
-    throw th;
-  }
-  const result = parseInt(input);
-  if (Number.isNaN(result) || result <= 0) {
-    throw th;
-  }
-  return result;
-}
-
-function parseN1IntOrThrow(input: string, th: any) {
-  if (input === "") return -1;
-  if (!/^[0-9]+$/.test(input)){
-    throw th;
-  }
-  if (isNaN(input as any)){
-    throw th;
-  }
-  const result = parseInt(input);
-  if (Number.isNaN(result) || result <= 0) {
-    throw th;
-  }
-  return result;
-}
-
-/** 解析秒数（支持小数），返回毫秒；空串返回 -1 */
-function parseN1SecToMsOrThrow(input: string, th: any): number {
-  if (input === "") return -1;
-  const result = parseFloat(input);
-  if (Number.isNaN(result) || result <= 0) {
-    throw th;
-  }
-  return Math.round(result * 1000);
 }
 
 async function saveTimeoutSettings(saveTestTimeout: boolean) {
@@ -2152,36 +2110,6 @@ const pluginAddBtn = document.querySelector(".plugin-add-btn") as HTMLButtonElem
 console.log("[settings] plugin-add-btn 查询结果:", pluginAddBtn ? "找到" : "未找到");
 
 
-// 简易命令行解析：支持引号包裹的参数
-function parseCommandLine(input: string): { command: string; args: string[] } {
-  const trimmed = input.trim();
-  if (!trimmed) return { command: "", args: [] };
-  const parts: string[] = [];
-  let current = "";
-  let inQuote = false;
-  let quoteChar = "";
-  for (const ch of trimmed) {
-    if (inQuote) {
-      if (ch === quoteChar) {
-        inQuote = false;
-      } else {
-        current += ch;
-      }
-    } else if (ch === '"' || ch === "'") {
-      inQuote = true;
-      quoteChar = ch;
-    } else if (ch === " ") {
-      if (current) {
-        parts.push(current);
-        current = "";
-      }
-    } else {
-      current += ch;
-    }
-  }
-  if (current) parts.push(current);
-  return { command: parts[0] || "", args: parts.slice(1) };
-}
 pluginAddBtn?.addEventListener("click", async () => {
   console.log("[settings] ＋ 按钮被点击，弹出输入框…");
   const command = await showInputModal({
