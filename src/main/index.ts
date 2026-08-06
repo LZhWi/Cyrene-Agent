@@ -3875,6 +3875,14 @@ ipcMain.handle(IPC.SETTINGS_SAVE_GENERAL, (_event, settings: Partial<GeneralSett
       startOpener(saved.openerMode === "off" ? "normal" : saved.openerMode);
     }
   }
+  // 屏幕监控动态启停：设置变更后立即生效，不用重启
+  if ("screenMonitorEnabled" in settings) {
+    if (saved.screenMonitorEnabled && loadVisionConfig()) {
+      screenMonitorService.start();
+    } else {
+      screenMonitorService.stop();
+    }
+  }
   return saved;
 });
 
