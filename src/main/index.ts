@@ -75,7 +75,7 @@ import { setLive2dWindowSender } from "./orchestrator/built-in-tools";
 import { registerAllTools } from "./orchestrator/tool-registration";
 import { initMcpManager, pruneMcpServersByIds } from "./orchestrator/mcp-manager";
 import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from "./sync-mcp-builtin";
-import { initPermissionFromDisk, registerPermissionIpc, getCurrentLevel } from "./permission";
+import { bootstrapPermission } from "./permission/bootstrap";
 import { registerChoiceIpc, setChoiceCardSender } from "./user-choice";
 import {
   initializeScreenshotService,
@@ -128,14 +128,13 @@ import { codeRunWorker } from "./orchestrator/code/code-run-worker";
 import {
   setWeatherConfig,
   setSearchConfig,
-  loadTodos,
-  onTodosChange,
   getCurrentTodos,
   setDelegateSettings,
   setUserTimezoneConfig,
 } from "./orchestrator/built-in-tools";
-import { TODO_MODES } from "./orchestrator/todo-store";
 import { resolveMusicPaths } from "./music/paths";
+import { bootstrapGameBot } from "./game-bot/bootstrap";
+import { bootstrapTodos } from "./todos/bootstrap";
 import { bootstrapMusicService } from "./music/bootstrap";
 import { installShutdownLatch } from "./music/shutdown-latch";
 import {
@@ -151,7 +150,6 @@ import {
   isMusicCompanionAvailable,
   loadMusicCompanionHost,
 } from "./skills/music-companion-host";
-import { initGameBot } from "./game-bot";
 
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
 import { createSchedulerSubsystem, type SchedulerSubsystem } from "./scheduler/bootstrap";
@@ -385,30 +383,9 @@ app.whenReady().then(async () => {
     skillRegistry.setAvailability("cyrene-music-companion", () => false);
   }
 
-  // 游戏代肝：IPC + game_bot_start 工具
-  initGameBot();
-
-  // 任务清单（todo_write 工具的持久化 + 事件广播）：
-  // - loadTodos 从磁盘恢复上次未完成的任务（跨重启延续）
-  // - onTodosChange 按 mode 订阅变化，把 TodoState 作为 CUSTOM 事件转发给所有聊天窗口
-  //   渲染端收到 cyrene.todos 后根据 mode 更新对应模式的进度面板
-  loadTodos();
-  for (const mode of TODO_MODES) {
-    onTodosChange(mode, (state) => {
-      for (const win of BrowserWindow.getAllWindows()) {
-        if (win.isDestroyed()) continue;
-        try {
-          win.webContents.send(IPC.AGUI_EVENT, {
-            type: "CUSTOM",
-            name: "cyrene.todos",
-            value: state,
-          });
-        } catch (e) {
-          console.warn("[Cyrene] todos 广播失败:", e);
-        }
-      }
-    });
-  }
+  // 启动游戏代肝与任务清单子系统
+  bootstrapGameBot();
+  bootstrapTodos();
 
   // AG-UI 事件流桥：渲染进程 invoke(AGUI_RUN) → CyreneAgent 跑 FC 循环 → 事件透传
   const agentRuntime = createAgentRuntime({
@@ -478,11 +455,8 @@ app.whenReady().then(async () => {
     createSettingsWindow: () => manager.createSettingsWindow(),
   });
   // 权限模块初始化：必须在 createWindow 之后但任意工具调用之前
-  initPermissionFromDisk();
-  registerPermissionIpc();
-  registerChoiceIpc();
+  bootstrapPermission();
   registerCallIpc();
-  logger.info(LogTag.Cyrene, "当前 agent 权限档位:", getCurrentLevel());
   try {
     const modelSettings = loadModelSettings();
     await initRAG("auto", undefined, undefined, modelSettings.embeddingModel, modelSettings.embeddingDimensions);
