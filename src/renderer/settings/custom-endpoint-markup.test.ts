@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 const html = fs.readFileSync(fileURLToPath(new URL("./index.html", import.meta.url)), "utf8");
 const source = fs.readFileSync(fileURLToPath(new URL("./settings.ts", import.meta.url)), "utf8");
+const mcpSource = fs.readFileSync(fileURLToPath(new URL("./mcp/panel.ts", import.meta.url)), "utf8");
 const presetsSource = fs.readFileSync(fileURLToPath(new URL("./api/presets.ts", import.meta.url)), "utf8");
 const styles = fs.readFileSync(fileURLToPath(new URL("./settings.css", import.meta.url)), "utf8");
 const icon = fs.readFileSync(
@@ -33,10 +34,10 @@ describe("custom endpoint API settings UI", () => {
   });
 
   it("includes the support boundary and all requested FAQ topics", () => {
-    expect(source).toContain("本地模型与自定义端点不在官方技术支持范围内");
-    expect(source).toContain("本地模型回复格式异常");
-    expect(source).toContain("MiniMax 思考模式失效");
-    expect(source).toContain("Claude 配置项比其他厂商少");
+    expect(mcpSource).toContain("本地模型与自定义端点不在官方技术支持范围内");
+    expect(mcpSource).toContain("本地模型回复格式异常");
+    expect(mcpSource).toContain("MiniMax 思考模式失效");
+    expect(mcpSource).toContain("Claude 配置项比其他厂商少");
   });
 
   it("persists the inactive custom profile together with the active one", () => {
