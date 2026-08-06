@@ -1689,10 +1689,9 @@ const stickerAddError = document.getElementById("sticker-add-error") as HTMLElem
 const stickerAddConfirm = document.getElementById("sticker-add-confirm") as HTMLButtonElement;
 const stickerAddCancel = document.getElementById("sticker-add-cancel") as HTMLButtonElement;
 
-let stickerAddPickedPath: string | null = null;
 
 function openStickerAddModal(): void {
-  stickerAddPickedPath = null;
+  preferencesState.stickerAddPickedPath = null;
   stickerAddFileName.textContent = "未选择";
   stickerAddId.value = "";
   stickerAddDesc.value = "";
@@ -1711,7 +1710,7 @@ stickerAddCancel.addEventListener("click", closeStickerAddModal);
 stickerAddPickBtn.addEventListener("click", async () => {
   const filePath = await window.settings?.stickerPickFile?.();
   if (filePath) {
-    stickerAddPickedPath = filePath;
+    preferencesState.stickerAddPickedPath = filePath;
     const name = filePath.split(/[\\/]/).pop() || filePath;
     stickerAddFileName.textContent = name;
     if (!stickerAddId.value) {
@@ -1724,7 +1723,7 @@ stickerAddPickBtn.addEventListener("click", async () => {
 stickerAddConfirm.addEventListener("click", async () => {
   stickerAddError.classList.add("is-hidden");
 
-  if (!stickerAddPickedPath) {
+  if (!preferencesState.stickerAddPickedPath) {
     stickerAddError.textContent = "请先选择图片文件";
     stickerAddError.classList.remove("is-hidden");
     return;
@@ -1754,7 +1753,7 @@ stickerAddConfirm.addEventListener("click", async () => {
   }
 
   try {
-    await window.settings?.stickerAdd?.({ sourcePath: stickerAddPickedPath, id, description, phrases });
+    await window.settings?.stickerAdd?.({ sourcePath: preferencesState.stickerAddPickedPath, id, description, phrases });
     closeStickerAddModal();
   } catch (err) {
     stickerAddError.textContent = "添加失败：" + (err as Error).message;

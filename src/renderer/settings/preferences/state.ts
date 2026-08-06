@@ -7,4 +7,5 @@ import { DEFAULT_CUSTOM_STYLE } from "../../../shared/style-sampling";
 export const preferencesState = {
   currentCustomStyleConfig: DEFAULT_CUSTOM_STYLE as CustomStyleConfig,
   customStyleOverlay: null as HTMLElement | null,
+  stickerAddPickedPath: null as string | null,
 };
