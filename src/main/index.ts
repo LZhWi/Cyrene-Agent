@@ -1,10 +1,9 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell, dialog, protocol, net, globalShortcut } from "electron";
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell, dialog, globalShortcut } from "electron";
 import * as path from "path";
-import * as fs from "fs";
+
 import { logger, LogTag } from "./logger";
 import { renderBanner } from "../shared/banner";
 import { createHash, randomUUID } from "crypto";
-import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
 import { type UiTheme } from "../shared/ui-theme";
 import { type UiFont } from "../shared/ui-font";
@@ -28,7 +27,6 @@ import {
 } from "./windows/window-state";
 import { broadcastToAllWindows } from "./windows/broadcast";
 import { type ReasoningPreference } from "../shared/reasoning";
-import { getUiFontResponseHeaders, isSafeUiFontRequest } from "./ui-font-protocol";
 import {
   type DefaultChatMode,
   type MobileMessageSegmentationMode,
@@ -89,8 +87,10 @@ import { enqueueLLMTask } from "./llm-queue";
 
 import { createSocialContextService, type SocialContextService } from "./services/social-context/social-context-service";
 
-import { getStickersDir } from "./sticker-storage";
-import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
+import {
+  registerPrivilegedSchemes,
+  registerProtocolHandlers,
+} from "./protocols/bootstrap";
 import { normalizeWindowVisibilitySettings } from "./window-visibility-settings";
 import type { StickerConfigItem } from "../shared/sticker-types";
 
@@ -316,10 +316,7 @@ registerChatUiIpc({
 
 // 注册本地用户资源协议（表情包图片与用户导入的字体）
 // 必须在 app.ready 之前调用
-protocol.registerSchemesAsPrivileged([
-  { scheme: "local-sticker", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true } },
-  { scheme: "local-font", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
-]);
+registerPrivilegedSchemes();
 
 if (loadGeneralSettings().disableGpuElectron) {
   app.commandLine.appendSwitch("disable-gpu");
@@ -345,34 +342,9 @@ app.whenReady().then(async () => {
   // 注入应用图标路径 getter（窗口工厂统一从这里读取，避免与 index.ts 循环依赖）
   setGetCurrentAppIconPath(() => getAppIconPath(loadGeneralSettings().uiIcon));
 
-  // 注册 local-sticker:// 协议处理器：将请求映射到 userData/stickers/ 下的文件
-  protocol.handle("local-sticker", (request) => {
-    const file = parseLocalStickerFileFromUrl(request.url);
-    if (!file) return new Response("Invalid sticker URL", { status: 404 });
+  // 注册本地用户资源协议处理器
+  registerProtocolHandlers();
 
-    const filePath = resolveLocalStickerPath(getStickersDir(), file);
-    if (!filePath) return new Response("Invalid sticker path", { status: 403 });
-
-    return net.fetch(pathToFileURL(filePath).toString());
-  });
-  function getUiFontsDir(): string {
-    return path.join(app.getPath("userData"), "ui-fonts");
-  }
-
-  protocol.handle("local-font", (request) => {
-    let fileName: string;
-    try {
-      fileName = decodeURIComponent(new URL(request.url).hostname);
-    } catch {
-      return new Response("Invalid font URL", { status: 404 });
-    }
-    if (!isSafeUiFontRequest(fileName)) return new Response("Invalid font URL", { status: 404 });
-    const filePath = path.join(getUiFontsDir(), fileName);
-    if (path.dirname(filePath) !== getUiFontsDir() || !fs.existsSync(filePath)) return new Response("Font not found", { status: 404 });
-    return net.fetch(pathToFileURL(filePath).toString()).then((response) => new Response(response.body, {
-      headers: getUiFontResponseHeaders(fileName),
-    }));
-  });
   // ── TTS IPC ──
   // 保存/加载 TTS 配置（复用 general settings 存储）
   ipcMain.handle(IPC.TTS_SAVE_SETTINGS, async (_event, tts: Partial<GeneralSettings>) => {
