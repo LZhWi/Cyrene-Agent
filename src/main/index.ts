@@ -38,12 +38,6 @@ import {
   type ProactiveDeliveryTarget,
   type SegmentedOutputMode,
 } from "../shared/preferences";
-import {
-  STYLE_FILE_BY_ID,
-  resolveStylePreference,
-  type CustomStyleConfig,
-  type StyleId,
-} from "../shared/style-sampling";
 import { STATUS_KEYWORDS } from "./status-keywords";
 import {
   addL2MemoryVector,
@@ -67,11 +61,9 @@ import {
   validateCaptionImagePath,
 } from "./chat/image-caption";
 import { decideImageSendStrategy } from "./chat/image-send-strategy";
-import { buildAlwaysOnContext, scheduleMemoryWrite } from "./orchestrator";
 import { CyreneAgent } from "./orchestrator/cyrene-agent";
 import { validateSearchApiKey } from "./orchestrator/search-backend-filter";
 import { indexConversationTurn } from "./orchestrator/history-tools";
-import { buildToneInjection } from "./orchestrator/tone-injector";
 
 import { getAdapter, buildVendorUrl, getAdapterForConfig, createSseReader } from "./orchestrator/vendors";
 import type {
@@ -90,10 +82,8 @@ import { testVendorConnection } from "./orchestrator/vendors/test-connection";
 
 import { getCapability, getCapabilityOrOpenAI } from "./orchestrator/vendors/capabilities";
 import { resolveVendorRuntimeSettings, setVendorRuntimeSettingsGetter } from "./orchestrator/vendors/runtime-settings";
-import { resolveApprovedStyleSampling } from "./orchestrator/vendors/style-sampling";
 
 import { toolRegistry, type ToolDefinition } from "./orchestrator/tool-registry";
-import { buildToolCatalog } from "./orchestrator/tool-catalog";
 import type { ToolRiskLevel } from "./permission";
 import { loadChannelsSettings } from "./channels/settings-store";
 import { channelManager } from "./channels/manager";
@@ -107,7 +97,6 @@ import "./orchestrator/fs-tools";
 import "./orchestrator/search-code-tools";
 import { initMcpManager, addMcpServer, removeMcpServer, listMcpServers, pruneMcpServersByIds } from "./orchestrator/mcp-manager";
 import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from "./sync-mcp-builtin";
-import { buildEnvironmentContext } from "./orchestrator/environment";
 import { initPermissionFromDisk, registerPermissionIpc, getCurrentLevel } from "./permission";
 import { registerChoiceIpc, setChoiceCardSender } from "./user-choice";
 import {
@@ -116,22 +105,20 @@ import {
 } from "./screenshot/screenshot-lifecycle";
 import { createWindowManager, type WindowManager } from "./windows/window-manager";
 import { enqueueLLMTask } from "./llm-queue";
-import { compileSocialContextBlock } from "./social-context/context";
+
 import {
   buildSocialExtractionPrompt,
   SOCIAL_EXTRACTION_SCHEMA,
 } from "./social-context/extractor";
-import { rankSocialAtoms } from "./social-context/retrieval";
 import { createSocialContextScheduler } from "./social-context/scheduler";
 import { createSocialAtomStore } from "./social-context/store";
 import { getEmbeddingStatus, downloadEmbeddingModel, deleteEmbeddingModel } from "./embedding-manager";
 import { BUILT_IN_STICKER_DESCRIPTIONS } from "./sticker-descriptions";
 import { buildCachedStickerEmbeddingIndex } from "./sticker-embedding-cache";
-import { matchSticker } from "./sticker-embedder";
 import type { StickerEmbeddingEntry } from "./sticker-embedder";
 import { buildCachedSceneIndex } from "./scene-embedding-cache";
 import type { SceneIndex } from "./scene-embedder";
-import { loadUserStickerManifest, addUserSticker, deleteUserSticker, getAllStickerConfig, isStickerIdTaken, getStickersDir } from "./sticker-storage";
+import { loadUserStickerManifest, addUserSticker, deleteUserSticker, isStickerIdTaken, getStickersDir } from "./sticker-storage";
 import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
 import { normalizeWindowVisibilitySettings } from "./window-visibility-settings";
 import type { StickerConfigItem } from "../shared/sticker-types";
@@ -171,7 +158,6 @@ import {
   getGeneralSettingsPath,
   getRagStorePath,
   getSettingsPath,
-  getStickerSettingsPath,
   getUserProfilePath,
   loadUserProfile,
   saveUserProfile,
@@ -192,25 +178,15 @@ import { loadMemoryPanelData } from "./memory/panel";
 import {
   createVisibleStreamFilter,
   extractJsonPayload,
-  parseObserverFeeling,
   stripThinkBlocks,
 } from "./chat-stream-utils";
-import {
-  RUNTIME_FEELINGS,
-  RUNTIME_STATUSES,
-  feelingToExpression,
-  inferRuntimeState,
-  type RuntimeFeeling,
-  type RuntimeState,
-  type RuntimeStatus,
-} from "./runtime-state";
+import { type RuntimeState } from "./runtime-state";
 import { getAppIconPath } from "./app-icon";
 import { ensureCustomStylePrompt } from "./style-prompt";
 import {
   appendApiLog,
   buildChatCompletionsUrl,
   getApiLogPath,
-  normalizeChatMessages,
 } from "./chat-api-utils";
 import type { StartTtsRequest, TtsAudioFormat, TtsSessionEvent, TtsStartResult } from "../shared/tts-session";
 import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
@@ -241,8 +217,7 @@ import {
 import { getDateLocale, updateLocaleContext } from "./locale-context";
 import { setAsrConfig } from "./asr/volcano-asr-engine";
 import { registerCallIpc, setCallSettings } from "./call/call-manager";
-import { initSkills, skillRegistry, buildAutoInjectedSkillContext, buildAutoInjectedSoulContext, buildSkillCatalog, setSkillEnabled, listSkillsForUi } from "./skills";
-import { resolveSlashActivation } from "./skills/slash-activation";
+import { initSkills, skillRegistry, setSkillEnabled, listSkillsForUi } from "./skills";
 import {
   isMusicCompanionAvailable,
   loadMusicCompanionHost,
@@ -252,19 +227,19 @@ import { initChannels, shutdownChannels, setChannelsConversationLifecycle } from
 import { buildChannelAttachmentInputs } from "./channels/agent-input";
 import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadGeneralSettings, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
-import {
-  buildAgentRunOptions,
-  onAgentRunFinished,
-  type BuildOptionsDeps,
-  type OnRunFinishedDeps,
-} from "./orchestrator/build-options";
-import { buildRelationshipContext, recordRelationshipTurn } from "./relationship/relationship-log";
-import { createFeelingScores, smoothFeeling } from "./orchestrator/runtime-state-smoother";
 import { getSchedulerStore } from "./scheduler/scheduler-store";
 import { SchedulerEngine } from "./scheduler/scheduler-engine";
 import { createSchedulerRunner } from "./scheduler/scheduler-runner";
 import { registerSchedulerIpc } from "./scheduler/scheduler-ipc";
 import type { ScheduledTask } from "./scheduler/types";
+import { createAgentRuntime, type AgentRuntime } from "./orchestrator/agent-runtime";
+import { createRuntimeStateService } from "./orchestrator/runtime-state-service";
+import {
+  getStickerManagerConfig,
+  loadStickerSettings,
+  saveStickerSettings,
+  setStickerEnabled,
+} from "./orchestrator/sticker-settings";
 import { createProactiveLifecycle } from "./proactive/proactive-lifecycle";
 import { normalizeCitaSettings } from "./cita/settings";
 import { CitaService, ContextStore, RemoteSemanticEngine } from "./cita";
@@ -308,13 +283,8 @@ const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 300000; // FC 总预算：20 轮 × 推�
 
 const STARTUP_EMBEDDING_REFRESH_DELAY_MS = 1500;
 
-let runtimeState: RuntimeState = {
-    status: "陪伴中",
-    feeling: "平静",
-    expression: 0,
-    updatedAt: Date.now(),
-  };
-let feelingScores = createFeelingScores(runtimeState.feeling);
+const runtimeStateService = createRuntimeStateService();
+runtimeStateService.onChange(() => broadcastRuntimeStateChanged());
 let stickerEmbeddingIndex: StickerEmbeddingEntry[] | null = null;
 let stickerEmbeddingRefreshSeq = 0;
 let sceneEmbeddingIndex: SceneIndex | null = null;
@@ -649,52 +619,6 @@ async function syncVolcanoSearchMcp(settings: GeneralSettings): Promise<{ mcpSyn
   return { mcpSyncResult: "no_change" };
 }
 
-let stickerSettingsCache: Record<string, boolean> | null = null;
-
-function loadStickerSettings0(): Record<string, boolean> {
-  let raw: Record<string, unknown> = {};
-  try {
-    const filePath = getStickerSettingsPath();
-    if (fs.existsSync(filePath)) {
-      raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as Record<string, unknown>;
-    }
-  } catch (err) {
-    console.error("[Cyrene] load sticker settings failed:", err);
-  }
-
-  // 把所有 id 归一化为 boolean（默认 true）
-  const result: Record<string, boolean> = {};
-  for (const id of Object.keys(raw)) {
-    result[id] = raw[id] !== false;
-  }
-  return result;
-}
-
-function loadStickerSettings(): Record<string, boolean> {
-  if (stickerSettingsCache !== null) return stickerSettingsCache;
-  return stickerSettingsCache = loadStickerSettings0();
-}
-
-function saveStickerSettings(settings: Record<string, boolean>): Record<string, boolean> {
-  const filePath = getStickerSettingsPath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(settings, null, 2), "utf8");
-  Object.assign(loadStickerSettings(), settings);
-  return settings;
-}
-
-function setStickerEnabled(id: string, enabled: boolean): Record<string, boolean> {
-  const current = loadStickerSettings();
-  current[id] = enabled;
-  return saveStickerSettings(current);
-}
-
-function getStickerManagerConfig(): StickerConfigItem[] {
-  const stickerSettings = loadStickerSettings();
-  return getAllStickerConfig(stickerSettings);
-}
-
-
 async function callChatCompletionsStream(
   settings: ModelSettings,
   messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
@@ -981,151 +905,6 @@ const citaService = new CitaService({
   }),
 });
 
-function readStylePrompt(styleId: StyleId): string {
-  if (styleId === "custom") {
-    const filePath = ensureCustomStylePrompt();
-    return fs.readFileSync(filePath, "utf8").trim();
-  }
-  return loadPromptFile("styles/" + STYLE_FILE_BY_ID[styleId]);
-}
-
-function resolveSoulSamplingForStyle(input: {
-  styleId: StyleId;
-  settings: { provider: string; model: string; reasoning?: ReasoningPreference };
-  customStyle: CustomStyleConfig;
-}) {
-  const capability = getCapabilityOrOpenAI(input.settings.provider);
-  const preference = resolveStylePreference(input.styleId, input.customStyle);
-  return resolveApprovedStyleSampling({
-    providerId: capability.id,
-    model: input.settings.model,
-    reasoning: input.settings.reasoning ?? { mode: "auto" },
-    preference,
-  });
-}
-
-function buildSystemPrompt(styleFile: string, includeStyle = true): string {
-  const parts: string[] = [];
-
-  // Chat 模式使用独立基础规则；仍兼容旧调用方传入的 "talk"。
-  const isChatMode = styleFile.startsWith("chat") || styleFile.startsWith("talk");
-  const isLearnMode = styleFile.startsWith("learn");
-
-  let systemFile: string;
-  let identityFile: string;
-  if (isChatMode) {
-    systemFile = "chat_system.md";
-    identityFile = "chat_identity.md";
-  } else if (isLearnMode) {
-    systemFile = "learn_system.md";
-    identityFile = "learn_identity.md";
-  } else {
-    systemFile = "work_system.md";
-    identityFile = "work_identity.md";
-  }
-
-  const system = loadPromptFile(systemFile);
-  if (system) parts.push(system);
-
-  const identity = loadPromptFile(identityFile);
-  if (identity) parts.push(identity);
-
-  const soul = loadPromptFile("soul.md");
-  if (soul) parts.push(soul);
-
-  const canon = loadPromptFile("canon_quotes.md");
-  if (canon) parts.push(canon);
-
-  // 新链路由 build-options 独立注入 style Prompt；旧调用方仍可选择在这里附加 style 文件。
-  // Learn 模式使用独立的身份与人格体系，不附加 work 风格文件。
-  if (includeStyle && !isChatMode && !isLearnMode) {
-    const style = loadPromptFile("styles/" + styleFile);
-    if (style) parts.push(style);
-  }
-
-  return parts.join("\n\n---\n\n");
-}
-
-/**
- * 工具阶段使用的 system prompt。
- * 第一期：固定 tools_system.md 规则 + 运行时生成的工具目录。
- * 不放任何人格 / 环境 / 记忆，避免人设污染工具决策。
- */
-function buildToolSystemPrompt(enabledTools: ReadonlyArray<ToolDefinition>, isOptimizedFirstRound?: boolean): string {
-  const base = loadPromptFile(isOptimizedFirstRound ? "tools_system_optimized_first.md" : "tools_system.md");
-  const catalog = buildToolCatalog(enabledTools as ToolDefinition[]);
-  return [
-    base,
-    "## 当前可用工具",
-    catalog,
-  ].filter(Boolean).join("\n\n");
-}
-
-/**
- * Soul 阶段使用的基础 system prompt。
- * 包含：人设（work_system.md/chat_system.md + work_identity.md/chat_identity.md + soul.md + canon + style）+ 后续可追加的环境/记忆等。
- * 注意：工具结果（`role: "tool"` 消息）在 conversation 中已携带，本函数不重复注入。
- * 第一期：build-options 会把 environmentContext / skillCatalog / toneInjection /
- * alwaysOnContext / relationshipContext / attachmentContext 等都拼到 baseContent 末尾，
- * 后续第二期再拆分为 toolEnvironmentContext / soulEnvironmentContext。
- */
-function buildSoulSystemBasePrompt(styleFile: string): string {
-  return buildSystemPrompt(styleFile, false);
-}
-
-function loadSoulFeelingContext(): string {
-  try {
-    const soulPath = path.join(app.getAppPath(), "prompts", "soul.md");
-    if (!fs.existsSync(soulPath)) return "";
-    return fs.readFileSync(soulPath, "utf8");
-  } catch {
-    return "";
-  }
-}
-
-async function observeRuntimeState(
-  settings: ModelSettings,
-  recentMessages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
-  latestUserText: string,
-  chatContent: string,
-): Promise<void> {
-  const recentDialogue = [...recentMessages.slice(-8), { role: "assistant" as const, content: chatContent }]
-    .filter((message) => message.role !== "system")
-    .slice(-6)
-    .map((message) => ({ role: message.role, content: message.content }));
-
-  // 入 LLM 后台队列：和 MemoryJudge 串行执行，避免并发触发限流；
-  // 限流自动退避 5s 重试 1 次。.catch 吞错误，不影响主流程。
-  enqueueLLMTask("心情观察器", async () => {
-    const observerContent = await callChatCompletions(settings, [
-      {
-        role: "system",
-        content:
-          '你是一个情绪分析器。以下是昔涟的完整人格设定：\n\n' + loadSoulFeelingContext() + '\n\n根据以上人格设定和以下对话，判断昔涟当前的心情状态。可选心情值（只能选其中一个）：平静 / 开心 / 温柔 / 激动 / 撒娇 / 担心 / 难过 / 感动 / 害羞。只返回 JSON，不要任何多余文字：{"feeling": "心情值"}。判断规则：以最后一轮对话为主，之前几轮为辅；判断的是昔涟的心情，不是用户的心情；无法判断时返回 平静。',
-      },
-      {
-        role: "user",
-        content: JSON.stringify({
-          recentDialogue,
-        }),
-      },
-    ], undefined, 30000, "心情观察器", false);
-    const feeling = parseObserverFeeling(observerContent);
-    if (feeling) {
-      const smoothed = smoothFeeling(feelingScores, feeling);
-      feelingScores = smoothed.scores;
-      runtimeState.feeling = smoothed.feeling as RuntimeFeeling;
-      runtimeState.expression = feelingToExpression[smoothed.feeling] ?? 0;
-      runtimeState.updatedAt = Date.now();
-      broadcastRuntimeStateChanged();
-    }
-  }, { log: false }).catch((err) => {
-    console.warn("[Cyrene] observe runtime failed; keeping current feeling:", err);
-  });
-  // 标注未使用的参数，避免 lint 警告
-  void latestUserText;
-}
-
 function broadcastToAuxWindows(channel: string, payload: unknown): void {
   for (const win of [reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
     if (win && !win.isDestroyed()) {
@@ -1155,7 +934,7 @@ function broadcastModelConfigChanged(settings = loadModelSettings()): void {
 }
 
 function broadcastRuntimeStateChanged(): void {
-  broadcastToAuxWindows(IPC.RUNTIME_STATE_CHANGED, runtimeState);
+  broadcastToAuxWindows(IPC.RUNTIME_STATE_CHANGED, runtimeStateService.getState());
 }
 
 function createWindow(manager: WindowManager): void {
@@ -1559,7 +1338,7 @@ ipcMain.handle(IPC.MODEL_CONFIG_GET, () => {
 });
 
 ipcMain.handle(IPC.RUNTIME_STATE_GET, () => {
-  return runtimeState;
+  return runtimeStateService.getState();
 });
 
 ipcMain.handle(IPC.SETTINGS_SAVE_CONFIG, (_event, settings: Partial<ModelSettings>) => {
@@ -1721,8 +1500,7 @@ ipcMain.handle(IPC.STICKERS_DELETE, async (_event, id: string) => {
 });
 
 ipcMain.handle(IPC.STICKERS_GET_ENABLED, () => {
-  const stickerSettings = loadStickerSettings();
-  return getAllStickerConfig(stickerSettings).filter((s) => s.enabled);
+  return getStickerManagerConfig().filter((s) => s.enabled);
 });
 
 
@@ -2716,25 +2494,22 @@ app.whenReady().then(async () => {
         }
       },
     });
-    const { options } = await buildAgentRunOptions(
-      {
-        messages: [
-          ...historyMessages,
-          { role: "user", content: msg.text },
-        ],
-        style: "01_default.md",
-        sessionId,
-        attachments: attachmentInputs.attachments,
-        imageAttachments: attachmentInputs.imageAttachments,
-        channel: msg.channel,
-        executionMode: sandbox === "off" ? "chat" : "work",
-        ...(sandbox === "off" ? {
-          userTurnId: `${msg.channel}:${msg.senderId}:${msg.at.toISOString()}:user`,
-          assistantTurnId: `${msg.channel}:${msg.senderId}:${msg.at.toISOString()}:assistant`,
-        } : {}),
-      },
-      buildOptionsDeps,
-    );
+    const { options } = await agentRuntime.buildOptions({
+      messages: [
+        ...historyMessages,
+        { role: "user", content: msg.text },
+      ],
+      style: "01_default.md",
+      sessionId,
+      attachments: attachmentInputs.attachments,
+      imageAttachments: attachmentInputs.imageAttachments,
+      channel: msg.channel,
+      executionMode: sandbox === "off" ? "chat" : "work",
+      ...(sandbox === "off" ? {
+        userTurnId: `${msg.channel}:${msg.senderId}:${msg.at.toISOString()}:user`,
+        assistantTurnId: `${msg.channel}:${msg.senderId}:${msg.at.toISOString()}:assistant`,
+      } : {}),
+    });
     // 把过滤后的 tools 注入 options（覆盖默认的 getEnabledTools）
     options.tools = filteredTools;
 
@@ -2750,7 +2525,7 @@ app.whenReady().then(async () => {
     });
     channelResult.text = reply;
     if (agent.lastResult) {
-      const finished = await onAgentRunFinished(agent.lastResult, msg.text, onRunFinishedDeps, msg.channel);
+      const finished = await agentRuntime.onRunFinished(agent.lastResult, msg.text, msg.channel);
       // 把 sticker 决定透出给 dispatcher，让它纳入 OutgoingMessage.parts；
       // 桌面聊天窗的 sticker 仍由 onAgentRunFinished 内部 IPC 广播承担，此处不重复。
       channelResult.sticker = finished.sticker;
@@ -2855,49 +2630,6 @@ app.whenReady().then(async () => {
 
   const schedulerStore = getSchedulerStore();
   schedulerStore.load();
-  const schedulerRunner = createSchedulerRunner({
-    buildOptions: async (task: ScheduledTask) => {
-      const settings = loadModelSettings();
-      if (!settings.baseUrl) throw new Error("还没有填写 API URL，请先在设置里保存 API 配置。");
-      const messages = [{ role: "user" as const, content: task.prompt }];
-      let alwaysOnContext = "";
-      try {
-        alwaysOnContext = await buildAlwaysOnContext(task.prompt, messages);
-      } catch (err) {
-        console.warn("[Scheduler] always-on context build failed:", err);
-      }
-      let environmentContext = "";
-      try {
-        const profile = loadUserProfile();
-        environmentContext = buildEnvironmentContext(
-          { provider: settings.provider, model: settings.model },
-          { nickname: profile.nickname, callPreference: profile.callPreference, birthday: profile.birthday, defaultCity: profile.defaultCity, timezone: profile.timezone },
-        );
-      } catch (err) {
-        console.warn("[Scheduler] environment context build failed:", err);
-      }
-      const skillCatalog = buildSkillCatalog(skillRegistry.getEnabled());
-      const systemContent =
-        (environmentContext ? environmentContext + "\n\n" : "") +
-        (alwaysOnContext ? alwaysOnContext + "\n\n" : "") +
-        buildSystemPrompt("01_default.md") +
-        (skillCatalog ? "\n\n---\n\n" + skillCatalog : "");
-      return {
-        settings: { provider: settings.provider, baseUrl: settings.baseUrl, model: settings.model, apiKey: settings.apiKey, contextWindowTokens: settings.contextWindowTokens },
-        messages: [{ role: "system", content: systemContent }, ...messages],
-        timeoutMs: getTimeoutSettings().chatRequestTimeout,
-      };
-    },
-    getChatWebContents: () => (reactChatWindow && !reactChatWindow.isDestroyed() ? reactChatWindow.webContents : null),
-    recordHistory: (entry) => schedulerStore.recordHistory(entry),
-    id: () => `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    now: () => new Date(),
-  });
-  schedulerEngine = new SchedulerEngine({
-    store: schedulerStore,
-    runTask: schedulerRunner.runScheduledTask,
-  });
-  registerSchedulerIpc(schedulerStore, schedulerEngine, () => toolRegistry.getAllTools());
 
   // AG-UI 事件流桥：渲染进程 invoke(AGUI_RUN) → CyreneAgent 跑 FC 循环 → 事件透传
   // buildOptions 负责统一构建上下文；onRunFinished 复用副作用
@@ -2985,106 +2717,43 @@ app.whenReady().then(async () => {
       );
     },
   });
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const buildOptionsDeps: BuildOptionsDeps = {
-    loadModelSettings: () => loadModelSettings(),
-    loadGeneralSettings: () => loadGeneralSettings(),
-    loadUserProfile: () => loadUserProfile(),
-    buildEnvironmentContext: ((model: { provider: string; model: string }, profile: unknown) =>
-      buildEnvironmentContext(model as any, profile as any)) as BuildOptionsDeps["buildEnvironmentContext"],
-    buildSkillCatalog: ((skills: ReadonlyArray<unknown>) =>
-      buildSkillCatalog(skills as any)) as BuildOptionsDeps["buildSkillCatalog"],
-    buildAutoInjectedSkillContext: ((skills: ReadonlyArray<unknown>) =>
-      buildAutoInjectedSkillContext(skills as any, (id) => skillRegistry.getBody(id))) as BuildOptionsDeps["buildAutoInjectedSkillContext"],
-    buildAutoInjectedSoulContext: ((skills: ReadonlyArray<unknown>) =>
-      buildAutoInjectedSoulContext(skills as any, (id) => skillRegistry.getBody(id))) as BuildOptionsDeps["buildAutoInjectedSoulContext"],
-    skillRegistry: skillRegistry as unknown as BuildOptionsDeps["skillRegistry"],
-    resolveSlashActivation: ((messages: ReadonlyArray<{ role: string; content?: string }>) =>
-      resolveSlashActivation(messages as any)) as BuildOptionsDeps["resolveSlashActivation"],
-    buildToneInjection: (async (userText, messages, provider, index) =>
-      buildToneInjection(userText, messages as any, provider as any, index as any)) as BuildOptionsDeps["buildToneInjection"],
-    sceneEmbeddingIndex: sceneEmbeddingIndex as unknown,
-    getSceneEmbeddingProvider: () => getSceneEmbeddingProvider() as unknown,
-    buildAlwaysOnContext: (async (userText, messages) =>
-      buildAlwaysOnContext(userText, messages as any)) as BuildOptionsDeps["buildAlwaysOnContext"],
-    buildRelationshipContext,
-    buildSystemPrompt,
-    buildToolSystemPrompt: (enabledTools, isOptimizedFirstRound) => buildToolSystemPrompt(enabledTools as ToolDefinition[], isOptimizedFirstRound),
-    buildSoulSystemBasePrompt,
-    readStylePrompt,
-    resolveSoulSampling: resolveSoulSamplingForStyle,
-    toolRegistry: { getEnabled: () => toolRegistry.getEnabledTools() },
-    normalizeChatMessages: ((raw: ReadonlyArray<unknown>) =>
-      normalizeChatMessages(raw as any)) as BuildOptionsDeps["normalizeChatMessages"],
-    chatRequestTimeoutMs: getTimeoutSettings().chatRequestTimeout,
-    captionImageForFallback: async (filePath: string) => {
-      const validated = validateCaptionImagePath(filePath);
-      if (!validated.ok) return { ok: false, error: validated.error };
-      const visionCfg = loadVisionConfig();
-      if (!visionCfg) return { ok: false, error: "未配置视觉模型，无法分析图片" };
-      try {
-        const { captionImage } = await import("./orchestrator/vision-captioner");
-        const caption = await captionImage(
-          { base64: validated.buffer.toString("base64"), mime: validated.mime },
-          IMAGE_CAPTION_PROMPT,
-          visionCfg,
-        );
-        if (caption.startsWith("[错误")) return { ok: false, error: caption };
-        return { ok: true, caption };
-      } catch (err: any) {
-        return { ok: false, error: err?.message || String(err) };
-      }
-    },
-    loadActionGateSystemPrompt: () => loadPromptFile("action_gate_system.md"),
-    loadNativeFcSystemPrompt: () => loadPromptFile("native_fc_system.md"),
-    loadAskSystemPrompt: () => loadPromptFile("ask_system.md"),
-    loadAskPersonaPrompt: () => loadPromptFile("ask_persona.md"),
-    loadAskQuotesPrompt: () => loadPromptFile("ask_quotes.md"),
-    prepareCitaTurn: (input) => citaService.prepareTurn(input),
-    buildChatSocialContext: async ({ conversationId, query }) => {
-      const now = Date.now();
-      const active = socialAtomStore.listActive(conversationId, now);
-      const retrievedAtoms = rankSocialAtoms(query, active, { now, limit: 5 });
-      return {
-        contextBlock: compileSocialContextBlock(retrievedAtoms),
-        retrievedAtoms,
-      };
-    },
-    getWorkspaceBinding: (conversationId: string) => {
-      return chatsStore.getWorkspaceBinding(conversationId);
-    },
-  };
-  const onRunFinishedDeps: OnRunFinishedDeps = {
-    loadModelSettings: () => loadModelSettings(),
-    scheduleMemoryWrite,
-    scheduleSocialAtomExtraction: (input) => socialContextScheduler.schedule(input),
-    inferRuntimeState,
-    runtimeState,
-    feelingToExpression,
-    setRuntimeState: (next) => {
-      if (next.status !== undefined) runtimeState.status = next.status as RuntimeStatus;
-      if (next.expression !== undefined) runtimeState.expression = next.expression;
-      if (next.updatedAt !== undefined) runtimeState.updatedAt = next.updatedAt;
-      if (next.feeling !== undefined) {
-        runtimeState.feeling = next.feeling as RuntimeFeeling;
-        feelingScores = createFeelingScores(runtimeState.feeling);
-      }
-    },
-    stickerEmbeddingIndex: stickerEmbeddingIndex as unknown,
-    getStickerEmbeddingIndex: () => stickerEmbeddingIndex as unknown,
-    getEmbeddingProvider: () => getEmbeddingProvider() as unknown,
-    matchSticker: (async (text, provider, index, threshold) =>
-      matchSticker(text, provider as any, index as any, threshold) as Promise<{ id: string } | null | undefined>) as OnRunFinishedDeps["matchSticker"],
-    loadStickerSettings,
+  const agentRuntime = createAgentRuntime({
+    runtimeStateService,
+    callChatCompletions,
+    enqueueLLMTask,
+    loadModelSettings,
+    loadGeneralSettings,
+    loadUserProfile,
+    toolRegistry,
+    skillRegistry,
+    sceneEmbeddingIndex,
+    stickerEmbeddingIndex,
+    getEmbeddingProvider,
+    getSceneEmbeddingProvider,
     broadcastRuntimeStateChanged,
-    observeRuntimeState: (async (settings, history, userText, reply) =>
-      observeRuntimeState(settings as any, history as any, userText, reply)) as OnRunFinishedDeps["observeRuntimeState"],
-    recordRelationshipTurn,
-  };
+    citaService,
+    socialContextScheduler,
+    chatsStore,
+    socialAtomStore,
+  });
+
+  const schedulerRunner = createSchedulerRunner({
+    buildOptions: (task) => agentRuntime.buildSchedulerOptions(task),
+    getChatWebContents: () => (reactChatWindow && !reactChatWindow.isDestroyed() ? reactChatWindow.webContents : null),
+    recordHistory: (entry) => schedulerStore.recordHistory(entry),
+    id: () => `hist-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    now: () => new Date(),
+  });
+  schedulerEngine = new SchedulerEngine({
+    store: schedulerStore,
+    runTask: schedulerRunner.runScheduledTask,
+  });
+  registerSchedulerIpc(schedulerStore, schedulerEngine, () => toolRegistry.getAllTools());
+
   registerAgUiIpc(
-    async (input: AguiRunInput) => buildAgentRunOptions(input, buildOptionsDeps),
+    (input) => agentRuntime.buildOptions(input),
     // sticker 由 bridge 发送回本次 run 的发起窗口；默认兜底目标为 reactChatWindow。
-    async (result, latestUserText) => onAgentRunFinished(result, latestUserText, onRunFinishedDeps),
+    (result, latestUserText) => agentRuntime.onRunFinished(result, latestUserText),
     () => reactChatWindow,
     proactiveLifecycle.proactiveConversationLifecycle,
   );
