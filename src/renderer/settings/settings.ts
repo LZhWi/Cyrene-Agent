@@ -79,6 +79,7 @@ import { memoryState } from "./memory/state";
 import { schedulerState } from "./scheduler/state";
 import { schedulerNewBtn, schedulerEmpty, schedulerList, schedulerEditor, schedulerEditorTitle, schedulerEditorClose, schedulerTitleInput, schedulerPromptInput, schedulerEnabledInput, schedulerKindInput, schedulerOnceRunAtInput, schedulerTimeOfDayInput, schedulerDayOfWeekInput, schedulerIntervalEveryInput, schedulerIntervalUnitInput, schedulerToolLimitInput, schedulerToolPicker, schedulerToolEmptyHint, schedulerSaveStatus, schedulerCancelBtn, schedulerSaveBtn } from "./scheduler/dom";
 import { toLocalDateTimeInputValue, isValidTimeOfDay, formatSchedulerDate, describeSchedule } from "./scheduler/utils";
+import { timeoutSaveStatus, timeoutSummaryInput, timeoutSummaryReset, timeoutVisionInput, timeoutVisionReset, timeoutUserChoiceInput, timeoutUserChoiceReset, timeoutTestInput, timeoutTestReset, timeoutMemoryJudgeInput, timeoutMemoryJudgeReset, timeoutProfileTotalBudgetInput, timeoutProfileTotalBudgetReset, timeoutProfilePerAttemptInput, timeoutProfilePerAttemptReset, timeoutProfileRemainingInput, timeoutProfileRemainingReset } from "./timeout/dom";
 import { tokensState } from "./tokens/state";
 import { ttsState } from "./tts/state";
 import { modalState } from "./shared/modal-state";
@@ -404,7 +405,6 @@ const placeholderCopy = document.getElementById("placeholder-copy") as HTMLEleme
 const saveStatus = document.getElementById("save-status") as HTMLElement;
 const appearanceSaveStatus = document.getElementById("appearance-save-status") as HTMLElement;
 const generalSaveStatus = document.getElementById("general-save-status") as HTMLElement;
-const timeoutSaveStatus = document.getElementById("timeout-save-status") as HTMLElement;
 const runtimeSaveStatus = document.getElementById("runtime-save-status") as HTMLElement;
 const preferencesSaveStatus = document.getElementById("preferences-save-status") as HTMLElement;
 const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLElement;
@@ -504,23 +504,7 @@ const openStickerManagerBtn = document.getElementById("open-sticker-manager-btn"
 const addStickerBtn = document.getElementById("add-sticker-btn") as HTMLButtonElement;
 const stickerThresholdInput = document.getElementById("sticker-threshold") as HTMLInputElement;
 const stickerThresholdVal = document.getElementById("sticker-threshold-val") as HTMLElement;
-const timeoutSummaryInput = document.getElementById("timeout-summary") as HTMLInputElement;
-const timeoutSummaryReset = document.getElementById("timeout-summary-reset-btn") as HTMLButtonElement;
-const timeoutVisionInput = document.getElementById("timeout-vision") as HTMLInputElement;
-const timeoutVisionReset = document.getElementById("timeout-vision-reset-btn") as HTMLButtonElement;
-const timeoutUserChoiceInput = document.getElementById("timeout-user-choice") as HTMLInputElement;
-const timeoutUserChoiceReset = document.getElementById("timeout-user-choice-reset-btn") as HTMLButtonElement;
-const timeoutTestInput = document.getElementById("timeout-test") as HTMLInputElement;
-const timeoutTestReset = document.getElementById("timeout-test-reset-btn") as HTMLButtonElement;
-const timeoutMemoryJudgeInput = document.getElementById("timeout-memory-judge") as HTMLInputElement;
-const timeoutMemoryJudgeReset = document.getElementById("timeout-memory-judge-reset-btn") as HTMLButtonElement;
 
-const timeoutProfileTotalBudgetInput = document.getElementById("timeout-profile-total-budget") as HTMLInputElement;
-const timeoutProfileTotalBudgetReset = document.getElementById("timeout-profile-total-budget-reset-btn") as HTMLButtonElement;
-const timeoutProfilePerAttemptInput = document.getElementById("timeout-profile-per-attempt") as HTMLInputElement;
-const timeoutProfilePerAttemptReset = document.getElementById("timeout-profile-per-attempt-reset-btn") as HTMLButtonElement;
-const timeoutProfileRemainingInput = document.getElementById("timeout-profile-remaining") as HTMLInputElement;
-const timeoutProfileRemainingReset = document.getElementById("timeout-profile-remaining-reset-btn") as HTMLButtonElement;
 const modelRequestTimeoutSecInput = document.getElementById("model-request-timeout-sec") as HTMLInputElement;
 const modelRequestTimeoutSecReset = document.getElementById("model-request-timeout-sec-reset-btn") as HTMLButtonElement;
 
