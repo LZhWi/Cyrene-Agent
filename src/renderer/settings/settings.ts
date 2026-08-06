@@ -80,6 +80,7 @@ import { ttsState } from "./tts/state";
 import { modalState } from "./shared/modal-state";
 import { apiState } from "./api/state";
 import { preferencesState } from "./preferences/state";
+import { asrState } from "./asr/state";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -1974,13 +1975,10 @@ asrEngineSelect?.addEventListener("change", () => {
   void saveAsrField("asrEngine", asrEngineSelect.value);
 });
 // 防抖保存：每个字段独立 timer，避免连续填写多个字段时只有最后一个被保存
-let asrAliyunAppKeyTimer: ReturnType<typeof setTimeout> | undefined;
-let asrAliyunAccessKeyIdTimer: ReturnType<typeof setTimeout> | undefined;
-let asrAliyunAccessKeySecretTimer: ReturnType<typeof setTimeout> | undefined;
 
-asrAliyunAppKeyInput?.addEventListener("input", () => { clearTimeout(asrAliyunAppKeyTimer); asrAliyunAppKeyTimer = setTimeout(() => void saveAsrField("asrAliyunAppKey", asrAliyunAppKeyInput.value.trim()), 800); });
-asrAliyunAccessKeyIdInput?.addEventListener("input", () => { clearTimeout(asrAliyunAccessKeyIdTimer); asrAliyunAccessKeyIdTimer = setTimeout(() => void saveAsrField("asrAliyunAccessKeyId", asrAliyunAccessKeyIdInput.value.trim()), 800); });
-asrAliyunAccessKeySecretInput?.addEventListener("input", () => { clearTimeout(asrAliyunAccessKeySecretTimer); asrAliyunAccessKeySecretTimer = setTimeout(() => void saveAsrField("asrAliyunAccessKeySecret", asrAliyunAccessKeySecretInput.value.trim()), 800); });
+asrAliyunAppKeyInput?.addEventListener("input", () => { clearTimeout(asrState.aliyunAppKeyTimer); asrState.aliyunAppKeyTimer = setTimeout(() => void saveAsrField("asrAliyunAppKey", asrAliyunAppKeyInput.value.trim()), 800); });
+asrAliyunAccessKeyIdInput?.addEventListener("input", () => { clearTimeout(asrState.aliyunAccessKeyIdTimer); asrState.aliyunAccessKeyIdTimer = setTimeout(() => void saveAsrField("asrAliyunAccessKeyId", asrAliyunAccessKeyIdInput.value.trim()), 800); });
+asrAliyunAccessKeySecretInput?.addEventListener("input", () => { clearTimeout(asrState.aliyunAccessKeySecretTimer); asrState.aliyunAccessKeySecretTimer = setTimeout(() => void saveAsrField("asrAliyunAccessKeySecret", asrAliyunAccessKeySecretInput.value.trim()), 800); });
 asrLanguageSelect?.addEventListener("change", () => void saveAsrField("asrLanguage", asrLanguageSelect.value));
 asrVadSilenceInput?.addEventListener("input", () => {
   void saveAsrField("asrVadSilenceMs", Number(asrVadSilenceInput.value) || 1000);
