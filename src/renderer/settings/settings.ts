@@ -130,6 +130,7 @@ import { saveTimeoutSettings } from "./timeout/panel";  // saveTimeoutSettings �
 import { DEFAULT_TIMEOUT_SETTINGS, type TimeoutSettings } from "../../shared/timeout-types";  // mock + API 表单校验用
 import "./user/panel";  // 副作用导入：执行事件绑定 + 初始加载
 import "./plugins/panel";  // 副作用导入：执行事件绑定 + 初始加载
+import "./plugins/permission";  // 副作用导入：权限档位 UI + 风险确认弹窗
 import "./tokens/panel";  // 副作用导入：Token 用量图表 + 时间范围切换
 import { renderSkills } from "./skills/panel";  // renderSkills 在切换到 skills 标签时按需调用
 
@@ -2374,123 +2375,6 @@ memoryImportedList?.addEventListener("click", async (event) => {
 
 void loadMemoryPanel();
 
-// ── 权限档位 UI ───────────────────────────────────────────
-type PermissionLevel = "read-only" | "scoped" | "per-action" | "full";
-
-
-const PERMISSION_NOTES: Record<PermissionLevel, string> = {
-  "read-only": "只读：昔涟不会修改本地任何文件，也不能为你安装新工具。",
-  "scoped": "指定目录：昔涟只能在你授权的目录里读写文件（白名单后续在此面板配置）。",
-  "per-action": "每次审批：每次涉及文件或安装的操作，昔涟都会在聊天里弹卡片让你确认。",
-  "full": "完全访问：昔涟可以自由调用本地命令（含 git/npm/pip）。请只在你完全信任的情况下使用。",
-};
-
-function paintPermissionUI(level: PermissionLevel): void {
-  if (!permissionBlocksWrap) return;
-  // scoped 档已从插件面板移除，回退显示只读
-  const display = level === "scoped" ? "read-only" : level;
-  const blocks = permissionBlocksWrap.querySelectorAll<HTMLButtonElement>("button[data-level]");
-  blocks.forEach((b) => {
-    const isActive = b.dataset.level === display;
-    b.classList.toggle("is-active", isActive);
-    b.setAttribute("aria-pressed", String(isActive));
-  });
-  if (permissionNote) {
-    permissionNote.textContent = PERMISSION_NOTES[level];
-  }
-}
-
-async function confirmFullAccess(): Promise<boolean> {
-  // 完全访问需要延迟确认 + 风险提示
-  _initModalOverlay();
-  if (!modalState.cyOverlay) return false;
-  const iconEl = modalState.cyOverlay.querySelector("#cy-modal-icon") as HTMLElement;
-  const titleEl = modalState.cyOverlay.querySelector("#cy-modal-title") as HTMLElement;
-  const msgEl = modalState.cyOverlay.querySelector("#cy-modal-message") as HTMLElement;
-  const cancelBtn = modalState.cyOverlay.querySelector("#cy-modal-cancel") as HTMLButtonElement;
-  const confirmBtn = modalState.cyOverlay.querySelector("#cy-modal-confirm") as HTMLButtonElement;
-  iconEl.textContent = "⚠️";
-  titleEl.textContent = "切换到完全访问？";
-  msgEl.textContent = "这意味着昔涟可以在你的电脑上自由执行命令，包括 git clone、npm install、删除文件等。请只在你完全信任她的判断时启用。";
-  cancelBtn.textContent = "再想想";
-  modalState.cyOverlay.classList.remove("is-hidden");
-
-  // 倒计时 5 秒强制等待
-  let remain = 5;
-  confirmBtn.disabled = true;
-  confirmBtn.textContent = "我了解风险（" + remain + "）";
-  const tick = setInterval(() => {
-    remain -= 1;
-    if (remain <= 0) {
-      confirmBtn.disabled = false;
-      confirmBtn.textContent = "我了解风险，启用";
-      clearInterval(tick);
-    } else {
-      confirmBtn.textContent = "我了解风险（" + remain + "）";
-    }
-  }, 1000);
-
-  return new Promise((resolve) => {
-    const cleanup = (result: boolean) => {
-      clearInterval(tick);
-      confirmBtn.disabled = false;
-      modalState.cyOverlay?.classList.add("is-hidden");
-      cancelBtn.removeEventListener("click", onCancel);
-      confirmBtn.removeEventListener("click", onConfirm);
-      resolve(result);
-    };
-    const onCancel = () => cleanup(false);
-    const onConfirm = () => cleanup(true);
-    cancelBtn.addEventListener("click", onCancel);
-    confirmBtn.addEventListener("click", onConfirm);
-  });
-}
-
-if (permissionBlocksWrap) {
-  permissionBlocksWrap.addEventListener("click", async (event) => {
-    const btn = (event.target as HTMLElement)?.closest("button[data-level]") as HTMLButtonElement | null;
-    if (!btn) return;
-    const target = (btn.dataset.level || "") as PermissionLevel;
-    if (!target) return;
-    if (btn.classList.contains("is-active")) {
-      console.log("[settings] 档位未变，不动作");
-      return;
-    }
-
-    if (target === "full") {
-      const ok = await confirmFullAccess();
-      if (!ok) {
-        console.log("[settings] 用户取消了完全访问");
-        return;
-      }
-    }
-
-    console.log("[settings] 切换权限档位 →", target);
-    try {
-      const result = await window.settings?.setPermissionLevel?.(target);
-      if (result?.ok) {
-        paintPermissionUI((result.level || target) as PermissionLevel);
-      } else {
-        console.warn("[settings] 切换档位失败:", result?.error);
-      }
-    } catch (err) {
-      console.error("[settings] 切换档位异常:", err);
-    }
-  });
-
-  // 初始化：从后端拿当前档位
-  void (async () => {
-    try {
-      const result = await window.settings?.getPermissionLevel?.();
-      const level = (result?.level || "read-only") as PermissionLevel;
-      console.log("[settings] 当前权限档位:", level);
-      paintPermissionUI(level);
-    } catch (err) {
-      console.warn("[settings] 加载权限档位失败:", err);
-      paintPermissionUI("read-only");
-    }
-  })();
-}
 
 // ── 生活工具手风琴 ─────────────────────────────────────────
 lifeToggle?.addEventListener("click", () => {

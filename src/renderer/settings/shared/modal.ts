@@ -4,7 +4,7 @@
 
 import { modalState } from "./modal-state";
 
-function _initModalOverlay(): void {
+export function _initModalOverlay(): void {
   if (modalState.cyOverlay) return;
   modalState.cyOverlay = document.createElement("div");
   modalState.cyOverlay.id = "cy-modal-overlay";
