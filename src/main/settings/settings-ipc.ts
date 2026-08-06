@@ -18,7 +18,8 @@ import type { RuntimeStateService } from "../orchestrator/runtime-state-service"
 import type { EmbeddingIndexService } from "../services/embedding/embedding-index-service";
 import { initReranker, getRerankerInstallStatus } from "../rag/reranker";
 import { switchEmbeddingModel } from "../rag";
-import { downloadEmbeddingModel } from "../embedding-manager";
+import { downloadEmbeddingModel, deleteEmbeddingModel } from "../embedding-manager";
+import * as os from "os";
 import { testVendorConnection } from "../orchestrator/vendors/test-connection";
 import type { VendorConfig } from "../orchestrator/vendors";
 import { normalizeModelSettings, getPublicModelConfig } from "../settings/model-settings";
@@ -280,6 +281,25 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     broadcastModelConfigChanged(preview);
   });
 
+  ipcMain.handle(IPC.EMBEDDING_GET_STATUS, async () => {
+    const cacheDir = path.join(os.homedir(), ".cache", "huggingface");
+    const models = {
+      minilm: { dir: "Xenova\\all-MiniLM-L6-v2", onnx: "onnx\\model_quantized.onnx", name: "MiniLM" },
+      bgem3: { dir: "Xenova\\bge-m3", onnx: "onnx\\model_quantized.onnx", name: "BGE-M3" },
+    };
+    const result: Record<string, { installed: boolean; sizeBytes: number }> = {};
+    for (const [key, m] of Object.entries(models)) {
+      const onnxPath = path.join(cacheDir, m.dir, m.onnx);
+      const installed = fs.existsSync(onnxPath);
+      let sizeBytes = 0;
+      if (installed) {
+        try { sizeBytes = fs.statSync(onnxPath).size; } catch {}
+      }
+      result[key] = { installed, sizeBytes };
+    }
+    return result;
+  });
+
   ipcMain.handle(IPC.EMBEDDING_DOWNLOAD, async (_event, payload: unknown) => {
     const p = payload as { model?: string; mirror?: string };
     const model = p.model || "minilm";
@@ -289,6 +309,18 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
       await downloadEmbeddingModel(model, mirror, (info) => {
         win?.webContents.send(IPC.EMBEDDING_PROGRESS, info);
       });
+      return { ok: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: message };
+    }
+  });
+
+  ipcMain.handle(IPC.EMBEDDING_DELETE, async (_event, payload: unknown) => {
+    const p = payload as { model?: string };
+    const model = p.model || "minilm";
+    try {
+      deleteEmbeddingModel(model);
       return { ok: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

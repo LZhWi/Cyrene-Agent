@@ -1,7 +1,6 @@
 import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell, dialog, protocol, net, globalShortcut } from "electron";
 import * as path from "path";
 import * as fs from "fs";
-import * as os from "os";
 import { logger, LogTag } from "./logger";
 import { renderBanner } from "../shared/banner";
 import { createHash, randomUUID } from "crypto";
@@ -93,7 +92,7 @@ import { createWindowManager, type WindowManager } from "./windows/window-manage
 import { enqueueLLMTask } from "./llm-queue";
 
 import { createSocialContextService, type SocialContextService } from "./services/social-context/social-context-service";
-import { getEmbeddingStatus, downloadEmbeddingModel, deleteEmbeddingModel } from "./embedding-manager";
+
 import { loadUserStickerManifest, addUserSticker, deleteUserSticker, isStickerIdTaken, getStickersDir } from "./sticker-storage";
 import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
 import { normalizeWindowVisibilitySettings } from "./window-visibility-settings";
@@ -741,41 +740,6 @@ ipcMain.handle(IPC.STICKERS_GET_ENABLED, () => {
 });
 
 
-ipcMain.handle(IPC.EMBEDDING_GET_STATUS, async () => {
-  const cacheDir = path.join(os.homedir(), ".cache", "huggingface");
-  const models = {
-    minilm: { dir: "Xenova\\all-MiniLM-L6-v2", onnx: "onnx\\model_quantized.onnx", name: "MiniLM" },
-    bgem3: { dir: "Xenova\\bge-m3", onnx: "onnx\\model_quantized.onnx", name: "BGE-M3" },
-  };
-  const result: Record<string, { installed: boolean; sizeBytes: number }> = {};
-  for (const [key, m] of Object.entries(models)) {
-    const onnxPath = path.join(cacheDir, m.dir, m.onnx);
-    const installed = fs.existsSync(onnxPath);
-    let sizeBytes = 0;
-    if (installed) {
-      try { sizeBytes = fs.statSync(onnxPath).size; } catch {}
-    }
-    result[key] = { installed, sizeBytes };
-  }
-  return result;
-});
-
-
-ipcMain.handle(IPC.EMBEDDING_DOWNLOAD, async (_event, payload: unknown) => {
-  const p = payload as { model?: string; mirror?: string };
-  const model = p.model || "minilm";
-  const mirror = p.mirror || "official";
-  try {
-    const win = BrowserWindow.getFocusedWindow();
-    await downloadEmbeddingModel(model, mirror, (info) => {
-      win?.webContents.send(IPC.EMBEDDING_PROGRESS, info);
-    });
-    return { ok: true };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: message };
-  }
-});
 
 ipcMain.handle(IPC.USER_GET_AVATAR, () => {
   const avatarPath = getAvatarPath();
@@ -887,17 +851,6 @@ ipcMain.handle(IPC.SKILL_SET_ENABLED, (_event, payload: unknown) => {
   return { ok: true };
 });
 
-ipcMain.handle(IPC.EMBEDDING_DELETE, async (_event, payload: unknown) => {
-  const p = payload as { model?: string };
-  const model = p.model || "minilm";
-  try {
-    deleteEmbeddingModel(model);
-    return { ok: true };
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: message };
-  }
-});
 
 ipcMain.on(IPC.SETTINGS_OPEN_CHROME_GPU, async () => {
   const win = new BrowserWindow({ width: 1024, height: 768 });
