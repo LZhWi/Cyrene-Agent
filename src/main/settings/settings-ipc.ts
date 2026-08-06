@@ -25,6 +25,8 @@ import type { VendorConfig } from "../orchestrator/vendors";
 import { normalizeModelSettings, getPublicModelConfig } from "../settings/model-settings";
 import type { ModelSettings } from "../settings/model-settings";
 import { getTimeoutSettings, saveTimeoutSettings } from "../timeout-manager";
+import type { syncVolcanoSearchMcp } from "./general-settings-lifecycle";
+import type { syncPlaywrightMcp } from "../sync-mcp-builtin";
 
 export interface SettingsIpcDependencies {
   get windowManager(): WindowManager | null;
@@ -36,6 +38,8 @@ export interface SettingsIpcDependencies {
   proactiveLifecycle: { getProactiveChatService: () => { invalidate: () => void } | null };
   reconcileUserMemoryIndex: () => Promise<void>;
   embeddingIndexService: EmbeddingIndexService;
+  syncVolcanoSearchMcp: typeof syncVolcanoSearchMcp;
+  syncPlaywrightMcp: typeof syncPlaywrightMcp;
 }
 
 function getUiFontsDir(): string {
@@ -62,6 +66,8 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     proactiveLifecycle,
     reconcileUserMemoryIndex,
     embeddingIndexService,
+    syncVolcanoSearchMcp,
+    syncPlaywrightMcp,
   } = deps;
 
   function broadcastToAuxWindows(channel: string, payload: unknown): void {
@@ -145,6 +151,33 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     if ("proactiveChatMode" in settings || "proactiveDeliveryTarget" in settings) {
       proactiveLifecycle.getProactiveChatService()?.invalidate();
     }
+    return saved;
+  });
+
+  // TTS 面板调用的通用设置读写入口（历史命名遗留）
+  ipcMain.handle(IPC.TTS_LOAD_SETTINGS, () => getGeneralSettings());
+
+  ipcMain.handle(IPC.TTS_SAVE_SETTINGS, async (_event, tts: Partial<GeneralSettings>) => {
+    const before = getGeneralSettings();
+    const saved = saveGeneralSettings({ ...before, ...tts });
+
+    // 搜索 MCP 自动注册/移除：选 MiniMax+有key→注册，否则→移除
+    const searchConfigChanged = "searchMinimaxKey" in tts || "searchEngine" in tts;
+    if (searchConfigChanged) {
+      await syncVolcanoSearchMcp(saved);
+    }
+
+    // Playwright MCP：按 settings 字段自动连接/断开
+    if ("playwrightMcpEnabled" in tts) {
+      await syncPlaywrightMcp(saved);
+    }
+
+    // 主动聊天总开关变化时使现有评估失效（频率档位由 ProactiveChat 内部判定，无需重启）。
+    if ("proactiveChatMode" in tts) {
+      proactiveLifecycle.getProactiveChatService()?.invalidate();
+    }
+
+    // 返回不含密钥明文的副本（前端展示用）
     return saved;
   });
 

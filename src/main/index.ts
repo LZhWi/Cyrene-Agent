@@ -83,6 +83,7 @@ import {
 } from "./screenshot/screenshot-lifecycle";
 import { createWindowManager, type WindowManager } from "./windows/window-manager";
 import { registerWindowSystemIpc } from "./windows/window-system-ipc";
+import { createTray } from "./tray";
 import { enqueueLLMTask } from "./llm-queue";
 
 import { createSocialContextService, type SocialContextService } from "./services/social-context/social-context-service";
@@ -253,38 +254,6 @@ function createWindow(manager: WindowManager): void {
 }
 
 
-function createTray(deps: {
-  toggleMainWindow: () => void;
-  createSidebarWindow: () => void;
-  createSettingsWindow: () => void;
-}): void {
-  const icon = nativeImage.createFromPath(getCurrentAppIconPath());
-  tray = new Tray(icon);
-
-  const contextMenu = Menu.buildFromTemplate([
-    {
-      label: "打开状态面板",
-      click: () => { deps.createSidebarWindow(); },
-    },
-    {
-      label: "设置",
-      click: () => { deps.createSettingsWindow(); },
-    },
-    {
-      label: "显示/隐藏桌宠",
-      click: () => { deps.toggleMainWindow(); },
-    },
-    { type: "separator" },
-    {
-      label: "退出",
-      click: () => { app.quit(); },
-    },
-  ]);
-
-  tray.setToolTip("Cyrene");
-  tray.setContextMenu(contextMenu);
-}
-
 registerWindowSystemIpc({
   get windowManager() { return windowManager; },
 });
@@ -304,6 +273,8 @@ registerChatUiIpc({
     proactiveLifecycle,
     reconcileUserMemoryIndex,
     embeddingIndexService,
+    syncVolcanoSearchMcp,
+    syncPlaywrightMcp,
   });
 
 
@@ -346,33 +317,6 @@ app.whenReady().then(async () => {
   registerProtocolHandlers();
 
   // ── TTS IPC ──
-  // 保存/加载 TTS 配置（复用 general settings 存储）
-  ipcMain.handle(IPC.TTS_SAVE_SETTINGS, async (_event, tts: Partial<GeneralSettings>) => {
-    const before = loadGeneralSettings();
-    const saved = saveGeneralSettings({ ...before, ...tts });
-
-    // 搜索 MCP 自动注册/移除：选 MiniMax+有key→注册，否则→移除
-    const searchConfigChanged = "searchMinimaxKey" in tts || "searchEngine" in tts;
-    if (searchConfigChanged) {
-      await syncVolcanoSearchMcp(saved);
-    }
-
-    // Playwright MCP：按 settings 字段自动连接/断开
-    if ("playwrightMcpEnabled" in tts) {
-      await syncPlaywrightMcp(saved);
-    }
-
-    // 主动聊天总开关变化时使现有评估失效（频率档位由 ProactiveChat 内部判定，无需重启）。
-    if ("proactiveChatMode" in tts) {
-      proactiveLifecycle.getProactiveChatService()?.invalidate();
-    }
-
-    // 返回不含密钥明文的副本（前端展示用）
-    return saved;
-  });
-  ipcMain.handle(IPC.TTS_LOAD_SETTINGS, () => {
-    return loadGeneralSettings();
-  });
   registerTtsIpc({ ttsSessionService });
 
 
@@ -528,7 +472,7 @@ app.whenReady().then(async () => {
   manager.createReactChatWindow();
   if (generalSettings.sidebarVisible) manager.createSidebarWindow();
   if (generalSettings.tasksVisible) manager.createTasksWindow();
-  createTray({
+  tray = createTray({
     toggleMainWindow: () => manager.toggleMainWindow(),
     createSidebarWindow: () => manager.createSidebarWindow(),
     createSettingsWindow: () => manager.createSettingsWindow(),
