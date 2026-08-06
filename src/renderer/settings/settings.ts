@@ -89,6 +89,7 @@ import { parsePositiveIntOrThrow, parseN1SecToMsOrThrow, parseCommandLine } from
 import { apiState } from "./api/state";
 import { apiForm, apiRuntimeForm, apiTimeoutForm, presetCards, presetWebsiteLink, displayNameInput, baseUrlInput, baseUrlResetBtn, modelInput, modelInputSuggestions, contextWindowInput, apiKeyInput, apiKeyLabel, apiKeyHint, testConnectionBtn, transportSelect, transportHint, endpointPreview, customEndpointControls, customEndpointOverrides, customEndpointSummary, customEndpointGuideBtn, workFlowAdaptBtn, apiNoteText, multimodalToggle, chatRequestTimeoutSecInput, maxIterationsInput, maxReplansInput, maxRefreshInput, perCallTimeoutSecInput, actionGateRepairBudgetSecInput, embeddingDimensionsInput, modelRequestTimeoutSecInput, modelRequestTimeoutSecReset, toggleEnableThinking, toggleDisableThinking, toggleDisableMaxToken } from "./api/dom";
 import { visionBaseUrlInput, visionApiKeyInput, visionModelInput, visionFieldsWrap, testVisionBtn, visionTestStatus } from "./vision/dom";
+import { avatarEl, uploadAvatarBtn, userDefaultCityInput, userNicknameInput, userCallPrefInput, userBirthdayInput, userTimezoneSelect, userGenderGroup } from "./user/dom";
 import { preferencesState } from "./preferences/state";
 import { stickerEnabledInput, stickerSizeSelect, stickerThresholdInput, stickerThresholdVal, stickerAddOverlay, stickerAddPickBtn, stickerAddFileName, stickerAddId, stickerAddDesc, stickerAddPhrases, stickerAddError, stickerAddConfirm, stickerAddCancel } from "./preferences/dom";
 import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
@@ -3807,16 +3808,8 @@ window.settings?.onSwitchSection?.((section) => {
   });
 })();
 // ── 用户信息面板 ──
-const avatarEl = document.getElementById("user-avatar-el") as HTMLElement | null;
 const avatarImg = avatarEl?.querySelector("img") as HTMLImageElement | null;
 const avatarPlaceholder = avatarEl?.querySelector("span") as HTMLElement | null;
-const uploadAvatarBtn = document.getElementById("upload-avatar-btn") as HTMLButtonElement | null;
-const userDefaultCityInput = document.getElementById("user-default-city") as HTMLInputElement | null;
-const userNicknameInput = document.getElementById("user-nickname") as HTMLInputElement | null;
-const userCallPrefInput = document.getElementById("user-call-pref") as HTMLInputElement | null;
-const userBirthdayInput = document.getElementById("user-birthday") as HTMLInputElement | null;
-const userTimezoneSelect = document.getElementById("user-timezone") as HTMLSelectElement | null;
-const userGenderGroup = document.getElementById("user-gender") as HTMLElement | null;
 
 
 function showAvatar(dataUrl: string | null): void {
