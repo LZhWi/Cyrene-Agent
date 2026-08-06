@@ -20,6 +20,8 @@ export interface BuildProactiveMessagesInput {
   toneRules?: string;
   /** [你的生活] 拟态日程：主动消息想分享生活时的唯一合法素材源（替代凭空编造现实见闻）。 */
   lifeContext?: string;
+  /** 最近屏幕观察摘要：让 proactive 判断用户当前是否在忙（如写代码/开会），决定是否打扰。 */
+  screenActivity?: string;
 }
 
 export type ProactiveModelDecision =
@@ -36,7 +38,7 @@ const PROACTIVE_SYSTEM = `[proactive_system]
 如果没有自然且值得说的内容，请返回 silent。不要为了完成任务而强行寒暄。
 不要提及系统检测、触发规则、评分、上下文、用户画像或内部状态。
 消息应当简短自然，可以关心、分享、跟进或轻轻询问，但禁止连续提出多个问题。
-不要声称自己调用了工具、读取了屏幕或执行了任何外部动作。
+不要声称自己调用了工具或执行了任何外部动作。
 不要编造你在现实世界的行动或见闻，你存在于自己的虚拟世界中。想表达陪伴时说你的心情和想法，或引用 [你的生活] 里给出的内容。`;
 
 const NIGHT_SYSTEM = `[night_system]
@@ -44,7 +46,7 @@ const NIGHT_SYSTEM = `[night_system]
 你可以自然地陪伴用户、分享你自己的状态（比如你此刻在想什么）、或轻轻好奇用户在忙什么。不要编造你刚刚做过的现实活动或见闻。
 如果你想关心用户，用分享你自己的感受的方式说，而不是叮嘱用户去睡觉。不要说教、催促或制造压力。
 不要每次都提睡觉；如果上下文中有更自然、更重要的话题，可以优先回应那个话题。
-不要透露你检测到了用户的键盘、鼠标、屏幕或系统状态。
+不要透露你检测到了用户的键盘鼠标活动或系统状态。
 如果此刻没有值得主动说的话，请选择保持安静。`;
 
 const FOLLOWUP_SYSTEM = `[followup_system]
@@ -94,6 +96,7 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
   if (input.userProfile?.trim()) systemParts.push(`[用户画像]\n${input.userProfile.trim()}`);
   if (input.relevantMemory?.trim()) systemParts.push(`[相关长期记忆]\n${input.relevantMemory.trim()}`);
   if (input.lifeContext?.trim()) systemParts.push(input.lifeContext.trim());
+  if (input.screenActivity?.trim()) systemParts.push(`[屏幕活动]\n${input.screenActivity.trim()}`);
   systemParts.push(formatHistory("最近使用的普通聊天会话", input.ordinaryHistory));
   systemParts.push(formatHistory("主动聊天专用会话", input.proactiveHistory));
   if (isActiveNight(input.localNow, input.idleSec)) systemParts.push(NIGHT_SYSTEM);

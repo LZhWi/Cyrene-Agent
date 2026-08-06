@@ -110,6 +110,9 @@ import { registerDocumentTools } from "./orchestrator/document-tools";
 import { registerLifeTools, setTranslateConfig } from "./orchestrator/life-tools";
 import { registerTravelTools, setTravelConfig } from "./orchestrator/travel-tools";
 import { registerEmailTools, setEmailConfig } from "./orchestrator/email-tools";
+import { registerScreenMonitorTool, setVisionConfigGetter } from "./screen-monitor/screen-monitor-tool";
+import { screenMonitorService } from "./screen-monitor/screen-monitor-service";
+import { observationStore } from "./screen-monitor/observation-store";
 import { resolveMusicPaths } from "./music/paths";
 import { bootstrapMusicService } from "./music/bootstrap";
 import { installShutdownLatch } from "./music/shutdown-latch";
@@ -561,6 +564,7 @@ interface GeneralSettings {
   /** 主动消息回应反馈学习：根据回复/忽略微调各场景开口频率；关闭后不记录任何反馈。 */
   proactiveFeedbackEnabled: boolean;
   socialContextEnabled: boolean;
+    screenMonitorEnabled: boolean;
   // TTS 配置
   ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo";
   ttsAutoRead: boolean;
@@ -803,6 +807,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   proactiveDeliveryTarget: "local",
   proactiveFeedbackEnabled: true,
   socialContextEnabled: false,
+    screenMonitorEnabled: false,
   ttsEngine: "off",
   ttsAutoRead: true,
   ttsSpeed: 1,
@@ -1359,6 +1364,9 @@ function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undef
     socialContextEnabled: input?.socialContextEnabled === undefined
       ? DEFAULT_GENERAL_SETTINGS.socialContextEnabled
       : Boolean(input.socialContextEnabled),
+    screenMonitorEnabled: input?.screenMonitorEnabled === undefined
+      ? DEFAULT_GENERAL_SETTINGS.screenMonitorEnabled
+      : Boolean(input.screenMonitorEnabled),
     // TTS 配置
     ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo"].includes(input?.ttsEngine as string) ? input?.ttsEngine : "off") as GeneralSettings["ttsEngine"],
     ttsAutoRead: input?.ttsAutoRead === undefined ? DEFAULT_GENERAL_SETTINGS.ttsAutoRead : Boolean(input.ttsAutoRead),
@@ -2129,6 +2137,16 @@ async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
     relevantMemory: memoryContext,
     // [你的生活] 拟态日程：主动消息分享生活时的唯一合法素材源。
     lifeContext: buildLifeContext(new Date(snapshot.now), app.getPath("userData")),
+    // 最近屏幕观察：让 proactive 判断用户是否在忙，决定是否打扰。
+    screenActivity: (() => {
+      const latest = observationStore.getLatest();
+      if (!latest) return undefined;
+      const ageMin = Math.round((Date.now() - latest.timestamp) / 60000);
+      // 超过 10 分钟的观测不注入（避免过时信息误导）
+      if (ageMin > 10) return undefined;
+      // 加"用户"前缀防角色错位（VLM 摘要可能省略主语）
+      return "用户当前屏幕活动：" + latest.summary + (ageMin > 0 ? `（${ageMin} 分钟前观测）` : "");
+    })(),
     ordinaryHistory: histories.ordinary,
     proactiveHistory: histories.proactive,
     sceneId: candidate.sceneId,
@@ -4928,6 +4946,15 @@ app.whenReady().then(async () => {
   // 邮件发送工具（SMTP 直发，需在设置里配置 SMTP 授权码）
   registerEmailTools();
   syncBuiltInToolToggles(loadGeneralSettings());
+
+  // 屏幕监控工具（get_screen_observation — 让 LLM 能看到用户屏幕）
+  setVisionConfigGetter(loadVisionConfig);
+  registerScreenMonitorTool();
+  // 后台周期观察：让 proactive 发起前能查到最新屏幕状态
+  screenMonitorService.setConfigGetter(loadVisionConfig);
+  if (loadVisionConfig() && loadGeneralSettings().screenMonitorEnabled) {
+    screenMonitorService.start();
+  }
 
   // 内置 MCP 自动连接：Playwright (默认关闭,选项控制)
   const initialSettings = loadGeneralSettings();

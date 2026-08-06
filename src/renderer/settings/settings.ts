@@ -320,6 +320,7 @@ interface GeneralSettings {
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
   proactiveFeedbackEnabled: boolean;
   socialContextEnabled: boolean;
+  screenMonitorEnabled: boolean;
 }
 
 interface UserApi {
@@ -605,6 +606,7 @@ if (!window.settings) {
       proactiveDeliveryTarget: "local",
       proactiveFeedbackEnabled: true,
       socialContextEnabled: false,
+          screenMonitorEnabled: false,
     }),
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
     channelsGetStatus: () => Promise.resolve({}),
@@ -790,6 +792,7 @@ const proactiveDeliverySelect = document.getElementById("proactive-delivery-sele
 const proactiveFeedbackRow = document.getElementById("proactive-feedback-row") as HTMLElement;
 const proactiveFeedbackSelect = document.getElementById("proactive-feedback-select") as HTMLElement;
 const socialContextSelect = document.getElementById("social-context-select") as HTMLElement;
+const screenMonitorSelect = document.getElementById("screen-monitor-select") as HTMLElement;
 const sidebarVisibleInput = document.getElementById("sidebar-visible") as HTMLInputElement;
 const tasksVisibleInput = document.getElementById("tasks-visible") as HTMLInputElement;
 const clearChatHistoryBtn = document.getElementById("clear-chat-history-btn") as HTMLButtonElement;
@@ -978,6 +981,14 @@ function applySocialContextSelection(enabled: boolean): void {
 
 function getSocialContextValue(): boolean {
   return getOptionGroupValue(socialContextSelect, "off") === "on";
+}
+
+function applyScreenMonitorSelection(enabled: boolean): void {
+  applyOptionGroupValue(screenMonitorSelect, enabled ? "on" : "off");
+}
+
+function getScreenMonitorValue(): boolean {
+  return getOptionGroupValue(screenMonitorSelect, "off") === "on";
 }
 
 function renderProactiveDeliveryVisibility(): void {
@@ -1408,6 +1419,7 @@ async function loadGeneralSettings(): Promise<void> {
     applyProactiveDeliverySelection(normalizeProactiveDeliveryTarget(cfg.proactiveDeliveryTarget));
     applyProactiveFeedbackSelection(cfg.proactiveFeedbackEnabled ?? true);
     applySocialContextSelection(cfg.socialContextEnabled ?? false);
+      applyScreenMonitorSelection(cfg.screenMonitorEnabled ?? false);
     renderProactiveDeliveryVisibility();
     void window.settings!.channelsGetStatus()
       .then((status: unknown) => renderProactiveDeliveryAvailability(status as Record<string, { phase?: string }>))
@@ -1595,6 +1607,13 @@ socialContextSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach
   });
 });
 
+screenMonitorSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
+  button.addEventListener("click", () => {
+    applyScreenMonitorSelection(button.dataset.value === "on");
+    setPreferencesSaveStatus("有未保存的更改");
+  });
+});
+
 preferencesForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   setPreferencesSaveStatus("保存中…");
@@ -1607,6 +1626,7 @@ preferencesForm.addEventListener("submit", async (e) => {
       proactiveDeliveryTarget: getProactiveDeliveryValue(),
       proactiveFeedbackEnabled: getProactiveFeedbackValue(),
       socialContextEnabled: getSocialContextValue(),
+            screenMonitorEnabled: getScreenMonitorValue(),
     });
     setPreferencesSaveStatus("已保存", "is-ok");
   } catch {
