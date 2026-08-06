@@ -76,6 +76,7 @@ import { channelsState } from "./channels/state";
 import { memoryState } from "./memory/state";
 import { schedulerState } from "./scheduler/state";
 import { tokensState } from "./tokens/state";
+import { ttsState } from "./tts/state";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -5205,20 +5206,19 @@ function ttsEl(id: string): HTMLInputElement {
 }
 
 // 当前加载的 TTS 配置（内存缓存，改一个字段就存一次）
-let ttsConfig: Record<string, unknown> = {};
 
 // 加载配置并填充表单
 async function loadTtsConfig(): Promise<void> {
   if (!window.tts) return;
   try {
-    ttsConfig = await window.tts.loadSettings() as Record<string, unknown>;
+    ttsState.config = await window.tts.loadSettings() as Record<string, unknown>;
   } catch (err) {
     console.warn("[TTS] 加载配置失败:", err);
     return;
   }
 
   // 引擎选择
-  const engine = String(ttsConfig.ttsEngine || "off");
+  const engine = String(ttsState.config.ttsEngine || "off");
   document.querySelectorAll<HTMLButtonElement>(".tts-engine").forEach((btn) => {
     const isActive = btn.dataset.engine === engine;
     btn.classList.toggle("is-active", isActive);
@@ -5231,54 +5231,54 @@ async function loadTtsConfig(): Promise<void> {
   }
 
   // 播放交互
-  ttsEl("tts-auto-read").checked = Boolean(ttsConfig.ttsAutoRead);
-  ttsEl("tts-speed").value = String(ttsConfig.ttsSpeed ?? 1);
-  ttsEl("tts-volume").value = String(ttsConfig.ttsVolume ?? 1);
+  ttsEl("tts-auto-read").checked = Boolean(ttsState.config.ttsAutoRead);
+  ttsEl("tts-speed").value = String(ttsState.config.ttsSpeed ?? 1);
+  ttsEl("tts-volume").value = String(ttsState.config.ttsVolume ?? 1);
   updateTtsSliderLabels();
 
   // MiniMax
-  ttsEl("tts-minimax-key").value = String(ttsConfig.ttsMinimaxKey ?? "");
-  ttsEl("tts-minimax-voice").value = String(ttsConfig.ttsMinimaxVoiceId ?? "");
+  ttsEl("tts-minimax-key").value = String(ttsState.config.ttsMinimaxKey ?? "");
+  ttsEl("tts-minimax-voice").value = String(ttsState.config.ttsMinimaxVoiceId ?? "");
   (ttsEl("tts-minimax-model") as HTMLSelectElement).value =
-    ttsConfig.ttsMinimaxModel === "speech-2.8-hd" ? "speech-2.8-hd" : "speech-2.8-turbo";
-  ttsEl("tts-streaming").checked = ttsConfig.ttsStreaming !== false;
-  ttsEl("tts-minimax-vocal-enhance").checked = ttsConfig.ttsMinimaxVocalEnhance !== false;
+    ttsState.config.ttsMinimaxModel === "speech-2.8-hd" ? "speech-2.8-hd" : "speech-2.8-turbo";
+  ttsEl("tts-streaming").checked = ttsState.config.ttsStreaming !== false;
+  ttsEl("tts-minimax-vocal-enhance").checked = ttsState.config.ttsMinimaxVocalEnhance !== false;
 
   // GPT-SoVITS
-  ttsEl("tts-gptsovits-url").value = String(ttsConfig.ttsGptsovitsBaseUrl ?? "http://localhost:9880");
-  ttsEl("tts-gptsovits-ref-audio").value = String(ttsConfig.ttsGptsovitsRefAudioPath ?? "");
-  ttsEl("tts-gptsovits-prompt-text").value = String(ttsConfig.ttsGptsovitsPromptText ?? "");
+  ttsEl("tts-gptsovits-url").value = String(ttsState.config.ttsGptsovitsBaseUrl ?? "http://localhost:9880");
+  ttsEl("tts-gptsovits-ref-audio").value = String(ttsState.config.ttsGptsovitsRefAudioPath ?? "");
+  ttsEl("tts-gptsovits-prompt-text").value = String(ttsState.config.ttsGptsovitsPromptText ?? "");
   (ttsEl("tts-gptsovits-format") as HTMLSelectElement).value =
-    ttsConfig.ttsGptsovitsFormat === "mp3" ? "mp3" : "wav";
-  ttsEl("tts-gptsovits-timeout").value = String(ttsConfig.ttsGptsovitsTimeoutMs ?? 180000);
+    ttsState.config.ttsGptsovitsFormat === "mp3" ? "mp3" : "wav";
+  ttsEl("tts-gptsovits-timeout").value = String(ttsState.config.ttsGptsovitsTimeoutMs ?? 180000);
 
   // 自定义云端
-  ttsEl("tts-custom-cloud-url").value = String(ttsConfig.ttsCustomCloudEndpointUrl ?? "");
-  ttsEl("tts-custom-cloud-key").value = String(ttsConfig.ttsCustomCloudApiKey ?? "");
-  ttsEl("tts-custom-cloud-voice").value = String(ttsConfig.ttsCustomCloudVoiceId ?? "");
+  ttsEl("tts-custom-cloud-url").value = String(ttsState.config.ttsCustomCloudEndpointUrl ?? "");
+  ttsEl("tts-custom-cloud-key").value = String(ttsState.config.ttsCustomCloudApiKey ?? "");
+  ttsEl("tts-custom-cloud-voice").value = String(ttsState.config.ttsCustomCloudVoiceId ?? "");
   (ttsEl("tts-custom-cloud-format") as HTMLSelectElement).value =
-    ttsConfig.ttsCustomCloudFormat === "wav" ? "wav" : "mp3";
-  ttsEl("tts-custom-cloud-timeout").value = String(ttsConfig.ttsCustomCloudTimeoutMs ?? 30000);
+    ttsState.config.ttsCustomCloudFormat === "wav" ? "wav" : "mp3";
+  ttsEl("tts-custom-cloud-timeout").value = String(ttsState.config.ttsCustomCloudTimeoutMs ?? 30000);
 
   // 小米 MiMo
-  ttsEl("tts-mimo-key").value = String(ttsConfig.ttsMimoKey ?? "");
-  ttsEl("tts-mimo-voice-audio").value = String(ttsConfig.ttsMimoVoiceAudioPath ?? "");
-  ttsEl("tts-mimo-style").value = String(ttsConfig.ttsMimoStylePrompt ?? "温柔、自然、略带亲近感，像在轻声陪用户聊天。");
+  ttsEl("tts-mimo-key").value = String(ttsState.config.ttsMimoKey ?? "");
+  ttsEl("tts-mimo-voice-audio").value = String(ttsState.config.ttsMimoVoiceAudioPath ?? "");
+  ttsEl("tts-mimo-style").value = String(ttsState.config.ttsMimoStylePrompt ?? "温柔、自然、略带亲近感，像在轻声陪用户聊天。");
 
-  // Mossland（UI 骨架已就位，IPC 第二步接通；字段值已写入 ttsConfig 以便保存）
-  ttsEl("tts-mossland-key").value = String(ttsConfig.ttsMosslandKey ?? "");
-  ttsEl("tts-mossland-voice").value = String(ttsConfig.ttsMosslandVoiceId ?? "");
+  // Mossland（UI 骨架已就位，IPC 第二步接通；字段值已写入 ttsState.config 以便保存）
+  ttsEl("tts-mossland-key").value = String(ttsState.config.ttsMosslandKey ?? "");
+  ttsEl("tts-mossland-voice").value = String(ttsState.config.ttsMosslandVoiceId ?? "");
   (ttsEl("tts-mossland-model") as HTMLSelectElement).value = "moss-tts";
-  ttsEl("tts-mossland-text").value = String(ttsConfig.ttsMosslandTestText ?? TTS_TEST_TEXT);
+  ttsEl("tts-mossland-text").value = String(ttsState.config.ttsMosslandTestText ?? TTS_TEST_TEXT);
   (ttsEl("tts-mossland-format") as HTMLSelectElement).value =
-    ttsConfig.ttsMosslandFormat === "wav" ? "wav"
-    : ttsConfig.ttsMosslandFormat === "pcm" ? "pcm"
+    ttsState.config.ttsMosslandFormat === "wav" ? "wav"
+    : ttsState.config.ttsMosslandFormat === "pcm" ? "pcm"
     : "mp3";
-  ttsConfig.ttsMosslandKey       = String(ttsEl("tts-mossland-key").value);
-  ttsConfig.ttsMosslandVoiceId   = String(ttsEl("tts-mossland-voice").value);
-  ttsConfig.ttsMosslandModel     = (ttsEl("tts-mossland-model") as HTMLSelectElement).value;
-  ttsConfig.ttsMosslandTestText  = String(ttsEl("tts-mossland-text").value);
-  ttsConfig.ttsMosslandFormat    = (ttsEl("tts-mossland-format") as HTMLSelectElement).value;
+  ttsState.config.ttsMosslandKey       = String(ttsEl("tts-mossland-key").value);
+  ttsState.config.ttsMosslandVoiceId   = String(ttsEl("tts-mossland-voice").value);
+  ttsState.config.ttsMosslandModel     = (ttsEl("tts-mossland-model") as HTMLSelectElement).value;
+  ttsState.config.ttsMosslandTestText  = String(ttsEl("tts-mossland-text").value);
+  ttsState.config.ttsMosslandFormat    = (ttsEl("tts-mossland-format") as HTMLSelectElement).value;
 
   // 加载完成后清掉所有 Provider 的脏态（按钮隐藏，status 清空）
   for (const provider of Object.keys(TTS_PROVIDER_FIELDS)) {
@@ -5299,7 +5299,7 @@ function updateTtsSliderLabels(): void {
 // 保存单个 TTS 配置字段
 async function saveTtsField(field: string, value: unknown): Promise<void> {
   if (!window.tts) return;
-  ttsConfig[field] = value;
+  ttsState.config[field] = value;
   try {
     await window.tts.saveSettings({ [field]: value });
   } catch (err) {
@@ -5431,7 +5431,7 @@ async function saveTtsProvider(provider: string): Promise<void> {
         value = num;
       }
       payload[field] = value;
-      ttsConfig[field] = value;   // 同步内存中的 ttsConfig 缓存
+      ttsState.config[field] = value;   // 同步内存中的 ttsState.config 缓存
     }
     if (Object.keys(payload).length === 0) {
       ui.status.textContent = "没有可保存的更改";
@@ -5688,7 +5688,7 @@ document.getElementById("tts-mossland-clone-start")?.addEventListener("click", a
       name: name || undefined,
       description: description || undefined,
     });
-    // 自动填到上方「音色 ID」+ 同步写到 ttsConfig（让保存按钮 / chat 调度都能用）
+    // 自动填到上方「音色 ID」+ 同步写到 ttsState.config（让保存按钮 / chat 调度都能用）
     ttsEl("tts-mossland-voice").value = result.voiceId;
     void saveTtsField("ttsMosslandVoiceId", result.voiceId);
     setMosslandStatus(`✅ 克隆成功！voice_id「${result.voiceId}」已自动填入音色 ID 框。`, "ok");
