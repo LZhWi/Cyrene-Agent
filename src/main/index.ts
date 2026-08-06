@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, protocol, net, globalShortcut } from "electron";
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell, dialog, protocol, net, globalShortcut } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
@@ -23,14 +23,6 @@ import {
   stickerManagerWindow,
   callWindow,
 } from "./windows/window-state";
-import {
-  createReactChatWindow,
-  createSidebarWindow,
-  createTasksWindow,
-  createSettingsWindow,
-  createStickerManagerWindow,
-  createCallWindow,
-} from "./windows/create-aux-windows";
 import { broadcastToAllWindows } from "./windows/broadcast";
 import {
   DEFAULT_WINDOW_CORNER_RADIUS,
@@ -115,6 +107,7 @@ import { loadChannelsSettings } from "./channels/settings-store";
 import { channelManager } from "./channels/manager";
 import { canStartProactiveChannelDelivery, sendProactiveChannelMessage } from "./channels/proactive-delivery";
 // 触发 built-in-tools 的副作用注册（fetch_url / run_shell / install_mcp_server）
+import { setLive2dWindowSender } from "./orchestrator/built-in-tools";
 import "./orchestrator/built-in-tools";
 // 触发 fs-tools 的副作用注册（read_file / list_dir / write_file / read_image）
 import "./orchestrator/fs-tools";
@@ -129,6 +122,7 @@ import {
   initializeScreenshotService,
   type ScreenshotService,
 } from "./screenshot/screenshot-lifecycle";
+import { createWindowManager, type WindowManager } from "./windows/window-manager";
 import { enqueueLLMTask } from "./llm-queue";
 import { compileSocialContextBlock } from "./social-context/context";
 import {
@@ -148,7 +142,6 @@ import type { SceneIndex } from "./scene-embedder";
 import { loadUserStickerManifest, addUserSticker, deleteUserSticker, getAllStickerConfig, isStickerIdTaken, getStickersDir } from "./sticker-storage";
 import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
 import { normalizeWindowVisibilitySettings } from "./window-visibility-settings";
-import { PetWindowMoveController } from "./pet-window-movement";
 import type { StickerConfigItem } from "../shared/sticker-types";
 import { initReranker, getRerankerInstallStatus } from "./rag/reranker";
 import { memoryStore } from "./memory/memory-store"
@@ -202,7 +195,6 @@ import {
 } from "./settings/model-settings";
 import type { GeneralSettings } from "./settings/general-settings";
 import { loadPromptFile } from "./prompts/prompt-loader";
-import { createMainWindow } from "./startup/create-main-window";
 import { bootstrapConfigGetters } from "./startup/bootstrap-config";
 import { loadMemoryPanelData } from "./memory/panel";
 import {
@@ -308,19 +300,13 @@ async function reconcileUserMemoryIndex(): Promise<void> {
   logger.info(LogTag.RAG, "reconciliation:", report);
 }
 
-let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let schedulerEngine: SchedulerEngine | null = null;
 let screenshotService: ScreenshotService | null = null;
+let windowManager: WindowManager | null = null;
 const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
   onClosed: () => { /* no-op：原 setLive2dWindow 已随 opener 子系统一起移除 */ },
 });
-const petWindowMoveController = new PetWindowMoveController(
-  () => mainWindow,
-  ({ x, y }) => {
-    saveGeneralSettings({ petWindowX: x, petWindowY: y });
-  },
-);
 
 // 聊天窗口当前活跃的会话 id（通过 IPC 由聊天窗口上报）；
 // 设置面板"删除当前会话"差异化提示用。聊天窗口关闭时由 closed 事件置 null。
@@ -328,9 +314,6 @@ let activeChatSessionId: string | null = null;
 
 const DEFAULT_CHAT_REQUEST_TIMEOUT_MS = 300000; // FC 总预算：20 轮 × 推理模型 ~10-15s 需 300s 余量
 
-/** 桌宠窗口的基础尺寸（zoom=1.0 时）。缩放因子改变窗口与模型尺寸，二者同步。 */
-const PET_WINDOW_BASE_WIDTH = 400;
-const PET_WINDOW_BASE_HEIGHT = 500;
 const STARTUP_EMBEDDING_REFRESH_DELAY_MS = 1500;
 
 let runtimeState: RuntimeState = {
@@ -766,23 +749,11 @@ async function synthesizeTtsSession(
 const ttsSessionService = new TtsSessionService(synthesizeTtsSession);
 
 function applyGeneralSettings(settings: GeneralSettings): void {
-  mainWindow?.setAlwaysOnTop(settings.petAlwaysOnTop, settings.petAlwaysOnTop ? "screen-saver" : "normal");
-  if (settings.petVisible) mainWindow?.show();
-  else mainWindow?.hide();
+  windowManager?.setMainWindowAlwaysOnTop(settings.petAlwaysOnTop);
+  if (settings.petVisible) windowManager?.showMainWindow();
+  else windowManager?.hideMainWindow();
   app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
-  applyPetZoom(settings.petZoom);
-}
-
-/**
- * 按缩放因子调整桌宠窗口尺寸，并通知渲染进程重算模型 scale。
- * 窗口与模型同步等比缩放，比例不变，故模型始终塞满窗口、不被裁剪。
- */
-function applyPetZoom(zoom: number): void {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const width = Math.round(PET_WINDOW_BASE_WIDTH * zoom);
-  const height = Math.round(PET_WINDOW_BASE_HEIGHT * zoom);
-  mainWindow.setSize(width, height);
-  sendToLive2DWindow(IPC.PET_ZOOM, zoom);
+  windowManager?.applyMainWindowZoom(settings.petZoom);
 }
 
 function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSettings {
@@ -1395,43 +1366,19 @@ function broadcastToAuxWindows(channel: string, payload: unknown): void {
 }
 
 function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
-  for (const win of [mainWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send(IPC.UI_THEME_CHANGED, theme);
-    }
-  }
+  windowManager?.broadcast(IPC.UI_THEME_CHANGED, theme);
 }
 
 function broadcastUiThemeRadiusChanged(theme: GeneralSettings["uiThemeRadius"]): void {
-  for (const win of [mainWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send(IPC.UI_THEME_RADIUS_CHANGED, theme);
-    }
-  }
+  windowManager?.broadcast(IPC.UI_THEME_RADIUS_CHANGED, theme);
 }
 
 function broadcastWindowCornerRadiusChanged(radius: GeneralSettings["windowCornerRadius"]): void {
-  for (const win of [
-    mainWindow,
-    reactChatWindow,
-    sidebarWindow,
-    tasksWindow,
-    settingsWindow,
-    stickerManagerWindow,
-    callWindow,
-  ]) {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send(IPC.UI_WINDOW_CORNER_RADIUS_CHANGED, radius);
-    }
-  }
+  windowManager?.broadcast(IPC.UI_WINDOW_CORNER_RADIUS_CHANGED, radius);
 }
 
 function broadcastUiFontChanged(font: GeneralSettings["uiFont"]): void {
-  for (const win of [mainWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
-    if (win && !win.isDestroyed()) {
-      win.webContents.send(IPC.UI_FONT_CHANGED, font);
-    }
-  }
+  windowManager?.broadcast(IPC.UI_FONT_CHANGED, font);
 }
 
 function broadcastModelConfigChanged(settings = loadModelSettings()): void {
@@ -1442,20 +1389,15 @@ function broadcastRuntimeStateChanged(): void {
   broadcastToAuxWindows(IPC.RUNTIME_STATE_CHANGED, runtimeState);
 }
 
-export function sendToLive2DWindow(channel: string, payload?: unknown): void {
-  const win = mainWindow;
-  if (!win || win.isDestroyed()) return;
-  if (payload === undefined) win.webContents.send(channel);
-  else win.webContents.send(channel, payload);
-}
+function createWindow(manager: WindowManager): void {
+  manager.createMainWindow();
 
-function createWindow(): void {
-  mainWindow = createMainWindow({
-    loadGeneralSettings,
-    getCurrentAppIconPath,
-    isDev,
+  manager.onMainWindowReady((win) => {
+    live2dWindowLifecycle.attach(win);
   });
-  live2dWindowLifecycle.attach(mainWindow);
+  manager.onMainWindowClosed(() => {
+    live2dWindowLifecycle.clear();
+  });
 
   applyGeneralSettings(loadGeneralSettings());
 
@@ -1463,35 +1405,29 @@ function createWindow(): void {
     loadGeneralSettings,
     sceneEmbeddingIndex,
   });
-
-  mainWindow.on("closed", () => {
-    petWindowMoveController.dispose();
-    live2dWindowLifecycle.clear(mainWindow ?? undefined);
-    mainWindow = null;
-  });
 }
 
 
-function createTray(): void {
+function createTray(deps: {
+  toggleMainWindow: () => void;
+  createSidebarWindow: () => void;
+  createSettingsWindow: () => void;
+}): void {
   const icon = nativeImage.createFromPath(getCurrentAppIconPath());
   tray = new Tray(icon);
 
   const contextMenu = Menu.buildFromTemplate([
     {
       label: "打开状态面板",
-      click: () => { createSidebarWindow(); },
+      click: () => { deps.createSidebarWindow(); },
     },
     {
       label: "设置",
-      click: () => { createSettingsWindow(); },
+      click: () => { deps.createSettingsWindow(); },
     },
     {
       label: "显示/隐藏桌宠",
-      click: () => {
-        if (mainWindow) {
-          mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show();
-        }
-      },
+      click: () => { deps.toggleMainWindow(); },
     },
     { type: "separator" },
     {
@@ -1511,95 +1447,38 @@ function applyUiIcon(iconSetting: UiIcon): void {
     return;
   }
   tray?.setImage(icon);
-  for (const win of [mainWindow, reactChatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
-    if (win && !win.isDestroyed()) win.setIcon(icon);
-  }
+  windowManager?.setIconForAllWindows(icon);
 }
 
 ipcMain.handle(IPC.WINDOW_SET_INTERACTIVE, (_event, interactive: boolean) => {
-  if (mainWindow) {
-    mainWindow.setIgnoreMouseEvents(!interactive, { forward: true });
-  }
+  windowManager?.setMainWindowInteractive(interactive);
 });
 
 ipcMain.on(IPC.WINDOW_MOVE, (_event, dx: number, dy: number) => {
-  petWindowMoveController.moveRelative(dx, dy);
+  windowManager?.moveMainWindowRelative(dx, dy);
 });
 
 ipcMain.on(IPC.WINDOW_MOVE_TO, (_event, x: number, y: number) => {
-  petWindowMoveController.queueAbsolute(x, y);
+  windowManager?.moveMainWindowTo(x, y);
 });
 
-/**
- * Toggle the BrowserWindow's opacity while the user is dragging.
- *
- * The window is created with 	ransparent: true (a WS_EX_LAYERED window).
- * Windows DWM treats "fully transparent" layered windows as a special
- * class and caches a separate drag-image bitmap that races with the
- * WebGL canvas being redrawn by the GPU during the drag -- that race
- * is the "double model" ghost the user sees.
- *
- * Why opacity (not setBackgroundColor): setBackgroundColor only changes
- * the Chromium page background. DWM still sees a fully-transparent
- * layered window and keeps its drag-image code path. setOpacity calls
- * SetLayeredWindowAttributes with a per-pixel alpha < 1.0, which forces
- * DWM to take the alpha-blending path -- the same path that no longer
- * generates the drag image. setOpacity is therefore the lever that
- * actually changes DWM's drag behaviour, regardless of the page
- * background colour.
- *
- * 0.99 (= 1% transparent) is the most conservative value: visually
- * imperceptible, but enough to switch DWM off the drag-image path.
- * If a particular Windows build still ghosts at 0.99, push the value
- * down (0.95, 0.9). Lower opacity is *more* effective at suppressing
- * the drag image, at the cost of making the model itself look faintly
- * translucent during the drag.
- */
 ipcMain.on(IPC.WINDOW_SET_DRAGGING, (_event, isDragging: boolean) => {
-  const window = mainWindow;
-  if (!window || window.isDestroyed()) return;
-  if (!isDragging) petWindowMoveController.finishDragging();
-  try {
-    window.setOpacity(isDragging ? 0.99 : 1.0);
-  } catch (error) {
-    console.warn("[Cyrene] Failed to update pet window dragging opacity:", error);
-  }
+  windowManager?.setMainWindowDragging(isDragging);
 });
 
-/**
- * Capture the current window contents and return it as a base64 data URL.
- *
- * Used by the renderer to grab a single frame of the WebGL canvas at the
- * start of a window drag, so it can overlay a static <img> on top of the
- * canvas while the drag is in progress. The static image lets the drag
- * work without involving the WebGL draw pipeline at all, which is what
- * kills the layered-window flicker (DWM is no longer racing with
- * GPU-driven canvas updates).
- */
-ipcMain.handle(IPC.WINDOW_CAPTURE_FRAME, async () => {
-  if (!mainWindow) return null;
-  try {
-    const image = await mainWindow.webContents.capturePage();
-    return image.toDataURL();
-  } catch (err) {
-    console.error("[Cyrene] captureFrame failed:", err);
-    return null;
-  }
-});
-ipcMain.handle(IPC.WINDOW_GET_CURSOR_POSITION, () => {
-  return screen.getCursorScreenPoint();
-});
+ipcMain.handle(IPC.WINDOW_CAPTURE_FRAME, async () => windowManager?.captureMainWindowFrame() ?? null);
+ipcMain.handle(IPC.WINDOW_GET_CURSOR_POSITION, () => windowManager?.getCursorScreenPosition() ?? { x: 0, y: 0 });
 
 ipcMain.handle(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS, () => ({
   window: live2dWindowLifecycle.getDiagnostics(),
 }));
 
 ipcMain.on(IPC.WINDOW_MINIMIZE, () => {
-  mainWindow?.minimize();
+  windowManager?.minimizeMainWindow();
 });
 
 ipcMain.on(IPC.WINDOW_CLOSE, () => {
-  mainWindow?.hide();
+  windowManager?.hideMainWindow();
 });
 
 ipcMain.on(IPC.APP_QUIT, () => {
@@ -1756,15 +1635,15 @@ ipcMain.handle(IPC.SIDEBAR_TOGGLE_ALWAYS_ON_TOP, () => {
 });
 
 ipcMain.on(IPC.SIDEBAR_OPEN_TASKS, () => {
-  createTasksWindow();
+  windowManager?.createTasksWindow();
 });
 
 ipcMain.on(IPC.SIDEBAR_OPEN_SETTINGS, (_event, section?: string) => {
-  createSettingsWindow(section);
+  windowManager?.createSettingsWindow(section);
 });
 
 ipcMain.on(IPC.SIDEBAR_OPEN_CALL, () => {
-  createCallWindow();
+  windowManager?.createCallWindow();
 });
 
 ipcMain.on(IPC.TASKS_MINIMIZE, () => {
@@ -1877,7 +1756,7 @@ ipcMain.handle(IPC.SETTINGS_OPEN_CUSTOM_STYLE_PROMPT, async () => {
 });
 
 ipcMain.on(IPC.SETTINGS_OPEN_SIDEBAR, () => {
-  createSidebarWindow();
+  windowManager?.createSidebarWindow();
 });
 
 ipcMain.on(IPC.SETTINGS_CLOSE_SIDEBAR, () => {
@@ -1885,7 +1764,7 @@ ipcMain.on(IPC.SETTINGS_CLOSE_SIDEBAR, () => {
 });
 
 ipcMain.on(IPC.SETTINGS_OPEN_TASKS, () => {
-  createTasksWindow();
+  windowManager?.createTasksWindow();
 });
 
 ipcMain.on(IPC.SETTINGS_CLOSE_TASKS, () => {
@@ -1894,7 +1773,7 @@ ipcMain.on(IPC.SETTINGS_CLOSE_TASKS, () => {
 
 ipcMain.on(IPC.SETTINGS_SET_PET_ALWAYS_ON_TOP, (_event, value: boolean) => {
   const saved = saveGeneralSettings({ ...loadGeneralSettings(), petAlwaysOnTop: Boolean(value) });
-  mainWindow?.setAlwaysOnTop(saved.petAlwaysOnTop, saved.petAlwaysOnTop ? "screen-saver" : "normal");
+  windowManager?.setMainWindowAlwaysOnTop(saved.petAlwaysOnTop);
 });
 
 ipcMain.on(IPC.SETTINGS_SET_PET_VISIBLE, (_event, value: boolean) => {
@@ -1903,7 +1782,7 @@ ipcMain.on(IPC.SETTINGS_SET_PET_VISIBLE, (_event, value: boolean) => {
 
 ipcMain.on(IPC.SETTINGS_SET_PET_ZOOM, (_event, value: number) => {
   const saved = saveGeneralSettings({ ...loadGeneralSettings(), petZoom: Number(value) });
-  applyPetZoom(saved.petZoom);
+  windowManager?.applyMainWindowZoom(saved.petZoom);
 });
 
 ipcMain.handle(IPC.MODEL_CONFIG_GET, () => {
@@ -2011,7 +1890,7 @@ ipcMain.on(IPC.SETTINGS_PREVIEW_RUNTIME_SYNC, (_event, value: "off" | "local" | 
 
 ipcMain.handle(IPC.SETTINGS_OPEN_STICKER_MANAGER, async () => {
   console.log("[stickers] open sticker manager requested");
-  return createStickerManagerWindow();
+  return windowManager?.createStickerManagerWindow();
 });
 
 ipcMain.on(IPC.STICKERS_MINIMIZE, () => {
@@ -2293,13 +2172,13 @@ app.whenReady().then(async () => {
   });
 
   ipcMain.on(IPC.LIVE2D_SPEECH_PREPARE, () => {
-    sendToLive2DWindow(IPC.LIVE2D_SPEECH_PREPARE);
+    windowManager?.sendToMainWindow(IPC.LIVE2D_SPEECH_PREPARE);
   });
   ipcMain.on(IPC.LIVE2D_MOUTH_START, (_event, payload: { durationMs?: number }) => {
-    sendToLive2DWindow(IPC.LIVE2D_MOUTH_START, { durationMs: Number(payload?.durationMs ?? 0) });
+    windowManager?.sendToMainWindow(IPC.LIVE2D_MOUTH_START, { durationMs: Number(payload?.durationMs ?? 0) });
   });
   ipcMain.on(IPC.LIVE2D_MOUTH_STOP, () => {
-    sendToLive2DWindow(IPC.LIVE2D_MOUTH_STOP);
+    windowManager?.sendToMainWindow(IPC.LIVE2D_MOUTH_STOP);
   });
 
   // ── TTS IPC ──
@@ -2960,7 +2839,7 @@ app.whenReady().then(async () => {
   screenshotService = initializeScreenshotService({
     initialHotkey: initialSettings.screenshotHotkey ?? "Alt+Shift+S",
     getReactChatWindow: () => reactChatWindow,
-    getMainWindow: () => mainWindow,
+    captureMainWindow: () => windowManager!.captureMainWindow(),
   });
   void screenshotService.prewarm();
 
@@ -3444,7 +3323,7 @@ app.whenReady().then(async () => {
     if (typeof sessionId !== "string" || sessionId.trim().length === 0) {
       return false;
     }
-    createReactChatWindow(sessionId);
+    windowManager?.createReactChatWindow(sessionId);
     return true;
   });
   // reactChatWindow → main：声明 ChatPage 已挂好 IPC 监听
@@ -3477,11 +3356,25 @@ app.whenReady().then(async () => {
     dateLocale: generalSettings.language,
     asrLanguage: generalSettings.asrLanguage,
   });
-  createWindow();
-  createReactChatWindow();
-  if (generalSettings.sidebarVisible) createSidebarWindow();
-  if (generalSettings.tasksVisible) createTasksWindow();
-  createTray();
+
+  const manager = createWindowManager({
+    getCurrentAppIconPath,
+    isDev,
+    loadMainWindowSettingsSlice: loadGeneralSettings,
+    persistMainWindowPosition: ({ x, y }) => saveGeneralSettings({ petWindowX: x, petWindowY: y }),
+  });
+  windowManager = manager;
+
+  createWindow(manager);
+  setLive2dWindowSender((channel, payload) => manager.sendToMainWindow(channel, payload));
+  manager.createReactChatWindow();
+  if (generalSettings.sidebarVisible) manager.createSidebarWindow();
+  if (generalSettings.tasksVisible) manager.createTasksWindow();
+  createTray({
+    toggleMainWindow: () => manager.toggleMainWindow(),
+    createSidebarWindow: () => manager.createSidebarWindow(),
+    createSettingsWindow: () => manager.createSettingsWindow(),
+  });
   // 权限模块初始化：必须在 createWindow 之后但任意工具调用之前
   initPermissionFromDisk();
   registerPermissionIpc();
@@ -3514,7 +3407,7 @@ app.on("window-all-closed", () => {});
 
 // 应用退出前把 token 用量缓存落盘（防抖未触发的最后一次写）
 app.on("before-quit", () => {
-  petWindowMoveController.dispose();
+  windowManager?.dispose();
   schedulerEngine?.stop();
   proactiveLifecycle.stopProactiveTrigger();
   codeRunWorker.cleanup();
@@ -3524,9 +3417,7 @@ app.on("before-quit", () => {
 });
 
 app.on("activate", () => {
-  if (mainWindow === null) {
-    createWindow();
-  }
+  windowManager?.createMainWindow();
 });
 
 

@@ -5,8 +5,12 @@ import { spawn } from "child_process";
 import { toolRegistry } from "./tool-registry";
 import { getDateLocale, getWeatherLanguage } from "../locale-context";
 import { addMcpServer } from "./mcp-manager";
-import { sendToLive2DWindow } from "../index";
 import { createPlayLive2DActionTool } from "./tools/play-live2d-action";
+
+let sendToLive2DWindow: (channel: string, payload?: unknown) => void = () => {};
+export function setLive2dWindowSender(sender: typeof sendToLive2DWindow): void {
+  sendToLive2DWindow = sender;
+}
 import { resolveChatContextTimezone } from "../chat-time-context";
 import type { ToolContext } from "./tool-context";
 import { VerificationRunner, resolveBuiltinExecutable } from "./code/verification-runner";

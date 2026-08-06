@@ -3,8 +3,8 @@ import path from "node:path";
 import { IPC } from "../../shared/ipc-channels";
 
 /** 桌宠窗口的基础尺寸（zoom=1.0 时）。缩放因子改变窗口与模型尺寸，二者同步。 */
-const PET_WINDOW_BASE_WIDTH = 400;
-const PET_WINDOW_BASE_HEIGHT = 500;
+export const PET_WINDOW_BASE_WIDTH = 400;
+export const PET_WINDOW_BASE_HEIGHT = 500;
 
 /**
  * 仅创建阶段需要的 GeneralSettings 切片。
