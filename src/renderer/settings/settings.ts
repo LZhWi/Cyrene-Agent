@@ -74,6 +74,7 @@ import type {
 import { musicState } from "./music/state";
 import { channelsState } from "./channels/state";
 import { memoryState } from "./memory/state";
+import { schedulerState } from "./scheduler/state";
 import type {
   GeneralSettings,
   MemoryPanelApi,
@@ -419,9 +420,6 @@ const schedulerSaveStatus = document.getElementById("scheduler-save-status") as 
 const schedulerCancelBtn = document.getElementById("scheduler-cancel-btn") as HTMLButtonElement | null;
 const schedulerSaveBtn = document.getElementById("scheduler-save-btn") as HTMLButtonElement | null;
 
-let schedulerTasks: ScheduledTask[] = [];
-let schedulerTools: SchedulerToolInfo[] = [];
-let editingSchedulerTaskId: string | null = null;
 
 const presetCards = document.getElementById("preset-cards") as HTMLElement;
 const presetWebsiteLink = document.getElementById("preset-website-link") as HTMLAnchorElement;
@@ -2554,7 +2552,7 @@ function renderSchedulerTools(selectedIds: string[] = []): void {
   if (!schedulerToolPicker) return;
   schedulerToolPicker.replaceChildren();
   const selected = new Set(selectedIds);
-  for (const tool of schedulerTools) {
+  for (const tool of schedulerState.tools) {
     const label = document.createElement("label");
     label.className = "scheduler-tool-option";
     const checkbox = document.createElement("input");
@@ -2573,8 +2571,8 @@ function renderSchedulerTools(selectedIds: string[] = []): void {
 async function renderSchedulerList(): Promise<void> {
   if (!schedulerList || !schedulerEmpty) return;
   schedulerList.replaceChildren();
-  schedulerEmpty.classList.toggle("is-hidden", schedulerTasks.length > 0);
-  for (const task of schedulerTasks) {
+  schedulerEmpty.classList.toggle("is-hidden", schedulerState.tasks.length > 0);
+  for (const task of schedulerState.tasks) {
     const card = document.createElement("article");
     card.className = "scheduler-card";
     card.innerHTML = `
@@ -2774,19 +2772,19 @@ async function loadSchedulerPanel(): Promise<void> {
     window.cyreneScheduler!.list(),
     window.cyreneScheduler!.getTools(),
   ]);
-  if (tasksResult.ok) schedulerTasks = tasksResult.value ?? [];
-  if (toolsResult.ok) schedulerTools = toolsResult.value ?? [];
+  if (tasksResult.ok) schedulerState.tasks = tasksResult.value ?? [];
+  if (toolsResult.ok) schedulerState.tools = toolsResult.value ?? [];
   renderSchedulerTools();
   await renderSchedulerList();
 }
 
 async function openSchedulerEditor(task?: ScheduledTask): Promise<void> {
-  editingSchedulerTaskId = task?.id ?? null;
+  schedulerState.editingTaskId = task?.id ?? null;
   schedulerEditor?.classList.remove("is-hidden");
   // 确保工具列表已加载
-  if (schedulerTools.length === 0) {
+  if (schedulerState.tools.length === 0) {
     const toolsResult = await window.cyreneScheduler!.getTools();
-    if (toolsResult.ok) schedulerTools = toolsResult.value ?? [];
+    if (toolsResult.ok) schedulerState.tools = toolsResult.value ?? [];
   }
   if (schedulerEditorTitle) schedulerEditorTitle.textContent = task ? "编辑定时任务" : "新建定时任务";
   if (schedulerTitleInput) schedulerTitleInput.value = task?.title ?? "";
@@ -2812,7 +2810,7 @@ async function openSchedulerEditor(task?: ScheduledTask): Promise<void> {
 }
 
 function closeSchedulerEditor(): void {
-  editingSchedulerTaskId = null;
+  schedulerState.editingTaskId = null;
   schedulerEditor?.classList.add("is-hidden");
 }
 
@@ -2878,8 +2876,8 @@ async function saveSchedulerTask(): Promise<void> {
       toolMode: schedulerToolLimitInput?.checked ? "allow-list" : "all-enabled",
       allowedToolIds: collectAllowedToolIds(),
     };
-    const result = editingSchedulerTaskId
-      ? await window.cyreneScheduler!.update(editingSchedulerTaskId, input)
+    const result = schedulerState.editingTaskId
+      ? await window.cyreneScheduler!.update(schedulerState.editingTaskId, input)
       : await window.cyreneScheduler!.add(input);
     if (!result.ok) throw new Error(result.error ?? "保存失败");
     await loadSchedulerPanel();
