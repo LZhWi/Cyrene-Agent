@@ -84,4 +84,29 @@ describe("work store isolation", () => {
     expect(bogus.mode).toBeUndefined();
     expect(bogus.boundDir).toBeUndefined();
   });
+
+  it("binds, replaces and clears the directory of code/learn sessions after creation", async () => {
+    const store = await import("./work-store");
+    store.initializeWorkStore();
+    const session = store.createWorkSession(undefined, "code");
+    expect(session.boundDir).toBeUndefined();
+
+    const bound = store.bindWorkSessionDir(session.id, "E:\\projects\\demo");
+    expect(bound?.boundDir).toBe("E:\\projects\\demo");
+    expect(store.getWorkSession(session.id)?.boundDir).toBe("E:\\projects\\demo");
+
+    const replaced = store.bindWorkSessionDir(session.id, "D:\\other");
+    expect(replaced?.boundDir).toBe("D:\\other");
+
+    const cleared = store.bindWorkSessionDir(session.id);
+    expect(cleared?.boundDir).toBeUndefined();
+  });
+
+  it("refuses to bind a directory on work-mode sessions", async () => {
+    const store = await import("./work-store");
+    store.initializeWorkStore();
+    const session = store.createWorkSession("plain");
+    expect(store.bindWorkSessionDir(session.id, "C:\\tmp")).toBeNull();
+    expect(store.getWorkSession(session.id)?.boundDir).toBeUndefined();
+  });
 });

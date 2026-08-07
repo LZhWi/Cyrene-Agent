@@ -330,7 +330,8 @@ call 窗口**没有文本输入框**或 PTT（Push-To-Talk）按钮，所有对�
 - **屏幕活动注入** —— 若启用屏幕监控，proactive 发起前注入最近屏幕观察摘要，让 LLM 判断用户是否在忙，决定是否打扰。
 
 #### 💼 Work 模式
-- **独立窗口** —— 独立 BrowserWindow，不干扰主聊天。
+- **内嵌视图** —— Work/Code/Learn 三模式内嵌在 Chat 窗口（模式下拉切换），
+  与聊天管线双轨并行、互不合并；会话按模式过滤、懒创建，Code/Learn 目录绑定可随时补。
 - **Router→Plan→ActionGate** —— 任务路由→计划生成→动作门控，完整 Agent 工作流。
 - **独立记忆** —— Work memory 与主聊天 memory 完全隔离，不交叉污染。
 - **工具过滤** —— 排除 recall_history / user_memory / delegate_task / ask_user_choice，

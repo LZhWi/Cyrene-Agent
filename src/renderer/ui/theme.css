@@ -113,7 +113,8 @@
 [data-ui-theme="pearl-white"] .settings-shell,
 [data-ui-theme="pearl-white"] .sidebar,
 [data-ui-theme="pearl-white"] .tasks {
-  background: var(--rb-card-bg);
+  /* 统一底色：卡片白叠 6% 粉，与 chat 窗口同款淡粉白 */
+  background: color-mix(in srgb, var(--rb-card-bg) 94%, var(--rb-pink-500));
   border-color: var(--rb-border-soft);
   box-shadow: var(--rb-shadow-card);
 }
@@ -136,12 +137,13 @@
 [data-ui-theme="pearl-white"] .sidebar__titlebar,
 [data-ui-theme="pearl-white"] .tasks__titlebar,
 [data-ui-theme="pearl-white"] .sticker-titlebar {
-  background: var(--rb-bg-1);
+  /* 标题栏放行透明，让统一淡粉白底色贯通整窗（chat 风格） */
+  background: transparent;
   border-bottom-color: var(--rb-border-soft);
 }
 
 [data-ui-theme="pearl-white"] .settings-nav {
-  background: var(--rb-bg-1);
+  background: transparent;
   border-right-color: var(--rb-border-soft);
 }
 
@@ -462,10 +464,11 @@
 [data-ui-theme="pearl-white"] .chat__winbtn,
 [data-ui-theme="pearl-white"] .chat__attach,
 [data-ui-theme="pearl-white"] .chat__sticker-btn {
+  /* 统一控件配方：浅白灰亚克力 60% + 柔和黑投影（chat 窗口同款） */
   color: var(--rb-text-default);
-  background: var(--rb-card-bg);
-  border-color: var(--rb-border-soft);
-  box-shadow: none;
+  background: rgba(246, 247, 250, 0.60);
+  border-color: rgba(0, 0, 0, 0.07);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.70);
 }
 
 /* .msg__speak 单独处理：默认透明背景，仅在 hover / .is-speaking 时填色。
@@ -508,9 +511,10 @@
 [data-ui-theme="pearl-white"] .base-url-reset:hover,
 [data-ui-theme="pearl-white"] .preset-website-link:hover,
 [data-ui-theme="pearl-white"] .perm-seg:not(.is-active):hover {
+  /* 悬停不换背景（chat 约定）：仅边框加深 + 文字品牌粉 */
   color: var(--rb-pink-600);
-  background: var(--rb-hover-light);
-  border-color: var(--rb-border-strong);
+  background: rgba(246, 247, 250, 0.60);
+  border-color: rgba(0, 0, 0, 0.12);
 }
 
 /* 今日日程：pearl-white 下保留品牌粉作为强调色。
@@ -1092,14 +1096,16 @@
 
 [data-ui-theme="pearl-white"] .sticker-shell {
   color: var(--rb-text-default);
-  background: var(--rb-card-bg);
+  /* 统一淡粉白底色（chat 同款） */
+  background: color-mix(in srgb, var(--rb-card-bg) 94%, var(--rb-pink-500));
   border-color: var(--rb-border-soft);
   box-shadow: var(--rb-shadow-elevated);
 }
 
 [data-ui-theme="pearl-white"] .call {
   color: var(--rb-text-default);
-  background: var(--rb-card-bg);
+  /* 统一淡粉白底色（chat 同款） */
+  background: color-mix(in srgb, var(--rb-card-bg) 94%, var(--rb-pink-500));
   border-color: var(--rb-border-soft);
 }
 
@@ -1110,13 +1116,17 @@
   color: var(--rb-text-default);
 }
 
+/* 通话关闭钮并入统一浅白灰亚克力；悬停不换背景，仅图标转品牌粉 */
 [data-ui-theme="pearl-white"] .call__close {
   color: var(--rb-text-muted);
+  background: rgba(246, 247, 250, 0.60);
+  border-color: rgba(0, 0, 0, 0.07);
 }
 
 [data-ui-theme="pearl-white"] .call__close:hover {
   color: var(--rb-pink-600);
-  background: var(--rb-pink-50);
+  background: rgba(246, 247, 250, 0.60);
+  border-color: rgba(0, 0, 0, 0.12);
 }
 
 [data-ui-theme="pearl-white"] .call__avatar {

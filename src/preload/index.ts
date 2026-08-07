@@ -73,16 +73,18 @@ const chatApi = {
   removeStreamListeners: () => { ipcRenderer.removeAllListeners(IPC.CHAT_STREAM_CHUNK); ipcRenderer.removeAllListeners(IPC.CHAT_STREAM_DONE); },
   getReasoningState: () => ipcRenderer.invoke(IPC.CHAT_GET_REASONING_STATE),
   setReasoning: (payload: { providerKey: string; preference: unknown }) => ipcRenderer.invoke(IPC.CHAT_SET_REASONING, payload),
+  /** 外部入口（侧边栏"工作"按钮）指示切到指定模式视图。 */
+  onSetMode: (callback: (mode: string) => void) => {
+    const listener = (_e: unknown, mode: string) => callback(mode);
+    ipcRenderer.on(IPC.CHAT_SET_MODE, listener);
+    return () => ipcRenderer.removeListener(IPC.CHAT_SET_MODE, listener);
+  },
 };
 
 contextBridge.exposeInMainWorld("cyrene", cyreneApi);
 contextBridge.exposeInMainWorld("chat", chatApi);
 
 const workApi = {
-  minimize: () => ipcRenderer.send(IPC.WORK_MINIMIZE),
-  close: () => ipcRenderer.send(IPC.WORK_CLOSE),
-  toggleMaximize: () => ipcRenderer.send(IPC.WORK_TOGGLE_MAXIMIZE),
-  isMaximized: () => ipcRenderer.invoke(IPC.WORK_IS_MAXIMIZED),
   listSessions: () => ipcRenderer.invoke(IPC.WORK_SESSIONS_LIST),
   getSession: (id: string) => ipcRenderer.invoke(IPC.WORK_SESSIONS_GET, id),
   createSession: (options?: string | { title?: string; mode?: "work" | "code" | "learn"; boundDir?: string }) =>
@@ -91,6 +93,7 @@ const workApi = {
   deleteSession: (id: string) => ipcRenderer.invoke(IPC.WORK_SESSIONS_DELETE, id),
   openFolder: () => ipcRenderer.invoke(IPC.WORK_OPEN_FOLDER),
   selectDir: () => ipcRenderer.invoke(IPC.WORK_SELECT_DIR),
+  bindDir: (id: string, boundDir?: string) => ipcRenderer.invoke(IPC.WORK_SESSIONS_BIND_DIR, { id, boundDir }),
   openModelSettings: () => ipcRenderer.send(IPC.SIDEBAR_OPEN_SETTINGS, "api-work"),
   listMemory: () => ipcRenderer.invoke(IPC.WORK_MEMORY_LIST),
   deleteMemory: (id: string) => ipcRenderer.invoke(IPC.WORK_MEMORY_DELETE, id),

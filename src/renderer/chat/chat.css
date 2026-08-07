@@ -48,6 +48,31 @@ body {
   opacity: 0.58;
 }
 
+/* pearl-white 整体背景统一为很淡的粉白：卡片白叠 6% 粉。
+   html 前缀提权 (0,2,1)：theme.css 后置加载且同为 (0,2,0)，必须压过。 */
+html[data-ui-theme="pearl-white"] .chat {
+  background: color-mix(in srgb, var(--rb-card-bg) 94%, var(--rb-pink-500));
+}
+
+/* theme.css 还给 .chat__main / .chat__messages 刷了不透明纯白底（三段式分层），
+   会把 .chat 上的底色整个挡住——消息区放行透明让统一底色透出来。 */
+html[data-ui-theme="pearl-white"] .chat__main,
+html[data-ui-theme="pearl-white"] .chat__messages {
+  background: transparent;
+}
+
+/* 输入区灰带（theme.css 给的 --rb-bg-2）同样并入淡粉白整体底色。 */
+html[data-ui-theme="pearl-white"] .chat__input,
+html[data-ui-theme="pearl-white"] .chat__file-tags {
+  background: color-mix(in srgb, var(--rb-card-bg) 94%, var(--rb-pink-500));
+}
+
+/* AI 气泡：theme.css 给的是不透明浅灰底，这里改成白色 60% 不透明，
+   让淡粉底色微微透出。(0,3,1) 特异性压过 theme.css 的 (0,2,2)。 */
+html[data-ui-theme="pearl-white"] .msg--model .msg__bubble {
+  background: rgba(255, 255, 255, 0.60);
+}
+
 /* ===== Floating particles (dreamy pink motes) ===== */
 .chat__particles {
   position: absolute;
@@ -59,22 +84,62 @@ body {
   display: block;
 }
 
+/* ===== Top fade scrim（顶部渐隐遮罩）=====
+   三层结构：消息流（最下层）→ 本渐隐+模糊层（中层，z-2）→ 标题栏控件
+   （最上层，z-3）。只覆盖控件上方的空隙：下沿与最高控件（38px 状态钮，
+   58px 栏内垂直居中）的顶边精确齐平（y=10px），仅在窗口最上沿保留
+   淡入淡出效果。透明度线性变化：上边缘 30%（不透明度 70%）→ 下边缘
+   100%（全透明）。曲线只由父层 mask 承担，子层底色全不透明，两者相乘
+   即为 mask 曲线本身；模糊随 mask 同步渐弱。底色锚定 --rb-bg-1 双主题自适应。 */
+.chat__topfade {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 10px;
+  z-index: 2;
+  pointer-events: none;
+  -webkit-mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.7), transparent 100%);
+  mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.7), transparent 100%);
+}
 
-/* ===== Custom titlebar ===== */
+.chat__topfade-blur {
+  position: absolute;
+  inset: 0;
+  /* 底色全不透明；渐隐曲线只由父层 mask 承担，避免两条曲线相乘。 */
+  background: var(--rb-bg-1);
+  backdrop-filter: blur(9px) saturate(140%);
+  -webkit-backdrop-filter: blur(9px) saturate(140%);
+}
+
+
+/* ===== Custom titlebar =====
+   悬浮透明标题栏：脱离文档流盖在内容之上，非操作部分完全透明，
+   消息流可以滚到标题栏下面透出来。可交互控件（下拉触发器、模式分段条、
+   窗口按钮）自带背景，不受影响。 */
 .chat__titlebar {
-  position: relative;
-  z-index: 1;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
   height: 58px;
   padding: 0 18px 0 22px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.025));
-  border-bottom: 1px solid var(--rb-border-soft);
+  background: transparent;
+  border-bottom: 0;
   -webkit-app-region: drag;
   user-select: none;
-  flex: 0 0 auto;
+}
+
+/* theme.css 会给各窗口标题栏刷不透明底色；chat 的悬浮栏必须保持透明
+   （多套一层 .chat 抬特异性，避免被主题规则盖回去） */
+[data-ui-theme="pearl-white"] .chat .chat__titlebar {
+  background: transparent;
+  border-bottom-color: transparent;
 }
 
 .chat__titlebar-drag {
@@ -84,17 +149,19 @@ body {
   min-width: 0;
 }
 
-/* 胶囊容器：把「昔涟 · 状态」框成一组，玻璃拟态半透明胶囊，
-   视觉上跟 loader 区分开，又不抢 loader。 */
+/* 胶囊容器：把「昔涟 · 状态」框成一组。悬浮透明标题栏里改用亚克力：
+   半透明底 + 背景模糊，边缘投影模拟悬浮。 */
 .chat__title-meta {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   padding: 5px 14px;
   border-radius: var(--rb-radius-full);
-  background: rgba(255, 255, 255, 0.07);
-  border: 1px solid var(--rb-border-soft);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
   white-space: nowrap;
 }
 
@@ -134,17 +201,40 @@ body {
 .chat__status-btn {
   -webkit-app-region: no-drag;
   flex: 0 0 auto;
-  padding: 0;
-  border: none;
-  background: transparent;
-  cursor: pointer;
   display: grid;
   place-items: center;
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.18);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  cursor: pointer;
   border-radius: var(--rb-radius-full);
+  transition: border-color 120ms ease, box-shadow 200ms ease, transform 120ms ease;
 }
 
+/* 悬停微微上浮：背景透明度不变，只抬 1px 并把投影拉远放大 */
 .chat__status-btn:hover {
-  filter: brightness(1.15);
+  border-color: rgba(255, 255, 255, 0.24);
+  transform: translateY(-1px);
+  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+.chat__status-btn:active { transform: translateY(0); }
+
+/* loader 布局盒是 100×100（scale(0.3) 只缩渲染不缩布局），直接放进
+   38px 圆钮会错位：从左上角缩放成 30×30 后，用非对称负外边距把外边距盒
+   收成 30×30 且让内容盒左上角对齐它——grid 居中外边距盒，渲染体即居中。
+   （对称负边距只缩外盒不平移内容，渲染体会偏 -35px。） */
+.chat__status-btn .loader {
+  width: 100px;
+  height: 100px;
+  transform-origin: top left;
+  margin: 0 -70px -70px 0;
+  box-shadow: none;
 }
 
 .loader {
@@ -298,6 +388,178 @@ body {
   -webkit-app-region: no-drag;
 }
 
+/* ===== 模式分段条（对齐上游 ModeSwitch：cy-segmented / cy-segment）=====
+   标题栏内绝对定位，居中于「meta 胶囊右缘 ~ actions 左缘」之间的可用区。
+   左右边界由 main.ts positionModeSwitch() 实测写入 CSS 变量，避免与两侧控件重叠。
+   容器保持上游分段条形态（圆角壳 + 内边距）；空闲段透明，激活高亮由可滑动的
+   thumb 胶囊承担（main.ts placeModeThumb() 定位），切换时带弹性回弹动画。 */
+.mode-switch {
+  position: absolute;
+  top: 50%;
+  left: var(--ms-left, 300px);
+  right: var(--ms-right, 440px);
+  margin: auto;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  width: max-content;
+  max-width: 100%;
+  height: 36px;
+  padding: 3px;
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 12px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+  /* 弹性过渡的过冲会被壳边缘裁掉，thumb 永远不会顶出容器 */
+  overflow: hidden;
+  -webkit-app-region: no-drag;
+  z-index: 2;
+  transition: transform 120ms ease, box-shadow 200ms ease;
+}
+
+/* 悬停微微上浮：translateY(-50%) 是垂直居中用的，上浮必须叠加在它之上；
+   背景透明度不变，只把投影拉远放大 */
+.mode-switch:hover {
+  transform: translateY(calc(-50% - 1px));
+  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+/* 滑动胶囊：高亮背景本体，在段之间弹性平移（left/width 由 JS 写入） */
+.mode-switch__thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: 0;
+  box-sizing: border-box;
+  border: 1px solid var(--rb-pink-glow);
+  border-radius: 9px;
+  background: linear-gradient(135deg, rgba(236, 72, 153, 0.42), rgba(157, 127, 234, 0.44));
+  box-shadow: 0 0 14px rgba(236, 72, 153, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  pointer-events: none;
+  transition: left 380ms cubic-bezier(0.34, 1.56, 0.64, 1), width 380ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.mode-switch.no-anim .mode-switch__thumb {
+  transition: none;
+}
+
+.mode-switch .mode-switch__btn {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: 100%;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: 9px;
+  color: var(--rb-text-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: none;
+  transition: color 140ms ease;
+}
+
+.mode-switch .mode-switch__btn:hover:not(.is-active) {
+  color: var(--rb-text-strong);
+}
+
+.mode-switch .mode-switch__btn.is-active {
+  color: var(--rb-text-on-pink);
+}
+
+/* 导航图标常驻边缘投影：无论悬停/选中都在，增强立体感 */
+.mode-switch svg {
+  flex: 0 0 auto;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.55));
+}
+
+.mode-switch .mode-switch__btn span {
+  line-height: 1;
+}
+
+/* pearl-white 主题：容器与控件统一浅白灰亚克力（60% 不透明）+ 未选中段灰字灰图标 + 激活胶囊淡粉紫（浅底深字） */
+[data-ui-theme="pearl-white"] .mode-switch {
+  background: rgba(246, 247, 250, 0.60);
+  border-color: rgba(0, 0, 0, 0.07);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.70);
+}
+
+/* pearl-white 下其余亚克力控件统一浅白灰配方（60% 不透明）+ 柔和黑投影；
+   关闭钮与清空钮（⌫）一并并入统一风格：theme.css 的合并选择器特异性
+   (0,3,0) 且后置加载，winbtn 需提到 (0,4,0) 才能压过。 */
+[data-ui-theme="pearl-white"] .chat__title-meta,
+[data-ui-theme="pearl-white"] .chat__status-btn,
+[data-ui-theme="pearl-white"] .chat .chat__winbtn,
+[data-ui-theme="pearl-white"] .chat .chat__icon-btn,
+[data-ui-theme="pearl-white"] .dropdown-trigger {
+  background: rgba(246, 247, 250, 0.60);
+  border-color: rgba(0, 0, 0, 0.07);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.70);
+}
+
+/* 关闭钮基础样式带粉色图标字色，pearl-white 下统一为深灰；
+   悬停仍保持浅白灰底（压掉基础样式的粉色 hover 渐变），仅文字转红。 */
+html[data-ui-theme="pearl-white"] .chat__winbtn--close {
+  color: var(--rb-text-default);
+}
+html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
+  background: rgba(246, 247, 250, 0.60);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.70);
+  color: var(--rb-pink-500);
+}
+
+[data-ui-theme="pearl-white"] .chat__status-btn:hover,
+[data-ui-theme="pearl-white"] .chat .chat__winbtn:hover,
+[data-ui-theme="pearl-white"] .chat .chat__icon-btn:hover {
+  background: rgba(246, 247, 250, 0.60);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+/* pearl-white 悬停上浮：背景仍不变，投影用浅色配方的放大版 */
+[data-ui-theme="pearl-white"] .chat__status-btn:hover,
+[data-ui-theme="pearl-white"] .chat__winbtn:hover,
+[data-ui-theme="pearl-white"] .dropdown-trigger:hover,
+[data-ui-theme="pearl-white"] .mode-switch:hover {
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.70);
+}
+
+[data-ui-theme="pearl-white"] .mode-switch__thumb {
+  background: linear-gradient(135deg, var(--rb-pink-100), #e6d9ff);
+  border-color: rgba(232, 74, 120, 0.22);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+
+[data-ui-theme="pearl-white"] .mode-switch .mode-switch__btn:not(.is-active) {
+  color: #a29aae;
+}
+
+[data-ui-theme="pearl-white"] .mode-switch .mode-switch__btn:not(.is-active):hover {
+  color: #7b7486;
+}
+
+[data-ui-theme="pearl-white"] .mode-switch .mode-switch__btn.is-active {
+  color: var(--rb-text-strong);
+}
+
+[data-ui-theme="pearl-white"] .mode-switch svg {
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
+}
+
+/* 窄窗口收进图标-only，避免与左侧标题胶囊/右侧按钮组打架 */
+@media (max-width: 1120px) {
+  .mode-switch .mode-switch__btn { padding: 0 9px; }
+  .mode-switch .mode-switch__btn span { display: none; }
+}
+
 .chat__icon-btn,
 .chat__winbtn {
   display: grid;
@@ -307,21 +569,23 @@ body {
   border-radius: var(--rb-radius-full);
   color: var(--rb-text-default);
   font-size: 14px;
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid var(--rb-border-soft);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
   transition: background 120ms ease, color 120ms ease, transform 120ms ease, box-shadow 200ms ease, border-color 120ms ease;
 }
 
 .chat__winbtn svg { display: block; }
 
 .chat__icon-btn:hover,
+/* 悬停不改背景透明度：微微上浮，投影拉远放大 */
 .chat__winbtn:hover {
-  background: var(--rb-border-soft);
-  border-color: var(--rb-border-strong);
+  border-color: rgba(255, 255, 255, 0.24);
   color: var(--rb-text-strong);
   transform: translateY(-1px);
-  box-shadow: 0 0 16px rgba(236, 72, 153, 0.26), inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.10);
 }
 
 .chat__winbtn:active { transform: translateY(0); }
@@ -348,6 +612,75 @@ body {
   min-height: 0;
 }
 
+/* Work 类模式（work/code/learn）：聊天区整体让位给 #work-view。
+   用 display:none 而非 visibility：隐藏后不参与 flex 布局也不接收输入。 */
+.chat.is-work-mode .chat__body {
+  display: none;
+}
+
+/* file-tags / composer / sticker-picker 是 .chat 直接子元素（不在 chat__body 内），
+   work 模式下需单独隐藏，否则会与 work 视图的输入框并存。 */
+.chat.is-work-mode .chat__file-tags,
+.chat.is-work-mode #composer,
+.chat.is-work-mode .sticker-picker {
+  display: none;
+}
+
+/* Work 视图是 .chat flex 列的中间子项：work.css 的 height:100% 会撑破
+   标题栏 + 视图的总高，这里改为按剩余空间伸缩。标题栏悬浮后视图顶到
+   窗口上沿，用 padding 让出标题栏高度（border-box 防止总高溢出）。 */
+.work-view {
+  flex: 1;
+  min-height: 0;
+  height: auto;
+  padding-top: 58px;
+  box-sizing: border-box;
+}
+
+/* 标题栏里的 Work 专属控件（会话栏开关 / 运行状态 / 记忆·模型设置·目录）
+   默认隐藏，仅 work/code/learn 模式显示；drag 区内需退出窗口拖拽。 */
+.chat__titlebar .work-only {
+  display: none;
+  -webkit-app-region: no-drag;
+}
+.chat.is-work-mode .chat__titlebar .work-only {
+  display: inline-flex;
+  align-items: center;
+}
+.chat.is-work-mode .chat__titlebar #wp-session-rail-toggle {
+  display: grid;
+}
+
+/* work 模式下隐藏聊天专属控件（模式下拉与窗口控制保留） */
+.chat.is-work-mode #chat-status-btn,
+.chat.is-work-mode .chat__title-meta,
+.chat.is-work-mode [data-dropdown="style-dropdown"],
+.chat.is-work-mode [data-dropdown="reasoning-dropdown"],
+.chat.is-work-mode #clear {
+  display: none;
+}
+
+/* Work 专属文字按钮：沿用 chat__icon-btn 的玻璃质感，宽度随文字 */
+.chat__work-btn {
+  display: inline-flex;
+  align-items: center;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: var(--rb-radius-full);
+  color: var(--rb-text-muted);
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--rb-border-soft);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transition: background 120ms ease, color 120ms ease, transform 120ms ease, border-color 120ms ease;
+}
+.chat__work-btn:hover {
+  background: var(--rb-border-soft);
+  border-color: var(--rb-border-strong);
+  color: var(--rb-text-strong);
+  transform: translateY(-1px);
+}
+
 /* 右侧纵向列：标题栏 + 消息区（含空态遮罩） */
 .chat__main {
   position: relative;
@@ -365,7 +698,8 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  padding: 14px 12px;
+  /* 顶部让出悬浮标题栏高度（58 + 14） */
+  padding: 72px 12px 14px;
   background: rgba(255, 255, 255, 0.04);
   border-right: 1px solid var(--rb-border-soft);
   overflow: hidden;
@@ -511,7 +845,9 @@ body {
   stroke-linejoin: round;
 }
 
-/* ===== Messages ===== */
+/* ===== Messages =====
+   标题栏悬浮后消息区顶到窗口上沿：静止时 92px 上边距让首条消息
+   待在标题栏下方，向上滚动时消息从透明标题栏后面透出来。 */
 .chat__messages {
   position: relative;
   z-index: 1;
@@ -519,7 +855,7 @@ body {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 34px 88px 18px;
+  padding: 92px 88px 18px;
   display: flex;
   flex-direction: column;
   gap: 18px;
@@ -1261,16 +1597,29 @@ body {
   gap: 4px;
   padding: 4px 9px;
   border-radius: 8px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--rb-border-faint);
+  background: rgba(255, 255, 255, 0.18);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
   cursor: pointer;
   user-select: none;
   -webkit-app-region: no-drag;
-  transition: background 0.12s, border-color 0.12s;
+  transition: border-color 0.12s, transform 0.12s, box-shadow 0.2s;
 }
+/* 悬停不改背景透明度：微微上浮，投影拉远放大 */
 .dropdown-trigger:hover {
-  background: var(--rb-border-faint);
-  border-color: var(--rb-border-soft);
+  border-color: rgba(255, 255, 255, 0.24);
+  transform: translateY(-1px);
+  box-shadow: 0 7px 20px rgba(0, 0, 0, 0.34), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+.dropdown-trigger:active { transform: translateY(0); }
+
+/* pearl-white 下 theme.css 会把 hover 背景换成实色，同样压掉 */
+[data-ui-theme="pearl-white"] .chat .dropdown-trigger:hover {
+  background: rgba(246, 247, 250, 0.60);
+  border-color: rgba(0, 0, 0, 0.12);
 }
 .dt-label {
   font-size: 11px;
@@ -1831,6 +2180,7 @@ body {
 .chat__empty-state {
   position: absolute;
   inset: 0;
+  top: 58px; /* 悬浮标题栏下方再居中，避免被栏盖住上半部分 */
   display: flex;
   flex-direction: column;
   align-items: center;

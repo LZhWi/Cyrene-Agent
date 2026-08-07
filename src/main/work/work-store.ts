@@ -180,6 +180,18 @@ export function renameWorkSession(id: string, title: string): WorkSession | null
   return saveWorkSession(session);
 }
 
+/**
+ * 为 code/learn 会话绑定（或解绑）只读目录。目录绑定与会话创建解耦：
+ * 会话可先建后绑；work 模式会话不接受绑定。
+ */
+export function bindWorkSessionDir(id: string, boundDir?: string): WorkSession | null {
+  const session = getWorkSession(id);
+  if (!session || workSessionMode(session) === "work") return null;
+  if (boundDir) session.boundDir = boundDir;
+  else delete session.boundDir;
+  return saveWorkSession(session);
+}
+
 export function deleteWorkSession(id: string): boolean {
   const filePath = sessionPath(id);
   if (fs.existsSync(filePath)) fs.unlinkSync(filePath);

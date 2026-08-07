@@ -211,7 +211,6 @@ async function reconcileUserMemoryIndex(): Promise<void> {
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let chatWindow: BrowserWindow | null = null;
-let workWindow: BrowserWindow | null = null;
 let sidebarWindow: BrowserWindow | null = null;
 let tasksWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
@@ -2670,7 +2669,7 @@ function getPublicModelConfig(settings = loadModelSettings()): PublicModelConfig
 }
 
 function broadcastToAuxWindows(channel: string, payload: unknown): void {
-  for (const win of [chatWindow, workWindow, sidebarWindow, tasksWindow, settingsWindow]) {
+  for (const win of [chatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(channel, payload);
     }
@@ -2678,7 +2677,7 @@ function broadcastToAuxWindows(channel: string, payload: unknown): void {
 }
 
 function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
-  for (const win of [mainWindow, chatWindow, workWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_THEME_CHANGED, theme);
     }
@@ -2686,7 +2685,7 @@ function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
 }
 
 function broadcastUiFontChanged(font: GeneralSettings["uiFont"]): void {
-  for (const win of [mainWindow, chatWindow, workWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_FONT_CHANGED, font);
     }
@@ -3114,41 +3113,21 @@ function createChatWindow(sessionId?: string): void {
   });
 }
 
-function createWorkWindow(): void {
-  if (workWindow && !workWindow.isDestroyed()) {
-    workWindow.show();
-    workWindow.focus();
-    return;
-  }
-
-  workWindow = new BrowserWindow({
-    width: 1380,
-    height: 840,
-    minWidth: 980,
-    minHeight: 620,
-    title: "Cyrene Work",
-    icon: getCurrentAppIconPath(),
-    backgroundColor: "#00000000",
-    autoHideMenuBar: true,
-    show: false,
-    frame: false,
-    transparent: true,
-    resizable: true,
-    webPreferences: {
-      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: false,
-    },
-  });
-  attachExternalLinkHandler(workWindow);
-  if (isDev) {
-    workWindow.loadURL("http://localhost:5173/work/");
+/** 侧边栏"工作"入口：打开 chat 窗口并切到 Work 视图（Work 不再有独立窗口）。 */
+function openChatWorkView(): void {
+  createChatWindow();
+  if (!chatWindow || chatWindow.isDestroyed()) return;
+  const deliverMode = () => {
+    if (chatWindow && !chatWindow.isDestroyed()) {
+      chatWindow.webContents.send(IPC.CHAT_SET_MODE, "work");
+    }
+  };
+  // 新建窗口时等加载完成再发，避免信号早于渲染层监听器注册
+  if (chatWindow.webContents.isLoading()) {
+    chatWindow.webContents.once("did-finish-load", deliverMode);
   } else {
-    workWindow.loadFile(path.join(__dirname, "..", "..", "renderer", "work", "index.html"));
+    deliverMode();
   }
-  workWindow.once("ready-to-show", () => workWindow?.show());
-  workWindow.on("closed", () => { workWindow = null; });
 }
 
 function createSidebarWindow(): void {
@@ -3469,7 +3448,7 @@ function applyUiIcon(iconSetting: UiIcon): void {
     return;
   }
   tray?.setImage(icon);
-  for (const win of [mainWindow, chatWindow, workWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) win.setIcon(icon);
   }
 }
@@ -4921,8 +4900,7 @@ app.whenReady().then(async () => {
   registerChatsIpc();
   initializeWorkStore();
   registerWorkIpc({
-    createWorkWindow,
-    getWorkWindow: () => workWindow,
+    openChatWorkView,
     resolveModelConfig: resolveWorkModelConfig,
     getTools: () => filterWorkTools(toolRegistry.getEnabledTools()),
     loadPrompt: (name, mode) => {

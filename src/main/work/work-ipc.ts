@@ -12,6 +12,7 @@ import { runWorkAgent } from "./work-agent";
 import { deleteWorkMemory, listWorkMemory } from "./work-memory-store";
 import {
   appendWorkMessage,
+  bindWorkSessionDir,
   createWorkSession,
   deleteWorkSession,
   getWorkSession,
@@ -23,8 +24,8 @@ import {
 } from "./work-store";
 
 export interface RegisterWorkIpcDeps {
-  createWorkWindow: () => void;
-  getWorkWindow: () => BrowserWindow | null;
+  /** 侧边栏"工作"入口：打开 chat 窗口并切到 Work 视图（Work 视图内嵌在 chat 窗口）。 */
+  openChatWorkView: () => void;
   resolveModelConfig: () => VendorConfig;
   getTools: () => ToolDefinition[];
   /** mode 用于选择模式专属 system prompt（code/learn），缺省走通用 work prompt。 */
@@ -131,16 +132,7 @@ ${role}
 }
 
 export function registerWorkIpc(deps: RegisterWorkIpcDeps): void {
-  ipcMain.on(IPC.SIDEBAR_OPEN_WORK, () => deps.createWorkWindow());
-  ipcMain.on(IPC.WORK_MINIMIZE, () => deps.getWorkWindow()?.minimize());
-  ipcMain.on(IPC.WORK_CLOSE, () => deps.getWorkWindow()?.close());
-  ipcMain.on(IPC.WORK_TOGGLE_MAXIMIZE, () => {
-    const win = deps.getWorkWindow();
-    if (!win) return;
-    if (win.isMaximized()) win.unmaximize();
-    else win.maximize();
-  });
-  ipcMain.handle(IPC.WORK_IS_MAXIMIZED, () => deps.getWorkWindow()?.isMaximized() ?? false);
+  ipcMain.on(IPC.SIDEBAR_OPEN_WORK, () => deps.openChatWorkView());
 
   ipcMain.handle(IPC.WORK_SESSIONS_LIST, () => listWorkSessions());
   ipcMain.handle(IPC.WORK_SESSIONS_GET, (_event, id: string) => getWorkSession(id));
@@ -156,10 +148,15 @@ export function registerWorkIpc(deps: RegisterWorkIpcDeps): void {
     activeRuns.delete(id);
     return deleteWorkSession(id);
   });
+  // 目录绑定与会话创建解耦：code/learn 会话建好后可随时绑定/更换目录
+  ipcMain.handle(IPC.WORK_SESSIONS_BIND_DIR, (_event, payload: { id: string; boundDir?: string }) => (
+    bindWorkSessionDir(payload.id, payload.boundDir)
+  ));
   ipcMain.handle(IPC.WORK_OPEN_FOLDER, () => openWorkFolder());
   // 为 code/learn 会话选择绑定目录：返回选中的绝对路径，取消返回 null。
-  ipcMain.handle(IPC.WORK_SELECT_DIR, async () => {
-    const win = deps.getWorkWindow();
+  // 父窗口优先取发起方（从 Chat 窗口内嵌视图发起），兜底当前聚焦窗口。
+  ipcMain.handle(IPC.WORK_SELECT_DIR, async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
     const options: OpenDialogOptions = { title: "选择要绑定的目录", properties: ["openDirectory"] };
     const result = await (win && !win.isDestroyed()
       ? dialog.showOpenDialog(win, options)

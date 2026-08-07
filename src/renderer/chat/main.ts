@@ -131,6 +131,8 @@ interface ChatApi {
     getImageSendStrategy: () => Promise<{ mode: "direct" | "caption" }>;
     getGeneralSettings?: () => Promise<{ defaultChatMode?: DefaultChatMode; segmentedOutputMode?: "all" | "chat" | "off" }>;
     getEnabledStickers?: () => Promise<Array<{ id: string; src: string; description?: string }>>;
+    /** 外部入口（侧边栏"工作"按钮）指示切到指定模式视图。 */
+    onSetMode?: (callback: (mode: string) => void) => () => void;
   }
 
 /** AG-UI 事件流 API（window.agui）。 */
@@ -2756,6 +2758,9 @@ function createEarlyMinimaxPlayback(): EarlyMinimaxPlayback {
 }
 
 function autosize(): void {
+  // 隐藏时（work 模式下 #composer 被 display:none）scrollHeight 为 0，
+  // 会写出 height:0px 的内联样式，切回聊天模式后输入框被永久压扁。
+  if (!inputEl.offsetParent) return;
   inputEl.style.height = "auto";
   inputEl.style.height = Math.min(inputEl.scrollHeight, 160) + "px";
 }
@@ -3935,6 +3940,94 @@ clearBtn.addEventListener("click", clearChat);
 
 
 
+/* ===== Work 视图模式切换 =====
+   五模式判定见 chat-mode.ts（纯逻辑，已单测）。 */
+import { mountWorkPanel, type WorkPanelHandle } from "../work/work-panel";
+import type { WorkPanelMode } from "../work/work-panel-logic";
+import { LAST_MODE_STORAGE_KEY, isKnownMode, isWorkViewMode } from "./chat-mode";
+
+let workPanelHandle: WorkPanelHandle | null = null;
+
+function readStoredMode(): string | null {
+  try { return localStorage.getItem(LAST_MODE_STORAGE_KEY); } catch { return null; }
+}
+
+/* 滑动胶囊定位：把 thumb 对齐到当前激活段（left/width），CSS 弹性过渡负责动画。
+   定位、模式切换、两侧文案宽度变化都会改变段的几何，因此跟随 positionModeSwitch 重算。 */
+function placeModeThumb(): void {
+  const switchEl = document.getElementById("mode-switch");
+  if (!switchEl) return;
+  const thumb = switchEl.querySelector<HTMLElement>(".mode-switch__thumb");
+  const active = switchEl.querySelector<HTMLElement>(".mode-switch__btn.is-active");
+  if (!thumb) return;
+  if (!active) { thumb.style.width = "0px"; return; }
+  const swRect = switchEl.getBoundingClientRect();
+  const btnRect = active.getBoundingClientRect();
+  // 容器边框会让子元素 rect 偏 1px，减去它使 thumb 与段完全重合
+  thumb.style.left = `${btnRect.left - swRect.left - 1}px`;
+  thumb.style.width = `${btnRect.width}px`;
+}
+
+/* 分段条定位：实测标题栏左右两侧可见控件的边界，把可用区写进 CSS 变量，
+   分段条在其中 margin:auto 居中。模式切换会改变两侧可见控件集合（work-only
+   显隐、chat 专属控件隐藏），resize 会改变几何，因此两处都要重算。 */
+function positionModeSwitch(): void {
+  const switchEl = document.getElementById("mode-switch");
+  const titlebar = document.querySelector<HTMLElement>(".chat__titlebar");
+  if (!switchEl || !titlebar) return;
+  const barRect = titlebar.getBoundingClientRect();
+  let leftBound = 0;
+  document.querySelectorAll<HTMLElement>(".chat__titlebar-drag > *").forEach((el) => {
+    if (el.offsetParent === null) return; // display:none 的控件不参与
+    leftBound = Math.max(leftBound, el.getBoundingClientRect().right - barRect.left);
+  });
+  let rightBound = 0;
+  document.querySelectorAll<HTMLElement>(".chat__titlebar-actions > *").forEach((el) => {
+    if (el.offsetParent === null) return;
+    rightBound = Math.max(rightBound, barRect.right - el.getBoundingClientRect().left);
+  });
+  switchEl.style.setProperty("--ms-left", `${Math.ceil(leftBound + 12)}px`);
+  switchEl.style.setProperty("--ms-right", `${Math.ceil(rightBound + 12)}px`);
+  placeModeThumb();
+}
+window.addEventListener("resize", positionModeSwitch);
+// 标题文案（模型连接状态/活动状态）异步变化会改变两侧控件宽度，尺寸变了就重算
+if (typeof ResizeObserver !== "undefined") {
+  const boundsObserver = new ResizeObserver(positionModeSwitch);
+  const dragZone = document.querySelector(".chat__titlebar-drag");
+  const actionsZone = document.querySelector(".chat__titlebar-actions");
+  if (dragZone) boundsObserver.observe(dragZone);
+  if (actionsZone) boundsObserver.observe(actionsZone);
+}
+
+function applyModeView(mode: string): void {
+  const workView = document.getElementById("work-view");
+  const chatRoot = document.querySelector(".chat");
+  if (!workView || !chatRoot) return;
+  const isWork = isWorkViewMode(mode);
+  chatRoot.classList.toggle("is-work-mode", isWork);
+  workView.hidden = !isWork;
+  // 分段条高亮同步：按 data-mode 精确匹配内部模式值（work/collab/code/learn/talk）
+  document.querySelectorAll<HTMLElement>("#mode-switch .mode-switch__btn").forEach((btn) => {
+    const active = btn.dataset.mode === mode;
+    btn.classList.toggle("is-active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+  placeModeThumb(); // 高亮胶囊滑向新激活段（CSS 弹性过渡）
+  if (!isWork) {
+    // 回到聊天模式：composer 重新可见，若曾留下异常内联高度则重算一次
+    autosize();
+  }
+  if (isWork) {
+    // 懒挂载一次，之后保留实例（会话/滚动状态不丢）；模式变化同步给面板
+    if (!workPanelHandle) workPanelHandle = mountWorkPanel(workView);
+    workPanelHandle.setMode(mode as WorkPanelMode);
+  }
+  try { localStorage.setItem(LAST_MODE_STORAGE_KEY, mode); } catch { /* 存储不可用时忽略 */ }
+  // 两侧可见控件集合随模式变化，重算分段条可用区
+  positionModeSwitch();
+}
+
 /* ===== Dropdown: mode + style + reasoning (body-level menus) ===== */
 (function() {
   var triggers = document.querySelectorAll(".dropdown-trigger");
@@ -3996,10 +4089,37 @@ clearBtn.addEventListener("click", clearChat);
     if (!menu) return;
     menu.querySelectorAll(".dm-opt").forEach(function(opt) {
       opt.addEventListener("click", function() {
-        selectDropdownOption(id, opt.getAttribute("data-value"));
+        var value = opt.getAttribute("data-value");
+        selectDropdownOption(id, value);
+        // 模式选项驱动视图切换：work/code/learn 显示内嵌 Work 面板，其余回到聊天区
+        if (id === "mode-dropdown" && value) applyModeView(value);
         closeAll();
       });
     });
+  });
+
+  // 启动恢复上次模式：只认五个已知模式，localStorage 脏数据不切视图
+  var storedMode = readStoredMode();
+  if (isKnownMode(storedMode)) {
+    selectDropdownOption("mode-dropdown", storedMode);
+    applyModeView(storedMode);
+  }
+
+  // 模式分段条：点击走与下拉选项完全相同的状态路径（is-active + 视图切换）
+  document.querySelectorAll("#mode-switch .mode-switch__btn").forEach(function(btn) {
+    btn.addEventListener("click", function() {
+      var mode = (btn as HTMLElement).dataset.mode;
+      if (!mode || !isKnownMode(mode)) return;
+      selectDropdownOption("mode-dropdown", mode);
+      applyModeView(mode);
+    });
+  });
+
+  // 外部入口的模式切换信号（侧边栏"工作"按钮 → 打开 Chat 窗口并切 Work 视图）
+  window.chat?.onSetMode?.(function(mode) {
+    if (!isKnownMode(mode)) return;
+    selectDropdownOption("mode-dropdown", mode);
+    applyModeView(mode);
   });
 
   // ── 推理下拉：动态生成 ──────────────────────────────
@@ -4311,4 +4431,11 @@ window.chatStore?.onChanged(async () => {
   if (next) loadSessionIntoUI(next);
 });
 autosize();
+// 首次定位禁动画：避免 thumb 从默认位置滑入，之后恢复弹性过渡
+const modeSwitchEl = document.getElementById("mode-switch");
+modeSwitchEl?.classList.add("no-anim");
+positionModeSwitch();
+requestAnimationFrame(() => requestAnimationFrame(() => {
+  modeSwitchEl?.classList.remove("no-anim");
+}));
 inputEl.focus();

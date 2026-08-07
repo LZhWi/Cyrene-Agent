@@ -8,11 +8,187 @@
   <link rel="stylesheet" href="../ui/fonts.css" />
   <link rel="stylesheet" href="../ui/base.css" />
   <link rel="stylesheet" href="./chat.css" />
+  <link rel="stylesheet" href="../work/work.css" />
 </head>
 <body>
   <div class="chat">
     <canvas class="chat__particles" id="particles" aria-hidden="true"></canvas>
-    <div class="chat__body">
+    <!-- 常驻标题栏：work 模式下 chat__body 隐藏，窗口拖拽 / 模式切换 /
+         窗口控制必须始终可用，所以标题栏提升到 .chat 顶层。
+         work-only 控件由 work-panel.ts 挂载时消费，仅 Work 类模式可见。 -->
+    <header class="chat__titlebar">
+      <div class="chat__titlebar-drag">
+        <button type="button" class="chat__status-btn" id="chat-status-btn" aria-label="会话列表" title="会话列表">
+          <div class="loader">
+            <svg width="100" height="100" viewBox="0 0 100 100">
+              <defs>
+                <mask id="clipping">
+                  <polygon points="0,0 100,0 100,100 0,100" fill="black"></polygon>
+                  <polygon points="25,25 75,25 50,75" fill="white"></polygon>
+                  <polygon points="50,25 75,75 25,75" fill="white"></polygon>
+                  <polygon points="35,35 65,35 50,65" fill="white"></polygon>
+                  <polygon points="35,35 65,35 50,65" fill="white"></polygon>
+                  <polygon points="35,35 65,35 50,65" fill="white"></polygon>
+                  <polygon points="35,35 65,35 50,65" fill="white"></polygon>
+                </mask>
+              </defs>
+            </svg>
+            <div class="box"></div>
+          </div>
+        </button>
+        <span class="chat__title-meta">
+          <span class="chat__name">昔涟</span>
+          <span class="chat__name-sep" aria-hidden="true">·</span>
+          <span class="chat__activity" id="chat-activity" hidden></span>
+          <span class="chat__name-sep" id="chat-activity-sep" aria-hidden="true" hidden>·</span>
+          <span class="chat__hint" id="chat-hint">模型未连接</span>
+        </span>
+        <button type="button" id="wp-session-rail-toggle" class="brand-mark work-only" aria-label="隐藏工作会话" aria-expanded="true" title="显示或隐藏工作会话">C</button>
+        <div class="titlebar__status work-only" id="wp-runtime-status"><span class="status-dot"></span>就绪</div>
+      </div>
+      <!-- 模式分段条：对齐上游 ModeSwitch（cy-segmented）。五段对应内部模式
+           work/collab/code/learn/talk；状态源仍是 #mode-dropdown 的 is-active。 -->
+      <div class="mode-switch" id="mode-switch" role="group" aria-label="模式切换">
+        <span class="mode-switch__thumb" aria-hidden="true"></span>
+        <button type="button" class="mode-switch__btn" data-mode="collab" title="协作">
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><path d="M16.5 9.25C16.5 12.43 13.59 15 10 15C9.22 15 8.47 14.88 7.78 14.65L4.5 16L5.35 13.17C4.2 12.16 3.5 10.78 3.5 9.25C3.5 6.07 6.41 3.5 10 3.5C13.59 3.5 16.5 6.07 16.5 9.25Z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/><path d="M7.5 9.25H7.51M10 9.25H10.01M12.5 9.25H12.51" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+          <span>协作</span>
+        </button>
+        <button type="button" class="mode-switch__btn" data-mode="talk" title="日常聊天">
+          <svg width="16" height="16" viewBox="0 0 48 48" fill="none" aria-hidden="true"><rect x="4" y="10" width="40" height="30" rx="2" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 6V14" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M25 23L14 23" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M34 31L14 31" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M34 6V14" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>
+          <span>日常聊天</span>
+        </button>
+        <button type="button" class="mode-switch__btn" data-mode="work" title="工作">
+          <svg width="16" height="16" viewBox="0 0 20 20" fill="none" aria-hidden="true"><rect x="3" y="3.5" width="14" height="10" rx="2" stroke="currentColor" stroke-width="1.5"/><path d="M7 16.5H13M10 13.5V16.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+          <span>工作</span>
+        </button>
+        <button type="button" class="mode-switch__btn" data-mode="code" title="代码">
+          <svg width="16" height="16" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M5 8C5 6.89543 5.89543 6 7 6H19L24 12H41C42.1046 12 43 12.8954 43 14V40C43 41.1046 42.1046 42 41 42H7C5.89543 42 5 41.1046 5 40V8Z" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M28 22L33 27L28 32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M20 22L15 27L20 32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>代码</span>
+        </button>
+        <button type="button" class="mode-switch__btn" data-mode="learn" title="学习">
+          <svg width="16" height="16" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M32 6H22V42H32V6Z" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M42 6H32V42H42V6Z" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M10 6L18 7L14.5 42L6 41L10 6Z" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M37 18V15" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M27 18V15" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>学习</span>
+        </button>
+      </div>
+      <div class="chat__titlebar-actions">
+        <div class="dropdown-trigger" data-dropdown="style-dropdown">
+          <span class="dt-label">风格</span>
+          <span class="dt-value" id="style-val">温柔 · 和善</span>
+          <span class="dt-arrow"></span>
+        </div>
+        <div class="dropdown-trigger" data-dropdown="reasoning-dropdown">
+          <span class="dt-label">推理</span>
+          <span class="dt-value" id="reasoning-val">Auto · 自动</span>
+          <span class="dt-arrow"></span>
+        </div>
+        <button type="button" class="chat__icon-btn" id="clear" aria-label="清空对话" title="清空对话">⌫</button>
+        <button id="wp-memory-btn" class="chat__work-btn work-only" title="Work 记忆">记忆</button>
+        <button id="wp-model-settings-btn" class="chat__work-btn work-only" title="打开 Work 模型设置">模型设置</button>
+        <button id="wp-folder-btn" class="chat__work-btn work-only" title="打开 Work 数据目录">目录</button>
+        <button type="button" class="chat__winbtn" id="min-btn" aria-label="最小化" title="最小化">
+          <svg width="10" height="2" viewBox="0 0 10 2" aria-hidden="true"><rect width="10" height="2" rx="1" fill="currentColor"/></svg>
+        </button>
+        <button type="button" class="chat__winbtn" id="max-btn" aria-label="最大化" title="最大化">
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.75" y="0.75" width="8.5" height="8.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
+        </button>
+        <button type="button" class="chat__winbtn chat__winbtn--close" id="close-btn" aria-label="关闭" title="关闭">
+          <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
+            <line x1="2" y1="2" x2="8" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+            <line x1="8" y1="2" x2="2" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
+          </svg>
+        </button>
+      </div>
+    </header>
+    <!-- Work 视图容器：work/code/learn 模式显示，collab/talk 时 hidden。
+         wp-* 标记由 work-panel.ts 的 mountWorkPanel 懒挂载时消费。 -->
+    <section class="work-view" id="work-view" hidden>
+      <div class="work-shell">
+        <aside class="session-rail" id="wp-session-rail">
+          <div class="rail-heading">
+            <span>工作会话</span>
+            <span class="rail-heading__hint">独立空间</span>
+          </div>
+          <button id="wp-new-session-btn" class="primary full">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+            新工作
+          </button>
+          <div class="session-list" id="wp-session-list"></div>
+        </aside>
+
+        <main class="workspace">
+          <section class="workspace__header">
+            <div>
+              <span class="workspace__eyebrow">WORKSPACE</span>
+              <h1 id="wp-session-title">新工作</h1>
+              <p id="wp-session-hint">独立历史 · 独立记忆 · 严格工作流</p>
+            </div>
+            <div class="model-picker">
+              <span>模型调用选项请在“设置 → API 设置 → Work 模型”中管理</span>
+            </div>
+          </section>
+
+          <section class="content-grid">
+            <div class="conversation-panel">
+              <div class="messages" id="wp-messages">
+                <div class="empty-state" id="wp-empty-state">
+                  <span class="empty-state__mark" aria-hidden="true">
+                    <svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4.7A2.5 2.5 0 0 1 4 13.5z" /></svg>
+                  </span>
+                  <strong>开始一项独立工作</strong>
+                  <span>这里不会读取聊天或主动消息的历史与记忆。</span>
+                </div>
+              </div>
+              <div class="composer__file-tags" id="wp-file-tags"></div>
+              <!-- 对齐上游 ChatComposer：单卡片（textarea 区 + 底部功能行），
+                   功能行左侧放附件/绑定目录/取消，发送圆形按钮右下对齐。 -->
+              <form class="composer" id="wp-composer">
+                <input type="file" id="wp-file-input" accept=".txt,.md,.markdown,.json,.csv,.tsv,.log,.xml,.yaml,.yml,.js,.mjs,.ts,.tsx,.jsx,.py,.java,.c,.cpp,.cc,.h,.hpp,.rs,.go,.rb,.php,.sh,.bash,.css,.scss,.sql,.ini,.conf,.toml,.env,.svg,.html,.htm,.png,.jpg,.jpeg,.gif,.bmp,.webp" multiple hidden />
+                <textarea id="wp-input" rows="2" placeholder="描述要完成的工作…"></textarea>
+                <div class="composer__footer">
+                  <button type="button" id="wp-attach-btn" class="composer__footer-btn" aria-label="添加附件" title="添加附件">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.5 12.5 6.1-6.1a3.2 3.2 0 0 1 4.5 4.5l-8 8a5 5 0 0 1-7.1-7.1l8.2-8.2" /></svg>
+                    <span>附件</span>
+                  </button>
+                  <button type="button" id="wp-bind-dir-btn" class="composer__footer-btn" hidden title="绑定工作目录">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /></svg>
+                    <span>绑定目录</span>
+                  </button>
+                  <button type="button" id="wp-cancel-btn" class="composer__footer-btn" hidden>取消</button>
+                  <button type="submit" id="wp-send-btn" class="composer__send" aria-label="执行">
+                    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 4 16 8-16 8 3-8z" /><path d="M7 12h13" /></svg>
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            <aside class="execution-panel">
+              <section class="panel-section">
+                <div class="panel-heading"><h2>执行计划</h2><span>PLAN</span></div>
+                <div id="wp-plan-view" class="plan-view muted">尚未开始</div>
+              </section>
+              <section class="panel-section">
+                <div class="panel-heading"><h2>活动</h2><span>ACTIVITY</span></div>
+                <div id="wp-activity-view" class="activity-view muted">暂无活动</div>
+              </section>
+              <section class="panel-section">
+                <div class="panel-heading"><h2>产物</h2><span>ARTIFACTS</span></div>
+                <div id="wp-artifact-view" class="artifact-view muted">暂无产物</div>
+              </section>
+            </aside>
+          </section>
+        </main>
+      </div>
+
+      <dialog id="wp-memory-dialog">
+        <div class="dialog-header">
+          <div><h2>Work 专用记忆</h2><p>这些内容不会进入 Chat、Collab 或 Proactive。</p></div>
+          <button id="wp-memory-close-btn" aria-label="关闭">×</button>
+        </div>
+        <div id="wp-memory-list" class="memory-list"></div>
+      </dialog>
+    </section>
+    <div class="chat__body" id="chat-body">
       <aside class="chat__rail" id="chat-rail" hidden>
         <button type="button" class="chat__rail-new" id="chat-rail-new">
           <span class="chat__rail-new-icon" aria-hidden="true">＋</span>
@@ -25,65 +201,6 @@
         </div>
       </aside>
       <div class="chat__main">
-        <header class="chat__titlebar">
-          <div class="chat__titlebar-drag">
-            <button type="button" class="chat__status-btn" id="chat-status-btn" aria-label="会话列表" title="会话列表">
-              <div class="loader">
-                <svg width="100" height="100" viewBox="0 0 100 100">
-                  <defs>
-                    <mask id="clipping">
-                      <polygon points="0,0 100,0 100,100 0,100" fill="black"></polygon>
-                      <polygon points="25,25 75,25 50,75" fill="white"></polygon>
-                      <polygon points="50,25 75,75 25,75" fill="white"></polygon>
-                      <polygon points="35,35 65,35 50,65" fill="white"></polygon>
-                      <polygon points="35,35 65,35 50,65" fill="white"></polygon>
-                      <polygon points="35,35 65,35 50,65" fill="white"></polygon>
-                      <polygon points="35,35 65,35 50,65" fill="white"></polygon>
-                    </mask>
-                  </defs>
-                </svg>
-                <div class="box"></div>
-              </div>
-            </button>
-            <span class="chat__title-meta">
-              <span class="chat__name">昔涟</span>
-              <span class="chat__name-sep" aria-hidden="true">·</span>
-              <span class="chat__activity" id="chat-activity" hidden></span>
-              <span class="chat__name-sep" id="chat-activity-sep" aria-hidden="true" hidden>·</span>
-              <span class="chat__hint" id="chat-hint">模型未连接</span>
-            </span>
-          </div>
-          <div class="chat__titlebar-actions">
-            <div class="dropdown-trigger" data-dropdown="mode-dropdown">
-              <span class="dt-label">模式</span>
-              <span class="dt-value" id="mode-val">协作</span>
-              <span class="dt-arrow"></span>
-            </div>
-            <div class="dropdown-trigger" data-dropdown="style-dropdown">
-              <span class="dt-label">风格</span>
-              <span class="dt-value" id="style-val">温柔 · 和善</span>
-              <span class="dt-arrow"></span>
-            </div>
-            <div class="dropdown-trigger" data-dropdown="reasoning-dropdown">
-              <span class="dt-label">推理</span>
-              <span class="dt-value" id="reasoning-val">Auto · 自动</span>
-              <span class="dt-arrow"></span>
-            </div>
-            <button type="button" class="chat__icon-btn" id="clear" aria-label="清空对话" title="清空对话">⌫</button>
-            <button type="button" class="chat__winbtn" id="min-btn" aria-label="最小化" title="最小化">
-              <svg width="10" height="2" viewBox="0 0 10 2" aria-hidden="true"><rect width="10" height="2" rx="1" fill="currentColor"/></svg>
-            </button>
-            <button type="button" class="chat__winbtn" id="max-btn" aria-label="最大化" title="最大化">
-              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.75" y="0.75" width="8.5" height="8.5" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>
-            </button>
-            <button type="button" class="chat__winbtn chat__winbtn--close" id="close-btn" aria-label="关闭" title="关闭">
-              <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true">
-                <line x1="2" y1="2" x2="8" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-                <line x1="8" y1="2" x2="2" y2="8" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>
-              </svg>
-            </button>
-          </div>
-        </header>
         <main class="chat__messages" id="messages" aria-live="polite"></main>
         <div class="chat__empty-state" id="chat-empty" hidden>
           <div class="chat__empty-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3h11A2.5 2.5 0 0 1 20 5.5v8a2.5 2.5 0 0 1-2.5 2.5H10l-5 4v-4.7A2.5 2.5 0 0 1 4 13.5z" /></svg></div>
@@ -109,11 +226,18 @@
     <div class="sticker-picker" id="sticker-picker" hidden>
       <div class="sticker-picker__grid" id="sticker-picker-grid"></div>
     </div>
+    <!-- 顶部渐隐遮罩（中层）：消息在最下层、可操作控件在最上层（标题栏 z-3）。
+         父层挂渐隐 mask，子层挂模糊+渐变底色——mask 作用于合成结果，
+         模糊必然随高度渐弱。pointer-events: none 不挡交互。 -->
+    <div class="chat__topfade" aria-hidden="true"><div class="chat__topfade-blur"></div></div>
   </div>
   <script type="module" src="./main.ts"></script>
   <div class="dropdown-menu" id="mode-dropdown">
     <div class="dm-opt is-active" data-value="collab">🛠️ 协作</div>
     <div class="dm-opt" data-value="talk">💬 日常聊天</div>
+    <div class="dm-opt" data-value="work">🗂️ 工作</div>
+    <div class="dm-opt" data-value="code">💻 代码</div>
+    <div class="dm-opt" data-value="learn">📖 学习</div>
   </div>
   <div class="dropdown-menu" id="style-dropdown">
     <div class="dm-title">聊天风格</div>

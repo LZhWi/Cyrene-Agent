@@ -31,6 +31,8 @@ export const IPC = {
   // 推理下拉（chat 窗口：原子读 + providerKey 写）
   CHAT_GET_REASONING_STATE: "chat:get-reasoning-state",
   CHAT_SET_REASONING: "chat:set-reasoning",
+  // 外部入口（如侧边栏"工作"按钮）指示 chat 窗口切到指定模式视图
+  CHAT_SET_MODE: "chat:set-mode",
 
   // AG-UI 事件流（替换上面的 chat:stream-* 的新通道）
   AGUI_RUN: "agui:run",
@@ -47,16 +49,13 @@ export const IPC = {
   SIDEBAR_OPEN_CALL: "sidebar:open-call",
   SIDEBAR_OPEN_WORK: "sidebar:open-work",
 
-  // isolated Work window/runtime
-  WORK_MINIMIZE: "work:minimize",
-  WORK_CLOSE: "work:close",
-  WORK_TOGGLE_MAXIMIZE: "work:toggle-maximize",
-  WORK_IS_MAXIMIZED: "work:is-maximized",
+  // Work 运行时（视图内嵌在 chat 窗口，无独立窗口）
   WORK_SESSIONS_LIST: "work:sessions:list",
   WORK_SESSIONS_GET: "work:sessions:get",
   WORK_SESSIONS_CREATE: "work:sessions:create",
   WORK_SESSIONS_RENAME: "work:sessions:rename",
   WORK_SESSIONS_DELETE: "work:sessions:delete",
+  WORK_SESSIONS_BIND_DIR: "work:sessions:bind-dir",
   WORK_OPEN_FOLDER: "work:open-folder",
   WORK_SELECT_DIR: "work:select-dir",
   WORK_MEMORY_LIST: "work:memory:list",
