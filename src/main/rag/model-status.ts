@@ -9,8 +9,8 @@ import { app } from "electron";
 const HF_CACHE_DIR = path.join(os.homedir(), ".cache", "huggingface", "Xenova");
 
 export interface ModelInstallStatus {
-  embedding: { minilm: boolean; bgem3: boolean };
-  reranker: { light: boolean; standard: boolean };
+  embedding: { bgem3: boolean };
+  reranker: { standard: boolean };
 }
 
 // All models require these files to be considered "installed"
@@ -30,22 +30,16 @@ const REQUIRED_FILES = ["tokenizer.json", "config.json", "onnx/model_quantized.o
 //
 // PROJECT_SUB_PATHS layout:
 //   models/Xenova/bge-m3/                 ← bgem3
-//   models/Xenova/all-MiniLM-L6-v2/       ← minilm
-//   models/ms-marco-MiniLM-L-6-v2/        ← reranker-light
 //   models/bge-reranker-base/             ← reranker-standard
 //
 // HF_CACHE_SUB_PATHS layout (~/.cache/huggingface/Xenova/):
 //   bge-m3/                               ← bgem3
-//   all-MiniLM-L6-v2/                     ← minilm
 const PROJECT_SUB_PATHS: Record<string, string[]> = {
-  "embedding-minilm": ["Xenova/all-MiniLM-L6-v2"],
   "embedding-bgem3": ["Xenova/bge-m3"],
-  "reranker-light": ["ms-marco-MiniLM-L-6-v2"],
   "reranker-standard": ["bge-reranker-base"],
 };
 
 const HF_CACHE_SUB_PATHS: Record<string, string[]> = {
-  "embedding-minilm": ["all-MiniLM-L6-v2"],
   "embedding-bgem3": ["bge-m3"],
 };
 
@@ -163,8 +157,8 @@ export function getModelInstallStatusDetail(
 ): ModelStatusDetail {
   const modelId =
     kind === "embedding"
-      ? modelKey === "bgem3" ? "embedding-bgem3" : "embedding-minilm"
-      : modelKey === "light" ? "reranker-light" : "reranker-standard";
+      ? "embedding-bgem3"
+      : "reranker-standard";
 
   const subPaths = PROJECT_SUB_PATHS[modelId] ?? [];
   const projectBaseDirs = getProjectModelsDirCandidates();
@@ -251,11 +245,9 @@ export function getModelInstallStatusDetail(
 export function getModelInstallStatus(): ModelInstallStatus {
   return {
     embedding: {
-      minilm: getModelInstallStatusDetail("embedding", "minilm").installed,
       bgem3: getModelInstallStatusDetail("embedding", "bgem3").installed,
     },
     reranker: {
-      light: getModelInstallStatusDetail("reranker", "light").installed,
       standard: getModelInstallStatusDetail("reranker", "standard").installed,
     },
   };
@@ -266,7 +258,7 @@ export function checkEmbeddingModelInstalled(modelKey: string): boolean {
   return detail.installed;
 }
 
-export function checkRerankerModelInstalled(modelId: "light" | "standard"): boolean {
-  const detail = getModelInstallStatusDetail("reranker", modelId);
+export function checkRerankerModelInstalled(): boolean {
+  const detail = getModelInstallStatusDetail("reranker", "standard");
   return detail.installed;
 }

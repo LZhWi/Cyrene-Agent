@@ -1,12 +1,11 @@
 // MCP Server 管理 UI：添加/删除/启停 MCP Server，自定义端点接入说明
-// 从 settings.ts 抽离。依赖 shared/modal + plugins/dom + api/dom + applyPreset。
+// 从 settings.ts 抽离。依赖 shared/modal + shared/parse + plugins/dom + api/dom。
 // 副作用导入：模块加载时执行事件绑定 + 接入说明渲染。
 
 import { showModal, showHtmlModal, showInputModal } from "../shared/modal";
-import { setSaveStatus, setGeneralSaveStatus } from "../shared/save-status";
+import { parseCommandLine } from "../shared/parse";
 import { pluginAddBtn } from "../plugins/dom";
 import { customEndpointGuideBtn } from "../api/dom";
-import { applyPreset } from "../settings";
 
 // ── MCP Server 管理 UI ──────────────────────────────────────
 console.log("[settings] plugin-add-btn 查询结果:", pluginAddBtn ? "找到" : "未找到");
@@ -75,71 +74,7 @@ pluginAddBtn?.addEventListener("click", async () => {
   }
 });
 
-clearChatHistoryBtn.addEventListener("click", async () => {
-  if (!window.confirm("清空所有聊天会话？\n此操作会删除全部历史对话，无法恢复。")) return;
-  try {
-    const sessions = await window.chatStore?.list();
-    if (sessions && sessions.length > 0) {
-      // 串行删除（store 不支持批量删除；会话数量不会大，可接受）
-      for (const s of sessions) {
-        await window.chatStore?.delete(s.id);
-      }
-    }
-    setGeneralSaveStatus("所有聊天会话已清空", "is-ok");
-  } catch (err) {
-    console.warn("[settings] 清空聊天会话失败:", err);
-    setGeneralSaveStatus("清空失败，请查看终端日志", "is-error");
-  }
-});
-
-presetCards?.addEventListener("click", (e) => {
-  const card = (e.target as HTMLElement).closest(".preset-card") as HTMLElement | null;
-  if (!card || card.classList.contains("is-disabled")) return;
-  const cardProviderName = card.dataset.provider;
-  if (!cardProviderName) return;
-
-  // 切厂商前先把当前厂商的输入值快照进缓存，避免覆盖丢失
-  captureActiveProviderProfile();
-
-  const providerName = getCustomEndpointMode(cardProviderName)
-    ? getCustomEndpointProvider(apiState.customEndpointMode)
-    : cardProviderName;
-  // 从缓存里取目标厂商的旧配置；没有缓存就用 preset 默认值
-  const cached = providerProfileCache[providerName];
-  applyPreset(
-    providerName,
-    cached?.model,
-    cached?.apiKey,
-    cached?.baseUrl,
-    cached?.displayName,
-    cached?.explicitTransport,
-  );
-  setSaveStatus(cached ? "已切回上次配置" : "已应用预设，填写 API Key 后保存");
-});
-
-customEndpointControls?.addEventListener("click", (e) => {
-  const button = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-custom-endpoint-mode]");
-  const nextMode = button?.dataset.apiState.customEndpointMode as CustomEndpointMode | undefined;
-  if (!nextMode || nextMode === apiState.customEndpointMode) return;
-
-  captureActiveProviderProfile();
-  apiState.customEndpointMode = nextMode;
-  const providerName = getCustomEndpointProvider(nextMode);
-  const cached = providerProfileCache[providerName];
-  applyPreset(
-    providerName,
-    cached?.model,
-    cached?.apiKey,
-    cached?.baseUrl,
-    cached?.displayName,
-    cached?.explicitTransport,
-  );
-  setSaveStatus(cached ? "已切回上次配置" : nextMode === "local"
-    ? "请填写本地服务地址和模型 ID"
-    : "请填写云端服务地址、API Key 和模型 ID");
-});
-
-const CUSTOM_ENDPOINT_GUIDE_BODY = [
+export const CUSTOM_ENDPOINT_GUIDE_BODY = [
   '<section class="custom-endpoint-guide-section">',
   '  <h4>官方云端模型</h4>',
   '  <p>从列表选择已适配厂商（OpenAI、Claude、Kimi、DeepSeek、MiniMax、智谱 GLM、通义千问、豆包、小米 MiMo），填写对应平台获取的 API Key 即可。Base URL 与推荐模型 ID 已预填。</p>',

@@ -1,12 +1,13 @@
 /**
  * Soul Execution Context -- 通用执行投影层。
  *
- * 将 ToolCallResult 确定性投影为 Soul 可安全使用的结构化上下文。
- * 不暴露原始 output、toolId、args 或内部引用。
+ * 将 ToolCallResult 投影为 Soul 可安全使用的结构化上下文。
+ * 优先使用 toolRegistry 中显式声明的 soulProjection；未声明的工具会走自动 fallback，
+ * 提取关键字段或安全摘要，避免“执行成功但无话可说”。
  *
  * 核心原则：
  * - actions 只证明某个工具调用真实发生过
- * - projections 才定义这个工具结果允许 Soul 声称到什么程度
+ * - projections 是工具返回中允许 Soul 直接引用或总结的信息
  * - executionStatus=succeeded ≠ 业务动作完成 ≠ 用户目标完成
  */
 
@@ -375,20 +376,112 @@ function projectResult(
   }
 }
 
+// ── 自动 fallback 投影器 ──────────────────────────────────
+
+/** 匹配常见“已生成：/path/to/file”工具输出契约 */
+function matchArtifactPath(output: string): string | undefined {
+  const match = output.match(/^\[[\w-]+\]\s*已生成[：:]\s*(.+?)\s*$/);
+  return match?.[1]?.trim();
+}
+
+/** 从普通对象中安全提取常见字段，作为 entity_detail 属性 */
+function extractCommonFields(parsed: Record<string, unknown>): Record<string, ProjectionValue> | undefined {
+  const commonFields = [
+    "path",
+    "filePath",
+    "file",
+    "url",
+    "status",
+    "success",
+    "result",
+    "data",
+    "message",
+    "count",
+    "total",
+    "title",
+    "name",
+  ];
+  const attributes: Record<string, ProjectionValue> = {};
+  let attrCount = 0;
+  for (const field of commonFields) {
+    if (attrCount >= MAX_ATTRIBUTES_PER_ITEM) break;
+    const value = sanitizeValue(getValueByPath(parsed, field));
+    if (value !== undefined) {
+      attributes[field] = value;
+      attrCount++;
+    }
+  }
+  return attrCount > 0 ? attributes : undefined;
+}
+
+/** 当工具未配置 soulProjection 时，自动把结果投影给 Soul */
+export function projectToolResultFallback(result: ToolCallResult): SoulProjection | undefined {
+  if (result.status !== "succeeded") return undefined;
+
+  const output = result.output;
+  if (typeof output !== "string" || output.length === 0) return undefined;
+
+  // 1. 优先匹配“已生成路径”这种内部可信契约
+  const artifactPath = matchArtifactPath(output);
+  if (artifactPath) {
+    const safePath = sanitizeString(artifactPath);
+    const filename = safePath.split(/[\\/]/).filter(Boolean).at(-1);
+    const attributes: Record<string, ProjectionValue> = { path: safePath };
+    return {
+      kind: "entity_detail",
+      source: "trusted_internal",
+      ...(filename ? { title: filename } : {}),
+      attributes,
+    };
+  }
+
+  // 2. 尝试解析 JSON 提取常见字段
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(output);
+  } catch {
+    parsed = undefined;
+  }
+
+  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const attributes = extractCommonFields(parsed as Record<string, unknown>);
+    if (attributes) {
+      return {
+        kind: "entity_detail",
+        source: "external_untrusted",
+        attributes,
+      };
+    }
+  }
+
+  // 3. 纯文本 fallback：安全摘要
+  const summary = sanitizeString(output).trim();
+  if (!summary) return undefined;
+  return {
+    kind: "entity_detail",
+    source: "external_untrusted",
+    attributes: {
+      summary,
+    },
+  };
+}
+
 // ── 主构建函数 ────────────────────────────────────────────
 
 /**
  * 对单个工具结果执行投影，返回 SoulProjection 或 undefined。
  * 供 Layer 2 (buildSoulExecutionContext) 和 planVerify 共享使用。
- * 不依赖 Soul Prompt 文本，只调用确定性投影逻辑。
+ * 优先使用 tool 声明的 soulProjection；无配置时走自动 fallback。
  */
 export function projectToolResult(
   result: ToolCallResult,
   tool: ToolDefinition | undefined,
 ): SoulProjection | undefined {
   if (result.status !== "succeeded") return undefined;
-  if (!tool?.soulProjection) return undefined;
-  return projectResult(result, tool.soulProjection);
+  if (tool?.soulProjection) {
+    return projectResult(result, tool.soulProjection);
+  }
+  return projectToolResultFallback(result);
 }
 
 export function buildSoulExecutionContext(

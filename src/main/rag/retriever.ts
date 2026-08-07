@@ -1,5 +1,6 @@
 import { JsonVectorStore, SearchResult } from "./vectorstore";
 import { EmbeddingProvider, getEmbeddingProvider } from "./embedding";
+import { getReranker } from "./reranker";
 
 // ── @node-rs/jieba 分词（Node 24 兼容；nodejieba 已弃用） ──
 import { Jieba } from "@node-rs/jieba";
@@ -251,7 +252,31 @@ export class HybridRetriever {
     }));
 
     scored.sort((a, b) => b.score - a.score);
-    return scored.slice(0, topK);
+    const candidates = scored.slice(0, topK);
+
+    // ── Reranker 精排 ──
+    // 如果 reranker 可用，用 cross-encoder 对候选结果做精排
+    const reranker = getReranker();
+    if (reranker && candidates.length > 1) {
+      try {
+        const docs = candidates.map((c) => c.entry.text);
+        const reranked = await reranker.rerank(query, docs);
+        const scoreMap = new Map(reranked.map((r) => [r.text, r.score]));
+
+        // 用 reranker 分数重排，但保留原始 hybrid 分数作为参考
+        for (const c of candidates) {
+          const rerankScore = scoreMap.get(c.entry.text);
+          if (rerankScore !== undefined) {
+            c.score = rerankScore;
+          }
+        }
+        candidates.sort((a, b) => b.score - a.score);
+      } catch (err) {
+        console.warn("[HybridRetriever] reranker failed, using hybrid scores:", err);
+      }
+    }
+
+    return candidates;
   }
 
   private bm25Search(query: string, source?: string, topK = 15, options: RetrieveOptions = {}): SearchResult[] {

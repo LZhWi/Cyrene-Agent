@@ -9,8 +9,8 @@ const { identity } = vi.hoisted(() => ({
   identity: {
     value: {
       provider: "local",
-      model: "Xenova/all-MiniLM-L6-v2",
-      dimensions: 384,
+      model: "Xenova/bge-m3",
+      dimensions: 1024,
     },
   },
 }));
@@ -36,8 +36,8 @@ describe("sticker embedding cache", () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-sticker-cache-"));
     identity.value = {
       provider: "local",
-      model: "Xenova/all-MiniLM-L6-v2",
-      dimensions: 384,
+      model: "Xenova/bge-m3",
+      dimensions: 1024,
     };
   });
 
@@ -76,8 +76,8 @@ describe("sticker embedding cache", () => {
 
     identity.value = {
       ...identity.value,
-      model: "Xenova/bge-m3",
-      dimensions: 1024,
+      model: "Xenova/different-model",
+      dimensions: 768,
     };
     const changedProvider = provider();
     await buildCachedStickerEmbeddingIndex(changedProvider, builtIn, {}, dir);

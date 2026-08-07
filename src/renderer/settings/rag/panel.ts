@@ -6,7 +6,7 @@
 (function () {
   const cards = document.querySelectorAll<HTMLButtonElement>(".rag-model-card:not([data-reranker])");
   const KEY = "cyrene.rag.model";
-  const saved = localStorage.getItem(KEY) || "minilm";
+  const saved = localStorage.getItem(KEY) || "bgem3";
   cards.forEach((card) => {
     const value = card.dataset.value;
     if (!value) return;
@@ -26,7 +26,7 @@
         if (result?.ok) {
           console.log("[settings] embedding switched to", value, "cleared:", result.clearedEntries);
           if (result.clearedEntries && result.clearedEntries > 0) {
-            window.alert("已切换至 " + (value === "bgem3" ? "BGE-M3" : "MiniLM") + "。由于向量维度不同，已清除 " + result.clearedEntries + " 条旧向量记忆。");
+            window.alert("已切换至 BGE-M3。由于向量维度不同，已清除 " + result.clearedEntries + " 条旧向量记忆。");
           }
         } else {
           // Rollback on failure
@@ -55,7 +55,7 @@
 (function () {
   const cards = document.querySelectorAll<HTMLButtonElement>(".rag-model-card[data-reranker]");
   const KEY = "cyrene.reranker.mode";
-  const saved = localStorage.getItem(KEY) || "light";
+  const saved = localStorage.getItem(KEY) || "standard";
   cards.forEach((card) => {
     const value = card.dataset.value;
     if (!value) return;
@@ -85,16 +85,13 @@
 
 /* ===== Reranker install status (real on-disk check via IPC) ===== */
 (async () => {
-  const lightEl = document.getElementById("reranker-light-status");
   const standardEl = document.getElementById("reranker-standard-status");
   try {
     const status = await (window as any).settings?.getRerankerStatus?.();
     if (!status) return;
-    if (lightEl) lightEl.textContent = status.light ? "已下载 · 约 23MB" : "未下载 · 可选";
     if (standardEl) standardEl.textContent = status.standard ? "已下载 · 约 279MB" : "未下载 · 可选";
   } catch (err) {
     console.warn("[Reranker] status check failed:", err);
-    if (lightEl) lightEl.textContent = "状态未知";
     if (standardEl) standardEl.textContent = "状态未知";
   }
 })();
@@ -102,20 +99,16 @@
 /* ===== Embedding model status ===== */
 (async () => {
   const bgem3El = document.getElementById("embedding-bgem3-status");
-  const minilmEl = document.getElementById("embedding-minilm-status");
   try {
     const status = await window.modelConfig?.getModelInstallStatus?.();
     if (!status) {
       if (bgem3El) bgem3El.textContent = "状态未知";
-      if (minilmEl) minilmEl.textContent = "状态未知";
       return;
     }
     if (bgem3El) bgem3El.textContent = status.embedding?.bgem3 ? "已下载 · 约 570MB" : "未下载";
-    if (minilmEl) minilmEl.textContent = status.embedding?.minilm ? "已下载 · 约 23MB" : "未下载";
   } catch (err) {
     console.warn("[Embedding] status check failed:", err);
     if (bgem3El) bgem3El.textContent = "状态未知";
-    if (minilmEl) minilmEl.textContent = "状态未知";
   }
 })();
 
@@ -132,7 +125,7 @@
 
   function getSelectedModel(): string {
     const active = document.querySelector(".rag-model-card.is-active:not([data-reranker])") as HTMLElement | null;
-    return active?.dataset.value || "minilm";
+    return active?.dataset.value || "bgem3";
   }
 
   downloadBtn?.addEventListener("click", async () => {
@@ -179,7 +172,7 @@
   }
   deleteBtn?.addEventListener("click", async () => {
     const model = getSelectedModel();
-    const name = model === "minilm" ? "MiniLM" : "BGE-M3";
+    const name = "BGE-M3";
     var confirmed = await _showModal({ title: "删 除 模 型", message: "确 定 删 除 " + name + " 模 型 缓 存？下 次 使 用 需 重 新 下 载。", icon: "⚠️", confirmText: "删 除", cancelText: "取 消" });
     if (!confirmed) return;
     deleteBtn.disabled = true;

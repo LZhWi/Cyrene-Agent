@@ -8,8 +8,8 @@ const { embeddingIdentity, userDataDir } = vi.hoisted(() => ({
   embeddingIdentity: {
     value: {
       provider: "local",
-      model: "Xenova/all-MiniLM-L6-v2",
-      dimensions: 384,
+      model: "Xenova/bge-m3",
+      dimensions: 1024,
       endpoint: undefined as string | undefined,
     },
   },
@@ -41,8 +41,8 @@ describe("document cache", () => {
     userDataDir.value = tmpDir;
     embeddingIdentity.value = {
       provider: "local",
-      model: "Xenova/all-MiniLM-L6-v2",
-      dimensions: 384,
+      model: "Xenova/bge-m3",
+      dimensions: 1024,
       endpoint: undefined,
     };
   });
@@ -86,8 +86,8 @@ describe("document cache", () => {
     const first = createDocumentCacheKey({
       textSha256: "abc",
       embeddingProvider: "local",
-      embeddingModel: "Xenova/all-MiniLM-L6-v2",
-      dimensions: 384,
+      embeddingModel: "Xenova/bge-m3",
+      dimensions: 1024,
       chunkStrategyVersion: "document-chunks-v1",
       chunkSize: 1200,
       chunkOverlap: 200,

@@ -69,14 +69,13 @@ interface ModelConfig {
 }
 
 const LOCAL_MODELS: Record<string, ModelConfig> = {
-  minilm: { key: "minilm", hfName: "Xenova/all-MiniLM-L6-v2", dims: 384 },
-  bgem3:  { key: "bgem3",  hfName: "Xenova/bge-m3",          dims: 1024 },
+  bgem3: { key: "bgem3", hfName: "Xenova/bge-m3", dims: 1024 },
 };
 
-const DEFAULT_MODEL_KEY = "minilm";
+const DEFAULT_MODEL_KEY = "bgem3";
 
 // ── 本地 Pipeline ──
-// 每个模型 key 独立缓存 pipeline，支持多模型同时运行（minilm 管文档/记忆，bgem3 管场景识别）
+// bge-m3 是唯一的 embedding 模型，同时服务于 RAG 记忆/文档检索和场景识别
 const localPipelines: Map<string, any> = new Map();
 const localPipelineLoads: Map<string, Promise<any>> = new Map();
 let currentModelKey: string = DEFAULT_MODEL_KEY;
@@ -381,12 +380,14 @@ export function getCurrentModelKey(): string {
 
 export function getCurrentModelDims(): number {
   const config = LOCAL_MODELS[currentModelKey];
-  return config ? config.dims : 384;
+  return config ? config.dims : 1024;
 }
 
 export function switchEmbeddingModel(modelKey: string): void {
-  const config = LOCAL_MODELS[modelKey];
-  if (!config) throw new Error("Unknown embedding model: " + modelKey);
+  if (modelKey !== "bgem3") {
+    console.warn(`[Embedding] ignoring model switch to "${modelKey}" — bge-m3 is the only supported model`);
+    return;
+  }
   cachedProvider = null;
   localPipelines.delete(currentModelKey);
   localPipelineLoads.delete(currentModelKey);

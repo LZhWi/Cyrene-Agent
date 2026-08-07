@@ -54,7 +54,7 @@ describe("document index worker runner", () => {
     const runner = createDocumentIndexWorkerRunner({
       createWorker: () => controlled.worker,
       getCachedImport: vi.fn().mockResolvedValue(null),
-      getEmbeddingConfig: () => ({ provider: "local", modelKey: "minilm" }),
+      getEmbeddingConfig: () => ({ provider: "local", modelKey: "bgem3" }),
       createImportId: () => "import-batched",
       persistPreparedBatch,
       putCache,
@@ -84,7 +84,7 @@ describe("document index worker runner", () => {
     const runner = createDocumentIndexWorkerRunner({
       createWorker: () => controlled.worker,
       getCachedImport: vi.fn().mockResolvedValue(null),
-      getEmbeddingConfig: () => ({ provider: "local", modelKey: "minilm" }),
+      getEmbeddingConfig: () => ({ provider: "local", modelKey: "bgem3" }),
       createImportId: () => "import-test",
       persistPreparedBatch,
       putCache,
@@ -100,7 +100,7 @@ describe("document index worker runner", () => {
     };
     controlled.emit({ type: "prepared", result: prepared });
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(controlled.posted).toContainEqual({ type: "embed", embedding: { provider: "local", modelKey: "minilm" } });
+    expect(controlled.posted).toContainEqual({ type: "embed", embedding: { provider: "local", modelKey: "bgem3" } });
 
     controlled.emit({ type: "progress", completedChunks: 1, totalChunks: 2 });
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -124,7 +124,7 @@ describe("document index worker runner", () => {
     const runner = createDocumentIndexWorkerRunner({
       createWorker: () => controlled.worker,
       getCachedImport: vi.fn().mockResolvedValue(null),
-      getEmbeddingConfig: () => ({ provider: "local", modelKey: "minilm" }),
+      getEmbeddingConfig: () => ({ provider: "local", modelKey: "bgem3" }),
       createImportId: () => "import-lightweight",
       persistPreparedBatch: vi.fn().mockResolvedValue(undefined),
       putCache: vi.fn().mockResolvedValue(undefined),
@@ -136,7 +136,7 @@ describe("document index worker runner", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(job.reportProgress).toHaveBeenCalledWith({ status: "embedding", completedChunks: 0, totalChunks: 42 });
-    expect(controlled.posted).toContainEqual({ type: "embed", embedding: { provider: "local", modelKey: "minilm" } });
+    expect(controlled.posted).toContainEqual({ type: "embed", embedding: { provider: "local", modelKey: "bgem3" } });
 
     controlled.emit({ type: "embedded-batch", chunks: [{ text: "only batch payload crosses to main", index: 0, embedding: [1] }] });
     controlled.emit({ type: "completed" });

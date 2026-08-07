@@ -1,4 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+vi.mock("electron", () => ({
+  app: {
+    getPath: vi.fn((name: string) => `/mock/${name}`),
+    getAppPath: vi.fn(() => process.cwd()),
+    getVersion: vi.fn(() => "0.0.0"),
+    isPackaged: false,
+    whenReady: vi.fn(() => Promise.resolve()),
+    on: vi.fn(),
+  },
+}));
 import {
   buildSoulExecutionContext,
   formatSoulExecutionContext,
@@ -363,23 +373,32 @@ describe("buildSoulExecutionContext", () => {
   });
 
   describe("safe fallback", () => {
-    it("generates actions but no projections for tools without soulProjection", () => {
+    it("generates fallback projections for tools without soulProjection", () => {
       const ctx = buildSoulExecutionContext(
         [succeeded("unknown_tool", '{"data":"something"}')],
         [tool("unknown_tool")],
       );
       expect(ctx.actions).toHaveLength(1);
-      expect(ctx.projections).toEqual([]);
+      expect(ctx.projections).toHaveLength(1);
+      expect(ctx.projections[0]).toMatchObject({
+        kind: "entity_detail",
+        source: "external_untrusted",
+      });
     });
 
-    it("does not expose raw output for unconfigured tools", () => {
+    it("exposes sanitized summary for unconfigured tools", () => {
       const ctx = buildSoulExecutionContext(
         [succeeded("unknown_tool", '{"secret":"value"}')],
         [tool("unknown_tool")],
       );
       const serialized = JSON.stringify(ctx);
-      expect(serialized).not.toContain("secret");
-      expect(serialized).not.toContain("value");
+      // 自动 fallback 会提取 common fields（如 secret），作为 external_untrusted 暴露给 Soul
+      expect(serialized).toContain("secret");
+      expect(serialized).toContain("value");
+      expect(ctx.projections[0]).toMatchObject({
+        kind: "entity_detail",
+        source: "external_untrusted",
+      });
     });
 
     it("only generates projections for succeeded tools", () => {
@@ -618,24 +637,65 @@ describe("weather entity_detail projection", () => {
   });
 });
 
-// ── Projection 缺失兜底测试 ─────────────
+// ── 自动 fallback 投影测试 ──────────────
 
-describe("projection missing safety fallback", () => {
-  it("tool succeeds but has no soulProjection -> action exists but no projection", () => {
+describe("projection auto fallback", () => {
+  it("JSON output without soulProjection -> extracts common fields", () => {
     const noProjectionTool = tool("unknown_tool");
     const ctx = buildSoulExecutionContext(
-      [succeeded("unknown_tool", '{"data":"something"}')],
+      [succeeded("unknown_tool", '{"path":"/tmp/foo.txt","count":42}')],
       [noProjectionTool],
     );
     expect(ctx.actions).toHaveLength(1);
     expect(ctx.actions[0].executionStatus).toBe("succeeded");
-    expect(ctx.projections).toEqual([]);
+    expect(ctx.projections).toHaveLength(1);
+    const proj = ctx.projections[0];
+    expect(proj).toMatchObject({
+      kind: "entity_detail",
+      source: "external_untrusted",
+    });
+    if (proj.kind !== "entity_detail") return;
+    expect(proj.attributes.path).toBe("/tmp/foo.txt");
+    expect(proj.attributes.count).toBe(42);
   });
 
-  it("SOUL_PHASE_RULES contains fallback rule text", () => {
-    expect(SOUL_NO_TOOL_DIRECTIVE).toContain("投影缺失兜底");
-    expect(SOUL_NO_TOOL_DIRECTIVE).toContain("只能说明操作已执行");
-    expect(SOUL_NO_TOOL_DIRECTIVE).toContain("不能编造具体业务数据");
+  it("artifact path output without soulProjection -> trusted projection", () => {
+    const noProjectionTool = tool("file_writer");
+    const ctx = buildSoulExecutionContext(
+      [succeeded("file_writer", "[file_writer] 已生成：/tmp/report.docx")],
+      [noProjectionTool],
+    );
+    expect(ctx.projections).toHaveLength(1);
+    const proj = ctx.projections[0];
+    expect(proj).toMatchObject({
+      kind: "entity_detail",
+      source: "trusted_internal",
+      title: "report.docx",
+    });
+    if (proj.kind !== "entity_detail") return;
+    expect(proj.attributes.path).toBe("/tmp/report.docx");
+  });
+
+  it("plain text output without soulProjection -> summary projection", () => {
+    const noProjectionTool = tool("generic_notifier");
+    const ctx = buildSoulExecutionContext(
+      [succeeded("generic_notifier", "邮件已发送至 user@example.com")],
+      [noProjectionTool],
+    );
+    expect(ctx.projections).toHaveLength(1);
+    const proj = ctx.projections[0];
+    expect(proj).toMatchObject({
+      kind: "entity_detail",
+      source: "external_untrusted",
+    });
+    if (proj.kind !== "entity_detail") return;
+    expect(proj.attributes.summary).toContain("邮件已发送至");
+  });
+
+  it("SOUL_PHASE_RULES allows summarizing tool output", () => {
+    expect(SOUL_NO_TOOL_DIRECTIVE).toContain("你可以基于以下信息向用户总结执行结果");
+    expect(SOUL_NO_TOOL_DIRECTIVE).toContain("工具明确返回的内容，你可以直接陈述或自然总结");
+    expect(SOUL_NO_TOOL_DIRECTIVE).toContain("不要补充工具返回中没有的细节");
   });
 });
 

@@ -118,7 +118,7 @@ import {
   saveSchedulerTask, toggleSchedulerTask, fireSchedulerTask,
   deleteSchedulerTask, toggleSchedulerHistory,
 } from "./scheduler/panel";
-import { loadMusicPanel, disposeMusicPanel } from "./music/panel";
+import { loadMusicPanel, disposeMusicPanel, getMusicApi } from "./music/panel";
 import { loadChannelsPanel } from "./channels/panel";
 import { renderProactiveDeliveryAvailability } from "./channels/panel";
 import "./asr/panel";  // 副作用导入：执行事件绑定 + 初始加载
@@ -1283,7 +1283,7 @@ transportSelect.addEventListener("change", () => {
 
 // 测试视觉模型按钮（仅在多模态开关 OFF 时可见）
 testVisionBtn.addEventListener("click", async () => {
-  const synced = isVisionSynced();
+  const synced = multimodalToggle.checked;
   const baseUrl = synced ? baseUrlInput.value : visionBaseUrlInput.value;
   const apiKey = synced ? apiKeyInput.value : visionApiKeyInput.value;
   const model = synced ? getCurrentModelValue() : visionModelInput.value;
@@ -1737,3 +1737,113 @@ musicReturnBtn?.addEventListener("click", () => {
 	});
 
 
+
+// ── 清空聊天历史 ─────────────────────────────────────────────
+clearChatHistoryBtn.addEventListener("click", async () => {
+  if (!window.confirm("清空所有聊天会话？\n此操作会删除全部历史对话，无法恢复。")) return;
+  try {
+    const sessions = await window.chatStore?.list();
+    if (sessions && sessions.length > 0) {
+      // 串行删除（store 不支持批量删除；会话数量不会大，可接受）
+      for (const s of sessions) {
+        await window.chatStore?.delete(s.id);
+      }
+    }
+    setGeneralSaveStatus("所有聊天会话已清空", "is-ok");
+  } catch (err) {
+    console.warn("[settings] 清空聊天会话失败:", err);
+    setGeneralSaveStatus("清空失败，请查看终端日志", "is-error");
+  }
+});
+
+// ── 预设卡切换厂商 ───────────────────────────────────────────
+presetCards?.addEventListener("click", (e) => {
+  const card = (e.target as HTMLElement).closest(".preset-card") as HTMLElement | null;
+  if (!card || card.classList.contains("is-disabled")) return;
+  const cardProviderName = card.dataset.provider;
+  if (!cardProviderName) return;
+
+  // 切厂商前先把当前厂商的输入值快照进缓存，避免覆盖丢失
+  captureActiveProviderProfile();
+
+  const providerName = getCustomEndpointMode(cardProviderName)
+    ? getCustomEndpointProvider(apiState.customEndpointMode)
+    : cardProviderName;
+  // 从缓存里取目标厂商的旧配置；没有缓存就用 preset 默认值
+  const cached = providerProfileCache[providerName];
+  applyPreset(
+    providerName,
+    cached?.model,
+    cached?.apiKey,
+    cached?.baseUrl,
+    cached?.displayName,
+    cached?.explicitTransport,
+  );
+  setSaveStatus(cached ? "已切回上次配置" : "已应用预设，填写 API Key 后保存");
+});
+
+// ── 自定义端点云端/本地模式切换 ───────────────────────────────
+customEndpointControls?.addEventListener("click", (e) => {
+  const button = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-custom-endpoint-mode]");
+  const nextMode = button?.dataset.customEndpointMode as CustomEndpointMode | undefined;
+  if (!nextMode || nextMode === apiState.customEndpointMode) return;
+
+  captureActiveProviderProfile();
+  apiState.customEndpointMode = nextMode;
+  const providerName = getCustomEndpointProvider(nextMode);
+  const cached = providerProfileCache[providerName];
+  applyPreset(
+    providerName,
+    cached?.model,
+    cached?.apiKey,
+    cached?.baseUrl,
+    cached?.displayName,
+    cached?.explicitTransport,
+  );
+  setSaveStatus(cached ? "已切回上次配置" : nextMode === "local"
+    ? "请填写本地服务地址和模型 ID"
+    : "请填写云端服务地址、API Key 和模型 ID");
+});
+
+// ── 偏好设置：聊天社交上下文 / 自定义风格 / 表单提交 ─────────
+chatSocialContextEnabledInput.addEventListener("change", () => {
+  setPreferencesSaveStatus("有未保存的更改");
+});
+
+customStyleSamplingBtn?.addEventListener("click", () => {
+  openCustomStyleModal();
+});
+
+customStylePromptBtn?.addEventListener("click", async () => {
+  try {
+    const result = await window.settings?.openCustomStylePrompt?.();
+    if (!result?.ok) {
+      setPreferencesSaveStatus("打开 Prompt 文件失败", "is-error");
+      return;
+    }
+    setPreferencesSaveStatus("已打开 Prompt 文件位置", "is-ok");
+  } catch {
+    setPreferencesSaveStatus("打开 Prompt 文件失败", "is-error");
+  }
+});
+
+preferencesForm.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  setPreferencesSaveStatus("保存中…");
+  try {
+    await window.settings!.saveGeneral({
+      citaEnabled: citaEnabledInput.checked,
+      citaSemanticEngine: "remote",
+      chatSocialContextEnabled: chatSocialContextEnabledInput.checked,
+      defaultChatMode: "chat",
+      segmentedOutputMode: "off",
+      mobileMessageSegmentation: getMobileMessageSegmentationValue(),
+      proactiveChatMode: getProactiveChatValue(),
+      proactiveDeliveryTarget: getProactiveDeliveryValue(),
+      screenshotHotkey: screenshotHotkeyInput?.value || "Alt+Shift+S",
+    });
+    setPreferencesSaveStatus("已保存", "is-ok");
+  } catch {
+    setPreferencesSaveStatus("保存失败", "is-error");
+  }
+});

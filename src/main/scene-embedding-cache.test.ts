@@ -64,8 +64,8 @@ describe("scene embedding cache", () => {
 
     identity.value = {
       ...identity.value,
-      model: "Xenova/all-MiniLM-L6-v2",
-      dimensions: 384,
+      model: "Xenova/different-model",
+      dimensions: 768,
     };
     const changedProvider = provider();
     await buildCachedSceneIndex(changedProvider, dir);

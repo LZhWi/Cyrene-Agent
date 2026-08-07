@@ -4,8 +4,9 @@
 
 import { setPreferencesSaveStatus } from "../shared/save-status";
 import { screenshotHotkeyInput } from "../appearance/dom";
-import { stickerAddError, stickerAddConfirm, stickerAddCancel } from "./dom";
-import { addStickerBtn } from "../shared/shell";
+import { preferencesState } from "./state";
+import { stickerAddError, stickerAddConfirm, stickerAddCancel, stickerAddPickBtn, stickerAddFileName, stickerAddId, stickerAddDesc, stickerAddPhrases, stickerAddOverlay } from "./dom";
+import { addStickerBtn, openStickerManagerBtn } from "../shared/shell";
 
 // ── 截图热键捕获 ──
 // 聚焦时临时挂起全局快捷键（防止录入时触发截图），失焦恢复。
@@ -48,48 +49,6 @@ screenshotHotkeyInput?.addEventListener("keydown", (e) => {
 
   screenshotHotkeyInput!.value = parts.join("+");
   setPreferencesSaveStatus("有未保存的更改");
-});
-
-chatSocialContextEnabledInput.addEventListener("change", () => {
-  setPreferencesSaveStatus("有未保存的更改");
-});
-
-customStyleSamplingBtn?.addEventListener("click", () => {
-  openCustomStyleModal();
-});
-
-customStylePromptBtn?.addEventListener("click", async () => {
-  try {
-    const result = await window.settings?.openCustomStylePrompt?.();
-    if (!result?.ok) {
-      setPreferencesSaveStatus("打开 Prompt 文件失败", "is-error");
-      return;
-    }
-    setPreferencesSaveStatus("已打开 Prompt 文件位置", "is-ok");
-  } catch {
-    setPreferencesSaveStatus("打开 Prompt 文件失败", "is-error");
-  }
-});
-
-preferencesForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  setPreferencesSaveStatus("保存中…");
-  try {
-    await window.settings!.saveGeneral({
-      citaEnabled: citaEnabledInput.checked,
-      citaSemanticEngine: "remote",
-      chatSocialContextEnabled: chatSocialContextEnabledInput.checked,
-      defaultChatMode: "chat",
-      segmentedOutputMode: "off",
-      mobileMessageSegmentation: getMobileMessageSegmentationValue(),
-      proactiveChatMode: getProactiveChatValue(),
-      proactiveDeliveryTarget: getProactiveDeliveryValue(),
-      screenshotHotkey: screenshotHotkeyInput?.value || "Alt+Shift+S",
-    });
-    setPreferencesSaveStatus("已保存", "is-ok");
-  } catch {
-    setPreferencesSaveStatus("保存失败", "is-error");
-  }
 });
 
 openStickerManagerBtn.addEventListener("click", async () => {

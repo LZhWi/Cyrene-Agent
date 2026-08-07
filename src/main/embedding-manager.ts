@@ -12,7 +12,6 @@ interface ModelInfo {
 }
 
 const MODELS: ModelInfo[] = [
-  { key: "minilm", name: "Xenova/all-MiniLM-L6-v2", dir: "Xenova\\all-MiniLM-L6-v2", onnx: "onnx\\model_quantized.onnx" },
   { key: "bgem3", name: "Xenova/bge-m3", dir: "Xenova\\bge-m3", onnx: "onnx\\model_quantized.onnx" },
 ];
 

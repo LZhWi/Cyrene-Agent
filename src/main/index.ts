@@ -467,9 +467,17 @@ app.whenReady().then(async () => {
     }
     // 初始化 MCP Manager；scheduler 启动前等待一次，避免近即时任务早于 MCP 工具恢复。
     await initMcpManager();
-    logger.info(LogTag.Cyrene, "RAG initialized OK");
+    logger.info(LogTag.RAG, "RAG initialized OK");
 
-    logger.info(LogTag.Reranker, "startup preload skipped; reranker initializes when changed in settings.");
+    // 初始化 reranker：根据设置决定是否启用（默认 standard）
+    // initReranker 内部会检测模型是否安装，未安装时自动降级为 none
+    try {
+      const { initReranker } = await import("./rag/reranker");
+      await initReranker(modelSettings.rerankerMode);
+      logger.info(LogTag.Reranker, "initialized with mode:", modelSettings.rerankerMode);
+    } catch (err) {
+      logger.warn(LogTag.Reranker, "startup init failed:", err);
+    }
   } catch (err) {
     console.error("[Cyrene] RAG init FAILED:", err);
   }

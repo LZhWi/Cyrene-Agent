@@ -265,7 +265,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
       const result = await switchEmbeddingModel(modelKey);
       if (result.ok) {
         await reconcileUserMemoryIndex();
-        saveModelSettings({ embeddingModel: modelKey as "minilm" | "bgem3" });
+        saveModelSettings({ embeddingModel: "bgem3" });
         broadcastModelConfigChanged();
         embeddingIndexService.invalidateStickerEmbeddingIndex();
         embeddingIndexService.refreshStickerEmbeddingIndex("embedding-model-switch");
@@ -278,7 +278,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     }
   });
 
-  ipcMain.handle(IPC.RERANKER_SET_MODE, async (_event, mode: "light" | "standard" | "none") => {
+  ipcMain.handle(IPC.RERANKER_SET_MODE, async (_event, mode: "standard" | "none") => {
     const current = getModelSettings();
     saveModelSettings({ ...current, rerankerMode: mode });
     await initReranker(mode);
@@ -317,7 +317,6 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
   ipcMain.handle(IPC.EMBEDDING_GET_STATUS, async () => {
     const cacheDir = path.join(os.homedir(), ".cache", "huggingface");
     const models = {
-      minilm: { dir: "Xenova\\all-MiniLM-L6-v2", onnx: "onnx\\model_quantized.onnx", name: "MiniLM" },
       bgem3: { dir: "Xenova\\bge-m3", onnx: "onnx\\model_quantized.onnx", name: "BGE-M3" },
     };
     const result: Record<string, { installed: boolean; sizeBytes: number }> = {};
@@ -335,7 +334,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
 
   ipcMain.handle(IPC.EMBEDDING_DOWNLOAD, async (_event, payload: unknown) => {
     const p = payload as { model?: string; mirror?: string };
-    const model = p.model || "minilm";
+    const model = p.model || "bgem3";
     const mirror = p.mirror || "official";
     try {
       const win = BrowserWindow.getFocusedWindow();
@@ -351,7 +350,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
 
   ipcMain.handle(IPC.EMBEDDING_DELETE, async (_event, payload: unknown) => {
     const p = payload as { model?: string };
-    const model = p.model || "minilm";
+    const model = p.model || "bgem3";
     try {
       deleteEmbeddingModel(model);
       return { ok: true };

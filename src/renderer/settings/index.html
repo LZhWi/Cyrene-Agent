@@ -749,14 +749,9 @@
                 <strong>Embedding 模型</strong>
                 <div class="rag-model-options">
                   <button type="button" class="rag-model-card is-active" data-value="bgem3">
-                    <span class="rag-model-card__title">专业 BGE-M3</span>
+                    <span class="rag-model-card__title">BGE-M3</span>
                     <span class="rag-model-card__desc">中文效果优秀，支持贴纸语义匹配和场景语气注入。</span>
                     <em id="embedding-bgem3-status">检测中...</em>
-                  </button>
-                  <button type="button" class="rag-model-card" data-value="minilm">
-                    <span class="rag-model-card__title">轻量 MiniLM</span>
-                    <span class="rag-model-card__desc">兼容项，中文效果一般。</span>
-                    <em id="embedding-minilm-status">检测中...</em>
                   </button>
                 </div>
               </div>
@@ -772,13 +767,8 @@
               <div class="agent-setting-subgroup" style="margin-top:12px">
                 <strong>Rerank 重排序</strong>
                 <div class="rag-model-options">
-                  <button type="button" class="rag-model-card is-active" data-value="light" data-reranker="1">
-                    <span class="rag-model-card__title">轻量 ms-marco-MiniLM</span>
-                    <span class="rag-model-card__desc">快速重排，适合日常闲聊，约 50ms/对。</span>
-                    <em id="reranker-light-status">检测中...</em>
-                  </button>
-                  <button type="button" class="rag-model-card" data-value="standard" data-reranker="1">
-                    <span class="rag-model-card__title">标准 bge-reranker-base</span>
+                  <button type="button" class="rag-model-card is-active" data-value="standard" data-reranker="1">
+                    <span class="rag-model-card__title">bge-reranker-base</span>
                     <span class="rag-model-card__desc">精准重排，适合长文档和专业检索，约 200ms/对。</span>
                     <em id="reranker-standard-status">检测中...</em>
                   </button>

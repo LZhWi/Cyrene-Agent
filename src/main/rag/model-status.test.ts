@@ -36,6 +36,9 @@ import {
   checkRerankerModelInstalled,
 } from "./model-status";
 
+// checkRerankerModelInstalled now takes no arguments (only "standard" exists)
+void checkRerankerModelInstalled;
+
 const REQUIRED_FILES = ["tokenizer.json", "config.json", "onnx/model_quantized.onnx"];
 
 function ensureFakeDir(...parts: string[]): string {
@@ -141,22 +144,9 @@ describe("model-status: project-side detection", () => {
     expect(detail.existingProjectDir).toBeNull();
   });
 
-  it("minilm is detected when models/Xenova/all-MiniLM-L6-v2 is installed", () => {
-    ensureFakeDir("models", "Xenova", "all-MiniLM-L6-v2");
-    const detail = getModelInstallStatusDetail("embedding", "minilm");
-    expect(detail.installed).toBe(true);
-    expect(detail.source).toBe("project");
-    expect(detail.matchedAt).toBe(path.join(ISOLATED_ROOT, "models", "Xenova", "all-MiniLM-L6-v2"));
-  });
-
-  it("reranker-light is detected when models/ms-marco-MiniLM-L-6-v2 is installed", () => {
-    ensureFakeDir("models", "ms-marco-MiniLM-L-6-v2");
-    expect(checkRerankerModelInstalled("light")).toBe(true);
-  });
-
   it("reranker-standard is detected when models/bge-reranker-base is installed", () => {
     ensureFakeDir("models", "bge-reranker-base");
-    expect(checkRerankerModelInstalled("standard")).toBe(true);
+    expect(checkRerankerModelInstalled()).toBe(true);
   });
 });
 
@@ -234,7 +224,6 @@ describe("model-status: getModelInstallStatus aggregate", () => {
 
     const status = getModelInstallStatus();
     expect(status.embedding.bgem3).toBe(true);
-    expect(status.embedding.minilm).toBe(false);
   });
 
   it("returns false for bgem3 when project models/Xenova/bge-m3 is incomplete (HF cache suppressed)", () => {
@@ -251,8 +240,6 @@ describe("model-status: getModelInstallStatus aggregate", () => {
 
     const status = getModelInstallStatus();
     expect(status.embedding.bgem3).toBe(true);
-    expect(status.embedding.minilm).toBe(false);
     expect(status.reranker.standard).toBe(true);
-    expect(status.reranker.light).toBe(false);
   });
 });

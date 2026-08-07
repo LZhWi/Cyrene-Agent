@@ -23,7 +23,7 @@ export interface PublicModelConfig {
   connected: boolean;
   runtimeSync: "off" | "local" | "llm";
   stickerSize: StickerSize;
-  rerankerMode: "light" | "standard" | "none";
+  rerankerMode: "standard" | "none";
 }
 
 // 单个厂商的可缓存配置：用户切到别的厂商再切回来，这三个字段从这里恢复。
@@ -129,8 +129,8 @@ export interface ModelSettings {
   citaRepairBudgetSec: number;
   /** Action Gate 结构化输出重试总预算（秒）。5-40，默认 10。 */
   actionGateRepairBudgetSec: number;
-  rerankerMode: "light" | "standard" | "none";
-  embeddingModel: "minilm" | "bgem3";
+  rerankerMode: "standard" | "none";
+  embeddingModel: "bgem3";
   /**
    * Embedding 维度（可选，仅 cloud 模式有效）。
    * 留空 = 首次请求自动探测；填写 = 作为严格声明并与实际响应校验。
@@ -173,8 +173,8 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   perCallTimeoutSec: 75,
   citaRepairBudgetSec: 8,
   actionGateRepairBudgetSec: 10,
-  rerankerMode: "light",
-  embeddingModel: "minilm",
+  rerankerMode: "standard",
+  embeddingModel: "bgem3",
   multimodal: false,
   contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
 };
@@ -312,8 +312,8 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
     actionGateRepairBudgetSec: typeof input?.actionGateRepairBudgetSec === "number" && Number.isFinite(input.actionGateRepairBudgetSec)
       ? Math.max(5, Math.min(40, Math.round(input.actionGateRepairBudgetSec)))
       : 10,
-    rerankerMode: input?.rerankerMode === "standard" || input?.rerankerMode === "none" ? input.rerankerMode : "light",
-    embeddingModel: input?.embeddingModel === "bgem3" ? "bgem3" : "minilm",
+    rerankerMode: input?.rerankerMode === "none" ? "none" : "standard",
+    embeddingModel: "bgem3",
     embeddingDimensions: typeof input?.embeddingDimensions === "number"
       && Number.isFinite(input.embeddingDimensions)
       && input.embeddingDimensions > 0

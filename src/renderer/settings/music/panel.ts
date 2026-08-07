@@ -22,7 +22,7 @@ import {
 } from "../../../shared/music-view-state";
 import { requestTrackPlayback } from "../music-playback";
 
-function getMusicApi(): MusicApi | null {
+export function getMusicApi(): MusicApi | null {
   const w = window as unknown as { music?: MusicApi };
   return w.music ?? null;
 }

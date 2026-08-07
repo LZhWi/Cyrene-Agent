@@ -38,6 +38,7 @@ exports.deriveState = deriveState;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
 const worldbook_constants_1 = require("./worldbook-constants");
+const logger_1 = require("../logger");
 exports.DEFAULT_DMAE_PARAMS = {
     maxScore: 100,
     promptThreshold: 30,
@@ -146,7 +147,7 @@ class WorldbookManager {
         }
         // v1 持久化 seam：预留，暂为空（重启回 0）
         this.loadState();
-        console.log(`[Worldbook] loaded ${allEntries.length} entries from ${files.length} files; DMAE state initialized for ${this.state.size} non-permanent entries`);
+        logger_1.logger.info(logger_1.LogTag.Worldbook, `loaded ${allEntries.length} entries from ${files.length} files; DMAE state initialized for ${this.state.size} non-permanent entries`);
     }
     // 从内存 entries 加载（不读 fs）：simulator / 测试用。
     // 复用 loadFromDirectory 的状态初始化逻辑，保证 sim 和生产用同一套初始化路径。
