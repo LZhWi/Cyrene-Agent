@@ -36,10 +36,13 @@ describe("scoreScene", () => {
     expect(scoreScene("morning", snap({ hour: 11 }), emptyWeather, state, Date.now())).toBe(0);
   });
 
-  it("morning and evening check-in are mutually exclusive per day", () => {
-    const fired = { ...state, todayFired: { daily_checkin: true } };
-    expect(scoreScene("morning", snap({ hour: 8, minute: 30 }), emptyWeather, fired, Date.now())).toBe(0);
-    expect(scoreScene("evening_checkin", snap({ hour: 20 }), emptyWeather, fired, Date.now())).toBe(0);
+  it("morning and evening check-in count their daily quota separately", () => {
+    const morningFired = { ...state, todayFired: { morning: true } };
+    expect(scoreScene("morning", snap({ hour: 8, minute: 30 }), emptyWeather, morningFired, Date.now())).toBe(0);
+    expect(scoreScene("evening_checkin", snap({ hour: 20 }), emptyWeather, morningFired, Date.now())).toBe(65);
+    const eveningFired = { ...state, todayFired: { evening_checkin: true } };
+    expect(scoreScene("evening_checkin", snap({ hour: 20 }), emptyWeather, eveningFired, Date.now())).toBe(0);
+    expect(scoreScene("morning", snap({ hour: 8, minute: 30 }), emptyWeather, eveningFired, Date.now())).toBe(85);
   });
 
   it("evening_checkin is low-weight and peaks around 20:00", () => {
@@ -52,7 +55,8 @@ describe("scoreScene", () => {
     const twoHoursAgo = 2 * 60 * 60 * 1000;
     expect(scoreScene("topic_followup", snap({ hour: 14, minute: 30, lastChatAgoMs: twoHoursAgo }), emptyWeather, state, Date.now())).toBe(45);
     expect(scoreScene("topic_followup", snap({ hour: 14, minute: 30, lastChatAgoMs: 30 * 60 * 1000 }), emptyWeather, state, Date.now())).toBe(0);
-    expect(scoreScene("topic_followup", snap({ hour: 14, minute: 30, lastChatAgoMs: 7 * 60 * 60 * 1000 }), emptyWeather, state, Date.now())).toBe(0);
+    expect(scoreScene("topic_followup", snap({ hour: 14, minute: 30, lastChatAgoMs: 7 * 60 * 60 * 1000 }), emptyWeather, state, Date.now())).toBe(45);
+    expect(scoreScene("topic_followup", snap({ hour: 14, minute: 30, lastChatAgoMs: 25 * 60 * 60 * 1000 }), emptyWeather, state, Date.now())).toBe(0);
     expect(scoreScene("topic_followup", snap({ hour: 14, minute: 30, lastChatAgoMs: twoHoursAgo, idleSec: 180 }), emptyWeather, state, Date.now())).toBe(0);
   });
 

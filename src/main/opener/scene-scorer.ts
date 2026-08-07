@@ -48,9 +48,6 @@ function isCoolingDown(scene: SceneId, state: OpenerState, now: number): boolean
 function isTodayFired(scene: SceneId, state: OpenerState): boolean {
   const cfg = SCENE_CONFIGS.find(c => c.id === scene);
   if (!cfg?.todayFiredFlag) return false;
-  if (cfg.todayFiredFlag === "daily_checkin") {
-    return Boolean(state.todayFired.daily_checkin || state.todayFired.morning || state.todayFired.evening_checkin);
-  }
   return Boolean(state.todayFired[cfg.todayFiredFlag]);
 }
 
@@ -73,7 +70,7 @@ function baseScore(
     case "topic_followup": {
       if (minuteOfDay < 11 * 60 + 30 || minuteOfDay > 23 * 60) return 0;
       if (snap.idleSec >= 180) return 0;
-      if (snap.lastChatAgoMs < 60 * 60 * 1000 || snap.lastChatAgoMs > 6 * 60 * 60 * 1000) return 0;
+      if (snap.lastChatAgoMs < 60 * 60 * 1000 || snap.lastChatAgoMs > 24 * 60 * 60 * 1000) return 0;
       return 35 + timeWindowMatchScore(minuteOfDay, 11 * 60 + 30, 14 * 60 + 30, 23 * 60, 10);
     }
     case "evening_checkin": {

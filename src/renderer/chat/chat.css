@@ -48,10 +48,33 @@ body {
   opacity: 0.58;
 }
 
-/* pearl-white 整体背景统一为很淡的粉白：卡片白叠 6% 粉。
-   html 前缀提权 (0,2,1)：theme.css 后置加载且同为 (0,2,0)，必须压过。 */
+/* pearl-white 整体背景统一为很淡的粉白：卡片白叠 2.5% 粉（演进：96%+4% →
+   97%+3% → 98%+2% → 还原 97%+3% → 97.5%+2.5%，取两档中间值整体提亮）。
+   html 前缀提权 (0,2,1)：theme.css 后置加载且同为 (0,2,0)，必须压过。
+   （曾试过底色层 70% 透明 / 上实下透渐变让头像透出，用户描述不清
+   效果不对，均已还原；底色保持完全不透明。） */
 html[data-ui-theme="pearl-white"] .chat {
-  background: color-mix(in srgb, var(--rb-card-bg) 94%, var(--rb-pink-500));
+  background: color-mix(in srgb, var(--rb-card-bg) 97.5%, var(--rb-pink-500));
+}
+
+/* pearl-white 环境柔光斑：多层淡粉径向渐变叠在底色上，避免大面积
+   纯色显得单调。(0,3,1) 压过 theme.css 的 pearl-white .chat::before 规则。
+   光斑浓度定档：左上 0.07（底色从 2% 还原回 3% 粉时，为保持左上角观感
+   不变同步下调 0.01 补偿）、右下粉 0.08、右上 0.055。
+   对角白色提亮层加强并放宽范围，配合底色提亮。 */
+html[data-ui-theme="pearl-white"] .chat::before {
+  opacity: 1;
+  background:
+    radial-gradient(48% 40% at 12% 0%, rgba(236, 72, 153, 0.07), transparent 72%),
+    radial-gradient(55% 48% at 92% 100%, rgba(244, 114, 182, 0.08), transparent 72%),
+    radial-gradient(34% 30% at 88% 8%, rgba(236, 72, 153, 0.055), transparent 70%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.55), transparent 42%);
+}
+
+/* 漂浮光斑（粒子 canvas）在 pearl-white 下隐藏：浅底上观感杂乱，
+   用户要求去掉。(0,3,1) 压过 theme.css 的 0.10。 */
+html[data-ui-theme="pearl-white"] .chat__particles {
+  opacity: 0;
 }
 
 /* theme.css 还给 .chat__main / .chat__messages 刷了不透明纯白底（三段式分层），
@@ -61,16 +84,81 @@ html[data-ui-theme="pearl-white"] .chat__messages {
   background: transparent;
 }
 
-/* 输入区灰带（theme.css 给的 --rb-bg-2）同样并入淡粉白整体底色。 */
-html[data-ui-theme="pearl-white"] .chat__input,
+/* 输入区已改为悬浮单卡片（对齐上游 Playa-0v0）：pearl-white 卡片用
+   96% 叠粉的淡薰衣草白（≈截图 #F5F0F8）+ 轻阴影；文件标签带变透明。
+   (0,2,1) 压过 theme.css 的 --rb-bg-2 灰带规则。
+   （曾加过整卡 opacity: 0.7，用户要求还原，卡片保持完全不透明。） */
+html[data-ui-theme="pearl-white"] .chat__input {
+  background: color-mix(in srgb, var(--rb-card-bg) 96%, var(--rb-pink-500));
+  border-color: rgba(0, 0, 0, 0.05);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+html[data-ui-theme="pearl-white"] .chat__input:hover {
+  border-color: rgba(0, 0, 0, 0.09);
+  box-shadow: 0 3px 12px rgba(0, 0, 0, 0.07);
+}
+html[data-ui-theme="pearl-white"] .chat__input:focus-within {
+  border-color: rgba(236, 72, 153, 0.35);
+  box-shadow: 0 0 0 3px var(--rb-pink-100), 0 2px 8px rgba(0, 0, 0, 0.05);
+}
 html[data-ui-theme="pearl-white"] .chat__file-tags {
-  background: color-mix(in srgb, var(--rb-card-bg) 94%, var(--rb-pink-500));
+  background: transparent;
 }
 
-/* AI 气泡：theme.css 给的是不透明浅灰底，这里改成白色 60% 不透明，
-   让淡粉底色微微透出。(0,3,1) 特异性压过 theme.css 的 (0,2,2)。 */
+/* textarea 本身透明：theme.css 给 #input 的输入框配方（不透明底）与
+   聚焦描边需中和掉，焦点反馈由整张卡片承担。(1,2,1) 压过
+   theme.css 的 (1,2,0)。 */
+html[data-ui-theme="pearl-white"] #input,
+html[data-ui-theme="pearl-white"] #input:focus {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
+/* 底部功能行图标改裸图标（对齐上游截图）：theme.css 给
+   .chat__attach / .chat__sticker-btn 的浅白灰亚克力盒子在此压回
+   透明 + 灰图标；选中/带文件态的粉系着色仍由 theme.css 接管。 */
+html[data-ui-theme="pearl-white"] .chat__attach,
+html[data-ui-theme="pearl-white"] .chat__sticker-btn {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--rb-text-muted);
+}
+html[data-ui-theme="pearl-white"] .chat__attach:hover,
+html[data-ui-theme="pearl-white"] .chat__sticker-btn:hover {
+  background: rgba(236, 72, 153, 0.06);
+  border-color: transparent;
+  box-shadow: none;
+  color: var(--rb-pink-600);
+}
+
+/* 发送按钮随上游截图：浅灰圆底 + 灰箭头（粉色渐变仅保留在
+   暗色主题）。(0,2,1)/(0,4,1) 压过 theme.css 的主按钮配方。 */
+html[data-ui-theme="pearl-white"] .chat__send {
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--rb-text-muted);
+  box-shadow: none;
+}
+html[data-ui-theme="pearl-white"] .chat__send:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.10);
+  color: var(--rb-text-default);
+  box-shadow: none;
+}
+
+/* AI 气泡：纯白亚克力 rgba(255,255,255,0.60)（原灰白 250,251,253 用户要求
+   改纯白），同款模糊度，让淡粉底色微微透出。(0,3,1) 特异性压过 theme.css
+   的 (0,2,2)。文字用深软炭灰 #3d3a46（带紫调，对比度约 10:1）；
+   气泡内 markdown 元素（代码/链接等）仍走各自配色。
+   阴影：用户气泡保持基础 .msg__bubble 原样（0 10px 28px 0.18）；
+   AI 气泡单独淡化（theme.css 给的 --rb-shadow-card 也被此规则压过，
+   外阴影 0.05 → 0.03）。 */
 html[data-ui-theme="pearl-white"] .msg--model .msg__bubble {
   background: rgba(255, 255, 255, 0.60);
+  color: #3d3a46;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.03), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
 }
 
 /* ===== Floating particles (dreamy pink motes) ===== */
@@ -404,7 +492,9 @@ html[data-ui-theme="pearl-white"] .msg--model .msg__bubble {
   align-items: center;
   gap: 1px;
   width: max-content;
-  max-width: 100%;
+  /* 上限是「两侧控件之间的空闲区」而非整个标题栏：窗口过窄时钳制宽度，
+     配合 margin:auto 仍居中，不再溢出压到右侧控件（JS 会先降级为纯图标） */
+  max-width: max(0px, calc(100% - var(--ms-left, 300px) - var(--ms-right, 440px)));
   height: 36px;
   padding: 3px;
   background: rgba(255, 255, 255, 0.18);
@@ -486,6 +576,16 @@ html[data-ui-theme="pearl-white"] .msg--model .msg__bubble {
   line-height: 1;
 }
 
+/* 窄空间降级：空闲区装不下完整分段条时收成纯图标，避免与两侧控件重叠。
+   类由 main.ts positionModeSwitch() 按实测几何切换，title 提示保留语义。 */
+.mode-switch--compact .mode-switch__btn {
+  padding: 0 9px;
+}
+
+.mode-switch--compact .mode-switch__btn span {
+  display: none;
+}
+
 /* pearl-white 主题：容器与控件统一浅白灰亚克力（60% 不透明）+ 未选中段灰字灰图标 + 激活胶囊淡粉紫（浅底深字） */
 [data-ui-theme="pearl-white"] .mode-switch {
   background: rgba(246, 247, 250, 0.60);
@@ -554,11 +654,8 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
   filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.18));
 }
 
-/* 窄窗口收进图标-only，避免与左侧标题胶囊/右侧按钮组打架 */
-@media (max-width: 1120px) {
-  .mode-switch .mode-switch__btn { padding: 0 9px; }
-  .mode-switch .mode-switch__btn span { display: none; }
-}
+/* 窄窗口降级已改为按实测空闲区判定：见上方 .mode-switch--compact 规则，
+   由 main.ts positionModeSwitch() 切换（视口宽度阈值无法反映两侧控件的实际宽度）。 */
 
 .chat__icon-btn,
 .chat__winbtn {
@@ -1028,6 +1125,11 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
   background: rgba(255, 255, 255, 0.06);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.10);
   -webkit-user-drag: none;
+  /* pearl-white 的 AI 气泡带 backdrop-filter（创建层叠上下文），绘制阶段会被
+     抬到普通流内容之上，气泡阴影反过来盖住后面的表情包；给 sticker 一个
+     层叠位置压回气泡之上（两主题均安全，暗色下气泡无 backdrop-filter）。 */
+  position: relative;
+  z-index: 1;
 }
 
 .msg__attachments {
@@ -1311,14 +1413,14 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
 }
 
 
-/* ── 文件上传按钮 ── */
+/* ── 文件上传按钮（底部功能行裸图标，对齐上游） ── */
 .chat__attach {
   flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--rb-border-soft);
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--rb-text-muted);
   font-size: 18px;
   cursor: pointer;
@@ -1331,9 +1433,8 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
 }
 
 .chat__attach:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--rb-text-default);
-  border-color: var(--rb-border-strong);
 }
 
 .chat__attach.has-file {
@@ -1353,14 +1454,14 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
   stroke-linejoin: round;
 }
 
-/* ── 表情包按钮 ── */
+/* ── 表情包按钮（底部功能行裸图标，对齐上游） ── */
 .chat__sticker-btn {
   flex: 0 0 auto;
-  width: 40px;
-  height: 40px;
+  width: 38px;
+  height: 38px;
   border-radius: 12px;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid var(--rb-border-soft);
+  background: transparent;
+  border: 1px solid transparent;
   color: var(--rb-text-muted);
   font-size: 18px;
   cursor: pointer;
@@ -1373,9 +1474,8 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
 }
 
 .chat__sticker-btn:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
   color: var(--rb-text-default);
-  border-color: var(--rb-border-strong);
 }
 
 .chat__sticker-btn.is-active {
@@ -1387,9 +1487,9 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
 /* ── 表情包选择面板 ── */
 .sticker-picker {
   position: absolute;
-  bottom: 72px;
-  left: 88px;
-  right: 88px;
+  bottom: 148px;
+  left: 128px;
+  right: 128px;
   max-height: 260px;
   overflow-y: auto;
   border-radius: 18px;
@@ -1473,12 +1573,13 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
 
 /* ===== Input ===== */
 
-/* File tags floating row between messages and input */
+/* 对齐上游 Playa-0v0：输入区改为悬浮单卡片（textarea 在上 + 底部功能行），
+   不再是顶到窗口两沿的灰带。 */
 .chat__file-tags {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
-  padding: 6px 12px;
+  padding: 2px 130px 0;
   min-height: 0;
 }
 .chat__file-tags:empty {
@@ -1489,28 +1590,37 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
   position: relative;
   z-index: 1;
   display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  padding: 18px 88px 26px;
-  background: linear-gradient(180deg, var(--rb-bg-1), var(--rb-bg-1));
-  border-top: 1px solid var(--rb-border-soft);
+  flex-direction: column;
   flex: 0 0 auto;
+  margin: 8px 128px 20px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--rb-border-soft);
+  border-radius: 18px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.16);
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.chat__input:hover {
+  border-color: var(--rb-border-strong);
+}
+
+/* 焦点反馈上移到整张卡片：textarea 本身不再单独描边。 */
+.chat__input:focus-within {
+  border-color: var(--rb-pink-glow);
+  box-shadow: 0 0 0 3px var(--rb-border-faint), 0 10px 28px rgba(0, 0, 0, 0.18);
 }
 
 #input {
-  flex: 1;
   resize: none;
-  padding: 14px 18px;
-  background: rgba(255, 255, 255, 0.08);
+  padding: 14px 16px 4px;
+  background: transparent;
   color: var(--rb-text-default);
-  border: 1px solid var(--rb-border-soft);
-  border-radius: 24px;
+  border: 0;
   font: var(--rb-text-body);
   line-height: 1.5;
   max-height: 160px;
   outline: none;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08), 0 10px 28px rgba(0, 0, 0, 0.16);
-  transition: border-color 120ms ease, box-shadow 120ms ease, background 120ms ease;
+  transition: background 120ms ease;
 }
 
 #input::placeholder { color: var(--rb-text-faint); }
@@ -1528,16 +1638,19 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
   background: var(--rb-pink-glow);
 }
 
-#input:focus {
-  background: rgba(255, 255, 255, 0.11);
-  border-color: var(--rb-border-strong);
-  box-shadow: 0 0 0 4px var(--rb-border-faint), inset 0 1px 0 rgba(255, 255, 255, 0.10);
+/* 底部功能行：左侧附件 / 表情包，发送按钮靠右。 */
+.chat__input-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px 10px;
 }
 
 .chat__send {
   flex: 0 0 auto;
-  width: 52px;
-  height: 52px;
+  margin-left: auto;
+  width: 40px;
+  height: 40px;
   border-radius: var(--rb-radius-full);
   background: var(--rb-grad-pink-hot);
   color: var(--rb-text-on-pink);
@@ -1564,11 +1677,11 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
 }
 
 .chat__send svg {
-  width: 21px;
-  height: 21px;
+  width: 19px;
+  height: 19px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.7;
+  stroke-width: 1.9;
   stroke-linecap: round;
   stroke-linejoin: round;
 }

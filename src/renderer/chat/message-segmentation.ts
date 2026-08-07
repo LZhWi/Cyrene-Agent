@@ -5,19 +5,10 @@ import {
 } from "../../shared/preferences";
 import {
   MAX_MESSAGE_SEGMENTS,
-  shouldBreakMessageSegmentAfterChar,
   shouldSkipMessageSegmentLeadingChar,
 } from "../../shared/message-segmentation";
 
-const SHORT_REPLY_LIMIT = 45;
-const COMPACT_MULTI_SENTENCE_LIMIT = 90;
-const MIN_SENTENCE_PART_LENGTH = 14;
 export const MAX_ASSISTANT_REPLY_BUBBLES = MAX_MESSAGE_SEGMENTS;
-const MIN_PART_LENGTH = 35;
-const IDEAL_MIN = 55;
-const HARD_MAX = 130;
-const STRONG_PAUSE = /[。！？!?；;♪～~]/;
-const WEAK_PAUSE = /[，,：:]/;
 
 export function shouldSegmentAssistantReply(
   chatMode: DefaultChatMode,
@@ -27,29 +18,44 @@ export function shouldSegmentAssistantReply(
   return mode === "all" || (mode === "chat" && chatMode === "talk");
 }
 
-export function shouldBreakStreamingBubbleAfterChar(char: string): boolean {
-  return shouldBreakMessageSegmentAfterChar(char);
-}
-
 export function shouldSkipStreamingBubbleLeadingChar(char: string, isAtBubbleStart: boolean): boolean {
   return shouldSkipMessageSegmentLeadingChar(char, isAtBubbleStart);
+}
+
+/**
+ * 流式气泡分段只认「空行」：已缓冲的空白段里含 ≥2 个换行，才算 LLM
+ * 自己给出的段落边界。单个换行只是气泡内换行，不触发分段——避免旧的
+ * 标点启发式把一句话从中间切断。
+ */
+export function isStreamingBubbleBoundary(pendingWhitespace: string): boolean {
+  let newlines = 0;
+  for (const char of pendingWhitespace) {
+    if (char === "\n") newlines += 1;
+  }
+  return newlines >= 2;
 }
 
 export function segmentAssistantReply(text: string): string[] {
   const clean = text.trim();
   if (!clean) return [];
-  if (clean.length < SHORT_REPLY_LIMIT || hasStructuredContent(clean)) return [clean];
+  // 代码块/列表/表格等结构化内容不拆，避免破坏排版
+  if (hasStructuredContent(clean)) return [clean];
 
-  if (clean.length <= COMPACT_MULTI_SENTENCE_LIMIT) {
-    const sentenceParts = splitCompactSentences(clean);
-    if (sentenceParts.length > 1) return sentenceParts;
+  // 只在「空行」（两个及以上换行，中间允许纯空白行）处分段；
+  // 没有空行就整条一个气泡，不再按标点猜句界
+  const parts = clean
+    .split(/\r?\n\s*\r?\n/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (parts.length <= 1) return [clean];
+
+  // 超出气泡数上限时，把多出的段落并进最后一个气泡
+  while (parts.length > MAX_ASSISTANT_REPLY_BUBBLES) {
+    const tail = parts.pop();
+    if (tail === undefined) break;
+    parts[parts.length - 1] += `\n\n${tail}`;
   }
-
-  const maxParts = chooseMaxParts(clean.length);
-  const targetLength = Math.ceil(clean.length / maxParts);
-  const roughParts = splitByNaturalPauses(clean, targetLength, maxParts);
-  const merged = mergeTinyParts(roughParts, maxParts);
-  return merged.length > 1 ? merged : [clean];
+  return parts;
 }
 
 export function getAssistantReplyBubbleTexts(
@@ -64,13 +70,6 @@ export function getAssistantReplyBubbleTexts(
     : [text];
 }
 
-function chooseMaxParts(length: number): number {
-  if (length <= 220) return 4;
-  if (length <= 380) return 6;
-  if (length <= 700) return 8;
-  return MAX_ASSISTANT_REPLY_BUBBLES;
-}
-
 function hasStructuredContent(text: string): boolean {
   if (text.includes("```")) return true;
   const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
@@ -81,87 +80,4 @@ function hasStructuredContent(text: string): boolean {
   if (tableLines >= 2) return true;
   if (/^\s*[\[{][\s\S]*[\]}]\s*$/.test(text) && text.includes("\n")) return true;
   return false;
-}
-
-function splitByNaturalPauses(text: string, targetLength: number, maxParts: number): string[] {
-  const parts: string[] = [];
-  let buffer = "";
-
-  for (const char of text) {
-    buffer += char;
-    const remainingSlots = maxParts - parts.length - 1;
-    if (remainingSlots <= 0) continue;
-
-    const len = buffer.length;
-    const canSplitStrong = len >= IDEAL_MIN && STRONG_PAUSE.test(char);
-    const canSplitWeak = len >= targetLength && WEAK_PAUSE.test(char);
-    const mustSplit = len >= HARD_MAX && (STRONG_PAUSE.test(char) || WEAK_PAUSE.test(char));
-
-    if (canSplitStrong || canSplitWeak || mustSplit) {
-      parts.push(buffer);
-      buffer = "";
-    }
-  }
-
-  if (buffer) parts.push(buffer);
-  return parts;
-}
-
-function splitCompactSentences(text: string): string[] {
-  const sentences = splitIntoStrongPauseUnits(text);
-  if (sentences.length < 2) return [text];
-
-  const parts: string[] = [];
-  for (let i = 0; i < sentences.length; i += 1) {
-    let part = sentences[i];
-    while (part.length < MIN_SENTENCE_PART_LENGTH && i < sentences.length - 1) {
-      i += 1;
-      part += sentences[i];
-    }
-    parts.push(part);
-  }
-
-  while (parts.length > MAX_ASSISTANT_REPLY_BUBBLES) {
-    const tail = parts.pop();
-    if (tail === undefined) break;
-    parts[parts.length - 1] += tail;
-  }
-
-  return parts.length > 1 ? parts : [text];
-}
-
-function splitIntoStrongPauseUnits(text: string): string[] {
-  const parts: string[] = [];
-  let buffer = "";
-
-  for (const char of text) {
-    buffer += char;
-    if (STRONG_PAUSE.test(char)) {
-      parts.push(buffer);
-      buffer = "";
-    }
-  }
-
-  if (buffer) parts.push(buffer);
-  return parts;
-}
-
-function mergeTinyParts(parts: string[], maxParts: number): string[] {
-  const merged: string[] = [];
-  for (const part of parts) {
-    const previous = merged.at(-1);
-    if (previous !== undefined && (part.length < MIN_PART_LENGTH || previous.length < MIN_PART_LENGTH)) {
-      merged[merged.length - 1] = previous + part;
-    } else {
-      merged.push(part);
-    }
-  }
-
-  while (merged.length > maxParts) {
-    const tail = merged.pop();
-    if (tail === undefined) break;
-    merged[merged.length - 1] += tail;
-  }
-
-  return merged;
 }

@@ -14,7 +14,7 @@ import { resolveAsset } from "../../shared/renderer-base";
 import {
   getAssistantReplyBubbleTexts,
   MAX_ASSISTANT_REPLY_BUBBLES,
-  shouldBreakStreamingBubbleAfterChar,
+  isStreamingBubbleBoundary,
   shouldSkipStreamingBubbleLeadingChar,
   shouldSegmentAssistantReply,
 } from "./message-segmentation";
@@ -3035,9 +3035,10 @@ async function triggerCyreneGreeting(): Promise<void> {
     const deltaQueue: string[] = [];
     let playbackTimer: number | null = null;
     let runFinishedArrived = false;
-    let startNextStreamingBubble = false;
     let streamingBubbleCount = 1;
     let currentBubbleLength = 0;
+    // 纯空白块先缓冲，碰到非空白字符再决定：含 ≥2 换行的空白段 = 空行段落边界 → 新气泡
+    let pendingWhitespace = "";
     const STREAMING_BUBBLE_MIN_LENGTH = 20;
     const allowStreamingBubbleSplit = shouldSegmentAssistantReply(isTalkMode() ? "talk" : "collab", segmentedOutputMode);
     const getStreamingBubble = (): HTMLElement | null => {
@@ -3054,25 +3055,33 @@ async function triggerCyreneGreeting(): Promise<void> {
         const next = deltaQueue.shift();
         if (next !== undefined) {
           streamContent += next;
-          const bubble = startNextStreamingBubble
-            ? (appendBubbleForMessage(streamMsgId) ?? getStreamingBubble())
-            : getStreamingBubble();
-          if (startNextStreamingBubble) currentBubbleLength = 0;
-          startNextStreamingBubble = false;
-          if (bubble) {
-            appendStreamingCharToBubble(bubble, next);
+          if (/^\s+$/.test(next)) {
+            pendingWhitespace += next;
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+            return;
           }
-          currentBubbleLength += next.length;
-          if (
+          const whitespace = pendingWhitespace;
+          pendingWhitespace = "";
+          const blankLineBoundary =
             allowStreamingBubbleSplit
             && streamingBubbleCount < MAX_ASSISTANT_REPLY_BUBBLES
             && currentBubbleLength >= STREAMING_BUBBLE_MIN_LENGTH
-            && shouldBreakStreamingBubbleAfterChar(next)
-          ) {
-            startNextStreamingBubble = true;
+            && isStreamingBubbleBoundary(whitespace);
+          const bubble = blankLineBoundary
+            ? (appendBubbleForMessage(streamMsgId) ?? getStreamingBubble())
+            : getStreamingBubble();
+          if (blankLineBoundary) {
             streamingBubbleCount += 1;
             currentBubbleLength = 0;
           }
+          if (bubble) {
+            // 边界空白（空行）丢弃；其余空白（单换行/空格）逐字还原进气泡
+            if (whitespace && !blankLineBoundary) {
+              for (const wsChar of whitespace) appendStreamingCharToBubble(bubble, wsChar);
+            }
+            appendStreamingCharToBubble(bubble, next);
+          }
+          currentBubbleLength += next.length;
           messagesEl.scrollTop = messagesEl.scrollHeight;
           return;
         }
@@ -3541,9 +3550,10 @@ async function send(): Promise<void> {
     const deltaQueue: string[] = [];
     let playbackTimer: number | null = null;
     let runFinishedArrived = false;
-    let startNextStreamingBubble = false;
     let streamingBubbleCount = 1;
     let currentBubbleLength = 0;
+    // 纯空白块先缓冲，碰到非空白字符再决定：含 ≥2 换行的空白段 = 空行段落边界 → 新气泡
+    let pendingWhitespace = "";
     const STREAMING_BUBBLE_MIN_LENGTH = 20;
     const allowStreamingBubbleSplit = shouldSegmentAssistantReply(isTalkMode() ? "talk" : "collab", segmentedOutputMode);
     /** 找到当前流式消息的气泡 DOM（TEXT_MESSAGE_START 时 render 过一次，带 data-msg-id）。 */
@@ -3562,26 +3572,34 @@ async function send(): Promise<void> {
         const next = deltaQueue.shift();
         if (next !== undefined) {
           streamContent += next;
-          // 增量追加 span 到气泡，CSS 渐显。不调 render()，避免全量重建卡顿。
-          const bubble = startNextStreamingBubble
-            ? (appendBubbleForMessage(streamMsgId) ?? getStreamingBubble())
-            : getStreamingBubble();
-          if (startNextStreamingBubble) currentBubbleLength = 0;
-          startNextStreamingBubble = false;
-          if (bubble) {
-            appendStreamingCharToBubble(bubble, next);
+          if (/^\s+$/.test(next)) {
+            pendingWhitespace += next;
+            messagesEl.scrollTop = messagesEl.scrollHeight;
+            return;
           }
-          currentBubbleLength += next.length;
-          if (
+          const whitespace = pendingWhitespace;
+          pendingWhitespace = "";
+          const blankLineBoundary =
             allowStreamingBubbleSplit
             && streamingBubbleCount < MAX_ASSISTANT_REPLY_BUBBLES
             && currentBubbleLength >= STREAMING_BUBBLE_MIN_LENGTH
-            && shouldBreakStreamingBubbleAfterChar(next)
-          ) {
-            startNextStreamingBubble = true;
+            && isStreamingBubbleBoundary(whitespace);
+          // 增量追加 span 到气泡，CSS 渐显。不调 render()，避免全量重建卡顿。
+          const bubble = blankLineBoundary
+            ? (appendBubbleForMessage(streamMsgId) ?? getStreamingBubble())
+            : getStreamingBubble();
+          if (blankLineBoundary) {
             streamingBubbleCount += 1;
             currentBubbleLength = 0;
           }
+          if (bubble) {
+            // 边界空白（空行）丢弃；其余空白（单换行/空格）逐字还原进气泡
+            if (whitespace && !blankLineBoundary) {
+              for (const wsChar of whitespace) appendStreamingCharToBubble(bubble, wsChar);
+            }
+            appendStreamingCharToBubble(bubble, next);
+          }
+          currentBubbleLength += next.length;
           messagesEl.scrollTop = messagesEl.scrollHeight;
           return;
         }
@@ -3988,6 +4006,16 @@ function positionModeSwitch(): void {
   });
   switchEl.style.setProperty("--ms-left", `${Math.ceil(leftBound + 12)}px`);
   switchEl.style.setProperty("--ms-right", `${Math.ceil(rightBound + 12)}px`);
+  // 窄空间降级：空闲区装不下分段条 → 收成纯图标；恢复用完整宽度实测，
+  // 避免用收窄后的宽度判断造成两态来回抖动。同帧切换不产生绘制闪烁。
+  const availableWidth = barRect.width - Math.ceil(leftBound + 12) - Math.ceil(rightBound + 12);
+  if (switchEl.classList.contains("mode-switch--compact")) {
+    switchEl.classList.remove("mode-switch--compact");
+    const fullWidth = switchEl.scrollWidth;
+    if (availableWidth < fullWidth) switchEl.classList.add("mode-switch--compact");
+  } else if (availableWidth < switchEl.scrollWidth) {
+    switchEl.classList.add("mode-switch--compact");
+  }
   placeModeThumb();
 }
 window.addEventListener("resize", positionModeSwitch);

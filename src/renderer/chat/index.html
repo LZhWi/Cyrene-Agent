@@ -210,10 +210,10 @@
       </div>
     </div>
     <div class="chat__file-tags" id="file-tags"></div>
+    <!-- 对齐上游 Playa-0v0 输入框：单卡片（textarea 在上 + 底部功能行），
+         功能行左侧附件 / 表情包，发送圆形按钮靠右。 -->
     <form class="chat__input" id="composer">
       <input type="file" id="file-input" accept=".txt,.md,.json,.csv,.log,.png,.jpg,.jpeg,.gif,.bmp,.webp" multiple style="display:none" />
-      <button type="button" class="chat__attach" id="attach-btn" aria-label="上传文件" title="上传文件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.5 12.5 5.8-5.8a3.3 3.3 0 0 1 4.7 4.7l-8 8a5 5 0 0 1-7.1-7.1l8.2-8.2" /></svg></button>
-      <button type="button" class="chat__sticker-btn" id="sticker-picker-btn" aria-label="表情包" title="表情包"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0-9-9 9 9 0 0 0 9 9ZM8.5 10h.01M15.5 10h.01M8 14.5c1 1.3 2.3 2 4 2s3-.7 4-2" /></svg></button>
       <textarea
         id="input"
         rows="1"
@@ -221,7 +221,11 @@
         autocomplete="off"
         spellcheck="false"
       ></textarea>
-      <button type="submit" class="chat__send" id="send" aria-label="发送"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 4 17 8-17 8 3-8zM7 12h14" /></svg></button>
+      <div class="chat__input-bar">
+        <button type="button" class="chat__attach" id="attach-btn" aria-label="上传文件" title="上传文件"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8.5 12.5 5.8-5.8a3.3 3.3 0 0 1 4.7 4.7l-8 8a5 5 0 0 1-7.1-7.1l8.2-8.2" /></svg></button>
+        <button type="button" class="chat__sticker-btn" id="sticker-picker-btn" aria-label="表情包" title="表情包"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21a9 9 0 1 0-9-9 9 9 0 0 0 9 9ZM8.5 10h.01M15.5 10h.01M8 14.5c1 1.3 2.3 2 4 2s3-.7 4-2" /></svg></button>
+        <button type="submit" class="chat__send" id="send" aria-label="发送"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" /></svg></button>
+      </div>
     </form>
     <div class="sticker-picker" id="sticker-picker" hidden>
       <div class="sticker-picker__grid" id="sticker-picker-grid"></div>

@@ -113,19 +113,25 @@
 [data-ui-theme="pearl-white"] .settings-shell,
 [data-ui-theme="pearl-white"] .sidebar,
 [data-ui-theme="pearl-white"] .tasks {
-  /* 统一底色：卡片白叠 6% 粉，与 chat 窗口同款淡粉白 */
-  background: color-mix(in srgb, var(--rb-card-bg) 94%, var(--rb-pink-500));
+  /* 统一底色：卡片白叠 2.5% 粉，与 chat 窗口同款淡粉白
+     （chat.css 对 .chat 另有同值覆写） */
+  background: color-mix(in srgb, var(--rb-card-bg) 97.5%, var(--rb-pink-500));
   border-color: var(--rb-border-soft);
   box-shadow: var(--rb-shadow-card);
 }
 
-/* Subtle ambient gradient layer — keep very faint on white */
+/* 环境柔光斑：全窗口统一 chat 同款三层粉 radial-gradient + 对角白色
+   提亮层（chat.css 对 .chat::before 有同值覆写）。opacity 抬回 1。 */
 [data-ui-theme="pearl-white"] .chat::before,
 [data-ui-theme="pearl-white"] .settings-shell::before,
 [data-ui-theme="pearl-white"] .sidebar::before,
 [data-ui-theme="pearl-white"] .tasks::before {
-  opacity: 0.06;
-  background: linear-gradient(135deg, var(--rb-pink-100), transparent 60%);
+  opacity: 1;
+  background:
+    radial-gradient(48% 40% at 12% 0%, rgba(236, 72, 153, 0.07), transparent 72%),
+    radial-gradient(55% 48% at 92% 100%, rgba(244, 114, 182, 0.08), transparent 72%),
+    radial-gradient(34% 30% at 88% 8%, rgba(236, 72, 153, 0.055), transparent 70%),
+    linear-gradient(135deg, rgba(255, 255, 255, 0.55), transparent 42%);
 }
 
 [data-ui-theme="pearl-white"] .chat__particles {
@@ -409,7 +415,8 @@
 [data-ui-theme="pearl-white"] .sticker-picker,
 [data-ui-theme="pearl-white"] .sticker-picker__item {
   border-color: var(--rb-border-soft);
-  background: var(--rb-card-bg);
+  /* 与窗口底色同款的淡粉白（97.5% 卡片白 + 2.5% 粉） */
+  background: color-mix(in srgb, var(--rb-card-bg) 97.5%, var(--rb-pink-500));
   box-shadow: var(--rb-shadow-card);
 }
 
@@ -1097,7 +1104,7 @@
 [data-ui-theme="pearl-white"] .sticker-shell {
   color: var(--rb-text-default);
   /* 统一淡粉白底色（chat 同款） */
-  background: color-mix(in srgb, var(--rb-card-bg) 94%, var(--rb-pink-500));
+  background: color-mix(in srgb, var(--rb-card-bg) 97.5%, var(--rb-pink-500));
   border-color: var(--rb-border-soft);
   box-shadow: var(--rb-shadow-elevated);
 }
@@ -1105,7 +1112,7 @@
 [data-ui-theme="pearl-white"] .call {
   color: var(--rb-text-default);
   /* 统一淡粉白底色（chat 同款） */
-  background: color-mix(in srgb, var(--rb-card-bg) 94%, var(--rb-pink-500));
+  background: color-mix(in srgb, var(--rb-card-bg) 97.5%, var(--rb-pink-500));
   border-color: var(--rb-border-soft);
 }
 

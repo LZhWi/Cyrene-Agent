@@ -11,9 +11,9 @@ export interface SceneConfig {
 }
 
 export const SCENE_CONFIGS: SceneConfig[] = [
-  { id: "morning",         todayFiredFlag: "daily_checkin", cooldownMs: 36000000, recentAvoidN: 0 },
-  { id: "topic_followup",  todayFiredFlag: null,            cooldownMs: 21600000, recentAvoidN: 0 },
-  { id: "evening_checkin", todayFiredFlag: "daily_checkin", cooldownMs: 36000000, recentAvoidN: 0 },
+  { id: "morning",         todayFiredFlag: "morning",         cooldownMs: 36000000, recentAvoidN: 0 },
+  { id: "topic_followup",  todayFiredFlag: null,            cooldownMs: 7200000,  recentAvoidN: 0 },
+  { id: "evening_checkin", todayFiredFlag: "evening_checkin", cooldownMs: 36000000, recentAvoidN: 0 },
   { id: "late_night",      todayFiredFlag: "late_night", cooldownMs: 7200000,  recentAvoidN: 2 },
   { id: "idle_daze",       todayFiredFlag: null,         cooldownMs: 3600000,  recentAvoidN: 2 },
   { id: "work_break",      todayFiredFlag: null,         cooldownMs: 7200000,  recentAvoidN: 1 },
