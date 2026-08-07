@@ -843,7 +843,7 @@
               <div class="memory-card__head">
                 <span><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M7 4H41" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 44H41" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 44C13.6667 30.6611 18 23.9944 24 24C30 24.0056 34.3333 30.6722 37 44H11Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M37 4C34.3333 17.3389 30 24.0056 24 24C18 23.9944 13.6667 17.3278 11 4H37Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M21 15H27" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 38H29" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
                 <div>
-                  <h2>当前阶段</h2>
+                  <h2>近况</h2>
                   <p>最近的目标、偏好和状态，会随时间变化</p><p class="memory-card__hint">手动修改的内容优先级高于自动推断</p>
                 </div>
                 <span class="memory-card__badge">L1</span>
@@ -860,13 +860,13 @@
               <div class="memory-card__head">
                 <span><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M40 27V6C40 4.89543 39.1046 4 38 4H10C8.89543 4 8 4.89543 8 6V42C8 43.1046 8.89543 44 10 44H21" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 12L31 12" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 20L31 20" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M17 28H23" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M37 37C37 38.3807 36.4404 39.6307 35.5355 40.5355C34.6307 41.4404 33.3807 42 32 42C29.2386 42 27 39.7614 27 37C27 34.2386 29.2386 32 32 32C34.7614 32 37 34.2386 37 37Z" fill="none"/><path d="M39 44L35.5355 40.5355M35.5355 40.5355C36.4404 39.6307 37 38.3807 37 37C37 34.2386 34.7614 32 32 32C29.2386 32 27 34.2386 27 37C27 39.7614 29.2386 42 32 42C33.3807 42 34.6307 41.4404 35.5355 40.5355Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
                 <div>
-                  <h2>事件记忆</h2>
+                  <h2>事件片段</h2>
                   <p>从聊天中提炼的重要事件，可搜索和管理</p>
                 </div>
                 <span class="memory-card__badge">L2</span>
               </div>
-              <div class="memory-search"><input id="memory-l2-search" type="text" placeholder="搜索记忆..." /></div>
-              <div class="memory-list" id="memory-l2-list"><div class="memory-list__empty"><span>📭</span><p>暂无事件记忆</p><p class="memory-list__hint">聊天后昔涟会自动提炼重要信息</p></div></div>
+              <div class="memory-search"><input id="memory-l2-search" type="text" placeholder="搜索片段..." /></div>
+              <div class="memory-list" id="memory-l2-list"><div class="memory-list__empty"><span>📭</span><p>暂无事件片段</p><p class="memory-list__hint">聊天后昔涟会自动提炼重要信息</p></div></div>
             </div>
             <!-- import -->
             <div class="memory-card">
@@ -884,11 +884,41 @@
               <div class="memory-card__head">
                 <span><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path fill-rule="evenodd" clip-rule="evenodd" d="M24 24V19L39 4L44 9L29 24H24Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 24H9C6.23858 24 4 26.2386 4 29C4 31.7614 6.23858 34 9 34H39C41.7614 34 44 36.2386 44 39C44 41.7614 41.7614 44 39 44H18" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
                 <div>
-                  <h2>阶段总结</h2>
+                  <h2>回顾</h2>
                   <p>AI 自动生成的阶段性回顾</p>
                 </div>
               </div>
-              <div class="memory-list" id="memory-reflection-list"><div class="memory-list__empty"><span>📭</span><p>暂无阶段总结</p><p class="memory-list__hint">持续聊天后会自动生成</p></div></div>
+              <div class="memory-list" id="memory-reflection-list"><div class="memory-list__empty"><span>📭</span><p>暂无回顾</p><p class="memory-list__hint">持续聊天后会自动生成</p></div></div>
+            </div>
+            <!-- obsidian vault binding -->
+            <div class="memory-card">
+              <div class="memory-card__head">
+                <span><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M16 24L22 30L32 18" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg></span>
+                <div>
+                  <h2>Obsidian Vault 绑定</h2>
+                  <p>绑定一个文件夹，把记忆同步成 .md 文件，用 [[双链]] 互连</p>
+                  <p class="memory-card__hint">用 Obsidian 打开绑定的文件夹，即可看到关系图谱</p>
+                </div>
+              </div>
+              <div class="memory-export">
+                <!-- 未绑定状态 -->
+                <div id="obsidian-vault-unbound" class="memory-export__row">
+                  <button type="button" class="ghost-btn" id="obsidian-vault-bind-btn"><svg width="18" height="18" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M6 24V36C6 39.3137 8.68629 42 12 42H36C39.3137 42 42 39.3137 42 36V24" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 30V6" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 16L24 6L34 16" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 绑定 Vault 文件夹</button>
+                </div>
+                <!-- 已绑定状态 -->
+                <div id="obsidian-vault-bound" class="memory-export__row is-hidden">
+                  <div class="memory-export__path" id="obsidian-vault-path"></div>
+                  <div class="memory-export__actions">
+                    <button type="button" class="ghost-btn" id="obsidian-vault-sync-btn"><svg width="16" height="16" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="display:inline;vertical-align:-2px"><path d="M24 8V16M24 8L18 14M24 8L30 14" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 40V32M24 40L30 34M24 40L18 34" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 24H16M8 24L14 18M8 24L14 30" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M40 24H32M40 24L34 18M40 24L34 30" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 立即同步</button>
+                    <button type="button" class="ghost-btn" id="obsidian-vault-unbind-btn">解绑</button>
+                  </div>
+                  <label class="memory-export__toggle">
+                    <input type="checkbox" id="obsidian-vault-auto-sync" />
+                    <span>自动同步（记忆变化后 2 秒自动写入）</span>
+                  </label>
+                  <p class="memory-export__hint" id="obsidian-vault-hint"></p>
+                </div>
+              </div>
             </div>
           </div>
         </section>

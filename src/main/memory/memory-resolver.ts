@@ -181,7 +181,7 @@ async function syncResolvedMemoryToRag(log: ConflictLog): Promise<void> {
     })
     await memoryStore.markL2SyncStatus(resolvedMemory.id, "synced", ragId)
   } catch (err) {
-    console.warn("[MemoryResolver] sync resolved memory to RAG failed:", err)
+    console.warn("[PMRS/Resolver] sync resolved memory to RAG failed:", err)
     await memoryStore.markL2SyncStatus(resolvedMemory.id, "sync_failed", undefined, err instanceof Error ? err : new Error(String(err)))
   }
 }

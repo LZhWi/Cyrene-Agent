@@ -111,6 +111,7 @@ import {
   enterL1EditMode, exitL1EditMode, saveL1, cancelL1Edit,
   renderImportedDocs,
 } from "./memory/panel";
+import { initObsidianVaultUI } from "./memory/obsidian-vault-ui";
 import {
   setSchedulerStatus, renderSchedulerTools, renderSchedulerList,
   loadSchedulerPanel, openSchedulerEditor, closeSchedulerEditor,
@@ -1676,7 +1677,9 @@ memoryL1EditBtn?.addEventListener("click", () => {
 });
 memoryL1CancelBtn?.addEventListener("click", cancelL1Edit);
 
+// ── Obsidian Vault 绑定 UI（逻辑抽离至 ./memory/obsidian-vault-ui）──
 
+initObsidianVaultUI();
 
 memoryImportedList?.addEventListener("click", async (event) => {
   const target = event.target as HTMLElement | null;

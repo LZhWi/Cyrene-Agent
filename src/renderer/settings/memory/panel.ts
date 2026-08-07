@@ -33,7 +33,7 @@ function renderL2List(query = ""): void {
       body: item.triggerText ? `触发片段：${item.triggerText}` : "无触发片段",
       meta: `状态：${item.status} · 权重：${item.weight.toFixed(1)} · 创建于：${formatDateTime(item.createdAt)}`,
     })),
-    normalized ? "没有匹配的事件记忆" : "暂无事件记忆",
+    normalized ? "没有匹配的事件片段" : "暂无事件片段",
     normalized ? "换个关键词试试" : "聊天后昔涟会自动提炼重要信息",
   );
 }
@@ -61,17 +61,17 @@ export async function loadMemoryPanel(): Promise<void> {
     renderInfoList(
       memoryReflectionList,
       payload.reflections,
-      "暂无阶段总结",
-      "当前项目里 Reflection 还没真正生成落地",
+      "暂无回顾",
+      "当前项目里回顾还没真正生成落地",
     );
 
     if (memoryL0EditBtn) memoryL0EditBtn.disabled = false;
     if (memoryL1EditBtn) memoryL1EditBtn.disabled = false;
   } catch (err) {
     console.error("[settings] load memory panel failed", err);
-    renderEmptyState(memoryL2List, "记忆读取失败", "请查看终端日志");
+    renderEmptyState(memoryL2List, "片段读取失败", "请查看终端日志");
     renderEmptyState(memoryImportedList, "导入知识读取失败", "请查看终端日志");
-    renderEmptyState(memoryReflectionList, "阶段总结读取失败", "请查看终端日志");
+    renderEmptyState(memoryReflectionList, "回顾读取失败", "请查看终端日志");
   }
 }
 

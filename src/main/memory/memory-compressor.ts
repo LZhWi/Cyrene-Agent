@@ -1,8 +1,8 @@
-// 记忆压缩 + Reflection 引擎
+// 片段压缩 + 回顾引擎
 //
 // 每 20 轮触发一次：
-//   阶段 A — 记忆压缩：聚类相似 L2 条目，合并为一条总结
-//   阶段 B — Reflection：审视当前 L0/L1，建议更新
+//   阶段 A — 片段压缩：聚类相似片段条目，合并为一条总结
+//   阶段 B — 回顾：审视当前画像/近况，建议更新
 //
 // 通过 enqueueLLMTask 在后台执行，不影响主对话流程。
 
@@ -12,12 +12,13 @@ import { addL2MemoryVector, deleteUserMemoryVectors, getEntriesBySource } from "
 import { cosineSimilarity } from "../rag/vectorstore";
 import { L0_FIELD_DESCRIPTIONS } from "./memory-types";
 import type { L2Memory } from "./memory-types";
+import { resolveL1Field } from "./memory-manager";
 import { commitMemoryCompression } from "./memory-compression-transaction";
 import { invokeMemoryLlm, invokeMemoryStructuredOutput, getDefaultMaxOutputTokens } from "./memory-llm-client";
 import { parseMemoryReflectionResult, validateMemoryReflectionBusiness } from "./memory-schemas";
 import type { MemoryReflectionItem } from "./memory-schemas";
 
-// ── 阶段 A：记忆压缩（纯文本总结，不需要结构化输出） ──
+// ── 阶段 A：片段压缩（纯文本总结，不需要结构化输出） ──
 
 const SIMILARITY_THRESHOLD = 0.85;
 const MIN_GROUP_SIZE = 3;
@@ -32,7 +33,7 @@ async function compressMemories(): Promise<number> {
   const activeL2 = allL2.filter((m) => m.status === "active" && !m.isSummary && m.ragId);
 
   if (activeL2.length < MIN_GROUP_SIZE) {
-    console.log("[MemoryCompressor] 活跃 L2 条目不足，跳过压缩");
+    console.log("[PMRS/Compressor] 活跃 L2 条目不足，跳过压缩");
     return 0;
   }
 
@@ -67,7 +68,7 @@ async function compressMemories(): Promise<number> {
   }
 
   if (groups.length === 0) {
-    console.log("[MemoryCompressor] 无需压缩的组");
+    console.log("[PMRS/Compressor] 无需压缩的组");
     return 0;
   }
 
@@ -125,7 +126,7 @@ async function compressMemories(): Promise<number> {
         deactivateSummary: (id) => memoryStore.updateL2Status([id], "archived"),
         deleteSummary: (id) => memoryStore.deleteL2(id),
         deleteVectors: (ids) => deleteUserMemoryVectors(ids),
-        warn: (message, error) => console.warn(`[MemoryCompressor] ${message}:`, error),
+        warn: (message, error) => console.warn(`[PMRS/Compressor] ${message}:`, error),
       });
 
       // 记录日志
@@ -136,16 +137,16 @@ async function compressMemories(): Promise<number> {
       });
 
       totalCompressed += subEntryIds.length;
-      console.log(`[MemoryCompressor] 压缩了 ${subEntryIds.length} 条 → "${cleanSummary.slice(0, 40)}"`);
+      console.log(`[PMRS/Compressor] 压缩了 ${subEntryIds.length} 条 → "${cleanSummary.slice(0, 40)}"`);
     } catch (err) {
-      console.warn("[MemoryCompressor] 组压缩失败:", err);
+      console.warn("[PMRS/Compressor] 组压缩失败:", err);
     }
   }
 
   return totalCompressed;
 }
 
-// ── 阶段 B：Reflection（L0/L1 元认知更新） ──
+// ── 阶段 B：回顾（画像/近况 元认知更新） ──
 
 async function runReflection(): Promise<void> {
   try {
@@ -153,7 +154,7 @@ async function runReflection(): Promise<void> {
     const l1 = await memoryStore.getL1();
 
     if (l0.isPinned) {
-      console.log("[Reflection] L0 已锁定，跳过更新建议");
+      console.log("[PMRS/Recap] L0 已锁定，跳过更新建议");
     }
 
     // 构建 LLM prompt
@@ -191,9 +192,9 @@ async function runReflection(): Promise<void> {
       currentProfile,
       "",
       "请分析：",
-      "1. 是否有信息可以更新 L0 字段（稳定身份信息）？",
+      "1. 是否有信息可以更新画像字段（稳定身份信息）？",
       `   可用字段：\n${fieldDescriptions}`,
-      "2. 是否有信息可以更新 L1 字段（近期目标/偏好/项目）？",
+      "2. 是否有信息可以更新近况字段（近期目标/偏好/项目）？",
       "",
       "输出格式：",
       "{",
@@ -202,7 +203,7 @@ async function runReflection(): Promise<void> {
       "  ]",
       "}",
       "",
-      "L1 字段可以选择 recentGoals / recentPreferences / currentProject。",
+      "近况字段可以选择 recentGoals / recentPreferences / currentProject。",
       "如果没有需要更新的信息，输出 {\"updates\":[]}。",
       "只输出 JSON，不要额外解释。",
     ].join("\n");
@@ -217,7 +218,7 @@ async function runReflection(): Promise<void> {
     });
 
     if (items.length === 0) {
-      console.log("[Reflection] 无 L0/L1 更新建议");
+      console.log("[PMRS/Recap] 无 L0/L1 更新建议");
       return;
     }
 
@@ -234,33 +235,33 @@ async function runReflection(): Promise<void> {
           summary: `L0.${item.field} 更新为 "${item.content.slice(0, 30)}"（置信度 ${item.confidence.toFixed(2)}）`,
         });
         updateCount++;
-        console.log(`[Reflection] L0.${item.field} 更新: "${item.content.slice(0, 30)}"`);
+        console.log(`[PMRS/Recap] L0.${item.field} 更新: "${item.content.slice(0, 30)}"`);
       } else if (item.layer === "L1") {
-        const l1Field = /目标|想要|计划|打算/.test(item.content) ? "recentGoals" : "recentPreferences";
+        const l1Field = resolveL1Field(item.field, item.content)
         await memoryStore.replaceL1Field(l1Field, item.content.trim());
         await memoryStore.appendReflectionLog({
           type: "l1_update",
           summary: `L1.${l1Field} 更新为 "${item.content.slice(0, 30)}"（置信度 ${item.confidence.toFixed(2)}）`,
         });
         updateCount++;
-        console.log(`[Reflection] L1.${l1Field} 更新: "${item.content.slice(0, 30)}"`);
+        console.log(`[PMRS/Recap] L1.${l1Field} 更新: "${item.content.slice(0, 30)}"`);
       }
     }
 
-    console.log(`[Reflection] 完成，更新了 ${updateCount} 个字段`);
+    console.log(`[PMRS/Recap] 完成，更新了 ${updateCount} 个字段`);
   } catch (err) {
-    console.warn("[Reflection] 执行失败:", err);
+    console.warn("[PMRS/Recap] 执行失败:", err);
   }
 }
 
 // ── 公开入口 ──
 
 /**
- * 运行记忆压缩 + Reflection。
+ * 运行片段压缩 + 回顾。
  * 由 scheduleMemoryWrite 在每 20 轮时触发。
  */
 export async function runMemoryCompression(): Promise<void> {
-  console.log("[Memory] 达到 20 轮，触发 Reflection + 记忆压缩");
+  console.log("[PMRS/Compressor] 达到 20 轮，触发回顾 + 片段压缩");
   await runReflection();
   await compressMemories();
 }

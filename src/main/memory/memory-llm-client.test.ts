@@ -95,11 +95,11 @@ describe("invokeMemoryStructuredOutput — repair context", () => {
       maxOutputTokens: 800,
       parseSchema: parseMemoryJudgeResult,
       validateBusiness: validateMemoryJudgeBusiness,
-    })).resolves.toEqual([]);
+    })).resolves.toEqual({ candidates: [], entities: [] });
 
     const repairMessages = mockConfig.requests[1]?.messages as Array<{ role: string; content: string }>;
     expect(repairMessages.at(-1)?.content).toContain("NO_JSON_OBJECT");
-    expect(repairMessages.at(-1)?.content).toContain('{"candidates":[]}');
+    expect(repairMessages.at(-1)?.content).toContain('{"candidates":[],"entities":[]}');
   });
 
   it("reflect repair instructs updates format, not groups", async () => {

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import {
   parseMemoryJudgeResult,
   validateMemoryJudgeBusiness,
+  isValidSlug,
 } from "./memory-schemas";
 
 describe("Memory Judge structured output schema", () => {
@@ -13,20 +14,145 @@ describe("Memory Judge structured output schema", () => {
         confidence: 0.9,
         triggerText: "我正在前端 chat 窗口迁移 react",
       }],
-    })).toEqual([{
-      layer: "L1",
-      content: "用户正在迁移 React Chat 窗口",
-      confidence: 0.9,
-      triggerText: "我正在前端 chat 窗口迁移 react",
-    }]);
+    })).toEqual({
+      candidates: [{
+        layer: "L1",
+        content: "用户正在迁移 React Chat 窗口",
+        confidence: 0.9,
+        triggerText: "我正在前端 chat 窗口迁移 react",
+      }],
+      entities: [],
+    });
   });
 
   test("treats an empty candidates envelope as a successful no-op", () => {
-    const candidates = parseMemoryJudgeResult({ candidates: [] });
+    const result = parseMemoryJudgeResult({ candidates: [] });
 
-    expect(validateMemoryJudgeBusiness(candidates)).toEqual({
+    expect(validateMemoryJudgeBusiness(result)).toEqual({
       status: "accepted",
-      value: [],
+      value: { candidates: [], entities: [] },
     });
+  });
+
+  test("parses entities alongside candidates and rejects bad types", () => {
+    const result = parseMemoryJudgeResult({
+      candidates: [],
+      entities: [
+        { name: "小张", type: "person", aliases: ["张三"] },
+        { name: "北京", type: "place" },
+      ],
+    });
+
+    expect(result.entities).toEqual([
+      { name: "小张", type: "person", aliases: ["张三"] },
+      { name: "北京", type: "place" },
+    ]);
+
+    expect(() => parseMemoryJudgeResult({
+      candidates: [],
+      entities: [{ name: "X", type: "unknown_type" }],
+    })).toThrow();
+  });
+
+  test("parses slug for L2 candidates and trims whitespace", () => {
+    const result = parseMemoryJudgeResult({
+      candidates: [{
+        layer: "L2",
+        content: "用户喜欢香菇",
+        confidence: 0.9,
+        triggerText: "我喜欢香菇",
+        slug: "  喜欢香菇  ",
+      }],
+      entities: [],
+    });
+
+    expect(result.candidates[0].slug).toBe("喜欢香菇");
+  });
+
+  test("drops invalid slug silently instead of failing the whole candidate", () => {
+    // 含标点 → 非法，丢弃 slug，候选照常通过
+    const withPunct = parseMemoryJudgeResult({
+      candidates: [{
+        layer: "L2",
+        content: "用户喜欢香菇",
+        confidence: 0.9,
+        triggerText: "我喜欢香菇",
+        slug: "喜欢香菇，很爱吃",
+      }],
+      entities: [],
+    });
+    expect(withPunct.candidates[0].slug).toBeUndefined();
+
+    // 含 emoji → 非法
+    const withEmoji = parseMemoryJudgeResult({
+      candidates: [{
+        layer: "L2",
+        content: "用户喜欢香菇",
+        confidence: 0.9,
+        triggerText: "我喜欢香菇",
+        slug: "喜欢香菇🍄",
+      }],
+      entities: [],
+    });
+    expect(withEmoji.candidates[0].slug).toBeUndefined();
+
+    // 超长（>20）→ 非法
+    const tooLong = parseMemoryJudgeResult({
+      candidates: [{
+        layer: "L2",
+        content: "用户喜欢香菇",
+        confidence: 0.9,
+        triggerText: "我喜欢香菇",
+        slug: "一二三四五六七八九十一二三四五六七八九十一",
+      }],
+      entities: [],
+    });
+    expect(tooLong.candidates[0].slug).toBeUndefined();
+  });
+
+  test("ignores slug on L0/L1 candidates even if LLM emits it", () => {
+    const result = parseMemoryJudgeResult({
+      candidates: [{
+        layer: "L1",
+        field: "recentPreferences",
+        content: "近期偏好深色主题",
+        confidence: 0.8,
+        triggerText: "我最近偏好深色主题",
+        slug: "深色偏好",
+      }],
+      entities: [],
+    });
+
+    expect(result.candidates[0].slug).toBeUndefined();
+  });
+});
+
+describe("isValidSlug", () => {
+  test("accepts Chinese, letters, digits, underscore, hyphen", () => {
+    expect(isValidSlug("喜欢香菇")).toBe(true);
+    expect(isValidSlug("和小张约饭")).toBe(true);
+    expect(isValidSlug("ReactChat迁移")).toBe(true);
+    expect(isValidSlug("react_chat-migration")).toBe(true);
+    expect(isValidSlug("片段_2026")).toBe(true);
+  });
+
+  test("rejects empty, whitespace-only, and over-length", () => {
+    expect(isValidSlug("")).toBe(false);
+    expect(isValidSlug("   ")).toBe(false);
+    expect(isValidSlug("一二三四五六七八九十一二三四五六七八九十一")).toBe(false);
+  });
+
+  test("rejects punctuation, quotes, spaces, emoji", () => {
+    expect(isValidSlug("喜欢香菇，很爱吃")).toBe(false);
+    expect(isValidSlug("喜欢 香菇")).toBe(false);
+    expect(isValidSlug("喜欢「香菇」")).toBe(false);
+    expect(isValidSlug("喜欢香菇🍄")).toBe(false);
+    expect(isValidSlug("喜欢/香菇")).toBe(false);
+  });
+
+  test("rejects non-string inputs", () => {
+    expect(isValidSlug(undefined)).toBe(false);
+    expect(isValidSlug(null)).toBe(false);
+    expect(isValidSlug(123)).toBe(false);
   });
 });

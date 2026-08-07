@@ -9,6 +9,7 @@
 import type { BusinessValidationResult } from "../orchestrator/structured-output/runner";
 import type { StructuredErrorDisposition } from "../orchestrator/structured-output/errors";
 import type { MemoryCandidate, MemoryConflictResolution } from "./memory-types";
+import type { ExtractedEntity } from "./entity-graph";
 
 // ── 公共工具 ──
 
@@ -56,6 +57,28 @@ const VALID_RESOLUTION_TYPES = new Set([
   "unrelated", "context_difference", "preference_evolution", "direct_conflict", "uncertain",
 ]);
 const VALID_MEMORY_STATUS = new Set(["active", "aging", "archived", "superseded", "merged"]);
+const VALID_ENTITY_TYPES = new Set(["person", "place", "concept", "preference", "organization"]);
+
+// ── L2 slug 校验 ──
+
+const SLUG_MAX_LENGTH = 20;
+/**
+ * slug 允许字符：中文字符（含扩展 A 区）、英文字母、数字、下划线、连字符。
+ * 拒绝空格、所有标点、引号、emoji。
+ */
+const SLUG_ALLOWED_PATTERN = /^[\u3400-\u9fa5A-Za-z0-9_-]+$/;
+
+/**
+ * 校验 L2 候选 slug 是否合法（≤20 字，仅中文/字母/数字/_/-，无标点/引号/emoji）。
+ * 非法 slug 直接丢弃（候选照常入库，回退到内部 id 作为文件名），不抛错。
+ */
+export function isValidSlug(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > SLUG_MAX_LENGTH) return false;
+  if (/\p{Extended_Pictographic}/u.test(trimmed)) return false;
+  return SLUG_ALLOWED_PATTERN.test(trimmed);
+}
 
 // ── 用于 provider_json_schema 的 JSON Schema ──
 // A 档模型（GPT/Claude/Kimi/Doubao）会收到这些 schema，严格约束输出结构。
@@ -71,6 +94,7 @@ export const MEMORY_JUDGE_JSON_SCHEMA: Record<string, unknown> = {
           layer: { type: "string", enum: ["L0", "L1", "L2"] },
           field: { type: "string" },
           summary: { type: "string" },
+          slug: { type: "string" },
           content: { type: "string" },
           confidence: { type: "number" },
           triggerText: { type: "string" },
@@ -88,8 +112,21 @@ export const MEMORY_JUDGE_JSON_SCHEMA: Record<string, unknown> = {
         additionalProperties: false,
       },
     },
+    entities: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          name: { type: "string" },
+          type: { type: "string", enum: ["person", "place", "concept", "preference", "organization"] },
+          aliases: { type: "array", items: { type: "string" } },
+        },
+        required: ["name", "type"],
+        additionalProperties: false,
+      },
+    },
   },
-  required: ["candidates"],
+  required: ["candidates", "entities"],
   additionalProperties: false,
 };
 
@@ -144,6 +181,17 @@ export const MEMORY_RESOLVE_JSON_SCHEMA: Record<string, unknown> = {
 
 // ── Judge Schema ──
 
+/**
+ * Memory Judge 的完整输出：记忆候选 + 顺手抽取的命名实体。
+ *
+ * 实体抽取复用 judge 的 LLM 调用（零额外调用），避免旧正则贪婪匹配产生的垃圾实体。
+ * 实体由 EntityGraph.ingestEntities() 入库。
+ */
+export interface MemoryJudgeResult {
+  candidates: MemoryCandidate[];
+  entities: ExtractedEntity[];
+}
+
 function parseMemoryCandidate(value: unknown): MemoryCandidate {
   const obj = requiredObject(value, "candidate");
   const layer = requiredString(obj.layer, "layer");
@@ -156,6 +204,10 @@ function parseMemoryCandidate(value: unknown): MemoryCandidate {
   };
   if (typeof obj.field === "string" && obj.field.trim()) result.field = obj.field.trim();
   if (typeof obj.summary === "string" && obj.summary.trim()) result.summary = obj.summary.trim();
+  // slug 仅对 L2 候选有意义；L0/L1 的 slug 一律丢弃
+  if (layer === "L2" && isValidSlug(obj.slug)) {
+    result.slug = (obj.slug as string).trim();
+  }
   if (VALID_IMPORTANCE.has(obj.importance as string)) result.importance = obj.importance as MemoryCandidate["importance"];
   if (VALID_STABILITY.has(obj.stability as string)) result.stability = obj.stability as MemoryCandidate["stability"];
   if (VALID_CERTAINTY.has(obj.certainty as string)) result.certainty = obj.certainty as MemoryCandidate["certainty"];
@@ -168,35 +220,64 @@ function parseMemoryCandidate(value: unknown): MemoryCandidate {
   return result;
 }
 
-/**
- * 从 LLM 输出中提取 MemoryCandidate 数组。
- * runStructuredOutput 的 parseSchema 回调。
- */
-export function parseMemoryJudgeResult(value: unknown): MemoryCandidate[] {
-  // runStructuredOutput 传入的是已经从 JSON 中提取的对象
-  // Judge 输出格式：数组 或 { candidates: [...] }
-  let arr: unknown[];
-  if (Array.isArray(value)) {
-    arr = value;
-  } else if (value && typeof value === "object" && Array.isArray((value as Record<string, unknown>).candidates)) {
-    arr = (value as Record<string, unknown>).candidates as unknown[];
-  } else {
-    throw new Error("Memory judge result must be an array or { candidates: [...] }");
+function parseExtractedEntity(value: unknown): ExtractedEntity {
+  const obj = requiredObject(value, "entity");
+  const name = requiredString(obj.name, "name");
+  const type = requiredString(obj.type, "type");
+  if (!VALID_ENTITY_TYPES.has(type)) {
+    throw new Error(`entity type must be one of ${[...VALID_ENTITY_TYPES].join(", ")}, got "${type}"`);
   }
-  return arr.map((item, i) => {
-    try {
-      return parseMemoryCandidate(item);
-    } catch (err) {
-      throw new Error(`candidate[${i}]: ${err instanceof Error ? err.message : String(err)}`);
-    }
+  const result: ExtractedEntity = { name, type: type as ExtractedEntity["type"] };
+  if (Array.isArray(obj.aliases)) {
+    result.aliases = stringArray(obj.aliases, "aliases")
+      .map((a) => a.trim())
+      .filter((a) => a && a !== name);
+  }
+  return result;
+}
+
+/**
+ * 从 LLM 输出中提取 MemoryJudgeResult（候选 + 实体）。
+ * runStructuredOutput 的 parseSchema 回调。
+ *
+ * 兼容两种顶层形式：
+ *   - { candidates: [...], entities: [...] }（新形式，A/D 档严格 schema）
+ *   - 纯数组（旧形式，无实体）—— 实体为空数组，保持向后兼容
+ */
+export function parseMemoryJudgeResult(value: unknown): MemoryJudgeResult {
+  if (Array.isArray(value)) {
+    // 旧形式：纯 candidates 数组，无实体
+    return {
+      candidates: value.map((item, i) => {
+        try { return parseMemoryCandidate(item); }
+        catch (err) { throw new Error(`candidate[${i}]: ${err instanceof Error ? err.message : String(err)}`); }
+      }),
+      entities: [],
+    };
+  }
+  const obj = requiredObject(value, "judge result");
+  const candidatesRaw = obj.candidates;
+  if (!Array.isArray(candidatesRaw)) {
+    throw new Error("Memory judge result.candidates must be an array");
+  }
+  const candidates = candidatesRaw.map((item, i) => {
+    try { return parseMemoryCandidate(item); }
+    catch (err) { throw new Error(`candidate[${i}]: ${err instanceof Error ? err.message : String(err)}`); }
   });
+  const entitiesRaw = Array.isArray(obj.entities) ? obj.entities : [];
+  const entities = entitiesRaw.map((item, i) => {
+    try { return parseExtractedEntity(item); }
+    catch (err) { throw new Error(`entity[${i}]: ${err instanceof Error ? err.message : String(err)}`); }
+  });
+  return { candidates, entities };
 }
 
 export function validateMemoryJudgeBusiness(
-  candidates: MemoryCandidate[],
-): BusinessValidationResult<MemoryCandidate[]> {
-  // 空数组是合法结果：表示最近对话没有值得写入的记忆。
-  return { status: "accepted", value: candidates };
+  result: MemoryJudgeResult,
+): BusinessValidationResult<MemoryJudgeResult> {
+  // 空候选是合法结果：表示最近对话没有值得写入的记忆。
+  // 空实体也是合法的：表示这段对话没有值得记录的命名实体。
+  return { status: "accepted", value: result };
 }
 
 // ── Compress Schema ──

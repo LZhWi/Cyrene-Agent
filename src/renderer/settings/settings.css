@@ -1552,6 +1552,50 @@ body {
 .memory-search input::placeholder {
   color: var(--rb-input-placeholder);
 }
+.memory-export {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+}
+.memory-export__row {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  width: 100%;
+}
+.memory-export__path {
+  color: var(--rb-text-muted);
+  font: var(--rb-text-small);
+  word-break: break-all;
+  padding: 6px 10px;
+  background: var(--rb-input-bg);
+  border-radius: 8px;
+  border: 1px solid var(--rb-input-border);
+}
+.memory-export__actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.memory-export__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--rb-text-muted);
+  font: var(--rb-text-small);
+  user-select: none;
+}
+.memory-export__toggle input {
+  cursor: pointer;
+}
+.memory-export__hint {
+  margin: 0;
+  color: var(--rb-text-muted);
+  font: var(--rb-text-small);
+  word-break: break-all;
+}
 .memory-list {
   min-height: 80px;
 }

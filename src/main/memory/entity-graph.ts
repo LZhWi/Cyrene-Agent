@@ -37,66 +37,17 @@ interface EntityGraphData {
   relations: EntityRelation[];
 }
 
-// ── 简单解析器（不依赖 LLM，用正则启发式提取） ──
+// ── 实体抽取输入类型 ──
+//
+// 实体抽取改由 Memory Judge 的 LLM 调用顺手产出（零额外 LLM 调用 + 零正则）。
+// 旧 ENTITY_PATTERNS 正则的 .{1,10} 贪婪匹配会把聊天碎片（标点/引号/emoji/单字）
+// 当成实体，产生「」就收尾」「（用户发送表情包：哈」之类的垃圾文件。
+// 详见 EntityGraph.ingestEntities()。
 
-// 常见实体触发模式
-const ENTITY_PATTERNS: Array<{ type: EntityNode["type"]; patterns: RegExp[] }> = [
-  {
-    type: "person",
-    patterns: [
-      /我的朋友(.{1,6})/g,
-      /我认识(.{1,6})/g,
-      /同事(.{1,6})/g,
-      /叫(.{1,4})(?:的人|的朋友|的同事|的老板)/g,
-      /有.{0,4}朋友.{0,4}(.{1,6})/g,
-      /(.{1,4})是我的朋友/g,
-    ],
-  },
-  {
-    type: "place",
-    patterns: [
-      /住在(.{1,10})/g,
-      /在(.{1,10})(?:工作|学习|生活|住|上班|上学)/g,
-      /去了(.{1,10})/g,
-      /在(.{1,10})出差/g,
-    ],
-  },
-  {
-    type: "organization",
-    patterns: [
-      /在(.{1,10})(?:公司|单位|工作室|团队|学校|大学|学院)/g,
-      /(.{1,10})公司/g,
-    ],
-  },
-  {
-    type: "preference",
-    patterns: [
-      /喜欢(.{1,10})(?:的东西|的活动|的食物|的音乐|的运动|的游戏|的动画|的漫画)/g,
-      /最爱(.{1,10})/g,
-      /讨厌(.{1,10})(?:的东西|的事情)/g,
-    ],
-  },
-];
-
-/** 从文本中启发式提取实体名，返回 [type, name] 列表 */
-export function extractEntitiesFromText(text: string): Array<{ type: EntityNode["type"]; name: string }> {
-  const results: Array<{ type: EntityNode["type"]; name: string }> = [];
-  const seen = new Set<string>();
-
-  for (const { type, patterns } of ENTITY_PATTERNS) {
-    for (const regex of patterns) {
-      const matches = text.matchAll(regex);
-      for (const m of matches) {
-        const name = m[1]?.trim();
-        if (name && name.length >= 2 && name.length <= 10 && !seen.has(`${type}:${name}`)) {
-          seen.add(`${type}:${name}`);
-          results.push({ type, name });
-        }
-      }
-    }
-  }
-
-  return results;
+export interface ExtractedEntity {
+  name: string;
+  type: EntityNode["type"];
+  aliases?: string[];
 }
 
 // ── 实体图谱管理器 ──
@@ -131,37 +82,56 @@ class EntityGraph {
     fs.writeFileSync(filePath, JSON.stringify(this.cache, null, 2), "utf8");
   }
 
-  /** 从一条对话文本中提取实体并入库 */
-  ingest(text: string): void {
+  /**
+   * 把一批已抽取的实体入库。
+   *
+   * 实体由 Memory Judge 的 LLM 调用顺手产出（{name, type, aliases}），
+   * 不再在此处用正则从原文抽取 —— 旧正则贪婪匹配会产生「」就收尾」之类的垃圾实体。
+   * 调用方：MemoryScheduler 在 judge 返回后调本方法。
+   */
+  ingestEntities(extracted: ExtractedEntity[]): void {
+    if (extracted.length === 0) return;
     const data = this.load();
-    const extracted = extractEntitiesFromText(text);
     const now = Date.now();
-    let hasNewEntity = false;
+    let changed = false;
 
-    for (const { type, name } of extracted) {
+    for (const { name, type, aliases } of extracted) {
+      const trimmedName = name?.trim();
+      if (!trimmedName || trimmedName.length < 2) continue;
       const existing = data.entities.find(
-        (e) => e.name === name || e.aliases.includes(name),
+        (e) => e.name === trimmedName || e.aliases.includes(trimmedName),
       );
       if (existing) {
         existing.mentionCount++;
         existing.lastMentionedAt = now;
+        // 合并 LLM 给出的新别名（去重），新别名也要喂给 jieba 避免误切
+        const newAliases = (aliases ?? [])
+          .map((a) => a.trim())
+          .filter((a) => a && a !== existing.name && !existing.aliases.includes(a));
+        if (newAliases.length > 0) {
+          existing.aliases.push(...newAliases);
+          for (const a of newAliases) this.feedSingleName(a);
+          changed = true;
+        }
       } else {
         data.entities.push({
           id: `ent_${now}_${Math.random().toString(36).slice(2, 8)}`,
-          name,
+          name: trimmedName,
           type,
-          aliases: [],
+          aliases: (aliases ?? [])
+            .map((a) => a.trim())
+            .filter((a) => a && a !== trimmedName),
           mentionCount: 1,
           firstMentionedAt: now,
           lastMentionedAt: now,
         });
-        hasNewEntity = true;
+        changed = true;
         // 新实体立即喂给 jieba，避免后续对话中该词被错误切分
-        this.feedSingleName(name);
+        this.feedSingleName(trimmedName);
       }
     }
 
-    if (extracted.length > 0) this.save();
+    if (changed) this.save();
   }
 
 /**

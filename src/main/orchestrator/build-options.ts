@@ -136,7 +136,7 @@ export interface BuildOptionsDeps {
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
 export interface OnRunFinishedDeps {
   loadModelSettings: () => ModelSettingsLite;
-  scheduleMemoryWrite: (userText: string, reply: string) => void;
+  scheduleMemoryWrite: (userText: string, reply: string, conversationId?: string) => void;
   scheduleSocialAtomExtraction?: (input: SocialExtractionInput) => void;
   inferRuntimeState: (userText: string, reply: string, flag: boolean) => { status: string };
   runtimeState: {
@@ -702,6 +702,7 @@ export async function onAgentRunFinished(
   latestUserText: string,
   deps: OnRunFinishedDeps,
   channel?: "wechat" | "feishu",
+  conversationId?: string,
 ): Promise<{ sticker: string | null }> {
   const chatContent = result.reply;
   const sideEffectUserText = stripTurnModelContextForSideEffects(latestUserText);
@@ -726,7 +727,7 @@ export async function onAgentRunFinished(
       now: socialContext.now,
     });
   } else {
-    deps.scheduleMemoryWrite(sideEffectUserText, chatContent);
+    deps.scheduleMemoryWrite(sideEffectUserText, chatContent, conversationId);
   }
 
   const settings = deps.loadModelSettings();

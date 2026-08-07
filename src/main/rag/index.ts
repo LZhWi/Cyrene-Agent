@@ -416,7 +416,7 @@ export function isUserMemoryVectorStoreReady(): boolean {
 }
 
 /**
- * 获取指定 source 的所有向量条目（含 embedding），用于记忆压缩 / 聚类。
+ * 获取指定 source 的所有向量条目（含 embedding），用于片段压缩 / 聚类。
  * 返回浅拷贝，调用方不应修改返回的 embedding。
  */
 export function getEntriesBySource(source: string): Array<{ id: string; text: string; embedding: number[]; createdAt: number; weight: number; metadata?: Record<string, unknown> }> {

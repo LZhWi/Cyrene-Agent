@@ -4,6 +4,7 @@ import { app } from "electron"
 import { ConflictLog, L0Profile, L1Profile, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryStore, ReflectionLog } from "./memory-types"
 import { appendMemoryTrace } from "./memory-trace"
 import { getMemoryLanguage } from "../locale-context"
+import { isImportingMemory } from "./obsidian-sync-flag"
 
 const CURRENT_SCHEMA_VERSION = 2
 const QUOTE_SNIPPET_MAX = 300
@@ -169,6 +170,11 @@ class MemoryStoreManager {
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
     fs.writeFileSync(filePath, JSON.stringify(store, null, 2), "utf8")
     this.cache = store
+    // 通知 Obsidian vault 绑定：记忆已变更，防抖触发自动同步
+    // 回流（Obsidian→PMRS）期间同步跳过，避免双向循环。标志读取是同步的（leaf 模块），
+    // 动态 import 仅为避免循环依赖（obsidian-exporter 反向依赖 memoryStore）。
+    if (isImportingMemory()) return
+    import("./obsidian-exporter").then(({ notifyMemoryChanged }) => notifyMemoryChanged()).catch(() => {})
   }
 
   async getL0(): Promise<L0Profile> {
@@ -391,6 +397,29 @@ class MemoryStoreManager {
       l2Id: mem.id,
       ragId: mem.ragId,
       details: { conflictRagId, memoryStatus: mem.status },
+    })
+    return mem
+  }
+
+  /**
+   * 仅更新某条 L2 的正文 content（用于 Obsidian 回流）。
+   * 不触碰 status / weight / createdAt 等运行时字段。
+   * 返回更新后的记忆；若 id 不存在或内容未变化则跳过保存（返回原记忆或 null）。
+   */
+  async updateL2Content(id: string, content: string): Promise<L2Memory | null> {
+    const store = await this.load()
+    const mem = store.l2.find((m) => m.id === id)
+    if (!mem) return null
+    if (mem.content === content) return mem
+    mem.content = content
+    await this.save(store)
+    appendMemoryTrace({
+      op: "l2.import-content",
+      layer: "L2",
+      status: "ok",
+      l2Id: mem.id,
+      ragId: mem.ragId,
+      details: { source: "obsidian-import" },
     })
     return mem
   }

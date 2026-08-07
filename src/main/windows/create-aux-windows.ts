@@ -8,9 +8,11 @@ import { attachExternalLinkHandler } from "./external-link";
 import {
   callWindow,
   getCurrentAppIconPath,
+  memoryWindow,
   reactChatSession,
   reactChatWindow,
   setCallWindowLocal,
+  setMemoryWindow,
   setReactChatWindow,
   setSettingsWindow,
   setSidebarWindow,
@@ -399,4 +401,65 @@ export function createCallWindow(): void {
 
   // 绑定给 call-manager
   setCallWindow(window);
+}
+
+/**
+ * 创建/复用记忆空间窗口。
+ */
+export function createMemoryWindow(): void {
+  if (memoryWindow && !memoryWindow.isDestroyed()) {
+    memoryWindow.show();
+    memoryWindow.focus();
+    return;
+  }
+
+  const display = screen.getPrimaryDisplay();
+  const { x: dx, y: dy, width: dw, height: dh } = display.workArea;
+  const width = 1280;
+  const height = 760;
+
+  const window = new BrowserWindow({
+    x: dx + Math.max(0, Math.floor((dw - width) / 2)),
+    y: dy + Math.max(0, Math.floor((dh - height) / 2)),
+    width,
+    height,
+    minWidth: 960,
+    minHeight: 540,
+    title: "昔涟 · 记忆空间",
+    icon: getCurrentAppIconPath(),
+    backgroundColor: "#00000000",
+    autoHideMenuBar: true,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: true,
+    webPreferences: {
+      preload: path.join(app.getAppPath(), "dist", "preload", "preload", "index.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  setMemoryWindow(window);
+
+  if (isDev) {
+    void window
+      .loadURL("http://localhost:5173/memory-ui/")
+      .catch((error) => console.error("[MemoryWindow] loadURL failed:", error));
+  } else {
+    void window
+      .loadFile(path.join(__dirname, "..", "..", "renderer", "memory-ui", "index.html"))
+      .catch((error) => console.error("[MemoryWindow] loadFile failed:", error));
+  }
+
+  window.once("ready-to-show", () => {
+    if (!window.isDestroyed()) window.show();
+  });
+
+  window.on("closed", () => {
+    if (memoryWindow === window) {
+      setMemoryWindow(null);
+    }
+  });
 }

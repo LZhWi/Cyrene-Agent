@@ -32,6 +32,12 @@ export interface L2Memory {
   id: string
   content: string
   triggerText: string
+  /**
+   * LLM 生成的精炼标题，用作 Obsidian 文件名与 wikilink 锚点。
+   * 缺失时回退到 id（l2_<ts>_<rand>）。
+   * id 仍为 PMRS 内部主键，写入 frontmatter，与文件名解耦。
+   */
+  slug?: string
   sourceConversationId: string
   createdAt: number
   lastAccessedAt: number
@@ -147,6 +153,11 @@ export interface MemoryCandidate {
   layer: "L0" | "L1" | "L2"
   field?: string
   summary?: string
+  /**
+   * L2 候选的精炼标题（≤20 字，仅中文/字母/数字/下划线/连字符）。
+   * 仅 L2 候选会消费此字段；缺失时回退到内部 id 作为文件名。
+   */
+  slug?: string
   content: string
   confidence: number
   triggerText: string
@@ -159,6 +170,8 @@ export interface MemoryCandidate {
   shouldWrite?: boolean
   reason?: string
   forbiddenOverclaims?: string[]
+  /** 来源会话 ID，由调度层注入（非 LLM 输出），用于 L2 回溯 */
+  sourceConversationId?: string
 }
 
 export interface MemoryJudgeTurn {

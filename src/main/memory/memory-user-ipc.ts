@@ -20,6 +20,9 @@ import {
 } from "../windows/window-state";
 import type { EmbeddingIndexService } from "../services/embedding/embedding-index-service";
 import { memoryStore } from "../memory/memory-store";
+import { exportMemoryToObsidianVault, syncToBoundVault } from "../memory/obsidian-exporter";
+import { loadObsidianVaultConfig, saveObsidianVaultConfig, unbindVault } from "../memory/obsidian-vault-config";
+import { startVaultWatcher, stopVaultWatcher } from "../memory/obsidian-importer";
 
 export interface MemoryUserToolIpcDependencies {
   get windowManager(): WindowManager | null;
@@ -163,6 +166,61 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
     return { ok: true };
   });
 
+  // ── Obsidian Vault 绑定 / 同步 / 配置 ──
+
+  // 一次性导出（不绑定）：弹目录选择框 → 调导出器
+  ipcMain.handle(IPC.MEMORY_EXPORT_OBSIDIAN_VAULT, async () => {
+    const result = await dialog.showOpenDialog({
+      title: "选择 Obsidian Vault 导出位置",
+      properties: ["openDirectory", "createDirectory"],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, canceled: true };
+    }
+    return exportMemoryToObsidianVault(result.filePaths[0]);
+  });
+
+  // 绑定 vault：弹目录选择 → 保存路径 → 立即同步一次 → 启动回流监听
+  ipcMain.handle(IPC.OBSIDIAN_VAULT_BIND, async () => {
+    const result = await dialog.showOpenDialog({
+      title: "选择要绑定的 Obsidian Vault 文件夹",
+      properties: ["openDirectory", "createDirectory"],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
+      return { ok: false, canceled: true };
+    }
+    const vaultPath = result.filePaths[0];
+    saveObsidianVaultConfig({ vaultPath });
+    // 绑定后立即同步一次
+    const syncResult = await syncToBoundVault();
+    // 启动 Obsidian → PMRS 回流监听
+    startVaultWatcher(vaultPath);
+    return { ok: syncResult.ok, vaultPath, fileCount: syncResult.fileCount, error: syncResult.error };
+  });
+
+  // 解绑：先停监听再清配置
+  ipcMain.handle(IPC.OBSIDIAN_VAULT_UNBIND, () => {
+    stopVaultWatcher();
+    unbindVault();
+    return { ok: true };
+  });
+
+  // 读配置
+  ipcMain.handle(IPC.OBSIDIAN_VAULT_GET_CONFIG, () => {
+    return loadObsidianVaultConfig();
+  });
+
+  // 设置自动同步开关
+  ipcMain.handle(IPC.OBSIDIAN_VAULT_SET_AUTO_SYNC, (_event, autoSync: boolean) => {
+    const updated = saveObsidianVaultConfig({ autoSync: Boolean(autoSync) });
+    return { ok: true, config: updated };
+  });
+
+  // 立即同步
+  ipcMain.handle(IPC.OBSIDIAN_VAULT_SYNC_NOW, async () => {
+    return syncToBoundVault();
+  });
+
   ipcMain.handle(IPC.USER_GET_PROFILE, () => loadUserProfile());
 
   ipcMain.handle(IPC.USER_SAVE_PROFILE, (_event, profile: Partial<{ avatarPath?: string } & Record<string, unknown>>) => {
@@ -235,4 +293,10 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
     console.log("[Skill] " + p.id + " enabled=" + (p.enabled !== false));
     return { ok: true };
   });
+
+  // 启动时：若已绑定 vault，恢复 Obsidian → PMRS 回流监听
+  const existingConfig = loadObsidianVaultConfig();
+  if (existingConfig.vaultPath) {
+    startVaultWatcher(existingConfig.vaultPath);
+  }
 }

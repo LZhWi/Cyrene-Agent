@@ -420,7 +420,7 @@ app.whenReady().then(async () => {
   registerAgUiIpc(
     (input) => agentRuntime.buildOptions(input),
     // sticker 由 bridge 发送回本次 run 的发起窗口；默认兜底目标为 reactChatWindow。
-    (result, latestUserText) => agentRuntime.onRunFinished(result, latestUserText),
+    (result, latestUserText, conversationId) => agentRuntime.onRunFinished(result, latestUserText, undefined, conversationId),
     () => reactChatWindow,
     proactiveLifecycle.proactiveConversationLifecycle,
   );

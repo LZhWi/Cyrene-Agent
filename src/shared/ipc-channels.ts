@@ -207,6 +207,12 @@ export const IPC = {
   MEMORY_PANEL_DELETE_IMPORTED_DOC: "memory-panel:delete-imported-doc",
   MEMORY_PANEL_SAVE_L0: "memory-panel:save-l0",
   MEMORY_PANEL_SAVE_L1: "memory-panel:save-l1",
+  MEMORY_EXPORT_OBSIDIAN_VAULT: "memory:export-obsidian-vault",
+  OBSIDIAN_VAULT_BIND: "obsidian-vault:bind",
+  OBSIDIAN_VAULT_UNBIND: "obsidian-vault:unbind",
+  OBSIDIAN_VAULT_GET_CONFIG: "obsidian-vault:get-config",
+  OBSIDIAN_VAULT_SET_AUTO_SYNC: "obsidian-vault:set-auto-sync",
+  OBSIDIAN_VAULT_SYNC_NOW: "obsidian-vault:sync-now",
 
   // MCP server management
   MCP_ADD_SERVER: "mcp:add-server",

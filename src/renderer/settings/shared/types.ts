@@ -184,11 +184,35 @@ export interface MemoryPanelPayload {
   }>;
 }
 
+export interface ObsidianVaultConfig {
+  vaultPath: string;
+  autoSync: boolean;
+  lastSyncAt: number;
+}
+
 export interface MemoryPanelApi {
   getData: () => Promise<MemoryPanelPayload>;
   deleteImportedDoc: (importId: string, fileName?: string) => Promise<{ ok: boolean; deleted: number }>;
   saveL0: (patch: Record<string, unknown>) => Promise<{ ok: boolean }>;
   saveL1: (patch: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  exportToObsidianVault: () => Promise<{
+    ok: boolean;
+    outputPath?: string;
+    fileCount?: number;
+    error?: string;
+    canceled?: boolean;
+  }>;
+  bindVault: () => Promise<{
+    ok: boolean;
+    vaultPath?: string;
+    fileCount?: number;
+    error?: string;
+    canceled?: boolean;
+  }>;
+  unbindVault: () => Promise<{ ok: boolean }>;
+  getVaultConfig: () => Promise<ObsidianVaultConfig>;
+  setAutoSync: (autoSync: boolean) => Promise<{ ok: boolean; config: ObsidianVaultConfig }>;
+  syncNow: () => Promise<{ ok: boolean; vaultPath?: string; fileCount?: number; error?: string; skipped?: boolean }>;
 }
 
 export interface SettingsApi {

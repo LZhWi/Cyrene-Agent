@@ -83,7 +83,7 @@ const OPERATION_TO_SO_STAGE: Record<MemoryLlmOperation, StructuredOutputStage> =
 };
 
 const OPERATION_REPAIR_FORMAT: Record<MemoryLlmOperation, string> = {
-  judge: '顶层必须是 JSON 对象，格式为 {"candidates":[...]}；没有候选时返回 {"candidates":[]}。',
+  judge: '顶层必须是 JSON 对象，格式为 {"candidates":[...],"entities":[...]}；没有候选时返回 {"candidates":[],"entities":[]}。',
   compress: '顶层必须是 JSON 对象，格式为 {"groups":[...]}。',
   reflect: '顶层必须是 JSON 对象，格式为 {"updates":[...]}；没有更新时返回 {"updates":[]}。',
   resolve: "顶层必须是一个符合原始字段要求的 JSON 对象。",

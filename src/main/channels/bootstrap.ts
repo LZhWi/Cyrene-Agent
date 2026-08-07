@@ -120,7 +120,7 @@ export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSu
     });
     channelResult.text = reply;
     if (agent.lastResult) {
-      const finished = await deps.agentRuntime.onRunFinished(agent.lastResult, msg.text, msg.channel);
+      const finished = await deps.agentRuntime.onRunFinished(agent.lastResult, msg.text, msg.channel, sessionId);
       channelResult.sticker = finished.sticker;
     }
     void indexConversationTurn(sessionId, msg.text, reply);

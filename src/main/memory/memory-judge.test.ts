@@ -8,7 +8,7 @@ vi.mock("./memory-llm-client", () => ({
   getDefaultMaxOutputTokens: () => 800,
   invokeMemoryStructuredOutput: vi.fn(async (options: { systemPrompt: string }) => {
     mocks.structuredOptions = options;
-    return [];
+    return { candidates: [], entities: [] };
   }),
 }));
 
@@ -34,7 +34,20 @@ describe("MemoryJudge B-tier output contract", () => {
 
     const prompt = mocks.structuredOptions?.systemPrompt ?? "";
     expect(prompt).toContain('顶层 JSON 对象');
-    expect(prompt).toContain('{"candidates":[]}');
+    expect(prompt).toContain('{"candidates":[],"entities":[]}');
     expect(prompt).not.toContain("输出格式为 JSON 数组");
+  });
+
+  test("instructs LLM to emit slug for L2 candidates", async () => {
+    await new MemoryJudge().judge("我喜欢香菇", "记下来了", "conversation-1");
+
+    const prompt = mocks.structuredOptions?.systemPrompt ?? "";
+    expect(prompt).toContain("L2 slug 抽取");
+    expect(prompt).toContain("L2 片段必须输出 slug");
+    // 校验规则要明确传给 LLM
+    expect(prompt).toMatch(/≤20\s*字/);
+    expect(prompt).toContain("禁止标点、引号、空格、emoji");
+    // L0/L1 明确禁止 slug
+    expect(prompt).toContain("L0 / L1 候选不要输出 slug 字段");
   });
 });

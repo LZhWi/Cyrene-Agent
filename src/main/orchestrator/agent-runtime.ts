@@ -77,7 +77,7 @@ type SchedulerRunOptions = Omit<CyreneRunOptions, "toolSystemContent" | "soulSys
 
 export interface AgentRuntime {
   buildOptions(input: AguiRunInput): Promise<{ options: CyreneRunOptions; latestUserText: string }>;
-  onRunFinished(result: CyreneRunResult, latestUserText: string, channel?: "wechat" | "feishu"): Promise<{ sticker: string | null }>;
+  onRunFinished(result: CyreneRunResult, latestUserText: string, channel?: "wechat" | "feishu", conversationId?: string): Promise<{ sticker: string | null }>;
   buildSchedulerOptions(task: ScheduledTask): Promise<SchedulerRunOptions>;
 }
 
@@ -234,9 +234,9 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       return buildAgentRunOptions(input, buildOptionsDeps);
     },
 
-    onRunFinished: async (result, latestUserText, channel) => {
+    onRunFinished: async (result, latestUserText, channel, conversationId) => {
       const onRunFinishedDeps = buildOnRunFinishedDeps();
-      return onAgentRunFinished(result, latestUserText, onRunFinishedDeps, channel);
+      return onAgentRunFinished(result, latestUserText, onRunFinishedDeps, channel, conversationId);
     },
 
     buildSchedulerOptions: async (task) => {
