@@ -19,11 +19,6 @@ export let tasksWindow: BrowserWindow | null = null;
 export let settingsWindow: BrowserWindow | null = null;
 export let stickerManagerWindow: BrowserWindow | null = null;
 export let callWindow: BrowserWindow | null = null;
-export let memoryWindow: BrowserWindow | null = null;
-
-export function setMemoryWindow(win: BrowserWindow | null): void {
-  memoryWindow = win;
-}
 
 export function setReactChatWindow(win: BrowserWindow | null): void {
   reactChatWindow = win;
