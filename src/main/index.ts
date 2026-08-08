@@ -2136,7 +2136,8 @@ async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
     relevantMemory: memoryContext,
     // [你的生活] 拟态日程：主动消息分享生活时的唯一合法素材源。
     lifeContext: buildLifeContext(new Date(snapshot.now), app.getPath("userData")),
-    // 最近屏幕观察：让 proactive 判断用户是否在忙，决定是否打扰。
+    // 最近屏幕观察：给 proactive 用户当前在做什么的参考信息——
+    // 既用于判断是否在忙、决定是否打扰，模型也可自决是否自然地提起当话题。
     screenActivity: (() => {
       // 自愈拉起：配置曾临时失效导致 stop() 后恢复的场景，在使用点补启动
       screenMonitorService.ensureRunningIfEnabled(loadGeneralSettings().screenMonitorEnabled, loadVisionConfig());

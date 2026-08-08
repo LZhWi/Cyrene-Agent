@@ -20,7 +20,9 @@ export interface BuildProactiveMessagesInput {
   toneRules?: string;
   /** [你的生活] 拟态日程：主动消息想分享生活时的唯一合法素材源（替代凭空编造现实见闻）。 */
   lifeContext?: string;
-  /** 最近屏幕观察摘要：让 proactive 判断用户当前是否在忙（如写代码/开会），决定是否打扰。 */
+  /** 最近屏幕观察摘要：给 proactive 的用户当前在做什么的参考信息——
+   *  既可判断用户是否在忙、决定是否打扰，模型也可自行决定自然地提起它当话题
+   *  （所有场景允许，不暴露检测机制）。 */
   screenActivity?: string;
 }
 
@@ -96,7 +98,13 @@ export function buildProactiveMessages(input: BuildProactiveMessagesInput): Chat
   if (input.userProfile?.trim()) systemParts.push(`[用户画像]\n${input.userProfile.trim()}`);
   if (input.relevantMemory?.trim()) systemParts.push(`[相关长期记忆]\n${input.relevantMemory.trim()}`);
   if (input.lifeContext?.trim()) systemParts.push(input.lifeContext.trim());
-  if (input.screenActivity?.trim()) systemParts.push(`[屏幕活动]\n${input.screenActivity.trim()}`);
+  // [屏幕活动]：信息提供式注入——提不提、提多深由模型自决（所有场景允许）；
+  // 使用指引随内容给出，"不暴露机制"红线与 PROACTIVE_SYSTEM/NIGHT_SYSTEM 一致。
+  if (input.screenActivity?.trim()) {
+    systemParts.push(
+      `[屏幕活动]\n${input.screenActivity.trim()}\n这是用户此刻的电脑活动内容：你可以自行判断要不要自然地提起它（完全不提、轻提、或关心展开都行），也可以只用它来判断用户是否在忙、是否保持安静；如需提起时，措辞要自然，可以使用自然的拟人化动作表达（如你“看到”用户在……），但是不要暴露检测、监控之类的机制。`,
+    );
+  }
   systemParts.push(formatHistory("最近使用的普通聊天会话", input.ordinaryHistory));
   systemParts.push(formatHistory("主动聊天专用会话", input.proactiveHistory));
   if (isActiveNight(input.localNow, input.idleSec)) systemParts.push(NIGHT_SYSTEM);

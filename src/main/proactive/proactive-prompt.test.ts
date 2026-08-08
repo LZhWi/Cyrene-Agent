@@ -168,6 +168,41 @@ describe("proactive prompt", () => {
     expect(String(withoutLife[0].content)).not.toContain(lifeMarker);
   });
 
+  it("injects screen activity as freely-mentionable reference info", () => {
+    const marker = "用户当前屏幕活动：类型：工作，内容：用户在调试代码。（2 分钟前观测）";
+    const withScreen = buildProactiveMessages({
+      basePersona: "P",
+      screenActivity: marker,
+      ordinaryHistory: [],
+      proactiveHistory: [],
+      sceneId: "work_break",
+      localNow: new Date(2026, 6, 13, 14, 0),
+      idleSec: 0,
+      unansweredCount: 0,
+    });
+    const system = String(withScreen[0].content);
+    expect(system).toContain("[屏幕活动]");
+    expect(system).toContain(marker);
+    // 使用指引：允许自决（含完全不提）+ 拟人化表达许可 + 不暴露机制红线
+    expect(system).toContain("你可以自行判断要不要自然地提起它");
+    expect(system).toContain("完全不提、轻提、或关心展开都行");
+    expect(system).toContain("你“看到”用户在");
+    expect(system).toContain("不要暴露检测、监控之类的机制");
+    // 排在历史墙之前（与其它素材块同层）
+    expect(system.indexOf(marker)).toBeLessThan(system.indexOf("[最近使用的普通聊天会话]"));
+
+    const withoutScreen = buildProactiveMessages({
+      basePersona: "P",
+      ordinaryHistory: [],
+      proactiveHistory: [],
+      sceneId: "work_break",
+      localNow: new Date(2026, 6, 13, 14, 0),
+      idleSec: 0,
+      unansweredCount: 0,
+    });
+    expect(String(withoutScreen[0].content)).not.toContain("[屏幕活动]");
+  });
+
   it("night system shares feelings without fabricating recent activities", () => {
     const night = buildProactiveMessages({
       basePersona: "P",

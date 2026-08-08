@@ -48,27 +48,23 @@ body {
   opacity: 0.58;
 }
 
-/* pearl-white 整体背景统一为很淡的粉白：卡片白叠 2.5% 粉（演进：96%+4% →
-   97%+3% → 98%+2% → 还原 97%+3% → 97.5%+2.5%，取两档中间值整体提亮）。
-   html 前缀提权 (0,2,1)：theme.css 后置加载且同为 (0,2,0)，必须压过。
-   （曾试过底色层 70% 透明 / 上实下透渐变让头像透出，用户描述不清
-   效果不对，均已还原；底色保持完全不透明。） */
+/* pearl-white 整体背景：纯色 #fdf9fb（用户取截图色，实测
+   rgb(253,249,251)，极淡粉白）。演进：96%+4% → 97%+3% → 98%+2% →
+   还原 97%+3% → 97.5%+2.5% → 98.5%+1.5% → 调回 97.5%+2.5% →
+   98%+2% → 纯色 #fdf9fb（当前，光斑同步关闭）。html 前缀提权 (0,2,1)：
+   theme.css 后置加载且同为 (0,2,0)，必须压过。（曾试过底色层 70% 透明 /
+   上实下透渐变让头像透出，用户描述不清效果不对，均已还原；底色保持
+   完全不透明。） */
 html[data-ui-theme="pearl-white"] .chat {
-  background: color-mix(in srgb, var(--rb-card-bg) 97.5%, var(--rb-pink-500));
+  background: #fdf9fb;
 }
 
-/* pearl-white 环境柔光斑：多层淡粉径向渐变叠在底色上，避免大面积
-   纯色显得单调。(0,3,1) 压过 theme.css 的 pearl-white .chat::before 规则。
-   光斑浓度定档：左上 0.07（底色从 2% 还原回 3% 粉时，为保持左上角观感
-   不变同步下调 0.01 补偿）、右下粉 0.08、右上 0.055。
-   对角白色提亮层加强并放宽范围，配合底色提亮。 */
+/* pearl-white 环境柔光斑：背景改纯色 #fdf9fb 后关闭（opacity: 0 保留层
+   便于恢复）。(0,3,1) 压过 theme.css 的 pearl-white .chat::before 规则。
+   原配方：三层粉 radial-gradient（左上 0.065、右下粉 0.055、右上 0.05）
+   + 对角白色提亮层 0.55/42%。 */
 html[data-ui-theme="pearl-white"] .chat::before {
-  opacity: 1;
-  background:
-    radial-gradient(48% 40% at 12% 0%, rgba(236, 72, 153, 0.07), transparent 72%),
-    radial-gradient(55% 48% at 92% 100%, rgba(244, 114, 182, 0.08), transparent 72%),
-    radial-gradient(34% 30% at 88% 8%, rgba(236, 72, 153, 0.055), transparent 70%),
-    linear-gradient(135deg, rgba(255, 255, 255, 0.55), transparent 42%);
+  opacity: 0;
 }
 
 /* 漂浮光斑（粒子 canvas）在 pearl-white 下隐藏：浅底上观感杂乱，
@@ -84,22 +80,32 @@ html[data-ui-theme="pearl-white"] .chat__messages {
   background: transparent;
 }
 
-/* 输入区已改为悬浮单卡片（对齐上游 Playa-0v0）：pearl-white 卡片用
-   96% 叠粉的淡薰衣草白（≈截图 #F5F0F8）+ 轻阴影；文件标签带变透明。
-   (0,2,1) 压过 theme.css 的 --rb-bg-2 灰带规则。
-   （曾加过整卡 opacity: 0.7，用户要求还原，卡片保持完全不透明。） */
+/* 输入区悬浮单卡片（对齐上游 Playa-0v0）：pink-100 亚克力用户反馈
+   太浓，改为用户截屏取色的纯色实底——默认 #FEFDFE（实测
+   rgb(254,253,254)），悬停/聚焦加深一档 #fcf9fb（实测 rgb(252,249,251)）。
+   背景不透明后亚克力 blur 已移除。
+   演进：96% 叠粉不透明 → 白 0.75 亚克力 → 淡粉 0.75 亚克力（太浓否决）
+   → 截图纯色（当前）。早年整卡 opacity: 0.7 也被否决。
+   (0,2,1) 压过 theme.css 的 --rb-bg-2 灰带规则。 */
 html[data-ui-theme="pearl-white"] .chat__input {
-  background: color-mix(in srgb, var(--rb-card-bg) 96%, var(--rb-pink-500));
+  background: #FEFDFE;
   border-color: rgba(0, 0, 0, 0.05);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+  transition: transform 180ms ease, box-shadow 180ms ease, border-color 180ms ease,
+    background 180ms ease;
 }
 html[data-ui-theme="pearl-white"] .chat__input:hover {
+  background: #fcf9fb;
   border-color: rgba(0, 0, 0, 0.09);
   box-shadow: 0 3px 12px rgba(0, 0, 0, 0.07);
 }
+/* 聚焦反馈：整卡上浮动画——translateY(-2px) + 阴影加深；
+   背景同悬停加深一档。 */
 html[data-ui-theme="pearl-white"] .chat__input:focus-within {
-  border-color: rgba(236, 72, 153, 0.35);
-  box-shadow: 0 0 0 3px var(--rb-pink-100), 0 2px 8px rgba(0, 0, 0, 0.05);
+  transform: translateY(-2px);
+  background: #fcf9fb;
+  border-color: rgba(0, 0, 0, 0.09);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.08);
 }
 html[data-ui-theme="pearl-white"] .chat__file-tags {
   background: transparent;
@@ -107,23 +113,30 @@ html[data-ui-theme="pearl-white"] .chat__file-tags {
 
 /* textarea 本身透明：theme.css 给 #input 的输入框配方（不透明底）与
    聚焦描边需中和掉，焦点反馈由整张卡片承担。(1,2,1) 压过
-   theme.css 的 (1,2,0)。 */
+   theme.css 的 (1,2,0)。输入文字与 AI 气泡同款 #3d3a46（用户要求；
+   演进：default #2c2c2e → muted #4f4a57 → #3d3a46）；提示文字改中性灰
+   #8e8e93（用户要求，压过 theme.css 的 --rb-input-placeholder #6f6876）。 */
 html[data-ui-theme="pearl-white"] #input,
 html[data-ui-theme="pearl-white"] #input:focus {
   background: transparent;
   border-color: transparent;
   box-shadow: none;
+  color: #3d3a46;
+}
+html[data-ui-theme="pearl-white"] #input::placeholder {
+  color: #8e8e93;
 }
 
 /* 底部功能行图标改裸图标（对齐上游截图）：theme.css 给
    .chat__attach / .chat__sticker-btn 的浅白灰亚克力盒子在此压回
-   透明 + 灰图标；选中/带文件态的粉系着色仍由 theme.css 接管。 */
+   透明 + 中性灰图标 #8e8e93（用户要求灰色；演进：muted #4f4a57 →
+   faint #6f6876 → 中性灰）；选中/带文件态的粉系着色仍由 theme.css 接管。 */
 html[data-ui-theme="pearl-white"] .chat__attach,
 html[data-ui-theme="pearl-white"] .chat__sticker-btn {
   background: transparent;
   border-color: transparent;
   box-shadow: none;
-  color: var(--rb-text-muted);
+  color: #8e8e93;
 }
 html[data-ui-theme="pearl-white"] .chat__attach:hover,
 html[data-ui-theme="pearl-white"] .chat__sticker-btn:hover {
@@ -133,29 +146,51 @@ html[data-ui-theme="pearl-white"] .chat__sticker-btn:hover {
   color: var(--rb-pink-600);
 }
 
-/* 发送按钮随上游截图：浅灰圆底 + 灰箭头（粉色渐变仅保留在
-   暗色主题）。(0,2,1)/(0,4,1) 压过 theme.css 的主按钮配方。 */
+/* 发送按钮随上游截图：浅灰圆底 + 中性灰箭头（粉色渐变仅保留在
+   暗色主题；箭头同用户要求改中性灰）。(0,2,1)/(0,4,1)
+   压过 theme.css 的主按钮配方。 */
 html[data-ui-theme="pearl-white"] .chat__send {
   background: rgba(0, 0, 0, 0.06);
-  color: var(--rb-text-muted);
+  color: #8e8e93;
   box-shadow: none;
 }
+/* 悬停与附件/表情按钮对齐（用户要求）：淡粉底 + 品牌粉图标。 */
 html[data-ui-theme="pearl-white"] .chat__send:hover:not(:disabled) {
-  background: rgba(0, 0, 0, 0.10);
-  color: var(--rb-text-default);
+  background: rgba(236, 72, 153, 0.06);
+  color: var(--rb-pink-600);
   box-shadow: none;
 }
 
-/* AI 气泡：纯白亚克力 rgba(255,255,255,0.60)（原灰白 250,251,253 用户要求
-   改纯白），同款模糊度，让淡粉底色微微透出。(0,3,1) 特异性压过 theme.css
-   的 (0,2,2)。文字用深软炭灰 #3d3a46（带紫调，对比度约 10:1）；
+/* AI 气泡：纯白亚克力 rgba(255,255,255,0.70)（0.60 → 0.65 → 0.70，用户
+   两次要求提不透明度；原灰白 250,251,253 用户要求改纯白），同款模糊度，
+   让淡粉底色微微透出。(0,3,1) 特异性压过 theme.css
+   的 (0,2,2)。文字用深软炭灰 #3d3a46（带紫调，对比度约 10:1；演进：
+   #3d3a46 → 改浅 → #575362 → 深一点 → #4a4652 → 再加深 → 回 #3d3a46）；
    气泡内 markdown 元素（代码/链接等）仍走各自配色。
+   描边：半透明白粉纱边 rgba(255,219,233,0.45)（用户指定，替换默认的
+   无彩灰 --rb-border-soft #e5e5ea；首版 255,199,221/0.65 用户要求
+   再淡一点、透明度再高一点）。
    阴影：用户气泡保持基础 .msg__bubble 原样（0 10px 28px 0.18）；
    AI 气泡单独淡化（theme.css 给的 --rb-shadow-card 也被此规则压过，
-   外阴影 0.05 → 0.03）。 */
+   外阴影 0.05 → 0.03）。
+   f4a16ae 之后的三次尝试均已否决还原：白底+粉字（方案 C）、深灰底+粉白、
+   对齐用户气泡 pink-500 粉底白字。 */
 html[data-ui-theme="pearl-white"] .msg--model .msg__bubble {
-  background: rgba(255, 255, 255, 0.60);
+  background: rgba(255, 255, 255, 0.70);
   color: #3d3a46;
+  border-color: rgba(255, 219, 233, 0.45);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.03), inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  backdrop-filter: blur(14px) saturate(150%);
+  -webkit-backdrop-filter: blur(14px) saturate(150%);
+}
+
+/* 表情包气泡对齐 AI 气泡设计（用户要求）：同款白亚克力底 + 白粉纱边 +
+   淡化阴影 + 亚克力模糊，圆角/尺寸保持 sticker 自身 18px。(0,2,1) 压过
+   theme.css 的 [data-ui-theme] .msg__sticker（0,2,0）。sticker 自带
+   position:relative + z-index:1 压过 AI 气泡 backdrop-filter 层叠，无需动。 */
+html[data-ui-theme="pearl-white"] .msg__sticker {
+  background: rgba(255, 255, 255, 0.60);
+  border-color: rgba(255, 219, 233, 0.45);
   box-shadow: 0 6px 18px rgba(0, 0, 0, 0.03), inset 0 1px 0 rgba(255, 255, 255, 0.5);
   backdrop-filter: blur(14px) saturate(150%);
   -webkit-backdrop-filter: blur(14px) saturate(150%);
@@ -1492,12 +1527,23 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
   right: 128px;
   max-height: 260px;
   overflow-y: auto;
+  /* 滚动条与聊天窗口统一：细轨 + 透明槽 + --rb-border-strong 拇指
+     （pearl-white 为 #d2d2d7 浅灰），替换系统默认粗黑滚动条。 */
+  scrollbar-width: thin;
+  scrollbar-color: var(--rb-border-strong) transparent;
   border-radius: 18px;
   background: linear-gradient(145deg, var(--rb-bg-3), var(--rb-bg-2));
   border: 1px solid var(--rb-border-soft);
   box-shadow: 0 -12px 40px rgba(0, 0, 0, 0.32);
   z-index: 50;
   padding: 12px;
+}
+
+.sticker-picker::-webkit-scrollbar { width: 6px; }
+.sticker-picker::-webkit-scrollbar-track { background: transparent; }
+.sticker-picker::-webkit-scrollbar-thumb {
+  background: var(--rb-border-strong);
+  border-radius: 3px;
 }
 
 .sticker-picker[hidden] { display: none; }
