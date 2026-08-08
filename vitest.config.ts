@@ -11,5 +11,12 @@ export default defineConfig({
       "skills/**/tests/**/*.test.ts",
       "scripts/cline-poc/**/*.test.ts",
     ],
+    // 使用 fork 进程池，避免 Windows 下 libuv fs-event 断言崩溃
+    pool: "forks",
+    poolOptions: {
+      forks: {
+        singleFork: true,
+      },
+    },
   },
 });
