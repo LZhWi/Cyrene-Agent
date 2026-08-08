@@ -7,7 +7,7 @@
 import * as fs from "fs"
 import * as os from "os"
 import * as path from "path"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const electronMock = vi.hoisted(() => ({
   userDataDir: "",
@@ -30,6 +30,22 @@ describe("isImporting flag prevents PMRS→Obsidian sync loop", () => {
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "obsidian-loop-"))
     vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-"))
     vi.resetModules()
+  })
+
+  afterEach(async () => {
+    const { _resetForTest } = await import("./obsidian-importer")
+    _resetForTest()
+    // 清理临时目录，避免 fs.watch 在 worker 退出时因监听已删除目录而崩溃
+    try {
+      fs.rmSync(electronMock.userDataDir, { recursive: true, force: true })
+    } catch {
+      // ignore
+    }
+    try {
+      fs.rmSync(vaultDir, { recursive: true, force: true })
+    } catch {
+      // ignore
+    }
   })
 
   it("回流期间的记忆写入不会触发反向同步", async () => {

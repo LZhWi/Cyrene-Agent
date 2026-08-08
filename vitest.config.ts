@@ -16,5 +16,9 @@ export default defineConfig({
     singleFork: true,
     maxWorkers: 1,
     minWorkers: 1,
+    // 明确禁用 watch/cache，减少 fs 事件
+    watch: false,
+    cache: false,
+    fileParallelism: false,
   },
 });
