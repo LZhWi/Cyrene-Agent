@@ -91,11 +91,8 @@ fixture permanent 条目，验证旁路（始终注入，不进 DMAE）。
 // 按权重选择（高 0.2 / 中-高 0.3 / 中 0.3 / 低 0.2）
 // 关键词池：每档给一组（用真实 fixture 里条目的触发词子集）
 const TIER_KEYWORDS: Array<{ tier: string; I: number; weight: number; keywords: string[] }> = [
-  // I=90 关键词池：去掉"昔涟""Cyrene"（这些是 soul 层常用昵称，worldbook 不应通过它们触发；
-  // 用户日常叫她"昔涟"应走 soul 的人格，而非 worldbook 的身世条目）。
-  // 保留"PHILIA093""翁法罗斯之心""权杖核心""最初形态""你从哪来"等纯身世关键词。
-  // 注：这些关键词必须在对应 .md 条目的"触发词"字段里存在，否则触发不到。
-  { tier: "high",     I: 90, weight: 0.2, keywords: ["迷迷", "PHILIA093", "翁法罗斯之心", "权杖核心", "最初形态", "你从哪来", "德谬歌"] },
+  // I=90 关键词池：必须与 fixture "昔涟主角" 条目的触发词字段一致，否则生成 rounds 也触发不到。
+  { tier: "high",     I: 90, weight: 0.2, keywords: ["昔涟", "Cyrene", "迷迷", "翁法罗斯之心"] },
   { tier: "mid-high", I: 70, weight: 0.3, keywords: ["哀丽秘榭", "故乡", "麦田"] },
   { tier: "mid",      I: 45, weight: 0.3, keywords: ["咖啡", "Blender", "猫", "星穹铁道"] },
   { tier: "low",      I: 15, weight: 0.2, keywords: ["今天下午", "天气", "上周"] },
