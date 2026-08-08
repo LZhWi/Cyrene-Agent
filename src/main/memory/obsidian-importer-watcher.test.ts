@@ -6,7 +6,7 @@
 import * as fs from "fs"
 import * as os from "os"
 import * as path from "path"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 const electronMock = vi.hoisted(() => ({
   userDataDir: "",
@@ -27,8 +27,24 @@ describe("vault watcher", () => {
 
   beforeEach(() => {
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "obsidian-watcher-"))
-    vaultDir = fs.mkdtempSync(path.join(os.tmpdir(), "vault-"))
+    // 解析为规范长路径，避免 Windows 短路径导致 fs.watch 内部断言失败
+    vaultDir = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "vault-")))
     vi.resetModules()
+  })
+
+  afterEach(async () => {
+    const { _resetForTest } = await import("./obsidian-importer")
+    _resetForTest()
+    try {
+      fs.rmSync(electronMock.userDataDir, { recursive: true, force: true })
+    } catch {
+      // ignore
+    }
+    try {
+      fs.rmSync(vaultDir, { recursive: true, force: true })
+    } catch {
+      // ignore
+    }
   })
 
   it("starts watcher, picks up vault edits, and stops cleanly", async () => {

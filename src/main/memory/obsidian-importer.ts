@@ -224,8 +224,11 @@ export function startVaultWatcher(vaultPath: string): void {
   }
 
   watchedVaultPath = vaultPath;
+  // Windows 下 os.tmpdir() 可能返回 8.3 短路径，而 fs.watch 事件回调里报告的是长路径，
+  // 两者前缀不一致会触发 libuv 断言。使用 realpath 获取规范化长路径。
+  const resolvedL2Dir = fs.realpathSync.native(l2Dir);
   try {
-    watcher = fs.watch(l2Dir, { recursive: false }, (_eventType, filename) => {
+    watcher = fs.watch(resolvedL2Dir, { recursive: false, persistent: false }, (_eventType, filename) => {
       if (!filename || !filename.endsWith(".md")) return;
       pendingFiles.add(filename);
       scheduleProcess();
