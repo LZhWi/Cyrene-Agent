@@ -74,6 +74,7 @@ describe("MemoryScheduler", () => {
       confidence: 0.9,
       triggerText: "我喜欢香菇",
       slug: "喜欢香菇",
+      sourceQuote: "我喜欢香菇，尤其爱吃鲜香菇",
       importance: "medium",
       stability: "situational",
       certainty: "explicit",

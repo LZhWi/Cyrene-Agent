@@ -22,39 +22,75 @@ const entityGraphMock = vi.hoisted(() => ({
   search: vi.fn(),
 }))
 
+const l2DmaeManagerMock = vi.hoisted(() => ({
+  getActiveL2ForPrompt: vi.fn(),
+}))
+
 vi.mock("../rag", () => ragMock)
 vi.mock("../memory/memory-store", () => ({ memoryStore: memoryStoreMock }))
 vi.mock("../memory/entity-graph", () => ({ entityGraph: entityGraphMock }))
+vi.mock("../memory/l2-dmae-manager", () => ({ l2DmaeManager: l2DmaeManagerMock }))
 vi.mock("./tool-registry", () => ({ toolRegistry: { getEnabledTools: vi.fn(() => []) } }))
 
 describe("buildMemoryInjection", () => {
   beforeEach(() => {
     clearRecentMemoryInjections()
     ragMock.searchMemory.mockReset()
-    ragMock.searchMemoryEntries.mockReset()
     ragMock.searchMemory.mockResolvedValue([])
-    ragMock.searchMemoryEntries.mockResolvedValue([])
     memoryStoreMock.getAllL2.mockReset()
     memoryStoreMock.getAllL2.mockResolvedValue([])
+    l2DmaeManagerMock.getActiveL2ForPrompt.mockReset()
+    l2DmaeManagerMock.getActiveL2ForPrompt.mockResolvedValue([])
     entityGraphMock.search.mockReset()
     entityGraphMock.search.mockReturnValue("")
   })
 
-  it("records injected user memory l2 ids from RAG metadata", async () => {
-    ragMock.searchMemoryEntries.mockResolvedValue([{
-      id: "rag_run",
-      text: "用户喜欢跑步",
-      createdAt: Date.now(),
-      score: 0.8,
-      metadata: { l2Id: "l2_run" },
-    }])
+  it("records injected user memory l2 ids from DMAE active L2", async () => {
+    memoryStoreMock.getAllL2.mockResolvedValue([
+      { id: "l2_run", content: "用户喜欢跑步", triggerText: "我喜欢跑步" },
+    ])
+    l2DmaeManagerMock.getActiveL2ForPrompt.mockResolvedValue([
+      { id: "l2_run", content: "用户喜欢跑步", triggerText: "我喜欢跑步" },
+    ])
     const { buildMemoryInjection } = await import("./index")
 
     const context = await buildMemoryInjection("跑步")
 
     expect(context).toContain("用户喜欢跑步")
     expect(wasRecentlyInjectedMemory("l2_run")).toBe(true)
-    expect(ragMock.searchMemoryEntries).toHaveBeenCalledWith("跑步", "user_memory", 5)
+    expect(l2DmaeManagerMock.getActiveL2ForPrompt).toHaveBeenCalledWith(expect.any(Array), 4)
+  })
+
+  it("appends sourceQuote as 原文 suffix when L2 has one, falls back to triggerText otherwise", async () => {
+    memoryStoreMock.getAllL2.mockResolvedValue([
+      { id: "l2_run", content: "用户喜欢跑步", triggerText: "我喜欢跑步", sourceQuote: "我每周都去跑步，雷打不动" },
+      { id: "l2_react", content: "用户用 React 做前端", triggerText: "我用 React 做前端" },
+    ])
+    l2DmaeManagerMock.getActiveL2ForPrompt.mockResolvedValue([
+      { id: "l2_run", content: "用户喜欢跑步", triggerText: "我喜欢跑步", sourceQuote: "我每周都去跑步，雷打不动" },
+      { id: "l2_react", content: "用户用 React 做前端", triggerText: "我用 React 做前端" },
+    ])
+    const { buildMemoryInjection } = await import("./index")
+
+    const context = await buildMemoryInjection("跑步 React")
+
+    // 有 sourceQuote → 用 sourceQuote 原文
+    expect(context).toContain("· 用户喜欢跑步（原文：我每周都去跑步，雷打不动）")
+    // 无 sourceQuote → 回退到 triggerText
+    expect(context).toContain("· 用户用 React 做前端（原文：我用 React 做前端）")
+  })
+
+  it("returns empty when no active L2", async () => {
+    memoryStoreMock.getAllL2.mockResolvedValue([
+      { id: "l2_run", content: "用户喜欢跑步", triggerText: "我喜欢跑步" },
+    ])
+    l2DmaeManagerMock.getActiveL2ForPrompt.mockResolvedValue([])
+    const { buildMemoryInjection } = await import("./index")
+
+    const context = await buildMemoryInjection("跑步")
+
+    expect(context).toBe("")
+    expect(wasRecentlyInjectedMemory("l2_run")).toBe(false)
   })
 })
 

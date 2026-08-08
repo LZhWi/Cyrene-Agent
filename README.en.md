@@ -8,6 +8,14 @@
 
 </div>
 
+<div align="center">
+
+<img src="./docs/image/preview2.png" alt="Cyrene Agent live preview (Work mode · weather query)" width="800">
+
+<i>Live preview · Work mode invoking a tool to check the weather</i>
+
+</div>
+
 **Cyrene-Agent is a Windows Live2D AI desktop companion centered around Cyrene from _Honkai: Star Rail_.**
 
 > A desktop Live2D conversational Agent built with Electron and TypeScript.  

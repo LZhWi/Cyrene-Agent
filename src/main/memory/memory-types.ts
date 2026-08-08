@@ -38,6 +38,12 @@ export interface L2Memory {
    * id 仍为 PMRS 内部主键，写入 frontmatter，与文件名解耦。
    */
   slug?: string
+  /**
+   * L2 原文对话片段（Memory Judge 精挑的最有信息量的原话）。
+   * L2 被向量召回时附带注入，让 LLM 看到「用户当时说的原话」而非仅浓缩结论。
+   * 仅展示用途；evidence.quoteSnippet 仍由 triggerText 自动填充，服务审计/冲突检测。
+   */
+  sourceQuote?: string
   sourceConversationId: string
   createdAt: number
   lastAccessedAt: number
@@ -58,6 +64,11 @@ export interface L2Memory {
   sourceMessageIds?: string[]
   supersededBy?: string
   mergedInto?: string
+  /**
+   * V5 DMAE：用于 H_u/H_m 检测的关键词集合。
+   * 由 content 分词 + evidence 实体在写入时提取；缺失时 memory-store 会自动补充。
+   */
+  keywords?: string[]
 }
 
 export type L2MemoryStatus = "active" | "aging" | "archived" | "superseded" | "merged"
@@ -158,6 +169,11 @@ export interface MemoryCandidate {
    * 仅 L2 候选会消费此字段；缺失时回退到内部 id 作为文件名。
    */
   slug?: string
+  /**
+   * L2 原文对话片段：挑最有信息量的对话原话（≤500 字）。
+   * 仅 L2 候选会消费此字段；L0/L1 的 sourceQuote 一律丢弃。
+   */
+  sourceQuote?: string
   content: string
   confidence: number
   triggerText: string
@@ -179,6 +195,20 @@ export interface MemoryJudgeTurn {
   assistantReply: string
 }
 
+/**
+ * L2 热层 DMAE 运行时状态（V5）。
+ * 随 memory.json 持久化；archived 条目在 Phase 1 跳过更新。
+ */
+export interface L2DmaeState {
+  l2Id: string
+  activation: number
+  intrinsicValue: number
+  userSilence: number
+  modelSilence: number
+  recentUserHits: number[]
+  state: "active" | "dormant" | "archived"
+}
+
 export interface MemoryStore {
   schemaVersion: number
   l0: L0Profile
@@ -187,6 +217,8 @@ export interface MemoryStore {
   evidence?: MemoryEvidence[]
   reflectionLogs?: ReflectionLog[]
   conflictLogs?: ConflictLog[]
+  /** L2 热层 DMAE 运行时状态（V5） */
+  l2DmaeStates?: L2DmaeState[]
   /** @deprecated Use schemaVersion for memory.json migrations. */
   version: number
 }

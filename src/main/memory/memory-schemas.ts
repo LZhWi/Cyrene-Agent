@@ -80,6 +80,22 @@ export function isValidSlug(value: unknown): value is string {
   return SLUG_ALLOWED_PATTERN.test(trimmed);
 }
 
+// ── L2 sourceQuote 校验 ──
+
+const SOURCE_QUOTE_MAX_LENGTH = 500;
+
+/**
+ * 校验 L2 候选 sourceQuote 是否合法（非空字符串，trim 后 ≤500 字）。
+ * 允许任意 Unicode（标点/空格/emoji 都行，因为是原文对话）。
+ * 超长或空直接丢弃（候选照常入库），不抛错。
+ * 规则比 slug 宽松：sourceQuote 是展示用原文，slug 是文件名。
+ */
+export function isValidSourceQuote(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  return trimmed.length > 0 && trimmed.length <= SOURCE_QUOTE_MAX_LENGTH;
+}
+
 // ── 用于 provider_json_schema 的 JSON Schema ──
 // A 档模型（GPT/Claude/Kimi/Doubao）会收到这些 schema，严格约束输出结构。
 
@@ -95,6 +111,7 @@ export const MEMORY_JUDGE_JSON_SCHEMA: Record<string, unknown> = {
           field: { type: "string" },
           summary: { type: "string" },
           slug: { type: "string" },
+          sourceQuote: { type: "string" },
           content: { type: "string" },
           confidence: { type: "number" },
           triggerText: { type: "string" },
@@ -207,6 +224,10 @@ function parseMemoryCandidate(value: unknown): MemoryCandidate {
   // slug 仅对 L2 候选有意义；L0/L1 的 slug 一律丢弃
   if (layer === "L2" && isValidSlug(obj.slug)) {
     result.slug = (obj.slug as string).trim();
+  }
+  // sourceQuote 仅对 L2 候选有意义；L0/L1 的 sourceQuote 一律丢弃
+  if (layer === "L2" && isValidSourceQuote(obj.sourceQuote)) {
+    result.sourceQuote = (obj.sourceQuote as string).trim();
   }
   if (VALID_IMPORTANCE.has(obj.importance as string)) result.importance = obj.importance as MemoryCandidate["importance"];
   if (VALID_STABILITY.has(obj.stability as string)) result.stability = obj.stability as MemoryCandidate["stability"];

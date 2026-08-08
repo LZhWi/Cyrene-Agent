@@ -78,12 +78,36 @@ function buildRagIdToL2IdMap(l2List: L2Memory[]): Map<string, string> {
   return map;
 }
 
-/** 建立 L2 id → slug 的索引，用于文件名/wikilink 反查 */
+/**
+ * 建立 L2 id → slug 的索引，用于文件名/wikilink 反查。
+ *
+ * 同 slug 冲突时自动加 -2/-3 后缀去重，避免：
+ *   1. 文件名撞车 → 后写覆盖先写
+ *   2. wikilink `[[slug]]` 歧义 → Obsidian 随机解析
+ *   3. manifest 漏记旧文件 → 残留
+ *
+ * 注意：返回的是去重后的 link name，可能与 mem.slug（原始 LLM 输出）不同。
+ * frontmatter 仍存原始 mem.slug 作为用户可见标题。
+ */
 function buildIdToSlugMap(l2List: L2Memory[]): Map<string, string> {
   const map = new Map<string, string>();
+  const usedLinkNames = new Set<string>();
+
   for (const mem of l2List) {
-    if (mem.slug) map.set(mem.id, mem.slug);
+    if (!mem.slug) continue;
+    const baseLinkName = sanitizeFileName(mem.slug);
+    if (baseLinkName === "_unnamed_") continue; // sanitize 兜底，不值得占用 link name
+
+    let linkName = baseLinkName;
+    let suffix = 2;
+    while (usedLinkNames.has(linkName)) {
+      linkName = `${baseLinkName}-${suffix}`;
+      suffix++;
+    }
+    usedLinkNames.add(linkName);
+    map.set(mem.id, linkName);
   }
+
   return map;
 }
 
@@ -132,6 +156,7 @@ function buildL2Markdown(
   lines.push("---");
   lines.push(`id: ${yamlString(mem.id)}`);
   if (mem.slug) lines.push(`slug: ${yamlString(mem.slug)}`);
+  if (mem.sourceQuote) lines.push(`sourceQuote: ${yamlString(mem.sourceQuote)}`);
   lines.push(`type: 片段`);
   lines.push(`status: ${L2_STATUS_LABEL[mem.status]}`);
   lines.push(`weight: ${mem.weight}`);

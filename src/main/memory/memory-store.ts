@@ -1,7 +1,7 @@
 import * as fs from "fs"
 import * as path from "path"
 import { app } from "electron"
-import { ConflictLog, L0Profile, L1Profile, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryStore, ReflectionLog } from "./memory-types"
+import { ConflictLog, L0Profile, L1Profile, L2DmaeState, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryStore, ReflectionLog } from "./memory-types"
 import { appendMemoryTrace } from "./memory-trace"
 import { getMemoryLanguage } from "../locale-context"
 import { isImportingMemory } from "./obsidian-sync-flag"
@@ -49,7 +49,7 @@ const DEFAULT_STORE: MemoryStore = {
 
 export type L0WritableField = Exclude<keyof L0Profile, "updatedAt">
 export type L1WritableField = keyof L1Profile
-export type L2Input = Omit<L2Memory, "id" | "createdAt" | "lastAccessedAt" | "accessCount" | "weight" | "status">
+export type L2Input = Omit<L2Memory, "id" | "createdAt" | "lastAccessedAt" | "accessCount" | "weight" | "status" | "keywords">
 
 function getMemoryPath(): string | null {
   // Electron 主进程外（如单测环境）app 可能不存在，直接放弃持久化
@@ -69,7 +69,28 @@ function cloneDefaultStore(): MemoryStore {
     evidence: [],
     reflectionLogs: [],
     conflictLogs: [],
+    l2DmaeStates: [],
   }
+}
+
+/** V5 DMAE：从 L2 content + 关键词文本提取命中检测关键词 */
+function extractKeywords(input: string, max = 12): string[] {
+  if (!input) return []
+  // 保留中文/日文/韩文字符、英文单词、数字
+  const tokens: string[] = []
+  for (const m of input.matchAll(/[\u4e00-\u9fa5\u3040-\u309f\u30a0-\u30ff]/g)) {
+    tokens.push(m[0])
+  }
+  for (const m of input.toLowerCase().matchAll(/[a-z0-9]+/g)) {
+    tokens.push(m[0])
+  }
+  // 按频率取 top max
+  const freq = new Map<string, number>()
+  for (const t of tokens) {
+    freq.set(t, (freq.get(t) ?? 0) + 1)
+  }
+  const sorted = [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t)
+  return sorted.slice(0, max)
 }
 
 function snippet(text: string | undefined, maxLength: number): string | undefined {
@@ -86,15 +107,21 @@ function backupMemoryFile(filePath: string): void {
 }
 
 export function repairMigrations(store: Partial<MemoryStore>): MemoryStore {
-  return {
+  const repaired: MemoryStore = {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     l0: { ...createDefaultL0(), ...store.l0 },
     l1: { ...DEFAULT_L1, ...store.l1 },
-    l2: Array.isArray(store.l2) ? store.l2.map((memory) => ({
-      ...memory,
-      syncStatus: memory.syncStatus ?? (memory.ragId ? "synced" : "pending_sync"),
-      evidenceIds: Array.isArray(memory.evidenceIds) ? memory.evidenceIds : [],
-    })) : [],
+    l2: Array.isArray(store.l2) ? store.l2.map((memory) => {
+      const keywords = Array.isArray(memory.keywords) && memory.keywords.length > 0
+        ? memory.keywords
+        : extractKeywords(`${memory.content} ${memory.triggerText}`)
+      return {
+        ...memory,
+        syncStatus: memory.syncStatus ?? (memory.ragId ? "synced" : "pending_sync"),
+        evidenceIds: Array.isArray(memory.evidenceIds) ? memory.evidenceIds : [],
+        keywords,
+      }
+    }) : [],
     evidence: Array.isArray(store.evidence) ? store.evidence : [],
     reflectionLogs: Array.isArray(store.reflectionLogs) ? store.reflectionLogs : [],
     conflictLogs: Array.isArray(store.conflictLogs) ? store.conflictLogs.map((log) => ({
@@ -102,8 +129,27 @@ export function repairMigrations(store: Partial<MemoryStore>): MemoryStore {
       resolverStatus: log.resolverStatus ?? (log.resolverPriority && log.resolverPriority !== "none" ? "queued" : "not_queued"),
       resolverAttemptCount: typeof log.resolverAttemptCount === "number" ? log.resolverAttemptCount : 0,
     })) : [],
+    l2DmaeStates: Array.isArray(store.l2DmaeStates) ? store.l2DmaeStates : [],
     version: typeof store.version === "number" ? store.version : 1,
   }
+
+  // V5 DMAE：为没有 l2DmaeState 的 L2 补初始化
+  const stateIds = new Set(repaired.l2DmaeStates?.map((s) => s.l2Id) ?? [])
+  for (const memory of repaired.l2) {
+    if (!stateIds.has(memory.id)) {
+      repaired.l2DmaeStates!.push({
+        l2Id: memory.id,
+        activation: 0,
+        intrinsicValue: 0,
+        userSilence: 0,
+        modelSilence: 0,
+        recentUserHits: [],
+        state: memory.status === "archived" ? "archived" : "archived",
+      })
+    }
+  }
+
+  return repaired
 }
 
 class MemoryStoreManager {
@@ -236,12 +282,23 @@ class MemoryStoreManager {
       status: "active",
       syncStatus: input.syncStatus ?? (input.ragId ? "synced" : "pending_sync"),
       evidenceIds: Array.isArray(input.evidenceIds) ? input.evidenceIds : [],
+      keywords: extractKeywords(`${input.content} ${input.triggerText}`),
     }
     const evidence = this.createEvidence(memory, input)
     memory.evidenceIds = [...(memory.evidenceIds ?? []), evidence.id]
     store.l2.push(memory)
     if (!store.evidence) store.evidence = []
     store.evidence.push(evidence)
+    if (!store.l2DmaeStates) store.l2DmaeStates = []
+    store.l2DmaeStates.push({
+      l2Id: memory.id,
+      activation: 0,
+      intrinsicValue: 0,
+      userSilence: 0,
+      modelSilence: 0,
+      recentUserHits: [],
+      state: "archived",
+    })
     await this.save(store)
     appendMemoryTrace({
       op: "l2.add",
@@ -583,8 +640,9 @@ class MemoryStoreManager {
     let resolutionMemoryId: string | undefined
     const shouldCreateResolved = resolution.actions.createResolvedMemory && Boolean(resolution.resolvedSummary?.trim())
     if (shouldCreateResolved) {
+      const resolvedSummary = resolution.resolvedSummary!.trim()
       const resolved: L2Memory = {
-        content: resolution.resolvedSummary!.trim(),
+        content: resolvedSummary,
         triggerText: resolution.reason,
         sourceConversationId: newMemory.sourceConversationId || oldMemory.sourceConversationId,
         sourceMessageIds: [
@@ -603,6 +661,7 @@ class MemoryStoreManager {
         accessCount: 0,
         weight: 0,
         status: "active",
+        keywords: extractKeywords(`${resolvedSummary} ${resolution.reason}`),
       }
       store.l2.push(resolved)
       resolutionMemoryId = resolved.id
@@ -717,6 +776,7 @@ class MemoryStoreManager {
   async addL2Batch(inputs: L2Input[]): Promise<L2Memory[]> {
     const store = await this.load()
     const results: L2Memory[] = []
+    if (!store.l2DmaeStates) store.l2DmaeStates = []
     for (const input of inputs) {
       const memory: L2Memory = {
         ...input,
@@ -728,12 +788,22 @@ class MemoryStoreManager {
         status: "active",
         syncStatus: input.syncStatus ?? (input.ragId ? "synced" : "pending_sync"),
         evidenceIds: Array.isArray(input.evidenceIds) ? input.evidenceIds : [],
+        keywords: extractKeywords(`${input.content} ${input.triggerText}`),
       }
       const evidence = this.createEvidence(memory, input)
       memory.evidenceIds = [...(memory.evidenceIds ?? []), evidence.id]
       store.l2.push(memory)
       if (!store.evidence) store.evidence = []
       store.evidence.push(evidence)
+      store.l2DmaeStates.push({
+        l2Id: memory.id,
+        activation: 0,
+        intrinsicValue: 0,
+        userSilence: 0,
+        modelSilence: 0,
+        recentUserHits: [],
+        state: "archived",
+      })
       results.push(memory)
     }
     await this.save(store)
@@ -754,6 +824,47 @@ class MemoryStoreManager {
       })
     }
     return results
+  }
+
+  // ── V5 L2 DMAE 状态读写 ──
+  async getL2DmaeState(l2Id: string): Promise<L2DmaeState | undefined> {
+    const store = await this.load()
+    return (store.l2DmaeStates ?? []).find((s) => s.l2Id === l2Id)
+  }
+
+  async getAllL2DmaeStates(): Promise<L2DmaeState[]> {
+    const store = await this.load()
+    return store.l2DmaeStates ?? []
+  }
+
+  async updateL2DmaeState(l2Id: string, patch: Partial<L2DmaeState>): Promise<L2DmaeState | undefined> {
+    const store = await this.load()
+    if (!store.l2DmaeStates) store.l2DmaeStates = []
+    const idx = store.l2DmaeStates.findIndex((s) => s.l2Id === l2Id)
+    if (idx === -1) return undefined
+    const merged = { ...store.l2DmaeStates[idx], ...patch, l2Id }
+    store.l2DmaeStates[idx] = merged
+    await this.save(store)
+    return merged
+  }
+
+  async initL2DmaeStateIfMissing(l2Id: string): Promise<L2DmaeState> {
+    const existing = await this.getL2DmaeState(l2Id)
+    if (existing) return existing
+    const store = await this.load()
+    if (!store.l2DmaeStates) store.l2DmaeStates = []
+    const created: L2DmaeState = {
+      l2Id,
+      activation: 0,
+      intrinsicValue: 0,
+      userSilence: 0,
+      modelSilence: 0,
+      recentUserHits: [],
+      state: "archived",
+    }
+    store.l2DmaeStates.push(created)
+    await this.save(store)
+    return created
   }
 }
 

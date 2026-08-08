@@ -110,15 +110,17 @@ function runScenario(scenario, params, debug = false) {
     const rounds = scenario.buildRounds();
     const entries = mgr.getEntries();
     const snapshots = [];
-    for (const round of rounds) {
-        // 跑一整轮：manager.updateActivation(userText, modelText)
-        mgr.updateActivation(round.userText, round.modelText);
+    for (let turn = 0; turn < rounds.length; turn++) {
+        const round = rounds[turn];
+        // 跑一整轮：manager.updateActivation(userText, modelText, turn)
+        mgr.updateActivation(round.userText, round.modelText, turn);
         // 拍快照
         const snap = entries.map((e) => {
             const st = mgr.getState(e.id);
             const a = st?.activation ?? 0;
             const us = st?.userSilence ?? 0;
             const ms = st?.modelSilence ?? 0;
+            const recentUserHits = st?.recentUserHits ?? [];
             return {
                 entryId: e.id,
                 intrinsicValue: e.intrinsicValue,
@@ -129,6 +131,7 @@ function runScenario(scenario, params, debug = false) {
                 state: (0, worldbook_1.deriveState)(a, params.promptThreshold),
                 userHit: e.keywords.some((kw) => round.userText.includes(kw)),
                 modelHit: e.keywords.some((kw) => round.modelText.includes(kw)),
+                recentUserHits,
             };
         });
         snapshots.push(snap);

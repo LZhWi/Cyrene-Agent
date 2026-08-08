@@ -19,6 +19,8 @@ let store: JsonVectorStore | null = null;
 let retriever: HybridRetriever | null = null;
 let worldbook: WorldbookManager | null = null;
 let provider: EmbeddingProvider | null = null;
+// 每轮对话递增，用于 DMAE repeatWindow 统计（worldbook 状态不持久化，重启回 0 可接受）
+let worldbookTurnCounter = 0;
 
 function getDataDir(): string {
   return path.join(app.getPath("userData"), "rag-data");
@@ -253,9 +255,10 @@ export async function searchHistoryEntries(
 }
 
 // ── Worldbook DMAE：每轮打分（本轮用户输入 + 上轮模型回复）──
-export function updateWorldbookActivation(userText: string, modelText: string): void {
+export function updateWorldbookActivation(userText: string, modelText: string, turn?: number): void {
   if (!worldbook) return;
-  worldbook.updateActivation(userText, modelText);
+  const t = turn ?? ++worldbookTurnCounter;
+  worldbook.updateActivation(userText, modelText, t);
 }
 
 // ── Worldbook DMAE：取 Active 条目内容（阈值门控 + 注入）──

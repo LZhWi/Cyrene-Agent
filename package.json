@@ -26,7 +26,8 @@
     "sim:coffee": "tsc -p tsconfig.sim.json && node dist/sim/main/sim/dmae-sim.js --scenario=coffee",
     "sim:mix": "tsc -p tsconfig.sim.json && node dist/sim/main/sim/dmae-sim.js --scenario=mix",
     "sim:rescue": "tsc -p tsconfig.sim.json && node dist/sim/main/sim/dmae-sim.js --scenario=rescue",
-    "sim:sweep": "tsc -p tsconfig.sim.json && node dist/sim/main/sim/dmae-sim.js --scenario=mix --rewardGain=3,5,7,10"
+    "sim:sweep": "tsc -p tsconfig.sim.json && node dist/sim/main/sim/dmae-sim.js --scenario=mix --rewardGain=3,5,7,10",
+    "sim:l2": "tsc -p tsconfig.sim.json && node dist/sim/main/sim/run-l2-sim.js"
   },
   "engines": {
     "node": ">=24 <25",

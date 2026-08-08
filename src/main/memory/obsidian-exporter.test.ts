@@ -242,17 +242,109 @@ describe("exportMemoryToObsidianVault", () => {
     const summaryMd = fs.readFileSync(summarySlugFile, "utf8")
     expect(summaryMd).toContain(`id: ${summary.id}`)
     expect(summaryMd).toContain(`slug: 规律跑步习惯`)
+    // 3. summary 无 sourceQuote 时不应输出该字段
+    expect(summaryMd).not.toMatch(/^sourceQuote:/m)
 
-    // 3. summary 内的 [[双链]] 指向 old 的 id（old 无 slug，回退到 id）
+    // 4. summary 内的 [[双链]] 指向 old 的 id（old 无 slug，回退到 id）
     expect(summaryMd).toContain(`[[${old.id}]]`)
     expect(summaryMd).toContain("压缩自：")
 
-    // 4. old 文件名仍是 id.md（无 slug 回退）
+    // 5. old 文件名仍是 id.md（无 slug 回退）
     const oldIdFile = path.join(outputDir, "记忆", `${old.id}.md`)
     expect(fs.existsSync(oldIdFile)).toBe(true)
     const oldMd = fs.readFileSync(oldIdFile, "utf8")
     // old 的 frontmatter 不应该有 slug 行
     expect(oldMd).not.toMatch(/^slug:/m)
+  })
+
+  it("deduplicates conflicting slugs with -2/-3 suffix and keeps original slug in frontmatter", async () => {
+    const { memoryStore } = await import("./memory-store")
+    const { exportMemoryToObsidianVault } = await import("./obsidian-exporter")
+
+    // 三条 L2，LLM 给了相同 slug（用户多次说"喜欢香菇"）
+    const l2a = await memoryStore.addL2Memory({
+      content: "用户喜欢香菇",
+      triggerText: "我喜欢香菇",
+      sourceConversationId: "conv",
+      ragId: "rag_a",
+      isPinned: false,
+    })
+    const l2b = await memoryStore.addL2Memory({
+      content: "用户又强调喜欢香菇",
+      triggerText: "我真的很喜欢香菇",
+      sourceConversationId: "conv",
+      ragId: "rag_b",
+      isPinned: false,
+    })
+    const l2c = await memoryStore.addL2Memory({
+      content: "用户再次提到喜欢香菇",
+      triggerText: "再说一次喜欢香菇",
+      sourceConversationId: "conv",
+      ragId: "rag_c",
+      isPinned: false,
+    })
+
+    // 手动塞相同 slug
+    const store = await memoryStore.load()
+    store.l2.find((m) => m.id === l2a.id)!.slug = "喜欢香菇"
+    store.l2.find((m) => m.id === l2b.id)!.slug = "喜欢香菇"
+    store.l2.find((m) => m.id === l2c.id)!.slug = "喜欢香菇"
+    // 让 c 压缩自 a 和 b（验证跨 L2 wikilink 也用去重后的名字）
+    store.l2.find((m) => m.id === l2c.id)!.subEntryIds = [l2a.id, l2b.id]
+    await memoryStore.save(store)
+
+    await exportMemoryToObsidianVault(outputDir)
+
+    // 1. 三个文件名应该各不相同：喜欢香菇.md / 喜欢香菇-2.md / 喜欢香菇-3.md
+    const fileA = path.join(outputDir, "记忆", "喜欢香菇.md")
+    const fileB = path.join(outputDir, "记忆", "喜欢香菇-2.md")
+    const fileC = path.join(outputDir, "记忆", "喜欢香菇-3.md")
+    expect(fs.existsSync(fileA)).toBe(true)
+    expect(fs.existsSync(fileB)).toBe(true)
+    expect(fs.existsSync(fileC)).toBe(true)
+
+    // 2. frontmatter 仍存原始 slug（用户可见标题）
+    const mdA = fs.readFileSync(fileA, "utf8")
+    const mdB = fs.readFileSync(fileB, "utf8")
+    const mdC = fs.readFileSync(fileC, "utf8")
+    expect(mdA).toContain(`slug: 喜欢香菇`)
+    expect(mdB).toContain(`slug: 喜欢香菇`)
+    expect(mdC).toContain(`slug: 喜欢香菇`)
+
+    // 3. c 压缩自 a 和 b：wikilink 应指向去重后的 link name，不是原始 slug
+    //    避免歧义 [[喜欢香菇]] 同时指向 a/b/c
+    expect(mdC).toContain(`[[喜欢香菇]]`)        // a 的去重后 link name
+    expect(mdC).toContain(`[[喜欢香菇-2]]`)      // b 的去重后 link name
+    expect(mdC).not.toMatch(/\[\[喜欢香菇\]\].*\[\[喜欢香菇\]\]/) // 不应该有两个 [[喜欢香菇]]
+  })
+
+  it("writes sourceQuote to L2 frontmatter when present", async () => {
+    const { memoryStore } = await import("./memory-store")
+    const { exportMemoryToObsidianVault } = await import("./obsidian-exporter")
+
+    const l2 = await memoryStore.addL2Memory({
+      content: "用户用 React 18.2 做前端",
+      triggerText: "我用 React 18.2 做的前端",
+      sourceConversationId: "conv",
+      ragId: "rag_1",
+      isPinned: false,
+    })
+    // 手动塞 slug + sourceQuote（addL2Memory 接口接受这两个字段）
+    const store = await memoryStore.load()
+    const entry = store.l2.find((m) => m.id === l2.id)!
+    entry.slug = "React前端"
+    entry.sourceQuote = "我用 React 18.2 做的前端，部署在 vercel 上"
+    await memoryStore.save(store)
+
+    await exportMemoryToObsidianVault(outputDir)
+
+    const l2File = path.join(outputDir, "记忆", "React前端.md")
+    expect(fs.existsSync(l2File)).toBe(true)
+    const l2md = fs.readFileSync(l2File, "utf8")
+    expect(l2md).toContain(`id: ${l2.id}`)
+    expect(l2md).toContain(`slug: React前端`)
+    // sourceQuote 含特殊字符（逗号、点）应被 yamlString 正确转义
+    expect(l2md).toContain(`sourceQuote: 我用 React 18.2 做的前端，部署在 vercel 上`)
   })
 
   it("writes manifest and is idempotent on re-export", async () => {

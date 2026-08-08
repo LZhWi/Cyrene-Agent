@@ -1,10 +1,11 @@
 // Orchestrator — unified entry point
 // Function Calling 模式下，Orchestrator 只负责构建 always-on 上下文（世界书 + L0/L1）
 // 工具的选择和执行由 function-calling.ts 的 runFunctionCallingLoop 处理
-import { updateWorldbookActivation, getPermanentWorldbookEntries, getActiveWorldbookEntries, getCascadeWorldbookEntries, searchMemory, searchMemoryEntries, INJECTION_HEADER, INJECTION_PREAMBLE } from "../rag";
+import { updateWorldbookActivation, getPermanentWorldbookEntries, getActiveWorldbookEntries, getCascadeWorldbookEntries, searchMemory, INJECTION_HEADER, INJECTION_PREAMBLE } from "../rag";
 import { memoryStore } from "../memory/memory-store";
 import { entityGraph } from "../memory/entity-graph";
-import { recordRecentMemorySearchEntries } from "../memory/recent-injected-memory";
+import { recordRecentMemoryInjection } from "../memory/recent-injected-memory";
+import { l2DmaeManager } from "../memory/l2-dmae-manager";
 import { toolRegistry } from "./tool-registry";
 
 export { ToolCallResult } from "./types";
@@ -19,9 +20,8 @@ export { runFunctionCallingLoop } from "./function-calling";
 // topicState TTL 已移除——由 DMAE Activation 状态机接管（见 rag/worldbook.ts）
 
 /**
- * 构建相关记忆注入：自动检索 top-N 相关 L2 记忆和导入文档，
- * 注入到 system prompt 中，让模型无需主动调用 tool 也能感知到相关信息。
- * 原有 tool 保留，模型仍可深度搜索。
+ * 构建相关记忆注入：返回经 V5 DMAE 排序后的 active L2 记忆，以及导入文档/实体关系。
+ * L2 DMAE 状态更新由调用方（call-prompt-builder.ts）在调用本函数前完成。
  */
 export async function buildMemoryInjection(
   userInput: string,
@@ -29,28 +29,26 @@ export async function buildMemoryInjection(
   const parts: string[] = [];
 
   try {
-    // 检索 top-3 L2 用户记忆
-    const userMemoryEntries = await searchMemoryEntries(userInput, "user_memory", 5);
-    if (userMemoryEntries.length > 0) {
-      recordRecentMemorySearchEntries(userMemoryEntries);
-      // 标注可能存在冲突的记忆
-      const allL2 = await memoryStore.getAllL2();
-      const conflictAnnotated = userMemoryEntries.map((entry) => {
-        const m = entry.text;
-        const l2Entry = allL2.find((l) => l.content === m && l.conflictWith && l.conflictWith.length > 0);
-        if (l2Entry) {
-          return `· ${m} ⚠️（该信息可能存在矛盾记录）`;
-        }
-        return `· ${m}`;
+    // V5 L2：直接读取 DMAE 引擎中 activation >= promptThreshold 的条目，按 activation 降序
+    const allL2 = await memoryStore.getAllL2();
+    const activeL2 = await l2DmaeManager.getActiveL2ForPrompt(allL2, 4);
+    recordRecentMemoryInjection(activeL2.map((l2) => l2.id));
+    if (activeL2.length > 0) {
+      const annotated = activeL2.map((l2) => {
+        const sourceQuote = l2.sourceQuote ?? l2.triggerText;
+        const hasConflict = !!(l2.conflictWith && l2.conflictWith.length > 0);
+        const conflictSuffix = hasConflict ? " ⚠️（该信息可能存在矛盾记录）" : "";
+        const quoteSuffix = sourceQuote ? `（原文：${sourceQuote}）` : "";
+        return `· ${l2.content}${conflictSuffix}${quoteSuffix}`;
       });
-      parts.push("【相关记忆】\n" + conflictAnnotated.join("\n"));
+      parts.push("【相关记忆】\n" + annotated.join("\n"));
     }
   } catch (err) {
     if (isDimensionMismatchError(err)) {
       console.error("[Orchestrator] user_memory search blocked: embedding dimension mismatch. Index rebuild required.", err);
       parts.push("【记忆系统】\n⚠️ 向量索引维度不一致，记忆检索已暂停。请在设置中切换 Embedding 模型以重建索引。");
     } else {
-      console.warn("[Orchestrator] user_memory search failed:", err);
+      console.warn("[Orchestrator] L2 DMAE injection failed:", err);
     }
   }
 

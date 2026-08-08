@@ -18,6 +18,7 @@ export interface EntrySnapshot {
   state: DmaeState;
   userHit: boolean;         // 本轮是否被 user 命中
   modelHit: boolean;        // 本轮是否被 model 命中
+  recentUserHits: number[]; // V5.1 repeatWindow 内命中轮次
 }
 
 export interface SimResult {

@@ -112,6 +112,8 @@ export class MemoryManager {
     }
     // LLM 生成的精炼标题，缺失时 obsidian-exporter 会回退到内部 id 作为文件名
     if (candidate.slug) l2Input.slug = candidate.slug
+    // L2 原文对话片段（展示用），缺失时不注入
+    if (candidate.sourceQuote) l2Input.sourceQuote = candidate.sourceQuote
 
     const l2 = await memoryStore.addL2Memory(l2Input)
 

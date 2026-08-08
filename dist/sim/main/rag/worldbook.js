@@ -33,7 +33,7 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.WorldbookManager = exports.QuadraticResistanceDecay = exports.DefaultRewardStrategy = exports.DEFAULT_DMAE_PARAMS = void 0;
+exports.WorldbookManager = exports.DmaeManager = exports.QuadraticResistanceDecay = exports.DefaultRewardStrategy = exports.DEFAULT_DMAE_PARAMS = void 0;
 exports.deriveState = deriveState;
 const fs = __importStar(require("fs"));
 const path = __importStar(require("path"));
@@ -48,22 +48,32 @@ exports.DEFAULT_DMAE_PARAMS = {
     wakeLambda: 0.3,
     decayAlpha: 1.5,
     decayBeta: 0.3,
+    repeatRho: 0.5,
+    satPower: 2,
+    repeatWindow: 6,
+    wakeBonus: 5,
 };
-// ── v4.0 默认 Reward 策略 ──
-// Ru = Bu × (1 + γ · ln(1 + U_old))     [v4.0 §4]
-//   - 连续命中 → 至少 Bu
-//   - 沉默越久 → ln(1+U) 越大 → 久别重逢奖励越猛
-//   - ln 单调递增 + 增长变缓 → 永远不会暴涨（避免无限分）
-//
-// Rm = Bm × e^(−λ · U_old)             [v4.0 §5]
-//   - U_old=0 → 最大 Bm
-//   - U_old 越大 → 指数衰减 → 模型话语权越小
-//   - Active gating 由主循环控制（v4.0 §5 要求 "当前 Activation ≥ PromptThreshold"）
-//   - Rm<D clamp 由主循环控制（v4.0 §8/§9 不变量）
+// ── V5.1 饱和抑制 / 重复抑制门控函数 ──
+function gateSaturation(activation, p, aMax) {
+    if (activation >= aMax)
+        return 0;
+    return Math.pow(1 - activation / aMax, p);
+}
+function gateRepeat(hitCount, rho) {
+    return 1 / (1 + rho * hitCount);
+}
+// ── V5.1 默认 Reward 策略 ──
+// Ru* = Bu × (1 + γ · ln(1 + U_old)) × G_sat × G_repeat   [V5 §5.6]
+//   G_sat  = (1 - A_old/A_max)^p                         [V5 §5.4]
+//   G_rep  = 1 / (1 + ρ · n_w)                           [V5 §5.5]
+// Rm = Bm × e^(−λ · U_old)                              [V5 §5.3]
 class DefaultRewardStrategy {
     userReward(ctx) {
-        const { snap, params } = ctx;
-        return params.userRewardBase * (1 + params.wakeGamma * Math.log(1 + snap.userSilence));
+        const { snap, params, recentHitCount } = ctx;
+        const base = params.userRewardBase * (1 + params.wakeGamma * Math.log(1 + snap.userSilence));
+        const gSat = gateSaturation(snap.activation, params.satPower, params.maxScore);
+        const gRep = gateRepeat(recentHitCount, params.repeatRho);
+        return base * gSat * gRep;
     }
     modelReward(ctx) {
         const { snap, params } = ctx;
@@ -95,28 +105,180 @@ function deriveState(activation, threshold) {
         return "Active";
     return "Dormant";
 }
-class WorldbookManager {
-    entries = [];
-    worldbookDir;
+class DmaeManager {
     state = new Map();
-    // ── One-Shot cascade：本轮用户命中后连带触发的条目（不入 DMAE 状态表，只本轮有效）──
-    lastCascadeEntries = [];
     params;
     rewardStrategy;
     decayStrategy;
-    stateFile;
     debug;
+    constructor(options) {
+        this.params = { ...exports.DEFAULT_DMAE_PARAMS, ...(options?.params ?? {}) };
+        this.rewardStrategy = options?.rewardStrategy ?? new DefaultRewardStrategy();
+        this.decayStrategy = options?.decayStrategy ?? new QuadraticResistanceDecay();
+        this.debug = options?.debug ?? true;
+    }
+    getParams() {
+        return this.params;
+    }
+    getDebug() {
+        return this.debug;
+    }
+    // 初始化/重置一条 entry 的状态（加载 entries 时调用）
+    initEntry(id) {
+        this.state.set(id, { activation: 0, userSilence: 0, modelSilence: 0, recentUserHits: [] });
+    }
+    removeEntry(id) {
+        this.state.delete(id);
+    }
+    clear() {
+        this.state.clear();
+    }
+    // 批量注册 entries（例如加载 worldbook / L2 列表）
+    initEntries(entries) {
+        this.state.clear();
+        for (const e of entries) {
+            if (e.enabled && !e.permanent) {
+                this.state.set(e.id, { activation: 0, userSilence: 0, modelSilence: 0, recentUserHits: [] });
+            }
+        }
+    }
+    getState(id) {
+        return this.state.get(id);
+    }
+    setState(id, st) {
+        this.state.set(id, st);
+    }
+    // V5.1 DMAE 主循环
+    updateActivation(entries, userText, modelText, turn = 0) {
+        const user = userText ?? "";
+        const model = modelText ?? "";
+        const params = this.params;
+        const max = params.maxScore;
+        const threshold = params.promptThreshold;
+        const changed = [];
+        const userHitIds = new Set();
+        for (const entry of entries) {
+            if (!entry.enabled || entry.permanent)
+                continue;
+            if (entry.keywords.length === 0)
+                continue;
+            const userHit = entry.keywords.some((kw) => user.includes(kw));
+            const modelHit = entry.keywords.some((kw) => model.includes(kw));
+            if (userHit)
+                userHitIds.add(entry.id);
+            const st = this.state.get(entry.id);
+            if (!st)
+                continue;
+            const aOld = st.activation;
+            const usOld = st.userSilence;
+            const msOld = st.modelSilence;
+            const oldState = deriveState(aOld, threshold);
+            // V5.1：未命中的 Archived 条目跳过本轮计算
+            if (oldState === worldbook_constants_1.WORLDBOOK_CONSTANTS.STATES.ARCHIVED && !userHit && !modelHit) {
+                continue;
+            }
+            // Lifecycle Phase：Wake-Up（V5 §7.4）
+            let aInit = aOld;
+            let wokeUp = false;
+            if (userHit && oldState === worldbook_constants_1.WORLDBOOK_CONSTANTS.FLOOR_TRIGGER_STATE) {
+                aInit = Math.min(max, threshold + params.wakeBonus);
+                wokeUp = true;
+            }
+            // silence update
+            const usNew = userHit ? 0 : usOld + 1;
+            const msNew = (userHit || modelHit) ? 0 : msOld + 1;
+            // V5.5：维护 recentUserHits 窗口
+            let recentHits = st.recentUserHits;
+            if (userHit) {
+                recentHits = [...recentHits, turn].filter((t) => t > turn - params.repeatWindow);
+            }
+            else {
+                recentHits = recentHits.filter((t) => t > turn - params.repeatWindow);
+            }
+            const recentHitCount = recentHits.length;
+            // reward
+            const snap = { activation: aInit, userSilence: usOld, modelSilence: msOld };
+            const userReward = userHit
+                ? this.rewardStrategy.userReward({ entry, snap, params, recentHitCount })
+                : 0;
+            // decay
+            const decay = this.decayStrategy.compute({
+                entry,
+                snap: { userSilence: usNew, modelSilence: msNew },
+                params,
+            });
+            // model reward
+            let modelReward = 0;
+            if (modelHit && oldState === worldbook_constants_1.WORLDBOOK_CONSTANTS.STATES.ACTIVE) {
+                const rawRm = this.rewardStrategy.modelReward({ entry, snap: { activation: aOld, userSilence: usOld, modelSilence: msOld }, params, recentHitCount });
+                modelReward = Math.max(0, Math.min(rawRm, decay - worldbook_constants_1.WORLDBOOK_CONSTANTS.EPSILON));
+            }
+            // commit
+            let aNew = aInit + userReward + modelReward - decay;
+            aNew = Math.max(0, Math.min(max, aNew));
+            st.activation = aNew;
+            st.userSilence = usNew;
+            st.modelSilence = msNew;
+            st.recentUserHits = recentHits;
+            if (this.debug && (userHit || modelHit || wokeUp || Math.abs(aNew - aOld) >= 0.05)) {
+                const reasons = [];
+                if (wokeUp)
+                    reasons.push(`wake→${aInit.toFixed(1)}`);
+                if (userHit)
+                    reasons.push(`U+${userReward.toFixed(2)}`);
+                if (modelHit)
+                    reasons.push(`M+${modelReward.toFixed(2)}`);
+                if (decay > 0)
+                    reasons.push(`D-${decay.toFixed(2)}`);
+                changed.push({ id: entry.id, aOld, aNew, reason: reasons.join(" ") });
+            }
+        }
+        if (this.debug && changed.length > 0) {
+            console.log(`[DMAE] update: ${changed.length} entries changed`);
+            for (const c of changed.slice(0, 12)) {
+                console.log(`  ${c.id}: ${c.aOld.toFixed(1)} → ${c.aNew.toFixed(1)}  (${c.reason})`);
+            }
+        }
+        return userHitIds;
+    }
+    // 返回 Activation >= threshold 的条目，按 activation 降序、priority 不作为 tiebreaker（通用层无 priority 概念）
+    getActiveEntries(entries, threshold) {
+        const th = threshold ?? this.params.promptThreshold;
+        return entries.filter((e) => {
+            if (!e.enabled || e.permanent)
+                return false;
+            const st = this.state.get(e.id);
+            if (!st)
+                return false;
+            return deriveState(st.activation, th) === worldbook_constants_1.WORLDBOOK_CONSTANTS.STATES.ACTIVE;
+        }).sort((a, b) => {
+            const sa = this.state.get(a.id).activation;
+            const sb = this.state.get(b.id).activation;
+            return sb - sa;
+        });
+    }
+}
+exports.DmaeManager = DmaeManager;
+class WorldbookManager {
+    entries = [];
+    worldbookDir;
+    dmae;
+    // ── One-Shot cascade：本轮用户命中后连带触发的条目（不入 DMAE 状态表，只本轮有效）──
+    lastCascadeEntries = [];
+    stateFile;
     // 终态注入上限（详见 worldbook-constants.ts）
     static MAX_ACTIVE = worldbook_constants_1.WORLDBOOK_CONSTANTS.MAX_ACTIVE;
     // .md 未写 intrinsic value 时的 fallback（详见 worldbook-constants.ts）
     static DEFAULT_INTRINSIC_VALUE = worldbook_constants_1.WORLDBOOK_CONSTANTS.DEFAULT_INTRINSIC_VALUE;
     constructor(worldbookDir, options) {
         this.worldbookDir = worldbookDir;
-        this.params = { ...exports.DEFAULT_DMAE_PARAMS, ...(options?.params ?? {}) };
-        this.rewardStrategy = options?.rewardStrategy ?? new DefaultRewardStrategy();
-        this.decayStrategy = options?.decayStrategy ?? new QuadraticResistanceDecay();
+        this.dmae = new DmaeManager({
+            params: options?.params,
+            rewardStrategy: options?.rewardStrategy,
+            decayStrategy: options?.decayStrategy,
+            debug: options?.debug,
+        });
         this.stateFile = options?.stateFile;
-        this.debug = options?.debug ?? true;
     }
     // Load all .md files from the worldbook directory
     async loadFromDirectory() {
@@ -139,26 +301,17 @@ class WorldbookManager {
         this.entries = allEntries;
         // 初始化 DMAE 状态：每条非常驻条目 activation=0（Archived 冷态）
         // 常驻条目不进 DMAE（始终注入），不给它们分配状态。
-        this.state.clear();
-        for (const e of this.entries) {
-            if (e.enabled && !e.permanent) {
-                this.state.set(e.id, { activation: 0, userSilence: 0, modelSilence: 0 });
-            }
-        }
+        this.dmae.initEntries(this.entries);
         // v1 持久化 seam：预留，暂为空（重启回 0）
         this.loadState();
-        logger_1.logger.info(logger_1.LogTag.Worldbook, `loaded ${allEntries.length} entries from ${files.length} files; DMAE state initialized for ${this.state.size} non-permanent entries`);
+        const nonPermanent = this.entries.filter((e) => e.enabled && !e.permanent).length;
+        logger_1.logger.info(logger_1.LogTag.Worldbook, `loaded ${allEntries.length} entries from ${files.length} files; DMAE state initialized for ${nonPermanent} non-permanent entries`);
     }
     // 从内存 entries 加载（不读 fs）：simulator / 测试用。
     // 复用 loadFromDirectory 的状态初始化逻辑，保证 sim 和生产用同一套初始化路径。
     loadFromEntries(entries) {
         this.entries = entries;
-        this.state.clear();
-        for (const e of this.entries) {
-            if (e.enabled && !e.permanent) {
-                this.state.set(e.id, { activation: 0, userSilence: 0, modelSilence: 0 });
-            }
-        }
+        this.dmae.initEntries(this.entries);
         this.loadState();
     }
     // Parse markdown format:
@@ -273,101 +426,9 @@ class WorldbookManager {
         }
         return entries;
     }
-    // ── DMAE 打分层：每轮更新所有条目的 Activation/US/MS ──
-    // v3.4 收口公式：
-    //   reward = userHit ? rewardGain × Wake(US_old) × Eff(A_old) : 0   (I 不参与 Reward)
-    //   decay  = (α·US_new² + β·MS_new²) / sqrt(I)                       (I 仅在 Resistance)
-    //   A_new  = clamp(A_old + reward - decay, 0, MaxScore)
-    //   if userHit && A_old 状态 == Archived: A_new = max(A_new, I)      (★ 仅 Archived 复活时 floor；I 参与 Floor 基线)
-    // MS 语义：距离最近一次"进入上下文"的轮数（userHit 或 modelHit 都重置），不是"模型有没有说过"
-    // ModelHit：只重置 msNew = 0，不给任何 reward（模型没有兴趣表达权 §7.3/§7.4）
-    // Snapshot 语义：每条 entry 独立、先读旧值再统一写，互不影响（DMAE §4/§11.1）。
-    updateActivation(userText, modelText) {
-        const user = userText ?? "";
-        const model = modelText ?? "";
-        const params = this.params;
-        const max = params.maxScore;
-        const changed = [];
-        // ── 第一遍：收集本轮所有 userHit 条目 id（cascade 通道用，DMAE 主循环也要）──
-        const userHitEntryIds = new Set();
-        for (const entry of this.entries) {
-            if (!entry.enabled || entry.permanent)
-                continue;
-            if (entry.keywords.length === 0)
-                continue;
-            if (entry.keywords.some((kw) => user.includes(kw))) {
-                userHitEntryIds.add(entry.id);
-            }
-        }
-        for (const entry of this.entries) {
-            if (!entry.enabled || entry.permanent)
-                continue;
-            if (entry.keywords.length === 0)
-                continue;
-            const st = this.state.get(entry.id);
-            if (!st)
-                continue;
-            // ─ snapshot old ─
-            const aOld = st.activation;
-            const usOld = st.userSilence;
-            const msOld = st.modelSilence;
-            // ─ hits ─
-            const userHit = entry.keywords.some((kw) => user.includes(kw));
-            const modelHit = entry.keywords.some((kw) => model.includes(kw));
-            // ─ silence update ─
-            const usNew = userHit ? 0 : usOld + 1;
-            // MS = 距离最近一次"进入上下文"的轮数。用户主动提 OR 模型自然提都属于"进入上下文"，
-            // 所以 userHit 也重置 ms——否则用户连续提但模型不复述时 ms 累积导致 decay 上升、A 反而下降。
-            const msNew = (userHit || modelHit) ? 0 : msOld + 1;
-            // ─ positive: user reward（仅 userHit，I 不参与） ─
-            const userReward = userHit
-                ? this.rewardStrategy.userReward({ entry, snap: { activation: aOld, userSilence: usOld, modelSilence: msOld }, params })
-                : 0;
-            // ─ negative: decay（I 仅在 Resistance） ─
-            const decay = this.decayStrategy.compute({
-                entry,
-                snap: { userSilence: usNew, modelSilence: msNew },
-                params,
-            });
-            // ─ positive: model reward（仅 modelHit + Active gating） ─
-            // v4.0 §5：Rm = Bm·e^(-λ·U_old)，仅当 A ≥ PromptThreshold 时给分
-            // v4.0 §8 不变量：Rm < D 严格成立，由主循环 clamp 保证（避免 Rm ≥ D 时仍能涨分）
-            let modelReward = 0;
-            if (modelHit && deriveState(aOld, params.promptThreshold) === worldbook_constants_1.WORLDBOOK_CONSTANTS.STATES.ACTIVE) {
-                const rawRm = this.rewardStrategy.modelReward({ entry, snap: { activation: aOld, userSilence: usOld, modelSilence: msOld }, params });
-                // 不变量 clamp：Rm = min(Rm, D - ε)
-                modelReward = Math.max(0, Math.min(rawRm, decay - worldbook_constants_1.WORLDBOOK_CONSTANTS.EPSILON));
-            }
-            // ─ commit ─
-            let aNew = aOld + userReward + modelReward - decay;
-            aNew = Math.max(0, aNew);
-            // ★ Floor 仅在 Archived 复活时触发（避免高价值条目每次命中都 floor 让 Decay/Wake 失效）
-            if (userHit && deriveState(aOld, params.promptThreshold) === worldbook_constants_1.WORLDBOOK_CONSTANTS.FLOOR_TRIGGER_STATE) {
-                aNew = Math.max(aNew, entry.intrinsicValue);
-            }
-            aNew = Math.min(max, aNew);
-            st.activation = aNew;
-            st.userSilence = usNew;
-            st.modelSilence = msNew;
-            if (this.debug && (userHit || modelHit || Math.abs(aNew - aOld) >= 0.05)) {
-                const reasons = [];
-                if (userHit)
-                    reasons.push(`U+${userReward.toFixed(2)}`);
-                if (modelHit)
-                    reasons.push(`M+${modelReward.toFixed(2)}`);
-                if (decay > 0)
-                    reasons.push(`D-${decay.toFixed(2)}`);
-                if (userHit && deriveState(aOld, params.promptThreshold) === worldbook_constants_1.WORLDBOOK_CONSTANTS.FLOOR_TRIGGER_STATE)
-                    reasons.push(`floor→${entry.intrinsicValue}`);
-                changed.push({ id: entry.id, aOld, aNew, reason: reasons.join(" ") });
-            }
-        }
-        if (this.debug && changed.length > 0) {
-            console.log(`[Worldbook/DMAE] update: ${changed.length} entries changed`);
-            for (const c of changed.slice(0, 12)) {
-                console.log(`  ${c.id}: ${c.aOld.toFixed(1)} → ${c.aNew.toFixed(1)}  (${c.reason})`);
-            }
-        }
+    // ── DMAE 打分层：委托给通用 DmaeManager，然后追加 One-Shot cascade ──
+    updateActivation(userText, modelText, turn = 0) {
+        const userHitEntryIds = this.dmae.updateActivation(this.entries, userText, modelText, turn);
         // ── One-Shot 联动触发（不入 DMAE 状态表，只本轮有效）──
         // 规则：只有 userHit 的条目才有连带触发权；cascade 目标不再级联（1 层封顶）。
         // 防死循环 3 条硬约束：
@@ -397,7 +458,7 @@ class WorldbookManager {
                 this.lastCascadeEntries.push(target);
             }
         }
-        if (this.debug && this.lastCascadeEntries.length > 0) {
+        if (this.dmae.getDebug() && this.lastCascadeEntries.length > 0) {
             console.log(`[Worldbook/Cascade] ${this.lastCascadeEntries.length} entries one-shot injected: ${this.lastCascadeEntries.map(e => e.id).join(", ")}`);
         }
     }
@@ -408,25 +469,18 @@ class WorldbookManager {
     // ── 业务层：阈值门控 + 注入 ──
     // deriveState(activation, promptThreshold)=="Active" 的条目注入；按 activation 降序、priority 降序 tiebreak、截 MAX_ACTIVE。
     getActiveEntries(promptThreshold) {
-        const th = promptThreshold ?? this.params.promptThreshold;
-        const active = this.entries
-            .filter((e) => {
-            if (!e.enabled || e.permanent)
-                return false;
-            const st = this.state.get(e.id);
-            if (!st)
-                return false;
-            return deriveState(st.activation, th) === worldbook_constants_1.WORLDBOOK_CONSTANTS.STATES.ACTIVE;
-        })
-            .sort((a, b) => {
-            const sa = this.state.get(a.id).activation;
-            const sb = this.state.get(b.id).activation;
+        const params = this.dmae.getParams();
+        const th = promptThreshold ?? params.promptThreshold;
+        let active = this.dmae.getActiveEntries(this.entries, th);
+        // 通用层只按 activation 排序；worldbook 追加 priority tiebreak
+        active = active.sort((a, b) => {
+            const sa = this.dmae.getState(a.id).activation;
+            const sb = this.dmae.getState(b.id).activation;
             if (sb !== sa)
                 return sb - sa;
             return b.priority - a.priority;
-        })
-            .slice(0, WorldbookManager.MAX_ACTIVE);
-        if (this.debug && active.length > 0) {
+        }).slice(0, WorldbookManager.MAX_ACTIVE);
+        if (this.dmae.getDebug() && active.length > 0) {
             console.log(`[Worldbook/DMAE] active entries injected: ${active.length} (threshold=${th})`);
         }
         // 返回带条目标题的完整内容（模型需要知道这段设定在说谁）
@@ -461,19 +515,19 @@ class WorldbookManager {
         return this.entries;
     }
     getState(id) {
-        return this.state.get(id);
+        return this.dmae.getState(id);
     }
     // ── 持久化 seam（v1 no-op；后续接 JsonVectorStore 同款 sync JSON）──
     loadState() {
         if (!this.stateFile)
             return;
-        // TODO v1.1: fs.readFileSync(this.stateFile) → 反序列化到 this.state
+        // TODO v1.1: fs.readFileSync(this.stateFile) → 反序列化到 this.dmae
         // 暂不落盘，重启回 0（已确认 v1 接受）
     }
     saveState() {
         if (!this.stateFile)
             return;
-        // TODO v1.1: fs.writeFileSync(this.stateFile, JSON.stringify([...this.state]))
+        // TODO v1.1: fs.writeFileSync(this.stateFile, JSON.stringify([...this.dmae]))
     }
 }
 exports.WorldbookManager = WorldbookManager;

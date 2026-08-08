@@ -8,6 +8,9 @@ import { resolveChatContextTimezone } from "../chat-time-context";
 import { getDateLocale } from "../locale-context";
 import { loadPromptFile } from "../prompts/prompt-loader";
 import { loadUserProfile } from "../settings-store";
+import { searchMemoryEntries } from "../rag";
+import { memoryStore } from "../memory/memory-store";
+import { l2DmaeManager } from "../memory/l2-dmae-manager";
 
 export interface CallPromptBuilderContext {
   /** 场景嵌入索引，由主进程在后台刷新，可能为 null。 */
@@ -22,7 +25,7 @@ export interface CallPromptBuilderContext {
 export async function buildCallSystemPrompt(
   ctx: CallPromptBuilderContext,
   userText: string,
-  messages: Array<{ role: "user"; content: string }>,
+  messages: Array<{ role: "user" | "assistant"; content: string }>,
 ): Promise<string> {
   // ① 时间日期（用用户时区，禁止直接喂未校验的 profile.timezone 给 Intl）
   const now = new Date();
@@ -33,7 +36,23 @@ export async function buildCallSystemPrompt(
   let alwaysOnContext = "";
   try { alwaysOnContext = await buildAlwaysOnContext(userText, messages); } catch { /* ignore */ }
 
-  // ③ 记忆注入
+  // ③ V5 L2 DMAE：先向量召回 top-4，再执行 DMAE 状态更新
+  try {
+    const allL2 = await memoryStore.getAllL2();
+    const recalled = await searchMemoryEntries(userText, "user_memory", 4);
+    const recalledIds = recalled
+      .map((r) => r.metadata?.l2Id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0);
+    const lastAssistant = [...messages]
+      .reverse()
+      .find((m) => m.role === "assistant")
+      ?.content ?? "";
+    await l2DmaeManager.updateActivation(allL2, userText, lastAssistant, recalledIds);
+  } catch (err) {
+    console.warn("[CallPromptBuilder] L2 DMAE update failed:", err);
+  }
+
+  // ④ 记忆注入（读取 DMAE active L2）
   let memoryInjection = "";
   try { memoryInjection = await buildMemoryInjection(userText); } catch { /* ignore */ }
 

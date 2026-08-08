@@ -8,6 +8,14 @@
 
 </div>
 
+<div align="center">
+
+<img src="./docs/image/preview2.png" alt="Cyrene Agent 实机运行预览（Work 模式 · 查看天气）" width="800">
+
+<i>实机运行预览 · Work 模式调用工具查看天气</i>
+
+</div>
+
 **Cyrene-Agent 是一个以《崩坏：星穹铁道》昔涟为核心角色的 Windows Live2D AI 桌面伴侣。**
 
 > 基于 Electron + TypeScript 开发的桌面端 Live2D 智能对话 Agent。  
