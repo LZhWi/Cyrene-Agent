@@ -128,13 +128,11 @@ import { codeRunWorker } from "./orchestrator/code/code-run-worker";
 import {
   setWeatherConfig,
   setSearchConfig,
-  getCurrentTodos,
   setDelegateSettings,
   setUserTimezoneConfig,
 } from "./orchestrator/built-in-tools";
 import { resolveMusicPaths } from "./music/paths";
 import { bootstrapGameBot } from "./game-bot/bootstrap";
-import { bootstrapTodos } from "./todos/bootstrap";
 import { bootstrapMusicService } from "./music/bootstrap";
 import { installShutdownLatch } from "./music/shutdown-latch";
 import {
@@ -383,9 +381,8 @@ app.whenReady().then(async () => {
     skillRegistry.setAvailability("cyrene-music-companion", () => false);
   }
 
-  // 启动游戏代肝与任务清单子系统
+  // 启动游戏代肝子系统
   bootstrapGameBot();
-  bootstrapTodos();
 
   // AG-UI 事件流桥：渲染进程 invoke(AGUI_RUN) → CyreneAgent 跑 FC 循环 → 事件透传
   const agentRuntime = createAgentRuntime({
@@ -424,9 +421,6 @@ app.whenReady().then(async () => {
     () => reactChatWindow,
     proactiveLifecycle.proactiveConversationLifecycle,
   );
-
-  // 状态栏专用入口：打开/复用 reactChatWindow
-  ipcMain.handle(IPC.TODOS_GET_CURRENT, () => getCurrentTodos());
 
   const generalSettings = loadGeneralSettings();
   // 初始化 Locale Context（从 GeneralSettings 的语言配置同步）

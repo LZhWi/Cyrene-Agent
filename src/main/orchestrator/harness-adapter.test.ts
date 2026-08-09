@@ -7,20 +7,9 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { buildHarnessSystemPrompt, mapTerminateReasonToTerminal, selectHarnessTools, sendHarnessEventAsAgui } from "./harness-adapter";
+import { buildHarnessSystemPrompt, mapTerminateReasonToTerminal, sendHarnessEventAsAgui } from "./harness-adapter";
 import type { HarnessEvent } from "./harness/types";
 import type { BaseEvent } from "@ag-ui/core";
-
-describe("selectHarnessTools", () => {
-  it("removes the legacy mode-scoped todo_write tool but preserves other registry tools", () => {
-    const tools = [
-      { id: "todo_write", name: "Legacy Todo" },
-      { id: "read_file", name: "Read file" },
-    ] as never[];
-
-    expect(selectHarnessTools(tools).map((tool) => tool.id)).toEqual(["read_file"]);
-  });
-});
 
 describe("Harness recovery context", () => {
   it("injects interrupted Todo context as read-only evidence", () => {

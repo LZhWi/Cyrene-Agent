@@ -23,10 +23,6 @@ import { loadPromptFile } from "../prompts/prompt-loader";
 
 const LOG_PREFIX = "[HarnessAdapter]";
 
-export function selectHarnessTools(tools: readonly ToolDefinition[]): ToolDefinition[] {
-  return tools.filter((tool) => tool.id !== "todo_write");
-}
-
 /**
  * 运行 CyreneHarness 并返回与旧循环兼容的 TwoPhaseFcResult。
  *
@@ -68,7 +64,7 @@ export async function runHarnessWithAdapter(
   const systemPrompt = buildHarnessSystemPrompt(options);
 
   // ── 构建工具列表 ──
-  const tools = selectHarnessTools(options.tools ?? toolRegistry.getEnabledTools());
+  const tools = [...(options.tools ?? toolRegistry.getEnabledTools())];
 
   // ── 构建工具上下文 ──
   const toolContext: ToolContext = {

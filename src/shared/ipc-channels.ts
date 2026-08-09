@@ -353,7 +353,5 @@ export const IPC = {
   SCREENSHOT_HOTKEY_CAPTURE_START: "screenshot:hotkey-capture-start",
   SCREENSHOT_HOTKEY_CAPTURE_END: "screenshot:hotkey-capture-end",
 
-  // TODO 卡片：初始加载当前状态（常驻需求）
-  TODOS_GET_CURRENT: "todos:get-current",
 } as const;
 

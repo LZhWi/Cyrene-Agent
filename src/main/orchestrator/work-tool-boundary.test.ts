@@ -44,5 +44,6 @@ describe("Work tool boundary", () => {
       expect(registered.has(id), `${id} should remain registered`).toBe(true);
     }
     expect(registered.has("delegate_coding")).toBe(false);
+    expect(registered.has("todo_write")).toBe(false);
   });
 });

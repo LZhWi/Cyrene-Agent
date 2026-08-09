@@ -34,7 +34,7 @@ export interface ToolContext {
    * Work 工具和 run_verification 必须使用此目录。
    */
   resolvedWorkspaceRoot?: string;
-  /** 当前会话的 UI 模式；工具可用它做模式隔离（如 todo_write）。 */
+  /** 当前会话的 UI 模式；工具可用它做模式隔离。 */
   mode?: ConversationMode;
   /** 未来扩展兜底；当前为空对象，不预设字段。遵循"地基通用，上层克制"。 */
   metadata?: Record<string, unknown>;

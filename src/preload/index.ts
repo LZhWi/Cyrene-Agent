@@ -570,8 +570,6 @@ const chatStoreApi = {
   },
   // reactChatWindow → main：ChatPage 已挂好 IPC 监听，允许 flush pending sessionId
   notifyReactReady: () => ipcRenderer.send(IPC.CHATS_REACT_READY),
-  // 获取当前各模式 TODO 状态，用于窗口初始加载和常驻显示
-  getCurrentTodos: () => ipcRenderer.invoke(IPC.TODOS_GET_CURRENT),
 };
 
 contextBridge.exposeInMainWorld("chatStore", chatStoreApi);
