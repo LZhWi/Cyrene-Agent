@@ -170,7 +170,7 @@ export function TodoPanel({ state, mode, workspaceName }: TodoPanelProps) {
 
         <div className="cy-todo__divider" />
 
-        <ul className="cy-todo__list">
+        <ul className="cy-todo__list" data-testid="todo-list">
           {total === 0 ? (
             <li className="cy-todo__item cy-todo__item--empty">
               <span className="cy-todo__status" aria-hidden="true">
@@ -196,24 +196,26 @@ export function TodoPanel({ state, mode, workspaceName }: TodoPanelProps) {
           )}
         </ul>
 
-        <div className="cy-todo__divider" />
+        <div className="cy-todo__footer" data-testid="todo-footer">
+          <div className="cy-todo__divider" />
 
-        <div
-          className="cy-todo__progress"
-          role="progressbar"
-          aria-valuenow={progress}
-          aria-valuemin={0}
-          aria-valuemax={100}
-        >
-          <div className="cy-todo__progress-bar" style={{ width: `${progress}%` }} />
-          <span className="cy-todo__progress-text">{progress}%</span>
-        </div>
+          <div
+            className="cy-todo__progress"
+            role="progressbar"
+            aria-valuenow={progress}
+            aria-valuemin={0}
+            aria-valuemax={100}
+          >
+            <div className="cy-todo__progress-bar" style={{ width: `${progress}%` }} />
+            <span className="cy-todo__progress-text">{progress}%</span>
+          </div>
 
-        <div className="cy-todo__workspace">
-          <span className="cy-todo__workspace-label">当前工作路径</span>
-          <span className="cy-todo__workspace-path" title={workspaceName}>
-            {workspaceName ?? "未绑定工作区"}
-          </span>
+          <div className="cy-todo__workspace">
+            <span className="cy-todo__workspace-label">当前工作路径</span>
+            <span className="cy-todo__workspace-path" title={workspaceName}>
+              {workspaceName ?? "未绑定工作区"}
+            </span>
+          </div>
         </div>
       </div>
     </div>

@@ -12,7 +12,10 @@
 }
 
 .cy-todo:not(.cy-todo--collapsed) {
-  aspect-ratio: 3 / 4;
+  display: flex;
+  flex-direction: column;
+  height: min(520px, calc(100vh - 96px));
+  min-height: min(320px, calc(100vh - 96px));
 }
 
 .cy-todo--collapsed .cy-todo__body {
@@ -36,6 +39,7 @@
   cursor: grab;
   padding: 0 10px;
   position: relative;
+  flex-shrink: 0;
 }
 
 .cy-todo__dragbar:active {
@@ -76,6 +80,10 @@
 
 .cy-todo__body {
   padding: 8px 14px 14px;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
   opacity: 1;
   transform: scale(1);
   transition: opacity 0.2s ease, transform 0.2s ease;
@@ -86,6 +94,7 @@
   display: flex;
   justify-content: center;
   margin-bottom: 10px;
+  flex-shrink: 0;
 }
 
 .cy-todo__mode-capsule {
@@ -120,6 +129,7 @@
   align-items: center;
   gap: 12px;
   padding: 0 2px;
+  flex-shrink: 0;
 }
 
 .cy-todo__mascot {
@@ -160,6 +170,7 @@
   background: rgba(255, 91, 138, 0.18);
   margin: 12px 0;
   border: none;
+  flex-shrink: 0;
 }
 
 /* ── 任务列表 ── */
@@ -170,8 +181,10 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
-  max-height: 180px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .cy-todo__list::-webkit-scrollbar {
@@ -229,6 +242,10 @@
   border-radius: 999px;
   background: #f5f5f5;
   overflow: hidden;
+}
+
+.cy-todo__footer {
+  flex-shrink: 0;
 }
 
 .cy-todo__progress-bar {
