@@ -6,10 +6,11 @@ import {
   findSessionIdForRun,
   hasActiveRunForSession,
   hydrateSessionMessages,
-  mergeHarnessTodosForMode,
+  mergeHarnessTodosForSession,
   patchSessionMessage,
   sessionInteraction,
   setSessionInteraction,
+  startSessionTodos,
 } from "./session-runtime-state";
 
 const ask = (id: string): ComposerInteraction => ({
@@ -83,29 +84,64 @@ describe("session runtime presentation state", () => {
     expect(sessionId).toBe("session-b");
   });
 
-  it("routes Harness todo updates into the existing mode TodoPanel state", () => {
+  it("keeps Todo state independent for two sessions in the same mode", () => {
     const previous = {
-      daily: {
-        todos: [{ id: "daily-1", content: "散步", status: "pending" as const }],
+      "session-b": {
+        runId: "run-b",
+        todos: [{ id: "b-1", content: "检查 B", status: "pending" as const }],
         updatedAt: 10,
-        mode: "daily" as const,
       },
     };
 
-    const next = mergeHarnessTodosForMode(previous, "work", [
+    const next = mergeHarnessTodosForSession(previous, "session-a", "run-a", [
       { id: "1", content: "读取核心循环", status: "completed" },
       { id: "2", content: "审查停止逻辑", status: "in_progress" },
       { id: "3", content: "已取消的旧步骤", status: "cancelled" },
     ], 20);
 
-    expect(next.daily).toBe(previous.daily);
-    expect(next.work).toEqual({
+    expect(next["session-b"]).toBe(previous["session-b"]);
+    expect(next["session-a"]).toEqual({
+      runId: "run-a",
       todos: [
         { id: "1", content: "读取核心循环", status: "completed" },
         { id: "2", content: "审查停止逻辑", status: "in_progress" },
       ],
       updatedAt: 20,
-      mode: "work",
     });
+  });
+
+  it("ignores a stale Todo event from another run in the same session", () => {
+    const previous = startSessionTodos({}, "session-a", "run-new", 10);
+
+    const next = mergeHarnessTodosForSession(previous, "session-a", "run-old", [
+      { id: "old", content: "旧任务", status: "pending" },
+    ], 20);
+
+    expect(next).toBe(previous);
+  });
+
+  it("filters cancelled, malformed, and unsupported Todo items", () => {
+    const next = mergeHarnessTodosForSession({}, "session-a", "run-a", [
+      { id: "ok", content: "保留", status: "pending" },
+      { id: "cancelled", content: "取消", status: "cancelled" },
+      { id: "", content: "无 ID", status: "pending" },
+      { id: "unknown", content: "未知", status: "blocked" },
+    ], 20);
+
+    expect(next["session-a"].todos).toEqual([
+      { id: "ok", content: "保留", status: "pending" },
+    ]);
+  });
+
+  it("starts a new run by clearing only the owning session Todo", () => {
+    const previous = {
+      "session-a": { runId: "run-old", todos: [{ id: "old", content: "旧", status: "pending" as const }], updatedAt: 1 },
+      "session-b": { runId: "run-b", todos: [{ id: "b", content: "B", status: "pending" as const }], updatedAt: 2 },
+    };
+
+    const next = startSessionTodos(previous, "session-a", "run-new", 30);
+
+    expect(next["session-a"]).toEqual({ runId: "run-new", todos: [], updatedAt: 30 });
+    expect(next["session-b"]).toBe(previous["session-b"]);
   });
 });

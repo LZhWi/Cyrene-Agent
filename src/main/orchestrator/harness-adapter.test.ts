@@ -7,9 +7,20 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { mapTerminateReasonToTerminal, sendHarnessEventAsAgui } from "./harness-adapter";
+import { mapTerminateReasonToTerminal, selectHarnessTools, sendHarnessEventAsAgui } from "./harness-adapter";
 import type { HarnessEvent } from "./harness/types";
 import type { BaseEvent } from "@ag-ui/core";
+
+describe("selectHarnessTools", () => {
+  it("removes the legacy mode-scoped todo_write tool but preserves other registry tools", () => {
+    const tools = [
+      { id: "todo_write", name: "Legacy Todo" },
+      { id: "read_file", name: "Read file" },
+    ] as never[];
+
+    expect(selectHarnessTools(tools).map((tool) => tool.id)).toEqual(["read_file"]);
+  });
+});
 
 describe("mapTerminateReasonToTerminal (Issue 2 + 3)", () => {
   it("maps undefined → success with externalEffectsMayContinue=false", () => {

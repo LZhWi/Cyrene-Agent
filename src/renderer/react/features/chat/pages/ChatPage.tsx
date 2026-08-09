@@ -3,7 +3,6 @@ import { DownOutlined } from "@ant-design/icons";
 import { ChatComposer, type ComposerAttachment } from "../components/ChatComposer";
 import { ComposerSlot } from "../components/ComposerSlot";
 import { TodoPanel } from "../components/TodoPanel";
-import type { TodoState } from "../../../../../shared/todo-types";
 import {
   describePermissionRequest,
   normalizeCodeAskInteraction,
@@ -56,12 +55,14 @@ import {
   findSessionIdForRun,
   hasActiveRunForSession,
   hydrateSessionMessages,
-  mergeHarnessTodosForMode,
+  mergeHarnessTodosForSession,
   patchSessionMessage,
   sessionInteraction,
   setSessionInteraction,
   setSessionInteractionBusy,
   type SessionInteractionState,
+  startSessionTodos,
+  type TodoStateBySession,
 } from "./session-runtime-state";
 import "../../../components/ui/SidebarToggle.css";
 import "../../../components/ui/ModeSwitch.css";
@@ -232,8 +233,6 @@ interface ChatStoreApi {
   onReactSwitchSession: (callback: (sessionId: string) => void) => () => void;
   // reactChatWindow → main：ChatPage 已挂好 IPC 监听，允许 flush pending sessionId
   notifyReactReady: () => void;
-  // 初始加载 TODO 状态，保证卡片常驻
-  getCurrentTodos: () => Promise<Record<"work" | "daily" | "learn", TodoState>>;
 }
 
 interface SidebarApi {
@@ -408,7 +407,7 @@ export function ChatPage() {
   const [selectedClineMode, setSelectedClineMode] = useState<"plan" | "act">("act");
   const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
-  const [todoStateByMode, setTodoStateByMode] = useState<Partial<Record<"work" | "daily" | "learn", TodoState>>>({});
+  const [todoStateBySession, setTodoStateBySession] = useState<TodoStateBySession>({});
   const activeModeRef = useRef(mode);
   const activeSessionIdsRef = useRef(activeSessionIds);
   const activeScopeRef = useRef(`mode:${mode}`);
@@ -429,34 +428,6 @@ export function ChatPage() {
   // 滚动到底部按钮状态
   const [scrollToBottomVisible, setScrollToBottomVisible] = useState(false);
   const scrollToBottomRef = useRef<() => void>(() => {});
-
-  useEffect(() => {
-    const api = aguiApi();
-    if (!api) return;
-
-    // 初始同步：从 main 加载各模式 TODO，保证卡片常驻显示
-    const store = chatStore();
-    if (store?.getCurrentTodos) {
-      store
-        .getCurrentTodos()
-        .then((state) => {
-          if (state) {
-            setTodoStateByMode(state);
-          }
-        })
-        .catch(() => {});
-    }
-
-    return api.onEvent((event) => {
-      if (event.type === "CUSTOM" && event.name === "cyrene.todos") {
-        const incoming = (event.value as TodoState) ?? { todos: [] };
-        const mode = incoming.mode;
-        if (mode === "work" || mode === "daily" || mode === "learn") {
-          setTodoStateByMode((prev) => ({ ...prev, [mode]: incoming }));
-        }
-      }
-    });
-  }, []);
 
   useEffect(() => {
     const settings = settingsApprovalApi();
@@ -1013,6 +984,11 @@ export function ChatPage() {
             };
           }
         }
+        setTodoStateBySession((current) => startSessionTodos(
+          current,
+          input.sessionId,
+          event.runId ?? activeRunsBySession.current[input.sessionId]?.runId,
+        ));
         if (input.targetMode === "code" && event.runId) {
           codeRunViewModel = {
             ...codeRunViewModel,
@@ -1168,7 +1144,12 @@ export function ChatPage() {
         // Harness 的 Todo 复用右侧现有 TodoPanel，不再复制成消息内 TaskPlanCard。
         const items = (event.value as { items?: Array<{ id: string; content: string; status: string }> } | null | undefined)?.items;
         if (Array.isArray(items)) {
-          setTodoStateByMode((current) => mergeHarnessTodosForMode(current, input.targetMode, items));
+          setTodoStateBySession((current) => mergeHarnessTodosForSession(
+            current,
+            input.sessionId,
+            event.runId ?? activeRunsBySession.current[input.sessionId]?.runId,
+            items,
+          ));
         }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.compressingContext") {
         setIsCompressingContext(true);
@@ -2019,7 +2000,11 @@ export function ChatPage() {
           </div>
         )}
         {(mode === "work" || mode === "daily" || mode === "learn") && (
-          <TodoPanel state={todoStateByMode[mode]} mode={mode} workspaceName={workspaceNames[mode]} />
+          <TodoPanel
+            state={activeSessionId ? todoStateBySession[activeSessionId] : null}
+            mode={mode}
+            workspaceName={workspaceNames[mode]}
+          />
         )}
         {hasMessages && (
           <ChatMessageList
