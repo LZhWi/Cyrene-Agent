@@ -1,5 +1,6 @@
 import type { ChatMessageItem } from "../components/ChatMessageList";
 import type { ComposerInteraction } from "../components/run-presentation";
+import type { TodoItem, TodoState } from "../../../../../shared/todo-types";
 
 export interface SessionInteractionEntry {
   interaction: ComposerInteraction;
@@ -73,4 +74,32 @@ export function findSessionIdForRun(
 ): string | undefined {
   if (!runId) return undefined;
   return Object.entries(activeRuns).find(([, run]) => run.runId === runId)?.[0];
+}
+
+type TodoPanelMode = "work" | "daily" | "learn";
+
+interface HarnessTodoPresentation {
+  id: string;
+  content: string;
+  status: string;
+}
+
+export function mergeHarnessTodosForMode(
+  state: Partial<Record<TodoPanelMode, TodoState>>,
+  mode: string,
+  items: readonly HarnessTodoPresentation[],
+  updatedAt = Date.now(),
+): Partial<Record<TodoPanelMode, TodoState>> {
+  if (mode !== "work" && mode !== "daily" && mode !== "learn") return state;
+
+  const todos = items.flatMap<TodoItem>((item) => {
+    if (!item.id || !item.content) return [];
+    if (item.status !== "pending" && item.status !== "in_progress" && item.status !== "completed") return [];
+    return [{ id: item.id, content: item.content, status: item.status }];
+  });
+
+  return {
+    ...state,
+    [mode]: { todos, updatedAt, mode },
+  };
 }

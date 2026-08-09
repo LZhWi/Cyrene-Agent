@@ -112,6 +112,43 @@ describe("streamChatWithSdk", () => {
     });
   });
 
+  it("promotes leading <think> content from text deltas into reasoning without leaking it into the answer", async () => {
+    const adapter = new OpenAICompatAdapter("chatgpt", openAICapability);
+    const seen: UnifiedStreamDelta[] = [];
+    const deps: SdkStreamRuntimeDeps = {
+      openAI: async () => iterableOf(
+        { choices: [{ delta: { content: "<thi" }, finish_reason: null }] },
+        { choices: [{ delta: { content: "nk>先检查项目" }, finish_reason: null }] },
+        { choices: [{ delta: { content: "结构</think>找到结果" }, finish_reason: null }] },
+        { choices: [{ delta: {}, finish_reason: "stop" }] },
+      ),
+      anthropic: unusedFactory,
+    };
+
+    const response = await streamChatWithSdk({
+      adapter,
+      request,
+      config: openAIConfig,
+      timeoutMs: 1_000,
+      onDelta: (delta) => seen.push(delta),
+    }, deps);
+
+    expect(seen
+      .filter((delta) => delta.type === "reasoning_delta")
+      .map((delta) => delta.delta)
+      .join(""))
+      .toBe("先检查项目结构");
+    expect(seen
+      .filter((delta) => delta.type === "text_delta")
+      .map((delta) => delta.delta)
+      .join(""))
+      .toBe("找到结果");
+    expect(response).toMatchObject({
+      text: "找到结果",
+      thinking: "先检查项目结构",
+    });
+  });
+
   it("delivers Anthropic raw deltas before asking the SDK for finalMessage", async () => {
     const adapter = new AnthropicAdapter("claude", anthropicCapability);
     const order: string[] = [];

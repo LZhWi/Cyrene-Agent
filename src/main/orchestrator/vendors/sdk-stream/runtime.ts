@@ -1,5 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import OpenAI from "openai";
+import { createThinkFilter } from "../../../chat/think-filter";
 import { AgentRuntimeError } from "../../agent-runtime-error";
 import type { ChatRequest, ChatResponse, ChatVendorAdapter, VendorConfig } from "../types";
 import { CyreneStreamAccumulator } from "./accumulator";
@@ -96,7 +97,8 @@ export async function streamChatWithSdk(
   }, input.timeoutMs);
 
   const accumulator = new CyreneStreamAccumulator();
-  const dispatch = (delta: UnifiedStreamDelta) => {
+  const taggedThinkFilter = createThinkFilter("leading-only");
+  const commitDelta = (delta: UnifiedStreamDelta) => {
     if (delta.type === "finish" && input.adapter.transport === "openai") {
       for (const toolCall of accumulator.snapshot().toolCalls) {
         if (!toolCall.ended) {
@@ -113,6 +115,23 @@ export async function streamChatWithSdk(
     accumulator.apply(delta);
     input.onDelta?.(delta);
   };
+  const flushTaggedThink = () => {
+    const visibleTail = taggedThinkFilter.flush();
+    const thinkingTail = taggedThinkFilter.takeThinking();
+    if (thinkingTail) commitDelta({ type: "reasoning_delta", delta: thinkingTail });
+    if (visibleTail) commitDelta({ type: "text_delta", delta: visibleTail });
+  };
+  const dispatch = (delta: UnifiedStreamDelta) => {
+    if (delta.type === "text_delta") {
+      const visible = taggedThinkFilter.push(delta.delta);
+      const thinking = taggedThinkFilter.takeThinking();
+      if (thinking) commitDelta({ type: "reasoning_delta", delta: thinking });
+      if (visible) commitDelta({ type: "text_delta", delta: visible });
+      return;
+    }
+    if (delta.type !== "reasoning_delta") flushTaggedThink();
+    commitDelta(delta);
+  };
 
   try {
     const prepared = requestBody(input.adapter, input.request, input.config);
@@ -127,6 +146,7 @@ export async function streamChatWithSdk(
         lastChunk = chunk;
         for (const delta of normalizeOpenAIChunk(chunk)) dispatch(delta);
       }
+      flushTaggedThink();
       return accumulator.finalize(lastChunk);
     }
 
@@ -140,6 +160,7 @@ export async function streamChatWithSdk(
     for await (const event of stream.events) {
       for (const delta of normalizer.normalize(event)) dispatch(delta);
     }
+    flushTaggedThink();
     const finalMessage = await stream.finalMessage();
     return reconcileAnthropicTerminal(
       accumulator.snapshot(),

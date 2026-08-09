@@ -54,6 +54,7 @@ import {
   clearSessionInteraction,
   findSessionIdForRun,
   hydrateSessionMessages,
+  mergeHarnessTodosForMode,
   patchSessionMessage,
   sessionInteraction,
   setSessionInteraction,
@@ -1185,23 +1186,10 @@ export function ChatPage() {
           });
         }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.todo") {
-        // v3: CyreneHarness 的 todo 事件（单数），payload 为 { items: TodoItem[] }
+        // Harness 的 Todo 复用右侧现有 TodoPanel，不再复制成消息内 TaskPlanCard。
         const items = (event.value as { items?: Array<{ id: string; content: string; status: string }> } | null | undefined)?.items;
         if (Array.isArray(items)) {
-          const taskPlan = {
-            steps: items.map((item) => ({
-              id: item.id,
-              title: item.content,
-              status: item.status === "in_progress" ? "running" as const
-                    : item.status === "completed" ? "completed" as const
-                    : item.status === "cancelled" ? "failed" as const
-                    : "pending" as const,
-            })),
-          };
-          updateMessage(input.targetMode, input.assistantId, {
-            taskPlan,
-            runStage: { kind: "executing" },
-          });
+          setTodoStateByMode((current) => mergeHarnessTodosForMode(current, input.targetMode, items));
         }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.compressingContext") {
         setIsCompressingContext(true);

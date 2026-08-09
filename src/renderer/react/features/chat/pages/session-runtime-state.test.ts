@@ -5,6 +5,7 @@ import {
   clearSessionInteraction,
   findSessionIdForRun,
   hydrateSessionMessages,
+  mergeHarnessTodosForMode,
   patchSessionMessage,
   sessionInteraction,
   setSessionInteraction,
@@ -70,5 +71,31 @@ describe("session runtime presentation state", () => {
     }, "run-b");
 
     expect(sessionId).toBe("session-b");
+  });
+
+  it("routes Harness todo updates into the existing mode TodoPanel state", () => {
+    const previous = {
+      daily: {
+        todos: [{ id: "daily-1", content: "散步", status: "pending" as const }],
+        updatedAt: 10,
+        mode: "daily" as const,
+      },
+    };
+
+    const next = mergeHarnessTodosForMode(previous, "work", [
+      { id: "1", content: "读取核心循环", status: "completed" },
+      { id: "2", content: "审查停止逻辑", status: "in_progress" },
+      { id: "3", content: "已取消的旧步骤", status: "cancelled" },
+    ], 20);
+
+    expect(next.daily).toBe(previous.daily);
+    expect(next.work).toEqual({
+      todos: [
+        { id: "1", content: "读取核心循环", status: "completed" },
+        { id: "2", content: "审查停止逻辑", status: "in_progress" },
+      ],
+      updatedAt: 20,
+      mode: "work",
+    });
   });
 });
