@@ -19,7 +19,7 @@ import {
   type ComposerInteraction,
 } from "../components/run-presentation";
 import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessageList";
-import { applyAgentRoundBoundary } from "../components/agent-rounds";
+import { applyAgentRoundBoundary, createRoundProcessMessage } from "../components/agent-rounds";
 import type { WeatherData } from "../components/weather/weather-types";
 import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
 import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
@@ -1224,12 +1224,12 @@ export function ChatPage() {
         const content = (event.value as { content?: unknown } | null | undefined)?.content;
         if (typeof content === "string" && content.trim()) {
           const processId = `process-${processMessageSequence++}`;
-          processMessages = [...processMessages, {
-            id: processId,
-            content: "",
-            afterToolCount: toolExecutions.length,
-            roundId: activeRoundId,
-          }];
+          processMessages = [...processMessages, createRoundProcessMessage(
+            processId,
+            "",
+            toolExecutions.length,
+            activeRoundId,
+          )];
           updateMessage(input.targetMode, input.assistantId, { processMessages });
           enqueuePublicTextReveal(content, (chunk) => {
             processMessages = processMessages.map((message) => message.id === processId
@@ -1427,11 +1427,12 @@ export function ChatPage() {
       completeRunActivity(true);
       const errorMessage = error instanceof Error ? error.message : String(error);
       const visibleError = `模型请求失败：${errorMessage}`;
-      processMessages = [...processMessages, {
-        id: `process-${processMessageSequence++}`,
-        content: visibleError,
-        afterToolCount: toolExecutions.length,
-      }];
+      processMessages = [...processMessages, createRoundProcessMessage(
+        `process-${processMessageSequence++}`,
+        visibleError,
+        toolExecutions.length,
+        activeRoundId,
+      )];
       updateMessage(input.targetMode, input.assistantId, {
         content: "",
         processMessages,

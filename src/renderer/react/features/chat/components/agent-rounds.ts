@@ -1,4 +1,4 @@
-import type { AgentRoundRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
+import type { AgentRoundRecord, ProcessMessageRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
 
 const LIVE_TOOL_LABELS: Record<string, string> = {
   list_dir: "列出目录",
@@ -17,6 +17,15 @@ const SUMMARY_TOOL_LABELS: Record<string, string> = {
   search_code: "搜索|次",
   run_shell: "执行|条命令",
 };
+
+export function createRoundProcessMessage(
+  id: string,
+  content: string,
+  afterToolCount: number,
+  roundId?: string,
+): ProcessMessageRecord {
+  return { id, content, afterToolCount, roundId };
+}
 
 export function startAgentRound(
   rounds: readonly AgentRoundRecord[],

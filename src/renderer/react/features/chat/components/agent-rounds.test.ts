@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ToolExecutionRecord } from "../../../../../shared/chat-types";
 import {
   applyAgentRoundBoundary,
+  createRoundProcessMessage,
   finishAgentRound,
   resolveAgentRoundTitle,
   startAgentRound,
@@ -16,6 +17,15 @@ function tool(
 }
 
 describe("agent round presentation", () => {
+  it("keeps terminal error text attached to the interrupted active round", () => {
+    expect(createRoundProcessMessage("error-1", "模型请求失败", 3, "round-2")).toEqual({
+      id: "error-1",
+      content: "模型请求失败",
+      afterToolCount: 3,
+      roundId: "round-2",
+    });
+  });
+
   it("tracks the active round from ordered start and end events", () => {
     const started = applyAgentRoundBoundary({ rounds: [], activeRoundId: undefined }, "start", "round-0", 100);
     expect(started).toEqual({
