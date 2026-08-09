@@ -43,6 +43,7 @@ import {
   type CodeRunViewModel,
 } from "../../../../lib/code-run-view-model";
 import {
+  bootstrapReactSession,
   normalizeSessionMode,
   openSessionByIdWithDeps,
   type OpenSessionArgs,
@@ -417,9 +418,9 @@ export function ChatPage() {
   const demoTimers = useRef(new Set<number>());
   const activeRunsBySession = useRef<Record<string, { assistantId: string; runId?: string; mode: ConversationMode }>>({});
   // bootstrap 标志：只由 cold-start finally 写入；模式切换 effect 仅检查
-  const bootstrapCompletedRef = useRef(false);
-  // 长期持有的会话操作 ref：避免 IPC 回调捕获陈旧闭包
-  const openSessionByIdRef = useRef<(id: string) => Promise<boolean>>(async () => false);
+  const [bootstrapCompleted, setBootstrapCompleted] = useState(false);
+  const observedModeRef = useRef(mode);
+  // 长期持有的刷新操作 ref：供 IPC 回调读取当前实现
   const refreshSessionsRef = useRef<
     (targetMode: ConversationMode, selectCurrent: boolean) => Promise<void>
   >(async () => {});
@@ -574,11 +575,13 @@ export function ChatPage() {
 
   // 模式 effect：bootstrap 完成后才刷新；bootstrap 自身由下方合并 effect 接管
   useEffect(() => {
-    if (!bootstrapCompletedRef.current) return;
+    const previousMode = observedModeRef.current;
+    observedModeRef.current = mode;
+    if (!bootstrapCompleted || previousMode === mode) return;
     void refreshSessionsRef.current(mode, true).catch((error) => {
       console.error("[ChatPage] Failed to refresh sessions after mode change:", error);
     });
-  }, [mode]);
+  }, [bootstrapCompleted, mode]);
 
   // 合并 effect：注册 IPC → cold-start → finally 置 bootstrap + 通知 ready
   useEffect(() => {
@@ -606,34 +609,21 @@ export function ChatPage() {
         });
     });
 
-    void (async () => {
-      try {
-        const urlSessionId = new URLSearchParams(window.location.search).get("sessionId");
-        if (urlSessionId) {
-          const opened = await openSessionById(urlSessionId);
-          if (opened) {
-            // 会话打开成功仍需填充左侧会话列表，但不重复 select
-            await refreshSessionsRef.current(activeModeRef.current, false);
-          } else {
-            await refreshSessionsRef.current(activeModeRef.current, true);
-          }
-        } else {
-          await refreshSessionsRef.current(activeModeRef.current, true);
-        }
-      } catch (error) {
-        console.error("[ChatPage] Failed to bootstrap React session:", error);
-        try {
-          await refreshSessionsRef.current(activeModeRef.current, true);
-        } catch (fallbackError) {
-          console.error("[ChatPage] Bootstrap fallback failed:", fallbackError);
-        }
-      } finally {
+    void bootstrapReactSession({
+      urlSessionId: new URLSearchParams(window.location.search).get("sessionId"),
+      currentMode: activeModeRef.current as ReactSessionMode,
+      openSession: openSessionById,
+      refreshSessions: async (targetMode, selectCurrent) => {
+        await refreshSessions(targetMode as ConversationMode, selectCurrent);
+      },
+    }).catch((error) => {
+      console.error("[ChatPage] Failed to bootstrap React session:", error);
+    }).finally(() => {
         // cold-start 全程完成才标记 bootstrap 完成；只有该标志置位后
         // mode 切换 effect 才会触发 refreshSessions
-        bootstrapCompletedRef.current = true;
+        setBootstrapCompleted(true);
         if (!disposed) store.notifyReactReady?.();
-      }
-    })();
+    });
 
     return () => {
       disposed = true;
@@ -783,7 +773,18 @@ export function ChatPage() {
    * 不触发页面重新加载。
    */
   async function openSessionById(sessionId: string): Promise<boolean> {
-    const opened = await openSessionByIdRef.current(sessionId);
+    const opened = await openSessionByIdWithDeps({
+      sessionId,
+      getSession: async (id) => {
+        const store = chatStore();
+        if (!store) return null;
+        const result = await store.get(id);
+        return (result ?? null) as { mode?: string } | null;
+      },
+      selectSession: async (id, targetMode) => {
+        await selectSession(id, targetMode as ConversationMode);
+      },
+    });
     if (opened && typeof window !== "undefined") {
       try {
         const url = new URL(window.location.href);
@@ -799,29 +800,6 @@ export function ChatPage() {
     }
     return opened;
   }
-
-  // 同步 openSessionByIdRef：每次 chatStore / selectSession 变更时重新打包
-  useEffect(() => {
-    openSessionByIdRef.current = (sessionId: string) =>
-      openSessionByIdWithDeps({
-        sessionId,
-        getSession: async (id) => {
-          const store = chatStore();
-          if (!store) return null;
-          const result = await store.get(id);
-          return (result ?? null) as { mode?: string } | null;
-        },
-        selectSession: async (id, mode) => {
-          // ReactSessionMode ⊂ ConversationMode，可直接传
-          await selectSession(id, mode as ConversationMode);
-        },
-      });
-  }, [chatStore, selectSession]);
-
-  // 同步 refreshSessionsRef
-  useEffect(() => {
-    refreshSessionsRef.current = refreshSessions;
-  }, [refreshSessions]);
 
   async function refreshSessions(targetMode: ConversationMode, selectCurrent: boolean) {
     const store = chatStore();
@@ -844,6 +822,9 @@ export function ChatPage() {
     setWorkspaceNames((current) => ({ ...current, [targetMode]: undefined }));
     if (targetMode === activeModeRef.current) void store.setActiveSession(null);
   }
+
+  // 渲染期间同步安装真实实现，保证 mount effect 不会先观察到默认 no-op。
+  refreshSessionsRef.current = refreshSessions;
 
   function streamDemoResponse(targetMode: ConversationMode, id: string, response: string, sessionId?: string) {
     const earlyTtsQueue = sessionId ? createEarlyTtsQueue(targetMode, sessionId, id) : null;
