@@ -53,6 +53,7 @@ import { splitTextForReveal } from "./message-reveal";
 import {
   clearSessionInteraction,
   findSessionIdForRun,
+  hasActiveRunForSession,
   hydrateSessionMessages,
   mergeHarnessTodosForMode,
   patchSessionMessage,
@@ -462,11 +463,11 @@ export function ChatPage() {
     return settings.onPermissionApprovalRequest((request) => {
       const currentMode = activeModeRef.current;
       const currentSessionId = activeSessionIdsRef.current[currentMode];
-      const ownerSessionId = findSessionIdForRun(activeRunsBySessionRef.current, request.runId)
+      const ownerSessionId = findSessionIdForRun(activeRunsBySession.current, request.runId)
         ?? currentSessionId;
       if (!ownerSessionId) return;
       setInteractionForSession(ownerSessionId, permissionInteraction(request));
-      const activeRun = activeRunsBySessionRef.current[ownerSessionId];
+      const activeRun = activeRunsBySession.current[ownerSessionId];
       if (activeRun) {
         updateMessage(ownerSessionId, activeRun.assistantId, { runStage: { kind: "waiting_permission" } });
       }
@@ -495,7 +496,6 @@ export function ChatPage() {
   const modelBusyByModeRef = useRef<Partial<Record<ConversationMode, boolean>>>({});
   const lastTurnRevisionStartingRef = useRef(false);
   const activeAguiOffsRef = useRef(new Set<() => void>());
-  const activeRunsBySessionRef = useRef(activeRunsBySession);
   const cancelRequestedSessionsRef = useRef(new Set<string>());
   const [pendingQueueBySession, setPendingQueueBySession] = useState<Record<string, { id: string; rawContent: string; visibleContent: string; attachments: ComposerAttachment[]; userSticker?: string }[]>>({});
   const pendingQueueBySessionRef = useRef(pendingQueueBySession);
@@ -769,7 +769,7 @@ export function ChatPage() {
       current,
       sessionId,
       uiMessages,
-      Boolean(activeRunsBySessionRef.current[sessionId]),
+      hasActiveRunForSession(activeRunsBySession.current, sessionId),
     ));
     setWorkspaceNames((current) => ({
       ...current,
@@ -921,7 +921,6 @@ export function ChatPage() {
       ...activeRunsBySession.current,
       [input.sessionId]: { assistantId: input.assistantId, mode: input.targetMode },
     };
-    activeRunsBySessionRef.current = activeRunsBySession;
     setModelBusyByMode((current) => ({ ...current, [input.targetMode]: true }));
     const earlyTtsQueue = createEarlyTtsQueue(input.targetMode, input.sessionId, input.assistantId);
     let streamContent = "";
@@ -1031,7 +1030,6 @@ export function ChatPage() {
               ...activeRunsBySession.current,
               [input.sessionId]: { ...(existing ?? { assistantId: input.assistantId, mode: input.targetMode }), runId: event.runId },
             };
-            activeRunsBySessionRef.current = activeRunsBySession;
           }
         }
         if (input.targetMode === "code" && event.runId) {
@@ -1294,7 +1292,6 @@ export function ChatPage() {
             runId: ack.runId,
           },
         };
-        activeRunsBySessionRef.current = activeRunsBySession;
         for (const accepted of eventGate.bind(ack.runId)) handleEvent(accepted);
         if (cancelRequestedSessionsRef.current.delete(input.sessionId)) {
           await api.cancel(ack.runId);
@@ -1375,7 +1372,6 @@ export function ChatPage() {
         const nextActive = { ...activeRunsBySession.current };
         delete nextActive[input.sessionId];
         activeRunsBySession.current = nextActive;
-        activeRunsBySessionRef.current = activeRunsBySession;
       }
       const nextBusy = { ...modelBusyByModeRef.current };
       delete nextBusy[input.targetMode];
@@ -1409,7 +1405,7 @@ export function ChatPage() {
   }
 
   function isSessionBusy(sessionId: string): boolean {
-    return Boolean(activeRunsBySessionRef.current[sessionId]);
+    return hasActiveRunForSession(activeRunsBySession.current, sessionId);
   }
 
   async function restartLastChatTurn(

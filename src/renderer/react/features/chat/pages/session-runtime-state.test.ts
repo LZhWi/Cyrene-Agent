@@ -4,6 +4,7 @@ import type { ComposerInteraction } from "../components/run-presentation";
 import {
   clearSessionInteraction,
   findSessionIdForRun,
+  hasActiveRunForSession,
   hydrateSessionMessages,
   mergeHarnessTodosForMode,
   patchSessionMessage,
@@ -62,6 +63,15 @@ describe("session runtime presentation state", () => {
     const next = hydrateSessionMessages({ "session-a": live }, "session-a", stored, true);
 
     expect(next["session-a"]).toBe(live);
+  });
+
+  it("reads the active-run record from the real session map", () => {
+    const activeRuns = {
+      "session-a": { runId: "run-a" },
+    };
+
+    expect(hasActiveRunForSession(activeRuns, "session-a")).toBe(true);
+    expect(hasActiveRunForSession(activeRuns, "session-b")).toBe(false);
   });
 
   it("finds the session that owns a permission run", () => {

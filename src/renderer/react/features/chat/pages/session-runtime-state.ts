@@ -76,6 +76,13 @@ export function findSessionIdForRun(
   return Object.entries(activeRuns).find(([, run]) => run.runId === runId)?.[0];
 }
 
+export function hasActiveRunForSession(
+  activeRuns: Record<string, unknown>,
+  sessionId: string,
+): boolean {
+  return Boolean(activeRuns[sessionId]);
+}
+
 type TodoPanelMode = "work" | "daily" | "learn";
 
 interface HarnessTodoPresentation {
