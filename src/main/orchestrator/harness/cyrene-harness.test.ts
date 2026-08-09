@@ -214,7 +214,7 @@ describe("CyreneHarness completion (P0-A)", () => {
       onEvent: (event) => events.push(event),
     });
 
-    expect(events.slice(0, 3)).toEqual([
+    expect(events.filter((event) => event.type.startsWith("reasoning_")).slice(0, 3)).toEqual([
       { type: "reasoning_start", messageId: "reasoning-0" },
       { type: "reasoning_delta", messageId: "reasoning-0", delta: "先检查" },
       { type: "reasoning_delta", messageId: "reasoning-0", delta: "，再回答" },
@@ -303,6 +303,14 @@ describe("CyreneHarness completion (P0-A)", () => {
     // 自然结束（非超时、非取消）
     expect(result.terminated).toBe(false);
     expect(result.terminateReason).toBeUndefined();
+    expect(events.filter((event) => event.type === "round_start" || event.type === "round_end")).toEqual([
+      { type: "round_start", roundId: "round-0" },
+      { type: "round_end", roundId: "round-0" },
+      { type: "round_start", roundId: "round-1" },
+      { type: "round_end", roundId: "round-1" },
+    ]);
+    expect(events.findIndex((event) => event.type === "round_end" && event.roundId === "round-1"))
+      .toBeLessThan(events.findIndex((event) => event.type === "final_answer"));
   });
 
   it("accepts honest final after an unknown non-idempotent side effect; uncertainEffects retained", async () => {

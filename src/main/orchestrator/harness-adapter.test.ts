@@ -127,6 +127,21 @@ describe("sendHarnessEventAsAgui runId stamping (Issue 6)", () => {
     });
   });
 
+  it("maps explicit model round boundaries to one ordered custom event stream", () => {
+    expect(captureEvents({ type: "round_start", roundId: "round-3" })[0]).toMatchObject({
+      type: "CUSTOM",
+      name: "cyrene.round",
+      value: { action: "start", roundId: "round-3" },
+      runId,
+    });
+    expect(captureEvents({ type: "round_end", roundId: "round-3" })[0]).toMatchObject({
+      type: "CUSTOM",
+      name: "cyrene.round",
+      value: { action: "end", roundId: "round-3" },
+      runId,
+    });
+  });
+
   it("maps public model reasoning to AG-UI reasoning events", () => {
     const start = captureEvents({ type: "reasoning_start", messageId: "reason-1" });
     const delta = captureEvents({ type: "reasoning_delta", messageId: "reason-1", delta: "先检查" });
@@ -142,7 +157,7 @@ describe("sendHarnessEventAsAgui runId stamping (Issue 6)", () => {
       type: "tool_start",
       toolCallId: "tc-1",
       toolName: "apply_patch",
-      args: {},
+      args: { path: "src/main.ts" },
     });
     const endEvents = captureEvents({
       type: "tool_end",
@@ -156,6 +171,13 @@ describe("sendHarnessEventAsAgui runId stamping (Issue 6)", () => {
     expect(toolStart).toBeDefined();
     expect(toolStart.runId).toBe(runId);
     expect(toolStart.toolCallId).toBe("tc-1");
+
+    expect(startEvents[1]).toMatchObject({
+      type: "TOOL_CALL_ARGS",
+      toolCallId: "tc-1",
+      delta: JSON.stringify({ path: "src/main.ts" }),
+      runId,
+    });
 
     const toolEnd = endEvents[0] as BaseEvent & { runId?: string; toolCallId?: string };
     expect(toolEnd.runId).toBe(runId);

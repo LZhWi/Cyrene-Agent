@@ -202,6 +202,20 @@ export function sendHarnessEventAsAgui(
   send: (event: BaseEvent) => void,
 ): void {
   switch (event.type) {
+    case "round_start":
+    case "round_end": {
+      send({
+        type: EventType.CUSTOM,
+        name: "cyrene.round",
+        value: {
+          action: event.type === "round_start" ? "start" : "end",
+          roundId: event.roundId,
+        },
+        threadId,
+        runId,
+      } as BaseEvent);
+      break;
+    }
     case "progress_text": {
       send({
         type: EventType.CUSTOM,
@@ -236,6 +250,13 @@ export function sendHarnessEventAsAgui(
         type: EventType.TOOL_CALL_START,
         toolCallId: event.toolCallId,
         toolCallName: event.toolName,
+        threadId,
+        runId,
+      } as BaseEvent);
+      send({
+        type: EventType.TOOL_CALL_ARGS,
+        toolCallId: event.toolCallId,
+        delta: JSON.stringify(event.args),
         threadId,
         runId,
       } as BaseEvent);

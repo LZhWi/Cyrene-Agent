@@ -121,6 +121,8 @@ export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
 // ── Harness 事件（给 UI / 桥层）──────────────────────────
 
 export type HarnessEvent =
+  | { type: "round_start"; roundId: string }
+  | { type: "round_end"; roundId: string }
   | { type: "progress_text"; content: string }
   | { type: "final_answer"; content: string }
   | { type: "reasoning_start"; messageId: string }

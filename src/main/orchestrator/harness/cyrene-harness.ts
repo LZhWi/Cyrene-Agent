@@ -98,6 +98,9 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
       return buildCancelledResult(state, rounds);
     }
 
+    const roundId = `round-${rounds}`;
+    input.onEvent?.({ type: "round_start", roundId });
+
     // ═══ Mid-loop compaction（v3 §10.6）═══
     const budget = computeTokenBudget(
       input.systemPrompt,
@@ -229,6 +232,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
 
         // ask_user 后丢弃 progress buffer，等待模型重新决策
         streamController.discardProgressBuffer();
+        input.onEvent?.({ type: "round_end", roundId });
         rounds++;
         continue;
       }
@@ -365,6 +369,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
         }
       }
 
+      input.onEvent?.({ type: "round_end", roundId });
       rounds++;
       continue;
     }
@@ -374,6 +379,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     // uncertainEffects 仍作为执行期安全状态保留（阻止相同危险副作用自动重放），
     // 但不参与 final settlement。
     const finalAnswer = streamController.commitProgressBuffer();
+    input.onEvent?.({ type: "round_end", roundId });
     input.onEvent?.({ type: "final_answer", content: finalAnswer });
     clock.stopActive();
     return buildResult(finalAnswer, state, false, undefined, rounds);
