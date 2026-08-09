@@ -57,6 +57,8 @@ export interface ToolExecutionRecord {
   name: string;
   status: "running" | "success" | "error";
   result?: string;
+  argsText?: string;
+  roundId?: string;
 }
 
 /** 一次 assistant run 的可恢复展示指标。 */
@@ -78,6 +80,7 @@ export interface ProcessMessageRecord {
   content: string;
   /** 该过程消息出现前已完成的工具数，用于恢复大致执行顺序。 */
   afterToolCount?: number;
+  roundId?: string;
 }
 
 export interface ReasoningBlock {
@@ -86,6 +89,14 @@ export interface ReasoningBlock {
   streaming?: boolean;
   /** 已完成的工具数，用于恢复 Think 与工具链的真实顺序。 */
   afterToolCount?: number;
+  roundId?: string;
+}
+
+export interface AgentRoundRecord {
+  id: string;
+  status: "running" | "completed";
+  startedAt: number;
+  completedAt?: number;
 }
 
 export interface ChatMessage {
@@ -97,6 +108,8 @@ export interface ChatMessage {
   reasoningBlocks?: ReasoningBlock[];
   /** 工具轮次中模型给用户的过程说明；不属于正式回答，也不冒充 reasoning。 */
   processMessages?: ProcessMessageRecord[];
+  /** Harness 模型调用回合；用于把公开文本、reasoning 与工具执行折叠为一个单元。 */
+  agentRounds?: AgentRoundRecord[];
   at: number;
   /** 不直接显示在聊天气泡里，但会拼入模型上下文。 */
   modelContext?: string;

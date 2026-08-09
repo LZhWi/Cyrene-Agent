@@ -19,12 +19,13 @@ import {
   type ComposerInteraction,
 } from "../components/run-presentation";
 import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessageList";
+import { applyAgentRoundBoundary } from "../components/agent-rounds";
 import type { WeatherData } from "../components/weather/weather-types";
 import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
 import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
 import { ConversationSidebar } from "../components/ConversationSidebar";
 import { StatusFloat } from "../components/StatusFloat";
-import type { ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
+import type { AgentRoundRecord, ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import { SidebarToggle } from "../../../components/ui/SidebarToggle";
 import { ModeSwitch } from "../../../components/ui/ModeSwitch";
 import { CharacterStatusPill } from "../../../components/ui/CharacterStatusPill";
@@ -357,6 +358,7 @@ function toUiMessages(session: ChatSession): ChatMessageItem[] {
       reasoning: message.reasoning,
       reasoningBlocks: message.reasoningBlocks,
       processMessages: message.processMessages,
+      agentRounds: message.agentRounds,
       runActivity: message.runActivity,
       ttsCacheKey: message.ttsCacheKey,
       ttsCacheVersion: message.ttsCacheVersion,
@@ -903,6 +905,8 @@ export function ChatPage() {
     let reasoningContent = "";
     let reasoningBlocks: ReasoningBlock[] = [];
     let processMessages: ProcessMessageRecord[] = [];
+    let agentRounds: AgentRoundRecord[] = [];
+    let activeRoundId: string | undefined;
     let processMessageSequence = 0;
     let finalMessageCompleted = false;
     let revealCancelled = false;
@@ -932,6 +936,7 @@ export function ChatPage() {
       reasoning: reasoningContent || undefined,
       reasoningBlocks,
       processMessages,
+      agentRounds,
       runActivity,
       at: assistantAt,
       sticker,
@@ -977,7 +982,14 @@ export function ChatPage() {
     const updateRunTool = (toolId: string, patch: Partial<ToolExecutionRecord>) => {
       const index = toolExecutions.findIndex((tool) => tool.id === toolId);
       toolExecutions = index === -1
-        ? [...toolExecutions, { id: toolId, name: patch.name ?? "工具调用", status: patch.status ?? "running", result: patch.result }]
+        ? [...toolExecutions, {
+            id: toolId,
+            name: patch.name ?? "工具调用",
+            status: patch.status ?? "running",
+            result: patch.result,
+            argsText: patch.argsText,
+            roundId: patch.roundId ?? activeRoundId,
+          }]
         : toolExecutions.map((tool, toolIndex) => toolIndex === index ? { ...tool, ...patch } : tool);
       updateMessage(input.targetMode, input.assistantId, { toolExecutions });
     };
@@ -1035,7 +1047,7 @@ export function ChatPage() {
     const updateReasoningBlock = (id: string, patch: Partial<ReasoningBlock>) => {
       const index = reasoningBlocks.findIndex((block) => block.id === id);
       reasoningBlocks = index < 0
-        ? [...reasoningBlocks, { id, content: "", afterToolCount: toolExecutions.length, ...patch }]
+        ? [...reasoningBlocks, { id, content: "", afterToolCount: toolExecutions.length, roundId: activeRoundId, ...patch }]
         : reasoningBlocks.map((block, blockIndex) => blockIndex === index ? { ...block, ...patch } : block);
       reasoningContent = reasoningBlocks.map((block) => block.content).filter(Boolean).join("\n\n");
       updateMessage(input.targetMode, input.assistantId, { reasoning: reasoningContent || undefined, reasoningBlocks });
@@ -1043,7 +1055,20 @@ export function ChatPage() {
     };
 
     const handleEvent = (event: AguiEvent) => {
-      if (event.type === "RUN_STARTED") {
+      if (event.type === "CUSTOM" && event.name === "cyrene.round") {
+        const value = event.value as { action?: unknown; roundId?: unknown } | null | undefined;
+        if ((value?.action === "start" || value?.action === "end") && typeof value.roundId === "string") {
+          const next = applyAgentRoundBoundary(
+            { rounds: agentRounds, activeRoundId },
+            value.action,
+            value.roundId,
+          );
+          agentRounds = next.rounds;
+          activeRoundId = next.activeRoundId;
+          updateMessage(input.targetMode, input.assistantId, { agentRounds });
+          void checkpointRun("running", true);
+        }
+      } else if (event.type === "RUN_STARTED") {
         runStarted = true;
         runActivity = { startedAt: Date.now(), reasoningMs: 0 };
         setIsCompressingContext(false);
@@ -1149,10 +1174,14 @@ export function ChatPage() {
           updateRunTool(event.toolCallId, {
             name: event.toolCallName ?? "工具调用",
             status: "running",
+            roundId: activeRoundId,
           });
           updateMessage(input.targetMode, input.assistantId, {
             runStage: { kind: "executing", detail: event.toolCallName ?? "工具调用" },
           });
+      } else if (event.type === "TOOL_CALL_ARGS" && event.toolCallId && event.delta) {
+        const currentArgs = toolExecutions.find((tool) => tool.id === event.toolCallId)?.argsText ?? "";
+        updateRunTool(event.toolCallId, { argsText: currentArgs + event.delta, roundId: activeRoundId });
       } else if (event.type === "TOOL_CALL_RESULT" && event.toolCallId) {
         updateRunTool(event.toolCallId, {
           status: event.status === "failed" ? "error" : "success",
@@ -1194,6 +1223,7 @@ export function ChatPage() {
             id: processId,
             content: "",
             afterToolCount: toolExecutions.length,
+            roundId: activeRoundId,
           }];
           updateMessage(input.targetMode, input.assistantId, { processMessages });
           enqueuePublicTextReveal(content, (chunk) => {
@@ -1374,6 +1404,7 @@ export function ChatPage() {
         reasoning: reasoningContent || undefined,
         reasoningBlocks,
         processMessages,
+        agentRounds,
         reasoningStreaming: false,
         runActivity,
         responseStarted: formalAnswerCommitted,
