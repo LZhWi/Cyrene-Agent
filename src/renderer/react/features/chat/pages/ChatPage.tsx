@@ -54,6 +54,7 @@ import { RunEventGate } from "./run-event-gate";
 import { splitTextForReveal } from "./message-reveal";
 import {
   clearSessionInteraction,
+  buildTodoRecoveryContext,
   findSessionIdForRun,
   hasActiveRunForSession,
   hydrateSessionMessages,
@@ -268,6 +269,7 @@ interface AguiApi {
     styleId?: string;
     sessionId: string;
     imageAttachments?: Array<{ name: string; filePath: string; mime?: string }>;
+    recoveryContext?: string;
   }) => Promise<{ success: boolean; runId: string; error?: string }>;
   onEvent: (callback: (event: AguiEvent) => void) => () => void;
   cancel: (runId?: string) => Promise<unknown>;
@@ -944,6 +946,9 @@ export function ChatPage() {
       runSnapshot: {
         runId: activeRunsBySession.current[input.sessionId]?.runId,
         status,
+        terminalStatus: status === "terminal"
+          ? (terminalStatus as "success" | "cancelled" | "timeout" | "runtime_error" | undefined)
+          : undefined,
         todos: currentTodos,
         updatedAt: Date.now(),
       },
@@ -1359,6 +1364,7 @@ export function ChatPage() {
         assistantTurnId: input.assistantId,
         styleId: general?.currentStyleId,
         sessionId: input.sessionId,
+        recoveryContext: buildTodoRecoveryContext(input.session.messages, input.assistantId),
         imageAttachments: input.attachments
           .filter((attachment) => attachment.kind === "image" && attachment.filePath)
           .map((attachment) => ({
@@ -1417,6 +1423,7 @@ export function ChatPage() {
       } else earlyTtsQueue.cancel();
     } catch (error) {
       earlyTtsQueue.cancel();
+      terminalStatus = terminalStatus ?? "runtime_error";
       completeRunActivity(true);
       const errorMessage = error instanceof Error ? error.message : String(error);
       const visibleError = `模型请求失败：${errorMessage}`;

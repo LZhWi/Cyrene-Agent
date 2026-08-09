@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { executeAskUser, executeConfirmUncertainEffect } from "./builtin-tools";
+import { executeAskUser, executeConfirmUncertainEffect, updateTodoToolSpec } from "./builtin-tools";
 import type { AgentState } from "./types";
 
 function currentState(): AgentState {
@@ -16,6 +16,12 @@ function currentState(): AgentState {
 }
 
 describe("Harness user-wait builtins", () => {
+  it("gives the model soft planning guidance without forcing simple tasks into Todo", () => {
+    expect(updateTodoToolSpec.description).toContain("多步任务");
+    expect(updateTodoToolSpec.description).toContain("多轮工具调用");
+    expect(updateTodoToolSpec.description).toContain("不要用于简单问答");
+  });
+
   it("rethrows AbortError from ask_user", async () => {
     const error = new Error("cancelled");
     error.name = "AbortError";

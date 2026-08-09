@@ -185,6 +185,8 @@ export interface AguiRunInput {
   attachments?: { name: string; text: string }[];
   /** 本轮图片附件。主进程会安全读取并转成 OpenAI-compatible image_url content block。 */
   imageAttachments?: { name: string; filePath: string; mime?: string }[];
+  /** 同一会话上一次异常中断的只读恢复检查点。 */
+  recoveryContext?: string;
 }
 
 /** 调用方（index.ts）注入：把输入转成 agent 需要的 options（含 system prompt 拼接）。 */
@@ -344,6 +346,7 @@ export function registerAgUiIpc(
     }
     const { options, latestUserText } = built;
     options.executionMode = agentExecutionMode;
+    options.recoveryContext = input.recoveryContext;
     options.conversationMode = mode;
     options.agentRuntime = (mode === "daily" || mode === "learn") ? "legacy" : "langgraph";
     // Task 2 / C1：把 bridge 创建的 canonical runId 注入 CyreneRunOptions，

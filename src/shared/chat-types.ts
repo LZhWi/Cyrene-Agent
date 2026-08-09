@@ -124,6 +124,7 @@ export interface ChatMessage {
   runSnapshot?: {
     runId?: string;
     status: "running" | "waiting_user" | "interrupted" | "terminal";
+    terminalStatus?: "success" | "cancelled" | "timeout" | "runtime_error";
     todos?: TodoItem[];
     updatedAt: number;
   };

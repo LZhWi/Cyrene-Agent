@@ -152,7 +152,7 @@ export async function runHarnessWithAdapter(
 
 // ── System Prompt 构建 ─────────────────────────────────────
 
-function buildHarnessSystemPrompt(options: CyreneRunOptions): string {
+export function buildHarnessSystemPrompt(options: CyreneRunOptions): string {
   const parts: string[] = [];
 
   // 人设层（Soul）
@@ -176,6 +176,10 @@ function buildHarnessSystemPrompt(options: CyreneRunOptions): string {
   // Runtime Environment Context
   if (options.runtimeEnvironmentContext) {
     parts.push(`[RUNTIME_ENV]\n${options.runtimeEnvironmentContext}`);
+  }
+
+  if (options.recoveryContext) {
+    parts.push(`[RECOVERY_CONTEXT]\n${options.recoveryContext}`);
   }
 
   // Response Context (CITA)

@@ -141,6 +141,8 @@ export interface CyreneRunOptions {
   responseContext?: string;
   /** 本地主进程生成的可信默认城市、桌面等运行环境信息。 */
   runtimeEnvironmentContext?: string;
+  /** 上一次异常中断 Run 的只读 Todo/执行检查点；只用于帮助模型恢复方向。 */
+  recoveryContext?: string;
   /** Ask Soul 专用轻量提示词。 */
   askSystemContent?: string;
   /** Ask Soul 只使用称呼、昵称和性别约束。 */

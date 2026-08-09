@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { mapTerminateReasonToTerminal, selectHarnessTools, sendHarnessEventAsAgui } from "./harness-adapter";
+import { buildHarnessSystemPrompt, mapTerminateReasonToTerminal, selectHarnessTools, sendHarnessEventAsAgui } from "./harness-adapter";
 import type { HarnessEvent } from "./harness/types";
 import type { BaseEvent } from "@ag-ui/core";
 
@@ -19,6 +19,19 @@ describe("selectHarnessTools", () => {
     ] as never[];
 
     expect(selectHarnessTools(tools).map((tool) => tool.id)).toEqual(["read_file"]);
+  });
+});
+
+describe("Harness recovery context", () => {
+  it("injects interrupted Todo context as read-only evidence", () => {
+    const prompt = buildHarnessSystemPrompt({
+      soulSystemBaseContent: "persona",
+      toolSystemContent: "tools",
+      recoveryContext: "上次停在检查取消链路",
+    } as never);
+
+    expect(prompt).toContain("[RECOVERY_CONTEXT]");
+    expect(prompt).toContain("上次停在检查取消链路");
   });
 });
 

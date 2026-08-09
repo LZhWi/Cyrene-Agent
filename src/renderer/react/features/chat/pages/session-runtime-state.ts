@@ -119,6 +119,30 @@ export interface SessionTodoState {
 
 export type TodoStateBySession = Record<string, SessionTodoState>;
 
+export function buildTodoRecoveryContext(
+  messages: readonly ChatMessage[],
+  excludedMessageId?: string,
+): string | undefined {
+  const message = [...messages].reverse().find((candidate) => {
+    if (candidate.id === excludedMessageId) return false;
+    const snapshot = candidate.runSnapshot;
+    if (!snapshot?.todos?.some((todo) => todo.status === "pending" || todo.status === "in_progress")) return false;
+    if (snapshot.status !== "terminal") return true;
+    return snapshot.terminalStatus !== undefined && snapshot.terminalStatus !== "success";
+  });
+  if (!message?.runSnapshot?.todos) return undefined;
+
+  const successes = message.toolExecutions?.filter((tool) => tool.status === "success").length ?? 0;
+  const failures = message.toolExecutions?.filter((tool) => tool.status === "error").length ?? 0;
+  return [
+    "上一次任务在完整回答提交前中断。以下内容来自同一会话的本地检查点，仅用于恢复方向：",
+    "Todo：",
+    ...message.runSnapshot.todos.map((todo) => `- [${todo.status}] ${todo.content}`),
+    `工具执行事实：成功 ${successes} 项，失败 ${failures} 项。`,
+    "Todo 和本地记录不能证明外部副作用已经成功；继续前请根据现有证据查证，不要自动重放危险操作。",
+  ].join("\n");
+}
+
 export function startSessionTodos(
   state: TodoStateBySession,
   sessionId: string,

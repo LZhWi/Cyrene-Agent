@@ -3,6 +3,7 @@ import type { ChatMessageItem } from "../components/ChatMessageList";
 import type { ComposerInteraction } from "../components/run-presentation";
 import {
   clearSessionInteraction,
+  buildTodoRecoveryContext,
   findSessionIdForRun,
   hasActiveRunForSession,
   hydrateSessionMessages,
@@ -26,6 +27,51 @@ const ask = (id: string): ComposerInteraction => ({
 });
 
 describe("session runtime presentation state", () => {
+  it("builds recovery context only for an interrupted run with incomplete Todos", () => {
+    const context = buildTodoRecoveryContext([
+      {
+        id: "assistant-old",
+        role: "model",
+        content: "",
+        at: 1,
+        runSnapshot: {
+          status: "terminal",
+          terminalStatus: "runtime_error",
+          updatedAt: 2,
+          todos: [
+            { id: "1", content: "扫描结构", status: "completed" },
+            { id: "2", content: "检查取消链路", status: "in_progress" },
+            { id: "3", content: "整理结论", status: "pending" },
+          ],
+        },
+        toolExecutions: [
+          { id: "t1", name: "read_file", status: "success" },
+          { id: "t2", name: "read_file", status: "error" },
+        ],
+      },
+    ]);
+
+    expect(context).toContain("[completed] 扫描结构");
+    expect(context).toContain("[in_progress] 检查取消链路");
+    expect(context).toContain("工具执行事实：成功 1 项，失败 1 项");
+    expect(context).toContain("不能证明外部副作用已经成功");
+  });
+
+  it("does not recover a successful terminal run", () => {
+    expect(buildTodoRecoveryContext([{
+      id: "assistant-ok",
+      role: "model",
+      content: "完成",
+      at: 1,
+      runSnapshot: {
+        status: "terminal",
+        terminalStatus: "success",
+        updatedAt: 2,
+        todos: [{ id: "1", content: "完成", status: "completed" }],
+      },
+    }])).toBeUndefined();
+  });
+
   it("shows an interaction only in its owning session", () => {
     const state = setSessionInteraction({}, "session-a", ask("ask-a"));
 
