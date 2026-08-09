@@ -29,6 +29,7 @@ import { CodeRunPanel } from "./CodeRunPanel";
 import type { CodeRunViewModel } from "../../../../lib/code-run-view-model";
 import type { WeatherData } from "./weather/weather-types";
 import { WeatherCard } from "./weather/WeatherCard";
+import { resolveAgentRoundTitle } from "./agent-rounds";
 
 export interface ChatMessageItem {
   id: string;
@@ -242,15 +243,98 @@ function RunActivityReasoningBlock({ block }: { block: ReasoningBlock }) {
   );
 }
 
-function RunActivityDetail({
+function AgentRoundGroup({
+  round,
   reasoningBlocks,
   processMessages,
   tools,
+  interrupted,
 }: {
+  round: AgentRoundRecord;
   reasoningBlocks: ReasoningBlock[];
   processMessages: ProcessMessageRecord[];
   tools: ToolExecutionRecord[];
+  interrupted: boolean;
 }) {
+  const running = round.status === "running" && !interrupted;
+  const [expanded, setExpanded] = useState(running);
+  const wasRunningRef = useRef(running);
+  useEffect(() => {
+    if (!wasRunningRef.current && running) setExpanded(true);
+    if (wasRunningRef.current && !running) setExpanded(false);
+    wasRunningRef.current = running;
+  }, [running]);
+
+  return (
+    <section className={`cy-agent-round${running ? " is-running" : " is-complete"}`}>
+      <button
+        type="button"
+        className="cy-agent-round__header"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((current) => !current)}
+      >
+        <span className="cy-agent-round__status" aria-hidden="true">{running ? <DotSpinner /> : "✓"}</span>
+        <span className="cy-agent-round__title">{resolveAgentRoundTitle(round, tools, interrupted)}</span>
+        <svg className={`cy-agent-round__chevron${expanded ? " is-expanded" : ""}`} viewBox="0 0 16 16" aria-hidden="true">
+          <path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" />
+        </svg>
+      </button>
+      {expanded && (
+        <div className="cy-agent-round__body">
+          {processMessages.filter((message) => message.content.trim()).map((message) => (
+            <div className="cy-run-activity__process" key={message.id}>
+              <MarkdownContent content={message.content} />
+            </div>
+          ))}
+          {reasoningBlocks.filter((block) => block.content.trim()).map((block) => (
+            <div className="cy-agent-round__reasoning" key={block.id}>
+              <span className="cy-agent-round__section-label">思考{block.streaming ? "中" : "完成"}</span>
+              <MarkdownContent content={block.content} streaming={block.streaming} />
+            </div>
+          ))}
+          {tools.length > 0 && <ToolExecutionContent tools={tools} />}
+        </div>
+      )}
+    </section>
+  );
+}
+
+export function RunActivityDetail({
+  agentRounds = [],
+  reasoningBlocks,
+  processMessages,
+  tools,
+  interrupted = false,
+}: {
+  agentRounds?: AgentRoundRecord[];
+  reasoningBlocks: ReasoningBlock[];
+  processMessages: ProcessMessageRecord[];
+  tools: ToolExecutionRecord[];
+  interrupted?: boolean;
+}) {
+  if (agentRounds.length > 0) {
+    const visibleRounds = agentRounds.filter((round) =>
+      processMessages.some((message) => message.roundId === round.id && message.content.trim())
+      || reasoningBlocks.some((block) => block.roundId === round.id && block.content.trim())
+      || tools.some((tool) => tool.roundId === round.id));
+    if (visibleRounds.length === 0) {
+      return <div className="cy-run-activity__empty">昔涟正在整理这一轮回复…</div>;
+    }
+    return (
+      <div className="cy-run-activity__detail">
+        {visibleRounds.map((round) => (
+          <AgentRoundGroup
+            key={round.id}
+            round={round}
+            interrupted={interrupted && round.status === "running"}
+            processMessages={processMessages.filter((message) => message.roundId === round.id)}
+            reasoningBlocks={reasoningBlocks.filter((block) => block.roundId === round.id)}
+            tools={tools.filter((tool) => tool.roundId === round.id)}
+          />
+        ))}
+      </div>
+    );
+  }
   const timeline: ReactNode[] = [];
   for (let index = 0; index <= tools.length; index += 1) {
     processMessages
@@ -288,6 +372,7 @@ function RunActivityContent({
   activity,
   reasoningBlocks,
   processMessages,
+  agentRounds,
   tools,
   stage,
   taskPlan,
@@ -298,6 +383,7 @@ function RunActivityContent({
   activity: RunActivityRecord;
   reasoningBlocks: ReasoningBlock[];
   processMessages: ProcessMessageRecord[];
+  agentRounds: AgentRoundRecord[];
   tools: ToolExecutionRecord[];
   stage?: AgentRunStage;
   taskPlan?: TaskPlanPresentation;
@@ -342,7 +428,13 @@ function RunActivityContent({
         <div className="cy-run-activity__expanded" id={`${activityId}-details`}>
           {taskPlan && <TaskPlanCard plan={taskPlan} />}
           <div className="cy-run-activity__divider" />
-          <RunActivityDetail reasoningBlocks={reasoningBlocks} processMessages={processMessages} tools={tools} />
+          <RunActivityDetail
+            agentRounds={agentRounds}
+            reasoningBlocks={reasoningBlocks}
+            processMessages={processMessages}
+            tools={tools}
+            interrupted={Boolean(activity.keepExpanded && activity.completedAt !== undefined)}
+          />
           <div className="cy-run-activity__divider" />
         </div>
       )}
@@ -608,6 +700,7 @@ function createRoles(
         activity?: RunActivityRecord;
         reasoningBlocks?: ReasoningBlock[];
         processMessages?: ProcessMessageRecord[];
+        agentRounds?: AgentRoundRecord[];
         tools?: ToolExecutionRecord[];
         runStage?: AgentRunStage;
         taskPlan?: TaskPlanPresentation;
@@ -622,6 +715,7 @@ function createRoles(
           activity={activity}
           reasoningBlocks={info.extraInfo?.reasoningBlocks ?? []}
           processMessages={info.extraInfo?.processMessages ?? []}
+          agentRounds={info.extraInfo?.agentRounds ?? []}
           tools={info.extraInfo?.tools ?? []}
           stage={info.extraInfo?.runStage}
           taskPlan={info.extraInfo?.taskPlan}
@@ -724,6 +818,7 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
           activity: message.runActivity,
           reasoningBlocks,
           processMessages: message.processMessages ?? [],
+          agentRounds: message.agentRounds ?? [],
           tools,
           runStage: message.runStage,
           taskPlan: message.taskPlan,
