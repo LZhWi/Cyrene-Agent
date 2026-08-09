@@ -8,6 +8,7 @@ import { captionImage } from "./vision-captioner";
 import type { ToolContext } from "./tool-context";
 import type { VerificationPolicy } from "./tool-registry";
 import { logger, LogTag } from "../logger";
+import { ToolExecutionError } from "./tool-execution-error";
 
 const LOG_PREFIX = "[FsTools]";
 
@@ -246,7 +247,13 @@ toolRegistry.register({
 async function executeWriteFile(args: Record<string, unknown>): Promise<string> {
   const raw = String(args.path || "").trim();
   const filePath = ensureAbsolute(raw);
-  if (!filePath) return "[错误] path 必须是绝对路径";
+  if (!filePath) {
+    throw new ToolExecutionError(
+      "E_PATH_NOT_ABSOLUTE",
+      "path 必须是绝对路径",
+      "invalid_arguments",
+    );
+  }
 
   const content = typeof args.content === "string" ? args.content : "";
   const append = args.append === true;
@@ -259,7 +266,11 @@ async function executeWriteFile(args: Record<string, unknown>): Promise<string> 
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      return "[错误] 创建父目录失败: " + msg;
+      throw new ToolExecutionError(
+        "E_CREATE_PARENT_FAILED",
+        "创建父目录失败: " + msg,
+        "permission_denied",
+      );
     }
   }
 
@@ -271,16 +282,36 @@ async function executeWriteFile(args: Record<string, unknown>): Promise<string> 
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    return "[错误] 写入失败: " + msg;
+    throw new ToolExecutionError(
+      "E_WRITE_FILE_FAILED",
+      "写入失败: " + msg,
+      "semantic_failure",
+      false,
+      "unknown",
+    );
   }
 
-  const st = safeStat(filePath);
+  let st: fs.Stats;
+  try {
+    st = fs.statSync(filePath);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new ToolExecutionError(
+      "E_WRITE_EVIDENCE_FAILED",
+      "写入完成但无法确认文件状态: " + msg,
+      "partial_failure",
+      false,
+      "unknown",
+    );
+  }
   return JSON.stringify({
-    tool: "write_file",
-    filePath,
-    action: append ? "appended" : "written",
-    sizeBytes: st?.size,
     success: true,
+    tool: "write_file",
+    path: filePath,
+    append,
+    exists: st.isFile(),
+    sizeBytes: st.size,
+    writtenBytes: Buffer.byteLength(content, "utf8"),
   });
 }
 

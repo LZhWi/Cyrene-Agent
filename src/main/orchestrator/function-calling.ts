@@ -13,7 +13,7 @@ import {
 } from "./vendors";
 import { extractLastUserQuery, type ToolContext } from "./tool-context";
 import { recordUsage } from "../token-usage-store";
-import type { AgentLoopSettings } from "./two-phase-fc-loop";
+import type { AgentLoopSettings } from "./cyrene-agent";
 import { resetReadRefs } from "../skills/skill-tools";
 import { truncateToolResult, compressConversation } from "./context-manager";
 import { resolveTimeoutPolicy } from "../runtime-policy";

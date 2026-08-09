@@ -29,14 +29,15 @@ export function resolveRunActivityExpanded(
   activityId: string,
   activity: RunActivityRecord,
 ): boolean {
-  return expandedById[activityId] ?? activity.completedAt === undefined;
+  return expandedById[activityId] ?? (activity.completedAt === undefined || activity.keepExpanded === true);
 }
 
 export function shouldAutoCollapseRunActivity(
   wasProcessing: boolean,
   isProcessing: boolean,
+  keepExpanded = false,
 ): boolean {
-  return wasProcessing && !isProcessing;
+  return wasProcessing && !isProcessing && !keepExpanded;
 }
 
 export function formatElapsed(milliseconds: number): string {

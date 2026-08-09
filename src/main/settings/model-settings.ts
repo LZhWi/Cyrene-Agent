@@ -157,10 +157,10 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   mode: "auto",
   // 默认厂商改为 MiniMax（v1 vendor adapter 第一个落地的），DeepSeek 已从 v1 清单移除。
   provider: "MiniMax（稀宇科技）",
-  baseUrl: "https://api.minimaxi.com/v1",
+  baseUrl: "https://api.minimaxi.com/anthropic",
   model: "MiniMax-M3",
   apiKey: "",
-  explicitTransport: "openai",
+  explicitTransport: "anthropic",
   perProvider: {},
   runtimeSync: "off",
   stickerEnabled: true,

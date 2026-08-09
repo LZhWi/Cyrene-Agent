@@ -24,6 +24,7 @@ import {
   validateAskUserAnswer,
 } from "./orchestrator/ask-card";
 import { getTimeoutSettings } from "./timeout-manager";
+import { createAbortError } from "./abort-utils";
 
 const LOG_PREFIX = "[UserChoice]";
 const DEFAULT_CHOICE_TIMEOUT_MS = 120_000; // 2 分钟超时，给用户足够思考时间
@@ -45,7 +46,7 @@ export interface LegacyChoiceCardData {
 
 export type ChoiceCardData = LegacyChoiceCardData | AskCardPayload;
 
-export type ChoiceSettlementReason = "answered" | "timeout" | "unavailable";
+export type ChoiceSettlementReason = "answered" | "timeout" | "unavailable" | "cancelled";
 
 export interface ChoiceSettlement {
   id: string;
@@ -56,8 +57,11 @@ export interface ChoiceSettlement {
 
 interface PendingChoice {
   resolve: (value: unknown) => boolean;
+  cancel?: () => boolean;
   timer: NodeJS.Timeout;
   status: "open" | "resolving";
+  /** Task 3 / C2：关联的 canonical runId，用于 cancelPendingChoicesForRun。 */
+  runId?: string;
 }
 
 const pendingChoices = new Map<string, PendingChoice>();
@@ -97,6 +101,7 @@ export function requestUserChoice(
       },
       timer,
       status: "open",
+      runId: undefined,
     });
 
     const payload: ChoiceCardData = { id, question, options, default: defaultValue };
@@ -119,27 +124,51 @@ export function requestUserClarification(
   sender?: (card: ChoiceCardData) => void,
   onSettled?: (settlement: ChoiceSettlement) => void,
   identity: { runId: string; revision: number } = { runId: "legacy", revision: 1 },
+  signal?: AbortSignal,
 ): Promise<AskUserAnswer> {
-  return new Promise<AskUserAnswer>((resolve) => {
+  return new Promise<AskUserAnswer>((resolve, reject) => {
     const id = "choice-" + (++choiceCounter) + "-" + Date.now();
     const emptyAnswer: AskUserAnswer = { requestId: id, answers: [] };
     const timeout = getTimeoutSettings().userChoiceTimeout;
     const publication = publishAskCard(card, { interactionId: id, ...identity });
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      pendingChoices.delete(id);
+      signal?.removeEventListener("abort", cancel);
+    };
+    const settleEmpty = (reason: "timeout" | "unavailable"): boolean => {
+      if (settled) return false;
+      settled = true;
+      cleanup();
+      onSettled?.({ id, ...identity, reason });
+      resolve(emptyAnswer);
+      return true;
+    };
+    const cancel = (): boolean => {
+      if (settled) return false;
+      settled = true;
+      cleanup();
+      onSettled?.({ id, ...identity, reason: "cancelled" });
+      reject(createAbortError());
+      return true;
+    };
     const timer = setTimeout(() => {
       const pending = pendingChoices.get(id);
       if (!pending || pending.status !== "open") return;
-      pendingChoices.delete(id);
       console.warn(LOG_PREFIX, "澄清超时（" + timeout + "ms）");
-      onSettled?.({ id, ...identity, reason: "timeout" });
-      resolve(emptyAnswer);
+      settleEmpty("timeout");
     }, timeout);
     pendingChoices.set(id, {
       resolve: (value) => {
+        if (settled) return false;
         try {
           const submitted = value as Record<string, unknown> | null;
           const answer = submitted && typeof submitted === "object" && "interactionId" in submitted
             ? resolveAskCardSubmission(publication, value as AskCardSubmission)
             : validateAskUserAnswer(card, id, value as AskUserAnswer);
+          settled = true;
+          cleanup();
           resolve(answer);
           onSettled?.({ id, ...identity, reason: "answered" });
           return true;
@@ -147,19 +176,23 @@ export function requestUserClarification(
           return false;
         }
       },
+      cancel,
       timer,
       status: "open",
+      runId: identity.runId,
     });
+    if (signal?.aborted) {
+      cancel();
+      return;
+    }
+    signal?.addEventListener("abort", cancel, { once: true });
     console.log(LOG_PREFIX, "发送结构化澄清:", id);
     const cardSender = sender ?? choiceCardSender;
     if (cardSender) {
       cardSender(publication.payload);
     } else {
-      clearTimeout(timer);
-      pendingChoices.delete(id);
       console.warn(LOG_PREFIX, "未注入卡片回调，返回空澄清");
-      onSettled?.({ id, ...identity, reason: "unavailable" });
-      resolve(emptyAnswer);
+      settleEmpty("unavailable");
     }
   });
 }
@@ -184,10 +217,23 @@ export function registerChoiceIpc(): void {
       console.warn(LOG_PREFIX, "用户选择校验失败:", payload.id);
       return { ok: false };
     }
-    clearTimeout(pending.timer);
-    pendingChoices.delete(payload.id);
     console.log(LOG_PREFIX, "用户选择:", payload.id);
     return { ok: true };
   });
+}
+
+/**
+ * Task 3 / C2：取消指定 runId 关联的所有 pending choice。
+ * 在 AGUI_CANCEL abort signal 后调用，清理 ask_user 卡片的 pending 状态与 timer。
+ * 渲染端通过 RUN_FINISHED(result.status="cancelled") 自然收到卡片关闭信号。
+ */
+export function cancelPendingChoicesForRun(runId: string): void {
+  for (const [id, pending] of pendingChoices) {
+    if (pending.runId === runId && pending.status === "open") {
+      if (pending.cancel?.()) {
+        console.log(LOG_PREFIX, "cancelPendingChoicesForRun 清理:", id, "runId=", runId);
+      }
+    }
+  }
 }
 

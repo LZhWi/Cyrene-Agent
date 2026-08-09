@@ -14,6 +14,7 @@ import {
   type AgentFileAccessLevel,
   type ToolRiskLevel,
 } from "./permission-policy";
+import { createAbortError } from "./abort-utils";
 
 export { policyFor };
 export type { AgentFileAccessLevel, ToolRiskLevel };
@@ -85,9 +86,11 @@ export function initPermissionFromDisk(): void {
 // 渲染端弹一个卡片，用户点同意/拒绝后回传结果。
 
 interface PendingApproval {
-  resolve: (allowed: boolean) => void;
-  reject: (err: Error) => void;
+  resolve: (allowed: boolean) => boolean;
+  cancel: () => boolean;
   timer: NodeJS.Timeout;
+  /** Task 3 / C2：关联的 canonical runId，用于 cancelPendingApprovalsForRun。 */
+  runId?: string;
 }
 
 const pendingApprovals = new Map<string, PendingApproval>();
@@ -101,22 +104,51 @@ export interface ApprovalRequest {
   args: Record<string, unknown>;
   risk: ToolRiskLevel;
   timeoutMs: number;
+  /** Task 3 / C2：可选 runId，用于 cancel 时按 run 清理。 */
+  runId?: string;
 }
 
 /**
  * 向用户发起一次审批请求，等用户点同意/拒绝。
  * 60 秒不响应自动拒绝。
  */
-export function requestApproval(request: Omit<ApprovalRequest, "id">): Promise<boolean> {
+export function requestApproval(
+  request: Omit<ApprovalRequest, "id">,
+  signal?: AbortSignal,
+): Promise<boolean> {
   return new Promise<boolean>((resolve, reject) => {
     const id = "approve-" + (++approvalCounter) + "-" + Date.now();
     const timeout = getTimeoutSettings().userChoiceTimeout;
-    const timer = setTimeout(() => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
       pendingApprovals.delete(id);
+      signal?.removeEventListener("abort", cancel);
+    };
+    const settle = (allowed: boolean): boolean => {
+      if (settled) return false;
+      settled = true;
+      cleanup();
+      resolve(allowed);
+      return true;
+    };
+    const cancel = (): boolean => {
+      if (settled) return false;
+      settled = true;
+      cleanup();
+      reject(createAbortError());
+      return true;
+    };
+    const timer = setTimeout(() => {
       console.warn(LOG_PREFIX, `审批超时（${timeout}ms 未响应），自动拒绝:`, request.toolId);
-      resolve(false);
+      settle(false);
     }, timeout);
-    pendingApprovals.set(id, { resolve, reject, timer });
+    pendingApprovals.set(id, { resolve: settle, cancel, timer, runId: request.runId });
+    if (signal?.aborted) {
+      cancel();
+      return;
+    }
+    signal?.addEventListener("abort", cancel, { once: true });
 
     const payload: ApprovalRequest = { id, ...request };
     console.log(LOG_PREFIX, "向渲染端发送审批请求:", id, request.toolId);
@@ -125,10 +157,8 @@ export function requestApproval(request: Omit<ApprovalRequest, "id">): Promise<b
     const wins = BrowserWindow.getAllWindows();
     if (wins.length === 0) {
       // 没有窗口可以审批 → 直接拒绝
-      clearTimeout(timer);
-      pendingApprovals.delete(id);
       console.warn(LOG_PREFIX, "无窗口可审批，自动拒绝");
-      resolve(false);
+      settle(false);
       return;
     }
     for (const win of wins) {
@@ -159,11 +189,8 @@ export function registerPermissionIpc(): void {
       console.warn(LOG_PREFIX, "审批回传未匹配到 pending:", payload?.id);
       return { ok: false };
     }
-    clearTimeout(pending.timer);
-    pendingApprovals.delete(payload.id);
     console.log(LOG_PREFIX, "审批结果:", payload.id, payload.allowed ? "同意" : "拒绝");
-    pending.resolve(Boolean(payload.allowed));
-    return { ok: true };
+    return { ok: pending.resolve(Boolean(payload.allowed)) };
   });
 
   logger.info(LogTag.Permission, "IPC handlers registered");
@@ -185,6 +212,10 @@ export async function checkPermission(input: {
   toolDescription: string;
   args: Record<string, unknown>;
   risk: ToolRiskLevel;
+  /** Task 3 / C2：可选 runId，用于 cancel 时按 run 清理 pending 审批。 */
+  runId?: string;
+  /** 当前 run 的取消信号。 */
+  signal?: AbortSignal;
 }): Promise<{ allowed: boolean; reason?: string }> {
   const level = currentLevel;
   const policy = policyFor(level, input.risk);
@@ -205,7 +236,21 @@ export async function checkPermission(input: {
     args: input.args,
     risk: input.risk,
     timeoutMs: getTimeoutSettings().userChoiceTimeout,
-  });
+    runId: input.runId,
+  }, input.signal);
   if (approved) return { allowed: true };
   return { allowed: false, reason: "用户拒绝了此次操作。" };
+}
+
+/**
+ * Task 3 / C2：取消指定 runId 关联的所有 pending 审批。
+ * 在 AGUI_CANCEL abort signal 后调用，清理权限卡片的 pending 状态与 timer。
+ * 渲染端通过 RUN_FINISHED(result.status="cancelled") 自然收到卡片关闭信号。
+ */
+export function cancelPendingApprovalsForRun(runId: string): void {
+  for (const [id, pending] of pendingApprovals) {
+    if (pending.runId === runId && pending.cancel()) {
+      console.log(LOG_PREFIX, "cancelPendingApprovalsForRun 清理:", id, "runId=", runId);
+    }
+  }
 }

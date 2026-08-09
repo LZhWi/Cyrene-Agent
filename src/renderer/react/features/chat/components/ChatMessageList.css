@@ -296,6 +296,13 @@
   padding: 8px 0;
 }
 
+.cy-run-activity__process {
+  padding: 7px 9px;
+  border-left: 2px solid rgb(209 144 173 / 45%);
+  color: var(--cy-text-secondary);
+  font-size: 12px;
+}
+
 .cy-run-activity__divider {
   height: 1px;
   background: linear-gradient(90deg, transparent, rgb(209 144 173 / 38%), transparent);

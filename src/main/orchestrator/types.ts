@@ -1,5 +1,7 @@
 // Orchestrator types
 
+import type { ToolEffectState, ToolErrorCategory } from "./tool-execution-error";
+
 // ToolCallResult: 单次工具调用的结果
 export interface ToolCallResult {
   toolId: string;
@@ -7,6 +9,8 @@ export interface ToolCallResult {
   output: string;
   status: "succeeded" | "failed";
   errorCode?: string;
+  category?: ToolErrorCategory;
+  effectState?: ToolEffectState;
   // 完成语义：该工具步骤是否已经结束（默认 true，由 normalizer 推导）
   terminal?: boolean;
   // 完成语义：失败后是否值得重试（默认 false，由 normalizer 推导）
@@ -31,6 +35,8 @@ export interface ToolExecutionOutcome {
   output: string;
   status: "succeeded" | "failed";
   errorCode?: string;
+  category?: ToolErrorCategory;
+  effectState?: ToolEffectState;
   // 完成语义：该工具步骤是否已经结束（默认 true，由 normalizer 推导）
   terminal?: boolean;
   // 完成语义：失败后是否值得重试（默认 false，由 normalizer 推导）

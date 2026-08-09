@@ -2,10 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { ExecutionLedger, ExecutionLedgerStore } from "./execution-ledger";
 
 describe("ExecutionLedger", () => {
-  it("reuses a succeeded execution with the same action fingerprint", async () => {
+  it("replays a succeeded execution for the same logical invocation", async () => {
     const ledger = new ExecutionLedger();
     const execute = vi.fn(async () => ({ status: "succeeded" as const, output: "ok" }));
-    const input = { capability: "music.play_track", targetRefs: ["ctx_1"], args: { candidateRef: "ctx_1" } };
+    const input = { logicalInvocationId: "run-1:call-123", capability: "music.play_track", targetRefs: ["ctx_1"], args: { candidateRef: "ctx_1" } };
 
     const first = await ledger.execute(input, execute);
     const second = await ledger.execute(input, execute);
@@ -15,12 +15,35 @@ describe("ExecutionLedger", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  it("executes a new model tool_call even when all request facts are identical", async () => {
+    const ledger = new ExecutionLedger();
+    const execute = vi.fn(async () => ({ status: "succeeded" as const, output: "ok" }));
+    const facts = { capability: "send_email", targetRefs: ["a@example.com"], args: { to: "a@example.com", body: "same" } };
+
+    await ledger.execute({ logicalInvocationId: "run-1:call-123", ...facts }, execute);
+    await ledger.execute({ logicalInvocationId: "run-1:call-456", ...facts }, execute);
+
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects the same logical invocation id with conflicting request facts", async () => {
+    const ledger = new ExecutionLedger();
+    const execute = vi.fn(async () => ({ status: "succeeded" as const, output: "ok" }));
+    await ledger.execute({ logicalInvocationId: "run-1:call-123", capability: "send_email", targetRefs: [], args: { body: "one" } }, execute);
+
+    await expect(ledger.execute(
+      { logicalInvocationId: "run-1:call-123", capability: "send_email", targetRefs: [], args: { body: "two" } },
+      execute,
+    )).rejects.toMatchObject({ code: "E_LOGICAL_INVOCATION_CONFLICT" });
+    expect(execute).toHaveBeenCalledTimes(1);
+  });
+
   it("allows an explicitly repeated action after a failed execution", async () => {
     const ledger = new ExecutionLedger();
     const execute = vi.fn()
       .mockResolvedValueOnce({ status: "failed" as const, errorCode: "E_FAIL", output: "fail" })
       .mockResolvedValueOnce({ status: "succeeded" as const, output: "ok" });
-    const input = { capability: "music.play_track", targetRefs: ["ctx_1"], args: { candidateRef: "ctx_1" } };
+    const input = { logicalInvocationId: "run-1:call-1", capability: "music.play_track", targetRefs: ["ctx_1"], args: { candidateRef: "ctx_1" } };
 
     expect((await ledger.execute(input, execute)).outcome.status).toBe("failed");
     expect((await ledger.execute(input, execute)).outcome.status).toBe("succeeded");
@@ -37,7 +60,7 @@ describe("ExecutionLedgerStore", () => {
 });
 
 describe("ExecutionLedger terminal-aware caching", () => {
-  const input = { capability: "cap", targetRefs: [], args: {} };
+  const input = { logicalInvocationId: "run-1:call-1", capability: "cap", targetRefs: [], args: {} };
 
   it("caches succeeded + terminal:true", async () => {
     const ledger = new ExecutionLedger();

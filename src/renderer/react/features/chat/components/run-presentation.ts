@@ -8,6 +8,8 @@ export type AgentRunStageKind =
   | "waiting_user"
   | "responding"
   | "completed"
+  | "cancelled"
+  | "timeout"
   | "failed";
 
 export interface AgentRunStage {
@@ -93,6 +95,72 @@ export function resolveComposerSlot(interaction?: ComposerInteraction): Composer
   return interaction?.kind ?? "composer";
 }
 
+/**
+ * Task 3 / C2：从 RUN_FINISHED 事件 result 字段解析终态 stage。
+ * - success → completed
+ * - cancelled → cancelled（保留已有部分输出，不生成"任务已完成"）
+ * - timeout → timeout（不伪装成功）
+ * - runtime_error → failed（防御性；正常走 RUN_ERROR 路径）
+ * - 缺失 result.status → completed（向后兼容旧 upstream）
+ */
+export function resolveRunFinishedStage(
+  result: { status?: string } | undefined | null,
+): AgentRunStage {
+  const status = result?.status;
+  switch (status) {
+    case "success":
+      return { kind: "completed" };
+    case "cancelled":
+      return { kind: "cancelled" };
+    case "timeout":
+      return { kind: "timeout" };
+    case "runtime_error":
+      return { kind: "failed" };
+    default:
+      return { kind: "completed" };
+  }
+}
+
+/**
+ * Task 3 / C2：根据终态 status 决定显示内容。
+ * - success：有内容用内容，空则用"任务已完成。"兜底
+ * - cancelled：保留已有部分输出，空则返回空串（绝不生成"任务已完成。"）
+ * - timeout：同 cancelled
+ * - runtime_error / 未知：保留已有内容
+ */
+export function resolveTerminalContent(
+  streamContent: string,
+  status: string | undefined,
+): string {
+  const trimmed = streamContent.trim();
+  switch (status) {
+    case "success":
+      return trimmed;
+    case "cancelled":
+    case "timeout":
+      // 保留已有部分输出；空或纯空白则返回空串（绝不生成"任务已完成。"）
+      return trimmed;
+    default:
+      return streamContent;
+  }
+}
+
+export function isFormalAnswerCommitted(
+  content: string,
+  status: string | undefined,
+  finalMessageCompleted: boolean,
+): boolean {
+  return status === "success" && finalMessageCompleted && content.trim().length > 0;
+}
+
+/** A stale terminal from an older run must not dismiss the current run's card. */
+export function shouldClearComposerInteractionForTerminal(
+  activeRunId: string | undefined,
+  terminalRunId: string | undefined,
+): boolean {
+  return !activeRunId || !terminalRunId || activeRunId === terminalRunId;
+}
+
 function readPermissionString(args: Record<string, unknown>, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = args[key];
@@ -149,6 +217,10 @@ export function describeRunStage(stage: AgentRunStage): string {
       return "昔涟正在组织回复…";
     case "completed":
       return "昔涟已完成本轮处理";
+    case "cancelled":
+      return "本轮已取消";
+    case "timeout":
+      return "本轮已超时";
     case "failed":
       return "昔涟这一步没有顺利完成";
   }
@@ -250,12 +322,12 @@ export function normalizeChoiceInteraction(value: unknown): AskUserInteraction |
       const id = asNonEmptyString(question?.id);
       const prompt = asNonEmptyString(question?.prompt);
       const options = normalizePublicOptions(question?.options);
-      if (!id || !prompt || options.length < 2 || customInput?.enabled !== true) return [];
+      if (!id || !prompt || options.length < 2 || typeof customInput?.enabled !== "boolean") return [];
       return [{
         id,
         question: prompt,
         options,
-        allowCustomInput: true,
+        allowCustomInput: customInput.enabled,
         freeTextPlaceholder: asNonEmptyString(customInput.placeholder),
         multiple: question.multiple === true,
       } satisfies AskUserQuestion];

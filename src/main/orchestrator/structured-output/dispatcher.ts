@@ -9,16 +9,10 @@ export async function dispatchChatGeneration<T>(input: {
   provider: string;
   endpointKind: "official" | "custom" | "local";
   environment?: Record<string, string | undefined>;
-  langchain: () => Promise<T>;
   legacy: () => Promise<T>;
 }): Promise<T> {
   if (!input.request.structuredOutput) return input.legacy();
   return runStructuredGeneration({
-    backend: resolveStructuredOutputBackend({
-      provider: input.provider,
-      endpointKind: input.endpointKind,
-    }, input.environment),
-    langchain: input.langchain,
     legacy: input.legacy,
   });
 }

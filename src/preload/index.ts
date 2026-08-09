@@ -6,6 +6,7 @@ import type { UiTheme } from "../shared/ui-theme";
 import type { UiFont } from "../shared/ui-font";
 import type { ReasoningPreference } from "../shared/reasoning";
 import type { DocumentIndexProgress } from "../main/rag/document-index-queue";
+import type { AguiRunAck } from "../shared/run-terminal";
 import { getLive2DIpcListenerCounts } from "./live2d-listener-diagnostics";
 import { exposeMusicApi } from "./music";
 import { normalizeChatAppearance, type ChatAppearanceSettings } from "../shared/chat-appearance";
@@ -92,7 +93,8 @@ contextBridge.exposeInMainWorld("cyrene", cyreneApi);
 contextBridge.exposeInMainWorld("chat", chatApi);
 
 // AG-UI 事件流：发起一次 agent run，通过 onEvent 回调收 AG-UI 标准事件，
-// 返回 Promise<{success,error}> 表示整轮结束。onEvent 返回的取消订阅函数用于停止监听。
+// 返回 AguiRunAck 表示 invoke 已被接收（终态仍由事件流承载）。
+// onEvent 返回的取消订阅函数用于停止监听。
 const aguiApi = {
   run: (input: {
     messages: unknown[];
@@ -105,7 +107,9 @@ const aguiApi = {
     attachments?: { name: string; text: string }[];
     imageAttachments?: { name: string; filePath: string; mime?: string }[];
   }) =>
-    ipcRenderer.invoke(IPC.AGUI_RUN, input) as Promise<{ success: boolean; error?: string }>,
+    // Task 2 / C1：返回 AguiRunAck，渲染端可立即拿到 canonical runId。
+    // ack.runId 与后续 RUN_STARTED.runId 强一致（由 bridge 注入 options.runId 保证）。
+    ipcRenderer.invoke(IPC.AGUI_RUN, input) as Promise<AguiRunAck>,
   onEvent: (callback: (event: unknown) => void) => {
     const listener = (_e: unknown, event: unknown) => {
       try {

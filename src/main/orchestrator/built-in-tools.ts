@@ -1350,7 +1350,7 @@ toolRegistry.register({
   name: "任务清单",
   description:
     "更新当前任务清单（todo list）。用于把复杂任务拆解成可执行步骤，让用户看到进度。\n" +
-    "【任务规划优先】收到多步任务时，应先调本工具列出步骤，再开始执行（包括在调 ask_user_choice 之前先列清单）。\n\n" +
+    "【任务规划优先】收到多步任务时，应先调本工具列出步骤，再开始执行（包括在调 ask_user 之前先列清单）。\n\n" +
     "何时用：\n" +
     "- 用户给的任务有 2 步以上（'帮我查 X 然后整理成报告'）\n" +
     "- 用户要求'规划一下''拆解一下''分步骤完成'\n" +
@@ -1418,12 +1418,6 @@ toolRegistry.register({
 // 暴露给 index.ts 在 startup 调用，避免 tree-shake 掉
 export { loadTodos, onTodosChange, getCurrentTodos } from "./todo-store";
 
-// ── 工具：ask_user_choice（歧义消解器）─────────────────────
-// 当用户需求模糊（"美观""好看""专业"）时，弹卡片让用户从选项中选择。
-// 阻塞工具执行，等用户选完返回选中的 value 给 LLM。
-// 通用设计：question + options 结构不绑死 Excel，PPT/Word/图片生成都能用。
-
-import { requestUserChoice, type ChoiceOption } from "../user-choice";
 import { runSubAgent, setDelegateSettings } from "./sub-agent";
 // 显式注册内置子代理 Profile（不依赖模块加载副作用）
 import { registerBuiltInSubAgentProfiles } from "./subagents/init";
@@ -1485,74 +1479,7 @@ toolRegistry.register({
   },
 });
 
-logger.info(LogTag.BuiltinTools, "registered: fetch_url / run_shell / install_mcp_server / weather / web_search / ask_user_choice / delegate_task");
-
-// ── 工具：ask_user_choice（歧义消解器）─────────────────────
-toolRegistry.register({
-  id: "ask_user_choice",
-  name: "询问用户选择",
-  description:
-    "当用户需求模糊（如「美观」「好看」「专业」「好看一点」）需要明确具体方向时，" +
-    "弹卡片让用户从选项中选择。工具会阻塞等待用户选择后返回结果。\n\n" +
-    "何时用：\n" +
-    "- 用户说「美观」「好看」「专业」但没给具体要求\n" +
-    "- 需要在多个方案间让用户选择\n" +
-    "- 用户的需求有多种合理解读\n\n" +
-    "不要用于：\n" +
-    "- 用户需求已经很明确（直接执行）\n" +
-    "- 用户说「你自己决定」「看着办」（按默认策略执行，不要弹窗）\n\n" +
-    "参数：question（问题文本），options（选项数组，每项含 label/value/description），" +
-    "default（可选，超时时的默认选择值）。",
-  enabled: true,
-  risk: "safe",
-  effectKind: "read" as const,
-  verificationPolicy: "none" as const,
-  inputSchema: {
-    type: "object",
-    properties: {
-      question: { type: "string", description: "要问用户的问题，如「请选择 Excel 风格」" },
-      options: {
-        type: "array",
-        description: "选项数组（2-5 个），每项含 label（显示名）/ value（返回值）/ description（说明，可选）",
-        items: {
-          type: "object",
-          properties: {
-            label: { type: "string", description: "选项显示名，如「简洁商务」" },
-            value: { type: "string", description: "选项返回值，如「simple-business」" },
-            description: { type: "string", description: "选项说明，如「表头加粗+边框+斑马纹」" },
-          },
-        },
-      },
-      default: { type: "string", description: "可选，超时（120s）时的默认选择值" },
-    },
-    required: ["question", "options"],
-  },
-  execute: async (args) => {
-    const question = String(args.question || "");
-    const options = (args.options || []) as ChoiceOption[];
-    const defaultValue = args.default ? String(args.default) : undefined;
-
-    if (!question) return "[错误] question 不能为空";
-    if (!Array.isArray(options) || options.length < 2) {
-      return "[错误] options 至少需要 2 个选项";
-    }
-
-    console.log(LOG_PREFIX, "ask_user_choice:", question, options.length + " 个选项");
-    const userChoice = await requestUserChoice(question, options, defaultValue);
-    console.log(LOG_PREFIX, "用户选择了:", userChoice);
-
-    if (!userChoice) {
-      return "[ask_user_choice] 用户未选择（超时），请按默认方案执行。";
-    }
-    // 找到用户选的选项，返回 label + value 方便 LLM 理解
-    const selected = options.find(o => o.value === userChoice);
-    if (selected) {
-      return `[ask_user_choice] 用户选择了：${selected.label}（${userChoice}）。请按此选择执行。`;
-    }
-    // 用户自定义输入（value 不在预设选项里）
-    return `[ask_user_choice] 用户自定义输入：${userChoice}。请按此要求执行。`;
-  },
-});
+logger.info(LogTag.BuiltinTools, "registered: fetch_url / run_shell / install_mcp_server / weather / web_search / delegate_task");
 
 // ── 工具：delegate_document（文档子代理入口）─────────────────────
 // 虚拟工具：对 Action Gate 是普通工具，执行时走专用子代理 Executor。

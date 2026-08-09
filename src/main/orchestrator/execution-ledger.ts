@@ -1,6 +1,7 @@
 import type { ToolExecutionOutcome } from "./types";
 
-export interface ExecutionFingerprintInput {
+export interface LogicalInvocationInput {
+  logicalInvocationId: string;
   capability: string;
   targetRefs: string[];
   args: Record<string, unknown>;
@@ -16,18 +17,36 @@ function stable(value: unknown): unknown {
   );
 }
 
-function fingerprint(input: ExecutionFingerprintInput): string {
-  return JSON.stringify(stable(input));
+function requestFingerprint(input: LogicalInvocationInput): string {
+  return JSON.stringify(stable({
+    capability: input.capability,
+    targetRefs: input.targetRefs,
+    args: input.args,
+  }));
+}
+
+export class LogicalInvocationConflictError extends Error {
+  readonly code = "E_LOGICAL_INVOCATION_CONFLICT";
+  readonly name = "LogicalInvocationConflictError";
 }
 
 export class ExecutionLedger {
+  private readonly requestFingerprints = new Map<string, string>();
   private readonly succeeded = new Map<string, ToolExecutionOutcome>();
 
   async execute(
-    input: ExecutionFingerprintInput,
+    input: LogicalInvocationInput,
     run: () => Promise<ToolExecutionOutcome>,
   ): Promise<{ outcome: ToolExecutionOutcome; cached: boolean }> {
-    const key = fingerprint(input);
+    const key = input.logicalInvocationId;
+    const fingerprint = requestFingerprint(input);
+    const previousFingerprint = this.requestFingerprints.get(key);
+    if (previousFingerprint && previousFingerprint !== fingerprint) {
+      throw new LogicalInvocationConflictError(
+        `Logical invocation ${key} was reused with different request facts`,
+      );
+    }
+    this.requestFingerprints.set(key, fingerprint);
     const existing = this.succeeded.get(key);
     if (existing) return { outcome: existing, cached: true };
     const outcome = await run();

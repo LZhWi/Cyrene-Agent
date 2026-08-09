@@ -28,7 +28,8 @@ const SUB_AGENT_TIMEOUT_MS = 60_000;
 /** 子代理不能调用的工具（防递归 + 防重复权限审批）。 */
 const BLOCKED_TOOLS = new Set([
   "delegate_task",     // 防递归
-  "ask_user_choice",   // 子代理不该跟用户交互（只有主 agent 能弹卡片）
+  "ask_user",          // 子代理不该跟用户交互（只有主 agent 能弹卡片）
+  "ask_user_choice",   // legacy 兼容：万一旧引用残留也一起屏蔽
 ]);
 
 /** 子代理返回的结构化结果。 */

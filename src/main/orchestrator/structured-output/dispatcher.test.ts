@@ -17,21 +17,19 @@ const structuredRequest: ChatRequest = {
   },
 };
 
-describe("structured generation dispatcher", () => {
-  test("routes a supported official provider to LangChain", async () => {
+describe("structured generation dispatcher (legacy-only)", () => {
+  test("routes a structured official provider to legacy", async () => {
     const result = await dispatchChatGeneration({
       request: structuredRequest,
       provider: "chatgpt",
       endpointKind: "official",
       environment: {},
-      langchain: async () => "langchain",
       legacy: async () => "legacy",
     });
-
-    expect(result).toBe("langchain");
+    expect(result).toBe("legacy");
   });
 
-  test("keeps ordinary Soul and Native FC requests on the existing adapter", async () => {
+  test("keeps ordinary requests on the existing adapter", async () => {
     const result = await dispatchChatGeneration({
       request: {
         model: "MiniMax-M3",
@@ -40,23 +38,19 @@ describe("structured generation dispatcher", () => {
       provider: "chatgpt",
       endpointKind: "official",
       environment: {},
-      langchain: async () => "langchain",
       legacy: async () => "legacy",
     });
-
     expect(result).toBe("legacy");
   });
 
-  test("routes a profiled non-LangChain provider to the legacy structured pipeline", async () => {
+  test("routes a non-official provider to legacy", async () => {
     const result = await dispatchChatGeneration({
       request: structuredRequest,
       provider: "minimax",
       endpointKind: "official",
       environment: {},
-      langchain: async () => "langchain",
       legacy: async () => "legacy",
     });
-
     expect(result).toBe("legacy");
   });
 });

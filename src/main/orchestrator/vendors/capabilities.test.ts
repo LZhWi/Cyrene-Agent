@@ -40,18 +40,19 @@ describe("PROVIDER_CAPABILITIES — schema smoke", () => {
 });
 
 describe("PROVIDER_CAPABILITIES — 已知条目存在性回归", () => {
-  test("MiniMax 默认使用 OpenAI 兼容入口", () => {
+  test("MiniMax 默认使用官方优先的 Anthropic 入口", () => {
     expect(getCapability("MiniMax（稀宇科技）")).toMatchObject({
-      transport: "openai",
-      baseUrl: "https://api.minimaxi.com/v1",
+      transport: "anthropic",
+      baseUrl: "https://api.minimaxi.com/anthropic",
       authStyle: "bearer",
+      anthropicAuthStyle: "x-api-key",
     });
   });
 
-  test("MiniMax 默认配置生成 OpenAI chat/completions 与 Bearer 请求", () => {
+  test("MiniMax 默认配置生成 Anthropic messages 与 x-api-key 请求", () => {
     const cfg = {
       provider: "MiniMax（稀宇科技）",
-      baseUrl: "https://api.minimaxi.com/v1",
+      baseUrl: "https://api.minimaxi.com/anthropic",
       model: "MiniMax-M3",
       apiKey: "test-key",
       explicitTransport: "auto" as const,
@@ -62,10 +63,10 @@ describe("PROVIDER_CAPABILITIES — 已知条目存在性回归", () => {
       cfg,
     );
 
-    expect(adapter.transport).toBe("openai");
-    expect(request.url).toBe("https://api.minimaxi.com/v1/chat/completions");
-    expect(request.headers.Authorization).toBe("Bearer test-key");
-    expect(request.headers["x-api-key"]).toBeUndefined();
+    expect(adapter.transport).toBe("anthropic");
+    expect(request.url).toBe("https://api.minimaxi.com/anthropic/v1/messages");
+    expect(request.headers["x-api-key"]).toBe("test-key");
+    expect(request.headers.Authorization).toBeUndefined();
   });
 
   test.each([

@@ -1,5 +1,5 @@
 import type { ChatVendorAdapter, ChatMessage, ChatRequest } from "./vendors/types";
-import type { AgentLoopSettings, TwoPhaseEvent } from "./two-phase-fc-loop";
+import type { AgentLoopSettings, TwoPhaseEvent } from "./cyrene-agent";
 
 const COMPRESSION_PROMPT = `你正在帮"昔涟"整理对话记忆。请把下面这段较早的对话历史总结成一段简洁的摘要，供后续回复参考。
 

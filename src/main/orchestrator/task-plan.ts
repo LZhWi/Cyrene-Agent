@@ -82,7 +82,7 @@ export interface TaskPlan {
 export interface PendingTaskSwitch {
   userRequest: string;
   contextualizedRequest?: string;
-  proposedRoute?: import("./task-router").TaskRoute;
+  proposedRoute?: { executionMode: "direct" | "plan"; skillIds: string[]; reason: string };
   createdAt: number;
 }
 

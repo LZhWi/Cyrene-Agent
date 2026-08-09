@@ -51,7 +51,7 @@ import type {
 } from "../social-context/types";
 import type { TrustedAskUserProfile } from "../../shared/ask-clarification";
 import type { ConversationMode } from "../../shared/chat-types";
-import type { SkillRouteInfo } from "./task-router";
+import type { SkillRouteInfo } from "./cyrene-agent";
 import { filterToolsBySearchBackend, type SearchBackend } from "./search-backend-filter";
 import { buildStickerEmbeddingQuery } from "../sticker-query";
 

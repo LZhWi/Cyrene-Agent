@@ -13,11 +13,11 @@ export const MODEL_PRESETS: ModelPreset[] = [
     shortName: "MiniMax",
     baseUrl: "https://api.minimaxi.com/v1",
     anthropicBaseUrl: "https://api.minimaxi.com/anthropic",
-    transport: "openai",
+    transport: "anthropic",
     mainModels: ["MiniMax-M3", "MiniMax-M2.7", "MiniMax-M2.5"],
     iconUrl: "../icons/providers/minimax.svg",
     websiteUrl: "https://platform.minimaxi.com/",
-    // 主模型和视觉模型默认都走 OpenAI 兼容入口。
+    // 主模型默认走 Anthropic SDK；视觉继续走 OpenAI 兼容入口。
     visionBaseUrl: "https://api.minimaxi.com/v1",
     supportsVision: true,
   },

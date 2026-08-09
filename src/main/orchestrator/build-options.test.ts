@@ -103,6 +103,30 @@ describe("build-options", () => {
     expect(result.options.settings.reasoning).toEqual({ mode: "off" })
   })
 
+  it.each(["chat", "work", "daily", "learn"] as const)(
+    "preserves the saved reasoning preference in %s mode",
+    async (executionMode) => {
+      const deps = createBuildDeps()
+      deps.loadModelSettings = () => ({
+        provider: "Qwen（通义千问）",
+        baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model: "qwen3-max",
+        apiKey: "k",
+        reasoning: { mode: "on" },
+      })
+
+      const result = await buildAgentRunOptions({
+        messages: [{ role: "user", content: "你好" }],
+        style: "01_default.md",
+        executionMode,
+        mode: executionMode,
+      }, deps)
+
+      expect(result.options.settings.reasoning).toEqual({ mode: "on" })
+      expect(result.options.executionMode).toBe(executionMode === "chat" ? "chat" : "work")
+    },
+  )
+
   it("adds a concise WeChat system when the run comes from WeChat", async () => {
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "你好" }],

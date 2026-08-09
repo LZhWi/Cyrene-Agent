@@ -7,7 +7,6 @@ import type {
 } from "../../orchestrator/vendors";
 import { classifyStructuredOutputEndpoint } from "../../orchestrator/structured-output/profiles";
 import { dispatchChatGeneration } from "../../orchestrator/structured-output/dispatcher";
-import { invokeLangChainStructured } from "../../orchestrator/structured-output/langchain-invoker";
 import {
   createVisibleStreamFilter,
   stripThinkBlocks,
@@ -232,25 +231,6 @@ export function createLlmClient(): LlmClient {
           configuredBaseUrl: cfg.baseUrl,
           officialBaseUrl: adapter.capability.baseUrl,
         }),
-        langchain: async () => {
-          const generated = await invokeLangChainStructured(
-            chatRequest,
-            {
-              ...cfg,
-              provider: adapter.id,
-              explicitTransport: adapter.transport,
-            },
-            controller.signal,
-          );
-          return {
-            assistantMessage: { role: "assistant" as const, content: generated.text },
-            text: generated.text,
-            toolCalls: [],
-            finishReason: generated.finishReason,
-            raw: { backend: "langchain" },
-            structuredValue: generated.structuredValue,
-          };
-        },
         legacy: async () => {
           const http = adapter.buildRequest(chatRequest, cfg);
           const response = await fetch(http.url, {

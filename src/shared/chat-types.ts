@@ -68,6 +68,15 @@ export interface RunActivityRecord {
   reasoningMs: number;
   /** 当前仍在流式输出的 reasoning 段起点；终态时必须清除。 */
   activeReasoningStartedAt?: number;
+  /** 取消、超时或失败时保持过程面板展开，避免隐藏唯一可见的执行证据。 */
+  keepExpanded?: boolean;
+}
+
+export interface ProcessMessageRecord {
+  id: string;
+  content: string;
+  /** 该过程消息出现前已完成的工具数，用于恢复大致执行顺序。 */
+  afterToolCount?: number;
 }
 
 export interface ReasoningBlock {
@@ -85,6 +94,8 @@ export interface ChatMessage {
   /** 模型公开返回的推理过程；不包含隐藏或加密思考。 */
   reasoning?: string;
   reasoningBlocks?: ReasoningBlock[];
+  /** 工具轮次中模型给用户的过程说明；不属于正式回答，也不冒充 reasoning。 */
+  processMessages?: ProcessMessageRecord[];
   at: number;
   /** 不直接显示在聊天气泡里，但会拼入模型上下文。 */
   modelContext?: string;

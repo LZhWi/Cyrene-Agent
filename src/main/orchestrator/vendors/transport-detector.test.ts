@@ -43,6 +43,15 @@ describe("resolveTransport（用户显式协议）", () => {
     ).toBe("openai");
   });
 
+  it("MiniMax 新配置默认使用官方优先的 Anthropic 协议", () => {
+    expect(
+      resolveTransport({
+        baseUrl: "https://api.minimaxi.com/anthropic",
+        provider: "MiniMax（稀宇科技）",
+      }),
+    ).toBe("anthropic");
+  });
+
   it("Base URL 路径不能覆盖厂商默认协议", () => {
     expect(
       resolveTransport({

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { runChatLoop } from "./chat-loop";
+import { runChatLoop as runChatLoopProduction, type ChatLoopOptions } from "./chat-loop";
+import { createSseReader } from "./vendors";
 import type {
   ChatMessage,
   ChatRequest,
@@ -83,6 +84,66 @@ class FakeAdapter implements ChatVendorAdapter {
   }
 }
 
+const testSdkStream: NonNullable<ChatLoopOptions["streamChat"]> = async (input) => {
+  const http = input.adapter.buildStreamRequest(input.request, input.config);
+  const response = await fetch(http.url, {
+    method: "POST",
+    headers: http.headers,
+    body: http.body,
+    signal: input.signal,
+  });
+  if (!response.ok) {
+    const body = await response.text();
+    const error = new Error(`HTTP ${response.status}${body ? ` - ${body}` : ""}`) as Error & { status?: number };
+    error.status = response.status;
+    throw error;
+  }
+  if (response.headers.get("content-type")?.includes("application/json")) {
+    return input.adapter.parseResponse(await response.json());
+  }
+  if (!response.body) throw new Error("empty stream");
+
+  let text = "";
+  let thinking = "";
+  let usage: { input: number; output: number } | undefined;
+  for await (const event of createSseReader(input.adapter, response.body)) {
+    const chunk = input.adapter.parseStreamEvent(event);
+    if (!chunk) continue;
+    if (chunk.error) throw new Error(chunk.error);
+    if (chunk.deltaThinking) {
+      thinking += chunk.deltaThinking;
+      input.onDelta?.({ type: "reasoning_delta", delta: chunk.deltaThinking });
+    }
+    if (chunk.deltaText) {
+      text += chunk.deltaText;
+      input.onDelta?.({ type: "text_delta", delta: chunk.deltaText });
+    }
+    if (chunk.usage) {
+      usage = {
+        input: Math.max(usage?.input ?? 0, chunk.usage.input),
+        output: Math.max(usage?.output ?? 0, chunk.usage.output),
+      };
+    }
+    if (chunk.done) break;
+  }
+  return {
+    assistantMessage: { role: "assistant", content: text, ...(thinking ? { thinking } : {}) },
+    text,
+    ...(thinking ? { thinking } : {}),
+    toolCalls: [],
+    finishReason: "stop",
+    raw: {},
+    ...(usage ? { usage } : {}),
+  };
+};
+
+function runChatLoop(options: ChatLoopOptions) {
+  return runChatLoopProduction({
+    ...options,
+    streamChat: options.streamChat ?? testSdkStream,
+  });
+}
+
 beforeEach(() => {
   globalThis.fetch = vi.fn(async () => new Response("{}", {
     status: 200,
@@ -93,6 +154,36 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("runChatLoop", () => {
+  it("uses the SDK stream runner for a Chat request", async () => {
+    const adapter = new FakeAdapter();
+    const streamChat = vi.fn(async (input: {
+      onDelta?: (delta: { type: "text_delta"; delta: string }) => void;
+    }) => {
+      input.onDelta?.({ type: "text_delta", delta: "SDK 真流式" });
+      return {
+        assistantMessage: { role: "assistant" as const, content: "SDK 真流式" },
+        text: "SDK 真流式",
+        toolCalls: [],
+        finishReason: "stop",
+        raw: {},
+        usage: { input: 3, output: 2 },
+      };
+    });
+
+    const result = await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
+      adapter,
+      messages: [{ role: "user", content: "在吗" }],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      timeoutMs: 30_000,
+      streamChat: streamChat as never,
+      recordUsage: vi.fn(),
+    });
+
+    expect(streamChat).toHaveBeenCalledOnce();
+    expect(result.reply).toBe("SDK 真流式");
+  });
+
   it("makes one plain Soul request without tools or structured output", async () => {
     const adapter = new FakeAdapter();
     const onEvent = vi.fn();

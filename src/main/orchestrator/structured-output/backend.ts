@@ -1,29 +1,23 @@
-export type StructuredOutputBackend = "langchain" | "legacy";
+// v3: LangChain 后端已删除,所有结构化输出统一走 legacy vendor adapter。
+// resolveStructuredOutputBackend 保留为占位(返回 "legacy"),供 dispatcher 调用,
+// 待 Phase 4 删除 agent-graph.ts 后可进一步简化。
+
+export type StructuredOutputBackend = "legacy";
 
 export interface StructuredOutputBackendContext {
   provider: string;
   endpointKind: "official" | "custom" | "local";
 }
 
-const LANGCHAIN_PROVIDERS = new Set(["chatgpt", "claude"]);
-
 export function resolveStructuredOutputBackend(
-  context: StructuredOutputBackendContext,
-  environment: Record<string, string | undefined> = process.env,
+  _context: StructuredOutputBackendContext,
+  _environment: Record<string, string | undefined> = process.env,
 ): StructuredOutputBackend {
-  if (environment.CYRENE_LEGACY_STRUCTURED_OUTPUT === "1") return "legacy";
-  return context.endpointKind === "official"
-    && LANGCHAIN_PROVIDERS.has(context.provider)
-    ? "langchain"
-    : "legacy";
+  return "legacy";
 }
 
 export async function runStructuredGeneration<T>(input: {
-  backend: StructuredOutputBackend;
-  langchain: () => Promise<T>;
   legacy: () => Promise<T>;
 }): Promise<T> {
-  return input.backend === "legacy"
-    ? input.legacy()
-    : input.langchain();
+  return input.legacy();
 }

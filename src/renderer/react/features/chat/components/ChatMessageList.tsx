@@ -3,7 +3,7 @@ import { XMarkdown, type ComponentProps } from "@ant-design/x-markdown";
 import Latex from "@ant-design/x-markdown/plugins/Latex";
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
-import type { ConversationMode, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
+import type { ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import thinkingMoodUrl from "../../../assets/status-moods/思考中.png?url";
 import completedThinkingMoodUrl from "../../../assets/status-moods/提醒.png?url";
 import workingMoodUrl from "../../../assets/status-moods/工作中.png?url";
@@ -36,6 +36,7 @@ export interface ChatMessageItem {
   content: string;
   reasoning?: string;
   reasoningBlocks?: ReasoningBlock[];
+  processMessages?: ProcessMessageRecord[];
   reasoningStreaming?: boolean;
   responseStarted?: boolean;
   streaming?: boolean;
@@ -242,13 +243,25 @@ function RunActivityReasoningBlock({ block }: { block: ReasoningBlock }) {
 
 function RunActivityDetail({
   reasoningBlocks,
+  processMessages,
   tools,
 }: {
   reasoningBlocks: ReasoningBlock[];
+  processMessages: ProcessMessageRecord[];
   tools: ToolExecutionRecord[];
 }) {
   const timeline: ReactNode[] = [];
   for (let index = 0; index <= tools.length; index += 1) {
+    processMessages
+      .filter((message) => (message.afterToolCount ?? 0) === index)
+      .forEach((message) => {
+        if (!message.content.trim()) return;
+        timeline.push(
+          <div className="cy-run-activity__process" key={`process-${message.id}`}>
+            <MarkdownContent content={message.content} />
+          </div>,
+        );
+      });
     reasoningBlocks
       .filter((block) => (block.afterToolCount ?? 0) === index)
       .forEach((block) => {
@@ -273,6 +286,7 @@ function RunActivityContent({
   activityId,
   activity,
   reasoningBlocks,
+  processMessages,
   tools,
   stage,
   taskPlan,
@@ -282,6 +296,7 @@ function RunActivityContent({
   activityId: string;
   activity: RunActivityRecord;
   reasoningBlocks: ReasoningBlock[];
+  processMessages: ProcessMessageRecord[];
   tools: ToolExecutionRecord[];
   stage?: AgentRunStage;
   taskPlan?: TaskPlanPresentation;
@@ -292,9 +307,9 @@ function RunActivityContent({
   const snapshot = resolveRunActivitySnapshot(activity, now);
   const wasProcessingRef = useRef(snapshot.processing);
   useEffect(() => {
-    if (shouldAutoCollapseRunActivity(wasProcessingRef.current, snapshot.processing)) onExpand(false);
+    if (shouldAutoCollapseRunActivity(wasProcessingRef.current, snapshot.processing, activity.keepExpanded)) onExpand(false);
     wasProcessingRef.current = snapshot.processing;
-  }, [onExpand, snapshot.processing]);
+  }, [activity.keepExpanded, onExpand, snapshot.processing]);
 
   const title = snapshot.processing
     ? `昔涟正在处理中 ${formatElapsed(snapshot.processingMs)}`
@@ -326,7 +341,7 @@ function RunActivityContent({
         <div className="cy-run-activity__expanded" id={`${activityId}-details`}>
           {taskPlan && <TaskPlanCard plan={taskPlan} />}
           <div className="cy-run-activity__divider" />
-          <RunActivityDetail reasoningBlocks={reasoningBlocks} tools={tools} />
+          <RunActivityDetail reasoningBlocks={reasoningBlocks} processMessages={processMessages} tools={tools} />
           <div className="cy-run-activity__divider" />
         </div>
       )}
@@ -591,6 +606,7 @@ function createRoles(
         activityId?: string;
         activity?: RunActivityRecord;
         reasoningBlocks?: ReasoningBlock[];
+        processMessages?: ProcessMessageRecord[];
         tools?: ToolExecutionRecord[];
         runStage?: AgentRunStage;
         taskPlan?: TaskPlanPresentation;
@@ -604,6 +620,7 @@ function createRoles(
           activityId={activityId}
           activity={activity}
           reasoningBlocks={info.extraInfo?.reasoningBlocks ?? []}
+          processMessages={info.extraInfo?.processMessages ?? []}
           tools={info.extraInfo?.tools ?? []}
           stage={info.extraInfo?.runStage}
           taskPlan={info.extraInfo?.taskPlan}
@@ -705,6 +722,7 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
           activityId: `${message.id}-activity`,
           activity: message.runActivity,
           reasoningBlocks,
+          processMessages: message.processMessages ?? [],
           tools,
           runStage: message.runStage,
           taskPlan: message.taskPlan,

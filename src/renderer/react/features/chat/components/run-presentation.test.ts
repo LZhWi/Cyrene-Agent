@@ -201,6 +201,29 @@ describe("work run presentation", () => {
     });
   });
 
+  it("accepts a runtime-owned fixed-choice card with custom input disabled", () => {
+    expect(normalizeChoiceInteraction({
+      interactionId: "confirm-1",
+      runId: "run-1",
+      revision: 1,
+      mode: "semantic_clarification",
+      questions: [{
+        id: "decision",
+        prompt: "是否仍要允许下一次相同操作？",
+        required: true,
+        multiple: false,
+        options: [
+          { id: "allow", label: "仍然允许" },
+          { id: "deny", label: "不要重复" },
+        ],
+        customInput: { enabled: false, placeholder: "" },
+      }],
+    })).toMatchObject({
+      id: "confirm-1",
+      questions: [{ id: "decision", allowCustomInput: false }],
+    });
+  });
+
   it("keeps unordered multi-question drafts and enforces option XOR custom", () => {
     const interaction = normalizeChoiceInteraction({
       interactionId: "choice-4",

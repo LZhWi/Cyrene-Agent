@@ -50,3 +50,18 @@ describe("React Code run messages", () => {
     expect(items.map((item) => item.role)).toContain("codeRun");
   });
 });
+
+describe("formal answer visibility", () => {
+  it("keeps an interrupted run in the process area without creating an empty assistant bubble", () => {
+    const message: ChatMessageItem = {
+      id: "assistant-interrupted",
+      role: "assistant",
+      content: "",
+      responseStarted: false,
+      runActivity: { startedAt: 1, completedAt: 2, reasoningMs: 0, keepExpanded: true },
+      processMessages: [{ id: "process-1", content: "已经检查了文件", afterToolCount: 0 }],
+    };
+
+    expect(createMessageItems([message], []).map((item) => item.role)).toEqual(["activity"]);
+  });
+});

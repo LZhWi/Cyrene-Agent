@@ -1,10 +1,11 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { firstValueFrom } from "rxjs";
 import { CyreneAgent, classifyRunError, toAguiEvent } from "./cyrene-agent";
 import { AgentRuntimeError } from "./agent-runtime-error";
 import { AgentExecutionError } from "./run-execution-status";
-import { runTwoPhaseFcLoop } from "./two-phase-fc-loop";
-import { runLangGraphAgentLoop } from "./langgraph-agent-loop";
 import { requestUserClarification } from "../user-choice";
+import { runHarnessWithAdapter } from "./harness-adapter";
+import { EventType } from "@ag-ui/core";
 
 vi.mock("./vendors", () => ({
   getAdapterForConfig: vi.fn(() => ({ id: "fake-adapter" })),
@@ -21,20 +22,40 @@ vi.mock("../permission", () => ({
   checkPermission: vi.fn(),
 }));
 
-vi.mock("./two-phase-fc-loop", () => ({
-  runTwoPhaseFcLoop: vi.fn(async () => ({
-    reply: "done",
-    toolResults: [],
-    soulPhaseReason: "no_tool",
-  })),
-}));
+const mockedRunHarnessWithAdapter = vi.mocked(runHarnessWithAdapter);
 
-vi.mock("./langgraph-agent-loop", () => ({
-  runLangGraphAgentLoop: vi.fn(async () => ({
-    reply: "done",
-    toolResults: [],
-    soulPhaseReason: "no_tool",
-  })),
+vi.mock("./harness-adapter", () => ({
+  runHarnessWithAdapter: vi.fn(async (_options: unknown, signal: AbortSignal, _send: unknown) => {
+    // Task 3：忠实模拟真实行为——signal abort 后返回 cancelled terminal。
+    // 如果 signal 已 aborted，立即返回 cancelled；否则等 signal abort。
+    if (signal.aborted) {
+      return {
+        reply: "",
+        toolResults: [],
+        soulPhaseReason: "no_tool",
+        terminal: { status: "cancelled", reason: "user_cancelled", externalEffectsMayContinue: true },
+        totalUsage: undefined,
+      };
+    }
+    return new Promise((resolve) => {
+      signal.addEventListener("abort", () => {
+        resolve({
+          reply: "",
+          toolResults: [],
+          soulPhaseReason: "no_tool",
+          terminal: { status: "cancelled", reason: "user_cancelled", externalEffectsMayContinue: true },
+          totalUsage: undefined,
+        });
+      }, { once: true });
+      // 兜底：10s 超时返回 success（防止测试挂死）
+      setTimeout(() => resolve({
+        reply: "done",
+        toolResults: [],
+        soulPhaseReason: "no_tool",
+        totalUsage: undefined,
+      }), 10_000);
+    });
+  }),
 }));
 
 vi.mock("../user-choice", () => ({
@@ -54,70 +75,6 @@ describe("CyreneAgent", () => {
   it("maps incremental tool arguments onto the standard AG-UI event", () => {
     expect(toAguiEvent({ type: "tool_call_args", toolCallId: "call-1", delta: "{\"path\":" }))
       .toMatchObject({ type: "TOOL_CALL_ARGS", toolCallId: "call-1", delta: "{\"path\":" });
-  });
-
-  it("passes CyreneRunOptions.soulSampling through to runTwoPhaseFcLoop", async () => {
-    const agent = new CyreneAgent({ threadId: "test-thread" });
-    const soulSampling = { temperature: 0.9, frequencyPenalty: 0.2 };
-
-    await new Promise<void>((resolve, reject) => {
-      agent.runWithEvents({
-        settings: {
-          provider: "test",
-          baseUrl: "https://test",
-          model: "m",
-          apiKey: "k",
-          contextWindowTokens: 256000,
-        },
-        messages: [{ role: "user", content: "hi" }],
-        timeoutMs: 1000,
-        tools: [],
-        toolSystemContent: "TOOL",
-        soulSystemBaseContent: "SOUL",
-        soulSampling,
-        executionMode: "work",
-        agentRuntime: "legacy",
-      }).subscribe({
-        complete: resolve,
-        error: reject,
-      });
-    });
-
-    expect(runTwoPhaseFcLoop).toHaveBeenCalledWith(expect.objectContaining({
-      soulSampling,
-    }));
-  });
-
-  it("wires the current run's choice-card callback into the LangGraph runtime", async () => {
-    const agent = new CyreneAgent({ threadId: "test-thread" });
-    const runChoiceSender = vi.fn();
-
-    await new Promise<void>((resolve, reject) => {
-      agent.runWithEvents({
-        settings: {
-          provider: "test",
-          baseUrl: "https://test",
-          model: "m",
-          apiKey: "k",
-          contextWindowTokens: 256000,
-        },
-        messages: [{ role: "user", content: "播放这首歌" }],
-        timeoutMs: 1000,
-        tools: [],
-        toolSystemContent: "TOOL",
-        soulSystemBaseContent: "SOUL",
-        executionMode: "work",
-        agentRuntime: "langgraph",
-        requestUserClarification: runChoiceSender,
-      }).subscribe({
-        complete: resolve,
-        error: reject,
-      });
-    });
-
-    expect(runLangGraphAgentLoop).toHaveBeenCalledWith(expect.objectContaining({
-      requestUserClarification: runChoiceSender,
-    }));
   });
 });
 
@@ -405,5 +362,176 @@ describe("executeToolCall business failure detection", () => {
     }
 
     expect(status).toBe("succeeded");
+  });
+});
+
+// ── Task 3 / C2：external signal threading + first-source-wins ──────────
+
+describe("CyreneAgent external signal threading (Task 3)", () => {
+  beforeEach(() => {
+    mockedRunHarnessWithAdapter.mockClear();
+  });
+
+  it("threads CyreneRunOptions.signal into harness signal (abort propagates)", async () => {
+    const agent = new CyreneAgent({ threadId: "thread-signal-1" });
+    const externalController = new AbortController();
+
+    const observable = agent.runWithEvents({
+      settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 } as never,
+      messages: [{ role: "user", content: "hi" }] as never,
+      timeoutMs: 60000,
+      toolSystemContent: "",
+      soulSystemBaseContent: "",
+      executionMode: "work",
+      runId: "run-signal-1",
+      signal: externalController.signal,
+    });
+
+    const events: unknown[] = [];
+    const sub = observable.subscribe({ next: (e) => events.push(e) });
+
+    // 等 harness 被调用
+    await vi.waitFor(() => expect(mockedRunHarnessWithAdapter).toHaveBeenCalledOnce());
+
+    // harness 收到的 signal 必须与外部 signal 联动
+    const harnessSignal = mockedRunHarnessWithAdapter.mock.calls[0]?.[1] as AbortSignal;
+    expect(harnessSignal).toBeDefined();
+    expect(harnessSignal.aborted).toBe(false);
+
+    // abort 外部 signal → harness signal 必须也 aborted
+    externalController.abort();
+    expect(harnessSignal.aborted).toBe(true);
+
+    // 等待 cancelled RUN_FINISHED
+    await vi.waitFor(() => {
+      const finished = events.find(
+        (e) => (e as { type?: string }).type === EventType.RUN_FINISHED,
+      );
+      expect(finished).toBeDefined();
+    });
+
+    const runFinished = events.find(
+      (e) => (e as { type?: string }).type === EventType.RUN_FINISHED,
+    ) as { result?: { status?: string; externalEffectsMayContinue?: boolean } };
+    expect(runFinished?.result?.status).toBe("cancelled");
+    expect(runFinished?.result?.externalEffectsMayContinue).toBe(true);
+
+    sub.unsubscribe();
+  });
+
+  it("emits exactly one terminal (cancelled) when external signal aborts", async () => {
+    const agent = new CyreneAgent({ threadId: "thread-signal-2" });
+    const externalController = new AbortController();
+
+    const observable = agent.runWithEvents({
+      settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 } as never,
+      messages: [{ role: "user", content: "hi" }] as never,
+      timeoutMs: 60000,
+      toolSystemContent: "",
+      soulSystemBaseContent: "",
+      executionMode: "work",
+      runId: "run-signal-2",
+      signal: externalController.signal,
+    });
+
+    const events: unknown[] = [];
+    const sub = observable.subscribe({ next: (e) => events.push(e) });
+
+    await vi.waitFor(() => expect(mockedRunHarnessWithAdapter).toHaveBeenCalledOnce());
+    externalController.abort();
+
+    // 等待完成
+    await vi.waitFor(() => {
+      expect(events.filter(
+        (e) => (e as { type?: string }).type === EventType.RUN_FINISHED,
+      )).toHaveLength(1);
+    });
+
+    // 恰好一个 RUN_FINISHED，没有 RUN_ERROR
+    const runFinishedCount = events.filter(
+      (e) => (e as { type?: string }).type === EventType.RUN_FINISHED,
+    ).length;
+    const runErrorCount = events.filter(
+      (e) => (e as { type?: string }).type === EventType.RUN_ERROR,
+    ).length;
+    expect(runFinishedCount).toBe(1);
+    expect(runErrorCount).toBe(0);
+
+    // cancelled terminal
+    const runFinished = events.find(
+      (e) => (e as { type?: string }).type === EventType.RUN_FINISHED,
+    ) as { result?: { status?: string } };
+    expect(runFinished?.result?.status).toBe("cancelled");
+
+    sub.unsubscribe();
+  });
+
+  it("cancelled path does not emit final_answer text as '最终回复被取消。'", async () => {
+    const agent = new CyreneAgent({ threadId: "thread-signal-3" });
+    const externalController = new AbortController();
+
+    const observable = agent.runWithEvents({
+      settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 } as never,
+      messages: [{ role: "user", content: "hi" }] as never,
+      timeoutMs: 60000,
+      toolSystemContent: "",
+      soulSystemBaseContent: "",
+      executionMode: "work",
+      runId: "run-signal-3",
+      signal: externalController.signal,
+    });
+
+    const events: unknown[] = [];
+    const sub = observable.subscribe({ next: (e) => events.push(e) });
+
+    await vi.waitFor(() => expect(mockedRunHarnessWithAdapter).toHaveBeenCalledOnce());
+    externalController.abort();
+
+    await vi.waitFor(() => {
+      expect(events.filter(
+        (e) => (e as { type?: string }).type === EventType.RUN_FINISHED,
+      )).toHaveLength(1);
+    });
+
+    // lastResult.reply 不得包含 "最终回复被取消。"
+    expect(agent.lastResult?.reply).not.toContain("最终回复被取消");
+    // cancelled terminal 不应带 reply 文本
+    if (agent.lastResult?.terminal) {
+      expect(agent.lastResult.terminal.status).toBe("cancelled");
+      expect(agent.lastResult.terminal.externalEffectsMayContinue).toBe(true);
+    }
+
+    sub.unsubscribe();
+  });
+
+  it("removes the external abort listener and does not abort the harness signal after normal completion", async () => {
+    mockedRunHarnessWithAdapter.mockResolvedValueOnce({
+      reply: "done",
+      toolResults: [],
+      soulPhaseReason: "no_tool",
+      totalUsage: undefined,
+    });
+    const agent = new CyreneAgent({ threadId: "thread-signal-cleanup" });
+    const externalController = new AbortController();
+    const addSpy = vi.spyOn(externalController.signal, "addEventListener");
+    const removeSpy = vi.spyOn(externalController.signal, "removeEventListener");
+
+    await new Promise<void>((resolve, reject) => {
+      agent.runWithEvents({
+        settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 } as never,
+        messages: [{ role: "user", content: "hi" }] as never,
+        timeoutMs: 60_000,
+        toolSystemContent: "",
+        soulSystemBaseContent: "",
+        executionMode: "work",
+        runId: "run-signal-cleanup",
+        signal: externalController.signal,
+      }).subscribe({ complete: resolve, error: reject });
+    });
+
+    const harnessSignal = mockedRunHarnessWithAdapter.mock.calls.at(-1)?.[1] as AbortSignal;
+    expect(addSpy).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
+    expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
+    expect(harnessSignal.aborted).toBe(false);
   });
 });

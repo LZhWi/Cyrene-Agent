@@ -7,6 +7,38 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
+const { fsFailures } = vi.hoisted(() => ({
+  fsFailures: { mkdir: false, write: false, stat: false },
+}));
+
+vi.mock("fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("fs")>();
+  return {
+    ...actual,
+    mkdirSync: (...args: unknown[]) => {
+      if (fsFailures.mkdir) {
+        fsFailures.mkdir = false;
+        throw new Error("mkdir boom");
+      }
+      return (actual.mkdirSync as (...inner: unknown[]) => unknown)(...args);
+    },
+    writeFileSync: (...args: unknown[]) => {
+      if (fsFailures.write) {
+        fsFailures.write = false;
+        throw new Error("write boom");
+      }
+      return (actual.writeFileSync as (...inner: unknown[]) => unknown)(...args);
+    },
+    statSync: (...args: unknown[]) => {
+      if (fsFailures.stat) {
+        fsFailures.stat = false;
+        throw new Error("stat boom");
+      }
+      return (actual.statSync as (...inner: unknown[]) => unknown)(...args);
+    },
+  };
+});
+
 // Mock toolRegistry 避免副作用
 vi.mock("./tool-registry", () => ({
   toolRegistry: {
@@ -24,6 +56,7 @@ vi.mock("./vision-captioner", () => ({
 // 需要在 mock 之后导入
 import "./fs-tools";
 import { toolRegistry } from "./tool-registry";
+import { ToolExecutionError } from "./tool-execution-error";
 
 let tmpDir: string;
 
@@ -32,6 +65,9 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  fsFailures.mkdir = false;
+  fsFailures.write = false;
+  fsFailures.stat = false;
   fs.rmSync(tmpDir, { recursive: true, force: true });
   vi.restoreAllMocks();
 });
@@ -148,5 +184,54 @@ describe("read_file structured output", () => {
 
     const result = JSON.parse(await tool!.execute({ path: testFile }));
     expect(result.totalLines).toBe(3);
+  });
+});
+
+describe("write_file truthful contract", () => {
+  function writeTool() {
+    return vi.mocked(toolRegistry.register).mock.calls.find(
+      (call) => call[0].id === "write_file",
+    )?.[0];
+  }
+
+  it("rejects a relative path with a typed error", async () => {
+    await expect(writeTool()!.execute({ path: "relative.txt", content: "x" }))
+      .rejects.toMatchObject({
+        name: "ToolExecutionError",
+        code: "E_PATH_NOT_ABSOLUTE",
+        category: "invalid_arguments",
+        effectState: "not_applied",
+      } satisfies Partial<ToolExecutionError>);
+  });
+
+  it("returns stat-backed evidence and allows a zero-byte file", async () => {
+    const target = path.join(tmpDir, "nested", "empty.txt");
+    const result = JSON.parse(await writeTool()!.execute({ path: target, content: "" }));
+
+    expect(result).toEqual({
+      success: true,
+      tool: "write_file",
+      path: target,
+      append: false,
+      exists: true,
+      sizeBytes: 0,
+      writtenBytes: 0,
+    });
+    expect(fs.existsSync(target)).toBe(true);
+  });
+
+  it("rejects mkdir, write, and stat failures with typed errors", async () => {
+    const target = path.join(tmpDir, "nested", "file.txt");
+    fsFailures.mkdir = true;
+    await expect(writeTool()!.execute({ path: target, content: "x" }))
+      .rejects.toMatchObject({ code: "E_CREATE_PARENT_FAILED", category: "permission_denied" });
+
+    fsFailures.write = true;
+    await expect(writeTool()!.execute({ path: target, content: "x" }))
+      .rejects.toMatchObject({ code: "E_WRITE_FILE_FAILED", effectState: "unknown" });
+
+    fsFailures.stat = true;
+    await expect(writeTool()!.execute({ path: target, content: "x" }))
+      .rejects.toMatchObject({ code: "E_WRITE_EVIDENCE_FAILED", effectState: "unknown" });
   });
 });

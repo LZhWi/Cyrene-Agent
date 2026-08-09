@@ -41,8 +41,14 @@ describe("run activity presentation", () => {
 
   it("auto-collapses only at the processing-to-complete transition", () => {
     expect(shouldAutoCollapseRunActivity(true, false)).toBe(true);
+    expect(shouldAutoCollapseRunActivity(true, false, true)).toBe(false);
     expect(shouldAutoCollapseRunActivity(false, false)).toBe(false);
     expect(shouldAutoCollapseRunActivity(true, true)).toBe(false);
+  });
+
+  it("keeps an abnormal run expanded after settlement", () => {
+    const activity = { startedAt: 1_000, completedAt: 2_000, reasoningMs: 0, keepExpanded: true };
+    expect(resolveRunActivityExpanded({}, "run-1", activity)).toBe(true);
   });
 
   it("formats elapsed time in minutes and seconds", () => {

@@ -269,6 +269,7 @@ export function ChatComposer({
         disabled={requiresWorkspace && !workspaceName}
         autoSize={{ minRows: 3, maxRows: 7 }}
         onChange={onChange}
+        onCancel={onCancel}
         onKeyDown={(event) => { shiftPressedRef.current = event.shiftKey; }}
         onSubmit={(submitValue) => {
           if (modelBusy) {

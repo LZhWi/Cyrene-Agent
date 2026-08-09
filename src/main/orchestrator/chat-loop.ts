@@ -6,7 +6,7 @@ import type {
   AgentLoopSettings,
   TwoPhaseEvent,
   TwoPhaseFcResult,
-} from "./two-phase-fc-loop";
+} from "./cyrene-agent";
 import type {
   ChatMessage,
   ChatRequest,
@@ -14,10 +14,12 @@ import type {
   ChatResponse,
   VendorConfig,
 } from "./vendors/types";
-import { createSseReader } from "./vendors";
+import { streamChatWithSdk } from "./vendors/sdk-stream/runtime";
+import type { UnifiedStreamDelta } from "./vendors/sdk-stream/types";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 import { getTimeoutSettings } from "../timeout-manager";
 import { compressConversation } from "./context-manager";
+import { isExplicitStreamUnsupported } from "./vendors/stream-support";
 
 export interface ChatLoopOptions {
   settings: AgentLoopSettings;
@@ -32,6 +34,8 @@ export interface ChatLoopOptions {
   signal?: AbortSignal;
   /** 非流式降级时的展示节奏；测试可设为 0，生产默认 20ms。 */
   fallbackRevealIntervalMs?: number;
+  /** 默认使用官方 SDK；测试可注入可控流实现。 */
+  streamChat?: typeof streamChatWithSdk;
   /** 当前对话模式，用于上下文压缩保留的最近轮数。 */
   mode?: string;
 }
@@ -41,11 +45,6 @@ class StreamUnavailableError extends Error {
     super(message, options);
     this.name = "StreamUnavailableError";
   }
-}
-
-function explicitlyRejectsStreaming(status: number, body: string): boolean {
-  if (status !== 400 && status !== 422) return false;
-  return /(?:stream(?:ing)?[^\r\n]{0,40}(?:not supported|unsupported|must be false|disabled|unavailable)|(?:not supported|unsupported)[^\r\n]{0,40}stream(?:ing)?|only non[- ]?stream|不支持.{0,12}流式|流式.{0,12}不支持)/i.test(body);
 }
 
 function waitForReveal(ms: number, signal?: AbortSignal): Promise<void> {
@@ -201,112 +200,66 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<TwoPhaseFcR
   };
 
   const invokeStreaming = async (messages: ChatMessage[]): Promise<{
-    text: string;
-    usage?: { input: number; output: number };
-    nonStreamingResponse?: ChatResponse;
+    response: ChatResponse;
+    needsReveal: boolean;
   }> => {
     const request = buildRequest(messages, true);
     const effectiveRequest = options.adapter.applyCacheHints?.(request, vendorConfig) ?? request;
-    const http = options.adapter.buildStreamRequest(effectiveRequest, vendorConfig);
-    const controller = new AbortController();
-    const abort = () => controller.abort();
-    options.signal?.addEventListener("abort", abort, { once: true });
-    const timer = setTimeout(abort, remainingBudget());
-    try {
-      const response = await fetch(http.url, {
-        method: "POST",
-        headers: http.headers,
-        body: http.body,
-        signal: controller.signal,
-      });
-      if (!response.ok) {
-        const body = await response.text().catch(() => "");
-        const detail = `HTTP ${response.status}${body ? ` - ${body.slice(0, 200)}` : ""}`;
-        if (explicitlyRejectsStreaming(response.status, body)) {
-          throw new StreamUnavailableError(`流式请求不受支持：${detail}`);
-        }
-        throw new AgentRuntimeError("E_MODEL_REQUEST_FAILED", `模型请求失败：${detail}`);
-      }
-
-      const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-      if (contentType.includes("application/json")) {
-        return { text: "", nonStreamingResponse: options.adapter.parseResponse(await response.json()) };
-      }
-      if (!response.body) throw new AgentRuntimeError("E_MODEL_RESPONSE_PARSE_FAILED", "模型流式响应体为空");
-
-      let text = "";
-      const timePrefixFilter = new ChatTimeStreamPrefixFilter();
-      const emitTextDelta = (delta: string) => {
-        if (!delta) return;
-        text += delta;
+    const timePrefixFilter = new ChatTimeStreamPrefixFilter();
+    let text = "";
+    const emitTextDelta = (delta: string) => {
+      if (!delta) return;
+      text += delta;
+      emittedStreamContent = true;
+      startText();
+      options.onEvent?.({ type: "text_message_content", messageId, delta });
+    };
+    const onDelta = (delta: UnifiedStreamDelta) => {
+      if (delta.type === "reasoning_delta" && delta.delta) {
         emittedStreamContent = true;
-        startText();
+        startReasoning();
         options.onEvent?.({
-          type: "text_message_content",
-          messageId,
-          delta,
+          type: "reasoning_message_content",
+          messageId: reasoningMessageId,
+          delta: delta.delta,
         });
-      };
-      let usage: { input: number; output: number } | undefined;
-      for await (const event of createSseReader(options.adapter, response.body)) {
-        const chunk = options.adapter.parseStreamEvent(event);
-        if (!chunk) continue;
-        if (chunk.error) {
-          throw new AgentRuntimeError("E_MODEL_REQUEST_FAILED", `模型流式响应错误：${chunk.error}`);
-        }
-        if (chunk.deltaThinking) {
-          emittedStreamContent = true;
-          startReasoning();
-          options.onEvent?.({
-            type: "reasoning_message_content",
-            messageId: reasoningMessageId,
-            delta: chunk.deltaThinking,
-          });
-        }
-        if (chunk.deltaText) {
-          emitTextDelta(timePrefixFilter.push(chunk.deltaText));
-        }
-        if (chunk.usage) {
-          usage = {
-            input: Math.max(usage?.input ?? 0, chunk.usage.input),
-            output: Math.max(usage?.output ?? 0, chunk.usage.output),
-          };
-        }
-        if (chunk.done) break;
+      } else if (delta.type === "text_delta" && delta.delta) {
+        emitTextDelta(timePrefixFilter.push(delta.delta));
       }
+    };
+    try {
+      const response = await (options.streamChat ?? streamChatWithSdk)({
+        adapter: options.adapter,
+        request: effectiveRequest,
+        config: vendorConfig,
+        timeoutMs: remainingBudget(),
+        signal: options.signal,
+        onDelta,
+      });
       emitTextDelta(timePrefixFilter.finish());
       if (!text.trim()) {
+        if (response.text.trim()) return { response, needsReveal: true };
         throw new AgentRuntimeError("E_MODEL_RESPONSE_PARSE_FAILED", "模型流式响应没有返回可见文本");
       }
-      return { text, usage };
+      return {
+        response: {
+          ...response,
+          text,
+          assistantMessage: { ...response.assistantMessage, content: text },
+        },
+        needsReveal: false,
+      };
     } catch (error) {
-      if (emittedStreamContent) throw error;
-      if (error instanceof StreamUnavailableError) throw error;
-      if (options.signal?.aborted) throw error;
+      if (!emittedStreamContent && isExplicitStreamUnsupported(error)) {
+        throw new StreamUnavailableError("流式请求不受支持", { cause: error });
+      }
       throw error;
-    } finally {
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", abort);
     }
   };
 
   const invokeWithStreamFallback = async (messages: ChatMessage[]) => {
     try {
-      const streamed = await invokeStreaming(messages);
-      if (streamed.nonStreamingResponse) {
-        return { response: streamed.nonStreamingResponse, needsReveal: true };
-      }
-      return {
-        response: {
-          assistantMessage: { role: "assistant" as const, content: streamed.text },
-          text: streamed.text,
-          toolCalls: [],
-          finishReason: "stop",
-          raw: null,
-          usage: streamed.usage,
-        } satisfies ChatResponse,
-        needsReveal: false,
-      };
+      return await invokeStreaming(messages);
     } catch (error) {
       if (!(error instanceof StreamUnavailableError) || emittedStreamContent) throw error;
       return { response: await invokeNonStreaming(messages), needsReveal: true };

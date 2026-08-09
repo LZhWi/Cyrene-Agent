@@ -10,6 +10,10 @@ import {
   normalizeCodeVerificationInteraction,
   normalizeChoiceInteraction,
   normalizeTaskPlanPresentation,
+  isFormalAnswerCommitted,
+  resolveRunFinishedStage,
+  resolveTerminalContent,
+  shouldClearComposerInteractionForTerminal,
   shouldDismissAsk,
   type AgentRunStage,
   type ComposerInteraction,
@@ -20,7 +24,7 @@ import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "..
 import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
 import { ConversationSidebar } from "../components/ConversationSidebar";
 import { StatusFloat } from "../components/StatusFloat";
-import type { ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
+import type { ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import { SidebarToggle } from "../../../components/ui/SidebarToggle";
 import { ModeSwitch } from "../../../components/ui/ModeSwitch";
 import { CharacterStatusPill } from "../../../components/ui/CharacterStatusPill";
@@ -44,6 +48,18 @@ import {
   type OpenSessionArgs,
   type ReactSessionMode,
 } from "./openSessionByDeps";
+import { RunEventGate } from "./run-event-gate";
+import { splitTextForReveal } from "./message-reveal";
+import {
+  clearSessionInteraction,
+  findSessionIdForRun,
+  hydrateSessionMessages,
+  patchSessionMessage,
+  sessionInteraction,
+  setSessionInteraction,
+  setSessionInteractionBusy,
+  type SessionInteractionState,
+} from "./session-runtime-state";
 import "../../../components/ui/SidebarToggle.css";
 import "../../../components/ui/ModeSwitch.css";
 import "../../../components/ui/CharacterStatusPill.css";
@@ -238,6 +254,7 @@ interface AguiEvent {
 }
 
 interface AguiApi {
+  // Task 2 / C1：返回 AguiRunAck（含 canonical runId），与 RUN_STARTED.runId 强一致。
   run: (input: {
     messages: Array<{ role: "user" | "model"; content: string; at?: number }>;
     userTurnId: string;
@@ -245,7 +262,7 @@ interface AguiApi {
     styleId?: string;
     sessionId: string;
     imageAttachments?: Array<{ name: string; filePath: string; mime?: string }>;
-  }) => Promise<{ success: boolean; error?: string }>;
+  }) => Promise<{ success: boolean; runId: string; error?: string }>;
   onEvent: (callback: (event: AguiEvent) => void) => () => void;
   cancel: (runId?: string) => Promise<unknown>;
 }
@@ -256,6 +273,7 @@ interface ChoiceApi {
 
 interface PermissionApprovalRequest {
   id: string;
+  runId?: string;
   toolId: string;
   toolName: string;
   toolDescription: string;
@@ -332,10 +350,11 @@ function toUiMessages(session: ChatSession): ChatMessageItem[] {
     content: message.content,
     reasoning: message.reasoning,
     reasoningBlocks: message.reasoningBlocks,
+    processMessages: message.processMessages,
     runActivity: message.runActivity,
     ttsCacheKey: message.ttsCacheKey,
     ttsCacheVersion: message.ttsCacheVersion,
-    responseStarted: message.role === "model",
+    responseStarted: message.role === "model" && Boolean(message.content.trim() || message.sticker),
     sticker: message.sticker,
     toolExecutions: message.toolExecutions,
     attachments: message.attachments,
@@ -371,7 +390,7 @@ export function ChatPage() {
   const [collapsed, setCollapsed] = useState(false);
   const [mode, setMode] = useState<ConversationMode>(getInitialMode);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
-  const [messagesByMode, setMessagesByMode] = useState<Partial<Record<ConversationMode, ChatMessageItem[]>>>({});
+  const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessageItem[]>>({});
   const [workspaceNames, setWorkspaceNames] = useState<Partial<Record<ConversationMode, string>>>({});
   const [attachmentsByScope, setAttachmentsByScope] = useState<Record<string, ComposerAttachment[]>>({});
   const [sessionsByMode, setSessionsByMode] = useState<Partial<Record<ConversationMode, ChatSessionMeta[]>>>({});
@@ -379,8 +398,7 @@ export function ChatPage() {
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [modelBusyByMode, setModelBusyByMode] = useState<Partial<Record<ConversationMode, boolean>>>({});
   const [isCompressingContext, setIsCompressingContext] = useState(false);
-  const [composerInteraction, setComposerInteraction] = useState<ComposerInteraction>();
-  const [interactionBusy, setInteractionBusy] = useState(false);
+  const [interactionsBySession, setInteractionsBySession] = useState<SessionInteractionState>({});
   const [lastTurnRevisionStarting, setLastTurnRevisionStarting] = useState(false);
   const [modelName, setModelName] = useState("模型未连接");
   const [modelDisplayName, setModelDisplayName] = useState("");
@@ -441,13 +459,15 @@ export function ChatPage() {
     const settings = settingsApprovalApi();
     if (!settings) return;
     return settings.onPermissionApprovalRequest((request) => {
-      setInteractionBusy(false);
-      setComposerInteraction(permissionInteraction(request));
       const currentMode = activeModeRef.current;
       const currentSessionId = activeSessionIdsRef.current[currentMode];
-      const activeRun = currentSessionId ? activeRunsBySessionRef.current[currentSessionId] : undefined;
+      const ownerSessionId = findSessionIdForRun(activeRunsBySessionRef.current, request.runId)
+        ?? currentSessionId;
+      if (!ownerSessionId) return;
+      setInteractionForSession(ownerSessionId, permissionInteraction(request));
+      const activeRun = activeRunsBySessionRef.current[ownerSessionId];
       if (activeRun) {
-        updateMessage(currentMode, activeRun.assistantId, { runStage: { kind: "waiting_permission" } });
+        updateMessage(ownerSessionId, activeRun.assistantId, { runStage: { kind: "waiting_permission" } });
       }
     });
   }, []);
@@ -473,8 +493,9 @@ export function ChatPage() {
   }, []);
   const modelBusyByModeRef = useRef<Partial<Record<ConversationMode, boolean>>>({});
   const lastTurnRevisionStartingRef = useRef(false);
-  const activeAguiOffRef = useRef<(() => void) | null>(null);
+  const activeAguiOffsRef = useRef(new Set<() => void>());
   const activeRunsBySessionRef = useRef(activeRunsBySession);
+  const cancelRequestedSessionsRef = useRef(new Set<string>());
   const [pendingQueueBySession, setPendingQueueBySession] = useState<Record<string, { id: string; rawContent: string; visibleContent: string; attachments: ComposerAttachment[]; userSticker?: string }[]>>({});
   const pendingQueueBySessionRef = useRef(pendingQueueBySession);
   useEffect(() => {
@@ -491,7 +512,10 @@ export function ChatPage() {
   const activeSessionId = activeSessionIds[mode];
   const scopeKey = activeSessionId ?? `mode:${mode}`;
   const draft = drafts[scopeKey] ?? "";
-  const messages = messagesByMode[mode] ?? [];
+  const messages = activeSessionId ? (messagesBySession[activeSessionId] ?? []) : [];
+  const activeInteraction = sessionInteraction(interactionsBySession, activeSessionId);
+  const composerInteraction = activeInteraction?.interaction;
+  const interactionBusy = activeInteraction?.busy ?? false;
   const hasMessages = messages.length > 0;
   const attachments = attachmentsByScope[scopeKey] ?? [];
   const sessions = sessionsByMode[mode] ?? [];
@@ -515,8 +539,8 @@ export function ChatPage() {
       window.clearInterval(timer);
     }
     demoTimers.current.clear();
-    activeAguiOffRef.current?.();
-    activeAguiOffRef.current = null;
+    for (const off of activeAguiOffsRef.current) off();
+    activeAguiOffsRef.current.clear();
     activeEarlyTtsRef.current?.queue.cancel();
     activeEarlyTtsRef.current = null;
     for (const url of localPreviewUrlsRef.current) URL.revokeObjectURL(url);
@@ -586,7 +610,10 @@ export function ChatPage() {
         const urlSessionId = new URLSearchParams(window.location.search).get("sessionId");
         if (urlSessionId) {
           const opened = await openSessionById(urlSessionId);
-          if (!opened) {
+          if (opened) {
+            // 会话打开成功仍需填充左侧会话列表，但不重复 select
+            await refreshSessionsRef.current(activeModeRef.current, false);
+          } else {
             await refreshSessionsRef.current(activeModeRef.current, true);
           }
         } else {
@@ -622,13 +649,26 @@ export function ChatPage() {
     }
   }, [activeSessionId, mode]);
 
-  function updateMessage(targetMode: ConversationMode, id: string, patch: Partial<ChatMessageItem>) {
-    setMessagesByMode((current) => ({
-      ...current,
-      [targetMode]: (current[targetMode] ?? []).map((item) => (
-        item.id === id ? { ...item, ...patch } : item
-      )),
-    }));
+  function setInteractionForSession(sessionId: string, interaction: ComposerInteraction): void {
+    setInteractionsBySession((current) => setSessionInteraction(current, sessionId, interaction));
+  }
+
+  function clearInteractionForSession(sessionId: string): void {
+    setInteractionsBySession((current) => clearSessionInteraction(current, sessionId));
+  }
+
+  function setInteractionBusyForSession(sessionId: string, busy: boolean): void {
+    setInteractionsBySession((current) => setSessionInteractionBusy(current, sessionId, busy));
+  }
+
+  function updateMessage(targetScope: ConversationMode | string, id: string, patch: Partial<ChatMessageItem>) {
+    setMessagesBySession((current) => {
+      const ownerSessionId = isConversationMode(targetScope)
+        ? Object.entries(current).find(([, items]) => items.some((item) => item.id === id))?.[0]
+          ?? activeSessionIdsRef.current[targetScope]
+        : targetScope;
+      return ownerSessionId ? patchSessionMessage(current, ownerSessionId, id, patch) : current;
+    });
   }
 
   function handleTtsCacheKey(
@@ -638,7 +678,7 @@ export function ChatPage() {
     cacheKey: string,
     converterVersion: string,
   ) {
-    updateMessage(targetMode, messageId, { ttsCacheKey: cacheKey, ttsCacheVersion: converterVersion });
+    updateMessage(sessionId, messageId, { ttsCacheKey: cacheKey, ttsCacheVersion: converterVersion });
     void chatStore()?.setMessageTtsCacheKey(sessionId, messageId, cacheKey, converterVersion);
   }
 
@@ -712,18 +752,24 @@ export function ChatPage() {
           }
           const verificationInteraction = normalizeCodeVerificationInteraction(restored.approval);
           if (verificationInteraction) {
-            setComposerInteraction(verificationInteraction);
+            setInteractionForSession(sessionId, verificationInteraction);
           } else {
             const pendingAsks = await api.getPendingAsks(sessionId);
             const askInteraction = normalizeCodeAskInteraction(pendingAsks[0]);
-            setComposerInteraction(askInteraction);
+            if (askInteraction) setInteractionForSession(sessionId, askInteraction);
+            else clearInteractionForSession(sessionId);
           }
         } catch (error) {
           console.warn("[Cyrene React] 恢复 Code 运行状态失败:", error);
         }
       }
     }
-    setMessagesByMode((current) => ({ ...current, [targetMode]: uiMessages }));
+    setMessagesBySession((current) => hydrateSessionMessages(
+      current,
+      sessionId,
+      uiMessages,
+      Boolean(activeRunsBySessionRef.current[sessionId]),
+    ));
     setWorkspaceNames((current) => ({
       ...current,
       [targetMode]: session.workspaceBinding?.displayName,
@@ -794,7 +840,6 @@ export function ChatPage() {
       activeSessionIdsRef.current = next;
       return next;
     });
-    setMessagesByMode((current) => ({ ...current, [targetMode]: [] }));
     setWorkspaceNames((current) => ({ ...current, [targetMode]: undefined }));
     if (targetMode === activeModeRef.current) void store.setActiveSession(null);
   }
@@ -879,8 +924,15 @@ export function ChatPage() {
     setModelBusyByMode((current) => ({ ...current, [input.targetMode]: true }));
     const earlyTtsQueue = createEarlyTtsQueue(input.targetMode, input.sessionId, input.assistantId);
     let streamContent = "";
+    // Task 3 / C2：RUN_FINISHED.result.status，用于区分 success / cancelled / timeout / runtime_error
+    let terminalStatus: string | undefined;
     let reasoningContent = "";
     let reasoningBlocks: ReasoningBlock[] = [];
+    let processMessages: ProcessMessageRecord[] = [];
+    let processMessageSequence = 0;
+    let finalMessageCompleted = false;
+    let revealCancelled = false;
+    let revealChain: Promise<void> = Promise.resolve();
     let sticker: string | null = null;
     let toolExecutions: ToolExecutionRecord[] = [];
     let runStarted = false;
@@ -899,6 +951,19 @@ export function ChatPage() {
         : toolExecutions.map((tool, toolIndex) => toolIndex === index ? { ...tool, ...patch } : tool);
       updateMessage(input.targetMode, input.assistantId, { toolExecutions });
     };
+    const enqueuePublicTextReveal = (content: string, publish: (chunk: string) => void) => {
+      if (input.targetMode === "chat") {
+        publish(content);
+        return;
+      }
+      revealChain = revealChain.then(async () => {
+        for (const chunk of splitTextForReveal(content)) {
+          if (revealCancelled) break;
+          publish(chunk);
+          await new Promise<void>((resolve) => window.setTimeout(resolve, 14));
+        }
+      });
+    };
     const publishRunActivity = () => {
       if (!runActivity) return;
       updateMessage(input.targetMode, input.assistantId, { runActivity: { ...runActivity } });
@@ -915,7 +980,7 @@ export function ChatPage() {
         activeReasoningStartedAt: starts.length ? Math.min(...starts) : undefined,
       };
     };
-    const completeRunActivity = () => {
+    const completeRunActivity = (keepExpanded = false) => {
       if (!runActivity || runActivity.completedAt === undefined) {
         const completedAt = Date.now();
         for (const startedAt of activeReasoningStarts.values()) {
@@ -929,6 +994,7 @@ export function ChatPage() {
           ...(runActivity ?? { startedAt: completedAt, reasoningMs: 0 }),
           completedAt,
           activeReasoningStartedAt: undefined,
+          keepExpanded,
         };
         publishRunActivity();
       }
@@ -945,18 +1011,27 @@ export function ChatPage() {
       updateMessage(input.targetMode, input.assistantId, { reasoning: reasoningContent || undefined, reasoningBlocks });
     };
 
-    const off = api.onEvent((event) => {
+    const handleEvent = (event: AguiEvent) => {
       if (event.type === "RUN_STARTED") {
         runStarted = true;
         runActivity = { startedAt: Date.now(), reasoningMs: 0 };
         setIsCompressingContext(false);
         if (event.runId) {
+          // Task 2 / C1：RUN_STARTED.runId 必须与 ack.runId 一致（由 bridge 注入 options.runId 保证）。
+          // 不一致时只 warn 不重写，避免渲染端拿到错误 runId 后无法 cancel。
           const existing = activeRunsBySession.current[input.sessionId];
-          activeRunsBySession.current = {
-            ...activeRunsBySession.current,
-            [input.sessionId]: { ...(existing ?? { assistantId: input.assistantId, mode: input.targetMode }), runId: event.runId },
-          };
-          activeRunsBySessionRef.current = activeRunsBySession;
+          if (existing?.runId && existing.runId !== event.runId) {
+            console.warn(
+              `[ChatPage] RUN_STARTED.runId (${event.runId}) 与 ack.runId (${existing.runId}) 不一致，` +
+              `请检查 bridge 是否正确注入 options.runId。保留 ack.runId 作为权威值。`,
+            );
+          } else {
+            activeRunsBySession.current = {
+              ...activeRunsBySession.current,
+              [input.sessionId]: { ...(existing ?? { assistantId: input.assistantId, mode: input.targetMode }), runId: event.runId },
+            };
+            activeRunsBySessionRef.current = activeRunsBySession;
+          }
         }
         if (input.targetMode === "code" && event.runId) {
           codeRunViewModel = {
@@ -1057,31 +1132,72 @@ export function ChatPage() {
           runStage: { kind: "responding" },
         });
       } else if (event.type === "TEXT_MESSAGE_CONTENT" && event.delta) {
-        streamContent += event.delta;
-        earlyTtsQueue.append(event.delta);
-        updateMessage(input.targetMode, input.assistantId, {
-          content: streamContent,
-          loading: false,
-          streaming: true,
-          responseStarted: true,
+        enqueuePublicTextReveal(event.delta, (chunk) => {
+          streamContent += chunk;
+          earlyTtsQueue.append(chunk);
+          updateMessage(input.targetMode, input.assistantId, {
+            content: streamContent,
+            loading: false,
+            streaming: true,
+            responseStarted: true,
+          });
         });
       } else if (event.type === "TEXT_MESSAGE_END") {
-        updateMessage(input.targetMode, input.assistantId, { streaming: false });
+        revealChain = revealChain.then(() => {
+          finalMessageCompleted = true;
+          updateMessage(input.targetMode, input.assistantId, { streaming: false });
+        });
+      } else if (event.type === "CUSTOM" && event.name === "cyrene.process_text") {
+        const content = (event.value as { content?: unknown } | null | undefined)?.content;
+        if (typeof content === "string" && content.trim()) {
+          const processId = `process-${processMessageSequence++}`;
+          processMessages = [...processMessages, {
+            id: processId,
+            content: "",
+            afterToolCount: toolExecutions.length,
+          }];
+          updateMessage(input.targetMode, input.assistantId, { processMessages });
+          enqueuePublicTextReveal(content, (chunk) => {
+            processMessages = processMessages.map((message) => message.id === processId
+              ? { ...message, content: message.content + chunk }
+              : message);
+            updateMessage(input.targetMode, input.assistantId, { processMessages });
+          });
+        }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.choice") {
         const interaction = normalizeChoiceInteraction(event.value);
         if (interaction) {
-          setInteractionBusy(false);
-          setComposerInteraction(interaction);
+          setInteractionForSession(input.sessionId, interaction);
           updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "waiting_user" } });
         }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.choice.dismiss") {
-        setComposerInteraction((current) => {
-          if (current?.kind !== "ask" || !shouldDismissAsk(current, event.value)) return current;
-          return undefined;
+        setInteractionsBySession((current) => {
+          const interaction = sessionInteraction(current, input.sessionId)?.interaction;
+          if (interaction?.kind !== "ask" || !shouldDismissAsk(interaction, event.value)) return current;
+          return clearSessionInteraction(current, input.sessionId);
         });
       } else if (event.type === "CUSTOM" && event.name === "cyrene.taskPlan") {
         const taskPlan = normalizeTaskPlanPresentation(event.value);
         if (taskPlan) {
+          updateMessage(input.targetMode, input.assistantId, {
+            taskPlan,
+            runStage: { kind: "executing" },
+          });
+        }
+      } else if (event.type === "CUSTOM" && event.name === "cyrene.todo") {
+        // v3: CyreneHarness 的 todo 事件（单数），payload 为 { items: TodoItem[] }
+        const items = (event.value as { items?: Array<{ id: string; content: string; status: string }> } | null | undefined)?.items;
+        if (Array.isArray(items)) {
+          const taskPlan = {
+            steps: items.map((item) => ({
+              id: item.id,
+              title: item.content,
+              status: item.status === "in_progress" ? "running" as const
+                    : item.status === "completed" ? "completed" as const
+                    : item.status === "cancelled" ? "failed" as const
+                    : "pending" as const,
+            })),
+          };
           updateMessage(input.targetMode, input.assistantId, {
             taskPlan,
             runStage: { kind: "executing" },
@@ -1100,8 +1216,7 @@ export function ChatPage() {
       } else if (event.type === "CUSTOM" && event.name === "code_ask") {
         const interaction = normalizeCodeAskInteraction(event.value);
         if (interaction) {
-          setInteractionBusy(false);
-          setComposerInteraction(interaction);
+          setInteractionForSession(input.sessionId, interaction);
           updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "waiting_user" } });
         }
       } else if (event.type === "CUSTOM" && (
@@ -1116,31 +1231,47 @@ export function ChatPage() {
         if (event.name === "code_verification_approval") {
           const interaction = normalizeCodeVerificationInteraction(codeRunViewModel.approval);
           if (interaction) {
-            setInteractionBusy(false);
-            setComposerInteraction(interaction);
+            setInteractionForSession(input.sessionId, interaction);
             updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "waiting_permission" } });
           } else {
-            setComposerInteraction((current) => (
-              current?.kind === "permission"
-              && current.source === "code_verification"
-              && current.id === codeRunViewModel.approval?.approvalId
-                ? undefined
-                : current
-            ));
+            setInteractionsBySession((current) => {
+              const interaction = sessionInteraction(current, input.sessionId)?.interaction;
+              return interaction?.kind === "permission"
+                && interaction.source === "code_verification"
+                && interaction.id === codeRunViewModel.approval?.approvalId
+                ? clearSessionInteraction(current, input.sessionId)
+                : current;
+            });
           }
         }
       } else if (event.type === "RUN_FINISHED") {
-        completeRunActivity();
-        updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "completed" } });
+        // Task 3 / C2：读取 result.status 区分终态（success / cancelled / timeout / runtime_error）
+        const result = (event as { result?: { status?: string } }).result;
+        terminalStatus = result?.status;
+        if (terminalStatus !== "success") revealCancelled = true;
+        const stage = resolveRunFinishedStage(result);
+        updateMessage(input.targetMode, input.assistantId, { runStage: stage });
+        const activeRunId = activeRunsBySession.current[input.sessionId]?.runId;
+        if (shouldClearComposerInteractionForTerminal(activeRunId, event.runId)) {
+          clearInteractionForSession(input.sessionId);
+        }
         resolveTerminal();
       } else if (event.type === "RUN_ERROR") {
-        completeRunActivity();
+        revealCancelled = true;
+        completeRunActivity(true);
         updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "failed" } });
+        const activeRunId = activeRunsBySession.current[input.sessionId]?.runId;
+        if (shouldClearComposerInteractionForTerminal(activeRunId, event.runId)) {
+          clearInteractionForSession(input.sessionId);
+        }
         resolveTerminal(new Error(event.message ?? event.error ?? event.content ?? "模型请求失败"));
       }
+    };
+    const eventGate = new RunEventGate<AguiEvent>();
+    const off = api.onEvent((event) => {
+      for (const accepted of eventGate.accept(event)) handleEvent(accepted);
     });
-    activeAguiOffRef.current?.();
-    activeAguiOffRef.current = off;
+    activeAguiOffsRef.current.add(off);
 
     try {
       const general = await window.chat?.getGeneralSettings?.();
@@ -1163,10 +1294,33 @@ export function ChatPage() {
           })),
       });
       if (!ack.success) throw new Error(ack.error ?? "模型请求发起失败");
+      // Task 2 / C1：立即把 ack.runId 写入 activeRunsBySession，
+      // 让 cancel 在 RUN_STARTED 事件到达前也能找到正确的 runId。
+      // RUN_STARTED.runId 必须与 ack.runId 一致（由 bridge 注入 options.runId 保证）。
+      if (ack.runId) {
+        const existing = activeRunsBySession.current[input.sessionId];
+        activeRunsBySession.current = {
+          ...activeRunsBySession.current,
+          [input.sessionId]: {
+            ...(existing ?? { assistantId: input.assistantId, mode: input.targetMode }),
+            runId: ack.runId,
+          },
+        };
+        activeRunsBySessionRef.current = activeRunsBySession;
+        for (const accepted of eventGate.bind(ack.runId)) handleEvent(accepted);
+        if (cancelRequestedSessionsRef.current.delete(input.sessionId)) {
+          await api.cancel(ack.runId);
+        }
+      }
       const terminalError = await terminal;
       if (terminalError) throw terminalError;
+      await revealChain;
 
-      const finalContent = streamContent.trim() ? streamContent : "任务已完成。";
+      // 只有 success + 完整 TEXT_MESSAGE_END + 非空正文才提交正式回答。
+      // cancelled / timeout / runtime_error 与半截流都只保留在展开的过程区。
+      const formalAnswerCommitted = isFormalAnswerCommitted(streamContent, terminalStatus, finalMessageCompleted);
+      completeRunActivity(!formalAnswerCommitted);
+      const finalContent = formalAnswerCommitted ? resolveTerminalContent(streamContent, terminalStatus) : "";
       updateMessage(input.targetMode, input.assistantId, {
         content: finalContent,
         loading: false,
@@ -1174,9 +1328,10 @@ export function ChatPage() {
         streaming: false,
         reasoning: reasoningContent || undefined,
         reasoningBlocks,
+        processMessages,
         reasoningStreaming: false,
         runActivity,
-        responseStarted: true,
+        responseStarted: formalAnswerCommitted,
         sticker,
         toolExecutions,
       });
@@ -1186,39 +1341,48 @@ export function ChatPage() {
         content: finalContent,
         reasoning: reasoningContent || undefined,
         reasoningBlocks,
+        processMessages,
         runActivity,
         at: Date.now(),
         sticker,
         toolExecutions,
       });
-      if (savedAssistant) {
+      if (savedAssistant && formalAnswerCommitted) {
         finishEarlyTtsQueue(earlyTtsQueue, finalContent);
       } else earlyTtsQueue.cancel();
     } catch (error) {
       earlyTtsQueue.cancel();
-      completeRunActivity();
+      completeRunActivity(true);
       const errorMessage = error instanceof Error ? error.message : String(error);
       const visibleError = `模型请求失败：${errorMessage}`;
-      updateMessage(input.targetMode, input.assistantId, {
+      processMessages = [...processMessages, {
+        id: `process-${processMessageSequence++}`,
         content: visibleError,
+        afterToolCount: toolExecutions.length,
+      }];
+      updateMessage(input.targetMode, input.assistantId, {
+        content: "",
+        processMessages,
         loading: false,
         waitingForFirstEvent: false,
         streaming: false,
         reasoningStreaming: false,
         runActivity,
-        responseStarted: true,
+        responseStarted: false,
       });
       await store.append(input.sessionId, {
         id: input.assistantId,
         role: "model",
-        content: visibleError,
+        content: "",
+        processMessages,
         runActivity,
         at: Date.now(),
       });
     } finally {
       off();
-      if (activeAguiOffRef.current === off) activeAguiOffRef.current = null;
+      activeAguiOffsRef.current.delete(off);
       const currentActive = activeRunsBySession.current[input.sessionId];
+      cancelRequestedSessionsRef.current.delete(input.sessionId);
       if (currentActive?.assistantId === input.assistantId) {
         const nextActive = { ...activeRunsBySession.current };
         delete nextActive[input.sessionId];
@@ -1303,9 +1467,9 @@ export function ChatPage() {
       activeEarlyTtsRef.current = null;
       stopTtsPlayback();
       const assistantId = crypto.randomUUID();
-      setMessagesByMode((current) => ({
+      setMessagesBySession((current) => ({
         ...current,
-        chat: [
+        [sessionId]: [
           ...toUiMessages(truncatedSession),
           {
             id: assistantId,
@@ -1337,7 +1501,8 @@ export function ChatPage() {
   }
 
   async function editLastChatUserMessage(messageId: string, content: string): Promise<boolean> {
-    const lastTurn = resolveRevisableLastTurn(messagesByMode.chat ?? [], "chat");
+    const sessionId = activeSessionIdsRef.current.chat;
+    const lastTurn = resolveRevisableLastTurn(sessionId ? (messagesBySession[sessionId] ?? []) : [], "chat");
     if (!lastTurn || lastTurn.userMessageId !== messageId) return false;
     return restartLastChatTurn(lastTurn.userMessageId, lastTurn.assistantMessageId, content);
   }
@@ -1545,13 +1710,13 @@ export function ChatPage() {
   }
 
   function updateMessageAttachments(
-    targetMode: ConversationMode,
+    sessionId: string,
     messageId: string,
     updater: (attachments: ComposerAttachment[]) => ComposerAttachment[],
   ) {
-    setMessagesByMode((current) => ({
+    setMessagesBySession((current) => ({
       ...current,
-      [targetMode]: (current[targetMode] ?? []).map((item) => (
+      [sessionId]: (current[sessionId] ?? []).map((item) => (
         item.id === messageId
           ? { ...item, attachments: updater(item.attachments ?? []) }
           : item
@@ -1560,7 +1725,7 @@ export function ChatPage() {
   }
 
   async function prepareImageAttachments(
-    targetMode: ConversationMode,
+    sessionId: string,
     messageId: string,
     attachments: ComposerAttachment[],
   ) {
@@ -1576,7 +1741,7 @@ export function ChatPage() {
 
     if (strategy.mode === "direct") {
       const paths = new Set(images.map((image) => image.filePath));
-      updateMessageAttachments(targetMode, messageId, (current) => current.map((attachment) => (
+      updateMessageAttachments(sessionId, messageId, (current) => current.map((attachment) => (
         paths.has(attachment.filePath)
           ? { ...attachment, imageSendMode: "direct", status: "done" }
           : attachment
@@ -1585,7 +1750,7 @@ export function ChatPage() {
     }
 
     for (const image of images) {
-      updateMessageAttachments(targetMode, messageId, (current) => current.map((attachment) => (
+      updateMessageAttachments(sessionId, messageId, (current) => current.map((attachment) => (
         attachment.filePath === image.filePath
           ? { ...attachment, imageSendMode: "caption", status: "processing" }
           : attachment
@@ -1596,7 +1761,7 @@ export function ChatPage() {
       } catch (error) {
         result = { ok: false, error: error instanceof Error ? error.message : String(error) };
       }
-      updateMessageAttachments(targetMode, messageId, (current) => current.map((attachment) => (
+      updateMessageAttachments(sessionId, messageId, (current) => current.map((attachment) => (
         attachment.filePath === image.filePath
           ? result.ok && result.caption
             ? { ...attachment, imageSendMode: "caption", status: "done", caption: result.caption, reason: undefined }
@@ -1707,10 +1872,10 @@ export function ChatPage() {
     userMessageId: string;
   }) {
     const { targetMode, sessionId, rawContent, visibleContent, attachments, userSticker, shouldRunModel, demoResponse, demoSticker, assistantId, userMessageId } = input;
-    setMessagesByMode((current) => ({
+    setMessagesBySession((current) => ({
       ...current,
-      [targetMode]: [
-        ...(current[targetMode] ?? []),
+      [sessionId]: [
+        ...(current[sessionId] ?? []),
         {
           id: userMessageId,
           role: "user",
@@ -1756,7 +1921,7 @@ export function ChatPage() {
     });
     void refreshSessions(targetMode, false);
     if (attachments.length > 0) {
-      void prepareImageAttachments(targetMode, userMessageId, attachments);
+      void prepareImageAttachments(sessionId, userMessageId, attachments);
     }
     if (demoResponse && assistantId) streamDemoResponse(targetMode, assistantId, demoResponse, sessionId);
     if (shouldRunModel && assistantId && !updatedSession) {
@@ -1783,13 +1948,17 @@ export function ChatPage() {
     const sessionId = activeSessionId;
     if (!sessionId) return;
     const activeRun = activeRunsBySession.current[sessionId];
-    if (!activeRun?.runId) return;
+    if (!activeRun) return;
     updateMessage(activeRun.mode, activeRun.assistantId, {
       streaming: false,
       loading: false,
       waitingForFirstEvent: false,
-      responseStarted: true,
+      responseStarted: false,
     });
+    if (!activeRun.runId) {
+      cancelRequestedSessionsRef.current.add(sessionId);
+      return;
+    }
     await aguiApi()?.cancel(activeRun.runId);
   }
 
@@ -1964,62 +2133,65 @@ export function ChatPage() {
             interaction={composerInteraction}
             interactionBusy={interactionBusy}
             onAnswer={(id, answer) => {
+              if (!activeSessionId) return;
               if (composerInteraction?.kind === "ask" && composerInteraction.source === "code") {
                 const api = codeRunApi();
                 if (!api || typeof answer !== "string" || !answer.trim()) return;
-                setInteractionBusy(true);
+                setInteractionBusyForSession(activeSessionId, true);
                 void api.respondAsk(id, answer).then((result) => {
-                  if (result.ok) setComposerInteraction(undefined);
-                  setInteractionBusy(false);
-                }).catch(() => setInteractionBusy(false));
+                  if (result.ok) clearInteractionForSession(activeSessionId);
+                  setInteractionBusyForSession(activeSessionId, false);
+                }).catch(() => setInteractionBusyForSession(activeSessionId, false));
                 return;
               }
               const choice = choiceApi();
               if (!choice) return;
-              setInteractionBusy(true);
+              setInteractionBusyForSession(activeSessionId, true);
               void choice.resolve(id, answer).then((result) => {
-                if (result.ok) setComposerInteraction(undefined);
-                setInteractionBusy(false);
-              }).catch(() => setInteractionBusy(false));
+                if (result.ok) clearInteractionForSession(activeSessionId);
+                setInteractionBusyForSession(activeSessionId, false);
+              }).catch(() => setInteractionBusyForSession(activeSessionId, false));
             }}
             onIgnore={(id) => {
+              if (!activeSessionId) return;
               if (composerInteraction?.kind === "ask" && composerInteraction.source === "code") {
                 const api = codeRunApi();
                 if (!api) return;
-                setInteractionBusy(true);
+                setInteractionBusyForSession(activeSessionId, true);
                 void api.cancelAsk(id).then((result) => {
-                  if (result.ok) setComposerInteraction(undefined);
-                  setInteractionBusy(false);
-                }).catch(() => setInteractionBusy(false));
+                  if (result.ok) clearInteractionForSession(activeSessionId);
+                  setInteractionBusyForSession(activeSessionId, false);
+                }).catch(() => setInteractionBusyForSession(activeSessionId, false));
                 return;
               }
               const choice = choiceApi();
               if (!choice) return;
-              setInteractionBusy(true);
+              setInteractionBusyForSession(activeSessionId, true);
               void choice.resolve(id, "").then((result) => {
-                if (result.ok) setComposerInteraction(undefined);
-                setInteractionBusy(false);
-              }).catch(() => setInteractionBusy(false));
+                if (result.ok) clearInteractionForSession(activeSessionId);
+                setInteractionBusyForSession(activeSessionId, false);
+              }).catch(() => setInteractionBusyForSession(activeSessionId, false));
             }}
             onPermissionDecision={(id, allowed) => {
+              if (!activeSessionId) return;
               if (composerInteraction?.kind === "permission" && composerInteraction.source === "code_verification") {
                 const api = codeRunApi();
                 if (!api) return;
-                setInteractionBusy(true);
+                setInteractionBusyForSession(activeSessionId, true);
                 const request = allowed ? api.approveVerification(id) : api.rejectVerification(id);
                 void request.then((result) => {
-                  if (result.ok) setComposerInteraction(undefined);
-                  setInteractionBusy(false);
-                }).catch(() => setInteractionBusy(false));
+                  if (result.ok) clearInteractionForSession(activeSessionId);
+                  setInteractionBusyForSession(activeSessionId, false);
+                }).catch(() => setInteractionBusyForSession(activeSessionId, false));
                 return;
               }
               const settings = settingsApprovalApi();
               if (!settings) return;
-              setInteractionBusy(true);
+              setInteractionBusyForSession(activeSessionId, true);
               void settings.resolvePermissionApproval(id, allowed).then((result) => {
-                if (result.ok) setComposerInteraction(undefined);
-                setInteractionBusy(false);
-              }).catch(() => setInteractionBusy(false));
+                if (result.ok) clearInteractionForSession(activeSessionId);
+                setInteractionBusyForSession(activeSessionId, false);
+              }).catch(() => setInteractionBusyForSession(activeSessionId, false));
             }}
           />
         </div>
