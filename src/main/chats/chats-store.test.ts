@@ -40,6 +40,38 @@ describe("chats store", () => {
     expect(page?.session.messageCount).toBe(3);
   });
 
+  it("upserts a run checkpoint by message id without disturbing conversation order", async () => {
+    const store = await import("./chats-store");
+    store.initialize();
+    const session = store.createSession({
+      initialMessages: [
+        { id: "user-1", role: "user", content: "开始", at: 1 },
+        { id: "assistant-1", role: "model", content: "", at: 2 },
+        { id: "user-2", role: "user", content: "排队消息", at: 3 },
+      ],
+    });
+
+    store.upsertMessage(session.id, {
+      id: "assistant-1",
+      role: "model",
+      content: "处理中",
+      at: 2,
+    });
+    store.upsertMessage(session.id, {
+      id: "assistant-2",
+      role: "model",
+      content: "新回复",
+      at: 4,
+    });
+
+    const updated = store.getSession(session.id);
+    expect(updated?.messages.map((message) => message.id)).toEqual([
+      "user-1", "assistant-1", "user-2", "assistant-2",
+    ]);
+    expect(updated?.messages[1].content).toBe("处理中");
+    expect(store.listSessions().find((item) => item.id === session.id)?.messageCount).toBe(4);
+  });
+
   it("includes the immutable session mode in every list item", async () => {
     const { createSession, initialize, listSessions } = await import("./chats-store");
     initialize();

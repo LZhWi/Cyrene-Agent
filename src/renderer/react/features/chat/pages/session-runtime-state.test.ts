@@ -8,6 +8,7 @@ import {
   hydrateSessionMessages,
   mergeHarnessTodosForSession,
   patchSessionMessage,
+  recoverInterruptedMessage,
   sessionInteraction,
   setSessionInteraction,
   startSessionTodos,
@@ -143,5 +144,30 @@ describe("session runtime presentation state", () => {
 
     expect(next["session-a"]).toEqual({ runId: "run-new", todos: [], updatedAt: 30 });
     expect(next["session-b"]).toBe(previous["session-b"]);
+  });
+
+  it("recovers a persisted non-terminal run as interrupted evidence", () => {
+    const recovered = recoverInterruptedMessage({
+      id: "assistant-a",
+      role: "assistant",
+      content: "半截过程",
+      streaming: true,
+      reasoningStreaming: true,
+      runActivity: { startedAt: 10, reasoningMs: 20 },
+    }, {
+      runId: "run-a",
+      status: "waiting_user",
+      todos: [{ id: "todo-1", content: "检查", status: "in_progress" }],
+      updatedAt: 100,
+    });
+
+    expect(recovered).toEqual(expect.objectContaining({
+      streaming: false,
+      reasoningStreaming: false,
+      loading: false,
+      waitingForFirstEvent: false,
+      runStage: { kind: "failed", detail: "上次运行已中断" },
+      runActivity: expect.objectContaining({ completedAt: 100, keepExpanded: true }),
+    }));
   });
 });

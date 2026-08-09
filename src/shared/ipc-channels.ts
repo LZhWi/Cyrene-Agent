@@ -102,6 +102,7 @@ export const IPC = {
   CHATS_GET_PAGE: "chats:get-page",
   CHATS_CREATE: "chats:create",
   CHATS_APPEND: "chats:append",
+  CHATS_UPSERT: "chats:upsert",
   CHATS_SET_MESSAGE_TTS_CACHE: "chats:set-message-tts-cache",
   CHATS_REPLACE_MESSAGES: "chats:replace-messages",
   CHATS_REPLACE_TAIL: "chats:replace-tail",

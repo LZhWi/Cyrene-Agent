@@ -357,6 +357,19 @@ export function appendMessage(id: string, message: ChatMessage): ChatSession | n
   return session;
 }
 
+export function upsertMessage(id: string, message: ChatMessage): ChatSession | null {
+  const session = readSessionFile(id);
+  if (!session) return null;
+  const index = session.messages.findIndex((item) => item.id === message.id);
+  if (index >= 0) session.messages[index] = message;
+  else session.messages.push(message);
+  session.updatedAt = Date.now();
+  if (!session.titleIsCustom) session.title = deriveTitle(session.messages);
+  writeSessionFile(session);
+  upsertMeta(metaFromSession(session));
+  return session;
+}
+
 /** 持久化 Code/Cline 的宿主会话元数据；Conversation mode 始终保持不变。 */
 export function updateCodeSession(
   sessionId: string,

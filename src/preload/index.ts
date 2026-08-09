@@ -506,6 +506,8 @@ const chatStoreApi = {
     ipcRenderer.invoke(IPC.CHATS_CREATE, payload ?? {}),
   append: (id: string, message: unknown) =>
     ipcRenderer.invoke(IPC.CHATS_APPEND, { id, message }),
+  upsert: (id: string, message: unknown) =>
+    ipcRenderer.invoke(IPC.CHATS_UPSERT, { id, message }),
   setMessageTtsCacheKey: (id: string, messageId: string, cacheKey: string, converterVersion: string) =>
     ipcRenderer.invoke(IPC.CHATS_SET_MESSAGE_TTS_CACHE, { id, messageId, cacheKey, converterVersion }),
   replaceMessages: (id: string, messages: unknown[]) =>

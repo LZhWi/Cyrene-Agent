@@ -75,6 +75,16 @@ export function registerChatsIpc(): void {
   );
 
   ipcMain.handle(
+    IPC.CHATS_UPSERT,
+    (event, payload: { id: string; message: ChatMessage } | null | undefined) => {
+      if (!payload?.id || !payload.message) return null;
+      const session = chatsStore.upsertMessage(payload.id, payload.message);
+      if (session) broadcastChanged(event.sender);
+      return session;
+    },
+  );
+
+  ipcMain.handle(
     IPC.CHATS_SET_MESSAGE_TTS_CACHE,
     (event, payload: { id: string; messageId: string; cacheKey: string; converterVersion: string }) => {
       if (!payload?.id || !payload.messageId || !payload.cacheKey || !payload.converterVersion) return null;

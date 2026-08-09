@@ -56,6 +56,26 @@ describe("chats IPC mode filtering", () => {
     ]);
   });
 
+  it("validates and forwards CHATS_UPSERT for run checkpoints", async () => {
+    const { registerChatsIpc } = await import("./chats-ipc");
+    registerChatsIpc();
+
+    const create = mocks.handlers.get(IPC.CHATS_CREATE);
+    const upsert = mocks.handlers.get(IPC.CHATS_UPSERT);
+    if (!create || !upsert) throw new Error("checkpoint IPC handlers were not registered");
+    const event = { sender: {} };
+    const session = await create(event, { mode: "work" }) as { id: string };
+
+    expect(await upsert(event, null)).toBeNull();
+    expect(await upsert(event, { id: session.id })).toBeNull();
+    expect(await upsert(event, {
+      id: session.id,
+      message: { id: "assistant-1", role: "model", content: "checkpoint", at: 1 },
+    })).toEqual(expect.objectContaining({
+      messages: [expect.objectContaining({ id: "assistant-1", content: "checkpoint" })],
+    }));
+  });
+
   it("persists the selected Cline plan/act mode only for Code sessions", async () => {
     const { registerChatsIpc } = await import("./chats-ipc");
     registerChatsIpc();

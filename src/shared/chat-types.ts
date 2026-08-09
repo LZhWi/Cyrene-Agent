@@ -6,6 +6,7 @@
 //   列表渲染只读 index.json，避免一次性把所有会话消息加载到内存。
 // - identityId 当前为预留字段——职位面板还未做，新会话默认 null，
 import type { MusicCardData } from "./music-card";
+import type { TodoItem } from "./todo-types";
 
 // - schemaVersion 用于以后改 schema 时的迁移判断；当前固定 1。
 
@@ -106,6 +107,13 @@ export interface ChatMessage {
   toolExecutions?: ToolExecutionRecord[];
   /** 本轮处理与公开推理的展示指标。 */
   runActivity?: RunActivityRecord;
+  /** 活跃 Agent run 的可恢复检查点；非终态快照在重启后只能恢复为 interrupted。 */
+  runSnapshot?: {
+    runId?: string;
+    status: "running" | "waiting_user" | "interrupted" | "terminal";
+    todos?: TodoItem[];
+    updatedAt: number;
+  };
   /** TTS 缓存 key。只存 key，不存绝对路径，避免 userData 路径变化后 session JSON 失效。 */
   ttsCacheKey?: string;
   /** 生成缓存时使用的朗读文本转换器版本；版本变化时旧缓存自然失效。 */

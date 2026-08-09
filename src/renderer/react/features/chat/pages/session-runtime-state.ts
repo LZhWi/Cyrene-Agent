@@ -1,4 +1,5 @@
 import type { ChatMessageItem } from "../components/ChatMessageList";
+import type { ChatMessage } from "../../../../../shared/chat-types";
 import type { ComposerInteraction } from "../components/run-presentation";
 import type { TodoItem } from "../../../../../shared/todo-types";
 
@@ -66,6 +67,27 @@ export function hydrateSessionMessages(
 ): Record<string, ChatMessageItem[]> {
   if (hasActiveRun && state[sessionId]) return state;
   return { ...state, [sessionId]: storedMessages };
+}
+
+export function recoverInterruptedMessage(
+  message: ChatMessageItem,
+  snapshot: NonNullable<ChatMessage["runSnapshot"]>,
+): ChatMessageItem {
+  if (snapshot.status === "terminal" || snapshot.status === "interrupted") return message;
+  return {
+    ...message,
+    streaming: false,
+    reasoningStreaming: false,
+    loading: false,
+    waitingForFirstEvent: false,
+    runStage: { kind: "failed", detail: "上次运行已中断" },
+    runActivity: {
+      ...(message.runActivity ?? { startedAt: snapshot.updatedAt, reasoningMs: 0 }),
+      activeReasoningStartedAt: undefined,
+      completedAt: snapshot.updatedAt,
+      keepExpanded: true,
+    },
+  };
 }
 
 export function findSessionIdForRun(

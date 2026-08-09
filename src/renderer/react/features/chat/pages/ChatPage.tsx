@@ -3,6 +3,7 @@ import { DownOutlined } from "@ant-design/icons";
 import { ChatComposer, type ComposerAttachment } from "../components/ChatComposer";
 import { ComposerSlot } from "../components/ComposerSlot";
 import { TodoPanel } from "../components/TodoPanel";
+import type { TodoItem } from "../../../../../shared/todo-types";
 import {
   describePermissionRequest,
   normalizeCodeAskInteraction,
@@ -57,6 +58,7 @@ import {
   hydrateSessionMessages,
   mergeHarnessTodosForSession,
   patchSessionMessage,
+  recoverInterruptedMessage,
   sessionInteraction,
   setSessionInteraction,
   setSessionInteractionBusy,
@@ -213,6 +215,7 @@ interface ChatStoreApi {
   get: (id: string) => Promise<ChatSession | null>;
   create: (input: { identityId: null; mode: ConversationMode; title?: string }) => Promise<ChatSession>;
   append: (id: string, message: ChatMessage) => Promise<ChatSession | null>;
+  upsert: (id: string, message: ChatMessage) => Promise<ChatSession | null>;
   replaceTail: (id: string, startIndex: number, messages: ChatMessage[]) => Promise<ChatSession | null>;
   setMessageTtsCacheKey: (id: string, messageId: string, cacheKey: string, converterVersion: string) => Promise<ChatSession | null>;
   rename: (id: string, title: string) => Promise<ChatSession | null>;
@@ -346,21 +349,24 @@ function stageForStep(stepName: string | undefined): AgentRunStage | undefined {
 }
 
 function toUiMessages(session: ChatSession): ChatMessageItem[] {
-  return session.messages.map((message) => ({
-    id: message.id,
-    role: message.role === "model" ? "assistant" : "user",
-    content: message.content,
-    reasoning: message.reasoning,
-    reasoningBlocks: message.reasoningBlocks,
-    processMessages: message.processMessages,
-    runActivity: message.runActivity,
-    ttsCacheKey: message.ttsCacheKey,
-    ttsCacheVersion: message.ttsCacheVersion,
-    responseStarted: message.role === "model" && Boolean(message.content.trim() || message.sticker),
-    sticker: message.sticker,
-    toolExecutions: message.toolExecutions,
-    attachments: message.attachments,
-  }));
+  return session.messages.map((message) => {
+    const item: ChatMessageItem = {
+      id: message.id,
+      role: message.role === "model" ? "assistant" : "user",
+      content: message.content,
+      reasoning: message.reasoning,
+      reasoningBlocks: message.reasoningBlocks,
+      processMessages: message.processMessages,
+      runActivity: message.runActivity,
+      ttsCacheKey: message.ttsCacheKey,
+      ttsCacheVersion: message.ttsCacheVersion,
+      responseStarted: message.role === "model" && Boolean(message.content.trim() || message.sticker),
+      sticker: message.sticker,
+      toolExecutions: message.toolExecutions,
+      attachments: message.attachments,
+    };
+    return message.runSnapshot ? recoverInterruptedMessage(item, message.runSnapshot) : item;
+  });
 }
 
 /**
@@ -416,6 +422,7 @@ export function ChatPage() {
   const localPreviewUrlsRef = useRef(new Set<string>());
   const demoTimers = useRef(new Set<number>());
   const activeRunsBySession = useRef<Record<string, { assistantId: string; runId?: string; mode: ConversationMode }>>({});
+  const runCheckpointBySessionRef = useRef<Record<string, (status: "running" | "waiting_user") => void>>({});
   // bootstrap 标志：只由 cold-start finally 写入；模式切换 effect 仅检查
   const [bootstrapCompleted, setBootstrapCompleted] = useState(false);
   const observedModeRef = useRef(mode);
@@ -442,6 +449,7 @@ export function ChatPage() {
       const activeRun = activeRunsBySession.current[ownerSessionId];
       if (activeRun) {
         updateMessage(ownerSessionId, activeRun.assistantId, { runStage: { kind: "waiting_permission" } });
+        runCheckpointBySessionRef.current[ownerSessionId]?.("waiting_user");
       }
     });
   }, []);
@@ -694,6 +702,20 @@ export function ChatPage() {
       return next;
     });
     const uiMessages = toUiMessages(session);
+    const latestRunSnapshot = session.messages.findLast((message) => message.runSnapshot)?.runSnapshot;
+    if (latestRunSnapshot?.todos) {
+      setTodoStateBySession((current) => {
+        if (hasActiveRunForSession(activeRunsBySession.current, sessionId) && current[sessionId]) return current;
+        return {
+          ...current,
+          [sessionId]: {
+            runId: latestRunSnapshot.runId,
+            todos: latestRunSnapshot.todos ?? [],
+            updatedAt: latestRunSnapshot.updatedAt,
+          },
+        };
+      });
+    }
     if (targetMode === "code") {
       setSelectedClineMode(session.codeSession?.clineMode ?? "act");
       const api = codeRunApi();
@@ -889,6 +911,11 @@ export function ChatPage() {
     let toolExecutions: ToolExecutionRecord[] = [];
     let runStarted = false;
     let runActivity: RunActivityRecord | undefined;
+    let currentTodos: TodoItem[] = [];
+    let persistedFinalContent = "";
+    const assistantAt = Date.now();
+    let checkpointTimer: number | undefined;
+    let checkpointChain = Promise.resolve<ChatSession | null>(null);
     let codeRunViewModel: CodeRunViewModel = createCodeRunViewModel();
     const activeReasoningStarts = new Map<string, number>();
     let currentReasoningId: string | undefined;
@@ -896,6 +923,57 @@ export function ChatPage() {
     const terminal = new Promise<Error | undefined>((resolve) => {
       resolveTerminal = resolve;
     });
+    const buildCheckpoint = (
+      status: "running" | "waiting_user" | "terminal",
+    ): ChatMessage => ({
+      id: input.assistantId,
+      role: "model",
+      content: status === "terminal" ? persistedFinalContent : "",
+      reasoning: reasoningContent || undefined,
+      reasoningBlocks,
+      processMessages,
+      runActivity,
+      at: assistantAt,
+      sticker,
+      toolExecutions,
+      runSnapshot: {
+        runId: activeRunsBySession.current[input.sessionId]?.runId,
+        status,
+        todos: currentTodos,
+        updatedAt: Date.now(),
+      },
+    });
+    const writeCheckpoint = (
+      status: "running" | "waiting_user" | "terminal",
+    ): Promise<ChatSession | null> => {
+      const snapshot = buildCheckpoint(status);
+      checkpointChain = checkpointChain
+        .catch(() => null)
+        .then(() => store.upsert(input.sessionId, snapshot));
+      return checkpointChain;
+    };
+    const checkpointRun = (
+      status: "running" | "waiting_user" | "terminal",
+      immediate = false,
+    ): Promise<ChatSession | null> => {
+      if (checkpointTimer !== undefined) {
+        window.clearTimeout(checkpointTimer);
+        checkpointTimer = undefined;
+      }
+      if (immediate) return writeCheckpoint(status);
+      checkpointTimer = window.setTimeout(() => {
+        checkpointTimer = undefined;
+        void writeCheckpoint(status);
+      }, 350);
+      return checkpointChain;
+    };
+    runCheckpointBySessionRef.current = {
+      ...runCheckpointBySessionRef.current,
+      [input.sessionId]: (status) => {
+        void checkpointRun(status, true);
+      },
+    };
+    await checkpointRun("running", true);
     const updateRunTool = (toolId: string, patch: Partial<ToolExecutionRecord>) => {
       const index = toolExecutions.findIndex((tool) => tool.id === toolId);
       toolExecutions = index === -1
@@ -961,6 +1039,7 @@ export function ChatPage() {
         : reasoningBlocks.map((block, blockIndex) => blockIndex === index ? { ...block, ...patch } : block);
       reasoningContent = reasoningBlocks.map((block) => block.content).filter(Boolean).join("\n\n");
       updateMessage(input.targetMode, input.assistantId, { reasoning: reasoningContent || undefined, reasoningBlocks });
+      void checkpointRun("running");
     };
 
     const handleEvent = (event: AguiEvent) => {
@@ -984,6 +1063,7 @@ export function ChatPage() {
             };
           }
         }
+        currentTodos = [];
         setTodoStateBySession((current) => startSessionTodos(
           current,
           input.sessionId,
@@ -1007,6 +1087,7 @@ export function ChatPage() {
           runActivity: { ...runActivity },
           runStage: { kind: "understanding" },
         });
+        void checkpointRun("running", true);
         return;
       }
       if (!runStarted) return;
@@ -1072,11 +1153,12 @@ export function ChatPage() {
           updateMessage(input.targetMode, input.assistantId, {
             runStage: { kind: "executing", detail: event.toolCallName ?? "工具调用" },
           });
-        } else if (event.type === "TOOL_CALL_RESULT" && event.toolCallId) {
+      } else if (event.type === "TOOL_CALL_RESULT" && event.toolCallId) {
         updateRunTool(event.toolCallId, {
           status: event.status === "failed" ? "error" : "success",
           result: (event.content ?? "").slice(0, 4000),
         });
+        void checkpointRun("running", true);
       } else if (event.type === "TOOL_CALL_END" && event.toolCallId) {
         updateRunTool(event.toolCallId, {});
       } else if (event.type === "TEXT_MESSAGE_START") {
@@ -1097,6 +1179,7 @@ export function ChatPage() {
             streaming: true,
             responseStarted: true,
           });
+          void checkpointRun("running");
         });
       } else if (event.type === "TEXT_MESSAGE_END") {
         revealChain = revealChain.then(() => {
@@ -1118,6 +1201,7 @@ export function ChatPage() {
               ? { ...message, content: message.content + chunk }
               : message);
             updateMessage(input.targetMode, input.assistantId, { processMessages });
+            void checkpointRun("running");
           });
         }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.choice") {
@@ -1125,6 +1209,7 @@ export function ChatPage() {
         if (interaction) {
           setInteractionForSession(input.sessionId, interaction);
           updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "waiting_user" } });
+          void checkpointRun("waiting_user", true);
         }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.choice.dismiss") {
         setInteractionsBySession((current) => {
@@ -1132,6 +1217,7 @@ export function ChatPage() {
           if (interaction?.kind !== "ask" || !shouldDismissAsk(interaction, event.value)) return current;
           return clearSessionInteraction(current, input.sessionId);
         });
+        void checkpointRun("running", true);
       } else if (event.type === "CUSTOM" && event.name === "cyrene.taskPlan") {
         const taskPlan = normalizeTaskPlanPresentation(event.value);
         if (taskPlan) {
@@ -1144,12 +1230,22 @@ export function ChatPage() {
         // Harness 的 Todo 复用右侧现有 TodoPanel，不再复制成消息内 TaskPlanCard。
         const items = (event.value as { items?: Array<{ id: string; content: string; status: string }> } | null | undefined)?.items;
         if (Array.isArray(items)) {
+          const ownerRunId = event.runId ?? activeRunsBySession.current[input.sessionId]?.runId;
+          const normalized = mergeHarnessTodosForSession({
+            [input.sessionId]: {
+              runId: ownerRunId,
+              todos: currentTodos,
+              updatedAt: Date.now(),
+            },
+          }, input.sessionId, ownerRunId, items);
+          currentTodos = normalized[input.sessionId]?.todos ?? currentTodos;
           setTodoStateBySession((current) => mergeHarnessTodosForSession(
             current,
             input.sessionId,
-            event.runId ?? activeRunsBySession.current[input.sessionId]?.runId,
+            ownerRunId,
             items,
           ));
+          void checkpointRun("running", true);
         }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.compressingContext") {
         setIsCompressingContext(true);
@@ -1255,6 +1351,7 @@ export function ChatPage() {
           },
         };
         for (const accepted of eventGate.bind(ack.runId)) handleEvent(accepted);
+        await checkpointRun("running", true);
         if (cancelRequestedSessionsRef.current.delete(input.sessionId)) {
           await api.cancel(ack.runId);
         }
@@ -1268,6 +1365,7 @@ export function ChatPage() {
       const formalAnswerCommitted = isFormalAnswerCommitted(streamContent, terminalStatus, finalMessageCompleted);
       completeRunActivity(!formalAnswerCommitted);
       const finalContent = formalAnswerCommitted ? resolveTerminalContent(streamContent, terminalStatus) : "";
+      persistedFinalContent = finalContent;
       updateMessage(input.targetMode, input.assistantId, {
         content: finalContent,
         loading: false,
@@ -1282,18 +1380,7 @@ export function ChatPage() {
         sticker,
         toolExecutions,
       });
-      const savedAssistant = await store.append(input.sessionId, {
-        id: input.assistantId,
-        role: "model",
-        content: finalContent,
-        reasoning: reasoningContent || undefined,
-        reasoningBlocks,
-        processMessages,
-        runActivity,
-        at: Date.now(),
-        sticker,
-        toolExecutions,
-      });
+      const savedAssistant = await checkpointRun("terminal", true);
       if (savedAssistant && formalAnswerCommitted) {
         finishEarlyTtsQueue(earlyTtsQueue, finalContent);
       } else earlyTtsQueue.cancel();
@@ -1317,15 +1404,13 @@ export function ChatPage() {
         runActivity,
         responseStarted: false,
       });
-      await store.append(input.sessionId, {
-        id: input.assistantId,
-        role: "model",
-        content: "",
-        processMessages,
-        runActivity,
-        at: Date.now(),
-      });
+      persistedFinalContent = "";
+      await checkpointRun("terminal", true);
     } finally {
+      if (checkpointTimer !== undefined) window.clearTimeout(checkpointTimer);
+      const checkpointCallbacks = { ...runCheckpointBySessionRef.current };
+      delete checkpointCallbacks[input.sessionId];
+      runCheckpointBySessionRef.current = checkpointCallbacks;
       off();
       activeAguiOffsRef.current.delete(off);
       const currentActive = activeRunsBySession.current[input.sessionId];
@@ -2098,7 +2183,10 @@ export function ChatPage() {
               if (!choice) return;
               setInteractionBusyForSession(activeSessionId, true);
               void choice.resolve(id, answer).then((result) => {
-                if (result.ok) clearInteractionForSession(activeSessionId);
+                if (result.ok) {
+                  clearInteractionForSession(activeSessionId);
+                  runCheckpointBySessionRef.current[activeSessionId]?.("running");
+                }
                 setInteractionBusyForSession(activeSessionId, false);
               }).catch(() => setInteractionBusyForSession(activeSessionId, false));
             }}
@@ -2118,7 +2206,10 @@ export function ChatPage() {
               if (!choice) return;
               setInteractionBusyForSession(activeSessionId, true);
               void choice.resolve(id, "").then((result) => {
-                if (result.ok) clearInteractionForSession(activeSessionId);
+                if (result.ok) {
+                  clearInteractionForSession(activeSessionId);
+                  runCheckpointBySessionRef.current[activeSessionId]?.("running");
+                }
                 setInteractionBusyForSession(activeSessionId, false);
               }).catch(() => setInteractionBusyForSession(activeSessionId, false));
             }}
@@ -2139,7 +2230,10 @@ export function ChatPage() {
               if (!settings) return;
               setInteractionBusyForSession(activeSessionId, true);
               void settings.resolvePermissionApproval(id, allowed).then((result) => {
-                if (result.ok) clearInteractionForSession(activeSessionId);
+                if (result.ok) {
+                  clearInteractionForSession(activeSessionId);
+                  runCheckpointBySessionRef.current[activeSessionId]?.("running");
+                }
                 setInteractionBusyForSession(activeSessionId, false);
               }).catch(() => setInteractionBusyForSession(activeSessionId, false));
             }}
