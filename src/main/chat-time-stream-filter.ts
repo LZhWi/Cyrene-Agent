@@ -64,6 +64,11 @@ export class ChatTimeStreamPrefixFilter {
     if (this.mode === "trimming") {
       const visibleIndex = chunk.search(/\S/);
       if (visibleIndex < 0) return "";
+      if (chunk[visibleIndex] === "[") {
+        this.mode = "probing";
+        this.buffer = "";
+        return this.push(chunk.slice(visibleIndex));
+      }
       this.mode = "passthrough";
       return chunk.slice(visibleIndex);
     }
@@ -72,6 +77,11 @@ export class ChatTimeStreamPrefixFilter {
     for (let index = 0; index < chunk.length; index += 1) {
       if (this.mode === "trimming") {
         if (/\s/.test(chunk[index])) continue;
+        if (chunk[index] === "[") {
+          this.mode = "probing";
+          this.buffer = "[";
+          continue;
+        }
         this.mode = "passthrough";
         output += chunk.slice(index);
         break;

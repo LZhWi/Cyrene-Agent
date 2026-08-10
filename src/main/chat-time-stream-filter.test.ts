@@ -28,6 +28,13 @@ describe("ChatTimeStreamPrefixFilter", () => {
     );
   });
 
+  it("removes repeated leading timestamp metadata before releasing visible text", () => {
+    expect(consume(new ChatTimeStreamPrefixFilter(), [
+      "[2026-08-10 18:18, Asia/Shanghai]\n",
+      "[2026-08-10 18:18, Asia/Shanghai]你好",
+    ])).toBe("你好");
+  });
+
   it("flushes an unfinished probe when the stream ends", () => {
     expect(consume(new ChatTimeStreamPrefixFilter(), ["[2026-08-"])).toBe("[2026-08-");
   });

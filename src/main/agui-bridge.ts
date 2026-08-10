@@ -22,6 +22,7 @@ import type { AguiRunAck, CyreneRunTerminalResult } from "../shared/run-terminal
 import { indexConversationTurn } from "./orchestrator/history-tools";
 import type { RelationshipChannel } from "./relationship/relationship-log";
 import { createThinkFilter, type ThinkStreamFilter, type ThinkFilterMode } from "./chat/think-filter";
+import { ChatTimeStreamPrefixFilter } from "./chat-time-stream-filter";
 import { runLearnPostTurnHook } from "./learn/progress/learn-post-turn";
 import { obsidianWorkspace } from "./learn/obsidian/obsidian-workspace-service";
 import { registerObsidianTools, unregisterObsidianTools } from "./learn/obsidian/obsidian-tools";
@@ -275,6 +276,7 @@ export function registerAgUiIpc(
     // <think> 标签过滤器：按单条 assistant message 隔离（TEXT_MESSAGE_START ~ END）
     // leading-only 模式：只在消息开头以 <think> 开头时才过滤，避免误删正文中的 <think> 讨论
     let thinkFilter: ThinkStreamFilter | null = null;
+    let timePrefixFilter: ChatTimeStreamPrefixFilter | null = null;
     const thinkFilterMode: ThinkFilterMode = "leading-only";
     let pendingTextStart: { type: string; messageId?: string; [key: string]: unknown } | null = null;
     let textStartForwarded = false;
@@ -326,6 +328,7 @@ export function registerAgUiIpc(
           // 兜底清理：如果 filter 仍存在（TEXT_MESSAGE_END 缺失），销毁
           endEmbeddedReasoning();
           thinkFilter = null;
+          timePrefixFilter = null;
           pendingTextStart = null;
           textStartForwarded = false;
           // Task 2 / C1：通过 settlement gate 保证 only-once terminal。
@@ -349,6 +352,7 @@ export function registerAgUiIpc(
         // <think> 过滤：拦截 TEXT_MESSAGE_* 事件
         if (eventType === "TEXT_MESSAGE_START") {
           thinkFilter = createThinkFilter(thinkFilterMode);
+          timePrefixFilter = new ChatTimeStreamPrefixFilter();
           pendingTextStart = baseEvent as typeof pendingTextStart;
           textStartForwarded = false;
           embeddedReasoningStarted = false;
@@ -364,7 +368,7 @@ export function registerAgUiIpc(
           }
           const event = baseEvent as { type: string; delta?: string };
           const rawDelta = typeof event.delta === "string" ? event.delta : "";
-          const visibleDelta = thinkFilter.push(rawDelta);
+          const visibleDelta = timePrefixFilter?.push(thinkFilter.push(rawDelta)) ?? thinkFilter.push(rawDelta);
           forwardEmbeddedReasoning(thinkFilter.takeThinking());
           if (visibleDelta) {
             endEmbeddedReasoning();
@@ -377,15 +381,17 @@ export function registerAgUiIpc(
 
         if (eventType === "TEXT_MESSAGE_END") {
           if (thinkFilter) {
-            const tail = thinkFilter.flush();
+            const tail = timePrefixFilter?.push(thinkFilter.flush()) ?? thinkFilter.flush();
+            const timeTail = timePrefixFilter?.finish() ?? "";
             forwardEmbeddedReasoning(thinkFilter.takeThinking());
-            if (tail) {
+            if (tail || timeTail) {
               endEmbeddedReasoning();
               forwardTextStart();
               // flush 出的尾部文本作为最后一个 CONTENT 发送，确保在 END 之前到达
-              send({ type: "TEXT_MESSAGE_CONTENT", delta: tail, threadId, runId });
+              send({ type: "TEXT_MESSAGE_CONTENT", delta: `${tail}${timeTail}`, threadId, runId });
             }
             thinkFilter = null;
+            timePrefixFilter = null;
           }
           endEmbeddedReasoning();
           if (textStartForwarded) send(baseEvent);

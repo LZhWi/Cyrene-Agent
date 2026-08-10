@@ -209,6 +209,34 @@ describe("agui-bridge sticker event ordering", () => {
     mocks.agentEvents = [];
   });
 
+  it.each(["chat", "work", "code"] as const)("removes repeated leading time metadata for %s replies", async (mode) => {
+    vi.resetModules();
+    mocks.handlers.clear();
+    mocks.agentEvents = [
+      { type: "TEXT_MESSAGE_START", messageId: "m-time", role: "assistant" },
+      { type: "TEXT_MESSAGE_CONTENT", messageId: "m-time", delta: "[2026-08-10 18:18, Asia/Shanghai]\n" },
+      { type: "TEXT_MESSAGE_CONTENT", messageId: "m-time", delta: "[2026-08-10 18:18, Asia/Shanghai]真正回复" },
+      { type: "TEXT_MESSAGE_END", messageId: "m-time" },
+    ];
+    mocks.getSession.mockReturnValue({
+      id: `${mode}-time`,
+      mode,
+      ...(mode === "chat" ? {} : { workspaceBinding: { workspaceRoot: "C:\\workspace", displayName: "workspace", boundAt: 1 } }),
+    });
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    const sent: Array<{ type?: string; delta?: string }> = [];
+    registerAgUiIpc(async () => ({
+      options: { settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 }, messages: [], timeoutMs: 1000, toolSystemContent: "TOOL", soulSystemBaseContent: "SOUL" },
+      latestUserText: "测试",
+    }), async () => {}, () => null);
+    const handler = mocks.handlers.get(IPC.AGUI_RUN);
+    if (!handler) throw new Error("AGUI_RUN handler was not registered");
+    await handler({ sender: { isDestroyed: () => false, send: (_channel: string, event: { type?: string; delta?: string }) => sent.push(event) } }, { messages: [{ role: "user", content: "测试" }], sessionId: `${mode}-time` });
+
+    expect(sent.filter((event) => event.type === "TEXT_MESSAGE_CONTENT").map((event) => event.delta).join("")).toBe("真正回复");
+    mocks.agentEvents = [];
+  });
+
   it("delivers sticker side effects before RUN_FINISHED so renderer keeps listening", async () => {
     vi.resetModules();
     mocks.handlers.clear();
