@@ -84,7 +84,10 @@ describe("function-calling round presentation", () => {
         { id: "process-0", roundId: "round-0", content: "先看项目结构" },
         { id: "process-1", roundId: "round-1", content: "继续检查取消链路" },
       ],
-      reasoningBlocks: [{ id: "reason-1", roundId: "round-1", content: "查找 IPC 入口", streaming: true }],
+      reasoningBlocks: [
+        { id: "reason-0", roundId: "round-1", content: "已经理清目录结构", streaming: false },
+        { id: "reason-1", roundId: "round-1", content: "查找 IPC 入口", streaming: true },
+      ],
       tools: [
         { id: "tool-0", roundId: "round-0", name: "list_dir", status: "success" },
         { id: "tool-1", roundId: "round-1", name: "read_file", status: "running" },
@@ -97,8 +100,12 @@ describe("function-calling round presentation", () => {
     expect(html.match(/class="cy-agent-round__art-image"/g)).toHaveLength(2);
     expect(html).not.toContain("cy-agent-round__status");
     expect(html).toContain("cy-reasoning-status-art is-thinking");
+    const thinkingArt = html.match(/cy-reasoning-status-art is-thinking[^>]*><img src="([^"]+)"/)?.[1];
+    const completedArt = html.match(/cy-reasoning-status-art is-complete[^>]*><img src="([^"]+)"/)?.[1];
+    expect(completedArt).toBe(thinkingArt);
     expect(html).toContain("昔涟已完成 · 浏览 1 个目录");
     expect(html).toContain("昔涟正在读取文件");
+    expect(html).toContain("先看项目结构");
     expect(html).toContain("继续检查取消链路");
     expect(html).toContain("查找 IPC 入口");
   });
@@ -113,5 +120,18 @@ describe("function-calling round presentation", () => {
       interrupted: false,
     }));
     expect(html).not.toContain("cy-agent-round");
+  });
+
+  it("keeps function-calling narration visible after its round collapses", () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const html = renderToStaticMarkup(React.createElement(RunActivityDetail, {
+      agentRounds: [{ id: "round-complete", status: "completed", startedAt: 1, completedAt: 2 }],
+      processMessages: [{ id: "process-complete", roundId: "round-complete", content: "人家先去看一眼目录结构" }],
+      reasoningBlocks: [],
+      tools: [{ id: "tool-complete", roundId: "round-complete", name: "list_dir", status: "success" }],
+      interrupted: false,
+    }));
+
+    expect(html).toContain("人家先去看一眼目录结构");
   });
 });

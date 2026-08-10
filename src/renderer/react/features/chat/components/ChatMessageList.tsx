@@ -199,14 +199,13 @@ function ReasoningContent({
   expanded: boolean;
   onExpand: (expanded: boolean) => void;
 }) {
-  const statusArt = loading ? thinkingMoodUrl : completedThinkingMoodUrl;
   return (
     <Think
       rootClassName="cy-message-reasoning"
       title={loading ? "正在思考…" : "思考完成"}
       icon={
         <span className={`cy-reasoning-status-art${loading ? " is-thinking" : " is-complete"}`} aria-hidden="true">
-          <img src={statusArt} alt="" draggable={false} />
+          <img src={thinkingMoodUrl} alt="" draggable={false} />
           {loading && <DotSpinner />}
         </span>
       }
@@ -280,6 +279,11 @@ function AgentRoundGroup({
 
   return (
     <section className={`cy-agent-round${running ? " is-running" : " is-complete"}`}>
+      {processMessages.filter((message) => message.content.trim()).map((message) => (
+        <div className="cy-run-activity__process" key={message.id}>
+          <MarkdownContent content={message.content} />
+        </div>
+      ))}
       <button
         type="button"
         className="cy-agent-round__header"
@@ -301,11 +305,6 @@ function AgentRoundGroup({
       </button>
       {expanded && (
         <div className="cy-agent-round__body">
-          {processMessages.filter((message) => message.content.trim()).map((message) => (
-            <div className="cy-run-activity__process" key={message.id}>
-              <MarkdownContent content={message.content} />
-            </div>
-          ))}
           {reasoningBlocks.filter((block) => block.content.trim()).map((block) => (
             <RunActivityReasoningBlock block={block} key={block.id} />
           ))}
