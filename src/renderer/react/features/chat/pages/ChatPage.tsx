@@ -3,6 +3,8 @@ import { DownOutlined } from "@ant-design/icons";
 import { ChatComposer, type ComposerAttachment } from "../components/ChatComposer";
 import { ComposerSlot } from "../components/ComposerSlot";
 import { TodoPanel } from "../components/TodoPanel";
+import { CodeGitPanel } from "../components/CodeGitPanel";
+import { CodeDiffReview } from "../components/CodeDiffReview";
 import type { TodoItem } from "../../../../../shared/todo-types";
 import {
   describePermissionRequest,
@@ -399,6 +401,7 @@ export function ChatPage() {
   const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [todoStateBySession, setTodoStateBySession] = useState<TodoStateBySession>({});
+  const [codeGitReviewPath, setCodeGitReviewPath] = useState<string | null>(null);
   const activeModeRef = useRef(mode);
   const activeSessionIdsRef = useRef(activeSessionIds);
   const activeScopeRef = useRef(`mode:${mode}`);
@@ -485,6 +488,10 @@ export function ChatPage() {
   const hasMessages = messages.length > 0;
   const attachments = attachmentsByScope[scopeKey] ?? [];
   const sessions = sessionsByMode[mode] ?? [];
+
+  useEffect(() => {
+    setCodeGitReviewPath(null);
+  }, [mode, activeSessionId]);
 
   activeModeRef.current = mode;
   activeSessionIdsRef.current = activeSessionIds;
@@ -1997,6 +2004,21 @@ export function ChatPage() {
           <TodoPanel
             state={activeSessionId ? todoStateBySession[activeSessionId] : null}
             mode={mode}
+          />
+        )}
+        {mode === "code" && activeSessionId && (
+          <CodeGitPanel
+            sessionId={activeSessionId}
+            onOpenDiff={setCodeGitReviewPath}
+            onRequestAgentAction={(prompt) => setDrafts((current) => ({ ...current, [scopeKey]: prompt }))}
+          />
+        )}
+        {mode === "code" && activeSessionId && (
+          <CodeDiffReview
+            sessionId={activeSessionId}
+            path={codeGitReviewPath}
+            open={codeGitReviewPath !== null}
+            onClose={() => setCodeGitReviewPath(null)}
           />
         )}
         {hasMessages && (

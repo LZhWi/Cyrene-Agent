@@ -1,0 +1,14 @@
+.cy-code-diff-review .ant-drawer-body { padding: 14px 18px 24px; background: #17191d; }
+.cy-code-diff-review .ant-drawer-header { background: #1f2228; border-bottom-color: #353940; }
+.cy-code-diff-review .ant-drawer-title { color: #e8eaed; font-family: Consolas, "Cascadia Mono", monospace; font-size: 13px; }
+.cy-code-diff-review .ant-drawer-close { color: #c6cad1; }
+.cy-code-diff-review__view-switch { display: flex; overflow: hidden; border: 1px solid #4b5059; border-radius: 7px; }
+.cy-code-diff-review__view-switch button { border: 0; padding: 3px 8px; color: #c6cad1; background: transparent; cursor: pointer; font-size: 12px; }
+.cy-code-diff-review__view-switch button.is-active { color: #fff; background: #ff5b8a; }
+.cy-code-diff-review__notice { margin: 16px 0; color: #b8bec8; font-size: 13px; }
+.cy-code-diff-review__file { overflow: auto; border: 1px solid #353940; border-radius: 8px; background: #1f2228; }
+.cy-code-diff-review .diff { min-width: max-content; color: #d7dce3; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
+.cy-code-diff-review .diff-gutter { color: #8b949e; background: #1f2228; }
+.cy-code-diff-review .diff-code { background: #1f2228; }
+.cy-code-diff-review .diff-code-delete { background: rgba(248, 81, 73, .18); }
+.cy-code-diff-review .diff-code-insert { background: rgba(63, 185, 80, .18); }
