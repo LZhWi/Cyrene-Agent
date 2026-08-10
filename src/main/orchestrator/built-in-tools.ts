@@ -6,6 +6,8 @@ import { toolRegistry } from "./tool-registry";
 import { getDateLocale, getWeatherLanguage } from "../locale-context";
 import { addMcpServer } from "./mcp-manager";
 import { createPlayLive2DActionTool } from "./tools/play-live2d-action";
+import { wrapWithSandbox, isSandboxReady } from "./sandbox/sandbox-exec";
+import { getCurrentLevel } from "../permission";
 
 let sendToLive2DWindow: (channel: string, payload?: unknown) => void = () => {};
 export function setLive2dWindowSender(sender: typeof sendToLive2DWindow): void {
@@ -155,6 +157,7 @@ interface ShellResult {
   stdout: string;
   stderr: string;
   truncated: boolean;
+  ranViaSandbox: boolean;
 }
 
 /**
@@ -193,59 +196,106 @@ function killTree(child: ReturnType<typeof spawn>): void {
   }
 }
 
-function runShellOnce(command: string, args: string[], cwd?: string, extraEnv?: Record<string, string>): Promise<ShellResult> {
+function runShellOnce(
+  command: string,
+  args: string[],
+  cwd?: string,
+  extraEnv?: Record<string, string>,
+  useSandbox?: boolean,
+): Promise<ShellResult> {
   return new Promise((resolve) => {
-    const child = spawn(command, args, {
-      cwd: cwd || undefined,
-      shell: false,
-      windowsHide: true,
-      env: { ...process.env, ...extraEnv },
-      // stdin→/dev/null(NUL)：误启动交互式进程(python/node REPL)时让它读到 EOF 立即退出，
-      // 不再卡在"等 stdin 输入"上耗满超时。stdout/stderr 仍 pipe 来收集输出。
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-    let stdout = "";
-    let stderr = "";
-    let truncated = false;
-    const timeoutTimer = setTimeout(() => {
-      console.warn(LOG_PREFIX, "run_shell 超时，kill 进程树:", command);
-      killTree(child);
-    }, SHELL_TIMEOUT_MS);
+    // 沙箱路径：先把 command+args 包成 {argv, env}，成功则 spawn 沙箱 argv；
+    // 失败/null 则 fallback 到原直接 spawn。useSandbox=true 时尝试沙箱。
+    (async () => {
+      let spawnCmd: string = command;
+      let spawnArgs: string[] = args;
+      let spawnEnv: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
+      let ranViaSandbox = false;
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      if (stdout.length < SHELL_MAX_OUTPUT) {
-        stdout += chunk.toString("utf8");
-        if (stdout.length > SHELL_MAX_OUTPUT) {
-          stdout = stdout.slice(0, SHELL_MAX_OUTPUT);
+      if (useSandbox) {
+        try {
+          const wrapped = await wrapWithSandbox(command, args, cwd);
+          if (wrapped) {
+            spawnCmd = wrapped.argv[0];
+            spawnArgs = wrapped.argv.slice(1);
+            // 沙箱 env 是 SRT 给的（含必要的 PATH/token 等），extraEnv 叠加在后面
+            spawnEnv = { ...wrapped.env, ...extraEnv };
+            ranViaSandbox = true;
+          } else {
+            // wrap 返回 null（沙箱不可用/失败）→ fallback 到直接 spawn
+            // 调用方需自行判断是否接受 fallback（workspace_mutation 不接受 fallback）
+            console.log(LOG_PREFIX, "run_shell sandbox unavailable, fallback to direct spawn");
+          }
+        } catch (err) {
+          // wrap 异常不应让 runShellOnce 卡死，fallback 到直接 spawn
+          const msg = err instanceof Error ? err.message : String(err);
+          console.warn(LOG_PREFIX, "run_shell wrap exception, fallback:", msg);
+        }
+      }
+
+      const child = spawn(spawnCmd, spawnArgs, {
+        cwd: cwd || undefined,
+        shell: false,
+        windowsHide: true,
+        env: spawnEnv,
+        // stdin→/dev/null(NUL)：误启动交互式进程(python/node REPL)时让它读到 EOF 立即退出，
+        // 不再卡在"等 stdin 输入"上耗满超时。stdout/stderr 仍 pipe 来收集输出。
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      let stdout = "";
+      let stderr = "";
+      let truncated = false;
+      const timeoutTimer = setTimeout(() => {
+        console.warn(LOG_PREFIX, "run_shell 超时，kill 进程树:", command);
+        killTree(child);
+      }, SHELL_TIMEOUT_MS);
+
+      child.stdout?.on("data", (chunk: Buffer) => {
+        if (stdout.length < SHELL_MAX_OUTPUT) {
+          stdout += chunk.toString("utf8");
+          if (stdout.length > SHELL_MAX_OUTPUT) {
+            stdout = stdout.slice(0, SHELL_MAX_OUTPUT);
+            truncated = true;
+          }
+        } else {
           truncated = true;
         }
-      } else {
-        truncated = true;
-      }
-    });
-    child.stderr?.on("data", (chunk: Buffer) => {
-      if (stderr.length < SHELL_MAX_OUTPUT) {
-        stderr += chunk.toString("utf8");
-        if (stderr.length > SHELL_MAX_OUTPUT) {
-          stderr = stderr.slice(0, SHELL_MAX_OUTPUT);
+      });
+      child.stderr?.on("data", (chunk: Buffer) => {
+        if (stderr.length < SHELL_MAX_OUTPUT) {
+          stderr += chunk.toString("utf8");
+          if (stderr.length > SHELL_MAX_OUTPUT) {
+            stderr = stderr.slice(0, SHELL_MAX_OUTPUT);
+            truncated = true;
+          }
+        } else {
           truncated = true;
         }
-      } else {
-        truncated = true;
-      }
-    });
-    child.on("error", (err) => {
-      clearTimeout(timeoutTimer);
+      });
+      child.on("error", (err) => {
+        clearTimeout(timeoutTimer);
+        resolve({
+          exitCode: -1,
+          stdout,
+          stderr: stderr + "\n[spawn error] " + err.message + (ranViaSandbox ? " [sandbox]" : ""),
+          truncated,
+          ranViaSandbox,
+        });
+      });
+      child.on("close", (code) => {
+        clearTimeout(timeoutTimer);
+        resolve({ exitCode: code, stdout, stderr, truncated, ranViaSandbox });
+      });
+    })().catch((err) => {
+      // async wrapper 异常兜底（理论上不会走到，wrapWithSandbox 内部已 try/catch）
+      const msg = err instanceof Error ? err.message : String(err);
       resolve({
         exitCode: -1,
-        stdout,
-        stderr: stderr + "\n[spawn error] " + err.message,
-        truncated,
+        stdout: "",
+        stderr: "[runShellOnce internal error] " + msg,
+        truncated: false,
+        ranViaSandbox: false,
       });
-    });
-    child.on("close", (code) => {
-      clearTimeout(timeoutTimer);
-      resolve({ exitCode: code, stdout, stderr, truncated });
     });
   });
 }
@@ -260,8 +310,11 @@ async function executeRunShell(args: Record<string, unknown>): Promise<string> {
   // 系统侧 shell policy 分类（不信任模型 purpose）
   const { classifyShellPolicy } = require("./shell-execution-policy");
   const policy = classifyShellPolicy(cmd, cmdArgs);
+  const level = getCurrentLevel();
+  logger.info(LogTag.BuiltinTools, `[run_shell] entry: command=${cmd} args=${JSON.stringify(cmdArgs)} cwd=${cwd || "(undefined)"} policy=${policy} level=${level}`);
 
   if (policy === "blocked") {
+    logger.info(LogTag.BuiltinTools, `[run_shell] rejected: policy=blocked command=${cmd}`);
     return JSON.stringify({
       command: cmd, args: cmdArgs, cwd,
       exitCode: -1, stdout: "", stderr: "[拒绝] 该命令被系统禁止执行",
@@ -270,17 +323,69 @@ async function executeRunShell(args: Record<string, unknown>): Promise<string> {
   }
 
   if (policy === "workspace_mutation") {
+    // full 档位：不走沙箱，直接 spawn（用户已选择完全信任）
+    if (level === "full") {
+      logger.info(LogTag.BuiltinTools, `[run_shell] workspace_mutation → full level, direct spawn (no sandbox)`);
+      const result = await runShellOnce(cmd, cmdArgs, cwd);
+      logger.info(LogTag.BuiltinTools, `[run_shell] [full] done: exitCode=${result.exitCode} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length}`);
+      return JSON.stringify({
+        command: cmd,
+        args: cmdArgs,
+        cwd,
+        exitCode: result.exitCode,
+        stdout: result.stdout,
+        stderr: result.stderr,
+        timedOut: false,
+        truncated: result.truncated,
+        policy: "workspace_mutation",
+        sandboxed: false,
+      });
+    }
+
+    // scoped / per-action 档位：沙箱可用时放行进沙箱
+    // （核心价值：pip/npm install 这种"未知但无害"命令能在笼子里跑）
+    // 注意：workspace_mutation 不接受 fallback —— runShellOnce 内部 wrap 失败会 fallback 到直接 spawn，
+    // 这违背 workspace_mutation 的安全语义。所以这里检查 ranViaSandbox：若 fallback 了则视为拒绝。
+    if (!isSandboxReady()) {
+      logger.info(LogTag.BuiltinTools, `[run_shell] workspace_mutation → sandbox not ready (level=${level}), rejected`);
+      return JSON.stringify({
+        command: cmd, args: cmdArgs, cwd,
+        exitCode: -1, stdout: "",
+        stderr: "[拒绝] 该命令可能修改工作区，请使用专用工具：代码修改用 apply_patch/write_file，验证用 run_verification",
+        timedOut: false, passed: false, policy, truncated: false,
+      });
+    }
+    logger.info(LogTag.BuiltinTools, `[run_shell] workspace_mutation → sandbox path (level=${level}), calling runShellOnce(useSandbox=true)`);
+    const result = await runShellOnce(cmd, cmdArgs, cwd, undefined, true);
+    // 沙箱 wrap 失败导致 fallback 到直接 spawn → 拒绝（不能让 workspace_mutation 越过沙箱直接跑）
+    if (!result.ranViaSandbox) {
+      logger.warn(LogTag.BuiltinTools, `[run_shell] workspace_mutation → sandbox wrap failed (fell back to direct spawn), rejected. stderr=${result.stderr.slice(0, 200)}`);
+      return JSON.stringify({
+        command: cmd, args: cmdArgs, cwd,
+        exitCode: -1, stdout: result.stdout,
+        stderr: result.stderr + "\n[拒绝] 沙箱不可用，该命令可能修改工作区，已终止",
+        timedOut: false, passed: false, policy, truncated: result.truncated,
+      });
+    }
+    logger.info(LogTag.BuiltinTools, `[run_shell] [sandbox ${level}] done: exitCode=${result.exitCode} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length}`);
     return JSON.stringify({
-      command: cmd, args: cmdArgs, cwd,
-      exitCode: -1, stdout: "",
-      stderr: "[拒绝] 该命令可能修改工作区，请使用专用工具：代码修改用 apply_patch/write_file，验证用 run_verification",
-      timedOut: false, passed: false, policy, truncated: false,
+      command: cmd,
+      args: cmdArgs,
+      cwd,
+      exitCode: result.exitCode,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      timedOut: false,
+      truncated: result.truncated,
+      policy: "workspace_mutation",
+      sandboxed: true,
     });
   }
 
-  console.log(LOG_PREFIX, "run_shell:", cmd, JSON.stringify(cmdArgs), cwd ? "cwd=" + cwd : "");
+  // read_only policy：安全读命令，直接 spawn（不经过沙箱）
+  logger.info(LogTag.BuiltinTools, `[run_shell] read_only policy, direct spawn (level=${level})`);
   const result = await runShellOnce(cmd, cmdArgs, cwd);
-  console.log(LOG_PREFIX, "run_shell 完成 exitCode=" + result.exitCode + " stdout.len=" + result.stdout.length + " stderr.len=" + result.stderr.length);
+  logger.info(LogTag.BuiltinTools, `[run_shell] [read_only] done: exitCode=${result.exitCode} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length} sandboxed=${result.ranViaSandbox}`);
 
   // 结构化返回（保留 ShellResult 字段，供证据收集器解析）
   return JSON.stringify({
@@ -293,6 +398,7 @@ async function executeRunShell(args: Record<string, unknown>): Promise<string> {
     timedOut: false,  // runShellOnce 超时时通过 kill 处理，此处为正常返回
     truncated: result.truncated,
     policy: "read_only",
+    sandboxed: result.ranViaSandbox,
   });
 }
 

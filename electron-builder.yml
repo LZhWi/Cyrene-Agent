@@ -3,6 +3,8 @@ productName: Cyrene
 directories:
   output: release
 asar: true
+asarUnpack:
+  - "**/vendor/srt-win/**"
 electronDist: node_modules/electron/dist
 files:
   - dist/**/*

@@ -328,7 +328,6 @@ async function executeToolCall(
     args,
     risk,
     runId: ctx?.runId,
-    signal: ctx?.signal,
   });
   if (!perm.allowed) {
     return failed("E_PERMISSION_DENIED", perm.reason || "权限不足");
@@ -458,12 +457,11 @@ export class CyreneAgent extends AbstractAgent {
               conversationId: options.conversationId ?? "default",
               runId,
               requestUserClarification: options.requestUserClarification
-                ?? ((card, signal) => requestUserClarification(
+                ?? ((card) => requestUserClarification(
                   card,
                   undefined,
                   undefined,
                   { runId, revision: 1 },
-                  signal,
                 )),
               timeoutMs: options.timeoutMs,
               executeTool,

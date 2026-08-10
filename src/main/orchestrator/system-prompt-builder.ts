@@ -61,6 +61,16 @@ export function buildSystemPrompt(styleFile: string, includeStyle = true): strin
   const system = loadPromptFile(systemFile);
   if (system) parts.push(system);
 
+  // Code 模式（work 分支）额外加载 work_remark.md + code_system.md + code_remark.md
+  if (!isChatMode && !isLearnMode) {
+    const workRemark = loadPromptFile("work_remark.md");
+    if (workRemark) parts.push(workRemark);
+    const codeSystem = loadPromptFile("code_system.md");
+    if (codeSystem) parts.push(codeSystem);
+    const codeRemark = loadPromptFile("code_remark.md");
+    if (codeRemark) parts.push(codeRemark);
+  }
+
   const identity = loadPromptFile(identityFile);
   if (identity) parts.push(identity);
 
@@ -87,9 +97,13 @@ export function buildSystemPrompt(styleFile: string, includeStyle = true): strin
  */
 export function buildToolSystemPrompt(enabledTools: ReadonlyArray<ToolDefinition>, isOptimizedFirstRound?: boolean): string {
   const base = loadPromptFile(isOptimizedFirstRound ? "tools_system_optimized_first.md" : "tools_system.md");
+  const codeSystem = loadPromptFile("code_system.md");
+  const codeRemark = loadPromptFile("code_remark.md");
   const catalog = buildToolCatalog(enabledTools as ToolDefinition[]);
   return [
     base,
+    codeSystem,
+    codeRemark,
     "## 当前可用工具",
     catalog,
   ].filter(Boolean).join("\n\n");

@@ -4,7 +4,7 @@ import { ToolExecutionError } from "../tool-execution-error";
 import type { ToolDefinition } from "../tool-registry";
 import type { AgentState } from "./types";
 import { dispatchToolCall } from "./tool-dispatcher";
-import { authorizeUncertainEffectRepeat } from "./uncertain-effect-guard";
+import { resolveUncertainEffect } from "./uncertain-effect-guard";
 
 function state(): AgentState {
   return { todoItems: [], uncertainEffects: [] };
@@ -99,7 +99,7 @@ describe("dispatchToolCall truthful execution", () => {
     expect(blocked.message).toContain(current.uncertainEffects[0].id);
     expect(execute).toHaveBeenCalledTimes(1);
 
-    expect(authorizeUncertainEffectRepeat(current, current.uncertainEffects[0].id)).toBe(true);
+    resolveUncertainEffect(current, current.uncertainEffects[0].toolCallId);
     const allowed = await dispatchToolCall(call("call-approved"), context);
     expect(allowed.outcome).toBe("success");
     expect(current.uncertainEffects).toHaveLength(0);

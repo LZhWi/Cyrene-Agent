@@ -130,7 +130,6 @@ export async function runHarnessWithAdapter(
         args,
         risk,
         runId,
-        signal,
       });
       return perm.allowed;
     },

@@ -35,15 +35,14 @@ describe("permission cancellation", () => {
     getAllWindows.mockReturnValue([{ webContents: { send: vi.fn() } }]);
   });
 
-  it("rejects a pending approval with AbortError when its signal aborts", async () => {
-    const controller = new AbortController();
+  it("rejects a pending approval with AbortError when its run is cancelled", async () => {
     let outcome: unknown;
-    void requestApproval(approval("run-signal"), controller.signal).then(
+    void requestApproval(approval("run-signal")).then(
       (value) => { outcome = { status: "resolved", value }; },
       (error) => { outcome = { status: "rejected", name: (error as Error).name }; },
     );
 
-    controller.abort();
+    cancelPendingApprovalsForRun("run-signal");
     await Promise.resolve();
 
     expect(outcome).toEqual({ status: "rejected", name: "AbortError" });

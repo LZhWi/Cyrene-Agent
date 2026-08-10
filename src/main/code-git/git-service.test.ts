@@ -130,6 +130,30 @@ describe("GitService.getDiffForSession", () => {
     expect(readGitErrorStdout({ git: { stdout: patch } })).toBe(patch);
   });
 
+  it("recovers the diff from error.message when autocrlf warning merges stdout+stderr", () => {
+    const diff = "diff --git a/new.ts b/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/new.ts\n@@ -0,0 +1 @@\n+export const answer = 42;\n";
+    const warning = "warning: in the working copy of 'new.ts', LF will be replaced by CRLF the next time Git touches it\n";
+    // simple-git 在 autocrlf 警告场景下把 stdout+stderr 合并进 error.message，
+    // 且不提供 error.stdout / error.git.stdout。
+    const error = Object.assign(new Error(diff + warning), { task: {} });
+
+    expect(readGitErrorStdout(error)).toBe(diff);
+  });
+
+  it("recovers numstat from error.message when autocrlf warning merges stdout+stderr", () => {
+    const numstat = "42\t0\tnew.ts\n";
+    const warning = "warning: in the working copy of 'new.ts', LF will be replaced by CRLF the next time Git touches it\n";
+    const error = Object.assign(new Error(numstat + warning), { task: {} });
+
+    expect(readGitErrorStdout(error)).toBe(numstat);
+  });
+
+  it("does not treat a real git error message as command output", () => {
+    const error = new Error("fatal: not a git repository");
+
+    expect(readGitErrorStdout(error)).toBeUndefined();
+  });
+
   it("rejects a parent traversal path before executing Git", async () => {
     const result = await service({}).getDiffForSession("session-1", "..\\secret.txt");
 

@@ -21,6 +21,7 @@ export type { AgentFileAccessLevel, ToolRiskLevel };
 const LOG_PREFIX = "[Permission]";
 
 export const ACCESS_LEVEL_LABEL: Record<AgentFileAccessLevel, string> = {
+  "project-read-only": "完全只读",
   "read-only": "只读",
   "scoped": "指定目录",
   "per-action": "每次审批",
@@ -174,7 +175,7 @@ export function registerPermissionIpc(): void {
 }
 
 function isValidLevel(value: unknown): value is AgentFileAccessLevel {
-  return value === "read-only" || value === "scoped" || value === "per-action" || value === "full";
+  return value === "project-read-only" || value === "read-only" || value === "scoped" || value === "per-action" || value === "full";
 }
 
 /**

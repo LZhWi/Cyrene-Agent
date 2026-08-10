@@ -73,6 +73,7 @@ import { resolveVendorRuntimeSettings, setVendorRuntimeSettingsGetter } from "./
 import { toolRegistry } from "./orchestrator/tool-registry";
 import { setLive2dWindowSender } from "./orchestrator/built-in-tools";
 import { registerAllTools } from "./orchestrator/tool-registration";
+import { initSandbox } from "./orchestrator/sandbox/sandbox-exec";
 import { initMcpManager, pruneMcpServersByIds } from "./orchestrator/mcp-manager";
 import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from "./sync-mcp-builtin";
 import { bootstrapPermission } from "./permission/bootstrap";
@@ -332,6 +333,12 @@ app.whenReady().then(async () => {
   registerCodeGitIpc({ service: codeGitService });
   proactiveLifecycle.initializeProactiveChatService();
   proactiveLifecycle.initializeProactiveTrigger();
+
+  // SRT 沙箱初始化（检测安装状态，不弹 UAC）：必须在 registerAllTools 前，
+  // 让 run_shell 的 workspace_mutation 分支能用上沙箱。失败不阻塞启动（fallback 到直接 spawn）。
+  await initSandbox().catch((e) =>
+    logger.error(LogTag.Runtime, "[Sandbox] initSandbox failed at startup:", e),
+  );
 
   // 工具注册：集中到一个显式入口，取代 index.ts 中的副作用 import
   registerAllTools({ codeGitService });

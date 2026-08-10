@@ -1,7 +1,7 @@
 import { Popover } from "antd";
 import { useEffect, useState } from "react";
 
-type PermissionLevel = "read-only" | "scoped" | "per-action" | "full";
+type PermissionLevel = "project-read-only" | "read-only" | "scoped" | "per-action" | "full";
 
 interface PermissionSettingsApi {
   getPermissionLevel?: () => Promise<{ level: PermissionLevel }>;
@@ -9,6 +9,7 @@ interface PermissionSettingsApi {
 }
 
 const PERMISSION_OPTIONS: ReadonlyArray<{ level: PermissionLevel; label: string }> = [
+  { level: "project-read-only", label: "完全只读" },
   { level: "read-only", label: "允许访问" },
   { level: "scoped", label: "指定目录" },
   { level: "per-action", label: "请求审批" },

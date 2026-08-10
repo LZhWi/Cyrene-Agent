@@ -185,23 +185,22 @@ describe("requestUserClarification", () => {
     });
   });
 
-  it("settles a structured clarification exactly once when its signal aborts", async () => {
+  it("settles a structured clarification exactly once when its run is cancelled", async () => {
     vi.useFakeTimers();
     const sender = vi.fn();
     const onSettled = vi.fn();
-    const controller = new AbortController();
     let outcome: unknown;
 
     void requestUserClarification({
       intro: "还需要确认一下。",
       questions: [],
       deferredFields: [],
-    }, sender, onSettled, { runId: "run-abort", revision: 1 }, controller.signal).then(
+    }, sender, onSettled, { runId: "run-abort", revision: 1 }).then(
       (value) => { outcome = { status: "resolved", value }; },
       (error) => { outcome = { status: "rejected", name: (error as Error).name }; },
     );
 
-    controller.abort();
+    cancelPendingChoicesForRun("run-abort");
     await Promise.resolve();
 
     expect(outcome).toEqual({ status: "rejected", name: "AbortError" });

@@ -57,7 +57,6 @@ const VISION_TEST_IMAGE_BASE64 =
 
 export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
   const {
-    windowManager,
     getGeneralSettings,
     saveGeneralSettings,
     getModelSettings,
@@ -69,6 +68,9 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
     syncVolcanoSearchMcp,
     syncPlaywrightMcp,
   } = deps;
+  // 注意：windowManager 不解构，统一用 deps.windowManager 实时读取 getter。
+  // registerSettingsIpc 在模块加载阶段调用，那时 windowManager 仍为 null，
+  // 解构会捕获 null 并导致后续 ?. 永远短路（设置里的打开侧边栏/日程等会失效）。
 
   function broadcastToAuxWindows(channel: string, payload: unknown): void {
     for (const win of [reactChatWindow, sidebarWindow, tasksWindow, settingsWindow]) {
@@ -188,7 +190,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
   });
 
   ipcMain.on(IPC.SETTINGS_OPEN_SIDEBAR, () => {
-    windowManager?.createSidebarWindow();
+    deps.windowManager?.createSidebarWindow();
   });
 
   ipcMain.on(IPC.SETTINGS_CLOSE_SIDEBAR, async () => {
@@ -196,7 +198,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
   });
 
   ipcMain.on(IPC.SETTINGS_OPEN_TASKS, () => {
-    windowManager?.createTasksWindow();
+    deps.windowManager?.createTasksWindow();
   });
 
   ipcMain.on(IPC.SETTINGS_CLOSE_TASKS, async () => {
@@ -205,7 +207,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
 
   ipcMain.on(IPC.SETTINGS_SET_PET_ALWAYS_ON_TOP, (_event, value: boolean) => {
     const saved = saveGeneralSettings({ ...getGeneralSettings(), petAlwaysOnTop: Boolean(value) });
-    windowManager?.setMainWindowAlwaysOnTop(saved.petAlwaysOnTop);
+    deps.windowManager?.setMainWindowAlwaysOnTop(saved.petAlwaysOnTop);
   });
 
   ipcMain.on(IPC.SETTINGS_SET_PET_VISIBLE, (_event, value: boolean) => {
@@ -214,7 +216,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
 
   ipcMain.on(IPC.SETTINGS_SET_PET_ZOOM, (_event, value: number) => {
     const saved = saveGeneralSettings({ ...getGeneralSettings(), petZoom: Number(value) });
-    windowManager?.applyMainWindowZoom(saved.petZoom);
+    deps.windowManager?.applyMainWindowZoom(saved.petZoom);
   });
 
   ipcMain.handle(IPC.MODEL_CONFIG_GET, () => getPublicModelConfig());

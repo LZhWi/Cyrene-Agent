@@ -16,7 +16,7 @@ import type {
 } from "./types";
 import { parseToolCallArgs } from "./types";
 import { isAbortError } from "../../abort-utils";
-import { authorizeUncertainEffectRepeat } from "./uncertain-effect-guard";
+import { resolveUncertainEffect } from "./uncertain-effect-guard";
 
 // ── update_todo ──────────────────────────────────────────
 
@@ -420,8 +420,11 @@ export async function executeConfirmUncertainEffect(
       answers?: Array<{ field?: string; selectedValues?: string[] }>;
     };
     const decision = raw.answers?.find((answer) => answer.field === "decision")?.selectedValues?.[0];
-    const authorized = decision === "allow_repeat"
-      && authorizeUncertainEffectRepeat(state, effectId);
+    const matchedEffect = state.uncertainEffects.find((effect) => effect.id === effectId);
+    const authorized = decision === "allow_repeat" && Boolean(matchedEffect);
+    if (authorized && matchedEffect) {
+      resolveUncertainEffect(state, matchedEffect.toolCallId);
+    }
     return {
       outcome: "success",
       tool: CONFIRM_UNCERTAIN_EFFECT_TOOL_ID,

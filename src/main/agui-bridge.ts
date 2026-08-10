@@ -235,11 +235,11 @@ export function registerAgUiIpc(
     // CyreneAgent 发出 RUN_FINISHED(result.status="cancelled")，complete 回调自然清理。
     const runAbortController = new AbortController();
     options.signal = runAbortController.signal;
-    options.requestUserClarification = (card, signal) => requestUserClarification(card, (cardData) => {
+    options.requestUserClarification = (card) => requestUserClarification(card, (cardData) => {
       send({ type: "CUSTOM", name: "cyrene.choice", value: cardData, threadId, runId });
     }, (settlement) => {
       send({ type: "CUSTOM", name: "cyrene.choice.dismiss", value: settlement, threadId, runId });
-    }, { runId, revision: 1 }, signal ?? runAbortController.signal);
+    }, { runId, revision: 1 });
 
     // Learn 模式：配置 Obsidian Vault 并注册工具
     if (mode === "learn" && session.workspaceBinding?.workspaceRoot) {

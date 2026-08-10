@@ -41,6 +41,8 @@
   stroke-linejoin: round;
 }
 
+.cy-permission-panel__option.is-project-read-only,
+.cy-permission-control.is-project-read-only,
 .cy-permission-panel__option.is-read-only,
 .cy-permission-control.is-read-only { color: #21a366; }
 .cy-permission-panel__option.is-scoped,
@@ -51,6 +53,7 @@
 .cy-permission-control.is-full { color: #d49d16; }
 
 .cy-permission-panel__option:hover { background: #f7f7f7; }
+.cy-permission-panel__option.is-project-read-only.is-active,
 .cy-permission-panel__option.is-read-only.is-active { background: #eaf8ef; }
 .cy-permission-panel__option.is-scoped.is-active { background: #eaf2ff; }
 .cy-permission-panel__option.is-per-action.is-active { background: #f1f1f1; }

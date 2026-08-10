@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
-  authorizeUncertainEffectRepeat,
-  evaluateUncertainEffect,
+  isBlockedByUncertainEffect,
+  resolveUncertainEffect,
 } from "./uncertain-effect-guard";
 import type { AgentState } from "./types";
 
@@ -19,26 +19,28 @@ function state(): AgentState {
 }
 
 describe("UncertainEffectGuard", () => {
-  it("blocks only a related non-idempotent request", () => {
-    expect(evaluateUncertainEffect(state(), "same-effect", "non_idempotent_side_effect"))
-      .toMatchObject({ allowed: false, effect: { id: "effect-1" } });
-    expect(evaluateUncertainEffect(state(), "different", "non_idempotent_side_effect"))
-      .toEqual({ allowed: true });
-    expect(evaluateUncertainEffect(state(), "same-effect", "read_only"))
-      .toEqual({ allowed: true });
-    expect(evaluateUncertainEffect(state(), "same-effect", "idempotent_mutation"))
-      .toEqual({ allowed: true });
+  it("blocks a matching fingerprint and allows a different one", () => {
+    expect(isBlockedByUncertainEffect(state(), "same-effect")).toBe(true);
+    expect(isBlockedByUncertainEffect(state(), "different")).toBe(false);
+    expect(isBlockedByUncertainEffect({ todoItems: [], uncertainEffects: [] }, "same-effect")).toBe(false);
   });
 
-  it("requires runtime-recorded user authorization and consumes it once", () => {
+  it("resolveUncertainEffect removes only the matching toolCallId", () => {
     const current = state();
-    expect(authorizeUncertainEffectRepeat(current, "missing")).toBe(false);
-    expect(authorizeUncertainEffectRepeat(current, "effect-1", 123)).toBe(true);
+    current.uncertainEffects.push({
+      id: "effect-2",
+      toolCallId: "call-other",
+      fingerprint: "other-effect",
+      toolName: "send_email",
+      message: "outcome unknown",
+    });
 
-    expect(evaluateUncertainEffect(current, "same-effect", "non_idempotent_side_effect"))
-      .toEqual({ allowed: true });
-    expect(current.uncertainEffects).toHaveLength(0);
-    expect(evaluateUncertainEffect(current, "same-effect", "non_idempotent_side_effect"))
-      .toEqual({ allowed: true });
+    resolveUncertainEffect(current, "call-old");
+    expect(current.uncertainEffects).toHaveLength(1);
+    expect(current.uncertainEffects[0].id).toBe("effect-2");
+
+    // 解除后不再被拦截
+    expect(isBlockedByUncertainEffect(current, "same-effect")).toBe(false);
+    expect(isBlockedByUncertainEffect(current, "other-effect")).toBe(true);
   });
 });

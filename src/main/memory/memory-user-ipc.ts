@@ -41,12 +41,15 @@ const L0_EDITABLE_KEYS = ["preferredName", "occupation", "longTermInterests", "l
 const L1_EDITABLE_KEYS = ["recentGoals", "recentPreferences", "currentProject"];
 
 export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): void {
-  const { windowManager, embeddingIndexService } = deps;
+  const { embeddingIndexService } = deps;
+  // 注意：windowManager 不解构，统一用 deps.windowManager 实时读取 getter。
+  // registerMemoryUserToolIpc 在模块加载阶段调用，那时 windowManager 仍为 null，
+  // 解构会捕获 null 并导致后续 ?. 永远短路（表情包管理窗口打不开）。
 
   // Sticker manager window controls
   ipcMain.handle(IPC.SETTINGS_OPEN_STICKER_MANAGER, async () => {
     console.log("[stickers] open sticker manager requested");
-    return windowManager?.createStickerManagerWindow();
+    return deps.windowManager?.createStickerManagerWindow();
   });
 
   ipcMain.on(IPC.STICKERS_MINIMIZE, () => {

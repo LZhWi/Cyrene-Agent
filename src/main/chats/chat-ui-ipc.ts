@@ -28,7 +28,7 @@ export function getActiveChatSessionId(): string | null {
 }
 
 export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
-  const { live2dWindowLifecycle, windowManager } = deps;
+  const { live2dWindowLifecycle } = deps;
 
   ipcMain.handle(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS, () => ({
     window: live2dWindowLifecycle.getDiagnostics(),
@@ -164,9 +164,12 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
   });
 
   // 状态栏专用入口：打开/复用 reactChatWindow
+  // 注意：必须用 deps.windowManager 实时读取 getter，不能在注册时解构。
+  // registerChatUiIpc 在模块加载阶段调用，那时 windowManager 仍为 null，
+  // 解构会捕获 null 并导致后续 ?. 永远短路，按钮点了打不开窗口。
   ipcMain.handle(IPC.CHATS_OPEN_IN_REACT_WINDOW, (_event, sessionId: string) => {
     if (typeof sessionId !== "string" || sessionId.trim().length === 0) return false;
-    windowManager?.createReactChatWindow(sessionId);
+    deps.windowManager?.createReactChatWindow(sessionId);
     return true;
   });
 

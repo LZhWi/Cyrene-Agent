@@ -15,13 +15,33 @@ const MAX_DIFF_BYTES = 2 * 1024 * 1024;
 /**
  * `git diff --no-index` uses exit code 1 when it successfully finds a diff.
  * simple-git keeps that command's stdout in `error.git.stdout`.
+ *
+ * 当 `core.autocrlf=true` 且未跟踪文件使用 LF 行结尾时，git 会在 stderr 输出
+ * "LF will be replaced by CRLF" 警告。simple-git 此时不再分别提供 stdout/stderr，
+ * 而是把两者合并塞进 `error.message`。此处增加 fallback：从 message 中提取
+ * 纯 diff/numstat 内容（截掉 warning 行），避免 diff 被当作错误消息原样显示。
  */
 export function readGitErrorStdout(error: unknown): string | undefined {
   if (!error || typeof error !== "object") return undefined;
   const direct = (error as { stdout?: unknown }).stdout;
   if (typeof direct === "string") return direct;
   const nested = (error as { git?: { stdout?: unknown } }).git?.stdout;
-  return typeof nested === "string" ? nested : undefined;
+  if (typeof nested === "string") return nested;
+  // simple-git 在 autocrlf 警告等场景下会把 stdout+stderr 合并进 error.message。
+  // 只接受看起来像 diff（diff --git 开头）或 numstat（数字开头）的 message，
+  // 避免把真正的 git 错误消息误当作命令输出。
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== "string") return undefined;
+  if (message.startsWith("diff --git") || /^\d/.test(message)) {
+    return stripGitWarnings(message);
+  }
+  return undefined;
+}
+
+/** 截掉 `warning:`/`fatal:`/`error:` 开头的行及之后内容，保留纯命令输出。 */
+function stripGitWarnings(value: string): string {
+  const warningIdx = value.search(/^(warning|fatal|error):/m);
+  return warningIdx >= 0 ? value.slice(0, warningIdx) : value;
 }
 
 export interface GitStatusFile {

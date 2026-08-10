@@ -6,9 +6,10 @@ import { permissionBlocksWrap, permissionNote } from "./dom";
 import { _initModalOverlay } from "../shared/modal";
 import { modalState } from "../shared/modal-state";
 
-type PermissionLevel = "read-only" | "scoped" | "per-action" | "full";
+type PermissionLevel = "project-read-only" | "read-only" | "scoped" | "per-action" | "full";
 
 const PERMISSION_NOTES: Record<PermissionLevel, string> = {
+  "project-read-only": "完全只读：昔涟只能在当前项目目录内只读，不能修改任何文件，也不能执行命令。",
   "read-only": "只读：昔涟不会修改本地任何文件，也不能为你安装新工具。",
   "scoped": "指定目录：昔涟只能在你授权的目录里读写文件（白名单后续在此面板配置）。",
   "per-action": "每次审批：每次涉及文件或安装的操作，昔涟都会在聊天里弹卡片让你确认。",

@@ -184,7 +184,7 @@ export async function dispatchToolCall(
       };
 
       const ledgerResult = await ctx.executionLedger.execute(
-        { capability: tool.id, targetRefs, args },
+        { logicalInvocationId: `${ctx.toolContext?.runId ?? "unknown"}:${call.id}`, capability: tool.id, targetRefs, args },
         ledgerRun,
       );
 
