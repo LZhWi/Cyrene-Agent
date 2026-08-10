@@ -40,6 +40,7 @@ import { decideRetry, getRetryParams, sleepWithJitter } from "./retry-policy";
 import { computeTokenBudget, compressForAgentLoop } from "./compaction";
 import { StreamController } from "./stream-controller";
 import { TimeoutClock } from "./timeout-clock";
+import { buildCurrentTodoNotebookContext } from "./todo-working-notebook";
 import { isCancellationError, raceWithSignal } from "../../abort-utils";
 import { isExplicitStreamUnsupported } from "../vendors/stream-support";
 
@@ -98,12 +99,17 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
       return buildCancelledResult(state, rounds);
     }
 
+    const roundSystemPrompt = [
+      input.systemPrompt,
+      buildCurrentTodoNotebookContext(state.todoItems),
+    ].join("\n\n---\n\n");
+
     const roundId = `round-${rounds}`;
     input.onEvent?.({ type: "round_start", roundId });
 
     // ═══ Mid-loop compaction（v3 §10.6）═══
     const budget = computeTokenBudget(
-      input.systemPrompt,
+      roundSystemPrompt,
       allToolSpecs,
       messages,
       config.contextWindowTokens,
@@ -115,7 +121,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     if (budget.needsCompaction) {
       console.log(`${LOG_PREFIX} mid-loop compaction triggered (estimated=${budget.estimatedInput} budget=${budget.usableInputBudget})`);
       messages = await compressForAgentLoop({
-        systemPrompt: input.systemPrompt,
+        systemPrompt: roundSystemPrompt,
         toolSchemas: allToolSpecs,
         messages,
         contextWindow: config.contextWindowTokens,
@@ -125,7 +131,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
         keepRecentCount: 20,
         summarize: async (history) => {
           // 复用现有 LLM 做摘要
-          return summarizeHistory(input.vendorConfig, input.systemPrompt, history, config, input.signal);
+          return summarizeHistory(input.vendorConfig, roundSystemPrompt, history, config, input.signal);
         },
       });
     }
@@ -137,7 +143,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     try {
       response = await callLLM(
         input.vendorConfig,
-        input.systemPrompt,
+        roundSystemPrompt,
         messages,
         allToolSpecs,
         config,

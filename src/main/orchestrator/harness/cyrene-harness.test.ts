@@ -350,4 +350,41 @@ describe("CyreneHarness completion (P0-A)", () => {
     expect(result.terminated).toBe(false);
     expect(result.terminateReason).toBeUndefined();
   });
+
+  it("shows the updated mutable Todo notebook to the next tool round", async () => {
+    const updateCall: ToolCall = {
+      id: "todo-1",
+      name: "update_todo",
+      arguments: JSON.stringify({
+        todos: [{ id: "inspect", content: "检查项目结构", status: "in_progress" }],
+      }),
+    };
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ text: "先记一下步骤。", toolCalls: [updateCall] }),
+      assistantResponse({ text: "现在继续检查。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockedDispatch.mockImplementation(async (_call, ctx) => {
+      ctx.state.todoItems = [{ id: "inspect", content: "检查项目结构", status: "in_progress" }];
+      return {
+        outcome: "success",
+        tool: "update_todo",
+        message: "待办列表已更新",
+        output: "{}",
+      };
+    });
+
+    await runCyreneHarness({
+      systemPrompt: "base prompt",
+      messages: [{ role: "user", content: "检查并修复这个项目" }],
+      tools: [],
+      vendorConfig,
+    });
+
+    const firstRequest = fakeStreamChatWithSdk.mock.calls[0][0].request as { messages: ChatMessage[] };
+    const secondRequest = fakeStreamChatWithSdk.mock.calls[1][0].request as { messages: ChatMessage[] };
+    expect(firstRequest.messages[0].content).toContain("当前工作笔记为空");
+    expect(secondRequest.messages[0].content).toContain("[in_progress] inspect: 检查项目结构");
+    expect(secondRequest.messages[0].content).toContain(`binding="false"`);
+  });
 });
