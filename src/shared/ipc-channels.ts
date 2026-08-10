@@ -44,6 +44,11 @@ export const IPC = {
   AGUI_CANCEL: "agui:cancel",
   SCHEDULER_EVENT: "scheduler:event",
 
+  // Code 模式 Git 工作台（renderer 只能读取结构化状态和 unified diff）
+  CODE_GIT_STATUS: "code-git:status",
+  CODE_GIT_DIFF: "code-git:diff",
+  CODE_GIT_CHANGED: "code-git:changed",
+
   // sidebar window (status / schedule / settings entry)
   SIDEBAR_MINIMIZE: "sidebar:minimize",
   SIDEBAR_CLOSE: "sidebar:close",
