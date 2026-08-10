@@ -14,6 +14,13 @@ export interface MemoryEntry {
   metadata?: Record<string, unknown>;
 }
 
+export interface ChatHistoryOccurrence {
+  sessionId: string;
+  role: "user" | "assistant";
+  ts: number;
+  turnId?: string;
+}
+
 export interface SearchResult {
   entry: MemoryEntry;
   score: number;        // 加权后的综合分数（余弦 × weight × 衰减）
@@ -33,6 +40,66 @@ export function cosineSimilarity(a: number[], b: number[]): number {
     dot += a[i] * b[i];
   }
   return dot;
+}
+
+export function normalizeChatHistoryText(text: string): string {
+  return text.normalize("NFC").replace(/\r\n?/g, "\n").trim();
+}
+
+function occurrenceFromMetadata(entry: MemoryEntry): ChatHistoryOccurrence | null {
+  const metadata = entry.metadata;
+  const sessionId = typeof metadata?.sessionId === "string" ? metadata.sessionId : "";
+  const role = metadata?.role === "user" || metadata?.role === "assistant" ? metadata.role : null;
+  const ts = typeof metadata?.ts === "number" && Number.isFinite(metadata.ts) ? metadata.ts : entry.createdAt;
+  if (!sessionId || !role) return null;
+  return {
+    sessionId,
+    role,
+    ts,
+    ...(typeof metadata?.turnId === "string" && metadata.turnId ? { turnId: metadata.turnId } : {}),
+  };
+}
+
+function occurrencesFromEntry(entry: MemoryEntry): ChatHistoryOccurrence[] {
+  const raw = entry.metadata?.occurrences;
+  if (Array.isArray(raw)) {
+    const occurrences = raw.flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const item = value as Record<string, unknown>;
+      if (typeof item.sessionId !== "string" || !item.sessionId) return [];
+      if (item.role !== "user" && item.role !== "assistant") return [];
+      if (typeof item.ts !== "number" || !Number.isFinite(item.ts)) return [];
+      return [{
+        sessionId: item.sessionId,
+        role: item.role,
+        ts: item.ts,
+        ...(typeof item.turnId === "string" && item.turnId ? { turnId: item.turnId } : {}),
+      } satisfies ChatHistoryOccurrence];
+    });
+    if (occurrences.length > 0) return occurrences;
+  }
+  const legacy = occurrenceFromMetadata(entry);
+  return legacy ? [legacy] : [];
+}
+
+function sameOccurrence(a: ChatHistoryOccurrence, b: ChatHistoryOccurrence): boolean {
+  if (a.turnId && b.turnId) return a.turnId === b.turnId;
+  return a.sessionId === b.sessionId && a.role === b.role && a.ts === b.ts;
+}
+
+function metadataWithOccurrences(
+  metadata: Record<string, unknown> | undefined,
+  occurrences: ChatHistoryOccurrence[],
+): Record<string, unknown> {
+  const latest = occurrences.reduce((best, item) => item.ts >= best.ts ? item : best);
+  const { turnId: _legacyTurnId, ...rest } = metadata ?? {};
+  return {
+    ...rest,
+    sessionId: latest.sessionId,
+    role: latest.role,
+    ts: latest.ts,
+    occurrences,
+  };
 }
 
 // ── IVF 倒排文件索引 ──
@@ -278,6 +345,52 @@ export class JsonVectorStore {
     return this.addPreparedBatch([{ text, source, embedding, metadata, createdAt: opts?.createdAt }])[0];
   }
 
+  /** chat_history 专用写入：仅规范化文本完全相同时合并，并保留每次出现的位置。 */
+  async addChatHistory(
+    text: string,
+    provider: EmbeddingProvider,
+    occurrence: ChatHistoryOccurrence,
+    opts?: { createdAt?: number },
+  ): Promise<MemoryEntry> {
+    const normalized = normalizeChatHistoryText(text);
+    let existing = this.entries.find((entry) => (
+      entry.source === "chat_history" && normalizeChatHistoryText(entry.text) === normalized
+    ));
+    if (!existing) {
+      const embedding = await provider.embed(text);
+      // The embed call yields. A live turn and startup backfill can therefore both
+      // observe a missing exact-text entry. Re-check before inserting so they share
+      // one vector and keep their positions as separate occurrences.
+      existing = this.entries.find((entry) => (
+        entry.source === "chat_history" && normalizeChatHistoryText(entry.text) === normalized
+      ));
+      if (!existing) {
+        return this.addPreparedBatch([{
+          text,
+          source: "chat_history",
+          embedding,
+          metadata: metadataWithOccurrences(undefined, [occurrence]),
+          createdAt: opts?.createdAt,
+        }])[0];
+      }
+    }
+
+    const occurrences = occurrencesFromEntry(existing);
+    const matchedIndex = occurrences.findIndex((item) => sameOccurrence(item, occurrence));
+    if (matchedIndex >= 0) {
+      // 惰性迁移：回填遇到旧 metadata.turnId/无 turnId 条目时，用信息更完整的新 occurrence 替换。
+      occurrences[matchedIndex] = occurrence.turnId ? occurrence : occurrences[matchedIndex];
+    } else {
+      occurrences.push(occurrence);
+      existing.weight = Math.min(existing.weight + 0.1, 5.0);
+    }
+    existing.lastRecalledAt = Date.now();
+    existing.metadata = metadataWithOccurrences(existing.metadata, occurrences);
+    this.dirty = true;
+    this.save();
+    return existing;
+  }
+
   // 批量添加（用于导入文档 chunk）
   async addBatch(
     items: Array<{ text: string; source: string; metadata?: Record<string, unknown> }>,
@@ -436,6 +549,81 @@ export class JsonVectorStore {
       this.save();
     }
     return deleted;
+  }
+
+  /** 删除指定聊天轮次的 occurrence；只有最后一次出现也被删除时才移除向量。 */
+  deleteChatHistoryOccurrencesByTurnIds(turnIds: string[]): number {
+    const ids = new Set(turnIds.filter(Boolean));
+    if (ids.size === 0) return 0;
+    let removedOccurrences = 0;
+    let deletedEntry = false;
+    const nextEntries: MemoryEntry[] = [];
+
+    for (const entry of this.entries) {
+      if (entry.source !== "chat_history") {
+        nextEntries.push(entry);
+        continue;
+      }
+      const occurrences = occurrencesFromEntry(entry);
+      const kept = occurrences.filter((item) => !item.turnId || !ids.has(item.turnId));
+      const removed = occurrences.length - kept.length;
+      if (removed === 0) {
+        nextEntries.push(entry);
+        continue;
+      }
+      removedOccurrences += removed;
+      if (kept.length === 0) {
+        deletedEntry = true;
+        continue;
+      }
+      entry.metadata = metadataWithOccurrences(entry.metadata, kept);
+      nextEntries.push(entry);
+    }
+
+    if (removedOccurrences > 0) {
+      this.entries = nextEntries;
+      this.dirty = true;
+      if (deletedEntry) this.markIndexDirty();
+      this.save();
+    }
+    return removedOccurrences;
+  }
+
+  /** Remove every chat-history occurrence owned by a deleted chat session. */
+  deleteChatHistoryOccurrencesBySessionId(sessionId: string): number {
+    if (!sessionId) return 0;
+    let removedOccurrences = 0;
+    let deletedEntry = false;
+    const nextEntries: MemoryEntry[] = [];
+
+    for (const entry of this.entries) {
+      if (entry.source !== "chat_history") {
+        nextEntries.push(entry);
+        continue;
+      }
+      const occurrences = occurrencesFromEntry(entry);
+      const kept = occurrences.filter((item) => item.sessionId !== sessionId);
+      const removed = occurrences.length - kept.length;
+      if (removed === 0) {
+        nextEntries.push(entry);
+        continue;
+      }
+      removedOccurrences += removed;
+      if (kept.length === 0) {
+        deletedEntry = true;
+        continue;
+      }
+      entry.metadata = metadataWithOccurrences(entry.metadata, kept);
+      nextEntries.push(entry);
+    }
+
+    if (removedOccurrences > 0) {
+      this.entries = nextEntries;
+      this.dirty = true;
+      if (deletedEntry) this.markIndexDirty();
+      this.save();
+    }
+    return removedOccurrences;
   }
 
   // 删除导入文档

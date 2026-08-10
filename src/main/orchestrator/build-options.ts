@@ -405,7 +405,14 @@ export async function buildAgentRunOptions(
       // 同时注入会让模型看到重复信息、消耗双份 token，且 social 过期后 user_memory 仍在会造成时间不一致。
       // 命中时优先保留 social（更新、更带时间语义），从 memoryInjection 的【相关记忆】块移除重叠条目。
       // open_loop 是话题延续，与长期事实不同维度，不参与抑制。
-      memoryInjection = suppressOverlappingMemoryEntries(memoryInjection, retrievedAtoms);
+      memoryInjection = suppressOverlappingMemoryEntries(memoryInjection, retrievedAtoms, (match) => {
+        console.debug("[SocialContext] suppressed overlapping L2 injection:", {
+          conversationId,
+          score: Number(match.score.toFixed(3)),
+          shortTerm: match.socialText,
+          memory: match.memoryText,
+        });
+      });
     } catch (err) {
       console.warn("[SocialContext] retrieval failed:", err);
     }
@@ -640,11 +647,18 @@ function lexicalOverlap(a: string, b: string): number {
 
 const MEMORY_OVERLAP_THRESHOLD = 0.6;
 
+export interface MemoryOverlapDiagnostic {
+  memoryText: string;
+  socialText: string;
+  score: number;
+}
+
 /** 从 memoryInjection 的【相关记忆】块移除与 short_term social atoms 高度重叠的条目。
  *  只动【相关记忆】块；【相关文档】/【人物关系】不参与抑制。整块空了则移除整块。 */
 export function suppressOverlappingMemoryEntries(
   memoryInjection: string,
   socialAtoms: ReadonlyArray<SocialAtom>,
+  onSuppressed?: (match: MemoryOverlapDiagnostic) => void,
 ): string {
   if (!memoryInjection || socialAtoms.length === 0) return memoryInjection;
   const shortTermContents = socialAtoms
@@ -667,7 +681,16 @@ export function suppressOverlappingMemoryEntries(
     const kept = entries.filter((entry) => {
       // 提取核心文本：去掉 · 前缀，去掉尾部标注（较久远的印象）/⚠️（...）
       const text = entry.replace(/^·\s*/, "").replace(/\s*[（(].*$/, "").trim();
-      return !shortTermContents.some((atom) => lexicalOverlap(text, atom) >= MEMORY_OVERLAP_THRESHOLD);
+      let strongestMatch: MemoryOverlapDiagnostic | undefined;
+      for (const socialText of shortTermContents) {
+        const score = lexicalOverlap(text, socialText);
+        if (score >= MEMORY_OVERLAP_THRESHOLD && (!strongestMatch || score > strongestMatch.score)) {
+          strongestMatch = { memoryText: text, socialText, score };
+        }
+      }
+      if (!strongestMatch) return true;
+      onSuppressed?.(strongestMatch);
+      return false;
     });
     if (kept.length === 0) return ""; // 整块移除
     return [lines[0], ...kept, ...tail].filter((line) => line.trim()).join("\n");

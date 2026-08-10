@@ -550,11 +550,19 @@ describe("suppressOverlappingMemoryEntries", () => {
     ].join("\n")
     const atoms = [makeAtom("short_term", "明天考试，需要复习")]
 
-    const result = suppressOverlappingMemoryEntries(memoryInjection, atoms)
+    const diagnostics: Array<{ memoryText: string; socialText: string; score: number }> = []
+    const result = suppressOverlappingMemoryEntries(memoryInjection, atoms, (match) => diagnostics.push(match))
 
     expect(result).toContain("用户喜欢跑步")
     expect(result).toContain("用户在学法语")
     expect(result).not.toContain("用户明天要考试")
+    expect(diagnostics).toEqual([
+      expect.objectContaining({
+        memoryText: "用户明天要考试",
+        socialText: "明天考试，需要复习",
+        score: expect.any(Number),
+      }),
+    ])
     // notes 行保留（仍有未抑制的条目）
     expect(result).toContain("较久远的印象")
   })

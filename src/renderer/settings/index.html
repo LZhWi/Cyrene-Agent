@@ -296,8 +296,8 @@
             </div>
             <div class="setting-row">
               <div>
-                <strong>屏幕活动观察</strong>
-                <span>后台周期截图并用视觉模型分析你在做什么，让主动消息能判断是否打扰。需配置视觉模型；仅在主动消息管线注入，其他时候由 AI 自行调用。默认关闭。</span>
+                <strong>后台屏幕活动观察</strong>
+                <span>开启后会定时截图并用视觉模型分析你在做什么，让主动消息判断是否打扰。关闭只停止后台定时观察；聊天时 AI 仍可按需调用屏幕观察工具。截图会发送给当前配置的视觉模型分析，原始截图不落盘。默认关闭。</span>
               </div>
               <div class="option-blocks option-blocks--wide" id="screen-monitor-select" role="radiogroup" aria-label="屏幕活动观察">
                 <button type="button" class="option-block is-active" data-value="off" aria-pressed="true">关闭</button>

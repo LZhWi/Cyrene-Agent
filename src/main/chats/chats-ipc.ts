@@ -21,7 +21,7 @@ import { loadState as loadOpenerState, saveState as saveOpenerState } from "../o
 import { rollbackLastProactive } from "../proactive/proactive-policy";
 import { deleteSocialContextByTurnIds, deleteSocialContextForConversation } from "../social-context";
 import { deleteCallContextEvent } from "../call/call-context-store";
-import { deleteHistoryEntriesByTurnIds } from "../rag";
+import { deleteHistoryEntriesBySessionId, deleteHistoryEntriesByTurnIds } from "../rag";
 
 function broadcastChanged(senderWebContents?: WebContents | null): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -103,9 +103,18 @@ export function registerChatsIpc(): void {
 
   ipcMain.handle(IPC.CHATS_DELETE, (event, id: string) => {
     if (!id) return false;
+    const beforeSession = chatsStore.getSession(id);
     const ok = chatsStore.deleteSession(id);
     if (ok) {
       deleteSocialContextForConversation(id);
+      try {
+        deleteHistoryEntriesBySessionId(id);
+      } catch (err) {
+        console.warn("[Chats] 删除会话历史索引失败:", err);
+      }
+      for (const message of beforeSession?.messages ?? []) {
+        if (message.callEvent) deleteCallContextEvent(message.callEvent.callId);
+      }
       broadcastChanged(event.sender);
     }
     return ok;

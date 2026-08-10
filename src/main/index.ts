@@ -2104,7 +2104,7 @@ function toProactiveHistory(
     .map((message) => ({ role: message.role, content: message.content, at: message.at }));
   const callTurns: ProactiveHistoryTurn[] = callEvents.map((event) => {
     const message = callEventToContextMessage(event);
-    return { role: "system", content: message.content, at: event.startedAt };
+    return { role: "call", content: message.content, at: event.startedAt };
   });
   return [...chatTurns, ...callTurns]
     .sort((a, b) => a.at - b.at)
@@ -4922,7 +4922,7 @@ app.whenReady().then(async () => {
   registerWorkIpc({
     openChatWorkView,
     resolveModelConfig: resolveWorkModelConfig,
-    getTools: () => filterWorkTools(toolRegistry.getEnabledTools()),
+    getTools: (mode) => filterWorkTools(toolRegistry.getEnabledTools(), mode),
     loadPrompt: (name, mode) => {
       const systemFiles = {
         work: "work_system.md",
@@ -5702,10 +5702,16 @@ app.whenReady().then(async () => {
     await initMcpManager();
     console.log("[Cyrene] RAG initialized OK");
     // 历史回填：索引曾因去重评分膨胀静默停摆，修复后把会话日志补进 chat_history（幂等、后台）。
-    backfillChatHistoryFromChatLogs();
+    void backfillChatHistoryFromChatLogs();
     // L2 回填提取：MemoryJudge 瘫痪期间的轮次已被水位线消费，重跑修好的 Judge 补写 L2（幂等、后台）。
     // 回填完成后再补跑一次压缩+Reflection：历史 520 轮的 20 轮触发曾全部静默空转（幂等、后台）。
-    backfillL2FromChatLogs().then(() => runReflectionCatchupOnce());
+    backfillL2FromChatLogs().then((result) => {
+      if (result.complete) {
+        runReflectionCatchupOnce();
+      } else {
+        console.log("[Memory] L2 回填尚未完成，跳过本次 Reflection 补跑:", result.reason ?? "unknown");
+      }
+    });
 
     console.log("[Reranker] startup preload skipped; reranker initializes when changed in settings.");
   } catch (err) {

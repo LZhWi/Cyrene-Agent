@@ -25,4 +25,16 @@ describe("filterWorkTools", () => {
 
     expect(result.map((item) => item.id)).toEqual(["web_search"]);
   });
+
+  it.each(["code", "learn"] as const)("gives %s mode no global or MCP tools", (mode) => {
+    const result = filterWorkTools([
+      tool("write_file"),
+      tool("ask_attached_image"),
+      tool("get_screen_observation"),
+      tool("web_search"),
+      tool("arbitrary_mcp_tool"),
+    ], mode);
+
+    expect(result).toEqual([]);
+  });
 });

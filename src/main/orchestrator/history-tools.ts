@@ -2,14 +2,19 @@
 //
 // 设计（见 docs/history-and-skill-architecture.md）：
 // - 不切分、不压缩、不启发式。全部历史无损存入向量库，模型主动召回。
-// - 存：每轮 user + assistant 消息用 addMemory 存入 source="chat_history"
+// - 存：每轮 user + assistant 消息用 addHistoryMemory 存入 source="chat_history"
 // - 取：recall_history 工具语义检索，按时间排序返回
 //
-// 复用现有 RAG 引擎（addMemory / searchHistoryEntries），不另建存储层。
+// 复用现有 RAG 引擎（addHistoryMemory / searchHistoryEntries），不另建存储层。
 
 import * as fs from "fs";
 import * as path from "path";
-import { addMemory, searchHistoryEntries } from "../rag";
+import {
+  addHistoryMemory,
+  deleteHistoryEntriesBySessionId,
+  getEntriesBySource,
+  searchHistoryEntries,
+} from "../rag";
 import { getUserDataDir } from "../runtime/runtime-paths";
 import { toolRegistry } from "./tool-registry";
 
@@ -18,7 +23,7 @@ const LOG_PREFIX = "[History]";
 /**
  * 把一轮对话存入向量库。在 agui-bridge 的 complete 回调里调用。
  * user 和 assistant 各存一条，方便按角色召回。
- * turnIds 写入 metadata.turnId，供单轮删除时级联清理索引。
+ * 每次出现写入 metadata.occurrences，供单轮删除时只移除对应位置。
  * 失败不抛错（历史存储是副作用，不能影响主流程）。
  */
 export async function indexConversationTurn(
@@ -30,10 +35,10 @@ export async function indexConversationTurn(
   const ts = Date.now();
   try {
     if (userText) {
-      await addMemory(userText, "chat_history", { sessionId, role: "user", ts, turnId: turnIds?.userTurnId });
+      await addHistoryMemory(userText, { sessionId, role: "user", ts, turnId: turnIds?.userTurnId });
     }
     if (assistantText) {
-      await addMemory(assistantText, "chat_history", { sessionId, role: "assistant", ts, turnId: turnIds?.assistantTurnId });
+      await addHistoryMemory(assistantText, { sessionId, role: "assistant", ts, turnId: turnIds?.assistantTurnId });
     }
   } catch (e) {
     console.warn(LOG_PREFIX, "索引对话失败:", e);
@@ -105,54 +110,148 @@ export function registerRecallHistoryTool(): void {
 // ── 历史回填 ──
 // 索引曾因去重评分膨胀静默停摆数周（见 vectorstore.add 的 rawScore 注释），
 // 修复后把 cyrene-chats 会话日志一次性补进 chat_history 索引，恢复 recall_history 对旧对话的召回。
-// - 幂等：标记文件防重跑；即便重跑，纯余弦去重也不会重复写入。
+// - 幂等：v2 标记文件防重跑；即便重跑，相同 occurrence 也不会重复写入。
 // - 时效：createdAt 保留消息原始时间（展示与时间排序用），lastRecalledAt 为回填时刻（初期不被衰减压低）。
 // - 后台执行不阻塞启动；单条失败跳过，RAG 未初始化则中止且不写标记（下次启动重试）。
-export function backfillChatHistoryFromChatLogs(): void {
-  void (async () => {
-    try {
+interface HistoryBackfillProgress {
+  complete: boolean;
+  doneSessions: string[];
+  sessionOffsets: Record<string, number>;
+  indexed: number;
+  at: number;
+}
+
+function readBackfillProgress(marker: string): HistoryBackfillProgress {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(marker, "utf8")) as Partial<HistoryBackfillProgress>;
+    return {
+      complete: parsed.complete === true,
+      doneSessions: Array.isArray(parsed.doneSessions)
+        ? parsed.doneSessions.filter((id): id is string => typeof id === "string")
+        : [],
+      sessionOffsets: parsed.sessionOffsets && typeof parsed.sessionOffsets === "object"
+        ? parsed.sessionOffsets as Record<string, number>
+        : {},
+      indexed: typeof parsed.indexed === "number" ? parsed.indexed : 0,
+      at: typeof parsed.at === "number" ? parsed.at : 0,
+    };
+  } catch {
+    return { complete: false, doneSessions: [], sessionOffsets: {}, indexed: 0, at: 0 };
+  }
+}
+
+function writeBackfillProgress(marker: string, progress: HistoryBackfillProgress): void {
+  fs.mkdirSync(path.dirname(marker), { recursive: true });
+  fs.writeFileSync(marker, JSON.stringify(progress), "utf8");
+}
+
+export async function backfillChatHistoryFromChatLogs(): Promise<void> {
+  try {
       const dataDir = getUserDataDir();
-      const marker = path.join(dataDir, "rag-data", ".history-backfill-v1");
-      if (fs.existsSync(marker)) return;
+      const marker = path.join(dataDir, "rag-data", ".history-occurrences-backfill-v2");
       const indexFile = path.join(dataDir, "cyrene-chats", "index.json");
       if (!fs.existsSync(indexFile)) return;
 
       const sessions = JSON.parse(fs.readFileSync(indexFile, "utf8")) as Array<{ id?: string }>;
-      let indexed = 0;
+      const sessionIds = sessions.flatMap((session) => typeof session?.id === "string" ? [session.id] : []);
+      let progress = fs.existsSync(marker)
+        ? readBackfillProgress(marker)
+        : { complete: false, doneSessions: [], sessionOffsets: {}, indexed: 0, at: 0 };
+      if (progress.complete && sessionIds.length > 0 && getEntriesBySource("chat_history").length === 0) {
+        progress = { complete: false, doneSessions: [], sessionOffsets: {}, indexed: 0, at: 0 };
+      }
+      if (progress.complete) return;
+
+      const doneSessions = new Set(progress.doneSessions);
+      let indexed = progress.indexed;
       for (const session of sessions) {
-        if (!session?.id) continue;
+        if (!session?.id || doneSessions.has(session.id)) continue;
         const file = path.join(dataDir, "cyrene-chats", "sessions", `${session.id}.json`);
-        if (!fs.existsSync(file)) continue;
+        if (!fs.existsSync(file)) {
+          doneSessions.add(session.id);
+          continue;
+        }
         const data = JSON.parse(fs.readFileSync(file, "utf8")) as {
-          messages?: Array<{ role?: string; content?: unknown; at?: unknown }>;
+          messages?: Array<{ id?: unknown; role?: string; content?: unknown; at?: unknown }>;
         };
-        for (const m of data.messages ?? []) {
-          if (typeof m.content !== "string" || !m.content.trim()) continue;
+        const fileMtime = fs.statSync(file).mtimeMs;
+        let sessionFailed = false;
+        for (const [messageIndex, m] of (data.messages ?? []).entries()) {
+          if (messageIndex <= (progress.sessionOffsets[session.id] ?? -1)) continue;
+          if (typeof m.content !== "string" || !m.content.trim()) {
+            progress.sessionOffsets[session.id] = messageIndex;
+            continue;
+          }
           const role = m.role === "user" ? "user" : m.role === "model" || m.role === "assistant" ? "assistant" : null;
-          if (!role) continue;
+          if (!role) {
+            progress.sessionOffsets[session.id] = messageIndex;
+            continue;
+          }
           const ts = typeof m.at === "number" ? m.at : undefined;
+          const occurrenceTs = ts ?? fileMtime + messageIndex;
+          const turnId = typeof m.id === "string" && m.id
+            ? m.id
+            : `backfill:${session.id}:${messageIndex}`;
           try {
-            await addMemory(
+            await addHistoryMemory(
               m.content,
-              "chat_history",
-              { sessionId: session.id, role, ts, backfilled: true },
+              {
+                sessionId: session.id,
+                role,
+                ts: occurrenceTs,
+                turnId,
+              },
               ts !== undefined ? { createdAt: ts } : undefined,
             );
+            if (!fs.existsSync(file)) {
+              deleteHistoryEntriesBySessionId(session.id);
+              doneSessions.add(session.id);
+              break;
+            }
             indexed++;
+            progress.sessionOffsets[session.id] = messageIndex;
+            writeBackfillProgress(marker, {
+              ...progress,
+              complete: false,
+              doneSessions: [...doneSessions],
+              indexed,
+              at: Date.now(),
+            });
           } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
             if (msg.includes("RAG not initialized")) {
               console.warn(LOG_PREFIX, "回填中止：RAG 未初始化");
               return; // 不写标记，下次启动重试
             }
+            sessionFailed = true;
+            console.warn(LOG_PREFIX, `会话 ${session.id} 回填失败，将在下次启动重试:`, msg);
+            break;
             // 单条失败（如嵌入异常）跳过，不中断整体回填
           }
         }
+        if (!sessionFailed) doneSessions.add(session.id);
+        writeBackfillProgress(marker, {
+          ...progress,
+          complete: false,
+          doneSessions: [...doneSessions],
+          indexed,
+          at: Date.now(),
+        });
       }
-      fs.writeFileSync(marker, JSON.stringify({ at: Date.now(), indexed }));
-      console.log(LOG_PREFIX, `历史回填完成：${indexed} 条`);
-    } catch (e) {
-      console.warn(LOG_PREFIX, "历史回填失败:", e);
-    }
-  })();
+      const complete = sessionIds.every((id) => doneSessions.has(id));
+      writeBackfillProgress(marker, {
+        ...progress,
+        complete,
+        doneSessions: [...doneSessions],
+        indexed,
+        at: Date.now(),
+      });
+      if (complete) {
+        console.log(LOG_PREFIX, `历史回填完成：${indexed} 条`);
+      } else {
+        console.warn(LOG_PREFIX, "历史回填未完成，失败位置将在下次启动继续");
+      }
+  } catch (e) {
+    console.warn(LOG_PREFIX, "历史回填失败:", e);
+  }
 }

@@ -16,6 +16,11 @@ const BATCH_SIZE = 8;
  * 重跑产出的改写表述与已有条目余弦常在 0.85~0.9 之间，0.9 会漏拦。 */
 const DEDUP_COSINE = 0.85;
 
+export interface L2BackfillResult {
+  complete: boolean;
+  reason?: "already_complete" | "no_chat_history" | "rag_unavailable" | "provider_unavailable" | "batch_failed" | "error";
+}
+
 /**
  * 与现有 L2 记忆判重：对候选文本做嵌入，与 user_memory 全部向量比纯余弦。
  * 嵌入失败时返回 false 不阻塞写入（后续压缩器仍会合并近似条目）。
@@ -39,7 +44,7 @@ async function isDuplicateL2(content: string, provider: EmbeddingProvider): Prom
 //   weight 从 0 起、衰减/召回语义与正常创建完全一致。
 // - 只写 L2：L0/L1 是"当前状态"层，重放旧提取会覆盖现在的字段。
 // - 后台执行不阻塞启动；单批失败会中断该会话并从该批续跑（批次级断点，避免重跑产出改写近重复）；RAG 未初始化则中止且不写标记（下次启动重试）。
-export function backfillL2FromChatLogs(): Promise<void> {
+export function backfillL2FromChatLogs(): Promise<L2BackfillResult> {
   return (async () => {
     try {
       const dataDir = getUserDataDir();
@@ -52,7 +57,7 @@ export function backfillL2FromChatLogs(): Promise<void> {
       if (fs.existsSync(marker)) {
         try {
           const m = JSON.parse(fs.readFileSync(marker, "utf8")) as { complete?: boolean; doneSessions?: string[]; doneBatches?: Record<string, number> };
-          if (m.complete === true) return;
+          if (m.complete === true) return { complete: true, reason: "already_complete" };
           doneSessions = Array.isArray(m.doneSessions) ? m.doneSessions : [];
           doneBatches = m.doneBatches && typeof m.doneBatches === "object" ? m.doneBatches : {};
         } catch {
@@ -71,15 +76,15 @@ export function backfillL2FromChatLogs(): Promise<void> {
       }
       const done = new Set(doneSessions);
       const indexFile = path.join(dataDir, "cyrene-chats", "index.json");
-      if (!fs.existsSync(indexFile)) return;
+      if (!fs.existsSync(indexFile)) return { complete: true, reason: "no_chat_history" };
       if (!isUserMemoryVectorStoreReady()) {
         console.warn(LOG_PREFIX, "L2 回填中止：RAG 未初始化");
-        return; // 不写标记，下次启动重试
+        return { complete: false, reason: "rag_unavailable" }; // 不写标记，下次启动重试
       }
       const provider = getEmbeddingProvider();
       if (!provider) {
         console.warn(LOG_PREFIX, "L2 回填中止：嵌入 provider 不可用");
-        return;
+        return { complete: false, reason: "provider_unavailable" };
       }
 
       const sessions = JSON.parse(fs.readFileSync(indexFile, "utf8")) as Array<{ id?: string }>;
@@ -161,12 +166,14 @@ export function backfillL2FromChatLogs(): Promise<void> {
       if (failedBatches > 0) {
         writeProgress();
         console.log(LOG_PREFIX, `L2 回填提取未完成：分析 ${batches} 批，写入 ${written} 条，跳过重复 ${skippedDup} 条，${failedBatches} 批失败（下次启动续跑）`);
-        return;
+        return { complete: false, reason: "batch_failed" };
       }
       fs.writeFileSync(marker, JSON.stringify({ complete: true, doneSessions: [...done], at: Date.now(), batches, written, skippedDup }));
       console.log(LOG_PREFIX, `L2 回填提取完成：分析 ${batches} 批，写入 ${written} 条，跳过重复 ${skippedDup} 条`);
+      return { complete: true };
     } catch (e) {
       console.warn(LOG_PREFIX, "L2 回填失败:", e);
+      return { complete: false, reason: "error" };
     }
   })();
 }

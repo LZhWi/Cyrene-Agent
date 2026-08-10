@@ -27,7 +27,7 @@ export interface RegisterWorkIpcDeps {
   /** 侧边栏"工作"入口：打开 chat 窗口并切到 Work 视图（Work 视图内嵌在 chat 窗口）。 */
   openChatWorkView: () => void;
   resolveModelConfig: () => VendorConfig;
-  getTools: () => ToolDefinition[];
+  getTools: (mode: WorkSessionMode) => ToolDefinition[];
   /** mode 用于选择模式专属 system prompt（code/learn），缺省走通用 work prompt。 */
   loadPrompt: (name: "system" | "style" | "router" | "plan" | "actionGate", mode?: WorkSessionMode) => string;
 }
@@ -200,7 +200,7 @@ export function registerWorkIpc(deps: RegisterWorkIpcDeps): void {
     const sessionMode = workSessionMode(nextSession);
     const boundDirUsable = Boolean(nextSession.boundDir && fs.existsSync(nextSession.boundDir) && fs.statSync(nextSession.boundDir).isDirectory());
     const tools: ToolDefinition[] = [
-      ...deps.getTools(),
+      ...deps.getTools(sessionMode),
       ...(sessionMode !== "work" && boundDirUsable ? buildDirTools(nextSession.boundDir!) : []),
     ];
     const modeContext = sessionMode !== "work" && boundDirUsable

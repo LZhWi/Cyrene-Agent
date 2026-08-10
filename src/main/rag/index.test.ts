@@ -30,8 +30,11 @@ vi.mock("./embedding", async (importOriginal) => ({
 }));
 
 import {
+  addHistoryMemory,
   addL2MemoryVector,
   addMemory,
+  deleteHistoryEntriesByTurnIds,
+  deleteHistoryEntriesBySessionId,
   deleteUserMemoryVectors,
   getEntriesBySource,
   hasImportedDocumentChunks,
@@ -39,6 +42,7 @@ import {
   initRAG,
   isUserMemoryVectorStoreReady,
   resetRAG,
+  searchHistoryEntries,
   searchMemoryEntries,
   searchImportedDocumentChunksForImportIds,
 } from "./index";
@@ -130,5 +134,116 @@ describe("user memory retrieval", () => {
 
     expect(results.map((entry) => entry.id)).toEqual([activeRagId]);
     expect(results.some((entry) => entry.id === archivedRagId)).toBe(false);
+  });
+});
+
+describe("chat history occurrences", () => {
+  it("merges only normalized exact text and records every occurrence", async () => {
+    const firstId = await addHistoryMemory("早安\r\n", {
+      sessionId: "session-a", role: "user", ts: 100, turnId: "turn-1",
+    });
+    const secondId = await addHistoryMemory("早安\n", {
+      sessionId: "session-b", role: "assistant", ts: 200, turnId: "turn-2",
+    });
+    const differentId = await addHistoryMemory("早安！", {
+      sessionId: "session-a", role: "user", ts: 300, turnId: "turn-3",
+    });
+
+    expect(secondId).toBe(firstId);
+    expect(differentId).not.toBe(firstId);
+    const merged = getEntriesBySource("chat_history").find((entry) => entry.id === firstId);
+    expect(merged?.metadata?.occurrences).toEqual([
+      { sessionId: "session-a", role: "user", ts: 100, turnId: "turn-1" },
+      { sessionId: "session-b", role: "assistant", ts: 200, turnId: "turn-2" },
+    ]);
+  });
+
+  it("removes one occurrence without deleting the shared vector", async () => {
+    const id = await addHistoryMemory("重复文本", {
+      sessionId: "session-a", role: "user", ts: 100, turnId: "turn-1",
+    });
+    await addHistoryMemory("重复文本", {
+      sessionId: "session-a", role: "user", ts: 200, turnId: "turn-2",
+    });
+
+    expect(deleteHistoryEntriesByTurnIds(["turn-1"])).toBe(1);
+    expect(getEntriesBySource("chat_history").find((entry) => entry.id === id)?.metadata?.occurrences)
+      .toEqual([{ sessionId: "session-a", role: "user", ts: 200, turnId: "turn-2" }]);
+
+    expect(deleteHistoryEntriesByTurnIds(["turn-2"])).toBe(1);
+    expect(getEntriesBySource("chat_history").some((entry) => entry.id === id)).toBe(false);
+  });
+
+  it("uses the latest remaining occurrence for recalled role and time", async () => {
+    await addHistoryMemory("重复问候", {
+      sessionId: "session-a", role: "user", ts: 100, turnId: "turn-1",
+    });
+    await addHistoryMemory("重复问候", {
+      sessionId: "session-b", role: "assistant", ts: 200, turnId: "turn-2",
+    });
+
+    const beforeDelete = await searchHistoryEntries("重复问候", 1);
+    expect(beforeDelete[0]).toMatchObject({ createdAt: 200, metadata: { role: "assistant", turnId: "turn-2" } });
+
+    deleteHistoryEntriesByTurnIds(["turn-2"]);
+    const afterDelete = await searchHistoryEntries("重复问候", 1);
+    expect(afterDelete[0]).toMatchObject({ createdAt: 100, metadata: { role: "user", turnId: "turn-1" } });
+  });
+
+  it("lazily upgrades legacy turnId metadata without duplicating the occurrence", async () => {
+    const id = await addMemory("旧历史", "chat_history", {
+      sessionId: "session-a", role: "user", ts: 100, turnId: "turn-legacy",
+    }, { createdAt: 100 });
+
+    const migratedId = await addHistoryMemory("旧历史", {
+      sessionId: "session-a", role: "user", ts: 100, turnId: "turn-legacy",
+    }, { createdAt: 100 });
+
+    expect(migratedId).toBe(id);
+    expect(getEntriesBySource("chat_history")[0].metadata?.occurrences)
+      .toEqual([{ sessionId: "session-a", role: "user", ts: 100, turnId: "turn-legacy" }]);
+    expect(getEntriesBySource("chat_history")[0].metadata?.turnId).toBeUndefined();
+  });
+
+  it("keeps distinct turn IDs even when their fallback fields are identical", async () => {
+    const id = await addHistoryMemory("same timestamp", {
+      sessionId: "session-a", role: "user", ts: 100, turnId: "turn-1",
+    });
+    await addHistoryMemory("same timestamp", {
+      sessionId: "session-a", role: "user", ts: 100, turnId: "turn-2",
+    });
+
+    expect(getEntriesBySource("chat_history").find((entry) => entry.id === id)?.metadata?.occurrences)
+      .toHaveLength(2);
+  });
+
+  it("does not create duplicate vectors when identical first writes overlap", async () => {
+    await Promise.all([
+      addHistoryMemory("concurrent text", {
+        sessionId: "session-a", role: "user", ts: 100, turnId: "turn-1",
+      }),
+      addHistoryMemory("concurrent text", {
+        sessionId: "session-a", role: "assistant", ts: 101, turnId: "turn-2",
+      }),
+    ]);
+
+    const entries = getEntriesBySource("chat_history").filter((entry) => entry.text === "concurrent text");
+    expect(entries).toHaveLength(1);
+    expect(entries[0].metadata?.occurrences).toHaveLength(2);
+  });
+
+  it("removes only the deleted session's shared occurrences", async () => {
+    const id = await addHistoryMemory("shared text", {
+      sessionId: "session-a", role: "user", ts: 100, turnId: "turn-1",
+    });
+    await addHistoryMemory("shared text", {
+      sessionId: "session-b", role: "user", ts: 200, turnId: "turn-2",
+    });
+
+    expect(deleteHistoryEntriesBySessionId("session-a")).toBe(1);
+    expect(getEntriesBySource("chat_history").find((entry) => entry.id === id)?.metadata?.occurrences)
+      .toEqual([{ sessionId: "session-b", role: "user", ts: 200, turnId: "turn-2" }]);
+    expect(deleteHistoryEntriesBySessionId("session-b")).toBe(1);
+    expect(getEntriesBySource("chat_history").some((entry) => entry.id === id)).toBe(false);
   });
 });

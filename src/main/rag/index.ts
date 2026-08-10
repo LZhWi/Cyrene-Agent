@@ -3,7 +3,7 @@ import * as fs from "fs";
 import { getUserDataDir, getAppRootDir } from "../runtime/runtime-paths";
 import { getEmbeddingProvider, resetEmbeddingProvider, EmbeddingProvider, switchEmbeddingModel as switchModel, getCurrentModelDims } from "./embedding";
 import { JsonVectorStore } from "./vectorstore";
-import type { MemoryEntry } from "./vectorstore";
+import type { ChatHistoryOccurrence, MemoryEntry } from "./vectorstore";
 import { HybridRetriever } from "./retriever";
 import { WorldbookManager } from "./worldbook";
 export { INJECTION_HEADER, INJECTION_PREAMBLE } from "./worldbook-constants";
@@ -143,6 +143,16 @@ export async function addMemory(
   return entry.id;
 }
 
+export async function addHistoryMemory(
+  text: string,
+  occurrence: ChatHistoryOccurrence,
+  opts?: { createdAt?: number },
+): Promise<string> {
+  if (!store || !provider) throw new Error("RAG not initialized");
+  const entry = await store.addChatHistory(text, provider, occurrence, opts);
+  return entry.id;
+}
+
 export async function addL2MemoryVector(
   text: string,
   l2Id: string,
@@ -231,12 +241,26 @@ export async function searchHistoryEntries(
 ): Promise<Array<{ text: string; createdAt: number; score: number; metadata?: Record<string, unknown> }>> {
   if (!retriever) return [];
   const results = await retriever.retrieve(query, "chat_history", topK);
-  return results.map((r) => ({
-    text: r.entry.text,
-    createdAt: r.entry.createdAt,
-    score: r.score,
-    metadata: r.entry.metadata,
-  }));
+  return results.map((r) => {
+    const occurrences = Array.isArray(r.entry.metadata?.occurrences)
+      ? r.entry.metadata.occurrences.filter((item): item is ChatHistoryOccurrence => (
+        Boolean(item) && typeof item === "object"
+        && typeof (item as ChatHistoryOccurrence).sessionId === "string"
+        && ((item as ChatHistoryOccurrence).role === "user" || (item as ChatHistoryOccurrence).role === "assistant")
+        && typeof (item as ChatHistoryOccurrence).ts === "number"
+      ))
+      : [];
+    const latest = occurrences.reduce<ChatHistoryOccurrence | undefined>(
+      (best, item) => !best || item.ts >= best.ts ? item : best,
+      undefined,
+    );
+    return {
+      text: r.entry.text,
+      createdAt: latest?.ts ?? r.entry.createdAt,
+      score: r.score,
+      metadata: latest ? { ...r.entry.metadata, ...latest } : r.entry.metadata,
+    };
+  });
 }
 
 // ── Worldbook DMAE：每轮打分（本轮用户输入 + 上轮模型回复）──
@@ -418,16 +442,15 @@ export function deleteUserMemoryVectors(ragIds: string[]): number {
   return store.deleteEntriesByIds(ragIds, "user_memory");
 }
 
-/** 单轮删除级联：按 metadata.turnId 删除 chat_history 索引条目（无 turnId 的旧条目不受影响）。 */
+/** 单轮删除级联：移除对应 occurrence；仅在无剩余 occurrence 时删除 chat_history 向量。 */
 export function deleteHistoryEntriesByTurnIds(turnIds: string[]): number {
   if (!store) throw new Error("RAG not initialized");
-  if (turnIds.length === 0) return 0;
-  const ids = new Set(turnIds);
-  const entryIds = getEntriesBySource("chat_history")
-    .filter((e) => typeof e.metadata?.turnId === "string" && ids.has(e.metadata.turnId as string))
-    .map((e) => e.id);
-  if (entryIds.length === 0) return 0;
-  return store.deleteEntriesByIds(entryIds, "chat_history");
+  return store.deleteChatHistoryOccurrencesByTurnIds(turnIds);
+}
+
+export function deleteHistoryEntriesBySessionId(sessionId: string): number {
+  if (!store) throw new Error("RAG not initialized");
+  return store.deleteChatHistoryOccurrencesBySessionId(sessionId);
 }
 
 export function deleteImportedDoc(importId: string, fileName?: string): number {
