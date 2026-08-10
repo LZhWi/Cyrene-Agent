@@ -292,24 +292,21 @@
 
 .cy-run-activity__detail {
   display: grid;
-  gap: 7px;
+  gap: 4px;
   padding: 8px 0;
 }
 
 .cy-agent-round {
-  overflow: hidden;
-  border: 1px solid rgb(209 144 173 / 22%);
-  border-radius: 10px;
-  background: rgb(255 255 255 / 42%);
+  min-width: 0;
 }
 
 .cy-agent-round__header {
   display: grid;
   width: 100%;
-  grid-template-columns: 18px minmax(0, 1fr) 16px;
+  grid-template-columns: 34px minmax(0, 1fr) 16px;
   align-items: center;
-  gap: 7px;
-  padding: 9px 10px;
+  gap: 8px;
+  padding: 5px 2px;
   border: 0;
   background: transparent;
   color: var(--cy-text);
@@ -319,18 +316,33 @@
 }
 
 .cy-agent-round__header:hover {
-  background: rgb(209 144 173 / 8%);
+  color: #a84f7a;
 }
 
-.cy-agent-round__status {
-  display: inline-flex;
+.cy-agent-round__header:focus-visible {
+  outline: 2px solid rgb(209 144 173 / 42%);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+.cy-agent-round__art {
+  display: flex;
+  width: 34px;
+  height: 34px;
   align-items: center;
   justify-content: center;
-  color: #55b743;
 }
 
-.cy-agent-round.is-running .cy-agent-round__status {
-  color: #c66b98;
+.cy-agent-round__art-image {
+  display: block;
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  user-select: none;
+}
+
+.cy-agent-round.is-running .cy-agent-round__art-image {
+  animation: cy-run-activity-breathe 2s ease-in-out infinite;
 }
 
 .cy-agent-round__title {
@@ -353,7 +365,7 @@
 .cy-agent-round__body {
   display: grid;
   gap: 6px;
-  padding: 0 10px 10px 35px;
+  padding: 1px 2px 9px 42px;
 }
 
 .cy-agent-round__reasoning {

@@ -265,6 +265,12 @@ function AgentRoundGroup({
     wasRunningRef.current = running;
   }, [running]);
 
+  const roundArt = interrupted
+    ? offlineMoodUrl
+    : running
+      ? workingMoodUrl
+      : completedThinkingMoodUrl;
+
   return (
     <section className={`cy-agent-round${running ? " is-running" : " is-complete"}`}>
       <button
@@ -273,7 +279,14 @@ function AgentRoundGroup({
         aria-expanded={expanded}
         onClick={() => setExpanded((current) => !current)}
       >
-        <span className="cy-agent-round__status" aria-hidden="true">{running ? <DotSpinner /> : "✓"}</span>
+        <span className="cy-agent-round__art" aria-hidden="true">
+          <img
+            className="cy-agent-round__art-image"
+            src={roundArt}
+            alt=""
+            draggable={false}
+          />
+        </span>
         <span className="cy-agent-round__title">{resolveAgentRoundTitle(round, tools, interrupted)}</span>
         <svg className={`cy-agent-round__chevron${expanded ? " is-expanded" : ""}`} viewBox="0 0 16 16" aria-hidden="true">
           <path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" />

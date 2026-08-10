@@ -89,6 +89,9 @@ describe("function-calling round presentation", () => {
     }));
 
     expect(html.match(/class="cy-agent-round(?: is-(?:running|complete))?"/g)).toHaveLength(2);
+    expect(html.match(/class="cy-agent-round__art"/g)).toHaveLength(2);
+    expect(html.match(/class="cy-agent-round__art-image"/g)).toHaveLength(2);
+    expect(html).not.toContain("cy-agent-round__status");
     expect(html).toContain("昔涟已完成 · 浏览 1 个目录");
     expect(html).toContain("昔涟正在读取文件");
     expect(html).toContain("继续检查取消链路");
