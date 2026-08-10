@@ -30,33 +30,6 @@ describe("React chat sticker messages", () => {
   });
 });
 
-describe("React Code run messages", () => {
-  it("places a deterministic verification result in the assistant timeline", () => {
-    const message = {
-      id: "assistant-code-1",
-      role: "assistant",
-      content: "任务已完成。",
-      responseStarted: true,
-      codeRun: {
-        run: null,
-        approval: null,
-        card: {
-          runId: "run-1",
-          status: "completed_verified",
-          workspaceRoot: "C:\\repo",
-          mutations: { created: [], modified: ["src/a.ts"], deleted: [], touchedPreExisting: [] },
-          verification: { status: "passed", steps: [] },
-          warnings: [],
-        },
-      },
-    } as ChatMessageItem & { codeRun: unknown };
-
-    const items = createMessageItems([message], []);
-
-    expect(items.map((item) => item.role)).toContain("codeRun");
-  });
-});
-
 describe("formal answer visibility", () => {
   it("keeps an interrupted run in the process area without creating an empty assistant bubble", () => {
     const message: ChatMessageItem = {

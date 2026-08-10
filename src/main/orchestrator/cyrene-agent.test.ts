@@ -32,7 +32,7 @@ vi.mock("./harness-adapter", () => ({
       return {
         reply: "",
         toolResults: [],
-        soulPhaseReason: "no_tool",
+        completionReason: "no_tool",
         terminal: { status: "cancelled", reason: "user_cancelled", externalEffectsMayContinue: true },
         totalUsage: undefined,
       };
@@ -42,7 +42,7 @@ vi.mock("./harness-adapter", () => ({
         resolve({
           reply: "",
           toolResults: [],
-          soulPhaseReason: "no_tool",
+          completionReason: "no_tool",
           terminal: { status: "cancelled", reason: "user_cancelled", externalEffectsMayContinue: true },
           totalUsage: undefined,
         });
@@ -51,7 +51,7 @@ vi.mock("./harness-adapter", () => ({
       setTimeout(() => resolve({
         reply: "done",
         toolResults: [],
-        soulPhaseReason: "no_tool",
+        completionReason: "no_tool",
         totalUsage: undefined,
       }), 10_000);
     });
@@ -508,7 +508,7 @@ describe("CyreneAgent external signal threading (Task 3)", () => {
     mockedRunHarnessWithAdapter.mockResolvedValueOnce({
       reply: "done",
       toolResults: [],
-      soulPhaseReason: "no_tool",
+      completionReason: "no_tool",
       totalUsage: undefined,
     });
     const agent = new CyreneAgent({ threadId: "thread-signal-cleanup" });

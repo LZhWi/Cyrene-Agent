@@ -5,7 +5,7 @@ export function shouldRunModelForMode(
   hasDemoResponse: boolean,
   hasDemoSticker: boolean,
 ): boolean {
-  return (mode === "chat" || mode === "work" || mode === "daily" || mode === "code" || mode === "learn")
+  return (mode === "chat" || mode === "work" || mode === "code" || mode === "learn")
     && !hasDemoResponse
     && !hasDemoSticker;
 }

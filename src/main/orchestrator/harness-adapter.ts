@@ -2,7 +2,7 @@
  * CyreneHarness ↔ CyreneAgent 适配层
  *
  * 把 CyreneRunOptions 转换为 HarnessInput，运行 Harness，
- * 再把 HarnessEvent 转为 AG-UI BaseEvent，HarnessResult 转为 TwoPhaseFcResult。
+ * 再把 HarnessEvent 转为 AG-UI BaseEvent，HarnessResult 转为 AgentLoopResult。
  *
  * 设计依据：docs/design/2026-08-08-cyreneHarnessloopdesign.md (v3 §11)
  */
@@ -16,7 +16,7 @@ import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./to
 import { runCyreneHarness } from "./harness";
 import type { HarnessEvent, HarnessInput } from "./harness";
 import { TODO_WORKING_NOTEBOOK_POLICY } from "./harness/todo-working-notebook";
-import type { TwoPhaseFcResult } from "./cyrene-agent";
+import type { AgentLoopResult } from "./cyrene-agent";
 import type { CyreneRunOptions, AgentLoopSettings } from "./cyrene-agent";
 import type { ToolCallResult } from "./types";
 import type { CyreneRunTerminalResult } from "../../shared/run-terminal";
@@ -25,17 +25,17 @@ import { loadPromptFile } from "../prompts/prompt-loader";
 const LOG_PREFIX = "[HarnessAdapter]";
 
 /**
- * 运行 CyreneHarness 并返回与旧循环兼容的 TwoPhaseFcResult。
+ * 运行 CyreneHarness 并返回统一的 AgentLoopResult。
  *
  * @param options CyreneRunOptions（与旧循环相同的输入）
  * @param signal 取消信号
- * @param sendBaseEvent 直接发送 AG-UI BaseEvent 的回调（绕过 TwoPhaseEvent）
+ * @param sendBaseEvent 直接发送 AG-UI BaseEvent 的回调
  */
 export async function runHarnessWithAdapter(
   options: CyreneRunOptions,
   signal: AbortSignal,
   sendBaseEvent: (event: BaseEvent) => void,
-): Promise<TwoPhaseFcResult> {
+): Promise<AgentLoopResult> {
   const messageId = `msg-${Date.now()}`;
   // Task 2 / C1：使用 canonical runId（由 CyreneAgent.runWithEvents 写回 options.runId）。
   // 不再生成 harness-${Date.now()}，避免 ack.runId 与 RUN_STARTED.runId 不一致。
@@ -120,7 +120,7 @@ export async function runHarnessWithAdapter(
   const result = await runCyreneHarness(harnessInput);
 
   // ── 转换结果 ──
-  const soulPhaseReason = mapTerminateReason(result.terminateReason);
+  const completionReason = mapTerminateReason(result.terminateReason);
   // Task 2 / C1：把 HarnessResult.terminateReason 映射为 canonical terminal，
   // 供 CyreneAgent.runWithEvents 写入 RUN_FINISHED.result。
   // 优先使用 harness 自身填的 result.terminal（如果未来 harness 内部直接写）。
@@ -141,7 +141,7 @@ export async function runHarnessWithAdapter(
   return {
     reply: result.finalAnswer,
     toolResults,
-    soulPhaseReason,
+    completionReason,
     terminal,
     totalUsage: undefined,
   };

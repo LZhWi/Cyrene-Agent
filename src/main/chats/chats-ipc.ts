@@ -175,19 +175,6 @@ export function registerChatsIpc(): void {
     },
   );
 
-  ipcMain.handle(
-    IPC.CHATS_SET_CODE_MODE,
-    (event, payload: { sessionId?: string; clineMode?: "plan" | "act" } = {}) => {
-      if (!payload.sessionId || (payload.clineMode !== "plan" && payload.clineMode !== "act")) {
-        return { ok: false, error: "invalid Code mode request" };
-      }
-      const session = chatsStore.updateCodeSession(payload.sessionId, { clineMode: payload.clineMode });
-      if (!session) return { ok: false, error: "Code session not found" };
-      broadcastChanged(event.sender);
-      return { ok: true, session };
-    },
-  );
-
   // ── 对话工作区绑定 ──────────────────────────────────────
 
   ipcMain.handle(
@@ -198,7 +185,7 @@ export function registerChatsIpc(): void {
       }
       const existing = chatsStore.getSession(payload.sessionId);
       if (!existing) return { ok: false, error: "session not found" };
-      if (existing.mode !== "work" && existing.mode !== "code" && existing.mode !== "daily" && existing.mode !== "learn") {
+      if (existing.mode !== "work" && existing.mode !== "code" && existing.mode !== "learn") {
         return { ok: false, error: `${existing.mode ?? "unknown"} mode does not support workspace binding` };
       }
       // 路径验证：目录存在 + realpath 解析

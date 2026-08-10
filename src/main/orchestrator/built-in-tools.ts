@@ -13,7 +13,7 @@ export function setLive2dWindowSender(sender: typeof sendToLive2DWindow): void {
 }
 import { resolveChatContextTimezone } from "../chat-time-context";
 import type { ToolContext } from "./tool-context";
-import { VerificationRunner, resolveBuiltinExecutable } from "./code/verification-runner";
+import { VerificationRunner, resolveBuiltinExecutable } from "./verification-runner";
 import { logger, LogTag } from "../logger";
 
 const LOG_PREFIX = "[BuiltinTools]";

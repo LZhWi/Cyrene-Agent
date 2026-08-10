@@ -15,28 +15,7 @@ export type ChatRole = "user" | "model";
 export type ChatSessionPurpose = "proactive-chat";
 
 /** 会话模式：创建时绑定，整个会话生命周期不变 */
-export type ConversationMode = "chat" | "work" | "code" | "learn" | "daily";
-
-/** Code 会话专属元数据 */
-export interface CodeSessionMetadata {
-  activeClineSessionId?: string;
-  clineMode: "plan" | "act";
-  codePreferencesVersion?: number;
-  tasks: Array<{
-    clineSessionId: string;
-    createdAt: number;
-    closedAt?: number;
-    title?: string;
-  }>;
-  pendingPrompt?: {
-    chatSessionId: string;
-    clineSessionId: string;
-    promptId: string;
-    status: "pending" | "answered" | "cancelled";
-    createdAt: number;
-    answeredAt?: number;
-  };
-}
+export type ConversationMode = "chat" | "work" | "code" | "learn";
 
 export type ChatStickerId =
   | "playful"
@@ -51,7 +30,7 @@ export type ChatStickerId =
 /** 任意表情包 ID（内置 + 用户自定义） */
 export type AnyStickerId = string;
 
-/** 一次模型回复中已展示的工具执行记录，供 React Daily/Work 会话恢复执行过程。 */
+/** 一次模型回复中已展示的工具执行记录，供 React Harness 会话恢复执行过程。 */
 export interface ToolExecutionRecord {
   id: string;
   name: string;
@@ -185,8 +164,6 @@ export interface ChatSession {
   workspaceBinding?: ConversationWorkspaceBinding;
   /** 会话模式：创建时绑定，整个会话生命周期不变。旧会话无此字段时默认 "work"。 */
   mode?: ConversationMode;
-  /** Code 会话专属元数据（mode === "code" 时使用） */
-  codeSession?: CodeSessionMetadata;
   /** 用户是否置顶该会话；置顶项在列表中优先展示。 */
   pinned?: boolean;
 }

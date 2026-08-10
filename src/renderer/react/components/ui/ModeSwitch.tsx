@@ -35,22 +35,11 @@ const LearnIcon = (
   </svg>
 );
 
-const DailyIcon = (
-  <svg width="16" height="16" viewBox="0 0 48 48" fill="none">
-    <rect x="4" y="10" width="40" height="30" rx="2" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-    <path d="M14 6V14" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
-    <path d="M25 23L14 23" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
-    <path d="M34 31L14 31" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
-    <path d="M34 6V14" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
-  </svg>
-);
-
 const modes = [
   { key: "work", label: "Work", icon: WorkIcon },
   { key: "chat", label: "Chat", icon: ChatIcon },
   { key: "code", label: "Code", icon: CodeIcon },
   { key: "learn", label: "Learn", icon: LearnIcon },
-  { key: "daily", label: "Daily", icon: DailyIcon },
 ];
 
 export function ModeSwitch({ value, onChange }: ModeSwitchProps) {

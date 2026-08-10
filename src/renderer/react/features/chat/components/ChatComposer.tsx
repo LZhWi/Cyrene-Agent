@@ -5,10 +5,8 @@ import { resolveAsset } from "../../../../../shared/renderer-base";
 import { ReasoningControl } from "./ReasoningControl";
 import { StyleControl } from "./StyleControl";
 import { PermissionControl } from "./PermissionControl";
-import { ClineModeSwitch, type ClineMode } from "./ClineModeSwitch";
 import chatWelcomeUrl from "../../../assets/welcome/chat.png?url";
 import codeWelcomeUrl from "../../../assets/welcome/code.png?url";
-import dailyWelcomeUrl from "../../../assets/welcome/daily.png?url";
 import learnWelcomeUrl from "../../../assets/welcome/learn.png?url";
 import workWelcomeUrl from "../../../assets/welcome/work.png?url";
 
@@ -21,7 +19,6 @@ interface ChatComposerProps {
   attachmentBusy?: boolean;
   modelBusy?: boolean;
   pendingQueue?: Array<{ id: string; content: string }>;
-  clineMode?: ClineMode;
   onChange: (value: string) => void;
   onSubmit: (value: string) => void;
   onCancel?: () => void;
@@ -32,8 +29,6 @@ interface ChatComposerProps {
   onRemoveAttachment: (index: number) => void;
   onScreenshot: () => void;
   onChooseSticker: (id: string) => void;
-  onClineModeChange?: (mode: ClineMode) => void;
-  onNewClineTask?: () => void;
   onInitVaultStructure?: () => void;
 }
 
@@ -53,7 +48,6 @@ export interface ComposerAttachment {
 const WELCOME_IMAGE_BY_MODE: Record<string, string> = {
   chat: chatWelcomeUrl,
   code: codeWelcomeUrl,
-  daily: dailyWelcomeUrl,
   learn: learnWelcomeUrl,
   work: workWelcomeUrl,
 };
@@ -178,7 +172,6 @@ export function ChatComposer({
   attachmentBusy = false,
   modelBusy = false,
   pendingQueue = [],
-  clineMode = "act",
   onChange,
   onSubmit,
   onCancel,
@@ -189,13 +182,11 @@ export function ChatComposer({
   onRemoveAttachment,
   onScreenshot,
   onChooseSticker,
-  onClineModeChange,
-  onNewClineTask,
   onInitVaultStructure,
 }: ChatComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
-  const supportsWorkFiles = ["work", "code", "daily"].includes(mode);
+  const supportsWorkFiles = ["work", "code"].includes(mode);
   const supportsObsidianLibrary = mode === "learn";
   const supportsPermission = supportsWorkFiles || supportsObsidianLibrary;
   const supportsStyle = mode !== "code";
@@ -361,20 +352,6 @@ export function ChatComposer({
         {supportsPermission && <span className="cy-composer__footer-separator" />}
         {supportsPermission && (
           <PermissionControl />
-        )}
-        {mode === "code" && onClineModeChange && (
-          <ClineModeSwitch value={clineMode} disabled={modelBusy} onChange={onClineModeChange} />
-        )}
-        {mode === "code" && onNewClineTask && (
-          <button
-            type="button"
-            className="cy-composer__footer-button cy-composer__cline-task-button"
-            disabled={modelBusy}
-            title="结束当前 Cline Task；下一条消息从新上下文开始"
-            onClick={onNewClineTask}
-          >
-            新 Cline Task
-          </button>
         )}
         {supportsStyle && <StyleControl />}
         <ReasoningControl />

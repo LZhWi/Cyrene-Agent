@@ -2,14 +2,11 @@
 //
 // 架构：
 //   Chat  ──> CyreneAgent ──> 无工具 ChatLoop
-//   Work  ──> CyreneAgent ──> LangGraph Runtime
-//   Daily ──> CyreneAgent ──> legacy TwoPhaseFC Runtime
-//   Code  ──> runCodeRequest() ──> 原生 Cline Runtime
-//   Learn ──> legacy TwoPhaseFC Runtime（同 Daily + Obsidian 工具）
+//   Work / Learn / Code ──> CyreneAgent ──> CyreneHarness
 //   各链路事件都由本桥通过 AGUI_EVENT 转发给渲染进程。
 //
-// Chat / Work 的 Observable 是内存流、跨不过进程边界；Code 的后台任务也不能依赖
-// WebContents 生命周期。因此主进程统一持有运行并仅把事件发送给 Renderer。
+// Agent 的 Observable 是内存流、跨不过进程边界。
+// 因此主进程统一持有运行并仅把事件发送给 Renderer。
 import { ipcMain, IpcMainInvokeEvent, WebContents } from "electron";
 import { IPC } from "../shared/ipc-channels";
 import { Subscription } from "rxjs";
@@ -31,101 +28,10 @@ import { registerObsidianTools, unregisterObsidianTools } from "./learn/obsidian
 import { getAdapterForConfig } from "./orchestrator/vendors";
 import { perf } from "./perf-trace";
 import type { StyleId } from "../shared/style-sampling";
-import { codeRunStore } from "./orchestrator/code/code-run-store";
-import { codeRunCoordinator } from "./orchestrator/code/code-run-coordinator";
 import * as chatsStore from "./chats/chats-store";
 import type { ConversationMode } from "../shared/chat-types";
 import { requestUserClarification, cancelPendingChoicesForRun } from "./user-choice";
 import { cancelPendingApprovalsForRun } from "./permission";
-import {
-  cancelAsk,
-  listPendingAskPresentations,
-  respondToAsk,
-} from "./orchestrator/code/code-ask-bridge";
-
-type RunCodeRequest = typeof import("./orchestrator/code/code-request").runCodeRequest;
-
-/**
- * Code 模式才加载完整 Cline 链。
- * 避免其他模式启动和 AG-UI 单测沿 code-request -> index 形成循环导入。
- */
-async function runCodeRequest(...args: Parameters<RunCodeRequest>): Promise<void> {
-  const codeRequest = await import("./orchestrator/code/code-request");
-  return codeRequest.runCodeRequest(...args);
-}
-
-const CODE_RENDERER_EVENT_TYPES: Record<string, string> = {
-  text_message_start: "TEXT_MESSAGE_START",
-  text_message_content: "TEXT_MESSAGE_CONTENT",
-  text_message_end: "TEXT_MESSAGE_END",
-  run_finished: "RUN_FINISHED",
-  run_error: "RUN_ERROR",
-};
-
-export function normalizeCodeRendererEvent(event: unknown, runId?: string): unknown {
-  if (!event || typeof event !== "object") return event;
-  const typed = event as { type?: string; payload?: unknown };
-  if (typed.type === "code_verification_card" || typed.type === "code_verification_approval" || typed.type === "code_mutation_evidence" || typed.type === "code_ask") {
-    return {
-      type: "CUSTOM",
-      name: typed.type,
-      value: typed.payload,
-      ...("runId" in typed ? { runId: typed.runId } : {}),
-    };
-  }
-  if (typed.type === "agent_event" && typed.payload && typeof typed.payload === "object") {
-    const agentEvent = (typed.payload as { event?: unknown }).event;
-    if (agentEvent && typeof agentEvent === "object") {
-      const content = agentEvent as {
-        type?: string;
-        contentType?: string;
-        text?: string;
-        reasoning?: string;
-        toolName?: string;
-        toolCallId?: string;
-        output?: unknown;
-        error?: string;
-      };
-      if (content.type === "content_start" || content.type === "content_update") {
-        if (content.contentType === "text" && content.text) {
-          return { type: "TEXT_MESSAGE_CONTENT", messageId: runId ? `code-text-${runId}` : undefined, delta: content.text };
-        }
-        if (content.contentType === "reasoning" && content.reasoning) {
-          return { type: "REASONING_MESSAGE_CONTENT", messageId: runId ? `code-reasoning-${runId}` : undefined, delta: content.reasoning };
-        }
-        if (content.type === "content_start" && content.contentType === "tool") {
-          return {
-            type: "TOOL_CALL_START",
-            toolCallId: content.toolCallId,
-            toolCallName: content.toolName,
-          };
-        }
-      }
-      if (content.type === "content_end") {
-        if (content.contentType === "text") return { type: "TEXT_MESSAGE_END" };
-        if (content.contentType === "reasoning") return { type: "REASONING_MESSAGE_END" };
-        if (content.contentType === "tool") {
-          const result = content.error ?? (
-            typeof content.output === "string"
-              ? content.output
-              : content.output === undefined
-                ? ""
-                : JSON.stringify(content.output)
-          );
-          return {
-            type: "TOOL_CALL_RESULT",
-            toolCallId: content.toolCallId,
-            content: result,
-            status: content.error ? "failed" : "success",
-          };
-        }
-      }
-    }
-  }
-  const normalizedType = typed.type ? CODE_RENDERER_EVENT_TYPES[typed.type] : undefined;
-  return normalizedType ? { ...typed, type: normalizedType } : event;
-}
-
 /**
  * Task 2 / C1：从 RUN_FINISHED 事件中提取 canonical terminal。
  *
@@ -285,7 +191,6 @@ export function registerAgUiIpc(
     };
 
     // ── 顶层模式分流：读取 ChatSession.mode（唯一可信来源） ──
-    // Code 模式完全绕过 CyreneAgent、CITA、WorkLoop
     const sessionId = input.sessionId;
     if (!sessionId) {
       lifecycle?.onConversationEnded();
@@ -297,40 +202,12 @@ export function registerAgUiIpc(
       throw new Error(`AGUI_RUN 会话不存在: ${sessionId}`);
     }
     const mode = session.mode ?? (session.purpose === "proactive-chat" ? "chat" : "work");
-    if ((mode === "work" || mode === "code" || mode === "daily" || mode === "learn") && !session.workspaceBinding?.workspaceRoot) {
+    if ((mode === "work" || mode === "code" || mode === "learn") && !session.workspaceBinding?.workspaceRoot) {
       lifecycle?.onConversationEnded();
       throw new Error(`${mode} 模式需要先绑定项目工作区`);
     }
 
-    if (mode === "code") {
-      console.log("[AgUiBridge] mode=code, dispatching to runCodeRequest (bypass CyreneAgent)");
-      const userText = (() => {
-        const msgs = input.messages;
-        for (let i = msgs.length - 1; i >= 0; i--) {
-          const m = msgs[i] as { role?: string; content?: string };
-          if (m?.role === "user") return m.content ?? "";
-        }
-        return "";
-      })();
-      send({ type: "RUN_STARTED", runId, threadId: sessionId });
-      const codeSend = (codeEvent: unknown): void => send(normalizeCodeRendererEvent(codeEvent, runId));
-      void runCodeRequest(
-        { text: userText, sessionId },
-        session,
-        { runId, sessionId, signal: new AbortController().signal, emitEvent: codeSend },
-      ).catch((err) => {
-        const message = err instanceof Error ? err.message : String(err);
-        codeSend({ type: "run_error", message, runId, threadId: sessionId });
-      }).finally(() => {
-        lifecycle?.onConversationEnded();
-      });
-
-      // CodeRunWorker 持有后台任务；Renderer/WebContents 仅接收事件，不拥有任务生命周期。
-      return { success: true, runId };
-    }
-
-    // ── Chat / Work / Daily / Learn：共用 CyreneAgent 外壳，固定选择各自 runtime ──
-    // Chat 走无工具 chat-loop；Work 强制 LangGraph；Daily / Learn 强制 legacy TwoPhaseFC。
+    // ── Chat / Work / Learn / Code：共用 CyreneAgent 外壳 ──
     const agentExecutionMode: AgentExecutionMode = mode === "chat" ? "chat" : "work";
     let built;
     try {
@@ -348,7 +225,6 @@ export function registerAgUiIpc(
     options.executionMode = agentExecutionMode;
     options.recoveryContext = input.recoveryContext;
     options.conversationMode = mode;
-    options.agentRuntime = (mode === "daily" || mode === "learn") ? "legacy" : "langgraph";
     // Task 2 / C1：把 bridge 创建的 canonical runId 注入 CyreneRunOptions，
     // 一路传到 Agent / Harness adapter / ToolContext / 所有 AG-UI 事件。
     // ack.runId 与 RUN_STARTED.runId 必须一致（Step 5 测试断言）。
@@ -653,90 +529,6 @@ export function registerAgUiIpc(
     // 终态（RUN_FINISHED/RUN_ERROR）由事件流承载，渲染端据此 offEvent + 收尾。
     // 这样避免 invoke reply 与 send 事件的投递顺序竞争导致 offEvent 提前取消监听。
     return { success: true, runId };
-  });
-
-  // ── Code run 状态查询 IPC ────────────────────────────
-
-  ipcMain.handle(IPC.CODE_RUN_GET, (_event, runId: string) => {
-    return codeRunStore.getRun(runId) ?? null;
-  });
-
-  ipcMain.handle(IPC.CODE_RUN_GET_ACTIVE, (_event, params: { chatSessionId?: string; clineSessionId?: string } = {}) => {
-    if (params.chatSessionId) {
-      return codeRunStore.getActiveRunByChatSession(params.chatSessionId) ?? null;
-    }
-    if (params.clineSessionId) {
-      return codeRunStore.getActiveRunByClineSession(params.clineSessionId) ?? null;
-    }
-    return null;
-  });
-
-  ipcMain.handle(IPC.CODE_RUN_LIST, (_event, chatSessionId?: string) => {
-    return codeRunStore.listRuns(chatSessionId);
-  });
-
-  // ── Code 验证审批 IPC ────────────────────────────
-
-  ipcMain.handle(IPC.CODE_VERIFICATION_GET_PENDING, (_event, params: { chatSessionId?: string; runId?: string } = {}) => {
-    if (params.runId) {
-      return codeRunStore.getPendingApprovalsByRun(params.runId);
-    }
-    if (params.chatSessionId) {
-      return codeRunStore.getPendingApprovalsByChatSession(params.chatSessionId);
-    }
-    return [];
-  });
-
-  ipcMain.handle(IPC.CODE_VERIFICATION_APPROVE, (_event, approvalId: string) => {
-    const a = codeRunStore.getApproval(approvalId);
-    if (!a) return { ok: false, error: "approval not found" };
-    if (a.status === "approved") return { ok: true, approval: a };
-    if (a.status !== "pending") return { ok: false, error: `approval already ${a.status}`, approval: a };
-    if (!codeRunCoordinator.isActive(a.runId)) {
-      return { ok: false, error: "run is terminal", approval: a };
-    }
-    return { ok: true, approval: codeRunStore.approve(approvalId) };
-  });
-
-  ipcMain.handle(IPC.CODE_VERIFICATION_REJECT, (_event, approvalId: string) => {
-    const a = codeRunStore.getApproval(approvalId);
-    if (!a) return { ok: false, error: "approval not found" };
-    if (a.status === "rejected") return { ok: true, approval: a };
-    if (a.status !== "pending") return { ok: false, error: `approval already ${a.status}`, approval: a };
-    if (!codeRunCoordinator.isActive(a.runId)) {
-      return { ok: false, error: "run is terminal", approval: a };
-    }
-    return { ok: true, approval: codeRunStore.reject(approvalId) };
-  });
-
-  // ── Code / Cline Ask IPC ────────────────────────────
-
-  ipcMain.handle(IPC.CODE_ASK_GET_PENDING, (_event, chatSessionId?: string) => {
-    return listPendingAskPresentations(chatSessionId);
-  });
-
-  ipcMain.handle(IPC.CODE_ASK_RESPOND, (_event, input: { promptId?: string; answer?: string } = {}) => {
-    const promptId = input.promptId?.trim();
-    const answer = input.answer?.trim();
-    if (!promptId || !answer) return { ok: false, error: "promptId and answer are required" };
-    return respondToAsk(promptId, answer)
-      ? { ok: true }
-      : { ok: false, error: "ask not found" };
-  });
-
-  ipcMain.handle(IPC.CODE_ASK_CANCEL, (_event, promptId: string) => {
-    const normalized = promptId?.trim();
-    if (!normalized) return { ok: false, error: "promptId is required" };
-    return cancelAsk(normalized, "user")
-      ? { ok: true }
-      : { ok: false, error: "ask not found" };
-  });
-
-  ipcMain.handle(IPC.CODE_SESSION_NEW_TASK, async (_event, chatSessionId: string) => {
-    const normalized = chatSessionId?.trim();
-    if (!normalized) return { ok: false, error: "chatSessionId is required" };
-    const { beginNewCodeTask } = await import("./orchestrator/code/code-command-router");
-    return beginNewCodeTask(normalized);
   });
 
   ipcMain.handle(IPC.AGUI_CANCEL, (_event, runId?: string) => {

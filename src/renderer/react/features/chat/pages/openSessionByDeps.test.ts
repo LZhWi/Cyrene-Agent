@@ -70,7 +70,7 @@ describe("normalizeSessionMode", () => {
     expect(normalizeSessionMode("chat")).toBe("chat");
     expect(normalizeSessionMode("work")).toBe("work");
     expect(normalizeSessionMode("code")).toBe("code");
-    expect(normalizeSessionMode("daily")).toBe("daily");
+    expect(normalizeSessionMode("daily")).toBe("work");
   });
 
   it("'learn' 返回 'learn'", () => {
@@ -107,14 +107,14 @@ describe("openSessionByIdWithDeps", () => {
     expect(selectSession).toHaveBeenCalledWith("work-1", "work");
   });
 
-  it("daily 会话：selectSession(id, 'daily') 被调用", async () => {
+  it("历史 daily 会话：按 Work 打开", async () => {
     const selectSession = vi.fn(async () => {});
     await openSessionByIdWithDeps({
       sessionId: "daily-1",
       getSession: async () => ({ mode: "daily" }),
       selectSession,
     });
-    expect(selectSession).toHaveBeenCalledWith("daily-1", "daily");
+    expect(selectSession).toHaveBeenCalledWith("daily-1", "work");
   });
 
   it("learn 会话：selectSession(id, 'learn') 被调用，返回 true", async () => {

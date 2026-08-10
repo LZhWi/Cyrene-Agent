@@ -5,8 +5,7 @@ import "./TodoPanel.css";
 
 export interface TodoPanelProps {
   state: TodoState | null;
-  mode: "work" | "daily" | "learn";
-  workspaceName?: string;
+  mode: "work" | "learn";
 }
 
 const DEFAULT_WIDTH = 240;
@@ -15,7 +14,6 @@ const DEFAULT_RIGHT = 24;
 
 const MODE_LABELS: Record<TodoPanelProps["mode"], string> = {
   work: "工作",
-  daily: "日常",
   learn: "学习",
 };
 
@@ -63,7 +61,7 @@ function ModeCapsule({ mode }: { mode: TodoPanelProps["mode"] }) {
   );
 }
 
-export function TodoPanel({ state, mode, workspaceName }: TodoPanelProps) {
+export function TodoPanel({ state, mode }: TodoPanelProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [pos, setPos] = useState({
     x: typeof window !== "undefined" ? window.innerWidth - DEFAULT_WIDTH - DEFAULT_RIGHT : 0,
@@ -210,12 +208,12 @@ export function TodoPanel({ state, mode, workspaceName }: TodoPanelProps) {
             <span className="cy-todo__progress-text">{progress}%</span>
           </div>
 
-          <div className="cy-todo__workspace">
-            <span className="cy-todo__workspace-label">当前工作路径</span>
-            <span className="cy-todo__workspace-path" title={workspaceName}>
-              {workspaceName ?? "未绑定工作区"}
-            </span>
-          </div>
+          {mode === "work" && (
+            <div className="cy-todo__extension-slot" data-testid="todo-extension-slot">
+              <span className="cy-todo__extension-label">项目状态</span>
+              <span className="cy-todo__extension-hint">Git 工作台即将接入</span>
+            </div>
+          )}
         </div>
       </div>
     </div>

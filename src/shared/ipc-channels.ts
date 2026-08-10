@@ -140,24 +140,6 @@ export const IPC = {
   CHATS_INIT_LEARN_WORKSPACE: "chats:init-learn-workspace",
   // main → 所有窗口：工作区绑定变更广播
   CHATS_WORKSPACE_CHANGED: "chats:workspace-changed",
-  // Code 会话级 Cline plan/act 模式
-  CHATS_SET_CODE_MODE: "chats:set-code-mode",
-
-  // Code run 状态查询
-  CODE_RUN_GET: "code:run:get",
-  CODE_RUN_GET_ACTIVE: "code:run:get-active",
-  CODE_RUN_LIST: "code:run:list",
-  // Code 验证审批
-  CODE_VERIFICATION_GET_PENDING: "code:verification:get-pending",
-  CODE_VERIFICATION_APPROVE: "code:verification:approve",
-  CODE_VERIFICATION_REJECT: "code:verification:reject",
-  // main → renderer：验证审批广播
-  CODE_VERIFICATION_APPROVAL_REQUESTED: "code:verification:approval-requested",
-  // Code / Cline AskQuestionExecutor bridge
-  CODE_ASK_GET_PENDING: "code:ask:get-pending",
-  CODE_ASK_RESPOND: "code:ask:respond",
-  CODE_ASK_CANCEL: "code:ask:cancel",
-  CODE_SESSION_NEW_TASK: "code:session:new-task",
 
 // sticker manager window
 	  STICKERS_MINIMIZE: "stickers:minimize",

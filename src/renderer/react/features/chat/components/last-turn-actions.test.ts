@@ -25,7 +25,7 @@ describe("resolveRevisableLastTurn", () => {
     ], "chat")).toEqual({ userMessageId: "u3", assistantMessageId: "a3" });
   });
 
-  it.each(["work", "code", "learn", "daily"] as const)("does not expose actions in %s mode", (mode) => {
+  it.each(["work", "code", "learn"] as const)("does not expose actions in %s mode", (mode) => {
     expect(resolveRevisableLastTurn(completedConversation, mode)).toBeNull();
   });
 

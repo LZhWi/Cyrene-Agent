@@ -25,8 +25,6 @@ import { stopTtsPlayback } from "./tts-playback";
 import { LastTurnActionButton } from "./LastTurnActionButton";
 import { resolveRevisableLastTurn, type RevisableLastTurn } from "./last-turn-actions";
 import { extractMessageStickerId, stripMessageStickerMarkers } from "./message-sticker";
-import { CodeRunPanel } from "./CodeRunPanel";
-import type { CodeRunViewModel } from "../../../../lib/code-run-view-model";
 import type { WeatherData } from "./weather/weather-types";
 import { WeatherCard } from "./weather/WeatherCard";
 import { resolveAgentRoundTitle } from "./agent-rounds";
@@ -52,7 +50,6 @@ export interface ChatMessageItem {
   runActivity?: RunActivityRecord;
   runStage?: AgentRunStage;
   taskPlan?: TaskPlanPresentation;
-  codeRun?: CodeRunViewModel;
   attachments?: ChatMessageAttachment[];
   weather?: WeatherData;
 }
@@ -757,15 +754,6 @@ function createRoles(
     rootClassName: "cy-message cy-message--waiting",
     contentRender: () => <ModelWaitContent />,
   },
-  codeRun: {
-    placement: "start" as const,
-    variant: "borderless" as const,
-    avatar: null,
-    rootClassName: "cy-message cy-message--code-run",
-    contentRender: (_content: string, info: { extraInfo?: { codeRun?: CodeRunViewModel } }) => (
-      info.extraInfo?.codeRun ? <CodeRunPanel value={info.extraInfo.codeRun} /> : null
-    ),
-  },
   weather: {
     placement: "start" as const,
     variant: "borderless" as const,
@@ -851,14 +839,6 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
           extraInfo: { tools: [tools[index]] },
         });
       }
-    }
-    if (message.codeRun && (message.codeRun.run || message.codeRun.card)) {
-      assistantItems.push({
-        key: `${message.id}-code-run`,
-        role: "codeRun",
-        content: "",
-        extraInfo: { codeRun: message.codeRun },
-      });
     }
     if (message.weather) {
       assistantItems.push({

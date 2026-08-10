@@ -9,7 +9,7 @@
 
 /**
  * 模型运行时配置子集。
- * 包含 Code 模式和 Cline 需要的模型相关字段。
+ * 包含 Code 模式需要的模型相关字段。
  */
 export interface ModelRuntimeProfile {
   provider: string;

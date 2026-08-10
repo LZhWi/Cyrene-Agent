@@ -4,8 +4,8 @@ import { recordUsage } from "../token-usage-store";
 import { AgentRuntimeError } from "./agent-runtime-error";
 import type {
   AgentLoopSettings,
-  TwoPhaseEvent,
-  TwoPhaseFcResult,
+  AgentLoopEvent,
+  AgentLoopResult,
 } from "./cyrene-agent";
 import type {
   ChatMessage,
@@ -29,7 +29,7 @@ export interface ChatLoopOptions {
   soulSampling?: ApprovedStyleSampling;
   timeoutMs: number;
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
-  onEvent?: (event: TwoPhaseEvent) => void;
+  onEvent?: (event: AgentLoopEvent) => void;
   recordUsage?: (input: number, output: number, calls: number) => void;
   signal?: AbortSignal;
   /** 非流式降级时的展示节奏；测试可设为 0，生产默认 20ms。 */
@@ -98,7 +98,7 @@ function withSoulSystem(messages: ChatMessage[], system: string): ChatMessage[] 
   return [{ role: "system", content: system }, ...messages];
 }
 
-export async function runChatLoop(options: ChatLoopOptions): Promise<TwoPhaseFcResult> {
+export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopResult> {
   const startedAt = Date.now();
   const usageRecorder = options.recordUsage ?? ((input, output, calls) => recordUsage(input, output, calls));
   let usedImageCaptionFallback = false;
@@ -311,7 +311,7 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<TwoPhaseFcR
       reply,
       toolResults: [],
       totalUsage: response.usage,
-      soulPhaseReason: "no_tool",
+      completionReason: "no_tool",
     };
   } finally {
     endReasoning();

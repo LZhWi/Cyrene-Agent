@@ -21,7 +21,6 @@ import {
   type ChatSession,
   type ChatSessionMeta,
   type ChatSessionPurpose,
-  type CodeSessionMetadata,
   type ConversationMode,
 } from "../../shared/chat-types";
 
@@ -38,7 +37,12 @@ let initialized = false;
 
 function isConversationMode(value: unknown): value is ConversationMode {
   return value === "chat" || value === "work" || value === "code"
-    || value === "learn" || value === "daily";
+    || value === "learn";
+}
+
+function normalizePersistedMode(value: unknown, purpose: ChatSessionPurpose | undefined): ConversationMode {
+  if (value === "daily") return "work";
+  return isConversationMode(value) ? value : inferLegacyMode(purpose);
 }
 
 function inferLegacyMode(purpose: ChatSessionPurpose | undefined): ConversationMode {
@@ -88,9 +92,7 @@ function readIndexFromDisk(): ChatSessionMeta[] {
       if (!valid) continue;
       const session = readSessionFile(meta.id!);
       const indexedMode = meta.mode;
-      const mode = isConversationMode(indexedMode)
-        ? indexedMode
-        : session?.mode ?? inferLegacyMode(meta.purpose);
+      const mode = normalizePersistedMode(indexedMode ?? session?.mode, meta.purpose ?? session?.purpose);
       const workspaceRoot = typeof meta.workspaceRoot === "string"
         ? meta.workspaceRoot
         : session?.workspaceBinding?.workspaceRoot;
@@ -145,10 +147,8 @@ function readSessionFile(id: string): ChatSession | null {
     if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.messages)) {
       return null;
     }
-    // 旧会话迁移：无 mode 字段时根据 purpose 推断
-    if (!isConversationMode(parsed.mode)) {
-      parsed.mode = inferLegacyMode(parsed.purpose);
-    }
+    parsed.mode = normalizePersistedMode(parsed.mode, parsed.purpose);
+    delete (parsed as ChatSession & { codeSession?: unknown }).codeSession;
     return parsed;
   } catch (err) {
     console.warn("[chats-store] session 文件解析失败:", id, err);
@@ -161,12 +161,12 @@ function writeSessionFile(session: ChatSession): void {
 }
 
 /**
- * 旧版会话没有 mode，也没有项目路径。升级时统一归入 Daily，并绑定到
+ * 旧版会话没有 mode，也没有项目路径。升级时统一归入 Work，并绑定到
  * userData/迁移文件夹。旧版本曾把无模式会话回填成未绑定路径的 Work，
  * 因此这里同时识别“无合法 mode”和“Work 但无 workspaceBinding”两种形态。
  * 新版 Work 创建流程要求绑定路径，所以有明确项目的会话不会被误迁移。
  */
-function migrateUnclassifiedLegacySessions(): void {
+function migrateLegacySessions(): void {
   if (!fs.existsSync(indexPath)) return;
   try {
     const parsed = JSON.parse(fs.readFileSync(indexPath, "utf8")) as unknown;
@@ -186,16 +186,24 @@ function migrateUnclassifiedLegacySessions(): void {
         continue;
       }
       if (!session || !Array.isArray(session.messages)) continue;
-      const needsMigration = !isConversationMode(session.mode)
-        || (session.mode === "work" && !session.workspaceBinding);
+      const sourceMode: unknown = session.mode ?? meta.mode;
+      const isLegacyDaily = sourceMode === "daily";
+      const nextMode = normalizePersistedMode(sourceMode, session.purpose ?? meta.purpose);
+      const needsWorkspaceBinding = nextMode === "work" && !session.workspaceBinding
+        && (!isConversationMode(sourceMode) || isLegacyDaily || sourceMode === "work");
+      const hasCodeSession = "codeSession" in (session as ChatSession & { codeSession?: unknown });
+      const needsMigration = sourceMode !== nextMode || needsWorkspaceBinding || hasCodeSession;
       if (!needsMigration) continue;
-      binding ??= legacyMigrationBinding();
-      session.mode = "daily";
-      session.workspaceBinding = { ...binding };
+      if (needsWorkspaceBinding) {
+        binding ??= legacyMigrationBinding();
+        session.workspaceBinding = { ...binding };
+      }
+      session.mode = nextMode;
+      delete (session as ChatSession & { codeSession?: unknown }).codeSession;
       writeSessionFile(session);
-      meta.mode = "daily";
-      meta.workspaceRoot = binding.workspaceRoot;
-      meta.workspaceDisplayName = binding.displayName;
+      meta.mode = nextMode;
+      meta.workspaceRoot = session.workspaceBinding?.workspaceRoot;
+      meta.workspaceDisplayName = session.workspaceBinding?.displayName;
       changed = true;
     }
     if (changed) atomicWriteJson(indexPath, parsed);
@@ -248,7 +256,7 @@ export function initialize(): void {
   sessionsDir = path.join(rootDir, SESSIONS_SUBDIR);
   indexPath = path.join(rootDir, INDEX_FILE);
   ensureDirs();
-  migrateUnclassifiedLegacySessions();
+  migrateLegacySessions();
   indexCache = readIndexFromDisk();
   initialized = true;
 }
@@ -314,7 +322,6 @@ export function createSession(opts?: {
     purpose: opts?.purpose,
     titleIsCustom: opts?.purpose ? true : undefined,
     mode,
-    ...(mode === "code" ? { codeSession: { clineMode: "act", tasks: [] } } : {}),
   };
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));
@@ -365,25 +372,6 @@ export function upsertMessage(id: string, message: ChatMessage): ChatSession | n
   else session.messages.push(message);
   session.updatedAt = Date.now();
   if (!session.titleIsCustom) session.title = deriveTitle(session.messages);
-  writeSessionFile(session);
-  upsertMeta(metaFromSession(session));
-  return session;
-}
-
-/** 持久化 Code/Cline 的宿主会话元数据；Conversation mode 始终保持不变。 */
-export function updateCodeSession(
-  sessionId: string,
-  patch: Partial<CodeSessionMetadata>,
-): ChatSession | null {
-  const session = readSessionFile(sessionId);
-  if (!session || session.mode !== "code") return null;
-  const current: CodeSessionMetadata = session.codeSession ?? { clineMode: "act", tasks: [] };
-  session.codeSession = {
-    ...current,
-    ...patch,
-    tasks: patch.tasks ? [...patch.tasks] : current.tasks,
-  };
-  session.updatedAt = Date.now();
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));
   return session;
@@ -493,7 +481,7 @@ export function migrateLegacyMessages(messages: ChatMessage[]): ChatSession | nu
     title: "历史对话",
     identityId: null,
     initialMessages: cleaned,
-    mode: "daily",
+    mode: "work",
   });
   return setWorkspaceBinding(session.id, legacyMigrationBinding());
 }

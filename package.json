@@ -7,7 +7,7 @@
     "cyrene": "./dist/cli/index.js"
   },
   "scripts": {
-    "build:main": "tsc -p tsconfig.main.json && node -e \"require('fs').cpSync('src/main/orchestrator/code/cline-esm-bridge.mjs','dist/main/main/orchestrator/code/cline-esm-bridge.mjs')\"",
+    "build:main": "tsc -p tsconfig.main.json",
     "build:preload": "tsc -p tsconfig.preload.json",
     "build:renderer": "vite build",
     "build:skills": "tsc -p tsconfig.skills.json",
@@ -61,7 +61,6 @@
     "@ant-design/x": "^2.9.0",
     "@ant-design/x-markdown": "^2.9.0",
     "@anthropic-ai/sdk": "^0.115.0",
-    "@cline/sdk": "0.0.66",
     "@lancedb/lancedb": "^0.30.0",
     "@larksuiteoapi/node-sdk": "^1.68.0",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -96,7 +95,8 @@
     "turndown": "^7.2.4",
     "unified": "^11.0.5",
     "wink-bm25-text-search": "^3.1.2",
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "yaml": "^2.9.0"
   },
   "allowScripts": {
     "protobufjs@7.6.4": true,

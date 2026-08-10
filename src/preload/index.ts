@@ -499,11 +499,11 @@ contextBridge.exposeInMainWorld("live2dDiagnostics", live2dDiagnosticsApi);
 
 // 聊天会话存储（多对话历史）
 const chatStoreApi = {
-  list: (options?: { mode?: "chat" | "work" | "code" | "learn" | "daily" }) => ipcRenderer.invoke(IPC.CHATS_LIST, options),
+  list: (options?: { mode?: "chat" | "work" | "code" | "learn" }) => ipcRenderer.invoke(IPC.CHATS_LIST, options),
   get: (id: string) => ipcRenderer.invoke(IPC.CHATS_GET, id),
   getPage: (id: string, before: number | null, limit: number) =>
     ipcRenderer.invoke(IPC.CHATS_GET_PAGE, { id, before, limit }),
-  create: (payload?: { title?: string; identityId?: string | null; mode?: "chat" | "work" | "code" | "learn" | "daily" }) =>
+  create: (payload?: { title?: string; identityId?: string | null; mode?: "chat" | "work" | "code" | "learn" }) =>
     ipcRenderer.invoke(IPC.CHATS_CREATE, payload ?? {}),
   append: (id: string, message: unknown) =>
     ipcRenderer.invoke(IPC.CHATS_APPEND, { id, message }),
@@ -557,8 +557,6 @@ const chatStoreApi = {
     ipcRenderer.on(IPC.CHATS_WORKSPACE_CHANGED, listener);
     return () => ipcRenderer.removeListener(IPC.CHATS_WORKSPACE_CHANGED, listener);
   },
-  setCodeMode: (sessionId: string, clineMode: "plan" | "act") =>
-    ipcRenderer.invoke(IPC.CHATS_SET_CODE_MODE, { sessionId, clineMode }),
   // 状态栏专用入口：要求 main 打开/复用 reactChatWindow 并加载指定 sessionId
   openInReactChatWindow: (sessionId: string) =>
     ipcRenderer.invoke(IPC.CHATS_OPEN_IN_REACT_WINDOW, sessionId),
@@ -573,32 +571,6 @@ const chatStoreApi = {
 };
 
 contextBridge.exposeInMainWorld("chatStore", chatStoreApi);
-
-// Code run 状态查询 + 验证审批
-const codeRunApi = {
-  getRun: (runId: string) =>
-    ipcRenderer.invoke(IPC.CODE_RUN_GET, runId),
-  getActiveRun: (params: { chatSessionId?: string; clineSessionId?: string }) =>
-    ipcRenderer.invoke(IPC.CODE_RUN_GET_ACTIVE, params),
-  listRuns: (chatSessionId?: string) =>
-    ipcRenderer.invoke(IPC.CODE_RUN_LIST, chatSessionId),
-  getPendingApprovals: (params: { chatSessionId?: string; runId?: string }) =>
-    ipcRenderer.invoke(IPC.CODE_VERIFICATION_GET_PENDING, params),
-  approveVerification: (approvalId: string) =>
-    ipcRenderer.invoke(IPC.CODE_VERIFICATION_APPROVE, approvalId),
-    rejectVerification: (approvalId: string) =>
-      ipcRenderer.invoke(IPC.CODE_VERIFICATION_REJECT, approvalId),
-    getPendingAsks: (chatSessionId?: string) =>
-      ipcRenderer.invoke(IPC.CODE_ASK_GET_PENDING, chatSessionId),
-    respondAsk: (promptId: string, answer: string) =>
-      ipcRenderer.invoke(IPC.CODE_ASK_RESPOND, { promptId, answer }),
-    cancelAsk: (promptId: string) =>
-      ipcRenderer.invoke(IPC.CODE_ASK_CANCEL, promptId),
-    createNewTask: (chatSessionId: string) =>
-      ipcRenderer.invoke(IPC.CODE_SESSION_NEW_TASK, chatSessionId),
-  };
-
-contextBridge.exposeInMainWorld("codeRun", codeRunApi);
 
 // Token 用量查询（设置中心 Token 面板用）
 const tokenUsageApi = {

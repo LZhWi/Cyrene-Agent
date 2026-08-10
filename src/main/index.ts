@@ -124,7 +124,6 @@ import { type RuntimeState } from "./runtime-state";
 import { getAppIconPath } from "./app-icon";
 import type { StartTtsRequest } from "../shared/tts-session";
 import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
-import { codeRunWorker } from "./orchestrator/code/code-run-worker";
 import {
   setWeatherConfig,
   setSearchConfig,
@@ -488,7 +487,6 @@ app.on("before-quit", () => {
   windowManager?.dispose();
   schedulerSubsystem?.engine.stop();
   proactiveLifecycle.stopProactiveTrigger();
-  codeRunWorker.cleanup();
   flushTokenUsage();
   void channelsSubsystem?.shutdown();
   void screenshotService?.shutdown();

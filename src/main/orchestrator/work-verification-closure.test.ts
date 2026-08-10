@@ -14,7 +14,7 @@ vi.mock("../index", () => ({
 
 import { toolRegistry } from "./tool-registry";
 import { setCurrentLevel } from "../permission";
-import { VerificationRunner, type VerificationResult } from "./code/verification-runner";
+import { VerificationRunner, type VerificationResult } from "./verification-runner";
 import "./built-in-tools";
 
 const runVerification = toolRegistry.getById("run_verification")!.execute;

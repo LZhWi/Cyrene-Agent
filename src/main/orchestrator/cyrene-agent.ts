@@ -1,9 +1,9 @@
-// CyreneAgent —— 把两阶段 FC 循环包进 AG-UI 的 AbstractAgent。
+// CyreneAgent —— 把两条 Agent 循环包进 AG-UI 的 AbstractAgent。
 //
 // 第一期重构：
-// - 持有 runWithEvents 入口，按 agentRuntime 选择 runLangGraphAgentLoop 或 runTwoPhaseFcLoop。
+// - 持有 runWithEvents 入口：Chat 使用 chat-loop，其余模式使用 CyreneHarness。
 // - 工具阶段只携带 tool_system + tools schema；Soul 阶段只携带 soul_systemBase + 工具结果摘要，不携带 tools。
-// - runWithEvents 把 TwoPhaseEvent 包装成 AG-UI BaseEvent 转发给渲染端。
+// - runWithEvents 把 AgentLoopEvent 包装成 AG-UI BaseEvent 转发给渲染端。
 //
 // 设计要点：
 // - FC 循环仍是 stream:false 一次性拿全文（不碰 LLM 层），拿到全文后切成 delta 逐个发
@@ -33,25 +33,24 @@ export interface SkillRouteInfo {
 }
 
 /**
- * v3: 简化的 TwoPhaseFcResult（原 two-phase-fc-loop.ts 将被删除）
- * Harness 适配器返回这个形状，保持下游消费方不变
+ * 两个 Agent loop 共同使用的结果形状。
  */
-export interface TwoPhaseFcResult {
+export interface AgentLoopResult {
   reply: string;
   toolResults: import("./types").ToolCallResult[];
-  soulPhaseReason: "no_tool" | "timeout" | "max_rounds" | "tool_error";
+  completionReason: "no_tool" | "timeout" | "max_rounds" | "tool_error";
   totalUsage?: { input: number; output: number };
   /**
    * Canonical 终态结算（Task 2 / C1）。
    * 由 harness-adapter 根据 HarnessResult.terminateReason 填充；
    * CyreneAgent.runWithEvents 据此决定 RUN_FINISHED.result 的形状。
-   * 未设置时由 CyreneAgent 通过 soulPhaseReason 推断（兼容旧调用方）。
+   * 未设置时由 CyreneAgent 通过 completionReason 推断（兼容旧调用方）。
    */
   terminal?: CyreneRunTerminalResult;
 }
 
-/** v3: 空的 TwoPhaseEvent 类型占位（原 two-phase-fc-loop.ts 将被删除） */
-export interface TwoPhaseEvent {
+/** 两个 Agent loop 共用的展示事件。 */
+export interface AgentLoopEvent {
   type: string;
   messageId?: string;
   role?: string;
@@ -114,11 +113,9 @@ export interface CyreneRunOptions {
   citaContextBlock?: string;
   /** CITA 本地校验后允许 Action Gate 引用的不透明引用集合。 */
   trustedRefs?: string[];
-  /** 临时回退开关；默认使用 LangGraph Runtime。 */
-  agentRuntime?: "langgraph" | "legacy" | "harness";
   /** Chat 跳过 CITA/Action Gate/Native FC；默认 Work。 */
   executionMode?: AgentExecutionMode;
-  /** 原始 UI 模式（work / daily / learn / chat / code），供工具做模式隔离。 */
+  /** 原始 UI 模式（work / learn / chat / code），供工具做模式隔离。 */
   conversationMode?: ConversationMode;
   timeoutMs: number;
   /** 可选：本次 run 的工具集合。未传时使用当前所有已启用工具。 */
@@ -207,17 +204,17 @@ function createRunId(): string {
 }
 
 /**
- * 把 TwoPhaseFcResult.soulPhaseReason 映射为 canonical 终态结算。
+ * 把 AgentLoopResult.completionReason 映射为 canonical 终态结算。
  * - no_tool / tool_error → success（harness 正常返回，已产出 final answer）
  * - max_rounds → timeout, reason="max_rounds"
  * - timeout → timeout, reason="timeout"
  *
- * 注意：cancelled 不是经由 soulPhaseReason 上报的（catch 块单独处理）。
+ * 注意：cancelled 不经由 completionReason 上报（catch 块单独处理）。
  */
-function terminalFromSoulPhaseReason(
-  soulPhaseReason: "no_tool" | "max_rounds" | "timeout" | "tool_error" | undefined,
+function terminalFromCompletionReason(
+  completionReason: "no_tool" | "max_rounds" | "timeout" | "tool_error" | undefined,
 ): CyreneRunTerminalResult {
-  switch (soulPhaseReason) {
+  switch (completionReason) {
     case "max_rounds":
       return { status: "timeout", reason: "max_rounds", externalEffectsMayContinue: true };
     case "timeout":
@@ -228,19 +225,15 @@ function terminalFromSoulPhaseReason(
   }
 }
 
-export function resolveAgentRuntime(_runtime: CyreneRunOptions["agentRuntime"]): "harness" {
-  return "harness";
-}
-
 export function resolveExecutionMode(mode: unknown): AgentExecutionMode {
   // 兼容尚未重启的旧 renderer 与历史内部调用。
   return mode === "chat" || mode === "soul-only" ? "chat" : "work";
 }
 
 /**
- * 把 TwoPhaseEvent 包装成 AG-UI BaseEvent。
+ * 把 AgentLoopEvent 包装成 AG-UI BaseEvent。
  */
-export function toAguiEvent(event: TwoPhaseEvent): BaseEvent {
+export function toAguiEvent(event: AgentLoopEvent): BaseEvent {
   switch (event.type) {
     case "step_started":
       return { type: EventType.STEP_STARTED, stepName: event.stepName };
@@ -299,7 +292,7 @@ export function toAguiEvent(event: TwoPhaseEvent): BaseEvent {
 
 /**
  * 执行一个工具调用，封装权限检查 + toolRegistry 调用 + 异常转 output。
- * 由 runTwoPhaseFcLoop 通过 executeTool 注入回调调用。
+ * 由 Harness 工具调度通过 executeTool 注入回调调用。
  */
 async function executeToolCall(
   tc: { id: string; name: string; arguments: string },
@@ -407,14 +400,13 @@ export class CyreneAgent extends AbstractAgent {
           const adapter = getAdapterForConfig(options.settings);
           adapterTimer.end();
 
-          const onEvent = (event: TwoPhaseEvent) => {
+          const onEvent = (event: AgentLoopEvent) => {
             if (cancelled) return;
             subscriber.next(toAguiEvent(event));
           };
           const executionMode = resolveExecutionMode(options.executionMode);
-          const runtime = resolveAgentRuntime(options.agentRuntime);
           debugLog(
-            `${LOG_PREFIX} executionMode=${executionMode} agentRuntime=${runtime} provider=${options.settings.provider} model=${options.settings.model}`,
+            `${LOG_PREFIX} executionMode=${executionMode} loop=${executionMode === "chat" ? "chat" : "harness"} provider=${options.settings.provider} model=${options.settings.model}`,
           );
           const enabledToolCount = executionMode === "chat"
             ? 0
@@ -423,7 +415,7 @@ export class CyreneAgent extends AbstractAgent {
           flowLog(`1. 准备上下文：${executionMode === "chat" ? "Chat" : "Work"} 模式，模型 ${options.settings.model}，${enabledToolCount} 个工具可用`);
           flowLog(`2. 理解用户请求：${executionMode === "chat" ? "Chat 模式无需工具上下文" : `完成，可信引用 ${(options.trustedRefs ?? []).length} 个`}`);
 
-          let result: TwoPhaseFcResult;
+          let result: AgentLoopResult;
           if (executionMode === "chat") {
             flowLog("3. Chat 模式：生成回复");
             result = await perf.track("chat_loop", () => runChatLoop({
@@ -483,7 +475,7 @@ export class CyreneAgent extends AbstractAgent {
               executionLedger: executionLedgers.forScope(`${options.conversationId ?? "default"}:messages-${options.messages.length}`),
             };
             const conversationId = options.conversationId ?? "default";
-            // v3: CyreneHarness 替换 LangGraph + TwoPhaseFC
+            // Work / Learn / Code 统一通过 CyreneHarness。
             // Issue 5：传 runOptions（含 canonical runId），不传原始 options。
             result = await perf.track("harness_loop", () => runHarnessWithAdapter(
               runOptions,
@@ -498,11 +490,11 @@ export class CyreneAgent extends AbstractAgent {
             reply: result.reply,
             toolResults: result.toolResults,
             totalUsage: result.totalUsage,
-            soulPhaseReason: result.soulPhaseReason,
+            soulPhaseReason: result.completionReason,
             executionMode,
             socialContext: options.socialContext,
-            // 优先使用 harness-adapter 上报的 terminal；否则按 soulPhaseReason 推断
-            terminal: result.terminal ?? terminalFromSoulPhaseReason(result.soulPhaseReason),
+            // 优先使用 harness-adapter 上报的 terminal；否则按 completionReason 推断
+            terminal: result.terminal ?? terminalFromCompletionReason(result.completionReason),
           };
           flowLog("── 本轮完成 ────────────────────────");
 

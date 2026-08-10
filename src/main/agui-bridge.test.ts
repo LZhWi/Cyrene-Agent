@@ -5,7 +5,6 @@ import { IPC } from "../shared/ipc-channels";
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => unknown>(),
   getSession: vi.fn(),
-  runCodeRequest: vi.fn(),
   runCyreneAgent: vi.fn(),
   requestUserClarification: vi.fn(),
   agentEvents: [] as unknown[],
@@ -75,9 +74,6 @@ vi.mock("./chats/chats-store", () => ({
   getSession: mocks.getSession,
 }));
 
-vi.mock("./orchestrator/code/code-request", () => ({
-  runCodeRequest: mocks.runCodeRequest,
-}));
 
 vi.mock("./user-choice", () => ({
   requestUserClarification: mocks.requestUserClarification,
@@ -98,48 +94,6 @@ describe("agui-bridge sticker event ordering", () => {
     mocks.errorAfterRunFinished = null;
     mocks.skipDefaultRunFinished = false;
     mocks.neverComplete = false;
-  });
-
-  it("maps Cline text and reasoning deltas onto the AG-UI stream contract", async () => {
-    const { normalizeCodeRendererEvent } = await import("./agui-bridge");
-
-    expect(normalizeCodeRendererEvent({
-      type: "agent_event",
-      payload: { event: { type: "content_start", contentType: "text", text: "完成" } },
-    })).toMatchObject({ type: "TEXT_MESSAGE_CONTENT", delta: "完成" });
-    expect(normalizeCodeRendererEvent({
-      type: "agent_event",
-      payload: { event: { type: "content_start", contentType: "reasoning", reasoning: "分析" } },
-    })).toMatchObject({ type: "REASONING_MESSAGE_CONTENT", delta: "分析" });
-    expect(normalizeCodeRendererEvent({
-      type: "agent_event",
-      payload: { event: { type: "content_update", contentType: "text", text: "继续" } },
-    })).toMatchObject({ type: "TEXT_MESSAGE_CONTENT", delta: "继续" });
-  });
-
-  it("maps Cline tool lifecycle events onto visible AG-UI tool states", async () => {
-    const { normalizeCodeRendererEvent } = await import("./agui-bridge");
-
-    expect(normalizeCodeRendererEvent({
-      type: "agent_event",
-      payload: { event: { type: "content_start", contentType: "tool", toolName: "apply_patch", toolCallId: "tool-1" } },
-    })).toMatchObject({ type: "TOOL_CALL_START", toolCallName: "apply_patch", toolCallId: "tool-1" });
-    expect(normalizeCodeRendererEvent({
-      type: "agent_event",
-      payload: { event: { type: "content_end", contentType: "tool", toolName: "apply_patch", toolCallId: "tool-1", output: "done" } },
-    })).toMatchObject({ type: "TOOL_CALL_RESULT", toolCallId: "tool-1", content: "done", status: "success" });
-  });
-
-  it("maps Cline Ask presentations onto a React-consumable custom event", async () => {
-    const { normalizeCodeRendererEvent } = await import("./agui-bridge");
-    const ask = { promptId: "ask-1", question: "选择方案？", options: ["A", "B"] };
-
-    expect(normalizeCodeRendererEvent({ type: "code_ask", payload: ask, runId: "run-1" })).toEqual({
-      type: "CUSTOM",
-      name: "code_ask",
-      value: ask,
-      runId: "run-1",
-    });
   });
 
   it("routes structured Ask cards to the AG-UI run sender", async () => {
@@ -333,13 +287,11 @@ describe("agui-bridge sticker event ordering", () => {
       styleId: "lively",
       executionMode: "chat",
     }));
-    expect(mocks.runCodeRequest).not.toHaveBeenCalled();
   });
 
   it("keeps Work requests on CyreneAgent and never dispatches the Code runtime", async () => {
     vi.resetModules();
     mocks.handlers.clear();
-    mocks.runCodeRequest.mockClear();
     mocks.runCyreneAgent.mockClear();
     mocks.getSession.mockReturnValue({
       id: "work-chat",
@@ -376,47 +328,6 @@ describe("agui-bridge sticker event ordering", () => {
     expect(mocks.runCyreneAgent).toHaveBeenCalledOnce();
     expect(mocks.runCyreneAgent).toHaveBeenCalledWith(expect.objectContaining({
       executionMode: "work",
-      agentRuntime: "langgraph",
-    }));
-    expect(mocks.runCodeRequest).not.toHaveBeenCalled();
-  });
-
-  it("dispatches Daily sessions to the legacy TwoPhaseFC runtime", async () => {
-    vi.resetModules();
-    mocks.handlers.clear();
-    mocks.runCyreneAgent.mockClear();
-    mocks.getSession.mockReturnValue({
-      id: "daily-chat",
-      mode: "daily",
-      workspaceBinding: { workspaceRoot: "C:\\daily", displayName: "daily", boundAt: 1 },
-    });
-    const { registerAgUiIpc } = await import("./agui-bridge");
-    const buildOptions = vi.fn(async () => ({
-      options: {
-        settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
-        messages: [],
-        timeoutMs: 1000,
-        toolSystemContent: "TOOL",
-        soulSystemBaseContent: "SOUL",
-      },
-      latestUserText: "整理今天的项目记录",
-    }));
-    registerAgUiIpc(buildOptions, async () => {}, () => null);
-    const handler = mocks.handlers.get(IPC.AGUI_RUN);
-    if (!handler) throw new Error("AGUI_RUN handler was not registered");
-
-    await handler({
-      sender: { isDestroyed: () => false, send: () => {} },
-    }, {
-      messages: [{ role: "user", content: "整理今天的项目记录" }],
-      sessionId: "daily-chat",
-      executionMode: "chat",
-    });
-
-    expect(buildOptions).toHaveBeenCalledWith(expect.objectContaining({ executionMode: "work" }));
-    expect(mocks.runCyreneAgent).toHaveBeenCalledWith(expect.objectContaining({
-      executionMode: "work",
-      agentRuntime: "legacy",
     }));
   });
 
@@ -424,7 +335,7 @@ describe("agui-bridge sticker event ordering", () => {
     vi.resetModules();
     mocks.handlers.clear();
     mocks.runCyreneAgent.mockClear();
-    mocks.getSession.mockReturnValue({ id: "daily-no-workspace", mode: "daily" });
+    mocks.getSession.mockReturnValue({ id: "work-no-workspace", mode: "work" });
     const { registerAgUiIpc } = await import("./agui-bridge");
     registerAgUiIpc(vi.fn(), async () => {}, () => null);
     const handler = mocks.handlers.get(IPC.AGUI_RUN);
@@ -434,93 +345,9 @@ describe("agui-bridge sticker event ordering", () => {
       sender: { isDestroyed: () => false, send: () => {} },
     }, {
       messages: [{ role: "user", content: "开始" }],
-      sessionId: "daily-no-workspace",
+      sessionId: "work-no-workspace",
     })).rejects.toThrow("需要先绑定项目工作区");
     expect(mocks.runCyreneAgent).not.toHaveBeenCalled();
-  });
-
-  it("Code verification event send failure does not stop the background run", async () => {
-    vi.resetModules();
-    mocks.handlers.clear();
-    mocks.runCodeRequest.mockClear();
-    mocks.runCyreneAgent.mockClear();
-    mocks.getSession.mockReturnValue({
-      id: "code-chat",
-      mode: "code",
-      workspaceBinding: { workspaceRoot: "C:\\code", displayName: "code", boundAt: 1 },
-    });
-    let continuedAfterEvent = false;
-    mocks.runCodeRequest.mockImplementation(async (_input, _session, context) => {
-      context.emitEvent({
-        type: "code_verification_card",
-        payload: { status: "completed_verified" },
-      });
-      continuedAfterEvent = true;
-    });
-
-    const { registerAgUiIpc } = await import("./agui-bridge");
-    registerAgUiIpc(
-      vi.fn(),
-      vi.fn(),
-      () => null,
-    );
-    const handler = mocks.handlers.get(IPC.AGUI_RUN);
-    if (!handler) throw new Error("AGUI_RUN handler was not registered");
-
-    const ack = await handler({
-      sender: {
-        isDestroyed: () => false,
-        send: () => { throw new Error("webContents destroyed during send"); },
-      },
-    }, {
-      messages: [{ role: "user", content: "修复代码" }],
-      sessionId: "code-chat",
-      styleId: "default",
-      executionMode: "work",
-    });
-
-    expect(ack).toMatchObject({ success: true });
-    await expect.poll(() => mocks.runCodeRequest).toHaveBeenCalledOnce();
-    expect(mocks.runCyreneAgent).not.toHaveBeenCalled();
-    expect(continuedAfterEvent).toBe(true);
-  });
-
-  it("starts a Code AG-UI run before forwarding deterministic Code cards", async () => {
-    vi.resetModules();
-    mocks.handlers.clear();
-    mocks.runCodeRequest.mockReset();
-    mocks.getSession.mockReturnValue({
-      id: "code-react",
-      mode: "code",
-      workspaceBinding: { workspaceRoot: "C:\\code", displayName: "code", boundAt: 1 },
-    });
-    mocks.runCodeRequest.mockImplementation(async (_input, _session, context) => {
-      context.emitEvent({
-        type: "code_verification_card",
-        payload: { runId: context.runId, status: "completed_verified" },
-      });
-    });
-    const sent: unknown[] = [];
-
-    const { registerAgUiIpc } = await import("./agui-bridge");
-    registerAgUiIpc(vi.fn(), vi.fn(), () => null);
-    const handler = mocks.handlers.get(IPC.AGUI_RUN);
-    if (!handler) throw new Error("AGUI_RUN handler was not registered");
-
-    const ack = await handler({
-      sender: { isDestroyed: () => false, send: (_channel: string, event: unknown) => sent.push(event) },
-    }, {
-      messages: [{ role: "user", content: "修复代码" }],
-      sessionId: "code-react",
-    }) as { runId: string };
-
-    await expect.poll(() => sent.length).toBeGreaterThanOrEqual(2);
-    expect(sent[0]).toMatchObject({ type: "RUN_STARTED", runId: ack.runId, threadId: "code-react" });
-    expect(sent[1]).toMatchObject({
-      type: "CUSTOM",
-      name: "code_verification_card",
-      value: { runId: ack.runId, status: "completed_verified" },
-    });
   });
 
   // ── Task 2 / C1：canonical runId 与 exactly-once settlement ────────────

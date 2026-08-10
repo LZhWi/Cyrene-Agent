@@ -1,5 +1,5 @@
 /**
- * Work/Daily/Learn 会先完整接收并分类模型回合，再把公开文本做展示层渐显。
+ * Work/Learn/Code 会先完整接收并分类模型回合，再把公开文本做展示层渐显。
  * 这不是伪造 reasoning；只改变已经收到的公开文本的呈现节奏。
  */
 export function splitTextForReveal(text: string, maxFrames = 80): string[] {

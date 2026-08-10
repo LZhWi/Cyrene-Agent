@@ -1,18 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { firstValueFrom } from "rxjs";
-import { resolveAgentRuntime, resolveExecutionMode, CyreneAgent } from "./cyrene-agent";
+import { resolveExecutionMode, CyreneAgent } from "./cyrene-agent";
 import type { CyreneRunOptions } from "./cyrene-agent";
 import type { BaseEvent } from "@ag-ui/core";
-
-describe("resolveAgentRuntime", () => {
-  it("uses Harness runtime by default (LangGraph legacy path has been retired)", () => {
-    expect(resolveAgentRuntime(undefined)).toBe("harness");
-    expect(resolveAgentRuntime("harness")).toBe("harness");
-    // 旧值不再分支：langgraph / legacy 都映射到 harness，避免静默走旧路径
-    expect(resolveAgentRuntime("langgraph")).toBe("harness");
-    expect(resolveAgentRuntime("legacy")).toBe("harness");
-  });
-});
 
 describe("resolveExecutionMode", () => {
   it("uses Work by default and migrates legacy execution mode names", () => {

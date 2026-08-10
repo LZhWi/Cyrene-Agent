@@ -680,7 +680,6 @@ export async function buildAgentRunOptions(
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
       ...(isChatMode ? { tools: runTools as ToolDefinition[] } : {}),
       ...(availableSkills.length > 0 ? { availableSkills } : {}),
-      agentRuntime: "langgraph",
       resolvedWorkspaceRoot,
     },
     latestUserText,

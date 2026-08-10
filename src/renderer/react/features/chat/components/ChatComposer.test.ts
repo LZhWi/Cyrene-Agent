@@ -18,7 +18,6 @@ vi.mock("antd", () => ({
 vi.mock("./ReasoningControl", () => ({ ReasoningControl: () => null }));
 vi.mock("./StyleControl", () => ({ StyleControl: () => null }));
 vi.mock("./PermissionControl", () => ({ PermissionControl: () => null }));
-vi.mock("./ClineModeSwitch", () => ({ ClineModeSwitch: () => null }));
 
 import { ChatComposer } from "./ChatComposer";
 

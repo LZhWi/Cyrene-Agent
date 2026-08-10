@@ -20,7 +20,6 @@ const SCENE_NAMES: Record<string, string> = {
   playful: "轻松俏皮",
   farewell: "告别/道别",
   concern: "表达关心",
-  daily: "日常闲聊",
 };
 
 // 通用语气规则（无论哪个场景都注入）—— 从 prompts/tone-rules.md 读取

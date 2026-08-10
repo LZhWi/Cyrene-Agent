@@ -1,5 +1,5 @@
 import type { ChatVendorAdapter, ChatMessage, ChatRequest } from "./vendors/types";
-import type { AgentLoopSettings, TwoPhaseEvent } from "./cyrene-agent";
+import type { AgentLoopSettings, AgentLoopEvent } from "./cyrene-agent";
 
 const COMPRESSION_PROMPT = `你正在帮"昔涟"整理对话记忆。请把下面这段较早的对话历史总结成一段简洁的摘要，供后续回复参考。
 
@@ -20,7 +20,7 @@ const COMPRESSION_PROMPT = `你正在帮"昔涟"整理对话记忆。请把下�
 function keepRecentCount(mode: string): number {
   switch (mode) {
     case "work":
-    case "daily":
+    case "code":
       return 6;
     case "learn":
       return 10;
@@ -83,7 +83,7 @@ export interface CompressOptions {
   /** 当前要附加到请求里的 system prompt（Tool/Soul 阶段不同）。 */
   systemContent: string;
   mode?: string;
-  onEvent?: (event: TwoPhaseEvent) => void;
+  onEvent?: (event: AgentLoopEvent) => void;
   signal?: AbortSignal;
 }
 

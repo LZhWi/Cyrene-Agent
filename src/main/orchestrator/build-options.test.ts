@@ -103,7 +103,7 @@ describe("build-options", () => {
     expect(result.options.settings.reasoning).toEqual({ mode: "off" })
   })
 
-  it.each(["chat", "work", "daily", "learn"] as const)(
+  it.each(["chat", "work", "code", "learn"] as const)(
     "preserves the saved reasoning preference in %s mode",
     async (executionMode) => {
       const deps = createBuildDeps()

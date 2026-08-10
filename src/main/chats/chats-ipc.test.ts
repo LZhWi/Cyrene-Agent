@@ -76,27 +76,12 @@ describe("chats IPC mode filtering", () => {
     }));
   });
 
-  it("persists the selected Cline plan/act mode only for Code sessions", async () => {
+  it("does not register the removed Cline plan/act IPC", async () => {
     const { registerChatsIpc } = await import("./chats-ipc");
     registerChatsIpc();
 
-    const create = mocks.handlers.get(IPC.CHATS_CREATE);
-    const setCodeMode = mocks.handlers.get(IPC.CHATS_SET_CODE_MODE);
-    if (!create || !setCodeMode) throw new Error("Code session IPC handlers were not registered");
-    const event = { sender: {} };
-    const code = await create(event, { mode: "code" }) as { id: string };
-    const work = await create(event, { mode: "work" }) as { id: string };
-
-    expect(await setCodeMode(event, { sessionId: code.id, clineMode: "plan" })).toEqual(
-      expect.objectContaining({ ok: true, session: expect.objectContaining({
-        mode: "code",
-        codeSession: expect.objectContaining({ clineMode: "plan" }),
-      }) }),
-    );
-    expect(await setCodeMode(event, { sessionId: work.id, clineMode: "plan" })).toEqual({
-      ok: false,
-      error: "Code session not found",
-    });
+    const setCodeMode = mocks.handlers.get("chats:set-code-mode");
+    expect(setCodeMode).toBeUndefined();
   });
 
   it("opens only a workspace already bound to a project conversation", async () => {

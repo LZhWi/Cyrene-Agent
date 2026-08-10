@@ -18,7 +18,7 @@
 import { spawn } from "child_process";
 import * as path from "path";
 import * as fs from "fs";
-import { policyFor, type AgentFileAccessLevel } from "../../permission-policy";
+import { policyFor, type AgentFileAccessLevel } from "../permission-policy";
 
 // ── 类型 ──────────────────────────────────────────────────
 
