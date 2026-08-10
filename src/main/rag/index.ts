@@ -243,6 +243,7 @@ export async function searchHistoryEntries(
     createdAfter?: number;
     rawScore?: boolean;
     semanticOnly?: boolean;
+    bm25Only?: boolean;
   } = {},
 ): Promise<Array<{ text: string; createdAt: number; score: number; metadata?: Record<string, unknown> }>> {
   if (!retriever) return [];

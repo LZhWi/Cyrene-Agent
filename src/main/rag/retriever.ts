@@ -51,6 +51,8 @@ export interface RetrieveOptions {
   createdAfter?: number;
   rawScore?: boolean;
   semanticOnly?: boolean;
+  /** 关键词预检：跳过嵌入只跑 BM25，返回原始分。近零成本，用于隐式召回触发判定。 */
+  bm25Only?: boolean;
   recordRecall?: boolean;
 }
 
@@ -215,6 +217,12 @@ export class HybridRetriever {
   ): Promise<SearchResult[]> {
     const stats = this.store.stats;
     if (stats.total === 0) return [];
+
+    // bm25Only：关键词预检旁路。不做嵌入、不走向量库（不产生召回记录），
+    // 返回原始 BM25 分——分数不跨语料可比，仅供调用方用固定阈值做触发判定。
+    if (options.bm25Only) {
+      return this.bm25Search(query, source, topK, options);
+    }
 
     // 如果没有 provider，向量检索不可用，只用 BM25
     if (!this.provider) {

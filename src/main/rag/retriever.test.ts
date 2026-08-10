@@ -100,4 +100,26 @@ describe("HybridRetriever", () => {
 
     expect(results.map((result) => result.entry.id).sort()).toEqual(entries.map((entry) => entry.id).sort());
   });
+
+  it("bm25Only preflight skips embedding and returns raw BM25 matches", async () => {
+    const store = createStore();
+    store.addPreparedBatch([
+      { text: "去年和 z 约好一起去看展览", source: "chat_history", embedding: [1, 0] },
+      { text: "今天天气真不错", source: "chat_history", embedding: [0, 1] },
+    ]);
+    const embed = vi.fn(async (_text: string) => [1, 0]);
+    const spyProvider: EmbeddingProvider = {
+      name: "spy",
+      dims: 2,
+      embed,
+      embedBatch: (texts) => Promise.all(texts.map((text) => embed(text))),
+    };
+    const retriever = new HybridRetriever(store, spyProvider);
+
+    const results = await retriever.retrieve("z 展览", "chat_history", 1, { bm25Only: true });
+
+    expect(embed).not.toHaveBeenCalled();
+    expect(results[0]?.entry.text).toBe("去年和 z 约好一起去看展览");
+    expect(results[0].score).toBeGreaterThan(0);
+  });
 });

@@ -41,6 +41,7 @@ import {
   reconcileHistoryHitsWithTimeline,
   registerRecallHistoryTool,
   rerankHistoryCandidatesForSandbox,
+  runHistoryAutoInjection,
   shouldAutoProbeHistoryRetrieval,
 } from "./history-tools";
 
@@ -135,6 +136,7 @@ describe("history retrieval auto probe cues", () => {
   it.each([
     "还记得我们之前说过的小摆件吗？",
     "上次我答应过你的事情是什么？",
+    "你再试试能不能想起来关于丝带或者小摆件的细节嘛",
     "[2026-08-10 15:13, Asia/Shanghai]\n记得吗（用户发送表情包：你看人家嘛）",
   ])("recognizes an explicit recall request: %s", (query) => {
     expect(shouldAutoProbeHistoryRetrieval(query)).toBe(true);
@@ -146,6 +148,84 @@ describe("history retrieval auto probe cues", () => {
     "普通聊天",
   ])("ignores an ordinary request: %s", (query) => {
     expect(shouldAutoProbeHistoryRetrieval(query)).toBe(false);
+  });
+});
+
+describe("history auto-injection", () => {
+  beforeEach(() => {
+    mocks.searchHistoryEntries.mockReset();
+  });
+
+  it("injects V2-retrieved turns when a recall cue hits", async () => {
+    const ribbonFact = {
+      text: "我想要的丝带是粉色的",
+      score: 0.8,
+      createdAt: Date.now() - 86_400_000,
+      metadata: { role: "user" },
+    };
+    mocks.searchHistoryEntries.mockResolvedValue([ribbonFact]);
+    const block = await runHistoryAutoInjection("你再试试能不能想起来关于丝带或者小摆件的细节嘛");
+    // 走完整 V2 管线：baseline + 多路检索，侧路检索均不记录召回
+    expect(mocks.searchHistoryEntries).toHaveBeenCalled();
+    expect(mocks.searchHistoryEntries.mock.calls.some(
+      (call) => (call[2] as { recordRecall?: boolean } | undefined)?.recordRecall === false,
+    )).toBe(true);
+    expect(block).toContain("我想要的丝带是粉色的");
+    expect(block).toContain("只读数据");
+  });
+
+  it("runs only the bm25 preflight when there is no cue and no lexical evidence", async () => {
+    mocks.searchHistoryEntries.mockResolvedValue([]);
+    const block = await runHistoryAutoInjection("今天天气怎么样？");
+    expect(block).toBe("");
+    // 只跑了一次 bm25Only 预检，没过阈值就不进完整检索
+    expect(mocks.searchHistoryEntries).toHaveBeenCalledTimes(1);
+    expect(mocks.searchHistoryEntries.mock.calls[0][2]).toMatchObject({ bm25Only: true });
+  });
+
+  it("triggers injection on strong lexical evidence without an explicit recall cue", async () => {
+    const zFact = {
+      text: "去年和 z 约好一起去看的展览",
+      score: 0.9,
+      createdAt: Date.now() - 86_400_000,
+      metadata: { role: "user" },
+    };
+    mocks.searchHistoryEntries.mockImplementation(async (
+      _query: string,
+      _depth: number,
+      options?: { bm25Only?: boolean },
+    ) => (
+      options?.bm25Only
+        ? [{ text: "去年和 z 约好一起去看的展览", score: 6.4, createdAt: Date.now() - 86_400_000 }]
+        : [zFact]
+    ));
+    const block = await runHistoryAutoInjection("对了，去年和 z 那件事后来怎么样了呀");
+    expect(block).toContain("去年和 z 约好一起去看的展览");
+    expect(block).toContain("只读数据");
+  });
+
+  it("stays silent when the preflight score is below threshold", async () => {
+    mocks.searchHistoryEntries.mockImplementation(async (
+      _query: string,
+      _depth: number,
+      options?: { bm25Only?: boolean },
+    ) => (options?.bm25Only ? [{ text: "weak match", score: 0.8, createdAt: Date.now() }] : []));
+    const block = await runHistoryAutoInjection("对了，去年那件事后来怎么样了呀");
+    expect(block).toBe("");
+    expect(mocks.searchHistoryEntries).toHaveBeenCalledTimes(1);
+  });
+
+  it("drops echoes of the current query", async () => {
+    const query = "想起来我们说过的丝带细节";
+    mocks.searchHistoryEntries.mockResolvedValue([
+      { text: query, score: 0.95, createdAt: Date.now(), metadata: { role: "user" } },
+    ]);
+    expect(await runHistoryAutoInjection(query)).toBe("");
+  });
+
+  it("returns empty when retrieval throws", async () => {
+    mocks.searchHistoryEntries.mockRejectedValue(new Error("rag down"));
+    expect(await runHistoryAutoInjection("还记得上次的事吗")).toBe("");
   });
 });
 
@@ -378,7 +458,9 @@ describe("history retrieval sandbox answer-focused reranking", () => {
     expect(texts).toContain(ranked[5].text);
   });
 
-  it("promotes the full parent when one of its sentence windows is selected", () => {
+  it("caps a parent and its sentence windows to one slot, keeping the fuller parent", () => {
+    // 同源封顶契约：父文与句窗至多占 1 个名额，避免一条长消息吃掉多席、
+    // 挤掉其他重要信息（实测案例：模糊回复全文+句窗占 2 席挤出含答案原文）。
     const parent = "完整事件原文：去年她反复写纸条并到学校寻找我们，后来学校心理老师介入处理。这件事持续了很长时间，期间还发生了许多具体事情，让我长期感到害怕和焦虑，也影响了之后的生活。";
     const window = "后来她反复写纸条并到学校寻找我们，学校心理老师随后介入处理。";
     const bridge = "……这样啊。所以那段时间你和朋友是不是每天都很害怕？";
@@ -400,9 +482,10 @@ describe("history retrieval sandbox answer-focused reranking", () => {
     }));
 
     const selected = diversifySandboxRerankResults(ranked, candidates).slice(0, 5).map((item) => item.text);
+    // 父文原位继承句窗的席位，句窗本身不再单独占名额
     expect(selected).toContain(parent);
-    expect(selected).toContain(window);
-    expect(selected).not.toContain(bridge);
+    expect(selected).not.toContain(window);
+    expect(selected).not.toContain("无关内容。");
   });
 });
 

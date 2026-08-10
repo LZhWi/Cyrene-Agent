@@ -43,7 +43,7 @@ import { IMAGE_CAPTION_MAX_BYTES, IMAGE_CAPTION_PROMPT, validateCaptionImagePath
 import { decideImageSendStrategy } from "./chat/image-send-strategy";
 import { buildAlwaysOnContext, buildMemoryInjection, runFunctionCallingLoop, scheduleMemoryWrite } from "./orchestrator";
 import { CyreneAgent } from "./orchestrator/cyrene-agent";
-import { indexConversationTurn } from "./orchestrator/history-tools";
+import { indexConversationTurn, runHistoryAutoInjection } from "./orchestrator/history-tools";
 import { buildToneInjection } from "./orchestrator/tone-injector";
 import { getAdapter, buildVendorUrl, getAdapterForConfig, createSseReader } from "./orchestrator/vendors";
 import type { VendorConfig } from "./orchestrator/vendors";
@@ -5679,6 +5679,7 @@ app.whenReady().then(async () => {
     buildAlwaysOnContext: (async (userText, messages) =>
       buildAlwaysOnContext(userText, messages as any)) as BuildOptionsDeps["buildAlwaysOnContext"],
     buildMemoryInjection,
+    buildHistoryAutoInjection: runHistoryAutoInjection,
     buildRelationshipContext,
     buildSystemPrompt,
     buildToolSystemPrompt: (enabledTools) => buildToolSystemPrompt(enabledTools as ToolDefinition[]),

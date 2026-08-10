@@ -15,6 +15,12 @@ export interface HistoryRetrievalHit {
 
 export type HistorySearch = (query: string, topK: number) => Promise<HistoryRetrievalHit[]>;
 
+/** 让出事件循环：V2 管线多路嵌入/重排是 CPU 密集段，串行 + 通道间小等待
+ *  避免峰值占满 CPU 造成 UI 卡顿（同一线程内 Promise.all 并无并行收益）。 */
+export function yieldToEventLoop(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
 export function sanitizeHistoryRetrievalQuery(query: string): string {
   return query
     .replace(/^\s*\[[^\]\n]{1,120}\]\s*/u, "")
@@ -71,7 +77,7 @@ interface SerializedHit {
 export interface HistoryRetrievalV2Record {
   version: 2;
   at: number;
-  source: "tool" | "auto_probe" | "sandbox";
+  source: "tool" | "auto_probe" | "auto_injection" | "sandbox";
   actualResultUnchanged: boolean;
   userQuery: string;
   toolQuery: string;
@@ -372,7 +378,7 @@ export async function runHistoryRetrievalV2Shadow(input: {
   now?: number;
   createdBefore?: number;
   logFile?: string;
-  source?: "tool" | "auto_probe" | "sandbox";
+  source?: "tool" | "auto_probe" | "auto_injection" | "sandbox";
   writeLog?: boolean;
   actualResultUnchanged?: boolean;
   expandCandidates?: (hits: HistoryRetrievalHit[]) => HistoryRetrievalHit[];
@@ -399,11 +405,14 @@ export async function runHistoryRetrievalV2Shadow(input: {
   if (input.semanticSearch && intentQuery && intentQuery !== expandedQuery) {
     searches.push({ channel: "semantic_intent", query: intentQuery, run: input.semanticSearch });
   }
-  const groups = (await Promise.all(searches.map(({ query, run }) => run(query, 12))))
-    .map((hits) => hits.filter((hit) => (
+  const groups: HistoryRetrievalHit[][] = [];
+  for (const { query, run } of searches) {
+    groups.push((await run(query, 12)).filter((hit) => (
       sanitizeHistoryRetrievalQuery(hit.text) !== cleanUserQuery
       && (input.createdBefore === undefined || hit.createdAt < input.createdBefore)
     )));
+    await yieldToEventLoop();
+  }
   const provenance = new Map<string, Array<{ channel: string; query: string; rank: number; score: number }>>();
   groups.forEach((hits, groupIndex) => {
     hits.forEach((hit, hitIndex) => {
@@ -427,6 +436,7 @@ export async function runHistoryRetrievalV2Shadow(input: {
   let rerankerError: string | undefined;
   const rerankerScores = new Map<string, number>();
   if (input.rerank && candidates.length > 0) {
+    await yieldToEventLoop();
     try {
       const reranked = await input.rerank(input.userQuery || input.toolQuery, candidates.map((hit) => hit.text));
       for (const item of reranked) rerankerScores.set(item.text, item.score);

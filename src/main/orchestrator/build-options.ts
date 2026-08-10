@@ -67,6 +67,8 @@ export interface BuildOptionsDeps {
     messages: ReadonlyArray<{ role: string; content?: string }>,
   ) => Promise<string>;
   buildMemoryInjection: (userText: string) => Promise<string>;
+  /** 线索触发的历史自动注入：命中回忆线索时系统直接检索并注入，不依赖工具决策。 */
+  buildHistoryAutoInjection?: (userText: string) => Promise<string>;
   buildRelationshipContext: () => Promise<string>;
   buildSystemPrompt: (styleFile: string) => string;
   /** 第一期：工具阶段 system prompt。仅含工具调度规则 + 自动生成的工具目录。 */
@@ -362,6 +364,17 @@ export async function buildAgentRunOptions(
   const musicCompanionContext = deps.buildMusicCompanionContext?.(conversationId, latestUserText) ?? "";
   const channelSystem = buildChannelSystem(input.channel);
 
+  // 方案 A：命中回忆线索时系统自动检索历史并注入，绕过 tool_phase 的工具决策漏调。
+  // 门槛与 auto_probe 一致：主聊天窗口 + proactive 会话；渠道聊天不注入。
+  let historyContextBlock = "";
+  if (deps.buildHistoryAutoInjection && (!input.channel || deps.isProactiveConversation?.(input.sessionId || "default") === true)) {
+    try {
+      historyContextBlock = await deps.buildHistoryAutoInjection(latestUserText);
+    } catch (err) {
+      console.warn("[Cyrene] history auto-injection failed:", err);
+    }
+  }
+
   let toneInjection = "";
   if (deps.sceneEmbeddingIndex) {
     try {
@@ -469,6 +482,8 @@ export async function buildAgentRunOptions(
     + (environmentContext ? "\n\n---\n\n" + environmentContext : "")
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
     + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "")
+    // 历史注入也进工具阶段：让模型拿着已检索到的细节决策，避免“看不到就漏调工具”。
+    + (historyContextBlock ? "\n\n---\n\n" + historyContextBlock : "")
     + (musicCompanionContext ? "\n\n" + musicCompanionContext : "");
 
   // Soul 阶段基础 system：人设 + 环境/记忆/关系/附件/渠道（这些是“表达”所需）。
@@ -493,6 +508,7 @@ export async function buildAgentRunOptions(
     // 挂到尾部动态区（每轮必变的 memoryInjection 之前），切换轮只损尾部零头。
     (lifeContext ? lifeContext + "\n\n" : "") +
     (memoryInjection ? memoryInjection + "\n\n" : "") +
+    (historyContextBlock ? historyContextBlock + "\n\n" : "") +
     (socialContextBlock ? socialContextBlock + "\n\n" : "") +
     (callContextBlock ? callContextBlock + "\n\n" : "") +
     (alwaysOnContext ? alwaysOnContext + "\n\n" : "") +
