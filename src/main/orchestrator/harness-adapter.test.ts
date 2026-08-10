@@ -11,6 +11,19 @@ import { buildHarnessSystemPrompt, mapTerminateReasonToTerminal, sendHarnessEven
 import type { HarnessEvent } from "./harness/types";
 import type { BaseEvent } from "@ag-ui/core";
 
+describe("Harness Todo working notebook policy", () => {
+  it("places the soft Todo policy in every Harness system prompt", () => {
+    const prompt = buildHarnessSystemPrompt({
+      soulSystemBaseContent: "persona",
+      toolSystemContent: "tools",
+    } as never);
+
+    expect(prompt).toContain("[TODO_WORKING_NOTEBOOK_POLICY]");
+    expect(prompt).toContain("至少 2 个 execution step");
+    expect(prompt).toContain("不得作为后续行动的强约束");
+  });
+});
+
 describe("Harness recovery context", () => {
   it("injects interrupted Todo context as read-only evidence", () => {
     const prompt = buildHarnessSystemPrompt({

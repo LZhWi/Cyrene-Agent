@@ -16,10 +16,12 @@ function currentState(): AgentState {
 }
 
 describe("Harness user-wait builtins", () => {
-  it("gives the model soft planning guidance without forcing simple tasks into Todo", () => {
-    expect(updateTodoToolSpec.description).toContain("多步任务");
-    expect(updateTodoToolSpec.description).toContain("多轮工具调用");
-    expect(updateTodoToolSpec.description).toContain("不要用于简单问答");
+  it("describes update_todo as a mutable notebook for multi-step tool work", () => {
+    expect(updateTodoToolSpec.description).toContain("至少 2 个 execution step");
+    expect(updateTodoToolSpec.description).toContain("tool round");
+    expect(updateTodoToolSpec.description).toContain("可变工作笔记");
+    expect(updateTodoToolSpec.description).toContain("单次工具即可完成");
+    expect(updateTodoToolSpec.description).toContain("改变方向");
   });
 
   it("rethrows AbortError from ask_user", async () => {

@@ -15,6 +15,7 @@ import { checkPermission, type ToolRiskLevel } from "../permission";
 import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./tool-context";
 import { runCyreneHarness } from "./harness";
 import type { HarnessEvent, HarnessInput } from "./harness";
+import { TODO_WORKING_NOTEBOOK_POLICY } from "./harness/todo-working-notebook";
 import type { TwoPhaseFcResult } from "./cyrene-agent";
 import type { CyreneRunOptions, AgentLoopSettings } from "./cyrene-agent";
 import type { ToolCallResult } from "./types";
@@ -163,6 +164,8 @@ export function buildHarnessSystemPrompt(options: CyreneRunOptions): string {
   if (harnessPersona) {
     parts.push(harnessPersona);
   }
+
+  parts.push(TODO_WORKING_NOTEBOOK_POLICY);
 
   // 工具调度规则
   if (options.toolSystemContent) {

@@ -25,9 +25,9 @@ export const UPDATE_TODO_TOOL_ID = "update_todo";
 export const updateTodoToolSpec: ToolSpec = {
   name: UPDATE_TODO_TOOL_ID,
   description:
-    "更新任务待办列表。传入完整的新 TodoItem 数组（整表替换）。\n" +
-    "何时使用：多步任务、用户要求规划/拆解，或预计需要多轮工具调用时，优先建立并持续更新清单。\n" +
-    "不要用于简单问答、纯闲聊或一次工具调用即可完成的任务。Todo 是工作计划，不是外部操作已经成功的证明。\n" +
+    "更新可变工作笔记（Todo）。传入完整的新 TodoItem 数组（整表替换）。\n" +
+    "何时使用：预计任务需要至少 2 个 execution step（执行步骤）或 tool round（工具推进轮次）时，优先建立并持续更新清单；不按 LLM 调用次数计算。\n" +
+    "不要用于简单问答、纯闲聊或单次工具即可完成的任务。Todo 是可随事实和改变方向而重写的工作笔记，不是后续行动的强约束，也不是外部操作已经成功的证明。\n" +
     "规则：\n" +
     "- id 必须唯一\n" +
     "- 同一时刻最多一个 in_progress\n" +
