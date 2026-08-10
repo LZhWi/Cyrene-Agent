@@ -232,11 +232,18 @@ function useRunActivityNow(processing: boolean): number {
 }
 
 function RunActivityReasoningBlock({ block }: { block: ReasoningBlock }) {
-  const [expanded, setExpanded] = useState(false);
+  const streaming = Boolean(block.streaming);
+  const [expanded, setExpanded] = useState(streaming);
+  const wasStreamingRef = useRef(streaming);
+  useEffect(() => {
+    if (!wasStreamingRef.current && streaming) setExpanded(true);
+    if (wasStreamingRef.current && !streaming) setExpanded(false);
+    wasStreamingRef.current = streaming;
+  }, [streaming]);
   return (
     <ReasoningContent
       content={block.content}
-      loading={Boolean(block.streaming)}
+      loading={streaming}
       expanded={expanded}
       onExpand={setExpanded}
     />
@@ -300,10 +307,7 @@ function AgentRoundGroup({
             </div>
           ))}
           {reasoningBlocks.filter((block) => block.content.trim()).map((block) => (
-            <div className="cy-agent-round__reasoning" key={block.id}>
-              <span className="cy-agent-round__section-label">思考{block.streaming ? "中" : "完成"}</span>
-              <MarkdownContent content={block.content} streaming={block.streaming} />
-            </div>
+            <RunActivityReasoningBlock block={block} key={block.id} />
           ))}
           {tools.length > 0 && <ToolExecutionContent tools={tools} />}
         </div>

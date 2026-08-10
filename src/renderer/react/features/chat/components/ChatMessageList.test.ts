@@ -2,12 +2,16 @@ import * as React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@ant-design/x", () => ({
-  Bubble: { List: () => null },
-  CodeHighlighter: () => null,
-  Think: () => null,
-  ThoughtChain: () => null,
-}));
+vi.mock("@ant-design/x", async () => {
+  const ReactModule = await import("react");
+  return {
+    Bubble: { List: () => null },
+    CodeHighlighter: () => null,
+    Think: ({ icon, title, children }: { icon?: React.ReactNode; title?: React.ReactNode; children?: React.ReactNode }) =>
+      ReactModule.createElement("div", null, icon, title, children),
+    ThoughtChain: () => null,
+  };
+});
 vi.mock("@ant-design/x-markdown", () => ({ XMarkdown: ({ content }: { content?: string }) => content ?? null }));
 vi.mock("@ant-design/x-markdown/plugins/Latex", () => ({ default: () => ({}) }));
 vi.mock("../../../../../shared/renderer-base", () => ({ resolveAsset: (path: string) => path }));
@@ -80,7 +84,7 @@ describe("function-calling round presentation", () => {
         { id: "process-0", roundId: "round-0", content: "先看项目结构" },
         { id: "process-1", roundId: "round-1", content: "继续检查取消链路" },
       ],
-      reasoningBlocks: [{ id: "reason-1", roundId: "round-1", content: "查找 IPC 入口" }],
+      reasoningBlocks: [{ id: "reason-1", roundId: "round-1", content: "查找 IPC 入口", streaming: true }],
       tools: [
         { id: "tool-0", roundId: "round-0", name: "list_dir", status: "success" },
         { id: "tool-1", roundId: "round-1", name: "read_file", status: "running" },
@@ -92,6 +96,7 @@ describe("function-calling round presentation", () => {
     expect(html.match(/class="cy-agent-round__art"/g)).toHaveLength(2);
     expect(html.match(/class="cy-agent-round__art-image"/g)).toHaveLength(2);
     expect(html).not.toContain("cy-agent-round__status");
+    expect(html).toContain("cy-reasoning-status-art is-thinking");
     expect(html).toContain("昔涟已完成 · 浏览 1 个目录");
     expect(html).toContain("昔涟正在读取文件");
     expect(html).toContain("继续检查取消链路");
