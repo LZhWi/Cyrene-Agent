@@ -219,7 +219,10 @@ async function callChatCompletions(
     const http = adapter.buildRequest({
       model: cfg.model,
       messages: messages as ChatMessage[],
-      maxTokens: 800,
+      // thinking 模型的思考计入同一预算：800 实测被挤没正文，2048 在 8 轮长转录批上
+      // 仍复现空 content；8192 给思考链充足余量。配合下方“空内容=失败”抛错，
+      // 即便再被挤没也会走调用方重试，而非静默当“无值得记录”。
+      maxTokens: 8192,
       stream: false,
     }, cfg)
 
@@ -347,13 +350,18 @@ export class MemoryJudge {
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        30000,
+        120000, // thinking 模型 + 8 轮转录需要充足余量；后台任务，不在关键路径
         "MemoryJudge",
       )
 
       const parsed = extractJsonArray(raw)
       if (!parsed) {
         console.error("[MemoryJudge] JSON 解析失败，原始内容：\n", raw.slice(0, 200))
+        if (!raw.trim()) {
+          // 空 content = 生成预算被思考链吃光（或适配器异常），模型并未真正作答；
+          // 按调用失败抛出，让 scheduler 保留轮次重试 / 回填标记会话未完成。
+          throw new Error("MemoryJudge 拿到空 content（token 预算耗尽）")
+        }
         console.log("[MemoryJudge] 本轮无值得记录的信息")
         return []
       }
@@ -375,9 +383,11 @@ export class MemoryJudge {
       )
       return candidates
     } catch (error) {
+      // 区分“模型回了但内容无效”（上方返回 []）与“调用失败”：
+      // 失败必须抛出，让调用方感知（scheduler 保留轮次待重试 / 回填标记未完成），
+      // 不能静默当成“无值得记录”——历史上这正是失败轮次被水位线消费掉的根因。
       console.error("[MemoryJudge] LLM 调用失败:", error)
-      console.log("[MemoryJudge] 本轮无值得记录的信息")
-      return []
+      throw error
     }
   }
 

@@ -105,13 +105,16 @@ import { SCENE_CONFIGS } from "./opener/scenes-config";
 import { getManifestPath, getOpenerPackDir } from "./opener/opener-pack-store";
 import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
 import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegateSettings } from "./orchestrator/built-in-tools";
-import { registerRecallHistoryTool } from "./orchestrator/history-tools";
+import { registerRecallHistoryTool, backfillChatHistoryFromChatLogs } from "./orchestrator/history-tools";
+import { backfillL2FromChatLogs } from "./memory/memory-backfill";
+import { runReflectionCatchupOnce } from "./memory/memory-compressor";
 import { registerDocumentTools } from "./orchestrator/document-tools";
 import { registerLifeTools, setTranslateConfig } from "./orchestrator/life-tools";
 import { registerTravelTools, setTravelConfig } from "./orchestrator/travel-tools";
 import { registerEmailTools, setEmailConfig } from "./orchestrator/email-tools";
 import { registerScreenMonitorTool, setVisionConfigGetter } from "./screen-monitor/screen-monitor-tool";
-import { screenMonitorService, formatActivityLine } from "./screen-monitor/screen-monitor-service";
+import { registerAttachedImageTool, setAttachedImageConfigGetter } from "./chat/attached-image-tool";
+import { screenMonitorService, formatActivityLine, noChangeNote } from "./screen-monitor/screen-monitor-service";
 import { observationStore } from "./screen-monitor/observation-store";
 import { resolveMusicPaths } from "./music/paths";
 import { bootstrapMusicService } from "./music/bootstrap";
@@ -984,12 +987,25 @@ async function loadMemoryPanelData() {
     console.warn("[settings] load imported docs failed:", error);
   }
 
+  let reflections: MemoryPanelItem[] = [];
+  try {
+    const logs = await memoryStore.getReflectionLogs();
+    reflections = [...logs].reverse().map((log) => ({
+      id: log.id,
+      title: log.type === "compression" ? "记忆压缩" : log.type === "l0_update" ? "核心画像更新" : "近期状态更新",
+      body: log.details ? `${log.summary}\n${log.details}` : log.summary,
+      meta: new Date(log.createdAt).toLocaleString("zh-CN"),
+    }));
+  } catch (error) {
+    console.warn("[settings] load reflection logs failed:", error);
+  }
+
   return {
     l0,
     l1,
     l2: l2.sort((a, b) => b.createdAt - a.createdAt),
     importedDocs,
-    reflections: [] as MemoryPanelItem[],
+    reflections,
   };
 }
 
@@ -2147,9 +2163,12 @@ async function buildProactiveAgentMessages(candidate: ProactiveCandidate) {
       // 超过 10 分钟的观测不注入（避免过时信息误导）
       if (ageMin > 10) return undefined;
       // 加"用户"前缀防角色错位（VLM 摘要可能省略主语）；
-      // 统一格式化为"类型：……，内容：……"单行（对照行等判定元数据一并剥离）
+      // 统一格式化为"类型：……，内容：……"单行（对照行等判定元数据一并剥离）。
+      // 像素级无变化观测追加无变化时长标注（推测用户不在电脑前），
+      // 时长信息已含在无变化标注里，不再叠加"N 分钟前观测"后缀。
       const flat = formatActivityLine(latest.summary);
-      return "用户当前屏幕活动：" + flat + (ageMin > 0 ? `（${ageMin} 分钟前观测）` : "");
+      const note = noChangeNote(latest);
+      return "用户当前屏幕活动：" + flat + (note || (ageMin > 0 ? `（${ageMin} 分钟前观测）` : ""));
     })(),
     ordinaryHistory: histories.ordinary,
     proactiveHistory: histories.proactive,
@@ -4948,6 +4967,9 @@ app.whenReady().then(async () => {
   // 屏幕监控工具（get_screen_observation — 让 LLM 能看到用户屏幕）
   setVisionConfigGetter(loadVisionConfig);
   registerScreenMonitorTool();
+  // 用户发图追问工具（ask_attached_image — 与屏幕聚焦旁路对齐，LLM 填 focus 看图片细节）
+  setAttachedImageConfigGetter(loadVisionConfig);
+  registerAttachedImageTool();
   // 后台周期观察：让 proactive 发起前能查到最新屏幕状态
   screenMonitorService.setConfigGetter(loadVisionConfig);
   if (loadVisionConfig() && loadGeneralSettings().screenMonitorEnabled) {
@@ -5062,6 +5084,7 @@ app.whenReady().then(async () => {
             visionCfg,
           );
           if (caption.startsWith("[错误")) return { ok: false, error: caption };
+          console.log("[ImageCaption] 发图描述完成:", caption.slice(0, 200));
           return { ok: true, caption };
         } catch (err: any) {
           return { ok: false, error: err?.message || String(err) };
@@ -5678,6 +5701,11 @@ app.whenReady().then(async () => {
     // 初始化 MCP Manager；scheduler 启动前等待一次，避免近即时任务早于 MCP 工具恢复。
     await initMcpManager();
     console.log("[Cyrene] RAG initialized OK");
+    // 历史回填：索引曾因去重评分膨胀静默停摆，修复后把会话日志补进 chat_history（幂等、后台）。
+    backfillChatHistoryFromChatLogs();
+    // L2 回填提取：MemoryJudge 瘫痪期间的轮次已被水位线消费，重跑修好的 Judge 补写 L2（幂等、后台）。
+    // 回填完成后再补跑一次压缩+Reflection：历史 520 轮的 20 轮触发曾全部静默空转（幂等、后台）。
+    backfillL2FromChatLogs().then(() => runReflectionCatchupOnce());
 
     console.log("[Reranker] startup preload skipped; reranker initializes when changed in settings.");
   } catch (err) {

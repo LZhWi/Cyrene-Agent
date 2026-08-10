@@ -224,12 +224,12 @@ class MemoryStoreManager {
     }
   }
 
-  async addL2Memory(input: L2Input): Promise<L2Memory> {
+  async addL2Memory(input: L2Input, opts?: { createdAt?: number }): Promise<L2Memory> {
     const store = await this.load()
     const memory: L2Memory = {
       ...input,
       id: `l2_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
-      createdAt: Date.now(),
+      createdAt: opts?.createdAt ?? Date.now(),
       lastAccessedAt: Date.now(),
       accessCount: 0,
       weight: 0,

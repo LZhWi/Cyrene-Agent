@@ -184,6 +184,7 @@ describe("memory conflict resolver", () => {
         sourceL2Id: newMemory.id,
         targetL2Id: oldMemory.id,
       }),
+      expect.objectContaining({ createdAt: expect.any(Number) }),
     )
   })
 

@@ -22,6 +22,8 @@ export interface SearchResult {
 export interface VectorSearchOptions {
   importIds?: string[];
   allowedEntryIds?: string[];
+  /** 得分 = 纯余弦相似度，不乘权重/时间衰减。供"判同"场景（如 add 去重）使用。 */
+  rawScore?: boolean;
 }
 
 // ── 余弦相似度（嵌入已归一化，等价于点积） ──
@@ -231,10 +233,12 @@ export class JsonVectorStore {
     text: string,
     source: string,
     provider: EmbeddingProvider,
-    metadata?: Record<string, unknown>
+    metadata?: Record<string, unknown>,
+    opts?: { createdAt?: number }
   ): Promise<MemoryEntry> {
-    // 去重检查
-    const existing = await this.search(text, source, provider, 1, 0.95);
+    // 去重检查（纯余弦：权重/衰减只影响召回排序，不参与判同——
+    // 否则权重膨胀后任意新文本都会"命中"，静默吞掉写入）
+    const existing = await this.search(text, source, provider, 1, 0.95, { rawScore: true });
     if (existing.length > 0) {
       // 更新权重和时间
       existing[0].entry.weight = Math.min(existing[0].entry.weight + 0.1, 5.0);
@@ -251,7 +255,7 @@ export class JsonVectorStore {
       embedding,
       source,
       weight: 1.0,
-      createdAt: Date.now(),
+      createdAt: opts?.createdAt ?? Date.now(),
       lastRecalledAt: Date.now(),
       metadata,
     };
@@ -268,9 +272,10 @@ export class JsonVectorStore {
     source: string,
     provider: EmbeddingProvider,
     metadata?: Record<string, unknown>,
+    opts?: { createdAt?: number },
   ): Promise<MemoryEntry> {
     const embedding = await provider.embed(text);
-    return this.addPreparedBatch([{ text, source, embedding, metadata }])[0];
+    return this.addPreparedBatch([{ text, source, embedding, metadata, createdAt: opts?.createdAt }])[0];
   }
 
   // 批量添加（用于导入文档 chunk）
@@ -292,7 +297,7 @@ export class JsonVectorStore {
   }
 
   addPreparedBatch(
-    items: Array<{ text: string; source: string; embedding: number[]; metadata?: Record<string, unknown> }>,
+    items: Array<{ text: string; source: string; embedding: number[]; metadata?: Record<string, unknown>; createdAt?: number }>,
   ): MemoryEntry[] {
     const results: MemoryEntry[] = [];
 
@@ -303,7 +308,7 @@ export class JsonVectorStore {
         embedding: items[i].embedding,
         source: items[i].source,
         weight: 1.0,
-        createdAt: Date.now(),
+        createdAt: items[i].createdAt ?? Date.now(),
         lastRecalledAt: Date.now(),
         metadata: items[i].metadata,
       };
@@ -367,7 +372,7 @@ export class JsonVectorStore {
           const sim = cosineSimilarity(queryEmbedding, entry.embedding);
           const hoursSinceRecall = (now - entry.lastRecalledAt) / (1000 * 60 * 60);
           const decayFactor = Math.pow(0.95, hoursSinceRecall / 24);
-          const weightedScore = sim * entry.weight * decayFactor;
+          const weightedScore = options.rawScore ? sim : sim * entry.weight * decayFactor;
 
           if (weightedScore >= minScore) {
             results.push({ entry, score: weightedScore });
@@ -384,7 +389,7 @@ export class JsonVectorStore {
         // 时间衰减：24h 未提及权重 ×0.95
         const hoursSinceRecall = (now - entry.lastRecalledAt) / (1000 * 60 * 60);
         const decayFactor = Math.pow(0.95, hoursSinceRecall / 24);
-        const weightedScore = sim * entry.weight * decayFactor;
+        const weightedScore = options.rawScore ? sim : sim * entry.weight * decayFactor;
 
         if (weightedScore >= minScore) {
           results.push({ entry, score: weightedScore });

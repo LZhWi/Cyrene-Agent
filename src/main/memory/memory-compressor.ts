@@ -50,12 +50,13 @@ function loadModelSettings(): ModelSettings {
   } catch { return defaults; }
 }
 
-async function callLLM(messages: Array<{ role: "system" | "user"; content: string }>, maxTokens = 500): Promise<string> {
+async function callLLM(messages: Array<{ role: "system" | "user"; content: string }>, maxTokens = 8192): Promise<string> {
   const settings = loadModelSettings();
   if (!settings.apiKey) throw new Error("missing api key");
 
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), 30000);
+  // thinking 模型的思考链计入同一预算，30s/小预算实测多次被吃光；后台任务，不在关键路径
+  const timer = setTimeout(() => controller.abort(), 120000);
 
   const cfg = {
     provider: settings.provider,
@@ -225,10 +226,14 @@ async function compressMemories(): Promise<number> {
       const summary = await callLLM([
         { role: "system", content: "你是一个简洁的记忆总结助手。" },
         { role: "user", content: prompt },
-      ], 300);
+      ], 8192);
 
+      if (!summary.trim()) {
+        console.warn("[MemoryCompressor] 总结拿到空 content（token 预算耗尽），跳过该组");
+        continue;
+      }
       const cleanSummary = summary.replace(/^["「『]|["」』]$/g, "").trim();
-      if (!cleanSummary || cleanSummary.length < 5) continue;
+      if (cleanSummary.length < 5) continue;
 
       const subEntryIds = group.map((g) => g.l2.id);
       await commitMemoryCompression({
@@ -327,8 +332,13 @@ async function runReflection(): Promise<void> {
     const raw = await callLLM([
       { role: "system", content: "你是一个谨慎的用户画像反思助手。只输出 JSON 数组。" },
       { role: "user", content: prompt },
-    ], 500);
+    ], 8192);
 
+    // 空 content = 模型没输出（预算耗尽等），不等于“无更新建议”；记 warn 便于终端可见
+    if (!raw.trim()) {
+      console.warn("[Reflection] 拿到空 content（token 预算耗尽），本次不作“无建议”处理");
+      return;
+    }
     const parsed = extractJsonArray(raw);
     if (!parsed || parsed.length === 0) {
       console.log("[Reflection] 无 L0/L1 更新建议");
@@ -398,4 +408,28 @@ export async function runReflectionAndCompression(): Promise<void> {
   } catch { /* ignore */ }
 
   console.log("[Memory] Reflection + 压缩流程完成");
+}
+
+// ── 一次性补跑（历史欠账清算） ──
+
+const REFLECTION_CATCHUP_MARKER = ".reflection-catchup-v1";
+
+/**
+ * 一次性补跑：历史轮次的 20 轮触发因小预算/30s 超时/空响应吞错全部静默空转；
+ * 修复后于下次启动（L2 回填完成后）对当前累积状态跑一遍压缩+Reflection，之后回归正常 20 轮循环。
+ * 幂等：标记存在直接跳过；失败不写标记，下次启动重试。
+ */
+export function runReflectionCatchupOnce(): void {
+  void (async () => {
+    try {
+      const marker = path.join(getUserDataDir(), REFLECTION_CATCHUP_MARKER);
+      if (fs.existsSync(marker)) return;
+      console.log("[MemoryCompressor] 补跑：历史 20 轮触发无产出，执行一次压缩+Reflection...");
+      await runReflectionAndCompression();
+      fs.writeFileSync(marker, JSON.stringify({ completedAt: Date.now() }));
+      console.log("[MemoryCompressor] 补跑完成，标记已写入；后续回归正常 20 轮循环");
+    } catch (err) {
+      console.error("[MemoryCompressor] 补跑失败，下次启动重试:", err);
+    }
+  })();
 }

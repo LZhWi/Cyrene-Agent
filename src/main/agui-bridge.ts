@@ -162,6 +162,7 @@ export function registerAgUiIpc(
               input.sessionId || "default",
               latestUserText,
               agent.lastResult.reply,
+              { userTurnId: input.userTurnId, assistantTurnId: input.assistantTurnId },
             );
           }
         } catch (err) {

@@ -300,7 +300,7 @@ async function syncResolvedMemoryToRag(log: ConflictLog): Promise<void> {
       resolutionType: log.resolutionType,
       sourceL2Id: log.sourceL2Id,
       targetL2Id: log.targetL2Id,
-    })
+    }, { createdAt: resolvedMemory.createdAt })
     await memoryStore.markL2SyncStatus(resolvedMemory.id, "synced", ragId)
   } catch (err) {
     await memoryStore.markL2SyncStatus(resolvedMemory.id, "sync_failed", undefined, err)

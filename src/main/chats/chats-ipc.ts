@@ -21,6 +21,7 @@ import { loadState as loadOpenerState, saveState as saveOpenerState } from "../o
 import { rollbackLastProactive } from "../proactive/proactive-policy";
 import { deleteSocialContextByTurnIds, deleteSocialContextForConversation } from "../social-context";
 import { deleteCallContextEvent } from "../call/call-context-store";
+import { deleteHistoryEntriesByTurnIds } from "../rag";
 
 function broadcastChanged(senderWebContents?: WebContents | null): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -131,6 +132,12 @@ export function registerChatsIpc(): void {
         const deletedMessages = beforeSession?.messages.filter((message) => !remainingIds.has(message.id)) ?? [];
         const deletedTurnIds = deletedMessages.map((message) => message.id);
         deleteSocialContextByTurnIds(payload.id, deletedTurnIds);
+        // 历史召回索引联动：删除该轮索引条目，避免已删除对话仍被 recall_history 召回
+        try {
+          deleteHistoryEntriesByTurnIds(deletedTurnIds);
+        } catch (err) {
+          console.warn("[Chats] 删除历史索引失败:", err);
+        }
         // 通话消息删除联动：从 call-context-store 移除对应事件，
         // 这样 LLM 上下文（callContextBlock）也不会再注入这条通话梗概。
         for (const deleted of deletedMessages) {

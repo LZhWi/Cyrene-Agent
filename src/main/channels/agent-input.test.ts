@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { getTurnAttachedImages } from "../chat/image-caption";
 import { buildChannelAttachmentInputs } from "./agent-input";
 import type { IncomingMessage } from "./types";
 
@@ -45,10 +46,33 @@ describe("buildChannelAttachmentInputs", () => {
       attachments: [
         {
           name: "微信图片",
-          text: "【图片视觉信息】\n用户通过微信发送了图片：微信图片\n画面里是一张聊天截图",
+          text: "【图片视觉信息】\n用户通过微信发送了图片：微信图片\n画面里是一张聊天截图\n如需仔细看图片的某个方面，调用 ask_attached_image 工具并用 focus 指定。",
         },
       ],
       imageAttachments: undefined,
     });
+  });
+
+  it("caption 模式登记当轮图片供追问工具，无图消息清空登记", async () => {
+    const msg: IncomingMessage = {
+      channel: "wechat",
+      senderId: "wx-user-1",
+      chatId: "wx-user-1",
+      text: "看看这个",
+      attachments: [
+        { kind: "image", filePath: "C:/cache/pic.png", mime: "image/png", caption: "微信图片" },
+      ],
+      at: new Date(0),
+    };
+
+    await buildChannelAttachmentInputs(msg, {
+      imageMode: "caption",
+      captionImage: async () => ({ ok: true, caption: "x" }),
+    });
+    expect(getTurnAttachedImages()).toEqual(["C:/cache/pic.png"]);
+
+    // 无图消息覆盖清空，防追问工具读上一轮旧图
+    await buildChannelAttachmentInputs({ ...msg, attachments: [] }, { imageMode: "caption" });
+    expect(getTurnAttachedImages()).toEqual([]);
   });
 });

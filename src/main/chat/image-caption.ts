@@ -5,6 +5,19 @@ import { getMimeFromExt, isImageExt } from "../rag/file-ingest";
 export const IMAGE_CAPTION_MAX_BYTES = 20 * 1024 * 1024;
 export const IMAGE_CAPTION_PROMPT = "请简洁描述这张图片的主要内容，重点提取用户可能想让你看的信息。";
 
+// 当轮用户图片登记（ask_attached_image 聚焦追问工具的数据源，与屏幕观察的
+// focus 旁路对齐）：agent-input 按消息覆盖写入——无图的消息清空，防工具读
+// 到上一轮旧图；仅 caption 模式登记（direct 模式主模型直接看原图，无需 VLM 追问）。
+let turnAttachedImages: string[] = [];
+
+export function setTurnAttachedImages(paths: string[]): void {
+  turnAttachedImages = [...paths];
+}
+
+export function getTurnAttachedImages(): string[] {
+  return [...turnAttachedImages];
+}
+
 export type ValidCaptionImage =
   | { ok: true; filePath: string; buffer: Buffer; mime: string }
   | { ok: false; error: string };

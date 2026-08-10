@@ -43,15 +43,18 @@ export async function buildMemoryInjection(
         const l2Id = entry.metadata?.l2Id;
         const l2Entry = (typeof l2Id === "string" ? l2ById.get(l2Id) : undefined)
           ?? allL2.find((l) => l.content === m);
+        // 时间锚点：优先 L2 的 createdAt（回填条目保留原始时间），缺失时回落向量条目时间
+        const d = new Date(l2Entry?.createdAt ?? entry.createdAt);
+        const dateNote = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
         if (l2Entry?.conflictWith && l2Entry.conflictWith.length > 0) {
           hasConflict = true;
-          return `· ${m} ⚠️（该信息可能存在矛盾记录）`;
+          return `· ${m} ⚠️（该信息可能存在矛盾记录，记录于 ${dateNote}）`;
         }
         if (l2Entry?.status === "aging") {
           hasAging = true;
-          return `· ${m}（较久远的印象）`;
+          return `· ${m}（较久远的印象，记录于 ${dateNote}）`;
         }
-        return `· ${m}`;
+        return `· ${m}（记录于 ${dateNote}）`;
       });
       const notes: string[] = [];
       if (hasConflict) notes.push("带 ⚠️ 的条目存在矛盾记录，引用前先向用户求证，不要当作事实。");

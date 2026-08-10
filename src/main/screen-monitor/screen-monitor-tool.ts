@@ -4,8 +4,8 @@
 
 import { toolRegistry, type ToolDefinition } from "../orchestrator/tool-registry";
 import { observationStore } from "./observation-store";
-import { captureAndAnalyze } from "./vlm-analyzer";
-import { parseIntentCategory, decideLowChange, formatActivityLine } from "./screen-monitor-service";
+import { captureAndAnalyze, captureAndAnalyzeFocused } from "./vlm-analyzer";
+import { parseIntentCategory, decideLowChange, formatActivityLine, noChangeNote } from "./screen-monitor-service";
 import type { VisionConfig } from "../orchestrator/vision-captioner";
 
 const LOG_PREFIX = "[ScreenMonitor/Tool]";
@@ -32,8 +32,9 @@ async function executeGetScreenObservation(): Promise<string> {
   if (observationStore.isLatestFresh(CACHE_REUSE_MS)) {
     const latest = observationStore.getLatest()!;
     console.log(LOG_PREFIX, "复用缓存观测（" + new Date(latest.timestamp).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" }) + "）");
-    // 去掉判定元数据，统一"类型：……，内容：……"格式返回
-    return formatActivityLine(latest.summary);
+    // 去掉判定元数据，统一"类型：……，内容：……"格式返回；
+    // 像素级无变化观测追加无变化时长标注（推测用户不在电脑前）
+    return formatActivityLine(latest.summary) + noChangeNote(latest);
   }
 
   // 2. 获取视觉模型配置
@@ -46,10 +47,10 @@ async function executeGetScreenObservation(): Promise<string> {
   try {
     const observation = await captureAndAnalyze(config, "tool");
 
-    // 4. 如果只有 1 条观测，直接返回
+    // 4. 如果只有 1 条观测，直接返回（无变化观测同样带标注）
     const recent = observationStore.getRecent(RECENT_COUNT);
     if (recent.length <= 1) {
-      return formatActivityLine(observation.summary);
+      return formatActivityLine(observation.summary) + noChangeNote(observation);
     }
 
     // 5. 整合近期观测（P2：加时间跨度标注 + 变化轨迹）
@@ -69,6 +70,10 @@ async function executeGetScreenObservation(): Promise<string> {
         const decision = decideLowChange(prev, parseIntentCategory(prev), o.summary);
         line += decision && !decision.lowChange ? "（较上次观测有变化）" : "（与上次观测一致）";
       }
+      // 最新一条若是像素级无变化观测，追加无变化时长标注
+      if (i === recent.length - 1) {
+        line += noChangeNote(o);
+      }
       return line;
     });
     return "近期屏幕活动（" + spanText + "）：\n" + lines.join("\n");
@@ -79,19 +84,46 @@ async function executeGetScreenObservation(): Promise<string> {
   }
 }
 
+/**
+ * 聚焦提问分支：LLM 指定关注点，VLM 照截图回答。
+ * 不复用 30s 缓存（问题不同答案必不同），答案也不写观测缓存
+ * （自由格式会污染三行格式契约）——旁路语义见 vlm-analyzer。
+ */
+async function executeFocusedObservation(focus: string): Promise<string> {
+  const config = visionConfigGetter?.();
+  if (!config) {
+    return "[错误] 未配置视觉模型，无法分析屏幕。请在设置里配置视觉模型。";
+  }
+  try {
+    return await captureAndAnalyzeFocused(config, focus);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(LOG_PREFIX, "聚焦观测失败:", msg);
+    return "[错误] 屏幕观察失败：" + msg;
+  }
+}
+
 /** 注册 get_screen_observation 工具到 tool-registry。 */
 export function registerScreenMonitorTool(): void {
   const tool: ToolDefinition = {
     id: "get_screen_observation",
     name: "屏幕观察",
-    description: "查看用户当前屏幕活动和近期变化。调用后会截图并用视觉模型分析用户正在做什么，返回屏幕活动摘要。适用于需要了解用户当前屏幕状态的场景。",
+    description: "查看用户当前屏幕活动和近期变化。调用后会截图并用视觉模型分析用户正在做什么，返回屏幕活动摘要。可选传 focus 指定一个想了解的具体问题（如「用户在看什么视频」），视觉模型会照截图回答；看不到时会如实说看不出来。",
     enabled: true,
     risk: "safe",
     inputSchema: {
       type: "object",
-      properties: {},
+      properties: {
+        focus: {
+          type: "string",
+          description: "可选。关于屏幕内容的开放式问题（如「详细描述屏幕上有什么」、「用户在学哪一章」），用「是什么样/内容是什么」式问法，避免「是不是…」的是非问句（会诱发确认式回答）。不传则返回通用活动摘要与近期变化。",
+        },
+      },
     },
-    execute: async () => executeGetScreenObservation(),
+    execute: async (args) => {
+      const focus = typeof args?.focus === "string" ? args.focus.trim() : "";
+      return focus ? executeFocusedObservation(focus) : executeGetScreenObservation();
+    },
   };
 
   toolRegistry.register(tool);

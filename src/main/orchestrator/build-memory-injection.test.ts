@@ -88,12 +88,12 @@ describe("buildMemoryInjection", () => {
 
     const context = await buildMemoryInjection("随便聊聊")
 
-    // active 正常引用，不带标注
-    expect(context).toContain("· 用户喜欢冰淇淋\n")
-    // aging 标注久远印象
-    expect(context).toContain("用户在学法语（较久远的印象）")
-    // 冲突条目保留 ⚠️ 标注
-    expect(context).toContain("用户住在上海 ⚠️（该信息可能存在矛盾记录）")
+    // active 正常引用，带记录日期锚点
+    expect(context).toMatch(/· 用户喜欢冰淇淋（记录于 \d{4}\/\d{1,2}\/\d{1,2}）/)
+    // aging 标注久远印象 + 日期
+    expect(context).toContain("用户在学法语（较久远的印象，记录于")
+    // 冲突条目保留 ⚠️ 标注 + 日期
+    expect(context).toContain("用户住在上海 ⚠️（该信息可能存在矛盾记录，记录于")
     // 尾部引用指引只在命中对应档位时出现
     expect(context).toContain("提及时用不确定的语气")
     expect(context).toContain("引用前先向用户求证")

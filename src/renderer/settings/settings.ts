@@ -4367,7 +4367,7 @@ async function loadMemoryPanel(): Promise<void> {
       memoryReflectionList,
       payload.reflections,
       "暂无阶段总结",
-      "当前项目里 Reflection 还没真正生成落地",
+      "每 20 轮对话自动运行；有压缩或画像更新时会生成记录",
     );
 
     if (memoryL0EditBtn) memoryL0EditBtn.disabled = false;

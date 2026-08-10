@@ -101,14 +101,17 @@ export class MemoryManager {
       syncStatus: "pending_sync",
     }
 
-    const l2 = await memoryStore.addL2Memory(l2Input)
+    const l2 = await memoryStore.addL2Memory(
+      l2Input,
+      candidate.createdAt !== undefined ? { createdAt: candidate.createdAt } : undefined,
+    )
 
     let ragId: string | undefined
     try {
       ragId = await addL2MemoryVector(candidate.content, l2.id, {
         triggerText: candidate.triggerText,
         confidence: candidate.confidence,
-      })
+      }, { createdAt: l2.createdAt })
       await memoryStore.markL2SyncStatus(l2.id, "synced", ragId)
     } catch (err) {
       await memoryStore.markL2SyncStatus(l2.id, "sync_failed", undefined, err)

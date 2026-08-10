@@ -1,4 +1,4 @@
-// screen-monitor-service 测试 — 意图类目解析与两级低变化判定（判定核心）。
+// screen-monitor-service 测试 — 意图类目解析、两级低变化判定与像素级无变化路径（判定核心）。
 // import 链会经 capture.ts 触碰 electron，先 mock 掉。
 
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
@@ -6,6 +6,18 @@ import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
 vi.mock("electron", () => ({
   desktopCapturer: { getSources: vi.fn(async () => []) },
 }));
+
+// mock 截图：服务现在先截图再像素对比，测试提供假截图避免触碰真实 electron
+vi.mock("./capture", () => ({
+  captureScreen: vi.fn(async () => ({ base64: "Zm9v", mime: "image/jpeg", width: 1024, height: 576 })),
+}));
+
+// mock 像素对比：时间线测试需要控制每次 tick 是否像素级无变化
+const diffMocks = vi.hoisted(() => ({
+  bitmapsNoChange: vi.fn(() => false),
+  smallBitmapFromBase64: vi.fn(() => Buffer.from([1, 2, 3, 4])),
+}));
+vi.mock("./screen-diff", () => diffMocks);
 
 // mock VLM 分析：时间线测试需要控制每次观测的成败与内容
 const vlmMocks = vi.hoisted(() => ({
@@ -20,9 +32,10 @@ import {
   formatActivityLine,
   INTENT_CATEGORIES,
   decideLowChange,
+  noChangeNote,
   screenMonitorService,
 } from "./screen-monitor-service";
-import { ScreenObservationStore, LOW_CHANGE_SIMILARITY_THRESHOLD } from "./observation-store";
+import { observationStore, ScreenObservationStore, LOW_CHANGE_SIMILARITY_THRESHOLD } from "./observation-store";
 
 describe("parseIntentCategory", () => {
   it("解析标准三行格式的第一行意图", () => {
@@ -239,6 +252,7 @@ describe("失败快重试（模拟网络抖动后的完整时间线）", () => {
 
   beforeEach(() => {
     vi.useFakeTimers();
+    screenMonitorService.resetForTests();
     vlmMocks.captureAndAnalyze.mockReset();
     screenMonitorService.setConfigGetter(() => fakeConfig);
   });
@@ -288,5 +302,103 @@ describe("失败快重试（模拟网络抖动后的完整时间线）", () => {
       await vi.advanceTimersByTimeAsync(i === 1 ? 180_000 : 120_000);
       expect(vlmMocks.captureAndAnalyze).toHaveBeenCalledTimes(i);
     }
+  });
+});
+
+describe("noChangeNote（提供给 LLM 的无变化标注）", () => {
+  it("无变化观测按连续段时长标注", () => {
+    const since = 1_000_000;
+    const obs = { timestamp: since + 24 * 60_000, summary: "类型：工作", source: "periodic" as const, noChange: true, noChangeSince: since };
+    expect(noChangeNote(obs, since + 24 * 60_000)).toBe("（屏幕内容在 24 分钟内没有发生变化，推测用户可能不在使用电脑或正在休息）");
+  });
+
+  it("时长不足一分钟至少记 1 分钟", () => {
+    const since = 1_000_000;
+    const obs = { timestamp: since + 10_000, summary: "类型：工作", source: "periodic" as const, noChange: true, noChangeSince: since };
+    expect(noChangeNote(obs, since + 10_000)).toContain("在 1 分钟内没有发生变化");
+  });
+
+  it("普通观测返回空串", () => {
+    expect(noChangeNote({ timestamp: 1, summary: "类型：工作", source: "periodic" })).toBe("");
+  });
+
+  it("无变化但缺连续段起点返回空串", () => {
+    expect(noChangeNote({ timestamp: 1, summary: "类型：工作", source: "periodic", noChange: true })).toBe("");
+  });
+});
+
+describe("像素级无变化（跳过 VLM 复用摘要 + 无变化段延续）", () => {
+  const fakeConfig = { baseUrl: "http://test", apiKey: "k", model: "vlm" };
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    screenMonitorService.resetForTests();
+    vlmMocks.captureAndAnalyze.mockReset();
+    // 用 mockClear 而非 mockReset：保留工厂里的默认实现（判有变化）
+    diffMocks.bitmapsNoChange.mockClear();
+    diffMocks.bitmapsNoChange.mockReturnValue(false);
+    observationStore.clear();
+    screenMonitorService.setConfigGetter(() => fakeConfig);
+  });
+
+  afterEach(() => {
+    screenMonitorService.stop();
+    vi.useRealTimers();
+  });
+
+  it("无变化 tick 跳过 VLM、复用摘要，段起点从最后一次有内容确认的观测起算，降频后维持 8 分钟", async () => {
+    const t0 = Date.now();
+    // mock 整体替换后不会自动写缓存，模拟真实 captureAndAnalyze 的写入行为
+    vlmMocks.captureAndAnalyze.mockImplementation(async () => {
+      const obs = { timestamp: Date.now(), summary: "类型：工作\n与上次比较：延续\n用户在写代码。", source: "periodic" as const };
+      observationStore.add(obs);
+      return obs;
+    });
+
+    screenMonitorService.start();
+
+    // t=3min：首次 tick 无对比位图 → 走 VLM（建立摘要基线，写入第 1 条观测）
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(vlmMocks.captureAndAnalyze).toHaveBeenCalledTimes(1);
+
+    // 此后截图像素级无变化
+    diffMocks.bitmapsNoChange.mockReturnValue(true);
+
+    // t=6min：第二次 tick 无变化 → 跳过 VLM，记录一条无变化观测
+    await vi.advanceTimersByTimeAsync(180_000);
+    expect(vlmMocks.captureAndAnalyze).toHaveBeenCalledTimes(1);
+    const first = observationStore.getLatest();
+    expect(first?.noChange).toBe(true);
+    expect(first?.summary).toContain("用户在写代码");
+    expect(first?.noChangeSince).toBe(t0 + 180_000); // 从首 tick 观测（最后一次内容确认）起算
+    expect(observationStore.getRecent(100).length).toBe(2);
+
+    // 降频至 8 分钟：t=11min 未触发，t=14min 触发
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(observationStore.getRecent(100).length).toBe(2);
+    await vi.advanceTimersByTimeAsync(3 * 60_000);
+    expect(vlmMocks.captureAndAnalyze).toHaveBeenCalledTimes(1); // 仍跳过 VLM
+    const second = observationStore.getLatest();
+    expect(second?.noChange).toBe(true);
+    expect(second?.noChangeSince).toBe(t0 + 180_000); // 连续段延续不重置
+    expect(observationStore.getRecent(100).length).toBe(3);
+  });
+
+  it("内容恢复变化：像素对比翻转为有变化，重新走 VLM", async () => {
+    vlmMocks.captureAndAnalyze.mockImplementation(async () => {
+      const obs = { timestamp: Date.now(), summary: "类型：工作\n与上次比较：延续\n用户在写代码。", source: "periodic" as const };
+      observationStore.add(obs);
+      return obs;
+    });
+    screenMonitorService.start();
+
+    await vi.advanceTimersByTimeAsync(180_000); // 首次 VLM 建立基线
+    diffMocks.bitmapsNoChange.mockReturnValue(true);
+    await vi.advanceTimersByTimeAsync(180_000); // 无变化 → 降频
+    expect(observationStore.getLatest()?.noChange).toBe(true);
+
+    diffMocks.bitmapsNoChange.mockReturnValue(false);
+    await vi.advanceTimersByTimeAsync(8 * 60_000); // 低频 tick，像素已有变化
+    expect(vlmMocks.captureAndAnalyze).toHaveBeenCalledTimes(2); // VLM 重新启用
   });
 });

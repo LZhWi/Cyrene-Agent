@@ -1,7 +1,8 @@
 // 工具注册表 — 统一管理所有可被 LLM Router 调度的工具
 // Worldbook 不在此注册，它走独立常驻检索路径
 
-import { searchMemory } from "../rag/index";
+import { searchMemory, searchMemoryEntries } from "../rag/index";
+import { memoryStore } from "../memory/memory-store";
 import type { ToolRiskLevel } from "../permission";
 import type { ToolContext } from "./tool-context";
 
@@ -133,8 +134,19 @@ toolRegistry.register({
     required: ['query'],
   },
   execute: async (args) => {
-    const results = await searchMemory(String(args.query), 'user_memory', Number(args.topK) || 5);
-    return results.map(formatMemoryResult).filter(Boolean).join('\n');
+    const results = await searchMemoryEntries(String(args.query), 'user_memory', Number(args.topK) || 5);
+    if (results.length === 0) return '';
+    const allL2 = await memoryStore.getAllL2();
+    const l2ById = new Map(allL2.map((l) => [l.id, l]));
+    return results.map((r) => {
+      const text = formatMemoryResult(r);
+      if (!text) return '';
+      // 时间锚点：优先 L2 的 createdAt（回填条目保留原始时间），缺失时回落向量条目时间
+      const l2Id = r.metadata?.l2Id;
+      const ts = (typeof l2Id === 'string' ? l2ById.get(l2Id)?.createdAt : undefined) ?? r.createdAt;
+      const d = new Date(ts);
+      return `[记录于 ${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}] ${text}`;
+    }).filter(Boolean).join('\n');
   },
 });
 

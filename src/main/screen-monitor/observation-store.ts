@@ -5,6 +5,10 @@ export interface ScreenObservation {
   timestamp: number;
   summary: string;
   source: "periodic" | "tool" | "trigger";
+  /** 像素级无变化：本次截图与上一张几乎完全相同，跳过 VLM 复用上次摘要 */
+  noChange?: boolean;
+  /** 无变化连续段起点时间戳：连续 noChange 观测沿链传递延续，内容恢复变化时置空 */
+  noChangeSince?: number;
 }
 
 const MAX_OBSERVATIONS = 50;

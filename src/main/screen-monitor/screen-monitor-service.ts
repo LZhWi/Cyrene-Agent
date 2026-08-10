@@ -9,7 +9,12 @@
 // 低变化不停转的原因："用户持续在同一个软件里操作"也是有效上下文——
 // 主动消息靠它判断是否打扰。若停转，观测会在注入侧 10 分钟过期后永久缺失。
 //
-// 低变化判定：两级标准（详见 decideLowChange）。
+// 变化判定三级：
+// 像素级（screen-diff）：相邻截图几乎完全相同 → 判"无变化"，跳过 VLM 复用
+//   上次摘要（省 token），观测打上 noChange/noChangeSince 标记，给 LLM 的
+//   内容里标注无变化时长（推测用户可能不在电脑前，见 noChangeNote）；
+//   频率仍按低变化处理（8 分钟）。
+// 两级语义标准（详见 decideLowChange）：
 // 主标准：VLM 结构化输出的类型类目（工作/学习/日常/娱乐）等值比较——
 //   类型描述"为什么在用电脑"而非"用什么软件"，浏览器里学习→娱乐能判出变化。
 // 次标准：VLM 对照上次观测自判"延续/切换"——同类目下的内容切换由此捕捉。
@@ -17,7 +22,14 @@
 // 两级都解析失败时回落文本相似度兜底（仅覆盖旧格式自由摘要）。
 
 import { captureAndAnalyze } from "./vlm-analyzer";
-import { textSimilarity, LOW_CHANGE_SIMILARITY_THRESHOLD } from "./observation-store";
+import { captureScreen } from "./capture";
+import { bitmapsNoChange, smallBitmapFromBase64 } from "./screen-diff";
+import {
+  observationStore,
+  textSimilarity,
+  LOW_CHANGE_SIMILARITY_THRESHOLD,
+  type ScreenObservation,
+} from "./observation-store";
 import type { VisionConfig } from "../orchestrator/vision-captioner";
 
 const LOG_PREFIX = "[ScreenMonitor/Service]";
@@ -134,6 +146,16 @@ export function decideLowChange(
   };
 }
 
+/**
+ * 无变化观测提供给 LLM 时的标注：无变化时长 + 缺席推断。
+ * 非无变化观测或无起点时间戳返回空串；时长至少记 1 分钟。
+ */
+export function noChangeNote(observation: ScreenObservation, nowMs = Date.now()): string {
+  if (!observation.noChange || !observation.noChangeSince) return "";
+  const minutes = Math.max(1, Math.round((nowMs - observation.noChangeSince) / 60_000));
+  return `（屏幕内容在 ${minutes} 分钟内没有发生变化，推测用户可能不在使用电脑或正在休息）`;
+}
+
 type MonitorState = "idle" | "periodic";
 
 class ScreenMonitorService {
@@ -144,6 +166,7 @@ class ScreenMonitorService {
   private lowChangeCount = 0;
   private lastSummary = "";
   private lastIntent: string | null = null;
+  private lastSmallBitmap: Buffer | null = null; // 上一张截图的缩采样位图，像素级无变化对比用
   private configGetter: (() => VisionConfig | null) | null = null;
 
   /** 注入视觉模型配置获取器（index.ts 启动时调用）。 */
@@ -163,6 +186,7 @@ class ScreenMonitorService {
     this.intervalMs = PERIODIC_INTERVAL_MS;
     this.lowChangeCount = 0;
     this.lastIntent = null;
+    this.lastSmallBitmap = null;
     this.lastTickStartMs = Date.now(); // 以启动时刻为锚，首次观察在完整间隔后
     console.log(LOG_PREFIX, "启动周期观察，间隔", PERIODIC_INTERVAL_MS / 1000, "s");
     this.scheduleNext();
@@ -183,6 +207,16 @@ class ScreenMonitorService {
   /** 是否正在运行。 */
   isRunning(): boolean {
     return this.state === "periodic";
+  }
+
+  /** 仅测试用：重置对比基线与频率状态，保证单例在测试间隔离。 */
+  resetForTests(): void {
+    this.stop();
+    this.intervalMs = PERIODIC_INTERVAL_MS;
+    this.lowChangeCount = 0;
+    this.lastSummary = "";
+    this.lastIntent = null;
+    this.lastSmallBitmap = null;
   }
 
   /**
@@ -206,6 +240,24 @@ class ScreenMonitorService {
     this.timer = setTimeout(() => this.tick(), delay);
   }
 
+  /**
+   * 像素级无变化观测：跳过 VLM 复用上次摘要，写入观测缓存并延续无变化连续段。
+   * noChangeSince 取上一观测的起点时间戳；上一观测无标记（刚恢复变化后的首个
+   * 无变化）从上一观测时刻起算；缓存为空时从当前起算。
+   */
+  private recordNoChangeObservation(): ScreenObservation {
+    const prev = observationStore.getLatest();
+    const observation: ScreenObservation = {
+      timestamp: Date.now(),
+      summary: this.lastSummary,
+      source: "periodic",
+      noChange: true,
+      noChangeSince: prev?.noChangeSince ?? prev?.timestamp ?? Date.now(),
+    };
+    observationStore.add(observation);
+    return observation;
+  }
+
   private async tick(): Promise<void> {
     this.lastTickStartMs = Date.now();
     const config = this.configGetter?.();
@@ -216,17 +268,32 @@ class ScreenMonitorService {
     }
 
     try {
-      // 把上次摘要传给 VLM 做连续性对照（与 decideLowChange 的对比对象保持一致）
-      const observation = await captureAndAnalyze(config, "periodic", this.lastSummary);
+      // 先截图再像素对比：无变化直接跳过 VLM 复用摘要；截图同时供后续 VLM 分析
+      // 复用（preCapture），一次 tick 只截一遍屏。
+      const capture = await captureScreen();
+      const small = smallBitmapFromBase64(capture.base64);
+      const noChange =
+        this.lastSmallBitmap !== null &&
+        small !== null &&
+        bitmapsNoChange(this.lastSmallBitmap, small);
+      this.lastSmallBitmap = small;
+
+      // 无变化且已有摘要基线（首启无 lastSummary 仍走 VLM）→ 记录后按低变化降频
+      const observation =
+        noChange && this.lastSummary
+          ? this.recordNoChangeObservation()
+          : await captureAndAnalyze(config, "periodic", this.lastSummary, capture);
 
       // 从失败快重试恢复：先回全速，后续低变化判定会再决定是否降频
       if (this.intervalMs === RETRY_INTERVAL_MS) {
         this.intervalMs = PERIODIC_INTERVAL_MS;
       }
 
-      // 低变化判定：类型类目主标准 + VLM 连续性次标准（纯函数，测试见同目录 test）
-      const intent = parseIntentCategory(observation.summary);
-      const decision = decideLowChange(this.lastSummary, this.lastIntent, observation.summary);
+      // 变化判定：像素级无变化直接按低变化处理；否则走两级语义标准
+      // （类型类目主标准 + VLM 连续性次标准，纯函数，测试见同目录 test）
+      const decision = observation.noChange
+        ? { lowChange: true, verdict: "像素级无变化（跳过 VLM 复用摘要）" }
+        : decideLowChange(this.lastSummary, this.lastIntent, observation.summary);
       if (decision) {
         if (decision.lowChange) {
           this.lowChangeCount++;
@@ -249,7 +316,7 @@ class ScreenMonitorService {
         }
       }
       this.lastSummary = observation.summary;
-      this.lastIntent = intent;
+      this.lastIntent = parseIntentCategory(observation.summary);
     } catch (err) {
       console.error(LOG_PREFIX, "周期观察失败:", err instanceof Error ? err.message : String(err));
       // 失败快重试：避免低频间隔叠加失败造成 >10 分钟的观测空窗（注入侧过期阈值）

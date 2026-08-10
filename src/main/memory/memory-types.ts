@@ -167,6 +167,8 @@ export interface MemoryCandidate {
   shouldWrite?: boolean
   reason?: string
   forbiddenOverclaims?: string[]
+  /** 仅回填注入：该事实的原始形成时间；正常提取不填（用写入时刻）。 */
+  createdAt?: number
 }
 
 export interface MemoryJudgeTurn {

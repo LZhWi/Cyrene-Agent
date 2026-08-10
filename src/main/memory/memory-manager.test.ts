@@ -70,6 +70,7 @@ describe("MemoryManager L2 sync", () => {
       candidate.content,
       allL2[0].id,
       expect.objectContaining({ confidence: candidate.confidence }),
+      expect.objectContaining({ createdAt: allL2[0].createdAt }),
     )
   })
 

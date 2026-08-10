@@ -135,10 +135,11 @@ export async function switchEmbeddingModel(modelKey: string): Promise<{ ok: bool
 export async function addMemory(
   text: string,
   source = "user_memory",
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  opts?: { createdAt?: number }
 ): Promise<string> {
   if (!store || !provider) throw new Error("RAG not initialized");
-  const entry = await store.add(text, source, provider, metadata);
+  const entry = await store.add(text, source, provider, metadata, opts);
   return entry.id;
 }
 
@@ -146,10 +147,11 @@ export async function addL2MemoryVector(
   text: string,
   l2Id: string,
   metadata?: Record<string, unknown>,
+  opts?: { createdAt?: number },
 ): Promise<string> {
   if (!store || !provider) throw new Error("RAG not initialized");
   if (!l2Id.trim()) throw new Error("l2Id is required");
-  const entry = await store.addUnique(text, "user_memory", provider, { ...metadata, l2Id });
+  const entry = await store.addUnique(text, "user_memory", provider, { ...metadata, l2Id }, opts);
   return entry.id;
 }
 
@@ -414,6 +416,18 @@ export function getEntriesBySource(source: string): Array<{ id: string; text: st
 export function deleteUserMemoryVectors(ragIds: string[]): number {
   if (!store) throw new Error("RAG not initialized");
   return store.deleteEntriesByIds(ragIds, "user_memory");
+}
+
+/** 单轮删除级联：按 metadata.turnId 删除 chat_history 索引条目（无 turnId 的旧条目不受影响）。 */
+export function deleteHistoryEntriesByTurnIds(turnIds: string[]): number {
+  if (!store) throw new Error("RAG not initialized");
+  if (turnIds.length === 0) return 0;
+  const ids = new Set(turnIds);
+  const entryIds = getEntriesBySource("chat_history")
+    .filter((e) => typeof e.metadata?.turnId === "string" && ids.has(e.metadata.turnId as string))
+    .map((e) => e.id);
+  if (entryIds.length === 0) return 0;
+  return store.deleteEntriesByIds(entryIds, "chat_history");
 }
 
 export function deleteImportedDoc(importId: string, fileName?: string): number {
