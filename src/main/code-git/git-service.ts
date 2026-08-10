@@ -43,6 +43,7 @@ export interface GitServiceDeps {
 export interface GitService {
   getStatusForSession(sessionId: string): Promise<CodeGitStatus>;
   getDiffForSession(sessionId: string, relativePath: string): Promise<CodeGitDiffResult>;
+  onChanged(listener: (payload: { sessionId: string }) => void): () => void;
 }
 
 interface ResolvedCodeSession {
@@ -52,6 +53,7 @@ interface ResolvedCodeSession {
 
 export function createGitService(deps: GitServiceDeps): GitService {
   const createClient = deps.createClient ?? createSimpleGitClient;
+  const listeners = new Set<(payload: { sessionId: string }) => void>();
 
   async function resolveCodeSession(sessionId: string): Promise<ResolvedCodeSession | CodeGitStatus> {
     const session = deps.getSession(sessionId);
@@ -71,6 +73,11 @@ export function createGitService(deps: GitServiceDeps): GitService {
   }
 
   return {
+    onChanged(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+
     async getStatusForSession(sessionId: string): Promise<CodeGitStatus> {
       try {
         const resolved = await resolveCodeSession(sessionId);

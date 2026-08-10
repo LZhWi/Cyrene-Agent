@@ -572,6 +572,18 @@ const chatStoreApi = {
 
 contextBridge.exposeInMainWorld("chatStore", chatStoreApi);
 
+const codeGitApi = {
+  getStatus: (sessionId: string) => ipcRenderer.invoke(IPC.CODE_GIT_STATUS, sessionId),
+  getDiff: (sessionId: string, path: string) =>
+    ipcRenderer.invoke(IPC.CODE_GIT_DIFF, { sessionId, path }),
+  onChanged: (callback: (payload: { sessionId: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { sessionId: string }) => callback(payload);
+    ipcRenderer.on(IPC.CODE_GIT_CHANGED, listener);
+    return () => ipcRenderer.removeListener(IPC.CODE_GIT_CHANGED, listener);
+  },
+};
+contextBridge.exposeInMainWorld("codeGit", codeGitApi);
+
 // Token 用量查询（设置中心 Token 面板用）
 const tokenUsageApi = {
   get: (days: number) => ipcRenderer.invoke(IPC.TOKEN_USAGE_GET, days),
