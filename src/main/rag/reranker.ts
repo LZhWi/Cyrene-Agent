@@ -44,6 +44,27 @@ async function loadRerankerPipeline(modelDir: string): Promise<any> {
   }
 }
 
+/** Cross-encoder 必须把 query/document 作为 tokenizer 的 text/text_pair 输入。 */
+export async function rerankDocumentsWithPipeline(
+  pipeline: any,
+  query: string,
+  documents: string[],
+): Promise<Array<{ text: string; score: number }>> {
+  if (documents.length === 0) return [];
+  const modelInputs = pipeline.tokenizer(
+    documents.map(() => query),
+    { text_pair: documents, padding: true, truncation: true },
+  );
+  const outputs = await pipeline.model(modelInputs);
+  const results = documents.map((text, index) => ({
+    text,
+    // BGE/MS-MARCO reranker 是单 logit 回归模型；raw logit 的顺序即相关性顺序。
+    score: Number(outputs.logits[index]?.data?.[0] ?? Number.NEGATIVE_INFINITY),
+  }));
+  results.sort((a, b) => b.score - a.score);
+  return results;
+}
+
 // ── Lightweight reranker (ms-marco-MiniLM-L6-v2, ~23MB) ──
 export async function createLightReranker(): Promise<RerankerProvider> {
   if (!lightPipeline) {
@@ -59,16 +80,7 @@ export async function createLightReranker(): Promise<RerankerProvider> {
 
       const start = Date.now();
 
-      // Cross-encoder: each input is [query, doc] pair
-      const inputs = documents.map((doc) => [query, doc]);
-      const outputs = await lightPipeline(inputs);
-
-      const results = documents.map((text, i) => ({
-        text,
-        score: outputs[i]?.score ?? 0,
-      }));
-
-      results.sort((a, b) => b.score - a.score);
+      const results = await rerankDocumentsWithPipeline(lightPipeline, query, documents);
 
       console.log(`[Reranker] light: ${documents.length} docs reranked in ${Date.now() - start}ms`);
       return results;
@@ -91,15 +103,7 @@ export async function createStandardReranker(): Promise<RerankerProvider> {
 
       const start = Date.now();
 
-      const inputs = documents.map((doc) => [query, doc]);
-      const outputs = await standardPipeline(inputs);
-
-      const results = documents.map((text, i) => ({
-        text,
-        score: outputs[i]?.score ?? 0,
-      }));
-
-      results.sort((a, b) => b.score - a.score);
+      const results = await rerankDocumentsWithPipeline(standardPipeline, query, documents);
 
       console.log(`[Reranker] standard: ${documents.length} docs reranked in ${Date.now() - start}ms`);
       return results;

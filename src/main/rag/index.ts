@@ -237,10 +237,16 @@ async function recordUserMemoryRecalls(results: Array<{ entry: MemoryEntry }>): 
 // 让召回工具能按时间排序、展示时间戳。
 export async function searchHistoryEntries(
   query: string,
-  topK = 5
+  topK = 5,
+  options: {
+    recordRecall?: boolean;
+    createdAfter?: number;
+    rawScore?: boolean;
+    semanticOnly?: boolean;
+  } = {},
 ): Promise<Array<{ text: string; createdAt: number; score: number; metadata?: Record<string, unknown> }>> {
   if (!retriever) return [];
-  const results = await retriever.retrieve(query, "chat_history", topK);
+  const results = await retriever.retrieve(query, "chat_history", topK, options);
   return results.map((r) => {
     const occurrences = Array.isArray(r.entry.metadata?.occurrences)
       ? r.entry.metadata.occurrences.filter((item): item is ChatHistoryOccurrence => (

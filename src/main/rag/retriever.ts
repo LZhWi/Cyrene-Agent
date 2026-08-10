@@ -1,4 +1,4 @@
-import { JsonVectorStore, SearchResult } from "./vectorstore";
+import { getMemoryEntryLatestTimestamp, JsonVectorStore, SearchResult } from "./vectorstore";
 import { EmbeddingProvider, getEmbeddingProvider } from "./embedding";
 
 // ── @node-rs/jieba 分词（Node 24 兼容；nodejieba 已弃用） ──
@@ -48,6 +48,10 @@ const NOUN_WEIGHT = 1.3;
 export interface RetrieveOptions {
   importIds?: string[];
   allowedEntryIds?: string[];
+  createdAfter?: number;
+  rawScore?: boolean;
+  semanticOnly?: boolean;
+  recordRecall?: boolean;
 }
 
 // ── 自定义词表（entity-graph 维护） ──
@@ -222,7 +226,9 @@ export class HybridRetriever {
     const vectorResults = await this.store.search(query, source, this.provider, topK * 3, 0.3, options);
 
     // 2. BM25 检索
-    const bm25Results = this.bm25Search(query, source, topK * 3, options);
+    const bm25Results = options.semanticOnly
+      ? []
+      : this.bm25Search(query, source, topK * 3, options);
 
     // 3. 融合：加权求和
     const merged: Map<string, { result: SearchResult; vectorScore: number; bm25Score: number }> = new Map();
@@ -247,7 +253,9 @@ export class HybridRetriever {
 
     const scored = all.map((m) => ({
       ...m.result,
-      score: (m.vectorScore / maxV) * vectorWeight + (m.bm25Score / maxB) * bm25Weight,
+      score: options.semanticOnly
+        ? m.vectorScore / maxV
+        : (m.vectorScore / maxV) * vectorWeight + (m.bm25Score / maxB) * bm25Weight,
     }));
 
     scored.sort((a, b) => b.score - a.score);
@@ -264,7 +272,8 @@ export class HybridRetriever {
     const allowedEntryIds = options.allowedEntryIds ? new Set(options.allowedEntryIds) : null;
     const docs = (source ? entries.filter((e) => e.source === source) : entries).filter((entry) =>
       (!allowedImportIds.size || allowedImportIds.has(String(entry.metadata?.importId ?? ""))) &&
-      (!allowedEntryIds || allowedEntryIds.has(entry.id)),
+      (!allowedEntryIds || allowedEntryIds.has(entry.id)) &&
+      (options.createdAfter === undefined || getMemoryEntryLatestTimestamp(entry) >= options.createdAfter),
     );
     if (docs.length === 0) return [];
 

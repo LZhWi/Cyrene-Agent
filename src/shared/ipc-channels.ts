@@ -194,6 +194,7 @@ export const IPC = {
   MEMORY_PANEL_DELETE_IMPORTED_DOC: "memory-panel:delete-imported-doc",
   MEMORY_PANEL_SAVE_L0: "memory-panel:save-l0",
   MEMORY_PANEL_SAVE_L1: "memory-panel:save-l1",
+  MEMORY_PANEL_RUN_RETRIEVAL_SANDBOX: "memory-panel:run-retrieval-sandbox",
 
   // MCP server management
   MCP_ADD_SERVER: "mcp:add-server",

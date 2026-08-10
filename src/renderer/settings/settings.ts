@@ -377,6 +377,36 @@ interface MemoryPanelApi {
   deleteImportedDoc: (importId: string, fileName?: string) => Promise<{ ok: boolean; deleted: number }>;
   saveL0: (patch: Record<string, unknown>) => Promise<{ ok: boolean }>;
   saveL1: (patch: Record<string, unknown>) => Promise<{ ok: boolean }>;
+  runRetrievalSandbox: (query: string, generateReply?: boolean) => Promise<MemoryRetrievalSandboxResult>;
+}
+
+interface MemoryRetrievalSandboxHit {
+  text: string;
+  createdAt: number;
+  score: number;
+  role: "user" | "assistant" | "unknown";
+  expansion: "adjacent_turn" | "sentence_window" | null;
+}
+
+interface MemoryRetrievalSandboxCandidate extends MemoryRetrievalSandboxHit {
+  candidateRank: number;
+  sources: Array<{ channel: string; query: string; rank: number; score: number }>;
+  rerankerScore: number | null;
+  selectedRank: number | null;
+}
+
+interface MemoryRetrievalSandboxResult {
+  query: string;
+  excludedRepeatedTestRecords: number;
+  excludedOrphanedRecords: number;
+  method: "reranker" | "rrf";
+  candidateCount: number;
+  queryVariants: Array<{ channel: string; query: string }>;
+  baseline: MemoryRetrievalSandboxHit[];
+  selected: MemoryRetrievalSandboxHit[];
+  candidates: MemoryRetrievalSandboxCandidate[];
+  replyGenerated: boolean;
+  reply: string | null;
 }
 
 interface SettingsApi {
@@ -4233,6 +4263,16 @@ const memoryL1PreferencesInput = document.getElementById("memory-l1-preferences"
 const memoryL1ProjectInput = document.getElementById("memory-l1-project") as HTMLTextAreaElement | null;
 const memoryL2SearchInput = document.getElementById("memory-l2-search") as HTMLInputElement | null;
 const memoryL2List = document.getElementById("memory-l2-list") as HTMLElement | null;
+const memorySandboxQuery = document.getElementById("memory-sandbox-query") as HTMLTextAreaElement | null;
+const memorySandboxGenerateReply = document.getElementById("memory-sandbox-generate-reply") as HTMLInputElement | null;
+const memorySandboxRunBtn = document.getElementById("memory-sandbox-run-btn") as HTMLButtonElement | null;
+const memorySandboxStatus = document.getElementById("memory-sandbox-status") as HTMLElement | null;
+const memorySandboxResults = document.getElementById("memory-sandbox-results") as HTMLElement | null;
+const memorySandboxBaseline = document.getElementById("memory-sandbox-baseline") as HTMLElement | null;
+const memorySandboxSelected = document.getElementById("memory-sandbox-selected") as HTMLElement | null;
+const memorySandboxCandidateFilter = document.getElementById("memory-sandbox-candidate-filter") as HTMLInputElement | null;
+const memorySandboxCandidates = document.getElementById("memory-sandbox-candidates") as HTMLElement | null;
+const memorySandboxReply = document.getElementById("memory-sandbox-reply") as HTMLElement | null;
 const memoryImportedList = document.getElementById("memory-imported-list") as HTMLElement | null;
 const memoryReflectionList = document.getElementById("memory-reflection-list") as HTMLElement | null;
 const memoryL0EditBtn = document.getElementById("memory-l0-edit-btn") as HTMLButtonElement | null;
@@ -4241,6 +4281,7 @@ const memoryL1EditBtn = document.getElementById("memory-l1-edit-btn") as HTMLBut
 const memoryL1CancelBtn = document.getElementById("memory-l1-cancel-btn") as HTMLButtonElement | null;
 
 let memoryPanelCache: MemoryPanelPayload | null = null;
+let memorySandboxCandidateCache: MemoryRetrievalSandboxCandidate[] = [];
 let l0Editing = false;
 let l1Editing = false;
 let l0Snapshot: Record<string, string> | null = null;
@@ -4384,6 +4425,92 @@ function syncLocationAndTimezoneFields(): void {
   const automatic = weatherLocationModeSelect?.value === "auto";
   if (locationStatusField) locationStatusField.style.display = automatic ? "block" : "none";
   if (manualTimezoneField) manualTimezoneField.style.display = timezoneModeSelect?.value === "manual" ? "block" : "none";
+}
+
+function renderSandboxHits(container: HTMLElement | null, hits: MemoryRetrievalSandboxHit[]): void {
+  renderInfoList(
+    container,
+    hits.map((hit, index) => ({
+      title: `${index + 1}. ${hit.role === "assistant" ? "昔涟" : hit.role === "user" ? "用户" : "角色未知"}${hit.expansion === "adjacent_turn" ? "（相邻轮次）" : hit.expansion === "sentence_window" ? "（句子窗口）" : ""}`,
+      body: hit.text,
+      meta: `${formatDateTime(hit.createdAt)} · score ${hit.score.toFixed(4)}`,
+    })),
+    "没有检索到历史片段",
+    "可以换一种更明确的问法再试",
+  );
+}
+
+function renderSandboxCandidates(query = ""): void {
+  const normalized = query.trim().toLowerCase();
+  const candidates = normalized
+    ? memorySandboxCandidateCache.filter((candidate) => candidate.text.toLowerCase().includes(normalized))
+    : memorySandboxCandidateCache;
+  renderInfoList(
+    memorySandboxCandidates,
+    candidates.map((candidate) => {
+      const role = candidate.role === "assistant" ? "昔涟" : candidate.role === "user" ? "用户" : "角色未知";
+      const sources = candidate.sources.length > 0
+        ? candidate.sources.map((source) => `${source.channel} #${source.rank}`).join("、")
+        : candidate.expansion === "adjacent_turn"
+          ? "相邻轮次扩展"
+          : candidate.expansion === "sentence_window"
+            ? "句子窗口扩展"
+            : "来源未记录";
+      const rerank = candidate.rerankerScore === null ? "未获得重排分" : `融合重排分 ${candidate.rerankerScore.toFixed(4)}`;
+      const selected = candidate.selectedRank === null ? "未入选" : `最终第 ${candidate.selectedRank}`;
+      return {
+        title: `候选 #${candidate.candidateRank} · ${role}${candidate.expansion === "adjacent_turn" ? "（相邻轮次）" : candidate.expansion === "sentence_window" ? "（句子窗口）" : ""}`,
+        body: candidate.text,
+        meta: `${formatDateTime(candidate.createdAt)} · ${sources} · ${rerank} · ${selected}`,
+      };
+    }),
+    normalized ? "候选池中没有匹配内容" : "候选池为空",
+    normalized ? "这说明该关键词没有进入候选池" : "当前查询没有生成候选",
+  );
+}
+
+async function runMemoryRetrievalSandbox(): Promise<void> {
+  const query = memorySandboxQuery?.value.trim() ?? "";
+  const generateReply = memorySandboxGenerateReply?.checked === true;
+  if (!query || !memorySandboxRunBtn) {
+    if (memorySandboxStatus) memorySandboxStatus.textContent = "请先输入测试问题";
+    return;
+  }
+  memorySandboxRunBtn.disabled = true;
+  memorySandboxRunBtn.textContent = "测试中…";
+  if (memorySandboxStatus) {
+    memorySandboxStatus.textContent = generateReply
+      ? "正在只读检索并生成隔离回复…"
+      : "正在只读检索与重排（不会调用 LLM）…";
+  }
+  memorySandboxResults?.classList.add("is-hidden");
+  try {
+    const result = await window.memoryPanel?.runRetrievalSandbox(query, generateReply);
+    if (!result) throw new Error("沙箱没有返回结果");
+    renderSandboxHits(memorySandboxBaseline, result.baseline);
+    renderSandboxHits(memorySandboxSelected, result.selected);
+    memorySandboxCandidateCache = result.candidates;
+    if (memorySandboxCandidateFilter) memorySandboxCandidateFilter.value = "";
+    renderSandboxCandidates();
+    if (memorySandboxReply) {
+      memorySandboxReply.textContent = result.replyGenerated && result.reply
+        ? result.reply
+        : "本次未调用 LLM；上方检索、重排与候选轨迹已正常完成。";
+    }
+    if (memorySandboxStatus) {
+      memorySandboxStatus.textContent =
+        `完成：${result.method === "reranker" ? "双查询融合重排" : "RRF"}，候选 ${result.candidateCount} 条，` +
+        `排除重复测试记录 ${result.excludedRepeatedTestRecords} 条，` +
+        `排除已删除会话残留 ${result.excludedOrphanedRecords} 条`;
+    }
+    memorySandboxResults?.classList.remove("is-hidden");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (memorySandboxStatus) memorySandboxStatus.textContent = `测试失败：${message}`;
+  } finally {
+    memorySandboxRunBtn.disabled = false;
+    memorySandboxRunBtn.textContent = "开始隔离测试";
+  }
 }
 
 function renderLocationStatus(location: { accuracy: number; obtainedAt: number } | null): void {
@@ -4647,6 +4774,16 @@ memoryL1EditBtn?.addEventListener("click", () => {
   if (l1Editing) { saveL1(); } else { enterL1EditMode(); }
 });
 memoryL1CancelBtn?.addEventListener("click", cancelL1Edit);
+memorySandboxRunBtn?.addEventListener("click", () => void runMemoryRetrievalSandbox());
+memorySandboxQuery?.addEventListener("keydown", (event) => {
+  if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+    event.preventDefault();
+    void runMemoryRetrievalSandbox();
+  }
+});
+memorySandboxCandidateFilter?.addEventListener("input", () => {
+  renderSandboxCandidates(memorySandboxCandidateFilter.value);
+});
 
 
 function renderImportedDocs(): void {

@@ -60,6 +60,31 @@ describe("build-options", () => {
 
     expect(result.options.soulSystemBaseContent).not.toContain("你正在通过微信回复用户")
     expect(result.options.soulSystemBaseContent).not.toContain("你正在通过飞书回复用户")
+    expect(result.options.enableHistoryRetrievalAutoProbe).toBe(true)
+  })
+
+  it("keeps the retrieval auto probe out of ordinary external channels", async () => {
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "还记得吗" }],
+      style: "01_default.md",
+      channel: "wechat",
+      sessionId: "channel:wechat:user",
+    }, createBuildDeps())
+
+    expect(result.options.enableHistoryRetrievalAutoProbe).toBe(false)
+  })
+
+  it("enables the retrieval auto probe for a proactive conversation", async () => {
+    const deps = createBuildDeps()
+    deps.isProactiveConversation = (conversationId) => conversationId === "proactive-session"
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "还记得吗" }],
+      style: "01_default.md",
+      channel: "mobile",
+      sessionId: "proactive-session",
+    }, deps)
+
+    expect(result.options.enableHistoryRetrievalAutoProbe).toBe(true)
   })
 
   it.each(["talk-soft.md", "01_default.md"])("injects session social context in desktop Chat/Collab (%s)", async (style) => {

@@ -29,8 +29,11 @@ export interface SearchResult {
 export interface VectorSearchOptions {
   importIds?: string[];
   allowedEntryIds?: string[];
+  createdAfter?: number;
   /** 得分 = 纯余弦相似度，不乘权重/时间衰减。供"判同"场景（如 add 去重）使用。 */
   rawScore?: boolean;
+  /** false 时仅计算结果，不更新 weight / lastRecalledAt，也不写回存储。 */
+  recordRecall?: boolean;
 }
 
 // ── 余弦相似度（嵌入已归一化，等价于点积） ──
@@ -44,6 +47,17 @@ export function cosineSimilarity(a: number[], b: number[]): number {
 
 export function normalizeChatHistoryText(text: string): string {
   return text.normalize("NFC").replace(/\r\n?/g, "\n").trim();
+}
+
+export function getMemoryEntryLatestTimestamp(entry: MemoryEntry): number {
+  if (entry.source !== "chat_history" || !Array.isArray(entry.metadata?.occurrences)) {
+    return entry.createdAt;
+  }
+  return entry.metadata.occurrences.reduce<number>((latest, occurrence) => {
+    if (!occurrence || typeof occurrence !== "object") return latest;
+    const ts = (occurrence as { ts?: unknown }).ts;
+    return typeof ts === "number" && Number.isFinite(ts) ? Math.max(latest, ts) : latest;
+  }, entry.createdAt);
 }
 
 function occurrenceFromMetadata(entry: MemoryEntry): ChatHistoryOccurrence | null {
@@ -460,7 +474,8 @@ export class JsonVectorStore {
     const allowedEntryIds = options.allowedEntryIds ? new Set(options.allowedEntryIds) : null;
     const shouldKeep = (entry: MemoryEntry) =>
       (!allowedImportIds.size || allowedImportIds.has(String(entry.metadata?.importId ?? ""))) &&
-      (!allowedEntryIds || allowedEntryIds.has(entry.id));
+      (!allowedEntryIds || allowedEntryIds.has(entry.id)) &&
+      (options.createdAfter === undefined || getMemoryEntryLatestTimestamp(entry) >= options.createdAfter);
 
     if (this.ivf && !source) {
       // ── IVF 加速路径（无 source 过滤时） ──
@@ -515,13 +530,15 @@ export class JsonVectorStore {
     const top = results.slice(0, topK);
 
     // 更新召回时间（仅对 topK 结果）
-    for (const r of top) {
-      r.entry.lastRecalledAt = now;
-      r.entry.weight = Math.min(r.entry.weight + 0.05, 5.0);
-    }
-    if (top.length > 0) {
-      this.dirty = true;
-      this.save();
+    if (options.recordRecall !== false) {
+      for (const r of top) {
+        r.entry.lastRecalledAt = now;
+        r.entry.weight = Math.min(r.entry.weight + 0.05, 5.0);
+      }
+      if (top.length > 0) {
+        this.dirty = true;
+        this.save();
+      }
     }
 
     return top;

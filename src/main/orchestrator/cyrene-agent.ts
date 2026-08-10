@@ -19,6 +19,7 @@ import { type ToolCallResult } from "./types";
 import { checkPermission, type ToolRiskLevel } from "../permission";
 import { getAdapterForConfig, type ChatMessage } from "./vendors";
 import { extractLastUserQuery, type ToolContext } from "./tool-context";
+import { runHistoryRetrievalV2AutoProbe } from "./history-tools";
 import {
   runTwoPhaseFcLoop,
   type TwoPhaseEvent,
@@ -53,6 +54,8 @@ export interface CyreneRunOptions {
   /** 可选：Soul 阶段尾部锚点（压缩版硬行为规则，追加在对话之后）。 */
   soulTailAnchorContent?: string;
   socialContext?: import("../social-context").SocialTurnContext;
+  /** 仅诊断：显式回忆问题未调用 recall_history 时，回复完成后运行只读 shadow。 */
+  enableHistoryRetrievalAutoProbe?: boolean;
 }
 
 /** FC 循环最终结果（供桥层做副作用用）。 */
@@ -177,6 +180,7 @@ export class CyreneAgent extends AbstractAgent {
 
       (async () => {
         try {
+          const runStartedAt = Date.now();
           subscriber.next({ type: EventType.RUN_STARTED, threadId, runId });
 
           const adapter = getAdapterForConfig(options.settings);
@@ -210,6 +214,16 @@ export class CyreneAgent extends AbstractAgent {
             soulPhaseReason: result.soulPhaseReason,
             socialContext: options.socialContext,
           };
+
+          if (
+            options.enableHistoryRetrievalAutoProbe
+            && !result.toolResults.some((toolResult) => toolResult.toolId === "recall_history")
+          ) {
+            const userQuery = extractLastUserQuery(options.messages);
+            void runHistoryRetrievalV2AutoProbe(userQuery, 90, runStartedAt).catch((error) => {
+              console.warn("[History/RetrievalV2AutoProbe] failed:", error);
+            });
+          }
 
           if (cancelled) return;
           subscriber.next({

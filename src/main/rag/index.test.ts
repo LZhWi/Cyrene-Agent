@@ -138,6 +138,40 @@ describe("user memory retrieval", () => {
 });
 
 describe("chat history occurrences", () => {
+  it("supports read-only retrieval without changing recall metadata", async () => {
+    const id = await addHistoryMemory("read only history", {
+      sessionId: "session-a", role: "user", ts: 100, turnId: "turn-1",
+    });
+    const storeFile = path.join(tmpDir, "rag-data", "memory-store.json");
+    const before = fs.readFileSync(storeFile, "utf8");
+
+    await searchHistoryEntries("read only history", 5, { recordRecall: false });
+
+    expect(getEntriesBySource("chat_history").some((entry) => entry.id === id)).toBe(true);
+    expect(fs.readFileSync(storeFile, "utf8")).toBe(before);
+  });
+
+  it("filters old history before Top-K while retaining a recently repeated occurrence", async () => {
+    const now = Date.now();
+    await addHistoryMemory("old only paragraph", {
+      sessionId: "session-a", role: "user", ts: 100, turnId: "old-turn",
+    }, { createdAt: 100 });
+    await addHistoryMemory("repeated paragraph", {
+      sessionId: "session-a", role: "user", ts: 200, turnId: "first-repeat",
+    }, { createdAt: 200 });
+    await addHistoryMemory("repeated paragraph", {
+      sessionId: "session-a", role: "user", ts: now, turnId: "recent-repeat",
+    }, { createdAt: now });
+
+    const results = await searchHistoryEntries("paragraph", 5, {
+      recordRecall: false,
+      createdAfter: now - 1_000,
+    });
+
+    expect(results.map((entry) => entry.text)).toEqual(["repeated paragraph"]);
+    expect(results[0]?.createdAt).toBe(now);
+  });
+
   it("merges only normalized exact text and records every occurrence", async () => {
     const firstId = await addHistoryMemory("早安\r\n", {
       sessionId: "session-a", role: "user", ts: 100, turnId: "turn-1",

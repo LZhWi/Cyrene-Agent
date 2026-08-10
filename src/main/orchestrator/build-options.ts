@@ -527,6 +527,7 @@ export async function buildAgentRunOptions(
       },
       messages: fcMessages,
       conversationId,
+      enableHistoryRetrievalAutoProbe: !input.channel || deps.isProactiveConversation?.(conversationId) === true,
       requiredToolName,
       timeoutMs: deps.chatRequestTimeoutMs,
       toolSystemContent,

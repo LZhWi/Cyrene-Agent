@@ -701,6 +701,46 @@
               <div class="memory-search"><input id="memory-l2-search" type="text" placeholder="搜索记忆..." /></div>
               <div class="memory-list" id="memory-l2-list"><div class="memory-list__empty"><span>📭</span><p>暂无事件记忆</p><p class="memory-list__hint">聊天后昔涟会自动提炼重要信息</p></div></div>
             </div>
+            <!-- retrieval sandbox -->
+            <div class="memory-card" id="memory-retrieval-sandbox">
+              <div class="memory-card__head">
+                <span>🧪</span>
+                <div>
+                  <h2>记忆检索沙箱</h2>
+                  <p>隔离测试历史检索与模拟回答，不污染正式聊天</p>
+                </div>
+                <span class="memory-card__badge">只读</span>
+              </div>
+              <p class="memory-sandbox__notice">只读取正式历史索引；不会创建会话、写入记忆、更新关系或情绪，也不会触发贴纸、TTS 与主动聊天。只有开启下方选项时才会调用模型并产生正常 API 用量。</p>
+              <textarea id="memory-sandbox-query" rows="3" maxlength="1000" placeholder="例如：你还记得我们之前说要做什么样的小摆件吗？"></textarea>
+              <label class="memory-sandbox__llm-option">
+                <div><strong>生成隔离模拟回复</strong><span>默认关闭；关闭时只运行检索、重排与候选轨迹，不调用 LLM。</span></div>
+                <span class="switch"><input id="memory-sandbox-generate-reply" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
+              <div class="memory-sandbox__actions">
+                <button type="button" class="save-btn" id="memory-sandbox-run-btn">开始隔离测试</button>
+                <span id="memory-sandbox-status" aria-live="polite"></span>
+              </div>
+              <div class="memory-sandbox__results is-hidden" id="memory-sandbox-results">
+                <section>
+                  <h3>当前正式检索 Top 5</h3>
+                  <div class="memory-list" id="memory-sandbox-selected"></div>
+                </section>
+                <section>
+                  <h3>旧检索基线 Top 5（仅供对照）</h3>
+                  <div class="memory-list" id="memory-sandbox-baseline"></div>
+                </section>
+                <details class="memory-sandbox__candidate-details">
+                  <summary>查看完整候选池与重排轨迹</summary>
+                  <input id="memory-sandbox-candidate-filter" type="search" placeholder="筛选候选内容，例如：花苞、玫瑰、形状" />
+                  <div class="memory-list" id="memory-sandbox-candidates"></div>
+                </details>
+                <section>
+                  <h3>隔离模拟回复（可选）</h3>
+                  <div class="memory-sandbox__reply" id="memory-sandbox-reply"></div>
+                </section>
+              </div>
+            </div>
             <!-- import -->
             <div class="memory-card">
               <div class="memory-card__head">

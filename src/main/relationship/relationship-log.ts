@@ -58,9 +58,21 @@ function compact(text: string, max = 120): string {
   return s.length > max ? s.slice(0, max) + "..." : s
 }
 
+function normalizeCareCue(cue: string | undefined): string {
+  return String(cue ?? "").replace(/^(?:下次回应提示[：:]\s*)+/, "").trim()
+}
+
+function summaryWithoutCareCue(summary: string | undefined, cue: string | undefined): string {
+  const text = String(summary ?? "").trim()
+  const rawCue = String(cue ?? "").trim()
+  if (!text || !rawCue || !text.endsWith(rawCue)) return text
+  return text.slice(0, -rawCue.length).trim()
+}
+
 function detectUserMood(text: string): string {
   if (/累|疲惫|困|没精神|撑不住|倦/.test(text)) return "疲惫"
   if (/不要|别|不想|不喜欢|太影响|影响观感|先不|别.*问|不要.*确认/.test(text)) return "明确边界"
+  if (/(紧张|害羞)/.test(text) && /(喜欢|表白|告白)/.test(text)) return "害羞"
   if (/焦虑|压力|烦|崩|紧张|担心|慌/.test(text)) return "焦虑"
   if (/难过|伤心|委屈|失落|想哭/.test(text)) return "低落"
   if (/开心|高兴|舒服|喜欢|好耶|太好了/.test(text)) return "开心"
@@ -83,34 +95,41 @@ function deriveSignal(userText: string, userMood: string): {
   if (userMood === "疲惫") {
     return {
       relationshipSignal: "用户显露疲惫状态，更需要低压力陪伴和短回应。",
-      nextCareCue: "下次回应提示：少安排、少追问，语气放慢，先接住状态。",
+      nextCareCue: "少安排、少追问，语气放慢，先接住状态。",
+    }
+  }
+
+  if (userMood === "害羞") {
+    return {
+      relationshipSignal: "用户在亲密表达中有些害羞或紧张，更适合轻松接住，不要问题解决化。",
+      nextCareCue: "轻松回应这份害羞或紧张，不要把亲密表达当作需要解决的问题。",
     }
   }
 
   if (userMood === "焦虑") {
     return {
       relationshipSignal: "用户可能处在压力或焦虑里，需要稳定感和清晰的小步建议。",
-      nextCareCue: "下次回应提示：先安抚，再给一两个可执行小步，不要铺太大。",
+      nextCareCue: "先安抚，再给一两个可执行小步，不要铺太大。",
     }
   }
 
   if (userMood === "低落") {
     return {
       relationshipSignal: "用户情绪偏低，需要被理解和陪着，而不是立刻被纠正。",
-      nextCareCue: "下次回应提示：先承认感受，再轻轻陪伴，不要急着总结道理。",
+      nextCareCue: "先承认感受，再轻轻陪伴，不要急着总结道理。",
     }
   }
 
   if (userMood === "开心") {
     return {
       relationshipSignal: "用户反馈偏积极，可以保持轻快互动并记住触发愉快的点。",
-      nextCareCue: "下次回应提示：可以更轻松一点，延续用户的好状态。",
+      nextCareCue: "可以更轻松一点，延续用户的好状态。",
     }
   }
 
   return {
     relationshipSignal: "本轮互动没有明显情绪峰值，保持自然陪伴即可。",
-    nextCareCue: `下次回应提示：延续最近话题「${compact(userText, 40)}」，不要过度解读。`,
+    nextCareCue: `延续最近话题「${compact(userText, 40)}」，不要过度解读。`,
   }
 }
 
@@ -141,7 +160,6 @@ function summarizeDate(date: string, entries: RelationshipLogEntry[]): Relations
   const parts = [
     `${date}：用户最近状态偏「${dominantMood}」。`,
     important ? `重要偏好：${important}` : signal,
-    cue,
   ]
   return {
     date,
@@ -196,9 +214,10 @@ export class RelationshipLogStore {
     if (recent.length === 0) return ""
 
     const lastMood = [...recent].reverse().find((e) => e.userMood !== "未知")?.userMood ?? "平稳"
-    const latestSummary = data.dailySummaries.at(-1)?.summary
+    const latestDailySummary = data.dailySummaries.at(-1)
+    const latestSummary = summaryWithoutCareCue(latestDailySummary?.summary, latestDailySummary?.nextCareCue)
     const preference = [...recent].reverse().find((e) => e.importantMoment)?.importantMoment
-    const cues = [...new Set(recent.map((e) => e.nextCareCue).filter(Boolean))].slice(-3)
+    const latestCue = normalizeCareCue(recent.at(-1)?.nextCareCue ?? latestDailySummary?.nextCareCue)
 
     const lines = [
       "【近期关系线索】",
@@ -206,7 +225,7 @@ export class RelationshipLogStore {
     ]
     if (latestSummary) lines.push(`- 最近日记摘要：${latestSummary}`)
     if (preference) lines.push(`- 重要互动偏好：${preference}`)
-    if (cues.length > 0) lines.push(`- 下次回应提示：${cues.join("；")}`)
+    if (latestCue) lines.push(`- 当前回应参考：${latestCue}`)
     return lines.join("\n")
   }
 }
