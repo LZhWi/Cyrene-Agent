@@ -44,7 +44,12 @@ export function buildCodeGitReviewSnapshot(input: {
     const candidate = normalizePath(file.path);
     return [...targets].some((target) => target === candidate || target.endsWith(`/${candidate}`));
   });
-  const files = filesWithStats.map(({ path, kind }) => ({ path, kind }));
+  const files = filesWithStats.map(({ path, kind, insertions, deletions }) => ({
+    path,
+    kind,
+    insertions,
+    deletions,
+  }));
   if (files.length === 0) return undefined;
 
   return {

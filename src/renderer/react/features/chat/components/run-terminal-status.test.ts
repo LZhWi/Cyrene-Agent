@@ -12,12 +12,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import {
-  resolveRunFinishedStage,
-  isFormalAnswerCommitted,
-  resolveTerminalContent,
-  shouldClearComposerInteractionForTerminal,
-} from "./run-presentation";
+import { resolveRunFinishedStage, resolveTerminalContent } from "./run-presentation";
 
 describe("resolveRunFinishedStage (Task 3 renderer)", () => {
   it("maps success → completed", () => {
@@ -52,9 +47,9 @@ describe("resolveTerminalContent (Task 3 renderer)", () => {
     expect(resolveTerminalContent("部分回复", "success")).toBe("部分回复");
   });
 
-  it("does not fabricate a formal answer for an empty successful run", () => {
-    expect(resolveTerminalContent("", "success")).toBe("");
-    expect(resolveTerminalContent("   ", "success")).toBe("");
+  it("defaults to '任务已完成。' for success when streamContent is empty", () => {
+    expect(resolveTerminalContent("", "success")).toBe("任务已完成。");
+    expect(resolveTerminalContent("   ", "success")).toBe("任务已完成。");
   });
 
   it("preserves partial streamContent for cancelled (no '任务已完成。' fallback)", () => {
@@ -73,29 +68,5 @@ describe("resolveTerminalContent (Task 3 renderer)", () => {
   it("returns empty string for timeout when no partial content (NOT '任务已完成。')", () => {
     expect(resolveTerminalContent("", "timeout")).toBe("");
     expect(resolveTerminalContent("   ", "timeout")).toBe("");
-  });
-});
-
-describe("formal answer commit", () => {
-  it("commits only a completed non-empty final message from a successful run", () => {
-    expect(isFormalAnswerCommitted("完整回答", "success", true)).toBe(true);
-    expect(isFormalAnswerCommitted("完整回答", "success", false)).toBe(false);
-    expect(isFormalAnswerCommitted("完整回答", "cancelled", true)).toBe(false);
-    expect(isFormalAnswerCommitted("", "success", true)).toBe(false);
-  });
-});
-
-describe("shouldClearComposerInteractionForTerminal", () => {
-  it("clears the pending interaction for the run that reached terminal", () => {
-    expect(shouldClearComposerInteractionForTerminal("run-1", "run-1")).toBe(true);
-  });
-
-  it("does not let a stale terminal clear a newer run's interaction", () => {
-    expect(shouldClearComposerInteractionForTerminal("run-new", "run-old")).toBe(false);
-  });
-
-  it("keeps backward compatibility when either side has no runId", () => {
-    expect(shouldClearComposerInteractionForTerminal(undefined, "run-1")).toBe(true);
-    expect(shouldClearComposerInteractionForTerminal("run-1", undefined)).toBe(true);
   });
 });

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ChatSession } from "../../shared/chat-types";
 import type { ResolvedGitExecutable } from "./git-executable";
-import { createGitService, type GitClient, type GitStatusSnapshot } from "./git-service";
+import { createGitService, readGitErrorStdout, type GitClient, type GitStatusSnapshot } from "./git-service";
 
 const executable: ResolvedGitExecutable = {
   command: "git",
@@ -124,6 +124,12 @@ describe("GitService.getStatusForSession", () => {
 });
 
 describe("GitService.getDiffForSession", () => {
+  it("extracts the normal untracked-file patch from simple-git's nested response", () => {
+    const patch = "diff --git a/new.ts b/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/new.ts\n@@ -0,0 +1 @@\n+export const answer = 42;\n";
+
+    expect(readGitErrorStdout({ git: { stdout: patch } })).toBe(patch);
+  });
+
   it("rejects a parent traversal path before executing Git", async () => {
     const result = await service({}).getDiffForSession("session-1", "..\\secret.txt");
 

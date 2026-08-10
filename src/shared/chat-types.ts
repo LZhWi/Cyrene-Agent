@@ -42,7 +42,12 @@ export interface ToolExecutionRecord {
 
 export interface CodeGitReviewSnapshot {
   sessionId: string;
-  files: Array<{ path: string; kind: "added" | "modified" | "deleted" | "renamed" | "conflicted" }>;
+  files: Array<{
+    path: string;
+    kind: "added" | "modified" | "deleted" | "renamed" | "conflicted";
+    insertions: number;
+    deletions: number;
+  }>;
   insertions: number;
   deletions: number;
   capturedAt: number;

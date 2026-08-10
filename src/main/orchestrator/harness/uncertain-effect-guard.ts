@@ -15,44 +15,7 @@
  * 把 obligation + final gate 移除，只保留本文件的副作用拦截。
  */
 
-import type { AgentState, SideEffectKind, UncertainEffect } from "./types";
-
-export type UncertainEffectDecision =
-  | { allowed: true }
-  | { allowed: false; effect: UncertainEffect; message: string };
-
-export function evaluateUncertainEffect(
-  state: AgentState,
-  fingerprint: string,
-  sideEffect: SideEffectKind,
-): UncertainEffectDecision {
-  if (sideEffect !== "non_idempotent_side_effect") return { allowed: true };
-  const effect = state.uncertainEffects.find((candidate) => candidate.fingerprint === fingerprint);
-  if (!effect) return { allowed: true };
-  if (effect.repeatAuthorization?.source === "user") {
-    state.uncertainEffects = state.uncertainEffects.filter((candidate) => candidate.id !== effect.id);
-    return { allowed: true };
-  }
-  return {
-    allowed: false,
-    effect,
-    message:
-      `前一次 ${effect.toolName}（tool call ${effect.toolCallId}）的结果尚无法确认。` +
-      `直接再次执行可能重复副作用。effectId=${effect.id}。` +
-      "请先查证、请求用户明确确认，或诚实结束。",
-  };
-}
-
-export function authorizeUncertainEffectRepeat(
-  state: AgentState,
-  effectId: string,
-  grantedAt = Date.now(),
-): boolean {
-  const effect = state.uncertainEffects.find((candidate) => candidate.id === effectId);
-  if (!effect) return false;
-  effect.repeatAuthorization = { source: "user", grantedAt };
-  return true;
-}
+import type { AgentState } from "./types";
 
 /**
  * 检查某工具调用是否被 uncertainEffects 拦截（相同 fingerprint）。
@@ -65,7 +28,7 @@ export function isBlockedByUncertainEffect(
   state: AgentState,
   fingerprint: string,
 ): boolean {
-  return !evaluateUncertainEffect(state, fingerprint, "non_idempotent_side_effect").allowed;
+  return state.uncertainEffects.some((effect) => effect.fingerprint === fingerprint);
 }
 
 /**

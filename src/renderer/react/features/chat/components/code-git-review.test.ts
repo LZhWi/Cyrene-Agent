@@ -20,7 +20,11 @@ describe("Code Git review snapshot", () => {
       ], 8),
       tools: [{ id: "1", name: "apply_patch", status: "success", argsText: '{"file_path":"src/a.ts"}' }],
       capturedAt: 10,
-    })).toMatchObject({ files: [{ path: "src/a.ts" }], insertions: 8, deletions: 1 });
+    })).toMatchObject({
+      files: [{ path: "src/a.ts", insertions: 8, deletions: 1 }],
+      insertions: 8,
+      deletions: 1,
+    });
   });
 
   it("does not create a review for commit/status tools or an unchanged Git snapshot", () => {

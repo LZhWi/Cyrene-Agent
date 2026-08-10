@@ -15,17 +15,11 @@ import type { ToolCallResult } from "../types";
 import type { AgentState, HarnessEvent, ToolObservation } from "./types";
 import { parseToolCallArgs, toolCallFingerprint } from "./types";
 import { isHarnessBuiltin } from "./builtin-tools";
-import {
-  executeUpdateTodo,
-  executeAskUser,
-  executeConfirmUncertainEffect,
-} from "./builtin-tools";
+import { executeUpdateTodo, executeAskUser } from "./builtin-tools";
 import { resolveSideEffect } from "./side-effect-resolver";
-import { evaluateUncertainEffect } from "./uncertain-effect-guard";
+import { isBlockedByUncertainEffect } from "./uncertain-effect-guard";
 import { ExecutionLedger } from "../execution-ledger";
 import type { ToolExecutionOutcome } from "../types";
-import { executeToolDefinition } from "../tool-executor";
-import { classifyToolResultError } from "./error-classifier";
 
 // ── 工具输出截断（v3 §5.7）───────────────────────────────
 
@@ -102,6 +96,18 @@ export async function dispatchToolCall(
   const args = parseToolCallArgs(call);
   const tool = ctx.tools.find((t) => t.id === call.name);
 
+  // fingerprint 拦截（v3 §5.5.1.1）
+  const fingerprint = toolCallFingerprint(call.name, args);
+  if (isBlockedByUncertainEffect(ctx.state, fingerprint)) {
+    return {
+      outcome: "failure",
+      category: "runtime_safety",
+      tool: call.name,
+      message:
+        "该副作用已有一次未确认结果，在 reconcile 或 ask 用户前不能重复执行",
+    };
+  }
+
   // 工具不存在
   if (!tool) {
     return {
@@ -109,20 +115,6 @@ export async function dispatchToolCall(
       category: "not_found",
       tool: call.name,
       message: `工具 "${call.name}" 未注册`,
-    };
-  }
-
-  const sideEffect = resolveSideEffect(tool, args);
-  const fingerprint = toolCallFingerprint(call.name, args);
-  const uncertainDecision = evaluateUncertainEffect(ctx.state, fingerprint, sideEffect);
-  if (!uncertainDecision.allowed) {
-    return {
-      outcome: "not_executed",
-      category: "runtime_safety",
-      toolSideEffect: sideEffect,
-      tool: call.name,
-      message: uncertainDecision.message,
-      suggestion: "查证前一次结果、请求用户明确确认，或诚实结束",
     };
   }
 
@@ -147,68 +139,129 @@ export async function dispatchToolCall(
     args,
   });
 
-  let execution: ToolExecutionOutcome;
-  let deduplicated = false;
+  let result: ToolCallResult | undefined;
   // 提取 targetRefs 从 args（path / file / url / id 等常见字段）
   const targetRefs = args.path !== undefined ? [String(args.path)]
     : args.file !== undefined ? [String(args.file)]
     : args.url !== undefined ? [String(args.url)]
     : [];
 
-  const runTool = () => executeToolDefinition(tool, args, ctx.toolContext);
-
-  // ExecutionLedger 只 replay 同一个 logical invocation 的终态成功事实。
+  // ExecutionLedger 命中 → 直接返回缓存的终态成功结果
   if (ctx.executionLedger) {
-    const ledgerResult = await ctx.executionLedger.execute({
-      logicalInvocationId: `${ctx.toolContext?.runId ?? "unknown-run"}:${call.id}`,
-      capability: tool.id,
-      targetRefs,
-      args,
-    }, runTool);
-    execution = ledgerResult.outcome;
-    deduplicated = ledgerResult.cached;
-  } else {
-    execution = await runTool();
+    try {
+      const ledgerRun = async (): Promise<ToolExecutionOutcome> => {
+        const run = await (async (): Promise<ToolCallResult> => {
+          try {
+            const output = await tool.execute(args, ctx.toolContext);
+            return {
+              toolId: tool.id,
+              args,
+              output,
+              status: "succeeded",
+              terminal: true,
+              retryable: false,
+            };
+          } catch (err) {
+            const errorMsg = err instanceof Error ? err.message : String(err);
+            return {
+              toolId: tool.id,
+              args,
+              output: errorMsg,
+              status: "failed",
+              errorCode: "TOOL_EXECUTION_ERROR",
+              terminal: true,
+              retryable: false,
+            };
+          }
+        })();
+        return {
+          status: run.status === "succeeded" ? "succeeded" : "failed",
+          output: run.output,
+          terminal: run.terminal,
+          retryable: run.retryable,
+          errorCode: run.errorCode,
+        };
+      };
+
+      const ledgerResult = await ctx.executionLedger.execute(
+        { capability: tool.id, targetRefs, args },
+        ledgerRun,
+      );
+
+      if (ledgerResult.cached) {
+        // 命中缓存：构造 cached observation
+        const cached = ledgerResult.outcome;
+        const cachedPreview = (cached.output ?? "").toString().slice(0, 200);
+        ctx.onEvent?.({
+          type: "tool_end",
+          toolCallId: call.id,
+          outcome: cached.status === "succeeded" ? "success" : "failure",
+          preview: `[cached] ${cachedPreview}`,
+        });
+        return {
+          outcome: cached.status === "succeeded" ? "success" : "failure",
+          tool: call.name,
+          target: targetRefs[0],
+          message: cached.output ?? "(cached)",
+          output: cached.output,
+          truncated: false,
+          fullOutputRef: undefined,
+        };
+      }
+
+      // 未命中：把 ledger 跑出来的结果赋给 result
+      result = ledgerResult.outcome.status === "succeeded"
+        ? {
+            toolId: tool.id,
+            args,
+            output: ledgerResult.outcome.output,
+            status: "succeeded",
+            terminal: ledgerResult.outcome.terminal,
+            retryable: ledgerResult.outcome.retryable,
+          }
+        : {
+            toolId: tool.id,
+            args,
+            output: ledgerResult.outcome.output ?? "(no output)",
+            status: "failed",
+            errorCode: ledgerResult.outcome.errorCode ?? "TOOL_EXECUTION_ERROR",
+            terminal: ledgerResult.outcome.terminal,
+            retryable: ledgerResult.outcome.retryable,
+          };
+    } catch {
+      // ledger 自身出错(不太可能) → 退回到下面直接执行,result 仍是 ToolCallResult | undefined
+    }
   }
 
-  const result: ToolCallResult = {
-    toolId: tool.id,
-    args,
-    output: execution.output,
-    status: execution.status,
-    errorCode: execution.errorCode,
-    category: execution.category,
-    effectState: execution.effectState,
-    terminal: execution.terminal,
-    retryable: execution.retryable,
-    ...(deduplicated ? { deduplicated: true } : {}),
-  };
-
-  const category = result.status === "failed"
-    ? result.category ?? classifyToolResultError(result)
-    : undefined;
-  const observationOutcome: ToolObservation["outcome"] = result.status === "succeeded"
-    ? "success"
-    : sideEffect === "non_idempotent_side_effect"
-      && (result.effectState === "unknown" || category === "timeout")
-      ? "unknown"
-      : "failure";
-
-  if (observationOutcome === "unknown") {
-    const effectId = `${ctx.toolContext?.runId ?? "unknown-run"}:${call.id}`;
-    if (!ctx.state.uncertainEffects.some((effect) => effect.id === effectId)) {
-      ctx.state.uncertainEffects.push({
-        id: effectId,
-        toolCallId: call.id,
-        fingerprint,
-        toolName: call.name,
-        message: result.output,
-      });
+  // 如果 ledger 路径已填 result,跳过下面的直接执行
+  if (!result) {
+    try {
+      const output = await tool.execute(args, ctx.toolContext);
+      result = {
+        toolId: tool.id,
+        args,
+        output,
+        status: "succeeded",
+        terminal: true,
+        retryable: false,
+      };
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      result = {
+        toolId: tool.id,
+        args,
+        output: errorMsg,
+        status: "failed",
+        errorCode: "TOOL_EXECUTION_ERROR",
+        terminal: true,
+        retryable: false,
+      };
     }
   }
 
   // 截断输出（v3 §5.7）
   const truncationConfig = ctx.truncation ?? DEFAULT_TRUNCATION;
+  const sideEffect = resolveSideEffect(tool, args);
   const { preview, truncated, fullOutputRef } = truncateOutput(
     result.output,
     truncationConfig,
@@ -218,17 +271,19 @@ export async function dispatchToolCall(
   ctx.onEvent?.({
     type: "tool_end",
     toolCallId: call.id,
-    outcome: observationOutcome === "success" ? "success" : "failure",
-    preview: `${deduplicated ? "[replayed] " : ""}${preview.slice(0, 200)}`,
+    outcome: result.status === "succeeded" ? "success" : "failure",
+    preview: preview.slice(0, 200),
   });
 
+  // 构造 observation
+  const outcome: ToolObservation["outcome"] =
+    result.status === "succeeded" ? "success" : "failure";
+
   return {
-    outcome: observationOutcome,
-    category,
-    toolSideEffect: sideEffect,
+    outcome,
     tool: call.name,
     target: (args.path as string | undefined) ?? (args.command as string | undefined) ?? (args.query as string | undefined),
-    message: `${deduplicated ? "[replayed] " : ""}${preview}`,
+    message: preview,
     output: result.output,
     truncated,
     preview,
@@ -249,9 +304,6 @@ async function executeHarnessBuiltin(
 
     case "ask_user":
       return executeAskUser(call, ctx.requestUserClarification, ctx.onEvent);
-
-    case "confirm_uncertain_effect":
-      return executeConfirmUncertainEffect(call, ctx.state, ctx.requestUserClarification);
 
     default:
       return {

@@ -12,6 +12,18 @@ import type { ResolvedGitExecutable } from "./git-executable";
 
 const MAX_DIFF_BYTES = 2 * 1024 * 1024;
 
+/**
+ * `git diff --no-index` uses exit code 1 when it successfully finds a diff.
+ * simple-git keeps that command's stdout in `error.git.stdout`.
+ */
+export function readGitErrorStdout(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const direct = (error as { stdout?: unknown }).stdout;
+  if (typeof direct === "string") return direct;
+  const nested = (error as { git?: { stdout?: unknown } }).git?.stdout;
+  return typeof nested === "string" ? nested : undefined;
+}
+
 export interface GitStatusFile {
   path: string;
   fromPath?: string;
@@ -273,9 +285,7 @@ function createSimpleGitClient(input: { workspaceRoot: string; executable: Resol
           deletions += fileDeletions;
           byPath[file.path] = { insertions: fileInsertions, deletions: fileDeletions };
         } catch (error) {
-          const output = typeof error === "object" && error && "stdout" in error
-            ? (error as { stdout?: unknown }).stdout
-            : undefined;
+          const output = readGitErrorStdout(error);
           if (typeof output === "string") {
             const [added, removed] = output.trim().split(/\s+/);
             const fileInsertions = /^\d+$/.test(added) ? Number(added) : 0;
@@ -293,9 +303,7 @@ function createSimpleGitClient(input: { workspaceRoot: string; executable: Resol
       try {
         return await git.raw(["diff", "--no-index", "--", "/dev/null", relativePath]);
       } catch (error) {
-        const stdout = typeof error === "object" && error && "stdout" in error
-          ? (error as { stdout?: unknown }).stdout
-          : undefined;
+        const stdout = readGitErrorStdout(error);
         if (typeof stdout === "string") return stdout;
         throw error;
       }

@@ -296,6 +296,26 @@
   padding: 8px 0;
 }
 
+.cy-message--git-review {
+  display: flex;
+  justify-content: center;
+}
+
+.cy-message--git-review .ant-bubble-body,
+.cy-message--git-review .ant-bubble-content {
+  width: 100%;
+  max-width: none;
+}
+
+.cy-message--git-review .ant-bubble-content {
+  display: flex;
+  justify-content: center;
+  padding: 8px 0;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+}
+
 .cy-agent-round {
   min-width: 0;
 }

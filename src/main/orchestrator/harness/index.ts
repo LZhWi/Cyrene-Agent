@@ -27,12 +27,9 @@ export { resolveSideEffect } from "./side-effect-resolver";
 export { classifyToolError, classifyToolResultError } from "./error-classifier";
 export { decideRetry, getRetryParams, sleepWithJitter } from "./retry-policy";
 export {
-  authorizeUncertainEffectRepeat,
-  evaluateUncertainEffect,
   isBlockedByUncertainEffect,
   resolveUncertainEffect,
 } from "./uncertain-effect-guard";
-export type { UncertainEffectDecision } from "./uncertain-effect-guard";
 export { computeTokenBudget, findSafeCutPoint, compressForAgentLoop } from "./compaction";
 export { StreamController } from "./stream-controller";
 export { TimeoutClock } from "./timeout-clock";

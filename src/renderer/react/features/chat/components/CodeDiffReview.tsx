@@ -1,9 +1,12 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { XMarkdown } from "@ant-design/x-markdown";
-import { Diff, Hunk, type ViewType } from "react-diff-view";
+import { Diff, Hunk, tokenize, type FileData, type ViewType } from "react-diff-view";
 import type { CodeGitDiffResult } from "../../../../../shared/code-git-types";
+import { languageForCodeDiffPath } from "./code-diff-language";
+import { refractor } from "./code-diff-refractor";
 import { buildCodeDiffViewModel } from "./code-diff-view-model";
 import "react-diff-view/style/index.css";
+import "prism-color-variables/variables.css";
 import "./CodeDiffReview.css";
 
 interface CodeGitApi { getDiff(sessionId: string, path: string): Promise<CodeGitDiffResult> }
@@ -15,6 +18,23 @@ function codeGitApi(): CodeGitApi | undefined {
 
 function Notice({ children }: { children: string }) {
   return <div className="cy-code-diff-review__notice"><XMarkdown content={children} /></div>;
+}
+
+function HighlightedDiffFile({ file, viewType }: { file: FileData; viewType: ViewType }) {
+  const language = languageForCodeDiffPath(file.newPath || file.oldPath || "");
+  const tokens = useMemo(() => language === "none" ? null : tokenize(file.hunks, {
+    highlight: true,
+    refractor,
+    language,
+  }), [file.hunks, language]);
+
+  return (
+    <section className="cy-code-diff-review__file">
+      <Diff diffType={file.type} hunks={file.hunks} tokens={tokens} viewType={viewType}>
+        {(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}
+      </Diff>
+    </section>
+  );
 }
 
 export function CodeDiffReview({ sessionId, path, open, onClose }: CodeDiffReviewProps) {
@@ -53,9 +73,7 @@ export function CodeDiffReview({ sessionId, path, open, onClose }: CodeDiffRevie
         {model?.kind === "error" && <Notice>{model.message}</Notice>}
         {model?.kind === "ready" && model.files.length === 0 && <Notice>当前 Git 工作区已经没有这个文件的可显示差异；它可能已被提交或变更。</Notice>}
         {model?.kind === "ready" && model.files.map((file, index) => (
-          <section key={`${file.oldPath}-${file.newPath}-${index}`} className="cy-code-diff-review__file">
-            <Diff diffType={file.type} hunks={file.hunks} viewType={viewType}>{(hunks) => hunks.map((hunk) => <Hunk key={hunk.content} hunk={hunk} />)}</Diff>
-          </section>
+          <HighlightedDiffFile key={`${file.oldPath}-${file.newPath}-${index}`} file={file} viewType={viewType} />
         ))}
       </div>
     </aside>

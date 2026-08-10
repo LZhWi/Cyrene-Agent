@@ -20,8 +20,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ── Hoisted mocks ──────────────────────────────────────
 
-const { fakeAdapter, fakeStreamChatWithSdk } = vi.hoisted(() => {
-  const adapter = {
+const { fakeAdapter } = vi.hoisted(() => ({
+  fakeAdapter: {
     id: "fake",
     buildRequest: (req: unknown) => ({
       url: "https://fake.local/chat",
@@ -30,29 +30,11 @@ const { fakeAdapter, fakeStreamChatWithSdk } = vi.hoisted(() => {
       body: JSON.stringify(req),
     }),
     parseResponse: (raw: unknown) => raw,
-  };
-  return {
-    fakeAdapter: adapter,
-    fakeStreamChatWithSdk: vi.fn(async (input: {
-      adapter: typeof adapter;
-      request: unknown;
-      signal?: AbortSignal;
-    }) => {
-      const http = input.adapter.buildRequest(input.request);
-      const response = await fetch(http.url, {
-        method: "POST",
-        headers: http.headers,
-        body: http.body,
-        signal: input.signal,
-      });
-      return input.adapter.parseResponse(await response.json());
-    }),
-  };
-});
+  },
+}));
 
 vi.mock("../vendors", () => ({
   getAdapterForConfig: vi.fn(() => fakeAdapter),
-  streamChatWithSdk: fakeStreamChatWithSdk,
 }));
 
 vi.mock("./tool-dispatcher", () => ({
@@ -405,7 +387,6 @@ describe("CyreneHarness cancellation propagation (Task 3 / C2)", () => {
     // checkPermission 返回永不 resolve 的 Promise（模拟用户未响应）
     let resolvePermission: (allowed: boolean) => void = () => {};
     const permissionPromise = new Promise<boolean>((resolve) => { resolvePermission = resolve; });
-    mockedDispatch.mockReturnValue(permissionPromise as unknown as Promise<ToolDispatchResult>);
 
     const promise = runCyreneHarness({
       systemPrompt: "test",
@@ -443,7 +424,6 @@ describe("CyreneHarness cancellation propagation (Task 3 / C2)", () => {
     // requestUserClarification 返回永不 resolve 的 Promise（模拟用户未回答）
     let resolveAsk: (val: unknown) => void = () => {};
     const askPromise = new Promise<unknown>((resolve) => { resolveAsk = resolve; });
-    mockedDispatch.mockReturnValue(askPromise as Promise<ToolDispatchResult>);
 
     const askToolCall: ToolCall = {
       id: "call-ask",
@@ -551,46 +531,5 @@ describe("CyreneHarness cancellation propagation (Task 3 / C2)", () => {
     // 核心不变量：cancelled 路径不生成 "最终回复被取消。"
     expect(result.finalAnswer).not.toContain("最终回复被取消");
     expect(result.finalAnswer).toBe("");
-  });
-
-  it("does not misclassify a non-abort tool failure as cancelled", async () => {
-    const fetchMock = deferredFetch();
-    vi.stubGlobal("fetch", fetchMock.fn);
-    mockedDispatch.mockRejectedValueOnce(new Error("dispatcher exploded"));
-
-    const promise = runCyreneHarness({
-      systemPrompt: "test",
-      messages: [{ role: "user", content: "do work" }],
-      tools: [readTool()],
-      vendorConfig,
-      signal: new AbortController().signal,
-    });
-
-    fetchMock.nextResolve(assistantResponse({ toolCalls: [mutationToolCall("call-1")] }));
-    await expect(promise).rejects.toThrow("dispatcher exploded");
-  });
-
-  it("does not misclassify a non-abort ask_user failure as cancelled", async () => {
-    const fetchMock = deferredFetch();
-    vi.stubGlobal("fetch", fetchMock.fn);
-    mockedDispatch.mockRejectedValueOnce(new Error("ask channel failed"));
-
-    const promise = runCyreneHarness({
-      systemPrompt: "test",
-      messages: [{ role: "user", content: "do work" }],
-      tools: [],
-      vendorConfig,
-      signal: new AbortController().signal,
-      requestUserClarification: vi.fn(),
-    });
-
-    fetchMock.nextResolve(assistantResponse({
-      toolCalls: [{
-        id: "call-ask",
-        name: "ask_user",
-        arguments: JSON.stringify({ question: "选择？" }),
-      }],
-    }));
-    await expect(promise).rejects.toThrow("ask channel failed");
   });
 });
