@@ -3,7 +3,7 @@ import { XMarkdown, type ComponentProps } from "@ant-design/x-markdown";
 import Latex from "@ant-design/x-markdown/plugins/Latex";
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
-import type { AgentRoundRecord, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
+import type { AgentRoundRecord, CodeGitReviewSnapshot, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import thinkingMoodUrl from "../../../assets/status-moods/思考中.png?url";
 import completedThinkingMoodUrl from "../../../assets/status-moods/提醒.png?url";
 import workingMoodUrl from "../../../assets/status-moods/工作中.png?url";
@@ -28,6 +28,7 @@ import { extractMessageStickerId, stripMessageStickerMarkers } from "./message-s
 import type { WeatherData } from "./weather/weather-types";
 import { WeatherCard } from "./weather/WeatherCard";
 import { resolveAgentRoundTitle } from "./agent-rounds";
+import { CodeGitReviewSummary } from "./CodeGitReviewSummary";
 
 export interface ChatMessageItem {
   id: string;
@@ -52,6 +53,7 @@ export interface ChatMessageItem {
   taskPlan?: TaskPlanPresentation;
   attachments?: ChatMessageAttachment[];
   weather?: WeatherData;
+  gitReview?: CodeGitReviewSnapshot;
 }
 
 export interface ChatMessageAttachment {
@@ -78,6 +80,7 @@ interface ChatMessageListProps {
   onRegenerateLastResponse?: (userMessageId: string, assistantMessageId: string) => Promise<boolean>;
   onScrollToBottomVisibilityChange?: (visible: boolean) => void;
   onRegisterScrollToBottom?: (scroll: () => void) => void;
+  onOpenCodeReview?: (path: string) => void;
 }
 
 const markdownConfig = { extensions: Latex() };
@@ -608,6 +611,7 @@ function createRoles(
   reasoningExpanded: Readonly<Record<string, boolean>>,
   onReasoningExpand: (id: string, expanded: boolean) => void,
   onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void,
+  onOpenCodeReview?: (path: string) => void,
 ) {
   return {
   user: {
@@ -763,6 +767,17 @@ function createRoles(
       info.extraInfo?.weather ? <WeatherCard data={info.extraInfo.weather} /> : null
     ),
   },
+  gitReview: {
+    placement: "start" as const,
+    variant: "borderless" as const,
+    avatar: null,
+    rootClassName: "cy-message cy-message--git-review",
+    contentRender: (_content: string, info: { extraInfo?: { gitReview?: CodeGitReviewSnapshot } }) => (
+      info.extraInfo?.gitReview && onOpenCodeReview
+        ? <CodeGitReviewSummary snapshot={info.extraInfo.gitReview} onOpen={onOpenCodeReview} />
+        : null
+    ),
+  },
   system: {
     placement: "start" as const,
     variant: "borderless" as const,
@@ -862,6 +877,14 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
         },
       });
     }
+    if (message.gitReview) {
+      assistantItems.push({
+        key: `${message.id}-git-review`,
+        role: "gitReview",
+        content: "",
+        extraInfo: { gitReview: message.gitReview },
+      });
+    }
     return assistantItems;
   });
 }
@@ -878,6 +901,7 @@ export function ChatMessageList({
   onRegenerateLastResponse,
   onScrollToBottomVisibilityChange,
   onRegisterScrollToBottom,
+  onOpenCodeReview,
 }: ChatMessageListProps) {
   const userAvatarUrl = useUserAvatar();
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
@@ -961,8 +985,9 @@ export function ChatMessageList({
       reasoningExpanded,
       onReasoningExpand,
       onTtsCacheKey,
+      onOpenCodeReview,
     ),
-    [beginEdit, cancelEdit, conversationId, editDraft, editingMessageId, lastTurn, mode, onReasoningExpand, onTtsCacheKey, preferredAddress, reasoningExpanded, regenerate, revisionBusy, submitEdit, userAvatarUrl],
+    [beginEdit, cancelEdit, conversationId, editDraft, editingMessageId, lastTurn, mode, onOpenCodeReview, onReasoningExpand, onTtsCacheKey, preferredAddress, reasoningExpanded, regenerate, revisionBusy, submitEdit, userAvatarUrl],
   );
 
   useEffect(() => {

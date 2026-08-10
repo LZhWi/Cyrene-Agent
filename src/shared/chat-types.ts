@@ -40,6 +40,14 @@ export interface ToolExecutionRecord {
   roundId?: string;
 }
 
+export interface CodeGitReviewSnapshot {
+  sessionId: string;
+  files: Array<{ path: string; kind: "added" | "modified" | "deleted" | "renamed" | "conflicted" }>;
+  insertions: number;
+  deletions: number;
+  capturedAt: number;
+}
+
 /** 一次 assistant run 的可恢复展示指标。 */
 export interface RunActivityRecord {
   /** Renderer 收到 RUN_STARTED 时的时间戳。 */
@@ -97,6 +105,8 @@ export interface ChatMessage {
   sticker?: string | null;
   /** 工具调用过程；与模型推理 reasoning 分开保存和展示。 */
   toolExecutions?: ToolExecutionRecord[];
+  /** 本轮 Code run 实际留下的可审阅 Git 变更摘要。 */
+  gitReview?: CodeGitReviewSnapshot;
   /** 本轮处理与公开推理的展示指标。 */
   runActivity?: RunActivityRecord;
   /** 活跃 Agent run 的可恢复检查点；非终态快照在重启后只能恢复为 interrupted。 */

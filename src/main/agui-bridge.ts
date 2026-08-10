@@ -465,7 +465,7 @@ export function registerAgUiIpc(
           if (agent.lastResult && isSuccessfulCompletion) {
             const lastResult = agent.lastResult;
             const effects = await perf.track("on_run_finished", async () => onFinished(lastResult, latestUserText, sessionId));
-            if (effects?.sticker !== undefined) {
+            if (mode !== "code" && effects?.sticker !== undefined) {
               send({
                 type: "CUSTOM",
                 name: "cyrene.sticker",

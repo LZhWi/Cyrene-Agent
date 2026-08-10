@@ -18,8 +18,9 @@ vi.mock("antd", () => ({
 vi.mock("./ReasoningControl", () => ({ ReasoningControl: () => null }));
 vi.mock("./StyleControl", () => ({ StyleControl: () => null }));
 vi.mock("./PermissionControl", () => ({ PermissionControl: () => null }));
+vi.mock("../../../../../shared/renderer-base", () => ({ resolveAsset: (path: string) => path }));
 
-import { ChatComposer } from "./ChatComposer";
+import { ChatComposer, parseComposerMessage } from "./ChatComposer";
 
 describe("ChatComposer cancellation", () => {
   beforeEach(() => {
@@ -47,5 +48,44 @@ describe("ChatComposer cancellation", () => {
     }));
 
     expect(senderProps?.onCancel).toBe(onCancel);
+  });
+});
+
+describe("ChatComposer Code sticker policy", () => {
+  const baseProps = {
+    value: "",
+    docked: true,
+    workspaceName: "project",
+    attachments: [],
+    onChange: vi.fn(),
+    onSubmit: vi.fn(),
+    onChooseWorkspace: vi.fn(),
+    onChooseFiles: vi.fn(),
+    onRemoveAttachment: vi.fn(),
+    onScreenshot: vi.fn(),
+    onChooseSticker: vi.fn(),
+  };
+
+  it("hides the sticker picker in Code mode but keeps it in Work mode", () => {
+    renderToStaticMarkup(createElement(ChatComposer, { ...baseProps, mode: "code" }));
+    const codeHtml = renderToStaticMarkup(senderProps?.prefix as React.ReactElement);
+    renderToStaticMarkup(createElement(ChatComposer, { ...baseProps, mode: "work" }));
+    const workHtml = renderToStaticMarkup(senderProps?.prefix as React.ReactElement);
+
+    expect(codeHtml).not.toContain('aria-label="表情包"');
+    expect(workHtml).toContain('aria-label="表情包"');
+  });
+
+  it("strips sticker markers without turning them into a Code message sticker", () => {
+    expect(parseComposerMessage("code", "检查一下 [sticker:playful]")).toEqual({
+      rawContent: "检查一下",
+      visibleContent: "检查一下",
+      userSticker: undefined,
+    });
+    expect(parseComposerMessage("work", "检查一下 [sticker:playful]")).toEqual({
+      rawContent: "检查一下 [sticker:playful]",
+      visibleContent: "检查一下",
+      userSticker: "playful",
+    });
   });
 });

@@ -1,14 +1,7 @@
-.cy-code-diff-review .ant-drawer-body { padding: 14px 18px 24px; background: #17191d; }
-.cy-code-diff-review .ant-drawer-header { background: #1f2228; border-bottom-color: #353940; }
-.cy-code-diff-review .ant-drawer-title { color: #e8eaed; font-family: Consolas, "Cascadia Mono", monospace; font-size: 13px; }
-.cy-code-diff-review .ant-drawer-close { color: #c6cad1; }
-.cy-code-diff-review__view-switch { display: flex; overflow: hidden; border: 1px solid #4b5059; border-radius: 7px; }
-.cy-code-diff-review__view-switch button { border: 0; padding: 3px 8px; color: #c6cad1; background: transparent; cursor: pointer; font-size: 12px; }
-.cy-code-diff-review__view-switch button.is-active { color: #fff; background: #ff5b8a; }
-.cy-code-diff-review__notice { margin: 16px 0; color: #b8bec8; font-size: 13px; }
-.cy-code-diff-review__file { overflow: auto; border: 1px solid #353940; border-radius: 8px; background: #1f2228; }
-.cy-code-diff-review .diff { min-width: max-content; color: #d7dce3; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
-.cy-code-diff-review .diff-gutter { color: #8b949e; background: #1f2228; }
-.cy-code-diff-review .diff-code { background: #1f2228; }
-.cy-code-diff-review .diff-code-delete { background: rgba(248, 81, 73, .18); }
-.cy-code-diff-review .diff-code-insert { background: rgba(63, 185, 80, .18); }
+.cy-code-diff-review { position:absolute; z-index:30; top:50px; right:10px; bottom:10px; width:clamp(360px,44vw,760px); display:flex; flex-direction:column; overflow:hidden; border:1px solid #eadfe3; border-radius:10px; background:#fff; box-shadow:-8px 0 28px rgba(62,39,48,.10); color:#292326; app-region:no-drag; }
+.cy-code-diff-review>header { min-height:54px; display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 13px; border-bottom:1px solid #eee5e8; background:linear-gradient(180deg,#fff,#fffafb); }
+.cy-code-diff-review>header>div:first-child { min-width:0; display:flex; flex-direction:column; gap:2px; }.cy-code-diff-review>header span { color:#ff5b8a; font-size:11px; font-weight:700; }.cy-code-diff-review>header strong { overflow:hidden; font-family:Consolas,"Cascadia Mono",monospace; font-size:12px; white-space:nowrap; text-overflow:ellipsis; }
+.cy-code-diff-review__actions { display:flex; align-items:center; gap:8px; }.cy-code-diff-review__view-switch { display:flex; overflow:hidden; border:1px solid #eadde2; border-radius:8px; }.cy-code-diff-review__view-switch button { padding:4px 9px; border:0; background:#fff; color:#777; cursor:pointer; font-size:11px; }.cy-code-diff-review__view-switch button.is-active { background:#ffedf3; color:#e94f7c; font-weight:600; }
+.cy-code-diff-review__close { width:28px; height:28px; border:0; border-radius:50%; background:transparent; color:#999; cursor:pointer; font-size:20px; }.cy-code-diff-review__close:hover { background:#fff0f5; color:#ff5b8a; }
+.cy-code-diff-review__body { min-height:0; flex:1; padding:12px; overflow:auto; background:#fff; }.cy-code-diff-review__notice { margin:10px 2px; padding:12px 14px; border:1px solid #f0e5e9; border-radius:10px; background:#fff9fb; color:#6e5d64; font-size:12px; }
+.cy-code-diff-review__file { min-width:0; overflow:auto; border:1px solid #eee5e8; border-radius:9px; background:#fff; }.cy-code-diff-review .diff { min-width:max-content; color:#342f31; font-family:Consolas,"Cascadia Mono",monospace; font-size:11px; }.cy-code-diff-review .diff-gutter { color:#9a8e93; background:#faf7f8; }.cy-code-diff-review .diff-code { background:#fff; }.cy-code-diff-review .diff-code-delete { background:#fff0f1; }.cy-code-diff-review .diff-code-insert { background:#eefbf2; }

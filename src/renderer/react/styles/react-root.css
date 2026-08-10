@@ -182,6 +182,11 @@ html, body {
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
+  transition: width 220ms ease;
+}
+
+.cy-workspace.is-review-open {
+  width: calc(100% - clamp(360px, 44vw, 760px) - 10px);
 }
 
 .cy-workspace-composer {

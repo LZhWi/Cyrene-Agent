@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo } from "react";
 import type { TodoState } from "../../../../shared/todo-types";
 import reminderPngUrl from "../../../assets/status-moods/提醒.png?url";
+import { useFloatingCard } from "./floating-card";
 import "./TodoPanel.css";
 
 export interface TodoPanelProps {
@@ -9,8 +10,6 @@ export interface TodoPanelProps {
 }
 
 const DEFAULT_WIDTH = 240;
-const DEFAULT_TOP = 80;
-const DEFAULT_RIGHT = 24;
 
 const MODE_LABELS: Record<TodoPanelProps["mode"], string> = {
   work: "工作",
@@ -62,89 +61,35 @@ function ModeCapsule({ mode }: { mode: TodoPanelProps["mode"] }) {
 }
 
 export function TodoPanel({ state, mode }: TodoPanelProps) {
-  const [collapsed, setCollapsed] = useState(false);
-  const [pos, setPos] = useState({
-    x: typeof window !== "undefined" ? window.innerWidth - DEFAULT_WIDTH - DEFAULT_RIGHT : 0,
-    y: DEFAULT_TOP,
-  });
-  const [isDragging, setIsDragging] = useState(false);
-  const dragRef = useRef<{
-    startX: number;
-    startY: number;
-    initialX: number;
-    initialY: number;
-  } | null>(null);
+  const floating = useFloatingCard({ width: DEFAULT_WIDTH });
 
   const todos = state?.todos ?? [];
   const total = todos.length;
   const completed = useMemo(() => todos.filter((t) => t.status === "completed").length, [todos]);
   const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-  useEffect(() => {
-    const handleMove = (e: MouseEvent) => {
-      if (!dragRef.current) return;
-      const dx = e.clientX - dragRef.current.startX;
-      const dy = e.clientY - dragRef.current.startY;
-      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-        setIsDragging(true);
-      }
-      const maxX = window.innerWidth - DEFAULT_WIDTH;
-      const maxY = window.innerHeight - 48;
-      setPos({
-        x: Math.min(Math.max(0, dragRef.current.initialX + dx), maxX),
-        y: Math.min(Math.max(0, dragRef.current.initialY + dy), maxY),
-      });
-    };
-
-    const handleUp = () => {
-      dragRef.current = null;
-      window.setTimeout(() => setIsDragging(false), 0);
-    };
-
-    window.addEventListener("mousemove", handleMove);
-    window.addEventListener("mouseup", handleUp);
-    return () => {
-      window.removeEventListener("mousemove", handleMove);
-      window.removeEventListener("mouseup", handleUp);
-    };
-  }, []);
-
-  const handleHeaderMouseDown = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest(".cy-todo__toggle")) return;
-    dragRef.current = {
-      startX: e.clientX,
-      startY: e.clientY,
-      initialX: pos.x,
-      initialY: pos.y,
-    };
-  };
-
-  const handleHeaderClick = () => {
-    if (isDragging) return;
-    setCollapsed((c) => !c);
-  };
-
   return (
     <div
-      className={`cy-todo ${collapsed ? "cy-todo--collapsed" : ""}`}
-      style={{ left: pos.x, top: pos.y }}
+      className={`cy-todo ${floating.collapsed ? "cy-todo--collapsed" : ""}`}
+      style={{ left: floating.position.x, top: floating.position.y }}
       role="region"
       aria-label="当前任务"
     >
       <button
         type="button"
         className="cy-todo__dragbar"
-        onMouseDown={handleHeaderMouseDown}
-        onClick={handleHeaderClick}
-        aria-expanded={!collapsed}
+        onMouseDown={floating.onHeaderMouseDown}
+        onClick={floating.onHeaderClick}
+        aria-expanded={!floating.collapsed}
         title="拖动"
       >
         <span className="cy-todo__dragline" />
         <span
           className="cy-todo__toggle"
+          data-floating-toggle
           onClick={(e) => {
             e.stopPropagation();
-            setCollapsed((c) => !c);
+            floating.toggle();
           }}
         >
           <ToggleIcon />

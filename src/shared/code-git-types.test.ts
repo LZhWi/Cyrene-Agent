@@ -19,6 +19,7 @@ describe("emptyCodeGitStatus", () => {
         renamed: 0,
         conflicted: 0,
       },
+      lines: { insertions: 0, deletions: 0 },
       ahead: 0,
       behind: 0,
     });

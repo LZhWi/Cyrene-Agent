@@ -10,6 +10,7 @@ function statusWith(overrides: Partial<CodeGitStatus> = {}): CodeGitStatus {
     branch: { current: "main", detached: false, branches: ["main"] },
     files: [],
     summary: { added: 0, modified: 0, deleted: 0, renamed: 0, conflicted: 0 },
+    lines: { insertions: 0, deletions: 0 },
     ahead: 0,
     behind: 0,
     ...overrides,
@@ -25,7 +26,7 @@ describe("Code Git panel presentation", () => {
 
   it("asks Cyrene to commit before pushing when the workspace is dirty", () => {
     expect(buildGitActionIntent(statusWith({
-      files: [{ path: "src/a.ts", kind: "modified", staged: false, unstaged: true }],
+      files: [{ path: "src/a.ts", kind: "modified", staged: false, unstaged: true, insertions: 1, deletions: 0 }],
       summary: { added: 0, modified: 1, deleted: 0, renamed: 0, conflicted: 0 },
       ahead: 2,
     }))).toEqual({

@@ -15,6 +15,7 @@ function createHarness() {
       branch: { current: "main", detached: false, branches: ["main"] },
       files: [],
       summary: { added: 0, modified: 0, deleted: 0, renamed: 0, conflicted: 0 },
+      lines: { insertions: 0, deletions: 0 },
       ahead: 0,
       behind: 0,
     })),

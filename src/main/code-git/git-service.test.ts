@@ -35,6 +35,7 @@ function client(overrides: Partial<GitClient> = {}): GitClient {
     isRepository: async () => true,
     getStatus: async () => cleanStatus,
     getBranches: async () => ["main"],
+    getLineStats: async () => ({ insertions: 0, deletions: 0, byPath: {} }),
     getTrackedDiff: async () => "",
     getUntrackedDiff: async () => "",
     init: async () => undefined,
@@ -98,6 +99,9 @@ describe("GitService.getStatusForSession", () => {
           ],
         }),
         getBranches: async () => ["main", "feature/review"],
+        getLineStats: async () => ({ insertions: 100, deletions: 23, byPath: {
+          "changed.ts": { insertions: 100, deletions: 23 },
+        } }),
       }),
     }).getStatusForSession("session-1");
 
@@ -107,6 +111,7 @@ describe("GitService.getStatusForSession", () => {
       behind: 1,
       branch: { current: "main", detached: false, branches: ["main", "feature/review"] },
       summary: { added: 1, modified: 1, deleted: 1, renamed: 1, conflicted: 1 },
+      lines: { insertions: 100, deletions: 23 },
     });
     expect(result.files.map((file) => file.kind)).toEqual([
       "added",

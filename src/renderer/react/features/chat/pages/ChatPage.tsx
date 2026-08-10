@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { DownOutlined } from "@ant-design/icons";
-import { ChatComposer, type ComposerAttachment } from "../components/ChatComposer";
+import { ChatComposer, parseComposerMessage, type ComposerAttachment } from "../components/ChatComposer";
 import { ComposerSlot } from "../components/ComposerSlot";
 import { TodoPanel } from "../components/TodoPanel";
 import { CodeGitPanel } from "../components/CodeGitPanel";
 import { CodeDiffReview } from "../components/CodeDiffReview";
 import type { TodoItem } from "../../../../../shared/todo-types";
+import type { CodeGitStatus } from "../../../../../shared/code-git-types";
 import {
   describePermissionRequest,
   normalizeChoiceInteraction,
@@ -20,6 +21,7 @@ import {
 } from "../components/run-presentation";
 import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessageList";
 import { applyAgentRoundBoundary, createRoundProcessMessage } from "../components/agent-rounds";
+import { buildCodeGitReviewSnapshot } from "../components/code-git-review";
 import type { WeatherData } from "../components/weather/weather-types";
 import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
 import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
@@ -351,6 +353,7 @@ function toUiMessages(session: ChatSession): ChatMessageItem[] {
       responseStarted: message.role === "model" && Boolean(message.content.trim() || message.sticker),
       sticker: message.sticker,
       toolExecutions: message.toolExecutions,
+      gitReview: message.gitReview,
       attachments: message.attachments,
     };
     return message.runSnapshot ? recoverInterruptedMessage(item, message.runSnapshot) : item;
@@ -871,6 +874,21 @@ export function ChatPage() {
     let revealChain: Promise<void> = Promise.resolve();
     let sticker: string | null = null;
     let toolExecutions: ToolExecutionRecord[] = [];
+    let gitReview: ChatMessage["gitReview"];
+    const gitStatusBefore: CodeGitStatus | undefined = input.targetMode === "code"
+      ? await window.codeGit?.getStatus(input.sessionId).catch(() => undefined)
+      : undefined;
+    const captureGitReview = async () => {
+      if (input.targetMode !== "code") return;
+      const gitStatusAfter = await window.codeGit?.getStatus(input.sessionId).catch(() => undefined);
+      gitReview = buildCodeGitReviewSnapshot({
+        sessionId: input.sessionId,
+        before: gitStatusBefore,
+        after: gitStatusAfter,
+        tools: toolExecutions,
+        capturedAt: Date.now(),
+      });
+    };
     let runStarted = false;
     let runActivity: RunActivityRecord | undefined;
     let currentTodos: TodoItem[] = [];
@@ -898,6 +916,7 @@ export function ChatPage() {
       at: assistantAt,
       sticker,
       toolExecutions,
+      gitReview,
       runSnapshot: {
         runId: activeRunsBySession.current[input.sessionId]?.runId,
         status,
@@ -1309,6 +1328,7 @@ export function ChatPage() {
       completeRunActivity(!formalAnswerCommitted);
       const finalContent = formalAnswerCommitted ? resolveTerminalContent(streamContent, terminalStatus) : "";
       persistedFinalContent = finalContent;
+      await captureGitReview();
       updateMessage(input.targetMode, input.assistantId, {
         content: finalContent,
         loading: false,
@@ -1323,6 +1343,7 @@ export function ChatPage() {
         responseStarted: formalAnswerCommitted,
         sticker,
         toolExecutions,
+        gitReview,
       });
       const savedAssistant = await checkpointRun("terminal", true);
       if (savedAssistant && formalAnswerCommitted) {
@@ -1351,6 +1372,8 @@ export function ChatPage() {
         responseStarted: false,
       });
       persistedFinalContent = "";
+      await captureGitReview();
+      if (gitReview) updateMessage(input.targetMode, input.assistantId, { gitReview });
       await checkpointRun("terminal", true);
     } finally {
       if (checkpointTimer !== undefined) window.clearTimeout(checkpointTimer);
@@ -1760,13 +1783,13 @@ export function ChatPage() {
   }
 
   async function sendMessage(content: string) {
-    const message = content.trim();
+    const parsedMessage = parseComposerMessage(mode, content);
+    const message = parsedMessage.rawContent;
     if (!message) return;
     activeEarlyTtsRef.current?.queue.cancel();
     activeEarlyTtsRef.current = null;
-    const stickerMatch = message.match(/\[sticker:([^\]]+)\]/);
-    const userSticker = stickerMatch?.[1];
-    const visibleMessage = message.replace(/\[sticker:[^\]]+\]/g, "").trim();
+    const userSticker = parsedMessage.userSticker;
+    const visibleMessage = parsedMessage.visibleContent;
     const demoResponse = DEMO_RESPONSES[message];
     const demoSticker = DEMO_STICKERS[message];
     const shouldRunModel = shouldRunModelForMode(mode, Boolean(demoResponse), Boolean(demoSticker));
@@ -1921,16 +1944,17 @@ export function ChatPage() {
   function queueCurrentDraft(value: string) {
     if (!activeSessionId || !value.trim()) return;
     const sessionId = activeSessionId;
-    const stickerMatch = value.match(/\[sticker:([^\]]+)\]/);
-    const userSticker = stickerMatch?.[1];
-    const visibleContent = value.replace(/\[sticker:[^\]]+\]/g, "").trim();
+    const parsedMessage = parseComposerMessage(mode, value);
+    if (!parsedMessage.rawContent) return;
+    const userSticker = parsedMessage.userSticker;
+    const visibleContent = parsedMessage.visibleContent;
     const attachmentsForMessage = attachments.map((attachment) => ({ ...attachment }));
     const userMessageId = crypto.randomUUID();
     const nextQueue = {
       ...pendingQueueBySessionRef.current,
       [sessionId]: [
         ...(pendingQueueBySessionRef.current[sessionId] ?? []),
-        { id: userMessageId, rawContent: value, visibleContent, attachments: attachmentsForMessage, userSticker },
+        { id: userMessageId, rawContent: parsedMessage.rawContent, visibleContent, attachments: attachmentsForMessage, userSticker },
       ],
     };
     pendingQueueBySessionRef.current = nextQueue;
@@ -1989,7 +2013,7 @@ export function ChatPage() {
         />
       </div>
       <main
-        className={`cy-workspace ${hasMessages ? "has-messages" : "is-empty"} ${isDraggingFiles ? "is-dragging-files" : ""}`}
+        className={`cy-workspace ${hasMessages ? "has-messages" : "is-empty"} ${isDraggingFiles ? "is-dragging-files" : ""} ${codeGitReviewPath ? "is-review-open" : ""}`}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -2009,16 +2033,9 @@ export function ChatPage() {
         {mode === "code" && activeSessionId && (
           <CodeGitPanel
             sessionId={activeSessionId}
-            onOpenDiff={setCodeGitReviewPath}
+            projectName={workspaceNames.code}
+            todoState={todoStateBySession[activeSessionId] ?? null}
             onRequestAgentAction={(prompt) => setDrafts((current) => ({ ...current, [scopeKey]: prompt }))}
-          />
-        )}
-        {mode === "code" && activeSessionId && (
-          <CodeDiffReview
-            sessionId={activeSessionId}
-            path={codeGitReviewPath}
-            open={codeGitReviewPath !== null}
-            onClose={() => setCodeGitReviewPath(null)}
           />
         )}
         {hasMessages && (
@@ -2044,6 +2061,7 @@ export function ChatPage() {
             onRegisterScrollToBottom={(scroll) => {
               scrollToBottomRef.current = scroll;
             }}
+            onOpenCodeReview={mode === "code" ? setCodeGitReviewPath : undefined}
           />
         )}
         {isCompressingContext && (
@@ -2136,6 +2154,9 @@ export function ChatPage() {
           />
         </div>
       </main>
+      {mode === "code" && activeSessionId && (
+        <CodeDiffReview sessionId={activeSessionId} path={codeGitReviewPath} open={codeGitReviewPath !== null} onClose={() => setCodeGitReviewPath(null)} />
+      )}
     </div>
   );
 }

@@ -14,6 +14,8 @@ export interface CodeGitFileChange {
   kind: CodeGitChangeKind;
   staged: boolean;
   unstaged: boolean;
+  insertions: number;
+  deletions: number;
 }
 
 export interface CodeGitStatus {
@@ -24,6 +26,7 @@ export interface CodeGitStatus {
   branch: { current: string | null; detached: boolean; branches: string[] } | null;
   files: CodeGitFileChange[];
   summary: Record<CodeGitChangeKind, number>;
+  lines: { insertions: number; deletions: number };
   ahead: number;
   behind: number;
 }
@@ -57,6 +60,7 @@ export function emptyCodeGitStatus(
       renamed: 0,
       conflicted: 0,
     },
+    lines: { insertions: 0, deletions: 0 },
     ahead: 0,
     behind: 0,
   };

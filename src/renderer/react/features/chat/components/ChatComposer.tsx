@@ -74,6 +74,24 @@ interface EnabledSticker {
   description?: string;
 }
 
+export function parseComposerMessage(mode: string, content: string): {
+  rawContent: string;
+  visibleContent: string;
+  userSticker?: string;
+} {
+  const trimmed = content.trim();
+  const stickerMatch = trimmed.match(/\[sticker:([^\]]+)\]/i);
+  const visibleContent = trimmed.replace(/\[sticker:[^\]]+\]/gi, "").trim();
+  if (mode === "code") {
+    return { rawContent: visibleContent, visibleContent, userSticker: undefined };
+  }
+  return {
+    rawContent: trimmed,
+    visibleContent,
+    userSticker: stickerMatch?.[1]?.trim() || undefined,
+  };
+}
+
 function stickerUrl(src: string): string {
   return src.startsWith("/stickers/") ? resolveAsset(src) : src;
 }
@@ -190,6 +208,7 @@ export function ChatComposer({
   const supportsObsidianLibrary = mode === "learn";
   const supportsPermission = supportsWorkFiles || supportsObsidianLibrary;
   const supportsStyle = mode !== "code";
+  const supportsStickers = mode !== "code";
   const welcomeImageUrl = WELCOME_IMAGE_BY_MODE[mode] ?? chatWelcomeUrl;
   const requiresWorkspace = supportsWorkFiles;
   const placeholder = mode === "chat"
@@ -197,9 +216,9 @@ export function ChatComposer({
     : requiresWorkspace && !workspaceName
       ? "有什么问题 / 任务，来找昔涟♪（ps：请先选中一个项目路径哦♪）"
       : "有什么问题 / 任务，来找昔涟♪";
-  const selectedStickerIds = [...value.matchAll(/\[sticker:([^\]]+)\]/gi)]
+  const selectedStickerIds = supportsStickers ? [...value.matchAll(/\[sticker:([^\]]+)\]/gi)]
     .map((match) => match[1].trim())
-    .filter(Boolean);
+    .filter(Boolean) : [];
   const stickerOccurrences = new Map<string, number>();
   const selectedStickers = selectedStickerIds.map((id) => {
     const occurrence = stickerOccurrences.get(id) ?? 0;
@@ -324,7 +343,7 @@ export function ChatComposer({
             >
               <ScreenshotIcon />
             </button>
-            <StickerPicker onChoose={onChooseSticker} />
+            {supportsStickers && <StickerPicker onChoose={onChooseSticker} />}
           </div>
         }
         />

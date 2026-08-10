@@ -1,0 +1,27 @@
+import React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("../../../assets/status-moods/工作中.png?url", () => ({ default: "working.png" }));
+
+import { CodeGitPanel } from "./CodeGitPanel";
+
+describe("CodeGitPanel", () => {
+  it("keeps Git actions in the fixed area and Todo in its own scrollable list without a Review entry", () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const html = renderToStaticMarkup(React.createElement(CodeGitPanel, {
+      sessionId: "s1",
+      projectName: "cyrene-project",
+      todoState: { updatedAt: 1, todos: [{ id: "t1", content: "完成审阅 UI", status: "pending" }] },
+      onRequestAgentAction: vi.fn(),
+    }));
+
+    expect(html).toContain("模式：Code");
+    expect(html).toContain("cyrene-project");
+    expect(html).toContain("分支切换");
+    expect(html).toContain("提交或推送");
+    expect(html).toContain('data-testid="code-todo-list"');
+    expect(html).toContain("完成审阅 UI");
+    expect(html).not.toContain(">审阅<");
+  });
+});

@@ -30,6 +30,11 @@ export interface GitClient {
   isRepository(): Promise<boolean>;
   getStatus(): Promise<GitStatusSnapshot>;
   getBranches(): Promise<string[]>;
+  getLineStats(files: GitStatusFile[]): Promise<{
+    insertions: number;
+    deletions: number;
+    byPath: Record<string, { insertions: number; deletions: number }>;
+  }>;
   getTrackedDiff(relativePath: string): Promise<string>;
   getUntrackedDiff(relativePath: string): Promise<string>;
   init(): Promise<void>;
@@ -161,7 +166,8 @@ export function createGitService(deps: GitServiceDeps): GitService {
         }
 
         const [status, branches] = await Promise.all([client.getStatus(), client.getBranches()]);
-        const files = status.files.map(normalizeFileChange);
+        const lines = await client.getLineStats(status.files);
+        const files = status.files.map((file) => normalizeFileChange(file, lines.byPath[file.path]));
         return {
           sessionId,
           state: "ready",
@@ -176,6 +182,7 @@ export function createGitService(deps: GitServiceDeps): GitService {
           },
           files,
           summary: summarizeFiles(files),
+          lines: { insertions: lines.insertions, deletions: lines.deletions },
           ahead: status.ahead,
           behind: status.behind,
         };
@@ -246,6 +253,41 @@ function createSimpleGitClient(input: { workspaceRoot: string; executable: Resol
     async getBranches() {
       return (await git.branchLocal()).all;
     },
+    async getLineStats(files) {
+      const tracked = await git.diffSummary(["HEAD"]).catch(() => ({ insertions: 0, deletions: 0, files: [] }));
+      let insertions = tracked.insertions;
+      let deletions = tracked.deletions;
+      const byPath: Record<string, { insertions: number; deletions: number }> = {};
+      for (const file of tracked.files ?? []) {
+        if ("file" in file && "insertions" in file && "deletions" in file) {
+          byPath[file.file] = { insertions: file.insertions, deletions: file.deletions };
+        }
+      }
+      for (const file of files.filter(isUntracked)) {
+        try {
+          const output = await git.raw(["diff", "--no-index", "--numstat", "--", "/dev/null", file.path]);
+          const [added, removed] = output.trim().split(/\s+/);
+          const fileInsertions = /^\d+$/.test(added) ? Number(added) : 0;
+          const fileDeletions = /^\d+$/.test(removed) ? Number(removed) : 0;
+          insertions += fileInsertions;
+          deletions += fileDeletions;
+          byPath[file.path] = { insertions: fileInsertions, deletions: fileDeletions };
+        } catch (error) {
+          const output = typeof error === "object" && error && "stdout" in error
+            ? (error as { stdout?: unknown }).stdout
+            : undefined;
+          if (typeof output === "string") {
+            const [added, removed] = output.trim().split(/\s+/);
+            const fileInsertions = /^\d+$/.test(added) ? Number(added) : 0;
+            const fileDeletions = /^\d+$/.test(removed) ? Number(removed) : 0;
+            insertions += fileInsertions;
+            deletions += fileDeletions;
+            byPath[file.path] = { insertions: fileInsertions, deletions: fileDeletions };
+          }
+        }
+      }
+      return { insertions, deletions, byPath };
+    },
     getTrackedDiff: (relativePath) => git.diff(["--no-ext-diff", "HEAD", "--", relativePath]),
     async getUntrackedDiff(relativePath) {
       try {
@@ -275,7 +317,7 @@ function isCodeGitStatus(value: ResolvedCodeSession | CodeGitStatus): value is C
   return "state" in value;
 }
 
-function normalizeFileChange(file: GitStatusFile): CodeGitFileChange {
+function normalizeFileChange(file: GitStatusFile, lines = { insertions: 0, deletions: 0 }): CodeGitFileChange {
   const kind = classifyFileKind(file);
   return {
     path: file.path,
@@ -283,6 +325,7 @@ function normalizeFileChange(file: GitStatusFile): CodeGitFileChange {
     kind,
     staged: isStaged(file),
     unstaged: isUnstaged(file),
+    ...lines,
   };
 }
 

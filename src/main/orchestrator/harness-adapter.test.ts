@@ -22,6 +22,19 @@ describe("Harness Todo working notebook policy", () => {
     expect(prompt).toContain("至少 2 个 execution step");
     expect(prompt).toContain("不得作为后续行动的强约束");
   });
+
+  it("assembles the same persona prompt for Work and Code", () => {
+    const common = {
+      soulSystemBaseContent: "完整人设",
+      toolSystemContent: "共享工具规则",
+      environmentContext: "共享环境",
+    };
+    const workPrompt = buildHarnessSystemPrompt({ ...common, conversationMode: "work" } as never);
+    const codePrompt = buildHarnessSystemPrompt({ ...common, conversationMode: "code" } as never);
+
+    expect(codePrompt).toBe(workPrompt);
+    expect(codePrompt).toContain("完整人设");
+  });
 });
 
 describe("Harness recovery context", () => {

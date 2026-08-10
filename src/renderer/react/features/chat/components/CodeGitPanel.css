@@ -1,59 +1,36 @@
-.cy-code-git {
-  position: fixed;
-  z-index: 1000;
-  top: 80px;
-  right: 24px;
-  width: 260px;
-  height: min(420px, calc(100vh - 96px));
-  min-height: 270px;
-  display: flex;
-  flex-direction: column;
-  padding: 10px 14px 14px;
-  overflow: hidden;
-  box-sizing: border-box;
-  border-radius: 16px;
-  background: #fff;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, .10);
-  color: #1a1a1a;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", "Microsoft YaHei", sans-serif;
-}
-
-.cy-code-git__dragline {
-  width: 36px;
-  height: 4px;
-  margin: 0 auto 8px;
-  flex: 0 0 auto;
-  border-radius: 4px;
-  background: #e5e5e5;
-}
-
-.cy-code-git__hero { display: flex; align-items: center; gap: 9px; flex: 0 0 auto; }
-.cy-code-git__mascot { width: 40px; height: 40px; object-fit: contain; animation: cy-code-git-float 2.8s ease-in-out infinite; }
-@keyframes cy-code-git-float { 50% { transform: translateY(-4px); } }
-.cy-code-git__hero h2 { margin: 3px 0 1px; font-size: 14px; line-height: 1.2; }
-.cy-code-git__hero p { max-width: 150px; margin: 0; overflow: hidden; color: #777; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
-.cy-code-git__mode { display: inline-flex; gap: 4px; align-items: center; color: #ff5b8a; font-size: 11px; font-weight: 600; }
-.cy-code-git__mode i { width: 6px; height: 6px; border-radius: 50%; background: #ff5b8a; }
-.cy-code-git__refresh { width: 24px; height: 24px; margin-left: auto; border: 0; border-radius: 50%; color: #999; background: transparent; cursor: pointer; font-size: 19px; line-height: 1; }
-.cy-code-git__refresh:hover:not(:disabled) { color: #ff5b8a; background: rgba(255, 91, 138, .08); }
-
-.cy-code-git__section { margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(255, 91, 138, .18); }
-.cy-code-git__changes { display: flex; min-height: 0; flex: 1; flex-direction: column; }
-.cy-code-git__section-title { display: flex; justify-content: space-between; color: #555; font-size: 12px; font-weight: 700; }
-.cy-code-git__count { color: #ff5b8a; }
-.cy-code-git__empty { margin: 9px 0 0; color: #999; font-size: 12px; }
-.cy-code-git__files { display: flex; min-height: 0; flex: 1; flex-direction: column; gap: 2px; margin: 6px -4px 0; padding: 0 4px; overflow-y: auto; list-style: none; }
-.cy-code-git__files::-webkit-scrollbar { width: 4px; }
-.cy-code-git__files::-webkit-scrollbar-thumb { border-radius: 3px; background: rgba(255, 91, 138, .25); }
-.cy-code-git__files button, .cy-code-git__branch { display: flex; width: 100%; gap: 7px; align-items: center; border: 0; border-radius: 6px; background: transparent; color: inherit; cursor: pointer; text-align: left; }
-.cy-code-git__files button { min-height: 25px; padding: 3px 4px; }
-.cy-code-git__files button:hover { background: rgba(255, 91, 138, .07); }
-.cy-code-git__file-kind { flex: 0 0 31px; font-size: 10px; font-weight: 600; }
-.cy-code-git__file-kind--added { color: #28a745; }.cy-code-git__file-kind--modified { color: #d89500; }.cy-code-git__file-kind--deleted { color: #e24c4b; }.cy-code-git__file-kind--renamed { color: #496fcf; }.cy-code-git__file-kind--conflicted { color: #bf3ec3; }
-.cy-code-git__file-path { overflow: hidden; font-family: Consolas, "Cascadia Mono", monospace; font-size: 11px; white-space: nowrap; text-overflow: ellipsis; }
-.cy-code-git__branch { justify-content: space-between; padding: 5px 2px; font-family: Consolas, "Cascadia Mono", monospace; font-size: 12px; }
-.cy-code-git__branch:hover:not(:disabled) { color: #ff5b8a; }.cy-code-git__branch:disabled { color: #aaa; cursor: default; }
-.cy-code-git__footer { display: flex; flex: 0 0 auto; align-items: center; gap: 8px; margin-top: 10px; padding-top: 9px; border-top: 1px solid rgba(255, 91, 138, .18); }
-.cy-code-git__sync { display: flex; gap: 6px; color: #888; font-size: 11px; }
-.cy-code-git__action { margin-left: auto; padding: 5px 9px; border: 1px solid rgba(255, 91, 138, .35); border-radius: 999px; color: #ff5b8a; background: rgba(255, 91, 138, .07); cursor: pointer; font-size: 11px; font-weight: 600; }
-.cy-code-git__action:hover { background: rgba(255, 91, 138, .14); }
+.cy-code-git { position:fixed; z-index:1000; width:260px; height:min(390px,calc(100vh - 96px)); min-height:min(290px,calc(100vh - 96px)); display:flex; flex-direction:column; overflow:hidden; border-radius:16px; background:#fff; box-shadow:0 8px 28px rgba(0,0,0,.10); color:#1a1a1a; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; }
+.cy-code-git--collapsed { height:auto; min-height:0; }
+.cy-code-git--collapsed .cy-code-git__body { max-height:0; padding-top:0; padding-bottom:0; opacity:0; pointer-events:none; overflow:hidden; }
+.cy-code-git__dragbar { width:100%; height:28px; flex:0 0 auto; position:relative; display:flex; align-items:center; justify-content:center; padding:0 10px; border:0; background:transparent; cursor:grab; }
+.cy-code-git__dragbar:active { cursor:grabbing; }
+.cy-code-git__dragline { width:36px; height:4px; border-radius:2px; background:#e5e5e5; }
+.cy-code-git__toggle { position:absolute; right:10px; top:50%; width:22px; height:22px; display:flex; align-items:center; justify-content:center; transform:translateY(-50%); border-radius:50%; color:#999; transition:.2s; }
+.cy-code-git__toggle:hover { color:#ff5b8a; background:rgba(255,91,138,.08); }
+.cy-code-git--collapsed .cy-code-git__toggle { transform:translateY(-50%) rotate(180deg); }
+.cy-code-git__body { display:flex; min-height:0; flex:1; flex-direction:column; padding:7px 14px 14px; transition:opacity .2s ease; }
+.cy-code-git__mode { align-self:center; display:inline-flex; align-items:center; gap:6px; margin-bottom:10px; padding:4px 12px; border:1px solid rgba(255,91,138,.25); border-radius:999px; background:rgba(255,91,138,.10); color:#ff5b8a; font-size:12px; font-weight:600; }
+.cy-code-git__mode i { width:7px; height:7px; border-radius:50%; background:#ff5b8a; }
+.cy-code-git__hero { display:flex; align-items:center; gap:10px; }
+.cy-code-git__mascot { width:42px; height:42px; object-fit:contain; animation:cy-code-git-float 2.8s ease-in-out infinite; }
+@keyframes cy-code-git-float { 50% { transform:translateY(-4px); } }
+.cy-code-git__project { min-width:0; display:flex; flex:1; flex-direction:column; gap:3px; }
+.cy-code-git__project strong { overflow:hidden; font-size:14px; white-space:nowrap; text-overflow:ellipsis; }
+.cy-code-git__project span { overflow:hidden; color:#888; font-size:11px; white-space:nowrap; text-overflow:ellipsis; }
+.cy-code-git__refresh { width:24px; height:24px; border:0; border-radius:50%; background:transparent; color:#999; cursor:pointer; font-size:18px; }
+.cy-code-git__refresh:hover:not(:disabled) { color:#ff5b8a; background:rgba(255,91,138,.08); }
+.cy-code-git__git-actions { display:flex; flex-direction:column; gap:2px; margin-top:10px; }
+.cy-code-git__git-actions button,.cy-code-git__change-row { min-height:28px; display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:7px; padding:3px 5px; border:0; border-radius:7px; background:transparent; color:#333; font-size:12px; text-align:left; }
+.cy-code-git__git-actions button { cursor:pointer; }
+.cy-code-git__git-actions button:hover:not(:disabled) { background:rgba(255,91,138,.07); }
+.cy-code-git__git-actions button:disabled { color:#aaa; cursor:default; }
+.cy-code-git__git-actions code { max-width:112px; overflow:hidden; color:#777; font-family:Consolas,"Cascadia Mono",monospace; font-size:11px; white-space:nowrap; text-overflow:ellipsis; }
+.cy-code-git__git-actions b { color:#aaa; font-size:15px; }
+.cy-code-git__added { color:#16a34a; font-weight:600; }.cy-code-git__deleted { color:#dc2626; font-weight:600; }
+.cy-code-git__divider { height:1px; margin:9px 0; flex:0 0 auto; background:rgba(255,91,138,.18); }
+.cy-code-git__todo-heading { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:7px; font-size:12px; font-weight:700; }
+.cy-code-git__todo-heading small { color:#888; font-size:10px; font-weight:400; }
+.cy-code-git__todos { min-height:0; flex:1; display:flex; flex-direction:column; gap:7px; margin:0; padding:0 2px; overflow-y:auto; overscroll-behavior:contain; list-style:none; }
+.cy-code-git__todos::-webkit-scrollbar { width:4px; }.cy-code-git__todos::-webkit-scrollbar-thumb { border-radius:3px; background:rgba(255,91,138,.25); }
+.cy-code-git__todos li { display:flex; align-items:flex-start; gap:7px; color:#333; font-size:12px; line-height:1.45; }
+.cy-code-git__todos i { width:10px; height:10px; margin-top:3px; flex:0 0 auto; border:1.5px solid #ff5b8a; border-radius:50%; }
+.cy-code-git__todos .is-completed { color:#999; text-decoration:line-through; }.cy-code-git__todos .is-completed i { background:#ff5b8a; }.cy-code-git__todos .is-empty { color:#aaa; }
