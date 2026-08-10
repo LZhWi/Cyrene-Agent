@@ -32,6 +32,13 @@ export interface GitClient {
   getBranches(): Promise<string[]>;
   getTrackedDiff(relativePath: string): Promise<string>;
   getUntrackedDiff(relativePath: string): Promise<string>;
+  init(): Promise<void>;
+  add(paths: string[]): Promise<void>;
+  commit(message: string): Promise<string>;
+  checkout(branch: string): Promise<void>;
+  checkoutNewBranch(branch: string): Promise<void>;
+  push(remote: string): Promise<void>;
+  revert(commit: string): Promise<void>;
 }
 
 export interface GitServiceDeps {
@@ -44,6 +51,17 @@ export interface GitService {
   getStatusForSession(sessionId: string): Promise<CodeGitStatus>;
   getDiffForSession(sessionId: string, relativePath: string): Promise<CodeGitDiffResult>;
   onChanged(listener: (payload: { sessionId: string }) => void): () => void;
+  initRepository(ctx: TrustedGitContext): Promise<string>;
+  commit(ctx: TrustedGitContext, message: string, paths: string[]): Promise<string>;
+  switchBranch(ctx: TrustedGitContext, branch: string, create: boolean): Promise<string>;
+  push(ctx: TrustedGitContext, remote?: string): Promise<string>;
+  revert(ctx: TrustedGitContext, commit: string): Promise<string>;
+}
+
+export interface TrustedGitContext {
+  sessionId: string;
+  mode: "code";
+  workspaceRoot: string;
 }
 
 interface ResolvedCodeSession {
@@ -72,10 +90,64 @@ export function createGitService(deps: GitServiceDeps): GitService {
     return { workspaceRoot, executable };
   }
 
+  async function clientForTrustedContext(ctx: TrustedGitContext): Promise<GitClient> {
+    const executable = await deps.resolveExecutable();
+    if (!executable) throw new Error("未检测到可用 Git");
+    return createClient({ workspaceRoot: ctx.workspaceRoot, executable });
+  }
+
+  function emitChanged(sessionId: string): void {
+    for (const listener of listeners) listener({ sessionId });
+  }
+
   return {
     onChanged(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
+    },
+
+    async initRepository(ctx) {
+      const client = await clientForTrustedContext(ctx);
+      await client.init();
+      emitChanged(ctx.sessionId);
+      return "已初始化 Git 仓库";
+    },
+
+    async commit(ctx, message, paths) {
+      if (!message.trim()) throw new Error("提交信息不能为空");
+      if (paths.length === 0 || paths.some((item) => !isSafeRelativePath(item))) {
+        throw new Error("请提供要提交的仓库内文件路径");
+      }
+      const client = await clientForTrustedContext(ctx);
+      await client.add(paths);
+      const result = await client.commit(message.trim());
+      emitChanged(ctx.sessionId);
+      return result;
+    },
+
+    async switchBranch(ctx, branch, create) {
+      if (!isSafeBranchName(branch)) throw new Error("分支名称不合法");
+      const client = await clientForTrustedContext(ctx);
+      if (create) await client.checkoutNewBranch(branch);
+      else await client.checkout(branch);
+      emitChanged(ctx.sessionId);
+      return `已切换到分支 ${branch}`;
+    },
+
+    async push(ctx, remote = "origin") {
+      if (!/^[A-Za-z0-9._-]+$/.test(remote)) throw new Error("远端名称不合法");
+      const client = await clientForTrustedContext(ctx);
+      await client.push(remote);
+      emitChanged(ctx.sessionId);
+      return `已推送到 ${remote}`;
+    },
+
+    async revert(ctx, commit) {
+      if (!/^[0-9a-f]{7,40}$/i.test(commit)) throw new Error("提交标识必须是 7 到 40 位十六进制 hash");
+      const client = await clientForTrustedContext(ctx);
+      await client.revert(commit);
+      emitChanged(ctx.sessionId);
+      return `已创建回退提交 ${commit}`;
     },
 
     async getStatusForSession(sessionId: string): Promise<CodeGitStatus> {
@@ -186,6 +258,16 @@ function createSimpleGitClient(input: { workspaceRoot: string; executable: Resol
         throw error;
       }
     },
+    init: async () => { await git.init(); },
+    add: async (paths) => { await git.raw(["add", "-A", "--", ...paths]); },
+    async commit(message) {
+      const result = await git.commit(message);
+      return result.commit ? `已创建提交 ${result.commit}` : "已创建提交";
+    },
+    checkout: async (branch) => { await git.checkout(branch); },
+    checkoutNewBranch: async (branch) => { await git.checkoutLocalBranch(branch); },
+    push: async (remote) => { await git.push(remote); },
+    revert: async (commit) => { await git.raw(["revert", "--no-edit", commit]); },
   };
 }
 
@@ -241,6 +323,16 @@ function summarizeFiles(files: CodeGitFileChange[]): Record<CodeGitChangeKind, n
 function isSafeRelativePath(value: string): boolean {
   if (!value || path.isAbsolute(value) || value.includes("\0")) return false;
   return !value.replace(/\\/g, "/").split("/").some((part) => part === "..");
+}
+
+function isSafeBranchName(value: string): boolean {
+  return Boolean(value)
+    && value.length <= 255
+    && !value.startsWith("-")
+    && !value.includes("..")
+    && !/[~^:\\?*\[\s]/.test(value)
+    && !value.endsWith("/")
+    && !value.endsWith(".");
 }
 
 function sameRelativePath(left: string, right: string): boolean {

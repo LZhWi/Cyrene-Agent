@@ -10,6 +10,8 @@ import { registerRecallHistoryTool } from "./history-tools";
 import { registerSearchCodeTool } from "./search-code-tools";
 import { toolRegistry } from "./tool-registry";
 import { registerTravelTools } from "./travel-tools";
+import type { GitService } from "../code-git/git-service";
+import { registerCodeGitTools } from "./git-tools";
 import "./built-in-tools";
 
 export function syncBuiltInToolToggles(settings: GeneralSettings): void {
@@ -17,7 +19,8 @@ export function syncBuiltInToolToggles(settings: GeneralSettings): void {
   toolRegistry.setEnabled("plan_trip", settings.travelEnabled);
 }
 
-export function registerAllTools(): void {
+export function registerAllTools(deps: { codeGitService: GitService }): void {
+  registerCodeGitTools(deps.codeGitService, toolRegistry);
   registerSearchCodeTool();
   registerRecallHistoryTool();
   registerDocumentTools();

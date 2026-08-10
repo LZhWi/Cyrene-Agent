@@ -334,7 +334,7 @@ app.whenReady().then(async () => {
   proactiveLifecycle.initializeProactiveTrigger();
 
   // 工具注册：集中到一个显式入口，取代 index.ts 中的副作用 import
-  registerAllTools();
+  registerAllTools({ codeGitService });
 
   // 内置 MCP 自动连接：Playwright (默认关闭,选项控制)
   const initialSettings = loadGeneralSettings();

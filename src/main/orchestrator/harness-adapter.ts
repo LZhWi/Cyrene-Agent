@@ -21,8 +21,25 @@ import type { CyreneRunOptions, AgentLoopSettings } from "./cyrene-agent";
 import type { ToolCallResult } from "./types";
 import type { CyreneRunTerminalResult } from "../../shared/run-terminal";
 import { loadPromptFile } from "../prompts/prompt-loader";
+import type { ConversationMode } from "../../shared/chat-types";
 
 const LOG_PREFIX = "[HarnessAdapter]";
+const CODE_ONLY_GIT_TOOL_IDS = new Set([
+  "git_status",
+  "git_init",
+  "git_commit",
+  "git_switch_branch",
+  "git_push",
+  "git_revert",
+]);
+
+export function filterToolsForConversationMode(
+  mode: ConversationMode | undefined,
+  tools: ToolDefinition[],
+): ToolDefinition[] {
+  if (mode === "code") return tools;
+  return tools.filter((tool) => !CODE_ONLY_GIT_TOOL_IDS.has(tool.id));
+}
 
 /**
  * 运行 CyreneHarness 并返回统一的 AgentLoopResult。
@@ -65,7 +82,10 @@ export async function runHarnessWithAdapter(
   const systemPrompt = buildHarnessSystemPrompt(options);
 
   // ── 构建工具列表 ──
-  const tools = [...(options.tools ?? toolRegistry.getEnabledTools())];
+  const tools = filterToolsForConversationMode(
+    options.conversationMode,
+    [...(options.tools ?? toolRegistry.getEnabledTools())],
+  );
 
   // ── 构建工具上下文 ──
   const toolContext: ToolContext = {

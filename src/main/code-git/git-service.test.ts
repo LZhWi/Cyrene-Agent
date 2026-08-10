@@ -37,6 +37,13 @@ function client(overrides: Partial<GitClient> = {}): GitClient {
     getBranches: async () => ["main"],
     getTrackedDiff: async () => "",
     getUntrackedDiff: async () => "",
+    init: async () => undefined,
+    add: async () => undefined,
+    commit: async () => "committed",
+    checkout: async () => undefined,
+    checkoutNewBranch: async () => undefined,
+    push: async () => undefined,
+    revert: async () => undefined,
     ...overrides,
   };
 }
