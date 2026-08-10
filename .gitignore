@@ -26,6 +26,8 @@ resources/bin/*.exe
 
 # OpenCode 二进制 distribution（按需本地下载，不进 git）
 resources/opencode/
+resources/mingit/
+.cache/mingit/
 
 # NOTE: dist/renderer/audio, dist/renderer/avatars, dist/renderer/models,
 # dist/renderer/stickers are intentionally NOT ignored (product assets).

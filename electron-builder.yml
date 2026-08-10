@@ -16,6 +16,8 @@ files:
 extraResources:
   - from: resources/bin/cyrene-screenshot.exe
     to: bin/cyrene-screenshot.exe
+  - from: resources/mingit
+    to: mingit
 win:
   target:
     - dir
