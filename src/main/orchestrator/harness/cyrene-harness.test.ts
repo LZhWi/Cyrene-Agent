@@ -57,7 +57,7 @@ vi.mock("./tool-dispatcher", () => ({
 import { runCyreneHarness } from "./cyrene-harness";
 import { dispatchToolCall } from "./tool-dispatcher";
 import type { ToolDispatchResult } from "./tool-dispatcher";
-import type { HarnessEvent } from "./types";
+import type { HarnessCheckpoint, HarnessEvent } from "./types";
 import type { ChatMessage, ChatResponse, ToolCall } from "../vendors/types";
 import type { ToolDefinition } from "../tool-registry";
 
@@ -311,6 +311,49 @@ describe("CyreneHarness completion (P0-A)", () => {
     ]);
     expect(events.findIndex((event) => event.type === "round_end" && event.roundId === "round-1"))
       .toBeLessThan(events.findIndex((event) => event.type === "final_answer"));
+  });
+
+  it("checkpoints a cloned transcript after tool work and before terminal settlement", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ toolCalls: [mutationToolCall("checkpoint-call")] }),
+      assistantResponse({ text: "检查完成。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockedDispatch.mockResolvedValue(successDispatchResult("checkpoint-call"));
+    const checkpoints: HarnessCheckpoint[] = [];
+
+    await runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "检查任务" }],
+      tools: [],
+      vendorConfig,
+      onCheckpoint: (checkpoint) => checkpoints.push(checkpoint),
+    });
+
+    expect(checkpoints.some((checkpoint) => checkpoint.messages.some((message) => message.role === "tool"))).toBe(true);
+    expect(checkpoints.at(-1)).toMatchObject({ rounds: 1 });
+    const last = checkpoints.at(-1);
+    if (!last) throw new Error("expected a terminal checkpoint");
+    last.messages.push({ role: "user", content: "不能污染 Harness" });
+    expect(checkpoints.at(-2)?.messages.some((message) => message.content === "不能污染 Harness")).toBe(false);
+  });
+
+  it("settles as a runtime error when a required checkpoint cannot be persisted", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ text: "不能假装已经保存。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "执行任务" }],
+      tools: [],
+      vendorConfig,
+      onCheckpoint: () => { throw new Error("disk unavailable"); },
+    });
+
+    expect(result.terminateReason).toBe("error");
+    expect(result.finalAnswer).toContain("执行状态保存失败");
   });
 
   it("accepts honest final after an unknown non-idempotent side effect; uncertainEffects retained", async () => {

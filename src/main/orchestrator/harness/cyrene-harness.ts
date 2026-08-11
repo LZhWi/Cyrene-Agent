@@ -91,12 +91,48 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
 
   let messages: ChatMessage[] = [...input.messages];
   let rounds = 0;
+  let checkpointFailure: string | undefined;
+
+  const checkpoint = (): void => {
+    try {
+      input.onCheckpoint?.({
+        messages: JSON.parse(JSON.stringify(messages)) as ChatMessage[],
+        state: JSON.parse(JSON.stringify(state)) as AgentState,
+        rounds,
+        at: Date.now(),
+      });
+    } catch (error) {
+      checkpointFailure = error instanceof Error ? error.message : String(error);
+      console.error(`${LOG_PREFIX} checkpoint failed:`, error);
+    }
+  };
+  const cancelled = (): HarnessResult => {
+    checkpoint();
+    if (checkpointFailure) {
+      return buildResult(`执行状态保存失败：${checkpointFailure}`, state, true, "error", rounds);
+    }
+    return buildCancelledResult(state, rounds);
+  };
+  const finish = (
+    finalAnswer: string,
+    terminated: boolean,
+    terminateReason: HarnessResult["terminateReason"],
+  ): HarnessResult => {
+    checkpoint();
+    if (checkpointFailure) {
+      return buildResult(`执行状态保存失败：${checkpointFailure}`, state, true, "error", rounds);
+    }
+    return buildResult(finalAnswer, state, terminated, terminateReason, rounds);
+  };
 
   // ── 主循环 ──
   while (rounds < config.maxRounds && !clock.isExecutionTimeout()) {
+    if (checkpointFailure) {
+      return buildResult(`执行状态保存失败：${checkpointFailure}`, state, true, "error", rounds);
+    }
     if (input.signal?.aborted) {
       // Task 3 / C2：cancelled 不生成 "最终回复被取消。"，finalAnswer 为空。
-      return buildCancelledResult(state, rounds);
+      return cancelled();
     }
 
     const roundSystemPrompt = [
@@ -159,11 +195,11 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     } catch (err) {
       // Task 3 / C2：signal abort → cancelled，不分类为 error。
       if (input.signal?.aborted) {
-        return buildCancelledResult(state, rounds);
+        return cancelled();
       }
       console.error(`${LOG_PREFIX} LLM call failed:`, err);
       const errorMsg = err instanceof Error ? err.message : String(err);
-      return buildResult(`抱歉，模型调用失败：${errorMsg}`, state, true, "error", rounds);
+      return finish(`抱歉，模型调用失败：${errorMsg}`, true, "error");
     } finally {
       if (reasoningStarted) {
         input.onEvent?.({ type: "reasoning_end", messageId: reasoningMessageId });
@@ -228,7 +264,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
           // Task 3 / C2：ask_user 等待期间 abort → cancelled
           clock.stopUserWait();
           if (isCancellationError(error, input.signal)) {
-            return buildCancelledResult(state, rounds);
+            return cancelled();
           }
           throw error;
         }
@@ -240,6 +276,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
         streamController.discardProgressBuffer();
         input.onEvent?.({ type: "round_end", roundId });
         rounds++;
+        checkpoint();
         continue;
       }
 
@@ -263,7 +300,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
 
         // Task 3 / C2：工具执行前检查 signal
         if (input.signal?.aborted) {
-          return buildCancelledResult(state, rounds);
+          return cancelled();
         }
 
         // ── 统一 dispatch（v3 §3.1）──
@@ -285,7 +322,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
         } catch (error) {
           // 工具执行/权限检查期间 abort → cancelled
           if (isCancellationError(error, input.signal)) {
-            return buildCancelledResult(state, rounds);
+            return cancelled();
           }
           throw error;
         }
@@ -311,12 +348,12 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
               } catch (error) {
                 // backoff 期间 abort → cancelled
                 if (isCancellationError(error, input.signal)) {
-                  return buildCancelledResult(state, rounds);
+                  return cancelled();
                 }
                 throw error;
               }
               if (input.signal?.aborted) {
-                return buildCancelledResult(state, rounds);
+                return cancelled();
               }
               let retryDispatch: ToolDispatchResult;
               try {
@@ -335,7 +372,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
               } catch (error) {
                 // retry 工具执行期间 abort → cancelled
                 if (isCancellationError(error, input.signal)) {
-                  return buildCancelledResult(state, rounds);
+                  return cancelled();
                 }
                 throw error;
               }
@@ -377,6 +414,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
 
       input.onEvent?.({ type: "round_end", roundId });
       rounds++;
+      checkpoint();
       continue;
     }
 
@@ -388,7 +426,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     input.onEvent?.({ type: "round_end", roundId });
     input.onEvent?.({ type: "final_answer", content: finalAnswer });
     clock.stopActive();
-    return buildResult(finalAnswer, state, false, undefined, rounds);
+    return finish(finalAnswer, false, undefined);
   }
 
   // ── 兜底：超 maxRounds 或超时 ──
@@ -396,7 +434,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
   const reason = clock.isExecutionTimeout() ? "timeout" : "max_rounds";
   const finalAnswer = streamController.getBuffered() || buildTimeoutReply(state, reason);
   input.onEvent?.({ type: "final_answer", content: finalAnswer });
-  return buildResult(finalAnswer, state, true, reason, rounds);
+  return finish(finalAnswer, true, reason);
 }
 
 // ── LLM 调用 ─────────────────────────────────────────────

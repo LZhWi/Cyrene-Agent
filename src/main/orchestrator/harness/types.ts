@@ -135,6 +135,14 @@ export type HarnessEvent =
   | { type: "runtime_feedback"; message: string }
   | { type: "error"; message: string };
 
+/** 供持久化执行者保存可恢复子运行状态的只读快照。 */
+export interface HarnessCheckpoint {
+  messages: ChatMessage[];
+  state: AgentState;
+  rounds: number;
+  at: number;
+}
+
 // ── Harness 输入与输出 ───────────────────────────────────
 
 export interface HarnessToolSpec extends ToolSpec {
@@ -157,6 +165,8 @@ export interface HarnessInput {
   signal?: AbortSignal;
   /** 事件回调 */
   onEvent?: (event: HarnessEvent) => void;
+  /** 每轮和终态时发送的可持久化 transcript 快照。 */
+  onCheckpoint?: (checkpoint: HarnessCheckpoint) => void;
   /** 用户澄清函数（ask_user 内置工具使用） */
   requestUserClarification?: (card: unknown) => Promise<unknown>;
   /** 工具上下文（权限检查等） */
