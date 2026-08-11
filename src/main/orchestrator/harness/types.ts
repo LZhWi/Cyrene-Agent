@@ -12,8 +12,10 @@
 import type { ChatMessage, ToolCall, ToolSpec } from "../vendors/types";
 import type { ToolDefinition } from "../tool-registry";
 import type { CyreneRunTerminalResult } from "../../../shared/run-terminal";
+import type { TodoItem } from "../../../shared/task-session";
 import type { ToolErrorCategory } from "../tool-execution-error";
 export type { ToolErrorCategory } from "../tool-execution-error";
+export type { TodoItem, TodoStatus } from "../../../shared/task-session";
 
 // ── 工具调用结果 ──────────────────────────────────────────
 
@@ -63,17 +65,6 @@ export interface UncertainEffect {
   toolName: string;
   message: string;
   repeatAuthorization?: { source: "user"; grantedAt: number };
-}
-
-// ── Todo（v3 §8）─────────────────────────────────────────
-
-export type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
-
-export interface TodoItem {
-  id: string;
-  content: string;
-  status: TodoStatus;
-  activeForm?: string;
 }
 
 // ── Agent State（v3 §6.3）────────────────────────────────
@@ -155,6 +146,8 @@ export interface HarnessInput {
   systemPrompt: string;
   /** 初始消息（不含 system） */
   messages: ChatMessage[];
+  /** 从可恢复会话还原的初始状态；Harness 会取得自己的深拷贝。 */
+  initialState?: AgentState;
   /** 普通工具列表（从 registry 获取） */
   tools: ToolDefinition[];
   /** 厂商适配器 ID（用于 LLM 调用） */

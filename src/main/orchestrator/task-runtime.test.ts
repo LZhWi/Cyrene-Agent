@@ -86,4 +86,68 @@ describe("TaskRuntime", () => {
       taskId: foreign.id,
     })).rejects.toThrow("TASK_PARENT_MISMATCH");
   });
+
+  it("restores the private Todo notebook when resuming the same task", async () => {
+    const store = createStore();
+    const task = store.create({
+      parentConversationId: "conversation-1",
+      parentRunId: "parent-run-0",
+      description: "检查取消链路",
+      prompt: "检查取消传播。",
+      subagentType: "general",
+      mode: "code",
+      resolvedWorkspaceRoot: "E:\\project",
+    });
+    store.checkpoint(task.id, {
+      status: "completed",
+      todoItems: [{ id: "inspect", content: "检查取消链路", status: "in_progress" }],
+    });
+    const runHarness = vi.fn(async () => ({
+      finalAnswer: "继续完成。",
+      finalState: { todoItems: [], uncertainEffects: [] },
+      terminated: false,
+      rounds: 1,
+      terminal: { status: "success" as const, externalEffectsMayContinue: false },
+    }));
+    const execute = createTaskExecutor({ parent, store, runHarness });
+
+    await execute({
+      description: "继续检查取消链路",
+      prompt: "继续。",
+      subagentType: "general",
+      taskId: task.id,
+    });
+
+    expect(runHarness).toHaveBeenCalledWith(expect.objectContaining({
+      initialState: {
+        todoItems: [{ id: "inspect", content: "检查取消链路", status: "in_progress" }],
+        uncertainEffects: [],
+      },
+    }));
+  });
+
+  it("persists the final Todo notebook even when no intermediate checkpoint arrives", async () => {
+    const store = createStore();
+    const runHarness = vi.fn(async () => ({
+      finalAnswer: "检查完成。",
+      finalState: {
+        todoItems: [{ id: "report", content: "整理检查结果", status: "completed" as const }],
+        uncertainEffects: [],
+      },
+      terminated: false,
+      rounds: 1,
+      terminal: { status: "success" as const, externalEffectsMayContinue: false },
+    }));
+    const execute = createTaskExecutor({ parent, store, runHarness });
+
+    const result = await execute({
+      description: "检查取消链路",
+      prompt: "检查取消传播并报告证据。",
+      subagentType: "general",
+    });
+
+    expect(store.get(result.taskId)?.todoItems).toEqual([
+      { id: "report", content: "整理检查结果", status: "completed" },
+    ]);
+  });
 });

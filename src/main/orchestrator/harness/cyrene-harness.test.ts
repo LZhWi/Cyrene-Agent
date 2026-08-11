@@ -431,6 +431,27 @@ describe("CyreneHarness completion (P0-A)", () => {
     expect(secondRequest.messages[0].content).toContain(`binding="false"`);
   });
 
+  it("shows a restored Todo notebook in the first child Harness round", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ text: "继续检查。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runCyreneHarness({
+      systemPrompt: "base prompt",
+      messages: [{ role: "user", content: "继续上一次子任务" }],
+      tools: [],
+      vendorConfig,
+      initialState: {
+        todoItems: [{ id: "inspect", content: "检查取消链路", status: "in_progress" }],
+        uncertainEffects: [],
+      },
+    });
+
+    const firstRequest = fakeStreamChatWithSdk.mock.calls[0][0].request as { messages: ChatMessage[] };
+    expect(firstRequest.messages[0].content).toContain("[in_progress] inspect: 检查取消链路");
+  });
+
   it("resumes the same Harness run after a complete Ask observation", async () => {
     const askCall: ToolCall = {
       id: "ask-mixed",

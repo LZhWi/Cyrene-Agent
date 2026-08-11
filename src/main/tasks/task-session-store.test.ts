@@ -105,4 +105,28 @@ describe("TaskSessionStore", () => {
       messages: [{ role: "user", content: "检查取消传播并列出证据。" }],
     });
   });
+
+  it("persists a task Todo notebook across restart without exposing mutable storage", () => {
+    const { root, store } = createStore();
+    const created = store.create(createInput());
+
+    store.checkpoint(created.id, {
+      todoItems: [{ id: "inspect", content: "检查取消链路", status: "in_progress" }],
+    });
+
+    const restarted = new TaskSessionStore(root);
+    const restored = restarted.get(created.id);
+
+    expect(restored?.todoItems).toEqual([
+      { id: "inspect", content: "检查取消链路", status: "in_progress" },
+    ]);
+
+    restored?.todoItems.push({ id: "report", content: "整理报告", status: "pending" });
+    expect(restarted.get(created.id)?.todoItems).toEqual([
+      { id: "inspect", content: "检查取消链路", status: "in_progress" },
+    ]);
+
+    const sibling = restarted.create({ ...createInput(), description: "另一个子任务" });
+    expect(sibling.todoItems).toEqual([]);
+  });
 });

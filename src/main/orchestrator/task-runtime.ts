@@ -93,6 +93,10 @@ export function createTaskExecutor(input: {
         tools: resolveTaskTools(profile, input.parent.tools),
         vendorConfig: input.parent.vendorConfig,
         config: { maxRounds: profile.maxRounds, totalTimeoutMs: profile.timeoutMs },
+        initialState: {
+          todoItems: session.todoItems,
+          uncertainEffects: [],
+        },
         signal: input.parent.signal,
         toolContext,
         checkPermission: input.parent.checkPermission,
@@ -106,6 +110,7 @@ export function createTaskExecutor(input: {
         onCheckpoint: (checkpoint) => {
           input.store.checkpoint(session.id, {
             messages: checkpoint.messages as TaskTranscriptMessage[],
+            todoItems: checkpoint.state.todoItems,
           });
         },
       });
@@ -113,6 +118,7 @@ export function createTaskExecutor(input: {
       input.store.checkpoint(session.id, {
         status: mapped.status,
         resultText: result.finalAnswer,
+        todoItems: result.finalState.todoItems,
         ...(mapped.error ? { error: mapped.error } : {}),
         completedAt: Date.now(),
       });

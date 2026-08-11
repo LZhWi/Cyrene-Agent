@@ -68,10 +68,9 @@ function buildCancelledResult(state: AgentState, rounds: number): HarnessResult 
  */
 export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResult> {
   const config: HarnessConfig = { ...DEFAULT_HARNESS_CONFIG, ...input.config };
-  const state: AgentState = {
-    todoItems: [],
-    uncertainEffects: [],
-  };
+  const state: AgentState = input.initialState
+    ? JSON.parse(JSON.stringify(input.initialState)) as AgentState
+    : { todoItems: [], uncertainEffects: [] };
 
   const streamController = new StreamController();
   const clock = new TimeoutClock(config.totalTimeoutMs, config.userWaitTimeoutMs);

@@ -4,6 +4,15 @@ export type TaskSessionStatus = "running" | "completed" | "failed" | "cancelled"
 
 export type TaskSubagentType = "general" | "document" | "search";
 
+export type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
+
+export interface TodoItem {
+  id: string;
+  content: string;
+  status: TodoStatus;
+  activeForm?: string;
+}
+
 /**
  * 保留 Harness 协议消息所需的可序列化字段，但不把 Main 的 vendor 类型反向引入 shared。
  */
@@ -39,6 +48,7 @@ export interface TaskSession {
   status: TaskSessionStatus;
   messages: TaskTranscriptMessage[];
   trace: TaskTraceRecord[];
+  todoItems: TodoItem[];
   resultText?: string;
   error?: { code: string; message: string };
   createdAt: number;

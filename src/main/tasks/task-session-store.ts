@@ -5,6 +5,8 @@ import type {
   TaskSession,
   TaskSessionStatus,
   TaskSubagentType,
+  TodoItem,
+  TodoStatus,
   TaskTraceRecord,
   TaskTranscriptMessage,
 } from "../../shared/task-session";
@@ -37,6 +39,7 @@ export interface TaskSessionCheckpoint {
   status?: TaskSessionStatus;
   messages?: TaskTranscriptMessage[];
   trace?: TaskTraceRecord[];
+  todoItems?: TodoItem[];
   resultText?: string;
   error?: { code: string; message: string };
   completedAt?: number;
@@ -62,6 +65,27 @@ function isTaskStatus(value: unknown): value is TaskSessionStatus {
 
 function isTaskType(value: unknown): value is TaskSubagentType {
   return value === "general" || value === "document" || value === "search";
+}
+
+function isTodoStatus(value: unknown): value is TodoStatus {
+  return value === "pending" || value === "in_progress" || value === "completed" || value === "cancelled";
+}
+
+function cloneTodoItems(value: unknown): TodoItem[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    const candidate = item as Partial<TodoItem>;
+    if (typeof candidate.id !== "string" || candidate.id.trim().length === 0
+      || typeof candidate.content !== "string" || candidate.content.trim().length === 0
+      || !isTodoStatus(candidate.status)) return [];
+    return [{
+      id: candidate.id,
+      content: candidate.content,
+      status: candidate.status,
+      ...(typeof candidate.activeForm === "string" ? { activeForm: candidate.activeForm } : {}),
+    }];
+  });
 }
 
 function isTaskSession(value: unknown): value is TaskSession {
@@ -123,6 +147,7 @@ export class TaskSessionStore {
       status: "running",
       messages: [{ role: "user", content: input.prompt }],
       trace: [],
+      todoItems: [],
       createdAt: now,
       updatedAt: now,
     };
@@ -176,6 +201,7 @@ export class TaskSessionStore {
     if (patch.status !== undefined) session.status = patch.status;
     if (patch.messages !== undefined) session.messages = cloneSession({ ...session, messages: patch.messages }).messages;
     if (patch.trace !== undefined) session.trace = patch.trace.slice(-TRACE_LIMIT);
+    if (patch.todoItems !== undefined) session.todoItems = cloneTodoItems(patch.todoItems);
     if (patch.resultText !== undefined) session.resultText = patch.resultText;
     if (patch.error !== undefined) session.error = { ...patch.error };
     if (patch.completedAt !== undefined) session.completedAt = patch.completedAt;
@@ -214,7 +240,9 @@ export class TaskSessionStore {
     if (!fs.existsSync(file)) return null;
     try {
       const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as unknown;
-      return isTaskSession(parsed) ? parsed : null;
+      return isTaskSession(parsed)
+        ? { ...parsed, todoItems: cloneTodoItems((parsed as Partial<TaskSession>).todoItems) }
+        : null;
     } catch {
       return null;
     }
