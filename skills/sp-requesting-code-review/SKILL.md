@@ -1,5 +1,5 @@
 ---
-name: SP · Requesting Code Review
+name: Sp Requesting Code Review
 description: >-
   Use when completing tasks, implementing major features, or before merging to
   verify work meets requirements

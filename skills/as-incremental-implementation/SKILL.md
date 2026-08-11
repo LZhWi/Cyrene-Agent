@@ -1,5 +1,5 @@
 ---
-name: AS · Incremental Implementation
+name: As Incremental Implementation
 description: >-
   Delivers changes incrementally. Use when implementing any feature or change
   that touches more than one file. Use when you're about to write a large amount

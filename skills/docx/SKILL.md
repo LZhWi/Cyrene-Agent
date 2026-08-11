@@ -1,23 +1,23 @@
 ---
 name: docx
+
 license: MIT
 metadata:
-  version: "1.0.0"
+  version: 1.0.0
   category: document-processing
   author: Minimax
   sources:
-    - "ECMA-376 Office Open XML File Formats"
-    - "GB/T 9704-2012 公文版面布局标准"
-    - "IEEE / ACM / APA / MLA / Chicago / Turabian 风格指南"
-    - "Springer LNCS / Nature / HBR 文档模板"
-modes: [work, learn]
+    - ECMA-376 Office Open XML File Formats
+    - GB/T 9704-2012 公文版面布局标准
+    - IEEE / ACM / APA / MLA / Chicago / Turabian 风格指南
+    - Springer LNCS / Nature / HBR 文档模板
+modes:
+  - work
+  - learn
 description: >
-  使用 OpenXML SDK (.NET) 进行专业的 DOCX 文档创建、编辑和格式化。
-  三种管道：(A) 从零创建新文档，(B) 在已有文档中填充/编辑内容，
-  (C) 应用模板格式化并通过 XSD 验证门控检查。
-  当用户需要生成、修改或格式化 Word 文档时，必须使用此 skill——
-  包括他们说"写一份报告"、"起草建议书"、"制作合同"、
-  "填写此表单"、"按此模板重新排版"，或任何最终输出为 .docx 文件的任务。
+  使用 OpenXML SDK (.NET) 进行专业的 DOCX 文档创建、编辑和格式化。 三种管道：(A) 从零创建新文档，(B)
+  在已有文档中填充/编辑内容， (C) 应用模板格式化并通过 XSD 验证门控检查。 当用户需要生成、修改或格式化 Word 文档时，必须使用此
+  skill—— 包括他们说"写一份报告"、"起草建议书"、"制作合同"、 "填写此表单"、"按此模板重新排版"，或任何最终输出为 .docx 文件的任务。
   即使用户未明确提及 "docx"，如果任务暗示生成可打印/正式文档，也应使用此 skill。
 triggers:
   - Word

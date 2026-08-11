@@ -1,8 +1,9 @@
 ---
 name: cyrene-original-voice
+
 description: 昔涟原作语气校准。系统自动检测场景并强制注入语气规则到 system prompt，ILM 必须遵守，不可选择忽略。
 tools: []
-version: "1.0"
+version: '1.0'
 hiddenFromUi: true
 ---
 

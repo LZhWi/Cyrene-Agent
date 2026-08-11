@@ -3,7 +3,7 @@ import "./ToolModePanel.css";
 
 type ToolMode = "work" | "code" | "learn";
 
-type TabKey = "general" | ToolMode;
+type TabKey = ToolMode;
 
 interface ToolCatalogItem {
   id: string;
@@ -17,7 +17,6 @@ interface ToolCatalogItem {
 type Overrides = Record<string, Partial<Record<string, boolean>>>;
 
 const TABS: Array<{ key: TabKey; label: string }> = [
-  { key: "general", label: "通用" },
   { key: "work", label: "Work" },
   { key: "code", label: "Code" },
   { key: "learn", label: "Learn" },
@@ -61,17 +60,12 @@ function isVisibleForMode(tool: ToolCatalogItem, mode: ToolMode, overrides: Over
   return tool.modes.includes(mode);
 }
 
-/** 通用 tab：只展示未声明 modes 的工具（默认对所有模式可用） */
-function isGeneralTool(tool: ToolCatalogItem): boolean {
-  return !tool.modes || tool.modes.length === 0;
-}
-
 export const ToolModePanel: React.FC = () => {
   const [tools, setTools] = useState<ToolCatalogItem[]>([]);
   const [overrides, setOverrides] = useState<Overrides>({});
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
-  const [tab, setTab] = useState<TabKey>("general");
+  const [tab, setTab] = useState<TabKey>("code");
 
   useEffect(() => {
     let cancelled = false;
@@ -90,15 +84,6 @@ export const ToolModePanel: React.FC = () => {
     return () => { cancelled = true; };
   }, []);
 
-  const toggleGeneral = useCallback((toolId: string, next: boolean) => {
-    setTools((prev) =>
-      prev.map((t) => (t.id === toolId ? { ...t, enabled: next } : t)),
-    );
-    void window.settings
-      ?.setToolEnabled?.(toolId, next)
-      ?.catch((err) => console.warn("[ToolModePanel] set enabled failed:", err));
-  }, []);
-
   const toggleMode = useCallback((toolId: string, mode: ToolMode, next: boolean) => {
     setOverrides((prev) => ({
       ...prev,
@@ -112,10 +97,7 @@ export const ToolModePanel: React.FC = () => {
   const visibleTools = useMemo(() => {
     const kw = filter.trim().toLowerCase();
     const usable = tools.filter((t) => !t.deprecated);
-    const shown =
-      tab === "general"
-        ? usable.filter((t) => isGeneralTool(t))
-        : usable.filter((t) => t.enabled && (isGeneralTool(t) || isVisibleForMode(t, tab, overrides)));
+    const shown = usable.filter((t) => t.enabled && isVisibleForMode(t, tab, overrides));
     const searched = kw
       ? shown.filter(
           (t) =>
@@ -125,8 +107,8 @@ export const ToolModePanel: React.FC = () => {
         )
       : shown;
     return [...searched].sort((a, b) => {
-      const aOn = tab === "general" ? a.enabled : isVisibleForMode(a, tab, overrides);
-      const bOn = tab === "general" ? b.enabled : isVisibleForMode(b, tab, overrides);
+      const aOn = isVisibleForMode(a, tab, overrides);
+      const bOn = isVisibleForMode(b, tab, overrides);
       if (aOn !== bOn) return aOn ? -1 : 1;
       return a.id.localeCompare(b.id);
     });
@@ -137,9 +119,7 @@ export const ToolModePanel: React.FC = () => {
       <header className="tool-panel__header">
         <h1 className="tool-panel__title">工具</h1>
         <p className="tool-panel__subtitle">
-          {tab === "general"
-            ? "管理所有模式下都可用的通用工具"
-            : `管理工具在 ${TABS.find((t) => t.key === tab)?.label} 模式下的可见性`}
+          {`管理工具在 ${TABS.find((t) => t.key === tab)?.label} 模式下的可见性`}
         </p>
       </header>
 
@@ -170,17 +150,14 @@ export const ToolModePanel: React.FC = () => {
       ) : (
         <div className="tool-panel__grid">
           {visibleTools.map((tool) => {
-            const isOn =
-              tab === "general" ? tool.enabled : isVisibleForMode(tool, tab, overrides);
+            const isOn = isVisibleForMode(tool, tab, overrides);
             return (
               <div key={tool.id} className={"tool-card" + (isOn ? "" : " is-off")}>
                 <ToolIcon toolId={tool.id} />
                 <div className="tool-card__body">
                   <div className="tool-card__name">
                     {tool.name}
-                    {tab !== "general" && !tool.enabled && (
-                      <span className="tool-card__badge">已禁用</span>
-                    )}
+                    {!tool.enabled && <span className="tool-card__badge">已禁用</span>}
                   </div>
                   <div className="tool-card__desc">{tool.description.split("\n")[0] || "暂无描述"}</div>
                 </div>
@@ -189,11 +166,7 @@ export const ToolModePanel: React.FC = () => {
                   role="switch"
                   aria-checked={isOn}
                   className={"tool-card__pill" + (isOn ? " is-on" : "")}
-                  onClick={() =>
-                    tab === "general"
-                      ? toggleGeneral(tool.id, !isOn)
-                      : toggleMode(tool.id, tab, !isOn)
-                  }
+                  onClick={() => toggleMode(tool.id, tab, !isOn)}
                 >
                   <span className="tool-card__pill-knob" />
                 </button>

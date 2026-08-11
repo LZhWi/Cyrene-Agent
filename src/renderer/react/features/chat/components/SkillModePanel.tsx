@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import "./SkillModePanel.css";
 
 type SkillMode = "work" | "code" | "learn";
-type TabKey = "general" | SkillMode;
+type TabKey = SkillMode;
 type SkillSource = "builtin" | "user";
 
 interface SkillCatalogItem {
@@ -19,7 +19,6 @@ interface SkillCatalogItem {
 type Overrides = Record<string, Partial<Record<SkillMode, boolean>>>;
 
 const TABS: Array<{ key: TabKey; label: string }> = [
-  { key: "general", label: "通用" },
   { key: "work", label: "Work" },
   { key: "code", label: "Code" },
   { key: "learn", label: "Learn" },
@@ -89,11 +88,6 @@ function isVisibleForMode(skill: SkillCatalogItem, mode: SkillMode, overrides: O
   return skill.modes.includes(mode);
 }
 
-/** 通用 tab：只展示未声明 modes 的 skill（默认对所有模式可用） */
-function isGeneralSkill(skill: SkillCatalogItem): boolean {
-  return !skill.modes || skill.modes.length === 0;
-}
-
 export const SkillModePanel: React.FC = () => {
   const [catalog, setCatalog] = useState<SkillCatalogItem[]>([]);
   const [overrides, setOverrides] = useState<Overrides>({});
@@ -101,7 +95,7 @@ export const SkillModePanel: React.FC = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState("");
   const [source, setSource] = useState<"all" | SkillSource>("all");
-  const [tab, setTab] = useState<TabKey>("general");
+  const [tab, setTab] = useState<TabKey>("code");
 
   const load = useCallback(async () => {
     const api = window.settings;
@@ -137,15 +131,6 @@ export const SkillModePanel: React.FC = () => {
     }
   }, [load]);
 
-  const toggleGeneral = useCallback((skillId: string, next: boolean) => {
-    setCatalog((prev) =>
-      prev.map((s) => (s.id === skillId ? { ...s, enabled: next } : s)),
-    );
-    void window.settings
-      ?.setSkillEnabled?.(skillId, next)
-      ?.catch((err) => console.warn("[SkillModePanel] set enabled failed:", err));
-  }, []);
-
   const toggleMode = useCallback((skillId: string, mode: SkillMode, next: boolean) => {
     setOverrides((prev) => ({
       ...prev,
@@ -162,10 +147,7 @@ export const SkillModePanel: React.FC = () => {
       if (source !== "all" && s.source !== source) return false;
       return true;
     });
-    const shown =
-      tab === "general"
-        ? candidates.filter((s) => isGeneralSkill(s))
-        : candidates.filter((s) => s.enabled && (isGeneralSkill(s) || isVisibleForMode(s, tab, overrides)));
+    const shown = candidates.filter((s) => s.enabled && isVisibleForMode(s, tab, overrides));
     const searched = kw
       ? shown.filter(
           (s) =>
@@ -175,8 +157,8 @@ export const SkillModePanel: React.FC = () => {
         )
       : shown;
     return [...searched].sort((a, b) => {
-      const aOn = tab === "general" ? a.enabled : isVisibleForMode(a, tab, overrides);
-      const bOn = tab === "general" ? b.enabled : isVisibleForMode(b, tab, overrides);
+      const aOn = isVisibleForMode(a, tab, overrides);
+      const bOn = isVisibleForMode(b, tab, overrides);
       if (aOn !== bOn) return aOn ? -1 : 1;
       return a.id.localeCompare(b.id);
     });
@@ -189,9 +171,7 @@ export const SkillModePanel: React.FC = () => {
           <div>
             <h1 className="skill-panel__title">技能</h1>
             <p className="skill-panel__subtitle">
-              {tab === "general"
-                ? "管理所有模式下都可用的通用 skill"
-                : `管理 skill 在 ${TABS.find((t) => t.key === tab)?.label} 模式下的可见性`}
+              {`管理 skill 在 ${TABS.find((t) => t.key === tab)?.label} 模式下的可见性`}
             </p>
           </div>
           <div className="skill-panel__actions">
@@ -266,8 +246,7 @@ export const SkillModePanel: React.FC = () => {
       ) : (
         <div className="skill-panel__list">
           {visibleSkills.map((skill) => {
-            const isOn =
-              tab === "general" ? skill.enabled : isVisibleForMode(skill, tab, overrides);
+            const isOn = isVisibleForMode(skill, tab, overrides);
             return (
               <div key={skill.id} className={"skill-card" + (isOn ? "" : " is-off")}>
                 <div className="skill-card__top">
@@ -275,9 +254,7 @@ export const SkillModePanel: React.FC = () => {
                   <div className="skill-card__body">
                     <div className="skill-card__name">
                       {skill.name}
-                      {tab !== "general" && !skill.enabled && (
-                        <span className="skill-card__badge">已禁用</span>
-                      )}
+                      {!skill.enabled && <span className="skill-card__badge">已禁用</span>}
                     </div>
                     <div className="skill-card__meta">
                       <span className={`skill-card__source skill-card__source--${skill.source}`}>
@@ -293,11 +270,7 @@ export const SkillModePanel: React.FC = () => {
                     role="switch"
                     aria-checked={isOn}
                     className={"skill-card__pill" + (isOn ? " is-on" : "")}
-                    onClick={() =>
-                      tab === "general"
-                        ? toggleGeneral(skill.id, !isOn)
-                        : toggleMode(skill.id, tab, !isOn)
-                    }
+                    onClick={() => toggleMode(skill.id, tab, !isOn)}
                   >
                     <span className="skill-card__pill-knob" />
                   </button>

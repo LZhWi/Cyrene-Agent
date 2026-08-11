@@ -1,5 +1,5 @@
 ---
-name: ECC · Coding Standards
+name: Ecc Coding Standards
 description: >-
   Baseline cross-project coding conventions for naming, readability,
   immutability, and code-quality review. Use detailed frontend or backend skills

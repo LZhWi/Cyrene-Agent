@@ -1,5 +1,5 @@
 ---
-name: AS · Api And Interface Design
+name: As Api And Interface Design
 description: >-
   Guides stable API and interface design. Use when designing APIs, module
   boundaries, or any public interface. Use when creating REST or GraphQL

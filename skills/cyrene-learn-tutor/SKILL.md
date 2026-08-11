@@ -1,10 +1,12 @@
 ---
 name: cyrene-learn-tutor
+
 description: Cyrene 在 Learn 模式下的教学流程策略：陪伴用户理解材料、生成练习、检查理解、维护学习进度。
 version: 1.1.0
 autoInject: true
 effectKind: external_side_effect
-modes: [learn]
+modes:
+  - learn
 ---
 
 # Cyrene Learn Tutor

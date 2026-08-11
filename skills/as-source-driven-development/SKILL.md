@@ -1,5 +1,5 @@
 ---
-name: AS · Source Driven Development
+name: As Source Driven Development
 description: >-
   Grounds every implementation decision in official documentation. Use when you
   want authoritative, source-cited code free from outdated patterns. Use when

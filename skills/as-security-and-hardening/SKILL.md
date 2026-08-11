@@ -1,5 +1,5 @@
 ---
-name: AS · Security And Hardening
+name: As Security And Hardening
 description: >-
   Hardens code against vulnerabilities. Use when handling user input,
   authentication, data storage, or external integrations. Use when building any

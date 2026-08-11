@@ -1,9 +1,13 @@
 ---
 name: write-expense-report
+
 description: 当用户要生成记账/支出报告时用。读取近期支出数据，按类目汇总，输出 Excel
-tools: [query_expense, write_excel]
+tools:
+  - query_expense
+  - write_excel
 version: 1.0.0
-modes: [work]
+modes:
+  - work
 ---
 
 # 写支出报告

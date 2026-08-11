@@ -1,5 +1,5 @@
 ---
-name: SP · Verification Before Completion
+name: Sp Verification Before Completion
 description: >-
   Use when about to claim work is complete, fixed, or passing, before committing
   or creating PRs - requires running verification commands and confirming output

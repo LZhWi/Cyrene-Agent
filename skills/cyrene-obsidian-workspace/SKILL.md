@@ -1,10 +1,12 @@
 ---
 name: cyrene-obsidian-workspace
+
 description: Cyrene 在 Learn 模式下操作 Obsidian Vault 的规范：目录约定、文件读取、按标题定位、创建与修改 Markdown 的安全原则。
 version: 1.0.0
 autoInject: true
 effectKind: mutation
-modes: [learn]
+modes:
+  - learn
 ---
 
 # Cyrene Obsidian Workspace

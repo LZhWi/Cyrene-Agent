@@ -1,5 +1,5 @@
 ---
-name: ECC · Codebase Onboarding
+name: Ecc Codebase Onboarding
 description: >-
   Analyze an unfamiliar codebase and generate a structured onboarding guide with
   architecture map, key entry points, conventions, and a starter CLAUDE.md. Use

@@ -1,5 +1,5 @@
 ---
-name: ECC · Security Review
+name: Ecc Security Review
 description: >-
   Use this skill when adding authentication, handling user input, working with
   secrets, creating API endpoints, or implementing payment/sensitive features.

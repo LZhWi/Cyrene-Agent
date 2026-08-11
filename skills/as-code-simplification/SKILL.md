@@ -1,5 +1,5 @@
 ---
-name: AS · Code Simplification
+name: As Code Simplification
 description: >-
   Simplifies code for clarity. Use when refactoring code for clarity without
   changing behavior. Use when code works but is harder to read, maintain, or

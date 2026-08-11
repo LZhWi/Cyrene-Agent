@@ -1,5 +1,5 @@
 ---
-name: AS · Spec Driven Development
+name: As Spec Driven Development
 description: >-
   Creates specs before coding. Use when starting a new project, feature, or
   significant change and no specification exists yet. Use when requirements are

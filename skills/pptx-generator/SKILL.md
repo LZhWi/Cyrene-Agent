@@ -1,14 +1,19 @@
 ---
 name: pptx-generator
-description: "生成、编辑和读取 PowerPoint 演示文稿。使用 PptxGenJS 从零创建（封面、目录、内容、章节分隔、总结幻灯片），通过 XML 工作流编辑已有 PPTX，或使用 markitdown 提取文本。触发词：PPT、PPTX、PowerPoint、演示文稿、幻灯片、slide、deck、slides。"
+
+description: >-
+  生成、编辑和读取 PowerPoint 演示文稿。使用 PptxGenJS 从零创建（封面、目录、内容、章节分隔、总结幻灯片），通过 XML 工作流编辑已有
+  PPTX，或使用 markitdown 提取文本。触发词：PPT、PPTX、PowerPoint、演示文稿、幻灯片、slide、deck、slides。
 license: MIT
 metadata:
-  version: "1.0"
+  version: '1.0'
   category: productivity
   sources:
-    - https://gitbrent.github.io/PptxGenJS/
-    - https://github.com/microsoft/markitdown
-modes: [work, learn]
+    - 'https://gitbrent.github.io/PptxGenJS/'
+    - 'https://github.com/microsoft/markitdown'
+modes:
+  - work
+  - learn
 ---
 
 # PPTX 生成器与编辑器

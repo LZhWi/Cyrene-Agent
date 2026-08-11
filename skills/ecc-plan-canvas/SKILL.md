@@ -1,5 +1,5 @@
 ---
-name: ECC · Plan Canvas
+name: Ecc Plan Canvas
 description: >-
   Open plans and HTML artifacts in a local browser canvas where the human
   annotates elements, chats, and approves or requests changes without leaving
