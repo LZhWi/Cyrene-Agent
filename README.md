@@ -354,6 +354,11 @@ Embedding 索引已采用后台 Worker、批处理和缓存机制，以降低文
 
 #### 💻 代码协作（Code）
 
+- **代码语义查询（LSP）** — Code 模式可在已绑定工作目录中查询定义、引用、悬停、符号与诊断；不会修改文件。
+- **外部服务由用户管理** — Cyrene 只提供 LSP 客户端，不随应用捆绑、下载、升级或静默安装语言服务器。
+- **发现顺序** — 优先使用用户明确配置的命令，其次查找工作区 `node_modules/.bin`，最后查找系统 `PATH`。
+- **安装与排障** — 请自行安装所需服务，例如 `typescript-language-server`、`pyright-langserver`、`gopls`、`rust-analyzer` 或 `clangd`；Windows 可用 `where pyright-langserver`，macOS/Linux 可用 `which pyright-langserver` 检查是否可发现。用户也可以明确要求昔涟通过现有、受权限控制的工具协助安装。
+- **安全边界** — 语言服务进程使用标准输入输出启动，文件访问受绑定工作目录限制；模型不能指定命令、服务 ID 或工作目录。
 
 
 #### 📚 学习陪伴（Learn）

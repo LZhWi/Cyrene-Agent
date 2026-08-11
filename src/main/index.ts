@@ -73,6 +73,7 @@ import { resolveVendorRuntimeSettings, setVendorRuntimeSettingsGetter } from "./
 import { toolRegistry } from "./orchestrator/tool-registry";
 import { setLive2dWindowSender } from "./orchestrator/built-in-tools";
 import { registerAllTools } from "./orchestrator/tool-registration";
+import { LspManager } from "./lsp/manager";
 import { initSandbox } from "./orchestrator/sandbox/sandbox-exec";
 import { initMcpManager, pruneMcpServersByIds } from "./orchestrator/mcp-manager";
 import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from "./sync-mcp-builtin";
@@ -191,6 +192,7 @@ let schedulerSubsystem: SchedulerSubsystem | null = null;
 let channelsSubsystem: ChannelsSubsystem | null = null;
 let screenshotService: ScreenshotService | null = null;
 let windowManager: WindowManager | null = null;
+let lspManager: LspManager | null = null;
 const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
   onClosed: () => { /* no-op：原 setLive2dWindow 已随 opener 子系统一起移除 */ },
 });
@@ -341,7 +343,8 @@ app.whenReady().then(async () => {
   );
 
   // 工具注册：集中到一个显式入口，取代 index.ts 中的副作用 import
-  registerAllTools({ codeGitService });
+  lspManager = new LspManager();
+  registerAllTools({ codeGitService, lspManager });
 
   // 内置 MCP 自动连接：Playwright (默认关闭,选项控制)
   const initialSettings = loadGeneralSettings();
@@ -510,6 +513,7 @@ app.on("before-quit", () => {
   flushTokenUsage();
   void channelsSubsystem?.shutdown();
   void screenshotService?.shutdown();
+  void lspManager?.disposeAll();
 });
 
 app.on("activate", () => {

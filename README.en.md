@@ -368,6 +368,11 @@ If OOM errors continue, use the Chrome DevTools Memory Profiler in development m
 
 #### 💻 Code Collaboration (Code)
 
+- **Semantic Code Queries (LSP)** — Code mode can query definitions, references, hover details, symbols, and diagnostics inside the bound workspace without modifying files.
+- **User-managed servers** — Cyrene provides an LSP client only. It never bundles, downloads, upgrades, or silently installs language servers.
+- **Discovery order** — Explicit user configuration comes first, followed by workspace `node_modules/.bin`, then the system `PATH`.
+- **Install and troubleshoot** — Install the server your language needs, such as `typescript-language-server`, `pyright-langserver`, `gopls`, `rust-analyzer`, or `clangd`. Use `where pyright-langserver` on Windows or `which pyright-langserver` on macOS/Linux. A user may explicitly ask Cyrene to assist through existing permission-controlled installation tools.
+- **Security boundary** — Servers run over stdio and file access stays inside the bound workspace. The model cannot choose a command, server ID, or workspace root.
 - **Cline Runtime** — Coding Agent runtime based on the Cline SDK, supporting multi-turn tool calls, file edits, and command execution.
 - **Trusted Workspace Binding** — Binds a session to a specific code directory; all file operations, command execution, and tool calls are restricted to that directory.
 - **Coding Agent Workflow** — Understands engineering requirements, reads and modifies code, analyzes logs and architecture, runs commands and tests, and delivers verifiable results.
