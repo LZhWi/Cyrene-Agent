@@ -22,7 +22,7 @@ function optionalPositiveInteger(args: Record<string, unknown>, key: string): nu
 function requireCodeWorkspace(ctx: ToolContext | undefined): LspExecutionContext {
   if (ctx?.mode !== "code") throw new Error("LSP 工具只允许在 Code 模式使用");
   if (!ctx.resolvedWorkspaceRoot) throw new Error("当前 Code 对话尚未绑定工作目录");
-  return { resolvedWorkspaceRoot: ctx.resolvedWorkspaceRoot };
+  return { resolvedWorkspaceRoot: ctx.resolvedWorkspaceRoot, signal: ctx.signal };
 }
 
 function parseQuery(args: Record<string, unknown>): LspQuery {

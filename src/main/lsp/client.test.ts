@@ -81,4 +81,15 @@ describe("LspClient", () => {
     expect(child.changed).toHaveLength(1);
     expect(child.kill).toHaveBeenCalled();
   });
+
+  it("rejects a cancelled request without disposing the shared server", async () => {
+    const { root } = createWorkspace();
+    const child = new FakeLspProcess();
+    const client = new LspClient({ server: resolvedServer(), workspaceRoot: root, spawnImpl: () => child });
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(client.request("textDocument/hover", {}, 10_000, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(child.kill).not.toHaveBeenCalled();
+  });
 });

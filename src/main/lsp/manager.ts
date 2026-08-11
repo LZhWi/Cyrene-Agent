@@ -9,7 +9,7 @@ import { LspContractError, toProtocolPosition, type LspQuery, type LspServerOver
 export interface LspClientLike {
   initialize(): Promise<void>;
   touchFile(filePath: string, languageId: string): Promise<void>;
-  request(method: string, params: unknown, timeoutMs?: number): Promise<unknown>;
+  request(method: string, params: unknown, timeoutMs?: number, signal?: AbortSignal): Promise<unknown>;
   getDiagnostics(filePath: string): unknown[];
   dispose(): Promise<void>;
 }
@@ -23,6 +23,7 @@ export interface LspManagerOptions {
 
 export interface LspExecutionContext {
   resolvedWorkspaceRoot?: string;
+  signal?: AbortSignal;
 }
 
 function languageIdFor(filePath: string): string {
@@ -76,18 +77,18 @@ export class LspManager {
 
     let value: unknown;
     switch (query.operation) {
-      case "goToDefinition": value = await client.request("textDocument/definition", fileParams(filePath!, query)); break;
-      case "findReferences": value = await client.request("textDocument/references", { ...fileParams(filePath!, query), context: { includeDeclaration: true } }); break;
-      case "hover": value = await client.request("textDocument/hover", fileParams(filePath!, query)); break;
-      case "documentSymbol": value = await client.request("textDocument/documentSymbol", { textDocument: { uri: pathToFileURL(filePath!).toString() } }); break;
-      case "workspaceSymbol": value = await client.request("workspace/symbol", { query: query.query ?? "" }); break;
-      case "goToImplementation": value = await client.request("textDocument/implementation", fileParams(filePath!, query)); break;
+      case "goToDefinition": value = await this.request(client, "textDocument/definition", fileParams(filePath!, query), context.signal); break;
+      case "findReferences": value = await this.request(client, "textDocument/references", { ...fileParams(filePath!, query), context: { includeDeclaration: true } }, context.signal); break;
+      case "hover": value = await this.request(client, "textDocument/hover", fileParams(filePath!, query), context.signal); break;
+      case "documentSymbol": value = await this.request(client, "textDocument/documentSymbol", { textDocument: { uri: pathToFileURL(filePath!).toString() } }, context.signal); break;
+      case "workspaceSymbol": value = await this.request(client, "workspace/symbol", { query: query.query ?? "" }, context.signal); break;
+      case "goToImplementation": value = await this.request(client, "textDocument/implementation", fileParams(filePath!, query), context.signal); break;
       case "diagnostics": value = client.getDiagnostics(filePath!); break;
-      case "prepareCallHierarchy": value = await client.request("textDocument/prepareCallHierarchy", fileParams(filePath!, query)); break;
+      case "prepareCallHierarchy": value = await this.request(client, "textDocument/prepareCallHierarchy", fileParams(filePath!, query), context.signal); break;
       case "incomingCalls":
-        value = await client.request("callHierarchy/incomingCalls", { item: this.callHierarchyItem(query) }); break;
+        value = await this.request(client, "callHierarchy/incomingCalls", { item: this.callHierarchyItem(query) }, context.signal); break;
       case "outgoingCalls":
-        value = await client.request("callHierarchy/outgoingCalls", { item: this.callHierarchyItem(query) }); break;
+        value = await this.request(client, "callHierarchy/outgoingCalls", { item: this.callHierarchyItem(query) }, context.signal); break;
       default: throw new LspContractError("LSP_UNSUPPORTED_OPERATION");
     }
 
@@ -142,5 +143,9 @@ export class LspManager {
       throw new LspContractError("LSP_UNSUPPORTED_OPERATION", "调用层级后续查询需要 prepareCallHierarchy 返回的条目");
     }
     return query.item;
+  }
+
+  private request(client: LspClientLike, method: string, params: unknown, signal?: AbortSignal): Promise<unknown> {
+    return signal ? client.request(method, params, undefined, signal) : client.request(method, params);
   }
 }

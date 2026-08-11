@@ -39,16 +39,31 @@ function defaultSpawn(
   return spawn(command, args, options) as unknown as LspChildProcess;
 }
 
-function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string): Promise<T> {
+function withTimeout<T>(operation: Promise<T>, timeoutMs: number, message: string, signal?: AbortSignal): Promise<T> {
+  if (signal?.aborted) return Promise.reject(abortError());
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let removeAbortListener: (() => void) | undefined;
   return Promise.race([
     operation,
     new Promise<T>((_, reject) => {
       timer = setTimeout(() => reject(new Error(message)), timeoutMs);
     }),
+    new Promise<T>((_, reject) => {
+      if (!signal) return;
+      const onAbort = () => reject(abortError());
+      signal.addEventListener("abort", onAbort, { once: true });
+      removeAbortListener = () => signal.removeEventListener("abort", onAbort);
+    }),
   ]).finally(() => {
     if (timer) clearTimeout(timer);
+    removeAbortListener?.();
   });
+}
+
+function abortError(): Error {
+  const error = new Error("LSP request cancelled");
+  error.name = "AbortError";
+  return error;
 }
 
 /** 一个工作区内单个外部 LSP 服务进程的 JSON-RPC 客户端。 */
@@ -134,9 +149,9 @@ export class LspClient {
     });
   }
 
-  async request<T>(method: string, params: unknown, timeoutMs = 10_000): Promise<T> {
+  async request<T>(method: string, params: unknown, timeoutMs = 10_000, signal?: AbortSignal): Promise<T> {
     await this.initialize();
-    return withTimeout(this.requireConnection().sendRequest(method, params), timeoutMs, "LSP_REQUEST_TIMEOUT") as Promise<T>;
+    return withTimeout(this.requireConnection().sendRequest(method, params), timeoutMs, "LSP_REQUEST_TIMEOUT", signal) as Promise<T>;
   }
 
   getDiagnostics(filePath: string): Diagnostic[] {

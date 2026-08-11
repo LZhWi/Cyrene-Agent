@@ -107,4 +107,18 @@ describe("LspManager", () => {
 
     expect(client.request).toHaveBeenCalledWith("callHierarchy/incomingCalls", { item });
   });
+
+  it("forwards parent cancellation to the semantic request", async () => {
+    const { root, file } = workspace();
+    const client = {
+      initialize: vi.fn(async () => {}), touchFile: vi.fn(async () => {}),
+      request: vi.fn(async () => null), getDiagnostics: vi.fn(() => []), dispose: vi.fn(async () => {}),
+    };
+    const manager = new LspManager({ resolveServer: () => resolvedServer, createClient: () => client });
+    const controller = new AbortController();
+
+    await manager.execute({ operation: "hover", filePath: file, line: 1, character: 1 }, { resolvedWorkspaceRoot: root, signal: controller.signal });
+
+    expect(client.request).toHaveBeenCalledWith("textDocument/hover", expect.any(Object), undefined, controller.signal);
+  });
 });
