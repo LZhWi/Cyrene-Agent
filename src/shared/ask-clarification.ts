@@ -80,7 +80,7 @@ export interface AskQuestionView {
   multiple: boolean;
   options: AskOptionView[];
   customInput: {
-    enabled: true;
+    enabled: boolean;
     placeholder?: string;
   };
 }

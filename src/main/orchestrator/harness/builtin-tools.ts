@@ -204,35 +204,43 @@ export const ASK_USER_TOOL_ID = "ask_user";
 export const askUserToolSpec: ToolSpec = {
   name: ASK_USER_TOOL_ID,
   description:
-    "向用户提问以补充信息。这是排他工具：一轮里出现 ask_user 时，其他工具调用不执行。\n" +
-    "用法：传入多个问题，每个问题有选项列表，用户可选或自定义输入。\n" +
-    "用户回答后，模型根据回答重新决策下一步。",
+    "在执行过程中需要用户提供偏好、澄清歧义、选择方向或补充自由文本时调用。" +
+    "这是排他工具：一轮里出现 ask_user 时，其他工具调用不执行。\n" +
+    "一次可问 1-3 个问题；支持单选、多选和自由填写。每题都必须回答，用户也可以自由填写“停止”等明确意图。" +
+    "不要用最终回复向用户提问；需要用户回答后继续当前任务时，应调用此工具。",
   parameters: {
     type: "object",
     properties: {
       questions: {
         type: "array",
+        minItems: 1,
+        maxItems: 3,
         description: "要问用户的问题列表",
         items: {
           type: "object",
           properties: {
             id: { type: "string", description: "问题唯一标识" },
             question: { type: "string", description: "问题文本" },
+            type: {
+              type: "string",
+              enum: ["single_select", "multi_select", "text"],
+              description: "single_select=单选；multi_select=多选；text=自由填写",
+            },
             options: {
               type: "array",
-              description: "可选项列表",
+              description: "单选/多选的可选项列表；text 类型不要传入",
               items: {
                 type: "object",
                 properties: {
                   label: { type: "string", description: "选项显示文本" },
                   value: { type: "string", description: "选项值" },
+                  description: { type: "string", description: "选项补充说明（可选）" },
                 },
                 required: ["label", "value"],
               },
             },
-            allowCustom: { type: "boolean", description: "是否允许自定义输入（默认 true）" },
           },
-          required: ["id", "question", "options"],
+          required: ["id", "question", "type"],
         },
       },
     },
@@ -240,18 +248,80 @@ export const askUserToolSpec: ToolSpec = {
   },
 };
 
-interface AskQuestion {
+type HarnessAskQuestionType = "single_select" | "multi_select" | "text";
+
+interface HarnessAskQuestion {
   id: string;
   question: string;
-  options: Array<{ label: string; value: string }>;
-  allowCustom?: boolean;
+  type: HarnessAskQuestionType;
+  options: Array<{ label: string; value: string; description?: string }>;
 }
 
 interface AskAnswer {
   questionId: string;
-  selectedValue?: string;
-  selectedLabel?: string;
+  selectedValues?: string[];
+  selectedLabels?: string[];
   customInput?: string;
+}
+
+const ASK_OPTION_LIMITS: Record<HarnessAskQuestionType, { min: number; max: number }> = {
+  single_select: { min: 2, max: 6 },
+  multi_select: { min: 2, max: 8 },
+  text: { min: 0, max: 0 },
+};
+
+function parseAskQuestions(raw: unknown): { questions?: HarnessAskQuestion[]; error?: string } {
+  if (!Array.isArray(raw) || raw.length === 0 || raw.length > 3) {
+    return { error: "questions 必须是包含 1-3 个问题的数组" };
+  }
+
+  const ids = new Set<string>();
+  const questions: HarnessAskQuestion[] = [];
+  for (const [index, candidate] of raw.entries()) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
+      return { error: `第 ${index + 1} 个问题必须是对象` };
+    }
+    const item = candidate as Record<string, unknown>;
+    const id = String(item.id ?? "").trim();
+    const question = String(item.question ?? "").trim();
+    const type = String(item.type ?? "");
+    if (!id || ids.has(id)) return { error: `第 ${index + 1} 个问题的 id 必须非空且唯一` };
+    if (!question) return { error: `第 ${index + 1} 个问题文本不能为空` };
+    if (type !== "single_select" && type !== "multi_select" && type !== "text") {
+      return { error: `第 ${index + 1} 个问题 type 必须是 single_select、multi_select 或 text` };
+    }
+
+    const rawOptions = item.options;
+    if (rawOptions !== undefined && !Array.isArray(rawOptions)) {
+      return { error: `第 ${index + 1} 个问题的 options 必须是数组` };
+    }
+    const optionsSource = (rawOptions ?? []) as unknown[];
+    const limits = ASK_OPTION_LIMITS[type];
+    if (optionsSource.length < limits.min || optionsSource.length > limits.max) {
+      return { error: `第 ${index + 1} 个 ${type} 问题必须有 ${limits.min}-${limits.max} 个选项` };
+    }
+
+    const values = new Set<string>();
+    const options: HarnessAskQuestion["options"] = [];
+    for (const optionCandidate of optionsSource) {
+      if (!optionCandidate || typeof optionCandidate !== "object" || Array.isArray(optionCandidate)) {
+        return { error: `第 ${index + 1} 个问题含有无效选项` };
+      }
+      const option = optionCandidate as Record<string, unknown>;
+      const label = String(option.label ?? "").trim();
+      const value = String(option.value ?? "").trim();
+      if (!label || !value || values.has(value)) {
+        return { error: `第 ${index + 1} 个问题的选项 label/value 必须非空，且 value 不可重复` };
+      }
+      values.add(value);
+      const description = typeof option.description === "string" ? option.description.trim() : "";
+      options.push({ label, value, ...(description ? { description } : {}) });
+    }
+
+    ids.add(id);
+    questions.push({ id, question, type, options });
+  }
+  return { questions };
 }
 
 /**
@@ -266,14 +336,16 @@ export async function executeAskUser(
   const args = parseToolCallArgs(call);
   const rawQuestions = (args.questions as unknown) ?? [];
 
-  if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
+  const parsed = parseAskQuestions(rawQuestions);
+  if (!parsed.questions) {
     return {
       outcome: "failure",
       category: "invalid_arguments",
       tool: ASK_USER_TOOL_ID,
-      message: "questions 参数必须是非空数组",
+      message: parsed.error ?? "questions 参数无效",
     };
   }
+  const questions = parsed.questions;
 
   if (!requestUserClarification) {
     return {
@@ -283,21 +355,6 @@ export async function executeAskUser(
       message: "requestUserClarification 函数未注入，无法向用户提问",
     };
   }
-
-  const questions: AskQuestion[] = rawQuestions.map((q: unknown) => {
-    const item = q as Record<string, unknown>;
-    return {
-      id: String(item.id ?? ""),
-      question: String(item.question ?? ""),
-      options: Array.isArray(item.options)
-        ? (item.options as Array<Record<string, unknown>>).map((o) => ({
-            label: String(o.label ?? ""),
-            value: String(o.value ?? ""),
-          }))
-        : [],
-      ...(item.allowCustom !== undefined ? { allowCustom: Boolean(item.allowCustom) } : {}),
-    };
-  });
 
   // 构造 AskClarificationCard（复用现有 UI 卡片格式）
   // 关键: AskClarificationCard.questions[].field 是 AskCard 内部 key;
@@ -309,10 +366,10 @@ export async function executeAskUser(
     questions: questions.map((q) => ({
       field: q.id,                    // ← 用 field 承载 question.id
       question: q.question,
-      type: "single_select" as const, // P0: 单选; options 提供时走 single_select
-      options: q.options.map((o) => ({ value: o.value, label: o.label })),
-      allowCustom: q.allowCustom ?? true,
-      freeTextPlaceholder: "或自定义输入",
+      type: q.type,
+      options: q.options,
+      allowCustom: true,
+      freeTextPlaceholder: q.type === "text" ? "请输入回答" : "或填写其他回答",
     })),
     deferredFields: [],
   };
@@ -324,25 +381,34 @@ export async function executeAskUser(
     // AskUserAnswer.answers[] 的 field 就是上面我们塞进去的 question.id
     const rawAnswers = (rawAnswer as { answers?: Array<{ field?: string; selectedValues?: string[]; customText?: string }> })?.answers ?? [];
 
-    // 翻译回模型能看懂的形状: 每个 question 都给一份, 缺的回答标 null
-    const answers: AskAnswer[] = questions.map((q) => {
+    const answers: AskAnswer[] = [];
+    for (const q of questions) {
       const matched = rawAnswers.find((a) => a.field === q.id);
-      const selectedValue = matched?.selectedValues?.[0];
-      const selectedLabel = selectedValue
-        ? q.options.find((o) => o.value === selectedValue)?.label
-        : undefined;
-      return {
-        questionId: q.id,
-        selectedValue,
-        selectedLabel,
-        customInput: matched?.customText ?? undefined,
-      };
-    });
+      const customInput = matched?.customText?.trim();
+      const selectedValues = Array.isArray(matched?.selectedValues) ? matched.selectedValues : [];
+      const validSelectedValues = selectedValues.every((value) => q.options.some((option) => option.value === value));
+      const expectedSelectionCount = q.type === "single_select" ? 1 : q.type === "multi_select" ? 1 : 0;
+      if (!matched || (customInput && selectedValues.length > 0) || (!customInput && selectedValues.length < expectedSelectionCount)
+        || !validSelectedValues || (q.type !== "multi_select" && selectedValues.length > expectedSelectionCount)) {
+        return {
+          outcome: "failure",
+          category: "timeout",
+          tool: ASK_USER_TOOL_ID,
+          message: "未收到每个问题的有效回答，不能把空回答当作用户选择",
+        };
+      }
+      if (customInput) {
+        answers.push({ questionId: q.id, customInput });
+        continue;
+      }
+      const selectedLabels = selectedValues.map((value) => q.options.find((option) => option.value === value)?.label ?? value);
+      answers.push({ questionId: q.id, selectedValues, selectedLabels });
+    }
 
     return {
       outcome: "success",
       tool: ASK_USER_TOOL_ID,
-      message: `用户已回答 ${answers.filter((a) => a.selectedValue || a.customInput).length} 个问题`,
+      message: `用户已回答 ${answers.length} 个问题`,
       output: JSON.stringify({ answers }),
     };
   } catch (err) {
