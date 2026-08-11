@@ -2044,7 +2044,11 @@ export function ChatPage() {
             mode={mode}
             sessions={sessions}
             activeSessionId={activeSessionId}
-            onSelect={(sessionId) => void selectSession(sessionId)}
+            onSelect={(sessionId) => {
+              setToolPanelOpen(false);
+              setSkillPanelOpen(false);
+              void selectSession(sessionId);
+            }}
             onOpenProject={(workspaceRoot) => {
               void chatStore()?.openWorkspace(workspaceRoot).then((result) => {
                 if (!result.ok) window.alert(`无法打开项目文件夹：${result.error ?? "未知错误"}`);
