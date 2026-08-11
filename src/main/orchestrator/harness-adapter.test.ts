@@ -12,6 +12,14 @@ import type { HarnessEvent } from "./harness/types";
 import type { BaseEvent } from "@ag-ui/core";
 
 describe("Harness Todo working notebook policy", () => {
+  it("does not duplicate environment or CITA already owned by build options", () => {
+    const prompt = buildHarnessSystemPrompt({
+      soulSystemBaseContent: "[ENV]", toolSystemContent: "[CITA_CONTEXT]",
+      runtimeEnvironmentContext: "[ENV]", citaContextBlock: "[CITA_CONTEXT]",
+    } as never);
+    expect(prompt.split("[ENV]").length - 1).toBe(1);
+    expect(prompt.split("[CITA_CONTEXT]").length - 1).toBe(1);
+  });
   it("places the soft Todo policy in every Harness system prompt", () => {
     const prompt = buildHarnessSystemPrompt({
       soulSystemBaseContent: "persona",

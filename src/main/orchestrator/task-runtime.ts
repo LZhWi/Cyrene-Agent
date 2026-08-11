@@ -9,6 +9,7 @@ import type { VendorConfig, ChatMessage } from "./vendors/types";
 import type { ToolContext } from "./tool-context";
 import { taskCharacterLeasePool, type TaskCharacterLeasePool } from "../tasks/task-character-pool";
 import type { TaskDelegationPresentation } from "../../shared/task-session";
+import type { RunCapabilities } from "./run-capabilities";
 
 export interface TaskExecuteRequest {
   description: string;
@@ -30,6 +31,7 @@ export interface TaskRuntimeParentContext {
   systemPrompt: string;
   vendorConfig: VendorConfig;
   tools: ToolDefinition[];
+  capabilities?: RunCapabilities;
   resolvedWorkspaceRoot?: string;
   signal?: AbortSignal;
   checkPermission?: HarnessInput["checkPermission"];
@@ -90,6 +92,7 @@ export function createTaskExecutor(input: {
       signal: input.parent.signal,
       resolvedWorkspaceRoot: input.parent.resolvedWorkspaceRoot,
       mode: input.parent.mode,
+      allowedSkillIds: input.parent.capabilities?.skillIds,
     };
 
     const lease = characterPool.acquire(input.parent.parentConversationId, input.random);

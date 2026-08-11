@@ -54,6 +54,7 @@ import type { TrustedAskUserProfile } from "../../shared/ask-clarification";
 import type { ConversationMode } from "../../shared/chat-types";
 import type { SkillRouteInfo } from "./cyrene-agent";
 import { filterToolsBySearchBackend, type SearchBackend } from "./search-backend-filter";
+import type { RunCapabilities } from "./run-capabilities";
 import { buildStickerEmbeddingQuery } from "../sticker-query";
 
 /** index.ts 模块级符号的最小可注入子集。
@@ -64,6 +65,8 @@ export interface BuildOptionsDeps {
   loadGeneralSettings: () => StyleSettingsLite;
   loadUserProfile: () => UserProfileLite;
   buildEnvironmentContext: (model: { provider: string; model: string }, profile: unknown) => string;
+  /** @deprecated 仅保留旧测试/调用方结构兼容；生产不再使用。 */
+  buildSystemPrompt?: (styleFile: string) => string;
   buildSkillCatalog: (skills: ReadonlyArray<unknown>) => string;
   buildAutoInjectedSkillContext: (skills: ReadonlyArray<unknown>) => string;
   buildAutoInjectedSoulContext?: (skills: ReadonlyArray<unknown>) => string;
@@ -90,11 +93,15 @@ export interface BuildOptionsDeps {
     messages: ReadonlyArray<{ role: string; content?: string }>,
   ) => Promise<string>;
   buildRelationshipContext: () => Promise<string>;
-  buildSystemPrompt: (styleFile: string) => string;
-  /** 第一期：工具阶段 system prompt。仅含工具调度规则 + 自动生成的工具目录。 */
-  buildToolSystemPrompt: (enabledTools: ReadonlyArray<unknown>, isOptimizedFirstRound?: boolean) => string;
+  /** 明确按模式构建基础人设，不再通过 style 文件名猜模式。 */
+  buildModePrompt?: (mode: ConversationMode) => string;
+  /** 工具阶段 system prompt。仅含工具调度规则 + 自动生成的工具目录。 */
+  buildToolSystemPrompt: (mode: ConversationMode, enabledTools: ReadonlyArray<unknown>, isOptimizedFirstRound?: boolean) => string;
   /** 第一期：Soul 阶段使用的基础 system prompt。工具结果在 FC 循环 Soul 阶段执行前动态追加。 */
   buildSoulSystemBasePrompt: (styleFile: string) => string;
+  resolveRunCapabilities?: (input: {
+    mode: ConversationMode; activeSearchBackend: SearchBackend; toolModeOverrides?: ToolModeOverrides; skillModeOverrides?: SkillModeOverrides;
+  }) => RunCapabilities;
   /** 已由 main 侧解析好的 style Markdown；build-options 只负责注入边界。 */
   readStylePrompt: (styleId: StyleId) => string;
   /** 按 provider/model/reasoning/customStyle 解析后的 Soul 采样参数。 */
@@ -543,21 +550,18 @@ export async function buildAgentRunOptions(
   // 优先使用 AguiBridge 注入的真实会话模式，fallback 到执行模式（兼容旧调用方）。
   const resolvedMode: ConversationMode = input.mode ?? (isChatMode ? "chat" : "work");
   const basePromptMode = resolvedMode;
-  const enabledTools = deps.toolRegistry.getEnabledToolsForMode(
-    resolvedMode,
-    styleSettings.toolModeOverrides,
-  );
+  const enabledTools = deps.toolRegistry.getEnabledToolsForMode(resolvedMode, styleSettings.toolModeOverrides);
 
   // 三模适配层：skill 按 resolvedMode 过滤，chat 模式不暴露 skill。
-  const enabledSkills = resolvedMode === "chat"
+  let enabledSkills = resolvedMode === "chat"
     ? []
     : deps.skillRegistry.getEnabledForMode(resolvedMode, styleSettings.skillModeOverrides);
-  const skillCatalog = deps.buildSkillCatalog(enabledSkills);
-  const autoInjectedSkillContext = deps.buildAutoInjectedSkillContext(enabledSkills);
-  const autoInjectedSoulContext = deps.buildAutoInjectedSoulContext?.(enabledSkills) ?? "";
+  let skillCatalog = deps.buildSkillCatalog(enabledSkills);
+  let autoInjectedSkillContext = deps.buildAutoInjectedSkillContext(enabledSkills);
+  let autoInjectedSoulContext = deps.buildAutoInjectedSoulContext?.(enabledSkills) ?? "";
 
   // Task Router 可用 Skill 列表（Router 判断 direct/plan 和 Skill 加载用）
-  const availableSkills: SkillRouteInfo[] = (enabledSkills as Array<Record<string, unknown>>).map((s) => ({
+  let availableSkills: SkillRouteInfo[] = (enabledSkills as Array<Record<string, unknown>>).map((s) => ({
     id: String(s.id ?? ""),
     description: String(s.description ?? ""),
     ...((s.manifest as Record<string, unknown>)?.defaultExecutionMode
@@ -581,30 +585,41 @@ export async function buildAgentRunOptions(
     activeSearchBackend,
   );
 
-  const runTools = filteredBySearch as unknown as typeof enabledTools;
+  const fallbackCapabilities: RunCapabilities = {
+    mode: resolvedMode,
+    tools: filteredBySearch as unknown as ToolDefinition[],
+    toolIds: new Set(filteredBySearch.map((tool) => tool.id)),
+    skills: enabledSkills as never[],
+    skillIds: new Set((enabledSkills as Array<{ id?: unknown }>).map((skill) => String(skill.id ?? "")).filter(Boolean)),
+  };
+  const capabilities = deps.resolveRunCapabilities?.({
+    mode: resolvedMode,
+    activeSearchBackend,
+    toolModeOverrides: styleSettings.toolModeOverrides,
+    skillModeOverrides: styleSettings.skillModeOverrides,
+  }) ?? fallbackCapabilities;
+  enabledSkills = capabilities.skills;
+  skillCatalog = deps.buildSkillCatalog(enabledSkills);
+  autoInjectedSkillContext = deps.buildAutoInjectedSkillContext(enabledSkills);
+  autoInjectedSoulContext = deps.buildAutoInjectedSoulContext?.(enabledSkills) ?? "";
+  availableSkills = (enabledSkills as Array<Record<string, unknown>>).map((s) => ({
+    id: String(s.id ?? ""),
+    description: String(s.description ?? ""),
+    ...((s.manifest as Record<string, unknown>)?.defaultExecutionMode
+      ? { defaultExecutionMode: (s.manifest as Record<string, unknown>).defaultExecutionMode as "direct" | "plan" }
+      : {}),
+  })).filter((s) => s.id);
+  const runTools = capabilities.tools;
   const searchToolIds = filteredBySearch
     .filter((t) => t.id === "web_search" || t.id.startsWith("minimax-web-search-"))
     .map((t) => t.id);
   console.log(`[Cyrene] 搜索后端=${activeSearchBackend} 暴露搜索工具=[${searchToolIds.join(", ") || "无"}]`);
-  const baseSystemPrompt = deps.buildSystemPrompt(basePromptMode);
-  const baseSoulSystemPrompt = deps.buildSoulSystemBasePrompt(basePromptMode);
-  const baseToolSystemPrompt = deps.buildToolSystemPrompt(runTools);
+  const baseSoulSystemPrompt = deps.buildModePrompt?.(resolvedMode)
+    ?? deps.buildSoulSystemBasePrompt(basePromptMode);
+  const baseToolSystemPrompt = resolvedMode === "chat" ? "" : deps.buildToolSystemPrompt(resolvedMode, runTools);
 
   // 第一期：保留旧 systemContent 兼容（已不再使用，保留字段是为了 logger 诊断）。
   // 同时新增 toolSystemContent / soulSystemBaseContent 两套。
-  const systemContent =
-    (environmentContext ? environmentContext + "\n\n" : "") +
-    (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
-    (channelSystem ? channelSystem + "\n\n" : "") +
-    baseSystemPrompt +
-    (skillCatalog ? "\n\n---\n\n" + skillCatalog : "") +
-    (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "") +
-    skillActivation +
-    toneInjection +
-    (alwaysOnContext ? "\n\n" + alwaysOnContext + "\n\n" : "") +
-    (relationshipContext ? "\n\n" + relationshipContext + "\n\n" : "") +
-    attachmentContext;
-
   // 工具阶段：工具规则 + 运行时工具目录 + 可用 Skill 路由清单。
   const toolSystemContent = baseToolSystemPrompt
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
@@ -703,7 +718,8 @@ export async function buildAgentRunOptions(
         },
       } : {}),
       ...(imageCaptionFallback ? { imageCaptionFallback } : {}),
-      ...(isChatMode ? { tools: runTools as ToolDefinition[] } : {}),
+      tools: [...runTools],
+      capabilities,
       ...(availableSkills.length > 0 ? { availableSkills } : {}),
       resolvedWorkspaceRoot,
     },

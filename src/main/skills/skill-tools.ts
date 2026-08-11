@@ -7,6 +7,7 @@
 import { toolRegistry, type ToolEffectKind } from "../orchestrator/tool-registry";
 import { skillRegistry } from "./skill-registry";
 import { logger, LogTag } from "../logger";
+import type { ToolContext } from "../orchestrator/tool-context";
 
 const LOG_PREFIX = "[SkillTools]";
 
@@ -16,6 +17,10 @@ const LOG_PREFIX = "[SkillTools]";
 // 官方 skill 系统靠宿主 agent（Claude Code 等）的上下文压缩兜底，我们没那层，得自己截断。
 const SKILL_BODY_MAX_CHARS = 6000;
 const SKILL_REF_MAX_CHARS = 8000;
+
+export function isSkillAllowedForRun(id: string, allowedSkillIds?: ReadonlySet<string>): boolean {
+  return allowedSkillIds?.has(id) ?? true;
+}
 
 /** 截断文本到 maxChars，超长时末尾附提示。保留前部（任务路由表/关键规则通常在前）。 */
 function truncateForContext(text: string, maxChars: number, hint: string): string {
@@ -80,8 +85,12 @@ export function registerSkillTools(): void {
       },
       required: ["skill_id"],
     },
-    execute: async (args) => {
+    needsContext: true,
+    execute: async (args, ctx?: ToolContext) => {
       const id = String(args.skill_id || "");
+      if (!isSkillAllowedForRun(id, ctx?.allowedSkillIds)) {
+        return `[invoke_skill] E_SKILL_UNAVAILABLE_IN_MODE: ${id}`;
+      }
       const skill = skillRegistry.getById(id);
       if (!skill || !skill.enabled || !skillRegistry.isAvailable(id)) {
         const available = skillRegistry.getEnabled().map(s => s.id).join(", ") || "(无)";
@@ -124,9 +133,13 @@ export function registerSkillTools(): void {
       },
       required: ["skill_id", "ref"],
     },
-    execute: async (args) => {
+    needsContext: true,
+    execute: async (args, ctx?: ToolContext) => {
       const id = String(args.skill_id || "");
       const ref = String(args.ref || "");
+      if (!isSkillAllowedForRun(id, ctx?.allowedSkillIds)) {
+        return `[read_skill_reference] E_SKILL_UNAVAILABLE_IN_MODE: ${id}`;
+      }
       const skill = skillRegistry.getById(id);
       if (!skill || !skill.enabled || !skillRegistry.isAvailable(id)) {
         return `[read_skill_reference] skill not found: ${id}`;

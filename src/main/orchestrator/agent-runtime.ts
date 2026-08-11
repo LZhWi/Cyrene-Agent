@@ -37,13 +37,14 @@ import {
 } from "./build-options";
 import { type CyreneRunResult, type CyreneRunOptions } from "./cyrene-agent";
 import {
-  buildSystemPrompt,
   buildToolSystemPrompt,
   buildSoulSystemBasePrompt,
   readStylePrompt,
   resolveSoulSamplingForStyle,
   loadSoulFeelingContext,
 } from "./system-prompt-builder";
+import { buildModePrompt } from "./mode-prompt-profile";
+import { resolveRunCapabilities } from "./run-capabilities";
 import { loadStickerSettings } from "./sticker-settings";
 import type { RuntimeStateService } from "./runtime-state-service";
 import type { LlmClient } from "../services/llm/llm-client";
@@ -162,10 +163,15 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       buildAlwaysOnContext: ((userText, messages) =>
         buildAlwaysOnContext(userText, messages as any)) as BuildOptionsDeps["buildAlwaysOnContext"],
       buildRelationshipContext,
-      buildSystemPrompt,
-      buildToolSystemPrompt: ((enabledTools, isOptimizedFirstRound) =>
-        buildToolSystemPrompt(enabledTools as ToolDefinition[], isOptimizedFirstRound)) as BuildOptionsDeps["buildToolSystemPrompt"],
+      buildModePrompt,
+      buildToolSystemPrompt: ((mode, enabledTools, isOptimizedFirstRound) =>
+        buildToolSystemPrompt(mode, enabledTools as ToolDefinition[], isOptimizedFirstRound)) as BuildOptionsDeps["buildToolSystemPrompt"],
       buildSoulSystemBasePrompt,
+      resolveRunCapabilities: ({ mode, activeSearchBackend, toolModeOverrides, skillModeOverrides }) => resolveRunCapabilities({
+        mode, activeSearchBackend, toolModeOverrides, skillModeOverrides,
+        toolRegistry: rawDeps.toolRegistry,
+        skillRegistry: rawDeps.skillRegistry,
+      }),
       readStylePrompt,
       resolveSoulSampling: resolveSoulSamplingForStyle,
       toolRegistry: {
@@ -262,7 +268,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         generalSettings.skillModeOverrides,
       );
       const systemContent = [
-        buildSystemPrompt("01_default.md"),
+        buildModePrompt("work"),
         buildEnvironmentContext({ provider: settings.provider, model: settings.model }, profile),
         buildSkillCatalog(scheduledSkills),
         await buildAlwaysOnContext(task.prompt, messages),

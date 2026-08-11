@@ -86,10 +86,7 @@ export async function runHarnessWithAdapter(
   const systemPrompt = buildHarnessSystemPrompt(options);
 
   // ── 构建工具列表 ──
-  const tools = filterToolsForConversationMode(
-    options.conversationMode,
-    [...(options.tools ?? toolRegistry.getEnabledTools())],
-  );
+  const tools = [...(options.capabilities?.tools ?? options.tools ?? toolRegistry.getEnabledTools())];
 
   // ── 构建工具上下文 ──
   const toolContext: ToolContext = {
@@ -100,6 +97,7 @@ export async function runHarnessWithAdapter(
     signal,
     resolvedWorkspaceRoot: options.resolvedWorkspaceRoot,
     mode: options.conversationMode,
+    allowedSkillIds: options.capabilities?.skillIds,
   };
   const permissionCheck = async (toolId: string, args: Record<string, unknown>): Promise<boolean> => {
     const tool = toolRegistry.getById(toolId);
@@ -110,6 +108,7 @@ export async function runHarnessWithAdapter(
   const taskExecutor = options.conversationMode === "work" || options.conversationMode === "code"
     ? createTaskExecutor({
       parent: { parentConversationId: threadId, parentRunId: runId, mode: options.conversationMode,
+        capabilities: options.capabilities,
         systemPrompt, vendorConfig, tools, resolvedWorkspaceRoot: options.resolvedWorkspaceRoot, signal, checkPermission: permissionCheck },
       store: new TaskSessionStore(app.getPath("userData")),
       onLifecycle: (event) => sendTaskLifecycleAsAgui(event, threadId, runId, sendBaseEvent),
@@ -197,11 +196,6 @@ export function buildHarnessSystemPrompt(options: CyreneRunOptions): string {
     parts.push(options.toolSystemContent);
   }
 
-  // Runtime Environment Context
-  if (options.runtimeEnvironmentContext) {
-    parts.push(`[RUNTIME_ENV]\n${options.runtimeEnvironmentContext}`);
-  }
-
   if (options.recoveryContext) {
     parts.push(`[RECOVERY_CONTEXT]\n${options.recoveryContext}`);
   }
@@ -209,11 +203,6 @@ export function buildHarnessSystemPrompt(options: CyreneRunOptions): string {
   // Response Context (CITA)
   if (options.responseContext) {
     parts.push(`[RESPONSE_CONTEXT]\n${options.responseContext}`);
-  }
-
-  // CITA 证据块
-  if (options.citaContextBlock) {
-    parts.push(`[CITA_CONTEXT]\n${options.citaContextBlock}`);
   }
 
   return parts.join("\n\n---\n\n");

@@ -23,6 +23,7 @@ import { getAdapterForConfig, type ChatMessage } from "./vendors";
 import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./tool-context";
 import { getTimeoutSettings } from "../timeout-manager";
 import { runChatLoop } from "./chat-loop";
+import type { RunCapabilities } from "./run-capabilities";
 import { runHarnessWithAdapter } from "./harness-adapter";
 
 /** v3: SkillRouteInfo 类型本地定义（原 task-router.ts 将被删除） */
@@ -120,6 +121,8 @@ export interface CyreneRunOptions {
   timeoutMs: number;
   /** 可选：本次 run 的工具集合。未传时使用当前所有已启用工具。 */
   tools?: ToolDefinition[];
+  /** 本轮冻结的模式能力；bridge 创建的 Run 必须提供。 */
+  capabilities?: RunCapabilities;
   /** 直发图片被主模型接口拒绝时，懒加载 caption fallback 消息并重试。 */
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
   /** 工具阶段使用的 system prompt（仅含工具调度规则 + 自动生成的工具目录）。 */
@@ -438,6 +441,7 @@ export class CyreneAgent extends AbstractAgent {
               signal: abortController.signal,
               resolvedWorkspaceRoot: options.resolvedWorkspaceRoot,
               mode: options.conversationMode,
+              allowedSkillIds: options.capabilities?.skillIds,
             });
             const commonOptions = {
               settings: options.settings,

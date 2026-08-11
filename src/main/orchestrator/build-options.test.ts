@@ -61,6 +61,17 @@ function createBuildDeps(): BuildOptionsDeps {
 }
 
 describe("build-options", () => {
+  it.each(["chat", "work", "learn", "code"] as const)("uses the explicit %s mode prompt", async (mode) => {
+    const deps = createBuildDeps();
+    deps.buildModePrompt = (target) => `[MODE:${target}]`;
+    const result = await buildAgentRunOptions({
+      sessionId: `${mode}-session`,
+      mode,
+      executionMode: mode === "chat" ? "chat" : "work",
+      messages: [{ role: "user", content: "你好" }],
+    }, deps);
+    expect(result.options.soulSystemBaseContent).toContain(`[MODE:${mode}]`);
+  });
   it("builds the lightweight Ask Soul prompt in the approved order with trusted identity only", async () => {
     const deps = createBuildDeps()
     deps.loadUserProfile = () => ({

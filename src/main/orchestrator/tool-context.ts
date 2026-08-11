@@ -36,6 +36,8 @@ export interface ToolContext {
   resolvedWorkspaceRoot?: string;
   /** 当前会话的 UI 模式；工具可用它做模式隔离。 */
   mode?: ConversationMode;
+  /** 本次 Run 允许加载的 Skill ID；缺失时仅兼容旧的非 bridge 调用。 */
+  allowedSkillIds?: ReadonlySet<string>;
   /** 未来扩展兜底；当前为空对象，不预设字段。遵循"地基通用，上层克制"。 */
   metadata?: Record<string, unknown>;
 }
