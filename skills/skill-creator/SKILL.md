@@ -422,9 +422,9 @@ After packaging, direct the user to the resulting `.skill` file path so they can
 
 When the user wants to create or install a new skill inside the Cyrene application (not just package it as a `.skill` file), you MUST save it to the **user skills directory** so Cyrene can pick it up at runtime:
 
-- **Windows:** `%APPDATA%/Cyrene-Agent/userData/skills/<skill-id>/`
-- **macOS:** `~/Library/Application Support/Cyrene-Agent/userData/skills/<skill-id>/`
-- **Linux:** `~/.config/Cyrene-Agent/userData/skills/<skill-id>/`
+- **Windows:** `%APPDATA%/live2d-cyrene/skills/<skill-id>/`
+- **macOS:** `~/Library/Application Support/live2d-cyrene/skills/<skill-id>/`
+- **Linux:** `~/.config/live2d-cyrene/skills/<skill-id>/`
 
 Directory layout for a user-installed skill:
 ```
