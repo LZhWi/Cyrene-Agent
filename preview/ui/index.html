@@ -1,0 +1,642 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cyrene UI 预览 — Ask 卡片 & 审批弹窗</title>
+  <style>
+    :root {
+      --cy-text: #2f2d31;
+      --cy-text-muted: #817b82;
+      --cy-border: #e7e2e5;
+      --cy-accent: #ff5b8a;
+      --cy-shadow-bubble-neutral: 0 8px 24px rgb(0 0 0 / 8%);
+      --rb-font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        radial-gradient(circle at 20% 20%, rgb(255 91 138 / 8%), transparent 35%),
+        radial-gradient(circle at 80% 80%, rgb(255 91 138 / 6%), transparent 35%),
+        #faf8f9;
+      color: var(--cy-text);
+      font-family: var(--rb-font-sans);
+      line-height: 1.5;
+    }
+
+    .preview-shell {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 40px 24px 80px;
+    }
+
+    .preview-header {
+      margin-bottom: 32px;
+    }
+
+    .preview-header h1 {
+      margin: 0 0 8px;
+      font-size: 22px;
+      font-weight: 600;
+    }
+
+    .preview-header p {
+      margin: 0;
+      color: var(--cy-text-muted);
+      font-size: 14px;
+    }
+
+    .preview-section {
+      margin-bottom: 36px;
+    }
+
+    .preview-section h2 {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 0 0 16px;
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--cy-text);
+    }
+
+    .preview-section h2 .badge {
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: rgb(255 91 138 / 10%);
+      color: var(--cy-accent);
+      font-size: 11px;
+      font-weight: 500;
+    }
+
+    .preview-stage {
+      display: flex;
+      justify-content: center;
+      padding: 28px 20px;
+      border: 1px dashed var(--cy-border);
+      border-radius: 20px;
+      background: rgb(255 255 255 / 60%);
+    }
+
+    /* ---------- RunExperience.css ---------- */
+    .cy-run-stage {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 28px;
+      color: var(--cy-text-muted, #727272);
+      font: 500 13px/1.4 var(--rb-font-sans, sans-serif);
+    }
+
+    .cy-run-stage__pulse {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--cy-accent, #ff5b8a);
+      box-shadow: 0 0 0 0 rgb(255 91 138 / 35%);
+      animation: cy-run-stage-pulse 1.7s ease-out infinite;
+    }
+
+    .cy-run-stage--completed .cy-run-stage__pulse,
+    .cy-run-stage--failed .cy-run-stage__pulse {
+      animation: none;
+    }
+
+    .cy-run-stage--completed .cy-run-stage__pulse { background: #54a56d; }
+    .cy-run-stage--failed .cy-run-stage__pulse { background: #d06969; }
+
+    @keyframes cy-run-stage-pulse {
+      70% { box-shadow: 0 0 0 6px rgb(255 91 138 / 0%); }
+      100% { box-shadow: 0 0 0 0 rgb(255 91 138 / 0%); }
+    }
+
+    .cy-task-plan-card,
+    .cy-run-outcome {
+      width: min(100%, 620px);
+      border: 1px solid var(--cy-border, #e7e2e5);
+      border-radius: 16px;
+      background: rgb(255 255 255 / 72%);
+      color: var(--cy-text, #2f2d31);
+      box-shadow: 0 8px 28px rgb(44 31 38 / 5%);
+    }
+
+    .cy-task-plan-card { padding: 14px 16px; }
+
+    .cy-task-plan-card header {
+      display: flex;
+      gap: 9px;
+      align-items: baseline;
+      margin-bottom: 10px;
+    }
+
+    .cy-task-plan-card header > span {
+      color: var(--cy-text-muted, #78727a);
+      font: 600 12px/1.2 var(--rb-font-sans, sans-serif);
+    }
+
+    .cy-task-plan-card header strong { font: 600 14px/1.3 var(--rb-font-sans, sans-serif); }
+
+    .cy-task-plan-card ol {
+      display: grid;
+      gap: 9px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .cy-task-plan-card li {
+      display: grid;
+      grid-template-columns: 10px minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      color: var(--cy-text-muted, #726d73);
+      font: 400 13px/1.35 var(--rb-font-sans, sans-serif);
+    }
+
+    .cy-task-plan-card__marker {
+      width: 7px;
+      height: 7px;
+      border: 1px solid #c9c1c5;
+      border-radius: 50%;
+    }
+
+    .cy-task-plan-card li.is-running .cy-task-plan-card__marker { border-color: var(--cy-accent, #ff5b8a); background: var(--cy-accent, #ff5b8a); }
+    .cy-task-plan-card li.is-completed .cy-task-plan-card__marker { border-color: #54a56d; background: #54a56d; }
+    .cy-task-plan-card li.is-failed .cy-task-plan-card__marker { border-color: #d06969; background: #d06969; }
+    .cy-task-plan-card small { color: #99939a; font: 500 11px/1 var(--rb-font-sans, sans-serif); }
+
+    .cy-run-outcome { padding: 11px 14px; font: 400 13px/1.5 var(--rb-font-sans, sans-serif); }
+    .cy-run-outcome--failed { border-color: #f1caca; color: #a34a4a; }
+
+    .cy-composer-slot {
+      position: relative;
+      display: grid;
+      width: 100%;
+      place-items: end center;
+    }
+
+    .cy-composer-slot__composer,
+    .cy-composer-slot__interaction {
+      grid-area: 1 / 1;
+      display: flex;
+      width: 100%;
+      justify-content: center;
+      transition: opacity 180ms ease, transform 220ms ease;
+    }
+
+    .cy-composer-slot__composer { opacity: 1; transform: translateY(0); }
+    .cy-composer-slot__interaction { z-index: 1; animation: cy-interaction-enter 220ms ease both; }
+    .cy-composer-slot.is-ask .cy-composer-slot__composer,
+    .cy-composer-slot.is-permission .cy-composer-slot__composer {
+      pointer-events: none;
+      opacity: 0;
+      transform: translateY(18px);
+    }
+
+    @keyframes cy-interaction-enter {
+      from { opacity: 0; transform: translateY(18px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    .cy-interaction-panel {
+      position: relative;
+      width: min(100%, 770px);
+      box-sizing: border-box;
+      padding: 16px 18px 14px;
+      border: 1px solid rgba(31, 35, 48, 0.08);
+      border-radius: 22px;
+      background: #F5F5F7;
+      box-shadow: var(--cy-shadow-bubble-neutral, 0 8px 24px rgb(0 0 0 / 8%));
+    }
+
+    .cy-interaction-panel__heading {
+      display: flex;
+      min-height: 20px;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .cy-interaction-panel__status {
+      display: inline-flex;
+      align-items: center;
+      gap: 9px;
+      color: var(--cy-text, #2f2d31);
+      font: 700 16px/1.3 var(--rb-font-sans, sans-serif);
+    }
+
+    .cy-interaction-panel__status img {
+      width: 28px;
+      height: 28px;
+      object-fit: contain;
+      filter: drop-shadow(0 2px 3px rgb(0 0 0 / 10%));
+    }
+
+    .cy-interaction-panel__mood-bottom-left {
+      position: absolute;
+      left: -26px;
+      bottom: -14px;
+      width: 84px;
+      height: 84px;
+      object-fit: contain;
+      pointer-events: none;
+      filter: drop-shadow(0 3px 6px rgb(0 0 0 / 12%));
+    }
+    .cy-interaction-panel__page,
+    .cy-interaction-panel__heading code { color: var(--cy-text-muted, #817b82); font: 500 12px/1.2 var(--rb-font-sans, sans-serif); }
+    .cy-interaction-panel__heading code { padding: 3px 6px; border-radius: 5px; background: #f5f2f3; }
+    .cy-interaction-panel__pager { display: flex; align-items: center; gap: 7px; }
+    .cy-interaction-panel__pager button,
+    .cy-interaction-panel__question-index button { border: 0; background: transparent; color: var(--cy-text-muted, #817b82); cursor: pointer; }
+    .cy-interaction-panel__pager button { width: 22px; height: 22px; padding: 0; border-radius: 6px; font: 500 18px/20px var(--rb-font-sans, sans-serif); }
+    .cy-interaction-panel__pager button:hover:not(:disabled),
+    .cy-interaction-panel__question-index button:hover:not(:disabled),
+    .cy-interaction-panel__question-index button.is-current { background: #fff4f7; color: var(--cy-accent, #ff5b8a); }
+    .cy-interaction-panel__pager button:disabled { cursor: default; opacity: .35; }
+    .cy-interaction-panel__intro { margin: 7px 0 0; color: var(--cy-text-muted, #817b82); font: 400 12px/1.5 var(--rb-font-sans, sans-serif); }
+    .cy-interaction-panel__question { margin: 8px 0 13px; color: var(--cy-text, #2f2d31); font: 400 14px/1.55 var(--rb-font-sans, sans-serif); }
+
+    .cy-interaction-panel__options { display: grid; gap: 5px; }
+    .cy-interaction-panel__options button {
+      display: grid;
+      grid-template-columns: 24px minmax(0, 1fr);
+      gap: 7px;
+      width: 100%;
+      padding: 9px 10px;
+      border: 1px solid transparent;
+      border-radius: 10px;
+      background: transparent;
+      color: var(--cy-text, #2f2d31);
+      text-align: left;
+      cursor: pointer;
+    }
+    .cy-interaction-panel__options button:hover,
+    .cy-interaction-panel__options button.is-selected { border-color: #ffc0d2; background: #fff4f7; }
+    .cy-interaction-panel__options button:disabled { cursor: wait; opacity: .58; }
+    .cy-interaction-panel__option-index { color: var(--cy-text-muted, #817b82); font: 500 13px/1.45 var(--rb-font-sans, sans-serif); }
+    .cy-interaction-panel__options strong { display: inline; font: 500 13px/1.45 var(--rb-font-sans, sans-serif); }
+    .cy-interaction-panel__options small { display: inline; margin-left: 7px; color: var(--cy-text-muted, #817b82); font: 400 12px/1.45 var(--rb-font-sans, sans-serif); }
+
+    .cy-interaction-panel__custom-answer { display: grid; gap: 6px; margin-top: 9px; color: var(--cy-text-muted, #817b82); font: 500 12px/1.2 var(--rb-font-sans, sans-serif); }
+    .cy-interaction-panel__custom-answer input { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid var(--cy-border, #e7e2e5); border-radius: 9px; color: var(--cy-text, #2f2d31); font: 400 13px/1.4 var(--rb-font-sans, sans-serif); outline: none; }
+    .cy-interaction-panel__custom-answer input:focus { border-color: rgba(255, 91, 138, .5); box-shadow: 0 0 0 3px rgb(255 91 138 / 10%); }
+    .cy-interaction-panel__question-index { display: flex; gap: 4px; margin-top: 10px; }
+    .cy-interaction-panel__question-index button { min-width: 31px; padding: 4px 7px; border-radius: 7px; font: 500 11px/1.3 var(--rb-font-sans, sans-serif); }
+
+    .cy-interaction-panel__metadata { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 6px 10px; margin: 0 0 15px; color: var(--cy-text-muted, #817b82); font: 400 12px/1.4 var(--rb-font-sans, sans-serif); }
+    .cy-interaction-panel__metadata dt { color: #999199; }
+    .cy-interaction-panel__metadata dd { min-width: 0; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .cy-interaction-panel__actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 14px; }
+    .cy-interaction-panel__actions button { min-width: 64px; padding: 8px 12px; border: 1px solid var(--cy-border, #e7e2e5); border-radius: 9px; background: #fff; color: var(--cy-text, #2f2d31); font: 500 13px/1.2 var(--rb-font-sans, sans-serif); cursor: pointer; }
+    .cy-interaction-panel__actions button.is-primary { border-color: var(--cy-accent, #ff5b8a); background: var(--cy-accent, #ff5b8a); color: #fff; }
+    .cy-interaction-panel__actions button:disabled { cursor: wait; opacity: .58; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .cy-run-stage__pulse,
+      .cy-composer-slot__interaction { animation: none; }
+      .cy-composer-slot__composer,
+      .cy-composer-slot__interaction { transition: none; }
+    }
+
+    /* ---------- PermissionControl.css ---------- */
+    .cy-permission-popover { }
+    .cy-permission-panel { width: 196px; padding: 10px; }
+    .cy-permission-panel strong { display: block; margin-bottom: 8px; color: var(--cy-text, #2f2d31); font: 600 13px/1.3 var(--rb-font-sans, sans-serif); }
+    .cy-permission-panel__options { display: grid; gap: 4px; }
+    .cy-permission-panel__option {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      padding: 8px 9px;
+      border: 1px solid transparent;
+      border-radius: 9px;
+      background: transparent;
+      color: var(--cy-text, #2f2d31);
+      font: 500 13px/1.3 var(--rb-font-sans, sans-serif);
+      text-align: left;
+      cursor: pointer;
+    }
+    .cy-permission-panel__option:hover,
+    .cy-permission-panel__option.is-active { background: #fff4f7; border-color: #ffc0d2; }
+    .cy-permission-panel__option svg {
+      flex: none;
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      stroke-width: 3.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+    .cy-permission-panel__option.is-project-read-only svg,
+    .cy-permission-panel__option.is-read-only svg { color: #54a56d; }
+    .cy-permission-panel__option.is-scoped svg { color: #d0934a; }
+    .cy-permission-panel__option.is-per-action svg { color: var(--cy-accent, #ff5b8a); }
+    .cy-permission-panel__option.is-full svg { color: #d06969; }
+
+    .cy-composer__footer-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 10px;
+      border: 1px solid var(--cy-border, #e7e2e5);
+      border-radius: 9px;
+      background: #fff;
+      color: var(--cy-text-muted, #817b82);
+      font: 500 12px/1.2 var(--rb-font-sans, sans-serif);
+      cursor: pointer;
+    }
+    .cy-composer__footer-button svg {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      stroke-width: 3.2;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      fill: none;
+    }
+    .cy-composer__footer-button.is-project-read-only,
+    .cy-composer__footer-button.is-read-only { color: #54a56d; }
+    .cy-composer__footer-button.is-scoped { color: #d0934a; }
+    .cy-composer__footer-button.is-per-action { color: var(--cy-accent, #ff5b8a); }
+    .cy-composer__footer-button.is-full { color: #d06969; }
+
+    /* ---------- Preview helpers ---------- */
+    .preview-popover-demo {
+      position: relative;
+      display: inline-block;
+    }
+
+    .preview-popover-content {
+      position: absolute;
+      bottom: calc(100% + 10px);
+      left: 0;
+      z-index: 10;
+      background: #F5F5F7;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgb(0 0 0 / 12%);
+    }
+
+    .preview-toggle-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      flex-wrap: wrap;
+    }
+
+    .preview-toggle-bar button {
+      padding: 6px 12px;
+      border: 1px solid var(--cy-border);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--cy-text);
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .preview-toggle-bar button.is-active {
+      border-color: var(--cy-accent);
+      background: #fff4f7;
+      color: var(--cy-accent);
+    }
+
+    .preview-note {
+      margin-top: 12px;
+      color: var(--cy-text-muted);
+      font-size: 12px;
+    }
+
+    .preview-hidden { display: none !important; }
+  </style>
+</head>
+<body>
+  <div class="preview-shell">
+    <header class="preview-header">
+      <h1>Ask 卡片 & 审批弹窗 预览</h1>
+      <p>下面是目前 Cyrene 聊天Composer里的两个交互UI。可以点击选项、切换问题、查看审批面板。</p>
+    </header>
+
+    <!-- Ask 卡片 -->
+    <section class="preview-section">
+      <h2>Ask 卡片 <span class="badge">AskUserPanel</span></h2>
+      <div class="preview-toggle-bar">
+        <button type="button" class="is-active" data-ask="single">单问题</button>
+        <button type="button" data-ask="multi">多问题（分页）</button>
+        <button type="button" data-ask="custom">含自定义输入</button>
+      </div>
+
+      <div class="preview-stage">
+        <section class="cy-interaction-panel" aria-label="昔涟正在询问" style="width: min(100%, 620px);">
+          <img src="mood-warm.png" class="cy-interaction-panel__mood-bottom-left" alt="" />
+          <div class="cy-interaction-panel__heading">
+            <span class="cy-interaction-panel__status"><img src="mood-company.png" alt="" />昔涟正在询问</span>
+            <nav class="cy-interaction-panel__pager preview-hidden" aria-label="切换问题" data-multi-only>
+              <button type="button" aria-label="上一个问题">‹</button>
+              <span class="cy-interaction-panel__page"><span id="ask-page">1</span> / 3</span>
+              <button type="button" aria-label="下一个问题">›</button>
+            </nav>
+          </div>
+
+          <p class="cy-interaction-panel__intro" data-intro>为了让回复更精准，请帮我确认几个问题。</p>
+
+          <p class="cy-interaction-panel__question" id="ask-question">你希望以哪种方式处理这个文件？</p>
+
+          <div class="cy-interaction-panel__options" role="radiogroup" aria-label="问题选项" id="ask-options">
+            <button type="button" role="radio" aria-checked="false">
+              <span class="cy-interaction-panel__option-index">1.</span>
+              <span><strong>直接覆盖</strong><small>用生成内容替换原文件</small></span>
+            </button>
+            <button type="button" role="radio" aria-checked="false">
+              <span class="cy-interaction-panel__option-index">2.</span>
+              <span><strong>创建备份</strong><small>原文件改名备份后再写入</small></span>
+            </button>
+            <button type="button" role="radio" aria-checked="false">
+              <span class="cy-interaction-panel__option-index">3.</span>
+              <span><strong>仅展示差异</strong><small>不修改文件，只输出对比</small></span>
+            </button>
+          </div>
+
+          <label class="cy-interaction-panel__custom-answer" id="ask-custom">
+            <span>其他回答</span>
+            <input type="text" placeholder="输入你的回答…">
+          </label>
+
+          <div class="cy-interaction-panel__question-index preview-hidden" aria-label="问题完成情况" data-multi-only>
+            <button type="button" class="is-current">✓ 1</button>
+            <button type="button">○ 2</button>
+            <button type="button">○ 3</button>
+          </div>
+
+          <div class="cy-interaction-panel__actions">
+            <button type="button" id="ask-ignore">忽略</button>
+            <button type="button" class="is-primary" id="ask-submit">提交</button>
+          </div>
+        </section>
+      </div>
+
+      <p class="preview-note">提示：点击选项可切换选中状态；多问题视图会显示分页与进度索引。</p>
+    </section>
+
+    <!-- 审批弹窗 -->
+    <section class="preview-section">
+      <h2>审批弹窗 <span class="badge">PermissionPanel</span></h2>
+      <div class="preview-stage">
+        <section class="cy-interaction-panel" aria-label="昔涟正在获取审批" style="width: min(100%, 620px);">
+          <img src="mood-warm.png" class="cy-interaction-panel__mood-bottom-left" alt="" />
+          <div class="cy-interaction-panel__heading">
+            <span class="cy-interaction-panel__status"><img src="mood-spoiled.png" alt="" />昔涟正在获取审批</span>
+          </div>
+          <p class="cy-interaction-panel__question">昔涟想要执行 shell 命令：<code>git status</code>，是否允许？</p>
+          <dl class="cy-interaction-panel__metadata">
+            <dt>工作区</dt>
+            <dd>e:/Cyrene-Agent</dd>
+            <dt>目标</dt>
+            <dd title="e:/Cyrene-Agent">e:/Cyrene-Agent</dd>
+          </dl>
+          <div class="cy-interaction-panel__actions">
+            <button type="button">拒绝</button>
+            <button type="button" class="is-primary">允许</button>
+          </div>
+        </section>
+      </div>
+      <p class="preview-note">当前为“替换输入框”式面板，出现在 Composer 位置。</p>
+    </section>
+
+    <!-- 权限等级（额外展示） -->
+    <section class="preview-section">
+      <h2>权限等级选择 <span class="badge">PermissionControl</span></h2>
+      <div class="preview-stage" style="min-height: 260px; align-items: flex-end;">
+        <div class="preview-popover-demo">
+          <div class="preview-popover-content">
+            <div class="cy-permission-panel">
+              <strong>权限等级</strong>
+              <div class="cy-permission-panel__options">
+                <button type="button" class="cy-permission-panel__option is-project-read-only">
+                  <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M6 9.25564 24.0086 4 42 9.25564V20.0337C42 31.3622 34.7502 41.4194 24.0026 45.0005 13.2521 41.4195 6 31.36 6 20.0287V9.25564Z"/><path d="m15 23 7 7 12-12"/></svg>
+                  <span>完全只读</span>
+                </button>
+                <button type="button" class="cy-permission-panel__option is-read-only is-active">
+                  <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M6 9.25564 24.0086 4 42 9.25564V20.0337C42 31.3622 34.7502 41.4194 24.0026 45.0005 13.2521 41.4195 6 31.36 6 20.0287V9.25564Z"/><path d="m15 23 7 7 12-12"/></svg>
+                  <span>允许访问</span>
+                </button>
+                <button type="button" class="cy-permission-panel__option is-scoped">
+                  <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M6 9.25564 24.0086 4 42 9.25564V20.0337C42 31.3622 34.7502 41.4194 24.0026 45.0005 13.2521 41.4195 6 31.36 6 20.0287V9.25564Z"/><path d="M14 21h8l2.5 3H34v8H14v-11Z"/></svg>
+                  <span>指定目录</span>
+                </button>
+                <button type="button" class="cy-permission-panel__option is-per-action">
+                  <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M6 9.25564 24.0086 4 42 9.25564V20.0337C42 31.3622 34.7502 41.4194 24.0026 45.0005 13.2521 41.4195 6 31.36 6 20.0287V9.25564Z"/><circle cx="22" cy="22" r="6"/><path d="m26.5 26.5 5 5"/></svg>
+                  <span>请求审批</span>
+                </button>
+                <button type="button" class="cy-permission-panel__option is-full">
+                  <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M6 9.25564 24.0086 4 42 9.25564V20.0337C42 31.3622 34.7502 41.4194 24.0026 45.0005 13.2521 41.4195 6 31.36 6 20.0287V9.25564Z"/><path d="M24 15v14"/><circle cx="24" cy="35" r="1.4" fill="currentColor" stroke="none"/></svg>
+                  <span>完全访问</span>
+                </button>
+              </div>
+            </div>
+          </div>
+          <button type="button" class="cy-composer__footer-button is-read-only">
+            <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M6 9.25564 24.0086 4 42 9.25564V20.0337C42 31.3622 34.7502 41.4194 24.0026 45.0005 13.2521 41.4195 6 31.36 6 20.0287V9.25564Z"/><path d="m15 23 7 7 12-12"/></svg>
+            <span>允许访问</span>
+            <svg viewBox="0 0 24 24" aria-hidden="true" style="width: 14px; height: 14px; stroke-width: 2.5;"><path d="m7 10 5 5 5-5"/></svg>
+          </button>
+        </div>
+      </div>
+      <p class="preview-note">触发按钮在 Composer 底部；点击可切换当前高亮项。</p>
+    </section>
+  </div>
+
+  <script>
+    // Ask 卡片：切换视图
+    const askScenarios = {
+      single: {
+        intro: "为了让回复更精准，请帮我确认几个问题。",
+        question: "你希望以哪种方式处理这个文件？",
+        options: [
+          { label: "直接覆盖", desc: "用生成内容替换原文件" },
+          { label: "创建备份", desc: "原文件改名备份后再写入" },
+          { label: "仅展示差异", desc: "不修改文件，只输出对比" },
+        ],
+        multi: false,
+        custom: false,
+      },
+      multi: {
+        intro: "请选择你偏好的配置项（共 3 个问题）。",
+        question: "问题 1：文件写入策略？",
+        options: [
+          { label: "覆盖", desc: "" },
+          { label: "追加", desc: "" },
+          { label: "跳过", desc: "" },
+        ],
+        multi: true,
+        custom: false,
+      },
+      custom: {
+        intro: "如果以上选项都不符合，可以直接输入你的想法。",
+        question: "你对这个任务还有什么补充要求？",
+        options: [
+          { label: "无补充", desc: "按默认方式继续" },
+          { label: "需要说明", desc: "在回复里附带原因" },
+        ],
+        multi: false,
+        custom: true,
+      },
+    };
+
+    let currentAsk = "single";
+
+    function renderAsk(scenarioKey) {
+      const scenario = askScenarios[scenarioKey];
+      currentAsk = scenarioKey;
+
+      document.getElementById("ask-question").textContent = scenario.question;
+      document.querySelector("[data-intro]").textContent = scenario.intro;
+      document.getElementById("ask-custom").classList.toggle("preview-hidden", !scenario.custom);
+
+      document.querySelectorAll("[data-multi-only]").forEach((el) => {
+        el.classList.toggle("preview-hidden", !scenario.multi);
+      });
+
+      const optionsRoot = document.getElementById("ask-options");
+      optionsRoot.innerHTML = "";
+      scenario.options.forEach((opt, index) => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.setAttribute("role", "radio");
+        btn.setAttribute("aria-checked", "false");
+        btn.innerHTML = `<span class="cy-interaction-panel__option-index">${index + 1}.</span>
+          <span><strong>${opt.label}</strong>${opt.desc ? `<small>${opt.desc}</small>` : ""}</span>`;
+        btn.addEventListener("click", () => {
+          optionsRoot.querySelectorAll("button").forEach((b) => b.setAttribute("aria-checked", "false"));
+          optionsRoot.querySelectorAll("button").forEach((b) => b.classList.remove("is-selected"));
+          btn.setAttribute("aria-checked", "true");
+          btn.classList.add("is-selected");
+        });
+        optionsRoot.appendChild(btn);
+      });
+    }
+
+    document.querySelectorAll("[data-ask]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll("[data-ask]").forEach((b) => b.classList.remove("is-active"));
+        btn.classList.add("is-active");
+        renderAsk(btn.dataset.ask);
+      });
+    });
+
+    renderAsk("single");
+
+    // 权限等级：切换 active
+    document.querySelectorAll(".cy-permission-panel__option").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".cy-permission-panel__option").forEach((b) => b.classList.remove("is-active"));
+        btn.classList.add("is-active");
+      });
+    });
+  </script>
+</body>
+</html>

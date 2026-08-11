@@ -61,7 +61,8 @@
 
 .cy-permission-popover .ant-popover-inner {
   padding: 9px;
-  border: 1px solid #eeeeee;
+  border: 1px solid rgba(31, 35, 48, 0.08);
   border-radius: 14px;
+  background: #F5F5F7;
   box-shadow: 0 12px 32px rgba(29, 29, 31, 0.12);
 }

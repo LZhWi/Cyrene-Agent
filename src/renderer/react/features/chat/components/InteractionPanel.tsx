@@ -11,6 +11,9 @@ import {
   type PermissionInteraction,
 } from "./run-presentation";
 import "./RunExperience.css";
+import moodWarmUrl from "../../../assets/status-moods/温柔.png?url";
+import moodCompanyUrl from "../../../assets/status-moods/陪伴中.png?url";
+import moodSpoiledUrl from "../../../assets/status-moods/撒娇.png?url";
 
 function PanelShell({ children, title }: { children: ReactNode; title: string }) {
   return (
@@ -69,8 +72,9 @@ export function AskUserPanel({
 
   return (
     <PanelShell title="昔涟正在询问">
+      <img src={moodWarmUrl} className="cy-interaction-panel__mood-bottom-left" alt="" />
       <div className="cy-interaction-panel__heading">
-        <span className="cy-interaction-panel__status">昔涟正在询问</span>
+        <span className="cy-interaction-panel__status"><img src={moodCompanyUrl} alt="" />昔涟正在询问</span>
         {questions.length > 1 && (
           <nav className="cy-interaction-panel__pager" aria-label="切换问题">
             <button type="button" aria-label="上一个问题" disabled={disabled || page === 0} onClick={() => setPage((value) => Math.max(0, value - 1))}>‹</button>
@@ -139,8 +143,9 @@ export function PermissionPanel({
 }) {
   return (
     <PanelShell title="昔涟正在获取审批">
+      <img src={moodWarmUrl} className="cy-interaction-panel__mood-bottom-left" alt="" />
       <div className="cy-interaction-panel__heading">
-        <span className="cy-interaction-panel__status">昔涟正在获取审批</span>
+        <span className="cy-interaction-panel__status"><img src={moodSpoiledUrl} alt="" />昔涟正在获取审批</span>
       </div>
       <p className="cy-interaction-panel__question">{interaction.summary}</p>
       <dl className="cy-interaction-panel__metadata">
