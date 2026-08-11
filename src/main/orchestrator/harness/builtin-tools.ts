@@ -17,10 +17,43 @@ import type {
 import { parseToolCallArgs } from "./types";
 import { isAbortError } from "../../abort-utils";
 import { resolveUncertainEffect } from "./uncertain-effect-guard";
+import type { TaskExecuteRequest, TaskExecuteResult } from "../task-runtime";
 
 // ── update_todo ──────────────────────────────────────────
 
 export const UPDATE_TODO_TOOL_ID = "update_todo";
+export const TASK_TOOL_ID = "task";
+
+export const taskToolSpec: ToolSpec = {
+  name: TASK_TOOL_ID,
+  description: "委托一个需要独立上下文、多步执行的前台子任务。父任务会等待结果；description 只用于向用户显示委托标签，prompt 是子任务完整指令。可传 task_id 继续同一子任务。子任务不能询问用户或再次委托。",
+  parameters: { type: "object", properties: {
+    description: { type: "string", description: "给用户显示的 3-40 字任务标签" },
+    prompt: { type: "string", description: "子任务完整执行指令" },
+    subagent_type: { type: "string", enum: ["general", "document", "search"] },
+    task_id: { type: "string", description: "可选：恢复此前同一子任务" },
+  }, required: ["description", "prompt", "subagent_type"] },
+};
+
+export async function executeTask(
+  call: ToolCall,
+  executor: ((request: TaskExecuteRequest) => Promise<TaskExecuteResult>) | undefined,
+): Promise<ToolObservation> {
+  if (!executor) return { outcome: "failure", category: "runtime_safety", tool: TASK_TOOL_ID, message: "TaskRuntime 未注入，当前运行不能委托子任务" };
+  const args = parseToolCallArgs(call);
+  const description = typeof args.description === "string" ? args.description.trim() : "";
+  const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
+  const subagentType = args.subagent_type;
+  const taskId = typeof args.task_id === "string" ? args.task_id.trim() || undefined : undefined;
+  if (description.length < 3 || description.length > 40 || !prompt
+    || (subagentType !== "general" && subagentType !== "document" && subagentType !== "search")) {
+    return { outcome: "failure", category: "invalid_arguments", tool: TASK_TOOL_ID, message: "task 需要 3-40 字 description、非空 prompt 与合法 subagent_type" };
+  }
+  const result = await executor({ description, prompt, subagentType, taskId });
+  return { outcome: result.status === "completed" ? "success" : "failure", tool: TASK_TOOL_ID,
+    message: `子任务“${description}”已${result.status === "completed" ? "完成" : result.status}。`,
+    output: JSON.stringify({ taskId: result.taskId, status: result.status, text: result.text }) };
+}
 
 export const updateTodoToolSpec: ToolSpec = {
   name: UPDATE_TODO_TOOL_ID,
@@ -513,6 +546,7 @@ export async function executeConfirmUncertainEffect(
 // ── 内置工具注册 ─────────────────────────────────────────
 
 export const HARNESS_BUILTIN_TOOL_IDS = new Set([
+  TASK_TOOL_ID,
   UPDATE_TODO_TOOL_ID,
   ASK_USER_TOOL_ID,
   CONFIRM_UNCERTAIN_EFFECT_TOOL_ID,
@@ -523,5 +557,5 @@ export function isHarnessBuiltin(toolName: string): boolean {
 }
 
 export function getHarnessBuiltinToolSpecs(): ToolSpec[] {
-  return [updateTodoToolSpec, askUserToolSpec, confirmUncertainEffectToolSpec];
+  return [updateTodoToolSpec, askUserToolSpec, confirmUncertainEffectToolSpec, taskToolSpec];
 }

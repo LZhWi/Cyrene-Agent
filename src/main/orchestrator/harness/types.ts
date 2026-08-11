@@ -168,6 +168,8 @@ export interface HarnessInput {
   checkPermission?: (toolId: string, args: Record<string, unknown>) => Promise<boolean>;
   /** ExecutionLedger：可选的同进程工具去重缓存（v3 §5.5.1.1） */
   executionLedger?: import("../execution-ledger").ExecutionLedger;
+  /** 父会话注入的前台子任务执行器；子 Harness 不会继续注入它。 */
+  taskExecutor?: (request: import("../task-runtime").TaskExecuteRequest) => Promise<import("../task-runtime").TaskExecuteResult>;
 }
 
 export interface HarnessResult {

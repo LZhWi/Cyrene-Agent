@@ -22,6 +22,10 @@ import type { ToolCallResult } from "./types";
 import type { CyreneRunTerminalResult } from "../../shared/run-terminal";
 import { loadPromptFile } from "../prompts/prompt-loader";
 import type { ConversationMode } from "../../shared/chat-types";
+import { app } from "electron";
+import { TaskSessionStore } from "../tasks/task-session-store";
+import { createTaskExecutor } from "./task-runtime";
+import type { TaskDelegationPresentation } from "../../shared/task-session";
 
 const LOG_PREFIX = "[HarnessAdapter]";
 const CODE_ONLY_GIT_TOOL_IDS = new Set([
@@ -97,6 +101,20 @@ export async function runHarnessWithAdapter(
     resolvedWorkspaceRoot: options.resolvedWorkspaceRoot,
     mode: options.conversationMode,
   };
+  const permissionCheck = async (toolId: string, args: Record<string, unknown>): Promise<boolean> => {
+    const tool = toolRegistry.getById(toolId);
+    if (!tool) return false;
+    const risk: ToolRiskLevel = (tool as ToolDefinition & { risk?: ToolRiskLevel }).risk ?? "safe";
+    return (await checkPermission({ toolId, toolName: tool.name, toolDescription: tool.description, args, risk, runId })).allowed;
+  };
+  const taskExecutor = options.conversationMode === "work" || options.conversationMode === "code"
+    ? createTaskExecutor({
+      parent: { parentConversationId: threadId, parentRunId: runId, mode: options.conversationMode,
+        systemPrompt, vendorConfig, tools, resolvedWorkspaceRoot: options.resolvedWorkspaceRoot, signal, checkPermission: permissionCheck },
+      store: new TaskSessionStore(app.getPath("userData")),
+      onLifecycle: (event) => sendTaskLifecycleAsAgui(event, threadId, runId, sendBaseEvent),
+    })
+    : undefined;
 
   // ── 构建 HarnessInput ──
   const harnessInput: HarnessInput = {
@@ -119,20 +137,8 @@ export async function runHarnessWithAdapter(
       : undefined,
     toolContext,
     executionLedger: options.executionLedger,
-    checkPermission: async (toolId: string, args: Record<string, unknown>): Promise<boolean> => {
-      const tool = toolRegistry.getById(toolId);
-      if (!tool) return false;
-      const risk: ToolRiskLevel = (tool as ToolDefinition & { risk?: ToolRiskLevel }).risk ?? "safe";
-      const perm = await checkPermission({
-        toolId,
-        toolName: tool.name,
-        toolDescription: tool.description,
-        args,
-        risk,
-        runId,
-      });
-      return perm.allowed;
-    },
+    checkPermission: permissionCheck,
+    taskExecutor,
   };
 
   // ── 运行 Harness ──
@@ -327,6 +333,16 @@ export function sendHarnessEventAsAgui(
       break;
     }
   }
+}
+
+/** TaskRuntime 私有生命周期到父 AG-UI 的唯一净化出口。 */
+export function sendTaskLifecycleAsAgui(
+  value: TaskDelegationPresentation,
+  threadId: string,
+  runId: string,
+  send: (event: BaseEvent) => void,
+): void {
+  send({ type: EventType.CUSTOM, name: "cyrene.task", value, threadId, runId } as BaseEvent);
 }
 
 // ── 结果转换 ───────────────────────────────────────────────

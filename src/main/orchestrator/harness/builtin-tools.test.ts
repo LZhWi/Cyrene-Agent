@@ -4,6 +4,8 @@ import {
   executeAskUser,
   executeConfirmUncertainEffect,
   updateTodoToolSpec,
+  taskToolSpec,
+  executeTask,
 } from "./builtin-tools";
 import type { AgentState } from "./types";
 
@@ -21,6 +23,17 @@ function currentState(): AgentState {
 }
 
 describe("Harness user-wait builtins", () => {
+  it("validates and delegates a foreground task without exposing its prompt", async () => {
+    const executor = vi.fn(async () => ({ taskId: "task-1", status: "completed" as const, text: "已检查。" }));
+    const result = await executeTask({ id: "task-call", name: "task", arguments: JSON.stringify({
+      description: "检查取消链路", prompt: "检查取消传播并给出证据", subagent_type: "general",
+    }) }, executor);
+
+    expect(taskToolSpec.name).toBe("task");
+    expect(executor).toHaveBeenCalledWith({ description: "检查取消链路", prompt: "检查取消传播并给出证据", subagentType: "general", taskId: undefined });
+    expect(result.output).toContain("task-1");
+    expect(result.message).not.toContain("检查取消传播");
+  });
   it("advertises a bounded general Ask contract to the model", () => {
     const questions = (askUserToolSpec.parameters as { properties?: Record<string, unknown> })
       .properties?.questions as Record<string, unknown>;

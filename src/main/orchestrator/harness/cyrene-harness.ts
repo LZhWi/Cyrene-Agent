@@ -315,6 +315,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
               checkPermission: input.checkPermission,
               toolContext: input.toolContext,
               executionLedger: input.executionLedger,
+              taskExecutor: input.taskExecutor,
             }),
             input.signal,
           );
@@ -365,6 +366,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
                     checkPermission: input.checkPermission,
                     toolContext: input.toolContext,
                     executionLedger: input.executionLedger,
+                    taskExecutor: input.taskExecutor,
                   }),
                   input.signal,
                 );

@@ -65,3 +65,15 @@ export interface TaskDelegationRecord {
   delegatedAt: number;
   updatedAt: number;
 }
+
+export type TaskDelegationPresentationStatus = "running" | "completed" | "failed" | "cancelled";
+
+/** 父流程可见的最小委托信息，不包含子任务 prompt 或私有轨迹。 */
+export interface TaskDelegationPresentation {
+  invocationId: string;
+  taskId: string;
+  description: string;
+  nickname: string;
+  assetFileName: string;
+  status: TaskDelegationPresentationStatus;
+}

@@ -15,7 +15,7 @@ import type { ToolCallResult } from "../types";
 import type { AgentState, HarnessEvent, ToolObservation } from "./types";
 import { parseToolCallArgs, toolCallFingerprint } from "./types";
 import { isHarnessBuiltin } from "./builtin-tools";
-import { executeUpdateTodo, executeAskUser } from "./builtin-tools";
+import { executeUpdateTodo, executeAskUser, executeTask } from "./builtin-tools";
 import { resolveSideEffect } from "./side-effect-resolver";
 import { isBlockedByUncertainEffect } from "./uncertain-effect-guard";
 import { ExecutionLedger } from "../execution-ledger";
@@ -70,6 +70,7 @@ export interface ToolDispatchContext {
   toolContext?: import("../tool-context").ToolContext;
   truncation?: TruncationConfig;
   executionLedger?: ExecutionLedger;
+  taskExecutor?: import("../task-runtime").TaskExecuteRequest extends infer _T ? (request: import("../task-runtime").TaskExecuteRequest) => Promise<import("../task-runtime").TaskExecuteResult> : never;
 }
 
 export interface ToolDispatchResult extends ToolObservation {
@@ -304,6 +305,8 @@ async function executeHarnessBuiltin(
 
     case "ask_user":
       return executeAskUser(call, ctx.requestUserClarification, ctx.onEvent);
+    case "task":
+      return executeTask(call, ctx.taskExecutor);
 
     default:
       return {

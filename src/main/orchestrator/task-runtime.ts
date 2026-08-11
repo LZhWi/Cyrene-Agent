@@ -7,6 +7,8 @@ import type { HarnessInput, HarnessResult } from "./harness/types";
 import type { ToolDefinition } from "./tool-registry";
 import type { VendorConfig, ChatMessage } from "./vendors/types";
 import type { ToolContext } from "./tool-context";
+import { taskCharacterLeasePool, type TaskCharacterLeasePool } from "../tasks/task-character-pool";
+import type { TaskDelegationPresentation } from "../../shared/task-session";
 
 export interface TaskExecuteRequest {
   description: string;
@@ -33,7 +35,7 @@ export interface TaskRuntimeParentContext {
   checkPermission?: HarnessInput["checkPermission"];
 }
 
-function taskStatus(result: HarnessResult): { status: TaskSessionStatus; error?: { code: string; message: string } } {
+function taskStatus(result: HarnessResult): { status: Exclude<TaskSessionStatus, "running" | "interrupted">; error?: { code: string; message: string } } {
   const terminal = result.terminal?.status;
   if (terminal === "cancelled" || result.terminateReason === "cancelled") return { status: "cancelled" };
   if (terminal === "timeout" || result.terminateReason === "timeout" || result.terminateReason === "max_rounds") {
@@ -56,8 +58,12 @@ export function createTaskExecutor(input: {
   parent: TaskRuntimeParentContext;
   store: TaskSessionStore;
   runHarness?: typeof runCyreneHarness;
+  characterPool?: Pick<TaskCharacterLeasePool, "acquire">;
+  random?: () => number;
+  onLifecycle?: (event: TaskDelegationPresentation) => void;
 }): (request: TaskExecuteRequest) => Promise<TaskExecuteResult> {
   const runHarness = input.runHarness ?? runCyreneHarness;
+  const characterPool = input.characterPool ?? taskCharacterLeasePool;
   return async (request) => {
     const profile = getTaskAgentProfile(request.subagentType);
     const session = request.taskId
@@ -85,6 +91,16 @@ export function createTaskExecutor(input: {
       resolvedWorkspaceRoot: input.parent.resolvedWorkspaceRoot,
       mode: input.parent.mode,
     };
+
+    const lease = characterPool.acquire(input.parent.parentConversationId, input.random);
+    const presentation = {
+      invocationId: session.childRunId,
+      taskId: session.id,
+      description: request.description,
+      nickname: lease.nickname,
+      assetFileName: lease.assetFileName,
+    };
+    input.onLifecycle?.({ ...presentation, status: "running" });
 
     try {
       const result = await runHarness({
@@ -122,6 +138,7 @@ export function createTaskExecutor(input: {
         ...(mapped.error ? { error: mapped.error } : {}),
         completedAt: Date.now(),
       });
+      input.onLifecycle?.({ ...presentation, status: mapped.status });
       return { taskId: session.id, status: mapped.status, text: result.finalAnswer };
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -130,7 +147,10 @@ export function createTaskExecutor(input: {
         error: { code: input.parent.signal?.aborted ? "TASK_CANCELLED" : "TASK_RUNTIME_ERROR", message },
         completedAt: Date.now(),
       });
+      input.onLifecycle?.({ ...presentation, status: input.parent.signal?.aborted ? "cancelled" : "failed" });
       throw error;
+    } finally {
+      lease.release();
     }
   };
 }

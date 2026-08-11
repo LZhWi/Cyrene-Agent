@@ -5,6 +5,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskSessionStore } from "../tasks/task-session-store";
 import { createTaskExecutor } from "./task-runtime";
 import type { ToolDefinition } from "./tool-registry";
+import { TaskCharacterLeasePool } from "../tasks/task-character-pool";
+import type { TaskDelegationPresentation } from "../../shared/task-session";
 
 const roots: string[] = [];
 
@@ -149,5 +151,44 @@ describe("TaskRuntime", () => {
     expect(store.get(result.taskId)?.todoItems).toEqual([
       { id: "report", content: "整理检查结果", status: "completed" },
     ]);
+  });
+
+  it("emits a sanitized running/terminal lifecycle and releases the nickname", async () => {
+    const store = createStore();
+    const characterPool = new TaskCharacterLeasePool();
+    const lifecycle: TaskDelegationPresentation[] = [];
+    const runHarness = vi.fn(async () => ({
+      finalAnswer: "检查完成。", finalState: { todoItems: [], uncertainEffects: [] },
+      terminated: false, rounds: 1, terminal: { status: "success" as const, externalEffectsMayContinue: false },
+    }));
+    const execute = createTaskExecutor({ parent, store, runHarness, characterPool, random: () => 0, onLifecycle: (event) => lifecycle.push(event) });
+
+    await execute({ description: "检查取消链路", prompt: "这是不能出现在父事件里的私密指令", subagentType: "general" });
+    const next = characterPool.acquire("conversation-1", () => 0);
+
+    expect(lifecycle).toEqual([
+      { invocationId: "child-run-1", taskId: "task-1", description: "检查取消链路", nickname: "风堇", assetFileName: "风堇.png", status: "running" },
+      { invocationId: "child-run-1", taskId: "task-1", description: "检查取消链路", nickname: "风堇", assetFileName: "风堇.png", status: "completed" },
+    ]);
+    expect(JSON.stringify(lifecycle)).not.toContain("私密指令");
+    expect(next.nickname).toBe("风堇");
+  });
+
+  it.each([
+    { terminal: { status: "runtime_error" as const, externalEffectsMayContinue: true }, expected: "failed" },
+    { terminal: { status: "cancelled" as const, externalEffectsMayContinue: true }, expected: "cancelled" },
+  ])("releases the nickname after $expected settlement", async ({ terminal, expected }) => {
+    const store = createStore();
+    const characterPool = new TaskCharacterLeasePool();
+    const lifecycle: Array<{ status: string }> = [];
+    const execute = createTaskExecutor({
+      parent, store, characterPool, random: () => 0, onLifecycle: (event) => lifecycle.push(event),
+      runHarness: vi.fn(async () => ({ finalAnswer: "", finalState: { todoItems: [], uncertainEffects: [] }, terminated: true, rounds: 1, terminal })),
+    });
+
+    await execute({ description: "检查异常结算", prompt: "执行", subagentType: "general" });
+
+    expect(lifecycle.at(-1)?.status).toBe(expected);
+    expect(characterPool.acquire("conversation-1", () => 0).nickname).toBe("风堇");
   });
 });

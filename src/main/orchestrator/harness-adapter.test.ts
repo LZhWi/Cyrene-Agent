@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { buildHarnessSystemPrompt, mapTerminateReasonToTerminal, sendHarnessEventAsAgui } from "./harness-adapter";
+import { buildHarnessSystemPrompt, mapTerminateReasonToTerminal, sendHarnessEventAsAgui, sendTaskLifecycleAsAgui } from "./harness-adapter";
 import type { HarnessEvent } from "./harness/types";
 import type { BaseEvent } from "@ag-ui/core";
 
@@ -266,5 +266,21 @@ describe("sendHarnessEventAsAgui runId stamping (Issue 6)", () => {
     for (const event of events) {
       expect((event as { runId?: string }).runId).toBe(runId);
     }
+  });
+});
+
+describe("Task delegation lifecycle projection", () => {
+  it("sends only the sanitized presentation fields to the parent run", () => {
+    const sent: BaseEvent[] = [];
+    sendTaskLifecycleAsAgui({
+      invocationId: "child-run-1", taskId: "task-1", description: "检查取消链路",
+      nickname: "风堇", assetFileName: "风堇.png", status: "running",
+    }, "thread-1", "run-1", (event) => sent.push(event));
+
+    expect(sent).toEqual([expect.objectContaining({
+      type: "CUSTOM", name: "cyrene.task", threadId: "thread-1", runId: "run-1",
+      value: { invocationId: "child-run-1", taskId: "task-1", description: "检查取消链路", nickname: "风堇", assetFileName: "风堇.png", status: "running" },
+    })]);
+    expect(JSON.stringify(sent)).not.toContain("prompt");
   });
 });
