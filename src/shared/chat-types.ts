@@ -7,6 +7,7 @@
 // - identityId 当前为预留字段——职位面板还未做，新会话默认 null，
 import type { MusicCardData } from "./music-card";
 import type { TodoItem } from "./todo-types";
+import type { TaskDelegationPresentation } from "./task-session";
 
 // - schemaVersion 用于以后改 schema 时的迁移判断；当前固定 1。
 
@@ -91,6 +92,10 @@ export interface AgentRoundRecord {
   completedAt?: number;
 }
 
+export interface TaskDelegationDisplayRecord extends TaskDelegationPresentation {
+  roundId?: string;
+}
+
 export interface ChatMessage {
   id: string;
   role: ChatRole;
@@ -102,6 +107,8 @@ export interface ChatMessage {
   processMessages?: ProcessMessageRecord[];
   /** Harness 模型调用回合；用于把公开文本、reasoning 与工具执行折叠为一个单元。 */
   agentRounds?: AgentRoundRecord[];
+  /** 父流程中的趣味子任务委托行；不包含子任务私有上下文。 */
+  taskDelegations?: TaskDelegationDisplayRecord[];
   at: number;
   /** 不直接显示在聊天气泡里，但会拼入模型上下文。 */
   modelContext?: string;

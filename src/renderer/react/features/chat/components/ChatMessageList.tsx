@@ -3,7 +3,7 @@ import { XMarkdown, type ComponentProps } from "@ant-design/x-markdown";
 import Latex from "@ant-design/x-markdown/plugins/Latex";
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
-import type { AgentRoundRecord, CodeGitReviewSnapshot, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
+import type { AgentRoundRecord, CodeGitReviewSnapshot, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import thinkingMoodUrl from "../../../assets/status-moods/思考中.png?url";
 import completedThinkingMoodUrl from "../../../assets/status-moods/提醒.png?url";
 import workingMoodUrl from "../../../assets/status-moods/工作中.png?url";
@@ -29,6 +29,7 @@ import type { WeatherData } from "./weather/weather-types";
 import { WeatherCard } from "./weather/WeatherCard";
 import { resolveAgentRoundTitle } from "./agent-rounds";
 import { CodeGitReviewSummary } from "./CodeGitReviewSummary";
+import { TaskDelegationRow } from "./TaskDelegationRow";
 
 export interface ChatMessageItem {
   id: string;
@@ -38,6 +39,7 @@ export interface ChatMessageItem {
   reasoningBlocks?: ReasoningBlock[];
   processMessages?: ProcessMessageRecord[];
   agentRounds?: AgentRoundRecord[];
+  taskDelegations?: TaskDelegationDisplayRecord[];
   reasoningStreaming?: boolean;
   responseStarted?: boolean;
   streaming?: boolean;
@@ -253,12 +255,14 @@ function AgentRoundGroup({
   round,
   reasoningBlocks,
   processMessages,
+  taskDelegations,
   tools,
   interrupted,
 }: {
   round: AgentRoundRecord;
   reasoningBlocks: ReasoningBlock[];
   processMessages: ProcessMessageRecord[];
+  taskDelegations: TaskDelegationDisplayRecord[];
   tools: ToolExecutionRecord[];
   interrupted: boolean;
 }) {
@@ -283,6 +287,9 @@ function AgentRoundGroup({
         <div className="cy-run-activity__process" key={message.id}>
           <MarkdownContent content={message.content} />
         </div>
+      ))}
+      {taskDelegations.map((delegation) => (
+        <TaskDelegationRow delegation={delegation} key={delegation.invocationId} />
       ))}
       <button
         type="button"
@@ -319,12 +326,14 @@ export function RunActivityDetail({
   agentRounds = [],
   reasoningBlocks,
   processMessages,
+  taskDelegations = [],
   tools,
   interrupted = false,
 }: {
   agentRounds?: AgentRoundRecord[];
   reasoningBlocks: ReasoningBlock[];
   processMessages: ProcessMessageRecord[];
+  taskDelegations?: TaskDelegationDisplayRecord[];
   tools: ToolExecutionRecord[];
   interrupted?: boolean;
 }) {
@@ -332,6 +341,7 @@ export function RunActivityDetail({
     const visibleRounds = agentRounds.filter((round) =>
       processMessages.some((message) => message.roundId === round.id && message.content.trim())
       || reasoningBlocks.some((block) => block.roundId === round.id && block.content.trim())
+      || taskDelegations.some((delegation) => delegation.roundId === round.id)
       || tools.some((tool) => tool.roundId === round.id));
     if (visibleRounds.length === 0) {
       return <div className="cy-run-activity__empty">昔涟正在整理这一轮回复…</div>;
@@ -344,6 +354,7 @@ export function RunActivityDetail({
             round={round}
             interrupted={interrupted && round.status === "running"}
             processMessages={processMessages.filter((message) => message.roundId === round.id)}
+            taskDelegations={taskDelegations.filter((delegation) => delegation.roundId === round.id)}
             reasoningBlocks={reasoningBlocks.filter((block) => block.roundId === round.id)}
             tools={tools.filter((tool) => tool.roundId === round.id)}
           />
@@ -352,6 +363,9 @@ export function RunActivityDetail({
     );
   }
   const timeline: ReactNode[] = [];
+  taskDelegations.forEach((delegation) => {
+    timeline.push(<TaskDelegationRow delegation={delegation} key={`task-${delegation.invocationId}`} />);
+  });
   for (let index = 0; index <= tools.length; index += 1) {
     processMessages
       .filter((message) => (message.afterToolCount ?? 0) === index)
@@ -389,6 +403,7 @@ function RunActivityContent({
   reasoningBlocks,
   processMessages,
   agentRounds,
+  taskDelegations,
   tools,
   stage,
   taskPlan,
@@ -400,6 +415,7 @@ function RunActivityContent({
   reasoningBlocks: ReasoningBlock[];
   processMessages: ProcessMessageRecord[];
   agentRounds: AgentRoundRecord[];
+  taskDelegations: TaskDelegationDisplayRecord[];
   tools: ToolExecutionRecord[];
   stage?: AgentRunStage;
   taskPlan?: TaskPlanPresentation;
@@ -448,6 +464,7 @@ function RunActivityContent({
             agentRounds={agentRounds}
             reasoningBlocks={reasoningBlocks}
             processMessages={processMessages}
+            taskDelegations={taskDelegations}
             tools={tools}
             interrupted={Boolean(activity.keepExpanded && activity.completedAt !== undefined)}
           />
@@ -718,6 +735,7 @@ function createRoles(
         reasoningBlocks?: ReasoningBlock[];
         processMessages?: ProcessMessageRecord[];
         agentRounds?: AgentRoundRecord[];
+        taskDelegations?: TaskDelegationDisplayRecord[];
         tools?: ToolExecutionRecord[];
         runStage?: AgentRunStage;
         taskPlan?: TaskPlanPresentation;
@@ -733,6 +751,7 @@ function createRoles(
           reasoningBlocks={info.extraInfo?.reasoningBlocks ?? []}
           processMessages={info.extraInfo?.processMessages ?? []}
           agentRounds={info.extraInfo?.agentRounds ?? []}
+          taskDelegations={info.extraInfo?.taskDelegations ?? []}
           tools={info.extraInfo?.tools ?? []}
           stage={info.extraInfo?.runStage}
           taskPlan={info.extraInfo?.taskPlan}
@@ -838,6 +857,7 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
           reasoningBlocks,
           processMessages: message.processMessages ?? [],
           agentRounds: message.agentRounds ?? [],
+          taskDelegations: message.taskDelegations ?? [],
           tools,
           runStage: message.runStage,
           taskPlan: message.taskPlan,

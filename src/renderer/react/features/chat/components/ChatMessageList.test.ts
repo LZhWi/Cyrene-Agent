@@ -107,4 +107,28 @@ describe("function-calling round presentation", () => {
 
     expect(html).toContain("人家先去看一眼目录结构");
   });
+
+  it("renders a task delegation in its owning tool round", () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const html = renderToStaticMarkup(React.createElement(RunActivityDetail, {
+      agentRounds: [{ id: "round-task", status: "running", startedAt: 1 }],
+      processMessages: [],
+      reasoningBlocks: [],
+      taskDelegations: [{
+        invocationId: "child-run-1",
+        taskId: "task-1",
+        description: "检查取消链路",
+        nickname: "风堇",
+        assetFileName: "风堇.png",
+        status: "running",
+        roundId: "round-task",
+      }],
+      tools: [],
+      interrupted: false,
+    }));
+
+    expect(html).toContain("昔涟委托了");
+    expect(html).toContain("风堇");
+    expect(html).toContain("检查取消链路");
+  });
 });

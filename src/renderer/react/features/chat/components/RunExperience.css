@@ -87,6 +87,60 @@
 .cy-run-outcome { padding: 11px 14px; font: 400 13px/1.5 var(--rb-font-sans, sans-serif); }
 .cy-run-outcome--failed { border-color: #f1caca; color: #a34a4a; }
 
+.cy-task-delegation {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 2px;
+  color: var(--cy-text, #2f2d31);
+  font: 500 13px/1.4 var(--rb-font-sans, sans-serif);
+}
+
+.cy-task-delegation__marker {
+  width: 16px;
+  flex: 0 0 16px;
+  color: var(--cy-accent, #ff5b8a);
+  text-align: center;
+  font-size: 15px;
+}
+
+.cy-task-delegation.is-completed .cy-task-delegation__marker { color: #54a56d; }
+.cy-task-delegation.is-failed .cy-task-delegation__marker,
+.cy-task-delegation.is-cancelled .cy-task-delegation__marker { color: #d06969; }
+
+.cy-task-delegation__avatar {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 34px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 4px rgb(0 0 0 / 10%));
+}
+
+.cy-task-delegation.is-running .cy-task-delegation__avatar {
+  animation: cy-task-delegation-breathe 1.8s ease-in-out infinite;
+}
+
+.cy-task-delegation__lead { color: var(--cy-text-muted, #777078); }
+.cy-task-delegation__nickname { flex: 0 0 auto; font-weight: 650; }
+.cy-task-delegation__description {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--cy-text-muted, #777078);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cy-task-delegation__status {
+  flex: 0 0 auto;
+  color: #999199;
+  font-size: 12px;
+}
+
+@keyframes cy-task-delegation-breathe {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-2px) scale(1.04); }
+}
+
 .cy-composer-slot {
   position: relative;
   display: grid;
@@ -212,6 +266,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .cy-run-stage__pulse,
+  .cy-task-delegation.is-running .cy-task-delegation__avatar,
   .cy-composer-slot__interaction { animation: none; }
   .cy-composer-slot__composer,
   .cy-composer-slot__interaction { transition: none; }

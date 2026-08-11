@@ -22,12 +22,13 @@ import {
 import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessageList";
 import { applyAgentRoundBoundary, createRoundProcessMessage } from "../components/agent-rounds";
 import { buildCodeGitReviewSnapshot } from "../components/code-git-review";
+import { applyTaskDelegationEvent, normalizeTaskDelegationEvent } from "../components/task-delegations";
 import type { WeatherData } from "../components/weather/weather-types";
 import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
 import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
 import { ConversationSidebar } from "../components/ConversationSidebar";
 
-import type { AgentRoundRecord, ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
+import type { AgentRoundRecord, ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import { SidebarToggle } from "../../../components/ui/SidebarToggle";
 import { ModeSwitch } from "../../../components/ui/ModeSwitch";
 import { ToolModeButton } from "../../../components/ui/ToolModeButton";
@@ -876,6 +877,7 @@ export function ChatPage() {
     let reasoningBlocks: ReasoningBlock[] = [];
     let processMessages: ProcessMessageRecord[] = [];
     let agentRounds: AgentRoundRecord[] = [];
+    let taskDelegations: TaskDelegationDisplayRecord[] = [];
     let activeRoundId: string | undefined;
     let processMessageSequence = 0;
     let finalMessageCompleted = false;
@@ -921,6 +923,7 @@ export function ChatPage() {
       reasoningBlocks,
       processMessages,
       agentRounds,
+      taskDelegations,
       runActivity,
       at: assistantAt,
       sticker,
@@ -1204,6 +1207,16 @@ export function ChatPage() {
             updateMessage(input.targetMode, input.assistantId, { processMessages });
             void checkpointRun("running");
           });
+        }
+      } else if (event.type === "CUSTOM" && event.name === "cyrene.task") {
+        const delegation = normalizeTaskDelegationEvent(event.value);
+        if (delegation) {
+          taskDelegations = applyTaskDelegationEvent(taskDelegations, delegation, activeRoundId);
+          updateMessage(input.targetMode, input.assistantId, {
+            taskDelegations,
+            runStage: { kind: "executing", detail: delegation.nickname },
+          });
+          void checkpointRun("running", true);
         }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.choice") {
         const interaction = normalizeChoiceInteraction(event.value);
