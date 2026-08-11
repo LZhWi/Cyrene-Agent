@@ -32,6 +32,8 @@ import { SidebarToggle } from "../../../components/ui/SidebarToggle";
 import { ModeSwitch } from "../../../components/ui/ModeSwitch";
 import { ToolModeButton } from "../../../components/ui/ToolModeButton";
 import { ToolModePanel } from "../components/ToolModePanel";
+import { SkillModeButton } from "../../../components/ui/SkillModeButton";
+import { SkillModePanel } from "../components/SkillModePanel";
 import { CharacterStatusPill } from "../../../components/ui/CharacterStatusPill";
 import { WindowControls } from "../../../components/ui/WindowControls";
 import { SettingsButton } from "../../../components/ui/SettingsButton";
@@ -391,6 +393,7 @@ export function ChatPage() {
   const preferredAddress = useUserCallPreference();
   const [collapsed, setCollapsed] = useState(false);
   const [toolPanelOpen, setToolPanelOpen] = useState(false);
+  const [skillPanelOpen, setSkillPanelOpen] = useState(false);
   const [mode, setMode] = useState<ConversationMode>(getInitialMode);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessageItem[]>>({});
@@ -1625,6 +1628,7 @@ export function ChatPage() {
     await refreshSessions(targetMode, false);
     await selectSession(session.id, targetMode);
     setToolPanelOpen(false);
+    setSkillPanelOpen(false);
   }
 
   async function handleRenameSession(sessionId: string, newTitle: string) {
@@ -1979,7 +1983,7 @@ export function ChatPage() {
       </div>
       <div className="cy-page-top-center">
         <CharacterStatusPill avatarPath={avatarLight} status={modelDisplayName || modelName} />
-        {!toolPanelOpen && (
+        {!toolPanelOpen && !skillPanelOpen && (
           <ModeSwitch value={mode} onChange={(nextMode) => {
             if (isConversationMode(nextMode)) setMode(nextMode);
           }} />
@@ -1995,7 +1999,8 @@ export function ChatPage() {
       <div className="cy-page-sidebar">
         <div className="cy-page-newtask">
           <NewTaskButton onClick={() => void createNewTask()} />
-          <ToolModeButton active={toolPanelOpen} onClick={() => setToolPanelOpen((v) => !v)} />
+          <ToolModeButton active={toolPanelOpen} onClick={() => { setToolPanelOpen((v) => !v); setSkillPanelOpen(false); }} />
+          <SkillModeButton active={skillPanelOpen} onClick={() => { setSkillPanelOpen((v) => !v); setToolPanelOpen(false); }} />
         </div>
         <div className="cy-page-conversations">
           <ConversationSidebar
@@ -2030,7 +2035,9 @@ export function ChatPage() {
             <span>松开即可添加到当前对话</span>
           </div>
         )}
-        {toolPanelOpen ? (
+        {skillPanelOpen ? (
+          <SkillModePanel />
+        ) : toolPanelOpen ? (
           <ToolModePanel />
         ) : (
         <>

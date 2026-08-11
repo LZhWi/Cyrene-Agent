@@ -1,0 +1,218 @@
+/* ===== 技能面板（单列列表） ===== */
+.skill-panel {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
+  background: var(--cy-bg-workspace, #fff);
+  user-select: none;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.skill-panel__header {
+  padding: 22px 28px 4px;
+  flex-shrink: 0;
+}
+
+.skill-panel__title {
+  margin: 0;
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--cy-text, #1d1d1f);
+}
+
+.skill-panel__subtitle {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--cy-text-muted, #8e8e93);
+}
+
+.skill-panel__toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 28px 8px;
+  flex-shrink: 0;
+}
+
+.skill-panel__search {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 9px 16px;
+  font-size: 13px;
+  color: var(--cy-text, #1d1d1f);
+  background: var(--cy-bg-page, #f8f7f6);
+  border: 1px solid var(--cy-border, #f2f2f2);
+  border-radius: 10px;
+  outline: none;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.skill-panel__search:focus {
+  border-color: var(--cy-pill-border, #ff9fbd);
+  box-shadow: 0 0 0 3px rgba(255, 91, 138, 0.1);
+}
+
+.skill-panel__filter {
+  flex-shrink: 0;
+  padding: 9px 12px;
+  font-size: 13px;
+  color: var(--cy-text, #1d1d1f);
+  background: var(--cy-bg-page, #f8f7f6);
+  border: 1px solid var(--cy-border, #f2f2f2);
+  border-radius: 10px;
+  cursor: pointer;
+  outline: none;
+}
+
+.skill-panel__filter:focus {
+  border-color: var(--cy-pill-border, #ff9fbd);
+}
+
+.skill-panel__list {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 28px 24px;
+}
+
+.skill-panel__count {
+  padding: 6px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--cy-text, #1d1d1f);
+}
+
+.skill-panel__count-num {
+  margin-left: 4px;
+  color: var(--cy-text-muted, #8e8e93);
+  font-weight: 500;
+}
+
+.skill-panel__loading,
+.skill-panel__empty {
+  padding: 40px 12px;
+  text-align: center;
+  font-size: 12px;
+  color: var(--cy-text-muted, #8e8e93);
+}
+
+/* 技能卡片 */
+.skill-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  margin-bottom: 6px;
+  border: 1px solid var(--cy-border, #f2f2f2);
+  border-radius: 12px;
+  transition: background 0.15s ease;
+}
+
+.skill-card:hover {
+  background: var(--cy-bg-page, #f8f7f6);
+}
+
+.skill-card__icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.skill-card__body {
+  flex: 1;
+  min-width: 0;
+}
+
+.skill-card__name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--cy-text, #1d1d1f);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.skill-card.is-off .skill-card__name {
+  color: var(--cy-text-muted, #8e8e93);
+}
+
+.skill-card__desc {
+  margin-top: 2px;
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--cy-text-muted, #8e8e93);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  word-break: break-word;
+}
+
+.skill-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+
+.skill-card__scope {
+  font-size: 11px;
+  color: var(--cy-text-muted, #8e8e93);
+}
+
+/* 胶囊开关 */
+.skill-card__pill {
+  position: relative;
+  width: 36px;
+  height: 20px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: #e4e4e8;
+  cursor: pointer;
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.skill-card__pill:hover {
+  box-shadow: 0 0 0 3px rgba(255, 91, 138, 0.08);
+}
+
+.skill-card__pill.is-on {
+  background: var(--cy-accent, #ff5b8a);
+}
+
+.skill-card__pill-knob {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  transition: transform 0.2s ease;
+}
+
+.skill-card__pill.is-on .skill-card__pill-knob {
+  transform: translateX(16px);
+}
+
+.skill-panel::-webkit-scrollbar {
+  width: 6px;
+}
+
+.skill-panel::-webkit-scrollbar-thumb {
+  background: var(--cy-border, #f2f2f2);
+  border-radius: 3px;
+}
