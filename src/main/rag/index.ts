@@ -11,6 +11,7 @@ import { chunkText } from "./chunk";
 import { feedEntityNamesToJieba } from "../memory/entity-graph";
 import { isL2LocallyRecallable } from "../memory/memory-types";
 import type { DocumentImportControl } from "./file-ingest";
+import { ensureRerankerInitialized, getReranker } from "./reranker";
 
 // ── Global RAG instances ──
 let store: JsonVectorStore | null = null;
@@ -184,6 +185,7 @@ export async function searchMemoryEntries(
 ): Promise<Array<{ id: string; text: string; createdAt: number; score: number; metadata?: Record<string, unknown> }>> {
   if (!retriever) return [];
   let allowedEntryIds: string[] | undefined;
+  let userMemorySearchTextByEntryId: Map<string, string> | undefined;
   if (source === "user_memory") {
     try {
       const { memoryStore } = await import("../memory/memory-store");
@@ -191,19 +193,89 @@ export async function searchMemoryEntries(
       const recallableById = new Map(
         memories.filter(isL2LocallyRecallable).map((memory) => [memory.id, memory]),
       );
-      allowedEntryIds = getEntriesBySource("user_memory")
+      const recallableEntries = getEntriesBySource("user_memory")
         .filter((entry) => {
           const l2Id = entry.metadata?.l2Id;
           if (typeof l2Id !== "string") return false;
           return recallableById.get(l2Id)?.ragId === entry.id;
-        })
-        .map((entry) => entry.id);
+        });
+      allowedEntryIds = recallableEntries.map((entry) => entry.id);
+      userMemorySearchTextByEntryId = new Map(recallableEntries.map((entry) => {
+        const l2Id = entry.metadata?.l2Id;
+        const memory = typeof l2Id === "string" ? recallableById.get(l2Id) : undefined;
+        const searchText = memory?.triggerText.trim()
+          ? `${memory.content}\n${memory.triggerText}`
+          : memory?.content ?? entry.text;
+        return [entry.id, searchText];
+      }));
     } catch (err) {
       console.warn("[RAG] failed to resolve recallable user memories:", err);
       return [];
     }
   }
-  const results = await retriever.retrieve(query, source, topK, { allowedEntryIds });
+  const finalTopK = source === "user_memory" ? Math.min(Math.max(topK, 0), 5) : topK;
+  const candidateTopK = source === "user_memory" ? Math.max(20, finalTopK) : finalTopK;
+  let results = await retriever.retrieve(query, source, candidateTopK, {
+    allowedEntryIds,
+    searchTextByEntryId: userMemorySearchTextByEntryId,
+    rawScore: source === "user_memory",
+    recordRecall: source === "user_memory" ? false : options?.recordRecall,
+  });
+  if (source === "user_memory") {
+    const lexicalCandidates = (await retriever.retrieve(query, source, 5, {
+      allowedEntryIds,
+      searchTextByEntryId: userMemorySearchTextByEntryId,
+      bm25Only: true,
+      recordRecall: false,
+    })).filter((result) => result.score > 0);
+    const candidateIds = new Set(results.map((result) => result.entry.id));
+    for (const lexicalCandidate of lexicalCandidates) {
+      if (candidateIds.has(lexicalCandidate.entry.id)) continue;
+      if (results.length >= candidateTopK) {
+        const removed = results.pop();
+        if (removed) candidateIds.delete(removed.entry.id);
+      }
+      results.push(lexicalCandidate);
+      candidateIds.add(lexicalCandidate.entry.id);
+    }
+    try {
+      await ensureRerankerInitialized();
+    } catch (error) {
+      console.warn("[RAG] lazy reranker initialization failed; using hybrid ranking:", error);
+    }
+    const reranker = getReranker();
+    let rerankApplied = false;
+    if (reranker && results.length > 0) {
+      try {
+        const documents = results.map((result) =>
+          userMemorySearchTextByEntryId?.get(result.entry.id) ?? result.entry.text
+        );
+        const reranked = await reranker.rerank(query, documents);
+        const candidatesByText = new Map<string, typeof results>();
+        results.forEach((result, index) => {
+          const text = documents[index];
+          const matches = candidatesByText.get(text) ?? [];
+          matches.push(result);
+          candidatesByText.set(text, matches);
+        });
+        const rerankedResults = reranked.flatMap((item) => {
+          const matches = candidatesByText.get(item.text);
+          const match = matches?.shift();
+          return match ? [{ ...match, score: item.score }] : [];
+        });
+        const unmatchedResults = Array.from(candidatesByText.values()).flat();
+        results = [...rerankedResults, ...unmatchedResults];
+        rerankApplied = true;
+      } catch (error) {
+        console.warn("[RAG] user memory rerank failed; using hybrid ranking:", error);
+      }
+    }
+    if (!rerankApplied && lexicalCandidates[0]) {
+      const lexicalIndex = results.findIndex((result) => result.entry.id === lexicalCandidates[0].entry.id);
+      if (lexicalIndex > 0) results.unshift(...results.splice(lexicalIndex, 1));
+    }
+    results = results.slice(0, finalTopK);
+  }
   if (options?.recordRecall !== false) {
     await recordUserMemoryRecalls(results);
   }

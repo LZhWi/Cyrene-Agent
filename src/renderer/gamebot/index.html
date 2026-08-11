@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>昔涟 · Game Bot</title>
+  <link rel="stylesheet" href="../ui/tokens.css" />
+  <link rel="stylesheet" href="../ui/fonts.css" />
+  <link rel="stylesheet" href="../ui/base.css" />
+  <link rel="stylesheet" href="./gamebot.css" />
+</head>
+<body>
+  <div class="gamebot-shell">
+    <header class="gamebot-titlebar">
+      <div class="gamebot-brand">
+        <span class="gamebot-brand__icon" aria-hidden="true">🎮</span>
+        <div>
+          <strong>Game Bot</strong>
+          <span>视觉识别与游戏任务控制台</span>
+        </div>
+      </div>
+      <div class="gamebot-titlebar__actions">
+        <button type="button" class="gamebot-winbtn" id="gamebot-min-btn" aria-label="最小化" title="最小化">—</button>
+        <button type="button" class="gamebot-winbtn gamebot-winbtn--close" id="gamebot-close-btn" aria-label="关闭" title="关闭">×</button>
+      </div>
+    </header>
+
+    <main class="gamebot-content">
+      <section class="gamebot-hero">
+        <div>
+          <span class="gamebot-kicker">AUTOMATION CONSOLE</span>
+          <h1>游戏任务，一处配置与运行</h1>
+          <p>默认建议先使用“只识别不点击”验证窗口和文字识别结果。</p>
+        </div>
+        <span class="gamebot-enabled-badge" id="gamebot-enabled-badge">正在读取状态…</span>
+      </section>
+
+      <section class="gamebot-card">
+        <div class="gamebot-card__heading">
+          <div>
+            <h2>基础配置</h2>
+            <p>选择脚本，并配置游戏位置与视觉模型。</p>
+          </div>
+        </div>
+        <div class="gamebot-form-grid gamebot-form-grid--two">
+          <label class="gamebot-field">
+            <span>游戏 exe 路径</span>
+            <input id="gamebot-exe" type="text" placeholder="D:/Star Rail Game/StarRail.exe" autocomplete="off" />
+          </label>
+          <label class="gamebot-field">
+            <span>任务脚本</span>
+            <select id="gamebot-recipe"></select>
+          </label>
+          <label class="gamebot-field">
+            <span>VLM Base URL</span>
+            <input id="gamebot-vlm-url" type="url" placeholder="https://api.siliconflow.cn/v1" autocomplete="off" />
+          </label>
+          <label class="gamebot-field">
+            <span>VLM 模型名</span>
+            <input id="gamebot-vlm-model" type="text" placeholder="Qwen/Qwen3-VL-8B-Instruct" autocomplete="off" />
+          </label>
+          <label class="gamebot-field gamebot-field--wide">
+            <span>VLM API Key</span>
+            <input id="gamebot-vlm-key" type="password" placeholder="sk-..." autocomplete="off" />
+          </label>
+        </div>
+        <div class="gamebot-refs">
+          <span>参考图目录</span>
+          <code id="gamebot-refs-dir">未加载</code>
+          <small id="gamebot-refs-list"></small>
+        </div>
+      </section>
+
+      <section class="gamebot-card gamebot-currency" id="gamebot-currency-wars-config" hidden>
+        <div class="gamebot-card__heading">
+          <div>
+            <h2>货币战争</h2>
+            <p>OCR 优先；未配置本地 OCR 时使用上方 VLM。</p>
+          </div>
+          <span class="gamebot-safety">安全默认：只识别</span>
+        </div>
+        <div class="gamebot-form-grid gamebot-form-grid--three">
+          <label class="gamebot-field">
+            <span>自动流程</span>
+            <select id="gamebot-cw-flow-mode">
+              <option value="combined">局外＋局内组合（Better V13）</option>
+              <option value="outer">仅局外刷词条/投资</option>
+            </select>
+          </label>
+          <label class="gamebot-field">
+            <span>游戏目标模式</span>
+            <select id="gamebot-cw-target-mode">
+              <option value="fullscreen">本地全屏（按 StarRail.exe）</option>
+              <option value="window">云游戏（按窗口标题）</option>
+            </select>
+          </label>
+          <label class="gamebot-field">
+            <span>窗口标题关键词</span>
+            <input id="gamebot-cw-window-title" type="text" placeholder="崩坏" autocomplete="off" />
+          </label>
+          <label class="gamebot-field">
+            <span>模糊匹配阈值</span>
+            <input id="gamebot-cw-fuzzy-score" type="number" min="60" max="100" step="1" />
+          </label>
+          <label class="gamebot-field">
+            <span>最大轮数（0 = 不限）</span>
+            <input id="gamebot-cw-max-rounds" type="number" min="0" max="999" step="1" />
+          </label>
+        </div>
+        <div class="gamebot-checks">
+          <label><input id="gamebot-cw-recognition-only" type="checkbox" /> 只识别不点击</label>
+          <label><input id="gamebot-cw-debuff-enabled" type="checkbox" /> 启用主词条识别</label>
+          <label><input id="gamebot-cw-blocked-enabled" type="checkbox" /> 启用不想要词条</label>
+          <label><input id="gamebot-cw-investment-enabled" type="checkbox" /> 启用投资识别</label>
+          <label><input id="gamebot-cw-check-investment-blocked" type="checkbox" /> 命中不想要词条时仍检查投资</label>
+          <label><input id="gamebot-cw-match-any" type="checkbox" /> 命中任意主词条即可</label>
+          <label><input id="gamebot-cw-stop-target" type="checkbox" /> 命中后立即停止</label>
+          <label><input id="gamebot-cw-auto-launch" type="checkbox" /> 未找到目标时允许自动启动</label>
+          <label><input id="gamebot-cw-elevated-input" type="checkbox" /> 使用管理员输入助手（启动时弹出 UAC）</label>
+        </div>
+        <p class="gamebot-target-hint" id="gamebot-target-hint">本地全屏模式会检查 StarRail.exe，并在开始后自动最小化控制台。</p>
+        <div class="gamebot-form-grid gamebot-form-grid--two">
+          <label class="gamebot-field">
+            <span>主词条目标</span>
+            <textarea id="gamebot-cw-targets" rows="4" placeholder="每行一个，按优先级排列"></textarea>
+          </label>
+          <label class="gamebot-field">
+            <span>不想要词条</span>
+            <textarea id="gamebot-cw-blocked" rows="4" placeholder="命中任意一个即重开"></textarea>
+          </label>
+          <label class="gamebot-field">
+            <span>投资目标</span>
+            <textarea id="gamebot-cw-investments" rows="4"></textarea>
+          </label>
+          <label class="gamebot-field">
+            <span>局内策略目标</span>
+            <textarea id="gamebot-cw-strategies" rows="4"></textarea>
+          </label>
+          <label class="gamebot-field">
+            <span>局内投资门槛</span>
+            <textarea id="gamebot-cw-ingame-investments" rows="4"></textarea>
+          </label>
+        </div>
+        <details class="gamebot-advanced">
+          <summary>Better V13 组合规则与识别阈值</summary>
+          <div class="gamebot-form-grid gamebot-form-grid--two">
+            <label class="gamebot-field"><span>局外主词条规则</span><select id="gamebot-cw-main-rule"><option value="stop">命中停止</option><option value="require">必须命中才继续</option><option value="optional">尝试后继续</option><option value="ignore">忽略</option></select></label>
+            <label class="gamebot-field"><span>不想要词条规则</span><select id="gamebot-cw-blocked-rule"><option value="restart">命中重开</option><option value="continue">命中仍继续</option><option value="ignore">忽略</option></select></label>
+            <label class="gamebot-field"><span>局外投资规则</span><select id="gamebot-cw-outer-investment-rule"><option value="stop">命中停止</option><option value="require">必须命中才继续</option><option value="optional">尝试后继续</option><option value="ignore">忽略</option></select></label>
+            <label class="gamebot-field"><span>局内投资规则</span><select id="gamebot-cw-ingame-investment-rule"><option value="require">必须命中才继续</option><option value="optional">尝试后继续</option><option value="ignore">忽略</option></select></label>
+            <label class="gamebot-field"><span>不想要词条阈值</span><input id="gamebot-cw-blocked-fuzzy-score" type="number" min="60" max="100" step="1" /></label>
+            <label class="gamebot-field"><span>按钮阈值</span><input id="gamebot-cw-button-fuzzy-score" type="number" min="60" max="100" step="1" /></label>
+            <label class="gamebot-field"><span>投资阈值</span><input id="gamebot-cw-investment-fuzzy-score" type="number" min="60" max="100" step="1" /></label>
+          </div>
+        </details>
+        <details class="gamebot-advanced">
+          <summary>本地 OCR（可选）</summary>
+          <div class="gamebot-checks gamebot-checks--compact">
+            <label><input id="gamebot-cw-auto-detect-ocr" type="checkbox" /> 自动使用 Better-HSRCW 的 RapidOCR</label>
+          </div>
+          <p class="gamebot-target-hint">自动检测现有 Better-HSRCW 目录，不复制约 230MB 的 OCR 运行时；下方自定义命令优先。</p>
+          <div class="gamebot-form-grid gamebot-form-grid--two">
+            <label class="gamebot-field">
+              <span>OCR 命令 / exe</span>
+              <input id="gamebot-cw-ocr-command" type="text" placeholder="留空则自动检测，未找到时使用 VLM" autocomplete="off" />
+            </label>
+            <label class="gamebot-field">
+              <span>OCR 参数（每行一个）</span>
+              <textarea id="gamebot-cw-ocr-args" rows="3" placeholder="tools/rapidocr_bridge.py&#10;--server"></textarea>
+            </label>
+          </div>
+        </details>
+      </section>
+
+      <section class="gamebot-runner">
+        <div class="gamebot-runner__actions">
+          <button type="button" class="gamebot-primary" id="gamebot-start-btn">▶ 开始运行</button>
+          <button type="button" class="gamebot-secondary" id="gamebot-stop-btn">■ 停止</button>
+        </div>
+        <div class="gamebot-status-wrap">
+          <span class="gamebot-status-label">运行状态</span>
+          <strong id="gamebot-status">尚未运行</strong>
+        </div>
+        <pre id="gamebot-log" class="gamebot-log" aria-live="polite"></pre>
+      </section>
+    </main>
+  </div>
+  <script type="module" src="./gamebot.ts"></script>
+</body>
+</html>

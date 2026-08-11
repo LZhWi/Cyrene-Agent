@@ -5,6 +5,11 @@
 import * as fs from "fs";
 import * as path from "path";
 import { app } from "electron";
+import {
+  DEFAULT_CURRENCY_WARS_SETTINGS,
+  normalizeCurrencyWarsSettings,
+  type CurrencyWarsSettings,
+} from "./currency-wars/types";
 
 export interface GameBotSettings {
   enabled: boolean;
@@ -15,6 +20,7 @@ export interface GameBotSettings {
     apiKey: string;
     model: string;
   };
+  currencyWars: CurrencyWarsSettings;
 }
 
 const DEFAULTS: GameBotSettings = {
@@ -22,6 +28,7 @@ const DEFAULTS: GameBotSettings = {
   exePath: "",
   activeRecipe: "star-rail-daily",
   vlm: { baseUrl: "", apiKey: "", model: "" },
+  currencyWars: DEFAULT_CURRENCY_WARS_SETTINGS,
 };
 
 function filePath(): string {
@@ -40,6 +47,7 @@ function normalize(input: Partial<GameBotSettings> | null | undefined): GameBotS
       apiKey: typeof v.apiKey === "string" ? v.apiKey.trim() : "",
       model: typeof v.model === "string" ? v.model.trim() : "",
     },
+    currencyWars: normalizeCurrencyWarsSettings(input?.currencyWars),
   };
 }
 
@@ -57,6 +65,7 @@ export function saveGameBotSettings(patch: Partial<GameBotSettings>): GameBotSet
   const existing = loadGameBotSettings();
   const merged: Partial<GameBotSettings> = { ...existing, ...patch };
   if (patch.vlm) merged.vlm = { ...existing.vlm, ...patch.vlm };
+  if (patch.currencyWars) merged.currencyWars = { ...existing.currencyWars, ...patch.currencyWars };
   const final = normalize(merged);
   fs.mkdirSync(path.dirname(filePath()), { recursive: true });
   fs.writeFileSync(filePath(), JSON.stringify(final, null, 2), "utf8");

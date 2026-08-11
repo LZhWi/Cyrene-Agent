@@ -1,5 +1,12 @@
-import { describe, expect, it, vi } from "vitest";
-import { rerankDocumentsWithPipeline } from "./reranker";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  configureRerankerForLazyInit,
+  ensureRerankerInitialized,
+  getReranker,
+  getRerankerMode,
+  rerankDocumentsWithPipeline,
+  resetReranker,
+} from "./reranker";
 
 describe("cross-encoder reranker input", () => {
   it("passes query/document pairs through tokenizer text_pair and sorts raw logits", async () => {
@@ -26,5 +33,23 @@ describe("cross-encoder reranker input", () => {
       { text: "more relevant", score: 2.25 },
       { text: "less relevant", score: -1.5 },
     ]);
+  });
+});
+
+describe("lazy reranker configuration", () => {
+  afterEach(() => resetReranker());
+
+  it("records a saved mode without preloading its model", () => {
+    configureRerankerForLazyInit("standard");
+
+    expect(getRerankerMode()).toBe("standard");
+    expect(getReranker()).toBeNull();
+  });
+
+  it("keeps none mode disabled when lazy initialization is requested", async () => {
+    configureRerankerForLazyInit("none");
+
+    await expect(ensureRerankerInitialized()).resolves.toBeNull();
+    expect(getReranker()).toBeNull();
   });
 });

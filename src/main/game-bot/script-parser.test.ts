@@ -1,5 +1,7 @@
 // script-parser 单测 —— YAML 文本 → GameRecipe 解析 + 校验。
 import { describe, it, expect } from "vitest";
+import * as fs from "fs";
+import * as path from "path";
 import { parseRecipe } from "./script-parser";
 
 describe("parseRecipe", () => {
@@ -98,5 +100,18 @@ describe("parseRecipe", () => {
   it("非法 YAML 报错", () => {
     const r = parseRecipe("name: x\n  bad: : :");
     expect(r.ok).toBe(false);
+  });
+
+  it("解析货币战争专用 runner", () => {
+    const r = parseRecipe('name: cw\nexe: game.exe\nrunner: currency-wars\nsteps: []');
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.recipe.runner).toBe("currency-wars");
+  });
+
+  it("内置货币战争配方使用用户配置的游戏路径", () => {
+    const yaml = fs.readFileSync(path.join(process.cwd(), "game-recipes", "star-rail-currency-wars.yaml"), "utf8");
+    const r = parseRecipe(yaml);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.recipe.exe).toBe("${exe_path}");
   });
 });

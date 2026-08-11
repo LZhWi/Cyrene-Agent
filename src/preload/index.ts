@@ -190,6 +190,7 @@ const sidebarApi = {
   openSettings: (section?: string) => ipcRenderer.send(IPC.SIDEBAR_OPEN_SETTINGS, section),
   openCall: () => ipcRenderer.send(IPC.SIDEBAR_OPEN_CALL),
   openWork: () => ipcRenderer.send(IPC.SIDEBAR_OPEN_WORK),
+  openGameBot: () => ipcRenderer.send(IPC.SIDEBAR_OPEN_GAME_BOT),
 };
 
 const tasksApi = {
@@ -678,6 +679,8 @@ contextBridge.exposeInMainWorld("tts", ttsApi);
 
 // 游戏代肝（插件卡：配置 + 参考图只读展示 + 开始停止）
 const gameBotApi = {
+  minimize: () => ipcRenderer.send(IPC.GAME_BOT_WINDOW_MINIMIZE),
+  close: () => ipcRenderer.send(IPC.GAME_BOT_WINDOW_CLOSE),
   getConfig: () => ipcRenderer.invoke(IPC.GAME_BOT_GET_CONFIG),
   saveConfig: (config: unknown) => ipcRenderer.invoke(IPC.GAME_BOT_SAVE_CONFIG, config),
   listRecipes: () => ipcRenderer.invoke(IPC.GAME_BOT_LIST_RECIPES),

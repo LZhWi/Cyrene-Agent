@@ -1,0 +1,240 @@
+:root { color-scheme: dark; }
+
+html, body { width: 100%; height: 100%; overflow: hidden; }
+body { margin: 0; background: transparent; color: var(--rb-text-default); }
+
+.gamebot-shell {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(255, 190, 225, 0.22);
+  border-radius: 20px;
+  background:
+    radial-gradient(circle at 85% 0%, rgba(236, 72, 153, 0.18), transparent 32%),
+    linear-gradient(145deg, rgba(38, 22, 49, 0.98), rgba(20, 16, 31, 0.98));
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+}
+
+.gamebot-titlebar {
+  min-height: 62px;
+  padding: 0 12px 0 22px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 190, 225, 0.13);
+  background: rgba(255, 255, 255, 0.025);
+  -webkit-app-region: drag;
+}
+.gamebot-brand { display: flex; align-items: center; gap: 12px; }
+.gamebot-brand__icon { font-size: 26px; filter: drop-shadow(0 0 10px rgba(244, 114, 182, 0.5)); }
+.gamebot-brand div { display: grid; gap: 2px; }
+.gamebot-brand strong { font-size: 15px; letter-spacing: 0.4px; }
+.gamebot-brand span:last-child { color: var(--rb-text-muted); font-size: 11px; }
+.gamebot-titlebar__actions { display: flex; -webkit-app-region: no-drag; }
+.gamebot-winbtn {
+  width: 38px; height: 34px; border: 0; border-radius: 9px; background: transparent;
+  color: var(--rb-text-muted); font-size: 18px; cursor: pointer;
+}
+.gamebot-winbtn:hover { background: rgba(255, 255, 255, 0.08); color: white; }
+.gamebot-winbtn--close:hover { background: rgba(239, 68, 68, 0.75); }
+
+.gamebot-content { flex: 1; overflow-y: auto; padding: 24px; scrollbar-width: thin; }
+.gamebot-hero { display: flex; align-items: flex-end; justify-content: space-between; gap: 20px; padding: 4px 4px 20px; }
+.gamebot-kicker { color: #fb8fca; font-size: 10px; font-weight: 800; letter-spacing: 1.7px; }
+.gamebot-hero h1 { margin: 7px 0 6px; font-size: 25px; line-height: 1.2; }
+.gamebot-hero p, .gamebot-card__heading p { margin: 0; color: var(--rb-text-muted); font-size: 12px; }
+.gamebot-enabled-badge, .gamebot-safety {
+  flex: none; padding: 7px 11px; border: 1px solid rgba(251, 143, 202, 0.25); border-radius: 999px;
+  background: rgba(236, 72, 153, 0.09); color: #f9a8d4; font-size: 11px; font-weight: 700;
+}
+.gamebot-enabled-badge.is-disabled { border-color: rgba(248, 113, 113, 0.28); background: rgba(239, 68, 68, 0.08); color: #fca5a5; }
+
+.gamebot-card, .gamebot-runner {
+  margin-bottom: 16px; padding: 19px; border: 1px solid rgba(255, 190, 225, 0.14);
+  border-radius: 17px; background: rgba(255, 255, 255, 0.035);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+}
+.gamebot-card[hidden] { display: none; }
+.gamebot-card__heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 17px; }
+.gamebot-card__heading h2 { margin: 0 0 5px; font-size: 16px; }
+.gamebot-form-grid { display: grid; gap: 13px; }
+.gamebot-form-grid--two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.gamebot-form-grid--three { grid-template-columns: 1.35fr repeat(2, minmax(110px, 0.65fr)); }
+.gamebot-field { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: var(--rb-text-muted); font-size: 11px; font-weight: 650; }
+.gamebot-field--wide { grid-column: 1 / -1; }
+.gamebot-field input, .gamebot-field select, .gamebot-field textarea {
+  width: 100%; box-sizing: border-box; border: 1px solid rgba(255, 190, 225, 0.17); border-radius: 10px;
+  outline: none; background: rgba(10, 8, 18, 0.42); color: rgba(255, 250, 253, 0.92);
+  padding: 9px 10px; font: 12px/1.4 inherit; transition: border-color .15s, box-shadow .15s;
+}
+.gamebot-field textarea { resize: vertical; font-family: ui-monospace, Consolas, monospace; }
+.gamebot-field input:focus, .gamebot-field select:focus, .gamebot-field textarea:focus { border-color: rgba(244, 114, 182, 0.62); box-shadow: 0 0 0 3px rgba(236, 72, 153, 0.09); }
+.gamebot-refs { display: grid; gap: 5px; margin-top: 14px; color: var(--rb-text-muted); font-size: 11px; }
+.gamebot-refs code { width: fit-content; max-width: 100%; overflow-wrap: anywhere; color: #f9a8d4; }
+.gamebot-checks { display: flex; flex-wrap: wrap; gap: 9px 20px; margin: 15px 0; color: var(--rb-text-muted); font-size: 12px; }
+.gamebot-checks label { display: inline-flex; align-items: center; gap: 7px; cursor: pointer; }
+.gamebot-checks input { accent-color: #ec4899; }
+.gamebot-checks--compact { margin: 4px 0 8px; }
+.gamebot-target-hint { margin: -4px 0 15px; color: var(--rb-text-muted); font-size: 11px; }
+.gamebot-advanced { margin-top: 15px; color: var(--rb-text-muted); font-size: 12px; }
+.gamebot-advanced summary { margin-bottom: 13px; cursor: pointer; }
+
+.gamebot-runner { position: sticky; bottom: -24px; margin-bottom: 0; backdrop-filter: blur(18px); background: rgba(27, 18, 38, 0.92); }
+.gamebot-runner__actions { display: flex; gap: 9px; }
+.gamebot-primary, .gamebot-secondary { border: 0; border-radius: 10px; padding: 10px 17px; color: white; font-weight: 750; cursor: pointer; }
+.gamebot-primary { background: linear-gradient(135deg, #ec4899, #c026d3); box-shadow: 0 8px 22px rgba(236, 72, 153, 0.22); }
+.gamebot-secondary { background: rgba(255, 255, 255, 0.08); color: var(--rb-text-muted); }
+.gamebot-primary:hover, .gamebot-secondary:hover { filter: brightness(1.12); }
+.gamebot-status-wrap { display: flex; align-items: center; gap: 9px; margin-top: 13px; }
+.gamebot-status-label { color: var(--rb-text-muted); font-size: 11px; }
+.gamebot-status-wrap strong { font-size: 12px; }
+.gamebot-log { min-height: 20px; max-height: 150px; margin: 10px 0 0; padding: 10px; overflow: auto; border-radius: 10px; background: rgba(5, 4, 10, 0.38); color: rgba(255, 245, 252, 0.7); white-space: pre-wrap; font: 11px/1.5 ui-monospace, Consolas, monospace; }
+
+@media (max-width: 760px) {
+  .gamebot-content { padding: 17px; }
+  .gamebot-hero { align-items: flex-start; flex-direction: column; }
+  .gamebot-form-grid--two, .gamebot-form-grid--three { grid-template-columns: 1fr; }
+  .gamebot-field--wide { grid-column: auto; }
+}
+
+/* pearl-white：与聊天窗口统一为纯淡粉白底、近白悬浮卡片和低对比灰边框。 */
+html[data-ui-theme="pearl-white"] .gamebot-shell {
+  color: var(--rb-text-default);
+  background: #fdf9fb;
+  border-color: var(--rb-border-soft);
+  box-shadow: var(--rb-shadow-elevated);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-titlebar {
+  background: transparent;
+  border-bottom-color: var(--rb-border-soft);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-brand strong,
+html[data-ui-theme="pearl-white"] .gamebot-hero h1,
+html[data-ui-theme="pearl-white"] .gamebot-card__heading h2,
+html[data-ui-theme="pearl-white"] .gamebot-status-wrap strong {
+  color: var(--rb-text-strong);
+  text-shadow: none;
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-brand span:last-child,
+html[data-ui-theme="pearl-white"] .gamebot-hero p,
+html[data-ui-theme="pearl-white"] .gamebot-card__heading p,
+html[data-ui-theme="pearl-white"] .gamebot-field,
+html[data-ui-theme="pearl-white"] .gamebot-refs,
+html[data-ui-theme="pearl-white"] .gamebot-checks,
+html[data-ui-theme="pearl-white"] .gamebot-advanced,
+html[data-ui-theme="pearl-white"] .gamebot-status-label {
+  color: var(--rb-text-muted);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-target-hint {
+  color: var(--rb-text-muted);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-kicker,
+html[data-ui-theme="pearl-white"] .gamebot-refs code {
+  color: var(--rb-pink-600);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-brand__icon {
+  filter: none;
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-winbtn {
+  color: var(--rb-text-default);
+  background: rgba(246, 247, 250, 0.60);
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.70);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-winbtn:hover {
+  color: var(--rb-pink-600);
+  background: rgba(246, 247, 250, 0.60);
+  border-color: rgba(0, 0, 0, 0.12);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.16), inset 0 1px 0 rgba(255, 255, 255, 0.70);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-winbtn--close:hover {
+  color: var(--rb-pink-500);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-card,
+html[data-ui-theme="pearl-white"] .gamebot-runner {
+  background: #FEFDFE;
+  border-color: rgba(0, 0, 0, 0.05);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05), inset 0 1px 0 rgba(255, 255, 255, 0.70);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-runner {
+  backdrop-filter: none;
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-enabled-badge,
+html[data-ui-theme="pearl-white"] .gamebot-safety {
+  color: var(--rb-pink-600);
+  background: var(--rb-pink-50);
+  border-color: var(--rb-pink-200);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-enabled-badge.is-disabled {
+  color: #b4233c;
+  background: #fff1f3;
+  border-color: #fecdd3;
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-field input,
+html[data-ui-theme="pearl-white"] .gamebot-field select,
+html[data-ui-theme="pearl-white"] .gamebot-field textarea {
+  color: var(--rb-input-text);
+  background: var(--rb-input-bg);
+  border-color: var(--rb-input-border);
+  box-shadow: none;
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-field input::placeholder,
+html[data-ui-theme="pearl-white"] .gamebot-field textarea::placeholder {
+  color: var(--rb-input-placeholder);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-field input:focus,
+html[data-ui-theme="pearl-white"] .gamebot-field select:focus,
+html[data-ui-theme="pearl-white"] .gamebot-field textarea:focus {
+  border-color: var(--rb-pink-300);
+  box-shadow: 0 0 0 3px var(--rb-pink-100);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-primary {
+  color: var(--rb-text-on-pink);
+  background: var(--rb-pink-500);
+  box-shadow: var(--rb-shadow-pink);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-primary:hover {
+  background: var(--rb-pink-600);
+  box-shadow: 0 6px 20px rgba(255, 91, 138, 0.28);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-secondary {
+  color: var(--rb-text-default);
+  background: rgba(246, 247, 250, 0.60);
+  border: 1px solid rgba(0, 0, 0, 0.07);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.70);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-secondary:hover {
+  color: var(--rb-pink-600);
+  border-color: rgba(0, 0, 0, 0.12);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-log {
+  color: #4a4652;
+  background: #f8f5f7;
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+html[data-ui-theme="pearl-white"] .gamebot-content {
+  scrollbar-color: var(--rb-scroll-thumb) transparent;
+}

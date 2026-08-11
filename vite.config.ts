@@ -14,6 +14,7 @@ export default defineConfig({
         sidebar: resolve(__dirname, "src/renderer/sidebar/index.html"),
         tasks: resolve(__dirname, "src/renderer/tasks/index.html"),
         settings: resolve(__dirname, "src/renderer/settings/index.html"),
+        gamebot: resolve(__dirname, "src/renderer/gamebot/index.html"),
         stickers: resolve(__dirname, "src/renderer/sticker-manager/index.html"),
         call: resolve(__dirname, "src/renderer/call/index.html"),
       },

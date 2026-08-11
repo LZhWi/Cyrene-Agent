@@ -1,0 +1,5 @@
+name: 星穹铁道·货币战争
+exe: "${exe_path}"
+model: "${vlm_config}"
+runner: currency-wars
+steps: []

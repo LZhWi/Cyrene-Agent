@@ -48,6 +48,7 @@ export const IPC = {
   SIDEBAR_OPEN_TASKS: "sidebar:open-tasks",
   SIDEBAR_OPEN_CALL: "sidebar:open-call",
   SIDEBAR_OPEN_WORK: "sidebar:open-work",
+  SIDEBAR_OPEN_GAME_BOT: "sidebar:open-game-bot",
 
   // Work 运行时（视图内嵌在 chat 窗口，无独立窗口）
   WORK_SESSIONS_LIST: "work:sessions:list",
@@ -229,6 +230,8 @@ export const IPC = {
   GAME_BOT_START: "game-bot:start",
   GAME_BOT_STOP: "game-bot:stop",
   GAME_BOT_PROGRESS: "game-bot:progress",
+  GAME_BOT_WINDOW_MINIMIZE: "game-bot:window-minimize",
+  GAME_BOT_WINDOW_CLOSE: "game-bot:window-close",
 
   // token usage statistics
   TOKEN_USAGE_GET: "token-usage:get",

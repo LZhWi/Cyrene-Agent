@@ -39,6 +39,7 @@ interface SidebarApi {
   openSettings: (section?: string) => void;
   openCall: () => void;
   openWork: () => void;
+  openGameBot: () => void;
 }
 
 declare global {
@@ -60,6 +61,7 @@ if (!window.sidebar) {
     openSettings: (_section?: string) => {},
     openCall: () => {},
     openWork: () => {},
+    openGameBot: () => {},
   };
 }
 
@@ -208,8 +210,7 @@ settingsBtn.addEventListener("click", () => {
 });
 
 modelSwitchBtn.addEventListener("click", () => {
-  // "切换模型"直奔 API 配置标签，而不是默认的通用标签
-  window.sidebar?.openSettings("api");
+  window.sidebar?.openGameBot();
 });
 
 callBtn.addEventListener("click", () => {

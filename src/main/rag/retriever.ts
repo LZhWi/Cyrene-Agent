@@ -48,6 +48,7 @@ const NOUN_WEIGHT = 1.3;
 export interface RetrieveOptions {
   importIds?: string[];
   allowedEntryIds?: string[];
+  searchTextByEntryId?: ReadonlyMap<string, string>;
   createdAfter?: number;
   rawScore?: boolean;
   semanticOnly?: boolean;
@@ -286,7 +287,7 @@ export class HybridRetriever {
     if (docs.length === 0) return [];
 
     const queryTokenInfo = tokenize(query);
-    const docTokensList = docs.map((d) => tokenize(d.text));
+    const docTokensList = docs.map((d) => tokenize(options.searchTextByEntryId?.get(d.id) ?? d.text));
     const totalDocs = docs.length;
     const avgDocLen = docTokensList.reduce((sum, t) => sum + t.length, 0) / totalDocs;
 

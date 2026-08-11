@@ -86,7 +86,7 @@ import { PetWindowMoveController } from "./pet-window-movement";
 import type { StickerConfigItem } from "../shared/sticker-types";
 import type { ImageMessageAttachment, ChatMessage } from "../shared/chat-types";
 import type { GptsovitsSynthesizeRequest, GptsovitsTextSplitMethod, GptsovitsVersion } from "../shared/tts-types";
-import { initReranker, getRerankerInstallStatus } from "./rag/reranker";
+import { configureRerankerForLazyInit, initReranker, getRerankerInstallStatus } from "./rag/reranker";
 import { memoryStore } from "./memory/memory-store"
 import { backupMemoryRagFiles, reconcileMemoryRag } from "./memory/memory-rag-reconciliation";
 import type { L0Profile, L1Profile } from "./memory/memory-types";
@@ -218,6 +218,7 @@ let chatWindow: BrowserWindow | null = null;
 let sidebarWindow: BrowserWindow | null = null;
 let tasksWindow: BrowserWindow | null = null;
 let settingsWindow: BrowserWindow | null = null;
+let gameBotWindow: BrowserWindow | null = null;
 let stickerManagerWindow: BrowserWindow | null = null;
 let callWindow: BrowserWindow | null = null;
 let schedulerEngine: SchedulerEngine | null = null;
@@ -2704,7 +2705,7 @@ function broadcastToAuxWindows(channel: string, payload: unknown): void {
 }
 
 function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
-  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, gameBotWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_THEME_CHANGED, theme);
     }
@@ -2712,7 +2713,7 @@ function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
 }
 
 function broadcastUiFontChanged(font: GeneralSettings["uiFont"]): void {
-  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, gameBotWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_FONT_CHANGED, font);
     }
@@ -3252,6 +3253,57 @@ function createTasksWindow(): void {
   });
 }
 
+function createGameBotWindow(): void {
+  if (gameBotWindow && !gameBotWindow.isDestroyed()) {
+    gameBotWindow.show();
+    gameBotWindow.focus();
+    return;
+  }
+
+  const display = screen.getPrimaryDisplay();
+  const { x: dx, y: dy, width: dw, height: dh } = display.workArea;
+  const width = Math.min(940, dw);
+  const height = Math.min(840, dh);
+  gameBotWindow = new BrowserWindow({
+    x: dx + Math.max(0, Math.floor((dw - width) / 2)),
+    y: dy + Math.max(0, Math.floor((dh - height) / 2)),
+    width,
+    height,
+    minWidth: Math.min(760, dw),
+    minHeight: Math.min(560, dh),
+    title: "昔涟 · Game Bot",
+    icon: getCurrentAppIconPath(),
+    backgroundColor: "#00000000",
+    autoHideMenuBar: true,
+    show: false,
+    frame: false,
+    transparent: true,
+    resizable: true,
+    webPreferences: {
+      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+    },
+  });
+
+  if (isDev) {
+    gameBotWindow.loadURL("http://localhost:5173/gamebot/");
+  } else {
+    gameBotWindow.loadFile(
+      path.join(__dirname, "..", "..", "renderer", "gamebot", "index.html")
+    );
+  }
+
+  gameBotWindow.once("ready-to-show", () => {
+    gameBotWindow?.show();
+  });
+
+  gameBotWindow.on("closed", () => {
+    gameBotWindow = null;
+  });
+}
+
 function createSettingsWindow(section?: string): void {
   if (settingsWindow && !settingsWindow.isDestroyed()) {
     settingsWindow.show();
@@ -3475,7 +3527,7 @@ function applyUiIcon(iconSetting: UiIcon): void {
     return;
   }
   tray?.setImage(icon);
-  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, gameBotWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) win.setIcon(icon);
   }
 }
@@ -3785,6 +3837,10 @@ ipcMain.on(IPC.SIDEBAR_OPEN_SETTINGS, (_event, section?: string) => {
   createSettingsWindow(section);
 });
 
+ipcMain.on(IPC.SIDEBAR_OPEN_GAME_BOT, () => {
+  createGameBotWindow();
+});
+
 ipcMain.on(IPC.SIDEBAR_OPEN_CALL, () => {
   createCallWindow();
 });
@@ -3802,6 +3858,14 @@ ipcMain.on(IPC.SETTINGS_MINIMIZE, () => {
 
 ipcMain.on(IPC.SETTINGS_CLOSE, () => {
   settingsWindow?.close();
+});
+
+ipcMain.on(IPC.GAME_BOT_WINDOW_MINIMIZE, () => {
+  gameBotWindow?.minimize();
+});
+
+ipcMain.on(IPC.GAME_BOT_WINDOW_CLOSE, () => {
+  gameBotWindow?.close();
 });
 
 ipcMain.handle(IPC.SETTINGS_GET_CONFIG, () => {
@@ -5807,6 +5871,7 @@ app.whenReady().then(async () => {
   try {
     const modelSettings = loadModelSettings();
     await initRAG("auto", undefined, undefined, modelSettings.embeddingModel);
+    configureRerankerForLazyInit(modelSettings.rerankerMode);
     try {
       await reconcileUserMemoryIndex();
     } catch (err) {
@@ -5827,7 +5892,7 @@ app.whenReady().then(async () => {
       }
     });
 
-    console.log("[Reranker] startup preload skipped; reranker initializes when changed in settings.");
+    console.log(`[Reranker] ${modelSettings.rerankerMode} mode configured; model loads on first user-memory retrieval.`);
   } catch (err) {
     console.error("[Cyrene] RAG init FAILED:", err);
   }

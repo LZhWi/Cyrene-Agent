@@ -23,6 +23,8 @@ export interface RunResult {
 
 const defaultSleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
+class RecipeAbortError extends Error {}
+
 /** 替换 ${var} 为 vars 中的值。 */
 function resolveVars(s: string, vars: Record<string, unknown>): string {
   return s.replace(/\$\{(\w+)\}/g, (_, k) => {
@@ -72,7 +74,22 @@ function stepDesc(step: Step): string {
 export async function runRecipe(recipe: GameRecipe, ctx: RunContext): Promise<RunResult> {
   const tools = ctx.tools;
   const vars: Record<string, unknown> = { ...(ctx.vars ?? {}) };
-  const sleep = ctx.sleep ?? defaultSleep;
+  vars.exe = resolveVars(recipe.exe, vars);
+  if (recipe.model) vars.model = resolveVars(recipe.model, vars);
+  const sleep = ctx.sleep
+    ? async (ms: number) => {
+        await ctx.sleep!(ms);
+        if (ctx.signal?.aborted) throw new RecipeAbortError("已中止");
+      }
+    : async (ms: number) => {
+        let remaining = ms;
+        while (remaining > 0) {
+          if (ctx.signal?.aborted) throw new RecipeAbortError("已中止");
+          const chunk = Math.min(remaining, 100);
+          await defaultSleep(chunk);
+          remaining -= chunk;
+        }
+      };
   const settleMs = ctx.settleMs ?? 3000;
   const total = recipe.steps.length;
   let completed = 0;
@@ -160,13 +177,20 @@ export async function runRecipe(recipe: GameRecipe, ctx: RunContext): Promise<Ru
     }
   }
 
-  for (let i = 0; i < recipe.steps.length; i++) {
-    if (ctx.signal?.aborted) return { ok: false, error: "已中止", completed, total };
-    const step = recipe.steps[i];
-    ctx.onProgress?.({ index: i, total, desc: stepDesc(step) });
-    const err = await execStep(step);
-    if (err) return { ok: false, error: err, completed, total };
-    completed = i + 1;
+  try {
+    for (let i = 0; i < recipe.steps.length; i++) {
+      if (ctx.signal?.aborted) return { ok: false, error: "已中止", completed, total };
+      const step = recipe.steps[i];
+      ctx.onProgress?.({ index: i, total, desc: stepDesc(step) });
+      const err = await execStep(step);
+      if (err) return { ok: false, error: err, completed, total };
+      completed = i + 1;
+    }
+    return { ok: true, completed, total };
+  } catch (err) {
+    if (err instanceof RecipeAbortError) {
+      return { ok: false, error: "已中止", completed, total };
+    }
+    throw err;
   }
-  return { ok: true, completed, total };
 }

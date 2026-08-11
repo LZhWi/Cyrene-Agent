@@ -1351,39 +1351,10 @@
             <article class="plugin-card" id="plugin-gamebot-card">
               <div class="plugin-card__icon">🎮</div>
               <div class="plugin-card__body">
-                <h2>游戏代肝</h2>
-                <p>按预设脚本自动跑每日任务，视觉定位自适应分辨率。参考图由后端存储，把小图按命名放进下方目录即可。</p>
-                <div class="plugin-config" id="plugin-gamebot-config">
-                  <div class="tts-field">
-                    <label for="gamebot-exe">游戏 exe 路径</label>
-                    <input id="gamebot-exe" type="text" placeholder="C:/Games/StarRail/StarRail.exe" autocomplete="off" />
-                  </div>
-                  <div class="tts-field">
-                    <label for="gamebot-vlm-url">VLM Base URL（OpenAI 兼容）</label>
-                    <input id="gamebot-vlm-url" type="url" placeholder="https://api.siliconflow.cn/v1" autocomplete="off" />
-                  </div>
-                  <div class="tts-field">
-                    <label for="gamebot-vlm-key">VLM API Key</label>
-                    <input id="gamebot-vlm-key" type="password" placeholder="sk-..." autocomplete="off" />
-                  </div>
-                  <div class="tts-field">
-                    <label for="gamebot-vlm-model">VLM 模型名</label>
-                    <input id="gamebot-vlm-model" type="text" placeholder="Qwen/Qwen3-VL-8B-Instruct" autocomplete="off" />
-                  </div>
-                  <div class="tts-field">
-                    <label for="gamebot-recipe">代肝脚本</label>
-                    <select id="gamebot-recipe"></select>
-                  </div>
-                  <p class="user-field-hint">参考图存放目录（自行把裁好的小图放进去）：<br /><code id="gamebot-refs-dir">未加载</code></p>
-                  <p class="user-field-hint" id="gamebot-refs-list" style="font-size:12px;"></p>
-                  <div class="tts-field">
-                    <button type="button" id="gamebot-start-btn">▶ 开始代肝</button>
-                    <button type="button" id="gamebot-stop-btn">⏹ 停止</button>
-                  </div>
-                  <pre id="gamebot-log" style="background:#1a1a1a;color:#0f0;padding:8px;max-height:180px;overflow:auto;font-size:12px;white-space:pre-wrap;"></pre>
-                </div>
+                <h2>Gamebot</h2>
+                <p>启用后可从状态面板的“Game Bot”按钮进入独立控制窗口。</p>
               </div>
-              <label class="plugin-switch" aria-label="启用游戏代肝">
+              <label class="plugin-switch" aria-label="启用 Gamebot">
                 <input type="checkbox" id="plugin-gamebot-enabled" />
                 <span></span>
               </label>

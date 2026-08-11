@@ -16,6 +16,17 @@ export interface ImgData {
   mime: string;
 }
 
+export interface OcrTextItem {
+  text: string;
+  confidence: number;
+  bounds: { x: number; y: number; width: number; height: number };
+}
+
+export interface OcrResult {
+  rawText: string;
+  items: OcrTextItem[];
+}
+
 const VLM_TIMEOUT_MS = 30_000;
 
 /** 拼接 baseUrl + /chat/completions，兼容带或不带尾斜杠。 */
@@ -40,7 +51,7 @@ async function chat(config: VlmConfig, instruction: string, images: ImgData[]): 
     messages: [{ role: "user", content }],
     // 1024 而非 512：thinking 模型思考 token 计入同一预算，
     // 太小会把 JSON 正文挤掉导致坐标/判断解析失败。
-    max_tokens: 1024,
+    max_tokens: 4096,
     stream: false,
   };
   const controller = new AbortController();
@@ -53,15 +64,35 @@ async function chat(config: VlmConfig, instruction: string, images: ImgData[]): 
       body: JSON.stringify(body),
     });
     if (!resp.ok) {
-      const t = await resp.text().catch(() => "");
-      console.error("[GameBot] VLM 请求失败 HTTP", resp.status, t.slice(0, 200));
-      return "";
+      const detail = (await resp.text().catch(() => "")).replace(/\s+/g, " ").slice(0, 160);
+      throw new Error(`VLM 请求失败（HTTP ${resp.status}）${detail ? "：" + detail : ""}`);
     }
-    const data = await resp.json() as { choices?: Array<{ message?: { content?: string | null } }> };
-    return data.choices?.[0]?.message?.content ?? "";
+    const data = await resp.json() as {
+      choices?: Array<{
+        finish_reason?: string | null;
+        message?: { content?: string | Array<{ type?: string; text?: string }> | null; reasoning_content?: string | null };
+      }>;
+    };
+    const choice = data.choices?.[0];
+    const rawContent = choice?.message?.content;
+    const content = typeof rawContent === "string"
+      ? rawContent
+      : Array.isArray(rawContent)
+        ? rawContent.map((part) => typeof part?.text === "string" ? part.text : "").join("")
+        : "";
+    if (content.trim()) return content;
+    if (choice?.finish_reason === "length") {
+      throw new Error("VLM 输出达到 token 上限，尚未生成最终 JSON；请重试或改用非 Thinking 视觉模型");
+    }
+    const reasoningLength = choice?.message?.reasoning_content?.length ?? 0;
+    throw new Error(reasoningLength > 0
+      ? `VLM 只返回了思考过程（${reasoningLength} 字符），没有最终 JSON`
+      : "VLM 响应中没有可用文本");
   } catch (err) {
-    console.error("[GameBot] VLM 请求异常:", err instanceof Error ? err.message : err);
-    return "";
+    const error = err instanceof Error ? err : new Error(String(err));
+    if (error.name === "AbortError") throw new Error(`VLM 请求超时（${VLM_TIMEOUT_MS / 1000} 秒）`);
+    console.error("[GameBot] VLM 请求异常:", error.message);
+    throw error;
   } finally {
     clearTimeout(timer);
   }
@@ -120,4 +151,63 @@ export async function compare(
   const text = await chat(config, instruction, [...refImgs, screenImg]);
   if (!text) return null;
   return parseMatchIndex(text, refImgs.length);
+}
+
+/**
+ * 用当前 VLM 提取文字及文字框。框坐标统一为 0-1000 窗口归一化坐标，
+ * 供本地 OCR sidecar 未配置时的兼容路径使用。
+ */
+export function parseRecognizedText(text: string): OcrResult | null {
+  const cleaned = text.replace(/```(?:json)?\s*/gi, "").replace(/```/gi, "").trim();
+  const itemsKey = cleaned.indexOf('"items"');
+  const topLevelArray = itemsKey < 0 && cleaned.indexOf("[") >= 0;
+  const start = itemsKey >= 0
+    ? cleaned.lastIndexOf("{", itemsKey)
+    : topLevelArray ? cleaned.indexOf("[") : cleaned.indexOf("{");
+  const end = topLevelArray ? cleaned.lastIndexOf("]") : cleaned.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(cleaned.slice(start, end + 1)) as { items?: unknown } | unknown[];
+    const rawItems = Array.isArray(parsed) ? parsed : parsed.items;
+    if (!Array.isArray(rawItems)) return null;
+    const items: OcrTextItem[] = [];
+    for (const raw of rawItems) {
+      if (!raw || typeof raw !== "object") continue;
+      const item = raw as Record<string, unknown>;
+      const value = typeof item.text === "string" ? item.text.trim() : "";
+      const x = Number(item.x);
+      const y = Number(item.y);
+      const width = Number(item.width);
+      const height = Number(item.height);
+      if (!value || ![x, y, width, height].every(Number.isFinite)) continue;
+      const normalizedX = Math.max(0, Math.min(1000, x));
+      const normalizedY = Math.max(0, Math.min(1000, y));
+      items.push({
+        text: value,
+        confidence: Math.max(0, Math.min(1, Number(item.confidence) || 0)),
+        bounds: {
+          x: normalizedX,
+          y: normalizedY,
+          width: Math.max(0, Math.min(1000 - normalizedX, width)),
+          height: Math.max(0, Math.min(1000 - normalizedY, height)),
+        },
+      });
+    }
+    return { rawText: items.map((item) => item.text).join("\n"), items };
+  } catch {
+    return null;
+  }
+}
+
+export async function recognizeText(config: VlmConfig, image: ImgData): Promise<OcrResult | null> {
+  const instruction =
+    "识别这张游戏窗口截图中的所有可见中文和数字，并给出每段文字的边界框。" +
+    "坐标为 0-1000 归一化坐标。只返回 JSON：" +
+    '{"items":[{"text":"文字","confidence":0.95,"x":0,"y":0,"width":100,"height":30}]}。' +
+    "不要 Markdown，不要解释。";
+  const text = await chat(config, instruction, [image]);
+  const parsed = parseRecognizedText(text);
+  if (parsed) return parsed;
+  const preview = text.replace(/\s+/g, " ").slice(0, 160);
+  throw new Error(`VLM 返回内容不是有效的 OCR JSON${preview ? "：" + preview : ""}`);
 }

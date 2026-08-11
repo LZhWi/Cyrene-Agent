@@ -4,7 +4,9 @@
 // 注意：nut.js 是 native 模块，Electron 需 electron-rebuild 重编译。
 // 若启动报 native 模块错误，备选 koffi + user32 SendInput（见 plan Task 6/13 验证点）。
 
-import { mouse, Point, keyboard, Key } from "@nut-tree-fork/nut-js";
+import { mouse, Point, keyboard, Key, Button } from "@nut-tree-fork/nut-js";
+
+const CLICK_HOLD_MS = 80;
 
 /** 特殊键名 → nut.js Key。单字母（A-Z）走动态解析。 */
 const KEY_MAP: Record<string, Key> = {
@@ -30,7 +32,32 @@ function resolveKey(name: string): Key | null {
 /** 移动到 (x,y) 并左键单击一次。 */
 export async function click(x: number, y: number): Promise<void> {
   await mouse.setPosition(new Point(x, y));
-  await mouse.leftClick();
+  await mouse.pressButton(Button.LEFT);
+  try {
+    await new Promise<void>((resolve) => setTimeout(resolve, CLICK_HOLD_MS));
+  } finally {
+    await mouse.releaseButton(Button.LEFT);
+  }
+}
+
+/** 从屏幕坐标 start 平滑拖拽到 end。 */
+export async function drag(start: { x: number; y: number }, end: { x: number; y: number }): Promise<void> {
+  const path = Array.from({ length: 13 }, (_, index) => {
+    const ratio = index / 12;
+    return new Point(
+      Math.round(start.x + (end.x - start.x) * ratio),
+      Math.round(start.y + (end.y - start.y) * ratio),
+    );
+  });
+  await mouse.setPosition(path[0]);
+  await mouse.drag(path);
+}
+
+/** 在指定屏幕坐标滚动；steps > 0 向下，steps < 0 向上。 */
+export async function scroll(x: number, y: number, steps: number): Promise<void> {
+  await mouse.setPosition(new Point(x, y));
+  if (steps > 0) await mouse.scrollDown(steps);
+  else if (steps < 0) await mouse.scrollUp(Math.abs(steps));
 }
 
 /** 点击屏幕中心。 */

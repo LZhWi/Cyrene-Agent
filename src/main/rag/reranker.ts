@@ -114,6 +114,8 @@ export async function createStandardReranker(): Promise<RerankerProvider> {
 // ── Reranker manager ──
 let currentReranker: RerankerProvider | null = null;
 let currentRerankerMode: "light" | "standard" | "none" = "none";
+let rerankerConfigVersion = 0;
+let lazyInitPromise: Promise<RerankerProvider | null> | null = null;
 
 /**
  * 检查某个 rerank 模型的 onnx 文件是否存在于本地 models/ 目录。
@@ -141,7 +143,9 @@ export function getRerankerInstallStatus(): { light: boolean; standard: boolean 
 }
 
 export async function initReranker(mode: "light" | "standard" | "none"): Promise<void> {
+  const configVersion = ++rerankerConfigVersion;
   currentRerankerMode = mode;
+  currentReranker = null;
 
   if (mode === "none") {
     currentReranker = null;
@@ -153,20 +157,51 @@ export async function initReranker(mode: "light" | "standard" | "none"): Promise
   if (!checkRerankerModelInstalled(mode)) {
     const modelDir = mode === "light" ? "ms-marco-MiniLM-L-6-v2" : "bge-reranker-base";
     console.warn(`[Reranker] 模型未找到 (models/${modelDir}/onnx/model_quantized.onnx)，自动降级为 none。基础聊天和基础 RAG 不受影响。`);
-    currentRerankerMode = "none";
-    currentReranker = null;
+    if (configVersion === rerankerConfigVersion) {
+      currentRerankerMode = "none";
+      currentReranker = null;
+    }
     return;
   }
 
   console.log(`[Reranker] initializing ${mode} mode...`);
 
   if (mode === "light") {
-    currentReranker = await createLightReranker();
+    const reranker = await createLightReranker();
+    if (configVersion === rerankerConfigVersion) currentReranker = reranker;
   } else {
-    currentReranker = await createStandardReranker();
+    const reranker = await createStandardReranker();
+    if (configVersion === rerankerConfigVersion) currentReranker = reranker;
   }
 
-  console.log(`[Reranker] ${mode} mode ready: ${currentReranker.name}`);
+  if (configVersion === rerankerConfigVersion && currentReranker) {
+    console.log(`[Reranker] ${mode} mode ready: ${currentReranker.name}`);
+  }
+}
+
+export function configureRerankerForLazyInit(mode: "light" | "standard" | "none"): void {
+  rerankerConfigVersion += 1;
+  currentRerankerMode = mode;
+  currentReranker = null;
+  lazyInitPromise = null;
+}
+
+export async function ensureRerankerInitialized(): Promise<RerankerProvider | null> {
+  if (currentReranker || currentRerankerMode === "none") return currentReranker;
+  if (lazyInitPromise) return lazyInitPromise;
+
+  const requestedMode = currentRerankerMode;
+  const promise = initReranker(requestedMode)
+    .then(() => currentRerankerMode === requestedMode ? currentReranker : null)
+    .catch((error) => {
+      console.warn(`[Reranker] lazy ${requestedMode} initialization failed; using hybrid ranking:`, error);
+      return null;
+    })
+    .finally(() => {
+      if (lazyInitPromise === promise) lazyInitPromise = null;
+    });
+  lazyInitPromise = promise;
+  return promise;
 }
 
 export function getReranker(): RerankerProvider | null {
@@ -178,8 +213,10 @@ export function getRerankerMode(): "light" | "standard" | "none" {
 }
 
 export function resetReranker(): void {
+  rerankerConfigVersion += 1;
   currentReranker = null;
   currentRerankerMode = "none";
+  lazyInitPromise = null;
   lightPipeline = null;
   standardPipeline = null;
 }

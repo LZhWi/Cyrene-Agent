@@ -35,6 +35,13 @@ describe("runRecipe", () => {
     expect(tools.launch).toHaveBeenCalledWith("C:/game.exe");
   });
 
+  it("顶层 exe 会解析成 ${exe} 供步骤使用", async () => {
+    const tools = mockTools();
+    const r = recipe('name: x\nexe: "${exe_path}"\nsteps:\n  - launch: "${exe}"');
+    await runRecipe(r, { tools, vars: { exe_path: "D:/Star Rail Game/StarRail.exe" }, sleep: noSleep });
+    expect(tools.launch).toHaveBeenCalledWith("D:/Star Rail Game/StarRail.exe");
+  });
+
   it("wait 调用 sleep", async () => {
     const tools = mockTools();
     const sleep = vi.fn().mockResolvedValue(undefined);

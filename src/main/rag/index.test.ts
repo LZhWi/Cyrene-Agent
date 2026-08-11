@@ -8,7 +8,7 @@ const provider: EmbeddingProvider = {
   name: "deterministic",
   dims: 2,
   async embed(text: string): Promise<number[]> {
-    return text.includes("paragraph") ? [0, 1] : [1, 0];
+    return text.includes("paragraph") || text.includes("lexical-distractor") ? [0, 1] : [1, 0];
   },
   async embedBatch(texts: string[]): Promise<number[][]> {
     return Promise.all(texts.map((text) => this.embed(text)));
@@ -16,6 +16,10 @@ const provider: EmbeddingProvider = {
 };
 
 const { userDataDir, appPath } = vi.hoisted(() => ({ userDataDir: { value: "" }, appPath: { value: "" } }));
+const rerankerMock = vi.hoisted(() => ({
+  current: null as null | { rerank: ReturnType<typeof vi.fn> },
+  ensureInitialized: vi.fn(),
+}));
 
 vi.mock("electron", () => ({
   app: {
@@ -27,6 +31,12 @@ vi.mock("electron", () => ({
 vi.mock("./embedding", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./embedding")>()),
   getEmbeddingProvider: () => provider,
+}));
+
+vi.mock("./reranker", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reranker")>()),
+  getReranker: () => rerankerMock.current,
+  ensureRerankerInitialized: rerankerMock.ensureInitialized,
 }));
 
 import {
@@ -54,6 +64,9 @@ beforeEach(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "rag-index-test-"));
   userDataDir.value = tmpDir;
   appPath.value = tmpDir;
+  rerankerMock.current = null;
+  rerankerMock.ensureInitialized.mockReset();
+  rerankerMock.ensureInitialized.mockImplementation(async () => rerankerMock.current);
   await initRAG();
 });
 
@@ -88,6 +101,154 @@ describe("turn document imports", () => {
 });
 
 describe("user memory retrieval", () => {
+  async function rewriteVectorState(
+    patches: Array<{ id: string; lastRecalledAt?: number; weight?: number }>,
+  ): Promise<void> {
+    flushVectorStoreSync();
+    const storeFile = path.join(tmpDir, "rag-data", "memory-store.json");
+    const persisted = JSON.parse(fs.readFileSync(storeFile, "utf8")) as Array<{
+      id: string;
+      lastRecalledAt: number;
+      weight: number;
+    }>;
+    const patchById = new Map(patches.map((patch) => [patch.id, patch]));
+    for (const entry of persisted) {
+      const patch = patchById.get(entry.id);
+      if (patch) Object.assign(entry, patch);
+    }
+    fs.writeFileSync(storeFile, JSON.stringify(persisted), "utf8");
+    resetRAG();
+    await initRAG();
+  }
+
+  async function addRecallableL2(input: {
+    content: string;
+    triggerText: string;
+    createdAt?: number;
+    status?: "active" | "aging";
+  }) {
+    const { memoryStore } = await import("../memory/memory-store");
+    const memory = await memoryStore.addL2Memory({
+      content: input.content,
+      triggerText: input.triggerText,
+      sourceConversationId: "test",
+      isPinned: false,
+      syncStatus: "pending_sync",
+    }, input.createdAt === undefined ? undefined : { createdAt: input.createdAt });
+    const ragId = await addL2MemoryVector(memory.content, memory.id, {
+      triggerText: memory.triggerText,
+    }, input.createdAt === undefined ? undefined : { createdAt: input.createdAt });
+    await memoryStore.markL2SyncStatus(memory.id, "synced", ragId);
+    if (input.status === "aging") await memoryStore.updateL2Status([memory.id], "aging");
+    return { memory, ragId };
+  }
+
+  it("lazily initializes the configured reranker before the first user-memory ranking", async () => {
+    await addRecallableL2({ content: "alpha durable memory", triggerText: "alpha trigger" });
+    const rerank = vi.fn(async (_query: string, documents: string[]) =>
+      documents.map((text) => ({ text, score: 1 }))
+    );
+    rerankerMock.ensureInitialized.mockImplementationOnce(async () => {
+      rerankerMock.current = { rerank };
+      return rerankerMock.current;
+    });
+
+    await searchMemoryEntries("alpha", "user_memory", 5, { recordRecall: false });
+
+    expect(rerankerMock.ensureInitialized).toHaveBeenCalledTimes(1);
+    expect(rerank).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not initialize the reranker for history retrieval", async () => {
+    await addHistoryMemory("alpha history", {
+      sessionId: "session-a", role: "user", ts: Date.now(), turnId: "turn-a",
+    });
+
+    await searchHistoryEntries("alpha", 5, { recordRecall: false });
+
+    expect(rerankerMock.ensureInitialized).not.toHaveBeenCalled();
+  });
+
+  it("keeps hybrid user-memory results when lazy reranker initialization fails", async () => {
+    const target = await addRecallableL2({ content: "alpha durable memory", triggerText: "alpha trigger" });
+    rerankerMock.ensureInitialized.mockRejectedValueOnce(new Error("model load failed"));
+
+    const results = await searchMemoryEntries("alpha", "user_memory", 5, { recordRecall: false });
+
+    expect(results.map((entry) => entry.id)).toContain(target.ragId);
+  });
+
+  it("recalls a 90-day-old memory through a synonymous semantic query", async () => {
+    const old = await addRecallableL2({
+      content: "durable old preference",
+      triggerText: "original wording",
+      createdAt: Date.now() - 90 * 24 * 60 * 60 * 1000,
+      status: "aging",
+    });
+    for (let index = 0; index < 20; index += 1) {
+      await addRecallableL2({
+        content: `synonymous reformulation lexical-distractor ${index}`,
+        triggerText: `recent trigger ${index}`,
+      });
+    }
+    await rewriteVectorState([{ id: old.ragId, lastRecalledAt: old.memory.createdAt }]);
+
+    const results = await searchMemoryEntries("synonymous reformulation", "user_memory", 5, { recordRecall: false });
+
+    expect(results.map((entry) => entry.id)).toContain(old.ragId);
+  });
+
+  it("finds a summary through triggerText without returning triggerText as the memory body", async () => {
+    for (let index = 0; index < 20; index += 1) {
+      await addRecallableL2({
+        content: `paragraph unrelated distractor ${index}`,
+        triggerText: `other trigger ${index}`,
+      });
+    }
+    const target = await addRecallableL2({
+      content: "用户偏好清淡饮食",
+      triggerText: "paragraph deadline phrase",
+    });
+    const rerank = vi.fn(async (_query: string, documents: string[]) => documents
+      .map((text) => ({ text, score: text.includes("deadline phrase") ? 100 : 1 }))
+      .sort((a, b) => b.score - a.score));
+    rerankerMock.current = { rerank };
+
+    const results = await searchMemoryEntries("paragraph deadline", "user_memory", 5, { recordRecall: false });
+
+    expect(rerank.mock.calls[0]?.[1]).toContain("用户偏好清淡饮食\nparagraph deadline phrase");
+    expect(results[0]).toMatchObject({ id: target.ragId, text: "用户偏好清淡饮食" });
+    expect(results[0]?.text).not.toContain("paragraph deadline phrase");
+  });
+
+  it("reranks an expanded candidate set and still returns only the top five", async () => {
+    const memories = [];
+    for (let index = 0; index < 21; index += 1) {
+      memories.push(await addRecallableL2({
+        content: index === 19 ? "alpha highly relevant old memory" : `alpha lexical-distractor weak recent memory ${index}`,
+        triggerText: `trigger ${index}`,
+        createdAt: index === 19 ? Date.now() - 90 * 24 * 60 * 60 * 1000 : undefined,
+        status: index === 19 ? "aging" : "active",
+      }));
+    }
+    await rewriteVectorState(memories.map(({ memory, ragId }) => ({
+      id: ragId,
+      weight: memory.content.includes("weak recent") ? 5 : 1,
+      lastRecalledAt: memory.createdAt,
+    })));
+    const rerank = vi.fn(async (_query: string, documents: string[]) => documents
+      .map((text) => ({ text, score: text.includes("highly relevant old") ? 100 : 1 }))
+      .sort((a, b) => b.score - a.score));
+    rerankerMock.current = { rerank };
+
+    const results = await searchMemoryEntries("alpha memory", "user_memory", 5, { recordRecall: false });
+
+    expect(rerank).toHaveBeenCalledTimes(1);
+    expect(rerank.mock.calls[0][1]).toHaveLength(20);
+    expect(results).toHaveLength(5);
+    expect(results[0]?.text).toBe("alpha highly relevant old memory");
+  });
+
   it("creates a distinct vector for every L2 even when contents are identical", async () => {
     const firstId = await addL2MemoryVector("用户喜欢香菇", "l2_first", { source: "test" });
     const secondId = await addL2MemoryVector("用户喜欢香菇", "l2_second", { source: "test" });

@@ -16,6 +16,12 @@ import { listRefs, readRef, refsDirPath } from "./refs-store";
 import { captureScreen } from "./screenshot";
 import * as input from "./input";
 import * as vlm from "./vlm-locator";
+import { OcrClient } from "./ocr-client";
+import { captureWindowTarget, findFullscreenTarget, findWindowTarget } from "./window-target";
+import { runCurrencyWars } from "./currency-wars/runner";
+import { launchDetached } from "./process-tools";
+import { resolveOcrLaunchConfig } from "./ocr-runtime";
+import { ElevatedInputClient } from "./elevated-input";
 
 const LOG = "[GameBot]";
 
@@ -60,8 +66,7 @@ function buildTools(settings: GameBotSettings): BotTools {
   const curRecipe = () => runningRecipe ?? settings.activeRecipe;
   return {
     launch: async (exe) => {
-      const { spawn } = await import("child_process");
-      spawn(exe, [], { detached: true, shell: false, stdio: "ignore" }).unref();
+      await launchDetached(exe);
     },
     screenshot: captureScreen,
     click: input.click,
@@ -111,28 +116,103 @@ export async function startGameBot(): Promise<{ ok: boolean; error?: string }> {
   if (runSignal) return { ok: false, error: "已有代肝任务在运行" };
   const settings = loadGameBotSettings();
   if (!settings.enabled) return { ok: false, error: "代肝未启用（设置→插件→游戏代肝 开启开关）" };
-  if (!settings.exePath) return { ok: false, error: "未配置游戏 exe 路径" };
-  if (!settings.vlm.baseUrl || !settings.vlm.apiKey || !settings.vlm.model)
-    return { ok: false, error: "未配置 VLM（baseUrl/apiKey/model）" };
   const recipe = loadRecipe(settings.activeRecipe);
   if (!recipe) return { ok: false, error: "找不到脚本: " + settings.activeRecipe };
+  const resolvedExe = recipe.exe.replace(/\$\{exe_path\}/g, settings.exePath).trim();
+  if (!resolvedExe) return { ok: false, error: "未配置游戏 exe 路径" };
+  const hasVlm = Boolean(settings.vlm.baseUrl && settings.vlm.apiKey && settings.vlm.model);
+  const ocrLaunch = recipe.runner === "currency-wars"
+    ? resolveOcrLaunchConfig({
+        command: settings.currencyWars.ocrCommand,
+        args: settings.currencyWars.ocrArgs,
+        autoDetect: settings.currencyWars.autoDetectOcr,
+        appPath: app.getAppPath(),
+      })
+    : null;
+  const hasLocalOcr = Boolean(ocrLaunch);
+  if (recipe.runner === "currency-wars" ? !hasVlm && !hasLocalOcr : !hasVlm)
+    return { ok: false, error: "未配置可用识别器（VLM 或本地 OCR）" };
 
   runningRecipe = settings.activeRecipe;
   runSignal = { aborted: false };
+  let elevatedInput: ElevatedInputClient | null = null;
+  if (recipe.runner === "currency-wars" && settings.currencyWars.elevatedInput && !settings.currencyWars.recognitionOnly) {
+    try {
+      broadcastProgress({ index: 0, total: settings.currencyWars.maxRounds || 1, desc: "等待管理员输入助手连接" });
+      elevatedInput = await ElevatedInputClient.connect(app.getPath("userData"), path.parse(resolvedExe).name);
+      broadcastProgress({ index: 0, total: settings.currencyWars.maxRounds || 1, desc: "管理员输入助手已连接" });
+    } catch (err) {
+      runSignal = null;
+      runningRecipe = null;
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  }
   const tools = buildTools(settings);
+  const signal = runSignal;
+  const ocrClient = hasLocalOcr
+    ? new OcrClient(ocrLaunch!.command, ocrLaunch!.args)
+    : null;
+  if (ocrLaunch?.source === "better-hsrcw") {
+    console.log(LOG, "已自动使用 Better-HSRCW 本地 RapidOCR:", ocrLaunch.command);
+    broadcastProgress({ index: 0, total: settings.currencyWars.maxRounds || 1, desc: "已启用本地 RapidOCR" });
+  }
+  const task = recipe.runner === "currency-wars"
+    ? runCurrencyWars({
+        exe: resolvedExe,
+        settings: settings.currencyWars,
+        signal,
+        onProgress: broadcastProgress,
+        tools: {
+          launch: tools.launch,
+          findWindow: findWindowTarget,
+          findFullscreen: findFullscreenTarget,
+          capture: captureWindowTarget,
+          click: elevatedInput ? elevatedInput.click.bind(elevatedInput) : input.click,
+          drag: elevatedInput ? elevatedInput.drag.bind(elevatedInput) : input.drag,
+          key: elevatedInput ? elevatedInput.key.bind(elevatedInput) : input.keyPress,
+          delay: async (ms) => {
+            let remaining = ms;
+            while (remaining > 0) {
+              if (signal.aborted) return;
+              const chunk = Math.min(remaining, 100);
+              await new Promise<void>((resolve) => setTimeout(resolve, chunk));
+              remaining -= chunk;
+            }
+          },
+          recognize: async (capture) => {
+            if (ocrClient) {
+              return ocrClient.recognize(Buffer.from(capture.base64, "base64"), capture.width, capture.height);
+            }
+            return vlm.recognizeText(
+              { baseUrl: settings.vlm.baseUrl, apiKey: settings.vlm.apiKey, model: settings.vlm.model },
+              capture,
+            );
+          },
+        },
+      }).then((res) => ({
+        ok: res.ok,
+        error: res.error,
+        completed: res.rounds,
+        total: settings.currencyWars.maxRounds || res.rounds,
+        detail: res.matched,
+      }))
+    : runRecipe(recipe, {
+        tools,
+        vars: { exe_path: settings.exePath, vlm_config: settings.vlm.model },
+        onProgress: broadcastProgress,
+        signal,
+      });
 
-  void runRecipe(recipe, {
-    tools,
-    vars: { exe_path: settings.exePath, vlm_config: settings.vlm.model },
-    onProgress: broadcastProgress,
-    signal: runSignal,
-  }).then((res) => {
+  void task.then((res) => {
     console.log(LOG, "代肝结束:", res.ok ? "成功" : "失败(" + res.error + ")", res.completed + "/" + res.total);
-    broadcastProgress({ index: -1, total: res.total, desc: res.ok ? "完成" : "失败: " + (res.error ?? "") });
+    const detail = "detail" in res && res.detail ? ": " + res.detail : "";
+    broadcastProgress({ index: -1, total: res.total, desc: res.ok ? "完成" + detail : "失败: " + (res.error ?? "") });
   }).catch((err) => {
     console.error(LOG, "代肝异常:", err);
     broadcastProgress({ index: -1, total: 0, desc: "异常: " + (err instanceof Error ? err.message : String(err)) });
   }).finally(() => {
+    ocrClient?.dispose();
+    elevatedInput?.dispose();
     runSignal = null;
     runningRecipe = null;
   });
@@ -157,7 +237,14 @@ export function initGameBot(): void {
   ipcMain.handle(IPC.GAME_BOT_LIST_RECIPES, () => listRecipes());
   ipcMain.handle(IPC.GAME_BOT_LIST_REFS, (_e, recipeId: string) => listRefs(recipeId));
   ipcMain.handle(IPC.GAME_BOT_REFS_DIR, (_e, recipeId: string) => refsDirPath(recipeId));
-  ipcMain.handle(IPC.GAME_BOT_START, () => startGameBot());
+  ipcMain.handle(IPC.GAME_BOT_START, async (event) => {
+    const settings = loadGameBotSettings();
+    const result = await startGameBot();
+    if (result.ok && settings.activeRecipe === "star-rail-currency-wars" && settings.currencyWars.targetMode === "fullscreen") {
+      BrowserWindow.fromWebContents(event.sender)?.minimize();
+    }
+    return result;
+  });
   ipcMain.handle(IPC.GAME_BOT_STOP, () => stopGameBot());
 
   // agent 触发工具：用户在聊天里要代肝时调用。enabled 跟随配置开关。
