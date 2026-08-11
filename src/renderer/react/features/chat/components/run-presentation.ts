@@ -276,7 +276,10 @@ export function normalizeChoiceInteraction(value: unknown): AskUserInteraction |
       const id = asNonEmptyString(question?.id);
       const prompt = asNonEmptyString(question?.prompt);
       const options = normalizePublicOptions(question?.options);
-      if (!id || !prompt || options.length < 2 || typeof customInput?.enabled !== "boolean") return [];
+      const isTextQuestion = options.length === 0;
+      if (!id || !prompt || typeof customInput?.enabled !== "boolean") return [];
+      if (!isTextQuestion && options.length < 2) return [];
+      if (isTextQuestion && customInput.enabled !== true) return [];
       return [{
         id,
         question: prompt,

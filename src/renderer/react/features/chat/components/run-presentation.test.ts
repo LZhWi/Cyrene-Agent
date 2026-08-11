@@ -143,6 +143,34 @@ describe("work run presentation", () => {
     });
   });
 
+  it("normalizes a required text-only Ask question", () => {
+    expect(normalizeChoiceInteraction({
+      interactionId: "choice-text",
+      runId: "run-text",
+      revision: 1,
+      mode: "semantic_clarification",
+      intro: "还需要一句补充。",
+      questions: [{
+        id: "note",
+        prompt: "还有什么要求？",
+        required: true,
+        multiple: false,
+        options: [],
+        customInput: { enabled: true, placeholder: "请输入要求" },
+      }],
+    })).toMatchObject({
+      kind: "ask",
+      id: "choice-text",
+      responseKind: "submission",
+      questions: [{
+        id: "note",
+        options: [],
+        allowCustomInput: true,
+        multiple: false,
+      }],
+    });
+  });
+
   it("accepts a runtime-owned fixed-choice card with custom input disabled", () => {
     expect(normalizeChoiceInteraction({
       interactionId: "confirm-1",

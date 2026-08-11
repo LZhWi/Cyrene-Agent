@@ -22,11 +22,11 @@ export function buildAskCard(
       const options = question.options
         .filter((option) => option.value !== CUSTOM_OPTION.value)
         .slice(0, 3);
-      if (options.length < 2) throw new Error("E_ASK_OPTIONS_INSUFFICIENT");
+      if (question.type !== "text" && options.length < 2) throw new Error("E_ASK_OPTIONS_INSUFFICIENT");
       return {
         ...question,
         options,
-        allowCustom: true,
+        allowCustom: question.allowCustom,
       };
     }),
     deferredFields: output.deferredFields,
@@ -41,6 +41,7 @@ interface PublishedQuestion {
   field: string;
   type: AskClarificationCard["questions"][number]["type"];
   options: Map<string, string>;
+  allowCustom: boolean;
 }
 
 /** Main-process-only publication state. Never send this object to Renderer. */
@@ -67,7 +68,12 @@ export function publishAskCard(
         ...(option.description ? { description: option.description } : {}),
       };
     });
-    privateQuestions.set(questionId, { field: question.field, type: question.type, options });
+    privateQuestions.set(questionId, {
+      field: question.field,
+      type: question.type,
+      options,
+      allowCustom: question.allowCustom,
+    });
     return {
       id: questionId,
       prompt: question.question,
@@ -75,7 +81,7 @@ export function publishAskCard(
       required: true as const,
       options: publicOptions,
       customInput: {
-        enabled: true as const,
+        enabled: question.allowCustom,
         ...(question.freeTextPlaceholder ? { placeholder: question.freeTextPlaceholder } : {}),
       },
     };
@@ -111,7 +117,7 @@ export function resolveAskCardSubmission(
     if (answer.source === "custom") {
       if ("optionId" in answer || "optionIds" in answer) invalidAnswer();
       const customText = answer.text?.trim();
-      if (!customText) invalidAnswer();
+      if (!question.allowCustom || !customText) invalidAnswer();
       return { field: question.field, customText };
     }
     if (answer.source !== "option" || "text" in answer) invalidAnswer();
@@ -143,7 +149,7 @@ export function validateAskUserAnswer(
     const customText = item.customText?.trim();
     const selectedValues = item.selectedValues?.filter((value) => value !== "__custom__");
     if (question.type === "text") {
-      if (!customText) invalidAnswer();
+      if (!question.allowCustom || !customText) invalidAnswer();
       return { field: item.field, customText };
     }
     const allowed = new Set(question.options
@@ -151,6 +157,7 @@ export function validateAskUserAnswer(
       .map((option) => option.value));
     if (selectedValues?.some((value) => !allowed.has(value))) invalidAnswer();
     if (question.type === "single_select" && (selectedValues?.length ?? 0) > 1) invalidAnswer();
+    if (customText && !question.allowCustom) invalidAnswer();
     if ((!selectedValues || selectedValues.length === 0) && !customText) invalidAnswer();
     return {
       field: item.field,
