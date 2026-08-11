@@ -46,8 +46,10 @@ html, body {
   width: 100vw;
   background: var(--cy-bg-page);
   box-sizing: border-box;
-  padding: 50px 10px 10px 200px;
+  padding: 50px 10px 10px 10px;
   position: relative;
+  display: flex;
+  gap: 10px;
   transition: padding 0.25s ease;
   border: 1px solid var(--cy-border);
   border-radius: var(--cy-window-radius, 24px);
@@ -114,60 +116,59 @@ html, body {
   right: 20px;
 }
 
-.cy-page-settings {
-  position: absolute;
-  bottom: 15px;
-  left: 160px;
-  transition: left 0.25s ease;
+/* 用户头像与设置按钮已移入 .cy-page-sidebar-bottom */
+
+/* 侧边栏父容器：宽度固定、内部纵向 flex，主区占剩余空间，随窗口缩放 */
+.cy-page-sidebar {
+  display: flex;
+  flex-direction: column;
+  width: 192px;
+  flex-shrink: 0;
+  min-height: 0;
+  transition: width 0.25s ease, opacity 0.2s ease;
 }
 
-.cy-page-user {
-  position: absolute;
-  bottom: 15px;
-  left: 10px;
-  transition: left 0.25s ease;
+.cy-page.is-collapsed .cy-page-sidebar {
+  width: 0;
+  opacity: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cy-page-main {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
 }
 
 .cy-page-newtask {
-  position: absolute;
-  top: 60px;
-  left: 8px;
-  transition: left 0.25s ease;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 10px;
+  padding: 0 2px;
+  flex-shrink: 0;
 }
 
 .cy-page-conversations {
-  position: absolute;
-  top: 114px;
-  bottom: 62px;
-  left: 8px;
-  width: 184px;
+  flex: 1;
   min-height: 0;
+  margin-top: 8px;
   overflow: hidden;
   app-region: no-drag;
-  transition: left 0.25s ease, opacity 0.2s ease;
 }
 
-.cy-page.is-collapsed .cy-page-newtask {
-  left: -162px;
-}
-
-.cy-page.is-collapsed .cy-page-conversations {
-  left: -190px;
-  opacity: 0;
-  pointer-events: none;
+.cy-page-sidebar-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 4px 4px;
+  flex-shrink: 0;
 }
 
 /* 收起状态：组件向左移 */
 .cy-page.is-collapsed .cy-page-top-center {
   left: calc(50% - 85px);
-}
-
-.cy-page.is-collapsed .cy-page-settings {
-  left: -30px;
-}
-
-.cy-page.is-collapsed .cy-page-user {
-  left: -180px;
 }
 
 .cy-workspace {

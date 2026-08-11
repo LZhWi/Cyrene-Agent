@@ -26,10 +26,12 @@ import type { WeatherData } from "../components/weather/weather-types";
 import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
 import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
 import { ConversationSidebar } from "../components/ConversationSidebar";
-import { StatusFloat } from "../components/StatusFloat";
+
 import type { AgentRoundRecord, ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import { SidebarToggle } from "../../../components/ui/SidebarToggle";
 import { ModeSwitch } from "../../../components/ui/ModeSwitch";
+import { ToolModeButton } from "../../../components/ui/ToolModeButton";
+import { ToolModePanel } from "../components/ToolModePanel";
 import { CharacterStatusPill } from "../../../components/ui/CharacterStatusPill";
 import { WindowControls } from "../../../components/ui/WindowControls";
 import { SettingsButton } from "../../../components/ui/SettingsButton";
@@ -70,13 +72,14 @@ import "../../../components/ui/WindowControls.css";
 import "../../../components/ui/SettingsButton.css";
 import "../../../components/ui/UserAvatar.css";
 import "../../../components/ui/NewTaskButton.css";
+import "../../../components/ui/ToolModeButton.css";
 import "../components/ChatComposer.css";
 import "../components/ReasoningControl.css";
 import "../components/StyleControl.css";
 import "../components/PermissionControl.css";
 import "../components/ChatMessageList.css";
 import "../components/ConversationSidebar.css";
-import "../components/StatusFloat.css";
+
 
 import avatarLight from "../../../assets/avatars/avatar-light.png";
 import compressingPng from "../../../assets/compressing.png";
@@ -387,6 +390,7 @@ function getInitialMode(): ConversationMode {
 export function ChatPage() {
   const preferredAddress = useUserCallPreference();
   const [collapsed, setCollapsed] = useState(false);
+  const [toolPanelOpen, setToolPanelOpen] = useState(false);
   const [mode, setMode] = useState<ConversationMode>(getInitialMode);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessageItem[]>>({});
@@ -480,7 +484,6 @@ export function ChatPage() {
     messageId: string;
   } | null>(null);
 
-  const taskLabel = ["work", "code"].includes(mode) ? "新建任务" : "新建对话";
   const activeSessionId = activeSessionIds[mode];
   const scopeKey = activeSessionId ?? `mode:${mode}`;
   const draft = drafts[scopeKey] ?? "";
@@ -1621,6 +1624,7 @@ export function ChatPage() {
     }
     await refreshSessions(targetMode, false);
     await selectSession(session.id, targetMode);
+    setToolPanelOpen(false);
   }
 
   async function handleRenameSession(sessionId: string, newTitle: string) {
@@ -1975,9 +1979,11 @@ export function ChatPage() {
       </div>
       <div className="cy-page-top-center">
         <CharacterStatusPill avatarPath={avatarLight} status={modelDisplayName || modelName} />
-        <ModeSwitch value={mode} onChange={(nextMode) => {
-          if (isConversationMode(nextMode)) setMode(nextMode);
-        }} />
+        {!toolPanelOpen && (
+          <ModeSwitch value={mode} onChange={(nextMode) => {
+            if (isConversationMode(nextMode)) setMode(nextMode);
+          }} />
+        )}
       </div>
       <div className="cy-page-windows">
         <WindowControls
@@ -1986,34 +1992,34 @@ export function ChatPage() {
           onClose={() => window.chat?.close()}
         />
       </div>
-      <div className="cy-page-settings">
-        <SettingsButton onClick={() => sidebarApi()?.openSettings("appearance")} />
-      </div>
-      <div className="cy-page-user">
-        <UserAvatar />
-      </div>
-      <div className="cy-page-newtask">
-        <NewTaskButton label={taskLabel} onClick={() => void createNewTask()} />
-      </div>
-      <div className="cy-page-conversations">
-        <StatusFloat />
-        <ConversationSidebar
-          mode={mode}
-          sessions={sessions}
-          activeSessionId={activeSessionId}
-          onSelect={(sessionId) => void selectSession(sessionId)}
-          onOpenProject={(workspaceRoot) => {
-            void chatStore()?.openWorkspace(workspaceRoot).then((result) => {
-              if (!result.ok) window.alert(`无法打开项目文件夹：${result.error ?? "未知错误"}`);
-            });
-          }}
-          onRename={(sessionId, newTitle) => void handleRenameSession(sessionId, newTitle)}
-          onDelete={(sessionId) => void handleDeleteSession(sessionId)}
-          onTogglePin={(sessionId, pinned) => void handleTogglePinSession(sessionId, pinned)}
-        />
+      <div className="cy-page-sidebar">
+        <div className="cy-page-newtask">
+          <NewTaskButton onClick={() => void createNewTask()} />
+          <ToolModeButton active={toolPanelOpen} onClick={() => setToolPanelOpen((v) => !v)} />
+        </div>
+        <div className="cy-page-conversations">
+          <ConversationSidebar
+            mode={mode}
+            sessions={sessions}
+            activeSessionId={activeSessionId}
+            onSelect={(sessionId) => void selectSession(sessionId)}
+            onOpenProject={(workspaceRoot) => {
+              void chatStore()?.openWorkspace(workspaceRoot).then((result) => {
+                if (!result.ok) window.alert(`无法打开项目文件夹：${result.error ?? "未知错误"}`);
+              });
+            }}
+            onRename={(sessionId, newTitle) => void handleRenameSession(sessionId, newTitle)}
+            onDelete={(sessionId) => void handleDeleteSession(sessionId)}
+            onTogglePin={(sessionId, pinned) => void handleTogglePinSession(sessionId, pinned)}
+          />
+        </div>
+        <div className="cy-page-sidebar-bottom">
+          <UserAvatar />
+          <SettingsButton onClick={() => sidebarApi()?.openSettings("appearance")} />
+        </div>
       </div>
       <main
-        className={`cy-workspace ${hasMessages ? "has-messages" : "is-empty"} ${isDraggingFiles ? "is-dragging-files" : ""} ${codeGitReviewPath ? "is-review-open" : ""}`}
+        className={`cy-page-main cy-workspace ${hasMessages ? "has-messages" : "is-empty"} ${isDraggingFiles ? "is-dragging-files" : ""} ${codeGitReviewPath ? "is-review-open" : ""}`}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -2024,6 +2030,10 @@ export function ChatPage() {
             <span>松开即可添加到当前对话</span>
           </div>
         )}
+        {toolPanelOpen ? (
+          <ToolModePanel />
+        ) : (
+        <>
         {(mode === "work" || mode === "learn") && (
           <TodoPanel
             state={activeSessionId ? todoStateBySession[activeSessionId] : null}
@@ -2153,6 +2163,8 @@ export function ChatPage() {
             }}
           />
         </div>
+        </>
+        )}
       </main>
       {mode === "code" && activeSessionId && (
         <CodeDiffReview sessionId={activeSessionId} path={codeGitReviewPath} open={codeGitReviewPath !== null} onClose={() => setCodeGitReviewPath(null)} />

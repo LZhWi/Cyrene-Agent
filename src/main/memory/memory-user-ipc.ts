@@ -9,6 +9,8 @@ import { deleteImportedDoc } from "../rag";
 import { loadUserProfile, saveUserProfile, getAvatarPath } from "../settings-store";
 import { addMcpServer, removeMcpServer, listMcpServers } from "../orchestrator/mcp-manager";
 import { toolRegistry } from "../orchestrator/tool-registry";
+import type { ConversationMode } from "../../shared/chat-types";
+import { loadGeneralSettings, saveGeneralSettings } from "../settings/settings-facade";
 import { listSkillsForUi, setSkillEnabled } from "../skills";
 import type { WindowManager } from "../windows/window-manager";
 import {
@@ -284,6 +286,65 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
       result[t.id] = t.enabled;
     }
     return result;
+  });
+
+  // 工具目录元数据（工具页展示用；只暴露可序列化字段，不含 execute/zod schema）
+  ipcMain.handle(IPC.TOOL_GET_CATALOG, () => {
+    return toolRegistry.getAllTools().map((t) => ({
+      id: t.id,
+      name: t.name,
+      description: t.description,
+      enabled: t.enabled,
+      modes: t.modes ?? null,
+      deprecated: t.deprecated ?? null,
+    }));
+  });
+
+  // 三模适配层：工具-模式覆盖层读写。
+  // 覆盖层持久化在 general-settings.toolModeOverrides，覆盖优先于工具声明的 modes 字段。
+  ipcMain.handle(IPC.TOOL_GET_MODE_OVERRIDES, () => {
+    return loadGeneralSettings().toolModeOverrides;
+  });
+
+  ipcMain.handle(IPC.TOOL_SET_MODE_OVERRIDE, (_event, payload: unknown) => {
+    const p = payload as { toolId?: string; mode?: string; enabled?: boolean };
+    if (!p.toolId || !p.mode) return { ok: false, error: "missing toolId or mode" };
+    const validModes = ["chat", "work", "code", "learn"];
+    if (!validModes.includes(p.mode)) return { ok: false, error: "invalid mode" };
+    const mode = p.mode as ConversationMode;
+    const before = loadGeneralSettings().toolModeOverrides;
+    const next = { ...before };
+    next[p.toolId] = { ...(next[p.toolId] ?? {}), [mode]: p.enabled !== false };
+    saveGeneralSettings({ toolModeOverrides: next });
+    console.log(`[Tool] override ${p.toolId}@${mode}=${p.enabled !== false}`);
+    return { ok: true };
+  });
+
+  ipcMain.handle(IPC.TOOL_CLEAR_MODE_OVERRIDE, (_event, payload: unknown) => {
+    const p = payload as { toolId?: string; mode?: string };
+    if (!p.toolId) return { ok: false, error: "missing toolId" };
+    const before = loadGeneralSettings().toolModeOverrides;
+    const next = { ...before };
+    if (p.mode) {
+      // 清除单个模式：删除该 mode 键，若工具已无任何覆盖则整个删除
+      const validModes = ["chat", "work", "code", "learn"];
+      if (!validModes.includes(p.mode)) return { ok: false, error: "invalid mode" };
+      const mode = p.mode as ConversationMode;
+      if (next[p.toolId]) {
+        const { [mode]: _removed, ...rest } = next[p.toolId];
+        if (Object.keys(rest).length > 0) {
+          next[p.toolId] = rest;
+        } else {
+          delete next[p.toolId];
+        }
+      }
+    } else {
+      // 未指定 mode：清除该工具的所有模式覆盖
+      delete next[p.toolId];
+    }
+    saveGeneralSettings({ toolModeOverrides: next });
+    console.log(`[Tool] override cleared ${p.toolId}@${p.mode ?? "all"}`);
+    return { ok: true };
   });
 
   // Skill toggles

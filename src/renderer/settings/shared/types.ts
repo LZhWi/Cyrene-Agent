@@ -247,6 +247,18 @@ export interface SettingsApi {
   rerankerSetMode?: (mode: string) => Promise<boolean>;
   setToolEnabled?: (id: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
   getToolEnabled?: () => Promise<Record<string, boolean>>;
+  // 三模适配层：工具-模式覆盖层（UI 设置面板用）
+  getToolCatalog?: () => Promise<Array<{
+    id: string;
+    name: string;
+    description: string;
+    enabled: boolean;
+    modes: Array<"chat" | "work" | "code" | "learn"> | null;
+    deprecated: string | null;
+  }>>;
+  getToolModeOverrides?: () => Promise<Record<string, Partial<Record<"chat" | "work" | "code" | "learn", boolean>>>>;
+  setToolModeOverride?: (toolId: string, mode: "chat" | "work" | "code" | "learn", enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+  clearToolModeOverride?: (toolId: string, mode?: "chat" | "work" | "code" | "learn") => Promise<{ ok: boolean; error?: string }>;
   listSkills?: () => Promise<Array<{ id: string; name: string; description: string; tools: string[]; enabled: boolean; source: string; version?: string; references: string[] }>>;
   setSkillEnabled?: (id: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
   addMcpServer?: (config: unknown) => Promise<{ ok: boolean; toolIds?: string[]; error?: string }>;

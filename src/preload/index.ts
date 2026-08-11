@@ -312,6 +312,13 @@ const settingsApi = {
   getRerankerStatus: (): Promise<{ light: boolean; standard: boolean }> => ipcRenderer.invoke(IPC.RERANKER_GET_STATUS),
   setToolEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke(IPC.TOOL_SET_ENABLED, { id, enabled }),
   getToolEnabled: () => ipcRenderer.invoke(IPC.TOOL_GET_ENABLED),
+  // 三模适配层：工具-模式覆盖层（UI 设置面板用）
+  getToolCatalog: () => ipcRenderer.invoke(IPC.TOOL_GET_CATALOG),
+  getToolModeOverrides: () => ipcRenderer.invoke(IPC.TOOL_GET_MODE_OVERRIDES),
+  setToolModeOverride: (toolId: string, mode: string, enabled: boolean) =>
+    ipcRenderer.invoke(IPC.TOOL_SET_MODE_OVERRIDE, { toolId, mode, enabled }),
+  clearToolModeOverride: (toolId: string, mode?: string) =>
+    ipcRenderer.invoke(IPC.TOOL_CLEAR_MODE_OVERRIDE, { toolId, mode }),
   listSkills: () => ipcRenderer.invoke(IPC.SKILL_LIST),
   setSkillEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke(IPC.SKILL_SET_ENABLED, { id, enabled }),
   addMcpServer: (config: unknown) => ipcRenderer.invoke(IPC.MCP_ADD_SERVER, config),

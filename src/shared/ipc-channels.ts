@@ -210,6 +210,12 @@ export const IPC = {
   // tool (plugin) toggle
   TOOL_SET_ENABLED: "tool:set-enabled",
   TOOL_GET_ENABLED: "tool:get-enabled",
+  // tool-mode override (三模适配层：用户自定义工具在 learn/code/work 模式下的可见性)
+  TOOL_GET_MODE_OVERRIDES: "tool:get-mode-overrides",
+  TOOL_SET_MODE_OVERRIDE: "tool:set-mode-override",
+  TOOL_CLEAR_MODE_OVERRIDE: "tool:clear-mode-override",
+  // tool catalog (工具页拉取工具元数据：id/name/description/modes)
+  TOOL_GET_CATALOG: "tool:get-catalog",
 
   // skill toggle
   SKILL_LIST: "skill:list",
