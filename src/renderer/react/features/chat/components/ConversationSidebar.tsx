@@ -287,7 +287,7 @@ export function ConversationSidebar({
               items={items}
               activeKey={activeSessionId}
               onActiveChange={(key) => {
-                queueMicrotask(() => onSelect(String(key)));
+                onSelect(String(key));
               }}
               groupable={supportsProjects ? {
                 collapsible: true,

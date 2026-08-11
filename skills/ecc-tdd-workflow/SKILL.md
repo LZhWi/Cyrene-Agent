@@ -1,5 +1,5 @@
 ---
-name: Ecc Tdd Workflow
+name: ecc-tdd-workflow
 description: >-
   Use this skill when writing new features, fixing bugs, or refactoring code.
   Enforces test-driven development with 80%+ coverage including unit,

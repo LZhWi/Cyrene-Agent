@@ -1,5 +1,5 @@
 ---
-name: Ecc Agent Introspection Debugging
+name: ecc-agent-introspection-debugging
 description: >-
   Structured self-debugging workflow for AI agent failures using capture,
   diagnosis, contained recovery, and introspection reports.

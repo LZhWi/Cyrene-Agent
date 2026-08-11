@@ -1,5 +1,5 @@
 ---
-name: As Using Agent Skills
+name: as-using-agent-skills
 description: >-
   Discovers and invokes agent skills. Use when starting a session or when you
   need to discover which skill applies to the current task. This is the

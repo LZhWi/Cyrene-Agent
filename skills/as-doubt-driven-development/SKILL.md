@@ -1,5 +1,5 @@
 ---
-name: As Doubt Driven Development
+name: as-doubt-driven-development
 description: >-
   Subjects every non-trivial decision to a fresh-context adversarial review
   before it stands. Use when correctness matters more than speed, when working

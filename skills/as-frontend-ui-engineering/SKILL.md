@@ -1,5 +1,5 @@
 ---
-name: As Frontend Ui Engineering
+name: as-frontend-ui-engineering
 description: >-
   Builds production-quality, accessible, responsive user-facing UIs. Use when
   building or modifying interfaces and pages, creating components, implementing

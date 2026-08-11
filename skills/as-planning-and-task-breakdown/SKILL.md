@@ -1,5 +1,5 @@
 ---
-name: As Planning And Task Breakdown
+name: as-planning-and-task-breakdown
 description: >-
   Breaks work into ordered tasks. Use when you have a spec or clear requirements
   and need to break work into implementable tasks. Use when a task feels too

@@ -1,5 +1,5 @@
 ---
-name: As Context Engineering
+name: as-context-engineering
 description: >-
   Optimizes agent context setup. Use when starting a new session, when agent
   output quality degrades, when switching between tasks, or when you need to

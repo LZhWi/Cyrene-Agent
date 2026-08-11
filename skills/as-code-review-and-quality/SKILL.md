@@ -1,5 +1,5 @@
 ---
-name: As Code Review And Quality
+name: as-code-review-and-quality
 description: >-
   Conducts multi-axis code review. Use before merging any change. Use when
   reviewing code written by yourself, another agent, or a human. Use when you

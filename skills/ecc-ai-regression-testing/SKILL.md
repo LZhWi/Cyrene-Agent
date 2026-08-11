@@ -1,5 +1,5 @@
 ---
-name: Ecc Ai Regression Testing
+name: ecc-ai-regression-testing
 description: >-
   Regression testing strategies for AI-assisted development. Sandbox-mode API
   testing without database dependencies, automated bug-check workflows, and

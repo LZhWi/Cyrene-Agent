@@ -1,5 +1,5 @@
 ---
-name: As Git Workflow And Versioning
+name: as-git-workflow-and-versioning
 description: >-
   Structures git workflow practices. Use when making any code change. Use when
   committing, branching, resolving conflicts, or when you need to organize work

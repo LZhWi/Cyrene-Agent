@@ -1,5 +1,5 @@
 ---
-name: Ecc Code Tour
+name: ecc-code-tour
 description: >-
   Create CodeTour `.tour` files — persona-targeted, step-by-step walkthroughs
   with real file and line anchors. Use for onboarding tours, architecture

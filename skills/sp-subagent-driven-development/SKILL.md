@@ -1,5 +1,5 @@
 ---
-name: Sp Subagent Driven Development
+name: sp-subagent-driven-development
 description: >-
   Use when executing implementation plans with independent tasks in the current
   session
