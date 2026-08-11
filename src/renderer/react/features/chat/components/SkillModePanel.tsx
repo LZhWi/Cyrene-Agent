@@ -89,6 +89,11 @@ function isVisibleForMode(skill: SkillCatalogItem, mode: SkillMode, overrides: O
   return skill.modes.includes(mode);
 }
 
+/** 通用 tab：只展示未声明 modes 的 skill（默认对所有模式可用） */
+function isGeneralSkill(skill: SkillCatalogItem): boolean {
+  return !skill.modes || skill.modes.length === 0;
+}
+
 export const SkillModePanel: React.FC = () => {
   const [catalog, setCatalog] = useState<SkillCatalogItem[]>([]);
   const [overrides, setOverrides] = useState<Overrides>({});
@@ -157,7 +162,10 @@ export const SkillModePanel: React.FC = () => {
       if (source !== "all" && s.source !== source) return false;
       return true;
     });
-    const shown = tab === "general" ? candidates : candidates.filter((s) => s.enabled);
+    const shown =
+      tab === "general"
+        ? candidates.filter((s) => isGeneralSkill(s))
+        : candidates.filter((s) => s.enabled && (isGeneralSkill(s) || isVisibleForMode(s, tab, overrides)));
     const searched = kw
       ? shown.filter(
           (s) =>
@@ -182,7 +190,7 @@ export const SkillModePanel: React.FC = () => {
             <h1 className="skill-panel__title">技能</h1>
             <p className="skill-panel__subtitle">
               {tab === "general"
-                ? "管理 skill 的全局开关"
+                ? "管理所有模式下都可用的通用 skill"
                 : `管理 skill 在 ${TABS.find((t) => t.key === tab)?.label} 模式下的可见性`}
             </p>
           </div>

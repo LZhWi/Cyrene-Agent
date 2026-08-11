@@ -61,6 +61,11 @@ function isVisibleForMode(tool: ToolCatalogItem, mode: ToolMode, overrides: Over
   return tool.modes.includes(mode);
 }
 
+/** 通用 tab：只展示未声明 modes 的工具（默认对所有模式可用） */
+function isGeneralTool(tool: ToolCatalogItem): boolean {
+  return !tool.modes || tool.modes.length === 0;
+}
+
 export const ToolModePanel: React.FC = () => {
   const [tools, setTools] = useState<ToolCatalogItem[]>([]);
   const [overrides, setOverrides] = useState<Overrides>({});
@@ -107,15 +112,18 @@ export const ToolModePanel: React.FC = () => {
   const visibleTools = useMemo(() => {
     const kw = filter.trim().toLowerCase();
     const usable = tools.filter((t) => !t.deprecated);
-    const candidates = tab === "general" ? usable : usable.filter((t) => t.enabled);
+    const shown =
+      tab === "general"
+        ? usable.filter((t) => isGeneralTool(t))
+        : usable.filter((t) => t.enabled && (isGeneralTool(t) || isVisibleForMode(t, tab, overrides)));
     const searched = kw
-      ? candidates.filter(
+      ? shown.filter(
           (t) =>
             t.id.toLowerCase().includes(kw) ||
             t.name.toLowerCase().includes(kw) ||
             t.description.toLowerCase().includes(kw),
         )
-      : candidates;
+      : shown;
     return [...searched].sort((a, b) => {
       const aOn = tab === "general" ? a.enabled : isVisibleForMode(a, tab, overrides);
       const bOn = tab === "general" ? b.enabled : isVisibleForMode(b, tab, overrides);
@@ -130,7 +138,7 @@ export const ToolModePanel: React.FC = () => {
         <h1 className="tool-panel__title">工具</h1>
         <p className="tool-panel__subtitle">
           {tab === "general"
-            ? "管理工具的全局开关"
+            ? "管理所有模式下都可用的通用工具"
             : `管理工具在 ${TABS.find((t) => t.key === tab)?.label} 模式下的可见性`}
         </p>
       </header>
