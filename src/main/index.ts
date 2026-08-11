@@ -29,6 +29,7 @@ import {
   buildMemoryContext,
   deleteImportedDoc,
   deleteUserMemoryVectors,
+  flushVectorStoreSync,
   getEntriesBySource,
   initRAG,
   isUserMemoryVectorStoreReady,
@@ -5845,6 +5846,7 @@ app.on("before-quit", () => {
   stopOpener();
   stopAsrTest();
   flushTokenUsage();
+  flushVectorStoreSync();
   void shutdownChannels();
 });
 

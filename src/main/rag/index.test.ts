@@ -36,6 +36,7 @@ import {
   deleteHistoryEntriesByTurnIds,
   deleteHistoryEntriesBySessionId,
   deleteUserMemoryVectors,
+  flushVectorStoreSync,
   getEntriesBySource,
   hasImportedDocumentChunks,
   importDocumentForTurn,
@@ -142,6 +143,7 @@ describe("chat history occurrences", () => {
     const id = await addHistoryMemory("read only history", {
       sessionId: "session-a", role: "user", ts: 100, turnId: "turn-1",
     });
+    flushVectorStoreSync(); // 存盘现为防抖异步；读文件断言前先 flush
     const storeFile = path.join(tmpDir, "rag-data", "memory-store.json");
     const before = fs.readFileSync(storeFile, "utf8");
 

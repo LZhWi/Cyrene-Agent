@@ -418,11 +418,17 @@ export async function buildMemoryContext(userInput: string): Promise<string> {
 
 // ── Reset ──
 export function resetRAG(): void {
+  store?.flushSync();
   store = null;
   retriever = null;
   worldbook = null;
   provider = null;
   resetEmbeddingProvider();
+}
+
+/** 同步 flush 向量库的防抖写盘（before-quit / reset 调用，防丢最后一次写）。 */
+export function flushVectorStoreSync(): void {
+  store?.flushSync();
 }
 
 export function getRAGStats() {

@@ -240,10 +240,18 @@ function buildIvfIndex(
 }
 
 // ── JSON 向量存储 ──
+let nextStoreInstanceId = 0;
+
 export class JsonVectorStore {
   private filePath: string;
+  private readonly instanceId = ++nextStoreInstanceId;
   private entries: MemoryEntry[] = [];
   private dirty = false;
+  private saveTimer: NodeJS.Timeout | null = null;
+  private persisting = false;
+  /** 写世代号：persist 启动 / flushSync 写盘各 +1；在途旧 persist 收尾时若发现世代已变，
+   *  丢弃 tmp 放弃 rename，防止旧快照覆盖更新的数据（flush 竞态防护）。 */
+  private writeSeq = 0;
 
   /** IVF 索引，null = 未构建或需要重建 */
   private ivf: IvfIndex | null = null;
@@ -267,11 +275,75 @@ export class JsonVectorStore {
     }
   }
 
+  /** 写入入口：防抖合并。高频变更（每轮索引/召回记录）在 1.5s 窗口内只触发一次实际写盘，
+   *  避免旧实现“每次变更同步 stringify+write 全量 JSON（实测 24.8MB）”阻塞主线程——
+   *  那是“卡顿但任务管理器 CPU 低”的典型来源（I/O 等待不计入 CPU，短促 stringify 躲过 1s 采样）。 */
   private save(): void {
+    this.dirty = true;
+    if (this.saveTimer) return;
+    this.saveTimer = setTimeout(() => {
+      this.saveTimer = null;
+      void this.persist();
+    }, 1500);
+  }
+
+  /** 实际写盘：逐条序列化 + 异步分块写临时文件 + 原子 rename。
+   *  主线程单次阻塞控制在亚毫秒级（每 64 条让出一次事件循环）；
+   *  临时文件 + rename 保证崩溃时不留下半写文件（比旧 writeFileSync 的撕裂窗口更小）。 */
+  private async persist(): Promise<void> {
+    if (this.persisting) {
+      this.save();
+      return;
+    }
+    this.persisting = true;
+    const seq = ++this.writeSeq;
+    // resetRAG() can replace the store while an old async persist is still finishing.
+    // Give each store generation its own temp file so a stale writer cannot unlink or
+    // rename the new store's in-flight snapshot.
+    const tmpPath = `${this.filePath}.tmp-${process.pid}-${this.instanceId}-${seq}`;
     try {
       const dir = path.dirname(this.filePath);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(this.filePath, JSON.stringify(this.entries, null, 2), "utf8");
+      const handle = await fs.promises.open(tmpPath, "w");
+      try {
+        await handle.write("[");
+        for (let i = 0; i < this.entries.length; i++) {
+          await handle.write(`${i > 0 ? "," : ""}${JSON.stringify(this.entries[i])}`);
+          if (i % 64 === 63) await new Promise<void>((resolve) => setImmediate(resolve));
+        }
+        await handle.write("]");
+      } finally {
+        await handle.close();
+      }
+      // 世代守卫：若期间 flushSync 已落过更新的数据，旧快照不得 rename 回去，
+      // 否则把新数据覆盖回旧（已复现竞态：flush 后文件 ["old","new"]，旧任务收尾后退回 ["old"]）。
+      // 检查与 renameSync 同处主线程同步段，中间不可被插入。
+      if (this.writeSeq !== seq) {
+        try { fs.unlinkSync(tmpPath); } catch { /* tmp 可能已不存在 */ }
+        return;
+      }
+      fs.renameSync(tmpPath, this.filePath);
+      this.dirty = false;
+    } catch (err) {
+      try { fs.unlinkSync(tmpPath); } catch { /* tmp 可能已不存在 */ }
+      console.warn("[RAG] failed to save vector store:", err);
+    } finally {
+      this.persisting = false;
+    }
+  }
+
+  /** 同步 flush：退出 / reset / 测试断言路径调用，取消防抖立即写盘（这些路径可接受阻塞）。 */
+  flushSync(): void {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    if (!this.dirty) return;
+    this.writeSeq++; // 使在途 persist 失效，其旧 rename 不会覆盖本次同步写
+    try {
+      const dir = path.dirname(this.filePath);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(this.filePath, JSON.stringify(this.entries), "utf8");
       this.dirty = false;
     } catch (err) {
       console.warn("[RAG] failed to save vector store:", err);

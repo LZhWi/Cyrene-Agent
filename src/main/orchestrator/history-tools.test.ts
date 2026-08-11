@@ -215,6 +215,33 @@ describe("history auto-injection", () => {
     expect(mocks.searchHistoryEntries).toHaveBeenCalledTimes(1);
   });
 
+  it.each([
+    { score: 5.999, shouldInject: false },
+    { score: 6.0, shouldInject: true },
+  ])("uses an inclusive 6.0 bm25 preflight threshold: $score", async ({ score, shouldInject }) => {
+    const fact = {
+      text: "PROJECT_NEBULA_HISTORY_FACT",
+      score: 0.9,
+      createdAt: Date.now() - 86_400_000,
+      metadata: { role: "user" },
+    };
+    mocks.searchHistoryEntries.mockImplementation(async (
+      _query: string,
+      _depth: number,
+      options?: { bm25Only?: boolean },
+    ) => (options?.bm25Only
+      ? [{ text: fact.text, score, createdAt: fact.createdAt }]
+      : [fact]));
+
+    const block = await runHistoryAutoInjection("tell me about project nebula");
+    if (shouldInject) {
+      expect(block).toContain(fact.text);
+    } else {
+      expect(block).toBe("");
+      expect(mocks.searchHistoryEntries).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("drops echoes of the current query", async () => {
     const query = "想起来我们说过的丝带细节";
     mocks.searchHistoryEntries.mockResolvedValue([

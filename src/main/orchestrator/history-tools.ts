@@ -497,8 +497,10 @@ const HISTORY_AUTO_PROBE_CUE = /还记得|记不记得|记得吗|想起|回忆|�
 
 /** 隐式召回预检阈值：BM25 原始分 ≥ 该值才触发自动注入。
  *  量纲参考（千条级语料）：单个低频名词命中 ≈ 6~9，df≈100 的常见词 ≈ 3~4，
- *  取 3.0 即“至少一个低频实体词命中”，可用检索沙箱在真实数据上调。 */
-const HISTORY_AUTO_INJECT_BM25_MIN_SCORE = 3.0;
+ *  取 6.0 即“至少一个低频实体词命中”，单个常见词的弱带不触发。
+ *  注意：多个特征词强命中（10+）说明消息与历史话题连续，触发属预期行为；
+ *  若要压制“词汇命中但无需回忆”，需注入端二次质量门槛（reranker 分数），与本阈值无关。 */
+const HISTORY_AUTO_INJECT_BM25_MIN_SCORE = 6.0;
 
 export function shouldAutoProbeHistoryRetrieval(userQuery: string): boolean {
   const clean = userQuery
