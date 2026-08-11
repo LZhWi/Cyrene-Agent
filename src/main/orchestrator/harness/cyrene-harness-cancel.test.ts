@@ -20,8 +20,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ── Hoisted mocks ──────────────────────────────────────
 
-const { fakeAdapter } = vi.hoisted(() => ({
-  fakeAdapter: {
+const { fakeAdapter, fakeStreamChatWithSdk } = vi.hoisted(() => {
+  const adapter = {
     id: "fake",
     buildRequest: (req: unknown) => ({
       url: "https://fake.local/chat",
@@ -30,11 +30,29 @@ const { fakeAdapter } = vi.hoisted(() => ({
       body: JSON.stringify(req),
     }),
     parseResponse: (raw: unknown) => raw,
-  },
-}));
+  };
+  return {
+    fakeAdapter: adapter,
+    fakeStreamChatWithSdk: vi.fn(async (input: {
+      adapter: typeof adapter;
+      request: unknown;
+      signal?: AbortSignal;
+    }) => {
+      const request = input.adapter.buildRequest(input.request);
+      const response = await fetch(request.url, {
+        method: request.method,
+        headers: request.headers,
+        body: request.body,
+        signal: input.signal,
+      });
+      return input.adapter.parseResponse(await response.json());
+    }),
+  };
+});
 
 vi.mock("../vendors", () => ({
   getAdapterForConfig: vi.fn(() => fakeAdapter),
+  streamChatWithSdk: fakeStreamChatWithSdk,
 }));
 
 vi.mock("./tool-dispatcher", () => ({
@@ -387,6 +405,10 @@ describe("CyreneHarness cancellation propagation (Task 3 / C2)", () => {
     // checkPermission 返回永不 resolve 的 Promise（模拟用户未响应）
     let resolvePermission: (allowed: boolean) => void = () => {};
     const permissionPromise = new Promise<boolean>((resolve) => { resolvePermission = resolve; });
+    mockedDispatch.mockImplementation(async (_call, context) => {
+      const allowed = await context.checkPermission?.("read_file", { path: "/tmp/x" });
+      return allowed ? successDispatchResult("call-1") : failureDispatchResult("call-1");
+    });
 
     const promise = runCyreneHarness({
       systemPrompt: "test",
@@ -424,11 +446,25 @@ describe("CyreneHarness cancellation propagation (Task 3 / C2)", () => {
     // requestUserClarification 返回永不 resolve 的 Promise（模拟用户未回答）
     let resolveAsk: (val: unknown) => void = () => {};
     const askPromise = new Promise<unknown>((resolve) => { resolveAsk = resolve; });
+    mockedDispatch.mockImplementation(async (_call, context) => {
+      await context.requestUserClarification?.({});
+      return successDispatchResult("call-ask");
+    });
 
     const askToolCall: ToolCall = {
       id: "call-ask",
       name: "ask_user",
-      arguments: JSON.stringify({ question: "选择？" }),
+      arguments: JSON.stringify({
+        questions: [{
+          id: "decision",
+          question: "选择？",
+          type: "single_select",
+          options: [
+            { label: "继续", value: "continue" },
+            { label: "停止", value: "stop" },
+          ],
+        }],
+      }),
     };
 
     const promise = runCyreneHarness({

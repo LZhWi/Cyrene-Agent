@@ -387,4 +387,47 @@ describe("CyreneHarness completion (P0-A)", () => {
     expect(secondRequest.messages[0].content).toContain("[in_progress] inspect: 检查项目结构");
     expect(secondRequest.messages[0].content).toContain(`binding="false"`);
   });
+
+  it("resumes the same Harness run after a complete Ask observation", async () => {
+    const askCall: ToolCall = {
+      id: "ask-mixed",
+      name: "ask_user",
+      arguments: JSON.stringify({
+        questions: [
+          { id: "format", question: "格式？", type: "single_select", options: [{ label: "Markdown", value: "md" }, { label: "Word", value: "docx" }] },
+          { id: "sections", question: "章节？", type: "multi_select", options: [{ label: "摘要", value: "summary" }, { label: "风险", value: "risks" }] },
+          { id: "note", question: "补充要求？", type: "text" },
+        ],
+      }),
+    };
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ text: "先确认几个选择。", toolCalls: [askCall] }),
+      assistantResponse({ text: "已经按你的选择继续完成。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockedDispatch.mockResolvedValue({
+      outcome: "success",
+      tool: "ask_user",
+      message: "用户已回答 3 个问题",
+      output: JSON.stringify({
+        answers: [
+          { questionId: "format", selectedValues: ["md"], selectedLabels: ["Markdown"] },
+          { questionId: "sections", selectedValues: ["summary", "risks"], selectedLabels: ["摘要", "风险"] },
+          { questionId: "note", customInput: "停止当前任务" },
+        ],
+      }),
+    });
+
+    const result = await runCyreneHarness({
+      systemPrompt: "base prompt",
+      messages: [{ role: "user", content: "完成方案" }],
+      tools: [],
+      vendorConfig,
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(result.finalAnswer).toBe("已经按你的选择继续完成。");
+    const secondRequest = fakeStreamChatWithSdk.mock.calls[1][0].request as { messages: ChatMessage[] };
+    expect(JSON.stringify(secondRequest.messages)).toContain("停止当前任务");
+  });
 });
