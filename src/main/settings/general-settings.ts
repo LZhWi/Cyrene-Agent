@@ -12,6 +12,7 @@ import type {
 import type { CustomStyleConfig, StyleId } from "../../shared/style-sampling";
 import type { ToolModeOverrides } from "../orchestrator/tool-registry";
 import type { SkillModeOverrides } from "../skills/types";
+import type { LspServerOverride } from "../lsp/types";
 
 /**
  * 通用设置（GeneralSettings）：与模型配置无关的 UI、TTS、工具开关、快捷键等。
@@ -148,4 +149,6 @@ export interface GeneralSettings extends ChatAppearanceSettings {
    *  key = skillId，value = { mode: enabled }。覆盖优先于 skill 声明的 modes 字段。
    *  空对象 = 全部按默认（modes 字段或全可见），由设置面板 UI 写入。 */
   skillModeOverrides: SkillModeOverrides;
+  /** Code 模式使用的用户自管语言服务命令覆盖。 */
+  lspServerOverrides: LspServerOverride[];
 }

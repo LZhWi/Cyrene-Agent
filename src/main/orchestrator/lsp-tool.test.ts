@@ -40,6 +40,7 @@ describe("Code LSP tool", () => {
       filePath: "src/app.ts",
       line: 2,
       character: 5,
+      item: undefined,
       query: undefined,
     }, { resolvedWorkspaceRoot: "E:\\project" });
   });
@@ -51,6 +52,16 @@ describe("Code LSP tool", () => {
       .rejects.toThrow("Code 模式");
     await expect(tool.execute({ operation: "hover", command: "powershell.exe" }, { mode: "code", userQuery: "查询", resolvedWorkspaceRoot: "E:\\project" }))
       .rejects.toThrow("不支持的 LSP 参数");
+  });
+
+  it("allows only an opaque call-hierarchy item for follow-up operations", async () => {
+    const manager = { execute: vi.fn(async () => ({ serverId: "fake-lsp", operation: "incomingCalls" as const, workspaceRoot: "E:\\project", items: [], message: "" })) };
+    const tool = createLspTool(manager);
+    const item = { name: "value", uri: "file:///project/src/app.ts", range: {}, selectionRange: {} };
+
+    await tool.execute({ operation: "incomingCalls", filePath: "src/app.ts", item }, { mode: "code", userQuery: "谁调用它", resolvedWorkspaceRoot: "E:\\project" });
+
+    expect(manager.execute).toHaveBeenCalledWith(expect.objectContaining({ operation: "incomingCalls", item }), expect.any(Object));
   });
 
   it("registers exactly one Code LSP tool", () => {

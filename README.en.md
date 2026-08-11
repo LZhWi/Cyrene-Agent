@@ -373,6 +373,20 @@ If OOM errors continue, use the Chrome DevTools Memory Profiler in development m
 - **Discovery order** — Explicit user configuration comes first, followed by workspace `node_modules/.bin`, then the system `PATH`.
 - **Install and troubleshoot** — Install the server your language needs, such as `typescript-language-server`, `pyright-langserver`, `gopls`, `rust-analyzer`, or `clangd`. Use `where pyright-langserver` on Windows or `which pyright-langserver` on macOS/Linux. A user may explicitly ask Cyrene to assist through existing permission-controlled installation tools.
 - **Security boundary** — Servers run over stdio and file access stays inside the bound workspace. The model cannot choose a command, server ID, or workspace root.
+- **Built-in definitions** — TypeScript/JavaScript/JSON, Python, Go, Rust, C/C++, Java, C#, PHP, Ruby, Kotlin, Lua, Vue, and YAML. A server process is reused within one workspace and released when the app exits.
+- **Custom server command** — Add `lspServerOverrides` to `app-settings.json` in the application data directory. It can override an existing definition's command, arguments, extensions, or initialization options; a model cannot supply a launch command in chat. For example:
+
+  ```json
+  {
+    "lspServerOverrides": [
+      {
+        "id": "python-pyright",
+        "command": "basedpyright-langserver",
+        "args": ["--stdio"]
+      }
+    ]
+  }
+  ```
 - **Cline Runtime** — Coding Agent runtime based on the Cline SDK, supporting multi-turn tool calls, file edits, and command execution.
 - **Trusted Workspace Binding** — Binds a session to a specific code directory; all file operations, command execution, and tool calls are restricted to that directory.
 - **Coding Agent Workflow** — Understands engineering requirements, reads and modifies code, analyzes logs and architecture, runs commands and tests, and delivers verifiable results.

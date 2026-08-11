@@ -359,6 +359,20 @@ Embedding 索引已采用后台 Worker、批处理和缓存机制，以降低文
 - **发现顺序** — 优先使用用户明确配置的命令，其次查找工作区 `node_modules/.bin`，最后查找系统 `PATH`。
 - **安装与排障** — 请自行安装所需服务，例如 `typescript-language-server`、`pyright-langserver`、`gopls`、`rust-analyzer` 或 `clangd`；Windows 可用 `where pyright-langserver`，macOS/Linux 可用 `which pyright-langserver` 检查是否可发现。用户也可以明确要求昔涟通过现有、受权限控制的工具协助安装。
 - **安全边界** — 语言服务进程使用标准输入输出启动，文件访问受绑定工作目录限制；模型不能指定命令、服务 ID 或工作目录。
+- **支持的内置定义** — TypeScript/JavaScript/JSON、Python、Go、Rust、C/C++、Java、C#、PHP、Ruby、Kotlin、Lua、Vue 与 YAML；服务进程会在同一工作区内复用，并在应用退出时释放。
+- **自定义服务命令** — 在应用数据目录的 `app-settings.json` 中配置 `lspServerOverrides`。它只覆盖内置服务的命令、参数、文件扩展名或初始化选项，不接受模型在对话中传入的启动命令。例如：
+
+  ```json
+  {
+    "lspServerOverrides": [
+      {
+        "id": "python-pyright",
+        "command": "basedpyright-langserver",
+        "args": ["--stdio"]
+      }
+    ]
+  }
+  ```
 
 
 #### 📚 学习陪伴（Learn）

@@ -66,6 +66,8 @@ export interface LspQuery {
   line?: number;
   character?: number;
   query?: string;
+  /** 仅用于调用层级的第二步；必须来自同一语言服务此前返回的条目。 */
+  item?: Record<string, unknown>;
 }
 
 export interface LspToolResult {

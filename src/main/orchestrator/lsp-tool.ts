@@ -26,7 +26,7 @@ function requireCodeWorkspace(ctx: ToolContext | undefined): LspExecutionContext
 }
 
 function parseQuery(args: Record<string, unknown>): LspQuery {
-  const allowedKeys = new Set(["operation", "filePath", "line", "character", "query"]);
+  const allowedKeys = new Set(["operation", "filePath", "line", "character", "query", "item"]);
   if (Object.keys(args).some((key) => !allowedKeys.has(key))) throw new Error("不支持的 LSP 参数");
   if (typeof args.operation !== "string" || !LSP_OPERATIONS.includes(args.operation as LspOperation)) {
     throw new Error("operation 必须是受支持的 LSP 操作");
@@ -37,7 +37,14 @@ function parseQuery(args: Record<string, unknown>): LspQuery {
     line: optionalPositiveInteger(args, "line"),
     character: optionalPositiveInteger(args, "character"),
     query: stringArg(args, "query"),
+    item: parseCallHierarchyItem(args.item),
   };
+}
+
+function parseCallHierarchyItem(value: unknown): Record<string, unknown> | undefined {
+  if (value === undefined) return undefined;
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("item 必须是调用层级条目对象");
+  return value as Record<string, unknown>;
 }
 
 export function createLspTool(manager: LspManagerPort): ToolDefinition {
@@ -59,6 +66,7 @@ export function createLspTool(manager: LspManagerPort): ToolDefinition {
         line: { type: "number", description: "从 1 开始的行号；位置类操作需要。" },
         character: { type: "number", description: "从 1 开始的字符号；位置类操作需要。" },
         query: { type: "string", description: "workspaceSymbol 的搜索词。" },
+        item: { type: "object", description: "仅 incomingCalls/outgoingCalls 使用：prepareCallHierarchy 返回的条目。" },
       },
       required: ["operation"],
     },

@@ -27,6 +27,7 @@ import type { GeneralSettings } from "./general-settings";
 import type { ToolModeOverrides } from "../orchestrator/tool-registry";
 import type { ConversationMode } from "../../shared/chat-types";
 import type { SkillModeOverrides } from "../skills/types";
+import { normalizeLspServerOverrides } from "../lsp/server-catalog";
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   citaEnabled: false,
@@ -108,6 +109,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   assistantBubbleEnabled: true,
   toolModeOverrides: {},
   skillModeOverrides: {},
+  lspServerOverrides: [],
 };
 
 const listeners = new Set<(before: GeneralSettings, after: GeneralSettings) => void>();
@@ -127,7 +129,7 @@ function notifyGeneralSettingsChanged(before: GeneralSettings, after: GeneralSet
   }
 }
 
-function normalizeGeneralSettings(
+export function normalizeGeneralSettings(
   input: Partial<GeneralSettings> | null | undefined,
 ): GeneralSettings {
   const windowVisibility = normalizeWindowVisibilitySettings(input);
@@ -273,6 +275,7 @@ function normalizeGeneralSettings(
     ...normalizeChatAppearance(input),
     toolModeOverrides: normalizeToolModeOverrides(input?.toolModeOverrides),
     skillModeOverrides: normalizeSkillModeOverrides(input?.skillModeOverrides),
+    lspServerOverrides: normalizeLspServerOverrides(input?.lspServerOverrides),
   };
 }
 

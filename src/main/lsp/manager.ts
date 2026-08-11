@@ -4,7 +4,7 @@ import { pathToFileURL } from "node:url";
 import { LspClient } from "./client";
 import { BUILTIN_LSP_SERVERS, findServerCandidates } from "./server-catalog";
 import { resolveLspServer, type ResolvedLspServer } from "./server-discovery";
-import { LspContractError, toProtocolPosition, type LspQuery, type LspToolResult } from "./types";
+import { LspContractError, toProtocolPosition, type LspQuery, type LspServerOverride, type LspToolResult } from "./types";
 
 export interface LspClientLike {
   initialize(): Promise<void>;
@@ -17,6 +17,8 @@ export interface LspClientLike {
 export interface LspManagerOptions {
   resolveServer?: (definition: ResolvedLspServer["definition"], workspaceRoot: string) => ResolvedLspServer | null;
   createClient?: (input: { server: ResolvedLspServer; workspaceRoot: string }) => LspClientLike;
+  /** 从设置缓存读取；每次执行重新取值，用户保存配置后无需重启。 */
+  getServerOverrides?: () => readonly LspServerOverride[];
 }
 
 export interface LspExecutionContext {
@@ -54,10 +56,12 @@ export class LspManager {
   private readonly clients = new Map<string, LspClientLike>();
   private readonly resolveServer: NonNullable<LspManagerOptions["resolveServer"]>;
   private readonly createClient: NonNullable<LspManagerOptions["createClient"]>;
+  private readonly getServerOverrides: NonNullable<LspManagerOptions["getServerOverrides"]>;
 
   constructor(options: LspManagerOptions = {}) {
     this.resolveServer = options.resolveServer ?? resolveLspServer;
     this.createClient = options.createClient ?? ((input) => new LspClient(input));
+    this.getServerOverrides = options.getServerOverrides ?? (() => []);
   }
 
   async execute(query: LspQuery, context: LspExecutionContext): Promise<LspToolResult> {
@@ -81,8 +85,9 @@ export class LspManager {
       case "diagnostics": value = client.getDiagnostics(filePath!); break;
       case "prepareCallHierarchy": value = await client.request("textDocument/prepareCallHierarchy", fileParams(filePath!, query)); break;
       case "incomingCalls":
+        value = await client.request("callHierarchy/incomingCalls", { item: this.callHierarchyItem(query) }); break;
       case "outgoingCalls":
-        throw new LspContractError("LSP_UNSUPPORTED_OPERATION", "调用层级后续查询需要先选择 prepareCallHierarchy 返回的条目");
+        value = await client.request("callHierarchy/outgoingCalls", { item: this.callHierarchyItem(query) }); break;
       default: throw new LspContractError("LSP_UNSUPPORTED_OPERATION");
     }
 
@@ -115,7 +120,8 @@ export class LspManager {
   }
 
   private async clientFor(workspaceRoot: string, filePath?: string): Promise<{ client: LspClientLike; serverId: string }> {
-    const candidates = filePath ? findServerCandidates(filePath) : [...BUILTIN_LSP_SERVERS];
+    const overrides = this.getServerOverrides();
+    const candidates = filePath ? findServerCandidates(filePath, overrides) : [...BUILTIN_LSP_SERVERS];
     for (const definition of candidates) {
       const server = this.resolveServer(definition, workspaceRoot);
       if (!server) continue;
@@ -129,5 +135,12 @@ export class LspManager {
       return { client, serverId: server.definition.id };
     }
     throw new LspContractError("LSP_SERVER_NOT_FOUND", "没有找到可用的语言服务；请按提示安装或配置对应服务。");
+  }
+
+  private callHierarchyItem(query: LspQuery): Record<string, unknown> {
+    if (!query.item || Array.isArray(query.item) || Object.keys(query.item).length === 0) {
+      throw new LspContractError("LSP_UNSUPPORTED_OPERATION", "调用层级后续查询需要 prepareCallHierarchy 返回的条目");
+    }
+    return query.item;
   }
 }

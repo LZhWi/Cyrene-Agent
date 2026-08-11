@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { LspManager } from "./manager";
 import type { ResolvedLspServer } from "./server-discovery";
+import type { LspServerDefinition, LspServerOverride } from "./types";
 
 const roots: string[] = [];
 
@@ -60,5 +61,50 @@ describe("LspManager", () => {
     await expect(manager.execute({ operation: "hover", filePath: path.join(root, "..", "other.ts"), line: 1, character: 1 }, { resolvedWorkspaceRoot: root }))
       .rejects.toMatchObject({ code: "LSP_PATH_OUTSIDE_WORKSPACE" });
     expect(resolveServer).not.toHaveBeenCalled();
+  });
+
+  it("uses persisted user overrides before resolving the built-in server", async () => {
+    const { root, file } = workspace();
+    const overrides: LspServerOverride[] = [{
+      id: "typescript-language-server",
+      command: "custom-ts-lsp",
+      args: ["--stdio", "--log-level=3"],
+    }];
+    const resolveServer = vi.fn((definition: LspServerDefinition) => ({
+      ...resolvedServer,
+      definition,
+      executablePath: "C:\\tools\\custom-ts-lsp.exe",
+      args: definition.commands[0].args,
+    }));
+    const client = {
+      initialize: vi.fn(async () => {}), touchFile: vi.fn(async () => {}),
+      request: vi.fn(async () => null), getDiagnostics: vi.fn(() => []), dispose: vi.fn(async () => {}),
+    };
+    const manager = new LspManager({
+      getServerOverrides: () => overrides,
+      resolveServer,
+      createClient: () => client,
+    });
+
+    await manager.execute({ operation: "hover", filePath: file, line: 1, character: 1 }, { resolvedWorkspaceRoot: root });
+
+    expect(resolveServer).toHaveBeenCalledWith(expect.objectContaining({
+      id: "typescript-language-server",
+      commands: [{ command: "custom-ts-lsp", args: ["--stdio", "--log-level=3"] }],
+    }), root);
+  });
+
+  it("forwards an item selected from prepareCallHierarchy to incomingCalls", async () => {
+    const { root, file } = workspace();
+    const client = {
+      initialize: vi.fn(async () => {}), touchFile: vi.fn(async () => {}),
+      request: vi.fn(async () => []), getDiagnostics: vi.fn(() => []), dispose: vi.fn(async () => {}),
+    };
+    const manager = new LspManager({ resolveServer: () => resolvedServer, createClient: () => client });
+    const item = { name: "value", uri: "file:///workspace/src/entry.ts", range: {}, selectionRange: {} };
+
+    await manager.execute({ operation: "incomingCalls", filePath: file, item }, { resolvedWorkspaceRoot: root });
+
+    expect(client.request).toHaveBeenCalledWith("callHierarchy/incomingCalls", { item });
   });
 });

@@ -39,6 +39,46 @@ function isValidOverride(value: LspServerOverride, serverId: string): boolean {
     && (!value.extensions || value.extensions.every((extension) => isNonBlankString(extension) && extension.startsWith(".")));
 }
 
+/**
+ * 对磁盘中的用户配置做白名单规范化。这里不接受任意对象，避免配置文件把
+ * 原型键或不可执行的参数传到子进程启动路径。
+ */
+export function normalizeLspServerOverrides(input: unknown): LspServerOverride[] {
+  if (!Array.isArray(input)) return [];
+  const seen = new Set<string>();
+  const knownIds = new Set(BUILTIN_LSP_SERVERS.map((definition) => definition.id));
+  const result: LspServerOverride[] = [];
+  for (const candidate of input) {
+    if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) continue;
+    const raw = candidate as Record<string, unknown>;
+    if (!isNonBlankString(raw.id) || !knownIds.has(raw.id) || seen.has(raw.id)) continue;
+    const command = raw.command === undefined ? undefined : isNonBlankString(raw.command) ? raw.command.trim() : undefined;
+    const args = Array.isArray(raw.args) && raw.args.every(isNonBlankString) ? raw.args.map((arg) => arg.trim()) : undefined;
+    const extensions = Array.isArray(raw.extensions)
+      && raw.extensions.every((extension) => isNonBlankString(extension) && extension.startsWith("."))
+      ? raw.extensions.map((extension) => extension.trim().toLowerCase())
+      : undefined;
+    const initializationOptions = raw.initializationOptions !== undefined && isPlainJsonValue(raw.initializationOptions)
+      ? raw.initializationOptions
+      : undefined;
+    if (raw.command !== undefined && !command) continue;
+    if (raw.args !== undefined && !args) continue;
+    if (raw.extensions !== undefined && !extensions) continue;
+    result.push({ id: raw.id, ...(command ? { command } : {}), ...(args ? { args } : {}), ...(extensions ? { extensions } : {}), ...(initializationOptions !== undefined ? { initializationOptions } : {}) });
+    seen.add(raw.id);
+  }
+  return result;
+}
+
+function isPlainJsonValue(value: unknown): boolean {
+  if (value === null || typeof value === "boolean" || typeof value === "string") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isPlainJsonValue);
+  if (!value || typeof value !== "object") return false;
+  return Object.entries(value as Record<string, unknown>).every(([key, nested]) =>
+    key !== "__proto__" && key !== "prototype" && key !== "constructor" && isPlainJsonValue(nested));
+}
+
 function applyOverride(serverDefinition: LspServerDefinition, overrides: readonly LspServerOverride[]): LspServerDefinition {
   const override = overrides.find((candidate) => isValidOverride(candidate, serverDefinition.id));
   if (!override) return serverDefinition;
