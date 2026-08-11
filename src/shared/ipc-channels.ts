@@ -220,6 +220,14 @@ export const IPC = {
   // skill toggle
   SKILL_LIST: "skill:list",
   SKILL_SET_ENABLED: "skill:set-enabled",
+  // skill-mode override（三模适配层：用户自定义 skill 在 work/code/learn 模式下的可见性）
+  SKILL_GET_MODE_OVERRIDES: "skill:get-mode-overrides",
+  SKILL_SET_MODE_OVERRIDE: "skill:set-mode-override",
+  SKILL_CLEAR_MODE_OVERRIDE: "skill:clear-mode-override",
+  // skill catalog（skill 页拉取元数据：id/name/description/modes）
+  SKILL_GET_CATALOG: "skill:get-catalog",
+  // 重新扫描 user skills 目录，安装/删除 skill 后无需重启即可刷新 UI
+  SKILL_RESCAN: "skill:rescan",
 
   // scheduled tasks
   SCHEDULER_LIST: "scheduler:list",

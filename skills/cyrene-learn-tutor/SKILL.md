@@ -4,6 +4,7 @@ description: Cyrene 在 Learn 模式下的教学流程策略：陪伴用户理�
 version: 1.1.0
 autoInject: true
 effectKind: external_side_effect
+modes: [learn]
 ---
 
 # Cyrene Learn Tutor

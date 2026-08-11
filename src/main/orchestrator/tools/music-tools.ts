@@ -195,6 +195,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       name: "获取今日推荐歌曲",
       description: "获取网易云音乐今日推荐并将前 5 首展示为卡片。需要用户已登录。返回可信候选引用。",
       enabled: true,
+      modes: ["work"],
       risk: "safe",
       inputSchema: { type: "object", properties: {}, required: [] },
       needsContext: true,
@@ -237,6 +238,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       name: "搜索网易云歌曲",
       description: "按关键词搜索网易云音乐。purpose=discover 用于展示候选；purpose=play 用于本轮搜索确认后直接播放唯一结果。返回最多 20 首真实歌曲的可信候选引用。",
       enabled: true,
+      modes: ["work"],
       risk: "safe",
       inputSchema: {
         type: "object",
@@ -301,6 +303,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       name: "呈现已选歌曲为卡片",
       description: "将可信歌曲候选引用渲染为 AG-UI 卡片。候选必须属于同一个集合，最多 5 首。",
       enabled: true,
+      modes: ["work"],
       risk: "safe",
       inputSchema: {
         type: "object",
@@ -346,6 +349,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       name: "播放网易云歌曲",
       description: "向默认音乐来源发送播放请求。仅接受 CITA 提供的可信歌曲候选引用；dispatched 不等于已开始播放。",
       enabled: true,
+      modes: ["work"],
       risk: "input-control",
       inputSchema: {
         type: "object",
@@ -396,6 +400,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       name: "播放网易云歌单",
       description: "通过本地网易云客户端播放指定歌单 ID。",
       enabled: true,
+      modes: ["work"],
       risk: "input-control",
       inputSchema: {
         type: "object",
@@ -434,6 +439,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       name: "获取我的网易云歌单",
       description: "获取当前登录用户的网易云音乐歌单列表，包括创建的和收藏的歌单。",
       enabled: true,
+      modes: ["work"],
       risk: "safe",
       inputSchema: { type: "object", properties: {}, required: [] },
       needsContext: false,
@@ -462,6 +468,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       name: "获取网易云歌单详情",
       description: "获取指定网易云音乐歌单的详细信息，包括歌单名称和其中的歌曲列表。",
       enabled: true,
+      modes: ["work"],
       risk: "safe",
       inputSchema: {
         type: "object",
@@ -498,6 +505,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       name: "创建网易云歌单",
       description: "为当前登录用户创建一个新的网易云音乐歌单。",
       enabled: true,
+      modes: ["work"],
       risk: "input-control",
       inputSchema: {
         type: "object",
@@ -535,6 +543,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       name: "添加歌曲到网易云歌单",
       description: "将一首或多首歌曲添加到指定的网易云音乐歌单。歌曲 ID 必须是纯数字。",
       enabled: true,
+      modes: ["work"],
       risk: "input-control",
       inputSchema: {
         type: "object",
@@ -575,6 +584,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       name: "获取我的网易云收藏",
       description: "获取当前登录用户收藏的歌手或专辑列表。category 为 'artists' 或 'albums'。",
       enabled: true,
+      modes: ["work"],
       risk: "safe",
       inputSchema: {
         type: "object",

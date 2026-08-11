@@ -180,6 +180,7 @@ export function registerEmailTools(): void {
       "attachments（可选附件绝对路径数组）。",
     enabled: true,
     risk: "network",
+    modes: ["work"],
     effectKind: "external_side_effect" as const,
     inputSchema: {
       type: "object",

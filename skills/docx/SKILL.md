@@ -10,6 +10,7 @@ metadata:
     - "GB/T 9704-2012 公文版面布局标准"
     - "IEEE / ACM / APA / MLA / Chicago / Turabian 风格指南"
     - "Springer LNCS / Nature / HBR 文档模板"
+modes: [work, learn]
 description: >
   使用 OpenXML SDK (.NET) 进行专业的 DOCX 文档创建、编辑和格式化。
   三种管道：(A) 从零创建新文档，(B) 在已有文档中填充/编辑内容，

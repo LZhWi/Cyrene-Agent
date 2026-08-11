@@ -3,7 +3,7 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import type { SkillEntry } from "./types";
+import type { SkillEntry, SkillMode, SkillModeOverrides } from "./types";
 import { parseSkillFrontmatter } from "./skill-scanner";
 
 export class SkillRegistry {
@@ -19,6 +19,21 @@ export class SkillRegistry {
     return Array.from(this.skills.values()).filter(s => s.enabled && (this.availability.get(s.id)?.() ?? true));
   }
 
+  /** 按会话模式过滤的启用 skill 列表。
+   *  过滤规则（优先级从高到低）：
+   *    1. skill.enabled && availability 探针通过
+   *    2. 若 overrides[skillId][mode] 存在：用覆盖值
+   *    3. 否则按 modes 字段：!modes || modes.includes(mode)
+   *  未声明 modes 且无覆盖的 skill 默认全模式可见。 */
+  getEnabledForMode(mode: SkillMode, overrides?: SkillModeOverrides): SkillEntry[] {
+    return Array.from(this.skills.values()).filter((s) => {
+      if (!s.enabled || !(this.availability.get(s.id)?.() ?? true)) return false;
+      const override = overrides?.[s.id]?.[mode];
+      if (override !== undefined) return override;
+      return !s.modes || s.modes.includes(mode);
+    });
+  }
+
   getAll(): SkillEntry[] {
     return Array.from(this.skills.values());
   }
@@ -30,6 +45,12 @@ export class SkillRegistry {
   setEnabled(id: string, enabled: boolean): void {
     const s = this.skills.get(id);
     if (s) s.enabled = enabled;
+  }
+
+  unregister(id: string): boolean {
+    this.bodyCache.delete(id);
+    this.availability.delete(id);
+    return this.skills.delete(id);
   }
 
   setAvailability(id: string, probe: () => boolean): void {

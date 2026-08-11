@@ -46,6 +46,26 @@ describe("SkillRegistry", () => {
     expect(reg.getAll()[0].enabled).toBe(true);
   });
 
+  it("getEnabledForMode 按 modes 字段过滤", () => {
+    reg.register(entry("work-only", { modes: ["work"] }));
+    reg.register(entry("code-only", { modes: ["code"] }));
+    reg.register(entry("all", { modes: undefined }));
+    reg.register(entry("disabled", { enabled: false, modes: ["work"] }));
+
+    expect(reg.getEnabledForMode("work").map(s => s.id).sort()).toEqual(["all", "work-only"]);
+    expect(reg.getEnabledForMode("code").map(s => s.id).sort()).toEqual(["all", "code-only"]);
+    expect(reg.getEnabledForMode("learn").map(s => s.id).sort()).toEqual(["all"]);
+  });
+
+  it("getEnabledForMode 用户覆盖层优先于 modes 字段", () => {
+    reg.register(entry("work-only", { modes: ["work"] }));
+    const overrides = { "work-only": { code: true, learn: false } };
+
+    expect(reg.getEnabledForMode("code", overrides).map(s => s.id)).toEqual(["work-only"]);
+    expect(reg.getEnabledForMode("work", overrides).map(s => s.id)).toEqual(["work-only"]);
+    expect(reg.getEnabledForMode("learn", overrides)).toEqual([]);
+  });
+
   it("getBody 懒加载 + 缓存（改磁盘不刷新）", () => {
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "reg-"));
     const mdPath = path.join(tmp, "SKILL.md");

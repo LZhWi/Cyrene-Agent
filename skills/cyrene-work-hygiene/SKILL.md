@@ -3,6 +3,7 @@ name: cyrene-work-hygiene
 description: 在 Work 模式中创建、整理或交付多文件工作成果时使用：先理解已有工作区，再选择最小且清晰的目录结构；普通问答、只读分析和单文件小修改不使用。
 version: 1.0.0
 effectKind: mutation
+modes: [work]
 ---
 
 # Cyrene Work Hygiene

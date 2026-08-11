@@ -30,7 +30,7 @@ vi.mock("../rag", () => ragMock)
 vi.mock("../memory/memory-store", () => ({ memoryStore: memoryStoreMock }))
 vi.mock("../memory/entity-graph", () => ({ entityGraph: entityGraphMock }))
 vi.mock("../memory/l2-dmae-manager", () => ({ l2DmaeManager: l2DmaeManagerMock }))
-vi.mock("./tool-registry", () => ({ toolRegistry: { getEnabledTools: vi.fn(() => []) } }))
+vi.mock("./tool-registry", () => ({ toolRegistry: { getEnabledTools: vi.fn(() => []), getEnabledToolsForMode: vi.fn(() => []) } }))
 
 describe("buildMemoryInjection", () => {
   beforeEach(() => {

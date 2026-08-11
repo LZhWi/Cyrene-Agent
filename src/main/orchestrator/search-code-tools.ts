@@ -346,6 +346,7 @@ export function registerSearchCodeTool(): void {
       "contextLines（可选，上下文行数），caseSensitive（可选，区分大小写）。",
     enabled: true,
     risk: "safe",
+    modes: ["code", "work"],
     effectKind: "read" as const,
     verificationPolicy: "none" as const,
     needsContext: true,

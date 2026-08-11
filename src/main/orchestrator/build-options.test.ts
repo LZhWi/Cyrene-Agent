@@ -10,6 +10,7 @@ import {
   type OnRunFinishedDeps,
 } from "./build-options"
 import type { SocialAtom } from "../social-context/types"
+import type { ConversationMode } from "../../shared/chat-types"
 
 function createBuildDeps(): BuildOptionsDeps {
   return {
@@ -23,7 +24,13 @@ function createBuildDeps(): BuildOptionsDeps {
     buildEnvironmentContext: () => "ENV",
     buildSkillCatalog: () => "",
     buildAutoInjectedSkillContext: () => "",
-    skillRegistry: { getEnabled: () => [] },
+    skillRegistry: {
+      getEnabled: () => [],
+      // 三模适配层：测试 mock skill 都不声明 modes，等价于全模式通用。
+      getEnabledForMode(this: { getEnabled(): ReadonlyArray<unknown> }, _mode: import("../skills/types").SkillMode) {
+        return this.getEnabled()
+      },
+    },
     resolveSlashActivation: () => "",
     buildToneInjection: async () => "",
     sceneEmbeddingIndex: null,
@@ -35,7 +42,14 @@ function createBuildDeps(): BuildOptionsDeps {
     buildSoulSystemBasePrompt: () => "SOUL_SYSTEM_BASE",
     readStylePrompt: (styleId) => `STYLE_PROMPT:${styleId}`,
     resolveSoulSampling: () => ({}),
-    toolRegistry: { getEnabled: () => [] },
+    toolRegistry: {
+      getEnabled: () => [],
+      // 三模适配层：测试 mock 工具都不声明 modes，等价于全模式通用，
+      // 因此 getEnabledToolsForMode 直接转发到 getEnabled，单测覆写 getEnabled 即可生效。
+      getEnabledToolsForMode(this: { getEnabled(): ReadonlyArray<unknown> }, _mode: ConversationMode) {
+        return this.getEnabled()
+      },
+    },
     normalizeChatMessages: (raw) => raw as never,
     chatRequestTimeoutMs: 1000,
     loadActionGateSystemPrompt: () => "",

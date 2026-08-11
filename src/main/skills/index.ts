@@ -68,18 +68,51 @@ export function setSkillEnabled(id: string, enabled: boolean): void {
   }
 }
 
-/** 返回所有 skill 的元数据（给 UI 用）。 */
+/** 返回所有 skill 的元数据（给 UI 用）。hiddenFromUi 的技能不暴露。 */
 export function listSkillsForUi() {
-  return skillRegistry.getAll().map(s => ({
-    id: s.id,
-    name: s.name,
-    description: s.description,
-    tools: s.tools ?? [],
-    enabled: s.enabled,
-    source: s.source,
-    version: s.version,
-    references: s.references,
-  }));
+  return skillRegistry
+    .getAll()
+    .filter((s) => !s.hiddenFromUi)
+    .map(s => ({
+      id: s.id,
+      name: s.name,
+      description: s.description,
+      tools: s.tools ?? [],
+      enabled: s.enabled,
+      source: s.source,
+      version: s.version,
+      references: s.references,
+    }));
+}
+
+/**
+ * 重新扫描 user skills 目录并更新 registry。
+ * 用于用户安装/删除 skill 后，无需重启应用即可刷新 UI。
+ * 返回扫描后 registry 中 skill 总数。
+ */
+export function rescanSkills(): number {
+  const builtinDir = path.join(app.getAppPath(), "skills");
+  const userDir = path.join(app.getPath("userData"), "skills");
+
+  const builtin = scanSkills(builtinDir, "builtin");
+  const user = scanSkills(userDir, "user");
+
+  const map = new Map<string, SkillEntry>();
+  for (const s of builtin) map.set(s.id, s);
+  for (const s of user) map.set(s.id, s);
+
+  const saved = loadEnabledState();
+  // 清理 registry 中已不存在的 skill，避免删除后仍残留
+  for (const id of skillRegistry.getAll().map((s) => s.id)) {
+    if (!map.has(id)) skillRegistry.unregister?.(id);
+  }
+  for (const s of map.values()) {
+    if (s.id in saved) s.enabled = saved[s.id];
+    skillRegistry.register(s);
+  }
+
+  logger.info(LogTag.Skills, `rescanned ${map.size} skills:`, Array.from(map.keys()).join(", ") || "(none)");
+  return map.size;
 }
 
 export { skillRegistry } from "./skill-registry";

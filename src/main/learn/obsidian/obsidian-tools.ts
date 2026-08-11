@@ -32,6 +32,7 @@ export function registerObsidianTools(): void {
       "- 确认某个笔记是否存在\n\n" +
       "参数：relativeDir（可选，目录相对路径），recursive（可选，是否递归，默认 true）",
     enabled: true,
+    modes: ["learn"],
     effectKind: "read",
     verificationPolicy: "none",
     inputSchema: {
@@ -75,6 +76,7 @@ export function registerObsidianTools(): void {
       "- 需要找到特定主题相关所有笔记\n\n" +
       "参数：query（必填，搜索关键词），relativeDir（可选，限制目录），limit（可选，默认 20）",
     enabled: true,
+    modes: ["learn"],
     effectKind: "read",
     verificationPolicy: "none",
     inputSchema: {
@@ -128,6 +130,7 @@ export function registerObsidianTools(): void {
       "- 为后续的章节编辑操作获取 contentHash\n\n" +
       "非必须时优先用 obsidian_read_section 精准读取章节，避免返回过长内容。",
     enabled: true,
+    modes: ["learn"],
     effectKind: "read",
     verificationPolicy: "none",
     inputSchema: {
@@ -169,6 +172,7 @@ export function registerObsidianTools(): void {
       "- 笔记很长但只需要部分内容\n\n" +
       "参数：path（笔记路径），headingPath（标题路径数组，如 ['Transformer', 'Self-Attention', 'QKV']），includeChildren（可选，是否包含子章节，默认 false）",
     enabled: true,
+    modes: ["learn"],
     effectKind: "read",
     verificationPolicy: "none",
     inputSchema: {
@@ -217,6 +221,7 @@ export function registerObsidianTools(): void {
       "- append_to_section：追加到某个标题章节末尾\n\n" +
       "参数：operation（操作类型）、path（笔记路径）、content（内容）、headingPath（replace_section/append_to_section 时需要）、expectedContentHash（修改已有文件时建议提供，防冲突）、includeChildren（replace_section 时）",
     enabled: true,
+    modes: ["learn"],
     effectKind: "mutation",
     verificationPolicy: "artifact",
     inputSchema: {
@@ -289,6 +294,7 @@ export function registerObsidianTools(): void {
       "- 教学完成后打开相关笔记供用户阅读\n\n" +
       "参数：path（笔记路径）、headingPath（可选，定位到具体章节）",
     enabled: true,
+    modes: ["learn"],
     effectKind: "external_side_effect",
     verificationPolicy: "none",
     inputSchema: {

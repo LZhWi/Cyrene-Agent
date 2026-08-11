@@ -15,6 +15,7 @@ license: MIT
 metadata:
   version: "1.0"
   category: document-generation
+modes: [work, learn]
 ---
 
 # minimax-pdf

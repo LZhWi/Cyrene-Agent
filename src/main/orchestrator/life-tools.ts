@@ -61,6 +61,7 @@ function registerExpenseTools(): void {
       "参数：amount（金额，数字），category（分类：餐饮/交通/购物/娱乐/生活/其他），note（备注）。",
     enabled: true,
     risk: "safe",
+    modes: ["work"],
     effectKind: "external_side_effect" as const,
     inputSchema: {
       type: "object",
@@ -103,6 +104,7 @@ function registerExpenseTools(): void {
       "参数：days（最近 N 天，默认 30），category（可选，按分类过滤），summary（可选，true 只返回汇总）。",
     enabled: true,
     risk: "safe",
+    modes: ["work"],
     effectKind: "read" as const,
     verificationPolicy: "none" as const,
     inputSchema: {
@@ -389,6 +391,7 @@ function registerApplyPatchTool(): void {
       "old_string 必须在文件中唯一；匹配多处会报错，需要更长的上下文使其唯一。",
     enabled: true,
     risk: "fs-write",
+    modes: ["code", "work"],
     effectKind: "mutation" as const,
     verificationPolicy: "code" as const,
     inputSchema: {

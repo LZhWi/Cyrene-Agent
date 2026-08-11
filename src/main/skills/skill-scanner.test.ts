@@ -70,6 +70,31 @@ tools: query_expense
   it("无 frontmatter 返回 null", () => {
     expect(parseSkillFrontmatter("纯正文无 frontmatter")).toBeNull();
   });
+
+  it("解析 modes 字段", () => {
+    const md = `---
+name: code-only
+description: 仅 code 模式
+tools: [query_expense]
+modes: [code]
+---
+正文`;
+    const r = parseSkillFrontmatter(md);
+    expect(r).not.toBeNull();
+    expect(r!.modes).toEqual(["code"]);
+  });
+
+  it("非法 modes 值被忽略", () => {
+    const md = `---
+name: x
+description: d
+modes: [invalid, CODE, learn]
+---
+正文`;
+    const r = parseSkillFrontmatter(md);
+    expect(r).not.toBeNull();
+    expect(r!.modes).toEqual(["code", "learn"]);
+  });
 });
 
 /** 建临时 skill 目录。 */

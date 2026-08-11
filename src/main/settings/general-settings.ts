@@ -10,6 +10,8 @@ import type {
   SegmentedOutputMode,
 } from "../../shared/preferences";
 import type { CustomStyleConfig, StyleId } from "../../shared/style-sampling";
+import type { ToolModeOverrides } from "../orchestrator/tool-registry";
+import type { SkillModeOverrides } from "../skills/types";
 
 /**
  * 通用设置（GeneralSettings）：与模型配置无关的 UI、TTS、工具开关、快捷键等。
@@ -138,4 +140,12 @@ export interface GeneralSettings extends ChatAppearanceSettings {
   asrShowTranscript: boolean;
   /** 截图全局热键（Electron Accelerator 格式，如 "Alt+Shift+S"） */
   screenshotHotkey: string;
+  /** 工具-模式覆盖层：用户自定义每个工具在 learn/code/work 模式下的可见性。
+   *  key = toolId，value = { mode: enabled }。覆盖优先于工具声明的 modes 字段。
+   *  空对象 = 全部按默认（modes 字段或全可见），由设置面板 UI 写入。 */
+  toolModeOverrides: ToolModeOverrides;
+  /** Skill-模式覆盖层：用户自定义每个 skill 在 work/code/learn 模式下的可见性。
+   *  key = skillId，value = { mode: enabled }。覆盖优先于 skill 声明的 modes 字段。
+   *  空对象 = 全部按默认（modes 字段或全可见），由设置面板 UI 写入。 */
+  skillModeOverrides: SkillModeOverrides;
 }

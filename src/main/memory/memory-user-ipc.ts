@@ -11,7 +11,8 @@ import { addMcpServer, removeMcpServer, listMcpServers } from "../orchestrator/m
 import { toolRegistry } from "../orchestrator/tool-registry";
 import type { ConversationMode } from "../../shared/chat-types";
 import { loadGeneralSettings, saveGeneralSettings } from "../settings/settings-facade";
-import { listSkillsForUi, setSkillEnabled } from "../skills";
+import { listSkillsForUi, setSkillEnabled, skillRegistry, rescanSkills } from "../skills";
+import type { SkillMode } from "../skills/types";
 import type { WindowManager } from "../windows/window-manager";
 import {
   reactChatWindow,
@@ -355,6 +356,75 @@ export function registerMemoryUserToolIpc(deps: MemoryUserToolIpcDependencies): 
     if (!p.id) return { ok: false, error: "missing skill id" };
     setSkillEnabled(p.id, p.enabled !== false);
     console.log("[Skill] " + p.id + " enabled=" + (p.enabled !== false));
+    return { ok: true };
+  });
+
+  // Skill 目录元数据（skill 页展示用；只暴露可序列化字段）
+  // hiddenFromUi = true 的技能（如角色语气校准）不显示在设置面板。
+  ipcMain.handle(IPC.SKILL_GET_CATALOG, () => {
+    return skillRegistry
+      .getAll()
+      .filter((s) => !s.hiddenFromUi)
+      .map((s) => ({
+        id: s.id,
+        name: s.name,
+        description: s.description,
+        enabled: s.enabled,
+        source: s.source,
+        modes: s.modes ?? null,
+        version: s.version,
+        references: s.references,
+      }));
+  });
+
+  // 重新扫描 user skills 目录，安装/删除 skill 后无需重启即可刷新 UI。
+  ipcMain.handle(IPC.SKILL_RESCAN, () => {
+    const count = rescanSkills();
+    return { ok: true, count };
+  });
+
+  // 三模适配层：skill-模式覆盖层读写。
+  // 覆盖层持久化在 general-settings.skillModeOverrides，覆盖优先于 skill 声明的 modes 字段。
+  ipcMain.handle(IPC.SKILL_GET_MODE_OVERRIDES, () => {
+    return loadGeneralSettings().skillModeOverrides;
+  });
+
+  ipcMain.handle(IPC.SKILL_SET_MODE_OVERRIDE, (_event, payload: unknown) => {
+    const p = payload as { skillId?: string; mode?: string; enabled?: boolean };
+    if (!p.skillId || !p.mode) return { ok: false, error: "missing skillId or mode" };
+    const validModes = ["work", "code", "learn"];
+    if (!validModes.includes(p.mode)) return { ok: false, error: "invalid mode" };
+    const mode = p.mode as SkillMode;
+    const before = loadGeneralSettings().skillModeOverrides;
+    const next = { ...before };
+    next[p.skillId] = { ...(next[p.skillId] ?? {}), [mode]: p.enabled !== false };
+    saveGeneralSettings({ skillModeOverrides: next });
+    console.log(`[Skill] override ${p.skillId}@${mode}=${p.enabled !== false}`);
+    return { ok: true };
+  });
+
+  ipcMain.handle(IPC.SKILL_CLEAR_MODE_OVERRIDE, (_event, payload: unknown) => {
+    const p = payload as { skillId?: string; mode?: string };
+    if (!p.skillId) return { ok: false, error: "missing skillId" };
+    const before = loadGeneralSettings().skillModeOverrides;
+    const next = { ...before };
+    if (p.mode) {
+      const validModes = ["work", "code", "learn"];
+      if (!validModes.includes(p.mode)) return { ok: false, error: "invalid mode" };
+      const mode = p.mode as SkillMode;
+      if (next[p.skillId]) {
+        const { [mode]: _removed, ...rest } = next[p.skillId];
+        if (Object.keys(rest).length > 0) {
+          next[p.skillId] = rest;
+        } else {
+          delete next[p.skillId];
+        }
+      }
+    } else {
+      delete next[p.skillId];
+    }
+    saveGeneralSettings({ skillModeOverrides: next });
+    console.log(`[Skill] override cleared ${p.skillId}@${p.mode ?? "all"}`);
     return { ok: true };
   });
 

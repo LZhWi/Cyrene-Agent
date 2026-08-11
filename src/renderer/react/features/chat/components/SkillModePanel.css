@@ -1,4 +1,4 @@
-/* ===== 技能面板（单列列表） ===== */
+/* ===== 技能面板：顶部 tabs（通用/Work/Code/Learn）+ 单列卡片列表 ===== */
 .skill-panel {
   display: flex;
   flex-direction: column;
@@ -31,17 +31,52 @@
   color: var(--cy-text-muted, #8e8e93);
 }
 
-.skill-panel__toolbar {
+.skill-panel__header-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.skill-panel__actions {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 14px 28px 8px;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.skill-panel__icon-btn {
+  width: 32px;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--cy-text-muted, #8e8e93);
+  background: var(--cy-bg-page, #f8f7f6);
+  border: 1px solid var(--cy-border, #f2f2f2);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: color 0.15s ease, background 0.15s ease, border-color 0.15s ease;
+}
+
+.skill-panel__icon-btn:hover {
+  color: var(--cy-accent, #ff5b8a);
+  background: var(--cy-bg-active, #fde0ed);
+  border-color: var(--cy-bg-active, #fde0ed);
+}
+
+.skill-panel__icon-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.skill-panel__search-row {
+  padding: 14px 28px 0;
   flex-shrink: 0;
 }
 
 .skill-panel__search {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
   box-sizing: border-box;
   padding: 9px 16px;
   font-size: 13px;
@@ -58,39 +93,71 @@
   box-shadow: 0 0 0 3px rgba(255, 91, 138, 0.1);
 }
 
-.skill-panel__filter {
+.skill-panel__tabs {
+  display: flex;
+  gap: 4px;
+  padding: 14px 28px 10px;
   flex-shrink: 0;
-  padding: 9px 12px;
-  font-size: 13px;
-  color: var(--cy-text, #1d1d1f);
-  background: var(--cy-bg-page, #f8f7f6);
-  border: 1px solid var(--cy-border, #f2f2f2);
-  border-radius: 10px;
-  cursor: pointer;
-  outline: none;
 }
 
-.skill-panel__filter:focus {
-  border-color: var(--cy-pill-border, #ff9fbd);
+.skill-panel__tab {
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--cy-text-muted, #8e8e93);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.skill-panel__tab:hover {
+  color: var(--cy-text, #1d1d1f);
+}
+
+.skill-panel__tab.is-active {
+  background: var(--cy-bg-active, #fde0ed);
+  color: var(--cy-accent, #ff5b8a);
+}
+
+.skill-panel__filter-row {
+  display: flex;
+  gap: 8px;
+  padding: 0 28px 10px;
+  flex-shrink: 0;
+}
+
+.skill-panel__filter-tab {
+  padding: 5px 12px;
+  font-size: 11.5px;
+  font-weight: 500;
+  color: var(--cy-text-muted, #8e8e93);
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.skill-panel__filter-tab:hover {
+  color: var(--cy-text, #1d1d1f);
+}
+
+.skill-panel__filter-tab.is-active {
+  background: var(--cy-bg-page, #f8f7f6);
+  color: var(--cy-text, #1d1d1f);
 }
 
 .skill-panel__list {
   flex: 1;
+  min-width: 0;
   min-height: 0;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   padding: 6px 28px 24px;
-}
-
-.skill-panel__count {
-  padding: 6px 0 8px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--cy-text, #1d1d1f);
-}
-
-.skill-panel__count-num {
-  margin-left: 4px;
-  color: var(--cy-text-muted, #8e8e93);
-  font-weight: 500;
 }
 
 .skill-panel__loading,
@@ -101,22 +168,30 @@
   color: var(--cy-text-muted, #8e8e93);
 }
 
-/* 技能卡片 */
+/* 技能卡片：单列 */
 .skill-card {
   display: flex;
-  align-items: center;
-  gap: 12px;
+  flex-direction: column;
+  gap: 8px;
   min-width: 0;
   box-sizing: border-box;
   padding: 12px 14px;
-  margin-bottom: 6px;
-  border: 1px solid var(--cy-border, #f2f2f2);
   border-radius: 12px;
   transition: background 0.15s ease;
 }
 
 .skill-card:hover {
   background: var(--cy-bg-page, #f8f7f6);
+}
+
+.skill-card.is-off .skill-card__name {
+  color: var(--cy-text-muted, #8e8e93);
+}
+
+.skill-card__top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .skill-card__icon {
@@ -127,6 +202,12 @@
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.skill-card__icon-letter {
+  line-height: 1;
 }
 
 .skill-card__body {
@@ -135,6 +216,9 @@
 }
 
 .skill-card__name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 13.5px;
   font-weight: 600;
   color: var(--cy-text, #1d1d1f);
@@ -143,12 +227,47 @@
   text-overflow: ellipsis;
 }
 
-.skill-card.is-off .skill-card__name {
+.skill-card__badge {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--cy-text-muted, #8e8e93);
+  background: var(--cy-bg-page, #f8f7f6);
+  border-radius: 999px;
+}
+
+.skill-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.skill-card__source {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  font-size: 10px;
+  font-weight: 500;
+  border-radius: 999px;
+}
+
+.skill-card__source--builtin {
+  color: #5f27cd;
+  background: #efeafc;
+}
+
+.skill-card__source--user {
+  color: #10ac84;
+  background: #e3f7f1;
+}
+
+.skill-card__version {
+  font-size: 10px;
   color: var(--cy-text-muted, #8e8e93);
 }
 
 .skill-card__desc {
-  margin-top: 2px;
   font-size: 11.5px;
   line-height: 1.45;
   color: var(--cy-text-muted, #8e8e93);
@@ -159,20 +278,9 @@
   word-break: break-word;
 }
 
-.skill-card__meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex-shrink: 0;
-}
-
-.skill-card__scope {
-  font-size: 11px;
-  color: var(--cy-text-muted, #8e8e93);
-}
-
 /* 胶囊开关 */
 .skill-card__pill {
+  flex-shrink: 0;
   position: relative;
   width: 36px;
   height: 20px;

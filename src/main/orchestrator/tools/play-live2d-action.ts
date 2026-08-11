@@ -82,6 +82,7 @@ export function createPlayLive2DActionTool(deps: PlayLive2DActionDeps): ToolDefi
     name: "做动作",
     description: buildDescription(),
     enabled: true,
+    modes: ["work"],
     effectKind: "external_side_effect",
     inputSchema: {
       type: "object",

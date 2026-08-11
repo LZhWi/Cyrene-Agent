@@ -8,6 +8,7 @@ metadata:
   sources:
     - ECMA-376 Office Open XML File Formats
     - Microsoft Open XML SDK documentation
+modes: [work, learn]
 ---
 
 # MiniMax XLSX Skill

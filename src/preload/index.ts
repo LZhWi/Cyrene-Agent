@@ -321,6 +321,14 @@ const settingsApi = {
     ipcRenderer.invoke(IPC.TOOL_CLEAR_MODE_OVERRIDE, { toolId, mode }),
   listSkills: () => ipcRenderer.invoke(IPC.SKILL_LIST),
   setSkillEnabled: (id: string, enabled: boolean) => ipcRenderer.invoke(IPC.SKILL_SET_ENABLED, { id, enabled }),
+  // 三模适配层：skill-模式覆盖层（UI 设置面板用）
+  getSkillCatalog: () => ipcRenderer.invoke(IPC.SKILL_GET_CATALOG),
+  rescanSkills: () => ipcRenderer.invoke(IPC.SKILL_RESCAN),
+  getSkillModeOverrides: () => ipcRenderer.invoke(IPC.SKILL_GET_MODE_OVERRIDES),
+  setSkillModeOverride: (skillId: string, mode: string, enabled: boolean) =>
+    ipcRenderer.invoke(IPC.SKILL_SET_MODE_OVERRIDE, { skillId, mode, enabled }),
+  clearSkillModeOverride: (skillId: string, mode?: string) =>
+    ipcRenderer.invoke(IPC.SKILL_CLEAR_MODE_OVERRIDE, { skillId, mode }),
   addMcpServer: (config: unknown) => ipcRenderer.invoke(IPC.MCP_ADD_SERVER, config),
   removeMcpServer: (serverId: string) => ipcRenderer.invoke(IPC.MCP_REMOVE_SERVER, serverId),
   listMcpServers: () => ipcRenderer.invoke(IPC.MCP_LIST_SERVERS),

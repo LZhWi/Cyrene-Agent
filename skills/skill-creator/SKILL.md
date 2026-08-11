@@ -1,6 +1,7 @@
 ---
 name: skill-creator
 description: Create new skills, modify and improve existing skills, and measure skill performance. Use when users want to create a skill from scratch, edit, or optimize an existing skill, run evals to test a skill, benchmark skill performance with variance analysis, or optimize a skill's description for better triggering accuracy.
+modes: [work, code, learn]
 ---
 
 # Skill Creator
@@ -416,6 +417,26 @@ python -m scripts.package_skill <path/to/skill-folder>
 After packaging, direct the user to the resulting `.skill` file path so they can install it.
 
 ---
+
+## Installing / saving the skill in Cyrene
+
+When the user wants to create or install a new skill inside the Cyrene application (not just package it as a `.skill` file), you MUST save it to the **user skills directory** so Cyrene can pick it up at runtime:
+
+- **Windows:** `%APPDATA%/Cyrene-Agent/userData/skills/<skill-id>/`
+- **macOS:** `~/Library/Application Support/Cyrene-Agent/userData/skills/<skill-id>/`
+- **Linux:** `~/.config/Cyrene-Agent/userData/skills/<skill-id>/`
+
+Directory layout for a user-installed skill:
+```
+skills/<skill-id>/
+├── SKILL.md          (required, frontmatter + instructions)
+└── ...               (optional scripts/references/assets)
+```
+
+After writing the files, tell the user:
+1. The exact install path.
+2. That they can click the "刷新" button in the skill panel (or run the `SKILL_RESCAN` IPC) to load it without restarting the app.
+3. If they want the skill to be mode-restricted by default, add a `modes:` line to `SKILL.md` frontmatter, e.g. `modes: [work, learn]`.
 
 ## Claude.ai-specific instructions
 

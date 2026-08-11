@@ -261,6 +261,21 @@ export interface SettingsApi {
   clearToolModeOverride?: (toolId: string, mode?: "chat" | "work" | "code" | "learn") => Promise<{ ok: boolean; error?: string }>;
   listSkills?: () => Promise<Array<{ id: string; name: string; description: string; tools: string[]; enabled: boolean; source: string; version?: string; references: string[] }>>;
   setSkillEnabled?: (id: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+  // 三模适配层：skill-模式覆盖层（UI 设置面板用）
+  getSkillCatalog?: () => Promise<Array<{
+    id: string;
+    name: string;
+    description: string;
+    enabled: boolean;
+    source: string;
+    modes: ("work" | "code" | "learn")[] | null;
+    version?: string;
+    references: string[];
+  }>>;
+  rescanSkills?: () => Promise<{ ok: boolean; count: number; error?: string }>;
+  getSkillModeOverrides?: () => Promise<Record<string, Partial<Record<"work" | "code" | "learn", boolean>>>>;
+  setSkillModeOverride?: (skillId: string, mode: "work" | "code" | "learn", enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
+  clearSkillModeOverride?: (skillId: string, mode?: "work" | "code" | "learn") => Promise<{ ok: boolean; error?: string }>;
   addMcpServer?: (config: unknown) => Promise<{ ok: boolean; toolIds?: string[]; error?: string }>;
   removeMcpServer?: (serverId: string) => Promise<{ ok: boolean; error?: string }>;
   listMcpServers?: () => Promise<Array<{ id: string; name: string; connected: boolean; toolCount: number; toolIds: string[] }>>;

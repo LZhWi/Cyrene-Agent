@@ -421,6 +421,7 @@ toolRegistry.register({
     "参数：command (可执行文件名或绝对路径)，args (字符串数组)，cwd (可选工作目录)。",
   enabled: true,
   risk: "shell",
+  modes: ["code", "work"],
   effectKind: "unknown" as const,
   inputSchema: {
     type: "object",
@@ -454,6 +455,7 @@ toolRegistry.register({
     "参数：verificationType（验证类型：typecheck/test/build/lint），cwd（可选工作目录）。",
   enabled: true,
   risk: "shell",
+  modes: ["code", "work"],
   effectKind: "verification" as const,
   ledgerPolicy: "bypass" as const,
   completionEvidence: [{ kind: "tool_succeeded" }],
@@ -769,6 +771,7 @@ toolRegistry.register({
     "args (字符串数组)，env (键值对，环境变量)，cwd (可选工作目录)。",
   enabled: true,
   risk: "fs-write",
+  modes: ["code", "work"],
   effectKind: "mutation" as const,
   verificationPolicy: "artifact" as const,
   inputSchema: {
@@ -1119,6 +1122,7 @@ toolRegistry.register({
     "参数：city（可选，城市名中文或拼音；不传则用用户设置的默认城市）。",
   enabled: true,
   risk: "network",
+  modes: ["work"],
   effectKind: "read" as const,
   verificationPolicy: "none" as const,
   inputSchema: {
@@ -1520,6 +1524,7 @@ toolRegistry.register({
     "paragraphs（段落数组），style（可选预设风格）。",
   enabled: true,
   risk: "safe",
+  modes: ["work"],
   capability: "delegate_document",
   executionKind: "subagent",
   subAgentProfile: "document",

@@ -283,6 +283,7 @@ export function registerTravelTools(): void {
       "- city（公交必填）：城市名，如「北京」「上海」。仅公交模式需要",
     enabled: true,
     risk: "network",
+    modes: ["work"],
     inputSchema: {
       type: "object",
       properties: {

@@ -1,27 +1,66 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import "./SkillModePanel.css";
 
-type SkillFilter = "all" | "project" | "user";
+type SkillMode = "work" | "code" | "learn";
+type TabKey = "general" | SkillMode;
+type SkillSource = "builtin" | "user";
 
-interface SkillUiEntry {
+interface SkillCatalogItem {
   id: string;
   name: string;
   description: string;
-  tools: string[];
   enabled: boolean;
-  source: "builtin" | "user";
+  source: SkillSource;
+  modes: SkillMode[] | null;
   version?: string;
   references: string[];
 }
 
-const FILTERS: Array<{ key: SkillFilter; label: string }> = [
-  { key: "all", label: "全部" },
-  { key: "project", label: "项目" },
-  { key: "user", label: "个人" },
+type Overrides = Record<string, Partial<Record<SkillMode, boolean>>>;
+
+const TABS: Array<{ key: TabKey; label: string }> = [
+  { key: "general", label: "通用" },
+  { key: "work", label: "Work" },
+  { key: "code", label: "Code" },
+  { key: "learn", label: "Learn" },
 ];
 
-function scopeLabel(source: string) {
-  return source === "user" ? "个人" : "项目";
+const SOURCE_OPTIONS: Array<{ key: "all" | SkillSource; label: string }> = [
+  { key: "all", label: "全部" },
+  { key: "builtin", label: "内置" },
+  { key: "user", label: "用户" },
+];
+
+// TODO: 为每个 skill 配置专属 SVG 图标；key 为 skill id。
+const SKILL_ICON_SVGS: Record<string, React.ReactNode> = {};
+
+function RefreshIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path
+        d="M36.7279 36.7279C33.4706 39.9853 28.9706 42 24 42C14.0589 42 6 33.9411 6 24C6 14.0589 14.0589 6 24 6C28.9706 6 33.4706 8.01472 36.7279 11.2721C38.3859 12.9301 42 17 42 17"
+        stroke="currentColor"
+        strokeWidth="4"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path d="M42 8V17H33" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg width="20" height="20" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M24 10V38" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
+      <path d="M10 24H38" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function PlaceholderIcon({ name }: { name: string }) {
+  const letter = name.trim().charAt(0).toUpperCase() || "S";
+  return <span className="skill-card__icon-letter">{letter}</span>;
 }
 
 function hashHue(id: string): number {
@@ -30,145 +69,238 @@ function hashHue(id: string): number {
   return h;
 }
 
-function PlaceholderIcon() {
-  return (
-    <svg width="18" height="18" viewBox="0 0 48 48" fill="none">
-      <path
-        d="M24 6L30 18H42L32 27L36 41L24 33L12 41L16 27L6 18H18L24 6Z"
-        stroke="currentColor"
-        strokeWidth="3.5"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
-function SkillIcon({ id }: { id: string }) {
-  const hue = hashHue(id);
+function SkillIcon({ skillId, name }: { skillId: string; name: string }) {
+  const hue = hashHue(skillId);
   return (
     <span
       className="skill-card__icon"
       style={{ background: `hsl(${hue}, 82%, 94%)`, color: `hsl(${hue}, 55%, 42%)` }}
     >
-      <PlaceholderIcon />
+      {SKILL_ICON_SVGS[skillId] ?? <PlaceholderIcon name={name} />}
     </span>
   );
 }
 
-export const SkillModePanel: React.FC = () => {
-  const [skills, setSkills] = useState<SkillUiEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [filter, setFilter] = useState("");
-  const [scope, setScope] = useState<SkillFilter>("all");
+/** 与主进程 getEnabledForMode 同源的默认可见性计算（前端镜像） */
+function isVisibleForMode(skill: SkillCatalogItem, mode: SkillMode, overrides: Overrides): boolean {
+  const override = overrides[skill.id]?.[mode];
+  if (override !== undefined) return override;
+  if (!skill.modes) return true;
+  return skill.modes.includes(mode);
+}
 
-  const load = useCallback(() => {
-    setLoading(true);
-    window.settings
-      ?.listSkills?.()
-      ?.then((list) => {
-        setSkills((list as SkillUiEntry[]) ?? []);
-      })
-      .catch((err) => console.warn("[SkillModePanel] load failed:", err))
-      .finally(() => setLoading(false));
+export const SkillModePanel: React.FC = () => {
+  const [catalog, setCatalog] = useState<SkillCatalogItem[]>([]);
+  const [overrides, setOverrides] = useState<Overrides>({});
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [filter, setFilter] = useState("");
+  const [source, setSource] = useState<"all" | SkillSource>("all");
+  const [tab, setTab] = useState<TabKey>("general");
+
+  const load = useCallback(async () => {
+    const api = window.settings;
+    const [cat, ov] = await Promise.all([
+      api?.getSkillCatalog?.() ?? Promise.resolve([]),
+      api?.getSkillModeOverrides?.() ?? Promise.resolve({}),
+    ]);
+    setCatalog(cat as SkillCatalogItem[]);
+    setOverrides(ov as Overrides);
   }, []);
 
   useEffect(() => {
-    load();
+    let cancelled = false;
+    setLoading(true);
+    load()
+      .catch((err) => console.warn("[SkillModePanel] load failed:", err))
+      .finally(() => !cancelled && setLoading(false));
+    return () => { cancelled = true; };
   }, [load]);
 
-  const toggle = useCallback((id: string, next: boolean) => {
-    setSkills((prev) => prev.map((s) => (s.id === id ? { ...s, enabled: next } : s)));
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      const res = await window.settings?.rescanSkills?.();
+      if (res && !res.ok) {
+        console.warn("[SkillModePanel] rescan failed:", res.error);
+      }
+      await load();
+    } catch (err) {
+      console.warn("[SkillModePanel] refresh failed:", err);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [load]);
+
+  const toggleGeneral = useCallback((skillId: string, next: boolean) => {
+    setCatalog((prev) =>
+      prev.map((s) => (s.id === skillId ? { ...s, enabled: next } : s)),
+    );
     void window.settings
-      ?.setSkillEnabled?.(id, next)
-      ?.then((res) => {
-        if (res && !res.ok) throw new Error(res.error);
-      })
-      .catch((err) => {
-        console.warn("[SkillModePanel] set enabled failed:", err);
-        // 失败回滚
-        setSkills((prev) => prev.map((s) => (s.id === id ? { ...s, enabled: !next } : s)));
-      });
+      ?.setSkillEnabled?.(skillId, next)
+      ?.catch((err) => console.warn("[SkillModePanel] set enabled failed:", err));
+  }, []);
+
+  const toggleMode = useCallback((skillId: string, mode: SkillMode, next: boolean) => {
+    setOverrides((prev) => ({
+      ...prev,
+      [skillId]: { ...prev[skillId], [mode]: next },
+    }));
+    void window.settings
+      ?.setSkillModeOverride?.(skillId, mode, next)
+      ?.catch((err) => console.warn("[SkillModePanel] set override failed:", err));
   }, []);
 
   const visibleSkills = useMemo(() => {
     const kw = filter.trim().toLowerCase();
-    let list = skills;
-    if (scope !== "all") {
-      list = list.filter((s) => (scope === "user" ? s.source === "user" : s.source !== "user"));
-    }
-    if (kw) {
-      list = list.filter(
-        (s) =>
-          s.id.toLowerCase().includes(kw) ||
-          s.name.toLowerCase().includes(kw) ||
-          s.description.toLowerCase().includes(kw) ||
-          s.tools.some((t) => t.toLowerCase().includes(kw)),
-      );
-    }
-    return [...list].sort((a, b) => {
-      // 启用的排前面，再按 id
-      if (a.enabled !== b.enabled) return (a.enabled ? 0 : 1) - (b.enabled ? 0 : 1);
+    const candidates = catalog.filter((s) => {
+      if (source !== "all" && s.source !== source) return false;
+      return true;
+    });
+    const shown = tab === "general" ? candidates : candidates.filter((s) => s.enabled);
+    const searched = kw
+      ? shown.filter(
+          (s) =>
+            s.id.toLowerCase().includes(kw) ||
+            s.name.toLowerCase().includes(kw) ||
+            s.description.toLowerCase().includes(kw),
+        )
+      : shown;
+    return [...searched].sort((a, b) => {
+      const aOn = tab === "general" ? a.enabled : isVisibleForMode(a, tab, overrides);
+      const bOn = tab === "general" ? b.enabled : isVisibleForMode(b, tab, overrides);
+      if (aOn !== bOn) return aOn ? -1 : 1;
       return a.id.localeCompare(b.id);
     });
-  }, [skills, scope, filter]);
+  }, [catalog, overrides, filter, source, tab]);
 
   return (
     <div className="skill-panel">
       <header className="skill-panel__header">
-        <h1 className="skill-panel__title">技能</h1>
-        <p className="skill-panel__subtitle">管理项目级与用户级技能。启用后可在聊天里通过 $skill-name 使用。</p>
+        <div className="skill-panel__header-row">
+          <div>
+            <h1 className="skill-panel__title">技能</h1>
+            <p className="skill-panel__subtitle">
+              {tab === "general"
+                ? "管理 skill 的全局开关"
+                : `管理 skill 在 ${TABS.find((t) => t.key === tab)?.label} 模式下的可见性`}
+            </p>
+          </div>
+          <div className="skill-panel__actions">
+            <button
+              type="button"
+              className="skill-panel__icon-btn"
+              title="重新扫描 user skills"
+              disabled={refreshing}
+              onClick={handleRefresh}
+            >
+              <RefreshIcon />
+            </button>
+            <button
+              type="button"
+              className="skill-panel__icon-btn"
+              title="安装/新建 skill（通过 skill-creator 或拖入目录）"
+              onClick={() => {
+                // 后续可接 skill-creator 或文件选择器；目前唤起 skill-creator 对话
+                const input = document.querySelector<HTMLTextAreaElement>(".cy-chat-input textarea");
+                if (input) {
+                  input.value = "/skill-creator 帮我新建一个 skill";
+                  input.focus();
+                  input.dispatchEvent(new Event("input", { bubbles: true }));
+                }
+              }}
+            >
+              <PlusIcon />
+            </button>
+          </div>
+        </div>
       </header>
 
-      <div className="skill-panel__toolbar">
+      <div className="skill-panel__search-row">
         <input
           className="skill-panel__search"
-          placeholder="搜索技能…"
+          placeholder="搜索 skill…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
-        <select
-          className="skill-panel__filter"
-          value={scope}
-          onChange={(e) => setScope(e.target.value as SkillFilter)}
-        >
-          {FILTERS.map((f) => (
-            <option key={f.key} value={f.key}>
-              {f.label}
-            </option>
-          ))}
-        </select>
+      </div>
+
+      <div className="skill-panel__tabs">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            className={"skill-panel__tab" + (tab === t.key ? " is-active" : "")}
+            onClick={() => setTab(t.key)}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      <div className="skill-panel__filter-row">
+        {SOURCE_OPTIONS.map((opt) => (
+          <button
+            key={opt.key}
+            type="button"
+            className={
+              "skill-panel__filter-tab" + (source === opt.key ? " is-active" : "")
+            }
+            onClick={() => setSource(opt.key)}
+          >
+            {opt.label}
+          </button>
+        ))}
       </div>
 
       {loading ? (
         <div className="skill-panel__loading">加载中…</div>
       ) : (
         <div className="skill-panel__list">
-          <div className="skill-panel__count">
-            工作区与个人技能
-            <span className="skill-panel__count-num">{visibleSkills.length}</span> 项
-          </div>
-          {visibleSkills.map((skill) => (
-            <div key={skill.id} className={"skill-card" + (skill.enabled ? "" : " is-off")}>
-              <SkillIcon id={skill.id} />
-              <div className="skill-card__body">
-                <div className="skill-card__name">{skill.id}</div>
-                <div className="skill-card__desc">{skill.description || "暂无描述"}</div>
+          {visibleSkills.map((skill) => {
+            const isOn =
+              tab === "general" ? skill.enabled : isVisibleForMode(skill, tab, overrides);
+            return (
+              <div key={skill.id} className={"skill-card" + (isOn ? "" : " is-off")}>
+                <div className="skill-card__top">
+                  <SkillIcon skillId={skill.id} name={skill.name} />
+                  <div className="skill-card__body">
+                    <div className="skill-card__name">
+                      {skill.name}
+                      {tab !== "general" && !skill.enabled && (
+                        <span className="skill-card__badge">已禁用</span>
+                      )}
+                    </div>
+                    <div className="skill-card__meta">
+                      <span className={`skill-card__source skill-card__source--${skill.source}`}>
+                        {skill.source === "builtin" ? "内置" : "用户"}
+                      </span>
+                      {skill.version ? (
+                        <span className="skill-card__version">v{skill.version}</span>
+                      ) : null}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={isOn}
+                    className={"skill-card__pill" + (isOn ? " is-on" : "")}
+                    onClick={() =>
+                      tab === "general"
+                        ? toggleGeneral(skill.id, !isOn)
+                        : toggleMode(skill.id, tab, !isOn)
+                    }
+                  >
+                    <span className="skill-card__pill-knob" />
+                  </button>
+                </div>
+                <div className="skill-card__desc">
+                  {skill.description.split("\n")[0] || "暂无描述"}
+                </div>
               </div>
-              <div className="skill-card__meta">
-                <span className="skill-card__scope">{scopeLabel(skill.source)}</span>
-                <button
-                  type="button"
-                  role="switch"
-                  aria-checked={skill.enabled}
-                  className={"skill-card__pill" + (skill.enabled ? " is-on" : "")}
-                  onClick={() => toggle(skill.id, !skill.enabled)}
-                >
-                  <span className="skill-card__pill-knob" />
-                </button>
-              </div>
-            </div>
-          ))}
-          {visibleSkills.length === 0 && <div className="skill-panel__empty">无匹配技能</div>}
+            );
+          })}
+          {visibleSkills.length === 0 && <div className="skill-panel__empty">无匹配 skill</div>}
         </div>
       )}
     </div>

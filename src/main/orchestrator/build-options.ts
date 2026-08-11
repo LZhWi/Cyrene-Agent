@@ -25,7 +25,8 @@ import {
   type CyreneRunOptions,
   type CyreneRunResult,
 } from "./cyrene-agent";
-import type { ToolDefinition } from "./tool-registry";
+import type { ToolDefinition, ToolModeOverrides } from "./tool-registry";
+import type { SkillModeOverrides } from "../skills/types";
 import type { ChatMessage, OpenAIContentBlock } from "./vendors/types";
 import type { AguiRunInput } from "../agui-bridge";
 import type { RelationshipChannel, RelationshipTurnInput } from "../relationship/relationship-log";
@@ -66,8 +67,16 @@ export interface BuildOptionsDeps {
   buildSkillCatalog: (skills: ReadonlyArray<unknown>) => string;
   buildAutoInjectedSkillContext: (skills: ReadonlyArray<unknown>) => string;
   buildAutoInjectedSoulContext?: (skills: ReadonlyArray<unknown>) => string;
-  skillRegistry: { getEnabled(): ReadonlyArray<unknown> };
-  resolveSlashActivation: (messages: ReadonlyArray<{ role: string; content?: string }>) => string;
+  skillRegistry: {
+    getEnabled(): ReadonlyArray<unknown>;
+    /** 按会话模式 + 用户覆盖层过滤的启用 skill 列表（三模适配层入口）。 */
+    getEnabledForMode(mode: import("../skills/types").SkillMode, overrides?: SkillModeOverrides): ReadonlyArray<unknown>;
+  };
+  resolveSlashActivation: (
+    messages: ReadonlyArray<{ role: string; content?: string }>,
+    mode?: import("../skills/types").SkillMode,
+    overrides?: SkillModeOverrides,
+  ) => string;
   buildToneInjection: (
     userText: string,
     messages: ReadonlyArray<{ role: string; content?: string }>,
@@ -95,7 +104,11 @@ export interface BuildOptionsDeps {
     customStyle: CustomStyleConfig;
   }) => ApprovedStyleSampling;
   /** 第一期：注入 toolRegistry（用于 buildToolSystemPrompt 自动生成目录）。 */
-  toolRegistry: { getEnabled(): ReadonlyArray<unknown> };
+  toolRegistry: {
+    getEnabled(): ReadonlyArray<unknown>;
+    /** 按会话模式 + 用户覆盖层过滤的启用工具列表（三模适配层入口）。 */
+    getEnabledToolsForMode(mode: ConversationMode, overrides?: ToolModeOverrides): ReadonlyArray<unknown>;
+  };
   normalizeChatMessages: (raw: ReadonlyArray<unknown>) => ChatMessage[];
   chatRequestTimeoutMs: number;
   captionImageForFallback?: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
@@ -186,12 +199,10 @@ export interface StyleSettingsLite {
   currentStyleId?: unknown;
   customStyle?: unknown;
   chatSocialContextEnabled?: unknown;
-}
-
-export interface StyleSettingsLite {
-  currentStyleId?: unknown;
-  customStyle?: unknown;
-  chatSocialContextEnabled?: unknown;
+  /** 工具-模式覆盖层（三模适配层）。未提供时按 modes 字段或全可见过滤。 */
+  toolModeOverrides?: ToolModeOverrides;
+  /** Skill-模式覆盖层（三模适配层）。未提供时按 modes 字段或全可见过滤。 */
+  skillModeOverrides?: SkillModeOverrides;
 }
 
 export interface UserProfileLite {
@@ -402,7 +413,6 @@ export async function buildAgentRunOptions(
     && styleSettings.chatSocialContextEnabled === true
     && Boolean(deps.buildChatSocialContext);
   const messagesForSoul = socialContextEnabled ? messages.slice(-12) : messages;
-  const skillActivation = deps.resolveSlashActivation(slimMessages);
   const profile = deps.loadUserProfile();
   const { cleanMessages: cleanLlm, timestampedMessages: llmMessages, timeContext: conversationTimeContext } = buildConversationTimeContext(
     messagesForSoul as unknown as ChatContextMessage[],
@@ -443,19 +453,6 @@ export async function buildAgentRunOptions(
   }
   envTimer.end();
 
-  const enabledSkills = deps.skillRegistry.getEnabled();
-  const skillCatalog = deps.buildSkillCatalog(enabledSkills);
-  const autoInjectedSkillContext = deps.buildAutoInjectedSkillContext(enabledSkills);
-  const autoInjectedSoulContext = deps.buildAutoInjectedSoulContext?.(enabledSkills) ?? "";
-
-  // Task Router 可用 Skill 列表（Router 判断 direct/plan 和 Skill 加载用）
-  const availableSkills: SkillRouteInfo[] = (enabledSkills as Array<Record<string, unknown>>).map((s) => ({
-    id: String(s.id ?? ""),
-    description: String(s.description ?? ""),
-    ...((s.manifest as Record<string, unknown>)?.defaultExecutionMode
-      ? { defaultExecutionMode: (s.manifest as Record<string, unknown>).defaultExecutionMode as "direct" | "plan" }
-      : {}),
-  })).filter((s) => s.id);
   const channelSystem = buildChannelSystem(input.channel);
 
   let chatSocialContextBlock = "";
@@ -544,9 +541,37 @@ export async function buildAgentRunOptions(
   });
   // 运行模式只决定基础 system；表达 style 始终单独注入 Soul。
   // 优先使用 AguiBridge 注入的真实会话模式，fallback 到执行模式（兼容旧调用方）。
-  const resolvedMode: ConversationMode | undefined = input.mode ?? (isChatMode ? "chat" : "work");
+  const resolvedMode: ConversationMode = input.mode ?? (isChatMode ? "chat" : "work");
   const basePromptMode = resolvedMode;
-  const enabledTools = deps.toolRegistry.getEnabled();
+  const enabledTools = deps.toolRegistry.getEnabledToolsForMode(
+    resolvedMode,
+    styleSettings.toolModeOverrides,
+  );
+
+  // 三模适配层：skill 按 resolvedMode 过滤，chat 模式不暴露 skill。
+  const enabledSkills = resolvedMode === "chat"
+    ? []
+    : deps.skillRegistry.getEnabledForMode(resolvedMode, styleSettings.skillModeOverrides);
+  const skillCatalog = deps.buildSkillCatalog(enabledSkills);
+  const autoInjectedSkillContext = deps.buildAutoInjectedSkillContext(enabledSkills);
+  const autoInjectedSoulContext = deps.buildAutoInjectedSoulContext?.(enabledSkills) ?? "";
+
+  // Task Router 可用 Skill 列表（Router 判断 direct/plan 和 Skill 加载用）
+  const availableSkills: SkillRouteInfo[] = (enabledSkills as Array<Record<string, unknown>>).map((s) => ({
+    id: String(s.id ?? ""),
+    description: String(s.description ?? ""),
+    ...((s.manifest as Record<string, unknown>)?.defaultExecutionMode
+      ? { defaultExecutionMode: (s.manifest as Record<string, unknown>).defaultExecutionMode as "direct" | "plan" }
+      : {}),
+  })).filter((s) => s.id);
+
+  // 三模适配层：slash 命令激活也按 resolvedMode 过滤。
+  const slashMode = resolvedMode === "chat" ? undefined : resolvedMode;
+  const skillActivation = deps.resolveSlashActivation(
+    slimMessages,
+    slashMode,
+    styleSettings.skillModeOverrides,
+  );
 
   // 搜索后端互斥过滤：每轮只暴露当前后端对应的搜索工具
   const generalSettings = deps.loadGeneralSettings();

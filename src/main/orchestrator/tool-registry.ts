@@ -5,6 +5,7 @@ import { searchMemory } from "../rag/index";
 import type { ToolRiskLevel } from "../permission";
 import type { ToolContext } from "./tool-context";
 import type { SoulProjectionConfig, SoulClaimKind } from "./soul-execution-context";
+import type { ConversationMode } from "../../shared/chat-types";
 
 /** 工具效果类型：决定工具对系统状态的影响分类。未配置默认 "unknown"。 */
 export type ToolEffectKind =
@@ -70,6 +71,10 @@ export interface ToolDefinition {
   enabled: boolean;     // 用户是否启用（对应设置面板的开关）
   // 危险等级：决定该工具在哪些权限档位下可调用；不填默认 "safe"
   risk?: ToolRiskLevel;
+  /** 工具暴露的会话模式白名单。未设置 = 全模式通用（向后兼容，行为不变）。
+   *  仅 learn/code/work 三种模式参与过滤；chat 模式不暴露任何工具。
+   *  注意：modes 是"默认推荐"，可被 ToolModeOverrides 覆盖。 */
+  modes?: ConversationMode[];
   // MCP 兼容字段：参数 schema，后续接 MCP 时直接复用
   inputSchema: {
     type: "object";
@@ -110,6 +115,12 @@ export interface ToolDefinition {
   execute: (args: Record<string, unknown>, ctx?: ToolContext) => Promise<string>;
 }
 
+/** 工具-模式覆盖层：用户自定义每个工具在每个会话模式下的可见性。
+ *  key = toolId，value = { mode: enabled }。
+ *  运行时优先级：覆盖层 > ToolDefinition.modes > 全模式可见。
+ *  持久化在 general-settings.toolModeOverrides，由 UI 写入。 */
+export type ToolModeOverrides = Record<string, Partial<Record<ConversationMode, boolean>>>;
+
 export class ToolRegistry {
   private tools: Map<string, ToolDefinition> = new Map();
 
@@ -130,6 +141,21 @@ export class ToolRegistry {
 
   getEnabledTools(): ToolDefinition[] {
     return Array.from(this.tools.values()).filter(t => t.enabled && !t.deprecated);
+  }
+
+  /** 按会话模式过滤的启用工具列表。
+   *  过滤规则（优先级从高到低）：
+   *    1. tool.enabled && !deprecated（总开关 + 废弃过滤）
+   *    2. 若 overrides[toolId][mode] 存在：用覆盖值（true=可见，false=隐藏）
+   *    3. 否则按 modes 字段：!modes || modes.includes(mode)
+   *  未声明 modes 且无覆盖的工具默认全模式可见——保持现有行为不变。 */
+  getEnabledToolsForMode(mode: ConversationMode, overrides?: ToolModeOverrides): ToolDefinition[] {
+    return Array.from(this.tools.values()).filter((t) => {
+      if (!t.enabled || t.deprecated) return false;
+      const override = overrides?.[t.id]?.[mode];
+      if (override !== undefined) return override;
+      return !t.modes || t.modes.includes(mode);
+    });
   }
 
   getAllTools(): ToolDefinition[] {

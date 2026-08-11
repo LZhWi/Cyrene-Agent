@@ -26,7 +26,8 @@ import { feelingToExpression } from "../runtime-state";
 import { resolveSlashActivation } from "../skills/slash-activation";
 import type { CitaService } from "../cita";
 import type { SocialAtom, SocialExtractionInput } from "../social-context/types";
-import type { ToolDefinition } from "./tool-registry";
+import type { ToolDefinition, ToolModeOverrides } from "./tool-registry";
+import type { ConversationMode } from "../../shared/chat-types";
 import {
   buildAgentRunOptions,
   onAgentRunFinished,
@@ -60,7 +61,10 @@ export interface AgentRuntimeDeps {
   loadModelSettings: () => ModelSettings;
   loadGeneralSettings: () => GeneralSettings;
   loadUserProfile: () => UserProfile;
-  toolRegistry: { getEnabledTools: () => ToolDefinition[] };
+  toolRegistry: {
+    getEnabledTools: () => ToolDefinition[];
+    getEnabledToolsForMode: (mode: ConversationMode, overrides?: ToolModeOverrides) => ToolDefinition[];
+  };
   skillRegistry: typeof skillRegistry;
   getSceneEmbeddingIndex: () => unknown;
   getStickerEmbeddingIndex: () => unknown;
@@ -143,9 +147,13 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         buildAutoInjectedSoulContext(skills as any, (id) =>
           rawDeps.skillRegistry.getBody(id),
         )) as BuildOptionsDeps["buildAutoInjectedSoulContext"],
-      skillRegistry: { getEnabled: () => rawDeps.skillRegistry.getEnabled() as unknown[] },
-      resolveSlashActivation: ((messages) =>
-        resolveSlashActivation(messages as any)) as BuildOptionsDeps["resolveSlashActivation"],
+      skillRegistry: {
+        getEnabled: () => rawDeps.skillRegistry.getEnabled() as unknown[],
+        getEnabledForMode: (mode, overrides) =>
+          rawDeps.skillRegistry.getEnabledForMode(mode, overrides) as unknown[],
+      },
+      resolveSlashActivation: ((messages, mode, overrides) =>
+        resolveSlashActivation(messages as any, mode, overrides)) as BuildOptionsDeps["resolveSlashActivation"],
       buildToneInjection: ((userText, messages, provider, index) =>
         buildToneInjection(userText, messages as any, provider as any, index as any)) as BuildOptionsDeps["buildToneInjection"],
       sceneEmbeddingIndex: rawDeps.getSceneEmbeddingIndex(),
@@ -160,7 +168,11 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       buildSoulSystemBasePrompt,
       readStylePrompt,
       resolveSoulSampling: resolveSoulSamplingForStyle,
-      toolRegistry: { getEnabled: () => rawDeps.toolRegistry.getEnabledTools() as unknown[] },
+      toolRegistry: {
+        getEnabled: () => rawDeps.toolRegistry.getEnabledTools() as unknown[],
+        getEnabledToolsForMode: (mode: ConversationMode, overrides?: ToolModeOverrides) =>
+          rawDeps.toolRegistry.getEnabledToolsForMode(mode, overrides) as unknown[],
+      },
       normalizeChatMessages: ((raw) =>
         normalizeChatMessages(raw as any)) as BuildOptionsDeps["normalizeChatMessages"],
       chatRequestTimeoutMs: getTimeoutSettings().chatRequestTimeout,
@@ -242,11 +254,17 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
     buildSchedulerOptions: async (task) => {
       const settings = rawDeps.loadModelSettings();
       const profile = rawDeps.loadUserProfile();
+      const generalSettings = rawDeps.loadGeneralSettings();
       const messages = [{ role: "user" as const, content: task.prompt }];
+      // 定时任务默认按 work 模式过滤 skill，并尊重 skill-模式覆盖层。
+      const scheduledSkills = rawDeps.skillRegistry.getEnabledForMode(
+        "work",
+        generalSettings.skillModeOverrides,
+      );
       const systemContent = [
         buildSystemPrompt("01_default.md"),
         buildEnvironmentContext({ provider: settings.provider, model: settings.model }, profile),
-        buildSkillCatalog(rawDeps.skillRegistry.getEnabled()),
+        buildSkillCatalog(scheduledSkills),
         await buildAlwaysOnContext(task.prompt, messages),
       ].join("\n\n---\n\n");
       return {

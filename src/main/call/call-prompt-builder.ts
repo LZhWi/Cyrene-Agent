@@ -8,6 +8,7 @@ import { resolveChatContextTimezone } from "../chat-time-context";
 import { getDateLocale } from "../locale-context";
 import { loadPromptFile } from "../prompts/prompt-loader";
 import { loadUserProfile } from "../settings-store";
+import { loadGeneralSettings } from "../settings/settings-facade";
 import { searchMemoryEntries } from "../rag";
 import { memoryStore } from "../memory/memory-store";
 import { l2DmaeManager } from "../memory/l2-dmae-manager";
@@ -71,8 +72,11 @@ export async function buildCallSystemPrompt(
   const phonePrompt = phoneParts.join("\n\n---\n\n");
 
   // ⑤ Skill 约束（resolveSlashActivation 会原地修改 messages）
-  const skillCatalog = buildSkillCatalog(skillRegistry.getEnabled());
-  const skillActivation = resolveSlashActivation(messages);
+  // Call 模式按 work 模式过滤 skill，并尊重 skill-模式覆盖层。
+  const skillCatalog = buildSkillCatalog(
+    skillRegistry.getEnabledForMode("work", loadGeneralSettings().skillModeOverrides),
+  );
+  const skillActivation = resolveSlashActivation(messages, "work", loadGeneralSettings().skillModeOverrides);
 
   // ⑥ 语气注入
   let toneInjection = "";

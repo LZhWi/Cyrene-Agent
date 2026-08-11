@@ -129,6 +129,7 @@ toolRegistry.register({
     "参数：path (必填，绝对路径)，startLine (可选，默认 1)，maxLines (可选，默认 500)。",
   enabled: true,
   risk: "fs-read",
+  modes: ["learn", "code", "work"],
   effectKind: "read" as const,
   verificationPolicy: "none" as const,
   inputSchema: {
@@ -229,6 +230,7 @@ toolRegistry.register({
     "参数：path (必填，绝对路径)，showHidden (可选，是否显示以 . 开头的隐藏项，默认 false)。",
   enabled: true,
   risk: "fs-read",
+  modes: ["learn", "code", "work"],
   effectKind: "read" as const,
   verificationPolicy: "none" as const,
   inputSchema: {
@@ -365,6 +367,7 @@ toolRegistry.register({
     "参数：path (绝对路径)，content (要写的字符串)，append (可选，true=追加，默认 false=覆盖)，createDirs (可选，默认 true)。",
   enabled: true,
   risk: "fs-write",
+  modes: ["code", "work"],
   effectKind: "mutation" as const,
   verificationPolicyResolver: resolveWriteFilePolicy,
   inputSchema: {
@@ -464,6 +467,7 @@ toolRegistry.register({
     "参数：path (必填，绝对路径)。",
   enabled: true,
   risk: "fs-read",
+  modes: ["learn", "code", "work"],
   effectKind: "read" as const,
   verificationPolicy: "none" as const,
   needsContext: true,

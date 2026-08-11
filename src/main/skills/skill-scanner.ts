@@ -5,7 +5,7 @@
 import * as fs from "fs";
 import * as path from "path";
 import matter from "gray-matter";
-import type { ParsedSkill, SkillEntry, SkillManifest } from "./types";
+import type { ParsedSkill, SkillEntry, SkillManifest, SkillMode } from "./types";
 import { logger } from "../../shared/logger";
 import { LogTag } from "../../shared/logger-tags";
 
@@ -28,8 +28,18 @@ interface MatterResult {
   content: string;
 }
 
+const VALID_SKILL_MODES = new Set<SkillMode>(["work", "code", "learn"]);
+
+function normalizeSkillModes(raw: unknown): SkillMode[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const modes = raw
+    .map((m) => (typeof m === "string" ? m.trim().toLowerCase() : undefined))
+    .filter((m): m is SkillMode => !!m && VALID_SKILL_MODES.has(m as SkillMode));
+  return modes.length > 0 ? modes : undefined;
+}
+
 /**
- * 解析 SKILL.md 文本：frontmatter（name/description/tools?/version?/effectKind?/autoInject?）+ 正文。
+ * 解析 SKILL.md 文本：frontmatter（name/description/tools?/version?/effectKind?/modes?）+ 正文。
  * 纯函数，不碰 fs/electron。
  * 返回 null 表示不合规（缺 name/description、tools 非 array、或无 frontmatter）。
  */
@@ -48,12 +58,15 @@ export function parseSkillFrontmatter(content: string): ParsedSkill | null {
   const effectKind = typeof d.effectKind === "string" && VALID_EFFECT_KINDS.has(d.effectKind)
     ? d.effectKind as import("../orchestrator/tool-registry").ToolEffectKind
     : undefined;
+  const hiddenFromUi = d.hiddenFromUi === true || d.hiddenFromUi === "true";
   return {
     name: d.name,
     description: d.description,
     tools: Array.isArray(d.tools) ? d.tools.map(String) : undefined,
     version: d.version !== undefined ? String(d.version) : undefined,
     effectKind,
+    modes: normalizeSkillModes(d.modes),
+    hiddenFromUi,
     body: parsed.content.trim(),
   };
 }
@@ -124,6 +137,8 @@ export function scanSkills(dir: string, source: "builtin" | "user"): SkillEntry[
       source,
       manifest,
       effectKind: parsed.effectKind,
+      modes: parsed.modes,
+      hiddenFromUi: parsed.hiddenFromUi,
     });
   }
   return result;
