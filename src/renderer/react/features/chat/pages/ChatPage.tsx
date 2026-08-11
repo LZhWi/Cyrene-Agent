@@ -398,6 +398,9 @@ export function ChatPage() {
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessageItem[]>>({});
   const [workspaceNames, setWorkspaceNames] = useState<Partial<Record<ConversationMode, string>>>({});
+  const [pendingWorkspaceByMode, setPendingWorkspaceByMode] = useState<
+    Partial<Record<ConversationMode, { path: string; displayName?: string }>>
+  >({});
   const [attachmentsByScope, setAttachmentsByScope] = useState<Record<string, ComposerAttachment[]>>({});
   const [sessionsByMode, setSessionsByMode] = useState<Partial<Record<ConversationMode, ChatSessionMeta[]>>>({});
   const [activeSessionIds, setActiveSessionIds] = useState<Partial<Record<ConversationMode, string>>>({});
@@ -1525,10 +1528,14 @@ export function ChatPage() {
     if (existing) return existing;
     const store = chatStore();
     if (!store) throw new Error("聊天会话服务尚未就绪");
+    const hasPendingWorkspace = !!pendingWorkspaceByMode[targetMode];
     const session = await store.create({
       identityId: null,
       mode: targetMode,
-      title: targetMode === "work" || targetMode === "code" ? "新任务" : "新对话",
+      title:
+        targetMode === "work" || targetMode === "code" || hasPendingWorkspace
+          ? "新任务"
+          : "新对话",
     });
     await refreshSessions(targetMode, false);
     await selectSession(session.id, targetMode);
@@ -1561,57 +1568,14 @@ export function ChatPage() {
     if (!store) return;
     const picked = await store.pickWorkspaceFolder();
     if (!picked.ok || !picked.path) return;
-    const sessionId = await ensureSession(targetMode);
-    const result = await store.setWorkspace(sessionId, picked.path);
-    if (!result.ok) {
-      window.alert(`设置工作区失败：${result.error ?? "未知错误"}`);
-      return;
-    }
-    setWorkspaceNames((current) => ({ ...current, [targetMode]: picked.displayName ?? "工作文件夹" }));
 
-    // Learn 模式：空目录询问是否初始化通用学习结构
-    if (targetMode === "learn" && result.isEmpty) {
-      const confirmed = window.confirm(
-        "这是一个空目录。Cyrene 可以在这里创建通用学习工作区结构（materials/、notes/、exercises/、templates/、learn/progress.md），方便你之后和 Cyrene 一起学习。\n\n是否创建？"
-      );
-      if (confirmed) {
-        await initVaultStructure(sessionId);
-      }
-    }
+    const workspace = { path: picked.path, displayName: picked.displayName ?? "工作文件夹" };
+    setWorkspaceNames((current) => ({ ...current, [targetMode]: workspace.displayName }));
 
-    await refreshSessions(targetMode, false);
-  }
-
-  async function createNewTask() {
-    const targetMode = mode;
-    const store = chatStore();
-    if (!store) return;
-    let workspace: { path: string; displayName?: string } | undefined;
-    if (targetMode === "work" || targetMode === "code" || targetMode === "learn") {
-      // 同一项目下的新任务应继承当前会话的可信工作区；只有还未选择
-      // 任何项目时才打开目录选择器，避免用户为每个任务重复选一次。
-      const activeId = activeSessionIdsRef.current[targetMode];
-      const activeSession = activeId ? await store.get(activeId) : null;
-      if (activeSession?.workspaceBinding?.workspaceRoot) {
-        workspace = {
-          path: activeSession.workspaceBinding.workspaceRoot,
-          displayName: activeSession.workspaceBinding.displayName,
-        };
-      } else {
-        const picked = await store.pickWorkspaceFolder();
-        if (!picked.ok || !picked.path) return;
-        workspace = { path: picked.path, displayName: picked.displayName };
-      }
-    }
-    const session = await store.create({
-      identityId: null,
-      mode: targetMode,
-      title: workspace ? "新任务" : "新对话",
-    });
-    if (workspace) {
-      const result = await store.setWorkspace(session.id, workspace.path);
+    const activeId = activeSessionIdsRef.current[targetMode];
+    if (activeId) {
+      const result = await store.setWorkspace(activeId, workspace.path);
       if (!result.ok) {
-        await store.delete(session.id);
         window.alert(`设置工作区失败：${result.error ?? "未知错误"}`);
         return;
       }
@@ -1621,12 +1585,65 @@ export function ChatPage() {
           "这是一个空目录。Cyrene 可以在这里创建通用学习工作区结构（materials/、notes/、exercises/、templates/、learn/progress.md），方便你之后和 Cyrene 一起学习。\n\n是否创建？"
         );
         if (confirmed) {
-          await initVaultStructure(session.id);
+          await initVaultStructure(activeId);
         }
       }
+      await refreshSessions(targetMode, false);
+    } else {
+      // 还没有发送第一条消息、未创建 session，先暂存工作区，发消息时一起绑定。
+      setPendingWorkspaceByMode((current) => ({ ...current, [targetMode]: workspace }));
     }
-    await refreshSessions(targetMode, false);
-    await selectSession(session.id, targetMode);
+  }
+
+  async function createNewTask() {
+    const targetMode = mode;
+    const store = chatStore();
+    if (!store) return;
+
+    // 点“新建”不真正创建 session，只清空当前模式的状态并回到欢迎页。
+    // 工作区保留：如果当前 session 已绑定项目，新任务继续在该项目下创建；
+    // 否则沿用之前通过 chooseWorkspace 选好的待绑定目录。
+    const activeId = activeSessionIdsRef.current[targetMode];
+    const activeSession = activeId ? await store.get(activeId) : null;
+    const inheritedWorkspace = activeSession?.workspaceBinding?.workspaceRoot
+      ? {
+          path: activeSession.workspaceBinding.workspaceRoot,
+          displayName: activeSession.workspaceBinding.displayName,
+        }
+      : pendingWorkspaceByMode[targetMode];
+
+    setActiveSessionIds((current) => {
+      const next = { ...current };
+      delete next[targetMode];
+      activeSessionIdsRef.current = next;
+      return next;
+    });
+    setDrafts((current) => {
+      const next = { ...current };
+      delete next[`mode:${targetMode}`];
+      return next;
+    });
+    setAttachmentsByScope((current) => {
+      const next = { ...current };
+      delete next[`mode:${targetMode}`];
+      return next;
+    });
+    setPendingWorkspaceByMode((current) => {
+      const next = { ...current };
+      if (inheritedWorkspace) {
+        next[targetMode] = inheritedWorkspace;
+      } else {
+        delete next[targetMode];
+      }
+      return next;
+    });
+    setWorkspaceNames((current) => {
+      const next = { ...current };
+      if (!inheritedWorkspace) {
+        delete next[targetMode];
+      }
+      return next;
+    });
     setToolPanelOpen(false);
     setSkillPanelOpen(false);
   }
@@ -1806,6 +1823,26 @@ export function ChatPage() {
     const attachmentsForMessage = attachments.map((attachment) => ({ ...attachment }));
     const targetMode = mode;
     const sessionId = await ensureSession(targetMode);
+
+    // 如果新建任务时已选好工作区但尚未创建 session，在这里一并绑定。
+    const pendingWorkspace = pendingWorkspaceByMode[targetMode];
+    if (pendingWorkspace) {
+      const workspaceResult = await chatStore()?.setWorkspace(sessionId, pendingWorkspace.path);
+      if (workspaceResult?.ok && targetMode === "learn" && workspaceResult.isEmpty) {
+        const confirmed = window.confirm(
+          "这是一个空目录。Cyrene 可以在这里创建通用学习工作区结构（materials/、notes/、exercises/、templates/、learn/progress.md），方便你之后和 Cyrene 一起学习。\n\n是否创建？"
+        );
+        if (confirmed) {
+          await initVaultStructure(sessionId);
+        }
+      }
+      setPendingWorkspaceByMode((current) => {
+        const next = { ...current };
+        delete next[targetMode];
+        return next;
+      });
+    }
+
     // 如果当前 session 正在跑模型，新消息进入 composer 上方队列，等当前 run 结束后自动发送
     if (shouldRunModel && isSessionBusy(sessionId)) {
       const nextQueue = {
@@ -2113,7 +2150,7 @@ export function ChatPage() {
             onSubmit={(value) => void sendMessage(value)}
             onCancel={() => void cancelCurrentRun()}
             onQueueMessage={(value) => queueCurrentDraft(value)}
-            onRemoveQueuedMessage={(id) => removeQueuedMessage(activeSessionId, id)}
+            onRemoveQueuedMessage={(id) => activeSessionId && removeQueuedMessage(activeSessionId, id)}
             onChooseWorkspace={() => void chooseWorkspace()}
             onInitVaultStructure={mode === "learn" ? () => {
               const sessionId = activeSessionIdsRef.current[mode];

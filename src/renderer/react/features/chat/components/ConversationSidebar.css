@@ -40,8 +40,12 @@
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  app-region: no-drag;
   pointer-events: auto;
+}
+
+.cy-conversation-list-wrapper > *,
+.cy-conversation-list-wrapper .ant-conversations-item {
+  app-region: no-drag;
 }
 
 .cy-conversation-list {
