@@ -36,6 +36,8 @@ export interface TaskRuntimeParentContext {
   resolvedWorkspaceRoot?: string;
   signal?: AbortSignal;
   checkPermission?: HarnessInput["checkPermission"];
+  includeInteractiveTools?: boolean;
+  permissionMode?: import("./cyrene-agent").CyreneRunOptions["permissionMode"];
 }
 
 function taskStatus(result: HarnessResult): { status: Exclude<TaskSessionStatus, "running" | "interrupted">; error?: { code: string; message: string } } {
@@ -93,6 +95,7 @@ export function createTaskExecutor(input: {
       resolvedWorkspaceRoot: input.parent.resolvedWorkspaceRoot,
       mode: input.parent.mode,
       allowedSkillIds: input.parent.capabilities?.skillIds,
+      permissionMode: input.parent.permissionMode,
     };
 
     const lease = characterPool.acquire(input.parent.parentConversationId, request.companionId);
@@ -119,6 +122,7 @@ export function createTaskExecutor(input: {
         signal: input.parent.signal,
         toolContext,
         checkPermission: input.parent.checkPermission,
+        includeInteractiveTools: input.parent.includeInteractiveTools,
         onEvent: (event) => {
           const trace = projectTaskTraceEvent(event);
           if (trace) {

@@ -14,7 +14,7 @@ import type { ToolDefinition } from "../tool-registry";
 import type { ToolCallResult } from "../types";
 import type { AgentState, HarnessEvent, ToolObservation } from "./types";
 import { parseToolCallArgs, toolCallFingerprint } from "./types";
-import { isHarnessBuiltin } from "./builtin-tools";
+import { isHarnessBuiltin, isInteractiveHarnessBuiltin } from "./builtin-tools";
 import { executeUpdateTodo, executeAskUser, executeTask } from "./builtin-tools";
 import { resolveSideEffect } from "./side-effect-resolver";
 import { isBlockedByUncertainEffect } from "./uncertain-effect-guard";
@@ -66,6 +66,7 @@ export interface ToolDispatchContext {
   tools: ToolDefinition[];
   onEvent?: (event: HarnessEvent) => void;
   requestUserClarification?: (card: unknown) => Promise<unknown>;
+  includeInteractiveTools?: boolean;
   checkPermission?: (toolId: string, args: Record<string, unknown>) => Promise<boolean>;
   toolContext?: import("../tool-context").ToolContext;
   truncation?: TruncationConfig;
@@ -91,6 +92,14 @@ export async function dispatchToolCall(
   // ── 内置工具 ──
   if (isHarnessBuiltin(call.name)) {
     return executeHarnessBuiltin(call, ctx);
+    if (ctx.includeInteractiveTools === false && isInteractiveHarnessBuiltin(call.name)) {
+      return {
+        outcome: "failure",
+        category: "not_found",
+        tool: call.name,
+        message: "当前渠道不支持交互式工具",
+      };
+    }
   }
 
   // ── 普通工具 ──

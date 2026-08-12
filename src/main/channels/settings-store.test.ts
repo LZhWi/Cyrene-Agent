@@ -97,4 +97,14 @@ describe("channels/settings-store", () => {
     saveChannelsSettings({ toolSandbox: "off" });
     expect(loadChannelsSettings().toolSandbox).toBe("off");
   });
+
+  it("migrates the removed safe-only mode to off without elevating permissions", () => {
+    fs.writeFileSync(
+      path.join(os.tmpdir(), "channels-settings.json"),
+      JSON.stringify({ toolSandbox: "safe-only" }),
+      "utf8",
+    );
+
+    expect(loadChannelsSettings().toolSandbox).toBe("off");
+  });
 });

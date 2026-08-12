@@ -7,7 +7,7 @@ import {
   channelsWechatEnabledEl, channelsFeishuEnabledEl,
   channelsRateUserEl, channelsRateChannelEl,
   channelsTtsEl, channelsStickerEl, channelsMirrorEl,
-  channelsToolSandboxOffEl, channelsToolSandboxAllEl, channelsToolSandboxSafeEl,
+  channelsToolSandboxOffEl, channelsToolSandboxAllEl,
   channelsFeishuAppIdEl, channelsFeishuAppSecretEl, channelsFeishuAppSecretRevealBtn,
   channelsFeishuSaveBtn, channelsFeishuFeedbackEl,
   channelsWechatStatusEl, channelsFeishuStatusEl,
@@ -112,7 +112,6 @@ export async function loadChannelsPanel(): Promise<void> {
     if (channelsMirrorEl) channelsMirrorEl.checked = cfg.mirrorToDesktop !== false;
     if (channelsToolSandboxOffEl) channelsToolSandboxOffEl.checked = cfg.toolSandbox === "off";
     if (channelsToolSandboxAllEl) channelsToolSandboxAllEl.checked = cfg.toolSandbox === "all";
-    if (channelsToolSandboxSafeEl) channelsToolSandboxSafeEl.checked = cfg.toolSandbox === "safe-only";
 
     // 飞书字段填充（长连接模式只需要 App ID；secret 加密存盘，UI 不回填明文）
     if (channelsFeishuAppIdEl) channelsFeishuAppIdEl.value = cfg.feishu.appId ?? "";
@@ -148,9 +147,7 @@ export async function loadChannelsPanel(): Promise<void> {
         mirrorToDesktop: channelsMirrorEl?.checked ?? true,
         toolSandbox: channelsToolSandboxOffEl?.checked
           ? "off"
-          : channelsToolSandboxSafeEl?.checked
-            ? "safe-only"
-            : "all",
+          : "all",
       });
     }, 200);
   };
@@ -164,7 +161,6 @@ export async function loadChannelsPanel(): Promise<void> {
     channelsMirrorEl,
     channelsToolSandboxOffEl,
     channelsToolSandboxAllEl,
-    channelsToolSandboxSafeEl,
   ]) {
     el?.addEventListener("change", scheduleSave);
   }

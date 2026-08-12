@@ -6,6 +6,7 @@ import {
   updateTodoToolSpec,
   taskToolSpec,
   executeTask,
+  getHarnessBuiltinToolSpecs,
 } from "./builtin-tools";
 import type { AgentState } from "./types";
 
@@ -23,6 +24,11 @@ function currentState(): AgentState {
 }
 
 describe("Harness user-wait builtins", () => {
+  it("omits interactive builtins when the channel cannot render Ask", () => {
+    expect(getHarnessBuiltinToolSpecs({ includeInteractive: false }).map((tool) => tool.name))
+      .toEqual(["update_todo", "task"]);
+  });
+
   it("validates and delegates a foreground task without exposing its prompt", async () => {
     const executor = vi.fn(async () => ({ taskId: "task-1", status: "completed" as const, text: "已检查。" }));
     const result = await executeTask({ id: "task-call", name: "task", arguments: JSON.stringify({

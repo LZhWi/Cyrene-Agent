@@ -162,6 +162,8 @@ export interface HarnessInput {
   onCheckpoint?: (checkpoint: HarnessCheckpoint) => void;
   /** 用户澄清函数（ask_user 内置工具使用） */
   requestUserClarification?: (card: unknown) => Promise<unknown>;
+  /** 是否向模型公布并允许 Ask/不确定副作用确认工具；默认 true。 */
+  includeInteractiveTools?: boolean;
   /** 工具上下文（权限检查等） */
   toolContext?: import("../tool-context").ToolContext;
   /** 权限检查函数 */

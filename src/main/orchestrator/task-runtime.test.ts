@@ -70,6 +70,34 @@ describe("TaskRuntime", () => {
     expect(store.get("task-1")).toMatchObject({ status: "completed", resultText: "检查完成。" });
   });
 
+  it("inherits a mobile parent's non-interactive Harness policy", async () => {
+    const store = createStore();
+    const runHarness = vi.fn(async () => ({
+      finalAnswer: "完成。",
+      finalState: { todoItems: [], uncertainEffects: [] },
+      terminated: false,
+      rounds: 1,
+      terminal: { status: "success" as const, externalEffectsMayContinue: false },
+    }));
+    const execute = createTaskExecutor({
+      parent: { ...parent, includeInteractiveTools: false, permissionMode: "allow_all" },
+      store,
+      runHarness,
+    });
+
+    await execute({
+      description: "检查文件",
+      prompt: "检查文件。",
+      subagentType: "general",
+      companionId: "风堇",
+    });
+
+    expect(runHarness).toHaveBeenCalledWith(expect.objectContaining({
+      includeInteractiveTools: false,
+      toolContext: expect.objectContaining({ permissionMode: "allow_all" }),
+    }));
+  });
+
   it("rejects a resume request whose task belongs to another parent conversation", async () => {
     const store = createStore();
     const foreign = store.create({

@@ -86,7 +86,10 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
       required: t.inputSchema.required,
     },
   }));
-  const allToolSpecs: ToolSpec[] = [...registryToolSpecs, ...getHarnessBuiltinToolSpecs()];
+  const allToolSpecs: ToolSpec[] = [
+    ...registryToolSpecs,
+    ...getHarnessBuiltinToolSpecs({ includeInteractive: input.includeInteractiveTools }),
+  ];
 
   let messages: ChatMessage[] = [...input.messages];
   let rounds = 0;
@@ -223,7 +226,9 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
 
     if (toolCalls.length > 0) {
       // ── 用户等待类内置工具排他检查（v3 §9.2）──
-      const exclusiveToolNames = new Set(["ask_user", "confirm_uncertain_effect"]);
+      const exclusiveToolNames = input.includeInteractiveTools === false
+        ? new Set<string>()
+        : new Set(["ask_user", "confirm_uncertain_effect"]);
       const askCalls = toolCalls.filter((c) => exclusiveToolNames.has(c.name));
       const otherCalls = toolCalls.filter((c) => !exclusiveToolNames.has(c.name));
 
@@ -256,6 +261,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
               tools: input.tools,
               onEvent: input.onEvent,
               requestUserClarification: input.requestUserClarification,
+              includeInteractiveTools: input.includeInteractiveTools,
             }),
             input.signal,
           );
@@ -312,6 +318,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
               tools: input.tools,
               onEvent: input.onEvent,
               requestUserClarification: input.requestUserClarification,
+              includeInteractiveTools: input.includeInteractiveTools,
               checkPermission: input.checkPermission,
               toolContext: input.toolContext,
               executionLedger: input.executionLedger,
@@ -363,6 +370,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
                     tools: input.tools,
                     onEvent: input.onEvent,
                     requestUserClarification: input.requestUserClarification,
+                    includeInteractiveTools: input.includeInteractiveTools,
                     checkPermission: input.checkPermission,
                     toolContext: input.toolContext,
                     executionLedger: input.executionLedger,

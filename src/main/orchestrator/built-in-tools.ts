@@ -300,7 +300,7 @@ function runShellOnce(
   });
 }
 
-async function executeRunShell(args: Record<string, unknown>): Promise<string> {
+async function executeRunShell(args: Record<string, unknown>, context?: import("./tool-context").ToolContext): Promise<string> {
   const cmd = String(args.command || "").trim();
   // 容错：模型常把 args 当字符串传（如 "--version"），normalizeArgs 会自动拆成 argv 数组
   const cmdArgs = normalizeArgs(args.args);
@@ -310,7 +310,7 @@ async function executeRunShell(args: Record<string, unknown>): Promise<string> {
   // 系统侧 shell policy 分类（不信任模型 purpose）
   const { classifyShellPolicy } = require("./shell-execution-policy");
   const policy = classifyShellPolicy(cmd, cmdArgs);
-  const level = getCurrentLevel();
+  const level = context?.permissionMode === "allow_all" ? "full" : getCurrentLevel();
   logger.info(LogTag.BuiltinTools, `[run_shell] entry: command=${cmd} args=${JSON.stringify(cmdArgs)} cwd=${cwd || "(undefined)"} policy=${policy} level=${level}`);
 
   if (policy === "blocked") {

@@ -12,7 +12,6 @@ export const channelsStickerEl = document.getElementById("channels-sticker-enabl
 export const channelsMirrorEl = document.getElementById("channels-mirror-desktop") as HTMLInputElement | null;
 export const channelsToolSandboxOffEl = document.getElementById("channels-tool-sandbox-off") as HTMLInputElement | null;
 export const channelsToolSandboxAllEl = document.getElementById("channels-tool-sandbox-all") as HTMLInputElement | null;
-export const channelsToolSandboxSafeEl = document.getElementById("channels-tool-sandbox-safe") as HTMLInputElement | null;
 export const channelsFeishuAppIdEl = document.getElementById("channels-feishu-app-id") as HTMLInputElement | null;
 export const channelsFeishuAppSecretEl = document.getElementById("channels-feishu-app-secret") as HTMLInputElement | null;
 export const channelsFeishuAppSecretRevealBtn = document.getElementById("channels-feishu-app-secret-reveal");

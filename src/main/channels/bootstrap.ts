@@ -4,8 +4,6 @@ import { loadGeneralSettings } from "../settings/settings-facade";
 import { loadModelSettings, loadVisionConfig } from "../settings/model-settings";
 import { CyreneAgent } from "../orchestrator/cyrene-agent";
 import { toolRegistry } from "../orchestrator/tool-registry";
-import type { ToolDefinition } from "../orchestrator/tool-registry";
-import type { ToolRiskLevel } from "../permission";
 import { decideImageSendStrategy } from "../chat/image-send-strategy";
 import {
   IMAGE_CAPTION_PROMPT,
@@ -16,6 +14,7 @@ import type { AgentRuntime } from "../orchestrator/agent-runtime";
 import type { TtsSynthesisService } from "../services/tts/tts-synthesis-service";
 import { buildChannelAttachmentInputs } from "./agent-input";
 import { loadChannelsSettings } from "./settings-store";
+import { resolveChannelAgentPolicy } from "./agent-policy";
 import {
   setDispatcherBuildAndRunAgent,
   setDispatcherBroadcastChat,
@@ -46,15 +45,12 @@ export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSu
     const channelResult: { text: string; sticker: string | null } = { text: "", sticker: null };
 
     const sandbox = loadChannelsSettings().toolSandbox;
+    const policy = resolveChannelAgentPolicy(sandbox);
     const allTools = toolRegistry.getEnabledTools();
-    const filteredTools: ToolDefinition[] = sandbox === "off"
-      ? []
-      : sandbox === "safe-only"
-        ? allTools.filter((t) => (t.risk ?? "safe") === ("safe" as ToolRiskLevel))
-        : allTools;
+    const exposedTools = policy.exposeTools ? allTools : [];
     console.log(
       "[Channels] bot run:",
-      `msg.channel=${msg.channel} sandbox=${sandbox} tools=${filteredTools.length}/${allTools.length} priorMsgs=${priorMessages?.length ?? 0}`,
+      `msg.channel=${msg.channel} sandbox=${sandbox} tools=${exposedTools.length}/${allTools.length} priorMsgs=${priorMessages?.length ?? 0}`,
     );
 
     const historyMessages = (priorMessages ?? [])
@@ -100,13 +96,17 @@ export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSu
       attachments: attachmentInputs.attachments,
       imageAttachments: attachmentInputs.imageAttachments,
       channel: msg.channel,
-      executionMode: sandbox === "off" ? "chat" : "work",
-      ...(sandbox === "off" ? {
+      executionMode: policy.executionMode,
+      ...(policy.executionMode === "chat" ? {
         userTurnId: `${msg.channel}:${msg.senderId}:${msg.at.toISOString()}:user`,
         assistantTurnId: `${msg.channel}:${msg.senderId}:${msg.at.toISOString()}:assistant`,
       } : {}),
     });
-    options.tools = filteredTools;
+    options.tools = policy.exposeTools
+      ? [...(options.capabilities?.tools ?? exposedTools)]
+      : [];
+    options.harnessInteractiveTools = policy.includeInteractiveTools;
+    options.permissionMode = policy.permissionMode;
 
     const threadId = `thread-${sessionId}-${Date.now()}`;
     const agent = new CyreneAgent({ threadId, description: `bot:${msg.channel}:${msg.senderId}` });

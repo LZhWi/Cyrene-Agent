@@ -153,7 +153,7 @@ export function decryptFeishuSecret(cfg: FeishuChannelConfig | undefined): strin
   return decryptField(cfg?.appSecret ?? "");
 }
 
-export type ChannelToolSandbox = "off" | "safe-only" | "all";
+export type ChannelToolSandbox = "off" | "all";
 
 export interface ChannelsSettings {
   wechat: WechatChannelConfig;
@@ -172,7 +172,7 @@ export interface ChannelsSettings {
   stickerEnabled: boolean;
   /** 全局：是否把 bot 会话镜像到桌面端 chatWindow */
   mirrorToDesktop: boolean;
-  /** 全局：Chat 关闭工具；Work 可限制工具风险等级。 */
+  /** 全局：关闭时走 Chat；全部开启时走无交互审批的 Harness。 */
   toolSandbox: ChannelToolSandbox;
 }
 
@@ -203,8 +203,11 @@ function normalize(input: Partial<ChannelsSettings> | null | undefined): Channel
     typeof v === "boolean" ? v : fallback;
 
   const safeStr = (v: unknown): string => (typeof v === "string" ? v : "");
-  const safeToolSandbox = (v: unknown): ChannelToolSandbox =>
-    v === "off" || v === "all" ? v : "safe-only";
+  const safeToolSandbox = (v: unknown): ChannelToolSandbox => {
+    if (v === "all") return "all";
+    if (v === "off" || v === "safe-only") return "off";
+    return DEFAULT_SETTINGS.toolSandbox;
+  };
 
   const w: Partial<WechatChannelConfig> | undefined = input?.wechat;
   const f: Partial<FeishuChannelConfig> | undefined = input?.feishu;

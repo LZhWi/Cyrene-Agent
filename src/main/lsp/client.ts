@@ -150,6 +150,7 @@ export class LspClient {
   }
 
   async request<T>(method: string, params: unknown, timeoutMs = 10_000, signal?: AbortSignal): Promise<T> {
+    if (signal?.aborted) throw abortError();
     await this.initialize();
     return withTimeout(this.requireConnection().sendRequest(method, params), timeoutMs, "LSP_REQUEST_TIMEOUT", signal) as Promise<T>;
   }

@@ -569,6 +569,13 @@ export function isHarnessBuiltin(toolName: string): boolean {
   return HARNESS_BUILTIN_TOOL_IDS.has(toolName);
 }
 
-export function getHarnessBuiltinToolSpecs(): ToolSpec[] {
-  return [updateTodoToolSpec, askUserToolSpec, confirmUncertainEffectToolSpec, taskToolSpec];
+export function isInteractiveHarnessBuiltin(toolName: string): boolean {
+  return toolName === ASK_USER_TOOL_ID || toolName === CONFIRM_UNCERTAIN_EFFECT_TOOL_ID;
+}
+
+export function getHarnessBuiltinToolSpecs(options?: { includeInteractive?: boolean }): ToolSpec[] {
+  const interactive = options?.includeInteractive !== false
+    ? [askUserToolSpec, confirmUncertainEffectToolSpec]
+    : [];
+  return [updateTodoToolSpec, ...interactive, taskToolSpec];
 }

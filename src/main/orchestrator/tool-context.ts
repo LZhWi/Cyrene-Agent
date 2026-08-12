@@ -38,6 +38,8 @@ export interface ToolContext {
   mode?: ConversationMode;
   /** 本次 Run 允许加载的 Skill ID；缺失时仅兼容旧的非 bridge 调用。 */
   allowedSkillIds?: ReadonlySet<string>;
+  /** 本轮工具执行权限策略；allow_all 仅用于用户显式开启的无审批渠道。 */
+  permissionMode?: "normal" | "allow_all";
   /** 未来扩展兜底；当前为空对象，不预设字段。遵循"地基通用，上层克制"。 */
   metadata?: Record<string, unknown>;
 }

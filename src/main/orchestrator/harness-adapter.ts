@@ -98,18 +98,22 @@ export async function runHarnessWithAdapter(
     resolvedWorkspaceRoot: options.resolvedWorkspaceRoot,
     mode: options.conversationMode,
     allowedSkillIds: options.capabilities?.skillIds,
+    permissionMode: options.permissionMode,
   };
   const permissionCheck = async (toolId: string, args: Record<string, unknown>): Promise<boolean> => {
+    if (options.permissionMode === "allow_all") return true;
     const tool = toolRegistry.getById(toolId);
     if (!tool) return false;
     const risk: ToolRiskLevel = (tool as ToolDefinition & { risk?: ToolRiskLevel }).risk ?? "safe";
-    return (await checkPermission({ toolId, toolName: tool.name, toolDescription: tool.description, args, risk, runId })).allowed;
+    return (await checkPermission({ toolId, toolName: tool.name, toolDescription: tool.description, args, risk, runId, signal })).allowed;
   };
   const taskExecutor = options.conversationMode === "work" || options.conversationMode === "code"
     ? createTaskExecutor({
       parent: { parentConversationId: threadId, parentRunId: runId, mode: options.conversationMode,
         capabilities: options.capabilities,
-        systemPrompt, vendorConfig, tools, resolvedWorkspaceRoot: options.resolvedWorkspaceRoot, signal, checkPermission: permissionCheck },
+        systemPrompt, vendorConfig, tools, resolvedWorkspaceRoot: options.resolvedWorkspaceRoot, signal,
+        checkPermission: permissionCheck, includeInteractiveTools: options.harnessInteractiveTools,
+        permissionMode: options.permissionMode },
       store: new TaskSessionStore(app.getPath("userData")),
       onLifecycle: (event) => sendTaskLifecycleAsAgui(event, threadId, runId, sendBaseEvent),
     })
@@ -134,6 +138,7 @@ export async function runHarnessWithAdapter(
     requestUserClarification: options.requestUserClarification
       ? (card) => options.requestUserClarification!(card as never, signal)
       : undefined,
+    includeInteractiveTools: options.harnessInteractiveTools,
     toolContext,
     executionLedger: options.executionLedger,
     checkPermission: permissionCheck,

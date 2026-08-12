@@ -123,6 +123,10 @@ export interface CyreneRunOptions {
   tools?: ToolDefinition[];
   /** 本轮冻结的模式能力；bridge 创建的 Run 必须提供。 */
   capabilities?: RunCapabilities;
+  /** Harness 是否公布需要桌面交互卡片的内置工具；默认开启。 */
+  harnessInteractiveTools?: boolean;
+  /** 工具权限结算方式；手机端全部开启使用 allow_all 跳过逐项审批。 */
+  permissionMode?: "normal" | "allow_all";
   /** 直发图片被主模型接口拒绝时，懒加载 caption fallback 消息并重试。 */
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
   /** 工具阶段使用的 system prompt（仅含工具调度规则 + 自动生成的工具目录）。 */

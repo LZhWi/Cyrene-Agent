@@ -83,4 +83,37 @@ describe("runHarnessWithAdapter cancellation context", () => {
     await input.requestUserClarification?.({ question: "continue?" });
     expect(clarify).toHaveBeenCalledWith({ question: "continue?" }, signal);
   });
+
+  it("passes the mobile non-interactive policy and allows tools without approval", async () => {
+    getById.mockReturnValue({
+      id: "write_file",
+      name: "Write File",
+      description: "writes a file",
+      risk: "dangerous",
+    });
+
+    await runHarnessWithAdapter({
+      runId: "run-mobile-all",
+      settings: {
+        provider: "test",
+        baseUrl: "",
+        model: "",
+        apiKey: "",
+        contextWindowTokens: 256_000,
+      },
+      messages: [{ role: "user", content: "写文件" }],
+      timeoutMs: 60_000,
+      toolSystemContent: "",
+      soulSystemBaseContent: "",
+      executionMode: "work",
+      harnessInteractiveTools: false,
+      permissionMode: "allow_all",
+    } as never, new AbortController().signal, vi.fn());
+
+    const input = runHarness.mock.calls[0]?.[0] as HarnessInput;
+    expect(input.includeInteractiveTools).toBe(false);
+    expect(input.toolContext?.permissionMode).toBe("allow_all");
+    await expect(input.checkPermission?.("write_file", { path: "x" })).resolves.toBe(true);
+    expect(permissionCheck).not.toHaveBeenCalled();
+  });
 });
