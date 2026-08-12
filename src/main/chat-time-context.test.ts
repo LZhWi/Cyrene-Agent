@@ -54,10 +54,11 @@ describe("chat time context", () => {
       { role: "assistant", content: "没有时间戳" },
     ], "Asia/Taipei");
 
-    expect(result.messages[0].content).toBe("用户发送这条消息的时间：2026-07-12 20:00；用户时区：Asia/Taipei。\n\n今天有点累");
+    expect(result.messages[0].content).toBe("<internal_context>用户发送这条消息的时间：2026-07-12 20:00；用户时区：Asia/Taipei。</internal_context>\n\n今天有点累");
     expect(result.messages[1].content).toBe("早点休息");
     expect(result.messages[2].content).toBe("没有时间戳");
-    expect(result.timeContext).toBe("");
+    expect(result.timeContext).toContain("## Internal Context Policy");
+    expect(result.timeContext).toContain("must never become part of the user-visible response");
   });
 
   it("does not add a gap notice below one hour", () => {
@@ -77,7 +78,7 @@ describe("chat time context", () => {
       { role: "user", content: "我回来啦", at: Date.UTC(2026, 6, 13, 3, 0) },
     ], "Asia/Taipei");
 
-    expect(result.timeContext).toBe([
+    expect(result.timeContext).toContain([
       "[对话时间信息]",
       "当前时间：2026-07-13 11:00, Asia/Taipei",
       "距离上一条有效聊天消息：约 14 小时 58 分钟",
@@ -90,7 +91,7 @@ describe("chat time context", () => {
     expect(buildConversationTimeContext([
       { role: "assistant", content: "上一条" },
       { role: "user", content: "本轮", at: Date.UTC(2026, 6, 13, 3, 0) },
-    ], "Asia/Taipei").timeContext).toBe("");
+    ], "Asia/Taipei").timeContext).toContain("## Internal Context Policy");
 
     expect(buildConversationTimeContext([
       { role: "assistant", content: "上一条", at: Date.UTC(2026, 6, 13, 2, 0) },

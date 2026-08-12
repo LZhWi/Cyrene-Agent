@@ -415,7 +415,7 @@ export function ChatPage() {
   const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [todoStateBySession, setTodoStateBySession] = useState<TodoStateBySession>({});
-  const [codeGitReviewPath, setCodeGitReviewPath] = useState<string | null>(null);
+  const [codeGitReview, setCodeGitReview] = useState<{ snapshot: ChatMessage["gitReview"]; initialPath?: string } | null>(null);
   const activeModeRef = useRef(mode);
   const activeSessionIdsRef = useRef(activeSessionIds);
   const activeScopeRef = useRef(`mode:${mode}`);
@@ -503,7 +503,7 @@ export function ChatPage() {
   const sessions = sessionsByMode[mode] ?? [];
 
   useEffect(() => {
-    setCodeGitReviewPath(null);
+    setCodeGitReview(null);
   }, [mode, activeSessionId]);
 
   activeModeRef.current = mode;
@@ -2095,7 +2095,7 @@ export function ChatPage() {
         </div>
       </div>
       <main
-        className={`cy-page-main cy-workspace ${hasMessages ? "has-messages" : "is-empty"} ${isDraggingFiles ? "is-dragging-files" : ""} ${codeGitReviewPath ? "is-review-open" : ""}`}
+        className={`cy-page-main cy-workspace ${hasMessages ? "has-messages" : "is-empty"} ${isDraggingFiles ? "is-dragging-files" : ""} ${codeGitReview ? "is-review-open" : ""}`}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -2148,7 +2148,7 @@ export function ChatPage() {
             onRegisterScrollToBottom={(scroll) => {
               scrollToBottomRef.current = scroll;
             }}
-            onOpenCodeReview={mode === "code" ? setCodeGitReviewPath : undefined}
+            onOpenCodeReview={mode === "code" ? (snapshot, initialPath) => setCodeGitReview({ snapshot, initialPath }) : undefined}
           />
         )}
         {isCompressingContext && (
@@ -2243,8 +2243,8 @@ export function ChatPage() {
         </>
         )}
       </main>
-      {mode === "code" && activeSessionId && (
-        <CodeDiffReview sessionId={activeSessionId} path={codeGitReviewPath} open={codeGitReviewPath !== null} onClose={() => setCodeGitReviewPath(null)} />
+      {mode === "code" && activeSessionId && codeGitReview?.snapshot && (
+        <CodeDiffReview sessionId={activeSessionId} snapshot={codeGitReview.snapshot} initialPath={codeGitReview.initialPath} open onClose={() => setCodeGitReview(null)} />
       )}
     </div>
   );

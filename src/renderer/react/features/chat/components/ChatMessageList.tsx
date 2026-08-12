@@ -82,7 +82,7 @@ interface ChatMessageListProps {
   onRegenerateLastResponse?: (userMessageId: string, assistantMessageId: string) => Promise<boolean>;
   onScrollToBottomVisibilityChange?: (visible: boolean) => void;
   onRegisterScrollToBottom?: (scroll: () => void) => void;
-  onOpenCodeReview?: (path: string) => void;
+  onOpenCodeReview?: (snapshot: CodeGitReviewSnapshot, path?: string) => void;
 }
 
 const markdownConfig = { extensions: Latex() };
@@ -628,7 +628,7 @@ function createRoles(
   reasoningExpanded: Readonly<Record<string, boolean>>,
   onReasoningExpand: (id: string, expanded: boolean) => void,
   onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void,
-  onOpenCodeReview?: (path: string) => void,
+  onOpenCodeReview?: (snapshot: CodeGitReviewSnapshot, path?: string) => void,
 ) {
   return {
   user: {

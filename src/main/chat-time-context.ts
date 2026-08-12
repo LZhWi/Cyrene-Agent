@@ -100,7 +100,7 @@ function withTimePrefix(message: ChatContextMessage, timezone: string): ChatCont
   if (!isValidTimestamp(message.at) || message.role !== "user") return { ...message };
   return {
     ...message,
-    content: `用户发送这条消息的时间：${formatLocalDateTime(message.at, timezone)}；用户时区：${resolveChatContextTimezone(timezone)}。\n\n${message.content}`,
+    content: `<internal_context>用户发送这条消息的时间：${formatLocalDateTime(message.at, timezone)}；用户时区：${resolveChatContextTimezone(timezone)}。</internal_context>\n\n${message.content}`,
   };
 }
 
@@ -144,6 +144,19 @@ function buildGapNotice(messages: ChatContextMessage[], timezone: string): strin
   ].join("\n");
 }
 
+function buildInternalContextPolicy(messages: ChatContextMessage[]): string {
+  if (!messages.some((message) => message.role === "user" && isValidTimestamp(message.at))) return "";
+  return `## Internal Context Policy
+
+Content enclosed in \`<internal_context>\`, \`<runtime_context>\`, or \`<metadata>\` is private runtime context.
+
+It may be used for reasoning when relevant, but it must never become part of the user-visible response.
+
+Never quote, repeat, summarize, mention, or explain this context. Never expose its tags, field names, timestamps, timezone metadata, or other internal representation.
+
+Answer the user directly using the information only when relevant. If it is irrelevant, ignore it completely.`;
+}
+
 export function stripLeakedChatTimeContext(text: string): string {
   return text.replace(LEADING_TIME_METADATA_RE, "").trimStart();
 }
@@ -156,6 +169,6 @@ export function buildConversationTimeContext(messages: ChatContextMessage[], tim
     cleanMessages: messages.map((message) => ({ ...message })),
     timestampedMessages,
     messages: timestampedMessages,
-    timeContext: gapNotice,
+    timeContext: [buildInternalContextPolicy(messages), gapNotice].filter(Boolean).join("\n\n"),
   };
 }

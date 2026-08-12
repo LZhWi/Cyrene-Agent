@@ -10,7 +10,7 @@ export function splitCodeReviewPath(path: string): { directory: string; filename
     : { directory: normalized.slice(0, lastSlash), filename: normalized.slice(lastSlash + 1) };
 }
 
-export function CodeGitReviewSummary({ snapshot, onOpen }: { snapshot: CodeGitReviewSnapshot; onOpen(path: string): void }) {
+export function CodeGitReviewSummary({ snapshot, onOpen }: { snapshot: CodeGitReviewSnapshot; onOpen(snapshot: CodeGitReviewSnapshot, path?: string): void }) {
   const [expanded, setExpanded] = useState(false);
   const visible = expanded ? snapshot.files : snapshot.files.slice(0, 3);
   return (
@@ -18,12 +18,12 @@ export function CodeGitReviewSummary({ snapshot, onOpen }: { snapshot: CodeGitRe
       <header>
         <span className="cy-git-review-summary__icon" aria-hidden="true">▣</span>
         <div><strong>已编辑 {snapshot.files.length} 个文件</strong><small><b>+{snapshot.insertions}</b> <i>-{snapshot.deletions}</i></small></div>
-        <button type="button" className="cy-git-review-summary__review" onClick={() => onOpen(snapshot.files[0].path)}>审阅</button>
+        <button type="button" className="cy-git-review-summary__review" onClick={() => onOpen(snapshot)}>审阅</button>
       </header>
       <ul>{visible.map((file) => {
         const display = splitCodeReviewPath(file.path);
         return <li key={file.path}>
-          <button type="button" onClick={() => onOpen(file.path)}>
+          <button type="button" onClick={() => onOpen(snapshot, file.path)}>
             <span className="cy-git-review-summary__path">
               {display.directory && <small>{display.directory}/</small>}
               <strong>{display.filename}</strong>

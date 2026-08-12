@@ -622,6 +622,7 @@ export async function buildAgentRunOptions(
   // 同时新增 toolSystemContent / soulSystemBaseContent 两套。
   // 工具阶段：工具规则 + 运行时工具目录 + 可用 Skill 路由清单。
   const toolSystemContent = baseToolSystemPrompt
+    + (conversationTimeContext.includes("## Internal Context Policy") ? "\n\n" + conversationTimeContext.split("\n\n[对话时间信息]")[0] : "")
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
     + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "")
     + (citaContextBlock ? "\n\n" + citaContextBlock : "")
