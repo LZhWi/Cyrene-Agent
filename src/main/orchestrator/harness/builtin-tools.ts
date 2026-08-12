@@ -18,22 +18,32 @@ import { parseToolCallArgs } from "./types";
 import { isAbortError } from "../../abort-utils";
 import { resolveUncertainEffect } from "./uncertain-effect-guard";
 import type { TaskExecuteRequest, TaskExecuteResult } from "../task-runtime";
+import { buildGoldenDescendantsPrompt, getGoldenDescendantNames } from "../../tasks/task-character-pool";
 
 // ── update_todo ──────────────────────────────────────────
 
 export const UPDATE_TODO_TOOL_ID = "update_todo";
 export const TASK_TOOL_ID = "task";
 
+const goldenDescendantNames = getGoldenDescendantNames();
+const hasGoldenDescendants = goldenDescendantNames.length > 0;
+
 export const taskToolSpec: ToolSpec = {
   name: TASK_TOOL_ID,
-  description: "委托一个需要独立上下文、多步执行的前台子任务。你必须在 companion_id 中选择一位伙伴：风堇、刻律德菈、长夜月、遐蝶、缇宝、阿格莱雅、白厄、丹恒、海瑟音、那刻夏、赛飞儿、万敌。父任务会等待结果；description 只用于向用户显示委托标签，prompt 是子任务完整指令。可传 task_id 继续同一子任务。子任务不能询问用户或再次委托。",
+  description: [
+    "委托一个需要独立上下文、多步执行的前台子任务。",
+    buildGoldenDescendantsPrompt(),
+    "父任务会等待结果；description 只用于向用户显示委托标签，prompt 是子任务完整指令。可传 task_id 继续同一子任务。子任务不能询问用户或再次委托。",
+  ].filter(Boolean).join(""),
   parameters: { type: "object", properties: {
     description: { type: "string", description: "给用户显示的 3-40 字任务标签" },
     prompt: { type: "string", description: "子任务完整执行指令" },
     subagent_type: { type: "string", enum: ["general", "document", "search"] },
-    companion_id: { type: "string", enum: ["风堇", "刻律德菈", "长夜月", "遐蝶", "缇宝", "阿格莱雅", "白厄", "丹恒", "海瑟音", "那刻夏", "赛飞儿", "万敌"], description: "本次委托的伙伴名字；必须明确选择一位" },
+    ...(hasGoldenDescendants ? {
+      companion_id: { type: "string", enum: [...goldenDescendantNames], description: "本次委托的黄金裔名字；必须明确选择一位" },
+    } : {}),
     task_id: { type: "string", description: "可选：恢复此前同一子任务" },
-  }, required: ["description", "prompt", "subagent_type", "companion_id"] },
+  }, required: ["description", "prompt", "subagent_type", ...(hasGoldenDescendants ? ["companion_id"] : [])] },
 };
 
 export async function executeTask(

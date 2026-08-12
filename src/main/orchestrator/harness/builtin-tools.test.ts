@@ -31,6 +31,7 @@ describe("Harness user-wait builtins", () => {
 
     expect(taskToolSpec.name).toBe("task");
     expect(JSON.stringify(taskToolSpec.parameters)).toContain("companion_id");
+    expect(taskToolSpec.description).toContain("黄金裔");
     expect(executor).toHaveBeenCalledWith({ description: "检查取消链路", prompt: "检查取消传播并给出证据", subagentType: "general", companionId: "风堇", taskId: undefined });
     expect(result.output).toContain("task-1");
     expect(result.message).not.toContain("检查取消传播");

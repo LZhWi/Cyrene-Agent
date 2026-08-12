@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { TaskCharacterLeasePool } from "./task-character-pool";
+import { TaskCharacterLeasePool, buildGoldenDescendantsPrompt, getGoldenDescendantNames } from "./task-character-pool";
 
 describe("TaskCharacterLeasePool", () => {
+  it("exports one canonical Golden Descendant list for prompts and tool schemas", () => {
+    expect(getGoldenDescendantNames()).toEqual(expect.arrayContaining(["风堇", "万敌"]));
+    expect(buildGoldenDescendantsPrompt()).toContain("黄金裔");
+    expect(buildGoldenDescendantsPrompt()).toContain("风堇");
+  });
   it("leases the companion explicitly selected by the model", () => {
     const pool = new TaskCharacterLeasePool();
     const lease = pool.acquire("chat-a", "风堇");

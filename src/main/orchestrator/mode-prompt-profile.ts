@@ -1,5 +1,6 @@
 import type { ConversationMode } from "../../shared/chat-types";
 import { loadPromptFile } from "../prompts/prompt-loader";
+import { buildGoldenDescendantsPrompt } from "../tasks/task-character-pool";
 
 export type PromptLoader = (filename: string) => string;
 
@@ -11,5 +12,8 @@ const MODE_FILES: Record<ConversationMode, readonly string[]> = {
 };
 
 export function buildModePrompt(mode: ConversationMode, load: PromptLoader = loadPromptFile): string {
-  return MODE_FILES[mode].map(load).filter(Boolean).join("\n\n---\n\n");
+  const goldenDescendants = mode === "work" || mode === "code"
+    ? buildGoldenDescendantsPrompt()
+    : "";
+  return [...MODE_FILES[mode].map(load), goldenDescendants].filter(Boolean).join("\n\n---\n\n");
 }

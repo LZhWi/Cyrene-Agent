@@ -15,4 +15,11 @@ describe("buildModePrompt", () => {
     for (const file of included) expect(prompt).toContain(marker(file));
     for (const file of excluded) expect(prompt).not.toContain(marker(file));
   });
+
+  it("only injects the Golden Descendant roster into task-capable modes", () => {
+    expect(buildModePrompt("work", load)).toContain("可委托的黄金裔");
+    expect(buildModePrompt("code", load)).toContain("可委托的黄金裔");
+    expect(buildModePrompt("chat", load)).not.toContain("可委托的黄金裔");
+    expect(buildModePrompt("learn", load)).not.toContain("可委托的黄金裔");
+  });
 });

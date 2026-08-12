@@ -15,6 +15,22 @@ export const TASK_CHARACTERS: readonly TaskCharacterDefinition[] = [
   })),
 ];
 
+export function getGoldenDescendantNames(): readonly string[] {
+  return TASK_CHARACTERS.map((character) => character.nickname);
+}
+
+export function buildGoldenDescendantsPrompt(): string {
+  const names = getGoldenDescendantNames();
+  return names.length === 0
+    ? ""
+    : [
+      `可委托的黄金裔：${names.join("、")}。`,
+      "复杂任务可以调用 task 委托一位黄金裔在独立上下文中处理；调用时必须在 companion_id 中明确选择一位。",
+      "用户指定某位黄金裔时优先选择该人；若该黄金裔正忙，工具会回告，你应换一位再委托。",
+      "可以自然说“我让风堇先处理这部分”，不要说“派分身”；界面会同步展示你选择的黄金裔。",
+    ].join("\n");
+}
+
 export interface TaskCharacterLease {
   nickname: string;
   assetFileName: string;
