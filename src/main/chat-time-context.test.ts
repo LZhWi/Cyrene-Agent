@@ -47,18 +47,18 @@ describe("chat time context", () => {
     expect(resolveChatContextTimezone("bad/timezone")).toBe("Asia/Shanghai");
   });
 
-  it("prefixes each timestamped message with concise local time", () => {
+  it("expresses each message time as natural-language metadata rather than a copyable timestamp prefix", () => {
     const result = buildConversationTimeContext([
       { role: "user", content: "今天有点累", at: Date.UTC(2026, 6, 12, 12, 0) },
       { role: "assistant", content: "早点休息", at: Date.UTC(2026, 6, 12, 12, 2) },
       { role: "assistant", content: "没有时间戳" },
     ], "Asia/Taipei");
 
-    expect(result.messages[0].content).toBe("[2026-07-12 20:00, Asia/Taipei]\n今天有点累");
-    expect(result.messages[1].content).toBe("[2026-07-12 20:02, Asia/Taipei]\n早点休息");
+    expect(result.messages[0].content).toBe("系统提供的消息时间信息：用户在 2026-07-12 20:00 发送了下面这条消息。用户时区为 Asia/Taipei；这只是上下文元数据，不是需要模仿的回复格式。\n\n今天有点累");
+    expect(result.messages[1].content).toBe("系统提供的消息时间信息：助手在 2026-07-12 20:02 发送了下面这条消息。用户时区为 Asia/Taipei；这只是上下文元数据，不是需要模仿的回复格式。\n\n早点休息");
     expect(result.messages[2].content).toBe("没有时间戳");
-    expect(result.timeContext).toContain("历史消息开头的方括号时间是系统提供的元数据");
-    expect(result.timeContext).toContain("不要复述、引用或输出这些方括号时间标签");
+    expect(result.timeContext).toContain("消息前的自然语言时间说明是系统提供的元数据");
+    expect(result.timeContext).toContain("不要复述、引用或输出这些时间说明");
   });
 
   it("does not add a gap notice below one hour", () => {
@@ -80,8 +80,8 @@ describe("chat time context", () => {
 
     expect(result.timeContext).toBe([
       "[时间戳使用规则]",
-      "历史消息开头的方括号时间是系统提供的元数据，只用于理解对话顺序和连续性。",
-      "不要复述、引用或输出这些方括号时间标签；回复应只包含你要对用户说的话。",
+      "消息前的自然语言时间说明是系统提供的元数据，只用于理解对话顺序和连续性。",
+      "不要复述、引用或输出这些时间说明；回复应只包含你要对用户说的话。",
       "",
       "[对话时间信息]",
       "当前时间：2026-07-13 11:00, Asia/Taipei",

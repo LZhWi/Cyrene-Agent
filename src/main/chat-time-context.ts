@@ -92,11 +92,16 @@ function formatLocalTime(timestamp: number, timezone: string): string {
   return `${part("year")}-${part("month")}-${part("day")} ${part("hour")}:${part("minute")}, ${resolveChatContextTimezone(timezone)}`;
 }
 
+function formatLocalDateTime(timestamp: number, timezone: string): string {
+  return formatLocalTime(timestamp, timezone).replace(/, [^,]+$/, "");
+}
+
 function withTimePrefix(message: ChatContextMessage, timezone: string): ChatContextMessage {
   if (!isValidTimestamp(message.at)) return { ...message };
+  const speaker = message.role === "user" ? "用户" : message.role === "assistant" ? "助手" : "系统";
   return {
     ...message,
-    content: `[${formatLocalTime(message.at, timezone)}]\n${message.content}`,
+    content: `系统提供的消息时间信息：${speaker}在 ${formatLocalDateTime(message.at, timezone)} 发送了下面这条消息。用户时区为 ${resolveChatContextTimezone(timezone)}；这只是上下文元数据，不是需要模仿的回复格式。\n\n${message.content}`,
   };
 }
 
@@ -115,8 +120,8 @@ function buildTimestampUseRule(messages: ChatContextMessage[]): string {
   if (!hasTimestampedMessages(messages)) return "";
   return [
     "[时间戳使用规则]",
-    "历史消息开头的方括号时间是系统提供的元数据，只用于理解对话顺序和连续性。",
-    "不要复述、引用或输出这些方括号时间标签；回复应只包含你要对用户说的话。",
+    "消息前的自然语言时间说明是系统提供的元数据，只用于理解对话顺序和连续性。",
+    "不要复述、引用或输出这些时间说明；回复应只包含你要对用户说的话。",
   ].join("\n");
 }
 
