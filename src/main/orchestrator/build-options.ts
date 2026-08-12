@@ -704,7 +704,8 @@ export async function buildAgentRunOptions(
       trustedAskUserProfile,
       nativeFcSystemContent,
       actionGateSystemPrompt,
-      timeoutMs: deps.chatRequestTimeoutMs,
+      // 不设整轮任务期限；用户取消才停止整个 Agent Run。
+      timeoutMs: 0,
       toolSystemContent,
       soulSystemBaseContent,
       soulSampling,

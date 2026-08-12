@@ -14,7 +14,6 @@ describe("advanced settings markup", () => {
   it("only exposes the three runtime settings that are still supported", () => {
     const panel = advancedPanels();
 
-    expect(panel).toContain('id="chat-request-timeout-sec"');
     expect(panel).toContain('id="model-request-timeout-sec"');
     expect(panel).toContain('id="timeout-user-choice"');
     expect(panel).toContain("询问等待时间（秒）");
@@ -31,6 +30,7 @@ describe("advanced settings markup", () => {
       "timeout-summary",
       "timeout-memory-judge",
       "timeout-vision",
+      "chat-request-timeout-sec",
     ]) {
       expect(panel).not.toContain(`id="${removedId}"`);
     }

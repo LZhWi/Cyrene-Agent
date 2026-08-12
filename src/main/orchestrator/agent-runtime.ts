@@ -283,7 +283,8 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
           contextWindowTokens: settings.contextWindowTokens,
         },
         messages: [{ role: "system" as const, content: systemContent }, ...messages],
-        timeoutMs: getTimeoutSettings().chatRequestTimeout,
+        // 定时任务也不因整轮耗时被中断；仍保留单次模型/工具自身的超时。
+        timeoutMs: 0,
       };
     },
   };

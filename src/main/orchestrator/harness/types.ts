@@ -99,7 +99,7 @@ export interface HarnessConfig {
 
 export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
   maxRounds: 50,
-  totalTimeoutMs: 300_000,
+  totalTimeoutMs: 0,
   userWaitTimeoutMs: 120_000,
   contextWindowTokens: 256_000,
   reservedOutputTokens: 8_192,

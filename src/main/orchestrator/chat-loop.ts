@@ -117,6 +117,8 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
 
   const remainingBudget = (): number => {
     if (options.signal?.aborted) throw new Error("E_SOUL_ONLY_CANCELLED");
+    // 0 表示没有整轮预算；单次请求仍使用局部请求超时。
+    if (options.timeoutMs <= 0 || !Number.isFinite(options.timeoutMs)) return timeout;
     const remaining = options.timeoutMs - (Date.now() - startedAt);
     if (remaining <= 0) throw new Error("E_SOUL_ONLY_TIMEOUT");
     return Math.max(1, Math.min(timeout, remaining));

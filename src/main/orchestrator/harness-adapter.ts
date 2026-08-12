@@ -126,7 +126,8 @@ export async function runHarnessWithAdapter(
     tools,
     vendorConfig,
     config: {
-      totalTimeoutMs: options.timeoutMs,
+      // 0 表示禁用整轮执行时钟；单次模型/工具超时仍由各自策略处理。
+      totalTimeoutMs: 0,
       contextWindowTokens: options.settings.contextWindowTokens,
     },
     signal,

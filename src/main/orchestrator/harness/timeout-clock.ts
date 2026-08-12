@@ -78,6 +78,7 @@ export class TimeoutClock {
 
   /** 是否执行超时 */
   isExecutionTimeout(): boolean {
+    if (this.totalTimeoutMs <= 0 || !Number.isFinite(this.totalTimeoutMs)) return false;
     return this.getActiveExecutionMs() >= this.totalTimeoutMs;
   }
 
@@ -88,6 +89,7 @@ export class TimeoutClock {
 
   /** 剩余执行时间（毫秒） */
   remainingExecutionMs(): number {
+    if (this.totalTimeoutMs <= 0 || !Number.isFinite(this.totalTimeoutMs)) return Number.POSITIVE_INFINITY;
     return Math.max(0, this.totalTimeoutMs - this.getActiveExecutionMs());
   }
 }

@@ -32,7 +32,7 @@ const profiles: Record<TaskSubagentType, TaskAgentProfile> = {
     ].join("\n"),
     allowedToolIds: "inherit",
     maxRounds: 30,
-    timeoutMs: 240_000,
+    timeoutMs: 0,
   },
   document: {
     id: "document",
@@ -54,7 +54,7 @@ const profiles: Record<TaskSubagentType, TaskAgentProfile> = {
       "list_dir",
     ],
     maxRounds: 20,
-    timeoutMs: 180_000,
+    timeoutMs: 0,
   },
   search: {
     id: "search",
@@ -68,7 +68,7 @@ const profiles: Record<TaskSubagentType, TaskAgentProfile> = {
     ].join("\n"),
     allowedToolIds: ["web_search", "fetch_url"],
     maxRounds: 20,
-    timeoutMs: 180_000,
+    timeoutMs: 0,
   },
 };
 

@@ -76,7 +76,7 @@ import { modalState } from "./shared/modal-state";
 import { formatDateTime, escapeHtml } from "./shared/format";
 import { parsePositiveIntOrThrow, parseCommandLine } from "./shared/parse";
 import { apiState } from "./api/state";
-import { apiForm, apiRuntimeForm, presetCards, presetWebsiteLink, displayNameInput, baseUrlInput, baseUrlResetBtn, modelInput, modelInputSuggestions, contextWindowInput, apiKeyInput, apiKeyLabel, apiKeyHint, testConnectionBtn, transportSelect, transportHint, endpointPreview, customEndpointControls, customEndpointOverrides, customEndpointSummary, customEndpointGuideBtn, workFlowAdaptBtn, apiNoteText, multimodalToggle, chatRequestTimeoutSecInput, embeddingDimensionsInput, toggleEnableThinking, toggleDisableThinking, toggleDisableMaxToken } from "./api/dom";
+import { apiForm, apiRuntimeForm, presetCards, presetWebsiteLink, displayNameInput, baseUrlInput, baseUrlResetBtn, modelInput, modelInputSuggestions, contextWindowInput, apiKeyInput, apiKeyLabel, apiKeyHint, testConnectionBtn, transportSelect, transportHint, endpointPreview, customEndpointControls, customEndpointOverrides, customEndpointSummary, customEndpointGuideBtn, workFlowAdaptBtn, apiNoteText, multimodalToggle, embeddingDimensionsInput, toggleEnableThinking, toggleDisableThinking, toggleDisableMaxToken } from "./api/dom";
 import { visionBaseUrlInput, visionApiKeyInput, visionModelInput, visionFieldsWrap, testVisionBtn, visionTestStatus } from "./vision/dom";
 import { appearanceForm, appearanceSaveStatus, runtimeSyncSelect, runtimeSyncNote, windowCornerRadiusInput, windowCornerRadiusVal, petAlwaysOnTopInput, petVisibleInput, petZoomInput, petZoomVal, chatLineHeightInput, chatLineHeightVal, assistantBubbleEnabledInput, chatParaSpacingInput, chatParaSpacingVal, launchAtLoginInput, uiFontCurrent, uiFontImportButton, uiFontResetButton, uiIconSelect, screenshotHotkeyInput, openChromeGpu, disableGpuInput, sidebarVisibleInput, tasksVisibleInput } from "./appearance/dom";
 import { generalForm, generalSaveStatus, languageSelect, defaultChatModeSelect, segmentedOutputSelect, mobileMessageSegmentationSelect, proactiveChatSelect, proactiveDeliveryRow, proactiveDeliverySelect, chatSocialContextEnabledInput, citaEnabledInput, citaEngineSelect, clearChatHistoryBtn, customStyleSamplingBtn, customStylePromptBtn } from "./general/dom";
@@ -183,7 +183,6 @@ if (!window.settings) {
         runtimeSync: "off",
         stickerEnabled: true,
         stickerSize: "standard",
-        chatRequestTimeoutSec: 300,
         citaRepairBudgetSec: 8,
       }),
     saveConfig: (c) => Promise.resolve(c as ModelSettings),
@@ -865,7 +864,6 @@ async function loadConfig(): Promise<void> {
     const threshold = cfg.stickerSimilarityThreshold ?? 0.55;
     stickerThresholdInput.value = String(threshold);
     stickerThresholdVal.textContent = threshold.toFixed(2);
-    chatRequestTimeoutSecInput.value = String(cfg.chatRequestTimeoutSec ?? 300);
     if (embeddingDimensionsInput) {
       embeddingDimensionsInput.value = cfg.embeddingDimensions ? String(cfg.embeddingDimensions) : "";
     }
@@ -966,13 +964,6 @@ runtimeSyncSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((
 
 stickerEnabledInput.addEventListener("change", () => {
   setCyreneSaveStatus("有未保存的更改");
-});
-
-// 任何高级字段改动都标记"有未保存的更改"
-[
-  chatRequestTimeoutSecInput,
-].forEach((el) => {
-  el.addEventListener("input", () => setCyreneSaveStatus("有未保存的更改"));
 });
 
 stickerSizeSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
@@ -1303,14 +1294,6 @@ apiRuntimeForm.addEventListener("submit", async (e) => {
   e.preventDefault();
   setRuntimeSaveStatus("保存中…");
   try {
-    const parsedTimeoutSec = Math.max(30, Math.min(1800, parseInt(chatRequestTimeoutSecInput.value, 10) || 300));
-    await window.settings!.saveConfig({
-      chatRequestTimeoutSec: parsedTimeoutSec,
-    });
-    // 同步总请求超时，并保存仍受支持的模型/询问超时。
-    await window.settings!.saveTimeoutSettings({
-      chatRequestTimeout: parsedTimeoutSec * 1000,
-    });
     if (!await saveTimeoutSettings(false)) return;
     setRuntimeSaveStatus("已保存", "is-ok");
   } catch {
@@ -1343,7 +1326,6 @@ cyrenePanel.addEventListener("submit", async (e) => {
   e.preventDefault();
   setCyreneSaveStatus("保存中…");
   try {
-    const parsedTimeoutSec = Math.max(30, Math.min(1800, parseInt(chatRequestTimeoutSecInput.value, 10) || 300));
     const rawDim = embeddingDimensionsInput?.value?.trim();
     const parsedNum = rawDim ? Number(rawDim) : NaN;
     const parsedDim = Number.isFinite(parsedNum) && parsedNum > 0
@@ -1354,7 +1336,6 @@ cyrenePanel.addEventListener("submit", async (e) => {
       stickerEnabled: stickerEnabledInput.checked,
       stickerSize: getStickerSizeValue(),
       stickerSimilarityThreshold: parseFloat(stickerThresholdInput.value),
-      chatRequestTimeoutSec: parsedTimeoutSec,
       embeddingDimensions: parsedDim && parsedDim > 0 ? parsedDim : undefined,
     });
     setCyreneSaveStatus("已保存", "is-ok");

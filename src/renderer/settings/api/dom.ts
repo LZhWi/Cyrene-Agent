@@ -25,7 +25,6 @@ export const customEndpointGuideBtn = document.getElementById("custom-endpoint-g
 export const workFlowAdaptBtn = document.getElementById("work-flow-adapt-btn") as HTMLButtonElement | null;
 export const apiNoteText = document.getElementById("api-note-text") as HTMLElement;
 export const multimodalToggle = document.getElementById("multimodal-toggle") as HTMLInputElement;
-export const chatRequestTimeoutSecInput = document.getElementById("chat-request-timeout-sec") as HTMLInputElement;
 export const embeddingDimensionsInput = document.getElementById("embedding-dimensions-input") as HTMLInputElement | null;
 export const modelRequestTimeoutSecInput = document.getElementById("model-request-timeout-sec") as HTMLInputElement;
 export const modelRequestTimeoutSecReset = document.getElementById("model-request-timeout-sec-reset-btn") as HTMLButtonElement;
