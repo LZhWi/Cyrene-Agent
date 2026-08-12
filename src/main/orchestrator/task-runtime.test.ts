@@ -55,6 +55,7 @@ describe("TaskRuntime", () => {
       description: "检查取消链路",
       prompt: "检查取消传播并报告证据。",
       subagentType: "general",
+      companionId: "风堇",
     });
 
     expect(result).toEqual({ taskId: "task-1", status: "completed", text: "检查完成。" });
@@ -85,6 +86,7 @@ describe("TaskRuntime", () => {
       description: "继续已有任务",
       prompt: "继续。",
       subagentType: "general",
+      companionId: "风堇",
       taskId: foreign.id,
     })).rejects.toThrow("TASK_PARENT_MISMATCH");
   });
@@ -117,6 +119,7 @@ describe("TaskRuntime", () => {
       description: "继续检查取消链路",
       prompt: "继续。",
       subagentType: "general",
+      companionId: "风堇",
       taskId: task.id,
     });
 
@@ -146,6 +149,7 @@ describe("TaskRuntime", () => {
       description: "检查取消链路",
       prompt: "检查取消传播并报告证据。",
       subagentType: "general",
+      companionId: "风堇",
     });
 
     expect(store.get(result.taskId)?.todoItems).toEqual([
@@ -161,10 +165,10 @@ describe("TaskRuntime", () => {
       finalAnswer: "检查完成。", finalState: { todoItems: [], uncertainEffects: [] },
       terminated: false, rounds: 1, terminal: { status: "success" as const, externalEffectsMayContinue: false },
     }));
-    const execute = createTaskExecutor({ parent, store, runHarness, characterPool, random: () => 0, onLifecycle: (event) => lifecycle.push(event) });
+    const execute = createTaskExecutor({ parent, store, runHarness, characterPool, onLifecycle: (event) => lifecycle.push(event) });
 
-    await execute({ description: "检查取消链路", prompt: "这是不能出现在父事件里的私密指令", subagentType: "general" });
-    const next = characterPool.acquire("conversation-1", () => 0);
+    await execute({ description: "检查取消链路", prompt: "这是不能出现在父事件里的私密指令", subagentType: "general", companionId: "风堇" });
+    const next = characterPool.acquire("conversation-1", "风堇");
 
     expect(lifecycle).toEqual([
       { invocationId: "child-run-1", taskId: "task-1", description: "检查取消链路", nickname: "风堇", assetFileName: "风堇.png", status: "running" },
@@ -182,13 +186,13 @@ describe("TaskRuntime", () => {
     const characterPool = new TaskCharacterLeasePool();
     const lifecycle: Array<{ status: string }> = [];
     const execute = createTaskExecutor({
-      parent, store, characterPool, random: () => 0, onLifecycle: (event) => lifecycle.push(event),
+      parent, store, characterPool, onLifecycle: (event) => lifecycle.push(event),
       runHarness: vi.fn(async () => ({ finalAnswer: "", finalState: { todoItems: [], uncertainEffects: [] }, terminated: true, rounds: 1, terminal })),
     });
 
-    await execute({ description: "检查异常结算", prompt: "执行", subagentType: "general" });
+    await execute({ description: "检查异常结算", prompt: "执行", subagentType: "general", companionId: "风堇" });
 
     expect(lifecycle.at(-1)?.status).toBe(expected);
-    expect(characterPool.acquire("conversation-1", () => 0).nickname).toBe("风堇");
+    expect(characterPool.acquire("conversation-1", "风堇").nickname).toBe("风堇");
   });
 });

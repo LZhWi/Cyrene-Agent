@@ -15,6 +15,7 @@ export interface TaskExecuteRequest {
   description: string;
   prompt: string;
   subagentType: TaskSubagentType;
+  companionId: string;
   taskId?: string;
 }
 
@@ -61,7 +62,6 @@ export function createTaskExecutor(input: {
   store: TaskSessionStore;
   runHarness?: typeof runCyreneHarness;
   characterPool?: Pick<TaskCharacterLeasePool, "acquire">;
-  random?: () => number;
   onLifecycle?: (event: TaskDelegationPresentation) => void;
 }): (request: TaskExecuteRequest) => Promise<TaskExecuteResult> {
   const runHarness = input.runHarness ?? runCyreneHarness;
@@ -95,7 +95,7 @@ export function createTaskExecutor(input: {
       allowedSkillIds: input.parent.capabilities?.skillIds,
     };
 
-    const lease = characterPool.acquire(input.parent.parentConversationId, input.random);
+    const lease = characterPool.acquire(input.parent.parentConversationId, request.companionId);
     const presentation = {
       invocationId: session.childRunId,
       taskId: session.id,

@@ -26,13 +26,14 @@ export const TASK_TOOL_ID = "task";
 
 export const taskToolSpec: ToolSpec = {
   name: TASK_TOOL_ID,
-  description: "委托一个需要独立上下文、多步执行的前台子任务。父任务会等待结果；description 只用于向用户显示委托标签，prompt 是子任务完整指令。可传 task_id 继续同一子任务。子任务不能询问用户或再次委托。",
+  description: "委托一个需要独立上下文、多步执行的前台子任务。你必须在 companion_id 中选择一位伙伴：风堇、刻律德菈、长夜月、遐蝶、缇宝、阿格莱雅、白厄、丹恒、海瑟音、那刻夏、赛飞儿、万敌。父任务会等待结果；description 只用于向用户显示委托标签，prompt 是子任务完整指令。可传 task_id 继续同一子任务。子任务不能询问用户或再次委托。",
   parameters: { type: "object", properties: {
     description: { type: "string", description: "给用户显示的 3-40 字任务标签" },
     prompt: { type: "string", description: "子任务完整执行指令" },
     subagent_type: { type: "string", enum: ["general", "document", "search"] },
+    companion_id: { type: "string", enum: ["风堇", "刻律德菈", "长夜月", "遐蝶", "缇宝", "阿格莱雅", "白厄", "丹恒", "海瑟音", "那刻夏", "赛飞儿", "万敌"], description: "本次委托的伙伴名字；必须明确选择一位" },
     task_id: { type: "string", description: "可选：恢复此前同一子任务" },
-  }, required: ["description", "prompt", "subagent_type"] },
+  }, required: ["description", "prompt", "subagent_type", "companion_id"] },
 };
 
 export async function executeTask(
@@ -44,12 +45,14 @@ export async function executeTask(
   const description = typeof args.description === "string" ? args.description.trim() : "";
   const prompt = typeof args.prompt === "string" ? args.prompt.trim() : "";
   const subagentType = args.subagent_type;
+  const companionId = typeof args.companion_id === "string" ? args.companion_id.trim() : "";
   const taskId = typeof args.task_id === "string" ? args.task_id.trim() || undefined : undefined;
   if (description.length < 3 || description.length > 40 || !prompt
+    || !companionId
     || (subagentType !== "general" && subagentType !== "document" && subagentType !== "search")) {
-    return { outcome: "failure", category: "invalid_arguments", tool: TASK_TOOL_ID, message: "task 需要 3-40 字 description、非空 prompt 与合法 subagent_type" };
+    return { outcome: "failure", category: "invalid_arguments", tool: TASK_TOOL_ID, message: "task 需要 3-40 字 description、非空 prompt、合法 subagent_type 与明确 companion_id" };
   }
-  const result = await executor({ description, prompt, subagentType, taskId });
+  const result = await executor({ description, prompt, subagentType, companionId, taskId });
   return { outcome: result.status === "completed" ? "success" : "failure", tool: TASK_TOOL_ID,
     message: `子任务“${description}”已${result.status === "completed" ? "完成" : result.status}。`,
     output: JSON.stringify({ taskId: result.taskId, status: result.status, text: result.text }) };

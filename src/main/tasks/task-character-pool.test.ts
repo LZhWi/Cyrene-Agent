@@ -2,32 +2,27 @@ import { describe, expect, it } from "vitest";
 import { TaskCharacterLeasePool } from "./task-character-pool";
 
 describe("TaskCharacterLeasePool", () => {
-  it("uses the fixed weight boundaries before renormalization", () => {
+  it("leases the companion explicitly selected by the model", () => {
     const pool = new TaskCharacterLeasePool();
-    expect(pool.acquire("chat-a", () => 0).nickname).toBe("风堇");
-    expect(pool.acquire("chat-b", () => 0.149).nickname).toBe("风堇");
-    expect(pool.acquire("chat-c", () => 0.15).nickname).toBe("刻律德菈");
+    const lease = pool.acquire("chat-a", "风堇");
+
+    expect(lease).toMatchObject({ nickname: "风堇", assetFileName: "风堇.png" });
   });
 
-  it("removes active names and renormalizes all remaining weights by the same denominator", () => {
+  it("rejects an unknown or already busy companion in the same conversation", () => {
     const pool = new TaskCharacterLeasePool();
-    const first = pool.acquire("chat-a", () => 0);
-    const second = pool.acquire("chat-a", () => 0);
+    pool.acquire("chat-a", "风堇");
 
-    expect(first.nickname).toBe("风堇");
-    expect(second.nickname).toBe("刻律德菈");
-
-    first.release();
-    expect(pool.acquire("chat-a", () => 0).nickname).toBe("风堇");
+    expect(() => pool.acquire("chat-a", "风堇")).toThrow("TASK_COMPANION_BUSY");
+    expect(() => pool.acquire("chat-a", "未知角色")).toThrow("TASK_COMPANION_UNKNOWN");
   });
 
-  it("releases a lease idempotently and never duplicates any of twelve active names", () => {
+  it("releases an explicit lease idempotently", () => {
     const pool = new TaskCharacterLeasePool();
-    const leases = Array.from({ length: 12 }, () => pool.acquire("chat-a", () => 0));
-    expect(new Set(leases.map((lease) => lease.nickname))).toHaveLength(12);
-    expect(() => pool.acquire("chat-a", () => 0)).toThrow("TASK_CHARACTER_POOL_EXHAUSTED");
-    leases[0].release();
-    leases[0].release();
-    expect(pool.acquire("chat-a", () => 0).nickname).toBe("风堇");
+    const lease = pool.acquire("chat-a", "风堇");
+    lease.release();
+    lease.release();
+
+    expect(pool.acquire("chat-a", "风堇").nickname).toBe("风堇");
   });
 });

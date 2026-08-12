@@ -26,13 +26,23 @@ describe("Harness user-wait builtins", () => {
   it("validates and delegates a foreground task without exposing its prompt", async () => {
     const executor = vi.fn(async () => ({ taskId: "task-1", status: "completed" as const, text: "已检查。" }));
     const result = await executeTask({ id: "task-call", name: "task", arguments: JSON.stringify({
-      description: "检查取消链路", prompt: "检查取消传播并给出证据", subagent_type: "general",
+      description: "检查取消链路", prompt: "检查取消传播并给出证据", subagent_type: "general", companion_id: "风堇",
     }) }, executor);
 
     expect(taskToolSpec.name).toBe("task");
-    expect(executor).toHaveBeenCalledWith({ description: "检查取消链路", prompt: "检查取消传播并给出证据", subagentType: "general", taskId: undefined });
+    expect(JSON.stringify(taskToolSpec.parameters)).toContain("companion_id");
+    expect(executor).toHaveBeenCalledWith({ description: "检查取消链路", prompt: "检查取消传播并给出证据", subagentType: "general", companionId: "风堇", taskId: undefined });
     expect(result.output).toContain("task-1");
     expect(result.message).not.toContain("检查取消传播");
+  });
+  it("requires the model to select a companion for a task", async () => {
+    const executor = vi.fn();
+    const result = await executeTask({ id: "task-call", name: "task", arguments: JSON.stringify({
+      description: "检查取消链路", prompt: "检查取消传播并给出证据", subagent_type: "general",
+    }) }, executor);
+
+    expect(result).toMatchObject({ outcome: "failure", category: "invalid_arguments" });
+    expect(executor).not.toHaveBeenCalled();
   });
   it("advertises a bounded general Ask contract to the model", () => {
     const questions = (askUserToolSpec.parameters as { properties?: Record<string, unknown> })
