@@ -22,9 +22,9 @@
 
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
 import { logger, LogTag } from "../../logger";
 import { getCurrentLevel } from "../../permission";
+import type { AgentFileAccessLevel } from "../../permission-policy";
 
 // ── 模块级单例 ──────────────────────────────────────────
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -36,6 +36,7 @@ let srtWin: any = null;
 let sandboxReady = false;
 let sandboxDisabled = false;
 let initAttempted = false;
+let sandboxSessionKey: string | null = null;
 
 // ── 环境开关 ────────────────────────────────────────────
 
@@ -95,11 +96,8 @@ function detectProjectRoot(cwd: string): string {
 // ── 按档位构建 per-call filesystem 配置 ──────────────────
 
 /**
- * 根据当前权限档位构建 per-call customConfig.filesystem。
- * - project-read-only: allowRead=[项目根], allowWrite=[]（只能读项目根，不能写）
- * - read-only: allowWrite=[]（读不限制，不能写）
- * - scoped: allowWrite=[cwd, homedir]（可在 cwd 和用户目录写）
- * - per-action: disabled=true（用户已审批，fs 不限制）
+ * Windows 的 allowRead/allowWrite 只能在 SandboxManager.initialize 时授权。
+ * 每次命令只传 deny 规则，避免 SRT 拒绝 per-exec grant。
  * - full: 返回 null（不走沙箱，调用方直接 spawn）
  *
  * allowWrite 目录会先 mkdirSync 确保存在（ACL grant 依赖）。
@@ -112,42 +110,16 @@ function buildFilesystemConfigForLevel(
   logger.info(LogTag.Runtime, `[Sandbox] buildFilesystemConfigForLevel: level=${level} cwd=${cwd}`);
 
   switch (level) {
-    case "project-read-only": {
-      const projectRoot = detectProjectRoot(cwd);
-      logger.info(LogTag.Runtime, `[Sandbox] fs config [project-read-only]: allowRead=[${projectRoot}] allowWrite=[] denyRead=[] denyWrite=[]`);
-      return {
-        filesystem: {
-          allowRead: [projectRoot],
-          allowWrite: [],
-          denyRead: [],
-          denyWrite: [],
-        },
-      };
-    }
+    case "project-read-only":
     case "read-only":
-      logger.info(LogTag.Runtime, `[Sandbox] fs config [read-only]: allowWrite=[] denyRead=[] denyWrite=[] (reads unrestricted)`);
+    case "scoped":
+      logger.info(LogTag.Runtime, `[Sandbox] fs config [${level}]: per-exec denies only; grants were applied at session initialization`);
       return {
         filesystem: {
-          allowWrite: [],
           denyRead: [],
           denyWrite: [],
         },
       };
-    case "scoped": {
-      const homedir = os.homedir();
-      const allowWriteDirs = [cwd, homedir];
-      for (const d of allowWriteDirs) {
-        try { fs.mkdirSync(d, { recursive: true }); } catch { /* 幂等 */ }
-      }
-      logger.info(LogTag.Runtime, `[Sandbox] fs config [scoped]: allowWrite=[${allowWriteDirs.join(", ")}] denyRead=[] denyWrite=[]`);
-      return {
-        filesystem: {
-          allowWrite: allowWriteDirs,
-          denyRead: [],
-          denyWrite: [],
-        },
-      };
-    }
     case "per-action":
       logger.info(LogTag.Runtime, `[Sandbox] fs config [per-action]: filesystem.disabled=true (user approved, fs unrestricted)`);
       return {
@@ -167,23 +139,35 @@ function buildFilesystemConfigForLevel(
  * 构建 SandboxManager.initialize 接受的 config。
  * allowWrite 目录必须先存在，否则 ACL grant 被丢弃。
  */
-function buildSandboxConfig(allowWriteCwd: string): SrtModule["SandboxRuntimeConfig"] {
+export function resolveSandboxSessionFilesystem(level: AgentFileAccessLevel, workspaceRoot: string): { allowRead?: string[]; allowWrite: string[]; denyRead: string[]; denyWrite: string[]; disabled?: boolean } {
+  switch (level) {
+    case "project-read-only":
+      return { allowRead: [workspaceRoot], allowWrite: [], denyRead: [], denyWrite: [] };
+    case "read-only":
+      return { allowWrite: [], denyRead: [], denyWrite: [] };
+    case "scoped":
+      return { allowWrite: [workspaceRoot], denyRead: [], denyWrite: [] };
+    case "per-action":
+      // 用户已审批本次操作，但 Windows 仍须在会话初始化时授予该工作区访问权。
+      return { allowWrite: [workspaceRoot], denyRead: [], denyWrite: [] };
+    case "full":
+      return { allowWrite: [], denyRead: [], denyWrite: [], disabled: true };
+  }
+}
+
+function buildSandboxConfig(level: AgentFileAccessLevel, workspaceRoot: string): SrtModule["SandboxRuntimeConfig"] {
   // 确保 allowWrite 目录存在（ACL grant 依赖）
   try {
-    fs.mkdirSync(allowWriteCwd, { recursive: true });
+    fs.mkdirSync(workspaceRoot, { recursive: true });
   } catch (err) {
-    logger.warn(LogTag.Runtime, `[Sandbox] mkdir allowWrite failed: ${allowWriteCwd}`, err);
+    logger.warn(LogTag.Runtime, `[Sandbox] mkdir workspace root failed: ${workspaceRoot}`, err);
   }
   return {
     network: {
       allowedDomains: [],
       deniedDomains: [],
     },
-    filesystem: {
-      denyRead: [],
-      allowWrite: [allowWriteCwd],
-      denyWrite: [],
-    },
+    filesystem: resolveSandboxSessionFilesystem(level, workspaceRoot),
     windows: {
       srtWin: { path: srtModule.VENDORED_SRT_WIN_EXE },
     },
@@ -194,11 +178,13 @@ function buildSandboxConfig(allowWriteCwd: string): SrtModule["SandboxRuntimeCon
  * 初始化 SandboxManager（装好之后调用）。
  * 不做安装，不做状态检查 — 调用方确保已 provisioned。
  */
-async function initSandboxManager(cwd: string): Promise<void> {
+async function initSandboxManager(level: AgentFileAccessLevel, cwd: string): Promise<void> {
   if (!srtModule) throw new Error("SRT module not loaded");
-  const config = buildSandboxConfig(cwd);
+  const workspaceRoot = level === "project-read-only" ? detectProjectRoot(cwd) : path.resolve(cwd);
+  const config = buildSandboxConfig(level, workspaceRoot);
   logger.info(LogTag.Runtime, `[Sandbox] initSandboxManager: cwd=${cwd} allowWrite=${config.filesystem.allowWrite.join(",")} srtWin=${srtModule.VENDORED_SRT_WIN_EXE}`);
   await srtModule.SandboxManager.initialize(config);
+  sandboxSessionKey = JSON.stringify({ level, workspaceRoot });
   logger.info(LogTag.Runtime, "[Sandbox] SandboxManager.initialize completed");
 }
 
@@ -206,7 +192,7 @@ async function initSandboxManager(cwd: string): Promise<void> {
 
 /**
  * 启动时检测 SRT 安装状态。
- * - 装了 → 初始化 SandboxManager → sandboxReady=true
+ * - 装了 → 仅检查可用性；首次需要执行时才对实际工作区初始化 ACL
  * - 没装 → 留 not-ready（不主动安装，避免启动时弹 UAC）
  * - 出错 → 标记 disabled，fallback 到直接 spawn
  *
@@ -244,9 +230,7 @@ export async function initSandbox(): Promise<void> {
     // wfp.state='absent' 表示 WFP 没装；provisioned 但 absent 时也能跑（fs 沙箱生效，network 放行）
     // 这里只在 user 已 provisioned 时即认为可用
 
-    await initSandboxManager(process.cwd());
-    sandboxReady = true;
-    logger.info(LogTag.Runtime, "[Sandbox] ready (sandboxed execution enabled)");
+    logger.info(LogTag.Runtime, "[Sandbox] provisioned; will initialize ACL for the active workspace on first sandboxed command");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     logger.error(LogTag.Runtime, `[Sandbox] init failed, disabling: ${msg}`);
@@ -255,11 +239,12 @@ export async function initSandbox(): Promise<void> {
 }
 
 /**
- * 沙箱是否已就绪（不触发 lazy install）。
- * executeRunShell 用这个判断 workspace_mutation 能否放行进沙箱。
+ * 沙箱是否可尝试执行（不触发 lazy install）。
+ * 只要 SRT 已加载且未被禁用，就允许 run_shell 进入 wrapWithSandbox，
+ * 由后者为实际工作区建立会话授权；初始化失败仍会被严格拒绝。
  */
 export function isSandboxReady(): boolean {
-  return sandboxReady && !sandboxDisabled;
+  return !!srtModule && !sandboxDisabled;
 }
 
 /**
@@ -270,12 +255,15 @@ export function isSandboxReady(): boolean {
  *
  * UAC 取消不算错误（用户可能只是这次不想装），下次还会再试。
  */
-async function ensureSandboxReady(): Promise<boolean> {
+export async function ensureSandboxReady(cwd: string = process.cwd()): Promise<boolean> {
   if (sandboxDisabled || !isWindows()) {
     logger.info(LogTag.Runtime, `[Sandbox] ensureSandboxReady: skip (sandboxDisabled=${sandboxDisabled} isWindows=${isWindows()})`);
     return false;
   }
-  if (sandboxReady) {
+  const level = getCurrentLevel();
+  const workspaceRoot = level === "project-read-only" ? detectProjectRoot(cwd) : path.resolve(cwd);
+  const desiredSessionKey = JSON.stringify({ level, workspaceRoot });
+  if (sandboxReady && sandboxSessionKey === desiredSessionKey) {
     logger.info(LogTag.Runtime, "[Sandbox] ensureSandboxReady: already ready");
     return true;
   }
@@ -297,7 +285,12 @@ async function ensureSandboxReady(): Promise<boolean> {
       }
       logger.info(LogTag.Runtime, `[Sandbox] install completed: user.provisioned=${installResult.user?.provisioned} wfp.state=${installResult.wfp?.state}`);
     }
-    await initSandboxManager(process.cwd());
+    if (sandboxReady) {
+      await srtModule.SandboxManager.reset();
+      sandboxReady = false;
+      sandboxSessionKey = null;
+    }
+    await initSandboxManager(level, workspaceRoot);
     sandboxReady = true;
     logger.info(LogTag.Runtime, "[Sandbox] ready (lazy init)");
     return true;
@@ -316,10 +309,10 @@ async function ensureSandboxReady(): Promise<boolean> {
  *          null 表示沙箱不可用或 wrap 失败，调用方 fallback 到直接 spawn。
  *
  * 流程：
- * 1. 沙箱未就绪 → 先 ensureSandboxReady()（可能弹 UAC，失败返回 null）
+ * 1. 沙箱未就绪 → 先 ensureSandboxReady(cwd)（可能弹 UAC，失败返回 null）
  * 2. 拼 command 字符串（含空格路径用双引号）
  * 3. 调 wrapWithSandboxArgv(cmdStr, undefined, customConfig, undefined, cwd)
- *    customConfig.filesystem.allowWrite=[cwd]（mkdir 后）保证命令能写自己的 cwd
+ *    工作区读写权限已在初始化阶段授予；customConfig 仅承载本次命令的 deny 规则
  */
 export async function wrapWithSandbox(
   command: string,
@@ -340,7 +333,8 @@ export async function wrapWithSandbox(
     return null;
   }
 
-  const ready = await ensureSandboxReady();
+  const resolvedCwd = cwd || process.cwd();
+  const ready = await ensureSandboxReady(resolvedCwd);
   if (!ready || !srtModule) {
     logger.info(LogTag.Runtime, `[Sandbox] wrapWithSandbox: sandbox not ready (ready=${ready} srtModule=${!!srtModule}), returning null`);
     return null;
@@ -348,7 +342,6 @@ export async function wrapWithSandbox(
 
   try {
     const cmdStr = buildCommandString(command, args);
-    const resolvedCwd = cwd || process.cwd();
     logger.info(LogTag.Runtime, `[Sandbox] wrapWithSandbox: cmdStr="${cmdStr}" resolvedCwd=${resolvedCwd}`);
 
     // 确保 cwd 存在（ACL grant 依赖；mkdirSync recursive 是幂等的）

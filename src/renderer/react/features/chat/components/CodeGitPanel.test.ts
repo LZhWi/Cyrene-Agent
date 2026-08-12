@@ -1,4 +1,6 @@
 import React from "react";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it, vi } from "vitest";
 
@@ -7,13 +9,20 @@ vi.mock("../../../assets/status-moods/工作中.png?url", () => ({ default: "wor
 import { CodeGitPanel } from "./CodeGitPanel";
 
 describe("CodeGitPanel", () => {
+  it("uses an application modal instead of Electron's unsupported prompt for Git operations", () => {
+    const source = readFileSync(resolve(__dirname, "CodeGitPanel.tsx"), "utf8");
+
+    expect(source).toContain('from "antd"');
+    expect(source).toContain("<Modal");
+    expect(source).not.toContain("window.prompt");
+  });
+
   it("keeps Git actions in the fixed area and Todo in its own scrollable list without a Review entry", () => {
     (globalThis as typeof globalThis & { React: typeof React }).React = React;
     const html = renderToStaticMarkup(React.createElement(CodeGitPanel, {
       sessionId: "s1",
       projectName: "cyrene-project",
       todoState: { updatedAt: 1, todos: [{ id: "t1", content: "完成审阅 UI", status: "pending" }] },
-      onRequestAgentAction: vi.fn(),
     }));
 
     expect(html).toContain("模式：Code");
