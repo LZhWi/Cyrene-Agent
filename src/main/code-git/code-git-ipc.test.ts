@@ -27,6 +27,9 @@ function createHarness() {
     })),
     watchSession: vi.fn(async () => undefined),
     unwatchSession: vi.fn(async () => undefined),
+    switchBranchForSession: vi.fn(async () => "已切换到分支 feature/x"),
+    commitForSession: vi.fn(async () => "已创建提交 abc1234"),
+    pushForSession: vi.fn(async () => "已推送到 origin"),
     onChanged: vi.fn((listener: (payload: CodeGitChangedPayload) => void) => {
       onChanged = listener;
       return () => undefined;
@@ -79,5 +82,15 @@ describe("registerCodeGitIpc", () => {
 
     expect(harness.service.watchSession).toHaveBeenCalledWith("session-1");
     expect(harness.service.unwatchSession).toHaveBeenCalledWith("session-1");
+  });
+
+  it("performs a direct branch switch and commit without accepting a workspace path", async () => {
+    const harness = createHarness();
+
+    await harness.handlers.get(IPC.CODE_GIT_SWITCH_BRANCH)?.({}, { sessionId: "session-1", branch: "feature/x", create: false });
+    await harness.handlers.get(IPC.CODE_GIT_COMMIT)?.({}, { sessionId: "session-1", message: "feat: x", paths: ["src/a.ts"] });
+
+    expect(harness.service.switchBranchForSession).toHaveBeenCalledWith("session-1", "feature/x", false);
+    expect(harness.service.commitForSession).toHaveBeenCalledWith("session-1", "feat: x", ["src/a.ts"]);
   });
 });

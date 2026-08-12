@@ -99,6 +99,9 @@ export interface GitService {
   watchSession(sessionId: string): Promise<void>;
   unwatchSession(sessionId: string): Promise<void>;
   dispose(): Promise<void>;
+  switchBranchForSession(sessionId: string, branch: string, create: boolean): Promise<string>;
+  commitForSession(sessionId: string, message: string, paths: string[]): Promise<string>;
+  pushForSession(sessionId: string): Promise<string>;
 }
 
 export interface TrustedGitContext {
@@ -143,6 +146,12 @@ export function createGitService(deps: GitServiceDeps): GitService {
     return createClient({ workspaceRoot: ctx.workspaceRoot, executable });
   }
 
+  async function trustedContextForSession(sessionId: string): Promise<TrustedGitContext> {
+    const resolved = await resolveCodeSession(sessionId);
+    if (isCodeGitStatus(resolved)) throw new Error(resolved.message ?? "Git 状态暂时不可用");
+    return { sessionId, mode: "code", workspaceRoot: resolved.workspaceRoot };
+  }
+
   function emitChanged(sessionId: string): void {
     for (const listener of listeners) listener({ sessionId });
   }
@@ -163,6 +172,15 @@ export function createGitService(deps: GitServiceDeps): GitService {
 
     unwatchSession: (sessionId) => workspaceWatcher.unsubscribe(sessionId),
     dispose: () => workspaceWatcher.dispose(),
+    async switchBranchForSession(sessionId, branch, create) {
+      return this.switchBranch(await trustedContextForSession(sessionId), branch, create);
+    },
+    async commitForSession(sessionId, message, paths) {
+      return this.commit(await trustedContextForSession(sessionId), message, paths);
+    },
+    async pushForSession(sessionId) {
+      return this.push(await trustedContextForSession(sessionId));
+    },
 
     async initRepository(ctx) {
       const client = await clientForTrustedContext(ctx);

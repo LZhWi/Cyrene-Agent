@@ -16,7 +16,7 @@ interface WindowLike {
 export interface RegisterCodeGitIpcDeps {
   ipcMain?: IpcMainLike;
   getWindows?: () => WindowLike[];
-  service: Pick<GitService, "getStatusForSession" | "getDiffForSession" | "watchSession" | "unwatchSession" | "onChanged">;
+  service: Pick<GitService, "getStatusForSession" | "getDiffForSession" | "watchSession" | "unwatchSession" | "switchBranchForSession" | "commitForSession" | "pushForSession" | "onChanged">;
 }
 
 export function registerCodeGitIpc(deps: RegisterCodeGitIpcDeps): void {
@@ -57,6 +57,17 @@ export function registerCodeGitIpc(deps: RegisterCodeGitIpcDeps): void {
 
   main.handle(IPC.CODE_GIT_WATCH, (_event, sessionId: unknown) => deps.service.watchSession(requireSessionId(sessionId)));
   main.handle(IPC.CODE_GIT_UNWATCH, (_event, sessionId: unknown) => deps.service.unwatchSession(requireSessionId(sessionId)));
+  main.handle(IPC.CODE_GIT_SWITCH_BRANCH, (_event, payload: unknown) => {
+    const input = payload as { sessionId?: unknown; branch?: unknown; create?: unknown } | null;
+    if (typeof input?.branch !== "string") throw new Error("缺少分支名称");
+    return deps.service.switchBranchForSession(requireSessionId(input.sessionId), input.branch, input.create === true);
+  });
+  main.handle(IPC.CODE_GIT_COMMIT, (_event, payload: unknown) => {
+    const input = payload as { sessionId?: unknown; message?: unknown; paths?: unknown } | null;
+    if (typeof input?.message !== "string" || !Array.isArray(input.paths) || input.paths.some((value) => typeof value !== "string" || !isSafeRendererRelativePath(value))) throw new Error("提交参数无效");
+    return deps.service.commitForSession(requireSessionId(input.sessionId), input.message, input.paths);
+  });
+  main.handle(IPC.CODE_GIT_PUSH, (_event, sessionId: unknown) => deps.service.pushForSession(requireSessionId(sessionId)));
 
   deps.service.onChanged((payload) => {
     for (const window of getWindows()) {

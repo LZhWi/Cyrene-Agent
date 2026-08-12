@@ -2123,7 +2123,6 @@ export function ChatPage() {
             sessionId={activeSessionId}
             projectName={workspaceNames.code}
             todoState={todoStateBySession[activeSessionId] ?? null}
-            onRequestAgentAction={(prompt) => setDrafts((current) => ({ ...current, [scopeKey]: prompt }))}
           />
         )}
         {hasMessages && (

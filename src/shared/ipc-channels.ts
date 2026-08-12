@@ -50,6 +50,9 @@ export const IPC = {
   CODE_GIT_CHANGED: "code-git:changed",
   CODE_GIT_WATCH: "code-git:watch",
   CODE_GIT_UNWATCH: "code-git:unwatch",
+  CODE_GIT_SWITCH_BRANCH: "code-git:switch-branch",
+  CODE_GIT_COMMIT: "code-git:commit",
+  CODE_GIT_PUSH: "code-git:push",
 
   // sidebar window (status / schedule / settings entry)
   SIDEBAR_MINIMIZE: "sidebar:minimize",

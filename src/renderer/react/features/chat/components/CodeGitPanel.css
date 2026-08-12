@@ -26,6 +26,10 @@
 .cy-code-git__git-actions code { max-width:112px; overflow:hidden; color:#777; font-family:Consolas,"Cascadia Mono",monospace; font-size:11px; white-space:nowrap; text-overflow:ellipsis; }
 .cy-code-git__git-actions b { color:#aaa; font-size:15px; }
 .cy-code-git__added { color:#16a34a; font-weight:600; }.cy-code-git__deleted { color:#dc2626; font-weight:600; }
+.cy-code-git__popover { display:flex; flex-direction:column; gap:3px; margin:2px 5px 5px; padding:5px; border:1px solid #f1dfe5; border-radius:8px; background:#fff8fb; }
+.cy-code-git__popover button { display:block; min-height:26px; width:100%; padding:4px 6px; border:0; border-radius:5px; background:transparent; color:#4a4043; font-size:11px; text-align:left; cursor:pointer; }.cy-code-git__popover button:hover:not(:disabled) { background:#ffeaf1; }.cy-code-git__popover button:disabled { color:#999; cursor:default; }
+.cy-code-git__commit-popover input { min-width:0; padding:6px 7px; border:1px solid #eadbe0; border-radius:6px; outline:none; background:#fff; font-size:11px; }.cy-code-git__commit-popover input:focus { border-color:#ff9bb7; }
+.cy-code-git__operation-error { margin:3px 5px; color:#c2415b; font-size:10px; line-height:1.35; }
 .cy-code-git__divider { height:1px; margin:9px 0; flex:0 0 auto; background:rgba(255,91,138,.18); }
 .cy-code-git__todo-heading { display:flex; align-items:baseline; justify-content:space-between; margin-bottom:7px; font-size:12px; font-weight:700; }
 .cy-code-git__todo-heading small { color:#888; font-size:10px; font-weight:400; }
