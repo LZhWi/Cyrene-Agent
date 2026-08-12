@@ -16,16 +16,6 @@ export function parsePositiveIntOrThrow(input: string, th: any) {
   return result;
 }
 
-/** 解析秒数（支持小数），返回毫秒；空串返回 -1；不合法时抛出 th。 */
-export function parseN1SecToMsOrThrow(input: string, th: any): number {
-  if (input === "") return -1;
-  const result = parseFloat(input);
-  if (Number.isNaN(result) || result <= 0) {
-    throw th;
-  }
-  return Math.round(result * 1000);
-}
-
 /** 简易命令行解析：支持引号包裹的参数，拆分为 { command, args }。 */
 export function parseCommandLine(input: string): { command: string; args: string[] } {
   const trimmed = input.trim();

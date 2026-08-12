@@ -71,13 +71,12 @@ import { memoryState } from "./memory/state";
 import { memoryL0NameInput, memoryL0OccupationInput, memoryL0InterestsInput, memoryL0LanguageInput, memoryL0NoteInput, memoryL1GoalsInput, memoryL1PreferencesInput, memoryL1ProjectInput, memoryL2SearchInput, memoryL2List, memoryImportedList, memoryReflectionList, memoryL0EditBtn, memoryL0CancelBtn, memoryL1EditBtn, memoryL1CancelBtn } from "./memory/dom";
 import { schedulerState } from "./scheduler/state";
 import { schedulerNewBtn, schedulerEmpty, schedulerList, schedulerEditor, schedulerEditorTitle, schedulerEditorClose, schedulerTitleInput, schedulerPromptInput, schedulerEnabledInput, schedulerKindInput, schedulerOnceRunAtInput, schedulerTimeOfDayInput, schedulerDayOfWeekInput, schedulerIntervalEveryInput, schedulerIntervalUnitInput, schedulerToolLimitInput, schedulerToolPicker, schedulerToolEmptyHint, schedulerSaveStatus, schedulerCancelBtn, schedulerSaveBtn } from "./scheduler/dom";
-import { timeoutProfileTotalBudgetInput, timeoutProfilePerAttemptInput, timeoutProfileRemainingInput } from "./timeout/dom";
 import { tokensState } from "./tokens/state";
 import { modalState } from "./shared/modal-state";
 import { formatDateTime, escapeHtml } from "./shared/format";
-import { parsePositiveIntOrThrow, parseN1SecToMsOrThrow, parseCommandLine } from "./shared/parse";
+import { parsePositiveIntOrThrow, parseCommandLine } from "./shared/parse";
 import { apiState } from "./api/state";
-import { apiForm, apiRuntimeForm, apiTimeoutForm, presetCards, presetWebsiteLink, displayNameInput, baseUrlInput, baseUrlResetBtn, modelInput, modelInputSuggestions, contextWindowInput, apiKeyInput, apiKeyLabel, apiKeyHint, testConnectionBtn, transportSelect, transportHint, endpointPreview, customEndpointControls, customEndpointOverrides, customEndpointSummary, customEndpointGuideBtn, workFlowAdaptBtn, apiNoteText, multimodalToggle, chatRequestTimeoutSecInput, maxIterationsInput, maxReplansInput, maxRefreshInput, perCallTimeoutSecInput, actionGateRepairBudgetSecInput, embeddingDimensionsInput, modelRequestTimeoutSecInput, modelRequestTimeoutSecReset, toggleEnableThinking, toggleDisableThinking, toggleDisableMaxToken } from "./api/dom";
+import { apiForm, apiRuntimeForm, presetCards, presetWebsiteLink, displayNameInput, baseUrlInput, baseUrlResetBtn, modelInput, modelInputSuggestions, contextWindowInput, apiKeyInput, apiKeyLabel, apiKeyHint, testConnectionBtn, transportSelect, transportHint, endpointPreview, customEndpointControls, customEndpointOverrides, customEndpointSummary, customEndpointGuideBtn, workFlowAdaptBtn, apiNoteText, multimodalToggle, chatRequestTimeoutSecInput, embeddingDimensionsInput, toggleEnableThinking, toggleDisableThinking, toggleDisableMaxToken } from "./api/dom";
 import { visionBaseUrlInput, visionApiKeyInput, visionModelInput, visionFieldsWrap, testVisionBtn, visionTestStatus } from "./vision/dom";
 import { appearanceForm, appearanceSaveStatus, runtimeSyncSelect, runtimeSyncNote, windowCornerRadiusInput, windowCornerRadiusVal, petAlwaysOnTopInput, petVisibleInput, petZoomInput, petZoomVal, chatLineHeightInput, chatLineHeightVal, assistantBubbleEnabledInput, chatParaSpacingInput, chatParaSpacingVal, launchAtLoginInput, uiFontCurrent, uiFontImportButton, uiFontResetButton, uiIconSelect, screenshotHotkeyInput, openChromeGpu, disableGpuInput, sidebarVisibleInput, tasksVisibleInput } from "./appearance/dom";
 import { generalForm, generalSaveStatus, languageSelect, defaultChatModeSelect, segmentedOutputSelect, mobileMessageSegmentationSelect, proactiveChatSelect, proactiveDeliveryRow, proactiveDeliverySelect, chatSocialContextEnabledInput, citaEnabledInput, citaEngineSelect, clearChatHistoryBtn, customStyleSamplingBtn, customStylePromptBtn } from "./general/dom";
@@ -101,7 +100,7 @@ import { MODEL_PRESETS } from "./api/presets";
 import { showModal, showHtmlModal, showInputModal } from "./shared/modal";
 import {
   setSaveStatus, setCyreneSaveStatus, setPreferencesSaveStatus, setAppearanceSaveStatus,
-  setGeneralSaveStatus, setTimeoutSaveStatus, setRuntimeSaveStatus,
+  setGeneralSaveStatus, setRuntimeSaveStatus,
 } from "./shared/save-status";
 import { renderEmptyState, renderInfoList } from "./shared/render";
 import { shallowEqual, safeGet } from "./shared/utils";
@@ -136,7 +135,6 @@ import "./gamebot/panel";  // 副作用导入：游戏代肝插件卡（VLM 配�
 import "./preferences/panel";  // 副作用导入：截图热键捕获 + 表情包列表/添加/删除
 import "./mcp/panel";  // 副作用导入：MCP Server 添加/删除/启停 + 自定义端点接入说明
 import "./tokens/panel";  // 副作用导入：Token 用量图表 + 时间范围切换
-import { renderSkills } from "./skills/panel";  // renderSkills 在切换到 skills 标签时按需调用
 
 // Inline modal (to avoid Vite tree-shaking)
 
@@ -186,12 +184,7 @@ if (!window.settings) {
         stickerEnabled: true,
         stickerSize: "standard",
         chatRequestTimeoutSec: 300,
-        maxIterations: 12,
-        maxReplans: 2,
-        maxRefresh: 1,
-        perCallTimeoutSec: 75,
         citaRepairBudgetSec: 8,
-        actionGateRepairBudgetSec: 10,
       }),
     saveConfig: (c) => Promise.resolve(c as ModelSettings),
     getGeneral: () => Promise.resolve({
@@ -240,8 +233,6 @@ if (!window.settings) {
     getToolModeOverrides: async () => ({}),
     setToolModeOverride: async () => ({ ok: false, error: "settings api unavailable" }),
     clearToolModeOverride: async () => ({ ok: false, error: "settings api unavailable" }),
-    listSkills: async () => [],
-    setSkillEnabled: async () => ({ ok: false, error: "settings api unavailable" }),
     getSkillCatalog: async () => [],
     rescanSkills: async () => ({ ok: false, count: 0, error: "settings api unavailable" }),
     getSkillModeOverrides: async () => ({}),
@@ -298,7 +289,6 @@ const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }>
   chat: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M33 38H22V30H36V22H44V38H39L36 41L33 38Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 6H36V30H17L13 34L9 30H4V6Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 18H20" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M26 18H27" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 18H13" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>`, title: "聊天", hint: "管理聊天窗口与会话" },
   user: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M44 8H4V38H19L24 43L29 38H44V8Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24" cy="19" r="5" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M33 32C33 27.5817 28.9706 24 24 24C19.0294 24 15 27.5817 15 32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "用户信息", hint: "编辑你的个人资料" },
   tasks: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M23.9998 44.3332C34.1251 44.3332 42.3332 36.1251 42.3332 25.9999C42.3332 15.8747 34.1251 7.66656 23.9998 7.66656C13.8746 7.66656 5.6665 15.8747 5.6665 25.9999C5.6665 36.1251 13.8746 44.3332 23.9998 44.3332Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M23.7594 15.3536L23.7582 26.3624L31.5305 34.1347" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9.00001L11 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M44 9.00001L37 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "定时任务", hint: "管理定时提醒与日程" },
-  skills: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>Skills</title><rect x="9" y="8" width="30" height="36" rx="2" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M18 4V10" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M30 4V10" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 19L32 19" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 27L28 27" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M16 35H24" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "Skills", hint: "管理 agent 的 skill 指令（约束如何用工具）" },
   plugins: { emoji: "🔌", title: "MCP", hint: "扩展功能与第三方集成" },
   preferences: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>偏好设置</title><path d="M12 35.0137H9H4V8.01273C4 6.90868 4.89543 6.01367 6 6.01367H42C43.1046 6.01367 44 6.90868 44 8.01273V35.0137H36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 32L14 42H34L24 32Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "偏好设置", hint: "设置聊天窗口和输出行为的默认偏好" },
   appearance: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>外观设置</title><path d="M24 44C29.9601 44 26.3359 35.136 30 31C33.1264 27.4709 44 29.0856 44 24C44 12.9543 35.0457 4 24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M28 17C29.6569 17 31 15.6569 31 14C31 12.3431 29.6569 11 28 11C26.3431 11 25 12.3431 25 14C25 15.6569 26.3431 17 28 17Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M16 21C17.6569 21 19 19.6569 19 18C19 16.3431 17.6569 15 16 15C14.3431 15 13 16.3431 13 18C13 19.6569 14.3431 21 16 21Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M17 34C18.6569 34 20 32.6569 20 31C20 29.3431 18.6569 28 17 28C15.3431 28 14 29.3431 14 31C14 32.6569 15.3431 34 17 34Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "外观设置", hint: "调整窗口布局、界面主题与昔涟桌宠" },
@@ -876,11 +866,6 @@ async function loadConfig(): Promise<void> {
     stickerThresholdInput.value = String(threshold);
     stickerThresholdVal.textContent = threshold.toFixed(2);
     chatRequestTimeoutSecInput.value = String(cfg.chatRequestTimeoutSec ?? 300);
-    maxIterationsInput.value = String(cfg.maxIterations ?? 12);
-    maxReplansInput.value = String(cfg.maxReplans ?? 2);
-    maxRefreshInput.value = String(cfg.maxRefresh ?? 1);
-    perCallTimeoutSecInput.value = String(cfg.perCallTimeoutSec ?? 75);
-    actionGateRepairBudgetSecInput.value = String(cfg.actionGateRepairBudgetSec ?? 10);
     if (embeddingDimensionsInput) {
       embeddingDimensionsInput.value = cfg.embeddingDimensions ? String(cfg.embeddingDimensions) : "";
     }
@@ -985,8 +970,7 @@ stickerEnabledInput.addEventListener("change", () => {
 
 // 任何高级字段改动都标记"有未保存的更改"
 [
-  chatRequestTimeoutSecInput, maxIterationsInput, maxReplansInput, maxRefreshInput,
-  perCallTimeoutSecInput, actionGateRepairBudgetSecInput,
+  chatRequestTimeoutSecInput,
 ].forEach((el) => {
   el.addEventListener("input", () => setCyreneSaveStatus("有未保存的更改"));
 });
@@ -1320,41 +1304,17 @@ apiRuntimeForm.addEventListener("submit", async (e) => {
   setRuntimeSaveStatus("保存中…");
   try {
     const parsedTimeoutSec = Math.max(30, Math.min(1800, parseInt(chatRequestTimeoutSecInput.value, 10) || 300));
-    const parsedMaxIterations = Math.max(5, Math.min(30, parseInt(maxIterationsInput.value, 10) || 12));
-    const parsedMaxReplans = Math.max(1, Math.min(5, parseInt(maxReplansInput.value, 10) || 2));
-    const parsedMaxRefresh = Math.max(0, Math.min(3, parseInt(maxRefreshInput.value, 10) || 1));
-    const parsedPerCallSec = Math.max(30, Math.min(120, parseInt(perCallTimeoutSecInput.value, 10) || 75));
-    const parsedAgSec = Math.max(5, Math.min(40, parseInt(actionGateRepairBudgetSecInput.value, 10) || 10));
     await window.settings!.saveConfig({
       chatRequestTimeoutSec: parsedTimeoutSec,
-      maxIterations: parsedMaxIterations,
-      maxReplans: parsedMaxReplans,
-      maxRefresh: parsedMaxRefresh,
-      perCallTimeoutSec: parsedPerCallSec,
-      actionGateRepairBudgetSec: parsedAgSec,
     });
-    // 同步超时到 TimeoutSettings（秒→毫秒）
+    // 同步总请求超时，并保存仍受支持的模型/询问超时。
     await window.settings!.saveTimeoutSettings({
       chatRequestTimeout: parsedTimeoutSec * 1000,
-      perRoundTimeout: parsedPerCallSec * 1000,
-      profileTotalBudgetMs: parseN1SecToMsOrThrow(timeoutProfileTotalBudgetInput.value, "Action Gate 总阶段时限"),
-      profilePerAttemptTimeoutMs: parseN1SecToMsOrThrow(timeoutProfilePerAttemptInput.value, "阶段内单次尝试超时"),
-      profileMinimumRemainingBudgetMs: parseN1SecToMsOrThrow(timeoutProfileRemainingInput.value, "最小剩余时间"),
     });
+    if (!await saveTimeoutSettings(false)) return;
     setRuntimeSaveStatus("已保存", "is-ok");
   } catch {
     setRuntimeSaveStatus("保存失败", "is-error");
-  }
-});
-
-apiTimeoutForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  setTimeoutSaveStatus("保存中…");
-  try {
-    await saveTimeoutSettings(false);
-    setTimeoutSaveStatus("已保存", "is-ok");
-  } catch {
-    setTimeoutSaveStatus("保存失败", "is-error");
   }
 });
 
@@ -1384,11 +1344,6 @@ cyrenePanel.addEventListener("submit", async (e) => {
   setCyreneSaveStatus("保存中…");
   try {
     const parsedTimeoutSec = Math.max(30, Math.min(1800, parseInt(chatRequestTimeoutSecInput.value, 10) || 300));
-    const parsedMaxIterations = Math.max(5, Math.min(30, parseInt(maxIterationsInput.value, 10) || 12));
-    const parsedMaxReplans = Math.max(1, Math.min(5, parseInt(maxReplansInput.value, 10) || 2));
-    const parsedMaxRefresh = Math.max(0, Math.min(3, parseInt(maxRefreshInput.value, 10) || 1));
-    const parsedPerCallSec = Math.max(30, Math.min(120, parseInt(perCallTimeoutSecInput.value, 10) || 75));
-    const parsedAgSec = Math.max(5, Math.min(40, parseInt(actionGateRepairBudgetSecInput.value, 10) || 10));
     const rawDim = embeddingDimensionsInput?.value?.trim();
     const parsedNum = rawDim ? Number(rawDim) : NaN;
     const parsedDim = Number.isFinite(parsedNum) && parsedNum > 0
@@ -1400,11 +1355,6 @@ cyrenePanel.addEventListener("submit", async (e) => {
       stickerSize: getStickerSizeValue(),
       stickerSimilarityThreshold: parseFloat(stickerThresholdInput.value),
       chatRequestTimeoutSec: parsedTimeoutSec,
-      maxIterations: parsedMaxIterations,
-      maxReplans: parsedMaxReplans,
-      maxRefresh: parsedMaxRefresh,
-      perCallTimeoutSec: parsedPerCallSec,
-      actionGateRepairBudgetSec: parsedAgSec,
       embeddingDimensions: parsedDim && parsedDim > 0 ? parsedDim : undefined,
     });
     setCyreneSaveStatus("已保存", "is-ok");
@@ -1430,8 +1380,7 @@ apiForm.addEventListener("submit", async (e) => {
     captureActiveProviderProfile();
     // mode 字段在 UI 层已删除，但仍传给 main 进程保留向后兼容（旧配置文件可能有该字段）。
     // 默认 "manual"（baseUrl 永远可改、模型名永远可填，行为等同原 Manual）。
-    await window.settings!.saveConfig({
-      mode: "manual",
+    const profile = {
       provider: apiState.activeProvider,
       displayName: displayNameInput.value.trim(),
       baseUrl: baseUrlInput.value.trim(),
@@ -1439,9 +1388,12 @@ apiForm.addEventListener("submit", async (e) => {
       apiKey: getApiKeyForRequest(),
       explicitTransport: transportSelect.value as ApiTransport,
       reasoning: providerProfileCache[apiState.activeProvider]?.reasoning,
+    };
+    const result = await window.settings!.saveModelProfile?.(profile);
+    if (!result) throw new Error("模型列表不可用");
+    await window.settings!.saveConfig({
       perProvider: { ...providerProfileCache },
       multimodal: multimodalToggle.checked,
-      // 视觉配置始终传三框值，不论开关状态（开关 ON 时保留但不使用）
       vision: {
         baseUrl: visionBaseUrlInput.value.trim(),
         apiKey: visionApiKeyInput.value.trim(),
@@ -1451,7 +1403,7 @@ apiForm.addEventListener("submit", async (e) => {
       disableMaxToken: toggleDisableMaxToken.checked,
       contextWindowTokens: Math.max(4096, parseInt(contextWindowInput.value, 10) || 256000),
     });
-    setSaveStatus("已保存", "is-ok");
+    setSaveStatus(result.added ? "已加入模型列表" : "相同 Key 与模型名已存在", result.added ? "is-ok" : "is-error");
   } catch {
     setSaveStatus("保存失败", "is-error");
   }
@@ -1484,7 +1436,6 @@ function switchSection(section: string): void {
   const isUser = section === "user";
   const isTasks = section === "tasks";
   const isPlugins = section === "plugins";
-  const isSkills = section === "skills";
   const isTokens = section === "tokens";
   const isChannels = section === "channels";
   const isTts = section === "tts";
@@ -1492,7 +1443,6 @@ function switchSection(section: string): void {
   const isMusic = section === "music";
   apiForm.classList.toggle("is-hidden", !isApi);
   apiRuntimeForm.classList.toggle("is-hidden", !isApiAdvanced);
-  apiTimeoutForm.classList.toggle("is-hidden", !isApiAdvanced);
   appearanceForm.classList.toggle("is-hidden", !isAppearance);
   generalForm.classList.toggle("is-hidden", !isGeneral);
   preferencesForm.classList.toggle("is-hidden", !isPreferences);
@@ -1506,9 +1456,6 @@ function switchSection(section: string): void {
   if (tasksPanel) tasksPanel.classList.toggle("is-hidden", !isTasks);
   if (isTasks) void loadSchedulerPanel();
   pluginsPanel.classList.toggle("is-hidden", !isPlugins);
-  const skillsPanel = document.getElementById("skills-panel");
-  if (skillsPanel) skillsPanel.classList.toggle("is-hidden", !isSkills);
-  if (isSkills) void renderSkills();
   const tokenPanel = document.getElementById("token-panel");
   if (tokenPanel) tokenPanel.classList.toggle("is-hidden", !isTokens);
   const channelsPanel = document.getElementById("channels-panel");
@@ -1524,7 +1471,7 @@ function switchSection(section: string): void {
   else disposeMusicPanel();
   placeholderPanel.classList.toggle(
     "is-hidden",
-    isApi || isApiAdvanced || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isTasks || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr || isMusic,
+    isApi || isApiAdvanced || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isTasks || isPlugins || isTokens || isChannels || isTts || isAsr || isMusic,
   );
 
   if (
@@ -1539,7 +1486,6 @@ function switchSection(section: string): void {
     !isUser &&
     !isTasks &&
     !isPlugins &&
-    !isSkills &&
     !isTokens &&
     !isChannels &&
     !isTts &&

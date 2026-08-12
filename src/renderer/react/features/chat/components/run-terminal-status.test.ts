@@ -47,9 +47,9 @@ describe("resolveTerminalContent (Task 3 renderer)", () => {
     expect(resolveTerminalContent("部分回复", "success")).toBe("部分回复");
   });
 
-  it("defaults to '任务已完成。' for success when streamContent is empty", () => {
-    expect(resolveTerminalContent("", "success")).toBe("任务已完成。");
-    expect(resolveTerminalContent("   ", "success")).toBe("任务已完成。");
+  it("does not fabricate a formal answer for success when streamContent is empty", () => {
+    expect(resolveTerminalContent("", "success")).toBe("");
+    expect(resolveTerminalContent("   ", "success")).toBe("");
   });
 
   it("preserves partial streamContent for cancelled (no '任务已完成。' fallback)", () => {

@@ -55,18 +55,8 @@ export interface ModelSettings {
   stickerSimilarityThreshold: number;
   /** 整个聊天请求的超时（秒）。30-1800，默认 300。 */
   chatRequestTimeoutSec: number;
-  /** 总轮数。5-30，默认 12。 */
-  maxIterations: number;
-  /** Plan 步骤失败后重规划次数。1-5，默认 2。 */
-  maxReplans: number;
-  /** 引用过期重新决策次数。0-3，默认 1。 */
-  maxRefresh: number;
-  /** 单次 LLM 调用超时（秒）。30-120，默认 75。 */
-  perCallTimeoutSec: number;
   /** CITA 结构化输出重试总预算（秒）。4-30，默认 8。 */
   citaRepairBudgetSec: number;
-  /** Action Gate 结构化输出重试总预算（秒）。5-40，默认 10。 */
-  actionGateRepairBudgetSec: number;
   vision?: {
     baseUrl: string;
     apiKey: string;
@@ -220,6 +210,10 @@ export interface SettingsApi {
   close: () => void;
   getConfig: () => Promise<ModelSettings>;
   saveConfig: (config: Partial<ModelSettings>) => Promise<ModelSettings>;
+  listModelProfiles?: () => Promise<{ profiles: Array<{ id: string; provider: string; displayName?: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: ApiTransport; reasoning?: ReasoningPreference }>; defaultModelProfileId?: string }>;
+  saveModelProfile?: (profile: { provider: string; displayName?: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: ApiTransport; reasoning?: ReasoningPreference }) => Promise<{ added: boolean; profiles: unknown[]; defaultModelProfileId?: string }>;
+  deleteModelProfile?: (id: string) => Promise<unknown>;
+  setDefaultModelProfile?: (id: string) => Promise<unknown>;
   getGeneral: () => Promise<GeneralSettings>;
   saveGeneral: (config: Partial<GeneralSettings>) => Promise<GeneralSettings>;
   openCustomStylePrompt?: () => Promise<{ ok: boolean; filePath?: string; error?: string }>;
@@ -259,9 +253,7 @@ export interface SettingsApi {
   getToolModeOverrides?: () => Promise<Record<string, Partial<Record<"chat" | "work" | "code" | "learn", boolean>>>>;
   setToolModeOverride?: (toolId: string, mode: "chat" | "work" | "code" | "learn", enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
   clearToolModeOverride?: (toolId: string, mode?: "chat" | "work" | "code" | "learn") => Promise<{ ok: boolean; error?: string }>;
-  listSkills?: () => Promise<Array<{ id: string; name: string; description: string; tools: string[]; enabled: boolean; source: string; version?: string; references: string[] }>>;
-  setSkillEnabled?: (id: string, enabled: boolean) => Promise<{ ok: boolean; error?: string }>;
-  // 三模适配层：skill-模式覆盖层（UI 设置面板用）
+  // 三模适配层：Skill-模式覆盖层（聊天窗口用）。
   getSkillCatalog?: () => Promise<Array<{
     id: string;
     name: string;

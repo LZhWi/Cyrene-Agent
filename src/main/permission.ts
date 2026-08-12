@@ -7,6 +7,7 @@ import { app } from "electron";
 import * as fs from "fs";
 import * as path from "path";
 import { IPC } from "../shared/ipc-channels";
+import { createAbortError } from "./abort-utils";
 import { getTimeoutSettings } from "./timeout-manager";
 import { logger, LogTag } from "./logger";
 import {
@@ -192,7 +193,9 @@ export async function checkPermission(input: {
   risk: ToolRiskLevel;
   /** Task 3 / C2：可选 runId，用于 cancel 时按 run 清理 pending 审批。 */
   runId?: string;
+  signal?: AbortSignal;
 }): Promise<{ allowed: boolean; reason?: string }> {
+  if (input.signal?.aborted) throw createAbortError();
   const level = currentLevel;
   const policy = policyFor(level, input.risk);
   console.log(LOG_PREFIX, "checkPermission:", input.toolId, "risk=" + input.risk, "level=" + level, "→", policy);
@@ -228,8 +231,7 @@ export function cancelPendingApprovalsForRun(runId: string): void {
     if (pending.runId === runId) {
       clearTimeout(pending.timer);
       pendingApprovals.delete(id);
-      // resolve(false) 让等待的 checkPermission 立即返回拒绝
-      pending.resolve(false);
+      pending.reject(createAbortError());
       console.log(LOG_PREFIX, "cancelPendingApprovalsForRun 清理:", id, "runId=", runId);
     }
   }

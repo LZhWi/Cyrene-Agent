@@ -15,7 +15,6 @@ function codeContext(workspaceRoot = "C:\\trusted"): ToolContext {
 function service(): GitService {
   return {
     getStatusForSession: vi.fn(),
-    getDiffForSession: vi.fn(),
   onChanged: vi.fn(() => () => undefined),
   watchSession: vi.fn(async () => undefined),
   unwatchSession: vi.fn(async () => undefined),

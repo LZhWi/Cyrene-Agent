@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatSession } from "../../shared/chat-types";
 import type { ResolvedGitExecutable } from "./git-executable";
-import { createGitService, readGitErrorStdout, type GitClient, type GitStatusSnapshot } from "./git-service";
+import { createGitService, type GitClient, type GitStatusSnapshot } from "./git-service";
 
 const executable: ResolvedGitExecutable = {
   command: "git",
@@ -36,8 +36,6 @@ function client(overrides: Partial<GitClient> = {}): GitClient {
     getStatus: async () => cleanStatus,
     getBranches: async () => ["main"],
     getLineStats: async () => ({ insertions: 0, deletions: 0, byPath: {} }),
-    getTrackedDiff: async () => "",
-    getUntrackedDiff: async () => "",
     getGitDir: async () => "C:\\repo\\.git",
     init: async () => undefined,
     add: async () => undefined,
@@ -123,7 +121,6 @@ describe("GitService.getStatusForSession", () => {
     ]);
   });
 });
-
 describe("GitService workspace subscriptions", () => {
   it("subscribes a Code session using the Git client's real metadata directory", async () => {
     const subscribe = vi.fn(async () => undefined);
@@ -141,60 +138,6 @@ describe("GitService workspace subscriptions", () => {
       sessionId: "session-1",
       workspaceRoot: "C:\\repo",
       gitDir: "C:\\worktrees\\repo-meta",
-    });
-  });
-});
-
-describe("GitService.getDiffForSession", () => {
-  it("extracts the normal untracked-file patch from simple-git's nested response", () => {
-    const patch = "diff --git a/new.ts b/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/new.ts\n@@ -0,0 +1 @@\n+export const answer = 42;\n";
-
-    expect(readGitErrorStdout({ git: { stdout: patch } })).toBe(patch);
-  });
-
-  it("recovers the diff from error.message when autocrlf warning merges stdout+stderr", () => {
-    const diff = "diff --git a/new.ts b/new.ts\nnew file mode 100644\n--- /dev/null\n+++ b/new.ts\n@@ -0,0 +1 @@\n+export const answer = 42;\n";
-    const warning = "warning: in the working copy of 'new.ts', LF will be replaced by CRLF the next time Git touches it\n";
-    // simple-git 在 autocrlf 警告场景下把 stdout+stderr 合并进 error.message，
-    // 且不提供 error.stdout / error.git.stdout。
-    const error = Object.assign(new Error(diff + warning), { task: {} });
-
-    expect(readGitErrorStdout(error)).toBe(diff);
-  });
-
-  it("recovers numstat from error.message when autocrlf warning merges stdout+stderr", () => {
-    const numstat = "42\t0\tnew.ts\n";
-    const warning = "warning: in the working copy of 'new.ts', LF will be replaced by CRLF the next time Git touches it\n";
-    const error = Object.assign(new Error(numstat + warning), { task: {} });
-
-    expect(readGitErrorStdout(error)).toBe(numstat);
-  });
-
-  it("does not treat a real git error message as command output", () => {
-    const error = new Error("fatal: not a git repository");
-
-    expect(readGitErrorStdout(error)).toBeUndefined();
-  });
-
-  it("rejects a parent traversal path before executing Git", async () => {
-    const result = await service({}).getDiffForSession("session-1", "..\\secret.txt");
-
-    expect(result).toEqual({
-      kind: "error",
-      sessionId: "session-1",
-      path: "..\\secret.txt",
-      message: "只能审阅当前仓库中的变更文件",
-    });
-  });
-
-  it("rejects an absolute path before executing Git", async () => {
-    const result = await service({}).getDiffForSession("session-1", "C:\\secret.txt");
-
-    expect(result).toEqual({
-      kind: "error",
-      sessionId: "session-1",
-      path: "C:\\secret.txt",
-      message: "只能审阅当前仓库中的变更文件",
     });
   });
 });

@@ -20,6 +20,7 @@ import { resolveSideEffect } from "./side-effect-resolver";
 import { isBlockedByUncertainEffect } from "./uncertain-effect-guard";
 import { ExecutionLedger } from "../execution-ledger";
 import type { ToolExecutionOutcome } from "../types";
+import { executeToolDefinition } from "../tool-executor";
 
 // ── 工具输出截断（v3 §5.7）───────────────────────────────
 
@@ -91,7 +92,6 @@ export async function dispatchToolCall(
 ): Promise<ToolDispatchResult> {
   // ── 内置工具 ──
   if (isHarnessBuiltin(call.name)) {
-    return executeHarnessBuiltin(call, ctx);
     if (ctx.includeInteractiveTools === false && isInteractiveHarnessBuiltin(call.name)) {
       return {
         outcome: "failure",
@@ -100,6 +100,7 @@ export async function dispatchToolCall(
         message: "当前渠道不支持交互式工具",
       };
     }
+    return executeHarnessBuiltin(call, ctx);
   }
 
   // ── 普通工具 ──
@@ -108,13 +109,14 @@ export async function dispatchToolCall(
 
   // fingerprint 拦截（v3 §5.5.1.1）
   const fingerprint = toolCallFingerprint(call.name, args);
+  const blockingEffect = ctx.state.uncertainEffects.find((effect) => effect.fingerprint === fingerprint);
   if (isBlockedByUncertainEffect(ctx.state, fingerprint)) {
     return {
-      outcome: "failure",
+      outcome: "not_executed",
       category: "runtime_safety",
       tool: call.name,
       message:
-        "该副作用已有一次未确认结果，在 reconcile 或 ask 用户前不能重复执行",
+        `该副作用已有一次未确认结果（${blockingEffect?.id ?? "unknown"}），在 reconcile 或 ask 用户前不能重复执行`,
     };
   }
 
@@ -149,124 +151,27 @@ export async function dispatchToolCall(
     args,
   });
 
-  let result: ToolCallResult | undefined;
+  let result: ToolCallResult;
   // 提取 targetRefs 从 args（path / file / url / id 等常见字段）
   const targetRefs = args.path !== undefined ? [String(args.path)]
     : args.file !== undefined ? [String(args.file)]
     : args.url !== undefined ? [String(args.url)]
     : [];
 
-  // ExecutionLedger 命中 → 直接返回缓存的终态成功结果
+  const run = async (): Promise<ToolExecutionOutcome> => executeToolDefinition(tool, args, ctx.toolContext);
   if (ctx.executionLedger) {
-    try {
-      const ledgerRun = async (): Promise<ToolExecutionOutcome> => {
-        const run = await (async (): Promise<ToolCallResult> => {
-          try {
-            const output = await tool.execute(args, ctx.toolContext);
-            return {
-              toolId: tool.id,
-              args,
-              output,
-              status: "succeeded",
-              terminal: true,
-              retryable: false,
-            };
-          } catch (err) {
-            const errorMsg = err instanceof Error ? err.message : String(err);
-            return {
-              toolId: tool.id,
-              args,
-              output: errorMsg,
-              status: "failed",
-              errorCode: "TOOL_EXECUTION_ERROR",
-              terminal: true,
-              retryable: false,
-            };
-          }
-        })();
-        return {
-          status: run.status === "succeeded" ? "succeeded" : "failed",
-          output: run.output,
-          terminal: run.terminal,
-          retryable: run.retryable,
-          errorCode: run.errorCode,
-        };
-      };
-
-      const ledgerResult = await ctx.executionLedger.execute(
-        { logicalInvocationId: `${ctx.toolContext?.runId ?? "unknown"}:${call.id}`, capability: tool.id, targetRefs, args },
-        ledgerRun,
-      );
-
-      if (ledgerResult.cached) {
-        // 命中缓存：构造 cached observation
-        const cached = ledgerResult.outcome;
-        const cachedPreview = (cached.output ?? "").toString().slice(0, 200);
-        ctx.onEvent?.({
-          type: "tool_end",
-          toolCallId: call.id,
-          outcome: cached.status === "succeeded" ? "success" : "failure",
-          preview: `[cached] ${cachedPreview}`,
-        });
-        return {
-          outcome: cached.status === "succeeded" ? "success" : "failure",
-          tool: call.name,
-          target: targetRefs[0],
-          message: cached.output ?? "(cached)",
-          output: cached.output,
-          truncated: false,
-          fullOutputRef: undefined,
-        };
-      }
-
-      // 未命中：把 ledger 跑出来的结果赋给 result
-      result = ledgerResult.outcome.status === "succeeded"
-        ? {
-            toolId: tool.id,
-            args,
-            output: ledgerResult.outcome.output,
-            status: "succeeded",
-            terminal: ledgerResult.outcome.terminal,
-            retryable: ledgerResult.outcome.retryable,
-          }
-        : {
-            toolId: tool.id,
-            args,
-            output: ledgerResult.outcome.output ?? "(no output)",
-            status: "failed",
-            errorCode: ledgerResult.outcome.errorCode ?? "TOOL_EXECUTION_ERROR",
-            terminal: ledgerResult.outcome.terminal,
-            retryable: ledgerResult.outcome.retryable,
-          };
-    } catch {
-      // ledger 自身出错(不太可能) → 退回到下面直接执行,result 仍是 ToolCallResult | undefined
-    }
-  }
-
-  // 如果 ledger 路径已填 result,跳过下面的直接执行
-  if (!result) {
-    try {
-      const output = await tool.execute(args, ctx.toolContext);
-      result = {
-        toolId: tool.id,
-        args,
-        output,
-        status: "succeeded",
-        terminal: true,
-        retryable: false,
-      };
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      result = {
-        toolId: tool.id,
-        args,
-        output: errorMsg,
-        status: "failed",
-        errorCode: "TOOL_EXECUTION_ERROR",
-        terminal: true,
-        retryable: false,
-      };
-    }
+    const ledgerResult = await ctx.executionLedger.execute(
+      { logicalInvocationId: `${ctx.toolContext?.runId ?? "unknown"}:${call.id}`, capability: tool.id, targetRefs, args },
+      run,
+    );
+    result = {
+      toolId: tool.id,
+      args,
+      ...ledgerResult.outcome,
+      ...(ledgerResult.cached ? { deduplicated: true } : {}),
+    };
+  } else {
+    result = { toolId: tool.id, args, ...await run() };
   }
 
   // 截断输出（v3 §5.7）
@@ -286,11 +191,29 @@ export async function dispatchToolCall(
   });
 
   // 构造 observation
-  const outcome: ToolObservation["outcome"] =
-    result.status === "succeeded" ? "success" : "failure";
+  const outcome: ToolObservation["outcome"] = result.status === "succeeded"
+    ? "success"
+    : result.effectState === "unknown" && sideEffect === "non_idempotent_side_effect"
+      ? "unknown"
+      : "failure";
+  if (outcome === "unknown") {
+    const effectId = `${ctx.toolContext?.runId ?? "unknown-run"}:${call.id}`;
+    if (!ctx.state.uncertainEffects.some((effect) => effect.id === effectId)) {
+      ctx.state.uncertainEffects.push({
+        id: effectId,
+        toolCallId: call.id,
+        fingerprint,
+        toolName: call.name,
+        message: "副作用已发起，但 Runtime 无法确认是否生效",
+      });
+    }
+  }
 
   return {
     outcome,
+    category: result.category,
+    toolSideEffect: sideEffect,
+    retryDecision: result.retryable ? "retry" : "no_retry",
     tool: call.name,
     target: (args.path as string | undefined) ?? (args.command as string | undefined) ?? (args.query as string | undefined),
     message: preview,

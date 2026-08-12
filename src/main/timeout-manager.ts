@@ -1,7 +1,7 @@
 import * as path from "path";
 import * as fs from "fs";
 import { app } from "electron";
-import { DEFAULT_CALL_TIMEOUT_MS, DEFAULT_CHAT_REQUEST_TIMEOUT_MS, DEFAULT_FORCE_SUMMARY_TIMEOUT_MS, DEFAULT_MEMORY_JUDGE_MS, DEFAULT_PER_ROUND_TIMEOUT_MS, DEFAULT_SEARCH_TIMEOUT_MS, DEFAULT_TIMEOUT_SETTINGS, DEFAULT_VISION_TIMEOUT_MS, type TimeoutSettings } from "../shared/timeout-types";
+import { DEFAULT_CHAT_REQUEST_TIMEOUT_MS, DEFAULT_TIMEOUT_SETTINGS, type TimeoutSettings } from "../shared/timeout-types";
 import { normalizeModelRequestTimeoutMs, DEFAULT_MODEL_REQUEST_TIMEOUT_MS } from "./orchestrator/config/model-timeout";
 
 let cachedTimeoutSettings: TimeoutSettings | null = null;
@@ -12,17 +12,9 @@ function getTimeoutSettingsPath(): string {
 
 function normalizeTimeoutSettings(input: Partial<TimeoutSettings> | null | undefined): TimeoutSettings {
   return {
-    callTimeout: input?.callTimeout || DEFAULT_CALL_TIMEOUT_MS,
     testTimeout: input?.testTimeout || 15000,
-    perRoundTimeout: input?.perRoundTimeout || DEFAULT_PER_ROUND_TIMEOUT_MS,
-    forceSummaryTimeout: input?.forceSummaryTimeout || DEFAULT_FORCE_SUMMARY_TIMEOUT_MS,
     chatRequestTimeout: input?.chatRequestTimeout || DEFAULT_CHAT_REQUEST_TIMEOUT_MS,
-    memoryJudgeTimeout: input?.memoryJudgeTimeout || DEFAULT_MEMORY_JUDGE_MS,
-    visionTimeout: input?.visionTimeout || DEFAULT_VISION_TIMEOUT_MS,
     userChoiceTimeout: input?.userChoiceTimeout || 60000,
-    searchTimeout: input?.searchTimeout || DEFAULT_SEARCH_TIMEOUT_MS,
-    profileTotalBudgetMs: input?.profileTotalBudgetMs || -1,
-    profilePerAttemptTimeoutMs: input?.profilePerAttemptTimeoutMs || -1,
     profileMinimumRemainingBudgetMs: input?.profileMinimumRemainingBudgetMs || -1,
     modelRequestTimeoutSec: input?.modelRequestTimeoutSec,
   };

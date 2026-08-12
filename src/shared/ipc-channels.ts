@@ -44,9 +44,8 @@ export const IPC = {
   AGUI_CANCEL: "agui:cancel",
   SCHEDULER_EVENT: "scheduler:event",
 
-  // Code 模式 Git 工作台（renderer 只能读取结构化状态和 unified diff）
+  // Code 模式 Git 工作台（renderer 只能读取结构化状态）
   CODE_GIT_STATUS: "code-git:status",
-  CODE_GIT_DIFF: "code-git:diff",
   CODE_GIT_CHANGED: "code-git:changed",
   CODE_GIT_WATCH: "code-git:watch",
   CODE_GIT_UNWATCH: "code-git:unwatch",
@@ -73,6 +72,10 @@ export const IPC = {
   SETTINGS_SWITCH_SECTION: "settings:switch-section",
   SETTINGS_GET_CONFIG: "settings:get-config",
   SETTINGS_SAVE_CONFIG: "settings:save-config",
+  SETTINGS_MODEL_PROFILES_LIST: "settings:model-profiles:list",
+  SETTINGS_MODEL_PROFILE_SAVE: "settings:model-profiles:save",
+  SETTINGS_MODEL_PROFILE_DELETE: "settings:model-profiles:delete",
+  SETTINGS_MODEL_PROFILE_SET_DEFAULT: "settings:model-profiles:set-default",
   SETTINGS_TEST_CONNECTION: "settings:test-connection",
   SETTINGS_TEST_VISION: "settings:test-vision",
   SETTINGS_GET_GENERAL: "settings:get-general",
@@ -119,6 +122,7 @@ export const IPC = {
   CHATS_RENAME: "chats:rename",
   CHATS_DELETE: "chats:delete",
   CHATS_SET_PINNED: "chats:set-pinned",
+  CHATS_SET_MODEL_PROFILE: "chats:set-model-profile",
   CHATS_OPEN_FOLDER: "chats:open-folder",
   CHATS_OPEN_WORKSPACE: "chats:open-workspace",
   CHATS_MIGRATE_LEGACY: "chats:migrate-legacy",

@@ -1,11 +1,10 @@
 // 通用保存状态条：7 个面板的 save-status DOM 文本/类名更新
 // 从 settings.ts 抽离。
-// 依赖：shared/shell.ts（全局壳 save-status）+ appearance/general/timeout 面板内 save-status DOM。
+// 依赖：shared/shell.ts（全局壳 save-status）+ appearance/general 面板内 save-status DOM。
 
 import { saveStatus, cyreneSaveStatus, preferencesSaveStatus, runtimeSaveStatus } from "./shell";
 import { appearanceSaveStatus } from "../appearance/dom";
 import { generalSaveStatus } from "../general/dom";
-import { timeoutSaveStatus } from "../timeout/dom";
 
 export function setSaveStatus(text: string, cls?: string): void {
   saveStatus.textContent = text;
@@ -35,12 +34,6 @@ export function setGeneralSaveStatus(text: string, cls?: string): void {
   generalSaveStatus.textContent = text;
   generalSaveStatus.className = "save-status";
   if (cls) generalSaveStatus.classList.add(cls);
-}
-
-export function setTimeoutSaveStatus(text: string, cls?: string): void {
-  timeoutSaveStatus.textContent = text;
-  timeoutSaveStatus.className = "save-status";
-  if (cls) timeoutSaveStatus.classList.add(cls);
 }
 
 export function setRuntimeSaveStatus(text: string, cls?: string): void {

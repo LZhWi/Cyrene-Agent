@@ -5,6 +5,7 @@ const { handle } = vi.hoisted(() => ({
 }));
 
 vi.mock("electron", () => ({
+  app: { getPath: vi.fn(() => "C:/tmp/cyrene-test") },
   ipcMain: { handle },
 }));
 

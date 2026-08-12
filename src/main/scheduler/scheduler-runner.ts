@@ -24,6 +24,17 @@ interface RunnerDeps {
   now: () => Date;
 }
 
+/** 定时任务是无人值守的 Work Harness：不询问、不审批，直接执行已分配工具。 */
+export function applyScheduledExecutionPolicy(options: CyreneRunOptions): CyreneRunOptions {
+  return {
+    ...options,
+    executionMode: "work",
+    conversationMode: "work",
+    harnessInteractiveTools: false,
+    permissionMode: "allow_all",
+  };
+}
+
 export function createSchedulerRunner(deps: RunnerDeps) {
   async function runScheduledTask(task: ScheduledTask, _scheduledFireAt: Date, manual: boolean): Promise<ScheduledRunResult> {
     const historyId = deps.id();
@@ -74,12 +85,12 @@ export function createSchedulerRunner(deps: RunnerDeps) {
       }
       const toolSystemContent = soulSystemBaseContent; // 第一期暂用同一份
 
-      const options: CyreneRunOptions = {
+      const options = applyScheduledExecutionPolicy({
         ...legacyOptions,
         messages,
         toolSystemContent,
         soulSystemBaseContent,
-      };
+      });
 
       const agent = new CyreneAgent({ threadId: `scheduler-${task.id}`, description: `Scheduled task: ${task.title}` });
 

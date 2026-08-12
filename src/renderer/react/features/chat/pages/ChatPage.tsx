@@ -4,9 +4,7 @@ import { ChatComposer, parseComposerMessage, type ComposerAttachment } from "../
 import { ComposerSlot } from "../components/ComposerSlot";
 import { TodoPanel } from "../components/TodoPanel";
 import { CodeGitPanel } from "../components/CodeGitPanel";
-import { CodeDiffReview } from "../components/CodeDiffReview";
 import type { TodoItem } from "../../../../../shared/todo-types";
-import type { CodeGitStatus } from "../../../../../shared/code-git-types";
 import {
   describePermissionRequest,
   normalizeChoiceInteraction,
@@ -21,7 +19,6 @@ import {
 } from "../components/run-presentation";
 import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessageList";
 import { applyAgentRoundBoundary, createRoundProcessMessage } from "../components/agent-rounds";
-import { createLiveCodeGitReview } from "../components/code-git-live-review";
 import { applyTaskDelegationEvent, normalizeTaskDelegationEvent } from "../components/task-delegations";
 import type { WeatherData } from "../components/weather/weather-types";
 import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
@@ -34,7 +31,9 @@ import { ModeSwitch } from "../../../components/ui/ModeSwitch";
 import { ToolModeButton } from "../../../components/ui/ToolModeButton";
 import { ToolModePanel } from "../components/ToolModePanel";
 import { SkillModeButton } from "../../../components/ui/SkillModeButton";
+import { ModelModeButton } from "../../../components/ui/ModelModeButton";
 import { SkillModePanel } from "../components/SkillModePanel";
+import { ModelModePanel } from "../components/ModelModePanel";
 import { CharacterStatusPill } from "../../../components/ui/CharacterStatusPill";
 import { WindowControls } from "../../../components/ui/WindowControls";
 import { SettingsButton } from "../../../components/ui/SettingsButton";
@@ -80,6 +79,7 @@ import "../components/ChatComposer.css";
 import "../components/ReasoningControl.css";
 import "../components/StyleControl.css";
 import "../components/PermissionControl.css";
+import "../components/ModelModePanel.css";
 import "../components/ChatMessageList.css";
 import "../components/ConversationSidebar.css";
 
@@ -224,6 +224,7 @@ interface ChatStoreApi {
   rename: (id: string, title: string) => Promise<ChatSession | null>;
   delete: (id: string) => Promise<boolean>;
   setPinned: (id: string, pinned: boolean) => Promise<ChatSession | null>;
+  setModelProfile: (id: string, modelProfileId?: string) => Promise<ChatSession | null>;
   pickWorkspaceFolder: () => Promise<{ ok: boolean; path?: string; displayName?: string; error?: string }>;
   setWorkspace: (sessionId: string, workspaceRoot: string) => Promise<{ ok: boolean; error?: string; isEmpty?: boolean }>;
   initLearnWorkspace: (sessionId: string) => Promise<{ ok: boolean; error?: string; created?: string[]; skipped?: string[] }>;
@@ -359,7 +360,6 @@ function toUiMessages(session: ChatSession): ChatMessageItem[] {
       responseStarted: message.role === "model" && Boolean(message.content.trim() || message.sticker),
       sticker: message.sticker,
       toolExecutions: message.toolExecutions,
-      gitReview: message.gitReview,
       attachments: message.attachments,
     };
     return message.runSnapshot ? recoverInterruptedMessage(item, message.runSnapshot) : item;
@@ -395,6 +395,7 @@ export function ChatPage() {
   const [collapsed, setCollapsed] = useState(false);
   const [toolPanelOpen, setToolPanelOpen] = useState(false);
   const [skillPanelOpen, setSkillPanelOpen] = useState(false);
+  const [modelPanelOpen, setModelPanelOpen] = useState(false);
   const [mode, setMode] = useState<ConversationMode>(getInitialMode);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessageItem[]>>({});
@@ -415,7 +416,6 @@ export function ChatPage() {
   const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [todoStateBySession, setTodoStateBySession] = useState<TodoStateBySession>({});
-  const [codeGitReview, setCodeGitReview] = useState<{ snapshot: ChatMessage["gitReview"]; initialPath?: string } | null>(null);
   const activeModeRef = useRef(mode);
   const activeSessionIdsRef = useRef(activeSessionIds);
   const activeScopeRef = useRef(`mode:${mode}`);
@@ -501,10 +501,7 @@ export function ChatPage() {
   const hasMessages = messages.length > 0;
   const attachments = attachmentsByScope[scopeKey] ?? [];
   const sessions = sessionsByMode[mode] ?? [];
-
-  useEffect(() => {
-    setCodeGitReview(null);
-  }, [mode, activeSessionId]);
+  const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
 
   activeModeRef.current = mode;
   activeSessionIdsRef.current = activeSessionIds;
@@ -701,6 +698,7 @@ export function ChatPage() {
     const generation = ++sessionSelectionGeneration.current;
     const session = await store.get(sessionId);
     if (!session || generation !== sessionSelectionGeneration.current) return;
+    setActiveSession(session);
     setActiveSessionIds((current) => {
       const next = { ...current, [targetMode]: sessionId };
       activeSessionIdsRef.current = next;
@@ -885,36 +883,6 @@ export function ChatPage() {
     let revealChain: Promise<void> = Promise.resolve();
     let sticker: string | null = null;
     let toolExecutions: ToolExecutionRecord[] = [];
-    let gitReview: ChatMessage["gitReview"];
-    const gitStatusBefore: CodeGitStatus | undefined = input.targetMode === "code"
-      ? await window.codeGit?.getStatus(input.sessionId).catch(() => undefined)
-      : undefined;
-    const liveGitReview = input.targetMode === "code"
-      ? createLiveCodeGitReview({
-        sessionId: input.sessionId,
-        assistantId: input.assistantId,
-        before: gitStatusBefore,
-        tools: () => toolExecutions,
-      })
-      : undefined;
-    if (input.targetMode === "code") void window.codeGit?.watch(input.sessionId).catch(() => undefined);
-    const captureGitReview = async () => {
-      if (input.targetMode !== "code") return;
-      const gitStatusAfter = await window.codeGit?.getStatus(input.sessionId).catch(() => undefined);
-      gitReview = liveGitReview?.freeze(gitStatusAfter);
-    };
-    const offGitReview = input.targetMode === "code"
-      ? window.codeGit?.onChanged((payload) => {
-        if (payload.sessionId !== input.sessionId) return;
-        void window.codeGit?.getStatus(input.sessionId).then((next) => {
-          const nextReview = liveGitReview?.update(next);
-          if (nextReview) {
-            gitReview = nextReview;
-            updateMessage(input.sessionId, input.assistantId, { gitReview: nextReview });
-          }
-        }).catch(() => undefined);
-      })
-      : undefined;
     let runStarted = false;
     let runActivity: RunActivityRecord | undefined;
     let currentTodos: TodoItem[] = [];
@@ -943,7 +911,6 @@ export function ChatPage() {
       at: assistantAt,
       sticker,
       toolExecutions,
-      gitReview,
       runSnapshot: {
         runId: activeRunsBySession.current[input.sessionId]?.runId,
         status,
@@ -1365,7 +1332,6 @@ export function ChatPage() {
       completeRunActivity(!formalAnswerCommitted);
       const finalContent = formalAnswerCommitted ? resolveTerminalContent(streamContent, terminalStatus) : "";
       persistedFinalContent = finalContent;
-      await captureGitReview();
       updateMessage(input.targetMode, input.assistantId, {
         content: finalContent,
         loading: false,
@@ -1380,7 +1346,6 @@ export function ChatPage() {
         responseStarted: formalAnswerCommitted,
         sticker,
         toolExecutions,
-        gitReview,
       });
       const savedAssistant = await checkpointRun("terminal", true);
       if (savedAssistant && formalAnswerCommitted) {
@@ -1409,8 +1374,6 @@ export function ChatPage() {
         responseStarted: false,
       });
       persistedFinalContent = "";
-      await captureGitReview();
-      if (gitReview) updateMessage(input.targetMode, input.assistantId, { gitReview });
       await checkpointRun("terminal", true);
     } finally {
       if (checkpointTimer !== undefined) window.clearTimeout(checkpointTimer);
@@ -1418,8 +1381,6 @@ export function ChatPage() {
       delete checkpointCallbacks[input.sessionId];
       runCheckpointBySessionRef.current = checkpointCallbacks;
       off();
-      offGitReview?.();
-      if (input.targetMode === "code") void window.codeGit?.unwatch(input.sessionId).catch(() => undefined);
       activeAguiOffsRef.current.delete(off);
       const currentActive = activeRunsBySession.current[input.sessionId];
       cancelRequestedSessionsRef.current.delete(input.sessionId);
@@ -2050,7 +2011,7 @@ export function ChatPage() {
       </div>
       <div className="cy-page-top-center">
         <CharacterStatusPill avatarPath={avatarLight} status={modelDisplayName || modelName} />
-        {!toolPanelOpen && !skillPanelOpen && (
+        {!toolPanelOpen && !skillPanelOpen && !modelPanelOpen && (
           <ModeSwitch value={mode} onChange={(nextMode) => {
             if (isConversationMode(nextMode)) setMode(nextMode);
           }} />
@@ -2067,7 +2028,8 @@ export function ChatPage() {
         <div className="cy-page-newtask">
           <NewTaskButton onClick={() => void createNewTask()} />
           <ToolModeButton active={toolPanelOpen} onClick={() => { setToolPanelOpen((v) => !v); setSkillPanelOpen(false); }} />
-          <SkillModeButton active={skillPanelOpen} onClick={() => { setSkillPanelOpen((v) => !v); setToolPanelOpen(false); }} />
+          <SkillModeButton active={skillPanelOpen} onClick={() => { setSkillPanelOpen((v) => !v); setToolPanelOpen(false); setModelPanelOpen(false); }} />
+          <ModelModeButton active={modelPanelOpen} onClick={() => { setModelPanelOpen((v) => !v); setToolPanelOpen(false); setSkillPanelOpen(false); }} />
         </div>
         <div className="cy-page-conversations">
           <ConversationSidebar
@@ -2077,6 +2039,7 @@ export function ChatPage() {
             onSelect={(sessionId) => {
               setToolPanelOpen(false);
               setSkillPanelOpen(false);
+              setModelPanelOpen(false);
               void selectSession(sessionId);
             }}
             onOpenProject={(workspaceRoot) => {
@@ -2095,7 +2058,7 @@ export function ChatPage() {
         </div>
       </div>
       <main
-        className={`cy-page-main cy-workspace ${hasMessages ? "has-messages" : "is-empty"} ${isDraggingFiles ? "is-dragging-files" : ""} ${codeGitReview ? "is-review-open" : ""}`}
+        className={`cy-page-main cy-workspace ${hasMessages ? "has-messages" : "is-empty"} ${isDraggingFiles ? "is-dragging-files" : ""}`}
         onDragEnter={handleDragEnter}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
@@ -2106,7 +2069,9 @@ export function ChatPage() {
             <span>松开即可添加到当前对话</span>
           </div>
         )}
-        {skillPanelOpen ? (
+        {modelPanelOpen ? (
+          <ModelModePanel />
+        ) : skillPanelOpen ? (
           <SkillModePanel />
         ) : toolPanelOpen ? (
           <ToolModePanel />
@@ -2148,7 +2113,6 @@ export function ChatPage() {
             onRegisterScrollToBottom={(scroll) => {
               scrollToBottomRef.current = scroll;
             }}
-            onOpenCodeReview={mode === "code" ? (snapshot, initialPath) => setCodeGitReview({ snapshot, initialPath }) : undefined}
           />
         )}
         {isCompressingContext && (
@@ -2195,6 +2159,13 @@ export function ChatPage() {
             onChooseSticker={(id) => {
               const separator = draft && !draft.endsWith(" ") ? " " : "";
               setDrafts((current) => ({ ...current, [scopeKey]: `${draft}${separator}[sticker:${id}]` }));
+            }}
+            activeModelProfileId={activeSession?.id === activeSessionId ? activeSession?.modelProfileId : undefined}
+            onSelectModelProfile={(modelProfileId) => {
+              if (!activeSessionId) return;
+              const store = chatStore();
+              if (!store) return;
+              void store.setModelProfile(activeSessionId, modelProfileId).then((session) => setActiveSession(session));
             }}
             />}
             interaction={composerInteraction}
@@ -2243,9 +2214,6 @@ export function ChatPage() {
         </>
         )}
       </main>
-      {mode === "code" && activeSessionId && codeGitReview?.snapshot && (
-        <CodeDiffReview sessionId={activeSessionId} snapshot={codeGitReview.snapshot} initialPath={codeGitReview.initialPath} open onClose={() => setCodeGitReview(null)} />
-      )}
     </div>
   );
 }

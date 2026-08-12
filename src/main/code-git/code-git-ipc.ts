@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import { BrowserWindow, ipcMain } from "electron";
 import { IPC } from "../../shared/ipc-channels";
-import type { CodeGitChangedPayload, CodeGitDiffResult } from "../../shared/code-git-types";
+import type { CodeGitChangedPayload } from "../../shared/code-git-types";
 import type { GitService } from "./git-service";
 
 interface IpcMainLike {
@@ -16,7 +16,7 @@ interface WindowLike {
 export interface RegisterCodeGitIpcDeps {
   ipcMain?: IpcMainLike;
   getWindows?: () => WindowLike[];
-  service: Pick<GitService, "getStatusForSession" | "getDiffForSession" | "watchSession" | "unwatchSession" | "switchBranchForSession" | "commitForSession" | "pushForSession" | "onChanged">;
+  service: Pick<GitService, "getStatusForSession" | "watchSession" | "unwatchSession" | "switchBranchForSession" | "commitForSession" | "pushForSession" | "onChanged">;
 }
 
 export function registerCodeGitIpc(deps: RegisterCodeGitIpcDeps): void {
@@ -38,21 +38,6 @@ export function registerCodeGitIpc(deps: RegisterCodeGitIpcDeps): void {
       };
     }
     return deps.service.getStatusForSession(sessionId);
-  });
-
-  main.handle(IPC.CODE_GIT_DIFF, (_event, payload: unknown): Promise<CodeGitDiffResult> | CodeGitDiffResult => {
-    const input = payload as { sessionId?: unknown; path?: unknown } | null;
-    const sessionId = typeof input?.sessionId === "string" ? input.sessionId : "";
-    const relativePath = typeof input?.path === "string" ? input.path : "";
-    if (!sessionId || !isSafeRendererRelativePath(relativePath)) {
-      return {
-        kind: "error",
-        sessionId,
-        path: relativePath,
-        message: "只能审阅当前仓库中的变更文件",
-      };
-    }
-    return deps.service.getDiffForSession(sessionId, relativePath);
   });
 
   main.handle(IPC.CODE_GIT_WATCH, (_event, sessionId: unknown) => deps.service.watchSession(requireSessionId(sessionId)));

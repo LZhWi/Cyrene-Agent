@@ -94,6 +94,8 @@ export interface AguiRunInput {
   imageAttachments?: { name: string; filePath: string; mime?: string }[];
   /** 同一会话上一次异常中断的只读恢复检查点。 */
   recoveryContext?: string;
+  /** 只由主进程根据会话持久化字段注入，渲染端传值不可信。 */
+  modelProfileId?: string;
 }
 
 /** 调用方（index.ts）注入：把输入转成 agent 需要的 options（含 system prompt 拼接）。 */
@@ -215,6 +217,7 @@ export function registerAgUiIpc(
     built = await perf.track("build_options", () => buildOptionsFn!({
       ...input,
       mode,
+      modelProfileId: session.modelProfileId,
       executionMode: agentExecutionMode,
     }));
     } catch (error) {

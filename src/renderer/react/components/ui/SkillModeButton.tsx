@@ -13,13 +13,11 @@ export function SkillModeButton({ active = false, onClick }: SkillModeButtonProp
       aria-pressed={active}
     >
       <span className="cy-side-action-icon">
-        <svg width="16" height="16" viewBox="0 0 48 48" fill="none">
-          <path
-            d="M18 8L24 16L30 8L38 14L30 20L38 28L30 34L24 26L18 34L10 28L18 20L10 14L18 8Z"
-            stroke="currentColor"
-            strokeWidth="4"
-            strokeLinejoin="round"
-          />
+        <svg width="18" height="18" viewBox="0 0 48 48" fill="none">
+          <path d="M39 6H9C7.34315 6 6 7.34315 6 9V39C6 40.6569 7.34315 42 9 42H39C40.6569 42 42 40.6569 42 39V9C42 7.34315 40.6569 6 39 6Z" fill="none" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M21 31L26 35L34 25" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M14 15H34" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M14 23L22 23" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </span>
       <span className="cy-side-action-label">技能</span>

@@ -31,12 +31,6 @@ export interface CodeGitStatus {
   behind: number;
 }
 
-export type CodeGitDiffResult =
-  | { kind: "ready"; sessionId: string; path: string; patch: string }
-  | { kind: "binary"; sessionId: string; path: string }
-  | { kind: "too_large"; sessionId: string; path: string; maxBytes: number }
-  | { kind: "error"; sessionId: string; path: string; message: string };
-
 export interface CodeGitChangedPayload {
   sessionId: string;
 }

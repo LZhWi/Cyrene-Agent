@@ -24,6 +24,7 @@ import {
   validateAskUserAnswer,
 } from "./orchestrator/ask-card";
 import { getTimeoutSettings } from "./timeout-manager";
+import { createAbortError } from "./abort-utils";
 
 const LOG_PREFIX = "[UserChoice]";
 const DEFAULT_CHOICE_TIMEOUT_MS = 120_000; // 2 分钟超时，给用户足够思考时间
@@ -45,7 +46,7 @@ export interface LegacyChoiceCardData {
 
 export type ChoiceCardData = LegacyChoiceCardData | AskCardPayload;
 
-export type ChoiceSettlementReason = "answered" | "timeout" | "unavailable";
+export type ChoiceSettlementReason = "answered" | "timeout" | "unavailable" | "cancelled";
 
 export interface ChoiceSettlement {
   id: string;
@@ -56,6 +57,9 @@ export interface ChoiceSettlement {
 
 interface PendingChoice {
   resolve: (value: unknown) => boolean;
+  reject?: (error: Error) => void;
+  onSettled?: (settlement: ChoiceSettlement) => void;
+  revision?: number;
   timer: NodeJS.Timeout;
   status: "open" | "resolving";
   /** Task 3 / C2：关联的 canonical runId，用于 cancelPendingChoicesForRun。 */
@@ -123,7 +127,7 @@ export function requestUserClarification(
   onSettled?: (settlement: ChoiceSettlement) => void,
   identity: { runId: string; revision: number } = { runId: "legacy", revision: 1 },
 ): Promise<AskUserAnswer> {
-  return new Promise<AskUserAnswer>((resolve) => {
+  return new Promise<AskUserAnswer>((resolve, reject) => {
     const id = "choice-" + (++choiceCounter) + "-" + Date.now();
     const emptyAnswer: AskUserAnswer = { requestId: id, answers: [] };
     const timeout = getTimeoutSettings().userChoiceTimeout;
@@ -150,6 +154,9 @@ export function requestUserClarification(
           return false;
         }
       },
+      reject,
+      onSettled,
+      revision: identity.revision,
       timer,
       status: "open",
       runId: identity.runId,
@@ -205,6 +212,8 @@ export function cancelPendingChoicesForRun(runId: string): void {
     if (pending.runId === runId && pending.status === "open") {
       clearTimeout(pending.timer);
       pendingChoices.delete(id);
+      pending.onSettled?.({ id, runId, revision: pending.revision ?? 1, reason: "cancelled" });
+      pending.reject?.(createAbortError());
       console.log(LOG_PREFIX, "cancelPendingChoicesForRun 清理:", id, "runId=", runId);
     }
   }

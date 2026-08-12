@@ -6,6 +6,7 @@ import type { GeneralSettings } from "../settings/general-settings";
 import type { UserProfile } from "../settings-store";
 import { loadVisionConfig } from "../settings/model-settings";
 import { getTimeoutSettings } from "../timeout-manager";
+import { resolveModelSettingsProfile } from "../settings/model-settings";
 import { normalizeChatMessages } from "../chat-api-utils";
 import { parseObserverFeeling } from "../chat-stream-utils";
 import { validateCaptionImagePath, IMAGE_CAPTION_PROMPT } from "../chat/image-caption";
@@ -133,7 +134,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
 
   function buildBuildOptionsDeps(): BuildOptionsDeps {
     return {
-      loadModelSettings: () => rawDeps.loadModelSettings(),
+      loadModelSettings: (modelProfileId?: string) => resolveModelSettingsProfile(rawDeps.loadModelSettings(), modelProfileId),
       loadGeneralSettings: () => rawDeps.loadGeneralSettings(),
       loadUserProfile: () => rawDeps.loadUserProfile(),
       buildEnvironmentContext: ((model, profile) =>

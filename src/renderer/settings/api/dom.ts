@@ -3,7 +3,6 @@
 
 export const apiForm = document.getElementById("api-form") as HTMLFormElement;
 export const apiRuntimeForm = document.getElementById("api-runtime-form") as HTMLFormElement;
-export const apiTimeoutForm = document.getElementById("api-timeout-form") as HTMLFormElement;
 export const presetCards = document.getElementById("preset-cards") as HTMLElement;
 export const presetWebsiteLink = document.getElementById("preset-website-link") as HTMLAnchorElement;
 export const displayNameInput = document.getElementById("display-name") as HTMLInputElement;
@@ -27,11 +26,6 @@ export const workFlowAdaptBtn = document.getElementById("work-flow-adapt-btn") a
 export const apiNoteText = document.getElementById("api-note-text") as HTMLElement;
 export const multimodalToggle = document.getElementById("multimodal-toggle") as HTMLInputElement;
 export const chatRequestTimeoutSecInput = document.getElementById("chat-request-timeout-sec") as HTMLInputElement;
-export const maxIterationsInput = document.getElementById("max-iterations") as HTMLInputElement;
-export const maxReplansInput = document.getElementById("max-replans") as HTMLInputElement;
-export const maxRefreshInput = document.getElementById("max-refresh") as HTMLInputElement;
-export const perCallTimeoutSecInput = document.getElementById("per-call-timeout-sec") as HTMLInputElement;
-export const actionGateRepairBudgetSecInput = document.getElementById("action-gate-repair-budget-sec") as HTMLInputElement;
 export const embeddingDimensionsInput = document.getElementById("embedding-dimensions-input") as HTMLInputElement | null;
 export const modelRequestTimeoutSecInput = document.getElementById("model-request-timeout-sec") as HTMLInputElement;
 export const modelRequestTimeoutSecReset = document.getElementById("model-request-timeout-sec-reset-btn") as HTMLButtonElement;

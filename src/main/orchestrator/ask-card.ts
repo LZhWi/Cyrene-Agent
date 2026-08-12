@@ -68,11 +68,12 @@ export function publishAskCard(
         ...(option.description ? { description: option.description } : {}),
       };
     });
+    const allowCustom = question.type === "text" || question.allowCustom;
     privateQuestions.set(questionId, {
       field: question.field,
       type: question.type,
       options,
-      allowCustom: question.allowCustom,
+      allowCustom,
     });
     return {
       id: questionId,
@@ -81,7 +82,7 @@ export function publishAskCard(
       required: true as const,
       options: publicOptions,
       customInput: {
-        enabled: question.allowCustom,
+        enabled: allowCustom,
         ...(question.freeTextPlaceholder ? { placeholder: question.freeTextPlaceholder } : {}),
       },
     };

@@ -307,6 +307,7 @@ export function createSession(opts?: {
   initialMessages?: ChatMessage[];
   purpose?: ChatSessionPurpose;
   mode?: ConversationMode;
+  modelProfileId?: string;
 }): ChatSession {
   const now = Date.now();
   const messages = opts?.initialMessages ?? [];
@@ -322,6 +323,7 @@ export function createSession(opts?: {
     purpose: opts?.purpose,
     titleIsCustom: opts?.purpose ? true : undefined,
     mode,
+    modelProfileId: opts?.modelProfileId,
   };
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));
@@ -439,6 +441,16 @@ export function setSessionPinned(id: string, pinned: boolean): ChatSession | nul
   const session = readSessionFile(id);
   if (!session) return null;
   session.pinned = Boolean(pinned);
+  writeSessionFile(session);
+  upsertMeta(metaFromSession(session));
+  return session;
+}
+
+export function setSessionModelProfile(id: string, modelProfileId: string | undefined): ChatSession | null {
+  const session = readSessionFile(id);
+  if (!session) return null;
+  session.modelProfileId = modelProfileId;
+  session.updatedAt = Date.now();
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));
   return session;

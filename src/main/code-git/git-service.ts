@@ -4,46 +4,11 @@ import type { ChatSession } from "../../shared/chat-types";
 import {
   emptyCodeGitStatus,
   type CodeGitChangeKind,
-  type CodeGitDiffResult,
   type CodeGitFileChange,
   type CodeGitStatus,
 } from "../../shared/code-git-types";
 import type { ResolvedGitExecutable } from "./git-executable";
 import { createGitWorkspaceWatcher, type GitWorkspaceWatcher } from "./git-workspace-watcher";
-
-const MAX_DIFF_BYTES = 2 * 1024 * 1024;
-
-/**
- * `git diff --no-index` uses exit code 1 when it successfully finds a diff.
- * simple-git keeps that command's stdout in `error.git.stdout`.
- *
- * 当 `core.autocrlf=true` 且未跟踪文件使用 LF 行结尾时，git 会在 stderr 输出
- * "LF will be replaced by CRLF" 警告。simple-git 此时不再分别提供 stdout/stderr，
- * 而是把两者合并塞进 `error.message`。此处增加 fallback：从 message 中提取
- * 纯 diff/numstat 内容（截掉 warning 行），避免 diff 被当作错误消息原样显示。
- */
-export function readGitErrorStdout(error: unknown): string | undefined {
-  if (!error || typeof error !== "object") return undefined;
-  const direct = (error as { stdout?: unknown }).stdout;
-  if (typeof direct === "string") return direct;
-  const nested = (error as { git?: { stdout?: unknown } }).git?.stdout;
-  if (typeof nested === "string") return nested;
-  // simple-git 在 autocrlf 警告等场景下会把 stdout+stderr 合并进 error.message。
-  // 只接受看起来像 diff（diff --git 开头）或 numstat（数字开头）的 message，
-  // 避免把真正的 git 错误消息误当作命令输出。
-  const message = (error as { message?: unknown }).message;
-  if (typeof message !== "string") return undefined;
-  if (message.startsWith("diff --git") || /^\d/.test(message)) {
-    return stripGitWarnings(message);
-  }
-  return undefined;
-}
-
-/** 截掉 `warning:`/`fatal:`/`error:` 开头的行及之后内容，保留纯命令输出。 */
-function stripGitWarnings(value: string): string {
-  const warningIdx = value.search(/^(warning|fatal|error):/m);
-  return warningIdx >= 0 ? value.slice(0, warningIdx) : value;
-}
 
 export interface GitStatusFile {
   path: string;
@@ -68,8 +33,6 @@ export interface GitClient {
     deletions: number;
     byPath: Record<string, { insertions: number; deletions: number }>;
   }>;
-  getTrackedDiff(relativePath: string): Promise<string>;
-  getUntrackedDiff(relativePath: string): Promise<string>;
   init(): Promise<void>;
   add(paths: string[]): Promise<void>;
   commit(message: string): Promise<string>;
@@ -89,7 +52,6 @@ export interface GitServiceDeps {
 
 export interface GitService {
   getStatusForSession(sessionId: string): Promise<CodeGitStatus>;
-  getDiffForSession(sessionId: string, relativePath: string): Promise<CodeGitDiffResult>;
   onChanged(listener: (payload: { sessionId: string }) => void): () => void;
   initRepository(ctx: TrustedGitContext): Promise<string>;
   commit(ctx: TrustedGitContext, message: string, paths: string[]): Promise<string>;
@@ -262,38 +224,6 @@ export function createGitService(deps: GitServiceDeps): GitService {
       }
     },
 
-    async getDiffForSession(sessionId: string, relativePath: string): Promise<CodeGitDiffResult> {
-      if (!isSafeRelativePath(relativePath)) {
-        return diffError(sessionId, relativePath, "只能审阅当前仓库中的变更文件");
-      }
-
-      try {
-        const resolved = await resolveCodeSession(sessionId);
-        if (isCodeGitStatus(resolved)) return diffError(sessionId, relativePath, resolved.message ?? "Git 状态暂时不可用");
-
-        const client = createClient(resolved);
-        if (!await client.isRepository()) {
-          return diffError(sessionId, relativePath, "这个目录还不是 Git 仓库");
-        }
-
-        const status = await client.getStatus();
-        const file = status.files.find((candidate) => sameRelativePath(candidate.path, relativePath));
-        if (!file) return diffError(sessionId, relativePath, "该文件不在当前 Git 变更中");
-
-        const patch = isUntracked(file)
-          ? await client.getUntrackedDiff(relativePath)
-          : await client.getTrackedDiff(relativePath);
-        if (Buffer.byteLength(patch, "utf8") > MAX_DIFF_BYTES) {
-          return { kind: "too_large", sessionId, path: relativePath, maxBytes: MAX_DIFF_BYTES };
-        }
-        if (/^Binary files .* differ$/m.test(patch)) {
-          return { kind: "binary", sessionId, path: relativePath };
-        }
-        return { kind: "ready", sessionId, path: relativePath, patch };
-      } catch (error) {
-        return diffError(sessionId, relativePath, errorMessage(error));
-      }
-    },
   };
 }
 
@@ -344,7 +274,7 @@ function createSimpleGitClient(input: { workspaceRoot: string; executable: Resol
           deletions += fileDeletions;
           byPath[file.path] = { insertions: fileInsertions, deletions: fileDeletions };
         } catch (error) {
-          const output = readGitErrorStdout(error);
+          const output = readGitCommandOutput(error);
           if (typeof output === "string") {
             const [added, removed] = output.trim().split(/\s+/);
             const fileInsertions = /^\d+$/.test(added) ? Number(added) : 0;
@@ -356,16 +286,6 @@ function createSimpleGitClient(input: { workspaceRoot: string; executable: Resol
         }
       }
       return { insertions, deletions, byPath };
-    },
-    getTrackedDiff: (relativePath) => git.diff(["--no-ext-diff", "HEAD", "--", relativePath]),
-    async getUntrackedDiff(relativePath) {
-      try {
-        return await git.raw(["diff", "--no-index", "--", "/dev/null", relativePath]);
-      } catch (error) {
-        const stdout = readGitErrorStdout(error);
-        if (typeof stdout === "string") return stdout;
-        throw error;
-      }
     },
     init: async () => { await git.init(); },
     add: async (paths) => { await git.raw(["add", "-A", "--", ...paths]); },
@@ -446,14 +366,19 @@ function isSafeBranchName(value: string): boolean {
     && !value.endsWith(".");
 }
 
-function sameRelativePath(left: string, right: string): boolean {
-  return left.replace(/\\/g, "/") === right.replace(/\\/g, "/");
-}
-
-function diffError(sessionId: string, path: string, message: string): CodeGitDiffResult {
-  return { kind: "error", sessionId, path, message };
-}
-
 function errorMessage(error: unknown): string {
   return error instanceof Error && error.message ? error.message : "Git 状态暂时不可用";
+}
+
+/** `git diff --no-index --numstat` uses exit code 1 when differences exist. */
+function readGitCommandOutput(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const direct = (error as { stdout?: unknown }).stdout;
+  if (typeof direct === "string") return direct;
+  const nested = (error as { git?: { stdout?: unknown } }).git?.stdout;
+  if (typeof nested === "string") return nested;
+  const message = (error as { message?: unknown }).message;
+  if (typeof message !== "string" || !/^\d/.test(message)) return undefined;
+  const warningIdx = message.search(/^(warning|fatal|error):/m);
+  return warningIdx >= 0 ? message.slice(0, warningIdx) : message;
 }

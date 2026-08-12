@@ -61,7 +61,7 @@ import { buildStickerEmbeddingQuery } from "../sticker-query";
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
  *  实际调用时由 index.ts 注入真实的强类型函数。这避免循环类型依赖。 */
 export interface BuildOptionsDeps {
-  loadModelSettings: () => ModelSettingsLite;
+  loadModelSettings: (modelProfileId?: string) => ModelSettingsLite;
   loadGeneralSettings: () => StyleSettingsLite;
   loadUserProfile: () => UserProfileLite;
   buildEnvironmentContext: (model: { provider: string; model: string }, profile: unknown) => string;
@@ -386,7 +386,7 @@ export async function buildAgentRunOptions(
   input: AguiRunInput,
   deps: BuildOptionsDeps,
 ): Promise<{ options: CyreneRunOptions; latestUserText: string }> {
-  const settings = deps.loadModelSettings();
+  const settings = deps.loadModelSettings(input.modelProfileId);
   const styleSettings = deps.loadGeneralSettings();
   if (!settings.baseUrl) {
     throw new Error("还没有填写 API URL，请先在设置里保存 API 配置。");

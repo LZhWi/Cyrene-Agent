@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { DEFAULT_CONTEXT_WINDOW_TOKENS } from "../orchestrator/model-config";
 import { foldReasoning, normalizeReasoningPreference, type ReasoningPreference } from "../../shared/reasoning";
 import type { StickerSize } from "../../shared/sticker-types";
@@ -7,6 +8,7 @@ import { getSettingsPath } from "../settings-store";
 import type { VisionConfig } from "../orchestrator/vision-captioner";
 import { migrateLegacyMinimaxDefaults } from "../orchestrator/vendors/minimax-defaults";
 import { getCapabilityOrOpenAI } from "../orchestrator/vendors/capabilities";
+import { addModelProfile, resolveDefaultModelProfile, type SavedModelProfile } from "./model-catalog";
 
 /**
  * 统一模型配置入口：所有模块（包括 Code 模式）必须通过此函数读取。
@@ -111,24 +113,17 @@ export interface ModelSettings {
   // 真值（source of truth）是 perProvider；顶层 baseUrl/model/apiKey 是当前厂商那一份的展开镜像，
   // 仅为兼容现有 main 进程里大量直接读 settings.baseUrl 等代码而保留。
   perProvider: Record<string, ProviderProfile>;
+  /** 用户保存的可选模型；默认项决定新对话和非对话任务的模型。 */
+  modelProfiles?: SavedModelProfile[];
+  defaultModelProfileId?: string;
   runtimeSync: "off" | "local" | "llm";
   stickerEnabled: boolean;
   stickerSize: StickerSize;
   stickerSimilarityThreshold: number;
   /** 整个聊天请求的总超时（秒）。30-1800，默认 300。 */
   chatRequestTimeoutSec: number;
-  /** 总轮数。5-30，默认 12。 */
-  maxIterations: number;
-  /** Plan 步骤失败后重规划次数。1-5，默认 2。 */
-  maxReplans: number;
-  /** 引用过期重新决策次数。0-3，默认 1。 */
-  maxRefresh: number;
-  /** 单次 LLM 调用超时（秒）。30-120，默认 75。 */
-  perCallTimeoutSec: number;
   /** CITA 结构化输出重试总预算（秒）。4-30，默认 8。 */
   citaRepairBudgetSec: number;
-  /** Action Gate 结构化输出重试总预算（秒）。5-40，默认 10。 */
-  actionGateRepairBudgetSec: number;
   rerankerMode: "standard" | "none";
   embeddingModel: "bgem3";
   /**
@@ -167,12 +162,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   stickerSize: "standard",
   stickerSimilarityThreshold: 0.55,
   chatRequestTimeoutSec: 300,
-  maxIterations: 12,
-  maxReplans: 2,
-  maxRefresh: 1,
-  perCallTimeoutSec: 75,
   citaRepairBudgetSec: 8,
-  actionGateRepairBudgetSec: 10,
   rerankerMode: "standard",
   embeddingModel: "bgem3",
   multimodal: false,
@@ -274,6 +264,14 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
     multimodal = true;
   }
 
+  const modelProfiles = Array.isArray(input?.modelProfiles)
+    ? input.modelProfiles.filter((item): item is SavedModelProfile => Boolean(item && typeof item === "object" && typeof item.id === "string" && typeof item.provider === "string"))
+      .map((item) => ({ ...normalizeProviderProfile(item, item.provider), id: item.id, provider: item.provider }))
+    : [];
+  if (modelProfiles.length === 0 && profile.apiKey && profile.model) {
+    modelProfiles.push({ ...profile, id: `legacy-${provider}-${profile.model}`.replace(/[^a-zA-Z0-9_-]/g, "_"), provider });
+  }
+
   return {
     mode,
     provider,
@@ -284,6 +282,8 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
     explicitTransport: profile.explicitTransport,
     reasoning: profile.reasoning,  // 顶层镜像：与 explicitTransport 同源（perProvider[currentProvider].reasoning）
     perProvider,
+    modelProfiles,
+    defaultModelProfileId: typeof input?.defaultModelProfileId === "string" ? input.defaultModelProfileId : modelProfiles[0]?.id,
     runtimeSync: input?.runtimeSync === "llm" ? "llm" : input?.runtimeSync === "local" ? "local" : "off",
     stickerEnabled: input?.stickerEnabled !== false,
     stickerSize: input?.stickerSize === "small" || input?.stickerSize === "large" ? input.stickerSize : "standard",
@@ -294,24 +294,9 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
       && Number.isFinite(input.chatRequestTimeoutSec)
       ? Math.max(30, Math.min(1800, Math.round(input.chatRequestTimeoutSec)))
       : 300,
-    maxIterations: typeof input?.maxIterations === "number" && Number.isFinite(input.maxIterations)
-      ? Math.max(5, Math.min(30, Math.round(input.maxIterations)))
-      : 12,
-    maxReplans: typeof input?.maxReplans === "number" && Number.isFinite(input.maxReplans)
-      ? Math.max(1, Math.min(5, Math.round(input.maxReplans)))
-      : 2,
-    maxRefresh: typeof input?.maxRefresh === "number" && Number.isFinite(input.maxRefresh)
-      ? Math.max(0, Math.min(3, Math.round(input.maxRefresh)))
-      : 1,
-    perCallTimeoutSec: typeof input?.perCallTimeoutSec === "number" && Number.isFinite(input.perCallTimeoutSec)
-      ? Math.max(30, Math.min(120, Math.round(input.perCallTimeoutSec)))
-      : 75,
     citaRepairBudgetSec: typeof input?.citaRepairBudgetSec === "number" && Number.isFinite(input.citaRepairBudgetSec)
       ? Math.max(4, Math.min(30, Math.round(input.citaRepairBudgetSec)))
       : 8,
-    actionGateRepairBudgetSec: typeof input?.actionGateRepairBudgetSec === "number" && Number.isFinite(input.actionGateRepairBudgetSec)
-      ? Math.max(5, Math.min(40, Math.round(input.actionGateRepairBudgetSec)))
-      : 10,
     rerankerMode: input?.rerankerMode === "none" ? "none" : "standard",
     embeddingModel: "bgem3",
     embeddingDimensions: typeof input?.embeddingDimensions === "number"
@@ -328,6 +313,46 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
       ? Math.round(input.contextWindowTokens)
       : DEFAULT_CONTEXT_WINDOW_TOKENS,
   };
+}
+
+export function listSavedModelProfiles(settings = loadModelSettings()): SavedModelProfile[] {
+  return settings.modelProfiles ?? [];
+}
+
+export function getDefaultModelProfile(settings = loadModelSettings()): SavedModelProfile | undefined {
+  return resolveDefaultModelProfile(listSavedModelProfiles(settings), settings.defaultModelProfileId);
+}
+
+/** 为单次对话展开已保存的模型；未找到时退回当前默认镜像。 */
+export function resolveModelSettingsProfile(settings: ModelSettings, id?: string): ModelSettings {
+  const profile = id ? listSavedModelProfiles(settings).find((item) => item.id === id) : undefined;
+  if (!profile) return settings;
+  return {
+    ...settings,
+    provider: profile.provider,
+    displayName: profile.displayName,
+    baseUrl: profile.baseUrl,
+    model: profile.model,
+    apiKey: profile.apiKey,
+    explicitTransport: profile.explicitTransport,
+    reasoning: profile.reasoning,
+  };
+}
+
+export function saveModelProfile(input: Omit<SavedModelProfile, "id"> & { id?: string }): { settings: ModelSettings; added: boolean } {
+  const existing = loadModelSettings();
+  const profile: SavedModelProfile = { ...normalizeProviderProfile(input, input.provider), id: input.id ?? randomUUID(), provider: input.provider };
+  const result = addModelProfile(listSavedModelProfiles(existing), profile);
+  if (!result.added) return { settings: existing, added: false };
+  const settings = saveModelSettings({ modelProfiles: result.profiles, defaultModelProfileId: existing.defaultModelProfileId ?? profile.id });
+  return { settings: existing.defaultModelProfileId ? settings : setDefaultModelProfile(profile.id), added: true };
+}
+
+export function setDefaultModelProfile(id: string): ModelSettings {
+  const existing = loadModelSettings();
+  const profile = listSavedModelProfiles(existing).find((item) => item.id === id);
+  if (!profile) throw new Error("模型不存在");
+  return saveModelSettings({ ...profile, defaultModelProfileId: id });
 }
 
 let modelSettingsCache: ModelSettings | null = null;

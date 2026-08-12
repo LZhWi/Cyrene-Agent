@@ -21,7 +21,6 @@ import type { ToolCallResult, ToolExecutionOutcome } from "./types";
 import { checkPermission, type ToolRiskLevel } from "../permission";
 import { getAdapterForConfig, type ChatMessage } from "./vendors";
 import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./tool-context";
-import { getTimeoutSettings } from "../timeout-manager";
 import { runChatLoop } from "./chat-loop";
 import type { RunCapabilities } from "./run-capabilities";
 import { runHarnessWithAdapter } from "./harness-adapter";
@@ -373,8 +372,6 @@ export class CyreneAgent extends AbstractAgent {
     };
     const conversationId = runOptions.conversationId ?? "default";
     const abortController = new AbortController();
-    const timeoutSettings = getTimeoutSettings();
-
     // first-source-wins：谁先触发 abort，谁就是最终分类
     let abortSource: AbortSource | undefined;
     const markAbort = (source: AbortSource) => {

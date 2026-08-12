@@ -20,6 +20,7 @@ import * as chatsStore from "./chats-store";
 import * as fs from "fs";
 import * as path from "path";
 import { ensureVaultStructure, isEmptyDirectory } from "../learn/obsidian/vault-init";
+import { getDefaultModelProfile } from "../settings/model-settings";
 
 function broadcastChanged(senderWebContents?: WebContents | null): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -58,6 +59,7 @@ export function registerChatsIpc(): void {
         title: payload?.title,
         identityId: payload?.identityId ?? null,
         mode: payload?.mode,
+        modelProfileId: getDefaultModelProfile()?.id,
       });
       broadcastChanged(event.sender);
       return session;
@@ -138,6 +140,13 @@ export function registerChatsIpc(): void {
   ipcMain.handle(IPC.CHATS_SET_PINNED, (event, payload: { id: string; pinned: boolean }) => {
     if (!payload || typeof payload.id !== "string") return null;
     const session = chatsStore.setSessionPinned(payload.id, Boolean(payload.pinned));
+    if (session) broadcastChanged(event.sender);
+    return session;
+  });
+
+  ipcMain.handle(IPC.CHATS_SET_MODEL_PROFILE, (event, payload: { id: string; modelProfileId?: string }) => {
+    if (!payload || typeof payload.id !== "string") return null;
+    const session = chatsStore.setSessionModelProfile(payload.id, payload.modelProfileId);
     if (session) broadcastChanged(event.sender);
     return session;
   });

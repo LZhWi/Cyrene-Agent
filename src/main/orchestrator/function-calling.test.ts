@@ -24,8 +24,6 @@ vi.mock("./context-manager", () => ({
 
 vi.mock("../timeout-manager", () => ({
   getTimeoutSettings: vi.fn(() => ({
-    perRoundTimeout: 75000,
-    forceSummaryTimeout: 90000,
   })),
 }));
 

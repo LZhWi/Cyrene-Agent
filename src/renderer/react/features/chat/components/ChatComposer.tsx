@@ -5,6 +5,7 @@ import { resolveAsset } from "../../../../../shared/renderer-base";
 import { ReasoningControl } from "./ReasoningControl";
 import { StyleControl } from "./StyleControl";
 import { PermissionControl } from "./PermissionControl";
+import { ModelSelector } from "./ModelSelector";
 import chatWelcomeUrl from "../../../assets/welcome/chat.png?url";
 import codeWelcomeUrl from "../../../assets/welcome/code.png?url";
 import learnWelcomeUrl from "../../../assets/welcome/learn.png?url";
@@ -30,6 +31,8 @@ interface ChatComposerProps {
   onScreenshot: () => void;
   onChooseSticker: (id: string) => void;
   onInitVaultStructure?: () => void;
+  activeModelProfileId?: string;
+  onSelectModelProfile?: (id: string) => void;
 }
 
 export interface ComposerAttachment {
@@ -201,6 +204,8 @@ export function ChatComposer({
   onScreenshot,
   onChooseSticker,
   onInitVaultStructure,
+  activeModelProfileId,
+  onSelectModelProfile,
 }: ChatComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
@@ -373,6 +378,7 @@ export function ChatComposer({
           <PermissionControl />
         )}
         {supportsStyle && <StyleControl />}
+        {onSelectModelProfile && <ModelSelector activeProfileId={activeModelProfileId} onSelect={onSelectModelProfile} />}
         <ReasoningControl />
         </div>
       </div>
