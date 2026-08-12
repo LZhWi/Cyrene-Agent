@@ -93,15 +93,11 @@ export interface ToolDefinition {
   completionEvidence?: CapabilityCompletionEvidence[];
   /** Plan 模式下不暴露给 Action Gate 和 Native FC（防止 Plan 步骤降级到旧 Loop）。 */
   hideInPlanMode?: boolean;
-  /** 执行类型：atomic 走普通 executeTool，subagent 走子代理 Executor。默认 atomic。 */
-  executionKind?: "atomic" | "subagent";
-  /** 子代理 Profile 标识（executionKind=subagent 时必填）。 */
-  subAgentProfile?: import("./subagents/types").SubAgentProfileId;
-  /** Ledger 策略：success_terminal 缓存终态成功（默认），bypass 不缓存。子代理默认 bypass。 */
+  /** Ledger 策略：success_terminal 缓存终态成功（默认），bypass 不缓存。 */
   ledgerPolicy?: "success_terminal" | "bypass";
   /** 标记为已废弃：从新运行的 Action Gate 可用工具列表中隐藏，但保留注册用于旧会话兼容。 */
   deprecated?: boolean;
-  /** 自定义完成证据验证器：对子代理工具，从结构化输出中验证 artifact 等条件。 */
+  /** 自定义完成证据验证器：从结构化输出中验证 artifact 等条件。 */
   completionEvidenceVerifier?: (result: import("./types").ToolCallResult) => boolean;
   /** 工具效果类型。未配置默认 "unknown"，不静默放行。 */
   effectKind?: ToolEffectKind;

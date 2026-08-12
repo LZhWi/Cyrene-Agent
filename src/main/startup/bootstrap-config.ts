@@ -4,7 +4,6 @@ import type { GeneralSettings } from "../settings/general-settings";
 import { loadModelSettings } from "../settings/model-settings";
 import { loadUserProfile } from "../settings-store";
 import {
-  setDelegateSettings,
   setSearchConfig,
   setUserTimezoneConfig,
   setWeatherConfig,
@@ -161,9 +160,4 @@ export function bootstrapConfigGetters(ctx: BootstrapConfigContext): void {
     },
   );
 
-  // 注入子代理 LLM 配置（delegate_task 工具用，复用主模型配置）
-  setDelegateSettings(() => {
-    const s = loadModelSettings();
-    return { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey, contextWindowTokens: s.contextWindowTokens };
-  });
 }

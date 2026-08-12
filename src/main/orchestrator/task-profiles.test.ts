@@ -24,9 +24,6 @@ const parentTools = [
   "web_search",
   "fetch_url",
   "task",
-  "delegate_task",
-  "delegate_document",
-  "delegate_search",
   "ask_user",
   "confirm_uncertain_effect",
 ].map(tool);
@@ -44,9 +41,6 @@ describe("Task agent profiles", () => {
     expect(resolved.map((entry) => entry.id)).toEqual(expect.arrayContaining(["read_file", "write_word"]));
     expect(resolved.map((entry) => entry.id)).not.toEqual(expect.arrayContaining([
       "task",
-      "delegate_task",
-      "delegate_document",
-      "delegate_search",
       "ask_user",
       "confirm_uncertain_effect",
     ]));

@@ -129,7 +129,6 @@ import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
 import {
   setWeatherConfig,
   setSearchConfig,
-  setDelegateSettings,
   setUserTimezoneConfig,
 } from "./orchestrator/built-in-tools";
 import { resolveMusicPaths } from "./music/paths";
