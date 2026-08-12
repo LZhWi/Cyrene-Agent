@@ -40,23 +40,31 @@ export function buildCodeGitReviewSnapshot(input: {
 
   const targets = new Set(input.tools.flatMap(toolTargetPaths));
   if (targets.size === 0) return undefined;
-  const filesWithStats = after.files.filter((file) => {
+  const belongsToRun = (file: CodeGitStatus["files"][number]) => {
     const candidate = normalizePath(file.path);
     return [...targets].some((target) => target === candidate || target.endsWith(`/${candidate}`));
-  });
-  const files = filesWithStats.map(({ path, kind, insertions, deletions }) => ({
-    path,
-    kind,
-    insertions,
-    deletions,
-  }));
+  };
+  const beforeByPath = new Map((input.before?.files ?? []).filter(belongsToRun).map((file) => [normalizePath(file.path), file]));
+  const afterByPath = new Map(after.files.filter(belongsToRun).map((file) => [normalizePath(file.path), file]));
+  const files = [...new Set([...beforeByPath.keys(), ...afterByPath.keys()])].map((key) => {
+    const beforeFile = beforeByPath.get(key);
+    const afterFile = afterByPath.get(key);
+    const insertionDelta = (afterFile?.insertions ?? 0) - (beforeFile?.insertions ?? 0);
+    const deletionDelta = (afterFile?.deletions ?? 0) - (beforeFile?.deletions ?? 0);
+    return {
+      path: afterFile?.path ?? beforeFile?.path ?? key,
+      kind: afterFile?.kind ?? beforeFile?.kind ?? "modified",
+      insertions: Math.max(insertionDelta, 0) + Math.max(-deletionDelta, 0),
+      deletions: Math.max(-insertionDelta, 0) + Math.max(deletionDelta, 0),
+    };
+  }).filter((file) => file.insertions > 0 || file.deletions > 0);
   if (files.length === 0) return undefined;
 
   return {
     sessionId: input.sessionId,
     files,
-    insertions: filesWithStats.reduce((sum, file) => sum + file.insertions, 0),
-    deletions: filesWithStats.reduce((sum, file) => sum + file.deletions, 0),
+    insertions: files.reduce((sum, file) => sum + file.insertions, 0),
+    deletions: files.reduce((sum, file) => sum + file.deletions, 0),
     capturedAt: input.capturedAt,
   };
 }

@@ -27,6 +27,20 @@ describe("Code Git review snapshot", () => {
     });
   });
 
+  it("reports deleting previously-added working-tree lines as this run's deletions", () => {
+    expect(buildCodeGitReviewSnapshot({
+      sessionId: "s1",
+      before: status([{ path: "src/a.ts", kind: "modified", staged: false, unstaged: true, insertions: 190, deletions: 0 }], 190),
+      after: status([{ path: "src/a.ts", kind: "modified", staged: false, unstaged: true, insertions: 166, deletions: 0 }], 166),
+      tools: [{ id: "1", name: "apply_patch", status: "success", argsText: '{"file_path":"src/a.ts"}' }],
+      capturedAt: 10,
+    })).toMatchObject({
+      files: [{ path: "src/a.ts", insertions: 0, deletions: 24 }],
+      insertions: 0,
+      deletions: 24,
+    });
+  });
+
   it("does not create a review for commit/status tools or an unchanged Git snapshot", () => {
     const dirty = status([{ path: "src/a.ts", kind: "modified", staged: false, unstaged: true, insertions: 3, deletions: 1 }]);
     expect(buildCodeGitReviewSnapshot({ sessionId: "s1", before: dirty, after: dirty, tools: [
