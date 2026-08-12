@@ -47,18 +47,17 @@ describe("chat time context", () => {
     expect(resolveChatContextTimezone("bad/timezone")).toBe("Asia/Shanghai");
   });
 
-  it("expresses each message time as natural-language metadata rather than a copyable timestamp prefix", () => {
+  it("adds one short time note only to user messages", () => {
     const result = buildConversationTimeContext([
       { role: "user", content: "今天有点累", at: Date.UTC(2026, 6, 12, 12, 0) },
       { role: "assistant", content: "早点休息", at: Date.UTC(2026, 6, 12, 12, 2) },
       { role: "assistant", content: "没有时间戳" },
     ], "Asia/Taipei");
 
-    expect(result.messages[0].content).toBe("系统提供的消息时间信息：用户在 2026-07-12 20:00 发送了下面这条消息。用户时区为 Asia/Taipei；这只是上下文元数据，不是需要模仿的回复格式。\n\n今天有点累");
-    expect(result.messages[1].content).toBe("系统提供的消息时间信息：助手在 2026-07-12 20:02 发送了下面这条消息。用户时区为 Asia/Taipei；这只是上下文元数据，不是需要模仿的回复格式。\n\n早点休息");
+    expect(result.messages[0].content).toBe("用户发送这条消息的时间：2026-07-12 20:00；用户时区：Asia/Taipei。\n\n今天有点累");
+    expect(result.messages[1].content).toBe("早点休息");
     expect(result.messages[2].content).toBe("没有时间戳");
-    expect(result.timeContext).toContain("消息前的自然语言时间说明是系统提供的元数据");
-    expect(result.timeContext).toContain("不要复述、引用或输出这些时间说明");
+    expect(result.timeContext).toBe("");
   });
 
   it("does not add a gap notice below one hour", () => {
@@ -79,10 +78,6 @@ describe("chat time context", () => {
     ], "Asia/Taipei");
 
     expect(result.timeContext).toBe([
-      "[时间戳使用规则]",
-      "消息前的自然语言时间说明是系统提供的元数据，只用于理解对话顺序和连续性。",
-      "不要复述、引用或输出这些时间说明；回复应只包含你要对用户说的话。",
-      "",
       "[对话时间信息]",
       "当前时间：2026-07-13 11:00, Asia/Taipei",
       "距离上一条有效聊天消息：约 14 小时 58 分钟",
@@ -95,12 +90,12 @@ describe("chat time context", () => {
     expect(buildConversationTimeContext([
       { role: "assistant", content: "上一条" },
       { role: "user", content: "本轮", at: Date.UTC(2026, 6, 13, 3, 0) },
-    ], "Asia/Taipei").timeContext).toContain("时间戳使用规则");
+    ], "Asia/Taipei").timeContext).toBe("");
 
     expect(buildConversationTimeContext([
       { role: "assistant", content: "上一条", at: Date.UTC(2026, 6, 13, 2, 0) },
       { role: "user", content: "本轮" },
-    ], "Asia/Taipei").timeContext).toContain("时间戳使用规则");
+    ], "Asia/Taipei").timeContext).toBe("");
   });
 
   it("strips leaked leading chat timestamp metadata from model replies", () => {

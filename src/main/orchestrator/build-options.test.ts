@@ -198,8 +198,8 @@ describe("build-options", () => {
       style: "01_default.md",
     }, deps)
 
-    expect(result.options.messages[0].content).toContain("用户在 2026-07-12 20:00 发送了下面这条消息")
-    expect(result.options.messages[2].content).toContain("用户在 2026-07-13 11:00 发送了下面这条消息")
+    expect(result.options.messages[0].content).toContain("用户发送这条消息的时间：2026-07-12 20:00")
+    expect(result.options.messages[2].content).toContain("用户发送这条消息的时间：2026-07-13 11:00")
     expect(result.options.soulSystemBaseContent).toContain("[对话时间信息]")
     expect(result.options.soulSystemBaseContent).toContain("距离上一条有效聊天消息：约 14 小时 58 分钟")
     expect(result.options.soulSystemBaseContent.match(/距离上一条有效聊天消息/g)).toHaveLength(1)

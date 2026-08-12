@@ -97,11 +97,10 @@ function formatLocalDateTime(timestamp: number, timezone: string): string {
 }
 
 function withTimePrefix(message: ChatContextMessage, timezone: string): ChatContextMessage {
-  if (!isValidTimestamp(message.at)) return { ...message };
-  const speaker = message.role === "user" ? "用户" : message.role === "assistant" ? "助手" : "系统";
+  if (!isValidTimestamp(message.at) || message.role !== "user") return { ...message };
   return {
     ...message,
-    content: `系统提供的消息时间信息：${speaker}在 ${formatLocalDateTime(message.at, timezone)} 发送了下面这条消息。用户时区为 ${resolveChatContextTimezone(timezone)}；这只是上下文元数据，不是需要模仿的回复格式。\n\n${message.content}`,
+    content: `用户发送这条消息的时间：${formatLocalDateTime(message.at, timezone)}；用户时区：${resolveChatContextTimezone(timezone)}。\n\n${message.content}`,
   };
 }
 
@@ -110,19 +109,6 @@ function formatDuration(ms: number): string {
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes % 60;
   return minutes > 0 ? `约 ${hours} 小时 ${minutes} 分钟` : `约 ${hours} 小时`;
-}
-
-function hasTimestampedMessages(messages: ChatContextMessage[]): boolean {
-  return messages.some((message) => isValidTimestamp(message.at));
-}
-
-function buildTimestampUseRule(messages: ChatContextMessage[]): string {
-  if (!hasTimestampedMessages(messages)) return "";
-  return [
-    "[时间戳使用规则]",
-    "消息前的自然语言时间说明是系统提供的元数据，只用于理解对话顺序和连续性。",
-    "不要复述、引用或输出这些时间说明；回复应只包含你要对用户说的话。",
-  ].join("\n");
 }
 
 function latestUserIndex(messages: ChatContextMessage[]): number {
@@ -164,13 +150,12 @@ export function stripLeakedChatTimeContext(text: string): string {
 
 export function buildConversationTimeContext(messages: ChatContextMessage[], timezone: string): ConversationTimeContext {
   const resolvedTimezone = resolveChatContextTimezone(timezone);
-  const timestampUseRule = buildTimestampUseRule(messages);
   const gapNotice = buildGapNotice(messages, resolvedTimezone);
   const timestampedMessages = messages.map((message) => withTimePrefix(message, resolvedTimezone));
   return {
     cleanMessages: messages.map((message) => ({ ...message })),
     timestampedMessages,
     messages: timestampedMessages,
-    timeContext: [timestampUseRule, gapNotice].filter(Boolean).join("\n\n"),
+    timeContext: gapNotice,
   };
 }
