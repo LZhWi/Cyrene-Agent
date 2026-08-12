@@ -96,4 +96,10 @@ describe("markdownToSpeechText", () => {
     expect(learn.text).toContain("积分");
     expect(learn.text).not.toContain("请查看下面的公式");
   });
+
+  it("replaces musical note symbols with a sentence-ending pause", () => {
+    const result = markdownToSpeechText("下午好呀伙伴♪ 人家呢…倒是不用吃饭。", {});
+    expect(result.text).toContain("下午好呀伙伴。");
+    expect(result.text).not.toContain("♪");
+  });
 });

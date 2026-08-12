@@ -123,8 +123,12 @@ function replaceMath(text: string, options: SpeechTextOptions, warnings: string[
     .replace(/\\\((.+?)\\\)/g, convert);
 }
 
+function normalizeSpeechText(text: string): string {
+  return text.replace(/♪/g, "。");
+}
+
 function sanitizePlainText(text: string, options: SpeechTextOptions, warnings: string[]): string {
-  return replaceMath(decodeEntities(text), options, warnings)
+  return normalizeSpeechText(replaceMath(decodeEntities(text), options, warnings))
     .replace(/https?:\/\/[^\s<>()]+/gi, "这里有一个链接")
     .replace(/\b[A-Za-z]:\\(?:[^\\\s,，。；;]+\\?)+/g, "一个文件路径")
     .replace(/(?:^|\s)\/(?:[^/\s]+\/)+[^\s,，。；;]*/g, " 一个文件路径")
