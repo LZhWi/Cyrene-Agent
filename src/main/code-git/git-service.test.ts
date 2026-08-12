@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { ChatSession } from "../../shared/chat-types";
 import type { ResolvedGitExecutable } from "./git-executable";
 import { createGitService, readGitErrorStdout, type GitClient, type GitStatusSnapshot } from "./git-service";
@@ -38,6 +38,7 @@ function client(overrides: Partial<GitClient> = {}): GitClient {
     getLineStats: async () => ({ insertions: 0, deletions: 0, byPath: {} }),
     getTrackedDiff: async () => "",
     getUntrackedDiff: async () => "",
+    getGitDir: async () => "C:\\repo\\.git",
     init: async () => undefined,
     add: async () => undefined,
     commit: async () => "committed",
@@ -120,6 +121,27 @@ describe("GitService.getStatusForSession", () => {
       "renamed",
       "conflicted",
     ]);
+  });
+});
+
+describe("GitService workspace subscriptions", () => {
+  it("subscribes a Code session using the Git client's real metadata directory", async () => {
+    const subscribe = vi.fn(async () => undefined);
+    const git = client({ getGitDir: async () => "C:\\worktrees\\repo-meta" });
+    const current = createGitService({
+      getSession: () => session("code"),
+      resolveExecutable: async () => executable,
+      createClient: () => git,
+      workspaceWatcher: { subscribe, unsubscribe: vi.fn(async () => undefined), dispose: vi.fn(async () => undefined) },
+    });
+
+    await current.watchSession("session-1");
+
+    expect(subscribe).toHaveBeenCalledWith({
+      sessionId: "session-1",
+      workspaceRoot: "C:\\repo",
+      gitDir: "C:\\worktrees\\repo-meta",
+    });
   });
 });
 

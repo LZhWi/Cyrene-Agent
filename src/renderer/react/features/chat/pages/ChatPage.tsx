@@ -21,7 +21,7 @@ import {
 } from "../components/run-presentation";
 import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessageList";
 import { applyAgentRoundBoundary, createRoundProcessMessage } from "../components/agent-rounds";
-import { buildCodeGitReviewSnapshot } from "../components/code-git-review";
+import { createLiveCodeGitReview } from "../components/code-git-live-review";
 import { applyTaskDelegationEvent, normalizeTaskDelegationEvent } from "../components/task-delegations";
 import type { WeatherData } from "../components/weather/weather-types";
 import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
@@ -889,17 +889,32 @@ export function ChatPage() {
     const gitStatusBefore: CodeGitStatus | undefined = input.targetMode === "code"
       ? await window.codeGit?.getStatus(input.sessionId).catch(() => undefined)
       : undefined;
+    const liveGitReview = input.targetMode === "code"
+      ? createLiveCodeGitReview({
+        sessionId: input.sessionId,
+        assistantId: input.assistantId,
+        before: gitStatusBefore,
+        tools: () => toolExecutions,
+      })
+      : undefined;
+    if (input.targetMode === "code") void window.codeGit?.watch(input.sessionId).catch(() => undefined);
     const captureGitReview = async () => {
       if (input.targetMode !== "code") return;
       const gitStatusAfter = await window.codeGit?.getStatus(input.sessionId).catch(() => undefined);
-      gitReview = buildCodeGitReviewSnapshot({
-        sessionId: input.sessionId,
-        before: gitStatusBefore,
-        after: gitStatusAfter,
-        tools: toolExecutions,
-        capturedAt: Date.now(),
-      });
+      gitReview = liveGitReview?.freeze(gitStatusAfter);
     };
+    const offGitReview = input.targetMode === "code"
+      ? window.codeGit?.onChanged((payload) => {
+        if (payload.sessionId !== input.sessionId) return;
+        void window.codeGit?.getStatus(input.sessionId).then((next) => {
+          const nextReview = liveGitReview?.update(next);
+          if (nextReview) {
+            gitReview = nextReview;
+            updateMessage(input.sessionId, input.assistantId, { gitReview: nextReview });
+          }
+        }).catch(() => undefined);
+      })
+      : undefined;
     let runStarted = false;
     let runActivity: RunActivityRecord | undefined;
     let currentTodos: TodoItem[] = [];
@@ -1403,6 +1418,8 @@ export function ChatPage() {
       delete checkpointCallbacks[input.sessionId];
       runCheckpointBySessionRef.current = checkpointCallbacks;
       off();
+      offGitReview?.();
+      if (input.targetMode === "code") void window.codeGit?.unwatch(input.sessionId).catch(() => undefined);
       activeAguiOffsRef.current.delete(off);
       const currentActive = activeRunsBySession.current[input.sessionId];
       cancelRequestedSessionsRef.current.delete(input.sessionId);

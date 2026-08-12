@@ -591,6 +591,8 @@ const codeGitApi = {
   getStatus: (sessionId: string) => ipcRenderer.invoke(IPC.CODE_GIT_STATUS, sessionId),
   getDiff: (sessionId: string, path: string) =>
     ipcRenderer.invoke(IPC.CODE_GIT_DIFF, { sessionId, path }),
+  watch: (sessionId: string) => ipcRenderer.invoke(IPC.CODE_GIT_WATCH, sessionId),
+  unwatch: (sessionId: string) => ipcRenderer.invoke(IPC.CODE_GIT_UNWATCH, sessionId),
   onChanged: (callback: (payload: { sessionId: string }) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: { sessionId: string }) => callback(payload);
     ipcRenderer.on(IPC.CODE_GIT_CHANGED, listener);

@@ -16,7 +16,10 @@ function service(): GitService {
   return {
     getStatusForSession: vi.fn(),
     getDiffForSession: vi.fn(),
-    onChanged: vi.fn(() => () => undefined),
+  onChanged: vi.fn(() => () => undefined),
+  watchSession: vi.fn(async () => undefined),
+  unwatchSession: vi.fn(async () => undefined),
+  dispose: vi.fn(async () => undefined),
     initRepository: vi.fn(async () => "initialized"),
     commit: vi.fn(async () => "committed"),
     switchBranch: vi.fn(async () => "switched"),

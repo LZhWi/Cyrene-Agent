@@ -25,6 +25,8 @@ function createHarness() {
       path,
       patch: "",
     })),
+    watchSession: vi.fn(async () => undefined),
+    unwatchSession: vi.fn(async () => undefined),
     onChanged: vi.fn((listener: (payload: CodeGitChangedPayload) => void) => {
       onChanged = listener;
       return () => undefined;
@@ -67,5 +69,15 @@ describe("registerCodeGitIpc", () => {
     harness.emitChanged({ sessionId: "session-1" });
 
     expect(harness.sent).toHaveBeenCalledWith(IPC.CODE_GIT_CHANGED, { sessionId: "session-1" });
+  });
+
+  it("subscribes and unsubscribes only a non-empty session identity", async () => {
+    const harness = createHarness();
+
+    await harness.handlers.get(IPC.CODE_GIT_WATCH)?.({}, "session-1");
+    await harness.handlers.get(IPC.CODE_GIT_UNWATCH)?.({}, "session-1");
+
+    expect(harness.service.watchSession).toHaveBeenCalledWith("session-1");
+    expect(harness.service.unwatchSession).toHaveBeenCalledWith("session-1");
   });
 });

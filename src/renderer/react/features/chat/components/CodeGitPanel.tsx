@@ -1,13 +1,16 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CodeGitChangedPayload, CodeGitStatus } from "../../../../../shared/code-git-types";
 import type { TodoState } from "../../../../../shared/todo-types";
 import workingPngUrl from "../../../assets/status-moods/工作中.png?url";
 import { buildGitActionIntent, buildGitStatusCopy } from "./code-git-presentation";
 import { useFloatingCard } from "./floating-card";
+import { createCodeGitRefreshController, type CodeGitRefreshController } from "./code-git-refresh";
 import "./CodeGitPanel.css";
 
 interface CodeGitApi {
   getStatus(sessionId: string): Promise<CodeGitStatus>;
+  watch(sessionId: string): Promise<void>;
+  unwatch(sessionId: string): Promise<void>;
   onChanged(callback: (payload: CodeGitChangedPayload) => void): () => void;
 }
 
@@ -29,26 +32,31 @@ function ToggleIcon() {
 export function CodeGitPanel({ sessionId, projectName, todoState, onRequestAgentAction }: CodeGitPanelProps) {
   const [status, setStatus] = useState<CodeGitStatus | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const refreshControllerRef = useRef<CodeGitRefreshController | null>(null);
   const api = codeGitApi();
   const floating = useFloatingCard({ width: 260 });
 
-  const refresh = useCallback(async () => {
-    if (!api) return;
-    setRefreshing(true);
-    try { setStatus(await api.getStatus(sessionId)); } finally { setRefreshing(false); }
-  }, [api, sessionId]);
-
   useEffect(() => {
-    let disposed = false;
     if (!api) return undefined;
-    void api.getStatus(sessionId).then((next) => { if (!disposed) setStatus(next); })
-      .catch(() => { if (!disposed) setStatus(null); });
-    return () => { disposed = true; };
+    const controller = createCodeGitRefreshController({
+      load: () => api.getStatus(sessionId),
+      apply: setStatus,
+      failed: () => setStatus(null),
+      busy: setRefreshing,
+    });
+    refreshControllerRef.current = controller;
+    void api.watch(sessionId).catch(() => undefined);
+    controller.request();
+    return () => {
+      controller.dispose();
+      if (refreshControllerRef.current === controller) refreshControllerRef.current = null;
+      void api.unwatch(sessionId).catch(() => undefined);
+    };
   }, [api, sessionId]);
 
   useEffect(() => api?.onChanged((payload) => {
-    if (payload.sessionId === sessionId) void refresh();
-  }), [api, refresh, sessionId]);
+    if (payload.sessionId === sessionId) refreshControllerRef.current?.request();
+  }), [api, sessionId]);
 
   const action = useMemo(() => status ? buildGitActionIntent(status) : null, [status]);
   const todos = todoState?.todos ?? [];
@@ -75,7 +83,7 @@ export function CodeGitPanel({ sessionId, projectName, todoState, onRequestAgent
             <strong>{projectName ?? "尚未绑定 Git 工作区"}</strong>
             <span title={statusCopy}>{statusCopy}</span>
           </div>
-          <button className="cy-code-git__refresh" type="button" onClick={() => void refresh()} disabled={!api || refreshing} aria-label="刷新 Git 状态">↻</button>
+          <button className="cy-code-git__refresh" type="button" onClick={() => refreshControllerRef.current?.request()} disabled={!api || refreshing} aria-label="刷新 Git 状态">↻</button>
         </div>
 
         <div className="cy-code-git__git-actions">

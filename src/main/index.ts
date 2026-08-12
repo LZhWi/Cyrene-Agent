@@ -162,6 +162,7 @@ import { createProactiveLifecycle } from "./proactive/proactive-lifecycle";
 import { createCitaService } from "./services/cita/cita-service";
 import { contextRefRegistry } from "./orchestrator/tool-context";
 import { createGitService } from "./code-git/git-service";
+import type { GitService } from "./code-git/git-service";
 import { resolveGitExecutable } from "./code-git/git-executable";
 import { registerCodeGitIpc } from "./code-git/code-git-ipc";
 
@@ -192,6 +193,7 @@ let channelsSubsystem: ChannelsSubsystem | null = null;
 let screenshotService: ScreenshotService | null = null;
 let windowManager: WindowManager | null = null;
 let lspManager: LspManager | null = null;
+let codeGitService: GitService | null = null;
 const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
   onClosed: () => { /* no-op：原 setLive2dWindow 已随 opener 子系统一起移除 */ },
 });
@@ -322,7 +324,7 @@ app.whenReady().then(async () => {
 
   // 聊天会话存储 IPC（chats-store.initialize 会建好 cyrene-chats 目录并加载 index）
   registerChatsIpc();
-  const codeGitService = createGitService({
+  codeGitService = createGitService({
     getSession: chatsStore.getSession,
     resolveExecutable: () => resolveGitExecutable({
       systemCommand: "git",
@@ -515,6 +517,7 @@ app.on("before-quit", () => {
   void channelsSubsystem?.shutdown();
   void screenshotService?.shutdown();
   void lspManager?.disposeAll();
+  void codeGitService?.dispose();
 });
 
 app.on("activate", () => {

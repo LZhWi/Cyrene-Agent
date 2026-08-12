@@ -1,4 +1,4 @@
-.cy-git-review-summary { width:min(780px,calc(100vw - 128px)); min-height:168px; overflow:hidden; border:1px solid #eee7ea; border-radius:14px; background:#fff; box-shadow:0 3px 14px rgba(38,25,30,.05); }
+.cy-git-review-summary { width:min(780px,calc(100vw - 128px)); overflow:hidden; border:1px solid #eee7ea; border-radius:14px; background:#fff; box-shadow:0 3px 14px rgba(38,25,30,.05); }
 .cy-git-review-summary header { min-height:64px; display:flex; align-items:center; gap:11px; padding:12px 15px; }
 .cy-git-review-summary__icon { width:32px; height:32px; display:grid; place-items:center; border-radius:9px; background:#f7f4f5; color:#666; }
 .cy-git-review-summary header div { min-width:0; display:flex; flex:1; flex-direction:column; gap:2px; }.cy-git-review-summary header strong { font-size:13px; }.cy-git-review-summary header small { display:flex; gap:6px; font-size:11px; font-style:normal; }.cy-git-review-summary header small b { color:#16a34a; }.cy-git-review-summary header small i { color:#dc2626; font-style:normal; }

@@ -9,6 +9,7 @@ import {
   type CodeGitStatus,
 } from "../../shared/code-git-types";
 import type { ResolvedGitExecutable } from "./git-executable";
+import { createGitWorkspaceWatcher, type GitWorkspaceWatcher } from "./git-workspace-watcher";
 
 const MAX_DIFF_BYTES = 2 * 1024 * 1024;
 
@@ -76,12 +77,14 @@ export interface GitClient {
   checkoutNewBranch(branch: string): Promise<void>;
   push(remote: string): Promise<void>;
   revert(commit: string): Promise<void>;
+  getGitDir(): Promise<string>;
 }
 
 export interface GitServiceDeps {
   getSession: (sessionId: string) => ChatSession | null;
   resolveExecutable: () => Promise<ResolvedGitExecutable | null>;
   createClient?: (input: { workspaceRoot: string; executable: ResolvedGitExecutable }) => GitClient;
+  workspaceWatcher?: GitWorkspaceWatcher;
 }
 
 export interface GitService {
@@ -93,6 +96,9 @@ export interface GitService {
   switchBranch(ctx: TrustedGitContext, branch: string, create: boolean): Promise<string>;
   push(ctx: TrustedGitContext, remote?: string): Promise<string>;
   revert(ctx: TrustedGitContext, commit: string): Promise<string>;
+  watchSession(sessionId: string): Promise<void>;
+  unwatchSession(sessionId: string): Promise<void>;
+  dispose(): Promise<void>;
 }
 
 export interface TrustedGitContext {
@@ -109,6 +115,10 @@ interface ResolvedCodeSession {
 export function createGitService(deps: GitServiceDeps): GitService {
   const createClient = deps.createClient ?? createSimpleGitClient;
   const listeners = new Set<(payload: { sessionId: string }) => void>();
+  const workspaceWatcher = deps.workspaceWatcher ?? createGitWorkspaceWatcher({
+    onWorkspaceChanged: (sessionIds) => sessionIds.forEach(emitChanged),
+    onError: () => undefined,
+  });
 
   async function resolveCodeSession(sessionId: string): Promise<ResolvedCodeSession | CodeGitStatus> {
     const session = deps.getSession(sessionId);
@@ -142,6 +152,17 @@ export function createGitService(deps: GitServiceDeps): GitService {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
+
+    async watchSession(sessionId) {
+      const resolved = await resolveCodeSession(sessionId);
+      if (isCodeGitStatus(resolved)) throw new Error(resolved.message ?? "Git 状态暂时不可用");
+      const client = createClient(resolved);
+      if (!await client.isRepository()) throw new Error("这个目录还不是 Git 仓库");
+      await workspaceWatcher.subscribe({ sessionId, workspaceRoot: resolved.workspaceRoot, gitDir: await client.getGitDir() });
+    },
+
+    unwatchSession: (sessionId) => workspaceWatcher.unsubscribe(sessionId),
+    dispose: () => workspaceWatcher.dispose(),
 
     async initRepository(ctx) {
       const client = await clientForTrustedContext(ctx);
@@ -338,6 +359,7 @@ function createSimpleGitClient(input: { workspaceRoot: string; executable: Resol
     checkoutNewBranch: async (branch) => { await git.checkoutLocalBranch(branch); },
     push: async (remote) => { await git.push(remote); },
     revert: async (commit) => { await git.raw(["revert", "--no-edit", commit]); },
+    getGitDir: async () => path.resolve(input.workspaceRoot, (await git.raw(["rev-parse", "--absolute-git-dir"])).trim()),
   };
 }
 

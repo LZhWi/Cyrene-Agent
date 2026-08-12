@@ -16,7 +16,7 @@ interface WindowLike {
 export interface RegisterCodeGitIpcDeps {
   ipcMain?: IpcMainLike;
   getWindows?: () => WindowLike[];
-  service: Pick<GitService, "getStatusForSession" | "getDiffForSession" | "onChanged">;
+  service: Pick<GitService, "getStatusForSession" | "getDiffForSession" | "watchSession" | "unwatchSession" | "onChanged">;
 }
 
 export function registerCodeGitIpc(deps: RegisterCodeGitIpcDeps): void {
@@ -55,11 +55,19 @@ export function registerCodeGitIpc(deps: RegisterCodeGitIpcDeps): void {
     return deps.service.getDiffForSession(sessionId, relativePath);
   });
 
+  main.handle(IPC.CODE_GIT_WATCH, (_event, sessionId: unknown) => deps.service.watchSession(requireSessionId(sessionId)));
+  main.handle(IPC.CODE_GIT_UNWATCH, (_event, sessionId: unknown) => deps.service.unwatchSession(requireSessionId(sessionId)));
+
   deps.service.onChanged((payload) => {
     for (const window of getWindows()) {
       if (!window.isDestroyed()) window.webContents.send(IPC.CODE_GIT_CHANGED, payload);
     }
   });
+}
+
+function requireSessionId(value: unknown): string {
+  if (typeof value !== "string" || !value.trim()) throw new Error("缺少会话标识");
+  return value;
 }
 
 function isSafeRendererRelativePath(value: string): boolean {
