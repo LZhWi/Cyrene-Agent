@@ -48,13 +48,16 @@ export function bootstrapConfigGetters(ctx: BootstrapConfigContext): void {
     () => loadGeneralSettings().weatherSource,
     () => loadGeneralSettings().amapKey,
     // 天气卡片回调：工具拿到结构化数据后，发 Custom 事件给 react 聊天窗口渲染卡片
-    (card) => {
+    (card, context) => {
       const win = getReactChatWindow();
       if (win) {
         win.webContents.send(IPC.AGUI_EVENT, {
           type: "CUSTOM",
           name: "cyrene.weather",
           value: card,
+          // 天气工具在 Harness 内执行时必须归属到该 run；否则 renderer 的
+          // RunEventGate 会把没有 runId 的卡片事件当作串会话事件丢弃。
+          ...(context?.runId ? { runId: context.runId } : {}),
         });
       }
     },

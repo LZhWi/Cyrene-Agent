@@ -178,6 +178,12 @@ export function registerAgUiIpc(
     const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
     const send = (baseEvent: unknown): void => {
+      // CyreneAgent 的 RUN_STARTED / RUN_FINISHED 自带 runId，但 ChatLoop 等内部
+      // AgentLoopEvent 经 toAguiEvent 转换后没有。渲染端用 runId 隔离并发会话，
+      // 因此所有桥层发出的事件都必须带 canonical runId，不能只给终态事件补上。
+      const eventWithRunId = baseEvent && typeof baseEvent === "object"
+        ? { ...(baseEvent as Record<string, unknown>), runId: (baseEvent as { runId?: unknown }).runId ?? runId }
+        : baseEvent;
       const targets: WebContents[] = [];
       if (!sender.isDestroyed()) targets.push(sender);
       const chatWin = getChatWindowFn();
@@ -186,7 +192,7 @@ export function registerAgUiIpc(
       }
       for (const t of targets) {
         try {
-          t.send(IPC.AGUI_EVENT, baseEvent);
+          t.send(IPC.AGUI_EVENT, eventWithRunId);
         } catch (err) {
           console.error("[AgUiBridge] send 失败:", (err instanceof Error ? err.message : String(err)), "事件类型=", (baseEvent as { type?: string })?.type);
         }

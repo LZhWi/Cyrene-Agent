@@ -169,10 +169,10 @@ describe("agui-bridge sticker event ordering", () => {
     ];
     mocks.getSession.mockReturnValue({ id: "chat-think", mode: "chat" });
     const { registerAgUiIpc } = await import("./agui-bridge");
-    const sent: Array<{ type?: string; delta?: string }> = [];
+    const sent: Array<{ type?: string; delta?: string; runId?: string }> = [];
     const sender = {
       isDestroyed: () => false,
-      send: (_channel: string, event: { type?: string; delta?: string }) => sent.push(event),
+      send: (_channel: string, event: { type?: string; delta?: string; runId?: string }) => sent.push(event),
     };
     registerAgUiIpc(
       async () => ({
@@ -206,6 +206,9 @@ describe("agui-bridge sticker event ordering", () => {
     ]);
     expect(sent.find((event) => event.type === "REASONING_MESSAGE_CONTENT")?.delta).toBe("先分析问题");
     expect(sent.find((event) => event.type === "TEXT_MESSAGE_CONTENT")?.delta).toBe("正式回答");
+    const runId = sent.find((event) => event.type === "RUN_STARTED")?.runId;
+    expect(runId).toEqual(expect.any(String));
+    expect(sent.filter((event) => event.type?.startsWith("TEXT_MESSAGE")).every((event) => event.runId === runId)).toBe(true);
     mocks.agentEvents = [];
   });
 

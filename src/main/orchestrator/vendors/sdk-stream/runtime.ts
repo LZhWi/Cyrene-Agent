@@ -91,10 +91,12 @@ export async function streamChatWithSdk(
   const abortFromCaller = () => controller.abort(input.signal?.reason);
   if (input.signal?.aborted) abortFromCaller();
   else input.signal?.addEventListener("abort", abortFromCaller, { once: true });
-  const timer = setTimeout(() => {
-    timedOut = true;
-    controller.abort(new DOMException("Model request timed out", "TimeoutError"));
-  }, input.timeoutMs);
+  const timer = Number.isFinite(input.timeoutMs) && input.timeoutMs > 0
+    ? setTimeout(() => {
+      timedOut = true;
+      controller.abort(new DOMException("Model request timed out", "TimeoutError"));
+    }, input.timeoutMs)
+    : undefined;
 
   const accumulator = new CyreneStreamAccumulator();
   const taggedThinkFilter = createThinkFilter("leading-only");
@@ -176,7 +178,7 @@ export async function streamChatWithSdk(
     if (error instanceof ProviderProtocolError || error instanceof AgentRuntimeError) throw error;
     throw new AgentRuntimeError("E_MODEL_REQUEST_FAILED", "模型服务请求失败。", { cause: error });
   } finally {
-    clearTimeout(timer);
+    if (timer !== undefined) clearTimeout(timer);
     input.signal?.removeEventListener("abort", abortFromCaller);
   }
 }

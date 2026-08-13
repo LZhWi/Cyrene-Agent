@@ -49,6 +49,29 @@ describe("ChatComposer cancellation", () => {
 
     expect(senderProps?.onCancel).toBe(onCancel);
   });
+
+  it("does not disable an active Work run when its workspace label is not loaded", () => {
+    vi.stubGlobal("React", React);
+
+    renderToStaticMarkup(createElement(ChatComposer, {
+      value: "",
+      mode: "work",
+      docked: true,
+      attachments: [],
+      modelBusy: true,
+      onChange: vi.fn(),
+      onSubmit: vi.fn(),
+      onCancel: vi.fn(),
+      onChooseWorkspace: vi.fn(),
+      onChooseFiles: vi.fn(),
+      onRemoveAttachment: vi.fn(),
+      onScreenshot: vi.fn(),
+      onChooseSticker: vi.fn(),
+    }));
+
+    expect(senderProps?.disabled).toBe(false);
+  });
+
 });
 
 describe("ChatComposer Code sticker policy", () => {

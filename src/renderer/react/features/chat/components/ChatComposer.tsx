@@ -30,7 +30,6 @@ interface ChatComposerProps {
   onRemoveAttachment: (index: number) => void;
   onScreenshot: () => void;
   onChooseSticker: (id: string) => void;
-  onInitVaultStructure?: () => void;
   activeModelProfileId?: string;
   onSelectModelProfile?: (id: string) => void;
 }
@@ -203,7 +202,6 @@ export function ChatComposer({
   onRemoveAttachment,
   onScreenshot,
   onChooseSticker,
-  onInitVaultStructure,
   activeModelProfileId,
   onSelectModelProfile,
 }: ChatComposerProps) {
@@ -281,7 +279,8 @@ export function ChatComposer({
         value={value}
         placeholder={modelBusy ? "按 Enter 停止 · Shift+Enter 加入队列" : placeholder}
         loading={modelBusy}
-        disabled={requiresWorkspace && !workspaceName}
+        // `disabled` 会同时禁掉 Sender 内建的取消键；运行中的任务必须始终可停止。
+        disabled={!modelBusy && requiresWorkspace && !workspaceName}
         autoSize={{ minRows: 3, maxRows: 7 }}
         onChange={onChange}
         onCancel={onCancel}
@@ -365,12 +364,6 @@ export function ChatComposer({
             <ObsidianVaultIcon />
             <span>{workspaceName ?? "Obsidian 项目库"}</span>
             <ChevronIcon />
-          </button>
-        )}
-        {supportsObsidianLibrary && workspaceName && onInitVaultStructure && (
-          <button type="button" className="cy-composer__footer-button" aria-label="添加 Cyrene 学习结构" onClick={onInitVaultStructure}>
-            <PlusIcon />
-            <span>添加学习结构</span>
           </button>
         )}
         {supportsPermission && <span className="cy-composer__footer-separator" />}

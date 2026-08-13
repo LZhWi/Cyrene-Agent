@@ -1535,10 +1535,10 @@ export function ChatPage() {
 
 
 
-  async function initVaultStructure(sessionId: string) {
+  async function initVaultStructure(sessionId: string, options?: { confirm?: boolean }) {
     const store = chatStore();
     if (!store) return;
-    const confirmed = window.confirm(
+    const confirmed = options?.confirm === false || window.confirm(
       "要在当前 Obsidian Vault 中添加 Cyrene 通用学习结构吗？只会创建缺失的文件，不会覆盖已有内容。"
     );
     if (!confirmed) return;
@@ -1576,7 +1576,7 @@ export function ChatPage() {
           "这是一个空目录。Cyrene 可以在这里创建通用学习工作区结构（materials/、notes/、exercises/、templates/、learn/progress.md），方便你之后和 Cyrene 一起学习。\n\n是否创建？"
         );
         if (confirmed) {
-          await initVaultStructure(activeId);
+          await initVaultStructure(activeId, { confirm: false });
         }
       }
       await refreshSessions(targetMode, false);
@@ -1824,7 +1824,7 @@ export function ChatPage() {
           "这是一个空目录。Cyrene 可以在这里创建通用学习工作区结构（materials/、notes/、exercises/、templates/、learn/progress.md），方便你之后和 Cyrene 一起学习。\n\n是否创建？"
         );
         if (confirmed) {
-          await initVaultStructure(sessionId);
+          await initVaultStructure(sessionId, { confirm: false });
         }
       }
       setPendingWorkspaceByMode((current) => {
@@ -1963,6 +1963,10 @@ export function ChatPage() {
     });
     if (!activeRun.runId) {
       cancelRequestedSessionsRef.current.add(sessionId);
+      // 首次模型请求尚未返回 ack.runId 时，仍要立即通知主进程。
+      // 该窗口内当前窗口只有这一条 active run，桥层会取消它；ack 返回后
+      // 仍保留 cancelRequestedSessionsRef 以处理跨进程投递顺序。
+      await aguiApi()?.cancel();
       return;
     }
     await aguiApi()?.cancel(activeRun.runId);
@@ -2149,10 +2153,6 @@ export function ChatPage() {
             onQueueMessage={(value) => queueCurrentDraft(value)}
             onRemoveQueuedMessage={(id) => activeSessionId && removeQueuedMessage(activeSessionId, id)}
             onChooseWorkspace={() => void chooseWorkspace()}
-            onInitVaultStructure={mode === "learn" ? () => {
-              const sessionId = activeSessionIdsRef.current[mode];
-              if (sessionId) void initVaultStructure(sessionId);
-            } : undefined}
             onChooseFiles={(files) => void chooseFiles(files)}
             onRemoveAttachment={removeAttachment}
             onScreenshot={() => void window.chat?.startScreenshot()}

@@ -196,6 +196,44 @@ describe("streamChatWithSdk", () => {
     ]);
   });
 
+  it("does not create a request deadline when timeoutMs is zero", async () => {
+    vi.useFakeTimers();
+    const adapter = new OpenAICompatAdapter("chatgpt", openAICapability);
+    const deps: SdkStreamRuntimeDeps = {
+      openAI: async () => ({
+        [Symbol.asyncIterator]() {
+          let sent = false;
+          return {
+            next: () => new Promise<IteratorResult<unknown>>((resolve) => {
+              setTimeout(() => {
+                if (sent) resolve({ done: true, value: undefined });
+                else {
+                  sent = true;
+                  resolve({
+                    done: false,
+                    value: { choices: [{ delta: { content: "ok" }, finish_reason: "stop" }] },
+                  });
+                }
+              }, 10);
+            }),
+          };
+        },
+      }),
+      anthropic: unusedFactory,
+    };
+
+    const pending = streamChatWithSdk({
+      adapter,
+      request,
+      config: openAIConfig,
+      timeoutMs: 0,
+    }, deps);
+
+    await vi.advanceTimersByTimeAsync(20);
+
+    await expect(pending).resolves.toMatchObject({ text: "ok" });
+  });
+
   it("turns only the runtime-owned deadline into E_MODEL_REQUEST_TIMEOUT", async () => {
     vi.useFakeTimers();
     const adapter = new OpenAICompatAdapter("chatgpt", openAICapability);
