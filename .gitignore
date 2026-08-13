@@ -56,6 +56,9 @@ tmp/
 tmpr-build.log
 tmprenderer-build.log
 
+# Legacy preview folder (不在代码引用，体积 ~4MB；从历史 commit 中移除并忽略)
+preview/
+
 # Playwright CLI scratch
 .playwright-cli/
 
