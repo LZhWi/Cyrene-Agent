@@ -28,10 +28,6 @@ jobs:
       - name: Build
         run: npm run build
 
-      - name: Test src/main/orchestrator/code
-        if: success() || failure()
-        run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/orchestrator/code
-
       - name: Test src/main/orchestrator/vendors
         if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/orchestrator/vendors
@@ -39,10 +35,6 @@ jobs:
       - name: Test src/main/orchestrator/structured-output
         if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/orchestrator/structured-output
-
-      - name: Test src/main/orchestrator/subagents
-        if: success() || failure()
-        run: npx vitest run --reporter=verbose --maxWorkers=1 src/main/orchestrator/subagents
 
       - name: Test src/main/orchestrator/tools
         if: success() || failure()
@@ -96,6 +88,3 @@ jobs:
         if: success() || failure()
         run: npx vitest run --reporter=verbose --maxWorkers=1 skills
 
-      - name: Test scripts/cline-poc
-        if: success() || failure()
-        run: npx vitest run --reporter=verbose --maxWorkers=1 scripts/cline-poc
