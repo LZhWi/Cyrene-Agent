@@ -1,3 +1,4 @@
+// Verification helper for the native screenshot executable.
 import { open, stat } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,7 +35,7 @@ async function main() {
   const inputPath = process.argv[2];
   if (!inputPath) {
     throw new Error(
-      "Usage: node scripts/verify-screenshot-helper.mjs <path-to-helper.exe>",
+      "Usage: node scripts/verify/screenshot-helper.mjs <path-to-helper.exe>",
     );
   }
   const result = await verifyScreenshotHelper(inputPath);

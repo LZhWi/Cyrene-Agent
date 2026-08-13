@@ -12,7 +12,7 @@ import extract from "extract-zip";
 const execFileAsync = promisify(execFile);
 const pipeline = promisify(pipelineCallback);
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const projectRoot = path.resolve(scriptDir, "..");
+const projectRoot = path.resolve(scriptDir, "..", "..");
 
 export async function prepareMinGit(options) {
   const { manifest, cacheDir, outputDir } = options;

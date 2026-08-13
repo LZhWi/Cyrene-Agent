@@ -2,11 +2,11 @@ const fs = require("fs");
 const path = require("path");
 
 // Reusable live provider smoke test.
-// Usage: node scripts/run-provider-work-smoke.cjs [runs] [model] [delayBetweenRunsMs]
+// Usage: node scripts/diagnostics/provider-work-smoke.cjs [runs] [model] [delayBetweenRunsMs]
 // Reads the locally saved API configuration and never prints the API key.
 // Reports task execution success separately from fail-closed routing to Soul.
 
-const root = path.resolve(__dirname, "..");
+const root = path.resolve(__dirname, "..", "..");
 const { CitaService } = require(path.join(root, "dist/main/main/cita/cita-service.js"));
 const { ContextStore } = require(path.join(root, "dist/main/main/cita/context-store.js"));
 const { RemoteSemanticEngine } = require(path.join(root, "dist/main/main/cita/remote-semantic-engine.js"));

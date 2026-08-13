@@ -7,7 +7,7 @@
 // 是否还需要 adapter 防御。
 //
 // 用法：
-//   node scripts/check-leading-assistant.mjs
+//   node scripts/diagnostics/check-leading-assistant.mjs
 // 自动读取 userData/model-settings.json（Windows: %APPDATA%\live2d-cyrene）。
 // 也可用环境变量覆盖：
 //   CYRENE_BASE_URL / CYRENE_API_KEY / CYRENE_MODEL

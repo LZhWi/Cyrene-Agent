@@ -2,10 +2,10 @@ import { copyFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
-import { verifyScreenshotHelper } from "./verify-screenshot-helper.mjs";
+import { verifyScreenshotHelper } from "../verify/screenshot-helper.mjs";
 
 const scriptDirectory = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDirectory, "..");
+const repoRoot = path.resolve(scriptDirectory, "..", "..");
 const manifestPath = path.join(
   repoRoot,
   "native",

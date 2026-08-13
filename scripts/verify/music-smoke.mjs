@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(__dirname, "..");
+const repoRoot = path.resolve(__dirname, "..", "..");
 
 const require = createRequire(import.meta.url);
 const electronPath = require("electron");

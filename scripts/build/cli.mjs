@@ -12,7 +12,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, "..");
+const repoRoot = path.resolve(scriptDir, "..", "..");
 const pkgPath = path.join(repoRoot, "package.json");
 const pkg = JSON.parse(await readFile(pkgPath, "utf8"));
 

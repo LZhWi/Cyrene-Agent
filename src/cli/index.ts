@@ -1,7 +1,7 @@
 /**
  * cyrene CLI entry. The real work is in app.ts so tests can import main().
  *
- * The #!/usr/bin/env node shebang is added by scripts/build-cli.mjs via
+ * The #!/usr/bin/env node shebang is added by scripts/build/cli.mjs via
  * esbuild's banner option, so this file stays shebang-free for vitest.
  */
 import { main } from "./app.js";

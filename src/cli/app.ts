@@ -4,7 +4,7 @@
  * This is the unit the test suite imports. index.ts is a 3-line shim that
  * calls main() and process.exit().
  *
- * __CYRENE_VERSION__ is injected at build time by scripts/build-cli.mjs via
+ * __CYRENE_VERSION__ is injected at build time by scripts/build/cli.mjs via
  * esbuild's `define`. In tests, main() accepts an optional version override
  * so the test suite does not depend on the build step.
  */
