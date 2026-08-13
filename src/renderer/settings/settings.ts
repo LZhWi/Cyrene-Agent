@@ -719,7 +719,7 @@ function applyCustomEndpointUI(preset: ModelPreset): void {
   apiState.customEndpointMode = mode;
   const presentation = getCustomEndpointPresentation(mode);
   customEndpointControls.querySelectorAll<HTMLButtonElement>("[data-custom-endpoint-mode]").forEach((button) => {
-    const active = button.dataset.apiState.customEndpointMode === mode;
+    const active = button.dataset.customEndpointMode === mode;
     button.classList.toggle("is-active", active);
     button.setAttribute("aria-pressed", String(active));
   });

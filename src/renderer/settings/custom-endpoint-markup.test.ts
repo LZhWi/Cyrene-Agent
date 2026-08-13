@@ -44,6 +44,11 @@ describe("custom endpoint API settings UI", () => {
     expect(source).toContain("perProvider: { ...providerProfileCache }");
   });
 
+  it("reads the custom endpoint button mode directly from its dataset", () => {
+    expect(source).toContain("button.dataset.customEndpointMode === mode");
+    expect(source).not.toContain("button.dataset.apiState.customEndpointMode");
+  });
+
   it("keeps confirmed Anthropic-compatible preset URLs explicit", () => {
     expect(presetsSource).toContain('anthropicBaseUrl: "https://api.minimaxi.com/anthropic"');
     expect(presetsSource).toContain('anthropicBaseUrl: "https://api.deepseek.com/anthropic"');
