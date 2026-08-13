@@ -400,7 +400,11 @@ CyreneHarness 是 Cyrene Agent 的核心 Agent Loop，负责把**模型决策、
 
 ![Code 模式示意](./docs/image/code.png)
 
-- **在 Work 基础上叠加代码专属工具** — 复用 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 主循环，额外注册代码专用工具集（读写改、命令执行、LSP 查询等）；Action Gate 在 Harness 入口前过滤不安全调用，Execution Policy 决定是否需要用户二次确认。
+> [!WARNING]
+>
+> Code 模式目前**尚未内置改动 review / diff 预览功能**，Agent 改完文件会直接落盘。建议在改动发生前**使用你顺手的 IDE 或 diff 工具**（如 VS Code、Cursor、JetBrains 系列、SourceGit 等）打开绑定目录以便随时查看 / 回滚。
+>
+> 启用 Git 是最稳妥的兜底：`git init && git add -A` 后任何改动都可 `git diff` / `git checkout -- .` 还原。
 
 - **在 Work 基础上叠加代码专属工具** — 复用 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 主循环，额外注册代码专用工具集（读写改、命令执行、LSP 查询等）；Action Gate 在 Harness 入口前过滤不安全调用，Execution Policy 决定是否需要用户二次确认。
 - **绑定可信工作目录** — 所有读写、命令执行与 LSP 查询必须落在用户预先绑定的目录内；模型无法指定或切换工作目录，越权访问（包括 `..` 与符号链接逃逸）会被直接拒绝。

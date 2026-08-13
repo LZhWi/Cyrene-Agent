@@ -404,6 +404,12 @@ The modes below are consumers of this loop:
 
 ![Code mode preview](./docs/image/code.png)
 
+> [!WARNING]
+>
+> Code mode **does not yet include a built-in review / diff preview**. Once the Agent finishes editing a file, the change is written to disk immediately. It is recommended to open the bound directory in your preferred IDE or diff tool (VS Code, Cursor, JetBrains, SourceGit, etc.) so you can inspect and roll back any change at any time.
+>
+> Initializing Git is the safest fallback: after `git init && git add -A`, any change can be inspected with `git diff` and reverted with `git checkout -- .`.
+
 - **Code-specific tools on top of Work** — Reuses the [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) main loop and registers extra code-focused tools (read/write/edit, command execution, LSP queries, etc.); Action Gate filters unsafe calls before the Harness entry, and Execution Policy decides whether to require a second user confirmation.
 - **Trusted workspace binding** — All read/write, command execution, and LSP queries must stay inside the user-bound directory; the model cannot pick or change the workspace, and out-of-scope access (including `..` and symlink escapes) is rejected outright.
 - **Semantic code queries (LSP)** — Code mode can query definitions, references, hover details, symbols, and diagnostics inside the bound workspace without modifying files.
