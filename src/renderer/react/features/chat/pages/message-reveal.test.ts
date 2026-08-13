@@ -13,4 +13,11 @@ describe("splitTextForReveal", () => {
   it("does not split surrogate pairs", () => {
     expect(splitTextForReveal("A🌸B", 3).join("")).toBe("A🌸B");
   });
+
+  it("bounds the default reveal work for a long model message", () => {
+    const chunks = splitTextForReveal("昔涟".repeat(500));
+
+    expect(chunks.join("")).toBe("昔涟".repeat(500));
+    expect(chunks.length).toBeLessThanOrEqual(24);
+  });
 });

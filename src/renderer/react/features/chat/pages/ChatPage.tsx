@@ -845,7 +845,7 @@ export function ChatPage() {
     const store = chatStore();
     if (!api || !store) {
       const visibleError = "模型请求失败：AG-UI 模型服务尚未就绪";
-      updateMessage(input.targetMode, input.assistantId, {
+      updateMessage(input.sessionId, input.assistantId, {
         content: visibleError,
         loading: false,
         waitingForFirstEvent: false,
@@ -964,7 +964,7 @@ export function ChatPage() {
             roundId: patch.roundId ?? activeRoundId,
           }]
         : toolExecutions.map((tool, toolIndex) => toolIndex === index ? { ...tool, ...patch } : tool);
-      updateMessage(input.targetMode, input.assistantId, { toolExecutions });
+      updateMessage(input.sessionId, input.assistantId, { toolExecutions });
     };
     const enqueuePublicTextReveal = (content: string, publish: (chunk: string) => void) => {
       if (input.targetMode === "chat") {
@@ -981,7 +981,7 @@ export function ChatPage() {
     };
     const publishRunActivity = () => {
       if (!runActivity) return;
-      updateMessage(input.targetMode, input.assistantId, { runActivity: { ...runActivity } });
+      updateMessage(input.sessionId, input.assistantId, { runActivity: { ...runActivity } });
     };
     const updateActiveReasoningStart = () => {
       const starts = [...activeReasoningStarts.values()];
@@ -1011,7 +1011,7 @@ export function ChatPage() {
       }
     };
     const markFirstResponse = () => {
-      updateMessage(input.targetMode, input.assistantId, { waitingForFirstEvent: false });
+      updateMessage(input.sessionId, input.assistantId, { waitingForFirstEvent: false });
     };
     const updateReasoningBlock = (id: string, patch: Partial<ReasoningBlock>) => {
       const index = reasoningBlocks.findIndex((block) => block.id === id);
@@ -1019,7 +1019,7 @@ export function ChatPage() {
         ? [...reasoningBlocks, { id, content: "", afterToolCount: toolExecutions.length, roundId: activeRoundId, ...patch }]
         : reasoningBlocks.map((block, blockIndex) => blockIndex === index ? { ...block, ...patch } : block);
       reasoningContent = reasoningBlocks.map((block) => block.content).filter(Boolean).join("\n\n");
-      updateMessage(input.targetMode, input.assistantId, { reasoning: reasoningContent || undefined, reasoningBlocks });
+      updateMessage(input.sessionId, input.assistantId, { reasoning: reasoningContent || undefined, reasoningBlocks });
       void checkpointRun("running");
     };
 
@@ -1034,7 +1034,7 @@ export function ChatPage() {
           );
           agentRounds = next.rounds;
           activeRoundId = next.activeRoundId;
-          updateMessage(input.targetMode, input.assistantId, { agentRounds });
+          updateMessage(input.sessionId, input.assistantId, { agentRounds });
           void checkpointRun("running", true);
         }
       } else if (event.type === "RUN_STARTED") {
@@ -1063,7 +1063,7 @@ export function ChatPage() {
           input.sessionId,
           event.runId ?? activeRunsBySession.current[input.sessionId]?.runId,
         ));
-        updateMessage(input.targetMode, input.assistantId, {
+        updateMessage(input.sessionId, input.assistantId, {
           waitingForFirstEvent: false,
           runActivity: { ...runActivity },
           runStage: { kind: "understanding" },
@@ -1091,7 +1091,7 @@ export function ChatPage() {
         updateActiveReasoningStart();
         publishRunActivity();
         updateReasoningBlock(reasoningId, { streaming: true });
-        updateMessage(input.targetMode, input.assistantId, {
+        updateMessage(input.sessionId, input.assistantId, {
           loading: false,
           reasoningStreaming: true,
           runStage: { kind: "responding" },
@@ -1101,7 +1101,7 @@ export function ChatPage() {
         currentReasoningId = reasoningId;
         const current = reasoningBlocks.find((block) => block.id === reasoningId)?.content ?? "";
         updateReasoningBlock(reasoningId, { content: current + event.delta, streaming: true });
-        updateMessage(input.targetMode, input.assistantId, {
+        updateMessage(input.sessionId, input.assistantId, {
           reasoning: reasoningContent,
           loading: false,
           reasoningStreaming: true,
@@ -1122,17 +1122,17 @@ export function ChatPage() {
           updateReasoningBlock(reasoningId, { streaming: false });
         }
         currentReasoningId = undefined;
-        updateMessage(input.targetMode, input.assistantId, { reasoningStreaming: false, loading: false });
+        updateMessage(input.sessionId, input.assistantId, { reasoningStreaming: false, loading: false });
         } else if (event.type === "STEP_STARTED") {
           const stage = stageForStep(event.stepName);
-          if (stage) updateMessage(input.targetMode, input.assistantId, { runStage: stage });
+          if (stage) updateMessage(input.sessionId, input.assistantId, { runStage: stage });
         } else if (event.type === "TOOL_CALL_START" && event.toolCallId) {
           updateRunTool(event.toolCallId, {
             name: event.toolCallName ?? "工具调用",
             status: "running",
             roundId: activeRoundId,
           });
-          updateMessage(input.targetMode, input.assistantId, {
+          updateMessage(input.sessionId, input.assistantId, {
             runStage: { kind: "executing", detail: event.toolCallName ?? "工具调用" },
           });
       } else if (event.type === "TOOL_CALL_ARGS" && event.toolCallId && event.delta) {
@@ -1147,7 +1147,7 @@ export function ChatPage() {
       } else if (event.type === "TOOL_CALL_END" && event.toolCallId) {
         updateRunTool(event.toolCallId, {});
       } else if (event.type === "TEXT_MESSAGE_START") {
-        updateMessage(input.targetMode, input.assistantId, {
+        updateMessage(input.sessionId, input.assistantId, {
           loading: false,
           reasoningStreaming: false,
           responseStarted: true,
@@ -1158,7 +1158,7 @@ export function ChatPage() {
         enqueuePublicTextReveal(event.delta, (chunk) => {
           streamContent += chunk;
           earlyTtsQueue.append(chunk);
-          updateMessage(input.targetMode, input.assistantId, {
+          updateMessage(input.sessionId, input.assistantId, {
             content: streamContent,
             loading: false,
             streaming: true,
@@ -1169,7 +1169,7 @@ export function ChatPage() {
       } else if (event.type === "TEXT_MESSAGE_END") {
         revealChain = revealChain.then(() => {
           finalMessageCompleted = true;
-          updateMessage(input.targetMode, input.assistantId, { streaming: false });
+          updateMessage(input.sessionId, input.assistantId, { streaming: false });
         });
       } else if (event.type === "CUSTOM" && event.name === "cyrene.process_text") {
         const content = (event.value as { content?: unknown } | null | undefined)?.content;
@@ -1181,12 +1181,12 @@ export function ChatPage() {
             toolExecutions.length,
             activeRoundId,
           )];
-          updateMessage(input.targetMode, input.assistantId, { processMessages });
+          updateMessage(input.sessionId, input.assistantId, { processMessages });
           enqueuePublicTextReveal(content, (chunk) => {
             processMessages = processMessages.map((message) => message.id === processId
               ? { ...message, content: message.content + chunk }
               : message);
-            updateMessage(input.targetMode, input.assistantId, { processMessages });
+            updateMessage(input.sessionId, input.assistantId, { processMessages });
             void checkpointRun("running");
           });
         }
@@ -1194,7 +1194,7 @@ export function ChatPage() {
         const delegation = normalizeTaskDelegationEvent(event.value);
         if (delegation) {
           taskDelegations = applyTaskDelegationEvent(taskDelegations, delegation, activeRoundId);
-          updateMessage(input.targetMode, input.assistantId, {
+          updateMessage(input.sessionId, input.assistantId, {
             taskDelegations,
             runStage: { kind: "executing", detail: delegation.nickname },
           });
@@ -1204,7 +1204,7 @@ export function ChatPage() {
         const interaction = normalizeChoiceInteraction(event.value);
         if (interaction) {
           setInteractionForSession(input.sessionId, interaction);
-          updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "waiting_user" } });
+          updateMessage(input.sessionId, input.assistantId, { runStage: { kind: "waiting_user" } });
           void checkpointRun("waiting_user", true);
         }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.choice.dismiss") {
@@ -1217,7 +1217,7 @@ export function ChatPage() {
       } else if (event.type === "CUSTOM" && event.name === "cyrene.taskPlan") {
         const taskPlan = normalizeTaskPlanPresentation(event.value);
         if (taskPlan) {
-          updateMessage(input.targetMode, input.assistantId, {
+          updateMessage(input.sessionId, input.assistantId, {
             taskPlan,
             runStage: { kind: "executing" },
           });
@@ -1247,11 +1247,11 @@ export function ChatPage() {
         setIsCompressingContext(true);
       } else if (event.type === "CUSTOM" && event.name === "cyrene.sticker") {
         sticker = typeof event.value === "string" ? event.value : null;
-        updateMessage(input.targetMode, input.assistantId, { sticker });
+        updateMessage(input.sessionId, input.assistantId, { sticker });
       } else if (event.type === "CUSTOM" && event.name === "cyrene.weather") {
         const weather = normalizeWeatherData(event.value);
         if (weather) {
-          updateMessage(input.targetMode, input.assistantId, { weather });
+          updateMessage(input.sessionId, input.assistantId, { weather });
         }
       } else if (event.type === "RUN_FINISHED") {
         // Task 3 / C2：读取 result.status 区分终态（success / cancelled / timeout / runtime_error）
@@ -1259,7 +1259,7 @@ export function ChatPage() {
         terminalStatus = result?.status;
         if (terminalStatus !== "success") revealCancelled = true;
         const stage = resolveRunFinishedStage(result);
-        updateMessage(input.targetMode, input.assistantId, { runStage: stage });
+        updateMessage(input.sessionId, input.assistantId, { runStage: stage });
         const activeRunId = activeRunsBySession.current[input.sessionId]?.runId;
         if (shouldClearComposerInteractionForTerminal(activeRunId, event.runId)) {
           clearInteractionForSession(input.sessionId);
@@ -1268,7 +1268,7 @@ export function ChatPage() {
       } else if (event.type === "RUN_ERROR") {
         revealCancelled = true;
         completeRunActivity(true);
-        updateMessage(input.targetMode, input.assistantId, { runStage: { kind: "failed" } });
+        updateMessage(input.sessionId, input.assistantId, { runStage: { kind: "failed" } });
         const activeRunId = activeRunsBySession.current[input.sessionId]?.runId;
         if (shouldClearComposerInteractionForTerminal(activeRunId, event.runId)) {
           clearInteractionForSession(input.sessionId);
@@ -1332,7 +1332,7 @@ export function ChatPage() {
       completeRunActivity(!formalAnswerCommitted);
       const finalContent = formalAnswerCommitted ? resolveTerminalContent(streamContent, terminalStatus) : "";
       persistedFinalContent = finalContent;
-      updateMessage(input.targetMode, input.assistantId, {
+      updateMessage(input.sessionId, input.assistantId, {
         content: finalContent,
         loading: false,
         waitingForFirstEvent: false,
@@ -1363,7 +1363,7 @@ export function ChatPage() {
         toolExecutions.length,
         activeRoundId,
       )];
-      updateMessage(input.targetMode, input.assistantId, {
+      updateMessage(input.sessionId, input.assistantId, {
         content: "",
         processMessages,
         loading: false,
