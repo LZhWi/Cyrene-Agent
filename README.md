@@ -1,10 +1,12 @@
-<div align="center">
+<p align="center">
+  <img src="./docs/image/preview.png" alt="Cyrene Agent" width="800">
+</p>
 
-<img src="./docs/image/preview.png" alt="Cyrene Agent" width="800">
+<h1 align="center">Cyrene-Agent</h1>
 
-# Cyrene-Agent
-
-[English](./README.en.md) | **中文**
+<p align="center">
+  <a href="./README.en.md">English</a> | <strong>中文</strong>
+</p>
 
 
 **Cyrene-Agent 是一个以《崩坏：星穹铁道》昔涟为核心角色的 Windows Live2D AI 桌面伴侣。**
