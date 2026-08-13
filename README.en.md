@@ -29,9 +29,9 @@
 
 - 🌸 **Playful Desktop Companion** — A persistent Live2D character with expressions, actions, status, mood, speech bubbles, and intelligent stickers
 - 💬 **Casual Conversation (Chat)** — Focused on character-driven interaction, with responses shaped by conversation history, user style, and long-term memory
-- 🛠️ **Assisted Work (Work)** — Understands requests, invokes tools through a complete Agent workflow, and replies from verified execution results
-- 💻 **Code Collaboration (Code)** — Binds a trusted code directory and uses a Coding Agent to read, modify, verify code, and run commands
-- 📚 **Learning Companion (Learn)** — Binds an Obsidian Vault to accompany users in understanding materials, taking notes, generating exercises, and tracking progress
+- 🛠️ **Assisted Work (Work)** — General-purpose task session that chains together web search, file processing, document generation, and lifestyle tools through the [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) main loop
+- 💻 **Code Collaboration (Code)** — Binds a trusted code directory, provides LSP semantic queries (definitions / references / hover / symbols / diagnostics) plus restricted read/write/exec commands; safety is enforced by Harness's Action Gate and Execution Policy
+- 📚 **Learning Companion (Learn)** — Binds an Obsidian Vault, accompanies users in understanding materials, organizing notes, generating exercises, and tracking progress
 - 📅 **Daily Affairs (Daily)** — General tool-enabled sessions for everyday Q&A, information organization, and light tasks
 - 🧠 **Personalized Memory** — L0 / L1 / L2 layered memory combined with the self-developed DMAE Worldbook for long-term interaction continuity
 - 🔊 **Voice Interaction** — Integrated TTS, ASR, and voice calls so Cyrene can listen and respond
@@ -200,10 +200,10 @@ Configuration is stored in the application's `<userData>/` directory. Most chang
 | --- | :---: | --- |
 | 🌸 Live2D Desktop Companion | ✅ Available | Always-on-top companion, multiple windows, expressions, actions, mood and status, speech bubbles, and intelligent stickers |
 | 💬 Casual Conversation (Chat) | ✅ Available | Independent character-chat flow that neither exposes nor executes tools, using recent messages, social context, and user style |
-| 🛠️ Assisted Work (Work) | ✅ Available | Complete Agent workflow: CITA → Action Gate → Native FC → Execution Policy → Tool Runtime → Soul |
+| 🛠️ Assisted Work (Work) | ✅ Available | Driven by [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts): CITA context understanding + Action Gate permission filtering + main-loop tool scheduling + uncertain-effect accounting + recoverable checkpoint; the Soul persona layer generates the reply text at the exit |
 | 💻 Code Collaboration (Code) | ✅ Available | Binds a trusted code directory; Coding Agent reads, modifies, verifies code, and runs commands |
 | 📚 Learning Companion (Learn) | ✅ Available | Binds an Obsidian Vault to accompany understanding, take notes, generate exercises, and track progress |
-| 📅 Daily Affairs (Daily) | ✅ Available | General tool-enabled sessions for everyday Q&A, information organization, and light tasks |
+| 📅 Daily Affairs (Daily) | ✅ Available | Reuses the CyreneHarness main loop; a general-purpose tool session for everyday Q&A, information organization, and light tasks |
 | 🧠 Personalized Memory | ✅ Available | L0 / L1 / L2 layered memory, self-developed DMAE Worldbook, relationship profile, and long-term interaction continuity |
 | 🔊 Voice Interaction | ✅ Available | Multiple TTS engines, real-time ASR, voice calls, and VAD silence detection; some features require additional configuration |
 | 🧰 Built-in Tools | ✅ Available | Web search, webpage reading, file operations, document generation, everyday services, music, and more |
@@ -353,28 +353,67 @@ If OOM errors continue, use the Chrome DevTools Memory Profiler in development m
 - **Channel-Specific Chat Style** — Desktop chat, mobile channels, and voice calls can use different expression styles.
 - **Segmented Replies** — Choose between “segment all / segment Chat only / disabled,” allowing long replies to be split into semantic chat bubbles.
 
+#### ⚙️ CyreneHarness Core Loop
+
+> `Work / Code / Daily` and any session mode that requires tool invocation runs on top of **CyreneHarness**.  
+> Source: [`src/main/orchestrator/harness/cyrene-harness.ts`](./src/main/orchestrator/harness/cyrene-harness.ts)
+
+CyreneHarness is the core Agent Loop of Cyrene Agent. It chains **model decisions, tool execution, side-effect accounting, and state recovery** into a continuous loop that is interruptible, recoverable, and replayable.
+
+**Key design points:**
+
+- **Continuous while + Function Calling loop** — Each round calls the LLM, dispatches the returned `toolCalls`, and lets the model end the turn when it returns no tool calls.
+- **assistantMessage must be written back (v3 P0 blocker)** — Every assistant message is pushed into `messages` unconditionally after each LLM response. Skipping this step breaks the loop on the next round.
+- **Exclusive Ask path** — `ask_user` / `confirm_uncertain_effect` are user-waiting built-in tools that monopolize the round: other co-round tools return `not_executed`, and the progress buffer is discarded before continuing.
+- **Four-state outcome with uncertainEffect interception** — Tool results fall into `success / failure / unknown / not_executed`. When `unknown` is paired with `sideEffect === non_idempotent`, the side effect is recorded into `state.uncertainEffects` and `halted = true` blocks further automatic replays of the same dangerous call within the round.
+- **Failure retry** — Failed tools decide whether to retry based on `classifyToolResultError` + `resolveSideEffect`; the `sleepWithJitter` backoff is interruptible via `AbortSignal`.
+- **Mid-loop Compaction** — Each round checks the token budget and triggers an LLM-driven summary when over the threshold, preserving todos and confirmed results.
+- **Signal-aware throughout** — Almost every `await` is wrapped with `raceWithSignal`; `signal.aborted` returns `cancelled()` (with `finalAnswer = ''` and **no `final_answer` event emitted**).
+- **Per-round checkpoint** — `onCheckpoint` persists `messages + state + rounds` so execution can resume after a cross-process crash.
+
+**Five terminal states:**
+
+| Status | `terminated` | `terminateReason` | Trigger |
+| :---: | :---: | :---: | --- |
+| ✅ success | `false` | `undefined` | Model ends the turn without invoking any tool |
+| ⚪ cancelled | `true` | `cancelled` | `AbortSignal` fires (`finalAnswer = ''`) |
+| 🟥 error | `true` | `error` | LLM throws or checkpoint fails |
+| 🟧 max_rounds | `true` | `max_rounds` | `config.maxRounds` reached |
+| 🟨 timeout | `true` | `timeout` | `config.totalTimeoutMs` exceeded |
+
+**Main flow:**
+
+![CyreneHarness main loop](./docs/image/harness.png)
+
+*(① Init → ② Main loop → ③ LLM → ④ Tool dispatch → ⑤ State ledger → ⑥ Terminal settlement)*
+
+The modes below are consumers of this loop:
+
 #### 🛠️ Assisted Work (Work)
 
-- **LangGraph Runtime** — Uses a LangGraph `StateGraph` to orchestrate multi-turn decision-execution loops, supporting both direct and plan execution modes.
-- **Complete Agent Workflow** — Tool tasks are processed through the following trusted execution chain:
+![Work mode preview](./docs/image/work.png)
 
-<img src="./docs/image/work-langgraph-flow.png" alt="Work Mode LangGraph Execution Flow" width="900">
-
-- **Code Verification Loop** — After a mutation tool modifies files, routeAfterTool sets `requiredNextAction=run_verification` to force verification in the next round; FinalizationGuard checks plan status and code verification status before respond, blocking if not satisfied.
-- **Local Trust Validation** — Model output must pass format, Schema, and business-level trust validation. The model itself is not the final trust boundary.
-- **Fail-Safe Degradation** — If Action Gate, Native FC, or the execution policy becomes untrusted at any stage, tool execution is prohibited and Soul responds honestly from locally generated failure facts.
-- **Multi-Provider Model Profiles** — Automatically selects an A / B / M / D Structured Output Profile based on provider capabilities and applies unified reasoning separation, JSON extraction, Repair, and failure routing.
-- **AG-UI Event Stream** — Delivers text, tool calls, execution state, and final results through a unified event stream with token-by-token rendering and tool cards.
+- **Driven by CyreneHarness** — Each message enters the while loop in [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts): every round calls the LLM → writes back the assistant message → dispatches tools → writes back tool results → checks uncertain effects → continues or ends. Pre-processors (CITA context understanding, Action Gate permission filtering) run before the Harness entry; the Soul persona layer generates the reply text after the Harness exit.
+- **Free tool chaining** — Web search, webpage reading, file R/W, document generation, and lifestyle tools can be combined on demand; the model picks the next tool without pre-orchestrated flows.
+- **Side-effect accounting** — When a non-idempotent side effect (sending email, modifying a remote file, etc.) has an unknown result, it is recorded into `state.uncertainEffects` and blocks automatic replay of the same dangerous call within the round.
+- **Failure retry and cancellation** — Tool failures retry based on error class and side-effect tier (with jittered backoff); `AbortSignal` can cancel at any time. Cancellation does not emit a "final reply" event to avoid misleading the user.
+- **Recoverable checkpoint** — `messages + state + rounds` are serialized to disk every round, so execution can resume after a cross-process crash without losing context.
+- **Persona and workflow coexist** — Cyrene's character-driven reply is preserved alongside tool calls; the reply text is generated by the Soul layer and is not overwritten by tool results.
 
 #### 💻 Code Collaboration (Code)
 
-- **Semantic Code Queries (LSP)** — Code mode can query definitions, references, hover details, symbols, and diagnostics inside the bound workspace without modifying files.
+![Code mode preview](./docs/image/code.png)
+
+- **Code-specific tools on top of Work** — Reuses the [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) main loop and registers extra code-focused tools (read/write/edit, command execution, LSP queries, etc.); Action Gate filters unsafe calls before the Harness entry, and Execution Policy decides whether to require a second user confirmation.
+- **Trusted workspace binding** — All read/write, command execution, and LSP queries must stay inside the user-bound directory; the model cannot pick or change the workspace, and out-of-scope access (including `..` and symlink escapes) is rejected outright.
+- **Semantic code queries (LSP)** — Code mode can query definitions, references, hover details, symbols, and diagnostics inside the bound workspace without modifying files.
 - **User-managed servers** — Cyrene provides an LSP client only. It never bundles, downloads, upgrades, or silently installs language servers.
-- **Discovery order** — Explicit user configuration comes first, followed by workspace `node_modules/.bin`, then the system `PATH`.
-- **Install and troubleshoot** — Install the server your language needs, such as `typescript-language-server`, `pyright-langserver`, `gopls`, `rust-analyzer`, or `clangd`. Use `where pyright-langserver` on Windows or `which pyright-langserver` on macOS/Linux. A user may explicitly ask Cyrene to assist through existing permission-controlled installation tools.
-- **Security boundary** — Servers run over stdio and file access stays inside the bound workspace. The model cannot choose a command, server ID, or workspace root.
-- **Built-in definitions** — TypeScript/JavaScript/JSON, Python, Go, Rust, C/C++, Java, C#, PHP, Ruby, Kotlin, Lua, Vue, and YAML. A server process is reused within one workspace and released when the app exits.
-- **Custom server command** — Add `lspServerOverrides` to `app-settings.json` in the application data directory. It can override an existing definition's command, arguments, extensions, or initialization options; a model cannot supply a launch command in chat. For example:
+- **Startup order** — Commands that are absolute paths are picked first, otherwise the workspace `node_modules/.bin` is searched, finally the system PATH is walked entry by entry (Windows also appends `.exe` / `.cmd` and other `PATHEXT` extensions).
+- **Install and troubleshoot** — Install the server your language needs, such as `typescript-language-server`, `pyright-langserver`, `gopls`, `rust-analyzer`, `clangd`, `jdtls`, `OmniSharp`, `intelephense`, `ruby-lsp`, `kotlin-language-server`, `lua-language-server`, `vue-language-server`, `yaml-language-server`. Use `where pyright-langserver` on Windows or `which pyright-langserver` on macOS/Linux. A user may explicitly ask Cyrene to assist through existing permission-controlled installation tools.
+- **Security boundary** — Language server processes are spawned with `stdio: "pipe"`, `shell: false`, and `cwd` forced to the bound workspace. The model cannot specify a command, server ID, or workspace root; `lspServerOverrides` only overrides command name / arguments / extensions of built-in services, and **does not accept arbitrary commands supplied by the model in chat**.
+- **Built-in languages** — TypeScript / JavaScript / JSON, Python, Go, Rust, C / C++, Java, C#, PHP, Ruby, Kotlin, Lua, Vue, and YAML (13 in total, see `src/main/lsp/server-catalog.ts`).
+- **Process reuse and release** — A given `serverId`'s LSP process is reused within the same workspace to avoid repeated cold starts; all processes are released when the app exits.
+- **Custom server command** — Configure `lspServerOverrides` in `general-settings.json` under the application data directory to override a built-in service's `command` / `args` / `extensions` / `initializationOptions`; the model cannot supply a launch command in chat. For example:
 
   ```json
   {
@@ -387,26 +426,21 @@ If OOM errors continue, use the Chrome DevTools Memory Profiler in development m
     ]
   }
   ```
-- **Cline Runtime** — Coding Agent runtime based on the Cline SDK, supporting multi-turn tool calls, file edits, and command execution.
-- **Trusted Workspace Binding** — Binds a session to a specific code directory; all file operations, command execution, and tool calls are restricted to that directory.
-- **Coding Agent Workflow** — Understands engineering requirements, reads and modifies code, analyzes logs and architecture, runs commands and tests, and delivers verifiable results.
-- **Change Review and Verification** — Code modifications go through change evidence collection, optional human confirmation, and verification runs to reduce the risk of automated code changes.
-- **AG-UI Event Stream** — Consistent text, tool cards, and run-state display with Work mode, supporting real-time tracking of the coding run process.
 
 #### 📚 Learning Companion (Learn)
 
 - **Obsidian Vault Workspace** — Binds a Vault as the learning workspace, using the `materials/`, `notes/`, `exercises/`, `templates/`, and `learn/progress.md` structure.
+- **Built on RAG and personalized memory** — Learning materials are indexed through the [RAG knowledge base](#-rag-document-knowledge-base) for retrieval, while progress and preferences flow into the L2 long-term memory to stay continuous across sessions.
 - **Accompanied Understanding** — Helps users understand materials through questions, breakdowns, analogies, and discussion rather than doing the learning for them.
 - **Notes and Exercises** — Organizes concepts, generates exercises, and records reviews inside the Vault, automatically maintaining a learning-progress overview.
 - **Respects the User's Pace** — Re-explains when the user is stuck, advances when the user is ready, and never scolds the user for wrong answers.
 
 #### 📅 Daily Affairs (Daily)
 
-- **TwoPhaseFC Runtime** — Uses the legacy TwoPhaseFC Agent execution chain, performing multi-turn tool execution and result summarization via native function calling.
-- **General Tool-Enabled Session** — The default general-purpose conversation mode for everyday Q&A, information organization, and light tasks.
-- **Workspace Binding** — Requires binding a trusted directory as the context root; file operations and tool execution stay within that directory.
-- **Flexible Agent Execution Chain** — Uses the same Agent shell as Work mode and invokes search, file, lifestyle, and other tools as needed.
-- **Legacy Session Compatibility** — Unclassified historical sessions default to Daily mode and bind to a migration workspace for smooth upgrades.
+- **Reuses the CyreneHarness main loop** — The default general-purpose tool session for everyday Q&A, information organization, and light tasks.
+- **Flexible tool execution chain** — Uses the same Agent shell as Work mode and invokes search, file, lifestyle, and other tools as needed.
+- **Workspace binding** — Requires binding a trusted directory as the context root; file operations and tool execution stay within that directory.
+- **Legacy session compatibility** — Unclassified historical sessions default to Daily mode and bind to a migration workspace for smooth upgrades.
 
 #### 📝 Rich Text and Code Rendering
 
@@ -519,16 +553,20 @@ Cyrene includes many built-in and extensible tools, primarily covering the follo
 | Build Tool | Vite 7 |
 | UI Rendering | HTML / CSS + React 19 + Pixi.js 7 + Ant Design X + Chart.js |
 | Live2D | `pixi-live2d-display` 0.5.0-beta + Cubism Core |
-| Agent Workflow | LangGraph + Structured Output + Native Function Calling |
-| Agent Event Protocol | `@ag-ui/core`, `@ag-ui/client` |
-| Tool Extensions | `@modelcontextprotocol/sdk` |
+| Agent Main Loop | [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) (while + Function Calling + streaming reasoning/tools) + Structured Output + Native Function Calling |
+| Agent Event Protocol | AG-UI (`@ag-ui/core`, `@ag-ui/client`) — decoupled from the renderer through `RUN_STARTED / STEP_* / TEXT_MESSAGE_* / TOOL_CALL_* / RUN_FINISHED` and other events |
+| Tool Dispatching | Self-developed `tool-dispatcher` + `side-effect-resolver` + `error-classifier` + `retry-policy` quartet, handling the four-state outcome (success / failure / unknown / not_executed) |
+| Sandbox Execution (Windows) | `@anthropic-ai/sandbox-runtime` (SRT) — untrusted commands run through `SandboxManager.wrapWithSandboxArgv`; falls back to direct `spawn` when not installed, with `workspace_mutation` commands still rejected |
+| LSP Client | Self-developed `LspManager` + `vscode-jsonrpc` protocol; processes are reused by `serverId`, launched with `stdio: "pipe"` and `shell: false` |
+| Tool Extensions | `@modelcontextprotocol/sdk` (stdio / SSE / StreamableHTTP transports) |
 | Memory and Retrieval | Embedding (`@xenova/transformers`) + BM25 + self-developed Cross-Encoder Reranker + self-developed indexing pipeline |
+| Context Entry Scheduling | Self-developed DMAE V5.1 (keyword-hit recall + activation decay + reversible active/dormant/archived states) |
 | Chinese Retrieval | `@node-rs/jieba` |
 | Browser and Desktop Automation | Playwright + `@nut-tree-fork/nut-js` |
 | Rich Text Rendering | `@ant-design/x-markdown` (Markdown / code highlighting / KaTeX math) |
 | Voice and Media | TTS / ASR + `silk-wasm` |
 | Native Screenshot Helper | Rust + DXGI Desktop Duplication / Direct2D / GDI + WIC PNG + NDJSON IPC |
-| Self-Developed Core | CITA, Action Gate, DMAE Worldbook, unified Structured Output Pipeline |
+| Self-Developed Core | CITA (context understanding), Action Gate (permission filtering), DMAE Worldbook, unified Structured Output Pipeline |
 | External Channels | Feishu OpenAPI, WeChat iLink |
 | Documents and Email | ExcelJS, docx, PDFKit, Nodemailer |
 | Testing | Vitest 4 |
@@ -548,6 +586,7 @@ models/                # Local AI models placed by the user; see MODEL_LICENSE.m
 └── ms-marco-MiniLM-L-6-v2/  # Lightweight reranking model (~23 MB, optional)
 
 src/
+├── cli/              # Command-line entry (`cyrene` command: banner / about / version / run)
 ├── main/             # Electron main process
 │   ├── asr/          # Speech recognition (Alibaba Cloud real-time ASR)
 │   ├── call/         # Voice-call core (ASR -> Agent -> TTS turns)
@@ -555,30 +594,57 @@ src/
 │   ├── chat/         # Chat support (image handling / think filtering / sending policy)
 │   ├── chats/        # Multi-conversation history and persistence
 │   ├── cita/         # CITA context-understanding and recommendation engine
+│   ├── code-git/     # Git service for Code mode (status / commit / branch / push / revert)
 │   ├── game-bot/     # Game automation driven by game recipes
-│   ├── memory/       # L0/L1/L2 memory engine and entity relationship graph
-│   ├── music/        # Music companion features (playback / recommendations / sessions)
+│   ├── learn/        # Learn mode: Obsidian Vault binding + progress overview
+│   ├── lsp/          # LSP client (manager / client / server-catalog / server-discovery)
+│   ├── memory/       # L0/L1/L2 memory engine + DMAE Worldbook + entity relationship graph
+│   ├── music/        # Music companion features (playback / recommendations / sessions / MCP client)
 │   ├── orchestrator/ # Agent loop, tool scheduling, and Action Gate
+│   │   ├── harness/  # CyreneHarness core (while loop + compaction + retry + uncertainty)
+│   │   ├── sandbox/  # Windows command-execution sandbox (@anthropic-ai/sandbox-runtime integration)
+│   │   ├── code/     # Code mode sub-module (workspace binding + LSP tools)
+│   │   ├── vendors/  # Multi-provider model adapters (A/B/M/D tiered Structured Output + Function Calling)
+│   │   ├── structured-output/  # Unified Structured Output pipeline
+│   │   ├── subagents/ # Sub-agents (task delegation / child Harness)
+│   │   ├── tools/    # Tool registry
+│   │   ├── model-config/  # Model configuration (tiered by provider/model)
+│   │   └── config/   # Timeouts / context-window and other global configuration
+│   ├── permission/   # Permission module (checkPermission / risk levels / permission-policy)
 │   ├── proactive/    # Proactive chat: model / policy / routing / service
-│   ├── rag/          # Retrieval-augmented generation and Worldbook injection
+│   ├── prompts/      # Prompt file loading (system prompt / persona / Runtime Policy)
+│   ├── protocols/    # Protocol layer (IPC and data-format conventions with external components)
+│   ├── rag/          # Retrieval-augmented generation and Worldbook injection (includes DmaeManager)
 │   ├── relationship/ # User relationship profile
+│   ├── runtime-policy/  # Runtime Policy (tool execution constraints + retry policy + side-effect accounting)
 │   ├── scheduler/    # Scheduled tasks (reminders / calendar)
-│   ├── sim/          # Scenario simulation tools
-│   ├── skills/       # Agent Skill system
+│   ├── screenshot/   # Native screenshot helper (IPC with the Rust assistant)
+│   ├── services/     # Service layer (BGE-M3 Embedding / email / search, etc.)
+│   ├── settings/     # Settings (general-settings / app-settings / model-settings)
+│   ├── sim/          # Scenario simulation tools (dmae-sim / run-l2-sim / sweep)
+│   ├── skills/       # Agent Skill system (built-in + user-defined)
 │   ├── social-context/  # Social-context extraction and injection
-│   ├── sticker-*.ts  # Semantic sticker matching (protocol / storage / description / embedder)
+│   ├── startup/      # Startup flow (windows / Tray / registration)
+│   ├── tasks/        # Task panel (TaskSessionStore / task execution / delegation)
+│   ├── todos/        # Todo working notebook (todoItems persistence inside Harness)
+│   ├── tts/          # Speech synthesis (multiple engines: MiniMax / Mossland / MiMo / GPT-SoVITS / custom)
+│   ├── windows/      # Windows-native concerns (window layout / position / visibility)
+│   ├── agui-bridge.ts # AG-UI event bridge (main process <-> renderer)
 │   ├── sync-mcp-builtin.ts  # Built-in MCP synchronization (Playwright / Feishu, etc.)
-│   └── tts/          # Speech synthesis (multiple engines)
+│   └── sticker-*.ts  # Semantic sticker matching (protocol / storage / description / embedder)
 ├── preload/          # Electron Preload bridge
 ├── renderer/         # Vite renderer
 │   ├── call/         # Voice-call window
 │   ├── chat/         # Main chat interface
+│   ├── lib/          # Shared library (hooks / utils / types)
 │   ├── live2d/       # Live2D model rendering
 │   ├── public/       # Tracked static source assets (audio / avatars / Cubism Core / stickers)
+│   ├── react/        # React 19 component library (features / styles / App)
 │   ├── settings/     # Settings center
 │   ├── sidebar/      # Sidebar
 │   ├── sticker-manager/  # Sticker management
 │   ├── tasks/        # Task panel
+│   ├── tast/         # Character avatar assets (PNG)
 │   ├── types/        # Shared type definitions
 │   └── ui/           # Shared UI components (modal / theme / chart, etc.)
 └── shared/           # Code shared between the main and renderer processes
@@ -588,13 +654,16 @@ dist/renderer/        # Vite output (generated files ignored; product assets tra
 ├── audio/            # Audio assets (tracked)
 ├── avatars/          # Avatar images (tracked)
 ├── call/ chat/ settings/ sidebar/ sticker-manager/ tasks/  # HTML entry points (generated, ignored)
+├── feeling/          # Character expression images (shy / calm / happy / moved / worried, tracked)
 ├── icons/            # Icons (tracked)
 ├── models/cyrene/    # Live2D model; see MODEL_LICENSE.md (tracked)
+├── react/            # React main entry (generated, ignored)
+├── status/           # Character status images (working / thinking / reminding / offline / listening, tracked)
 └── stickers/         # Sticker images (tracked)
 ```
 
-> `dist/renderer/assets/`, `dist/renderer/*/index.html`, and `dist/renderer/live2dcubismcore.min.js` are generated Vite build outputs and are not tracked by Git.  
-> `audio/`, `avatars/`, `icons/`, `models/`, and `stickers/` are product assets and are tracked.  
+> `dist/renderer/assets/`, the per-window `index.html` files, and `dist/renderer/live2dcubismcore.min.js` are generated Vite build outputs and are not tracked by Git.  
+> `audio/`, `avatars/`, `feeling/`, `icons/`, `models/`, `status/`, and `stickers/` are product assets and are tracked.  
 > Static source assets are located in `src/renderer/public/`. Run `npm run build:renderer` to regenerate the build output.
 
 ---

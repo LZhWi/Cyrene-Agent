@@ -20,8 +20,8 @@
 
 - 🌸 **趣味桌面陪伴** — Live2D 角色常驻桌面，支持表情、动作、状态、心情、气泡互动与智能表情包
 - 💬 **日常聊天（Chat）** — 专注角色化交流，结合会话历史、用户风格与长期记忆自然回应
-- 🛠️ **辅助工作（Work）** — 
-- 💻 **代码协作（Code）** — 
+- 🛠️ **辅助工作（Work）** — 通用任务会话，支持联网搜索、文件处理、文档生成、生活服务等工具的串联调用，由 CyreneHarness 主循环统一调度
+- 💻 **代码协作（Code）** — 绑定可信代码目录，提供 LSP 语义查询（定义/引用/悬停/符号/诊断）与受限的读写改命令执行，安全边界由 Harness 的 Action Gate 与 Execution Policy 统一把关
 - 📚 **学习陪伴（Learn）** — 绑定 Obsidian Vault，陪伴用户理解材料、整理笔记、生成练习与维护进
 - 🧠 **个性化记忆** — L0 / L1 / L2 分层记忆，结合自研记忆头像+Worldbook+沉淀长期互动
 - 🌱 **条目生命周期** — 自研DMAE算法（v4.0未实现最新v5.1）负责管理prompt在上下文中的生命周期
@@ -195,7 +195,7 @@ npm run package:win:dir
 | --- | :---: | --- |
 | 🌸 Live2D 桌面陪伴 | ✅ 可用 | 支持桌宠置顶、多窗口、表情动作、心情状态、气泡互动与智能表情包 |
 | 💬 日常聊天（Chat） | ✅ 可用 | 独立角色聊天流程，不暴露或执行工具，结合近期消息、社交上下文与用户风格生成回复 |
-| 🛠️ 辅助工作（Work） | ✅ 可用 | 完整 Agent 工作流：CITA → Action Gate → Native FC → Execution Policy → Tool Runtime → Soul |
+| 🛠️ 辅助工作（Work） | ✅ 可用 | 由 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 统一驱动：CITA 上下文理解 + Action Gate 权限过滤 + 主循环工具调度 + 不确定副作用记账 + 可恢复 checkpoint；人设层（Soul）在出口生成回复文本 |
 | 💻 代码协作（Code） | ✅ 可用 | 绑定可信代码目录，Coding Agent 读取、修改、验证代码并执行命令 |
 | 📚 学习陪伴（Learn） | ✅ 可用 | 绑定 Obsidian Vault，陪伴理解材料、整理笔记、生成练习与维护进度 |
 | 📅 日常事务（Daily） | ✅ 可用 | 通用工具会话，处理日常问答、信息整理与轻度任务 |
@@ -349,18 +349,69 @@ Embedding 索引已采用后台 Worker、批处理和缓存机制，以降低文
 - **多端聊天风格** — 桌面聊天、手机渠道和语音通话可使用不同的表达风格。
 - **回复分段** — 可选择「全部分段 / 仅 Chat 分段 / 关闭」，长回复能够按语义拆分为多个聊天气泡。
 
+#### ⚙️ CyreneHarness 核心循环
+
+> `Work / Code / Daily` 等需要工具调用的会话模式，全部跑在 **CyreneHarness** 之上。
+> 源码：[`src/main/orchestrator/harness/cyrene-harness.ts`](./src/main/orchestrator/harness/cyrene-harness.ts)
+
+CyreneHarness 是 Cyrene Agent 的核心 Agent Loop，负责把**模型决策、工具执行、副作用记账与状态恢复**串成一个可中断、可恢复、可回放的连续循环。
+
+**关键设计：**
+
+- **连续的 while + Function Calling 循环** — 每轮调用 LLM，按其返回的 `toolCalls` 进入工具派发，无 `toolCalls` 时由模型主动结束当前 turn。
+- **assistantMessage 必写回（v3 P0 blocker）** — 每轮模型返回的 assistant 消息必须无条件 `push` 进 `messages`，否则下一轮模型会看不到自己上一步的回复，loop 立即崩。
+- **Ask 互斥路径** — `ask_user` / `confirm_uncertain_effect` 是用户等待类内置工具，必须独占本轮：其余同轮工具全部以 `not_executed` 协议结果写回，并 `discardProgressBuffer()` 丢弃进度文本。
+- **四态 outcome 与 uncertainEffects 拦截** — 工具结果分为 `success / failure / unknown / not_executed`。当 `unknown` 且 `sideEffect === non_idempotent` 时，副作用会被记入 `state.uncertainEffects`，并 `halted = true` 暂停本轮后续同类调用，防止自动重放危险副作用。
+- **失败重试** — 工具失败时根据 `classifyToolResultError` + `resolveSideEffect` 决定是否重试；`sleepWithJitter` 退避可被 `AbortSignal` 中断。
+- **Mid-loop Compaction** — 每轮开始时根据 token 预算判断是否需要压缩上下文，超阈值时复用 LLM 做历史摘要，保留 todo 与已确定结果。
+- **全程 signal-aware** — 几乎每个 `await` 都用 `raceWithSignal` 包裹，`signal.aborted` 时返回 `cancelled()`（`finalAnswer = ''`，**不发 `final_answer` 事件**）。
+- **每轮 checkpoint** — 通过 `onCheckpoint` 把 `messages` + `state` + `rounds` 持久化，跨进程崩溃后可恢复。
+
+**5 种终止状态：**
+
+| 状态 | `terminated` | `terminateReason` | 触发条件 |
+| :---: | :---: | :---: | --- |
+| ✅ success | `false` | `undefined` | 模型不再调用工具，主动结束当前 turn |
+| ⚪ cancelled | `true` | `cancelled` | `AbortSignal` 触发（`finalAnswer = ''`） |
+| 🟥 error | `true` | `error` | LLM 抛错或 checkpoint 失败 |
+| 🟧 max_rounds | `true` | `max_rounds` | 达到 `config.maxRounds` |
+| 🟨 timeout | `true` | `timeout` | 超过 `config.totalTimeoutMs` |
+
+**主流程示意：**
+
+![CyreneHarness 主循环](./docs/image/harness.png)
+
+*（示意图：① 初始化 → ② 主循环 → ③ LLM → ④ 工具调度 → ⑤ 状态账本 → ⑥ 终态结算）*
+
+下面各模式是 Harness 的"消费者"：
+
 #### 🛠️ 辅助工作（Work）
 
+![Work 模式示意](./docs/image/work.png)
+
+- **CyreneHarness 主循环驱动** — 单条消息进入 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 的 while 循环：每轮调用 LLM → 写回 assistant 消息 → 派发工具 → 写回 tool result → 检查不确定副作用 → 继续或结束。预处理器（CITA 上下文理解）在 Harness 入口前完成，人设层（Soul）在 Harness 出口后生成回复文本。
+- **工具自由串联** — 支持联网搜索、网页读取、文件读写、文档生成、生活服务等工具按需组合调用；模型可自行决定下一个工具，无需预先编排流程。
+- **副作用记账** — 非幂等副作用（发送邮件、修改远端文件等）结果未知时，会写入 `state.uncertainEffects` 并停止本轮同类自动重放，避免危险操作被无声重复。
+- **失败重试与中断** — 工具失败按错误分类与副作用等级决定是否重试（带退避抖动），随时可通过 `AbortSignal` 取消；取消时不会发出"最终回复"，避免误导用户。
+- **可恢复 checkpoint** — 每轮结束把 `messages + state + rounds` 序列化到本地，跨进程崩溃后可在原状态续跑，不丢上下文。
+- **人设与流程并存** — 在保留昔涟人格回复的同时承载工具调用。
 
 #### 💻 代码协作（Code）
 
+![Code 模式示意](./docs/image/code.png)
+
+- **在 Work 基础上叠加代码专属工具** — 复用 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 主循环，额外注册代码专用工具集（读写改、命令执行、LSP 查询等）；Action Gate 在 Harness 入口前过滤不安全调用，Execution Policy 决定是否需要用户二次确认。
+
+- **在 Work 基础上叠加代码专属工具** — 复用 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 主循环，额外注册代码专用工具集（读写改、命令执行、LSP 查询等）；Action Gate 在 Harness 入口前过滤不安全调用，Execution Policy 决定是否需要用户二次确认。
+- **绑定可信工作目录** — 所有读写、命令执行与 LSP 查询必须落在用户预先绑定的目录内；模型无法指定或切换工作目录，越权访问（包括 `..` 与符号链接逃逸）会被直接拒绝。
 - **代码语义查询（LSP）** — Code 模式可在已绑定工作目录中查询定义、引用、悬停、符号与诊断；不会修改文件。
 - **外部服务由用户管理** — Cyrene 只提供 LSP 客户端，不随应用捆绑、下载、升级或静默安装语言服务器。
-- **发现顺序** — 优先使用用户明确配置的命令，其次查找工作区 `node_modules/.bin`，最后查找系统 `PATH`。
-- **安装与排障** — 请自行安装所需服务，例如 `typescript-language-server`、`pyright-langserver`、`gopls`、`rust-analyzer` 或 `clangd`；Windows 可用 `where pyright-langserver`，macOS/Linux 可用 `which pyright-langserver` 检查是否可发现。用户也可以明确要求昔涟通过现有、受权限控制的工具协助安装。
-- **安全边界** — 语言服务进程使用标准输入输出启动，文件访问受绑定工作目录限制；模型不能指定命令、服务 ID 或工作目录。
-- **支持的内置定义** — TypeScript/JavaScript/JSON、Python、Go、Rust、C/C++、Java、C#、PHP、Ruby、Kotlin、Lua、Vue 与 YAML；服务进程会在同一工作区内复用，并在应用退出时释放。
-- **自定义服务命令** — 在应用数据目录的 `app-settings.json` 中配置 `lspServerOverrides`。它只覆盖内置服务的命令、参数、文件扩展名或初始化选项，不接受模型在对话中传入的启动命令。例如：
+- **启动顺序** — 先按命令是否为绝对路径定位，否则在工作区 `node_modules/.bin` 中查找，最后回退到系统 PATH 逐目录遍历（Windows 还会按 `PATHEXT` 追加 `.exe` / `.cmd` 等扩展名）。
+- **安装与排障** — 请自行安装所需服务，例如 `typescript-language-server`、`pyright-langserver`、`gopls`、`rust-analyzer`、`clangd`、`jdtls`、`OmniSharp`、`intelephense`、`ruby-lsp`、`kotlin-language-server`、`lua-language-server`、`vue-language-server`、`yaml-language-server`；Windows 可用 `where pyright-langserver`，macOS/Linux 可用 `which pyright-langserver` 检查是否可发现。用户也可以明确要求昔涟通过现有、受权限控制的工具协助安装。
+- **安全边界** — 语言服务进程以 `stdio: "pipe"` 启动，`shell: false`，`cwd` 强制为绑定工作目录；模型不能指定命令、服务 ID 或工作目录；`lspServerOverrides` 只覆盖 builtin 服务的命令名 / 参数 / 扩展名，**不接受模型在对话中传入的任意命令**。
+- **内置支持的语言** — TypeScript / JavaScript / JSON、Python、Go、Rust、C / C++、Java、C#、PHP、Ruby、Kotlin、Lua、Vue、YAML（13 种，详见 `src/main/lsp/server-catalog.ts`）。
+- **进程复用与释放** — 同一 serverId 的 LSP 进程在同一工作区内复用，避免反复冷启动；应用退出时统一释放。
+- **自定义服务命令** — 在应用数据目录的 `general-settings.json` 中配置 `lspServerOverrides`，只覆盖 builtin 服务的 `command` / `args` / `extensions` / `initializationOptions`，不接受模型在对话中传入的启动命令。例如：
 
   ```json
   {
@@ -378,6 +429,7 @@ Embedding 索引已采用后台 Worker、批处理和缓存机制，以降低文
 #### 📚 学习陪伴（Learn）
 
 - **Obsidian Vault 工作区** — 绑定一个 Vault 作为学习工作区，约定 `materials/`、`notes/`、`exercises/`、`templates/` 与 `learn/progress.md` 目录结构。
+- **基于 RAG 与个性化记忆** — 学习材料通过 [RAG 文档知识库](#-rag-文档知识库) 索引后参与检索，学习进度与偏好进入 L2 长期记忆，跨会话保持连续。
 - **陪伴式理解** — 通过提问、拆解、类比和讨论帮助用户理解材料，而非代替用户完成学习任务。
 - **笔记与练习** — 在 Vault 内共同整理概念、生成练习与记录复盘，并自动维护学习进度总览。
 - **尊重学习节奏** — 用户没懂时换种方式解释，用户已懂时推进到下一步，不因答错而责备。
@@ -492,16 +544,20 @@ Cyrene 内置和扩展的工具较多，主要覆盖以下类别：
 | 构建工具 | Vite 7 |
 | 界面渲染 | HTML / CSS + React 19 + Pixi.js 7 + Ant Design X + Chart.js |
 | Live2D | `pixi-live2d-display` 0.5.0-beta + Cubism Core |
-| Agent 工作流 | LangGraph + Structured Output + Native Function Calling |
-| Agent 事件协议 | `@ag-ui/core`、`@ag-ui/client` |
-| 工具扩展 | `@modelcontextprotocol/sdk` |
+| Agent 主循环 | [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts)（while + Function Calling + 流式 reasoning/tool） + Structured Output + Native Function Calling |
+| Agent 事件协议 | AG-UI（`@ag-ui/core`、`@ag-ui/client`）— 通过 `RUN_STARTED / STEP_* / TEXT_MESSAGE_* / TOOL_CALL_* / RUN_FINISHED` 等事件与渲染进程解耦 |
+| 工具调度 | 自研 `tool-dispatcher` + `side-effect-resolver` + `error-classifier` + `retry-policy` 四件套，统一处理四态 outcome（success / failure / unknown / not_executed） |
+| 沙箱执行（Windows） | `@anthropic-ai/sandbox-runtime`（SRT）— 非可信命令走 SandboxManager.wrapWithSandboxArgv；未安装时回退直接 spawn，workspace_mutation 命令仍被拒绝 |
+| LSP 客户端 | 自研 `LspManager` + `vscode-jsonrpc` 协议，进程按 serverId 复用，stdio pipe 与 `shell:false` 启动 |
+| 工具扩展 | `@modelcontextprotocol/sdk`（stdio / SSE / StreamableHTTP transport） |
 | 记忆与检索 | Embedding（`@xenova/transformers`）+ BM25 + 自研 Cross-Encoder Reranker + 自研索引管线 |
+| 上下文条目调度 | 自研 DMAE V5.1（关键词命中召回 + 激活度衰减 + active/dormant/archived 三态可逆） |
 | 中文检索 | `@node-rs/jieba` |
 | 浏览器与桌面自动化 | Playwright + `@nut-tree-fork/nut-js` |
 | 富文本渲染 | `@ant-design/x-markdown`（Markdown / 代码高亮 / KaTeX 公式） |
 | 语音与媒体 | TTS / ASR + `silk-wasm` |
 | 原生截图助手 | Rust + DXGI Desktop Duplication / Direct2D / GDI + WIC PNG + NDJSON IPC |
-| 自研核心 | CITA、Action Gate、DMAE Worldbook、统一 Structured Output Pipeline |
+| 自研核心 | CITA（上下文理解）、Action Gate（权限过滤）、DMAE Worldbook、统一 Structured Output Pipeline |
 | 外部渠道 | 飞书 OpenAPI、微信 iLink |
 | 文档与邮件 | ExcelJS、docx、PDFKit、Nodemailer |
 | 测试 | Vitest 4 |
@@ -521,6 +577,7 @@ models/                # 本机 AI 模型（用户放置，见 MODEL_LICENSE.md�
 └── ms-marco-MiniLM-L-6-v2/  # 轻量排序模型（~23MB，可选）
 
 src/
+├── cli/              # 命令行入口（`cyrene` 命令，实现 banner / about / version / run 子命令）
 ├── main/             # Electron 主进程
 │   ├── asr/          # 语音识别（阿里云实时 ASR）
 │   ├── call/         # 语音通话核心逻辑（ASR -> agent -> TTS 轮次）
@@ -528,26 +585,53 @@ src/
 │   ├── chat/         # 聊天附属（图片处理 / think 过滤 / 发送策略）
 │   ├── chats/        # 多会话历史与持久化
 │   ├── cita/         # CITA 上下文理解与建议引擎
+│   ├── code-git/     # Code 模式的 git 服务（status / commit / branch / push / revert）
 │   ├── game-bot/     # 游戏自动化（game-recipes 驱动）
-│   ├── memory/       # L0/L1/L2 记忆引擎 + 实体关系图
-│   ├── music/        # 音乐陪伴（播放 / 推荐 / 会话）
+│   ├── learn/        # Learn 模式：Obsidian Vault 绑定 + 进度总览
+│   ├── lsp/          # LSP 客户端（manager / client / server-catalog / server-discovery）
+│   ├── memory/       # L0/L1/L2 记忆引擎 + DMAE Worldbook + 实体关系图
+│   ├── music/        # 音乐陪伴（播放 / 推荐 / 会话 / MCP 客户端）
 │   ├── orchestrator/ # Agent 主循环 + 工具调度 + Action Gate
+│   │   ├── harness/  # CyreneHarness 核心（while 循环 + compaction + retry + uncertainty）
+│   │   ├── sandbox/  # Windows 命令执行沙箱（@anthropic-ai/sandbox-runtime 接入）
+│   │   ├── code/     # Code 模式子模块（绑定工作目录 + LSP 工具）
+│   │   ├── vendors/  # 多模型厂商适配（A/B/M/D 分级 Structured Output + Function Calling）
+│   │   ├── structured-output/  # 统一 Structured Output Pipeline
+│   │   ├── subagents/ # 子 Agent（任务委派 / 子 Harness）
+│   │   ├── tools/    # 工具注册表
+│   │   ├── model-config/  # 模型配置（按 provider/model 分级）
+│   │   └── config/   # 超时 / 上下文窗口等全局配置
+│   ├── permission/   # 权限模块（checkPermission / risk 等级 / permission-policy）
 │   ├── proactive/    # 主动对话：模型 / 策略 / 路由 / 服务
-│   ├── rag/          # 检索增强生成 + worldbook 注入
+│   ├── prompts/      # Prompt 文件加载（system prompt / persona / Runtime Policy）
+│   ├── protocols/    # 协议层（与外部组件的 IPC / 数据格式约定）
+│   ├── rag/          # 检索增强生成 + Worldbook 注入（含 DmaeManager）
 │   ├── relationship/ # 用户关系画像
+│   ├── runtime-policy/  # Runtime Policy（工具执行约束 + 重试策略 + 副作用记账）
 │   ├── scheduler/    # 定时任务（提醒 / 日程）
-│   ├── sim/          # 场景模拟工具
-│   ├── skills/       # Agent skill 系统
+│   ├── screenshot/   # 原生截图助手相关（与 Rust 助手 IPC）
+│   ├── services/     # 服务层（BGE-M3 Embedding / 邮件 / 搜索等）
+│   ├── settings/     # 设置（general-settings / app-settings / model-settings）
+│   ├── sim/          # 场景模拟工具（dmae-sim / run-l2-sim / sweep）
+│   ├── skills/       # Agent skill 系统（内置 + 用户自定义）
 │   ├── social-context/  # 社交上下文抽取与注入
-│   ├── sticker-*.ts  # 贴纸语义匹配（协议 / 存储 / 描述 / embedder）
+│   ├── startup/      # 启动流程（窗口 / Tray / 注册表）
+│   ├── tasks/        # 任务面板（TaskSessionStore / 任务执行 / 委派）
+│   ├── todos/        # Todo 工作笔记本（Harness 内 todoItems 持久化）
+│   ├── tts/          # 语音合成（多引擎：MiniMax / Mossland / MiMo / GPT-SoVITS / 自定义）
+│   ├── windows/      # Windows 原生相关（窗口布局 / 位置 / 可见性）
+│   ├── agui-bridge.ts # AG-UI 事件桥（主进程 ↔ 渲染进程）
 │   ├── sync-mcp-builtin.ts  # 内置 MCP 同步（Playwright / 飞书等）
-│   └── tts/          # 语音合成（多引擎）
+│   └── sticker-*.ts  # 贴纸语义匹配（协议 / 存储 / 描述 / embedder）
 ├── preload/          # Electron preload 桥接
 ├── renderer/         # Vite 渲染层
 │   ├── call/         # 语音通话窗口
 │   ├── chat/         # 主聊天界面
+│   ├── lib/          # 通用库（hooks / utils / 类型）
 │   ├── live2d/       # Live2D 模型渲染逻辑
 │   ├── public/       # 静态资源源文件（音频 / 头像 / Cubism Core / 贴纸，已跟踪）
+│   ├── react/        # React 19 组件库（features / styles / App）
+│   ├── tast/         # 角色头像资源（PNG）
 │   ├── settings/     # 设置中心
 │   ├── sidebar/      # 侧边栏
 │   ├── sticker-manager/  # 贴纸管理
@@ -561,14 +645,17 @@ dist/renderer/        # Vite 构建产物（构建产物 gitignore，产品资�
 ├── audio/            # 音频资源（已跟踪）
 ├── avatars/          # 头像图片（已跟踪）
 ├── call/ chat/ settings/ sidebar/ sticker-manager/ tasks/   # HTML 入口（构建产物，gitignore）
+├── feeling/          # 角色表情图片（害羞/平静/开心/感动/担心…，已跟踪）
 ├── icons/            # 图标（已跟踪）
 ├── models/cyrene/    # Live2D 模型 - 见 MODEL_LICENSE.md（已跟踪）
+├── react/            # React 主入口（构建产物，gitignore）
+├── status/           # 角色状态图片（工作中/思考中/提醒/离线/聆听中…，已跟踪）
 └── stickers/         # 贴纸图片资源（已跟踪）
 ```
 
-> dist/renderer/assets/、dist/renderer/*/index.html、 dist/renderer/live2dcubismcore.min.js 为 Vite 构建产物
-> 不在 git 跟踪范围内。 audio/、avatars/、icons/、models/、stickers/ 为产品资源，已纳入 git。
-> 静态资源源文件见 src/renderer/public/。 运行 npm run build:renderer 重新生成构建产物。
+> `dist/renderer/assets/`、各窗口的 `index.html`、`dist/renderer/live2dcubismcore.min.js` 为 Vite 构建产物
+> 不在 git 跟踪范围内。`audio/`、`avatars/`、`feeling/`、`icons/`、`models/`、`status/`、`stickers/` 为产品资源，已纳入 git。
+> 静态资源源文件见 `src/renderer/public/`。运行 `npm run build:renderer` 重新生成构建产物。
 
 ---
 
