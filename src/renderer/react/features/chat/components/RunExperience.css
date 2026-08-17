@@ -434,34 +434,55 @@ button.cy-file-change-card__row:hover { background: #f7f4f6; }
 .cy-plan-content__body {
   flex: 1;
   overflow-y: auto;
-  padding: 14px 16px;
-  font-size: 13px;
+  padding: 12px 16px;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+/* 计划面板正文/列表/段落：与基准字号一致，整体紧凑 */
+.cy-plan-content__body .cy-message-markdown,
+.cy-plan-content__body .cy-message-markdown p,
+.cy-plan-content__body .cy-message-markdown li {
+  font-size: 12px;
+  line-height: 1.65;
+}
+
+.cy-plan-content__body .cy-message-markdown p,
+.cy-plan-content__body .cy-message-markdown li {
+  margin: 4px 0;
 }
 
 /* 计划面板标题字号：克制，避免一级标题喧宾夺主 */
 .cy-plan-content__body .cy-message-markdown h1 {
-  margin: 4px 0 10px;
-  font: 600 16px/1.35 var(--rb-font-sans, sans-serif);
+  margin: 4px 0 8px;
+  font: 600 15px/1.35 var(--rb-font-sans, sans-serif);
   color: var(--cy-text, #1d1d1f);
 }
 
 .cy-plan-content__body .cy-message-markdown h2 {
-  margin: 14px 0 6px;
-  font: 600 13px/1.35 var(--rb-font-sans, sans-serif);
+  margin: 12px 0 4px;
+  font: 600 12.5px/1.35 var(--rb-font-sans, sans-serif);
   color: var(--cy-text, #1d1d1f);
+  letter-spacing: 0.02em;
 }
 
 .cy-plan-content__body .cy-message-markdown h3 {
-  margin: 10px 0 4px;
-  font: 600 12px/1.35 var(--rb-font-sans, sans-serif);
+  margin: 8px 0 3px;
+  font: 600 11.5px/1.35 var(--rb-font-sans, sans-serif);
   color: var(--cy-text-muted, #6b6b6b);
 }
 
 /* 计划面板分隔线：弱化，避免满屏水平线 */
 .cy-plan-content__body .cy-message-markdown hr {
-  margin: 10px 0;
+  margin: 8px 0;
   border: 0;
   border-top: 1px solid var(--cy-border, #f0ebee);
+}
+
+/* 代码块：比正文略小，保持等宽对齐 */
+.cy-plan-content__body .cy-message-markdown pre,
+.cy-plan-content__body .cy-message-markdown code {
+  font-size: 11.5px;
 }
 
 /* XMarkdown 的 GFM task list 勾选态：已完成项弱化 + 删除线 */
