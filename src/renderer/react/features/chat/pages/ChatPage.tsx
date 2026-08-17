@@ -4,6 +4,9 @@ import { ChatComposer, parseComposerMessage, type ComposerAttachment } from "../
 import { ComposerSlot } from "../components/ComposerSlot";
 import { TodoPanel } from "../components/TodoPanel";
 import { CodeGitPanel } from "../components/CodeGitPanel";
+import { PlanContent, PlanReviewEntry, planTabLabel, planTabDotClass, type PlanReviewPhase } from "../components/PlanReviewPanel";
+import { ReviewDiffContent } from "../components/ReviewInspector";
+import { RightInspector, type InspectorTab } from "../components/RightInspector";
 import type { TodoItem } from "../../../../../shared/todo-types";
 import {
   describePermissionRequest,
@@ -25,7 +28,7 @@ import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "..
 import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
 import { ConversationSidebar } from "../components/ConversationSidebar";
 
-import type { AgentRoundRecord, ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
+import type { AgentRoundRecord, ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord, ToolFileChange } from "../../../../../shared/chat-types";
 import { SidebarToggle } from "../../../components/ui/SidebarToggle";
 import { ModeSwitch } from "../../../components/ui/ModeSwitch";
 import { ToolModeButton } from "../../../components/ui/ToolModeButton";
@@ -34,7 +37,6 @@ import { SkillModeButton } from "../../../components/ui/SkillModeButton";
 import { ModelModeButton } from "../../../components/ui/ModelModeButton";
 import { SkillModePanel } from "../components/SkillModePanel";
 import { ModelModePanel } from "../components/ModelModePanel";
-import { CharacterStatusPill } from "../../../components/ui/CharacterStatusPill";
 import { WindowControls } from "../../../components/ui/WindowControls";
 import { SettingsButton } from "../../../components/ui/SettingsButton";
 import { UserAvatar } from "../../../components/ui/UserAvatar";
@@ -54,6 +56,7 @@ import { splitTextForReveal } from "./message-reveal";
 import {
   clearSessionInteraction,
   buildTodoRecoveryContext,
+  bindWorkspaceName,
   findSessionIdForRun,
   hasActiveRunForSession,
   hydrateSessionMessages,
@@ -69,7 +72,6 @@ import {
 } from "./session-runtime-state";
 import "../../../components/ui/SidebarToggle.css";
 import "../../../components/ui/ModeSwitch.css";
-import "../../../components/ui/CharacterStatusPill.css";
 import "../../../components/ui/WindowControls.css";
 import "../../../components/ui/SettingsButton.css";
 import "../../../components/ui/UserAvatar.css";
@@ -84,7 +86,6 @@ import "../components/ChatMessageList.css";
 import "../components/ConversationSidebar.css";
 
 
-import avatarLight from "../../../assets/avatars/avatar-light.png";
 import compressingPng from "../../../assets/compressing.png";
 
 const CONVERSATION_MODES: readonly ConversationMode[] = ["chat", "work", "code", "learn"];
@@ -255,6 +256,8 @@ interface AguiEvent {
   toolCallName?: string;
   stepName?: string;
   status?: string;
+  /** Diff Review 卡片证据；由 tool_end 事件独立携带（主进程 harness-adapter 透传）。 */
+  changes?: ToolFileChange[];
 }
 
 interface AguiApi {
@@ -267,9 +270,11 @@ interface AguiApi {
     sessionId: string;
     imageAttachments?: Array<{ name: string; filePath: string; mime?: string }>;
     recoveryContext?: string;
+    resumeFromRunId?: string;
   }) => Promise<{ success: boolean; runId: string; error?: string }>;
   onEvent: (callback: (event: AguiEvent) => void) => () => void;
   cancel: (runId?: string) => Promise<unknown>;
+  getInterruptedRun?: (sessionId: string) => Promise<{ runId: string; rounds: number; todoCount: number; updatedAt: number } | null>;
 }
 
 interface ChoiceApi {
@@ -361,6 +366,7 @@ function toUiMessages(session: ChatSession): ChatMessageItem[] {
       sticker: message.sticker,
       toolExecutions: message.toolExecutions,
       attachments: message.attachments,
+      runId: message.runSnapshot?.runId,
     };
     return message.runSnapshot ? recoverInterruptedMessage(item, message.runSnapshot) : item;
   });
@@ -396,6 +402,10 @@ export function ChatPage() {
   const [toolPanelOpen, setToolPanelOpen] = useState(false);
   const [skillPanelOpen, setSkillPanelOpen] = useState(false);
   const [modelPanelOpen, setModelPanelOpen] = useState(false);
+  /** 右侧 Review 检查面板：打开时把白色工作区挤窄 */
+  const [reviewInspector, setReviewInspector] = useState<{ runId: string; fileIndex: number } | null>(null);
+  /** 右侧面板当前激活的 tab（diff / plan），由打开动作自动切换 */
+  const [inspectorTab, setInspectorTab] = useState<"diff" | "plan">("plan");
   const [mode, setMode] = useState<ConversationMode>(getInitialMode);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessageItem[]>>({});
@@ -411,11 +421,15 @@ export function ChatPage() {
   const [isCompressingContext, setIsCompressingContext] = useState(false);
   const [interactionsBySession, setInteractionsBySession] = useState<SessionInteractionState>({});
   const [lastTurnRevisionStarting, setLastTurnRevisionStarting] = useState(false);
-  const [modelName, setModelName] = useState("模型未连接");
-  const [modelDisplayName, setModelDisplayName] = useState("");
   const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const [todoStateBySession, setTodoStateBySession] = useState<TodoStateBySession>({});
+  // 计划模式（Plan Mode 二期）：会话级计划面板内容与阶段（review → executing → completed）。
+  const [planReviewBySession, setPlanReviewBySession] = useState<
+    Record<string, { content: string; planPath: string; phase: PlanReviewPhase }>
+  >({});
+  const [planDrawerOpen, setPlanDrawerOpen] = useState(false);
+  const [interruptedRun, setInterruptedRun] = useState<{ runId: string; rounds: number; todoCount: number } | null>(null);
   const activeModeRef = useRef(mode);
   const activeSessionIdsRef = useRef(activeSessionIds);
   const activeScopeRef = useRef(`mode:${mode}`);
@@ -462,12 +476,10 @@ export function ChatPage() {
     let active = true;
     const apply = (config: PublicModelConfig) => {
       if (!active) return;
-      setModelName(typeof config.model === "string" && config.model.trim() ? config.model.trim() : "模型未连接");
-      setModelDisplayName(typeof config.displayName === "string" ? config.displayName.trim() : "");
       setStickerSize(config.stickerSize === "small" || config.stickerSize === "large" ? config.stickerSize : "standard");
     };
     void modelConfig.get().then(apply).catch(() => {
-      if (active) setModelName("模型未连接");
+      if (active) setStickerSize("standard");
     });
     const off = modelConfig.onChanged(apply);
     return () => {
@@ -620,6 +632,71 @@ export function ChatPage() {
       activeEarlyTtsRef.current = null;
     }
   }, [activeSessionId, mode]);
+
+  useEffect(() => {
+    const sessionId = activeSessionId;
+    const api = aguiApi();
+    if (!sessionId || !api?.getInterruptedRun || mode === "chat") {
+      setInterruptedRun(null);
+      return;
+    }
+    let active = true;
+    void api.getInterruptedRun(sessionId).then((run) => {
+      if (active) setInterruptedRun(run ? { runId: run.runId, rounds: run.rounds, todoCount: run.todoCount } : null);
+    }).catch(() => { if (active) setInterruptedRun(null); });
+    return () => { active = false; };
+  }, [activeSessionId, mode]);
+
+  // 计划模式事件（Plan Mode）：review/approved/exited 在 run 结束后由主进程发出
+  // （run 订阅已解除），必须持久监听；completed 在 run 内发出，run 订阅无此分支，
+  // 也统一在这里处理。批准后自动发送执行消息（sendMessage 自带 busy 排队机制）。
+  useEffect(() => {
+    const api = aguiApi();
+    if (!api?.onEvent || mode !== "code" || !activeSessionId) return;
+    const off = api.onEvent((event) => {
+      if (event.type !== "CUSTOM" || typeof event.name !== "string" || !event.name.startsWith("cyrene.plan.")) return;
+      const value = (event.value ?? null) as { sessionId?: string; planPath?: string; planContent?: string; text?: string } | null;
+      if (value?.sessionId && value.sessionId !== activeSessionId) return;
+      switch (event.name) {
+        case "cyrene.plan.review":
+          if (value?.sessionId && typeof value.planContent === "string" && value.planContent.trim()) {
+            setPlanReviewBySession((current) => ({
+              ...current,
+              [value.sessionId!]: {
+                content: value.planContent!,
+                planPath: value.planPath ?? "",
+                phase: "review",
+              },
+            }));
+            setPlanDrawerOpen(true);
+            setInspectorTab("plan");
+          }
+          break;
+        case "cyrene.plan.approved":
+          if (value?.sessionId) {
+            setPlanReviewBySession((current) => current[value.sessionId!]
+              ? { ...current, [value.sessionId!]: { ...current[value.sessionId!], phase: "executing" } }
+              : current);
+            void sendMessage("已批准计划，请开始执行。");
+          }
+          break;
+        case "cyrene.plan.supplement":
+          // 第二段补充卡提交的文本：作为用户消息发给模型修改计划，改完会重新走审批
+          if (value?.sessionId && typeof value.text === "string" && value.text.trim()) {
+            void sendMessage(value.text);
+          }
+          break;
+        case "cyrene.plan.completed":
+          // adapter 发出时不带 sessionId；code 模式专属事件，按当前会话处理
+          setPlanReviewBySession((current) => current[activeSessionId]
+            ? { ...current, [activeSessionId]: { ...current[activeSessionId], phase: "completed" } }
+            : current);
+          break;
+      }
+    });
+    return off;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, activeSessionId]);
 
   function setInteractionForSession(sessionId: string, interaction: ComposerInteraction): void {
     setInteractionsBySession((current) => setSessionInteraction(current, sessionId, interaction));
@@ -840,6 +917,7 @@ export function ChatPage() {
     assistantId: string;
     session: ChatSession;
     attachments: ComposerAttachment[];
+    resumeFromRunId?: string;
   }) {
     const api = aguiApi();
     const store = chatStore();
@@ -961,6 +1039,7 @@ export function ChatPage() {
             status: patch.status ?? "running",
             result: patch.result,
             argsText: patch.argsText,
+            changes: patch.changes,
             roundId: patch.roundId ?? activeRoundId,
           }]
         : toolExecutions.map((tool, toolIndex) => toolIndex === index ? { ...tool, ...patch } : tool);
@@ -1067,6 +1146,7 @@ export function ChatPage() {
           waitingForFirstEvent: false,
           runActivity: { ...runActivity },
           runStage: { kind: "understanding" },
+          runId: event.runId ?? activeRunsBySession.current[input.sessionId]?.runId,
         });
         void checkpointRun("running", true);
         return;
@@ -1142,6 +1222,7 @@ export function ChatPage() {
         updateRunTool(event.toolCallId, {
           status: event.status === "failed" ? "error" : "success",
           result: (event.content ?? "").slice(0, 4000),
+          changes: event.changes,
         });
         void checkpointRun("running", true);
       } else if (event.type === "TOOL_CALL_END" && event.toolCallId) {
@@ -1295,6 +1376,7 @@ export function ChatPage() {
         styleId: general?.currentStyleId,
         sessionId: input.sessionId,
         recoveryContext: buildTodoRecoveryContext(input.session.messages, input.assistantId),
+        ...(input.resumeFromRunId ? { resumeFromRunId: input.resumeFromRunId } : {}),
         imageAttachments: input.attachments
           .filter((attachment) => attachment.kind === "image" && attachment.filePath)
           .map((attachment) => ({
@@ -1798,7 +1880,7 @@ export function ChatPage() {
     if (files.length > 0) void chooseFiles(files);
   }
 
-  async function sendMessage(content: string) {
+  async function sendMessage(content: string, resumeFromRunId?: string) {
     const parsedMessage = parseComposerMessage(mode, content);
     const message = parsedMessage.rawContent;
     if (!message) return;
@@ -1819,6 +1901,13 @@ export function ChatPage() {
     const pendingWorkspace = pendingWorkspaceByMode[targetMode];
     if (pendingWorkspace) {
       const workspaceResult = await chatStore()?.setWorkspace(sessionId, pendingWorkspace.path);
+      if (workspaceResult?.ok) {
+        setWorkspaceNames((current) => bindWorkspaceName(
+          current,
+          targetMode,
+          pendingWorkspace.displayName ?? "工作文件夹",
+        ));
+      }
       if (workspaceResult?.ok && targetMode === "learn" && workspaceResult.isEmpty) {
         const confirmed = window.confirm(
           "这是一个空目录。Cyrene 可以在这里创建通用学习工作区结构（materials/、notes/、exercises/、templates/、learn/progress.md），方便你之后和 Cyrene 一起学习。\n\n是否创建？"
@@ -1861,6 +1950,7 @@ export function ChatPage() {
       demoSticker,
       assistantId,
       userMessageId,
+      resumeFromRunId,
     });
   }
 
@@ -1876,8 +1966,9 @@ export function ChatPage() {
     demoSticker?: string;
     assistantId?: string;
     userMessageId: string;
+    resumeFromRunId?: string;
   }) {
-    const { targetMode, sessionId, rawContent, visibleContent, attachments, userSticker, shouldRunModel, demoResponse, demoSticker, assistantId, userMessageId } = input;
+    const { targetMode, sessionId, rawContent, visibleContent, attachments, userSticker, shouldRunModel, demoResponse, demoSticker, assistantId, userMessageId, resumeFromRunId } = input;
     setMessagesBySession((current) => ({
       ...current,
       [sessionId]: [
@@ -1946,6 +2037,7 @@ export function ChatPage() {
         assistantId,
         session: updatedSession,
         attachments,
+        resumeFromRunId,
       });
     }
   }
@@ -2014,7 +2106,6 @@ export function ChatPage() {
         <SidebarToggle collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
       </div>
       <div className="cy-page-top-center">
-        <CharacterStatusPill avatarPath={avatarLight} status={modelDisplayName || modelName} />
         {!toolPanelOpen && !skillPanelOpen && !modelPanelOpen && (
           <ModeSwitch value={mode} onChange={(nextMode) => {
             if (isConversationMode(nextMode)) setMode(nextMode);
@@ -2094,6 +2185,12 @@ export function ChatPage() {
             todoState={todoStateBySession[activeSessionId] ?? null}
           />
         )}
+        {interruptedRun && !isCurrentScopeRunning && (
+          <div className="cy-harness-recovery">
+            <span>昔涟上次任务意外中断（已进行 {interruptedRun.rounds} 轮）。</span>
+            <button type="button" onClick={() => void sendMessage("继续上次任务", interruptedRun.runId)}>继续任务</button>
+          </div>
+        )}
         {hasMessages && (
           <ChatMessageList
             messages={messages}
@@ -2116,6 +2213,19 @@ export function ChatPage() {
             onScrollToBottomVisibilityChange={setScrollToBottomVisible}
             onRegisterScrollToBottom={(scroll) => {
               scrollToBottomRef.current = scroll;
+            }}
+            onOpenReviewInspector={(runId, fileIndex) => {
+              setReviewInspector({ runId, fileIndex });
+              setInspectorTab("diff");
+            }}
+          />
+        )}
+        {mode === "code" && activeSessionId && planReviewBySession[activeSessionId] && (
+          <PlanReviewEntry
+            phase={planReviewBySession[activeSessionId].phase}
+            onOpen={() => {
+              setPlanDrawerOpen(true);
+              setInspectorTab("plan");
             }}
           />
         )}
@@ -2142,7 +2252,9 @@ export function ChatPage() {
             value={draft}
             mode={mode}
             docked={hasMessages}
+            conversationId={activeSessionId ?? undefined}
             workspaceName={workspaceNames[mode]}
+            workspaceRoot={activeSession?.workspaceBinding?.workspaceRoot}
             attachments={attachments}
             attachmentBusy={attachmentBusy}
             modelBusy={isCurrentScopeRunning}
@@ -2214,6 +2326,43 @@ export function ChatPage() {
         </>
         )}
       </main>
+      {(() => {
+        const tabs: InspectorTab[] = [];
+        const activePlan = mode === "code" && activeSessionId ? planReviewBySession[activeSessionId] : null;
+        if (reviewInspector) {
+          tabs.push({
+            id: "diff",
+            label: "Diff",
+            content: <ReviewDiffContent runId={reviewInspector.runId} fileIndex={reviewInspector.fileIndex} />,
+          });
+        }
+        if (activePlan && planDrawerOpen) {
+          tabs.push({
+            id: "plan",
+            label: planTabLabel(activePlan.phase),
+            dotClass: planTabDotClass(activePlan.phase),
+            content: <PlanContent content={activePlan.content} phase={activePlan.phase} />,
+          });
+        }
+        if (tabs.length === 0) return null;
+        return (
+          <RightInspector
+            tabs={tabs}
+            activeTabId={inspectorTab}
+            onTabChange={(id) => setInspectorTab(id as "diff" | "plan")}
+            onClose={() => {
+              // 关当前 tab，若还有另一个 tab 则自动切过去
+              if (inspectorTab === "diff") {
+                setReviewInspector(null);
+                if (activePlan && planDrawerOpen) setInspectorTab("plan");
+              } else {
+                setPlanDrawerOpen(false);
+                if (reviewInspector) setInspectorTab("diff");
+              }
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }
