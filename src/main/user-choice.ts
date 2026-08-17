@@ -27,7 +27,7 @@ import { getTimeoutSettings } from "./timeout-manager";
 import { createAbortError } from "./abort-utils";
 
 const LOG_PREFIX = "[UserChoice]";
-const DEFAULT_CHOICE_TIMEOUT_MS = 120_000; // 2 分钟超时，给用户足够思考时间
+// 卡片等待超时统一取 timeout-settings 的 userChoiceTimeout（设置页「询问等待时间」可调，默认 60s）。
 
 /** 选项结构。 */
 export interface ChoiceOption {

@@ -33,6 +33,8 @@ export interface GitClient {
     deletions: number;
     byPath: Record<string, { insertions: number; deletions: number }>;
   }>;
+  getDiff(options: GitDiffQuery): Promise<GitDiffResult>;
+  getLog(options: GitLogQuery): Promise<GitLogEntry[]>;
   init(): Promise<void>;
   add(paths: string[]): Promise<void>;
   commit(message: string): Promise<string>;
@@ -41,6 +43,45 @@ export interface GitClient {
   push(remote: string): Promise<void>;
   revert(commit: string): Promise<void>;
   getGitDir(): Promise<string>;
+}
+
+export interface GitDiffQuery {
+  /** 基准 ref，默认 HEAD；staged 时表示与该 ref 比较 */
+  ref?: string;
+  /** true = 已暂存改动（git diff --cached），false = 工作区改动 */
+  staged?: boolean;
+  /** 限定仓库内相对路径 */
+  paths?: string[];
+  /** patch 文本最多保留的行数，超出截断 */
+  maxPatchLines?: number;
+}
+
+export interface GitDiffResult {
+  base: string;
+  staged: boolean;
+  files: string[];
+  insertions: number;
+  deletions: number;
+  truncated: boolean;
+  patch: string;
+  /** 每文件增删统计（Diff Review 卡片用） */
+  perFile: Array<{ file: string; insertions: number; deletions: number }>;
+}
+
+export interface GitLogQuery {
+  /** 最多返回条数，默认 20 */
+  maxCount?: number;
+  /** 指定分支/ref；默认当前分支 */
+  ref?: string;
+  /** 限定单文件的提交历史 */
+  path?: string;
+}
+
+export interface GitLogEntry {
+  hash: string;
+  date: string;
+  author: string;
+  message: string;
 }
 
 export interface GitServiceDeps {
@@ -58,6 +99,8 @@ export interface GitService {
   switchBranch(ctx: TrustedGitContext, branch: string, create: boolean): Promise<string>;
   push(ctx: TrustedGitContext, remote?: string): Promise<string>;
   revert(ctx: TrustedGitContext, commit: string): Promise<string>;
+  diff(ctx: TrustedGitContext, options?: GitDiffQuery): Promise<GitDiffResult>;
+  log(ctx: TrustedGitContext, options?: GitLogQuery): Promise<GitLogEntry[]>;
   watchSession(sessionId: string): Promise<void>;
   unwatchSession(sessionId: string): Promise<void>;
   dispose(): Promise<void>;
@@ -188,6 +231,33 @@ export function createGitService(deps: GitServiceDeps): GitService {
       return `已创建回退提交 ${commit}`;
     },
 
+    async diff(ctx, options = {}) {
+      const client = await clientForTrustedContext(ctx);
+      const ref = options.ref ?? "HEAD";
+      if (!isSafeGitRef(ref)) throw new Error("ref 不合法");
+      const paths = options.paths ?? [];
+      if (paths.some((item) => !isSafeRelativePath(item))) throw new Error("请提供仓库内相对路径");
+      return client.getDiff({
+        ref,
+        staged: options.staged ?? false,
+        paths,
+        maxPatchLines: options.maxPatchLines ?? 400,
+      });
+    },
+
+    async log(ctx, options = {}) {
+      const client = await clientForTrustedContext(ctx);
+      const ref = options.ref;
+      if (ref !== undefined && !isSafeGitRef(ref)) throw new Error("ref 不合法");
+      const path = options.path;
+      if (path !== undefined && !isSafeRelativePath(path)) throw new Error("请提供仓库内相对路径");
+      const maxCount = options.maxCount ?? 20;
+      if (!Number.isInteger(maxCount) || maxCount < 1 || maxCount > 200) {
+        throw new Error("maxCount 必须是 1 到 200 的整数");
+      }
+      return client.getLog({ maxCount, ...(ref ? { ref } : {}), ...(path ? { path } : {}) });
+    },
+
     async getStatusForSession(sessionId: string): Promise<CodeGitStatus> {
       try {
         const resolved = await resolveCodeSession(sessionId);
@@ -297,6 +367,68 @@ function createSimpleGitClient(input: { workspaceRoot: string; executable: Resol
     checkoutNewBranch: async (branch) => { await git.checkoutLocalBranch(branch); },
     push: async (remote) => { await git.push(remote); },
     revert: async (commit) => { await git.raw(["revert", "--no-edit", commit]); },
+    async getDiff(options) {
+      const args = options.staged ? ["--cached"] : [];
+      args.push(options.ref ?? "HEAD");
+      if (options.paths?.length) args.push("--", ...options.paths);
+      // 尚无提交的新仓库：HEAD 不存在，视为无差异
+      const empty: GitDiffResult = {
+        base: options.ref ?? "HEAD",
+        staged: options.staged ?? false,
+        files: [],
+        insertions: 0,
+        deletions: 0,
+        truncated: false,
+        patch: "",
+        perFile: [],
+      };
+      let summary;
+      let patch: string;
+      try {
+        [summary, patch] = await Promise.all([git.diffSummary(args), git.diff(args)]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        if (/unknown revision|bad revision|ambiguous argument/i.test(message)) return empty;
+        throw error;
+      }
+      const maxLines = options.maxPatchLines ?? 400;
+      const lines = patch.split("\n");
+      const truncated = lines.length > maxLines;
+      const perFile = summary.files.flatMap((file) =>
+        "insertions" in file && "deletions" in file
+          ? [{ file: file.file, insertions: file.insertions, deletions: file.deletions }]
+          : []);
+      return {
+        ...empty,
+        files: perFile.map((f) => f.file),
+        insertions: summary.insertions,
+        deletions: summary.deletions,
+        truncated,
+        patch: truncated ? lines.slice(0, maxLines).join("\n") + "\n...（已截断）" : patch,
+        perFile,
+      };
+    },
+    async getLog(options) {
+      const recordSep = "\u001e";
+      const fieldSep = "\u001f";
+      const args = [
+        "log",
+        `--pretty=format:%H${fieldSep}%ad${fieldSep}%an${fieldSep}%s${recordSep}`,
+        "--date=short",
+        `-n${options.maxCount ?? 20}`,
+        ...(options.ref ? [options.ref] : []),
+        ...(options.path ? ["--", options.path] : []),
+      ];
+      const output = await git.raw(args);
+      return output
+        .split(recordSep)
+        .map((entry) => entry.replace(/^\n/, ""))
+        .filter((entry) => entry.trim().length > 0)
+        .map((entry) => {
+          const [hash, date, author, message] = entry.split(fieldSep);
+          return { hash, date, author, message };
+        });
+    },
     getGitDir: async () => path.resolve(input.workspaceRoot, (await git.raw(["rev-parse", "--absolute-git-dir"])).trim()),
   };
 }
@@ -364,6 +496,12 @@ function isSafeBranchName(value: string): boolean {
     && !/[~^:\\?*\[\s]/.test(value)
     && !value.endsWith("/")
     && !value.endsWith(".");
+}
+
+/** 只放行 commit hash、分支/标签名和 ref 路径（refs/heads/x），阻止选项注入与范围语法 */
+function isSafeGitRef(value: string): boolean {
+  return /^[0-9a-fA-F]{7,40}$/.test(value)
+    || (/^[A-Za-z0-9][A-Za-z0-9._/-]{0,254}$/.test(value) && !value.includes("..") && !value.includes("@{") && !value.endsWith("."));
 }
 
 function errorMessage(error: unknown): string {

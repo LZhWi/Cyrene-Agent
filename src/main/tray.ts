@@ -1,17 +1,19 @@
-import { app, Menu, nativeImage, Tray } from "electron";
+import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "electron";
 import { getCurrentAppIconPath } from "./windows/window-state";
 
 export interface CreateTrayDependencies {
   toggleMainWindow: () => void;
+  createReactChatWindow: () => void;
   createSidebarWindow: () => void;
   createSettingsWindow: () => void;
 }
 
-export function createTray(deps: CreateTrayDependencies): Tray {
-  const icon = nativeImage.createFromPath(getCurrentAppIconPath());
-  const tray = new Tray(icon);
-
-  const contextMenu = Menu.buildFromTemplate([
+export function buildTrayMenuTemplate(deps: CreateTrayDependencies): MenuItemConstructorOptions[] {
+  return [
+    {
+      label: "打开聊天窗口",
+      click: () => { deps.createReactChatWindow(); },
+    },
     {
       label: "打开状态面板",
       click: () => { deps.createSidebarWindow(); },
@@ -29,7 +31,14 @@ export function createTray(deps: CreateTrayDependencies): Tray {
       label: "退出",
       click: () => { app.quit(); },
     },
-  ]);
+  ];
+}
+
+export function createTray(deps: CreateTrayDependencies): Tray {
+  const icon = nativeImage.createFromPath(getCurrentAppIconPath());
+  const tray = new Tray(icon);
+
+  const contextMenu = Menu.buildFromTemplate(buildTrayMenuTemplate(deps));
 
   tray.setToolTip("Cyrene");
   tray.setContextMenu(contextMenu);

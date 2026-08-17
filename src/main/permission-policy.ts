@@ -25,10 +25,24 @@ export function policyFor(
 ): "allow" | "ask" | "deny" {
   if (risk === "safe") return "allow";
 
+  // shell 的安全边界由沙箱兜底：所有档位都放行进 executeRunShell 的档位路由，
+  // 由 buildFilesystemConfigForLevel + wrapWithSandbox 强制 fs 边界。
+  // 不再用 policyFor 作为 shell 的准入闸门。
+  if (risk === "shell") {
+    switch (level) {
+      case "project-read-only":
+      case "read-only":
+      case "scoped":
+      case "full":
+        return "allow";
+      case "per-action":
+        return "ask";
+    }
+  }
+
   switch (level) {
     case "project-read-only":
-      // 策略同 read-only：档位控制的是沙箱 fs 配置（allowRead 限定项目根），
-      // 不是工具准入。shell 仍被 deny，走不到 executeRunShell。
+      // 档位控制的是沙箱 fs 配置（allowRead 限定项目根），不是工具准入。
       return risk === "fs-read" || risk === "network" ? "allow" : "deny";
     case "read-only":
       return risk === "fs-read" || risk === "network" ? "allow" : "deny";

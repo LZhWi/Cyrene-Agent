@@ -84,6 +84,33 @@ describe("chats IPC mode filtering", () => {
     expect(setCodeMode).toBeUndefined();
   });
 
+  it("removes only the deleted conversation's persisted tool results", async () => {
+    const { registerChatsIpc } = await import("./chats-ipc");
+    const { FileToolOutputStore } = await import("../orchestrator/harness/tool-output/file-tool-output-store");
+    registerChatsIpc();
+    const create = mocks.handlers.get(IPC.CHATS_CREATE);
+    const remove = mocks.handlers.get(IPC.CHATS_DELETE);
+    if (!create || !remove) throw new Error("chat delete IPC handler was not registered");
+    const event = { sender: {} };
+    const first = await create(event, { mode: "work" }) as { id: string };
+    const second = await create(event, { mode: "work" }) as { id: string };
+    const store = new FileToolOutputStore(mocks.userDataDir);
+    const firstRef = await store.put({
+      conversationId: first.id, runId: "run-1", toolCallId: "call-1", toolName: "read_file",
+      outcome: "success", output: "first output", truncatedForModel: false,
+    });
+    const secondRef = await store.put({
+      conversationId: second.id, runId: "run-2", toolCallId: "call-2", toolName: "read_file",
+      outcome: "success", output: "second output", truncatedForModel: false,
+    });
+
+    expect(await remove(event, first.id)).toBe(true);
+    await expect(store.read({ conversationId: first.id, resultRef: firstRef.resultRef, offset: 0, length: 100 }))
+      .resolves.toBeNull();
+    await expect(store.read({ conversationId: second.id, resultRef: secondRef.resultRef, offset: 0, length: 100 }))
+      .resolves.toMatchObject({ content: "second output" });
+  });
+
   it("opens only a workspace already bound to a project conversation", async () => {
     const { registerChatsIpc } = await import("./chats-ipc");
     registerChatsIpc();

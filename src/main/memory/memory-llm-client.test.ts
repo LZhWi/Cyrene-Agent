@@ -37,6 +37,7 @@ vi.mock("./memory-llm-shared", () => ({
 
 vi.mock("../token-usage-store", () => ({
   recordUsage: vi.fn(),
+  recordRequest: vi.fn(),
 }));
 
 vi.mock("../orchestrator/vendors", () => ({

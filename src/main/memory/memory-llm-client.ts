@@ -12,7 +12,7 @@
 
 import { getAdapterForConfig } from "../orchestrator/vendors";
 import type { VendorConfig, ChatMessage, ChatRequest } from "../orchestrator/vendors";
-import { recordUsage } from "../token-usage-store";
+import { recordUsage, recordRequest } from "../token-usage-store";
 import { resolveTimeoutPolicy, resolveMaxOutputTokens } from "../runtime-policy";
 import type { RuntimeStage } from "../runtime-policy";
 import { runStructuredOutput } from "../orchestrator/structured-output/runner";
@@ -233,8 +233,11 @@ export async function invokeMemoryStructuredOutput<T>(options: InvokeMemoryStruc
       const parsed = adapter.parseResponse(data);
 
       // best-effort usage recording
+      recordRequest(cfg.model);
       if (parsed.usage) {
-        try { recordUsage(parsed.usage.input, parsed.usage.output, 1); } catch { /* ignore */ }
+        try {
+          recordUsage(parsed.usage.input, parsed.usage.output, 1, parsed.usage.cachedInput, cfg.model, parsed.usage.cacheCreation);
+        } catch { /* ignore */ }
       }
 
       return {
@@ -345,8 +348,11 @@ export async function invokeMemoryLlm(request: MemoryLlmRequest): Promise<Memory
   }
 
   const parsed = adapter.parseResponse(data);
+  recordRequest(cfg.model);
   if (parsed.usage) {
-    try { recordUsage(parsed.usage.input, parsed.usage.output, 1); } catch { /* ignore */ }
+    try {
+      recordUsage(parsed.usage.input, parsed.usage.output, 1, parsed.usage.cachedInput, cfg.model, parsed.usage.cacheCreation);
+    } catch { /* ignore */ }
   }
 
   return {

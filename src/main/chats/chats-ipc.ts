@@ -13,7 +13,7 @@
 // 注意：`chats:open-in-chat-window` 涉及 BrowserWindow 创建逻辑，
 // 由 src/main/index.ts 自行注册，不在本模块；本模块只管纯数据操作。
 
-import { BrowserWindow, ipcMain, type WebContents, dialog, shell } from "electron";
+import { app, BrowserWindow, ipcMain, type WebContents, dialog, shell } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import type { ChatMessage, ConversationMode, ConversationWorkspaceBinding } from "../../shared/chat-types";
 import * as chatsStore from "./chats-store";
@@ -21,6 +21,9 @@ import * as fs from "fs";
 import * as path from "path";
 import { ensureVaultStructure, isEmptyDirectory } from "../learn/obsidian/vault-init";
 import { getDefaultModelProfile } from "../settings/model-settings";
+import { FileToolOutputStore } from "../orchestrator/harness/tool-output/file-tool-output-store";
+import { getHarnessRunStore } from "../orchestrator/harness/run-store";
+import { getRunReviewTracker } from "../orchestrator/review/run-review-tracker";
 
 function broadcastChanged(senderWebContents?: WebContents | null): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -130,10 +133,23 @@ export function registerChatsIpc(): void {
     },
   );
 
-  ipcMain.handle(IPC.CHATS_DELETE, (event, id: string) => {
+  ipcMain.handle(IPC.CHATS_DELETE, async (event, id: string) => {
     if (!id) return false;
     const ok = chatsStore.deleteSession(id);
-    if (ok) broadcastChanged(event.sender);
+    if (ok) {
+      try {
+        await new FileToolOutputStore(app.getPath("userData")).deleteConversation(id);
+      } catch (error) {
+        // 会话已经删除；结果存储清理失败不能把 UI 回滚成“删除失败”。
+        console.error("[ChatsIpc] failed to delete persisted tool outputs", error);
+      }
+      try {
+        getHarnessRunStore(app.getPath("userData")).deleteConversation(id);
+      } catch (error) {
+        console.error("[ChatsIpc] failed to delete persisted harness runs", error);
+      }
+      broadcastChanged(event.sender);
+    }
     return ok;
   });
 
@@ -297,6 +313,23 @@ export function registerChatsIpc(): void {
       }
     },
   );
+
+  // ── Review 快照：获取指定 Run 的不可变文件变更审查数据 ──
+  // 正常终止的 Run 已在 harness-adapter 主动 finalize；
+  // 崩溃恢复（interrupted）的 Run 在此按 "halted" 状态补生成。
+  // 仍在运行的 Run（status=running）不生成快照，避免拿到不完整的 diff。
+  ipcMain.handle(IPC.REVIEW_GET, (_event, runId: string) => {
+    if (!runId || typeof runId !== "string") return null;
+    const tracker = getRunReviewTracker(app.getPath("userData"));
+    // 先尝试直接加载（正常终止的 Run 已在 harness-adapter 主动 finalize）
+    const existing = tracker.loadReview(runId);
+    if (existing) return existing;
+    // 检查 Run 状态：只有非 running 的 Run 才补生成快照
+    const session = getHarnessRunStore(app.getPath("userData")).get(runId);
+    if (!session || session.status === "running") return null;
+    // 崩溃恢复（interrupted）或异常终止的 Run：按 halted 补生成
+    return tracker.finalizeIfPending(runId, session.createdAt, "halted");
+  });
 }
 
 // ── 路径验证 ──────────────────────────────────────────────

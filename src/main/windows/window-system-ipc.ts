@@ -1,6 +1,6 @@
 import { BrowserWindow, ipcMain } from "electron";
 import { IPC } from "../../shared/ipc-channels";
-import { getUsage } from "../token-usage-store";
+import { clearUsage, getUsageReport } from "../token-usage-store";
 import {
   sidebarWindow,
   tasksWindow,
@@ -89,7 +89,10 @@ export function registerWindowSystemIpc(deps: WindowSystemIpcDependencies): void
 
   // Token 用量查询 IPC（临时挂靠，后续归到统计模块）
   ipcMain.handle(IPC.TOKEN_USAGE_GET, (_event, days: number) => {
-    return getUsage(Math.max(1, Math.min(90, Number(days) || 7)));
+    return getUsageReport(Math.max(1, Math.min(90, Number(days) || 7)));
+  });
+  ipcMain.handle(IPC.TOKEN_USAGE_CLEAR, () => {
+    clearUsage();
   });
 
   ipcMain.on(IPC.LIVE2D_SPEECH_PREPARE, () => {

@@ -36,6 +36,17 @@ function client(overrides: Partial<GitClient> = {}): GitClient {
     getStatus: async () => cleanStatus,
     getBranches: async () => ["main"],
     getLineStats: async () => ({ insertions: 0, deletions: 0, byPath: {} }),
+    getDiff: async (options = {}) => ({
+      base: options.ref ?? "HEAD",
+      staged: options.staged ?? false,
+      files: [],
+      insertions: 0,
+      deletions: 0,
+      truncated: false,
+      patch: "",
+      perFile: [],
+    }),
+    getLog: async () => [],
     getGitDir: async () => "C:\\repo\\.git",
     init: async () => undefined,
     add: async () => undefined,
@@ -139,5 +150,61 @@ describe("GitService workspace subscriptions", () => {
       workspaceRoot: "C:\\repo",
       gitDir: "C:\\worktrees\\repo-meta",
     });
+  });
+});
+
+describe("GitService.diff", () => {
+  const ctx = { sessionId: "session-1", mode: "code" as const, workspaceRoot: "C:\\repo" };
+
+  it("passes through defaults to the client", async () => {
+    const getDiff = vi.fn(async (options: { ref?: string; staged?: boolean; maxPatchLines?: number }) => ({
+      base: options.ref ?? "HEAD", staged: options.staged ?? false, files: [], insertions: 1, deletions: 2, truncated: false, patch: "", perFile: [],
+    }));
+    const result = await service({ client: client({ getDiff }) }).diff(ctx);
+
+    expect(getDiff).toHaveBeenCalledWith({ ref: "HEAD", staged: false, paths: [], maxPatchLines: 400 });
+    expect(result).toMatchObject({ base: "HEAD", staged: false });
+  });
+
+  it("rejects option-injecting refs", async () => {
+    const current = service({});
+    await expect(current.diff(ctx, { ref: "--exec=evil" })).rejects.toThrow("ref 不合法");
+    await expect(current.diff(ctx, { ref: "main..origin" })).rejects.toThrow("ref 不合法");
+  });
+
+  it("rejects paths escaping the repository", async () => {
+    await expect(
+      service({}).diff(ctx, { paths: ["../outside.txt"] }),
+    ).rejects.toThrow("仓库内相对路径");
+  });
+
+  it("accepts commit hash, branch, tag and refs/... refs", async () => {
+    const getDiff = vi.fn(async () => ({ base: "", staged: false, files: [], insertions: 0, deletions: 0, truncated: false, patch: "", perFile: [] }));
+    const current = service({ client: client({ getDiff }) });
+    await current.diff(ctx, { ref: "0123abcd" });
+    await current.diff(ctx, { ref: "feature/review" });
+    await current.diff(ctx, { ref: "v1.2.3" });
+    await current.diff(ctx, { ref: "refs/heads/main" });
+    expect(getDiff).toHaveBeenCalledTimes(4);
+  });
+});
+
+describe("GitService.log", () => {
+  const ctx = { sessionId: "session-1", mode: "code" as const, workspaceRoot: "C:\\repo" };
+
+  it("passes through validated options to the client", async () => {
+    const getLog = vi.fn(async () => [{ hash: "abc1234", date: "2026-08-16", author: "Cyrene", message: "feat: x" }]);
+    const result = await service({ client: client({ getLog }) }).log(ctx, { maxCount: 5, ref: "main", path: "src/a.ts" });
+
+    expect(getLog).toHaveBeenCalledWith({ maxCount: 5, ref: "main", path: "src/a.ts" });
+    expect(result).toEqual([{ hash: "abc1234", date: "2026-08-16", author: "Cyrene", message: "feat: x" }]);
+  });
+
+  it("rejects invalid maxCount, ref and path", async () => {
+    const current = service({});
+    await expect(current.log(ctx, { maxCount: 0 })).rejects.toThrow("maxCount");
+    await expect(current.log(ctx, { maxCount: 201 })).rejects.toThrow("maxCount");
+    await expect(current.log(ctx, { ref: "--upload-pack=x" })).rejects.toThrow("ref 不合法");
+    await expect(current.log(ctx, { path: "../outside" })).rejects.toThrow("仓库内相对路径");
   });
 });
