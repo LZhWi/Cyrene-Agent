@@ -1,4 +1,9 @@
-// search_code 工具 — 结构化代码搜索，替代 Agent 依赖的 run_shell/rg
+// 文本搜索工具 — 在工作区文件内容中搜索字面文本或正则匹配
+//
+// search_text 替代旧 search_code（已 deprecated），修复：
+// - workspaceRoot 改用 ctx.resolvedWorkspaceRoot，不再依赖 process.cwd()
+// - glob 自动扩展：*.ts → **/*.ts，覆盖子目录
+// - 名字和描述明确声明为"文本搜索"，避免误导模型
 //
 // 安全约束：
 // - 工作区根目录限制（路径逃逸检测）
@@ -11,7 +16,7 @@ import * as path from "path";
 import { toolRegistry, type ToolEffectKind, type VerificationPolicy } from "./tool-registry";
 import type { ToolContext } from "./tool-context";
 
-const LOG_PREFIX = "[SearchCode]";
+const LOG_PREFIX = "[SearchText]";
 
 // ── 常量 ──────────────────────────────────────────────────
 
@@ -25,11 +30,14 @@ const SEARCH_TIMEOUT_MS = 30000;   // 搜索超时 30s
 const IGNORED_DIRS = new Set([
   ".git", ".svn", ".hg",
   "node_modules", "bower_components",
-  "dist", "build", "out", "output",
+  "dist", "build", "out", "output", "release",
   ".next", ".nuxt", ".cache",
   "__pycache__", ".pytest_cache",
   ".idea", ".vscode",
   "coverage", ".nyc_output",
+  "target", "vendor", ".venv", "venv",
+  // git worktree 镜像目录：内容是工作区旧副本，搜出来会伪装成"当前代码仍有残留"
+  ".worktrees", "worktrees",
 ]);
 
 /** 忽略的文件扩展名（二进制/生成文件） */
@@ -66,10 +74,16 @@ function shouldIgnoreDir(dirName: string): boolean {
 
 // ── Glob 匹配 ─────────────────────────────────────────────
 
-/** 简单 glob 匹配（支持 * 和 **） */
+// 将用户写的 glob 模式规范化：无路径前缀的模式自动加上 globstar 前缀以覆盖子目录
+function normalizeGlob(pattern: string): string {
+  if (pattern.includes("/") || pattern.startsWith("**/")) return pattern;
+  return "**/" + pattern;
+}
+
+// 简单 glob 匹配，支持单星号和双星号
 function matchesGlob(filePath: string, pattern: string): boolean {
-  // 转换 glob 为正则
-  const regexStr = pattern
+  const normalized = normalizeGlob(pattern);
+  const regexStr = normalized
     .replace(/\./g, "\\.")
     .replace(/\*\*/g, "⟨GLOBSTAR⟩")
     .replace(/\*/g, "[^/]*")
@@ -183,6 +197,7 @@ function walkDir(
   maxMatches: number,
   fileGlobs: string[] | undefined,
   signal?: AbortSignal,
+  skippedDirs?: Set<string>,
 ): SearchMatch[] {
   const allMatches: SearchMatch[] = [];
 
@@ -205,7 +220,9 @@ function walkDir(
       const relativePath = path.relative(workspaceRoot, fullPath);
 
       if (entry.isDirectory()) {
-        if (!shouldIgnoreDir(entry.name)) {
+        if (shouldIgnoreDir(entry.name)) {
+          skippedDirs?.add(entry.name);
+        } else {
           walk(fullPath);
         }
       } else if (entry.isFile()) {
@@ -250,8 +267,8 @@ async function executeSearchCode(args: Record<string, unknown>, ctx?: ToolContex
   const paths = Array.isArray(args.paths) ? args.paths.map(String) : ["."];
   const fileGlobs = Array.isArray(args.fileGlobs) ? args.fileGlobs.map(String) : undefined;
 
-  // 工作区根目录：从 ToolContext 或 process.cwd()
-  const workspaceRoot = path.resolve(process.cwd());
+  // 工作区根目录：优先从 ToolContext 获取，再回退到 process.cwd()
+  const workspaceRoot = ctx?.resolvedWorkspaceRoot ?? path.resolve(process.cwd());
 
   // AbortSignal
   const signal = ctx?.signal;
@@ -264,8 +281,10 @@ async function executeSearchCode(args: Record<string, unknown>, ctx?: ToolContex
   });
 
   try {
-    const searchPromise = (async (): Promise<SearchResult> => {
+    const searchPromise = (async (): Promise<SearchResult & { searchType?: string; message?: string; rejectedPaths?: string[]; skippedDirs?: string[] }> => {
       const allMatches: SearchMatch[] = [];
+      const rejectedPaths: string[] = [];
+      const skippedDirs = new Set<string>();
 
       for (const p of paths) {
         if (signal?.aborted) break;
@@ -276,6 +295,7 @@ async function executeSearchCode(args: Record<string, unknown>, ctx?: ToolContex
         // 路径逃逸检测
         if (!isWithinWorkspace(resolvedPath, workspaceRoot)) {
           console.warn(LOG_PREFIX, "路径逃逸检测拒绝:", p);
+          rejectedPaths.push(p);
           continue;
         }
 
@@ -285,7 +305,7 @@ async function executeSearchCode(args: Record<string, unknown>, ctx?: ToolContex
         if (stat.isDirectory()) {
           const dirMatches = walkDir(
             resolvedPath, workspaceRoot, query, mode, caseSensitive,
-            contextLines, maxMatches - allMatches.length, fileGlobs, signal,
+            contextLines, maxMatches - allMatches.length, fileGlobs, signal, skippedDirs,
           );
           allMatches.push(...dirMatches);
         } else if (stat.isFile()) {
@@ -304,11 +324,29 @@ async function executeSearchCode(args: Record<string, unknown>, ctx?: ToolContex
         }
       }
 
+      // 根据搜索结果生成明确的 message
+      let message: string | undefined;
+      if (rejectedPaths.length > 0 && allMatches.length === 0) {
+        message = `路径 ${rejectedPaths.join(", ")} 在工作区外被拒绝，搜索未执行。search_text 只能搜索工作区内文件。要确认工作区外文件是否存在，请用 list_dir 或 run_shell。`;
+      } else if (rejectedPaths.length > 0) {
+        message = `路径 ${rejectedPaths.join(", ")} 在工作区外被拒绝，已跳过。`;
+      } else if (allMatches.length === 0) {
+        message = "未找到匹配内容。这不代表目标文件不存在——search_text 搜索的是文件内容，不是文件名。要查找文件请用 list_dir。";
+      }
+      if (skippedDirs.size > 0) {
+        const note = `已排除镜像/依赖目录：${[...skippedDirs].slice(0, 5).join(", ")}。这些目录里的内容不是当前工作区代码，不参与匹配。`;
+        message = message ? `${message} ${note}` : note;
+      }
+
       return {
         matches: allMatches.slice(0, maxMatches),
         totalMatches: allMatches.length,
         returnedMatches: Math.min(allMatches.length, maxMatches),
         truncated: allMatches.length > maxMatches,
+        searchType: "content",
+        ...(message ? { message } : {}),
+        ...(rejectedPaths.length > 0 ? { rejectedPaths } : {}),
+        ...(skippedDirs.size > 0 ? { skippedDirs: [...skippedDirs].slice(0, 10) } : {}),
       };
     })();
 
@@ -331,23 +369,14 @@ export function registerSearchCodeTool(): void {
   toolRegistry.register({
     id: "search_code",
     name: "搜索代码",
+    deprecated: true,
     description:
-      "在工作区中搜索代码内容。返回匹配的文件、行号、上下文。\n\n" +
-      "何时用：\n" +
-      "- 查找函数/变量/类的定义或引用\n" +
-      "- 搜索包含特定文本的文件\n" +
-      "- 按文件类型过滤搜索\n\n" +
-      "不要用于：\n" +
-      "- 读取完整文件内容 → read_file\n" +
-      "- 列出目录结构 → list_dir\n" +
-      "- 修改代码 → apply_patch\n\n" +
-      "参数：query（搜索文本），paths（可选，搜索路径），fileGlobs（可选，文件过滤如 '*.ts'），" +
-      "mode（可选，literal/regex），maxMatches（可选，最多返回数），" +
-      "contextLines（可选，上下文行数），caseSensitive（可选，区分大小写）。",
+      "【已废弃】请改用 search_text。旧 search_code 存在精度问题：纯文本匹配会命中注释和字符串，且 workspaceRoot 依赖 process.cwd()。",
     enabled: true,
     risk: "safe",
     modes: ["code", "work"],
     effectKind: "read" as const,
+    isConcurrencySafe: () => true,
     verificationPolicy: "none" as const,
     needsContext: true,
     inputSchema: {
@@ -366,5 +395,51 @@ export function registerSearchCodeTool(): void {
     execute: executeSearchCode,
   });
 
-  console.log(LOG_PREFIX, "已注册：search_code");
+  console.log(LOG_PREFIX, "已注册：search_code (deprecated)");
+}
+
+export function registerSearchTextTool(): void {
+  toolRegistry.register({
+    id: "search_text",
+    name: "文本搜索",
+    catalogHint: "【文本级】在工作区文件内容中搜索字面文本或正则表达式，返回路径、行号和上下文。",
+    description:
+      "在当前工作区的真实文件内容中实时搜索字面文本或正则表达式，返回匹配的文件路径、行号和少量上下文。\n\n" +
+      "何时用：\n" +
+      "- 已知某个字面文本（URL、错误消息、硬编码字符串）在哪些文件里\n" +
+      "- 用正则表达式查找符合模式的文本片段\n" +
+      "- 快速定位包含特定字符串的文件\n\n" +
+      "不要用于：\n" +
+      "- 判断某个函数/类是否存在（纯文本会命中注释/字符串）→ 用 ast_grep_search 或 lsp\n" +
+      "- 读取完整文件内容 → read_file\n" +
+      "- 列出目录结构 → list_dir\n" +
+      "- 查找文件名 → list_dir 或 Glob\n" +
+      "- 修改代码 → str_replace/apply_patch\n\n" +
+      "参数：query（搜索文本），mode（可选，literal 默认 / regex 正则），paths（可选，搜索路径），" +
+      "fileGlobs（可选，文件过滤如 '*.ts' 自动扩展为 '**/*.ts'），" +
+      "maxMatches（可选，最多返回数），contextLines（可选，上下文行数），caseSensitive（可选，区分大小写）。",
+    enabled: true,
+    risk: "safe",
+    modes: ["code", "work"],
+    effectKind: "read" as const,
+    isConcurrencySafe: () => true,
+    verificationPolicy: "none" as const,
+    needsContext: true,
+    inputSchema: {
+      type: "object",
+      properties: {
+        query: { type: "string", description: "要搜索的文本" },
+        mode: { type: "string", enum: ["literal", "regex"], description: "搜索模式：literal（默认，字面匹配）或 regex（正则表达式）" },
+        paths: { type: "array", description: "搜索路径（相对于工作区根目录，默认 '.'）", items: { type: "string" } },
+        fileGlobs: { type: "array", description: "文件过滤 glob（如 '*.ts' 会自动扩展为 '**/*.ts' 覆盖子目录）", items: { type: "string" } },
+        maxMatches: { type: "number", description: "最多返回匹配数（默认 20，上限 100）" },
+        contextLines: { type: "number", description: "上下文行数（默认 2，上限 5）" },
+        caseSensitive: { type: "boolean", description: "是否区分大小写（默认 false）" },
+      },
+      required: ["query"],
+    },
+    execute: executeSearchCode,
+  });
+
+  console.log(LOG_PREFIX, "已注册：search_text");
 }

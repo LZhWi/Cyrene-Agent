@@ -73,6 +73,16 @@ afterEach(() => {
 });
 
 describe("read_file structured output", () => {
+  it("explicitly marks filesystem text and directory reads as concurrency-safe", () => {
+    const readFile = vi.mocked(toolRegistry.register).mock.calls.find((call) => call[0].id === "read_file")?.[0];
+    const listDir = vi.mocked(toolRegistry.register).mock.calls.find((call) => call[0].id === "list_dir")?.[0];
+    const readImage = vi.mocked(toolRegistry.register).mock.calls.find((call) => call[0].id === "read_image")?.[0];
+
+    expect(readFile?.isConcurrencySafe?.({ path: "C:\\workspace\\a.txt" })).toBe(true);
+    expect(listDir?.isConcurrencySafe?.({ path: "C:\\workspace" })).toBe(true);
+    expect(readImage?.isConcurrencySafe).toBeUndefined();
+  });
+
   it("returns structured JSON with all required fields", async () => {
     const testFile = path.join(tmpDir, "test.txt");
     fs.writeFileSync(testFile, "line 1\nline 2\nline 3\nline 4\nline 5");
@@ -216,6 +226,9 @@ describe("write_file truthful contract", () => {
       exists: true,
       sizeBytes: 0,
       writtenBytes: 0,
+      changes: [
+        { file: target, kind: "added", insertions: 0, deletions: 0, diff: [] },
+      ],
     });
     expect(fs.existsSync(target)).toBe(true);
   });

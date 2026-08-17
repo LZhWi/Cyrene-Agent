@@ -6,9 +6,13 @@ import * as path from "path";
 import { toolRegistry } from "./tool-registry";
 import { captionImage } from "./vision-captioner";
 import type { ToolContext } from "./tool-context";
+import type { ToolFileChange } from "../../shared/chat-types";
+import { buildFullFileDiff, countLines, finalizeFileChanges } from "./tool-evidence";
 import type { VerificationPolicy } from "./tool-registry";
 import { logger, LogTag } from "../logger";
 import { ToolExecutionError } from "./tool-execution-error";
+import { app } from "electron";
+import { getRunReviewTracker } from "./review/run-review-tracker";
 
 const LOG_PREFIX = "[FsTools]";
 
@@ -52,7 +56,7 @@ async function executeReadFile(args: Record<string, unknown>): Promise<string> {
     return JSON.stringify({
       success: false,
       errorCode: "FILE_NOT_FOUND",
-      error: "文件不存在或无法访问: " + filePath + "。不要重复读取相同路径，请先用 search_code 或 list_dir 重新定位文件。",
+      error: "文件不存在或无法访问: " + filePath + "。不要重复读取相同路径，请先用 search_text 或 list_dir 重新定位文件。",
       retryable: true,
     });
   }
@@ -131,6 +135,8 @@ toolRegistry.register({
   risk: "fs-read",
   modes: ["learn", "code", "work"],
   effectKind: "read" as const,
+  // 只读同步文件读取；不会改工作区或 Harness 父状态。
+  isConcurrencySafe: () => true,
   verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
@@ -232,6 +238,8 @@ toolRegistry.register({
   risk: "fs-read",
   modes: ["learn", "code", "work"],
   effectKind: "read" as const,
+  // 只读目录枚举；不会改工作区或 Harness 父状态。
+  isConcurrencySafe: () => true,
   verificationPolicy: "none" as const,
   inputSchema: {
     type: "object",
@@ -246,7 +254,7 @@ toolRegistry.register({
 
 // ── 工具 3：write_file ────────────────────────────────────
 
-async function executeWriteFile(args: Record<string, unknown>): Promise<string> {
+async function executeWriteFile(args: Record<string, unknown>, ctx?: ToolContext): Promise<string> {
   const raw = String(args.path || "").trim();
   const filePath = ensureAbsolute(raw);
   if (!filePath) {
@@ -260,6 +268,7 @@ async function executeWriteFile(args: Record<string, unknown>): Promise<string> 
   const content = typeof args.content === "string" ? args.content : "";
   const append = args.append === true;
   const createDirs = args.createDirs !== false; // 默认创建父目录
+  const existedBefore = fs.existsSync(filePath);
 
   console.log(LOG_PREFIX, "write_file:", filePath, "bytes=" + Buffer.byteLength(content, "utf8"), append ? "(append)" : "(overwrite)");
 
@@ -274,6 +283,12 @@ async function executeWriteFile(args: Record<string, unknown>): Promise<string> 
         "permission_denied",
       );
     }
+  }
+
+  // Review 基线捕获：在写文件之前保存 pre-mutation baseline
+  if (ctx?.runId) {
+    const tracker = getRunReviewTracker(app.getPath("userData"));
+    tracker.captureBefore(ctx.runId, filePath);
   }
 
   try {
@@ -306,6 +321,24 @@ async function executeWriteFile(args: Record<string, unknown>): Promise<string> 
       "unknown",
     );
   }
+  // Diff Review 卡片证据：新文件/追加=added，覆盖已有=modified
+  const insertions = countLines(content);
+  const change: ToolFileChange = append || !existedBefore
+    ? {
+        file: filePath,
+        kind: "added",
+        insertions,
+        deletions: 0,
+        diff: buildFullFileDiff(insertions === 0 ? [] : content.split("\n").slice(0, insertions), "add"),
+      }
+    : {
+        file: filePath,
+        kind: "modified",
+        insertions,
+        deletions: 0,
+        // 覆盖写没有行级 diff（全文替换），只给统计
+      };
+
   return JSON.stringify({
     success: true,
     tool: "write_file",
@@ -314,6 +347,7 @@ async function executeWriteFile(args: Record<string, unknown>): Promise<string> 
     exists: st.isFile(),
     sizeBytes: st.size,
     writtenBytes: Buffer.byteLength(content, "utf8"),
+    changes: finalizeFileChanges([change]),
   });
 }
 
@@ -361,7 +395,7 @@ toolRegistry.register({
     "- 用户要新建文件\n" +
     "- 需要持久化一段内容到磁盘\n\n" +
     "不要用于：\n" +
-    "- 修改已有文件的局部内容（用 apply_patch 更安全）\n" +
+    "- 修改已有文件的局部内容（用 str_replace/apply_patch 更安全）\n" +
     "- 生成 Excel/Word/PDF/Markdown 文档（用对应专用工具）\n" +
     "- 写入危险系统路径\n\n" +
     "参数：path (绝对路径)，content (要写的字符串)，append (可选，true=追加，默认 false=覆盖)，createDirs (可选，默认 true)。",

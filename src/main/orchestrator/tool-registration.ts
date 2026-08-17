@@ -7,7 +7,9 @@ import { registerDocumentTools } from "./document-tools";
 import "./fs-tools";
 import { registerLifeTools, setTranslateConfig } from "./life-tools";
 import { registerRecallHistoryTool } from "./history-tools";
-import { registerSearchCodeTool } from "./search-code-tools";
+import { registerSearchCodeTool, registerSearchTextTool } from "./search-code-tools";
+import { registerApplyPatchTool } from "./apply-patch-tools";
+import { registerAstGrepTools } from "./ast-grep-tools";
 import { toolRegistry } from "./tool-registry";
 import { registerTravelTools } from "./travel-tools";
 import type { GitService } from "../code-git/git-service";
@@ -25,6 +27,9 @@ export function registerAllTools(deps: { codeGitService: GitService; lspManager:
   registerCodeGitTools(deps.codeGitService, toolRegistry);
   registerLspTool(deps.lspManager, toolRegistry);
   registerSearchCodeTool();
+  registerSearchTextTool();
+  registerApplyPatchTool();
+  registerAstGrepTools();
   registerRecallHistoryTool();
   registerDocumentTools();
 

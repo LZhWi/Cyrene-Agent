@@ -4,7 +4,6 @@
 import { searchMemory } from "../rag/index";
 import type { ToolRiskLevel } from "../permission";
 import type { ToolContext } from "./tool-context";
-import type { SoulProjectionConfig, SoulClaimKind } from "./soul-execution-context";
 import type { ConversationMode } from "../../shared/chat-types";
 
 /** 工具效果类型：决定工具对系统状态的影响分类。未配置默认 "unknown"。 */
@@ -21,14 +20,11 @@ export type VerificationPolicy = "none" | "artifact" | "code" | "unknown";
 /** 动态效果解析器：根据参数判断效果类型（如 run_shell 根据 purpose）。 */
 export type ToolEffectResolver = (args: Record<string, unknown>) => ToolEffectKind;
 
+/** 工具并发安全判定：只返回严格 true 时，当前参数才可进入 Harness 并发池。 */
+export type ToolConcurrencyClassifier = (args: Record<string, unknown>) => boolean;
+
 /** 动态验证策略解析器：根据参数判断验证策略（如 write_file 根据文件扩展名）。 */
 export type VerificationPolicyResolver = (args: Record<string, unknown>) => VerificationPolicy;
-
-/** 工具完成证据元数据：供 Planner 生成 completionCriteria 和 planVerify 校验 */
-export interface CapabilityCompletionEvidence {
-  kind: "tool_succeeded" | "projection_claim";
-  claimKind?: SoulClaimKind;
-}
 
 /** JSON Schema 片段：参数可以是简单类型，也可以是 array/object（含 items/properties）。 */
 export type JsonSchemaProp =
@@ -83,26 +79,19 @@ export interface ToolDefinition {
   };
   /** 工具若声明 needsContext，调度层执行时会传入 ToolContext。默认不声明=不传。 */
   needsContext?: boolean;
-  /** Soul 上下文中替代 toolId 的安全语义名称 */
-  soulActionLabel?: string;
-  /** 声明式 Soul 投影配置 */
-  soulProjection?: SoulProjectionConfig;
-  /** 工具专用错误码 -> 用户安全消息 */
-  soulErrorMessages?: Record<string, string>;
-  /** 完成证据元数据：供 Planner 和 planVerify 使用。未配置的工具不能进入 Plan 步骤。 */
-  completionEvidence?: CapabilityCompletionEvidence[];
-  /** Plan 模式下不暴露给 Action Gate 和 Native FC（防止 Plan 步骤降级到旧 Loop）。 */
-  hideInPlanMode?: boolean;
   /** Ledger 策略：success_terminal 缓存终态成功（默认），bypass 不缓存。 */
   ledgerPolicy?: "success_terminal" | "bypass";
   /** 标记为已废弃：从新运行的 Action Gate 可用工具列表中隐藏，但保留注册用于旧会话兼容。 */
   deprecated?: boolean;
-  /** 自定义完成证据验证器：从结构化输出中验证 artifact 等条件。 */
-  completionEvidenceVerifier?: (result: import("./types").ToolCallResult) => boolean;
   /** 工具效果类型。未配置默认 "unknown"，不静默放行。 */
   effectKind?: ToolEffectKind;
   /** 动态效果解析器（覆盖 effectKind）。用于 run_shell 等根据参数判断效果的工具。 */
   effectResolver?: ToolEffectResolver;
+  /**
+   * 当前参数是否可与其他明确安全的调用并发。未声明、抛错或非 true 一律串行。
+   * 此元数据仅供 Runtime 使用，不进入模型可见 Tool Schema。
+   */
+  isConcurrencySafe?: ToolConcurrencyClassifier;
   /** 验证策略。mutation 工具必须显式配置；未配置视为 "unknown"。 */
   verificationPolicy?: VerificationPolicy;
   /** 动态验证策略解析器（覆盖 verificationPolicy）。用于 write_file 根据文件扩展名判断。 */

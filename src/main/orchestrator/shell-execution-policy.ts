@@ -1,158 +1,174 @@
-// ShellExecutionPolicy — 系统侧命令分类，不信任模型 purpose
+// ShellExecutionPolicy — 命令副作用分类器 + 灾难守卫
 //
-// 分类规则：
-// - read_only：只读命令（ls, cat, rg, git status 等）
-// - verification：run_verification 专用（不在本模块处理）
-// - workspace_mutation：可能修改工作区的命令
-// - blocked：明确禁止的命令
+// 设计哲学：
+// - Classifier（分类器）负责判断 effect → 仅用于 approval / UI / logging / 风险提示
+// - Sandbox（沙箱）负责强制能力边界 → OS 级别兜底
+// 绝不让 classifier 成为安全边界。
 //
-// 不信任模型填写的 purpose 参数，完全由系统侧按 executable + argv 白名单判断。
-// 未知参数组合默认拒绝（workspace_mutation），不默认只读。
+// 分类结果：
+// - "read"：明确只读命令（git status, ls, echo 等）
+// - "write"：明确有写副作用的命令（git commit, npm install, > redirect 等）
+// - "unknown"：无法判断（node script.js, some-tool.cmd 等）
+//
+// 灾难守卫：
+// - isCatastrophicCommand() 拦截明显灾难操作（format, shutdown, dd 等）
+//   不试图穷举所有危险命令——沙箱才是最终裁判。
 
-export type ShellExecutionPolicy =
-  | "read_only"
-  | "verification"
-  | "workspace_mutation"
-  | "blocked";
+/** 命令副作用分类（仅用于 approval / UI / logging，不是安全边界） */
+export type ShellEffect = "read" | "write" | "unknown";
 
-// ── 只读命令白名单 ──────────────────────────────────────
+// ── 明确只读的命令首词 ──────────────────────────────────
 
-/** 不带子命令的只读可执行文件 */
-const READ_ONLY_EXECUTABLES = new Set([
-  "ls", "cat", "head", "tail", "wc", "find", "grep", "rg", "fd",
+const READ_ONLY_FIRST_WORDS = new Set([
+  "ls", "cat", "head", "tail", "wc", "grep", "rg", "fd",
   "echo", "pwd", "which", "where", "type", "file", "stat", "du",
   "df", "uname", "hostname", "date", "id", "whoami", "env",
-  "sort", "uniq", "cut", "tr", "sed", "awk",  // 纯文本处理（不带重定向）
+  "sort", "uniq", "cut", "tr", "sed", "awk",
+  "dir", "tree", "ver", "vol",  // Windows 只读内建
+  // 注：find 不在此列——它有 -delete/-exec 等写参数，单独在下方分支处理
 ]);
 
-/** 带精确子命令的只读 git 命令 */
+/** git 只读子命令 */
 const READ_ONLY_GIT_SUBCOMMANDS = new Set([
-  "status", "diff", "log", "show", "branch",  // branch 单独检查 -d/-D
-  "remote", "stash", "tag", "describe", "rev-parse", "ls-files",
-  "ls-remote", "cat-file", "count-objects", "config --get",
+  "status", "diff", "log", "show", "branch", "remote", "stash",
+  "tag", "describe", "rev-parse", "ls-files", "ls-remote",
+  "cat-file", "count-objects", "blame",
 ]);
 
-/** git branch 的写操作参数 */
+/** git 写子命令 */
+const WRITE_GIT_SUBCOMMANDS = new Set([
+  "checkout", "reset", "rebase", "merge", "pull", "push",
+  "commit", "add", "rm", "mv", "clean", "am", "apply",
+  "cherry-pick", "revert", "init", "clone", "fetch", "archive",
+]);
+
+/** git branch 写参数 */
 const GIT_BRANCH_WRITE_FLAGS = new Set(["-d", "-D", "-m", "-M", "-c", "-C"]);
 
-/** git stash 的写操作子命令 */
+/** git stash 写子命令 */
 const GIT_STASH_WRITE_SUBCOMMANDS = new Set(["push", "pop", "drop", "clear", "apply", "create"]);
 
-/** git remote 的写操作子命令 */
+/** git remote 写子命令 */
 const GIT_REMOTE_WRITE_SUBCOMMANDS = new Set(["add", "remove", "rename", "set-url", "prune", "update"]);
 
-/** find 的写操作参数 */
+/** find 写参数 */
 const FIND_WRITE_FLAGS = new Set(["-delete", "-exec", "-execdir", "-ok"]);
 
-// ── 明确禁止的可执行文件 ────────────────────────────────
+// ── 灾难命令守卫 ────────────────────────────────────────
 
-const BLOCKED_EXECUTABLES = new Set([
-  "rm", "rmdir", "del", "format", "mkfs",
+/** 灾难级命令首词：无论什么档位都直接拒绝 */
+const CATASTROPHIC_FIRST_WORDS = new Set([
+  "format", "mkfs", "fdisk",
   "shutdown", "reboot", "halt", "poweroff",
-  "dd", "mkfs", "fdisk",
-  "chmod", "chown", "chgrp",  // 权限修改
+  "dd",
 ]);
 
-// ── 危险 Shell 包装器 ──────────────────────────────────
-
-const DANGEROUS_SHELL_WRAPPERS = new Set([
-  "cmd", "powershell", "pwsh", "bash", "sh", "zsh", "fish",
-  "cmd.exe", "powershell.exe", "bash.exe", "sh.exe",
-]);
-
-// ── 分类函数 ────────────────────────────────────────────
+// ── 灾难守卫 ────────────────────────────────────────────
 
 /**
- * 分类 shell 命令的执行策略。
- * 基于 executable + argv 精确匹配，不信任模型 purpose。
- * 未知参数组合默认拒绝（workspace_mutation），不默认只读。
+ * 灾难命令检测：拦截明显的灾难操作（format / shutdown / dd 等）。
+ * 不试图穷举所有危险命令——沙箱才是最终裁判。
  */
-export function classifyShellPolicy(
-  executable: string,
-  args: string[],
-): ShellExecutionPolicy {
-  const exe = executable.toLowerCase().replace(/\.exe$/, "");
-  const allArgs = args.map(a => a.toLowerCase());
-
-  // ── 1. 明确禁止的可执行文件 ──
-  if (BLOCKED_EXECUTABLES.has(exe)) return "blocked";
-
-  // ── 2. 危险 Shell 包装器 -> workspace_mutation ──
-  // cmd /c, powershell -Command, bash -c 等
-  if (DANGEROUS_SHELL_WRAPPERS.has(exe)) return "workspace_mutation";
-
-  // ── 3. 检查重定向、管道、命令连接符 ──
-  // 这些在结构化 argv 中不应该出现（模型应该只传纯参数），
-  // 但防御性检查
-  const allTokens = [executable, ...args];
-  for (const token of allTokens) {
-    // 重定向
-    if (/^[^|]*[<>]/.test(token)) return "workspace_mutation";
-    // 管道
-    if (token === "|") return "workspace_mutation";
-    // 命令连接符
-    if (token === "&&" || token === "||" || token === ";") return "workspace_mutation";
-    // 子 shell
-    if (token.includes("$(") || token.includes("`")) return "workspace_mutation";
-    // 通配符展开可能导致意外
-    if (token.includes("*") || token.includes("?")) return "workspace_mutation";
-  }
-
-  // ── 4. 不带子命令的只读可执行文件 ──
-  if (READ_ONLY_EXECUTABLES.has(exe)) return "read_only";
-
-  // ── 5. Git 命令 ──
-  if (exe === "git") {
-    const subcommand = allArgs[0];
-    if (!subcommand) return "workspace_mutation"; // git 无参数 -> 不确定
-
-    if (subcommand === "branch") {
-      // git branch -D/-d/-m/-M/-c/-C -> workspace_mutation
-      if (allArgs.some(a => GIT_BRANCH_WRITE_FLAGS.has(a))) return "workspace_mutation";
-      // git branch (查看) -> read_only
-      return "read_only";
-    }
-
-    if (subcommand === "stash") {
-      const stashSub = allArgs[1];
-      if (stashSub && GIT_STASH_WRITE_SUBCOMMANDS.has(stashSub)) return "workspace_mutation";
-      // git stash list / git stash show -> read_only
-      return "read_only";
-    }
-
-    if (subcommand === "remote") {
-      const remoteSub = allArgs[1];
-      if (remoteSub && GIT_REMOTE_WRITE_SUBCOMMANDS.has(remoteSub)) return "workspace_mutation";
-      // git remote / git remote -v -> read_only
-      return "read_only";
-    }
-
-    if (subcommand === "checkout" || subcommand === "reset" || subcommand === "rebase" ||
-        subcommand === "merge" || subcommand === "pull" || subcommand === "push" ||
-        subcommand === "commit" || subcommand === "add" || subcommand === "rm" ||
-        subcommand === "mv" || subcommand === "clean" || subcommand === "am" ||
-        subcommand === "apply" || subcommand === "cherry-pick" || subcommand === "revert") {
-      return "workspace_mutation";
-    }
-
-    // 只读 git 子命令
-    if (READ_ONLY_GIT_SUBCOMMANDS.has(subcommand)) return "read_only";
-
-    // 未知 git 子命令 -> workspace_mutation（安全侧拒绝）
-    return "workspace_mutation";
-  }
-
-  // ── 6. find 命令检查写操作参数 ──
-  if (exe === "find") {
-    if (allArgs.some(a => FIND_WRITE_FLAGS.has(a))) return "workspace_mutation";
-    return "read_only";
-  }
-
-  // ── 7. 未知可执行文件 -> workspace_mutation ──
-  return "workspace_mutation";
+export function isCatastrophicCommand(command: string): boolean {
+  const trimmed = command.trim().toLowerCase();
+  if (!trimmed) return false;
+  // 取第一个 token（可能是路径，取 basename），去掉任何文件扩展名（.exe/.cmd/.ext4 等）
+  const firstToken = trimmed.split(/\s+/)[0];
+  const basename = firstToken.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
+  return CATASTROPHIC_FIRST_WORDS.has(basename);
 }
 
-// ── 工具执行前策略守卫 ──────────────────────────────────
+// ── 副作用分类器 ────────────────────────────────────────
+
+/**
+ * 分类命令行字符串的副作用。
+ *
+ * **仅用于 approval / UI / logging / 风险提示，不是安全边界。**
+ * 沙箱才是最终裁判：哪怕 classifier 误判为 read，沙箱也会阻止写操作。
+ *
+ * @param command 完整命令行字符串（如 "git status | findstr TODO"）
+ * @returns "read" | "write" | "unknown"
+ */
+export function classifyShellEffect(command: string): ShellEffect {
+  const trimmed = command.trim();
+  if (!trimmed) return "unknown";
+
+  // ── 1. 检查 shell 操作符 → write ──
+  // 重定向 (> >> <)、管道 (|)、命令连接 (&& || & ;) 中只要出现就视为 write
+  // 因为管道后段可能写文件，重定向明确写文件
+  if (/[<>]/.test(trimmed) || /\|/.test(trimmed) || /(&&|\|\||[&;])/.test(trimmed)) {
+    // 但纯读管道如 "git status | findstr xxx" 实际是 read——
+    // 保守起见仍标 write，让 sandbox 兜底；per-action 档会触发审批
+    // 代价是 read-only 档跑不了管道，但安全侧失优于功能侧失
+    return "write";
+  }
+
+  // ── 2. 取首词分析 ──
+  const tokens = trimmed.split(/\s+/);
+  const firstToken = tokens[0].toLowerCase();
+  const basename = firstToken.replace(/^.*[\\/]/, "").replace(/\.[^.]+$/, "");
+  const rest = tokens.slice(1).map((t) => t.toLowerCase());
+
+  // ── 3. 只读命令首词 ──
+  if (READ_ONLY_FIRST_WORDS.has(basename)) return "read";
+
+  // ── 4. Git 命令 ──
+  if (basename === "git") {
+    const subcommand = rest[0];
+    if (!subcommand) return "unknown";
+
+    if (subcommand === "branch") {
+      if (rest.some((a) => GIT_BRANCH_WRITE_FLAGS.has(a))) return "write";
+      return "read";
+    }
+    if (subcommand === "stash") {
+      const stashSub = rest[1];
+      if (stashSub && GIT_STASH_WRITE_SUBCOMMANDS.has(stashSub)) return "write";
+      return "read";
+    }
+    if (subcommand === "remote") {
+      const remoteSub = rest[1];
+      if (remoteSub && GIT_REMOTE_WRITE_SUBCOMMANDS.has(remoteSub)) return "write";
+      return "read";
+    }
+    if (WRITE_GIT_SUBCOMMANDS.has(subcommand)) return "write";
+    if (READ_ONLY_GIT_SUBCOMMANDS.has(subcommand)) return "read";
+    return "unknown";
+  }
+
+  // ── 5. find 命令 ──
+  if (basename === "find") {
+    if (rest.some((a) => FIND_WRITE_FLAGS.has(a))) return "write";
+    return "read";
+  }
+
+  // ── 6. npm/yarn/pnpm ──
+  if (["npm", "yarn", "pnpm", "npx"].includes(basename)) {
+    const sub = rest[0];
+    if (!sub) return "unknown";
+    // install / create / publish / run（可能写）→ write
+    const WRITE_SUBS = new Set(["install", "i", "add", "remove", "uninstall", "publish",
+      "create", "init", "run", "run-script", "ci", "update", "audit", "fix"]);
+    if (WRITE_SUBS.has(sub)) return "write";
+    // list / ls / view / info / outdated / why → read
+    const READ_SUBS = new Set(["list", "ls", "view", "info", "outdated", "why", "config", "prefix", "root"]);
+    if (READ_SUBS.has(sub)) return "read";
+    return "unknown";
+  }
+
+  // ── 7. 其他已知开发工具 ──
+  if (["node", "python", "python3", "py", "ruby", "go", "cargo", "rustc",
+       "gcc", "g++", "cl", "msbuild", "tsc", "eslint", "prettier",
+       "pip", "pip3", "cargo", "docker", "kubectl"].includes(basename)) {
+    // 这些工具可能做任何事——交给沙箱
+    return "unknown";
+  }
+
+  // ── 8. 未知命令 ──
+  return "unknown";
+}
+
+// ── 工具执行前策略守卫（保留，供 tool-registry 使用）────────
 
 export interface ExecutionPolicyDecision {
   allowed: boolean;
@@ -163,17 +179,12 @@ export interface ExecutionPolicyDecision {
 /**
  * 执行前策略守卫：在工具实际执行前检查是否允许。
  * 覆盖 Plan 和 Direct 模式。
- * Evidence Collector 只收集已合法执行的结果，不负责发现配置错误。
- *
- * 安全策略：effectKind=unknown 表示系统不知道工具是否会修改文件、
- * 产生外部副作用或执行不可逆操作，不能静默放行。
  */
 export function checkExecutionPolicy(
   effectKind: string,
   verificationPolicy: string,
   toolId: string,
 ): ExecutionPolicyDecision {
-  // effectKind=unknown -> 拒绝（配置缺失）
   if (effectKind === "unknown") {
     return {
       allowed: false,
@@ -182,7 +193,6 @@ export function checkExecutionPolicy(
     };
   }
 
-  // mutation + verificationPolicy=unknown -> 拒绝
   if (effectKind === "mutation" && verificationPolicy === "unknown") {
     return {
       allowed: false,

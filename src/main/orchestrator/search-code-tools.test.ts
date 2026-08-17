@@ -42,6 +42,7 @@ describe("search_code tool", () => {
     expect(toolDef.effectKind).toBe("read");
     expect(toolDef.verificationPolicy).toBe("none");
     expect(toolDef.needsContext).toBe(true);
+    expect(toolDef.isConcurrencySafe?.({ query: "needle" })).toBe(true);
   });
 
   it("searches for literal text in files", async () => {
@@ -111,6 +112,36 @@ describe("search_code tool", () => {
       { userQuery: "test" } as any,
     ));
     expect(result).toHaveProperty("matches");
+  });
+
+  it("skips .worktrees mirror directories and reports them in skippedDirs", async () => {
+    registerSearchCodeTool();
+    const tool = vi.mocked(toolRegistry.register).mock.calls[0][0];
+
+    // 当前工作区真实代码 + worktree 里的旧副本（同名符号残留）
+    fs.mkdirSync(path.join(tmpDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, "src", "main.ts"), "const loopLog = 1;\n");
+    fs.mkdirSync(path.join(tmpDir, ".worktrees", "task-x", "src"), { recursive: true });
+    fs.writeFileSync(path.join(tmpDir, ".worktrees", "task-x", "src", "main.ts"), "const flowLog = 1;\n");
+
+    const result = JSON.parse(await tool.execute(
+      { query: "flowLog" },
+      { userQuery: "test" } as any,
+    ));
+
+    // 旧副本不参与匹配：不会返回 .worktrees 里的命中
+    expect(result.totalMatches).toBe(0);
+    // 但明确告知模型排除了哪些镜像目录
+    expect(result.skippedDirs).toContain(".worktrees");
+    expect(result.message).toContain("已排除镜像/依赖目录");
+
+    // 当前工作区的代码仍能正常搜到
+    const currentResult = JSON.parse(await tool.execute(
+      { query: "loopLog" },
+      { userQuery: "test" } as any,
+    ));
+    expect(currentResult.totalMatches).toBe(1);
+    expect(currentResult.matches[0].path.replace(/\\/g, "/")).toBe("src/main.ts");
   });
 
   it("handles caseSensitive option", async () => {

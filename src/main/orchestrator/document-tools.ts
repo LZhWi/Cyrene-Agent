@@ -392,13 +392,6 @@ export function registerDocumentTools(): void {
     needsContext: true,
     effectKind: "mutation" as const,
     verificationPolicy: "artifact" as const,
-    soulActionLabel: "生成 Word 文档",
-    soulProjection: {
-      projector: "artifact_path",
-      source: "trusted_internal",
-      kind: "docx",
-    },
-    completionEvidence: [{ kind: "tool_succeeded" }],
     inputSchema: {
       type: "object",
       properties: {

@@ -2,7 +2,7 @@
 //
 // 设计：
 // - 启动时 initSandbox() 检测 SRT 安装状态；装了就启用 SandboxManager。
-// - wrapWithSandbox(command, args, cwd) 把命令包成 {argv, env} 返回；
+// - wrapWithSandbox(command, cwd) 把命令字符串包成 {argv, env} 返回；
 //   null 表示 fallback 到直接 spawn（沙箱不可用 / wrap 失败）。
 // - 沙箱不可用时 workspace_mutation 命令仍被拒绝（保持原行为）。
 // - CYRENE_SRT=0 环境变量可强制禁用，出问题时 fallback。
@@ -46,25 +46,6 @@ function isSrtDisabledByEnv(): boolean {
 
 function isWindows(): boolean {
   return process.platform === "win32";
-}
-
-// ── 命令字符串拼接 ──────────────────────────────────────
-
-/**
- * 把 executable + argv 拼成 SRT 接受的命令字符串。
- * 含空格的 token 用双引号包裹（cmd.exe 解析）。
- */
-function buildCommandString(command: string, args: string[]): string {
-  const quote = (s: string): string => {
-    if (s === "") return '""';
-    // 含空格或特殊字符 → 双引号包裹，内部双引号转义为 \"
-    if (/[\s"<>|&^]/.test(s)) {
-      return '"' + s.replace(/"/g, '\\"') + '"';
-    }
-    return s;
-  };
-  if (args.length === 0) return quote(command);
-  return quote(command) + " " + args.map(quote).join(" ");
 }
 
 // ── 项目根检测 ──────────────────────────────────────────
@@ -303,24 +284,23 @@ export async function ensureSandboxReady(cwd: string = process.cwd()): Promise<b
 }
 
 /**
- * 把 command + args 包成沙箱 argv + env。
+ * 把命令字符串包成沙箱 argv + env。
  *
+ * @param command 完整命令行字符串（如 "git status | findstr TODO"），SRT 内部用 cmd.exe /c 执行
  * @returns {argv, env} 调用方用 spawn(argv[0], argv.slice(1), {shell:false, env, cwd, stdio})；
  *          null 表示沙箱不可用或 wrap 失败，调用方 fallback 到直接 spawn。
  *
  * 流程：
  * 1. 沙箱未就绪 → 先 ensureSandboxReady(cwd)（可能弹 UAC，失败返回 null）
- * 2. 拼 command 字符串（含空格路径用双引号）
- * 3. 调 wrapWithSandboxArgv(cmdStr, undefined, customConfig, undefined, cwd)
+ * 2. 调 wrapWithSandboxArgv(command, undefined, customConfig, undefined, cwd)
  *    工作区读写权限已在初始化阶段授予；customConfig 仅承载本次命令的 deny 规则
  */
 export async function wrapWithSandbox(
   command: string,
-  args: string[],
   cwd?: string,
 ): Promise<{ argv: string[]; env: NodeJS.ProcessEnv } | null> {
   const level = getCurrentLevel();
-  logger.info(LogTag.Runtime, `[Sandbox] wrapWithSandbox: command=${command} args=${JSON.stringify(args)} cwd=${cwd || "(undefined)"} level=${level}`);
+  logger.info(LogTag.Runtime, `[Sandbox] wrapWithSandbox: command="${command}" cwd=${cwd || "(undefined)"} level=${level}`);
 
   if (sandboxDisabled || !isWindows()) {
     logger.info(LogTag.Runtime, `[Sandbox] wrapWithSandbox: skip (sandboxDisabled=${sandboxDisabled} isWindows=${isWindows()})`);
@@ -341,36 +321,33 @@ export async function wrapWithSandbox(
   }
 
   try {
-    const cmdStr = buildCommandString(command, args);
-    logger.info(LogTag.Runtime, `[Sandbox] wrapWithSandbox: cmdStr="${cmdStr}" resolvedCwd=${resolvedCwd}`);
+    logger.info(LogTag.Runtime, `[Sandbox] wrapWithSandbox: command="${command}" resolvedCwd=${resolvedCwd}`);
 
     // 确保 cwd 存在（ACL grant 依赖；mkdirSync recursive 是幂等的）
     try {
       fs.mkdirSync(resolvedCwd, { recursive: true });
     } catch (err) {
-      // cwd 不存在 / 不可创建 → 让 SRT 自己处理；多数命令会在 spawn 时报错
       logger.warn(LogTag.Runtime, `[Sandbox] wrapWithSandbox: mkdir cwd failed: ${resolvedCwd}`, err);
     }
 
     // per-call customConfig：按当前权限档位选 fs 配置
     const customConfig = buildFilesystemConfigForLevel(resolvedCwd);
     if (!customConfig) {
-      // full 档位（兜底，前面已拦截）
       logger.info(LogTag.Runtime, "[Sandbox] wrapWithSandbox: customConfig is null (full level fallback), returning null");
       return null;
     }
 
     logger.info(LogTag.Runtime, `[Sandbox] wrapWithSandbox: calling wrapWithSandboxArgv...`);
     const wrapped = await srtModule.SandboxManager.wrapWithSandboxArgv(
-      cmdStr,
-      undefined, // binShell：让 SRT 自己选（Windows 默认 cmd.exe）
+      command,       // 完整命令字符串，SRT 内部 cmd.exe /c 执行
+      undefined,     // binShell：让 SRT 自己选（Windows 默认 cmd.exe）
       customConfig,
-      undefined, // abortSignal
+      undefined,     // abortSignal
       resolvedCwd,
-      undefined, // options
+      undefined,     // options
     );
     if (!wrapped || !Array.isArray(wrapped.argv) || wrapped.argv.length === 0) {
-      logger.warn(LogTag.Runtime, `[Sandbox] wrapWithSandbox: wrap returned empty argv for: ${cmdStr} (wrapped=${JSON.stringify(wrapped)})`);
+      logger.warn(LogTag.Runtime, `[Sandbox] wrapWithSandbox: wrap returned empty argv for: ${command} (wrapped=${JSON.stringify(wrapped)})`);
       return null;
     }
     logger.info(LogTag.Runtime, `[Sandbox] wrapWithSandbox: success, argv.length=${wrapped.argv.length} argv[0]=${wrapped.argv[0]}`);

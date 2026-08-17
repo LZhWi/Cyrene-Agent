@@ -1,5 +1,5 @@
 /**
- * apply_patch 失败诊断测试
+ * str_replace 失败诊断测试
  */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
@@ -22,10 +22,10 @@ vi.mock("./built-in-tools", () => ({}));
 // Mock fetch 避免翻译工具的网络调用
 globalThis.fetch = vi.fn() as any;
 
-// 直接测试 apply_patch 的逻辑，不导入整个 life-tools
+// 直接测试 str_replace 的逻辑，不导入整个 life-tools
 // 因为 life-tools 依赖 electron 的 ipcMain
 
-// 提取 apply_patch 核心逻辑用于测试
+// 提取 str_replace 核心逻辑用于测试
 interface MatchPosition {
   line: number;
   context: string;
@@ -108,16 +108,28 @@ function findAllMatchPositions(lines: string[], oldStr: string): MatchPosition[]
   return positions;
 }
 
-/** 模拟 apply_patch 执行 */
-function executeApplyPatch(filePath: string, oldStr: string, newStr: string): any {
+/** 模拟 str_replace 执行 */
+function executeStrReplace(filePath: string, oldStr: string, newStr: string): any {
   if (!filePath) return { error: "file_path 不能为空", success: false };
   if (!fs.existsSync(filePath)) return { error: `文件不存在：${filePath}`, success: false };
 
   const content = fs.readFileSync(filePath, "utf8");
   if (!oldStr) return { error: "old_string 不能为空", success: false };
 
+  // EOL 归一化（与 life-tools.ts 真实实现保持一致）
+  let matchStr = oldStr;
+  let replaceStr = newStr;
+  if (content.includes("\r\n") && !oldStr.includes("\r")) {
+    matchStr = oldStr.replaceAll("\n", "\r\n");
+    replaceStr = newStr.replaceAll("\n", "\r\n");
+  } else if (!content.includes("\r\n") && oldStr.includes("\r\n")) {
+    matchStr = oldStr.replaceAll("\r\n", "\n");
+    replaceStr = newStr.replaceAll("\r\n", "\n");
+  }
+  const eolNormalized = matchStr !== oldStr;
+
   const lines = content.split("\n");
-  const count = content.split(oldStr).length - 1;
+  const count = content.split(matchStr).length - 1;
 
   if (count === 0) {
     const nearest = findNearestMatch(lines, oldStr);
@@ -154,15 +166,16 @@ function executeApplyPatch(filePath: string, oldStr: string, newStr: string): an
     };
   }
 
-  const newContent = content.replace(oldStr, newStr);
+  const newContent = content.replace(matchStr, replaceStr);
   fs.writeFileSync(filePath, newContent, "utf8");
   const size = fs.statSync(filePath).size;
   return {
-    tool: "apply_patch",
+    tool: "str_replace",
     filePath,
     action: "modified",
     sizeBytes: size,
     success: true,
+    eolNormalized,
   };
 }
 
@@ -177,25 +190,43 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("apply_patch success", () => {
+describe("str_replace success", () => {
   it("applies patch successfully", async () => {
     const testFile = path.join(tmpDir, "test.ts");
     fs.writeFileSync(testFile, "const a = 1;\nconst b = 2;\nconst c = 3;");
 
-    const result = executeApplyPatch(testFile, "const b = 2;", "const b = 42;");
+    const result = executeStrReplace(testFile, "const b = 2;", "const b = 42;");
 
     expect(result.success).toBe(true);
     expect(result.action).toBe("modified");
     expect(fs.readFileSync(testFile, "utf8")).toContain("const b = 42;");
   });
+
+  it("matches LF old_string against a CRLF file and preserves CRLF on write", async () => {
+    const testFile = path.join(tmpDir, "crlf.ts");
+    // Windows 文件 CRLF；模型给的 old_string/new_string 是 LF
+    fs.writeFileSync(testFile, "function init() {\r\n  const flowLog = 1;\r\n  return flowLog;\r\n}\r\n");
+
+    const result = executeStrReplace(
+      testFile,
+      "  const flowLog = 1;\n  return flowLog;",
+      "  const loopLog = 1;\n  return loopLog;",
+    );
+
+    expect(result.success).toBe(true);
+    expect(result.eolNormalized).toBe(true);
+    // 写回保持 CRLF，不出现混合 EOL
+    expect(fs.readFileSync(testFile, "utf8"))
+      .toBe("function init() {\r\n  const loopLog = 1;\r\n  return loopLog;\r\n}\r\n");
+  });
 });
 
-describe("apply_patch failure diagnostics", () => {
+describe("str_replace failure diagnostics", () => {
   it("returns structured diagnostic when old_string not found", async () => {
     const testFile = path.join(tmpDir, "test.ts");
     fs.writeFileSync(testFile, "const foo = 1;\nconst bar = 2;\nconst baz = 3;");
 
-    const result = executeApplyPatch(testFile, "const qux = 999;", "const qux = 42;");
+    const result = executeStrReplace(testFile, "const qux = 999;", "const qux = 42;");
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("未找到");
@@ -209,7 +240,7 @@ describe("apply_patch failure diagnostics", () => {
     const testFile = path.join(tmpDir, "test.ts");
     fs.writeFileSync(testFile, "const foo = 1;\nconst bar = 2;\nconst baz = 3;");
 
-    const result = executeApplyPatch(testFile, "const foo = 999;", "const foo = 42;");
+    const result = executeStrReplace(testFile, "const foo = 999;", "const foo = 42;");
 
     expect(result.success).toBe(false);
     expect(result.diagnostic.kind).toBe("not_found");
@@ -223,7 +254,7 @@ describe("apply_patch failure diagnostics", () => {
     const testFile = path.join(tmpDir, "test.ts");
     fs.writeFileSync(testFile, "const x = 1;\nconst y = 2;\nconst x = 1;\nconst z = 3;");
 
-    const result = executeApplyPatch(testFile, "const x = 1;", "const x = 42;");
+    const result = executeStrReplace(testFile, "const x = 1;", "const x = 42;");
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("匹配 2 处");
@@ -239,7 +270,7 @@ describe("apply_patch failure diagnostics", () => {
     const testFile = path.join(tmpDir, "test.ts");
     fs.writeFileSync(testFile, "// header\nconst x = 1;\n// middle\nconst x = 1;\n// footer");
 
-    const result = executeApplyPatch(testFile, "const x = 1;", "const x = 42;");
+    const result = executeStrReplace(testFile, "const x = 1;", "const x = 42;");
 
     expect(result.success).toBe(false);
     expect(result.diagnostic.positions[0].context).toContain("header");
@@ -247,14 +278,14 @@ describe("apply_patch failure diagnostics", () => {
   });
 
   it("returns error for empty file_path", async () => {
-    const result = executeApplyPatch("", "test", "new");
+    const result = executeStrReplace("", "test", "new");
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("file_path 不能为空");
   });
 
   it("returns error for non-existent file", async () => {
-    const result = executeApplyPatch("/nonexistent/file.txt", "test", "new");
+    const result = executeStrReplace("/nonexistent/file.txt", "test", "new");
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("文件不存在");
@@ -264,7 +295,7 @@ describe("apply_patch failure diagnostics", () => {
     const testFile = path.join(tmpDir, "test.txt");
     fs.writeFileSync(testFile, "content");
 
-    const result = executeApplyPatch(testFile, "", "new");
+    const result = executeStrReplace(testFile, "", "new");
 
     expect(result.success).toBe(false);
     expect(result.error).toContain("old_string 不能为空");
@@ -275,18 +306,18 @@ describe("apply_patch failure diagnostics", () => {
     const original = "const foo = 1;\nconst bar = 2;";
     fs.writeFileSync(testFile, original);
 
-    executeApplyPatch(testFile, "not found", "replacement");
+    executeStrReplace(testFile, "not found", "replacement");
 
     expect(fs.readFileSync(testFile, "utf8")).toBe(original);
   });
 });
 
-describe("apply_patch multiline old_string", () => {
+describe("str_replace multiline old_string", () => {
   it("handles multiline old_string", async () => {
     const testFile = path.join(tmpDir, "test.ts");
     fs.writeFileSync(testFile, "function foo() {\n  return 1;\n}\n\nfunction bar() {\n  return 2;\n}");
 
-    const result = executeApplyPatch(
+    const result = executeStrReplace(
       testFile,
       "function foo() {\n  return 1;\n}",
       "function foo() {\n  return 42;\n}",
@@ -300,7 +331,7 @@ describe("apply_patch multiline old_string", () => {
     const testFile = path.join(tmpDir, "test.ts");
     fs.writeFileSync(testFile, "function foo() {\n  return 1;\n}");
 
-    const result = executeApplyPatch(
+    const result = executeStrReplace(
       testFile,
       "function foo() {\n  return 999;\n}",
       "function foo() {\n  return 42;\n}",

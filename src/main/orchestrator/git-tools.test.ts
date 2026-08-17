@@ -27,6 +27,8 @@ function service(): GitService {
     switchBranch: vi.fn(async () => "switched"),
     push: vi.fn(async () => "pushed"),
     revert: vi.fn(async () => "reverted"),
+    diff: vi.fn(async () => ({ base: "HEAD", staged: false, files: [], insertions: 0, deletions: 0, truncated: false, patch: "", perFile: [] })),
+    log: vi.fn(async () => []),
   };
 }
 
@@ -67,6 +69,8 @@ describe("createCodeGitTools", () => {
       "git_switch_branch",
       "git_push",
       "git_revert",
+      "git_diff",
+      "git_log",
     ]);
   });
 
@@ -81,6 +85,8 @@ describe("createCodeGitTools", () => {
       "git_switch_branch",
       "git_push",
       "git_revert",
+      "git_diff",
+      "git_log",
     ]);
   });
 });
