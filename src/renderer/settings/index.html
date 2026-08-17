@@ -249,8 +249,8 @@
         <form class="settings-panel is-hidden" id="api-runtime-form" data-panel="api-advanced">
           <div class="panel-heading">
             <div>
-              <h1>运行超时设置</h1>
-              <p>控制单轮对话、模型请求和询问用户时的等待时间。</p>
+              <h1>运行设置</h1>
+              <p>控制模型请求、询问用户等待时间与 Harness 工具执行方式。</p>
             </div>
           </div>
           <div class="settings-list">
@@ -269,6 +269,11 @@
                 <button type="button" class="timeout-reset" id="timeout-user-choice-reset-btn" title="重置为默认（60s）">↻</button>
               </div>
               <span class="field-hint">昔涟向用户提问后等待回答的最长时间。</span>
+            </label>
+            <label class="field field--full">
+              <span>工具并发数</span>
+              <input id="max-parallel-tool-calls" type="number" min="1" max="8" step="1" placeholder="4" autocomplete="off" />
+              <span class="field-hint">同时执行的安全工具数量。范围：1~8；设为 1 时完全串行。保存后从下一个任务生效。</span>
             </label>
           </div>
           <div class="form-actions">
@@ -1447,6 +1452,13 @@
               <div class="music-status-main"><span class="music-status-dot" id="music-status-dot"></span><strong id="music-account-status-text">尚未连接</strong><span id="music-status-description"></span></div>
               <div class="music-actions" id="music-actions"><button type="button" class="btn-primary" id="music-login-btn">连接网易云</button></div>
             </div>
+            <div class="music-card is-hidden" id="music-component-help">
+              <div class="music-card__header"><h2>音乐组件未就绪</h2></div>
+              <div class="music-card__body">
+                <p class="panel-hint">将下载好的 <code>music</code> 文件夹放入组件目录，然后重新检测。</p>
+                <div class="music-actions"><button type="button" class="btn-secondary" id="music-open-component-dir">打开组件文件夹</button><button type="button" class="btn-primary" id="music-recheck-component">重新检测</button></div>
+              </div>
+            </div>
             <div class="music-qr is-hidden" id="music-qr"><img class="music-qr__img" id="music-qr-img" alt="网易云登录二维码" /><div><strong>网易云音乐 App 扫码</strong><p id="music-qr-tip">请用网易云音乐 App 扫描二维码完成登录</p><p id="music-qr-status">当前状态：等待扫码</p></div></div>
             <div class="music-search-card music-card" id="music-search-card"><div class="music-card__header"><h2>搜索歌曲</h2></div><div class="music-card__body"><p id="music-search-hint" class="panel-hint">连接网易云后即可搜索歌曲和获取每日推荐。</p><div id="music-search-form" class="form-input-with-action is-hidden"><input type="text" id="music-search-input" class="form-input form-input--wide" placeholder="输入歌名或歌手" autocomplete="off" /><button type="button" class="btn-secondary" id="music-search-btn">搜索</button></div><div class="music-search-results" id="music-search-results"><p class="empty-hint">连接网易云后即可搜索歌曲和获取每日推荐。</p></div></div></div>
             <div class="music-feedback" id="music-feedback"></div>
@@ -1536,7 +1548,7 @@
               <button type="button" class="token-range__btn" data-range="30" role="tab" aria-selected="false">30d</button>
             </div>
 
-            <!-- Hero 指标区：总消耗(大字)+请求数(右上小字)，下面三小框 -->
+            <!-- 概览：只展示实际已记录的数据 -->
             <div class="token-hero">
               <div class="token-hero__main">
                 <span class="token-hero__label"><svg width="14" height="14" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-2px"><title>真实消耗</title><path d="M4 42H44" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><rect x="8" y="28" width="6" height="14" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><rect x="21" y="18" width="6" height="24" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><rect x="34" y="6" width="6" height="36" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg> 真实消耗</span>
@@ -1560,10 +1572,23 @@
               </div>
               <div class="token-stat">
                 <span class="token-stat__icon">🎯</span>
-                <span class="token-stat__label">命中</span>
+                <span class="token-stat__label">缓存命中</span>
                 <span class="token-stat__value" id="token-hit">N/A</span>
               </div>
             </div>
+
+            <section class="token-cache-summary" aria-labelledby="token-cache-summary-title">
+              <div class="token-cache-summary__heading">
+                <h3 class="token-cache-summary__title" id="token-cache-summary-title">统计 Token</h3>
+                <button type="button" class="ghost-btn token-cache-summary__clear" id="token-usage-clear">重置计算</button>
+              </div>
+              <dl class="token-cache-summary__list">
+                <div><dt>统计请求数</dt><dd id="token-cache-requests">0</dd></div>
+                <div><dt>统计总 Token</dt><dd id="token-cache-total">0</dd></div>
+                <div><dt>缓存命中 Token</dt><dd id="token-cache-hit">0</dd></div>
+                <div><dt>统计缓存命中率</dt><dd id="token-cache-rate">模型未提供缓存统计</dd></div>
+              </dl>
+            </section>
 
             <!-- 空态：无用量数据时显示 -->
             <div class="token-empty is-hidden" id="token-empty">
@@ -1586,12 +1611,17 @@
               <div class="token-trend-wrap">
                 <canvas id="token-trend-chart"></canvas>
               </div>
+
+              <div class="token-section-title">模型用量占比</div>
+              <div class="token-models">
+                <div class="token-models__chart"><canvas id="token-model-chart"></canvas></div>
+                <div class="token-models__list" id="token-model-list"></div>
+              </div>
             </div>
 
             <!-- hover tooltip 浮层（柱状图和波浪图共用） -->
             <div class="token-tooltip" id="token-tooltip" hidden></div>
 
-            <p class="token-panel__hint">💡 命中/未命中为缓存统计占位，接入缓存功能后显示真实值。</p>
           </div>
         </section>
 

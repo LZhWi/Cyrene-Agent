@@ -1,5 +1,5 @@
 import type { ChatMessageItem } from "../components/ChatMessageList";
-import type { ChatMessage } from "../../../../../shared/chat-types";
+import type { ChatMessage, ConversationMode } from "../../../../../shared/chat-types";
 import type { ComposerInteraction } from "../components/run-presentation";
 import type { TodoItem } from "../../../../../shared/todo-types";
 
@@ -9,6 +9,14 @@ export interface SessionInteractionEntry {
 }
 
 export type SessionInteractionState = Record<string, SessionInteractionEntry>;
+
+export function bindWorkspaceName(
+  state: Partial<Record<ConversationMode, string>>,
+  mode: ConversationMode,
+  displayName: string | undefined,
+): Partial<Record<ConversationMode, string>> {
+  return { ...state, [mode]: displayName };
+}
 
 export function sessionInteraction(
   state: SessionInteractionState,

@@ -6,6 +6,7 @@ const LIVE_TOOL_LABELS: Record<string, string> = {
   write_file: "写入文件",
   edit_file: "编辑文件",
   search_code: "搜索代码",
+  search_text: "文本搜索",
   run_shell: "执行命令",
 };
 
@@ -15,6 +16,7 @@ const SUMMARY_TOOL_LABELS: Record<string, string> = {
   write_file: "写入|个文件",
   edit_file: "编辑|个文件",
   search_code: "搜索|次",
+  search_text: "搜索|次",
   run_shell: "执行|条命令",
 };
 
@@ -79,6 +81,15 @@ function completedSummary(tools: readonly ToolExecutionRecord[]): string[] {
   });
   if (facts.length === 0 && successful.length > 0) facts.push(`完成 ${successful.length} 项操作`);
   return facts;
+}
+
+/** 本轮被改动的文件数（按路径去重）；用于完成态标题的粉色高亮提示。 */
+export function countRoundChangedFiles(tools: readonly ToolExecutionRecord[]): number {
+  const files = new Set<string>();
+  for (const tool of tools) {
+    for (const change of tool.changes ?? []) files.add(change.file);
+  }
+  return files.size;
 }
 
 export function resolveAgentRoundTitle(

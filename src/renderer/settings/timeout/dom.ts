@@ -5,3 +5,4 @@ export const timeoutUserChoiceInput = document.getElementById("timeout-user-choi
 export const timeoutUserChoiceReset = document.getElementById("timeout-user-choice-reset-btn") as HTMLButtonElement;
 export const timeoutTestInput = document.getElementById("timeout-test") as HTMLInputElement;
 export const timeoutTestReset = document.getElementById("timeout-test-reset-btn") as HTMLButtonElement;
+export const maxParallelToolCallsInput = document.getElementById("max-parallel-tool-calls") as HTMLInputElement;

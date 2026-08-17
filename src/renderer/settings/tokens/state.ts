@@ -5,4 +5,5 @@ import type { Chart } from "chart.js";
 
 export const tokensState = {
   trendChart: null as Chart | null,
+  modelChart: null as Chart | null,
 };

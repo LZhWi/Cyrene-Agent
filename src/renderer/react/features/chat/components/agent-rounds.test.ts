@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ToolExecutionRecord } from "../../../../../shared/chat-types";
 import {
   applyAgentRoundBoundary,
+  countRoundChangedFiles,
   createRoundProcessMessage,
   finishAgentRound,
   resolveAgentRoundTitle,
@@ -78,5 +79,30 @@ describe("agent round presentation", () => {
     const round = startAgentRound([], "round-0", 100)[0];
     expect(resolveAgentRoundTitle(round, [tool("a", "read_file", "error")], true))
       .toBe("昔涟已中断 · 1 项失败");
+  });
+});
+
+describe("countRoundChangedFiles", () => {
+  it("counts changed files deduplicated by path across tools", () => {
+    const tools: ToolExecutionRecord[] = [
+      {
+        id: "a", name: "str_replace", status: "success", roundId: "round-0",
+        changes: [{ file: "src/a.ts", kind: "modified", insertions: 1, deletions: 1 }],
+      },
+      {
+        id: "b", name: "write_file", status: "success", roundId: "round-0",
+        changes: [
+          { file: "src/a.ts", kind: "modified", insertions: 2, deletions: 0 },
+          { file: "src/b.ts", kind: "added", insertions: 5, deletions: 0 },
+        ],
+      },
+      { id: "c", name: "read_file", status: "success", roundId: "round-0" },
+    ];
+    expect(countRoundChangedFiles(tools)).toBe(2);
+  });
+
+  it("returns 0 when no tool reports changes", () => {
+    expect(countRoundChangedFiles([tool("a", "list_dir")])).toBe(0);
+    expect(countRoundChangedFiles([])).toBe(0);
   });
 });

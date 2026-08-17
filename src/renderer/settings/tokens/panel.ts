@@ -4,6 +4,8 @@
 
 import { Chart, registerables, type ChartConfiguration } from "chart.js";
 import { tokensState } from "./state";
+import { formatCacheRate } from "./cache-statistics";
+import { showModal } from "../shared/modal";
 
 Chart.register(...registerables);
 
@@ -12,17 +14,45 @@ interface TokenDayData {
   weekday: string;    // "周日"
   input: number;
   output: number;
-  hit: number;        // 缓存命中（占位 0）
-  miss: number;       // 缓存未命中（占位 0）
+  hit: number;
+  miss: number;
+  cacheCreation: number;
   requests: number;
+  attemptedRequests: number;
+  /** 厂商实际返回缓存统计的请求数；0 表示暂无数据。 */
+  cacheUsageRequests: number;
+}
+
+interface TokenModelData {
+  model: string;
+  input: number;
+  output: number;
+  hit: number;
+  miss: number;
+  cacheCreation?: number;
+  cacheUsageRequests?: number;
+  requests: number;
+  attemptedRequests?: number;
+}
+
+interface TokenUsageReport {
+  days: TokenDayData[];
+  models: TokenModelData[];
 }
 
 declare global {
-  interface Window {
+interface Window {
     tokenUsage?: {
-      get: (days: number) => Promise<TokenDayData[]>;
+      get: (days: number) => Promise<TokenUsageReport>;
+      clear: () => Promise<void>;
     };
   }
+}
+
+function formatCacheMetric(value: number, data: TokenDayData): string {
+  if (data.cacheUsageRequests <= 0) return "暂无数据";
+  const suffix = data.cacheUsageRequests < data.requests ? "（部分请求未提供）" : "";
+  return `${value.toLocaleString()}${suffix}`;
 }
 
 // 柱状图：根据数据动态生成柱子（复用 chart.css 的 .chart-bar 样式）
@@ -94,8 +124,10 @@ function showTokenTooltip(e: MouseEvent, d: TokenDayData): void {
     <div class="token-tooltip__date">${d.date} ${d.weekday}</div>
     <div class="token-tooltip__row"><span>📥 输入</span><span>${d.input.toLocaleString()}</span></div>
     <div class="token-tooltip__row"><span>📤 输出</span><span>${d.output.toLocaleString()}</span></div>
-    <div class="token-tooltip__row"><span>🎯 命中</span><span>${d.hit > 0 ? d.hit.toLocaleString() : "N/A"}</span></div>
-    <div class="token-tooltip__row"><span>❌ 未命中</span><span>${d.miss > 0 ? d.miss.toLocaleString() : "N/A"}</span></div>
+    <div class="token-tooltip__row"><span>🎯 缓存命中</span><span>${formatCacheMetric(d.hit, d)}</span></div>
+    <div class="token-tooltip__row"><span>❌ 缓存未命中</span><span>${formatCacheMetric(d.miss, d)}</span></div>
+    <div class="token-tooltip__row"><span>📝 缓存创建</span><span>${d.cacheCreation > 0 ? d.cacheCreation.toLocaleString() : "暂无数据"}</span></div>
+    <div class="token-tooltip__row"><span>🔢 请求</span><span>${d.requests.toLocaleString()} / ${d.attemptedRequests.toLocaleString()}</span></div>
   `;
   tip.hidden = false;
   moveTokenTooltip(e);
@@ -200,8 +232,10 @@ function renderTokenTrendChart(data: TokenDayData[]): void {
               const idx = items[0].dataIndex;
               const d = data[idx];
               return [
-                `🎯 命中: ${d.hit > 0 ? d.hit.toLocaleString() : "N/A"}`,
-                `❌ 未命中: ${d.miss > 0 ? d.miss.toLocaleString() : "N/A"}`,
+                `🎯 缓存命中: ${formatCacheMetric(d.hit, d)}`,
+                `❌ 缓存未命中: ${formatCacheMetric(d.miss, d)}`,
+                `📝 缓存创建: ${d.cacheCreation > 0 ? d.cacheCreation.toLocaleString() : "暂无数据"}`,
+                `🔢 请求: ${d.requests} / ${d.attemptedRequests}`,
               ];
             },
           },
@@ -228,34 +262,86 @@ function renderTokenTrendChart(data: TokenDayData[]): void {
   tokensState.trendChart = new Chart(canvas, config);
 }
 
+const modelColors = ["#ff7eb7", "#8b7cf6", "#4db6ac", "#f4a261", "#5b8def", "#94a3b8"];
+
+function renderModelUsage(models: TokenModelData[]): void {
+  const canvas = document.getElementById("token-model-chart") as HTMLCanvasElement | null;
+  const list = document.getElementById("token-model-list");
+  if (!canvas || !list) return;
+  tokensState.modelChart?.destroy();
+  tokensState.modelChart = null;
+  list.innerHTML = "";
+  const visible = models.slice(0, 6);
+  const total = visible.reduce((sum, item) => sum + item.input + item.output, 0);
+  if (total <= 0) {
+    list.innerHTML = '<p class="token-models__empty">暂无可归类的模型用量</p>';
+    return;
+  }
+  tokensState.modelChart = new Chart(canvas, {
+    type: "doughnut",
+    data: {
+      labels: visible.map((item) => item.model),
+      datasets: [{ data: visible.map((item) => item.input + item.output), backgroundColor: modelColors, borderWidth: 2, borderColor: "rgba(255,255,255,.76)" }],
+    },
+    options: { responsive: true, maintainAspectRatio: false, cutout: "68%", plugins: { legend: { display: false }, tooltip: { callbacks: { label: (item) => `${item.label}: ${(item.raw as number).toLocaleString()} Token` } } } },
+  });
+  for (const [index, item] of visible.entries()) {
+    const used = item.input + item.output;
+    const row = document.createElement("div");
+    row.className = "token-model-row";
+    row.innerHTML = `<span class="token-model-row__dot" style="background:${modelColors[index]}"></span><span class="token-model-row__name"></span><span class="token-model-row__value">${used.toLocaleString()} · ${(used / total * 100).toFixed(1)}%</span>`;
+    row.querySelector(".token-model-row__name")!.textContent = item.model;
+    list.appendChild(row);
+  }
+}
+
 // 更新指标卡片
 function updateTokenStats(data: TokenDayData[]): void {
   const totalInput = data.reduce((s, d) => s + d.input, 0);
   const totalOutput = data.reduce((s, d) => s + d.output, 0);
   const total = totalInput + totalOutput;
   const requests = data.reduce((s, d) => s + d.requests, 0);
+  const attemptedRequests = data.reduce((s, d) => s + d.attemptedRequests, 0);
+  const cacheUsageRequests = data.reduce((s, d) => s + d.cacheUsageRequests, 0);
+  const totalCacheHit = data.reduce((s, d) => s + d.hit, 0);
 
   const set = (id: string, val: string) => {
     const el = document.getElementById(id);
     if (el) el.textContent = val;
   };
   set("token-total", total.toLocaleString());
-  set("token-requests", requests.toLocaleString());
+  // 展示"有 usage 的请求数 / 总请求数"，让用户一眼看到统计覆盖率
+  set("token-requests", attemptedRequests > 0
+    ? `${requests.toLocaleString()} / ${attemptedRequests.toLocaleString()}`
+    : requests.toLocaleString());
   set("token-input", totalInput.toLocaleString());
   set("token-output", totalOutput.toLocaleString());
-  set("token-hit", "N/A");
+  set("token-hit", cacheUsageRequests > 0
+    ? `${totalCacheHit.toLocaleString()}${cacheUsageRequests < requests ? "（部分）" : ""}`
+    : "暂无数据");
+
+  set("token-cache-requests", requests.toLocaleString());
+  set("token-cache-total", total.toLocaleString());
+  set("token-cache-hit", totalCacheHit.toLocaleString());
+  set("token-cache-rate", formatCacheRate({
+    hit: totalCacheHit,
+    miss: data.reduce((s, d) => s + d.miss, 0),
+    requests,
+    cacheUsageRequests,
+  }));
 }
 
 // 刷新整个面板：调 IPC 拉真实数据 → 有数据渲染图表，无数据显示空态
 async function refreshTokenPanel(days: number): Promise<void> {
-  let data: TokenDayData[] = [];
+  let report: TokenUsageReport = { days: [], models: [] };
   try {
-    data = await window.tokenUsage?.get(days) ?? [];
+    report = await window.tokenUsage?.get(days) ?? report;
   } catch (err) {
     console.warn("[settings] 拉取 Token 用量失败:", err);
   }
 
-  const hasData = data.some((d) => d.input > 0 || d.output > 0 || d.requests > 0);
+  const data = report.days;
+  const hasData = data.some((d) => d.input > 0 || d.output > 0 || d.requests > 0 || d.attemptedRequests > 0);
   const emptyEl = document.getElementById("token-empty");
   const chartsEl = document.getElementById("token-charts");
 
@@ -268,7 +354,11 @@ async function refreshTokenPanel(days: number): Promise<void> {
     set("token-requests", "0");
     set("token-input", "0");
     set("token-output", "0");
-    set("token-hit", "N/A");
+    set("token-hit", "暂无数据");
+    set("token-cache-requests", "0");
+    set("token-cache-total", "0");
+    set("token-cache-hit", "0");
+    set("token-cache-rate", "模型未提供缓存统计");
     return;
   }
 
@@ -278,6 +368,7 @@ async function refreshTokenPanel(days: number): Promise<void> {
   updateTokenStats(data);
   renderTokenBarChart(data);
   renderTokenTrendChart(data);
+  renderModelUsage(report.models);
 }
 
 // 时间范围按钮交互
@@ -292,6 +383,27 @@ document.querySelectorAll<HTMLButtonElement>(".token-range__btn").forEach((btn) 
     const days = Number(btn.dataset.range) || 7;
     void refreshTokenPanel(days);
   });
+});
+
+document.getElementById("token-usage-clear")?.addEventListener("click", async () => {
+  const confirmed = await showModal({
+    title: "重置 Token 统计",
+    message: "这会清空全部本地 Token、请求数和缓存统计，且无法恢复。",
+    icon: "🗑️",
+    confirmText: "全部清空",
+  });
+  if (!confirmed) return;
+  const button = document.getElementById("token-usage-clear") as HTMLButtonElement | null;
+  if (button) button.disabled = true;
+  try {
+    await window.tokenUsage?.clear();
+    const days = Number(document.querySelector<HTMLButtonElement>(".token-range__btn.is-active")?.dataset.range) || 7;
+    await refreshTokenPanel(days);
+  } catch (err) {
+    console.warn("[settings] 清空 Token 用量失败:", err);
+  } finally {
+    if (button) button.disabled = false;
+  }
 });
 
 // 初始渲染

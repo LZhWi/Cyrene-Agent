@@ -3,7 +3,7 @@ import { XMarkdown, type ComponentProps } from "@ant-design/x-markdown";
 import Latex from "@ant-design/x-markdown/plugins/Latex";
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
-import type { AgentRoundRecord, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
+import type { AgentRoundRecord, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord, ToolFileChange } from "../../../../../shared/chat-types";
 import thinkingMoodUrl from "../../../assets/status-moods/思考中.png?url";
 import completedThinkingMoodUrl from "../../../assets/status-moods/提醒.png?url";
 import workingMoodUrl from "../../../assets/status-moods/工作中.png?url";
@@ -27,8 +27,10 @@ import { resolveRevisableLastTurn, type RevisableLastTurn } from "./last-turn-ac
 import { extractMessageStickerId, stripMessageStickerMarkers } from "./message-sticker";
 import type { WeatherData } from "./weather/weather-types";
 import { WeatherCard } from "./weather/WeatherCard";
-import { resolveAgentRoundTitle } from "./agent-rounds";
+import { countRoundChangedFiles, resolveAgentRoundTitle } from "./agent-rounds";
 import { TaskDelegationRow } from "./TaskDelegationRow";
+import { extractFileChanges, FileChangeCard } from "./FileChangeCard";
+import { ReviewPanel } from "./ReviewPanel";
 
 export interface ChatMessageItem {
   id: string;
@@ -51,6 +53,8 @@ export interface ChatMessageItem {
   toolExecutions?: ToolExecutionRecord[];
   runActivity?: RunActivityRecord;
   runStage?: AgentRunStage;
+  /** 关联的 Run ID，用于获取 Review 快照 */
+  runId?: string;
   taskPlan?: TaskPlanPresentation;
   attachments?: ChatMessageAttachment[];
   weather?: WeatherData;
@@ -80,6 +84,8 @@ interface ChatMessageListProps {
   onRegenerateLastResponse?: (userMessageId: string, assistantMessageId: string) => Promise<boolean>;
   onScrollToBottomVisibilityChange?: (visible: boolean) => void;
   onRegisterScrollToBottom?: (scroll: () => void) => void;
+  /** 点击 Review 文件项时打开右侧检查面板 */
+  onOpenReviewInspector?: (runId: string, fileIndex: number) => void;
 }
 
 const markdownConfig = { extensions: Latex() };
@@ -123,7 +129,7 @@ class MarkdownRenderBoundary extends Component<{
   }
 }
 
-function MarkdownContent({ content }: { content: string; streaming?: boolean }) {
+export function MarkdownContent({ content }: { content: string; streaming?: boolean }) {
   return (
     <MarkdownRenderBoundary content={content}>
       <XMarkdown
@@ -302,7 +308,12 @@ function AgentRoundGroup({
             draggable={false}
           />
         </span>
-        <span className="cy-agent-round__title">{resolveAgentRoundTitle(round, tools, interrupted)}</span>
+        <span className="cy-agent-round__title">
+          {resolveAgentRoundTitle(round, tools, interrupted)}
+          {!interrupted && round.status !== "running" && countRoundChangedFiles(tools) > 0 && (
+            <span className="cy-agent-round__files"> · {countRoundChangedFiles(tools)} 个文件已被改动</span>
+          )}
+        </span>
         <svg className={`cy-agent-round__chevron${expanded ? " is-expanded" : ""}`} viewBox="0 0 16 16" aria-hidden="true">
           <path d="m4 6 4 4 4-4" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.75" />
         </svg>
@@ -484,12 +495,25 @@ function ToolExecutionContent({ tools }: { tools: ToolExecutionRecord[] }) {
           description: tool.status === "running" ? "正在执行…" : tool.status === "error" ? "执行失败" : "执行完成",
           status: tool.status === "running" ? "loading" : tool.status === "error" ? "error" : "success",
           blink: tool.status === "running",
-          collapsible: Boolean(tool.result),
-          content: tool.result ? <pre className="cy-tool-executions__result">{tool.result}</pre> : undefined,
+          collapsible: Boolean(tool.result || tool.changes),
+          content: (tool.result || tool.changes)
+            ? <ToolResultContent result={tool.result} changes={tool.changes} />
+            : undefined,
         }))}
       />
     </section>
   );
+}
+
+/** 工具结果展示：优先用事件携带的结构化 changes 渲染 Diff Review 卡片；否则尝试解析完整 result JSON；最后原样展示 */
+function ToolResultContent({ result, changes }: { result?: string; changes?: ToolFileChange[] }) {
+  if (changes && changes.length > 0) return <FileChangeCard changes={changes} />;
+  if (result) {
+    const parsed = extractFileChanges(result);
+    if (parsed) return <FileChangeCard changes={parsed} />;
+    return <pre className="cy-tool-executions__result">{result}</pre>;
+  }
+  return null;
 }
 
 function attachmentStatus(attachment: ChatMessageAttachment): string | undefined {
@@ -625,6 +649,7 @@ function createRoles(
   reasoningExpanded: Readonly<Record<string, boolean>>,
   onReasoningExpand: (id: string, expanded: boolean) => void,
   onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void,
+  onOpenReviewInspector?: (runId: string, fileIndex: number) => void,
 ) {
   return {
   user: {
@@ -782,6 +807,17 @@ function createRoles(
       info.extraInfo?.weather ? <WeatherCard data={info.extraInfo.weather} /> : null
     ),
   },
+  review: {
+    placement: "start" as const,
+    variant: "borderless" as const,
+    avatar: null,
+    rootClassName: "cy-message cy-message--review",
+    contentRender: (_content: string, info: { extraInfo?: { runId?: string } }) => (
+      info.extraInfo?.runId
+        ? <ReviewPanel runId={info.extraInfo.runId} onOpenInspector={onOpenReviewInspector} />
+        : null
+    ),
+  },
   system: {
     placement: "start" as const,
     variant: "borderless" as const,
@@ -882,6 +918,15 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
         },
       });
     }
+    // Review 面板：Run 结束后（非 streaming/loading）且有 runId 时显示
+    if (message.runId && !message.streaming && !message.loading) {
+      assistantItems.push({
+        key: `${message.id}-review`,
+        role: "review",
+        content: "",
+        extraInfo: { runId: message.runId },
+      });
+    }
     return assistantItems;
   });
 }
@@ -898,6 +943,7 @@ export function ChatMessageList({
   onRegenerateLastResponse,
   onScrollToBottomVisibilityChange,
   onRegisterScrollToBottom,
+  onOpenReviewInspector,
 }: ChatMessageListProps) {
   const userAvatarUrl = useUserAvatar();
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
@@ -981,8 +1027,9 @@ export function ChatMessageList({
       reasoningExpanded,
       onReasoningExpand,
       onTtsCacheKey,
+      onOpenReviewInspector,
     ),
-    [beginEdit, cancelEdit, conversationId, editDraft, editingMessageId, lastTurn, mode, onReasoningExpand, onTtsCacheKey, preferredAddress, reasoningExpanded, regenerate, revisionBusy, submitEdit, userAvatarUrl],
+    [beginEdit, cancelEdit, conversationId, editDraft, editingMessageId, lastTurn, mode, onOpenReviewInspector, onReasoningExpand, onTtsCacheKey, preferredAddress, reasoningExpanded, regenerate, revisionBusy, submitEdit, userAvatarUrl],
   );
 
   useEffect(() => {

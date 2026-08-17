@@ -5,6 +5,7 @@
 import {
   timeoutUserChoiceInput, timeoutUserChoiceReset,
   timeoutTestInput, timeoutTestReset,
+  maxParallelToolCallsInput,
 } from "./dom";
 import { modelRequestTimeoutSecInput, modelRequestTimeoutSecReset } from "../api/dom";
 import { setSaveStatus, setRuntimeSaveStatus } from "../shared/save-status";
@@ -17,6 +18,8 @@ export async function loadTimeoutSettings(): Promise<void> {
     timeoutUserChoiceInput.value = String(cfg.userChoiceTimeout / 1000);
     timeoutTestInput.value = String(cfg.testTimeout);
     modelRequestTimeoutSecInput.value = cfg.modelRequestTimeoutSec != null ? String(cfg.modelRequestTimeoutSec) : "";
+    const generalSettings = await window.settings!.getGeneral();
+    maxParallelToolCallsInput.value = String(generalSettings.maxParallelToolCalls ?? 4);
     setRuntimeSaveStatus("时间设置保存后，对后续请求生效。");
   } catch {
     setRuntimeSaveStatus("读取偏好失败", "is-error");
@@ -46,6 +49,12 @@ export async function saveTimeoutSettings(saveTestTimeout: boolean): Promise<boo
   }
   try {
     await window.settings!.saveTimeoutSettings(settings);
+    if (!saveTestTimeout) {
+      const requested = Number(maxParallelToolCallsInput.value);
+      await window.settings!.saveGeneral({
+        maxParallelToolCalls: Number.isFinite(requested) ? requested : 4,
+      });
+    }
     if (saveTestTimeout) {
       setSaveStatus("已保存", "is-ok");
     } else {

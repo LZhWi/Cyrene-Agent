@@ -45,6 +45,45 @@ describe("formal answer visibility", () => {
   });
 });
 
+describe("review panel visibility", () => {
+  it("appends a review bubble when runId is set and message is not streaming", () => {
+    const message: ChatMessageItem = {
+      id: "assistant-done",
+      role: "assistant",
+      content: "完成了",
+      streaming: false,
+      runId: "run-abc-123",
+    };
+    const roles = createMessageItems([message], []).map((item) => item.role);
+    expect(roles).toContain("review");
+    const reviewItem = createMessageItems([message], []).find((item) => item.role === "review");
+    expect(reviewItem?.extraInfo?.runId).toBe("run-abc-123");
+  });
+
+  it("does not append review bubble while streaming", () => {
+    const message: ChatMessageItem = {
+      id: "assistant-streaming",
+      role: "assistant",
+      content: "正在处理",
+      streaming: true,
+      runId: "run-abc-456",
+    };
+    const roles = createMessageItems([message], []).map((item) => item.role);
+    expect(roles).not.toContain("review");
+  });
+
+  it("does not append review bubble when runId is absent", () => {
+    const message: ChatMessageItem = {
+      id: "assistant-no-run",
+      role: "assistant",
+      content: "纯对话",
+      streaming: false,
+    };
+    const roles = createMessageItems([message], []).map((item) => item.role);
+    expect(roles).not.toContain("review");
+  });
+});
+
 describe("function-calling round presentation", () => {
   it("renders one collapsible activity group per model round with reasoning inside", () => {
     (globalThis as typeof globalThis & { React: typeof React }).React = React;
@@ -83,7 +122,25 @@ describe("function-calling round presentation", () => {
     expect(html).toContain("查找 IPC 入口");
   });
 
-  it("does not render an empty final-answer round as a fake completed operation", () => {
+  it("appends a pink changed-files hint after the completed round title", () => {
+    (globalThis as typeof globalThis & { React: typeof React }).React = React;
+    const html = renderToStaticMarkup(React.createElement(RunActivityDetail, {
+      agentRounds: [{ id: "round-0", status: "completed", startedAt: 1, completedAt: 2 }],
+      processMessages: [],
+      reasoningBlocks: [],
+      tools: [{
+        id: "tool-0", roundId: "round-0", name: "str_replace", status: "success",
+        changes: [{ file: "src/a.ts", kind: "modified", insertions: 3, deletions: 1 }],
+      }],
+      interrupted: false,
+    }));
+
+    expect(html).toContain("昔涟已完成");
+    expect(html).toContain('class="cy-agent-round__files"');
+    expect(html).toContain("1 个文件已被改动");
+  });
+
+  it("does not render an empty final-answer round as a fake completed operation", async () => {
     (globalThis as typeof globalThis & { React: typeof React }).React = React;
     const html = renderToStaticMarkup(React.createElement(RunActivityDetail, {
       agentRounds: [{ id: "round-final", status: "completed", startedAt: 1, completedAt: 2 }],

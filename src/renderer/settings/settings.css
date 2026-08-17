@@ -2798,6 +2798,99 @@ body {
   border: 1px solid rgba(255, 182, 220, 0.12);
 }
 
+/* 仅展示厂商明确上报的缓存数据，避免把未知误导为未命中。 */
+.token-cache-summary {
+  margin: 0 0 22px;
+  padding: 14px 16px;
+  border: 1px solid rgba(255, 182, 220, 0.14);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.token-cache-summary__title {
+  margin: 0 0 10px;
+  color: var(--rb-text-default);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.token-cache-summary__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.token-cache-summary__heading .token-cache-summary__title { margin-bottom: 0; }
+
+.token-cache-summary__clear {
+  flex: 0 0 auto;
+  padding: 4px 9px;
+  color: var(--rb-text-muted);
+  font-size: 11px;
+}
+
+.token-cache-summary__list {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 16px;
+  margin: 0;
+}
+
+.token-cache-summary__list > div {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.token-cache-summary__list dt {
+  color: var(--rb-text-muted);
+  font-size: 11px;
+}
+
+.token-cache-summary__list dd {
+  overflow: hidden;
+  margin: 0;
+  color: var(--rb-text-default);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 520px) {
+  .token-cache-summary__list { grid-template-columns: 1fr; }
+}
+
+.token-models {
+  display: grid;
+  grid-template-columns: 190px minmax(0, 1fr);
+  gap: 18px;
+  align-items: center;
+  min-height: 190px;
+  padding: 16px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 182, 220, 0.12);
+}
+
+.token-models__chart { height: 160px; }
+.token-models__list { display: grid; gap: 3px; min-width: 0; }
+.token-model-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid rgba(255, 182, 220, .1); font-size: 12px; }
+.token-model-row:last-child { border-bottom: 0; }
+.token-model-row__dot { width: 8px; height: 8px; border-radius: 50%; }
+.token-model-row__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--rb-text-default); }
+.token-model-row__value { color: var(--rb-text-muted); font-variant-numeric: tabular-nums; }
+.token-models__empty { color: var(--rb-text-muted); font-size: 12px; margin: 0; }
+
+@media (max-width: 580px) {
+  .token-models { grid-template-columns: 1fr; }
+  .token-models__chart { height: 180px; }
+}
+
 /* hover tooltip 浮层（柱状图和波浪图共用） */
 .token-tooltip {
   position: fixed;

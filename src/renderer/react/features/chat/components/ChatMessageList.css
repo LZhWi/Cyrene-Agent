@@ -1,4 +1,6 @@
 .cy-message-list {
+  /* Leave room for the floating Todo/Git card on wide desktop windows. */
+  --cy-message-reading-width: min(100%, clamp(640px, calc(100vw - 560px), 1120px));
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -138,12 +140,12 @@
 
 .cy-message--assistant .ant-bubble-body {
   min-width: 0;
-  max-width: 760px;
+  max-width: var(--cy-message-reading-width);
 }
 
 .cy-message--reasoning {
-  width: min(82%, 760px);
-  max-width: min(82%, 760px);
+  width: var(--cy-message-reading-width);
+  max-width: var(--cy-message-reading-width);
 }
 
 .cy-message--reasoning .ant-bubble-content {
@@ -153,8 +155,8 @@
 }
 
 .cy-message--tool {
-  width: min(82%, 760px);
-  max-width: min(82%, 760px);
+  width: var(--cy-message-reading-width);
+  max-width: var(--cy-message-reading-width);
 }
 
 .cy-message--tool .ant-bubble-avatar {
@@ -175,8 +177,8 @@
 }
 
 .cy-message--waiting {
-  width: min(82%, 760px);
-  max-width: min(82%, 760px);
+  width: var(--cy-message-reading-width);
+  max-width: var(--cy-message-reading-width);
 }
 
 .cy-message--waiting .ant-bubble-avatar {
@@ -196,8 +198,8 @@
 }
 
 .cy-message--activity {
-  width: min(82%, 760px);
-  max-width: min(82%, 760px);
+  width: var(--cy-message-reading-width);
+  max-width: var(--cy-message-reading-width);
 }
 
 .cy-message--activity .ant-bubble-avatar {
@@ -369,6 +371,12 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 完成态标题后的文件改动提示：项目主粉高亮 */
+.cy-agent-round__files {
+  color: var(--cy-accent, #ff5b8a);
+  font-weight: 600;
 }
 
 .cy-agent-round__chevron {
@@ -852,6 +860,12 @@
   border-radius: 0;
   background: transparent;
   box-shadow: none;
+}
+
+/* 无气泡时不为可拖动的 Todo/Git 卡片预留阅读宽度；保留头像与固定右侧边距。 */
+:root[data-assistant-bubble="off"] .cy-message--assistant .ant-bubble-body {
+  width: calc(100% - 54px);
+  max-width: calc(100% - 54px);
 }
 
 .cy-message:hover .cy-copy-button,

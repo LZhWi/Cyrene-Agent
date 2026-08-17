@@ -64,6 +64,9 @@ const TOOL_ICON_SVGS: Record<string, React.ReactNode> = {
   search_code: <GithubIcon />,
   lsp: <GithubIcon />,
   apply_patch: <GithubIcon />,
+  str_replace: <GithubIcon />,
+  ast_grep_search: <GithubIcon />,
+  ast_grep_replace: <GithubIcon />,
   run_shell: <GithubIcon />,
   run_verification: <GithubIcon />,
 };

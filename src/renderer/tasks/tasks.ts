@@ -12,6 +12,7 @@ interface TokenDayData {
   hit: number;
   miss: number;
   requests: number;
+  cacheUsageRequests: number;
 }
 
 // ── preload 桥接（全部由共享 preload 暴露） ─────────────────

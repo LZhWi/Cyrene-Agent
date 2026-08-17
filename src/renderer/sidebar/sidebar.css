@@ -316,35 +316,6 @@ body {
   padding: 12px;
 }
 
-.model-row,
-.model-feed {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-}
-
-.model-row__key,
-.model-feed {
-  font: var(--rb-text-small);
-  color: var(--rb-text-muted);
-}
-
-.model-row__value,
-.model-feed__name {
-  color: var(--rb-text-strong);
-  font-weight: 500;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.model-feed__emoji {
-  margin-right: 2px;
-  filter: drop-shadow(0 0 6px rgba(236, 72, 153, 0.4));
-}
-
 .model-switch-btn,
 .settings-btn {
   position: relative;

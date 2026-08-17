@@ -73,7 +73,7 @@ const statusEmojiEl = document.getElementById("status-emoji") as HTMLElement;
 const statusLabelEl = document.getElementById("status-label") as HTMLElement;
 const feelingEmojiEl = document.getElementById("feeling-emoji") as HTMLElement;
 const feelingLabelEl = document.getElementById("feeling-label") as HTMLElement;
-const feedingModelEl = document.getElementById("feeding-model") as HTMLElement;
+
 const onlineBadge = onlineStatusLabel.closest(".profile__online") as HTMLElement | null;
 let runtimeSyncEnabled = false;
 let latestRuntimeState: RuntimeState | null = null;
@@ -139,8 +139,6 @@ function applyModelConfig(config: ModelConfig | null): void {
   runtimeSyncEnabled = config?.runtimeSync === "local" || config?.runtimeSync === "llm";
   onlineStatusLabel.textContent = connected ? "在线" : "离线";
   onlineBadge?.classList.toggle("is-offline", !connected);
-  // "正在喂养"显示优先级：用户昵称 > 厂商短名 > model id > 兜底
-  feedingModelEl.textContent = config?.displayName || config?.shortName || config?.model || "未选择模型";
   if (!runtimeSyncEnabled) applyRuntimeDisabled();
   else if (!wasRuntimeSyncEnabled) applyRuntimeState(latestRuntimeState);
 }

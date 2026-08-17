@@ -1,12 +1,19 @@
 // Global type augmentations for renderer
 
+import type { ReviewSnapshot } from "../shared/review-types";
+
 interface SystemApi {
   openExternal: (url: string) => Promise<{ ok: boolean; error?: string }>;
+}
+
+interface ReviewApi {
+  get: (runId: string) => Promise<ReviewSnapshot | null>;
 }
 
 declare global {
   interface Window {
     system?: SystemApi;
+    review?: ReviewApi;
   }
 }
 
