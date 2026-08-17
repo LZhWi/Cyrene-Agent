@@ -5,21 +5,39 @@ directories:
 asar: true
 asarUnpack:
   - "**/vendor/srt-win/**"
+  - "**/node_modules/@ast-grep/**"
 electronDist: node_modules/electron/dist
 files:
   - dist/**/*
+  - "!dist/components/**/*"
   - package.json
   - prompts/**/*
   - assets/**/*
   - skills/**/*
   - game-recipes/**/*
   - vendor/**/*
-  - models/**/*
+  - "!vendor/cloud-music-mcp/**/*"
+  - "!models/**/*"
 extraResources:
   - from: resources/bin/cyrene-screenshot.exe
     to: bin/cyrene-screenshot.exe
   - from: resources/mingit
     to: mingit
+  - from: resources/components
+    to: components
 win:
+  icon: assets/tray-icon.ico
   target:
-    - dir
+    - nsis
+nsis:
+  artifactName: Cyrene-Setup-${version}.${ext}
+  oneClick: false
+  differentialPackage: false
+  allowToChangeInstallationDirectory: true
+  # Shortcut creation is controlled by the assisted install page below.
+  createDesktopShortcut: false
+  createStartMenuShortcut: true
+  menuCategory: Cyrene
+  include: build/installer/installer.nsh
+  installerSidebar: build/installer/installer-sidebar.bmp
+  uninstallerSidebar: build/installer/installer-sidebar.bmp
