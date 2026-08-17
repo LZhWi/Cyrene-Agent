@@ -101,37 +101,87 @@ export function findSafeCutPoint(
   return cutIndex;
 }
 
+/**
+ * 判断一个 transcript 边界是否完整保留了每个 tool call / tool result 配对。
+ * `cutIndex` 左边会被压缩、右边原样保留；任何一对不得跨越该边界。
+ */
+function isToolPairSafeBoundary(messages: ChatMessage[], cutIndex: number): boolean {
+  const toolCallIndexes = new Map<string, number>();
+  for (let index = 0; index < messages.length; index++) {
+    const entry = messages[index];
+    if (entry?.role !== "assistant") continue;
+    for (const call of entry.toolCalls ?? []) toolCallIndexes.set(call.id, index);
+  }
+
+  for (let resultIndex = 0; resultIndex < messages.length; resultIndex++) {
+    const entry = messages[resultIndex];
+    if (entry?.role !== "tool" || !entry.toolCallId) continue;
+    const callIndex = toolCallIndexes.get(entry.toolCallId);
+    if (callIndex !== undefined && callIndex < cutIndex && resultIndex >= cutIndex) return false;
+  }
+  return true;
+}
+
+/**
+ * 按 token 预算保留近期尾部，并将边界回退到不会拆开工具配对的位置。
+ * 返回 0 表示没有足够安全、可压缩的旧历史。
+ */
+export function findSafeCutPointForRetainedTokens(
+  messages: ChatMessage[],
+  retainTokens: number,
+): number {
+  if (messages.length === 0 || retainTokens <= 0) return 0;
+
+  let cutIndex = messages.length;
+  let retainedTokens = 0;
+  while (cutIndex > 0 && retainedTokens < retainTokens) {
+    cutIndex--;
+    retainedTokens += estimateMessageTokens([messages[cutIndex]!]);
+  }
+
+  while (cutIndex > 0 && !isToolPairSafeBoundary(messages, cutIndex)) cutIndex--;
+  return cutIndex;
+}
+
 // ── Agent 导向压缩 prompt（v3 §10.6 第3点）───────────────
 
-export const AGENT_COMPACTION_PROMPT = `你正在帮 Agent 整理执行历史的摘要。请把下面这段较早的执行历史总结成一段简洁的摘要，供后续继续执行参考。
+export const AGENT_COMPACTION_PROMPT = `你正在为 CyreneHarness 生成可恢复的执行历史检查点。请将上方较早的对话历史压缩为以下固定 Markdown 结构；每个标题都必须保留，没有内容时写“无”。
 
-要求：
-1. 保留用户的核心目标、当前任务、未完成的待办事项。
-2. **保留已执行的工具操作序列及其确定性结果**（文件路径、命令、退出码、错误信息）。
-3. 保留已确认的事实和数据（如路径、文件名、参数值）。
-4. 保留 todo 状态和未确认的 uncertain effects（已发起但结果未知的副作用）。
-5. 删除模型自言自语、重复确认、过渡性语句。
-6. 如果对话中包含代码/命令，只保留最终生效的版本和用途说明。
-7. 摘要控制在 400~600 字以内，用中文输出。
+## 原始任务与意图
+## 已确认事实
+## 文件与改动
+## 工具结果与引用
+## Todo 与未完成事项
+## 不确定副作用
+## 当前进度
+## 下一步
 
-执行历史：
-{history}
+规则：
+1. 保留用户目标、明确约束、精确路径、命令、错误、标识符、数值和已经确认的结论。
+2. 工具结果只写必要事实；若消息里已有 tool-result:// 引用，保留该引用，不要编造完整输出。
+3. 合并先前的检查点，只保留仍然有效的事实，删除模型自言自语与重复过渡语。
+4. 使用简洁中文项目符号；不要调用工具，不要解释你正在生成摘要。
+5. 摘要必须明显短于被压缩的历史。`;
 
-请直接输出摘要内容，不要加任何前缀说明。`;
+const COMPACTION_CHECKPOINT_OPEN = "<cyrene_compaction_checkpoint>";
+const COMPACTION_CHECKPOINT_CLOSE = "</cyrene_compaction_checkpoint>";
+
+/** 将已验证的摘要包装为可持久化、可识别的 transcript 检查点。 */
+export function buildCompactionCheckpoint(summary: string): ChatMessage {
+  return {
+    role: "system",
+    content: `${COMPACTION_CHECKPOINT_OPEN}\n${summary.trim()}\n${COMPACTION_CHECKPOINT_CLOSE}`,
+  };
+}
 
 // ── 压缩执行 ─────────────────────────────────────────────
 
 export interface CompactionOptions {
-  systemPrompt: string;
-  toolSchemas: Array<{ name: string; description: string; parameters: object }>;
   messages: ChatMessage[];
-  contextWindow: number;
-  reservedOutput: number;
-  safetyMargin: number;
-  threshold: number;
-  keepRecentCount: number;
-  /** 压缩回调：把待压缩的文本摘要成一段 */
-  summarize: (history: string) => Promise<string>;
+  /** 压缩后至少原样保留的近期 transcript token 估算值。 */
+  retainTokens: number;
+  /** 压缩回调：把待压缩的原始消息序列摘要成一段。 */
+  summarize: (history: ChatMessage[]) => Promise<string>;
 }
 
 /**
@@ -145,39 +195,24 @@ export interface CompactionOptions {
 export async function compressForAgentLoop(
   options: CompactionOptions,
 ): Promise<ChatMessage[]> {
-  const { messages, keepRecentCount, summarize } = options;
+  const { messages, retainTokens, summarize } = options;
 
-  if (messages.length <= keepRecentCount) return messages;
-
-  // 找配对安全切点
-  const cutIndex = findSafeCutPoint(messages, keepRecentCount);
+  const cutIndex = findSafeCutPointForRetainedTokens(messages, retainTokens);
   if (cutIndex === 0) return messages; // 无法安全切分
 
   const toCompress = messages.slice(0, cutIndex);
   const toKeep = messages.slice(cutIndex);
 
-  // 格式化待压缩段
-  const history = toCompress
-    .map((m) => {
-      const role = m.role === "user" ? "用户" : m.role === "assistant" ? "Agent" : m.role;
-      const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-      let line = `--- ${role} ---\n${text}`;
-      if (m.toolCalls?.length) {
-        line += `\n[工具调用: ${m.toolCalls.map((t) => t.name).join(", ")}]`;
-      }
-      return line;
-    })
-    .join("\n\n");
-
   try {
-    const summary = await summarize(history);
-    const summaryMessage: ChatMessage = {
-      role: "system",
-      content: `[执行历史摘要]\n${summary}`,
-    };
+    const summary = await summarize(toCompress);
+    if (!summary.trim()) return messages;
+    const summaryMessage = buildCompactionCheckpoint(summary);
+    if (estimateMessageTokens([summaryMessage]) >= estimateMessageTokens(toCompress)) {
+      return messages;
+    }
     return [summaryMessage, ...toKeep];
   } catch {
-    // 压缩失败：兜底丢弃最旧（保留 recent）
-    return toKeep;
+    // 摘要失败绝不丢弃历史；下轮可重试或由上层处理模型窗口溢出。
+    return messages;
   }
 }
