@@ -39,6 +39,28 @@ export interface ToolExecutionRecord {
   result?: string;
   argsText?: string;
   roundId?: string;
+  /** 结构化文件变更证据（Diff Review 卡片）；由 tool_end 事件独立携带，不依赖被截断的 result 文本。 */
+  changes?: ToolFileChange[];
+}
+
+/** Diff Review 卡片：单行展示（hunk=@@ 头，context=未变行）。 */
+export type ToolDiffLineType = "context" | "add" | "remove" | "hunk";
+
+export interface ToolDiffLine {
+  type: ToolDiffLineType;
+  text: string;
+}
+
+/** 写文件工具返回 JSON 中的结构化变更证据，前端渲染成"文件 +x/-y"审查卡片。 */
+export interface ToolFileChange {
+  /** 相对工作区路径（或工具给定的展示路径） */
+  file: string;
+  kind: "added" | "modified" | "deleted" | "renamed";
+  insertions: number;
+  deletions: number;
+  /** 展示用红绿 diff 行；变更过大时省略并置 truncated */
+  diff?: ToolDiffLine[];
+  truncated?: boolean;
 }
 
 /** 一次 assistant run 的可恢复展示指标。 */

@@ -105,6 +105,7 @@ export interface ModelPreset {
 }
 
 export interface GeneralSettings extends ChatAppearanceSettings {
+  maxParallelToolCalls: number;
   citaEnabled: boolean;
   citaSemanticEngine: "remote" | "local";
   chatSocialContextEnabled: boolean;
@@ -273,6 +274,14 @@ export interface SettingsApi {
   listMcpServers?: () => Promise<Array<{ id: string; name: string; connected: boolean; toolCount: number; toolIds: string[] }>>;
   getPermissionLevel?: () => Promise<{ level: "read-only" | "scoped" | "per-action" | "full" }>;
   setPermissionLevel?: (level: string) => Promise<{ ok: boolean; level?: string; error?: string }>;
+  // 计划模式开关（renderer → main）：显式设置 on/off
+  setPlanMode?: (payload: { conversationId: string; target: "on" | "off"; workspaceRoot?: string }) => Promise<{ ok: boolean; state?: string; reason?: string }>;
+  // 计划模式状态查询（renderer → main）：挂载时调一次拿初始状态
+  getPlanState?: (conversationId: string) => Promise<{ state: string }>;
+  // 计划模式状态广播（main → renderer）：任意入口触发的状态切换都走这条
+  onPlanStateChanged?: (
+    callback: (payload: { conversationId: string; state: string }) => void,
+  ) => (() => void) | void;
   testConnection?: (config: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: ApiTransport; reasoning?: ReasoningPreference }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
   testVision?: (config: { baseUrl: string; apiKey: string; model: string }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
   // main → settings：要求切到指定标签（窗口已打开时由 main 发这个事件）

@@ -7,7 +7,9 @@
 //
 // Agent 的 Observable 是内存流、跨不过进程边界。
 // 因此主进程统一持有运行并仅把事件发送给 Renderer。
-import { ipcMain, IpcMainInvokeEvent, WebContents } from "electron";
+import * as fs from "fs";
+import { app, ipcMain, IpcMainInvokeEvent, WebContents } from "electron";
+import { getHarnessRunStore } from "./orchestrator/harness/run-store";
 import { IPC } from "../shared/ipc-channels";
 import { Subscription } from "rxjs";
 import { AgentRuntimeError } from "./orchestrator/agent-runtime-error";
@@ -33,6 +35,9 @@ import * as chatsStore from "./chats/chats-store";
 import type { ConversationMode } from "../shared/chat-types";
 import { requestUserClarification, cancelPendingChoicesForRun } from "./user-choice";
 import { cancelPendingApprovalsForRun } from "./permission";
+import { approvePlan, getPlanPath, moveToReview, supplementPlan } from "./orchestrator/plan-mode";
+import { buildPlanReviewCard, buildPlanSupplementCard } from "./orchestrator/harness/plan-tools";
+import type { AskUserAnswer } from "../shared/ask-clarification";
 /**
  * Task 2 / C1：从 RUN_FINISHED 事件中提取 canonical terminal。
  *
@@ -94,6 +99,8 @@ export interface AguiRunInput {
   imageAttachments?: { name: string; filePath: string; mime?: string }[];
   /** 同一会话上一次异常中断的只读恢复检查点。 */
   recoveryContext?: string;
+  /** 用户点击“继续任务”时指定的中断 Harness Run。 */
+  resumeFromRunId?: string;
   /** 只由主进程根据会话持久化字段注入，渲染端传值不可信。 */
   modelProfileId?: string;
 }
@@ -148,6 +155,85 @@ let buildOptionsFn: BuildOptionsFn | null = null;
 let getChatWindowFn: GetChatWindowFn = () => null;
 
 /**
+ * 计划审批流（设计稿 §5 方案 Y / §8）：run 成功收尾后触发，不阻塞 RUN_FINISHED。
+ *
+ * 1. PLAN_DISCUSSING + 本轮 write_plan → PLAN_REVIEW（moveToReview 幂等，纯讨论轮不弹卡）
+ * 2. 发 cyrene.plan.review（计划全文，渲染端打开独立计划窗口）+ 弹第一段审批卡（两选项）
+ * 3. 批准 → EXECUTING + cyrene.plan.approved，渲染端自动发送执行消息开新 run
+ * 4. 选"我要修改 / 补充" → 弹第二段纯文本卡；提交的文本经 cyrene.plan.supplement
+ *    由渲染端作为用户消息发出，模型改计划后再次 write_plan 重新走审批
+ * 5. 第二段卡超时 / 空文本 → 拉回 PLAN_DISCUSSING，等用户下一条消息
+ */
+function startPlanReviewFlow(params: {
+  sessionId: string;
+  threadId: string;
+  runId: string;
+  send: (event: unknown) => void;
+}): void {
+  const { sessionId, threadId, runId, send } = params;
+  void (async () => {
+    if (!moveToReview(sessionId)) return;
+    console.log("[AgUiBridge][Plan] run finished with write_plan, entering PLAN_REVIEW");
+    const planPath = getPlanPath(sessionId);
+    // 计划全文走独立事件：publishAskCard 只映射 questions，卡片 payload 带不动全文。
+    let planContent = "";
+    try {
+      planContent = await fs.promises.readFile(planPath, "utf8");
+    } catch (err) {
+      console.warn("[AgUiBridge][Plan] read plan.md for review failed:", err);
+    }
+    send({
+      type: "CUSTOM",
+      name: "cyrene.plan.review",
+      value: { planPath, planContent, sessionId },
+      threadId,
+      runId,
+    });
+    const answer = await requestUserClarification(
+      buildPlanReviewCard(planPath),
+      (cardData) => send({ type: "CUSTOM", name: "cyrene.choice", value: cardData, threadId, runId }),
+      undefined,
+      { runId, revision: 1 },
+    ) as AskUserAnswer;
+    const decision = answer.answers.find((a) => a.field === "plan_decision");
+    if (decision?.selectedValues?.includes("approve") && approvePlan(sessionId)) {
+      console.log("[AgUiBridge][Plan] plan approved, entering EXECUTING");
+      // 渲染端对此事件做持久监听（run 订阅此时已解除），按 sessionId 匹配后自动发送执行消息。
+      send({ type: "CUSTOM", name: "cyrene.plan.approved", value: { planPath, sessionId }, threadId, runId });
+      return;
+    }
+    // 非批准（含超时空答案）：统一拉回讨论态
+    supplementPlan(sessionId);
+    if (!decision?.selectedValues?.includes("supplement")) return;
+    // 第二段：纯文本补充卡（复用同一 ask 卡片链路）
+    console.log("[AgUiBridge][Plan] user wants to supplement, asking for details");
+    const supplementAnswer = await requestUserClarification(
+      buildPlanSupplementCard(),
+      (cardData) => send({ type: "CUSTOM", name: "cyrene.choice", value: cardData, threadId, runId }),
+      undefined,
+      { runId, revision: 2 },
+    ) as AskUserAnswer;
+    const supplementText = supplementAnswer.answers
+      .find((a) => a.field === "plan_supplement")?.customText?.trim();
+    if (supplementText) {
+      console.log("[AgUiBridge][Plan] supplement submitted, back to PLAN_DISCUSSING with user text");
+      send({
+        type: "CUSTOM",
+        name: "cyrene.plan.supplement",
+        value: { sessionId, text: supplementText },
+        threadId,
+        runId,
+      });
+    } else {
+      console.log("[AgUiBridge][Plan] supplement card timed out / empty, waiting for user message");
+    }
+  })().catch((err) => {
+    console.warn("[AgUiBridge][Plan] review flow failed:", err);
+    supplementPlan(sessionId);
+  });
+}
+
+/**
  * 注册 AG-UI IPC。由 index.ts 在 app.whenReady() 调一次。
  *
  * @param buildOptions 把渲染进程输入转成 agent options（含上下文构建）
@@ -162,6 +248,17 @@ export function registerAgUiIpc(
 ): void {
   buildOptionsFn = buildOptions;
   getChatWindowFn = getChatWindow;
+
+  ipcMain.handle(IPC.HARNESS_GET_INTERRUPTED_RUN, (_event, conversationId: unknown) => {
+    if (typeof conversationId !== "string" || !conversationId) return null;
+    const run = getHarnessRunStore(app.getPath("userData")).getLatestInterrupted(conversationId);
+    return run ? {
+      runId: run.runId,
+      rounds: run.rounds,
+      todoCount: run.state.todoItems.length,
+      updatedAt: run.updatedAt,
+    } : null;
+  });
 
   const onFinished = onRunFinished;
   ipcMain.handle(IPC.AGUI_RUN, async (event: IpcMainInvokeEvent, rawInput: unknown) => {
@@ -234,6 +331,7 @@ export function registerAgUiIpc(
     const { options, latestUserText } = built;
     options.executionMode = agentExecutionMode;
     options.recoveryContext = input.recoveryContext;
+    options.resumeFromRunId = input.resumeFromRunId;
     options.conversationMode = mode;
     // Task 2 / C1：把 bridge 创建的 canonical runId 注入 CyreneRunOptions，
     // 一路传到 Agent / Harness adapter / ToolContext / 所有 AG-UI 事件。
@@ -528,6 +626,10 @@ export function registerAgUiIpc(
         } else if (pendingRunFinishedEvent) {
           send(pendingRunFinishedEvent);
           pendingRunFinishedEvent = null;
+        }
+        // 计划模式（仅 code）：run 成功收尾后检测 write_plan，触发审批流（异步，不阻塞 complete）。
+        if (mode === "code" && isSuccessfulCompletion) {
+          startPlanReviewFlow({ sessionId, threadId, runId, send });
         }
         endLifecycle();
         perf.dump();

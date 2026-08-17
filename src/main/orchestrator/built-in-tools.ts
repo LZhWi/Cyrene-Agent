@@ -8,6 +8,7 @@ import { addMcpServer } from "./mcp-manager";
 import { createPlayLive2DActionTool } from "./tools/play-live2d-action";
 import { wrapWithSandbox, isSandboxReady } from "./sandbox/sandbox-exec";
 import { getCurrentLevel } from "../permission";
+import { classifyShellEffect, isCatastrophicCommand, type ShellEffect } from "./shell-execution-policy";
 
 let sendToLive2DWindow: (channel: string, payload?: unknown) => void = () => {};
 export function setLive2dWindowSender(sender: typeof sendToLive2DWindow): void {
@@ -160,27 +161,6 @@ interface ShellResult {
   ranViaSandbox: boolean;
 }
 
-/**
- * 把 args 规范化成 argv 数组。模型常把 "--version" 当字符串传（schema 要求数组），
- * 不容错的话 Array.isArray 判否 → cmdArgs=[] → 裸启动 python/node 的交互式 REPL，卡死。
- */
-function normalizeArgs(raw: unknown): string[] {
-  if (Array.isArray(raw)) return raw.map((x) => String(x));
-  if (typeof raw === "string" && raw.trim()) return tokenizeArgs(raw);
-  return [];
-}
-
-/** 简易 argv 分词：尊重单/双引号，处理转义空格。不引 shell（避免注入）。 */
-function tokenizeArgs(s: string): string[] {
-  const out: string[] = [];
-  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(s)) !== null) {
-    out.push(m[1] ?? m[2] ?? m[3]);
-  }
-  return out;
-}
-
 /** 可靠终止进程树。Windows 上 child.kill("SIGKILL") 只杀直接子进程，杀不掉孙进程。 */
 function killTree(child: ReturnType<typeof spawn>): void {
   if (child.pid == null) return;
@@ -196,25 +176,34 @@ function killTree(child: ReturnType<typeof spawn>): void {
   }
 }
 
+/**
+ * 执行一条完整 Shell 命令字符串。
+ *
+ * 直接执行路径用 `cmd.exe /d /s /c` 跑整行命令，支持管道（|）、重定向（> >> <）、
+ * 命令连接（&& || & ;）、cmd 内建命令（dir/type/echo/del）等完整 Shell 语义。
+ * SRT 沙箱路径内部也用 cmd.exe /c，所以两条路径语义一致。
+ *
+ * @param command 完整命令行字符串（如 "git status | findstr TODO"）
+ * @param useSandbox true 时优先走沙箱；沙箱不可用则 fallback 到直接 cmd.exe（调用方判定是否接受）
+ */
 function runShellOnce(
   command: string,
-  args: string[],
   cwd?: string,
   extraEnv?: Record<string, string>,
   useSandbox?: boolean,
 ): Promise<ShellResult> {
   return new Promise((resolve) => {
-    // 沙箱路径：先把 command+args 包成 {argv, env}，成功则 spawn 沙箱 argv；
-    // 失败/null 则 fallback 到原直接 spawn。useSandbox=true 时尝试沙箱。
     (async () => {
-      let spawnCmd: string = command;
-      let spawnArgs: string[] = args;
+      // 默认直接执行：cmd.exe /d /s /c 跑完整命令字符串，支持管道/重定向/内建命令
+      // /d=禁用 AutoRun（避免注册表注入命令） /s=正确处理引号包裹的命令字符串
+      let spawnCmd: string = process.env.ComSpec || "cmd.exe";
+      let spawnArgs: string[] = ["/d", "/s", "/c", command];
       let spawnEnv: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
       let ranViaSandbox = false;
 
       if (useSandbox) {
         try {
-          const wrapped = await wrapWithSandbox(command, args, cwd);
+          const wrapped = await wrapWithSandbox(command, cwd);
           if (wrapped) {
             spawnCmd = wrapped.argv[0];
             spawnArgs = wrapped.argv.slice(1);
@@ -222,12 +211,11 @@ function runShellOnce(
             spawnEnv = { ...wrapped.env, ...extraEnv };
             ranViaSandbox = true;
           } else {
-            // wrap 返回 null（沙箱不可用/失败）→ fallback 到直接 spawn
-            // 调用方需自行判断是否接受 fallback（workspace_mutation 不接受 fallback）
-            console.log(LOG_PREFIX, "run_shell sandbox unavailable, fallback to direct spawn");
+            // wrap 返回 null（沙箱不可用/失败）→ fallback 到直接 cmd.exe
+            // 调用方需自行判断是否接受 fallback（写副作用命令不接受 fallback）
+            console.log(LOG_PREFIX, "run_shell sandbox unavailable, fallback to direct cmd.exe");
           }
         } catch (err) {
-          // wrap 异常不应让 runShellOnce 卡死，fallback 到直接 spawn
           const msg = err instanceof Error ? err.message : String(err);
           console.warn(LOG_PREFIX, "run_shell wrap exception, fallback:", msg);
         }
@@ -301,103 +289,80 @@ function runShellOnce(
 }
 
 async function executeRunShell(args: Record<string, unknown>, context?: import("./tool-context").ToolContext): Promise<string> {
-  const cmd = String(args.command || "").trim();
-  // 容错：模型常把 args 当字符串传（如 "--version"），normalizeArgs 会自动拆成 argv 数组
-  const cmdArgs = normalizeArgs(args.args);
+  const command = String(args.command || "").trim();
   const cwd = args.cwd ? String(args.cwd) : undefined;
-  if (!cmd) return "[错误] command 不能为空";
+  if (!command) return "[错误] command 不能为空";
 
-  // 系统侧 shell policy 分类（不信任模型 purpose）
-  const { classifyShellPolicy } = require("./shell-execution-policy");
-  const policy = classifyShellPolicy(cmd, cmdArgs);
-  const level = context?.permissionMode === "allow_all" ? "full" : getCurrentLevel();
-  logger.info(LogTag.BuiltinTools, `[run_shell] entry: command=${cmd} args=${JSON.stringify(cmdArgs)} cwd=${cwd || "(undefined)"} policy=${policy} level=${level}`);
-
-  if (policy === "blocked") {
-    logger.info(LogTag.BuiltinTools, `[run_shell] rejected: policy=blocked command=${cmd}`);
+  // 灾难命令守卫：无论档位都拒绝（format/shutdown/dd 等明显灾难操作）
+  if (isCatastrophicCommand(command)) {
+    logger.info(LogTag.BuiltinTools, `[run_shell] rejected: catastrophic command="${command}"`);
     return JSON.stringify({
-      command: cmd, args: cmdArgs, cwd,
+      command, cwd,
       exitCode: -1, stdout: "", stderr: "[拒绝] 该命令被系统禁止执行",
-      timedOut: false, passed: false, policy, truncated: false,
+      timedOut: false, truncated: false, effect: "unknown", sandboxed: false,
     });
   }
 
-  if (policy === "workspace_mutation") {
-    // full 档位：不走沙箱，直接 spawn（用户已选择完全信任）
-    if (level === "full") {
-      logger.info(LogTag.BuiltinTools, `[run_shell] workspace_mutation → full level, direct spawn (no sandbox)`);
-      const result = await runShellOnce(cmd, cmdArgs, cwd);
-      logger.info(LogTag.BuiltinTools, `[run_shell] [full] done: exitCode=${result.exitCode} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length}`);
-      return JSON.stringify({
-        command: cmd,
-        args: cmdArgs,
-        cwd,
-        exitCode: result.exitCode,
-        stdout: result.stdout,
-        stderr: result.stderr,
-        timedOut: false,
-        truncated: result.truncated,
-        policy: "workspace_mutation",
-        sandboxed: false,
-      });
-    }
+  const level = context?.permissionMode === "allow_all" ? "full" : getCurrentLevel();
+  const effect: ShellEffect = classifyShellEffect(command);
+  logger.info(LogTag.BuiltinTools, `[run_shell] entry: command="${command}" cwd=${cwd || "(undefined)"} effect=${effect} level=${level}`);
 
-    // scoped / per-action 档位：沙箱可用时放行进沙箱
-    // （核心价值：pip/npm install 这种"未知但无害"命令能在笼子里跑）
-    // 注意：workspace_mutation 不接受 fallback —— runShellOnce 内部 wrap 失败会 fallback 到直接 spawn，
-    // 这违背 workspace_mutation 的安全语义。所以这里检查 ranViaSandbox：若 fallback 了则视为拒绝。
-    if (!isSandboxReady()) {
-      logger.info(LogTag.BuiltinTools, `[run_shell] workspace_mutation → sandbox not ready (level=${level}), rejected`);
-      return JSON.stringify({
-        command: cmd, args: cmdArgs, cwd,
-        exitCode: -1, stdout: "",
-        stderr: "[拒绝] 该命令可能修改工作区，请使用专用工具：代码修改用 apply_patch/write_file，验证用 run_verification",
-        timedOut: false, passed: false, policy, truncated: false,
-      });
-    }
-    logger.info(LogTag.BuiltinTools, `[run_shell] workspace_mutation → sandbox path (level=${level}), calling runShellOnce(useSandbox=true)`);
-    const result = await runShellOnce(cmd, cmdArgs, cwd, undefined, true);
-    // 沙箱 wrap 失败导致 fallback 到直接 spawn → 拒绝（不能让 workspace_mutation 越过沙箱直接跑）
-    if (!result.ranViaSandbox) {
-      logger.warn(LogTag.BuiltinTools, `[run_shell] workspace_mutation → sandbox wrap failed (fell back to direct spawn), rejected. stderr=${result.stderr.slice(0, 200)}`);
-      return JSON.stringify({
-        command: cmd, args: cmdArgs, cwd,
-        exitCode: -1, stdout: result.stdout,
-        stderr: result.stderr + "\n[拒绝] 沙箱不可用，该命令可能修改工作区，已终止",
-        timedOut: false, passed: false, policy, truncated: result.truncated,
-      });
-    }
-    logger.info(LogTag.BuiltinTools, `[run_shell] [sandbox ${level}] done: exitCode=${result.exitCode} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length}`);
+  // full 档位：直接 spawn，不走沙箱（用户已选择完全信任）
+  if (level === "full") {
+    logger.info(LogTag.BuiltinTools, `[run_shell] full level → direct cmd.exe (no sandbox)`);
+    const result = await runShellOnce(command, cwd);
+    logger.info(LogTag.BuiltinTools, `[run_shell] [full] done: exitCode=${result.exitCode} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length}`);
     return JSON.stringify({
-      command: cmd,
-      args: cmdArgs,
-      cwd,
+      command, cwd,
       exitCode: result.exitCode,
       stdout: result.stdout,
       stderr: result.stderr,
       timedOut: false,
       truncated: result.truncated,
-      policy: "workspace_mutation",
-      sandboxed: true,
+      effect,
+      sandboxed: false,
     });
   }
 
-  // read_only policy：安全读命令，直接 spawn（不经过沙箱）
-  logger.info(LogTag.BuiltinTools, `[run_shell] read_only policy, direct spawn (level=${level})`);
-  const result = await runShellOnce(cmd, cmdArgs, cwd);
-  logger.info(LogTag.BuiltinTools, `[run_shell] [read_only] done: exitCode=${result.exitCode} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length} sandboxed=${result.ranViaSandbox}`);
+  // 非 full 档位：按副作用路由
+  // - read  → 沙箱优先，不可用则允许 fallback 到直接 cmd.exe（graceful degradation）
+  // - write/unknown → 必须沙箱，沙箱不可用或 wrap 失败则拒绝（不 fallback）
+  const requiresSandbox = effect !== "read";
 
-  // 结构化返回（保留 ShellResult 字段，供证据收集器解析）
+  if (requiresSandbox && !isSandboxReady()) {
+    logger.info(LogTag.BuiltinTools, `[run_shell] write/unknown → sandbox not ready (level=${level}), rejected`);
+    return JSON.stringify({
+      command, cwd,
+      exitCode: -1, stdout: "",
+      stderr: "[拒绝] 沙箱不可用，该命令可能修改工作区，已终止。请在设置中安装沙箱或提升权限档位。",
+      timedOut: false, truncated: false, effect, sandboxed: false,
+    });
+  }
+
+  const useSandbox = isSandboxReady();
+  logger.info(LogTag.BuiltinTools, `[run_shell] ${level} → useSandbox=${useSandbox} effect=${effect}`);
+  const result = await runShellOnce(command, cwd, undefined, useSandbox);
+
+  // 写副作用命令若 fallback 到直接 spawn（沙箱 wrap 失败）→ 拒绝
+  if (requiresSandbox && useSandbox && !result.ranViaSandbox) {
+    logger.warn(LogTag.BuiltinTools, `[run_shell] write/unknown → sandbox wrap failed (fell back to direct spawn), rejected. stderr=${result.stderr.slice(0, 200)}`);
+    return JSON.stringify({
+      command, cwd,
+      exitCode: -1, stdout: result.stdout,
+      stderr: result.stderr + "\n[拒绝] 沙箱不可用，该命令可能修改工作区，已终止",
+      timedOut: false, truncated: result.truncated, effect, sandboxed: false,
+    });
+  }
+
+  logger.info(LogTag.BuiltinTools, `[run_shell] [${level}] done: exitCode=${result.exitCode} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length} sandboxed=${result.ranViaSandbox}`);
   return JSON.stringify({
-    command: cmd,
-    args: cmdArgs,
-    cwd,
+    command, cwd,
     exitCode: result.exitCode,
     stdout: result.stdout,
     stderr: result.stderr,
-    timedOut: false,  // runShellOnce 超时时通过 kill 处理，此处为正常返回
+    timedOut: false,
     truncated: result.truncated,
-    policy: "read_only",
+    effect,
     sandboxed: result.ranViaSandbox,
   });
 }
@@ -406,19 +371,28 @@ toolRegistry.register({
   id: "run_shell",
   name: "执行命令",
   description:
-    "在用户电脑上执行一条命令（不通过 shell，按 argv 数组传参）。返回 exitCode + stdout + stderr。\n\n" +
+    "在用户电脑上执行一条 Shell 命令字符串（通过 cmd.exe 解析）。返回 exitCode + stdout + stderr。\n\n" +
+    "支持的 Shell 语义：\n" +
+    "- 管道：git status | findstr TODO\n" +
+    "- 重定向：npm run build > build.log 或 echo hello >> out.txt\n" +
+    "- 命令串联：cd src && dir 或 git add . && git commit -m msg\n" +
+    "- cmd 内建命令：dir / type / echo / del / copy / set 等可直接用\n" +
+    "- 环境变量：%VAR% 会被展开\n\n" +
     "何时用：\n" +
     "- git clone / git status / git log 等版本控制操作\n" +
     "- npm install / npm run / pip install / node xxx.js 等开发操作\n" +
     "- node --version / python --version 等查环境\n" +
-    "- 用户明确要求'跑一下这条命令'\n\n" +
+    "- 用户明确要求'跑一下这条命令'\n" +
+    "- 需要管道/重定向组合的命令\n\n" +
     "不要用于：\n" +
     "- 读文件 → read_file（更安全）\n" +
     "- 列目录 → list_dir\n" +
+    "- 搜索代码内容 → search_text\n" +
     "- 下载网页 → fetch_url\n" +
     "- 能用专用工具完成的事\n\n" +
-    "高风险：会真实修改用户系统。危险命令需用户在权限档位授权或单次同意。" +
-    "参数：command (可执行文件名或绝对路径)，args (字符串数组)，cwd (可选工作目录)。",
+    "安全说明：非完全信任档位下，写副作用的命令会在沙箱中执行（限制文件系统访问范围）。" +
+    "灾难命令（format/shutdown/dd 等）一律拒绝。\n" +
+    "参数：command (完整命令行字符串，如 \"git status\")，cwd (可选工作目录)。",
   enabled: true,
   risk: "shell",
   modes: ["code", "work"],
@@ -426,8 +400,7 @@ toolRegistry.register({
   inputSchema: {
     type: "object",
     properties: {
-      command: { type: "string", description: "可执行文件名（如 'git'、'npm'）或绝对路径" },
-      args: { type: "array", description: "命令行参数，按 argv 数组形式给，例如 ['clone', 'https://...']" },
+      command: { type: "string", description: "完整命令行字符串，如 \"git status\"、\"npm install\"、\"dir | findstr TODO\"" },
       cwd: { type: "string", description: "工作目录绝对路径，可选" },
     },
     required: ["command"],
@@ -451,26 +424,13 @@ toolRegistry.register({
     "不要用于：\n" +
     "- 读取文件内容 → read_file\n" +
     "- 执行任意命令 → run_shell\n" +
-    "- 修改代码 → apply_patch/write_file\n\n" +
+    "- 修改代码 → apply_patch/str_replace/write_file\n\n" +
     "参数：verificationType（验证类型：typecheck/test/build/lint），cwd（可选工作目录）。",
   enabled: true,
   risk: "shell",
   modes: ["code", "work"],
   effectKind: "verification" as const,
   ledgerPolicy: "bypass" as const,
-  completionEvidence: [{ kind: "tool_succeeded" }],
-  soulActionLabel: "代码验证",
-  soulProjection: {
-    projector: "entity_detail",
-    source: "trusted_internal",
-    fields: {
-      title: "verificationType",
-      passed: "passed",
-      exitCode: "exitCode",
-      command: "command",
-      durationMs: "durationMs",
-    },
-  },
   inputSchema: {
     type: "object",
     properties: {
@@ -1132,24 +1092,6 @@ toolRegistry.register({
     },
     required: [],
   },
-  soulActionLabel: "查询天气",
-  soulProjection: {
-    projector: "entity_detail",
-    source: "trusted_internal",
-    fields: {
-      title: "city",
-      region: "region",
-      weather: "weather",
-      temperature: "temperature",
-      feelsLike: "feelsLike",
-      humidity: "humidity",
-      windDirection: "windDirection",
-      windSpeed: "windSpeed",
-    },
-  },
-  completionEvidence: [
-    { kind: "tool_succeeded" },
-  ],
   execute: executeWeather,
 });
 
@@ -1207,8 +1149,6 @@ interface WebSearchOutput {
 
 /** snippet 最大长度 */
 const MAX_SNIPPET_LEN = 500;
-/** projection 最大条数 */
-const MAX_PROJECTION_RESULTS = 8;
 
 /** 截断 snippet */
 function truncateSnippet(text: string): string {
@@ -1418,27 +1358,6 @@ toolRegistry.register({
     },
     required: ["query"],
   },
-  soulActionLabel: "网络搜索",
-  soulProjection: {
-    projector: "entity_list",
-    source: "external_untrusted",
-    itemsPath: "results",
-    fields: {
-      title: "title",
-      url: "url",
-      snippet: "snippet",
-      source: "source",
-    },
-    maxItems: MAX_PROJECTION_RESULTS,
-  },
-  soulErrorMessages: {
-    E_SEARCH_NOT_ENABLED: "联网搜索未启用",
-    E_SEARCH_KEY_MISSING: "搜索 API Key 未配置",
-    E_SEARCH_QUERY_EMPTY: "搜索关键词为空",
-  },
-  completionEvidence: [
-    { kind: "tool_succeeded" },
-  ],
   execute: executeWebSearch,
 });
 

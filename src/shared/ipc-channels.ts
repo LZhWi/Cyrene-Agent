@@ -42,6 +42,7 @@ export const IPC = {
   AGUI_RUN: "agui:run",
   AGUI_EVENT: "agui:event",
   AGUI_CANCEL: "agui:cancel",
+  HARNESS_GET_INTERRUPTED_RUN: "harness:get-interrupted-run",
   SCHEDULER_EVENT: "scheduler:event",
 
   // Code 模式 Git 工作台（renderer 只能读取结构化状态）
@@ -155,6 +156,10 @@ export const IPC = {
   // main → 所有窗口：工作区绑定变更广播
   CHATS_WORKSPACE_CHANGED: "chats:workspace-changed",
 
+  // Review 快照（不可变文件变更审查）
+  // renderer → main：获取指定 Run 的 ReviewSnapshot（不存在时按 halted 补生成）
+  REVIEW_GET: "review:get",
+
 // sticker manager window
 	  STICKERS_MINIMIZE: "stickers:minimize",
 	  STICKERS_CLOSE: "stickers:close",
@@ -261,6 +266,7 @@ export const IPC = {
 
   // token usage statistics
   TOKEN_USAGE_GET: "token-usage:get",
+  TOKEN_USAGE_CLEAR: "token-usage:clear",
 
   // TTS 语音合成
   TTS_UPLOAD: "tts:upload",          // 上传音频文件 → file_id
@@ -296,6 +302,12 @@ export const IPC = {
   PERMISSION_APPROVAL_REQUEST: "permission:approval-request",
   // renderer → main：审批结果回传
   PERMISSION_APPROVAL_RESOLVE: "permission:approval-resolve",
+  // main → renderer：计划模式状态变化广播（任何入口触发都走这条）
+  PLAN_STATE_CHANGED: "plan:state-changed",
+  // renderer → main：设置计划模式 on/off（显式目标，不是 toggle）
+  PLAN_SET_MODE: "plan:set-mode",
+  // renderer → main：查询某会话当前计划模式状态
+  PLAN_GET_STATE: "plan:get-state",
 
   // user choice card (ambiguity resolver)
   // 卡片展示走 AGUI_EVENT 的 CUSTOM 事件（与天气卡片同通道）
@@ -353,6 +365,8 @@ export const IPC = {
   MUSIC_PLAY_TRACK: "music:play-track",
   MUSIC_PLAY_PLAYLIST: "music:play-playlist",
   MUSIC_DETECT_PLAYER: "music:detect-player",
+  MUSIC_OPEN_COMPONENT_DIR: "music:open-component-dir",
+  MUSIC_RECHECK_COMPONENT: "music:recheck-component",
   MUSIC_STATE_CHANGED: "music:state-changed",
   MUSIC_CARD: "music:card",
 

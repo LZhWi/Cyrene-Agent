@@ -7,6 +7,7 @@ import type { UiFont } from "../shared/ui-font";
 import type { ReasoningPreference } from "../shared/reasoning";
 import type { DocumentIndexProgress } from "../main/rag/document-index-queue";
 import type { AguiRunAck } from "../shared/run-terminal";
+import type { ReviewSnapshot } from "../shared/review-types";
 import { getLive2DIpcListenerCounts } from "./live2d-listener-diagnostics";
 import { exposeMusicApi } from "./music";
 import { normalizeChatAppearance, type ChatAppearanceSettings } from "../shared/chat-appearance";
@@ -107,6 +108,7 @@ const aguiApi = {
     attachments?: { name: string; text: string }[];
     imageAttachments?: { name: string; filePath: string; mime?: string }[];
     recoveryContext?: string;
+    resumeFromRunId?: string;
   }) =>
     // Task 2 / C1：返回 AguiRunAck，渲染端可立即拿到 canonical runId。
     // ack.runId 与后续 RUN_STARTED.runId 强一致（由 bridge 注入 options.runId 保证）。
@@ -123,6 +125,9 @@ const aguiApi = {
     return () => ipcRenderer.off(IPC.AGUI_EVENT, listener);
   },
   cancel: (runId?: string) => ipcRenderer.invoke(IPC.AGUI_CANCEL, runId),
+  getInterruptedRun: (sessionId: string) => ipcRenderer.invoke(IPC.HARNESS_GET_INTERRUPTED_RUN, sessionId) as Promise<{
+    runId: string; rounds: number; todoCount: number; updatedAt: number;
+  } | null>,
 };
 
 contextBridge.exposeInMainWorld("agui", aguiApi);
@@ -381,6 +386,23 @@ const settingsApi = {
   // 权限档位
   getPermissionLevel: () => ipcRenderer.invoke(IPC.PERMISSION_GET_LEVEL),
   setPermissionLevel: (level: string) => ipcRenderer.invoke(IPC.PERMISSION_SET_LEVEL, level),
+  // 计划模式开关（renderer → main）：显式设置 on/off
+  setPlanMode: (payload: { conversationId: string; target: "on" | "off"; workspaceRoot?: string }) =>
+    ipcRenderer.invoke(IPC.PLAN_SET_MODE, payload),
+  // 计划模式状态查询（renderer → main）：挂载时调一次拿初始状态
+  getPlanState: (conversationId: string) =>
+    ipcRenderer.invoke(IPC.PLAN_GET_STATE, { conversationId }),
+  // 计划模式状态广播（main → renderer）：任何入口触发的状态切换都走这条
+  onPlanStateChanged: (
+    callback: (payload: { conversationId: string; state: string }) => void,
+  ) => {
+    const listener = (
+      _e: Electron.IpcRendererEvent,
+      payload: { conversationId: string; state: string },
+    ) => callback(payload);
+    ipcRenderer.on(IPC.PLAN_STATE_CHANGED, listener);
+    return () => ipcRenderer.removeListener(IPC.PLAN_STATE_CHANGED, listener);
+  },
 
   // 审批弹窗：主进程在 per-action 档位下推过来的请求（每 60 秒超时自动拒绝）
   onPermissionApprovalRequest: (
@@ -593,6 +615,13 @@ const chatStoreApi = {
 
 contextBridge.exposeInMainWorld("chatStore", chatStoreApi);
 
+// Review 快照：获取指定 Run 的不可变文件变更审查数据
+const reviewApi = {
+  get: (runId: string) => ipcRenderer.invoke(IPC.REVIEW_GET, runId) as Promise<ReviewSnapshot | null>,
+};
+
+contextBridge.exposeInMainWorld("review", reviewApi);
+
 const codeGitApi = {
   getStatus: (sessionId: string) => ipcRenderer.invoke(IPC.CODE_GIT_STATUS, sessionId),
   watch: (sessionId: string) => ipcRenderer.invoke(IPC.CODE_GIT_WATCH, sessionId),
@@ -611,6 +640,7 @@ contextBridge.exposeInMainWorld("codeGit", codeGitApi);
 // Token 用量查询（设置中心 Token 面板用）
 const tokenUsageApi = {
   get: (days: number) => ipcRenderer.invoke(IPC.TOKEN_USAGE_GET, days),
+  clear: () => ipcRenderer.invoke(IPC.TOKEN_USAGE_CLEAR) as Promise<void>,
 };
 contextBridge.exposeInMainWorld("tokenUsage", tokenUsageApi);
 

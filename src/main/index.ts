@@ -75,6 +75,7 @@ import { setLive2dWindowSender } from "./orchestrator/built-in-tools";
 import { registerAllTools } from "./orchestrator/tool-registration";
 import { LspManager } from "./lsp/manager";
 import { initSandbox } from "./orchestrator/sandbox/sandbox-exec";
+import { initPlanPaths, initPlanStateBroadcaster, enterPlanDiscussing, exitPlanMode, getPlanState } from "./orchestrator/plan-mode";
 import { initMcpManager, pruneMcpServersByIds } from "./orchestrator/mcp-manager";
 import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from "./sync-mcp-builtin";
 import { bootstrapPermission } from "./permission/bootstrap";
@@ -165,9 +166,14 @@ import { createGitService } from "./code-git/git-service";
 import type { GitService } from "./code-git/git-service";
 import { resolveGitExecutable } from "./code-git/git-executable";
 import { registerCodeGitIpc } from "./code-git/code-git-ipc";
+import { installSingleInstanceGuard } from "./single-instance";
 
 
 configureDocumentIndexQueue(runDocumentIndexJob);
+
+const isPrimaryCyreneProcess = installSingleInstanceGuard(app, () => {
+  windowManager?.showMainWindow();
+});
 
 async function reconcileUserMemoryIndex(): Promise<void> {
   if (!isUserMemoryVectorStoreReady()) {
@@ -296,7 +302,7 @@ if (loadGeneralSettings().disableGpuElectron) {
   app.commandLine.appendSwitch("enable-unsafe-swiftshader");
 }
 
-app.whenReady().then(async () => {
+if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   // Print the banner once at startup. It is plain text (no color, no log
   // prefix) so it stands apart from logger output as a brand artifact.
   process.stdout.write("\n" + renderBanner() + "\n\n");
@@ -342,6 +348,46 @@ app.whenReady().then(async () => {
   await initSandbox().catch((e) =>
     logger.error(LogTag.Runtime, "[Sandbox] initSandbox failed at startup:", e),
   );
+
+  // 计划模式路径根注入：write_plan / plan.md 读写都基于 userData/plans/<conversationId>/。
+  initPlanPaths(app.getPath("userData"));
+  // 计划模式状态广播：所有状态切换都广播到所有窗口，让 PlanModeToggle 等组件
+  // 能感知任何入口触发的状态变化（模型 enter_plan_mode / 用户开关 / 审批 / 执行完成）。
+  initPlanStateBroadcaster((conversationId, state) => {
+    const payload = { conversationId, state };
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send(IPC.PLAN_STATE_CHANGED, payload);
+    }
+  });
+  // 计划模式开关 IPC：renderer 调 setPlanMode({ conversationId, target, workspaceRoot? })
+  //   - target="on"  → 进入 PLAN_DISCUSSING（已激活时 no-op；带 workspaceRoot 时计划文件落工作区 .cyrene/）
+  //   - target="off" → 退出回 NORMAL（EXECUTING 中拒绝退出）
+  ipcMain.handle(IPC.PLAN_SET_MODE, (_event, payload: { conversationId?: string; target?: "on" | "off"; workspaceRoot?: string }) => {
+    const conversationId = payload?.conversationId;
+    const target = payload?.target;
+    if (!conversationId) return { ok: false, reason: "缺少 conversationId" };
+    if (target !== "on" && target !== "off") return { ok: false, reason: "target 必须是 on/off" };
+    const current = getPlanState(conversationId);
+    if (target === "on") {
+      if (current !== "NORMAL") return { ok: true, state: current }; // 已激活：no-op
+      const t = enterPlanDiscussing(conversationId, payload.workspaceRoot);
+      if (!t.ok) return { ok: false, reason: t.reason, state: current };
+      return { ok: true, state: getPlanState(conversationId) };
+    }
+    // target === "off"
+    if (current === "EXECUTING") {
+      return { ok: false, reason: "计划执行中，不可手动退出", state: current };
+    }
+    if (current === "NORMAL") return { ok: true, state: current };
+    exitPlanMode(conversationId);
+    return { ok: true, state: getPlanState(conversationId) };
+  });
+  // 计划模式状态查询 IPC：renderer 挂载时调一次拿初始状态
+  ipcMain.handle(IPC.PLAN_GET_STATE, (_event, payload: { conversationId?: string }) => {
+    const conversationId = payload?.conversationId;
+    if (!conversationId) return { state: "NORMAL" as const };
+    return { state: getPlanState(conversationId) };
+  });
 
   // 工具注册：集中到一个显式入口，取代 index.ts 中的副作用 import
   lspManager = new LspManager({
@@ -470,6 +516,7 @@ app.whenReady().then(async () => {
   if (generalSettings.tasksVisible) manager.createTasksWindow();
   tray = createTray({
     toggleMainWindow: () => manager.toggleMainWindow(),
+    createReactChatWindow: () => manager.createReactChatWindow(),
     createSidebarWindow: () => manager.createSidebarWindow(),
     createSettingsWindow: () => manager.createSettingsWindow(),
   });
