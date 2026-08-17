@@ -15,7 +15,6 @@ export interface TaskAgentProfile {
   description: string;
   systemPrompt: string;
   allowedToolIds: "inherit" | readonly string[];
-  maxRounds: number;
   timeoutMs: number;
 }
 
@@ -31,7 +30,6 @@ const profiles: Record<TaskSubagentType, TaskAgentProfile> = {
       "先使用已给上下文和工具验证，再报告结论、修改或产物路径。",
     ].join("\n"),
     allowedToolIds: "inherit",
-    maxRounds: 30,
     timeoutMs: 0,
   },
   document: {
@@ -53,7 +51,6 @@ const profiles: Record<TaskSubagentType, TaskAgentProfile> = {
       "read_file",
       "list_dir",
     ],
-    maxRounds: 20,
     timeoutMs: 0,
   },
   search: {
@@ -67,7 +64,6 @@ const profiles: Record<TaskSubagentType, TaskAgentProfile> = {
       "无法验证的结论必须标明不确定性。",
     ].join("\n"),
     allowedToolIds: ["web_search", "fetch_url"],
-    maxRounds: 20,
     timeoutMs: 0,
   },
 };

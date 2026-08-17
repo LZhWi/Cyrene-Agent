@@ -153,6 +153,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         getEnabled: () => rawDeps.skillRegistry.getEnabled() as unknown[],
         getEnabledForMode: (mode, overrides) =>
           rawDeps.skillRegistry.getEnabledForMode(mode, overrides) as unknown[],
+        getBody: (id) => rawDeps.skillRegistry.getBody(id),
       },
       resolveSlashActivation: ((messages, mode, overrides) =>
         resolveSlashActivation(messages as any, mode, overrides)) as BuildOptionsDeps["resolveSlashActivation"],
@@ -165,8 +166,8 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         buildAlwaysOnContext(userText, messages as any)) as BuildOptionsDeps["buildAlwaysOnContext"],
       buildRelationshipContext,
       buildModePrompt,
-      buildToolSystemPrompt: ((mode, enabledTools, isOptimizedFirstRound) =>
-        buildToolSystemPrompt(mode, enabledTools as ToolDefinition[], isOptimizedFirstRound)) as BuildOptionsDeps["buildToolSystemPrompt"],
+      buildToolSystemPrompt: ((mode, enabledTools) =>
+        buildToolSystemPrompt(mode, enabledTools as ToolDefinition[])) as BuildOptionsDeps["buildToolSystemPrompt"],
       buildSoulSystemBasePrompt,
       resolveRunCapabilities: ({ mode, activeSearchBackend, toolModeOverrides, skillModeOverrides }) => resolveRunCapabilities({
         mode, activeSearchBackend, toolModeOverrides, skillModeOverrides,
@@ -201,11 +202,6 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
           return { ok: false, error: err?.message || String(err) };
         }
       },
-      loadActionGateSystemPrompt: () => loadPromptFile("action_gate_system.md"),
-      loadNativeFcSystemPrompt: () => loadPromptFile("native_fc_system.md"),
-      loadAskSystemPrompt: () => loadPromptFile("ask_system.md"),
-      loadAskPersonaPrompt: () => loadPromptFile("ask_persona.md"),
-      loadAskQuotesPrompt: () => loadPromptFile("ask_quotes.md"),
       prepareCitaTurn: (input) => rawDeps.citaService.prepareTurn(input),
       buildChatSocialContext: async ({ conversationId, query }) => {
         const now = Date.now();

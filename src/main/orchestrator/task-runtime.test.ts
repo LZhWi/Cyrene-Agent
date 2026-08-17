@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskSessionStore } from "../tasks/task-session-store";
-import { createTaskExecutor } from "./task-runtime";
+import { buildChildPromptLayers, createTaskExecutor } from "./task-runtime";
 import type { ToolDefinition } from "./tool-registry";
 import { TaskCharacterLeasePool } from "../tasks/task-character-pool";
 import type { TaskDelegationPresentation } from "../../shared/task-session";
@@ -40,6 +40,13 @@ afterEach(() => {
 });
 
 describe("TaskRuntime", () => {
+  it("keeps the child role stable and workspace metadata session-scoped", () => {
+    const layers = buildChildPromptLayers(parent, "SUBAGENT_PROFILE");
+    expect(layers.stablePrefix).toBe("SUBAGENT_PROFILE");
+    expect(layers.sessionPrefix).toContain("E:\\project");
+    expect(layers.sessionPrefix).toContain("会话模式：code");
+  });
+
   it("creates an isolated child Harness run and persists its final result", async () => {
     const store = createStore();
     const runHarness = vi.fn(async (input: any) => ({
@@ -62,6 +69,7 @@ describe("TaskRuntime", () => {
     expect(runHarness).toHaveBeenCalledWith(expect.objectContaining({
       messages: [{ role: "user", content: "检查取消传播并报告证据。" }],
       tools: [expect.objectContaining({ id: "read_file" })],
+      config: expect.not.objectContaining({ maxRounds: expect.anything() }),
       toolContext: expect.objectContaining({
         runId: "child-run-1",
         resolvedWorkspaceRoot: "E:\\project",

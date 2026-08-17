@@ -10,6 +10,8 @@ import type { ToolContext } from "./tool-context";
 import { taskCharacterLeasePool, type TaskCharacterLeasePool } from "../tasks/task-character-pool";
 import type { TaskDelegationPresentation } from "../../shared/task-session";
 import type { RunCapabilities } from "./run-capabilities";
+import type { PromptLayers } from "./prompt-layers";
+import type { ToolOutputStore } from "./harness/tool-output/tool-output-store";
 
 export interface TaskExecuteRequest {
   description: string;
@@ -38,13 +40,14 @@ export interface TaskRuntimeParentContext {
   checkPermission?: HarnessInput["checkPermission"];
   includeInteractiveTools?: boolean;
   permissionMode?: import("./cyrene-agent").CyreneRunOptions["permissionMode"];
+  toolOutputStore?: ToolOutputStore;
 }
 
 function taskStatus(result: HarnessResult): { status: Exclude<TaskSessionStatus, "running" | "interrupted">; error?: { code: string; message: string } } {
   const terminal = result.terminal?.status;
   if (terminal === "cancelled" || result.terminateReason === "cancelled") return { status: "cancelled" };
-  if (terminal === "timeout" || result.terminateReason === "timeout" || result.terminateReason === "max_rounds") {
-    return { status: "failed", error: { code: "TASK_TIMEOUT", message: "子任务超过执行时间或轮数上限" } };
+  if (terminal === "timeout" || result.terminateReason === "timeout") {
+    return { status: "failed", error: { code: "TASK_TIMEOUT", message: "子任务超过执行时间上限" } };
   }
   if (terminal === "runtime_error" || result.terminateReason === "error") {
     return { status: "failed", error: { code: "TASK_RUNTIME_ERROR", message: result.finalAnswer || "子任务运行失败" } };
@@ -52,11 +55,15 @@ function taskStatus(result: HarnessResult): { status: Exclude<TaskSessionStatus,
   return { status: "completed" };
 }
 
-function childSystemPrompt(parent: TaskRuntimeParentContext, profilePrompt: string): string {
+export function buildChildPromptLayers(parent: TaskRuntimeParentContext, profilePrompt: string): PromptLayers {
   const workspace = parent.resolvedWorkspaceRoot
     ? `可信工作目录：${parent.resolvedWorkspaceRoot}`
     : "当前没有绑定工作目录。";
-  return `${profilePrompt}\n\n${workspace}\n会话模式：${parent.mode}`;
+  return {
+    stablePrefix: profilePrompt,
+    sessionPrefix: `${workspace}\n会话模式：${parent.mode}`,
+    mode: parent.mode,
+  };
 }
 
 export function createTaskExecutor(input: {
@@ -109,18 +116,21 @@ export function createTaskExecutor(input: {
     input.onLifecycle?.({ ...presentation, status: "running" });
 
     try {
+      const promptLayers = buildChildPromptLayers(input.parent, profile.systemPrompt);
       const result = await runHarness({
-        systemPrompt: childSystemPrompt(input.parent, profile.systemPrompt),
+        systemPrompt: promptLayers.stablePrefix,
+        promptLayers,
         messages: session.messages as ChatMessage[],
         tools: resolveTaskTools(profile, input.parent.tools),
         vendorConfig: input.parent.vendorConfig,
-        config: { maxRounds: profile.maxRounds, totalTimeoutMs: profile.timeoutMs },
+        config: { totalTimeoutMs: profile.timeoutMs },
         initialState: {
           todoItems: session.todoItems,
           uncertainEffects: [],
         },
         signal: input.parent.signal,
         toolContext,
+        toolOutputStore: input.parent.toolOutputStore,
         checkPermission: input.parent.checkPermission,
         includeInteractiveTools: input.parent.includeInteractiveTools,
         onEvent: (event) => {

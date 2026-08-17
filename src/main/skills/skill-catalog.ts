@@ -4,44 +4,32 @@
 import type { SkillEntry } from "./types";
 
 /**
- * 歧义识别策略。
- * 不"制造"歧义，而是"识别"用户需求中天然存在的多解读空间。
- * 用户说了模糊风格词（美观/好看/专业）但没给具体要求 → 弹卡片让用户选。
- * 用户说了"你自己决定" → 不弹，直接用默认样式。
- * 用户给了明确细节 → 不弹，直接做。
+ * Skill 匹配判断流程（流程式清单头）。
+ * 针对 Recall 不足（该调用没调用）的修复：陈述式清单让模型跳过匹配判断，
+ * 流程式规则强制模型在选择基础工具前逐项做语义匹配。
+ * 匹配标准是「Skill 能力是否适用于完成当前任务」（semantic routing），
+ * 不是关键词重合（keyword routing 会把 Precision 搞坏）。
  */
-const AMBIGUITY_POLICY = [
+const SKILL_SELECTION_HEADER = [
+  "## Skill 选择",
+  "以下 Skill 均为用户当前明确启用的能力。",
   "",
-  "## 歧义识别与处理策略",
+  "在选择基础工具或直接回复用户之前，必须先执行 Skill 匹配判断：",
   "",
-  "### 何时弹卡片（ask_user）",
-  "当用户**主动**提到风格/样式相关词（「美观」「好看」「专业」「漂亮」「彩色」「规整」等）",
-  "且**没有给出具体要求**时，说明需求存在多解读空间。此时应调用 ask_user 让用户选择具体方向，再按选择执行。",
+  "1. 逐项检查下方 Skill 的 description。",
+  "2. 判断该 Skill 描述的能力是否适用于完成当前用户任务。",
+  "3. 如果一个或多个 Skill 适用，必须先调用 invoke_skill(skill_id) 加载对应完整规则，再继续任务。",
+  "4. 不要仅因为你自己已经知道如何完成任务，就跳过适用的 Skill。",
+  "5. 如果没有任何 Skill 适用，则正常使用基础工具或直接回复。",
   "",
-  "示例：",
-  "- 「做个美观的 Excel」→ 弹卡片（美观可以是简洁商务/彩色展示/财务报表等多种解读）",
-  "- 「弄得专业一点」→ 弹卡片（专业可以有多种风格）",
-  "- 「做个漂亮点的报告」→ 弹卡片（漂亮可以有多种解读）",
-  "",
-  "### 何时不弹卡片",
-  "- 用户说「你自己决定」「看着办」→ 用户已授权，直接用默认样式，不要询问",
-  "- 用户没提任何样式词（「做个表」「导出 Excel」）→ 用默认样式直接做",
-  "- 用户给了明确细节（「深蓝表头白色字」「冻结首行」「加边框」）→ 直接按要求做",
-  "- 用户要求的是功能而非样式（「加公式」「编辑已有文件」）→ 按功能需求执行",
-  "",
-  "### 工具选择",
-  "- 简单表格 / 数据整理 → 直接用 write_excel（已内置美观样式），不要走 invoke_skill(xlsx)",
-  "- 简单文档 / 报告 / 总结 → 直接用 write_word（已内置美观样式），不要走 invoke_skill(docx)",
-  "- 用户通过 ask_user 选择了风格 → 用对应 write_* 工具的 style 参数直接生成，不要走 skill 手写 XML",
-  "- write_excel 支持 5 种主题：default / dark / colorful / simple-business / financial",
-  "- write_word 支持 5 种主题：default / academic / clean / elegant / formal",
-  "- 用户给了自定义颜色要求（如「粉色表头」「深灰背景」）→ 用 write_excel 的 colors 参数传 ARGB hex 值，你负责把颜色名翻译成 hex",
-  "- 只有用户明确要求「公式」「财务格式标准」「条件格式」「编辑已有 xlsx」「页眉页脚/目录/图片」等具体高级需求时，才考虑 invoke_skill",
+  "Skill 清单：",
 ].join("\n");
 
 /**
  * 生成注入 system prompt 的 skill 清单段（拼在人格层之后）。
  * 只含 enabled skill。返回空串表示无可用 skill（调用方据此跳过拼接）。
+ * 职责边界：清单只负责「什么时候值得加载某 Skill」；
+ * 真正执行时的边界情况（如 xlsx/docx 的歧义处理规则）由各自 SKILL.md 正文负责。
  */
 export function buildSkillCatalog(skills: SkillEntry[]): string {
   const enabled = skills.filter(s => s.enabled);
@@ -53,12 +41,7 @@ export function buildSkillCatalog(skills: SkillEntry[]): string {
       : "";
     return `- ${s.id}: ${s.description}${toolsTag}${activationTag}`;
   });
-  return [
-    "## 可用 Skill",
-    "当未自动注入的 skill 适用于当前任务时，先调用 invoke_skill(skill_id) 取详细指令；标记为自动注入的 skill 已在后文提供完整规则，无需再次调用 invoke_skill。",
-    "",
-    ...lines,
-  ].join("\n") + AMBIGUITY_POLICY;
+  return [SKILL_SELECTION_HEADER, ...lines].join("\n");
 }
 
 /**

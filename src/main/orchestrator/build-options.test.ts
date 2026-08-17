@@ -30,6 +30,7 @@ function createBuildDeps(): BuildOptionsDeps {
       getEnabledForMode(this: { getEnabled(): ReadonlyArray<unknown> }, _mode: import("../skills/types").SkillMode) {
         return this.getEnabled()
       },
+      getBody: () => null,
     },
     resolveSlashActivation: () => "",
     buildToneInjection: async () => "",
@@ -52,11 +53,6 @@ function createBuildDeps(): BuildOptionsDeps {
     },
     normalizeChatMessages: (raw) => raw as never,
     chatRequestTimeoutMs: 1000,
-    loadActionGateSystemPrompt: () => "",
-    loadNativeFcSystemPrompt: () => "",
-    loadAskSystemPrompt: () => "ASK_SYSTEM",
-    loadAskPersonaPrompt: () => "ASK_PERSONA",
-    loadAskQuotesPrompt: () => "ASK_QUOTES",
   }
 }
 
@@ -72,7 +68,7 @@ describe("build-options", () => {
     }, deps);
     expect(result.options.soulSystemBaseContent).toContain(`[MODE:${mode}]`);
   });
-  it("builds the lightweight Ask Soul prompt in the approved order with trusted identity only", async () => {
+  it("does not include legacy Ask Soul prompt fields", async () => {
     const deps = createBuildDeps()
     deps.loadUserProfile = () => ({
       nickname: "小王",
@@ -91,12 +87,8 @@ describe("build-options", () => {
       trustedAskUserProfile?: Record<string, unknown>
     }
 
-    expect(askOptions.askSystemContent).toBe("ASK_SYSTEM\n\nASK_PERSONA\n\nASK_QUOTES")
-    expect(askOptions.trustedAskUserProfile).toEqual({
-      nickname: "小王",
-      callPreference: "伙伴",
-      gender: "male",
-    })
+    expect(askOptions.askSystemContent).toBeUndefined()
+    expect(askOptions.trustedAskUserProfile).toBeUndefined()
   })
 
   it("passes the trusted runtime environment to the agent decision stages", async () => {
@@ -161,7 +153,7 @@ describe("build-options", () => {
 
     expect(result.options.soulSystemBaseContent).toContain("你正在通过微信回复用户")
     expect(result.options.soulSystemBaseContent).toContain("SOUL_SYSTEM_BASE")
-    expect(result.options.soulSystemBaseContent).toContain("RELATIONSHIP")
+    expect(result.options.soulRuntimeContext).toContain("RELATIONSHIP")
     expect(result.options.toolSystemContent).toBe("TOOL_SYSTEM")
   })
 
@@ -200,11 +192,11 @@ describe("build-options", () => {
 
     expect(result.options.messages[0].content).toContain("<internal_context>用户发送这条消息的时间：2026-07-12 20:00")
     expect(result.options.messages[2].content).toContain("<internal_context>用户发送这条消息的时间：2026-07-13 11:00")
-    expect(result.options.soulSystemBaseContent).toContain("## Internal Context Policy")
+    expect(result.options.soulRuntimeContext).toContain("## Internal Context Policy")
     expect(result.options.toolSystemContent).toContain("## Internal Context Policy")
-    expect(result.options.soulSystemBaseContent).toContain("[对话时间信息]")
-    expect(result.options.soulSystemBaseContent).toContain("距离上一条有效聊天消息：约 14 小时 58 分钟")
-    expect(result.options.soulSystemBaseContent.match(/距离上一条有效聊天消息/g)).toHaveLength(1)
+    expect(result.options.soulRuntimeContext).toContain("[对话时间信息]")
+    expect(result.options.soulRuntimeContext).toContain("距离上一条有效聊天消息：约 14 小时 58 分钟")
+    expect(result.options.soulRuntimeContext?.match(/距离上一条有效聊天消息/g)).toHaveLength(1)
     expect(result.options.toolSystemContent).not.toContain("[对话时间信息]")
   })
 
@@ -237,7 +229,7 @@ describe("build-options", () => {
     expect(result.options.executionMode).toBe("chat")
     expect(result.options.tools).toEqual([])
     expect(result.options.citaContextBlock).toBe("")
-    expect(result.options.soulSystemBaseContent).toContain("STYLE_PROMPT:lively")
+    expect(result.options.soulRuntimeContext).toContain("STYLE_PROMPT:lively")
     expect(result.options.toolSystemContent).not.toContain("STYLE_PROMPT:lively")
   })
 
@@ -299,7 +291,7 @@ describe("build-options", () => {
       query: "message-13",
     })
     expect(result.options.messages).toHaveLength(12)
-    expect(result.options.soulSystemBaseContent).toContain("用户喜欢海边")
+    expect(result.options.soulRuntimeContext).toContain("用户喜欢海边")
     expect(result.options.socialContext).toMatchObject({
       enabled: true,
       conversationId: "chat-a",
@@ -391,10 +383,11 @@ describe("build-options", () => {
       executionMode: "work",
     }, deps)
 
-    for (const result of [chat, work]) {
-      expect(result.options.soulSystemBaseContent).toContain("STYLE_PROMPT:sweet")
-      expect(result.options.soulSampling).toEqual({ temperature: 0.82, frequencyPenalty: 0.2 })
-    }
+    // chat 保留 style prompt 与采样；work/code 完全不受 style 影响，走厂商默认
+    expect(chat.options.soulRuntimeContext).toContain("STYLE_PROMPT:sweet")
+    expect(chat.options.soulSampling).toEqual({ temperature: 0.82, frequencyPenalty: 0.2 })
+    expect(work.options.soulRuntimeContext).not.toContain("STYLE_PROMPT:sweet")
+    expect(work.options.soulSampling).toBeUndefined()
     expect(chat.options.executionMode).toBe("chat")
     expect(work.options.executionMode).toBe("work")
   })
@@ -456,8 +449,9 @@ describe("build-options", () => {
     expect(deps.prepareCitaTurn).toHaveBeenCalledTimes(1)
     expect(result.options.conversationId).toBe("conversation-1")
     expect(result.options.messages.at(-1)).toEqual(originalUserMessage)
-    expect(result.options.toolSystemContent).toContain("[CITA_CONTEXT]")
-    expect(result.options.toolSystemContent).toContain("music-candidate-1")
+    expect(result.options.toolSystemContent).not.toContain("[CITA_CONTEXT]")
+    expect(result.options.citaContextBlock).toContain("[CITA_CONTEXT]")
+    expect(result.options.citaContextBlock).toContain("music-candidate-1")
     expect(result.options.originalQuery).toBe("第二首")
     expect(result.options.contextualizedQuery).toBe("播放当前网易云日推第二首")
     expect(result.options.citaContextBlock).toContain("music-candidate-1")
@@ -503,7 +497,7 @@ describe("build-options", () => {
 
     expect(result.options.toolSystemContent).toContain("AUTO_MUSIC_RULES")
     expect(result.options.soulSystemBaseContent).not.toContain("AUTO_MUSIC_RULES")
-    expect(result.options.soulSystemBaseContent).toContain("SOUL_MUSIC_REPLY_RULES")
+    expect(result.options.soulRuntimeContext).toContain("SOUL_MUSIC_REPLY_RULES")
   })
 
   it("attaches direct image content blocks to the latest user message", async () => {
@@ -534,6 +528,25 @@ describe("build-options", () => {
     ])
     // 第一期：原始 messages 不含 system，所以 messages[0] 就是首条用户消息
     expect(result.options.messages[0].content).toBe("上一轮")
+  })
+
+  it("uses a vision caption instead of sending image data when the primary model is not multimodal", async () => {
+    const deps = createBuildDeps()
+    deps.loadModelSettings = () => ({
+      provider: "test", baseUrl: "https://example.test", model: "text-only", apiKey: "k", multimodal: false,
+    })
+    deps.captionImageForFallback = async () => ({ ok: true, caption: "截图显示一个红色错误提示" })
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "这张图报什么错？" }],
+      imageAttachments: [{ name: "error.png", filePath: "C:\\tmp\\error.png", mime: "image/png" }],
+    }, deps)
+
+    const latestUser = result.options.messages.at(-1)
+    expect(latestUser?.content).toBe(
+      "这张图报什么错？\n\n【图片视觉信息】\n以下内容是视觉模型对用户本轮图片的观察结果，请将其视为你已经看到的图片内容；如果某张图分析失败，请不要编造。\n- error.png：截图显示一个红色错误提示",
+    )
+    expect(result.options.imageCaptionFallback).toBeUndefined()
   })
 
   it("builds caption fallback messages for direct image send failures", async () => {

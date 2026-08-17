@@ -21,7 +21,7 @@ describe("buildSkillCatalog", () => {
 
   it("含标题 + 每条 id: description + tools 标注", () => {
     const out = buildSkillCatalog([e("write-expense-report", "生成支出报告", ["query_expense", "write_excel"])]);
-    expect(out).toContain("可用 Skill");
+    expect(out).toContain("Skill 选择");
     expect(out).toContain("invoke_skill");
     expect(out).toContain("- write-expense-report: 生成支出报告");
     expect(out).toContain("[tools: query_expense, write_excel]");

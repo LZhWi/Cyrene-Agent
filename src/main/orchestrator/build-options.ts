@@ -20,6 +20,8 @@
 //   sticker 文本预处理 / stickerEmbeddingIndex / getEmbeddingProvider / loadStickerSettings
 //
 // 这些全部塞到 BuildOptionsDeps 里。dispatcher 在 Phase 1 注入同样的 deps 即可。
+import { existsSync } from "fs";
+import { basename } from "path";
 import {
   resolveExecutionMode,
   type CyreneRunOptions,
@@ -50,12 +52,13 @@ import type {
   SocialAtom,
   SocialExtractionInput,
 } from "../social-context/types";
-import type { TrustedAskUserProfile } from "../../shared/ask-clarification";
 import type { ConversationMode } from "../../shared/chat-types";
 import type { SkillRouteInfo } from "./cyrene-agent";
 import { filterToolsBySearchBackend, type SearchBackend } from "./search-backend-filter";
 import type { RunCapabilities } from "./run-capabilities";
 import { buildStickerEmbeddingQuery } from "../sticker-query";
+import { isPlanReadOnly, getPlanState } from "./plan-mode";
+import { policyFor, type ToolRiskLevel } from "../permission-policy";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
@@ -74,6 +77,8 @@ export interface BuildOptionsDeps {
     getEnabled(): ReadonlyArray<unknown>;
     /** 按会话模式 + 用户覆盖层过滤的启用 skill 列表（三模适配层入口）。 */
     getEnabledForMode(mode: import("../skills/types").SkillMode, overrides?: SkillModeOverrides): ReadonlyArray<unknown>;
+    /** 懒加载某 skill 的 SKILL.md 正文（去 frontmatter）。用于 plan mode 条件注入 cyrene-plan-mode body。 */
+    getBody(id: string): string | null;
   };
   resolveSlashActivation: (
     messages: ReadonlyArray<{ role: string; content?: string }>,
@@ -95,8 +100,8 @@ export interface BuildOptionsDeps {
   buildRelationshipContext: () => Promise<string>;
   /** 明确按模式构建基础人设，不再通过 style 文件名猜模式。 */
   buildModePrompt?: (mode: ConversationMode) => string;
-  /** 工具阶段 system prompt。仅含工具调度规则 + 自动生成的工具目录。 */
-  buildToolSystemPrompt: (mode: ConversationMode, enabledTools: ReadonlyArray<unknown>, isOptimizedFirstRound?: boolean) => string;
+  /** 工具阶段 system prompt。仅含自动生成的工具目录。 */
+  buildToolSystemPrompt: (mode: ConversationMode, enabledTools: ReadonlyArray<unknown>) => string;
   /** 第一期：Soul 阶段使用的基础 system prompt。工具结果在 FC 循环 Soul 阶段执行前动态追加。 */
   buildSoulSystemBasePrompt: (styleFile: string) => string;
   resolveRunCapabilities?: (input: {
@@ -119,11 +124,6 @@ export interface BuildOptionsDeps {
   normalizeChatMessages: (raw: ReadonlyArray<unknown>) => ChatMessage[];
   chatRequestTimeoutMs: number;
   captionImageForFallback?: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
-  loadActionGateSystemPrompt: () => string;
-  loadNativeFcSystemPrompt: () => string;
-  loadAskSystemPrompt: () => string;
-  loadAskPersonaPrompt: () => string;
-  loadAskQuotesPrompt: () => string;
   prepareCitaTurn?: (input: {
     conversationId: string;
     turnId: string;
@@ -198,11 +198,15 @@ export interface ModelSettingsLite {
   runtimeSync?: string;
   stickerEnabled?: boolean;
   stickerSimilarityThreshold?: number;
+  /** 默认为 true；用户显式关闭时，图片先交给独立视觉模型转成文字。 */
+  multimodal?: boolean;
   /** 上下文窗口大小（Token）。来自 ModelSettings.contextWindowTokens。 */
   contextWindowTokens?: number;
 }
 
 export interface StyleSettingsLite {
+  /** Harness 安全工具并发设置；旧测试/旧配置可省略。 */
+  maxParallelToolCalls?: unknown;
   currentStyleId?: unknown;
   customStyle?: unknown;
   chatSocialContextEnabled?: unknown;
@@ -305,41 +309,51 @@ function withDirectImageAttachments(messages: ChatMessage[], input: AguiRunInput
   return next;
 }
 
+async function withCaptionedImageAttachments(
+  messages: ChatMessage[],
+  input: AguiRunInput,
+  deps: BuildOptionsDeps,
+): Promise<ChatMessage[]> {
+  const images = input.imageAttachments?.filter((image) =>
+    typeof image?.filePath === "string" && typeof image?.name === "string",
+  ) ?? [];
+  if (images.length === 0 || !deps.captionImageForFallback) return messages;
+
+  const captionedMessages = messages.map((message) => ({ ...message }));
+  const latestUserIndex = captionedMessages.map((message) => message.role).lastIndexOf("user");
+  if (latestUserIndex < 0) return captionedMessages;
+
+  const current = captionedMessages[latestUserIndex];
+  const text = contentToText(current.content);
+  const imageLines: string[] = [];
+  for (const image of images) {
+    const result = await deps.captionImageForFallback(image.filePath);
+    if (result.ok && result.caption) {
+      imageLines.push(`- ${image.name}：${result.caption}`);
+    } else {
+      imageLines.push(`- ${image.name}：图片分析失败：${result.error || "图片分析失败"}。请诚实说明暂时无法看清这张图。`);
+    }
+  }
+
+  const imageContext = "【图片视觉信息】\n以下内容是视觉模型对用户本轮图片的观察结果，请将其视为你已经看到的图片内容；如果某张图分析失败，请不要编造。\n" + imageLines.join("\n");
+  captionedMessages[latestUserIndex] = {
+    ...current,
+    content: text ? `${text}\n\n${imageContext}` : imageContext,
+  };
+  return captionedMessages;
+}
+
 function buildImageCaptionFallbackMessages(
   systemContent: string,
   messages: ChatMessage[],
   input: AguiRunInput,
   deps: BuildOptionsDeps,
 ): (() => Promise<ChatMessage[]>) | undefined {
-  const images = input.imageAttachments?.filter((image) =>
-    typeof image?.filePath === "string" && typeof image?.name === "string",
-  ) ?? [];
-  if (images.length === 0 || !deps.captionImageForFallback) return undefined;
-
-  return async () => {
-    const fallbackMessages = messages.map((message) => ({ ...message }));
-    const latestUserIndex = fallbackMessages.map((message) => message.role).lastIndexOf("user");
-    if (latestUserIndex < 0) return [{ role: "system", content: systemContent }, ...fallbackMessages];
-
-    const current = fallbackMessages[latestUserIndex];
-    const text = contentToText(current.content);
-    const imageLines: string[] = [];
-    for (const image of images) {
-      const result = await deps.captionImageForFallback!(image.filePath);
-      if (result.ok && result.caption) {
-        imageLines.push(`- ${image.name}：${result.caption}`);
-      } else {
-        imageLines.push(`- ${image.name}：图片分析失败：${result.error || "图片分析失败"}。请诚实说明暂时无法看清这张图。`);
-      }
-    }
-
-    const imageContext = "【图片视觉信息】\n以下内容是视觉模型对用户本轮图片的观察结果，请将其视为你已经看到的图片内容；如果某张图分析失败，请不要编造。\n" + imageLines.join("\n");
-    fallbackMessages[latestUserIndex] = {
-      ...current,
-      content: text ? `${text}\n\n${imageContext}` : imageContext,
-    };
-    return [{ role: "system", content: systemContent }, ...fallbackMessages];
-  };
+  if (!input.imageAttachments?.length || !deps.captionImageForFallback) return undefined;
+  return async () => [
+    { role: "system", content: systemContent },
+    ...await withCaptionedImageAttachments(messages, input, deps),
+  ];
 }
 
 function isStyleId(value: unknown): value is StyleId {
@@ -364,6 +378,23 @@ function resolveRunStyleId(input: AguiRunInput, saved: StyleSettingsLite): Style
   if (legacyStyleId) return legacyStyleId;
   if (isStyleId(saved.currentStyleId)) return saved.currentStyleId;
   return normalizeStyleId(undefined);
+}
+
+/**
+ * 读取工作区静态元数据（项目名 + 是否 git 仓库）。
+ * 刻意只提供这两项稳定事实，不注入 branch 等动态状态——branch 会随
+ * git switch 变化，进了 stable prefix 会打穿提示词缓存；需要时模型自己跑
+ * git status 即可。.git 存在性检查同时兼容普通仓库（目录）和 worktree/submodule（文件）。
+ */
+function readWorkspaceMeta(root: string): { projectName: string; isGitRepo: boolean } {
+  try {
+    return {
+      projectName: basename(root),
+      isGitRepo: existsSync(root + "/.git"),
+    };
+  } catch {
+    return { projectName: "", isGitRepo: false };
+  }
 }
 
 function buildStylePromptBlock(markdown: string): string {
@@ -409,6 +440,7 @@ export async function buildAgentRunOptions(
     ? deps.getWorkspaceBinding?.(conversationId)
     : undefined;
   const resolvedWorkspaceRoot = workspaceBinding?.workspaceRoot;
+  const workspaceMeta = resolvedWorkspaceRoot ? readWorkspaceMeta(resolvedWorkspaceRoot) : undefined;
   if (resolvedWorkspaceRoot) {
     console.log("[BuildOptions] workspace binding loaded:",
       "conversationId=" + conversationId.slice(0, 8) + "...",
@@ -539,18 +571,36 @@ export async function buildAgentRunOptions(
     attachmentContext = `\n\n【本轮附件内容】\n${parts.join("\n\n")}`;
   }
 
-  const styleId = resolveRunStyleId(input, styleSettings);
-  const stylePromptBlock = buildStylePromptBlock(deps.readStylePrompt(styleId));
-  const soulSampling = deps.resolveSoulSampling({
-    styleId,
-    settings,
-    customStyle: styleSettings.customStyle as CustomStyleConfig,
-  });
-  // 运行模式只决定基础 system；表达 style 始终单独注入 Soul。
   // 优先使用 AguiBridge 注入的真实会话模式，fallback 到执行模式（兼容旧调用方）。
   const resolvedMode: ConversationMode = input.mode ?? (isChatMode ? "chat" : "work");
   const basePromptMode = resolvedMode;
-  const enabledTools = deps.toolRegistry.getEnabledToolsForMode(resolvedMode, styleSettings.toolModeOverrides);
+
+  const styleId = resolveRunStyleId(input, styleSettings);
+  const isTaskMode = resolvedMode === "work" || resolvedMode === "code";
+  // work/code 完全不受 style 影响：不注入风格 prompt，采样走厂商默认。
+  // chat/learn + default 也走厂商默认采样（不自己设 0.65）；
+  // 只有显式选了非 default 的具体 style 才用预设采样。
+  const stylePromptBlock = isTaskMode
+    ? ""
+    : buildStylePromptBlock(deps.readStylePrompt(styleId));
+  const soulSampling = (!isTaskMode && styleId !== "default")
+    ? deps.resolveSoulSampling({
+      styleId,
+      settings,
+      customStyle: styleSettings.customStyle as CustomStyleConfig,
+    })
+    : undefined;
+  const modeEnabledTools = deps.toolRegistry.getEnabledToolsForMode(resolvedMode, styleSettings.toolModeOverrides);
+  // 计划模式只读强制（第一层，设计稿 §5）：PLAN_DISCUSSING/PLAN_REVIEW 期间
+  // 工具列表在 run 组装时就收敛到 read-only 策略允许的风险级。
+  // 仅 code 模式参与计划状态机（work/chat 会话恒为 NORMAL，不触发过滤）。
+  const conversationIdForPlan = conversationId;
+  const planReadOnly = resolvedMode === "code" && isPlanReadOnly(conversationIdForPlan);
+  const enabledTools = planReadOnly
+    ? (modeEnabledTools as readonly ToolDefinition[]).filter(
+      (t) => policyFor("read-only", (t as ToolDefinition & { risk?: ToolRiskLevel }).risk ?? "safe") === "allow",
+    )
+    : modeEnabledTools;
 
   // 三模适配层：skill 按 resolvedMode 过滤，chat 模式不暴露 skill。
   let enabledSkills = resolvedMode === "chat"
@@ -559,6 +609,19 @@ export async function buildAgentRunOptions(
   let skillCatalog = deps.buildSkillCatalog(enabledSkills);
   let autoInjectedSkillContext = deps.buildAutoInjectedSkillContext(enabledSkills);
   let autoInjectedSoulContext = deps.buildAutoInjectedSoulContext?.(enabledSkills) ?? "";
+
+  // Plan Mode 条件注入：cyrene-plan-mode skill 的 SKILL.md 正文只在
+  // PLAN_DISCUSSING / PLAN_REVIEW 时注入。不拼进 stablePrefix（autoInjectedSkillContext
+  // 会进 toolSystemContent → stablePrefix，进/出 plan mode 会打断缓存），改为单独字段
+  // planSkillContext 传给 harness，在 runtimeParts（可变部分）拼，保证缓存前缀稳定。
+  const planStateForInject = resolvedMode === "code" ? getPlanState(conversationIdForPlan) : "NORMAL";
+  let planSkillContext: string | undefined;
+  if (planStateForInject === "PLAN_DISCUSSING" || planStateForInject === "PLAN_REVIEW") {
+    const planSkillBody = deps.skillRegistry.getBody("cyrene-plan-mode");
+    if (planSkillBody) {
+      planSkillContext = `## Plan Mode 指令（自动激活，无需 invoke_skill）\n\n${planSkillBody}`;
+    }
+  }
 
   // Task Router 可用 Skill 列表（Router 判断 direct/plan 和 Skill 加载用）
   let availableSkills: SkillRouteInfo[] = (enabledSkills as Array<Record<string, unknown>>).map((s) => ({
@@ -625,59 +688,55 @@ export async function buildAgentRunOptions(
     + (conversationTimeContext.includes("## Internal Context Policy") ? "\n\n" + conversationTimeContext.split("\n\n[对话时间信息]")[0] : "")
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
     + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "")
-    + (citaContextBlock ? "\n\n" + citaContextBlock : "")
     + (resolvedWorkspaceRoot
-      ? `\n\n[当前项目工作区]\n可信根目录：${resolvedWorkspaceRoot}\n所有本地文件的读取、创建与生成都必须以此目录为根；不得写入桌面、下载目录或其他目录。`
+      ? `\n\n[当前项目工作区]\n可信根目录：${resolvedWorkspaceRoot}`
+        + (workspaceMeta?.projectName ? `\n项目名称：${workspaceMeta.projectName}` : "")
+        + `\ngit 仓库：${workspaceMeta?.isGitRepo ? "是" : "否"}`
+        + `\n所有本地文件的读取、创建与生成都必须以此目录为根；不得写入桌面、下载目录或其他目录。`
       : "");
 
 
-  // Soul 阶段基础 system：人设 + 环境/记忆/关系/附件/渠道（这些是"表达"所需）。
-  // FC 循环在 Soul 阶段追加通用 ToolExecutionContext，并保留 role:tool 协议消息。
+  // Soul 的稳定前缀只保留固定人设/渠道。每轮变化的事实在请求尾部注入，
+  // 使厂商提示词缓存可以复用同一个前缀。
+  // 工具结果以 role:tool 协议消息随对话历史进入 Soul 阶段。
   const soulSystemWithoutCita =
-    (environmentContext ? environmentContext + "\n\n" : "") +
-    (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
-    baseSoulSystemPrompt +
-    (chatSocialContextBlock ? "\n\n---\n\n" + chatSocialContextBlock : "") +
-    (stylePromptBlock ? "\n\n---\n\n" + stylePromptBlock : "") +
-    (autoInjectedSoulContext ? "\n\n---\n\n" + autoInjectedSoulContext : "") +
-    skillActivation +
-    toneInjection +
-    (alwaysOnContext ? "\n\n" + alwaysOnContext + "\n\n" : "") +
-    (relationshipContext ? "\n\n" + relationshipContext + "\n\n" : "") +
-    attachmentContext;
+    baseSoulSystemPrompt;
   const soulSystemBaseContent = soulSystemWithoutCita;
-
-  const nativeFcSystemContent = deps.loadNativeFcSystemPrompt();
-  const actionGateSystemPrompt = deps.loadActionGateSystemPrompt();
-  const askSystemContent = [
-    deps.loadAskSystemPrompt(),
-    deps.loadAskPersonaPrompt(),
-    deps.loadAskQuotesPrompt(),
-  ].filter(Boolean).join("\n\n");
-  const profileGender: NonNullable<TrustedAskUserProfile["gender"]> = profile.gender === "male"
-    || profile.gender === "female"
-    || profile.gender === "nonbinary"
-    || profile.gender === "secret"
-    ? profile.gender
-    : "unknown";
-  const trustedAskUserProfile = {
-    ...(profile.callPreference?.trim() ? { callPreference: profile.callPreference.trim() } : {}),
-    ...(profile.nickname?.trim() ? { nickname: profile.nickname.trim() } : {}),
-    gender: profileGender,
-  };
+  const soulRuntimeContext = [
+    environmentContext,
+    conversationTimeContext,
+    chatSocialContextBlock,
+    stylePromptBlock,
+    autoInjectedSoulContext,
+    skillActivation,
+    toneInjection,
+    alwaysOnContext,
+    relationshipContext,
+    attachmentContext,
+  ].filter((context): context is string => Boolean(context?.trim())).join("\n\n---\n\n");
 
   // 第一期：原始 messages 不再携带 system。FC 循环按阶段动态注入。
-  const fcMessages: ChatMessage[] = withDirectImageAttachments(llmMessages as unknown as ChatMessage[], input);
-  const cleanFcMessages: ChatMessage[] = withDirectImageAttachments(cleanLlm as unknown as ChatMessage[], input);
-  const imageCaptionFallback = buildImageCaptionFallbackMessages(
+  // `multimodal=false` is an explicit user decision: never send image bytes to
+  // the main model.  Describe first with the independent vision model, then
+  // give Harness only the resulting text context.
+  const primaryModelIsMultimodal = settings.multimodal !== false;
+  const fcMessages: ChatMessage[] = primaryModelIsMultimodal
+    ? withDirectImageAttachments(llmMessages as unknown as ChatMessage[], input)
+    : await withCaptionedImageAttachments(llmMessages as unknown as ChatMessage[], input, deps);
+  const cleanFcMessages: ChatMessage[] = primaryModelIsMultimodal
+    ? withDirectImageAttachments(cleanLlm as unknown as ChatMessage[], input)
+    : await withCaptionedImageAttachments(cleanLlm as unknown as ChatMessage[], input, deps);
+  const imageCaptionFallback = primaryModelIsMultimodal
+    ? buildImageCaptionFallbackMessages(
     isChatMode
-      ? soulSystemWithoutCita
-      : toolSystemContent + "\n\n---\n\n" + soulSystemWithoutCita,
+      ? [soulSystemWithoutCita, soulRuntimeContext].filter(Boolean).join("\n\n---\n\n")
+      : [toolSystemContent, soulSystemWithoutCita, soulRuntimeContext].filter(Boolean).join("\n\n---\n\n"),
     llmMessages as unknown as ChatMessage[],
     input,
     deps,
-  );
+    )
+    : undefined;
 
   return {
     options: {
@@ -690,6 +749,9 @@ export async function buildAgentRunOptions(
         reasoning: settings.reasoning,
         contextWindowTokens: settings.contextWindowTokens ?? 256000,
       },
+      maxParallelToolCalls: typeof generalSettings.maxParallelToolCalls === "number"
+        ? Math.max(1, Math.min(8, Math.trunc(generalSettings.maxParallelToolCalls)))
+        : 4,
       messages: fcMessages,
       cleanMessages: cleanFcMessages,
       conversationId,
@@ -700,14 +762,12 @@ export async function buildAgentRunOptions(
       trustedRefs,
       responseContext,
       runtimeEnvironmentContext: environmentContext,
-      askSystemContent,
-      trustedAskUserProfile,
-      nativeFcSystemContent,
-      actionGateSystemPrompt,
       // 不设整轮任务期限；用户取消才停止整个 Agent Run。
       timeoutMs: 0,
       toolSystemContent,
       soulSystemBaseContent,
+      soulRuntimeContext,
+      ...(planSkillContext ? { planSkillContext } : {}),
       soulSampling,
       ...(socialContextEnabled && input.userTurnId && input.assistantTurnId ? {
         socialContext: {
