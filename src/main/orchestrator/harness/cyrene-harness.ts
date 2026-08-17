@@ -12,7 +12,9 @@
  * - 工具输出双级截断
  */
 
+import { createHash } from "node:crypto";
 import { getAdapterForConfig, streamChatWithSdk } from "../vendors";
+import { recordUsage, recordRequest } from "../../token-usage-store";
 import type {
   ChatMessage,
   ChatRequest,
@@ -25,26 +27,42 @@ import type { ToolDefinition } from "../tool-registry";
 import type { ToolCallResult } from "../types";
 import type {
   AgentState,
+  HarnessCacheState,
   HarnessConfig,
   HarnessEvent,
   HarnessInput,
   HarnessResult,
   ToolObservation,
 } from "./types";
-import { parseToolCallArgs, toolCallFingerprint, DEFAULT_HARNESS_CONFIG } from "./types";
+import type { ToolOutputRef } from "./tool-output/tool-output-store";
+import { INITIAL_HARNESS_CACHE_STATE, parseToolCallArgs, toolCallFingerprint, DEFAULT_HARNESS_CONFIG } from "./types";
 import { getHarnessBuiltinToolSpecs, isHarnessBuiltin } from "./builtin-tools";
-import { dispatchToolCall, type ToolDispatchResult } from "./tool-dispatcher";
+import { dispatchToolCall, persistToolDispatchResult, type ToolDispatchResult } from "./tool-dispatcher";
+import { classifyToolExecutionMode, scheduleToolCalls } from "./tool-call-scheduler";
 import { resolveSideEffect } from "./side-effect-resolver";
+import { extractFileChangesFromOutput } from "../tool-evidence";
 import { classifyToolError, classifyToolResultError } from "./error-classifier";
 import { decideRetry, getRetryParams, sleepWithJitter } from "./retry-policy";
-import { computeTokenBudget, compressForAgentLoop } from "./compaction";
+import { AGENT_COMPACTION_PROMPT, computeTokenBudget, compressForAgentLoop } from "./compaction";
 import { StreamController } from "./stream-controller";
 import { TimeoutClock } from "./timeout-clock";
 import { buildCurrentTodoNotebookContext } from "./todo-working-notebook";
+import { appendInternalTranscriptMessage, createInternalTranscriptMessage } from "./internal-transcript";
 import { isCancellationError, raceWithSignal } from "../../abort-utils";
 import { isExplicitStreamUnsupported } from "../vendors/stream-support";
+import {
+  buildStableSystemPrefix,
+  composePromptLayers,
+  normalizeToolSpecsForCache,
+  projectCacheRelevantRequest,
+  type PromptLayers,
+} from "../prompt-layers";
 
 const LOG_PREFIX = "[CyreneHarness]";
+
+function fingerprintCacheDiagnostic(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
 
 // ── Task 3 / C2：signal-aware 工具函数 ────────────────────
 
@@ -88,19 +106,49 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
   }));
   const allToolSpecs: ToolSpec[] = [
     ...registryToolSpecs,
-    ...getHarnessBuiltinToolSpecs({ includeInteractive: input.includeInteractiveTools }),
+    ...getHarnessBuiltinToolSpecs({
+      includeInteractive: input.includeInteractiveTools,
+      includeTask: Boolean(input.taskExecutor),
+      planState: input.planState,
+    }),
   ];
 
   let messages: ChatMessage[] = [...input.messages];
   let rounds = 0;
+  let cache: HarnessCacheState = input.initialCache
+    ? { ...input.initialCache }
+    : { ...INITIAL_HARNESS_CACHE_STATE };
+  let toolOutputs: ToolOutputRef[] = [];
   let checkpointFailure: string | undefined;
+
+  // 每轮临时拼接 runtimeContext 会使上一请求不再是下一请求的前缀。
+  // 所有启动时已知的动态事实在这里一次性物化为 transcript 尾部。
+  const initialContextParts = [
+    input.initialInternalContext?.content,
+    input.promptLayers?.runtimeContext,
+    state.todoItems.length > 0 ? buildCurrentTodoNotebookContext(state.todoItems) : undefined,
+  ].filter((part): part is string => Boolean(part?.trim()));
+  if (initialContextParts.length > 0) {
+    const latestRevision = messages.reduce(
+      (current, message) => Math.max(current, message.internal?.revision ?? 0),
+      0,
+    );
+    messages = appendInternalTranscriptMessage(messages, createInternalTranscriptMessage({
+      kind: input.initialInternalContext?.kind ?? "run_start",
+      revision: latestRevision + 1,
+      runId: input.runId ?? "harness-run",
+      content: initialContextParts.join("\n\n---\n\n"),
+    }));
+  }
 
   const checkpoint = (): void => {
     try {
       input.onCheckpoint?.({
         messages: JSON.parse(JSON.stringify(messages)) as ChatMessage[],
         state: JSON.parse(JSON.stringify(state)) as AgentState,
+        toolOutputs: JSON.parse(JSON.stringify(toolOutputs)) as ToolOutputRef[],
         rounds,
+        cache: { ...cache },
         at: Date.now(),
       });
     } catch (error) {
@@ -128,7 +176,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
   };
 
   // ── 主循环 ──
-  while (rounds < config.maxRounds && !clock.isExecutionTimeout()) {
+  while (!clock.isExecutionTimeout()) {
     if (checkpointFailure) {
       return buildResult(`执行状态保存失败：${checkpointFailure}`, state, true, "error", rounds);
     }
@@ -137,10 +185,15 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
       return cancelled();
     }
 
+    const promptLayers: PromptLayers = {
+      stablePrefix: input.promptLayers?.stablePrefix ?? input.systemPrompt,
+      ...(input.promptLayers?.sessionPrefix ? { sessionPrefix: input.promptLayers.sessionPrefix } : {}),
+      ...(input.promptLayers?.mode ? { mode: input.promptLayers.mode } : {}),
+    };
+    // 仅用于本地预算与摘要准确性；不可直接作为 wire system prompt。
     const roundSystemPrompt = [
-      input.systemPrompt,
-      buildCurrentTodoNotebookContext(state.todoItems),
-    ].join("\n\n---\n\n");
+      buildStableSystemPrefix(promptLayers),
+    ].filter(Boolean).join("\n\n---\n\n");
 
     const roundId = `round-${rounds}`;
     input.onEvent?.({ type: "round_start", roundId });
@@ -158,30 +211,63 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
 
     if (budget.needsCompaction) {
       console.log(`${LOG_PREFIX} mid-loop compaction triggered (estimated=${budget.estimatedInput} budget=${budget.usableInputBudget})`);
-      messages = await compressForAgentLoop({
-        systemPrompt: roundSystemPrompt,
-        toolSchemas: allToolSpecs,
+      const messageCountBeforeCompaction = messages.length;
+      input.onCompactionLifecycle?.({ status: "started", messageCountBefore: messageCountBeforeCompaction });
+      const compactedMessages = await compressForAgentLoop({
         messages,
-        contextWindow: config.contextWindowTokens,
-        reservedOutput: config.reservedOutputTokens,
-        safetyMargin: config.safetyMarginTokens,
-        threshold: config.compactionThreshold,
-        keepRecentCount: 20,
+        retainTokens: Math.floor(config.contextWindowTokens * config.compactionRetainRatio),
         summarize: async (history) => {
-          // 复用现有 LLM 做摘要
-          return summarizeHistory(input.vendorConfig, roundSystemPrompt, history, config, input.signal);
+          return summarizeHistory(
+            input.vendorConfig,
+            roundSystemPrompt,
+            history,
+            allToolSpecs,
+            config,
+            input.signal,
+          );
         },
       });
+      if (compactedMessages !== messages) {
+        cache = {
+          cacheEpoch: cache.cacheEpoch + 1,
+          epochReason: "compaction",
+        };
+        messages = compactedMessages;
+        input.onCompactionLifecycle?.({
+          status: "committed",
+          messageCountBefore: messageCountBeforeCompaction,
+          messageCountAfter: compactedMessages.length,
+          cache: { ...cache },
+        });
+        // 压缩已替换模型历史；下一次请求前必须持久化新 epoch，避免崩溃后混淆周期。
+        checkpoint();
+      } else {
+        messages = compactedMessages;
+      }
     }
 
     // ═══ callLLM ═══
+    const cacheRequest = projectCacheRelevantRequest({
+      stableSystem: buildStableSystemPrefix(promptLayers),
+      tools: allToolSpecs,
+      messages,
+    });
+    input.onCacheDiagnostic?.({
+      ...(input.runId ? { runId: input.runId } : {}),
+      cacheEpoch: cache.cacheEpoch,
+      round: rounds,
+      stablePromptFingerprint: fingerprintCacheDiagnostic(cacheRequest.stableSystem),
+      toolSchemaFingerprint: fingerprintCacheDiagnostic(cacheRequest.tools),
+      messagePrefixFingerprint: fingerprintCacheDiagnostic(cacheRequest.messages),
+      messageCount: cacheRequest.messages.length,
+    });
     let response: ChatResponse;
     const reasoningMessageId = `reasoning-${rounds}`;
     let reasoningStarted = false;
     try {
       response = await callLLM(
         input.vendorConfig,
-        roundSystemPrompt,
+        promptLayers,
         messages,
         allToolSpecs,
         config,
@@ -237,6 +323,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
 
         // 其余 ask_user 返回 not_executed
         for (const call of askCalls.slice(1)) {
+          input.onToolLifecycle?.({ toolCallId: call.id, toolName: call.name, toolSideEffect: "read_only", status: "not_executed" });
           messages.push(toolResultMessage(call, {
             outcome: "not_executed",
             reason: "not_executed_due_to_another_ask",
@@ -245,6 +332,12 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
 
         // 同轮普通工具调用返回 not_executed
         for (const call of otherCalls) {
+          input.onToolLifecycle?.({
+            toolCallId: call.id,
+            toolName: call.name,
+            toolSideEffect: resolveSideEffect(input.tools.find((tool) => tool.id === call.name), parseToolCallArgs(call)),
+            status: "not_executed",
+          });
           messages.push(toolResultMessage(call, {
             outcome: "not_executed",
             reason: "not_executed_due_to_clarification",
@@ -253,6 +346,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
 
         // 执行 ask_user
         clock.startUserWait();
+        input.onToolLifecycle?.({ toolCallId: primaryAsk.id, toolName: primaryAsk.name, toolSideEffect: "read_only", status: "started" });
         let askResult: ToolDispatchResult;
         try {
           askResult = await raceWithSignal(
@@ -262,6 +356,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
               onEvent: input.onEvent,
               requestUserClarification: input.requestUserClarification,
               includeInteractiveTools: input.includeInteractiveTools,
+              toolOutputStore: input.toolOutputStore,
             }),
             input.signal,
           );
@@ -276,6 +371,12 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
         clock.stopUserWait();
 
         messages.push(toolResultMessage(primaryAsk, askResult));
+        input.onToolLifecycle?.({
+          toolCallId: primaryAsk.id,
+          toolName: primaryAsk.name,
+          toolSideEffect: "read_only",
+          status: askResult.outcome === "unknown" ? "unknown" : askResult.outcome === "not_executed" ? "not_executed" : "committed",
+        });
 
         // ask_user 后丢弃 progress buffer，等待模型重新决策
         streamController.discardProgressBuffer();
@@ -292,113 +393,79 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
         input.onEvent?.({ type: "progress_text", content: progressContent });
       }
 
-      let halted = false;
-      for (const call of otherCalls) {
-        // ── halt 后续调用返回 not_executed ──
-        if (halted) {
-          messages.push(toolResultMessage(call, {
-            outcome: "not_executed",
-            reason: "runtime_halted_after_prior_uncertain_side_effect_or_fatal",
-          }));
-          continue;
-        }
+      const dispatchContext = {
+        state,
+        tools: input.tools,
+        onEvent: input.onEvent,
+        requestUserClarification: input.requestUserClarification,
+        includeInteractiveTools: input.includeInteractiveTools,
+        checkPermission: input.checkPermission,
+        toolContext: input.toolContext,
+        executionLedger: input.executionLedger,
+        taskExecutor: input.taskExecutor,
+        toolOutputStore: input.toolOutputStore,
+        deferOutputPersistence: true,
+      };
 
-        // Task 3 / C2：工具执行前检查 signal
-        if (input.signal?.aborted) {
-          return cancelled();
-        }
-
-        // ── 统一 dispatch（v3 §3.1）──
-        // Task 3 / C2：用 raceWithSignal 包裹，abort 时立即返回 cancelled。
-        let dispatchResult: ToolDispatchResult;
-        try {
-          dispatchResult = await raceWithSignal(
-            dispatchToolCall(call, {
-              state,
-              tools: input.tools,
-              onEvent: input.onEvent,
-              requestUserClarification: input.requestUserClarification,
-              includeInteractiveTools: input.includeInteractiveTools,
-              checkPermission: input.checkPermission,
-              toolContext: input.toolContext,
-              executionLedger: input.executionLedger,
-              taskExecutor: input.taskExecutor,
-            }),
-            input.signal,
-          );
-        } catch (error) {
-          // 工具执行/权限检查期间 abort → cancelled
-          if (isCancellationError(error, input.signal)) {
-            return cancelled();
-          }
-          throw error;
-        }
-
-        let result = dispatchResult;
-
-        // ── 失败重试（v3 §5.3）──
+      /** 一次 logical invocation 的执行、重试和完整输出持久化可在安全池内重叠。 */
+      const executeWithRetry = async (call: ToolCall): Promise<ToolDispatchResult> => {
+        const toolSideEffect = resolveSideEffect(input.tools.find((tool) => tool.id === call.name), parseToolCallArgs(call));
+        input.onToolLifecycle?.({
+          toolCallId: call.id,
+          toolName: call.name,
+          toolSideEffect,
+          status: "started",
+        });
+        let result = await raceWithSignal(dispatchToolCall(call, dispatchContext), input.signal);
         if (result.outcome === "failure") {
-          const category = result.category ?? classifyToolResultError(result.rawResult ?? { toolId: call.name, args: {}, output: "", status: "failed" } as ToolCallResult);
-          const sideEffect = resolveSideEffect(
-            input.tools.find((t) => t.id === call.name),
-            parseToolCallArgs(call),
+          const category = result.category ?? classifyToolResultError(
+            result.rawResult ?? { toolId: call.name, args: {}, output: "", status: "failed" } as ToolCallResult,
           );
+          const sideEffect = resolveSideEffect(input.tools.find((tool) => tool.id === call.name), parseToolCallArgs(call));
           const retryDecision = decideRetry(category, sideEffect);
-
           if (retryDecision === "retry") {
             const retryParams = getRetryParams(category);
-            let retryResult = result;
             for (let attempt = 0; attempt < retryParams.maxRetries; attempt++) {
-              // Task 3 / C2：retry backoff 用可中断 sleep
-              try {
-                await sleepWithJitter(retryParams.backoffMs[attempt] ?? 1000, input.signal);
-              } catch (error) {
-                // backoff 期间 abort → cancelled
-                if (isCancellationError(error, input.signal)) {
-                  return cancelled();
-                }
-                throw error;
-              }
-              if (input.signal?.aborted) {
-                return cancelled();
-              }
-              let retryDispatch: ToolDispatchResult;
-              try {
-                retryDispatch = await raceWithSignal(
-                  dispatchToolCall(call, {
-                    state,
-                    tools: input.tools,
-                    onEvent: input.onEvent,
-                    requestUserClarification: input.requestUserClarification,
-                    includeInteractiveTools: input.includeInteractiveTools,
-                    checkPermission: input.checkPermission,
-                    toolContext: input.toolContext,
-                    executionLedger: input.executionLedger,
-                    taskExecutor: input.taskExecutor,
-                  }),
-                  input.signal,
-                );
-              } catch (error) {
-                // retry 工具执行期间 abort → cancelled
-                if (isCancellationError(error, input.signal)) {
-                  return cancelled();
-                }
-                throw error;
-              }
-              retryResult = retryDispatch;
-              if (retryResult.outcome !== "failure") break;
+              await sleepWithJitter(retryParams.backoffMs[attempt] ?? 1000, input.signal);
+              result = await raceWithSignal(dispatchToolCall(call, dispatchContext), input.signal);
+              if (result.outcome !== "failure") break;
             }
-            result = retryResult;
           }
         }
+        return persistToolDispatchResult(call, result, dispatchContext);
+      };
 
-        // ── 写回 tool result ──
+      /** 所有模型可见写回都经此处按原始 tool-call 顺序发生。 */
+      const commitToolResult = async (
+        call: ToolCall,
+        result: ToolDispatchResult,
+      ): Promise<"continue" | "halt"> => {
+        const toolSideEffect = result.toolSideEffect
+          ?? resolveSideEffect(input.tools.find((tool) => tool.id === call.name), parseToolCallArgs(call));
+        if (result.toolOutputRef && !toolOutputs.some((entry) => entry.recordId === result.toolOutputRef?.recordId)) {
+          toolOutputs.push(result.toolOutputRef);
+        }
+        input.onEvent?.({
+          type: "tool_end",
+          toolCallId: call.id,
+          outcome: result.outcome,
+          preview: (result.preview ?? result.message).slice(0, 200),
+          // Diff Review 卡片证据走独立字段，不受 preview 截断影响
+          changes: extractFileChangesFromOutput(result.output),
+        });
         messages.push(toolResultMessage(call, result));
+        input.onToolLifecycle?.({
+          toolCallId: call.id,
+          toolName: call.name,
+          toolSideEffect,
+          status: result.outcome === "unknown"
+            ? "unknown"
+            : result.outcome === "not_executed" ? "not_executed" : "committed",
+        });
 
-        // ── uncertainEffects 拦截（v3 §5.5.1.1）──
         if (result.outcome === "unknown") {
-          const tool = input.tools.find((t) => t.id === call.name);
-          const sideEffect = resolveSideEffect(tool, parseToolCallArgs(call));
+          const tool = input.tools.find((candidate) => candidate.id === call.name);
+          const sideEffect = toolSideEffect;
           if (sideEffect === "non_idempotent_side_effect") {
             const fingerprint = toolCallFingerprint(call.name, parseToolCallArgs(call));
             const effectId = `${input.toolContext?.runId ?? "unknown-run"}:${call.id}`;
@@ -411,15 +478,33 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
                 message: "副作用已发起，但 Runtime 无法确认是否生效",
               });
             }
-            halted = true; // 本轮后续 side-effect 调用暂停
+            return "halt";
           }
         }
+        return result.category === "fatal" ? "halt" : "continue";
+      };
 
-        // ── fatal 也 halt ──
-        if (result.category === "fatal") {
-          halted = true;
-        }
+      let schedule;
+      try {
+        schedule = await scheduleToolCalls({
+          calls: otherCalls,
+          maxParallel: config.maxParallelToolCalls,
+          signal: input.signal,
+          classify: (call) => classifyToolExecutionMode(call, input.tools),
+          execute: ({ call }) => executeWithRetry(call),
+          commit: ({ call }, result) => commitToolResult(call, result),
+          notExecuted: async ({ call }, reason): Promise<ToolDispatchResult> => ({
+            outcome: "not_executed",
+            category: "runtime_safety",
+            tool: call.name,
+            message: reason,
+          }),
+        });
+      } catch (error) {
+        if (isCancellationError(error, input.signal)) return cancelled();
+        throw error;
       }
+      if (schedule.cancelled || input.signal?.aborted) return cancelled();
 
       input.onEvent?.({ type: "round_end", roundId });
       rounds++;
@@ -438,19 +523,18 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     return finish(finalAnswer, false, undefined);
   }
 
-  // ── 兜底：超 maxRounds 或超时 ──
+  // ── 兜底：显式配置的总超时 ──
   clock.stopActive();
-  const reason = clock.isExecutionTimeout() ? "timeout" : "max_rounds";
-  const finalAnswer = streamController.getBuffered() || buildTimeoutReply(state, reason);
+  const finalAnswer = streamController.getBuffered() || buildTimeoutReply(state);
   input.onEvent?.({ type: "final_answer", content: finalAnswer });
-  return finish(finalAnswer, true, reason);
+  return finish(finalAnswer, true, "timeout");
 }
 
 // ── LLM 调用 ─────────────────────────────────────────────
 
 async function callLLM(
   vendorConfig: VendorConfig,
-  systemPrompt: string,
+  promptLayers: PromptLayers,
   messages: ChatMessage[],
   tools: ToolSpec[],
   config: HarnessConfig,
@@ -458,17 +542,32 @@ async function callLLM(
   onReasoningDelta?: (delta: string) => void,
 ): Promise<ChatResponse> {
   const adapter = getAdapterForConfig(vendorConfig);
+  const composed = composePromptLayers(promptLayers, messages);
   const chatRequest: ChatRequest = {
     model: vendorConfig.model,
-    messages: [{ role: "system", content: systemPrompt }, ...messages],
-    tools,
+    messages: composed.messages,
+    tools: normalizeToolSpecsForCache(tools),
     stream: true,
     maxTokens: config.reservedOutputTokens,
+    promptLayers: composed.metadata,
   };
 
   let receivedStreamDelta = false;
+  const recordResponseUsage = (response: ChatResponse): ChatResponse => {
+    recordRequest(vendorConfig.model);
+    if (!response.usage) return response;
+    recordUsage(
+      response.usage.input,
+      response.usage.output,
+      1,
+      response.usage.cachedInput,
+      vendorConfig.model,
+      response.usage.cacheCreation,
+    );
+    return response;
+  };
   try {
-    return await streamChatWithSdk({
+    return recordResponseUsage(await streamChatWithSdk({
       adapter,
       request: chatRequest,
       config: vendorConfig,
@@ -478,12 +577,14 @@ async function callLLM(
         receivedStreamDelta = true;
         if (delta.type === "reasoning_delta" && delta.delta) onReasoningDelta?.(delta.delta);
       },
-    });
+    }));
   } catch (error) {
+    console.log(`[DIAG] streamChatWithSdk error: ${error instanceof Error ? error.message : String(error)}, receivedStreamDelta=${receivedStreamDelta}`);
     if (receivedStreamDelta || !isExplicitStreamUnsupported(error)) throw error;
   }
 
   // 部分兼容模型明确拒绝 stream + tools；只在零增量、明确不支持时降级，绝不重放半截流。
+  console.log("[DIAG] falling back to non-stream request");
   const fallbackRequest: ChatRequest = { ...chatRequest, stream: false };
   const http = adapter.buildRequest(fallbackRequest, vendorConfig);
   const response = await fetch(http.url, {
@@ -496,7 +597,11 @@ async function callLLM(
     const errorData = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
     throw new Error(errorData.error?.message || `模型请求失败：HTTP ${response.status}`);
   }
-  return adapter.parseResponse(await response.json());
+  const fallbackRaw = await response.json();
+  const fallbackParsed = adapter.parseResponse(fallbackRaw);
+  console.log(`[DIAG] fallback raw.usage=${JSON.stringify((fallbackRaw as Record<string, unknown>)?.usage ?? "(none)")}`);
+  console.log(`[DIAG] fallback parsed.usage=${JSON.stringify(fallbackParsed.usage ?? "(none)")}`);
+  return recordResponseUsage(fallbackParsed);
 }
 
 // ── 历史摘要（用于 mid-loop compaction）──────────────────
@@ -504,32 +609,21 @@ async function callLLM(
 async function summarizeHistory(
   vendorConfig: VendorConfig,
   systemPrompt: string,
-  history: string,
+  history: ChatMessage[],
+  tools: ToolSpec[],
   config: HarnessConfig,
   signal?: AbortSignal,
 ): Promise<string> {
   const adapter = getAdapterForConfig(vendorConfig);
-  const compactionPrompt = `你正在帮 Agent 整理执行历史的摘要。请把下面这段较早的执行历史总结成一段简洁的摘要，供后续继续执行参考。
-
-要求：
-1. 保留用户的核心目标、当前任务、未完成的待办事项。
-2. **保留已执行的工具操作序列及其确定性结果**（文件路径、命令、退出码、错误信息）。
-3. 保留已确认的事实和数据（如路径、文件名、参数值）。
-4. 保留 todo 状态和未确认的 uncertain effects（已发起但结果未知的副作用）。
-5. 删除模型自言自语、重复确认、过渡性语句。
-6. 摘要控制在 400~600 字以内，用中文输出。
-
-执行历史：
-${history}
-
-请直接输出摘要内容，不要加任何前缀说明。`;
 
   const chatRequest: ChatRequest = {
     model: vendorConfig.model,
     messages: [
       { role: "system", content: systemPrompt },
-      { role: "user", content: compactionPrompt },
+      ...history,
+      { role: "user", content: AGENT_COMPACTION_PROMPT },
     ],
+    tools: normalizeToolSpecsForCache(tools),
     stream: false,
     maxTokens: config.reservedOutputTokens,
   };
@@ -556,19 +650,27 @@ function toolResultMessage(
   call: ToolCall,
   observation: ToolObservation | { outcome: string; reason: string },
 ): ChatMessage {
+  // 未截断的内置工具输出（例如 ask_user 的答案）仍是下一轮决策所需事实。
+  // 长工具输出则必须只写入剪枝后的 preview，不能绕过截断再次注入模型上下文。
+  const modelObservation = { ...observation } as Record<string, unknown>;
+  if (modelObservation.truncated === true) {
+    modelObservation.output = modelObservation.preview ?? modelObservation.message;
+  }
+  delete modelObservation.rawResult;
+  delete modelObservation.toolOutputRef;
   return {
     role: "tool",
     toolCallId: call.id,
     name: call.name,
-    content: JSON.stringify(observation),
+    content: JSON.stringify(modelObservation),
   };
 }
 
-function buildTimeoutReply(state: AgentState, reason: string): string {
+function buildTimeoutReply(state: AgentState): string {
   const parts: string[] = [
     "抱歉，任务执行时间较长，已达到时间上限。",
     "",
-    `中断原因：${reason === "timeout" ? "执行超时" : "达到最大轮数"}`,
+    "中断原因：执行超时",
   ];
 
   if (state.todoItems.length > 0) {

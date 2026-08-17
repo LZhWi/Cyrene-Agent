@@ -20,7 +20,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ── Hoisted mocks ──────────────────────────────────────
 
-const { fakeAdapter, fakeStreamChatWithSdk } = vi.hoisted(() => {
+const { fakeAdapter, fakeStreamChatWithSdk, recordUsage, recordRequest } = vi.hoisted(() => {
   const adapter = {
     id: "fake",
     buildRequest: (req: unknown) => ({
@@ -33,6 +33,8 @@ const { fakeAdapter, fakeStreamChatWithSdk } = vi.hoisted(() => {
   };
   return {
     fakeAdapter: adapter,
+    recordUsage: vi.fn(),
+    recordRequest: vi.fn(),
     fakeStreamChatWithSdk: vi.fn(async (input: {
       adapter: typeof adapter;
       request: unknown;
@@ -57,7 +59,10 @@ vi.mock("../vendors", () => ({
 
 vi.mock("./tool-dispatcher", () => ({
   dispatchToolCall: vi.fn(),
+  persistToolDispatchResult: vi.fn(async (_call: unknown, result: unknown) => result),
 }));
+
+vi.mock("../../token-usage-store", () => ({ recordUsage, recordRequest }));
 
 import { runCyreneHarness } from "./cyrene-harness";
 import { dispatchToolCall } from "./tool-dispatcher";

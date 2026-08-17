@@ -3,8 +3,10 @@ import { ExecutionLedger } from "../execution-ledger";
 import { ToolExecutionError } from "../tool-execution-error";
 import type { ToolDefinition } from "../tool-registry";
 import type { AgentState } from "./types";
-import { dispatchToolCall } from "./tool-dispatcher";
+import { dispatchToolCall, DEFAULT_TRUNCATION, truncateOutput } from "./tool-dispatcher";
 import { resolveUncertainEffect } from "./uncertain-effect-guard";
+import type { ToolOutputStore } from "./tool-output/tool-output-store";
+import { ToolOutputPersistenceError } from "./tool-output/file-tool-output-store";
 
 function state(): AgentState {
   return { todoItems: [], uncertainEffects: [] };
@@ -30,6 +32,22 @@ function call(id: string, args: Record<string, unknown> = { to: "a@example.com" 
 }
 
 describe("dispatchToolCall truthful execution", () => {
+  it("preserves both the head and tail when pruning output above 8192 characters", () => {
+    const output = [
+      "HEAD_MARKER",
+      "a".repeat(8_500),
+      "TAIL_MARKER",
+    ].join("\n");
+
+    const result = truncateOutput(output, DEFAULT_TRUNCATION, "call-1");
+
+    expect(result.truncated).toBe(true);
+    expect(result.preview).toContain("HEAD_MARKER");
+    expect(result.preview).toContain("[... tool result middle pruned ...]");
+    expect(result.preview).toContain("TAIL_MARKER");
+    expect(result.preview.length).toBeLessThanOrEqual(8_192);
+  });
+
   it("preserves typed error facts in the failure observation", async () => {
     const result = await dispatchToolCall(call("call-1"), {
       state: state(),
@@ -119,5 +137,96 @@ describe("dispatchToolCall truthful execution", () => {
     await dispatchToolCall(call("call-old"), context);
     const result = await dispatchToolCall(call("call-new", { to: "b@example.com" }), context);
     expect(result.outcome).toBe("success");
+  });
+
+  it("persists the complete normal-tool result before exposing its pruned preview", async () => {
+    const output = `HEAD\n${"MIDDLE".repeat(2_000)}\nTAIL`;
+    const put = vi.fn(async () => ({
+      recordId: "a".repeat(64),
+      resultRef: `tool-result://v1/${"a".repeat(64)}`,
+      runId: "run-1",
+      toolCallId: "call-1",
+      toolName: "send_email",
+      bytes: Buffer.byteLength(output),
+      codePoints: Array.from(output).length,
+      truncatedForModel: true,
+      createdAt: 1,
+    }));
+    const store: ToolOutputStore = {
+      put,
+      read: vi.fn(),
+      find: vi.fn(),
+      deleteConversation: vi.fn(),
+    };
+
+    const result = await dispatchToolCall(call("call-1"), {
+      state: state(),
+      tools: [tool(async () => output)],
+      toolContext: { userQuery: "", conversationId: "conversation-1", runId: "run-1" },
+      toolOutputStore: store,
+    });
+
+    expect(put).toHaveBeenCalledWith(expect.objectContaining({
+      conversationId: "conversation-1",
+      runId: "run-1",
+      toolCallId: "call-1",
+      output,
+    }));
+    expect(result.fullOutputRef).toBe(`tool-result://v1/${"a".repeat(64)}`);
+    expect(result.preview).toContain("HEAD");
+    expect(result.preview).toContain("TAIL");
+    expect(result.preview).not.toBe(output);
+    expect(result.preview?.length).toBeLessThanOrEqual(8_192);
+  });
+
+  it("persists short normal-tool results too", async () => {
+    const put = vi.fn(async () => ({
+      recordId: "b".repeat(64), resultRef: `tool-result://v1/${"b".repeat(64)}`,
+      runId: "run-1", toolCallId: "call-1", toolName: "send_email",
+      bytes: 2, codePoints: 2, truncatedForModel: false, createdAt: 1,
+    }));
+    const store: ToolOutputStore = { put, read: vi.fn(), find: vi.fn(), deleteConversation: vi.fn() };
+
+    const result = await dispatchToolCall(call("call-1"), {
+      state: state(), tools: [tool(async () => "ok")],
+      toolContext: { userQuery: "", conversationId: "conversation-1", runId: "run-1" }, toolOutputStore: store,
+    });
+
+    expect(put).toHaveBeenCalledWith(expect.objectContaining({ output: "ok", truncatedForModel: false }));
+    expect(result).toMatchObject({ output: "ok", fullOutputRef: `tool-result://v1/${"b".repeat(64)}` });
+  });
+
+  it("does not turn a persistence failure into a false tool failure", async () => {
+    const persistenceError = new ToolOutputPersistenceError("disk unavailable");
+    const store: ToolOutputStore = {
+      put: vi.fn(async () => { throw persistenceError; }),
+      read: vi.fn(), find: vi.fn(), deleteConversation: vi.fn(),
+    };
+
+    await expect(dispatchToolCall(call("call-1"), {
+      state: state(), tools: [tool(async () => "email sent")],
+      toolContext: { userQuery: "", conversationId: "conversation-1", runId: "run-1" }, toolOutputStore: store,
+    })).rejects.toBe(persistenceError);
+  });
+
+  it("persists a task final observation but not ordinary Harness control builtins", async () => {
+    const output = JSON.stringify({ taskId: "task-1", status: "completed", text: "子代理完整报告" });
+    const put = vi.fn(async () => ({
+      recordId: "d".repeat(64), resultRef: `tool-result://v1/${"d".repeat(64)}`,
+      runId: "run-1", toolCallId: "task-call", toolName: "task",
+      bytes: Buffer.byteLength(output), codePoints: Array.from(output).length, truncatedForModel: false, createdAt: 1,
+    }));
+    const store: ToolOutputStore = { put, read: vi.fn(), find: vi.fn(), deleteConversation: vi.fn() };
+
+    const result = await dispatchToolCall({ id: "task-call", name: "task", arguments: JSON.stringify({
+      description: "检查子任务", prompt: "给出完整报告", subagent_type: "general", companion_id: "风堇",
+    }) }, {
+      state: state(), tools: [], toolOutputStore: store,
+      toolContext: { userQuery: "", conversationId: "conversation-1", runId: "run-1" },
+      taskExecutor: async () => ({ taskId: "task-1", status: "completed", text: "子代理完整报告" }),
+    });
+
+    expect(put).toHaveBeenCalledWith(expect.objectContaining({ toolName: "task", output }));
+    expect(result.fullOutputRef).toBe(`tool-result://v1/${"d".repeat(64)}`);
   });
 });

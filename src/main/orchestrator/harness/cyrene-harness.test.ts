@@ -14,7 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // ── Hoisted mocks（必须在 import SUT 之前）──────────────
 
-const { fakeAdapter, fakeStreamChatWithSdk } = vi.hoisted(() => {
+const { fakeAdapter, fakeStreamChatWithSdk, recordUsage, recordRequest } = vi.hoisted(() => {
   const adapter = {
     id: "fake",
     buildRequest: (req: unknown) => ({
@@ -27,6 +27,8 @@ const { fakeAdapter, fakeStreamChatWithSdk } = vi.hoisted(() => {
   };
   return {
     fakeAdapter: adapter,
+    recordUsage: vi.fn(),
+    recordRequest: vi.fn(),
     fakeStreamChatWithSdk: vi.fn(async (input: {
       adapter: typeof adapter;
       request: unknown;
@@ -52,14 +54,18 @@ vi.mock("../vendors", () => ({
 
 vi.mock("./tool-dispatcher", () => ({
   dispatchToolCall: vi.fn(),
+  persistToolDispatchResult: vi.fn(async (_call: unknown, result: unknown) => result),
 }));
+
+vi.mock("../../token-usage-store", () => ({ recordUsage, recordRequest }));
 
 import { runCyreneHarness } from "./cyrene-harness";
 import { dispatchToolCall } from "./tool-dispatcher";
 import type { ToolDispatchResult } from "./tool-dispatcher";
-import type { HarnessCheckpoint, HarnessEvent } from "./types";
+import type { HarnessCacheDiagnostic, HarnessCheckpoint, HarnessEvent } from "./types";
 import type { ChatMessage, ChatResponse, ToolCall } from "../vendors/types";
 import type { ToolDefinition } from "../tool-registry";
+import { projectCacheRelevantChatRequest } from "../prompt-layers";
 
 const mockedDispatch = vi.mocked(dispatchToolCall);
 
@@ -80,6 +86,10 @@ function assistantResponse(opts: { text?: string; toolCalls?: ToolCall[] }): Cha
     finishReason: toolCalls.length ? "tool_calls" : "stop",
     raw: {},
   };
+}
+
+function assistantResponseWithUsage(usage: NonNullable<ChatResponse["usage"]>): ChatResponse {
+  return { ...assistantResponse({ text: "完成" }), usage };
 }
 
 function fakeFetchSequencer(responses: ChatResponse[]) {
@@ -164,12 +174,38 @@ function sendEmailTool(): ToolDefinition {
   };
 }
 
+function safeReadTool(id: string): ToolDefinition {
+  return {
+    id,
+    name: id,
+    description: "safe read",
+    enabled: true,
+    inputSchema: { type: "object", properties: {} },
+    effectKind: "read",
+    isConcurrencySafe: () => true,
+    execute: vi.fn(),
+  };
+}
+
+function mutationTool(id = "write_file"): ToolDefinition {
+  return {
+    id,
+    name: id,
+    description: "safe local mutation",
+    enabled: true,
+    inputSchema: { type: "object", properties: { path: { type: "string" }, content: { type: "string" } } },
+    effectKind: "mutation",
+    execute: vi.fn(),
+  };
+}
+
 // ── Tests ──────────────────────────────────────────────
 
 describe("CyreneHarness completion (P0-A)", () => {
   beforeEach(() => {
     mockedDispatch.mockReset();
     fakeStreamChatWithSdk.mockClear();
+    recordUsage.mockReset();
   });
 
   it("uses the SDK stream runner with native tools enabled", async () => {
@@ -181,7 +217,7 @@ describe("CyreneHarness completion (P0-A)", () => {
     const result = await runCyreneHarness({
       systemPrompt: "you are a test agent",
       messages: [{ role: "user", content: "完成任务" }],
-      tools: [],
+      tools: [mutationTool()],
       vendorConfig,
     });
 
@@ -190,6 +226,23 @@ describe("CyreneHarness completion (P0-A)", () => {
     expect(fakeStreamChatWithSdk).toHaveBeenCalledWith(expect.objectContaining({
       request: expect.objectContaining({ stream: true, tools: expect.any(Array) }),
     }));
+  });
+
+  it("records each Harness model response and preserves its provider-reported cache tokens", async () => {
+    fakeStreamChatWithSdk.mockResolvedValueOnce(assistantResponseWithUsage({
+      input: 20,
+      output: 7,
+      cachedInput: 12,
+    }));
+
+    await runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "完成任务" }],
+      tools: [],
+      vendorConfig,
+    });
+
+    expect(recordUsage).toHaveBeenCalledWith(20, 7, 1, 12, "fake-model", undefined);
   });
 
   it("forwards only provider-returned reasoning deltas to the process stream", async () => {
@@ -313,13 +366,226 @@ describe("CyreneHarness completion (P0-A)", () => {
       .toBeLessThan(events.findIndex((event) => event.type === "final_answer"));
   });
 
+  it("runs explicit-safe reads concurrently but commits their observations in model order", async () => {
+    const calls: ToolCall[] = [
+      { id: "read-a", name: "read_a", arguments: "{}" },
+      { id: "read-b", name: "read_b", arguments: "{}" },
+    ];
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ toolCalls: calls }),
+      assistantResponse({ text: "读取完成。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    let resolveA!: () => void;
+    let resolveB!: () => void;
+    const gateA = new Promise<void>((resolve) => { resolveA = resolve; });
+    const gateB = new Promise<void>((resolve) => { resolveB = resolve; });
+    const started: string[] = [];
+    mockedDispatch.mockImplementation(async (toolCall) => {
+      started.push(toolCall.id);
+      if (toolCall.id === "read-a") await gateA;
+      if (toolCall.id === "read-b") await gateB;
+      return {
+        outcome: "success",
+        tool: toolCall.name,
+        message: toolCall.name,
+        output: toolCall.name,
+        preview: toolCall.name,
+        truncated: false,
+      };
+    });
+
+    const events: HarnessEvent[] = [];
+    const running = runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "并行读取" }],
+      tools: [safeReadTool("read_a"), safeReadTool("read_b")],
+      vendorConfig,
+      config: { maxParallelToolCalls: 2 },
+      onEvent: (event) => events.push(event),
+    });
+
+    await expect.poll(() => started).toEqual(["read-a", "read-b"]);
+    resolveB();
+    await Promise.resolve();
+    expect(events.filter((event) => event.type === "tool_end")).toEqual([]);
+    resolveA();
+    const result = await running;
+
+    expect(result.finalAnswer).toBe("读取完成。");
+    expect(events.filter((event) => event.type === "tool_end").map((event) => (event as { toolCallId: string }).toolCallId))
+      .toEqual(["read-a", "read-b"]);
+    const nextRequest = fakeStreamChatWithSdk.mock.calls[1]?.[0].request as { messages: ChatMessage[] };
+    expect(nextRequest.messages.filter((message) => message.role === "tool").map((message) => message.toolCallId))
+      .toEqual(["read-a", "read-b"]);
+  });
+
+  it("continues beyond fifty tool rounds until the model returns a final answer", async () => {
+    const toolRounds = Array.from({ length: 51 }, (_, index) => (
+      assistantResponse({ toolCalls: [mutationToolCall(`call-${index + 1}`)] })
+    ));
+    const { fn: fetchMock } = fakeFetchSequencer([
+      ...toolRounds,
+      assistantResponse({ text: "第 51 轮工具完成后自然收尾。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockedDispatch.mockResolvedValue(successDispatchResult());
+
+    const result = await runCyreneHarness({
+      systemPrompt: "you are a long-running test agent",
+      messages: [{ role: "user", content: "执行一个超过五十轮的任务" }],
+      tools: [],
+      vendorConfig,
+    });
+
+    expect(result.finalAnswer).toBe("第 51 轮工具完成后自然收尾。");
+    expect(result.rounds).toBe(51);
+    expect(result.terminateReason).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(52);
+  });
+
+  it("persists a structured compaction checkpoint before the next model request", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ text: "## 原始任务与意图\n- 完成历史任务\n\n## 下一步\n- 继续回答" }),
+      assistantResponse({ text: "已在保留上下文的基础上完成。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    const checkpoints: HarnessCheckpoint[] = [];
+    const compactions: Array<{ status: string; messageCountBefore: number; messageCountAfter?: number }> = [];
+    const historicalMessages: ChatMessage[] = Array.from({ length: 20 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `${index === 0 ? "旧任务" : "旧历史"}`.repeat(100),
+    }));
+
+    await runCyreneHarness({
+      systemPrompt: "test system prompt",
+      messages: [
+        ...historicalMessages,
+        { role: "user", content: "请继续完成".repeat(40) },
+      ],
+      tools: [],
+      vendorConfig,
+      config: {
+        contextWindowTokens: 200,
+        reservedOutputTokens: 20,
+        safetyMarginTokens: 0,
+        compactionThreshold: 0.3,
+        compactionRetainRatio: 0.16,
+      },
+      onCheckpoint: (checkpoint) => checkpoints.push(checkpoint),
+      onCompactionLifecycle: (event) => compactions.push(event),
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const summaryRequest = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string) as {
+      messages: ChatMessage[];
+    };
+    expect(summaryRequest.messages.some((entry) => entry.content === "旧任务".repeat(100))).toBe(true);
+    expect(summaryRequest.messages.at(-1)?.content).toContain("## 原始任务与意图");
+    expect(checkpoints.at(-1)?.messages[0]?.content).toContain("<cyrene_compaction_checkpoint>");
+    expect(checkpoints.at(-1)?.cache).toEqual({ cacheEpoch: 2, epochReason: "compaction" });
+    expect(compactions).toEqual([
+      expect.objectContaining({ status: "started", messageCountBefore: historicalMessages.length + 1 }),
+      expect.objectContaining({ status: "committed", cache: { cacheEpoch: 2, epochReason: "compaction" } }),
+    ]);
+  });
+
+  it("does not erase the transcript when the compaction request fails", async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce({ ok: false, json: async () => ({}) })
+      .mockResolvedValueOnce({ ok: true, json: async () => assistantResponse({ text: "仍然可以继续回答。" }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const checkpoints: HarnessCheckpoint[] = [];
+    const originalHistory = "旧任务".repeat(100);
+    const historicalMessages: ChatMessage[] = Array.from({ length: 20 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: index === 0 ? originalHistory : "旧历史".repeat(100),
+    }));
+
+    const result = await runCyreneHarness({
+      systemPrompt: "test system prompt",
+      messages: [
+        ...historicalMessages,
+        { role: "user", content: "请继续完成".repeat(40) },
+      ],
+      tools: [],
+      vendorConfig,
+      config: {
+        contextWindowTokens: 200,
+        reservedOutputTokens: 20,
+        safetyMarginTokens: 0,
+        compactionThreshold: 0.3,
+        compactionRetainRatio: 0.16,
+      },
+      onCheckpoint: (checkpoint) => checkpoints.push(checkpoint),
+    });
+
+    expect(result.finalAnswer).toBe("仍然可以继续回答。");
+    expect(checkpoints.at(-1)?.messages.some((entry) => entry.content === originalHistory)).toBe(true);
+    expect(checkpoints.at(-1)?.cache).toEqual({ cacheEpoch: 1, epochReason: "run_start" });
+  });
+
+  it("writes only the pruned tool observation into the next model request", async () => {
+    const rawOutput = [
+      "HEAD_MARKER",
+      "a".repeat(4_500),
+      "MIDDLE_SECRET_MARKER",
+      "b".repeat(4_500),
+      "TAIL_MARKER",
+    ].join("\n");
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ toolCalls: [mutationToolCall("long-output-call")] }),
+      assistantResponse({ text: "已根据工具结果完成。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockedDispatch.mockResolvedValue({
+      ...successDispatchResult("long-output-call"),
+      message: "HEAD_MARKER\n\n[... tool result middle pruned ...]\n\nTAIL_MARKER",
+      preview: "HEAD_MARKER\n\n[... tool result middle pruned ...]\n\nTAIL_MARKER",
+      output: rawOutput,
+      truncated: true,
+      toolOutputRef: {
+        recordId: "e".repeat(64), resultRef: `tool-result://v1/${"e".repeat(64)}`,
+        runId: "run-1", toolCallId: "long-output-call", toolName: "write_file",
+        bytes: rawOutput.length, codePoints: Array.from(rawOutput).length, truncatedForModel: true, createdAt: 1,
+      },
+    });
+
+    await runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "检查长工具输出" }],
+      tools: [],
+      vendorConfig,
+    });
+
+    const secondRequest = fakeStreamChatWithSdk.mock.calls[1]?.[0].request as { messages: ChatMessage[] };
+    const toolMessage = secondRequest.messages.find((message) => message.role === "tool");
+    expect(toolMessage?.content).toContain("HEAD_MARKER");
+    expect(toolMessage?.content).toContain("TAIL_MARKER");
+    expect(toolMessage?.content).not.toContain("MIDDLE_SECRET_MARKER");
+    expect(toolMessage?.content).not.toContain("toolOutputRef");
+  });
+
   it("checkpoints a cloned transcript after tool work and before terminal settlement", async () => {
     const { fn: fetchMock } = fakeFetchSequencer([
       assistantResponse({ toolCalls: [mutationToolCall("checkpoint-call")] }),
       assistantResponse({ text: "检查完成。" }),
     ]);
     vi.stubGlobal("fetch", fetchMock);
-    mockedDispatch.mockResolvedValue(successDispatchResult("checkpoint-call"));
+    mockedDispatch.mockResolvedValue({
+      ...successDispatchResult("checkpoint-call"),
+      toolOutputRef: {
+        recordId: "c".repeat(64),
+        resultRef: `tool-result://v1/${"c".repeat(64)}`,
+        runId: "run-1",
+        toolCallId: "checkpoint-call",
+        toolName: "write_file",
+        bytes: 42,
+        codePoints: 42,
+        truncatedForModel: false,
+        createdAt: 1,
+      },
+    });
     const checkpoints: HarnessCheckpoint[] = [];
 
     await runCyreneHarness({
@@ -331,11 +597,35 @@ describe("CyreneHarness completion (P0-A)", () => {
     });
 
     expect(checkpoints.some((checkpoint) => checkpoint.messages.some((message) => message.role === "tool"))).toBe(true);
+    expect(checkpoints.some((checkpoint) => checkpoint.toolOutputs?.[0]?.toolCallId === "checkpoint-call")).toBe(true);
     expect(checkpoints.at(-1)).toMatchObject({ rounds: 1 });
     const last = checkpoints.at(-1);
     if (!last) throw new Error("expected a terminal checkpoint");
     last.messages.push({ role: "user", content: "不能污染 Harness" });
     expect(checkpoints.at(-2)?.messages.some((message) => message.content === "不能污染 Harness")).toBe(false);
+  });
+
+  it("records a durable lifecycle before dispatch and after committing a tool observation", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ toolCalls: [mutationToolCall("durable-call")] }),
+      assistantResponse({ text: "完成。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockedDispatch.mockResolvedValue(successDispatchResult("durable-call"));
+    const lifecycle: Array<{ toolCallId: string; status: string }> = [];
+
+    await runCyreneHarness({
+      systemPrompt: "test",
+      messages: [{ role: "user", content: "写入文件" }],
+      tools: [mutationTool()],
+      vendorConfig,
+      onToolLifecycle: (event) => lifecycle.push(event),
+    });
+
+    expect(lifecycle).toEqual([
+      expect.objectContaining({ toolCallId: "durable-call", status: "started", toolSideEffect: "idempotent_mutation" }),
+      expect.objectContaining({ toolCallId: "durable-call", status: "committed", toolSideEffect: "idempotent_mutation" }),
+    ]);
   });
 
   it("settles as a runtime error when a required checkpoint cannot be persisted", async () => {
@@ -394,7 +684,7 @@ describe("CyreneHarness completion (P0-A)", () => {
     expect(result.terminateReason).toBeUndefined();
   });
 
-  it("shows the updated mutable Todo notebook to the next tool round", async () => {
+  it("makes the next model request an append-only extension after update_todo", async () => {
     const updateCall: ToolCall = {
       id: "todo-1",
       name: "update_todo",
@@ -424,14 +714,48 @@ describe("CyreneHarness completion (P0-A)", () => {
       vendorConfig,
     });
 
-    const firstRequest = fakeStreamChatWithSdk.mock.calls[0][0].request as { messages: ChatMessage[] };
-    const secondRequest = fakeStreamChatWithSdk.mock.calls[1][0].request as { messages: ChatMessage[] };
-    expect(firstRequest.messages[0].content).toContain("当前工作笔记为空");
-    expect(secondRequest.messages[0].content).toContain("[in_progress] inspect: 检查项目结构");
-    expect(secondRequest.messages[0].content).toContain(`binding="false"`);
+    const firstRequest = fakeStreamChatWithSdk.mock.calls[0][0].request as Parameters<typeof projectCacheRelevantChatRequest>[0];
+    const secondRequest = fakeStreamChatWithSdk.mock.calls[1][0].request as Parameters<typeof projectCacheRelevantChatRequest>[0];
+    const first = projectCacheRelevantChatRequest(firstRequest);
+    const second = projectCacheRelevantChatRequest(secondRequest);
+
+    expect(second.stableSystem).toEqual(first.stableSystem);
+    expect(second.tools).toEqual(first.tools);
+    expect(second.messages.slice(0, first.messages.length)).toEqual(first.messages);
+    expect(second.messages.some((message) => String(message.content).includes("CURRENT_TODO_NOTEBOOK"))).toBe(false);
   });
 
-  it("shows a restored Todo notebook in the first child Harness round", async () => {
+  it("emits non-sensitive cache diagnostics for every model request", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ toolCalls: [mutationToolCall("cache-1")] }),
+      assistantResponse({ text: "完成" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockedDispatch.mockResolvedValue(successDispatchResult("cache-1"));
+    const diagnostics: HarnessCacheDiagnostic[] = [];
+
+    await runCyreneHarness({
+      systemPrompt: "base prompt",
+      messages: [{ role: "user", content: "执行两步任务" }],
+      tools: [],
+      vendorConfig,
+      runId: "run-cache",
+      onCacheDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+    });
+
+    expect(diagnostics).toHaveLength(2);
+    expect(diagnostics[1]).toMatchObject({
+      runId: "run-cache",
+      cacheEpoch: 1,
+      round: 1,
+      stablePromptFingerprint: diagnostics[0]?.stablePromptFingerprint,
+      toolSchemaFingerprint: diagnostics[0]?.toolSchemaFingerprint,
+    });
+    expect(diagnostics[1]?.messageCount).toBeGreaterThan(diagnostics[0]?.messageCount as number);
+    expect(diagnostics[0]?.messagePrefixFingerprint).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("materializes a restored Todo notebook once as a metadata-free internal message", async () => {
     const { fn: fetchMock } = fakeFetchSequencer([
       assistantResponse({ text: "继续检查。" }),
     ]);
@@ -446,10 +770,17 @@ describe("CyreneHarness completion (P0-A)", () => {
         todoItems: [{ id: "inspect", content: "检查取消链路", status: "in_progress" }],
         uncertainEffects: [],
       },
+      initialInternalContext: {
+        kind: "recovery",
+        content: "<internal_context type=\"recovery\">已从中断任务恢复</internal_context>",
+      },
     });
 
     const firstRequest = fakeStreamChatWithSdk.mock.calls[0][0].request as { messages: ChatMessage[] };
-    expect(firstRequest.messages[0].content).toContain("[in_progress] inspect: 检查取消链路");
+    expect(firstRequest.messages[0].content).toBe("base prompt");
+    expect(firstRequest.messages.some((message) => String(message.content).includes("已从中断任务恢复"))).toBe(true);
+    expect(firstRequest.messages.some((message) => String(message.content).includes("[in_progress] inspect: 检查取消链路"))).toBe(true);
+    expect(firstRequest.messages.every((message) => message.visibility === undefined && message.internal === undefined)).toBe(true);
   });
 
   it("resumes the same Harness run after a complete Ask observation", async () => {

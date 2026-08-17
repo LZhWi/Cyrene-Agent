@@ -14,6 +14,8 @@ import type { ToolDefinition } from "../tool-registry";
 import type { CyreneRunTerminalResult } from "../../../shared/run-terminal";
 import type { TodoItem } from "../../../shared/task-session";
 import type { ToolErrorCategory } from "../tool-execution-error";
+import type { ToolFileChange } from "../../../shared/chat-types";
+import type { ToolOutputRef, ToolOutputStore } from "./tool-output/tool-output-store";
 export type { ToolErrorCategory } from "../tool-execution-error";
 export type { TodoItem, TodoStatus } from "../../../shared/task-session";
 
@@ -52,6 +54,8 @@ export interface ToolObservation {
   truncated?: boolean;
   preview?: string;
   fullOutputRef?: string;
+  /** Runtime-only 完整输出记录；写入 Checkpoint，不进入模型消息。 */
+  toolOutputRef?: ToolOutputRef;
   /** 工具返回的原始输出（未截断前），可能被截断后只保留 preview */
   output?: string;
 }
@@ -74,11 +78,41 @@ export interface AgentState {
   uncertainEffects: UncertainEffect[];
 }
 
+export type HarnessCacheEpochReason =
+  | "run_start"
+  | "compaction"
+  | "recovery"
+  | "model_changed"
+  | "tool_catalog_changed"
+  | "prompt_version_changed";
+
+/** 模型可见上下文最后一次发生结构性重建的缓存周期。 */
+export interface HarnessCacheState {
+  cacheEpoch: number;
+  epochReason: HarnessCacheEpochReason;
+}
+
+/** 只包含 hash 和计数的缓存诊断，禁止携带提示词或工具输出正文。 */
+export interface HarnessCacheDiagnostic {
+  runId?: string;
+  cacheEpoch: number;
+  round: number;
+  stablePromptFingerprint: string;
+  toolSchemaFingerprint: string;
+  messagePrefixFingerprint: string;
+  messageCount: number;
+}
+
+export const INITIAL_HARNESS_CACHE_STATE: HarnessCacheState = {
+  cacheEpoch: 1,
+  epochReason: "run_start",
+};
+
 // ── Harness 配置 ─────────────────────────────────────────
 
 export interface HarnessConfig {
-  /** 最大循环轮数 */
-  maxRounds: number;
+  /** 已声明为安全的工具最多可同时执行几个；1 表示串行。 */
+  maxParallelToolCalls: number;
   /** 总超时（毫秒） */
   totalTimeoutMs: number;
   /** 用户等待超时（毫秒，ask_user 等待期间不计入执行超时） */
@@ -91,22 +125,19 @@ export interface HarnessConfig {
   safetyMarginTokens: number;
   /** 压缩触发阈值比例（默认 0.7） */
   compactionThreshold: number;
-  /** 软截断字符数（默认 2000） */
-  softTruncateChars: number;
-  /** 硬熔断字符数（默认 8000） */
-  hardTruncateChars: number;
+  /** 压缩后原样保留的近期 transcript 占上下文窗口比例（默认 0.16）。 */
+  compactionRetainRatio: number;
 }
 
 export const DEFAULT_HARNESS_CONFIG: HarnessConfig = {
-  maxRounds: 50,
+  maxParallelToolCalls: 4,
   totalTimeoutMs: 0,
   userWaitTimeoutMs: 120_000,
   contextWindowTokens: 256_000,
   reservedOutputTokens: 8_192,
   safetyMarginTokens: 512,
   compactionThreshold: 0.7,
-  softTruncateChars: 2_000,
-  hardTruncateChars: 8_000,
+  compactionRetainRatio: 0.16,
 };
 
 // ── Harness 事件（给 UI / 桥层）──────────────────────────
@@ -120,17 +151,38 @@ export type HarnessEvent =
   | { type: "reasoning_delta"; messageId: string; delta: string }
   | { type: "reasoning_end"; messageId: string }
   | { type: "tool_start"; toolCallId: string; toolName: string; args: Record<string, unknown> }
-  | { type: "tool_end"; toolCallId: string; outcome: ToolCallOutcome; preview: string }
+  | { type: "tool_end"; toolCallId: string; outcome: ToolCallOutcome; preview: string; changes?: ToolFileChange[] }
   | { type: "todo_update"; items: TodoItem[] }
   | { type: "ask_user"; card: unknown }
+  | { type: "plan_mode_changed"; state: import("../plan-mode").PlanStateName }
+  | { type: "plan_written"; planPath: string }
   | { type: "runtime_feedback"; message: string }
   | { type: "error"; message: string };
+
+/** 仅供持久层记账的工具调用边界；不直接暴露给聊天 UI。 */
+export interface HarnessToolLifecycleEvent {
+  toolCallId: string;
+  toolName: string;
+  toolSideEffect: SideEffectKind;
+  status: "started" | "committed" | "unknown" | "not_executed";
+}
+
+/** 压缩事务边界；只有 committed 才表示 transcript 已被替换。 */
+export interface HarnessCompactionLifecycleEvent {
+  status: "started" | "committed";
+  messageCountBefore: number;
+  messageCountAfter?: number;
+  cache?: HarnessCacheState;
+}
 
 /** 供持久化执行者保存可恢复子运行状态的只读快照。 */
 export interface HarnessCheckpoint {
   messages: ChatMessage[];
   state: AgentState;
+  /** 完整工具输出的引用，不复制 output.txt 内容。 */
+  toolOutputs: ToolOutputRef[];
   rounds: number;
+  cache: HarnessCacheState;
   at: number;
 }
 
@@ -142,10 +194,24 @@ export interface HarnessToolSpec extends ToolSpec {
 }
 
 export interface HarnessInput {
-  /** 系统提示词（已包含人设 + Runtime Policy） */
+  /**
+   * 兼容旧调用方的扁平系统提示词。新调用方应使用 promptLayers，
+   * 让稳定前缀与每轮运行时上下文分离。
+   */
   systemPrompt: string;
+  /** 缓存友好的提示词分层；Todo 等每轮状态不得放入 stablePrefix。 */
+  promptLayers?: import("../prompt-layers").PromptLayers;
   /** 初始消息（不含 system） */
   messages: ChatMessage[];
+  /** canonical runId；仅用于内部 transcript 元数据，永不进入 Provider 请求。 */
+  runId?: string;
+  /** 首次请求前物化一次的内部事实；后续轮次不得重新注入。 */
+  initialInternalContext?: {
+    kind: "run_start" | "recovery";
+    content: string;
+  };
+  /** 恢复或上下文重建后的初始缓存周期。 */
+  initialCache?: HarnessCacheState;
   /** 从可恢复会话还原的初始状态；Harness 会取得自己的深拷贝。 */
   initialState?: AgentState;
   /** 普通工具列表（从 registry 获取） */
@@ -160,16 +226,26 @@ export interface HarnessInput {
   onEvent?: (event: HarnessEvent) => void;
   /** 每轮和终态时发送的可持久化 transcript 快照。 */
   onCheckpoint?: (checkpoint: HarnessCheckpoint) => void;
+  /** 工具执行前与模型可见结果提交后的持久化边界。 */
+  onToolLifecycle?: (event: HarnessToolLifecycleEvent) => void;
+  /** 压缩前后持久化事务边界。 */
+  onCompactionLifecycle?: (event: HarnessCompactionLifecycleEvent) => void;
+  /** 每次模型请求前的非敏感缓存结构诊断。 */
+  onCacheDiagnostic?: (diagnostic: HarnessCacheDiagnostic) => void;
   /** 用户澄清函数（ask_user 内置工具使用） */
   requestUserClarification?: (card: unknown) => Promise<unknown>;
   /** 是否向模型公布并允许 Ask/不确定副作用确认工具；默认 true。 */
   includeInteractiveTools?: boolean;
+  /** 计划模式状态；控制计划工具组可见性（undefined = 不注入计划工具，兼容旧调用方/子任务）。 */
+  planState?: import("../plan-mode").PlanStateName;
   /** 工具上下文（权限检查等） */
   toolContext?: import("../tool-context").ToolContext;
   /** 权限检查函数 */
   checkPermission?: (toolId: string, args: Record<string, unknown>) => Promise<boolean>;
   /** ExecutionLedger：可选的同进程工具去重缓存（v3 §5.5.1.1） */
   executionLedger?: import("../execution-ledger").ExecutionLedger;
+  /** ToolOutputStore：生产 Harness 注入的完整工具结果存储。 */
+  toolOutputStore?: ToolOutputStore;
   /** 父会话注入的前台子任务执行器；子 Harness 不会继续注入它。 */
   taskExecutor?: (request: import("../task-runtime").TaskExecuteRequest) => Promise<import("../task-runtime").TaskExecuteResult>;
 }
@@ -179,17 +255,17 @@ export interface HarnessResult {
   finalAnswer: string;
   /** 最终 Agent State 快照 */
   finalState: AgentState;
-  /** 是否因超时/轮数上限退出（兼容字段；新消费方请改用 terminal.status） */
+  /** 是否因超时退出（兼容字段；新消费方请改用 terminal.status） */
   terminated: boolean;
   /** 终止原因（兼容字段；新消费方请改用 terminal.reason） */
-  terminateReason?: "max_rounds" | "timeout" | "cancelled" | "error";
+  terminateReason?: "timeout" | "cancelled" | "error";
   /**
    * Canonical 终态结算（Task 2 / C1）。
    *
    * 新消费方（CyreneAgent.runWithEvents、agui-bridge settlement gate）必须读 terminal，
    * 不要再从 terminated / terminateReason 反推：
    *  - status="success"：模型自然收尾（无 tool call 或主动结束）。
-   *  - status="timeout"：reason ∈ { max_rounds, timeout }。
+   *  - status="timeout"：reason="timeout"。
    *  - status="cancelled"：reason="user_cancelled"（Task 3 才会真正写入；Task 2 占位）。
    *  - status="error"：reason 来自 AgentRuntimeError.code 或工具 fatal。
    *

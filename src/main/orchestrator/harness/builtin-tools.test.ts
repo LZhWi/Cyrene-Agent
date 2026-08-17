@@ -26,7 +26,12 @@ function currentState(): AgentState {
 describe("Harness user-wait builtins", () => {
   it("omits interactive builtins when the channel cannot render Ask", () => {
     expect(getHarnessBuiltinToolSpecs({ includeInteractive: false }).map((tool) => tool.name))
-      .toEqual(["update_todo", "task"]);
+      .toEqual(["update_todo", "task", "read_tool_result"]);
+  });
+
+  it("omits task when the run has no task executor", () => {
+    expect(getHarnessBuiltinToolSpecs({ includeInteractive: false, includeTask: false }).map((tool) => tool.name))
+      .toEqual(["update_todo", "read_tool_result"]);
   });
 
   it("validates and delegates a foreground task without exposing its prompt", async () => {

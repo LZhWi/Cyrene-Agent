@@ -14,50 +14,56 @@ import type { ToolDefinition } from "../tool-registry";
 import type { ToolCallResult } from "../types";
 import type { AgentState, HarnessEvent, ToolObservation } from "./types";
 import { parseToolCallArgs, toolCallFingerprint } from "./types";
-import { isHarnessBuiltin, isInteractiveHarnessBuiltin } from "./builtin-tools";
+import { isHarnessBuiltin, isInteractiveHarnessBuiltin, TASK_TOOL_ID } from "./builtin-tools";
 import { executeUpdateTodo, executeAskUser, executeTask } from "./builtin-tools";
+import { ENTER_PLAN_MODE_TOOL_ID, WRITE_PLAN_TOOL_ID, executeEnterPlanMode, executeWritePlan } from "./plan-tools";
+import { executeReadToolResult, READ_TOOL_RESULT_TOOL_ID } from "./tool-output/read-tool-result";
 import { resolveSideEffect } from "./side-effect-resolver";
+import { extractFileChangesFromOutput } from "../tool-evidence";
 import { isBlockedByUncertainEffect } from "./uncertain-effect-guard";
 import { ExecutionLedger } from "../execution-ledger";
 import type { ToolExecutionOutcome } from "../types";
 import { executeToolDefinition } from "../tool-executor";
+import type { ToolOutputStore } from "./tool-output/tool-output-store";
+import { ToolOutputPersistenceError } from "./tool-output/file-tool-output-store";
 
 // ── 工具输出截断（v3 §5.7）───────────────────────────────
 
 export interface TruncationConfig {
-  softLimit: number;
-  hardLimit: number;
+  thresholdChars: number;
+  headChars: number;
+  tailChars: number;
 }
 
 export const DEFAULT_TRUNCATION: TruncationConfig = {
-  softLimit: 2000,
-  hardLimit: 8000,
+  thresholdChars: 8_192,
+  headChars: 4_096,
+  tailChars: 1_024,
 };
 
+export const TOOL_RESULT_PRUNE_MARKER = "\n\n[... tool result middle pruned ...]\n\n";
+
 /**
- * 截断工具输出（v3 §5.7 双级预算）。
- * - 软截断：超过 softLimit 截断，返回 preview
- * - 硬熔断：超过 hardLimit 强制砍到 hardLimit
+ * 剪枝模型可见的工具输出。
+ * 超出阈值时保留头尾，避免遗失末尾错误、退出码和统计摘要。
  */
 export function truncateOutput(
   output: string,
   config: TruncationConfig,
-  toolCallId: string,
+  _toolCallId: string,
 ): { preview: string; truncated: boolean; fullOutputRef?: string } {
-  if (output.length <= config.softLimit) {
+  const points = Array.from(output);
+  if (points.length <= config.thresholdChars) {
     return { preview: output, truncated: false };
   }
 
-  const truncated = true;
-  const hardCapped = output.length > config.hardLimit
-    ? output.slice(0, config.hardLimit) + `\n...[硬熔断，原长度 ${output.length}]`
-    : output;
-
   // P0: 暂不实现 backing store，fullOutputRef 省略
   // P1: 如果有 ToolOutputStore，保存完整输出并返回引用
-  const preview = hardCapped.slice(0, config.softLimit) + `\n...[已截断，原长度 ${output.length} 字符]`;
+  const preview = points.slice(0, config.headChars).join("")
+    + TOOL_RESULT_PRUNE_MARKER
+    + points.slice(-config.tailChars).join("");
 
-  return { preview, truncated, fullOutputRef: undefined };
+  return { preview, truncated: true, fullOutputRef: undefined };
 }
 
 // ── 工具执行接口 ─────────────────────────────────────────
@@ -71,6 +77,10 @@ export interface ToolDispatchContext {
   checkPermission?: (toolId: string, args: Record<string, unknown>) => Promise<boolean>;
   toolContext?: import("../tool-context").ToolContext;
   truncation?: TruncationConfig;
+  /** 完整工具输出持久化；生产 Harness 必须注入。 */
+  toolOutputStore?: ToolOutputStore;
+  /** Harness 内部重试时延后保存，确保最终 observation 对应唯一 record。 */
+  deferOutputPersistence?: boolean;
   executionLedger?: ExecutionLedger;
   taskExecutor?: import("../task-runtime").TaskExecuteRequest extends infer _T ? (request: import("../task-runtime").TaskExecuteRequest) => Promise<import("../task-runtime").TaskExecuteResult> : never;
 }
@@ -100,7 +110,8 @@ export async function dispatchToolCall(
         message: "当前渠道不支持交互式工具",
       };
     }
-    return executeHarnessBuiltin(call, ctx);
+    const result = await executeHarnessBuiltin(call, ctx);
+    return ctx.deferOutputPersistence ? result : persistToolDispatchResult(call, result, ctx);
   }
 
   // ── 普通工具 ──
@@ -177,20 +188,13 @@ export async function dispatchToolCall(
   // 截断输出（v3 §5.7）
   const truncationConfig = ctx.truncation ?? DEFAULT_TRUNCATION;
   const sideEffect = resolveSideEffect(tool, args);
-  const { preview, truncated, fullOutputRef } = truncateOutput(
+  const { preview, truncated } = truncateOutput(
     result.output,
     truncationConfig,
     call.id,
   );
 
-  ctx.onEvent?.({
-    type: "tool_end",
-    toolCallId: call.id,
-    outcome: result.status === "succeeded" ? "success" : "failure",
-    preview: preview.slice(0, 200),
-  });
-
-  // 构造 observation
+  // 构造 observation 的真实 outcome；保存输出不能改变工具执行本身的事实。
   const outcome: ToolObservation["outcome"] = result.status === "succeeded"
     ? "success"
     : result.effectState === "unknown" && sideEffect === "non_idempotent_side_effect"
@@ -209,7 +213,7 @@ export async function dispatchToolCall(
     }
   }
 
-  return {
+  const observation: ToolDispatchResult = {
     outcome,
     category: result.category,
     toolSideEffect: sideEffect,
@@ -220,9 +224,71 @@ export async function dispatchToolCall(
     output: result.output,
     truncated,
     preview,
-    fullOutputRef,
     rawResult: result,
   };
+  const persisted = ctx.deferOutputPersistence
+    ? observation
+    : await persistToolDispatchResult(call, observation, ctx);
+
+  if (!ctx.deferOutputPersistence) {
+    ctx.onEvent?.({
+      type: "tool_end",
+      toolCallId: call.id,
+      outcome: result.status === "succeeded" ? "success" : "failure",
+      preview: preview.slice(0, 200),
+      // Diff Review 卡片证据走独立字段，不受 preview 截断影响
+      changes: extractFileChangesFromOutput(result.output),
+    });
+  }
+
+  return persisted;
+}
+
+/**
+ * Persists only the final model-facing observation for one logical invocation.
+ * Harness retries call dispatch with deferOutputPersistence, then invoke this once.
+ */
+export async function persistToolDispatchResult(
+  call: ToolCall,
+  result: ToolDispatchResult,
+  ctx: ToolDispatchContext,
+): Promise<ToolDispatchResult> {
+  if (!shouldPersistResult(call, result) || !ctx.toolOutputStore || result.toolOutputRef) return result;
+  const conversationId = ctx.toolContext?.conversationId;
+  const runId = ctx.toolContext?.runId;
+  if (!conversationId || !runId) {
+    throw new ToolOutputPersistenceError("工具结果保存缺少会话或运行标识");
+  }
+  const output = result.output;
+  if (output === undefined) return result;
+  const projection = result.preview !== undefined && result.truncated !== undefined
+    ? { preview: result.preview, truncated: result.truncated }
+    : truncateOutput(output, ctx.truncation ?? DEFAULT_TRUNCATION, call.id);
+  const ref = await ctx.toolOutputStore.put({
+    conversationId,
+    runId,
+    toolCallId: call.id,
+    toolName: call.name,
+    outcome: result.outcome,
+    output,
+    truncatedForModel: projection.truncated,
+  });
+  return {
+    ...result,
+    preview: projection.preview,
+    truncated: projection.truncated,
+    fullOutputRef: ref.resultRef,
+    toolOutputRef: ref,
+  };
+}
+
+function shouldPersistResult(
+  call: ToolCall,
+  result: ToolDispatchResult,
+): result is ToolDispatchResult & { output: string; outcome: "success" | "failure" | "unknown" } {
+  return (call.name === TASK_TOOL_ID || !isHarnessBuiltin(call.name))
+    && result.output !== undefined
+    && (result.outcome === "success" || result.outcome === "failure" || result.outcome === "unknown");
 }
 
 // ── 内置工具执行 ─────────────────────────────────────────
@@ -237,8 +303,14 @@ async function executeHarnessBuiltin(
 
     case "ask_user":
       return executeAskUser(call, ctx.requestUserClarification, ctx.onEvent);
+    case ENTER_PLAN_MODE_TOOL_ID:
+      return executeEnterPlanMode(call, ctx.toolContext, ctx.onEvent);
+    case WRITE_PLAN_TOOL_ID:
+      return executeWritePlan(call, ctx.toolContext, ctx.onEvent);
     case "task":
       return executeTask(call, ctx.taskExecutor);
+    case READ_TOOL_RESULT_TOOL_ID:
+      return executeReadToolResult(call, ctx.toolOutputStore, ctx.toolContext);
 
     default:
       return {

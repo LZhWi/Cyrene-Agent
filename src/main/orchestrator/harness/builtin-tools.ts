@@ -19,6 +19,8 @@ import { isAbortError } from "../../abort-utils";
 import { resolveUncertainEffect } from "./uncertain-effect-guard";
 import type { TaskExecuteRequest, TaskExecuteResult } from "../task-runtime";
 import { buildGoldenDescendantsPrompt, getGoldenDescendantNames } from "../../tasks/task-character-pool";
+import { READ_TOOL_RESULT_TOOL_ID, readToolResultToolSpec } from "./tool-output/read-tool-result";
+import { ENTER_PLAN_MODE_TOOL_ID, WRITE_PLAN_TOOL_ID, enterPlanModeToolSpec, writePlanToolSpec } from "./plan-tools";
 
 // ── update_todo ──────────────────────────────────────────
 
@@ -32,6 +34,8 @@ export const taskToolSpec: ToolSpec = {
   name: TASK_TOOL_ID,
   description: [
     "委托一个需要独立上下文、多步执行的前台子任务。",
+    "何时用：多个互不依赖的调查方向可以并行；较大目录或多个模块的独立审查；有明确交付物的专项任务。",
+    "何时不用：一句话能回答的；只需一次工具调用的。",
     buildGoldenDescendantsPrompt(),
     "父任务会等待结果；description 只用于向用户显示委托标签，prompt 是子任务完整指令。可传 task_id 继续同一子任务。子任务不能询问用户或再次委托。",
   ].filter(Boolean).join(""),
@@ -64,7 +68,7 @@ export async function executeTask(
   }
   const result = await executor({ description, prompt, subagentType, companionId, taskId });
   return { outcome: result.status === "completed" ? "success" : "failure", tool: TASK_TOOL_ID,
-    message: `子任务“${description}”已${result.status === "completed" ? "完成" : result.status}。`,
+    message: `子任务"${description}"已${result.status === "completed" ? "完成" : result.status}。`,
     output: JSON.stringify({ taskId: result.taskId, status: result.status, text: result.text }) };
 }
 
@@ -563,6 +567,9 @@ export const HARNESS_BUILTIN_TOOL_IDS = new Set([
   UPDATE_TODO_TOOL_ID,
   ASK_USER_TOOL_ID,
   CONFIRM_UNCERTAIN_EFFECT_TOOL_ID,
+  READ_TOOL_RESULT_TOOL_ID,
+  ENTER_PLAN_MODE_TOOL_ID,
+  WRITE_PLAN_TOOL_ID,
 ]);
 
 export function isHarnessBuiltin(toolName: string): boolean {
@@ -573,9 +580,35 @@ export function isInteractiveHarnessBuiltin(toolName: string): boolean {
   return toolName === ASK_USER_TOOL_ID || toolName === CONFIRM_UNCERTAIN_EFFECT_TOOL_ID;
 }
 
-export function getHarnessBuiltinToolSpecs(options?: { includeInteractive?: boolean }): ToolSpec[] {
+/**
+ * 计划工具组按状态注入（设计稿 §3 可见性即防御）：
+ * - NORMAL：enter_plan_mode + write_plan。工具列表是 run 级固定的，模型常在
+ *   同一 run 内先调 enter_plan_mode 再调 write_plan，因此两者必须同时注入；
+ *   write_plan 自身有状态守卫（非 PLAN_DISCUSSING 调用直接 failure）。
+ * - PLAN_DISCUSSING：仅 write_plan（enter_plan_mode 物理隐藏，幂等防御）
+ * - PLAN_REVIEW / EXECUTING：全部隐藏（REVIEW 无模型轮；EXECUTING 防执行中再进计划）
+ * - undefined（旧调用方/子任务）：不注入任何计划工具
+ */
+function planToolSpecsFor(planState: import("../plan-mode").PlanStateName | undefined): ToolSpec[] {
+  switch (planState) {
+    case "NORMAL":
+      return [enterPlanModeToolSpec, writePlanToolSpec];
+    case "PLAN_DISCUSSING":
+      return [writePlanToolSpec];
+    default:
+      return [];
+  }
+}
+
+export function getHarnessBuiltinToolSpecs(options?: {
+  includeInteractive?: boolean;
+  includeTask?: boolean;
+  planState?: import("../plan-mode").PlanStateName;
+}): ToolSpec[] {
   const interactive = options?.includeInteractive !== false
     ? [askUserToolSpec, confirmUncertainEffectToolSpec]
     : [];
-  return [updateTodoToolSpec, ...interactive, taskToolSpec];
+  const task = options?.includeTask === false ? [] : [taskToolSpec];
+  const plan = planToolSpecsFor(options?.planState);
+  return [updateTodoToolSpec, ...interactive, ...task, readToolResultToolSpec, ...plan];
 }
