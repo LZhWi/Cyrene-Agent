@@ -1,0 +1,114 @@
+/* ReviewPanel — 气泡内的 Review 文件列表（点击文件打开右侧 diff 面板） */
+
+.cy-review-panel {
+  width: min(100%, 480px);
+  box-sizing: border-box;
+  margin: 7px 0 2px;
+  border: 1px solid var(--cy-border, #e7e2e5);
+  border-radius: 10px;
+  background: rgb(255 255 255 / 85%);
+  box-shadow: 0 4px 16px rgb(44 31 38 / 4%);
+  overflow: hidden;
+  app-region: no-drag;
+}
+
+/* 汇总头 */
+.cy-review-panel__summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--cy-border, #ece7ea);
+  background: #faf8f9;
+}
+.cy-review-panel__summary-title {
+  flex: 1;
+  font: 600 12px/1.2 var(--rb-font-sans, sans-serif);
+  color: var(--cy-text-muted, #78727a);
+}
+.cy-review-panel__summary-stats {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+  font: 600 12px/1.2 var(--rb-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+.cy-review-panel__summary-stats .is-add { color: #1a7f37; }
+.cy-review-panel__summary-stats .is-remove { color: #cf222e; }
+
+/* 文件列表 */
+.cy-review-panel__list {
+  max-height: 280px;
+  overflow-y: auto;
+}
+
+/* 文件项 */
+.cy-review-panel__file-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--cy-text, #2f2d31);
+  font: 12px/1.3 var(--rb-font-sans, sans-serif);
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.1s;
+}
+.cy-review-panel__file-item:hover {
+  background: var(--cy-bg-hover, #fff1f6);
+}
+
+/* kind 徽标 */
+.cy-review-panel__kind {
+  flex-shrink: 0;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.cy-review-panel__kind.is-modified { background: #ddf4ff; color: #0550ae; }
+.cy-review-panel__kind.is-created  { background: #e6ffec; color: #116329; }
+.cy-review-panel__kind.is-deleted  { background: #ffebe9; color: #82071e; }
+.cy-review-panel__kind.is-renamed  { background: #ddf4ff; color: #0550ae; }
+.cy-review-panel__kind.is-binary   { background: #f0f0f0; color: #6e7781; }
+.cy-review-panel__kind.is-large    { background: #f0f0f0; color: #6e7781; }
+
+/* 文件路径 */
+.cy-review-panel__file-path {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;
+  text-align: left;
+}
+.cy-review-panel__dir {
+  color: var(--cy-text-muted, #99939a);
+}
+.cy-review-panel__base {
+  color: var(--cy-text, #2f2d31);
+  font-weight: 600;
+}
+
+/* 文件增删统计 */
+.cy-review-panel__file-stats {
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+  font: 600 11px/1.2 var(--rb-font-mono, monospace);
+  font-variant-numeric: tabular-nums;
+}
+.cy-review-panel__file-stats .is-add { color: #1a7f37; }
+.cy-review-panel__file-stats .is-remove { color: #cf222e; }
+
+/* 右箭头（提示点击会打开侧栏） */
+.cy-review-panel__arrow {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  color: var(--cy-text-muted, #b5adb2);
+}
