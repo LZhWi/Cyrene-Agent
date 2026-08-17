@@ -40,6 +40,17 @@ tmp/
 tmpr-build.log
 tmprenderer-build.log
 
+# UI debug screenshots (intermediate comparison artifacts, local-only)
+acrylic-*.png
+mode-switch-*.png
+ms-*.png
+ms5-*.png
+pearl-*.png
+static-collab-*.png
+sticker-zindex-*.png
+tb-float-scroll.png
+src/main/game-bot/minecraft-sidecar/.vision-smoke-capture.png
+
 # Playwright CLI scratch
 .playwright-cli/
 
