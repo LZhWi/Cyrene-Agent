@@ -71,6 +71,7 @@ beforeEach(() => {
 
 const PATHS = {
   vendorDir: "/repo/vendor/cloud-music-mcp",
+  componentDir: undefined,
   runtimeDir: "/userdata/music/netease/runtime",
   accountPath: "/userdata/music/netease/account.enc",
   resourceBaseDir: "/repo",
@@ -109,10 +110,34 @@ describe("MusicService", () => {
     expect(validateTool).toHaveBeenCalledWith({});
     expect(checkTool).not.toHaveBeenCalled();
   });
-  it("getDailyRecommendations rejects when backend not ready (stopped initial)", async () => {
+  it("starts on demand before reporting that a signed-in account is required", async () => {
     const s = new MusicService(PATHS);
     expect(s.getBackendState()).toBe("stopped");
-    await expect(s.getDailyRecommendations("c1")).rejects.toThrow(/E_BACKEND_NOT_READY/);
+    await expect(s.getDailyRecommendations("c1")).rejects.toThrow(/E_ACCOUNT_REQUIRED/);
+    expect(s.getBackendState()).toBe("ready");
+  });
+
+  it("starts the backend on the first music operation", async () => {
+    searchTool.mockResolvedValue({ success: true, items: [{ id: 1, name: "X", artist: "Y" }] });
+    const s = new MusicService(PATHS);
+
+    await expect(s.searchTracks("X", "c1")).resolves.toMatchObject({ source: "search" });
+    expect(s.getBackendState()).toBe("ready");
+  });
+
+  it("closes an idle backend ten minutes after the last music operation", async () => {
+    vi.useFakeTimers();
+    searchTool.mockResolvedValue({ success: true, items: [{ id: 1, name: "X", artist: "Y" }] });
+    const s = new MusicService(PATHS);
+
+    await s.searchTracks("X", "c1");
+    expect(vi.getTimerCount()).toBe(1);
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+    vi.useRealTimers();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(s.getBackendState()).toBe("stopped");
+    expect(clientInstances[0].close).toHaveBeenCalledTimes(1);
   });
 
   it("searchTracks returns a set after start", async () => {

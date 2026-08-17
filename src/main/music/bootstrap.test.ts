@@ -44,6 +44,7 @@ import { buildMusicTools } from "../orchestrator/tools/music-tools";
 
 const PATHS = {
   vendorDir: "/repo/vendor/cloud-music-mcp",
+  componentDir: undefined,
   runtimeDir: "/repo/runtime",
   accountPath: "/repo/account.enc",
   resourceBaseDir: "/repo",
@@ -59,13 +60,13 @@ beforeEach(() => {
 });
 
 describe("bootstrapMusicService", () => {
-  it("creates a MusicService, registers IPC + tools, and triggers start()", () => {
+  it("creates a MusicService and registers IPC + tools without starting the backend", () => {
     const b = bootstrapMusicService(PATHS);
     expect(MusicService).toHaveBeenCalledTimes(1);
     expect(vi.mocked(registerMusicIpcHandlers)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(buildMusicTools)).toHaveBeenCalledTimes(1);
     expect(registered).toEqual(["music_a", "music_b"]);
-    expect(b.service.start).toHaveBeenCalledTimes(1);
+    expect(b.service.start).not.toHaveBeenCalled();
     expect(b.isShuttingDown()).toBe(false);
   });
 

@@ -6,6 +6,7 @@ const removed: string[] = [];
 const stateListeners: Array<(s: unknown) => void> = [];
 
 vi.mock("electron", () => ({
+  shell: { openPath: vi.fn().mockResolvedValue("") },
   ipcMain: {
     handle: (channel: string, fn: (e: unknown, payload: unknown) => Promise<unknown> | unknown) => {
       handlerMap[channel] = fn as (e: unknown, payload: unknown) => Promise<unknown>;
@@ -54,6 +55,8 @@ import { MusicInputError } from "./types";
       getPlayerState: vi.fn(() => "available"),
       getLoginFlowState: vi.fn(() => "idle"),
       getRootPid: vi.fn(() => undefined),
+      getComponentDir: vi.fn(() => "C:\\Users\\test\\components\\music"),
+      recheckComponent: asyncThat(() => ({ backend: "ready", account: "signed_out", player: "available", flow: "idle" })),
       onStateChange: vi.fn(onStateChangeImpl),
       pollOnce: asyncThat(),
       beginLogin: asyncThat(),
@@ -76,7 +79,7 @@ import { MusicInputError } from "./types";
   });
 
 describe("registerMusicIpcHandlers", () => {
-  it("registers all 10 invoke channels", () => {
+  it("registers all music invoke channels", () => {
     registerMusicIpcHandlers(mockService());
     const expected = [
       "music:get-status",
@@ -89,6 +92,8 @@ describe("registerMusicIpcHandlers", () => {
       "music:play-track",
       "music:play-playlist",
       "music:detect-player",
+      "music:open-component-dir",
+      "music:recheck-component",
     ];
     for (const ch of expected) {
       expect(handlerMap[ch]).toBeDefined();
@@ -100,7 +105,7 @@ describe("registerMusicIpcHandlers", () => {
     disposer();
     expect(removed).toContain("music:get-status");
     expect(removed).toContain("music:play-track");
-    expect(removed.length).toBe(10);
+    expect(removed.length).toBe(12);
   });
 
   it("MUSIC_SEARCH: keyword too long returns ok:false errorCode", async () => {

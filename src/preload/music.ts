@@ -13,6 +13,8 @@ export function exposeMusicApi() {
     playTrack: (trackId: string) => ipcRenderer.invoke(IPC.MUSIC_PLAY_TRACK, trackId),
     playPlaylist: (playlistId: string) => ipcRenderer.invoke(IPC.MUSIC_PLAY_PLAYLIST, playlistId),
     detectPlayer: () => ipcRenderer.invoke(IPC.MUSIC_DETECT_PLAYER),
+    openComponentDir: () => ipcRenderer.invoke(IPC.MUSIC_OPEN_COMPONENT_DIR),
+    recheckComponent: () => ipcRenderer.invoke(IPC.MUSIC_RECHECK_COMPONENT),
     onStateChanged: (h: (s: unknown) => void) => {
       const listener = (_: unknown, s: unknown) => h(s);
       ipcRenderer.on(IPC.MUSIC_STATE_CHANGED, listener);

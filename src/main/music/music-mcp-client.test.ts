@@ -31,6 +31,11 @@ beforeEach(() => {
 
 const VENDOR = path.resolve("/tmp/vendor/cloud-music-mcp");
 const RUNTIME = "/tmp/runtime";
+const PORTABLE = {
+  command: path.resolve("/tmp/components/music/cyrene-music.exe"),
+  args: [],
+  cwd: path.resolve("/tmp/components/music"),
+};
 
 function tool(name: string, props: Record<string, unknown>) {
   return { name, description: "", inputSchema: { type: "object", properties: props, required: Object.keys(props).filter(k => (props[k] as { required?: boolean })?.required) } };
@@ -149,6 +154,19 @@ describe("MusicMcpClient", () => {
     expect(inst.env).toBeDefined();
     expect((inst.env as NodeJS.ProcessEnv).CYRENE_MUSIC_STORAGE_DIR).toBe(RUNTIME);
     expect((inst.env as NodeJS.ProcessEnv).MINIMAX_API_KEY).toBeUndefined();
+  });
+
+  it("starts a portable component directly without uv", async () => {
+    listTools.mockResolvedValue({ tools: [] });
+    connect.mockResolvedValue(undefined);
+    const c = new MusicMcpClient(PORTABLE, RUNTIME);
+    await c.connect();
+    const sdk = await import("@modelcontextprotocol/sdk/client/stdio.js");
+    const calls = (sdk.StdioClientTransport as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const inst = calls.at(-1)?.[0] as Record<string, unknown>;
+    expect(inst.command).toBe(PORTABLE.command);
+    expect(inst.args).toEqual([]);
+    expect(inst.cwd).toBe(PORTABLE.cwd);
   });
 
   it("getRootPid returns undefined before connect", () => {

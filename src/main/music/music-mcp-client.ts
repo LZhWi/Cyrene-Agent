@@ -44,6 +44,22 @@ export interface ContractResult {
   schemaMismatch: string[];
 }
 
+export interface MusicMcpLaunch {
+  command: string;
+  args: string[];
+  cwd: string;
+}
+
+export type MusicMcpLaunchSource = string | MusicMcpLaunch | (() => Promise<MusicMcpLaunch>);
+
+export function buildDevelopmentMusicLaunch(vendorDir: string): MusicMcpLaunch {
+  return {
+    command: "uv",
+    args: ["run", "--project", vendorDir, "--frozen", "--no-dev", "cloud-music-mcp"],
+    cwd: vendorDir,
+  };
+}
+
 export class MusicMcpClient {
   private client: Client | null = null;
   private transport: StdioClientTransport | null = null;
@@ -51,19 +67,18 @@ export class MusicMcpClient {
   private rootPid: number | undefined = undefined;
 
   constructor(
-    private readonly vendorDir: string,
+    private readonly launch: MusicMcpLaunchSource,
     private readonly runtimeDir: string,
   ) {}
 
   async connect(): Promise<void> {
+    const source = typeof this.launch === "function" ? await this.launch() : this.launch;
+    const launch = typeof source === "string" ? buildDevelopmentMusicLaunch(source) : source;
     this.transport = new StdioClientTransport({
-      command: "uv",
-      args: [
-        "run", "--project", this.vendorDir, "--frozen", "--no-dev",
-        "cloud-music-mcp",
-      ],
+      command: launch.command,
+      args: launch.args,
       env: buildChildEnv({ CYRENE_MUSIC_STORAGE_DIR: this.runtimeDir }) as Record<string, string>,
-      cwd: this.vendorDir,
+      cwd: launch.cwd,
     });
     this.client = new Client({ name: "cyrene-music", version: "0.1.0" }, { capabilities: {} });
     await this.client.connect(this.transport);

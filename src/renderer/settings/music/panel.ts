@@ -10,6 +10,7 @@ import type {
 import { musicState } from "./state";
 import {
   musicFeedbackEl, musicAccountStatusText,
+  musicComponentHelp, musicOpenComponentDir, musicRecheckComponent,
   musicSearchForm, musicSearchHint,
   musicQrBox, musicQrStatus, musicQrImg, musicQrTip,
   musicLoginBtn, musicCancelBtn, musicDisconnectBtn,
@@ -44,6 +45,8 @@ export function renderMusicStatus(snapshot: MusicStatusSnapshot): void {
     login_expired: "二维码已过期", login_failed: "登录失败", connected: "网易云音乐已连接", connected_without_client: "已登录，但未检测到桌面客户端",
   };
   if (musicAccountStatusText) musicAccountStatusText.textContent = labels[state];
+  const componentUnavailable = snapshot.backend === "failed";
+  musicComponentHelp?.classList.toggle("is-hidden", !componentUnavailable);
   const musicStatusDot = document.getElementById("music-status-dot");
   if (musicStatusDot) musicStatusDot.classList.toggle("is-connected", state === "connected" || state === "connected_without_client");
   const actionHost = document.getElementById("music-actions");
@@ -310,6 +313,20 @@ export async function loadMusicPanel(): Promise<void> {
   musicLoginBtn?.addEventListener("click", () => void startMusicLogin());
   musicCancelBtn?.addEventListener("click", () => void cancelMusicLogin());
   musicDisconnectBtn?.addEventListener("click", () => void disconnectMusic());
+  musicOpenComponentDir?.addEventListener("click", async () => {
+    const result = await getMusicApi()?.openComponentDir();
+    if (!result?.ok) setMusicFeedback("err", "无法打开音乐组件文件夹");
+  });
+  musicRecheckComponent?.addEventListener("click", async () => {
+    setMusicFeedback("info", "正在检测音乐组件…");
+    const result = await getMusicApi()?.recheckComponent();
+    if (result?.ok) {
+      renderMusicStatus(result.data);
+      setMusicFeedback("ok", "音乐组件已识别");
+    } else {
+      setMusicFeedback("err", "未找到可用的音乐组件");
+    }
+  });
 
   // 搜索
   musicSearchBtn?.addEventListener("click", () => void runMusicSearch());

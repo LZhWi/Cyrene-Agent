@@ -10,6 +10,7 @@ import { MusicInputError } from "./types";
 import { MusicRouter } from "./music-router";
 import { NeteaseMusicProvider, NETEASE_PROVIDER_ID } from "./netease-music-provider";
 import type { MusicPaths } from "./paths";
+import { resolvePortableMusicComponent } from "./portable-component";
 import type {
   MusicSelectionSet,
   PlaybackDispatchResult,
@@ -28,6 +29,7 @@ import type {
 	import type { MusicStatusSnapshot } from "../../shared/music-view-state";
 	
 	const SET_TTL_MS = 30 * 60_000;
+	const MUSIC_IDLE_TIMEOUT_MS = 10 * 60_000;
 
 export interface PresentResult {
   cardRef: string;
@@ -40,6 +42,8 @@ export class MusicService {
   private playerState: MusicPlayerState = "unknown";
   private activeProfile: MusicProfile | null = null;
   private shuttingDown = false;
+  private startPromise: Promise<void> | null = null;
+  private idleTimer: NodeJS.Timeout | null = null;
 
   private readonly client: MusicMcpClient;
   private readonly detector: ProtocolDetector;
@@ -57,7 +61,11 @@ export class MusicService {
 
   constructor(paths: MusicPaths) {
     this.paths = paths;
-    this.client = new MusicMcpClient(paths.vendorDir, paths.runtimeDir);
+    const launch = paths.componentDir
+      ? async () => resolvePortableMusicComponent(paths.componentDir!)
+      : paths.vendorDir;
+    if (!launch) throw new Error("E_MUSIC_LAUNCH_NOT_CONFIGURED");
+    this.client = new MusicMcpClient(launch, paths.runtimeDir);
     this.detector = new ProtocolDetector();
     const netease = new NeteaseMusicProvider(this.client);
     this.router = new MusicRouter(new Map([[netease.id, netease]]), () => NETEASE_PROVIDER_ID);
@@ -73,6 +81,17 @@ export class MusicService {
   // ── Lifecycle ──────────────────────────────────────────────
 
   async start(): Promise<void> {
+    if (this.backendState === "ready" || this.backendState === "degraded") return;
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = this.connectBackend();
+    try {
+      await this.startPromise;
+    } finally {
+      this.startPromise = null;
+    }
+  }
+
+  private async connectBackend(): Promise<void> {
     this.backendState = "starting";
     try {
       await this.client.connect();
@@ -142,6 +161,11 @@ export class MusicService {
       };
     }
     this.shuttingDown = true;
+    this.clearIdleTimer();
+    return this.stopBackend();
+  }
+
+  private async stopBackend(): Promise<MusicShutdownReport> {
     // 1. Cancel any in-flight login flow (background polling) before tearing down
     //    the MCP client, so no further cyrene_music_login_check RPCs are issued.
     try { await this.orchestrator.shutdown(); } catch { /* ignore */ }
@@ -161,14 +185,17 @@ export class MusicService {
         processTreeExited = true;
       }
     }
+    // The backend is no longer usable once its transport has closed.  Report
+    // that immediately; deleting throwaway runtime files must not leave the
+    // UI in a misleading "ready" state while the filesystem is slow.
+    this.backendState = "stopped";
+    this.emitBackendChange("stopped");
     let runtimeRemoved = true;
     try {
       await fs.rm(this.paths.runtimeDir, { recursive: true, force: true });
     } catch {
       runtimeRemoved = false;
     }
-    this.backendState = "stopped";
-    this.emitBackendChange("stopped");
     return { rootProcessPid, transportClosed, processTreeExited, runtimeRemoved };
   }
 
@@ -178,6 +205,12 @@ export class MusicService {
   getAccountState(): MusicAccountState { return this.orchestrator.getAccountState(); }
   getPlayerState(): MusicPlayerState { return this.playerState; }
   getLoginFlowState(): LoginFlowState { return this.orchestrator.getFlowState(); }
+  getComponentDir(): string | undefined { return this.paths.componentDir; }
+
+  async recheckComponent(): Promise<MusicStatusSnapshot> {
+    await this.ensureReady();
+    return this.getSnapshot();
+  }
   getActiveProfile(): MusicProfile | null { return this.activeProfile; }
 
   getSelectionSet(setId: string, conversationId: string): MusicSelectionSet | null {
@@ -244,7 +277,7 @@ export class MusicService {
   // ── Login ──────────────────────────────────────────────────
 
   async beginLogin() {
-    this.requireReady();
+    await this.ensureReady();
     return this.orchestrator.beginLogin();
   }
 
@@ -268,7 +301,7 @@ export class MusicService {
     conversationId: string,
     options: { provider?: string; resolutionRunId?: string } = {},
   ): Promise<MusicSelectionSet> {
-    this.requireReady();
+    await this.ensureReady();
     this.requireSignedIn();
     const provider = this.router.resolve(options.provider);
     const tracks = await provider.getDailyRecommendations();
@@ -294,7 +327,7 @@ export class MusicService {
     limit?: number,
     options: { provider?: string; resolutionRunId?: string; purpose?: "discover" | "play" } = {},
   ): Promise<MusicSelectionSet> {
-    this.requireReady();
+    await this.ensureReady();
     const trimmed = (typeof keyword === "string" ? keyword : "").trim();
     if (trimmed.length === 0) throw new MusicInputError("E_INVALID_KEYWORD_EMPTY");
     if (trimmed.length > 100) throw new MusicInputError("E_INVALID_KEYWORD_TOO_LONG");
@@ -354,14 +387,14 @@ export class MusicService {
   }
 
   async getMyPlaylists(options: { provider?: string } = {}): Promise<MusicPlaylist[]> {
-    this.requireReady();
+    await this.ensureReady();
     this.requireSignedIn();
     const provider = this.router.resolve(options.provider);
     return provider.getMyPlaylists();
   }
 
   async getPlaylistDetail(playlistId: string, options: { provider?: string } = {}): Promise<MusicPlaylistDetail> {
-    this.requireReady();
+    await this.ensureReady();
     this.requireSignedIn();
     if (!/^\d+$/.test(playlistId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
     const provider = this.router.resolve(options.provider);
@@ -372,7 +405,7 @@ export class MusicService {
     name: string,
     options: { provider?: string; privacy?: boolean } = {},
   ): Promise<MusicPlaylist> {
-    this.requireReady();
+    await this.ensureReady();
     this.requireSignedIn();
     const trimmed = (typeof name === "string" ? name : "").trim();
     if (trimmed.length === 0) throw new MusicInputError("E_INVALID_PLAYLIST_NAME_EMPTY");
@@ -386,7 +419,7 @@ export class MusicService {
     trackIds: string[],
     options: { provider?: string } = {},
   ): Promise<{ added: number; playlistId: string }> {
-    this.requireReady();
+    await this.ensureReady();
     this.requireSignedIn();
     if (!/^\d+$/.test(playlistId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
     if (!Array.isArray(trackIds) || trackIds.length === 0) {
@@ -403,7 +436,7 @@ export class MusicService {
     category: "artists" | "albums",
     options: { provider?: string } = {},
   ): Promise<MusicSubscription[]> {
-    this.requireReady();
+    await this.ensureReady();
     this.requireSignedIn();
     if (category !== "artists" && category !== "albums") {
       throw new MusicInputError("E_INVALID_SUBSCRIPTION_CATEGORY");
@@ -430,21 +463,44 @@ export class MusicService {
     if (!wasPresented && !resolvedForThisRun) {
       throw new MusicInputError("E_TRACK_NOT_PLAYABLE");
     }
+    await this.ensureReady();
     return this.router.resolve(input.provider).playTrack(trackId);
   }
 
   /** Trusted renderer path: card/settings IDs originate from MusicService results. */
   async playTrackFromUi(trackId: string): Promise<PlaybackDispatchResult> {
     if (!/^\d+$/.test(trackId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
+    await this.ensureReady();
     return this.router.resolve().playTrack(trackId);
   }
 
   async playPlaylist(playlistId: string): Promise<PlaybackDispatchResult> {
     if (!/^\d+$/.test(playlistId)) throw new MusicInputError("E_INVALID_ID_FORMAT");
+    await this.ensureReady();
     return this.router.resolve().playPlaylist(playlistId);
   }
 
   // ── Helpers ────────────────────────────────────────────────
+
+  private async ensureReady(): Promise<void> {
+    if (this.shuttingDown) throw new MusicInputError("E_BACKEND_NOT_READY");
+    await this.start();
+    this.requireReady();
+    this.scheduleIdleShutdown();
+  }
+
+  private scheduleIdleShutdown(): void {
+    this.clearIdleTimer();
+    this.idleTimer = setTimeout(async () => {
+      this.idleTimer = null;
+      await this.stopBackend();
+    }, MUSIC_IDLE_TIMEOUT_MS);
+  }
+
+  private clearIdleTimer(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer);
+    this.idleTimer = null;
+  }
 
   private requireReady(): void {
     if (this.backendState !== "ready" && this.backendState !== "degraded") {

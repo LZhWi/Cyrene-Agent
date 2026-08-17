@@ -31,4 +31,6 @@ export interface MusicApi {
   search: (keyword: string, limit?: number) => Promise<MusicIpcResult<MusicSelectionResult>>;
   playTrack: (trackId: string) => Promise<MusicIpcResult<{ state: "dispatched" | "web_fallback" | "client_unavailable" | "launch_failed" }>>;
   onStateChanged: (h: (s: MusicStatusSnapshot) => void) => (() => void) | void;
+  openComponentDir: () => Promise<{ ok: boolean; errorCode?: string }>;
+  recheckComponent: () => Promise<MusicIpcResult<MusicStatusSnapshot>>;
 }

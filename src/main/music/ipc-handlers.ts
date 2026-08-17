@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain, BrowserWindow, shell } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import { MusicInputError, type MusicBackendState, type MusicAccountState, type MusicPlayerState } from "./types";
 import type { MusicService } from "./music-service";
@@ -88,6 +88,19 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
     wrap(async () => service.getPlayerState(), service),
   );
   channels.push(IPC.MUSIC_DETECT_PLAYER);
+
+  ipcMain.handle(IPC.MUSIC_OPEN_COMPONENT_DIR, async () => {
+    const componentDir = service.getComponentDir();
+    if (!componentDir) return { ok: false as const, errorCode: "E_MUSIC_COMPONENT_DEV_MODE" };
+    const error = await shell.openPath(componentDir);
+    return error
+      ? { ok: false as const, errorCode: "E_MUSIC_COMPONENT_OPEN_FAILED" }
+      : { ok: true as const };
+  });
+  channels.push(IPC.MUSIC_OPEN_COMPONENT_DIR);
+
+  ipcMain.handle(IPC.MUSIC_RECHECK_COMPONENT, () => wrap(() => service.recheckComponent(), service));
+  channels.push(IPC.MUSIC_RECHECK_COMPONENT);
 
   // ── 状态变更推送：任何 state 轴变化都广播到所有窗口 ──────────
   const unsubState = service.onStateChange((snapshot) => {

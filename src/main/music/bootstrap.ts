@@ -16,11 +16,9 @@ export function bootstrapMusicService(paths: MusicPaths, hooks: MusicToolHooks =
   const ipcDisposer = registerMusicIpcHandlers(service);
   const tools = buildMusicTools(service, hooks);
   for (const tool of tools) toolRegistry.register(tool);
-  // start() emits the "failed" backend state on error and then re-throws;
-  // attach a no-op .catch() so the rejection does not surface as
-  // UnhandledPromiseRejectionWarning. Callers observe failures via
-  // service.getBackendState() (e.g. smoke harness polls state).
-  service.start().catch(() => { /* failure is signalled via backendState="failed" */ });
+  // Do not start the optional music backend here.  It is connected lazily by
+  // the first real music action so an idle Cyrene window never keeps Python
+  // processes alive merely because the extension is installed.
 
   let shuttingDown = false;
   return {
