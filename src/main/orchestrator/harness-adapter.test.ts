@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { buildHarnessSystemPrompt, mapTerminateReasonToTerminal, sendHarnessEventAsAgui, sendTaskLifecycleAsAgui } from "./harness-adapter";
+import { buildHarnessPromptLayers, buildHarnessSystemPrompt, mapTerminateReasonToTerminal, materializeHarnessStartTranscript, sendHarnessEventAsAgui, sendTaskLifecycleAsAgui } from "./harness-adapter";
 import type { HarnessEvent } from "./harness/types";
 import type { BaseEvent } from "@ag-ui/core";
 
@@ -31,6 +31,21 @@ describe("Harness Todo working notebook policy", () => {
     expect(prompt).toContain("不得作为后续行动的强约束");
   });
 
+  it("adds Skill selection to tool modes and task delegation only to Work and Code", () => {
+    const workPrompt = buildHarnessSystemPrompt({
+      soulSystemBaseContent: "persona", toolSystemContent: "tools", conversationMode: "work",
+    } as never);
+    const learnPrompt = buildHarnessSystemPrompt({
+      soulSystemBaseContent: "persona", toolSystemContent: "tools", conversationMode: "learn",
+    } as never);
+
+    expect(workPrompt).toContain("Skill 选择");
+    expect(workPrompt).toContain("不要因为表面关键词重合而调用 Skill");
+    expect(workPrompt).toContain("多个互不依赖的调查或执行方向");
+    expect(learnPrompt).toContain("Skill 选择");
+    expect(learnPrompt).not.toContain("子代理 task 委托");
+  });
+
   it("assembles the same persona prompt for Work and Code", () => {
     const common = {
       soulSystemBaseContent: "完整人设",
@@ -46,6 +61,20 @@ describe("Harness Todo working notebook policy", () => {
 });
 
 describe("Harness recovery context", () => {
+  it("keeps recovery and response context outside the stable system prefix", () => {
+    const layers = buildHarnessPromptLayers({
+      soulSystemBaseContent: "persona",
+      toolSystemContent: "tools",
+      recoveryContext: "上次停在检查取消链路",
+      responseContext: "本轮引用资料",
+    } as never);
+
+    expect(layers.stablePrefix).not.toContain("RECOVERY_CONTEXT");
+    expect(layers.stablePrefix).not.toContain("RESPONSE_CONTEXT");
+    expect(layers.runtimeContext).toContain("上次停在检查取消链路");
+    expect(layers.runtimeContext).toContain("本轮引用资料");
+  });
+
   it("injects interrupted Todo context as read-only evidence", () => {
     const prompt = buildHarnessSystemPrompt({
       soulSystemBaseContent: "persona",
@@ -243,6 +272,26 @@ describe("sendHarnessEventAsAgui runId stamping (Issue 6)", () => {
     });
   });
 
+  it("forwards structured file changes on TOOL_CALL_RESULT independent of preview truncation", () => {
+    const changes = [{
+      file: "src/main/orchestrator/life-tools.ts",
+      kind: "modified" as const,
+      insertions: 3,
+      deletions: 1,
+      diff: [{ type: "add" as const, text: "const b = 20;" }],
+    }];
+    const events = captureEvents({
+      type: "tool_end",
+      toolCallId: "tc-changes",
+      outcome: "success",
+      preview: '{"tool":"str_replace","filePath":"E:\\very\\long\\path…', // 200 字符截断后的 preview
+      changes,
+    }) as Array<BaseEvent & { changes?: unknown }>;
+
+    expect(events[0]).toMatchObject({ type: "TOOL_CALL_RESULT", toolCallId: "tc-changes" });
+    expect((events[0] as { changes?: unknown }).changes).toEqual(changes);
+  });
+
   it("marks every non-success harness outcome as a failed tool result", () => {
     for (const outcome of ["failure", "unknown", "not_executed"] as const) {
       const [result] = captureEvents({
@@ -290,5 +339,27 @@ describe("Task delegation lifecycle projection", () => {
       value: { invocationId: "child-run-1", taskId: "task-1", description: "检查取消链路", nickname: "风堇", assetFileName: "风堇.png", status: "running" },
     })]);
     expect(JSON.stringify(sent)).not.toContain("prompt");
+  });
+
+  it("materializes runtime context before the run store is created", () => {
+    const messages = materializeHarnessStartTranscript({
+      messages: [{ role: "user", content: "继续任务" }],
+      runId: "run-1",
+      runtimeContext: "[RECOVERY_CONTEXT]\n上次停在测试失败",
+      initialState: {
+        todoItems: [{ id: "test", content: "修复测试", status: "in_progress" }],
+        uncertainEffects: [],
+      },
+      kind: "recovery",
+    });
+
+    expect(messages).toHaveLength(2);
+    expect(messages[1]).toMatchObject({
+      role: "user",
+      visibility: "internal",
+      internal: { kind: "recovery", runId: "run-1" },
+    });
+    expect(messages[1]?.content).toContain("上次停在测试失败");
+    expect(messages[1]?.content).toContain("修复测试");
   });
 });

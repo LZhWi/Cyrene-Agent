@@ -26,6 +26,10 @@ vi.mock("../prompts/prompt-loader", () => ({
   loadPromptFile: vi.fn(() => "runtime policy"),
 }));
 
+vi.mock("electron", () => ({
+  app: { getPath: vi.fn(() => "C:\\cyrene-test-user-data") },
+}));
+
 import { runHarnessWithAdapter } from "./harness-adapter";
 import type { HarnessInput } from "./harness";
 

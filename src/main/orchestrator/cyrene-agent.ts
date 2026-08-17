@@ -71,7 +71,6 @@ import { perf } from "../perf-trace";
 import { debugLog, flowLog } from "../agent-log";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 import { requestUserClarification } from "../user-choice";
-import type { TrustedAskUserProfile } from "../../shared/ask-clarification";
 import type { ConversationMode } from "../../shared/chat-types";
 import type { CyreneRunTerminalResult } from "../../shared/run-terminal";
 import { executeToolDefinition } from "./tool-executor";
@@ -94,6 +93,8 @@ export type AgentExecutionMode = "work" | "chat";
 /** CyreneAgent.run() 需要的输入——桥层构造好后塞进 input.state 或 forwardedProps。 */
 export interface CyreneRunOptions {
   settings: AgentLoopSettings;
+  /** 本 Run 快照的 Harness 安全工具并发上限。 */
+  maxParallelToolCalls?: number;
   /**
    * Canonical runId（Task 2 / C1）。
    * - 由 AG-UI bridge 在 IPC 入口创建，并通过本字段一路传给 Agent、Harness adapter、ToolContext、所有 AG-UI 事件。
@@ -102,6 +103,8 @@ export interface CyreneRunOptions {
    *   不得再各自生成 harness-${Date.now()} 等本地 ID。
    */
   runId?: string;
+  /** 用户明确要求继续的旧 Harness Run；仅由恢复入口注入。 */
+  resumeFromRunId?: string;
   /** 原始消息（不含 system）。FC 循环按阶段动态注入。 */
   messages: ChatMessage[];
   conversationId?: string;
@@ -132,24 +135,21 @@ export interface CyreneRunOptions {
   toolSystemContent: string;
   /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。 */
   soulSystemBaseContent: string;
+  /** 每次请求才附加给 Soul 的可变运行时上下文；不参与稳定缓存前缀。 */
+  soulRuntimeContext?: string;
+  /** Plan Mode 时注入的 cyrene-plan-mode skill 正文；可变，不参与稳定缓存前缀，
+   *  在 harness runtimeParts 里拼，避免进/出 plan mode 打断 stablePrefix 缓存。 */
+  planSkillContext?: string;
   /** 只应用到 Soul 最终自然语言回复，禁止影响 CITA、Action Gate 与 Native FC。 */
   soulSampling?: ApprovedStyleSampling;
   /** 不带时间戳前缀的 messages，给 Action Gate 用。未传时回退到 messages。 */
   cleanMessages?: ChatMessage[];
-  /** Native FC 专用 system prompt（从 native_fc_system.md 读取）。 */
-  nativeFcSystemContent?: string;
-  /** Action Gate 专用 system prompt（从 action_gate_system.md 读取）。 */
-  actionGateSystemPrompt?: string;
   /** [RESPONSE_CONTEXT] 文本，从 CITA 结果生成，给 Soul 动态追加。 */
   responseContext?: string;
   /** 本地主进程生成的可信默认城市、桌面等运行环境信息。 */
   runtimeEnvironmentContext?: string;
   /** 上一次异常中断 Run 的只读 Todo/执行检查点；只用于帮助模型恢复方向。 */
   recoveryContext?: string;
-  /** Ask Soul 专用轻量提示词。 */
-  askSystemContent?: string;
-  /** Ask Soul 只使用称呼、昵称和性别约束。 */
-  trustedAskUserProfile?: TrustedAskUserProfile;
   /** 由 AG-UI bridge 注入，确保 Ask 卡片回到实际发起本轮的渲染窗口。 */
   requestUserClarification?: (
     card: import("../../shared/ask-clarification").AskClarificationCard,
@@ -426,6 +426,7 @@ export class CyreneAgent extends AbstractAgent {
               adapter,
               messages: options.messages,
               soulSystemBaseContent: options.soulSystemBaseContent,
+              runtimeContext: [options.soulRuntimeContext, options.citaContextBlock, options.responseContext].filter(Boolean).join("\n\n---\n\n"),
               soulSampling: options.soulSampling,
               timeoutMs: options.timeoutMs,
               imageCaptionFallback: options.imageCaptionFallback,
@@ -444,39 +445,6 @@ export class CyreneAgent extends AbstractAgent {
               mode: options.conversationMode,
               allowedSkillIds: options.capabilities?.skillIds,
             });
-            const commonOptions = {
-              settings: options.settings,
-              adapter,
-              messages: options.messages,
-              tools: options.tools ?? toolRegistry.getEnabledTools(),
-              toolSystemContent: options.toolSystemContent,
-              soulSystemBaseContent: options.soulSystemBaseContent,
-              soulSampling: options.soulSampling,
-              cleanMessages: options.cleanMessages,
-              nativeFcSystemContent: options.nativeFcSystemContent,
-              actionGateSystemPrompt: options.actionGateSystemPrompt,
-              responseContext: options.responseContext,
-              runtimeEnvironmentContext: options.runtimeEnvironmentContext,
-              askSystemContent: options.askSystemContent,
-              trustedAskUserProfile: options.trustedAskUserProfile,
-              conversationId: options.conversationId ?? "default",
-              runId,
-              requestUserClarification: options.requestUserClarification
-                ?? ((card) => requestUserClarification(
-                  card,
-                  undefined,
-                  undefined,
-                  { runId, revision: 1 },
-                )),
-              timeoutMs: options.timeoutMs,
-              executeTool,
-              onEvent,
-              signal: abortController.signal,
-              markAbort,
-              availableSkills: options.availableSkills ?? [],
-              mode: options.conversationMode,
-              executionLedger: executionLedgers.forScope(`${options.conversationId ?? "default"}:messages-${options.messages.length}`),
-            };
             const conversationId = options.conversationId ?? "default";
             // Work / Learn / Code 统一通过 CyreneHarness。
             // Issue 5：传 runOptions（含 canonical runId），不传原始 options。

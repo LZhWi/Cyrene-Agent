@@ -1,4 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("../token-usage-store", () => ({
+  recordUsage: vi.fn(),
+  recordRequest: vi.fn(),
+}));
+
 import { runChatLoop as runChatLoopProduction, type ChatLoopOptions } from "./chat-loop";
 import { createSseReader } from "./vendors";
 import type {
@@ -154,6 +160,37 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("runChatLoop", () => {
+  it("keeps the chat system prefix stable while appending runtime context as a wire-only suffix", async () => {
+    const adapter = new FakeAdapter();
+    await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
+      adapter,
+      messages: [{ role: "user", content: "在吗" }],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      runtimeContext: "[RUNTIME] 当前时间与附件",
+      timeoutMs: 0,
+      fallbackRevealIntervalMs: 0,
+      recordUsage: vi.fn(),
+      streamChat: async (input) => {
+        adapter.buildStreamRequest(input.request);
+        return {
+          assistantMessage: { role: "assistant", content: "你好" },
+          text: "你好",
+          toolCalls: [],
+          finishReason: "stop",
+          raw: {},
+          usage: { input: 1, output: 1 },
+        };
+      },
+    });
+
+    expect(adapter.requests[0].messages[0]).toEqual({ role: "system", content: "SOUL_SYSTEM" });
+    expect(adapter.requests[0].messages.at(-1)).toEqual({
+      role: "user",
+      content: "<runtime_context>\n[RUNTIME] 当前时间与附件\n</runtime_context>",
+    });
+  });
+
   it("uses the SDK stream runner for a Chat request", async () => {
     const adapter = new FakeAdapter();
     const streamChat = vi.fn(async (input: {
@@ -211,7 +248,7 @@ describe("runChatLoop", () => {
     expect(result.toolResults).toEqual([]);
     expect(result.reply).toBe("只是陪你聊聊。");
     expect(result.totalUsage).toEqual({ input: 12, output: 6 });
-    expect(recordUsage).toHaveBeenCalledWith(12, 6, 1);
+    expect(recordUsage).toHaveBeenCalledWith(12, 6, 1, undefined, undefined);
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "text_message_start" }));
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ type: "text_message_end" }));
   });

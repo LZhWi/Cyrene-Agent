@@ -1,6 +1,6 @@
 import { stripLeakedChatTimeContext } from "../chat-time-context";
 import { ChatTimeStreamPrefixFilter } from "../chat-time-stream-filter";
-import { recordUsage } from "../token-usage-store";
+import { recordUsage, recordRequest } from "../token-usage-store";
 import { AgentRuntimeError } from "./agent-runtime-error";
 import type {
   AgentLoopSettings,
@@ -20,17 +20,20 @@ import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 import { getTimeoutSettings } from "../timeout-manager";
 import { compressConversation } from "./context-manager";
 import { isExplicitStreamUnsupported } from "./vendors/stream-support";
+import { composePromptLayers } from "./prompt-layers";
 
 export interface ChatLoopOptions {
   settings: AgentLoopSettings;
   adapter: ChatVendorAdapter;
   messages: ChatMessage[];
   soulSystemBaseContent: string;
+  /** 每次请求才注入的本轮上下文，不能写回对话历史或稳定前缀。 */
+  runtimeContext?: string;
   soulSampling?: ApprovedStyleSampling;
   timeoutMs: number;
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
   onEvent?: (event: AgentLoopEvent) => void;
-  recordUsage?: (input: number, output: number, calls: number) => void;
+  recordUsage?: (input: number, output: number, calls: number, cachedInput?: number, cacheCreation?: number) => void;
   signal?: AbortSignal;
   /** 非流式降级时的展示节奏；测试可设为 0，生产默认 20ms。 */
   fallbackRevealIntervalMs?: number;
@@ -93,14 +96,9 @@ function stripToolProtocol(text: string): string {
     .trim();
 }
 
-function withSoulSystem(messages: ChatMessage[], system: string): ChatMessage[] {
-  if (messages[0]?.role === "system") return messages;
-  return [{ role: "system", content: system }, ...messages];
-}
-
 export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopResult> {
   const startedAt = Date.now();
-  const usageRecorder = options.recordUsage ?? ((input, output, calls) => recordUsage(input, output, calls));
+  const usageRecorder = options.recordUsage ?? ((input, output, calls, cachedInput, cacheCreation) => recordUsage(input, output, calls, cachedInput, options.settings.model, cacheCreation));
   let usedImageCaptionFallback = false;
 
   const messages = await compressConversation({
@@ -135,7 +133,11 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
 
   const buildRequest = (reqMessages: ChatMessage[], stream: boolean): ChatRequest => ({
     model: options.settings.model,
-    messages: withSoulSystem(reqMessages, options.soulSystemBaseContent),
+    ...composePromptLayers({
+      stablePrefix: options.soulSystemBaseContent,
+      runtimeContext: options.runtimeContext,
+      mode: options.mode,
+    }, reqMessages),
     stream,
     ...(options.soulSampling ?? {}),
   });
@@ -293,8 +295,9 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
       endReasoning();
     }
 
+    recordRequest(options.settings.model);
     if (response.usage) {
-      usageRecorder(response.usage.input, response.usage.output, 1);
+      usageRecorder(response.usage.input, response.usage.output, 1, response.usage.cachedInput, response.usage.cacheCreation);
     }
     const reply = stripLeakedChatTimeContext(stripToolProtocol(response.text))
       || "刚才没有生成正常回复，请再试一次。";

@@ -7,15 +7,30 @@
  * 设计依据：docs/design/2026-08-08-cyreneHarnessloopdesign.md (v3 §11)
  */
 
+import * as fs from "fs";
 import { EventType, type BaseEvent } from "@ag-ui/core";
 import type { ChatMessage, VendorConfig } from "./vendors/types";
 import type { ToolDefinition } from "./tool-registry";
 import { toolRegistry } from "./tool-registry";
 import { checkPermission, type ToolRiskLevel } from "../permission";
+import { policyFor } from "../permission-policy";
+import {
+  completeExecution,
+  getPlanPath,
+  getPlanState,
+  isPlanReadOnly,
+  supplementPlan,
+} from "./plan-mode";
 import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./tool-context";
 import { runCyreneHarness } from "./harness";
 import type { HarnessEvent, HarnessInput } from "./harness";
-import { TODO_WORKING_NOTEBOOK_POLICY } from "./harness/todo-working-notebook";
+import {
+  TODO_WORKING_NOTEBOOK_POLICY,
+  buildCurrentTodoNotebookContext,
+} from "./harness/todo-working-notebook";
+import { appendInternalTranscriptMessage, createInternalTranscriptMessage } from "./harness/internal-transcript";
+import type { AgentState, HarnessCacheState } from "./harness/types";
+import type { PromptLayers } from "./prompt-layers";
 import type { AgentLoopResult } from "./cyrene-agent";
 import type { CyreneRunOptions, AgentLoopSettings } from "./cyrene-agent";
 import type { ToolCallResult } from "./types";
@@ -25,7 +40,13 @@ import type { ConversationMode } from "../../shared/chat-types";
 import { app } from "electron";
 import { TaskSessionStore } from "../tasks/task-session-store";
 import { createTaskExecutor } from "./task-runtime";
+import { FileToolOutputStore } from "./harness/tool-output/file-tool-output-store";
+import { getHarnessRunStore, type HarnessRequestSnapshot } from "./harness/run-store";
+import { getRunReviewTracker } from "./review/run-review-tracker";
+import type { ReviewRunStatus } from "../../shared/review-types";
+import { prepareHarnessRecovery } from "./harness/run-recovery";
 import type { TaskDelegationPresentation } from "../../shared/task-session";
+import { createHash } from "node:crypto";
 
 const LOG_PREFIX = "[HarnessAdapter]";
 const CODE_ONLY_GIT_TOOL_IDS = new Set([
@@ -36,6 +57,78 @@ const CODE_ONLY_GIT_TOOL_IDS = new Set([
   "git_push",
   "git_revert",
 ]);
+
+const HARNESS_SKILL_SELECTION_POLICY = [
+  "## Skill 选择",
+  "可用 Skill 清单中的每一项都是用户明确启用的能力，应在匹配场景下优先考虑使用，而不是默认忽略。",
+  "当当前任务明确匹配某个 Skill 的描述，且该 Skill 能提供专门流程、约束或领域能力时，调用 invoke_skill(skill_id) 获取执行指令，然后按指令执行。",
+  "不要因为表面关键词重合而调用 Skill；若多个 Skill 同时匹配，只选择完成当前任务所需的最小集合。",
+].join("\n");
+
+const HARNESS_TASK_DELEGATION_POLICY = [
+  "## 子代理 task 委托",
+  "当任务可拆成独立、多步骤的子任务，且委托能减少主任务上下文负担或让不同方向并行推进时，使用 task 委托一位黄金裔。",
+  "适合：多个互不依赖的调查或执行方向；较大目录或多个模块的独立审查；可明确交付结果的专项任务。",
+  "不要委托：一句话即可回答的问题；只需一次工具调用的操作。",
+  "主任务仍负责整合子任务结果、判断下一步并向用户完成回复。",
+].join("\n");
+
+function fingerprint(value: unknown): string {
+  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
+}
+
+function snapshotHarnessRequest(
+  options: CyreneRunOptions,
+  promptLayers: PromptLayers,
+  tools: ToolDefinition[],
+): HarnessRequestSnapshot {
+  return {
+    provider: options.settings.provider,
+    model: options.settings.model,
+    contextWindowTokens: options.settings.contextWindowTokens,
+    ...(options.settings.reasoning ? { reasoning: JSON.stringify(options.settings.reasoning) } : {}),
+    ...(options.conversationMode ? { mode: options.conversationMode } : {}),
+    promptFingerprint: fingerprint(promptLayers.stablePrefix),
+    toolSchemaFingerprint: fingerprint(tools.map((tool) => ({
+      id: tool.id,
+      description: tool.description,
+      schema: tool.inputSchema,
+    })).sort((left, right) => left.id.localeCompare(right.id))),
+    enabledToolIds: tools.map((tool) => tool.id).sort(),
+    ...(options.resolvedWorkspaceRoot ? { workspaceRoot: options.resolvedWorkspaceRoot } : {}),
+  };
+}
+
+/**
+ * 将启动/恢复时的动态事实一次性写入主 transcript。
+ * 这一步必须发生在 Run Store.create 之前，才能让首次 LLM 调用也可恢复。
+ */
+export function materializeHarnessStartTranscript(input: {
+  messages: readonly ChatMessage[];
+  runId: string;
+  runtimeContext?: string;
+  initialState?: AgentState;
+  kind: "run_start" | "recovery";
+}): ChatMessage[] {
+  const parts = [
+    input.runtimeContext,
+    input.initialState?.todoItems.length
+      ? buildCurrentTodoNotebookContext(input.initialState.todoItems)
+      : undefined,
+  ].filter((part): part is string => Boolean(part?.trim()));
+  if (parts.length === 0) return [...input.messages];
+
+  const revision = input.messages.reduce(
+    (current, message) => Math.max(current, message.internal?.revision ?? 0),
+    0,
+  ) + 1;
+  return appendInternalTranscriptMessage(input.messages, createInternalTranscriptMessage({
+    kind: input.kind,
+    revision,
+    runId: input.runId,
+    content: parts.join("\n\n---\n\n"),
+  }));
+}
 
 export function filterToolsForConversationMode(
   mode: ConversationMode | undefined,
@@ -69,7 +162,34 @@ export async function runHarnessWithAdapter(
   }
   const threadId = options.conversationId ?? "default";
 
-  console.log(`${LOG_PREFIX} starting harness run, mode=${options.conversationMode ?? "work"}`);
+  // ── 计划模式 run 首钩（设计稿 §3 / §7）──
+  // PLAN_REVIEW 期间用户直接发新消息：视为对计划的补充讨论，拉回 PLAN_DISCUSSING。
+  // 仅 code 模式参与计划状态机；work/chat 会话恒为 NORMAL。
+  if (options.conversationMode === "code" && getPlanState(threadId) === "PLAN_REVIEW") {
+    supplementPlan(threadId);
+    console.log(`${LOG_PREFIX} [Plan] new message during PLAN_REVIEW, back to PLAN_DISCUSSING`);
+  }
+  // run 组装时的计划状态快照：决定计划工具组的初始注入（builtin-tools §planToolSpecsFor）。
+  const planState = options.conversationMode === "code" ? getPlanState(threadId) : undefined;
+
+  // EXECUTING：把已批准的计划全文作为 run 级事实注入 wire-only runtime context
+  // （与 recoveryContext 同通道，进 transcript，不污染缓存前缀）。
+  let planContextBlock: string | undefined;
+  if (planState === "EXECUTING") {
+    try {
+      const planContent = await fs.promises.readFile(getPlanPath(threadId), "utf8");
+      planContextBlock = [
+        "[PLAN_CONTEXT]",
+        "用户已批准以下实施计划。请严格按计划清单顺序执行，用 update_todo 维护任务进度：",
+        "",
+        planContent.trim(),
+      ].join("\n");
+    } catch (err) {
+      console.warn(`${LOG_PREFIX} [Plan] read plan.md failed:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  console.log(`${LOG_PREFIX} starting harness run, mode=${options.conversationMode ?? "work"}${planState ? ` plan=${planState}` : ""}`);
 
   // ── 构建 VendorConfig ──
   const vendorConfig: VendorConfig = {
@@ -81,12 +201,58 @@ export async function runHarnessWithAdapter(
     reasoning: options.settings.reasoning,
   };
 
-  // ── 构建 system prompt ──
-  // Harness 使用单一 system prompt（人设 + 工具规则 + Runtime Policy）
-  const systemPrompt = buildHarnessSystemPrompt(options);
-
   // ── 构建工具列表 ──
   const tools = [...(options.capabilities?.tools ?? options.tools ?? toolRegistry.getEnabledTools())];
+  const runStore = getHarnessRunStore(app.getPath("userData"));
+  const recovered = options.resumeFromRunId
+    ? (() => {
+      const previous = runStore.get(options.resumeFromRunId!);
+      if (!previous || previous.conversationId !== threadId) throw new Error("HARNESS_RECOVERY_NOT_FOUND");
+      return prepareHarnessRecovery(previous, {
+        workspaceRoot: options.resolvedWorkspaceRoot,
+        provider: options.settings.provider,
+        model: options.settings.model,
+        enabledToolIds: tools.map((tool) => tool.id),
+      });
+    })()
+    : undefined;
+  // "继续任务"本身也是新的用户意图：恢复旧快照时保留它，避免模型只看到
+  // 旧 transcript（对话记录）而不知道用户已明确授权继续。
+  const latestIncomingMessage = options.messages.at(-1);
+  const baseRunMessages = recovered
+    ? [
+      ...recovered.messages,
+      ...(latestIncomingMessage?.role === "user" ? [{ ...latestIncomingMessage }] : []),
+    ]
+    : options.messages;
+  const recoveryContext = [options.recoveryContext, recovered?.recoveryContext, planContextBlock]
+    .filter(Boolean).join("\n\n");
+  // 恢复/CITA 等本轮事实放在 wire-only runtime context，不能污染缓存前缀。
+  const promptLayers = buildHarnessPromptLayers(
+    recoveryContext ? { ...options, recoveryContext } : options,
+  );
+  const runMessages = materializeHarnessStartTranscript({
+    messages: baseRunMessages,
+    runId,
+    runtimeContext: promptLayers.runtimeContext,
+    initialState: recovered?.state,
+    kind: recovered ? "recovery" : "run_start",
+  });
+  // 动态启动事实已经写入 transcript；后续每轮不得重新作为 runtime tail 注入。
+  const harnessPromptLayers: PromptLayers = {
+    stablePrefix: promptLayers.stablePrefix,
+    ...(promptLayers.sessionPrefix ? { sessionPrefix: promptLayers.sessionPrefix } : {}),
+    ...(promptLayers.mode ? { mode: promptLayers.mode } : {}),
+  };
+  const systemPrompt = harnessPromptLayers.stablePrefix;
+  runStore.create({
+    conversationId: threadId,
+    runId,
+    messages: runMessages,
+    request: snapshotHarnessRequest(options, harnessPromptLayers, tools),
+    ...(recovered ? { state: recovered.state, cache: recovered.cache } : {}),
+    ...(options.resumeFromRunId ? { resumedFromRunId: options.resumeFromRunId } : {}),
+  });
 
   // ── 构建工具上下文 ──
   const toolContext: ToolContext = {
@@ -102,18 +268,30 @@ export async function runHarnessWithAdapter(
   };
   const permissionCheck = async (toolId: string, args: Record<string, unknown>): Promise<boolean> => {
     if (options.permissionMode === "allow_all") return true;
+    // 计划只读第二层（设计稿 §5）：PLAN_DISCUSSING/PLAN_REVIEW 期间运行时兜底拦截。
+    // 第一层在 build-options 组装时已过滤工具列表；此处覆盖恢复 run、
+    // 状态中途切换等旁路路径。策略与第一层一致（read-only 档位允许的风险级）。
+    if (options.conversationMode === "code" && isPlanReadOnly(threadId)) {
+      const planTool = toolRegistry.getById(toolId) as (ToolDefinition & { risk?: ToolRiskLevel }) | undefined;
+      const planRisk: ToolRiskLevel = planTool?.risk ?? "safe";
+      if (policyFor("read-only", planRisk) !== "allow") {
+        console.log(`${LOG_PREFIX} [Plan] read-only enforcement blocked tool=${toolId} risk=${planRisk}`);
+        return false;
+      }
+    }
     const tool = toolRegistry.getById(toolId);
     if (!tool) return false;
     const risk: ToolRiskLevel = (tool as ToolDefinition & { risk?: ToolRiskLevel }).risk ?? "safe";
     return (await checkPermission({ toolId, toolName: tool.name, toolDescription: tool.description, args, risk, runId, signal })).allowed;
   };
+  const toolOutputStore = new FileToolOutputStore(app.getPath("userData"));
   const taskExecutor = options.conversationMode === "work" || options.conversationMode === "code"
     ? createTaskExecutor({
       parent: { parentConversationId: threadId, parentRunId: runId, mode: options.conversationMode,
         capabilities: options.capabilities,
         systemPrompt, vendorConfig, tools, resolvedWorkspaceRoot: options.resolvedWorkspaceRoot, signal,
         checkPermission: permissionCheck, includeInteractiveTools: options.harnessInteractiveTools,
-        permissionMode: options.permissionMode },
+        permissionMode: options.permissionMode, toolOutputStore },
       store: new TaskSessionStore(app.getPath("userData")),
       onLifecycle: (event) => sendTaskLifecycleAsAgui(event, threadId, runId, sendBaseEvent),
     })
@@ -122,10 +300,15 @@ export async function runHarnessWithAdapter(
   // ── 构建 HarnessInput ──
   const harnessInput: HarnessInput = {
     systemPrompt,
-    messages: options.messages,
+    promptLayers: harnessPromptLayers,
+    messages: runMessages,
+    runId,
+    ...(recovered ? { initialState: recovered.state } : {}),
+    ...(recovered ? { initialCache: recovered.cache } : {}),
     tools,
     vendorConfig,
     config: {
+      maxParallelToolCalls: options.maxParallelToolCalls,
       // 0 表示禁用整轮执行时钟；单次模型/工具超时仍由各自策略处理。
       totalTimeoutMs: 0,
       contextWindowTokens: options.settings.contextWindowTokens,
@@ -136,11 +319,30 @@ export async function runHarnessWithAdapter(
         sendHarnessEventAsAgui(event, messageId, threadId, runId, sendBaseEvent);
       }
     },
+    onCheckpoint: (checkpoint) => {
+      runStore.checkpoint(runId, {
+        messages: checkpoint.messages,
+        state: checkpoint.state,
+        toolOutputs: checkpoint.toolOutputs,
+        rounds: checkpoint.rounds,
+      });
+    },
+    onToolLifecycle: (event) => {
+      runStore.recordTool(runId, {
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        sideEffect: event.toolSideEffect,
+        status: event.status,
+      });
+    },
+    onCompactionLifecycle: (event) => runStore.recordCompaction(runId, event),
     requestUserClarification: options.requestUserClarification
       ? (card) => options.requestUserClarification!(card as never, signal)
       : undefined,
     includeInteractiveTools: options.harnessInteractiveTools,
+    planState,
     toolContext,
+    toolOutputStore,
     executionLedger: options.executionLedger,
     checkPermission: permissionCheck,
     taskExecutor,
@@ -162,6 +364,43 @@ export async function runHarnessWithAdapter(
     result.terminateReason,
     hasUncertainEffects,
   );
+  const terminalRunStatus = terminal.status === "success"
+    ? "completed"
+    : terminal.status === "cancelled" ? "cancelled" : "failed";
+  const finalSession = runStore.markTerminal(runId, terminalRunStatus);
+
+  // ── Review 快照：Run 终止时生成不可变 ReviewSnapshot ──
+  // 正常终止时主动 finalize；崩溃恢复（interrupted）的 Run 由前端打开 Review 时
+  // 通过 finalizeIfPending 按需补生成。
+  try {
+    const tracker = getRunReviewTracker(app.getPath("userData"));
+    const reviewStatus: ReviewRunStatus = terminalRunStatus;
+    tracker.finalizeReview(runId, finalSession.createdAt, reviewStatus);
+  } catch (err) {
+    // Review 生成失败不应阻塞 Run 结果返回
+    console.error(`${LOG_PREFIX} finalizeReview failed:`, err);
+  }
+
+  // ── 计划模式 run 尾钩（设计稿 §3）──
+  // 执行 run 结束（无论成败/取消）自动摘牌回 NORMAL；planPath 供前端"施工已完成"标注。
+  // PLAN_DISCUSSING → PLAN_REVIEW 的转换不在 adapter 做：审批流由 agui-bridge 在
+  // RUN_FINISHED 之后触发（需要 buildOptions 重开执行 run 的能力）。
+  if (options.conversationMode === "code") {
+    const finishedPlanPath = completeExecution(threadId);
+    if (finishedPlanPath) {
+      console.log(`${LOG_PREFIX} [Plan] execution finished, back to NORMAL, plan=${finishedPlanPath}`);
+      if (!signal.aborted) {
+        sendBaseEvent({
+          type: EventType.CUSTOM,
+          name: "cyrene.plan.completed",
+          value: { planPath: finishedPlanPath, runStatus: terminalRunStatus },
+          threadId,
+          runId,
+        } as BaseEvent);
+      }
+    }
+  }
+
   const toolResults: ToolCallResult[] = [];
 
   console.log(
@@ -179,7 +418,7 @@ export async function runHarnessWithAdapter(
 
 // ── System Prompt 构建 ─────────────────────────────────────
 
-export function buildHarnessSystemPrompt(options: CyreneRunOptions): string {
+export function buildHarnessPromptLayers(options: CyreneRunOptions): PromptLayers {
   const parts: string[] = [];
 
   // 人设层（Soul）
@@ -202,16 +441,36 @@ export function buildHarnessSystemPrompt(options: CyreneRunOptions): string {
     parts.push(options.toolSystemContent);
   }
 
-  if (options.recoveryContext) {
-    parts.push(`[RECOVERY_CONTEXT]\n${options.recoveryContext}`);
+  if (options.conversationMode !== "chat") {
+    parts.push(HARNESS_SKILL_SELECTION_POLICY);
+  }
+  if (options.conversationMode === "work" || options.conversationMode === "code") {
+    parts.push(HARNESS_TASK_DELEGATION_POLICY);
   }
 
+  const runtimeParts: string[] = [];
+  if (options.soulRuntimeContext) runtimeParts.push(options.soulRuntimeContext);
+  // Plan Mode 指令（可变，不进 stablePrefix——进/出 plan mode 不打断缓存前缀）
+  if (options.planSkillContext) runtimeParts.push(options.planSkillContext);
+  if (options.runtimeEnvironmentContext) runtimeParts.push(options.runtimeEnvironmentContext);
+  if (options.citaContextBlock) runtimeParts.push(options.citaContextBlock);
+  if (options.recoveryContext) runtimeParts.push(`[RECOVERY_CONTEXT]\n${options.recoveryContext}`);
   // Response Context (CITA)
-  if (options.responseContext) {
-    parts.push(`[RESPONSE_CONTEXT]\n${options.responseContext}`);
-  }
+  if (options.responseContext) runtimeParts.push(`[RESPONSE_CONTEXT]\n${options.responseContext}`);
 
-  return parts.join("\n\n---\n\n");
+  const stablePrefix = parts.join("\n\n---\n\n");
+  const uniqueRuntimeParts = runtimeParts.filter((part) => !stablePrefix.includes(part));
+  return {
+    stablePrefix,
+    ...(options.conversationMode ? { mode: options.conversationMode } : {}),
+    ...(uniqueRuntimeParts.length ? { runtimeContext: uniqueRuntimeParts.join("\n\n---\n\n") } : {}),
+  };
+}
+
+/** @deprecated 兼容外部调用；Harness 主路径改用 buildHarnessPromptLayers。 */
+export function buildHarnessSystemPrompt(options: CyreneRunOptions): string {
+  const layers = buildHarnessPromptLayers(options);
+  return [layers.stablePrefix, layers.runtimeContext].filter(Boolean).join("\n\n---\n\n");
 }
 
 // ── HarnessEvent → AG-UI BaseEvent ────────────────────────
@@ -291,6 +550,8 @@ export function sendHarnessEventAsAgui(
         messageId: `${messageId}-tool-${event.toolCallId}`,
         toolCallId: event.toolCallId,
         content: event.preview,
+        // Diff Review 卡片证据：完整结构化变更，独立于被截断的 preview 文本
+        changes: event.changes,
         role: "tool",
         status: event.outcome === "success" ? "success" : "failed",
         threadId,
@@ -321,6 +582,26 @@ export function sendHarnessEventAsAgui(
     }
     case "ask_user": {
       // ask_user 通过 requestUserClarification 处理，不需要额外事件
+      break;
+    }
+    case "plan_mode_changed": {
+      send({
+        type: EventType.CUSTOM,
+        name: "cyrene.plan",
+        value: { action: "state_changed", state: event.state },
+        threadId,
+        runId,
+      } as BaseEvent);
+      break;
+    }
+    case "plan_written": {
+      send({
+        type: EventType.CUSTOM,
+        name: "cyrene.plan",
+        value: { action: "written", planPath: event.planPath },
+        threadId,
+        runId,
+      } as BaseEvent);
       break;
     }
     case "error": {
