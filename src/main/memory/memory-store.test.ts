@@ -696,4 +696,32 @@ describe("memoryStore", () => {
     await memoryStore.setPendingTurns([])
     expect(await memoryStore.getPendingTurns()).toEqual([])
   })
+
+  it("round-trips L2 DMAE working-memory states across restart", async () => {
+    const { memoryStore } = await import("./memory-store")
+
+    // 默认为空表（存量数据没有 l2DmaeStates 字段也不报错）
+    expect(await memoryStore.getL2DmaeSnapshot()).toEqual({ states: {}, round: 0 })
+
+    await memoryStore.setL2DmaeSnapshot(
+      {
+        l2_topic: { activation: 36, userSilence: 0, modelSilence: 0, lastInjectedRound: 1, round: 1 },
+      },
+      1,
+    )
+
+    // 落盘验证：memory.json 里确实写入了状态表
+    const persisted = JSON.parse(
+      fs.readFileSync(path.join(electronMock.userDataDir, "memory.json"), "utf8"),
+    )
+    expect(persisted.l2DmaeStates.l2_topic.activation).toBe(36)
+    expect(persisted.l2DmaeRound).toBe(1)
+
+    // 重启（重新 import）后驻留集完整恢复
+    vi.resetModules()
+    const reloaded = await import("./memory-store")
+    const restored = await reloaded.memoryStore.getL2DmaeSnapshot()
+    expect(restored.round).toBe(1)
+    expect(restored.states.l2_topic.activation).toBe(36)
+  })
 })

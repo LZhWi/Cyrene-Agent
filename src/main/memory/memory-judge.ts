@@ -173,6 +173,10 @@ function normalizeCandidate(input: unknown): MemoryCandidate | null {
     certainty === "explicit" ? 0.9 :
     certainty === "inferred" ? 0.65 :
     0.4
+  // sourceQuote 原文片段：可选、去空白、截 500 字（与 prompt 软上限一致，防模型超发）
+  const sourceQuote = typeof record.sourceQuote === "string" && record.sourceQuote.trim()
+    ? record.sourceQuote.trim().slice(0, 500)
+    : undefined
   return {
     layer,
     field: typeof record.field === 'string' ? record.field : undefined,
@@ -189,6 +193,7 @@ function normalizeCandidate(input: unknown): MemoryCandidate | null {
     shouldWrite,
     reason: reason.trim(),
     forbiddenOverclaims,
+    sourceQuote,
   }
 }
 
@@ -208,6 +213,12 @@ async function callChatCompletions(
     model: settings.model,
     apiKey: settings.apiKey,
     explicitTransport: settings.explicitTransport,
+    // 提取质量依赖思考链：A/B 实测 kimi-k2.6 关闭思考时对含明确可提取信息的
+    // 8 轮窗口全部 1 秒内直出 []（零思考、零分析）；开启思考（40~72s）才能逐轮
+    // 分析并产出候选。历史 L2 也正是开思考期间形成的。
+    // 不能设 auto：该厂商默认思考虽开，但语义上 auto=不发字段，依赖服务端默认，
+    // 显式 on 更稳。代价是单次调用 40~72s，见下方超时注释。
+    reasoning: { mode: "on" },
   }
 
   try {
@@ -320,6 +331,7 @@ export class MemoryJudge {
         "  \"certainty\": \"explicit|inferred|uncertain\",",
         "  \"attribution\": \"user_explicit|assistant_inferred|mixed\",",
         "  \"evidenceQuotes\": [\"用户原话短引文，必须来自用户\"],",
+        "  \"sourceQuote\": \"L2 原文对话片段，仅 L2 输出\",",
         "  \"contextSummary\": \"最近多轮上下文概括，不超过80字\",",
         "  \"shouldWrite\": true,",
         "  \"reason\": \"为什么值得记，或为什么不写\",",
@@ -327,6 +339,11 @@ export class MemoryJudge {
         "}",
         "",
         "L1/L2 不需要 field。",
+        "L2 候选必须额外输出 sourceQuote 字段（L0/L1 不输出）：",
+        "- sourceQuote = 从最近对话里挑出的最有信息量的一段原文（用户或对话原话），软上限 500 字",
+        "- 目的：summary 是浓缩结论，会丢失专有名词/数字/代码等字面信息；sourceQuote 保留「用户当时说的原话」，召回时提供字面证据",
+        "- 不要整段照抄对话，优先挑含专有名词、数字、代码、关键名词的句子；不要把 summary 复制进 sourceQuote",
+        "- sourceQuote 里如有引号，同样用「」替代英文双引号",
         "inferred / uncertain 不允许进入 L0；如果还值得保留，只能放 L2，或者 shouldWrite=false。",
         "没有值得记录的信息时，输出：[]",
         "summary 和 evidenceQuotes 里禁止出现英文双引号，用「」替代。",
@@ -350,7 +367,8 @@ export class MemoryJudge {
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        120000, // thinking 模型 + 8 轮转录需要充足余量；后台任务，不在关键路径
+        300000, // 开思考实测 40~72s（8 轮窗口），服务端忙时可更久；后台任务不在关键路径，
+        // 给足余量避免历史停摆根因（120s 被思考链拖破后静默失败数天）重演。
         "MemoryJudge",
       )
 

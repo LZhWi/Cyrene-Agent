@@ -100,6 +100,8 @@ export class MemoryManager {
       isPinned: false,
       syncStatus: "pending_sync",
     }
+    // L2 原文对话片段（judge 同批输出）：召回注入时附字面证据；缺失时注入回退 triggerText
+    if (candidate.sourceQuote) l2Input.sourceQuote = candidate.sourceQuote
 
     const l2 = await memoryStore.addL2Memory(
       l2Input,

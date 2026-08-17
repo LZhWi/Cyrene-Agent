@@ -88,7 +88,9 @@ function loadResolverModelSettings(): ResolverModelSettings {
       apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "",
       explicitTransport: parsed.explicitTransport === "openai" || parsed.explicitTransport === "anthropic" || parsed.explicitTransport === "auto" ? parsed.explicitTransport : undefined,
     }
-  } catch {
+  } catch (err) {
+    // 与 compressor 同理：静默降级要留日志，否则 "missing api key" 对不上因果。
+    console.error("[MemoryResolver] 读取 model-settings.json 失败，退回默认设置:", err)
     return DEFAULT_MODEL_SETTINGS
   }
 }
@@ -211,7 +213,9 @@ export function buildResolverMessages(payload: ResolverPayload): Array<{ role: "
 export async function callResolverLLM(
   settings: ResolverModelSettings,
   messages: Array<{ role: "system" | "user"; content: string }>,
-  maxTokens = 700,
+  // 开思考后思考链计入同一预算，700 会被挤爆/截断（历史 "invalid resolver json" 根因）；
+  // 与 judge 对齐给 8192。
+  maxTokens = 8192,
 ): Promise<string> {
   if (!settings.apiKey) throw new Error("missing api key")
   const cfg: VendorConfig = {
@@ -220,6 +224,9 @@ export async function callResolverLLM(
     model: settings.model,
     apiKey: settings.apiKey,
     explicitTransport: settings.explicitTransport,
+    // 与 judge/compressor 同理：kimi-k2.6 关思考时结构化判断直出空/无效结果，
+    // 显式开思考保证冲突裁决质量（后台任务，可接受 40~72s 时延）。
+    reasoning: { mode: "on" },
   }
   const adapter = getAdapterForConfig(cfg)
   const http = adapter.buildRequest({
@@ -228,23 +235,34 @@ export async function callResolverLLM(
     maxTokens,
     stream: false,
   }, cfg)
-  const response = await fetch(http.url, {
-    method: "POST",
-    headers: http.headers,
-    body: http.body,
-  })
-  if (!response.ok) throw new Error(`resolver request failed: HTTP ${response.status}`)
-  const data = await response.json()
-  const parsed = adapter.parseResponse(data)
-  if (parsed.usage) recordUsage(parsed.usage.input, parsed.usage.output, 1)
-  return parsed.text ?? ""
+  // judge/compressor 都有超时保护，resolver 此前裸 fetch：请求挂起会永远阻塞
+  // 串行队列里的后续任务。开思考 40~72s 量级，与 judge 对齐给 300s。
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 300000)
+  try {
+    const response = await fetch(http.url, {
+      method: "POST",
+      headers: http.headers,
+      body: http.body,
+      signal: controller.signal,
+    })
+    if (!response.ok) throw new Error(`resolver request failed: HTTP ${response.status}`)
+    const data = await response.json()
+    const parsed = adapter.parseResponse(data)
+    if (parsed.usage) recordUsage(parsed.usage.input, parsed.usage.output, 1)
+    return parsed.text ?? ""
+  } finally {
+    clearTimeout(timer)
+  }
 }
 
 export async function resolvePayload(
   payload: ResolverPayload,
   deps: ResolverDeps,
 ): Promise<MemoryConflictResolution> {
-  const raw = await deps.callLLM(buildResolverMessages(payload), 700)
+  // 不显式传 maxTokens：思考链计入同一预算，历史硬编码 700 会把输出挤爆/截断，
+  // 造成 "invalid resolver json"；走 callResolverLLM 的默认 8192。
+  const raw = await deps.callLLM(buildResolverMessages(payload), 8192)
   const parsed = extractJsonObject(raw)
   const resolution = parsed ? normalizeResolution(parsed) : null
   if (!resolution) throw new Error("invalid resolver json")

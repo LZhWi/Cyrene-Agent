@@ -74,6 +74,25 @@ describe("MemoryManager L2 sync", () => {
     )
   })
 
+  it("persists candidate sourceQuote onto the L2 entry for later literal citation", async () => {
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_quote")
+    const { memoryManager } = await import("./memory-manager")
+    const { memoryStore } = await import("./memory-store")
+    const candidate: MemoryCandidate = {
+      layer: "L2",
+      content: "用户在做前端项目",
+      confidence: 0.9,
+      triggerText: "我在做前端",
+      sourceQuote: "我用 React 18.2 做的前端，部署在 vercel 上",
+    }
+
+    await memoryManager.writeMemory([candidate])
+
+    const allL2 = await memoryStore.getAllL2()
+    expect(allL2).toHaveLength(1)
+    expect(allL2[0].sourceQuote).toBe("我用 React 18.2 做的前端，部署在 vercel 上")
+  })
+
   it("keeps L2 as sync_failed when RAG write fails", async () => {
     ragMock.addL2MemoryVector.mockRejectedValue(new Error("RAG down"))
     const { memoryManager } = await import("./memory-manager")

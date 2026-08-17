@@ -194,6 +194,50 @@ describe("build-options", () => {
     expect(result.memoryContextText).toBeUndefined()
   })
 
+  it("keeps Minecraft session summaries in the same 16-item window as calls and renders them as a system-prompt block", async () => {
+    const deps = createBuildDeps()
+    deps.getMinecraftContextEvents = () => [{
+      id: "mc-1",
+      startedAt: 1_500,
+      endedAt: 1_700,
+      serverLabel: "localhost:25565",
+      players: ["Steve"],
+      summary: "我们一起在湖边盖了木屋。",
+    }]
+    const history = Array.from({ length: 15 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" as const : "assistant" as const,
+      content: `history-${index}`,
+      at: index * 100,
+    }))
+    const result = await buildAgentRunOptions({
+      messages: [...history, { role: "user", content: "接着聊", at: 2_000 }],
+      style: "01_default.md",
+    }, deps)
+
+    // 与通话同窗淘汰：16 chat + 1 联机 = 17 项 slice 16；联机事件不进 messages 数组。
+    expect(result.options.messages).toHaveLength(15)
+    expect(result.options.soulSystemBaseContent).toContain("【近期 Minecraft 联机记录｜只读事实数据】")
+    expect(result.options.soulSystemBaseContent).toContain("我们一起在湖边盖了木屋。")
+    // MemoryJudge 通过 memoryContextText 拿到联机记录事实来源
+    expect(result.memoryContextText).toContain("我们一起在湖边盖了木屋。")
+  })
+
+  it("keeps Minecraft session summaries out of unrelated external-channel conversations", async () => {
+    const deps = createBuildDeps()
+    deps.getMinecraftContextEvents = () => [{
+      id: "mc-1", startedAt: 1_000, endedAt: 1_100, serverLabel: "srv", players: [], summary: "本地联机私有摘要",
+    }]
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "微信消息", at: 2_000 }],
+      style: "01_default.md",
+      channel: "wechat",
+      sessionId: "channel:wechat:user",
+    }, deps)
+
+    expect(result.options.soulSystemBaseContent).not.toContain("本地联机私有摘要")
+    expect(result.memoryContextText).toBeUndefined()
+  })
+
   it("toolSystemContent / soulSystemBaseContent 是分开的两套字符串", async () => {
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "你好" }],

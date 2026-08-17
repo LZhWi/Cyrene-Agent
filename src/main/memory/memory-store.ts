@@ -1,7 +1,7 @@
 import * as fs from "fs"
 import * as path from "path"
 import { getUserDataDir } from "../runtime/runtime-paths"
-import { ConflictLog, L0Profile, L1Profile, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryJudgeTurn, MemoryStore, ReflectionLog } from "./memory-types"
+import { ConflictLog, L0Profile, L1Profile, L2DmaeState, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryJudgeTurn, MemoryStore, ReflectionLog } from "./memory-types"
 import { appendMemoryTrace } from "./memory-trace"
 
 const CURRENT_SCHEMA_VERSION = 2
@@ -111,6 +111,9 @@ export function repairMigrations(store: Partial<MemoryStore>): MemoryStore {
     pendingTurns: Array.isArray(store.pendingTurns) ? store.pendingTurns.filter(
       (turn) => turn && typeof turn.userInput === "string" && typeof turn.assistantReply === "string",
     ) : [],
+    // DMAE 状态属于运行时缓存：损坏/缺失时重建为空表即可，不影响记忆本体。
+    l2DmaeStates: store.l2DmaeStates && typeof store.l2DmaeStates === "object" ? store.l2DmaeStates : {},
+    l2DmaeRound: typeof store.l2DmaeRound === "number" ? store.l2DmaeRound : 0,
     version: typeof store.version === "number" ? store.version : 1,
   }
 }
@@ -537,7 +540,12 @@ class MemoryStoreManager {
     return (store.conflictLogs ?? [])
       .filter((log) => (
         log.status === "candidate" &&
-        log.resolverStatus === "queued" &&
+        // failed 条目允许带重试：历史故障（小预算导致 invalid json）曾把 4 条冲突
+        // 永久卡在 failed，队列过滤只认 queued 导致修复后也不会再被裁决。
+        // 上限 3 次，避免真坏数据无限重试；节奏由调用方 60s 间隔 + 每 5 轮一次控制。
+        (log.resolverStatus === "queued" || (
+          log.resolverStatus === "failed" && (log.resolverAttemptCount ?? 0) < 3
+        )) &&
         log.resolverPriority !== undefined &&
         log.resolverPriority !== "none"
       ))
@@ -765,6 +773,20 @@ class MemoryStoreManager {
       })
     }
     return results
+  }
+
+  /** 读取 L2 DMAE 工作记忆状态表（重启恢复驻留集用） */
+  async getL2DmaeSnapshot(): Promise<{ states: Record<string, L2DmaeState>; round: number }> {
+    const store = await this.load()
+    return { states: { ...(store.l2DmaeStates ?? {}) }, round: store.l2DmaeRound ?? 0 }
+  }
+
+  /** 整表替换 L2 DMAE 状态；调用方（dmae-manager）负责防抖，这里不做限频 */
+  async setL2DmaeSnapshot(states: Record<string, L2DmaeState>, round: number): Promise<void> {
+    const store = await this.load()
+    store.l2DmaeStates = { ...states }
+    store.l2DmaeRound = round
+    await this.save(store)
   }
 }
 

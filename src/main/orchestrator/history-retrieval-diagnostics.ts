@@ -428,7 +428,34 @@ export async function runHistoryRetrievalV2Shadow(input: {
     });
   });
   const fusedCandidates = reciprocalRankFusion(groups.map((hits) => filterByCutoff(hits, cutoff)));
+  // RRF 共识戳记：多通道（hybrid 各查询 + 语义通道）秩共识是 storyline/主题连续性
+  // 的最强信号（实测：主线轮次占 RRF 前 13，而 reranker 因词汇偏置把离题轮排更高）。
+  // 戳记 1-based 秩供 diversify 作为证据融合，防止 cross-encoder 词汇偏置独裁。
+  fusedCandidates.forEach((hit, index) => {
+    hit.metadata = { ...hit.metadata, rrfEvidenceRank: index + 1 };
+  });
   const candidates = input.expandCandidates ? input.expandCandidates(fusedCandidates) : fusedCandidates;
+  // 语义证据戳记：最终重排只看 cross-encoder 秩融合，原始余弦不参与终排
+  // （实测案例：cosine 0.57 的强证据轮被 reranker 推翻掉出 Top5）。
+  // 这里把语义通道（纯余弦）的最佳排名写入 metadata，供 diversify 在角色平衡前
+  // 作为一路证据融合，防止 reranker 对强余弦证据"独裁"。句窗候选回退父文排名。
+  const semanticRankByKey = new Map<string, number>();
+  provenance.forEach((sources, key) => {
+    for (const s of sources) {
+      if (s.channel !== "semantic_raw" && s.channel !== "semantic_intent") continue;
+      const prev = semanticRankByKey.get(key);
+      if (prev === undefined || s.rank < prev) semanticRankByKey.set(key, s.rank);
+    }
+  });
+  const provenanceKeyOf = (text: string) => text.normalize("NFC").replace(/\r\n?/g, "\n").trim();
+  for (const hit of candidates) {
+    const key = provenanceKeyOf(hit.text);
+    const parent = typeof hit.metadata?.retrievalParentText === "string"
+      ? provenanceKeyOf(hit.metadata.retrievalParentText)
+      : "";
+    const rank = semanticRankByKey.get(key) ?? (parent ? semanticRankByKey.get(parent) : undefined);
+    if (rank !== undefined) hit.metadata = { ...hit.metadata, semanticEvidenceRank: rank };
+  }
   input.onCandidates?.(candidates);
 
   let method: "reranker" | "rrf" = "rrf";

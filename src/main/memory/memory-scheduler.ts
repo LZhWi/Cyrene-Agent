@@ -19,7 +19,7 @@ export interface MemorySchedulerDeps {
   writeMemory: (candidates: MemoryCandidate[]) => Promise<void>
   getL1: () => Promise<L1Profile>
   replaceL1Field: (field: "roundCount", value: number) => Promise<void>
-  runReflectionAndCompression: () => Promise<void>
+  runReflectionAndCompression: () => Promise<unknown>
   runResolverQueueOnce: () => Promise<unknown>
   getLastDecayAt: () => Promise<number>
   runDecay: () => Promise<void>

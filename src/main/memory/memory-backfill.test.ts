@@ -54,11 +54,55 @@ describe("backfillL2FromChatLogs completion state", () => {
     fs.rmSync(mocks.dataDir, { recursive: true, force: true });
   });
 
-  it("reports an existing complete marker as complete", async () => {
-    fs.writeFileSync(path.join(mocks.dataDir, ".l2-backfill-v3"), JSON.stringify({ complete: true }), "utf8");
+  it("reports already_complete when the watermark covers every turn", async () => {
+    fs.writeFileSync(path.join(mocks.dataDir, ".l2-backfill-v4"), JSON.stringify({ complete: true, coveredUntilTs: 5000 }), "utf8");
+    writeChatIndex(["chat-1"]);
+    fs.writeFileSync(path.join(mocks.dataDir, "cyrene-chats", "sessions", "chat-1.json"), JSON.stringify({
+      messages: [
+        { role: "user", content: "明天考试", at: 1000 },
+        { role: "model", content: "我会陪你复习", at: 2000 },
+      ],
+    }), "utf8");
 
     await expect(backfillL2FromChatLogs()).resolves.toEqual({ complete: true, reason: "already_complete" });
     expect(mocks.judgeRecentTurns).not.toHaveBeenCalled();
+  });
+
+  it("only replays turns after the watermark and advances it on success", async () => {
+    fs.writeFileSync(path.join(mocks.dataDir, ".l2-backfill-v4"), JSON.stringify({ complete: true, coveredUntilTs: 1500 }), "utf8");
+    writeChatIndex(["chat-1"]);
+    fs.writeFileSync(path.join(mocks.dataDir, "cyrene-chats", "sessions", "chat-1.json"), JSON.stringify({
+      messages: [
+        { role: "user", content: "旧话题", at: 1000 },
+        { role: "model", content: "旧回复", at: 1200 },
+        { role: "user", content: "新话题", at: 3000 },
+        { role: "model", content: "新回复", at: 4000 },
+      ],
+    }), "utf8");
+    mocks.judgeRecentTurns.mockResolvedValue([]);
+
+    await expect(backfillL2FromChatLogs()).resolves.toEqual({ complete: true });
+    expect(mocks.judgeRecentTurns).toHaveBeenCalledTimes(1);
+    expect(mocks.judgeRecentTurns.mock.calls[0][0]).toEqual([{ userInput: "新话题", assistantReply: "新回复" }]);
+    const marker = JSON.parse(fs.readFileSync(path.join(mocks.dataDir, ".l2-backfill-v4"), "utf8"));
+    expect(marker.complete).toBe(true);
+    expect(marker.coveredUntilTs).toBe(4000);
+  });
+
+  it("inherits the v3 completion time as the initial watermark", async () => {
+    fs.writeFileSync(path.join(mocks.dataDir, ".l2-backfill-v3"), JSON.stringify({ complete: true, at: 5000 }), "utf8");
+    writeChatIndex(["chat-1"]);
+    fs.writeFileSync(path.join(mocks.dataDir, "cyrene-chats", "sessions", "chat-1.json"), JSON.stringify({
+      messages: [
+        { role: "user", content: "明天考试", at: 1000 },
+        { role: "model", content: "我会陪你复习", at: 2000 },
+      ],
+    }), "utf8");
+
+    await expect(backfillL2FromChatLogs()).resolves.toEqual({ complete: true });
+    expect(mocks.judgeRecentTurns).not.toHaveBeenCalled();
+    const marker = JSON.parse(fs.readFileSync(path.join(mocks.dataDir, ".l2-backfill-v4"), "utf8"));
+    expect(marker.coveredUntilTs).toBe(5000);
   });
 
   it("does not report completion while RAG is unavailable", async () => {
@@ -79,13 +123,44 @@ describe("backfillL2FromChatLogs completion state", () => {
     mocks.judgeRecentTurns.mockRejectedValueOnce(new Error("temporary failure"));
 
     await expect(backfillL2FromChatLogs()).resolves.toEqual({ complete: false, reason: "batch_failed" });
-    expect(JSON.parse(fs.readFileSync(path.join(mocks.dataDir, ".l2-backfill-v3"), "utf8")).complete).toBe(false);
+    const marker = JSON.parse(fs.readFileSync(path.join(mocks.dataDir, ".l2-backfill-v4"), "utf8"));
+    expect(marker.complete).toBe(false);
+    expect(marker.coveredUntilTs).toBe(0);
   });
 
   it("reports completion after all sessions finish", async () => {
     writeChatIndex([]);
 
     await expect(backfillL2FromChatLogs()).resolves.toEqual({ complete: true });
-    expect(JSON.parse(fs.readFileSync(path.join(mocks.dataDir, ".l2-backfill-v3"), "utf8")).complete).toBe(true);
+    expect(JSON.parse(fs.readFileSync(path.join(mocks.dataDir, ".l2-backfill-v4"), "utf8")).complete).toBe(true);
+  });
+
+  it("routes batches through the LLM queue and retries once on rate limit", async () => {
+    // 真实场景：回填与聊天并发打同一 key 撞 RPM 限流。批次须走 llm-queue，
+    // 获得"限流 → 5s 退避 → 重试一次"的保护，而非直接失败整段回填。
+    vi.useFakeTimers();
+    try {
+      writeChatIndex(["chat-1"]);
+      fs.writeFileSync(path.join(mocks.dataDir, "cyrene-chats", "sessions", "chat-1.json"), JSON.stringify({
+        messages: [
+          { role: "user", content: "明天考试", at: 1000 },
+          { role: "model", content: "我会陪你复习", at: 2000 },
+        ],
+      }), "utf8");
+      mocks.judgeRecentTurns
+        .mockRejectedValueOnce(new Error("429 rate limit exceeded"))
+        .mockResolvedValueOnce([]);
+
+      const resultPromise = backfillL2FromChatLogs();
+      // 快进退避等待（llm-queue RETRY_DELAY_MS = 5s）
+      await vi.advanceTimersByTimeAsync(6000);
+      await expect(resultPromise).resolves.toEqual({ complete: true });
+      expect(mocks.judgeRecentTurns).toHaveBeenCalledTimes(2);
+      const marker = JSON.parse(fs.readFileSync(path.join(mocks.dataDir, ".l2-backfill-v4"), "utf8"));
+      expect(marker.complete).toBe(true);
+      expect(marker.coveredUntilTs).toBe(2000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

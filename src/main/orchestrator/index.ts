@@ -5,6 +5,7 @@ import { updateWorldbookActivation, getPermanentWorldbookEntries, getActiveWorld
 import { memoryStore } from "../memory/memory-store";
 import { isL1Fresh } from "../memory/memory-types";
 import { entityGraph } from "../memory/entity-graph";
+import { isL2DmaeEnabled, l2DmaeManager } from "../memory/dmae-manager";
 import { recordRecentMemorySearchEntries } from "../memory/recent-injected-memory";
 import { toolRegistry } from "./tool-registry";
 
@@ -27,18 +28,26 @@ export async function buildMemoryInjection(
   const parts: string[] = [];
 
   try {
-    // 检索 top-3 L2 用户记忆
+    // 检索 top-5 L2 用户记忆
     const userMemoryEntries = await searchMemoryEntries(userInput, "user_memory", 5);
-    if (userMemoryEntries.length > 0) {
+    const allL2 = await memoryStore.getAllL2();
+    // DMAE 工作记忆：开启时按"检索 ∪ pinned ∪ 活跃集"选注入集，话题记忆跨轮驻留；
+    // 关闭时走纯检索路径，输出与改造前一致。只读调用方用预览，不变更状态。
+    let injectionEntries = userMemoryEntries;
+    if (isL2DmaeEnabled()) {
+      injectionEntries = options.trackState !== false
+        ? await l2DmaeManager.applyTurn(userMemoryEntries, allL2)
+        : await l2DmaeManager.previewTurn(userMemoryEntries, allL2);
+    }
+    if (injectionEntries.length > 0) {
       if (options.trackState !== false) {
-        recordRecentMemorySearchEntries(userMemoryEntries);
+        recordRecentMemorySearchEntries(injectionEntries);
       }
       // 按数据信号分档措辞：冲突条目需求证；aging（久未提及）条目用不确定语气；active 正常引用
-      const allL2 = await memoryStore.getAllL2();
       const l2ById = new Map(allL2.map((l) => [l.id, l]));
       let hasConflict = false;
       let hasAging = false;
-      const annotated = userMemoryEntries.map((entry) => {
+      const annotated = injectionEntries.map((entry) => {
         const m = entry.text;
         const l2Id = entry.metadata?.l2Id;
         const l2Entry = (typeof l2Id === "string" ? l2ById.get(l2Id) : undefined)
@@ -46,15 +55,19 @@ export async function buildMemoryInjection(
         // 时间锚点：优先 L2 的 createdAt（回填条目保留原始时间），缺失时回落向量条目时间
         const d = new Date(l2Entry?.createdAt ?? entry.createdAt);
         const dateNote = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+        // 字面证据：优先提取期保留的 sourceQuote，缺失时回退 triggerText（也是用户原话短引文）。
+        // 摘要会丢失专有名词/数字等字面信息，附上原文让模型引用时有据可依。
+        const quote = (l2Entry?.sourceQuote ?? l2Entry?.triggerText ?? "").trim();
+        const quoteNote = quote && quote !== m ? `原文：${quote}；` : "";
         if (l2Entry?.conflictWith && l2Entry.conflictWith.length > 0) {
           hasConflict = true;
-          return `· ${m} ⚠️（该信息可能存在矛盾记录，记录于 ${dateNote}）`;
+          return `· ${m} ⚠️（该信息可能存在矛盾记录，${quoteNote}记录于 ${dateNote}）`;
         }
         if (l2Entry?.status === "aging") {
           hasAging = true;
-          return `· ${m}（较久远的印象，记录于 ${dateNote}）`;
+          return `· ${m}（较久远的印象，${quoteNote}记录于 ${dateNote}）`;
         }
-        return `· ${m}（记录于 ${dateNote}）`;
+        return `· ${m}（${quoteNote}记录于 ${dateNote}）`;
       });
       const notes: string[] = [];
       if (hasConflict) notes.push("带 ⚠️ 的条目存在矛盾记录，引用前先向用户求证，不要当作事实。");

@@ -60,9 +60,29 @@ export interface L2Memory {
   sourceMessageIds?: string[]
   supersededBy?: string
   mergedInto?: string
+  /** 提取时保留的「用户当时说的原话」片段：L2 是浓缩结论，会丢失专有名词/数字等
+   * 字面信息；召回注入时附上原文让后续模型看到字面证据（缺失时注入回退 triggerText）。 */
+  sourceQuote?: string
 }
 
 export type L2MemoryStatus = "active" | "aging" | "archived" | "superseded" | "merged"
+
+/**
+ * L2 DMAE 工作记忆运行时状态（每条 L2 一份，按 l2Id 索引）。
+ * 语义与世界书 DMAE（rag/worldbook.ts EntryState）对齐：
+ * - activation 0-100，>= promptThreshold 视为"活跃"，驻留注入
+ * - userSilence/modelSilence 为距上次命中的轮数，驱动二次阻力衰减
+ * 额外字段服务于驻留去重与饱和抑制（repeatWindow/repeatRho）。
+ */
+export interface L2DmaeState {
+  activation: number
+  userSilence: number
+  modelSilence: number
+  /** 上次注入时的全局轮次；-1 表示从未注入 */
+  lastInjectedRound: number
+  /** 状态最近一次更新时的全局轮次 */
+  round: number
+}
 
 export function isL2LocallyRecallable(memory: L2Memory): boolean {
   return (
@@ -167,6 +187,8 @@ export interface MemoryCandidate {
   shouldWrite?: boolean
   reason?: string
   forbiddenOverclaims?: string[]
+  /** L2 原文对话片段（≤500 字）：judge 与 summary 同批输出，落库到 L2.sourceQuote。 */
+  sourceQuote?: string
   /** 仅回填注入：该事实的原始形成时间；正常提取不填（用写入时刻）。 */
   createdAt?: number
 }
@@ -188,6 +210,10 @@ export interface MemoryStore {
   lastDecayAt?: number
   /** 尚未被 MemoryJudge 提取的残余轮次，重启后恢复，避免丢轮 */
   pendingTurns?: MemoryJudgeTurn[]
+  /** L2 DMAE 工作记忆状态表（按 l2Id 索引），重启后恢复驻留集 */
+  l2DmaeStates?: Record<string, L2DmaeState>
+  /** DMAE 全局轮次计数（每次带状态更新的注入轮 +1） */
+  l2DmaeRound?: number
   /** @deprecated Use schemaVersion for memory.json migrations. */
   version: number
 }

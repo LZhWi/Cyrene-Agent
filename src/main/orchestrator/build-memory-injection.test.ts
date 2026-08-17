@@ -1,5 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import * as fs from "fs"
+import * as os from "os"
+import * as path from "path"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { clearRecentMemoryInjections, wasRecentlyInjectedMemory } from "../memory/recent-injected-memory"
+
+const testEnv = vi.hoisted(() => ({
+  userDataDir: "",
+}))
 
 const ragMock = vi.hoisted(() => ({
   searchMemory: vi.fn(),
@@ -16,6 +23,8 @@ const memoryStoreMock = vi.hoisted(() => ({
   getAllL2: vi.fn(),
   getL0: vi.fn(),
   getL1: vi.fn(),
+  getL2DmaeSnapshot: vi.fn(async () => ({ states: {}, round: 0 })),
+  setL2DmaeSnapshot: vi.fn(async () => undefined),
 }))
 
 const entityGraphMock = vi.hoisted(() => ({
@@ -25,11 +34,13 @@ const entityGraphMock = vi.hoisted(() => ({
 vi.mock("../rag", () => ragMock)
 vi.mock("../memory/memory-store", () => ({ memoryStore: memoryStoreMock }))
 vi.mock("../memory/entity-graph", () => ({ entityGraph: entityGraphMock }))
+vi.mock("../runtime/runtime-paths", () => ({ getUserDataDir: () => testEnv.userDataDir }))
 vi.mock("./tool-registry", () => ({ toolRegistry: { getEnabledTools: vi.fn(() => []) } }))
 
 describe("buildMemoryInjection", () => {
   beforeEach(() => {
     clearRecentMemoryInjections()
+    testEnv.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-injection-"))
     ragMock.searchMemory.mockReset()
     ragMock.searchMemoryEntries.mockReset()
     ragMock.searchMemory.mockResolvedValue([])
@@ -38,6 +49,10 @@ describe("buildMemoryInjection", () => {
     memoryStoreMock.getAllL2.mockResolvedValue([])
     entityGraphMock.search.mockReset()
     entityGraphMock.search.mockReturnValue("")
+  })
+
+  afterEach(() => {
+    fs.rmSync(testEnv.userDataDir, { recursive: true, force: true })
   })
 
   it("records injected user memory l2 ids from RAG metadata", async () => {
@@ -113,6 +128,110 @@ describe("buildMemoryInjection", () => {
     expect(context).toContain("· 用户喜欢冰淇淋")
     expect(context).not.toContain("较久远的印象")
     expect(context).not.toContain("求证")
+  })
+
+  it("appends sourceQuote as literal evidence, falling back to triggerText", async () => {
+    ragMock.searchMemoryEntries.mockResolvedValue([
+      { id: "rag_q1", text: "用户在做前端项目", createdAt: Date.now(), score: 0.9, metadata: { l2Id: "l2_q1" } },
+      { id: "rag_q2", text: "用户喜欢香菇", createdAt: Date.now(), score: 0.8, metadata: { l2Id: "l2_q2" } },
+    ])
+    memoryStoreMock.getAllL2.mockResolvedValue([
+      // 有 sourceQuote：优先用提取期保留的原文
+      { id: "l2_q1", content: "用户在做前端项目", status: "active", conflictWith: [], sourceQuote: "我用 React 18.2 做的前端，部署在 vercel 上", triggerText: "我在做前端" },
+      // 无 sourceQuote：回退 triggerText（同样是用户原话短引文）
+      { id: "l2_q2", content: "用户喜欢香菇", status: "active", conflictWith: [], triggerText: "我喜欢吃香菇" },
+    ])
+    const { buildMemoryInjection } = await import("./index")
+
+    const context = await buildMemoryInjection("前端")
+
+    expect(context).toContain("原文：我用 React 18.2 做的前端，部署在 vercel 上；记录于")
+    expect(context).toContain("原文：我喜欢吃香菇；记录于")
+  })
+})
+
+describe("buildMemoryInjection with DMAE working memory", () => {
+  const topicL2 = {
+    id: "l2_topic",
+    content: "用户正在筹备画展",
+    status: "active",
+    conflictWith: [],
+    triggerText: "我在筹备画展",
+    syncStatus: "synced",
+    ragId: "rag_topic",
+    createdAt: Date.now(),
+  }
+
+  function enableDmae(): void {
+    fs.writeFileSync(
+      path.join(testEnv.userDataDir, "model-settings.json"),
+      JSON.stringify({ memoryDmaeEnabled: true }),
+      "utf8",
+    )
+  }
+
+  beforeEach(async () => {
+    testEnv.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-injection-dmae-"))
+    const { l2DmaeManager } = await import("../memory/dmae-manager")
+    l2DmaeManager.resetForTest()
+  })
+
+  afterEach(async () => {
+    const { l2DmaeManager } = await import("../memory/dmae-manager")
+    l2DmaeManager.resetForTest()
+  })
+
+  it("keeps a topic memory injected on the next turn even when recall misses it", async () => {
+    // 真实场景：用户连聊几轮画展后换了个说法提问，纯检索召回不到——
+    // DMAE 驻留集应让话题记忆继续在场，而不是断片。
+    enableDmae()
+    const { buildMemoryInjection } = await import("./index")
+
+    ragMock.searchMemoryEntries.mockResolvedValue([
+      { id: "rag_topic", text: "用户正在筹备画展", createdAt: Date.now(), score: 0.9, metadata: { l2Id: "l2_topic" } },
+    ])
+    memoryStoreMock.getAllL2.mockResolvedValue([topicL2])
+    const first = await buildMemoryInjection("画展准备得怎么样了")
+    expect(first).toContain("用户正在筹备画展")
+
+    // 第二轮：用户话题漂移，检索空手而归
+    ragMock.searchMemoryEntries.mockResolvedValue([])
+    const second = await buildMemoryInjection("今天天气怎么样")
+    expect(second).toContain("用户正在筹备画展")
+  })
+
+  it("read-only callers preview the working set without committing state", async () => {
+    // 真实场景：通话/只读管线与设置页沙箱走 trackState:false，
+    // 预览可以展示驻留效果，但不能把状态写进正式表。
+    enableDmae()
+    const { buildMemoryInjection } = await import("./index")
+
+    ragMock.searchMemoryEntries.mockResolvedValue([
+      { id: "rag_topic", text: "用户正在筹备画展", createdAt: Date.now(), score: 0.9, metadata: { l2Id: "l2_topic" } },
+    ])
+    memoryStoreMock.getAllL2.mockResolvedValue([topicL2])
+    const first = await buildMemoryInjection("画展准备得怎么样了", { trackState: false })
+    expect(first).toContain("用户正在筹备画展")
+
+    ragMock.searchMemoryEntries.mockResolvedValue([])
+    const second = await buildMemoryInjection("今天天气怎么样", { trackState: false })
+    // 预览未提交 → 第二次预览仍从空状态表出发，不会驻留
+    expect(second).not.toContain("用户正在筹备画展")
+  })
+
+  it("stays byte-identical to pure retrieval when the switch is off", async () => {
+    // 回归守卫：默认关闭时，第二轮检索为空就是没有注入，行为与改造前一致
+    const { buildMemoryInjection } = await import("./index")
+
+    ragMock.searchMemoryEntries.mockResolvedValue([
+      { id: "rag_topic", text: "用户正在筹备画展", createdAt: Date.now(), score: 0.9, metadata: { l2Id: "l2_topic" } },
+    ])
+    memoryStoreMock.getAllL2.mockResolvedValue([topicL2])
+    await buildMemoryInjection("画展准备得怎么样了")
+
+    ragMock.searchMemoryEntries.mockResolvedValue([])
+    const second = await buildMemoryInjection("今天天气怎么样")
+    expect(second).not.toContain("用户正在筹备画展")
   })
 })
 

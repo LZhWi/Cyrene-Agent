@@ -38,10 +38,12 @@ import { buildSocialContextBlock, type SocialAtom, type SocialTurnContext } from
 import {
   buildCallContextBlock,
   buildCallMemoryContext,
-  mergeCallEventsIntoHistory,
-  selectNewCallEventsForMemory,
+  mergeExternalEventsIntoHistory,
+  selectNewExternalEventsForMemory,
   type CallContextEvent,
 } from "../call/call-context";
+import { buildMinecraftContextBlock, buildMinecraftMemoryContext } from "../game-bot/minecraft/session-context";
+import type { MinecraftSessionEvent } from "../game-bot/minecraft/types";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
@@ -90,6 +92,8 @@ export interface BuildOptionsDeps {
   getSocialEmbeddingProvider?: () => EmbeddingProvider | null | undefined;
   retrieveSocialContext?: (conversationId: string, query: string, provider?: EmbeddingProvider | null) => Promise<SocialAtom[]>;
   getCallContextEvents?: () => CallContextEvent[];
+  /** Minecraft 联机事件（minecraft-sessions.json 档案的只读投影），与通话事件同窗淘汰。 */
+  getMinecraftContextEvents?: () => MinecraftSessionEvent[];
   isProactiveConversation?: (conversationId: string) => boolean;
 }
 
@@ -311,9 +315,19 @@ export async function buildAgentRunOptions(
   const includeCallContext = !input.channel
     || Boolean(input.sessionId && deps.isProactiveConversation?.(input.sessionId));
   const callEvents = includeCallContext ? deps.getCallContextEvents?.() ?? [] : [];
-  const mergedHistory = mergeCallEventsIntoHistory(chatContextMessages, callEvents, 16);
-  const newCallEventsForMemory = selectNewCallEventsForMemory(chatContextMessages, mergedHistory.visibleEvents);
-  const memoryContextText = buildCallMemoryContext(newCallEventsForMemory);
+  const minecraftEvents = includeCallContext ? deps.getMinecraftContextEvents?.() ?? [] : [];
+  // 联机事件与聊天/通话混入同一个 16 项窗：时间序统一淘汰，“近期事件”语义一致。
+  const mergedHistory = mergeExternalEventsIntoHistory(chatContextMessages, [...callEvents, ...minecraftEvents], 16);
+  const visibleCallEvents = mergedHistory.visibleEvents
+    .filter((event): event is CallContextEvent => !("serverLabel" in event));
+  const visibleMinecraftEvents = mergedHistory.visibleEvents
+    .filter((event): event is MinecraftSessionEvent => "serverLabel" in event);
+  const newCallEventsForMemory = selectNewExternalEventsForMemory(chatContextMessages, visibleCallEvents);
+  const newMinecraftEventsForMemory = selectNewExternalEventsForMemory(chatContextMessages, visibleMinecraftEvents);
+  const memoryContextText = [
+    buildCallMemoryContext(newCallEventsForMemory),
+    buildMinecraftMemoryContext(newMinecraftEventsForMemory),
+  ].filter(Boolean).join("\n\n");
   const { messages: llmMessages, timeContext: conversationTimeContext } = buildConversationTimeContext(
     mergedHistory.messages,
     contextTimezone,
@@ -430,8 +444,9 @@ export async function buildAgentRunOptions(
       console.warn("[SocialContext] retrieval failed:", err);
     }
   }
-  // 通话事件改为 system prompt 里的只读数据块（不再作为 role 消息插历史，避免 Anthropic 合并）。
-  const callContextBlock = buildCallContextBlock(mergedHistory.visibleEvents, contextTimezone);
+  // 通话/联机事件改为 system prompt 里的只读数据块（不再作为 role 消息插历史，避免 Anthropic 合并）。
+  const callContextBlock = buildCallContextBlock(visibleCallEvents, contextTimezone);
+  const minecraftContextBlock = buildMinecraftContextBlock(visibleMinecraftEvents, contextTimezone);
   const styleFile = input.style || "01_default.md";
   const enabledTools = deps.toolRegistry.getEnabled();
   // talk 模式白名单：只允许轻量、日常聊天场景常用的工具。
@@ -511,6 +526,7 @@ export async function buildAgentRunOptions(
     (historyContextBlock ? historyContextBlock + "\n\n" : "") +
     (socialContextBlock ? socialContextBlock + "\n\n" : "") +
     (callContextBlock ? callContextBlock + "\n\n" : "") +
+    (minecraftContextBlock ? minecraftContextBlock + "\n\n" : "") +
     (alwaysOnContext ? alwaysOnContext + "\n\n" : "") +
     (relationshipContext ? "\n\n" + relationshipContext + "\n\n" : "") +
     (musicCompanionContext ? "\n\n" + musicCompanionContext : "") +

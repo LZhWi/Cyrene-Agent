@@ -47,16 +47,23 @@ function loadModelSettings(): ModelSettings {
       apiKey: typeof parsed.apiKey === "string" ? parsed.apiKey.trim() : "",
       explicitTransport,
     };
-  } catch { return defaults; }
+  } catch (err) {
+    // 静默降级会把失败原因一起吞掉（JSON 损坏/权限异常等）；记 error 便于排查。
+    // 降级后 apiKey 为空，后续调用会以 "missing api key" 失败——有这条日志才能对上因果。
+    console.error("[MemoryCompressor] 读取 model-settings.json 失败，退回默认设置:", err);
+    return defaults;
+  }
 }
 
-async function callLLM(messages: Array<{ role: "system" | "user"; content: string }>, maxTokens = 8192): Promise<string> {
+// 导出仅供诊断探针/测试复用（与 resolver 的 callResolverLLM 同例）。
+export async function callLLM(messages: Array<{ role: "system" | "user"; content: string }>, maxTokens = 8192): Promise<string> {
   const settings = loadModelSettings();
   if (!settings.apiKey) throw new Error("missing api key");
 
   const controller = new AbortController();
-  // thinking 模型的思考链计入同一预算，30s/小预算实测多次被吃光；后台任务，不在关键路径
-  const timer = setTimeout(() => controller.abort(), 120000);
+  // 开思考的压缩调用实测 40~72s 量级，120s 在服务端忙时会被拖破（历史停摆根因）；
+  // 后台任务不在关键路径，放宽到 300s。
+  const timer = setTimeout(() => controller.abort(), 300000);
 
   const cfg = {
     provider: settings.provider,
@@ -64,6 +71,8 @@ async function callLLM(messages: Array<{ role: "system" | "user"; content: strin
     model: settings.model,
     apiKey: settings.apiKey,
     explicitTransport: settings.explicitTransport,
+    // 与 judge/resolver 同理：kimi-k2.6 关思考时直出无效结果，显式开思考保质量。
+    reasoning: { mode: "on" } as const,
   };
 
   try {
@@ -282,7 +291,7 @@ async function compressMemories(): Promise<number> {
 
 // ── 阶段 B：Reflection（L0/L1 元认知更新） ──
 
-async function runReflection(): Promise<void> {
+async function runReflection(): Promise<boolean> {
   try {
     const l0 = await memoryStore.getL0();
     const l1 = await memoryStore.getL1();
@@ -325,6 +334,8 @@ async function runReflection(): Promise<void> {
       "如果没有需要更新的信息，返回空数组 []。",
       "如果需要更新，以 JSON 数组格式返回，每个元素包含：",
       '{ "layer": "L0"|"L1", "field": "字段名", "content": "新值", "confidence": 0.0~1.0 }',
+      'layer 为 L1 时必须额外给出 "target": "recentGoals"|"recentPreferences"|"currentProject"，',
+      "指明内容归属：近期目标/计划 → recentGoals；偏好/状态/喜好 → recentPreferences；正在做的项目/工程 → currentProject。",
       "",
       "只输出 JSON，不要额外解释。",
     ].join("\n");
@@ -334,15 +345,16 @@ async function runReflection(): Promise<void> {
       { role: "user", content: prompt },
     ], 8192);
 
-    // 空 content = 模型没输出（预算耗尽等），不等于“无更新建议”；记 warn 便于终端可见
+    // 空 content = 模型没输出（预算耗尽等），不等于“无更新建议”；记 warn 便于终端可见。
+    // 对补跑标记而言这算失败（LLM 没真正回应），不返回成功。
     if (!raw.trim()) {
       console.warn("[Reflection] 拿到空 content（token 预算耗尽），本次不作“无建议”处理");
-      return;
+      return false;
     }
     const parsed = extractJsonArray(raw);
     if (!parsed || parsed.length === 0) {
       console.log("[Reflection] 无 L0/L1 更新建议");
-      return;
+      return true;
     }
 
     const validFields = Object.keys(L0_FIELD_DESCRIPTIONS);
@@ -366,7 +378,13 @@ async function runReflection(): Promise<void> {
         updateCount++;
         console.log(`[Reflection] L0.${field} 更新: "${content.slice(0, 30)}"`);
       } else if (layer === "L1") {
-        const l1Field = /目标|想要|计划|打算/.test(content) ? "recentGoals" : "recentPreferences";
+        // 优先用模型声明的 target；缺失/非法时退回关键词启发式兜底。
+        // 旧实现只有启发式：currentProject 永远不会被反思更新，且语义边界靠猜。
+        const declared = rec.target;
+        const l1Field: "recentGoals" | "recentPreferences" | "currentProject" =
+          declared === "recentGoals" || declared === "recentPreferences" || declared === "currentProject"
+            ? declared
+            : (/目标|想要|计划|打算/.test(content) ? "recentGoals" : "recentPreferences");
         await memoryStore.replaceL1Field(l1Field, content.trim());
         await memoryStore.appendReflectionLog({
           type: "l1_update",
@@ -378,8 +396,10 @@ async function runReflection(): Promise<void> {
     }
 
     console.log(`[Reflection] 完成，更新了 ${updateCount} 个字段`);
+    return true;
   } catch (err) {
     console.warn("[Reflection] 执行失败:", err);
+    return false;
   }
 }
 
@@ -388,8 +408,9 @@ async function runReflection(): Promise<void> {
 /**
  * 运行记忆压缩 + Reflection。
  * 由 scheduleMemoryWrite 在每 20 轮时触发。
+ * @returns reflectionOk：Reflection 的 LLM 调用是否真正得到回应（补跑标记据此落标）。
  */
-export async function runReflectionAndCompression(): Promise<void> {
+export async function runReflectionAndCompression(): Promise<{ reflectionOk: boolean }> {
   console.log("[Memory] 开始 20 轮 Reflection + 记忆压缩...");
 
   // 阶段 A：记忆压缩
@@ -397,7 +418,7 @@ export async function runReflectionAndCompression(): Promise<void> {
   console.log(`[Memory] 压缩完成，共压缩 ${compressed} 条原始记忆`);
 
   // 阶段 B：Reflection（L0/L1 元认知更新）
-  await runReflection();
+  const reflectionOk = await runReflection();
 
   // 重建 RAG 索引（数据有变化）
   try {
@@ -408,16 +429,20 @@ export async function runReflectionAndCompression(): Promise<void> {
   } catch { /* ignore */ }
 
   console.log("[Memory] Reflection + 压缩流程完成");
+  return { reflectionOk };
 }
 
 // ── 一次性补跑（历史欠账清算） ──
 
-const REFLECTION_CATCHUP_MARKER = ".reflection-catchup-v1";
+// v1 标记在故障期（思考拖破超时/关思考直出空）已被错误消费：reflectionLogs 至今为 0，
+// 说明那次补跑实际空转。升 v2 让修复后的版本重新补跑一次。
+const REFLECTION_CATCHUP_MARKER = ".reflection-catchup-v2";
 
 /**
  * 一次性补跑：历史轮次的 20 轮触发因小预算/30s 超时/空响应吞错全部静默空转；
  * 修复后于下次启动（L2 回填完成后）对当前累积状态跑一遍压缩+Reflection，之后回归正常 20 轮循环。
- * 幂等：标记存在直接跳过；失败不写标记，下次启动重试。
+ * 幂等：标记存在直接跳过；Reflection 的 LLM 调用没真正得到回应（抛错/空 content）
+ * 不写标记，下次启动重试——避免重蹈 v1“失败也落标、欠账永久不清”的覆辙。
  */
 export function runReflectionCatchupOnce(): void {
   void (async () => {
@@ -425,7 +450,11 @@ export function runReflectionCatchupOnce(): void {
       const marker = path.join(getUserDataDir(), REFLECTION_CATCHUP_MARKER);
       if (fs.existsSync(marker)) return;
       console.log("[MemoryCompressor] 补跑：历史 20 轮触发无产出，执行一次压缩+Reflection...");
-      await runReflectionAndCompression();
+      const { reflectionOk } = await runReflectionAndCompression();
+      if (!reflectionOk) {
+        console.warn("[MemoryCompressor] 补跑：Reflection 未得到有效回应，不落标，下次启动重试");
+        return;
+      }
       fs.writeFileSync(marker, JSON.stringify({ completedAt: Date.now() }));
       console.log("[MemoryCompressor] 补跑完成，标记已写入；后续回归正常 20 轮循环");
     } catch (err) {

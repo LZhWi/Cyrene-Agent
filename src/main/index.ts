@@ -33,6 +33,7 @@ import {
   getEntriesBySource,
   initRAG,
   isUserMemoryVectorStoreReady,
+  searchMemoryEntries,
   switchEmbeddingModel,
 } from "./rag";
 import { getEmbeddingProvider, getSceneEmbeddingProvider } from "./rag/embedding";
@@ -88,6 +89,7 @@ import type { ImageMessageAttachment, ChatMessage } from "../shared/chat-types";
 import type { GptsovitsSynthesizeRequest, GptsovitsTextSplitMethod, GptsovitsVersion } from "../shared/tts-types";
 import { configureRerankerForLazyInit, initReranker, getRerankerInstallStatus } from "./rag/reranker";
 import { memoryStore } from "./memory/memory-store"
+import { isL2DmaeEnabled, l2DmaeManager } from "./memory/dmae-manager"
 import { backupMemoryRagFiles, reconcileMemoryRag } from "./memory/memory-rag-reconciliation";
 import type { L0Profile, L1Profile } from "./memory/memory-types";
 import { broadcastChatsChanged, registerChatsIpc } from "./chats/chats-ipc";
@@ -510,6 +512,8 @@ interface ModelSettings {
   stickerSimilarityThreshold: number;
   rerankerMode: "light" | "standard" | "none";
   embeddingModel: "minilm" | "bgem3";
+  /** L2 DMAE 工作记忆总开关（默认关 = 纯检索行为，开启后由 DMAE 决定注入取舍）。 */
+  memoryDmaeEnabled: boolean;
   // 视觉模型配置（可选）。undefined 或未启用 = 不支持看图，read_image 诚实拒绝。
   vision?: VisionModelConfig;
 }
@@ -787,6 +791,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   stickerSimilarityThreshold: 0.55,
   rerankerMode: "light",
   embeddingModel: "minilm",
+  memoryDmaeEnabled: false,
 };
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
@@ -1108,6 +1113,7 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
       : 0.55,
     rerankerMode: input?.rerankerMode === "standard" || input?.rerankerMode === "none" ? input.rerankerMode : "light",
     embeddingModel: input?.embeddingModel === "bgem3" ? "bgem3" : "minilm",
+    memoryDmaeEnabled: input?.memoryDmaeEnabled === true,
     vision: normalizeVisionConfig(input?.vision),
   };
 }
@@ -4304,6 +4310,53 @@ ipcMain.handle(IPC.MEMORY_PANEL_RUN_RETRIEVAL_SANDBOX, async (_event, payload: {
     );
   }
 
+  // ── L2 事件记忆：DMAE 更新前后检索对比（只读预览，不更新状态表、不记召回统计）──
+  let l2Memory: {
+    enabled: boolean;
+    baseline: Array<{ text: string; createdAt: number; score: number; l2Id: string | null }>;
+    dmaePreview: Array<{ text: string; createdAt: number; l2Id: string | null; via: "recall" | "pinned" | "active"; activation: number | null }>;
+    states: Array<{ l2Id: string; activation: number; state: "Active" | "Dormant" | "Archived" }>;
+  } | null = null;
+  try {
+    const l2Baseline = await searchMemoryEntries(query, "user_memory", 5, { recordRecall: false });
+    const allL2 = await memoryStore.getAllL2();
+    const preview = await l2DmaeManager.previewTurnDetailed(l2Baseline, allL2);
+    const previewEntries = preview.selected;
+    const statesAfter = preview.states;
+    const l2ById = new Map(allL2.map((l2) => [l2.id, l2]));
+    const baselineL2Ids = new Set(
+      l2Baseline.map((entry) => entry.metadata?.l2Id).filter((id): id is string => typeof id === "string"),
+    );
+    const activationByL2Id = new Map(statesAfter.map((item) => [item.l2Id, item.activation]));
+    l2Memory = {
+      enabled: isL2DmaeEnabled(),
+      baseline: l2Baseline.map((entry) => ({
+        text: entry.text.slice(0, 300),
+        createdAt: entry.createdAt,
+        score: entry.score,
+        l2Id: typeof entry.metadata?.l2Id === "string" ? entry.metadata.l2Id : null,
+      })),
+      dmaePreview: previewEntries.map((entry) => {
+        const l2Id = typeof entry.metadata?.l2Id === "string" ? entry.metadata.l2Id : null;
+        const via: "recall" | "pinned" | "active" = l2Id !== null && baselineL2Ids.has(l2Id)
+          ? "recall"
+          : l2Id !== null && l2ById.get(l2Id)?.isPinned === true
+            ? "pinned"
+            : "active";
+        return {
+          text: entry.text.slice(0, 300),
+          createdAt: entry.createdAt,
+          l2Id,
+          via,
+          activation: l2Id !== null ? activationByL2Id.get(l2Id) ?? null : null,
+        };
+      }),
+      states: statesAfter,
+    };
+  } catch (err) {
+    console.warn("[MemorySandbox] L2 DMAE comparison failed:", err);
+  }
+
   return {
     query: retrieval.query,
     excludedRepeatedTestRecords: retrieval.excludedRepeatedTestRecords,
@@ -4322,6 +4375,7 @@ ipcMain.handle(IPC.MEMORY_PANEL_RUN_RETRIEVAL_SANDBOX, async (_event, payload: {
     })),
     replyGenerated: generateReply,
     reply,
+    l2Memory,
   };
 });
 ipcMain.handle(IPC.MEMORY_PANEL_DELETE_IMPORTED_DOC, (_event, payload: { importId: string; fileName?: string }) => {
@@ -5912,6 +5966,8 @@ app.on("before-quit", () => {
   stopAsrTest();
   flushTokenUsage();
   flushVectorStoreSync();
+  // DMAE 工作记忆状态防抖落盘的最后兜底（5s 防抖窗口内的最后一次变更）
+  void l2DmaeManager.flushNow();
   void shutdownChannels();
 });
 

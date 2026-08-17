@@ -200,6 +200,8 @@ interface ModelSettings {
   stickerEnabled: boolean;
   stickerSize: "small" | "standard" | "large";
   stickerSimilarityThreshold: number;
+  /** L2 DMAE 工作记忆总开关（main 端默认 false）。 */
+  memoryDmaeEnabled?: boolean;
   vision?: {
     syncWithMain: boolean;
     baseUrl: string;
@@ -407,6 +409,24 @@ interface MemoryRetrievalSandboxResult {
   candidates: MemoryRetrievalSandboxCandidate[];
   replyGenerated: boolean;
   reply: string | null;
+  /** L2 事件记忆 DMAE 更新前后对比（只读预览）；检索失败时为 null */
+  l2Memory?: MemorySandboxL2Comparison | null;
+}
+
+interface MemorySandboxL2Item {
+  text: string;
+  createdAt: number;
+  l2Id: string | null;
+}
+
+interface MemorySandboxL2Comparison {
+  enabled: boolean;
+  baseline: Array<MemorySandboxL2Item & { score: number }>;
+  dmaePreview: Array<MemorySandboxL2Item & {
+    via: "recall" | "pinned" | "active";
+    activation: number | null;
+  }>;
+  states: Array<{ l2Id: string; activation: number; state: "Active" | "Dormant" | "Archived" }>;
 }
 
 interface SettingsApi {
@@ -1413,6 +1433,7 @@ async function loadConfig(): Promise<void> {
     const threshold = cfg.stickerSimilarityThreshold ?? 0.55;
     stickerThresholdInput.value = String(threshold);
     stickerThresholdVal.textContent = threshold.toFixed(2);
+    if (memoryDmaeEnabledInput) memoryDmaeEnabledInput.checked = cfg.memoryDmaeEnabled === true;
 
     setCyreneSaveStatus("等待保存");
   } catch {
@@ -4183,11 +4204,14 @@ const memoryL2SearchInput = document.getElementById("memory-l2-search") as HTMLI
 const memoryL2List = document.getElementById("memory-l2-list") as HTMLElement | null;
 const memorySandboxQuery = document.getElementById("memory-sandbox-query") as HTMLTextAreaElement | null;
 const memorySandboxGenerateReply = document.getElementById("memory-sandbox-generate-reply") as HTMLInputElement | null;
+const memoryDmaeEnabledInput = document.getElementById("memory-dmae-enabled") as HTMLInputElement | null;
 const memorySandboxRunBtn = document.getElementById("memory-sandbox-run-btn") as HTMLButtonElement | null;
 const memorySandboxStatus = document.getElementById("memory-sandbox-status") as HTMLElement | null;
 const memorySandboxResults = document.getElementById("memory-sandbox-results") as HTMLElement | null;
 const memorySandboxBaseline = document.getElementById("memory-sandbox-baseline") as HTMLElement | null;
 const memorySandboxSelected = document.getElementById("memory-sandbox-selected") as HTMLElement | null;
+const memorySandboxL2Baseline = document.getElementById("memory-sandbox-l2-baseline") as HTMLElement | null;
+const memorySandboxL2Dmae = document.getElementById("memory-sandbox-l2-dmae") as HTMLElement | null;
 const memorySandboxCandidateFilter = document.getElementById("memory-sandbox-candidate-filter") as HTMLInputElement | null;
 const memorySandboxCandidates = document.getElementById("memory-sandbox-candidates") as HTMLElement | null;
 const memorySandboxReply = document.getElementById("memory-sandbox-reply") as HTMLElement | null;
@@ -4358,6 +4382,49 @@ function renderSandboxHits(container: HTMLElement | null, hits: MemoryRetrievalS
   );
 }
 
+function renderSandboxL2Comparison(comparison: MemorySandboxL2Comparison | null | undefined): void {
+  if (!memorySandboxL2Baseline || !memorySandboxL2Dmae) return;
+  if (!comparison) {
+    renderEmptyState(memorySandboxL2Baseline, "L2 对比不可用", "事件记忆索引尚未就绪或检索失败");
+    renderEmptyState(memorySandboxL2Dmae, "L2 对比不可用", "事件记忆索引尚未就绪或检索失败");
+    return;
+  }
+
+  renderInfoList(
+    memorySandboxL2Baseline,
+    comparison.baseline.map((item, index) => ({
+      title: `${index + 1}. 检索命中`,
+      body: item.text,
+      meta: `${formatDateTime(item.createdAt)} · score ${item.score.toFixed(4)}`,
+    })),
+    "纯检索没有命中任何事件记忆",
+    "试试换成记忆里出现过的原话关键词",
+  );
+
+  const viaLabel: Record<"recall" | "pinned" | "active", string> = {
+    recall: "检索命中",
+    pinned: "置顶常驻",
+    active: "工作集驻留",
+  };
+  renderInfoList(
+    memorySandboxL2Dmae,
+    comparison.dmaePreview.map((item, index) => ({
+      title: `${index + 1}. ${viaLabel[item.via]}${item.activation !== null ? ` · 激活度 ${item.activation}` : ""}`,
+      body: item.text,
+      meta: `${formatDateTime(item.createdAt)}${item.via !== "recall" ? " · DMAE 补位：未命中检索但保留注入" : ""}`,
+    })),
+    "DMAE 预览没有选出任何记忆",
+    "检索与驻留集均为空时会出现这种情况",
+  );
+
+  if (!comparison.enabled && comparison.dmaePreview.length > 0) {
+    const note = document.createElement("p");
+    note.className = "memory-record__meta";
+    note.textContent = "提示：DMAE 尚未启用（上方「启用 DMAE 工作记忆」开关），此处为启用后的效果预览，正式注入暂不受影响。";
+    memorySandboxL2Dmae.appendChild(note);
+  }
+}
+
 function renderSandboxCandidates(query = ""): void {
   const normalized = query.trim().toLowerCase();
   const candidates = normalized
@@ -4407,6 +4474,7 @@ async function runMemoryRetrievalSandbox(): Promise<void> {
     if (!result) throw new Error("沙箱没有返回结果");
     renderSandboxHits(memorySandboxBaseline, result.baseline);
     renderSandboxHits(memorySandboxSelected, result.selected);
+    renderSandboxL2Comparison(result.l2Memory);
     memorySandboxCandidateCache = result.candidates;
     if (memorySandboxCandidateFilter) memorySandboxCandidateFilter.value = "";
     renderSandboxCandidates();
@@ -4419,7 +4487,10 @@ async function runMemoryRetrievalSandbox(): Promise<void> {
       memorySandboxStatus.textContent =
         `完成：${result.method === "reranker" ? "双查询融合重排" : "RRF"}，候选 ${result.candidateCount} 条，` +
         `排除重复测试记录 ${result.excludedRepeatedTestRecords} 条，` +
-        `排除已删除会话残留 ${result.excludedOrphanedRecords} 条`;
+        `排除已删除会话残留 ${result.excludedOrphanedRecords} 条` +
+        (result.excludedRepeatedTestRecords > 0
+          ? "（与测试问题逐字相同的历史轮次及其回复，新旧两侧均不参与排序，模拟真实回忆场景）"
+          : "");
     }
     memorySandboxResults?.classList.remove("is-hidden");
   } catch (error) {
@@ -4693,6 +4764,10 @@ memoryL1EditBtn?.addEventListener("click", () => {
 });
 memoryL1CancelBtn?.addEventListener("click", cancelL1Edit);
 memorySandboxRunBtn?.addEventListener("click", () => void runMemoryRetrievalSandbox());
+memoryDmaeEnabledInput?.addEventListener("change", () => {
+  // DMAE 总开关切换即落盘 model-settings.json；正式注入链路每轮实时读取，无需重启即生效。
+  void window.settings!.saveConfig({ memoryDmaeEnabled: memoryDmaeEnabledInput.checked });
+});
 memorySandboxQuery?.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
     event.preventDefault();

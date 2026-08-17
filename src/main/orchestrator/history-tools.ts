@@ -30,6 +30,18 @@ import { toolRegistry } from "./tool-registry";
 const LOG_PREFIX = "[History]";
 const HISTORY_ADJACENT_MAX_GAP_MS = 5 * 60 * 1000;
 
+/** 语义证据融合项权重：finalScore += W/(9+semanticRank)。
+ *  终排 rerank 只看 cross-encoder 秩融合，原始余弦不参与（实测 cosine 0.57 的
+ *  强证据轮被推翻掉出 Top5）；加此项后 rank1 +0.04，足以救回强证据轮，
+ *  又不至于大幅搅动中游候选（rerank 融合分量级 0.02~0.12）。 */
+const SEMANTIC_EVIDENCE_WEIGHT = 0.4;
+
+/** RRF 多通道共识融合项权重：finalScore += W/(9+rrfRank)。
+ *  RRF 秩（hybrid 各查询 + 语义通道共识）是主题/storyline 连续性的最强信号
+ *  （实测：主线轮次占 RRF 前 13，reranker 却因"不用担心"词汇偏置把离题轮排更高）；
+ *  rank1 +0.05，与语义项同量级，足以让共识轮次压过词汇偏置噪声。 */
+const RRF_EVIDENCE_WEIGHT = 0.5;
+
 interface StoredHistoryEntry {
   text: string;
   createdAt: number;
@@ -235,7 +247,15 @@ export function diversifySandboxRerankResults(
     else if (!expansion && compactText.length >= 140) multiplier *= 1.03;
     if (expansion === "adjacent_turn") multiplier *= 0.9;
     if (isShortAssistantFollowUp(item.text)) multiplier *= 0.86;
-    return { ...item, score: item.score * multiplier };
+    // 语义通道（纯余弦）证据融合：在角色平衡前加入，防止 reranker 独裁推翻强余弦证据。
+    // semanticEvidenceRank 由 V2 shadow 戳记（句窗已回退父文排名）。
+    const semanticRank = candidate?.metadata?.semanticEvidenceRank;
+    // RRF 多通道共识融合：主题/storyline 连续性信号，对抗 cross-encoder 词汇偏置。
+    const rrfRank = candidate?.metadata?.rrfEvidenceRank;
+    let score = item.score * multiplier;
+    if (typeof semanticRank === "number") score += SEMANTIC_EVIDENCE_WEIGHT / (9 + semanticRank);
+    if (typeof rrfRank === "number") score += RRF_EVIDENCE_WEIGHT / (9 + rrfRank);
+    return { ...item, score };
   }).sort((a, b) => b.score - a.score);
   // 同源封顶：父文与其句窗在最终入选里至多占 1 个名额，
   // 否则一条长消息（全文 + 若干句窗）会吃掉多个注入名额、挤掉其他重要信息
@@ -401,6 +421,14 @@ export async function runHistoryRetrievalSandbox(
   const historyEntries = getEntriesBySource("chat_history");
   const timelineEntries = authoritativeEntries?.length ? authoritativeEntries : historyEntries;
   const excludedKeys = collectRepeatedTestTurnKeys(query, timelineEntries);
+  // 文本级排除兜底：实时索引条目的 entry.createdAt 是"索引时刻"，与权威源 message.at
+  // 不相等，导致 historyHitKey 永远对不上、基线漏排逐字测试轮。文本匹配不受元数据影响，
+  // 保证基线与 V2 通道对"重复测试记录"应用同一口径。
+  const excludedTexts = new Set(
+    materializeHistoryTimeline(timelineEntries)
+      .filter((item) => excludedKeys.has(historyHitKey(item)))
+      .map((item) => item.text.normalize("NFC").replace(/\r\n?/g, "\n").trim()),
+  );
   const authoritativeTexts = authoritativeEntries?.length
     ? new Set(authoritativeEntries.map((entry) => entry.text.normalize("NFC").replace(/\r\n?/g, "\n").trim()))
     : null;
@@ -419,6 +447,7 @@ export async function runHistoryRetrievalSandbox(
     const filtered = hits.filter((hit) => {
       if (excludedKeys.has(historyHitKey(hit))) return false;
       const normalizedText = hit.text.normalize("NFC").replace(/\r\n?/g, "\n").trim();
+      if (excludedTexts.has(normalizedText)) return false;
       if (authoritativeTexts && !authoritativeTexts.has(normalizedText)) {
         excludedOrphanedTexts.add(normalizedText);
         return false;
