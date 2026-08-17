@@ -10,7 +10,6 @@ import type {
 import { ContextRefRegistry } from "../context-ref-registry";
 import { contextRefRegistry, type ToolContext } from "../tool-context";
 import type { ToolDefinition } from "../tool-registry";
-import type { SoulProjectionConfig } from "../soul-execution-context";
 
 export interface MusicToolHooks {
   contextRefs?: ContextRefRegistry;
@@ -199,22 +198,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       risk: "safe",
       inputSchema: { type: "object", properties: {}, required: [] },
       needsContext: true,
-      soulActionLabel: "获取每日推荐",
-      soulProjection: {
-        projector: "entity_list",
-        source: "trusted_internal",
-        itemsPath: "context.candidates",
-        fields: { title: "name", artists: "artists", album: "album", position: "position" },
-      },
       effectKind: "read" as const,
       verificationPolicy: "none" as const,
-      soulErrorMessages: {
-        E_ACCOUNT_REQUIRED: "需要登录网易云音乐账号",
-        E_BACKEND_NOT_READY: "音乐服务未就绪",
-      },
-      completionEvidence: [
-        { kind: "tool_succeeded" },
-      ],
       execute: async (_args, ctx) => {
         const conversationId = conversationIdOf(ctx);
         const set = service.getLatestSelectionSet(conversationId, "daily_recommendation")
@@ -254,23 +239,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
         required: ["keyword", "purpose"],
       },
       needsContext: true,
-      soulActionLabel: "搜索歌曲",
-      soulProjection: {
-        projector: "entity_list",
-        source: "trusted_internal",
-        itemsPath: "context.candidates",
-        fields: { title: "name", artists: "artists", album: "album", position: "position" },
-      },
       effectKind: "read" as const,
       verificationPolicy: "none" as const,
-      soulErrorMessages: {
-        E_BACKEND_NOT_READY: "音乐服务未就绪",
-        E_INVALID_KEYWORD_EMPTY: "搜索关键词为空",
-        E_INVALID_KEYWORD_TOO_LONG: "搜索关键词过长",
-      },
-      completionEvidence: [
-        { kind: "tool_succeeded" },
-      ],
       execute: async (args, ctx) => {
         const conversationId = conversationIdOf(ctx);
         const purpose = args.purpose;
@@ -315,13 +285,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       },
       controlledInput: { candidateRefs: { type: "context_ref_array", kind: "candidate" } },
       needsContext: true,
-      soulActionLabel: "展示歌曲列表",
       effectKind: "read" as const,
       verificationPolicy: "none" as const,
-      soulErrorMessages: {
-        E_MUSIC_MIXED_CONTEXT_SET: "候选歌曲不属于同一列表",
-        E_SET_NOT_FOUND: "候选列表不存在",
-      },
       execute: async (args, ctx) => {
         const conversationId = conversationIdOf(ctx);
         const candidateRefs = Array.isArray(args.candidateRefs) ? args.candidateRefs.map(String) : [];
@@ -360,29 +325,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       },
       controlledInput: { candidateRef: { type: "context_ref", kind: "candidate" } },
       needsContext: true,
-      soulActionLabel: "播放歌曲",
-      soulProjection: {
-        projector: "action_dispatch",
-        source: "trusted_internal",
-        statePath: "dispatch.state",
-        stateClaims: {
-          dispatched: { kind: "request_dispatched" },
-          web_fallback: { kind: "browser_opened" },
-        },
-      },
       effectKind: "external_side_effect" as const,
       verificationPolicy: "none" as const,
-      soulErrorMessages: {
-        E_TRACK_NOT_PLAYABLE: "该歌曲不可播放",
-        E_TRACK_NOT_IN_SET: "歌曲不在当前候选列表中",
-        E_PLAYBACK_DISPATCH_FAILED: "播放请求发送失败",
-        E_CONTEXT_REF_NOT_FOUND: "引用已失效",
-        E_CONTEXT_REF_EXPIRED: "引用已过期",
-      },
-      completionEvidence: [
-        { kind: "projection_claim", claimKind: "request_dispatched" },
-        { kind: "projection_claim", claimKind: "browser_opened" },
-      ],
       execute: async (args, ctx) => {
         const conversationId = conversationIdOf(ctx);
         const candidateRef = String(args.candidateRef ?? "");
@@ -408,26 +352,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
         required: ["playlistId"],
       },
       controlledInput: { playlistId: "tool_result" },
-      soulActionLabel: "播放歌单",
-      soulProjection: {
-        projector: "action_dispatch",
-        source: "trusted_internal",
-        statePath: "dispatch.state",
-        stateClaims: {
-          dispatched: { kind: "request_dispatched" },
-          web_fallback: { kind: "browser_opened" },
-        },
-      },
       effectKind: "external_side_effect" as const,
       verificationPolicy: "none" as const,
-      soulErrorMessages: {
-        E_INVALID_ID_FORMAT: "歌单 ID 格式无效",
-        E_PLAYBACK_DISPATCH_FAILED: "播放请求发送失败",
-      },
-      completionEvidence: [
-        { kind: "projection_claim", claimKind: "request_dispatched" },
-        { kind: "projection_claim", claimKind: "browser_opened" },
-      ],
       execute: async (args) => {
         const dispatch = await service.playPlaylist(String(args.playlistId));
         return JSON.stringify({ kind: "playback", dispatch });
@@ -443,20 +369,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       risk: "safe",
       inputSchema: { type: "object", properties: {}, required: [] },
       needsContext: false,
-      soulActionLabel: "获取我的歌单",
-      soulProjection: {
-        projector: "entity_list",
-        source: "trusted_internal",
-        itemsPath: "playlists",
-        fields: { title: "name", trackCount: "trackCount", creator: "creator" },
-      },
       effectKind: "read" as const,
       verificationPolicy: "none" as const,
-      soulErrorMessages: {
-        E_ACCOUNT_REQUIRED: "需要登录网易云音乐账号",
-        E_BACKEND_NOT_READY: "音乐服务未就绪",
-      },
-      completionEvidence: [{ kind: "tool_succeeded" }],
       execute: async () => {
         const playlists = await service.getMyPlaylists();
         return JSON.stringify({ kind: "my_playlists", playlists });
@@ -479,21 +393,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       },
       controlledInput: { playlistId: "tool_result" },
       needsContext: false,
-      soulActionLabel: "查看歌单详情",
-      soulProjection: {
-        projector: "entity_list",
-        source: "trusted_internal",
-        itemsPath: "detail.tracks",
-        fields: { title: "name", artists: "artists", album: "album" },
-      },
       effectKind: "read" as const,
       verificationPolicy: "none" as const,
-      soulErrorMessages: {
-        E_ACCOUNT_REQUIRED: "需要登录网易云音乐账号",
-        E_BACKEND_NOT_READY: "音乐服务未就绪",
-        E_INVALID_ID_FORMAT: "歌单 ID 格式无效",
-      },
-      completionEvidence: [{ kind: "tool_succeeded" }],
       execute: async (args) => {
         const detail = await service.getPlaylistDetail(String(args.playlistId));
         return JSON.stringify({ kind: "playlist_detail", detail });
@@ -516,22 +417,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
         required: ["name"],
       },
       needsContext: false,
-      soulActionLabel: "创建歌单",
-      soulProjection: {
-        projector: "entity_detail",
-        source: "trusted_internal",
-        entityPath: "playlist",
-        fields: { title: "name", trackCount: "trackCount" },
-      },
       effectKind: "mutation" as const,
       verificationPolicy: "none" as const,
-      soulErrorMessages: {
-        E_ACCOUNT_REQUIRED: "需要登录网易云音乐账号",
-        E_BACKEND_NOT_READY: "音乐服务未就绪",
-        E_INVALID_PLAYLIST_NAME_EMPTY: "歌单名称不能为空",
-        E_INVALID_PLAYLIST_NAME_TOO_LONG: "歌单名称过长",
-      },
-      completionEvidence: [{ kind: "tool_succeeded" }],
       execute: async (args) => {
         const playlist = await service.createPlaylist(String(args.name), { privacy: Boolean(args.privacy) });
         return JSON.stringify({ kind: "create_playlist", playlist });
@@ -555,22 +442,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       },
       controlledInput: { playlistId: "tool_result" },
       needsContext: false,
-      soulActionLabel: "添加歌曲到歌单",
-      soulProjection: {
-        projector: "action_completed",
-        source: "trusted_internal",
-        claim: { kind: "action_completed", action: "已将歌曲添加到网易云歌单" },
-        confirmation: { kind: "tool_status" },
-      },
       effectKind: "mutation" as const,
       verificationPolicy: "none" as const,
-      soulErrorMessages: {
-        E_ACCOUNT_REQUIRED: "需要登录网易云音乐账号",
-        E_BACKEND_NOT_READY: "音乐服务未就绪",
-        E_INVALID_ID_FORMAT: "歌单或歌曲 ID 格式无效",
-        E_TRACK_IDS_EMPTY: "未提供要添加的歌曲",
-      },
-      completionEvidence: [{ kind: "tool_succeeded" }],
       execute: async (args) => {
         const playlistId = String(args.playlistId ?? "");
         const trackIds = Array.isArray(args.trackIds) ? args.trackIds.map(String) : [];
@@ -598,21 +471,8 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
         required: ["category"],
       },
       needsContext: false,
-      soulActionLabel: "获取我的收藏",
-      soulProjection: {
-        projector: "entity_list",
-        source: "trusted_internal",
-        itemsPath: "subscriptions",
-        fields: { title: "name" },
-      },
       effectKind: "read" as const,
       verificationPolicy: "none" as const,
-      soulErrorMessages: {
-        E_ACCOUNT_REQUIRED: "需要登录网易云音乐账号",
-        E_BACKEND_NOT_READY: "音乐服务未就绪",
-        E_INVALID_SUBSCRIPTION_CATEGORY: "收藏类型必须是 artists 或 albums",
-      },
-      completionEvidence: [{ kind: "tool_succeeded" }],
       execute: async (args) => {
         const category = String(args.category ?? "");
         if (category !== "artists" && category !== "albums") {
