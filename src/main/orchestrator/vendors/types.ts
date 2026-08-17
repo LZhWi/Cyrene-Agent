@@ -3,6 +3,7 @@
 // 协议事实来源：docs/vendors/tool-calling-matrix.md
 
 import type { ReasoningPreference } from "../../../shared/reasoning";
+import type { PromptLayerMetadata } from "../prompt-layers";
 
 export type Transport = "openai" | "anthropic";
 export type AuthStyle = "bearer" | "x-api-key";
@@ -58,6 +59,17 @@ export interface ChatMessage {
   thinking?: string;
   /** Anthropic 多轮必须原样回传 assistant.content block 数组；OpenAI transport 不读。 */
   rawAssistant?: unknown;
+  /** 仅供本地 transcript / UI 使用；Adapter 序列化时不得发送。 */
+  visibility?: "user" | "internal";
+  /** 仅供本地持久化和去重使用；Adapter 序列化时不得发送。 */
+  internal?: {
+    kind: "run_start" | "state_delta" | "recovery";
+    revision: number;
+    digest: string;
+    id: string;
+    runId: string;
+    createdAt: number;
+  };
 }
 
 export interface ToolSpec {
@@ -124,6 +136,8 @@ export interface ChatRequest {
   maxTokens?: number;
   /** 透传到请求体顶层的厂商扩展字段（如 Kimi 的 prompt_cache_key）。 */
   extraBody?: Record<string, unknown>;
+  /** 仅供本地缓存键与诊断使用，Adapter 不得将该字段直接发给厂商。 */
+  promptLayers?: PromptLayerMetadata;
 }
 
 /**
@@ -157,7 +171,7 @@ export interface StreamChunk {
   error?: string;
   deltaToolCalls?: ToolCall[];
   done?: boolean;
-  usage?: { input: number; output: number };
+  usage?: { input: number; output: number; cachedInput?: number; cacheCreation?: number };
 }
 
 /** 适配器解析后的统一响应，调度层只看这个。 */
@@ -175,7 +189,7 @@ export interface ChatResponse {
   structuredValue?: unknown;
   /** API 返回的 token 用量（OpenAI: prompt_tokens/completion_tokens；Anthropic: input_tokens/output_tokens）。
    *  未上报时为 undefined，由调用方兜底。 */
-  usage?: { input: number; output: number };
+  usage?: { input: number; output: number; cachedInput?: number; cacheCreation?: number };
 }
 
 export interface HttpRequest {

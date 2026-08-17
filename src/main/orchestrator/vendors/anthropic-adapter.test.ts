@@ -170,8 +170,8 @@ describe("AnthropicAdapter", () => {
     })?.deltaText).toBe("兼容流");
     expect(adapter.parseStreamEvent({
       eventType: "message_start",
-      data: JSON.stringify({ message: { usage: { input_tokens: 11, output_tokens: 0 } } }),
-    })?.usage).toEqual({ input: 11, output: 0 });
+      data: JSON.stringify({ message: { usage: { input_tokens: 11, output_tokens: 0, cache_read_input_tokens: 8 } } }),
+    })?.usage).toEqual({ input: 11, output: 0, cachedInput: 8 });
     expect(adapter.parseStreamEvent({
       eventType: "message_delta",
       data: JSON.stringify({ delta: { stop_reason: "end_turn" }, usage: { output_tokens: 8 } }),

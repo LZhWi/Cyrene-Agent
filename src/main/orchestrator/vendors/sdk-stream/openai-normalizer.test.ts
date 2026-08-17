@@ -11,12 +11,17 @@ describe("normalizeOpenAIChunk", () => {
             finish_reason: "content_filter",
           },
         ],
-        usage: { prompt_tokens: 11, completion_tokens: 4, total_tokens: 15 },
+        usage: {
+          prompt_tokens: 11,
+          completion_tokens: 4,
+          total_tokens: 15,
+          prompt_tokens_details: { cached_tokens: 7 },
+        },
       }),
     ).toEqual([
       { type: "text_delta", delta: "hello" },
       { type: "refusal", reason: "policy" },
-      { type: "usage", inputTokens: 11, outputTokens: 4 },
+      { type: "usage", inputTokens: 11, outputTokens: 4, cachedInputTokens: 7 },
       { type: "finish", reason: "content_filter" },
     ]);
   });
@@ -94,5 +99,14 @@ describe("normalizeOpenAIChunk", () => {
     expect(normalizeOpenAIChunk({ choices: [{ delta: { role: "assistant" }, finish_reason: null }] })).toEqual([]);
     expect(normalizeOpenAIChunk(null)).toEqual([]);
     expect(normalizeOpenAIChunk({ choices: "not-an-array" })).toEqual([]);
+  });
+
+  it("retains usage from the terminal usage-only chunk emitted by OpenAI-compatible APIs", () => {
+    expect(
+      normalizeOpenAIChunk({
+        choices: [],
+        usage: { prompt_tokens: 21, completion_tokens: 8, prompt_tokens_details: { cached_tokens: 13 } },
+      }),
+    ).toEqual([{ type: "usage", inputTokens: 21, outputTokens: 8, cachedInputTokens: 13 }]);
   });
 });

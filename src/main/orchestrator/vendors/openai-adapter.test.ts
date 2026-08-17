@@ -18,6 +18,22 @@ const capability: ProviderCapability = {
 };
 
 describe("OpenAICompatAdapter", () => {
+  test("derives Kimi prompt_cache_key from stable prompt and tool identity only", () => {
+    const adapter = new OpenAICompatAdapter("kimi", { ...capability, cacheStrategy: "prompt_cache_key" });
+    const base = {
+      model: "kimi-k2.7-code",
+      messages: [{ role: "user" as const, content: "this message must not affect cache identity" }],
+      tools: [{ name: "read_file", description: "read", parameters: { type: "object" } }],
+      promptLayers: { stablePrefix: "stable rules", mode: "code", promptVersion: "v1" },
+    };
+
+    const first = adapter.applyCacheHints!(base, { provider: "Kimi", baseUrl: "https://e.test/v1", model: base.model, apiKey: "k" });
+    const second = adapter.applyCacheHints!({ ...base, messages: [{ role: "user", content: "different user content" }] }, { provider: "Kimi", baseUrl: "https://e.test/v1", model: base.model, apiKey: "k" });
+
+    expect(first.extraBody?.prompt_cache_key).toMatch(/^cyrene:kimi:[a-f0-9]{16}$/);
+    expect(second.extraBody?.prompt_cache_key).toBe(first.extraBody?.prompt_cache_key);
+  });
+
   test("maps structured json_schema requests to response_format", () => {
     const adapter = new OpenAICompatAdapter("test-openai", capability);
     const schema = {
@@ -218,9 +234,9 @@ describe("OpenAICompatAdapter", () => {
     const adapter = new OpenAICompatAdapter("test-openai", capability);
     const chunk = adapter.parseStreamEvent({
       eventType: "data",
-      data: JSON.stringify({ usage: { prompt_tokens: 10, completion_tokens: 20 } }),
+      data: JSON.stringify({ usage: { prompt_tokens: 10, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 6 } } }),
     });
-    expect(chunk?.usage).toEqual({ input: 10, output: 20 });
+    expect(chunk?.usage).toEqual({ input: 10, output: 20, cachedInput: 6 });
   });
 
   test("parseStreamEvent: usage 与空 delta 同一事件时不会丢失", () => {
@@ -255,13 +271,13 @@ describe("OpenAICompatAdapter", () => {
         },
         finish_reason: "stop",
       }],
-      usage: { prompt_tokens: 5, completion_tokens: 10 },
+      usage: { prompt_tokens: 5, completion_tokens: 10, prompt_tokens_details: { cached_tokens: 3 } },
     });
     expect(resp.text).toBe("最终答案");
     expect(resp.thinking).toBe("思考过程");
     expect(resp.assistantMessage.thinking).toBe("思考过程");
     expect(resp.assistantMessage.content).toBe("最终答案");
-    expect(resp.usage).toEqual({ input: 5, output: 10 });
+    expect(resp.usage).toEqual({ input: 5, output: 10, cachedInput: 3 });
     expect(resp.finishReason).toBe("stop");
   });
 

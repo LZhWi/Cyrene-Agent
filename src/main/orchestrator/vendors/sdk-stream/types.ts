@@ -4,7 +4,7 @@ export type UnifiedStreamDelta =
   | { type: "tool_call_start"; index: number; id?: string; nameDelta?: string }
   | { type: "tool_call_arguments_delta"; index: number; id?: string; delta: string }
   | { type: "tool_call_end"; index: number; id?: string }
-  | { type: "usage"; inputTokens?: number; outputTokens?: number }
+  | { type: "usage"; inputTokens?: number; outputTokens?: number; cachedInputTokens?: number; cacheCreationTokens?: number }
   | { type: "finish"; reason: string }
   | { type: "refusal"; reason?: string };
 
@@ -20,7 +20,7 @@ export interface StreamAccumulatorSnapshot {
   }>;
   finishReason?: string;
   refusal?: string;
-  usage?: { input: number; output: number };
+  usage?: { input: number; output: number; cachedInput?: number; cacheCreation?: number };
 }
 
 export interface StreamDiagnostic {

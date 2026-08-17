@@ -11,6 +11,7 @@ vi.mock("../permission", () => ({
 
 vi.mock("../token-usage-store", () => ({
   recordUsage: vi.fn(),
+  recordRequest: vi.fn(),
 }));
 
 vi.mock("../skills/skill-tools", () => ({

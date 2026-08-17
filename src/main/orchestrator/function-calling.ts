@@ -12,7 +12,7 @@ import {
   type ToolSpec,
 } from "./vendors";
 import { extractLastUserQuery, type ToolContext } from "./tool-context";
-import { recordUsage } from "../token-usage-store";
+import { recordUsage, recordRequest } from "../token-usage-store";
 import type { AgentLoopSettings } from "./cyrene-agent";
 import { resetReadRefs } from "../skills/skill-tools";
 import { truncateToolResult, compressConversation } from "./context-manager";
@@ -177,10 +177,11 @@ export async function runFunctionCallingLoop(
     const chat = adapter.parseResponse(data);
 
     // 累加 token 用量（每轮都记）
+    recordRequest(settings.model);
     if (chat.usage) {
       accInput += chat.usage.input;
       accOutput += chat.usage.output;
-      recordUsage(chat.usage.input, chat.usage.output, 1);
+      recordUsage(chat.usage.input, chat.usage.output, 1, chat.usage.cachedInput, settings.model, chat.usage.cacheCreation);
     }
 
     console.log(
@@ -323,10 +324,11 @@ export async function runFunctionCallingLoop(
     const chat = adapter.parseResponse(data);
     console.log(LOG_PREFIX, "强制回复完成，长度=" + chat.text.length);
     // 最终回复也记 usage
+    recordRequest(settings.model);
     if (chat.usage) {
       accInput += chat.usage.input;
       accOutput += chat.usage.output;
-      recordUsage(chat.usage.input, chat.usage.output, 1);
+      recordUsage(chat.usage.input, chat.usage.output, 1, chat.usage.cachedInput, settings.model, chat.usage.cacheCreation);
     }
     const totalUsage = (accInput > 0 || accOutput > 0) ? { input: accInput, output: accOutput } : undefined;
     return { reply: chat.text, toolResults: allToolResults, totalUsage };

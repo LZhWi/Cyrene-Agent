@@ -21,6 +21,8 @@ export class CyreneStreamAccumulator {
   private refusal: string | undefined;
   private inputTokens: number | undefined;
   private outputTokens: number | undefined;
+  private cachedInputTokens: number | undefined;
+  private cacheCreationTokens: number | undefined;
 
   apply(delta: UnifiedStreamDelta): void {
     switch (delta.type) {
@@ -51,6 +53,8 @@ export class CyreneStreamAccumulator {
       case "usage":
         if (delta.inputTokens !== undefined) this.inputTokens = delta.inputTokens;
         if (delta.outputTokens !== undefined) this.outputTokens = delta.outputTokens;
+        if (delta.cachedInputTokens !== undefined) this.cachedInputTokens = delta.cachedInputTokens;
+        if (delta.cacheCreationTokens !== undefined) this.cacheCreationTokens = delta.cacheCreationTokens;
         return;
       case "finish":
         this.finishReason = delta.reason;
@@ -68,8 +72,13 @@ export class CyreneStreamAccumulator {
       toolCalls: this.sortedToolCalls().map((toolCall) => ({ ...toolCall })),
       ...(this.finishReason !== undefined ? { finishReason: this.finishReason } : {}),
       ...(this.refusal !== undefined ? { refusal: this.refusal } : {}),
-      ...(this.inputTokens !== undefined && this.outputTokens !== undefined
-        ? { usage: { input: this.inputTokens, output: this.outputTokens } }
+      ...(this.inputTokens !== undefined || this.outputTokens !== undefined || this.cachedInputTokens !== undefined || this.cacheCreationTokens !== undefined
+        ? { usage: {
+            input: this.inputTokens ?? 0,
+            output: this.outputTokens ?? 0,
+            ...(this.cachedInputTokens !== undefined ? { cachedInput: this.cachedInputTokens } : {}),
+            ...(this.cacheCreationTokens !== undefined ? { cacheCreation: this.cacheCreationTokens } : {}),
+          } }
         : {}),
     };
   }
@@ -91,8 +100,13 @@ export class CyreneStreamAccumulator {
       toolCalls,
       finishReason: this.finishReason ?? "unknown",
       raw,
-      ...(this.inputTokens !== undefined && this.outputTokens !== undefined
-        ? { usage: { input: this.inputTokens, output: this.outputTokens } }
+      ...(this.inputTokens !== undefined || this.outputTokens !== undefined || this.cachedInputTokens !== undefined || this.cacheCreationTokens !== undefined
+        ? { usage: {
+            input: this.inputTokens ?? 0,
+            output: this.outputTokens ?? 0,
+            ...(this.cachedInputTokens !== undefined ? { cachedInput: this.cachedInputTokens } : {}),
+            ...(this.cacheCreationTokens !== undefined ? { cacheCreation: this.cacheCreationTokens } : {}),
+          } }
         : {}),
     };
   }

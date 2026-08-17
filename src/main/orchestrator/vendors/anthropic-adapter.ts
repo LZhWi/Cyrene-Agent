@@ -198,7 +198,7 @@ export class AnthropicAdapter implements ChatVendorAdapter {
     const data = raw as {
       content?: ContentBlock[];
       stop_reason?: string;
-      usage?: { input_tokens?: number; output_tokens?: number };
+      usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
     };
     const blocks = data.content ?? [];
     let text = "";
@@ -241,7 +241,16 @@ export class AnthropicAdapter implements ChatVendorAdapter {
 
     // 提取 token 用量（Anthropic 协议: input_tokens/output_tokens）
     const usage = data.usage
-      ? { input: data.usage.input_tokens ?? 0, output: data.usage.output_tokens ?? 0 }
+      ? {
+          input: data.usage.input_tokens ?? 0,
+          output: data.usage.output_tokens ?? 0,
+          ...(typeof data.usage.cache_read_input_tokens === "number"
+            ? { cachedInput: data.usage.cache_read_input_tokens }
+            : {}),
+          ...(typeof data.usage.cache_creation_input_tokens === "number"
+            ? { cacheCreation: data.usage.cache_creation_input_tokens }
+            : {}),
+        }
       : undefined;
 
     return { assistantMessage, text, thinking, toolCalls, finishReason, raw, usage };
@@ -257,9 +266,9 @@ export class AnthropicAdapter implements ChatVendorAdapter {
     let parsed: {
       type?: string;
       error?: { message?: unknown };
-      message?: { usage?: { input_tokens?: number; output_tokens?: number } };
+      message?: { usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } };
       delta?: { type?: string; text?: string; thinking?: string; partial_json?: string; stop_reason?: string };
-      usage?: { input_tokens?: number; output_tokens?: number };
+      usage?: { input_tokens?: number; output_tokens?: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
     };
     try {
       parsed = JSON.parse(event.data);
@@ -279,6 +288,12 @@ export class AnthropicAdapter implements ChatVendorAdapter {
           usage: {
             input: startUsage.input_tokens ?? 0,
             output: startUsage.output_tokens ?? 0,
+            ...(typeof startUsage.cache_read_input_tokens === "number"
+              ? { cachedInput: startUsage.cache_read_input_tokens }
+              : {}),
+            ...(typeof startUsage.cache_creation_input_tokens === "number"
+              ? { cacheCreation: startUsage.cache_creation_input_tokens }
+              : {}),
           },
         } : null;
       }
@@ -298,6 +313,12 @@ export class AnthropicAdapter implements ChatVendorAdapter {
         if (parsed.usage) chunk.usage = {
           input: parsed.usage.input_tokens ?? 0,
           output: parsed.usage.output_tokens ?? 0,
+          ...(typeof parsed.usage.cache_read_input_tokens === "number"
+            ? { cachedInput: parsed.usage.cache_read_input_tokens }
+            : {}),
+          ...(typeof parsed.usage.cache_creation_input_tokens === "number"
+            ? { cacheCreation: parsed.usage.cache_creation_input_tokens }
+            : {}),
         };
         return Object.keys(chunk).length > 0 ? chunk : null;
       }

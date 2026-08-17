@@ -12,6 +12,7 @@ import { getTimeoutSettings } from "../../timeout-manager";
 import { resolveAutomaticToolChoicePolicy, resolveToolChoicePolicy } from "./tool-choice-policy";
 import { getVendorRuntimeSettings } from "./runtime-settings";
 import { resolveApiEndpoint } from "../../../shared/api-endpoint";
+import { buildStableCacheFingerprint } from "../prompt-layers";
 
 /** 把统一消息翻译成 OpenAI wire messages。 */
 function toWireMessages(messages: ChatMessage[]): unknown[] {
@@ -58,6 +59,10 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
       messages: toWireMessages(req.messages),
       stream: req.stream ?? false,
     };
+    // OpenAI 流式协议默认不返回 usage；显式开启 include_usage 让最后一个 chunk 带 usage。
+    if (req.stream) {
+      body.stream_options = { include_usage: true };
+    }
     // temperature 只在调用方显式传时才塞进 body。
     // 不传时让厂商用默认值——不同型号约束不同（如 Kimi k2.6 只允许 1），
     // 硬编码兜底值会在某些模型上报错。
@@ -164,7 +169,7 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
     if (jsonStr === "[DONE]") return { done: true };
     let parsed: {
       choices?: Array<{ delta?: { content?: unknown; reasoning_content?: unknown; thinking?: unknown; reasoning?: unknown; tool_calls?: unknown }; finish_reason?: unknown }>;
-      usage?: { prompt_tokens?: number; completion_tokens?: number };
+      usage?: { prompt_tokens?: number; completion_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
       error?: { message?: unknown };
     };
     try {
@@ -186,6 +191,9 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
       chunk.usage = {
         input: parsed.usage.prompt_tokens ?? 0,
         output: parsed.usage.completion_tokens ?? 0,
+        ...(typeof parsed.usage.prompt_tokens_details?.cached_tokens === "number"
+          ? { cachedInput: parsed.usage.prompt_tokens_details.cached_tokens }
+          : {}),
       };
     }
     // 暂不实现：if (Array.isArray(delta.tool_calls)) chunk.deltaToolCalls = ...
@@ -207,7 +215,7 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
         };
         finish_reason?: string;
       }>;
-      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
+      usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number; prompt_tokens_details?: { cached_tokens?: number } };
     };
     const choice = data.choices?.[0];
     const msg = choice?.message;
@@ -230,7 +238,13 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
 
     // 提取 token 用量（OpenAI 协议: prompt_tokens/completion_tokens）
     const usage = data.usage
-      ? { input: data.usage.prompt_tokens ?? 0, output: data.usage.completion_tokens ?? 0 }
+      ? {
+          input: data.usage.prompt_tokens ?? 0,
+          output: data.usage.completion_tokens ?? 0,
+          ...(typeof data.usage.prompt_tokens_details?.cached_tokens === "number"
+            ? { cachedInput: data.usage.prompt_tokens_details.cached_tokens }
+            : {}),
+        }
       : undefined;
 
     return {
@@ -258,11 +272,22 @@ export class OpenAICompatAdapter implements ChatVendorAdapter {
     return next;
   }
 
-  // Kimi：多轮 Agent 强烈建议传 prompt_cache_key（命中后 usage.cached_tokens 体现）。
-  // v1 用"厂商+模型"稳定 key 缓存 system/工具定义；v2 可换成会话级 key。
+  // Kimi：cache key 只反映可缓存前缀和工具定义，绝不包含用户输入、Todo 或 runId。
   applyCacheHints(req: ChatRequest, _cfg: VendorConfig): ChatRequest {
     if (this.capability.cacheStrategy !== "prompt_cache_key") return req;
-    const extraBody = { ...(req.extraBody ?? {}), prompt_cache_key: `cyrene:${this.id}` };
+    const layers = req.promptLayers;
+    const fingerprint = layers
+      ? buildStableCacheFingerprint({
+          provider: this.id,
+          model: req.model,
+          mode: layers.mode,
+          promptVersion: layers.promptVersion,
+          stablePrefix: layers.stablePrefix,
+          sessionPrefix: layers.sessionPrefix,
+          tools: req.tools ?? [],
+        })
+      : "legacy";
+    const extraBody = { ...(req.extraBody ?? {}), prompt_cache_key: `cyrene:${this.id}:${fingerprint}` };
     return { ...req, extraBody };
   }
 

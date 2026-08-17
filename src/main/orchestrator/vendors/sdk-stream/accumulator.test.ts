@@ -114,14 +114,23 @@ describe("CyreneStreamAccumulator", () => {
     );
   });
 
-  it("does not expose missing usage fields as zero", () => {
+  it("exposes partial usage with missing fields filled as zero", () => {
     const accumulator = new CyreneStreamAccumulator();
 
     accumulator.apply({ type: "usage", inputTokens: 12 });
-    expect(accumulator.snapshot().usage).toBeUndefined();
+    expect(accumulator.snapshot().usage).toEqual({ input: 12, output: 0 });
 
     accumulator.apply({ type: "usage", outputTokens: 7 });
     expect(accumulator.snapshot().usage).toEqual({ input: 12, output: 7 });
+  });
+
+  it("preserves provider-reported cached input tokens with the final usage", () => {
+    const accumulator = new CyreneStreamAccumulator();
+
+    accumulator.apply({ type: "usage", inputTokens: 20, cachedInputTokens: 12 });
+    accumulator.apply({ type: "usage", outputTokens: 7 });
+
+    expect(accumulator.finalize(null).usage).toEqual({ input: 20, output: 7, cachedInput: 12 });
   });
 
   it("preserves refusal and terminal reason", () => {

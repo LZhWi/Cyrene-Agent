@@ -58,11 +58,12 @@ function normalizeToolCalls(value: unknown): UnifiedStreamDelta[] {
 }
 
 export function normalizeOpenAIChunk(chunk: unknown): UnifiedStreamDelta[] {
-  if (!isRecord(chunk) || !Array.isArray(chunk.choices)) return [];
+  if (!isRecord(chunk)) return [];
   const output: UnifiedStreamDelta[] = [];
   const finishReasons: string[] = [];
+  const choices = Array.isArray(chunk.choices) ? chunk.choices : [];
 
-  for (const choice of chunk.choices) {
+  for (const choice of choices) {
     if (!isRecord(choice)) continue;
     const delta = isRecord(choice.delta) ? choice.delta : undefined;
     if (delta) {
@@ -86,8 +87,14 @@ export function normalizeOpenAIChunk(chunk: unknown): UnifiedStreamDelta[] {
     const inputTokens = typeof chunk.usage.prompt_tokens === "number" ? chunk.usage.prompt_tokens : undefined;
     const outputTokens =
       typeof chunk.usage.completion_tokens === "number" ? chunk.usage.completion_tokens : undefined;
+    const details = isRecord(chunk.usage.prompt_tokens_details)
+      ? chunk.usage.prompt_tokens_details
+      : undefined;
+    const cachedInputTokens = details && typeof details.cached_tokens === "number"
+      ? details.cached_tokens
+      : undefined;
     if (inputTokens !== undefined || outputTokens !== undefined) {
-      output.push({ type: "usage", inputTokens, outputTokens });
+      output.push({ type: "usage", inputTokens, outputTokens, ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}) });
     }
   }
 

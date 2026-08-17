@@ -27,13 +27,20 @@ describe("Work tool boundary", () => {
     await import("./fs-tools");
     const { registerLifeTools } = await import("./life-tools");
     const { registerSearchCodeTool } = await import("./search-code-tools");
+    const { registerApplyPatchTool } = await import("./apply-patch-tools");
+    const { registerAstGrepTools } = await import("./ast-grep-tools");
     registerLifeTools();
     registerSearchCodeTool();
+    registerApplyPatchTool();
+    registerAstGrepTools();
 
     const registered = new Set(toolRegistry.getAllTools().map((tool) => tool.id));
 
     for (const id of [
       "apply_patch",
+      "str_replace",
+      "ast_grep_search",
+      "ast_grep_replace",
       "search_code",
       "write_file",
       "run_shell",

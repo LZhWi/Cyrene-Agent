@@ -95,9 +95,9 @@ describe("AnthropicEventNormalizer", () => {
     expect(
       normalizer.normalize({
         type: "message_start",
-        message: { usage: { input_tokens: 20, output_tokens: 0 } },
+        message: { usage: { input_tokens: 20, output_tokens: 0, cache_read_input_tokens: 12 } },
       }),
-    ).toEqual([{ type: "usage", inputTokens: 20, outputTokens: 0 }]);
+    ).toEqual([{ type: "usage", inputTokens: 20, outputTokens: 0, cachedInputTokens: 12 }]);
     expect(
       normalizer.normalize({
         type: "message_delta",

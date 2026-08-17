@@ -5,6 +5,7 @@ import { AgentRuntimeError } from "../../agent-runtime-error";
 import type { ChatRequest, ChatResponse, ChatVendorAdapter, VendorConfig } from "../types";
 import { CyreneStreamAccumulator } from "./accumulator";
 import { AnthropicEventNormalizer, reconcileAnthropicTerminal } from "./anthropic-normalizer";
+import { dumpRequest, dumpResponse } from "../prompt-dump";
 import {
   deriveAnthropicClientConfig,
   deriveOpenAIClientConfig,
@@ -100,6 +101,8 @@ export async function streamChatWithSdk(
 
   const accumulator = new CyreneStreamAccumulator();
   const taggedThinkFilter = createThinkFilter("leading-only");
+  // LLM 调用原文 traceId —— 即使 dump 关闭也会生成，方便上层日志关联。
+  let traceId = "";
   const commitDelta = (delta: UnifiedStreamDelta) => {
     if (delta.type === "finish" && input.adapter.transport === "openai") {
       for (const toolCall of accumulator.snapshot().toolCalls) {
@@ -137,6 +140,11 @@ export async function streamChatWithSdk(
 
   try {
     const prepared = requestBody(input.adapter, input.request, input.config);
+    traceId = dumpRequest({
+      transport: input.adapter.transport,
+      endpoint: prepared.endpoint,
+      body: prepared.body,
+    });
     if (input.adapter.transport === "openai") {
       const chunks = await deps.openAI({
         client: deriveOpenAIClientConfig(prepared.endpoint, input.config.apiKey),
@@ -149,7 +157,17 @@ export async function streamChatWithSdk(
         for (const delta of normalizeOpenAIChunk(chunk)) dispatch(delta);
       }
       flushTaggedThink();
-      return accumulator.finalize(lastChunk);
+      const openaiFinal = accumulator.finalize(lastChunk);
+      dumpResponse(traceId, {
+        transport: "openai",
+        ok: true,
+        text: openaiFinal.text,
+        thinking: openaiFinal.thinking,
+        toolCalls: openaiFinal.toolCalls,
+        usage: openaiFinal.usage,
+        raw: openaiFinal.raw,
+      });
+      return openaiFinal;
     }
 
     const authStyle = input.adapter.capability.anthropicAuthStyle ?? input.adapter.capability.authStyle;
@@ -160,17 +178,48 @@ export async function streamChatWithSdk(
     });
     const normalizer = new AnthropicEventNormalizer();
     for await (const event of stream.events) {
+      // [DIAG] 打印每个 SSE 事件的 type + usage 相关字段
+      const evt = event as Record<string, unknown>;
+      const evtType = typeof evt.type === "string" ? evt.type : "(unknown)";
+      if (evtType === "message_start" || evtType === "message_delta") {
+        const usageSource = evtType === "message_start" ? (evt.message as Record<string, unknown> | undefined)?.usage : evt.usage;
+        console.log(`[DIAG] SSE ${evtType} usage=${JSON.stringify(usageSource ?? "(none)")}`);
+      }
       for (const delta of normalizer.normalize(event)) dispatch(delta);
     }
     flushTaggedThink();
     const finalMessage = await stream.finalMessage();
-    return reconcileAnthropicTerminal(
+    // [DIAG] 打印 accumulator snapshot 的 usage 和 finalMessage 的 usage
+    const liveSnap = accumulator.snapshot();
+    console.log(`[DIAG] accumulator.usage=${JSON.stringify(liveSnap.usage ?? "(none)")}`);
+    const finalAsRecord = finalMessage as Record<string, unknown>;
+    console.log(`[DIAG] finalMessage.usage=${JSON.stringify(finalAsRecord?.usage ?? "(none)")}`);
+    const reconciled = reconcileAnthropicTerminal(
       accumulator.snapshot(),
       finalMessage,
       input.adapter,
       input.onDiagnostic,
     );
+    console.log(`[DIAG] reconciled.usage=${JSON.stringify(reconciled.usage ?? "(none)")}`);
+    dumpResponse(traceId, {
+      transport: "anthropic",
+      ok: true,
+      text: reconciled.text,
+      thinking: reconciled.thinking,
+      toolCalls: reconciled.toolCalls,
+      usage: reconciled.usage,
+      raw: reconciled.raw,
+    });
+    return reconciled;
   } catch (error) {
+    if (traceId) {
+      dumpResponse(traceId, {
+        transport: input.adapter.transport,
+        ok: false,
+        raw: null,
+        error: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+      });
+    }
     if (timedOut) {
       throw new AgentRuntimeError("E_MODEL_REQUEST_TIMEOUT", "模型响应超时，请稍后重试。", { cause: error });
     }
