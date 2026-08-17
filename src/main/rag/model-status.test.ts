@@ -30,6 +30,7 @@ vi.mock("electron", () => ({
 import {
   getProjectModelsDir,
   getProjectModelsDirCandidates,
+  getProjectModelBaseDir,
   getModelInstallStatusDetail,
   getModelInstallStatus,
   checkEmbeddingModelInstalled,
@@ -120,6 +121,17 @@ describe("model-status: getProjectModelsDirCandidates priority", () => {
     const dirs = getProjectModelsDirCandidates();
     const seen = new Set(dirs);
     expect(seen.size).toBe(dirs.length);
+  });
+
+  it("includes the directory beside the packaged executable as a model location", () => {
+    expect(getProjectModelsDirCandidates()).toContain(path.join(path.dirname(process.execPath), "models"));
+  });
+
+  it("uses the directory containing the complete model instead of an earlier empty candidate", () => {
+    process.env.CYRENE_MODELS_DIR = path.join(ISOLATED_ROOT, "empty-override");
+    ensureFakeDir("models", "Xenova", "bge-m3");
+
+    expect(getProjectModelBaseDir("embedding", "bgem3")).toBe(path.join(ISOLATED_ROOT, "models"));
   });
 });
 

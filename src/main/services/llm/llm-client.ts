@@ -11,7 +11,7 @@ import {
   createVisibleStreamFilter,
   stripThinkBlocks,
 } from "../../chat-stream-utils";
-import { recordUsage } from "../../token-usage-store";
+import { recordUsage, recordRequest } from "../../token-usage-store";
 import { appendApiLog } from "../../chat-api-utils";
 
 export interface LlmClient {
@@ -117,6 +117,7 @@ export function createLlmClient(): LlmClient {
         throw new Error("响应体为空，不支持流式读取");
       }
 
+      recordRequest(settings.model);
       let fullText = "";
       const visibleFilter = createVisibleStreamFilter();
 
@@ -129,7 +130,7 @@ export function createLlmClient(): LlmClient {
           if (visibleDelta) onChunk(visibleDelta);
         }
         if (chunk.usage) {
-          recordUsage(chunk.usage.input, chunk.usage.output, 1);
+          recordUsage(chunk.usage.input, chunk.usage.output, 1, chunk.usage.cachedInput, settings.model, chunk.usage.cacheCreation);
         }
         if (chunk.done) break;
       }
@@ -247,8 +248,9 @@ export function createLlmClient(): LlmClient {
           return adapter.parseResponse(await response.json());
         },
       });
+      recordRequest(settings.model);
       if (parsed.usage) {
-        recordUsage(parsed.usage.input, parsed.usage.output, 1);
+        recordUsage(parsed.usage.input, parsed.usage.output, 1, parsed.usage.cachedInput, settings.model, parsed.usage.cacheCreation);
       }
       const totalTime = Date.now() - startTime;
       console.log(`[TIMING] ${label} OK in ${totalTime}ms resultLen=${parsed.text.length}`);

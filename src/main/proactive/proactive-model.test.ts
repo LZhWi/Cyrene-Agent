@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   buildRequest: vi.fn(),
   parseResponse: vi.fn(),
   recordUsage: vi.fn(),
+  recordRequest: vi.fn(),
 }));
 
 vi.mock("../orchestrator/vendors", () => ({
@@ -13,7 +14,7 @@ vi.mock("../orchestrator/vendors", () => ({
   }),
 }));
 
-vi.mock("../token-usage-store", () => ({ recordUsage: mocks.recordUsage }));
+vi.mock("../token-usage-store", () => ({ recordUsage: mocks.recordUsage, recordRequest: mocks.recordRequest }));
 
 import { runProactiveModel } from "./proactive-model";
 
@@ -53,7 +54,7 @@ describe("runProactiveModel", () => {
     expect(request).not.toHaveProperty("tools");
     expect(JSON.stringify(request)).not.toContain("tool_calls");
     expect(result).toEqual({ kind: "send", text: "休息一下吧♪" });
-    expect(mocks.recordUsage).toHaveBeenCalledWith(12, 8, 1);
+    expect(mocks.recordUsage).toHaveBeenCalledWith(12, 8, 1, undefined, "model", undefined);
   });
 
   it("returns silent only after parsing the complete response", async () => {

@@ -1,4 +1,4 @@
-import { recordUsage } from "../token-usage-store";
+import { recordUsage, recordRequest } from "../token-usage-store";
 import {
   getAdapterForConfig,
   type ChatMessage,
@@ -56,8 +56,9 @@ export async function runProactiveModel(input: RunProactiveModelInput): Promise<
     } catch {
       return { kind: "invalid", reason: "invalid_provider_response" };
     }
+    recordRequest(input.settings.model);
     if (parsedResponse.usage) {
-      recordUsage(parsedResponse.usage.input, parsedResponse.usage.output, 1);
+      recordUsage(parsedResponse.usage.input, parsedResponse.usage.output, 1, parsedResponse.usage.cachedInput, input.settings.model, parsedResponse.usage.cacheCreation);
     }
     return parseProactiveDecision(parsedResponse.text ?? "");
   } catch (error) {

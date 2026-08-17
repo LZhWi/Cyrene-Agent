@@ -479,13 +479,18 @@ const PROVIDER_SHORT_NAMES: Record<string, string> = {
 };
 
 export function getPublicModelConfig(settings = loadModelSettings()): PublicModelConfig {
+  // 状态面板表达“是否已有可用的已保存模型”，不能只看顶层默认镜像。
+  // 打包版首次启动时镜像可能未回填，但 modelProfiles 已经持久化。
+  const hasSavedModel = listSavedModelProfiles(settings).some((profile) => (
+    Boolean(profile.model?.trim()) && Boolean(profile.apiKey?.trim())
+  ));
   return {
     mode: settings.mode,
     provider: settings.provider,
     displayName: settings.displayName,
     shortName: PROVIDER_SHORT_NAMES[settings.provider] ?? settings.provider,
     model: settings.model,
-    connected: Boolean(settings.apiKey),
+    connected: hasSavedModel,
     runtimeSync: settings.runtimeSync,
     stickerSize: settings.stickerSize,
     rerankerMode: settings.rerankerMode,

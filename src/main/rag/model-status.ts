@@ -80,8 +80,9 @@ function probeCandidates(
  * Priority:
  *   1. CYRENE_MODELS_DIR env var (highest — explicit override)
  *   2. process.cwd() + "models"  (when launched from project root, e.g. `electron .`)
- *   3. app.getAppPath() + "models"  (works in both dev and packaged builds)
- *   4. process.resourcesPath + "models"  (packaged extraResources fallback)
+ *   3. directory beside the executable + "models" (release users drop models here)
+ *   4. app.getAppPath() + "models"  (development fallback)
+ *   5. process.resourcesPath + "models"  (packaged extraResources fallback)
  *
  * Why this matters: the previous implementation used
  * `path.join(__dirname, "..", "..", "..", "models")` — but the compiled
@@ -95,6 +96,8 @@ export function getProjectModelsDirCandidates(): string[] {
   if (process.env.CYRENE_MODELS_DIR) out.push(process.env.CYRENE_MODELS_DIR);
   const cwdModels = path.join(process.cwd(), "models");
   if (!out.includes(cwdModels)) out.push(cwdModels);
+  const executableModels = path.join(path.dirname(process.execPath), "models");
+  if (!out.includes(executableModels)) out.push(executableModels);
   try {
     const appModels = path.join(app.getAppPath(), "models");
     if (!out.includes(appModels)) out.push(appModels);
@@ -111,6 +114,20 @@ export function getProjectModelsDirCandidates(): string[] {
 /** Primary project-models directory (highest-priority candidate). */
 export function getProjectModelsDir(): string {
   return getProjectModelsDirCandidates()[0];
+}
+
+/**
+ * Resolve the base directory containing a complete local model. This is the
+ * same probe used by the settings status UI, so a displayed installed model
+ * and the runtime loader can never disagree about its location.
+ */
+export function getProjectModelBaseDir(kind: "embedding" | "reranker", modelKey: string): string | null {
+  const modelId = kind === "embedding" ? "embedding-bgem3" : "reranker-standard";
+  for (const baseDir of getProjectModelsDirCandidates()) {
+    const probe = probeCandidates(modelId, baseDir, PROJECT_SUB_PATHS);
+    if (probe.installed) return baseDir;
+  }
+  return null;
 }
 
 /**

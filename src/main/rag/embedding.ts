@@ -1,5 +1,5 @@
 // @xenova/transformers is ESM-only, use dynamic import in CJS context
-import { checkEmbeddingModelInstalled, getProjectModelsDir } from "./model-status";
+import { checkEmbeddingModelInstalled, getProjectModelBaseDir } from "./model-status";
 import * as path from "path";
 import * as os from "os";
 
@@ -102,7 +102,9 @@ async function getLocalPipeline(modelKey?: string): Promise<any> {
     // 主路径：项目根 models/（用户实际放模型的地方）。
     // 兜底：HF cache，通过 cache_dir 选项传给 pipeline。
     // transformers 内部会按 (localModelPath, cache_dir) 顺序查找文件。
-    env.localModelPath = getProjectModelsDir();
+    const modelBaseDir = getProjectModelBaseDir("embedding", key);
+    if (!modelBaseDir) throw new Error(`Local embedding model "${key}" is not installed`);
+    env.localModelPath = modelBaseDir;
     const pipe = await pipeline("feature-extraction", config.hfName, {
       cache_dir: path.join(os.homedir(), ".cache", "huggingface"),
     });

@@ -24,3 +24,13 @@ describe("general LSP settings", () => {
     expect(normalizeGeneralSettings({}).lspServerOverrides).toEqual([]);
   });
 });
+
+describe("general Harness tool concurrency settings", () => {
+  it("defaults to four and normalizes the configured safe range", () => {
+    expect(normalizeGeneralSettings({}).maxParallelToolCalls).toBe(4);
+    expect(normalizeGeneralSettings({ maxParallelToolCalls: 0 } as never).maxParallelToolCalls).toBe(1);
+    expect(normalizeGeneralSettings({ maxParallelToolCalls: 99 } as never).maxParallelToolCalls).toBe(8);
+    expect(normalizeGeneralSettings({ maxParallelToolCalls: 3.8 } as never).maxParallelToolCalls).toBe(3);
+    expect(normalizeGeneralSettings({ maxParallelToolCalls: "invalid" } as never).maxParallelToolCalls).toBe(4);
+  });
+});

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { addModelProfile, resolveDefaultModelProfile } from "./model-catalog";
-import { normalizeModelSettings, getDefaultModelProfile } from "./model-settings";
+import { normalizeModelSettings, getDefaultModelProfile, getPublicModelConfig } from "./model-settings";
 
 describe("model catalog", () => {
   it("keeps the first saved model as the default and rejects a duplicate key plus model", () => {
@@ -25,6 +25,23 @@ describe("model catalog", () => {
 
     expect(duplicate.added).toBe(false);
     expect(duplicate.profiles).toHaveLength(1);
+  });
+
+  it("marks the public status connected when a saved model exists even if the legacy mirror is empty", () => {
+    const settings = normalizeModelSettings({
+      provider: "ChatGPT（OpenAI）",
+      apiKey: "",
+      model: "",
+      modelProfiles: [{
+        id: "saved-model",
+        provider: "ChatGPT（OpenAI）",
+        displayName: "我的模型",
+        apiKey: "sk-saved",
+        model: "gpt-5.6",
+        baseUrl: "https://api.openai.com/v1",
+      }],
+    });
+    expect(getPublicModelConfig(settings).connected).toBe(true);
   });
 
   it("migrates an existing configured model into the default catalog entry", () => {

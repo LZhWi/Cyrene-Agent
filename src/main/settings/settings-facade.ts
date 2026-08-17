@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import * as path from "path";
 import {
   DEFAULT_WINDOW_CORNER_RADIUS,
   normalizeWindowCornerRadius,
@@ -28,8 +29,13 @@ import type { ToolModeOverrides } from "../orchestrator/tool-registry";
 import type { ConversationMode } from "../../shared/chat-types";
 import type { SkillModeOverrides } from "../skills/types";
 import { normalizeLspServerOverrides } from "../lsp/server-catalog";
+import {
+  applyInstallerLaunchAtLoginSelection,
+  consumeInstallerLaunchAtLoginSelection,
+} from "./launch-at-login";
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
+  maxParallelToolCalls: 4,
   citaEnabled: false,
   citaSemanticEngine: "remote",
   chatSocialContextEnabled: false,
@@ -149,7 +155,14 @@ export function normalizeGeneralSettings(
     const num = typeof value === "number" ? value : Number(value);
     return Number.isFinite(num) ? Math.max(1000, Math.min(120000, Math.round(num))) : fallback;
   };
+  const normalizeMaxParallelToolCalls = (value: unknown): number => {
+    const numberValue = typeof value === "number" ? value : Number(value);
+    return Number.isFinite(numberValue)
+      ? Math.max(1, Math.min(8, Math.trunc(numberValue)))
+      : DEFAULT_GENERAL_SETTINGS.maxParallelToolCalls;
+  };
   return {
+    maxParallelToolCalls: normalizeMaxParallelToolCalls(input?.maxParallelToolCalls),
     citaEnabled: cita.enabled,
     citaSemanticEngine: cita.semanticEngine,
     chatSocialContextEnabled: normalizeChatSocialContextEnabled(input?.chatSocialContextEnabled),
@@ -332,10 +345,19 @@ function normalizeSkillModeOverrides(
 function loadGeneralSettings0(): GeneralSettings {
   try {
     const filePath = getGeneralSettingsPath();
-    if (!fs.existsSync(filePath)) return { ...DEFAULT_GENERAL_SETTINGS };
-    return normalizeGeneralSettings(
-      JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<GeneralSettings>,
+    const existing = fs.existsSync(filePath)
+      ? JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<GeneralSettings>
+      : {};
+    const installerSelection = consumeInstallerLaunchAtLoginSelection(
+      path.join(path.dirname(filePath), "installer-options.json"),
+      fs,
     );
+    const withInstallerSelection = applyInstallerLaunchAtLoginSelection(existing, installerSelection);
+    if (installerSelection !== null) {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, JSON.stringify(normalizeGeneralSettings(withInstallerSelection), null, 2));
+    }
+    return normalizeGeneralSettings(withInstallerSelection);
   } catch (err) {
     console.error("[Cyrene] load general settings failed:", err);
     return { ...DEFAULT_GENERAL_SETTINGS };

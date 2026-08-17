@@ -12,6 +12,7 @@ import { syncBuiltInToolToggles } from "../orchestrator/tool-registration";
 import { loadModelSettings, getPublicModelConfig } from "./model-settings";
 import type { GeneralSettings } from "./general-settings";
 import type { UiIcon } from "../../shared/ui-icon";
+import { syncLaunchAtLogin } from "./launch-at-login";
 
 export interface GeneralSettingsLifecycleDependencies {
   get windowManager(): WindowManager | null;
@@ -28,7 +29,7 @@ export function applyGeneralSettings(settings: GeneralSettings, deps: GeneralSet
   deps.windowManager?.setMainWindowAlwaysOnTop(settings.petAlwaysOnTop);
   if (settings.petVisible) deps.windowManager?.showMainWindow();
   else deps.windowManager?.hideMainWindow();
-  // app.setLoginItemSettings 是全局副作用，由调用方在 index.ts 执行。
+  syncLaunchAtLogin(settings.launchAtLogin, app);
   deps.windowManager?.applyMainWindowZoom(settings.petZoom);
 }
 

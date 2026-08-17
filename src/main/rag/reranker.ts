@@ -2,7 +2,7 @@
 // 只支持 bge-reranker-base，不再提供 light 版本
 import * as path from "path";
 import * as os from "os";
-import { app } from "electron";
+import { getProjectModelBaseDir } from "./model-status";
 
 // ── Types ──
 export interface RerankerProvider {
@@ -16,15 +16,13 @@ const importEsm = new Function("moduleName", "return import(moduleName)") as (mo
 // ── Pipeline cache ──
 let standardPipeline: any = null;
 
-function getModelsDir(): string {
-  return path.join(app.getAppPath(), "models");
-}
-
 async function loadRerankerPipeline(modelDir: string): Promise<any> {
   const { pipeline, env } = await importEsm("@xenova/transformers");
 
   const originalPath = env.localModelPath;
-  env.localModelPath = getModelsDir();
+  const modelsDir = getProjectModelBaseDir("reranker", "standard");
+  if (!modelsDir) throw new Error("Local reranker model is not installed");
+  env.localModelPath = modelsDir;
   env.allowLocalModels = true;
   env.allowRemoteModels = false;
   env.useBrowserCache = false;
@@ -77,13 +75,7 @@ let currentReranker: RerankerProvider | null = null;
 let currentRerankerMode: "standard" | "none" = "none";
 
 function checkRerankerModelInstalled(): boolean {
-  const onnxPath = path.join(getModelsDir(), "bge-reranker-base", "onnx", "model_quantized.onnx");
-  try {
-    const fs = require("fs");
-    return fs.existsSync(onnxPath);
-  } catch {
-    return false;
-  }
+  return getProjectModelBaseDir("reranker", "standard") !== null;
 }
 
 export function getRerankerInstallStatus(): { standard: boolean } {
