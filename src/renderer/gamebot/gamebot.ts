@@ -34,11 +34,38 @@ type CurrencyWarsConfig = {
 };
 
 type GameBotConfig = {
+  minecraftSummaryAction?: { id: string; action: "generate" | "save" | "discard" };
+  minecraftSummaryReview?: { type: "summary-review"; stage: "offer" | "draft"; id: string; summary?: string } | null;
   enabled: boolean;
   exePath: string;
   activeRecipe: string;
   vlm: { baseUrl: string; apiKey: string; model: string };
   currencyWars: CurrencyWarsConfig;
+  minecraft: {
+    host: string;
+    port: number;
+    username: string;
+    auth: "microsoft" | "offline";
+    owner: string;
+    version: string;
+    reconnect: boolean;
+    autonomy: { mode: "passive" | "companion" | "survival"; visionEnabled: boolean };
+    soul: {
+      enabled: boolean;
+      baseUrl: string;
+      apiKey: string;
+      model: string;
+      reasoning: "auto" | "off" | "low" | "medium" | "high";
+    };
+    llm: {
+      enabled: boolean;
+      baseUrl: string;
+      apiKey: string;
+      model: string;
+      maxSteps: number;
+      reasoning: "auto" | "off" | "low" | "medium" | "high";
+    };
+  };
 };
 
 interface GameBotApi {
@@ -76,6 +103,7 @@ if (!api) {
   const refsDir = byId("gamebot-refs-dir");
   const refsList = byId("gamebot-refs-list");
   const currencyPanel = byId("gamebot-currency-wars-config");
+  const minecraftPanel = byId("gamebot-minecraft-config");
   const status = byId("gamebot-status");
   const log = byId("gamebot-log");
   const cwWindowTitle = byId<HTMLInputElement>("gamebot-cw-window-title");
@@ -108,6 +136,33 @@ if (!api) {
   const cwOcrCommand = byId<HTMLInputElement>("gamebot-cw-ocr-command");
   const cwOcrArgs = byId<HTMLTextAreaElement>("gamebot-cw-ocr-args");
   const cwAutoDetectOcr = byId<HTMLInputElement>("gamebot-cw-auto-detect-ocr");
+  const mcHost = byId<HTMLInputElement>("gamebot-mc-host");
+  const mcPort = byId<HTMLInputElement>("gamebot-mc-port");
+  const mcUsername = byId<HTMLInputElement>("gamebot-mc-username");
+  const mcAuth = byId<HTMLSelectElement>("gamebot-mc-auth");
+  const mcOwner = byId<HTMLInputElement>("gamebot-mc-owner");
+  const mcVersion = byId<HTMLInputElement>("gamebot-mc-version");
+  const mcReconnect = byId<HTMLInputElement>("gamebot-mc-reconnect");
+  const mcAutonomyMode = byId<HTMLSelectElement>("gamebot-mc-autonomy-mode");
+  const mcVisionEnabled = byId<HTMLInputElement>("gamebot-mc-vision-enabled");
+  const mcSoulEnabled = byId<HTMLInputElement>("gamebot-mc-soul-enabled");
+  const mcSoulUrl = byId<HTMLInputElement>("gamebot-mc-soul-url");
+  const mcSoulKey = byId<HTMLInputElement>("gamebot-mc-soul-key");
+  const mcSoulModel = byId<HTMLInputElement>("gamebot-mc-soul-model");
+  const mcSoulReasoning = byId<HTMLSelectElement>("gamebot-mc-soul-reasoning");
+  const mcLlmEnabled = byId<HTMLInputElement>("gamebot-mc-llm-enabled");
+  const mcLlmUrl = byId<HTMLInputElement>("gamebot-mc-llm-url");
+  const mcLlmKey = byId<HTMLInputElement>("gamebot-mc-llm-key");
+  const mcLlmModel = byId<HTMLInputElement>("gamebot-mc-llm-model");
+  const mcLlmMaxSteps = byId<HTMLInputElement>("gamebot-mc-llm-max-steps");
+  const mcLlmReasoning = byId<HTMLSelectElement>("gamebot-mc-llm-reasoning");
+  const mcSummaryReview = byId<HTMLElement>("gamebot-mc-summary-review");
+  const mcSummaryPrompt = byId<HTMLElement>("gamebot-mc-summary-prompt");
+  const mcSummaryText = byId<HTMLTextAreaElement>("gamebot-mc-summary-text");
+  const mcSummaryGenerate = byId<HTMLButtonElement>("gamebot-mc-summary-generate");
+  const mcSummarySave = byId<HTMLButtonElement>("gamebot-mc-summary-save");
+  const mcSummaryDiscard = byId<HTMLButtonElement>("gamebot-mc-summary-discard");
+  let mcSummaryId = "";
   let currentRecipe = "star-rail-daily";
 
   const readLines = (element: HTMLTextAreaElement): string[] => Array.from(new Set(
@@ -118,6 +173,7 @@ if (!api) {
   };
   const updateRecipePanel = (): void => {
     currencyPanel.hidden = currentRecipe !== "star-rail-currency-wars";
+    minecraftPanel.hidden = currentRecipe !== "minecraft-player";
   };
   const updateTargetMode = (): void => {
     const fullscreen = cwTargetMode.value === "fullscreen";
@@ -167,6 +223,34 @@ if (!api) {
         ocrCommand: cwOcrCommand.value.trim(),
         ocrArgs: readLines(cwOcrArgs),
       },
+      minecraft: {
+        host: mcHost.value.trim(),
+        port: Number(mcPort.value || 25565),
+        username: mcUsername.value.trim(),
+        auth: mcAuth.value === "offline" ? "offline" : "microsoft",
+        owner: mcOwner.value.trim(),
+        version: mcVersion.value.trim(),
+        reconnect: mcReconnect.checked,
+        autonomy: {
+          mode: mcAutonomyMode.value as GameBotConfig["minecraft"]["autonomy"]["mode"],
+          visionEnabled: mcVisionEnabled.checked,
+        },
+        soul: {
+          enabled: mcSoulEnabled.checked,
+          baseUrl: mcSoulUrl.value.trim(),
+          apiKey: mcSoulKey.value.trim(),
+          model: mcSoulModel.value.trim(),
+          reasoning: mcSoulReasoning.value as GameBotConfig["minecraft"]["soul"]["reasoning"],
+        },
+        llm: {
+          enabled: mcLlmEnabled.checked,
+          baseUrl: mcLlmUrl.value.trim(),
+          apiKey: mcLlmKey.value.trim(),
+          model: mcLlmModel.value.trim(),
+          maxSteps: Number(mcLlmMaxSteps.value || 6),
+          reasoning: mcLlmReasoning.value as GameBotConfig["minecraft"]["llm"]["reasoning"],
+        },
+      },
     });
     status.textContent = "配置已保存";
   };
@@ -209,6 +293,27 @@ if (!api) {
     cwOcrCommand.value = config.currencyWars.ocrCommand;
     cwOcrArgs.value = config.currencyWars.ocrArgs.join("\n");
     cwAutoDetectOcr.checked = config.currencyWars.autoDetectOcr;
+    mcHost.value = config.minecraft.host;
+    mcPort.value = String(config.minecraft.port);
+    mcUsername.value = config.minecraft.username;
+    mcAuth.value = config.minecraft.auth;
+    mcOwner.value = config.minecraft.owner;
+    mcVersion.value = config.minecraft.version;
+    mcReconnect.checked = config.minecraft.reconnect;
+    mcAutonomyMode.value = config.minecraft.autonomy.mode;
+    mcVisionEnabled.checked = config.minecraft.autonomy.visionEnabled;
+    mcSoulEnabled.checked = config.minecraft.soul.enabled;
+    mcSoulUrl.value = config.minecraft.soul.baseUrl;
+    mcSoulKey.value = config.minecraft.soul.apiKey;
+    mcSoulModel.value = config.minecraft.soul.model;
+    mcSoulReasoning.value = config.minecraft.soul.reasoning;
+    mcLlmEnabled.checked = config.minecraft.llm.enabled;
+    mcLlmUrl.value = config.minecraft.llm.baseUrl;
+    mcLlmKey.value = config.minecraft.llm.apiKey;
+    mcLlmModel.value = config.minecraft.llm.model;
+    mcLlmMaxSteps.value = String(config.minecraft.llm.maxSteps);
+    mcLlmReasoning.value = config.minecraft.llm.reasoning;
+    if (config.minecraftSummaryReview) showMinecraftSummaryReview(config.minecraftSummaryReview);
     const recipes = await api.listRecipes();
     recipeSelect.replaceChildren(...recipes.map((recipe) => {
       const option = document.createElement("option");
@@ -222,7 +327,7 @@ if (!api) {
     await refreshRefs();
   };
 
-  for (const element of [exe, url, key, model, cwWindowTitle, cwFlowMode, cwTargetMode, cwAutoLaunch, cwFuzzyScore, cwBlockedFuzzyScore, cwButtonFuzzyScore, cwInvestmentFuzzyScore, cwMaxRounds, cwMatchAny, cwDebuffEnabled, cwBlockedEnabled, cwInvestmentEnabled, cwCheckInvestmentBlocked, cwStopTarget, cwRecognitionOnly, cwElevatedInput, cwTargets, cwBlocked, cwInvestments, cwStrategies, cwInGameInvestments, cwMainRule, cwBlockedRule, cwOuterInvestmentRule, cwInGameInvestmentRule, cwAutoDetectOcr, cwOcrCommand, cwOcrArgs]) {
+  for (const element of [exe, url, key, model, cwWindowTitle, cwFlowMode, cwTargetMode, cwAutoLaunch, cwFuzzyScore, cwBlockedFuzzyScore, cwButtonFuzzyScore, cwInvestmentFuzzyScore, cwMaxRounds, cwMatchAny, cwDebuffEnabled, cwBlockedEnabled, cwInvestmentEnabled, cwCheckInvestmentBlocked, cwStopTarget, cwRecognitionOnly, cwElevatedInput, cwTargets, cwBlocked, cwInvestments, cwStrategies, cwInGameInvestments, cwMainRule, cwBlockedRule, cwOuterInvestmentRule, cwInGameInvestmentRule, cwAutoDetectOcr, cwOcrCommand, cwOcrArgs, mcHost, mcPort, mcUsername, mcAuth, mcOwner, mcVersion, mcReconnect, mcAutonomyMode, mcVisionEnabled, mcSoulEnabled, mcSoulUrl, mcSoulKey, mcSoulModel, mcSoulReasoning, mcLlmEnabled, mcLlmUrl, mcLlmKey, mcLlmModel, mcLlmMaxSteps, mcLlmReasoning]) {
     element.addEventListener("change", () => void saveFields());
   }
   cwTargetMode.addEventListener("change", updateTargetMode);
@@ -242,10 +347,35 @@ if (!api) {
     status.textContent = "正在停止…";
     appendLog("已请求停止");
   });
+  const submitSummaryAction = async (action: "generate" | "save" | "discard"): Promise<void> => {
+    if (!mcSummaryId) return;
+    const result = await api.saveConfig({ minecraftSummaryAction: { id: mcSummaryId, action } } as Partial<GameBotConfig>) as unknown as { ok?: boolean; error?: string };
+    if (result?.ok === false) appendLog(`联机记录操作失败：${result.error ?? "未知错误"}`);
+    if (action === "discard" || (action === "save" && result?.ok !== false)) {
+      mcSummaryReview.hidden = true;
+      mcSummaryId = "";
+    }
+  };
+  mcSummaryGenerate.addEventListener("click", () => void submitSummaryAction("generate"));
+  mcSummarySave.addEventListener("click", () => void submitSummaryAction("save"));
+  mcSummaryDiscard.addEventListener("click", () => void submitSummaryAction("discard"));
+  const showMinecraftSummaryReview = (review: NonNullable<GameBotConfig["minecraftSummaryReview"]>): void => {
+    mcSummaryId = review.id;
+    mcSummaryReview.hidden = false;
+    const hasDraft = review.stage === "draft";
+    mcSummaryPrompt.textContent = hasDraft
+      ? "这是拟保存的联机记录。请确认内容后决定是否保存。"
+      : "联机已经结束。是否生成本次记录？现在不会调用模型，也不会保存任何摘要。";
+    mcSummaryText.hidden = !hasDraft;
+    mcSummaryText.value = review.summary ?? "";
+    mcSummaryGenerate.hidden = hasDraft;
+    mcSummarySave.hidden = !hasDraft;
+  };
   api.onProgress((raw) => {
-    const info = raw as { index: number; total: number; desc: string };
+    const info = raw as { index: number; total: number; desc: string; minecraftSummary?: { type: "summary-review"; stage: "offer" | "draft"; id: string; summary?: string } };
     status.textContent = info.desc;
     appendLog(info.desc + (info.index >= 0 ? ` (${info.index + 1}/${info.total})` : ""));
+    if (info.minecraftSummary?.type === "summary-review") showMinecraftSummaryReview(info.minecraftSummary);
   });
   void refresh().catch((error) => {
     status.textContent = "配置加载失败";

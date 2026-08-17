@@ -49,6 +49,16 @@ export interface ChatMessage {
     endedAt: number;
     summary: string;
   };
+  /** Minecraft 联机记录标记。存在时渲染为联机气泡（用户侧），content 为空不参与 LLM 上下文。
+   *  sessionId 对应 MinecraftSessionEvent.id，删除消息时联动清理 minecraft-sessions.json。 */
+  minecraftEvent?: {
+    sessionId: string;
+    startedAt: number;
+    endedAt: number;
+    serverLabel: string;
+    players: string[];
+    summary: string;
+  };
 }
 
 export type MessageAttachment = ImageMessageAttachment | DocumentMessageAttachment;

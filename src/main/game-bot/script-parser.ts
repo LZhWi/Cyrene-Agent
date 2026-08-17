@@ -125,7 +125,7 @@ export function parseRecipe(yamlText: string): ParseResult {
     const exe = str(d.exe, "exe");
     const model = optStr(d.model);
     const runner = d.runner === undefined ? "steps" : str(d.runner, "runner");
-    if (runner !== "steps" && runner !== "currency-wars") throw new Error("未知 runner: " + runner);
+    if (runner !== "steps" && runner !== "currency-wars" && runner !== "minecraft-player") throw new Error("未知 runner: " + runner);
     if (!Array.isArray(d.steps)) throw new Error("steps 必须是数组");
     const steps = d.steps.map(parseStep);
     return { ok: true, recipe: { name, exe, model, runner, steps } };

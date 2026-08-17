@@ -1111,22 +1111,26 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
   border-top-right-radius: 6px;
 }
 
-/* 通话记录气泡：用户侧，点击展开摘要 */
-.msg__bubble--call {
+/* 通话记录 / Minecraft 联机记录气泡：用户侧，点击展开摘要（两类同构，共享样式） */
+.msg__bubble--call,
+.msg__bubble--minecraft {
   cursor: pointer;
   user-select: none;
   min-width: 180px;
 }
-.msg__call-header {
+.msg__call-header,
+.msg__minecraft-header {
   font-weight: 600;
   font-size: 0.95em;
   margin-bottom: 4px;
 }
-.msg__call-meta {
+.msg__call-meta,
+.msg__minecraft-meta {
   font-size: 0.82em;
   opacity: 0.85;
 }
-.msg__call-summary {
+.msg__call-summary,
+.msg__minecraft-summary {
   margin-top: 10px;
   padding-top: 10px;
   border-top: 1px solid rgba(255, 255, 255, 0.2);

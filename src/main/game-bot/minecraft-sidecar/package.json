@@ -1,0 +1,16 @@
+{
+  "name": "cyrene-minecraft-sidecar",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "test": "node --test commands.test.cjs safety.test.cjs tools.test.cjs crops.test.cjs mining.test.cjs combat.test.cjs building.test.cjs animals.test.cjs environment.test.cjs bed.test.cjs lighting.test.cjs boat.test.cjs windows.test.cjs appearance.test.cjs autonomy.test.cjs chat-output.test.cjs chat-source.test.cjs llm-http.test.cjs llm-planner.test.cjs llm-contracts.test.cjs soul-orchestrator.test.cjs viewer-compat.test.cjs context-retrieval-worker.test.cjs live-provider-smoke.test.cjs live-minecraft-smoke.test.cjs",
+    "smoke:providers": "node live-provider-smoke.cjs",
+    "smoke:autonomy-provider": "node live-autonomy-provider-smoke.cjs",
+    "smoke:context": "node context-retrieval-smoke.cjs"
+  },
+  "dependencies": {
+    "mineflayer": "4.37.1",
+    "mineflayer-pathfinder": "^2.4.5",
+    "prismarine-viewer": "^1.33.0"
+  }
+}

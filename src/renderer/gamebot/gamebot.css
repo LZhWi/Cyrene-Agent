@@ -238,3 +238,9 @@ html[data-ui-theme="pearl-white"] .gamebot-log {
 html[data-ui-theme="pearl-white"] .gamebot-content {
   scrollbar-color: var(--rb-scroll-thumb) transparent;
 }
+.gamebot-summary-review textarea {
+  box-sizing: border-box;
+  width: 100%;
+  resize: vertical;
+  margin: 12px 0;
+}

@@ -58,6 +58,6 @@ export interface GameRecipe {
   name: string;
   exe: string;          // 可含 ${exe_path}
   model?: string;       // 可含 ${vlm_config}；留空则用全局 VLM 配置
-  runner?: "steps" | "currency-wars";
+  runner?: "steps" | "currency-wars" | "minecraft-player";
   steps: Step[];
 }

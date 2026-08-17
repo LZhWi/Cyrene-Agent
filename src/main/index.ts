@@ -143,7 +143,7 @@ import {
   loadMusicCompanionHost,
   recordMusicCompanionPresentation,
 } from "./skills/music-companion-host";
-import { initGameBot } from "./game-bot";
+import { initGameBot, setMinecraftSessionSavedCallback, loadMinecraftContextEvents } from "./game-bot";
 import { initChannels, shutdownChannels, setChannelsConversationLifecycle } from "./channels/init";
 import { buildChannelAttachmentInputs } from "./channels/agent-input";
 import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatcherBroadcastChat, setDispatcherLoadGeneralSettings, setDispatcherLoadRecentHistory } from "./channels/dispatcher";
@@ -3068,6 +3068,33 @@ function createWindow(): void {
     }
   });
 
+  // Minecraft 联机记录保存回调：经用户审阅确认保存后，往 proactive-chat 会话插联机消息
+  // （与通话结束回调同构：用户侧气泡，content 为空不参与 LLM 上下文）。
+  setMinecraftSessionSavedCallback((event) => {
+    const sessionId = chatsStore.getSessionByPurpose("proactive-chat")?.id ?? null;
+    if (!sessionId) return;
+    const minecraftMessage: ChatMessage = {
+      id: randomUUID(),
+      role: "user",
+      content: "",
+      at: event.startedAt,
+      minecraftEvent: {
+        sessionId: event.id,
+        startedAt: event.startedAt,
+        endedAt: event.endedAt,
+        serverLabel: event.serverLabel,
+        players: event.players,
+        summary: event.summary,
+      },
+    };
+    const updated = chatsStore.appendMessage(sessionId, minecraftMessage);
+    if (!updated) return;
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue;
+      try { win.webContents.send(IPC.CHATS_CHANGED); } catch { /* ignore */ }
+    }
+  });
+
   // 注入子代理 LLM 配置（delegate_task 工具用，复用主模型配置）
   setDelegateSettings(() => {
     const s = loadModelSettings();
@@ -5816,6 +5843,7 @@ app.whenReady().then(async () => {
     getSocialEmbeddingProvider: () => getEmbeddingProvider(),
     retrieveSocialContext,
     getCallContextEvents: loadCallContextEvents,
+    getMinecraftContextEvents: loadMinecraftContextEvents,
     isProactiveConversation: (conversationId) => chatsStore.getSession(conversationId)?.purpose === "proactive-chat",
     captionImageForFallback: async (filePath: string) => {
       const validated = validateCaptionImagePath(filePath);

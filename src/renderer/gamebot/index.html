@@ -172,6 +172,108 @@
         </details>
       </section>
 
+      <section class="gamebot-card" id="gamebot-minecraft-config" hidden>
+        <div class="gamebot-card__heading">
+          <div>
+            <h2>Minecraft 联机玩家</h2>
+            <p>Java 版独立玩家账号；仅绑定玩家可通过游戏聊天控制昔涟。</p>
+          </div>
+          <span class="gamebot-safety">Java · 局域网/私人服务器</span>
+        </div>
+        <div class="gamebot-form-grid gamebot-form-grid--two">
+          <label class="gamebot-field">
+            <span>服务器地址</span>
+            <input id="gamebot-mc-host" type="text" placeholder="localhost" autocomplete="off" />
+          </label>
+          <label class="gamebot-field">
+            <span>端口</span>
+            <input id="gamebot-mc-port" type="number" min="1" max="65535" step="1" />
+          </label>
+          <label class="gamebot-field">
+            <span>机器人账号 / 邮箱</span>
+            <input id="gamebot-mc-username" type="text" maxlength="128" autocomplete="off" />
+          </label>
+          <label class="gamebot-field">
+            <span>认证方式</span>
+            <select id="gamebot-mc-auth">
+              <option value="microsoft">Microsoft 正版账号</option>
+              <option value="offline">离线测试服</option>
+            </select>
+          </label>
+          <label class="gamebot-field">
+            <span>绑定玩家名</span>
+            <input id="gamebot-mc-owner" type="text" maxlength="16" pattern="[A-Za-z0-9_]{1,16}" placeholder="你的游戏名（最多 16 字符）" autocomplete="off" />
+          </label>
+          <label class="gamebot-field">
+            <span>服务器版本（可留空）</span>
+            <input id="gamebot-mc-version" type="text" placeholder="自动检测" autocomplete="off" />
+          </label>
+        </div>
+        <div class="gamebot-checks">
+          <label><input id="gamebot-mc-reconnect" type="checkbox" /> 断线后最多重连 3 次</label>
+          <label><input id="gamebot-mc-vision-enabled" type="checkbox" /> 启用第三视角 VLM 观察</label>
+        </div>
+        <div class="gamebot-form-grid gamebot-form-grid--two">
+          <label class="gamebot-field">
+            <span>自主模式</span>
+            <select id="gamebot-mc-autonomy-mode">
+              <option value="passive">被动：指令与紧急自保</option>
+              <option value="companion">陪伴：低风险主动协助</option>
+              <option value="survival">自主生存：自行选择安全目标</option>
+            </select>
+          </label>
+        </div>
+        <p class="gamebot-target-hint">视觉复用本页顶部的 GameBot VLM 配置。主模型连接过载时会每秒重试，10 秒后自动改用 glm-4.1v-thinking-flash。旧配置默认保持被动，不会自行改动世界。</p>
+        <details class="gamebot-advanced">
+          <summary>自然语言与任务规划 LLM（可选）</summary>
+          <div class="gamebot-checks gamebot-checks--compact">
+            <label><input id="gamebot-mc-llm-enabled" type="checkbox" /> 启用自然语言规划</label>
+          </div>
+          <p class="gamebot-target-hint">两阶段架构均使用独立的 OpenAI-compatible 配置，仅供 Minecraft GameBot 使用。高性能 Soul 模型读取受限的只读人格、最近普通对话与相关记忆，负责理解意图和组织最终回复；低成本执行模型只规划下一条已验证指令。精确指令不调用 LLM。</p>
+          <h3>高性能 Soul 模型（入口 / 出口）</h3>
+          <div class="gamebot-checks gamebot-checks--compact">
+            <label><input id="gamebot-mc-soul-enabled" type="checkbox" /> 启用高质量意图理解和最终回复</label>
+          </div>
+          <div class="gamebot-form-grid gamebot-form-grid--two">
+            <label class="gamebot-field"><span>Soul Base URL</span><input id="gamebot-mc-soul-url" type="url" placeholder="https://api.moonshot.cn/v1" autocomplete="off" /></label>
+            <label class="gamebot-field"><span>Soul 模型</span><input id="gamebot-mc-soul-model" type="text" placeholder="kimi-k2.6 / qwen3.7-max / MiniMax-M2.7" autocomplete="off" /></label>
+            <label class="gamebot-field"><span>Soul API Key</span><input id="gamebot-mc-soul-key" type="password" autocomplete="off" /></label>
+            <label class="gamebot-field"><span>Soul 推理强度</span><select id="gamebot-mc-soul-reasoning"><option value="auto">自动</option><option value="off">关闭（省 Token）</option><option value="low">低</option><option value="medium">中</option><option value="high">高</option></select></label>
+          </div>
+          <h3>低成本执行模型（逐步规划）</h3>
+          <p class="gamebot-target-hint">智谱：Base URL 填 <code>https://open.bigmodel.cn/api/paas/v4</code>；实测免费 <code>glm-4.7-flash</code> 和 <code>glm-4.7-flashx</code> 的稳定性不足，推荐 <code>glm-4.7</code> 并将推理强度设为“关闭”（真实动作基准 10/10，平均约 2.2 秒）。本地 Ollama：Base URL 填 <code>http://127.0.0.1:11434/v1</code>；4B 模型仅建议作为离线备用。</p>
+          <div class="gamebot-form-grid gamebot-form-grid--two">
+            <label class="gamebot-field">
+              <span>LLM Base URL</span>
+              <input id="gamebot-mc-llm-url" type="url" placeholder="https://api.openai.com/v1" autocomplete="off" />
+            </label>
+            <label class="gamebot-field">
+              <span>LLM 模型</span>
+              <input id="gamebot-mc-llm-model" type="text" placeholder="gpt-5-mini / 本地模型名" autocomplete="off" />
+            </label>
+            <label class="gamebot-field">
+              <span>LLM API Key（本地服务可留空）</span>
+              <input id="gamebot-mc-llm-key" type="password" autocomplete="off" />
+            </label>
+            <label class="gamebot-field">
+              <span>单次计划最大步骤</span>
+              <input id="gamebot-mc-llm-max-steps" type="number" min="1" max="8" step="1" />
+            </label>
+            <label class="gamebot-field">
+              <span>规划推理强度</span>
+              <select id="gamebot-mc-llm-reasoning">
+                <option value="auto">自动（兼容普通模型）</option>
+                <option value="off">关闭</option>
+                <option value="low">低</option>
+                <option value="medium">中</option>
+                <option value="high">高</option>
+              </select>
+            </label>
+          </div>
+        </details>
+        <p class="gamebot-target-hint">常用游戏聊天指令：跟随 / 跟我探索 / 过来 / 停止 / 撤退 / 状态 / 背包 / 设置家 / 回家 / 捡东西 / 找回遗物 / 脱困 / 铺平台 / 建避难所 / 采集 3 个橡木 / 采矿 3 个铁 / 安全掘进 6 格 / 给我 3 个橡木 / 合成石镐 / 放工作台 / 放熔炉 / 放箱子 / 放床 / 放火把 / 开门 / 关门 / 绑定箱子 / 查看箱子 / 存入 5 个泥土 / 存入手上物品 / 取出 2 个泥土 / 绑定床 / 睡觉 / 起床 / 吃东西 / 拿出铁剑 / 开垦耕地 4 块 / 种胡萝卜 4 个 / 收割马铃薯 3 个 / 烤 3 个牛肉 / 穿装备 / 装备盾牌 / 自卫 / 钓鱼 / 打水 / 倒水 / 挤奶 / 繁殖牛 / 剪羊毛 / 查看交易 / 交易 1 / 附魔 1 / 重命名 幸运镐 / 放船 / 上船 / 离开船。“跟我探索”和安全掘进会记录回程点；地表采集最多 16 个；暴露矿只从现有通道采集；安全掘进只水平推进，遇液体、空洞、坠落方块或不可靠地面立即停止；避难所为 4×4 双格墙和完整屋顶；低血量优先撤退；始终保留 3 个低价值方块用于浅坑脱困；工具剩余耐久过低时不会继续使用。首次使用 Microsoft 认证时会在日志中显示设备登录提示。</p>
+      </section>
+
       <section class="gamebot-runner">
         <div class="gamebot-runner__actions">
           <button type="button" class="gamebot-primary" id="gamebot-start-btn">▶ 开始运行</button>
@@ -182,6 +284,18 @@
           <strong id="gamebot-status">尚未运行</strong>
         </div>
         <pre id="gamebot-log" class="gamebot-log" aria-live="polite"></pre>
+      </section>
+      <section class="gamebot-card gamebot-summary-review" id="gamebot-mc-summary-review" hidden>
+        <div class="gamebot-card__heading"><div>
+          <h2>Minecraft 联机记录</h2>
+          <p id="gamebot-mc-summary-prompt">联机已经结束。只有你确认后才会生成和保存记录。</p>
+        </div></div>
+        <textarea id="gamebot-mc-summary-text" rows="7" readonly hidden></textarea>
+        <div class="gamebot-runner__actions">
+          <button type="button" class="gamebot-primary" id="gamebot-mc-summary-generate">生成记录草稿</button>
+          <button type="button" class="gamebot-primary" id="gamebot-mc-summary-save" hidden>确认保存</button>
+          <button type="button" class="gamebot-secondary" id="gamebot-mc-summary-discard">不记录</button>
+        </div>
       </section>
     </main>
   </div>

@@ -56,6 +56,14 @@ interface Message {
     endedAt: number;
     summary: string;
   };
+  minecraftEvent?: {
+    sessionId: string;
+    startedAt: number;
+    endedAt: number;
+    serverLabel: string;
+    players: string[];
+    summary: string;
+  };
 }
 
 type MessageAttachment = ImageMessageAttachment | DocumentMessageAttachment;
@@ -509,7 +517,7 @@ function getOpenerBridge(): OpenerFeedbackBridge | undefined {
 // - 过滤空 content / 渲染中的 thinking 占位（thinking=true 时通常 content 为空，但保险起见双重过滤）
 // - 丢弃仅用于本轮模型调用的 modelContext 与 thinking 等瞬态字段
 function toPersistableMessages(arr: Message[]): Array<{
-  id: string; role: Role; content: string; at: number; attachments?: MessageAttachment[]; sticker?: StickerId | null; ttsCacheKey?: string; musicCard?: MusicCardData; weatherCard?: WeatherCardData; callEvent?: Message["callEvent"];
+  id: string; role: Role; content: string; at: number; attachments?: MessageAttachment[]; sticker?: StickerId | null; ttsCacheKey?: string; musicCard?: MusicCardData; weatherCard?: WeatherCardData; callEvent?: Message["callEvent"]; minecraftEvent?: Message["minecraftEvent"];
 }> {
   return arr
     .filter((m) => m && (m.role === "user" || m.role === "model") && !m.thinking && !m.transient && (
@@ -519,6 +527,7 @@ function toPersistableMessages(arr: Message[]): Array<{
       || Boolean(m.musicCard)
       || Boolean(m.weatherCard)
       || Boolean(m.callEvent)
+      || Boolean(m.minecraftEvent)
     ))
     .map((m) => ({
       id: m.id,
@@ -531,6 +540,7 @@ function toPersistableMessages(arr: Message[]): Array<{
       musicCard: m.musicCard,
       weatherCard: m.weatherCard,
       callEvent: m.callEvent,
+      minecraftEvent: m.minecraftEvent,
     }));
 }
 
@@ -569,6 +579,7 @@ function loadSessionIntoUI(session: ChatStoreSession): void {
       musicCard: m.musicCard,
       weatherCard: m.weatherCard,
       callEvent: m.callEvent,
+      minecraftEvent: m.minecraftEvent,
     });
   }
   // 上报活跃 sessionId（设置面板“删除当前会话”差异化提示用）
@@ -1617,6 +1628,7 @@ function render(preserveScroll = false): void {
     || Boolean(m.musicCard)
     || Boolean(m.weatherCard)
     || Boolean(m.callEvent)
+    || Boolean(m.minecraftEvent)
   );
   if (emptyEl) emptyEl.toggleAttribute("hidden", hasMessages);
 
@@ -1677,6 +1689,33 @@ function render(preserveScroll = false): void {
           const summary = document.createElement("div");
           summary.className = "msg__call-summary";
           summary.textContent = m.callEvent!.summary;
+          bubble.appendChild(summary);
+        }
+      });
+      bubbles.push(bubble);
+    } else if (m.minecraftEvent) {
+      // Minecraft 联机记录气泡：与通话气泡同构，用户侧特殊样式，点击展开摘要
+      bubble.classList.add("msg__bubble--minecraft");
+      bubble.replaceChildren();
+      const header = document.createElement("div");
+      header.className = "msg__minecraft-header";
+      header.textContent = "⛏️ Minecraft 联机";
+      const meta = document.createElement("div");
+      meta.className = "msg__minecraft-meta";
+      const durationMin = Math.max(1, Math.round((m.minecraftEvent.endedAt - m.minecraftEvent.startedAt) / 60_000));
+      const players = m.minecraftEvent.players.filter(Boolean).join("、");
+      meta.textContent = `持续约 ${durationMin} 分钟 · ${formatTime(m.minecraftEvent.startedAt)}`
+        + (players ? ` · ${players}` : "");
+      bubble.appendChild(header);
+      bubble.appendChild(meta);
+      bubble.addEventListener("click", () => {
+        const expanded = bubble.classList.toggle("is-expanded");
+        const existing = bubble.querySelector(".msg__minecraft-summary");
+        if (existing) existing.remove();
+        if (expanded) {
+          const summary = document.createElement("div");
+          summary.className = "msg__minecraft-summary";
+          summary.textContent = m.minecraftEvent!.summary;
           bubble.appendChild(summary);
         }
       });

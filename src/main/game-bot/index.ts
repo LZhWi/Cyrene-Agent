@@ -22,15 +22,20 @@ import { runCurrencyWars } from "./currency-wars/runner";
 import { launchDetached } from "./process-tools";
 import { resolveOcrLaunchConfig } from "./ocr-runtime";
 import { ElevatedInputClient } from "./elevated-input";
+import { MinecraftBotManager, type MinecraftManagerEvent } from "./minecraft/manager";
+import { loadMinecraftSessionEvents } from "./minecraft/session-store";
+import type { MinecraftSessionEvent } from "./minecraft/types";
 
 const LOG = "[GameBot]";
+const MINECRAFT_RECIPE = { id: "minecraft-player", name: "Minecraft 联机玩家" };
+const minecraftManager = new MinecraftBotManager();
 
 /** 扫描内置 game-recipes/ 目录，返回脚本元数据列表。 */
 export function listRecipes(): { id: string; name: string }[] {
   const dir = path.join(app.getAppPath(), "game-recipes");
   const result: { id: string; name: string }[] = [];
   try {
-    if (!fs.existsSync(dir)) return result;
+    if (!fs.existsSync(dir)) return [MINECRAFT_RECIPE];
     for (const f of fs.readdirSync(dir)) {
       if (!f.endsWith(".yaml") && !f.endsWith(".yml")) continue;
       const id = f.replace(/\.(ya?ml)$/, "");
@@ -40,11 +45,15 @@ export function listRecipes(): { id: string; name: string }[] {
   } catch (err) {
     console.warn(LOG, "listRecipes 失败:", err);
   }
+  result.push(MINECRAFT_RECIPE);
   return result;
 }
 
 /** 读脚本文件 → GameRecipe。 */
 function loadRecipe(id: string): GameRecipe | null {
+  if (id === MINECRAFT_RECIPE.id) {
+    return { name: MINECRAFT_RECIPE.name, exe: "minecraft-sidecar", runner: "minecraft-player", steps: [] };
+  }
   const dir = path.join(app.getAppPath(), "game-recipes");
   for (const ext of [".yaml", ".yml"]) {
     const p = path.join(dir, id + ext);
@@ -103,7 +112,7 @@ function buildTools(settings: GameBotSettings): BotTools {
   };
 }
 
-function broadcastProgress(info: { index: number; total: number; desc: string }): void {
+function broadcastProgress(info: { index: number; total: number; desc: string; minecraftSummary?: MinecraftManagerEvent }): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (!win.isDestroyed()) {
       try { win.webContents.send(IPC.GAME_BOT_PROGRESS, info); } catch { /* ignore */ }
@@ -118,6 +127,54 @@ export async function startGameBot(): Promise<{ ok: boolean; error?: string }> {
   if (!settings.enabled) return { ok: false, error: "代肝未启用（设置→插件→游戏代肝 开启开关）" };
   const recipe = loadRecipe(settings.activeRecipe);
   if (!recipe) return { ok: false, error: "找不到脚本: " + settings.activeRecipe };
+  if (recipe.runner === "minecraft-player") {
+    if (!settings.minecraft.username) return { ok: false, error: "请配置 Minecraft 机器人账号" };
+    if (!settings.minecraft.owner) return { ok: false, error: "请配置允许控制昔涟的玩家名" };
+    if (settings.minecraft.auth === "offline" && !/^[A-Za-z0-9_]{1,16}$/.test(settings.minecraft.username)) {
+      return { ok: false, error: "Minecraft 离线账号名只能包含字母、数字、下划线，且最多 16 个字符" };
+    }
+    if (!/^[A-Za-z0-9_]{1,16}$/.test(settings.minecraft.owner)) {
+      return { ok: false, error: "绑定玩家名只能包含字母、数字、下划线，且最多 16 个字符" };
+    }
+    if (settings.minecraft.llm.enabled && (!settings.minecraft.llm.baseUrl || !settings.minecraft.llm.model)) {
+      return { ok: false, error: "已启用 Minecraft LLM，但尚未填写 Base URL 和模型" };
+    }
+    if (settings.minecraft.llm.enabled && !/^https?:\/\//i.test(settings.minecraft.llm.baseUrl)) {
+      return { ok: false, error: "Minecraft LLM Base URL 必须使用 http 或 https" };
+    }
+    if (settings.minecraft.soul.enabled && (!settings.minecraft.soul.baseUrl || !settings.minecraft.soul.model)) {
+      return { ok: false, error: "已启用 Minecraft 高性能 Soul LLM，但尚未填写 Base URL 和模型" };
+    }
+    if (settings.minecraft.soul.enabled && !/^https?:\/\//i.test(settings.minecraft.soul.baseUrl)) {
+      return { ok: false, error: "Minecraft Soul LLM Base URL 必须使用 http 或 https" };
+    }
+    if (settings.minecraft.soul.enabled && !settings.minecraft.llm.enabled) {
+      return { ok: false, error: "两阶段模式需要同时启用高性能 Soul LLM 和低成本执行 LLM" };
+    }
+    runningRecipe = settings.activeRecipe;
+    runSignal = { aborted: false };
+    try {
+      const minecraftVision = settings.minecraft.autonomy.visionEnabled && settings.vlm.baseUrl && settings.vlm.model
+        ? { baseUrl: settings.vlm.baseUrl, apiKey: settings.vlm.apiKey, model: settings.vlm.model }
+        : null;
+      minecraftManager.start(app.getAppPath(), app.getPath("userData"), settings.minecraft, minecraftVision, (event) => {
+        const desc = event.type === "progress"
+          ? event.description
+          : event.stage === "offer"
+            ? "联机已结束：是否生成本次 Minecraft 联机记录？"
+            : "联机记录草稿已生成，请确认是否保存";
+        broadcastProgress({ index: 0, total: 1, desc, minecraftSummary: event });
+      }, () => {
+        runSignal = null;
+        runningRecipe = null;
+      });
+      return { ok: true };
+    } catch (error) {
+      runSignal = null;
+      runningRecipe = null;
+      return { ok: false, error: error instanceof Error ? error.message : String(error) };
+    }
+  }
   const resolvedExe = recipe.exe.replace(/\$\{exe_path\}/g, settings.exePath).trim();
   if (!resolvedExe) return { ok: false, error: "未配置游戏 exe 路径" };
   const hasVlm = Boolean(settings.vlm.baseUrl && settings.vlm.apiKey && settings.vlm.model);
@@ -222,14 +279,44 @@ export async function startGameBot(): Promise<{ ok: boolean; error?: string }> {
 /** 停止代肝。 */
 export function stopGameBot(): { ok: boolean } {
   if (runSignal) runSignal.aborted = true;
+  if (minecraftManager.running) minecraftManager.stop();
   return { ok: true };
+}
+
+/** 联机记录确认保存后的回调接线（主 app 用它往聊天会话插联机气泡）。 */
+export function setMinecraftSessionSavedCallback(callback: (event: MinecraftSessionEvent) => void): void {
+  minecraftManager.setSessionSavedCallback(callback);
+}
+
+/** minecraft-sessions.json 档案的只读读路径（build-options 上下文注入用）。 */
+export function loadMinecraftContextEvents(): MinecraftSessionEvent[] {
+  return loadMinecraftSessionEvents(path.join(app.getPath("userData"), "game-bot", "minecraft-sessions.json"));
 }
 
 /** 注册 IPC + game_bot_start 工具。app.whenReady 后调一次。 */
 export function initGameBot(): void {
-  ipcMain.handle(IPC.GAME_BOT_GET_CONFIG, () => loadGameBotSettings());
-  ipcMain.handle(IPC.GAME_BOT_SAVE_CONFIG, (_e, patch: unknown) => {
-    const saved = saveGameBotSettings(patch as Partial<GameBotSettings>);
+  ipcMain.handle(IPC.GAME_BOT_GET_CONFIG, () => ({
+    ...loadGameBotSettings(),
+    minecraftSummaryReview: minecraftManager.getPendingSummaryReview(),
+  }));
+  ipcMain.handle(IPC.GAME_BOT_SAVE_CONFIG, async (_e, patch: unknown) => {
+    const summaryAction = (patch && typeof patch === "object" ? patch : {}) as {
+      minecraftSummaryAction?: { id?: unknown; action?: unknown };
+    };
+    if (summaryAction.minecraftSummaryAction) {
+      const id = typeof summaryAction.minecraftSummaryAction.id === "string" ? summaryAction.minecraftSummaryAction.id : "";
+      const action = summaryAction.minecraftSummaryAction.action;
+      if (action !== "generate" && action !== "save" && action !== "discard") {
+        return { ok: false, error: "无效的联机记录操作" };
+      }
+      return minecraftManager.handleSummaryAction(id, action);
+    }
+    const configPatch = patch as Partial<GameBotSettings>;
+    const previous = loadGameBotSettings();
+    const saved = saveGameBotSettings(configPatch);
+    if (configPatch.minecraft?.autonomy?.mode && previous.minecraft.autonomy.mode !== saved.minecraft.autonomy.mode) {
+      minecraftManager.updateAutonomy(saved.minecraft.autonomy);
+    }
     // enabled 开关同步到 agent 工具，关了 agent 就看不到/调不到
     toolRegistry.setEnabled("game_bot_start", saved.enabled);
     return saved;

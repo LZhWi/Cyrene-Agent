@@ -8,6 +8,14 @@ export interface CallContextEvent {
   summary: string;
 }
 
+/** 通话 / Minecraft 联机等多方事件共享的最小时间线形状（结构型约束，不强制继承）。 */
+export interface ExternalTimelineEvent {
+  id: string;
+  startedAt: number;
+  endedAt: number;
+  summary: string;
+}
+
 function durationLabel(startedAt: number, endedAt: number): string {
   const minutes = Math.max(1, Math.round((endedAt - startedAt) / 60_000));
   return `约 ${minutes} 分钟`;
@@ -26,40 +34,48 @@ export function callEventToContextMessage(event: CallContextEvent): ChatContextM
   };
 }
 
-export function mergeCallEventsIntoHistory(
+export function mergeExternalEventsIntoHistory<T extends ExternalTimelineEvent>(
   messages: ReadonlyArray<ChatContextMessage>,
-  events: ReadonlyArray<CallContextEvent>,
+  events: ReadonlyArray<T>,
   limit = 16,
-): { messages: ChatContextMessage[]; visibleEvents: CallContextEvent[] } {
-  // 通话事件仍参与"最近 N 项"的时间排序与淘汰，但不再作为 role 消息插入 messages 数组。
-  // 原因：Anthropic 适配会把历史里的 system 消息合并进顶层 system prompt，导致通话事件
-  // 失去历史位置并获得更高指令优先级。改为在 system prompt 里以独立数据块呈现（buildCallContextBlock）。
+): { messages: ChatContextMessage[]; visibleEvents: T[] } {
+  // 外部事件仍参与“最近 N 项”的时间排序与淘汰，但不再作为 role 消息插入 messages 数组。
+  // 原因：Anthropic 适配会把历史里的 system 消息合并进顶层 system prompt，导致事件
+  // 失去历史位置并获得更高指令优先级。改为在 system prompt 里以独立数据块呈现（build*ContextBlock）。
   const candidates = [
-    ...messages.map((message, index) => ({ kind: "chat" as const, message: { ...message }, index })),
+    ...messages.map((message, index) => ({ kind: "chat" as const, message: { ...message }, at: message.at, index })),
     ...events.map((event, index) => ({
-      kind: "call" as const,
+      kind: "event" as const,
       event,
-      message: callEventToContextMessage(event),
+      at: event.startedAt,
       index: messages.length + index,
     })),
   ];
   candidates.sort((a, b) => {
-    const aTime = Number.isFinite(a.message.at) ? a.message.at! : Number.MAX_SAFE_INTEGER;
-    const bTime = Number.isFinite(b.message.at) ? b.message.at! : Number.MAX_SAFE_INTEGER;
+    const aTime = Number.isFinite(a.at) ? a.at! : Number.MAX_SAFE_INTEGER;
+    const bTime = Number.isFinite(b.at) ? b.at! : Number.MAX_SAFE_INTEGER;
     return aTime - bTime || a.index - b.index;
   });
   const recent = candidates.slice(-Math.max(1, limit));
   return {
     messages: recent.flatMap((item) => item.kind === "chat" ? [item.message] : []),
-    visibleEvents: recent.flatMap((item) => item.kind === "call" ? [item.event] : []),
+    visibleEvents: recent.flatMap((item) => item.kind === "event" ? [item.event] : []),
   };
 }
 
-export function selectNewCallEventsForMemory(
+export function mergeCallEventsIntoHistory(
+  messages: ReadonlyArray<ChatContextMessage>,
+  events: ReadonlyArray<CallContextEvent>,
+  limit = 16,
+): { messages: ChatContextMessage[]; visibleEvents: CallContextEvent[] } {
+  return mergeExternalEventsIntoHistory(messages, events, limit);
+}
+
+export function selectNewExternalEventsForMemory<T extends ExternalTimelineEvent>(
   chatMessages: ReadonlyArray<ChatContextMessage>,
-  visibleEvents: ReadonlyArray<CallContextEvent>,
+  visibleEvents: ReadonlyArray<T>,
   noPreviousMessageLookbackMs = 24 * 60 * 60 * 1000,
-): CallContextEvent[] {
+): T[] {
   const latestUserIndex = [...chatMessages].map((message) => message.role).lastIndexOf("user");
   if (latestUserIndex < 0) return [];
   const latestUser = chatMessages[latestUserIndex];
@@ -71,6 +87,14 @@ export function selectNewCallEventsForMemory(
     .at(-1);
   const lowerBound = previousAt ?? currentAt - noPreviousMessageLookbackMs;
   return visibleEvents.filter((event) => event.endedAt > lowerBound && event.startedAt <= currentAt);
+}
+
+export function selectNewCallEventsForMemory(
+  chatMessages: ReadonlyArray<ChatContextMessage>,
+  visibleEvents: ReadonlyArray<CallContextEvent>,
+  noPreviousMessageLookbackMs = 24 * 60 * 60 * 1000,
+): CallContextEvent[] {
+  return selectNewExternalEventsForMemory(chatMessages, visibleEvents, noPreviousMessageLookbackMs);
 }
 
 export function buildCallMemoryContext(events: ReadonlyArray<CallContextEvent>): string {

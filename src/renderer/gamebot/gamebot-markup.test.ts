@@ -31,6 +31,25 @@ describe("standalone gamebot window markup", () => {
       "gamebot-cw-auto-detect-ocr",
       "gamebot-start-btn",
       "gamebot-stop-btn",
+      "gamebot-minecraft-config",
+      "gamebot-mc-host",
+      "gamebot-mc-username",
+      "gamebot-mc-owner",
+      "gamebot-mc-llm-enabled",
+      "gamebot-mc-soul-enabled",
+      "gamebot-mc-soul-url",
+      "gamebot-mc-soul-key",
+      "gamebot-mc-soul-model",
+      "gamebot-mc-soul-reasoning",
+      "gamebot-mc-llm-url",
+      "gamebot-mc-llm-key",
+      "gamebot-mc-llm-model",
+      "gamebot-mc-llm-max-steps",
+      "gamebot-mc-llm-reasoning",
+      "gamebot-mc-summary-review",
+      "gamebot-mc-summary-generate",
+      "gamebot-mc-summary-save",
+      "gamebot-mc-summary-discard",
       "gamebot-status",
     ]) {
       expect(markup).toContain(`id="${id}"`);
@@ -42,5 +61,17 @@ describe("standalone gamebot window markup", () => {
     expect(styles).toContain("background: #fdf9fb");
     expect(styles).toContain('html[data-ui-theme="pearl-white"] .gamebot-field input');
     expect(styles).toContain('html[data-ui-theme="pearl-white"] .gamebot-primary');
+  });
+
+  it("documents the advanced Minecraft survival commands", () => {
+    for (const command of ["放床", "存入手上物品", "拿出铁剑", "查看交易", "交易 1", "附魔 1", "重命名 幸运镐"]) {
+      expect(markup).toContain(command);
+    }
+  });
+
+  it("documents the tested GLM executor preset", () => {
+    expect(markup).toContain("https://open.bigmodel.cn/api/paas/v4");
+    expect(markup).toContain("glm-4.7-flash");
+    expect(markup).toContain("glm-4.7-flashx");
   });
 });

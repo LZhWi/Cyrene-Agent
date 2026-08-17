@@ -6,6 +6,7 @@ dist/preload/
 dist/renderer/assets
 dist/renderer/call/index.html
 dist/renderer/chat/index.html
+dist/renderer/gamebot/index.html
 dist/renderer/settings/index.html
 dist/renderer/sidebar/index.html
 dist/renderer/sticker-manager/index.html

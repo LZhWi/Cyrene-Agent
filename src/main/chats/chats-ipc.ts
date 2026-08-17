@@ -13,7 +13,8 @@
 // 注意：`chats:open-in-chat-window` 涉及 BrowserWindow 创建逻辑，
 // 由 src/main/index.ts 自行注册，不在本模块；本模块只管纯数据操作。
 
-import { BrowserWindow, ipcMain, type WebContents } from "electron";
+import { app, BrowserWindow, ipcMain, type WebContents } from "electron";
+import * as path from "path";
 import { IPC } from "../../shared/ipc-channels";
 import type { ChatMessage } from "../../shared/chat-types";
 import * as chatsStore from "./chats-store";
@@ -21,7 +22,12 @@ import { loadState as loadOpenerState, saveState as saveOpenerState } from "../o
 import { rollbackLastProactive } from "../proactive/proactive-policy";
 import { deleteSocialContextByTurnIds, deleteSocialContextForConversation } from "../social-context";
 import { deleteCallContextEvent } from "../call/call-context-store";
+import { deleteMinecraftSessionEvent } from "../game-bot/minecraft/session-store";
 import { deleteHistoryEntriesBySessionId, deleteHistoryEntriesByTurnIds } from "../rag";
+
+function minecraftSessionStoreFile(): string {
+  return path.join(app.getPath("userData"), "game-bot", "minecraft-sessions.json");
+}
 
 function broadcastChanged(senderWebContents?: WebContents | null): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -114,6 +120,7 @@ export function registerChatsIpc(): void {
       }
       for (const message of beforeSession?.messages ?? []) {
         if (message.callEvent) deleteCallContextEvent(message.callEvent.callId);
+        if (message.minecraftEvent) deleteMinecraftSessionEvent(minecraftSessionStoreFile(), message.minecraftEvent.sessionId);
       }
       broadcastChanged(event.sender);
     }
@@ -147,10 +154,11 @@ export function registerChatsIpc(): void {
         } catch (err) {
           console.warn("[Chats] 删除历史索引失败:", err);
         }
-        // 通话消息删除联动：从 call-context-store 移除对应事件，
-        // 这样 LLM 上下文（callContextBlock）也不会再注入这条通话梗概。
+        // 通话/联机消息删除联动：从对应档案移除事件，
+        // 这样 LLM 上下文（callContextBlock / minecraftContextBlock）也不会再注入这条记录。
         for (const deleted of deletedMessages) {
           if (deleted.callEvent) deleteCallContextEvent(deleted.callEvent.callId);
+          if (deleted.minecraftEvent) deleteMinecraftSessionEvent(minecraftSessionStoreFile(), deleted.minecraftEvent.sessionId);
         }
         broadcastChanged(event.sender);
 
