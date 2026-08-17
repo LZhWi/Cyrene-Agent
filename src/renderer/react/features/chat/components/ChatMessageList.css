@@ -154,21 +154,26 @@
   background: transparent;
 }
 
-.cy-message--tool {
+.cy-message--tool,
+.cy-message--review {
   width: var(--cy-message-reading-width);
   max-width: var(--cy-message-reading-width);
 }
 
-.cy-message--tool .ant-bubble-avatar {
+.cy-message--tool .ant-bubble-avatar,
+.cy-message--review .ant-bubble-avatar {
   display: none;
 }
 
-.cy-message--tool .ant-bubble-body {
+.cy-message--tool .ant-bubble-body,
+.cy-message--review .ant-bubble-body,
+.cy-message--review .ant-bubble-content {
   width: 100%;
   max-width: none;
 }
 
-.cy-message--tool .ant-bubble-content {
+.cy-message--tool .ant-bubble-content,
+.cy-message--review .ant-bubble-content {
   padding: 0;
   min-height: 0;
   background: transparent;
