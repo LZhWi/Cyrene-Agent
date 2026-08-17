@@ -134,7 +134,9 @@ toolRegistry.register({
     required: ['query'],
   },
   execute: async (args) => {
-    const results = await searchMemoryEntries(String(args.query), 'user_memory', Number(args.topK) || 5);
+    // 工具通道=联想/查证通道：允许带回已失效（被纠正/取代）的记忆，但带 ⏳ 标记，
+    // 自动注入通道则严格只引有效事实（searchMemoryEntries 默认过滤）。
+    const results = await searchMemoryEntries(String(args.query), 'user_memory', Number(args.topK) || 5, { includeExpired: true });
     if (results.length === 0) return '';
     const allL2 = await memoryStore.getAllL2();
     const l2ById = new Map(allL2.map((l) => [l.id, l]));
@@ -145,7 +147,10 @@ toolRegistry.register({
       const l2Id = r.metadata?.l2Id;
       const ts = (typeof l2Id === 'string' ? l2ById.get(l2Id)?.createdAt : undefined) ?? r.createdAt;
       const d = new Date(ts);
-      return `[记录于 ${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}] ${text}`;
+      const expiredNote = r.metadata?.l2Expired === true
+        ? ' ⏳（该记录已被更新信息纠正/取代，仅作过往背景联想，不要当作当前事实）'
+        : '';
+      return `[记录于 ${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}] ${text}${expiredNote}`;
     }).filter(Boolean).join('\n');
   },
 });

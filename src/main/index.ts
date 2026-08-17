@@ -111,6 +111,7 @@ import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegat
 import { registerRecallHistoryTool, backfillChatHistoryFromChatLogs, runHistoryRetrievalSandbox } from "./orchestrator/history-tools";
 import { backfillL2FromChatLogs } from "./memory/memory-backfill";
 import { runReflectionCatchupOnce } from "./memory/memory-compressor";
+import { notifyDreamUserActivity, startDreamScheduler, stopDreamScheduler } from "./memory/memory-dream";
 import { registerDocumentTools } from "./orchestrator/document-tools";
 import { registerLifeTools, setTranslateConfig } from "./orchestrator/life-tools";
 import { registerTravelTools, setTravelConfig } from "./orchestrator/travel-tools";
@@ -514,6 +515,16 @@ interface ModelSettings {
   embeddingModel: "minilm" | "bgem3";
   /** L2 DMAE 工作记忆总开关（默认关 = 纯检索行为，开启后由 DMAE 决定注入取舍）。 */
   memoryDmaeEnabled: boolean;
+  /** 梦境蒸馏总开关（默认关）。开启后空闲窗口自动做记忆整理。 */
+  memoryDreamEnabled: boolean;
+  /** 做梦专用模型（可选）。四要素齐全才生效，否则跟随主模型。 */
+  dream?: {
+    provider: string;
+    baseUrl: string;
+    model: string;
+    apiKey: string;
+    explicitTransport?: "openai" | "anthropic" | "auto";
+  };
   // 视觉模型配置（可选）。undefined 或未启用 = 不支持看图，read_image 诚实拒绝。
   vision?: VisionModelConfig;
 }
@@ -792,6 +803,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   rerankerMode: "light",
   embeddingModel: "minilm",
   memoryDmaeEnabled: false,
+  memoryDreamEnabled: false,
 };
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
@@ -1044,6 +1056,26 @@ function normalizeProviderProfile(input: Partial<ProviderProfile> | null | undef
 }
 
 /** 清洗视觉模型配置。syncWithMain=true 时三字段不保留（运行时从主配置读）。 */
+/** 做梦专用模型归一化：四要素（provider/baseUrl/model/apiKey）齐全才落盘，否则丢弃（跟随主模型）。 */
+function normalizeDreamModelConfig(input: ModelSettings["dream"] | undefined): ModelSettings["dream"] {
+  if (!input || typeof input !== "object") return undefined;
+  const provider = typeof input.provider === "string" ? input.provider.trim() : "";
+  const baseUrl = typeof input.baseUrl === "string" ? input.baseUrl.trim() : "";
+  const model = typeof input.model === "string" ? input.model.trim() : "";
+  const apiKey = typeof input.apiKey === "string" ? input.apiKey.trim() : "";
+  if (!provider || !baseUrl || !model || !apiKey) return undefined;
+  return {
+    provider,
+    baseUrl,
+    model,
+    apiKey,
+    explicitTransport:
+      input.explicitTransport === "openai" || input.explicitTransport === "anthropic" || input.explicitTransport === "auto"
+        ? input.explicitTransport
+        : undefined,
+  };
+}
+
 function normalizeVisionConfig(input: Partial<VisionModelConfig> | undefined): VisionModelConfig | undefined {
   if (!input || typeof input !== "object") return undefined;
   const syncWithMain = input.syncWithMain === true;
@@ -1114,6 +1146,8 @@ function normalizeModelSettings(input: Partial<ModelSettings> | null | undefined
     rerankerMode: input?.rerankerMode === "standard" || input?.rerankerMode === "none" ? input.rerankerMode : "light",
     embeddingModel: input?.embeddingModel === "bgem3" ? "bgem3" : "minilm",
     memoryDmaeEnabled: input?.memoryDmaeEnabled === true,
+    memoryDreamEnabled: input?.memoryDreamEnabled === true,
+    dream: normalizeDreamModelConfig(input?.dream),
     vision: normalizeVisionConfig(input?.vision),
   };
 }
@@ -2529,6 +2563,8 @@ async function observeRuntimeState(
 }
 
 async function requestModelReply(inputMessages: unknown, styleFile = "01_default.md"): Promise<ChatReplyPayload> {
+  // 用户消息到达即视为活动：进行中的梦境立即中止，空闲计时归零。
+  notifyDreamUserActivity();
   const settings = loadModelSettings();
   if (!settings.apiKey) {
     throw new Error("还没有填写 API Key，请先在设置里保存 API 配置。");
@@ -5974,6 +6010,9 @@ app.whenReady().then(async () => {
       }
     });
 
+    // 梦境蒸馏调度：空闲窗口自动整理记忆（memoryDreamEnabled 默认关，行为零变化）。
+    startDreamScheduler();
+
     console.log(`[Reranker] ${modelSettings.rerankerMode} mode configured; model loads on first user-memory retrieval.`);
   } catch (err) {
     console.error("[Cyrene] RAG init FAILED:", err);
@@ -5990,6 +6029,7 @@ app.on("window-all-closed", () => {});
 app.on("before-quit", () => {
   petWindowMoveController.dispose();
   schedulerEngine?.stop();
+  stopDreamScheduler();
   stopOpener();
   stopAsrTest();
   flushTokenUsage();

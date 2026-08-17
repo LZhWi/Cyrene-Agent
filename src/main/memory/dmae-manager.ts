@@ -11,7 +11,7 @@ import * as path from "path";
 import { getUserDataDir } from "../runtime/runtime-paths";
 import { memoryStore } from "./memory-store";
 import { appendMemoryTrace } from "./memory-trace";
-import { isL2LocallyRecallable, L2DmaeState, L2Memory } from "./memory-types";
+import { isL2LocallyRecallable, isL2Expired, L2DmaeState, L2Memory } from "./memory-types";
 
 // ── 参数（沿用上游标定值；全部集中于此，首周观察 trace 后再微调）──
 export const L2_DMAE_PARAMS = {
@@ -196,6 +196,8 @@ export function selectEntries(
     const l2 = l2ById.get(l2Id);
     if (!l2) return;
     if (!isL2LocallyRecallable(l2)) return;
+    // 有效期窗口：被纠正/取代的事实不驻留注入（与检索通道过滤一致）
+    if (isL2Expired(l2)) return;
     if (l2.conflictWith && l2.conflictWith.length > 0) return;
     seen.add(l2Id);
     selected.push(toRecallEntry(l2));

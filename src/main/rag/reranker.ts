@@ -2,6 +2,7 @@
 import * as path from "path";
 import * as os from "os";
 import { getAppRootDir } from "../runtime/runtime-paths";
+import { applyOnnxCpuSessionPolicy } from "./onnx-session-policy";
 
 // ── Types ──
 export interface RerankerProvider {
@@ -21,6 +22,8 @@ function getModelsDir(): string {
 }
 
 async function loadRerankerPipeline(modelDir: string): Promise<any> {
+  // 会话线程限流必须先于任何 session 创建（pipeline 加载即创建 session）。
+  await applyOnnxCpuSessionPolicy();
   const { pipeline, env } = await importEsm("@xenova/transformers");
 
   // Save original localModelPath (embedding may have set it)

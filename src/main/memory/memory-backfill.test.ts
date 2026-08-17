@@ -8,17 +8,20 @@ const mocks = vi.hoisted(() => ({
   ragReady: true,
   embeddingProviderAvailable: true,
   judgeRecentTurns: vi.fn(),
+  entries: [] as Array<{ id: string; embedding: number[]; metadata: Record<string, unknown> }>,
+  cosine: 0,
+  recordL2RecallsBatch: vi.fn(async () => 1),
 }));
 
 vi.mock("../runtime/runtime-paths", () => ({
   getUserDataDir: () => mocks.dataDir,
 }));
 vi.mock("../rag", () => ({
-  getEntriesBySource: () => [],
+  getEntriesBySource: () => mocks.entries,
   isUserMemoryVectorStoreReady: () => mocks.ragReady,
 }));
 vi.mock("../rag/vectorstore", () => ({
-  cosineSimilarity: () => 0,
+  cosineSimilarity: () => mocks.cosine,
 }));
 vi.mock("../rag/embedding", () => ({
   getEmbeddingProvider: () => mocks.embeddingProviderAvailable ? { embed: vi.fn(async () => [1]) } : null,
@@ -28,6 +31,9 @@ vi.mock("./memory-judge", () => ({
 }));
 vi.mock("./memory-manager", () => ({
   memoryManager: { writeMemory: vi.fn(async () => undefined) },
+}));
+vi.mock("./memory-store", () => ({
+  memoryStore: { recordL2RecallsBatch: mocks.recordL2RecallsBatch },
 }));
 
 import { backfillL2FromChatLogs } from "./memory-backfill";
@@ -47,7 +53,10 @@ describe("backfillL2FromChatLogs completion state", () => {
     mocks.dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-l2-backfill-"));
     mocks.ragReady = true;
     mocks.embeddingProviderAvailable = true;
+    mocks.entries = [];
+    mocks.cosine = 0;
     mocks.judgeRecentTurns.mockReset();
+    mocks.recordL2RecallsBatch.mockClear();
   });
 
   afterEach(() => {
@@ -162,5 +171,31 @@ describe("backfillL2FromChatLogs completion state", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("treats a dedup hit as a recall and refreshes the matched memory's stats", async () => {
+    // 真实场景：旧事实在历史轮次里被重述，候选与既有（可能是 aging）条目判重命中。
+    // 不能只吞掉候选——重述本身就是召回信号，应刷新既有条目统计，防其卡在降级态。
+    writeChatIndex(["chat-1"]);
+    fs.writeFileSync(path.join(mocks.dataDir, "cyrene-chats", "sessions", "chat-1.json"), JSON.stringify({
+      messages: [
+        { role: "user", content: "我还是喜欢跑步", at: 1000 },
+        { role: "model", content: "嗯，记得的", at: 2000 },
+      ],
+    }), "utf8");
+    mocks.entries.push({ id: "rag_old", embedding: [1], metadata: { l2Id: "l2_old" } });
+    mocks.cosine = 0.95;
+    mocks.judgeRecentTurns.mockResolvedValue([{
+      layer: "L2",
+      content: "用户喜欢跑步",
+      confidence: 0.9,
+      triggerText: "我还是喜欢跑步",
+    }]);
+    const { memoryManager } = await import("./memory-manager");
+
+    await expect(backfillL2FromChatLogs()).resolves.toEqual({ complete: true });
+
+    expect(memoryManager.writeMemory).not.toHaveBeenCalled(); // 重复候选不写入
+    expect(mocks.recordL2RecallsBatch).toHaveBeenCalledWith(["l2_old"]); // 但刷了既有条目
   });
 });

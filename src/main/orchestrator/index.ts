@@ -3,9 +3,11 @@
 // 工具的选择和执行由 function-calling.ts 的 runFunctionCallingLoop 处理
 import { updateWorldbookActivation, getPermanentWorldbookEntries, getActiveWorldbookEntries, getCascadeWorldbookEntries, searchMemory, searchMemoryEntries, INJECTION_HEADER, INJECTION_PREAMBLE } from "../rag";
 import { memoryStore } from "../memory/memory-store";
+import { memoryManager } from "../memory/memory-manager";
 import { isL1Fresh } from "../memory/memory-types";
 import { entityGraph } from "../memory/entity-graph";
 import { isL2DmaeEnabled, l2DmaeManager } from "../memory/dmae-manager";
+import { NARRATIVE_INJECT_MAX } from "../memory/memory-dream";
 import { recordRecentMemorySearchEntries } from "../memory/recent-injected-memory";
 import { toolRegistry } from "./tool-registry";
 
@@ -28,8 +30,8 @@ export async function buildMemoryInjection(
   const parts: string[] = [];
 
   try {
-    // 检索 top-5 L2 用户记忆
-    const userMemoryEntries = await searchMemoryEntries(userInput, "user_memory", 5);
+    // 检索 top-5 L2 用户记忆（召回统计改在最终注入集上记账，见下方 onL2Recalled）
+    const userMemoryEntries = await searchMemoryEntries(userInput, "user_memory", 5, { recordRecall: false });
     const allL2 = await memoryStore.getAllL2();
     // DMAE 工作记忆：开启时按"检索 ∪ pinned ∪ 活跃集"选注入集，话题记忆跨轮驻留；
     // 关闭时走纯检索路径，输出与改造前一致。只读调用方用预览，不变更状态。
@@ -42,6 +44,13 @@ export async function buildMemoryInjection(
     if (injectionEntries.length > 0) {
       if (options.trackState !== false) {
         recordRecentMemorySearchEntries(injectionEntries);
+        // reconsolidation：对"最终注入"的条目（含 DMAE 补位/pinned）刷召回统计，
+        // 取代旧的按搜索命中记账——搜索命中不等于进入上下文，补位条目此前从不刷新。
+        void memoryManager.onL2Recalled(
+          injectionEntries
+            .map((entry) => entry.metadata?.l2Id)
+            .filter((id): id is string => typeof id === "string" && id.length > 0),
+        );
       }
       // 按数据信号分档措辞：冲突条目需求证；aging（久未提及）条目用不确定语气；active 正常引用
       const l2ById = new Map(allL2.map((l) => [l.id, l]));
@@ -192,6 +201,15 @@ export async function buildAlwaysOnContext(
         memoryContext += `[近期状态]\n${l1Lines.join("\n")}\n\n`;
       }
       parts.push(memoryContext.trim());
+    }
+
+    // ── 梦境沉淀叙事 — 有内容才注入 ─────────────────────
+    // 被降级记忆在遗忘前蒸馏出的长期陪伴叙事（永不衰减）。
+    // 只取最新几条控制注入体积（每条 ≤400 字，3 条约 600 token）。
+    const narratives = await memoryStore.getDreamNarratives();
+    if (narratives.length > 0) {
+      const injected = narratives.slice(-NARRATIVE_INJECT_MAX).map((n) => `· ${n.text}`).join("\n");
+      parts.push(`[长期陪伴叙事]\n${injected}\n（这是你在梦里沉淀下来的关系印象，可作为语气与默契的背景，不要逐字复述）`);
     }
   } catch (err) {
     console.warn("[Orchestrator] memory load failed:", err);

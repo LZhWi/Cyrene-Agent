@@ -6,6 +6,7 @@ import { cosineSimilarity } from "../rag/vectorstore";
 import { getEmbeddingProvider, type EmbeddingProvider } from "../rag/embedding";
 import { memoryJudge } from "./memory-judge";
 import { memoryManager } from "./memory-manager";
+import { memoryStore } from "./memory-store";
 import { enqueueLLMTask } from "../llm-queue";
 import type { MemoryCandidate, MemoryJudgeTurn } from "./memory-types";
 
@@ -27,14 +28,17 @@ export interface L2BackfillResult {
 
 /**
  * 与现有 L2 记忆判重：对候选文本做嵌入，与 user_memory 全部向量比纯余弦。
- * 嵌入失败时返回 false 不阻塞写入（后续压缩器仍会合并近似条目）。
+ * 命中时返回该向量的 l2Id（"用户又说了一遍"，刷召回统计用），无命中返回 null。
+ * 嵌入失败时返回 null 不阻塞写入（后续压缩器仍会合并近似条目）。
  */
-async function isDuplicateL2(content: string, provider: EmbeddingProvider): Promise<boolean> {
+async function findDuplicateL2Id(content: string, provider: EmbeddingProvider): Promise<string | null> {
   try {
     const emb = await provider.embed(content);
-    return getEntriesBySource("user_memory").some((e) => cosineSimilarity(emb, e.embedding) >= DEDUP_COSINE);
+    const hit = getEntriesBySource("user_memory").find((e) => cosineSimilarity(emb, e.embedding) >= DEDUP_COSINE);
+    const l2Id = hit?.metadata?.l2Id;
+    return typeof l2Id === "string" && l2Id.length > 0 ? l2Id : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -94,6 +98,9 @@ export function backfillL2FromChatLogs(): Promise<L2BackfillResult> {
       let written = 0;
       let skippedDup = 0;
       let failedBatches = 0;
+      // 判重命中的既有条目："用户又说了一遍"也算一次召回，收尾统一刷统计，
+      // 防止 aging 条目被去重拦住重述信号、长期卡在降级态。
+      const recalledByDedup = new Set<string>();
       let newWatermark = coveredUntilTs;
       const writeProgress = (complete: boolean) => {
         fs.writeFileSync(marker, JSON.stringify({ complete, coveredUntilTs: newWatermark, at: Date.now() }));
@@ -153,8 +160,10 @@ export function backfillL2FromChatLogs(): Promise<L2BackfillResult> {
           }
           for (const candidate of candidates) {
             if (candidate.layer !== "L2") continue; // L0/L1 不回填，避免覆盖当前状态
-            if (await isDuplicateL2(candidate.content, provider)) {
+            const duplicateL2Id = await findDuplicateL2Id(candidate.content, provider);
+            if (duplicateL2Id) {
               skippedDup += 1;
+              recalledByDedup.add(duplicateL2Id);
               continue;
             }
             candidate.createdAt = batchTs;
@@ -168,6 +177,15 @@ export function backfillL2FromChatLogs(): Promise<L2BackfillResult> {
           newWatermark = Math.max(newWatermark, batchTs);
         }
         if (sessionFailed) break; // 本轮不再继续后续会话，下次启动从水位线续跑
+      }
+      // 判重命中统一刷一次召回统计（单次 load/save）。幂等：失败续跑时同轮重放
+      // 会再次命中再刷一遍，weight 有 100 上限、lastAccessedAt 只会更新不会更旧。
+      if (recalledByDedup.size > 0) {
+        try {
+          await memoryStore.recordL2RecallsBatch([...recalledByDedup]);
+        } catch (e) {
+          console.warn(LOG_PREFIX, "判重命中条目召回统计刷新失败（跳过）:", e);
+        }
       }
       if (failedBatches > 0) {
         writeProgress(false);

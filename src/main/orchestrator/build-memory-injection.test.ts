@@ -23,8 +23,10 @@ const memoryStoreMock = vi.hoisted(() => ({
   getAllL2: vi.fn(),
   getL0: vi.fn(),
   getL1: vi.fn(),
+  getDreamNarratives: vi.fn(async () => []),
   getL2DmaeSnapshot: vi.fn(async () => ({ states: {}, round: 0 })),
   setL2DmaeSnapshot: vi.fn(async () => undefined),
+  recordL2RecallsBatch: vi.fn(async () => 0),
 }))
 
 const entityGraphMock = vi.hoisted(() => ({
@@ -47,6 +49,7 @@ describe("buildMemoryInjection", () => {
     ragMock.searchMemoryEntries.mockResolvedValue([])
     memoryStoreMock.getAllL2.mockReset()
     memoryStoreMock.getAllL2.mockResolvedValue([])
+    memoryStoreMock.recordL2RecallsBatch.mockClear()
     entityGraphMock.search.mockReset()
     entityGraphMock.search.mockReturnValue("")
   })
@@ -69,7 +72,10 @@ describe("buildMemoryInjection", () => {
 
     expect(context).toContain("用户喜欢跑步")
     expect(wasRecentlyInjectedMemory("l2_run")).toBe(true)
-    expect(ragMock.searchMemoryEntries).toHaveBeenCalledWith("跑步", "user_memory", 5)
+    expect(ragMock.searchMemoryEntries).toHaveBeenCalledWith("跑步", "user_memory", 5, { recordRecall: false })
+    // reconsolidation：召回统计在最终注入集上批量记账（fire-and-forget，等一个微任务）
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(memoryStoreMock.recordL2RecallsBatch).toHaveBeenCalledWith(["l2_run"])
   })
 
   it("can retrieve memory without changing recent-injection state", async () => {

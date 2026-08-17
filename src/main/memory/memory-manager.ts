@@ -18,7 +18,7 @@ function getL1Field(content: string): L1Field {
 }
 
 function hasCorrectionIntent(text: string): boolean {
-  return ["不是这样", "你记错了", "记错了", "我现在不这样", "现在不这样"].some((phrase) => text.includes(phrase))
+  return ["不是这样", "你记错了", "记错了", "我现在不这样", "现在不这样", "我说错了", "之前说错了", "纠正一下", "更正一下"].some((phrase) => text.includes(phrase))
 }
 
 function getImpactScope(memory: L2Memory): "low" | "medium" | "high" {
@@ -162,6 +162,36 @@ export class MemoryManager {
 
       const candidate = findPossibleConflictCandidate(content, existing.content)
       if (candidate.isCandidate) {
+        const correctionIntent = hasCorrectionIntent(triggerText)
+        const recentInjection = wasRecentlyInjectedMemory(existing.id)
+        const ragScore = metadataMatch ? matchedEntry.score : undefined
+
+        // ── 纠正快速通道（MemOS 反馈纠正思想落地）──
+        // 显式纠正意图 + 强证据（旧条目刚被注入=用户当场纠错，或语义相似 ≥0.75）时，
+        // 直接失效旧记忆（superseded + validTo=now），不走 ⚠️ 挂起/空闲 resolver 流程。
+        // 证据不足时仍落回下方挂起流程，避免误伤。
+        if (correctionIntent && (recentInjection || (ragScore ?? 0) >= 0.75)) {
+          const superseded = await memoryStore.supersedeL2(existing.id, newL2Id)
+          if (superseded) {
+            await memoryStore.appendConflictLog({
+              status: "resolved",
+              sourceL2Id: newL2Id,
+              targetL2Id: existing.id,
+              sourceRagId: newRagId,
+              targetRagId: existing.ragId,
+              reason: candidate.reason ?? "explicit correction supersedes old memory",
+              confidence: candidate.confidence,
+              detector: "local",
+              resolutionType: "preference_evolution",
+              resolutionMemoryId: newL2Id,
+              resolutionReason: "correction intent + strong evidence fast path",
+              resolutionConfidence: recentInjection ? 0.9 : 0.8,
+            })
+            console.log(`[MemoryManager] ✏️ 纠正意图命中，旧记忆已失效: "${preview(existing.content, 30)}" → "${preview(content, 30)}"`)
+            continue
+          }
+        }
+
         // 本地规则只产出疑似候选，不确认冲突真伪。
         const marked = await memoryStore.markL2Conflict(existing.id, newRagId)
         if (marked) {
@@ -176,10 +206,10 @@ export class MemoryManager {
             detector: "local",
           })
           const score = scoreMemoryConflict({
-            candidateSource: wasRecentlyInjectedMemory(existing.id) ? "recent_injection" : metadataMatch ? "rag" : "local",
-            ragScore: metadataMatch ? matchedEntry.score : undefined,
-            correctionIntent: hasCorrectionIntent(triggerText),
-            recentInjection: wasRecentlyInjectedMemory(existing.id),
+            candidateSource: recentInjection ? "recent_injection" : metadataMatch ? "rag" : "local",
+            ragScore,
+            correctionIntent,
+            recentInjection,
             localContradiction: true,
             evidence: await this.getEvidenceLevel(newL2Id, existing.id),
             activeTarget: existing.status !== "archived",
@@ -212,7 +242,13 @@ export class MemoryManager {
   }
 
   async onL2Recalled(ids: string[]): Promise<void> {
-    void ids
+    const unique = [...new Set(ids)]
+    if (unique.length === 0) return
+    try {
+      await memoryStore.recordL2RecallsBatch(unique)
+    } catch (err) {
+      console.warn("[MemoryManager] 召回统计批量刷新失败:", err)
+    }
   }
 }
 

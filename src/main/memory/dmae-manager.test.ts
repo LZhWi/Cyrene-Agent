@@ -157,6 +157,28 @@ describe("selectEntries 注入选择", () => {
     expect(ids).toContain("l2_ok");
     expect(ids).not.toContain("l2_conflict");
   });
+
+  it("keeps expired (superseded) memories out of pinned and active-set top-up", () => {
+    // 真实场景：被纠正/取代的旧事实（validTo 已过）即使 pinned 或高激活也不应驻留注入
+    const allL2 = [
+      makeL2({ id: "l2_expired_pinned", isPinned: true, validTo: Date.now() - 1000 }),
+      makeL2({ id: "l2_expired_active", validTo: Date.now() - 1000 }),
+      makeL2({ id: "l2_future", validFrom: Date.now() + 100000 }),
+      makeL2({ id: "l2_ok", validFrom: Date.now() - 100000 }),
+    ];
+    const states = new Map<string, L2DmaeState>([
+      ["l2_expired_active", freshState({ activation: 80 })],
+      ["l2_future", freshState({ activation: 70 })],
+      ["l2_ok", freshState({ activation: 60 })],
+    ]);
+
+    const selected = selectEntries([], allL2, states);
+    const ids = selected.map((e) => e.metadata?.l2Id);
+    expect(ids).toContain("l2_ok");
+    expect(ids).not.toContain("l2_expired_pinned");
+    expect(ids).not.toContain("l2_expired_active");
+    expect(ids).not.toContain("l2_future");
+  });
 });
 
 describe("L2DmaeManager 与开关", () => {

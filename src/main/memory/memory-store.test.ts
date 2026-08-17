@@ -190,6 +190,50 @@ describe("memoryStore", () => {
     expect(empty.l1.generatedAt).toBe(0)
   })
 
+  it("normalizes validFrom from createdAt for legacy L2 entries during migration repair", async () => {
+    const { repairMigrations } = await import("./memory-store")
+
+    const repaired = repairMigrations({
+      l2: [
+        {
+          id: "l2_old",
+          content: "旧事实",
+          triggerText: "旧触发",
+          sourceConversationId: "test",
+          createdAt: 123,
+          lastAccessedAt: 123,
+          accessCount: 0,
+          weight: 5,
+          isPinned: false,
+          status: "active",
+          ragId: "rag_old",
+        } as never,
+        {
+          id: "l2_new",
+          content: "新事实",
+          triggerText: "新触发",
+          sourceConversationId: "test",
+          createdAt: 999,
+          lastAccessedAt: 999,
+          accessCount: 0,
+          weight: 5,
+          isPinned: false,
+          status: "active",
+          ragId: "rag_new",
+          validFrom: 500,
+          validTo: 800,
+        } as never,
+      ],
+    })
+
+    // 旧条目用 createdAt 补齐 validFrom；validTo 不伪造
+    expect(repaired.l2[0].validFrom).toBe(123)
+    expect(repaired.l2[0].validTo).toBeUndefined()
+    // 已有有效期字段的条目不被覆盖
+    expect(repaired.l2[1].validFrom).toBe(500)
+    expect(repaired.l2[1].validTo).toBe(800)
+  })
+
   it("treats stale or unset L1 as not fresh", async () => {
     const { isL1Fresh, L1_FRESHNESS_WINDOW_MS } = await import("./memory-types")
     const base = { recentGoals: "g", recentPreferences: "", currentProject: "", roundCount: 0 }
@@ -197,6 +241,30 @@ describe("memoryStore", () => {
     expect(isL1Fresh({ ...base, generatedAt: 0 })).toBe(false)
     expect(isL1Fresh({ ...base, generatedAt: Date.now() })).toBe(true)
     expect(isL1Fresh({ ...base, generatedAt: Date.now() - L1_FRESHNESS_WINDOW_MS - 1 })).toBe(false)
+  })
+
+  it("treats memories past validTo or before validFrom as expired", async () => {
+    const { isL2Expired } = await import("./memory-types")
+    const base = {
+      id: "l2_expiry_probe",
+      content: "事实",
+      triggerText: "触发",
+      sourceConversationId: "test",
+      createdAt: 100,
+      lastAccessedAt: 100,
+      accessCount: 0,
+      weight: 0,
+      isPinned: false,
+      status: "active" as const,
+    }
+    const now = 1000
+
+    expect(isL2Expired({ ...base }, now)).toBe(false)
+    expect(isL2Expired({ ...base, validTo: 1000 }, now)).toBe(true)
+    expect(isL2Expired({ ...base, validTo: 1001 }, now)).toBe(false)
+    expect(isL2Expired({ ...base, validFrom: 1001 }, now)).toBe(true)
+    expect(isL2Expired({ ...base, validFrom: 500, validTo: 900 }, now)).toBe(true)
+    expect(isL2Expired({ ...base, validFrom: 500, validTo: 2000 }, now)).toBe(false)
   })
 
   it("updates L0 and L2 through atomic write APIs", async () => {
@@ -263,6 +331,91 @@ describe("memoryStore", () => {
       expect(persisted.accessCount).toBe(0)
     },
   )
+
+  it("refreshes recall stats for the final injected set in one batch", async () => {
+    const { memoryStore } = await import("./memory-store")
+    const now = 1_700_000_000_000
+    const active = await memoryStore.addL2Memory({
+      content: "用户喜欢香菇",
+      triggerText: "我喜欢香菇",
+      sourceConversationId: "test",
+      ragId: "rag_batch_active",
+      isPinned: false,
+    })
+    const aging = await memoryStore.addL2Memory({
+      content: "用户以前养过猫",
+      triggerText: "我养过猫",
+      sourceConversationId: "test",
+      ragId: "rag_batch_aging",
+      isPinned: false,
+    })
+    const dead = await memoryStore.addL2Memory({
+      content: "用户住在旧城区",
+      triggerText: "我住旧城区",
+      sourceConversationId: "test",
+      ragId: "rag_batch_dead",
+      isPinned: false,
+    })
+
+    // 预置：aging 条目 weight 低于复活线；superseded 条目不应被复活
+    const store = await memoryStore.load()
+    const agingEntry = store.l2.find((m) => m.id === aging.id)!
+    agingEntry.status = "aging"
+    agingEntry.weight = 10
+    const deadEntry = store.l2.find((m) => m.id === dead.id)!
+    deadEntry.status = "superseded"
+    deadEntry.weight = 5
+    await memoryStore.save(store)
+
+    const changed = await memoryStore.recordL2RecallsBatch([active.id, aging.id, dead.id, "not_exist"], now)
+    const all = await memoryStore.getAllL2()
+    const a = all.find((item) => item.id === active.id)!
+    const b = all.find((item) => item.id === aging.id)!
+    const c = all.find((item) => item.id === dead.id)!
+    const traceEvents = readTraceEvents()
+
+    expect(changed).toBe(2)
+    // active 保持 active，权重 +1
+    expect(a.weight).toBe(1)
+    expect(a.lastAccessedAt).toBe(now)
+    expect(a.accessCount).toBe(1)
+    expect(a.status).toBe("active")
+    // aging 未到复活线仍是 aging，但统计已刷新（下次衰减不会误伤）
+    expect(b.weight).toBe(11)
+    expect(b.lastAccessedAt).toBe(now)
+    expect(b.status).toBe("aging")
+    // superseded 不复活
+    expect(c.weight).toBe(5)
+    expect(c.status).toBe("superseded")
+    expect(traceEvents.some((event) => event.op === "l2.recall.batch")).toBe(true)
+  })
+
+  it("supersedes an old L2 memory with validity window and never double-processes", async () => {
+    const { memoryStore } = await import("./memory-store")
+    const now = 1_700_000_000_000
+    const oldMemory = await memoryStore.addL2Memory({
+      content: "用户喜欢甜豆浆",
+      triggerText: "我喜欢甜豆浆",
+      sourceConversationId: "test",
+      ragId: "rag_supersede_old",
+      isPinned: false,
+    })
+
+    expect(await memoryStore.supersedeL2(oldMemory.id, "l2_new_id", now)).toBe(true)
+    const updated = (await memoryStore.getAllL2()).find((item) => item.id === oldMemory.id)!
+    expect(updated.status).toBe("superseded")
+    expect(updated.supersededBy).toBe("l2_new_id")
+    expect(updated.validTo).toBe(now)
+
+    // 已 superseded 的条目不再重复处理；不存在的 id 返回 false
+    expect(await memoryStore.supersedeL2(oldMemory.id, "l2_other", now + 1)).toBe(false)
+    expect(await memoryStore.supersedeL2("not_exist", "l2_x", now)).toBe(false)
+
+    const still = (await memoryStore.getAllL2()).find((item) => item.id === oldMemory.id)!
+    expect(still.supersededBy).toBe("l2_new_id")
+    expect(still.validTo).toBe(now)
+    expect(readTraceEvents().some((event) => event.op === "l2.supersede" && event.l2Id === oldMemory.id)).toBe(true)
+  })
 
   it("creates evidence for new L2 memories with bounded snippets", async () => {
     const { memoryStore } = await import("./memory-store")
@@ -658,12 +811,15 @@ describe("memoryStore", () => {
     const persisted = JSON.parse(fs.readFileSync(memoryPath, "utf8"))
     const backups = fs.readdirSync(electronMock.userDataDir).filter((name) => name.startsWith("memory.backup."))
 
-    expect(store.schemaVersion).toBe(2)
-    expect(persisted.schemaVersion).toBe(2)
+    expect(store.schemaVersion).toBe(3)
+    expect(persisted.schemaVersion).toBe(3)
     expect(store.l0.preferredName).toBe("伙伴")
     expect(store.l1.roundCount).toBe(7)
     expect(store.l2[0].syncStatus).toBe("synced")
     expect(store.l2[0].evidenceIds).toEqual([])
+    // v3 迁移：旧条目无 validFrom，用 createdAt 归一化；validTo 不伪造
+    expect(store.l2[0].validFrom).toBe(1)
+    expect(store.l2[0].validTo).toBeUndefined()
     expect(store.evidence).toEqual([])
     expect(store.conflictLogs).toEqual([])
     expect(backups).toHaveLength(1)

@@ -1,12 +1,14 @@
 import * as fs from "fs"
 import * as path from "path"
 import { getUserDataDir } from "../runtime/runtime-paths"
-import { ConflictLog, L0Profile, L1Profile, L2DmaeState, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryJudgeTurn, MemoryStore, ReflectionLog } from "./memory-types"
+import { ConflictLog, DreamNarrative, L0Profile, L1Profile, L2DmaeState, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryJudgeTurn, MemoryStore, ReflectionLog } from "./memory-types"
 import { appendMemoryTrace } from "./memory-trace"
 
-const CURRENT_SCHEMA_VERSION = 2
+const CURRENT_SCHEMA_VERSION = 3
 const QUOTE_SNIPPET_MAX = 300
 const DAY_MS = 24 * 60 * 60 * 1000
+/** 梦境沉淀叙事保留上限（注入时另取最新几条，见 memory-dream NARRATIVE_INJECT_MAX） */
+const DREAM_NARRATIVE_MAX = 8
 /** active 闲置满 30 天降为 aging */
 const DECAY_AGING_IDLE_MS = 30 * DAY_MS
 /** aging 闲置满 90 天降为 archived */
@@ -99,6 +101,12 @@ export function repairMigrations(store: Partial<MemoryStore>): MemoryStore {
       ...memory,
       syncStatus: memory.syncStatus ?? (memory.ragId ? "synced" : "pending_sync"),
       evidenceIds: Array.isArray(memory.evidenceIds) ? memory.evidenceIds : [],
+      // v3 迁移：有效期起点归一化。旧数据没有 validFrom，用 createdAt 补齐，
+      // 让时间维判定（isL2Expired / 未来时间邻近 boost）有统一字段可读；
+      // validTo 不伪造——缺失即"未被纠正/取代"，旧事实默认继续有效。
+      validFrom: typeof memory.validFrom === "number"
+        ? memory.validFrom
+        : (typeof memory.createdAt === "number" ? memory.createdAt : 0),
     })) : [],
     evidence: Array.isArray(store.evidence) ? store.evidence : [],
     reflectionLogs: Array.isArray(store.reflectionLogs) ? store.reflectionLogs : [],
@@ -114,6 +122,12 @@ export function repairMigrations(store: Partial<MemoryStore>): MemoryStore {
     // DMAE 状态属于运行时缓存：损坏/缺失时重建为空表即可，不影响记忆本体。
     l2DmaeStates: store.l2DmaeStates && typeof store.l2DmaeStates === "object" ? store.l2DmaeStates : {},
     l2DmaeRound: typeof store.l2DmaeRound === "number" ? store.l2DmaeRound : 0,
+    // 梦境叙事为新增可选字段：旧数据缺失视为空，已有条目只保留结构合法的项。
+    dreamNarratives: Array.isArray(store.dreamNarratives)
+      ? store.dreamNarratives.filter(
+        (n) => n && typeof n.text === "string" && n.text.length > 0 && typeof n.createdAt === "number",
+      )
+      : [],
     version: typeof store.version === "number" ? store.version : 1,
   }
 }
@@ -359,6 +373,69 @@ class MemoryStoreManager {
 
   async updateL2Weight(id: string, delta: number): Promise<void> {
     await this.updateL2RecallStats(id, delta)
+  }
+
+  /**
+   * 批量召回刷新（reconsolidation，思想源自 Herta 的"召回即重巩固"）：
+   * 最终注入进上下文的条目统一 +1 权重、刷新 lastAccessedAt，
+   * 让常用记忆不被闲置衰减误伤。单次 load/save，避免逐条写盘。
+   * 与 updateL2RecallStats 同款状态迁移规则；已废弃条目不复活。
+   */
+  async recordL2RecallsBatch(ids: string[], now = Date.now()): Promise<number> {
+    const store = await this.load()
+    const idSet = new Set(ids)
+    let changed = 0
+    for (const mem of store.l2) {
+      if (!idSet.has(mem.id)) continue
+      if (mem.status !== "active" && mem.status !== "aging") continue
+      const previousStatus = mem.status
+      mem.weight = Math.max(0, Math.min(100, mem.weight + 1))
+      mem.lastAccessedAt = now
+      mem.accessCount += 1
+      if (mem.isPinned || previousStatus === "active") {
+        mem.status = "active"
+      } else if (mem.weight >= 30) {
+        mem.status = "active"
+      } else {
+        mem.status = "aging"
+      }
+      changed += 1
+    }
+    if (changed > 0) {
+      await this.save(store)
+    }
+    appendMemoryTrace({
+      op: "l2.recall.batch",
+      layer: "L2",
+      status: changed > 0 ? "ok" : "skip",
+      details: { requested: ids.length, changed },
+    })
+    return changed
+  }
+
+  /**
+   * 纠正/取代失效（validity window 的写入端）：旧条目标 superseded + validTo=now，
+   * 并指向取代它的新条目。自动检索通道据此关闭旧事实引用；条目本体与证据保留，
+   * 工具通道仍可带标记查阅。已废弃/归档条目不重复处理。
+   */
+  async supersedeL2(oldId: string, newId: string, now = Date.now()): Promise<boolean> {
+    const store = await this.load()
+    const old = store.l2.find((m) => m.id === oldId)
+    if (!old) return false
+    if (old.status === "superseded" || old.status === "merged" || old.status === "archived") return false
+    old.status = "superseded"
+    old.supersededBy = newId
+    old.validTo = now
+    await this.save(store)
+    appendMemoryTrace({
+      op: "l2.supersede",
+      layer: "L2",
+      status: "ok",
+      l2Id: oldId,
+      ragId: old.ragId,
+      details: { supersededBy: newId, validTo: now },
+    })
+    return true
   }
 
   async markL2SyncStatus(id: string, syncStatus: L2SyncStatus, ragId?: string, error?: unknown): Promise<L2Memory | null> {
@@ -664,6 +741,27 @@ class MemoryStoreManager {
     })
   }
 
+  /**
+   * 梦境蒸馏合并落账：源条目标 merged 并指向合并后的总结条目。
+   * 与 archived 不同，merged 保留"被谁吸收"的血缘，工具通道可溯源。
+   */
+  async mergeL2Batch(ids: string[], mergedIntoId: string): Promise<void> {
+    const store = await this.load()
+    const idSet = new Set(ids)
+    for (const mem of store.l2) {
+      if (!idSet.has(mem.id)) continue
+      mem.status = "merged"
+      mem.mergedInto = mergedIntoId
+    }
+    await this.save(store)
+    appendMemoryTrace({
+      op: "l2.merge.batch",
+      layer: "L2",
+      status: "ok",
+      details: { ids, mergedInto: mergedIntoId },
+    })
+  }
+
   async archiveL2Batch(ids: string[]): Promise<void> {
     await this.updateL2Status(ids, "archived")
   }
@@ -787,6 +885,31 @@ class MemoryStoreManager {
     store.l2DmaeStates = { ...states }
     store.l2DmaeRound = round
     await this.save(store)
+  }
+
+  /** 追加一段梦境沉淀叙事（永不衰减）；上限 8 条，超出滚动丢弃最旧。 */
+  async appendDreamNarrative(text: string): Promise<DreamNarrative> {
+    const store = await this.load()
+    const entry: DreamNarrative = {
+      id: `dream_narrative_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+      createdAt: Date.now(),
+      text,
+    }
+    store.dreamNarratives = [...(store.dreamNarratives ?? []), entry].slice(-DREAM_NARRATIVE_MAX)
+    await this.save(store)
+    appendMemoryTrace({
+      op: "dream.narrative.add",
+      layer: "L2",
+      status: "ok",
+      details: { id: entry.id, length: text.length },
+    })
+    return entry
+  }
+
+  /** 读取全部梦境叙事（按写入顺序，最新在末尾） */
+  async getDreamNarratives(): Promise<DreamNarrative[]> {
+    const store = await this.load()
+    return [...(store.dreamNarratives ?? [])]
   }
 }
 

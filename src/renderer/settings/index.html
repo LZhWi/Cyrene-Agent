@@ -721,6 +721,10 @@
                 <div><strong>启用 DMAE 工作记忆</strong><span>正式对话中由 DMAE 决定记忆注入取舍（驻留 / 唤醒 / 衰减）；关闭时保持纯检索行为。切换即保存并立即生效。</span></div>
                 <span class="switch"><input id="memory-dmae-enabled" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
               </label>
+              <label class="memory-sandbox__llm-option">
+                <div><strong>启用梦境蒸馏</strong><span>空闲 15 分钟以上且距上次做梦超过 24 小时时，自动整理记忆：低频条目降级并沉淀成一段长期陪伴叙事，相似的久远印象合并成简洁总结。你一回来就会立即中止，几乎不占用聊天配额。切换即保存并立即生效。</span></div>
+                <span class="switch"><input id="memory-dream-enabled" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
               <div class="memory-sandbox__actions">
                 <button type="button" class="save-btn" id="memory-sandbox-run-btn">开始隔离测试</button>
                 <span id="memory-sandbox-status" aria-live="polite"></span>

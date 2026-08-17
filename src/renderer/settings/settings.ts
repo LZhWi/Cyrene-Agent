@@ -202,6 +202,8 @@ interface ModelSettings {
   stickerSimilarityThreshold: number;
   /** L2 DMAE 工作记忆总开关（main 端默认 false）。 */
   memoryDmaeEnabled?: boolean;
+  /** 梦境蒸馏总开关（main 端默认 false）。 */
+  memoryDreamEnabled?: boolean;
   vision?: {
     syncWithMain: boolean;
     baseUrl: string;
@@ -1434,6 +1436,7 @@ async function loadConfig(): Promise<void> {
     stickerThresholdInput.value = String(threshold);
     stickerThresholdVal.textContent = threshold.toFixed(2);
     if (memoryDmaeEnabledInput) memoryDmaeEnabledInput.checked = cfg.memoryDmaeEnabled === true;
+    if (memoryDreamEnabledInput) memoryDreamEnabledInput.checked = cfg.memoryDreamEnabled === true;
 
     setCyreneSaveStatus("等待保存");
   } catch {
@@ -4205,6 +4208,7 @@ const memoryL2List = document.getElementById("memory-l2-list") as HTMLElement | 
 const memorySandboxQuery = document.getElementById("memory-sandbox-query") as HTMLTextAreaElement | null;
 const memorySandboxGenerateReply = document.getElementById("memory-sandbox-generate-reply") as HTMLInputElement | null;
 const memoryDmaeEnabledInput = document.getElementById("memory-dmae-enabled") as HTMLInputElement | null;
+const memoryDreamEnabledInput = document.getElementById("memory-dream-enabled") as HTMLInputElement | null;
 const memorySandboxRunBtn = document.getElementById("memory-sandbox-run-btn") as HTMLButtonElement | null;
 const memorySandboxStatus = document.getElementById("memory-sandbox-status") as HTMLElement | null;
 const memorySandboxResults = document.getElementById("memory-sandbox-results") as HTMLElement | null;
@@ -4767,6 +4771,10 @@ memorySandboxRunBtn?.addEventListener("click", () => void runMemoryRetrievalSand
 memoryDmaeEnabledInput?.addEventListener("change", () => {
   // DMAE 总开关切换即落盘 model-settings.json；正式注入链路每轮实时读取，无需重启即生效。
   void window.settings!.saveConfig({ memoryDmaeEnabled: memoryDmaeEnabledInput.checked });
+});
+memoryDreamEnabledInput?.addEventListener("change", () => {
+  // 梦境总开关切换即落盘 model-settings.json；调度器每 10 分钟检查时实时读取，无需重启即生效。
+  void window.settings!.saveConfig({ memoryDreamEnabled: memoryDreamEnabledInput.checked });
 });
 memorySandboxQuery?.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {

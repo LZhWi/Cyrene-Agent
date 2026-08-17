@@ -63,6 +63,10 @@ export interface L2Memory {
   /** 提取时保留的「用户当时说的原话」片段：L2 是浓缩结论，会丢失专有名词/数字等
    * 字面信息；召回注入时附上原文让后续模型看到字面证据（缺失时注入回退 triggerText）。 */
   sourceQuote?: string
+  /** 事实有效期起点（迁移时归一化为 createdAt）；缺失视为无下界 */
+  validFrom?: number
+  /** 事实有效期终点：被纠正/取代时写入；到期后自动检索不再引用，仅工具通道带标记可查 */
+  validTo?: number
 }
 
 export type L2MemoryStatus = "active" | "aging" | "archived" | "superseded" | "merged"
@@ -93,12 +97,34 @@ export function isL2LocallyRecallable(memory: L2Memory): boolean {
   )
 }
 
+/**
+ * 事实有效期判定（思想源自 MemPalace 的 validity windows）：
+ * - validTo 已到期：事实被纠正/取代，自动引用通道关闭
+ * - validFrom 在未来：回填条目尚未生效（防御性，正常不出现）
+ * 两字段缺失视为无界（旧数据默认永远有效）。
+ */
+export function isL2Expired(memory: L2Memory, now = Date.now()): boolean {
+  if (typeof memory.validTo === "number" && memory.validTo <= now) return true
+  if (typeof memory.validFrom === "number" && memory.validFrom > now) return true
+  return false
+}
+
 export interface ReflectionLog {
   id: string
   createdAt: number
   type: "compression" | "l0_update" | "l1_update"
   summary: string
   details?: string
+}
+
+/**
+ * 梦境沉淀叙事：被降级记忆在遗忘前蒸馏成的第一人称陪伴叙事。
+ * 永不衰减、不进检索，由 always-on 上下文注入最新几条。
+ */
+export interface DreamNarrative {
+  id: string
+  createdAt: number
+  text: string
 }
 
 export interface ConflictLog {
@@ -214,6 +240,8 @@ export interface MemoryStore {
   l2DmaeStates?: Record<string, L2DmaeState>
   /** DMAE 全局轮次计数（每次带状态更新的注入轮 +1） */
   l2DmaeRound?: number
+  /** 梦境沉淀叙事（永不衰减）；缺失视为空 */
+  dreamNarratives?: DreamNarrative[]
   /** @deprecated Use schemaVersion for memory.json migrations. */
   version: number
 }

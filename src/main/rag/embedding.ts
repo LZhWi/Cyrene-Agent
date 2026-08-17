@@ -1,5 +1,6 @@
 // @xenova/transformers is ESM-only, use dynamic import in CJS context
 import { checkEmbeddingModelInstalled, getProjectModelsDir } from "./model-status";
+import { applyOnnxCpuSessionPolicy } from "./onnx-session-policy";
 import * as path from "path";
 import * as os from "os";
 
@@ -38,6 +39,37 @@ const LOCAL_MODELS: Record<string, ModelConfig> = {
 
 const DEFAULT_MODEL_KEY = "minilm";
 
+// ── 本地嵌入缓存 ──
+// 同文本同模型必然产出同一向量，缓存纯减法、不影响检索质量。
+// 一条召回类消息会跑注入+探针两套管线、每套 5 路查询变体，userQuery 原文
+// 在 semantic_raw/semantic_intent/双管线间大量重复；回合入库的常见短句同理。
+const EMBED_CACHE_CAPACITY = 512;
+const localEmbedCache = new Map<string, number[]>();
+
+function embedCacheKey(modelKey: string, text: string): string {
+  return `${modelKey}\u0000${text.normalize("NFC").trim()}`;
+}
+
+function embedCacheGet(key: string): number[] | undefined {
+  const hit = localEmbedCache.get(key);
+  if (hit) {
+    // Map 迭代序 = 插入序：命中后重插尾部即 LRU
+    localEmbedCache.delete(key);
+    localEmbedCache.set(key, hit);
+  }
+  return hit;
+}
+
+function embedCachePut(key: string, vector: number[]): void {
+  if (localEmbedCache.has(key)) localEmbedCache.delete(key);
+  localEmbedCache.set(key, vector);
+  while (localEmbedCache.size > EMBED_CACHE_CAPACITY) {
+    const oldest = localEmbedCache.keys().next().value;
+    if (oldest === undefined) break;
+    localEmbedCache.delete(oldest);
+  }
+}
+
 // ── 本地 Pipeline ──
 // 每个模型 key 独立缓存 pipeline，支持多模型同时运行（minilm 管文档/记忆，bgem3 管场景识别）
 const localPipelines: Map<string, any> = new Map();
@@ -59,6 +91,8 @@ async function getLocalPipeline(modelKey?: string): Promise<any> {
 
   const load = (async () => {
     localPipelineInitCount += 1;
+    // 会话线程限流必须先于任何 session 创建（pipeline 加载即创建 session）。
+    await applyOnnxCpuSessionPolicy();
     const { pipeline, env } = await importEsm("@xenova/transformers");
     env.allowLocalModels = true;
     env.allowRemoteModels = false;
@@ -102,17 +136,21 @@ export function createLocalEmbeddingProvider(modelKey?: string): EmbeddingProvid
     workerConfig: { provider: "local", modelKey: key },
 
     async embed(text: string): Promise<number[]> {
+      const cacheKey = embedCacheKey(key, text);
+      const cached = embedCacheGet(cacheKey);
+      // 返回副本：调用方若原地修改向量，不得污染缓存
+      if (cached) return cached.slice();
       const pipe = await getLocalPipeline(key);
       const result: any = await pipe(text, { pooling: "mean", normalize: true });
-      return Array.from(result.data as Float32Array);
+      const vector = Array.from(result.data as Float32Array);
+      embedCachePut(cacheKey, vector);
+      return vector;
     },
 
     async embedBatch(texts: string[]): Promise<number[][]> {
-      const pipe = await getLocalPipeline(key);
       const results: number[][] = [];
       for (const text of texts) {
-        const result: any = await pipe(text, { pooling: "mean", normalize: true });
-        results.push(Array.from(result.data as Float32Array));
+        results.push(await this.embed(text));
       }
       return results;
     },
@@ -270,6 +308,7 @@ export function resetEmbeddingProvider(): void {
   cachedProvider = null;
   localPipelines.clear();
   localPipelineLoads.clear();
+  localEmbedCache.clear();
   currentModelKey = DEFAULT_MODEL_KEY;
   localPipelineInitCount = 0;
 }

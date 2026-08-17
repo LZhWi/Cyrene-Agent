@@ -19,6 +19,7 @@ import type { ChatMessage, ToolCall, VendorConfig } from "../orchestrator/vendor
 import { buildCallConversation, buildCallMessages, type CallPromptContent } from "./call-prompt";
 import { saveCallContextEvent } from "./call-context-store";
 import type { CallContextEvent } from "./call-context";
+import { enqueueLLMTask } from "../llm-queue";
 
 const LOG_PREFIX = "[CallManager]";
 
@@ -342,7 +343,11 @@ export function stopCall(): void {
   shutdownAsrRuntimes();
   sendState("ENDED");
   if (historyForSummary.some((message) => message.role === "user")) {
-    void summarizeAndStoreCall(historyForSummary, startedAt, endedAt);
+    // 入后台队列串行：挂断瞬间记忆维护（MemoryMaintenance）也刚入队，
+    // 直连会与其同时打到同一个 key 触发限流。
+    void enqueueLLMTask("通话总结", () => summarizeAndStoreCall(historyForSummary, startedAt, endedAt)).catch((err) => {
+      console.warn(LOG_PREFIX, "通话总结失败（不影响挂断流程）:", err);
+    });
   }
 }
 

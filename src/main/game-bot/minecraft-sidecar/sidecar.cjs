@@ -160,11 +160,14 @@ function compactWorldState() {
       distance: Math.round(entity.position.distanceTo(bot.entity.position)),
       isOwner: Boolean(settings?.owner && entity.username === settings.owner),
     }));
+  const owner = ownerEntity();
   return {
     cameraPerspective: "third_person_behind_gamebot",
     cameraSubject: { role: "gamebot", username: bot.username },
     gamebotAppearance: { skinVersion: currentSkinVersion, description: gamebotAppearance.description || null },
-    user: { username: settings?.owner || null, visible: Boolean(ownerEntity()) },
+    // position 是 bot 自身坐标；user.position 供模型区分“你在这里/用户在那里”，
+    // 避免把 bot 坐标误当作“用户那边”复述或设点。
+    user: { username: settings?.owner || null, visible: Boolean(owner), position: positionSnapshot(owner?.position) },
     health: Math.round(bot.health),
     food: Math.round(bot.food),
     oxygen: bot.oxygenLevel,
@@ -2531,9 +2534,23 @@ async function handleOwnerCommand(message, options = {}) {
     const entity = ownerEntity();
     if (!entity) return bot.chat("我暂时看不到你。");
     if (!safeRoute.length) rememberSafeCheckpoint();
-    bot.pathfinder.setGoal(new goals.GoalNear(entity.position.x, entity.position.y, entity.position.z, 1));
     bot.chat("我来啦。");
     remember("前往用户所在位置");
+    // 计划循环以本函数返回作为“步骤完成”：come 原先只挂寻路目标就立即返回，
+    // 后续的 set_home 等步骤会读到 bot 半路坐标（家点落在错误位置的根因）。
+    // 这里等待到达（封顶 90s、尽力而为）；直接聊天指令走 fire-and-forget 路径，应答不受影响。
+    const goal = new goals.GoalNear(entity.position.x, entity.position.y, entity.position.z, 1);
+    const arrive = (async () => {
+      try {
+        await bot.pathfinder.goto(goal);
+      } catch {
+        try {
+          // 路线被关着的门挡住时，自助开门后重规划一次（与 goNear 同策）。
+          if (await openNearbyClosedDoors() > 0) await bot.pathfinder.goto(goal);
+        } catch { /* 仍到不了则尽力而为，由后续步骤按最新状态核验 */ }
+      }
+    })();
+    await Promise.race([arrive, new Promise((resolve) => setTimeout(resolve, 90_000))]);
     return;
   }
   if (command.type === "set_home") {

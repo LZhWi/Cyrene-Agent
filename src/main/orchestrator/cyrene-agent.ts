@@ -34,6 +34,24 @@ export interface AgentLoopSettings {
   explicitTransport?: "openai" | "anthropic" | "auto";
 }
 
+// ── auto_probe 延迟去重 ──
+// probe 只写 shadow 日志、不参与回复生成。同一条召回类消息刚跑完 auto_injection
+// 全量管线时，紧接着再跑一遍 probe 会在回复窗口内制造第二次 CPU 爆发
+//（5 路嵌入 + 重排，ORT 默认吃满全核），挤掉 Live2D/Minecraft 的帧。
+// 推迟到空闲窗口，且同一时刻只保留一个待跑 probe，避免连续消息叠加。
+const HISTORY_AUTO_PROBE_DELAY_MS = 30_000;
+let pendingAutoProbeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleHistoryRetrievalAutoProbe(userQuery: string, runStartedAt: number): void {
+  if (pendingAutoProbeTimer) clearTimeout(pendingAutoProbeTimer);
+  pendingAutoProbeTimer = setTimeout(() => {
+    pendingAutoProbeTimer = null;
+    void runHistoryRetrievalV2AutoProbe(userQuery, 90, runStartedAt).catch((error) => {
+      console.warn("[History/RetrievalV2AutoProbe] failed:", error);
+    });
+  }, HISTORY_AUTO_PROBE_DELAY_MS);
+}
+
 /** CyreneAgent.run() 需要的输入——桥层构造好后塞进 input.state 或 forwardedProps。 */
 export interface CyreneRunOptions {
   settings: AgentLoopSettings;
@@ -219,10 +237,9 @@ export class CyreneAgent extends AbstractAgent {
             options.enableHistoryRetrievalAutoProbe
             && !result.toolResults.some((toolResult) => toolResult.toolId === "recall_history")
           ) {
-            const userQuery = extractLastUserQuery(options.messages);
-            void runHistoryRetrievalV2AutoProbe(userQuery, 90, runStartedAt).catch((error) => {
-              console.warn("[History/RetrievalV2AutoProbe] failed:", error);
-            });
+            // 延迟到空闲窗口跑（见 scheduleHistoryRetrievalAutoProbe 注释），
+            // 避免与刚结束的 auto_injection 管线在回复窗口内叠加 CPU 爆发。
+            scheduleHistoryRetrievalAutoProbe(extractLastUserQuery(options.messages), runStartedAt);
           }
 
           if (cancelled) return;

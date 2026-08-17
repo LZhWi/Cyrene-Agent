@@ -314,6 +314,95 @@ describe("MemoryManager L2 sync", () => {
     })
   })
 
+  it("fast-path supersedes the old memory on explicit correction with strong RAG evidence", async () => {
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_new")
+    const { memoryManager } = await import("./memory-manager")
+    const { memoryStore } = await import("./memory-store")
+    const existing = await memoryStore.addL2Memory({
+      content: "用户喜欢跑步",
+      triggerText: "我喜欢跑步",
+      sourceConversationId: "test",
+      ragId: "rag_existing",
+      isPinned: false,
+    })
+    ragMock.searchMemoryEntries.mockResolvedValue([{
+      id: "rag_existing",
+      text: "用户喜欢跑步",
+      createdAt: Date.now(),
+      score: 0.9,
+      metadata: { l2Id: existing.id },
+    }])
+    const candidate: MemoryCandidate = {
+      layer: "L2",
+      content: "用户不喜欢跑步",
+      confidence: 0.93,
+      triggerText: "你记错了，我不喜欢跑步",
+    }
+
+    await memoryManager.writeMemory([candidate])
+
+    const allL2 = await memoryStore.getAllL2()
+    const old = allL2.find((item) => item.id === existing.id)!
+    const fresh = allL2.find((item) => item.content === "用户不喜欢跑步")!
+    const conflictLogs = await memoryStore.getConflictLogs()
+    const traceEvents = readTraceEvents()
+
+    // 旧记忆直接失效：superseded + validTo + 指向新条目
+    expect(old.status).toBe("superseded")
+    expect(old.supersededBy).toBe(fresh.id)
+    expect(typeof old.validTo).toBe("number")
+    // 冲突日志直接 resolved，不进 resolver 队列
+    expect(conflictLogs).toHaveLength(1)
+    expect(conflictLogs[0]).toMatchObject({
+      status: "resolved",
+      targetL2Id: existing.id,
+      resolutionType: "preference_evolution",
+      resolutionMemoryId: fresh.id,
+    })
+    expect(conflictLogs[0].resolverStatus).not.toBe("queued")
+    // 快速通道不走 ⚠️ 挂起标记
+    expect(traceEvents.some((event) => event.op === "l2.conflict.mark")).toBe(false)
+    expect(traceEvents.some((event) => event.op === "l2.supersede" && event.l2Id === existing.id)).toBe(true)
+  })
+
+  it("falls back to the pending conflict flow when correction intent lacks strong evidence", async () => {
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_new")
+    const { memoryManager } = await import("./memory-manager")
+    const { memoryStore } = await import("./memory-store")
+    const existing = await memoryStore.addL2Memory({
+      content: "用户喜欢游泳",
+      triggerText: "我喜欢游泳",
+      sourceConversationId: "test",
+      ragId: "rag_existing",
+      isPinned: false,
+    })
+    // 有纠正词但语义相似分不足 0.75 且非近期注入 → 证据不足，落回挂起流程
+    ragMock.searchMemoryEntries.mockResolvedValue([{
+      id: "rag_existing",
+      text: "用户喜欢游泳",
+      createdAt: Date.now(),
+      score: 0.6,
+      metadata: { l2Id: existing.id },
+    }])
+    const candidate: MemoryCandidate = {
+      layer: "L2",
+      content: "用户不喜欢游泳",
+      confidence: 0.93,
+      triggerText: "纠正一下，我不喜欢游泳",
+    }
+
+    await memoryManager.writeMemory([candidate])
+
+    const old = (await memoryStore.getAllL2()).find((item) => item.id === existing.id)!
+    const conflictLogs = await memoryStore.getConflictLogs()
+
+    expect(old.status).not.toBe("superseded")
+    expect(old.validTo).toBeUndefined()
+    expect(conflictLogs).toHaveLength(1)
+    expect(conflictLogs[0].status).toBe("candidate")
+    expect(conflictLogs[0].resolverStatus).toBe("queued")
+  })
+
   it("does not write conflict logs for unrelated negative memories", async () => {
     ragMock.addL2MemoryVector.mockResolvedValue("rag_new")
     ragMock.searchMemoryEntries.mockResolvedValue([{

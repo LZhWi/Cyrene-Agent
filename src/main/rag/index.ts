@@ -9,7 +9,7 @@ import { WorldbookManager } from "./worldbook";
 export { INJECTION_HEADER, INJECTION_PREAMBLE } from "./worldbook-constants";
 import { chunkText } from "./chunk";
 import { feedEntityNamesToJieba } from "../memory/entity-graph";
-import { isL2LocallyRecallable } from "../memory/memory-types";
+import { isL2LocallyRecallable, isL2Expired } from "../memory/memory-types";
 import type { DocumentImportControl } from "./file-ingest";
 import { ensureRerankerInitialized, getReranker } from "./reranker";
 
@@ -181,18 +181,26 @@ export async function searchMemoryEntries(
   query: string,
   source?: string,
   topK = 5,
-  options?: { recordRecall?: boolean }
+  options?: { recordRecall?: boolean; includeExpired?: boolean }
 ): Promise<Array<{ id: string; text: string; createdAt: number; score: number; metadata?: Record<string, unknown> }>> {
   if (!retriever) return [];
   let allowedEntryIds: string[] | undefined;
   let userMemorySearchTextByEntryId: Map<string, string> | undefined;
+  let expiredL2Ids: Set<string> | undefined;
   if (source === "user_memory") {
     try {
       const { memoryStore } = await import("../memory/memory-store");
       const memories = await memoryStore.getAllL2();
+      // 有效期窗口：被纠正/取代（validTo 到期）的事实默认退出自动引用通道；
+      // includeExpired（工具通道）允许带回但打 expired 标记，仅供联想/查证。
       const recallableById = new Map(
-        memories.filter(isL2LocallyRecallable).map((memory) => [memory.id, memory]),
+        memories
+          .filter((memory) => isL2LocallyRecallable(memory) && (options?.includeExpired === true || !isL2Expired(memory)))
+          .map((memory) => [memory.id, memory]),
       );
+      expiredL2Ids = options?.includeExpired === true
+        ? new Set(memories.filter((memory) => isL2LocallyRecallable(memory) && isL2Expired(memory)).map((memory) => memory.id))
+        : undefined;
       const recallableEntries = getEntriesBySource("user_memory")
         .filter((entry) => {
           const l2Id = entry.metadata?.l2Id;
@@ -279,13 +287,17 @@ export async function searchMemoryEntries(
   if (options?.recordRecall !== false) {
     await recordUserMemoryRecalls(results);
   }
-  return results.map((r) => ({
-    id: r.entry.id,
-    text: r.entry.text,
-    createdAt: r.entry.createdAt,
-    score: r.score,
-    metadata: r.entry.metadata,
-  }));
+  return results.map((r) => {
+    const l2Id = r.entry.metadata?.l2Id;
+    const expired = expiredL2Ids && typeof l2Id === "string" && expiredL2Ids.has(l2Id);
+    return {
+      id: r.entry.id,
+      text: r.entry.text,
+      createdAt: r.entry.createdAt,
+      score: r.score,
+      metadata: expired ? { ...r.entry.metadata, l2Expired: true } : r.entry.metadata,
+    };
+  });
 }
 
 async function recordUserMemoryRecalls(results: Array<{ entry: MemoryEntry }>): Promise<void> {
