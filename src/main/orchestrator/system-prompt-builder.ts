@@ -63,18 +63,15 @@ export function buildSystemPrompt(styleFile: string, includeStyle = true): strin
 
 /**
  * 工具阶段使用的 system prompt。
- * 第一期：固定 tools_system.md 规则 + 运行时生成的工具目录。
+ * 仅含运行时生成的工具目录，不再注入固定规则文件——
  * 不放任何人格 / 环境 / 记忆，避免人设污染工具决策。
  */
 export function buildToolSystemPrompt(
   _mode: ConversationMode,
   enabledTools: ReadonlyArray<ToolDefinition>,
-  isOptimizedFirstRound?: boolean,
 ): string {
-  const base = loadPromptFile(isOptimizedFirstRound ? "tools_system_optimized_first.md" : "tools_system.md");
   const catalog = buildToolCatalog(enabledTools as ToolDefinition[]);
   return [
-    base,
     "## 当前可用工具",
     catalog,
   ].filter(Boolean).join("\n\n");
