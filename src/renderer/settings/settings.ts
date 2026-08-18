@@ -44,16 +44,6 @@ import {
   validateCustomEndpointConfig,
   type CustomEndpointMode,
 } from "./custom-endpoint-state";
-import {
-  deriveNeteaseViewState,
-  type MusicStatusSnapshot,
-  type NeteaseViewState,
-} from "../../shared/music-view-state";
-export {
-  deriveNeteaseViewState,
-  type MusicStatusSnapshot,
-  type NeteaseViewState,
-} from "../../shared/music-view-state";
 import type {
   ScheduleConfig,
   SchedulerApi,
@@ -118,7 +108,7 @@ import {
   saveSchedulerTask, toggleSchedulerTask, fireSchedulerTask,
   deleteSchedulerTask, toggleSchedulerHistory,
 } from "./scheduler/panel";
-import { loadMusicPanel, disposeMusicPanel, getMusicApi } from "./music/panel";
+import { loadMusicPanel, disposeMusicPanel } from "./music/panel";
 import { loadChannelsPanel } from "./channels/panel";
 import { renderProactiveDeliveryAvailability } from "./channels/panel";
 import "./asr/panel";  // 副作用导入：执行事件绑定 + 初始加载
@@ -1549,35 +1539,7 @@ void loadChannelsPanel();
 
 
 
-// ── 网易云折叠卡片用的全局 status 订阅（不依赖切到 music 面板） ────────
-// 让 MCP 面板里的「网易云音乐 / 尚未连接」永远跟主进程状态同步。
-// 用一个独立的 unsub 句柄，跟 music 面板自己的订阅解耦。
-(() => {
-  const api = getMusicApi();
-  if (!api || typeof api.onStateChanged !== "function") return;
-  try {
-    api.onStateChanged((s) => {
-      // 只更新折叠卡片的状态文案，避免与 music 面板里的 renderMusicStatus 重复副作用
-      const el = document.getElementById("music-platform-status");
-      if (!el) return;
-      const state = deriveNeteaseViewState(s);
-      const connected = state === "connected" || state === "connected_without_client";
-      el.textContent = connected ? "已连接" : "尚未连接";
-      el.classList.toggle("is-connected", connected);
-    });
-    api.getStatus().then((r) => {
-      if (!r.ok) return;
-      const el = document.getElementById("music-platform-status");
-      if (!el) return;
-      const state = deriveNeteaseViewState(r.data);
-      const connected = state === "connected" || state === "connected_without_client";
-      el.textContent = connected ? "已连接" : "尚未连接";
-      el.classList.toggle("is-connected", connected);
-    }).catch(() => { /* ignore */ });
-  } catch {
-    /* window.music 还没准备好，忽略 */
-  }
-})();
+// ── 网易云折叠卡片状态已移除：外部不显示具体连接状态，只在音乐面板内可见 ──
 
 // 启动时读 URL hash 决定初始标签（main 通过 loadURL 带 #api 实现"切换模型按钮跳 API"）。
 // 无 hash 默认 general。

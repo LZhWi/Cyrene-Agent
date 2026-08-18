@@ -27,6 +27,8 @@ export type NeteaseViewState =
 export function deriveNeteaseViewState(snapshot: MusicStatusSnapshot): NeteaseViewState {
   if (snapshot.backend === "starting") return "backend_starting";
   if (snapshot.backend === "failed" || snapshot.backend === "incompatible") return "backend_error";
+  // account 还没初始化完成（restoreSession 异步在进行）→ 显示"正在读取状态"
+  if (snapshot.account === "unknown") return "backend_starting";
   if (
     snapshot.flow === "creating_qr" ||
     snapshot.flow === "waiting_scan" ||
@@ -37,5 +39,8 @@ export function deriveNeteaseViewState(snapshot: MusicStatusSnapshot): NeteaseVi
   if (snapshot.flow === "expired") return "login_expired";
   if (snapshot.flow === "failed") return "login_failed";
   if (snapshot.account !== "signed_in") return "signed_out";
+  // account === "signed_in" 但 player 还在初始化（mpv 启动中）→ 视为"已登录，但 mpv 未就绪"，
+  // 不再返回 backend_starting，避免已登录用户看到"正在读取音乐服务状态…"。
+  if (snapshot.player === "unknown") return "connected_without_client";
   return snapshot.player === "available" ? "connected" : "connected_without_client";
 }

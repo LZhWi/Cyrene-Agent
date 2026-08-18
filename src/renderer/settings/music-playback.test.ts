@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { requestTrackPlayback } from "./music-playback";
 
 describe("requestTrackPlayback", () => {
-  it("calls the formal music preload API and reports a dispatched request precisely", async () => {
+  it("reports a dispatched request as playing", async () => {
     const playTrack = vi.fn().mockResolvedValue({
       ok: true,
       data: { state: "dispatched", resourceType: "song", resourceId: "123" },
@@ -11,10 +11,10 @@ describe("requestTrackPlayback", () => {
     const result = await requestTrackPlayback({ playTrack }, { id: "123", name: "Song" });
 
     expect(playTrack).toHaveBeenCalledWith("123");
-    expect(result).toEqual({ kind: "ok", message: "已向网易云发送播放请求：Song" });
+    expect(result).toEqual({ kind: "ok", message: "已开始播放：Song" });
   });
 
-  it("explains when the NetEase desktop client is unavailable", async () => {
+  it("explains when mpv is not ready (client_unavailable)", async () => {
     const playTrack = vi.fn().mockResolvedValue({
       ok: true,
       data: { state: "client_unavailable", resourceType: "song", resourceId: "123" },
@@ -23,17 +23,30 @@ describe("requestTrackPlayback", () => {
     const result = await requestTrackPlayback({ playTrack }, { id: "123", name: "Song" });
 
     expect(result.kind).toBe("err");
-    expect(result.message).toContain("需要安装网易云音乐桌面客户端");
+    expect(result.message).toContain("mpv 播放器未就绪");
   });
 
-  it("reports the MCP browser fallback without claiming desktop dispatch", async () => {
+  it("reports launch_failed as mpv startup failure", async () => {
     const playTrack = vi.fn().mockResolvedValue({
       ok: true,
-      data: { state: "web_fallback", resourceType: "song", resourceId: "123" },
+      data: { state: "launch_failed", resourceType: "song", resourceId: "123" },
     });
 
     const result = await requestTrackPlayback({ playTrack }, { id: "123", name: "Song" });
 
-    expect(result).toEqual({ kind: "ok", message: "网易云桌面客户端不可用，已在浏览器中打开：Song" });
+    expect(result.kind).toBe("err");
+    expect(result.message).toContain("mpv 启动失败");
+  });
+
+  it("reports IPC failure with errorCode", async () => {
+    const playTrack = vi.fn().mockResolvedValue({
+      ok: false,
+      errorCode: "E_BACKEND_NOT_READY",
+    });
+
+    const result = await requestTrackPlayback({ playTrack }, { id: "123", name: "Song" });
+
+    expect(result.kind).toBe("err");
+    expect(result.message).toContain("E_BACKEND_NOT_READY");
   });
 });

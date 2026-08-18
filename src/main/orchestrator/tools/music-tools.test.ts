@@ -1,16 +1,15 @@
 import { describe, expect, it, vi } from "vitest";
-import { ContextRefRegistry } from "../context-ref-registry";
 import { buildMusicTools } from "./music-tools";
+
+const ENC = "4C777A98B81DF0CC069B59F63F3882B1";
+const ENC2 = "A".repeat(32);
 
 function serviceDouble() {
   return {
     getDailyRecommendations: vi.fn(),
     getLatestSelectionSet: vi.fn(),
     searchTracks: vi.fn(),
-    presentTracks: vi.fn(),
-    markTracksPresented: vi.fn(),
-    getSelectionSet: vi.fn(),
-    playTrack: vi.fn(),
+    playTrackFromUi: vi.fn(),
     playPlaylist: vi.fn(),
     getMyPlaylists: vi.fn(),
     getPlaylistDetail: vi.fn(),
@@ -20,34 +19,41 @@ function serviceDouble() {
   };
 }
 
-function registry(now = () => 1_000) {
-  let sequence = 0;
-  return new ContextRefRegistry({ now, createId: () => `ctx_${++sequence}` });
+function track(overrides: Partial<Record<string, unknown>> = {}) {
+  return {
+    id: ENC,
+    encryptedId: ENC,
+    originalId: 3339230677,
+    name: "晴天",
+    artists: ["周杰伦"],
+    album: "叶惠美",
+    durationMs: 268000,
+    coverUrl: "http://p1.music.126.net/cover.jpg",
+    ...overrides,
+  };
 }
 
 function selectionSet(overrides: Record<string, unknown> = {}) {
   return {
     setId: "daily-raw-id",
-    provider: "netease-cloud-music",
+    provider: "netease-openapi",
     source: "daily_recommendation",
     createdAt: 900,
     expiresAt: 9_000,
     conversationId: "c1",
-    tracks: [{ id: "255667", name: "胆小鬼", artists: ["梁咏琪"], album: "最爱梁咏琪" }],
+    tracks: [track()],
     ...overrides,
   };
 }
 
-describe("music Agent tools", () => {
-  it("declares stable capabilities for Action Gate routing", () => {
-    const capabilities = Object.fromEntries(
-      buildMusicTools(serviceDouble() as never).map((tool) => [tool.id, tool.capability]),
-    );
-
+describe("music Agent tools (M4 — CITA removed)", () => {
+  it("declares 9 tools with stable capabilities (music_present_tracks deleted)", () => {
+    const tools = buildMusicTools(serviceDouble() as never);
+    expect(tools).toHaveLength(9);
+    const capabilities = Object.fromEntries(tools.map((t) => [t.id, t.capability]));
     expect(capabilities).toMatchObject({
       music_get_daily_recommendations: "music.daily_recommendations",
       music_search: "music.search",
-      music_present_tracks: "music.present_tracks",
       music_play_track: "music.play_track",
       music_play_playlist: "music.play_playlist",
       music_my_playlists: "music.my_playlists",
@@ -56,282 +62,139 @@ describe("music Agent tools", () => {
       music_add_to_playlist: "music.add_to_playlist",
       music_my_subscriptions: "music.my_subscriptions",
     });
+    // music_present_tracks is deleted
+    expect(tools.find((t) => t.id === "music_present_tracks")).toBeUndefined();
   });
 
-  it("returns opaque daily candidates and publishes only safe CITA projections", async () => {
+  it("music_get_daily_recommendations returns tracks with encryptedId + sends card", async () => {
     const service = serviceDouble();
     const set = selectionSet();
     service.getDailyRecommendations.mockResolvedValue(set);
-    service.presentTracks.mockResolvedValue({ cardRef: "internal-card" });
-    service.getSelectionSet.mockReturnValue(set);
-    const contextRefs = registry();
-    const ingestContextEvent = vi.fn();
     const sendCard = vi.fn(() => true);
-    const tool = buildMusicTools(service as never, { contextRefs, ingestContextEvent, sendCard })
-      .find((candidate) => candidate.id === "music_get_daily_recommendations")!;
+    const tool = buildMusicTools(service as never, { sendCard })
+      .find((t) => t.id === "music_get_daily_recommendations")!;
 
-    const outputText = await tool.execute({}, {
-      userQuery: "今日推荐",
-      conversationId: "c1",
-      runId: "run-1",
-      contextRefs,
-    });
-    const output = JSON.parse(outputText);
+    const output = JSON.parse(await tool.execute({}, { userQuery: "今日推荐", conversationId: "c1", runId: "r1" }));
 
-    expect(output).toEqual({
-      kind: "recommendations",
-      context: {
-        setRef: "ctx_1",
-        source: "daily_recommendation",
-        candidates: [{
-          candidateRef: "ctx_2",
-          position: 1,
-          name: "胆小鬼",
-          artists: ["梁咏琪"],
-          album: "最爱梁咏琪",
-        }],
-      },
-      presentation: { presented: true },
-    });
-    expect(outputText).not.toContain("255667");
-    expect(outputText).not.toContain("daily-raw-id");
-    expect(outputText).not.toContain("netease-cloud-music");
-    expect(service.markTracksPresented).toHaveBeenCalledWith("daily-raw-id", "c1", ["255667"]);
-    expect(sendCard).toHaveBeenCalledWith(expect.objectContaining({ tracks: set.tracks }));
-    expect(ingestContextEvent).toHaveBeenCalledWith(expect.objectContaining({
-      type: "context_presented",
-      contextRefs: ["ctx_2"],
+    expect(output.kind).toBe("recommendations");
+    expect(output.tracks[0].encryptedId).toBe(ENC);
+    expect(output.tracks[0].originalId).toBe(3339230677);
+    expect(output.tracks[0].name).toBe("晴天");
+    expect(output.card.delivered).toBe(true);
+    expect(output.card.count).toBe(1);
+    expect(sendCard).toHaveBeenCalledWith(expect.objectContaining({
+      source: "daily_recommendation",
+      tracks: expect.arrayContaining([expect.objectContaining({ encryptedId: ENC })]),
     }));
   });
 
-  it("reuses the current daily set and does not render the same card twice", async () => {
+  it("music_get_daily_recommendations reuses cached daily set", async () => {
     const service = serviceDouble();
-    const set = selectionSet({ presentedTrackIds: ["255667"], presentedAt: 950 });
+    const set = selectionSet();
     service.getLatestSelectionSet.mockReturnValue(set);
-    service.getSelectionSet.mockReturnValue(set);
-    service.presentTracks.mockResolvedValue({ cardRef: "internal-card" });
-    const contextRefs = registry();
-    const sendCard = vi.fn(() => true);
-    const ingestContextEvent = vi.fn();
-    const tool = buildMusicTools(service as never, { contextRefs, sendCard, ingestContextEvent })
-      .find((candidate) => candidate.id === "music_get_daily_recommendations")!;
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_get_daily_recommendations")!;
 
-    const first = JSON.parse(await tool.execute({}, {
-      userQuery: "今日推荐",
-      conversationId: "c1",
-      runId: "run-1",
-      contextRefs,
-    }));
-    const second = JSON.parse(await tool.execute({}, {
-      userQuery: "再试一次",
-      conversationId: "c1",
-      runId: "run-2",
-      contextRefs,
-    }));
+    await tool.execute({}, { userQuery: "今日推荐", conversationId: "c1" });
 
     expect(service.getDailyRecommendations).not.toHaveBeenCalled();
-    expect(first.context).toEqual(second.context);
-    expect(first.presentation).toEqual({ presented: true, reused: true });
-    expect(second.presentation).toEqual({ presented: true, reused: true });
-    expect(sendCard).not.toHaveBeenCalled();
-    expect(ingestContextEvent).toHaveBeenCalledWith(expect.objectContaining({
-      type: "context_presented",
-      contextRefs: first.context.candidates.map((candidate: { candidateRef: string }) => candidate.candidateRef),
-    }));
   });
 
-  it("does not mark candidates presented when card delivery fails", async () => {
+  it("music_search returns tracks with encryptedId + sends card", async () => {
     const service = serviceDouble();
-    const set = selectionSet();
-    service.getDailyRecommendations.mockResolvedValue(set);
-    service.presentTracks.mockResolvedValue({ cardRef: "internal-card" });
-    service.getSelectionSet.mockReturnValue(set);
-    const contextRefs = registry();
-    const tool = buildMusicTools(service as never, {
-      contextRefs,
-      sendCard: () => { throw new Error("renderer unavailable"); },
-    }).find((candidate) => candidate.id === "music_get_daily_recommendations")!;
-
-    await expect(tool.execute({}, { userQuery: "日推", conversationId: "c1", contextRefs }))
-      .rejects.toThrow("renderer unavailable");
-    expect(service.markTracksPresented).not.toHaveBeenCalled();
-  });
-
-  it("does not mark candidates presented when no card recipient exists", async () => {
-    const service = serviceDouble();
-    const set = selectionSet();
-    service.getDailyRecommendations.mockResolvedValue(set);
-    service.presentTracks.mockResolvedValue({ cardRef: "internal-card" });
-    service.getSelectionSet.mockReturnValue(set);
-    const contextRefs = registry();
-    const ingestContextEvent = vi.fn();
-    const tool = buildMusicTools(service as never, {
-      contextRefs,
-      ingestContextEvent,
-      sendCard: () => false,
-    }).find((candidate) => candidate.id === "music_get_daily_recommendations")!;
-
-    const output = JSON.parse(await tool.execute({}, { userQuery: "日推", conversationId: "c1", contextRefs }));
-
-    expect(output.presentation).toEqual({ presented: false });
-    expect(service.markTracksPresented).not.toHaveBeenCalled();
-    expect(ingestContextEvent).not.toHaveBeenCalledWith(expect.objectContaining({ type: "context_presented" }));
-  });
-
-  it("resolves candidateRef internally before delegating playback", async () => {
-    const service = serviceDouble();
-    service.playTrack.mockResolvedValue({ state: "dispatched", resourceType: "song", resourceId: "255667" });
-    const contextRefs = registry();
-    const candidateRef = contextRefs.issue({
-      conversationId: "c1",
-      domain: "music",
-      kind: "candidate",
-      expiresAt: 9_000,
-      value: {
-        provider: "netease-cloud-music",
-        setId: "daily-raw-id",
-        trackId: "255667",
-        conversationId: "c1",
-      },
-    });
-    const tool = buildMusicTools(service as never, { contextRefs })
-      .find((candidate) => candidate.id === "music_play_track")!;
+    const set = selectionSet({ source: "search", query: "晴天" });
+    service.searchTracks.mockResolvedValue(set);
+    const sendCard = vi.fn(() => true);
+    const tool = buildMusicTools(service as never, { sendCard })
+      .find((t) => t.id === "music_search")!;
 
     const output = JSON.parse(await tool.execute(
-      { candidateRef },
-      { userQuery: "播放第一首", conversationId: "c1", runId: "run-1", contextRefs },
+      { keyword: "晴天" },
+      { userQuery: "搜索晴天", conversationId: "c1", runId: "r1" },
     ));
 
-    expect(tool.inputSchema).toEqual(expect.objectContaining({ required: ["candidateRef"] }));
-    expect(tool.controlledInput).toEqual({ candidateRef: { type: "context_ref", kind: "candidate" } });
-    expect(service.playTrack).toHaveBeenCalledWith({
-      provider: "netease-cloud-music",
-      setId: "daily-raw-id",
-      trackId: "255667",
-      conversationId: "c1",
-      runId: "run-1",
-    });
+    expect(output.kind).toBe("search");
+    expect(output.tracks[0].encryptedId).toBe(ENC);
+    expect(service.searchTracks).toHaveBeenCalledWith("晴天", "c1", undefined);
+    expect(sendCard).toHaveBeenCalledWith(expect.objectContaining({ source: "search" }));
+  });
+
+  it("music_search no longer requires purpose param", async () => {
+    const service = serviceDouble();
+    const set = selectionSet({ source: "search" });
+    service.searchTracks.mockResolvedValue(set);
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_search")!;
+
+    expect(tool.inputSchema.required).toEqual(["keyword"]);
+    expect(tool.inputSchema.properties).not.toHaveProperty("purpose");
+
+    await tool.execute({ keyword: "晴天" }, { userQuery: "搜索晴天", conversationId: "c1" });
+    expect(service.searchTracks).toHaveBeenCalled();
+  });
+
+  it("music_play_track accepts encryptedId and dispatches", async () => {
+    const service = serviceDouble();
+    service.playTrackFromUi.mockResolvedValue({ state: "dispatched", resourceType: "song", resourceId: ENC });
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_play_track")!;
+
+    const output = JSON.parse(await tool.execute({ encryptedId: ENC }));
+
+    expect(tool.inputSchema.required).toEqual(["encryptedId"]);
+    expect(tool.controlledInput).toEqual({ encryptedId: "tool_result" });
+    expect(service.playTrackFromUi).toHaveBeenCalledWith(ENC);
     expect(output.dispatch.state).toBe("dispatched");
   });
 
-  it.each([
-    { name: "cross-conversation", ref: "valid", conversationId: "c2", error: /CONVERSATION/ },
-    { name: "invented", ref: "ctx_invented", conversationId: "c1", error: /NOT_FOUND/ },
-  ])("rejects $name refs before playback", async ({ ref, conversationId, error }) => {
-    const service = serviceDouble();
-    const contextRefs = registry();
-    const valid = contextRefs.issue({
-      conversationId: "c1", domain: "music", kind: "candidate", expiresAt: 9_000,
-      value: { provider: "netease-cloud-music", setId: "s1", trackId: "1", conversationId: "c1" },
-    });
-    const tool = buildMusicTools(service as never, { contextRefs })
-      .find((candidate) => candidate.id === "music_play_track")!;
-
-    await expect(tool.execute(
-      { candidateRef: ref === "valid" ? valid : ref },
-      { userQuery: "播放", conversationId, contextRefs },
-    )).rejects.toThrow(error);
-    expect(service.playTrack).not.toHaveBeenCalled();
-  });
-
-  it("rejects expired refs before playback", async () => {
-    let now = 1_000;
-    const service = serviceDouble();
-    const contextRefs = registry(() => now);
-    const candidateRef = contextRefs.issue({
-      conversationId: "c1", domain: "music", kind: "candidate", expiresAt: 1_100,
-      value: { provider: "netease-cloud-music", setId: "s1", trackId: "1", conversationId: "c1" },
-    });
-    now = 1_101;
-    const tool = buildMusicTools(service as never, { contextRefs })
-      .find((candidate) => candidate.id === "music_play_track")!;
-
-    await expect(tool.execute({ candidateRef }, { userQuery: "播放", conversationId: "c1", contextRefs }))
-      .rejects.toThrow(/EXPIRED/);
-    expect(service.playTrack).not.toHaveBeenCalled();
-  });
-
-  it("resolves ordered candidateRefs to one real set for presentation", async () => {
-    const service = serviceDouble();
-    const set = selectionSet({
-      setId: "s1",
-      tracks: [
-        { id: "101", name: "晴天", artists: ["周杰伦"] },
-        { id: "102", name: "夜曲", artists: ["周杰伦"] },
-      ],
-    });
-    service.presentTracks.mockResolvedValue({ cardRef: "internal-card" });
-    service.getSelectionSet.mockReturnValue(set);
-    const contextRefs = registry();
-    const first = contextRefs.issue({ conversationId: "c1", domain: "music", kind: "candidate", expiresAt: 9_000,
-      value: { provider: set.provider, setId: "s1", trackId: "101", conversationId: "c1" } });
-    const second = contextRefs.issue({ conversationId: "c1", domain: "music", kind: "candidate", expiresAt: 9_000,
-      value: { provider: set.provider, setId: "s1", trackId: "102", conversationId: "c1" } });
-    const tool = buildMusicTools(service as never, { contextRefs, sendCard: vi.fn(() => true) })
-      .find((candidate) => candidate.id === "music_present_tracks")!;
-
-    expect(tool.controlledInput).toEqual({ candidateRefs: { type: "context_ref_array", kind: "candidate" } });
-
-    await tool.execute({ candidateRefs: [second, first] }, { userQuery: "展示", conversationId: "c1", contextRefs });
-
-    expect(service.presentTracks).toHaveBeenCalledWith(expect.objectContaining({ setId: "s1", trackIds: ["102", "101"] }));
-    expect(service.markTracksPresented).toHaveBeenCalledWith("s1", "c1", ["102", "101"]);
-  });
-
-  it("uses the model-selected search purpose without inferring from user wording", async () => {
-    const service = serviceDouble();
-    const set = selectionSet({ source: "search", query: "稻香", resolutionPurpose: "play" });
-    service.searchTracks.mockResolvedValue(set);
-    const contextRefs = registry();
-    const tool = buildMusicTools(service as never, { contextRefs })
-      .find((candidate) => candidate.id === "music_search")!;
-
-    const output = await tool.execute(
-      { keyword: "稻香", purpose: "discover" },
-      { userQuery: "播放稻香", conversationId: "c1", runId: "run-1", contextRefs },
-    );
-
-    expect(service.searchTracks).toHaveBeenCalledWith("稻香", "c1", undefined, {
-      resolutionRunId: "run-1",
-      purpose: "discover",
-    });
-    expect(output).not.toContain("255667");
-    expect(output).not.toContain("netease-cloud-music");
-  });
-
-  it("rejects a missing search purpose instead of guessing from user wording", async () => {
+  it("music_play_track rejects invalid encryptedId (not 32-hex)", async () => {
     const service = serviceDouble();
     const tool = buildMusicTools(service as never)
-      .find((candidate) => candidate.id === "music_search")!;
+      .find((t) => t.id === "music_play_track")!;
 
-    await expect(tool.execute(
-      { keyword: "稻香" },
-      { userQuery: "播放稻香", conversationId: "c1", runId: "run-1" },
-    )).rejects.toThrow("E_MUSIC_SEARCH_PURPOSE_REQUIRED");
-    expect(service.searchTracks).not.toHaveBeenCalled();
+    await expect(tool.execute({ encryptedId: "short" })).rejects.toThrow("E_INVALID_ENCRYPTED_ID");
+    await expect(tool.execute({ encryptedId: "X".repeat(32) })).rejects.toThrow("E_INVALID_ENCRYPTED_ID");
+    expect(service.playTrackFromUi).not.toHaveBeenCalled();
   });
 
-  it("music_play_playlist remains a real service call", async () => {
+  it("music_play_track accepts lowercase hex", async () => {
     const service = serviceDouble();
-    service.playPlaylist.mockResolvedValue({ state: "dispatched", resourceType: "playlist", resourceId: "456" });
-    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_play_playlist")!;
-    expect(tool.controlledInput).toEqual({ playlistId: "tool_result" });
+    service.playTrackFromUi.mockResolvedValue({ state: "dispatched", resourceType: "song", resourceId: ENC });
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_play_track")!;
 
-    await tool.execute({ playlistId: "456" });
-
-    expect(service.playPlaylist).toHaveBeenCalledWith("456");
+    await tool.execute({ encryptedId: ENC.toLowerCase() });
+    expect(service.playTrackFromUi).toHaveBeenCalledWith(ENC.toLowerCase());
   });
 
-  it("music_my_playlists returns playlists from service", async () => {
+  it("music_play_track does not require needsContext (no CITA)", async () => {
+    const tool = buildMusicTools(serviceDouble() as never)
+      .find((t) => t.id === "music_play_track")!;
+    expect(tool.needsContext).toBe(false);
+  });
+
+  it("music_play_playlist dispatches via service", async () => {
+    const service = serviceDouble();
+    service.playPlaylist.mockResolvedValue({ state: "dispatched", resourceType: "playlist", resourceId: "P".repeat(32) });
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_play_playlist")!;
+
+    const output = JSON.parse(await tool.execute({ playlistId: "P".repeat(32) }));
+
+    expect(service.playPlaylist).toHaveBeenCalledWith("P".repeat(32));
+    expect(output.dispatch.state).toBe("dispatched");
+  });
+
+  it("music_my_playlists returns playlists", async () => {
     const service = serviceDouble();
     service.getMyPlaylists.mockResolvedValue([
       { id: "123", name: "我的歌单", trackCount: 10, creator: "user" },
     ]);
-    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_my_playlists")!;
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_my_playlists")!;
 
-    const output = JSON.parse(await tool.execute({}, { userQuery: "test", conversationId: "c1" }));
+    const output = JSON.parse(await tool.execute({}, { userQuery: "我的歌单", conversationId: "c1" }));
 
-    expect(tool.effectKind).toBe("read");
     expect(service.getMyPlaylists).toHaveBeenCalled();
     expect(output).toEqual({
       kind: "my_playlists",
@@ -339,69 +202,82 @@ describe("music Agent tools", () => {
     });
   });
 
-  it("music_playlist_detail returns detail for a playlist id", async () => {
+  it("music_playlist_detail returns detail", async () => {
     const service = serviceDouble();
     service.getPlaylistDetail.mockResolvedValue({
-      id: "123",
-      name: "我的歌单",
-      trackCount: 2,
-      tracks: [
-        { id: "1", name: "晴天", artists: ["周杰伦"] },
-        { id: "2", name: "夜曲", artists: ["周杰伦"] },
-      ],
+      id: "123", name: "我的歌单", trackCount: 2,
+      tracks: [track()],
     });
-    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_playlist_detail")!;
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_playlist_detail")!;
 
-    const output = JSON.parse(await tool.execute({ playlistId: "123" }, { userQuery: "test", conversationId: "c1" }));
+    const output = JSON.parse(await tool.execute({ playlistId: "123" }));
 
     expect(service.getPlaylistDetail).toHaveBeenCalledWith("123");
-    expect(output.kind).toBe("playlist_detail");
     expect(output.detail.name).toBe("我的歌单");
   });
 
-  it("music_create_playlist creates a playlist with name and privacy", async () => {
+  it("music_create_playlist creates with name and privacy", async () => {
     const service = serviceDouble();
     service.createPlaylist.mockResolvedValue({ id: "789", name: "新歌单", trackCount: 0 });
-    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_create_playlist")!;
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_create_playlist")!;
 
-    expect(tool.effectKind).toBe("mutation");
-
-    const output = JSON.parse(await tool.execute({ name: "新歌单", privacy: true }, { userQuery: "test", conversationId: "c1" }));
+    const output = JSON.parse(await tool.execute({ name: "新歌单", privacy: true }));
 
     expect(service.createPlaylist).toHaveBeenCalledWith("新歌单", { privacy: true });
-    expect(output).toEqual({ kind: "create_playlist", playlist: { id: "789", name: "新歌单", trackCount: 0 } });
+    expect(output.playlist.id).toBe("789");
   });
 
-  it("music_add_to_playlist adds tracks to a playlist", async () => {
+  it("music_add_to_playlist adds encryptedIds", async () => {
     const service = serviceDouble();
-    service.addToPlaylist.mockResolvedValue({ added: 2, playlistId: "123" });
-    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_add_to_playlist")!;
+    service.addToPlaylist.mockResolvedValue({ added: 2, playlistId: "P".repeat(32) });
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_add_to_playlist")!;
 
-    expect(tool.effectKind).toBe("mutation");
+    const output = JSON.parse(await tool.execute({ playlistId: "P".repeat(32), trackIds: [ENC, ENC2] }));
 
-    const output = JSON.parse(await tool.execute({ playlistId: "123", trackIds: ["1", "2"] }, { userQuery: "test", conversationId: "c1" }));
-
-    expect(service.addToPlaylist).toHaveBeenCalledWith("123", ["1", "2"]);
-    expect(output).toEqual({ kind: "add_to_playlist", added: 2, playlistId: "123" });
+    expect(service.addToPlaylist).toHaveBeenCalledWith("P".repeat(32), [ENC, ENC2]);
+    expect(output.added).toBe(2);
   });
 
-  it("music_my_subscriptions returns subscriptions by category", async () => {
+  it("music_my_subscriptions returns subscriptions", async () => {
     const service = serviceDouble();
     service.getMySubscriptions.mockResolvedValue([{ id: "1", name: "周杰伦" }]);
-    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_my_subscriptions")!;
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_my_subscriptions")!;
 
-    const output = JSON.parse(await tool.execute({ category: "artists" }, { userQuery: "test", conversationId: "c1" }));
+    const output = JSON.parse(await tool.execute({ category: "artists" }));
 
     expect(service.getMySubscriptions).toHaveBeenCalledWith("artists");
-    expect(output).toEqual({ kind: "my_subscriptions", category: "artists", subscriptions: [{ id: "1", name: "周杰伦" }] });
+    expect(output.subscriptions[0].name).toBe("周杰伦");
   });
 
   it("music_my_subscriptions rejects invalid category", async () => {
     const service = serviceDouble();
-    const tool = buildMusicTools(service as never).find((candidate) => candidate.id === "music_my_subscriptions")!;
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_my_subscriptions")!;
 
-    await expect(tool.execute({ category: "songs" }, { userQuery: "test", conversationId: "c1" }))
-      .rejects.toThrow("E_INVALID_SUBSCRIPTION_CATEGORY");
+    await expect(tool.execute({ category: "songs" })).rejects.toThrow("E_INVALID_SUBSCRIPTION_CATEGORY");
     expect(service.getMySubscriptions).not.toHaveBeenCalled();
+  });
+
+  it("no CITA imports remain (no ContextRefRegistry, no contextRefRegistry)", () => {
+    // This test documents the CITA removal. If someone re-introduces CITA
+    // imports, this will fail at compile time.
+    const tool = buildMusicTools(serviceDouble() as never);
+    expect(tool.length).toBe(9);
+    // No tool has controlledInput with context_ref type
+    for (const t of tool) {
+      if (t.controlledInput) {
+        const vals = Object.values(t.controlledInput);
+        for (const v of vals) {
+          if (typeof v === "object" && v !== null && "type" in v) {
+            expect((v as { type: string }).type).not.toBe("context_ref");
+            expect((v as { type: string }).type).not.toBe("context_ref_array");
+          }
+        }
+      }
+    }
   });
 });

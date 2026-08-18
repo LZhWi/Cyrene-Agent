@@ -13,3 +13,37 @@ export type MusicPlayerState = "unknown" | "available" | "unavailable";
 export type LoginFlowState =
   | "idle" | "creating_qr" | "waiting_scan" | "waiting_confirm"
   | "authorized" | "expired" | "cancelled" | "failed";
+
+/**
+ * Live playback state pushed from main (mpv) to renderer.
+ * Populated from mpv property observations.
+ */
+export interface PlaybackState {
+  /** mpv process alive & IPC socket connected. */
+  connected: boolean;
+  /** A file is loaded (not necessarily playing). */
+  loaded: boolean;
+  paused: boolean;
+  /** Seconds; 0 when unknown. */
+  position: number;
+  /** Seconds; 0 when unknown. */
+  duration: number;
+  volume: number; // 0–100
+  /** Currently loaded track metadata, if any. */
+  track?: {
+    encryptedId: string;
+    name: string;
+    artists: string[];
+    coverUrl?: string;
+  };
+}
+
+/**
+ * Commands the renderer can send to main to control mpv playback.
+ * Each maps 1:1 to an IPC channel.
+ */
+export type PlaybackAction =
+  | "play" | "pause" | "toggle-play"
+  | "seek" | "set-volume"
+  | "stop"
+  | "next" | "prev";

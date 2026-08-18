@@ -10,11 +10,11 @@ import type {
 import { musicState } from "./state";
 import {
   musicFeedbackEl, musicAccountStatusText,
-  musicComponentHelp, musicOpenComponentDir, musicRecheckComponent,
   musicSearchForm, musicSearchHint,
   musicQrBox, musicQrStatus, musicQrImg, musicQrTip,
   musicLoginBtn, musicCancelBtn, musicDisconnectBtn,
   musicSearchBtn, musicSearchInput, musicSearchResults,
+  musicAppIdInput, musicPrivateKeyInput, musicSaveConfigBtn,
 } from "./dom";
 import {
   deriveNeteaseViewState,
@@ -40,13 +40,11 @@ function setMusicFeedback(kind: "info" | "ok" | "err", msg: string): void {
 export function renderMusicStatus(snapshot: MusicStatusSnapshot): void {
   const state = deriveNeteaseViewState(snapshot);
   const labels: Record<NeteaseViewState, string> = {
-    backend_starting: "音乐服务暂不可用", backend_error: "音乐服务暂不可用", signed_out: "尚未连接",
+    backend_starting: "正在读取音乐服务状态…", backend_error: "音乐服务暂不可用", signed_out: "尚未连接",
     creating_qr: "正在等待扫码", waiting_scan: "正在等待扫码", waiting_confirm: "已扫码，请在手机确认",
-    login_expired: "二维码已过期", login_failed: "登录失败", connected: "网易云音乐已连接", connected_without_client: "已登录，但未检测到桌面客户端",
+    login_expired: "二维码已过期", login_failed: "登录失败", connected: "网易云音乐已连接", connected_without_client: "已登录，但 mpv 播放器未就绪",
   };
   if (musicAccountStatusText) musicAccountStatusText.textContent = labels[state];
-  const componentUnavailable = snapshot.backend === "failed";
-  musicComponentHelp?.classList.toggle("is-hidden", !componentUnavailable);
   const musicStatusDot = document.getElementById("music-status-dot");
   if (musicStatusDot) musicStatusDot.classList.toggle("is-connected", state === "connected" || state === "connected_without_client");
   const actionHost = document.getElementById("music-actions");
@@ -114,6 +112,13 @@ export function stopMusicLoginPolling(): void {
   if (musicState.loginPollTimer != null) {
     window.clearInterval(musicState.loginPollTimer);
     musicState.loginPollTimer = null;
+  }
+}
+
+function stopInitPolling(): void {
+  if (musicState.initPollTimer != null) {
+    window.clearInterval(musicState.initPollTimer);
+    musicState.initPollTimer = null;
   }
 }
 
@@ -313,20 +318,6 @@ export async function loadMusicPanel(): Promise<void> {
   musicLoginBtn?.addEventListener("click", () => void startMusicLogin());
   musicCancelBtn?.addEventListener("click", () => void cancelMusicLogin());
   musicDisconnectBtn?.addEventListener("click", () => void disconnectMusic());
-  musicOpenComponentDir?.addEventListener("click", async () => {
-    const result = await getMusicApi()?.openComponentDir();
-    if (!result?.ok) setMusicFeedback("err", "无法打开音乐组件文件夹");
-  });
-  musicRecheckComponent?.addEventListener("click", async () => {
-    setMusicFeedback("info", "正在检测音乐组件…");
-    const result = await getMusicApi()?.recheckComponent();
-    if (result?.ok) {
-      renderMusicStatus(result.data);
-      setMusicFeedback("ok", "音乐组件已识别");
-    } else {
-      setMusicFeedback("err", "未找到可用的音乐组件");
-    }
-  });
 
   // 搜索
   musicSearchBtn?.addEventListener("click", () => void runMusicSearch());
@@ -334,24 +325,92 @@ export async function loadMusicPanel(): Promise<void> {
     if (e.key === "Enter") void runMusicSearch();
   });
 
-  // 订阅状态推送
+  // 订阅状态推送（忽略 backend_starting，搜索探测已处理初始状态）
   const api = getMusicApi();
   if (api && typeof api.onStateChanged === "function") {
-    const unsub = api.onStateChanged((s) => renderMusicStatus(s));
+    const unsub = api.onStateChanged((s) => {
+      const state = deriveNeteaseViewState(s);
+      if (state === "backend_starting") return; // 不覆盖搜索探测结果
+      renderMusicStatus(s);
+    });
     if (typeof unsub === "function") musicState.stateUnsub = unsub;
   }
 
-  // 首次拉一次状态
+  // 用搜索探测登录态：搜索成功 = token 有效 = 已登录；失败 = 需要扫码。
   if (api) {
     try {
-      const r = await api.getStatus();
-      if (r.ok) renderMusicStatus(r.data);
-      else setMusicFeedback("err", "读取状态失败：" + r.errorCode);
+      const r = await api.search("a", 1);
+      if (r.ok) {
+        setMusicFeedback("ok", "已连接到网易云音乐");
+        if (musicAccountStatusText) musicAccountStatusText.textContent = "网易云音乐已连接";
+        const dot = document.getElementById("music-status-dot");
+        if (dot) dot.classList.add("is-connected");
+      } else {
+        setMusicFeedback("info", "尚未登录，请扫码");
+        if (musicAccountStatusText) musicAccountStatusText.textContent = "尚未连接";
+      }
     } catch (err) {
-      console.warn("[music] getStatus failed", err);
+      console.warn("[music] 探测失败", err);
+      setMusicFeedback("info", "尚未登录，请扫码");
     }
   } else {
     setMusicFeedback("err", "window.music 未就绪");
+  }
+
+  // OpenAPI 配置表单（appId + privateKey）
+  void loadOpenapiConfigForm();
+  musicSaveConfigBtn?.addEventListener("click", () => void saveOpenapiConfig());
+}
+
+// ── OpenAPI 配置表单 ───────────────────────────────────────
+async function loadOpenapiConfigForm(): Promise<void> {
+  const api = getMusicApi();
+  if (!api?.getOpenapiConfig) return;
+  try {
+    const r = await api.getOpenapiConfig();
+    if (!r.ok) {
+      setMusicFeedback("err", "读取配置失败：" + r.errorCode);
+      return;
+    }
+    if (r.data && musicAppIdInput) {
+      // privateKey 被后端 mask 成空串，只回填 appId；privateKey 留空让用户
+      // 决定是否覆盖（保存时若 privateKey 为空则保留旧值，见下方）。
+      musicAppIdInput.value = r.data.appId;
+    }
+  } catch (err) {
+    console.warn("[music] loadOpenapiConfig failed", err);
+  }
+}
+
+async function saveOpenapiConfig(): Promise<void> {
+  const api = getMusicApi();
+  if (!api?.saveOpenapiConfig) {
+    setMusicFeedback("err", "window.music 未就绪");
+    return;
+  }
+  const appId = musicAppIdInput?.value.trim() ?? "";
+  const privateKey = musicPrivateKeyInput?.value.trim() ?? "";
+  if (!appId) {
+    setMusicFeedback("err", "请填写 appId");
+    return;
+  }
+  // privateKey 为空 → 视为保留旧值（仅在已有配置时允许）
+  if (!privateKey) {
+    setMusicFeedback("err", "请填写 privateKey（首次配置必填）");
+    return;
+  }
+  setMusicFeedback("info", "正在保存配置…");
+  try {
+    const r = await api.saveOpenapiConfig({ appId, privateKey });
+    if (r.ok) {
+      setMusicFeedback("ok", "OpenAPI 配置已保存，后端状态：" + r.data.backend);
+      // 清空 privateKey 输入框（安全）
+      if (musicPrivateKeyInput) musicPrivateKeyInput.value = "";
+    } else {
+      setMusicFeedback("err", "保存失败：" + r.errorCode);
+    }
+  } catch (err) {
+    setMusicFeedback("err", "保存异常：" + (err as Error).message);
   }
 }
 

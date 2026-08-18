@@ -23,7 +23,12 @@ export interface MusicProfile {
 }
 
 export interface MusicTrack {
+  /** 32-hex encrypted id — the one all API calls require (play/like/playlist ops). */
   id: string;
+  /** Explicit alias of `id` (OpenAPI dual-id contract; renderer Track uses this name). */
+  encryptedId?: string;
+  /** Numeric original id — for user-visible web links only, never for API calls. */
+  originalId?: number;
   name: string;
   artists: string[];
   album?: string;
@@ -32,7 +37,9 @@ export interface MusicTrack {
 }
 
 export interface MusicPlaylist {
+  /** 32-hex encrypted playlist id (API ops). */
   id: string;
+  originalId?: number;
   name: string;
   coverUrl?: string;
   trackCount: number;

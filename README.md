@@ -189,147 +189,8 @@ npm run package:win:dir
 
 相关配置会保存在应用的 `<userData>/` 目录中，修改后通常无需重启应用。
 
----
-
-## 📊 当前状态
-
-| 模块 | 状态 | 说明 |
-| --- | :---: | --- |
-| 🌸 Live2D 桌面陪伴 | ✅ 可用 | 支持桌宠置顶、多窗口、表情动作、心情状态、气泡互动与智能表情包 |
-| 💬 日常聊天（Chat） | ✅ 可用 | 独立角色聊天流程，不暴露或执行工具，结合近期消息、社交上下文与用户风格生成回复 |
-| 🛠️ 辅助工作（Work） | ✅ 可用 | 由 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 统一驱动：CITA 上下文理解 + Action Gate 权限过滤 + 主循环工具调度 + 不确定副作用记账 + 可恢复 checkpoint；人设层（Soul）在出口生成回复文本 |
-| 💻 代码协作（Code） | ✅ 可用 | 绑定可信代码目录，Coding Agent 读取、修改、验证代码并执行命令 |
-| 📚 学习陪伴（Learn） | ✅ 可用 | 绑定 Obsidian Vault，陪伴理解材料、整理笔记、生成练习与维护进度 |
-| 📅 日常事务（Daily） | ✅ 可用 | 通用工具会话，处理日常问答、信息整理与轻度任务 |
-| 🧠 个性化记忆 | ✅ 可用 | L0 / L1 / L2 分层记忆、自研 DMAE Worldbook、关系画像与长期互动沉淀 |
-| 🔊 语音交互 | ✅ 可用 | 支持多 TTS 引擎、实时 ASR、语音通话与 VAD 静默检测，部分功能需要额外配置 |
-| 🧰 内置工具 | ✅ 可用 | 支持联网搜索、网页读取、文件操作、文档生成、生活服务、音乐等工具 |
-| 🔌 多模型厂商适配 | ✅ 可用 | 根据厂商能力使用 A / B / M / D 分级 Structured Output 与 Function Calling Profile |
-| ✨ Skill 系统 | ✅ 可用 | 支持内置 Skill、用户自定义 Skill、Slash 命令与参考资料读取 |
-| 📚 RAG 文档知识库 | 🧪 实验性 | 支持多格式文档导入、向量与 BM25 混合检索、Reranker 和来源追溯 |
-| 🔌 MCP 扩展生态 | 🧪 实验性 | 支持 stdio、SSE 与 HTTP Transport，实际兼容性取决于第三方 MCP Server |
-| 📱 飞书 Lark | ✅ 可用 | 支持长连接消息接入与多种媒体类型 |
-| 📱 微信 iLink | 🧪 实验性 | 支持长轮询消息收发、媒体处理与手机端对话 |
-| 🌙 主动聊天 | 🧪 实验性 | 支持状态判断、不打扰策略与桌面、飞书、微信多渠道投递 |
-
-> ✅ **可用**：核心流程已经实现，可用于日常体验。  
-> 🧪 **实验性**：功能已经接入，但兼容性、边界情况或使用体验仍在持续完善。
-
----
-
-## ❓ 常见问题
-
-### 本地 AI 模型
 
 
-### 是否支持本地大模型和其他第三方模型平台？
-
-Cyrene 对本地模型、自定义端点及未列入兼容性名单的第三方模型平台，仅提供基础的通用兼容与容错处理。
-
-由于这些端点尚未经过完整 Work 流程实测，因此：
-
-- 不保证能够稳定运行
-- 不保证 Structured Output 与 Function Calling 能力可用
-- 不保证能够完成完整 Agent 工具链
-- 暂不提供相关配置、兼容性问题与错误排查的技术解答
-
-未知模型、本地模型与自定义端点会默认使用通用 **D 档**运行，实际兼容性需要用户自行测试。
-
-> [!NOTE]
->
-> Cyrene 目前由个人独立开发，时间、设备和 API 测试成本有限。现阶段仅对项目明确适配并完成验证的主要模型厂商提供兼容性维护与技术解答，未来会根据项目进度逐步扩展测试范围。
-
-当前重点适配的模型厂商包括：
-
-- 豆包 Seed
-- Kimi
-- DeepSeek
-- Qwen
-- GLM
-- MiMo
-- MiniMax
-- OpenAI
-- Anthropic
-
-不同厂商和具体型号的验证状态并不相同，请以项目内的模型兼容性表及实测报告为准。
-
-> BGE-M3、`ms-marco-MiniLM-L-6-v2` 与 `bge-reranker-base` 是项目使用的本地 Embedding / Reranker 增强模型，不属于用于聊天的本地大语言模型。
-
-### API Key 安全吗？
-
-> [!WARNING]
->
-> 当前版本不建议在共享电脑或其他不可信环境中运行。
-
-LLM、独立视觉模型、ASR、TTS 及其他第三方服务的凭据会保存在应用的 `<userData>/` 目录中：
-
-- `<userData>/model-settings.json`：LLM 与视觉模型配置（明文）
-- `<userData>/app-settings.json`：ASR、TTS、地图、搜索、邮件等配置（明文）
-- `<userData>/weixin/credentials.json`：微信 iLink Bot 凭据（明文）
-- `<userData>/mcp-servers.json`：MCP server 配置，含 `env` 环境变量（明文）
-- `<userData>/channels-settings.json`：飞书 `appSecret` / `verificationToken` / `encryptKey`（safeStorage 加密）
-- `<userData>/music/netease/account.enc`：网易云音乐登录 Cookie（safeStorage 加密）
-
-目前大部分凭据仍以明文形式保存在本地文件中，主要依赖操作系统的用户目录权限进行保护。
-
-飞书渠道凭据与网易云音乐登录 Cookie 使用 Electron `safeStorage` 加密：
-
-- Windows：DPAPI
-- macOS：Keychain
-- Linux：libsecret
-- 系统密钥环不可用时会回退至较弱的本地混淆方案
-
-请勿分享或上传 `<userData>/`、设置文件及日志文件，也不要将其同步到公共云盘或提交到 Git 仓库。
-
-如需清除凭据与应用配置，可以删除以下文件后重启：
-
-```text
-<userData>/model-settings.json
-<userData>/app-settings.json
-<userData>/weixin/credentials.json
-<userData>/mcp-servers.json
-<userData>/channels-settings.json
-<userData>/music/netease/account.enc
-```
-
-### macOS / Linux 可以运行吗？
-
-Cyrene 当前以 **Windows 10 / 11** 为主要开发和测试平台。
-
-| 平台 | 状态 | 说明 |
-|---|:---:|---|
-| Windows 10 / 11 | ✅ 已实测 | 主要支持平台 |
-| macOS | ⚠️ 未完整验证 | Electron 主体理论可运行，但透明窗口、鼠标穿透与窗口层级可能存在兼容问题 |
-| Linux | ⚠️ 未完整验证 | 桌面环境与系统密钥环差异可能影响部分功能 |
-
-`game-bot` 使用的 `nut.js` 包含原生依赖，目前仅在 Windows 上完成端到端验证。
-
-如在 macOS 或 Linux 上遇到兼容问题，欢迎通过 GitHub Issue 提交运行环境、错误日志和复现步骤。
-
-### 出现 OOM 或内存占用过高怎么办？
-
-可以依次尝试：
-
-1. **关闭 Reranker**  
-   设置 -> 昔涟设置 -> RAG / 文档导入 -> 将 Reranker 模式设为 none
-
-2. **关闭暂时不用的 MCP 服务**  
-   Playwright 等浏览器自动化服务可能启动额外的 Chromium 进程。
-
-3. **减少大型 RAG 文档**  
-   删除暂时不需要的知识库文件，降低索引和检索负担。
-
-4. **关闭不使用的窗口和后台任务**  
-   长时间运行的工具任务、语音服务和多会话可能持续占用资源。
-
-5. **重启应用**  
-   可以释放模型、索引、浏览器子进程和长期运行任务占用的内存。
-
-Embedding 索引已采用后台 Worker、批处理和缓存机制，以降低文档导入时的内存峰值。
-
-如果仍然频繁出现 OOM，可以在开发模式下使用 Chrome DevTools Memory Profiler 获取 Heap Snapshot，并在提交 Issue 时附上复现步骤与相关日志。
-
----
 
 ## ✨ 功能
 
@@ -540,6 +401,33 @@ Cyrene 内置和扩展的工具较多，主要覆盖以下类别：
 </details>
 
 ---
+---
+
+## 📊 当前状态
+
+| 模块 | 状态 | 说明 |
+| --- | :---: | --- |
+| 🌸 Live2D 桌面陪伴 | ✅ 可用 | 支持桌宠置顶、多窗口、表情动作、心情状态、气泡互动与智能表情包 |
+| 💬 日常聊天（Chat） | ✅ 可用 | 独立角色聊天流程，不暴露或执行工具，结合近期消息、社交上下文与用户风格生成回复 |
+| 🛠️ 辅助工作（Work） | ✅ 可用 | 由 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 统一驱动：CITA 上下文理解 + Action Gate 权限过滤 + 主循环工具调度 + 不确定副作用记账 + 可恢复 checkpoint；人设层（Soul）在出口生成回复文本 |
+| 💻 代码协作（Code） | ✅ 可用 | 绑定可信代码目录，Coding Agent 读取、修改、验证代码并执行命令 |
+| 📚 学习陪伴（Learn） | ✅ 可用 | 绑定 Obsidian Vault，陪伴理解材料、整理笔记、生成练习与维护进度 |
+| 📅 日常事务（Daily） | ✅ 可用 | 通用工具会话，处理日常问答、信息整理与轻度任务 |
+| 🧠 个性化记忆 | ✅ 可用 | L0 / L1 / L2 分层记忆、自研 DMAE Worldbook、关系画像与长期互动沉淀 |
+| 🔊 语音交互 | ✅ 可用 | 支持多 TTS 引擎、实时 ASR、语音通话与 VAD 静默检测，部分功能需要额外配置 |
+| 🧰 内置工具 | ✅ 可用 | 支持联网搜索、网页读取、文件操作、文档生成、生活服务、音乐等工具 |
+| 🔌 多模型厂商适配 | ✅ 可用 | 根据厂商能力使用 A / B / M / D 分级 Structured Output 与 Function Calling Profile |
+| ✨ Skill 系统 | ✅ 可用 | 支持内置 Skill、用户自定义 Skill、Slash 命令与参考资料读取 |
+| 📚 RAG 文档知识库 | 🧪 实验性 | 支持多格式文档导入、向量与 BM25 混合检索、Reranker 和来源追溯 |
+| 🔌 MCP 扩展生态 | 🧪 实验性 | 支持 stdio、SSE 与 HTTP Transport，实际兼容性取决于第三方 MCP Server |
+| 📱 飞书 Lark | ✅ 可用 | 支持长连接消息接入与多种媒体类型 |
+| 📱 微信 iLink | 🧪 实验性 | 支持长轮询消息收发、媒体处理与手机端对话 |
+| 🌙 主动聊天 | 🧪 实验性 | 支持状态判断、不打扰策略与桌面、飞书、微信多渠道投递 |
+
+> ✅ **可用**：核心流程已经实现，可用于日常体验。  
+> 🧪 **实验性**：功能已经接入，但兼容性、边界情况或使用体验仍在持续完善。
+
+---
 
 ## 🧱 技术栈
 
@@ -664,7 +552,119 @@ dist/renderer/        # Vite 构建产物（构建产物 gitignore，产品资�
 > 静态资源源文件见 `src/renderer/public/`。运行 `npm run build:renderer` 重新生成构建产物。
 
 ---
+## ❓ 常见问题
 
+### 本地 AI 模型
+
+
+### 是否支持本地大模型和其他第三方模型平台？
+
+Cyrene 对本地模型、自定义端点及未列入兼容性名单的第三方模型平台，仅提供基础的通用兼容与容错处理。
+
+由于这些端点尚未经过完整 Work 流程实测，因此：
+
+- 不保证能够稳定运行
+- 不保证 Structured Output 与 Function Calling 能力可用
+- 不保证能够完成完整 Agent 工具链
+- 暂不提供相关配置、兼容性问题与错误排查的技术解答
+
+未知模型、本地模型与自定义端点会默认使用通用 **D 档**运行，实际兼容性需要用户自行测试。
+
+> [!NOTE]
+>
+> Cyrene 目前由个人独立开发，时间、设备和 API 测试成本有限。现阶段仅对项目明确适配并完成验证的主要模型厂商提供兼容性维护与技术解答，未来会根据项目进度逐步扩展测试范围。
+
+当前重点适配的模型厂商包括：
+
+- 豆包 Seed
+- Kimi
+- DeepSeek
+- Qwen
+- GLM
+- MiMo
+- MiniMax
+- OpenAI
+- Anthropic
+
+不同厂商和具体型号的验证状态并不相同，请以项目内的模型兼容性表及实测报告为准。
+
+> BGE-M3、`ms-marco-MiniLM-L-6-v2` 与 `bge-reranker-base` 是项目使用的本地 Embedding / Reranker 增强模型，不属于用于聊天的本地大语言模型。
+
+### API Key 安全吗？
+
+> [!WARNING]
+>
+> 当前版本不建议在共享电脑或其他不可信环境中运行。
+
+LLM、独立视觉模型、ASR、TTS 及其他第三方服务的凭据会保存在应用的 `<userData>/` 目录中：
+
+- `<userData>/model-settings.json`：LLM 与视觉模型配置（明文）
+- `<userData>/app-settings.json`：ASR、TTS、地图、搜索、邮件等配置（明文）
+- `<userData>/weixin/credentials.json`：微信 iLink Bot 凭据（明文）
+- `<userData>/mcp-servers.json`：MCP server 配置，含 `env` 环境变量（明文）
+- `<userData>/channels-settings.json`：飞书 `appSecret` / `verificationToken` / `encryptKey`（safeStorage 加密）
+- `<userData>/music/netease/account.enc`：网易云音乐登录 Cookie（safeStorage 加密）
+
+目前大部分凭据仍以明文形式保存在本地文件中，主要依赖操作系统的用户目录权限进行保护。
+
+飞书渠道凭据与网易云音乐登录 Cookie 使用 Electron `safeStorage` 加密：
+
+- Windows：DPAPI
+- macOS：Keychain
+- Linux：libsecret
+- 系统密钥环不可用时会回退至较弱的本地混淆方案
+
+请勿分享或上传 `<userData>/`、设置文件及日志文件，也不要将其同步到公共云盘或提交到 Git 仓库。
+
+如需清除凭据与应用配置，可以删除以下文件后重启：
+
+```text
+<userData>/model-settings.json
+<userData>/app-settings.json
+<userData>/weixin/credentials.json
+<userData>/mcp-servers.json
+<userData>/channels-settings.json
+<userData>/music/netease/account.enc
+```
+
+### macOS / Linux 可以运行吗？
+
+Cyrene 当前以 **Windows 10 / 11** 为主要开发和测试平台。
+
+| 平台 | 状态 | 说明 |
+|---|:---:|---|
+| Windows 10 / 11 | ✅ 已实测 | 主要支持平台 |
+| macOS | ⚠️ 未完整验证 | Electron 主体理论可运行，但透明窗口、鼠标穿透与窗口层级可能存在兼容问题 |
+| Linux | ⚠️ 未完整验证 | 桌面环境与系统密钥环差异可能影响部分功能 |
+
+`game-bot` 使用的 `nut.js` 包含原生依赖，目前仅在 Windows 上完成端到端验证。
+
+如在 macOS 或 Linux 上遇到兼容问题，欢迎通过 GitHub Issue 提交运行环境、错误日志和复现步骤。
+
+### 出现 OOM 或内存占用过高怎么办？
+
+可以依次尝试：
+
+1. **关闭 Reranker**  
+   设置 -> 昔涟设置 -> RAG / 文档导入 -> 将 Reranker 模式设为 none
+
+2. **关闭暂时不用的 MCP 服务**  
+   Playwright 等浏览器自动化服务可能启动额外的 Chromium 进程。
+
+3. **减少大型 RAG 文档**  
+   删除暂时不需要的知识库文件，降低索引和检索负担。
+
+4. **关闭不使用的窗口和后台任务**  
+   长时间运行的工具任务、语音服务和多会话可能持续占用资源。
+
+5. **重启应用**  
+   可以释放模型、索引、浏览器子进程和长期运行任务占用的内存。
+
+Embedding 索引已采用后台 Worker、批处理和缓存机制，以降低文档导入时的内存峰值。
+
+如果仍然频繁出现 OOM，可以在开发模式下使用 Chrome DevTools Memory Profiler 获取 Heap Snapshot，并在提交 Issue 时附上复现步骤与相关日志。
+
+---
 ## ⚠️ 免责声明
 
 本项目为**非官方粉丝同人作品**，与 HoYoverse / 米哈游**无任何关联、

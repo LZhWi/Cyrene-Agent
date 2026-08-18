@@ -132,11 +132,19 @@ describe("deriveNeteaseViewState", () => {
     ).toBe("connected_without_client");
   });
 
-  it("(ready, signed_in, _, authorized, unknown) -> connected_without_client (unknown treated as unavailable)", () => {
+  it("(ready, signed_in, _, authorized, unknown) -> connected_without_client (signed-in but mpv initializing)", () => {
     expect(
       deriveNeteaseViewState(
         snap({ backend: "ready", account: "signed_in", player: "unknown", flow: "authorized" }),
       ),
     ).toBe("connected_without_client");
+  });
+
+  it("(ready, unknown, _, _) -> backend_starting (account not initialized)", () => {
+    expect(
+      deriveNeteaseViewState(
+        snap({ backend: "ready", account: "unknown", player: "unknown", flow: "idle" }),
+      ),
+    ).toBe("backend_starting");
   });
 });

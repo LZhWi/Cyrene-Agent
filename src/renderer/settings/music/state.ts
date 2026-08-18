@@ -7,4 +7,5 @@ export const musicState = {
   stateUnsub: null as (() => void) | null,
   loginPollTimer: null as number | null,
   lastQrDataUrl: null as string | null,
+  initPollTimer: null as number | null,
 };

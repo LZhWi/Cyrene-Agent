@@ -365,10 +365,23 @@ export const IPC = {
   MUSIC_PLAY_TRACK: "music:play-track",
   MUSIC_PLAY_PLAYLIST: "music:play-playlist",
   MUSIC_DETECT_PLAYER: "music:detect-player",
-  MUSIC_OPEN_COMPONENT_DIR: "music:open-component-dir",
-  MUSIC_RECHECK_COMPONENT: "music:recheck-component",
+  MUSIC_GET_OPENAPI_CONFIG: "music:get-openapi-config",
+  MUSIC_SAVE_OPENAPI_CONFIG: "music:save-openapi-config",
   MUSIC_STATE_CHANGED: "music:state-changed",
   MUSIC_CARD: "music:card",
+  // mpv playback control (renderer → main)
+  MUSIC_PLAYBACK_PLAY: "music:playback:play",
+  MUSIC_PLAYBACK_PAUSE: "music:playback:pause",
+  MUSIC_PLAYBACK_TOGGLE: "music:playback:toggle",
+  MUSIC_PLAYBACK_SEEK: "music:playback:seek",
+  MUSIC_PLAYBACK_VOLUME: "music:playback:volume",
+  MUSIC_PLAYBACK_STOP: "music:playback:stop",
+  MUSIC_PLAYBACK_NEXT: "music:playback:next",
+  MUSIC_PLAYBACK_PREV: "music:playback:prev",
+  MUSIC_PLAYBACK_STATE: "music:playback:state", // main → renderer push
+  // UI direct connect (renderer → main, not via AI tool layer)
+  MUSIC_GET_LYRICS: "music:get-lyrics",
+  MUSIC_TOGGLE_FAVORITE: "music:toggle-favorite",
 
   // screenshot
   SCREENSHOT_START: "screenshot:start",

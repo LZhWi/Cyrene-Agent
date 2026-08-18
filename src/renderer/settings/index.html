@@ -1401,7 +1401,7 @@
                 <div class="music-platform-grid" id="music-platform-list">
                   <button type="button" class="plugin-card plugin-card--sub music-platform" id="music-platform-netease" data-platform="netease">
                     <div class="plugin-card__icon"><img data-music-logo alt="网易云音乐" /></div>
-                    <div class="plugin-card__body"><h2>网易云音乐</h2><p>扫码登录后搜索并播放歌曲。</p><span id="music-platform-status">尚未连接</span></div>
+                    <div class="plugin-card__body"><h2>网易云音乐</h2><p>扫码登录后搜索并播放歌曲。</p></div>
                   </button>
                   <article class="plugin-card plugin-card--sub is-muted"><div class="plugin-card__body"><h2>QQ 音乐</h2><p>敬请期待</p></div><span class="plugin-placeholder-tag">敬请期待</span></article>
                   <article class="plugin-card plugin-card--sub is-muted"><div class="plugin-card__body"><h2>Spotify</h2><p>敬请期待</p></div><span class="plugin-placeholder-tag">敬请期待</span></article>
@@ -1447,17 +1447,21 @@
           </div>
           <div id="netease-detail-view" class="is-hidden">
             <button type="button" class="music-return-btn" id="music-return-btn">← 返回音乐平台</button>
-            <header class="music-detail-header"><img data-music-logo alt="网易云音乐" /><div><h1>网易云音乐</h1><p>扫码登录后搜索歌曲，并通过桌面客户端播放。</p></div></header>
+            <header class="music-detail-header"><img data-music-logo alt="网易云音乐" /><div><h1>网易云音乐</h1><p>扫码登录后搜索歌曲，通过内置 mpv 播放器播放。</p></div></header>
+            <div class="music-card music-openapi-card" id="music-openapi-card">
+              <div class="music-card__header"><h2>OpenAPI 配置</h2></div>
+              <div class="music-card__body">
+                <p class="panel-hint">填写网易云音乐开放平台分配的 appId 与 privateKey，用于调用 OpenAPI 接口。</p>
+                <label class="form-label" for="music-openapi-appid">App ID</label>
+                <input type="text" id="music-openapi-appid" class="form-input form-input--wide" placeholder="例如 b3010d00000000009b4d0c1cfda9accd" autocomplete="off" />
+                <label class="form-label" for="music-openapi-private-key">Private Key（PKCS#8 base64 或 PEM）</label>
+                <textarea id="music-openapi-private-key" class="form-textarea form-input--wide" rows="4" placeholder="粘贴平台分配的 RSA 私钥（base64 或 -----BEGIN PRIVATE KEY-----... 格式）" autocomplete="off"></textarea>
+                <div class="music-actions"><button type="button" class="btn-primary" id="music-save-openapi-config">保存配置</button></div>
+              </div>
+            </div>
             <div class="music-card music-status-card">
               <div class="music-status-main"><span class="music-status-dot" id="music-status-dot"></span><strong id="music-account-status-text">尚未连接</strong><span id="music-status-description"></span></div>
               <div class="music-actions" id="music-actions"><button type="button" class="btn-primary" id="music-login-btn">连接网易云</button></div>
-            </div>
-            <div class="music-card is-hidden" id="music-component-help">
-              <div class="music-card__header"><h2>音乐组件未就绪</h2></div>
-              <div class="music-card__body">
-                <p class="panel-hint">将下载好的 <code>music</code> 文件夹放入组件目录，然后重新检测。</p>
-                <div class="music-actions"><button type="button" class="btn-secondary" id="music-open-component-dir">打开组件文件夹</button><button type="button" class="btn-primary" id="music-recheck-component">重新检测</button></div>
-              </div>
             </div>
             <div class="music-qr is-hidden" id="music-qr"><img class="music-qr__img" id="music-qr-img" alt="网易云登录二维码" /><div><strong>网易云音乐 App 扫码</strong><p id="music-qr-tip">请用网易云音乐 App 扫描二维码完成登录</p><p id="music-qr-status">当前状态：等待扫码</p></div></div>
             <div class="music-search-card music-card" id="music-search-card"><div class="music-card__header"><h2>搜索歌曲</h2></div><div class="music-card__body"><p id="music-search-hint" class="panel-hint">连接网易云后即可搜索歌曲和获取每日推荐。</p><div id="music-search-form" class="form-input-with-action is-hidden"><input type="text" id="music-search-input" class="form-input form-input--wide" placeholder="输入歌名或歌手" autocomplete="off" /><button type="button" class="btn-secondary" id="music-search-btn">搜索</button></div><div class="music-search-results" id="music-search-results"><p class="empty-hint">连接网易云后即可搜索歌曲和获取每日推荐。</p></div></div></div>

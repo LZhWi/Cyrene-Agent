@@ -27,6 +27,16 @@ latest.yml
 # Native screenshot helper is built locally and staged for electron-builder.
 resources/bin/*.exe
 
+# mpv binary is downloaded locally and staged for electron-builder.
+resources/bin/mpv/
+.cache/mpv/
+
+# M0 POC scratch（含早期 token/qr.png 敏感产物，仅本地参考）
+tmp-m0-poc/
+
+# electron-builder installer UI 中间产物
+build/installer/
+
 # OpenCode 二进制 distribution（按需本地下载，不进 git）
 resources/opencode/
 resources/mingit/

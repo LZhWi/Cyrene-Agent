@@ -16,9 +16,9 @@ export function bootstrapMusicService(paths: MusicPaths, hooks: MusicToolHooks =
   const ipcDisposer = registerMusicIpcHandlers(service);
   const tools = buildMusicTools(service, hooks);
   for (const tool of tools) toolRegistry.register(tool);
-  // Do not start the optional music backend here.  It is connected lazily by
-  // the first real music action so an idle Cyrene window never keeps Python
-  // processes alive merely because the extension is installed.
+  // Do not start the music backend here.  It is connected lazily by the first
+  // real music action (ensureReady) so an idle Cyrene window never holds a
+  // network session merely because the extension is installed.
 
   let shuttingDown = false;
   return {

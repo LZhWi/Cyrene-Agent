@@ -161,7 +161,6 @@ import {
 } from "./orchestrator/sticker-settings";
 import { createProactiveLifecycle } from "./proactive/proactive-lifecycle";
 import { createCitaService } from "./services/cita/cita-service";
-import { contextRefRegistry } from "./orchestrator/tool-context";
 import { createGitService } from "./code-git/git-service";
 import type { GitService } from "./code-git/git-service";
 import { resolveGitExecutable } from "./code-git/git-executable";
@@ -416,11 +415,9 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   });
   void screenshotService.prewarm();
 
-  // Cloud Music MCP wiring (MusicService + IPC + 5 Agent tools + shutdown latch)
+  // Cloud Music wiring (MusicService + IPC + 9 Agent tools + shutdown latch)
   const musicPaths = resolveMusicPaths();
   const musicBootstrap = bootstrapMusicService(musicPaths, {
-    contextRefs: contextRefRegistry,
-    ingestContextEvent: (event) => citaService.ingest(event),
     sendCard: (card) => {
       if (reactChatWindow && !reactChatWindow.isDestroyed()) {
         reactChatWindow.webContents.send(IPC.AGUI_EVENT, {

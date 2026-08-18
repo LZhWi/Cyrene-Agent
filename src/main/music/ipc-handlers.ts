@@ -1,8 +1,10 @@
-import { ipcMain, BrowserWindow, shell } from "electron";
+import { ipcMain, BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import { MusicInputError, type MusicBackendState, type MusicAccountState, type MusicPlayerState } from "./types";
 import type { MusicService } from "./music-service";
 import { sanitizeLogLine } from "./log-sanitizer";
+import { parseLrc } from "./lyrics-parser";
+import { LyricsCache } from "./lyrics-cache";
 
 export type MusicIpcResult<T> =
   | { ok: true; data: T }
@@ -89,18 +91,90 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
   );
   channels.push(IPC.MUSIC_DETECT_PLAYER);
 
-  ipcMain.handle(IPC.MUSIC_OPEN_COMPONENT_DIR, async () => {
-    const componentDir = service.getComponentDir();
-    if (!componentDir) return { ok: false as const, errorCode: "E_MUSIC_COMPONENT_DEV_MODE" };
-    const error = await shell.openPath(componentDir);
-    return error
-      ? { ok: false as const, errorCode: "E_MUSIC_COMPONENT_OPEN_FAILED" }
-      : { ok: true as const };
+  // OpenAPI credential config (appId + privateKey).  These do NOT go through
+  // wrap() — saveOpenapiConfig is the prerequisite for backend readiness, so
+  // it must succeed even when the backend is currently "incompatible".
+  ipcMain.handle(IPC.MUSIC_GET_OPENAPI_CONFIG, async () => {
+    try {
+      const config = await service.getOpenapiConfig();
+      // Mask privateKey in the returned payload — renderer only needs to
+      // know whether config exists + the appId for display.
+      return config
+        ? { ok: true as const, data: { appId: config.appId, privateKey: "" } }
+        : { ok: true as const, data: null };
+    } catch (err: unknown) {
+      console.error("[music] getOpenapiConfig failed", sanitizeLogLine(String(err)));
+      return { ok: false as const, errorCode: "E_INTERNAL_ERROR" };
+    }
   });
-  channels.push(IPC.MUSIC_OPEN_COMPONENT_DIR);
+  channels.push(IPC.MUSIC_GET_OPENAPI_CONFIG);
 
-  ipcMain.handle(IPC.MUSIC_RECHECK_COMPONENT, () => wrap(() => service.recheckComponent(), service));
-  channels.push(IPC.MUSIC_RECHECK_COMPONENT);
+  ipcMain.handle(
+    IPC.MUSIC_SAVE_OPENAPI_CONFIG,
+    (_e, config: { appId: string; privateKey: string }) =>
+      service.applyOpenapiConfig(config).then(
+        () => ({ ok: true as const, data: { backend: service.getBackendState() } }),
+        (err: unknown) => {
+          if (err instanceof MusicInputError) {
+            return { ok: false as const, errorCode: err.code };
+          }
+          console.error("[music] saveOpenapiConfig failed", sanitizeLogLine(String(err)));
+          return { ok: false as const, errorCode: "E_INTERNAL_ERROR" };
+        },
+      ),
+  );
+  channels.push(IPC.MUSIC_SAVE_OPENAPI_CONFIG);
+
+  // ── mpv 播放控制 ───────────────────────────────────────────
+  ipcMain.handle(IPC.MUSIC_PLAYBACK_PLAY, () => wrap(() => service.playbackPlay(), service));
+  channels.push(IPC.MUSIC_PLAYBACK_PLAY);
+
+  ipcMain.handle(IPC.MUSIC_PLAYBACK_PAUSE, () => wrap(() => service.playbackPause(), service));
+  channels.push(IPC.MUSIC_PLAYBACK_PAUSE);
+
+  ipcMain.handle(IPC.MUSIC_PLAYBACK_TOGGLE, () => wrap(() => service.playbackToggle(), service));
+  channels.push(IPC.MUSIC_PLAYBACK_TOGGLE);
+
+  ipcMain.handle(IPC.MUSIC_PLAYBACK_SEEK, (_e, seconds: number) =>
+    wrap(() => service.playbackSeek(seconds), service),
+  );
+  channels.push(IPC.MUSIC_PLAYBACK_SEEK);
+
+  ipcMain.handle(IPC.MUSIC_PLAYBACK_VOLUME, (_e, vol: number) =>
+    wrap(() => service.playbackSetVolume(vol), service),
+  );
+  channels.push(IPC.MUSIC_PLAYBACK_VOLUME);
+
+  ipcMain.handle(IPC.MUSIC_PLAYBACK_STOP, () => wrap(() => service.playbackStop(), service));
+  channels.push(IPC.MUSIC_PLAYBACK_STOP);
+
+  ipcMain.handle(IPC.MUSIC_PLAYBACK_NEXT, () => wrap(() => service.playbackNext(), service));
+  channels.push(IPC.MUSIC_PLAYBACK_NEXT);
+
+  ipcMain.handle(IPC.MUSIC_PLAYBACK_PREV, () => wrap(() => service.playbackPrev(), service));
+  channels.push(IPC.MUSIC_PLAYBACK_PREV);
+
+  // ── UI 直连：歌词（不经 AI 工具层） ─────────────────────────
+  const lyricsCache = new LyricsCache(service.getLyricsCacheDir());
+  ipcMain.handle(IPC.MUSIC_GET_LYRICS, (_e, payload: { encryptedId: string }) =>
+    wrap(async () => {
+      const cached = await lyricsCache.get(payload.encryptedId);
+      if (cached) return cached;
+      const raw = await service.getLyrics(payload.encryptedId);
+      const lines = parseLrc(raw);
+      await lyricsCache.set(payload.encryptedId, lines);
+      return lines;
+    }, service),
+  );
+  channels.push(IPC.MUSIC_GET_LYRICS);
+
+  // ── UI 直连：收藏切换 ──────────────────────────────────────
+  ipcMain.handle(IPC.MUSIC_TOGGLE_FAVORITE, (_e, payload: { encryptedId: string; favorite: boolean }) =>
+    wrap(async () => {
+      return service.toggleFavorite(payload.encryptedId, payload.favorite);
+    }, service),
+  );
+  channels.push(IPC.MUSIC_TOGGLE_FAVORITE);
 
   // ── 状态变更推送：任何 state 轴变化都广播到所有窗口 ──────────
   const unsubState = service.onStateChange((snapshot) => {
@@ -108,9 +182,16 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
       if (!win.isDestroyed()) win.webContents.send(IPC.MUSIC_STATE_CHANGED, snapshot);
     }
   });
+  // Playback state 推送：mpv 状态变化时广播到所有窗口
+  const unsubPlayback = service.onPlaybackStateChange?.((playback) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(IPC.MUSIC_PLAYBACK_STATE, playback);
+    }
+  });
 
   return function dispose() {
     for (const ch of channels) ipcMain.removeHandler(ch);
     unsubState();
+    unsubPlayback?.();
   };
 }

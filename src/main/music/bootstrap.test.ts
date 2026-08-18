@@ -43,8 +43,6 @@ import { registerMusicIpcHandlers } from "./ipc-handlers";
 import { buildMusicTools } from "../orchestrator/tools/music-tools";
 
 const PATHS = {
-  vendorDir: "/repo/vendor/cloud-music-mcp",
-  componentDir: undefined,
   runtimeDir: "/repo/runtime",
   accountPath: "/repo/account.enc",
   resourceBaseDir: "/repo",

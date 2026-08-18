@@ -4133,6 +4133,40 @@ body {
   margin: 0;
   font-size: 16px;
 }
+
+/* OpenAPI 配置卡片表单 */
+.music-openapi-card .music-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.music-openapi-card .form-label {
+  font-size: 12px;
+  color: var(--rb-text-muted);
+  margin-top: 4px;
+}
+.music-openapi-card .form-input--wide,
+.music-openapi-card .form-textarea {
+  width: 100%;
+  padding: 8px 10px;
+  font-size: 13px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  border: 1px solid var(--rb-border, #d0d0d0);
+  border-radius: 6px;
+  background: var(--rb-surface, #fff);
+  color: var(--rb-text, #111);
+  box-sizing: border-box;
+}
+.music-openapi-card .form-textarea {
+  resize: vertical;
+  min-height: 64px;
+  line-height: 1.4;
+}
+.music-openapi-card .form-input--wide:focus,
+.music-openapi-card .form-textarea:focus {
+  outline: none;
+  border-color: var(--rb-primary, #2b6cff);
+}
 .music-status {
   font-size: 12px;
   color: var(--rb-text-muted);

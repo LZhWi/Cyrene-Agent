@@ -19,18 +19,17 @@ vi.mock("electron", () => ({
 import { resolveMusicPaths } from "./paths";
 
 describe("resolveMusicPaths (dev)", () => {
-  it("uses repo-root vendor dir in development", () => {
+  it("resolves runtime + account paths under userData in development", () => {
     const p = resolveMusicPaths();
-    expect(p.vendorDir).toBe(path.join(repoPath, "vendor", "cloud-music-mcp"));
     expect(p.runtimeDir).toBe(path.join(userDataPath, "music", "netease", "runtime"));
     expect(p.accountPath).toBe(path.join(userDataPath, "music", "netease", "account.enc"));
+    expect(p.resourceBaseDir).toBe(repoPath);
   });
 
-  it("uses the installed portable component directory when packaged", async () => {
+  it("uses resourcesPath as resourceBaseDir when packaged", () => {
     packaged = true;
     const p = resolveMusicPaths();
-    expect(p.componentDir).toBe(path.join(resourcesPath, "components", "music"));
-    expect(p.vendorDir).toBeUndefined();
+    expect(p.resourceBaseDir).toBe(resourcesPath);
     packaged = false;
   });
 });

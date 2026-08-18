@@ -55,8 +55,7 @@ import { MusicInputError } from "./types";
       getPlayerState: vi.fn(() => "available"),
       getLoginFlowState: vi.fn(() => "idle"),
       getRootPid: vi.fn(() => undefined),
-      getComponentDir: vi.fn(() => "C:\\Users\\test\\components\\music"),
-      recheckComponent: asyncThat(() => ({ backend: "ready", account: "signed_out", player: "available", flow: "idle" })),
+      getLyricsCacheDir: vi.fn(() => "/tmp/lyrics-cache"),
       onStateChange: vi.fn(onStateChangeImpl),
       pollOnce: asyncThat(),
       beginLogin: asyncThat(),
@@ -67,6 +66,8 @@ import { MusicInputError } from "./types";
       presentTracks: asyncThat(),
       playTrackFromUi: asyncThat(playTrackImpl),
       playPlaylist: asyncThat(playTrackImpl),
+      getOpenapiConfig: asyncThat(async () => null),
+      applyOpenapiConfig: asyncThat(async () => undefined),
     };
     for (const [k, v] of Object.entries(overrides)) base[k] = v;
     return base;
@@ -92,8 +93,8 @@ describe("registerMusicIpcHandlers", () => {
       "music:play-track",
       "music:play-playlist",
       "music:detect-player",
-      "music:open-component-dir",
-      "music:recheck-component",
+      "music:get-openapi-config",
+      "music:save-openapi-config",
     ];
     for (const ch of expected) {
       expect(handlerMap[ch]).toBeDefined();
@@ -105,7 +106,7 @@ describe("registerMusicIpcHandlers", () => {
     disposer();
     expect(removed).toContain("music:get-status");
     expect(removed).toContain("music:play-track");
-    expect(removed.length).toBe(12);
+    expect(removed.length).toBe(22);
   });
 
   it("MUSIC_SEARCH: keyword too long returns ok:false errorCode", async () => {
@@ -201,7 +202,7 @@ describe("registerMusicIpcHandlers", () => {
   it("non-MusicInputError exception is converted to E_INTERNAL_ERROR, no internal path leak", async () => {
     const svc = mockService();
     svc.searchTracks.mockRejectedValue(
-      new Error("ENOENT: C:\\Users\\admin\\vendor\\cloud-music-mcp\\missing"),
+      new Error("ENOENT: C:\\Users\\admin\\internal\\runtime\\missing"),
     );
     registerMusicIpcHandlers(svc);
     const r = (await handlerMap["music:search"](null, { keyword: "q" })) as any;
@@ -209,6 +210,60 @@ describe("registerMusicIpcHandlers", () => {
     expect(r.errorCode).toBe("E_INTERNAL_ERROR");
     const serialized = JSON.stringify(r);
     expect(serialized).not.toContain("C:\\Users");
-    expect(serialized).not.toContain("vendor/cloud-music-mcp");
+    expect(serialized).not.toContain("internal/runtime");
+  });
+
+  it("MUSIC_GET_OPENAPI_CONFIG: returns null when unconfigured", async () => {
+    const svc = mockService();
+    svc.getOpenapiConfig.mockResolvedValue(null);
+    registerMusicIpcHandlers(svc);
+    const r = (await handlerMap["music:get-openapi-config"](null, undefined)) as any;
+    expect(r.ok).toBe(true);
+    expect(r.data).toBeNull();
+  });
+
+  it("MUSIC_GET_OPENAPI_CONFIG: masks privateKey in returned config", async () => {
+    const svc = mockService();
+    svc.getOpenapiConfig.mockResolvedValue({
+      appId: "app-xyz",
+      privateKey: "SUPER_SECRET_KEY",
+    });
+    registerMusicIpcHandlers(svc);
+    const r = (await handlerMap["music:get-openapi-config"](null, undefined)) as any;
+    expect(r.ok).toBe(true);
+    expect(r.data.appId).toBe("app-xyz");
+    expect(r.data.privateKey).toBe(""); // masked
+    // Ensure the real key never crosses the IPC boundary
+    expect(JSON.stringify(r)).not.toContain("SUPER_SECRET_KEY");
+  });
+
+  it("MUSIC_SAVE_OPENAPI_CONFIG: applies config and returns backend state", async () => {
+    const svc = mockService();
+    svc.applyOpenapiConfig.mockResolvedValue(undefined);
+    svc.getBackendState.mockReturnValue("ready");
+    registerMusicIpcHandlers(svc);
+    const r = (await handlerMap["music:save-openapi-config"](null, {
+      appId: "app-1",
+      privateKey: "A".repeat(1600),
+    })) as any;
+    expect(r.ok).toBe(true);
+    expect(r.data.backend).toBe("ready");
+    expect(svc.applyOpenapiConfig).toHaveBeenCalledWith({
+      appId: "app-1",
+      privateKey: "A".repeat(1600),
+    });
+  });
+
+  it("MUSIC_SAVE_OPENAPI_CONFIG: invalid config returns ok:false errorCode", async () => {
+    const svc = mockService();
+    const { MusicInputError } = await import("./types");
+    svc.applyOpenapiConfig.mockRejectedValue(new MusicInputError("E_OPENAPI_CONFIG_INVALID", "appId required"));
+    registerMusicIpcHandlers(svc);
+    const r = (await handlerMap["music:save-openapi-config"](null, {
+      appId: "",
+      privateKey: "k",
+    })) as any;
+    expect(r.ok).toBe(false);
+    expect(r.errorCode).toBe("E_OPENAPI_CONFIG_INVALID");
   });
 });
