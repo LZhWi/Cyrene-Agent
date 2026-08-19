@@ -39,6 +39,7 @@ interface MusicApi {
 interface BackendTrack {
   id: string;
   encryptedId?: string;
+  originalId?: number;
   name: string;
   artists?: string[];
   album?: string;
@@ -49,7 +50,7 @@ interface BackendPlaylist {
   id: string;
   originalId?: number | string;
   name: string;
-  coverImgUrl?: string;
+  coverUrl?: string;
   trackCount: number;
   tracks?: BackendTrack[];
 }
@@ -57,7 +58,7 @@ interface BackendPlaylist {
 function normalizeTrack(t: BackendTrack): Track {
   return {
     encryptedId: t.encryptedId ?? t.id,
-    originalId: String(t.id),
+    originalId: String(t.originalId ?? t.id),
     name: t.name,
     artists: t.artists ?? [],
     album: t.album,
@@ -69,9 +70,10 @@ function normalizeTrack(t: BackendTrack): Track {
 
 function normalizePlaylist(p: BackendPlaylist): Playlist {
   return {
-    originalId: String(p.originalId ?? p.id),
+    id: p.id,
+    originalId: String(p.originalId ?? ""),
     name: p.name,
-    coverImgUrl: p.coverImgUrl,
+    coverImgUrl: p.coverUrl,
     trackCount: p.trackCount,
     tracks: [],
   };

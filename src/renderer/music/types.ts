@@ -21,6 +21,9 @@ export interface Track {
 }
 
 export interface Playlist {
+  /** 32-hex 加密 ID — API 调用用这个 */
+  id: string;
+  /** 数字原 ID — 仅用于展示 */
   originalId: string;
   name: string;
   coverImgUrl?: string;
