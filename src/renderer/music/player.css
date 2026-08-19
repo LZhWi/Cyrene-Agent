@@ -124,7 +124,7 @@ body {
   align-items: center;
   gap: 24px;
   padding: 14px 20px;
-  padding-right: 80px; /* 避开窗口按钮 */
+  margin-right: 72px; /* 给窗口按钮留出物理空间，避免 drag 区域覆盖 */
   border-bottom: 1px solid var(--border);
   flex: none;
   background: var(--bg-elev);
@@ -134,6 +134,11 @@ body {
 .mp-header button,
 .mp-header .playlist-chip,
 .mp-header nav {
+  -webkit-app-region: no-drag;
+}
+
+/* 按钮区域显式排除拖拽 */
+.mp-window-chrome {
   -webkit-app-region: no-drag;
 }
 
