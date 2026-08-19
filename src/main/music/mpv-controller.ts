@@ -296,6 +296,11 @@ export class MpvController extends EventEmitter {
 
   /** Load a URL for playback (replaces current, starts playing). */
   async load(url: string, mode: "replace" | "append" = "replace"): Promise<void> {
+    // 清除上一首的 track 元数据：loadfile 期间 mpv 会推送多次 property change
+    // （time-pos/duration/idle-active），若此时 state.track 还是旧值，前端会
+    // 用旧 track 去 queue 匹配，导致 UI 跳回第一首。setTrack 会随后注入新 track。
+    this.state.track = undefined;
+    this.emitState();
     await this.command("loadfile", [url, mode]);
     this.state.loaded = true;
     this.state.paused = false;

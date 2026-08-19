@@ -185,9 +185,18 @@ export function App() {
 
   // ── 订阅 mpv 播放状态推送 ──────────────────────────────────
   useEffect(() => {
+    console.log("[music-debug] onPlaybackState effect mounted", { hasApi: !!api });
     if (!api) return;
     const unsub = api.onPlaybackState?.((raw) => {
       const mpv = raw as Partial<MpvPlaybackState>;
+      console.log("[music-debug] onPlaybackState recv:", {
+        trackEncId: mpv.track?.encryptedId,
+        trackName: mpv.track?.name,
+        paused: mpv.paused,
+        loaded: mpv.loaded,
+        duration: mpv.duration,
+        position: mpv.position,
+      });
       setState((s) => {
         const next: Partial<PlaybackState> = {};
         if (typeof mpv.position === "number") next.positionMs = Math.round(mpv.position * 1000);
@@ -210,6 +219,13 @@ export function App() {
         // track 变化 → 同步 currentTrack（优先用本地 queue 里的完整信息）
         if (mpv.track && typeof mpv.track.encryptedId === "string") {
           const inQueue = s.queue.find((t) => t.encryptedId === mpv.track!.encryptedId);
+          console.log("[music-debug] track match check:", {
+            mpvEncId: mpv.track.encryptedId,
+            currentEncId: s.currentTrack?.encryptedId,
+            foundInQueue: !!inQueue,
+            foundName: inQueue?.name,
+            queueLen: s.queue.length,
+          });
           if (inQueue) {
             next.currentTrack = inQueue;
             const idx = s.queue.indexOf(inQueue);
@@ -322,6 +338,7 @@ export function App() {
   // ── 播放指定歌曲（本地 queue 管理 + IPC 派发） ──────────────
   const playTrack = useCallback(
     (track: Track) => {
+      console.log("[music-debug] playTrack called:", { name: track.name, encryptedId: track.encryptedId, visible: track.visible });
       if (!track.visible) {
         patch({ error: `「${track.name}」暂时无法播放` });
         return;
@@ -348,7 +365,10 @@ export function App() {
         return { ...s, queue, currentTrack: track, queueIndex: queue.length - 1, durationMs: track.durationMs ?? 0 };
       });
 
-      void api.playTrack(track.encryptedId).catch((err) => {
+      void api.playTrack(track.encryptedId).then((r) => {
+        console.log("[music-debug] playTrack IPC result:", { ok: r.ok, errorCode: r.errorCode, trackEncId: track.encryptedId });
+      }).catch((err) => {
+        console.log("[music-debug] playTrack IPC error:", { err: String(err), trackEncId: track.encryptedId });
         patch({ isLoading: false, error: "播放失败：" + (err instanceof Error ? err.message : String(err)) });
       });
 

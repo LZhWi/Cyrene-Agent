@@ -64,6 +64,8 @@ export class MusicService {
   private playerListeners = new Set<StateListener<MusicPlayerState>>();
   private flowListeners = new Set<StateListener<LoginFlowState>>();
   private stateListeners = new Set<StateListener<MusicStatusSnapshot>>();
+  // mpv 未启动时缓存的 playback 监听器，mpv.start() 后批量补注册
+  private pendingPlaybackListeners = new Set<(state: PlaybackState) => void>();
 
   constructor(paths: MusicPaths) {
     this.paths = paths;
@@ -121,11 +123,25 @@ export class MusicService {
     this.mpv = new MpvController();
     try {
       await this.mpv.start();
+      // 补注册 mpv 启动前缓存的 playback 监听器（ipc-handlers 在 app 启动时注册）
+      for (const l of this.pendingPlaybackListeners) {
+        this.mpv.onStateChange(l);
+      }
+      this.pendingPlaybackListeners.clear();
       const dispatcher: PlaybackDispatcher = async (resource) => {
         if (!this.mpv) {
+          console.log("[music-debug] dispatcher: mpv is null");
           return { state: "client_unavailable", resourceType: resource.kind, resourceId: "", errorCode: "E_MPV_NOT_STARTED" };
         }
+        const dispatchTrackId = resource.kind === "song" ? resource.track.id : resource.tracks[0]?.id ?? "";
+        console.log("[music-debug] dispatcher before load:", {
+          kind: resource.kind,
+          hasUrl: !!resource.playUrl,
+          urlLen: resource.playUrl.length,
+          trackId: dispatchTrackId,
+        });
         await this.mpv.load(resource.playUrl, "replace");
+        console.log("[music-debug] dispatcher load done, about to setTrack:", { trackId: dispatchTrackId });
         if (resource.kind === "song") {
           this.currentPlayback = {
             encryptedId: resource.track.id,
@@ -134,6 +150,7 @@ export class MusicService {
             coverUrl: resource.track.coverUrl,
           };
           this.mpv.setTrack(this.currentPlayback);
+          console.log("[music-debug] dispatcher setTrack done (song):", { encId: this.currentPlayback.encryptedId, name: this.currentPlayback.name });
         } else {
           this.currentPlayback = {
             encryptedId: resource.tracks[0]?.id ?? "",
@@ -142,6 +159,7 @@ export class MusicService {
             coverUrl: resource.tracks[0]?.coverUrl,
           };
           this.mpv.setTrack(this.currentPlayback);
+          console.log("[music-debug] dispatcher setTrack done (playlist):", { encId: this.currentPlayback.encryptedId, name: this.currentPlayback.name });
         }
         this.playerState = "available";
         this.emitPlayerChange("available");
@@ -238,9 +256,15 @@ export class MusicService {
     this.stateListeners.add(listener);
     return () => this.stateListeners.delete(listener);
   }
-  onPlaybackStateChange(listener: (state: PlaybackState) => void): (() => void) | undefined {
-    if (!this.mpv) return undefined;
-    return this.mpv.onStateChange(listener);
+  onPlaybackStateChange(listener: (state: PlaybackState) => void): () => void {
+    if (this.mpv) {
+      return this.mpv.onStateChange(listener);
+    }
+    // mpv 尚未启动：缓存 listener，start() 完成后补注册
+    this.pendingPlaybackListeners.add(listener);
+    return () => {
+      this.pendingPlaybackListeners.delete(listener);
+    };
   }
 
   getSnapshot(): MusicStatusSnapshot {

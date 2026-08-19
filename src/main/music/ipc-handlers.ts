@@ -194,7 +194,7 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
     }
   });
   // Playback state 推送：mpv 状态变化时广播到所有窗口
-  const unsubPlayback = service.onPlaybackStateChange?.((playback) => {
+  const unsubPlayback = service.onPlaybackStateChange((playback) => {
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) win.webContents.send(IPC.MUSIC_PLAYBACK_STATE, playback);
     }
@@ -203,6 +203,6 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
   return function dispose() {
     for (const ch of channels) ipcMain.removeHandler(ch);
     unsubState();
-    unsubPlayback?.();
+    unsubPlayback();
   };
 }

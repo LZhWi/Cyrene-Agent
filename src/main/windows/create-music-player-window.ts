@@ -57,6 +57,7 @@ export function createMusicPlayerWindow(): void {
 
   window.once("ready-to-show", () => {
     if (!window.isDestroyed()) window.show();
+    if (isDev) window.webContents.openDevTools({ mode: "detach" });
   });
 
   window.on("closed", () => {
