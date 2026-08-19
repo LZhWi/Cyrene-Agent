@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   AlertCircle,
   Heart,
@@ -52,7 +52,6 @@ export default function MusicPlayer({
   const [query, setQuery] = useState("");
   const track = state.currentTrack;
   const mode: PlayMode = state.isShuffled ? "shuffle" : state.repeatMode;
-  const debounceRef = useRef<number | null>(null);
 
   // 单键轮换：顺序 → 列表循环 → 单曲循环 → 随机 → 顺序
   const cycleMode = () => {
@@ -68,8 +67,7 @@ export default function MusicPlayer({
 
   const handleQueryChange = (value: string) => {
     setQuery(value);
-    if (debounceRef.current) window.clearTimeout(debounceRef.current);
-    debounceRef.current = window.setTimeout(() => onSearch(value), 250);
+    onSearch(value);
   };
 
   const clearQuery = () => {
@@ -124,10 +122,10 @@ export default function MusicPlayer({
         <nav className="mp-playlists" aria-label="歌单选择">
           {playlists.map((pl) => (
             <button
-              key={pl.originalId}
+              key={pl.id}
               type="button"
               className={`playlist-chip ${
-                pl.originalId === activePlaylistId ? "is-active" : ""
+                pl.id === activePlaylistId ? "is-active" : ""
               }`}
               onClick={() => onSelectPlaylist(pl)}
             >
@@ -238,13 +236,13 @@ export default function MusicPlayer({
                     results={searchResults}
                     isSearching={isSearching}
                     query={query}
-                    currentId={track?.originalId}
+                    currentId={track?.encryptedId}
                     onPlay={actions.playTrack}
                   />
                 ) : (
                   <QueueList
                     queue={state.queue}
-                    currentId={track?.originalId}
+                    currentId={track?.encryptedId}
                     onPlay={actions.playTrack}
                     onRemove={actions.removeFromQueue}
                   />

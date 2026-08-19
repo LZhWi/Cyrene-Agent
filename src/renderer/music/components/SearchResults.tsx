@@ -35,11 +35,11 @@ export default function SearchResults({
   return (
     <ul className="queue">
       {results.map((track, i) => {
-        const active = track.originalId === currentId;
+        const active = track.encryptedId === currentId;
         const disabled = !track.visible;
         return (
           <li
-            key={`${track.originalId}-${i}`}
+            key={`${track.encryptedId}-${i}`}
             className={[
               "queue-item",
               active ? "is-active" : "",

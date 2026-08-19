@@ -396,8 +396,8 @@ describe("MusicService (M3 OpenAPI)", () => {
   });
 
   it("getMyPlaylists / getPlaylistDetail / createPlaylist / addToPlaylist / getMySubscriptions", async () => {
-    mocks.getCreatedPlaylists.mockResolvedValue({ records: [{ id: "P".repeat(32), name: "list", trackCount: 3 }] });
-    mocks.getPlaylistDetail.mockResolvedValue({ id: "P".repeat(32), name: "list" });
+    mocks.getCreatedPlaylists.mockResolvedValue({ records: [{ id: "a".repeat(32), name: "list", trackCount: 3 }] });
+    mocks.getPlaylistDetail.mockResolvedValue({ id: "a".repeat(32), name: "list" });
     mocks.getPlaylistSongs.mockResolvedValue([songRec()]);
     mocks.createPlaylist.mockResolvedValue({ id: "Q".repeat(32), name: "new" });
     mocks.addSongsToPlaylist.mockResolvedValue({ count: 1 });
@@ -408,9 +408,9 @@ describe("MusicService (M3 OpenAPI)", () => {
     (s as unknown as { orchestrator: { setAccountState: (st: string) => void } }).orchestrator.setAccountState("signed_in");
 
     expect((await s.getMyPlaylists())[0].trackCount).toBe(3);
-    expect((await s.getPlaylistDetail("P".repeat(32))).name).toBe("list");
+    expect((await s.getPlaylistDetail("a".repeat(32))).name).toBe("list");
     expect((await s.createPlaylist("new")).id).toBe("Q".repeat(32));
-    expect(await s.addToPlaylist("P".repeat(32), [ENC])).toEqual({ added: 1, playlistId: "P".repeat(32) });
+    expect(await s.addToPlaylist("a".repeat(32), [ENC])).toEqual({ added: 1, playlistId: "a".repeat(32) });
     expect((await s.getMySubscriptions("albums"))[0].name).toBe("叶惠美");
     expect(await s.getMySubscriptions("artists")).toEqual([]);
   });

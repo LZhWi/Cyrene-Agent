@@ -58,7 +58,7 @@ interface BackendPlaylist {
 function normalizeTrack(t: BackendTrack): Track {
   return {
     encryptedId: t.encryptedId ?? t.id,
-    originalId: String(t.originalId ?? t.id),
+    originalId: t.originalId != null ? String(t.originalId) : "",
     name: t.name,
     artists: t.artists ?? [],
     album: t.album,
@@ -218,7 +218,7 @@ export function App() {
             // 不在 queue（比如 AI 工具直接播的）→ 构造最小 Track
             next.currentTrack = {
               encryptedId: mpv.track.encryptedId,
-              originalId: mpv.track.encryptedId,
+              originalId: "",
               name: mpv.track.name ?? "未知歌曲",
               artists: mpv.track.artists ?? [],
               coverImgUrl: mpv.track.coverUrl,
@@ -282,7 +282,7 @@ export function App() {
         const pls = (r.data as BackendPlaylist[]).map(normalizePlaylist);
         setPlaylists(pls);
         if (pls.length > 0 && !activePlaylistId) {
-          setActivePlaylistId(pls[0].originalId);
+          setActivePlaylistId(pls[0].id);
           // 自动加载第一个歌单的 tracks 作为初始 queue
           void loadPlaylistTracks(pls[0]);
         }
@@ -297,7 +297,7 @@ export function App() {
     async (playlist: Playlist) => {
       if (!api) return;
       try {
-        const r = await api.getPlaylistDetail(playlist.originalId);
+        const r = await api.getPlaylistDetail(playlist.id);
         if (r.ok && r.data) {
           const detail = r.data as BackendPlaylist;
           const tracks = (detail.tracks ?? []).map(normalizeTrack);
@@ -461,7 +461,7 @@ export function App() {
         });
       },
       loadPlaylist(playlist) {
-        setActivePlaylistId(playlist.originalId);
+        setActivePlaylistId(playlist.id);
         void loadPlaylistTracks(playlist);
       },
       toggleRepeat() {

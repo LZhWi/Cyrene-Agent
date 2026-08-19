@@ -21,11 +21,11 @@ export default function QueueList({
   return (
     <ul className="queue">
       {queue.map((track, i) => {
-        const active = track.originalId === currentId;
+        const active = track.encryptedId === currentId;
         const disabled = !track.visible;
         return (
           <li
-            key={`${track.originalId}-${i}`}
+            key={`${track.encryptedId}-${i}`}
             className={[
               "queue-item",
               active ? "is-active" : "",

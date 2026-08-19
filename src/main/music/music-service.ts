@@ -15,6 +15,7 @@ import { SelectionSetCache } from "./selection-set-cache";
 import { MpvController } from "./mpv-controller";
 import type { PlaybackDispatcher } from "./netease-openapi-provider";
 import { MusicInputError } from "./types";
+import { assertEncryptedId } from "./openapi-result-normalizer";
 import type { MusicPaths } from "./paths";
 import type {
   MusicSelectionSet,
@@ -405,7 +406,7 @@ export class MusicService {
   async getPlaylistDetail(playlistId: string): Promise<MusicPlaylistDetail> {
     await this.ensureReady();
     this.requireSignedIn();
-    if (!playlistId) throw new MusicInputError("E_INVALID_ID_FORMAT");
+    assertEncryptedId(playlistId);
     return this.provider.getPlaylistDetail(playlistId);
   }
 
