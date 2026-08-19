@@ -516,6 +516,7 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
     createReactChatWindow: () => manager.createReactChatWindow(),
     createSidebarWindow: () => manager.createSidebarWindow(),
     createSettingsWindow: () => manager.createSettingsWindow(),
+    createMusicPlayerWindow: () => manager.createMusicPlayerWindow(),
   });
   // 权限模块初始化：必须在 createWindow 之后但任意工具调用之前
   bootstrapPermission();

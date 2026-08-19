@@ -9,6 +9,7 @@ import {
   createStickerManagerWindow,
   createTasksWindow,
 } from "./create-aux-windows";
+import { createMusicPlayerWindow } from "./create-music-player-window";
 import { broadcastToAllWindows } from "./broadcast";
 import { PetWindowMoveController } from "../pet-window-movement";
 
@@ -27,6 +28,7 @@ export interface WindowManager {
   createTasksWindow(): void;
   createStickerManagerWindow(): void;
   createCallWindow(): void;
+  createMusicPlayerWindow(): void;
 
   showMainWindow(): void;
   hideMainWindow(): void;
@@ -118,6 +120,7 @@ export function createWindowManager(options: WindowManagerOptions): WindowManage
     createTasksWindow,
     createStickerManagerWindow,
     createCallWindow,
+    createMusicPlayerWindow,
 
     showMainWindow(): void {
       getUsableMainWindow()?.show();

@@ -92,9 +92,21 @@ describe("registerMusicIpcHandlers", () => {
       "music:present-tracks",
       "music:play-track",
       "music:play-playlist",
+      "music:get-my-playlists",
+      "music:get-playlist-detail",
       "music:detect-player",
       "music:get-openapi-config",
       "music:save-openapi-config",
+      "music:playback:play",
+      "music:playback:pause",
+      "music:playback:toggle",
+      "music:playback:seek",
+      "music:playback:volume",
+      "music:playback:stop",
+      "music:playback:next",
+      "music:playback:prev",
+      "music:get-lyrics",
+      "music:toggle-favorite",
     ];
     for (const ch of expected) {
       expect(handlerMap[ch]).toBeDefined();
@@ -106,7 +118,7 @@ describe("registerMusicIpcHandlers", () => {
     disposer();
     expect(removed).toContain("music:get-status");
     expect(removed).toContain("music:play-track");
-    expect(removed.length).toBe(22);
+    expect(removed.length).toBe(24);
   });
 
   it("MUSIC_SEARCH: keyword too long returns ok:false errorCode", async () => {

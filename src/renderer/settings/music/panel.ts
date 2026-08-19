@@ -15,6 +15,7 @@ import {
   musicLoginBtn, musicCancelBtn, musicDisconnectBtn,
   musicSearchBtn, musicSearchInput, musicSearchResults,
   musicAppIdInput, musicPrivateKeyInput, musicSaveConfigBtn,
+  musicOpenPlayerBtn,
 } from "./dom";
 import {
   deriveNeteaseViewState,
@@ -360,6 +361,21 @@ export async function loadMusicPanel(): Promise<void> {
   // OpenAPI 配置表单（appId + privateKey）
   void loadOpenapiConfigForm();
   musicSaveConfigBtn?.addEventListener("click", () => void saveOpenapiConfig());
+
+  // 打开独立播放器窗口
+  musicOpenPlayerBtn?.addEventListener("click", async () => {
+    const api = getMusicApi();
+    if (!api?.openPlayer) {
+      setMusicFeedback("err", "音乐 API 未就绪");
+      return;
+    }
+    try {
+      await api.openPlayer();
+      setMusicFeedback("ok", "播放器窗口已打开");
+    } catch (err) {
+      setMusicFeedback("err", "打开播放器失败：" + (err instanceof Error ? err.message : String(err)));
+    }
+  });
 }
 
 // ── OpenAPI 配置表单 ───────────────────────────────────────

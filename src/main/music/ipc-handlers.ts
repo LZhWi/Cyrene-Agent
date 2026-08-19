@@ -86,6 +86,17 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
   );
   channels.push(IPC.MUSIC_PLAY_PLAYLIST);
 
+  // 用户歌单（播放器窗口顶部 chips + loadPlaylist 用）
+  ipcMain.handle(IPC.MUSIC_GET_MY_PLAYLISTS, () =>
+    wrap(() => service.getMyPlaylists(), service),
+  );
+  channels.push(IPC.MUSIC_GET_MY_PLAYLISTS);
+
+  ipcMain.handle(IPC.MUSIC_GET_PLAYLIST_DETAIL, (_e, playlistId: string) =>
+    wrap(() => service.getPlaylistDetail(playlistId), service),
+  );
+  channels.push(IPC.MUSIC_GET_PLAYLIST_DETAIL);
+
   ipcMain.handle(IPC.MUSIC_DETECT_PLAYER, () =>
     wrap(async () => service.getPlayerState(), service),
   );

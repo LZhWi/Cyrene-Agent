@@ -26,7 +26,17 @@ export function exposeMusicApi() {
     playbackNext: () => ipcRenderer.invoke(IPC.MUSIC_PLAYBACK_NEXT),
     playbackPrev: () => ipcRenderer.invoke(IPC.MUSIC_PLAYBACK_PREV),
     getLyrics: (encryptedId: string) => ipcRenderer.invoke(IPC.MUSIC_GET_LYRICS, { encryptedId }),
-    toggleFavorite: (encryptedId: string) => ipcRenderer.invoke(IPC.MUSIC_TOGGLE_FAVORITE, encryptedId),
+    toggleFavorite: (encryptedId: string, favorite: boolean) =>
+      ipcRenderer.invoke(IPC.MUSIC_TOGGLE_FAVORITE, { encryptedId, favorite }),
+    // 用户歌单（播放器窗口顶部 chips + loadPlaylist）
+    getMyPlaylists: () => ipcRenderer.invoke(IPC.MUSIC_GET_MY_PLAYLISTS),
+    getPlaylistDetail: (playlistId: string) =>
+      ipcRenderer.invoke(IPC.MUSIC_GET_PLAYLIST_DETAIL, playlistId),
+    // 窗口控制（播放器窗口无框）
+    openPlayer: () => ipcRenderer.invoke(IPC.MUSIC_OPEN_PLAYER),
+    openSettings: (section?: string) => ipcRenderer.invoke(IPC.MUSIC_OPEN_SETTINGS, section),
+    minimizeWindow: () => ipcRenderer.send(IPC.MUSIC_PLAYER_MINIMIZE),
+    closeWindow: () => ipcRenderer.send(IPC.MUSIC_PLAYER_CLOSE),
     // ── 事件订阅 ──
     onStateChanged: (h: (s: unknown) => void) => {
       const listener = (_: unknown, s: unknown) => h(s);

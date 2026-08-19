@@ -382,6 +382,14 @@ export const IPC = {
   // UI direct connect (renderer → main, not via AI tool layer)
   MUSIC_GET_LYRICS: "music:get-lyrics",
   MUSIC_TOGGLE_FAVORITE: "music:toggle-favorite",
+  // 用户歌单（播放器窗口顶部 chips + loadPlaylist）
+  MUSIC_GET_MY_PLAYLISTS: "music:get-my-playlists",
+  MUSIC_GET_PLAYLIST_DETAIL: "music:get-playlist-detail",
+  // 打开/关闭播放器窗口（renderer → main）
+  MUSIC_OPEN_PLAYER: "music:open-player",
+  MUSIC_OPEN_SETTINGS: "music:open-settings",
+  MUSIC_PLAYER_CLOSE: "music:player:close",
+  MUSIC_PLAYER_MINIMIZE: "music:player:minimize",
 
   // screenshot
   SCREENSHOT_START: "screenshot:start",

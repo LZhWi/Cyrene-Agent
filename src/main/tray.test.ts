@@ -9,6 +9,7 @@ describe("buildTrayMenuTemplate", () => {
       createReactChatWindow,
       createSidebarWindow: vi.fn(),
       createSettingsWindow: vi.fn(),
+      createMusicPlayerWindow: vi.fn(),
     });
     const chatItem = template.find((item) => item.label === "打开聊天窗口");
 

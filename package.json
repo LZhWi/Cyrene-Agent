@@ -86,6 +86,7 @@
     "gray-matter": "^4.0.3",
     "js-yaml": "^5.0.0",
     "llamaindex": "^0.12.1",
+    "lucide-react": "^1.32.0",
     "marked": "^16.4.2",
     "mdast-util-to-string": "^4.0.0",
     "nodemailer": "^9.0.1",

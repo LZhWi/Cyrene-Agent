@@ -6,6 +6,7 @@ export interface CreateTrayDependencies {
   createReactChatWindow: () => void;
   createSidebarWindow: () => void;
   createSettingsWindow: () => void;
+  createMusicPlayerWindow: () => void;
 }
 
 export function buildTrayMenuTemplate(deps: CreateTrayDependencies): MenuItemConstructorOptions[] {
@@ -17,6 +18,10 @@ export function buildTrayMenuTemplate(deps: CreateTrayDependencies): MenuItemCon
     {
       label: "打开状态面板",
       click: () => { deps.createSidebarWindow(); },
+    },
+    {
+      label: "打开音乐播放器",
+      click: () => { deps.createMusicPlayerWindow(); },
     },
     {
       label: "设置",

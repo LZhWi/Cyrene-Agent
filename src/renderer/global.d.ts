@@ -23,4 +23,18 @@ declare module "*.md?raw" {
   export default content;
 }
 
+// Vite 静态资源导入：返回解析后的 URL 字符串
+declare module "*.png" {
+  const src: string;
+  export default src;
+}
+declare module "*.jpg" {
+  const src: string;
+  export default src;
+}
+declare module "*.svg" {
+  const src: string;
+  export default src;
+}
+
 export {};

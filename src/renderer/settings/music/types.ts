@@ -32,5 +32,6 @@ export interface MusicApi {
   playTrack: (trackId: string) => Promise<MusicIpcResult<{ state: "dispatched" | "web_fallback" | "client_unavailable" | "launch_failed" }>>;
   getOpenapiConfig: () => Promise<MusicIpcResult<{ appId: string; privateKey: string } | null>>;
   saveOpenapiConfig: (config: { appId: string; privateKey: string }) => Promise<MusicIpcResult<{ backend: string }>>;
+  openPlayer: () => Promise<unknown>;
   onStateChanged: (h: (s: MusicStatusSnapshot) => void) => (() => void) | void;
 }

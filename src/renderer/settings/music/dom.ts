@@ -26,3 +26,4 @@ export const musicOpenapiCard = document.getElementById("music-openapi-card");
 export const musicAppIdInput = document.getElementById("music-openapi-appid") as HTMLInputElement | null;
 export const musicPrivateKeyInput = document.getElementById("music-openapi-private-key") as HTMLTextAreaElement | null;
 export const musicSaveConfigBtn = document.getElementById("music-save-openapi-config") as HTMLButtonElement | null;
+export const musicOpenPlayerBtn = document.getElementById("music-open-player-btn") as HTMLButtonElement | null;

@@ -5,6 +5,7 @@ import {
   sidebarWindow,
   tasksWindow,
   settingsWindow,
+  musicPlayerWindow,
 } from "./window-state";
 import type { WindowManager } from "./window-manager";
 
@@ -79,6 +80,22 @@ export function registerWindowSystemIpc(deps: WindowSystemIpcDependencies): void
 
   ipcMain.on(IPC.SETTINGS_CLOSE, () => {
     settingsWindow?.close();
+  });
+
+  // 音乐播放器窗口控制
+  ipcMain.on(IPC.MUSIC_PLAYER_MINIMIZE, () => {
+    musicPlayerWindow?.minimize();
+  });
+  ipcMain.on(IPC.MUSIC_PLAYER_CLOSE, () => {
+    musicPlayerWindow?.close();
+  });
+  ipcMain.handle(IPC.MUSIC_OPEN_PLAYER, () => {
+    deps.windowManager?.createMusicPlayerWindow();
+    return true;
+  });
+  ipcMain.handle(IPC.MUSIC_OPEN_SETTINGS, (_event, section?: string) => {
+    deps.windowManager?.createSettingsWindow(section);
+    return true;
   });
 
   ipcMain.on(IPC.SETTINGS_OPEN_CHROME_GPU, async () => {
