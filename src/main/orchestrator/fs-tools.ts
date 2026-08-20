@@ -360,7 +360,7 @@ function resolveWriteFilePolicy(args: Record<string, unknown>): VerificationPoli
   // 配置文件名 -> code（精确匹配）
   const codeConfigFiles = new Set([
     "package.json", "tsconfig.json", "tsconfig.main.json", "tsconfig.preload.json",
-    "tsconfig.skills.json", "vite.config.ts", "vite.config.js", "vitest.config.ts",
+    "vite.config.ts", "vite.config.js", "vitest.config.ts",
     ".eslintrc", ".eslintrc.js", ".eslintrc.json", ".prettierrc",
     "babel.config.js", "babel.config.json", "webpack.config.js",
   ]);
