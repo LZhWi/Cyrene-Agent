@@ -540,8 +540,6 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
       if (!mainWindow.isDestroyed() && !mainWindow.isVisible()) {
         mainWindow.show();
       }
-      // 同时通知渲染进程隐藏其内部的启动加载遮罩（兜底/兼容）。
-      manager.sendToMainWindow(IPC.STARTUP_READY);
       markStartupPhaseReady();
     }, SPLASH_MIN_MS);
   };

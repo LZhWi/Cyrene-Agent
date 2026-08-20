@@ -21,8 +21,6 @@ export const IPC = {
   WINDOW_GET_CURSOR_POSITION: "window:get-cursor-position",
   PET_VISIBILITY_CHANGED: "pet:visibility-changed",
   APP_QUIT: "app:quit",
-  // main → pet window：启动流程全部完成，可以隐藏启动加载画面
-  STARTUP_READY: "app:startup-ready",
 
   // chat window
   CHAT_MINIMIZE: "chat:minimize",
