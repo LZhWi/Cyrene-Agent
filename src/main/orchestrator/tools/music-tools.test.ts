@@ -76,6 +76,10 @@ describe("music Agent tools (M4 — CITA removed)", () => {
     });
     // music_present_tracks is deleted
     expect(tools.find((t) => t.id === "music_present_tracks")).toBeUndefined();
+    // 全部工具对 work + learn 模式开放；chat 模式系统级不暴露任何工具
+    for (const t of tools) {
+      expect(t.modes).toEqual(["work", "learn"]);
+    }
   });
 
   it("music_get_daily_recommendations returns tracks with encryptedId", async () => {
