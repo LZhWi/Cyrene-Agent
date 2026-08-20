@@ -8,7 +8,7 @@ import { getSettingsPath } from "../settings-store";
 import type { VisionConfig } from "../orchestrator/vision-captioner";
 import { migrateLegacyMinimaxDefaults } from "../orchestrator/vendors/minimax-defaults";
 import { getCapabilityOrOpenAI } from "../orchestrator/vendors/capabilities";
-import { addModelProfile, resolveDefaultModelProfile, type SavedModelProfile } from "./model-catalog";
+import { addModelProfile, resolveDefaultModelProfile, updateModelProfile, type SavedModelProfile } from "./model-catalog";
 
 /**
  * 统一模型配置入口：所有模块（包括 Code 模式）必须通过此函数读取。
@@ -44,6 +44,16 @@ export interface ProviderProfile {
    * 实际请求时由 resolveEffectiveReasoning 决定 effective config。
    */
   reasoning?: ReasoningPreference;
+  /**
+   * 上下文窗口（Token）。档案级字段；未定义 = 回退顶层 ModelSettings.contextWindowTokens。
+   * 老档案（迁移前）不带此字段，行为与旧版一致。
+   */
+  contextWindowTokens?: number;
+  /**
+   * 主模型是否多模态。档案级字段；未定义 = 回退顶层 ModelSettings.multimodal。
+   * true 时图片直发主模型（direct），false 走独立视觉模型转述（caption）。
+   */
+  multimodal?: boolean;
 }
 
 /**
@@ -197,6 +207,7 @@ function normalizeProviderProfile(
 ): ProviderProfile {
   const explicitTransport: ProviderProfile["explicitTransport"] =
     migrateLegacyExplicitTransport(input, provider);
+  const rawContextWindow = (input as { contextWindowTokens?: unknown })?.contextWindowTokens;
   return {
     baseUrl: typeof input?.baseUrl === "string" ? input.baseUrl.trim() : "",
     model: typeof input?.model === "string" ? input.model.trim() : "",
@@ -204,6 +215,14 @@ function normalizeProviderProfile(
     displayName: typeof input?.displayName === "string" && input?.displayName.trim() ? input.displayName.trim() : undefined,
     explicitTransport,
     reasoning: normalizeReasoningPreference((input as { reasoning?: unknown })?.reasoning),
+    // 非法值 → undefined（回退全局）；下限 4096，与 UI 输入框 min 一致
+    contextWindowTokens: typeof rawContextWindow === "number" && Number.isFinite(rawContextWindow) && rawContextWindow >= 4096
+      ? Math.round(rawContextWindow)
+      : undefined,
+    // 仅接受显式 true/false；undefined/其他值 → undefined（回退全局）
+    multimodal: (input as { multimodal?: unknown })?.multimodal === true || (input as { multimodal?: unknown })?.multimodal === false
+      ? (input as { multimodal: boolean }).multimodal
+      : undefined,
   };
 }
 
@@ -264,12 +283,31 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
     multimodal = true;
   }
 
-  const modelProfiles = Array.isArray(input?.modelProfiles)
-    ? input.modelProfiles.filter((item): item is SavedModelProfile => Boolean(item && typeof item === "object" && typeof item.id === "string" && typeof item.provider === "string"))
+  const hasPersistedProfiles = Array.isArray(input?.modelProfiles);
+  const modelProfiles: SavedModelProfile[] = hasPersistedProfiles
+    ? input!.modelProfiles!.filter((item): item is SavedModelProfile => Boolean(item && typeof item === "object" && typeof item.id === "string" && typeof item.provider === "string"))
       .map((item) => ({ ...normalizeProviderProfile(item, item.provider), id: item.id, provider: item.provider }))
     : [];
-  if (modelProfiles.length === 0 && profile.apiKey && profile.model) {
-    modelProfiles.push({ ...profile, id: `legacy-${provider}-${profile.model}`.replace(/[^a-zA-Z0-9_-]/g, "_"), provider });
+
+  // 迁移补全：仅当 modelProfiles 字段从未持久化过（老版本配置首次升级）时执行。
+  // 之后 modelProfiles 永远是数组（可为空），不再从 perProvider 补——
+  // 否则用户删除档案后重启，perProvider 残留数据会把档案"复活"。
+  // 迁移档案不写 contextWindowTokens/multimodal → 运行时回退全局值，行为与迁移前一致；
+  // 用户在 UI 里编辑保存后才落档案级值。id 人类可读，不用 hash/时间戳。
+  if (!hasPersistedProfiles) {
+    for (const [providerName, providerProfile] of Object.entries(perProvider)) {
+      if (!providerProfile.apiKey || !providerProfile.model) continue;
+      const seq = modelProfiles.filter((item) => item.provider === providerName).length + 1;
+      modelProfiles.push({
+        ...providerProfile,
+        id: `profile-${providerName}-${seq}`.replace(/[^a-zA-Z0-9_-]/g, "_"),
+        provider: providerName,
+      });
+    }
+    // 兜底：perProvider 全空但顶层镜像有效（极老版本配置）时至少保住当前这一份
+    if (modelProfiles.length === 0 && profile.apiKey && profile.model) {
+      modelProfiles.push({ ...profile, id: `legacy-${provider}-${profile.model}`.replace(/[^a-zA-Z0-9_-]/g, "_"), provider });
+    }
   }
 
   return {
@@ -336,12 +374,26 @@ export function resolveModelSettingsProfile(settings: ModelSettings, id?: string
     apiKey: profile.apiKey,
     explicitTransport: profile.explicitTransport,
     reasoning: profile.reasoning,
+    // 档案级字段覆盖镜像；未定义时回退全局值（老档案 = 现行为）
+    contextWindowTokens: profile.contextWindowTokens ?? settings.contextWindowTokens,
+    multimodal: profile.multimodal ?? settings.multimodal,
   };
 }
 
 export function saveModelProfile(input: Omit<SavedModelProfile, "id"> & { id?: string }): { settings: ModelSettings; added: boolean } {
   const existing = loadModelSettings();
   const profile: SavedModelProfile = { ...normalizeProviderProfile(input, input.provider), id: input.id ?? randomUUID(), provider: input.provider };
+
+  // 带 id 且档案存在 → 更新（字段全量覆盖，表单即全量，不走去重）
+  if (input.id) {
+    const updated = updateModelProfile(listSavedModelProfiles(existing), profile);
+    if (updated) {
+      const settings = saveModelSettings({ modelProfiles: updated });
+      return { settings, added: true };
+    }
+    // id 不存在（档案已被删除等）→ 落到新增路径，用现有 id 保存
+  }
+
   const result = addModelProfile(listSavedModelProfiles(existing), profile);
   if (!result.added) return { settings: existing, added: false };
   const settings = saveModelSettings({ modelProfiles: result.profiles, defaultModelProfileId: existing.defaultModelProfileId ?? profile.id });

@@ -40,8 +40,13 @@ describe("custom endpoint API settings UI", () => {
     expect(mcpSource).toContain("Claude 配置项比其他厂商少");
   });
 
-  it("persists the inactive custom profile together with the active one", () => {
-    expect(source).toContain("perProvider: { ...providerProfileCache }");
+  it("persists profiles through the model catalog instead of perProvider cache", () => {
+    // 档案化改造后：表单绑定档案（editingProfileId），保存走 saveModelProfile；
+    // perProvider 缓存体系（providerProfileCache / captureActiveProviderProfile）已退役。
+    expect(source).toContain("id: apiState.editingProfileId");
+    expect(source).toContain("saveModelProfile?.(profile)");
+    expect(source).not.toContain("providerProfileCache");
+    expect(source).not.toContain("captureActiveProviderProfile");
   });
 
   it("reads the custom endpoint button mode directly from its dataset", () => {
@@ -54,7 +59,7 @@ describe("custom endpoint API settings UI", () => {
     expect(presetsSource).toContain('anthropicBaseUrl: "https://api.deepseek.com/anthropic"');
     expect(presetsSource).toContain('anthropicBaseUrl: "https://open.bigmodel.cn/api/anthropic"');
     expect(presetsSource).toContain('anthropicBaseUrl: "https://api.xiaomimimo.com/anthropic"');
-    expect(source).toContain("该厂商的 A口地址未内置");
+    expect(source).toContain("该厂商的 Anthropic 兼容地址未内置");
   });
 
   it("top-aligns fields with different amounts of helper text", () => {

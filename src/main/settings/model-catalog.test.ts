@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { addModelProfile, resolveDefaultModelProfile } from "./model-catalog";
-import { normalizeModelSettings, getDefaultModelProfile, getPublicModelConfig } from "./model-settings";
+import { addModelProfile, updateModelProfile, resolveDefaultModelProfile } from "./model-catalog";
+import { normalizeModelSettings, getDefaultModelProfile, getPublicModelConfig, resolveModelSettingsProfile } from "./model-settings";
 
 describe("model catalog", () => {
   it("keeps the first saved model as the default and rejects a duplicate key plus model", () => {
@@ -25,6 +25,51 @@ describe("model catalog", () => {
 
     expect(duplicate.added).toBe(false);
     expect(duplicate.profiles).toHaveLength(1);
+  });
+
+  it("allows the same key and model on a different baseUrl (官方 API + 中转站共存)", () => {
+    const official = addModelProfile([], {
+      id: "glm-official",
+      provider: "GLM（智谱）",
+      baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+      apiKey: "sk-same",
+      model: "glm-4.7",
+    });
+    const relay = addModelProfile(official.profiles, {
+      id: "glm-relay",
+      provider: "GLM（智谱）",
+      baseUrl: "https://relay.example.com/v1",
+      apiKey: "sk-same",
+      model: "glm-4.7",
+    });
+
+    expect(relay.added).toBe(true);
+    expect(relay.profiles).toHaveLength(2);
+  });
+
+  it("updates a profile in place by id without dedup interference", () => {
+    const base = [{
+      id: "glm-1",
+      provider: "GLM（智谱）",
+      baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+      apiKey: "sk-old",
+      model: "glm-4.7",
+    }];
+    const updated = updateModelProfile(base, {
+      id: "glm-1",
+      provider: "GLM（智谱）",
+      baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+      apiKey: "sk-new",
+      model: "glm-4.7",
+      displayName: "GLM 官方",
+      contextWindowTokens: 128000,
+      multimodal: true,
+    });
+
+    expect(updated).toHaveLength(1);
+    expect(updated?.[0]).toMatchObject({ apiKey: "sk-new", displayName: "GLM 官方", contextWindowTokens: 128000, multimodal: true });
+
+    expect(updateModelProfile(base, { id: "missing", provider: "GLM（智谱）", baseUrl: "", apiKey: "", model: "" })).toBeNull();
   });
 
   it("marks the public status connected when a saved model exists even if the legacy mirror is empty", () => {
@@ -56,5 +101,81 @@ describe("model catalog", () => {
       provider: "ChatGPT（OpenAI）",
       model: "gpt-5.6",
     });
+  });
+
+  it("migrates every configured provider into profiles with readable ids, idempotently", () => {
+    const legacy = {
+      provider: "GLM（智谱）",
+      perProvider: {
+        "GLM（智谱）": { baseUrl: "https://open.bigmodel.cn/api/paas/v4", apiKey: "sk-glm", model: "glm-4.7" },
+        "DeepSeek（深度求索）": { baseUrl: "https://api.deepseek.com", apiKey: "sk-ds", model: "deepseek-chat" },
+        "Kimi（月之暗面）": { baseUrl: "https://api.moonshot.cn/v1", apiKey: "", model: "kimi-k2" }, // 无 Key 跳过
+      },
+    };
+
+    const first = normalizeModelSettings(legacy);
+    expect(first.modelProfiles).toHaveLength(2);
+    expect(first.modelProfiles?.map((p) => p.id)).toEqual(["profile-GLM____-1", "profile-DeepSeek______-1"]);
+
+    // 幂等：normalize 已持久化的结果不会重复建档
+    const second = normalizeModelSettings(first);
+    expect(second.modelProfiles).toHaveLength(2);
+  });
+
+  it("does not resurrect profiles from perProvider after the user cleared the catalog", () => {
+    const legacy = normalizeModelSettings({
+      provider: "GLM（智谱）",
+      perProvider: {
+        "GLM（智谱）": { baseUrl: "https://open.bigmodel.cn/api/paas/v4", apiKey: "sk-glm", model: "glm-4.7" },
+      },
+    });
+    expect(legacy.modelProfiles).toHaveLength(1);
+
+    // 用户删光档案（modelProfiles: []）→ 重启后不得从 perProvider 复活
+    const cleared = normalizeModelSettings({ ...legacy, modelProfiles: [] });
+    expect(cleared.modelProfiles).toHaveLength(0);
+  });
+
+  it("resolves profile-scoped context window and multimodal with global fallback", () => {
+    const settings = normalizeModelSettings({
+      provider: "GLM（智谱）",
+      contextWindowTokens: 256000,
+      multimodal: false,
+      modelProfiles: [
+        { id: "p-full", provider: "GLM（智谱）", baseUrl: "https://a.com", apiKey: "k", model: "m", contextWindowTokens: 128000, multimodal: true },
+        { id: "p-legacy", provider: "GLM（智谱）", baseUrl: "https://b.com", apiKey: "k2", model: "m2" },
+      ],
+    });
+
+    const full = resolveModelSettingsProfile(settings, "p-full");
+    expect(full.contextWindowTokens).toBe(128000);
+    expect(full.multimodal).toBe(true);
+
+    // 老档案无档案级字段 → 回退全局值
+    const legacyProfile = resolveModelSettingsProfile(settings, "p-legacy");
+    expect(legacyProfile.contextWindowTokens).toBe(256000);
+    expect(legacyProfile.multimodal).toBe(false);
+
+    // 未绑定档案 → 原样返回
+    expect(resolveModelSettingsProfile(settings, undefined).contextWindowTokens).toBe(256000);
+  });
+
+  it("cleans invalid profile-scoped fields back to undefined", () => {
+    const settings = normalizeModelSettings({
+      provider: "GLM（智谱）",
+      modelProfiles: [
+        {
+          id: "p-bad",
+          provider: "GLM（智谱）",
+          baseUrl: "https://a.com",
+          apiKey: "k",
+          model: "m",
+          contextWindowTokens: 100, // 低于 4096 下限 → 清洗为 undefined
+          multimodal: "yes", // 非布尔 → 清洗为 undefined
+        } as never,
+      ],
+    });
+    expect(settings.modelProfiles?.[0].contextWindowTokens).toBeUndefined();
+    expect(settings.modelProfiles?.[0].multimodal).toBeUndefined();
   });
 });

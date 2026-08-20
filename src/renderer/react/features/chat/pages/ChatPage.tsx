@@ -1802,7 +1802,8 @@ export function ChatPage() {
 
     let strategy: { mode: "direct" | "caption" } = { mode: "caption" };
     try {
-      strategy = await window.chat.getImageSendStrategy();
+      // 传 sessionId：会话绑定的档案若声明 multimodal 则按档案裁决，否则回退全局
+      strategy = await window.chat.getImageSendStrategy(sessionId);
     } catch (error) {
       console.warn("[Cyrene React] 获取图片发送策略失败，回退视觉描述:", error);
     }

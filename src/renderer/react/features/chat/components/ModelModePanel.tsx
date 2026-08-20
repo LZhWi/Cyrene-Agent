@@ -7,6 +7,8 @@ interface ModelProfile {
   provider: string;
   displayName?: string;
   model: string;
+  contextWindowTokens?: number;
+  multimodal?: boolean;
 }
 
 interface ModelCatalogApi {
@@ -175,6 +177,10 @@ export function ModelModePanel() {
                     <div className="model-card__name">
                       {profile.displayName || profile.provider}
                       {isDefault && <span className="model-card__badge">默认</span>}
+                      {profile.multimodal === true && <span className="model-card__badge">多模态</span>}
+                      {profile.contextWindowTokens ? (
+                        <span className="model-card__badge">{Math.round(profile.contextWindowTokens / 1000)}k</span>
+                      ) : null}
                     </div>
                     <div className="model-card__meta">
                       <span className="model-card__provider">{getProviderLabel(profile.provider)}</span>

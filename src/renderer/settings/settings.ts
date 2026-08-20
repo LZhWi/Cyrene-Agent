@@ -65,8 +65,8 @@ import { tokensState } from "./tokens/state";
 import { modalState } from "./shared/modal-state";
 import { formatDateTime, escapeHtml } from "./shared/format";
 import { parsePositiveIntOrThrow, parseCommandLine } from "./shared/parse";
-import { apiState } from "./api/state";
-import { apiForm, apiRuntimeForm, presetCards, presetWebsiteLink, displayNameInput, baseUrlInput, baseUrlResetBtn, modelInput, modelInputSuggestions, contextWindowInput, apiKeyInput, apiKeyLabel, apiKeyHint, testConnectionBtn, transportSelect, transportHint, endpointPreview, customEndpointControls, customEndpointOverrides, customEndpointSummary, customEndpointGuideBtn, workFlowAdaptBtn, apiNoteText, multimodalToggle, embeddingDimensionsInput, toggleEnableThinking, toggleDisableThinking, toggleDisableMaxToken } from "./api/dom";
+import { apiState, type SavedProfileLite } from "./api/state";
+import { apiForm, apiRuntimeForm, presetCards, profileList, profileListCount, profileEditorTitle, deleteProfileBtn, presetWebsiteLink, displayNameInput, baseUrlInput, baseUrlResetBtn, modelInput, modelInputSuggestions, contextWindowInput, apiKeyInput, apiKeyLabel, apiKeyHint, testConnectionBtn, transportSelect, transportHint, endpointPreview, customEndpointControls, customEndpointOverrides, customEndpointSummary, customEndpointGuideBtn, workFlowAdaptBtn, apiNoteText, multimodalToggle, embeddingDimensionsInput, toggleEnableThinking, toggleDisableThinking, toggleDisableMaxToken } from "./api/dom";
 import { visionBaseUrlInput, visionApiKeyInput, visionModelInput, visionFieldsWrap, testVisionBtn, visionTestStatus } from "./vision/dom";
 import { appearanceForm, appearanceSaveStatus, runtimeSyncSelect, runtimeSyncNote, windowCornerRadiusInput, windowCornerRadiusVal, petAlwaysOnTopInput, petVisibleInput, petZoomInput, petZoomVal, chatLineHeightInput, chatLineHeightVal, assistantBubbleEnabledInput, chatParaSpacingInput, chatParaSpacingVal, launchAtLoginInput, uiFontCurrent, uiFontImportButton, uiFontResetButton, uiIconSelect, screenshotHotkeyInput, openChromeGpu, disableGpuInput, sidebarVisibleInput, tasksVisibleInput } from "./appearance/dom";
 import { generalForm, generalSaveStatus, languageSelect, defaultChatModeSelect, segmentedOutputSelect, mobileMessageSegmentationSelect, proactiveChatSelect, proactiveDeliveryRow, proactiveDeliverySelect, chatSocialContextEnabledInput, citaEnabledInput, citaEngineSelect, clearChatHistoryBtn, customStyleSamplingBtn, customStylePromptBtn } from "./general/dom";
@@ -264,9 +264,9 @@ document.querySelectorAll<HTMLImageElement>("[data-music-logo]").forEach((image)
 
 // Embedding 维度（可选，仅 cloud 模式）
 
-// 渲染端内存缓存：保存每个厂商上一次填写的 baseUrl / model / apiKey
-// 切厂商时从这里读，保存时同步进去；持久化由 main 进程的 saveModelSettings 负责（perProvider 字段）。
-const providerProfileCache: Record<string, ProviderProfile> = {};
+// 档案化改造后，perProvider 缓存体系退役：
+// 表单绑定「档案」（apiState.editingProfileId）而不是「当前厂商」，
+// 同厂商建多套配置（官方 API + 中转站）互不覆盖。持久化走 modelProfiles。
 
 // 当前激活的厂商：每次 applyPreset 后更新；用于"切到下一家厂商前先把当前那家的输入框值缓存住"
 
@@ -277,7 +277,7 @@ const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }>
   chat: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M33 38H22V30H36V22H44V38H39L36 41L33 38Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 6H36V30H17L13 34L9 30H4V6Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 18H20" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M26 18H27" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><path d="M12 18H13" stroke="currentColor" stroke-width="4" stroke-linecap="round"/></svg>`, title: "聊天", hint: "管理聊天窗口与会话" },
   user: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M44 8H4V38H19L24 43L29 38H44V8Z" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="24" cy="19" r="5" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M33 32C33 27.5817 28.9706 24 24 24C19.0294 24 15 27.5817 15 32" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "用户信息", hint: "编辑你的个人资料" },
   tasks: { emoji: `<svg style="vertical-align:-3px" width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M23.9998 44.3332C34.1251 44.3332 42.3332 36.1251 42.3332 25.9999C42.3332 15.8747 34.1251 7.66656 23.9998 7.66656C13.8746 7.66656 5.6665 15.8747 5.6665 25.9999C5.6665 36.1251 13.8746 44.3332 23.9998 44.3332Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M23.7594 15.3536L23.7582 26.3624L31.5305 34.1347" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M4 9.00001L11 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M44 9.00001L37 4.00001" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg>`, title: "定时任务", hint: "管理定时提醒与日程" },
-  plugins: { emoji: "🔌", title: "MCP", hint: "扩展功能与第三方集成" },
+  plugins: { emoji: "🔌", title: "工具配置", hint: "管理昔涟可调用的工具能力" },
   preferences: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>偏好设置</title><path d="M12 35.0137H9H4V8.01273C4 6.90868 4.89543 6.01367 6 6.01367H42C43.1046 6.01367 44 6.90868 44 8.01273V35.0137H36" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M24 32L14 42H34L24 32Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "偏好设置", hint: "设置聊天窗口和输出行为的默认偏好" },
   appearance: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>外观设置</title><path d="M24 44C29.9601 44 26.3359 35.136 30 31C33.1264 27.4709 44 29.0856 44 24C44 12.9543 35.0457 4 24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M28 17C29.6569 17 31 15.6569 31 14C31 12.3431 29.6569 11 28 11C26.3431 11 25 12.3431 25 14C25 15.6569 26.3431 17 28 17Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M16 21C17.6569 21 19 19.6569 19 18C19 16.3431 17.6569 15 16 15C14.3431 15 13 16.3431 13 18C13 19.6569 14.3431 21 16 21Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M17 34C18.6569 34 20 32.6569 20 31C20 29.3431 18.6569 28 17 28C15.3431 28 14 29.3431 14 31C14 32.6569 15.3431 34 17 34Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "外观设置", hint: "调整窗口布局、界面主题与昔涟桌宠" },
   general: { emoji: `<svg width="24" height="24" viewBox="0 0 48 48" fill="none" aria-hidden="true" style="vertical-align:-3px"><title>通用设置</title><path d="M18.2838 43.1713C14.9327 42.1736 11.9498 40.3213 9.58787 37.867C10.469 36.8227 11 35.4734 11 34.0001C11 30.6864 8.31371 28.0001 5 28.0001C4.79955 28.0001 4.60139 28.01 4.40599 28.0292C4.13979 26.7277 4 25.3803 4 24.0001C4 21.9095 4.32077 19.8938 4.91579 17.9995C4.94381 17.9999 4.97188 18.0001 5 18.0001C8.31371 18.0001 11 15.3138 11 12.0001C11 11.0488 10.7786 10.1493 10.3846 9.35011C12.6975 7.1995 15.5205 5.59002 18.6521 4.72314C19.6444 6.66819 21.6667 8.00013 24 8.00013C26.3333 8.00013 28.3556 6.66819 29.3479 4.72314C32.4795 5.59002 35.3025 7.1995 37.6154 9.35011C37.2214 10.1493 37 11.0488 37 12.0001C37 15.3138 39.6863 18.0001 43 18.0001C43.0281 18.0001 43.0562 17.9999 43.0842 17.9995C43.6792 19.8938 44 21.9095 44 24.0001C44 25.3803 43.8602 26.7277 43.594 28.0292C43.3986 28.01 43.2005 28.0001 43 28.0001C39.6863 28.0001 37 30.6864 37 34.0001C37 35.4734 37.531 36.8227 38.4121 37.867C36.0502 40.3213 33.0673 42.1736 29.7162 43.1713C28.9428 40.752 26.676 39.0001 24 39.0001C21.324 39.0001 19.0572 40.752 18.2838 43.1713Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M24 31C27.866 31 31 27.866 31 24C31 20.134 27.866 17 24 17C20.134 17 17 20.134 17 24C17 27.866 20.134 31 24 31Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/></svg>`, title: "通用设置", hint: "管理窗口、音频和系统行为" },
@@ -611,22 +611,127 @@ function fillModelOptions(preset: ModelPreset, preferredModel?: string): void {
   modelInput.value = preferredModel ?? fallback;
 }
 
-/**
- * 把"当前输入框里的值"快照到内存缓存里（perProvider）。
- * 切厂商前调用一次，避免覆盖丢失。
- */
-function captureActiveProviderProfile(): void {
-  if (!apiState.activeProvider) return;
-  const cached = providerProfileCache[apiState.activeProvider];
-  // reasoning 仍由 renderReasoningControls 写入 cache；这里只保留它（不动 mode/effort）
-  providerProfileCache[apiState.activeProvider] = {
-    baseUrl: baseUrlInput.value.trim(),
-    model: getCurrentModelValue().trim(),
-    apiKey: apiKeyInput.value.trim(),
-    displayName: displayNameInput.value.trim(),
-    explicitTransport: transportSelect.value as ProviderProfile["explicitTransport"],
-    reasoning: cached?.reasoning,
+// ── 档案编辑（表单绑定档案，不再绑定"当前厂商"） ────────────────
+
+/** 视觉三框是全局配置：切换档案/预设时先快照再恢复，避免被 preset 默认值覆盖。 */
+function snapshotVisionInputs(): { baseUrl: string; apiKey: string; model: string } {
+  return {
+    baseUrl: visionBaseUrlInput.value,
+    apiKey: visionApiKeyInput.value,
+    model: visionModelInput.value,
   };
+}
+
+function restoreVisionInputs(snapshot: { baseUrl: string; apiKey: string; model: string }): void {
+  visionBaseUrlInput.value = snapshot.baseUrl;
+  visionApiKeyInput.value = snapshot.apiKey;
+  visionModelInput.value = snapshot.model;
+}
+
+/** 档案列表渲染：卡片 = 昵称 + 厂商 + 模型 + 徽标（默认/上下文/多模态）。 */
+function renderProfileList(): void {
+  if (!profileList) return;
+  profileList.replaceChildren();
+  const count = apiState.profiles.length;
+  profileListCount.textContent = count ? `${count} 个档案` : "";
+
+  if (count === 0) {
+    const empty = document.createElement("div");
+    empty.className = "profile-list__empty";
+    empty.textContent = "还没有档案。选下方厂商预设新建一个，保存后会出现在这里。";
+    profileList.appendChild(empty);
+    return;
+  }
+
+  for (const profile of apiState.profiles) {
+    const isDefault = profile.id === apiState.defaultProfileId;
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "profile-card" + (profile.id === apiState.editingProfileId ? " is-active" : "");
+    card.dataset.profileId = profile.id;
+
+    const name = document.createElement("span");
+    name.className = "profile-card__name";
+    name.textContent = profile.displayName || profile.provider;
+    card.appendChild(name);
+
+    const meta = document.createElement("span");
+    meta.className = "profile-card__meta";
+    const metaParts: string[] = [findPreset(profile.provider).shortName, profile.model];
+    if (profile.contextWindowTokens) metaParts.push(`${Math.round(profile.contextWindowTokens / 1000)}k`);
+    meta.textContent = metaParts.join(" · ");
+    card.appendChild(meta);
+
+    const badges = document.createElement("span");
+    badges.className = "profile-card__badges";
+    if (isDefault) {
+      const badge = document.createElement("span");
+      badge.className = "profile-card__badge";
+      badge.textContent = "默认";
+      badges.appendChild(badge);
+    }
+    if (profile.multimodal === true) {
+      const badge = document.createElement("span");
+      badge.className = "profile-card__badge profile-card__badge--vision";
+      badge.textContent = "多模态";
+      badges.appendChild(badge);
+    }
+    card.appendChild(badges);
+
+    profileList.appendChild(card);
+  }
+}
+
+/** 从 main 拉取档案列表并渲染。 */
+async function reloadProfiles(): Promise<void> {
+  const catalog = await window.settings?.listModelProfiles?.();
+  if (!catalog) return;
+  apiState.profiles = catalog.profiles as SavedProfileLite[];
+  apiState.defaultProfileId = catalog.defaultModelProfileId;
+  renderProfileList();
+}
+
+/** 编辑状态 UI：标题 + 删除按钮可见性。 */
+function applyEditingStateUI(): void {
+  profileEditorTitle.textContent = apiState.editingProfileId ? "编辑档案" : "新建档案";
+  deleteProfileBtn.hidden = !apiState.editingProfileId;
+}
+
+/** 载入档案到编辑表单。 */
+function editProfile(profile: SavedProfileLite, globalMultimodal: boolean): void {
+  const visionSnapshot = snapshotVisionInputs();
+  apiState.editingProfileId = profile.id;
+  apiState.editingReasoning = profile.reasoning;
+  applyPreset(
+    profile.provider,
+    profile.model,
+    profile.apiKey,
+    profile.baseUrl,
+    profile.displayName,
+    profile.explicitTransport as ProviderProfile["explicitTransport"],
+  );
+  restoreVisionInputs(visionSnapshot);
+  // 档案级字段：未定义 = 老档案，回退全局值显示
+  contextWindowInput.value = profile.contextWindowTokens ? String(profile.contextWindowTokens) : "";
+  multimodalToggle.checked = profile.multimodal ?? globalMultimodal;
+  applyMultimodalUI();
+  applyEditingStateUI();
+  renderProfileList();
+  setSaveStatus(`正在编辑「${profile.displayName || profile.model}」`);
+}
+
+/** 开始新建草稿：preset 预填 URL/模型/协议，清空 Key 与昵称。 */
+function startNewDraft(providerName: string): void {
+  const visionSnapshot = snapshotVisionInputs();
+  apiState.editingProfileId = undefined;
+  apiState.editingReasoning = undefined;
+  applyPreset(providerName);
+  restoreVisionInputs(visionSnapshot);
+  contextWindowInput.value = "";
+  multimodalToggle.checked = false;
+  applyMultimodalUI();
+  applyEditingStateUI();
+  renderProfileList();
 }
 
 /** 模式按钮已删除——模型名永远从 input 读取。保留函数名供旧调用点用，语义不变。 */
@@ -723,7 +828,7 @@ function applyCustomEndpointUI(preset: ModelPreset): void {
   apiKeyInput.placeholder = presentation.apiKeyOptional ? "无需鉴权时留空" : "sk-...";
   baseUrlInput.placeholder = presentation.baseUrlPlaceholder;
   modelInput.placeholder = "填写服务实际提供的模型 ID";
-  transportHint.textContent = "请按自定义服务实际提供的 O 口或 A 口选择；程序不会自动探测。";
+  transportHint.textContent = "请按自定义服务实际提供的接口类型选择；程序不会自动探测。";
   baseUrlResetBtn.title = "清空自定义 Base URL";
   apiNoteText.textContent = "自定义端点按保守兼容模式运行。保存后请先测试连接；连接成功不代表结构化输出、工具调用或思考模式一定可用。";
 }
@@ -813,23 +918,6 @@ async function loadConfig(): Promise<void> {
     fillPresetOptions();
     const cfg = await window.settings!.getConfig();
     // 模式按钮已删除——mode 字段不再用 UI 控制，直接忽略 cfg.mode
-    // 把 main 进程返回的 perProvider 灌进渲染端内存缓存，切厂商时用到
-    if (cfg.perProvider && typeof cfg.perProvider === "object") {
-      for (const [key, value] of Object.entries(cfg.perProvider)) {
-        if (value && typeof value === "object") {
-          providerProfileCache[key] = {
-            baseUrl: typeof value.baseUrl === "string" ? value.baseUrl : "",
-            model: typeof value.model === "string" ? value.model : "",
-            apiKey: typeof value.apiKey === "string" ? value.apiKey : "",
-            displayName: typeof (value as { displayName?: unknown }).displayName === "string"
-              ? (value as { displayName: string }).displayName
-              : undefined,
-            explicitTransport: (value as { explicitTransport?: ApiTransport }).explicitTransport,
-            reasoning: (value as { reasoning?: ReasoningPreference }).reasoning,
-          };
-        }
-      }
-    }
     const vision = cfg.vision;
     applyPreset(
       cfg.provider,
@@ -859,9 +947,17 @@ async function loadConfig(): Promise<void> {
     toggleEnableThinking.checked = cfg.thinkingOverride === 1;
     toggleDisableThinking.checked = cfg.thinkingOverride === -1;
     toggleDisableMaxToken.checked = !!cfg.disableMaxToken;
-    contextWindowInput.value = String(cfg.contextWindowTokens ?? 256000);
 
-    // 视觉模型配置已并入 applyPreset（preferredVision 参数）。
+    // 档案列表加载 + 默认进入默认档案的编辑态；
+    // 无档案时保持上方 applyPreset 的顶层镜像作为"新建草稿"起点。
+    await reloadProfiles();
+    const defaultProfile = apiState.profiles.find((p) => p.id === apiState.defaultProfileId) ?? apiState.profiles[0];
+    if (defaultProfile) {
+      editProfile(defaultProfile, cfg.multimodal);
+    } else {
+      contextWindowInput.value = String(cfg.contextWindowTokens ?? 256000);
+      applyEditingStateUI();
+    }
 
     setSaveStatus("等待保存");
     setCyreneSaveStatus("等待保存");
@@ -1203,7 +1299,7 @@ if (testConnectionBtn) {
         model,
         apiKey,
         explicitTransport: transportSelect.value as ProviderProfile["explicitTransport"],
-        reasoning: providerProfileCache[apiState.activeProvider]?.reasoning,
+        reasoning: apiState.editingReasoning,
       });
       if (result.ok) setSaveStatus("连接成功 " + result.latency + "ms · " + (result.sample ?? ""), "is-ok");
       else setSaveStatus("连接失败：" + (result.error ?? "未知错误"), "is-error");
@@ -1250,7 +1346,7 @@ transportSelect.addEventListener("change", () => {
   }
   updateEndpointPreview();
   if (transportSelect.value === "anthropic" && !preset.anthropicBaseUrl && preset.transport !== "anthropic") {
-    transportHint.textContent = "该厂商的 A口地址未内置；请按服务商文档填写 A口 Base URL，程序只追加 /v1/messages。";
+    transportHint.textContent = "该厂商的 Anthropic 兼容地址未内置；请按服务商文档填写 Base URL，程序只追加 /v1/messages。";
   }
   setSaveStatus("有未保存的更改");
 });
@@ -1345,25 +1441,25 @@ apiForm.addEventListener("submit", async (e) => {
     if (!await saveTimeoutSettings(true)) {
       return;
     }
-    // 保存前把当前输入快照进 perProvider 缓存（main 进程也会做一次，但渲染端先做一遍，
-    // 是为了下一次切厂商再切回来不依赖磁盘往返）
-    captureActiveProviderProfile();
-    // mode 字段在 UI 层已删除，但仍传给 main 进程保留向后兼容（旧配置文件可能有该字段）。
-    // 默认 "manual"（baseUrl 永远可改、模型名永远可填，行为等同原 Manual）。
+    // 档案保存：editingProfileId 存在 = 更新（字段全量覆盖），否则新增。
+    // 上下文窗口与多模态跟随档案；留空/非法按 256000 兜底。
+    const isEditing = Boolean(apiState.editingProfileId);
     const profile = {
+      id: apiState.editingProfileId,
       provider: apiState.activeProvider,
       displayName: displayNameInput.value.trim(),
       baseUrl: baseUrlInput.value.trim(),
       model: getCurrentModelValue().trim(),
       apiKey: getApiKeyForRequest(),
       explicitTransport: transportSelect.value as ApiTransport,
-      reasoning: providerProfileCache[apiState.activeProvider]?.reasoning,
+      reasoning: apiState.editingReasoning,
+      contextWindowTokens: Math.max(4096, parseInt(contextWindowInput.value, 10) || 256000),
+      multimodal: multimodalToggle.checked,
     };
     const result = await window.settings!.saveModelProfile?.(profile);
     if (!result) throw new Error("模型列表不可用");
+    // 全局选项（视觉模型/思考开关/maxToken）不随档案走，单独保存
     await window.settings!.saveConfig({
-      perProvider: { ...providerProfileCache },
-      multimodal: multimodalToggle.checked,
       vision: {
         baseUrl: visionBaseUrlInput.value.trim(),
         apiKey: visionApiKeyInput.value.trim(),
@@ -1371,9 +1467,22 @@ apiForm.addEventListener("submit", async (e) => {
       },
       thinkingOverride: toggleEnableThinking.checked ? 1 : toggleDisableThinking.checked ? -1 : 0,
       disableMaxToken: toggleDisableMaxToken.checked,
-      contextWindowTokens: Math.max(4096, parseInt(contextWindowInput.value, 10) || 256000),
     });
-    setSaveStatus(result.added ? "已加入模型列表" : "相同 Key 与模型名已存在", result.added ? "is-ok" : "is-error");
+    if (isEditing) {
+      setSaveStatus("档案已更新", "is-ok");
+    } else if (result.added) {
+      setSaveStatus("已加入模型列表", "is-ok");
+      // 新建成功后切到编辑态，用户可直接再改再存
+      const saved = (result.profiles as SavedProfileLite[]).at(-1);
+      if (saved && saved.id) {
+        apiState.editingProfileId = saved.id;
+        apiState.editingReasoning = saved.reasoning;
+        applyEditingStateUI();
+      }
+    } else {
+      setSaveStatus("相同 Key、模型名与 URL 的档案已存在", "is-error");
+    }
+    await reloadProfiles();
   } catch {
     setSaveStatus("保存失败", "is-error");
   }
@@ -1648,53 +1757,63 @@ clearChatHistoryBtn.addEventListener("click", async () => {
   }
 });
 
-// ── 预设卡切换厂商 ───────────────────────────────────────────
+// ── 预设卡：选择厂商 = 开始新建档案草稿 ───────────────────────
 presetCards?.addEventListener("click", (e) => {
   const card = (e.target as HTMLElement).closest(".preset-card") as HTMLElement | null;
   if (!card || card.classList.contains("is-disabled")) return;
   const cardProviderName = card.dataset.provider;
   if (!cardProviderName) return;
 
-  // 切厂商前先把当前厂商的输入值快照进缓存，避免覆盖丢失
-  captureActiveProviderProfile();
-
   const providerName = getCustomEndpointMode(cardProviderName)
     ? getCustomEndpointProvider(apiState.customEndpointMode)
     : cardProviderName;
-  // 从缓存里取目标厂商的旧配置；没有缓存就用 preset 默认值
-  const cached = providerProfileCache[providerName];
-  applyPreset(
-    providerName,
-    cached?.model,
-    cached?.apiKey,
-    cached?.baseUrl,
-    cached?.displayName,
-    cached?.explicitTransport,
-  );
-  setSaveStatus(cached ? "已切回上次配置" : "已应用预设，填写 API Key 后保存");
+  startNewDraft(providerName);
+  setSaveStatus("已应用预设，填写 API Key 后保存档案");
 });
 
-// ── 自定义端点云端/本地模式切换 ───────────────────────────────
+// ── 自定义端点云端/本地模式切换（切换 = 换草稿厂商） ───────────
 customEndpointControls?.addEventListener("click", (e) => {
   const button = (e.target as HTMLElement).closest<HTMLButtonElement>("[data-custom-endpoint-mode]");
   const nextMode = button?.dataset.customEndpointMode as CustomEndpointMode | undefined;
   if (!nextMode || nextMode === apiState.customEndpointMode) return;
 
-  captureActiveProviderProfile();
   apiState.customEndpointMode = nextMode;
   const providerName = getCustomEndpointProvider(nextMode);
-  const cached = providerProfileCache[providerName];
-  applyPreset(
-    providerName,
-    cached?.model,
-    cached?.apiKey,
-    cached?.baseUrl,
-    cached?.displayName,
-    cached?.explicitTransport,
-  );
-  setSaveStatus(cached ? "已切回上次配置" : nextMode === "local"
+  startNewDraft(providerName);
+  setSaveStatus(nextMode === "local"
     ? "请填写本地服务地址和模型 ID"
     : "请填写云端服务地址、API Key 和模型 ID");
+});
+
+// ── 档案列表：点击档案载入编辑 ────────────────────────────────
+profileList?.addEventListener("click", (e) => {
+  const card = (e.target as HTMLElement).closest(".profile-card") as HTMLElement | null;
+  if (!card) return;
+  const profileId = card.dataset.profileId;
+  const profile = apiState.profiles.find((p) => p.id === profileId);
+  if (!profile) return;
+  editProfile(profile, multimodalToggle.checked);
+});
+
+// ── 删除当前编辑的档案 ────────────────────────────────────────
+deleteProfileBtn?.addEventListener("click", async () => {
+  if (!apiState.editingProfileId) return;
+  const profile = apiState.profiles.find((p) => p.id === apiState.editingProfileId);
+  const name = profile?.displayName || profile?.model || "该档案";
+  try {
+    await window.settings?.deleteModelProfile?.(apiState.editingProfileId);
+    setSaveStatus(`已删除「${name}」`, "is-ok");
+    await reloadProfiles();
+    // 删除后切到剩余的默认档案；没有档案则回到草稿态
+    const next = apiState.profiles.find((p) => p.id === apiState.defaultProfileId) ?? apiState.profiles[0];
+    if (next) {
+      editProfile(next, multimodalToggle.checked);
+    } else {
+      startNewDraft(apiState.activeProvider || "MiniMax（稀宇科技）");
+    }
+  } catch {
+    setSaveStatus("删除失败", "is-error");
+  }
 });
 
 // ── 偏好设置：聊天社交上下文 / 自定义风格 / 表单提交 ─────────

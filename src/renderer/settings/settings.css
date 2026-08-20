@@ -2247,6 +2247,138 @@ body {
   max-width: 100%;
 }
 
+/* ── 档案列表（API 设置页） ─────────────────────────────── */
+.profile-list-section {
+  margin: 6px 0 16px;
+}
+
+.profile-list-heading {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+.profile-list-heading h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--rb-text-strong);
+}
+.profile-list-heading p {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--rb-text-default);
+}
+.profile-list-count {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--rb-text-default);
+}
+
+.profile-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 10px;
+}
+
+.profile-list__empty {
+  grid-column: 1 / -1;
+  padding: 18px 16px;
+  border-radius: 14px;
+  font-size: 12px;
+  color: var(--rb-text-default);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed rgba(255, 182, 220, 0.22);
+}
+
+.profile-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 182, 220, 0.14);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 120ms ease;
+}
+.profile-card:hover {
+  border-color: rgba(255, 182, 220, 0.36);
+  transform: translateY(-1px);
+}
+.profile-card.is-active {
+  background: rgba(236, 72, 153, 0.16);
+  border-color: rgba(255, 182, 220, 0.30);
+}
+.profile-card__name {
+  max-width: 100%;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--rb-text-strong);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.profile-card__meta {
+  max-width: 100%;
+  font-size: 11px;
+  color: var(--rb-text-default);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.profile-card__badges {
+  display: flex;
+  gap: 6px;
+}
+.profile-card__badge {
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--rb-text-strong);
+  background: rgba(236, 72, 153, 0.22);
+}
+.profile-card__badge--vision {
+  background: rgba(120, 180, 255, 0.20);
+}
+
+/* 档案编辑器标题（新建/编辑） */
+.profile-editor-heading {
+  margin: 4px 0 12px;
+}
+.profile-editor-heading h2 {
+  margin: 0;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--rb-text-strong);
+}
+.profile-editor-heading p {
+  margin: 2px 0 0;
+  font-size: 11.5px;
+  color: var(--rb-text-default);
+}
+
+/* 多模态开关在表单网格内占整行 */
+.profile-multimodal-row {
+  grid-column: 1 / -1;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+/* 删除档案按钮 */
+.save-btn--danger {
+  color: #ff9db4;
+  border-color: rgba(255, 110, 150, 0.40);
+}
+.save-btn--danger:hover:not(:disabled) {
+  color: #ff7a99;
+  border-color: rgba(255, 110, 150, 0.70);
+}
+
 /* 自定义端点：与官方厂商卡片共用主表单，但明确标注高级与非官方边界。 */
 .custom-endpoint-controls {
   display: grid;

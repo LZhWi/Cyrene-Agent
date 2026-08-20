@@ -70,7 +70,8 @@ const chatApi = {
     ipcRenderer.invoke(IPC.CHAT_CAPTION_IMAGE, { filePath, hasAnnotations }),
   getImagePreview: (filePath: string) =>
     ipcRenderer.invoke(IPC.CHAT_GET_IMAGE_PREVIEW, { filePath }),
-  getImageSendStrategy: () => ipcRenderer.invoke(IPC.CHAT_GET_IMAGE_SEND_STRATEGY),
+  getImageSendStrategy: (sessionId?: string) =>
+    ipcRenderer.invoke(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, sessionId ? { sessionId } : undefined),
   getGeneralSettings: () => ipcRenderer.invoke(IPC.SETTINGS_GET_GENERAL),
   getReasoningState: () => ipcRenderer.invoke(IPC.CHAT_GET_REASONING_STATE),
   setReasoning: (payload: { providerKey: string; preference: unknown }) => ipcRenderer.invoke(IPC.CHAT_SET_REASONING, payload),

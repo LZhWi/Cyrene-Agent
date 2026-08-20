@@ -4,6 +4,10 @@
 export const apiForm = document.getElementById("api-form") as HTMLFormElement;
 export const apiRuntimeForm = document.getElementById("api-runtime-form") as HTMLFormElement;
 export const presetCards = document.getElementById("preset-cards") as HTMLElement;
+export const profileList = document.getElementById("model-profile-list") as HTMLElement;
+export const profileListCount = document.getElementById("profile-list-count") as HTMLElement;
+export const profileEditorTitle = document.getElementById("profile-editor-title") as HTMLElement;
+export const deleteProfileBtn = document.getElementById("delete-profile-btn") as HTMLButtonElement;
 export const presetWebsiteLink = document.getElementById("preset-website-link") as HTMLAnchorElement;
 export const displayNameInput = document.getElementById("display-name") as HTMLInputElement;
 export const baseUrlInput = document.getElementById("base-url") as HTMLInputElement;

@@ -2,8 +2,8 @@ import { BrowserWindow, ipcMain } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import { getCapabilityOrOpenAI } from "../orchestrator/vendors";
 import { normalizeReasoningPreference } from "../../shared/reasoning";
-import { loadModelSettings, saveModelSettings } from "../settings/model-settings";
-import { loadVisionConfig } from "../settings/model-settings";
+import { loadModelSettings, saveModelSettings, loadVisionConfig, resolveModelSettingsProfile } from "../settings/model-settings";
+import { getSession } from "./chats-store";
 import { describePendingAttachment } from "../rag/file-ingest";
 import { processDocumentIndexRequest } from "../rag/document-index-ipc";
 import {
@@ -155,8 +155,19 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     };
   });
 
-  ipcMain.handle(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, () => {
-    const settings = loadModelSettings();
+  ipcMain.handle(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, (_event, payload: unknown) => {
+    // 按会话解析：会话绑定的档案若声明了 multimodal 则优先于全局值；
+    // 无 sessionId / 会话未绑档案 / 档案未声明 → 回退全局（现行为）。
+    const sessionId = payload && typeof payload === "object"
+      ? (payload as { sessionId?: unknown }).sessionId
+      : undefined;
+    let settings = loadModelSettings();
+    if (typeof sessionId === "string" && sessionId) {
+      const session = getSession(sessionId);
+      if (session?.modelProfileId) {
+        settings = resolveModelSettingsProfile(settings, session.modelProfileId);
+      }
+    }
     return decideImageSendStrategy({
       multimodal: settings.multimodal,
       vision: loadVisionConfig(),
