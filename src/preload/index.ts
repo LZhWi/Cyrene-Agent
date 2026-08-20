@@ -36,6 +36,11 @@ const cyreneApi = {
     ipcRenderer.on(IPC.PET_VISIBILITY_CHANGED, listener);
     return () => ipcRenderer.off(IPC.PET_VISIBILITY_CHANGED, listener);
   },
+  onStartupReady: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on(IPC.STARTUP_READY, listener);
+    return () => ipcRenderer.off(IPC.STARTUP_READY, listener);
+  },
 };
 
 const chatApi = {

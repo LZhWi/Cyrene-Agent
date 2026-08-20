@@ -49,6 +49,36 @@ export function setCallWindowLocal(win: BrowserWindow | null): void {
   callWindow = win;
 }
 
+// 启动阶段控制：在 app startup 完成前，新创建的辅助窗口先不 show，
+// 等主进程发送 STARTUP_READY 后再统一显示，制造“加载完再出现窗口”的效果。
+let startupPhaseActive = true;
+let startupPhaseReady = false;
+const pendingShowWindows = new Set<BrowserWindow>();
+
+export function isStartupPhaseActive(): boolean {
+  return startupPhaseActive;
+}
+
+export function markStartupPhaseReady(): void {
+  if (startupPhaseReady) return;
+  startupPhaseReady = true;
+  startupPhaseActive = false;
+  for (const win of pendingShowWindows) {
+    if (!win.isDestroyed()) {
+      win.show();
+    }
+  }
+  pendingShowWindows.clear();
+}
+
+export function showWindowWhenStartupReady(win: BrowserWindow): void {
+  if (startupPhaseReady || !startupPhaseActive) {
+    win.show();
+    return;
+  }
+  pendingShowWindows.add(win);
+}
+
 /**
  * React 聊天窗口的会话调度器。
  *

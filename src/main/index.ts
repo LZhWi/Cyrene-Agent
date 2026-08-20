@@ -16,6 +16,7 @@ import {
 } from "./settings/settings-facade";
 import {
   getCurrentAppIconPath,
+  markStartupPhaseReady,
   setGetCurrentAppIconPath,
   reactChatSession,
   reactChatWindow,
@@ -87,6 +88,7 @@ import {
 import { createWindowManager, type WindowManager } from "./windows/window-manager";
 import { registerWindowSystemIpc } from "./windows/window-system-ipc";
 import { createTray } from "./tray";
+import { createSplashWindow } from "./startup/create-splash-window";
 import { enqueueLLMTask } from "./llm-queue";
 
 import { createSocialContextService, type SocialContextService } from "./services/social-context/social-context-service";
@@ -232,11 +234,11 @@ function broadcastToAuxWindows(channel: string, payload: unknown): void {
   }
 }
 
-function createWindow(manager: WindowManager): void {
-  manager.createMainWindow();
+function createWindow(manager: WindowManager, showOnReady = true): BrowserWindow {
+  const win = manager.createMainWindow(showOnReady);
 
-  manager.onMainWindowReady((win) => {
-    live2dWindowLifecycle.attach(win);
+  manager.onMainWindowReady((w) => {
+    live2dWindowLifecycle.attach(w);
   });
   manager.onMainWindowClosed(() => {
     live2dWindowLifecycle.clear();
@@ -254,6 +256,8 @@ function createWindow(manager: WindowManager): void {
     loadGeneralSettings,
     getSceneEmbeddingIndex: () => embeddingIndexService.getSceneEmbeddingIndex(),
   });
+
+  return win;
 }
 
 
@@ -468,6 +472,11 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
     asrLanguage: generalSettings.asrLanguage,
   });
 
+  // 先显示启动闪屏窗口，再初始化其他窗口。
+  const SPLASH_MIN_MS = 2500;
+  const splashStartedAt = Date.now();
+  const splashWindow = createSplashWindow({ isDev });
+
   const manager = createWindowManager({
     getCurrentAppIconPath,
     isDev,
@@ -476,7 +485,9 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   });
   windowManager = manager;
 
-  createWindow(manager);
+  // 先创建主窗口但不显示，等闪屏关闭后再一起显示。
+  const mainWindow = createWindow(manager, false);
+
   setLive2dWindowSender((channel, payload) => manager.sendToMainWindow(channel, payload));
   manager.createReactChatWindow();
   if (generalSettings.sidebarVisible) manager.createSidebarWindow();
@@ -519,6 +530,28 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   embeddingIndexService.scheduleStartupRefreshes();
 
   schedulerSubsystem.engine.start();
+
+  // 启动流程全部完成后，再额外显示一段时间闪屏，让用户能明确看到加载画面。
+  const closeSplashAndShowWindows = () => {
+    setTimeout(() => {
+      if (!splashWindow.isDestroyed()) {
+        splashWindow.close();
+      }
+      if (!mainWindow.isDestroyed() && !mainWindow.isVisible()) {
+        mainWindow.show();
+      }
+      // 同时通知渲染进程隐藏其内部的启动加载遮罩（兜底/兼容）。
+      manager.sendToMainWindow(IPC.STARTUP_READY);
+      markStartupPhaseReady();
+    }, SPLASH_MIN_MS);
+  };
+
+  // 主窗口可能还在加载中，等它加载完再统一显示，避免闪屏提前消失。
+  if (mainWindow.webContents.isLoadingMainFrame()) {
+    mainWindow.webContents.once("did-finish-load", closeSplashAndShowWindows);
+  } else {
+    closeSplashAndShowWindows();
+  }
 });
 
 app.on("window-all-closed", () => {});
@@ -536,7 +569,7 @@ app.on("before-quit", () => {
 });
 
 app.on("activate", () => {
-  windowManager?.createMainWindow();
+  windowManager?.createMainWindow(true);
 });
 
 

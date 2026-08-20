@@ -21,12 +21,21 @@ export interface CreateMainWindowContext {
   isDev: boolean;
 }
 
+export interface CreateMainWindowOptions {
+  /** 窗口 ready 后是否立即 show；默认 true。启动闪屏场景可先隐藏，等闪屏关闭再显示。 */
+  showOnReady?: boolean;
+}
+
 /**
  * 创建主桌宠窗口。
  * 只负责机械构造：恢复上次坐标、创建 BrowserWindow、加载 URL/文件、
  * 绑定 show/hide 可见性广播。不含业务 getter 注入。
  */
-export function createMainWindow(ctx: CreateMainWindowContext): BrowserWindow {
+export function createMainWindow(
+  ctx: CreateMainWindowContext,
+  options: CreateMainWindowOptions = {},
+): BrowserWindow {
+  const { showOnReady = true } = options;
   const settings = ctx.loadGeneralSettings();
   const transparent = true;
   let restoreX: number | undefined;
@@ -73,6 +82,7 @@ export function createMainWindow(ctx: CreateMainWindowContext): BrowserWindow {
     skipTaskbar: true,
     resizable: false,
     hasShadow: false,
+    show: false,
     icon: ctx.getCurrentAppIconPath(),
     webPreferences: {
       preload: path.join(app.getAppPath(), "dist", "preload", "preload", "index.js"),
@@ -97,6 +107,12 @@ export function createMainWindow(ctx: CreateMainWindowContext): BrowserWindow {
   });
   win.on("show", () => {
     win.webContents.send(IPC.PET_VISIBILITY_CHANGED, true);
+  });
+
+  win.once("ready-to-show", () => {
+    if (showOnReady && !win.isDestroyed()) {
+      win.show();
+    }
   });
 
   return win;

@@ -17,6 +17,7 @@ import {
   setStickerManagerWindow,
   setTasksWindow,
   settingsWindow,
+  showWindowWhenStartupReady,
   sidebarWindow,
   stickerManagerWindow,
   tasksWindow,
@@ -81,7 +82,7 @@ export function createReactChatWindow(sessionId?: string): void {
   }
 
   window.once("ready-to-show", () => {
-    if (!window.isDestroyed()) window.show();
+    if (!window.isDestroyed()) showWindowWhenStartupReady(window);
   });
 
   window.on("closed", () => {
@@ -146,7 +147,7 @@ export function createSidebarWindow(): void {
   }
 
   window.once("ready-to-show", () => {
-    window.show();
+    showWindowWhenStartupReady(window);
   });
 
   window.on("closed", () => {
@@ -197,7 +198,7 @@ export function createTasksWindow(): void {
   }
 
   window.once("ready-to-show", () => {
-    window.show();
+    showWindowWhenStartupReady(window);
   });
 
   window.on("closed", () => {
@@ -260,7 +261,7 @@ export function createSettingsWindow(section?: string): void {
   }
 
   window.once("ready-to-show", () => {
-    window.show();
+    showWindowWhenStartupReady(window);
   });
 
   window.on("closed", () => {
@@ -328,7 +329,7 @@ export async function createStickerManagerWindow(): Promise<{ ok: boolean; error
   }
 
   window.once("ready-to-show", () => {
-    window.show();
+    showWindowWhenStartupReady(window);
     window.focus();
     window.moveTop();
   });
@@ -388,7 +389,7 @@ export function createCallWindow(): void {
   }
 
   window.once("ready-to-show", () => {
-    window.show();
+    showWindowWhenStartupReady(window);
   });
 
   window.on("closed", () => {

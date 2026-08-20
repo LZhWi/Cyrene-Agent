@@ -21,7 +21,7 @@ export interface WindowManagerOptions {
 }
 
 export interface WindowManager {
-  createMainWindow(): BrowserWindow;
+  createMainWindow(showOnReady?: boolean): BrowserWindow;
   createReactChatWindow(sessionId?: string): void;
   createSidebarWindow(): void;
   createSettingsWindow(section?: string): void;
@@ -72,11 +72,13 @@ export function createWindowManager(options: WindowManagerOptions): WindowManage
     return mainWindow;
   }
 
-  function setMainWindow(window: BrowserWindow): void {
+  function setMainWindow(window: BrowserWindow, showOnReady = true): void {
     mainWindow = window;
     window.once("ready-to-show", () => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
-      mainWindow.show();
+      if (showOnReady) {
+        mainWindow.show();
+      }
       for (const handler of readyHandlers) {
         try { handler(mainWindow); } catch (err) { console.error("[WindowManager] ready handler failed:", err); }
       }
@@ -103,14 +105,17 @@ export function createWindowManager(options: WindowManagerOptions): WindowManage
   }
 
   return {
-    createMainWindow(): BrowserWindow {
+    createMainWindow(showOnReady = true): BrowserWindow {
       if (mainWindow && !mainWindow.isDestroyed()) return mainWindow;
-      const win = createMainWindow({
-        getCurrentAppIconPath: options.getCurrentAppIconPath,
-        isDev: options.isDev,
-        loadGeneralSettings: options.loadMainWindowSettingsSlice,
-      });
-      setMainWindow(win);
+      const win = createMainWindow(
+        {
+          getCurrentAppIconPath: options.getCurrentAppIconPath,
+          isDev: options.isDev,
+          loadGeneralSettings: options.loadMainWindowSettingsSlice,
+        },
+        { showOnReady },
+      );
+      setMainWindow(win, showOnReady);
       return win;
     },
 

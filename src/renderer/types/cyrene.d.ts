@@ -14,6 +14,7 @@ declare global {
       getCursorPosition: () => Promise<{ x: number; y: number } | null>;
       onPetZoom: (callback: (zoom: number) => void) => () => void;
       onPetVisibilityChanged: (callback: (visible: boolean) => void) => () => void;
+      onStartupReady: (callback: () => void) => () => void;
     };
   }
 }

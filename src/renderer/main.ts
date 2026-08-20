@@ -26,6 +26,7 @@ if (!window.cyrene) {
     getCursorPosition: () => Promise.resolve(null),
     onPetZoom: (_cb: (zoom: number) => void) => () => {},
     onPetVisibilityChanged: (_cb: (visible: boolean) => void) => () => {},
+    onStartupReady: (_cb: () => void) => () => {},
   };
 }
 
@@ -67,6 +68,33 @@ function addTrackedEventListener(
   target.addEventListener(type, listener);
   live2dLifecycle.track("listener", label, () => target.removeEventListener(type, listener));
 }
+
+// 启动加载画面最少显示一段时间，避免加载太快时画面一闪而过。
+const MIN_STARTUP_LOADING_MS = 2500;
+const STARTUP_LOADING_SAFETY_TIMEOUT_MS = 8000;
+const startupLoadingStartedAt = performance.now();
+let startupLoadingHidden = false;
+
+function hideStartupLoading(): void {
+  if (startupLoadingHidden) return;
+  startupLoadingHidden = true;
+
+  const el = document.getElementById("startup-loading");
+  if (!el) return;
+
+  const elapsed = performance.now() - startupLoadingStartedAt;
+  const remaining = Math.max(0, MIN_STARTUP_LOADING_MS - elapsed);
+
+  window.setTimeout(() => {
+    el.classList.add("hidden");
+    window.setTimeout(() => el.classList.add("removed"), 400);
+  }, remaining);
+}
+
+// 主进程所有窗口/服务初始化完成后会发送 STARTUP_READY；
+// 加一个兜底超时，防止开发时 HMR 重载或 IPC 丢失导致加载画面卡住。
+window.cyrene.onStartupReady(hideStartupLoading);
+window.setTimeout(hideStartupLoading, STARTUP_LOADING_SAFETY_TIMEOUT_MS);
 
 const manager = new Live2DManager({
   canvas,

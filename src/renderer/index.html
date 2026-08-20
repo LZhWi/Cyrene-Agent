@@ -21,10 +21,21 @@
   <link rel="stylesheet" href="./ui/fonts.css" />
   <link rel="stylesheet" href="./ui/base.css" />
   <link rel="stylesheet" href="./ui/theme.css" />
+  <link rel="stylesheet" href="./startup-loading.css" />
   <!-- Cubism 4 Core (required by pixi-live2d-display/cubism4) -->
   <script src="/live2dcubismcore.min.js"></script>
 </head>
 <body>
+  <div id="startup-loading">
+    <img class="startup-loading__logo" src="./loading.png" alt="Cyrene" />
+    <div class="startup-loading__loader">
+      <div class="startup-loading__circle"></div>
+      <div class="startup-loading__circle"></div>
+      <div class="startup-loading__circle"></div>
+      <div class="startup-loading__circle"></div>
+      <div class="startup-loading__circle"></div>
+    </div>
+  </div>
   <canvas id="live2d-canvas"></canvas>
   <script type="module" src="./main.ts"></script>
 </body>
