@@ -29,6 +29,12 @@ export interface PlaybackState {
   /** Seconds; 0 when unknown. */
   duration: number;
   volume: number; // 0–100
+  /**
+   * Playback reached end of file (mpv `eof-reached`, needs --keep-open).
+   * Ground truth for "自然播完" detection; the position>=duration-1s
+   * heuristic is only a fallback.
+   */
+  eofReached?: boolean;
   /** Currently loaded track metadata, if any. */
   track?: {
     encryptedId: string;

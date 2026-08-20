@@ -44,14 +44,7 @@ export class NeteaseOpenapiProvider implements MusicProvider {
 
   async playTrack(trackId: string): Promise<PlaybackDispatchResult> {
     assertEncryptedId(trackId);
-    console.log("[music-debug] provider.playTrack start:", { trackId });
     const detail = await this.client.getSongDetail(trackId);
-    console.log("[music-debug] getSongDetail result:", {
-      trackId,
-      hasUrl: !!detail.playUrl,
-      urlLen: detail.playUrl?.length ?? 0,
-      name: detail.name,
-    });
     if (!detail.playUrl) {
       throw new MusicInputError("E_TRACK_NOT_PLAYABLE", `E_TRACK_NOT_PLAYABLE: ${detail.name ?? trackId}`);
     }

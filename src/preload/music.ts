@@ -32,6 +32,11 @@ export function exposeMusicApi() {
     getMyPlaylists: () => ipcRenderer.invoke(IPC.MUSIC_GET_MY_PLAYLISTS),
     getPlaylistDetail: (playlistId: string) =>
       ipcRenderer.invoke(IPC.MUSIC_GET_PLAYLIST_DETAIL, playlistId),
+    // ── 本地缓存歌单（边播边存 + 用户导入） ──
+    getCachedTracks: () => ipcRenderer.invoke(IPC.MUSIC_GET_CACHED_TRACKS),
+    removeCachedTrack: (trackId: string) =>
+      ipcRenderer.invoke(IPC.MUSIC_REMOVE_CACHED_TRACK, trackId),
+    importLocalTracks: () => ipcRenderer.invoke(IPC.MUSIC_IMPORT_LOCAL_TRACKS),
     // 窗口控制（播放器窗口无框）
     openPlayer: () => ipcRenderer.invoke(IPC.MUSIC_OPEN_PLAYER),
     openSettings: (section?: string) => ipcRenderer.invoke(IPC.MUSIC_OPEN_SETTINGS, section),
@@ -52,6 +57,11 @@ export function exposeMusicApi() {
       const listener = (_: unknown, c: unknown) => h(c);
       ipcRenderer.on(IPC.MUSIC_CARD, listener);
       return () => ipcRenderer.removeListener(IPC.MUSIC_CARD, listener);
+    },
+    onCacheUpdated: (h: () => void) => {
+      const listener = () => h();
+      ipcRenderer.on(IPC.MUSIC_CACHE_UPDATED, listener);
+      return () => ipcRenderer.removeListener(IPC.MUSIC_CACHE_UPDATED, listener);
     },
   });
 }

@@ -57,6 +57,8 @@ import { MusicInputError } from "./types";
       getRootPid: vi.fn(() => undefined),
       getLyricsCacheDir: vi.fn(() => "/tmp/lyrics-cache"),
       onStateChange: vi.fn(onStateChangeImpl),
+      onPlaybackStateChange: vi.fn(() => () => {}),
+      onCacheUpdated: vi.fn(() => () => {}),
       pollOnce: asyncThat(),
       beginLogin: asyncThat(),
       cancelLogin: asyncThat(),
@@ -107,6 +109,9 @@ describe("registerMusicIpcHandlers", () => {
       "music:playback:prev",
       "music:get-lyrics",
       "music:toggle-favorite",
+      "music:get-cached-tracks",
+      "music:remove-cached-track",
+      "music:import-local-tracks",
     ];
     for (const ch of expected) {
       expect(handlerMap[ch]).toBeDefined();
@@ -118,7 +123,7 @@ describe("registerMusicIpcHandlers", () => {
     disposer();
     expect(removed).toContain("music:get-status");
     expect(removed).toContain("music:play-track");
-    expect(removed.length).toBe(24);
+    expect(removed.length).toBe(27);
   });
 
   it("MUSIC_SEARCH: keyword too long returns ok:false errorCode", async () => {

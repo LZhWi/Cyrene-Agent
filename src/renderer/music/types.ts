@@ -31,7 +31,12 @@ export interface Playlist {
   tracks: Track[];
 }
 
-export type RepeatMode = "off" | "all" | "one";
+/**
+ * 播放模式（shuffle 不是 repeat 的一种，故整体改名 PlaybackMode）：
+ *   off = 只放一次 | all = 列表循环（播到末尾回第一首）
+ *   one = 单曲循环 | shuffle = 随机
+ */
+export type PlaybackMode = "off" | "all" | "one" | "shuffle";
 
 export interface PlaybackState {
   currentTrack: Track | null;
@@ -42,8 +47,7 @@ export interface PlaybackState {
   isMuted: boolean;
   queue: Track[];
   queueIndex: number;
-  repeatMode: RepeatMode;
-  isShuffled: boolean;
+  playbackMode: PlaybackMode;
   isLoading: boolean;
   error?: string;
 }
@@ -59,8 +63,8 @@ export interface PlaybackActions {
   addToQueue(track: Track): void;
   removeFromQueue(index: number): void;
   loadPlaylist(playlist: Playlist): void;
-  toggleRepeat(): void;
-  toggleShuffle(): void;
+  /** 在当前歌单类型的模式集合内轮换（online: off/one，cache: off/all/one/shuffle） */
+  cycleMode(): void;
   toggleFavorite(track: Track): void;
 }
 
@@ -71,6 +75,12 @@ export interface MusicPlayerProps {
   playlists: Playlist[];
   activePlaylistId: string;
   onSelectPlaylist(playlist: Playlist): void;
+  /** 激活歌单类型：online 双模式，cache 四模式 + 删除/导入入口 */
+  modeSet: "online" | "cache";
+  /** 导入本地音乐到缓存池（仅缓存歌单显示入口） */
+  onImportLocalTracks?(): void;
+  /** 删除缓存曲目（仅缓存歌单的每行删除按钮） */
+  onRemoveCachedTrack?(track: Track): void;
   /** 搜索：query 变化时调 onSearch，结果通过 searchResults 回传 */
   searchResults: Track[];
   isSearching: boolean;

@@ -7,7 +7,7 @@ import type {
   Playlist,
   PlaybackActions,
   PlaybackState,
-  RepeatMode,
+  PlaybackMode,
   Track,
 } from "./types";
 
@@ -28,11 +28,15 @@ interface MusicApi {
   playbackVolume: (vol: number) => Promise<MusicIpcResult<unknown>>;
   getLyrics: (encryptedId: string) => Promise<MusicIpcResult<unknown>>;
   toggleFavorite: (encryptedId: string, favorite: boolean) => Promise<MusicIpcResult<unknown>>;
+  getCachedTracks: () => Promise<MusicIpcResult<unknown>>;
+  removeCachedTrack: (trackId: string) => Promise<MusicIpcResult<unknown>>;
+  importLocalTracks: () => Promise<MusicIpcResult<unknown>>;
   minimizeWindow: () => void;
   closeWindow: () => void;
   openSettings: (section?: string) => Promise<unknown>;
   onPlaybackState: (h: (s: unknown) => void) => (() => void) | void;
   onStateChanged: (h: (s: unknown) => void) => (() => void) | void;
+  onCacheUpdated: (h: () => void) => (() => void) | void;
 }
 
 // 后端返回类型（与 src/main/music/types.ts 的 MusicPlaylist/MusicTrack 对齐）
@@ -93,50 +97,64 @@ const INITIAL_STATE: PlaybackState = {
   isMuted: false,
   queue: [],
   queueIndex: -1,
-  repeatMode: "off",
-  isShuffled: false,
+  playbackMode: "off",
   isLoading: false,
 };
 
-const REPEAT_ORDER: RepeatMode[] = ["off", "all", "one"];
-const LS_KEY = "cyrene:music:playback-mode";
+// ── 本地缓存虚拟歌单 ──────────────────────────────────────────
+const LOCAL_CACHE_PLAYLIST_ID = "__local_cache__";
 
-interface PersistedMode {
-  repeatMode: RepeatMode;
-  isShuffled: boolean;
+function makeCachePlaylist(tracks: Track[]): Playlist {
+  return {
+    id: LOCAL_CACHE_PLAYLIST_ID,
+    originalId: "",
+    name: "本地缓存",
+    trackCount: tracks.length,
+    tracks,
+  };
 }
 
-function loadPersistedMode(): Partial<Pick<PlaybackState, "repeatMode" | "isShuffled">> {
+// ── 播放模式：普通歌单双模式，缓存歌单四模式，localStorage 分开持久化 ──
+const ONLINE_MODES: PlaybackMode[] = ["off", "one"];
+const CACHE_MODES: PlaybackMode[] = ["off", "all", "one", "shuffle"];
+const LS_MODE_ONLINE = "cyrene:music:playback-mode:online";
+const LS_MODE_CACHE = "cyrene:music:playback-mode:cache";
+
+function loadPersistedMode(key: string, allowed: PlaybackMode[]): PlaybackMode {
   try {
-    const raw = localStorage.getItem(LS_KEY);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Partial<PersistedMode>;
-    const out: Partial<Pick<PlaybackState, "repeatMode" | "isShuffled">> = {};
-    if (parsed?.repeatMode && REPEAT_ORDER.includes(parsed.repeatMode)) {
-      out.repeatMode = parsed.repeatMode;
-    }
-    if (typeof parsed?.isShuffled === "boolean") {
-      out.isShuffled = parsed.isShuffled;
-    }
-    return out;
+    const raw = localStorage.getItem(key);
+    if (!raw) return "off";
+    const parsed = JSON.parse(raw) as { mode?: string };
+    const mode = parsed?.mode as PlaybackMode | undefined;
+    return mode && allowed.includes(mode) ? mode : "off";
   } catch {
-    return {};
+    return "off";
   }
 }
 
-function savePersistedMode(mode: PersistedMode): void {
+function savePersistedMode(key: string, mode: PlaybackMode): void {
   try {
-    localStorage.setItem(LS_KEY, JSON.stringify(mode));
+    localStorage.setItem(key, JSON.stringify({ mode }));
   } catch {
     /* localStorage 不可用时静默忽略 */
   }
 }
 
 export function App() {
-  const persisted = useMemo(loadPersistedMode, []);
-  const [state, setState] = useState<PlaybackState>({ ...INITIAL_STATE, ...persisted });
-  const [playlists, setPlaylists] = useState<Playlist[]>([]);
+  const persistedOnline = useMemo(() => loadPersistedMode(LS_MODE_ONLINE, ONLINE_MODES), []);
+  const persistedCache = useMemo(() => loadPersistedMode(LS_MODE_CACHE, CACHE_MODES), []);
+  const persistedOnlineRef = useRef(persistedOnline);
+  const persistedCacheRef = useRef(persistedCache);
+
+  const [state, setState] = useState<PlaybackState>({
+    ...INITIAL_STATE,
+    playbackMode: persistedOnline,
+  });
+  const [neteasePlaylists, setNeteasePlaylists] = useState<Playlist[]>([]);
+  const [cacheTracks, setCacheTracks] = useState<Track[]>([]);
   const [activePlaylistId, setActivePlaylistId] = useState("");
+  // 同步网易云歌单最新值给 onStateChanged 回调用，避免闭包陷阱导致重复拉取
+  const neteasePlaylistsRef = useRef<Playlist[]>([]);
   const [searchResults, setSearchResults] = useState<Track[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [loginReady, setLoginReady] = useState(false);
@@ -146,14 +164,30 @@ export function App() {
   const volumeBeforeMute = useRef<number>(70);
   // 换歌 loading 超时兜底（mpv 没在 3s 内回 duration 就强制解锁）
   const loadingTimer = useRef<number | null>(null);
+  // 播完一次性标记（eof-reached 触发，防重复路由）；换曲时重置
+  const endedRef = useRef(false);
+  const lastTrackIdRef = useRef<string>("");
+  const [endedTick, setEndedTick] = useState(0);
+
+  // 最新 state / activePlaylistId 的 ref（播完路由 effect 里读，避免闭包陷阱）
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const activePlaylistIdRef = useRef(activePlaylistId);
+  activePlaylistIdRef.current = activePlaylistId;
 
   const api = getMusicApi();
+
+  // 缓存虚拟歌单插在头部
+  const playlists = useMemo(
+    () => [makeCachePlaylist(cacheTracks), ...neteasePlaylists],
+    [cacheTracks, neteasePlaylists],
+  );
 
   const patch = useCallback((p: Partial<PlaybackState>) => {
     setState((s) => ({ ...s, ...p }));
   }, []);
 
-  // ── 启动探测：搜索请求 + 3秒最低等待 ──────────────────────
+  // ── 启动探测：搜索请求 + 4秒最低等待 ──────────────────────
   useEffect(() => {
     if (!api) {
       // 没有 preload API（浏览器预览等）→ 直接跳过 loading
@@ -185,18 +219,9 @@ export function App() {
 
   // ── 订阅 mpv 播放状态推送 ──────────────────────────────────
   useEffect(() => {
-    console.log("[music-debug] onPlaybackState effect mounted", { hasApi: !!api });
     if (!api) return;
     const unsub = api.onPlaybackState?.((raw) => {
       const mpv = raw as Partial<MpvPlaybackState>;
-      console.log("[music-debug] onPlaybackState recv:", {
-        trackEncId: mpv.track?.encryptedId,
-        trackName: mpv.track?.name,
-        paused: mpv.paused,
-        loaded: mpv.loaded,
-        duration: mpv.duration,
-        position: mpv.position,
-      });
       setState((s) => {
         const next: Partial<PlaybackState> = {};
         if (typeof mpv.position === "number") next.positionMs = Math.round(mpv.position * 1000);
@@ -219,13 +244,6 @@ export function App() {
         // track 变化 → 同步 currentTrack（优先用本地 queue 里的完整信息）
         if (mpv.track && typeof mpv.track.encryptedId === "string") {
           const inQueue = s.queue.find((t) => t.encryptedId === mpv.track!.encryptedId);
-          console.log("[music-debug] track match check:", {
-            mpvEncId: mpv.track.encryptedId,
-            currentEncId: s.currentTrack?.encryptedId,
-            foundInQueue: !!inQueue,
-            foundName: inQueue?.name,
-            queueLen: s.queue.length,
-          });
           if (inQueue) {
             next.currentTrack = inQueue;
             const idx = s.queue.indexOf(inQueue);
@@ -250,11 +268,50 @@ export function App() {
         }
         return { ...s, ...next };
       });
+
+      // ── 播完判定（一次性标记）──
+      // 事实源 = mpv eof-reached（keep-open 下播完停在结尾）；
+      // paused && position >= duration - 1s 仅作 eof 事件丢失时的兜底
+      const trackId = typeof mpv.track?.encryptedId === "string" ? mpv.track.encryptedId : undefined;
+      if (trackId && trackId !== lastTrackIdRef.current) {
+        lastTrackIdRef.current = trackId;
+        endedRef.current = false;
+      }
+      const duration = typeof mpv.duration === "number" ? mpv.duration : 0;
+      const position = typeof mpv.position === "number" ? mpv.position : 0;
+      const atTail = duration > 0 && position >= duration - 1;
+      const ended =
+        mpv.eofReached === true || (mpv.paused === true && atTail && mpv.loaded !== false);
+      if (ended && !endedRef.current && trackId) {
+        endedRef.current = true;
+        setEndedTick((n) => n + 1);
+      }
     });
     return () => {
       if (typeof unsub === "function") unsub();
     };
   }, [api]);
+
+  // ── 播完路由：单曲循环重播 / 缓存歌单自动连播 / 只放一次停在结尾 ──
+  useEffect(() => {
+    if (endedTick === 0) return;
+    const s = stateRef.current;
+    if (!s.currentTrack) return;
+    if (s.playbackMode === "one") {
+      playTrack(s.currentTrack);
+      return;
+    }
+    const isCache = activePlaylistIdRef.current === LOCAL_CACHE_PLAYLIST_ID;
+    if (isCache && (s.playbackMode === "all" || s.playbackMode === "shuffle")) {
+      const ni = computeNextIndex(s);
+      if (ni >= 0) {
+        const t = s.queue[ni];
+        if (t) playTrack(t);
+      }
+    }
+    // off（只放一次）→ 停在结尾，播放键可点重播
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [endedTick]);
 
   // ── 订阅 music 状态（检测登录态） ──────────────────────────
   useEffect(() => {
@@ -266,6 +323,7 @@ export function App() {
         if (snap?.account === "signed_in") {
           setLoginReady(true);
           loadPlaylists();
+          void loadCacheTracks();
         } else {
           setLoginReady(false);
         }
@@ -278,7 +336,8 @@ export function App() {
       const snap = raw as { account?: string };
       if (snap?.account === "signed_in") {
         setLoginReady(true);
-        if (playlists.length === 0) void loadPlaylists();
+        if (neteasePlaylistsRef.current.length === 0) void loadPlaylists();
+        void loadCacheTracks();
       } else {
         setLoginReady(false);
       }
@@ -296,7 +355,8 @@ export function App() {
       const r = await api.getMyPlaylists();
       if (r.ok && r.data) {
         const pls = (r.data as BackendPlaylist[]).map(normalizePlaylist);
-        setPlaylists(pls);
+        setNeteasePlaylists(pls);
+        neteasePlaylistsRef.current = pls;
         if (pls.length > 0 && !activePlaylistId) {
           setActivePlaylistId(pls[0].id);
           // 自动加载第一个歌单的 tracks 作为初始 queue
@@ -309,9 +369,68 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [api, activePlaylistId]);
 
+  // ── 拉取缓存歌单曲目 ──────────────────────────────────────
+  const loadCacheTracks = useCallback(async () => {
+    if (!api) return;
+    try {
+      const r = await api.getCachedTracks();
+      if (r.ok && r.data) {
+        setCacheTracks((r.data as BackendTrack[]).map(normalizeTrack));
+      }
+    } catch {
+      /* 缓存歌单可选，失败不提示 */
+    }
+  }, [api]);
+
+  // ── 订阅缓存索引变化（下载完成/删除/导入） ──────────────────
+  useEffect(() => {
+    if (!api) return;
+    const unsub = api.onCacheUpdated?.(() => {
+      void loadCacheTracks();
+    });
+    return () => {
+      if (typeof unsub === "function") unsub();
+    };
+  }, [api, loadCacheTracks]);
+
+  // ── 缓存歌单激活时：缓存索引变化 → 合并刷新 queue（不打断当前播放） ──
+  useEffect(() => {
+    if (activePlaylistId !== LOCAL_CACHE_PLAYLIST_ID) return;
+    setState((s) => {
+      const idx = cacheTracks.findIndex((t) => t.encryptedId === s.currentTrack?.encryptedId);
+      const queueIndex =
+        idx >= 0
+          ? idx
+          : cacheTracks.length > 0
+            ? Math.min(s.queueIndex < 0 ? 0 : s.queueIndex, cacheTracks.length - 1)
+            : -1;
+      if (s.queue === cacheTracks && s.queueIndex === queueIndex) return s;
+      return {
+        ...s,
+        queue: cacheTracks,
+        queueIndex,
+        durationMs: idx >= 0 ? (cacheTracks[idx].durationMs ?? s.durationMs) : s.durationMs,
+      };
+    });
+  }, [activePlaylistId, cacheTracks]);
+
   const loadPlaylistTracks = useCallback(
     async (playlist: Playlist) => {
       if (!api) return;
+      // 缓存歌单：tracks 已在内存（cacheTracks 快照），不调 API
+      if (playlist.id === LOCAL_CACHE_PLAYLIST_ID) {
+        setState((s) => ({
+          ...s,
+          queue: playlist.tracks,
+          queueIndex: playlist.tracks.length > 0 ? 0 : -1,
+          currentTrack: playlist.tracks[0] ?? null,
+          durationMs: playlist.tracks[0]?.durationMs ?? 0,
+          positionMs: 0,
+          isPlaying: false,
+          error: undefined,
+        }));
+        return;
+      }
       try {
         const r = await api.getPlaylistDetail(playlist.id);
         if (r.ok && r.data) {
@@ -338,7 +457,7 @@ export function App() {
   // ── 播放指定歌曲（本地 queue 管理 + IPC 派发） ──────────────
   const playTrack = useCallback(
     (track: Track) => {
-      console.log("[music-debug] playTrack called:", { name: track.name, encryptedId: track.encryptedId, visible: track.visible });
+      endedRef.current = false;
       if (!track.visible) {
         patch({ error: `「${track.name}」暂时无法播放` });
         return;
@@ -365,26 +484,25 @@ export function App() {
         return { ...s, queue, currentTrack: track, queueIndex: queue.length - 1, durationMs: track.durationMs ?? 0 };
       });
 
-      void api.playTrack(track.encryptedId).then((r) => {
-        console.log("[music-debug] playTrack IPC result:", { ok: r.ok, errorCode: r.errorCode, trackEncId: track.encryptedId });
-      }).catch((err) => {
-        console.log("[music-debug] playTrack IPC error:", { err: String(err), trackEncId: track.encryptedId });
+      void api.playTrack(track.encryptedId).catch((err) => {
         patch({ isLoading: false, error: "播放失败：" + (err instanceof Error ? err.message : String(err)) });
       });
 
-      // 异步补歌词
-      void api.getLyrics(track.encryptedId).then((r) => {
-        if (r.ok && r.data) {
-          const lyrics = r.data as { timeMs: number; text: string }[];
-          setState((s) => ({
-            ...s,
-            currentTrack: s.currentTrack ? { ...s.currentTrack, lyrics } : s.currentTrack,
-            queue: s.queue.map((t) =>
-              t.encryptedId === track.encryptedId ? { ...t, lyrics } : t,
-            ),
-          }));
-        }
-      }).catch(() => { /* 歌词可选，失败不提示 */ });
+      // 异步补歌词（导入的本地曲目没有歌词，跳过）
+      if (!track.encryptedId.startsWith("local-")) {
+        void api.getLyrics(track.encryptedId).then((r) => {
+          if (r.ok && r.data) {
+            const lyrics = r.data as { timeMs: number; text: string }[];
+            setState((s) => ({
+              ...s,
+              currentTrack: s.currentTrack ? { ...s.currentTrack, lyrics } : s.currentTrack,
+              queue: s.queue.map((t) =>
+                t.encryptedId === track.encryptedId ? { ...t, lyrics } : t,
+              ),
+            }));
+          }
+        }).catch(() => { /* 歌词可选，失败不提示 */ });
+      }
     },
     [api, patch],
   );
@@ -392,7 +510,7 @@ export function App() {
   // ── 计算下一首/上一首索引 ──────────────────────────────────
   const computeNextIndex = useCallback((s: PlaybackState): number => {
     if (s.queue.length === 0) return -1;
-    if (s.isShuffled && s.queue.length > 1) {
+    if (s.playbackMode === "shuffle" && s.queue.length > 1) {
       let ni: number;
       do {
         ni = Math.floor(Math.random() * s.queue.length);
@@ -400,14 +518,21 @@ export function App() {
       return ni;
     }
     const atEnd = s.queueIndex >= s.queue.length - 1;
-    if (atEnd) return s.repeatMode === "all" ? 0 : -1;
+    if (atEnd) return s.playbackMode === "all" ? 0 : -1;
     return s.queueIndex + 1;
   }, []);
 
   const computePrevIndex = useCallback((s: PlaybackState): number => {
     if (s.queue.length === 0) return -1;
-    if (s.queueIndex <= 0) return s.repeatMode === "all" ? s.queue.length - 1 : 0;
+    if (s.queueIndex <= 0) return s.playbackMode === "all" ? s.queue.length - 1 : 0;
     return s.queueIndex - 1;
+  }, []);
+
+  // ── 切歌单时模式随歌单类型切换 ──────────────────────────────
+  const applyModeForPlaylist = useCallback((playlistId: string) => {
+    const mode =
+      playlistId === LOCAL_CACHE_PLAYLIST_ID ? persistedCacheRef.current : persistedOnlineRef.current;
+    setState((s) => (s.playbackMode === mode ? s : { ...s, playbackMode: mode }));
   }, []);
 
   // ── actions（MusicPlayer 组件消费） ──────────────────────────
@@ -416,6 +541,12 @@ export function App() {
       playTrack,
       togglePlayPause() {
         if (!api || !state.currentTrack) return;
+        // 播完停在结尾（keep-open）→ 点播放 = 重播当前曲（缓存秒开）
+        if (endedRef.current && !state.isPlaying) {
+          endedRef.current = false;
+          playTrack(state.currentTrack);
+          return;
+        }
         void api.playbackToggle().catch(() => { /* ignore */ });
       },
       next() {
@@ -481,18 +612,23 @@ export function App() {
         });
       },
       loadPlaylist(playlist) {
+        applyModeForPlaylist(playlist.id);
         setActivePlaylistId(playlist.id);
         void loadPlaylistTracks(playlist);
       },
-      toggleRepeat() {
-        const next = REPEAT_ORDER[(REPEAT_ORDER.indexOf(state.repeatMode) + 1) % REPEAT_ORDER.length];
-        patch({ repeatMode: next });
-        savePersistedMode({ repeatMode: next, isShuffled: state.isShuffled });
-      },
-      toggleShuffle() {
-        const next = !state.isShuffled;
-        patch({ isShuffled: next });
-        savePersistedMode({ repeatMode: state.repeatMode, isShuffled: next });
+      cycleMode() {
+        const isCache = activePlaylistId === LOCAL_CACHE_PLAYLIST_ID;
+        const set = isCache ? CACHE_MODES : ONLINE_MODES;
+        const idx = set.indexOf(state.playbackMode);
+        const next = set[(idx + 1) % set.length];
+        patch({ playbackMode: next });
+        if (isCache) {
+          persistedCacheRef.current = next;
+          savePersistedMode(LS_MODE_CACHE, next);
+        } else {
+          persistedOnlineRef.current = next;
+          savePersistedMode(LS_MODE_ONLINE, next);
+        }
       },
       toggleFavorite(track) {
         if (!api) return;
@@ -510,7 +646,7 @@ export function App() {
         void api.toggleFavorite(track.encryptedId, newFav).catch(() => { /* ignore */ });
       },
     }),
-    [api, state, patch, playTrack, computeNextIndex, computePrevIndex, loadPlaylistTracks],
+    [api, state, patch, playTrack, computeNextIndex, computePrevIndex, loadPlaylistTracks, activePlaylistId, applyModeForPlaylist],
   );
 
   // ── 搜索（250ms 防抖） ──────────────────────────────────────
@@ -545,6 +681,37 @@ export function App() {
     actions.loadPlaylist(playlist);
   }, [actions]);
 
+  // ── 删除缓存曲目（正在播放的会被后端拒绝） ──────────────────
+  const removeCachedTrack = useCallback(
+    async (track: Track) => {
+      if (!api) return;
+      try {
+        const r = await api.removeCachedTrack(track.encryptedId);
+        if (!r.ok) {
+          patch({
+            error: r.errorCode === "E_CACHE_TRACK_PLAYING" ? "正在播放，无法删除" : "删除失败，请稍后再试",
+          });
+          return;
+        }
+        // 本地立即移除（onCacheUpdated 兜底同步）
+        setCacheTracks((ts) => ts.filter((t) => t.encryptedId !== track.encryptedId));
+      } catch {
+        patch({ error: "删除失败，请稍后再试" });
+      }
+    },
+    [api, patch],
+  );
+
+  // ── 导入本地音乐（主进程弹系统文件框，完成后 onCacheUpdated 自动刷新） ──
+  const importLocalTracks = useCallback(async () => {
+    if (!api) return;
+    try {
+      await api.importLocalTracks();
+    } catch {
+      patch({ error: "导入失败，请稍后再试" });
+    }
+  }, [api, patch]);
+
   // ── 窗口控制（无框窗口，通过 preload 暴露的 IPC 派发） ────
   const minimizeWindow = useCallback(() => {
     api?.minimizeWindow();
@@ -578,7 +745,7 @@ export function App() {
     <div className="mp-shell">
       <div className="mp-window-chrome">
         <button type="button" className="win-btn" onClick={minimizeWindow} title="最小化"><Minus size={14} /></button>
-        <button type="button" className="win-btn" onClick={closeWindow} title="关闭"><X size={14} /></button>
+        <button type="button" className="win-btn win-btn--close" onClick={closeWindow} title="关闭"><X size={14} /></button>
       </div>
       <MusicPlayer
         state={state}
@@ -586,6 +753,9 @@ export function App() {
         playlists={playlists}
         activePlaylistId={activePlaylistId}
         onSelectPlaylist={handleSelectPlaylist}
+        modeSet={activePlaylistId === LOCAL_CACHE_PLAYLIST_ID ? "cache" : "online"}
+        onImportLocalTracks={importLocalTracks}
+        onRemoveCachedTrack={removeCachedTrack}
         searchResults={searchResults}
         isSearching={isSearching}
         onSearch={handleSearch}

@@ -13,6 +13,7 @@ import { NeteaseOpenapiProvider } from "./netease-openapi-provider";
 import { OpenapiConfigStore } from "./openapi-config";
 import { SelectionSetCache } from "./selection-set-cache";
 import { MpvController } from "./mpv-controller";
+import { CacheDownloader } from "./cache-downloader";
 import type { PlaybackDispatcher } from "./netease-openapi-provider";
 import { MusicInputError } from "./types";
 import { assertEncryptedId } from "./openapi-result-normalizer";
@@ -30,6 +31,7 @@ import type {
   MusicPlaylist,
   MusicPlaylistDetail,
   MusicSubscription,
+  MusicTrack,
 } from "./types";
 import type { MusicStatusSnapshot } from "../../shared/music-view-state";
 import type { PlaybackState } from "../../shared/music-types";
@@ -55,6 +57,7 @@ export class MusicService {
   private readonly orchestrator: OpenapiLoginOrchestrator;
   private provider: NeteaseOpenapiProvider;
   private readonly cache: SelectionSetCache;
+  private readonly cacheDownloader: CacheDownloader;
   private readonly paths: MusicPaths;
   private mpv: MpvController | null = null;
   private currentPlayback: PlaybackState["track"] | null = null;
@@ -80,6 +83,8 @@ export class MusicService {
     });
     this.provider = new NeteaseOpenapiProvider(this.client);
     this.cache = new SelectionSetCache();
+    // 边播边存缓存池：与 lyrics-cache 同级
+    this.cacheDownloader = new CacheDownloader(path.join(paths.runtimeDir, "music-cache"));
   }
 
   // ── Lifecycle ──────────────────────────────────────────────
@@ -101,6 +106,9 @@ export class MusicService {
    * If config present → inject into client + restore token session.
    */
   private async initOpenapi(): Promise<void> {
+    // 缓存池初始化（幂等）：读索引 + 启动对账，失败不阻塞主链路
+    await this.cacheDownloader.initialize();
+
     const config = await this.configStore.loadValidated();
     if (!config) {
       this.backendState = "incompatible";
@@ -130,39 +138,25 @@ export class MusicService {
       this.pendingPlaybackListeners.clear();
       const dispatcher: PlaybackDispatcher = async (resource) => {
         if (!this.mpv) {
-          console.log("[music-debug] dispatcher: mpv is null");
           return { state: "client_unavailable", resourceType: resource.kind, resourceId: "", errorCode: "E_MPV_NOT_STARTED" };
         }
-        const dispatchTrackId = resource.kind === "song" ? resource.track.id : resource.tracks[0]?.id ?? "";
-        console.log("[music-debug] dispatcher before load:", {
-          kind: resource.kind,
-          hasUrl: !!resource.playUrl,
-          urlLen: resource.playUrl.length,
-          trackId: dispatchTrackId,
-        });
         await this.mpv.load(resource.playUrl, "replace");
-        console.log("[music-debug] dispatcher load done, about to setTrack:", { trackId: dispatchTrackId });
-        if (resource.kind === "song") {
+        const track = resource.kind === "song" ? resource.track : resource.tracks[0];
+        if (track) {
           this.currentPlayback = {
-            encryptedId: resource.track.id,
-            name: resource.track.name,
-            artists: resource.track.artists,
-            coverUrl: resource.track.coverUrl,
+            encryptedId: track.id,
+            name: track.name,
+            artists: track.artists,
+            coverUrl: track.coverUrl,
           };
           this.mpv.setTrack(this.currentPlayback);
-          console.log("[music-debug] dispatcher setTrack done (song):", { encId: this.currentPlayback.encryptedId, name: this.currentPlayback.name });
-        } else {
-          this.currentPlayback = {
-            encryptedId: resource.tracks[0]?.id ?? "",
-            name: resource.tracks[0]?.name ?? "playlist",
-            artists: resource.tracks[0]?.artists ?? [],
-            coverUrl: resource.tracks[0]?.coverUrl,
-          };
-          this.mpv.setTrack(this.currentPlayback);
-          console.log("[music-debug] dispatcher setTrack done (playlist):", { encId: this.currentPlayback.encryptedId, name: this.currentPlayback.name });
         }
         this.playerState = "available";
         this.emitPlayerChange("available");
+        // 边播边存：CDN 直链约 20 分钟过期，必须当下并行下载（切歌不取消）
+        if (track) {
+          void this.cacheDownloader.download(track, resource.playUrl);
+        }
         return { state: "dispatched", resourceType: resource.kind, resourceId: resource.kind === "song" ? resource.track.id : "" };
       };
       this.provider = new NeteaseOpenapiProvider(this.client, dispatcher);
@@ -544,7 +538,77 @@ export class MusicService {
     return favorite;
   }
 
+  // ── 本地缓存（边播边存 + 用户导入） ────────────────────────
+
+  /** 缓存歌单曲目列表（离线可用，不要求登录）。 */
+  async getCachedTracks(): Promise<MusicTrack[]> {
+    await this.cacheDownloader.initialize();
+    return this.cacheDownloader.listTracks();
+  }
+
+  /** 删除缓存曲目；正在播放该曲目时拒删（E_CACHE_TRACK_PLAYING）。 */
+  async removeCachedTrack(encryptedId: string): Promise<boolean> {
+    if (!encryptedId) throw new MusicInputError("E_INVALID_ID_FORMAT");
+    await this.cacheDownloader.initialize();
+    if (this.currentPlayback?.encryptedId === encryptedId) {
+      throw new MusicInputError("E_CACHE_TRACK_PLAYING");
+    }
+    return this.cacheDownloader.remove(encryptedId);
+  }
+
+  /** 导入用户本地音乐文件到缓存池（主进程文件框选好的路径）。 */
+  async importLocalFiles(filePaths: string[]): Promise<{ imported: number; skipped: number }> {
+    await this.cacheDownloader.initialize();
+    return this.cacheDownloader.importFiles(filePaths);
+  }
+
+  /** 缓存索引变化（下载完成/删除/导入）订阅。 */
+  onCacheUpdated(listener: () => void): () => void {
+    return this.cacheDownloader.onUpdated(listener);
+  }
+
   // ── Playback dispatch ──────────────────────────────────────
+
+  /**
+   * 播放优先级（顺序即层级）：
+   *   1. 缓存命中（index + 文件双条件）→ 直接播本地文件，不调 API
+   *   2. 正在下载 → await 现有下载 Promise（Promise 复用），完成后播本地
+   *   3. 都没有 → 在线链路（getSongDetail → dispatch），dispatch 成功后并行下载
+   * 缓存判断在 assertEncryptedId 之前，`local-` 开头的导入曲目 ID 也能走通。
+   */
+  private async dispatchFromCacheOrProvider(trackId: string): Promise<PlaybackDispatchResult> {
+    const cachedPath = this.cacheDownloader.getFilePath(trackId);
+    if (cachedPath) {
+      return this.dispatchLocalTrack(trackId, cachedPath);
+    }
+    const pending = this.cacheDownloader.getDownloadPromise(trackId);
+    if (pending) {
+      const result = await pending;
+      if (result.ok && result.filePath) {
+        return this.dispatchLocalTrack(trackId, result.filePath);
+      }
+      // 下载失败 → 落回在线链路
+    }
+    return this.provider.playTrack(trackId);
+  }
+
+  /** 直接播本地缓存文件（零延迟、零流量、零 API 调用）。 */
+  private async dispatchLocalTrack(trackId: string, filePath: string): Promise<PlaybackDispatchResult> {
+    this.requireMpv();
+    const rec = this.cacheDownloader.getTrack(trackId);
+    await this.mpv!.load(filePath, "replace");
+    this.currentPlayback = {
+      encryptedId: trackId,
+      name: rec?.name ?? trackId,
+      artists: rec?.artists ?? [],
+      coverUrl: rec?.coverUrl,
+    };
+    this.mpv!.setTrack(this.currentPlayback);
+    this.playerState = "available";
+    this.emitPlayerChange("available");
+    console.log("[music-cache] play from cache:", { trackId, name: this.currentPlayback.name });
+    return { state: "dispatched", resourceType: "song", resourceId: trackId };
+  }
 
   async playTrack(input: CandidatePlaybackRequest): Promise<PlaybackDispatchResult> {
     const trackId = input.trackId;
@@ -563,14 +627,14 @@ export class MusicService {
       throw new MusicInputError("E_TRACK_NOT_PLAYABLE");
     }
     await this.ensureReady();
-    return this.provider.playTrack(trackId);
+    return this.dispatchFromCacheOrProvider(trackId);
   }
 
   /** Trusted renderer path: IDs originate from MusicService search results. */
   async playTrackFromUi(trackId: string): Promise<PlaybackDispatchResult> {
     if (!trackId) throw new MusicInputError("E_INVALID_ID_FORMAT");
     await this.ensureReady();
-    return this.provider.playTrack(trackId);
+    return this.dispatchFromCacheOrProvider(trackId);
   }
 
   async playPlaylist(playlistId: string): Promise<PlaybackDispatchResult> {

@@ -145,6 +145,43 @@ vi.mock("./mpv-controller", () => ({
   }),
 }));
 
+// Mock CacheDownloader — 用 hoisted 状态控制缓存命中/下载中场景
+const cacheState = vi.hoisted(() => ({
+  files: new Map<string, string>(),
+  inFlight: new Map<string, Promise<{ ok: boolean; trackId: string; filePath?: string }>>(),
+  records: new Map<string, { encryptedId: string; name: string; artists: string[] }>(),
+  updatedListeners: new Set<() => void>(),
+}));
+vi.mock("./cache-downloader", () => ({
+  CacheDownloader: vi.fn().mockImplementation(function () {
+    return {
+      initialize: vi.fn(async () => {}),
+      isCached: vi.fn((id: string) => cacheState.files.has(id)),
+      getFilePath: vi.fn((id: string) => cacheState.files.get(id)),
+      getDownloadPromise: vi.fn((id: string) => cacheState.inFlight.get(id) ?? undefined),
+      getTrack: vi.fn((id: string) => cacheState.records.get(id)),
+      listTracks: vi.fn(() => [...cacheState.records.values()]),
+      download: vi.fn(async (track: { id: string }) => ({
+        ok: true,
+        trackId: track.id,
+        filePath: cacheState.files.get(track.id),
+      })),
+      remove: vi.fn(async (id: string) => cacheState.records.delete(id)),
+      importFiles: vi.fn(async () => ({ imported: 0, skipped: 0 })),
+      on: vi.fn((_event: string, handler: () => void) => {
+        cacheState.updatedListeners.add(handler);
+      }),
+      off: vi.fn((_event: string, handler: () => void) => {
+        cacheState.updatedListeners.delete(handler);
+      }),
+      onUpdated: vi.fn((handler: () => void) => {
+        cacheState.updatedListeners.add(handler);
+        return () => cacheState.updatedListeners.delete(handler);
+      }),
+    };
+  }),
+}));
+
 import { MusicService } from "./music-service";
 
 const ENC = "4C777A98B81DF0CC069B59F63F3882B1";
@@ -152,6 +189,10 @@ const ENC2 = "A".repeat(32);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  cacheState.files.clear();
+  cacheState.inFlight.clear();
+  cacheState.records.clear();
+  cacheState.updatedListeners.clear();
   // Default: restoreSession finds no token → signed_out.
   mocks.loginAnonymous.mockResolvedValue({ accessToken: "anon", refreshToken: "", expireTime: 86400 });
 });
@@ -336,6 +377,48 @@ describe("MusicService (M3 OpenAPI)", () => {
     const s = makeService();
     await s.start();
     await expect(s.playTrackFromUi(ENC)).rejects.toThrow(/E_TRACK_NOT_PLAYABLE/);
+  });
+
+  it("playTrackFromUi cache hit → plays local file without API call", async () => {
+    cacheState.files.set(ENC, "C:/cache/enc.mp3");
+    cacheState.records.set(ENC, { encryptedId: ENC, name: "晴天", artists: ["周杰伦"] });
+    const s = makeService();
+    await s.start();
+    const r = await s.playTrackFromUi(ENC);
+    expect(r.state).toBe("dispatched");
+    expect(mpvMocks.load).toHaveBeenCalledWith("C:/cache/enc.mp3", "replace");
+    expect(mpvMocks.setTrack).toHaveBeenCalledWith(expect.objectContaining({ encryptedId: ENC, name: "晴天" }));
+    // 关键：不调 getSongDetail（不烧 API 配额）
+    expect(mocks.getSongDetail).not.toHaveBeenCalled();
+  });
+
+  it("playTrackFromUi downloading → awaits in-flight promise, then plays local", async () => {
+    let resolveDownload!: (v: { ok: boolean; trackId: string; filePath?: string }) => void;
+    cacheState.inFlight.set(
+      ENC,
+      new Promise((res) => { resolveDownload = res; }),
+    );
+    cacheState.records.set(ENC, { encryptedId: ENC, name: "晴天", artists: ["周杰伦"] });
+    const s = makeService();
+    await s.start();
+    const pending = s.playTrackFromUi(ENC);
+    // 下载尚未完成时不应打 API
+    await new Promise((r) => setTimeout(r, 0));
+    expect(mocks.getSongDetail).not.toHaveBeenCalled();
+    resolveDownload({ ok: true, trackId: ENC, filePath: "C:/cache/enc.mp3" });
+    const r = await pending;
+    expect(r.state).toBe("dispatched");
+    expect(mpvMocks.load).toHaveBeenCalledWith("C:/cache/enc.mp3", "replace");
+    expect(mocks.getSongDetail).not.toHaveBeenCalled();
+  });
+
+  it("removeCachedTrack rejects when track is playing (E_CACHE_TRACK_PLAYING)", async () => {
+    mocks.getSongDetail.mockResolvedValue({ name: "晴天", playUrl: "http://x/y.mp3" });
+    const s = makeService();
+    await s.start();
+    await s.playTrackFromUi(ENC); // currentPlayback = ENC
+    cacheState.records.set(ENC, { encryptedId: ENC, name: "晴天", artists: [] });
+    await expect(s.removeCachedTrack(ENC)).rejects.toMatchObject({ code: "E_CACHE_TRACK_PLAYING" });
   });
 
   it("playback control methods call mpv", async () => {

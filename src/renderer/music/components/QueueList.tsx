@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { Trash2, X } from "lucide-react";
 import type { Track } from "../types";
 import { formatTime } from "../types";
 
@@ -6,7 +6,10 @@ interface QueueListProps {
   queue: Track[];
   currentId?: string;
   onPlay(track: Track): void;
-  onRemove(index: number): void;
+  /** 从队列移除（普通歌单的 X 按钮） */
+  onRemove?(index: number): void;
+  /** 删除缓存文件（仅缓存歌单的 Trash2 按钮，后端拒删正在播放的曲） */
+  onDeleteTrack?(track: Track): void;
 }
 
 export default function QueueList({
@@ -14,6 +17,7 @@ export default function QueueList({
   currentId,
   onPlay,
   onRemove,
+  onDeleteTrack,
 }: QueueListProps) {
   if (queue.length === 0) {
     return <div className="panel-empty">队列为空</div>;
@@ -58,14 +62,25 @@ export default function QueueList({
             <span className="queue-duration">
               {formatTime(track.durationMs ?? 0)}
             </span>
-            <button
-              type="button"
-              className="icon-btn queue-remove"
-              title="从队列移除"
-              onClick={() => onRemove(i)}
-            >
-              <X size={14} />
-            </button>
+            {onDeleteTrack ? (
+              <button
+                type="button"
+                className="icon-btn queue-remove queue-delete"
+                title="删除缓存"
+                onClick={() => onDeleteTrack(track)}
+              >
+                <Trash2 size={14} />
+              </button>
+            ) : onRemove ? (
+              <button
+                type="button"
+                className="icon-btn queue-remove"
+                title="从队列移除"
+                onClick={() => onRemove(i)}
+              >
+                <X size={14} />
+              </button>
+            ) : null}
           </li>
         );
       })}

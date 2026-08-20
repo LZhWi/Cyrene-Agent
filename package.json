@@ -89,6 +89,7 @@
     "lucide-react": "^1.32.0",
     "marked": "^16.4.2",
     "mdast-util-to-string": "^4.0.0",
+    "music-metadata": "^11.15.0",
     "nodemailer": "^9.0.1",
     "openai": "^6.49.0",
     "pdfkit": "^0.19.1",

@@ -95,6 +95,20 @@ describe("MpvController", () => {
     await ctrl.dispose();
   });
 
+  it("load() explicitly unpauses after loadfile (EOF/暂停后换曲无声的回归)", async () => {
+    const ctrl = new MpvController({ binaryPath: "mpv" });
+    await ctrl.start();
+    await ctrl.load("http://example.com/song.mp3");
+    // loadfile 之后的下一条命令必须是 set_property pause=false：
+    // loadfile 不重置 pause，keep-open 播完自动暂停后换曲会静默加载
+    const calls: string[] = mockSocket.write.mock.calls.map((c: unknown[]) => c[0] as string);
+    const loadIdx = calls.findIndex((c) => c.includes("loadfile"));
+    const unpauseIdx = calls.findIndex((c) => c.includes("set_property") && c.includes("pause") && c.includes("false"));
+    expect(loadIdx).toBeGreaterThanOrEqual(0);
+    expect(unpauseIdx).toBeGreaterThan(loadIdx);
+    await ctrl.dispose();
+  });
+
   it("play/pause/seek/volume send correct mpv commands", async () => {
     const ctrl = new MpvController({ binaryPath: "mpv" });
     await ctrl.start();
@@ -103,7 +117,8 @@ describe("MpvController", () => {
     await ctrl.seek(10);
     await ctrl.setVolume(50);
     const written = mockSocket.write.mock.calls.map((c: unknown[]) => c[0] as string).join("");
-    expect(written).toContain('"set"');
+    // 此 mpv 构建的属性赋值必须用 set_property（见 mpv-controller.ts 注释）
+    expect(written).toContain('"set_property"');
     expect(written).toContain('"pause"');
     expect(written).toContain('"seek"');
     expect(written).toContain('"volume"');

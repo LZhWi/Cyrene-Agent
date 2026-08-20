@@ -21,6 +21,8 @@ export const IPC = {
   WINDOW_GET_CURSOR_POSITION: "window:get-cursor-position",
   PET_VISIBILITY_CHANGED: "pet:visibility-changed",
   APP_QUIT: "app:quit",
+  // main → pet window：启动流程全部完成，可以隐藏启动加载画面
+  STARTUP_READY: "app:startup-ready",
 
   // chat window
   CHAT_MINIMIZE: "chat:minimize",
@@ -390,6 +392,12 @@ export const IPC = {
   MUSIC_OPEN_SETTINGS: "music:open-settings",
   MUSIC_PLAYER_CLOSE: "music:player:close",
   MUSIC_PLAYER_MINIMIZE: "music:player:minimize",
+  // 本地缓存歌单（边播边存 + 用户导入）
+  MUSIC_GET_CACHED_TRACKS: "music:get-cached-tracks",
+  MUSIC_REMOVE_CACHED_TRACK: "music:remove-cached-track",
+  MUSIC_IMPORT_LOCAL_TRACKS: "music:import-local-tracks",
+  // main → renderer：缓存索引变化（下载完成/删除/导入）广播
+  MUSIC_CACHE_UPDATED: "music:cache-updated",
 
   // screenshot
   SCREENSHOT_START: "screenshot:start",

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import {
   AlertCircle,
-  Heart,
+  FolderPlus,
   ListMusic,
   Loader2,
   Music2,
@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import type { MusicPlayerProps } from "../types";
 import logo from "../assets/logo.png";
+import decoBadge from "../assets/music2.png";
 import LyricsView from "./LyricsView";
 import ProgressBar from "./ProgressBar";
 import QueueList from "./QueueList";
@@ -30,10 +31,10 @@ const MODE_META: Record<
   PlayMode,
   { label: string; next: string; Icon: typeof Repeat }
 > = {
-  off: { label: "顺序播放", next: "列表循环", Icon: Repeat },
+  off: { label: "只放一次", next: "单曲循环", Icon: Repeat },
   all: { label: "列表循环", next: "单曲循环", Icon: Repeat },
   one: { label: "单曲循环", next: "随机播放", Icon: Repeat1 },
-  shuffle: { label: "随机播放", next: "顺序播放", Icon: Shuffle },
+  shuffle: { label: "随机播放", next: "只放一次", Icon: Shuffle },
 };
 
 export default function MusicPlayer({
@@ -42,6 +43,9 @@ export default function MusicPlayer({
   playlists,
   activePlaylistId,
   onSelectPlaylist,
+  modeSet,
+  onImportLocalTracks,
+  onRemoveCachedTrack,
   searchResults,
   isSearching,
   onSearch,
@@ -51,19 +55,7 @@ export default function MusicPlayer({
   const [panelCollapsed, setPanelCollapsed] = useState(false);
   const [query, setQuery] = useState("");
   const track = state.currentTrack;
-  const mode: PlayMode = state.isShuffled ? "shuffle" : state.repeatMode;
-
-  // 单键轮换：顺序 → 列表循环 → 单曲循环 → 随机 → 顺序
-  const cycleMode = () => {
-    if (state.isShuffled) {
-      actions.toggleShuffle();
-    } else if (state.repeatMode === "one") {
-      actions.toggleRepeat();
-      actions.toggleShuffle();
-    } else {
-      actions.toggleRepeat();
-    }
-  };
+  const mode: PlayMode = state.playbackMode;
 
   const handleQueryChange = (value: string) => {
     setQuery(value);
@@ -199,6 +191,16 @@ export default function MusicPlayer({
               <div className="panel-header">
                 <span className="panel-title">播放列表</span>
                 <span className="panel-count">{state.queue.length}</span>
+                {modeSet === "cache" && onImportLocalTracks && (
+                  <button
+                    type="button"
+                    className="icon-btn panel-import"
+                    onClick={() => onImportLocalTracks()}
+                    title="导入本地音乐"
+                  >
+                    <FolderPlus size={16} />
+                  </button>
+                )}
                 <button
                   type="button"
                   className="icon-btn panel-collapse"
@@ -244,7 +246,8 @@ export default function MusicPlayer({
                     queue={state.queue}
                     currentId={track?.encryptedId}
                     onPlay={actions.playTrack}
-                    onRemove={actions.removeFromQueue}
+                    onRemove={modeSet === "cache" ? undefined : actions.removeFromQueue}
+                    onDeleteTrack={modeSet === "cache" ? onRemoveCachedTrack : undefined}
                   />
                 )}
               </div>
@@ -275,24 +278,14 @@ export default function MusicPlayer({
         />
         <div className="controls-row">
           <div className="controls-left">
-            <button
-              type="button"
-              className={`icon-btn fav-corner ${track?.isFavorite ? "is-fav" : ""}`}
-              onClick={() => track && actions.toggleFavorite(track)}
-              disabled={!track}
-              title={track?.isFavorite ? "取消收藏" : "收藏"}
-            >
-              <Heart
-                size={18}
-                fill={track?.isFavorite ? "currentColor" : "none"}
-              />
-            </button>
+            {/* 装饰图标（原收藏按钮，功能暂缓） */}
+            <img className="deco-badge" src={decoBadge} alt="" draggable={false} />
           </div>
           <div className="controls-center">
             <button
               type="button"
               className={`icon-btn ${mode !== "off" ? "is-on" : ""}`}
-              onClick={cycleMode}
+              onClick={actions.cycleMode}
               title={`${MODE_META[mode].label}（点击切换${MODE_META[mode].next}）`}
             >
               <ModeIcon size={17} />

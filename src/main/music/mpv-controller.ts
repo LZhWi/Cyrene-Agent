@@ -95,6 +95,7 @@ export class MpvController extends EventEmitter {
     position: 0,
     duration: 0,
     volume: DEFAULT_VOLUME,
+    eofReached: false,
   };
   private readonly options: MpvControllerOptions;
   private readonly socketPath: string;
@@ -122,6 +123,9 @@ export class MpvController extends EventEmitter {
       `--input-ipc-server=${this.socketPath}`,
       "--no-terminal",
       "--no-video",
+      // 播完后停在结尾暂停（不进 idle、track 元数据保留）：
+      // eof-reached 属性是"自然播完"的事实源，配合 keep-open 判定 EOF
+      "--keep-open=always",
       `--volume=${this.options.initialVolume ?? DEFAULT_VOLUME}`,
       ...(this.options.extraArgs ?? []),
     ];
@@ -250,11 +254,9 @@ export class MpvController extends EventEmitter {
         this.state.volume = typeof value === "number" ? value : 0;
         break;
       case "eof-reached":
-        // Playback ended — reset position, keep track info.
-        if (value === true) {
-          this.state.position = 0;
-          this.state.paused = true;
-        }
+        // keep-open 下播完 mpv 停在结尾（position 保留、track 元数据保留），
+        // eofReached 作为"自然播完"事实源推给前端做模式路由
+        this.state.eofReached = value === true;
         break;
       case "idle-active":
         this.state.loaded = value === false;
@@ -276,8 +278,12 @@ export class MpvController extends EventEmitter {
     }
     const id = ++this.cmdId;
     const payload = JSON.stringify({ command: [command, ...args], request_id: id }) + "\n";
+    const cmdLabel = `${command} ${JSON.stringify(args)}`;
     return new Promise((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      this.pending.set(id, {
+        resolve,
+        reject: (err: Error) => reject(new Error(`${err.message} [cmd: ${cmdLabel}]`)),
+      });
       this.socket!.write(payload, (err) => {
         if (err) {
           this.pending.delete(id);
@@ -300,10 +306,16 @@ export class MpvController extends EventEmitter {
     // （time-pos/duration/idle-active），若此时 state.track 还是旧值，前端会
     // 用旧 track 去 queue 匹配，导致 UI 跳回第一首。setTrack 会随后注入新 track。
     this.state.track = undefined;
+    this.state.eofReached = false;
     this.emitState();
     await this.command("loadfile", [url, mode]);
+    // loadfile 不会重置 pause 标志：上一曲暂停/EOF（keep-open 播完自动 pause）
+    // 状态下换曲会"加载了但无声、进度条不动"。必须显式解除暂停。
+    // （实测 mpv v0.41：EOF 后 loadfile 仍保持 pause=true，time-pos 停在 0）
+    await this.command("set_property", ["pause", false]);
     this.state.loaded = true;
     this.state.paused = false;
+    this.state.eofReached = false;
     this.emitState();
   }
 
@@ -313,20 +325,23 @@ export class MpvController extends EventEmitter {
     this.emitState();
   }
 
-  async play(): Promise<void> { await this.command("set", ["pause", false]); }
-  async pause(): Promise<void> { await this.command("set", ["pause", true]); }
+  // 注：此 mpv 构建（v0.41 dev）的 `set` 命令拒绝 JSON 数字/布尔值（报 invalid parameter），
+  // 属性赋值必须用 `set_property`。
+  async play(): Promise<void> { await this.command("set_property", ["pause", false]); }
+  async pause(): Promise<void> { await this.command("set_property", ["pause", true]); }
   async togglePlay(): Promise<void> { await this.command("cycle", ["pause"]); }
   async seek(seconds: number, mode: "relative" | "absolute" = "relative"): Promise<void> {
     await this.command("seek", [seconds, mode]);
   }
   async setVolume(vol: number): Promise<void> {
     const clamped = Math.max(0, Math.min(100, vol));
-    await this.command("set", ["volume", clamped]);
+    await this.command("set_property", ["volume", clamped]);
   }
   async stop(): Promise<void> {
     await this.command("stop");
     this.state.loaded = false;
     this.state.position = 0;
+    this.state.eofReached = false;
     this.emitState();
   }
 

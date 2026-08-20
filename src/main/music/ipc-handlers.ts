@@ -1,4 +1,4 @@
-import { ipcMain, BrowserWindow } from "electron";
+import { ipcMain, BrowserWindow, dialog } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import { MusicInputError, type MusicBackendState, type MusicAccountState, type MusicPlayerState } from "./types";
 import type { MusicService } from "./music-service";
@@ -187,6 +187,34 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
   );
   channels.push(IPC.MUSIC_TOGGLE_FAVORITE);
 
+  // ── 本地缓存歌单（边播边存 + 用户导入） ─────────────────────
+  ipcMain.handle(IPC.MUSIC_GET_CACHED_TRACKS, () =>
+    wrap(() => service.getCachedTracks(), service),
+  );
+  channels.push(IPC.MUSIC_GET_CACHED_TRACKS);
+
+  ipcMain.handle(IPC.MUSIC_REMOVE_CACHED_TRACK, (_e, trackId: string) =>
+    wrap(() => service.removeCachedTrack(trackId), service),
+  );
+  channels.push(IPC.MUSIC_REMOVE_CACHED_TRACK);
+
+  // 主进程弹系统文件选择框（多选，限音频格式）→ 导入缓存池
+  ipcMain.handle(IPC.MUSIC_IMPORT_LOCAL_TRACKS, () =>
+    wrap(async () => {
+      const picked = await dialog.showOpenDialog({
+        title: "导入本地音乐",
+        properties: ["openFile", "multiSelections"],
+        filters: [{ name: "音频文件", extensions: ["mp3", "flac", "wav", "ogg", "m4a", "aac"] }],
+      });
+      if (picked.canceled || picked.filePaths.length === 0) {
+        return { imported: 0, skipped: 0, cancelled: true };
+      }
+      const result = await service.importLocalFiles(picked.filePaths);
+      return { ...result, cancelled: false };
+    }, service),
+  );
+  channels.push(IPC.MUSIC_IMPORT_LOCAL_TRACKS);
+
   // ── 状态变更推送：任何 state 轴变化都广播到所有窗口 ──────────
   const unsubState = service.onStateChange((snapshot) => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -199,10 +227,17 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
       if (!win.isDestroyed()) win.webContents.send(IPC.MUSIC_PLAYBACK_STATE, playback);
     }
   });
+  // 缓存索引变化（下载完成/删除/导入）→ 广播，渲染进程刷新缓存歌单
+  const unsubCache = service.onCacheUpdated(() => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(IPC.MUSIC_CACHE_UPDATED);
+    }
+  });
 
   return function dispose() {
     for (const ch of channels) ipcMain.removeHandler(ch);
     unsubState();
     unsubPlayback();
+    unsubCache();
   };
 }

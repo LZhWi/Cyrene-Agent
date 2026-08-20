@@ -443,6 +443,15 @@ body {
   margin-left: auto;
 }
 
+/* 缓存歌单的“导入本地音乐”入口（与收起按钮一起靠右） */
+.panel-import {
+  margin-left: auto;
+}
+
+.panel-import + .panel-collapse {
+  margin-left: 0;
+}
+
 .panel-content {
   flex: 1;
   min-height: 0;
@@ -692,6 +701,12 @@ body {
   opacity: 1;
 }
 
+/* 删除缓存（危险操作，hover 提示红） */
+.queue-delete:hover {
+  color: #f87171;
+  background: rgba(248, 113, 113, 0.12);
+}
+
 /* ============ 错误条 ============ */
 .mp-error {
   flex: none;
@@ -850,8 +865,14 @@ body {
   cursor: not-allowed;
 }
 
-.fav-corner.is-fav {
-  color: var(--accent);
+/* 左下角装饰徽章（原收藏按钮位置） */
+.deco-badge {
+  width: 26px;
+  height: 26px;
+  object-fit: contain;
+  display: block;
+  pointer-events: none;
+  user-select: none;
 }
 
 .play-btn {
