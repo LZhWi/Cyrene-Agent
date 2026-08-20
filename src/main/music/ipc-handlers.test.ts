@@ -65,7 +65,6 @@ import { MusicInputError } from "./types";
       logout: asyncThat(),
       getDailyRecommendations: asyncThat(),
       searchTracks: asyncThat(searchImpl),
-      presentTracks: asyncThat(),
       playTrackFromUi: asyncThat(playTrackImpl),
       playPlaylist: asyncThat(playTrackImpl),
       getOpenapiConfig: asyncThat(async () => null),
@@ -91,7 +90,6 @@ describe("registerMusicIpcHandlers", () => {
       "music:logout",
       "music:get-daily",
       "music:search",
-      "music:present-tracks",
       "music:play-track",
       "music:play-playlist",
       "music:get-my-playlists",
@@ -123,7 +121,7 @@ describe("registerMusicIpcHandlers", () => {
     disposer();
     expect(removed).toContain("music:get-status");
     expect(removed).toContain("music:play-track");
-    expect(removed.length).toBe(27);
+    expect(removed.length).toBe(26);
   });
 
   it("MUSIC_SEARCH: keyword too long returns ok:false errorCode", async () => {

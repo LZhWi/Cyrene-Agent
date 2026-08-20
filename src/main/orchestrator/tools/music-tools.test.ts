@@ -66,12 +66,11 @@ describe("music Agent tools (M4 — CITA removed)", () => {
     expect(tools.find((t) => t.id === "music_present_tracks")).toBeUndefined();
   });
 
-  it("music_get_daily_recommendations returns tracks with encryptedId + sends card", async () => {
+  it("music_get_daily_recommendations returns tracks with encryptedId", async () => {
     const service = serviceDouble();
     const set = selectionSet();
     service.getDailyRecommendations.mockResolvedValue(set);
-    const sendCard = vi.fn(() => true);
-    const tool = buildMusicTools(service as never, { sendCard })
+    const tool = buildMusicTools(service as never)
       .find((t) => t.id === "music_get_daily_recommendations")!;
 
     const output = JSON.parse(await tool.execute({}, { userQuery: "今日推荐", conversationId: "c1", runId: "r1" }));
@@ -80,12 +79,7 @@ describe("music Agent tools (M4 — CITA removed)", () => {
     expect(output.tracks[0].encryptedId).toBe(ENC);
     expect(output.tracks[0].originalId).toBe(3339230677);
     expect(output.tracks[0].name).toBe("晴天");
-    expect(output.card.delivered).toBe(true);
-    expect(output.card.count).toBe(1);
-    expect(sendCard).toHaveBeenCalledWith(expect.objectContaining({
-      source: "daily_recommendation",
-      tracks: expect.arrayContaining([expect.objectContaining({ encryptedId: ENC })]),
-    }));
+    expect(output.card).toBeUndefined();
   });
 
   it("music_get_daily_recommendations reuses cached daily set", async () => {
@@ -100,12 +94,11 @@ describe("music Agent tools (M4 — CITA removed)", () => {
     expect(service.getDailyRecommendations).not.toHaveBeenCalled();
   });
 
-  it("music_search returns tracks with encryptedId + sends card", async () => {
+  it("music_search returns tracks with encryptedId", async () => {
     const service = serviceDouble();
     const set = selectionSet({ source: "search", query: "晴天" });
     service.searchTracks.mockResolvedValue(set);
-    const sendCard = vi.fn(() => true);
-    const tool = buildMusicTools(service as never, { sendCard })
+    const tool = buildMusicTools(service as never)
       .find((t) => t.id === "music_search")!;
 
     const output = JSON.parse(await tool.execute(
@@ -116,7 +109,7 @@ describe("music Agent tools (M4 — CITA removed)", () => {
     expect(output.kind).toBe("search");
     expect(output.tracks[0].encryptedId).toBe(ENC);
     expect(service.searchTracks).toHaveBeenCalledWith("晴天", "c1", undefined);
-    expect(sendCard).toHaveBeenCalledWith(expect.objectContaining({ source: "search" }));
+    expect(output.card).toBeUndefined();
   });
 
   it("music_search no longer requires purpose param", async () => {

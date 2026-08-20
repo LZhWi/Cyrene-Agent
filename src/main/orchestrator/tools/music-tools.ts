@@ -5,19 +5,9 @@
 //   MusicCandidateRefPayload, MusicSetRefPayload, music_present_tracks
 // - music_search: no purpose param, returns tracks with encryptedId + originalId
 // - music_play_track: accepts encryptedId (32-hex), calls playTrackFromUi
-// - music_get_daily_recommendations / music_search: directly call sendCard
 import type { MusicService } from "../../music/music-service";
-import type { MusicTrack } from "../../music/types";
 import type { ToolDefinition } from "../tool-registry";
 import type { ToolContext } from "../tool-context";
-
-export interface MusicToolHooks {
-  /** Renderer card delivery. Returns true if the renderer accepted the card. */
-  sendCard?: (card: {
-    source: string;
-    tracks: MusicTrack[];
-  }) => boolean;
-}
 
 const HEX32 = /^[0-9A-Fa-f]{32}$/;
 
@@ -25,26 +15,13 @@ function conversationIdOf(ctx?: ToolContext): string {
   return ctx?.conversationId || "default";
 }
 
-/** Pick the top N tracks and deliver them as a card if a recipient exists. */
-function deliverCard(
-  hooks: MusicToolHooks,
-  source: string,
-  tracks: MusicTrack[],
-  maxCards = 5,
-): { delivered: boolean; displayed: MusicTrack[] } {
-  const displayed = tracks.slice(0, maxCards);
-  if (!hooks.sendCard) return { delivered: false, displayed };
-  const delivered = hooks.sendCard({ source, tracks: displayed });
-  return { delivered, displayed };
-}
-
-export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {}): ToolDefinition[] {
+export function buildMusicTools(service: MusicService): ToolDefinition[] {
   return [
     {
       id: "music_get_daily_recommendations",
       capability: "music.daily_recommendations",
       name: "获取今日推荐歌曲",
-      description: "获取网易云音乐今日推荐歌曲。返回包含加密 ID 和原始 ID 的歌曲列表，并展示前 5 首为卡片。需要用户已登录。",
+      description: "获取网易云音乐今日推荐歌曲。返回包含加密 ID 和原始 ID 的歌曲列表。需要用户已登录。",
       enabled: true,
       modes: ["work"],
       risk: "safe",
@@ -56,7 +33,6 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
         const conversationId = conversationIdOf(ctx);
         const set = service.getLatestSelectionSet(conversationId, "daily_recommendation")
           ?? await service.getDailyRecommendations(conversationId);
-        const card = deliverCard(hooks, "daily_recommendation", set.tracks);
         return JSON.stringify({
           kind: "recommendations",
           tracks: set.tracks.map((t) => ({
@@ -68,7 +44,6 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
             durationMs: t.durationMs,
             coverUrl: t.coverUrl,
           })),
-          card: { delivered: card.delivered, count: card.displayed.length },
         });
       },
     },
@@ -76,7 +51,7 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
       id: "music_search",
       capability: "music.search",
       name: "搜索网易云歌曲",
-      description: "按关键词搜索网易云音乐。返回包含加密 ID 和原始 ID 的歌曲列表，并展示前 5 首为卡片。用户说「播放某歌」时，先用此工具搜索拿到 encryptedId，再调 music_play_track。",
+      description: "按关键词搜索网易云音乐。返回包含加密 ID 和原始 ID 的歌曲列表。用户说「播放某歌」时，先用此工具搜索拿到 encryptedId，再调 music_play_track。",
       enabled: true,
       modes: ["work"],
       risk: "safe",
@@ -98,7 +73,6 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
           conversationId,
           args.limit as number | undefined,
         );
-        const card = deliverCard(hooks, "search", set.tracks);
         return JSON.stringify({
           kind: "search",
           tracks: set.tracks.map((t) => ({
@@ -110,7 +84,6 @@ export function buildMusicTools(service: MusicService, hooks: MusicToolHooks = {
             durationMs: t.durationMs,
             coverUrl: t.coverUrl,
           })),
-          card: { delivered: card.delivered, count: card.displayed.length },
         });
       },
     },

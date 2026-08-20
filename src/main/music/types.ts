@@ -65,10 +65,6 @@ export interface MusicSelectionSet {
   createdAt: number;
   expiresAt: number;
   conversationId: string;
-  resolutionRunId?: string;
-  resolutionPurpose?: "discover" | "play";
-  presentedAt?: number;
-  presentedTrackIds?: string[];
   tracks: MusicTrack[];
 }
 
@@ -77,29 +73,6 @@ export interface PlaybackDispatchResult {
   resourceType: "song" | "playlist";
   resourceId: string;
   errorCode?: string;
-}
-
-export interface CandidatePlaybackRequest {
-  provider: string;
-  setId: string;
-  trackId: string;
-  conversationId: string;
-  runId?: string;
-}
-
-/** Tool Runtime only. Never expose these Provider parameters to the Agent or CITA package. */
-export interface MusicCandidateRefPayload {
-  provider: string;
-  setId: string;
-  trackId: string;
-  conversationId: string;
-}
-
-/** Tool Runtime only. */
-export interface MusicSetRefPayload {
-  provider: string;
-  setId: string;
-  conversationId: string;
 }
 
 export class MusicInputError extends Error {

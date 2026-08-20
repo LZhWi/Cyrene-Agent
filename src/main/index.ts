@@ -145,10 +145,6 @@ import { getDateLocale, updateLocaleContext } from "./locale-context";
 import { setAsrConfig } from "./asr/volcano-asr-engine";
 import { registerCallIpc, setCallSettings } from "./call/call-manager";
 import { initSkills, skillRegistry } from "./skills";
-import {
-  isMusicCompanionAvailable,
-  loadMusicCompanionHost,
-} from "./skills/music-companion-host";
 
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
 import { createSchedulerSubsystem, type SchedulerSubsystem } from "./scheduler/bootstrap";
@@ -417,37 +413,11 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
 
   // Cloud Music wiring (MusicService + IPC + 9 Agent tools + shutdown latch)
   const musicPaths = resolveMusicPaths();
-  const musicBootstrap = bootstrapMusicService(musicPaths, {
-    sendCard: (card) => {
-      if (reactChatWindow && !reactChatWindow.isDestroyed()) {
-        reactChatWindow.webContents.send(IPC.AGUI_EVENT, {
-          type: "CUSTOM",
-          name: "cyrene.music",
-          value: card,
-        });
-        return true;
-      }
-      return false;
-    },
-  });
+  const musicBootstrap = bootstrapMusicService(musicPaths);
   installShutdownLatch(musicBootstrap);
 
   // Skill 系统：扫描双源 skills + 注册 meta-tool
   initSkills();
-  try {
-    loadMusicCompanionHost(
-      path.join(app.getAppPath(), "dist", "skills", "cyrene-music-companion", "index.js"),
-      () => ({
-        skillEnabled: skillRegistry.getById("cyrene-music-companion")?.enabled === true,
-        backendAvailable: ["ready", "degraded"].includes(musicBootstrap.service.getBackendState()),
-        enabledTools: toolRegistry.getEnabledTools().map((tool) => tool.id),
-      }),
-    );
-    skillRegistry.setAvailability("cyrene-music-companion", isMusicCompanionAvailable);
-  } catch (err) {
-    console.error("[MusicCompanion] 复合 Skill 加载失败:", err);
-    skillRegistry.setAvailability("cyrene-music-companion", () => false);
-  }
 
   // 启动游戏代肝子系统
   bootstrapGameBot();

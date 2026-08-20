@@ -27,7 +27,6 @@ import type {
   LoginFlowState,
   MusicProfile,
   MusicShutdownReport,
-  CandidatePlaybackRequest,
   MusicPlaylist,
   MusicPlaylistDetail,
   MusicSubscription,
@@ -37,10 +36,6 @@ import type { MusicStatusSnapshot } from "../../shared/music-view-state";
 import type { PlaybackState } from "../../shared/music-types";
 
 const SET_TTL_MS = 30 * 60_000;
-
-export interface PresentResult {
-  cardRef: string;
-}
 
 type StateListener<T> = (state: T) => void;
 
@@ -209,10 +204,6 @@ export class MusicService {
   getLyricsCacheDir(): string { return path.join(this.paths.runtimeDir, "lyrics-cache"); }
   getActiveProfile(): MusicProfile | null { return this.activeProfile; }
 
-  getSelectionSet(setId: string, conversationId: string): MusicSelectionSet | null {
-    return this.cache.get(setId, conversationId);
-  }
-
   getLatestSelectionSet(
     conversationId: string,
     source?: MusicSelectionSet["source"],
@@ -330,7 +321,6 @@ export class MusicService {
 
   async getDailyRecommendations(
     conversationId: string,
-    options: { resolutionRunId?: string } = {},
   ): Promise<MusicSelectionSet> {
     await this.ensureReady();
     this.requireSignedIn();
@@ -343,8 +333,6 @@ export class MusicService {
       createdAt: Date.now(),
       expiresAt: Date.now() + SET_TTL_MS,
       conversationId,
-      resolutionRunId: options.resolutionRunId,
-      resolutionPurpose: "discover",
       tracks,
     };
     this.cache.add(set);
@@ -355,7 +343,6 @@ export class MusicService {
     keyword: string,
     conversationId: string,
     limit?: number,
-    options: { resolutionRunId?: string; purpose?: "discover" | "play" } = {},
   ): Promise<MusicSelectionSet> {
     await this.ensureReady();
     const trimmed = (typeof keyword === "string" ? keyword : "").trim();
@@ -372,47 +359,10 @@ export class MusicService {
       createdAt: Date.now(),
       expiresAt: Date.now() + SET_TTL_MS,
       conversationId,
-      resolutionRunId: options.resolutionRunId,
-      resolutionPurpose: options.purpose ?? "discover",
       tracks,
     };
     this.cache.add(set);
     return set;
-  }
-
-  async presentTracks(params: {
-    setId: string;
-    conversationId: string;
-    trackIds: string[];
-    reasons?: string[];
-  }): Promise<PresentResult> {
-    const { setId, conversationId, trackIds, reasons } = params;
-    const set = this.cache.get(setId, conversationId);
-    if (!set) throw new MusicInputError("E_SET_NOT_FOUND");
-    if (trackIds.length === 0 || trackIds.length > 5) throw new MusicInputError("E_TOO_MANY_SELECTED");
-    if (reasons) {
-      if (reasons.length !== trackIds.length) throw new MusicInputError("E_REASONS_MISMATCH");
-      for (const r of reasons) {
-        if (r.length > 50) throw new MusicInputError("E_REASON_TOO_LONG");
-      }
-      if (reasons.join("").length > 500) throw new MusicInputError("E_REASONS_TOTAL_TOO_LONG");
-    }
-    const setTrackIds = new Set(set.tracks.map((t) => t.id));
-    for (const tid of trackIds) {
-      if (!setTrackIds.has(tid)) throw new MusicInputError("E_TRACK_NOT_IN_SET");
-    }
-    const cardRef = `cyrene:music:${setId}:${trackIds.join(":")}`;
-    return { cardRef };
-  }
-
-  markTracksPresented(setId: string, conversationId: string, trackIds: string[]): void {
-    const set = this.cache.get(setId, conversationId);
-    if (!set) throw new MusicInputError("E_SET_NOT_FOUND");
-    const available = new Set(set.tracks.map((track) => track.id));
-    if (trackIds.length === 0 || trackIds.some((trackId) => !available.has(trackId))) {
-      throw new MusicInputError("E_TRACK_NOT_IN_SET");
-    }
-    this.cache.markPresented(setId, conversationId, trackIds);
   }
 
   async getMyPlaylists(): Promise<MusicPlaylist[]> {
@@ -612,26 +562,6 @@ export class MusicService {
     this.emitPlayerChange("available");
     console.log("[music-cache] play from cache:", { trackId, name: this.currentPlayback.name });
     return { state: "dispatched", resourceType: "song", resourceId: trackId };
-  }
-
-  async playTrack(input: CandidatePlaybackRequest): Promise<PlaybackDispatchResult> {
-    const trackId = input.trackId;
-    if (!trackId) throw new MusicInputError("E_INVALID_ID_FORMAT");
-    const set = this.cache.get(input.setId, input.conversationId);
-    if (!set) throw new MusicInputError("E_SET_NOT_FOUND");
-    if (set.provider !== input.provider) throw new MusicInputError("E_PROVIDER_MISMATCH");
-    if (!set.tracks.some((track) => track.id === trackId)) {
-      throw new MusicInputError("E_TRACK_NOT_IN_SET");
-    }
-    const wasPresented = set.presentedTrackIds?.includes(trackId) === true;
-    const resolvedForThisRun = set.resolutionPurpose === "play"
-      && Boolean(input.runId)
-      && set.resolutionRunId === input.runId;
-    if (!wasPresented && !resolvedForThisRun) {
-      throw new MusicInputError("E_TRACK_NOT_PLAYABLE");
-    }
-    await this.ensureReady();
-    return this.dispatchFromCacheOrProvider(trackId);
   }
 
   /** Trusted renderer path: IDs originate from MusicService search results. */

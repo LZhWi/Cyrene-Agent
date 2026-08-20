@@ -276,85 +276,6 @@ describe("MusicService (M3 OpenAPI)", () => {
     expect(set.tracks).toHaveLength(3);
   });
 
-  it("presentTracks validates trackIds belong to set", async () => {
-    mocks.searchSongs.mockResolvedValue({ recordCount: 1, records: [songRec()] });
-    const s = makeService();
-    await s.start();
-    (s as unknown as { orchestrator: { setAccountState: (st: string) => void } }).orchestrator.setAccountState("signed_in");
-    const set = await s.searchTracks("晴天", "c1");
-    await expect(s.presentTracks({ setId: set.setId, conversationId: "c1", trackIds: [ENC2] }))
-      .rejects.toThrow(/E_TRACK_NOT_IN_SET/);
-    const ok = await s.presentTracks({ setId: set.setId, conversationId: "c1", trackIds: [ENC] });
-    expect(ok.cardRef).toContain(set.setId);
-  });
-
-  it("presentTracks limits to 5 selected", async () => {
-    mocks.searchSongs.mockResolvedValue({ recordCount: 1, records: [songRec()] });
-    const s = makeService();
-    await s.start();
-    (s as unknown as { orchestrator: { setAccountState: (st: string) => void } }).orchestrator.setAccountState("signed_in");
-    const set = await s.searchTracks("晴天", "c1");
-    await expect(s.presentTracks({ setId: set.setId, conversationId: "c1", trackIds: [ENC, ENC, ENC, ENC, ENC, ENC] }))
-      .rejects.toThrow(/E_TOO_MANY_SELECTED/);
-  });
-
-  it("markTracksPresented sets presentedTrackIds", async () => {
-    mocks.searchSongs.mockResolvedValue({ recordCount: 1, records: [songRec()] });
-    const s = makeService();
-    await s.start();
-    (s as unknown as { orchestrator: { setAccountState: (st: string) => void } }).orchestrator.setAccountState("signed_in");
-    const set = await s.searchTracks("晴天", "c1");
-    s.markTracksPresented(set.setId, "c1", [ENC]);
-    expect(s.getSelectionSet(set.setId, "c1")).toEqual(expect.objectContaining({
-      presentedTrackIds: [ENC],
-    }));
-  });
-
-  it("playTrack (CITA) validates candidate set + run", async () => {
-    mocks.searchSongs.mockResolvedValue({ recordCount: 1, records: [songRec()] });
-    mocks.getSongDetail.mockResolvedValue({ name: "晴天", playUrl: "http://x/y.mp3" });
-    const s = makeService();
-    await s.start();
-    (s as unknown as { orchestrator: { setAccountState: (st: string) => void } }).orchestrator.setAccountState("signed_in");
-    const set = await s.searchTracks("晴天", "c1", 5, { resolutionRunId: "run-1", purpose: "play" });
-
-    // Wrong run → rejected
-    await expect(s.playTrack({
-      provider: set.provider,
-      setId: set.setId,
-      trackId: ENC,
-      conversationId: "c1",
-      runId: "run-2",
-    })).rejects.toThrow(/E_TRACK_NOT_PLAYABLE/);
-
-    // Correct run → dispatched via mpv
-    const r = await s.playTrack({
-      provider: set.provider,
-      setId: set.setId,
-      trackId: ENC,
-      conversationId: "c1",
-      runId: "run-1",
-    });
-    expect(r.state).toBe("dispatched");
-    expect(r.resourceType).toBe("song");
-    expect(r.resourceId).toBe(ENC);
-  });
-
-  it("playTrack rejects track not in set", async () => {
-    mocks.searchSongs.mockResolvedValue({ recordCount: 1, records: [songRec()] });
-    const s = makeService();
-    await s.start();
-    (s as unknown as { orchestrator: { setAccountState: (st: string) => void } }).orchestrator.setAccountState("signed_in");
-    const set = await s.searchTracks("晴天", "c1", 5, { resolutionRunId: "run-1", purpose: "play" });
-    await expect(s.playTrack({
-      provider: set.provider,
-      setId: set.setId,
-      trackId: ENC2,
-      conversationId: "c1",
-      runId: "run-1",
-    })).rejects.toThrow(/E_TRACK_NOT_IN_SET/);
-  });
-
   it("playTrackFromUi rejects empty id", async () => {
     const s = makeService();
     await s.start();
@@ -576,16 +497,6 @@ describe("MusicService (M3 OpenAPI)", () => {
     await s.applyOpenapiConfig({ appId: "x", privateKey: "C".repeat(1600) });
     const after = await s.getOpenapiConfig();
     expect(after).not.toBeNull();
-  });
-
-  it("getSelectionSet retrieves set by id and conversationId", async () => {
-    mocks.searchSongs.mockResolvedValue({ recordCount: 1, records: [songRec()] });
-    const s = makeService();
-    await s.start();
-    (s as unknown as { orchestrator: { setAccountState: (st: string) => void } }).orchestrator.setAccountState("signed_in");
-    const set = await s.searchTracks("晴天", "c1");
-    expect(s.getSelectionSet(set.setId, "c1")).toEqual(set);
-    expect(s.getSelectionSet(set.setId, "c2")).toBeNull();
   });
 
   it("no config → incompatible", async () => {

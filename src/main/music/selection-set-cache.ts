@@ -54,23 +54,6 @@ export class SelectionSetCache {
     return null;
   }
 
-  touch(setId: string): void {
-    const s = this.bySetId.get(setId);
-    if (!s) return;
-    const conv = this.byConversation.get(s.conversationId);
-    if (!conv) return;
-    conv.delete(setId);
-    conv.add(setId);
-  }
-
-  markPresented(setId: string, conversationId: string, trackIds: string[], presentedAt = Date.now()): void {
-    const set = this.get(setId, conversationId);
-    if (!set) throw new Error("E_SET_NOT_FOUND");
-    set.presentedAt = presentedAt;
-    set.presentedTrackIds = [...trackIds];
-    this.touch(setId);
-  }
-
   evictExpired(): void {
     const now = Date.now();
     for (const [id, s] of this.bySetId) {
