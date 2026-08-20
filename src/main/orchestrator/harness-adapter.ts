@@ -58,21 +58,6 @@ const CODE_ONLY_GIT_TOOL_IDS = new Set([
   "git_revert",
 ]);
 
-const HARNESS_SKILL_SELECTION_POLICY = [
-  "## Skill 选择",
-  "可用 Skill 清单中的每一项都是用户明确启用的能力，应在匹配场景下优先考虑使用，而不是默认忽略。",
-  "当当前任务明确匹配某个 Skill 的描述，且该 Skill 能提供专门流程、约束或领域能力时，调用 invoke_skill(skill_id) 获取执行指令，然后按指令执行。",
-  "不要因为表面关键词重合而调用 Skill；若多个 Skill 同时匹配，只选择完成当前任务所需的最小集合。",
-].join("\n");
-
-const HARNESS_TASK_DELEGATION_POLICY = [
-  "## 子代理 task 委托",
-  "当任务可拆成独立、多步骤的子任务，且委托能减少主任务上下文负担或让不同方向并行推进时，使用 task 委托一位黄金裔。",
-  "适合：多个互不依赖的调查或执行方向；较大目录或多个模块的独立审查；可明确交付结果的专项任务。",
-  "不要委托：一句话即可回答的问题；只需一次工具调用的操作。",
-  "主任务仍负责整合子任务结果、判断下一步并向用户完成回复。",
-].join("\n");
-
 function fingerprint(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
@@ -441,11 +426,14 @@ export function buildHarnessPromptLayers(options: CyreneRunOptions): PromptLayer
     parts.push(options.toolSystemContent);
   }
 
+  // 工具 / Skill / Task 委托统一使用规范（prompts/tool_usage.md）。
+  // 唯一事实源：不在此处或各模式 system 文件里再放一份，避免规则散落与漂移。
+  // chat 模式没有工具能力，不注入。
   if (options.conversationMode !== "chat") {
-    parts.push(HARNESS_SKILL_SELECTION_POLICY);
-  }
-  if (options.conversationMode === "work" || options.conversationMode === "code") {
-    parts.push(HARNESS_TASK_DELEGATION_POLICY);
+    const toolUsagePolicy = loadPromptFile("tool_usage.md");
+    if (toolUsagePolicy) {
+      parts.push(toolUsagePolicy);
+    }
   }
 
   const runtimeParts: string[] = [];

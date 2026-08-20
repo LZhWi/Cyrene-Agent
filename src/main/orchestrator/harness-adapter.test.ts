@@ -31,19 +31,26 @@ describe("Harness Todo working notebook policy", () => {
     expect(prompt).toContain("不得作为后续行动的强约束");
   });
 
-  it("adds Skill selection to tool modes and task delegation only to Work and Code", () => {
-    const workPrompt = buildHarnessSystemPrompt({
-      soulSystemBaseContent: "persona", toolSystemContent: "tools", conversationMode: "work",
-    } as never);
-    const learnPrompt = buildHarnessSystemPrompt({
-      soulSystemBaseContent: "persona", toolSystemContent: "tools", conversationMode: "learn",
-    } as never);
+  it("injects the shared tool usage policy (tool_usage.md) for tool modes but not chat", () => {
+    const base = {
+      soulSystemBaseContent: "persona",
+      toolSystemContent: "tools",
+    };
+    const workPrompt = buildHarnessSystemPrompt({ ...base, conversationMode: "work" } as never);
+    const learnPrompt = buildHarnessSystemPrompt({ ...base, conversationMode: "learn" } as never);
+    const chatPrompt = buildHarnessSystemPrompt({ ...base, conversationMode: "chat" } as never);
 
-    expect(workPrompt).toContain("Skill 选择");
-    expect(workPrompt).toContain("不要因为表面关键词重合而调用 Skill");
+    // 工具使用：主动调用规则（修复"不催就不调工具"）
+    expect(workPrompt).toContain("## 工具使用");
+    expect(workPrompt).toContain("主动调用");
+    // Skill 使用规范
+    expect(workPrompt).toContain("invoke_skill");
+    // Task 委托规范
     expect(workPrompt).toContain("多个互不依赖的调查或执行方向");
-    expect(learnPrompt).toContain("Skill 选择");
-    expect(learnPrompt).not.toContain("子代理 task 委托");
+    // learn 同样注入统一规范（Task 一节按工具可用性自行生效）
+    expect(learnPrompt).toContain("## 工具使用");
+    // chat 模式没有工具能力，不注入
+    expect(chatPrompt).not.toContain("## 工具使用");
   });
 
   it("assembles the same persona prompt for Work and Code", () => {
