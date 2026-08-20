@@ -564,6 +564,22 @@ body {
   font-weight: 600;
 }
 
+/* 译文：原文下方小字淡色（双语歌词） */
+.lyric-trans {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.5;
+  color: var(--text-faint);
+  opacity: 0.85;
+}
+
+.lyric-line.is-active .lyric-trans {
+  color: var(--accent);
+  opacity: 0.72;
+}
+
 /* ============ 队列 ============ */
 .queue {
   flex: 1;

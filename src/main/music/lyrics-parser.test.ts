@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseLrc } from "./lyrics-parser";
+import { parseLrc, mergeTranslation } from "./lyrics-parser";
 
 describe("parseLrc", () => {
   it("parses timestamps and text, sorting ascending", () => {
@@ -52,5 +52,40 @@ describe("parseLrc", () => {
   it("returns [] for empty / no-timestamp input", () => {
     expect(parseLrc("")).toEqual([]);
     expect(parseLrc("[ti:x]\nplain text only")).toEqual([]);
+  });
+});
+
+describe("mergeTranslation", () => {
+  const lines = [
+    { timeMs: 10_000, text: "hello" },
+    { timeMs: 15_000, text: "world" },
+    { timeMs: 20_000, text: "孤独" },
+  ];
+
+  it("时间戳精确一致 → 逐行合并 translation", () => {
+    const trans = ["[00:10.00]你好", "[00:15.00]世界", "[00:20.00]lonely"].join("\n");
+    const out = mergeTranslation(lines, trans);
+    expect(out).toEqual([
+      { timeMs: 10_000, text: "hello", translation: "你好" },
+      { timeMs: 15_000, text: "world", translation: "世界" },
+      { timeMs: 20_000, text: "孤独", translation: "lonely" },
+    ]);
+  });
+
+  it("翻译时间戳有小漂移（<800ms）→ 容差就近匹配", () => {
+    const trans = ["[00:10.30]你好", "[00:14.80]世界"].join("\n");
+    const out = mergeTranslation(lines, trans);
+    expect(out[0].translation).toBe("你好");
+    expect(out[1].translation).toBe("世界");
+    expect(out[2].translation).toBeUndefined();
+  });
+
+  it("翻译为空 / 无对应行 → 原样返回（不修改入参）", () => {
+    expect(mergeTranslation(lines, "")).toBe(lines);
+    expect(mergeTranslation([], "[00:10.00]x")).toEqual([]);
+    const out = mergeTranslation(lines, "[01:00.00]迟到的翻译");
+    expect(out.every((l) => l.translation === undefined)).toBe(true);
+    // 入参未被修改
+    expect(lines[0]).toEqual({ timeMs: 10_000, text: "hello" });
   });
 });

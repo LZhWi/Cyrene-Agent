@@ -439,12 +439,16 @@ describe("MusicService (M3 OpenAPI)", () => {
   });
 
   it("getLyrics calls client.getLyric", async () => {
-    mocks.getLyric.mockResolvedValue({ lyric: "[00:01.00]晴天\n" });
+    mocks.getLyric.mockResolvedValue({
+      lyric: "[00:01.00]晴天\n",
+      transLyric: "[00:01.00]Sunny Day\n",
+    });
     const s = makeService();
     await s.start();
     (s as unknown as { orchestrator: { setAccountState: (st: string) => void } }).orchestrator.setAccountState("signed_in");
-    const lyrics = await s.getLyrics(ENC);
-    expect(lyrics).toBe("[00:01.00]晴天\n");
+    const { lrc, transLrc } = await s.getLyrics(ENC);
+    expect(lrc).toBe("[00:01.00]晴天\n");
+    expect(transLrc).toBe("[00:01.00]Sunny Day\n");
     expect(mocks.getLyric).toHaveBeenCalledWith(ENC);
   });
 

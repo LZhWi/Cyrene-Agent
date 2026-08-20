@@ -3,7 +3,7 @@ import { IPC } from "../../shared/ipc-channels";
 import { MusicInputError, type MusicBackendState, type MusicAccountState, type MusicPlayerState } from "./types";
 import type { MusicService } from "./music-service";
 import { sanitizeLogLine } from "./log-sanitizer";
-import { parseLrc } from "./lyrics-parser";
+import { parseLrc, mergeTranslation } from "./lyrics-parser";
 import { LyricsCache } from "./lyrics-cache";
 
 export type MusicIpcResult<T> =
@@ -171,8 +171,9 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
     wrap(async () => {
       const cached = await lyricsCache.get(payload.encryptedId);
       if (cached) return cached;
-      const raw = await service.getLyrics(payload.encryptedId);
-      const lines = parseLrc(raw);
+      const { lrc, transLrc } = await service.getLyrics(payload.encryptedId);
+      // 原文优先带时间戳 LRC；无 LRC 时不做纯文本 fallback（无时间轴无法滚动）
+      const lines = mergeTranslation(parseLrc(lrc), transLrc);
       await lyricsCache.set(payload.encryptedId, lines);
       return lines;
     }, service),

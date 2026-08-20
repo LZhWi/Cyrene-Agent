@@ -5,6 +5,8 @@
 export interface LyricLine {
   timeMs: number;
   text: string;
+  /** 译文（网易云 transLyric 按时间戳对齐合并；无翻译的歌没有该字段）。 */
+  translation?: string;
 }
 
 export interface Track {

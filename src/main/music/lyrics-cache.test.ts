@@ -12,12 +12,25 @@ beforeEach(async () => {
 });
 
 describe("LyricsCache", () => {
-  it("miss returns null, then set/get round-trips", async () => {
+  it("miss returns null, then set/get round-trips（v2 含 translation 字段）", async () => {
     const c = new LyricsCache(dir);
     expect(await c.get(ENC)).toBeNull();
-    const lines = [{ timeMs: 12_000, text: "晴天" }, { timeMs: 15_300, text: "故事的小黄花" }];
+    const lines = [
+      { timeMs: 12_000, text: "晴天" },
+      { timeMs: 15_300, text: "故事的小黄花", translation: "the little yellow flower of the story" },
+    ];
     await c.set(ENC, lines);
     expect(await c.get(ENC)).toEqual(lines);
+  });
+
+  it("v1 旧格式（裸数组）视为 miss → 触发重拉升级 v2", async () => {
+    const c = new LyricsCache(dir);
+    await fs.mkdir(dir, { recursive: true });
+    await fs.writeFile(path.join(dir, `${ENC}.json`), JSON.stringify([{ timeMs: 0, text: "old" }]));
+    expect(await c.get(ENC)).toBeNull();
+    // 重拉后写入 v2 覆盖
+    await c.set(ENC, [{ timeMs: 0, text: "new", translation: "新" }]);
+    expect(await c.get(ENC)).toEqual([{ timeMs: 0, text: "new", translation: "新" }]);
   });
 
   it("caches empty [] (means: no lyrics — don't re-request)", async () => {

@@ -4,6 +4,8 @@
 export interface LyricLine {
   timeMs: number;
   text: string;
+  /** 译文（transLyric，网易云返回的翻译 LRC 按时间戳对齐合并而来）。 */
+  translation?: string;
 }
 
 const TAG_RE = /^\[([^\]]*)\]/;
@@ -59,4 +61,39 @@ export function parseLrc(lrc: string): LyricLine[] {
 
   out.sort((a, b) => a.timeMs - b.timeMs);
   return out;
+}
+
+/**
+ * 把翻译 LRC（transLyric，同样带时间戳）合并进已解析的原文行。
+ *
+ * 对齐策略：翻译与原文的时间戳通常逐行一致；先精确匹配 timeMs，
+ * 精确不中再在 ±800ms 容差内找最近的一行。找不到的原文行保持无翻译。
+ * 返回新数组（不修改入参）。
+ */
+export function mergeTranslation(lines: LyricLine[], transLrc: string): LyricLine[] {
+  const trans = parseLrc(transLrc);
+  if (lines.length === 0 || trans.length === 0) return lines;
+
+  // 按 timeMs 建索引（翻译一行只服务一个时间点）
+  const exact = new Map<number, string>();
+  for (const t of trans) {
+    if (!exact.has(t.timeMs)) exact.set(t.timeMs, t.text);
+  }
+
+  const TOLERANCE_MS = 800;
+  return lines.map((line) => {
+    let text = exact.get(line.timeMs);
+    if (text === undefined) {
+      // 容差就近匹配（翻译时间戳与原文有零点几秒漂移的常见情况）
+      let best: { dt: number; text: string } | null = null;
+      for (const t of trans) {
+        const dt = Math.abs(t.timeMs - line.timeMs);
+        if (dt <= TOLERANCE_MS && (best === null || dt < best.dt)) {
+          best = { dt, text: t.text };
+        }
+      }
+      text = best?.text;
+    }
+    return text ? { ...line, translation: text } : line;
+  });
 }

@@ -41,6 +41,9 @@ export default function LyricsView({ track, positionMs }: LyricsViewProps) {
           className={`lyric-line ${i === activeIndex ? "is-active" : ""}`}
         >
           {line.text}
+          {line.translation && (
+            <span className="lyric-trans">{line.translation}</span>
+          )}
         </p>
       ))}
     </div>

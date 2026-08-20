@@ -524,11 +524,15 @@ export class MusicService {
 
   // ── UI 直连数据（lyrics / favorite，不经 AI 工具层） ────────
 
-  async getLyrics(encryptedId: string): Promise<string> {
+  /** 返回原文 LRC + 翻译 LRC（翻译由 IPC 层按时间戳合并）。 */
+  async getLyrics(encryptedId: string): Promise<{ lrc: string; transLrc: string }> {
     await this.ensureReady();
     this.requireSignedIn();
     const lyric = await this.client.getLyric(encryptedId);
-    return lyric.lyric ?? "";
+    return {
+      lrc: lyric.lyric ?? "",
+      transLrc: lyric.transLyric ?? "",
+    };
   }
 
   async toggleFavorite(encryptedId: string, favorite: boolean): Promise<boolean> {

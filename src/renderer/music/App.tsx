@@ -488,20 +488,30 @@ export function App() {
         patch({ isLoading: false, error: "播放失败：" + (err instanceof Error ? err.message : String(err)) });
       });
 
-      // 异步补歌词（导入的本地曲目没有歌词，跳过）
+      // 异步补歌词（导入的本地曲目没有网易云歌词，跳过）
       if (!track.encryptedId.startsWith("local-")) {
         void api.getLyrics(track.encryptedId).then((r) => {
-          if (r.ok && r.data) {
-            const lyrics = r.data as { timeMs: number; text: string }[];
-            setState((s) => ({
+          if (!r.ok || !r.data) {
+            if (!r.ok) console.warn("[music] getLyrics failed:", r.errorCode);
+            return;
+          }
+          const lyrics = r.data as { timeMs: number; text: string; translation?: string }[];
+          setState((s) => {
+            // 响应迟到且用户已切歌 → 丢弃，避免旧歌词挂到新歌上
+            if (s.currentTrack && s.currentTrack.encryptedId !== track.encryptedId) {
+              return s;
+            }
+            return {
               ...s,
               currentTrack: s.currentTrack ? { ...s.currentTrack, lyrics } : s.currentTrack,
               queue: s.queue.map((t) =>
                 t.encryptedId === track.encryptedId ? { ...t, lyrics } : t,
               ),
-            }));
-          }
-        }).catch(() => { /* 歌词可选，失败不提示 */ });
+            };
+          });
+        }).catch((err) => {
+          console.warn("[music] getLyrics error:", err);
+        });
       }
     },
     [api, patch],
