@@ -2,7 +2,7 @@
 // 从 settings.ts 抽离。完全自含（window.gameBot IPC + IIFE 闭包）。
 // 副作用导入：模块加载时执行 initGameBotPluginCard()。
 
-// ===== 游戏代肝插件卡（在 plugins 面板里，MCP 下、生活工具上）=====
+// ===== 游戏代肝插件卡（在 plugins 面板里，本地文件与 Playwright 之间）=====
 function initGameBotPluginCard(): void {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const gb = (window as any).gameBot as {

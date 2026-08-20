@@ -1,4 +1,4 @@
-// Plugins 面板 DOM 引用（天气/出行/Playwright/权限/生活等插件子区）
+// Plugins 面板 DOM 引用（天气/出行/Playwright/权限等插件子区）
 // 从 settings.ts 抽离。ESM 静态导入保证查询在 settings.ts 顶层代码之前执行。
 
 export const weatherEnabledCheckbox = document.getElementById("plugin-weather-enabled") as HTMLInputElement | null;
@@ -14,6 +14,3 @@ export const pluginAddBtn = document.querySelector(".plugin-add-btn") as HTMLBut
 export const neteaseDetailView = document.getElementById("netease-detail-view");
 export const permissionBlocksWrap = document.getElementById("plugin-file-permission") as HTMLElement | null;
 export const permissionNote = document.getElementById("plugin-file-note") as HTMLElement | null;
-export const lifeToggle = document.getElementById("plugin-life-toggle") as HTMLButtonElement | null;
-export const lifeCard = document.getElementById("plugin-life-card");
-export const lifeBody = document.getElementById("plugin-life-body");

@@ -71,7 +71,7 @@ import { visionBaseUrlInput, visionApiKeyInput, visionModelInput, visionFieldsWr
 import { appearanceForm, appearanceSaveStatus, runtimeSyncSelect, runtimeSyncNote, windowCornerRadiusInput, windowCornerRadiusVal, petAlwaysOnTopInput, petVisibleInput, petZoomInput, petZoomVal, chatLineHeightInput, chatLineHeightVal, assistantBubbleEnabledInput, chatParaSpacingInput, chatParaSpacingVal, launchAtLoginInput, uiFontCurrent, uiFontImportButton, uiFontResetButton, uiIconSelect, screenshotHotkeyInput, openChromeGpu, disableGpuInput, sidebarVisibleInput, tasksVisibleInput } from "./appearance/dom";
 import { generalForm, generalSaveStatus, languageSelect, defaultChatModeSelect, segmentedOutputSelect, mobileMessageSegmentationSelect, proactiveChatSelect, proactiveDeliveryRow, proactiveDeliverySelect, chatSocialContextEnabledInput, citaEnabledInput, citaEngineSelect, clearChatHistoryBtn, customStyleSamplingBtn, customStylePromptBtn } from "./general/dom";
 import { minBtn, closeBtn, preferencesForm, sectionTitle, sectionHint, placeholderPanel, cyrenePanel, disclaimerPanel, pluginsPanel, placeholderIcon, placeholderTitle, placeholderCopy, saveStatus, runtimeSaveStatus, preferencesSaveStatus, cyreneSaveStatus, openStickerManagerBtn, addStickerBtn } from "./shared/shell";
-import { pluginAddBtn, neteaseDetailView, permissionBlocksWrap, permissionNote, lifeToggle, lifeCard, lifeBody } from "./plugins/dom";
+import { pluginAddBtn, neteaseDetailView, permissionBlocksWrap, permissionNote } from "./plugins/dom";
 import { preferencesState } from "./preferences/state";
 import { stickerEnabledInput, stickerSizeSelect, stickerThresholdInput, stickerThresholdVal, stickerAddOverlay, stickerAddPickBtn, stickerAddFileName, stickerAddId, stickerAddDesc, stickerAddPhrases, stickerAddError, stickerAddConfirm, stickerAddCancel } from "./preferences/dom";
 import { diversityDriverOf, diversityValueOf } from "./preferences/style-utils";
@@ -1611,15 +1611,7 @@ memoryImportedList?.addEventListener("click", async (event) => {
 void loadMemoryPanel();
 
 
-// ── 生活工具手风琴 ─────────────────────────────────────────
-lifeToggle?.addEventListener("click", () => {
-  const expanded = lifeToggle.getAttribute("aria-expanded") === "true";
-  lifeToggle.setAttribute("aria-expanded", String(!expanded));
-  lifeCard?.classList.toggle("is-expanded", !expanded);
-  lifeBody?.classList.toggle("is-collapsed", expanded);
-});
-
-// ── 音乐工具手风琴（跟生活工具一样的折叠逻辑）────────────────
+// ── 音乐工具手风琴 ─────────────────────────────────────────
 musicToggle?.addEventListener("click", () => {
   const expanded = musicToggle.getAttribute("aria-expanded") === "true";
   musicToggle.setAttribute("aria-expanded", String(!expanded));

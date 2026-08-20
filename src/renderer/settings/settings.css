@@ -1838,15 +1838,6 @@ body {
   opacity: 0.5;
 }
 
-/* 常驻绿灯：内置工具不可关闭，显示绿色圆点 */
-.plugin-always-on {
-  color: #4ade80;
-  font-size: 14px;
-  line-height: 1;
-  flex-shrink: 0;
-  text-shadow: 0 0 6px rgba(74, 222, 128, 0.5);
-  cursor: default;
-}
 .plugin-card__icon {
   width: 42px;
   height: 42px;
@@ -1983,7 +1974,7 @@ body {
   box-shadow: 0 0 14px rgba(236, 72, 153, 0.26);
 }
 
-/* 生活工具手风琴 */
+/* 插件手风琴（音乐工具等可折叠插件卡） */
 .plugin-card--accordion {
   display: block;
 }
