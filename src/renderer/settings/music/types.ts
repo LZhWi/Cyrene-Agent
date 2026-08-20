@@ -25,7 +25,7 @@ export type MusicIpcResult<T> =
 
 export interface MusicApi {
   getStatus: () => Promise<MusicIpcResult<MusicStatusSnapshot>>;
-  beginLogin: () => Promise<MusicIpcResult<{ loginSessionId: string; qrContent: string; expiresAt: number; pollIntervalMs: number }>>;
+  beginLogin: () => Promise<MusicIpcResult<{ loginSessionId?: string; qrContent?: string; expiresAt?: number; pollIntervalMs?: number }>>;
   cancelLogin: () => Promise<MusicIpcResult<unknown>>;
   logout: () => Promise<MusicIpcResult<unknown>>;
   search: (keyword: string, limit?: number) => Promise<MusicIpcResult<MusicSelectionResult>>;

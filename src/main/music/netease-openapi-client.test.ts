@@ -130,6 +130,19 @@ describe("NeteaseOpenapiClient transport", () => {
     expect(verifySign(params)).toBe(true);
   });
 
+  it("loginAnonymous never carries a stale accessToken (login deadlock fix)", async () => {
+    const { client, fetchImpl } = makeClient();
+    // 模拟登录死锁现场：client 里残留失效的用户 token
+    client.setAccessToken("stale-user-token");
+    fetchImpl.mockResolvedValue(jsonResponse({ code: 200, data: { accessToken: "anon", refreshToken: "r", expireTime: 86400 } }));
+
+    await client.loginAnonymous();
+
+    const params = paramsFromPostCall(fetchImpl);
+    expect(params.accessToken).toBeUndefined();
+    expect(verifySign(params)).toBe(true);
+  });
+
   it("throws NeteaseOpenapiError on business error code", async () => {
     const { client, fetchImpl } = makeClient();
     fetchImpl.mockResolvedValue(jsonResponse({ code: 301, message: "未授权" }));

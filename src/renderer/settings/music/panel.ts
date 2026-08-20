@@ -141,7 +141,14 @@ function startMusicLoginPolling(pollIntervalMs = 2000): void {
           stopMusicLoginPolling();
           if (r.data.flow !== "expired") clearMusicQr();
           setMusicFeedback("err", r.data.flow === "expired" ? "二维码已过期，请重新生成" : "登录未完成，请重试");
-        } else if (r.data.account === "temporarily_unavailable" || r.data.account === "expired") {
+        } else if (
+          // 登录流程进行中（waiting_scan 等）时，account 的 expired /
+          // temporarily_unavailable 描述的是上一轮会话的旧 token，不是本次
+          // 扫码的结果——此时清二维码会让"300 秒有效期的码只显示几秒"。
+          // 只有流程不在进行中（idle 等）才把账户状态当成失败依据。
+          (r.data.account === "temporarily_unavailable" || r.data.account === "expired") &&
+          r.data.flow !== "creating_qr" && r.data.flow !== "waiting_scan" && r.data.flow !== "waiting_confirm"
+        ) {
           stopMusicLoginPolling();
           clearMusicQr();
           setMusicFeedback("err", "登录失败：账户状态 " + r.data.account);
@@ -171,6 +178,13 @@ async function startMusicLogin(): Promise<void> {
         player: r.playerState ?? "unknown",
       };
       renderMusicStatus(snapshot);
+      return;
+    }
+    // 无 qrContent：上一次会话其实已完成手机授权（主进程吃掉了 803），
+    // 不需要画二维码，直接轮询等 signed_in。
+    if (!r.data.qrContent) {
+      setMusicFeedback("info", "正在确认登录状态…");
+      startMusicLoginPolling(r.data.pollIntervalMs);
       return;
     }
     // 用 qrcode 包把 qrContent 渲染成 PNG dataURL

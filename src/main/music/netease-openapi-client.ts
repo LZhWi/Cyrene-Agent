@@ -226,7 +226,7 @@ export class NeteaseOpenapiClient {
     return signer.sign(this.privateKeyPem, "base64");
   }
 
-  private buildParams(biz: Record<string, unknown>): Record<string, string> {
+  private buildParams(biz: Record<string, unknown>, anonymous = false): Record<string, string> {
     const params: Record<string, unknown> = {
       appId: this.appId,
       signType: "RSA_SHA256",
@@ -234,7 +234,9 @@ export class NeteaseOpenapiClient {
       device: this.deviceJson,
       bizContent: JSON.stringify(biz),
     };
-    if (this.accessToken) params.accessToken = this.accessToken;
+    // 匿名请求不携带任何旧 token——登录入口必须干净，残留的失效 token
+    // 会让服务器拒绝匿名登录（301），导致二维码永远出不来（登录死锁）。
+    if (!anonymous && this.accessToken) params.accessToken = this.accessToken;
     return { ...params, sign: this.signParams(params) } as Record<string, string>;
   }
 
@@ -242,9 +244,10 @@ export class NeteaseOpenapiClient {
     method: "GET" | "POST",
     path: string,
     biz: Record<string, unknown>,
+    opts: { anonymous?: boolean } = {},
   ): Promise<T> {
     this.requireConfigured();
-    const params = this.buildParams(biz);
+    const params = this.buildParams(biz, opts.anonymous);
     let res: Response;
     try {
       if (method === "GET") {
@@ -279,11 +282,15 @@ export class NeteaseOpenapiClient {
 
   // -- auth -----------------------------------------------------------------
 
-  /** Anonymous login: 24h token, business endpoints all return 301 with it. QR flow only. */
+  /** Anonymous login: 24h token, business endpoints all return 301 with it. QR flow only.
+   *  Never carries an accessToken — a stale user token would be rejected (301). */
   async loginAnonymous(): Promise<OpenapiTokenBundle> {
-    return this.request<OpenapiTokenBundle>("POST", "/openapi/music/basic/oauth2/login/anonymous", {
-      clientId: this.appId,
-    });
+    return this.request<OpenapiTokenBundle>(
+      "POST",
+      "/openapi/music/basic/oauth2/login/anonymous",
+      { clientId: this.appId },
+      { anonymous: true },
+    );
   }
 
   async getQrCodeKey(): Promise<{ qrCodeUrl: string; uniKey: string }> {
