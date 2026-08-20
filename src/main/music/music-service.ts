@@ -403,6 +403,19 @@ export class MusicService {
     return this.provider.addToPlaylist(playlistId, trackIds);
   }
 
+  async removeFromPlaylist(
+    playlistId: string,
+    trackIds: string[],
+  ): Promise<{ removed: number; playlistId: string }> {
+    await this.ensureReady();
+    this.requireSignedIn();
+    if (!playlistId) throw new MusicInputError("E_INVALID_ID_FORMAT");
+    if (!Array.isArray(trackIds) || trackIds.length === 0) {
+      throw new MusicInputError("E_TRACK_IDS_EMPTY");
+    }
+    return this.provider.removeFromPlaylist(playlistId, trackIds);
+  }
+
   async getMySubscriptions(
     category: "artists" | "albums",
   ): Promise<MusicSubscription[]> {

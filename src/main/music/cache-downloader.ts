@@ -158,6 +158,7 @@ export class CacheDownloader extends EventEmitter {
         album: rec.album,
         durationMs: rec.durationMs,
         coverUrl: rec.coverUrl,
+        source: rec.source,
       }));
   }
 

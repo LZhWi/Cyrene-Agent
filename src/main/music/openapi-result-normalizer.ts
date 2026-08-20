@@ -152,6 +152,21 @@ export function normalizeAddToPlaylistResult(
   return { added: requested, playlistId };
 }
 
+/** removeSongs response (untested write) — same defensive-count shape as add. */
+export function normalizeRemoveFromPlaylistResult(
+  payload: unknown,
+  requested: number,
+  playlistId: string,
+): { removed: number; playlistId: string } {
+  if (payload && typeof payload === "object") {
+    const p = payload as Record<string, unknown>;
+    for (const key of ["count", "removedCount", "removed_count", "successCount"]) {
+      if (typeof p[key] === "number") return { removed: p[key] as number, playlistId };
+    }
+  }
+  return { removed: requested, playlistId };
+}
+
 /** Validates a 32-hex encrypted id before any API call (kills抄错/截断 ids early). */
 export function assertEncryptedId(id: string): string {
   if (!/^[0-9A-Fa-f]{32}$/.test(id)) {

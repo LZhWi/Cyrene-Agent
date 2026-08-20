@@ -15,7 +15,13 @@ function serviceDouble() {
     getPlaylistDetail: vi.fn(),
     createPlaylist: vi.fn(),
     addToPlaylist: vi.fn(),
+    removeFromPlaylist: vi.fn(),
+    toggleFavorite: vi.fn(),
     getMySubscriptions: vi.fn(),
+    getCachedTracks: vi.fn(),
+    removeCachedTrack: vi.fn(),
+    getPlaybackState: vi.fn(),
+    playbackStop: vi.fn(),
   };
 }
 
@@ -47,20 +53,26 @@ function selectionSet(overrides: Record<string, unknown> = {}) {
 }
 
 describe("music Agent tools (M4 — CITA removed)", () => {
-  it("declares 9 tools with stable capabilities (music_present_tracks deleted)", () => {
+  it("declares 15 tools with stable capabilities (music_present_tracks deleted)", () => {
     const tools = buildMusicTools(serviceDouble() as never);
-    expect(tools).toHaveLength(9);
+    expect(tools).toHaveLength(15);
     const capabilities = Object.fromEntries(tools.map((t) => [t.id, t.capability]));
     expect(capabilities).toMatchObject({
       music_get_daily_recommendations: "music.daily_recommendations",
       music_search: "music.search",
       music_play_track: "music.play_track",
       music_play_playlist: "music.play_playlist",
+      music_get_playback_status: "music.playback_status",
+      music_stop_playback: "music.stop_playback",
       music_my_playlists: "music.my_playlists",
       music_playlist_detail: "music.playlist_detail",
       music_create_playlist: "music.create_playlist",
       music_add_to_playlist: "music.add_to_playlist",
+      music_toggle_favorite: "music.toggle_favorite",
+      music_remove_from_playlist: "music.remove_from_playlist",
       music_my_subscriptions: "music.my_subscriptions",
+      music_get_cached_tracks: "music.cached_tracks",
+      music_remove_cached_track: "music.remove_cached_track",
     });
     // music_present_tracks is deleted
     expect(tools.find((t) => t.id === "music_present_tracks")).toBeUndefined();
@@ -178,6 +190,94 @@ describe("music Agent tools (M4 — CITA removed)", () => {
     expect(output.dispatch.state).toBe("dispatched");
   });
 
+  it("music_get_playback_status reports playing track with progress", async () => {
+    const service = serviceDouble();
+    service.getPlaybackState.mockReturnValue({
+      connected: true, loaded: true, paused: false,
+      position: 42.5, duration: 268.9, volume: 70,
+      track: { encryptedId: ENC, name: "晴天", artists: ["周杰伦"], coverUrl: "http://x/cover.jpg" },
+    });
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_get_playback_status")!;
+
+    const output = JSON.parse(await tool.execute({}));
+
+    expect(output).toMatchObject({
+      kind: "playback_status",
+      connected: true,
+      isPlaying: true,
+      paused: false,
+      track: { encryptedId: ENC, name: "晴天", artists: ["周杰伦"] },
+      positionMs: 42500,
+      durationMs: 268900,
+      volume: 70,
+    });
+  });
+
+  it("music_get_playback_status reports paused and idle states", async () => {
+    const service = serviceDouble();
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_get_playback_status")!;
+
+    service.getPlaybackState.mockReturnValue({
+      connected: true, loaded: true, paused: true,
+      position: 10, duration: 200, volume: 30,
+      track: { encryptedId: ENC, name: "晴天", artists: ["周杰伦"] },
+    });
+    let output = JSON.parse(await tool.execute({}));
+    expect(output.isPlaying).toBe(false);
+    expect(output.paused).toBe(true);
+
+    service.getPlaybackState.mockReturnValue({
+      connected: true, loaded: false, paused: false,
+      position: 0, duration: 0, volume: 70,
+    });
+    output = JSON.parse(await tool.execute({}));
+    expect(output.isPlaying).toBe(false);
+    expect(output.paused).toBe(false);
+    expect(output.track).toBeNull();
+  });
+
+  it("music_stop_playback stops when a track is loaded", async () => {
+    const service = serviceDouble();
+    service.getPlaybackState.mockReturnValue({
+      connected: true, loaded: true, paused: false,
+      position: 10, duration: 200, volume: 70,
+      track: { encryptedId: ENC, name: "晴天", artists: ["周杰伦"] },
+    });
+    service.playbackStop.mockResolvedValue(undefined);
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_stop_playback")!;
+
+    const output = JSON.parse(await tool.execute({}));
+
+    expect(service.playbackStop).toHaveBeenCalledTimes(1);
+    expect(output).toEqual({ kind: "stop_playback", stopped: true });
+  });
+
+  it("music_stop_playback is a no-op when nothing is playing", async () => {
+    const service = serviceDouble();
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_stop_playback")!;
+
+    // mpv 未启动
+    service.getPlaybackState.mockReturnValue({
+      connected: false, loaded: false, paused: false,
+      position: 0, duration: 0, volume: 70,
+    });
+    let output = JSON.parse(await tool.execute({}));
+    expect(output).toEqual({ kind: "stop_playback", stopped: false, nothingPlaying: true });
+
+    // mpv 在跑但没有已加载曲目
+    service.getPlaybackState.mockReturnValue({
+      connected: true, loaded: false, paused: false,
+      position: 0, duration: 0, volume: 70,
+    });
+    output = JSON.parse(await tool.execute({}));
+    expect(output.stopped).toBe(false);
+    expect(service.playbackStop).not.toHaveBeenCalled();
+  });
+
   it("music_my_playlists returns playlists", async () => {
     const service = serviceDouble();
     service.getMyPlaylists.mockResolvedValue([
@@ -255,11 +355,101 @@ describe("music Agent tools (M4 — CITA removed)", () => {
     expect(service.getMySubscriptions).not.toHaveBeenCalled();
   });
 
+  it("music_play_track accepts local- cache ids (imported files)", async () => {
+    const service = serviceDouble();
+    const localId = "local-abc123def456";
+    service.playTrackFromUi.mockResolvedValue({ state: "dispatched", resourceType: "song", resourceId: localId });
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_play_track")!;
+
+    const output = JSON.parse(await tool.execute({ encryptedId: localId }));
+
+    expect(service.playTrackFromUi).toHaveBeenCalledWith(localId);
+    expect(output.dispatch.state).toBe("dispatched");
+  });
+
+  it("music_toggle_favorite calls service with favorite flag", async () => {
+    const service = serviceDouble();
+    service.toggleFavorite.mockResolvedValue(true);
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_toggle_favorite")!;
+
+    const output = JSON.parse(await tool.execute({ encryptedId: ENC, favorite: true }));
+
+    expect(service.toggleFavorite).toHaveBeenCalledWith(ENC, true);
+    expect(output).toEqual({ kind: "toggle_favorite", encryptedId: ENC, favorite: true });
+  });
+
+  it("music_toggle_favorite rejects invalid and local- ids", async () => {
+    const service = serviceDouble();
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_toggle_favorite")!;
+
+    await expect(tool.execute({ encryptedId: "local-abc123def456", favorite: true }))
+      .rejects.toThrow("E_INVALID_ENCRYPTED_ID");
+    await expect(tool.execute({ encryptedId: "short", favorite: true }))
+      .rejects.toThrow("E_INVALID_ENCRYPTED_ID");
+    expect(service.toggleFavorite).not.toHaveBeenCalled();
+  });
+
+  it("music_remove_from_playlist removes trackIds", async () => {
+    const service = serviceDouble();
+    service.removeFromPlaylist.mockResolvedValue({ removed: 2, playlistId: "P".repeat(32) });
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_remove_from_playlist")!;
+
+    const output = JSON.parse(await tool.execute({ playlistId: "P".repeat(32), trackIds: [ENC, ENC2] }));
+
+    expect(service.removeFromPlaylist).toHaveBeenCalledWith("P".repeat(32), [ENC, ENC2]);
+    expect(output.kind).toBe("remove_from_playlist");
+    expect(output.removed).toBe(2);
+  });
+
+  it("music_get_cached_tracks returns tracks with source", async () => {
+    const service = serviceDouble();
+    service.getCachedTracks.mockResolvedValue([
+      track({ source: "netease" }),
+      track({ id: "local-abc123def456", encryptedId: "local-abc123def456", name: "本地歌", source: "imported" }),
+    ]);
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_get_cached_tracks")!;
+
+    const output = JSON.parse(await tool.execute({}));
+
+    expect(output.kind).toBe("cached_tracks");
+    expect(output.tracks[0].source).toBe("netease");
+    expect(output.tracks[1].encryptedId).toBe("local-abc123def456");
+    expect(output.tracks[1].source).toBe("imported");
+  });
+
+  it("music_remove_cached_track removes by hex or local- id", async () => {
+    const service = serviceDouble();
+    service.removeCachedTrack.mockResolvedValue(true);
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_remove_cached_track")!;
+
+    const output = JSON.parse(await tool.execute({ trackId: "local-abc123def456" }));
+    expect(service.removeCachedTrack).toHaveBeenCalledWith("local-abc123def456");
+    expect(output).toEqual({ kind: "remove_cached_track", trackId: "local-abc123def456", removed: true });
+
+    await tool.execute({ trackId: ENC });
+    expect(service.removeCachedTrack).toHaveBeenCalledWith(ENC);
+  });
+
+  it("music_remove_cached_track rejects invalid id", async () => {
+    const service = serviceDouble();
+    const tool = buildMusicTools(service as never)
+      .find((t) => t.id === "music_remove_cached_track")!;
+
+    await expect(tool.execute({ trackId: "junk" })).rejects.toThrow("E_INVALID_ENCRYPTED_ID");
+    expect(service.removeCachedTrack).not.toHaveBeenCalled();
+  });
+
   it("no CITA imports remain (no ContextRefRegistry, no contextRefRegistry)", () => {
     // This test documents the CITA removal. If someone re-introduces CITA
     // imports, this will fail at compile time.
     const tool = buildMusicTools(serviceDouble() as never);
-    expect(tool.length).toBe(9);
+    expect(tool.length).toBe(15);
     // No tool has controlledInput with context_ref type
     for (const t of tool) {
       if (t.controlledInput) {

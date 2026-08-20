@@ -15,6 +15,7 @@ import {
   normalizePlaylistDetail,
   normalizeSubscribedAlbums,
   normalizeAddToPlaylistResult,
+  normalizeRemoveFromPlaylistResult,
   assertEncryptedId,
 } from "./openapi-result-normalizer";
 
@@ -104,6 +105,13 @@ export class NeteaseOpenapiProvider implements MusicProvider {
     const ids = trackIds.map((id) => assertEncryptedId(id));
     const payload = await this.client.addSongsToPlaylist(playlistId, ids);
     return normalizeAddToPlaylistResult(payload, ids.length, playlistId);
+  }
+
+  async removeFromPlaylist(playlistId: string, trackIds: string[]): Promise<{ removed: number; playlistId: string }> {
+    if (trackIds.length === 0) throw new MusicInputError("E_REMOVE_FROM_PLAYLIST_EMPTY");
+    const ids = trackIds.map((id) => assertEncryptedId(id));
+    const payload = await this.client.removeSongsFromPlaylist(playlistId, ids);
+    return normalizeRemoveFromPlaylistResult(payload, ids.length, playlistId);
   }
 
   async getMySubscriptions(category: "artists" | "albums"): Promise<MusicSubscription[]> {

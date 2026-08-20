@@ -34,6 +34,8 @@ export interface MusicTrack {
   album?: string;
   durationMs?: number;
   coverUrl?: string;
+  /** 仅缓存池曲目：netease = 边播边存下来的，imported = 用户本地导入的。 */
+  source?: "netease" | "imported";
 }
 
 export interface MusicPlaylist {

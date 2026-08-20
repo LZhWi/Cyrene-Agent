@@ -9,6 +9,7 @@ import {
   normalizeUserProfile,
   normalizeSubscribedAlbums,
   normalizeAddToPlaylistResult,
+  normalizeRemoveFromPlaylistResult,
   assertEncryptedId,
 } from "./openapi-result-normalizer";
 import { MusicInputError } from "./types";
@@ -131,6 +132,13 @@ describe("normalizeAddToPlaylistResult", () => {
   it("prefers server count, falls back to requested", () => {
     expect(normalizeAddToPlaylistResult({ count: 2 }, 3, "pl")).toEqual({ added: 2, playlistId: "pl" });
     expect(normalizeAddToPlaylistResult({ whatever: 1 }, 3, "pl")).toEqual({ added: 3, playlistId: "pl" });
+  });
+});
+
+describe("normalizeRemoveFromPlaylistResult", () => {
+  it("prefers server count, falls back to requested", () => {
+    expect(normalizeRemoveFromPlaylistResult({ removedCount: 2 }, 3, "pl")).toEqual({ removed: 2, playlistId: "pl" });
+    expect(normalizeRemoveFromPlaylistResult({ whatever: 1 }, 3, "pl")).toEqual({ removed: 3, playlistId: "pl" });
   });
 });
 

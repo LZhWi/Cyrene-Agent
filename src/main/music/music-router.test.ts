@@ -13,6 +13,7 @@ function provider(id: string): MusicProvider {
     getPlaylistDetail: vi.fn(),
     createPlaylist: vi.fn(),
     addToPlaylist: vi.fn(),
+    removeFromPlaylist: vi.fn(),
     getMySubscriptions: vi.fn(),
   };
 }

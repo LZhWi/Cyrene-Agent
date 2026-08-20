@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   getPlaylistSongs: vi.fn(),
   createPlaylist: vi.fn(),
   addSongsToPlaylist: vi.fn(),
+  removeSongsFromPlaylist: vi.fn(),
   getSubscribedAlbums: vi.fn(),
   getUserProfile: vi.fn(),
   loginAnonymous: vi.fn(),
@@ -109,6 +110,7 @@ vi.mock("./netease-openapi-client", () => ({
       getPlaylistSongs: mocks.getPlaylistSongs,
       createPlaylist: mocks.createPlaylist,
       addSongsToPlaylist: mocks.addSongsToPlaylist,
+      removeSongsFromPlaylist: mocks.removeSongsFromPlaylist,
       getSubscribedAlbums: mocks.getSubscribedAlbums,
       getUserProfile: mocks.getUserProfile,
       loginAnonymous: mocks.loginAnonymous,
@@ -421,6 +423,17 @@ describe("MusicService (M3 OpenAPI)", () => {
     expect(await s.addToPlaylist("a".repeat(32), [ENC])).toEqual({ added: 1, playlistId: "a".repeat(32) });
     expect((await s.getMySubscriptions("albums"))[0].name).toBe("叶惠美");
     expect(await s.getMySubscriptions("artists")).toEqual([]);
+  });
+
+  it("removeFromPlaylist delegates to provider and validates input", async () => {
+    mocks.removeSongsFromPlaylist.mockResolvedValue({ count: 1 });
+    const s = makeService();
+    await s.start();
+    (s as unknown as { orchestrator: { setAccountState: (st: string) => void } }).orchestrator.setAccountState("signed_in");
+
+    expect(await s.removeFromPlaylist("a".repeat(32), [ENC])).toEqual({ removed: 1, playlistId: "a".repeat(32) });
+    expect(mocks.removeSongsFromPlaylist).toHaveBeenCalledWith("a".repeat(32), [ENC]);
+    await expect(s.removeFromPlaylist("a".repeat(32), [])).rejects.toThrow(/E_TRACK_IDS_EMPTY/);
   });
 
   it("getLoginFlowState returns idle before login", () => {

@@ -12,5 +12,6 @@ export interface MusicProvider {
   getPlaylistDetail(playlistId: string): Promise<MusicPlaylistDetail>;
   createPlaylist(name: string, privacy?: boolean): Promise<MusicPlaylist>;
   addToPlaylist(playlistId: string, trackIds: string[]): Promise<{ added: number; playlistId: string }>;
+  removeFromPlaylist(playlistId: string, trackIds: string[]): Promise<{ removed: number; playlistId: string }>;
   getMySubscriptions(category: "artists" | "albums"): Promise<MusicSubscription[]>;
 }

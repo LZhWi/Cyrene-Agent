@@ -16,6 +16,7 @@ function makeClient() {
     getPlaylistSongs: vi.fn(),
     createPlaylist: vi.fn(),
     addSongsToPlaylist: vi.fn(),
+    removeSongsFromPlaylist: vi.fn(),
     getSubscribedAlbums: vi.fn(),
   };
 }
@@ -119,6 +120,24 @@ describe("NeteaseOpenapiProvider", () => {
     expect(added).toEqual({ added: 1, playlistId: "P".repeat(32) });
     await expect(p.addToPlaylist("P".repeat(32), [])).rejects.toThrow(/E_ADD_TO_PLAYLIST_EMPTY/);
     await expect(p.addToPlaylist("P".repeat(32), ["not-hex"])).rejects.toThrow(/E_INVALID_ENCRYPTED_ID/);
+  });
+
+  it("removeFromPlaylist: normalizes count, validates ids", async () => {
+    const c = makeClient();
+    c.removeSongsFromPlaylist.mockResolvedValue({ count: 1 });
+    const p = new NeteaseOpenapiProvider(c as unknown as NeteaseOpenapiClient);
+
+    const removed = await p.removeFromPlaylist("P".repeat(32), [ENC, ENC2]);
+    expect(c.removeSongsFromPlaylist).toHaveBeenCalledWith("P".repeat(32), [ENC, ENC2]);
+    expect(removed).toEqual({ removed: 1, playlistId: "P".repeat(32) });
+
+    // 无 count 字段 → 回退为请求数
+    c.removeSongsFromPlaylist.mockResolvedValue({ whatever: true });
+    const fallback = await p.removeFromPlaylist("P".repeat(32), [ENC, ENC2]);
+    expect(fallback.removed).toBe(2);
+
+    await expect(p.removeFromPlaylist("P".repeat(32), [])).rejects.toThrow(/E_REMOVE_FROM_PLAYLIST_EMPTY/);
+    await expect(p.removeFromPlaylist("P".repeat(32), ["not-hex"])).rejects.toThrow(/E_INVALID_ENCRYPTED_ID/);
   });
 
   it("getMySubscriptions: artists → [] (no endpoint), albums → normalized", async () => {
