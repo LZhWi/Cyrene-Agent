@@ -187,6 +187,44 @@ export function App() {
     setState((s) => ({ ...s, ...p }));
   }, []);
 
+  // ── 歌词顺势拉取 ──────────────────────────────────────────
+  // 用户点播（playTrack）与 agent 工具播放（播放状态推送检测换曲）两条路径
+  // 共享；同一曲目只拉一次，主进程 LyricsCache 命中时 0 配额。
+  const lastLyricsIdRef = useRef<string>("");
+  const fetchLyrics = useCallback((encryptedId: string) => {
+    if (!api) return;
+    if (encryptedId.startsWith("local-")) return; // 本地导入曲目无网易云歌词
+    if (lastLyricsIdRef.current === encryptedId) return;
+    lastLyricsIdRef.current = encryptedId;
+    void api.getLyrics(encryptedId).then((r) => {
+      if (!r.ok || !r.data) {
+        if (!r.ok) {
+          console.warn("[music] getLyrics failed:", r.errorCode);
+          // 失败允许下次播放重试
+          if (lastLyricsIdRef.current === encryptedId) lastLyricsIdRef.current = "";
+        }
+        return;
+      }
+      const lyrics = r.data as { timeMs: number; text: string; translation?: string }[];
+      setState((s) => {
+        // 响应迟到且用户已切歌 → 丢弃，避免旧歌词挂到新歌上
+        if (s.currentTrack && s.currentTrack.encryptedId !== encryptedId) {
+          return s;
+        }
+        return {
+          ...s,
+          currentTrack: s.currentTrack ? { ...s.currentTrack, lyrics } : s.currentTrack,
+          queue: s.queue.map((t) =>
+            t.encryptedId === encryptedId ? { ...t, lyrics } : t,
+          ),
+        };
+      });
+    }).catch((err) => {
+      console.warn("[music] getLyrics error:", err);
+      if (lastLyricsIdRef.current === encryptedId) lastLyricsIdRef.current = "";
+    });
+  }, [api]);
+
   // ── 启动探测：搜索请求 + 4秒最低等待 ──────────────────────
   useEffect(() => {
     if (!api) {
@@ -276,6 +314,8 @@ export function App() {
       if (trackId && trackId !== lastTrackIdRef.current) {
         lastTrackIdRef.current = trackId;
         endedRef.current = false;
+        // 播放即顺势拉歌词：覆盖 agent 工具触发的播放（不经 playTrack）
+        fetchLyrics(trackId);
       }
       const duration = typeof mpv.duration === "number" ? mpv.duration : 0;
       const position = typeof mpv.position === "number" ? mpv.position : 0;
@@ -290,7 +330,7 @@ export function App() {
     return () => {
       if (typeof unsub === "function") unsub();
     };
-  }, [api]);
+  }, [api, fetchLyrics]);
 
   // ── 播完路由：单曲循环重播 / 缓存歌单自动连播 / 只放一次停在结尾 ──
   useEffect(() => {
@@ -488,33 +528,10 @@ export function App() {
         patch({ isLoading: false, error: "播放失败：" + (err instanceof Error ? err.message : String(err)) });
       });
 
-      // 异步补歌词（导入的本地曲目没有网易云歌词，跳过）
-      if (!track.encryptedId.startsWith("local-")) {
-        void api.getLyrics(track.encryptedId).then((r) => {
-          if (!r.ok || !r.data) {
-            if (!r.ok) console.warn("[music] getLyrics failed:", r.errorCode);
-            return;
-          }
-          const lyrics = r.data as { timeMs: number; text: string; translation?: string }[];
-          setState((s) => {
-            // 响应迟到且用户已切歌 → 丢弃，避免旧歌词挂到新歌上
-            if (s.currentTrack && s.currentTrack.encryptedId !== track.encryptedId) {
-              return s;
-            }
-            return {
-              ...s,
-              currentTrack: s.currentTrack ? { ...s.currentTrack, lyrics } : s.currentTrack,
-              queue: s.queue.map((t) =>
-                t.encryptedId === track.encryptedId ? { ...t, lyrics } : t,
-              ),
-            };
-          });
-        }).catch((err) => {
-          console.warn("[music] getLyrics error:", err);
-        });
-      }
+      // 异步补歌词（与 agent 播放路径共享，local- 曲目内部跳过）
+      fetchLyrics(track.encryptedId);
     },
-    [api, patch],
+    [api, patch, fetchLyrics],
   );
 
   // ── 计算下一首/上一首索引 ──────────────────────────────────
