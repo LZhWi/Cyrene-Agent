@@ -254,16 +254,6 @@ export const IPC = {
   SCHEDULER_GET_TOOLS: "scheduler:get-tools",
   SCHEDULER_CHANGED: "scheduler:changed",  // main → renderer：任务列表变更通知
 
-  // game-bot（游戏代肝）
-  GAME_BOT_GET_CONFIG: "game-bot:get-config",
-  GAME_BOT_SAVE_CONFIG: "game-bot:save-config",
-  GAME_BOT_LIST_RECIPES: "game-bot:list-recipes",
-  GAME_BOT_LIST_REFS: "game-bot:list-refs",
-  GAME_BOT_REFS_DIR: "game-bot:refs-dir",
-  GAME_BOT_START: "game-bot:start",
-  GAME_BOT_STOP: "game-bot:stop",
-  GAME_BOT_PROGRESS: "game-bot:progress",
-
   // token usage statistics
   TOKEN_USAGE_GET: "token-usage:get",
   TOKEN_USAGE_CLEAR: "token-usage:clear",

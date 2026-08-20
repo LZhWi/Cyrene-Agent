@@ -752,21 +752,4 @@ const ttsApi = {
 };
 contextBridge.exposeInMainWorld("tts", ttsApi);
 
-// 游戏代肝（插件卡：配置 + 参考图只读展示 + 开始停止）
-const gameBotApi = {
-  getConfig: () => ipcRenderer.invoke(IPC.GAME_BOT_GET_CONFIG),
-  saveConfig: (config: unknown) => ipcRenderer.invoke(IPC.GAME_BOT_SAVE_CONFIG, config),
-  listRecipes: () => ipcRenderer.invoke(IPC.GAME_BOT_LIST_RECIPES),
-  listRefs: (recipeId: string) => ipcRenderer.invoke(IPC.GAME_BOT_LIST_REFS, recipeId),
-  refsDir: (recipeId: string) => ipcRenderer.invoke(IPC.GAME_BOT_REFS_DIR, recipeId),
-  start: () => ipcRenderer.invoke(IPC.GAME_BOT_START),
-  stop: () => ipcRenderer.invoke(IPC.GAME_BOT_STOP),
-  onProgress: (callback: (info: unknown) => void) => {
-    const listener = (_e: unknown, info: unknown) => callback(info);
-    ipcRenderer.on(IPC.GAME_BOT_PROGRESS, listener);
-    return () => ipcRenderer.off(IPC.GAME_BOT_PROGRESS, listener);
-  },
-};
-contextBridge.exposeInMainWorld("gameBot", gameBotApi);
-
 exposeMusicApi();

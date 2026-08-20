@@ -14,7 +14,6 @@ export const LogTag = {
   EmailTools: "EmailTools",
   Skills: "Skills",
   SkillTools: "SkillTools",
-  GameBot: "GameBot",
   TodoStore: "TodoStore",
   MCP: "MCP",
   Permission: "Permission",

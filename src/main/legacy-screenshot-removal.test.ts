@@ -53,9 +53,7 @@ describe("legacy screenshot overlay removal", () => {
 
   it("keeps the native screenshot modules free of the Electron capture window", () => {
     const sources = mainScreenshotSources();
-    const gameBotScreenshot = "src/main/game-bot/screenshot.ts";
 
-    expect(sources.map(({ relativePath }) => relativePath)).not.toContain(gameBotScreenshot);
     for (const { relativePath, source } of sources) {
       expect(source, relativePath).not.toMatch(
         /\bdesktopCapturer\b|\bgetDisplayMedia\b|new\s+BrowserWindow\s*\(/,

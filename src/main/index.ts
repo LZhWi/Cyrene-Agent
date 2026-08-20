@@ -135,7 +135,6 @@ import {
   setUserTimezoneConfig,
 } from "./orchestrator/built-in-tools";
 import { resolveMusicPaths } from "./music/paths";
-import { bootstrapGameBot } from "./game-bot/bootstrap";
 import { bootstrapMusicService } from "./music/bootstrap";
 import { installShutdownLatch } from "./music/shutdown-latch";
 import {
@@ -422,9 +421,6 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
 
   // Skill 系统：扫描双源 skills + 注册 meta-tool
   initSkills();
-
-  // 启动游戏代肝子系统
-  bootstrapGameBot();
 
   // AG-UI 事件流桥：渲染进程 invoke(AGUI_RUN) → CyreneAgent 跑 FC 循环 → 事件透传
   const agentRuntime = createAgentRuntime({
