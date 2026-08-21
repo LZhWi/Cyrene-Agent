@@ -120,6 +120,13 @@ export function createLlmClient(): LlmClient {
       recordRequest(settings.model);
       let fullText = "";
       const visibleFilter = createVisibleStreamFilter();
+      // anthropic 流式 usage 分散在 message_start（input）和 message_delta（output）两个事件里，
+      // 逐 chunk 记会重复计数；改为逐字段取最大值合并，循环结束记一次。
+      let sawUsage = false;
+      let usageInput = 0;
+      let usageOutput = 0;
+      let usageCached: number | undefined;
+      let usageCacheCreation: number | undefined;
 
       for await (const event of createSseReader(adapter, response.body)) {
         const chunk = adapter.parseStreamEvent(event);
@@ -130,9 +137,20 @@ export function createLlmClient(): LlmClient {
           if (visibleDelta) onChunk(visibleDelta);
         }
         if (chunk.usage) {
-          recordUsage(chunk.usage.input, chunk.usage.output, 1, chunk.usage.cachedInput, settings.model, chunk.usage.cacheCreation);
+          sawUsage = true;
+          usageInput = Math.max(usageInput, chunk.usage.input ?? 0);
+          usageOutput = Math.max(usageOutput, chunk.usage.output ?? 0);
+          if (chunk.usage.cachedInput !== undefined) {
+            usageCached = Math.max(usageCached ?? 0, chunk.usage.cachedInput);
+          }
+          if (chunk.usage.cacheCreation !== undefined) {
+            usageCacheCreation = Math.max(usageCacheCreation ?? 0, chunk.usage.cacheCreation);
+          }
         }
         if (chunk.done) break;
+      }
+      if (sawUsage) {
+        recordUsage(usageInput, usageOutput, 1, usageCached, settings.model, usageCacheCreation);
       }
 
       const visibleTail = visibleFilter.flush();

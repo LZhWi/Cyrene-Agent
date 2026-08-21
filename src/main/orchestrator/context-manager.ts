@@ -1,5 +1,6 @@
 import type { ChatVendorAdapter, ChatMessage, ChatRequest } from "./vendors/types";
 import type { AgentLoopSettings, AgentLoopEvent } from "./cyrene-agent";
+import { recordRequest, recordUsage } from "../token-usage-store";
 
 const COMPRESSION_PROMPT = `你正在帮"昔涟"整理对话记忆。请把下面这段较早的对话历史总结成一段简洁的摘要，供后续回复参考。
 
@@ -48,12 +49,6 @@ export function estimateMessageTokens(messages: ChatMessage[]): number {
     const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
     return sum + estimateTokens(text) + 4; // +4 为角色/格式开销
   }, 0);
-}
-
-/** 单条工具结果截断，保留摘要即可。 */
-export function truncateToolResult(output: string, maxChars = 2000): string {
-  if (!output || output.length <= maxChars) return output;
-  return output.slice(0, maxChars) + `\n...[截断，原长度 ${output.length}]`;
 }
 
 function formatConversation(messages: ChatMessage[]): string {
@@ -167,6 +162,11 @@ async function callSummarizeModel(
       throw new Error(`压缩请求失败：HTTP ${response.status}${body ? ` - ${body.slice(0, 200)}` : ""}`);
     }
     const parsed = adapter.parseResponse(await response.json());
+    // 压缩是一次真实 LLM 请求，与其他调用一样记入 Token 用量统计
+    recordRequest(settings.model);
+    if (parsed.usage) {
+      recordUsage(parsed.usage.input, parsed.usage.output, 1, parsed.usage.cachedInput, settings.model, parsed.usage.cacheCreation);
+    }
     return parsed.text.trim() || "[压缩结果为空]";
   } finally {
     signal?.removeEventListener("abort", abort);

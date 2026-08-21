@@ -12,6 +12,7 @@ import { synthesizeByEngine } from "../tts/tts-dispatcher";
 import type { TtsEngine } from "../../shared/tts-types";
 import { getAdapterForConfig, buildVendorUrl } from "../orchestrator/vendors";
 import { resolveTimeoutPolicy } from "../runtime-policy";
+import { recordRequest, recordUsage } from "../token-usage-store";
 import type { ChatMessage } from "../orchestrator/vendors/types";
 
 const LOG_PREFIX = "[CallManager]";
@@ -358,6 +359,11 @@ async function runAgentTurn(userText: string): Promise<string | null> {
 
     const raw = await httpResp.json();
     const resp = adapter.parseResponse(raw);
+    // 记入 Token 用量统计（电话通话此前完全不记录）
+    recordRequest(ms.model);
+    if (resp.usage) {
+      recordUsage(resp.usage.input, resp.usage.output, 1, resp.usage.cachedInput, ms.model, resp.usage.cacheCreation);
+    }
     // 过滤掉表情包标记
     const reply = (resp.text || "").replace(/\[sticker:[^\]]+\]/g, "").trim();
 

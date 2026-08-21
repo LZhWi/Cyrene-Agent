@@ -1,6 +1,5 @@
 // Orchestrator — unified entry point
-// Function Calling 模式下，Orchestrator 只负责构建 always-on 上下文（世界书 + L0/L1）
-// 工具的选择和执行由 function-calling.ts 的 runFunctionCallingLoop 处理
+// 只负责构建 always-on 上下文（世界书 + L0/L1）；工具的选择和执行由 CyreneHarness 处理
 import { updateWorldbookActivation, getPermanentWorldbookEntries, getActiveWorldbookEntries, getCascadeWorldbookEntries, searchMemory, INJECTION_HEADER, INJECTION_PREAMBLE } from "../rag";
 import { memoryStore } from "../memory/memory-store";
 import { entityGraph } from "../memory/entity-graph";
@@ -15,7 +14,6 @@ function isDimensionMismatchError(err: unknown): boolean {
 }
 export { scheduleMemoryWrite } from "./context-builder";
 export { buildToneInjection } from "./tone-injector";
-export { runFunctionCallingLoop } from "./function-calling";
 
 // topicState TTL 已移除——由 DMAE Activation 状态机接管（见 rag/worldbook.ts）
 

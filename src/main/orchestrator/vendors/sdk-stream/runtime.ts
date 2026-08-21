@@ -239,29 +239,16 @@ export async function streamChatWithSdk(
     });
     const normalizer = new AnthropicEventNormalizer();
     for await (const event of stream.events) {
-      // [DIAG] 打印每个 SSE 事件的 type + usage 相关字段
-      const evt = event as Record<string, unknown>;
-      const evtType = typeof evt.type === "string" ? evt.type : "(unknown)";
-      if (evtType === "message_start" || evtType === "message_delta") {
-        const usageSource = evtType === "message_start" ? (evt.message as Record<string, unknown> | undefined)?.usage : evt.usage;
-        console.log(`[DIAG] SSE ${evtType} usage=${JSON.stringify(usageSource ?? "(none)")}`);
-      }
       for (const delta of normalizer.normalize(event)) dispatch(delta);
     }
     flushTaggedThink();
     const finalMessage = await stream.finalMessage();
-    // [DIAG] 打印 accumulator snapshot 的 usage 和 finalMessage 的 usage
-    const liveSnap = accumulator.snapshot();
-    console.log(`[DIAG] accumulator.usage=${JSON.stringify(liveSnap.usage ?? "(none)")}`);
-    const finalAsRecord = finalMessage as Record<string, unknown>;
-    console.log(`[DIAG] finalMessage.usage=${JSON.stringify(finalAsRecord?.usage ?? "(none)")}`);
     const reconciled = reconcileAnthropicTerminal(
       accumulator.snapshot(),
       finalMessage,
       input.adapter,
       input.onDiagnostic,
     );
-    console.log(`[DIAG] reconciled.usage=${JSON.stringify(reconciled.usage ?? "(none)")}`);
     dumpResponse(traceId, {
       transport: "anthropic",
       ok: true,

@@ -17,7 +17,6 @@
 
 export type RuntimeTimeoutStage =
   | "memory-llm"
-  | "native-function-calling"
   | "tool-execution"
   | "tts-minimax"
   | "tts-gptsovits"
@@ -49,10 +48,6 @@ const STAGE_DEFAULTS: Record<RuntimeTimeoutStage, TimeoutPolicy> = {
   "memory-llm": {
     // memory-judge.ts, memory-compressor.ts：30s
     totalMs: 30_000,
-  },
-  "native-function-calling": {
-    // function-calling.ts PER_ROUND_TIMEOUT_MS：75s（推理模型带 thinking，30s 偏紧）
-    totalMs: 75_000,
   },
   "tool-execution": {
     // built-in-tools.ts SHELL_TIMEOUT_MS：5min

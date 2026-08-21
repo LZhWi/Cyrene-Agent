@@ -278,9 +278,9 @@ npm run build:main && npm run build:preload && npm run build:sim && npm run buil
 
 ## 回归验证清单
 
-- [ ] tsc（main/preload/sim）+ vite build + vitest 303 文件全绿
-- [ ] 新增单测：api-endpoint responses 后缀 / responses-adapter（buildRequest 各消息形态、parseResponse、rawAssistant 经 toResponseInputItems 回放与退化构造、tool_result 追加、include 端点级判定、replay policy 对无 encrypted_content reasoning 的丢弃）/ responses-normalizer（全事件类型含 refusal/error，completed 与 incomplete 双终态捕获）/ transport-detector / call-manager 协议跟随
-- [ ] 旧档案（openai/anthropic）行为零变化——现有 2372 用例不回归即为证明
+- [x] tsc（main/preload/sim）+ vite build + vitest 305 文件 2431 用例全绿（四个 commit 均已验证）
+- [x] 新增单测：api-endpoint responses 后缀 / responses-adapter（buildRequest 各消息形态、parseResponse、rawAssistant 经 toResponseInputItems 回放与退化构造、tool_result 追加、include 端点级判定、replay policy 对无 encrypted_content reasoning 的丢弃）/ responses-normalizer（全事件类型含 refusal/error，completed 与 incomplete 双终态捕获）/ transport-detector / call-manager 协议跟随
+- [x] 旧档案（openai/anthropic）行为零变化——全量用例不回归即为证明
 - [ ] 手测：ChatGPT 官方 key 新建档案 → 默认预填 responses → 测试连接 → 会话绑定后流式对话 → 多轮对话（验证 reasoning item 经 encrypted_content 回放，第二轮不丢思考上下文）
 - [ ] 手测：流式 + 工具调用链路 → 第二轮请求 input 里包含原序的 message/function_call/reasoning items（开 dump 检查请求体）
 - [ ] 手测：DeepSeek 同一 baseUrl 建三档案（三种协议各一）→ 三档案分别测试连接通过
@@ -318,3 +318,26 @@ npm run build:main && npm run build:preload && npm run build:sim && npm run buil
 1. **P1**：rawAssistant 回放从「原样塞回 input」改为「replay policy → `toResponseInputItems()` 清洗 → input」。核实：SDK 7.5.0 自带该 helper，位于 `openai/lib/responses/ResponseInputItems`（深度导入路径，**包根无导出**，README 的引用方式在 7.5.0 会报 undefined，已实测）；helper 负责保序、剥 `created_by`、过滤不可回放 item。同时消除初稿「决策 2 跳过无 encrypted_content 的 reasoning」与「rawAssistant 原样完整重放」的内部矛盾。
 2. **P1**：`response.incomplete` 与 `response.completed` 同等捕获为 finalResponse——核实 `ResponseIncompleteEvent.response: Response`（完整 Response）。incomplete（如 max_output_tokens 截断）时 output 已含 reasoning/message/部分工具链，不应丢弃退化；「传输中断（无终态事件）」才是唯一的降级场景。
 3. **P2**：`responsesEncryptedReasoning` 判定从厂商级改为端点级——ChatGPT 档案的 baseUrl 用户可自由改（可填第三方中转），capability 标记不证明端点是官方。增加 `api.openai.com` 域名白名单判定（关键决策 7）。
+
+---
+
+## 待办：尚未完成项
+
+施工四个 commit（d7369a6 / fa3f688 / f576e73 / ce51665）已全部合入，自动化验证全绿。以下事项尚未完成：
+
+### 手测验证（回归清单的手测 4 项全部未执行）
+
+- [ ] ChatGPT 官方 key 新建档案 → 默认预填 responses → 测试连接 → 会话绑定后流式对话 → 多轮对话（验证 reasoning item 经 encrypted_content 回放，第二轮不丢思考上下文）
+- [ ] 流式 + 工具调用链路 → 第二轮请求 input 里包含原序的 message / function_call / reasoning items（开 `CYRENE_PROMPT_DUMP=1` 检查请求体）
+- [ ] DeepSeek 同一 baseUrl 建三档案（三种协议各一）→ 三档案分别测试连接通过
+- [ ] 电话通话功能使用 responses 档案时不报协议错
+- [ ] 存量 ChatGPT 档案升级后行为核验：capability 默认协议已切为 responses，若存在**未固化 explicitTransport** 的老配置，协议会静默跟随新默认值——验证老档案对话协议未被意外切换；异常则在设置存储层补固化逻辑
+
+### supportedTransports 动态提示未消费
+
+capabilities 已落库 `supportedTransports` 数组，但设置页 transportHint 目前是静态文案（笼统列出三种协议类型），尚未按当前厂商动态展示「该厂商官方支持哪些协议」。矩阵设计的第二个用途（transportHint 提示文案）未实现，低优先级，需要时再补。
+
+### 已知边界（设计内取舍，非遗漏）
+
+- `thinkingOverride` / `disableMaxToken` / 独立视觉模型配置仍留全局区，不跟随档案（沿用模型档案改造的既定边界）。
+- `read_image` 工具配置仍读全局设置，不纳入档案管理（沿用既定边界）。

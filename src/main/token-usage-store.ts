@@ -278,7 +278,8 @@ export function getUsageReport(days: number): TokenUsageReport {
     days: daily,
     models: [...models.entries()]
       .map(([model, value]) => ({ model, ...value }))
-      .filter((item) => item.input > 0 || item.output > 0 || item.requests > 0)
+      // attemptedRequests > 0 也保留：端点不回 usage 的模型可见（显示 0 token），而不是从列表消失
+      .filter((item) => item.input > 0 || item.output > 0 || item.requests > 0 || (item.attemptedRequests ?? 0) > 0)
       .sort((left, right) => (right.input + right.output) - (left.input + left.output)),
   };
 }

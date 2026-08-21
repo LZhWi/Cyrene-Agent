@@ -1,5 +1,5 @@
 // 厂商工具调用适配层 —— 统一类型
-// 调度层（function-calling.ts）只依赖这里的统一结构，绝不出现 if (provider === "xxx")。
+// 调度层（CyreneHarness）只依赖这里的统一结构，绝不出现 if (provider === "xxx")。
 // 协议事实来源：docs/vendors/tool-calling-matrix.md
 
 import type { ReasoningPreference } from "../../../shared/reasoning";
@@ -213,7 +213,7 @@ export interface TestConnectionResult {
 
 /**
  * 厂商能力表的一条记录。是 vendor adapter 的"事实来源"，
- * 避免 function-calling.ts 里散落 if (provider === "kimi")。
+ * 避免调度层散落 if (provider === "kimi")。
  */
 export interface ProviderCapability {
   id: string;
