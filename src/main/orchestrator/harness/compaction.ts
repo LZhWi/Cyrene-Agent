@@ -166,6 +166,15 @@ export const AGENT_COMPACTION_PROMPT = `你正在为 CyreneHarness 生成可恢�
 const COMPACTION_CHECKPOINT_OPEN = "<cyrene_compaction_checkpoint>";
 const COMPACTION_CHECKPOINT_CLOSE = "</cyrene_compaction_checkpoint>";
 
+/** 判定消息是否为压缩检查点（单一事实源；context-usage 分类等消费方复用，禁止重复实现标记匹配）。 */
+export function isCompactionCheckpointMessage(
+  message: Pick<ChatMessage, "role" | "content">,
+): boolean {
+  return message.role === "system"
+    && typeof message.content === "string"
+    && message.content.includes(COMPACTION_CHECKPOINT_OPEN);
+}
+
 /** 将已验证的摘要包装为可持久化、可识别的 transcript 检查点。 */
 export function buildCompactionCheckpoint(summary: string): ChatMessage {
   return {

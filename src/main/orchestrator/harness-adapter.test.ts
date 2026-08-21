@@ -323,6 +323,27 @@ describe("sendHarnessEventAsAgui runId stamping (Issue 6)", () => {
     expect(custom.name).toBe("cyrene.todo");
   });
 
+  it("routes context_usage snapshots to the cyrene.context.usage CUSTOM event", () => {
+    const snapshot = {
+      phase: "preRequest" as const,
+      contextWindowTokens: 128_000,
+      totalTokens: 1200,
+      categories: [{ key: "systemPrompt" as const, tokens: 1200 }],
+      messageCount: 2,
+      updatedAt: 1_700_000_000_000,
+    };
+    const events = captureEvents({ type: "context_usage", snapshot });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({
+      type: "CUSTOM",
+      name: "cyrene.context.usage",
+      value: snapshot,
+      runId,
+      threadId,
+    });
+  });
+
   it("stamps runId on final_answer TEXT_MESSAGE events", () => {
     const events = captureEvents({ type: "final_answer", content: "最终回复" });
 
@@ -330,6 +351,40 @@ describe("sendHarnessEventAsAgui runId stamping (Issue 6)", () => {
     for (const event of events) {
       expect((event as { runId?: string }).runId).toBe(runId);
     }
+  });
+});
+
+describe("buildHarnessPromptLayers usageParts", () => {
+  it("splits persona and tool layers without breaking stablePrefix composition", () => {
+    const layers = buildHarnessPromptLayers({
+      soulSystemBaseContent: "完整人设",
+      toolSystemContent: "工具规则与目录",
+      conversationMode: "work",
+    } as never);
+
+    expect(layers.usageParts?.personaContent).toContain("完整人设");
+    expect(layers.usageParts?.personaContent).toContain("[TODO_WORKING_NOTEBOOK_POLICY]");
+    expect(layers.usageParts?.personaContent).not.toContain("工具规则与目录");
+    expect(layers.usageParts?.toolLayerContent).toContain("工具规则与目录");
+    // tool_usage.md 归入工具层，不进人设层
+    expect(layers.usageParts?.toolLayerContent).toContain("## 工具使用");
+    expect(layers.usageParts?.personaContent).not.toContain("## 工具使用");
+    // stablePrefix 仍是两桶原序拼接，与拆分前一致
+    expect(layers.stablePrefix).toBe([
+      layers.usageParts?.personaContent,
+      layers.usageParts?.toolLayerContent,
+    ].filter(Boolean).join("\n\n---\n\n"));
+  });
+
+  it("keeps the tool layer empty for chat mode", () => {
+    const layers = buildHarnessPromptLayers({
+      soulSystemBaseContent: "完整人设",
+      toolSystemContent: "",
+      conversationMode: "chat",
+    } as never);
+
+    expect(layers.usageParts?.toolLayerContent).toBe("");
+    expect(layers.stablePrefix).toBe(layers.usageParts?.personaContent);
   });
 });
 

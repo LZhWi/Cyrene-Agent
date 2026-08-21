@@ -191,6 +191,45 @@ describe("runChatLoop", () => {
     });
   });
 
+  it("emits preRequest and terminal context usage snapshots, terminal includes the final reply", async () => {
+    const adapter = new FakeAdapter();
+    const usageSnapshots: Array<{
+      phase: string;
+      messageCount: number;
+      conversationTokens: number;
+      runtimeAndToolLogsTokens: number;
+    }> = [];
+
+    await runChatLoop({
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k", contextWindowTokens: 256000 },
+      adapter,
+      messages: [{ role: "user", content: "陪我聊聊" }],
+      soulSystemBaseContent: "SOUL_SYSTEM",
+      runtimeContext: "[RUNTIME] 当前时间",
+      timeoutMs: 30_000,
+      onEvent: (event) => {
+        if (event.type !== "context_usage" || !event.contextUsage) return;
+        usageSnapshots.push({
+          phase: event.contextUsage.phase,
+          messageCount: event.contextUsage.messageCount,
+          conversationTokens: event.contextUsage.categories.find((category) => category.key === "conversation")?.tokens ?? -1,
+          runtimeAndToolLogsTokens: event.contextUsage.categories.find((category) => category.key === "runtimeAndToolLogs")?.tokens ?? -1,
+        });
+      },
+      recordUsage: vi.fn(),
+    });
+
+    // 请求前一次 + 拿到回复后一次。
+    expect(usageSnapshots.map((snapshot) => snapshot.phase)).toEqual(["preRequest", "terminal"]);
+    // preRequest：仅 1 条 user 消息；runtime_context 尾部注入不进 messages（避免双重计数），
+    // 由 runtimeAndToolLogs 单独计量。
+    expect(usageSnapshots[0].messageCount).toBe(1);
+    expect(usageSnapshots[0].runtimeAndToolLogsTokens).toBeGreaterThan(0);
+    // terminal：并入最终 assistant 回复，消息数 +1，对话历史 token 增长。
+    expect(usageSnapshots[1].messageCount).toBe(2);
+    expect(usageSnapshots[1].conversationTokens).toBeGreaterThan(usageSnapshots[0].conversationTokens);
+  });
+
   it("uses the SDK stream runner for a Chat request", async () => {
     const adapter = new FakeAdapter();
     const streamChat = vi.fn(async (input: {
@@ -311,6 +350,7 @@ describe("runChatLoop", () => {
     });
 
     expect(events.map((event) => event.type)).toEqual([
+      "context_usage",
       "step_started",
       "reasoning_message_start",
       "reasoning_message_content",
@@ -318,6 +358,7 @@ describe("runChatLoop", () => {
       "reasoning_message_end",
       "text_message_start",
       "text_message_content",
+      "context_usage",
       "text_message_end",
       "step_finished",
     ]);
@@ -345,10 +386,12 @@ describe("runChatLoop", () => {
     });
 
     expect(events.map((event) => event.type)).toEqual([
+      "context_usage",
       "step_started",
       "reasoning_message_start",
       "reasoning_message_content",
       "reasoning_message_end",
+      "context_usage",
       "text_message_start",
       "text_message_content",
       "text_message_end",

@@ -422,7 +422,7 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   // Skill 系统：扫描双源 skills + 注册 meta-tool
   initSkills();
 
-  // AG-UI 事件流桥：渲染进程 invoke(AGUI_RUN) → CyreneAgent 跑 FC 循环 → 事件透传
+  // AG-UI 事件流桥：渲染进程 invoke(AGUI_RUN) → CyreneAgent 跑 Agent 循环 → 事件透传
   const agentRuntime = createAgentRuntime({
     runtimeStateService,
     llmClient,

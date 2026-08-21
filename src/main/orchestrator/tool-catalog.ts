@@ -2,7 +2,7 @@
 //
 // 设计原则：
 // - 只输出 id + 用途 + 风险三项，不放参数（参数走 tools Schema，避免双重定义）。
-// - 目录用于 LLM 工具阶段的第一层选择："这个工具大概是做什么的"，不替代完整 description。
+// - 目录用于 LLM 选择工具时的第一层参考："这个工具大概是做什么的"，不替代完整 description。
 // - 不依赖全局 toolRegistry；接受传入的工具列表，测试时可注入。
 
 import type { ToolDefinition } from "./tool-registry";

@@ -167,13 +167,13 @@ describe("build-options", () => {
     expect(result.options.soulSystemBaseContent).not.toContain("你正在通过飞书回复用户")
   })
 
-  it("messages 不含 system，FC 循环按阶段动态注入", async () => {
+  it("messages 不含 system，由循环层组装 system", async () => {
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "你好" }],
       style: "01_default.md",
     }, createBuildDeps())
 
-    // 第一期：原始 messages 不含 system 消息
+    // 原始 messages 不含 system 消息
     expect(result.options.messages.some((m) => m.role === "system")).toBe(false)
   })
 

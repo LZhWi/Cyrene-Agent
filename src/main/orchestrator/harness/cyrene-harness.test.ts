@@ -826,3 +826,74 @@ describe("CyreneHarness completion (P0-A)", () => {
     expect(JSON.stringify(secondRequest.messages)).toContain("停止当前任务");
   });
 });
+
+describe("CyreneHarness context usage snapshots", () => {
+  beforeEach(() => {
+    mockedDispatch.mockReset();
+    fakeStreamChatWithSdk.mockClear();
+    recordUsage.mockReset();
+  });
+
+  function conversationTokens(event: Extract<HarnessEvent, { type: "context_usage" }>): number {
+    return event.snapshot.categories.find((category) => category.key === "conversation")?.tokens ?? -1;
+  }
+
+  it("emits growing preRequest snapshots each round and a terminal snapshot containing the final answer", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ toolCalls: [mutationToolCall("call-1")] }),
+      assistantResponse({ text: "已创建文件，任务完成。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockedDispatch.mockResolvedValue(successDispatchResult("call-1"));
+
+    const events: HarnessEvent[] = [];
+    await runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "创建一个文件" }],
+      tools: [],
+      vendorConfig,
+      onEvent: (event) => events.push(event),
+    });
+
+    const usageEvents = events.filter((event): event is Extract<HarnessEvent, { type: "context_usage" }> => event.type === "context_usage");
+    // 两轮各一次 preRequest + finish() 一次 terminal。
+    expect(usageEvents.map((event) => event.snapshot.phase)).toEqual(["preRequest", "preRequest", "terminal"]);
+
+    const [firstPre, secondPre, terminal] = usageEvents;
+    // 工具轮后对话历史 token 增长。
+    expect(conversationTokens(secondPre)).toBeGreaterThan(conversationTokens(firstPre));
+    // 终态快照包含 final assistant 回复，conversation 大于最后一次 preRequest。
+    expect(conversationTokens(terminal)).toBeGreaterThan(conversationTokens(secondPre));
+    // 快照携带轮次与窗口字段。
+    expect(terminal.snapshot.round).toBe(1);
+    expect(terminal.snapshot.contextWindowTokens).toBeGreaterThan(0);
+    expect(terminal.snapshot.totalTokens).toBe(terminal.snapshot.categories.reduce((sum, category) => sum + category.tokens, 0));
+  });
+
+  it("does not emit a terminal snapshot when the run is cancelled", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ toolCalls: [mutationToolCall("call-1")] }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    mockedDispatch.mockImplementation(async () => {
+      controller.abort();
+      return successDispatchResult("call-1");
+    });
+
+    const events: HarnessEvent[] = [];
+    const result = await runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "创建一个文件" }],
+      tools: [],
+      vendorConfig,
+      signal: controller.signal,
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(result.terminateReason).toBe("cancelled");
+    const usageEvents = events.filter((event): event is Extract<HarnessEvent, { type: "context_usage" }> => event.type === "context_usage");
+    expect(usageEvents.length).toBeGreaterThan(0);
+    expect(usageEvents.every((event) => event.snapshot.phase === "preRequest")).toBe(true);
+  });
+});

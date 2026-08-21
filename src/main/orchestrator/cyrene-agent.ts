@@ -1,13 +1,12 @@
 // CyreneAgent —— 把两条 Agent 循环包进 AG-UI 的 AbstractAgent。
 //
-// 第一期重构：
 // - 持有 runWithEvents 入口：Chat 使用 chat-loop，其余模式使用 CyreneHarness。
-// - 工具阶段只携带 tool_system + tools schema；Soul 阶段只携带 soul_systemBase + 工具结果摘要，不携带 tools。
+// - Harness 单循环：每轮携带同一份 stablePrefix（人设+工具规则）+ tools schema + transcript；
+//   工具结果以 role:tool 消息写回 transcript。
 // - runWithEvents 把 AgentLoopEvent 包装成 AG-UI BaseEvent 转发给渲染端。
 //
 // 设计要点：
-// - FC 循环仍是 stream:false 一次性拿全文（不碰 LLM 层），拿到全文后切成 delta 逐个发
-//   TEXT_MESSAGE_CONTENT，这就是"流式感"的来源——标准 AG-UI 做法。
+// - Chat 循环流式输出（SDK 流 + 非流式兜底）；Harness 每轮流式调用 LLM。
 // - run() 不做副作用（不写记忆、不推断表情）。那些在桥层 runAgent 完成后做，
 //   保持 agent 纯粹只管"产出事件流"。
 // - 错误用 observer.error() 抛，桥层捕获。
@@ -63,6 +62,8 @@ export interface AgentLoopEvent {
   status?: string;
   snapshot?: unknown;
   taskPlan?: unknown;
+  /** 上下文容量快照（chat-loop 发射；type 为 "context_usage"）。 */
+  contextUsage?: import("../../shared/context-usage").ContextUsageSnapshot;
 }
 
 import type { SocialAtom } from "../social-context/types";
@@ -105,7 +106,7 @@ export interface CyreneRunOptions {
   runId?: string;
   /** 用户明确要求继续的旧 Harness Run；仅由恢复入口注入。 */
   resumeFromRunId?: string;
-  /** 原始消息（不含 system）。FC 循环按阶段动态注入。 */
+  /** 原始消息（不含 system）。system 由 chat-loop / harness-adapter 按 promptLayers 组装，不随消息持久化。 */
   messages: ChatMessage[];
   conversationId?: string;
   /** CITA 保留的用户原始 Query；旧调用方未传时从最后一条 user 消息读取。 */
@@ -131,9 +132,9 @@ export interface CyreneRunOptions {
   permissionMode?: "normal" | "allow_all";
   /** 直发图片被主模型接口拒绝时，懒加载 caption fallback 消息并重试。 */
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
-  /** 工具阶段使用的 system prompt（仅含工具调度规则 + 自动生成的工具目录）。 */
+  /** 工具规则与目录 system prompt（进入 harness stablePrefix）。 */
   toolSystemContent: string;
-  /** Soul 阶段使用的基础 system prompt（人设 + 环境/记忆/关系/附件）。 */
+  /** 人设基础 system prompt（仅人设/渠道；环境/记忆/关系/附件在 soulRuntimeContext，随请求尾部注入）。 */
   soulSystemBaseContent: string;
   /** 每次请求才附加给 Soul 的可变运行时上下文；不参与稳定缓存前缀。 */
   soulRuntimeContext?: string;
@@ -183,7 +184,7 @@ export interface CyreneRunOptions {
   signal?: AbortSignal;
 }
 
-/** FC 循环最终结果（供桥层做副作用用）。 */
+/** Agent run 最终结果（供桥层做副作用用）。 */
 export interface CyreneRunResult {
   reply: string;
   toolResults: ToolCallResult[];
@@ -290,6 +291,13 @@ export function toAguiEvent(event: AgentLoopEvent): BaseEvent {
       return { type: EventType.REASONING_MESSAGE_END, messageId: event.messageId };
     case "compressing_context":
       return { type: EventType.CUSTOM, name: "cyrene.compressingContext", value: { text: "昔涟正在压缩上下文…" } };
+    case "context_usage":
+      // 上下文容量快照：与 harness-adapter 的同名 CUSTOM 事件对齐。
+      return {
+        type: EventType.CUSTOM,
+        name: "cyrene.context.usage",
+        value: event.contextUsage,
+      } as BaseEvent;
     default:
       // v3: 未知事件类型转为 CUSTOM 占位，不再抛错
       return { type: EventType.CUSTOM, name: "cyrene.unknown", value: event } as BaseEvent;
@@ -354,7 +362,7 @@ export class CyreneAgent extends AbstractAgent {
   lastResult?: CyreneRunResult;
 
   /**
-   * 跑 FC 循环并返回事件流。桥层订阅这个流转发给渲染进程。
+   * 跑 Agent 循环并返回事件流。桥层订阅这个流转发给渲染进程。
    * 传入的 options 会原样跑——settings/messages/timeout 都在这里。
    */
   runWithEvents(options: CyreneRunOptions): Observable<BaseEvent> {

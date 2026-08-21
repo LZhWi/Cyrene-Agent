@@ -8,6 +8,7 @@
 import type { MusicCardData } from "./music-card";
 import type { TodoItem } from "./todo-types";
 import type { TaskDelegationPresentation } from "./task-session";
+import type { ContextUsageSnapshot } from "./context-usage";
 
 // - schemaVersion 用于以后改 schema 时的迁移判断；当前固定 1。
 
@@ -142,6 +143,8 @@ export interface ChatMessage {
   ttsCacheVersion?: string;
   /** 已实际展示的音乐候选卡片；持久化展示不延长 Skill 候选状态 TTL。 */
   musicCard?: MusicCardData;
+  /** 上下文容量快照（run 终态落盘）；运行中被每轮 preRequest 快照实时覆盖（纯内存）。 */
+  contextUsage?: ContextUsageSnapshot;
 }
 
 export type MessageAttachment = ImageMessageAttachment | DocumentMessageAttachment;

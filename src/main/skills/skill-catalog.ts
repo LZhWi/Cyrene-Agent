@@ -69,8 +69,8 @@ export function buildAutoInjectedSkillContext(
 }
 
 /**
- * Soul 阶段没有工具能力，只注入 Skill 明确声明的回复策略小节。
- * 其余工具流程仍只属于 TOOL_PHASE，避免模型把工具协议输出成聊天文本。
+ * chat 模式没有工具能力，只注入 Skill 明确声明的回复策略小节。
+ * 其余工具流程仍只属于带工具的 harness 循环，避免模型把工具协议输出成聊天文本。
  */
 export function buildAutoInjectedSoulContext(
   skills: SkillEntry[],

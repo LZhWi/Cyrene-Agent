@@ -4,6 +4,7 @@ import Latex from "@ant-design/x-markdown/plugins/Latex";
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ErrorInfo, type KeyboardEvent, type ReactNode } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
 import type { AgentRoundRecord, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord, ToolFileChange } from "../../../../../shared/chat-types";
+import type { ContextUsageSnapshot } from "../../../../../shared/context-usage";
 import thinkingMoodUrl from "../../../assets/status-moods/思考中.png?url";
 import completedThinkingMoodUrl from "../../../assets/status-moods/提醒.png?url";
 import workingMoodUrl from "../../../assets/status-moods/工作中.png?url";
@@ -58,6 +59,8 @@ export interface ChatMessageItem {
   taskPlan?: TaskPlanPresentation;
   attachments?: ChatMessageAttachment[];
   weather?: WeatherData;
+  /** 上下文容量快照：运行中为每轮 preRequest 实时值，run 结束后为终态快照。 */
+  contextUsage?: ContextUsageSnapshot;
 }
 
 export interface ChatMessageAttachment {

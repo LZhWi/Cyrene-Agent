@@ -62,8 +62,8 @@ export function buildSystemPrompt(styleFile: string, includeStyle = true): strin
 }
 
 /**
- * 工具阶段使用的 system prompt。
- * 仅含运行时生成的工具目录，不再注入固定规则文件——
+ * 工具规则与目录 system prompt（进入 harness stablePrefix）。
+ * 仅含运行时生成的工具目录——
  * 不放任何人格 / 环境 / 记忆，避免人设污染工具决策。
  */
 export function buildToolSystemPrompt(
@@ -78,12 +78,10 @@ export function buildToolSystemPrompt(
 }
 
 /**
- * Soul 阶段使用的基础 system prompt。
- * 包含：按模式选取的人设基础 + 后续可追加的环境/记忆等。
- * 注意：工具结果（`role: "tool"` 消息）在 conversation 中已携带，本函数不重复注入。
- * 第一期：build-options 会把 environmentContext / skillCatalog / toneInjection /
- * alwaysOnContext / relationshipContext / attachmentContext 等都拼到 baseContent 末尾，
- * 后续第二期再拆分为 toolEnvironmentContext / soulEnvironmentContext。
+ * 人设基础 system prompt（进入 stablePrefix）。
+ * 仅包含按模式选取的人设基础；环境/记忆/关系/附件等动态内容走
+ * soulRuntimeContext，随请求尾部注入。
+ * 注意：工具结果（`role: "tool"` 消息）在单循环 transcript 中已携带，本函数不重复注入。
  */
 export function buildSoulSystemBasePrompt(styleFile: string): string {
   return buildSystemPrompt(styleFile, false);

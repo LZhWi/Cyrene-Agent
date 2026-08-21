@@ -286,6 +286,7 @@ export async function runHarnessWithAdapter(
   const harnessInput: HarnessInput = {
     systemPrompt,
     promptLayers: harnessPromptLayers,
+    usageParts: promptLayers.usageParts,
     messages: runMessages,
     runId,
     ...(recovered ? { initialState: recovered.state } : {}),
@@ -403,12 +404,13 @@ export async function runHarnessWithAdapter(
 
 // ── System Prompt 构建 ─────────────────────────────────────
 
-export function buildHarnessPromptLayers(options: CyreneRunOptions): PromptLayers {
-  const parts: string[] = [];
-
+export function buildHarnessPromptLayers(
+  options: CyreneRunOptions,
+): PromptLayers & { usageParts?: { personaContent: string; toolLayerContent: string } } {
   // 人设层（Soul）
+  const personaParts: string[] = [];
   if (options.soulSystemBaseContent) {
-    parts.push(options.soulSystemBaseContent);
+    personaParts.push(options.soulSystemBaseContent);
   }
 
   // Harness 专属人设（cyrene_harness.md）
@@ -416,14 +418,16 @@ export function buildHarnessPromptLayers(options: CyreneRunOptions): PromptLayer
   // 设计稿 §4.5: 这是 Persona 层,不承担 Runtime Policy
   const harnessPersona = loadPromptFile("cyrene_harness.md");
   if (harnessPersona) {
-    parts.push(harnessPersona);
+    personaParts.push(harnessPersona);
   }
 
-  parts.push(TODO_WORKING_NOTEBOOK_POLICY);
+  personaParts.push(TODO_WORKING_NOTEBOOK_POLICY);
 
-  // 工具调度规则
+  // 工具调度规则 + 使用规范（tool_usage.md），同一份 parts 列表派生，
+  // 供上下文容量快照按"系统提示词 / 工具定义与 Skill 目录"分类，避免二次拼串漂移。
+  const toolParts: string[] = [];
   if (options.toolSystemContent) {
-    parts.push(options.toolSystemContent);
+    toolParts.push(options.toolSystemContent);
   }
 
   // 工具 / Skill / Task 委托统一使用规范（prompts/tool_usage.md）。
@@ -432,7 +436,7 @@ export function buildHarnessPromptLayers(options: CyreneRunOptions): PromptLayer
   if (options.conversationMode !== "chat") {
     const toolUsagePolicy = loadPromptFile("tool_usage.md");
     if (toolUsagePolicy) {
-      parts.push(toolUsagePolicy);
+      toolParts.push(toolUsagePolicy);
     }
   }
 
@@ -446,10 +450,14 @@ export function buildHarnessPromptLayers(options: CyreneRunOptions): PromptLayer
   // Response Context (CITA)
   if (options.responseContext) runtimeParts.push(`[RESPONSE_CONTEXT]\n${options.responseContext}`);
 
-  const stablePrefix = parts.join("\n\n---\n\n");
+  const stablePrefix = [...personaParts, ...toolParts].join("\n\n---\n\n");
   const uniqueRuntimeParts = runtimeParts.filter((part) => !stablePrefix.includes(part));
   return {
     stablePrefix,
+    usageParts: {
+      personaContent: personaParts.join("\n\n---\n\n"),
+      toolLayerContent: toolParts.join("\n\n---\n\n"),
+    },
     ...(options.conversationMode ? { mode: options.conversationMode } : {}),
     ...(uniqueRuntimeParts.length ? { runtimeContext: uniqueRuntimeParts.join("\n\n---\n\n") } : {}),
   };
@@ -559,6 +567,17 @@ export function sendHarnessEventAsAgui(
         type: EventType.CUSTOM,
         name: "cyrene.todo",
         value: { items: event.items },
+        threadId,
+        runId,
+      } as BaseEvent);
+      break;
+    }
+    case "context_usage": {
+      // 上下文容量快照：preRequest 每轮实时刷新，terminal 随消息持久化。
+      send({
+        type: EventType.CUSTOM,
+        name: "cyrene.context.usage",
+        value: event.snapshot,
         threadId,
         runId,
       } as BaseEvent);

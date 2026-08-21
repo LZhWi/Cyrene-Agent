@@ -15,6 +15,7 @@ import type { CyreneRunTerminalResult } from "../../../shared/run-terminal";
 import type { TodoItem } from "../../../shared/task-session";
 import type { ToolErrorCategory } from "../tool-execution-error";
 import type { ToolFileChange } from "../../../shared/chat-types";
+import type { ContextUsageSnapshot } from "../../../shared/context-usage";
 import type { ToolOutputRef, ToolOutputStore } from "./tool-output/tool-output-store";
 export type { ToolErrorCategory } from "../tool-execution-error";
 export type { TodoItem, TodoStatus } from "../../../shared/task-session";
@@ -153,6 +154,7 @@ export type HarnessEvent =
   | { type: "tool_start"; toolCallId: string; toolName: string; args: Record<string, unknown> }
   | { type: "tool_end"; toolCallId: string; outcome: ToolCallOutcome; preview: string; changes?: ToolFileChange[] }
   | { type: "todo_update"; items: TodoItem[] }
+  | { type: "context_usage"; snapshot: ContextUsageSnapshot }
   | { type: "ask_user"; card: unknown }
   | { type: "plan_mode_changed"; state: import("../plan-mode").PlanStateName }
   | { type: "plan_written"; planPath: string }
@@ -201,6 +203,14 @@ export interface HarnessInput {
   systemPrompt: string;
   /** 缓存友好的提示词分层；Todo 等每轮状态不得放入 stablePrefix。 */
   promptLayers?: import("../prompt-layers").PromptLayers;
+  /**
+   * stablePrefix 的人设层/工具层文本拆分，供上下文容量快照分类；
+   * 缺省时整个 stablePrefix 计入系统提示词类。
+   */
+  usageParts?: {
+    personaContent: string;
+    toolLayerContent: string;
+  };
   /** 初始消息（不含 system） */
   messages: ChatMessage[];
   /** canonical runId；仅用于内部 transcript 元数据，永不进入 Provider 请求。 */

@@ -2,6 +2,8 @@ import { Sender } from "@ant-design/x";
 import { Popover } from "antd";
 import { useEffect, useRef, useState } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
+import type { ContextUsageSnapshot } from "../../../../../shared/context-usage";
+import { ContextUsageRing } from "./ContextUsageRing";
 import { ReasoningControl } from "./ReasoningControl";
 import { StyleControl } from "./StyleControl";
 import { PermissionControl } from "./PermissionControl";
@@ -38,6 +40,8 @@ interface ChatComposerProps {
   onChooseSticker: (id: string) => void;
   activeModelProfileId?: string;
   onSelectModelProfile?: (id: string) => void;
+  /** 上下文容量快照：运行中实时刷新，空闲时为最近一次终态快照；无快照不渲染圆环。 */
+  contextUsage?: ContextUsageSnapshot;
 }
 
 export interface ComposerAttachment {
@@ -212,6 +216,7 @@ export function ChatComposer({
   onChooseSticker,
   activeModelProfileId,
   onSelectModelProfile,
+  contextUsage,
 }: ChatComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [enabledStickers, setEnabledStickers] = useState<EnabledSticker[]>([]);
@@ -386,6 +391,7 @@ export function ChatComposer({
         {supportsStyle && <StyleControl />}
         {onSelectModelProfile && <ModelSelector activeProfileId={activeModelProfileId} onSelect={onSelectModelProfile} />}
         <ReasoningControl />
+        <ContextUsageRing usage={contextUsage} />
         </div>
       </div>
     </div>

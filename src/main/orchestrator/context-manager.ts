@@ -75,7 +75,7 @@ export interface CompressOptions {
   messages: ChatMessage[];
   adapter: ChatVendorAdapter;
   settings: AgentLoopSettings;
-  /** 当前要附加到请求里的 system prompt（Tool/Soul 阶段不同）。 */
+  /** 当前要附加到请求里的 system prompt（chat 模式为 soulSystemBaseContent）。 */
   systemContent: string;
   mode?: string;
   onEvent?: (event: AgentLoopEvent) => void;

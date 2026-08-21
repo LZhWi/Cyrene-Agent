@@ -29,6 +29,7 @@ import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
 import { ConversationSidebar } from "../components/ConversationSidebar";
 
 import type { AgentRoundRecord, ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord, ToolFileChange } from "../../../../../shared/chat-types";
+import { isContextUsageSnapshot, type ContextUsageSnapshot } from "../../../../../shared/context-usage";
 import { SidebarToggle } from "../../../components/ui/SidebarToggle";
 import { ModeSwitch } from "../../../components/ui/ModeSwitch";
 import { ToolModeButton } from "../../../components/ui/ToolModeButton";
@@ -366,6 +367,7 @@ function toUiMessages(session: ChatSession): ChatMessageItem[] {
       sticker: message.sticker,
       toolExecutions: message.toolExecutions,
       attachments: message.attachments,
+      contextUsage: message.contextUsage,
       runId: message.runSnapshot?.runId,
     };
     return message.runSnapshot ? recoverInterruptedMessage(item, message.runSnapshot) : item;
@@ -965,6 +967,8 @@ export function ChatPage() {
     let runActivity: RunActivityRecord | undefined;
     let currentTodos: TodoItem[] = [];
     let persistedFinalContent = "";
+    // 上下文容量快照：preRequest 每轮实时覆盖（纯内存），terminal 随 checkpoint 落盘。
+    let contextUsage: ContextUsageSnapshot | undefined;
     const assistantAt = Date.now();
     let checkpointTimer: number | undefined;
     let checkpointChain = Promise.resolve<ChatSession | null>(null);
@@ -989,6 +993,7 @@ export function ChatPage() {
       at: assistantAt,
       sticker,
       toolExecutions,
+      contextUsage,
       runSnapshot: {
         runId: activeRunsBySession.current[input.sessionId]?.runId,
         status,
@@ -1326,6 +1331,15 @@ export function ChatPage() {
         }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.compressingContext") {
         setIsCompressingContext(true);
+      } else if (event.type === "CUSTOM" && event.name === "cyrene.context.usage") {
+        // 上下文容量快照：preRequest 纯内存实时刷新（零 I/O）；
+        // terminal 用 debounce 版 checkpointRun，合并进紧随其后的 RUN_FINISHED terminal checkpoint，一次落盘。
+        const snapshot = isContextUsageSnapshot(event.value) ? event.value : undefined;
+        if (snapshot) {
+          contextUsage = snapshot;
+          updateMessage(input.sessionId, input.assistantId, { contextUsage: snapshot });
+          if (snapshot.phase === "terminal") void checkpointRun("running");
+        }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.sticker") {
         sticker = typeof event.value === "string" ? event.value : null;
         updateMessage(input.sessionId, input.assistantId, { sticker });
@@ -2100,6 +2114,8 @@ export function ChatPage() {
   const currentPendingQueue = activeSessionId
     ? (pendingQueueBySession[activeSessionId] ?? []).map((item) => ({ id: item.id, content: item.visibleContent }))
     : [];
+  // 上下文容量圆环：运行中显示当前 assistant 消息的实时快照，空闲时显示最近一次终态快照。
+  const latestContextUsage = messages.findLast((message) => message.contextUsage)?.contextUsage;
 
   return (
     <div className={`cy-page ${collapsed ? "is-collapsed" : ""}`}>
@@ -2274,6 +2290,7 @@ export function ChatPage() {
               setDrafts((current) => ({ ...current, [scopeKey]: `${draft}${separator}[sticker:${id}]` }));
             }}
             activeModelProfileId={activeSession?.id === activeSessionId ? activeSession?.modelProfileId : undefined}
+            contextUsage={latestContextUsage}
             onSelectModelProfile={(modelProfileId) => {
               if (!activeSessionId) return;
               const store = chatStore();

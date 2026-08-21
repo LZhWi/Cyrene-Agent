@@ -100,9 +100,9 @@ export interface BuildOptionsDeps {
   buildRelationshipContext: () => Promise<string>;
   /** 明确按模式构建基础人设，不再通过 style 文件名猜模式。 */
   buildModePrompt?: (mode: ConversationMode) => string;
-  /** 工具阶段 system prompt。仅含自动生成的工具目录。 */
+  /** 工具规则与目录 system prompt（进入 harness stablePrefix）。仅含自动生成的工具目录。 */
   buildToolSystemPrompt: (mode: ConversationMode, enabledTools: ReadonlyArray<unknown>) => string;
-  /** 第一期：Soul 阶段使用的基础 system prompt。工具结果在 FC 循环 Soul 阶段执行前动态追加。 */
+  /** 人设基础 system prompt；动态内容走 soulRuntimeContext，随请求尾部注入。 */
   buildSoulSystemBasePrompt: (styleFile: string) => string;
   resolveRunCapabilities?: (input: {
     mode: ConversationMode; activeSearchBackend: SearchBackend; toolModeOverrides?: ToolModeOverrides; skillModeOverrides?: SkillModeOverrides;
@@ -681,9 +681,8 @@ export async function buildAgentRunOptions(
     ?? deps.buildSoulSystemBasePrompt(basePromptMode);
   const baseToolSystemPrompt = resolvedMode === "chat" ? "" : deps.buildToolSystemPrompt(resolvedMode, runTools);
 
-  // 第一期：保留旧 systemContent 兼容（已不再使用，保留字段是为了 logger 诊断）。
-  // 同时新增 toolSystemContent / soulSystemBaseContent 两套。
-  // 工具阶段：工具规则 + 运行时工具目录 + 可用 Skill 路由清单。
+  // toolSystemContent 进入 harness stablePrefix（与人设层一起拼装）：
+  // 工具规则 + 运行时工具目录 + 可用 Skill 路由清单。
   const toolSystemContent = baseToolSystemPrompt
     + (conversationTimeContext.includes("## Internal Context Policy") ? "\n\n" + conversationTimeContext.split("\n\n[对话时间信息]")[0] : "")
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
@@ -698,7 +697,7 @@ export async function buildAgentRunOptions(
 
   // Soul 的稳定前缀只保留固定人设/渠道。每轮变化的事实在请求尾部注入，
   // 使厂商提示词缓存可以复用同一个前缀。
-  // 工具结果以 role:tool 协议消息随对话历史进入 Soul 阶段。
+  // 工具结果以 role:tool 消息写回单循环 transcript。
   const soulSystemWithoutCita =
     (channelSystem ? channelSystem + "\n\n" : "") +
     baseSoulSystemPrompt;
@@ -716,7 +715,7 @@ export async function buildAgentRunOptions(
     attachmentContext,
   ].filter((context): context is string => Boolean(context?.trim())).join("\n\n---\n\n");
 
-  // 第一期：原始 messages 不再携带 system。FC 循环按阶段动态注入。
+  // 原始 messages 不携带 system。system 由 chat-loop / harness-adapter 按 promptLayers 组装。
   // `multimodal=false` is an explicit user decision: never send image bytes to
   // the main model.  Describe first with the independent vision model, then
   // give Harness only the resulting text context.

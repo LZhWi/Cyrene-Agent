@@ -1,0 +1,172 @@
+// ContextUsageRing 单测：纯函数口径 + 静态渲染断言（renderToStaticMarkup，项目惯例）。
+//
+// 重点覆盖施工文档 Phase 3 验收点：
+// - visualRatio clamp（含 ratio>1：文本诚实显示 117%，圆环 clamp 整圈）
+// - contextWindowTokens<=0 / NaN：不渲染进度弧与百分比，菜单仍显示绝对值
+// - 分级变色（normal / warm≥70% / alert≥90%）
+// - 无快照返回 null；0 token 类别在菜单中隐藏；数字格式化
+import * as React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+import type { ContextUsageCategoryKey, ContextUsageSnapshot } from "../../../../../shared/context-usage";
+
+// JSX 经典运行时（React.createElement）：被测 .tsx 需要全局 React（项目测试惯例）。
+vi.stubGlobal("React", React);
+
+vi.mock("antd", async () => {
+  const ReactModule = await import("react");
+  return {
+    // 直渲 children + content，让静态 markup 能同时断言圆环与菜单。
+    Popover: ({ children, content }: { children?: unknown; content?: unknown }) =>
+      ReactModule.createElement("div", null, children as React.ReactNode, content as React.ReactNode),
+  };
+});
+
+import {
+  CONTEXT_USAGE_CATEGORY_META,
+  ContextUsageRing,
+  RING_CIRCUMFERENCE,
+  clampVisualRatio,
+  computeUsageRatio,
+  formatTokenCount,
+  resolveRingTone,
+} from "./ContextUsageRing";
+
+const CATEGORY_KEYS: ContextUsageCategoryKey[] = [
+  "systemPrompt",
+  "toolDefinitions",
+  "runtimeAndToolLogs",
+  "conversation",
+  "other",
+];
+
+function snapshotOf(input: {
+  categories?: Partial<Record<ContextUsageCategoryKey, number>>;
+  contextWindowTokens?: number;
+  totalTokens?: number;
+}): ContextUsageSnapshot {
+  const values = input.categories ?? { systemPrompt: 1000, conversation: 500 };
+  const categories = CATEGORY_KEYS.map((key) => ({ key, tokens: values[key] ?? 0 }));
+  return {
+    phase: "terminal",
+    contextWindowTokens: input.contextWindowTokens ?? 256_000,
+    totalTokens: input.totalTokens ?? categories.reduce((sum, category) => sum + category.tokens, 0),
+    categories,
+    messageCount: 3,
+    updatedAt: Date.now(),
+  };
+}
+
+/** 从 markup 提取进度弧的 stroke-dasharray，返回 [弧长, 周长]。 */
+function extractDasharray(markup: string): [number, number] | undefined {
+  const match = markup.match(/stroke-dasharray="([\d.]+) ([\d.]+)"/);
+  if (!match) return undefined;
+  return [Number(match[1]), Number(match[2])];
+}
+
+describe("context usage helpers", () => {
+  it("formats token counts as k notation only above 1000", () => {
+    expect(formatTokenCount(0)).toBe("0");
+    expect(formatTokenCount(999)).toBe("999");
+    expect(formatTokenCount(1234)).toBe("1.2k");
+    expect(formatTokenCount(12_345)).toBe("12.3k");
+    expect(formatTokenCount(123_456)).toBe("123k");
+    expect(formatTokenCount(Number.NaN)).toBe("0");
+  });
+
+  it("computes the usage ratio and returns NaN for invalid windows", () => {
+    expect(computeUsageRatio(12_800, 256_000)).toBeCloseTo(0.05);
+    expect(Number.isNaN(computeUsageRatio(100, 0))).toBe(true);
+    expect(Number.isNaN(computeUsageRatio(100, -5))).toBe(true);
+    expect(Number.isNaN(computeUsageRatio(Number.NaN, 100))).toBe(true);
+    expect(computeUsageRatio(0, 100)).toBe(0);
+  });
+
+  it("clamps the visual ratio fed into the svg arc", () => {
+    expect(clampVisualRatio(0.42)).toBeCloseTo(0.42);
+    expect(clampVisualRatio(1.18)).toBe(1);
+    expect(clampVisualRatio(-0.2)).toBe(0);
+    expect(clampVisualRatio(Number.NaN)).toBe(0);
+    expect(clampVisualRatio(Number.POSITIVE_INFINITY)).toBe(0);
+  });
+
+  it("grades the ring tone at compression and overflow thresholds", () => {
+    expect(resolveRingTone(0.05)).toBe("normal");
+    expect(resolveRingTone(0.69)).toBe("normal");
+    expect(resolveRingTone(0.7)).toBe("warm");
+    expect(resolveRingTone(0.89)).toBe("warm");
+    expect(resolveRingTone(0.9)).toBe("alert");
+    expect(resolveRingTone(1.4)).toBe("alert");
+    expect(resolveRingTone(Number.NaN)).toBe("normal");
+  });
+});
+
+describe("ContextUsageRing rendering", () => {
+  it("renders nothing without a snapshot", () => {
+    expect(renderToStaticMarkup(React.createElement(ContextUsageRing, { usage: undefined }))).toBe("");
+  });
+
+  it("renders a normal-tone ring with title summary", () => {
+    const markup = renderToStaticMarkup(React.createElement(ContextUsageRing, {
+      usage: snapshotOf({ categories: { systemPrompt: 12_800, conversation: 0 } }),
+    }));
+    expect(markup).toContain("cy-context-usage-ring is-normal");
+    expect(markup).toContain("上下文 12.8k / 256k (5%)");
+    const dash = extractDasharray(markup);
+    expect(dash).toBeDefined();
+    expect(dash![1]).toBeCloseTo(RING_CIRCUMFERENCE);
+    expect(dash![0] / dash![1]).toBeCloseTo(0.05, 2);
+  });
+
+  it("clamps an over-window ratio to a full ring while keeping the honest percentage", () => {
+    const markup = renderToStaticMarkup(React.createElement(ContextUsageRing, {
+      usage: snapshotOf({ totalTokens: 300_000, categories: { conversation: 300_000 } }),
+    }));
+    // 300k / 256k = 117.1875% → 文本诚实显示 117%，圆环整圈，色调 alert。
+    expect(markup).toContain("117%");
+    expect(markup).toContain("cy-context-usage-ring is-alert");
+    const dash = extractDasharray(markup);
+    expect(dash![0]).toBeCloseTo(RING_CIRCUMFERENCE);
+    expect(dash![0] / dash![1]).toBeCloseTo(1);
+  });
+
+  it("omits the progress arc and percentage when the context window is invalid", () => {
+    const markup = renderToStaticMarkup(React.createElement(ContextUsageRing, {
+      usage: snapshotOf({ contextWindowTokens: 0, categories: { systemPrompt: 1500 } }),
+    }));
+    expect(markup).toContain("cy-context-usage-ring__track");
+    expect(markup).not.toContain("cy-context-usage-ring__progress");
+    // 无窗口比例：标题与明细行均不带百分比（堆叠条的 width:100% 是 CSS，不算）。
+    expect(markup).not.toContain("tokens (");
+    expect(markup).not.toContain("cy-context-usage-menu__share");
+    // 菜单仍显示绝对 token 值。
+    expect(markup).toContain("1.5k tokens");
+  });
+
+  it("grades to warm tone at 70% occupancy", () => {
+    const markup = renderToStaticMarkup(React.createElement(ContextUsageRing, {
+      usage: snapshotOf({ categories: { conversation: 184_320 } }), // 184320/256000 = 0.72
+    }));
+    expect(markup).toContain("cy-context-usage-ring is-warm");
+    expect(markup).toContain("(72%)");
+  });
+
+  it("renders the popover menu with stacked bar and per-category rows, hiding zero-token categories", () => {
+    const markup = renderToStaticMarkup(React.createElement(ContextUsageRing, {
+      usage: snapshotOf({ categories: { systemPrompt: 12_800, toolDefinitions: 51_200, conversation: 12_800 } }),
+    }));
+    // 菜单结构：标题 + 汇总 + 脚注。
+    expect(markup).toContain("上下文容量");
+    expect(markup).toContain("估算值（按字符折算），对话后自动刷新");
+    // 堆叠条 = 3 个可见类别段。
+    expect((markup.match(/cy-context-usage-menu__bar"/g) ?? []).length).toBe(1);
+    expect((markup.match(/cy-context-usage-menu__dot"/g) ?? []).length).toBe(3);
+    // 0 token 的运行时上下文与工具日志、其他被隐藏。
+    expect(markup).not.toContain(CONTEXT_USAGE_CATEGORY_META.runtimeAndToolLogs.label);
+    expect(markup).not.toContain(CONTEXT_USAGE_CATEGORY_META.other.label);
+    // 明细行：类别名 + token 数 + 占窗口百分比（51.2k/256k = 20%）。
+    expect(markup).toContain(CONTEXT_USAGE_CATEGORY_META.toolDefinitions.label);
+    expect(markup).toContain("51.2k");
+    expect(markup).toContain(">20%</span>");
+  });
+});

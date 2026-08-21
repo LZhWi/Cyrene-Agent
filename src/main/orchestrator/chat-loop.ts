@@ -19,6 +19,7 @@ import type { UnifiedStreamDelta } from "./vendors/sdk-stream/types";
 import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 import { getTimeoutSettings } from "../timeout-manager";
 import { compressConversation } from "./context-manager";
+import { buildContextUsageSnapshot } from "./context-usage";
 import { isExplicitStreamUnsupported } from "./vendors/stream-support";
 import { composePromptLayers } from "./prompt-layers";
 
@@ -110,6 +111,25 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
     onEvent: options.onEvent,
     signal: options.signal,
   });
+
+  // 上下文容量快照（preRequest）：压缩后、请求前。
+  // messages 为压缩后的原始消息，不含 composePromptLayers 追加的 runtime_context
+  // 尾部（不变量），runtimeContext 由独立参数计量，避免双重计数。
+  const emitContextUsage = (phase: "preRequest" | "terminal", extraAssistantReply?: string): void => {
+    options.onEvent?.({
+      type: "context_usage",
+      contextUsage: buildContextUsageSnapshot({
+        phase,
+        contextWindowTokens: options.settings.contextWindowTokens,
+        personaContent: options.soulSystemBaseContent,
+        ...(options.runtimeContext ? { runtimeContext: options.runtimeContext } : {}),
+        ...(extraAssistantReply !== undefined
+          ? { messages: [...messages, { role: "assistant" as const, content: extraAssistantReply }] }
+          : { messages }),
+      }),
+    });
+  };
+  emitContextUsage("preRequest");
 
   const timeout = getTimeoutSettings().chatRequestTimeout;
 
@@ -301,6 +321,8 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
     }
     const reply = stripLeakedChatTimeContext(stripToolProtocol(response.text))
       || "刚才没有生成正常回复，请再试一次。";
+    // 终态快照：把最终回复并入历史口径（与下一轮进入历史的文本一致）。
+    emitContextUsage("terminal", reply);
     if (result.needsReveal) {
       startText();
       await emitFallbackText(

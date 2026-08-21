@@ -44,6 +44,7 @@ import { extractFileChangesFromOutput } from "../tool-evidence";
 import { classifyToolError, classifyToolResultError } from "./error-classifier";
 import { decideRetry, getRetryParams, sleepWithJitter } from "./retry-policy";
 import { AGENT_COMPACTION_PROMPT, computeTokenBudget, compressForAgentLoop } from "./compaction";
+import { buildContextUsageSnapshot } from "../context-usage";
 import { StreamController } from "./stream-controller";
 import { TimeoutClock } from "./timeout-clock";
 import { buildCurrentTodoNotebookContext } from "./todo-working-notebook";
@@ -163,11 +164,36 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     }
     return buildCancelledResult(state, rounds);
   };
+  /**
+   * 上下文容量快照（docs/context-usage-viewer-construction-plan.md）：
+   * - preRequest：每轮 compaction 后、callLLM 前，代表本轮真正发给模型的 input；
+   * - terminal：finish() 统一出口，此时 final assistant 已写回 transcript，含最终回复。
+   * harness 的动态事实已物化为 internal transcript 消息，无独立 runtimeContext 计量。
+   */
+  const emitContextUsage = (phase: "preRequest" | "terminal"): void => {
+    const stablePrefix = input.promptLayers?.stablePrefix ?? input.systemPrompt;
+    const usageParts = input.usageParts
+      ?? { personaContent: stablePrefix, toolLayerContent: "" };
+    input.onEvent?.({
+      type: "context_usage",
+      snapshot: buildContextUsageSnapshot({
+        phase,
+        ...(input.runId ? { runId: input.runId } : {}),
+        round: rounds,
+        contextWindowTokens: config.contextWindowTokens,
+        personaContent: usageParts.personaContent,
+        toolLayerContent: usageParts.toolLayerContent,
+        toolSpecs: allToolSpecs,
+        messages,
+      }),
+    });
+  };
   const finish = (
     finalAnswer: string,
     terminated: boolean,
     terminateReason: HarnessResult["terminateReason"],
   ): HarnessResult => {
+    emitContextUsage("terminal");
     checkpoint();
     if (checkpointFailure) {
       return buildResult(`执行状态保存失败：${checkpointFailure}`, state, true, "error", rounds);
@@ -245,6 +271,10 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
         messages = compactedMessages;
       }
     }
+
+    // ═══ 上下文容量快照（preRequest）═══
+    // 压缩后、请求前：快照准确代表本轮真正发给模型的 input。
+    emitContextUsage("preRequest");
 
     // ═══ callLLM ═══
     const cacheRequest = projectCacheRelevantRequest({
