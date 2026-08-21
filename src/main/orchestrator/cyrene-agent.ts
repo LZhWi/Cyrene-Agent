@@ -82,7 +82,7 @@ export interface AgentLoopSettings {
   baseUrl: string;
   model: string;
   apiKey: string;
-  explicitTransport?: "openai" | "anthropic" | "auto";
+  explicitTransport?: "openai" | "anthropic" | "responses" | "auto";
   reasoning?: import("../../shared/reasoning").ReasoningPreference;
   /** 用户设置的模型上下文窗口（Token）。用于非 code 模式的对话压缩触发阈值。 */
   contextWindowTokens: number;

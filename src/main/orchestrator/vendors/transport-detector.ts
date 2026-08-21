@@ -11,7 +11,7 @@ export function resolveTransport(cfg: {
   explicitTransport?: Transport | "auto" | undefined;
   provider: string;
 }): Transport {
-  if (cfg.explicitTransport === "openai" || cfg.explicitTransport === "anthropic") {
+  if (cfg.explicitTransport === "openai" || cfg.explicitTransport === "anthropic" || cfg.explicitTransport === "responses") {
     return cfg.explicitTransport;
   }
   return getCapabilityOrOpenAI(cfg.provider).transport;

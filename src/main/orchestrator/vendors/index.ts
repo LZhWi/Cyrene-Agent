@@ -2,6 +2,7 @@
 // 调度层只需 getAdapter(provider) 或 getAdapterForConfig(cfg)，不关心 transport 细节。
 import { OpenAICompatAdapter } from "./openai-adapter";
 import { AnthropicAdapter } from "./anthropic-adapter";
+import { ResponsesAdapter } from "./responses-adapter";
 import { getCapability, getCapabilityOrOpenAI, PROVIDER_CAPABILITIES } from "./capabilities";
 import { resolveTransport } from "./transport-detector";
 import { resolveApiEndpoint } from "../../../shared/api-endpoint";
@@ -55,7 +56,9 @@ export function getAdapterForConfig(cfg: VendorConfig): ChatVendorAdapter {
   const adapter: ChatVendorAdapter =
     transport === "anthropic"
       ? new AnthropicAdapter(cap.id, cap)
-      : new OpenAICompatAdapter(cap.id, cap);
+      : transport === "responses"
+        ? new ResponsesAdapter(cap.id, cap)
+        : new OpenAICompatAdapter(cap.id, cap);
   cache.set(cacheKey, adapter);
   return adapter;
 }

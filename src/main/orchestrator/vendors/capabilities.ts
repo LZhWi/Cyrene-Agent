@@ -23,6 +23,8 @@ export const PROVIDER_CAPABILITIES = [
     supportsVision: true,
     // 视觉仍走 OpenAI 兼容入口。
     visionBaseUrl: "https://api.minimaxi.com/v1",
+    // 三协议全支持（协议矩阵 2026-08-21）
+    supportedTransports: ["anthropic", "openai", "responses"],
   },
   {
     id: "deepseek",
@@ -39,6 +41,8 @@ export const PROVIDER_CAPABILITIES = [
     testStrategy: "text",
     // 文档未明示视觉版，默认模型不支持
     supportsVision: false,
+    // 三格式原生全支持（官方文档）
+    supportedTransports: ["openai", "anthropic", "responses"],
   },
   {
     id: "doubao",
@@ -53,6 +57,8 @@ export const PROVIDER_CAPABILITIES = [
     cacheStrategy: "none",
     testStrategy: "text",
     supportsVision: true,
+    // 火山方舟三格式全兼容（官方文档）
+    supportedTransports: ["openai", "anthropic", "responses"],
   },
   {
     id: "glm",
@@ -68,6 +74,8 @@ export const PROVIDER_CAPABILITIES = [
     testStrategy: "text",
     // 视觉版是 glm-5v-turbo，默认 glm-5.2 不支持
     supportsVision: false,
+    // OpenAI 兼容 + Anthropic 兼容（协议矩阵 2026-08-21，用户确认）
+    supportedTransports: ["openai", "anthropic"],
   },
   {
     id: "kimi",
@@ -84,6 +92,8 @@ export const PROVIDER_CAPABILITIES = [
     testStrategy: "text",
     // k2.7-code 支持 image_url / video_url content block
     supportsVision: true,
+    // 官方仅兼容 Chat Completions（协议矩阵 2026-08-21）
+    supportedTransports: ["openai"],
   },
   {
     id: "qwen",
@@ -99,6 +109,8 @@ export const PROVIDER_CAPABILITIES = [
     testStrategy: "text",
     // 视觉版是 qwen-vl 系列，默认 qwen-max 不支持
     supportsVision: false,
+    // 官方 OpenAI 兼容；Responses 由阿里云百炼中转（协议矩阵 2026-08-21）
+    supportedTransports: ["openai", "responses"],
   },
   {
     id: "chatgpt",
@@ -114,6 +126,10 @@ export const PROVIDER_CAPABILITIES = [
     testStrategy: "text",
     // model 由用户填，保守 false；门控会按 supportsVision 拦截
     supportsVision: false,
+    // 双协议：Chat Completions + Responses（Responses 为官方主推）
+    supportedTransports: ["openai", "responses"],
+    // 端点级标记：仅 OpenAI 官方端点支持 encrypted reasoning 回放
+    responsesEncryptedReasoning: true,
   },
   {
     id: "claude",
@@ -129,6 +145,8 @@ export const PROVIDER_CAPABILITIES = [
     testStrategy: "text",
     // Claude 支持多模态 image content block
     supportsVision: true,
+    // 自家协议 only
+    supportedTransports: ["anthropic"],
   },
   {
     id: "mimo",
@@ -147,6 +165,8 @@ export const PROVIDER_CAPABILITIES = [
     supportsVision: true,
     // 结构上独立：用户切主入口到 /anthropic 时视觉仍由 visionBaseUrl 决定
     visionBaseUrl: "https://api.xiaomimimo.com/v1",
+    // 三格式原生全支持（协议矩阵 2026-08-21）
+    supportedTransports: ["openai", "anthropic", "responses"],
   },
 ] satisfies readonly ProviderCapability[];
 

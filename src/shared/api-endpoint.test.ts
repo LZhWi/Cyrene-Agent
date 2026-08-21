@@ -36,4 +36,32 @@ describe("resolveApiEndpoint", () => {
       appendedSuffix: null,
     });
   });
+
+  it("appends /responses to a versioned OpenAI base URL", () => {
+    expect(resolveApiEndpoint("https://api.openai.com/v1", "responses")).toEqual({
+      url: "https://api.openai.com/v1/responses",
+      appendedSuffix: "/responses",
+    });
+  });
+
+  it("appends /responses to a third-party versioned base URL (Ark /v3)", () => {
+    expect(resolveApiEndpoint("https://ark.cn-beijing.volces.com/api/v3", "responses")).toEqual({
+      url: "https://ark.cn-beijing.volces.com/api/v3/responses",
+      appendedSuffix: "/responses",
+    });
+  });
+
+  it("appends /responses to a bare DeepSeek host", () => {
+    expect(resolveApiEndpoint("https://api.deepseek.com", "responses")).toEqual({
+      url: "https://api.deepseek.com/responses",
+      appendedSuffix: "/responses",
+    });
+  });
+
+  it("does not duplicate a complete Responses endpoint", () => {
+    expect(resolveApiEndpoint("https://api.openai.com/v1/responses/", "responses")).toEqual({
+      url: "https://api.openai.com/v1/responses",
+      appendedSuffix: null,
+    });
+  });
 });

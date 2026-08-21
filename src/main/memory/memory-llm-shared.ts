@@ -25,7 +25,7 @@ export interface MemoryModelConfig {
   baseUrl: string;
   model: string;
   apiKey: string;
-  explicitTransport?: "openai" | "anthropic" | "auto";
+  explicitTransport?: "openai" | "anthropic" | "responses" | "auto";
 }
 
 /** 旧 DeepSeek 默认值 — 仅用于兼容已迁移用户的配置文件。 */
@@ -54,7 +54,7 @@ interface RawSettings {
 }
 
 function parseTransport(value: unknown): MemoryModelConfig["explicitTransport"] {
-  return value === "openai" || value === "anthropic" || value === "auto" ? value : undefined;
+  return value === "openai" || value === "anthropic" || value === "responses" || value === "auto" ? value : undefined;
 }
 
 /**

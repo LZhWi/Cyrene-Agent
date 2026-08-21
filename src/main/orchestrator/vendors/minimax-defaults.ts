@@ -2,7 +2,7 @@ const MINIMAX_PROVIDER = "MiniMax（稀宇科技）";
 const LEGACY_ANTHROPIC_DEFAULT = "https://api.minimaxi.com/anthropic";
 const OPENAI_DEFAULT = "https://api.minimaxi.com/v1";
 
-type TransportPreference = "openai" | "anthropic" | "auto";
+type TransportPreference = "openai" | "anthropic" | "responses" | "auto";
 
 /** Migrate only the old shipped default; an explicit Anthropic choice remains authoritative. */
 export function migrateLegacyMinimaxDefaults<T extends {

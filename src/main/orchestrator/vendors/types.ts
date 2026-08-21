@@ -5,7 +5,7 @@
 import type { ReasoningPreference } from "../../../shared/reasoning";
 import type { PromptLayerMetadata } from "../prompt-layers";
 
-export type Transport = "openai" | "anthropic";
+export type Transport = "openai" | "anthropic" | "responses";
 export type AuthStyle = "bearer" | "x-api-key";
 export type ThinkingField = "reasoning_content" | "thinking" | "reasoning_details" | null;
 export type CacheStrategy = "prompt_cache_key" | "cache_control" | "auto" | "none";
@@ -233,6 +233,20 @@ export interface ProviderCapability {
   supportsVision: boolean;
   /** Supported must-call wire policies; Adapter maps required to OpenAI required / Anthropic any. */
   toolChoiceModes?: ReadonlyArray<"named" | "required" | "auto" | "omit">;
+  /**
+   * 该厂商支持的协议清单（来自 docs/vendors 协议矩阵）。
+   * 仅用于新建档案时预填默认值 + UI 提示文案，**不拦截**用户在下拉框的选择——
+   * 用户填什么协议就走什么协议（自定义端点/中转站自行负责兼容性）。
+   * 不标 = 未核实，UI 按"仅 capability.transport"提示。
+   */
+  supportedTransports?: readonly Transport[];
+  /**
+   * Responses transport：端点是否按 OpenAI 官方语义支持
+   * `include: ["reasoning.encrypted_content"]`（store:false 下多轮回放加密 reasoning）。
+   * capability 标记只是必要条件；运行时还需 baseUrl 为 OpenAI 官方域名（api.openai.com）
+   * 才真正下发 include——中转站/第三方兼容端不发，避免报参数错误。
+   */
+  responsesEncryptedReasoning?: boolean;
   /**
    * 视觉模型的 OpenAI 兼容 baseUrl。仅当主聊天走 Anthropic 入口、视觉需走 OpenAI 入口时才需要标
    * （如 MiniMax 主配 /anthropic，视觉要走 /v1）。不标 = 视觉用主配置 baseUrl。

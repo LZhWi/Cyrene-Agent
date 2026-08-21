@@ -60,4 +60,25 @@ describe("resolveTransport（用户显式协议）", () => {
       }),
     ).toBe("anthropic");
   });
+
+  it("用户显式 responses 优先于厂商默认协议", () => {
+    expect(
+      resolveTransport({
+        baseUrl: "https://api.deepseek.com",
+        explicitTransport: "responses",
+        provider: "DeepSeek（深度求索）",
+      }),
+    ).toBe("responses");
+  });
+
+  it("显式 responses 与 auto 在同一档案下往返不丢值", () => {
+    // "auto" 仍只作为旧配置兼容输入回退厂商默认；responses 必须原样透传
+    expect(
+      resolveTransport({
+        baseUrl: "https://api.openai.com/v1",
+        explicitTransport: "responses",
+        provider: "ChatGPT（OpenAI）",
+      }),
+    ).toBe("responses");
+  });
 });

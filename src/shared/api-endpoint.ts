@@ -1,4 +1,4 @@
-export type ApiTransport = "openai" | "anthropic";
+export type ApiTransport = "openai" | "anthropic" | "responses";
 
 export interface ResolvedApiEndpoint {
   url: string;
@@ -19,6 +19,12 @@ export function resolveApiEndpoint(baseUrl: string, transport: ApiTransport): Re
       return { url: `${trimmed}/messages`, appendedSuffix: "/messages" };
     }
     return { url: `${trimmed}/v1/messages`, appendedSuffix: "/v1/messages" };
+  }
+
+  if (transport === "responses") {
+    // OpenAI Responses API：baseUrl 已含版本前缀（如 /v1、/api/v3），只追加 /responses。
+    if (trimmed.endsWith("/responses")) return { url: trimmed, appendedSuffix: null };
+    return { url: `${trimmed}/responses`, appendedSuffix: "/responses" };
   }
 
   if (trimmed.endsWith("/chat/completions")) return { url: trimmed, appendedSuffix: null };

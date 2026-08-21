@@ -36,8 +36,9 @@ export interface ProviderProfile {
   displayName?: string;
   /**
    * 用户在 settings 显式选择的协议。"auto" 只用于读取旧配置，规范化后会固化为具体值。
+   * "responses" = OpenAI Responses API（第三协议，2026-08 施工）。
    */
-  explicitTransport?: "openai" | "anthropic" | "auto";
+  explicitTransport?: "openai" | "anthropic" | "responses" | "auto";
   /**
    * 用户保存的推理偏好（source of truth）。顶层 ModelSettings.reasoning 是当前厂商镜像。
    * 当前模型不支持某个 effort 时仍保留 user preference，
@@ -112,7 +113,7 @@ export interface ModelSettings {
    * 当前厂商的 explicitTransport 镜像（顶层字段是 perProvider[currentProvider] 的视图）。
    * 详见 ProviderProfile.explicitTransport。
    */
-  explicitTransport?: "openai" | "anthropic" | "auto";
+  explicitTransport?: "openai" | "anthropic" | "responses" | "auto";
   /**
    * 当前厂商 reasoning 偏好的顶层镜像（与 explicitTransport 同思路）。
    * 真值在 perProvider[currentProvider].reasoning；顶层字段是 view。
@@ -187,7 +188,7 @@ function migrateLegacyExplicitTransport(
   input: Partial<ProviderProfile> | null | undefined,
   provider = DEFAULT_MODEL_SETTINGS.provider,
 ): ProviderProfile["explicitTransport"] {
-  if (input?.explicitTransport === "openai" || input?.explicitTransport === "anthropic") {
+  if (input?.explicitTransport === "openai" || input?.explicitTransport === "anthropic" || input?.explicitTransport === "responses") {
     return input.explicitTransport;
   }
 
@@ -473,7 +474,7 @@ export function saveModelSettings(settings: Partial<ModelSettings>): ModelSettin
   const incomingProfile = perProvider[currentProvider] ?? normalizeProviderProfile(null, currentProvider);
   // 协议只接受用户明确选择的 OpenAI / Anthropic；旧 auto 不再进入运行时。
   const incomingExplicitTransport: ProviderProfile["explicitTransport"] =
-    settings.explicitTransport === "openai" || settings.explicitTransport === "anthropic"
+    settings.explicitTransport === "openai" || settings.explicitTransport === "anthropic" || settings.explicitTransport === "responses"
       ? settings.explicitTransport
       : incomingProfile.explicitTransport;
   // reasoning 折叠（用户第三轮修订 #4）：优先级 perProvider > 顶层 > existing

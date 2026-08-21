@@ -51,13 +51,13 @@ function safeDir(p: string): boolean {
 }
 
 export interface DumpRequestMeta {
-  transport: "openai" | "anthropic";
+  transport: "openai" | "anthropic" | "responses";
   endpoint: string;
   body: Record<string, unknown>;
 }
 
 export interface DumpResponseMeta {
-  transport: "openai" | "anthropic";
+  transport: "openai" | "anthropic" | "responses";
   ok: boolean;
   /** 抽取出来的可见文本/思考/工具调用，便于快速浏览 */
   text?: string;
