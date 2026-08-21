@@ -111,13 +111,13 @@ export function ContextUsageRing({ usage }: { usage?: ContextUsageSnapshot }) {
           const share = usage.totalTokens > 0
             ? Math.round((category.tokens / usage.totalTokens) * 100)
             : undefined;
-          // 圆点用分类色，透明度按排序位次递减（榜首最实，往下渐淡）。
+          // 圆点统一主题色，透明度按排序位次递减（榜首最实，往下渐淡）。
           const dotOpacity = Math.max(0.25, 1 - index * 0.15);
           return (
             <li key={category.key}>
               <span
                 className="cy-context-usage-menu__dot"
-                style={{ background: meta.color, opacity: dotOpacity }}
+                style={{ opacity: dotOpacity }}
                 aria-hidden="true"
               />
               <span className="cy-context-usage-menu__name">{meta.label}</span>

@@ -155,7 +155,8 @@
   height: 8px;
   flex: none;
   border-radius: 50%;
-  /* 背景与透明度由组件内联提供：分类色 + 按排序位次递减。 */
+  background: var(--cy-accent);
+  /* 透明度由组件内联提供：按排序位次递减。 */
 }
 
 .cy-context-usage-menu__name {
