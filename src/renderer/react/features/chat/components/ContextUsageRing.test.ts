@@ -203,5 +203,9 @@ describe("ContextUsageRing rendering", () => {
     // 按 token 从大到小排队：tools(51.2k) 在 systemPrompt(12.8k) 之前。
     expect(markup.indexOf(CONTEXT_USAGE_CATEGORY_META.tools.label))
       .toBeLessThan(markup.indexOf(CONTEXT_USAGE_CATEGORY_META.systemPrompt.label));
+    // 圆点用分类色 + 透明度按位次递减：榜首 1，次席 0.85，第三 0.7。
+    expect(markup).toContain(`background:${CONTEXT_USAGE_CATEGORY_META.tools.color};opacity:1`);
+    expect(markup).toContain(`background:${CONTEXT_USAGE_CATEGORY_META.systemPrompt.color};opacity:0.85`);
+    expect(markup).toContain(`background:${CONTEXT_USAGE_CATEGORY_META.conversation.color};opacity:0.7`);
   });
 });

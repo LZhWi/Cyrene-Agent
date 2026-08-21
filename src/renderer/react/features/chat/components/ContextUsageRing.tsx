@@ -105,15 +105,21 @@ export function ContextUsageRing({ usage }: { usage?: ContextUsageSnapshot }) {
         <span>{CONTEXT_USAGE_MOOD_META[tone].text}</span>
       </div>
       <ul className="cy-context-usage-menu__rows">
-        {visibleCategories.map((category) => {
+        {visibleCategories.map((category, index) => {
           const meta = CONTEXT_USAGE_CATEGORY_META[category.key];
           // 占已用比例：各类加总恒 100%，直观看构成；与顶行"占窗口容量"互补。
           const share = usage.totalTokens > 0
             ? Math.round((category.tokens / usage.totalTokens) * 100)
             : undefined;
+          // 圆点用分类色，透明度按排序位次递减（榜首最实，往下渐淡）。
+          const dotOpacity = Math.max(0.25, 1 - index * 0.15);
           return (
             <li key={category.key}>
-              <span className="cy-context-usage-menu__dot" aria-hidden="true" />
+              <span
+                className="cy-context-usage-menu__dot"
+                style={{ background: meta.color, opacity: dotOpacity }}
+                aria-hidden="true"
+              />
               <span className="cy-context-usage-menu__name">{meta.label}</span>
               <span className="cy-context-usage-menu__tokens">{formatTokenCount(category.tokens)}</span>
               {share !== undefined && <span className="cy-context-usage-menu__share">{share}%</span>}
