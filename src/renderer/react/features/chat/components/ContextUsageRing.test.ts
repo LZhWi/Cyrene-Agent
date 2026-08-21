@@ -200,5 +200,8 @@ describe("ContextUsageRing rendering", () => {
     expect(markup).toContain("51.2k");
     expect(markup).toContain(">67%</span>");
     expect(markup).toContain(">17%</span>");
+    // 按 token 从大到小排队：tools(51.2k) 在 systemPrompt(12.8k) 之前。
+    expect(markup.indexOf(CONTEXT_USAGE_CATEGORY_META.tools.label))
+      .toBeLessThan(markup.indexOf(CONTEXT_USAGE_CATEGORY_META.systemPrompt.label));
   });
 });

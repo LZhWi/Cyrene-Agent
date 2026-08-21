@@ -86,7 +86,10 @@ export function ContextUsageRing({ usage }: { usage?: ContextUsageSnapshot }) {
     : `${formatTokenCount(usage.totalTokens)} tokens`;
   const title = `上下文 ${summaryText.replace(" tokens ", " ")}`;
 
-  const visibleCategories = usage.categories.filter((category) => category.tokens > 0);
+  // 明细行按 token 从大到小排队，大头一眼置顶。
+  const visibleCategories = usage.categories
+    .filter((category) => category.tokens > 0)
+    .sort((a, b) => b.tokens - a.tokens);
 
   const menu = (
     <div className="cy-context-usage-menu" aria-label="上下文占比">
