@@ -37,7 +37,13 @@ describe("built-in provider SDK stream contracts", () => {
     expect(resolveTransport(config)).toBe(capability.transport);
     expect(adapter.transport).toBe(capability.transport);
     expect(body).toMatchObject({ model: "configured-model", stream: true });
-    expect(http.url).toMatch(capability.transport === "openai" ? /\/chat\/completions$/ : /\/v1\/messages$/);
+    expect(http.url).toMatch(
+      capability.transport === "openai"
+        ? /\/chat\/completions$/
+        : capability.transport === "responses"
+          ? /\/responses$/
+          : /\/v1\/messages$/,
+    );
     expect(body.tools).toBeDefined();
   });
 

@@ -83,7 +83,8 @@ export const MODEL_PRESETS: ModelPreset[] = [
     providerName: "ChatGPT（OpenAI）",
     shortName: "ChatGPT",
     baseUrl: "https://api.openai.com/v1",
-    transport: "openai",
+    // 官方主推 Responses（o 系列完整思考摘要仅此协议有），新建档案默认预填 responses。
+    transport: "responses",
     // 官方入口只推荐已纳入结构化输出 Profile 的型号；代理与自定义型号走“自定义端点”。
     mainModels: ["gpt-5.6"],
     iconUrl: "../icons/providers/openai.svg",

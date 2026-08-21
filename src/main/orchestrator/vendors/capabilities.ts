@@ -115,7 +115,9 @@ export const PROVIDER_CAPABILITIES = [
   {
     id: "chatgpt",
     displayName: "ChatGPT（OpenAI）",
-    transport: "openai",
+    // 官方主推 Responses（o 系列完整思考摘要仅此协议有）——默认切换（施工文档关键决策）。
+    // 旧档案已固化 explicitTransport，不受默认值影响；仅新建档案/无显式值时生效。
+    transport: "responses",
     baseUrl: "https://api.openai.com/v1",
     authStyle: "bearer",
     defaultModel: "",

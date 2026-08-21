@@ -1,6 +1,7 @@
 // API 面板内部状态
 // 从 settings.ts 顶层 let 抽离，收进单一对象。
 
+import type { ApiTransport } from "../../../shared/api-endpoint";
 import type { ReasoningPreference } from "../../../shared/reasoning";
 import type { CustomEndpointMode } from "../custom-endpoint-state";
 
@@ -12,7 +13,7 @@ export interface SavedProfileLite {
   baseUrl: string;
   model: string;
   apiKey: string;
-  explicitTransport?: "openai" | "anthropic" | "auto";
+  explicitTransport?: ApiTransport;
   reasoning?: ReasoningPreference;
   contextWindowTokens?: number;
   multimodal?: boolean;

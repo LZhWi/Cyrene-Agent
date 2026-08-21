@@ -779,7 +779,11 @@ function validateActiveCustomEndpoint(): string | null {
 function updateEndpointPreview(): void {
   const transport = transportSelect.value as ApiTransport;
   const baseUrl = baseUrlInput.value.trim();
-  const defaultSuffix = transport === "anthropic" ? "/v1/messages" : "/chat/completions";
+  const defaultSuffix = transport === "anthropic"
+    ? "/v1/messages"
+    : transport === "responses"
+      ? "/responses"
+      : "/chat/completions";
 
   if (!baseUrl) {
     endpointPreview.textContent = `程序会按所选协议自动追加请求路径（默认 ${defaultSuffix}）。`;
@@ -804,7 +808,7 @@ function applyCustomEndpointUI(preset: ModelPreset): void {
     apiKeyInput.placeholder = "sk-...";
     baseUrlInput.placeholder = "https://api.deepseek.com";
     modelInput.placeholder = "选厂商后自动填入，可手填覆盖";
-    transportHint.textContent = "请按服务商提供的接口类型明确选择，程序不会自动识别协议。";
+    transportHint.textContent = "请按服务商实际提供的接口类型选择（OpenAI 兼容 / Anthropic 兼容 / OpenAI Responses）；程序不会自动识别协议。";
     baseUrlResetBtn.title = "重置为厂商默认 URL";
     apiNoteText.textContent = "选择模型预设后会自动填入 Provider、Base URL 和模型名；你只需要填写对应平台的 API Key。配置只保存在本机 Electron 用户数据目录。";
     return;
@@ -861,7 +865,7 @@ export function applyPreset(
     && restoredBaseUrl === preset.baseUrl
     && preset.anthropicBaseUrl
       ? preset.anthropicBaseUrl
-      : selectedTransport === "openai"
+      : (selectedTransport === "openai" || selectedTransport === "responses")
         && preset.anthropicBaseUrl
         && restoredBaseUrl === preset.anthropicBaseUrl
           ? preset.baseUrl
@@ -1340,7 +1344,8 @@ transportSelect.addEventListener("change", () => {
   if (knownPresetUrls.includes(currentBaseUrl)) {
     if (transportSelect.value === "anthropic" && preset.anthropicBaseUrl) {
       baseUrlInput.value = preset.anthropicBaseUrl;
-    } else if (transportSelect.value === "openai") {
+    } else if (transportSelect.value === "openai" || transportSelect.value === "responses") {
+      // responses 与 openai 共用同一 Base URL（后缀由 resolveApiEndpoint 追加）
       baseUrlInput.value = preset.baseUrl;
     }
   }
