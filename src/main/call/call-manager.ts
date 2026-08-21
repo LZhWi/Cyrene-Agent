@@ -10,8 +10,7 @@ import { IPC } from "../../shared/ipc-channels";
 import { VolcanoAsrStream, getAsrConfig } from "../asr/volcano-asr-engine";
 import { synthesizeByEngine } from "../tts/tts-dispatcher";
 import type { TtsEngine } from "../../shared/tts-types";
-import { runFunctionCallingLoop } from "../orchestrator";
-import { getAdapter, buildVendorUrlByProvider } from "../orchestrator/vendors";
+import { getAdapterForConfig, buildVendorUrl } from "../orchestrator/vendors";
 import { resolveTimeoutPolicy } from "../runtime-policy";
 import type { ChatMessage } from "../orchestrator/vendors/types";
 
@@ -64,7 +63,7 @@ let systemPromptBuilder: ((userText: string) => Promise<string>) | null = null;
 let weatherHandler: ((userText: string) => Promise<string | null>) | null = null;
 
 export function setCallSettings(
-  modelGetter: () => { provider: string; baseUrl: string; model: string; apiKey: string },
+  modelGetter: () => { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: "openai" | "anthropic" | "responses" | "auto" },
   ttsGetter: () => {
     ttsEngine: TtsEngine;
     ttsMinimaxKey: string; ttsMinimaxVoiceId: string;
@@ -327,12 +326,10 @@ async function runAgentTurn(userText: string): Promise<string | null> {
       throw new Error("模型配置缺失或未填写 API Key");
     }
 
-    const adapter = getAdapter(ms.provider);
-    if (!adapter) {
-      throw new Error(`不支持的模型 provider: ${ms.provider}`);
-    }
+    // 协议跟随档案配置（explicitTransport），缺失时由 resolveTransport 回退厂商默认
+    const adapter = getAdapterForConfig(ms);
 
-    const url = buildVendorUrlByProvider(ms.provider, ms.baseUrl);
+    const url = buildVendorUrl(ms.baseUrl, adapter.transport);
     const systemPrompt = await systemPromptBuilder?.(userText) ?? "";
     const messages: ChatMessage[] = [
       { role: "system", content: systemPrompt },

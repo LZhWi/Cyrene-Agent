@@ -203,10 +203,10 @@ function registerExchangeRateTool(): void {
 // ══════════════════════════════════════════════════════════
 
 // 翻译需要调主模型，注入由 index.ts 完成
-let modelSettingsGetter: (() => { provider: string; baseUrl: string; model: string; apiKey: string } | null) | null = null;
+let modelSettingsGetter: (() => { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: "openai" | "anthropic" | "responses" | "auto" } | null) | null = null;
 
 /** index.ts 启动时注入模型设置读取器。 */
-export function setTranslateConfig(getter: () => { provider: string; baseUrl: string; model: string; apiKey: string } | null): void {
+export function setTranslateConfig(getter: () => { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: "openai" | "anthropic" | "responses" | "auto" } | null): void {
   modelSettingsGetter = getter;
 }
 
@@ -246,33 +246,35 @@ function registerTranslateTool(): void {
         return "[错误] 未配置模型，翻译不可用";
       }
 
-      // 动态 import 避免循环依赖
-      const { buildVendorUrlByProvider } = await import("./vendors");
+      // 动态 import 避免循环依赖；协议跟随档案配置（explicitTransport），与主链路同源
+      const { getAdapterForConfig } = await import("./vendors");
       const fromHint = args.from ? `（源语言：${args.from}）` : "（自动检测源语言）";
       const sysPrompt = `你是翻译器${fromHint}。把以下文本翻译成${to}，只输出译文，不要任何解释或额外文字。`;
       const ctrl = new AbortController();
       const timer = setTimeout(() => ctrl.abort(), resolveTimeoutPolicy({ stage: "external-http" }).totalMs);
       try {
-        const resp = await fetch(buildVendorUrlByProvider(settings.provider, settings.baseUrl), {
-          method: "POST",
-          signal: ctrl.signal,
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${settings.apiKey}`,
-          },
-          body: JSON.stringify({
+        const adapter = getAdapterForConfig(settings);
+        const http = adapter.buildRequest(
+          {
             model: settings.model,
             messages: [
               { role: "system", content: sysPrompt },
               { role: "user", content: text },
             ],
-            max_tokens: 2000,
+            maxTokens: 2000,
             stream: false,
-          }),
+          },
+          settings,
+        );
+        const resp = await fetch(http.url, {
+          method: "POST",
+          signal: ctrl.signal,
+          headers: http.headers,
+          body: http.body,
         });
         if (!resp.ok) return `[错误] 翻译失败：HTTP ${resp.status}`;
-        const data = await resp.json() as { choices?: Array<{ message?: { content?: string } }> };
-        const result = data.choices?.[0]?.message?.content?.trim() || "";
+        const data = await resp.json();
+        const result = adapter.parseResponse(data).text.trim();
         if (!result) return "[错误] 翻译返回空";
         return `[translate] ${result}`;
       } catch (e) {

@@ -3,6 +3,7 @@ import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 // Mock 重依赖模块，保留 toolRegistry 真实单例
 vi.mock("./vendors", () => ({
   getAdapter: vi.fn(),
+  getAdapterForConfig: vi.fn(),
 }));
 
 vi.mock("../permission", () => ({
@@ -28,7 +29,7 @@ vi.mock("../timeout-manager", () => ({
   })),
 }));
 
-import { getAdapter } from "./vendors";
+import { getAdapter, getAdapterForConfig } from "./vendors";
 import { runFunctionCallingLoop } from "./function-calling";
 import { toolRegistry } from "./tool-registry";
 
@@ -80,6 +81,7 @@ describe("runFunctionCallingLoop allowedToolIds guard", () => {
     });
 
     vi.mocked(getAdapter).mockReturnValue(mockAdapter as never);
+    vi.mocked(getAdapterForConfig).mockReturnValue(mockAdapter as never);
 
     globalThis.fetch = vi.fn(async () => ({
       ok: true,

@@ -5,7 +5,7 @@ import { toolRegistry, ToolDefinition } from "./tool-registry";
 import { ToolCallResult } from "./types";
 import { checkPermission, ToolRiskLevel } from "../permission";
 import {
-  getAdapter,
+  getAdapterForConfig,
   type ChatMessage,
   type ChatRequest,
   type ToolExecutionResult,
@@ -32,6 +32,8 @@ interface LoopSettings {
   baseUrl: string;
   model: string;
   apiKey: string;
+  /** 用户显式选择的协议；缺失时由 resolveTransport 回退厂商默认。 */
+  explicitTransport?: "openai" | "anthropic" | "responses" | "auto";
   /** 用户设置的模型上下文窗口（Token），用于对话压缩触发阈值。 */
   contextWindowTokens: number;
 }
@@ -97,7 +99,7 @@ export async function runFunctionCallingLoop(
   toolResults: ToolCallResult[];
   totalUsage?: { input: number; output: number };
 }> {
-  const adapter = getAdapter(settings.provider);
+  const adapter = getAdapterForConfig(settings);
   const allowedSet = allowedToolIds ? new Set(allowedToolIds) : undefined;
   const tools = buildToolSpecs(allowedToolIds);
   const allToolResults: ToolCallResult[] = [];

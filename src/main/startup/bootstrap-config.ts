@@ -112,7 +112,7 @@ export function bootstrapConfigGetters(ctx: BootstrapConfigContext): void {
   setCallSettings(
     () => {
       const s = loadModelSettings();
-      return { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey };
+      return { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey, explicitTransport: s.explicitTransport };
     },
     () => {
       const s = loadGeneralSettings();

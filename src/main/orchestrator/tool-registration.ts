@@ -36,7 +36,7 @@ export function registerAllTools(deps: { codeGitService: GitService; lspManager:
   setTranslateConfig(() => {
     const s = loadModelSettings();
     return s.apiKey
-      ? { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey }
+      ? { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey, explicitTransport: s.explicitTransport }
       : null;
   });
   registerLifeTools();
