@@ -30,6 +30,16 @@ export function deriveOpenAIClientConfig(endpoint: string, apiKey: string): Open
   return { baseURL, apiKey, maxRetries: 0 };
 }
 
+/**
+ * Responses API 客户端配置：endpoint 以 /responses 结尾，剥掉后缀得 baseURL
+ * （SDK 内部固定向 {baseURL}/responses 发请求，与 deriveOpenAIClientConfig 同模式）。
+ */
+export function deriveResponsesClientConfig(endpoint: string, apiKey: string): OpenAIClientConfig {
+  const baseURL = endpointBase(endpoint, "/responses");
+  if (!baseURL) throw new Error("OpenAI SDK Responses endpoint must end with /responses");
+  return { baseURL, apiKey, maxRetries: 0 };
+}
+
 export function createEndpointPinnedFetch(
   endpoint: string,
   delegate: typeof fetch = fetch,

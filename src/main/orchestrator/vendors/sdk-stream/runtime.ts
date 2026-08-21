@@ -9,10 +9,12 @@ import { dumpRequest, dumpResponse } from "../prompt-dump";
 import {
   deriveAnthropicClientConfig,
   deriveOpenAIClientConfig,
+  deriveResponsesClientConfig,
   type AnthropicClientConfig,
   type OpenAIClientConfig,
 } from "./client-config";
 import { normalizeOpenAIChunk } from "./openai-normalizer";
+import { normalizeResponsesEvent } from "./responses-normalizer";
 import {
   ProviderProtocolError,
   type StreamDiagnostic,
@@ -33,6 +35,7 @@ export interface AnthropicStreamFactoryInput {
 
 export interface SdkStreamRuntimeDeps {
   openAI: (input: OpenAIStreamFactoryInput) => Promise<AsyncIterable<unknown>>;
+  responses: (input: OpenAIStreamFactoryInput) => Promise<AsyncIterable<unknown>>;
   anthropic: (input: AnthropicStreamFactoryInput) => Promise<{
     events: AsyncIterable<unknown>;
     finalMessage: () => Promise<unknown>;
@@ -53,6 +56,12 @@ const defaultDeps: SdkStreamRuntimeDeps = {
   openAI: async ({ client: options, body, signal }) => {
     const client = new OpenAI(options);
     const stream = await client.chat.completions.create(body as never, { signal });
+    return stream as unknown as AsyncIterable<unknown>;
+  },
+  responses: async ({ client: options, body, signal }) => {
+    const client = new OpenAI(options);
+    // stream 是 body 字段不是第二个参数（SDK 7.5 重载签名，施工文档已核实）
+    const stream = await client.responses.create({ ...body, stream: true } as never, { signal });
     return stream as unknown as AsyncIterable<unknown>;
   },
   anthropic: async ({ client: options, body, signal }) => {
@@ -83,6 +92,20 @@ function cancellationError(signal: AbortSignal): Error {
     : new DOMException("The operation was aborted", "AbortError");
 }
 
+/**
+ * 捕获 Responses 流的终态事件本体（response.completed / response.incomplete 都带完整 Response）。
+ * 这是 rawAssistant 补挂的 canonical source；incomplete（如 max_output_tokens 截断）时 output
+ * 已含 reasoning/message/部分工具链，与 completed 同等地位，不应丢弃退化。
+ */
+function responsesTerminalResponse(event: unknown): Record<string, unknown> | undefined {
+  if (typeof event !== "object" || event === null || Array.isArray(event)) return undefined;
+  const record = event as Record<string, unknown>;
+  if (record.type !== "response.completed" && record.type !== "response.incomplete") return undefined;
+  const response = record.response;
+  if (typeof response !== "object" || response === null || Array.isArray(response)) return undefined;
+  return response as Record<string, unknown>;
+}
+
 export async function streamChatWithSdk(
   input: SdkStreamRunInput,
   deps: SdkStreamRuntimeDeps = defaultDeps,
@@ -104,7 +127,8 @@ export async function streamChatWithSdk(
   // LLM 调用原文 traceId —— 即使 dump 关闭也会生成，方便上层日志关联。
   let traceId = "";
   const commitDelta = (delta: UnifiedStreamDelta) => {
-    if (delta.type === "finish" && input.adapter.transport === "openai") {
+    if (delta.type === "finish"
+      && (input.adapter.transport === "openai" || input.adapter.transport === "responses")) {
       for (const toolCall of accumulator.snapshot().toolCalls) {
         if (!toolCall.ended) {
           const end: UnifiedStreamDelta = {
@@ -168,6 +192,43 @@ export async function streamChatWithSdk(
         raw: openaiFinal.raw,
       });
       return openaiFinal;
+    }
+
+    if (input.adapter.transport === "responses") {
+      const chunks = await deps.responses({
+        client: deriveResponsesClientConfig(prepared.endpoint, input.config.apiKey),
+        body: prepared.body,
+        signal: controller.signal,
+      });
+      let finalResponse: Record<string, unknown> | undefined;
+      for await (const event of chunks) {
+        const terminal = responsesTerminalResponse(event);
+        if (terminal) finalResponse = terminal;
+        for (const delta of normalizeResponsesEvent(event)) dispatch(delta);
+      }
+      flushTaggedThink();
+      const finalized = accumulator.finalize(finalResponse);
+      // rawAssistant 补挂：完整 output items 是 Responses 多轮保真的核心（accumulator 不产出该字段）。
+      // 真正传输中断（无终态事件）时 finalResponse 为空 → rawAssistant 缺失 → 下轮退化构造，安全降级。
+      const outputItems = finalResponse !== undefined && Array.isArray(finalResponse.output)
+        ? finalResponse.output
+        : undefined;
+      const responsesFinal: ChatResponse = outputItems !== undefined
+        ? {
+            ...finalized,
+            assistantMessage: { ...finalized.assistantMessage, rawAssistant: outputItems },
+          }
+        : finalized;
+      dumpResponse(traceId, {
+        transport: "responses",
+        ok: true,
+        text: responsesFinal.text,
+        thinking: responsesFinal.thinking,
+        toolCalls: responsesFinal.toolCalls,
+        usage: responsesFinal.usage,
+        raw: responsesFinal.raw,
+      });
+      return responsesFinal;
     }
 
     const authStyle = input.adapter.capability.anthropicAuthStyle ?? input.adapter.capability.authStyle;
