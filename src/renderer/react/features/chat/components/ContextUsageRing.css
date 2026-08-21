@@ -22,7 +22,14 @@
 }
 
 .cy-context-usage-ring__track {
-  stroke: var(--cy-border);
+  /* 底环必须与 composer 背景 (#f4f4f4) 拉开对比，否则整环隐形。
+     取 --cy-text-muted (#8e8e93) 的 35% 透明度 ≈ #d0d0d2。 */
+  stroke: rgba(142, 142, 147, 0.35);
+  transition: stroke 120ms ease;
+}
+
+.cy-context-usage-ring:hover .cy-context-usage-ring__track {
+  stroke: rgba(142, 142, 147, 0.55);
 }
 
 .cy-context-usage-ring.is-normal .cy-context-usage-ring__progress {

@@ -390,8 +390,8 @@ export function ChatComposer({
         )}
         {supportsStyle && <StyleControl />}
         {onSelectModelProfile && <ModelSelector activeProfileId={activeModelProfileId} onSelect={onSelectModelProfile} />}
-        <ReasoningControl />
         <ContextUsageRing usage={contextUsage} />
+        <ReasoningControl />
         </div>
       </div>
     </div>

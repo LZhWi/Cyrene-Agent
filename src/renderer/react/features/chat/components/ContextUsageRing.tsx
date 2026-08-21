@@ -11,8 +11,8 @@ import { useState } from "react";
 import type { ContextUsageCategoryKey, ContextUsageSnapshot } from "../../../../../shared/context-usage";
 import "./ContextUsageRing.css";
 
-const RING_SIZE = 18;
-const RING_STROKE = 2.5;
+const RING_SIZE = 20;
+const RING_STROKE = 3;
 const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
 /** 导出供单测断言弧长比例；圆环几何的唯一事实源。 */
 export const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
