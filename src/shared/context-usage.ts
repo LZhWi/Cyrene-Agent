@@ -5,13 +5,16 @@
 // - preRequest 只更新 renderer 内存态，圆环实时刷新，零 I/O；
 // - terminal 包含最终 assistant 回复，随消息持久化（一次落盘）。
 
-/** 五类分类 key；口径见 docs/context-usage-viewer-construction-plan.md。 */
+/** 六类分类 key；口径见 docs/context-usage-viewer-construction-plan.md。
+ *  `toolDefinitions` 为旧快照兼容 key（拆分前"工具与 Skill"合一），仅渲染层识别，不再产出。 */
 export type ContextUsageCategoryKey =
   | "systemPrompt"
-  | "toolDefinitions"
+  | "tools"
+  | "skills"
   | "runtimeAndToolLogs"
   | "conversation"
-  | "other";
+  | "other"
+  | "toolDefinitions";
 
 export interface ContextUsageCategory {
   key: ContextUsageCategoryKey;
@@ -39,10 +42,13 @@ export interface ContextUsageSnapshot {
 
 const CATEGORY_KEY_SET = new Set<string>([
   "systemPrompt",
-  "toolDefinitions",
+  "tools",
+  "skills",
   "runtimeAndToolLogs",
   "conversation",
   "other",
+  // 旧快照兼容（拆分前合一计数），校验放行但新快照不再产出。
+  "toolDefinitions",
 ]);
 
 /** 渲染层事件负载校验；不通过一律忽略，绝不把脏数据写进消息。 */

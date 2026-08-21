@@ -183,6 +183,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
         contextWindowTokens: config.contextWindowTokens,
         personaContent: usageParts.personaContent,
         toolLayerContent: usageParts.toolLayerContent,
+        ...(usageParts.skillLayerContent ? { skillLayerContent: usageParts.skillLayerContent } : {}),
         toolSpecs: allToolSpecs,
         messages,
       }),

@@ -24,7 +24,8 @@ import type {
 
 const CATEGORY_KEYS: readonly ContextUsageCategoryKey[] = [
   "systemPrompt",
-  "toolDefinitions",
+  "tools",
+  "skills",
   "runtimeAndToolLogs",
   "conversation",
   "other",
@@ -37,8 +38,11 @@ export interface ContextUsageSnapshotInput {
   contextWindowTokens: number;
   /** 人设层文本（系统提示词类）。 */
   personaContent: string;
-  /** 工具规则/目录/使用规范文本；缺省为空。 */
+  /** 工具规则/目录/使用规范文本（含 Skill 目录段）；缺省为空。 */
   toolLayerContent?: string;
+  /** toolLayerContent 中 Skill 目录段（skillCatalog + 自动注入 skill 上下文）的独立副本；
+   *  快照把这一段从"工具"里拆出单独计"技能"类；缺省不拆。 */
+  skillLayerContent?: string;
   /** 工具 schema 列表；chat 模式不传。 */
   toolSpecs?: Array<{ name: string; description: string; parameters: object }>;
   /** chat 模式请求尾部注入的 runtime context 文本；harness 模式不传（已物化进消息）。 */
@@ -64,17 +68,23 @@ function classifyMessage(message: ChatMessage): ContextUsageCategoryKey {
 export function buildContextUsageSnapshot(input: ContextUsageSnapshotInput): ContextUsageSnapshot {
   const buckets: Record<ContextUsageCategoryKey, number> = {
     systemPrompt: 0,
-    toolDefinitions: 0,
+    tools: 0,
+    skills: 0,
     runtimeAndToolLogs: 0,
     conversation: 0,
     other: 0,
+    // 旧兼容 key 恒 0：计算端不再产出，仅为满足 Record 全键。
+    toolDefinitions: 0,
   };
 
   buckets.systemPrompt += estimateTokens(input.personaContent);
-  buckets.toolDefinitions += estimateTokens(input.toolLayerContent ?? "");
+  // Skill 目录段先单独计量，再从工具层总量中扣除（skill 段嵌在 toolSystemContent 里，
+  // 前后分隔符 \n\n---\n\n 的几 token 留在工具类，属估算容差）。
+  buckets.skills += estimateTokens(input.skillLayerContent ?? "");
+  buckets.tools += Math.max(0, estimateTokens(input.toolLayerContent ?? "") - buckets.skills);
   for (const spec of input.toolSpecs ?? []) {
     // 与 computeTokenBudget 同公式。
-    buckets.toolDefinitions += estimateTokens(spec.name + spec.description + JSON.stringify(spec.parameters));
+    buckets.tools += estimateTokens(spec.name + spec.description + JSON.stringify(spec.parameters));
   }
   if (input.runtimeContext?.trim()) {
     // 与 composePromptLayers 的 wire 包装一致，含标签开销。

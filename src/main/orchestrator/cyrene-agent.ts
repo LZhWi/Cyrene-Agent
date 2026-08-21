@@ -134,6 +134,9 @@ export interface CyreneRunOptions {
   imageCaptionFallback?: () => Promise<ChatMessage[]>;
   /** 工具规则与目录 system prompt（进入 harness stablePrefix）。 */
   toolSystemContent: string;
+  /** toolSystemContent 中 Skill 目录段（skillCatalog + 自动注入 skill 上下文）的独立副本，
+   *  供上下文容量快照把"技能"从"工具"里拆出来单独计量；不参与请求拼装。 */
+  skillLayerContent?: string;
   /** 人设基础 system prompt（仅人设/渠道；环境/记忆/关系/附件在 soulRuntimeContext，随请求尾部注入）。 */
   soulSystemBaseContent: string;
   /** 每次请求才附加给 Soul 的可变运行时上下文；不参与稳定缓存前缀。 */

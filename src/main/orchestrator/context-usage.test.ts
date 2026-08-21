@@ -62,14 +62,33 @@ describe("buildContextUsageSnapshot", () => {
     expect(tokensOf(snapshot, "conversation")).toBe(0);
   });
 
-  it("toolSpecs 折算进 toolDefinitions（与 computeTokenBudget 同公式）", () => {
+  it("toolSpecs 折算进 tools（与 computeTokenBudget 同公式）", () => {
     const spec = { name: "weather", description: "查询天气", parameters: { type: "object", properties: { city: { type: "string" } } } };
     const snapshot = snapshotOf([], {
       toolLayerContent: "## 当前可用工具",
       toolSpecs: [spec],
     });
     const expectedSchema = estimateTokens(spec.name + spec.description + JSON.stringify(spec.parameters));
-    expect(tokensOf(snapshot, "toolDefinitions")).toBe(estimateTokens("## 当前可用工具") + expectedSchema);
+    expect(tokensOf(snapshot, "tools")).toBe(estimateTokens("## 当前可用工具") + expectedSchema);
+  });
+
+  it("skillLayerContent 把技能从工具层拆出单独计量", () => {
+    const skillLayer = "## 可用技能\n- music: 音乐技能";
+    const toolLayer = `## 当前可用工具\n\n---\n\n${skillLayer}\n\n---\n\n[当前项目工作区]\n可信根目录：/tmp`;
+    const snapshot = snapshotOf([], {
+      toolLayerContent: toolLayer,
+      skillLayerContent: skillLayer,
+    });
+    expect(tokensOf(snapshot, "skills")).toBe(estimateTokens(skillLayer));
+    expect(tokensOf(snapshot, "tools")).toBe(estimateTokens(toolLayer) - estimateTokens(skillLayer));
+    // 拆分不改变总量：tools + skills == 工具层全量。
+    expect(tokensOf(snapshot, "tools") + tokensOf(snapshot, "skills")).toBe(estimateTokens(toolLayer));
+  });
+
+  it("缺省 skillLayerContent 时不拆分，全部计入工具类", () => {
+    const snapshot = snapshotOf([], { toolLayerContent: "## 当前可用工具" });
+    expect(tokensOf(snapshot, "skills")).toBe(0);
+    expect(tokensOf(snapshot, "tools")).toBe(estimateTokens("## 当前可用工具"));
   });
 
   it("runtimeContext 单独计量且含 wire 包装开销；messages 不含尾部注入时不双重计数", () => {

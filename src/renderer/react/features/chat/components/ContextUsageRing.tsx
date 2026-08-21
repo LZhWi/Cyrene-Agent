@@ -6,9 +6,11 @@
 // - 占用比 = totalTokens / contextWindowTokens；SVG 弧长只吃 clamp 后的
 //   visualRatio（ratio>1 时文本诚实显示如 118%，圆环 clamp 到整圈）。
 // - 颜色分级：正常主题强调色；≥70% 暖色；≥90% 警示红。仅变色，无动画。
+// - 菜单趣味性：按档位切换 Cyrene 小人（开心/提醒/担心）+ 一句拟人提示。
 import { Popover } from "antd";
 import { useState } from "react";
 import type { ContextUsageCategoryKey, ContextUsageSnapshot } from "../../../../../shared/context-usage";
+import { resolveAsset } from "../../../../../shared/renderer-base";
 import "./ContextUsageRing.css";
 
 const RING_SIZE = 20;
@@ -19,10 +21,21 @@ export const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
 export const CONTEXT_USAGE_CATEGORY_META: Record<ContextUsageCategoryKey, { label: string; color: string }> = {
   systemPrompt: { label: "系统提示词", color: "#8B5CF6" },
-  toolDefinitions: { label: "工具定义与 Skill 目录", color: "#3B82F6" },
-  runtimeAndToolLogs: { label: "运行时上下文与工具日志", color: "#F59E0B" },
+  tools: { label: "工具", color: "#3B82F6" },
+  skills: { label: "技能", color: "#06B6D4" },
+  runtimeAndToolLogs: { label: "运行时与日志", color: "#F59E0B" },
   conversation: { label: "对话历史", color: "#10B981" },
   other: { label: "其他", color: "#9CA3AF" },
+  // 旧快照兼容（拆分前"工具与 Skill"合一）；新快照不再产出此 key。
+  toolDefinitions: { label: "工具与 Skill", color: "#3B82F6" },
+};
+
+/** 三档趣味性小人：normal / warm / alert；素材走 public 目录，不进 bundle。
+ *  当前为占位图，后续直接替换 public/context-usage/ 下的同名文件即可。 */
+export const CONTEXT_USAGE_MOOD_META: Record<ContextUsageRingTone, { src: string; text: string }> = {
+  normal: { src: resolveAsset("context-usage/normal.png"), text: "还很宽敞，随便聊~" },
+  warm: { src: resolveAsset("context-usage/warm.png"), text: "有点满了，等下我帮你整理" },
+  alert: { src: resolveAsset("context-usage/alert.png"), text: "快撑不住啦，建议新开对话" },
 };
 
 /** 数字格式：>=1000 显示 12.3k（>=100k 取整），否则原值。 */
@@ -74,7 +87,6 @@ export function ContextUsageRing({ usage }: { usage?: ContextUsageSnapshot }) {
   const title = `上下文 ${summaryText.replace(" tokens ", " ")}`;
 
   const visibleCategories = usage.categories.filter((category) => category.tokens > 0);
-  const stackedTotal = visibleCategories.reduce((sum, category) => sum + category.tokens, 0);
 
   const menu = (
     <div className="cy-context-usage-menu" aria-label="上下文占比">
@@ -82,26 +94,23 @@ export function ContextUsageRing({ usage }: { usage?: ContextUsageSnapshot }) {
         <strong>上下文容量</strong>
         <span>{summaryText}</span>
       </div>
-      {visibleCategories.length > 0 && stackedTotal > 0 && (
-        <div className="cy-context-usage-menu__bar" aria-hidden="true">
-          {visibleCategories.map((category) => (
-            <span
-              key={category.key}
-              style={{
-                width: `${(category.tokens / stackedTotal) * 100}%`,
-                background: CONTEXT_USAGE_CATEGORY_META[category.key].color,
-              }}
-            />
-          ))}
-        </div>
-      )}
+      <div className={`cy-context-usage-menu__progress is-${tone}`} aria-hidden="true">
+        <span style={{ width: `${visualRatio * 100}%` }} />
+      </div>
+      <div className={`cy-context-usage-menu__mood is-${tone}`}>
+        <img src={CONTEXT_USAGE_MOOD_META[tone].src} alt="" aria-hidden="true" draggable={false} />
+        <span>{CONTEXT_USAGE_MOOD_META[tone].text}</span>
+      </div>
       <ul className="cy-context-usage-menu__rows">
         {visibleCategories.map((category) => {
           const meta = CONTEXT_USAGE_CATEGORY_META[category.key];
-          const share = showRatio ? Math.round((category.tokens / usage.contextWindowTokens) * 100) : undefined;
+          // 占已用比例：各类加总恒 100%，直观看构成；与顶行"占窗口容量"互补。
+          const share = usage.totalTokens > 0
+            ? Math.round((category.tokens / usage.totalTokens) * 100)
+            : undefined;
           return (
             <li key={category.key}>
-              <span className="cy-context-usage-menu__dot" style={{ background: meta.color }} aria-hidden="true" />
+              <span className="cy-context-usage-menu__dot" aria-hidden="true" />
               <span className="cy-context-usage-menu__name">{meta.label}</span>
               <span className="cy-context-usage-menu__tokens">{formatTokenCount(category.tokens)}</span>
               {share !== undefined && <span className="cy-context-usage-menu__share">{share}%</span>}

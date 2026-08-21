@@ -406,7 +406,7 @@ export async function runHarnessWithAdapter(
 
 export function buildHarnessPromptLayers(
   options: CyreneRunOptions,
-): PromptLayers & { usageParts?: { personaContent: string; toolLayerContent: string } } {
+): PromptLayers & { usageParts?: { personaContent: string; toolLayerContent: string; skillLayerContent?: string } } {
   // 人设层（Soul）
   const personaParts: string[] = [];
   if (options.soulSystemBaseContent) {
@@ -457,6 +457,7 @@ export function buildHarnessPromptLayers(
     usageParts: {
       personaContent: personaParts.join("\n\n---\n\n"),
       toolLayerContent: toolParts.join("\n\n---\n\n"),
+      ...(options.skillLayerContent ? { skillLayerContent: options.skillLayerContent } : {}),
     },
     ...(options.conversationMode ? { mode: options.conversationMode } : {}),
     ...(uniqueRuntimeParts.length ? { runtimeContext: uniqueRuntimeParts.join("\n\n---\n\n") } : {}),

@@ -683,6 +683,11 @@ export async function buildAgentRunOptions(
 
   // toolSystemContent 进入 harness stablePrefix（与人设层一起拼装）：
   // 工具规则 + 运行时工具目录 + 可用 Skill 路由清单。
+  // skillLayerContent 是其中 Skill 目录段的独立副本（文本一致），供上下文容量
+  // 快照把"技能"从"工具"里拆出来单独计量；不影响 toolSystemContent 本身。
+  const skillLayerContent = [skillCatalog, autoInjectedSkillContext]
+    .filter((part): part is string => Boolean(part))
+    .join("\n\n---\n\n");
   const toolSystemContent = baseToolSystemPrompt
     + (conversationTimeContext.includes("## Internal Context Policy") ? "\n\n" + conversationTimeContext.split("\n\n[对话时间信息]")[0] : "")
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
@@ -764,6 +769,7 @@ export async function buildAgentRunOptions(
       // 不设整轮任务期限；用户取消才停止整个 Agent Run。
       timeoutMs: 0,
       toolSystemContent,
+      skillLayerContent,
       soulSystemBaseContent,
       soulRuntimeContext,
       ...(planSkillContext ? { planSkillContext } : {}),

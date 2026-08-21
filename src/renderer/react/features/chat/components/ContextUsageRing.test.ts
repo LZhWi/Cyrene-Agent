@@ -22,8 +22,12 @@ vi.mock("antd", async () => {
   };
 });
 
+// 项目惯例：resolveAsset 在测试里直通，断言相对路径即可。
+vi.mock("../../../../../shared/renderer-base", () => ({ resolveAsset: (path: string) => path }));
+
 import {
   CONTEXT_USAGE_CATEGORY_META,
+  CONTEXT_USAGE_MOOD_META,
   ContextUsageRing,
   RING_CIRCUMFERENCE,
   clampVisualRatio,
@@ -34,7 +38,8 @@ import {
 
 const CATEGORY_KEYS: ContextUsageCategoryKey[] = [
   "systemPrompt",
-  "toolDefinitions",
+  "tools",
+  "skills",
   "runtimeAndToolLogs",
   "conversation",
   "other",
@@ -136,9 +141,11 @@ describe("ContextUsageRing rendering", () => {
     }));
     expect(markup).toContain("cy-context-usage-ring__track");
     expect(markup).not.toContain("cy-context-usage-ring__progress");
-    // 无窗口比例：标题与明细行均不带百分比（堆叠条的 width:100% 是 CSS，不算）。
+    // 无窗口比例：标题不带容量百分比（堆叠条的 width:100% 是 CSS，不算）。
     expect(markup).not.toContain("tokens (");
-    expect(markup).not.toContain("cy-context-usage-menu__share");
+    // 明细行仍显示占已用百分比（1500/1500 = 100%）。
+    expect(markup).toContain("cy-context-usage-menu__share");
+    expect(markup).toContain(">100%</span>");
     // 菜单仍显示绝对 token 值。
     expect(markup).toContain("1.5k tokens");
   });
@@ -151,22 +158,47 @@ describe("ContextUsageRing rendering", () => {
     expect(markup).toContain("(72%)");
   });
 
-  it("renders the popover menu with stacked bar and per-category rows, hiding zero-token categories", () => {
+  it("switches the mood mascot and caption by tone", () => {
+    const normal = renderToStaticMarkup(React.createElement(ContextUsageRing, {
+      usage: snapshotOf({ categories: { conversation: 12_800 } }), // 5%
+    }));
+    expect(normal).toContain("cy-context-usage-menu__mood is-normal");
+    expect(normal).toContain(CONTEXT_USAGE_MOOD_META.normal.src);
+    expect(normal).toContain(CONTEXT_USAGE_MOOD_META.normal.text);
+
+    const warm = renderToStaticMarkup(React.createElement(ContextUsageRing, {
+      usage: snapshotOf({ categories: { conversation: 184_320 } }), // 72%
+    }));
+    expect(warm).toContain("cy-context-usage-menu__mood is-warm");
+    expect(warm).toContain(CONTEXT_USAGE_MOOD_META.warm.src);
+    expect(warm).toContain(CONTEXT_USAGE_MOOD_META.warm.text);
+
+    const alert = renderToStaticMarkup(React.createElement(ContextUsageRing, {
+      usage: snapshotOf({ totalTokens: 300_000, categories: { conversation: 300_000 } }), // 117%
+    }));
+    expect(alert).toContain("cy-context-usage-menu__mood is-alert");
+    expect(alert).toContain(CONTEXT_USAGE_MOOD_META.alert.src);
+    expect(alert).toContain(CONTEXT_USAGE_MOOD_META.alert.text);
+  });
+
+  it("renders the popover menu with a single progress bar and per-category rows, hiding zero-token categories", () => {
     const markup = renderToStaticMarkup(React.createElement(ContextUsageRing, {
-      usage: snapshotOf({ categories: { systemPrompt: 12_800, toolDefinitions: 51_200, conversation: 12_800 } }),
+      usage: snapshotOf({ categories: { systemPrompt: 12_800, tools: 51_200, conversation: 12_800 } }),
     }));
     // 菜单结构：标题 + 汇总 + 脚注。
     expect(markup).toContain("上下文容量");
     expect(markup).toContain("估算值（按字符折算），对话后自动刷新");
-    // 堆叠条 = 3 个可见类别段。
-    expect((markup.match(/cy-context-usage-menu__bar"/g) ?? []).length).toBe(1);
+    // 单条总占比进度条（normal 档）。
+    expect((markup.match(/cy-context-usage-menu__progress is-normal/g) ?? []).length).toBe(1);
     expect((markup.match(/cy-context-usage-menu__dot"/g) ?? []).length).toBe(3);
-    // 0 token 的运行时上下文与工具日志、其他被隐藏。
+    // 0 token 的技能、运行时与日志、其他被隐藏。
+    expect(markup).not.toContain(CONTEXT_USAGE_CATEGORY_META.skills.label);
     expect(markup).not.toContain(CONTEXT_USAGE_CATEGORY_META.runtimeAndToolLogs.label);
     expect(markup).not.toContain(CONTEXT_USAGE_CATEGORY_META.other.label);
-    // 明细行：类别名 + token 数 + 占窗口百分比（51.2k/256k = 20%）。
-    expect(markup).toContain(CONTEXT_USAGE_CATEGORY_META.toolDefinitions.label);
+    // 明细行：类别名 + token 数 + 占已用百分比（51.2k/76.8k = 67%），各类加总 100%。
+    expect(markup).toContain(CONTEXT_USAGE_CATEGORY_META.tools.label);
     expect(markup).toContain("51.2k");
-    expect(markup).toContain(">20%</span>");
+    expect(markup).toContain(">67%</span>");
+    expect(markup).toContain(">17%</span>");
   });
 });

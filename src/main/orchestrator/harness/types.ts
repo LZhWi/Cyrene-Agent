@@ -210,6 +210,8 @@ export interface HarnessInput {
   usageParts?: {
     personaContent: string;
     toolLayerContent: string;
+    /** Skill 目录段（含 toolLayerContent 中的 Skill 部分），快照拆"技能"类用；缺省归零。 */
+    skillLayerContent?: string;
   };
   /** 初始消息（不含 system） */
   messages: ChatMessage[];

@@ -46,13 +46,48 @@
 
 /* ── 占比菜单 ── */
 
+/* Popover 外壳对齐表情包选择器：16px 圆角 + 边框 + 收紧内边距。 */
+.cy-context-usage-popover .ant-popover-inner {
+  padding: 14px 16px;
+  border: 1px solid var(--cy-border);
+  border-radius: 16px;
+}
+
 .cy-context-usage-menu {
   display: grid;
-  gap: 10px;
+  gap: 14px;
   width: max-content;
   min-width: 260px;
   max-width: 320px;
-  padding: 2px;
+}
+
+/* 小人状态行：按档位换图换文案，warm/alert 时文字染色呼应圆环。 */
+.cy-context-usage-menu__mood {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 2px 0;
+}
+
+.cy-context-usage-menu__mood img {
+  width: 52px;
+  height: 52px;
+  flex: none;
+  object-fit: contain;
+  -webkit-user-drag: none;
+}
+
+.cy-context-usage-menu__mood span {
+  font: 12px/1.5 var(--rb-font-sans, sans-serif);
+  color: var(--cy-text-muted);
+}
+
+.cy-context-usage-menu__mood.is-warm span {
+  color: #b45309;
+}
+
+.cy-context-usage-menu__mood.is-alert span {
+  color: #dc2626;
 }
 
 .cy-context-usage-menu__header {
@@ -72,33 +107,46 @@
   color: var(--cy-text-muted);
 }
 
-.cy-context-usage-menu__bar {
-  display: flex;
-  width: 100%;
-  height: 6px;
+/* 总占比进度条：单色，随档位变色（呼应圆环）。 */
+.cy-context-usage-menu__progress {
+  height: 4px;
   overflow: hidden;
-  border-radius: 3px;
+  border-radius: 2px;
   background: var(--cy-border);
 }
 
-.cy-context-usage-menu__bar span {
+.cy-context-usage-menu__progress span {
+  display: block;
   height: 100%;
-  min-width: 2px;
+  border-radius: 2px;
+  transition: width 200ms ease;
+}
+
+.cy-context-usage-menu__progress.is-normal span {
+  background: var(--cy-accent);
+}
+
+.cy-context-usage-menu__progress.is-warm span {
+  background: #f59e0b;
+}
+
+.cy-context-usage-menu__progress.is-alert span {
+  background: #ef4444;
 }
 
 .cy-context-usage-menu__rows {
   display: grid;
-  gap: 6px;
+  gap: 10px;
   margin: 0;
-  padding: 0;
+  padding: 2px 0;
   list-style: none;
 }
 
 .cy-context-usage-menu__rows li {
   display: flex;
   align-items: center;
-  gap: 8px;
-  font: 12px/1.4 var(--rb-font-sans, sans-serif);
+  gap: 10px;
+  font: 12px/1.6 var(--rb-font-sans, sans-serif);
   color: var(--cy-text);
 }
 
@@ -107,6 +155,7 @@
   height: 8px;
   flex: none;
   border-radius: 50%;
+  background: var(--cy-accent);
 }
 
 .cy-context-usage-menu__name {
@@ -118,6 +167,8 @@
 }
 
 .cy-context-usage-menu__tokens {
+  min-width: 44px;
+  text-align: right;
   color: var(--cy-text);
   font-variant-numeric: tabular-nums;
 }
