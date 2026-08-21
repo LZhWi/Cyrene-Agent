@@ -427,6 +427,11 @@
   background: #ddd;
 }
 
+/* 弹性空白：把右侧控件组（上下文环/思考控制）推到 footer 最右端。 */
+.cy-composer__footer-spacer {
+  flex: 1;
+}
+
 .cy-model-selector__menu { min-width: 210px; display: grid; gap: 4px; }
 .cy-model-selector__menu button { border: 0; background: transparent; text-align: left; padding: 8px; border-radius: 8px; cursor: pointer; display: grid; gap: 2px; }
 .cy-model-selector__menu button:hover { background: #fff0f5; }

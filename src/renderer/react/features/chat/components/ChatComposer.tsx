@@ -390,6 +390,7 @@ export function ChatComposer({
         )}
         {supportsStyle && <StyleControl />}
         {onSelectModelProfile && <ModelSelector activeProfileId={activeModelProfileId} onSelect={onSelectModelProfile} />}
+        <span className="cy-composer__footer-spacer" />
         <ContextUsageRing usage={contextUsage} />
         <ReasoningControl />
         </div>
