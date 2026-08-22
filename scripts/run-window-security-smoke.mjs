@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron as electron } from "playwright";
@@ -18,13 +18,13 @@ const expected = {
   ],
   chat: [
     "agui", "chat", "chatStore", "choice", "cyreneFont", "cyreneTheme", "lifeStatus",
-    "live2dSpeech", "modelConfig", "music", "schedulerEvents", "settings", "tts", "work",
+    "live2dSpeech", "modelConfig", "music", "openerBridge", "schedulerEvents", "settings", "tts", "user", "work",
   ],
-  sidebar: ["cyreneFont", "cyreneTheme", "lifeStatus", "modelConfig", "runtimeState", "sidebar"],
+  sidebar: ["chatStore", "cyreneFont", "cyreneTheme", "lifeStatus", "modelConfig", "runtimeState", "sidebar"],
   tasks: ["cyreneFont", "cyreneScheduler", "cyreneTheme", "schedulerEvents", "sidebar", "tasks", "tokenUsage"],
   settings: [
     "chatStore", "cyreneFont", "cyreneLocation", "cyreneScheduler", "cyreneTheme",
-    "memoryPanel", "modelConfig", "music", "settings", "system", "tokenUsage", "tts", "user",
+    "gameBot", "memoryPanel", "modelConfig", "music", "openerBridge", "settings", "system", "tokenUsage", "tts", "user",
   ],
   "sticker-manager": ["cyreneFont", "cyreneTheme", "stickerManager"],
   call: ["call", "cyreneFont", "cyreneTheme", "live2dSpeech", "tts"],
@@ -33,10 +33,32 @@ const expected = {
 const profileDir = await mkdtemp(join(tmpdir(), "cyrene-window-security-"));
 let electronApp;
 try {
+  const avatarPath = join(profileDir, "avatar.png");
+  await writeFile(
+    avatarPath,
+    Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z2S8AAAAASUVORK5CYII=", "base64"),
+  );
+  await writeFile(
+    join(profileDir, "user-profile.json"),
+    JSON.stringify({ avatarPath }),
+    "utf8",
+  );
   electronApp = await electron.launch({
-    args: [".", `--user-data-dir=${profileDir}`],
+    // Renderer security checks do not depend on GPU process isolation. Keeping
+    // the GPU in-process avoids host subprocess startup failures in this smoke.
+    args: [
+      "--in-process-gpu",
+      `--user-data-dir=${profileDir}`,
+      ".",
+    ],
     cwd: process.cwd(),
-    env: { ...process.env, VITE_DEV: "" },
+    env: {
+      ...process.env,
+      HOME: profileDir,
+      USERPROFILE: profileDir,
+      UV_CACHE_DIR: join(profileDir, "uv-cache"),
+      VITE_DEV: "",
+    },
     timeout: 45_000,
   });
   await electronApp.firstWindow({ timeout: 45_000 });
@@ -75,6 +97,11 @@ try {
   await settings.evaluate(() => window.settings.openStickerManager());
   await findPage("/sticker-manager/");
 
+  const actualUserData = await electronApp.evaluate(({ app }) => app.getPath("userData"));
+  if (actualUserData.toLowerCase() !== profileDir.toLowerCase()) {
+    throw new Error(`Electron did not use the isolated userData directory: ${actualUserData}`);
+  }
+
   const fragments = {
     main: "/renderer/index.html",
     chat: "/chat/",
@@ -97,13 +124,40 @@ try {
       script.remove();
       return window[marker] === true;
     });
-    results[role] = { exposed, inlineScriptExecuted };
+    const popupBlocked = await page.evaluate(() => window.open("about:blank") === null);
+    results[role] = { exposed, inlineScriptExecuted, popupBlocked };
     const expectedApis = [...expected[role]].sort();
     if (JSON.stringify(exposed) !== JSON.stringify(expectedApis)) {
       throw new Error(`${role} preload mismatch: ${JSON.stringify({ expected: expectedApis, exposed })}`);
     }
     if (inlineScriptExecuted) throw new Error(`${role} CSP allowed an inline script`);
+    if (!popupBlocked) throw new Error(`${role} navigation policy allowed an about:blank popup`);
   }
+  const chat = await findPage("/chat/");
+  const avatarDataUrl = await chat.evaluate(() => window.user?.getAvatar());
+  if (typeof avatarDataUrl !== "string" || !avatarDataUrl.startsWith("data:image/png;base64,")) {
+    throw new Error("chat could not read the isolated user avatar");
+  }
+  await chat.evaluate(async () => {
+    const sessionId = await window.chatStore?.getActiveSession();
+    if (!sessionId) throw new Error("chat has no active session for avatar smoke");
+    await window.chatStore?.append(sessionId, {
+      id: "avatar-smoke-user-message",
+      role: "user",
+      content: "avatar smoke",
+      at: Date.now(),
+    });
+  });
+  await chat.reload({ waitUntil: "domcontentloaded" });
+  await chat.waitForFunction(() => {
+    const row = document.querySelector('[data-msg-id="avatar-smoke-user-message"]');
+    const image = row?.querySelector(".msg__avatar-img");
+    return image instanceof HTMLImageElement && image.src.startsWith("data:image/png;base64,");
+  }, undefined, { timeout: 10_000 });
+  const sidebarHistory = await sidebar.evaluate(() => window.chatStore?.list());
+  if (!Array.isArray(sidebarHistory)) throw new Error("sidebar chatStore API is unavailable");
+  const openerStatus = await settings.evaluate(() => window.openerBridge?.getStatus());
+  if (!openerStatus || typeof openerStatus !== "object") throw new Error("settings openerBridge API is unavailable");
   console.log(JSON.stringify({ ok: true, profileDir, results }, null, 2));
 } finally {
   if (electronApp) await electronApp.close().catch(() => {});

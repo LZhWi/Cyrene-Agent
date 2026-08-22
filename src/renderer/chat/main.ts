@@ -325,7 +325,7 @@ const FRONTEND_REPLY_TIMEOUT_MS = 35000;
  * baked into the CSS background of `.msg--user .msg__avatar`.
  *
  * Model side: 昔涟的 PNG，由 CSS border-radius: 50% 自动裁圆。
- * User side: 暂留空，等设置页里上传用户头像后再把 user 改成 file:// 或 data: URL。
+ * User side: 先显示渐变占位，随后由 user:get-avatar 返回的 data URL 替换。
  */
 const AVATAR_SRC: Record<Role, string> = {
   model: resolveAsset("avatars/cyrene-avatar.png"),
@@ -335,7 +335,7 @@ const AVATAR_SRC: Record<Role, string> = {
 // Load user avatar from profile
 (async () => {
   try {
-    const dataUrl = await (window as any).user?.getAvatar();
+    const dataUrl = await window.user?.getAvatar();
     if (dataUrl) {
       AVATAR_SRC.user = dataUrl;
       render();

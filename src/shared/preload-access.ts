@@ -16,10 +16,11 @@ const ROLE_APIS: Record<PreloadWindowRole, ReadonlySet<string>> = {
   ]),
   chat: new Set([
     "chat", "work", "agui", "schedulerEvents", "choice", "cyreneTheme", "cyreneFont",
-    "settings", "modelConfig", "lifeStatus", "live2dSpeech", "chatStore", "tts", "music",
+    "settings", "modelConfig", "user", "lifeStatus", "live2dSpeech", "openerBridge",
+    "chatStore", "tts", "music",
   ]),
   sidebar: new Set([
-    "sidebar", "cyreneTheme", "cyreneFont", "modelConfig", "runtimeState", "lifeStatus",
+    "sidebar", "cyreneTheme", "cyreneFont", "modelConfig", "runtimeState", "lifeStatus", "chatStore",
   ]),
   tasks: new Set([
     "tasks", "sidebar", "schedulerEvents", "cyreneTheme", "cyreneFont",
@@ -27,11 +28,15 @@ const ROLE_APIS: Record<PreloadWindowRole, ReadonlySet<string>> = {
   ]),
   settings: new Set([
     "system", "cyreneTheme", "cyreneFont", "settings", "cyreneScheduler", "modelConfig",
-    "user", "cyreneLocation", "memoryPanel", "chatStore", "tokenUsage", "tts", "music",
+    "user", "cyreneLocation", "memoryPanel", "openerBridge", "chatStore", "tokenUsage", "tts", "music", "gameBot",
   ]),
   "sticker-manager": new Set(["cyreneTheme", "cyreneFont", "stickerManager"]),
   call: new Set(["call", "cyreneTheme", "cyreneFont", "live2dSpeech", "tts"]),
 };
+
+export const PRELOAD_API_NAMES = Object.freeze([
+  ...new Set(Object.values(ROLE_APIS).flatMap((apis) => [...apis])),
+]);
 
 export function parsePreloadWindowRole(argv: readonly string[]): PreloadWindowRole | null {
   const raw = argv.find((arg) => arg.startsWith(ROLE_PREFIX))?.slice(ROLE_PREFIX.length);
