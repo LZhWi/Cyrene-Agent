@@ -178,6 +178,7 @@ const DELETE_ICON = `<svg class="msg__delete-icon" viewBox="0 0 24 24" width="14
 
 interface AguiApi {
   run: (input: {
+    runId?: string;
     messages: unknown[];
     style: string;
     sessionId?: string;
@@ -185,9 +186,9 @@ interface AguiApi {
     assistantTurnId?: string;
     attachments?: { name: string; text: string }[];
     imageAttachments?: { name: string; filePath: string; mime?: string }[];
-  }) => Promise<{ success: boolean; error?: string }>;
+  }) => Promise<{ success: boolean; runId?: string; error?: string }>;
   onEvent: (callback: (event: unknown) => void) => () => void;
-  cancel: () => Promise<boolean>;
+  cancel: (runId: string) => Promise<boolean>;
 }
 
 interface SchedulerEventsApi {
@@ -217,6 +218,7 @@ interface AguiBaseEvent {
   toolCallName?: string;
   content?: string;
   error?: string;
+  code?: string;
   stepName?: string;
   runId?: string;
   threadId?: string;
@@ -1929,6 +1931,10 @@ function registerAguiListener(callback: (event: unknown) => void): () => void {
   return release;
 }
 
+function createAguiRunId(): string {
+  return `run-${crypto.randomUUID()}`;
+}
+
 function installSchedulerEventListener(): void {
   if (!window.schedulerEvents?.onEvent) return;
 
@@ -3049,6 +3055,7 @@ async function triggerCyreneGreeting(): Promise<void> {
 
   let streamMsgId = "";
   try {
+    const runId = createAguiRunId();
     streamMsgId = String(Date.now() + 1);
     const streamMsg = { id: streamMsgId, role: "model" as const, content: "", at: Date.now(), thinking: true, transient: true };
     messages.push(streamMsg);
@@ -3131,6 +3138,7 @@ async function triggerCyreneGreeting(): Promise<void> {
     const offEvent = registerAguiListener((rawEvent) => {
       try {
         const event = rawEvent as AguiBaseEvent;
+        if (event.type !== "CUSTOM" && event.runId !== runId) return;
         const msg = messages.find(m => m.id === streamMsgId);
         switch (event.type) {
           case "TOOL_CALL_START": {
@@ -3212,7 +3220,7 @@ async function triggerCyreneGreeting(): Promise<void> {
             tryFinish();
             break;
           case "RUN_ERROR":
-            failRun(new Error(event.content || "模型请求失败"));
+            failRun(new Error(event.error || event.content || "模型请求失败"));
             break;
           default:
             break;
@@ -3224,6 +3232,7 @@ async function triggerCyreneGreeting(): Promise<void> {
 
     // 种子消息：不推入 messages 数组、不渲染，只作为 agent 输入触发昔涟主动开口
     const ack = await window.agui!.run({
+      runId,
       messages: [{ role: "user", content: "[internal] 用户点击了「和昔涟聊天」，请你主动开口聊几句，像朋友打招呼一样自然开场。" }],
       style: getCurrentStyle(),
       sessionId: currentSessionId || undefined,
@@ -3559,6 +3568,7 @@ async function send(): Promise<void> {
 
   let streamMsgId = "";
   try {
+    const runId = createAguiRunId();
     streamMsgId = String(Date.now() + 1);
     const streamMsg = { id: streamMsgId, role: "model", content: "", at: Date.now(), thinking: true, transient: true };
     messages.push(streamMsg);
@@ -3650,6 +3660,7 @@ async function send(): Promise<void> {
     const offEvent = registerAguiListener((rawEvent) => {
       try {
         const event = rawEvent as AguiBaseEvent;
+        if (event.type !== "CUSTOM" && event.runId !== runId) return;
         const msg = messages.find(m => m.id === streamMsgId);
         switch (event.type) {
           case "TOOL_CALL_START": {
@@ -3741,7 +3752,7 @@ async function send(): Promise<void> {
             tryFinish();
             break;
           case "RUN_ERROR":
-            failRun(new Error(event.content || "模型请求失败"));
+            failRun(new Error(event.error || event.content || "模型请求失败"));
             break;
           default:
             // TOOL_CALL_* / STEP_* 暂不在 UI 处理（骨架阶段）
@@ -3756,6 +3767,7 @@ async function send(): Promise<void> {
     // 真正的完成由事件流 RUN_FINISHED/RUN_ERROR 驱动（await runDone）。
     const modelMessages = buildModelMessages();
     const ack = await window.agui!.run({
+      runId,
       messages: modelMessages,
       style: getCurrentStyle(),
       sessionId: currentSessionId || undefined,

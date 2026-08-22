@@ -145,6 +145,8 @@ interface PendingApproval {
   resolve: (allowed: boolean) => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
+  signal?: AbortSignal;
+  onAbort?: () => void;
 }
 
 const pendingApprovals = new Map<string, PendingApproval>();
@@ -167,15 +169,30 @@ export interface ApprovalRequest {
  * 向用户发起一次审批请求，等用户点同意/拒绝。
  * 60 秒不响应自动拒绝。
  */
-export function requestApproval(request: Omit<ApprovalRequest, "id">): Promise<boolean> {
+function settlePendingApproval(id: string, allowed: boolean): boolean {
+  const pending = pendingApprovals.get(id);
+  if (!pending) return false;
+  clearTimeout(pending.timer);
+  if (pending.signal && pending.onAbort) pending.signal.removeEventListener("abort", pending.onAbort);
+  pendingApprovals.delete(id);
+  pending.resolve(allowed);
+  return true;
+}
+
+export function requestApproval(request: Omit<ApprovalRequest, "id">, signal?: AbortSignal): Promise<boolean> {
   return new Promise<boolean>((resolve, reject) => {
     const id = "approve-" + (++approvalCounter) + "-" + Date.now();
     const timer = setTimeout(() => {
-      pendingApprovals.delete(id);
       console.warn(LOG_PREFIX, "审批超时（60s 未响应），自动拒绝:", request.toolId);
-      resolve(false);
+      settlePendingApproval(id, false);
     }, 60_000);
-    pendingApprovals.set(id, { resolve, reject, timer });
+    const onAbort = () => settlePendingApproval(id, false);
+    pendingApprovals.set(id, { resolve, reject, timer, signal, onAbort });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     const payload: ApprovalRequest = { id, ...request };
     console.log(LOG_PREFIX, "向渲染端发送审批请求:", id, request.toolId);
@@ -186,10 +203,8 @@ export function requestApproval(request: Omit<ApprovalRequest, "id">): Promise<b
     ));
     if (wins.length === 0) {
       // 没有窗口可以审批 → 直接拒绝
-      clearTimeout(timer);
-      pendingApprovals.delete(id);
       console.warn(LOG_PREFIX, "无窗口可审批，自动拒绝");
-      resolve(false);
+      settlePendingApproval(id, false);
       return;
     }
     for (const win of wins) {
@@ -206,29 +221,47 @@ export function requestApproval(request: Omit<ApprovalRequest, "id">): Promise<b
  */
 const NOTIFY_WAIT_MS = 3000;
 
-const pendingNotifications = new Map<string, { resolve: (allowed: boolean) => void; timer: NodeJS.Timeout }>();
+const pendingNotifications = new Map<string, {
+  resolve: (allowed: boolean) => void;
+  timer: NodeJS.Timeout;
+  signal?: AbortSignal;
+  onAbort?: () => void;
+}>();
 
-export function notifyApproval(request: Omit<ApprovalRequest, "id">): Promise<boolean> {
+function settlePendingNotification(id: string, allowed: boolean): boolean {
+  const pending = pendingNotifications.get(id);
+  if (!pending) return false;
+  clearTimeout(pending.timer);
+  if (pending.signal && pending.onAbort) pending.signal.removeEventListener("abort", pending.onAbort);
+  pendingNotifications.delete(id);
+  pending.resolve(allowed);
+  return true;
+}
+
+export function notifyApproval(request: Omit<ApprovalRequest, "id">, signal?: AbortSignal): Promise<boolean> {
   return new Promise<boolean>((resolve) => {
     const id = "notify-" + (++approvalCounter) + "-" + Date.now();
     const payload: ApprovalRequest = { id, ...request, notifyOnly: true };
     console.log(LOG_PREFIX, "发送工具执行通知（3s 等待）:", id, request.toolId);
 
     const timer = setTimeout(() => {
-      pendingNotifications.delete(id);
       console.log(LOG_PREFIX, "通知超时（3s），默认允许:", request.toolId);
-      resolve(true);
+      settlePendingNotification(id, true);
     }, NOTIFY_WAIT_MS);
-    pendingNotifications.set(id, { resolve, timer });
+    const onAbort = () => settlePendingNotification(id, false);
+    pendingNotifications.set(id, { resolve, timer, signal, onAbort });
+    if (signal?.aborted) {
+      onAbort();
+      return;
+    }
+    signal?.addEventListener("abort", onAbort, { once: true });
 
     const wins = BrowserWindow.getAllWindows().filter((win) => (
       request.targetWebContentsId === undefined || win.webContents.id === request.targetWebContentsId
     ));
     if (wins.length === 0) {
-      clearTimeout(timer);
-      pendingNotifications.delete(id);
       console.warn(LOG_PREFIX, "无窗口可通知，默认允许");
-      resolve(true);
+      settlePendingNotification(id, true);
       return;
     }
     for (const win of wins) {
@@ -256,12 +289,9 @@ export function registerPermissionIpc(): void {
   ipcMain.handle(IPC.PERMISSION_APPROVAL_RESOLVE, (_event, payload: { id: string; allowed: boolean }) => {
     // 通知模式：3 秒等待中的 Promise resolve
     if (payload?.id?.startsWith("notify-")) {
-      const pending = pendingNotifications.get(payload.id);
-      if (pending) {
-        clearTimeout(pending.timer);
-        pendingNotifications.delete(payload.id);
+      if (pendingNotifications.has(payload.id)) {
         console.log(LOG_PREFIX, "通知结果:", payload.id, payload.allowed ? "允许" : "阻止");
-        pending.resolve(Boolean(payload.allowed));
+        settlePendingNotification(payload.id, Boolean(payload.allowed));
       }
       return { ok: true };
     }
@@ -272,10 +302,8 @@ export function registerPermissionIpc(): void {
       console.warn(LOG_PREFIX, "审批回传未匹配到 pending:", payload?.id);
       return { ok: false };
     }
-    clearTimeout(pending.timer);
-    pendingApprovals.delete(payload.id);
     console.log(LOG_PREFIX, "审批结果:", payload.id, payload.allowed ? "同意" : "拒绝");
-    pending.resolve(Boolean(payload.allowed));
+    settlePendingApproval(payload.id, Boolean(payload.allowed));
     return { ok: true };
   });
 
@@ -302,6 +330,7 @@ export async function checkPermission(input: {
   args: Record<string, unknown>;
   risk: ToolRiskLevel;
   targetWebContentsId?: number;
+  signal?: AbortSignal;
 }): Promise<{ allowed: boolean; reason?: string }> {
   const level = currentLevel;
   const policy = policyFor(level, input.risk);
@@ -323,7 +352,7 @@ export async function checkPermission(input: {
       args: input.args,
       risk: input.risk,
       targetWebContentsId: input.targetWebContentsId,
-    });
+    }, input.signal);
     if (allowed) return { allowed: true };
     return { allowed: false, reason: "用户阻止了此次操作。" };
   }
@@ -337,7 +366,7 @@ export async function checkPermission(input: {
       args: input.args,
       risk: input.risk,
       targetWebContentsId: input.targetWebContentsId,
-    });
+    }, input.signal);
     if (approved) return { allowed: true };
     return { allowed: false, reason: "用户拒绝了此次操作。" };
   }
@@ -357,7 +386,7 @@ export async function checkPermission(input: {
     args: input.args,
     risk: input.risk,
     targetWebContentsId: input.targetWebContentsId,
-  });
+  }, input.signal);
   if (approved) return { allowed: true };
   return { allowed: false, reason: "用户拒绝了此次操作。" };
 }

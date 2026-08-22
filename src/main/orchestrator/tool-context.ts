@@ -3,6 +3,7 @@
 // 地基通用：当前只服务于 read_image（视觉），未来其他工具按需声明 needsContext 接入。
 
 import type { ChatMessage } from "./vendors";
+import type { RunControl } from "../runtime/run-control";
 
 /** 工具上下文。userQuery 是当前唯一稳定字段；metadata 留未来扩展（PDF/音频等），现在不填。 */
 export interface ToolContext {
@@ -10,6 +11,12 @@ export interface ToolContext {
   userQuery: string;
   /** 当前聊天会话 ID；需要跨轮隔离状态的工具必须使用该字段。 */
   conversationId?: string;
+  /** 本轮唯一标识；工具日志和幂等副作用必须以它隔离。 */
+  runId?: string;
+  /** 用户取消或上层终止时触发；长任务应监听并尽快停止。 */
+  signal?: AbortSignal;
+  /** 调度层持有的取消闸门与副作用账本。 */
+  runControl?: RunControl;
   /** 未来扩展兜底；当前为空对象，不预设字段。遵循"地基通用，上层克制"。 */
   metadata?: Record<string, unknown>;
 }

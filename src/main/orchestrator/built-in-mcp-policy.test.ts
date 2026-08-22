@@ -9,6 +9,7 @@ vi.mock("./mcp-manager", () => ({ addMcpServer }));
 
 import "./built-in-tools";
 import { toolRegistry } from "./tool-registry";
+import { RunControl } from "../runtime/run-control";
 
 describe("built-in MCP installation policy", () => {
   beforeEach(() => addMcpServer.mockClear());
@@ -24,4 +25,22 @@ describe("built-in MCP installation policy", () => {
       defaultToolPolicy: { risk: "shell", effectKind: "external_side_effect" },
     }));
   });
+
+  it("kills an in-flight run_shell process when the run is cancelled", async () => {
+    const tool = toolRegistry.getById("run_shell")!;
+    const control = new RunControl("run-shell-cancel");
+    const execution = tool.execute({
+      command: process.execPath,
+      args: ["-e", "setInterval(() => {}, 1000)"],
+    }, {
+      userQuery: "",
+      runId: control.runId,
+      signal: control.signal,
+      runControl: control,
+    });
+
+    setTimeout(() => control.cancel(), 50);
+
+    await expect(execution).rejects.toThrow(/E_RUN_CANCELLED/);
+  }, 5_000);
 });

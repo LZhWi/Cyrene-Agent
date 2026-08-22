@@ -128,13 +128,14 @@ contextBridge.exposeInMainWorld("work", workApi);
 // 返回 Promise<{success,error}> 表示整轮结束。onEvent 返回的取消订阅函数用于停止监听。
 const aguiApi = {
   run: (input: {
+    runId?: string;
     messages: unknown[];
     style: string;
     sessionId?: string;
     attachments?: { name: string; text: string }[];
     imageAttachments?: { name: string; filePath: string; mime?: string }[];
   }) =>
-    ipcRenderer.invoke(IPC.AGUI_RUN, input) as Promise<{ success: boolean; error?: string }>,
+    ipcRenderer.invoke(IPC.AGUI_RUN, input) as Promise<{ success: boolean; runId?: string; error?: string }>,
   onEvent: (callback: (event: unknown) => void) => {
     const listener = (_e: unknown, event: unknown) => {
       try {
@@ -146,7 +147,7 @@ const aguiApi = {
     ipcRenderer.on(IPC.AGUI_EVENT, listener);
     return () => ipcRenderer.off(IPC.AGUI_EVENT, listener);
   },
-  cancel: () => ipcRenderer.invoke(IPC.AGUI_CANCEL),
+  cancel: (runId: string) => ipcRenderer.invoke(IPC.AGUI_CANCEL, { runId }),
 };
 
 contextBridge.exposeInMainWorld("agui", aguiApi);

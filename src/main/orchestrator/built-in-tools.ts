@@ -7,6 +7,7 @@ import { addMcpServer } from "./mcp-manager";
 import { sendToLive2DWindow } from "../index";
 import { createPlayLive2DActionTool } from "./tools/play-live2d-action";
 import type { WeatherCardData, WeatherForecastDay } from "../../shared/weather-card";
+import type { ToolContext } from "./tool-context";
 
 export type { WeatherCardData, WeatherForecastDay };
 
@@ -48,7 +49,7 @@ function stripHtml(html: string): string {
   }
 }
 
-async function executeFetchUrl(args: Record<string, unknown>): Promise<string> {
+async function executeFetchUrl(args: Record<string, unknown>, ctx?: ToolContext): Promise<string> {
   const url = String(args.url || "").trim();
   if (!/^https?:\/\//i.test(url)) {
     return "[错误] url 必须以 http:// 或 https:// 开头";
@@ -57,6 +58,9 @@ async function executeFetchUrl(args: Record<string, unknown>): Promise<string> {
   console.log(LOG_PREFIX, "fetch_url:", url, "format=" + (asMarkdown ? "markdown" : "raw"));
 
   const ac = new AbortController();
+  const onAbort = () => ac.abort(ctx?.signal?.reason);
+  if (ctx?.signal?.aborted) ctx.signal.throwIfAborted();
+  ctx?.signal?.addEventListener("abort", onAbort, { once: true });
   const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS);
   try {
     const resp = await fetch(url, {
@@ -85,6 +89,7 @@ async function executeFetchUrl(args: Record<string, unknown>): Promise<string> {
     return "[错误] fetch 失败: " + msg;
   } finally {
     clearTimeout(timer);
+    ctx?.signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -157,17 +162,33 @@ function killTree(child: ReturnType<typeof spawn>): void {
   if (child.pid == null) return;
   if (process.platform === "win32") {
     // /T=含整棵子树  /F=强制  砍掉进程树，避免孙进程成为孤儿
-    spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+    const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
       windowsHide: true,
       shell: false,
       stdio: "ignore",
+    });
+    // taskkill 可能被系统策略拦截或启动失败；直接子进程必须有独立兜底，不能一直挂到 5 分钟超时。
+    const fallback = setTimeout(() => {
+      try { child.kill(); } catch { /* 已退出则忽略 */ }
+    }, 500);
+    fallback.unref();
+    killer.once("close", () => {
+      clearTimeout(fallback);
+      if (!child.killed) {
+        try { child.kill(); } catch { /* 已退出则忽略 */ }
+      }
+    });
+    killer.once("error", () => {
+      clearTimeout(fallback);
+      try { child.kill(); } catch { /* 已退出则忽略 */ }
     });
   } else {
     try { child.kill("SIGKILL"); } catch { /* 已退出则忽略 */ }
   }
 }
 
-function runShellOnce(command: string, args: string[], cwd?: string): Promise<ShellResult> {
+function runShellOnce(command: string, args: string[], cwd?: string, signal?: AbortSignal): Promise<ShellResult> {
+  if (signal?.aborted) signal.throwIfAborted();
   return new Promise((resolve) => {
     const child = spawn(command, args, {
       cwd: cwd || undefined,
@@ -185,6 +206,12 @@ function runShellOnce(command: string, args: string[], cwd?: string): Promise<Sh
       console.warn(LOG_PREFIX, "run_shell 超时，kill 进程树:", command);
       killTree(child);
     }, SHELL_TIMEOUT_MS);
+    const onAbort = () => killTree(child);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const cleanup = () => {
+      clearTimeout(timeoutTimer);
+      signal?.removeEventListener("abort", onAbort);
+    };
 
     child.stdout?.on("data", (chunk: Buffer) => {
       if (stdout.length < SHELL_MAX_OUTPUT) {
@@ -209,7 +236,7 @@ function runShellOnce(command: string, args: string[], cwd?: string): Promise<Sh
       }
     });
     child.on("error", (err) => {
-      clearTimeout(timeoutTimer);
+      cleanup();
       resolve({
         exitCode: -1,
         stdout,
@@ -218,13 +245,13 @@ function runShellOnce(command: string, args: string[], cwd?: string): Promise<Sh
       });
     });
     child.on("close", (code) => {
-      clearTimeout(timeoutTimer);
+      cleanup();
       resolve({ exitCode: code, stdout, stderr, truncated });
     });
   });
 }
 
-async function executeRunShell(args: Record<string, unknown>): Promise<string> {
+async function executeRunShell(args: Record<string, unknown>, ctx?: ToolContext): Promise<string> {
   const cmd = String(args.command || "").trim();
   // 容错：模型常把 args 当字符串传（如 "--version"），normalizeArgs 会自动拆成 argv 数组
   const cmdArgs = normalizeArgs(args.args);
@@ -232,7 +259,8 @@ async function executeRunShell(args: Record<string, unknown>): Promise<string> {
   if (!cmd) return "[错误] command 不能为空";
 
   console.log(LOG_PREFIX, "run_shell:", cmd, JSON.stringify(cmdArgs), cwd ? "cwd=" + cwd : "");
-  const result = await runShellOnce(cmd, cmdArgs, cwd);
+  const result = await runShellOnce(cmd, cmdArgs, cwd, ctx?.signal);
+  ctx?.signal?.throwIfAborted();
   console.log(LOG_PREFIX, "run_shell 完成 exitCode=" + result.exitCode + " stdout.len=" + result.stdout.length + " stderr.len=" + result.stderr.length);
 
   const lines: string[] = [];
@@ -280,7 +308,8 @@ toolRegistry.register({
 // 把一个 {command, args, env} 注册成新的 MCP server。
 // agent 读完 README 的 mcpServers 配置后，调这个工具一次性写盘 + 启动 + 发现工具
 
-async function executeInstallMcp(args: Record<string, unknown>): Promise<string> {
+async function executeInstallMcp(args: Record<string, unknown>, ctx?: ToolContext): Promise<string> {
+  ctx?.signal?.throwIfAborted();
   const id = (String(args.id || "").trim()) || ("mcp-" + Date.now());
   const name = String(args.name || "").trim() || id;
   const command = String(args.command || "").trim();
@@ -311,6 +340,7 @@ async function executeInstallMcp(args: Record<string, unknown>): Promise<string>
       cwd,
       defaultToolPolicy: { risk: "shell", effectKind: "external_side_effect" },
     });
+    ctx?.signal?.throwIfAborted();
     if (!result.ok) {
       return "[错误] 安装失败: " + (result.error || "未知错误");
     }

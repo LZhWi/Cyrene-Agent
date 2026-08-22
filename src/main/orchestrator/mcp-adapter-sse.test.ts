@@ -258,4 +258,36 @@ describe("mcp-adapter transport split", () => {
 
 		await expect(toolRegistry.getById("tool-error-bad")!.execute({})).rejects.toThrow(/E_MCP_TOOL_FAILED: denied/);
 	});
+
+	it("passes the run AbortSignal into MCP callTool", async () => {
+		const Client = (await import("@modelcontextprotocol/sdk/client/index.js")).Client as any;
+		const callTool = vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] });
+		Client.mockImplementation(function (this: unknown) {
+			return {
+				connect: vi.fn().mockResolvedValue(undefined),
+				listTools: vi.fn().mockResolvedValue({ tools: [{ name: "run", inputSchema: { type: "object", properties: {} } }] }),
+				close: vi.fn().mockResolvedValue(undefined),
+				callTool,
+			};
+		});
+		await connectMcpServer({
+			id: "signal",
+			name: "Signal",
+			transport: "stdio",
+			command: "node",
+			defaultToolPolicy: { risk: "shell", effectKind: "external_side_effect" },
+		});
+		const controller = new AbortController();
+
+		await toolRegistry.getById("signal-run")!.execute({}, {
+			userQuery: "",
+			signal: controller.signal,
+		});
+
+		expect(callTool).toHaveBeenCalledWith(
+			{ name: "run", arguments: {} },
+			undefined,
+			{ signal: controller.signal },
+		);
+	});
 });

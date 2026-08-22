@@ -193,11 +193,15 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
         properties: mt.inputSchema?.properties as Record<string, { type: string; description: string }> || {},
         required: mt.inputSchema?.required,
       },
-      execute: async (args: Record<string, unknown>) => {
+      execute: async (args: Record<string, unknown>, ctx) => {
         console.log(LOG_PREFIX, "调用工具:", toolId, JSON.stringify(args));
         try {
           const result = await withTimeout(
-            client.callTool({ name: mt.name, arguments: args }),
+            client.callTool(
+              { name: mt.name, arguments: args },
+              undefined,
+              ctx?.signal ? { signal: ctx.signal } : undefined,
+            ),
             normalizeTimeout(config.toolCallTimeoutMs, MCP_DEFAULT_TOOL_TIMEOUT_MS),
             `callTool ${toolId}`,
           );

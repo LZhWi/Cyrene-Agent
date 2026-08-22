@@ -20,9 +20,11 @@ import {
 } from "./orchestrator/cyrene-agent";
 import { indexConversationTurn } from "./orchestrator/history-tools";
 import type { RelationshipChannel } from "./relationship/relationship-log";
+import { isRunCancelledError, RunControl } from "./runtime/run-control";
 
 /** 渲染进程发起 run 时传的输入。 */
 export interface AguiRunInput {
+  runId?: string;
   messages: unknown[];   // 原始 {role, content}[]，主进程会 normalize
   style: string;         // 人格 style 文件名
   sessionId?: string;    // 会话 ID，用于历史召回按会话隔离（可选，默认 "default"）
@@ -62,10 +64,28 @@ export interface AguiConversationLifecycle {
 }
 
 /** 单次对话的活跃订阅（用于取消）。键 = runId。 */
-const activeRuns = new Map<string, { subscription: Subscription; endLifecycle: () => void }>();
+interface ActiveAguiRun {
+  subscription?: Subscription;
+  endLifecycle: () => void;
+  control: RunControl;
+  senderId: number;
+  send: (event: unknown) => void;
+}
+
+const activeRuns = new Map<string, ActiveAguiRun>();
+const reservedRunIds = new Set<string>();
 
 let buildOptionsFn: BuildOptionsFn | null = null;
 let getChatWindowFn: GetChatWindowFn = () => null;
+
+function requestedRunId(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !/^run-[A-Za-z0-9-]{8,80}$/.test(value)) {
+    throw new Error("E_INVALID_RUN_ID");
+  }
+  if (activeRuns.has(value) || reservedRunIds.has(value)) throw new Error("E_RUN_ID_CONFLICT");
+  return value;
+}
 
 /**
  * 注册 AG-UI IPC。由 index.ts 在 app.whenReady() 调一次。
@@ -88,20 +108,23 @@ export function registerAgUiIpc(
     if (!buildOptionsFn || !onFinished) {
       throw new Error("AG-UI 桥未初始化");
     }
+    const input = rawInput as AguiRunInput;
+    const control = new RunControl(requestedRunId(input.runId));
+    const runId = control.runId;
+    reservedRunIds.add(runId);
     lifecycle?.onUserMessage();
     lifecycle?.onConversationStarted();
-    const input = rawInput as AguiRunInput;
     let built;
     try {
       built = await buildOptionsFn(input);
     } catch (error) {
+      reservedRunIds.delete(runId);
       lifecycle?.onConversationEnded();
       throw error;
     }
     const { options, latestUserText, memoryContextText } = built;
 
     const threadId = `thread-${Date.now()}`;
-    const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const agent = new CyreneAgent({ threadId, description: "Cyrene 主聊天" });
 
     // 事件转发目标：优先用 invoke 的 sender（发起 run 的窗口），兜底用聊天窗口
@@ -133,15 +156,27 @@ export function registerAgUiIpc(
 
     // 订阅 agent 事件流：每个事件透传渲染端；
     // complete/error 时做副作用，并补发一个终态事件让渲染端知道这轮结束。
-    const sub = agent.runWithEvents(options).subscribe({
+    const activeRun: ActiveAguiRun = {
+      endLifecycle,
+      control,
+      senderId: sender.id,
+      send,
+    };
+    reservedRunIds.delete(runId);
+    activeRuns.set(runId, activeRun);
+
+    const sub = agent.runWithEvents(options, control).subscribe({
       next: (baseEvent) => {
+        const eventWithRun = baseEvent && typeof baseEvent === "object"
+          ? { ...(baseEvent as Record<string, unknown>), threadId, runId }
+          : baseEvent;
         // sticker / memory 等副作用在 complete 回调里执行。前端收到 RUN_FINISHED 后会收尾并取消监听，
         // 所以必须把 RUN_FINISHED 延后到副作用事件之后发送，否则 cyrene.sticker 会晚到而被丢掉。
         if ((baseEvent as { type?: string })?.type === "RUN_FINISHED") {
-          pendingRunFinishedEvent = baseEvent;
+          pendingRunFinishedEvent = eventWithRun;
           return;
         }
-        send(baseEvent);
+        send(eventWithRun);
       },
       error: (err) => {
         const message = err instanceof Error ? err.message : String(err);
@@ -149,13 +184,15 @@ export function registerAgUiIpc(
         // 补发 RUN_ERROR 事件，渲染端据此收尾（invoke 早已 resolve，靠事件驱动）
         send({ type: "RUN_ERROR", error: message, threadId, runId });
         activeRuns.delete(runId);
+        control.complete();
         endLifecycle();
       },
       complete: async () => {
-        activeRuns.delete(runId);
         try {
+          control.throwIfCancelled();
           if (agent.lastResult) {
             await onFinished(agent.lastResult, latestUserText, memoryContextText);
+            control.throwIfCancelled();
             // 历史召回用：把这轮对话存入向量库（异步，不阻塞，失败不影响主流程）
             // 放在 onFinished 之后，确保记忆/sticker 等副作用先跑完
             void indexConversationTurn(
@@ -166,15 +203,20 @@ export function registerAgUiIpc(
             );
           }
         } catch (err) {
+          if (control.signal.aborted || isRunCancelledError(err)) return;
           console.warn("[AgUiBridge] 副作用失败（不影响结果）:", err);
+        } finally {
+          activeRuns.delete(runId);
+          if (!control.signal.aborted) {
+            if (pendingRunFinishedEvent) send(pendingRunFinishedEvent);
+            control.complete();
+          }
+          endLifecycle();
         }
-        if (pendingRunFinishedEvent) {
-          send(pendingRunFinishedEvent);
-        }
-        endLifecycle();
       },
     });
-    activeRuns.set(runId, { subscription: sub, endLifecycle });
+    activeRun.subscription = sub;
+    if (control.status !== "active") activeRuns.delete(runId);
 
     // invoke 立刻返回 ack，不等 Observable 结束。
     // 终态（RUN_FINISHED/RUN_ERROR）由事件流承载，渲染端据此 offEvent + 收尾。
@@ -182,12 +224,21 @@ export function registerAgUiIpc(
     return { success: true, runId };
   });
 
-  ipcMain.handle(IPC.AGUI_CANCEL, () => {
-    for (const run of activeRuns.values()) {
-      run.subscription.unsubscribe();
-      run.endLifecycle();
-    }
-    activeRuns.clear();
+  ipcMain.handle(IPC.AGUI_CANCEL, (event: IpcMainInvokeEvent, payload: { runId?: unknown }) => {
+    const runId = typeof payload?.runId === "string" ? payload.runId : "";
+    const run = activeRuns.get(runId);
+    if (!run || run.senderId !== event.sender.id) return false;
+    run.control.cancel("renderer requested cancellation");
+    run.send({
+      type: "RUN_ERROR",
+      code: "E_RUN_CANCELLED",
+      error: "已取消",
+      content: "已取消",
+      runId,
+    });
+    run.subscription?.unsubscribe();
+    run.endLifecycle();
+    activeRuns.delete(runId);
     return true;
   });
 }

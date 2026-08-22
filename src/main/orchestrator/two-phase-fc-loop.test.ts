@@ -148,6 +148,59 @@ afterEach(() => {
 });
 
 describe("runTwoPhaseFcLoop", () => {
+  it("aborts an in-flight tool-phase model fetch with the outer signal", async () => {
+    const adapter = new FakeAdapter();
+    const controller = new AbortController();
+    const executeTool = vi.fn().mockResolvedValue("should not run");
+    globalThis.fetch = vi.fn((_url, init) => new Promise<Response>((_resolve, reject) => {
+      const signal = init?.signal as AbortSignal;
+      signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    })) as unknown as typeof fetch;
+
+    const run = runTwoPhaseFcLoop({
+      ...baseOptions,
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      executeTool,
+      signal: controller.signal,
+    });
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledOnce());
+    controller.abort();
+
+    await expect(run).rejects.toThrow(/E_RUN_CANCELLED/);
+    expect(executeTool).not.toHaveBeenCalled();
+  });
+
+  it("does not turn cancellation during Soul fetch into a fallback reply", async () => {
+    const adapter = new FakeAdapter();
+    adapter.enqueueText("switch to soul");
+    const controller = new AbortController();
+    const emitted: string[] = [];
+    let calls = 0;
+    globalThis.fetch = vi.fn((_url, init) => {
+      calls += 1;
+      if (calls === 1) return Promise.resolve(new Response("{}", { status: 200 }));
+      return new Promise<Response>((_resolve, reject) => {
+        const signal = init?.signal as AbortSignal;
+        signal.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+      });
+    }) as unknown as typeof fetch;
+
+    const run = runTwoPhaseFcLoop({
+      ...baseOptions,
+      settings: { provider: "test", baseUrl: "https://test", model: "m", apiKey: "k" },
+      adapter,
+      executeTool: async () => "ok",
+      signal: controller.signal,
+      onEvent: (event) => emitted.push(event.type),
+    });
+    await vi.waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(2));
+    controller.abort();
+
+    await expect(run).rejects.toThrow(/E_RUN_CANCELLED/);
+    expect(emitted).not.toContain("text_message_start");
+  });
+
   it("passes an explicit required tool choice only to the first tool-phase request", async () => {
     const adapter = new FakeAdapter();
     adapter.enqueueText("模型仍未调用工具");

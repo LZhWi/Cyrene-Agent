@@ -20,6 +20,7 @@ import { checkPermission, type ToolRiskLevel } from "../permission";
 import { getAdapterForConfig, type ChatMessage } from "./vendors";
 import { extractLastUserQuery, type ToolContext } from "./tool-context";
 import { runHistoryRetrievalV2AutoProbe } from "./history-tools";
+import { isRunCancelledError, RunControl } from "../runtime/run-control";
 import {
   runTwoPhaseFcLoop,
   type TwoPhaseEvent,
@@ -135,8 +136,10 @@ function toAguiEvent(event: TwoPhaseEvent): BaseEvent {
 async function executeToolCall(
   tc: { id: string; name: string; arguments: string },
   runnableToolIds: Set<string>,
-  ctx?: ToolContext,
+  ctx: ToolContext,
+  control: RunControl,
 ): Promise<string> {
+  control.throwIfCancelled();
   const displayTool = toolRegistry.getById(tc.name);
   let args: Record<string, unknown> = {};
   try {
@@ -160,15 +163,39 @@ async function executeToolCall(
     toolDescription: tool.description,
     args,
     risk,
+    signal: control.signal,
   });
+  control.throwIfCancelled();
   if (!perm.allowed) {
     return "[已拒绝] " + (perm.reason || "权限不足");
   }
 
+  const effectId = tc.id || `${tc.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  control.startEffect({
+    id: effectId,
+    toolId: tc.name,
+    kind: tool.effectKind ?? (
+      risk === "fs-read" || risk === "network"
+        ? "read"
+        : risk === "fs-write"
+          ? "mutation"
+          : risk === "shell" || risk === "input-control"
+            ? "external_side_effect"
+            : "unknown"
+    ),
+  });
   try {
-    return await tool.execute(args, tool.needsContext ? ctx : undefined);
+    const output = await tool.execute(args, ctx);
+    control.throwIfCancelled();
+    control.finishEffect(effectId, "completed");
+    return output;
   } catch (err) {
+    if (control.signal.aborted || isRunCancelledError(err)) {
+      control.finishEffect(effectId, "cancelled");
+      throw err;
+    }
     const errMsg = err instanceof Error ? err.message : String(err);
+    control.finishEffect(effectId, "failed", errMsg);
     return "[工具执行失败] " + errMsg;
   }
 }
@@ -188,10 +215,9 @@ export class CyreneAgent extends AbstractAgent {
    * 跑 FC 循环并返回事件流。桥层订阅这个流转发给渲染进程。
    * 传入的 options 会原样跑——settings/messages/timeout 都在这里。
    */
-  runWithEvents(options: CyreneRunOptions): Observable<BaseEvent> {
+  runWithEvents(options: CyreneRunOptions, control = new RunControl()): Observable<BaseEvent> {
     const threadId = this.threadId;
-    const runId = `run-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const abortController = new AbortController();
+    const runId = control.runId;
 
     return new Observable<BaseEvent>((subscriber) => {
       let cancelled = false;
@@ -214,15 +240,23 @@ export class CyreneAgent extends AbstractAgent {
             soulTailAnchorContent: options.soulTailAnchorContent,
             timeoutMs: options.timeoutMs,
             imageCaptionFallback: options.imageCaptionFallback,
-            executeTool: (tc, runnableToolIds) => executeToolCall(tc, runnableToolIds, {
-              userQuery: extractLastUserQuery(options.messages),
-              conversationId: options.conversationId ?? "default",
-            }),
+            executeTool: (tc, runnableToolIds) => executeToolCall(
+              tc,
+              runnableToolIds,
+              {
+                userQuery: extractLastUserQuery(options.messages),
+                conversationId: options.conversationId ?? "default",
+                runId,
+                signal: control.signal,
+                runControl: control,
+              },
+              control,
+            ),
             onEvent: (event) => {
               if (cancelled) return;
               subscriber.next(toAguiEvent(event));
             },
-            signal: abortController.signal,
+            signal: control.signal,
           });
 
           this.lastResult = {
@@ -243,6 +277,7 @@ export class CyreneAgent extends AbstractAgent {
           }
 
           if (cancelled) return;
+          control.complete();
           subscriber.next({
             type: EventType.RUN_FINISHED,
             threadId,
@@ -251,14 +286,19 @@ export class CyreneAgent extends AbstractAgent {
           subscriber.complete();
         } catch (err) {
           if (cancelled) return;
+          if (control.signal.aborted || isRunCancelledError(err)) {
+            subscriber.error(new Error(`E_RUN_CANCELLED: ${runId}`));
+            return;
+          }
           console.error(LOG_PREFIX, "run 失败:", err);
+          control.complete();
           subscriber.error(err instanceof Error ? err : new Error(String(err)));
         }
       })();
 
       return () => {
         cancelled = true;
-        abortController.abort();
+        if (control.status === "active") control.cancel("observable unsubscribed");
       };
     });
   }

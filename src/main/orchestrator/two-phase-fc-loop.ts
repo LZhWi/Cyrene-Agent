@@ -47,6 +47,7 @@ import type {
 } from "./vendors/types";
 import type { ToolDefinition } from "./tool-registry";
 import type { ToolCallResult } from "./types";
+import { isRunCancelledError, RunCancelledError } from "../runtime/run-control";
 
 export interface AgentLoopSettings {
   provider: string;
@@ -220,10 +221,14 @@ async function callAdapter(
   req: ChatRequest,
   cfg: AgentLoopSettings,
   perRoundTimeoutMs: number,
+  signal?: AbortSignal,
 ): Promise<unknown> {
+  if (signal?.aborted) throw new RunCancelledError("unknown");
   const http = adapter.buildRequest(req, cfg);
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), perRoundTimeoutMs);
+  const onAbort = () => controller.abort(signal?.reason);
+  signal?.addEventListener("abort", onAbort, { once: true });
   try {
     const response = await fetch(http.url, {
       method: "POST",
@@ -243,9 +248,15 @@ async function callAdapter(
       }, "body:", errorText.slice(0, 500));
       throw new Error("模型请求失败：HTTP " + response.status + (errorText ? " — " + errorText.slice(0, 200) : ""));
     }
-    return await response.json();
+    const data = await response.json();
+    if (signal?.aborted) throw new RunCancelledError("unknown");
+    return data;
+  } catch (error) {
+    if (signal?.aborted) throw new RunCancelledError("unknown");
+    throw error;
   } finally {
     clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -295,10 +306,12 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
   let usedImageCaptionFallback = false;
 
   const switchToImageCaptionFallback = async (reason: string): Promise<boolean> => {
+    if (signal?.aborted) throw new RunCancelledError("unknown");
     if (usedImageCaptionFallback || !imageCaptionFallback) return false;
     usedImageCaptionFallback = true;
     console.warn(LOG_PREFIX, "图片直发失败，回退 caption 后重试:", reason);
     conversation = await imageCaptionFallback();
+    if (signal?.aborted) throw new RunCancelledError("unknown");
     return true;
   };
 
@@ -335,8 +348,9 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
 
     let data: unknown;
     try {
-      data = await callAdapter(adapter, req, toolPhaseSettings, perRoundTimeoutMs);
+      data = await callAdapter(adapter, req, toolPhaseSettings, perRoundTimeoutMs, signal);
     } catch (err) {
+      if (signal?.aborted || isRunCancelledError(err)) throw err;
       if (err instanceof Error && err.name === "AbortError") {
         consecutiveTimeouts++;
         console.warn(LOG_PREFIX, "第 " + (round + 1) + " 轮 LLM 请求超时，连续第 " + consecutiveTimeouts + " 次");
@@ -379,6 +393,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
 
       const execResults: ToolExecutionResult[] = [];
       for (const tc of chat.toolCalls) {
+        if (signal?.aborted) throw new RunCancelledError("unknown");
         const toolCallId = tc.id || `${tc.name}-${Date.now()}`;
         const displayTool = tools.find((t) => t.id === tc.name);
 
@@ -401,6 +416,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
         try {
           output = await executeTool(tc, runnableToolIds);
         } catch (err) {
+          if (signal?.aborted || isRunCancelledError(err)) throw err;
           const errMsg = err instanceof Error ? err.message : String(err);
           output = "[工具执行失败] " + errMsg;
           console.error(LOG_PREFIX, "工具执行失败 [" + tc.name + "]:", errMsg);
@@ -505,6 +521,8 @@ async function runSoulPhase(args: {
     recordUsageFn,
   } = args;
 
+  if (signal?.aborted) throw new RunCancelledError("unknown");
+
   onEvent?.({ type: "step_started", stepName: `soul-phase-${reason}` });
   console.log(LOG_PREFIX, "进入 SOUL_PHASE, reason=" + reason);
 
@@ -530,14 +548,8 @@ async function runSoulPhase(args: {
   };
   if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, cfg);
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), forceSummaryTimeoutMs);
-  if (signal) {
-    signal.addEventListener("abort", () => controller.abort());
-  }
-
   try {
-    const data = await callAdapter(adapter, req, cfg, forceSummaryTimeoutMs);
+    const data = await callAdapter(adapter, req, cfg, forceSummaryTimeoutMs, signal);
     const chat = adapter.parseResponse(data);
     const reply = stripLeakedChatTimeContext(chat.text);
     if (chat.usage) {
@@ -570,6 +582,7 @@ async function runSoulPhase(args: {
       soulPhaseReason: reason,
     };
   } catch (err) {
+    if (signal?.aborted || isRunCancelledError(err)) throw err;
     // 兜底再失败也别让整个 run 崩掉。用已收集的工具结果拼一个"任务中断"文案降级返回。
     const errReason = err instanceof Error && err.name === "AbortError"
       ? "总结请求超时"
@@ -585,7 +598,5 @@ async function runSoulPhase(args: {
       totalUsage: accInput > 0 || accOutput > 0 ? { input: accInput, output: accOutput } : undefined,
       soulPhaseReason: reason,
     };
-  } finally {
-    clearTimeout(timer);
   }
 }
