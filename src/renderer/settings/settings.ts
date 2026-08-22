@@ -5007,7 +5007,7 @@ const permissionNote = document.getElementById("plugin-file-note") as HTMLElemen
 
 const PERMISSION_NOTES: Record<PermissionLevel, string> = {
   "read-only": "只读：昔涟不会修改本地任何文件，也不能为你安装新工具。",
-  "scoped": "指定目录：昔涟只能在你授权的目录里读写文件（白名单后续在此面板配置）。",
+  "scoped": "旧版指定目录档当前没有可配置白名单，因此文件访问会被拒绝；请选择只读、每次审批或完全访问。",
   "per-action": "每次审批：每次涉及文件或安装的操作，昔涟都会在聊天里弹卡片让你确认。",
   "full": "完全访问：昔涟可以自由调用本地命令（含 git/npm/pip）。请只在你完全信任的情况下使用。",
 };

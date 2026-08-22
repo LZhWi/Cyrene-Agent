@@ -73,8 +73,8 @@ export function policyFor(level: AgentFileAccessLevel, risk: ToolRiskLevel): "al
     case "read-only":
       return risk === "fs-read" || risk === "network" ? "allow" : "deny";
     case "scoped":
-      // 指定目录档：fs 读写允许（具体路径校验在工具内部做），shell 拒绝
-      if (risk === "fs-read" || risk === "fs-write" || risk === "network") return "allow";
+      // 当前版本没有可配置目录白名单；旧 persisted scoped 值必须 fail closed，不能退化为全盘访问。
+      if (risk === "network") return "allow";
       return "deny";
     case "per-action":
       // 每次审批：除 safe 外都弹审批
@@ -306,6 +306,11 @@ export async function checkPermission(input: {
   const level = currentLevel;
   const policy = policyFor(level, input.risk);
   console.log(LOG_PREFIX, "checkPermission:", input.toolId, "risk=" + input.risk, "level=" + level, "→", policy);
+
+  // scoped 的目录白名单尚未实现，必须在所有自动放行/写入特殊分支之前拒绝文件访问。
+  if (level === "scoped" && (input.risk === "fs-read" || input.risk === "fs-write")) {
+    return { allowed: false, reason: "指定目录档尚未配置授权目录，已拒绝此次文件访问。" };
+  }
 
   // 白名单工具：3 秒通知等待，超时默认允许，用户可阻止
   // write_file 特殊处理：仅桌面路径走 3 秒通知，其他路径走 60 秒审批
