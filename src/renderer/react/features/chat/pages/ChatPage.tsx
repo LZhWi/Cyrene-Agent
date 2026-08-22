@@ -1733,6 +1733,7 @@ export function ChatPage() {
     });
     setToolPanelOpen(false);
     setSkillPanelOpen(false);
+    setModelPanelOpen(false);
   }
 
   async function handleRenameSession(sessionId: string, newTitle: string) {
@@ -2139,7 +2140,7 @@ export function ChatPage() {
       <div className="cy-page-sidebar">
         <div className="cy-page-newtask">
           <NewTaskButton onClick={() => void createNewTask()} />
-          <ToolModeButton active={toolPanelOpen} onClick={() => { setToolPanelOpen((v) => !v); setSkillPanelOpen(false); }} />
+          <ToolModeButton active={toolPanelOpen} onClick={() => { setToolPanelOpen((v) => !v); setSkillPanelOpen(false); setModelPanelOpen(false); }} />
           <SkillModeButton active={skillPanelOpen} onClick={() => { setSkillPanelOpen((v) => !v); setToolPanelOpen(false); setModelPanelOpen(false); }} />
           <ModelModeButton active={modelPanelOpen} onClick={() => { setModelPanelOpen((v) => !v); setToolPanelOpen(false); setSkillPanelOpen(false); }} />
         </div>
