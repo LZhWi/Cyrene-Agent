@@ -1,6 +1,5 @@
-import { app } from "electron";
 import * as fs from "node:fs";
-import * as path from "node:path";
+import { findPromptPath } from "../external-content-paths";
 
 /**
  * 加载 prompts 目录下的 Markdown/文本文件。
@@ -8,15 +7,8 @@ import * as path from "node:path";
  */
 export function loadPromptFile(filename: string): string {
   try {
-    // electron 主进程外（如 vitest）app 不可用，回退到 cwd（仓库根）定位 prompts/
-    let promptsDir: string;
-    try {
-      promptsDir = path.join(app.getAppPath(), "prompts");
-    } catch {
-      promptsDir = path.join(process.cwd(), "prompts");
-    }
-    const filePath = path.join(promptsDir, filename);
-    if (!fs.existsSync(filePath)) return "";
+    const filePath = findPromptPath(filename);
+    if (!filePath) return "";
     return fs.readFileSync(filePath, "utf8").trim();
   } catch {
     return "";

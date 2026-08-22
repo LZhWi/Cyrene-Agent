@@ -13,6 +13,7 @@ import { chunkText } from "./chunk";
 import { feedEntityNamesToJieba } from "../memory/entity-graph";
 import { isL2LocallyRecallable } from "../memory/memory-types";
 import type { DocumentImportControl } from "./file-ingest";
+import { findPromptPath } from "../external-content-paths";
 
 // ── Global RAG instances ──
 let store: JsonVectorStore | null = null;
@@ -42,7 +43,7 @@ export async function initRAG(
     retriever = new HybridRetriever(store, provider);
   }
   worldbook = new WorldbookManager(
-    path.join(app.getAppPath(), "prompts", "worldbook"),
+    findPromptPath("worldbook") ?? path.join(app.getPath("userData"), "empty-worldbook"),
     { stateFile: path.join(app.getPath("userData"), "worldbook-state.json") }
   );
   await worldbook.loadFromDirectory();

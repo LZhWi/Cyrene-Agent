@@ -9,6 +9,7 @@ import { skillRegistry } from "./skill-registry";
 import { registerSkillTools } from "./skill-tools";
 import type { SkillEntry } from "./types";
 import { logger, LogTag } from "../logger";
+import { getExternalContentPaths, resolveSkillScanSources } from "../external-content-paths";
 
 const LOG_PREFIX = "[Skills]";
 
@@ -33,16 +34,13 @@ function loadEnabledState(): Record<string, boolean> {
  * 必须在 app.whenReady 之后调用（依赖 app.getPath）。
  */
 export function initSkills(): void {
-  const builtinDir = path.join(app.getAppPath(), "skills");
-  const userDir = path.join(app.getPath("userData"), "skills");
+  const sources = resolveSkillScanSources(getExternalContentPaths());
 
-  const builtin = scanSkills(builtinDir, "builtin");
-  const user = scanSkills(userDir, "user");
-
-  // 合并：按 id，user 覆盖 builtin（目录级整体覆盖，见 spec 4.1）
+  // 合并：扫描源按低到高优先级排列，user 覆盖 builtin。
   const map = new Map<string, SkillEntry>();
-  for (const s of builtin) map.set(s.id, s);
-  for (const s of user) map.set(s.id, s);
+  for (const source of sources) {
+    for (const skill of scanSkills(source.directory, source.source)) map.set(skill.id, skill);
+  }
 
   // 合并 enabled 状态（settings.json 持久化的覆盖默认 true）
   const saved = loadEnabledState();
@@ -52,6 +50,7 @@ export function initSkills(): void {
   }
 
   registerSkillTools();
+  logger.info(LogTag.Skills, "scan roots:", sources.map((source) => `${source.source}:${source.directory}`).join(" | "));
   logger.info(LogTag.Skills, `loaded ${map.size} skills:`, Array.from(map.keys()).join(", ") || "(none)");
 }
 
@@ -91,15 +90,12 @@ export function listSkillsForUi() {
  * 返回扫描后 registry 中 skill 总数。
  */
 export function rescanSkills(): number {
-  const builtinDir = path.join(app.getAppPath(), "skills");
-  const userDir = path.join(app.getPath("userData"), "skills");
-
-  const builtin = scanSkills(builtinDir, "builtin");
-  const user = scanSkills(userDir, "user");
+  const sources = resolveSkillScanSources(getExternalContentPaths());
 
   const map = new Map<string, SkillEntry>();
-  for (const s of builtin) map.set(s.id, s);
-  for (const s of user) map.set(s.id, s);
+  for (const source of sources) {
+    for (const skill of scanSkills(source.directory, source.source)) map.set(skill.id, skill);
+  }
 
   const saved = loadEnabledState();
   // 清理 registry 中已不存在的 skill，避免删除后仍残留

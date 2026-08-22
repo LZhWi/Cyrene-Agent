@@ -11,12 +11,16 @@ files:
   - dist/**/*
   - "!dist/components/**/*"
   - package.json
-  - prompts/**/*
   - assets/**/*
-  - skills/**/*
   - vendor/**/*
   - "!vendor/cloud-music-mcp/**/*"
   - "!models/**/*"
+  # prompts / skills 作为安装目录根下的独立文件夹，方便用户修改
+extraFiles:
+  - from: prompts
+    to: prompts
+  - from: skills
+    to: skills
 extraResources:
   - from: resources/bin/cyrene-screenshot.exe
     to: bin/cyrene-screenshot.exe

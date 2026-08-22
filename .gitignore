@@ -19,6 +19,7 @@ dist/renderer/live2dcubismcore.min.js
 dist/sim/
 dist/skills/
 release/
+.build-temp/
 # electron-builder 在仓库根生成的产物（与 release/ 同款，不进 git）
 latest.yml
 *.js.map
@@ -34,8 +35,38 @@ resources/bin/mpv/
 # M0 POC scratch（含早期 token/qr.png 敏感产物，仅本地参考）
 tmp-m0-poc/
 
-# electron-builder installer UI 中间产物
-build/installer/
+# build/ 顶层是 NSIS 安装包的源资源（installer.nsh / installer-sidebar.bmp /
+# cyrene-installer-source.png），被 electron-builder.yml 引用，必须进 Git。
+# build/installer/ui/ 是自研安装器 UI 的整个子项目，源码 + 产物都不进 git。
+# 兜底：未来若在 build/ 下新增其他子目录（除了上方白名单的 3 个文件），默认全部忽略。
+build/*
+!build/installer/
+build/installer/*
+!build/installer/installer.nsh
+!build/installer/installer-sidebar.bmp
+!build/installer/cyrene-installer-source.png
+build/installer/ui/
+build/installer/ui/node_modules/
+build/installer/ui/dist/
+build/installer/ui/dist-electron/
+build/installer/ui/dist-installer/
+build/installer/ui/payload/
+build/installer/ui/dev*.log
+
+# Renderer 构建产物——保留产品资源（audio/avatars/feeling/icons/models/stickers/status），
+# 其他 Vite 产物（assets、各窗口 index.html、live2dcubismcore.min.js 等）已在上方忽略。
+# 额外兜底：未跟踪的 context-usage 预览图与时间戳备份目录
+dist/renderer/context-usage/
+dist/renderer-old-*/
+
+# build/installer/ui/src/ 下的同名源图（setup/setup-loading/succeed/failed/ch）被安装 UI 引用，
+# 打包时由 vite/webpack 复制到 src/renderer/react/assets/ 作为产物副本。
+# 真正的源在 build/installer/ui/src/（已在上方 ignore），副本是构建输出，按文件名 ignore 避免误提交。
+src/renderer/react/assets/ch.png
+src/renderer/react/assets/failed.png
+src/renderer/react/assets/setup.png
+src/renderer/react/assets/setup-loading.png
+src/renderer/react/assets/succeed.png
 
 # OpenCode 二进制 distribution（按需本地下载，不进 git）
 resources/opencode/
@@ -70,8 +101,9 @@ tmp/
 tmpr-build.log
 tmprenderer-build.log
 
-# Legacy preview folder (不在代码引用，体积 ~4MB；从历史 commit 中移除并忽略)
+# Legacy UI prototype directories (not referenced by production code)
 preview/
+player-demo/
 
 # Playwright CLI scratch
 .playwright-cli/

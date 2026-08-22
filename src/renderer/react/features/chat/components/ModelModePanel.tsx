@@ -69,7 +69,7 @@ function getProviderIconUrl(provider: string | undefined): string {
     if (normalized.includes("custom") || normalized.includes("自定义") || normalized.includes("本地模型")) return "custom-endpoint";
     return null;
   })();
-  return key ? `/icons/providers/${key}.svg` : fallbackIconUrl;
+  return key ? `../icons/providers/${key}.svg` : fallbackIconUrl;
 }
 
 function ModelIcon({ provider }: { provider: string }) {

@@ -9,4 +9,10 @@ describe("ModelModePanel", () => {
     expect(source).toContain("setDefaultModelProfile");
     expect(source).toContain("deleteModelProfile");
   });
+
+  it("uses a file-protocol-safe relative path for provider icons", () => {
+    const source = fs.readFileSync(path.join(__dirname, "ModelModePanel.tsx"), "utf8");
+    expect(source).toContain('`../icons/providers/${key}.svg`');
+    expect(source).not.toContain('`/icons/providers/${key}.svg`');
+  });
 });

@@ -126,14 +126,15 @@ Cyrene 无需本地大语言模型即可正常聊天，但建议安装 **BGE-M3 
 
 ### 5. 音乐功能（可选）
 
-音乐工具基于 [Code-MonkeyZhang/cloud-music-mcp](https://github.com/Code-MonkeyZhang/cloud-music-mcp) 集成。如需使用网易云音乐功能，需额外安装：
+音乐功能由主进程内置的 `NeteaseOpenapiProvider` + `MpvController` 组成：
 
-- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** — Python 包管理器，首次运行音乐工具时会自动下载 Python 并安装依赖
-- **[网易云音乐桌面客户端](https://music.163.com/)** — 用于播放歌曲，需注册 `orpheus://` 协议
+- **数据源** — `NeteaseOpenapiProvider` 通过网易云音乐 OpenAPI 拉取搜索结果、推荐、歌单、收藏等内容；需要在设置中配置 OpenAPI 凭据（Cookie / Token 等）。
+- **播放** — `MpvController` 启动打包在 `resources/bin/mpv/mpv.exe` 的 mpv 子进程，通过命名管道（Windows）或 Unix socket 发送 JSON IPC 命令，**不需要安装网易云桌面客户端或注册 `orpheus://` 协议**。
+- **mpv 缺失时的处理** — 由 `npm run prepare:mpv` 在打包阶段拷贝 mpv 二进制到 `resources/bin/mpv/`；本地未检测到 mpv 时，音乐工具会返回 `client_unavailable` 并在 UI 中提示，但不影响其他功能。
 
 > [!NOTE]
 >
-> 音乐功能为可选组件，不影响聊天及其他核心功能。未安装 `uv` 时，音乐工具会自动跳过并在界面中提示。
+> 音乐功能为可选组件，不影响聊天及其他核心功能。未配置 OpenAPI 凭据或未检测到 mpv 时，音乐工具会自动跳过并在界面中提示。
 
 ### 6. 构建并启动
 
@@ -308,6 +309,16 @@ CyreneHarness 是 Cyrene Agent 的核心 Agent Loop，负责把**模型决策、
 - **代码高亮** — 支持多种常用编程语言的代码块语法高亮和代码复制。
 - **数学公式** — 支持行内公式与块级公式渲染。
 - **流式兼容** — 生成过程中保持稳定输出，消息完成后再渲染为完整富文本内容。
+
+#### 🎵 音乐陪伴
+
+![Cyrene Music 播放界面](./docs/image/music.png)
+
+- **Cyrene Music 独立窗口** — 桌面端内置「Cyrene Music」播放器，支持歌单标签切换、本地缓存与播放列表管理，沉浸感更强。
+- **网易云音乐数据源** — 通过自研 `NeteaseOpenapiProvider` 调用网易云 OpenAPI，提供搜索歌曲 / 艺人 / 专辑、每日推荐、我的歌单与收藏等能力。
+- **mpv 内置播放** — 由 `MpvController` 启动打包在 `resources/bin/mpv/mpv.exe` 中的 mpv 进程，通过命名管道（Windows）或 Unix socket 收发 JSON IPC 命令，实现加载、播放、暂停、跳转、音量、停止等控制，无需唤起外部客户端。
+- **多工具串联** — 在 `Work / Daily` 模式中可与其他工具（联网搜索、文件、文档等）组合完成「搜歌 → 加入歌单 → 播放」等连续任务。
+- **懒启动 + 可降级** — 音乐后端在首次真实音乐操作时才建立网络会话，空闲时不会占用资源；mpv 缺失时会进入 `client_unavailable` 路径并向 UI 提示，不影响聊天与其他核心功能。
 
 #### 🧠 个性化记忆
 

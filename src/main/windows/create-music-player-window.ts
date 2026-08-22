@@ -6,7 +6,7 @@ import { getCurrentAppIconPath, setMusicPlayerWindow, musicPlayerWindow } from "
 /**
  * 创建/复用音乐播放器窗口。
  *
- * 窗口尺寸匹配 player-demo 设计（960×640 卡片）。
+ * 窗口尺寸采用音乐播放器正式设计（960×640 卡片）。
  * 复用 settings/sidebar 那一套窗口工厂模式：已存在则 show+focus。
  */
 export function createMusicPlayerWindow(): void {

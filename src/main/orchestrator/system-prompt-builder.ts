@@ -1,6 +1,4 @@
 import fs from "node:fs";
-import path from "node:path";
-import { app } from "electron";
 import { loadPromptFile } from "../prompts/prompt-loader";
 import {
   STYLE_FILE_BY_ID,
@@ -88,11 +86,5 @@ export function buildSoulSystemBasePrompt(styleFile: string): string {
 }
 
 export function loadSoulFeelingContext(): string {
-  try {
-    const soulPath = path.join(app.getAppPath(), "prompts", "soul.md");
-    if (!fs.existsSync(soulPath)) return "";
-    return fs.readFileSync(soulPath, "utf8");
-  } catch {
-    return "";
-  }
+  return loadPromptFile("soul.md");
 }

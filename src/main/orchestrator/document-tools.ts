@@ -12,6 +12,7 @@ import * as path from "path";
 import { app } from "electron";
 import { toolRegistry } from "./tool-registry";
 import type { ToolContext } from "./tool-context";
+import { findSkillPath } from "../external-content-paths";
 
 const LOG_PREFIX = "[DocTools]";
 
@@ -58,14 +59,7 @@ function loadStylesDir(skillId: string): StyleCacheEntry {
   styleLoaded.add(skillId);
   const cache: StyleCacheEntry = {};
   try {
-    const candidates = [
-      path.join(app.getAppPath(), "skills", skillId, "styles"),
-      path.join(process.cwd(), "skills", skillId, "styles"),
-    ];
-    let stylesDir = "";
-    for (const c of candidates) {
-      if (fs.existsSync(c)) { stylesDir = c; break; }
-    }
+    const stylesDir = findSkillPath(skillId, "styles");
     if (!stylesDir) return {};
 
     for (const f of fs.readdirSync(stylesDir)) {
@@ -118,15 +112,7 @@ export function registerDocumentTools(): void {
     if (themesLoaded) return;
     themesLoaded = true;
     try {
-      // 尝试多个可能的 skill 路径
-      const candidates = [
-        path.join(app.getAppPath(), "skills", "xlsx", "styles"),
-        path.join(process.cwd(), "skills", "xlsx", "styles"),
-      ];
-      let stylesDir = "";
-      for (const c of candidates) {
-        if (fs.existsSync(c)) { stylesDir = c; break; }
-      }
+      const stylesDir = findSkillPath("xlsx", "styles");
       if (!stylesDir) return;
 
       for (const f of fs.readdirSync(stylesDir)) {

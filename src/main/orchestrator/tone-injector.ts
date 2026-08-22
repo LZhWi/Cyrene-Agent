@@ -4,10 +4,9 @@
 // 场景样本仅作参考，模型按昔涟的语气表达相同意思。
 
 import * as fs from "fs";
-import * as path from "path";
-import { app } from "electron";
 import { matchScene, type SceneId, type SceneIndex } from "../scene-embedder";
 import { type EmbeddingProvider } from "../rag/embedding";
+import { findPromptPath, findSkillPath } from "../external-content-paths";
 
 /** 场景匹配阈值——贴着 farewell 最低分 0.722 收紧，所有正确命中都能过。 */
 const SCENE_MATCH_THRESHOLD = 0.72;
@@ -51,8 +50,8 @@ const DEFAULT_RULES = `## 句式禁止
 /** 从 prompts/tone-rules.md 加载语气规则，文件不存在时用内置默认值。 */
 function loadToneRules(): string {
   try {
-    const rulesPath = path.join(app.getAppPath(), "prompts", "tone-rules.md");
-    if (fs.existsSync(rulesPath)) {
+    const rulesPath = findPromptPath("tone-rules.md");
+    if (rulesPath) {
       const content = fs.readFileSync(rulesPath, "utf8").trim();
       // 去掉 frontmatter（如果有）
       const body = content.startsWith("---")
@@ -72,9 +71,8 @@ function loadToneRules(): string {
 function loadSceneSamples(scene: SceneId): string {
   if (!scene) return "";
   try {
-    const skillDir = path.join(app.getAppPath(), "skills", "cyrene-original-voice", "references");
-    const filePath = path.join(skillDir, `${scene}.md`);
-    if (!fs.existsSync(filePath)) return "";
+    const filePath = findSkillPath("cyrene-original-voice", `references/${scene}.md`);
+    if (!filePath) return "";
     return fs.readFileSync(filePath, "utf8");
   } catch {
     return "";
