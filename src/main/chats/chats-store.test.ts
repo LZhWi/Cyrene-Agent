@@ -88,4 +88,26 @@ describe("chats store", () => {
     expect(second.id).not.toBe(first.id);
     expect(store.getSessionByPurpose("proactive-chat")?.id).toBe(second.id);
   });
+
+  it("reuses an isolated in-memory session snapshot between durable writes", async () => {
+    const store = await import("./chats-store");
+    store.initialize();
+    const created = store.createSession({
+      initialMessages: [{ id: "1", role: "user", content: "original", at: 1 }],
+    });
+    const readSpy = vi.spyOn(fs, "readFileSync");
+
+    const first = store.getSession(created.id)!;
+    first.messages[0].content = "external mutation";
+    expect(store.getSession(created.id)?.messages[0].content).toBe("original");
+    store.appendMessage(created.id, { id: "2", role: "model", content: "reply", at: 2 });
+    expect(store.getSessionPage(created.id, null, 10)?.messages).toHaveLength(2);
+    expect(readSpy).not.toHaveBeenCalled();
+    readSpy.mockRestore();
+
+    vi.resetModules();
+    const reloaded = await import("./chats-store");
+    reloaded.initialize();
+    expect(reloaded.getSession(created.id)?.messages).toHaveLength(2);
+  });
 });

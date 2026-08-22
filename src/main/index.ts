@@ -10,9 +10,10 @@ import { DEFAULT_UI_FONT, isSupportedFontFileName, normalizeUiFont, type UiFont 
 import { normalizeUiIcon, UI_ICON_PRESETS, type UiIcon } from "../shared/ui-icon";
 import { foldReasoning, normalizeReasoningPreference, type ReasoningPreference } from "../shared/reasoning";
 import { getUiFontResponseHeaders, isSafeUiFontRequest } from "./ui-font-protocol";
-import { writeFileAtomicSync, writeJsonAtomicSync } from "./runtime/atomic-file";
+import { writeFileAtomic, writeJsonAtomicSync } from "./runtime/atomic-file";
 import { appendRotatingLogSync } from "./runtime/rotating-log";
 import { pruneDirectoryByMtimeSync } from "./runtime/cache-pruner";
+import { AsyncOperationTracker } from "./runtime/async-operation-tracker";
 import {
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
@@ -321,6 +322,7 @@ function getTtsCacheDir(): string {
 const TTS_CACHE_MAX_BYTES = 512 * 1024 * 1024;
 const TTS_CACHE_TARGET_BYTES = 384 * 1024 * 1024;
 const ttsStreamControls = new TtsStreamControlRegistry();
+const ttsCacheWrites = new AsyncOperationTracker();
 let ttsCachePruneTimer: NodeJS.Timeout | null = null;
 let desktopShutdownPromise: Promise<void> | null = null;
 
@@ -353,6 +355,7 @@ function shutdownDesktopRuntime(): Promise<void> {
       ttsCachePruneTimer = null;
     }
     await Promise.allSettled([
+      ttsCacheWrites.settleAll(),
       Promise.resolve().then(() => l2DmaeManager.flushNow()),
       Promise.resolve().then(() => shutdownChannels()),
       Promise.resolve().then(() => shutdownMcpManager()),
@@ -381,8 +384,17 @@ function scheduleTtsCachePrune(): void {
   ttsCachePruneTimer.unref();
 }
 
-function writeTtsCacheFile(filePath: string, audio: Buffer): void {
-  writeFileAtomicSync(filePath, audio);
+async function readTtsCacheFile(filePath: string): Promise<Buffer | null> {
+  try {
+    return await fs.promises.readFile(filePath);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+
+async function writeTtsCacheFile(filePath: string, audio: Buffer): Promise<void> {
+  await ttsCacheWrites.track(writeFileAtomic(filePath, audio));
   scheduleTtsCachePrune();
 }
 
@@ -5009,8 +5021,8 @@ app.whenReady().then(async () => {
         expectedPath = getTtsCachePath(payload.expectedCacheKey, format);
       } catch { /* expectedCacheKey 格式非法，忽略 */ }
     }
-    if (expectedPath && fs.existsSync(expectedPath)) {
-      const cachedBuffer = fs.readFileSync(expectedPath);
+    const cachedBuffer = expectedPath ? await readTtsCacheFile(expectedPath) : null;
+    if (cachedBuffer) {
       appendMinimaxTtsLog({
         requestId: `tts-cache-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         ts: new Date().toISOString(),
@@ -5033,14 +5045,12 @@ app.whenReady().then(async () => {
 
     const cacheKey = buildTtsCacheKey(payload);
     const audioPath = getTtsCachePath(cacheKey, format);
-    fs.mkdirSync(path.dirname(audioPath), { recursive: true });
-
     const audioBuffer = await ttsSynthesize({
       ...payload,
       format,
       debugLog: appendMinimaxTtsLog,
     });
-    writeTtsCacheFile(audioPath, audioBuffer);
+    await writeTtsCacheFile(audioPath, audioBuffer);
     appendMinimaxTtsLog({
       requestId: `tts-cache-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ts: new Date().toISOString(),
@@ -5074,8 +5084,18 @@ app.whenReady().then(async () => {
     if (payload.expectedCacheKey) {
       try { expectedPath = getTtsCachePath(payload.expectedCacheKey, format); } catch { /* */ }
     }
-    if (expectedPath && fs.existsSync(expectedPath)) {
-      const cachedBuf = fs.readFileSync(expectedPath);
+    let cachedBuf: Buffer | null;
+    try {
+      cachedBuf = expectedPath ? await readTtsCacheFile(expectedPath) : null;
+    } catch (error) {
+      ttsStreamControls.finish(payload.streamId);
+      throw error;
+    }
+    if (cachedBuf) {
+      if (signal.aborted) {
+        ttsStreamControls.finish(payload.streamId);
+        return { started: false, cacheKey: payload.expectedCacheKey, cached: true };
+      }
       appendMinimaxTtsLog({
         requestId: `tts-stream-cache-${Date.now()}`,
         ts: new Date().toISOString(),
@@ -5097,7 +5117,6 @@ app.whenReady().then(async () => {
 
     const cacheKey = buildTtsCacheKey(payload);
     const audioPath = getTtsCachePath(cacheKey, format);
-    fs.mkdirSync(path.dirname(audioPath), { recursive: true });
     const fullChunks: Buffer[] = [];
 
     // 异步合成，不 await（handler 立即返回，chunk 通过 send 推送）
@@ -5122,7 +5141,7 @@ app.whenReady().then(async () => {
         });
         if (signal.aborted) return;
         // 落盘缓存（用完整 buffer，不用拼接的 fullChunks——synthesize 返回的更可靠）
-        writeTtsCacheFile(audioPath, audioBuffer);
+        await writeTtsCacheFile(audioPath, audioBuffer);
         appendMinimaxTtsLog({
           requestId: `tts-stream-${Date.now()}`,
           ts: new Date().toISOString(),
@@ -5180,8 +5199,8 @@ app.whenReady().then(async () => {
         expectedPath = getTtsCachePath(payload.expectedCacheKey, format);
       } catch { /* expectedCacheKey 格式非法，忽略 */ }
     }
-    if (expectedPath && fs.existsSync(expectedPath)) {
-      const cachedBuffer = fs.readFileSync(expectedPath);
+    const cachedBuffer = expectedPath ? await readTtsCacheFile(expectedPath) : null;
+    if (cachedBuffer) {
       appendGptsovitsTtsLog({
         requestId: `gptsovits-cache-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         ts: new Date().toISOString(),
@@ -5206,14 +5225,12 @@ app.whenReady().then(async () => {
     const request = resolveGptsovitsRequest(payload);
     const cacheKey = buildGptsovitsCacheKey(request);
     const audioPath = getTtsCachePath(cacheKey, format);
-    fs.mkdirSync(path.dirname(audioPath), { recursive: true });
-
     const result = await gptsovitsSynthesize({
       ...request,
       format,
       debugLog: appendGptsovitsTtsLog,
     });
-    writeTtsCacheFile(audioPath, result.audio);
+    await writeTtsCacheFile(audioPath, result.audio);
     appendGptsovitsTtsLog({
       requestId: `gptsovits-cache-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ts: new Date().toISOString(),
@@ -5265,8 +5282,8 @@ app.whenReady().then(async () => {
         expectedPath = getTtsCachePath(payload.expectedCacheKey, format);
       } catch { /* expectedCacheKey 格式非法，忽略 */ }
     }
-    if (expectedPath && fs.existsSync(expectedPath)) {
-      const cachedBuffer = fs.readFileSync(expectedPath);
+    const cachedBuffer = expectedPath ? await readTtsCacheFile(expectedPath) : null;
+    if (cachedBuffer) {
       appendCustomCloudTtsLog({
         requestId: `custom-cloud-cache-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         ts: new Date().toISOString(),
@@ -5289,8 +5306,6 @@ app.whenReady().then(async () => {
 
     const cacheKey = buildCustomCloudCacheKey(payload);
     const audioPath = getTtsCachePath(cacheKey, format);
-    fs.mkdirSync(path.dirname(audioPath), { recursive: true });
-
     const result = await customCloudSynthesize({
       endpointUrl: payload.endpointUrl,
       apiKey: payload.apiKey,
@@ -5302,7 +5317,7 @@ app.whenReady().then(async () => {
       timeoutMs: payload.timeoutMs,
       debugLog: appendCustomCloudTtsLog,
     });
-    writeTtsCacheFile(audioPath, result.audio);
+    await writeTtsCacheFile(audioPath, result.audio);
     appendCustomCloudTtsLog({
       requestId: `custom-cloud-cache-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ts: new Date().toISOString(),
@@ -5355,8 +5370,8 @@ app.whenReady().then(async () => {
         expectedPath = getTtsCachePath(payload.expectedCacheKey, format);
       } catch { /* expectedCacheKey 格式非法，忽略 */ }
     }
-    if (expectedPath && fs.existsSync(expectedPath)) {
-      const cachedBuffer = fs.readFileSync(expectedPath);
+    const cachedBuffer = expectedPath ? await readTtsCacheFile(expectedPath) : null;
+    if (cachedBuffer) {
       appendMimoTtsLog({
         requestId: `mimo-cache-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         ts: new Date().toISOString(),
@@ -5379,8 +5394,6 @@ app.whenReady().then(async () => {
 
     const cacheKey = buildMimoCacheKey(payload);
     const audioPath = getTtsCachePath(cacheKey, format);
-    fs.mkdirSync(path.dirname(audioPath), { recursive: true });
-
     const result = await mimoSynthesize({
       apiKey: payload.apiKey,
       voiceAudioPath: payload.voiceAudioPath,
@@ -5388,7 +5401,7 @@ app.whenReady().then(async () => {
       stylePrompt: payload.stylePrompt,
       debugLog: appendMimoTtsLog,
     });
-    writeTtsCacheFile(audioPath, result.audio);
+    await writeTtsCacheFile(audioPath, result.audio);
     appendMimoTtsLog({
       requestId: `mimo-cache-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ts: new Date().toISOString(),

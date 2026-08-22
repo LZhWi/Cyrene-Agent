@@ -31,7 +31,23 @@ let rootDir = "";
 let sessionsDir = "";
 let indexPath = "";
 let indexCache: ChatSessionMeta[] = [];
+const SESSION_CACHE_CAPACITY = 8;
+const sessionCache = new Map<string, ChatSession>();
 let initialized = false;
+
+function cloneSession(session: ChatSession): ChatSession {
+  return structuredClone(session);
+}
+
+function rememberSession(session: ChatSession): void {
+  sessionCache.delete(session.id);
+  sessionCache.set(session.id, cloneSession(session));
+  while (sessionCache.size > SESSION_CACHE_CAPACITY) {
+    const oldestId = sessionCache.keys().next().value;
+    if (oldestId === undefined) break;
+    sessionCache.delete(oldestId);
+  }
+}
 
 function ensureDirs(): void {
   if (!fs.existsSync(rootDir)) fs.mkdirSync(rootDir, { recursive: true });
@@ -79,6 +95,11 @@ function sessionPath(id: string): string {
 }
 
 function readSessionFile(id: string): ChatSession | null {
+  const cached = sessionCache.get(id);
+  if (cached) {
+    rememberSession(cached);
+    return cloneSession(cached);
+  }
   const filePath = sessionPath(id);
   if (!fs.existsSync(filePath)) return null;
   try {
@@ -87,6 +108,7 @@ function readSessionFile(id: string): ChatSession | null {
     if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.messages)) {
       return null;
     }
+    rememberSession(parsed);
     return parsed;
   } catch (err) {
     console.warn("[chats-store] session 文件解析失败:", id, err);
@@ -96,6 +118,7 @@ function readSessionFile(id: string): ChatSession | null {
 
 function writeSessionFile(session: ChatSession): void {
   atomicWriteJson(sessionPath(session.id), session);
+  rememberSession(session);
 }
 
 function metaFromSession(session: ChatSession): ChatSessionMeta {
@@ -139,6 +162,7 @@ export function initialize(): void {
   indexPath = path.join(rootDir, INDEX_FILE);
   ensureDirs();
   indexCache = readIndexFromDisk();
+  sessionCache.clear();
   initialized = true;
 }
 
@@ -317,6 +341,7 @@ export function deleteSession(id: string): boolean {
     }
   }
   const inIndex = indexCache.some((m) => m.id === id);
+  sessionCache.delete(id);
   if (inIndex) removeMetaById(id);
   return fileExisted || inIndex;
 }
