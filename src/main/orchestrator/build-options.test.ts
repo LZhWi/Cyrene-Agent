@@ -68,6 +68,46 @@ describe("build-options", () => {
     }, deps);
     expect(result.options.soulSystemBaseContent).toContain(`[MODE:${mode}]`);
   });
+
+  it("keeps chat tool-free when enhancement switch is off", async () => {
+    const deps = createBuildDeps();
+    deps.toolRegistry.getEnabled = () => [
+      { id: "music_search", name: "搜索歌曲", description: "d", enabled: true } as never,
+    ];
+    const result = await buildAgentRunOptions({
+      sessionId: "chat-plain",
+      mode: "chat",
+      executionMode: "chat",
+      messages: [{ role: "user", content: "你好" }],
+    }, deps);
+    expect(result.options.tools).toEqual([]);
+    expect(result.options.toolSystemContent).not.toContain("TOOL_SYSTEM");
+  });
+
+  it("exposes only opted-in tools for enhanced chat", async () => {
+    const deps = createBuildDeps();
+    deps.loadGeneralSettings = () => ({
+      currentStyleId: "default",
+      customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+      chatSocialContextEnabled: false,
+      chatToolsEnabled: true,
+      // 勾选 music_search；read_file 不勾（验证未声明 modes 的工具不漏进 chat）。
+      toolModeOverrides: { music_search: { chat: true }, read_file: { chat: false } },
+    });
+    deps.toolRegistry.getEnabled = () => [
+      { id: "music_search", name: "搜索歌曲", description: "d", enabled: true },
+      { id: "read_file", name: "读文件", description: "d", enabled: true },
+    ] as never;
+    const result = await buildAgentRunOptions({
+      sessionId: "chat-tools",
+      mode: "chat",
+      executionMode: "chat",
+      messages: [{ role: "user", content: "放首歌" }],
+    }, deps);
+    expect((result.options.tools ?? []).map((t: { id: string }) => t.id)).toEqual(["music_search"]);
+    // 有工具时 chat 也注入工具目录 prompt（进 harness stablePrefix）。
+    expect(result.options.toolSystemContent).toContain("TOOL_SYSTEM");
+  });
   it("does not include legacy Ask Soul prompt fields", async () => {
     const deps = createBuildDeps()
     deps.loadUserProfile = () => ({

@@ -106,6 +106,7 @@ export interface BuildOptionsDeps {
   buildSoulSystemBasePrompt: (styleFile: string) => string;
   resolveRunCapabilities?: (input: {
     mode: ConversationMode; activeSearchBackend: SearchBackend; toolModeOverrides?: ToolModeOverrides; skillModeOverrides?: SkillModeOverrides;
+    chatToolsEnabled?: boolean;
   }) => RunCapabilities;
   /** 已由 main 侧解析好的 style Markdown；build-options 只负责注入边界。 */
   readStylePrompt: (styleId: StyleId) => string;
@@ -212,6 +213,8 @@ export interface StyleSettingsLite {
   chatSocialContextEnabled?: unknown;
   /** 工具-模式覆盖层（三模适配层）。未提供时按 modes 字段或全可见过滤。 */
   toolModeOverrides?: ToolModeOverrides;
+  /** Chat 模式工具增强总开关。未提供时视为关闭（chat 无工具，现状行为）。 */
+  chatToolsEnabled?: boolean;
   /** Skill-模式覆盖层（三模适配层）。未提供时按 modes 字段或全可见过滤。 */
   skillModeOverrides?: SkillModeOverrides;
 }
@@ -643,10 +646,21 @@ export async function buildAgentRunOptions(
   // 搜索后端互斥过滤：每轮只暴露当前后端对应的搜索工具
   const generalSettings = deps.loadGeneralSettings();
   const activeSearchBackend = ((generalSettings as Record<string, unknown>).searchEngine as string ?? "off") as SearchBackend;
-  const filteredBySearch = isChatMode ? [] : filterToolsBySearchBackend(
-    enabledTools as unknown as Array<{ id: string }>,
-    activeSearchBackend,
-  );
+  // Chat 模式工具增强（fallbackCapabilities 路径，与 resolveRunCapabilities 同口径）：
+  // 总开关开启时仅放行 Chat tab 显式勾选（override.chat===true）的工具，
+  // 严格 opt-in——不走"未声明 modes 即全可见"的默认规则，防止 fs/git 等
+  // 未声明 modes 的工具意外漏进闲聊会话。
+  const chatOptInTools = (isChatMode && styleSettings.chatToolsEnabled === true)
+    ? (modeEnabledTools as readonly ToolDefinition[]).filter(
+      (t) => styleSettings.toolModeOverrides?.[t.id]?.chat === true,
+    )
+    : [];
+  const filteredBySearch = isChatMode
+    ? filterToolsBySearchBackend(chatOptInTools as unknown as Array<{ id: string }>, activeSearchBackend)
+    : filterToolsBySearchBackend(
+      enabledTools as unknown as Array<{ id: string }>,
+      activeSearchBackend,
+    );
 
   const fallbackCapabilities: RunCapabilities = {
     mode: resolvedMode,
@@ -660,6 +674,7 @@ export async function buildAgentRunOptions(
     activeSearchBackend,
     toolModeOverrides: styleSettings.toolModeOverrides,
     skillModeOverrides: styleSettings.skillModeOverrides,
+    chatToolsEnabled: styleSettings.chatToolsEnabled === true,
   }) ?? fallbackCapabilities;
   enabledSkills = capabilities.skills;
   skillCatalog = deps.buildSkillCatalog(enabledSkills);
@@ -679,7 +694,11 @@ export async function buildAgentRunOptions(
   console.log(`[Cyrene] 搜索后端=${activeSearchBackend} 暴露搜索工具=[${searchToolIds.join(", ") || "无"}]`);
   const baseSoulSystemPrompt = deps.buildModePrompt?.(resolvedMode)
     ?? deps.buildSoulSystemBasePrompt(basePromptMode);
-  const baseToolSystemPrompt = resolvedMode === "chat" ? "" : deps.buildToolSystemPrompt(resolvedMode, runTools);
+  // Chat 工具增强开启且有勾选工具时，chat 也注入工具目录 prompt
+  //（buildToolSystemPrompt 忽略 mode，只按工具列表生成目录，chat 复用安全）。
+  const baseToolSystemPrompt = resolvedMode === "chat"
+    ? (runTools.length > 0 ? deps.buildToolSystemPrompt(resolvedMode, runTools) : "")
+    : deps.buildToolSystemPrompt(resolvedMode, runTools);
 
   // toolSystemContent 进入 harness stablePrefix（与人设层一起拼装）：
   // 工具规则 + 运行时工具目录 + 可用 Skill 路由清单。

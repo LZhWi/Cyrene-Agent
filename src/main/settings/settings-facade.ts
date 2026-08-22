@@ -114,6 +114,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   chatLineHeight: 1.75,
   assistantBubbleEnabled: true,
   toolModeOverrides: {},
+  chatToolsEnabled: false,
   skillModeOverrides: {},
   lspServerOverrides: [],
 };
@@ -287,6 +288,7 @@ export function normalizeGeneralSettings(
       : "mp3",
     ...normalizeChatAppearance(input),
     toolModeOverrides: normalizeToolModeOverrides(input?.toolModeOverrides),
+    chatToolsEnabled: Boolean(input?.chatToolsEnabled),
     skillModeOverrides: normalizeSkillModeOverrides(input?.skillModeOverrides),
     lspServerOverrides: normalizeLspServerOverrides(input?.lspServerOverrides),
   };

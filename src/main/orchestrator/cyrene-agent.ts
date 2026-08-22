@@ -419,18 +419,22 @@ export class CyreneAgent extends AbstractAgent {
             subscriber.next(toAguiEvent(event));
           };
           const executionMode = resolveExecutionMode(options.executionMode);
+          // Chat 工具增强：chat 会话在设置里勾选了工具（options.tools 非空）时
+          // 改走 CyreneHarness（native function calling）；否则维持无工具 ChatLoop。
+          const chatToolCount = (options.tools ?? []).length;
+          const chatWithTools = executionMode === "chat" && chatToolCount > 0;
           debugLog(
-            `${LOG_PREFIX} executionMode=${executionMode} loop=${executionMode === "chat" ? "chat" : "harness"} provider=${options.settings.provider} model=${options.settings.model}`,
+            `${LOG_PREFIX} executionMode=${executionMode} loop=${executionMode === "chat" && !chatWithTools ? "chat" : "harness"} provider=${options.settings.provider} model=${options.settings.model}`,
           );
           const enabledToolCount = executionMode === "chat"
-            ? 0
+            ? chatToolCount
             : (options.tools ?? toolRegistry.getEnabledTools()).filter((tool) => tool.enabled).length;
           flowLog("── 新请求 ─────────────────────────");
           flowLog(`1. 准备上下文：${executionMode === "chat" ? "Chat" : "Work"} 模式，模型 ${options.settings.model}，${enabledToolCount} 个工具可用`);
           flowLog(`2. 理解用户请求：${executionMode === "chat" ? "Chat 模式无需工具上下文" : `完成，可信引用 ${(options.trustedRefs ?? []).length} 个`}`);
 
           let result: AgentLoopResult;
-          if (executionMode === "chat") {
+          if (executionMode === "chat" && !chatWithTools) {
             flowLog("3. Chat 模式：生成回复");
             result = await perf.track("chat_loop", () => runChatLoop({
               settings: options.settings,

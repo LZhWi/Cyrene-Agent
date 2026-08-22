@@ -169,8 +169,8 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       buildToolSystemPrompt: ((mode, enabledTools) =>
         buildToolSystemPrompt(mode, enabledTools as ToolDefinition[])) as BuildOptionsDeps["buildToolSystemPrompt"],
       buildSoulSystemBasePrompt,
-      resolveRunCapabilities: ({ mode, activeSearchBackend, toolModeOverrides, skillModeOverrides }) => resolveRunCapabilities({
-        mode, activeSearchBackend, toolModeOverrides, skillModeOverrides,
+      resolveRunCapabilities: ({ mode, activeSearchBackend, toolModeOverrides, skillModeOverrides, chatToolsEnabled }) => resolveRunCapabilities({
+        mode, activeSearchBackend, toolModeOverrides, skillModeOverrides, chatToolsEnabled,
         toolRegistry: rawDeps.toolRegistry,
         skillRegistry: rawDeps.skillRegistry,
       }),

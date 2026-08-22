@@ -5,6 +5,7 @@ import { AgentRuntimeError } from "./agent-runtime-error";
 import { AgentExecutionError } from "./run-execution-status";
 import { requestUserClarification } from "../user-choice";
 import { runHarnessWithAdapter } from "./harness-adapter";
+import { runChatLoop } from "./chat-loop";
 import { EventType } from "@ag-ui/core";
 
 vi.mock("./vendors", () => ({
@@ -20,6 +21,17 @@ vi.mock("./tool-registry", () => ({
 
 vi.mock("../permission", () => ({
   checkPermission: vi.fn(),
+}));
+
+// Chat 模式无工具时走 runChatLoop；mock 掉避免真实 LLM 调用。
+const mockedRunChatLoop = vi.mocked(runChatLoop);
+vi.mock("./chat-loop", () => ({
+  runChatLoop: vi.fn(async () => ({
+    reply: "chat-reply",
+    toolResults: [],
+    completionReason: "no_tool" as const,
+    totalUsage: undefined,
+  })),
 }));
 
 const mockedRunHarnessWithAdapter = vi.mocked(runHarnessWithAdapter);
@@ -533,5 +545,62 @@ describe("CyreneAgent external signal threading (Task 3)", () => {
     expect(addSpy).toHaveBeenCalledWith("abort", expect.any(Function), { once: true });
     expect(removeSpy).toHaveBeenCalledWith("abort", expect.any(Function));
     expect(harnessSignal.aborted).toBe(false);
+  });
+});
+
+// ── Chat 模式工具增强：按工具数分流 ChatLoop / Harness ──────────
+describe("CyreneAgent chat tool enhancement branch", () => {
+  beforeEach(() => {
+    mockedRunHarnessWithAdapter.mockClear();
+    mockedRunChatLoop.mockClear();
+  });
+
+  it("routes chat without tools to runChatLoop (unchanged behavior)", async () => {
+    const agent = new CyreneAgent({ threadId: "thread-chat-plain" });
+    const events: unknown[] = [];
+    const sub = agent.runWithEvents({
+      settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 } as never,
+      messages: [{ role: "user", content: "hi" }] as never,
+      timeoutMs: 60000,
+      toolSystemContent: "",
+      soulSystemBaseContent: "",
+      executionMode: "chat",
+      tools: [],
+      runId: "run-chat-plain",
+    }).subscribe({ next: (e) => events.push(e) });
+
+    await vi.waitFor(() => expect(mockedRunChatLoop).toHaveBeenCalledOnce());
+    expect(mockedRunHarnessWithAdapter).not.toHaveBeenCalled();
+    await vi.waitFor(() => {
+      expect(events.find((e) => (e as { type?: string }).type === EventType.RUN_FINISHED)).toBeDefined();
+    });
+    sub.unsubscribe();
+  });
+
+  it("routes chat with opted-in tools to the harness (native function calling)", async () => {
+    const agent = new CyreneAgent({ threadId: "thread-chat-tools" });
+    const externalController = new AbortController();
+    const events: unknown[] = [];
+    const sub = agent.runWithEvents({
+      settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 } as never,
+      messages: [{ role: "user", content: "放首歌" }] as never,
+      timeoutMs: 60000,
+      toolSystemContent: "TOOLS",
+      soulSystemBaseContent: "",
+      executionMode: "chat",
+      tools: [{ id: "music_search", name: "搜索歌曲", description: "d", enabled: true } as never],
+      runId: "run-chat-tools",
+      signal: externalController.signal,
+    }).subscribe({ next: (e) => events.push(e) });
+
+    await vi.waitFor(() => expect(mockedRunHarnessWithAdapter).toHaveBeenCalledOnce());
+    expect(mockedRunChatLoop).not.toHaveBeenCalled();
+
+    // 结束 run：abort 触发 harness mock 的 cancelled 分支收尾。
+    externalController.abort();
+    await vi.waitFor(() => {
+      expect(events.find((e) => (e as { type?: string }).type === EventType.RUN_FINISHED)).toBeDefined();
+    });
+    sub.unsubscribe();
   });
 });

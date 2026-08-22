@@ -31,6 +31,42 @@
   color: var(--cy-text-muted, #8e8e93);
 }
 
+/* Chat 模式工具增强总开关行：标题 + 说明 + 复用卡片 pill 开关。 */
+.tool-panel__master {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 14px 28px 0;
+  padding: 12px 16px;
+  border: 1px solid var(--cy-border, #f2f2f2);
+  border-radius: 12px;
+  background: var(--cy-bg-page, #f8f7f6);
+  flex-shrink: 0;
+}
+
+.tool-panel__master-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.tool-panel__master-text strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--cy-text, #1d1d1f);
+}
+
+.tool-panel__master-text span {
+  font-size: 11px;
+  color: var(--cy-text-muted, #8e8e93);
+}
+
+.tool-panel__master-pill {
+  flex: none;
+}
+
 .tool-panel__search-row {
   padding: 14px 28px 0;
   flex-shrink: 0;
