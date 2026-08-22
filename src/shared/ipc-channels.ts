@@ -246,6 +246,7 @@ export const IPC = {
   TTS_SYNTHESIZE_CACHED: "tts:synthesize-cached", // 语音合成 + 本地音频缓存
   // 流式语音合成（边合成边播，首字延迟低）
   TTS_STREAM_START: "tts:stream-start",           // 渲染端 → main：启动流式合成
+  TTS_STREAM_CANCEL: "tts:stream-cancel",         // 渲染端 → main：按 streamId 取消流式合成
   TTS_AUDIO_CHUNK: "tts:audio-chunk",             // main → 渲染端：推一段音频 base64
   TTS_STREAM_END: "tts:stream-end",               // main → 渲染端：流式结束（含 cacheKey）
   TTS_STREAM_ERROR: "tts:stream-error",           // main → 渲染端：流式错误

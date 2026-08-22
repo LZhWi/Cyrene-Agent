@@ -73,7 +73,7 @@ interface ActiveAguiRun {
 }
 
 const activeRuns = new Map<string, ActiveAguiRun>();
-const reservedRunIds = new Set<string>();
+const reservedRuns = new Map<string, ActiveAguiRun>();
 
 let buildOptionsFn: BuildOptionsFn | null = null;
 let getChatWindowFn: GetChatWindowFn = () => null;
@@ -83,7 +83,7 @@ function requestedRunId(value: unknown): string | undefined {
   if (typeof value !== "string" || !/^run-[A-Za-z0-9-]{8,80}$/.test(value)) {
     throw new Error("E_INVALID_RUN_ID");
   }
-  if (activeRuns.has(value) || reservedRunIds.has(value)) throw new Error("E_RUN_ID_CONFLICT");
+  if (activeRuns.has(value) || reservedRuns.has(value)) throw new Error("E_RUN_ID_CONFLICT");
   return value;
 }
 
@@ -111,25 +111,7 @@ export function registerAgUiIpc(
     const input = rawInput as AguiRunInput;
     const control = new RunControl(requestedRunId(input.runId));
     const runId = control.runId;
-    reservedRunIds.add(runId);
-    lifecycle?.onUserMessage();
-    lifecycle?.onConversationStarted();
-    let built;
-    try {
-      built = await buildOptionsFn(input);
-    } catch (error) {
-      reservedRunIds.delete(runId);
-      lifecycle?.onConversationEnded();
-      throw error;
-    }
-    const { options, latestUserText, memoryContextText } = built;
-
-    const threadId = `thread-${Date.now()}`;
-    const agent = new CyreneAgent({ threadId, description: "Cyrene 主聊天" });
-
-    // 事件转发目标：优先用 invoke 的 sender（发起 run 的窗口），兜底用聊天窗口
     const sender = event.sender;
-
     const send = (baseEvent: unknown): void => {
       const targets: WebContents[] = [];
       if (!sender.isDestroyed()) targets.push(sender);
@@ -137,22 +119,45 @@ export function registerAgUiIpc(
       if (chatWin && !chatWin.isDestroyed() && chatWin.webContents !== sender) {
         targets.push(chatWin.webContents);
       }
-      for (const t of targets) {
+      for (const target of targets) {
         try {
-          t.send(IPC.AGUI_EVENT, baseEvent);
+          target.send(IPC.AGUI_EVENT, baseEvent);
         } catch (err) {
           console.error("[AgUiBridge] send 失败:", (err instanceof Error ? err.message : String(err)), "事件类型=", (baseEvent as { type?: string })?.type);
         }
       }
     };
-
-    let pendingRunFinishedEvent: unknown | null = null;
     let lifecycleEnded = false;
     const endLifecycle = (): void => {
       if (lifecycleEnded) return;
       lifecycleEnded = true;
       lifecycle?.onConversationEnded();
     };
+    const reservedRun: ActiveAguiRun = {
+      endLifecycle,
+      control,
+      senderId: sender.id,
+      send,
+    };
+    reservedRuns.set(runId, reservedRun);
+    lifecycle?.onUserMessage();
+    lifecycle?.onConversationStarted();
+    let built;
+    try {
+      built = await buildOptionsFn(input);
+      control.throwIfCancelled();
+    } catch (error) {
+      reservedRuns.delete(runId);
+      endLifecycle();
+      throw error;
+    }
+    reservedRuns.delete(runId);
+    const { options, latestUserText, memoryContextText } = built;
+
+    const threadId = `thread-${Date.now()}`;
+    const agent = new CyreneAgent({ threadId, description: "Cyrene 主聊天" });
+
+    let pendingRunFinishedEvent: unknown | null = null;
 
     // 订阅 agent 事件流：每个事件透传渲染端；
     // complete/error 时做副作用，并补发一个终态事件让渲染端知道这轮结束。
@@ -162,7 +167,6 @@ export function registerAgUiIpc(
       senderId: sender.id,
       send,
     };
-    reservedRunIds.delete(runId);
     activeRuns.set(runId, activeRun);
 
     const sub = agent.runWithEvents(options, control).subscribe({
@@ -226,7 +230,7 @@ export function registerAgUiIpc(
 
   ipcMain.handle(IPC.AGUI_CANCEL, (event: IpcMainInvokeEvent, payload: { runId?: unknown }) => {
     const runId = typeof payload?.runId === "string" ? payload.runId : "";
-    const run = activeRuns.get(runId);
+    const run = activeRuns.get(runId) ?? reservedRuns.get(runId);
     if (!run || run.senderId !== event.sender.id) return false;
     run.control.cancel("renderer requested cancellation");
     run.send({

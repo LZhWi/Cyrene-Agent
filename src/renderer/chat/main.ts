@@ -34,6 +34,7 @@ import {
   initMarkdownRenderer,
   renderMarkdown,
 } from "./markdown/init";
+import { ChatRunState } from "./run-cancel-state";
 
 type Role = "user" | "model";
 
@@ -276,6 +277,8 @@ initCodeBlockController(messagesEl);
 const formEl = document.getElementById("composer") as HTMLFormElement;
 const inputEl = document.getElementById("input") as HTMLTextAreaElement;
 const sendBtn = document.getElementById("send") as HTMLButtonElement;
+const SEND_BUTTON_ICON = sendBtn.innerHTML;
+const STOP_BUTTON_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2" /></svg>';
 const stickerPickerBtn = document.getElementById("sticker-picker-btn") as HTMLButtonElement;
 const stickerPicker = document.getElementById("sticker-picker") as HTMLElement;
 const stickerPickerGrid = document.getElementById("sticker-picker-grid") as HTMLElement;
@@ -2082,14 +2085,16 @@ interface TtsApi {
   }) => Promise<{ base64: string; cacheKey: string; cached: boolean; format: "wav" }>;
   // 流式合成（minimax，边推 chunk 边播）
   streamStart: (payload: {
+    streamId: string;
     apiKey: string; voiceId: string; text: string;
     speed?: number; volume?: number; pitch?: number;
     model?: string; format?: "mp3" | "wav" | "pcm";
     expectedCacheKey?: string;
   }) => Promise<{ started: boolean; cacheKey: string; cached: boolean }>;
-  onAudioChunk: (callback: (payload: { base64: string }) => void) => () => void;
-  onStreamEnd: (callback: (payload: { cacheKey: string; cached: boolean; format: "mp3" | "wav" | "pcm" }) => void) => () => void;
-  onStreamError: (callback: (payload: { message: string }) => void) => () => void;
+  streamCancel: (streamId: string) => Promise<boolean>;
+  onAudioChunk: (callback: (payload: { streamId: string; base64: string }) => void) => () => void;
+  onStreamEnd: (callback: (payload: { streamId: string; cacheKey: string; cached: boolean; format: "mp3" | "wav" | "pcm" }) => void) => () => void;
+  onStreamError: (callback: (payload: { streamId: string; message: string }) => void) => () => void;
   loadSettings: () => Promise<Record<string, unknown>>;
 }
 
@@ -2107,6 +2112,7 @@ declare global {
 // 当前正在播放的 TTS 音频实例（全局唯一）。点新朗读前先停这个，避免重叠。
 let currentTtsAudio: HTMLAudioElement | null = null;
 let currentTtsObjectUrl: string | null = null;
+let currentTtsStreamId: string | null = null;
 // 当前正在朗读的消息 ID，用于给对应消息 row 加 .is-speaking class 并切换喇叭图标。
 // null 表示没有正在播放。
 let currentSpeakingMsgId: string | null = null;
@@ -2186,6 +2192,9 @@ function startTextModeMouth(): void {
 
 /** 停止当前正在播放的 TTS 音频（如果有）。只停 audio，UI 复位由调用方决定。 */
 function stopCurrentTts(): void {
+  const streamId = currentTtsStreamId;
+  currentTtsStreamId = null;
+  if (streamId) void window.tts?.streamCancel(streamId).catch(() => {});
   if (currentTtsAudio) {
     releaseCurrentTtsAudio(currentTtsAudio);
   }
@@ -2330,6 +2339,8 @@ async function streamAndPlayCached(
 
   stopCurrentTts();  // 先停当前 TTS（含 stopLive2dMouth），再拿 token，否则 token 立刻失效
   const token = nextSpeechToken();
+  const streamId = `tts-${crypto.randomUUID()}`;
+  currentTtsStreamId = streamId;
   const t0 = performance.now();  // 诊断时间戳基准（startPolling 闭包要用，必须在 try 外声明）
   let mediaSource: MediaSource | null = null;
   let sourceBuffer: SourceBuffer | null = null;
@@ -2348,6 +2359,7 @@ async function streamAndPlayCached(
   let streamReady = false;
   let streamResult: { cacheKey: string } | null = null;
   let resolveStream: ((v: { cacheKey: string } | null) => void) | null = null;
+  let firstChunkAt = 0;
 
   const cleanup = () => {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
@@ -2355,6 +2367,7 @@ async function streamAndPlayCached(
     offChunk = offEnd = offErr = null;
     chunkQueue.length = 0;
     queuedAudioBytes = 0;
+    if (currentTtsStreamId === streamId) currentTtsStreamId = null;
   };
 
   const finishStream = (result: { cacheKey: string } | null) => {
@@ -2420,9 +2433,44 @@ async function streamAndPlayCached(
     }, 30);
   };
 
+  // 先监听再启动，避免缓存命中时主进程在 invoke 返回前就发完 chunk/end。
+  offChunk = window.tts.onAudioChunk((payload) => {
+    if (payload.streamId !== streamId || speechToken !== token) return;
+    if (!firstChunkAt) {
+      firstChunkAt = performance.now();
+      console.log(`[TTS-Stream] 第一个 chunk +${Math.round(firstChunkAt - t0)}ms`);
+    }
+    const bytes = Uint8Array.from(atob(payload.base64), (c) => c.charCodeAt(0));
+    if (queuedAudioBytes + bytes.byteLength > maxQueuedAudioBytes) {
+      console.warn("[TTS-Stream] 音频队列超过 12MB，停止本轮流式播放");
+      void window.tts?.streamCancel(streamId);
+      cleanup();
+      if (audioEl) releaseCurrentTtsAudio(audioEl);
+      finishStream(null);
+      return;
+    }
+    chunkQueue.push(bytes);
+    queuedAudioBytes += bytes.byteLength;
+  });
+  offEnd = window.tts.onStreamEnd((payload) => {
+    if (payload.streamId !== streamId) return;
+    ended = true;
+    resolvedCacheKey = payload.cacheKey;
+    console.log(`[TTS-Stream] STREAM_END +${Math.round(performance.now() - t0)}ms chunks=${chunkQueue.length}`);
+  });
+  offErr = window.tts.onStreamError((payload) => {
+    if (payload.streamId !== streamId) return;
+    console.warn(`[TTS-Stream] ERROR +${Math.round(performance.now() - t0)}ms:`, payload.message);
+    ended = true;
+    cleanup();
+    try { mediaSource?.endOfStream(); } catch { /* */ }
+    finishStream(null);
+  });
+
   try {
     // 启动流式合成
     const startResult = await window.tts.streamStart({
+      streamId,
       apiKey: settings.ttsMinimaxKey,
       voiceId: settings.ttsMinimaxVoiceId,
       text,
@@ -2433,37 +2481,6 @@ async function streamAndPlayCached(
       expectedCacheKey: existing?.ttsCacheKey,
     });
     console.log(`[TTS-Stream] streamStart 返回 +${Math.round(performance.now() - t0)}ms started=${startResult.started} cached=${startResult.cached}`);
-
-    // 注册监听（只注册一次）
-    let firstChunkAt = 0;
-    offChunk = window.tts.onAudioChunk((payload) => {
-      if (speechToken !== token) return;
-      if (!firstChunkAt) {
-        firstChunkAt = performance.now();
-        console.log(`[TTS-Stream] 第一个 chunk +${Math.round(firstChunkAt - t0)}ms`);
-      }
-      const bytes = Uint8Array.from(atob(payload.base64), (c) => c.charCodeAt(0));
-      if (queuedAudioBytes + bytes.byteLength > maxQueuedAudioBytes) {
-        console.warn("[TTS-Stream] 音频队列超过 12MB，停止本轮流式播放");
-        cleanup();
-        if (audioEl) releaseCurrentTtsAudio(audioEl);
-        finishStream(null);
-        return;
-      }
-      chunkQueue.push(bytes);
-      queuedAudioBytes += bytes.byteLength;
-    });
-    offEnd = window.tts.onStreamEnd((payload) => {
-      ended = true;
-      resolvedCacheKey = payload.cacheKey;
-      console.log(`[TTS-Stream] STREAM_END +${Math.round(performance.now() - t0)}ms chunks=${chunkQueue.length}`);
-    });
-    offErr = window.tts.onStreamError((payload) => {
-      console.warn(`[TTS-Stream] ERROR +${Math.round(performance.now() - t0)}ms:`, payload.message);
-      ended = true;
-      cleanup();
-      try { mediaSource?.endOfStream(); } catch { /* */ }
-    });
 
     // 设置 MediaSource + Audio
     mediaSource = new MediaSource();
@@ -2502,6 +2519,10 @@ async function streamAndPlayCached(
     // 等 STREAM_END + 队列 flush 完
     return await new Promise<{ cacheKey: string } | null>((resolve) => {
       resolveStream = resolve;
+      if (streamReady && (!options?.waitForPlaybackEnd || playbackEnded)) {
+        resolve(streamResult);
+        return;
+      }
       startPolling(resolve);
     });
   } catch (err) {
@@ -2957,6 +2978,56 @@ async function getModelReply(): Promise<ChatReplyPayload> {
 
 let sending = false;
 let deleting = false;  // 删除操作进行中标志，阻止 onChanged 并发重载和用户输入竞态
+const chatRunState = new ChatRunState();
+
+class ChatRunCancelledError extends Error {
+  readonly code = "E_RUN_CANCELLED";
+
+  constructor() {
+    super("已取消");
+    this.name = "ChatRunCancelledError";
+  }
+}
+
+function paintChatRunButton(): void {
+  const active = chatRunState.snapshot();
+  sendBtn.classList.toggle("is-stop", Boolean(active));
+  sendBtn.classList.toggle("is-cancelling", active?.cancelRequested === true);
+  sendBtn.innerHTML = active ? STOP_BUTTON_ICON : SEND_BUTTON_ICON;
+  sendBtn.disabled = active?.cancelRequested === true || (sending && !active);
+  sendBtn.setAttribute("aria-label", active ? (active.cancelRequested ? "正在取消" : "停止生成") : "发送");
+  sendBtn.title = active ? (active.cancelRequested ? "正在取消" : "停止生成") : "发送";
+}
+
+function beginChatRun(runId: string): void {
+  chatRunState.begin(runId);
+  paintChatRunButton();
+}
+
+function finishChatRun(runId: string): void {
+  chatRunState.finish(runId);
+  paintChatRunButton();
+}
+
+async function cancelActiveChatRun(): Promise<void> {
+  const runId = chatRunState.requestCancel();
+  if (!runId) return;
+  paintChatRunButton();
+  ttsPlaybackSequence += 1;
+  stopCurrentTts();
+  chatHintEl.textContent = "正在取消…";
+  try {
+    await window.agui?.cancel(runId);
+  } catch (error) {
+    console.warn("[Chat] 取消请求发送失败:", error);
+  }
+}
+
+function isChatRunCancelled(error: unknown, runId: string): boolean {
+  return error instanceof ChatRunCancelledError
+    || chatRunState.isCancellationRequested(runId)
+    || (error instanceof Error && error.message.includes("E_RUN_CANCELLED"));
+}
 
 // 发送期间到达的 proactive-chat 外部变更（如昔涟又发了一条主动消息）不立刻重载，
 // 否则会清掉 transient 思考消息 / 冲掉刚落库的回复。记下 sessionId，等发送结束、
@@ -3048,20 +3119,21 @@ async function triggerCyreneGreeting(): Promise<void> {
   const emptyEl = document.getElementById("chat-empty");
   if (emptyEl) emptyEl.setAttribute("hidden", "");
 
+  const runId = createAguiRunId();
   sending = true;
-  sendBtn.disabled = true;
-  await refreshModelConfig();
-  chatHintEl.textContent = currentModelConfig?.connected ? `${currentModelConfig.model} 思考中…` : "模型未连接";
+  beginChatRun(runId);
 
   let streamMsgId = "";
+  let streamContent = "";
+  let offEvent: (() => void) | null = null;
   try {
-    const runId = createAguiRunId();
+    await refreshModelConfig();
+    chatHintEl.textContent = currentModelConfig?.connected ? `${currentModelConfig.model} 思考中…` : "模型未连接";
     streamMsgId = String(Date.now() + 1);
     const streamMsg = { id: streamMsgId, role: "model" as const, content: "", at: Date.now(), thinking: true, transient: true };
     messages.push(streamMsg);
     render();
 
-    let streamContent = "";
     let ttsContent = "";
     let autoSpeakTriggered = false;
     const earlyMinimaxPlayback = createEarlyMinimaxPlayback();
@@ -3077,6 +3149,7 @@ async function triggerCyreneGreeting(): Promise<void> {
       finishRun = resolve;
       failRun = reject;
     });
+    void runDone.catch(() => {});
 
     const deltaQueue: string[] = [];
     let playbackTimer: number | null = null;
@@ -3135,7 +3208,7 @@ async function triggerCyreneGreeting(): Promise<void> {
         tryFinish();
       }, 40);
     };
-    const offEvent = registerAguiListener((rawEvent) => {
+    offEvent = registerAguiListener((rawEvent) => {
       try {
         const event = rawEvent as AguiBaseEvent;
         if (event.type !== "CUSTOM" && event.runId !== runId) return;
@@ -3220,7 +3293,14 @@ async function triggerCyreneGreeting(): Promise<void> {
             tryFinish();
             break;
           case "RUN_ERROR":
-            failRun(new Error(event.error || event.content || "模型请求失败"));
+            if (event.code === "E_RUN_CANCELLED") {
+              if (playbackTimer !== null) { clearInterval(playbackTimer); playbackTimer = null; }
+              deltaQueue.length = 0;
+              pendingWhitespace = "";
+              failRun(new ChatRunCancelledError());
+            } else {
+              failRun(new Error(event.error || event.content || "模型请求失败"));
+            }
             break;
           default:
             break;
@@ -3231,6 +3311,7 @@ async function triggerCyreneGreeting(): Promise<void> {
     });
 
     // 种子消息：不推入 messages 数组、不渲染，只作为 agent 输入触发昔涟主动开口
+    if (chatRunState.isCancellationRequested(runId)) throw new ChatRunCancelledError();
     const ack = await window.agui!.run({
       runId,
       messages: [{ role: "user", content: "[internal] 用户点击了「和昔涟聊天」，请你主动开口聊几句，像朋友打招呼一样自然开场。" }],
@@ -3238,12 +3319,12 @@ async function triggerCyreneGreeting(): Promise<void> {
       sessionId: currentSessionId || undefined,
     });
     if (!ack.success) {
-      offEvent();
       throw new Error(ack.error || "模型请求发起失败");
     }
 
     await runDone;
     offEvent();
+    offEvent = null;
 
     const msg = messages.find(m => m.id === streamMsgId);
     if (msg) {
@@ -3266,25 +3347,28 @@ async function triggerCyreneGreeting(): Promise<void> {
     render();
     // 天气卡片已通过 msg.weatherCard 持久化并在 render 中渲染，无需单独 appendChild。
   } catch (err) {
+    const cancelled = isChatRunCancelled(err, runId);
     const message = err instanceof Error ? err.message : "模型请求失败";
     const msg = messages.find(m => m.id === streamMsgId);
     if (msg) {
       msg.thinking = false;
       msg.transient = false;
-      msg.content = "连接模型失败：" + message;
+      msg.content = cancelled ? (streamContent.trim() ? `${streamContent}\n\n（已取消）` : "已取消") : "连接模型失败：" + message;
     } else {
       messages.push({
         id: String(Date.now() + 2),
         role: "model",
-        content: "连接模型失败：" + message,
+        content: cancelled ? "已取消" : "连接模型失败：" + message,
         at: Date.now(),
       });
     }
     void saveSession();
     render();
   } finally {
+    offEvent?.();
+    finishChatRun(runId);
     sending = false;
-    sendBtn.disabled = false;
+    paintChatRunButton();
     chatHintEl.textContent = formatModelHint(currentModelConfig);
     inputEl.focus();
     void flushPendingProactiveReload();
@@ -3567,14 +3651,16 @@ async function send(): Promise<void> {
   render();
 
   let streamMsgId = "";
+  let streamContent = "";
+  let offEvent: (() => void) | null = null;
+  const runId = createAguiRunId();
+  beginChatRun(runId);
   try {
-    const runId = createAguiRunId();
     streamMsgId = String(Date.now() + 1);
     const streamMsg = { id: streamMsgId, role: "model", content: "", at: Date.now(), thinking: true, transient: true };
     messages.push(streamMsg);
     render();
 
-    let streamContent = "";
     let ttsContent = "";
     let autoSpeakTriggered = false;
     const earlyMinimaxPlayback = createEarlyMinimaxPlayback();
@@ -3592,6 +3678,7 @@ async function send(): Promise<void> {
       finishRun = resolve;
       failRun = reject;
     });
+    void runDone.catch(() => {});
 
     // AG-UI 事件流：订阅 window.agui.onEvent，按事件类型渲染
     // 主进程在 FC 完成后瞬间把所有 delta 发完，渲染端用"回放队列"按固定节奏逐字显示，
@@ -3657,7 +3744,7 @@ async function send(): Promise<void> {
         tryFinish();
       }, 40);
     };
-    const offEvent = registerAguiListener((rawEvent) => {
+    offEvent = registerAguiListener((rawEvent) => {
       try {
         const event = rawEvent as AguiBaseEvent;
         if (event.type !== "CUSTOM" && event.runId !== runId) return;
@@ -3752,7 +3839,14 @@ async function send(): Promise<void> {
             tryFinish();
             break;
           case "RUN_ERROR":
-            failRun(new Error(event.error || event.content || "模型请求失败"));
+            if (event.code === "E_RUN_CANCELLED") {
+              if (playbackTimer !== null) { clearInterval(playbackTimer); playbackTimer = null; }
+              deltaQueue.length = 0;
+              pendingWhitespace = "";
+              failRun(new ChatRunCancelledError());
+            } else {
+              failRun(new Error(event.error || event.content || "模型请求失败"));
+            }
             break;
           default:
             // TOOL_CALL_* / STEP_* 暂不在 UI 处理（骨架阶段）
@@ -3766,6 +3860,7 @@ async function send(): Promise<void> {
     // invoke 只确认"已发起"，不等 Observable 结束。
     // 真正的完成由事件流 RUN_FINISHED/RUN_ERROR 驱动（await runDone）。
     const modelMessages = buildModelMessages();
+    if (chatRunState.isCancellationRequested(runId)) throw new ChatRunCancelledError();
     const ack = await window.agui!.run({
       runId,
       messages: modelMessages,
@@ -3776,7 +3871,6 @@ async function send(): Promise<void> {
       imageAttachments: directImageAttachments.length > 0 ? directImageAttachments : undefined,
     });
     if (!ack.success) {
-      offEvent();
       throw new Error(ack.error || "模型请求发起失败");
     }
     if (clearModelContexts()) void saveSession();
@@ -3784,6 +3878,7 @@ async function send(): Promise<void> {
     // 等事件流终态
     await runDone;
     offEvent();
+    offEvent = null;
 
     const msg = messages.find(m => m.id === streamMsgId);
     if (msg) {
@@ -3807,24 +3902,27 @@ async function send(): Promise<void> {
     // 天气卡片已通过 msg.weatherCard 持久化并在 render 中渲染，无需单独 appendChild。
     // TTS 已在 TEXT_MESSAGE_END 时触发，这里不再重复朗读
   } catch (err) {
+    const cancelled = isChatRunCancelled(err, runId);
     const message = err instanceof Error ? err.message : "模型请求失败";
     const msg = messages.find(m => m.id === streamMsgId);
     if (msg) {
       msg.thinking = false;
       msg.transient = false;
-      msg.content = "连接模型失败：" + message;
+      msg.content = cancelled ? (streamContent.trim() ? `${streamContent}\n\n（已取消）` : "已取消") : "连接模型失败：" + message;
     } else {
       messages.push({
         id: String(Date.now() + 2),
         role: "model",
-        content: "连接模型失败：" + message,
+        content: cancelled ? "已取消" : "连接模型失败：" + message,
         at: Date.now(),
       });
     }
     void saveSession();
     render();  } finally {
+    offEvent?.();
+    finishChatRun(runId);
     sending = false;
-    sendBtn.disabled = false;
+    paintChatRunButton();
     chatHintEl.textContent = formatModelHint(currentModelConfig);
     inputEl.focus();
     void flushPendingProactiveReload();
@@ -3854,6 +3952,10 @@ closeBtn.addEventListener("click", () => {
 /* ===== Composer ===== */
 formEl.addEventListener("submit", (e) => {
   e.preventDefault();
+  if (sending && chatRunState.snapshot()) {
+    void cancelActiveChatRun();
+    return;
+  }
   void send();
 });
 

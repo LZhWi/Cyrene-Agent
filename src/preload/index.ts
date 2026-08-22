@@ -656,23 +656,25 @@ const ttsApi = {
   pickSovitsWeightFile: () => ipcRenderer.invoke(IPC.TTS_PICK_SOVITS_WEIGHT),
   // 流式语音合成（边合成边播）
   streamStart: (payload: {
+    streamId: string;
     apiKey: string; voiceId: string; text: string;
     speed?: number; volume?: number; pitch?: number;
     model?: string; format?: "mp3" | "wav" | "pcm";
     expectedCacheKey?: string;
   }) => ipcRenderer.invoke(IPC.TTS_STREAM_START, payload),
-  onAudioChunk: (callback: (payload: { base64: string }) => void) => {
-    const listener = (_e: Electron.IpcRendererEvent, payload: { base64: string }) => callback(payload);
+  streamCancel: (streamId: string) => ipcRenderer.invoke(IPC.TTS_STREAM_CANCEL, { streamId }),
+  onAudioChunk: (callback: (payload: { streamId: string; base64: string }) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, payload: { streamId: string; base64: string }) => callback(payload);
     ipcRenderer.on(IPC.TTS_AUDIO_CHUNK, listener);
     return () => ipcRenderer.removeListener(IPC.TTS_AUDIO_CHUNK, listener);
   },
-  onStreamEnd: (callback: (payload: { cacheKey: string; cached: boolean; format: "mp3" | "wav" | "pcm" }) => void) => {
-    const listener = (_e: Electron.IpcRendererEvent, payload: { cacheKey: string; cached: boolean; format: "mp3" | "wav" | "pcm" }) => callback(payload);
+  onStreamEnd: (callback: (payload: { streamId: string; cacheKey: string; cached: boolean; format: "mp3" | "wav" | "pcm" }) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, payload: { streamId: string; cacheKey: string; cached: boolean; format: "mp3" | "wav" | "pcm" }) => callback(payload);
     ipcRenderer.on(IPC.TTS_STREAM_END, listener);
     return () => ipcRenderer.removeListener(IPC.TTS_STREAM_END, listener);
   },
-  onStreamError: (callback: (payload: { message: string }) => void) => {
-    const listener = (_e: Electron.IpcRendererEvent, payload: { message: string }) => callback(payload);
+  onStreamError: (callback: (payload: { streamId: string; message: string }) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, payload: { streamId: string; message: string }) => callback(payload);
     ipcRenderer.on(IPC.TTS_STREAM_ERROR, listener);
     return () => ipcRenderer.removeListener(IPC.TTS_STREAM_ERROR, listener);
   },

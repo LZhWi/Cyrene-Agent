@@ -5,6 +5,7 @@ import { IPC } from "../shared/ipc-channels";
 const mocks = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => unknown>(),
   holdOpen: false,
+  buildGate: null as Promise<void> | null,
   controls: [] as any[],
   teardown: vi.fn(),
 }));
@@ -50,6 +51,7 @@ describe("agui-bridge sticker event ordering", () => {
   beforeEach(() => {
     mocks.handlers.clear();
     mocks.holdOpen = false;
+    mocks.buildGate = null;
     mocks.controls.length = 0;
     mocks.teardown.mockClear();
   });
@@ -140,5 +142,46 @@ describe("agui-bridge sticker event ordering", () => {
       code: "E_RUN_CANCELLED",
       runId: ack.runId,
     }));
+  });
+
+  it("accepts cancellation while buildOptions is still pending and never starts the agent", async () => {
+    vi.resetModules();
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    const sender = { id: 21, isDestroyed: () => false, send: vi.fn() };
+    let releaseBuild!: () => void;
+    mocks.buildGate = new Promise<void>((resolve) => { releaseBuild = resolve; });
+
+    registerAgUiIpc(
+      async () => {
+        await mocks.buildGate;
+        return {
+          options: {
+            settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
+            messages: [],
+            timeoutMs: 1000,
+            toolSystemContent: "TOOL",
+            soulSystemBaseContent: "SOUL",
+          },
+          latestUserText: "cancel while building",
+        };
+      },
+      vi.fn(),
+      () => null,
+    );
+
+    const run = mocks.handlers.get(IPC.AGUI_RUN)!;
+    const cancel = mocks.handlers.get(IPC.AGUI_CANCEL)!;
+    const runId = "run-build-12345678";
+    const pendingRun = run({ sender }, { runId, messages: [], style: "01_default.md" });
+    await Promise.resolve();
+
+    expect(await cancel({ sender }, { runId })).toBe(true);
+    releaseBuild();
+    await expect(pendingRun).rejects.toThrow(/E_RUN_CANCELLED/);
+    expect(mocks.controls).toHaveLength(0);
+    expect(sender.send).toHaveBeenCalledWith(
+      IPC.AGUI_EVENT,
+      expect.objectContaining({ type: "RUN_ERROR", code: "E_RUN_CANCELLED", runId }),
+    );
   });
 });

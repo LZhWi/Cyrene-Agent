@@ -1736,6 +1736,16 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
   stroke-linejoin: round;
 }
 
+.chat__send.is-stop svg {
+  fill: currentColor;
+  stroke: none;
+}
+
+.chat__send.is-cancelling {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 /* Drag & drop visual feedback */
 .chat--drag-over::after {
   content: "📂 松开放入文件";

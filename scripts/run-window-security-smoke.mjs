@@ -143,6 +143,13 @@ try {
     }
   }
   const chat = await findPage("/chat/");
+  const cancellationApis = await chat.evaluate(() => ({
+    aguiCancel: typeof window.agui?.cancel === "function",
+    ttsStreamCancel: typeof window.tts?.streamCancel === "function",
+  }));
+  if (!cancellationApis.aguiCancel || !cancellationApis.ttsStreamCancel) {
+    throw new Error(`chat cancellation preload mismatch: ${JSON.stringify(cancellationApis)}`);
+  }
   const avatarDataUrl = await chat.evaluate(() => window.user?.getAvatar());
   if (typeof avatarDataUrl !== "string" || !avatarDataUrl.startsWith("data:image/png;base64,")) {
     throw new Error("chat could not read the isolated user avatar");
