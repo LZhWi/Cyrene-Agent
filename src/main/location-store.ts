@@ -1,6 +1,7 @@
 import { app } from "electron";
 import * as fs from "fs";
 import * as path from "path";
+import { writeJsonAtomicSync } from "./runtime/atomic-file";
 
 export interface LocationSnapshot {
   latitude: number;
@@ -40,7 +41,7 @@ export function saveLocation(input: unknown): LocationSnapshot | null {
   if (!location) return null;
   const filePath = locationPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(location), "utf8");
+  writeJsonAtomicSync(filePath, location);
   return location;
 }
 

@@ -10,6 +10,7 @@ import { BUILT_IN_STICKER_FILES, BUILT_IN_STICKER_DESCRIPTIONS } from "./sticker
 import { BUILT_IN_STICKER_IDS } from "../shared/sticker-types";
 import type { UserStickerMeta, StickerConfigItem } from "../shared/sticker-types";
 import { buildLocalStickerUrl } from "./sticker-protocol";
+import { writeJsonAtomicSync } from "./runtime/atomic-file";
 
 // ── 路径 ──
 
@@ -44,7 +45,7 @@ function saveUserStickerManifest(stickers: Record<string, UserStickerMeta>): voi
   const filePath = getManifestPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
   const data: ManifestFile = { schemaVersion: 1, stickers };
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf8");
+  writeJsonAtomicSync(filePath, data);
 }
 
 // ── 增删查 ──

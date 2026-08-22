@@ -5,6 +5,7 @@ import { getUserDataDir } from "../runtime/runtime-paths";
 import { connectMcpServer, disconnectMcpServer, getMcpServerStates, McpServerConfig } from "./mcp-adapter";
 import { applyKnownBuiltinMcpPolicy } from "./mcp-config-policy";
 import { connectStartupItems } from "./startup-connections";
+import { writeJsonAtomicSync } from "../runtime/atomic-file";
 
 const LOG_PREFIX = "[MCP Manager]";
 
@@ -35,7 +36,7 @@ function saveConfigs(configs: McpServerConfig[]): void {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true });
     }
-    fs.writeFileSync(getConfigPath(), JSON.stringify(configs, null, 2), "utf-8");
+    writeJsonAtomicSync(getConfigPath(), configs);
     console.log(LOG_PREFIX, "已保存 " + configs.length + " 个 MCP server 配置");
   } catch (err) {
     console.error(LOG_PREFIX, "保存配置失败:", (err as Error).message);

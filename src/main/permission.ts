@@ -7,6 +7,7 @@ import { app } from "electron";
 import * as fs from "fs";
 import * as path from "path";
 import { IPC } from "../shared/ipc-channels";
+import { writeJsonAtomicSync } from "./runtime/atomic-file";
 
 const LOG_PREFIX = "[Permission]";
 
@@ -108,7 +109,7 @@ function persistLevel(level: AgentFileAccessLevel): void {
   try {
     const filePath = getStorePath();
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, JSON.stringify({ level }, null, 2), "utf8");
+    writeJsonAtomicSync(filePath, { level });
   } catch (err) {
     console.error(LOG_PREFIX, "持久化档位失败:", err);
   }

@@ -11,6 +11,9 @@ import { normalizeUiIcon, UI_ICON_PRESETS, type UiIcon } from "../shared/ui-icon
 import { foldReasoning, normalizeReasoningPreference, type ReasoningPreference } from "../shared/reasoning";
 import { getUiFontResponseHeaders, isSafeUiFontRequest } from "./ui-font-protocol";
 import { classifyNavigation } from "./navigation-policy";
+import { writeFileAtomicSync, writeJsonAtomicSync } from "./runtime/atomic-file";
+import { appendRotatingLogSync } from "./runtime/rotating-log";
+import { pruneDirectoryByMtimeSync } from "./runtime/cache-pruner";
 import {
   RENDERER_CONTENT_SECURITY_POLICY,
   shouldProtectRendererDocument,
@@ -261,7 +264,7 @@ function appendMinimaxTtsLog(entry: Record<string, unknown>): void {
     const logDir = path.join(app.getPath("userData"), "logs");
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, "minimax-tts.log");
-    fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
+    appendRotatingLogSync(logFile, JSON.stringify(entry, null, 2) + "\n");
     if (entry.phase === "request.begin") {
       console.log("[TTS MiniMax] 诊断日志:", logFile);
     }
@@ -275,7 +278,7 @@ function appendGptsovitsTtsLog(entry: Record<string, unknown>): void {
     const logDir = path.join(app.getPath("userData"), "logs");
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, "gptsovits-tts.log");
-    fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
+    appendRotatingLogSync(logFile, JSON.stringify(entry, null, 2) + "\n");
     if (entry.phase === "request.begin") {
       console.log("[TTS GPT-SoVITS] 诊断日志:", logFile);
     }
@@ -289,7 +292,7 @@ function appendCustomCloudTtsLog(entry: Record<string, unknown>): void {
     const logDir = path.join(app.getPath("userData"), "logs");
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, "custom-cloud-tts.log");
-    fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
+    appendRotatingLogSync(logFile, JSON.stringify(entry, null, 2) + "\n");
     if (entry.phase === "request.begin") {
       console.log("[TTS CustomCloud] 诊断日志:", logFile);
     }
@@ -303,7 +306,7 @@ function appendMimoTtsLog(entry: Record<string, unknown>): void {
     const logDir = path.join(app.getPath("userData"), "logs");
     fs.mkdirSync(logDir, { recursive: true });
     const logFile = path.join(logDir, "mimo-tts.log");
-    fs.appendFileSync(logFile, JSON.stringify(entry, null, 2) + "\n", "utf8");
+    appendRotatingLogSync(logFile, JSON.stringify(entry, null, 2) + "\n");
     if (entry.phase === "request.begin") {
       console.log("[TTS MiMo] 诊断日志:", logFile);
     }
@@ -314,6 +317,35 @@ function appendMimoTtsLog(entry: Record<string, unknown>): void {
 
 function getTtsCacheDir(): string {
   return path.join(app.getPath("userData"), "cyrene-tts-cache");
+}
+
+const TTS_CACHE_MAX_BYTES = 512 * 1024 * 1024;
+const TTS_CACHE_TARGET_BYTES = 384 * 1024 * 1024;
+let ttsCachePruneTimer: NodeJS.Timeout | null = null;
+
+function scheduleTtsCachePrune(): void {
+  if (ttsCachePruneTimer) return;
+  ttsCachePruneTimer = setTimeout(() => {
+    ttsCachePruneTimer = null;
+    try {
+      const result = pruneDirectoryByMtimeSync(
+        getTtsCacheDir(),
+        TTS_CACHE_MAX_BYTES,
+        TTS_CACHE_TARGET_BYTES,
+      );
+      if (result.removed > 0) {
+        console.log(`[TTS cache] removed ${result.removed} old files (${result.beforeBytes} -> ${result.afterBytes} bytes)`);
+      }
+    } catch (error) {
+      console.warn("[TTS cache] prune failed:", error instanceof Error ? error.message : error);
+    }
+  }, 5_000);
+  ttsCachePruneTimer.unref();
+}
+
+function writeTtsCacheFile(filePath: string, audio: Buffer): void {
+  writeFileAtomicSync(filePath, audio);
+  scheduleTtsCachePrune();
 }
 
 function assertTtsCacheKey(cacheKey: string): string {
@@ -952,7 +984,7 @@ function saveUserProfile(profile: Partial<UserProfile>): UserProfile {
   const merged = { ...existing, ...profile };
   const filePath = getUserProfilePath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(merged, null, 2), "utf8");
+  writeJsonAtomicSync(filePath, merged);
   return merged;
 }
 
@@ -1383,7 +1415,7 @@ function saveModelSettings(settings: Partial<ModelSettings>): ModelSettings {
   const final = normalizeModelSettings(merged);
   const filePath = getSettingsPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(final, null, 2), "utf8");
+  writeJsonAtomicSync(filePath, final);
   return final;
 }
 
@@ -1558,7 +1590,7 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   const normalized = normalizeGeneralSettings({ ...before, ...settings });
   const filePath = getGeneralSettingsPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(normalized, null, 2), "utf8");
+  writeJsonAtomicSync(filePath, normalized);
   applyGeneralSettings(normalized, before);
   syncBuiltInToolToggles(normalized);
   if (before.uiTheme !== normalized.uiTheme) {
@@ -1653,7 +1685,7 @@ function loadStickerSettings(): Record<string, boolean> {
 function saveStickerSettings(settings: Record<string, boolean>): Record<string, boolean> {
   const filePath = getStickerSettingsPath();
   fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  fs.writeFileSync(filePath, JSON.stringify(settings, null, 2), "utf8");
+  writeJsonAtomicSync(filePath, settings);
   return settings;
 }
 
@@ -1963,7 +1995,7 @@ function appendApiLog(
       "=".repeat(80),
       "",
     ].join(os.EOL);
-    fs.appendFileSync(getApiLogPath(), entry, "utf8");
+    appendRotatingLogSync(getApiLogPath(), entry);
   } catch {
     // silent
   }
@@ -4692,6 +4724,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 app.whenReady().then(async () => {
+  scheduleTtsCachePrune();
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
     if (details.resourceType !== "mainFrame" || !shouldProtectRendererDocument(details.url)) {
       callback({ responseHeaders: details.responseHeaders });
@@ -4987,7 +5020,7 @@ app.whenReady().then(async () => {
       format,
       debugLog: appendMinimaxTtsLog,
     });
-    fs.writeFileSync(audioPath, audioBuffer);
+    writeTtsCacheFile(audioPath, audioBuffer);
     appendMinimaxTtsLog({
       requestId: `tts-cache-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ts: new Date().toISOString(),
@@ -5062,7 +5095,7 @@ app.whenReady().then(async () => {
           },
         });
         // 落盘缓存（用完整 buffer，不用拼接的 fullChunks——synthesize 返回的更可靠）
-        fs.writeFileSync(audioPath, audioBuffer);
+        writeTtsCacheFile(audioPath, audioBuffer);
         appendMinimaxTtsLog({
           requestId: `tts-stream-${Date.now()}`,
           ts: new Date().toISOString(),
@@ -5146,7 +5179,7 @@ app.whenReady().then(async () => {
       format,
       debugLog: appendGptsovitsTtsLog,
     });
-    fs.writeFileSync(audioPath, result.audio);
+    writeTtsCacheFile(audioPath, result.audio);
     appendGptsovitsTtsLog({
       requestId: `gptsovits-cache-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ts: new Date().toISOString(),
@@ -5235,7 +5268,7 @@ app.whenReady().then(async () => {
       timeoutMs: payload.timeoutMs,
       debugLog: appendCustomCloudTtsLog,
     });
-    fs.writeFileSync(audioPath, result.audio);
+    writeTtsCacheFile(audioPath, result.audio);
     appendCustomCloudTtsLog({
       requestId: `custom-cloud-cache-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ts: new Date().toISOString(),
@@ -5321,7 +5354,7 @@ app.whenReady().then(async () => {
       stylePrompt: payload.stylePrompt,
       debugLog: appendMimoTtsLog,
     });
-    fs.writeFileSync(audioPath, result.audio);
+    writeTtsCacheFile(audioPath, result.audio);
     appendMimoTtsLog({
       requestId: `mimo-cache-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
       ts: new Date().toISOString(),

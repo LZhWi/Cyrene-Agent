@@ -21,6 +21,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { app, safeStorage } from "electron";
 import type { ChannelId } from "./types";
+import { writeJsonAtomicSync } from "../runtime/atomic-file";
 
 /** safeStorage 加密后的前缀。读取时遇到这个前缀就解密 */
 const ENC_PREFIX = "enc:";
@@ -282,7 +283,7 @@ export function saveChannelsSettings(patch: Partial<ChannelsSettings>): Channels
   // 写盘时 final.appSecret / final.encryptKey 已经是密文形态（带 enc: 前缀）
   // load 时解密，运行时给上层看到明文。
   fs.mkdirSync(path.dirname(filePath()), { recursive: true });
-  fs.writeFileSync(filePath(), JSON.stringify(final, null, 2), "utf8");
+  writeJsonAtomicSync(filePath(), final);
 
   // 返回给上层时再解密一次，让 API 用户拿到明文
   const out: ChannelsSettings = {
