@@ -34,7 +34,9 @@ interface CompactChatApi {
 }
 
 function compactApi(): CompactChatApi | undefined {
-  return (window as typeof window & { chat?: CompactChatApi }).chat;
+  // 主动压缩走会话存储 API（preload 的 chatStoreApi），挂在 window.chatStore；
+  // window.chat 是窗口控制（minimize/close 等），之前取错对象导致点击静默无反应。
+  return (window as typeof window & { chatStore?: CompactChatApi }).chatStore;
 }
 
 export const CONTEXT_USAGE_CATEGORY_META: Record<ContextUsageCategoryKey, { label: string; color: string }> = {
@@ -124,7 +126,11 @@ export function ContextUsageRing({ usage, sessionId, busy }: ContextUsageRingPro
   const handleCompactClick = (): void => {
     if (!canCompact || compactPhase === "running" || !sessionId) return;
     const invoke = compactApi()?.compactConversation;
-    if (!invoke) return;
+    // API 接线缺失时进入 error 态给用户反馈，避免静默无反应难排查。
+    if (!invoke) {
+      setCompactPhase("error");
+      return;
+    }
     setCompactPhase("running");
     void invoke(sessionId)
       .then((result) => setCompactPhase(result?.ok ? "done" : "error"))
