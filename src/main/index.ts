@@ -2852,6 +2852,7 @@ function createWindow(): void {
     icon: getCurrentAppIconPath(),
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      additionalArguments: ["--cyrene-window-role=main"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -3182,6 +3183,7 @@ function createChatWindow(sessionId?: string): void {
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      additionalArguments: ["--cyrene-window-role=chat"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -3259,6 +3261,7 @@ function createSidebarWindow(): void {
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      additionalArguments: ["--cyrene-window-role=sidebar"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -3306,6 +3309,7 @@ function createTasksWindow(): void {
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      additionalArguments: ["--cyrene-window-role=tasks"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -3412,6 +3416,7 @@ function createSettingsWindow(section?: string): void {
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      additionalArguments: ["--cyrene-window-role=settings"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -3468,6 +3473,7 @@ async function createStickerManagerWindow(): Promise<{ ok: boolean; error?: stri
     parent: settingsWindow ?? undefined,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      additionalArguments: ["--cyrene-window-role=sticker-manager"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -3538,6 +3544,7 @@ function createCallWindow(): void {
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      additionalArguments: ["--cyrene-window-role=call"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
