@@ -48,6 +48,7 @@ import type {
 import type { ToolDefinition } from "./tool-registry";
 import type { ToolCallResult } from "./types";
 import { isRunCancelledError, RunCancelledError } from "../runtime/run-control";
+import { modelRuntimeCoordinator, type ModelRuntimeClass } from "../runtime/model-runtime-coordinator";
 
 export interface AgentLoopSettings {
   provider: string;
@@ -109,6 +110,8 @@ export interface TwoPhaseFcOptions {
   recordUsage?: (input: number, output: number, calls: number, cachedInput?: number) => void;
   /** 用户取消信号。 */
   signal?: AbortSignal;
+  /** 仅用于模型运行资源排队；不改变请求内容。 */
+  runtimeClass?: ModelRuntimeClass;
 }
 
 export interface TwoPhaseFcResult {
@@ -222,41 +225,46 @@ async function callAdapter(
   cfg: AgentLoopSettings,
   perRoundTimeoutMs: number,
   signal?: AbortSignal,
+  runtimeClass: ModelRuntimeClass = "interactive",
 ): Promise<unknown> {
   if (signal?.aborted) throw new RunCancelledError("unknown");
   const http = adapter.buildRequest(req, cfg);
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), perRoundTimeoutMs);
-  const onAbort = () => controller.abort(signal?.reason);
-  signal?.addEventListener("abort", onAbort, { once: true });
   try {
-    const response = await fetch(http.url, {
-      method: "POST",
-      signal: controller.signal,
-      headers: http.headers,
-      body: http.body,
-    });
-    if (!response.ok) {
-      const errorText = await response.text().catch(() => "");
-      // wire-level 诊断：记录请求形状（model/tool_choice/reasoning 等），便于排查 400 类问题
-      console.warn(LOG_PREFIX, "HTTP", response.status, "请求形状:", {
-        model: req.model,
-        hasTools: Boolean(req.tools?.length),
-        toolChoice: req.toolChoice,
-        reasoning: cfg.reasoning,
-        stream: req.stream,
-      }, "body:", errorText.slice(0, 500));
-      throw new Error("模型请求失败：HTTP " + response.status + (errorText ? " — " + errorText.slice(0, 200) : ""));
-    }
-    const data = await response.json();
+    const data = await modelRuntimeCoordinator.run(runtimeClass, async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), perRoundTimeoutMs);
+      const onAbort = () => controller.abort(signal?.reason);
+      signal?.addEventListener("abort", onAbort, { once: true });
+      try {
+        const response = await fetch(http.url, {
+          method: "POST",
+          signal: controller.signal,
+          headers: http.headers,
+          body: http.body,
+        });
+        if (!response.ok) {
+          const errorText = await response.text().catch(() => "");
+          // wire-level 诊断：记录请求形状（model/tool_choice/reasoning 等），便于排查 400 类问题
+          console.warn(LOG_PREFIX, "HTTP", response.status, "请求形状:", {
+            model: req.model,
+            hasTools: Boolean(req.tools?.length),
+            toolChoice: req.toolChoice,
+            reasoning: cfg.reasoning,
+            stream: req.stream,
+          }, "body:", errorText.slice(0, 500));
+          throw new Error("模型请求失败：HTTP " + response.status + (errorText ? " — " + errorText.slice(0, 200) : ""));
+        }
+        return response.json();
+      } finally {
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", onAbort);
+      }
+    }, signal);
     if (signal?.aborted) throw new RunCancelledError("unknown");
     return data;
   } catch (error) {
     if (signal?.aborted) throw new RunCancelledError("unknown");
     throw error;
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort);
   }
 }
 
@@ -348,7 +356,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
 
     let data: unknown;
     try {
-      data = await callAdapter(adapter, req, toolPhaseSettings, perRoundTimeoutMs, signal);
+      data = await callAdapter(adapter, req, toolPhaseSettings, perRoundTimeoutMs, signal, options.runtimeClass);
     } catch (err) {
       if (signal?.aborted || isRunCancelledError(err)) throw err;
       if (err instanceof Error && err.name === "AbortError") {
@@ -457,6 +465,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
       reason: "no_tool",
       forceSummaryTimeoutMs,
       signal,
+      runtimeClass: options.runtimeClass,
       onEvent,
       recordUsageFn,
     });
@@ -480,6 +489,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
     reason: "max_rounds",
     forceSummaryTimeoutMs,
     signal,
+    runtimeClass: options.runtimeClass,
     onEvent,
     recordUsageFn,
   });
@@ -501,6 +511,7 @@ async function runSoulPhase(args: {
   reason: SoulPhaseReason;
   forceSummaryTimeoutMs: number;
   signal: AbortSignal | undefined;
+  runtimeClass: ModelRuntimeClass | undefined;
   onEvent: ((e: TwoPhaseEvent) => void) | undefined;
   recordUsageFn: (input: number, output: number, calls: number, cachedInput?: number) => void;
 }): Promise<TwoPhaseFcResult> {
@@ -517,6 +528,7 @@ async function runSoulPhase(args: {
     reason,
     forceSummaryTimeoutMs,
     signal,
+    runtimeClass,
     onEvent,
     recordUsageFn,
   } = args;
@@ -549,7 +561,7 @@ async function runSoulPhase(args: {
   if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, cfg);
 
   try {
-    const data = await callAdapter(adapter, req, cfg, forceSummaryTimeoutMs, signal);
+    const data = await callAdapter(adapter, req, cfg, forceSummaryTimeoutMs, signal, runtimeClass);
     const chat = adapter.parseResponse(data);
     const reply = stripLeakedChatTimeContext(chat.text);
     if (chat.usage) {

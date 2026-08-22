@@ -21,6 +21,7 @@ import { getAdapterForConfig, type ChatMessage } from "./vendors";
 import { extractLastUserQuery, type ToolContext } from "./tool-context";
 import { runHistoryRetrievalV2AutoProbe } from "./history-tools";
 import { isRunCancelledError, RunControl } from "../runtime/run-control";
+import { modelRuntimeClassForAgentDescription } from "../runtime/model-runtime-coordinator";
 import {
   runTwoPhaseFcLoop,
   type TwoPhaseEvent,
@@ -257,6 +258,7 @@ export class CyreneAgent extends AbstractAgent {
               subscriber.next(toAguiEvent(event));
             },
             signal: control.signal,
+            runtimeClass: modelRuntimeClassForAgentDescription(this.description),
           });
 
           this.lastResult = {

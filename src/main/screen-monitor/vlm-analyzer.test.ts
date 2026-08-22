@@ -57,6 +57,7 @@ describe("vlm-analyzer", () => {
       expect.any(String),
       fakeConfig,
       2048,
+      "vision-background",
     );
   });
 
@@ -90,6 +91,7 @@ describe("vlm-analyzer", () => {
       expect.any(String),
       fakeConfig,
       4096,
+      "vision-interactive",
     );
   });
 

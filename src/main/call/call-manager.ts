@@ -20,6 +20,7 @@ import { buildCallConversation, buildCallMessages, type CallPromptContent } from
 import { saveCallContextEvent } from "./call-context-store";
 import type { CallContextEvent } from "./call-context";
 import { enqueueLLMTask } from "../llm-queue";
+import { modelRuntimeCoordinator } from "../runtime/model-runtime-coordinator";
 
 const LOG_PREFIX = "[CallManager]";
 
@@ -499,6 +500,7 @@ async function runAgentTurn(userText: string, signal?: AbortSignal): Promise<str
           return weatherTool.execute(args);
         },
         signal,
+        runtimeClass: "call",
       });
       const reply = result.reply.replace(/\[sticker:[^\]]+\]/g, "").trim();
       if (reply) {
@@ -525,19 +527,20 @@ async function runAgentTurn(userText: string, signal?: AbortSignal): Promise<str
       : directRequest;
     const req = adapter.buildRequest(cacheAwareRequest, phoneSettings);
 
-    const httpResp = await fetch(url, {
-      method: "POST",
-      headers: { ...req.headers, "Content-Type": "application/json" },
-      body: req.body,
-      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
-    });
+    const raw = await modelRuntimeCoordinator.run("call", async () => {
+      const httpResp = await fetch(url, {
+        method: "POST",
+        headers: { ...req.headers, "Content-Type": "application/json" },
+        body: req.body,
+        signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
+      });
 
-    if (!httpResp.ok) {
-      const errorText = await httpResp.text().catch(() => "");
-      throw new Error(`LLM 请求失败: ${httpResp.status}${errorText ? ` — ${errorText.slice(0, 500)}` : ""}`);
-    }
-
-    const raw = await httpResp.json();
+      if (!httpResp.ok) {
+        const errorText = await httpResp.text().catch(() => "");
+        throw new Error(`LLM 请求失败: ${httpResp.status}${errorText ? ` — ${errorText.slice(0, 500)}` : ""}`);
+      }
+      return httpResp.json();
+    }, signal);
     const resp = adapter.parseResponse(raw);
     // 过滤掉表情包标记
     const reply = (resp.text || "").replace(/\[sticker:[^\]]+\]/g, "").trim();

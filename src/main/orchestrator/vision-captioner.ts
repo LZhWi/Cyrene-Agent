@@ -5,6 +5,7 @@
 //
 // 判断全交给视觉模型：不本地判断"具体vs泛泛"，把用户原话+图片一起发，
 // 配框架指令让视觉模型自己理解任务。
+import { modelRuntimeCoordinator, type ModelRuntimeClass } from "../runtime/model-runtime-coordinator";
 
 /** 视觉模型配置（OpenAI 兼容）。 */
 export interface VisionConfig {
@@ -76,6 +77,7 @@ export async function captionImage(
   userQuery: string,
   config: VisionConfig,
   maxTokens = 1024,
+  runtimeClass: ModelRuntimeClass = "vision-interactive",
 ): Promise<string> {
   const instruction = buildInstruction(userQuery);
   const dataUrl = "data:" + image.mime + ";base64," + image.base64;
@@ -108,28 +110,37 @@ export async function captionImage(
   console.log("[Vision] 调用视觉模型:", config.model, "url=" + url, "query.len=" + userQuery.length);
   const startMs = Date.now();
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), VISION_TIMEOUT_MS);
   try {
-    const resp = await fetch(url, {
-      method: "POST",
-      signal: controller.signal,
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: "Bearer " + config.apiKey,
-      },
-      body: JSON.stringify(body),
+    const result = await modelRuntimeCoordinator.run(runtimeClass, async () => {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), VISION_TIMEOUT_MS);
+      try {
+        const resp = await fetch(url, {
+          method: "POST",
+          signal: controller.signal,
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + config.apiKey,
+          },
+          body: JSON.stringify(body),
+        });
+
+        if (!resp.ok) {
+          return { ok: false as const, status: resp.status, errorText: await resp.text().catch(() => "") };
+        }
+        const data = await resp.json() as {
+          choices?: Array<{ message?: { content?: string | null } }>;
+        };
+        return { ok: true as const, data };
+      } finally {
+        clearTimeout(timer);
+      }
     });
-
-    if (!resp.ok) {
-      const errText = await resp.text().catch(() => "");
-      console.error("[Vision] 请求失败 HTTP " + resp.status, errText.slice(0, 200));
-      return "[错误·运行时] 视觉模型请求失败：HTTP " + resp.status + " " + errText.slice(0, 200);
+    if (!result.ok) {
+      console.error("[Vision] 请求失败 HTTP " + result.status, result.errorText.slice(0, 200));
+      return "[错误·运行时] 视觉模型请求失败：HTTP " + result.status + " " + result.errorText.slice(0, 200);
     }
-
-    const data = await resp.json() as {
-      choices?: Array<{ message?: { content?: string | null } }>;
-    };
+    const data = result.data;
     // thinking 模型的 <think> 块与 <answer> 包裹标签内联在 content 里，
     // 必须先剥掉再判空——否则思考原文/标签前缀会进观测摘要和工具结果
     const text = stripWrapperTags(stripThinkBlocks(data.choices?.[0]?.message?.content ?? ""));
@@ -148,8 +159,6 @@ export async function captionImage(
     const msg = err instanceof Error ? err.message : String(err);
     console.error("[Vision] 请求异常:", msg);
     return "[错误·运行时] 视觉模型请求异常：" + msg;
-  } finally {
-    clearTimeout(timer);
   }
 }
 

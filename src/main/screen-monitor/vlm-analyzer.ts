@@ -4,6 +4,7 @@
 import { captionImage, type VisionConfig, type VisionImage } from "../orchestrator/vision-captioner";
 import { captureScreen, type ScreenCapture } from "./capture";
 import { observationStore, type ScreenObservation } from "./observation-store";
+import type { ModelRuntimeClass } from "../runtime/model-runtime-coordinator";
 
 const LOG_PREFIX = "[ScreenMonitor/VLM]";
 
@@ -96,9 +97,10 @@ async function captionWithRetryAndFallback(
   prompt: string,
   config: VisionConfig,
   maxTokens: number,
+  runtimeClass: ModelRuntimeClass,
 ): Promise<string> {
   const canFallback = config.model !== VISION_FALLBACK_MODEL;
-  let result = await captionImage(image, prompt, config, maxTokens);
+  let result = await captionImage(image, prompt, config, maxTokens, runtimeClass);
   for (
     let attempt = 0;
     canFallback && attempt < OVERLOAD_RETRY_MAX &&
@@ -107,11 +109,11 @@ async function captionWithRetryAndFallback(
   ) {
     await new Promise((resolve) => setTimeout(resolve, OVERLOAD_RETRY_INTERVAL_MS));
     console.log(LOG_PREFIX, "过载重试 " + (attempt + 1) + "/" + OVERLOAD_RETRY_MAX + ":", config.model);
-    result = await captionImage(image, prompt, config, maxTokens);
+    result = await captionImage(image, prompt, config, maxTokens, runtimeClass);
   }
   if (canFallback && result.startsWith("[错误") && isRetryableConnectionError(result)) {
     console.warn(LOG_PREFIX, "重试耗尽，回落", VISION_FALLBACK_MODEL);
-    return captionImage(image, prompt, { ...config, model: VISION_FALLBACK_MODEL }, maxTokens);
+    return captionImage(image, prompt, { ...config, model: VISION_FALLBACK_MODEL }, maxTokens, runtimeClass);
   }
   return result;
 }
@@ -134,7 +136,7 @@ export async function analyzeScreen(
   // thinking 模型的思考 token 计入同一预算，默认 1024 会被长思考挤没正文
   // （glm-4.1v-thinking-flash 实测思考单独就有 700+ 字），屏幕分析单独放宽上限。
   // 上限只影响"想太久"的个例，正常调用用量不变。
-  const result = await captionWithRetryAndFallback(image, buildAnalysisPrompt(prevSummary), config, SCREEN_ANALYSIS_MAX_TOKENS);
+  const result = await captionWithRetryAndFallback(image, buildAnalysisPrompt(prevSummary), config, SCREEN_ANALYSIS_MAX_TOKENS, "vision-background");
   if (result.startsWith("[错误")) {
     console.warn(LOG_PREFIX, "VLM 分析失败:", result.slice(0, 100));
     return result;
@@ -190,7 +192,7 @@ export async function analyzeScreenFocused(
     base64: capture.base64,
     mime: capture.mime,
   };
-  const result = await captionWithRetryAndFallback(image, buildFocusedPrompt(focus, imageNoun), config, FOCUSED_ANALYSIS_MAX_TOKENS);
+  const result = await captionWithRetryAndFallback(image, buildFocusedPrompt(focus, imageNoun), config, FOCUSED_ANALYSIS_MAX_TOKENS, "vision-interactive");
   if (result.startsWith("[错误")) {
     console.warn(LOG_PREFIX, "VLM 聚焦分析失败:", result.slice(0, 100));
   }
