@@ -6,14 +6,6 @@ import type { GptsovitsSynthesizeRequest } from "../shared/tts-types";
 import type { DocumentIndexProgress } from "../main/rag/document-index-queue";
 import { getLive2DIpcListenerCounts } from "./live2d-listener-diagnostics";
 import { exposeMusicApi } from "./music";
-import { parsePreloadWindowRole, shouldExposePreloadApi } from "../shared/preload-access";
-
-const preloadWindowRole = parsePreloadWindowRole(process.argv);
-function exposeApi(name: string, api: object): void {
-  if (shouldExposePreloadApi(preloadWindowRole, name)) {
-    contextBridge.exposeInMainWorld(name, api);
-  }
-}
 
 const cyreneApi = {
   minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
@@ -89,8 +81,8 @@ const chatApi = {
   },
 };
 
-exposeApi("cyrene", cyreneApi);
-exposeApi("chat", chatApi);
+contextBridge.exposeInMainWorld("cyrene", cyreneApi);
+contextBridge.exposeInMainWorld("chat", chatApi);
 
 const workApi = {
   listSessions: () => ipcRenderer.invoke(IPC.WORK_SESSIONS_LIST),
@@ -130,7 +122,7 @@ const workApi = {
   },
 };
 
-exposeApi("work", workApi);
+contextBridge.exposeInMainWorld("work", workApi);
 
 // AG-UI 事件流：发起一次 agent run，通过 onEvent 回调收 AG-UI 标准事件，
 // 返回 Promise<{success,error}> 表示整轮结束。onEvent 返回的取消订阅函数用于停止监听。
@@ -158,14 +150,14 @@ const aguiApi = {
   cancel: (runId: string) => ipcRenderer.invoke(IPC.AGUI_CANCEL, { runId }),
 };
 
-exposeApi("agui", aguiApi);
+contextBridge.exposeInMainWorld("agui", aguiApi);
 
 // System utilities exposed to renderer
 const systemApi = {
   openExternal: (url: string) => ipcRenderer.invoke(IPC.OPEN_EXTERNAL, url),
 };
 
-exposeApi("system", systemApi);
+contextBridge.exposeInMainWorld("system", systemApi);
 
 const schedulerEventsApi = {
   onEvent: (callback: (event: unknown) => void) => {
@@ -181,7 +173,7 @@ const schedulerEventsApi = {
   },
 };
 
-exposeApi("schedulerEvents", schedulerEventsApi);
+contextBridge.exposeInMainWorld("schedulerEvents", schedulerEventsApi);
 
 // 用户选择卡片（歧义消解器）：渲染端回传用户选择给主进程
 // 卡片展示走 AGUI_EVENT 的 CUSTOM 事件（与天气卡片同通道），resolve 走独立 IPC
@@ -189,7 +181,7 @@ const choiceApi = {
   resolve: (id: string, value: string) =>
     ipcRenderer.invoke(IPC.CHOICE_RESOLVE, { id, value }),
 };
-exposeApi("choice", choiceApi);
+contextBridge.exposeInMainWorld("choice", choiceApi);
 
 const sidebarApi = {
   minimize: () => ipcRenderer.send(IPC.SIDEBAR_MINIMIZE),
@@ -212,8 +204,8 @@ const tasksApi = {
   },
 };
 
-exposeApi("sidebar", sidebarApi);
-exposeApi("tasks", tasksApi);
+contextBridge.exposeInMainWorld("sidebar", sidebarApi);
+contextBridge.exposeInMainWorld("tasks", tasksApi);
 
 // 通话窗口 API
 const callApi = {
@@ -244,7 +236,7 @@ const callApi = {
     return () => ipcRenderer.removeListener(IPC.CALL_ERROR, handler);
   },
 };
-exposeApi("call", callApi);
+contextBridge.exposeInMainWorld("call", callApi);
 
 const cyreneThemeApi = {
   get: () => ipcRenderer.invoke(IPC.UI_THEME_GET) as Promise<UiTheme>,
@@ -255,7 +247,7 @@ const cyreneThemeApi = {
   },
 };
 
-exposeApi("cyreneTheme", cyreneThemeApi);
+contextBridge.exposeInMainWorld("cyreneTheme", cyreneThemeApi);
 
 const cyreneFontApi = {
   get: () => ipcRenderer.invoke(IPC.UI_FONT_GET) as Promise<UiFont>,
@@ -266,7 +258,7 @@ const cyreneFontApi = {
   },
 };
 
-exposeApi("cyreneFont", cyreneFontApi);
+contextBridge.exposeInMainWorld("cyreneFont", cyreneFontApi);
 
 const settingsApi = {
   minimize: () => ipcRenderer.send(IPC.SETTINGS_MINIMIZE),
@@ -393,7 +385,7 @@ const settingsApi = {
     ipcRenderer.invoke(IPC.PERMISSION_APPROVAL_RESOLVE, { id, allowed }),
 };
 
-exposeApi("settings", settingsApi);
+contextBridge.exposeInMainWorld("settings", settingsApi);
 
 const schedulerApi = {
   list: () => ipcRenderer.invoke(IPC.SCHEDULER_LIST),
@@ -406,7 +398,7 @@ const schedulerApi = {
   getTools: () => ipcRenderer.invoke(IPC.SCHEDULER_GET_TOOLS),
 };
 
-exposeApi("cyreneScheduler", schedulerApi);
+contextBridge.exposeInMainWorld("cyreneScheduler", schedulerApi);
 
 const stickerManagerApi = {
 	  minimize: () => ipcRenderer.send(IPC.STICKERS_MINIMIZE),
@@ -419,7 +411,7 @@ const stickerManagerApi = {
 	  deleteSticker: (id: string) => ipcRenderer.invoke(IPC.STICKERS_DELETE, id),
 	};
 
-exposeApi("stickerManager", stickerManagerApi);
+contextBridge.exposeInMainWorld("stickerManager", stickerManagerApi);
 
 const modelConfigApi = {
   get: () => ipcRenderer.invoke(IPC.MODEL_CONFIG_GET),
@@ -431,7 +423,7 @@ const modelConfigApi = {
   },
 };
 
-exposeApi("modelConfig", modelConfigApi);
+contextBridge.exposeInMainWorld("modelConfig", modelConfigApi);
 const runtimeStateApi = {
   get: () => ipcRenderer.invoke(IPC.RUNTIME_STATE_GET),
   onChanged: (callback: (state: unknown) => void) => {
@@ -490,16 +482,16 @@ const memoryPanelApi = {
   testQueryRouter: (settings: Record<string, unknown>) => ipcRenderer.invoke(IPC.MEMORY_QUERY_ROUTER_TEST, settings),
 };
 
-exposeApi("user", userApi);
-exposeApi("cyreneLocation", locationApi);
-exposeApi("memoryPanel", memoryPanelApi);
-exposeApi("runtimeState", runtimeStateApi);
+contextBridge.exposeInMainWorld("user", userApi);
+contextBridge.exposeInMainWorld("cyreneLocation", locationApi);
+contextBridge.exposeInMainWorld("memoryPanel", memoryPanelApi);
+contextBridge.exposeInMainWorld("runtimeState", runtimeStateApi);
 
 // [你的生活] 当前活动查询（chat 标题栏 / sidebar 状态位显示用）
 const lifeStatusApi = {
   getCurrentActivity: (): Promise<string | null> => ipcRenderer.invoke(IPC.LIFE_GET_CURRENT_ACTIVITY),
 };
-exposeApi("lifeStatus", lifeStatusApi);
+contextBridge.exposeInMainWorld("lifeStatus", lifeStatusApi);
 
 const live2dSpeechApi = {
   prepare: () => ipcRenderer.send(IPC.LIVE2D_SPEECH_PREPARE),
@@ -526,7 +518,7 @@ const live2dSpeechApi = {
     return () => ipcRenderer.removeListener(IPC.LIVE2D_SHOW_BUBBLE, listener);
   },
 };
-exposeApi("live2dSpeech", live2dSpeechApi);
+contextBridge.exposeInMainWorld("live2dSpeech", live2dSpeechApi);
 
 const live2dActionApi = {
   onPlayAction: (callback: (payload: import("../shared/live2d-actions").Live2DTarget) => void) => {
@@ -535,13 +527,13 @@ const live2dActionApi = {
     return () => ipcRenderer.removeListener(IPC.LIVE2D_PLAY_ACTION, listener);
   },
 };
-exposeApi("live2dAction", live2dActionApi);
+contextBridge.exposeInMainWorld("live2dAction", live2dActionApi);
 
 const live2dDiagnosticsApi = {
   getMain: () => ipcRenderer.invoke(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS),
   getIpcListenerCounts: () => getLive2DIpcListenerCounts(ipcRenderer),
 };
-exposeApi("live2dDiagnostics", live2dDiagnosticsApi);
+contextBridge.exposeInMainWorld("live2dDiagnostics", live2dDiagnosticsApi);
 
 // Opener 主动开口反馈（渲染端 → 主进程）
 const openerApi = {
@@ -557,7 +549,7 @@ const openerApi = {
   proactiveIgnoreFeedback: () => ipcRenderer.invoke(IPC.OPENER_PROACTIVE_IGNORE_FEEDBACK) as Promise<boolean>,
   proactivePendingFeedback: () => ipcRenderer.invoke(IPC.OPENER_PROACTIVE_PENDING_FEEDBACK) as Promise<boolean>,
 };
-exposeApi("openerBridge", openerApi);
+contextBridge.exposeInMainWorld("openerBridge", openerApi);
 
 // 聊天会话存储（多对话历史）
 const chatStoreApi = {
@@ -606,13 +598,13 @@ const chatStoreApi = {
   },
 };
 
-exposeApi("chatStore", chatStoreApi);
+contextBridge.exposeInMainWorld("chatStore", chatStoreApi);
 
 // Token 用量查询（设置中心 Token 面板用）
 const tokenUsageApi = {
   get: (days: number) => ipcRenderer.invoke(IPC.TOKEN_USAGE_GET, days),
 };
-exposeApi("tokenUsage", tokenUsageApi);
+contextBridge.exposeInMainWorld("tokenUsage", tokenUsageApi);
 
 // TTS 语音合成（设置中心 TTS 面板 + 聊天窗口朗读用）
 const ttsApi = {
@@ -687,7 +679,7 @@ const ttsApi = {
   saveSettings: (tts: Record<string, unknown>) => ipcRenderer.invoke(IPC.TTS_SAVE_SETTINGS, tts),
   loadSettings: () => ipcRenderer.invoke(IPC.TTS_LOAD_SETTINGS),
 };
-exposeApi("tts", ttsApi);
+contextBridge.exposeInMainWorld("tts", ttsApi);
 
 // 游戏代肝（插件卡：配置 + 参考图只读展示 + 开始停止）
 const gameBotApi = {
@@ -706,6 +698,6 @@ const gameBotApi = {
     return () => ipcRenderer.off(IPC.GAME_BOT_PROGRESS, listener);
   },
 };
-exposeApi("gameBot", gameBotApi);
+contextBridge.exposeInMainWorld("gameBot", gameBotApi);
 
-if (shouldExposePreloadApi(preloadWindowRole, "music")) exposeMusicApi();
+exposeMusicApi();

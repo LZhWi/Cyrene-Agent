@@ -147,7 +147,6 @@ export function listMcpServers(): Array<{
   connected: boolean;
   toolCount: number;
   toolIds: string[];
-  rejectedTools: Array<{ name: string; reason: string }>;
 }> {
   return getMcpServerStates();
 }

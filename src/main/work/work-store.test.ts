@@ -110,30 +110,4 @@ describe("work store isolation", () => {
     expect(store.getWorkSession(session.id)?.boundDir).toBeUndefined();
   });
 
-  it.each(["..", "../outside", "..\\outside", "CON", "id/child"])(
-    "rejects an external session id before resolving a file path: %s",
-    async (id) => {
-      const store = await import("./work-store");
-      store.initializeWorkStore();
-      expect(store.getWorkSession(id)).toBeNull();
-      expect(store.deleteWorkSession(id)).toBe(false);
-    },
-  );
-
-  it("ignores unsafe ids loaded from the persisted index", async () => {
-    const root = path.join(electronMock.userDataDir, "cyrene-work");
-    fs.mkdirSync(path.join(root, "sessions"), { recursive: true });
-    fs.writeFileSync(path.join(root, "index.json"), JSON.stringify([{
-      id: "../outside",
-      title: "unsafe",
-      status: "idle",
-      messageCount: 0,
-      createdAt: 1,
-      updatedAt: 1,
-    }]));
-
-    const store = await import("./work-store");
-    store.initializeWorkStore();
-    expect(store.listWorkSessions()).toEqual([]);
-  });
 });

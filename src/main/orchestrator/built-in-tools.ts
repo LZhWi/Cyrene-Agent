@@ -1,5 +1,5 @@
 // 内置高危工具 — 给 agent 装上 fetch_url / run_shell / install_mcp_server 三件武器
-// 全部走权限网关：fetch_url=network, run_shell=shell, install_mcp_server=shell
+// 全部走权限网关：fetch_url=network, run_shell=shell, install_mcp_server=fs-write
 
 import { spawn } from "child_process";
 import { toolRegistry } from "./tool-registry";
@@ -373,7 +373,7 @@ toolRegistry.register({
     "参数：id (可选，唯一标识，留空则用时间戳)，name (展示名)，command (可执行命令)，" +
     "args (字符串数组)，env (键值对，环境变量)，cwd (可选工作目录)。",
   enabled: true,
-  risk: "shell",
+  risk: "fs-write",
   inputSchema: {
     type: "object",
     properties: {

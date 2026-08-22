@@ -3,24 +3,12 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import type { ToolRiskLevel } from "../permission";
-import { ToolDefinition, toolRegistry, type ToolEffectKind } from "./tool-registry";
+import { ToolDefinition, toolRegistry } from "./tool-registry";
 
 const LOG_PREFIX = "[MCP Adapter]";
 
 export const MCP_DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
 export const MCP_DEFAULT_TOOL_TIMEOUT_MS = 60_000;
-
-interface McpToolAnnotations {
-  readOnlyHint?: boolean;
-  destructiveHint?: boolean;
-  [key: string]: unknown;
-}
-
-export interface McpToolPolicy {
-  risk: ToolRiskLevel;
-  effectKind: Exclude<ToolEffectKind, "unknown">;
-}
 
 export interface McpServerConfig {
   id: string;
@@ -31,10 +19,6 @@ export interface McpServerConfig {
   env?: Record<string, string>;
   cwd?: string;
   url?: string;
-  /** 本地显式 server 级兜底。未设置时，无 annotations 的工具 fail closed。 */
-  defaultToolPolicy?: McpToolPolicy;
-  /** 本地显式逐工具覆盖，优先于第三方 server 返回的 annotations。 */
-  toolPolicyOverrides?: Record<string, McpToolPolicy>;
   connectTimeoutMs?: number;
   toolCallTimeoutMs?: number;
 }
@@ -45,7 +29,6 @@ interface McpServerState {
   transport: Transport;
   connected: boolean;
   toolIds: string[];
-  rejectedTools: Array<{ name: string; reason: string }>;
 }
 
 function normalizeTimeout(value: number | undefined, fallback: number): number {
@@ -71,35 +54,7 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: str
   }
 }
 
-export function isMcpToolPolicy(value: unknown): value is McpToolPolicy {
-  if (!value || typeof value !== "object") return false;
-  const p = value as McpToolPolicy;
-  return ["safe", "fs-read", "fs-write", "shell", "network", "input-control"].includes(p.risk)
-    && ["read", "mutation", "external_side_effect"].includes(p.effectKind);
-}
-
-/**
- * 本地策略是权限下限；第三方 annotations 只能把风险抬高，不能自行降权。
- * 没有本地策略时，即使 server 自称 readOnly 也 fail closed。
- */
-export function resolveMcpToolPolicy(
-  annotations: McpToolAnnotations | undefined,
-  override: McpToolPolicy | undefined,
-  serverDefault: McpToolPolicy | undefined,
-): McpToolPolicy | undefined {
-  const localPolicy = isMcpToolPolicy(override)
-    ? override
-    : isMcpToolPolicy(serverDefault)
-      ? serverDefault
-      : undefined;
-  if (!localPolicy) return undefined;
-  if (annotations?.destructiveHint === true) {
-    return { risk: "shell", effectKind: "external_side_effect" };
-  }
-  return localPolicy;
-}
-
-/** 连接一个 MCP server，发现并注册已完成本地风险分类的工具。 */
+/** 连接一个 MCP server，发现并注册工具。 */
 export async function connectMcpServer(config: McpServerConfig): Promise<string[]> {
   console.log(LOG_PREFIX, "连接 MCP server:", config.name, "(" + config.id + ")");
 
@@ -140,7 +95,6 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
   let mcpTools: Array<{
     name: string;
     description?: string;
-    annotations?: McpToolAnnotations;
     inputSchema: {
       type: "object";
       properties: Record<string, unknown>;
@@ -160,7 +114,6 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
   }
 
   const registeredIds: string[] = [];
-  const rejectedTools: Array<{ name: string; reason: string }> = [];
   for (const mt of mcpTools) {
     const toolId = config.id + "-" + mt.name;
     if (toolRegistry.getById(toolId)) {
@@ -168,20 +121,11 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
       continue;
     }
 
-    const policy = resolveMcpToolPolicy(
-      mt.annotations,
-      config.toolPolicyOverrides?.[mt.name],
-      config.defaultToolPolicy,
-    );
-
     const toolDef: ToolDefinition = {
       id: toolId,
       name: "[" + config.name + "] " + mt.name,
       description: mt.description || mt.name,
       enabled: true,
-      origin: "mcp",
-      risk: policy?.risk,
-      effectKind: policy?.effectKind,
       inputSchema: {
         type: "object",
         properties: mt.inputSchema?.properties as Record<string, { type: string; description: string }> || {},
@@ -233,14 +177,8 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
     transport,
     connected: true,
     toolIds: registeredIds,
-    rejectedTools,
   });
-  console.log(
-    LOG_PREFIX,
-    "MCP server 就绪:",
-    config.name,
-    `(${registeredIds.length} 个工具, ${rejectedTools.length} 个拒绝)`,
-  );
+  console.log(LOG_PREFIX, "MCP server 就绪:", config.name, `(${registeredIds.length} 个工具)`);
   return registeredIds;
 }
 
@@ -269,7 +207,6 @@ export function getMcpServerStates(): Array<{
   connected: boolean;
   toolCount: number;
   toolIds: string[];
-  rejectedTools: Array<{ name: string; reason: string }>;
 }> {
   return Array.from(mcpServerStates.values()).map(s => ({
     id: s.config.id,
@@ -277,7 +214,6 @@ export function getMcpServerStates(): Array<{
     connected: s.connected,
     toolCount: s.toolIds.length,
     toolIds: [...s.toolIds],
-    rejectedTools: [...s.rejectedTools],
   }));
 }
 

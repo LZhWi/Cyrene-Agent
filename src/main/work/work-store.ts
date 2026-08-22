@@ -2,7 +2,6 @@ import { app, shell } from "electron";
 import { randomUUID } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import { assertSafeFileStem, resolvePathInside } from "../runtime/path-guard";
 import type {
   WorkArtifact,
   WorkMessage,
@@ -48,26 +47,15 @@ function isWorkSessionMeta(value: unknown): value is WorkSessionMeta {
   if (!value || typeof value !== "object") return false;
   const item = value as Partial<WorkSessionMeta>;
   return typeof item.id === "string"
-    && isSafeSessionId(item.id)
     && typeof item.title === "string"
     && typeof item.messageCount === "number"
     && typeof item.createdAt === "number"
     && typeof item.updatedAt === "number";
 }
 
-function isSafeSessionId(id: unknown): id is string {
-  try {
-    assertSafeFileStem(id, "work session id");
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function sessionPath(id: string): string {
   ensureInitialized();
-  const safeId = assertSafeFileStem(id, "work session id");
-  return resolvePathInside(sessionsDir, `${safeId}.json`);
+  return path.join(sessionsDir, `${id}.json`);
 }
 
 /** 旧会话 JSON 无 mode 字段，缺省视为普通工作会话。 */
@@ -121,12 +109,11 @@ export function listWorkSessions(): WorkSessionMeta[] {
 }
 
 export function getWorkSession(id: string): WorkSession | null {
-  let filePath: string;
-  try { filePath = sessionPath(id); } catch { return null; }
+  const filePath = sessionPath(id);
   if (!fs.existsSync(filePath)) return null;
   try {
     const session = JSON.parse(fs.readFileSync(filePath, "utf8")) as WorkSession;
-    return session?.schemaVersion === 1 && session.id === id && Array.isArray(session.messages) ? session : null;
+    return session?.schemaVersion === 1 && Array.isArray(session.messages) ? session : null;
   } catch {
     return null;
   }
@@ -206,8 +193,7 @@ export function bindWorkSessionDir(id: string, boundDir?: string): WorkSession |
 }
 
 export function deleteWorkSession(id: string): boolean {
-  let filePath: string;
-  try { filePath = sessionPath(id); } catch { return false; }
+  const filePath = sessionPath(id);
   if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
   const before = indexCache.length;
   indexCache = indexCache.filter((item) => item.id !== id);

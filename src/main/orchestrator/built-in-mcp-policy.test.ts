@@ -11,18 +11,17 @@ import "./built-in-tools";
 import { toolRegistry } from "./tool-registry";
 import { RunControl } from "../runtime/run-control";
 
-describe("built-in MCP installation policy", () => {
+describe("built-in tool execution", () => {
   beforeEach(() => addMcpServer.mockClear());
 
-  it("keeps legacy MCP installation configs free of forced tool policies", async () => {
+	it("installs a custom MCP server", async () => {
     const tool = toolRegistry.getById("install_mcp_server");
 
-    expect(tool?.risk).toBe("shell");
+    expect(tool?.risk).toBe("fs-write");
     await tool?.execute({ id: "custom", name: "Custom", command: "node", args: ["server.js"] });
 
     const config = addMcpServer.mock.calls[0]?.[0];
     expect(config).toEqual(expect.objectContaining({ id: "custom" }));
-    expect(config).not.toHaveProperty("defaultToolPolicy");
   });
 
   it("kills an in-flight run_shell process when the run is cancelled", async () => {

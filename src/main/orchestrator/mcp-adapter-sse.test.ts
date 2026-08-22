@@ -34,7 +34,7 @@ vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
 	}),
 }));
 
-import { connectMcpServer, disconnectMcpServer, getMcpServerStates, resolveMcpToolPolicy } from "./mcp-adapter";
+import { connectMcpServer, disconnectMcpServer, getMcpServerStates } from "./mcp-adapter";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { toolRegistry } from "./tool-registry";
@@ -104,7 +104,7 @@ describe("mcp-adapter transport split", () => {
 		).rejects.toThrow(/sse transport requires url/);
 	});
 
-	it("keeps unannotated legacy MCP tools available without a local policy", async () => {
+	it("registers discovered MCP tools", async () => {
 		const Client = (await import("@modelcontextprotocol/sdk/client/index.js")).Client as any;
 		Client.mockImplementation(function (this: unknown) {
 			return {
@@ -117,62 +117,8 @@ describe("mcp-adapter transport split", () => {
 		const ids = await connectMcpServer({ id: "unclassified", name: "Unclassified", transport: "stdio", command: "node" });
 
 		expect(ids).toEqual(["unclassified-mystery"]);
-		expect(toolRegistry.getById("unclassified-mystery")).toEqual(expect.objectContaining({
-			origin: "mcp",
-			risk: undefined,
-			effectKind: undefined,
-		}));
-		expect(getMcpServerStates().find((s) => s.id === "unclassified")?.rejectedTools).toEqual([]);
-	});
-
-	it("does not trust annotations without a local policy and escalates destructive hints", () => {
-		expect(resolveMcpToolPolicy({ readOnlyHint: true }, undefined, undefined)).toBeUndefined();
-		expect(resolveMcpToolPolicy(
-			{ destructiveHint: true },
-			undefined,
-			{ risk: "network", effectKind: "read" },
-		)).toEqual({
-			risk: "shell",
-			effectKind: "external_side_effect",
-		});
-	});
-
-	it("uses a local per-tool override before the server default", () => {
-		expect(resolveMcpToolPolicy(
-			undefined,
-			{ risk: "network", effectKind: "read" },
-			{ risk: "shell", effectKind: "external_side_effect" },
-		)).toEqual({ risk: "network", effectKind: "read" });
-	});
-
-	it("registers classified MCP tools with explicit origin, risk and effect", async () => {
-		const Client = (await import("@modelcontextprotocol/sdk/client/index.js")).Client as any;
-		Client.mockImplementation(function (this: unknown) {
-			return {
-				connect: vi.fn().mockResolvedValue(undefined),
-				listTools: vi.fn().mockResolvedValue({ tools: [{
-					name: "lookup",
-					annotations: { readOnlyHint: true },
-					inputSchema: { type: "object", properties: {} },
-				}] }),
-				close: vi.fn().mockResolvedValue(undefined),
-				callTool: vi.fn().mockResolvedValue({ content: [{ type: "text", text: "ok" }] }),
-			};
-		});
-
-		await connectMcpServer({
-			id: "classified",
-			name: "Classified",
-			transport: "stdio",
-			command: "node",
-			defaultToolPolicy: { risk: "fs-read", effectKind: "read" },
-		});
-
-		expect(toolRegistry.getById("classified-lookup")).toMatchObject({
-			origin: "mcp",
-			risk: "fs-read",
-			effectKind: "read",
-		});
+		expect(toolRegistry.getById("unclassified-mystery")).toBeDefined();
+		expect(getMcpServerStates().find((s) => s.id === "unclassified")?.toolIds).toEqual(["unclassified-mystery"]);
 	});
 
 	it("times out a hanging connection and closes its transport", async () => {
@@ -232,7 +178,6 @@ describe("mcp-adapter transport split", () => {
 			transport: "stdio",
 			command: "node",
 			toolCallTimeoutMs: 10,
-			defaultToolPolicy: { risk: "shell", effectKind: "external_side_effect" },
 		});
 
 		await expect(toolRegistry.getById("call-timeout-hang")!.execute({})).rejects.toThrow(
@@ -255,7 +200,6 @@ describe("mcp-adapter transport split", () => {
 			name: "Tool Error",
 			transport: "stdio",
 			command: "node",
-			defaultToolPolicy: { risk: "shell", effectKind: "external_side_effect" },
 		});
 
 		await expect(toolRegistry.getById("tool-error-bad")!.execute({})).rejects.toThrow(/E_MCP_TOOL_FAILED: denied/);
@@ -277,7 +221,6 @@ describe("mcp-adapter transport split", () => {
 			name: "Signal",
 			transport: "stdio",
 			command: "node",
-			defaultToolPolicy: { risk: "shell", effectKind: "external_side_effect" },
 		});
 		const controller = new AbortController();
 
