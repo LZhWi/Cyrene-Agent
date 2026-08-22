@@ -39,12 +39,7 @@ try {
     env: { ...process.env, VITE_DEV: "" },
     timeout: 45_000,
   });
-  const main = await electronApp.firstWindow({ timeout: 45_000 });
-  await main.waitForLoadState("domcontentloaded");
-  await main.evaluate(() => {
-    window.settings.openSidebar();
-    window.settings.openTasks();
-  });
+  await electronApp.firstWindow({ timeout: 45_000 });
 
   const findPage = async (fragment) => {
     const deadline = Date.now() + 30_000;
@@ -58,6 +53,14 @@ try {
     }
     throw new Error(`Timed out waiting for window: ${fragment}`);
   };
+
+  // Window creation is asynchronous; chat can become observable before the pet
+  // window, so identify the root window by its packaged URL instead of arrival order.
+  const main = await findPage("/renderer/index.html");
+  await main.evaluate(() => {
+    window.settings.openSidebar();
+    window.settings.openTasks();
+  });
 
   const sidebar = await findPage("/sidebar/");
   await findPage("/tasks/");
