@@ -46,7 +46,9 @@ export function parsePreloadWindowRole(argv: readonly string[]): PreloadWindowRo
 }
 
 export function shouldExposePreloadApi(role: PreloadWindowRole | null, apiName: string): boolean {
-  // Unlabelled windows retain the legacy preload surface. GameBot is intentionally
-  // unlabelled because it is outside the scope of the PC hardening work.
-  return role === null || ROLE_APIS[role].has(apiName);
+  // Compatibility rollback: every desktop renderer receives the legacy preload
+  // surface. Keep role parsing only so restrictions can be redesigned later.
+  void role;
+  void apiName;
+  return true;
 }

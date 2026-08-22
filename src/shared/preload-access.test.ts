@@ -8,18 +8,12 @@ describe("preload access policy", () => {
     expect(parsePreloadWindowRole(["electron"])).toBeNull();
   });
 
-  it("limits privileged APIs to the window that needs them", () => {
-    expect(shouldExposePreloadApi("chat", "agui")).toBe(true);
-    expect(shouldExposePreloadApi("chat", "user")).toBe(true);
-    expect(shouldExposePreloadApi("chat", "openerBridge")).toBe(true);
-    expect(shouldExposePreloadApi("chat", "gameBot")).toBe(false);
-    expect(shouldExposePreloadApi("call", "tts")).toBe(true);
-    expect(shouldExposePreloadApi("call", "settings")).toBe(false);
-    expect(shouldExposePreloadApi("sticker-manager", "stickerManager")).toBe(true);
-    expect(shouldExposePreloadApi("sticker-manager", "chatStore")).toBe(false);
-    expect(shouldExposePreloadApi("settings", "gameBot")).toBe(true);
-    expect(shouldExposePreloadApi("sidebar", "chatStore")).toBe(true);
-    expect(shouldExposePreloadApi("settings", "openerBridge")).toBe(true);
+  it("keeps the legacy API surface available in every desktop window", () => {
+    for (const role of ["main", "chat", "sidebar", "tasks", "settings", "sticker-manager", "call"] as const) {
+      expect(shouldExposePreloadApi(role, "agui")).toBe(true);
+      expect(shouldExposePreloadApi(role, "settings")).toBe(true);
+      expect(shouldExposePreloadApi(role, "gameBot")).toBe(true);
+    }
   });
 
   it("keeps unlabelled legacy windows compatible", () => {

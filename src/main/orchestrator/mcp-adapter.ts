@@ -173,12 +173,6 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
       config.toolPolicyOverrides?.[mt.name],
       config.defaultToolPolicy,
     );
-    if (!policy) {
-      const reason = "missing local tool policy";
-      rejectedTools.push({ name: mt.name, reason });
-      console.warn(LOG_PREFIX, `拒绝未分类工具 ${toolId}: ${reason}`);
-      continue;
-    }
 
     const toolDef: ToolDefinition = {
       id: toolId,
@@ -186,8 +180,8 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
       description: mt.description || mt.name,
       enabled: true,
       origin: "mcp",
-      risk: policy.risk,
-      effectKind: policy.effectKind,
+      risk: policy?.risk,
+      effectKind: policy?.effectKind,
       inputSchema: {
         type: "object",
         properties: mt.inputSchema?.properties as Record<string, { type: string; description: string }> || {},

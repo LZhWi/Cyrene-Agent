@@ -14,16 +14,15 @@ import { RunControl } from "../runtime/run-control";
 describe("built-in MCP installation policy", () => {
   beforeEach(() => addMcpServer.mockClear());
 
-  it("requires shell permission and classifies installed third-party tools as external side effects", async () => {
+  it("keeps legacy MCP installation configs free of forced tool policies", async () => {
     const tool = toolRegistry.getById("install_mcp_server");
 
     expect(tool?.risk).toBe("shell");
     await tool?.execute({ id: "custom", name: "Custom", command: "node", args: ["server.js"] });
 
-    expect(addMcpServer).toHaveBeenCalledWith(expect.objectContaining({
-      id: "custom",
-      defaultToolPolicy: { risk: "shell", effectKind: "external_side_effect" },
-    }));
+    const config = addMcpServer.mock.calls[0]?.[0];
+    expect(config).toEqual(expect.objectContaining({ id: "custom" }));
+    expect(config).not.toHaveProperty("defaultToolPolicy");
   });
 
   it("kills an in-flight run_shell process when the run is cancelled", async () => {

@@ -10,14 +10,9 @@ import { DEFAULT_UI_FONT, isSupportedFontFileName, normalizeUiFont, type UiFont 
 import { normalizeUiIcon, UI_ICON_PRESETS, type UiIcon } from "../shared/ui-icon";
 import { foldReasoning, normalizeReasoningPreference, type ReasoningPreference } from "../shared/reasoning";
 import { getUiFontResponseHeaders, isSafeUiFontRequest } from "./ui-font-protocol";
-import { classifyNavigation } from "./navigation-policy";
 import { writeFileAtomicSync, writeJsonAtomicSync } from "./runtime/atomic-file";
 import { appendRotatingLogSync } from "./runtime/rotating-log";
 import { pruneDirectoryByMtimeSync } from "./runtime/cache-pruner";
-import {
-  RENDERER_CONTENT_SECURITY_POLICY,
-  shouldProtectRendererDocument,
-} from "./renderer-security-policy";
 import {
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
@@ -70,7 +65,6 @@ import "./orchestrator/built-in-tools";
 // 触发 fs-tools 的副作用注册（read_file / list_dir / write_file / read_image）
 import "./orchestrator/fs-tools";
 import { initMcpManager, addMcpServer, removeMcpServer, listMcpServers, pruneMcpServersByIds, shutdownMcpManager } from "./orchestrator/mcp-manager";
-import { sanitizeRendererMcpConfig } from "./orchestrator/mcp-config-policy";
 import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from "./sync-mcp-builtin";
 import { buildEnvironmentContext } from "./orchestrator/environment";
 import { initPermissionFromDisk, registerPermissionIpc, getCurrentLevel } from "./permission";
@@ -1639,7 +1633,6 @@ async function syncVolcanoSearchMcp(settings: GeneralSettings): Promise<void> {
           MINIMAX_API_KEY: settings.searchMinimaxKey.trim(),
           MINIMAX_API_HOST: "https://api.minimaxi.com",
         },
-        defaultToolPolicy: { risk: "network", effectKind: "read" },
       });
       if (result.ok) {
         console.log("[Cyrene] MiniMax 搜索 MCP 注册成功，工具:", result.toolIds?.join(", "));
@@ -1661,7 +1654,6 @@ async function syncVolcanoSearchMcp(settings: GeneralSettings): Promise<void> {
         command: "uvx",
         args: ["minimax-coding-plan-mcp", "-y"],
         env: { MINIMAX_API_KEY: settings.searchMinimaxKey.trim(), MINIMAX_API_HOST: "https://api.minimaxi.com" },
-        defaultToolPolicy: { risk: "network", effectKind: "read" },
       });
     } catch (err) { console.error("[Cyrene] MiniMax 搜索 MCP 重新注册异常:", err); }
   }
@@ -2826,21 +2818,20 @@ export function sendToLive2DWindow(channel: string, payload?: unknown): void {
   else win.webContents.send(channel, payload);
 }
 
+function openExternalUrl(url: string): boolean {
+  if (!url.startsWith("http://") && !url.startsWith("https://")) return false;
+  if (isDev && url.startsWith("http://localhost:5173")) return false;
+  void shell.openExternal(url);
+  return true;
+}
+
 function attachExternalLinkHandler(win: BrowserWindow): void {
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (classifyNavigation(url, win.webContents.getURL()) === "external") {
-      void shell.openExternal(url);
-    }
-    return { action: "deny" };
+    return openExternalUrl(url) ? { action: "deny" } : { action: "allow" };
   });
 
   win.webContents.on("will-navigate", (event, url) => {
-    const decision = classifyNavigation(url, win.webContents.getURL());
-    if (decision === "allow") return;
-    event.preventDefault();
-    if (decision === "external") {
-      void shell.openExternal(url);
-    }
+    if (openExternalUrl(url)) event.preventDefault();
   });
 }
 function createWindow(): void {
@@ -2892,13 +2883,11 @@ function createWindow(): void {
     icon: getCurrentAppIconPath(),
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      additionalArguments: ["--cyrene-window-role=main"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
   });
-  attachExternalLinkHandler(mainWindow);
   live2dWindowLifecycle.attach(mainWindow);
 
   if (isDev) {
@@ -3224,13 +3213,11 @@ function createChatWindow(sessionId?: string): void {
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      additionalArguments: ["--cyrene-window-role=chat"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
   });
-  attachExternalLinkHandler(chatWindow);
 
   // 通过 URL query 把目标 sessionId 带给渲染进程（首次加载用），
   // 后续切换走 CHATS_SWITCH_SESSION 事件，避免重新加载页面。
@@ -3303,13 +3290,11 @@ function createSidebarWindow(): void {
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      additionalArguments: ["--cyrene-window-role=sidebar"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
   });
-  attachExternalLinkHandler(sidebarWindow);
 
   if (isDev) {
     sidebarWindow.loadURL("http://localhost:5173/sidebar/");
@@ -3352,13 +3337,11 @@ function createTasksWindow(): void {
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      additionalArguments: ["--cyrene-window-role=tasks"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
   });
-  attachExternalLinkHandler(tasksWindow);
 
   if (isDev) {
     tasksWindow.loadURL("http://localhost:5173/tasks/");
@@ -3460,7 +3443,6 @@ function createSettingsWindow(section?: string): void {
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      additionalArguments: ["--cyrene-window-role=settings"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
@@ -3517,13 +3499,11 @@ async function createStickerManagerWindow(): Promise<{ ok: boolean; error?: stri
     parent: settingsWindow ?? undefined,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      additionalArguments: ["--cyrene-window-role=sticker-manager"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
   });
-  attachExternalLinkHandler(stickerManagerWindow);
 
   stickerManagerWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
     console.error("[stickers] did-fail-load", { errorCode, errorDescription, validatedURL });
@@ -3589,13 +3569,11 @@ function createCallWindow(): void {
     resizable: true,
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
-      additionalArguments: ["--cyrene-window-role=call"],
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
   });
-  attachExternalLinkHandler(callWindow);
 
   if (isDev) {
     callWindow.loadURL("http://localhost:5173/call/");
@@ -4659,9 +4637,7 @@ ipcMain.handle(IPC.USER_UPLOAD_AVATAR, async () => {
 
 ipcMain.handle(IPC.MCP_ADD_SERVER, async (_event, config: unknown) => {
   console.log('[MCP IPC] add-server:', JSON.stringify(config).slice(0, 200));
-  // Renderer 添加的任意第三方 MCP 一律按高风险外部副作用处理；
-  // 不接受 renderer 自带的 policy override，避免被篡改页面自我降权。
-  const result = await addMcpServer(sanitizeRendererMcpConfig(config));
+  const result = await addMcpServer(config as Parameters<typeof addMcpServer>[0]);
   console.log('[MCP IPC] add-server result:', JSON.stringify(result));
   return result;
 });
@@ -4729,18 +4705,6 @@ protocol.registerSchemesAsPrivileged([
 
 app.whenReady().then(async () => {
   scheduleTtsCachePrune();
-  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-    if (details.resourceType !== "mainFrame" || !shouldProtectRendererDocument(details.url)) {
-      callback({ responseHeaders: details.responseHeaders });
-      return;
-    }
-    callback({
-      responseHeaders: {
-        ...details.responseHeaders,
-        "Content-Security-Policy": [RENDERER_CONTENT_SECURITY_POLICY],
-      },
-    });
-  });
   const isTrustedLocationRequester = (urlString: string): boolean => {
     try {
       const url = new URL(urlString);

@@ -104,7 +104,7 @@ describe("mcp-adapter transport split", () => {
 		).rejects.toThrow(/sse transport requires url/);
 	});
 
-	it("fails closed for an unannotated tool without a local policy", async () => {
+	it("keeps unannotated legacy MCP tools available without a local policy", async () => {
 		const Client = (await import("@modelcontextprotocol/sdk/client/index.js")).Client as any;
 		Client.mockImplementation(function (this: unknown) {
 			return {
@@ -116,11 +116,13 @@ describe("mcp-adapter transport split", () => {
 
 		const ids = await connectMcpServer({ id: "unclassified", name: "Unclassified", transport: "stdio", command: "node" });
 
-		expect(ids).toEqual([]);
-		expect(toolRegistry.getById("unclassified-mystery")).toBeUndefined();
-		expect(getMcpServerStates().find((s) => s.id === "unclassified")?.rejectedTools).toEqual([
-			expect.objectContaining({ name: "mystery" }),
-		]);
+		expect(ids).toEqual(["unclassified-mystery"]);
+		expect(toolRegistry.getById("unclassified-mystery")).toEqual(expect.objectContaining({
+			origin: "mcp",
+			risk: undefined,
+			effectKind: undefined,
+		}));
+		expect(getMcpServerStates().find((s) => s.id === "unclassified")?.rejectedTools).toEqual([]);
 	});
 
 	it("does not trust annotations without a local policy and escalates destructive hints", () => {

@@ -25,9 +25,9 @@ export interface ToolDefinition {
   /** 可选分类标签，第一期暂不强制使用。 */
   category?: string;
   enabled: boolean;     // 用户是否启用（对应设置面板的开关）
-  // 危险等级：决定该工具在哪些权限档位下可调用；所有工具必须显式分类
-  risk: ToolRiskLevel;
-  /** 工具来源。MCP 工具必须显式完成风险分类，不能继承 builtin 的 safe 默认值。 */
+  // 危险等级：决定该工具在哪些权限档位下可调用；不填默认 "safe"
+  risk?: ToolRiskLevel;
+  /** 工具来源；回滚后的 legacy MCP 工具允许沿用未分类兼容行为。 */
   origin?: ToolOrigin;
   /** 工具的实际效果类型，供副作用保护和后续执行账本使用。 */
   effectKind?: ToolEffectKind;

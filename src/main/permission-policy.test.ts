@@ -17,11 +17,12 @@ describe("agent tool permission policy", () => {
     expect(policyFor("read-only", "input-control")).toBe("deny");
   });
 
-  it("keeps every non-safe operation reachable through approval after scoped migration", () => {
-    for (const risk of risks.filter((value) => value !== "safe" && value !== "network")) {
-      expect(policyFor("scoped", risk)).toBe("ask");
-    }
+  it("restores the legacy scoped compatibility policy", () => {
+    expect(policyFor("scoped", "fs-read")).toBe("allow");
+    expect(policyFor("scoped", "fs-write")).toBe("allow");
     expect(policyFor("scoped", "network")).toBe("allow");
+    expect(policyFor("scoped", "shell")).toBe("deny");
+    expect(policyFor("scoped", "input-control")).toBe("deny");
   });
 
   it("asks for every non-safe operation in per-action and allows all in full", () => {

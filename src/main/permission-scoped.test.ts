@@ -11,19 +11,19 @@ vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows: vi.fn(() => []) },
 }));
 
-describe("legacy scoped permission migration", () => {
+describe("legacy scoped permission compatibility", () => {
   beforeEach(() => {
     vi.resetModules();
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-permission-scoped-"));
   });
 
-  it("normalizes a runtime scoped selection to per-action", async () => {
+  it("preserves a runtime scoped selection", async () => {
     const permission = await import("./permission");
     permission.setCurrentLevel("scoped");
-    expect(permission.getCurrentLevel()).toBe("per-action");
+    expect(permission.getCurrentLevel()).toBe("scoped");
   });
 
-  it("migrates a persisted scoped level to per-action", async () => {
+  it("preserves a persisted scoped level without rewriting it", async () => {
     fs.writeFileSync(
       path.join(electronMock.userDataDir, "agent-permission.json"),
       JSON.stringify({ level: "scoped" }),
@@ -32,10 +32,10 @@ describe("legacy scoped permission migration", () => {
     const permission = await import("./permission");
     permission.initPermissionFromDisk();
 
-    expect(permission.getCurrentLevel()).toBe("per-action");
+    expect(permission.getCurrentLevel()).toBe("scoped");
     expect(JSON.parse(fs.readFileSync(
       path.join(electronMock.userDataDir, "agent-permission.json"),
       "utf8",
-    ))).toEqual({ level: "per-action" });
+    ))).toEqual({ level: "scoped" });
   });
 });

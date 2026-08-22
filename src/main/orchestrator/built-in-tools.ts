@@ -338,7 +338,6 @@ async function executeInstallMcp(args: Record<string, unknown>, ctx?: ToolContex
       args: cmdArgs,
       env,
       cwd,
-      defaultToolPolicy: { risk: "shell", effectKind: "external_side_effect" },
     });
     ctx?.signal?.throwIfAborted();
     if (!result.ok) {
