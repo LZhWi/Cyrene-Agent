@@ -2330,6 +2330,15 @@ pluginAddBtn?.addEventListener("click", async () => {
     return;
   }
 
+  const trusted = await showModal({
+    title: "确认 MCP 高风险权限",
+    message: "此 MCP Server 的代码将在本机运行。其未标注工具将统一按高风险外部副作用处理，只会在“每次审批”或“完全访问”权限下执行。是否继续？",
+    icon: "⚠️",
+    confirmText: "确认并添加",
+    cancelText: "取消",
+  });
+  if (!trusted) return;
+
   console.log("[settings] 添加 MCP server:", name, serverId, command.trim());
 
   try {
@@ -2339,6 +2348,7 @@ pluginAddBtn?.addEventListener("click", async () => {
       transport: "stdio",
       command: parsed.command,
       args: parsed.args,
+      defaultToolPolicy: { risk: "shell", effectKind: "external_side_effect" },
     });
 
     if (result?.ok) {

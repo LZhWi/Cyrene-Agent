@@ -6,6 +6,9 @@ import { memoryStore } from "../memory/memory-store";
 import type { ToolRiskLevel } from "../permission";
 import type { ToolContext } from "./tool-context";
 
+export type ToolOrigin = "builtin" | "mcp";
+export type ToolEffectKind = "read" | "mutation" | "external_side_effect" | "unknown";
+
 /** JSON Schema 片段：参数可以是简单类型，也可以是 array/object（含 items/properties）。 */
 export type JsonSchemaProp =
   | { type: string; description?: string; enum?: string[] }
@@ -24,6 +27,10 @@ export interface ToolDefinition {
   enabled: boolean;     // 用户是否启用（对应设置面板的开关）
   // 危险等级：决定该工具在哪些权限档位下可调用；不填默认 "safe"
   risk?: ToolRiskLevel;
+  /** 工具来源。MCP 工具必须显式完成风险分类，不能继承 builtin 的 safe 默认值。 */
+  origin?: ToolOrigin;
+  /** 工具的实际效果类型，供副作用保护和后续执行账本使用。 */
+  effectKind?: ToolEffectKind;
   // MCP 兼容字段：参数 schema，后续接 MCP 时直接复用
   inputSchema: {
     type: "object";

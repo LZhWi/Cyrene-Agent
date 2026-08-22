@@ -1,5 +1,5 @@
 // 内置高危工具 — 给 agent 装上 fetch_url / run_shell / install_mcp_server 三件武器
-// 全部走权限网关：fetch_url=network, run_shell=shell, install_mcp_server=fs-write
+// 全部走权限网关：fetch_url=network, run_shell=shell, install_mcp_server=shell
 
 import { spawn } from "child_process";
 import { toolRegistry } from "./tool-registry";
@@ -309,6 +309,7 @@ async function executeInstallMcp(args: Record<string, unknown>): Promise<string>
       args: cmdArgs,
       env,
       cwd,
+      defaultToolPolicy: { risk: "shell", effectKind: "external_side_effect" },
     });
     if (!result.ok) {
       return "[错误] 安装失败: " + (result.error || "未知错误");
@@ -343,7 +344,7 @@ toolRegistry.register({
     "参数：id (可选，唯一标识，留空则用时间戳)，name (展示名)，command (可执行命令)，" +
     "args (字符串数组)，env (键值对，环境变量)，cwd (可选工作目录)。",
   enabled: true,
-  risk: "fs-write",
+  risk: "shell",
   inputSchema: {
     type: "object",
     properties: {

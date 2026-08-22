@@ -33,6 +33,7 @@ export async function syncPlaywrightMcp(settings: {
         transport: "stdio",
         command: "npx",
         args: ["-y", "@playwright/mcp@latest", "--isolated", "--headless", "--no-sandbox"],
+        defaultToolPolicy: { risk: "input-control", effectKind: "external_side_effect" },
       });
       if (result.ok) {
         console.log(LOG_PREFIX, "Playwright MCP 注册成功,工具:", result.toolIds?.join(", "));

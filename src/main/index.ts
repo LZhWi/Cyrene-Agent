@@ -62,6 +62,7 @@ import "./orchestrator/built-in-tools";
 // 触发 fs-tools 的副作用注册（read_file / list_dir / write_file / read_image）
 import "./orchestrator/fs-tools";
 import { initMcpManager, addMcpServer, removeMcpServer, listMcpServers, pruneMcpServersByIds } from "./orchestrator/mcp-manager";
+import { sanitizeRendererMcpConfig } from "./orchestrator/mcp-config-policy";
 import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from "./sync-mcp-builtin";
 import { buildEnvironmentContext } from "./orchestrator/environment";
 import { initPermissionFromDisk, registerPermissionIpc, getCurrentLevel } from "./permission";
@@ -1597,6 +1598,7 @@ async function syncVolcanoSearchMcp(settings: GeneralSettings): Promise<void> {
           MINIMAX_API_KEY: settings.searchMinimaxKey.trim(),
           MINIMAX_API_HOST: "https://api.minimaxi.com",
         },
+        defaultToolPolicy: { risk: "network", effectKind: "read" },
       });
       if (result.ok) {
         console.log("[Cyrene] MiniMax 搜索 MCP 注册成功，工具:", result.toolIds?.join(", "));
@@ -1618,6 +1620,7 @@ async function syncVolcanoSearchMcp(settings: GeneralSettings): Promise<void> {
         command: "uvx",
         args: ["minimax-coding-plan-mcp", "-y"],
         env: { MINIMAX_API_KEY: settings.searchMinimaxKey.trim(), MINIMAX_API_HOST: "https://api.minimaxi.com" },
+        defaultToolPolicy: { risk: "network", effectKind: "read" },
       });
     } catch (err) { console.error("[Cyrene] MiniMax 搜索 MCP 重新注册异常:", err); }
   }
@@ -4603,7 +4606,9 @@ ipcMain.handle(IPC.USER_UPLOAD_AVATAR, async () => {
 
 ipcMain.handle(IPC.MCP_ADD_SERVER, async (_event, config: unknown) => {
   console.log('[MCP IPC] add-server:', JSON.stringify(config).slice(0, 200));
-  const result = await addMcpServer(config as Parameters<typeof addMcpServer>[0]);
+  // Renderer 添加的任意第三方 MCP 一律按高风险外部副作用处理；
+  // 不接受 renderer 自带的 policy override，避免被篡改页面自我降权。
+  const result = await addMcpServer(sanitizeRendererMcpConfig(config));
   console.log('[MCP IPC] add-server result:', JSON.stringify(result));
   return result;
 });

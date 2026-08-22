@@ -3,19 +3,40 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ToolDefinition, toolRegistry } from "./tool-registry";
+import type { ToolRiskLevel } from "../permission";
+import { ToolDefinition, toolRegistry, type ToolEffectKind } from "./tool-registry";
 
 const LOG_PREFIX = "[MCP Adapter]";
 
+export const MCP_DEFAULT_CONNECT_TIMEOUT_MS = 15_000;
+export const MCP_DEFAULT_TOOL_TIMEOUT_MS = 60_000;
+
+interface McpToolAnnotations {
+  readOnlyHint?: boolean;
+  destructiveHint?: boolean;
+  [key: string]: unknown;
+}
+
+export interface McpToolPolicy {
+  risk: ToolRiskLevel;
+  effectKind: Exclude<ToolEffectKind, "unknown">;
+}
+
 export interface McpServerConfig {
-  id: string;              // 唯一标识
-  name: string;            // 展示名
+  id: string;
+  name: string;
   transport: "stdio" | "sse";
-  command?: string;         // stdio 必填,sse 不用
-  args?: string[];         // 命令行参数
+  command?: string;
+  args?: string[];
   env?: Record<string, string>;
   cwd?: string;
-  url?: string;            // sse 必填,stdio 不用
+  url?: string;
+  /** 本地显式 server 级兜底。未设置时，无 annotations 的工具 fail closed。 */
+  defaultToolPolicy?: McpToolPolicy;
+  /** 本地显式逐工具覆盖，优先于第三方 server 返回的 annotations。 */
+  toolPolicyOverrides?: Record<string, McpToolPolicy>;
+  connectTimeoutMs?: number;
+  toolCallTimeoutMs?: number;
 }
 
 interface McpServerState {
@@ -23,26 +44,71 @@ interface McpServerState {
   client: Client;
   transport: Transport;
   connected: boolean;
-  toolIds: string[];       // 已注册到 ToolRegistry 的工具 ID 列表
+  toolIds: string[];
+  rejectedTools: Array<{ name: string; reason: string }>;
+}
+
+function normalizeTimeout(value: number | undefined, fallback: number): number {
+  return Number.isFinite(value)
+    ? Math.max(10, Math.min(10 * 60_000, Math.trunc(value!)))
+    : fallback;
+}
+
+async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_resolve, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`E_MCP_TIMEOUT: ${label} exceeded ${timeoutMs}ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+export function isMcpToolPolicy(value: unknown): value is McpToolPolicy {
+  if (!value || typeof value !== "object") return false;
+  const p = value as McpToolPolicy;
+  return ["safe", "fs-read", "fs-write", "shell", "network", "input-control"].includes(p.risk)
+    && ["read", "mutation", "external_side_effect"].includes(p.effectKind);
 }
 
 /**
- * 连接一个 MCP server，发现其工具并注册到 ToolRegistry。
- * 返回注册的工具 ID 列表。
+ * 本地策略是权限下限；第三方 annotations 只能把风险抬高，不能自行降权。
+ * 没有本地策略时，即使 server 自称 readOnly 也 fail closed。
  */
+export function resolveMcpToolPolicy(
+  annotations: McpToolAnnotations | undefined,
+  override: McpToolPolicy | undefined,
+  serverDefault: McpToolPolicy | undefined,
+): McpToolPolicy | undefined {
+  const localPolicy = isMcpToolPolicy(override)
+    ? override
+    : isMcpToolPolicy(serverDefault)
+      ? serverDefault
+      : undefined;
+  if (!localPolicy) return undefined;
+  if (annotations?.destructiveHint === true) {
+    return { risk: "shell", effectKind: "external_side_effect" };
+  }
+  return localPolicy;
+}
+
+/** 连接一个 MCP server，发现并注册已完成本地风险分类的工具。 */
 export async function connectMcpServer(config: McpServerConfig): Promise<string[]> {
   console.log(LOG_PREFIX, "连接 MCP server:", config.name, "(" + config.id + ")");
 
   let transport: Transport;
   if (config.transport === "sse") {
-    if (!config.url) {
-      throw new Error("sse transport requires url");
-    }
+    if (!config.url) throw new Error("sse transport requires url");
     transport = new SSEClientTransport(new URL(config.url));
   } else {
-    if (!config.command) {
-      throw new Error("stdio transport requires command");
-    }
+    if (!config.command) throw new Error("stdio transport requires command");
     transport = new StdioClientTransport({
       command: config.command,
       args: config.args,
@@ -51,7 +117,6 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
     });
   }
 
-  // 监听 transport 错误
   transport.onerror = (err: Error) => {
     console.error(LOG_PREFIX, "transport 错误 [" + config.name + "]:", err.message);
   };
@@ -60,22 +125,22 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
     { name: "cyrene", version: "0.4.3" },
     { capabilities: {} },
   );
+  const connectTimeoutMs = normalizeTimeout(config.connectTimeoutMs, MCP_DEFAULT_CONNECT_TIMEOUT_MS);
 
   try {
-    await client.connect(transport);
+    await withTimeout(client.connect(transport), connectTimeoutMs, `connect ${config.id}`);
     console.log(LOG_PREFIX, "已连接到", config.name);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(LOG_PREFIX, "连接失败 [" + config.name + "]:", msg);
-    // 连接失败时清理 transport
-    try { await transport.close(); } catch (_) { /* ignore */ }
+    try { await transport.close(); } catch { /* ignore cleanup error */ }
     throw err;
   }
 
-  // 发现工具
   let mcpTools: Array<{
     name: string;
     description?: string;
+    annotations?: McpToolAnnotations;
     inputSchema: {
       type: "object";
       properties: Record<string, unknown>;
@@ -84,34 +149,34 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
   }> = [];
 
   try {
-    const result = await client.listTools();
-    mcpTools = result.tools as Array<{
-      name: string;
-      description?: string;
-      inputSchema: {
-        type: "object";
-        properties: Record<string, unknown>;
-        required?: string[];
-      };
-    }>;
+    const result = await withTimeout(client.listTools(), connectTimeoutMs, `listTools ${config.id}`);
+    mcpTools = result.tools as typeof mcpTools;
     console.log(LOG_PREFIX, "发现 " + mcpTools.length + " 个工具:", mcpTools.map(t => t.name).join(", "));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error(LOG_PREFIX, "listTools 失败 [" + config.name + "]:", msg);
-    await client.close();
+    try { await client.close(); } catch { /* ignore cleanup error */ }
     throw err;
   }
 
-  // 注册到 ToolRegistry
   const registeredIds: string[] = [];
+  const rejectedTools: Array<{ name: string; reason: string }> = [];
   for (const mt of mcpTools) {
-    // 用短横线拼接，不用冒号——Kimi 等厂商 function.name 正则不允许冒号
-    // （Kimi: ^[a-zA-Z_][a-zA-Z0-9-_]$）。短横线所有厂商都接受。
     const toolId = config.id + "-" + mt.name;
-
-    // 如果已存在同名工具，跳过
     if (toolRegistry.getById(toolId)) {
       console.warn(LOG_PREFIX, "工具已存在，跳过:", toolId);
+      continue;
+    }
+
+    const policy = resolveMcpToolPolicy(
+      mt.annotations,
+      config.toolPolicyOverrides?.[mt.name],
+      config.defaultToolPolicy,
+    );
+    if (!policy) {
+      const reason = "missing local tool policy";
+      rejectedTools.push({ name: mt.name, reason });
+      console.warn(LOG_PREFIX, `拒绝未分类工具 ${toolId}: ${reason}`);
       continue;
     }
 
@@ -120,21 +185,22 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
       name: "[" + config.name + "] " + mt.name,
       description: mt.description || mt.name,
       enabled: true,
+      origin: "mcp",
+      risk: policy.risk,
+      effectKind: policy.effectKind,
       inputSchema: {
         type: "object",
         properties: mt.inputSchema?.properties as Record<string, { type: string; description: string }> || {},
         required: mt.inputSchema?.required,
       },
-      // TODO: 未来若 MCP 工具需要 ToolContext，在此将 ctx 映射为 MCP 协议 arguments 的隐藏字段。
-      // 当前 MCP 工具 execute 签名不带 ctx，按需接入时改签名为 (args, ctx?) 并在这里处理。
       execute: async (args: Record<string, unknown>) => {
         console.log(LOG_PREFIX, "调用工具:", toolId, JSON.stringify(args));
         try {
-          const result = await client.callTool({
-            name: mt.name,
-            arguments: args,
-          });
-          // 提取文本内容
+          const result = await withTimeout(
+            client.callTool({ name: mt.name, arguments: args }),
+            normalizeTimeout(config.toolCallTimeoutMs, MCP_DEFAULT_TOOL_TIMEOUT_MS),
+            `callTool ${toolId}`,
+          );
           const texts: string[] = [];
           if (result.content && Array.isArray(result.content)) {
             for (const block of result.content) {
@@ -144,12 +210,16 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
             }
           }
           const output = texts.join("\n") || JSON.stringify(result.content);
+          if (result.isError === true) {
+            throw new Error(`E_MCP_TOOL_FAILED${output ? `: ${output}` : ""}`);
+          }
           console.log(LOG_PREFIX, "工具返回 [" + toolId + "]:", output.slice(0, 200));
           return output;
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           console.error(LOG_PREFIX, "工具调用失败 [" + toolId + "]:", msg);
-          return "[MCP 工具调用失败] " + msg;
+          if (msg.startsWith("E_MCP_")) throw err;
+          throw new Error("E_MCP_TOOL_FAILED: " + msg);
         }
       },
     };
@@ -159,23 +229,23 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
     console.log(LOG_PREFIX, "已注册工具:", toolId);
   }
 
-  // 保存状态
-  const state: McpServerState = {
+  mcpServerStates.set(config.id, {
     config,
     client,
     transport,
     connected: true,
     toolIds: registeredIds,
-  };
-  mcpServerStates.set(config.id, state);
-
-  console.log(LOG_PREFIX, "MCP server 就绪:", config.name, "(" + registeredIds.length + " 个工具)");
+    rejectedTools,
+  });
+  console.log(
+    LOG_PREFIX,
+    "MCP server 就绪:",
+    config.name,
+    `(${registeredIds.length} 个工具, ${rejectedTools.length} 个拒绝)`,
+  );
   return registeredIds;
 }
 
-/**
- * 断开并清理一个 MCP server 及其注册的工具。
- */
 export async function disconnectMcpServer(serverId: string): Promise<boolean> {
   console.log(LOG_PREFIX, "断开 MCP server:", serverId);
   const state = mcpServerStates.get(serverId);
@@ -183,37 +253,25 @@ export async function disconnectMcpServer(serverId: string): Promise<boolean> {
     console.warn(LOG_PREFIX, "未找到 MCP server:", serverId);
     return false;
   }
-
-  // 从 ToolRegistry 移除工具
-  for (const toolId of state.toolIds) {
-    toolRegistry.unregister(toolId);
-    console.log(LOG_PREFIX, "已移除工具:", toolId);
-  }
-
+  for (const toolId of state.toolIds) toolRegistry.unregister(toolId);
   try {
     await state.client.close();
-    console.log(LOG_PREFIX, "已断开:", serverId);
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error(LOG_PREFIX, "client.close 失败 [" + serverId + "]:", msg);
-    // 即使 client.close 失败，也尝试关闭 transport
-    try { await state.transport.close(); } catch (_) { /* ignore */ }
+    console.error(LOG_PREFIX, "client.close 失败 [" + serverId + "]:", err);
+    try { await state.transport.close(); } catch { /* ignore cleanup error */ }
   }
-
   state.connected = false;
   mcpServerStates.delete(serverId);
   return true;
 }
 
-/**
- * 获取所有已连接的 MCP server 状态。
- */
 export function getMcpServerStates(): Array<{
   id: string;
   name: string;
   connected: boolean;
   toolCount: number;
   toolIds: string[];
+  rejectedTools: Array<{ name: string; reason: string }>;
 }> {
   return Array.from(mcpServerStates.values()).map(s => ({
     id: s.config.id,
@@ -221,11 +279,8 @@ export function getMcpServerStates(): Array<{
     connected: s.connected,
     toolCount: s.toolIds.length,
     toolIds: [...s.toolIds],
+    rejectedTools: [...s.rejectedTools],
   }));
 }
 
-// 内部状态存储
 const mcpServerStates = new Map<string, McpServerState>();
-
-
-

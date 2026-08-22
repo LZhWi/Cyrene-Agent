@@ -41,6 +41,7 @@ describe("syncPlaywrightMcp", () => {
       transport: "stdio",
       command: "npx",
       args: expect.arrayContaining(["-y", "@playwright/mcp@latest"]),
+      defaultToolPolicy: { risk: "input-control", effectKind: "external_side_effect" },
     }));
   });
 

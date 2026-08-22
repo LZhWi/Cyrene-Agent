@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { getUserDataDir } from "../runtime/runtime-paths";
 import { connectMcpServer, disconnectMcpServer, getMcpServerStates, McpServerConfig } from "./mcp-adapter";
+import { applyKnownBuiltinMcpPolicy } from "./mcp-config-policy";
 
 const LOG_PREFIX = "[MCP Manager]";
 
@@ -17,7 +18,7 @@ function loadConfigs(): McpServerConfig[] {
     const configs = JSON.parse(raw);
     if (Array.isArray(configs)) {
       console.log(LOG_PREFIX, "加载了 " + configs.length + " 个 MCP server 配置");
-      return configs;
+      return configs.map((config: McpServerConfig) => applyKnownBuiltinMcpPolicy(config));
     }
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -150,6 +151,7 @@ export function listMcpServers(): Array<{
   connected: boolean;
   toolCount: number;
   toolIds: string[];
+  rejectedTools: Array<{ name: string; reason: string }>;
 }> {
   return getMcpServerStates();
 }
