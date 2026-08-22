@@ -10,6 +10,11 @@ import { DEFAULT_UI_FONT, isSupportedFontFileName, normalizeUiFont, type UiFont 
 import { normalizeUiIcon, UI_ICON_PRESETS, type UiIcon } from "../shared/ui-icon";
 import { foldReasoning, normalizeReasoningPreference, type ReasoningPreference } from "../shared/reasoning";
 import { getUiFontResponseHeaders, isSafeUiFontRequest } from "./ui-font-protocol";
+import { classifyNavigation } from "./navigation-policy";
+import {
+  RENDERER_CONTENT_SECURITY_POLICY,
+  shouldProtectRendererDocument,
+} from "./renderer-security-policy";
 import {
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
@@ -2785,21 +2790,20 @@ export function sendToLive2DWindow(channel: string, payload?: unknown): void {
   else win.webContents.send(channel, payload);
 }
 
-function openExternalUrl(url: string): boolean {
-  if (!url.startsWith("http://") && !url.startsWith("https://")) return false;
-  if (isDev && url.startsWith("http://localhost:5173")) return false;
-  void shell.openExternal(url);
-  return true;
-}
-
 function attachExternalLinkHandler(win: BrowserWindow): void {
   win.webContents.setWindowOpenHandler(({ url }) => {
-    return openExternalUrl(url) ? { action: "deny" } : { action: "allow" };
+    if (classifyNavigation(url, win.webContents.getURL()) === "external") {
+      void shell.openExternal(url);
+    }
+    return { action: "deny" };
   });
 
   win.webContents.on("will-navigate", (event, url) => {
-    if (openExternalUrl(url)) {
-      event.preventDefault();
+    const decision = classifyNavigation(url, win.webContents.getURL());
+    if (decision === "allow") return;
+    event.preventDefault();
+    if (decision === "external") {
+      void shell.openExternal(url);
     }
   });
 }
@@ -2858,6 +2862,7 @@ function createWindow(): void {
       sandbox: false,
     },
   });
+  attachExternalLinkHandler(mainWindow);
   live2dWindowLifecycle.attach(mainWindow);
 
   if (isDev) {
@@ -3189,6 +3194,7 @@ function createChatWindow(sessionId?: string): void {
       sandbox: false,
     },
   });
+  attachExternalLinkHandler(chatWindow);
 
   // 通过 URL query 把目标 sessionId 带给渲染进程（首次加载用），
   // 后续切换走 CHATS_SWITCH_SESSION 事件，避免重新加载页面。
@@ -3267,6 +3273,7 @@ function createSidebarWindow(): void {
       sandbox: false,
     },
   });
+  attachExternalLinkHandler(sidebarWindow);
 
   if (isDev) {
     sidebarWindow.loadURL("http://localhost:5173/sidebar/");
@@ -3315,6 +3322,7 @@ function createTasksWindow(): void {
       sandbox: false,
     },
   });
+  attachExternalLinkHandler(tasksWindow);
 
   if (isDev) {
     tasksWindow.loadURL("http://localhost:5173/tasks/");
@@ -3479,6 +3487,7 @@ async function createStickerManagerWindow(): Promise<{ ok: boolean; error?: stri
       sandbox: false,
     },
   });
+  attachExternalLinkHandler(stickerManagerWindow);
 
   stickerManagerWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
     console.error("[stickers] did-fail-load", { errorCode, errorDescription, validatedURL });
@@ -3550,6 +3559,7 @@ function createCallWindow(): void {
       sandbox: false,
     },
   });
+  attachExternalLinkHandler(callWindow);
 
   if (isDev) {
     callWindow.loadURL("http://localhost:5173/call/");
@@ -4682,6 +4692,18 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 app.whenReady().then(async () => {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    if (details.resourceType !== "mainFrame" || !shouldProtectRendererDocument(details.url)) {
+      callback({ responseHeaders: details.responseHeaders });
+      return;
+    }
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        "Content-Security-Policy": [RENDERER_CONTENT_SECURITY_POLICY],
+      },
+    });
+  });
   const isTrustedLocationRequester = (urlString: string): boolean => {
     try {
       const url = new URL(urlString);
