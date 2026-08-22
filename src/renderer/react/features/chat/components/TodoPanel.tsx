@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { TodoState } from "../../../../shared/todo-types";
-import reminderPngUrl from "../../../assets/status-moods/提醒.png?url";
+import workTodoPngUrl from "../../../assets/status-moods/提醒.png?url";
+import learnTodoPngUrl from "../../../assets/status-moods/学习.png?url";
 import { useFloatingCard } from "./floating-card";
 import "./TodoPanel.css";
 
@@ -102,7 +103,7 @@ export function TodoPanel({ state, mode }: TodoPanelProps) {
         </div>
 
         <div className="cy-todo__hero">
-          <img className="cy-todo__mascot" src={reminderPngUrl} alt="提醒" />
+          <img className="cy-todo__mascot" src={mode === "learn" ? learnTodoPngUrl : workTodoPngUrl} alt="提醒" />
           <div className="cy-todo__hero-text">
             <div className="cy-todo__hero-title">当前任务</div>
             <div className="cy-todo__hero-sub">

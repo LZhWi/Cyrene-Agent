@@ -96,7 +96,7 @@ export function CodeGitPanel({ sessionId, projectName, todoState }: CodeGitPanel
       </button>
 
       <div className="cy-code-git__body">
-        <div className="cy-code-git__mode"><i aria-hidden="true" />模式：Code</div>
+        <div className="cy-code-git__mode"><i aria-hidden="true" />Coding</div>
         <div className="cy-code-git__hero">
           <img className="cy-code-git__mascot" src={workingPngUrl} alt="工作中" />
           <div className="cy-code-git__project">

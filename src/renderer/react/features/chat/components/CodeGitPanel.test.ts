@@ -25,7 +25,7 @@ describe("CodeGitPanel", () => {
       todoState: { updatedAt: 1, todos: [{ id: "t1", content: "完成审阅 UI", status: "pending" }] },
     }));
 
-    expect(html).toContain("模式：Code");
+    expect(html).toContain("Coding");
     expect(html).toContain("cyrene-project");
     expect(html).toContain("分支切换");
     expect(html).toContain("提交或推送");
