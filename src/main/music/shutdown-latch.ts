@@ -8,6 +8,7 @@ export interface MusicBootstrapForLatch {
 export function installShutdownLatch(
   bootstrap: MusicBootstrapForLatch,
   timeoutMs = 5000,
+  shutdownDependents: () => Promise<unknown> = async () => undefined,
 ): void {
   let triggered = false;
   app.on("before-quit", (event) => {
@@ -19,7 +20,7 @@ export function installShutdownLatch(
       console.error(`[Cyrene] music shutdown timeout after ${timeoutMs}ms, forcing exit`);
       app.quit();
     }, timeoutMs);
-    void bootstrap.shutdown().finally(() => {
+    void Promise.allSettled([bootstrap.shutdown(), shutdownDependents()]).finally(() => {
       clearTimeout(t);
       app.quit();
     });

@@ -66,7 +66,7 @@ import { canStartProactiveChannelDelivery, sendProactiveChannelMessage } from ".
 import "./orchestrator/built-in-tools";
 // 触发 fs-tools 的副作用注册（read_file / list_dir / write_file / read_image）
 import "./orchestrator/fs-tools";
-import { initMcpManager, addMcpServer, removeMcpServer, listMcpServers, pruneMcpServersByIds } from "./orchestrator/mcp-manager";
+import { initMcpManager, addMcpServer, removeMcpServer, listMcpServers, pruneMcpServersByIds, shutdownMcpManager } from "./orchestrator/mcp-manager";
 import { sanitizeRendererMcpConfig } from "./orchestrator/mcp-config-policy";
 import { syncPlaywrightMcp, PLAYWRIGHT_MCP_ID, REMOVED_BUILTIN_MCP_IDS } from "./sync-mcp-builtin";
 import { buildEnvironmentContext } from "./orchestrator/environment";
@@ -5407,10 +5407,6 @@ app.whenReady().then(async () => {
     console.log("[Cyrene] 已清理遗留的已下架内置 MCP:", removed.join(", "));
   }
 
-  void syncPlaywrightMcp(initialSettings).catch((e) =>
-    console.error("[Cyrene] playwright MCP sync failed:", e)
-  );
-
   // Cloud Music MCP wiring (MusicService + IPC + 5 Agent tools + shutdown latch)
   const musicPaths = resolveMusicPaths();
   const musicBootstrap = bootstrapMusicService(musicPaths, {
@@ -5425,7 +5421,9 @@ app.whenReady().then(async () => {
       }
     },
   });
-  installShutdownLatch(musicBootstrap);
+  installShutdownLatch(musicBootstrap, 5000, async () => {
+    await Promise.allSettled([shutdownChannels(), shutdownMcpManager()]);
+  });
 
   // Skill 系统：扫描双源 skills + 注册 meta-tool
   initSkills();
@@ -5897,8 +5895,6 @@ app.whenReady().then(async () => {
     }
   });
 
-  void initChannels();
-
   // 任务清单（todo_write 工具的持久化 + 事件广播）：
   // - loadTodos 从磁盘恢复上次未完成的任务（跨重启延续）
   // - onTodosChange 订阅变化，把 TodoState 作为 CUSTOM 事件转发给所有聊天窗口
@@ -6127,6 +6123,7 @@ app.whenReady().then(async () => {
     }
     // 初始化 MCP Manager；scheduler 启动前等待一次，避免近即时任务早于 MCP 工具恢复。
     await initMcpManager();
+    await syncPlaywrightMcp(initialSettings);
     console.log("[Cyrene] RAG initialized OK");
     // 历史回填：索引曾因去重评分膨胀静默停摆，修复后把会话日志补进 chat_history（幂等、后台）。
     const historyBackfill = backfillChatHistoryFromChatLogs();
@@ -6153,6 +6150,11 @@ app.whenReady().then(async () => {
 
   scheduleStartupEmbeddingRefreshes();
 
+  // 渠道依赖 RAG/MCP 与模型设置；失败独立记录，不阻塞桌面窗口和 scheduler。
+  void initChannels().catch((err) => {
+    console.error("[Channels] startup failed:", err instanceof Error ? err.message : err);
+  });
+
   schedulerEngine.start();
 });
 
@@ -6169,7 +6171,6 @@ app.on("before-quit", () => {
   flushVectorStoreSync();
   // DMAE 工作记忆状态防抖落盘的最后兜底（5s 防抖窗口内的最后一次变更）
   void l2DmaeManager.flushNow();
-  void shutdownChannels();
 });
 
 app.on("activate", () => {

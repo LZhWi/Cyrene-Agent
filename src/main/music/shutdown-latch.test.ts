@@ -44,6 +44,20 @@ describe("installShutdownLatch", () => {
     expect(fakeApp.quit).toHaveBeenCalled();
   });
 
+  it("waits for dependent shutdown and contains its failure", async () => {
+    let release!: () => void;
+    const dependent = vi.fn(() => new Promise<void>((_resolve, reject) => {
+      release = () => reject(new Error("channel stop failed"));
+    }));
+    const bootstrap = { isShuttingDown: () => false, shutdown: vi.fn().mockResolvedValue({}) };
+    installShutdownLatch(bootstrap, 1000, dependent);
+    handlers[0]({ preventDefault: vi.fn() });
+    await vi.waitFor(() => expect(dependent).toHaveBeenCalled());
+    expect(fakeApp.quit).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(fakeApp.quit).toHaveBeenCalled());
+  });
+
   it("second before-quit (after latch fired) is idempotent and lets app exit", async () => {
     const shutdown = vi.fn().mockResolvedValue({});
     const bootstrap = { isShuttingDown: () => false, shutdown };

@@ -4,6 +4,7 @@ import * as path from "path";
 import { getUserDataDir } from "../runtime/runtime-paths";
 import { connectMcpServer, disconnectMcpServer, getMcpServerStates, McpServerConfig } from "./mcp-adapter";
 import { applyKnownBuiltinMcpPolicy } from "./mcp-config-policy";
+import { connectStartupItems } from "./startup-connections";
 
 const LOG_PREFIX = "[MCP Manager]";
 
@@ -83,18 +84,13 @@ export async function initMcpManager(): Promise<void> {
     return;
   }
 
-  let connected = 0;
-  let failed = 0;
-
-  for (const config of configs) {
-    try {
-      await connectMcpServer(config);
-      connected++;
-    } catch (err) {
-      failed++;
+  const { connected, failed } = await connectStartupItems(
+    configs,
+    connectMcpServer,
+    (config, err) => {
       console.error(LOG_PREFIX, "自动连接失败 [" + config.name + "]:", (err as Error).message);
-    }
-  }
+    },
+  );
 
   console.log(LOG_PREFIX, "初始化完成: " + connected + " 个成功, " + failed + " 个失败");
 }
@@ -154,4 +150,10 @@ export function listMcpServers(): Array<{
   rejectedTools: Array<{ name: string; reason: string }>;
 }> {
   return getMcpServerStates();
+}
+
+/** 应用退出时并行关闭所有已连接 server，避免 stdio 子进程遗留。 */
+export async function shutdownMcpManager(): Promise<void> {
+  const serverIds = getMcpServerStates().map((state) => state.id);
+  await Promise.allSettled(serverIds.map((id) => disconnectMcpServer(id)));
 }
