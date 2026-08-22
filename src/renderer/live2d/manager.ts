@@ -132,6 +132,13 @@ export class Live2DManager {
       resolution: Math.min(window.devicePixelRatio || 1, 2),
       autoDensity: true,
     });
+    // The pet doesn't need full-refresh rendering: the ticker otherwise runs at
+    // the display's refresh rate (144/165Hz on high-refresh laptops) — a
+    // continuous WebGL load that on hybrid-GPU machines lands on the iGPU and
+    // stacks with DWM + animated wallpaper to saturation (observed: iGPU 100%
+    // spikes freezing mouse/wallpaper while chat streams). 30fps is visually
+    // indistinguishable for the pet and cuts that demand to a fraction.
+    this.app.ticker.maxFPS = 30;
     try {
       await this.loadModel();
     } catch (err) {

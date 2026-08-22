@@ -103,7 +103,7 @@ vi.mock("../rag/index", () => ({
 }));
 vi.mock("./memory-trace", () => ({ appendMemoryTrace: vi.fn() }));
 
-import { dreamSlimScore, runDreamCycle } from "./memory-dream";
+import { DREAM_PARAMS, dreamSlimScore, planSlimDown, runDreamCycle, type DreamParams } from "./memory-dream";
 
 describe.skipIf(!DATA_EXISTS)("真实数据梦境模拟（只读）", () => {
   let originalL2: L2Memory[] = [];
@@ -154,24 +154,54 @@ describe.skipIf(!DATA_EXISTS)("真实数据梦境模拟（只读）", () => {
     expect(mocks.l2Memories.every((m) => m.status === originalL2.find((o) => o.id === m.id)?.status)).toBe(true);
   });
 
+  it("真实记忆副本在强制满载时收敛到 active + aging 工作集上限", () => {
+    const now = Date.now();
+    const workingBefore = originalL2.filter((m) => m.status === "active" || m.status === "aging").length;
+    const reducible = originalL2.filter((m) => m.status === "active" && !m.isPinned).length;
+    if (workingBefore < 2 || reducible < 2) return;
+    const totalCap = workingBefore - 1;
+    const activeCap = Math.max(0, originalL2.filter((m) => m.status === "active").length - 2);
+    const plan = planSlimDown(originalL2.map((m) => ({ ...m })), now, {
+      ...DREAM_PARAMS,
+      activeCap,
+      totalCap,
+    });
+    const archived = new Set(plan.toArchive);
+    const workingAfter = originalL2.filter((m) =>
+      (m.status === "active" || m.status === "aging") && !archived.has(m.id)
+    ).length;
+
+    expect(plan.toArchive.length).toBeGreaterThanOrEqual(1);
+    expect(workingAfter).toBeLessThanOrEqual(totalCap);
+    expect(plan.toArchive.every((id) => originalL2.find((m) => m.id === id)?.isPinned !== true)).toBe(true);
+  });
+
   it("压低水位模拟满载：降级顺序、叙事与真实向量聚类全链路", async () => {
     const now = Date.now();
-    // activeCap=20：56 条 active 强制降 36 条；观察评分排序是否合理
+    const params: DreamParams = { ...DREAM_PARAMS, activeCap: 20 };
+    // 漂移免疫：期望降级集由纯函数 planner 对当前真实数据快照实时复核，不硬编码
+    // 条数——真实数据随使用变化（写测试时 56 active 降 36，之后 active 数会变）。
+    const plan = planSlimDown(originalL2.map((m) => ({ ...m })), now, params);
+    const demotedCount = plan.toAging.length;
+    if (demotedCount === 0) {
+      console.log("[DreamSim] active 未超 20 水位，跳过满载模拟");
+      return;
+    }
     const result = await runDreamCycle({ params: { activeCap: 20 } });
 
     expect(result.status).toBe("completed");
-    expect(result.demotedToAging).toBe(36);
+    expect(result.demotedToAging).toBe(demotedCount);
     expect(result.narrativeWritten).toBe(true);
     // 只读模拟：fetch 已被 stub 拦截（无真实网络请求）；
     // 调用次数 = 沉淀 1 次 + 每组合并 1 次，与预算一致
     expect(mocks.fetchCalls).toBe(1 + result.mergedGroups);
 
-    // 不变量 1：降级的 36 条必然是全库评分最低的 36 条（纯函数可复核）
+    // 不变量 1：降级集必然与纯函数 planner 的规划一致
     const scored = originalL2
-      .filter((m) => !m.isPinned)
-      .map((m) => ({ id: m.id, score: dreamSlimScore(m, now) }))
+      .filter((m) => m.status === "active" && !m.isPinned)
+      .map((m) => ({ id: m.id, score: dreamSlimScore(m, now, params) }))
       .sort((a, b) => a.score - b.score);
-    const expectedDemoted = new Set(scored.slice(0, 36).map((s) => s.id));
+    const expectedDemoted = new Set(plan.toAging);
     const actualDemoted = mocks.statusUpdates
       .filter((u) => u.status === "aging")
       .flatMap((u) => u.ids);
@@ -209,8 +239,8 @@ describe.skipIf(!DATA_EXISTS)("真实数据梦境模拟（只读）", () => {
       input: { l2Total: originalL2.length, active: originalL2.filter((m) => m.status === "active").length, ragEntries: mocks.ragEntries.length },
       params: { activeCap: 20 },
       demotedToAging: result.demotedToAging,
-      demotedScoreRange: [scored[0].score.toFixed(4), scored[35].score.toFixed(4)],
-      keptScoreRange: [scored[36].score.toFixed(4), scored[scored.length - 1].score.toFixed(4)],
+      demotedScoreRange: [scored[0].score.toFixed(4), scored[demotedCount - 1].score.toFixed(4)],
+      keptScoreRange: [scored[demotedCount].score.toFixed(4), scored[scored.length - 1].score.toFixed(4)],
       narrativeChars: narrative.length,
       narrativePreview: narrative,
       mergedGroups: result.mergedGroups,

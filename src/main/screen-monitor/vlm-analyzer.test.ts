@@ -65,7 +65,7 @@ describe("vlm-analyzer", () => {
     const before = observationStore.getRecent(100).length;
     const answer = await captureAndAnalyzeFocused(fakeConfig, "用户在看什么视频？");
     expect(answer).toContain("特征值");
-    // 聚焦路径用高分辨率截图（读小字），周期观测保持默认 1024/q80
+    // 聚焦路径显式 2048/q90（读小字），周期路径走默认 2048/q85
     expect(captureScreen).toHaveBeenLastCalledWith(2048, 90);
     const prompt = String(captionMocks.captionImage.mock.calls[0][1]);
     expect(prompt).toContain("问题：用户在看什么视频？");

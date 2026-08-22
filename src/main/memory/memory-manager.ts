@@ -4,9 +4,19 @@ import { MemoryCandidate, L0_FIELD_DESCRIPTIONS, L2Memory } from "./memory-types
 import { findPossibleConflictCandidate } from "./memory-conflict"
 import { scoreMemoryConflict, type ConflictEvidenceLevel } from "./memory-conflict-score"
 import { wasRecentlyInjectedMemory } from "./recent-injected-memory"
-import { addL2MemoryVector, searchMemoryEntries } from "../rag/index"
+import { addL2MemoryVector, getEntriesBySource, searchMemoryEntries } from "../rag/index"
+import { getEmbeddingProvider } from "../rag/embedding"
+import { cosineSimilarity } from "../rag/vectorstore"
 
 type L1Field = "recentGoals" | "recentPreferences"
+
+/** 只生成疑似重复候选；不得据此丢弃新记忆。 */
+export const L2_WRITE_DEDUP_COSINE = 0.9
+
+export interface SuspectedDuplicateL2 {
+  memory: L2Memory
+  score: number
+}
 
 function preview(content: string, maxLength: number): string {
   return content.slice(0, maxLength)
@@ -21,6 +31,12 @@ function hasCorrectionIntent(text: string): boolean {
   return ["不是这样", "你记错了", "记错了", "我现在不这样", "现在不这样", "我说错了", "之前说错了", "纠正一下", "更正一下"].some((phrase) => text.includes(phrase))
 }
 
+function isExplicitGoalCompletion(content: string, triggerText: string, kind: string | undefined): boolean {
+  if (kind !== "experience" && kind !== "fact") return false
+  const text = `${content} ${triggerText}`
+  return /(?:已经|终于|刚刚|顺利|成功|目前已|现在已).{0,12}(?:完成|做完|实现|达成|学会|结束|通过|毕业)|(?:完成了|做完了|实现了|达成了|学会了|结束了|通过了|毕业了)/u.test(text)
+}
+
 function getImpactScope(memory: L2Memory): "low" | "medium" | "high" {
   if (memory.isPinned) return "high"
   if (memory.status === "active") return "medium"
@@ -33,6 +49,46 @@ function shouldSkipCandidate(candidate: MemoryCandidate): boolean {
 
 function canWriteCoreProfile(candidate: MemoryCandidate): boolean {
   return candidate.certainty === "explicit" && candidate.attribution === "user_explicit"
+}
+
+export function selectImmediateDuplicateL2(
+  candidate: MemoryCandidate,
+  embedding: number[],
+  allL2: L2Memory[],
+  entries: Array<{ id: string; embedding: number[]; metadata?: Record<string, unknown> }>,
+): L2Memory | null {
+  return selectSuspectedDuplicateL2(candidate, embedding, allL2, entries)?.memory ?? null
+}
+
+export function selectSuspectedDuplicateL2(
+  candidate: MemoryCandidate,
+  embedding: number[],
+  allL2: L2Memory[],
+  entries: Array<{ id: string; embedding: number[]; metadata?: Record<string, unknown> }>,
+): SuspectedDuplicateL2 | null {
+  // 状态变化与显式纠正必须进入后续有效期/冲突处理，不能被相似度去重吞掉。
+  if (hasCorrectionIntent(`${candidate.triggerText} ${candidate.content}`)) return null
+  if (isExplicitGoalCompletion(candidate.content, candidate.triggerText, candidate.facets?.primaryKind)) return null
+  const vectorsByL2Id = new Map(entries.flatMap((entry) => {
+    const l2Id = entry.metadata?.l2Id
+    return typeof l2Id === "string" ? [[l2Id, entry] as const] : []
+  }))
+  let best: { memory: L2Memory; score: number } | null = null
+  for (const existing of allL2) {
+    if ((existing.status !== "active" && existing.status !== "aging") || existing.syncStatus !== "synced") continue
+    const vector = vectorsByL2Id.get(existing.id)
+    if (!vector || vector.id !== existing.ragId) continue
+    if (
+      candidate.facets?.source === "model"
+      && existing.facets?.source === "model"
+      && candidate.facets.primaryKind !== existing.facets.primaryKind
+    ) continue
+    const score = cosineSimilarity(embedding, vector.embedding)
+    if (score < L2_WRITE_DEDUP_COSINE || (best && score <= best.score)) continue
+    if (findPossibleConflictCandidate(candidate.content, existing.content).isCandidate) continue
+    best = { memory: existing, score }
+  }
+  return best
 }
 
 export class MemoryManager {
@@ -92,6 +148,10 @@ export class MemoryManager {
   }
 
   private async writeL2(candidate: MemoryCandidate): Promise<void> {
+    // 高余弦也可能是时间更新或信息补充，不能在写入前直接吞掉。
+    // 先保留两条完整记忆，写入成功后再把关系提交给后台 Resolver。
+    const suspectedDuplicate = await this.findSuspectedDuplicateL2(candidate)
+
     const l2Input: Omit<L2Memory, "id" | "createdAt" | "lastAccessedAt" | "accessCount" | "weight" | "status"> = {
       content: candidate.content,
       triggerText: candidate.triggerText,
@@ -99,6 +159,7 @@ export class MemoryManager {
       embedding: [],
       isPinned: false,
       syncStatus: "pending_sync",
+      facets: candidate.facets,
     }
     // L2 原文对话片段（judge 同批输出）：召回注入时附字面证据；缺失时注入回退 triggerText
     if (candidate.sourceQuote) l2Input.sourceQuote = candidate.sourceQuote
@@ -113,26 +174,84 @@ export class MemoryManager {
       ragId = await addL2MemoryVector(candidate.content, l2.id, {
         triggerText: candidate.triggerText,
         confidence: candidate.confidence,
+        facets: l2.facets,
       }, { createdAt: l2.createdAt })
       await memoryStore.markL2SyncStatus(l2.id, "synced", ragId)
     } catch (err) {
       await memoryStore.markL2SyncStatus(l2.id, "sync_failed", undefined, err)
+      if (suspectedDuplicate) {
+        await this.queueSuspectedDuplicate(l2, undefined, suspectedDuplicate)
+      }
       console.warn("[MemoryManager] L2 已写入，但 RAG 同步失败:", err)
       return
     }
 
     console.log(`[MemoryManager] L2 写入: "${preview(candidate.content, 30)}"（l2Id: ${l2.id}, ragId: ${ragId}）`)
 
+    if (suspectedDuplicate) {
+      await this.queueSuspectedDuplicate(l2, ragId, suspectedDuplicate)
+    }
+
     // ── 冲突检测：检查新记忆是否与现有记忆矛盾 ──
     try {
-      await this.detectAndMarkConflicts(candidate.content, l2.id, ragId, candidate.triggerText)
+      await this.detectAndMarkConflicts(candidate.content, l2.id, ragId, candidate.triggerText, candidate.facets?.primaryKind)
     } catch (err) {
       console.warn("[MemoryManager] 冲突检测失败:", err)
     }
   }
 
+  private async findSuspectedDuplicateL2(candidate: MemoryCandidate): Promise<SuspectedDuplicateL2 | null> {
+    const provider = getEmbeddingProvider()
+    if (!provider) return null
+    try {
+      const [embedding, allL2] = await Promise.all([
+        provider.embed(candidate.content),
+        memoryStore.getAllL2(),
+      ])
+      return selectSuspectedDuplicateL2(candidate, embedding, allL2, getEntriesBySource("user_memory"))
+    } catch (error) {
+      // 疑似重复检测只是旁路标记；失败时仍正常写入，不能丢掉新事实。
+      console.warn("[MemoryManager] L2 疑似重复检测失败，继续写入:", error)
+      return null
+    }
+  }
+
+  private async queueSuspectedDuplicate(
+    fresh: L2Memory,
+    freshRagId: string | undefined,
+    match: SuspectedDuplicateL2,
+  ): Promise<void> {
+    const log = await memoryStore.appendConflictLog({
+      status: "candidate",
+      sourceL2Id: fresh.id,
+      targetL2Id: match.memory.id,
+      sourceRagId: freshRagId,
+      targetRagId: match.memory.ragId,
+      reason: `high-cosine near-duplicate candidate (${match.score.toFixed(4)}); preserve both until relationship review`,
+      confidence: match.score,
+      detector: "local",
+      candidateType: "near_duplicate",
+    })
+    await memoryStore.scoreConflictLog(log.id, {
+      conflictScore: Math.max(35, Math.min(100, Math.round(match.score * 100))),
+      resolverPriority: "idle",
+      scoringSignals: {
+        ragCandidate: true,
+        impactScope: getImpactScope(match.memory),
+        penalties: ["near_duplicate_requires_non_destructive_review"],
+      },
+    })
+    console.log(`[MemoryManager] 🔎 疑似重复已保留并排队裁决: "${preview(match.memory.content, 30)}" ↔ "${preview(fresh.content, 30)}"`)
+  }
+
   /** 检测新记忆是否与现有 active 记忆矛盾，如有则标记 */
-  private async detectAndMarkConflicts(content: string, newL2Id: string, newRagId: string, triggerText: string): Promise<void> {
+  private async detectAndMarkConflicts(
+    content: string,
+    newL2Id: string,
+    newRagId: string,
+    triggerText: string,
+    newKind?: string,
+  ): Promise<void> {
     // 搜索语义相似的现有 L2 条目
     const allL2 = await memoryStore.getAllL2()
     const activeL2 = allL2.filter((m) => (m.status === "active" || m.status === "aging") && m.ragId && m.ragId !== newRagId)
@@ -146,6 +265,40 @@ export class MemoryManager {
       const l2Id = entry.metadata?.l2Id
       if (typeof l2Id === "string" && l2Id.length > 0) {
         entriesByL2Id.set(l2Id, entry)
+      }
+    }
+
+    // 目标完成是状态演进，不是仍未完成的 goal，也不是普通真假矛盾。
+    // 严格要求新条目明确表达“已经完成”且被模型标为 experience/fact，
+    // 再取语义检索中最靠前的旧 goal 结束其有效期。
+    if (isExplicitGoalCompletion(content, triggerText, newKind)) {
+      const completedGoal = similarEntries
+        .map((entry) => typeof entry.metadata?.l2Id === "string"
+          ? activeL2.find((memory) => (
+            memory.id === entry.metadata?.l2Id &&
+            memory.facets?.source === "model" &&
+            memory.facets.primaryKind === "goal" &&
+            memory.facets.retrievalKinds.length === 1
+          ))
+          : undefined)
+        .find((memory): memory is L2Memory => memory !== undefined)
+      if (completedGoal && await memoryStore.supersedeL2(completedGoal.id, newL2Id)) {
+        await memoryStore.appendConflictLog({
+          status: "resolved",
+          sourceL2Id: newL2Id,
+          targetL2Id: completedGoal.id,
+          sourceRagId: newRagId,
+          targetRagId: completedGoal.ragId,
+          reason: "explicit goal completion ends the previous open goal",
+          confidence: 0.9,
+          detector: "local",
+          resolutionType: "context_difference",
+          resolutionMemoryId: newL2Id,
+          resolutionReason: "goal completed state transition",
+          resolutionConfidence: 0.9,
+        })
+        console.log(`[MemoryManager] ✅ 目标已完成，旧 goal 结束有效期: "${preview(completedGoal.content, 30)}"`)
+        return
       }
     }
 

@@ -103,6 +103,35 @@ describe("memory conflict resolver", () => {
     expect(result.actions.oldMemoryStatus).toBe("superseded")
   })
 
+  it("warns the resolver that near-duplicate candidates may contain temporal or additive updates", async () => {
+    const { buildResolverMessages } = await import("./memory-resolver")
+    const payload: ResolverPayload = {
+      conflictLog: {
+        id: "conf",
+        createdAt: 1,
+        status: "candidate",
+        sourceL2Id: "new",
+        targetL2Id: "old",
+        reason: "high cosine",
+        confidence: 0.98,
+        detector: "local",
+        candidateType: "near_duplicate",
+      },
+      newMemory: { id: "new", content: "用户喜欢草莓、香草和榛子冰激凌", triggerText: "", sourceConversationId: "", createdAt: 1, lastAccessedAt: 1, accessCount: 0, weight: 0, isPinned: false, status: "active" },
+      oldMemory: { id: "old", content: "用户喜欢草莓和香草冰激凌", triggerText: "", sourceConversationId: "", createdAt: 1, lastAccessedAt: 1, accessCount: 0, weight: 0, isPinned: false, status: "active" },
+      newEvidence: [],
+      oldEvidence: [],
+      conflictScore: 98,
+      scoringSignals: { ragCandidate: true },
+    }
+
+    const messages = buildResolverMessages(payload)
+    expect(messages[0].content).toContain("关系 Resolver")
+    expect(messages[1].content).toContain("候选类型：near_duplicate")
+    expect(messages[1].content).toContain("列表新增项")
+    expect(messages[1].content).toContain("必须保留")
+  })
+
   it("rejects invalid resolver JSON", async () => {
     const { resolvePayload } = await import("./memory-resolver")
     const payload: ResolverPayload = {

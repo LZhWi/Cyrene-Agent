@@ -26,7 +26,7 @@ const memoryStoreMock = vi.hoisted(() => ({
   getDreamNarratives: vi.fn(async () => []),
   getL2DmaeSnapshot: vi.fn(async () => ({ states: {}, round: 0 })),
   setL2DmaeSnapshot: vi.fn(async () => undefined),
-  recordL2RecallsBatch: vi.fn(async () => 0),
+  recordL2RecallsBatch: vi.fn(async (_ids: string[]) => 0),
 }))
 
 const entityGraphMock = vi.hoisted(() => ({
@@ -72,11 +72,22 @@ describe("buildMemoryInjection", () => {
 
     expect(context).toContain("用户喜欢跑步")
     expect(wasRecentlyInjectedMemory("l2_run")).toBe(true)
-    expect(ragMock.searchMemoryEntries).toHaveBeenCalledWith("跑步", "user_memory", 5, { recordRecall: false })
-    // reconsolidation：召回统计在最终注入集上批量记账（fire-and-forget，等一个微任务）
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(memoryStoreMock.recordL2RecallsBatch).toHaveBeenCalledWith(["l2_run"])
-  })
+    expect(ragMock.searchMemoryEntries).toHaveBeenCalledWith("跑步", "user_memory", 5, {
+      recordRecall: false,
+      facetFusion: true,
+      retrievalPlan: expect.objectContaining({
+        semanticResults: 5,
+        kindResults: 0,
+        maxResults: 5,
+        queryKinds: [],
+      }),
+    })
+    // reconsolidation：召回统计在最终注入集上批量记账（fire-and-forget，轮询等待，
+    // 防并发负载下固定 setTimeout 的时序抖动）
+    await vi.waitFor(() => {
+      expect(memoryStoreMock.recordL2RecallsBatch).toHaveBeenCalledWith(["l2_run"])
+    })
+  }, 20000)
 
   it("can retrieve memory without changing recent-injection state", async () => {
     ragMock.searchMemoryEntries.mockResolvedValue([{
@@ -92,7 +103,7 @@ describe("buildMemoryInjection", () => {
 
     expect(context).toContain("用户喜欢散步")
     expect(wasRecentlyInjectedMemory("l2_phone")).toBe(false)
-  })
+  }, 20000)
 
   it("annotates aging and conflicted memories with citation guidance", async () => {
     ragMock.searchMemoryEntries.mockResolvedValue([
@@ -204,6 +215,29 @@ describe("buildMemoryInjection with DMAE working memory", () => {
     ragMock.searchMemoryEntries.mockResolvedValue([])
     const second = await buildMemoryInjection("今天天气怎么样")
     expect(second).toContain("用户正在筹备画展")
+  })
+
+  it("does not refresh lifecycle recall statistics for DMAE-only resident top-ups", async () => {
+    enableDmae()
+    const { buildMemoryInjection } = await import("./index")
+    const otherL2 = { ...topicL2, id: "l2_other", ragId: "rag_other", content: "用户喜欢慢跑" }
+    memoryStoreMock.getAllL2.mockResolvedValue([topicL2, otherL2])
+
+    ragMock.searchMemoryEntries.mockResolvedValue([
+      { id: "rag_topic", text: topicL2.content, createdAt: Date.now(), score: 0.9, metadata: { l2Id: topicL2.id } },
+    ])
+    await buildMemoryInjection("画展准备得怎么样了")
+    await vi.waitFor(() => expect(memoryStoreMock.recordL2RecallsBatch).toHaveBeenCalled())
+    memoryStoreMock.recordL2RecallsBatch.mockClear()
+
+    ragMock.searchMemoryEntries.mockResolvedValue([
+      { id: "rag_other", text: otherL2.content, createdAt: Date.now(), score: 0.9, metadata: { l2Id: otherL2.id } },
+    ])
+    const context = await buildMemoryInjection("慢跑")
+    expect(context).toContain(topicL2.content)
+    expect(context).toContain(otherL2.content)
+    await vi.waitFor(() => expect(memoryStoreMock.recordL2RecallsBatch).toHaveBeenCalled())
+    expect(memoryStoreMock.recordL2RecallsBatch.mock.calls.at(-1)?.[0]).toEqual([otherL2.id])
   })
 
   it("read-only callers preview the working set without committing state", async () => {

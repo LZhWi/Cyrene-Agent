@@ -476,6 +476,9 @@ const memoryPanelApi = {
   saveL0: (patch: Record<string, unknown>) => ipcRenderer.invoke(IPC.MEMORY_PANEL_SAVE_L0, patch),
   saveL1: (patch: Record<string, unknown>) => ipcRenderer.invoke(IPC.MEMORY_PANEL_SAVE_L1, patch),
   runRetrievalSandbox: (query: string, generateReply = false) => ipcRenderer.invoke(IPC.MEMORY_PANEL_RUN_RETRIEVAL_SANDBOX, { query, generateReply }),
+  getQueryRouterSettings: () => ipcRenderer.invoke(IPC.MEMORY_QUERY_ROUTER_GET_SETTINGS),
+  saveQueryRouterSettings: (settings: Record<string, unknown>) => ipcRenderer.invoke(IPC.MEMORY_QUERY_ROUTER_SAVE_SETTINGS, settings),
+  testQueryRouter: (settings: Record<string, unknown>) => ipcRenderer.invoke(IPC.MEMORY_QUERY_ROUTER_TEST, settings),
 };
 
 contextBridge.exposeInMainWorld("user", userApi);

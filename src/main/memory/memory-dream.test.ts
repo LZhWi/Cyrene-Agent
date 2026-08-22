@@ -234,6 +234,19 @@ describe("瘦身评分与规划", () => {
     const plan = planSlimDown([agingLow, agingHigh, agingPinned], now, { ...DREAM_PARAMS, activeCap: 300, totalCap: 2 });
     expect(plan.toArchive).toEqual([agingLow.id]);
   });
+
+  it("totalCap 只约束 active + aging 工作集，已归档条目不制造虚假溢出", () => {
+    const now = Date.now();
+    const active = makeL2({ status: "active" });
+    const aging = makeL2({ status: "aging" });
+    const archived = Array.from({ length: 10 }, () => makeL2({ status: "archived" }));
+
+    const plan = planSlimDown([active, aging, ...archived], now, {
+      ...DREAM_PARAMS, activeCap: 10, totalCap: 2,
+    });
+
+    expect(plan).toEqual({ toAging: [], toArchive: [] });
+  });
 });
 
 describe("聚类", () => {

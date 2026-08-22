@@ -336,6 +336,27 @@ describe("history retrieval diagnostics", () => {
     expect(fs.existsSync(logFile)).toBe(false);
   });
 
+  it("changes only the final cutoff when a larger finalK is requested", async () => {
+    const candidates = Array.from({ length: 12 }, (_, index) => hit(`history-${index}`, 12 - index));
+    let selected: Array<{ text: string }> = [];
+    await runHistoryRetrievalV2Shadow({
+      userQuery: "remember the whole story",
+      toolQuery: "whole story",
+      days: 90,
+      baseline: [],
+      search: async () => candidates,
+      rerank: async (_query, documents) => documents.map((text, index) => ({ text, score: 12 - index })),
+      finalK: 10,
+      enabled: true,
+      now: 1_000,
+      writeLog: false,
+      onResult: (hits) => { selected = hits; },
+    });
+
+    expect(selected).toHaveLength(10);
+    expect(selected.map((item) => item.text)).toEqual(candidates.slice(0, 10).map((item) => item.text));
+  });
+
   it("marks promoted results as changing the formal result", async () => {
     const record = await runHistoryRetrievalV2Shadow({
       userQuery: "Which university admitted me?",

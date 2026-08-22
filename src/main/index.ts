@@ -43,7 +43,7 @@ import { retrieveQueuedDocumentChunks, runDocumentIndexJob } from "./rag/documen
 import { processDocumentIndexRequest } from "./rag/document-index-ipc";
 import { IMAGE_CAPTION_MAX_BYTES, IMAGE_CAPTION_PROMPT, validateCaptionImagePath } from "./chat/image-caption";
 import { decideImageSendStrategy } from "./chat/image-send-strategy";
-import { buildAlwaysOnContext, buildMemoryInjection, runFunctionCallingLoop, scheduleMemoryWrite } from "./orchestrator";
+import { buildAlwaysOnContext, buildMemoryInjection, resolveMemoryRetrievalPlan, runFunctionCallingLoop, scheduleMemoryWrite } from "./orchestrator";
 import { CyreneAgent } from "./orchestrator/cyrene-agent";
 import { indexConversationTurn, runHistoryAutoInjection } from "./orchestrator/history-tools";
 import { buildToneInjection } from "./orchestrator/tone-injector";
@@ -90,6 +90,9 @@ import type { GptsovitsSynthesizeRequest, GptsovitsTextSplitMethod, GptsovitsVer
 import { configureRerankerForLazyInit, initReranker, getRerankerInstallStatus } from "./rag/reranker";
 import { memoryStore } from "./memory/memory-store"
 import { isL2DmaeEnabled, l2DmaeManager } from "./memory/dmae-manager"
+import { repairStoredMemoryFacets, resolveFacetSupplementMinimumScore, resolveRetrievalPlan } from "./memory/memory-facets"
+import { routeMemoryQuery, type MemoryQueryRouterSettings } from "./memory/memory-query-router"
+import { loadMemoryQueryRouterSettings, normalizeMemoryQueryRouterSettings, saveMemoryQueryRouterSettings } from "./memory/memory-query-router-settings"
 import { backupMemoryRagFiles, reconcileMemoryRag } from "./memory/memory-rag-reconciliation";
 import type { L0Profile, L1Profile } from "./memory/memory-types";
 import { broadcastChatsChanged, registerChatsIpc } from "./chats/chats-ipc";
@@ -110,6 +113,7 @@ import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
 import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegateSettings } from "./orchestrator/built-in-tools";
 import { registerRecallHistoryTool, backfillChatHistoryFromChatLogs, runHistoryRetrievalSandbox } from "./orchestrator/history-tools";
 import { backfillL2FromChatLogs } from "./memory/memory-backfill";
+import { backfillMemoryFacets } from "./memory/memory-facet-backfill";
 import { runReflectionCatchupOnce } from "./memory/memory-compressor";
 import { notifyDreamUserActivity, startDreamScheduler, stopDreamScheduler } from "./memory/memory-dream";
 import { registerDocumentTools } from "./orchestrator/document-tools";
@@ -4287,11 +4291,33 @@ ipcMain.handle(IPC.USER_GET_AVATAR, () => {
 });
 
 ipcMain.handle(IPC.MEMORY_PANEL_GET_DATA, () => loadMemoryPanelData());
+ipcMain.handle(IPC.MEMORY_QUERY_ROUTER_GET_SETTINGS, () => loadMemoryQueryRouterSettings());
+ipcMain.handle(IPC.MEMORY_QUERY_ROUTER_SAVE_SETTINGS, (_event, settings: Partial<MemoryQueryRouterSettings>) => (
+  saveMemoryQueryRouterSettings(settings)
+));
+ipcMain.handle(IPC.MEMORY_QUERY_ROUTER_TEST, async (_event, settings: Partial<MemoryQueryRouterSettings>) => {
+  const startedAt = Date.now();
+  const normalized = normalizeMemoryQueryRouterSettings({ ...settings, enabled: true });
+  const route = await routeMemoryQuery("我们说好的礼物还记得吗？", normalized);
+  const ok = route.source === "llm" && route.retrievalKinds.includes("commitment");
+  return {
+    ok,
+    latency: Date.now() - startedAt,
+    sample: route.source === "llm" ? JSON.stringify(route) : undefined,
+    error: ok ? undefined : route.source === "fallback"
+      ? "模型未返回有效的查询路由 JSON"
+      : "模型返回了有效 JSON，但没有把“说好的礼物”识别为 commitment",
+  };
+});
 ipcMain.handle(IPC.MEMORY_PANEL_RUN_RETRIEVAL_SANDBOX, async (_event, payload: { query?: unknown; generateReply?: unknown }) => {
   const query = typeof payload?.query === "string" ? payload.query.trim() : "";
   const generateReply = payload?.generateReply === true;
   if (!query) throw new Error("测试问题不能为空");
   if (query.length > 1000) throw new Error("测试问题不能超过 1000 个字符");
+
+  // 沙箱与正式聊天共享同一次路由判定，但只把结果作为只读检索计划使用。
+  const queryRoute = await routeMemoryQuery(query, loadMemoryQueryRouterSettings());
+  const retrievalPlan = resolveRetrievalPlan(query, queryRoute);
 
   const sandboxMessages = chatsStore.listSessions().flatMap((meta) => {
     const session = chatsStore.getSession(meta.id);
@@ -4312,7 +4338,7 @@ ipcMain.handle(IPC.MEMORY_PANEL_RUN_RETRIEVAL_SANDBOX, async (_event, payload: {
       }];
     });
   });
-  const retrieval = await runHistoryRetrievalSandbox(query, 90, sandboxMessages);
+  const retrieval = await runHistoryRetrievalSandbox(query, 90, sandboxMessages, retrievalPlan);
   const normalizedText = (text: string) => text.normalize("NFC").replace(/\r\n?/g, "\n").trim();
   const resolveRole = (hit: typeof retrieval.selected[number]): "user" | "assistant" | "unknown" => {
     const turnId = hit.metadata?.turnId;
@@ -4377,16 +4403,55 @@ ipcMain.handle(IPC.MEMORY_PANEL_RUN_RETRIEVAL_SANDBOX, async (_event, payload: {
   let l2Memory: {
     enabled: boolean;
     baseline: Array<{ text: string; createdAt: number; score: number; l2Id: string | null }>;
+    facetRetrieval: {
+      queryKind: string | null;
+      queryKinds: string[];
+      routeSource: "llm" | "fallback";
+      scope: "normal" | "scoped_list" | "exhaustive_list";
+      semanticLimit: number;
+      kindLimit: number;
+      maxResults: number;
+      facetMinimumScore: number | null;
+      classifiedCount: number;
+      pendingCount: number;
+      results: Array<{
+        text: string;
+        createdAt: number;
+        score: number;
+        l2Id: string | null;
+        primaryKind: string;
+        retrievalKinds: string[];
+        facetSource: string;
+        via: "semantic" | "kind";
+      }>;
+    };
     dmaePreview: Array<{ text: string; createdAt: number; l2Id: string | null; via: "recall" | "pinned" | "active"; activation: number | null }>;
     states: Array<{ l2Id: string; activation: number; state: "Active" | "Dormant" | "Archived" }>;
   } | null = null;
   try {
-    const l2Baseline = await searchMemoryEntries(query, "user_memory", 5, { recordRecall: false });
+    const facetPlan = retrievalPlan;
+    const l2FacetResults = await searchMemoryEntries(query, "user_memory", 5, {
+      recordRecall: false,
+      facetFusion: true,
+      retrievalPlan: facetPlan,
+    });
+    const l2Baseline = l2FacetResults.slice(0, facetPlan.semanticResults);
     const allL2 = await memoryStore.getAllL2();
     const preview = await l2DmaeManager.previewTurnDetailed(l2Baseline, allL2);
     const previewEntries = preview.selected;
     const statesAfter = preview.states;
     const l2ById = new Map(allL2.map((l2) => [l2.id, l2]));
+    const facetByL2Id = new Map(allL2.map((l2) => [
+      l2.id,
+      repairStoredMemoryFacets(l2.facets, `${l2.content} ${l2.triggerText}`),
+    ]));
+    const facetMinimumScore = resolveFacetSupplementMinimumScore(l2FacetResults, facetPlan, {
+      getFacets: (entry) => {
+        const l2Id = typeof entry.metadata?.l2Id === "string" ? entry.metadata.l2Id : null;
+        return l2Id === null ? undefined : facetByL2Id.get(l2Id);
+      },
+      getFacetScore: (entry) => entry.score,
+    });
     const baselineL2Ids = new Set(
       l2Baseline.map((entry) => entry.metadata?.l2Id).filter((id): id is string => typeof id === "string"),
     );
@@ -4399,6 +4464,32 @@ ipcMain.handle(IPC.MEMORY_PANEL_RUN_RETRIEVAL_SANDBOX, async (_event, payload: {
         score: entry.score,
         l2Id: typeof entry.metadata?.l2Id === "string" ? entry.metadata.l2Id : null,
       })),
+      facetRetrieval: {
+        queryKind: facetPlan.queryKind ?? null,
+        queryKinds: facetPlan.queryKinds,
+        routeSource: queryRoute.source,
+        scope: facetPlan.scope,
+        semanticLimit: facetPlan.semanticResults,
+        kindLimit: facetPlan.kindResults,
+        maxResults: facetPlan.maxResults,
+        facetMinimumScore,
+        classifiedCount: [...facetByL2Id.values()].filter((facets) => facets.source === "model").length,
+        pendingCount: [...facetByL2Id.values()].filter((facets) => facets.source !== "model").length,
+        results: l2FacetResults.map((entry, index) => {
+          const l2Id = typeof entry.metadata?.l2Id === "string" ? entry.metadata.l2Id : null;
+          const facets = l2Id === null ? undefined : facetByL2Id.get(l2Id);
+          return {
+            text: entry.text.slice(0, 300),
+            createdAt: entry.createdAt,
+            score: entry.score,
+            l2Id,
+            primaryKind: facets?.primaryKind ?? "other",
+            retrievalKinds: facets?.retrievalKinds ?? ["other"],
+            facetSource: facets?.source ?? "pending",
+            via: index < facetPlan.semanticResults ? "semantic" : "kind",
+          };
+        }),
+      },
       dmaePreview: previewEntries.map((entry) => {
         const l2Id = typeof entry.metadata?.l2Id === "string" ? entry.metadata.l2Id : null;
         const via: "recall" | "pinned" | "active" = l2Id !== null && baselineL2Ids.has(l2Id)
@@ -4422,6 +4513,9 @@ ipcMain.handle(IPC.MEMORY_PANEL_RUN_RETRIEVAL_SANDBOX, async (_event, payload: {
 
   return {
     query: retrieval.query,
+    plannedLimit: retrieval.plannedLimit,
+    beforeThresholdCount: retrieval.beforeThresholdCount,
+    relevanceThreshold: retrieval.relevanceThreshold,
     excludedRepeatedTestRecords: retrieval.excludedRepeatedTestRecords,
     excludedOrphanedRecords: retrieval.excludedOrphanedRecords,
     method: retrieval.method,
@@ -5843,6 +5937,7 @@ app.whenReady().then(async () => {
   // deps 函数签名故意宽 (unknown/ReadonlyArray)；这里做一次包装把强类型函数适配进去
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const buildOptionsDeps: BuildOptionsDeps = {
+    notifyUserActivity: notifyDreamUserActivity,
     loadModelSettings: () => loadModelSettings(),
     loadUserProfile: () => loadUserProfile(),
     buildEnvironmentContext: ((model: { provider: string; model: string }, profile: unknown) =>
@@ -5861,7 +5956,8 @@ app.whenReady().then(async () => {
     buildAlwaysOnContext: (async (userText, messages) =>
       buildAlwaysOnContext(userText, messages as any)) as BuildOptionsDeps["buildAlwaysOnContext"],
     buildMemoryInjection,
-    buildHistoryAutoInjection: runHistoryAutoInjection,
+    resolveMemoryRetrievalPlan,
+    buildHistoryAutoInjection: (userText, options) => runHistoryAutoInjection(userText, 90, options),
     buildRelationshipContext,
     buildSystemPrompt,
     buildToolSystemPrompt: (enabledTools) => buildToolSystemPrompt(enabledTools as ToolDefinition[]),
@@ -5999,16 +6095,19 @@ app.whenReady().then(async () => {
     await initMcpManager();
     console.log("[Cyrene] RAG initialized OK");
     // 历史回填：索引曾因去重评分膨胀静默停摆，修复后把会话日志补进 chat_history（幂等、后台）。
-    void backfillChatHistoryFromChatLogs();
+    const historyBackfill = backfillChatHistoryFromChatLogs();
     // L2 回填提取：MemoryJudge 瘫痪期间的轮次已被水位线消费，重跑修好的 Judge 补写 L2（幂等、后台）。
     // 回填完成后再补跑一次压缩+Reflection：历史 520 轮的 20 轮触发曾全部静默空转（幂等、后台）。
-    backfillL2FromChatLogs().then((result) => {
+    const l2Backfill = backfillL2FromChatLogs();
+    l2Backfill.then((result) => {
       if (result.complete) {
         runReflectionCatchupOnce();
       } else {
         console.log("[Memory] L2 回填尚未完成，跳过本次 Reflection 补跑:", result.reason ?? "unknown");
       }
     });
+    // 等旧数据回填稳定后再由 Kimi 补分类标签；后台运行，失败保留断点并在下次启动续跑。
+    void Promise.allSettled([historyBackfill, l2Backfill]).then(() => backfillMemoryFacets());
 
     // 梦境蒸馏调度：空闲窗口自动整理记忆（memoryDreamEnabled 默认关，行为零变化）。
     startDreamScheduler();

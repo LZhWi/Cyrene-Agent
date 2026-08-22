@@ -10,11 +10,19 @@ import { isL2DmaeEnabled, l2DmaeManager } from "../memory/dmae-manager";
 import { NARRATIVE_INJECT_MAX } from "../memory/memory-dream";
 import { recordRecentMemorySearchEntries } from "../memory/recent-injected-memory";
 import { toolRegistry } from "./tool-registry";
+import { resolveRetrievalPlan, type RetrievalPlan } from "../memory/memory-facets";
+import { routeMemoryQuery } from "../memory/memory-query-router";
+import { loadMemoryQueryRouterSettings } from "../memory/memory-query-router-settings";
 
 export { ToolCallResult } from "./types";
 export { scheduleMemoryWrite } from "./context-builder";
 export { buildToneInjection } from "./tone-injector";
 export { runFunctionCallingLoop } from "./function-calling";
+
+export async function resolveMemoryRetrievalPlan(userInput: string): Promise<RetrievalPlan> {
+  const queryRoute = await routeMemoryQuery(userInput, loadMemoryQueryRouterSettings());
+  return resolveRetrievalPlan(userInput, queryRoute);
+}
 
 // topicState TTL 已移除——由 DMAE Activation 状态机接管（见 rag/worldbook.ts）
 
@@ -25,29 +33,36 @@ export { runFunctionCallingLoop } from "./function-calling";
  */
 export async function buildMemoryInjection(
   userInput: string,
-  options: { trackState?: boolean } = {},
+  options: { trackState?: boolean; retrievalPlan?: RetrievalPlan } = {},
 ): Promise<string> {
   const parts: string[] = [];
 
   try {
+    const retrievalPlan = options.retrievalPlan ?? await resolveMemoryRetrievalPlan(userInput);
     // 检索 top-5 L2 用户记忆（召回统计改在最终注入集上记账，见下方 onL2Recalled）
-    const userMemoryEntries = await searchMemoryEntries(userInput, "user_memory", 5, { recordRecall: false });
+    const userMemoryEntries = await searchMemoryEntries(userInput, "user_memory", 5, {
+      recordRecall: false,
+      facetFusion: true,
+      retrievalPlan,
+    });
     const allL2 = await memoryStore.getAllL2();
     // DMAE 工作记忆：开启时按"检索 ∪ pinned ∪ 活跃集"选注入集，话题记忆跨轮驻留；
     // 关闭时走纯检索路径，输出与改造前一致。只读调用方用预览，不变更状态。
     let injectionEntries = userMemoryEntries;
     if (isL2DmaeEnabled()) {
-      injectionEntries = options.trackState !== false
+      const dmaeEntries = options.trackState !== false
         ? await l2DmaeManager.applyTurn(userMemoryEntries, allL2)
         : await l2DmaeManager.previewTurn(userMemoryEntries, allL2);
+      // 普通聊天维持双通道最多 10 条；明确枚举时保留扩大的检索集，不被 DMAE 固定帽截断。
+      injectionEntries = retrievalPlan.scope === "normal" ? dmaeEntries : userMemoryEntries;
     }
     if (injectionEntries.length > 0) {
       if (options.trackState !== false) {
         recordRecentMemorySearchEntries(injectionEntries);
-        // reconsolidation：对"最终注入"的条目（含 DMAE 补位/pinned）刷召回统计，
-        // 取代旧的按搜索命中记账——搜索命中不等于进入上下文，补位条目此前从不刷新。
+        // reconsolidation 只记录本轮真实检索命中。DMAE/pinned 补位可以短暂进入上下文，
+        // 但不能冒充查询相关性刷新 weight / lastAccessedAt，否则会形成自我续命循环。
         void memoryManager.onL2Recalled(
-          injectionEntries
+          userMemoryEntries
             .map((entry) => entry.metadata?.l2Id)
             .filter((id): id is string => typeof id === "string" && id.length > 0),
         );

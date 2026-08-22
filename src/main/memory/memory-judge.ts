@@ -5,6 +5,7 @@ import type { VendorConfig, ChatMessage } from "../orchestrator/vendors"
 import { getUserDataDir } from "../runtime/runtime-paths"
 import { MemoryCandidate, L0_FIELD_DESCRIPTIONS, MemoryJudgeTurn } from "./memory-types"
 import { recordUsage } from "../token-usage-store"
+import { normalizeMemoryFacets, tryNormalizeModelFacets, type MemoryFacets } from "./memory-facets"
 
 interface ModelSettings {
   provider: string
@@ -194,6 +195,9 @@ function normalizeCandidate(input: unknown): MemoryCandidate | null {
     reason: reason.trim(),
     forbiddenOverclaims,
     sourceQuote,
+    ...(layer === "L2" ? {
+      facets: normalizeMemoryFacets(record.facets, `${summary.trim()} ${evidenceQuotes.join(" ")}`),
+    } : {}),
   }
 }
 
@@ -269,6 +273,46 @@ export class MemoryJudge {
       .map(([field, description]) => `  · ${field}：${description}`)
       .join('\n')
   }
+
+  async classifyMemoryFacetsBatch(
+    items: Array<{ id: string; text: string; context?: string }>,
+  ): Promise<Array<{ id: string; facets: MemoryFacets }>> {
+    if (items.length === 0) return []
+    const settings = loadModelSettings()
+    if (!settings.apiKey) throw new Error("MemoryFacetBackfill missing api key")
+    const systemPrompt = [
+      "你是记忆分类器。只分类，不改写、删除或判断记忆正文是否正确。",
+      "对输入数组的每一项输出且只输出一个对应结果；id 必须原样保留。",
+      "primaryKind 和 retrievalKinds 只能使用 commitment|preference|goal|wish|experience|fact|emotion|other。",
+      "primaryKind 必须是正文最核心、最能决定这条记忆生命周期的唯一主类。",
+      "retrievalKinds 是用于召回的标签数组，必须包含 primaryKind，去重后最多 3 个；只标正文直接支持的类型，不要为了凑数添加标签。",
+      "若存在任何具体类型，不得同时输出 other；无法可靠分类时才使用 primaryKind=other 且 retrievalKinds=[other]。",
+      "明确约定、承诺、答应或双方说好的未来事项是 commitment；不要把期待、愿望或假设标成 commitment。",
+      "有行动意图、准备实现的计划是 goal；单方面或双方共同期待、希望发生但没有行动承诺的是 wish。",
+      "已经完成的目标不再是 goal：完成事件归 experience，完成后的当前状态可归 fact。",
+      "只有正文明确表达难过、开心、害怕、焦虑、生气、孤独、紧张、羞愧、愤怒、悲伤或兴奋等情绪时才用 emotion；不要推断隐含情绪。",
+      "输出裸 JSON 数组：[{\"id\":\"原id\",\"primaryKind\":\"other\",\"retrievalKinds\":[\"other\"]}]",
+    ].join("\n")
+    const raw = await callChatCompletions(settings, [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: JSON.stringify(items) },
+    ], 300000, "MemoryFacetBackfill")
+    const parsed = extractJsonArray(raw)
+    if (!parsed) throw new Error("MemoryFacetBackfill JSON 解析失败")
+    const requested = new Set(items.map((item) => item.id))
+    const seen = new Set<string>()
+    const results: Array<{ id: string; facets: MemoryFacets }> = []
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue
+      const record = item as Record<string, unknown>
+      const id = typeof record.id === "string" ? record.id : ""
+      const facets = tryNormalizeModelFacets(record)
+      if (!requested.has(id) || seen.has(id) || !facets) continue
+      seen.add(id)
+      results.push({ id, facets })
+    }
+    return results
+  }
   async judgeRecentTurns(
     turns: MemoryJudgeTurn[],
     conversationId: string,
@@ -279,8 +323,9 @@ export class MemoryJudge {
       const settings = loadModelSettings()
       if (!settings.apiKey) {
         console.error("[MemoryJudge] LLM 调用失败: missing api key")
-        console.log("[MemoryJudge] 本轮无值得记录的信息")
-        return []
+        // 配置缺失不是“模型判断无记忆”。必须把失败传给调度器，保留残余轮次，
+        // 等用户补全配置后重试，不能推进提取水位线。
+        throw new Error("MemoryJudge missing api key")
       }
 
       const systemPrompt = [
@@ -310,6 +355,7 @@ export class MemoryJudge {
         "- summary 必须忠于用户原话和上下文，不要自行推广范围",
         "- 如果只是 AI 的建议、安慰、总结、推断，不要写成用户事实",
         "- 不要把「这次」「刚刚」「这个话题里」变成长期偏好",
+        "- 用户明确表达的未来计划、承诺或约定，即使依赖某个前置条件，只要对未来对话有帮助，也应按原条件保守记录；不要仅因含有「等……以后」「如果……」就返回空数组",
         "- 不要自动使用绝对化表达：只、永远、从不、一定、完全、绝对、以后都、不再，除非用户原话明确说过这些词",
         "- 如果 summary 中存在可能过度概括的词，必须写入 forbiddenOverclaims；有 forbiddenOverclaims 时 shouldWrite 必须是 false",
         "",
@@ -332,6 +378,7 @@ export class MemoryJudge {
         "  \"attribution\": \"user_explicit|assistant_inferred|mixed\",",
         "  \"evidenceQuotes\": [\"用户原话短引文，必须来自用户\"],",
         "  \"sourceQuote\": \"L2 原文对话片段，仅 L2 输出\",",
+        "  \"facets\": { \"primaryKind\": \"commitment|preference|goal|wish|experience|fact|emotion|other\", \"retrievalKinds\": [\"最多 3 个固定类型，且包含 primaryKind\"] },",
         "  \"contextSummary\": \"最近多轮上下文概括，不超过80字\",",
         "  \"shouldWrite\": true,",
         "  \"reason\": \"为什么值得记，或为什么不写\",",
@@ -344,6 +391,13 @@ export class MemoryJudge {
         "- 目的：summary 是浓缩结论，会丢失专有名词/数字/代码等字面信息；sourceQuote 保留「用户当时说的原话」，召回时提供字面证据",
         "- 不要整段照抄对话，优先挑含专有名词、数字、代码、关键名词的句子；不要把 summary 复制进 sourceQuote",
         "- sourceQuote 里如有引号，同样用「」替代英文双引号",
+        "L2 候选必须额外输出 facets.primaryKind 与 facets.retrievalKinds；两者只能使用 commitment|preference|goal|wish|experience|fact|emotion|other。",
+        "primaryKind 是最核心且唯一的主类，用于生命周期判断；retrievalKinds 只用于检索召回，必须包含 primaryKind，去重后最多 3 个。",
+        "只添加正文直接支持的检索类型，不要为了凑数添加；有具体类型时不得同时包含 other。",
+        "明确约定、承诺、答应或双方说好的未来事项用 commitment；不要把期待、愿望、假设或 AI 单方面畅想误标为约定。",
+        "有行动意图、准备实现的计划用 goal；单方面或双方共同期待、希望发生但没有行动承诺的未来状态用 wish。",
+        "已经完成的目标不再标 goal：完成事件用 experience，完成后的当前状态可用 fact。",
+        "只有用户明确表达具体情绪时才用 emotion；不要从语气、事件或 AI 回应推断用户情绪。",
         "inferred / uncertain 不允许进入 L0；如果还值得保留，只能放 L2，或者 shouldWrite=false。",
         "没有值得记录的信息时，输出：[]",
         "summary 和 evidenceQuotes 里禁止出现英文双引号，用「」替代。",
@@ -375,13 +429,11 @@ export class MemoryJudge {
       const parsed = extractJsonArray(raw)
       if (!parsed) {
         console.error("[MemoryJudge] JSON 解析失败，原始内容：\n", raw.slice(0, 200))
-        if (!raw.trim()) {
-          // 空 content = 生成预算被思考链吃光（或适配器异常），模型并未真正作答；
-          // 按调用失败抛出，让 scheduler 保留轮次重试 / 回填标记会话未完成。
-          throw new Error("MemoryJudge 拿到空 content（token 预算耗尽）")
-        }
-        console.log("[MemoryJudge] 本轮无值得记录的信息")
-        return []
+        // 只有合法的 [] 才表示“模型明确判断无记忆”。空内容或非 JSON 文本都没有
+        // 给出可验证的判断，必须保留轮次重试，不能静默推进水位线。
+        throw new Error(raw.trim()
+          ? "MemoryJudge JSON 解析失败"
+          : "MemoryJudge 拿到空 content（token 预算耗尽）")
       }
 
       const candidates = parsed

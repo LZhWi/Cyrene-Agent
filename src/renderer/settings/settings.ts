@@ -382,6 +382,19 @@ interface MemoryPanelApi {
   saveL0: (patch: Record<string, unknown>) => Promise<{ ok: boolean }>;
   saveL1: (patch: Record<string, unknown>) => Promise<{ ok: boolean }>;
   runRetrievalSandbox: (query: string, generateReply?: boolean) => Promise<MemoryRetrievalSandboxResult>;
+  getQueryRouterSettings: () => Promise<MemoryQueryRouterSettings>;
+  saveQueryRouterSettings: (settings: Partial<MemoryQueryRouterSettings>) => Promise<MemoryQueryRouterSettings>;
+  testQueryRouter: (settings: Partial<MemoryQueryRouterSettings>) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
+}
+
+interface MemoryQueryRouterSettings {
+  enabled: boolean;
+  provider: string;
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  explicitTransport: "auto" | "openai" | "anthropic";
+  reasoning: "auto" | "off" | "low";
 }
 
 interface MemoryRetrievalSandboxHit {
@@ -401,6 +414,9 @@ interface MemoryRetrievalSandboxCandidate extends MemoryRetrievalSandboxHit {
 
 interface MemoryRetrievalSandboxResult {
   query: string;
+  plannedLimit: number;
+  beforeThresholdCount: number;
+  relevanceThreshold: number | null;
   excludedRepeatedTestRecords: number;
   excludedOrphanedRecords: number;
   method: "reranker" | "rrf";
@@ -424,6 +440,25 @@ interface MemorySandboxL2Item {
 interface MemorySandboxL2Comparison {
   enabled: boolean;
   baseline: Array<MemorySandboxL2Item & { score: number }>;
+  facetRetrieval: {
+    queryKind: string | null;
+    queryKinds: string[];
+    routeSource: "llm" | "fallback";
+    scope: "normal" | "scoped_list" | "exhaustive_list";
+    semanticLimit: number;
+    kindLimit: number;
+    maxResults: number;
+    facetMinimumScore: number | null;
+    classifiedCount: number;
+    pendingCount: number;
+    results: Array<MemorySandboxL2Item & {
+      score: number;
+      primaryKind: string;
+      retrievalKinds: string[];
+      facetSource: string;
+      via: "semantic" | "kind";
+    }>;
+  };
   dmaePreview: Array<MemorySandboxL2Item & {
     via: "recall" | "pinned" | "active";
     activation: number | null;
@@ -4205,6 +4240,16 @@ const memoryL1PreferencesInput = document.getElementById("memory-l1-preferences"
 const memoryL1ProjectInput = document.getElementById("memory-l1-project") as HTMLTextAreaElement | null;
 const memoryL2SearchInput = document.getElementById("memory-l2-search") as HTMLInputElement | null;
 const memoryL2List = document.getElementById("memory-l2-list") as HTMLElement | null;
+const memoryQueryRouterEnabled = document.getElementById("memory-query-router-enabled") as HTMLInputElement | null;
+const memoryQueryRouterProvider = document.getElementById("memory-query-router-provider") as HTMLInputElement | null;
+const memoryQueryRouterBaseUrl = document.getElementById("memory-query-router-base-url") as HTMLInputElement | null;
+const memoryQueryRouterApiKey = document.getElementById("memory-query-router-api-key") as HTMLInputElement | null;
+const memoryQueryRouterModel = document.getElementById("memory-query-router-model") as HTMLInputElement | null;
+const memoryQueryRouterTransport = document.getElementById("memory-query-router-transport") as HTMLSelectElement | null;
+const memoryQueryRouterReasoning = document.getElementById("memory-query-router-reasoning") as HTMLSelectElement | null;
+const memoryQueryRouterSaveBtn = document.getElementById("memory-query-router-save-btn") as HTMLButtonElement | null;
+const memoryQueryRouterTestBtn = document.getElementById("memory-query-router-test-btn") as HTMLButtonElement | null;
+const memoryQueryRouterStatus = document.getElementById("memory-query-router-status") as HTMLElement | null;
 const memorySandboxQuery = document.getElementById("memory-sandbox-query") as HTMLTextAreaElement | null;
 const memorySandboxGenerateReply = document.getElementById("memory-sandbox-generate-reply") as HTMLInputElement | null;
 const memoryDmaeEnabledInput = document.getElementById("memory-dmae-enabled") as HTMLInputElement | null;
@@ -4215,6 +4260,8 @@ const memorySandboxResults = document.getElementById("memory-sandbox-results") a
 const memorySandboxBaseline = document.getElementById("memory-sandbox-baseline") as HTMLElement | null;
 const memorySandboxSelected = document.getElementById("memory-sandbox-selected") as HTMLElement | null;
 const memorySandboxL2Baseline = document.getElementById("memory-sandbox-l2-baseline") as HTMLElement | null;
+const memorySandboxL2FacetSummary = document.getElementById("memory-sandbox-l2-facet-summary") as HTMLElement | null;
+const memorySandboxL2FacetResults = document.getElementById("memory-sandbox-l2-facet-results") as HTMLElement | null;
 const memorySandboxL2Dmae = document.getElementById("memory-sandbox-l2-dmae") as HTMLElement | null;
 const memorySandboxCandidateFilter = document.getElementById("memory-sandbox-candidate-filter") as HTMLInputElement | null;
 const memorySandboxCandidates = document.getElementById("memory-sandbox-candidates") as HTMLElement | null;
@@ -4330,6 +4377,63 @@ function renderL2List(query = ""): void {
   );
 }
 
+function readMemoryQueryRouterSettings(): MemoryQueryRouterSettings {
+  return {
+    enabled: memoryQueryRouterEnabled?.checked === true,
+    provider: memoryQueryRouterProvider?.value.trim() || "自定义",
+    baseUrl: memoryQueryRouterBaseUrl?.value.trim() || "",
+    apiKey: memoryQueryRouterApiKey?.value.trim() || "",
+    model: memoryQueryRouterModel?.value.trim() || "",
+    explicitTransport: memoryQueryRouterTransport?.value === "openai" || memoryQueryRouterTransport?.value === "anthropic"
+      ? memoryQueryRouterTransport.value : "auto",
+    reasoning: memoryQueryRouterReasoning?.value === "low" || memoryQueryRouterReasoning?.value === "auto"
+      ? memoryQueryRouterReasoning.value : "off",
+  };
+}
+
+function fillMemoryQueryRouterSettings(settings: MemoryQueryRouterSettings): void {
+  if (memoryQueryRouterEnabled) memoryQueryRouterEnabled.checked = settings.enabled;
+  if (memoryQueryRouterProvider) memoryQueryRouterProvider.value = settings.provider;
+  if (memoryQueryRouterBaseUrl) memoryQueryRouterBaseUrl.value = settings.baseUrl;
+  if (memoryQueryRouterApiKey) memoryQueryRouterApiKey.value = settings.apiKey;
+  if (memoryQueryRouterModel) memoryQueryRouterModel.value = settings.model;
+  if (memoryQueryRouterTransport) memoryQueryRouterTransport.value = settings.explicitTransport;
+  if (memoryQueryRouterReasoning) memoryQueryRouterReasoning.value = settings.reasoning;
+}
+
+async function saveMemoryQueryRouter(): Promise<void> {
+  if (!memoryQueryRouterSaveBtn) return;
+  memoryQueryRouterSaveBtn.disabled = true;
+  if (memoryQueryRouterStatus) memoryQueryRouterStatus.textContent = "保存中…";
+  try {
+    const saved = await window.memoryPanel?.saveQueryRouterSettings(readMemoryQueryRouterSettings());
+    if (!saved) throw new Error("没有返回配置");
+    fillMemoryQueryRouterSettings(saved);
+    if (memoryQueryRouterStatus) memoryQueryRouterStatus.textContent = "已保存，下一次检索立即生效";
+  } catch (error) {
+    if (memoryQueryRouterStatus) memoryQueryRouterStatus.textContent = `保存失败：${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    memoryQueryRouterSaveBtn.disabled = false;
+  }
+}
+
+async function testMemoryQueryRouter(): Promise<void> {
+  if (!memoryQueryRouterTestBtn) return;
+  memoryQueryRouterTestBtn.disabled = true;
+  if (memoryQueryRouterStatus) memoryQueryRouterStatus.textContent = "正在用“我们说好的礼物”测试路由…";
+  try {
+    const result = await window.memoryPanel?.testQueryRouter(readMemoryQueryRouterSettings());
+    if (!result) throw new Error("没有返回测试结果");
+    if (memoryQueryRouterStatus) memoryQueryRouterStatus.textContent = result.ok
+      ? `测试成功（${result.latency} ms）：${result.sample ?? "返回有效 JSON"}`
+      : `测试失败（${result.latency} ms）：${result.error ?? "未知错误"}`;
+  } catch (error) {
+    if (memoryQueryRouterStatus) memoryQueryRouterStatus.textContent = `测试失败：${error instanceof Error ? error.message : String(error)}`;
+  } finally {
+    memoryQueryRouterTestBtn.disabled = false;
+  }
+}
+
 async function loadMemoryPanel(): Promise<void> {
   try {
     const payload = await window.memoryPanel?.getData();
@@ -4359,6 +4463,8 @@ async function loadMemoryPanel(): Promise<void> {
 
     if (memoryL0EditBtn) memoryL0EditBtn.disabled = false;
     if (memoryL1EditBtn) memoryL1EditBtn.disabled = false;
+    const router = await window.memoryPanel?.getQueryRouterSettings();
+    if (router) fillMemoryQueryRouterSettings(router);
   } catch (err) {
     console.error("[settings] load memory panel failed", err);
     renderEmptyState(memoryL2List, "记忆读取失败", "请查看终端日志");
@@ -4387,9 +4493,11 @@ function renderSandboxHits(container: HTMLElement | null, hits: MemoryRetrievalS
 }
 
 function renderSandboxL2Comparison(comparison: MemorySandboxL2Comparison | null | undefined): void {
-  if (!memorySandboxL2Baseline || !memorySandboxL2Dmae) return;
+  if (!memorySandboxL2Baseline || !memorySandboxL2FacetResults || !memorySandboxL2Dmae) return;
   if (!comparison) {
     renderEmptyState(memorySandboxL2Baseline, "L2 对比不可用", "事件记忆索引尚未就绪或检索失败");
+    renderEmptyState(memorySandboxL2FacetResults, "分类检索不可用", "事件记忆索引尚未就绪或检索失败");
+    if (memorySandboxL2FacetSummary) memorySandboxL2FacetSummary.textContent = "未获得分类检索计划";
     renderEmptyState(memorySandboxL2Dmae, "L2 对比不可用", "事件记忆索引尚未就绪或检索失败");
     return;
   }
@@ -4403,6 +4511,31 @@ function renderSandboxL2Comparison(comparison: MemorySandboxL2Comparison | null 
     })),
     "纯检索没有命中任何事件记忆",
     "试试换成记忆里出现过的原话关键词",
+  );
+
+  const facet = comparison.facetRetrieval;
+  const scopeLabel = {
+    normal: "普通",
+    scoped_list: "列举",
+    exhaustive_list: "完整列举",
+  }[facet.scope];
+  if (memorySandboxL2FacetSummary) {
+    const thresholdLabel = facet.facetMinimumScore === null
+      ? "标签门槛：完整盘点不截断"
+      : `标签门槛：score ≥ ${facet.facetMinimumScore.toFixed(1)}`;
+    memorySandboxL2FacetSummary.textContent = facet.queryKinds.length > 0
+      ? `查询分类：${facet.queryKinds.join(" + ")} · 路由：${facet.routeSource === "llm" ? "LLM" : "回退"} · 范围：${scopeLabel} · 语义 ${facet.semanticLimit} + 标签 ${facet.kindLimit}，最多 ${facet.maxResults} 条 · ${thresholdLabel} · 已分类 ${facet.classifiedCount} / 待补标 ${facet.pendingCount}`
+      : `未触发分类扩展 · 路由：${facet.routeSource === "llm" ? "LLM 判定无需扩展" : "未配置或失败回退"} · 仅保留语义 Top ${facet.semanticLimit} · 已分类 ${facet.classifiedCount} / 待补标 ${facet.pendingCount}`;
+  }
+  renderInfoList(
+    memorySandboxL2FacetResults,
+    facet.results.map((item, index) => ({
+      title: `${index + 1}. ${item.via === "semantic" ? "原语义命中" : "同类标签补充"} · 主类 ${item.primaryKind}`,
+      body: item.text,
+      meta: `${formatDateTime(item.createdAt)} · score ${item.score.toFixed(4)} · 检索标签 ${item.retrievalKinds.join(" / ")} · 标签来源 ${item.facetSource}`,
+    })),
+    "分类检索没有命中任何事件记忆",
+    facet.queryKinds.length > 0 ? "当前分类下没有可召回的已标记记忆" : "当前问题未触发类型扩展，因此只运行原语义检索",
   );
 
   const viaLabel: Record<"recall" | "pinned" | "active", string> = {
@@ -4470,7 +4603,7 @@ async function runMemoryRetrievalSandbox(): Promise<void> {
   if (memorySandboxStatus) {
     memorySandboxStatus.textContent = generateReply
       ? "正在只读检索并生成隔离回复…"
-      : "正在只读检索与重排（不会调用 LLM）…";
+      : "正在只读检索与重排（若已启用查询路由，会调用该小模型）…";
   }
   memorySandboxResults?.classList.add("is-hidden");
   try {
@@ -4478,6 +4611,10 @@ async function runMemoryRetrievalSandbox(): Promise<void> {
     if (!result) throw new Error("沙箱没有返回结果");
     renderSandboxHits(memorySandboxBaseline, result.baseline);
     renderSandboxHits(memorySandboxSelected, result.selected);
+    const selectedHeading = document.getElementById("memory-sandbox-selected-heading");
+    if (selectedHeading) {
+      selectedHeading.textContent = `当前正式检索（计划上限 ${result.plannedLimit}，实际入选 ${result.selected.length}）`;
+    }
     renderSandboxL2Comparison(result.l2Memory);
     memorySandboxCandidateCache = result.candidates;
     if (memorySandboxCandidateFilter) memorySandboxCandidateFilter.value = "";
@@ -4490,6 +4627,8 @@ async function runMemoryRetrievalSandbox(): Promise<void> {
     if (memorySandboxStatus) {
       memorySandboxStatus.textContent =
         `完成：${result.method === "reranker" ? "双查询融合重排" : "RRF"}，候选 ${result.candidateCount} 条，` +
+        `计划上限 ${result.plannedLimit} 条，门槛前 ${result.beforeThresholdCount} 条，实际入选 ${result.selected.length} 条` +
+        (result.relevanceThreshold === null ? "（RRF 回退不应用分数门槛），" : `（相关性门槛 ${result.relevanceThreshold}），`) +
         `排除重复测试记录 ${result.excludedRepeatedTestRecords} 条，` +
         `排除已删除会话残留 ${result.excludedOrphanedRecords} 条` +
         (result.excludedRepeatedTestRecords > 0
@@ -4767,6 +4906,8 @@ memoryL1EditBtn?.addEventListener("click", () => {
   if (l1Editing) { saveL1(); } else { enterL1EditMode(); }
 });
 memoryL1CancelBtn?.addEventListener("click", cancelL1Edit);
+memoryQueryRouterSaveBtn?.addEventListener("click", () => void saveMemoryQueryRouter());
+memoryQueryRouterTestBtn?.addEventListener("click", () => void testMemoryQueryRouter());
 memorySandboxRunBtn?.addEventListener("click", () => void runMemoryRetrievalSandbox());
 memoryDmaeEnabledInput?.addEventListener("change", () => {
   // DMAE 总开关切换即落盘 model-settings.json；正式注入链路每轮实时读取，无需重启即生效。

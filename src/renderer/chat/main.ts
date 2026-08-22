@@ -4338,6 +4338,9 @@ interface Particle {
 const PARTICLE_COUNT = 38;
 const PARTICLE_HUE_MIN = 305; // pink
 const PARTICLE_HUE_MAX = 345; // violet
+const PARTICLE_FPS = 30; // 光斑限帧（见 drawParticles 注释）
+const PARTICLE_HZ = 144; // 速度常量标定基线（原高刷屏每帧步进）
+let lastParticleAt = 0;
 
 const particlesCanvas = document.getElementById("particles") as HTMLCanvasElement | null;
 const particlesCtx = particlesCanvas ? particlesCanvas.getContext("2d") : null;
@@ -4372,13 +4375,21 @@ function resizeParticles(): void {
   particlesCtx.setTransform(particlesDpr, 0, 0, particlesDpr, 0, 0);
 }
 
-function drawParticles(): void {
+function drawParticles(now: number): void {
+  particlesRaf = requestAnimationFrame(drawParticles);
+  // 限帧 30：rAF 原本跑满显示刷新率（144/165Hz），而这个 canvas 是各气泡
+  // backdrop-filter 的"背景"——它每重绘一次，模糊就重算一次。慢漂光斑
+  // 30fps 肉眼无差，GPU 链路负载降到零头。
+  if (now - lastParticleAt < 1000 / PARTICLE_FPS) return;
+  // 速度常量原按高刷新率"每帧"标定；改按时间步进，限帧后漂移/闪烁速度不变。
+  const f = lastParticleAt ? Math.min(3, (now - lastParticleAt) / (1000 / PARTICLE_HZ)) : 1;
+  lastParticleAt = now;
   if (!particlesCtx) return;
   particlesCtx.clearRect(0, 0, particlesW, particlesH);
   for (const p of particles) {
-    p.x += p.vx;
-    p.y += p.vy;
-    p.twinkle += p.twinkleSpeed;
+    p.x += p.vx * f;
+    p.y += p.vy * f;
+    p.twinkle += p.twinkleSpeed * f;
     if (p.y < -10) {
       p.y = particlesH + 10;
       p.x = Math.random() * particlesW;
@@ -4398,7 +4409,6 @@ function drawParticles(): void {
     particlesCtx.arc(p.x, p.y, r, 0, Math.PI * 2);
     particlesCtx.fill();
   }
-  particlesRaf = requestAnimationFrame(drawParticles);
 }
 
 if (particlesCtx) {

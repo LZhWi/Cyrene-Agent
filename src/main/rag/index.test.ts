@@ -20,6 +20,7 @@ const rerankerMock = vi.hoisted(() => ({
   current: null as null | { rerank: ReturnType<typeof vi.fn> },
   ensureInitialized: vi.fn(),
 }));
+const REAL_MEMORY_PATH = "C:/Users/ASUS/AppData/Roaming/live2d-cyrene/memory.json";
 
 vi.mock("electron", () => ({
   app: {
@@ -126,6 +127,7 @@ describe("user memory retrieval", () => {
     triggerText: string;
     createdAt?: number;
     status?: "active" | "aging";
+    facets?: import("../memory/memory-facets").MemoryFacets;
   }) {
     const { memoryStore } = await import("../memory/memory-store");
     const memory = await memoryStore.addL2Memory({
@@ -134,6 +136,7 @@ describe("user memory retrieval", () => {
       sourceConversationId: "test",
       isPinned: false,
       syncStatus: "pending_sync",
+      facets: input.facets,
     }, input.createdAt === undefined ? undefined : { createdAt: input.createdAt });
     const ragId = await addL2MemoryVector(memory.content, memory.id, {
       triggerText: memory.triggerText,
@@ -296,6 +299,110 @@ describe("user memory retrieval", () => {
 
     expect(results.map((entry) => entry.id)).toEqual([activeRagId]);
     expect(results.some((entry) => entry.id === archivedRagId)).toBe(false);
+  });
+
+  it("returns superseded memories only for includeExpired without restoring automatic injection", async () => {
+    const { memoryStore } = await import("../memory/memory-store");
+    const oldMemory = await memoryStore.addL2Memory({
+      content: "旧住址是海边路八号",
+      triggerText: "以前住在哪里",
+      sourceConversationId: "test",
+      isPinned: false,
+      syncStatus: "pending_sync",
+    });
+    const oldRagId = await addL2MemoryVector(oldMemory.content, oldMemory.id, { triggerText: oldMemory.triggerText });
+    await memoryStore.markL2SyncStatus(oldMemory.id, "synced", oldRagId);
+    await memoryStore.supersedeL2(oldMemory.id, "l2_new_address", Date.now() - 1);
+
+    expect(await searchMemoryEntries("海边路", "user_memory", 5, { recordRecall: false })).toEqual([]);
+    const historical = await searchMemoryEntries("海边路", "user_memory", 5, {
+      recordRecall: false,
+      includeExpired: true,
+    });
+    expect(historical).toHaveLength(1);
+    expect(historical[0].text).toBe("旧住址是海边路八号");
+    expect(historical[0].metadata?.l2Expired).toBe(true);
+  });
+
+  it("keeps semantic Top 5 intact and appends deduplicated facet Top 5", async () => {
+    const semantic = await Promise.all(Array.from({ length: 5 }, (_, index) => addRecallableL2({
+      content: `alpha semantic ${index}`,
+      triggerText: `alpha ${index}`,
+    })));
+    const commitment = await addRecallableL2({
+      content: "用户答应视频通话完成后亲手做礼物",
+      triggerText: "我会亲手给你做礼物",
+      facets: {
+        primaryKind: "goal",
+        retrievalKinds: ["goal", "commitment"],
+        source: "model",
+        pendingClassification: false,
+      },
+    });
+    const weakCommitment = await addRecallableL2({
+      content: "用户承诺以后有机会去拍海边日落",
+      triggerText: "以后去海边拍日落给你看",
+      facets: {
+        primaryKind: "commitment",
+        retrievalKinds: ["commitment"],
+        source: "model",
+        pendingClassification: false,
+      },
+    });
+    await addRecallableL2({ content: "用户喜欢打篮球", triggerText: "我喜欢篮球" });
+    rerankerMock.current = {
+      rerank: vi.fn(async (_query: string, documents: string[]) => documents.map((text) => ({
+        text,
+        score: text.startsWith("alpha semantic")
+          ? 100 - Number(text.at(-1))
+          : text.includes("海边日落") ? -4.1 : 1,
+      })).sort((a, b) => b.score - a.score)),
+    };
+
+    const results = await searchMemoryEntries("我们还有哪些约定", "user_memory", 5, {
+      recordRecall: false,
+      facetFusion: true,
+      retrievalPlan: {
+        scope: "scoped_list",
+        semanticResults: 5,
+        kindResults: 8,
+        maxResults: 13,
+        candidateDepth: 48,
+        characterBudget: 3000,
+        queryKinds: ["commitment"],
+        queryKind: "commitment",
+      },
+    });
+
+    expect(results.slice(0, 5).map((entry) => entry.id)).toEqual(semantic.map((item) => item.ragId));
+    expect(results.map((entry) => entry.id)).toContain(commitment.ragId);
+    expect(results.map((entry) => entry.id)).not.toContain(weakCommitment.ragId);
+    expect(new Set(results.map((entry) => entry.id)).size).toBe(results.length);
+    expect(results).toHaveLength(6);
+  });
+
+  it.skipIf(!fs.existsSync(REAL_MEMORY_PATH))("keeps a superseded clone of a real memory out of automatic injection", async () => {
+    const real = JSON.parse(fs.readFileSync(REAL_MEMORY_PATH, "utf8")) as {
+      l2?: Array<{ content?: string; triggerText?: string; status?: string }>;
+    };
+    const sample = real.l2?.find((item) => item.status === "active" && item.content && item.triggerText);
+    if (!sample?.content || !sample.triggerText) return;
+    const { memoryStore } = await import("../memory/memory-store");
+    const cloned = await memoryStore.addL2Memory({
+      content: sample.content,
+      triggerText: sample.triggerText,
+      sourceConversationId: "real-data-read-only-clone",
+      isPinned: false,
+      syncStatus: "pending_sync",
+    });
+    const ragId = await addL2MemoryVector(cloned.content, cloned.id, { triggerText: cloned.triggerText });
+    await memoryStore.markL2SyncStatus(cloned.id, "synced", ragId);
+    await memoryStore.supersedeL2(cloned.id, "simulated-correction", Date.now() - 1);
+
+    expect((await searchMemoryEntries(sample.triggerText, "user_memory", 5, { recordRecall: false }))
+      .some((item) => item.id === ragId)).toBe(false);
+    expect((await searchMemoryEntries(sample.triggerText, "user_memory", 5, { recordRecall: false, includeExpired: true }))
+      .some((item) => item.id === ragId && item.metadata?.l2Expired === true)).toBe(true);
   });
 });
 

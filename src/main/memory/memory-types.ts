@@ -1,3 +1,5 @@
+import type { MemoryFacets } from "./memory-facets"
+
 export interface L0Profile {
   nickname: string
   preferredName: string
@@ -67,6 +69,8 @@ export interface L2Memory {
   validFrom?: number
   /** 事实有效期终点：被纠正/取代时写入；到期后自动检索不再引用，仅工具通道带标记可查 */
   validTo?: number
+  /** 类型/主题/实体分面；旧数据升级后先标 pending，再由 MemoryJudge 后台补标。 */
+  facets?: MemoryFacets
 }
 
 export type L2MemoryStatus = "active" | "aging" | "archived" | "superseded" | "merged"
@@ -138,6 +142,8 @@ export interface ConflictLog {
   reason: string
   confidence: number
   detector: "local" | "llm" | "manual"
+  /** 省略表示传统冲突候选；near_duplicate 表示仅因高相似度进入非破坏式关系裁决。 */
+  candidateType?: "conflict" | "near_duplicate"
   conflictScore?: number
   resolverPriority?: ConflictResolverPriority
   scoringSignals?: ConflictScoringSignals
@@ -217,6 +223,8 @@ export interface MemoryCandidate {
   sourceQuote?: string
   /** 仅回填注入：该事实的原始形成时间；正常提取不填（用写入时刻）。 */
   createdAt?: number
+  /** MemoryJudge 与摘要同批输出；缺失或非法时回落为保守的本地标签。 */
+  facets?: MemoryFacets
 }
 
 export interface MemoryJudgeTurn {

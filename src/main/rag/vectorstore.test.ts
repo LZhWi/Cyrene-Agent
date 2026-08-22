@@ -24,6 +24,27 @@ describe("JsonVectorStore persistence", () => {
     }
   });
 
+  it("leaves legacy chat history metadata unchanged on store load", () => {
+    const dbPath = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-vectorstore-facets-"));
+    tempDirs.push(dbPath);
+    fs.writeFileSync(path.join(dbPath, "memory-store.json"), JSON.stringify([{
+      id: "legacy-history",
+      text: "我答应以后亲手给你做礼物",
+      embedding: [1, 0],
+      source: "chat_history",
+      weight: 1,
+      createdAt: 1,
+      lastRecalledAt: 1,
+      metadata: { sessionId: "old", role: "user", ts: 1 },
+    }]), "utf8");
+
+    const store = new JsonVectorStore(dbPath);
+    store.flushSync();
+    const persisted = JSON.parse(fs.readFileSync(path.join(dbPath, "memory-store.json"), "utf8"));
+
+    expect(persisted[0].metadata.memoryFacets).toBeUndefined();
+  });
+
   it("isolates a replacement store from a stale instance's temp file", async () => {
     const dbPath = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-vectorstore-race-"));
     tempDirs.push(dbPath);

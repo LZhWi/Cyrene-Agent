@@ -186,6 +186,10 @@ export function buildResolverMessages(payload: ResolverPayload): Array<{ role: "
   )).join("\n")
   const userPrompt = [
     "请判断以下两条用户记忆的关系，并只输出 JSON。",
+    `候选类型：${payload.conflictLog.candidateType ?? "conflict"}`,
+    payload.conflictLog.candidateType === "near_duplicate"
+      ? "注意：高向量相似度不等于重复。时间变化、数量变化、列表新增项和条件变化都属于有效增量，必须保留；只有事实完全等价时才可合并。若生成合并摘要，必须覆盖两条记忆的全部有效细节。"
+      : "",
     "",
     "旧记忆：",
     `summary: ${payload.oldMemory.content}`,
@@ -205,7 +209,7 @@ export function buildResolverMessages(payload: ResolverPayload): Array<{ role: "
   ].join("\n")
 
   return [
-    { role: "system", content: "你是谨慎的用户记忆冲突 Resolver。你只根据 summary 和 evidence 判断，不要编造事实，只输出 JSON。" },
+    { role: "system", content: "你是谨慎的用户记忆关系 Resolver。你只根据 summary 和 evidence 判断冲突、演进、补充或重复，不要编造事实，只输出 JSON。" },
     { role: "user", content: userPrompt },
   ]
 }

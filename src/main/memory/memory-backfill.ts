@@ -2,8 +2,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { getUserDataDir } from "../runtime/runtime-paths";
 import { getEntriesBySource, isUserMemoryVectorStoreReady } from "../rag";
-import { cosineSimilarity } from "../rag/vectorstore";
-import { getEmbeddingProvider, type EmbeddingProvider } from "../rag/embedding";
+import { getEmbeddingProvider } from "../rag/embedding";
 import { memoryJudge } from "./memory-judge";
 import { memoryManager } from "./memory-manager";
 import { memoryStore } from "./memory-store";
@@ -13,43 +12,31 @@ import type { MemoryCandidate, MemoryJudgeTurn } from "./memory-types";
 const LOG_PREFIX = "[Memory]";
 /** 与正常提取的上下文窗口对齐（memory-scheduler MEMORY_JUDGE_CONTEXT_TURNS） */
 const BATCH_SIZE = 8;
-/** 与现有 user_memory 向量纯余弦 ≥ 该值视为重复，跳过写入。
- * 取 0.9：误判与漏拦的代价不对称——误判（主题相近但事实全新的候选被吞）
- * 会被水位线永久消费、无法自愈；漏拦（重跑边界重叠产生的改写型重复）
- * 只是多写一条近似条目，后续压缩器（SIMILARITY_THRESHOLD 0.85）会合并。
- * 实测边界案例："日常使用Apple Music并计划接入接口" vs "希望AI推荐歌单" ≈0.85~0.86，
- * 0.85 会误吞新事实，0.9 可放行。 */
-const DEDUP_COSINE = 0.9;
-
 export interface L2BackfillResult {
   complete: boolean;
   reason?: "already_complete" | "no_chat_history" | "rag_unavailable" | "provider_unavailable" | "batch_failed" | "error";
 }
 
 /**
- * 与现有 L2 记忆判重：对候选文本做嵌入，与 user_memory 全部向量比纯余弦。
- * 命中时返回该向量的 l2Id（"用户又说了一遍"，刷召回统计用），无命中返回 null。
- * 嵌入失败时返回 null 不阻塞写入（后续压缩器仍会合并近似条目）。
+ * 回填失败重放只对“摘要文本完全相同”做幂等跳过。
+ * 语义近似不在写入阶段删除：时间变化、数量变化或新增列表项的余弦可能高达 0.98，
+ * 必须交给 MemoryManager 的疑似重复关系裁决。
  */
-async function findDuplicateL2Id(content: string, provider: EmbeddingProvider): Promise<string | null> {
-  try {
-    const emb = await provider.embed(content);
-    const hit = getEntriesBySource("user_memory").find((e) => cosineSimilarity(emb, e.embedding) >= DEDUP_COSINE);
-    const l2Id = hit?.metadata?.l2Id;
-    return typeof l2Id === "string" && l2Id.length > 0 ? l2Id : null;
-  } catch {
-    return null;
-  }
+function findExactReplayL2Id(content: string): string | null {
+  const normalized = content.normalize("NFC").trim();
+  const hit = getEntriesBySource("user_memory").find((entry) => entry.text.normalize("NFC").trim() === normalized);
+  const l2Id = hit?.metadata?.l2Id;
+  return typeof l2Id === "string" && l2Id.length > 0 ? l2Id : null;
 }
 
 // ── L2 回填提取 ──
 // MemoryJudge 曾因 thinking 预算被挤占瘫痪数周（见 memory-judge maxTokens 注释），
 // 期间轮次被调度器水位线当作"无值得记录"消费掉，正常流程不会重提。
 // 修复后读取会话日志、按 8 轮分批重跑修好的 Judge，补写 L2。
-// v4 起改为增量水位线：不再一次性跑完就永久封印，而是持久化 coveredUntilTs，
-// 每次启动只重放水位线之后的轮次——后台提取再次停摆（超时/坏配置）时，
-// 修复后重启即可自动补齐空窗期，无需再发新版本标记。
-// - 幂等：水位线 + 去重守卫双保险；写入前与现有 user_memory 比纯余弦 ≥0.9 判重。
+// v4 回填未完成时按会话持久化 sessionOffsets，并保留 coveredUntilTs 兼容旧标记；
+// complete=true 后永久封存，不再重放正常提取成功的新轮次。当前调度器会持久化失败残余并自行重试，
+// 历史聊天回填只负责修复既有空窗，避免每次启动依赖语义判重重新提取正常轮次。
+// - 幂等：会话水位线 + 完全相同摘要守卫；语义近似候选不在写入阶段丢弃。
 // - 时效：createdAt 用该批轮次的原始时间（批内最晚一条），面板形成时间反映真实发生时间；
 //   weight 从 0 起、衰减/召回语义与正常创建完全一致。
 // - 只写 L2：L0/L1 是"当前状态"层，重放旧提取会覆盖现在的字段。
@@ -61,12 +48,30 @@ export function backfillL2FromChatLogs(): Promise<L2BackfillResult> {
       const dataDir = getUserDataDir();
       const marker = path.join(dataDir, ".l2-backfill-v4");
       let coveredUntilTs = 0;
+      let baselineCoveredUntilTs = 0;
+      const sessionOffsets: Record<string, number> = {};
       let previouslyComplete = false;
       if (fs.existsSync(marker)) {
         try {
-          const m = JSON.parse(fs.readFileSync(marker, "utf8")) as { complete?: boolean; coveredUntilTs?: number };
+          const m = JSON.parse(fs.readFileSync(marker, "utf8")) as {
+            complete?: boolean;
+            coveredUntilTs?: number;
+            baselineCoveredUntilTs?: number;
+            sessionOffsets?: Record<string, number>;
+          };
           previouslyComplete = m.complete === true;
           coveredUntilTs = typeof m.coveredUntilTs === "number" ? m.coveredUntilTs : 0;
+          if (m.sessionOffsets && typeof m.sessionOffsets === "object") {
+            for (const [sid, offset] of Object.entries(m.sessionOffsets)) {
+              if (typeof offset === "number") sessionOffsets[sid] = offset;
+            }
+            baselineCoveredUntilTs = typeof m.baselineCoveredUntilTs === "number"
+              ? m.baselineCoveredUntilTs
+              : 0;
+          } else {
+            // 旧 v4 只有全局水位：把它冻结为迁移基线，之后新增进度按会话记录。
+            baselineCoveredUntilTs = coveredUntilTs;
+          }
         } catch {
           // 标记损坏视为从零开始（去重守卫保证不写重复）
         }
@@ -77,9 +82,25 @@ export function backfillL2FromChatLogs(): Promise<L2BackfillResult> {
         if (fs.existsSync(v3)) {
           try {
             const m = JSON.parse(fs.readFileSync(v3, "utf8")) as { complete?: boolean; at?: number };
-            if (m.complete === true && typeof m.at === "number") coveredUntilTs = m.at;
+            if (m.complete === true && typeof m.at === "number") {
+              coveredUntilTs = m.at;
+              baselineCoveredUntilTs = m.at;
+              previouslyComplete = true;
+            }
           } catch { /* 旧标记损坏则从零开始，去重守卫兜底 */ }
         }
+      }
+      if (previouslyComplete) {
+        if (!fs.existsSync(marker)) {
+          fs.writeFileSync(marker, JSON.stringify({
+            complete: true,
+            coveredUntilTs,
+            baselineCoveredUntilTs,
+            sessionOffsets,
+            at: Date.now(),
+          }));
+        }
+        return { complete: true, reason: "already_complete" };
       }
       const indexFile = path.join(dataDir, "cyrene-chats", "index.json");
       if (!fs.existsSync(indexFile)) return { complete: true, reason: "no_chat_history" };
@@ -103,7 +124,13 @@ export function backfillL2FromChatLogs(): Promise<L2BackfillResult> {
       const recalledByDedup = new Set<string>();
       let newWatermark = coveredUntilTs;
       const writeProgress = (complete: boolean) => {
-        fs.writeFileSync(marker, JSON.stringify({ complete, coveredUntilTs: newWatermark, at: Date.now() }));
+        fs.writeFileSync(marker, JSON.stringify({
+          complete,
+          coveredUntilTs: newWatermark,
+          baselineCoveredUntilTs,
+          sessionOffsets,
+          at: Date.now(),
+        }));
       };
       for (const session of sessions) {
         if (!session?.id) continue;
@@ -124,7 +151,9 @@ export function backfillL2FromChatLogs(): Promise<L2BackfillResult> {
             pendingUser = { text: m.content, ts };
           } else if (m.role === "model" || m.role === "assistant") {
             if (pendingUser) {
-              turns.push({ userInput: pendingUser.text, assistantReply: m.content, ts });
+              // 轮次游标必须绑定 user 消息：若上次启动时回复尚未落盘，之后补上的
+              // assistant 时间更晚；用回复时间会让同一 user 轮次在下次启动再次回填。
+              turns.push({ userInput: pendingUser.text, assistantReply: m.content, ts: pendingUser.ts });
               pendingUser = null;
             }
           }
@@ -132,7 +161,8 @@ export function backfillL2FromChatLogs(): Promise<L2BackfillResult> {
         if (pendingUser) turns.push({ userInput: pendingUser.text, assistantReply: "", ts: pendingUser.ts });
 
         // 只重放水位线之后的增量轮次；边界重叠由 0.9 余弦判重兜底。
-        const due = turns.filter((t) => t.ts > coveredUntilTs);
+        const sessionOffset = sessionOffsets[session.id] ?? baselineCoveredUntilTs;
+        const due = turns.filter((t) => t.ts > sessionOffset);
         if (due.length === 0) continue;
 
         let sessionFailed = false;
@@ -160,7 +190,7 @@ export function backfillL2FromChatLogs(): Promise<L2BackfillResult> {
           }
           for (const candidate of candidates) {
             if (candidate.layer !== "L2") continue; // L0/L1 不回填，避免覆盖当前状态
-            const duplicateL2Id = await findDuplicateL2Id(candidate.content, provider);
+            const duplicateL2Id = findExactReplayL2Id(candidate.content);
             if (duplicateL2Id) {
               skippedDup += 1;
               recalledByDedup.add(duplicateL2Id);
@@ -171,9 +201,14 @@ export function backfillL2FromChatLogs(): Promise<L2BackfillResult> {
               await memoryManager.writeMemory([candidate]);
               written += 1;
             } catch (e) {
-              console.warn(LOG_PREFIX, "L2 回填单条写入失败（跳过）:", e);
+              console.warn(LOG_PREFIX, "L2 回填单条写入失败（下次启动重试）:", e);
+              failedBatches += 1;
+              sessionFailed = true;
+              break;
             }
           }
+          if (sessionFailed) break;
+          sessionOffsets[sid] = Math.max(sessionOffsets[sid] ?? baselineCoveredUntilTs, batchTs);
           newWatermark = Math.max(newWatermark, batchTs);
         }
         if (sessionFailed) break; // 本轮不再继续后续会话，下次启动从水位线续跑
@@ -193,9 +228,6 @@ export function backfillL2FromChatLogs(): Promise<L2BackfillResult> {
         return { complete: false, reason: "batch_failed" };
       }
       writeProgress(true);
-      if (batches === 0 && previouslyComplete) {
-        return { complete: true, reason: "already_complete" };
-      }
       console.log(LOG_PREFIX, `L2 回填提取完成：分析 ${batches} 批，写入 ${written} 条，跳过重复 ${skippedDup} 条`);
       return { complete: true };
     } catch (e) {

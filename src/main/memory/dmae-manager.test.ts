@@ -98,11 +98,21 @@ describe("simulateTurn 状态演算", () => {
 
   it("discounts recall reward inside the repeat window to prevent one memory from saturating", () => {
     // 真实场景：同一条记忆连续多轮被检索命中，activation 不应无限堆满 100
-    const seeded = new Map([["l2_hot", freshState({ activation: 40, lastInjectedRound: 4 })]]);
+    const seeded = new Map([["l2_hot", freshState({ activation: 10, lastInjectedRound: 4 })]]);
     const saturated = simulateTurn(seeded, ["l2_hot"], 6); // round-lastInjected=2 < 6 → 打折
-    const fresh = simulateTurn(new Map([["l2_hot", freshState({ activation: 40, lastInjectedRound: -1 })]]), ["l2_hot"], 6);
+    const fresh = simulateTurn(new Map([["l2_hot", freshState({ activation: 10, lastInjectedRound: -1 })]]), ["l2_hot"], 6);
     expect(saturated.get("l2_hot")!.activation).toBeLessThan(fresh.get("l2_hot")!.activation);
-    expect(fresh.get("l2_hot")!.activation - 40).toBeCloseTo(36, 5);
+    expect(fresh.get("l2_hot")!.activation - 10).toBeCloseTo(36, 5);
+  });
+
+  it("caps a repeatedly recalled non-pinned memory at the short-residency ceiling", () => {
+    let states = new Map<string, L2DmaeState>();
+    for (let round = 1; round <= 12; round += 1) {
+      states = simulateTurn(states, ["l2_hot"], round);
+      const state = states.get("l2_hot")!;
+      state.lastInjectedRound = round;
+    }
+    expect(states.get("l2_hot")!.activation).toBeLessThanOrEqual(L2_DMAE_PARAMS.residencyScoreCap);
   });
 
   it("drops states of deleted memories instead of carrying them forever", () => {
@@ -139,6 +149,24 @@ describe("selectEntries 注入选择", () => {
     expect(ids).toContain("l2_active");
     expect(ids).not.toContain("l2_cold");
     expect(selected.length).toBeLessThanOrEqual(L2_DMAE_PARAMS.maxInject);
+  });
+
+  it("does not top up an active memory after too many consecutive retrieval misses", () => {
+    const allL2 = [
+      makeL2({ id: "l2_recent" }),
+      makeL2({ id: "l2_stale" }),
+      makeL2({ id: "l2_pinned_stale", isPinned: true }),
+    ];
+    const states = new Map<string, L2DmaeState>([
+      ["l2_recent", freshState({ activation: 50, userSilence: L2_DMAE_PARAMS.maxResidentSilence })],
+      ["l2_stale", freshState({ activation: 98, userSilence: L2_DMAE_PARAMS.maxResidentSilence + 1 })],
+      ["l2_pinned_stale", freshState({ activation: 98, userSilence: L2_DMAE_PARAMS.maxResidentSilence + 20 })],
+    ]);
+
+    const ids = selectEntries([], allL2, states).map((item) => item.metadata?.l2Id);
+    expect(ids).toContain("l2_recent");
+    expect(ids).not.toContain("l2_stale");
+    expect(ids).toContain("l2_pinned_stale");
   });
 
   it("keeps conflicted memories out of the DMAE top-up channel until resolved", () => {

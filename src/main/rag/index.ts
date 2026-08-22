@@ -12,6 +12,7 @@ import { feedEntityNamesToJieba } from "../memory/entity-graph";
 import { isL2LocallyRecallable, isL2Expired } from "../memory/memory-types";
 import type { DocumentImportControl } from "./file-ingest";
 import { ensureRerankerInitialized, getReranker } from "./reranker";
+import { repairStoredMemoryFacets, resolveRetrievalPlan, selectFacetAwareItems, type MemoryFacets, type RetrievalPlan } from "../memory/memory-facets";
 
 // ── Global RAG instances ──
 let store: JsonVectorStore | null = null;
@@ -171,7 +172,7 @@ export async function searchMemory(
   query: string,
   source?: string,
   topK = 5,
-  options?: { recordRecall?: boolean }
+  options?: { recordRecall?: boolean; facetFusion?: boolean }
 ): Promise<string[]> {
   const results = await searchMemoryEntries(query, source, topK, options);
   return results.map((r) => r.text);
@@ -181,25 +182,36 @@ export async function searchMemoryEntries(
   query: string,
   source?: string,
   topK = 5,
-  options?: { recordRecall?: boolean; includeExpired?: boolean }
+  options?: { recordRecall?: boolean; includeExpired?: boolean; facetFusion?: boolean; retrievalPlan?: RetrievalPlan }
 ): Promise<Array<{ id: string; text: string; createdAt: number; score: number; metadata?: Record<string, unknown> }>> {
   if (!retriever) return [];
   let allowedEntryIds: string[] | undefined;
   let userMemorySearchTextByEntryId: Map<string, string> | undefined;
   let expiredL2Ids: Set<string> | undefined;
+  let facetsByEntryId: Map<string, MemoryFacets> | undefined;
   if (source === "user_memory") {
     try {
       const { memoryStore } = await import("../memory/memory-store");
       const memories = await memoryStore.getAllL2();
       // 有效期窗口：被纠正/取代（validTo 到期）的事实默认退出自动引用通道；
       // includeExpired（工具通道）允许带回但打 expired 标记，仅供联想/查证。
+      const includeExpired = options?.includeExpired === true;
+      const isEligible = (memory: typeof memories[number]): boolean => {
+        if (isL2LocallyRecallable(memory)) return includeExpired || !isL2Expired(memory);
+        return includeExpired
+          && memory.status === "superseded"
+          && memory.syncStatus === "synced"
+          && typeof memory.ragId === "string"
+          && memory.ragId.length > 0
+          && isL2Expired(memory);
+      };
       const recallableById = new Map(
         memories
-          .filter((memory) => isL2LocallyRecallable(memory) && (options?.includeExpired === true || !isL2Expired(memory)))
+          .filter(isEligible)
           .map((memory) => [memory.id, memory]),
       );
-      expiredL2Ids = options?.includeExpired === true
-        ? new Set(memories.filter((memory) => isL2LocallyRecallable(memory) && isL2Expired(memory)).map((memory) => memory.id))
+      expiredL2Ids = includeExpired
+        ? new Set(memories.filter((memory) => isEligible(memory) && isL2Expired(memory)).map((memory) => memory.id))
         : undefined;
       const recallableEntries = getEntriesBySource("user_memory")
         .filter((entry) => {
@@ -208,6 +220,11 @@ export async function searchMemoryEntries(
           return recallableById.get(l2Id)?.ragId === entry.id;
         });
       allowedEntryIds = recallableEntries.map((entry) => entry.id);
+      facetsByEntryId = new Map(recallableEntries.flatMap((entry) => {
+        const l2Id = entry.metadata?.l2Id;
+        const memory = typeof l2Id === "string" ? recallableById.get(l2Id) : undefined;
+        return memory ? [[entry.id, repairStoredMemoryFacets(memory.facets, `${memory.content} ${memory.triggerText}`)] as const] : [];
+      }));
       userMemorySearchTextByEntryId = new Map(recallableEntries.map((entry) => {
         const l2Id = entry.metadata?.l2Id;
         const memory = typeof l2Id === "string" ? recallableById.get(l2Id) : undefined;
@@ -221,8 +238,15 @@ export async function searchMemoryEntries(
       return [];
     }
   }
-  const finalTopK = source === "user_memory" ? Math.min(Math.max(topK, 0), 5) : topK;
-  const candidateTopK = source === "user_memory" ? Math.max(20, finalTopK) : finalTopK;
+  const facetPlan = source === "user_memory" && options?.facetFusion === true
+    ? options.retrievalPlan ?? resolveRetrievalPlan(query)
+    : undefined;
+  const finalTopK = source === "user_memory"
+    ? (facetPlan?.maxResults ?? Math.min(Math.max(topK, 0), 5))
+    : topK;
+  const candidateTopK = source === "user_memory"
+    ? Math.max(facetPlan?.candidateDepth ?? 20, finalTopK)
+    : finalTopK;
   let results = await retriever.retrieve(query, source, candidateTopK, {
     allowedEntryIds,
     searchTextByEntryId: userMemorySearchTextByEntryId,
@@ -282,7 +306,49 @@ export async function searchMemoryEntries(
       const lexicalIndex = results.findIndex((result) => result.entry.id === lexicalCandidates[0].entry.id);
       if (lexicalIndex > 0) results.unshift(...results.splice(lexicalIndex, 1));
     }
-    results = results.slice(0, finalTopK);
+    if (facetPlan && facetPlan.queryKinds.length > 0 && facetsByEntryId) {
+      const kindEntryIds = [...facetsByEntryId.entries()]
+        .filter(([, facets]) => facets.source === "model" && facetPlan.queryKinds.some((kind) => facets.retrievalKinds.includes(kind)))
+        .map(([entryId]) => entryId);
+      if (kindEntryIds.length > 0) {
+        let kindRanked = await retriever.retrieve(query, source, Math.min(facetPlan.candidateDepth, kindEntryIds.length), {
+          allowedEntryIds: kindEntryIds,
+          searchTextByEntryId: userMemorySearchTextByEntryId,
+          rawScore: true,
+          recordRecall: false,
+        });
+        const reranker = getReranker();
+        if (reranker && kindRanked.length > 0) {
+          try {
+            const documents = kindRanked.map((result) => userMemorySearchTextByEntryId?.get(result.entry.id) ?? result.entry.text);
+            const reranked = await reranker.rerank(query, documents);
+            const candidatesByText = new Map<string, typeof kindRanked>();
+            kindRanked.forEach((result, index) => {
+              const text = documents[index];
+              const matches = candidatesByText.get(text) ?? [];
+              matches.push(result);
+              candidatesByText.set(text, matches);
+            });
+            kindRanked = reranked.flatMap((item) => {
+              const match = candidatesByText.get(item.text)?.shift();
+              return match ? [{ ...match, score: item.score }] : [];
+            });
+          } catch (error) {
+            console.warn("[RAG] memory kind rerank failed; using hybrid ranking:", error);
+          }
+        }
+        const seenEntryIds = new Set(results.map((result) => result.entry.id));
+        results.push(...kindRanked.filter((result) => !seenEntryIds.has(result.entry.id)));
+      }
+    }
+    results = facetPlan
+      ? selectFacetAwareItems(results, facetPlan, {
+        getText: (result) => result.entry.text,
+        getFacets: (result) => facetsByEntryId?.get(result.entry.id),
+        getKey: (result) => String(result.entry.metadata?.l2Id ?? result.entry.id),
+        getFacetScore: (result) => result.score,
+      })
+      : results.slice(0, finalTopK);
   }
   if (options?.recordRecall !== false) {
     await recordUserMemoryRecalls(results);

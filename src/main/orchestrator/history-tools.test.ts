@@ -38,12 +38,80 @@ import {
   diversifySandboxRerankResults,
   expandHistoryHitsWithAdjacentTurns,
   expandHistoryHitsWithSentenceWindows,
+  filterHistoryHitsByRelevance,
   reconcileHistoryHitsWithTimeline,
   registerRecallHistoryTool,
+  resolveHistoryAutoInjectionLimit,
   rerankHistoryCandidatesForSandbox,
   runHistoryAutoInjection,
+  runHistoryRetrievalSandbox,
   shouldAutoProbeHistoryRetrieval,
 } from "./history-tools";
+
+describe("history retrieval scaling", () => {
+  it.each([
+    { scope: "normal", queryKinds: [], expected: 5 },
+    { scope: "normal", queryKinds: ["experience"], expected: 8 },
+    { scope: "scoped_list", queryKinds: ["experience"], expected: 10 },
+    { scope: "exhaustive_list", queryKinds: ["experience"], expected: 12 },
+  ] as const)("maps $scope / $queryKinds to $expected injected turns", ({ scope, queryKinds, expected }) => {
+    expect(resolveHistoryAutoInjectionLimit({ scope, queryKinds: [...queryKinds] })).toBe(expected);
+  });
+
+  it("applies method-specific relaxed score floors to reranker and RRF output", () => {
+    const hits = [
+      { text: "relevant", score: 0.1, createdAt: 1, metadata: { retrievalRelevanceScore: -5.9 } },
+      { text: "too weak", score: 0.09, createdAt: 2, metadata: { retrievalRelevanceScore: -6.1 } },
+    ];
+    expect(filterHistoryHitsByRelevance(hits, "reranker").map((hit) => hit.text)).toEqual(["relevant"]);
+    expect(filterHistoryHitsByRelevance([
+      { text: "single-channel top hit", score: 0.0164, createdAt: 1 },
+      { text: "weak tail", score: 0.013, createdAt: 2 },
+    ], "rrf").map((hit) => hit.text)).toEqual(["single-channel top hit"]);
+  });
+
+  it("uses the shared scoped plan in the sandbox instead of silently falling back to five", async () => {
+    const now = Date.now();
+    const entries = Array.from({ length: 12 }, (_, index) => ({
+      text: `history-${index + 1}`,
+      score: 1 - index / 100,
+      createdAt: now - index,
+      weight: 1,
+      metadata: { sessionId: "session-a", role: "user" as const, turnId: `turn-${index + 1}` },
+    }));
+    mocks.getEntriesBySource.mockReturnValue(entries);
+    mocks.searchHistoryEntries.mockImplementation(async (_query: string, depth: number) => entries.slice(0, depth));
+
+    const result = await runHistoryRetrievalSandbox("remember our plans", 90, entries, {
+      scope: "scoped_list",
+      queryKinds: ["commitment"],
+    });
+
+    expect(result.plannedLimit).toBe(10);
+    expect(result.beforeThresholdCount).toBe(10);
+    expect(result.selected).toHaveLength(10);
+    expect(result.relevanceThreshold).toBe(0.014);
+    expect(mocks.searchHistoryEntries.mock.calls.every((call) => call[2]?.recordRecall === false)).toBe(true);
+  });
+
+  it("does not leak orphaned index rows when the authoritative sandbox timeline is empty", async () => {
+    const stale = {
+      text: "deleted-session-history",
+      score: 1,
+      createdAt: Date.now(),
+      weight: 1,
+      metadata: { sessionId: "deleted", role: "user" as const },
+    };
+    mocks.getEntriesBySource.mockReturnValue([stale]);
+    mocks.searchHistoryEntries.mockResolvedValue([stale]);
+
+    const result = await runHistoryRetrievalSandbox("deleted history", 90, []);
+
+    expect(result.baseline).toEqual([]);
+    expect(result.selected).toEqual([]);
+    expect(result.excludedOrphanedRecords).toBe(1);
+  });
+});
 
 describe("recall_history V2 integration", () => {
   beforeEach(() => {
@@ -154,6 +222,36 @@ describe("history retrieval auto probe cues", () => {
 describe("history auto-injection", () => {
   beforeEach(() => {
     mocks.searchHistoryEntries.mockReset();
+    mocks.getEntriesBySource.mockReturnValue([]);
+  });
+
+  it("keeps history retrieval independent from memory-kind metadata", async () => {
+    const now = Date.now();
+    const semantic = Array.from({ length: 5 }, (_, index) => ({
+      text: `SEMANTIC_${index}`,
+      score: 1 - index * 0.1,
+      createdAt: now - 1000 + index,
+      metadata: { role: "user", sessionId: "semantic" },
+    }));
+    mocks.searchHistoryEntries.mockResolvedValue(semantic);
+    mocks.getEntriesBySource.mockReturnValue([
+      ...semantic.map((hit, index) => ({
+        id: `semantic-${index}`, text: hit.text, source: "chat_history", weight: hit.score,
+        createdAt: hit.createdAt, metadata: hit.metadata,
+      })),
+      {
+        id: "facet-gift", text: "我答应视频通话完成后亲手做礼物", source: "chat_history", weight: 1,
+        createdAt: now, metadata: {
+          sessionId: "facet", role: "user", ts: now,
+          memoryFacets: { kind: "commitment", topics: ["关系|约定"], entities: [], source: "model", pendingClassification: false },
+        },
+      },
+    ]);
+
+    const block = await runHistoryAutoInjection("还记得我们有哪些约定吗");
+
+    for (const hit of semantic) expect(block).toContain(hit.text);
+    expect(block).not.toContain("我答应视频通话完成后亲手做礼物");
   });
 
   it("injects V2-retrieved turns when a recall cue hits", async () => {
@@ -172,6 +270,38 @@ describe("history auto-injection", () => {
     )).toBe(true);
     expect(block).toContain("我想要的丝带是粉色的");
     expect(block).toContain("只读数据");
+  });
+
+  it("uses the shared scoped-list plan to inject at most ten ranked history turns", async () => {
+    const now = Date.now();
+    const hits = Array.from({ length: 12 }, (_, index) => ({
+      text: `PAINTING_HISTORY_${index}`,
+      score: 12 - index,
+      createdAt: now - index,
+      metadata: { role: index % 2 === 0 ? "user" : "assistant" },
+    }));
+    mocks.searchHistoryEntries.mockResolvedValue(hits);
+
+    const block = await runHistoryAutoInjection(
+      "还记得前天测试画画时描述的画面吗",
+      90,
+      {
+        retrievalPlan: {
+          scope: "scoped_list",
+          semanticResults: 5,
+          kindResults: 8,
+          maxResults: 13,
+          candidateDepth: 48,
+          characterBudget: 3000,
+          queryKinds: ["experience", "emotion"],
+          queryKind: "experience",
+        },
+      },
+    );
+
+    expect(block).toContain("PAINTING_HISTORY_9");
+    expect(block).not.toContain("PAINTING_HISTORY_10");
+    expect(block).not.toContain("PAINTING_HISTORY_11");
   });
 
   it("runs only the bm25 preflight when there is no cue and no lexical evidence", async () => {
@@ -420,6 +550,7 @@ describe("history retrieval sandbox answer-focused reranking", () => {
       "要做的小摆件 形状 造型 外观 样子 设计 细节",
     ]);
     expect(result[0].text).toBe("pink rosebud shape");
+    expect(result.find((item) => item.text === "pink rosebud shape")?.relevanceScore).toBeCloseTo(2.3);
   });
 
   it("gives a small sandbox-only lift to candidates that state the expanded intent", async () => {
@@ -457,6 +588,13 @@ describe("history retrieval sandbox answer-focused reranking", () => {
       .toContain("rosebud answer");
     expect(diversifySandboxRerankResults(ranked, candidates).slice(0, 5).map((item) => item.text))
       .not.toContain("weak assistant");
+  });
+
+  it("supports a larger final cutoff without changing reranked order", () => {
+    const ranked = Array.from({ length: 12 }, (_, index) => ({ text: `item-${index}`, score: 12 - index }));
+    const candidates = ranked.map((item) => ({ ...item, createdAt: 1_000, metadata: { role: "user" } }));
+    expect(diversifySandboxRerankResults(ranked, candidates, 10).slice(0, 10).map((item) => item.text))
+      .toEqual(ranked.slice(0, 10).map((item) => item.text));
   });
 
   it("prefers substantive event evidence over short assistant follow-ups and adjacent filler", () => {
@@ -540,7 +678,7 @@ describe("chat history occurrence backfill", () => {
     fs.rmSync(mocks.dataDir, { recursive: true, force: true });
   });
 
-  it("resumes at the failed message and never reruns after completion", async () => {
+  it("resumes at the failed message and incrementally self-heals messages appended after completion", async () => {
     mocks.addHistoryMemory
       .mockResolvedValueOnce("entry-1")
       .mockRejectedValueOnce(new Error("temporary embedding failure"));
@@ -567,5 +705,18 @@ describe("chat history occurrence backfill", () => {
     mocks.addHistoryMemory.mockClear();
     await backfillChatHistoryFromChatLogs();
     expect(mocks.addHistoryMemory).not.toHaveBeenCalled();
+
+    const sessionFile = path.join(mocks.dataDir, "cyrene-chats", "sessions", "session-a.json");
+    const session = JSON.parse(fs.readFileSync(sessionFile, "utf8"));
+    session.messages.push({ id: "turn-4", role: "model", content: "four", at: 400 });
+    fs.writeFileSync(sessionFile, JSON.stringify(session));
+
+    await backfillChatHistoryFromChatLogs();
+
+    expect(mocks.addHistoryMemory.mock.calls.map((call) => call[0])).toEqual(["four"]);
+    expect(JSON.parse(fs.readFileSync(marker, "utf8"))).toMatchObject({
+      complete: true,
+      sessionOffsets: { "session-a": 3 },
+    });
   });
 });

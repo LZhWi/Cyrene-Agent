@@ -44,11 +44,14 @@ import {
 } from "../call/call-context";
 import { buildMinecraftContextBlock, buildMinecraftMemoryContext } from "../game-bot/minecraft/session-context";
 import type { MinecraftSessionEvent } from "../game-bot/minecraft/types";
+import type { RetrievalPlan } from "../memory/memory-facets";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
  *  实际调用时由 index.ts 注入真实的强类型函数。这避免循环类型依赖。 */
 export interface BuildOptionsDeps {
+  /** 用户发起任意聊天运行时通知后台任务；用于重置梦境空闲计时并中止正在运行的梦境。 */
+  notifyUserActivity?: () => void;
   loadModelSettings: () => ModelSettingsLite;
   loadUserProfile: () => UserProfileLite;
   buildEnvironmentContext: (model: { provider: string; model: string }, profile: unknown) => string;
@@ -68,9 +71,10 @@ export interface BuildOptionsDeps {
     userText: string,
     messages: ReadonlyArray<{ role: string; content?: string }>,
   ) => Promise<string>;
-  buildMemoryInjection: (userText: string) => Promise<string>;
+  resolveMemoryRetrievalPlan?: (userText: string) => Promise<RetrievalPlan>;
+  buildMemoryInjection: (userText: string, options?: { retrievalPlan?: RetrievalPlan }) => Promise<string>;
   /** 线索触发的历史自动注入：命中回忆线索时系统直接检索并注入，不依赖工具决策。 */
-  buildHistoryAutoInjection?: (userText: string) => Promise<string>;
+  buildHistoryAutoInjection?: (userText: string, options?: { retrievalPlan?: RetrievalPlan }) => Promise<string>;
   buildRelationshipContext: () => Promise<string>;
   buildSystemPrompt: (styleFile: string) => string;
   /** 第一期：工具阶段 system prompt。仅含工具调度规则 + 自动生成的工具目录。 */
@@ -297,6 +301,7 @@ export async function buildAgentRunOptions(
   input: AguiRunInput,
   deps: BuildOptionsDeps,
 ): Promise<{ options: CyreneRunOptions; latestUserText: string; memoryContextText?: string }> {
+  deps.notifyUserActivity?.();
   const settings = deps.loadModelSettings();
   if (!settings.apiKey) {
     throw new Error("还没有填写 API Key，请先在设置里保存 API 配置。");
@@ -341,9 +346,21 @@ export async function buildAgentRunOptions(
     console.warn("[Cyrene] always-on context build failed:", err);
   }
 
+  let retrievalPlan: RetrievalPlan | undefined;
+  if (deps.resolveMemoryRetrievalPlan) {
+    try {
+      retrievalPlan = await deps.resolveMemoryRetrievalPlan(latestUserText);
+    } catch (err) {
+      console.warn("[Cyrene] retrieval plan routing failed:", err);
+    }
+  }
+
   let memoryInjection = "";
   try {
-    memoryInjection = await deps.buildMemoryInjection(latestUserText);
+    memoryInjection = await deps.buildMemoryInjection(
+      latestUserText,
+      retrievalPlan ? { retrievalPlan } : undefined,
+    );
   } catch (err) {
     console.warn("[Cyrene] memory injection failed:", err);
   }
@@ -383,7 +400,10 @@ export async function buildAgentRunOptions(
   let historyContextBlock = "";
   if (deps.buildHistoryAutoInjection && (!input.channel || deps.isProactiveConversation?.(input.sessionId || "default") === true)) {
     try {
-      historyContextBlock = await deps.buildHistoryAutoInjection(latestUserText);
+      historyContextBlock = await deps.buildHistoryAutoInjection(
+        latestUserText,
+        retrievalPlan ? { retrievalPlan } : undefined,
+      );
     } catch (err) {
       console.warn("[Cyrene] history auto-injection failed:", err);
     }

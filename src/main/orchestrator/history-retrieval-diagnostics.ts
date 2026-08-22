@@ -373,7 +373,7 @@ export async function runHistoryRetrievalV2Shadow(input: {
   baseline: HistoryRetrievalHit[];
   search: HistorySearch;
   semanticSearch?: HistorySearch;
-  rerank?: (query: string, documents: string[]) => Promise<Array<{ text: string; score: number }>>;
+  rerank?: (query: string, documents: string[]) => Promise<Array<{ text: string; score: number; relevanceScore?: number }>>;
   enabled?: boolean;
   now?: number;
   createdBefore?: number;
@@ -382,6 +382,7 @@ export async function runHistoryRetrievalV2Shadow(input: {
   writeLog?: boolean;
   actualResultUnchanged?: boolean;
   expandCandidates?: (hits: HistoryRetrievalHit[]) => HistoryRetrievalHit[];
+  finalK?: number;
   onCandidates?: (hits: HistoryRetrievalHit[]) => void;
   onResult?: (hits: HistoryRetrievalHit[]) => void;
 }): Promise<HistoryRetrievalV2Record | undefined> {
@@ -458,8 +459,9 @@ export async function runHistoryRetrievalV2Shadow(input: {
   }
   input.onCandidates?.(candidates);
 
+  const requestedFinalK = Math.min(12, Math.max(1, Math.floor(input.finalK ?? 5)));
   let method: "reranker" | "rrf" = "rrf";
-  let finalHits = candidates.slice(0, 6);
+  let finalHits = candidates.slice(0, input.finalK === undefined ? 6 : requestedFinalK);
   let rerankerError: string | undefined;
   const rerankerScores = new Map<string, number>();
   if (input.rerank && candidates.length > 0) {
@@ -470,8 +472,14 @@ export async function runHistoryRetrievalV2Shadow(input: {
       const byText = new Map(candidates.map((hit) => [hit.text, hit]));
       finalHits = reranked.flatMap((item) => {
         const hit = byText.get(item.text);
-        return hit ? [{ ...hit, score: item.score }] : [];
-      }).slice(0, 5);
+        return hit ? [{
+          ...hit,
+          score: item.score,
+          metadata: typeof item.relevanceScore === "number"
+            ? { ...hit.metadata, retrievalRelevanceScore: item.relevanceScore }
+            : hit.metadata,
+        }] : [];
+      }).slice(0, requestedFinalK);
       method = "reranker";
     } catch (error) {
       rerankerError = error instanceof Error ? error.message : String(error);
@@ -491,7 +499,7 @@ export async function runHistoryRetrievalV2Shadow(input: {
     candidateDepth: 12,
     candidateCount: candidates.length,
     method,
-    finalK: method === "reranker" ? 5 : 6,
+    finalK: method === "reranker" ? requestedFinalK : input.finalK === undefined ? 6 : requestedFinalK,
     baseline: serializeHits(input.baseline),
     candidates: serializeHits(candidates),
     shadowResult: serializeHits(finalHits),

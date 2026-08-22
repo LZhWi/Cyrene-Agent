@@ -196,6 +196,9 @@ export const IPC = {
   MEMORY_PANEL_SAVE_L0: "memory-panel:save-l0",
   MEMORY_PANEL_SAVE_L1: "memory-panel:save-l1",
   MEMORY_PANEL_RUN_RETRIEVAL_SANDBOX: "memory-panel:run-retrieval-sandbox",
+  MEMORY_QUERY_ROUTER_GET_SETTINGS: "memory-query-router:get-settings",
+  MEMORY_QUERY_ROUTER_SAVE_SETTINGS: "memory-query-router:save-settings",
+  MEMORY_QUERY_ROUTER_TEST: "memory-query-router:test",
 
   // MCP server management
   MCP_ADD_SERVER: "mcp:add-server",

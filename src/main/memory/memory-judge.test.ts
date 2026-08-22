@@ -30,7 +30,7 @@ vi.mock("../orchestrator/vendors", () => ({
 
 import { memoryJudge } from "./memory-judge";
 
-function validL2Raw(sourceQuote?: string): string {
+function validL2Raw(sourceQuote?: string, facets?: Record<string, unknown>): string {
   const candidate: Record<string, unknown> = {
     layer: "L2",
     summary: "用户在做前端项目",
@@ -45,6 +45,7 @@ function validL2Raw(sourceQuote?: string): string {
     forbiddenOverclaims: [],
   };
   if (sourceQuote !== undefined) candidate.sourceQuote = sourceQuote;
+  if (facets !== undefined) candidate.facets = facets;
   return JSON.stringify([candidate]);
 }
 
@@ -74,6 +75,14 @@ describe("MemoryJudge sourceQuote", () => {
     const systemPrompt = mocks.capturedMessages.find((m) => m.role === "system")?.content ?? "";
     expect(systemPrompt).toContain("sourceQuote");
     expect(systemPrompt).toContain("原话");
+    expect(systemPrompt).toContain("facets");
+    expect(systemPrompt).toContain("primaryKind");
+    expect(systemPrompt).toContain("retrievalKinds");
+    expect(systemPrompt).toContain("最多 3 个");
+    expect(systemPrompt).toContain("commitment");
+    expect(systemPrompt).toContain("wish");
+    expect(systemPrompt).toContain("只有用户明确表达具体情绪");
+    expect(systemPrompt).toContain("不要仅因含有「等……以后」「如果……」就返回空数组");
   });
 
   it("keeps the model-provided sourceQuote on the candidate", async () => {
@@ -99,5 +108,84 @@ describe("MemoryJudge sourceQuote", () => {
     const candidates = await memoryJudge.judgeRecentTurns([{ userInput: "我在做前端", assistantReply: "听起来不错" }], "chat-1");
 
     expect(candidates[0].sourceQuote).toBeUndefined();
+  });
+
+  it("treats a missing API key as a retryable extraction failure", async () => {
+    fs.writeFileSync(
+      path.join(mocks.dataDir, "model-settings.json"),
+      JSON.stringify({ provider: "mock", baseUrl: "http://mock.local", model: "mock-1", apiKey: "" }),
+      "utf8",
+    );
+
+    await expect(memoryJudge.judgeRecentTurns([
+      { userInput: "我答应以后把礼物做好", assistantReply: "好呀" },
+    ], "chat-missing-key")).rejects.toThrow("missing api key");
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("treats a non-empty malformed response as retryable instead of no-memory", async () => {
+    mocks.llmText = "我分析过了，但这不是合法 JSON";
+
+    await expect(memoryJudge.judgeRecentTurns([
+      { userInput: "我准备明年完成这个约定", assistantReply: "我记住啦" },
+    ], "chat-malformed-json")).rejects.toThrow("JSON 解析失败");
+  });
+
+  it("keeps model-classified facets on a new L2 candidate", async () => {
+    mocks.llmText = validL2Raw(undefined, {
+      primaryKind: "goal",
+      retrievalKinds: ["goal", "commitment"],
+    });
+
+    const candidates = await memoryJudge.judgeRecentTurns([
+      { userInput: "我准备继续学高等数学", assistantReply: "好呀" },
+    ], "chat-1");
+
+    expect(candidates[0].facets).toMatchObject({
+      primaryKind: "goal",
+      retrievalKinds: ["goal", "commitment"],
+      source: "model",
+      pendingClassification: false,
+    });
+  });
+
+  it("classifies an old-memory batch without changing IDs", async () => {
+    mocks.llmText = JSON.stringify([{
+      id: "old-1",
+      primaryKind: "goal",
+      retrievalKinds: ["goal", "commitment"],
+    }]);
+
+    const results = await memoryJudge.classifyMemoryFacetsBatch([{
+      id: "old-1",
+      text: "我答应明年亲手给你做礼物",
+    }]);
+
+    const batchPrompt = mocks.capturedMessages.find((message) => message.role === "system")?.content ?? "";
+    expect(batchPrompt).toContain("wish");
+    expect(batchPrompt).toContain("已经完成的目标不再是 goal");
+    expect(batchPrompt).toContain("不要推断隐含情绪");
+    expect(batchPrompt).toContain("primaryKind");
+    expect(batchPrompt).toContain("retrievalKinds");
+    expect(batchPrompt).toContain("最多 3 个");
+    expect(batchPrompt).not.toContain("topics");
+
+    expect(results).toEqual([{
+      id: "old-1",
+      facets: {
+        primaryKind: "goal",
+        retrievalKinds: ["goal", "commitment"],
+        source: "model",
+        pendingClassification: false,
+      },
+    }]);
+  });
+
+  it("leaves invalid or missing batch labels for a later retry", async () => {
+    mocks.llmText = JSON.stringify([{ id: "old-1", primaryKind: "invented", retrievalKinds: ["invented"] }]);
+    await expect(memoryJudge.classifyMemoryFacetsBatch([
+      { id: "old-1", text: "第一条" },
+      { id: "old-2", text: "第二条" },
+    ])).resolves.toEqual([]);
   });
 });

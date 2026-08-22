@@ -260,6 +260,33 @@ describe("MemoryScheduler", () => {
     expect(savedBatches[5]).toEqual([])
   })
 
+  it("does not restore successfully cleared turns on a later restart", async () => {
+    let persisted: MemoryJudgeTurn[] = Array.from({ length: 5 }, (_, i) => ({
+      userInput: `old user ${i + 1}`,
+      assistantReply: `old assistant ${i + 1}`,
+    }))
+    let roundCount = 5
+    const first = createScheduler({
+      loadPendingTurns: vi.fn(async () => persisted.map((turn) => ({ ...turn }))),
+      savePendingTurns: vi.fn(async (turns: MemoryJudgeTurn[]) => {
+        persisted = turns.map((turn) => ({ ...turn }))
+      }),
+      getL1: vi.fn(async () => ({ recentGoals: "", recentPreferences: "", currentProject: "", generatedAt: 0, roundCount })),
+      replaceL1Field: vi.fn(async (_field: "roundCount", value: number) => { roundCount = value }),
+    })
+    first.scheduler.scheduleMemoryWrite("new user", "new assistant")
+    await vi.waitFor(() => expect(first.deps.judgeMemory).toHaveBeenCalledTimes(1))
+    await vi.waitFor(() => expect(persisted).toEqual([]))
+
+    const second = createScheduler({
+      loadPendingTurns: vi.fn(async () => persisted.map((turn) => ({ ...turn }))),
+      getL1: vi.fn(async () => ({ recentGoals: "", recentPreferences: "", currentProject: "", generatedAt: 0, roundCount })),
+    })
+    second.scheduler.scheduleMemoryWrite("later user", "later assistant")
+    await vi.waitFor(() => expect(second.deps.replaceL1Field).toHaveBeenCalled())
+    expect(second.deps.judgeMemory).not.toHaveBeenCalled()
+  })
+
   it("keeps residue when judge fails so a restart can retry extraction", async () => {
     const savedBatches: MemoryJudgeTurn[][] = []
     const { scheduler, deps } = createScheduler({

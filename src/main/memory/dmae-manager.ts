@@ -16,12 +16,17 @@ import { isL2LocallyRecallable, isL2Expired, L2DmaeState, L2Memory } from "./mem
 // ── 参数（沿用上游标定值；全部集中于此，首周观察 trace 后再微调）──
 export const L2_DMAE_PARAMS = {
   maxScore: 100,
+  /** 驻留分上限：避免反复命中堆到 100 后换话题仍需约 7 轮才退出。pinned 不受驻留门控。 */
+  residencyScoreCap: 55,
   /** activation >= 此值视为活跃，进入驻留注入候选 */
   promptThreshold: 30,
   /** 活跃集最多驻留几条（在检索结果之外额外注入） */
   activeTopK: 4,
+  /** 连续超过此轮数未被真实检索命中时，不再仅凭历史激活度补位。 */
+  maxResidentSilence: 3,
   /** 最终注入总量上限（检索 top-5 ∪ 活跃集，防上下文膨胀） */
-  maxInject: 6,
+  // 双通道检索：保留语义 Top5，再补标签 Top5；最终仍由事项去重与字符预算约束。
+  maxInject: 10,
   /** 用户静默衰减权重：D = α·US² + β·MS²（与世界书同款二次阻力衰减） */
   decayAlpha: 1.0,
   decayBeta: 0.2,
@@ -133,7 +138,8 @@ function evolveState(prev: L2DmaeState, rank: number | undefined, round: number)
   const decay = params.decayAlpha * userSilence * userSilence
     + params.decayBeta * modelSilence * modelSilence;
 
-  let activation = clampScore(prev.activation + reward - decay);
+  // 旧快照中可能已有接近 100 的分数；每次演算都收敛到短驻留上限，完成无损迁移。
+  let activation = Math.min(params.residencyScoreCap, clampScore(prev.activation + reward - decay));
   // 唤醒：Dormant/Archived 被用户话题重新召回 → 拉回工作集（上游 wake-up 语义）
   if (hit && prev.activation < params.promptThreshold) {
     activation = Math.max(activation, params.promptThreshold + params.wakeBonus);
@@ -210,7 +216,11 @@ export function selectEntries(
 
   // 活跃集：activation >= threshold 按激活度降序取 top-K（含浮点容差）
   const activeIds = [...states.entries()]
-    .filter(([l2Id, st]) => st.activation >= params.promptThreshold - params.epsilon && !seen.has(l2Id))
+    .filter(([l2Id, st]) => (
+      st.activation >= params.promptThreshold - params.epsilon
+      && st.userSilence <= params.maxResidentSilence
+      && !seen.has(l2Id)
+    ))
     .sort((a, b) => b[1].activation - a[1].activation)
     .slice(0, params.activeTopK)
     .map(([l2Id]) => l2Id);

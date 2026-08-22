@@ -10,7 +10,12 @@ const electronMock = vi.hoisted(() => ({
 
 const ragMock = vi.hoisted(() => ({
   addL2MemoryVector: vi.fn(),
+  getEntriesBySource: vi.fn(),
   searchMemoryEntries: vi.fn(),
+}))
+
+const embeddingMock = vi.hoisted(() => ({
+  getEmbeddingProvider: vi.fn(),
 }))
 
 vi.mock("electron", () => ({
@@ -20,6 +25,7 @@ vi.mock("electron", () => ({
 }))
 
 vi.mock("../rag/index", () => ragMock)
+vi.mock("../rag/embedding", () => embeddingMock)
 
 function readTraceEvents(): Array<Record<string, unknown>> {
   const tracePath = path.join(electronMock.userDataDir, "memory-trace.log")
@@ -35,8 +41,12 @@ describe("MemoryManager L2 sync", () => {
   beforeEach(() => {
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "memory-manager-"))
     ragMock.addL2MemoryVector.mockReset()
+    ragMock.getEntriesBySource.mockReset()
+    ragMock.getEntriesBySource.mockReturnValue([])
     ragMock.searchMemoryEntries.mockReset()
     ragMock.searchMemoryEntries.mockResolvedValue([])
+    embeddingMock.getEmbeddingProvider.mockReset()
+    embeddingMock.getEmbeddingProvider.mockReturnValue(undefined)
     vi.resetModules()
   })
 
@@ -173,6 +183,210 @@ describe("MemoryManager L2 sync", () => {
 
     const l0 = await memoryStore.getL0()
     expect(l0.preferredName).toBe("用户希望被称为 P宝")
+  })
+
+  it("ends an old goal validity window when a model-labelled completion is written", async () => {
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_completed")
+    const { memoryManager } = await import("./memory-manager")
+    const { memoryStore } = await import("./memory-store")
+    const existing = await memoryStore.addL2Memory({
+      content: "用户计划完成高等数学课程",
+      triggerText: "我准备把高数学完",
+      sourceConversationId: "test",
+      ragId: "rag_goal",
+      isPinned: false,
+      syncStatus: "synced",
+      facets: { primaryKind: "goal", retrievalKinds: ["goal"], source: "model", pendingClassification: false },
+    })
+    ragMock.searchMemoryEntries.mockResolvedValue([{
+      id: "rag_goal",
+      text: existing.content,
+      createdAt: Date.now(),
+      score: 0.9,
+      metadata: { l2Id: existing.id },
+    }])
+    const candidate: MemoryCandidate = {
+      layer: "L2",
+      content: "用户已经完成了高等数学课程",
+      confidence: 0.95,
+      triggerText: "我终于把高数学完了",
+      facets: { primaryKind: "experience", retrievalKinds: ["experience"], source: "model", pendingClassification: false },
+    }
+
+    await memoryManager.writeMemory([candidate])
+
+    const all = await memoryStore.getAllL2()
+    const old = all.find((memory) => memory.id === existing.id)!
+    const fresh = all.find((memory) => memory.id !== existing.id)!
+    expect(old.status).toBe("superseded")
+    expect(old.validTo).toEqual(expect.any(Number))
+    expect(old.supersededBy).toBe(fresh.id)
+    expect(fresh.facets?.primaryKind).toBe("experience")
+  })
+
+  it("keeps an immediate high-cosine candidate and queues non-destructive relationship review", async () => {
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_new")
+    embeddingMock.getEmbeddingProvider.mockReturnValue({ embed: vi.fn(async () => [1, 0]) })
+    const { memoryManager } = await import("./memory-manager")
+    const { memoryStore } = await import("./memory-store")
+    const existing = await memoryStore.addL2Memory({
+      content: "用户正在开发三层架构的 MC 系统",
+      triggerText: "现在我们的mc系统工作流程是分三层的",
+      sourceConversationId: "",
+      embedding: [],
+      isPinned: false,
+      syncStatus: "pending_sync",
+      facets: { primaryKind: "fact", retrievalKinds: ["fact"], source: "model", pendingClassification: false },
+    })
+    await memoryStore.markL2SyncStatus(existing.id, "synced", "rag_existing")
+    ragMock.getEntriesBySource.mockReturnValue([{
+      id: "rag_existing",
+      text: existing.content,
+      embedding: [1, 0],
+      createdAt: existing.createdAt,
+      weight: 0,
+      metadata: { l2Id: existing.id },
+    }])
+
+    await memoryManager.writeMemory([{
+      layer: "L2",
+      content: "用户正在开发一个三层架构的 MC 系统",
+      confidence: 0.9,
+      triggerText: "我们的 MC 系统是三层架构",
+      facets: { primaryKind: "fact", retrievalKinds: ["fact"], source: "model", pendingClassification: false },
+    }])
+
+    const allL2 = await memoryStore.getAllL2()
+    const conflictLogs = await memoryStore.getConflictLogs()
+    expect(allL2).toHaveLength(2)
+    expect(allL2.map((item) => item.content)).toContain("用户正在开发一个三层架构的 MC 系统")
+    expect(conflictLogs).toHaveLength(1)
+    expect(conflictLogs[0]).toMatchObject({
+      candidateType: "near_duplicate",
+      targetL2Id: existing.id,
+      resolverPriority: "idle",
+      resolverStatus: "queued",
+    })
+    expect(ragMock.addL2MemoryVector).toHaveBeenCalled()
+  })
+
+  it.each([
+    ["用户明天打算去买西装", "用户打算后天去买西装"],
+    [
+      "用户表示喜欢草莓、香草口味的甜品，尤其是这些口味的冰激凌",
+      "用户表示喜欢草莓、香草、榛子口味的甜品，尤其是这些口味的冰激凌",
+    ],
+  ])("preserves high-cosine updates instead of dropping added facts: %s", async (oldContent, newContent) => {
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_new")
+    embeddingMock.getEmbeddingProvider.mockReturnValue({ embed: vi.fn(async () => [1, 0]) })
+    const { memoryManager } = await import("./memory-manager")
+    const { memoryStore } = await import("./memory-store")
+    const existing = await memoryStore.addL2Memory({
+      content: oldContent,
+      triggerText: oldContent,
+      sourceConversationId: "",
+      embedding: [],
+      isPinned: false,
+      syncStatus: "pending_sync",
+      facets: { primaryKind: "preference", retrievalKinds: ["preference"], source: "model", pendingClassification: false },
+    })
+    await memoryStore.markL2SyncStatus(existing.id, "synced", "rag_existing")
+    ragMock.getEntriesBySource.mockReturnValue([{
+      id: "rag_existing",
+      text: existing.content,
+      embedding: [1, 0],
+      createdAt: existing.createdAt,
+      weight: 0,
+      metadata: { l2Id: existing.id },
+    }])
+
+    await memoryManager.writeMemory([{
+      layer: "L2",
+      content: newContent,
+      confidence: 0.95,
+      triggerText: newContent,
+      facets: { primaryKind: "preference", retrievalKinds: ["preference"], source: "model", pendingClassification: false },
+    }])
+
+    const allL2 = await memoryStore.getAllL2()
+    const [log] = await memoryStore.getConflictLogs()
+    expect(allL2.map((item) => item.content)).toEqual(expect.arrayContaining([oldContent, newContent]))
+    expect(log).toMatchObject({ candidateType: "near_duplicate", targetL2Id: existing.id, resolverStatus: "queued" })
+  })
+
+  it("does not deduplicate a completed goal into its old open-goal memory", async () => {
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_completed")
+    embeddingMock.getEmbeddingProvider.mockReturnValue({ embed: vi.fn(async () => [1, 0]) })
+    const { memoryManager } = await import("./memory-manager")
+    const { memoryStore } = await import("./memory-store")
+    const existing = await memoryStore.addL2Memory({
+      content: "用户计划完成高等数学课程",
+      triggerText: "我准备把高数学完",
+      sourceConversationId: "",
+      embedding: [],
+      isPinned: false,
+      syncStatus: "pending_sync",
+      facets: { primaryKind: "goal", retrievalKinds: ["goal"], source: "model", pendingClassification: false },
+    })
+    await memoryStore.markL2SyncStatus(existing.id, "synced", "rag_existing")
+    ragMock.getEntriesBySource.mockReturnValue([{
+      id: "rag_existing",
+      text: existing.content,
+      embedding: [1, 0],
+      createdAt: existing.createdAt,
+      weight: 0,
+      metadata: { l2Id: existing.id },
+    }])
+
+    await memoryManager.writeMemory([{
+      layer: "L2",
+      content: "用户已经完成高等数学课程",
+      confidence: 0.9,
+      triggerText: "我终于把高数学完了",
+      facets: { primaryKind: "experience", retrievalKinds: ["experience"], source: "model", pendingClassification: false },
+    }])
+
+    expect(await memoryStore.getAllL2()).toHaveLength(2)
+    expect(ragMock.addL2MemoryVector).toHaveBeenCalledWith(
+      "用户已经完成高等数学课程",
+      expect.any(String),
+      expect.any(Object),
+      expect.any(Object),
+    )
+  })
+
+  it("does not auto-supersede a mixed memory merely because goal is one retrieval kind", async () => {
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_completed_mixed")
+    const { memoryManager } = await import("./memory-manager")
+    const { memoryStore } = await import("./memory-store")
+    const existing = await memoryStore.addL2Memory({
+      content: "用户计划完成高等数学课程，并答应完成后和昔涟一起庆祝",
+      triggerText: "我学完高数就和你一起庆祝",
+      sourceConversationId: "test",
+      ragId: "rag_mixed_goal",
+      isPinned: false,
+      syncStatus: "synced",
+      facets: { primaryKind: "commitment", retrievalKinds: ["commitment", "goal"], source: "model", pendingClassification: false },
+    })
+    ragMock.searchMemoryEntries.mockResolvedValue([{
+      id: "rag_mixed_goal",
+      text: existing.content,
+      createdAt: Date.now(),
+      score: 0.9,
+      metadata: { l2Id: existing.id },
+    }])
+
+    await memoryManager.writeMemory([{
+      layer: "L2",
+      content: "用户已经完成了高等数学课程",
+      confidence: 0.95,
+      triggerText: "我终于把高数学完了",
+      facets: { primaryKind: "experience", retrievalKinds: ["experience", "goal"], source: "model", pendingClassification: false },
+    }])
+
+    const old = (await memoryStore.getAllL2()).find((memory) => memory.id === existing.id)!
+    expect(old.status).not.toBe("superseded")
+    expect(old.validTo).toBeUndefined()
   })
 
   it("writes candidate conflict logs separately when local candidate detection matches", async () => {

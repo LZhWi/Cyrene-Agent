@@ -3,8 +3,9 @@ import * as path from "path"
 import { getUserDataDir } from "../runtime/runtime-paths"
 import { ConflictLog, DreamNarrative, L0Profile, L1Profile, L2DmaeState, L2Memory, L2SyncStatus, MemoryConflictResolution, MemoryEvidence, MemoryJudgeTurn, MemoryStore, ReflectionLog } from "./memory-types"
 import { appendMemoryTrace } from "./memory-trace"
+import { createPendingMemoryFacets, repairStoredMemoryFacets, type MemoryFacets } from "./memory-facets"
 
-const CURRENT_SCHEMA_VERSION = 3
+const CURRENT_SCHEMA_VERSION = 6
 const QUOTE_SNIPPET_MAX = 300
 const DAY_MS = 24 * 60 * 60 * 1000
 /** 梦境沉淀叙事保留上限（注入时另取最新几条，见 memory-dream NARRATIVE_INJECT_MAX） */
@@ -60,6 +61,20 @@ function getMemoryPath(): string {
   return path.join(getUserDataDir(), "memory.json")
 }
 
+function getLastGoodMemoryPath(): string {
+  return path.join(getUserDataDir(), "memory.last-good.json")
+}
+
+function writeJsonAtomically(filePath: string, json: string): void {
+  const tempPath = `${filePath}.tmp-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  try {
+    fs.writeFileSync(tempPath, json, "utf8")
+    fs.renameSync(tempPath, filePath)
+  } finally {
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
+  }
+}
+
 function cloneDefaultStore(): MemoryStore {
   return {
     ...DEFAULT_STORE,
@@ -107,6 +122,8 @@ export function repairMigrations(store: Partial<MemoryStore>): MemoryStore {
       validFrom: typeof memory.validFrom === "number"
         ? memory.validFrom
         : (typeof memory.createdAt === "number" ? memory.createdAt : 0),
+      // v5：L2 分类收缩为固定 kind；旧开放 topics/entities 被丢弃，非模型结果等待 Kimi 补标。
+      facets: repairStoredMemoryFacets(memory.facets, `${memory.content ?? ""} ${memory.triggerText ?? ""}`),
     })) : [],
     evidence: Array.isArray(store.evidence) ? store.evidence : [],
     reflectionLogs: Array.isArray(store.reflectionLogs) ? store.reflectionLogs : [],
@@ -170,10 +187,17 @@ class MemoryStoreManager {
       } catch {
         // 如果连备份也失败，仍然生成干净默认文件，避免主流程被记忆文件阻塞。
       }
-      this.cache = cloneDefaultStore()
+      let recoveredFromLastGood = false
+      try {
+        const lastGoodRaw = fs.readFileSync(getLastGoodMemoryPath(), "utf8")
+        this.cache = repairMigrations(JSON.parse(lastGoodRaw) as Partial<MemoryStore>)
+        recoveredFromLastGood = true
+      } catch {
+        this.cache = cloneDefaultStore()
+      }
       await this.save(this.cache)
       appendMemoryTrace({
-        op: "migration.recoverDefault",
+        op: recoveredFromLastGood ? "store.recoverLastGood" : "migration.recoverDefault",
         layer: "migration",
         status: "error",
         error: err instanceof Error ? err.message : String(err),
@@ -186,7 +210,10 @@ class MemoryStoreManager {
     const filePath = getMemoryPath()
     const dir = path.dirname(filePath)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(filePath, JSON.stringify(store, null, 2), "utf8")
+    const json = JSON.stringify(store, null, 2)
+    // 两个文件都用同目录临时文件替换：主文件若因断电/外部中断损坏，仍可从最近快照恢复。
+    writeJsonAtomically(getLastGoodMemoryPath(), json)
+    writeJsonAtomically(filePath, json)
     this.cache = store
   }
 
@@ -253,6 +280,7 @@ class MemoryStoreManager {
       status: "active",
       syncStatus: input.syncStatus ?? (input.ragId ? "synced" : "pending_sync"),
       evidenceIds: Array.isArray(input.evidenceIds) ? input.evidenceIds : [],
+      facets: input.facets ?? createPendingMemoryFacets(),
     }
     const evidence = this.createEvidence(memory, input)
     memory.evidenceIds = [...(memory.evidenceIds ?? []), evidence.id]
@@ -276,6 +304,21 @@ class MemoryStoreManager {
       details: { evidenceId: evidence.id, sourceStatus: evidence.sourceStatus },
     })
     return memory
+  }
+
+  async updateL2FacetsBatch(updates: Array<{ id: string; facets: MemoryFacets }>): Promise<number> {
+    if (updates.length === 0) return 0
+    const store = await this.load()
+    const byId = new Map(updates.map((item) => [item.id, item.facets]))
+    let changed = 0
+    for (const memory of store.l2) {
+      const facets = byId.get(memory.id)
+      if (!facets) continue
+      memory.facets = facets
+      changed += 1
+    }
+    if (changed > 0) await this.save(store)
+    return changed
   }
 
   private createEvidence(memory: L2Memory, input: L2Input): MemoryEvidence {

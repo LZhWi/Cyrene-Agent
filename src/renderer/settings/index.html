@@ -701,17 +701,45 @@
               <div class="memory-search"><input id="memory-l2-search" type="text" placeholder="搜索记忆..." /></div>
               <div class="memory-list" id="memory-l2-list"><div class="memory-list__empty"><span>📭</span><p>暂无事件记忆</p><p class="memory-list__hint">聊天后昔涟会自动提炼重要信息</p></div></div>
             </div>
+            <!-- L2 query router model -->
+            <div class="memory-card">
+              <div class="memory-card__head">
+                <span>🧭</span>
+                <div>
+                  <h2>记忆查询路由模型</h2>
+                  <p>用小模型判断是否需要按一个或多个记忆类型扩大召回；失败时自动退回语义 Top 5</p>
+                </div>
+                <span class="memory-card__badge">独立配置</span>
+              </div>
+              <label class="memory-sandbox__llm-option">
+                <div><strong>启用查询路由</strong><span>每次正式 L2 检索前进行一次短 JSON 判定，会产生少量 API 用量和延迟。</span></div>
+                <span class="switch"><input id="memory-query-router-enabled" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </label>
+              <div class="memory-fields">
+                <div class="memory-field"><label>服务商</label><input id="memory-query-router-provider" type="text" placeholder="自定义" /></div>
+                <div class="memory-field"><label>模型</label><input id="memory-query-router-model" type="text" placeholder="低延迟小模型" /></div>
+                <div class="memory-field memory-field--full"><label>API 地址</label><input id="memory-query-router-base-url" type="text" placeholder="https://.../v1" /></div>
+                <div class="memory-field memory-field--full"><label>API Key</label><input id="memory-query-router-api-key" type="password" autocomplete="off" placeholder="仅保存在本机" /></div>
+                <div class="memory-field"><label>协议</label><select id="memory-query-router-transport"><option value="auto">自动识别</option><option value="openai">OpenAI 兼容</option><option value="anthropic">Anthropic</option></select></div>
+                <div class="memory-field"><label>推理</label><select id="memory-query-router-reasoning"><option value="off">关闭</option><option value="low">低</option><option value="auto">自动</option></select></div>
+              </div>
+              <div class="memory-sandbox__actions">
+                <button type="button" class="save-btn" id="memory-query-router-save-btn">保存</button>
+                <button type="button" class="ghost-btn" id="memory-query-router-test-btn">测试</button>
+                <span id="memory-query-router-status" aria-live="polite"></span>
+              </div>
+            </div>
             <!-- retrieval sandbox -->
             <div class="memory-card" id="memory-retrieval-sandbox">
               <div class="memory-card__head">
                 <span>🧪</span>
                 <div>
                   <h2>记忆检索沙箱</h2>
-                  <p>隔离测试历史检索与模拟回答，不污染正式聊天</p>
+                  <p>隔离测试历史检索、L2 分类检索与模拟回答，不污染正式聊天</p>
                 </div>
                 <span class="memory-card__badge">只读</span>
               </div>
-              <p class="memory-sandbox__notice">只读取正式历史索引；不会创建会话、写入记忆、更新关系或情绪，也不会触发贴纸、TTS 与主动聊天。只有开启下方选项时才会调用模型并产生正常 API 用量。</p>
+              <p class="memory-sandbox__notice">只读取正式历史索引与 L2 记忆索引，不会触发旧记忆补标；不会创建会话、写入记忆、更新关系或情绪，也不会触发贴纸、TTS 与主动聊天。启用上方查询路由或开启下方模拟回复时会调用对应模型并产生正常 API 用量。</p>
               <textarea id="memory-sandbox-query" rows="3" maxlength="1000" placeholder="例如：你还记得我们之前说要做什么样的小摆件吗？"></textarea>
               <label class="memory-sandbox__llm-option">
                 <div><strong>生成隔离模拟回复</strong><span>默认关闭；关闭时只运行检索、重排与候选轨迹，不调用 LLM。</span></div>
@@ -731,7 +759,7 @@
               </div>
               <div class="memory-sandbox__results is-hidden" id="memory-sandbox-results">
                 <section>
-                  <h3>当前正式检索 Top 5</h3>
+                  <h3 id="memory-sandbox-selected-heading">当前正式检索（动态上限）</h3>
                   <div class="memory-list" id="memory-sandbox-selected"></div>
                 </section>
                 <section>
@@ -741,6 +769,11 @@
                 <section>
                   <h3>L2 记忆 · DMAE 更新前（纯检索 Top 5）</h3>
                   <div class="memory-list" id="memory-sandbox-l2-baseline"></div>
+                </section>
+                <section>
+                  <h3>L2 记忆 · 分类检索结果</h3>
+                  <p class="memory-sandbox__facet-summary" id="memory-sandbox-l2-facet-summary">语义 Top 5 + 同类标签补充</p>
+                  <div class="memory-list" id="memory-sandbox-l2-facet-results"></div>
                 </section>
                 <section>
                   <h3>L2 记忆 · DMAE 更新后（工作集预览）</h3>

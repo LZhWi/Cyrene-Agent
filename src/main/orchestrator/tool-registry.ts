@@ -136,7 +136,10 @@ toolRegistry.register({
   execute: async (args) => {
     // 工具通道=联想/查证通道：允许带回已失效（被纠正/取代）的记忆，但带 ⏳ 标记，
     // 自动注入通道则严格只引有效事实（searchMemoryEntries 默认过滤）。
-    const results = await searchMemoryEntries(String(args.query), 'user_memory', Number(args.topK) || 5, { includeExpired: true });
+    const results = await searchMemoryEntries(String(args.query), 'user_memory', Number(args.topK) || 5, {
+      includeExpired: true,
+      facetFusion: true,
+    });
     if (results.length === 0) return '';
     const allL2 = await memoryStore.getAllL2();
     const l2ById = new Map(allL2.map((l) => [l.id, l]));

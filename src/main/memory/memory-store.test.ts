@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest"
 const electronMock = vi.hoisted(() => ({
   userDataDir: "",
 }))
+const REAL_MEMORY_PATH = "C:/Users/ASUS/AppData/Roaming/live2d-cyrene/memory.json"
 
 vi.mock("electron", () => ({
   app: {
@@ -27,6 +28,41 @@ describe("memoryStore", () => {
   beforeEach(() => {
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "memory-store-"))
     vi.resetModules()
+  })
+
+  it("recovers the last valid snapshot when memory.json is truncated", async () => {
+    const first = await import("./memory-store")
+    await first.memoryStore.addL2Memory({
+      content: "不能因半写文件丢失的真实记忆",
+      triggerText: "请记住",
+      sourceConversationId: "test",
+      isPinned: false,
+    })
+    const memoryPath = path.join(electronMock.userDataDir, "memory.json")
+    const lastGoodPath = path.join(electronMock.userDataDir, "memory.last-good.json")
+    expect(fs.existsSync(lastGoodPath)).toBe(true)
+    fs.writeFileSync(memoryPath, '{"schemaVersion":3,"l2":[', "utf8")
+
+    vi.resetModules()
+    const reloaded = await import("./memory-store")
+    const recovered = await reloaded.memoryStore.getAllL2()
+
+    expect(recovered.map((item) => item.content)).toContain("不能因半写文件丢失的真实记忆")
+    expect(() => JSON.parse(fs.readFileSync(memoryPath, "utf8"))).not.toThrow()
+  })
+
+  it.skipIf(!fs.existsSync(REAL_MEMORY_PATH))("recovers an exact copy of the real memory corpus after truncation", async () => {
+    const realRaw = fs.readFileSync(REAL_MEMORY_PATH, "utf8")
+    const real = JSON.parse(realRaw) as { l2?: unknown[]; evidence?: unknown[] }
+    fs.writeFileSync(path.join(electronMock.userDataDir, "memory.json"), '{"schemaVersion":3,"l2":[', "utf8")
+    fs.writeFileSync(path.join(electronMock.userDataDir, "memory.last-good.json"), realRaw, "utf8")
+
+    const { memoryStore } = await import("./memory-store")
+    const recovered = await memoryStore.load()
+
+    expect(recovered.l2).toHaveLength(real.l2?.length ?? 0)
+    expect(recovered.evidence).toHaveLength(real.evidence?.length ?? 0)
+    expect(recovered.l2.map((item) => item.id)).toEqual((real.l2 as Array<{ id: string }>).map((item) => item.id))
   })
 
   it("persists L2 conflict markers and status changes", async () => {
@@ -798,6 +834,7 @@ describe("memoryStore", () => {
           isPinned: false,
           status: "active",
           ragId: "rag_legacy",
+          facets: { kind: "fact", source: "model", pendingClassification: false },
         }],
         evidence: [],
         reflectionLogs: [],
@@ -811,8 +848,8 @@ describe("memoryStore", () => {
     const persisted = JSON.parse(fs.readFileSync(memoryPath, "utf8"))
     const backups = fs.readdirSync(electronMock.userDataDir).filter((name) => name.startsWith("memory.backup."))
 
-    expect(store.schemaVersion).toBe(3)
-    expect(persisted.schemaVersion).toBe(3)
+    expect(store.schemaVersion).toBe(6)
+    expect(persisted.schemaVersion).toBe(6)
     expect(store.l0.preferredName).toBe("伙伴")
     expect(store.l1.roundCount).toBe(7)
     expect(store.l2[0].syncStatus).toBe("synced")
@@ -820,10 +857,34 @@ describe("memoryStore", () => {
     // v3 迁移：旧条目无 validFrom，用 createdAt 归一化；validTo 不伪造
     expect(store.l2[0].validFrom).toBe(1)
     expect(store.l2[0].validTo).toBeUndefined()
+    expect(store.l2[0].facets).toEqual({
+      primaryKind: "fact",
+      retrievalKinds: ["fact"],
+      source: "model",
+      pendingClassification: false,
+    })
     expect(store.evidence).toEqual([])
     expect(store.conflictLogs).toEqual([])
     expect(backups).toHaveLength(1)
     expect(readTraceEvents().some((event) => event.op === "migration.upgrade")).toBe(true)
+  })
+
+  it("lets the v2 model backfill replace a migrated legacy single label", async () => {
+    const { memoryStore } = await import("./memory-store")
+    const memory = await memoryStore.addL2Memory({
+      content: "用户计划参加舞会，并答应买完西装拍照给AI看",
+      triggerText: "我会买完拍照给你看",
+      sourceConversationId: "test",
+      isPinned: false,
+      facets: { primaryKind: "goal", retrievalKinds: ["goal"], source: "model", pendingClassification: false },
+    })
+
+    expect(await memoryStore.updateL2FacetsBatch([{
+      id: memory.id,
+      facets: { primaryKind: "goal", retrievalKinds: ["goal", "commitment"], source: "model", pendingClassification: false },
+    }])).toBe(1)
+    expect((await memoryStore.getAllL2()).find((item) => item.id === memory.id)?.facets?.retrievalKinds)
+      .toEqual(["goal", "commitment"])
   })
 
   it("round-trips pending turns and truncates oversized text", async () => {

@@ -259,7 +259,7 @@ export interface SlimPlan {
 /**
  * 容量体检规划（纯函数）：
  * - active 超上限：非 pinned 的 active 按评分从低到高降为 aging；
- * - 全库仍超上限：非 pinned 的 aging（含本轮新降的）按评分从低到高归档。
+ * - active + aging 工作集仍超上限：非 pinned 的 aging（含本轮新降的）按评分从低到高归档。
  * 只降级不删除；pinned 永不参与。
  */
 export function planSlimDown(all: L2Memory[], now: number, params: DreamParams = DREAM_PARAMS): SlimPlan {
@@ -276,16 +276,16 @@ export function planSlimDown(all: L2Memory[], now: number, params: DreamParams =
     for (const m of demoteCandidates) toAging.push(m.id);
   }
 
-  const totalOverflow = all.length - params.totalCap;
+  // archived / merged / superseded 已退出工作集，不能继续制造永远无法消除的“全库超限”。
+  const workingSetCount = all.filter((m) => m.status === "active" || m.status === "aging").length;
+  const totalOverflow = workingSetCount - params.totalCap;
   if (totalOverflow > 0) {
     const demotedSet = new Set(toAging);
     const agingPool = all
       .filter((m) => (m.status === "aging" || demotedSet.has(m.id)) && !m.isPinned)
       .sort((a, b) => dreamSlimScore(a, now, params) - dreamSlimScore(b, now, params))
       .slice(0, totalOverflow);
-    for (const m of agingPool) {
-      if (!demotedSet.has(m.id)) toArchive.push(m.id);
-    }
+    for (const m of agingPool) toArchive.push(m.id);
   }
   return { toAging, toArchive };
 }
@@ -465,7 +465,7 @@ export async function runDreamCycle(opts: { signal?: AbortSignal; params?: Parti
   // ── 阶段 ②：遗忘前沉淀（仅当本轮确有降级条目）──
   if (isAborted(opts.signal)) return finish("aborted", "aborted_before_sediment");
   const byId = new Map(allL2.map((m) => [m.id, m]));
-  const demotedEntries = [...plan.toAging, ...plan.toArchive]
+  const demotedEntries = [...new Set([...plan.toAging, ...plan.toArchive])]
     .map((id) => byId.get(id))
     .filter((m): m is L2Memory => Boolean(m));
   if (demotedEntries.length > 0) {

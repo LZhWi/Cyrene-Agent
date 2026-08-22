@@ -1573,6 +1573,13 @@ body {
   font-weight: 600;
 }
 
+.memory-sandbox__facet-summary {
+  margin: 0;
+  color: var(--rb-text-muted);
+  font: var(--rb-text-small);
+  line-height: 1.6;
+}
+
 .memory-sandbox__candidate-details {
   display: grid;
   gap: 10px;

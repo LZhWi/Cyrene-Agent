@@ -25,6 +25,7 @@ import {
   sanitizeHistoryRetrievalQuery,
   yieldToEventLoop,
 } from "./history-retrieval-diagnostics";
+import type { RetrievalPlan } from "../memory/memory-facets";
 import { toolRegistry } from "./tool-registry";
 
 const LOG_PREFIX = "[History]";
@@ -193,7 +194,7 @@ export async function rerankHistoryCandidatesForSandbox(
   query: string,
   documents: string[],
   rerank: (query: string, documents: string[]) => Promise<Array<{ text: string; score: number }>>,
-): Promise<Array<{ text: string; score: number }>> {
+): Promise<Array<{ text: string; score: number; relevanceScore: number }>> {
   const explicitIntentMatchBoost = 0.016;
   const cleanQuery = sanitizeHistoryRetrievalQuery(query);
   const expandedQuery = expandHistoryRetrievalQuery(cleanQuery);
@@ -203,10 +204,15 @@ export async function rerankHistoryCandidatesForSandbox(
     : [{ query: cleanQuery || query, weight: 1 }];
   const rankings = await Promise.all(queries.map((item) => rerank(item.query, documents)));
   const fused = new Map<string, number>();
+  const relevanceScores = new Map<string, number>();
   rankings.forEach((ranking, queryIndex) => {
     ranking.forEach((item, rankIndex) => {
       const score = fused.get(item.text) ?? 0;
       fused.set(item.text, score + queries[queryIndex].weight / (8 + rankIndex + 1));
+      relevanceScores.set(
+        item.text,
+        (relevanceScores.get(item.text) ?? 0) + queries[queryIndex].weight * item.score,
+      );
     });
   });
   const intentTerms = expandedQuery.startsWith(`${cleanQuery} `)
@@ -218,16 +224,17 @@ export async function rerankHistoryCandidatesForSandbox(
       return {
         text,
         score: (fused.get(text) ?? 0) + Math.min(lexicalMatches, 2) * explicitIntentMatchBoost,
+        relevanceScore: relevanceScores.get(text) ?? Number.NEGATIVE_INFINITY,
       };
     })
     .sort((a, b) => b.score - a.score);
 }
 
 export function diversifySandboxRerankResults(
-  ranked: Array<{ text: string; score: number }>,
+  ranked: Array<{ text: string; score: number; relevanceScore?: number }>,
   candidates: HistoryRetrievalHit[],
   finalK = 5,
-): Array<{ text: string; score: number }> {
+): Array<{ text: string; score: number; relevanceScore?: number }> {
   if (ranked.length <= finalK) return ranked;
   const candidateByText = new Map(candidates.map((candidate) => [candidate.text, candidate]));
   const roleByText = new Map(candidates.map((candidate) => [candidate.text, candidate.metadata?.role]));
@@ -265,8 +272,8 @@ export function diversifySandboxRerankResults(
     const parentText = candidateByText.get(text)?.metadata?.retrievalParentText;
     return typeof parentText === "string" ? parentText : text;
   };
-  const groupChosen = new Map<string, { text: string; score: number }>();
-  const deduped: Array<{ text: string; score: number }> = [];
+  const groupChosen = new Map<string, { text: string; score: number; relevanceScore?: number }>();
+  const deduped: Array<{ text: string; score: number; relevanceScore?: number }> = [];
   for (const item of evidenceRanked) {
     const key = groupKeyOf(item.text);
     const existing = groupChosen.get(key);
@@ -394,6 +401,9 @@ export function collectRepeatedTestTurnKeys(
 
 export interface HistoryRetrievalSandboxResult {
   query: string;
+  plannedLimit: number;
+  beforeThresholdCount: number;
+  relevanceThreshold: number | null;
   excludedRepeatedTestRecords: number;
   excludedOrphanedRecords: number;
   baseline: HistoryRetrievalHit[];
@@ -413,13 +423,15 @@ export async function runHistoryRetrievalSandbox(
   userQuery: string,
   days = 90,
   authoritativeEntries?: StoredHistoryEntry[],
+  retrievalPlan?: HistoryScalePlan,
 ): Promise<HistoryRetrievalSandboxResult> {
   const query = userQuery.trim();
   if (!query) throw new Error("测试问题不能为空");
   const now = Date.now();
   const cutoff = now - days * 24 * 60 * 60 * 1000;
   const historyEntries = getEntriesBySource("chat_history");
-  const timelineEntries = authoritativeEntries?.length ? authoritativeEntries : historyEntries;
+  const hasAuthoritativeEntries = authoritativeEntries !== undefined;
+  const timelineEntries = hasAuthoritativeEntries ? authoritativeEntries : historyEntries;
   const excludedKeys = collectRepeatedTestTurnKeys(query, timelineEntries);
   // 文本级排除兜底：实时索引条目的 entry.createdAt 是"索引时刻"，与权威源 message.at
   // 不相等，导致 historyHitKey 永远对不上、基线漏排逐字测试轮。文本匹配不受元数据影响，
@@ -429,7 +441,7 @@ export async function runHistoryRetrievalSandbox(
       .filter((item) => excludedKeys.has(historyHitKey(item)))
       .map((item) => item.text.normalize("NFC").replace(/\r\n?/g, "\n").trim()),
   );
-  const authoritativeTexts = authoritativeEntries?.length
+  const authoritativeTexts = hasAuthoritativeEntries
     ? new Set(authoritativeEntries.map((entry) => entry.text.normalize("NFC").replace(/\r\n?/g, "\n").trim()))
     : null;
   const excludedOrphanedTexts = new Set<string>();
@@ -454,7 +466,7 @@ export async function runHistoryRetrievalSandbox(
       }
       return true;
     }).slice(0, depth);
-    return authoritativeEntries?.length
+    return hasAuthoritativeEntries
       ? reconcileHistoryHitsWithTimeline(filtered, authoritativeEntries)
       : filtered;
   };
@@ -470,6 +482,7 @@ export async function runHistoryRetrievalSandbox(
   }
   let selected: HistoryRetrievalHit[] = [];
   let candidates: HistoryRetrievalHit[] = [];
+  const plannedLimit = resolveHistoryAutoInjectionLimit(retrievalPlan);
   const record = await runHistoryRetrievalV2Shadow({
     userQuery: query,
     toolQuery: query,
@@ -488,6 +501,7 @@ export async function runHistoryRetrievalSandbox(
             (focusedQuery, focusedDocuments) => reranker.rerank(focusedQuery, focusedDocuments),
           ),
           candidates,
+          plannedLimit,
         )
       : undefined,
     expandCandidates: (hits) => expandHistoryHitsWithSentenceWindows(
@@ -496,12 +510,19 @@ export async function runHistoryRetrievalSandbox(
     enabled: true,
     source: "sandbox",
     writeLog: false,
+    finalK: plannedLimit,
     onCandidates: (hits) => { candidates = hits; },
     onResult: (hits) => { selected = hits; },
   });
   if (!record) throw new Error("检索沙箱未能生成结果");
+  const beforeThresholdCount = selected.length;
+  selected = filterHistoryHitsByRelevance(selected, record.method).slice(0, plannedLimit);
+  const selectedRankByText = new Map(selected.map((hit, index) => [hit.text, index + 1]));
   return {
     query,
+    plannedLimit,
+    beforeThresholdCount,
+    relevanceThreshold: record.method === "reranker" ? HISTORY_MIN_RERANKER_SCORE : HISTORY_MIN_RRF_SCORE,
     excludedRepeatedTestRecords: excludedKeys.size,
     excludedOrphanedRecords: excludedOrphanedTexts.size,
     baseline,
@@ -513,7 +534,7 @@ export async function runHistoryRetrievalSandbox(
         candidateRank: index + 1,
         sources: trace?.sources ?? [],
         rerankerScore: trace?.rerankerScore ?? null,
-        selectedRank: trace?.selectedRank ?? null,
+        selectedRank: selectedRankByText.get(hit.text) ?? null,
       };
     }),
     method: record.method,
@@ -530,6 +551,31 @@ const HISTORY_AUTO_PROBE_CUE = /还记得|记不记得|记得吗|想起|回忆|�
  *  注意：多个特征词强命中（10+）说明消息与历史话题连续，触发属预期行为；
  *  若要压制“词汇命中但无需回忆”，需注入端二次质量门槛（reranker 分数），与本阈值无关。 */
 const HISTORY_AUTO_INJECT_BM25_MIN_SCORE = 6.0;
+export const HISTORY_MIN_RERANKER_SCORE = -6;
+/** 真实诊断中 Top 12 最低为 0.014925；取 0.014，仅剔除更弱的单通道末梢。 */
+export const HISTORY_MIN_RRF_SCORE = 0.014;
+
+type HistoryScalePlan = Pick<RetrievalPlan, "scope" | "queryKinds">;
+
+export function resolveHistoryAutoInjectionLimit(plan?: HistoryScalePlan): number {
+  if (!plan || plan.queryKinds.length === 0) return 5;
+  if (plan.scope === "exhaustive_list") return 12;
+  if (plan.scope === "scoped_list") return 10;
+  return 8;
+}
+
+export function filterHistoryHitsByRelevance<T extends HistoryRetrievalHit>(
+  hits: T[],
+  method: "reranker" | "rrf",
+): T[] {
+  return hits.filter((hit) => {
+    if (method === "reranker") {
+        const relevanceScore = hit.metadata?.retrievalRelevanceScore;
+        return (typeof relevanceScore === "number" ? relevanceScore : hit.score) >= HISTORY_MIN_RERANKER_SCORE;
+    }
+    return hit.score >= HISTORY_MIN_RRF_SCORE;
+  });
+}
 
 export function shouldAutoProbeHistoryRetrieval(userQuery: string): boolean {
   const clean = userQuery
@@ -595,13 +641,15 @@ export async function runHistoryRetrievalV2AutoProbe(
  * 只有 V2 能稳定召回有用信息，所以自动注入不另开轻量分支。
  * - V2 失败静默回落 baseline；baseline 检索失败抛错由调用方处理。
  * - recordRecall: false：侧路检索不污染条目的 weight/lastRecalledAt。
- * - 返回至多 5 条（未排序，由调用方按时间排序）。命中线索的轮次延迟代价与一次 recall_history 相当。
+ * - 工具默认返回 5 条；自动注入按共享检索计划扩展为 5/8/10/12 条（未排序，由调用方按时间排序）。
+ *   命中线索的轮次延迟代价与一次 recall_history 相当。
  */
 async function retrieveHistoryHits(
   toolQuery: string,
   userQuery: string,
   days: number,
   source: "tool" | "auto_injection",
+  finalK = 5,
 ): Promise<HistoryRetrievalHit[]> {
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   // baseline 召回记录按 source 语义：工具显式调用才记；自动注入是系统猜测，
@@ -624,7 +672,7 @@ async function retrieveHistoryHits(
     }
     const historyEntries = getEntriesBySource("chat_history");
     let candidates: HistoryRetrievalHit[] = [];
-    await runHistoryRetrievalV2Shadow({
+    const record = await runHistoryRetrievalV2Shadow({
       userQuery,
       toolQuery,
       days,
@@ -647,6 +695,7 @@ async function retrieveHistoryHits(
               (focusedQuery, focusedDocuments) => reranker.rerank(focusedQuery, focusedDocuments),
             ),
             candidates,
+            finalK,
           )
         : undefined,
       expandCandidates: (candidateHits) => expandHistoryHitsWithSentenceWindows(
@@ -658,15 +707,17 @@ async function retrieveHistoryHits(
       source,
       writeLog: isHistoryRetrievalDiagnosticsEnabled(),
       actualResultUnchanged: false,
+      finalK,
       onCandidates: (candidateHits) => { candidates = candidateHits; },
       onResult: (v2Hits) => {
         if (v2Hits.length > 0) selected = v2Hits;
       },
     });
+    if (record) selected = filterHistoryHitsByRelevance(selected, record.method);
   } catch (error) {
     console.warn("[History/RetrievalV2] failed, using baseline:", error);
   }
-  return selected.slice(0, 5);
+  return selected.slice(0, finalK);
 }
 
 /**
@@ -679,7 +730,11 @@ async function retrieveHistoryHits(
  * 纯语义指代（历史里没出现过消息中的关键词）仍靠工具 + prompt 兜底。
  * 任何失败返回空串：注入是增强不是必需，不能阻断回复主流程。
  */
-export async function runHistoryAutoInjection(userQuery: string, days = 90): Promise<string> {
+export async function runHistoryAutoInjection(
+  userQuery: string,
+  days = 90,
+  options: { retrievalPlan?: RetrievalPlan } = {},
+): Promise<string> {
   try {
     const query = sanitizeHistoryRetrievalQuery(userQuery) || userQuery.trim();
     if (!query) return "";
@@ -695,12 +750,13 @@ export async function runHistoryAutoInjection(userQuery: string, days = 90): Pro
       }
     }
     if (!triggered) return "";
-    const hits = await retrieveHistoryHits(query, userQuery, days, "auto_injection");
+    const finalK = resolveHistoryAutoInjectionLimit(options.retrievalPlan);
+    const hits = await retrieveHistoryHits(query, userQuery, days, "auto_injection", finalK);
     const cleanQuery = query.normalize("NFC").replace(/\r\n?/g, "\n").trim();
     const selected = hits
       .filter((hit) => hit.text.normalize("NFC").replace(/\r\n?/g, "\n").trim() !== cleanQuery)
       .sort((a, b) => a.createdAt - b.createdAt)
-      .slice(0, 5);
+      .slice(0, finalK);
     if (selected.length === 0) return "";
     const lines = selected.map((hit) => {
       const date = new Date(hit.createdAt).toLocaleString("zh-CN");
@@ -768,7 +824,7 @@ export function registerRecallHistoryTool(): void {
       type: "object",
       properties: {
         query: { type: "string", description: "检索关键词或自然语言问题" },
-        days: { type: "number", description: "可选，限制最近 N 天，默认 30" },
+        days: { type: "number", description: "可选，限制最近 N 天，默认 90" },
       },
       required: ["query"],
     },
@@ -809,11 +865,12 @@ export function registerRecallHistoryTool(): void {
 // 修复后把 cyrene-chats 会话日志一次性补进 chat_history 索引，恢复 recall_history 对旧对话的召回。
 // - 幂等：v2 标记文件防重跑；即便重跑，相同 occurrence 也不会重复写入。
 // - 时效：createdAt 保留消息原始时间（展示与时间排序用），lastRecalledAt 为回填时刻（初期不被衰减压低）。
-// - 后台执行不阻塞启动；单条失败跳过，RAG 未初始化则中止且不写标记（下次启动重试）。
+// - 后台执行不阻塞启动；单条失败停在当前 offset，下次启动续跑；RAG 未初始化时同样不推进标记。
 interface HistoryBackfillProgress {
   complete: boolean;
   doneSessions: string[];
   sessionOffsets: Record<string, number>;
+  sessionFileSignatures: Record<string, string>;
   indexed: number;
   at: number;
 }
@@ -829,17 +886,51 @@ function readBackfillProgress(marker: string): HistoryBackfillProgress {
       sessionOffsets: parsed.sessionOffsets && typeof parsed.sessionOffsets === "object"
         ? parsed.sessionOffsets as Record<string, number>
         : {},
+      sessionFileSignatures: parsed.sessionFileSignatures && typeof parsed.sessionFileSignatures === "object"
+        ? parsed.sessionFileSignatures as Record<string, string>
+        : {},
       indexed: typeof parsed.indexed === "number" ? parsed.indexed : 0,
       at: typeof parsed.at === "number" ? parsed.at : 0,
     };
   } catch {
-    return { complete: false, doneSessions: [], sessionOffsets: {}, indexed: 0, at: 0 };
+    return { complete: false, doneSessions: [], sessionOffsets: {}, sessionFileSignatures: {}, indexed: 0, at: 0 };
   }
 }
 
 function writeBackfillProgress(marker: string, progress: HistoryBackfillProgress): void {
   fs.mkdirSync(path.dirname(marker), { recursive: true });
   fs.writeFileSync(marker, JSON.stringify(progress), "utf8");
+}
+
+function historySessionFileSignature(file: string): string {
+  const stat = fs.statSync(file);
+  return `${stat.mtimeMs}:${stat.size}`;
+}
+
+export function findHistorySessionsNeedingBackfill(
+  dataDir: string,
+  sessionIds: string[],
+  progress: Pick<HistoryBackfillProgress, "doneSessions" | "sessionOffsets" | "sessionFileSignatures">,
+): { pendingIds: string[]; observedSignatures: Record<string, string> } {
+  const done = new Set(progress.doneSessions);
+  const pendingIds: string[] = [];
+  const observedSignatures: Record<string, string> = {};
+  for (const sessionId of sessionIds) {
+    if (!done.has(sessionId)) {
+      pendingIds.push(sessionId);
+      continue;
+    }
+    const file = path.join(dataDir, "cyrene-chats", "sessions", `${sessionId}.json`);
+    if (!fs.existsSync(file)) continue;
+    const signature = historySessionFileSignature(file);
+    observedSignatures[sessionId] = signature;
+    if (progress.sessionFileSignatures[sessionId] === signature) continue;
+    const data = JSON.parse(fs.readFileSync(file, "utf8")) as { messages?: unknown[] };
+    if ((data.messages?.length ?? 0) - 1 > (progress.sessionOffsets[sessionId] ?? -1)) {
+      pendingIds.push(sessionId);
+    }
+  }
+  return { pendingIds, observedSignatures };
 }
 
 export async function backfillChatHistoryFromChatLogs(): Promise<void> {
@@ -853,13 +944,22 @@ export async function backfillChatHistoryFromChatLogs(): Promise<void> {
       const sessionIds = sessions.flatMap((session) => typeof session?.id === "string" ? [session.id] : []);
       let progress = fs.existsSync(marker)
         ? readBackfillProgress(marker)
-        : { complete: false, doneSessions: [], sessionOffsets: {}, indexed: 0, at: 0 };
+        : { complete: false, doneSessions: [], sessionOffsets: {}, sessionFileSignatures: {}, indexed: 0, at: 0 };
       if (progress.complete && sessionIds.length > 0 && getEntriesBySource("chat_history").length === 0) {
-        progress = { complete: false, doneSessions: [], sessionOffsets: {}, indexed: 0, at: 0 };
+        progress = { complete: false, doneSessions: [], sessionOffsets: {}, sessionFileSignatures: {}, indexed: 0, at: 0 };
       }
-      if (progress.complete) return;
+      const sessionCheck = findHistorySessionsNeedingBackfill(dataDir, sessionIds, progress);
+      if (sessionCheck.pendingIds.length === 0) {
+        const signaturesChanged = Object.entries(sessionCheck.observedSignatures)
+          .some(([id, signature]) => progress.sessionFileSignatures[id] !== signature);
+        progress.sessionFileSignatures = { ...progress.sessionFileSignatures, ...sessionCheck.observedSignatures };
+        if (progress.complete && signaturesChanged) writeBackfillProgress(marker, progress);
+        if (progress.complete) return;
+      }
 
       const doneSessions = new Set(progress.doneSessions);
+      sessionCheck.pendingIds.forEach((id) => doneSessions.delete(id));
+      progress.complete = false;
       let indexed = progress.indexed;
       for (const session of sessions) {
         if (!session?.id || doneSessions.has(session.id)) continue;
@@ -872,6 +972,7 @@ export async function backfillChatHistoryFromChatLogs(): Promise<void> {
           messages?: Array<{ id?: unknown; role?: string; content?: unknown; at?: unknown }>;
         };
         const fileMtime = fs.statSync(file).mtimeMs;
+        const fileSignature = historySessionFileSignature(file);
         let sessionFailed = false;
         for (const [messageIndex, m] of (data.messages ?? []).entries()) {
           if (messageIndex <= (progress.sessionOffsets[session.id] ?? -1)) continue;
@@ -923,10 +1024,12 @@ export async function backfillChatHistoryFromChatLogs(): Promise<void> {
             sessionFailed = true;
             console.warn(LOG_PREFIX, `会话 ${session.id} 回填失败，将在下次启动重试:`, msg);
             break;
-            // 单条失败（如嵌入异常）跳过，不中断整体回填
           }
         }
-        if (!sessionFailed) doneSessions.add(session.id);
+        if (!sessionFailed) {
+          doneSessions.add(session.id);
+          progress.sessionFileSignatures[session.id] = fileSignature;
+        }
         writeBackfillProgress(marker, {
           ...progress,
           complete: false,

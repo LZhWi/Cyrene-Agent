@@ -38,6 +38,44 @@ function createBuildDeps(): BuildOptionsDeps {
 }
 
 describe("build-options", () => {
+  it("resolves one retrieval plan and shares it with L2 and history injection", async () => {
+    const deps = createBuildDeps()
+    const retrievalPlan = {
+      scope: "scoped_list" as const,
+      semanticResults: 5,
+      kindResults: 8,
+      maxResults: 13,
+      candidateDepth: 48,
+      characterBudget: 3000,
+      queryKinds: ["experience" as const],
+      queryKind: "experience" as const,
+    }
+    deps.resolveMemoryRetrievalPlan = vi.fn(async () => retrievalPlan)
+    deps.buildMemoryInjection = vi.fn(async () => "MEMORY")
+    deps.buildHistoryAutoInjection = vi.fn(async () => "HISTORY")
+
+    await buildAgentRunOptions({
+      messages: [{ role: "user", content: "还记得前天画画时的画面吗" }],
+      style: "01_default.md",
+    }, deps)
+
+    expect(deps.resolveMemoryRetrievalPlan).toHaveBeenCalledTimes(1)
+    expect(deps.buildMemoryInjection).toHaveBeenCalledWith(expect.any(String), { retrievalPlan })
+    expect(deps.buildHistoryAutoInjection).toHaveBeenCalledWith(expect.any(String), { retrievalPlan })
+  })
+
+  it("notifies the dream scheduler as soon as a user run starts", async () => {
+    const deps = createBuildDeps()
+    deps.notifyUserActivity = vi.fn()
+
+    await buildAgentRunOptions({
+      messages: [{ role: "user", content: "你好" }],
+      style: "01_default.md",
+    }, deps)
+
+    expect(deps.notifyUserActivity).toHaveBeenCalledTimes(1)
+  })
+
   it("adds a concise WeChat system when the run comes from WeChat", async () => {
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "你好" }],
