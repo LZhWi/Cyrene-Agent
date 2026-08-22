@@ -14,16 +14,19 @@
 // 由 src/main/index.ts 自行注册，不在本模块；本模块只管纯数据操作。
 
 import { app, BrowserWindow, ipcMain, type WebContents, dialog, shell } from "electron";
+import { randomUUID } from "crypto";
 import { IPC } from "../../shared/ipc-channels";
 import type { ChatMessage, ConversationMode, ConversationWorkspaceBinding } from "../../shared/chat-types";
 import * as chatsStore from "./chats-store";
 import * as fs from "fs";
 import * as path from "path";
 import { ensureVaultStructure, isEmptyDirectory } from "../learn/obsidian/vault-init";
-import { getDefaultModelProfile } from "../settings/model-settings";
+import { getDefaultModelProfile, loadModelSettings, resolveModelSettingsProfile } from "../settings/model-settings";
 import { FileToolOutputStore } from "../orchestrator/harness/tool-output/file-tool-output-store";
 import { getHarnessRunStore } from "../orchestrator/harness/run-store";
 import { getRunReviewTracker } from "../orchestrator/review/run-review-tracker";
+import { getAdapterForConfig } from "../orchestrator/vendors";
+import { callSummarizeModel } from "../orchestrator/context-manager";
 
 function broadcastChanged(senderWebContents?: WebContents | null): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -37,6 +40,13 @@ function broadcastChanged(senderWebContents?: WebContents | null): void {
     }
   }
 }
+
+/** 主动压缩的模型窗口大小：与渲染层 ChatPage 每轮 run 的 slice(-16) 保持一致。 */
+const COMPACT_MODEL_WINDOW = 16;
+/** 主动压缩保留的最近消息条数（约 3 轮对话），其余窗口内消息摘要成一条记忆。 */
+const COMPACT_KEEP_RECENT = 6;
+/** 并发保护：同一会话压缩进行中时拒绝重复触发。 */
+const compactingSessions = new Set<string>();
 
 export function registerChatsIpc(): void {
   chatsStore.initialize();
@@ -120,6 +130,88 @@ export function registerChatsIpc(): void {
       const session = chatsStore.replaceMessagesTail(payload.id, payload.startIndex, payload.messages);
       if (session) broadcastChanged(event.sender);
       return session;
+    },
+  );
+
+  // ── 主动压缩：上下文容量菜单小人点击触发 ──────────────
+  // 口径与渲染层每轮 run 的 slice(-16) 模型窗口对齐：窗口外是纯 UI 历史
+  // （不进模型上下文，原样保留）；窗口内保留最近 COMPACT_KEEP 条，其余
+  // 摘要成一条记忆消息（与 Chat 模式循环内自动压缩同格式，下一轮 run
+  // normalize 后作为 assistant 消息进入模型上下文）。
+  ipcMain.handle(
+    IPC.CHATS_COMPACT,
+    async (_event, payload: { sessionId?: unknown }) => {
+      const sessionId = payload && typeof payload === "object"
+        ? (payload as { sessionId?: unknown }).sessionId
+        : undefined;
+      if (typeof sessionId !== "string" || !sessionId) {
+        return { ok: false, error: "missing sessionId" };
+      }
+      if (compactingSessions.has(sessionId)) {
+        return { ok: false, error: "正在压缩，请稍候" };
+      }
+      const session = chatsStore.getSession(sessionId);
+      if (!session) return { ok: false, error: "会话不存在" };
+
+      const windowMessages = session.messages.slice(-COMPACT_MODEL_WINDOW);
+      const keepMessages = windowMessages.slice(-COMPACT_KEEP_RECENT);
+      const oldMessages = windowMessages.slice(0, -COMPACT_KEEP_RECENT);
+      if (oldMessages.length === 0) {
+        return { ok: false, error: "对话还很短，不需要压缩" };
+      }
+
+      // UI 消息 → 模型消息（与 normalizeChatMessages 同口径：model→assistant，空内容丢弃）。
+      const history = oldMessages
+        .filter((message) => typeof message.content === "string" && message.content.trim())
+        .map((message) => ({
+          role: message.role === "user" ? ("user" as const) : ("assistant" as const),
+          content: message.content,
+        }));
+      if (history.length === 0) {
+        return { ok: false, error: "对话还很短，不需要压缩" };
+      }
+
+      compactingSessions.add(sessionId);
+      try {
+        const base = loadModelSettings();
+        const settings = session.modelProfileId
+          ? resolveModelSettingsProfile(base, session.modelProfileId)
+          : base;
+        if (!settings.baseUrl) {
+          return { ok: false, error: "还没有填写 API URL，请先在设置里保存 API 配置。" };
+        }
+        const adapter = getAdapterForConfig({
+          provider: settings.provider,
+          baseUrl: settings.baseUrl,
+          model: settings.model,
+          apiKey: settings.apiKey,
+          ...(settings.explicitTransport ? { explicitTransport: settings.explicitTransport } : {}),
+          ...(settings.reasoning ? { reasoning: settings.reasoning } : {}),
+        });
+
+        // 摘要失败直接报错返回，绝不落库、不动原消息（历史安全优先）。
+        const summary = await callSummarizeModel(history, adapter, settings);
+        const summaryMessage: ChatMessage = {
+          id: `compact-${randomUUID().slice(0, 8)}`,
+          role: "model",
+          content: `[此前对话已压缩为记忆摘要]\n${summary}`,
+          at: Date.now(),
+        };
+
+        const head = session.messages.slice(0, session.messages.length - COMPACT_MODEL_WINDOW);
+        const nextMessages = [...head, summaryMessage, ...keepMessages];
+        const updated = chatsStore.replaceMessages(sessionId, nextMessages);
+        if (!updated) return { ok: false, error: "会话不存在" };
+
+        // 压缩结果由主进程改写，发起窗口并不知情；必须广播给所有窗口
+        // （含 sender）触发聊天窗口重载，不能走跳过 sender 的来源隔离。
+        broadcastChanged();
+        return { ok: true, before: session.messages.length, after: nextMessages.length };
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) };
+      } finally {
+        compactingSessions.delete(sessionId);
+      }
     },
   );
 

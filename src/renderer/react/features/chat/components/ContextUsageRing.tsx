@@ -7,6 +7,8 @@
 //   visualRatio（ratio>1 时文本诚实显示如 118%，圆环 clamp 到整圈）。
 // - 颜色分级：正常主题强调色；≥70% 暖色；≥90% 警示红。仅变色，无动画。
 // - 菜单趣味性：按档位切换 Cyrene 小人（开心/提醒/担心）+ 一句拟人提示。
+// - 小人可点击主动压缩（chats:compact）：悬停 crossfade 到压缩小人图，
+//   点击把模型窗口内旧消息摘要成一条记忆，聊天窗口经 CHATS_CHANGED 重载。
 import { Popover } from "antd";
 import { useState } from "react";
 import type { ContextUsageCategoryKey, ContextUsageSnapshot } from "../../../../../shared/context-usage";
@@ -18,6 +20,22 @@ const RING_STROKE = 3;
 const RING_RADIUS = (RING_SIZE - RING_STROKE) / 2;
 /** 导出供单测断言弧长比例；圆环几何的唯一事实源。 */
 export const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
+
+/** 主动压缩 IPC 的返回形状（preload chatStoreApi.compactConversation）。 */
+interface CompactConversationResult {
+  ok: boolean;
+  error?: string;
+  before?: number;
+  after?: number;
+}
+
+interface CompactChatApi {
+  compactConversation?: (sessionId: string) => Promise<CompactConversationResult>;
+}
+
+function compactApi(): CompactChatApi | undefined {
+  return (window as typeof window & { chat?: CompactChatApi }).chat;
+}
 
 export const CONTEXT_USAGE_CATEGORY_META: Record<ContextUsageCategoryKey, { label: string; color: string }> = {
   systemPrompt: { label: "系统提示词", color: "#8B5CF6" },
@@ -37,6 +55,9 @@ export const CONTEXT_USAGE_MOOD_META: Record<ContextUsageRingTone, { src: string
   warm: { src: resolveAsset("context-usage/warm.png"), text: "有点满了，等下我帮你整理" },
   alert: { src: resolveAsset("context-usage/alert.png"), text: "快撑不住啦，建议新开对话" },
 };
+
+/** 压缩小人：悬停小人图时 crossfade 显示，点击触发主动压缩。 */
+export const CONTEXT_USAGE_COMPACT_SRC = resolveAsset("context-usage/compact.png");
 
 /** 数字格式：>=1000 显示 12.3k（>=100k 取整），否则原值。 */
 export function formatTokenCount(value: number): string {
@@ -72,8 +93,20 @@ export function resolveRingTone(ratio: number): ContextUsageRingTone {
   return "normal";
 }
 
-export function ContextUsageRing({ usage }: { usage?: ContextUsageSnapshot }) {
+/** 主动压缩的状态机：idle → running → done/error。 */
+export type ContextCompactPhase = "idle" | "running" | "done" | "error";
+
+interface ContextUsageRingProps {
+  usage?: ContextUsageSnapshot;
+  /** 当前会话 ID：提供后小人可点击触发主动压缩。 */
+  sessionId?: string;
+  /** 模型运行中：禁用压缩，避免与 run 的消息写回竞态。 */
+  busy?: boolean;
+}
+
+export function ContextUsageRing({ usage, sessionId, busy }: ContextUsageRingProps) {
   const [open, setOpen] = useState(false);
+  const [compactPhase, setCompactPhase] = useState<ContextCompactPhase>("idle");
   if (!usage) return null;
 
   const ratio = computeUsageRatio(usage.totalTokens, usage.contextWindowTokens);
@@ -85,6 +118,27 @@ export function ContextUsageRing({ usage }: { usage?: ContextUsageSnapshot }) {
     ? `${formatTokenCount(usage.totalTokens)} / ${formatTokenCount(usage.contextWindowTokens)} tokens (${percentText})`
     : `${formatTokenCount(usage.totalTokens)} tokens`;
   const title = `上下文 ${summaryText.replace(" tokens ", " ")}`;
+
+  // 主动压缩：无 sessionId（如 demo 会话）或运行中不可点。
+  const canCompact = Boolean(sessionId) && !busy;
+  const handleCompactClick = (): void => {
+    if (!canCompact || compactPhase === "running" || !sessionId) return;
+    const invoke = compactApi()?.compactConversation;
+    if (!invoke) return;
+    setCompactPhase("running");
+    void invoke(sessionId)
+      .then((result) => setCompactPhase(result?.ok ? "done" : "error"))
+      .catch(() => setCompactPhase("error"));
+  };
+
+  const compacting = compactPhase === "running";
+  const moodText = compactPhase === "running"
+    ? "正在整理记忆…"
+    : compactPhase === "done"
+      ? "记忆已整理，清爽啦~"
+      : compactPhase === "error"
+        ? "整理失败，稍后再试"
+        : CONTEXT_USAGE_MOOD_META[tone].text;
 
   // 明细行按 token 从大到小排队，大头一眼置顶。
   const visibleCategories = usage.categories
@@ -100,9 +154,38 @@ export function ContextUsageRing({ usage }: { usage?: ContextUsageSnapshot }) {
       <div className={`cy-context-usage-menu__progress is-${tone}`} aria-hidden="true">
         <span style={{ width: `${visualRatio * 100}%` }} />
       </div>
-      <div className={`cy-context-usage-menu__mood is-${tone}`}>
-        <img src={CONTEXT_USAGE_MOOD_META[tone].src} alt="" aria-hidden="true" draggable={false} />
-        <span>{CONTEXT_USAGE_MOOD_META[tone].text}</span>
+      <div
+        className={[
+          "cy-context-usage-menu__mood",
+          `is-${tone}`,
+          canCompact ? "can-compact" : "",
+          compacting ? "is-compacting" : "",
+        ].filter(Boolean).join(" ")}
+      >
+        <button
+          type="button"
+          className="cy-context-usage-menu__mood-figure"
+          onClick={handleCompactClick}
+          disabled={!canCompact || compacting}
+          title={canCompact ? "整理记忆（压缩上下文）" : undefined}
+          aria-label="整理记忆（压缩上下文）"
+        >
+          <img
+            className="cy-context-usage-menu__mood-img"
+            src={CONTEXT_USAGE_MOOD_META[tone].src}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+          />
+          <img
+            className="cy-context-usage-menu__mood-img cy-context-usage-menu__mood-img--compact"
+            src={CONTEXT_USAGE_COMPACT_SRC}
+            alt=""
+            aria-hidden="true"
+            draggable={false}
+          />
+        </button>
+        <span>{moodText}</span>
       </div>
       <ul className="cy-context-usage-menu__rows">
         {visibleCategories.map((category, index) => {

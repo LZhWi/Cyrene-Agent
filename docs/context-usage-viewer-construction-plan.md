@@ -323,6 +323,20 @@ npx vitest run
 5. 重启应用打开旧会话：圆环仍显示持久化的终态快照。
 6. 长对话推高占用至 70%+：圆环变色；继续推高验证 90% 警示色与 >100% 时的"文本诚实 + 圆环整圈"表现。
 7. 长多轮任务运行期间观察磁盘写入：中间轮不应触发会话全量落盘（只有终态一次，debounce 合并）。
+8. **主动压缩**：打开有历史（>10 条消息）的会话，菜单中悬停小人图 → crossfade 到压缩小人；点击 → 文案变"正在整理记忆…"，完成后聊天记录中窗口内旧消息合并为一条"[此前对话已压缩为记忆摘要]"，下轮对话后圆环"对话历史"明显回落。模型运行中（composer 显示"按 Enter 停止"时）小人不可点击。
+
+---
+
+## 主动压缩（后续增量：小人点击触发）
+
+数据链路与设计（复用既有件，无新依赖）：
+
+- **通道**：`IPC.CHATS_COMPACT ("chats:compact")`，renderer invoke，返回 `{ ok, error?, before?, after? }`。
+- **主进程**（`chats-ipc.ts`）：口径与渲染层每轮 run 的 `slice(-16)` 模型窗口对齐——窗口外是纯 UI 历史原样保留；窗口内保留最近 6 条，其余经 `callSummarizeModel`（`context-manager.ts`，Chat 模式循环内压缩同一实现）摘要成一条 `role: "model"` 消息 `[此前对话已压缩为记忆摘要]…`，与 Chat 模式自动压缩同格式，下轮 run normalize 后作为 assistant 记忆进入模型上下文。
+- **模型配置**：按会话 `modelProfileId` 解析（`resolveModelSettingsProfile`），摘要失败直接报错返回、绝不落库（历史安全优先）。
+- **并发保护**：模块级 `compactingSessions` Set 防同会话重复触发；渲染层在 `modelBusy`（run 进行中）时禁用点击，避免与 run 的消息写回竞态。
+- **广播刷新**：压缩后 `broadcastChanged()` 不带 sender（全窗口广播，含发起方）——压缩结果由主进程改写，发起窗口必须被 CHATS_CHANGED 唤醒重载；这是对"来源隔离跳过 sender"约定的显式例外。
+- **UI**（`ContextUsageRing.tsx`）：小人图改为 button + 两张 img 叠放 crossfade（纯 CSS `:hover` 渐隐渐显 `compact.png`，240ms）；点击走 `window.chat.compactConversation(sessionId)`；状态机 idle → running（"正在整理记忆…"）→ done（"记忆已整理，清爽啦~"）/ error（"整理失败，稍后再试"）。素材 `public/context-usage/compact.png`。
 
 ---
 

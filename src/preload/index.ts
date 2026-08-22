@@ -557,6 +557,14 @@ const chatStoreApi = {
     ipcRenderer.invoke(IPC.CHATS_REPLACE_MESSAGES, { id, messages }),
   replaceTail: (id: string, startIndex: number, messages: unknown[]) =>
     ipcRenderer.invoke(IPC.CHATS_REPLACE_TAIL, { id, startIndex, messages }),
+  // 主动压缩：把模型窗口内旧消息摘要成一条记忆（上下文容量菜单小人点击触发）
+  compactConversation: (sessionId: string) =>
+    ipcRenderer.invoke(IPC.CHATS_COMPACT, { sessionId }) as Promise<{
+      ok: boolean;
+      error?: string;
+      before?: number;
+      after?: number;
+    }>,
   rename: (id: string, title: string) =>
     ipcRenderer.invoke(IPC.CHATS_RENAME, { id, title }),
   delete: (id: string) => ipcRenderer.invoke(IPC.CHATS_DELETE, id),

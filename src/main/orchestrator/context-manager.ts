@@ -119,7 +119,11 @@ export async function compressConversation(options: CompressOptions): Promise<Ch
   }
 }
 
-async function callSummarizeModel(
+/**
+ * 独立的 LLM 摘要调用：把一段历史消息摘要成文本。
+ * Chat 模式循环内压缩与「主动压缩」IPC（chats:compact）共用；失败直接 throw，由调用方决定兜底。
+ */
+export async function callSummarizeModel(
   messages: ChatMessage[],
   adapter: ChatVendorAdapter,
   settings: AgentLoopSettings,

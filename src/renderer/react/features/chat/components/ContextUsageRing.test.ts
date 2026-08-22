@@ -27,6 +27,7 @@ vi.mock("../../../../../shared/renderer-base", () => ({ resolveAsset: (path: str
 
 import {
   CONTEXT_USAGE_CATEGORY_META,
+  CONTEXT_USAGE_COMPACT_SRC,
   CONTEXT_USAGE_MOOD_META,
   ContextUsageRing,
   RING_CIRCUMFERENCE,
@@ -179,6 +180,36 @@ describe("ContextUsageRing rendering", () => {
     expect(alert).toContain("cy-context-usage-menu__mood is-alert");
     expect(alert).toContain(CONTEXT_USAGE_MOOD_META.alert.src);
     expect(alert).toContain(CONTEXT_USAGE_MOOD_META.alert.text);
+  });
+
+  it("renders the compact mascot crossfade layer and stays inert without a sessionId", () => {
+    // 无 sessionId：小人不可点击（无 can-compact），按钮 disabled，但仍渲染压缩图层。
+    const inert = renderToStaticMarkup(React.createElement(ContextUsageRing, {
+      usage: snapshotOf({ categories: { conversation: 12_800 } }),
+    }));
+    expect(inert).toContain(CONTEXT_USAGE_COMPACT_SRC);
+    expect(inert).not.toContain("can-compact");
+    expect(inert).toContain("cy-context-usage-menu__mood-figure\" disabled");
+  });
+
+  it("enables the compact trigger with a sessionId and disables it while busy", () => {
+    const usage = snapshotOf({ categories: { conversation: 12_800 } });
+    const enabled = renderToStaticMarkup(React.createElement(ContextUsageRing, {
+      usage,
+      sessionId: "session-1",
+    }));
+    expect(enabled).toContain("cy-context-usage-menu__mood is-normal can-compact");
+    expect(enabled).toContain(CONTEXT_USAGE_COMPACT_SRC);
+    expect(enabled).not.toContain("cy-context-usage-menu__mood-figure\" disabled");
+
+    // 模型运行中：压缩禁用，避免与 run 的消息写回竞态。
+    const busy = renderToStaticMarkup(React.createElement(ContextUsageRing, {
+      usage,
+      sessionId: "session-1",
+      busy: true,
+    }));
+    expect(busy).not.toContain("can-compact");
+    expect(busy).toContain("cy-context-usage-menu__mood-figure\" disabled");
   });
 
   it("renders the popover menu with a single progress bar and per-category rows, hiding zero-token categories", () => {
