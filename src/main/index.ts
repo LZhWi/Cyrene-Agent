@@ -167,7 +167,11 @@ import { saveBlob } from "./channels/mobile-blobs";
 import { DESKTOP_PROACTIVE_STEM } from "./sync/types";
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
 import { clearLocation, loadLocation, saveLocation } from "./location-store";
-import { isAudioMediaCheck, isAudioOnlyMediaRequest } from "./media-permission";
+import {
+  isAudioMediaCheck,
+  isAudioOnlyMediaRequest,
+  isClipboardWritePermission,
+} from "./media-permission";
 import {
   buildAgentRunOptions,
   onAgentRunFinished,
@@ -4750,12 +4754,20 @@ app.whenReady().then(async () => {
     if (!webContents || !isTrustedLocationRequester(urlString)) return false;
     return webContents === settingsWindow?.webContents || webContents === callWindow?.webContents;
   };
+  const isTrustedClipboardWriter = (webContents: WebContents | null, urlString: string): boolean => (
+    Boolean(webContents)
+    && isTrustedLocationRequester(urlString)
+    && webContents === chatWindow?.webContents
+  );
   session.defaultSession.setPermissionCheckHandler((webContents, permission, requestingOrigin, details) => {
     if (!webContents) return false;
     const requestingUrl = details.requestingUrl ?? requestingOrigin ?? webContents.getURL();
     if (permission === "geolocation") return isTrustedLocationRequester(requestingUrl);
     if (permission === "media") {
       return isTrustedAudioRequester(webContents, requestingUrl) && isAudioMediaCheck(details.mediaType);
+    }
+    if (isClipboardWritePermission(permission)) {
+      return isTrustedClipboardWriter(webContents, requestingUrl);
     }
     return false;
   });
@@ -4768,6 +4780,10 @@ app.whenReady().then(async () => {
     if (permission === "media") {
       const mediaTypes = "mediaTypes" in details ? details.mediaTypes : undefined;
       callback(isTrustedAudioRequester(webContents, requestingUrl) && isAudioOnlyMediaRequest(mediaTypes));
+      return;
+    }
+    if (isClipboardWritePermission(permission)) {
+      callback(isTrustedClipboardWriter(webContents, requestingUrl));
       return;
     }
     callback(false);

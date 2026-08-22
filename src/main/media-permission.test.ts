@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isAudioMediaCheck, isAudioOnlyMediaRequest } from "./media-permission";
+import {
+  isAudioMediaCheck,
+  isAudioOnlyMediaRequest,
+  isClipboardWritePermission,
+} from "./media-permission";
 
 describe("desktop media permissions", () => {
   it("allows microphone-only permission checks", () => {
@@ -13,5 +17,10 @@ describe("desktop media permissions", () => {
     expect(isAudioOnlyMediaRequest(["audio", "video"])).toBe(false);
     expect(isAudioOnlyMediaRequest(["video"])).toBe(false);
     expect(isAudioOnlyMediaRequest(undefined)).toBe(false);
+  });
+
+  it("recognizes sanitized clipboard writes without allowing clipboard reads", () => {
+    expect(isClipboardWritePermission("clipboard-sanitized-write")).toBe(true);
+    expect(isClipboardWritePermission("clipboard-read")).toBe(false);
   });
 });

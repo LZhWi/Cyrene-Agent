@@ -11,29 +11,31 @@ vi.mock("electron", () => ({
   BrowserWindow: { getAllWindows: vi.fn(() => []) },
 }));
 
-describe("legacy scoped permission fails closed without configured roots", () => {
+describe("legacy scoped permission migration", () => {
   beforeEach(() => {
     vi.resetModules();
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-permission-scoped-"));
   });
 
-  it.each([
-    ["read_file", "fs-read"],
-    ["list_dir", "fs-read"],
-    ["write_file", "fs-write"],
-  ] as const)("denies %s before notification or approval", async (toolId, risk) => {
+  it("normalizes a runtime scoped selection to per-action", async () => {
     const permission = await import("./permission");
     permission.setCurrentLevel("scoped");
+    expect(permission.getCurrentLevel()).toBe("per-action");
+  });
 
-    await expect(permission.checkPermission({
-      toolId,
-      toolName: toolId,
-      toolDescription: toolId,
-      args: { path: path.join(electronMock.userDataDir, "file.txt") },
-      risk,
-    })).resolves.toEqual({
-      allowed: false,
-      reason: "指定目录档尚未配置授权目录，已拒绝此次文件访问。",
-    });
+  it("migrates a persisted scoped level to per-action", async () => {
+    fs.writeFileSync(
+      path.join(electronMock.userDataDir, "agent-permission.json"),
+      JSON.stringify({ level: "scoped" }),
+      "utf8",
+    );
+    const permission = await import("./permission");
+    permission.initPermissionFromDisk();
+
+    expect(permission.getCurrentLevel()).toBe("per-action");
+    expect(JSON.parse(fs.readFileSync(
+      path.join(electronMock.userDataDir, "agent-permission.json"),
+      "utf8",
+    ))).toEqual({ level: "per-action" });
   });
 });

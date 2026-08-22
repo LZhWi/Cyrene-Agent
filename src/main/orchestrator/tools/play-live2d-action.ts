@@ -82,6 +82,7 @@ export function createPlayLive2DActionTool(deps: PlayLive2DActionDeps): ToolDefi
     name: "做动作",
     description: buildDescription(),
     enabled: true,
+    risk: "safe",
     inputSchema: {
       type: "object",
       properties: {

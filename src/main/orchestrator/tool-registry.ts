@@ -103,6 +103,8 @@ toolRegistry.register({
     '- 联网信息（那是 web_search）\n\n' +
     '参数：query (必填，搜索关键词)，topK (可选，返回条数，默认5)。',
   enabled: true,
+  risk: 'safe',
+  effectKind: 'read',
   inputSchema: {
     type: 'object',
     properties: {
@@ -132,6 +134,8 @@ toolRegistry.register({
     '- 用户从没提过的信息（查不到就老实说不知道）\n\n' +
     '参数：query (必填，搜索关键词)，topK (可选，返回条数，默认5)。',
   enabled: true,
+  risk: 'safe',
+  effectKind: 'read',
   inputSchema: {
     type: 'object',
     properties: {

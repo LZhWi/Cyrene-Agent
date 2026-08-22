@@ -156,6 +156,15 @@ try {
   }, undefined, { timeout: 10_000 });
   const sidebarHistory = await sidebar.evaluate(() => window.chatStore?.list());
   if (!Array.isArray(sidebarHistory)) throw new Error("sidebar chatStore API is unavailable");
+  const clipboardPermission = await chat.evaluate(async () => {
+    const status = await navigator.permissions.query({ name: "clipboard-write" });
+    return status.state;
+  });
+  if (clipboardPermission !== "granted") throw new Error(`chat clipboard write permission is ${clipboardPermission}`);
+  const memoryPanelData = await settings.evaluate(() => window.memoryPanel?.getData());
+  if (!memoryPanelData || typeof memoryPanelData !== "object") {
+    throw new Error("settings memoryPanel API is unavailable");
+  }
   const openerStatus = await settings.evaluate(() => window.openerBridge?.getStatus());
   if (!openerStatus || typeof openerStatus !== "object") throw new Error("settings openerBridge API is unavailable");
   console.log(JSON.stringify({ ok: true, profileDir, results }, null, 2));

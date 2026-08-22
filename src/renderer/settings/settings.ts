@@ -5007,15 +5007,15 @@ const permissionNote = document.getElementById("plugin-file-note") as HTMLElemen
 
 const PERMISSION_NOTES: Record<PermissionLevel, string> = {
   "read-only": "只读：昔涟不会修改本地任何文件，也不能为你安装新工具。",
-  "scoped": "旧版指定目录档当前没有可配置白名单，因此文件访问会被拒绝；请选择只读、每次审批或完全访问。",
+  "scoped": "旧版指定目录档会自动迁移为每次审批，避免正常文件访问被永久拒绝。",
   "per-action": "每次审批：每次涉及文件或安装的操作，昔涟都会在聊天里弹卡片让你确认。",
   "full": "完全访问：昔涟可以自由调用本地命令（含 git/npm/pip）。请只在你完全信任的情况下使用。",
 };
 
 function paintPermissionUI(level: PermissionLevel): void {
   if (!permissionBlocksWrap) return;
-  // scoped 档已从插件面板移除，回退显示只读
-  const display = level === "scoped" ? "read-only" : level;
+  // scoped 档已从插件面板移除，旧值按主进程迁移规则显示为每次审批
+  const display = level === "scoped" ? "per-action" : level;
   const blocks = permissionBlocksWrap.querySelectorAll<HTMLButtonElement>("button[data-level]");
   blocks.forEach((b) => {
     const isActive = b.dataset.level === display;

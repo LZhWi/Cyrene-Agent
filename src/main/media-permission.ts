@@ -7,3 +7,7 @@ export function isAudioOnlyMediaRequest(mediaTypes: readonly string[] | undefine
     && mediaTypes.length > 0
     && mediaTypes.every((mediaType) => mediaType === "audio");
 }
+
+export function isClipboardWritePermission(permission: string): boolean {
+  return permission === "clipboard-sanitized-write";
+}

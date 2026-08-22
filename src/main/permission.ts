@@ -74,9 +74,9 @@ export function policyFor(level: AgentFileAccessLevel, risk: ToolRiskLevel): "al
     case "read-only":
       return risk === "fs-read" || risk === "network" ? "allow" : "deny";
     case "scoped":
-      // 当前版本没有可配置目录白名单；旧 persisted scoped 值必须 fail closed，不能退化为全盘访问。
-      if (risk === "network") return "allow";
-      return "deny";
+      // 旧版 scoped 没有可配置目录白名单；按 per-action 处理，避免正常功能
+      // 因无可配置入口而被永久拒绝，同时仍要求用户确认敏感操作。
+      return risk === "network" ? "allow" : "ask";
     case "per-action":
       // 每次审批：除 safe 外都弹审批
       return "ask";
@@ -93,6 +93,7 @@ export function getCurrentLevel(): AgentFileAccessLevel {
 }
 
 export function setCurrentLevel(level: AgentFileAccessLevel): void {
+  if (level === "scoped") level = "per-action";
   if (currentLevel === level) return;
   console.log(LOG_PREFIX, "档位切换:", currentLevel, "→", level);
   currentLevel = level;
@@ -128,7 +129,11 @@ export function initPermissionFromDisk(): void {
     }
     const raw = JSON.parse(fs.readFileSync(filePath, "utf8")) as { level?: unknown };
     if (isValidLevel(raw?.level)) {
-      currentLevel = raw.level;
+      currentLevel = raw.level === "scoped" ? "per-action" : raw.level;
+      if (raw.level === "scoped") {
+        persistLevel(currentLevel);
+        console.warn(LOG_PREFIX, "旧版 scoped 档缺少可配置目录，已迁移为 per-action");
+      }
       console.log(LOG_PREFIX, "从磁盘加载档位:", currentLevel);
     } else {
       console.warn(LOG_PREFIX, "档位文件内容无效，回退默认");
@@ -336,11 +341,6 @@ export async function checkPermission(input: {
   const level = currentLevel;
   const policy = policyFor(level, input.risk);
   console.log(LOG_PREFIX, "checkPermission:", input.toolId, "risk=" + input.risk, "level=" + level, "→", policy);
-
-  // scoped 的目录白名单尚未实现，必须在所有自动放行/写入特殊分支之前拒绝文件访问。
-  if (level === "scoped" && (input.risk === "fs-read" || input.risk === "fs-write")) {
-    return { allowed: false, reason: "指定目录档尚未配置授权目录，已拒绝此次文件访问。" };
-  }
 
   // 白名单工具：3 秒通知等待，超时默认允许，用户可阻止
   // write_file 特殊处理：仅桌面路径走 3 秒通知，其他路径走 60 秒审批

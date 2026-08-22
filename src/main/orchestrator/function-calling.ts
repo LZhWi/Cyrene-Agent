@@ -33,8 +33,8 @@ interface LoopSettings {
 }
 
 /** 把 ToolRegistry 里的工具转成统一 ToolSpec（与 wire 格式解耦）。 */
-function buildToolSpecs(): ToolSpec[] {
-  return toolRegistry.getEnabledTools().map(t => ({
+function buildToolSpecs(availableTools: readonly ToolDefinition[]): ToolSpec[] {
+  return availableTools.filter((tool) => tool.enabled).map(t => ({
     name: t.id,
     description: t.description,
     parameters: {
@@ -82,13 +82,15 @@ export async function runFunctionCallingLoop(
   settings: LoopSettings,
   messages: ChatMessage[],
   timeoutMs: number = 60000,
+  availableTools: readonly ToolDefinition[] = toolRegistry.getEnabledTools(),
 ): Promise<{
   reply: string;
   toolResults: ToolCallResult[];
   totalUsage?: { input: number; output: number };
 }> {
   const adapter = getAdapter(settings.provider);
-  const tools = buildToolSpecs();
+  const tools = buildToolSpecs(availableTools);
+  const runnableToolIds = new Set(availableTools.filter((tool) => tool.enabled).map((tool) => tool.id));
   const allToolResults: ToolCallResult[] = [];
   const startTime = Date.now();
   // 累加所有轮次的 token 用量（工具循环可能多轮，每轮都有 usage）
@@ -206,7 +208,7 @@ export async function runFunctionCallingLoop(
         console.log(LOG_PREFIX, "执行工具:", tc.name, JSON.stringify(args).slice(0, 200));
 
         let output: string;
-        if (!tool || !tool.enabled) {
+        if (!tool || !tool.enabled || !runnableToolIds.has(tc.name)) {
           output = "[错误] 工具不可用: " + tc.name;
           console.warn(LOG_PREFIX, output);
         } else {

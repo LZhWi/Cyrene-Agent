@@ -16,7 +16,7 @@
 //   - 只暴露轻量工具（不暴露 delegate_task 自身，防递归）
 
 import { runFunctionCallingLoop } from "./function-calling";
-import { toolRegistry } from "./tool-registry";
+import { toolRegistry, type ToolDefinition } from "./tool-registry";
 import { truncateToolResult } from "./context-manager";
 
 const LOG_PREFIX = "[SubAgent]";
@@ -30,6 +30,10 @@ const BLOCKED_TOOLS = new Set([
   "delegate_task",     // 防递归
   "ask_user_choice",   // 子代理不该跟用户交互（只有主 agent 能弹卡片）
 ]);
+
+export function filterSubAgentTools(tools: readonly ToolDefinition[]): ToolDefinition[] {
+  return tools.filter((tool) => tool.enabled && !BLOCKED_TOOLS.has(tool.id));
+}
 
 /** 子代理返回的结构化结果。 */
 export interface SubAgentResult {
@@ -65,15 +69,7 @@ export async function runSubAgent(task: string): Promise<SubAgentResult> {
 
   const settings = delegateSettingsGetter();
 
-  // 临时屏蔽子代理不该用的工具
-  const hiddenTools: string[] = [];
-  for (const toolId of BLOCKED_TOOLS) {
-    const tool = toolRegistry.getById(toolId);
-    if (tool && tool.enabled) {
-      tool.enabled = false;
-      hiddenTools.push(toolId);
-    }
-  }
+  const subAgentTools = filterSubAgentTools(toolRegistry.getEnabledTools());
 
   try {
     console.log(LOG_PREFIX, "启动子代理任务:", task.slice(0, 100));
@@ -93,6 +89,7 @@ export async function runSubAgent(task: string): Promise<SubAgentResult> {
       settings,
       subMessages,
       SUB_AGENT_TIMEOUT_MS,
+      subAgentTools,
     );
 
     const reply = result.reply || "(无回复)";
@@ -136,11 +133,5 @@ export async function runSubAgent(task: string): Promise<SubAgentResult> {
       recoverable: isTimeout,
       summary: "子代理执行失败：" + errMsg.slice(0, 200),
     };
-  } finally {
-    // 恢复被隐藏的工具
-    for (const toolId of hiddenTools) {
-      const tool = toolRegistry.getById(toolId);
-      if (tool) tool.enabled = true;
-    }
   }
 }
