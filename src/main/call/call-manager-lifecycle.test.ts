@@ -28,7 +28,7 @@ vi.mock("../orchestrator/vendors", () => ({
   }),
 }));
 
-import { endTurn, setCallSettings, setCallWindow, startCall, stopCall } from "./call-manager";
+import { abortCallForShutdown, endTurn, setCallSettings, setCallWindow, startCall, stopCall } from "./call-manager";
 
 const asrConfig = {
   engine: "local", appKey: "", accessKeyId: "", accessKeySecret: "",
@@ -63,6 +63,7 @@ describe("call lifecycle", () => {
     sent.length = 0;
     mocks.createAsrStream.mockReset();
     mocks.synthesizeByEngine.mockReset();
+    mocks.enqueueLLMTask.mockClear();
     mocks.getAsrConfig.mockReturnValue(asrConfig);
     vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({}), { status: 200 })));
     setCallWindow({
@@ -118,6 +119,26 @@ describe("call lifecycle", () => {
 
     expect(sent.some(([channel]) => channel === IPC.CALL_TTS_AUDIO)).toBe(false);
     expect(sent.at(-1)).toEqual([IPC.CALL_STATE, { state: "ENDED" }]);
+  });
+
+  it("aborts an active turn on shutdown without enqueueing a call summary", async () => {
+    let onFinal: ((text: string) => void) | undefined;
+    mocks.createAsrStream.mockImplementation((_cfg, _partial, final) => {
+      onFinal = final;
+      return { start: vi.fn(async () => {}), sendAudio: vi.fn(), finish: vi.fn(async () => {}), stop: vi.fn() };
+    });
+    const tts = deferred<{ audio: Buffer; format: "mp3" }>();
+    mocks.synthesizeByEngine.mockReturnValue(tts.promise);
+    await startCall();
+    onFinal?.("退出前的问题");
+    const turn = endTurn();
+    await vi.waitFor(() => expect(mocks.synthesizeByEngine).toHaveBeenCalledOnce());
+
+    abortCallForShutdown();
+    expect((mocks.synthesizeByEngine.mock.calls[0][1].signal as AbortSignal).aborted).toBe(true);
+    expect(mocks.enqueueLLMTask).not.toHaveBeenCalled();
+    tts.resolve({ audio: Buffer.from("late"), format: "mp3" });
+    await turn;
   });
 
   it("preserves the synthesized audio format in the renderer event", async () => {

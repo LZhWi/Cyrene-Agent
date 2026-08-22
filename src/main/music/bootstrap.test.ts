@@ -94,4 +94,17 @@ describe("bootstrapMusicService", () => {
     expect(unregistered).toHaveLength(0);
     expect(r2.runtimeRemoved).toBe(true);
   });
+
+  it("returns the same in-flight shutdown promise to concurrent callers", async () => {
+    let release!: (value: Awaited<ReturnType<MusicService["shutdown"]>>) => void;
+    const pending = new Promise<Awaited<ReturnType<MusicService["shutdown"]>>>((resolve) => { release = resolve; });
+    const b = bootstrapMusicService(PATHS);
+    vi.mocked(b.service.shutdown).mockReturnValueOnce(pending);
+    const first = b.shutdown();
+    const second = b.shutdown();
+    expect(first).toBe(second);
+    expect(b.service.shutdown).toHaveBeenCalledTimes(1);
+    release({ rootProcessPid: undefined, transportClosed: true, processTreeExited: true, runtimeRemoved: true });
+    await expect(first).resolves.toMatchObject({ runtimeRemoved: true });
+  });
 });

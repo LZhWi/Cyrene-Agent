@@ -378,6 +378,22 @@ export function stopCall(): void {
   }
 }
 
+/** 进程退出专用：只释放通话运行时，不启动新的通话总结模型请求。 */
+export function abortCallForShutdown(): void {
+  active = false;
+  callGeneration += 1;
+  turnController?.abort();
+  turnController = null;
+  callStartedAt = 0;
+  callHistory.length = 0;
+  if (asrStream) {
+    asrStream.stop();
+    asrStream = null;
+  }
+  shutdownAsrRuntimes();
+  currentState = "ENDED";
+}
+
 function fallbackCallSummary(history: ReadonlyArray<ChatMessage>): string {
   const topics = history
     .filter((message) => message.role === "user" && typeof message.content === "string")

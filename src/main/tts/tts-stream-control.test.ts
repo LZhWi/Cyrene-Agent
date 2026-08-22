@@ -25,4 +25,14 @@ describe("TtsStreamControlRegistry", () => {
     registry.finish("tts-chat-abcdefgh");
     expect(() => registry.start("tts-chat-abcdefgh", 1)).not.toThrow();
   });
+
+  it("aborts and removes every active stream during shutdown", () => {
+    const registry = new TtsStreamControlRegistry();
+    const first = registry.start("tts-chat-12345678", 1);
+    const second = registry.start("tts-chat-abcdefgh", 2);
+    expect(registry.cancelAll()).toBe(2);
+    expect(first.aborted).toBe(true);
+    expect(second.aborted).toBe(true);
+    expect(registry.cancel("tts-chat-12345678", 1)).toBe(false);
+  });
 });

@@ -10,19 +10,26 @@ export function installShutdownLatch(
   timeoutMs = 5000,
   shutdownDependents: () => Promise<unknown> = async () => undefined,
 ): void {
-  let triggered = false;
+  let state: "idle" | "cleaning" | "ready" = "idle";
   app.on("before-quit", (event) => {
-    if (triggered) return;
-    if (bootstrap.isShuttingDown()) return;
-    triggered = true;
+    if (state === "ready") return;
     event.preventDefault();
+    if (state === "cleaning") return;
+    state = "cleaning";
+    let finished = false;
+    const finish = (): void => {
+      if (finished) return;
+      finished = true;
+      state = "ready";
+      app.quit();
+    };
     const t = setTimeout(() => {
       console.error(`[Cyrene] music shutdown timeout after ${timeoutMs}ms, forcing exit`);
-      app.quit();
+      finish();
     }, timeoutMs);
     void Promise.allSettled([bootstrap.shutdown(), shutdownDependents()]).finally(() => {
       clearTimeout(t);
-      app.quit();
+      finish();
     });
   });
 }

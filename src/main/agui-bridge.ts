@@ -78,6 +78,19 @@ const reservedRuns = new Map<string, ActiveAguiRun>();
 let buildOptionsFn: BuildOptionsFn | null = null;
 let getChatWindowFn: GetChatWindowFn = () => null;
 
+/** 应用退出时中止所有尚未完成的桌面对话，不再向正在销毁的窗口发送终态事件。 */
+export function shutdownAgUiBridge(): number {
+  const runs = new Set([...reservedRuns.values(), ...activeRuns.values()]);
+  reservedRuns.clear();
+  activeRuns.clear();
+  for (const run of runs) {
+    run.control.cancel("application shutdown");
+    run.subscription?.unsubscribe();
+    run.endLifecycle();
+  }
+  return runs.size;
+}
+
 function requestedRunId(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || !/^run-[A-Za-z0-9-]{8,80}$/.test(value)) {

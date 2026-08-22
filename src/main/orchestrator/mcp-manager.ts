@@ -7,6 +7,10 @@ import { connectStartupItems } from "./startup-connections";
 import { writeJsonAtomicSync } from "../runtime/atomic-file";
 
 const LOG_PREFIX = "[MCP Manager]";
+let initialized = false;
+let initializationPromise: Promise<void> | null = null;
+let initializationController: AbortController | null = null;
+let shutdownPromise: Promise<void> | null = null;
 
 function getConfigPath(): string {
   const userDataPath = getUserDataDir();
@@ -76,23 +80,38 @@ export async function pruneMcpServersByIds(serverIds: string[]): Promise<string[
  * 启动时自动连接所有已保存的 MCP server。
  */
 export async function initMcpManager(): Promise<void> {
+  if (initialized) return;
+  if (shutdownPromise) await shutdownPromise;
+  if (initializationPromise) return initializationPromise;
+  const controller = new AbortController();
+  initializationController = controller;
+  initializationPromise = initializeMcpManager(controller.signal).finally(() => {
+    if (initializationController === controller) initializationController = null;
+    initializationPromise = null;
+  });
+  return initializationPromise;
+}
+
+async function initializeMcpManager(signal: AbortSignal): Promise<void> {
   console.log(LOG_PREFIX, "初始化 MCP Manager...");
   const configs = loadConfigs();
 
   if (configs.length === 0) {
     console.log(LOG_PREFIX, "没有已配置的 MCP server，跳过");
+    if (!signal.aborted) initialized = true;
     return;
   }
 
   const { connected, failed } = await connectStartupItems(
     configs,
-    connectMcpServer,
+    (config) => connectMcpServer(config, signal),
     (config, err) => {
       console.error(LOG_PREFIX, "自动连接失败 [" + config.name + "]:", (err as Error).message);
     },
   );
 
   console.log(LOG_PREFIX, "初始化完成: " + connected + " 个成功, " + failed + " 个失败");
+  if (!signal.aborted) initialized = true;
 }
 
 /**
@@ -153,6 +172,15 @@ export function listMcpServers(): Array<{
 
 /** 应用退出时并行关闭所有已连接 server，避免 stdio 子进程遗留。 */
 export async function shutdownMcpManager(): Promise<void> {
-  const serverIds = getMcpServerStates().map((state) => state.id);
-  await Promise.allSettled(serverIds.map((id) => disconnectMcpServer(id)));
+  if (shutdownPromise) return shutdownPromise;
+  initializationController?.abort(new DOMException("应用正在退出", "AbortError"));
+  shutdownPromise = (async () => {
+    await initializationPromise;
+    const serverIds = getMcpServerStates().map((state) => state.id);
+    await Promise.allSettled(serverIds.map((id) => disconnectMcpServer(id)));
+    initialized = false;
+  })().finally(() => {
+    shutdownPromise = null;
+  });
+  return shutdownPromise;
 }

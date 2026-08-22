@@ -113,7 +113,7 @@ import { hasPendingFeedback, settleReplyFeedback, settleIgnoreFeedback } from ".
 import type { ShowBubblePayload } from "./opener/opener-types";
 import { SCENE_CONFIGS } from "./opener/scenes-config";
 import { getManifestPath, getOpenerPackDir } from "./opener/opener-pack-store";
-import { registerAgUiIpc, type AguiRunInput } from "./agui-bridge";
+import { registerAgUiIpc, shutdownAgUiBridge, type AguiRunInput } from "./agui-bridge";
 import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegateSettings } from "./orchestrator/built-in-tools";
 import { registerRecallHistoryTool, backfillChatHistoryFromChatLogs, runHistoryRetrievalSandbox } from "./orchestrator/history-tools";
 import { backfillL2FromChatLogs } from "./memory/memory-backfill";
@@ -140,7 +140,7 @@ import {
 } from "./chat-time-context";
 import { setAsrConfig } from "./asr/volcano-asr-engine";
 import { normalizeAsrHotwords, normalizeLocalAsrProfile } from "./asr/asr-settings";
-import { setCallWindow, registerCallIpc, setCallSettings, setCallEndedCallback, stopCall, isCallActive } from "./call/call-manager";
+import { abortCallForShutdown, setCallWindow, registerCallIpc, setCallSettings, setCallEndedCallback, stopCall, isCallActive } from "./call/call-manager";
 import { findLatestChatContextSessionId, trimSoulForCall } from "./call/call-prompt";
 import { loadCallContextEvents } from "./call/call-context-store";
 import { callEventToContextMessage, type CallContextEvent } from "./call/call-context";
@@ -322,6 +322,44 @@ const TTS_CACHE_MAX_BYTES = 512 * 1024 * 1024;
 const TTS_CACHE_TARGET_BYTES = 384 * 1024 * 1024;
 const ttsStreamControls = new TtsStreamControlRegistry();
 let ttsCachePruneTimer: NodeJS.Timeout | null = null;
+let desktopShutdownPromise: Promise<void> | null = null;
+
+function shutdownDesktopRuntime(): Promise<void> {
+  if (desktopShutdownPromise) return desktopShutdownPromise;
+  desktopShutdownPromise = Promise.resolve().then(async () => {
+    const steps: Array<[string, () => void]> = [
+      ["pet movement", () => petWindowMoveController.dispose()],
+      ["scheduler", () => schedulerEngine?.stop()],
+      ["dream scheduler", stopDreamScheduler],
+      ["proactive opener", stopOpener],
+      ["proactive generation", () => proactiveChatService?.invalidate()],
+      ["active chat runs", () => { shutdownAgUiBridge(); }],
+      ["active call", abortCallForShutdown],
+      ["ASR test", stopAsrTest],
+      ["screen monitor", () => screenMonitorService.stop()],
+      ["TTS streams", () => { ttsStreamControls.cancelAll(); }],
+      ["token usage", flushTokenUsage],
+      ["vector store", flushVectorStoreSync],
+    ];
+    for (const [label, stop] of steps) {
+      try {
+        stop();
+      } catch (error) {
+        console.warn(`[Cyrene] shutdown step failed [${label}]:`, error);
+      }
+    }
+    if (ttsCachePruneTimer) {
+      clearTimeout(ttsCachePruneTimer);
+      ttsCachePruneTimer = null;
+    }
+    await Promise.allSettled([
+      Promise.resolve().then(() => l2DmaeManager.flushNow()),
+      Promise.resolve().then(() => shutdownChannels()),
+      Promise.resolve().then(() => shutdownMcpManager()),
+    ]);
+  });
+  return desktopShutdownPromise;
+}
 
 function scheduleTtsCachePrune(): void {
   if (ttsCachePruneTimer) return;
@@ -5451,7 +5489,7 @@ app.whenReady().then(async () => {
     },
   });
   installShutdownLatch(musicBootstrap, 5000, async () => {
-    await Promise.allSettled([shutdownChannels(), shutdownMcpManager()]);
+    await shutdownDesktopRuntime();
   });
 
   // Skill 系统：扫描双源 skills + 注册 meta-tool
@@ -6188,19 +6226,6 @@ app.whenReady().then(async () => {
 });
 
 app.on("window-all-closed", () => {});
-
-// 应用退出前把 token 用量缓存落盘（防抖未触发的最后一次写）
-app.on("before-quit", () => {
-  petWindowMoveController.dispose();
-  schedulerEngine?.stop();
-  stopDreamScheduler();
-  stopOpener();
-  stopAsrTest();
-  flushTokenUsage();
-  flushVectorStoreSync();
-  // DMAE 工作记忆状态防抖落盘的最后兜底（5s 防抖窗口内的最后一次变更）
-  void l2DmaeManager.flushNow();
-});
 
 app.on("activate", () => {
   if (mainWindow === null) {

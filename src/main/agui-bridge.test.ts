@@ -184,4 +184,32 @@ describe("agui-bridge sticker event ordering", () => {
       expect.objectContaining({ type: "RUN_ERROR", code: "E_RUN_CANCELLED", runId }),
     );
   });
+
+  it("cancels active runs exactly once during application shutdown", async () => {
+    mocks.holdOpen = true;
+    vi.resetModules();
+    const { registerAgUiIpc, shutdownAgUiBridge } = await import("./agui-bridge");
+    const sender = { id: 31, isDestroyed: () => false, send: vi.fn() };
+    const ended = vi.fn();
+    registerAgUiIpc(
+      async () => ({
+        options: {
+          settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
+          messages: [], timeoutMs: 1000, toolSystemContent: "TOOL", soulSystemBaseContent: "SOUL",
+        },
+        latestUserText: "shutdown",
+      }),
+      vi.fn(),
+      () => null,
+      { onUserMessage: vi.fn(), onConversationStarted: vi.fn(), onConversationEnded: ended },
+    );
+    const run = mocks.handlers.get(IPC.AGUI_RUN)!;
+    await run({ sender }, { runId: "run-exit-12345678", messages: [], style: "01_default.md" });
+
+    expect(shutdownAgUiBridge()).toBe(1);
+    expect(shutdownAgUiBridge()).toBe(0);
+    expect(mocks.controls[0].signal.aborted).toBe(true);
+    expect(mocks.teardown).toHaveBeenCalledOnce();
+    expect(ended).toHaveBeenCalledOnce();
+  });
 });

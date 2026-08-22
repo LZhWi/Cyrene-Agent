@@ -66,7 +66,7 @@ async function withTimeout<T>(
 }
 
 /** 连接一个 MCP server，发现并注册工具。 */
-export async function connectMcpServer(config: McpServerConfig): Promise<string[]> {
+export async function connectMcpServer(config: McpServerConfig, parentSignal?: AbortSignal): Promise<string[]> {
   console.log(LOG_PREFIX, "连接 MCP server:", config.name, "(" + config.id + ")");
 
   let transport: Transport;
@@ -98,6 +98,7 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
       (signal) => client.connect(transport, { signal, timeout: connectTimeoutMs, maxTotalTimeout: connectTimeoutMs }),
       connectTimeoutMs,
       `connect ${config.id}`,
+      parentSignal,
     );
     console.log(LOG_PREFIX, "已连接到", config.name);
   } catch (err) {
@@ -122,6 +123,7 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
       (signal) => client.listTools(undefined, { signal, timeout: connectTimeoutMs, maxTotalTimeout: connectTimeoutMs }),
       connectTimeoutMs,
       `listTools ${config.id}`,
+      parentSignal,
     );
     mcpTools = result.tools as typeof mcpTools;
     console.log(LOG_PREFIX, "发现 " + mcpTools.length + " 个工具:", mcpTools.map(t => t.name).join(", "));
@@ -130,6 +132,11 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
     console.error(LOG_PREFIX, "listTools 失败 [" + config.name + "]:", msg);
     try { await client.close(); } catch { /* ignore cleanup error */ }
     throw err;
+  }
+
+  if (parentSignal?.aborted) {
+    try { await client.close(); } catch { /* ignore cleanup error */ }
+    throw parentSignal.reason ?? new DOMException("MCP connection cancelled", "AbortError");
   }
 
   const registeredIds: string[] = [];

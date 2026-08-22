@@ -58,26 +58,40 @@ describe("installShutdownLatch", () => {
     await vi.waitFor(() => expect(fakeApp.quit).toHaveBeenCalled());
   });
 
-  it("second before-quit (after latch fired) is idempotent and lets app exit", async () => {
-    const shutdown = vi.fn().mockResolvedValue({});
+  it("keeps blocking repeated before-quit events until cleanup finishes", async () => {
+    let release!: () => void;
+    const shutdown = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
     const bootstrap = { isShuttingDown: () => false, shutdown };
     installShutdownLatch(bootstrap, 1000);
-    handlers[0]({ preventDefault: vi.fn() });
-    await new Promise((r) => setTimeout(r, 0));
-    handlers[0]({ preventDefault: vi.fn() });
+    const first = { preventDefault: vi.fn() };
+    const second = { preventDefault: vi.fn() };
+    handlers[0](first);
+    handlers[0](second);
+    expect(first.preventDefault).toHaveBeenCalledOnce();
+    expect(second.preventDefault).toHaveBeenCalledOnce();
     expect(shutdown).toHaveBeenCalledTimes(1);
+    expect(fakeApp.quit).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(fakeApp.quit).toHaveBeenCalledOnce());
   });
 
-  it("if isShuttingDown() returns true at first call, latch does nothing", () => {
+  it("joins an already-running bootstrap shutdown instead of bypassing dependents", async () => {
+    let release!: () => void;
+    const inFlight = new Promise<void>((resolve) => { release = resolve; });
+    const dependent = vi.fn().mockResolvedValue(undefined);
     const bootstrap = {
       isShuttingDown: () => true,
-      shutdown: vi.fn().mockResolvedValue({}),
+      shutdown: vi.fn(() => inFlight),
     };
-    installShutdownLatch(bootstrap, 1000);
+    installShutdownLatch(bootstrap, 1000, dependent);
     const event = { preventDefault: vi.fn() };
     handlers[0](event);
-    expect(event.preventDefault).not.toHaveBeenCalled();
-    expect(bootstrap.shutdown).not.toHaveBeenCalled();
+    expect(event.preventDefault).toHaveBeenCalledOnce();
+    expect(bootstrap.shutdown).toHaveBeenCalledOnce();
+    expect(dependent).toHaveBeenCalledOnce();
+    expect(fakeApp.quit).not.toHaveBeenCalled();
+    release();
+    await vi.waitFor(() => expect(fakeApp.quit).toHaveBeenCalledOnce());
   });
 
   it("forces app.quit() on timeout if shutdown hangs", () => {
@@ -88,5 +102,20 @@ describe("installShutdownLatch", () => {
     handlers[0]({ preventDefault: vi.fn() });
     vi.advanceTimersByTime(500);
     expect(fakeApp.quit).toHaveBeenCalled();
+  });
+
+  it("does not quit twice when timed-out cleanup resolves late", async () => {
+    vi.useFakeTimers();
+    let release!: () => void;
+    const shutdown = vi.fn(() => new Promise<void>((resolve) => { release = resolve; }));
+    const bootstrap = { isShuttingDown: () => false, shutdown };
+    installShutdownLatch(bootstrap, 500);
+    handlers[0]({ preventDefault: vi.fn() });
+    vi.advanceTimersByTime(500);
+    expect(fakeApp.quit).toHaveBeenCalledOnce();
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(fakeApp.quit).toHaveBeenCalledOnce();
   });
 });

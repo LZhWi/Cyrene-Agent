@@ -185,6 +185,14 @@ try {
   if (!openerStatus || typeof openerStatus !== "object") throw new Error("settings openerBridge API is unavailable");
   console.log(JSON.stringify({ ok: true, profileDir, results }, null, 2));
 } finally {
-  if (electronApp) await electronApp.close().catch(() => {});
-  await rm(profileDir, { recursive: true, force: true }).catch(() => {});
+  if (electronApp) {
+    const closeStartedAt = Date.now();
+    await electronApp.close();
+    const closeElapsedMs = Date.now() - closeStartedAt;
+    if (closeElapsedMs > 7_000) {
+      throw new Error(`Electron shutdown exceeded cleanup bound: ${closeElapsedMs}ms`);
+    }
+  }
+  // A removable profile proves Electron and its child processes released their file handles.
+  await rm(profileDir, { recursive: true, force: true });
 }

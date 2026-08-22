@@ -21,6 +21,10 @@ import { getRecentLog, clearLog } from "./message-log";
 const LOG = "[ChannelsInit]";
 
 let initialized = false;
+let initializationPromise: Promise<void> | null = null;
+let shutdownPromise: Promise<void> | null = null;
+let shutdownRequested = false;
+let ipcRegistered = false;
 let conversationLifecycle: {
   onUserMessage(): void;
   onConversationStarted(): void;
@@ -36,7 +40,18 @@ let wxAdapter: ILinkBotAdapter | null = null;
 /** app.whenReady() 调一次。idempotent。 */
 export async function initChannels(): Promise<void> {
   if (initialized) return;
-  initialized = true;
+  if (shutdownPromise) await shutdownPromise;
+  if (initializationPromise) return initializationPromise;
+  shutdownRequested = false;
+  initializationPromise = initializeChannels();
+  try {
+    await initializationPromise;
+  } finally {
+    initializationPromise = null;
+  }
+}
+
+async function initializeChannels(): Promise<void> {
 
   // 注入 dispatcher 到 manager
   channelManager.setDispatcher(async (msg) => {
@@ -50,7 +65,10 @@ export async function initChannels(): Promise<void> {
   });
 
   // 注册全局 IPC
-  registerChannelsIpc();
+  if (!ipcRegistered) {
+    registerChannelsIpc();
+    ipcRegistered = true;
+  }
 
   // 启动 inbound-server
   try {
@@ -59,6 +77,7 @@ export async function initChannels(): Promise<void> {
   } catch (err) {
     console.error(LOG, "入站 server 启动失败:", err);
   }
+  if (shutdownRequested) return;
 
   // 注册 adapter
   const feishuAdapter = new FeishuAdapter();
@@ -71,16 +90,27 @@ export async function initChannels(): Promise<void> {
 
   // 启动所有已注册 adapter
   await channelManager.startAll();
+  if (shutdownRequested) return;
 
+  initialized = true;
   console.log(LOG, "channels 模块就绪");
   broadcastChannelsStatus();
 }
 
 /** app.on('before-quit') 调 */
 export async function shutdownChannels(): Promise<void> {
-  await channelManager.stopAll();
-  await stopInboundServer();
-  initialized = false;
+  if (shutdownPromise) return shutdownPromise;
+  shutdownRequested = true;
+  shutdownPromise = (async () => {
+    await initializationPromise;
+    await channelManager.stopAll();
+    await stopInboundServer();
+    initialized = false;
+    wxAdapter = null;
+  })().finally(() => {
+    shutdownPromise = null;
+  });
+  return shutdownPromise;
 }
 
 /** IPC 注册 */

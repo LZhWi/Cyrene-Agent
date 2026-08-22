@@ -22,24 +22,20 @@ export function bootstrapMusicService(paths: MusicPaths, hooks: MusicToolHooks =
   // service.getBackendState() (e.g. smoke harness polls state).
   service.start().catch(() => { /* failure is signalled via backendState="failed" */ });
 
-  let shuttingDown = false;
+  let shutdownPromise: Promise<MusicShutdownReport> | null = null;
   return {
     service,
-    isShuttingDown: () => shuttingDown,
-    shutdown: async () => {
-      if (shuttingDown) {
-        return {
-          rootProcessPid: undefined,
-          transportClosed: true,
-          processTreeExited: true,
-          runtimeRemoved: true,
-        };
+    isShuttingDown: () => shutdownPromise !== null,
+    shutdown: () => {
+      if (!shutdownPromise) {
+        shutdownPromise = (async () => {
+          const report = await service.shutdown();
+          ipcDisposer();
+          for (const t of tools) toolRegistry.unregister(t.id);
+          return report;
+        })();
       }
-      shuttingDown = true;
-      const report = await service.shutdown();
-      ipcDisposer();
-      for (const t of tools) toolRegistry.unregister(t.id);
-      return report;
+      return shutdownPromise;
     },
   };
 }

@@ -20,6 +20,7 @@ export class ChannelManager {
   private dispatchFn: DispatchFn | null = null;
   /** 启动后已开启的 adapter（start 成功的才会调 stop） */
   private startedAdapters = new Set<ChannelId>();
+  private startPromise: Promise<void> | null = null;
 
   /** 注册 adapter（必须在 startAll 之前调用） */
   register(adapter: ChannelAdapter): void {
@@ -39,24 +40,32 @@ export class ChannelManager {
   }
 
   /** 启动所有已注册 adapter（失败的跳过、记 log） */
-  async startAll(): Promise<void> {
-    for (const adapter of this.adapters.values()) {
-      try {
-        // 每次 start 前重新注入 handler（防止 setDispatcher 之前 adapter 已经被外部注入 null）
-        if (this.dispatchFn) {
-          setAdapterHandler(adapter, this.makeAdapterHandler(adapter.id));
+  startAll(): Promise<void> {
+    if (this.startPromise) return this.startPromise;
+    this.startPromise = (async () => {
+      for (const adapter of this.adapters.values()) {
+        if (this.startedAdapters.has(adapter.id)) continue;
+        try {
+          // 每次 start 前重新注入 handler（防止 setDispatcher 之前 adapter 已经被外部注入 null）
+          if (this.dispatchFn) {
+            setAdapterHandler(adapter, this.makeAdapterHandler(adapter.id));
+          }
+          await adapter.start();
+          this.startedAdapters.add(adapter.id);
+          console.log(LOG, `渠道启动: ${adapter.id} (${adapter.displayName})`);
+        } catch (err) {
+          console.error(LOG, `渠道启动失败 [${adapter.id}]:`, err instanceof Error ? err.message : err);
         }
-        await adapter.start();
-        this.startedAdapters.add(adapter.id);
-        console.log(LOG, `渠道启动: ${adapter.id} (${adapter.displayName})`);
-      } catch (err) {
-        console.error(LOG, `渠道启动失败 [${adapter.id}]:`, err instanceof Error ? err.message : err);
       }
-    }
+    })().finally(() => {
+      this.startPromise = null;
+    });
+    return this.startPromise;
   }
 
   /** 关闭所有已启动的 adapter */
   async stopAll(): Promise<void> {
+    await this.startPromise;
     for (const id of this.startedAdapters) {
       const adapter = this.adapters.get(id);
       if (!adapter) continue;

@@ -25,4 +25,13 @@ export class TtsStreamControlRegistry {
   finish(streamId: string): void {
     this.active.delete(streamId);
   }
+
+  cancelAll(): number {
+    const streams = Array.from(this.active.values());
+    this.active.clear();
+    for (const stream of streams) {
+      stream.controller.abort(new DOMException("应用正在退出", "AbortError"));
+    }
+    return streams.length;
+  }
 }
