@@ -123,9 +123,13 @@ describe("mcp-adapter transport split", () => {
 
 	it("times out a hanging connection and closes its transport", async () => {
 		const Client = (await import("@modelcontextprotocol/sdk/client/index.js")).Client as any;
+		let connectSignal: AbortSignal | undefined;
 		Client.mockImplementation(function (this: unknown) {
 			return {
-				connect: vi.fn(() => new Promise(() => undefined)),
+				connect: vi.fn((_transport, options) => {
+					connectSignal = options?.signal;
+					return new Promise(() => undefined);
+				}),
 				listTools: vi.fn(),
 				close: vi.fn().mockResolvedValue(undefined),
 			};
@@ -138,16 +142,21 @@ describe("mcp-adapter transport split", () => {
 			command: "node",
 			connectTimeoutMs: 10,
 		})).rejects.toThrow(/E_MCP_TIMEOUT: connect connect-timeout/);
+		expect(connectSignal?.aborted).toBe(true);
 		expect(mockStdioClose).toHaveBeenCalled();
 	});
 
 	it("times out hanging tool discovery and closes the client", async () => {
 		const Client = (await import("@modelcontextprotocol/sdk/client/index.js")).Client as any;
 		const close = vi.fn().mockResolvedValue(undefined);
+		let listSignal: AbortSignal | undefined;
 		Client.mockImplementation(function (this: unknown) {
 			return {
 				connect: vi.fn().mockResolvedValue(undefined),
-				listTools: vi.fn(() => new Promise(() => undefined)),
+				listTools: vi.fn((_params, options) => {
+					listSignal = options?.signal;
+					return new Promise(() => undefined);
+				}),
 				close,
 			};
 		});
@@ -159,17 +168,22 @@ describe("mcp-adapter transport split", () => {
 			command: "node",
 			connectTimeoutMs: 10,
 		})).rejects.toThrow(/E_MCP_TIMEOUT: listTools list-timeout/);
+		expect(listSignal?.aborted).toBe(true);
 		expect(close).toHaveBeenCalled();
 	});
 
 	it("times out a hanging tool call instead of returning a successful error string", async () => {
 		const Client = (await import("@modelcontextprotocol/sdk/client/index.js")).Client as any;
+		let callSignal: AbortSignal | undefined;
 		Client.mockImplementation(function (this: unknown) {
 			return {
 				connect: vi.fn().mockResolvedValue(undefined),
 				listTools: vi.fn().mockResolvedValue({ tools: [{ name: "hang", inputSchema: { type: "object", properties: {} } }] }),
 				close: vi.fn().mockResolvedValue(undefined),
-				callTool: vi.fn(() => new Promise(() => undefined)),
+				callTool: vi.fn((_request, _schema, options) => {
+					callSignal = options?.signal;
+					return new Promise(() => undefined);
+				}),
 			};
 		});
 		await connectMcpServer({
@@ -183,6 +197,7 @@ describe("mcp-adapter transport split", () => {
 		await expect(toolRegistry.getById("call-timeout-hang")!.execute({})).rejects.toThrow(
 			/E_MCP_TIMEOUT: callTool call-timeout-hang/,
 		);
+		expect(callSignal?.aborted).toBe(true);
 	});
 
 	it("turns MCP isError responses into failed executions", async () => {
@@ -232,7 +247,39 @@ describe("mcp-adapter transport split", () => {
 		expect(callTool).toHaveBeenCalledWith(
 			{ name: "run", arguments: {} },
 			undefined,
-			{ signal: controller.signal },
+			expect.objectContaining({
+				signal: expect.any(AbortSignal),
+				timeout: 60_000,
+				maxTotalTimeout: 60_000,
+			}),
 		);
+		const forwardedSignal = callTool.mock.calls[0][2].signal as AbortSignal;
+		expect(forwardedSignal.aborted).toBe(false);
+		expect(forwardedSignal).not.toBe(controller.signal);
+	});
+
+	it("aborts an in-flight MCP tool request when the chat run is cancelled", async () => {
+		const Client = (await import("@modelcontextprotocol/sdk/client/index.js")).Client as any;
+		let forwardedSignal: AbortSignal | undefined;
+		Client.mockImplementation(function (this: unknown) {
+			return {
+				connect: vi.fn().mockResolvedValue(undefined),
+				listTools: vi.fn().mockResolvedValue({ tools: [{ name: "run", inputSchema: { type: "object", properties: {} } }] }),
+				close: vi.fn().mockResolvedValue(undefined),
+				callTool: vi.fn((_request, _schema, options) => {
+					forwardedSignal = options.signal;
+					return new Promise((_resolve, reject) => {
+						options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+					});
+				}),
+			};
+		});
+		await connectMcpServer({ id: "cancel", name: "Cancel", transport: "stdio", command: "node" });
+		const controller = new AbortController();
+		const execution = toolRegistry.getById("cancel-run")!.execute({}, { userQuery: "", signal: controller.signal });
+
+		controller.abort(new DOMException("chat cancelled", "AbortError"));
+		await expect(execution).rejects.toThrow(/E_MCP_TOOL_FAILED|chat cancelled/);
+		expect(forwardedSignal?.aborted).toBe(true);
 	});
 });

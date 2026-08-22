@@ -37,20 +37,31 @@ function normalizeTimeout(value: number | undefined, fallback: number): number {
     : fallback;
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+async function withTimeout<T>(
+  operation: (signal: AbortSignal) => Promise<T>,
+  timeoutMs: number,
+  label: string,
+  parentSignal?: AbortSignal,
+): Promise<T> {
+  const controller = new AbortController();
+  const timeoutError = new Error(`E_MCP_TIMEOUT: ${label} exceeded ${timeoutMs}ms`);
   let timer: NodeJS.Timeout | undefined;
+  const onParentAbort = () => controller.abort(parentSignal?.reason ?? new DOMException("MCP operation cancelled", "AbortError"));
+  parentSignal?.addEventListener("abort", onParentAbort, { once: true });
+  if (parentSignal?.aborted) onParentAbort();
   try {
     return await Promise.race([
-      promise,
+      operation(controller.signal),
       new Promise<T>((_resolve, reject) => {
-        timer = setTimeout(
-          () => reject(new Error(`E_MCP_TIMEOUT: ${label} exceeded ${timeoutMs}ms`)),
-          timeoutMs,
-        );
+        const onAbort = () => reject(controller.signal.reason ?? new DOMException("MCP operation cancelled", "AbortError"));
+        controller.signal.addEventListener("abort", onAbort, { once: true });
+        if (controller.signal.aborted) onAbort();
+        timer = setTimeout(() => controller.abort(timeoutError), timeoutMs);
       }),
     ]);
   } finally {
     if (timer) clearTimeout(timer);
+    parentSignal?.removeEventListener("abort", onParentAbort);
   }
 }
 
@@ -83,7 +94,11 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
   const connectTimeoutMs = normalizeTimeout(config.connectTimeoutMs, MCP_DEFAULT_CONNECT_TIMEOUT_MS);
 
   try {
-    await withTimeout(client.connect(transport), connectTimeoutMs, `connect ${config.id}`);
+    await withTimeout(
+      (signal) => client.connect(transport, { signal, timeout: connectTimeoutMs, maxTotalTimeout: connectTimeoutMs }),
+      connectTimeoutMs,
+      `connect ${config.id}`,
+    );
     console.log(LOG_PREFIX, "已连接到", config.name);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -103,7 +118,11 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
   }> = [];
 
   try {
-    const result = await withTimeout(client.listTools(), connectTimeoutMs, `listTools ${config.id}`);
+    const result = await withTimeout(
+      (signal) => client.listTools(undefined, { signal, timeout: connectTimeoutMs, maxTotalTimeout: connectTimeoutMs }),
+      connectTimeoutMs,
+      `listTools ${config.id}`,
+    );
     mcpTools = result.tools as typeof mcpTools;
     console.log(LOG_PREFIX, "发现 " + mcpTools.length + " 个工具:", mcpTools.map(t => t.name).join(", "));
   } catch (err) {
@@ -134,14 +153,16 @@ export async function connectMcpServer(config: McpServerConfig): Promise<string[
       execute: async (args: Record<string, unknown>, ctx) => {
         console.log(LOG_PREFIX, "调用工具:", toolId, JSON.stringify(args));
         try {
+          const toolCallTimeoutMs = normalizeTimeout(config.toolCallTimeoutMs, MCP_DEFAULT_TOOL_TIMEOUT_MS);
           const result = await withTimeout(
-            client.callTool(
+            (signal) => client.callTool(
               { name: mt.name, arguments: args },
               undefined,
-              ctx?.signal ? { signal: ctx.signal } : undefined,
+              { signal, timeout: toolCallTimeoutMs, maxTotalTimeout: toolCallTimeoutMs },
             ),
-            normalizeTimeout(config.toolCallTimeoutMs, MCP_DEFAULT_TOOL_TIMEOUT_MS),
+            toolCallTimeoutMs,
             `callTool ${toolId}`,
+            ctx?.signal,
           );
           const texts: string[] = [];
           if (result.content && Array.isArray(result.content)) {
