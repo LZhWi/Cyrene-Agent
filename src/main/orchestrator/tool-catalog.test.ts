@@ -7,6 +7,7 @@ function makeTool(overrides: Partial<ToolDefinition> & { id: string }): ToolDefi
     name: overrides.id,
     description: overrides.id,
     enabled: true,
+    risk: "safe",
     inputSchema: { type: "object", properties: {} },
     execute: async () => "",
     ...overrides,
@@ -31,7 +32,7 @@ describe("buildToolCatalog", () => {
     expect(out).toContain("用途：读取网页");
   });
 
-  it("默认 risk 为 safe", () => {
+  it("展示显式标记的 safe risk", () => {
     const tools = [makeTool({ id: "x", description: "X" })];
     const out = buildToolCatalog(tools);
     expect(out).toContain("风险：safe");

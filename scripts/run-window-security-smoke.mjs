@@ -2,6 +2,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron as electron } from "playwright";
+import pngjs from "pngjs";
+
+const { PNG } = pngjs;
 
 const knownApis = [
   "agui", "call", "chat", "chatStore", "choice", "cyrene", "cyreneFont",
@@ -79,6 +82,41 @@ try {
   // Window creation is asynchronous; chat can become observable before the pet
   // window, so identify the root window by its packaged URL instead of arrival order.
   const main = await findPage("/renderer/index.html");
+  const styleViolations = [];
+  const onConsole = (message) => {
+    const value = message.text();
+    if (value.includes("Content Security Policy") && value.includes("style-src")) {
+      styleViolations.push(value);
+    }
+  };
+  main.on("console", onConsole);
+  await main.evaluate(() => {
+    const probe = document.createElement("link");
+    probe.id = "cyrene-google-font-csp-probe";
+    probe.rel = "stylesheet";
+    probe.href = "https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400&display=swap";
+    document.head.appendChild(probe);
+  });
+  await main.waitForTimeout(500);
+  main.off("console", onConsole);
+  await main.evaluate(() => document.getElementById("cyrene-google-font-csp-probe")?.remove());
+  if (styleViolations.length > 0) {
+    throw new Error(`Google Fonts stylesheet is blocked by CSP: ${styleViolations.join(" | ")}`);
+  }
+  await main.waitForFunction(() => {
+    const diagnostics = window.__cyrene?.getLive2DDiagnostics?.();
+    return diagnostics?.resources?.modelLoaded === true;
+  }, undefined, { timeout: 45_000 });
+  await main.waitForTimeout(500);
+  const screenshot = PNG.sync.read(await main.screenshot({ omitBackground: true }));
+  let live2dRendered = false;
+  for (let i = 3; i < screenshot.data.length; i += 4) {
+    if (screenshot.data[i] !== 0) {
+      live2dRendered = true;
+      break;
+    }
+  }
+  if (!live2dRendered) throw new Error("Live2D model loaded but the canvas remained transparent");
   await main.evaluate(() => {
     window.settings.openSidebar();
     window.settings.openTasks();

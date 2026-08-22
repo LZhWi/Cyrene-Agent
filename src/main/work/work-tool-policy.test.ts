@@ -9,6 +9,7 @@ function tool(id: string): ToolDefinition {
     description: id,
     inputSchema: { type: "object", properties: {} },
     enabled: true,
+    risk: "safe",
     execute: async () => "ok",
   };
 }

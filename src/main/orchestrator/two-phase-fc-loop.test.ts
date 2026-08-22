@@ -118,6 +118,7 @@ function makeTool(id: string, enabled = true): ToolDefinition {
     name: id,
     description: id,
     enabled,
+    risk: "safe",
     inputSchema: { type: "object", properties: {} },
     execute: async () => "ok",
   };

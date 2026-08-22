@@ -7,6 +7,7 @@ const tool: ToolDefinition = {
   name: "sample",
   description: "sample",
   enabled: true,
+  risk: "safe",
   inputSchema: {
     type: "object",
     properties: {

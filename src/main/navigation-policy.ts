@@ -18,6 +18,10 @@ export function classifyNavigation(targetValue: string, currentValue: string): N
     return "external";
   }
 
+  if (target.protocol === "mailto:" || target.protocol === "tel:") {
+    return "external";
+  }
+
   if (target.protocol === "file:" && current?.protocol === "file:") {
     return target.pathname === current.pathname ? "allow" : "deny";
   }

@@ -13,10 +13,14 @@ describe("renderer navigation policy", () => {
     )).toBe("allow");
   });
 
-  it("opens only HTTP(S) cross-origin URLs externally", () => {
+  it("opens supported external URL protocols through the OS", () => {
     expect(classifyNavigation("https://github.com/example", "file:///C:/app/index.html"))
       .toBe("external");
     expect(classifyNavigation("https://example.com", "http://localhost:5173/settings/"))
+      .toBe("external");
+    expect(classifyNavigation("mailto:user@example.com", "file:///C:/app/index.html"))
+      .toBe("external");
+    expect(classifyNavigation("tel:+8613800138000", "file:///C:/app/index.html"))
       .toBe("external");
   });
 

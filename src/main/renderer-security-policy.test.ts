@@ -21,4 +21,10 @@ describe("renderer content security policy", () => {
     expect(RENDERER_CONTENT_SECURITY_POLICY).toContain("frame-ancestors 'none'");
     expect(RENDERER_CONTENT_SECURITY_POLICY).not.toContain("unsafe-eval");
   });
+
+  it("keeps the renderer font stylesheet and font files loadable", () => {
+    expect(RENDERER_CONTENT_SECURITY_POLICY).toContain("style-src 'self' 'unsafe-inline' https://fonts.googleapis.com");
+    expect(RENDERER_CONTENT_SECURITY_POLICY).toContain("font-src 'self' data: local-font: https://fonts.gstatic.com");
+  });
+
 });
