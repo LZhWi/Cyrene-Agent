@@ -451,14 +451,14 @@ function waitForAudioMetadata(audio: HTMLAudioElement): Promise<number | null> {
   });
 }
 
-function playTtsAudio(base64: string): void {
+function playTtsAudio(base64: string, format: "wav" | "mp3" = "mp3"): void {
   // 停掉旧音频和嘴型
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
   stopLive2dMouth();
 
   const token = nextSpeechToken();
   const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
-  const blob = new Blob([bytes], { type: "audio/mp3" });
+  const blob = new Blob([bytes], { type: format === "wav" ? "audio/wav" : "audio/mpeg" });
   const url = URL.createObjectURL(blob);
   const audio = new Audio(url);
   audio.preload = "auto";
@@ -471,18 +471,21 @@ function playTtsAudio(base64: string): void {
   audio.onended = () => {
     URL.revokeObjectURL(url);
     if (currentAudio === audio) currentAudio = null;
-    if (speechToken === token) stopLive2dMouth();
-    window.call?.ttsDone();
+    const isCurrent = speechToken === token;
+    if (isCurrent) stopLive2dMouth();
+    if (isCurrent && currentState === "SPEAKING") window.call?.ttsDone();
   };
   audio.onerror = () => {
     URL.revokeObjectURL(url);
     if (currentAudio === audio) currentAudio = null;
-    if (speechToken === token) stopLive2dMouth();
-    window.call?.ttsDone();
+    const isCurrent = speechToken === token;
+    if (isCurrent) stopLive2dMouth();
+    if (isCurrent && currentState === "SPEAKING") window.call?.ttsDone();
   };
   audio.play().catch(() => {
-    if (speechToken === token) stopLive2dMouth();
-    window.call?.ttsDone();
+    const isCurrent = speechToken === token;
+    if (isCurrent) stopLive2dMouth();
+    if (isCurrent && currentState === "SPEAKING") window.call?.ttsDone();
   });
 
   // 等音频 metadata 获取时长，延迟后驱动嘴型
@@ -521,9 +524,10 @@ window.call?.onAsrResult((data: { partial?: string; final?: string }) => {
   }
 });
 
-window.call?.onTtsAudio((data: { base64: string }) => {
+window.call?.onTtsAudio((data: { base64: string; format?: "wav" | "mp3" }) => {
+  if (currentState !== "SPEAKING") return;
   renderTranscript(currentUserText, "（语音回复中）");
-  playTtsAudio(data.base64);
+  playTtsAudio(data.base64, data.format);
 });
 
 window.call?.onError((data: { message: string }) => {

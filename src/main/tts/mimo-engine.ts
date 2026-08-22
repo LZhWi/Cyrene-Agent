@@ -12,6 +12,7 @@ export interface MimoSynthesizeOptions {
   model?: "mimo-v2.5-tts-voiceclone";
   endpointUrl?: string;
   debugLog?: (entry: Record<string, unknown>) => void;
+  signal?: AbortSignal;
 }
 
 export interface MimoSynthesizeResult {
@@ -86,6 +87,7 @@ export async function synthesize(opts: MimoSynthesizeOptions): Promise<MimoSynth
           voice,
         },
       }),
+      signal: opts.signal,
     });
   } catch (err) {
     log({ phase: "error", error: err instanceof Error ? err.message : String(err), durationMs: Date.now() - startedAt });

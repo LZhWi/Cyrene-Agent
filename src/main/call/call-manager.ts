@@ -38,6 +38,8 @@ let currentState: CallState = "IDLE";
 let finalText = "";
 let active = false;
 let callStartedAt = 0;
+let callGeneration = 0;
+let turnController: AbortController | null = null;
 
 /** 通话上下文：保留最近 N 轮对话历史（每轮 = user + assistant 一对）。
  * 主聊天窗口（src/main/index.ts:1276 normalizeChatMessages）默认保留 24 条（12 轮）。
@@ -119,9 +121,9 @@ function sendAsrResult(partial: string | undefined, final: string | undefined): 
   }
 }
 
-function sendTtsAudio(base64: string): void {
+function sendTtsAudio(base64: string, format: "wav" | "mp3"): void {
   if (callWindow && !callWindow.isDestroyed()) {
-    callWindow.webContents.send(IPC.CALL_TTS_AUDIO, { base64 });
+    callWindow.webContents.send(IPC.CALL_TTS_AUDIO, { base64, format });
   }
 }
 
@@ -143,16 +145,23 @@ export async function startCall(): Promise<void> {
     return;
   }
 
+  const generation = ++callGeneration;
+  turnController?.abort();
+  turnController = new AbortController();
   active = true;
   callStartedAt = Date.now();
   finalText = "";
   callHistory.length = 0;
   console.log(LOG_PREFIX, "startCall 重置: finalText 清空, history 清空");
   try {
-    await startAsrStream(cfg);
-    if (active) sendState("LISTENING");
+    await startAsrStream(cfg, generation);
+    if (isCurrentCall(generation)) sendState("LISTENING");
   } catch (error) {
+    if (!isCurrentCall(generation)) return;
     active = false;
+    asrStream?.stop();
+    asrStream = null;
+    turnController = null;
     const message = error instanceof Error ? error.message : String(error);
     sendError(`ASR 启动失败：${message}`);
     sendState("ERROR");
@@ -160,29 +169,44 @@ export async function startCall(): Promise<void> {
 }
 
 /** 创建并启动一个 ASR 流。 */
-async function startAsrStream(cfg: AsrConfig): Promise<void> {
-  asrStream = createAsrStream(
+async function startAsrStream(cfg: AsrConfig, generation: number): Promise<void> {
+  const stream = createAsrStream(
     cfg,
-    (text) => sendAsrResult(text, undefined),
-    (text) => { finalText = text; sendAsrResult(undefined, text); },
+    (text) => { if (isCurrentCall(generation)) sendAsrResult(text, undefined); },
+    (text) => {
+      if (!isCurrentCall(generation)) return;
+      finalText = text;
+      sendAsrResult(undefined, text);
+    },
   );
-  await asrStream.start();
+  asrStream = stream;
+  await stream.start();
+  if (!isCurrentCall(generation)) {
+    stream.stop();
+    throw new DOMException("通话启动已取消", "AbortError");
+  }
+}
+
+function isCurrentCall(generation: number): boolean {
+  return active && generation === callGeneration;
 }
 
 /** 结束本轮（VAD 静默）：停 ASR → 跑 agent → TTS → 播放。 */
 export async function endTurn(): Promise<void> {
   console.log(LOG_PREFIX, "endTurn 入口: active=", active, "state=", currentState, "finalText.length=", finalText.length);
   if (!active || currentState !== "LISTENING") return;
+  const generation = callGeneration;
+  const signal = turnController?.signal;
 
   sendState("THINKING");
   if (asrStream) {
     try {
       await asrStream.finish();
+      if (!isCurrentCall(generation)) return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       sendError(`ASR 识别失败：${message}`);
-      await restartAsr();
-      if (active) sendState("LISTENING");
+      await resumeListening(generation);
       return;
     }
   }
@@ -193,20 +217,19 @@ export async function endTurn(): Promise<void> {
   if (!text) {
     // 空文本，直接重启 ASR 回 LISTENING
     console.log(LOG_PREFIX, "endTurn 空文本，直接重启 ASR");
-    await restartAsr();
-    if (active) sendState("LISTENING");
+    await resumeListening(generation);
     return;
   }
 
   try {
     // 调 agent 获取回复
     console.log(LOG_PREFIX, "runAgentTurn 开始, text.length=", text.length);
-    const reply = await runAgentTurn(text);
+    const reply = await runAgentTurn(text, signal);
+    if (!isCurrentCall(generation)) return;
     console.log(LOG_PREFIX, "runAgentTurn 结果: reply.length=", reply?.length ?? "null");
     if (!reply) {
       sendError("未收到 agent 回复");
-      await restartAsr();
-      if (active) sendState("LISTENING");
+      await resumeListening(generation);
       return;
     }
 
@@ -214,34 +237,29 @@ export async function endTurn(): Promise<void> {
     const tts = ttsSettingsGetter?.();
     if (!tts || tts.ttsEngine === "off") {
       sendError("TTS 未配置：请在设置中启用 TTS 引擎");
-      await restartAsr();
-      if (active) sendState("LISTENING");
+      await resumeListening(generation);
       return;
     }
 
     // 引擎配置完整性检查
     if (tts.ttsEngine === "minimax" && (!tts.ttsMinimaxKey || !tts.ttsMinimaxVoiceId)) {
       sendError("TTS 未配置：请在设置中配置 MiniMax API Key 和音色 ID");
-      await restartAsr();
-      if (active) sendState("LISTENING");
+      await resumeListening(generation);
       return;
     }
     if (tts.ttsEngine === "gptsovits" && (!tts.ttsGptsovitsBaseUrl || !tts.ttsGptsovitsRefAudioPath || !tts.ttsGptsovitsPromptText)) {
       sendError("TTS 未配置：请在设置中配置 GPT-SoVITS baseUrl、参考音频和文本");
-      await restartAsr();
-      if (active) sendState("LISTENING");
+      await resumeListening(generation);
       return;
     }
     if (tts.ttsEngine === "custom-cloud" && !tts.ttsCustomCloudEndpointUrl) {
       sendError("TTS 未配置：请在设置中配置自定义云端 Endpoint URL");
-      await restartAsr();
-      if (active) sendState("LISTENING");
+      await resumeListening(generation);
       return;
     }
     if (tts.ttsEngine === "mimo" && (!tts.ttsMimoKey || !tts.ttsMimoVoiceAudioPath)) {
       sendError("TTS 未配置：请在设置中配置小米 MiMo API Key 和昔涟克隆音频");
-      await restartAsr();
-      if (active) sendState("LISTENING");
+      await resumeListening(generation);
       return;
     }
 
@@ -283,28 +301,29 @@ export async function endTurn(): Promise<void> {
         voiceAudioPath: tts.ttsMimoVoiceAudioPath,
         stylePrompt: tts.ttsMimoStylePrompt,
         ...(tts.ttsEngine === "custom-cloud" ? { format: tts.ttsCustomCloudFormat } : {}),
+        signal,
       });
-      sendTtsAudio(result.audio.toString("base64"));
+      if (!isCurrentCall(generation)) return;
+      sendTtsAudio(result.audio.toString("base64"), result.format);
       // 等渲染端 CALL_TTS_DONE 后恢复 LISTENING
     } catch (ttsErr) {
+      if (!isCurrentCall(generation)) return;
       const msg = ttsErr instanceof Error ? ttsErr.message : String(ttsErr);
       sendError("TTS 合成失败：" + msg);
-      await restartAsr();
-      if (active) sendState("LISTENING");
+      await resumeListening(generation);
     }
   } catch (err) {
+    if (!isCurrentCall(generation)) return;
     const msg = err instanceof Error ? err.message : String(err);
     sendError("通话出错：" + msg);
-    await restartAsr();
-    if (active) sendState("LISTENING");
+    await resumeListening(generation);
   }
 }
 
 /** TTS 播完后恢复 LISTENING，重新开始 ASR。 */
 export async function onTtsDone(): Promise<void> {
-  if (!active) return;
-  await restartAsr();
-  if (active) sendState("LISTENING");
+  if (!active || currentState !== "SPEAKING") return;
+  await resumeListening(callGeneration);
 }
 
 export function flushAsrPartial(): void {
@@ -313,14 +332,17 @@ export function flushAsrPartial(): void {
 }
 
 /** 重新开始一轮 ASR 识别。 */
-async function restartAsr(): Promise<void> {
+async function resumeListening(generation: number): Promise<void> {
+  if (!isCurrentCall(generation)) return;
   const cfg = getAsrConfig();
   if (!cfg) return;
   if (asrStream) asrStream.stop();
   finalText = "";
   try {
-    await startAsrStream(cfg);
+    await startAsrStream(cfg, generation);
+    if (isCurrentCall(generation)) sendState("LISTENING");
   } catch (error) {
+    if (!isCurrentCall(generation)) return;
     active = false;
     const message = error instanceof Error ? error.message : String(error);
     sendError(`ASR 重启失败：${message}`);
@@ -330,10 +352,14 @@ async function restartAsr(): Promise<void> {
 
 /** 挂断：清理一切。 */
 export function stopCall(): void {
+  if (!active && currentState === "ENDED") return;
   const endedAt = Date.now();
   const startedAt = callStartedAt || endedAt;
   const historyForSummary = callHistory.map((message) => ({ ...message }));
   active = false;
+  callGeneration += 1;
+  turnController?.abort();
+  turnController = null;
   callStartedAt = 0;
   callHistory.length = 0;
   if (asrStream) {
@@ -434,7 +460,7 @@ const WEATHER_REGEX = /天气|今天.*热|今天.*冷|下雨|下雪|气温|几�
  * 2. 其他问题仍直接调 LLM（不走 FC loop，不调工具），用通话专用 system prompt
  * 3. 回复过滤掉 [sticker:xxx] 表情包标记
  */
-async function runAgentTurn(userText: string): Promise<string | null> {
+async function runAgentTurn(userText: string, signal?: AbortSignal): Promise<string | null> {
   try {
     const ms = modelSettingsGetter?.();
     if (!ms || !ms.apiKey) {
@@ -472,6 +498,7 @@ async function runAgentTurn(userText: string): Promise<string | null> {
           try { args = JSON.parse(toolCall.arguments || "{}"); } catch { /* 由天气工具按空参数处理 */ }
           return weatherTool.execute(args);
         },
+        signal,
       });
       const reply = result.reply.replace(/\[sticker:[^\]]+\]/g, "").trim();
       if (reply) {
@@ -502,7 +529,7 @@ async function runAgentTurn(userText: string): Promise<string | null> {
       method: "POST",
       headers: { ...req.headers, "Content-Type": "application/json" },
       body: req.body,
-      signal: AbortSignal.timeout(30000),
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000),
     });
 
     if (!httpResp.ok) {

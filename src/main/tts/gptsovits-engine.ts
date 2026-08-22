@@ -13,6 +13,7 @@ export interface GptsovitsSynthesizeOptions extends GptsovitsAdvancedOptions {
   format?: "wav" | "mp3";   // 默认 wav
   timeoutMs?: number;      // 默认 60000（本地推理可能较慢）
   debugLog?: (entry: Record<string, unknown>) => void;
+  signal?: AbortSignal;
 }
 
 export interface GptsovitsSynthesizeResult {
@@ -113,20 +114,20 @@ async function synthesizeLocked(opts: GptsovitsSynthesizeOptions): Promise<Gptso
   });
 
   // 3) 发请求 + 超时控制
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timeoutSignal]) : timeoutSignal;
 
   let resp: Response;
   try {
-    await ensureWeights(opts, controller.signal);
+    await ensureWeights(opts, signal);
     resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body,
-      signal: controller.signal,
+      signal,
     });
   } catch (err) {
-    clearTimeout(timer);
+    if (opts.signal?.aborted) throw new DOMException("语音合成已取消", "AbortError");
     if (err instanceof Error && err.name === "AbortError") {
       log({ phase: "error", error: `合成超时（${timeoutMs}ms）`, durationMs: Date.now() - startedAt });
       throw new Error(`GPT-SoVITS 合成超时（${timeoutMs}ms），检查服务是否在跑`);
@@ -134,7 +135,6 @@ async function synthesizeLocked(opts: GptsovitsSynthesizeOptions): Promise<Gptso
     log({ phase: "error", error: err instanceof Error ? err.message : String(err), durationMs: Date.now() - startedAt });
     throw new Error(`GPT-SoVITS 请求失败: ${err instanceof Error ? err.message : String(err)}`);
   }
-  clearTimeout(timer);
 
   // 4) 响应处理
   if (!resp.ok) {

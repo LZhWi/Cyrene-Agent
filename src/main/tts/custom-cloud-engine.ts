@@ -11,6 +11,7 @@ export interface CustomCloudSynthesizeOptions {
   format?: "wav" | "mp3";
   timeoutMs?: number;
   debugLog?: (entry: Record<string, unknown>) => void;
+  signal?: AbortSignal;
 }
 
 export interface CustomCloudSynthesizeResult {
@@ -50,8 +51,8 @@ export async function synthesize(opts: CustomCloudSynthesizeOptions): Promise<Cu
   if (!endpointUrl) throw new Error("缺少自定义云端 TTS 地址");
   if (!text) throw new Error("缺少合成文本");
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  const signal = opts.signal ? AbortSignal.any([opts.signal, timeoutSignal]) : timeoutSignal;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
   };
@@ -78,18 +79,16 @@ export async function synthesize(opts: CustomCloudSynthesizeOptions): Promise<Cu
         volume: opts.volume ?? 1,
         format,
       }),
-      signal: controller.signal,
+      signal,
     });
   } catch (err) {
-    clearTimeout(timer);
+    if (opts.signal?.aborted) throw new DOMException("语音合成已取消", "AbortError");
     if (err instanceof Error && err.name === "AbortError") {
       log({ phase: "error", error: `合成超时（${timeoutMs}ms）`, durationMs: Date.now() - startedAt });
       throw new Error(`自定义云端 TTS 合成超时（${timeoutMs}ms）`);
     }
     log({ phase: "error", error: err instanceof Error ? err.message : String(err), durationMs: Date.now() - startedAt });
     throw new Error(`自定义云端 TTS 请求失败: ${err instanceof Error ? err.message : String(err)}`);
-  } finally {
-    clearTimeout(timer);
   }
 
   if (!resp.ok) {

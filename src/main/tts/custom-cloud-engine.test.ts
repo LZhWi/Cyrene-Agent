@@ -80,4 +80,19 @@ describe("custom-cloud-engine synthesize", () => {
       text: "hi",
     })).rejects.toThrow(/400 bad request/);
   });
+
+  it("aborts an in-flight request with the caller signal", async () => {
+    vi.stubGlobal("fetch", vi.fn((_input: unknown, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+    })));
+    const controller = new AbortController();
+    const request = synthesize({
+      endpointUrl: "https://tts.example.com",
+      text: "hi",
+      signal: controller.signal,
+    });
+
+    controller.abort();
+    await expect(request).rejects.toMatchObject({ name: "AbortError" });
+  });
 });

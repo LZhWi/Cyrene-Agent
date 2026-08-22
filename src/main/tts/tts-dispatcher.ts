@@ -26,6 +26,7 @@ export interface SynthesizeByEnginePayload extends GptsovitsAdvancedOptions {
   // mimo 专用
   voiceAudioPath?: string;
   stylePrompt?: string;
+  signal?: AbortSignal;
 }
 
 export interface SynthesizeByEngineResult {
@@ -54,6 +55,7 @@ export async function synthesizeByEngine(
       volume: payload.volume,
       model: payload.model ?? "speech-2.8-turbo",
       format: payload.format ?? "mp3",
+      signal: payload.signal,
     });
     return { audio, format: payload.format ?? "mp3" };
   }
@@ -78,6 +80,7 @@ export async function synthesizeByEngine(
       temperature: payload.temperature,
       repetitionPenalty: payload.repetitionPenalty,
       sampleSteps: payload.sampleSteps,
+      signal: payload.signal,
     });
     return { audio: result.audio, format: result.format };
   }
@@ -95,6 +98,7 @@ export async function synthesizeByEngine(
       volume: payload.volume,
       format: payload.format ?? "mp3",
       timeoutMs: payload.timeoutMs,
+      signal: payload.signal,
     });
     return { audio: result.audio, format: result.format };
   }
@@ -109,6 +113,7 @@ export async function synthesizeByEngine(
       text: payload.text,
       stylePrompt: payload.stylePrompt ?? payload.promptText,
       model: "mimo-v2.5-tts-voiceclone",
+      signal: payload.signal,
     });
     return { audio: result.audio, format: result.format };
   }

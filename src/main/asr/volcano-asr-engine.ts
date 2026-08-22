@@ -22,6 +22,9 @@ export class VolcanoAsrStream {
   private appKey = "";
   private finishPromise: Promise<void> | null = null;
   private finishResolve: (() => void) | null = null;
+  private startResolve: (() => void) | null = null;
+  private startReject: ((error: Error) => void) | null = null;
+  private startTimer: NodeJS.Timeout | null = null;
 
   constructor(
     private readonly onPartial: (text: string) => void,
@@ -37,8 +40,9 @@ export class VolcanoAsrStream {
       token = await this.getToken(accessKeyId, accessKeySecret);
     } catch (err) {
       console.error(LOG_PREFIX, "获取 token 失败:", err);
-      return;
+      throw err;
     }
+    if (this.stopped) throw new DOMException("ASR 启动已取消", "AbortError");
     console.log(LOG_PREFIX, "token 获取成功，连接 WebSocket...");
 
     const url = `${NLS_GATEWAY}?token=${encodeURIComponent(token)}`;
@@ -50,10 +54,23 @@ export class VolcanoAsrStream {
     });
 
     this.ws.on("message", (raw: Buffer) => this.handleMessage(raw));
-    this.ws.on("error", (err) => console.error(LOG_PREFIX, "WS 错误:", err.message));
+    this.ws.on("error", (err) => {
+      console.error(LOG_PREFIX, "WS 错误:", err.message);
+      this.rejectStart(new Error(`ASR WebSocket 连接失败：${err.message}`));
+    });
     this.ws.on("close", (code) => {
       console.log(LOG_PREFIX, `WS 关闭: ${code}`);
+      this.rejectStart(new Error(`ASR WebSocket 在就绪前关闭（code=${code}）`));
       this.resolveFinish();
+    });
+
+    await new Promise<void>((resolve, reject) => {
+      this.startResolve = resolve;
+      this.startReject = reject;
+      this.startTimer = setTimeout(() => {
+        this.rejectStart(new Error("ASR WebSocket 启动超时"));
+        try { this.ws?.terminate(); } catch { /* ignore */ }
+      }, 15_000);
     });
   }
 
@@ -100,7 +117,13 @@ export class VolcanoAsrStream {
   stop(): void {
     if (this.stopped) return;
     this.stopped = true;
-    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    this.rejectStart(new DOMException("ASR 启动已取消", "AbortError"));
+    if (!this.ws) return;
+    if (this.ws.readyState === WebSocket.CONNECTING) {
+      try { this.ws.terminate(); } catch { /* ignore */ }
+      return;
+    }
+    if (this.ws.readyState !== WebSocket.OPEN) return;
 
     // 发剩余音频
     if (this.audioBuffer.length > 0) {
@@ -140,6 +163,22 @@ export class VolcanoAsrStream {
     this.finishResolve = null;
   }
 
+  private resolveStart(): void {
+    if (this.startTimer) clearTimeout(this.startTimer);
+    this.startTimer = null;
+    this.startResolve?.();
+    this.startResolve = null;
+    this.startReject = null;
+  }
+
+  private rejectStart(error: Error): void {
+    if (this.startTimer) clearTimeout(this.startTimer);
+    this.startTimer = null;
+    this.startReject?.(error);
+    this.startResolve = null;
+    this.startReject = null;
+  }
+
   /** 解析服务端 JSON 响应 */
   private handleMessage(raw: Buffer): void {
     try {
@@ -163,11 +202,13 @@ export class VolcanoAsrStream {
 
       if (status !== 20000000 && status !== undefined) {
         console.error(LOG_PREFIX, `ASR 错误: status=${status}, msg=${msg.header?.status_text}`);
+        this.rejectStart(new Error(`ASR 启动失败: ${msg.header?.status_text || status}`));
         return;
       }
 
       if (eventName === "TranscriptionStarted") {
         console.log(LOG_PREFIX, "转写已开始，可以发送音频");
+        this.resolveStart();
       } else if (eventName === "TranscriptionResultChanged") {
         // 中间结果
         const text = msg.payload?.result ?? "";
