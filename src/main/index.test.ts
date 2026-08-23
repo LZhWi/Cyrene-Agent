@@ -8,52 +8,77 @@ vi.mock("electron", () => ({
 
 // vi.mock 工厂会被 hoist 到文件顶部,不能直接引用顶层 const;
 // 用 vi.hoisted 把 mock 函数提到 mock 工厂之前。
-const { mockAdd, mockRemove, mockList } = vi.hoisted(() => ({
+const { mockAdd, mockRemove, mockListConfigs } = vi.hoisted(() => ({
   mockAdd: vi.fn().mockResolvedValue({ ok: true, toolIds: [] }),
   mockRemove: vi.fn().mockResolvedValue({ ok: true }),
-  mockList: vi.fn().mockReturnValue([]),
+  mockListConfigs: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock("./orchestrator/mcp-manager", () => ({
   addMcpServer: mockAdd,
   removeMcpServer: mockRemove,
-  listMcpServers: mockList,
+  listMcpServerConfigs: mockListConfigs,
 }));
 
-import { syncPlaywrightMcp } from "./sync-mcp-builtin";
+import { syncPlaywrightMcp, buildPlaywrightMcpConfig, PLAYWRIGHT_MCP_ID } from "./sync-mcp-builtin";
 
 describe("syncPlaywrightMcp", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockList.mockReturnValue([]);
+    mockListConfigs.mockReturnValue([]);
   });
 
-  it("does nothing when disabled and not connected", async () => {
+  it("does nothing when disabled and no stored config", async () => {
     await syncPlaywrightMcp({ playwrightMcpEnabled: false });
     expect(mockAdd).not.toHaveBeenCalled();
     expect(mockRemove).not.toHaveBeenCalled();
   });
 
-  it("adds stdio server when enabled and not connected", async () => {
+  it("adds stdio server (execPath + ELECTRON_RUN_AS_NODE + msedge) when enabled and no stored config", async () => {
     await syncPlaywrightMcp({ playwrightMcpEnabled: true });
+    expect(mockAdd).toHaveBeenCalledTimes(1);
     expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
-      id: "playwright-mcp",
+      id: PLAYWRIGHT_MCP_ID,
       transport: "stdio",
-      command: "npx",
-      args: expect.arrayContaining(["-y", "@playwright/mcp@latest"]),
+      command: process.execPath,
+      args: expect.arrayContaining([
+        expect.stringContaining("cli.js"),
+        "--isolated",
+        "--headless",
+        "--browser",
+        "msedge",
+      ]),
+      env: { ELECTRON_RUN_AS_NODE: "1" },
     }));
   });
 
-  it("removes when disabled and connected", async () => {
-    mockList.mockReturnValue([{ id: "playwright-mcp", name: "x", connected: true, toolCount: 0, toolIds: [] }]);
+  it("removes stored config when disabled", async () => {
+    mockListConfigs.mockReturnValue([buildPlaywrightMcpConfig()]);
     await syncPlaywrightMcp({ playwrightMcpEnabled: false });
-    expect(mockRemove).toHaveBeenCalledWith("playwright-mcp");
+    expect(mockRemove).toHaveBeenCalledWith(PLAYWRIGHT_MCP_ID);
+    expect(mockAdd).not.toHaveBeenCalled();
   });
 
-  it("no-op when enabled and already connected", async () => {
-    mockList.mockReturnValue([{ id: "playwright-mcp", name: "x", connected: true, toolCount: 0, toolIds: [] }]);
+  it("no-op when enabled and stored config matches expected", async () => {
+    mockListConfigs.mockReturnValue([buildPlaywrightMcpConfig()]);
     await syncPlaywrightMcp({ playwrightMcpEnabled: true });
     expect(mockAdd).not.toHaveBeenCalled();
     expect(mockRemove).not.toHaveBeenCalled();
+  });
+
+  it("migrates stale npx config (remove + re-add) when enabled", async () => {
+    mockListConfigs.mockReturnValue([{
+      id: PLAYWRIGHT_MCP_ID,
+      name: "Playwright 浏览器",
+      transport: "stdio",
+      command: "npx",
+      args: ["-y", "@playwright/mcp@latest", "--isolated", "--headless", "--no-sandbox"],
+    }]);
+    await syncPlaywrightMcp({ playwrightMcpEnabled: true });
+    expect(mockRemove).toHaveBeenCalledWith(PLAYWRIGHT_MCP_ID);
+    expect(mockAdd).toHaveBeenCalledTimes(1);
+    expect(mockAdd).toHaveBeenCalledWith(expect.objectContaining({
+      command: process.execPath,
+    }));
   });
 });

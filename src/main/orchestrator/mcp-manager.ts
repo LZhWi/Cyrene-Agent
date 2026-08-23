@@ -128,14 +128,16 @@ export async function addMcpServer(config: McpServerConfig): Promise<{
 
 /**
  * 移除一个 MCP server，断开连接并持久化。
+ *
+ * 配置清理不依赖连接状态：历史上「配置存在但连接从未成功」的 server
+ * （如 npx 不可用的场景）在 mcpServerStates 中没有记录，若因 disconnect
+ * 失败而跳过配置清理，残留配置会导致后续 addMcpServer 报"已存在相同 ID"
+ * 且永远无法修复。
  */
 export async function removeMcpServer(serverId: string): Promise<{ ok: boolean; error?: string }> {
   console.log(LOG_PREFIX, "移除 MCP server:", serverId);
 
-  const disconnected = await disconnectMcpServer(serverId);
-  if (!disconnected) {
-    return { ok: false, error: "未找到 MCP server: " + serverId };
-  }
+  await disconnectMcpServer(serverId);
 
   const configs = loadConfigs().filter(c => c.id !== serverId);
   saveConfigs(configs);
@@ -153,4 +155,13 @@ export function listMcpServers(): Array<{
   toolIds: string[];
 }> {
   return getMcpServerStates();
+}
+
+/**
+ * 读取已持久化的 MCP server 配置（含连接失败、未连接的）。
+ * 与 listMcpServers（仅运行时连接态）互补：内置 MCP 同步逻辑需要
+ * 以配置文件为事实源，避免「配置存在但连接失败」被误判为不存在。
+ */
+export function listMcpServerConfigs(): McpServerConfig[] {
+  return loadConfigs();
 }

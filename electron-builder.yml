@@ -6,6 +6,11 @@ asar: true
 asarUnpack:
   - "**/vendor/srt-win/**"
   - "**/node_modules/@ast-grep/**"
+  # Playwright MCP 以 ELECTRON_RUN_AS_NODE 模式运行，读不了 asar 虚拟路径，
+  # 需真实磁盘文件（cli.js + 其依赖的 playwright / playwright-core）
+  - "**/node_modules/@playwright/**"
+  - "**/node_modules/playwright/**"
+  - "**/node_modules/playwright-core/**"
 electronDist: node_modules/electron/dist
 files:
   - dist/**/*

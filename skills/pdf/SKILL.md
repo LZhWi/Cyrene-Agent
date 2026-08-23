@@ -187,5 +187,5 @@ bash scripts/make.sh demo    # 构建示例 PDF
 | Python 3.9+ | 所有 `.py` 脚本 | 系统 |
 | `reportlab` | `render_body.py` | `pip install reportlab` |
 | `pypdf` | fill，merge，reformat | `pip install pypdf` |
-| Node.js 18+ | `render_cover.js` | 系统 |
-| `playwright` + Chromium | `render_cover.js` | `npm install -g playwright && npx playwright install chromium` |
+| Node.js 18+ | `render_cover.js` | 系统；打包版自动回落 Cyrene 内置 Node，无需安装 |
+| `playwright` | `render_cover.js` | 打包版随应用内置；开发环境 `npm install -g playwright`。浏览器优先系统 Edge，无需下载 Chromium |

@@ -96,7 +96,7 @@ export async function loadBuiltinMcpToggles(): Promise<void> {
   try {
     const cfg = await window.tts?.loadSettings();
     if (cfg && playwrightMcpCheckbox) {
-      // 默认关闭 —— 启用会下载 Chromium，约 150MB
+      // 默认关闭 —— 浏览器走系统 Edge，MCP 随应用内置，无需额外下载
       playwrightMcpCheckbox.checked = Boolean(cfg.playwrightMcpEnabled);
     }
   } catch (err) {

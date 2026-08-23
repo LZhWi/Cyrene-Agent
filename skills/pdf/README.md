@@ -137,8 +137,8 @@ Design tokens (`tokens.json`) flow from `palette.py` to every renderer — cover
 | Python 3.9+ | all `.py` scripts | system |
 | `reportlab` | `render_body.py` | `pip install reportlab` |
 | `pypdf` | fill, merge, reformat | `pip install pypdf` |
-| Node.js 18+ | `render_cover.js` | system |
-| `playwright` + Chromium | `render_cover.js` | `npm install -g playwright && npx playwright install chromium` |
+| Node.js 18+ | `render_cover.js` | system; packaged builds fall back to Cyrene's bundled Node |
+| `playwright` | `render_cover.js` | bundled with packaged builds; dev: `npm install -g playwright`. Browser: system Edge first, no Chromium download needed |
 
 ## License
 
@@ -211,8 +211,8 @@ Design tokens (color, typography, spacing) are written once by `palette.py` and 
 | Python 3.9+ | palette, cover, render_body, merge | system |
 | `reportlab` | Body page rendering | `pip install reportlab` |
 | `pypdf` | Merging PDFs | `pip install pypdf` |
-| Node.js 18+ | Cover rendering | system |
-| `playwright` | Headless Chromium for cover | `npm install -g playwright && npx playwright install chromium` |
+| Node.js 18+ | Cover rendering | system; packaged builds fall back to Cyrene's bundled Node |
+| `playwright` | Headless browser for cover | bundled with packaged builds; dev: `npm install -g playwright`. Uses system Edge first — no Chromium download needed |
 
 Run `bash scripts/make.sh check` to verify everything at once.  
 Run `bash scripts/make.sh fix` to auto-install what is missing.

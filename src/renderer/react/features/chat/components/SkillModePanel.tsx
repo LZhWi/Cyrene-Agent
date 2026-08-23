@@ -48,15 +48,6 @@ function RefreshIcon() {
   );
 }
 
-function PlusIcon() {
-  return (
-    <svg width="20" height="20" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <path d="M24 10V38" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
-      <path d="M10 24H38" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function PlaceholderIcon({ name }: { name: string }) {
   const letter = name.trim().charAt(0).toUpperCase() || "S";
   return <span className="skill-card__icon-letter">{letter}</span>;
@@ -183,22 +174,6 @@ export const SkillModePanel: React.FC = () => {
               onClick={handleRefresh}
             >
               <RefreshIcon />
-            </button>
-            <button
-              type="button"
-              className="skill-panel__icon-btn"
-              title="安装/新建 skill（通过 skill-creator 或拖入目录）"
-              onClick={() => {
-                // 后续可接 skill-creator 或文件选择器；目前唤起 skill-creator 对话
-                const input = document.querySelector<HTMLTextAreaElement>(".cy-chat-input textarea");
-                if (input) {
-                  input.value = "/skill-creator 帮我新建一个 skill";
-                  input.focus();
-                  input.dispatchEvent(new Event("input", { bubbles: true }));
-                }
-              }}
-            >
-              <PlusIcon />
             </button>
           </div>
         </div>

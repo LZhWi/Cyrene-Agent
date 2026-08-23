@@ -29,7 +29,28 @@
 set -euo pipefail
 SCRIPTS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY="python3"
+
+# Node 运行时：优先系统 node；打包环境无 node 时回落 Cyrene.exe 的
+# Node 模式（ELECTRON_RUN_AS_NODE=1）。脚本位于 <install>/resources/skills/pdf/scripts，
+# 向上三层即 resources/，Cyrene.exe 在其上一级（安装根目录）。
 NODE="node"
+NODE_KIND="system"
+if ! command -v node &>/dev/null; then
+  _CYRENE="$(cd "$SCRIPTS/../../.." && pwd)/../Cyrene.exe"
+  if [[ -f "$_CYRENE" ]]; then
+    NODE="$_CYRENE"
+    NODE_KIND="cyrene"
+  fi
+fi
+
+# 统一的 Node 调用入口（Cyrene 模式需注入 ELECTRON_RUN_AS_NODE）
+run_node() {
+  if [[ "$NODE_KIND" == "cyrene" ]]; then
+    ELECTRON_RUN_AS_NODE=1 "$NODE" "$@"
+  else
+    "$NODE" "$@"
+  fi
+}
 
 # ── Colour helpers ─────────────────────────────────────────────────────────────
 red()    { printf '\033[0;31m%s\033[0m\n' "$*"; }
@@ -66,17 +87,18 @@ cmd_check() {
     ok=false
   fi
 
-  # Node.js
-  if command -v node &>/dev/null; then
+  # Node.js（系统 node 或打包版 Cyrene 内置 Node）
+  if [[ "$NODE_KIND" == "cyrene" ]]; then
+    green "  ✓ node (Cyrene 内置 Node 运行时)"
+  elif command -v node &>/dev/null; then
     green "  ✓ node $(node --version)"
   else
     red   "  ✗ node not found — cover rendering unavailable"
     ok=false
   fi
 
-  # Playwright
-  if node -e "require('playwright')" 2>/dev/null || \
-     node -e "require(require('child_process').execSync('npm root -g').toString().trim()+'/playwright')" 2>/dev/null; then
+  # Playwright（--probe 走与渲染一致的加载链：项目依赖 → app.asar.unpacked → 全局）
+  if run_node "$SCRIPTS/render_cover.js" --probe >/dev/null 2>&1; then
     green "  ✓ playwright"
   else
     yellow "  ⚠ playwright not found  (run: make.sh fix)"
@@ -113,10 +135,11 @@ cmd_fix() {
   fi
 
   # Playwright
-  if command -v npm &>/dev/null; then
+  if [[ "$NODE_KIND" == "cyrene" ]]; then
+    green "  ✓ playwright 随应用内置，浏览器使用系统 Edge，无需安装"
+  elif command -v npm &>/dev/null; then
     npm install -g playwright --silent 2>/dev/null && \
-    npx playwright install chromium --silent 2>/dev/null && \
-    green "  ✓ Playwright + Chromium installed" || \
+    green "  ✓ Playwright installed (浏览器优先使用系统 Edge，无需下载 Chromium)" || \
     { yellow "  playwright install failed — try manually"; rc=3; }
   else
     yellow "  npm not found — cannot install Playwright automatically"
@@ -214,7 +237,7 @@ print(f'  Fonts   : {t[\"font_display\"]} / {t[\"font_body\"]}')"
     --out "$workdir/cover.html" \
     "${subtitle_args[@]+"${subtitle_args[@]}"}"
 
-  $NODE "$SCRIPTS/render_cover.js" \
+  run_node "$SCRIPTS/render_cover.js" \
     --input "$workdir/cover.html" \
     --out   "$workdir/cover.pdf"
   green "  ✓ Cover rendered"
