@@ -217,7 +217,9 @@ function renderTasks(tasks: ScheduledTask[]): void {
 // ── 数据拉取 ──────────────────────────────────────────────────
 async function fetchTokenData(): Promise<TokenDayData[]> {
   try {
-    return (await window.tokenUsage?.get(7)) ?? [];
+    // IPC 返回 { days, models } 报表对象；tasks 页只用 days 数组
+    const report = await window.tokenUsage?.get(7);
+    return Array.isArray(report?.days) ? report.days : [];
   } catch (err) {
     console.warn("[tasks] 拉取 Token 用量失败:", err);
     return [];

@@ -386,6 +386,22 @@ describe("buildHarnessPromptLayers usageParts", () => {
     expect(layers.usageParts?.toolLayerContent).toBe("");
     expect(layers.stablePrefix).toBe(layers.usageParts?.personaContent);
   });
+
+  it("chat keeps full soul persona without the harness compact persona; work/code keep both", () => {
+    const base = {
+      soulSystemBaseContent: "完整人设",
+      toolSystemContent: "工具规则",
+    };
+    const chatLayers = buildHarnessPromptLayers({ ...base, conversationMode: "chat" } as never);
+    const workLayers = buildHarnessPromptLayers({ ...base, conversationMode: "work" }as never);
+
+    // chat：完整 soul 人在，不叠加 harness 精简人设（与 soul.md 逐字重复）
+    expect(chatLayers.stablePrefix).toContain("完整人设");
+    expect(chatLayers.stablePrefix).not.toContain("Execution Persona");
+    // work：mode 文件无 soul.md，仍靠 harness 精简人设补位
+    expect(workLayers.stablePrefix).toContain("完整人设");
+    expect(workLayers.stablePrefix).toContain("Execution Persona");
+  });
 });
 
 describe("Task delegation lifecycle projection", () => {

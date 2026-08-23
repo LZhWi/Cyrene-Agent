@@ -416,7 +416,12 @@ export function buildHarnessPromptLayers(
   // Harness 专属人设（cyrene_harness.md）
   // 设计稿 §4.3: 整个 Loop 用同一份,不做动态切换
   // 设计稿 §4.5: 这是 Persona 层,不承担 Runtime Policy
-  const harnessPersona = loadPromptFile("cyrene_harness.md");
+  // Chat 工具增强：chat 的 mode prompt 已含完整 soul.md 人设（449 行），
+  // harness 精简人设（尾部约 45 行性格描述）与 soul.md 逐字重复，不再叠加；
+  // work/learn/code 的 mode 文件不含 soul.md，仍靠精简人设补位。
+  const harnessPersona = options.conversationMode === "chat"
+    ? ""
+    : loadPromptFile("cyrene_harness.md");
   if (harnessPersona) {
     personaParts.push(harnessPersona);
   }
