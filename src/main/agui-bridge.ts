@@ -627,8 +627,8 @@ export function registerAgUiIpc(
           send(pendingRunFinishedEvent);
           pendingRunFinishedEvent = null;
         }
-        // 计划模式（仅 code）：run 成功收尾后检测 write_plan，触发审批流（异步，不阻塞 complete）。
-        if (mode === "code" && isSuccessfulCompletion) {
+        // 计划模式（code / chat）：run 成功收尾后检测 write_plan，触发审批流（异步，不阻塞 complete）。
+        if ((mode === "code" || mode === "chat") && isSuccessfulCompletion) {
           startPlanReviewFlow({ sessionId, threadId, runId, send });
         }
         endLifecycle();

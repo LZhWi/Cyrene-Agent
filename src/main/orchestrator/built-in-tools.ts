@@ -153,6 +153,36 @@ toolRegistry.register({
 const SHELL_TIMEOUT_MS = 5 * 60_000; // 5 分钟兜底
 const SHELL_MAX_OUTPUT = 16 * 1024;  // 单次最多 16KB stdout/stderr
 
+// ── Shell 输出解码 ─────────────────────────────────────
+// 中文 Windows 的 cmd.exe 按系统 OEM 码页（GBK/CP936）输出（dir/echo/del 等内建命令），
+// 直接 chunk.toString("utf8") 中文全是 U+FFFD 乱码。策略：Buffer 原样累积，
+// 进程结束时先严格 UTF-8 解码（node/npm/git 等现代工具输出 UTF-8），
+// 含非法序列时回落 GBK 解码（Electron 自带 full-icu，TextDecoder("gbk") 可用）。
+const utf8StrictDecoder = new TextDecoder("utf-8", { fatal: true });
+let gbkDecoder: typeof utf8StrictDecoder | null = null;
+try {
+  gbkDecoder = new TextDecoder("gbk");
+} catch {
+  // 非 full-ICU 环境无 GBK：最终兜底宽松 UTF-8（替换字符）
+}
+
+function decodeShellOutput(chunks: Buffer[]): string {
+  if (chunks.length === 0) return "";
+  const buf = Buffer.concat(chunks).subarray(0, SHELL_MAX_OUTPUT);
+  try {
+    return utf8StrictDecoder.decode(buf);
+  } catch {
+    if (gbkDecoder) {
+      try {
+        return gbkDecoder.decode(buf);
+      } catch {
+        // GBK 也解不动（如二进制输出）：落到宽松 UTF-8
+      }
+    }
+    return buf.toString("utf8");
+  }
+}
+
 interface ShellResult {
   exitCode: number | null;
   stdout: string;
@@ -226,12 +256,21 @@ function runShellOnce(
         shell: false,
         windowsHide: true,
         env: spawnEnv,
+        // 直接 cmd.exe 路径必须 verbatim：Node 默认对 argv 做 MSVCRT 转义（" → \"），
+        // 而 cmd.exe 的 /s 规则只剥首尾引号、不认 \" 转义，字面引号会传给目标程序——
+        // 带引号路径如 node "E:\video test\_check.js" 会变成非法模块名。
+        // windowsVerbatimArguments 让 argv 原样空格拼接，引号语义完全交给 cmd。
+        // 沙箱路径不加：srt-win 是 Rust 程序（MSVCRT 解析 argv），与 Node 自动转义配对正确。
+        ...(ranViaSandbox ? {} : { windowsVerbatimArguments: true }),
         // stdin→/dev/null(NUL)：误启动交互式进程(python/node REPL)时让它读到 EOF 立即退出，
         // 不再卡在"等 stdin 输入"上耗满超时。stdout/stderr 仍 pipe 来收集输出。
         stdio: ["ignore", "pipe", "pipe"],
       });
-      let stdout = "";
-      let stderr = "";
+      // Buffer 原样累积（16KB 上限），进程结束时按 UTF-8→GBK 顺序解码（见 decodeShellOutput）
+      const stdoutChunks: Buffer[] = [];
+      const stderrChunks: Buffer[] = [];
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
       let truncated = false;
       const timeoutTimer = setTimeout(() => {
         console.warn(LOG_PREFIX, "run_shell 超时，kill 进程树:", command);
@@ -239,40 +278,42 @@ function runShellOnce(
       }, SHELL_TIMEOUT_MS);
 
       child.stdout?.on("data", (chunk: Buffer) => {
-        if (stdout.length < SHELL_MAX_OUTPUT) {
-          stdout += chunk.toString("utf8");
-          if (stdout.length > SHELL_MAX_OUTPUT) {
-            stdout = stdout.slice(0, SHELL_MAX_OUTPUT);
-            truncated = true;
-          }
-        } else {
+        if (stdoutBytes >= SHELL_MAX_OUTPUT) {
           truncated = true;
+          return;
         }
+        stdoutChunks.push(chunk);
+        stdoutBytes += chunk.length;
+        if (stdoutBytes > SHELL_MAX_OUTPUT) truncated = true;
       });
       child.stderr?.on("data", (chunk: Buffer) => {
-        if (stderr.length < SHELL_MAX_OUTPUT) {
-          stderr += chunk.toString("utf8");
-          if (stderr.length > SHELL_MAX_OUTPUT) {
-            stderr = stderr.slice(0, SHELL_MAX_OUTPUT);
-            truncated = true;
-          }
-        } else {
+        if (stderrBytes >= SHELL_MAX_OUTPUT) {
           truncated = true;
+          return;
         }
+        stderrChunks.push(chunk);
+        stderrBytes += chunk.length;
+        if (stderrBytes > SHELL_MAX_OUTPUT) truncated = true;
       });
       child.on("error", (err) => {
         clearTimeout(timeoutTimer);
         resolve({
           exitCode: -1,
-          stdout,
-          stderr: stderr + "\n[spawn error] " + err.message + (ranViaSandbox ? " [sandbox]" : ""),
+          stdout: decodeShellOutput(stdoutChunks),
+          stderr: decodeShellOutput(stderrChunks) + "\n[spawn error] " + err.message + (ranViaSandbox ? " [sandbox]" : ""),
           truncated,
           ranViaSandbox,
         });
       });
       child.on("close", (code) => {
         clearTimeout(timeoutTimer);
-        resolve({ exitCode: code, stdout, stderr, truncated, ranViaSandbox });
+        resolve({
+          exitCode: code,
+          stdout: decodeShellOutput(stdoutChunks),
+          stderr: decodeShellOutput(stderrChunks),
+          truncated,
+          ranViaSandbox,
+        });
       });
     })().catch((err) => {
       // async wrapper 异常兜底（理论上不会走到，wrapWithSandbox 内部已 try/catch）

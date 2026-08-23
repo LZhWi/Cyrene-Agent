@@ -7,7 +7,7 @@
  * - 计划文件优先落工作区 `<workspaceRoot>/.cyrene/docs/plan-<时间戳>.md`
  *   （项目产物归项目，且 .cyrene 由 write_plan 自动加 .gitignore）；
  *   拿不到 workspaceRoot 时回落 userData/plans/<conversationId>/plan.md
- * - 仅 code 模式参与；work 预留接口（调用方按 conversationMode 决定是否进入）
+ * - code 与 chat（开启工具走 harness）模式参与；work 预留接口（调用方按 conversationMode 决定是否进入）
  */
 
 export type PlanStateName = "NORMAL" | "PLAN_DISCUSSING" | "PLAN_REVIEW" | "EXECUTING";

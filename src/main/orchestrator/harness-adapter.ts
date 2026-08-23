@@ -149,13 +149,19 @@ export async function runHarnessWithAdapter(
 
   // ── 计划模式 run 首钩（设计稿 §3 / §7）──
   // PLAN_REVIEW 期间用户直接发新消息：视为对计划的补充讨论，拉回 PLAN_DISCUSSING。
-  // 仅 code 模式参与计划状态机；work/chat 会话恒为 NORMAL。
-  if (options.conversationMode === "code" && getPlanState(threadId) === "PLAN_REVIEW") {
+  // code 与 chat（开启工具走 harness）参与计划状态机；work 会话恒为 NORMAL。
+  if (
+    (options.conversationMode === "code" || options.conversationMode === "chat")
+    && getPlanState(threadId) === "PLAN_REVIEW"
+  ) {
     supplementPlan(threadId);
     console.log(`${LOG_PREFIX} [Plan] new message during PLAN_REVIEW, back to PLAN_DISCUSSING`);
   }
   // run 组装时的计划状态快照：决定计划工具组的初始注入（builtin-tools §planToolSpecsFor）。
-  const planState = options.conversationMode === "code" ? getPlanState(threadId) : undefined;
+  // chat 模式仅在开启工具走 harness 时才会到达这里，planState 为 undefined 的旧调用方不受影响。
+  const planState = options.conversationMode === "code" || options.conversationMode === "chat"
+    ? getPlanState(threadId)
+    : undefined;
 
   // EXECUTING：把已批准的计划全文作为 run 级事实注入 wire-only runtime context
   // （与 recoveryContext 同通道，进 transcript，不污染缓存前缀）。
@@ -256,7 +262,10 @@ export async function runHarnessWithAdapter(
     // 计划只读第二层（设计稿 §5）：PLAN_DISCUSSING/PLAN_REVIEW 期间运行时兜底拦截。
     // 第一层在 build-options 组装时已过滤工具列表；此处覆盖恢复 run、
     // 状态中途切换等旁路路径。策略与第一层一致（read-only 档位允许的风险级）。
-    if (options.conversationMode === "code" && isPlanReadOnly(threadId)) {
+    if (
+      (options.conversationMode === "code" || options.conversationMode === "chat")
+      && isPlanReadOnly(threadId)
+    ) {
       const planTool = toolRegistry.getById(toolId) as (ToolDefinition & { risk?: ToolRiskLevel }) | undefined;
       const planRisk: ToolRiskLevel = planTool?.risk ?? "safe";
       if (policyFor("read-only", planRisk) !== "allow") {
@@ -371,7 +380,7 @@ export async function runHarnessWithAdapter(
   // 执行 run 结束（无论成败/取消）自动摘牌回 NORMAL；planPath 供前端"施工已完成"标注。
   // PLAN_DISCUSSING → PLAN_REVIEW 的转换不在 adapter 做：审批流由 agui-bridge 在
   // RUN_FINISHED 之后触发（需要 buildOptions 重开执行 run 的能力）。
-  if (options.conversationMode === "code") {
+  if (options.conversationMode === "code" || options.conversationMode === "chat") {
     const finishedPlanPath = completeExecution(threadId);
     if (finishedPlanPath) {
       console.log(`${LOG_PREFIX} [Plan] execution finished, back to NORMAL, plan=${finishedPlanPath}`);

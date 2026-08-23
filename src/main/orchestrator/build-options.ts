@@ -596,9 +596,10 @@ export async function buildAgentRunOptions(
   const modeEnabledTools = deps.toolRegistry.getEnabledToolsForMode(resolvedMode, styleSettings.toolModeOverrides);
   // 计划模式只读强制（第一层，设计稿 §5）：PLAN_DISCUSSING/PLAN_REVIEW 期间
   // 工具列表在 run 组装时就收敛到 read-only 策略允许的风险级。
-  // 仅 code 模式参与计划状态机（work/chat 会话恒为 NORMAL，不触发过滤）。
+  // code 与 chat（开启工具走 harness）参与计划状态机；work 会话恒为 NORMAL 不触发过滤。
   const conversationIdForPlan = conversationId;
-  const planReadOnly = resolvedMode === "code" && isPlanReadOnly(conversationIdForPlan);
+  const planReadOnly = (resolvedMode === "code" || resolvedMode === "chat")
+    && isPlanReadOnly(conversationIdForPlan);
   const enabledTools = planReadOnly
     ? (modeEnabledTools as readonly ToolDefinition[]).filter(
       (t) => policyFor("read-only", (t as ToolDefinition & { risk?: ToolRiskLevel }).risk ?? "safe") === "allow",
@@ -617,7 +618,9 @@ export async function buildAgentRunOptions(
   // PLAN_DISCUSSING / PLAN_REVIEW 时注入。不拼进 stablePrefix（autoInjectedSkillContext
   // 会进 toolSystemContent → stablePrefix，进/出 plan mode 会打断缓存），改为单独字段
   // planSkillContext 传给 harness，在 runtimeParts（可变部分）拼，保证缓存前缀稳定。
-  const planStateForInject = resolvedMode === "code" ? getPlanState(conversationIdForPlan) : "NORMAL";
+  const planStateForInject = resolvedMode === "code" || resolvedMode === "chat"
+    ? getPlanState(conversationIdForPlan)
+    : "NORMAL";
   let planSkillContext: string | undefined;
   if (planStateForInject === "PLAN_DISCUSSING" || planStateForInject === "PLAN_REVIEW") {
     const planSkillBody = deps.skillRegistry.getBody("cyrene-plan-mode");

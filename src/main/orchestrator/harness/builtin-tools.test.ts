@@ -4,6 +4,7 @@ import {
   executeAskUser,
   executeConfirmUncertainEffect,
   updateTodoToolSpec,
+  executeUpdateTodo,
   taskToolSpec,
   executeTask,
   getHarnessBuiltinToolSpecs,
@@ -196,6 +197,54 @@ describe("Harness user-wait builtins", () => {
     expect(updateTodoToolSpec.description).toContain("可变工作笔记");
     expect(updateTodoToolSpec.description).toContain("单次工具即可完成");
     expect(updateTodoToolSpec.description).toContain("改变方向");
+  });
+
+  it("update_todo batch-completes multiple pending todos in one call", async () => {
+    const state: AgentState = {
+      todoItems: [
+        { id: "a", content: "步骤一", status: "pending" },
+        { id: "b", content: "步骤二", status: "pending" },
+        { id: "c", content: "步骤三", status: "pending" },
+      ],
+      uncertainEffects: [],
+    };
+    const observation = await executeUpdateTodo({
+      id: "todo-1",
+      name: "update_todo",
+      arguments: JSON.stringify({
+        todos: [
+          { id: "a", content: "步骤一", status: "completed" },
+          { id: "b", content: "步骤二", status: "completed" },
+          { id: "c", content: "步骤三", status: "completed" },
+        ],
+      }),
+    }, state);
+
+    expect(observation.outcome).toBe("success");
+    expect(state.todoItems.map((t) => t.status)).toEqual(["completed", "completed", "completed"]);
+    expect(observation.message).toContain("所有 invariant 检查通过");
+  });
+
+  it("update_todo still refuses reviving terminal todos", async () => {
+    const state: AgentState = {
+      todoItems: [
+        { id: "a", content: "已完成的步骤", status: "completed" },
+      ],
+      uncertainEffects: [],
+    };
+    const observation = await executeUpdateTodo({
+      id: "todo-2",
+      name: "update_todo",
+      arguments: JSON.stringify({
+        todos: [
+          { id: "a", content: "已完成的步骤", status: "pending" },
+        ],
+      }),
+    }, state);
+
+    expect(observation.outcome).toBe("success"); // 修正不拒绝整次调用，只回告实际列表
+    expect(state.todoItems[0]?.status).toBe("completed");
+    expect(observation.message).toContain("非法状态转移");
   });
 
   it("rethrows AbortError from ask_user", async () => {

@@ -81,7 +81,7 @@ export const updateTodoToolSpec: ToolSpec = {
     "规则：\n" +
     "- id 必须唯一\n" +
     "- 同一时刻最多一个 in_progress\n" +
-    "- 状态转移：pending → in_progress → completed/cancelled\n" +
+    "- 状态转移：pending → in_progress → completed/cancelled；pending 也可直接 completed/cancelled（一轮内可批量收尾多条，无需逐条经过 in_progress）\n" +
     "- 不要把已 completed/cancelled 的任务改回 pending\n" +
     "Runtime 会校验并修正违规，修正后的实际列表会回告给你。",
   parameters: {
@@ -113,7 +113,10 @@ export const updateTodoToolSpec: ToolSpec = {
 // ── Todo Invariants（v3 §8.9 / §8.10）────────────────────
 
 const VALID_TRANSITIONS: Record<TodoStatus, TodoStatus[]> = {
-  pending: ["in_progress", "cancelled"],
+  // pending → completed 允许跳过 in_progress：一轮内批量收尾多条 todo 时
+  // 不必逐条走 in_progress → completed（同一时刻最多一个 in_progress，
+  // 严格线性会强迫模型一轮只能划掉一条）。
+  pending: ["in_progress", "completed", "cancelled"],
   in_progress: ["completed", "cancelled"],
   completed: [],
   cancelled: [],
