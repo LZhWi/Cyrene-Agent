@@ -1,8 +1,8 @@
 /* ===== 设计变量 ===== */
 :root {
   /* 背景 */
-  --cy-bg-page: #F8F7F6;
-  --cy-bg-workspace: #ffffff;
+  --cy-bg-page: #FAF4F8;
+  --cy-bg-workspace: #FFFBFC;
   --cy-bg-hover: #fff1f6;
   --cy-bg-active: #fde0ed;
   
@@ -184,6 +184,29 @@ html, body {
   flex-direction: column;
   overflow: hidden;
   transition: width 220ms ease;
+}
+
+.cy-workspace::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: url("../../../../assets/ui/cyrene-surface-pattern.svg");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
+  opacity: 0.9;
+  pointer-events: none;
+  transition: opacity 220ms ease;
+}
+
+.cy-workspace.has-messages::before {
+  opacity: 0.55;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cy-workspace::before {
+    transition: none;
+  }
 }
 
 .cy-workspace-composer {

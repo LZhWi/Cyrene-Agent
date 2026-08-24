@@ -6,6 +6,7 @@
 import { Popover, Segmented } from "antd";
 import { useEffect, useState } from "react";
 import reminderIconUrl from "../../../assets/status-moods/提醒.png?url";
+import "./PlanModeToggle.css";
 
 interface PlanApi {
   setPlanMode?: (payload: { conversationId: string; target: "on" | "off"; workspaceRoot?: string }) => Promise<{ ok: boolean; state?: string; reason?: string }>;
@@ -94,7 +95,7 @@ export function PlanModeToggle({ conversationId, workspaceRoot }: PlanModeToggle
       onOpenChange={setOpen}
       overlayClassName="cy-plan-popover"
     >
-      <button type="button" className={`cy-composer__agent-button cy-plan-control ${active ? "is-active" : ""}`}>
+      <button type="button" className={`cy-composer__agent-button cy-plan-control ${active ? "is-active" : ""}`} aria-pressed={active}>
         <img className="cy-plan-icon" src={reminderIconUrl} alt="" />
         <span>{label}</span>
         <ChevronIcon />

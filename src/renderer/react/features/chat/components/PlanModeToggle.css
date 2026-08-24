@@ -6,7 +6,7 @@
 }
 
 .cy-plan-control {
-  /* 与 cy-reasoning-control 同源：cy-composer__agent-button 已提供基础样式 */
+  /* 基础布局由输入框底栏的 cy-composer__agent-button 提供。 */
 }
 
 .cy-plan-icon {
@@ -63,5 +63,5 @@
 
 /* 激活态：按钮文字+图标轻微染色，区别于 thinking 按钮 */
 .cy-plan-control.is-active {
-  color: var(--cy-accent, #2563eb);
+  color: var(--cy-accent, #ff5b8a);
 }

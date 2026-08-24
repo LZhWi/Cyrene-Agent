@@ -2,7 +2,7 @@
 //
 // 渲染复用聊天正文的 MarkdownContent（@ant-design/x-markdown + 代码高亮），
 // 与模型回复的 md 渲染保持完全一致；阶段色点与提示由 RightInspector 顶部 tab 提供。
-// 入口 chip（PlanReviewEntry）留在聊天流里，点击打开右侧面板。
+// 入口 chip（PlanReviewEntry）由 Code Todo 卡片承载，点击打开右侧面板。
 
 import { MarkdownContent } from "./ChatMessageList";
 
@@ -51,7 +51,7 @@ export function planTabDotClass(phase: PlanReviewPhase): string {
   return PHASE_DOT[phase];
 }
 
-/** 聊天流尾部的小入口按钮：点击打开右侧计划面板。 */
+/** Code Todo 卡片底部的小入口按钮：点击打开右侧计划面板。 */
 export function PlanReviewEntry({
   phase,
   onOpen,

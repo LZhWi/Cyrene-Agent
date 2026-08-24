@@ -6,6 +6,7 @@ import workingPngUrl from "../../../assets/status-moods/工作中.png?url";
 import { buildGitStatusCopy } from "./code-git-presentation";
 import { useFloatingCard } from "./floating-card";
 import { createCodeGitRefreshController, type CodeGitRefreshController } from "./code-git-refresh";
+import { PlanReviewEntry, type PlanReviewPhase } from "./PlanReviewPanel";
 import "./CodeGitPanel.css";
 
 interface CodeGitApi {
@@ -22,6 +23,8 @@ export interface CodeGitPanelProps {
   sessionId: string;
   projectName?: string;
   todoState: TodoState | null;
+  planPhase?: PlanReviewPhase;
+  onOpenPlan?: () => void;
 }
 
 function codeGitApi(): CodeGitApi | undefined {
@@ -32,7 +35,7 @@ function ToggleIcon() {
   return <svg width="16" height="16" viewBox="0 0 48 48" fill="none" aria-hidden="true"><path d="M27 9V21H39M21 39V27H9M27 21L42 6M21 27L6 42" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
-export function CodeGitPanel({ sessionId, projectName, todoState }: CodeGitPanelProps) {
+export function CodeGitPanel({ sessionId, projectName, todoState, planPhase, onOpenPlan }: CodeGitPanelProps) {
   const [status, setStatus] = useState<CodeGitStatus | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [dialog, setDialog] = useState<"branch" | "commit" | null>(null);
@@ -130,6 +133,11 @@ export function CodeGitPanel({ sessionId, projectName, todoState }: CodeGitPanel
             </li>
           ))}
         </ul>
+        {planPhase && onOpenPlan && (
+          <div className="cy-code-git__plan-status" data-testid="code-plan-status">
+            <PlanReviewEntry phase={planPhase} onOpen={onOpenPlan} />
+          </div>
+        )}
       </div>
 
       <Modal open={dialog === "branch"} title="切换分支" footer={null} onCancel={() => setDialog(null)} className="cy-code-git-modal">

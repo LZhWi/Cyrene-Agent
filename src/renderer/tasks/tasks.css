@@ -229,6 +229,24 @@ body {
   background: var(--rb-bg-1);
   border: 1px solid var(--rb-border-soft);
   box-shadow: none;
+  /* 用量行与缓存命中行整体水平居中（共享样式在 ui/chart.css，此处按窗口覆盖） */
+  text-align: center;
+}
+
+.schedule-usage .usage-info {
+  justify-content: center;
+}
+
+/* 今日缓存命中摘要：仅厂商返回过缓存明细时显示（js 控制 hidden） */
+.usage-cache {
+  margin-top: -2px;
+  font: var(--rb-text-micro);
+  color: var(--rb-text-muted);
+  letter-spacing: 0.2px;
+}
+
+.usage-cache[hidden] {
+  display: none;
 }
 
 .task-section {

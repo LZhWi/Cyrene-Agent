@@ -4,7 +4,7 @@ import { ChatComposer, parseComposerMessage, type ComposerAttachment } from "../
 import { ComposerSlot } from "../components/ComposerSlot";
 import { TodoPanel } from "../components/TodoPanel";
 import { CodeGitPanel } from "../components/CodeGitPanel";
-import { PlanContent, PlanReviewEntry, planTabLabel, planTabDotClass, type PlanReviewPhase } from "../components/PlanReviewPanel";
+import { PlanContent, planTabLabel, planTabDotClass, type PlanReviewPhase } from "../components/PlanReviewPanel";
 import { ReviewDiffContent } from "../components/ReviewInspector";
 import { RightInspector, type InspectorTab } from "../components/RightInspector";
 import type { TodoItem } from "../../../../../shared/todo-types";
@@ -2201,6 +2201,11 @@ export function ChatPage() {
             sessionId={activeSessionId}
             projectName={workspaceNames.code}
             todoState={todoStateBySession[activeSessionId] ?? null}
+            planPhase={planReviewBySession[activeSessionId]?.phase}
+            onOpenPlan={() => {
+              setPlanDrawerOpen(true);
+              setInspectorTab("plan");
+            }}
           />
         )}
         {interruptedRun && !isCurrentScopeRunning && (
@@ -2235,15 +2240,6 @@ export function ChatPage() {
             onOpenReviewInspector={(runId, fileIndex) => {
               setReviewInspector({ runId, fileIndex });
               setInspectorTab("diff");
-            }}
-          />
-        )}
-        {mode === "code" && activeSessionId && planReviewBySession[activeSessionId] && (
-          <PlanReviewEntry
-            phase={planReviewBySession[activeSessionId].phase}
-            onOpen={() => {
-              setPlanDrawerOpen(true);
-              setInspectorTab("plan");
             }}
           />
         )}

@@ -7,7 +7,11 @@
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: #ffffff;
+  background-color: #FFFBFC;
+  background-image: url("../../../../../../assets/ui/cyrene-surface-pattern.svg");
+  background-position: center;
+  background-repeat: no-repeat;
+  background-size: cover;
   border: 1px solid var(--cy-border, #f2f2f2);
   border-radius: 14px;
   overflow: hidden;
@@ -26,7 +30,7 @@
   display: flex;
   align-items: stretch;
   border-bottom: 1px solid var(--cy-border, #f0ebee);
-  background: #faf8f9;
+  background: rgb(255 247 250 / 92%);
   flex-shrink: 0;
   min-height: 38px;
 }
@@ -63,7 +67,7 @@
 .cy-right-inspector__tab.is-active {
   color: var(--cy-text, #2f2d31);
   border-bottom-color: var(--cy-accent, #ff5b8a);
-  background: #ffffff;
+  background: rgb(255 251 252 / 96%);
 }
 
 /* 单 tab 时的标题（退化模式，不显示 tab 切换条） */

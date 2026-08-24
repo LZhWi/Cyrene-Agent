@@ -8,7 +8,6 @@ import { ReasoningControl } from "./ReasoningControl";
 import { StyleControl } from "./StyleControl";
 import { PermissionControl } from "./PermissionControl";
 import { PlanModeToggle } from "./PlanModeToggle";
-import "../components/PlanModeToggle.css";
 import { ModelSelector } from "./ModelSelector";
 import chatWelcomeUrl from "../../../assets/welcome/chat.png?url";
 import codeWelcomeUrl from "../../../assets/welcome/code.png?url";
@@ -19,10 +18,10 @@ interface ChatComposerProps {
   value: string;
   mode: string;
   docked: boolean;
-  /** 当前会话 ID：用于权限档位 ↔ 计划模式联动（code 模式下选 read-only 触发进入） */
+  /** 当前会话 ID：用于上下文用量与计划模式状态。 */
   conversationId?: string;
   workspaceName?: string;
-  /** 当前会话绑定的项目根路径：用于计划模式 toggle（计划文件优先落工作区 .cyrene/） */
+  /** 当前会话绑定的项目根路径：计划文件优先落到工作区 .cyrene/。 */
   workspaceRoot?: string;
   attachments: ComposerAttachment[];
   attachmentBusy?: boolean;
@@ -223,7 +222,6 @@ export function ChatComposer({
   const supportsWorkFiles = ["work", "code"].includes(mode);
   const supportsObsidianLibrary = mode === "learn";
   const supportsPermission = supportsWorkFiles || supportsObsidianLibrary;
-  // 计划模式 toggle 只在 code 模式显示（设计：plan mode 仅 code 模式启用）
   const supportsPlanToggle = mode === "code";
   const supportsStyle = mode === "chat" || mode === "learn";
   const supportsStickers = mode !== "code";

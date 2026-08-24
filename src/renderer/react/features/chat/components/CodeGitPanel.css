@@ -35,6 +35,9 @@
 .cy-code-git__todos li { display:flex; align-items:flex-start; gap:7px; color:#333; font-size:12px; line-height:1.45; }
 .cy-code-git__todos i { width:10px; height:10px; margin-top:3px; flex:0 0 auto; border:1.5px solid #ff5b8a; border-radius:50%; }
 .cy-code-git__todos .is-completed { color:#999; text-decoration:line-through; }.cy-code-git__todos .is-completed i { background:#ff5b8a; }.cy-code-git__todos .is-empty { color:#aaa; }
+.cy-code-git__plan-status { flex:0 0 auto; margin-top:9px; padding-top:9px; border-top:1px solid rgba(255,91,138,.18); }
+.cy-code-git__plan-status .cy-plan-entry { width:100%; justify-content:center; margin:0; border:0; border-radius:9px; background:#fff5f8; }
+.cy-code-git__plan-status .cy-plan-entry:hover { background:#ffeaf1; }
 .cy-code-git-modal .ant-modal-content { border:1px solid #f2d9e2; border-radius:16px; box-shadow:0 18px 48px rgba(177,66,108,.18); }
 .cy-code-git-modal .ant-modal-header { border-bottom:1px solid #f7e5eb; padding-bottom:12px; }
 .cy-code-git-modal .ant-modal-title { color:#3b2730; }

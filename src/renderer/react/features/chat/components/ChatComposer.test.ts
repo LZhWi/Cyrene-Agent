@@ -13,6 +13,7 @@ vi.mock("@ant-design/x", () => ({
 
 vi.mock("antd", () => ({
   Popover: ({ children }: { children?: unknown }) => children ?? null,
+  Segmented: () => null,
 }));
 
 vi.mock("./ReasoningControl", () => ({ ReasoningControl: () => null }));
@@ -110,5 +111,16 @@ describe("ChatComposer Code sticker policy", () => {
       visibleContent: "检查一下",
       userSticker: "playful",
     });
+  });
+
+  it("keeps the plan mode toggle in the Code composer footer", () => {
+    const html = renderToStaticMarkup(createElement(ChatComposer, {
+      ...baseProps,
+      mode: "code",
+      conversationId: "session-1",
+    }));
+
+    expect(html).toContain("计划模式 · off");
+    expect(html).toContain("cy-plan-control");
   });
 });
