@@ -109,6 +109,35 @@ export interface ChatSessionMeta {
   purpose?: ChatSessionPurpose;
 }
 
+export type ChatStorageStatus =
+  | { status: "ready" }
+  | { status: "recovery_pending"; primaryError: string; lastGoodError: string }
+  | {
+    status: "session_recovery_pending";
+    sessionId: string;
+    recoverable: boolean;
+    recoverySource: "legacy_tmp" | "last_good" | null;
+  }
+  | { status: "rebuilding"; recovery: "index" | "session"; sessionId?: string }
+  | { status: "recovery_failed"; recovery: "index" | "session"; sessionId?: string; error: string };
+
+export interface ChatIndexRecoveryResult {
+  ok: boolean;
+  recoveredSessions: number;
+  invalidSessions: string[];
+  backupPaths: string[];
+  error?: string;
+}
+
+export interface ChatSessionRecoveryResult {
+  ok: boolean;
+  sessionId: string;
+  action?: "recovered" | "isolated";
+  recoverySource?: "primary" | "legacy_tmp" | "last_good";
+  backupPaths: string[];
+  error?: string;
+}
+
 export const CHAT_SCHEMA_VERSION = 1 as const;
 
 // 默认 identity 显示名（职位面板未做，所有会话先用这个）。

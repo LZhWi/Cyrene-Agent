@@ -3096,3 +3096,38 @@ html[data-ui-theme="pearl-white"] .chat .chat__winbtn--close:hover {
 [data-ui-theme="pearl-white"] .music-agui-card__header span,
 [data-ui-theme="pearl-white"] .music-agui-card__order,
 [data-ui-theme="pearl-white"] .music-agui-card__meta span { color: #8b7180; }
+
+.chat-recovery {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(12, 10, 18, 0.72);
+  backdrop-filter: blur(12px);
+}
+
+.chat-recovery[hidden] { display: none; }
+
+.chat-recovery__card {
+  width: min(460px, 100%);
+  padding: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 18px;
+  color: rgba(255, 255, 255, 0.92);
+  background: rgba(32, 27, 42, 0.96);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.36);
+}
+
+.chat-recovery__card h2 { margin: 0 0 10px; font-size: 20px; }
+.chat-recovery__card p { margin: 0; color: rgba(255, 255, 255, 0.68); line-height: 1.65; }
+.chat-recovery__actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.chat-recovery__actions button { border: 0; border-radius: 10px; padding: 9px 15px; cursor: pointer; }
+.chat-recovery__actions button:not(.is-secondary) { color: #fff; background: #d45b84; }
+.chat-recovery__actions .is-secondary { color: rgba(255,255,255,.78); background: rgba(255,255,255,.1); }
+.chat-recovery__actions button:disabled { cursor: default; opacity: .55; }
+
+[data-ui-theme="pearl-white"] .chat-recovery { background: rgba(255, 248, 252, 0.78); }
+[data-ui-theme="pearl-white"] .chat-recovery__card { color: #352534; background: rgba(255,255,255,.98); border-color: rgba(100,60,90,.14); }
+[data-ui-theme="pearl-white"] .chat-recovery__card p { color: #806b7b; }

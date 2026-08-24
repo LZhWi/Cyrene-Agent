@@ -3,6 +3,7 @@ import { IPC } from "../shared/ipc-channels";
 import type { UiTheme } from "../shared/ui-theme";
 import type { UiFont } from "../shared/ui-font";
 import type { GptsovitsSynthesizeRequest } from "../shared/tts-types";
+import type { ChatStorageStatus } from "../shared/chat-types";
 import type { DocumentIndexProgress } from "../main/rag/document-index-queue";
 import { getLive2DIpcListenerCounts } from "./live2d-listener-diagnostics";
 import { exposeMusicApi } from "./music";
@@ -554,6 +555,10 @@ contextBridge.exposeInMainWorld("openerBridge", openerApi);
 // 聊天会话存储（多对话历史）
 const chatStoreApi = {
   list: () => ipcRenderer.invoke(IPC.CHATS_LIST),
+  getStorageStatus: () => ipcRenderer.invoke(IPC.CHATS_GET_STORAGE_STATUS),
+  approveIndexRebuild: () => ipcRenderer.invoke(IPC.CHATS_APPROVE_INDEX_REBUILD),
+  approveSessionRecovery: () => ipcRenderer.invoke(IPC.CHATS_APPROVE_SESSION_RECOVERY),
+  declineIndexRebuild: () => ipcRenderer.invoke(IPC.CHATS_DECLINE_INDEX_REBUILD),
   get: (id: string) => ipcRenderer.invoke(IPC.CHATS_GET, id),
   getPage: (id: string, before: number | null, limit: number) =>
     ipcRenderer.invoke(IPC.CHATS_GET_PAGE, { id, before, limit }),
@@ -589,6 +594,11 @@ const chatStoreApi = {
     const listener = () => callback();
     ipcRenderer.on(IPC.CHATS_CHANGED, listener);
     return () => ipcRenderer.removeListener(IPC.CHATS_CHANGED, listener);
+  },
+  onStorageStatusChanged: (callback: (status: ChatStorageStatus) => void) => {
+    const listener = (_e: Electron.IpcRendererEvent, status: ChatStorageStatus) => callback(status);
+    ipcRenderer.on(IPC.CHATS_STORAGE_STATUS_CHANGED, listener);
+    return () => ipcRenderer.removeListener(IPC.CHATS_STORAGE_STATUS_CHANGED, listener);
   },
   // main → 聊天窗口：要求切到指定 sessionId（窗口已打开时用）
   onSwitchSession: (callback: (sessionId: string) => void) => {

@@ -2397,6 +2397,9 @@ function recordProactiveDeliveryMetadata(input: ProactiveCommitInput): void {
 async function commitLocalProactiveMessage(input: ProactiveCommitInput): Promise<ProactiveCommitResult> {
   const initialDecision = getProactiveCommitDecision(input.candidate, input.generationEpoch);
   if (!initialDecision.allowed) return { kind: "cancelled", reason: initialDecision.reason };
+  if (chatsStore.getStorageStatus().status !== "ready") {
+    return { kind: "cancelled", reason: "chat_storage_recovery_pending" };
+  }
 
   const session = chatsStore.getOrCreateSessionByPurpose("proactive-chat", {
     title: "昔涟的主动消息",
@@ -3169,6 +3172,7 @@ function createWindow(): void {
   // 通话结束回调：往聊天会话插入通话消息（用户侧气泡，content 为空不参与 LLM 上下文）。
   // 插入"通话启动时使用的会话窗口"（通话启动时快照），没有则用主动会话窗口。
   setCallEndedCallback((event) => {
+    if (chatsStore.getStorageStatus().status !== "ready") return;
     const sessionId = callStartedChatSessionId
       ?? chatsStore.getSessionByPurpose("proactive-chat")?.id
       ?? null;
@@ -3197,6 +3201,7 @@ function createWindow(): void {
   // Minecraft 联机记录保存回调：经用户审阅确认保存后，往 proactive-chat 会话插联机消息
   // （与通话结束回调同构：用户侧气泡，content 为空不参与 LLM 上下文）。
   setMinecraftSessionSavedCallback((event) => {
+    if (chatsStore.getStorageStatus().status !== "ready") return;
     const sessionId = chatsStore.getSessionByPurpose("proactive-chat")?.id ?? null;
     if (!sessionId) return;
     const minecraftMessage: ChatMessage = {
@@ -5829,6 +5834,9 @@ app.whenReady().then(async () => {
       const userStickerMatch = /\[sticker:([A-Za-z0-9_-]+)\]/.exec(text);
       const userSticker = userStickerMatch ? userStickerMatch[1] : null;
       const userCleanText = text.replace(/\[sticker:[^\]]+\]/g, "").trim();
+      if (chatsStore.getStorageStatus().status !== "ready") {
+        throw new Error("聊天索引等待用户批准恢复");
+      }
       chatsStore.appendMessage(sessionId, {
         id: randomUUID(),
         role: "user",

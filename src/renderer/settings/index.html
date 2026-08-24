@@ -893,6 +893,14 @@
           </div>
           <div class="panel-body">
             <div class="chat-sessions">
+              <div class="chat-sessions__recovery is-hidden" id="chat-recovery-banner">
+                <strong id="chat-recovery-banner-title">聊天索引需要恢复</strong>
+                <span id="chat-recovery-banner-message">主索引和恢复副本均无法读取。</span>
+                <div>
+                  <button type="button" id="chat-recovery-banner-approve">扫描并重建</button>
+                  <button type="button" id="chat-recovery-banner-decline">暂不处理</button>
+                </div>
+              </div>
               <button type="button" class="chat-sessions__new" id="chat-new-btn">
                 <span class="chat-sessions__new-icon" aria-hidden="true">＋</span>
                 <span>新对话</span>

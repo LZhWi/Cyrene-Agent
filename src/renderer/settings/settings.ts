@@ -28,6 +28,7 @@ import { requestTrackPlayback } from "./music-playback";
 import { type ReasoningPreference } from "../../shared/reasoning";
 import type { WorkModelSettings } from "../../shared/work-types";
 import type { CallModelSettings } from "../../shared/call-types";
+import type { ChatIndexRecoveryResult, ChatSessionRecoveryResult, ChatStorageStatus } from "../../shared/chat-types";
 import type { GptsovitsSynthesizeRequest } from "../../shared/tts-types";
 import { type LoginFlowState } from "../../shared/music-types";
 import {
@@ -5258,6 +5259,10 @@ declare global {
   interface Window {
     chatStore?: {
       list: () => Promise<ChatSessionMetaUI[]>;
+      getStorageStatus: () => Promise<ChatStorageStatus>;
+      approveIndexRebuild: () => Promise<ChatIndexRecoveryResult>;
+      approveSessionRecovery: () => Promise<ChatSessionRecoveryResult>;
+      declineIndexRebuild: () => Promise<ChatStorageStatus>;
       get: (id: string) => Promise<unknown>;
       create: (payload?: { title?: string; identityId?: string | null }) => Promise<{ id: string } | null>;
       delete: (id: string) => Promise<boolean>;
@@ -5266,6 +5271,7 @@ declare global {
       openInChatWindow: (sessionId: string) => Promise<boolean>;
       getActiveSession: () => Promise<string | null>;
       onChanged: (cb: () => void) => () => void;
+      onStorageStatusChanged: (cb: (status: ChatStorageStatus) => void) => () => void;
       onActiveSessionChanged: (cb: (sessionId: string | null) => void) => () => void;
     };
   }
@@ -5273,10 +5279,54 @@ declare global {
 
 let chatSessionsActiveId: string | null = null;
 
+const chatRecoveryBanner = document.getElementById("chat-recovery-banner") as HTMLElement | null;
+const chatRecoveryBannerTitle = document.getElementById("chat-recovery-banner-title") as HTMLElement | null;
+const chatRecoveryBannerMessage = document.getElementById("chat-recovery-banner-message") as HTMLElement | null;
+const chatRecoveryBannerApprove = document.getElementById("chat-recovery-banner-approve") as HTMLButtonElement | null;
+const chatRecoveryBannerDecline = document.getElementById("chat-recovery-banner-decline") as HTMLButtonElement | null;
+let currentSettingsChatStorageStatus: ChatStorageStatus = { status: "ready" };
+
+function applySettingsChatStorageStatus(status: ChatStorageStatus): void {
+  currentSettingsChatStorageStatus = status;
+  const newButton = document.getElementById("chat-new-btn") as HTMLButtonElement | null;
+  const ready = status.status === "ready";
+  chatRecoveryBanner?.classList.toggle("is-hidden", ready);
+  if (chatRecoveryBannerTitle && !ready) {
+    chatRecoveryBannerTitle.textContent = status.status === "session_recovery_pending"
+      || (status.status === "rebuilding" && status.recovery === "session")
+      || (status.status === "recovery_failed" && status.recovery === "session")
+      ? "聊天会话文件需要恢复"
+      : "聊天索引需要恢复";
+  }
+  if (newButton) newButton.disabled = !ready;
+  if (chatRecoveryBannerApprove) {
+    chatRecoveryBannerApprove.textContent = status.status === "session_recovery_pending" ? "批准恢复会话" : "扫描并重建";
+  }
+  if (chatRecoveryBannerMessage && !ready) {
+    chatRecoveryBannerMessage.textContent = status.status === "rebuilding"
+      ? status.recovery === "session" ? "正在恢复或隔离损坏会话……" : "正在扫描会话文件并重建索引……"
+      : status.status === "recovery_failed"
+        ? `${status.recovery === "session" ? "会话恢复" : "索引重建"}失败：${status.error}`
+        : status.status === "session_recovery_pending"
+          ? status.recoverable
+            ? `会话 ${status.sessionId} 的主文件损坏，但存在有效恢复副本；批准前不会修改文件。`
+            : `会话 ${status.sessionId} 没有有效恢复副本；批准后才会隔离损坏文件。`
+          : "主索引和恢复副本均无法读取。批准前不会扫描或修改会话文件。";
+  }
+}
+
 async function renderChatSessions(): Promise<void> {
   const listEl = document.getElementById("chat-sessions-list");
   const emptyEl = document.getElementById("chat-sessions-empty");
   if (!listEl || !window.chatStore) return;
+
+  const storageStatus = await window.chatStore.getStorageStatus();
+  applySettingsChatStorageStatus(storageStatus);
+  if (storageStatus.status !== "ready") {
+    listEl.innerHTML = "";
+    emptyEl?.classList.add("is-hidden");
+    return;
+  }
 
   // 第一次渲染前如果还不知道活跃 sessionId，主动拉一次
   if (chatSessionsActiveId === null) {
@@ -6286,6 +6336,14 @@ document.getElementById("tts-gptsovits-ref-pick")?.addEventListener("click", asy
   }
 });
 
+window.chatStore?.onStorageStatusChanged((status) => {
+  applySettingsChatStorageStatus(status);
+  if (status.status === "ready") {
+    const panel = document.getElementById("chat-panel");
+    if (panel && !panel.classList.contains("is-hidden")) void renderChatSessions();
+  }
+});
+
 document.getElementById("tts-gptsovits-gpt-weight-pick")?.addEventListener("click", async () => {
   const filePath = await window.tts?.pickGptWeightFile();
   if (!filePath) return;
@@ -6316,6 +6374,55 @@ function readGptsovitsAdvancedOptions(): Pick<GptsovitsSynthesizeRequest,
     sampleSteps: Number(ttsEl("tts-gptsovits-sample-steps").value),
   };
 }
+
+chatRecoveryBannerApprove?.addEventListener("click", async () => {
+  if (!window.chatStore) return;
+  chatRecoveryBannerApprove.disabled = true;
+  if (chatRecoveryBannerDecline) chatRecoveryBannerDecline.disabled = true;
+  if (chatRecoveryBannerMessage) {
+    chatRecoveryBannerMessage.textContent = currentSettingsChatStorageStatus.status === "session_recovery_pending"
+      ? "正在恢复或隔离损坏会话……"
+      : "正在扫描会话文件并重建索引……";
+  }
+  try {
+    if (currentSettingsChatStorageStatus.status === "session_recovery_pending") {
+      const result = await window.chatStore.approveSessionRecovery();
+      if (!result.ok) {
+        if (chatRecoveryBannerMessage) chatRecoveryBannerMessage.textContent = `会话恢复失败：${result.error ?? "未知错误"}`;
+        return;
+      }
+      const backupDir = result.backupPaths[0]?.replace(/[\\/][^\\/]+$/, "");
+      window.alert([
+        result.action === "recovered" ? "会话已从有效副本恢复。" : "会话没有有效副本，损坏文件已隔离。",
+        backupDir ? `损坏文件位置：${backupDir}` : "没有需要隔离的现存文件。",
+      ].join("\n"));
+      await renderChatSessions();
+      return;
+    }
+    const result = await window.chatStore.approveIndexRebuild();
+    if (!result.ok) {
+      if (chatRecoveryBannerMessage) chatRecoveryBannerMessage.textContent = `索引重建失败：${result.error ?? "未知错误"}`;
+      return;
+    }
+    const backupDir = result.backupPaths[0]?.replace(/[\\/][^\\/]+$/, "");
+    window.alert([
+      `索引重建完成：恢复 ${result.recoveredSessions} 个会话。`,
+      `无法解析的会话文件：${result.invalidSessions.length} 个。`,
+      backupDir ? `原索引备份：${backupDir}` : "原索引文件不存在，因此没有生成备份。",
+    ].join("\n"));
+    await renderChatSessions();
+  } finally {
+    chatRecoveryBannerApprove.disabled = false;
+    if (chatRecoveryBannerDecline) chatRecoveryBannerDecline.disabled = false;
+  }
+});
+
+chatRecoveryBannerDecline?.addEventListener("click", async () => {
+  await window.chatStore?.declineIndexRebuild();
+  if (chatRecoveryBannerMessage) {
+    chatRecoveryBannerMessage.textContent = "尚未执行恢复。聊天数据保持原样；稍后仍可再次点击批准按钮。";
+  }
+});
 
 // GPT-SoVITS 测试发音
 document.getElementById("tts-gptsovits-test")?.addEventListener("click", async () => {

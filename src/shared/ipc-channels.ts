@@ -118,6 +118,11 @@ export const IPC = {
     CHATS_DELETE_MESSAGE: "chats:delete-message",
   CHATS_OPEN_FOLDER: "chats:open-folder",
   CHATS_MIGRATE_LEGACY: "chats:migrate-legacy",
+  CHATS_GET_STORAGE_STATUS: "chats:get-storage-status",
+  CHATS_APPROVE_INDEX_REBUILD: "chats:approve-index-rebuild",
+  CHATS_APPROVE_SESSION_RECOVERY: "chats:approve-session-recovery",
+  CHATS_DECLINE_INDEX_REBUILD: "chats:decline-index-rebuild",
+  CHATS_STORAGE_STATUS_CHANGED: "chats:storage-status-changed",
   // 任意会话变动后 main → 所有渲染窗口 broadcast，触发列表/标题刷新
   CHATS_CHANGED: "chats:changed",
   // 设置中心 → main：要求打开聊天窗口并加载指定 sessionId

@@ -2776,6 +2776,24 @@ body {
   padding: 8px;
 }
 
+.chat-sessions__recovery {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px solid rgba(216, 91, 132, 0.28);
+  border-radius: 12px;
+  background: rgba(216, 91, 132, 0.08);
+}
+
+.chat-sessions__recovery.is-hidden { display: none; }
+.chat-sessions__recovery span { color: var(--text-secondary); font-size: 13px; }
+.chat-sessions__recovery div { display: flex; gap: 8px; }
+.chat-sessions__recovery button { border: 0; border-radius: 8px; padding: 7px 11px; cursor: pointer; }
+.chat-sessions__recovery button:first-child { color: #fff; background: #d45b84; }
+.chat-sessions__recovery button:last-child { color: var(--text-secondary); background: var(--surface-hover); }
+.chat-sessions__recovery button:disabled { cursor: default; opacity: .55; }
+
 .tts-advanced {
   margin: 14px 0;
   padding: 12px 14px;

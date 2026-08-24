@@ -28,6 +28,7 @@ import {
 } from "./types";
 import { normalizeMusicCardData, type MusicCardData } from "../../shared/music-card";
 import { normalizeWeatherCardData, type WeatherCardData } from "../../shared/weather-card";
+import type { ChatIndexRecoveryResult, ChatSessionRecoveryResult, ChatStorageStatus } from "../../shared/chat-types";
 import { requestTrackPlayback } from "../settings/music-playback";
 import {
   initCodeBlockController,
@@ -483,6 +484,10 @@ interface ChatStoreSession {
 
 interface ChatStoreApi {
   list: () => Promise<ChatSessionMetaUI[]>;
+  getStorageStatus: () => Promise<ChatStorageStatus>;
+  approveIndexRebuild: () => Promise<ChatIndexRecoveryResult>;
+  approveSessionRecovery: () => Promise<ChatSessionRecoveryResult>;
+  declineIndexRebuild: () => Promise<ChatStorageStatus>;
   get: (id: string) => Promise<ChatStoreSession | null>;
   getPage: (id: string, before: number | null, limit: number) => Promise<{ session: Omit<ChatStoreSession, "messages">; messages: ChatStoreSession["messages"]; hasMore: boolean } | null>;
   create: (payload?: { title?: string; identityId?: string | null }) => Promise<ChatStoreSession>;
@@ -499,6 +504,7 @@ interface ChatStoreApi {
   getActiveSession: () => Promise<string | null>;
   onActiveSessionChanged: (callback: (sessionId: string | null) => void) => () => void;
   onChanged: (callback: () => void) => () => void;
+  onStorageStatusChanged: (callback: (status: ChatStorageStatus) => void) => () => void;
   onSwitchSession: (callback: (sessionId: string) => void) => () => void;
 }
 
@@ -757,7 +763,7 @@ async function maybeMigrateLegacy(): Promise<void> {
 }
 
 // 启动流程：迁移老数据 → 决定加载哪个 session → render
-async function bootstrap(): Promise<void> {
+async function bootstrap(): Promise<boolean> {
   if (!window.chatStore) {
     console.warn("[Cyrene Chat] chatStore IPC 未就绪——可能是 preload 未加载");
     render();
@@ -784,10 +790,16 @@ async function bootstrap(): Promise<void> {
   }
 
   if (!await loadSessionTailIntoUI(sessionId)) {
+    const status = await window.chatStore.getStorageStatus();
+    if (status.status !== "ready") {
+      renderChatStorageStatus(status);
+      return false;
+    }
     const session = await window.chatStore.create({ identityId: null });
     sessionTailStart = 0;
     loadSessionIntoUI(session);
   }
+  return true;
 }
 
 function formatTime(at: number): string {
@@ -1442,6 +1454,125 @@ function createMessageBubble(text?: string): HTMLElement {
   if (text) item.textContent = text;
   return item;
 }
+
+const chatRecoveryEl = document.getElementById("chat-recovery") as HTMLElement | null;
+const chatRecoveryTitleEl = document.getElementById("chat-recovery-title") as HTMLElement | null;
+const chatRecoveryMessageEl = document.getElementById("chat-recovery-message") as HTMLElement | null;
+const chatRecoveryApproveEl = document.getElementById("chat-recovery-approve") as HTMLButtonElement | null;
+const chatRecoveryDeclineEl = document.getElementById("chat-recovery-decline") as HTMLButtonElement | null;
+let chatBootstrapPromise: Promise<void> | null = null;
+let chatBootstrapped = false;
+let currentChatStorageStatus: ChatStorageStatus = { status: "ready" };
+
+function renderChatStorageStatus(status: ChatStorageStatus): void {
+  currentChatStorageStatus = status;
+  if (!chatRecoveryEl) return;
+  if (status.status === "ready") {
+    chatRecoveryEl.hidden = true;
+    return true;
+  }
+  chatRecoveryEl.hidden = false;
+  if (chatRecoveryTitleEl) {
+    chatRecoveryTitleEl.textContent = status.status === "session_recovery_pending"
+      || (status.status === "rebuilding" && status.recovery === "session")
+      || (status.status === "recovery_failed" && status.recovery === "session")
+      ? "聊天会话文件需要恢复"
+      : "聊天索引需要恢复";
+  }
+  if (chatRecoveryApproveEl) {
+    chatRecoveryApproveEl.textContent = status.status === "session_recovery_pending" ? "批准恢复会话" : "扫描并重建";
+  }
+  if (chatRecoveryMessageEl) {
+    chatRecoveryMessageEl.textContent = status.status === "rebuilding"
+      ? status.recovery === "session"
+        ? "正在按你的批准恢复或隔离损坏会话，请稍候……"
+        : "正在扫描会话文件并重建索引，请稍候……"
+      : status.status === "recovery_failed"
+        ? `${status.recovery === "session" ? "会话恢复" : "索引重建"}失败：${status.error}`
+        : status.status === "session_recovery_pending"
+          ? status.recoverable
+            ? `会话 ${status.sessionId} 的主文件无法读取，但发现有效的${status.recoverySource === "legacy_tmp" ? "临时恢复文件" : " last-good 副本"}。批准前不会移动或覆盖任何文件。`
+            : `会话 ${status.sessionId} 及其恢复副本均无法读取。批准后才会把损坏文件移入 recovery/sessions，并从可用会话列表移除该项。`
+          : "聊天索引及其恢复副本均无法读取。会话文件不会被修改，批准后才会扫描并重建索引。";
+  }
+}
+
+async function runChatBootstrapOnce(): Promise<void> {
+  if (chatBootstrapped) return;
+  if (chatBootstrapPromise) return chatBootstrapPromise;
+  chatBootstrapPromise = bootstrap().then((completed) => {
+    chatBootstrapped = completed;
+  }).finally(() => {
+    chatBootstrapPromise = null;
+  });
+  return chatBootstrapPromise;
+}
+
+async function bootstrapWithStorageGate(): Promise<void> {
+  if (!window.chatStore) {
+    await runChatBootstrapOnce();
+    return;
+  }
+  const status = await window.chatStore.getStorageStatus();
+  renderChatStorageStatus(status);
+  if (status.status === "ready") await runChatBootstrapOnce();
+}
+
+chatRecoveryApproveEl?.addEventListener("click", async () => {
+  if (!window.chatStore) return;
+  chatRecoveryApproveEl.disabled = true;
+  if (chatRecoveryDeclineEl) chatRecoveryDeclineEl.disabled = true;
+  if (chatRecoveryMessageEl) {
+    chatRecoveryMessageEl.textContent = currentChatStorageStatus.status === "session_recovery_pending"
+      ? "正在按你的批准恢复或隔离损坏会话，请稍候……"
+      : "正在扫描会话文件并重建索引，请稍候……";
+  }
+  try {
+    if (currentChatStorageStatus.status === "session_recovery_pending") {
+      const result = await window.chatStore.approveSessionRecovery();
+      if (!result.ok) {
+        if (chatRecoveryMessageEl) chatRecoveryMessageEl.textContent = `会话恢复失败：${result.error ?? "未知错误"}`;
+        return;
+      }
+      const backupDir = result.backupPaths[0]?.replace(/[\\/][^\\/]+$/, "");
+      window.alert([
+        result.action === "recovered" ? "会话已从有效副本恢复。" : "会话没有有效副本，损坏文件已隔离。",
+        backupDir ? `损坏文件位置：${backupDir}` : "没有需要隔离的现存文件。",
+      ].join("\n"));
+      const nextStatus = await window.chatStore.getStorageStatus();
+      renderChatStorageStatus(nextStatus);
+      if (nextStatus.status === "ready") await runChatBootstrapOnce();
+      return;
+    }
+    const result = await window.chatStore.approveIndexRebuild();
+    if (!result.ok) {
+      if (chatRecoveryMessageEl) chatRecoveryMessageEl.textContent = `索引重建失败：${result.error ?? "未知错误"}`;
+      return;
+    }
+    if (chatRecoveryMessageEl) {
+      chatRecoveryMessageEl.textContent = `已恢复 ${result.recoveredSessions} 个会话；无法解析 ${result.invalidSessions.length} 个会话文件。`;
+    }
+    const backupDir = result.backupPaths[0]?.replace(/[\\/][^\\/]+$/, "");
+    window.alert([
+      `索引重建完成：恢复 ${result.recoveredSessions} 个会话。`,
+      `无法解析的会话文件：${result.invalidSessions.length} 个。`,
+      backupDir ? `原索引备份：${backupDir}` : "原索引文件不存在，因此没有生成备份。",
+    ].join("\n"));
+    const nextStatus = await window.chatStore.getStorageStatus();
+    renderChatStorageStatus(nextStatus);
+    if (nextStatus.status === "ready") await runChatBootstrapOnce();
+  } finally {
+    chatRecoveryApproveEl.disabled = false;
+    if (chatRecoveryDeclineEl) chatRecoveryDeclineEl.disabled = false;
+  }
+});
+
+chatRecoveryDeclineEl?.addEventListener("click", async () => {
+  await window.chatStore?.declineIndexRebuild();
+  if (chatRecoveryMessageEl) {
+    chatRecoveryMessageEl.textContent = "尚未执行恢复。聊天数据保持原样，Chat 暂不可用；你可以稍后再次点击批准按钮。";
+  }
+});
 
 function renderMarkdownIntoBubble(bubble: HTMLElement, text: string): void {
   const result = renderMarkdown(text);
@@ -4533,12 +4664,17 @@ if (particlesCtx) {
 }
 
 
-// 启动：迁移老 localStorage → 选会话 → render
+window.chatStore?.onStorageStatusChanged((status) => {
+  renderChatStorageStatus(status);
+  if (status.status === "ready") void runChatBootstrapOnce();
+});
+
+// 启动：先确认 Chat 存储可用，再迁移老 localStorage → 选会话 → render
 // 先把用户贴纸目录拉到内存，再 bootstrap 渲染历史消息——否则首屏里
 // 纯贴纸消息（气泡已隐藏）会因 enabledStickers 还没加载而渲染成空白。
 void (async () => {
   await loadEnabledStickers();
-  await bootstrap();
+  await bootstrapWithStorageGate();
   buildQuickPresets();
   installSchedulerEventListener();
   void initModelConfig();

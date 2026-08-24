@@ -235,6 +235,16 @@
          模糊必然随高度渐弱。pointer-events: none 不挡交互。 -->
     <div class="chat__topfade" aria-hidden="true"><div class="chat__topfade-blur"></div></div>
   </div>
+  <section class="chat-recovery" id="chat-recovery" hidden role="dialog" aria-modal="true" aria-labelledby="chat-recovery-title">
+    <div class="chat-recovery__card">
+      <h2 id="chat-recovery-title">聊天索引需要恢复</h2>
+      <p id="chat-recovery-message">聊天索引及其恢复副本均无法读取。会话文件可能仍然完整。</p>
+      <div class="chat-recovery__actions">
+        <button type="button" id="chat-recovery-approve">扫描并重建</button>
+        <button type="button" id="chat-recovery-decline" class="is-secondary">暂不处理</button>
+      </div>
+    </div>
+  </section>
   <script type="module" src="./main.ts"></script>
   <div class="dropdown-menu" id="mode-dropdown">
     <div class="dm-opt is-active" data-value="collab">🛠️ 协作</div>

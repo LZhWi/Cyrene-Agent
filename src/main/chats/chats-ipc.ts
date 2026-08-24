@@ -42,10 +42,36 @@ function broadcastChanged(senderWebContents?: WebContents | null): void {
   }
 }
 
+function broadcastStorageStatus(): void {
+  const status = chatsStore.getStorageStatus();
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    try { win.webContents.send(IPC.CHATS_STORAGE_STATUS_CHANGED, status); } catch { /* ignore */ }
+  }
+}
+
 export function registerChatsIpc(): void {
   chatsStore.initialize();
+  chatsStore.onStorageStatusChanged(broadcastStorageStatus);
 
   ipcMain.handle(IPC.CHATS_LIST, () => chatsStore.listSessions());
+  ipcMain.handle(IPC.CHATS_GET_STORAGE_STATUS, () => chatsStore.getStorageStatus());
+  ipcMain.handle(IPC.CHATS_APPROVE_INDEX_REBUILD, () => {
+    const result = chatsStore.approveIndexRebuild();
+    broadcastStorageStatus();
+    if (result.ok) broadcastChanged();
+    return result;
+  });
+  ipcMain.handle(IPC.CHATS_APPROVE_SESSION_RECOVERY, () => {
+    const result = chatsStore.approveSessionRecovery();
+    if (result.ok) broadcastChanged();
+    return result;
+  });
+  ipcMain.handle(IPC.CHATS_DECLINE_INDEX_REBUILD, () => {
+    const status = chatsStore.declineIndexRebuild();
+    broadcastStorageStatus();
+    return status;
+  });
 
   ipcMain.handle(IPC.CHATS_GET, (_event, id: string) => chatsStore.getSession(id));
   ipcMain.handle(IPC.CHATS_GET_PAGE, (_event, payload: { id: string; before?: number | null; limit?: number }) => {
