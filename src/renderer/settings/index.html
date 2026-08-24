@@ -136,15 +136,24 @@
               <span class="form-hint endpoint-preview" id="endpoint-preview" aria-live="polite"></span>
             </label>
 
-            <label class="field field--full">
+            <div class="field field--full">
               <span>API 协议</span>
-              <select id="transport-select">
-                <option value="openai">OpenAI 兼容</option>
-                <option value="anthropic">Anthropic 兼容</option>
-                <option value="responses">OpenAI Responses</option>
-              </select>
-              <span class="form-hint" id="transport-hint">请按服务商实际提供的接口类型选择（OpenAI 兼容 / Anthropic 兼容 / OpenAI Responses）；程序不会自动识别协议。</span>
-            </label>
+              <div class="transport-cards" id="transport-select" role="group" aria-label="API 协议">
+                <button type="button" class="preset-card" data-value="openai" aria-pressed="false">
+                  <span class="preset-card__logo"><img src="../icons/providers/openai.svg" alt="" width="24" height="24" draggable="false" /></span>
+                  <span class="preset-card__name">chat/completion</span>
+                </button>
+                <button type="button" class="preset-card" data-value="anthropic" aria-pressed="false">
+                  <span class="preset-card__logo"><img src="../icons/providers/claude.svg" alt="" width="24" height="24" draggable="false" /></span>
+                  <span class="preset-card__name">anthropic</span>
+                </button>
+                <button type="button" class="preset-card" data-value="responses" aria-pressed="false">
+                  <span class="preset-card__logo"><img src="../icons/providers/openai.svg" alt="" width="24" height="24" draggable="false" /></span>
+                  <span class="preset-card__name">Responses</span>
+                </button>
+              </div>
+              <span class="form-hint" id="transport-hint">请按服务商实际提供的接口类型选择（chat/completion / anthropic / Responses）；程序不会自动识别协议。</span>
+            </div>
 
             <label class="field field--full">
               <span>模型名</span>

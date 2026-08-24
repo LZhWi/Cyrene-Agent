@@ -574,7 +574,7 @@ async function callLLM(
 ): Promise<ChatResponse> {
   const adapter = getAdapterForConfig(vendorConfig);
   const composed = composePromptLayers(promptLayers, messages);
-  const chatRequest: ChatRequest = {
+  const baseRequest: ChatRequest = {
     model: vendorConfig.model,
     messages: composed.messages,
     tools: normalizeToolSpecsForCache(tools),
@@ -582,6 +582,9 @@ async function callLLM(
     maxTokens: config.reservedOutputTokens,
     promptLayers: composed.metadata,
   };
+  // 缓存路由 hints（Kimi prompt_cache_key 等）：此前只有 ChatLoop / 压缩摘要链路注入，
+  // Harness 工具循环整条链漏发；在这里统一补上，下方流式与非流式兜底共用同一份 hints。
+  const chatRequest = adapter.applyCacheHints?.(baseRequest, vendorConfig) ?? baseRequest;
 
   let receivedStreamDelta = false;
   const recordResponseUsage = (response: ChatResponse): ChatResponse => {

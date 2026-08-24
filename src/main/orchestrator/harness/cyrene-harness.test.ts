@@ -60,6 +60,7 @@ vi.mock("./tool-dispatcher", () => ({
 vi.mock("../../token-usage-store", () => ({ recordUsage, recordRequest }));
 
 import { runCyreneHarness } from "./cyrene-harness";
+import { getAdapterForConfig } from "../vendors";
 import { dispatchToolCall } from "./tool-dispatcher";
 import type { ToolDispatchResult } from "./tool-dispatcher";
 import type { HarnessCacheDiagnostic, HarnessCheckpoint, HarnessEvent } from "./types";
@@ -225,6 +226,26 @@ describe("CyreneHarness completion (P0-A)", () => {
     expect(fakeStreamChatWithSdk).toHaveBeenCalledTimes(1);
     expect(fakeStreamChatWithSdk).toHaveBeenCalledWith(expect.objectContaining({
       request: expect.objectContaining({ stream: true, tools: expect.any(Array) }),
+    }));
+  });
+
+  it("callLLM 链路注入 applyCacheHints（Kimi prompt_cache_key 等不再漏发）", async () => {
+    const adapterWithHints = {
+      ...fakeAdapter,
+      applyCacheHints: (req: Record<string, unknown>) => ({ ...req, extraBody: { prompt_cache_key: "kimi-cache-key" } }),
+    };
+    vi.mocked(getAdapterForConfig).mockReturnValueOnce(adapterWithHints as never);
+    fakeStreamChatWithSdk.mockResolvedValueOnce(assistantResponse({ text: "完成。" }));
+
+    await runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "完成任务" }],
+      tools: [],
+      vendorConfig,
+    });
+
+    expect(fakeStreamChatWithSdk).toHaveBeenCalledWith(expect.objectContaining({
+      request: expect.objectContaining({ extraBody: { prompt_cache_key: "kimi-cache-key" } }),
     }));
   });
 

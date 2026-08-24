@@ -26,13 +26,45 @@ interface ContentBlock {
 }
 
 /**
+ * 消息级缓存断点的模型门控（官方显式缓存支持列表，2026-08）：
+ * - Claude：全系支持 content block 上的 cache_control；
+ * - MiniMax：显式缓存仅 M2.x 系列（M2 / M2.1 / M2.5 / M2.7，含 highspeed/Stable 变体）；
+ *   M3 靠被动缓存（服务端自动前缀匹配，无需断点），保守起见不对其发送。
+ */
+function supportsMessageCacheBreakpoint(adapterId: string, model: string): boolean {
+  if (adapterId === "claude") return true;
+  if (adapterId === "minimax") return /^minimax-m2(?:$|[.-])/i.test(model.trim());
+  return false;
+}
+
+/** 给一条 wire message 的最后一个 content block 打 ephemeral 缓存断点；返回是否成功。 */
+function markMessageCacheBreakpoint(message: Record<string, unknown>): boolean {
+  if (typeof message.content === "string" && message.content.length > 0) {
+    message.content = [{
+      type: "text",
+      text: message.content,
+      cache_control: { type: "ephemeral" },
+    }];
+    return true;
+  }
+  if (Array.isArray(message.content) && message.content.length > 0) {
+    // 浅拷贝 block 数组再打标记，避免污染 rawAssistant 等持久化引用
+    const blocks = (message.content as ContentBlock[]).map(block => ({ ...block }));
+    blocks[blocks.length - 1].cache_control = { type: "ephemeral" };
+    message.content = blocks;
+    return true;
+  }
+  return false;
+}
+
+/**
  * 把统一消息翻译成 Anthropic wire messages。
  * system 抽出来单独返回（Anthropic system 是顶层字段）。
  * 关键：assistant 若带 rawAssistant（上一轮原始 content block 数组）则原样回传，
  * 保证 thinking / tool_use block 完整回灌（MiniMax 多轮强制要求）。
  * tool 结果：Anthropic 用 user 角色的 tool_result block，同轮多个合并到同一条 user message。
  */
-function toWireMessages(messages: ChatMessage[]): {
+function toWireMessages(messages: ChatMessage[], options?: { cacheBreakpoints?: boolean }): {
   system: string | undefined;
   messages: Array<Record<string, unknown>>;
 } {
@@ -81,6 +113,16 @@ function toWireMessages(messages: ChatMessage[]): {
       }
     }
   }
+  if (options?.cacheBreakpoints) {
+    // 从尾部向前给两条消息打断点（连同 system 断点共 3 个，低于 Claude 4 个上限）：
+    // - 最后一条：滚动断点，下一轮请求把它整体当作可复用前缀（工具循环逐轮命中）；
+    // - 倒数第二条：兜底断点——ChatLoop 尾部注入 runtime_context 时最后一条每轮都变，
+    //   真正稳定的"历史末尾"在倒数第二条。
+    let marked = 0;
+    for (let i = wire.length - 1; i >= 0 && marked < 2; i -= 1) {
+      if (markMessageCacheBreakpoint(wire[i])) marked += 1;
+    }
+  }
   return { system, messages: wire };
 }
 
@@ -89,7 +131,10 @@ export class AnthropicAdapter implements ChatVendorAdapter {
   constructor(public readonly id: string, public capability: ProviderCapability) {}
 
   buildRequest(req: ChatRequest, cfg: VendorConfig): HttpRequest {
-    const { system, messages } = toWireMessages(req.messages);
+    // system 断点覆盖"tools + system"前缀；消息级断点按模型门控（见 supportsMessageCacheBreakpoint）
+    const useMessageBreakpoints = this.capability.cacheStrategy === "cache_control"
+      && supportsMessageCacheBreakpoint(this.id, req.model);
+    const { system, messages } = toWireMessages(req.messages, { cacheBreakpoints: useMessageBreakpoints });
     const body: Record<string, unknown> = {
       model: req.model,
       max_tokens: getVendorRuntimeSettings().disableMaxToken ? undefined : req.maxTokens ?? DEFAULT_MAX_TOKENS,

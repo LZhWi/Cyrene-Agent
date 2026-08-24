@@ -87,6 +87,21 @@ function renderTodayUsage(data7: TokenDayData[]): void {
 
   const numEl = $("usage-number");
   if (numEl) numEl.textContent = formatThousands(todayTotal);
+
+  // 缓存命中 = hit / (hit + miss)。仅当厂商返回过缓存明细（cacheUsageRequests > 0）才展示，
+  // 避免对不支持缓存的厂商显示误导性的 0%。
+  const cacheEl = $("usage-cache");
+  if (cacheEl) {
+    const hit = today?.hit ?? 0;
+    const cacheTotal = hit + (today?.miss ?? 0);
+    if (cacheTotal > 0 && (today?.cacheUsageRequests ?? 0) > 0) {
+      const rate = Math.round((hit / cacheTotal) * 100);
+      cacheEl.textContent = `缓存命中 ${rate}% · ${formatTokenShort(hit)} tokens`;
+      cacheEl.hidden = false;
+    } else {
+      cacheEl.hidden = true;
+    }
+  }
 }
 
 // ── 渲染：7 天柱状图（周日起算，今日之后留空柱） ────────────

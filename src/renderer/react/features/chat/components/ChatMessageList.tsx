@@ -240,13 +240,8 @@ function useRunActivityNow(processing: boolean): number {
 
 function RunActivityReasoningBlock({ block }: { block: ReasoningBlock }) {
   const streaming = Boolean(block.streaming);
-  const [expanded, setExpanded] = useState(streaming);
-  const wasStreamingRef = useRef(streaming);
-  useEffect(() => {
-    if (!wasStreamingRef.current && streaming) setExpanded(true);
-    if (wasStreamingRef.current && !streaming) setExpanded(false);
-    wasStreamingRef.current = streaming;
-  }, [streaming]);
+  // 与纯聊天模式保持一致：思考块默认折叠（含流式生成期间），仅用户点击后展开
+  const [expanded, setExpanded] = useState(false);
   return (
     <ReasoningContent
       content={block.content}

@@ -371,6 +371,36 @@ body {
   opacity: 0.72;
 }
 
+/* API 协议卡片组：复用厂商预设卡（preset-card）的视觉——图标在左、名称在右，横排紧凑 */
+.transport-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.transport-cards .preset-card {
+  width: auto;
+  flex-shrink: initial;
+  flex-direction: row;
+  justify-content: center;
+  gap: 8px;
+  padding: 8px 6px;
+}
+
+.transport-cards .preset-card__logo {
+  width: 20px;
+  height: 20px;
+}
+
+.transport-cards .preset-card__logo img {
+  max-width: 18px;
+  max-height: 18px;
+}
+
+.transport-cards .preset-card__name {
+  white-space: nowrap;
+}
+
 .api-note {
   display: flex;
   gap: 10px;

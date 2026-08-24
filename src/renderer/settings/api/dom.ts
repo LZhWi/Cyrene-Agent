@@ -19,7 +19,53 @@ export const apiKeyInput = document.getElementById("api-key") as HTMLInputElemen
 export const apiKeyLabel = document.getElementById("api-key-label") as HTMLElement;
 export const apiKeyHint = document.getElementById("api-key-hint") as HTMLElement;
 export const testConnectionBtn = document.getElementById("test-connection-btn") as HTMLButtonElement | null;
-export const transportSelect = document.getElementById("transport-select") as HTMLSelectElement;
+// API 协议卡片组（transport-cards，复用 preset-card 视觉）：对外保持 <select> 的
+// value/disabled/change 语义，settings.ts 的既有调用点（读值、程序赋值、change 监听）
+// 无需感知 DOM 形态变化。
+const transportRoot = document.getElementById("transport-select");
+const transportButtons = Array.from(
+  transportRoot?.querySelectorAll<HTMLButtonElement>("button[data-value]") ?? [],
+);
+let transportValue = transportButtons[0]?.dataset.value ?? "openai";
+const transportChangeListeners = new Set<() => void>();
+
+function renderTransportState(): void {
+  for (const button of transportButtons) {
+    const active = button.dataset.value === transportValue;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+}
+
+for (const button of transportButtons) {
+  button.addEventListener("click", () => {
+    if (button.disabled || button.dataset.value === transportValue) return;
+    transportValue = button.dataset.value ?? transportValue;
+    renderTransportState();
+    transportChangeListeners.forEach((listener) => listener());
+  });
+}
+renderTransportState();
+
+export const transportSelect = {
+  get value(): string {
+    return transportValue;
+  },
+  set value(next: string) {
+    if (transportValue === next) return;
+    transportValue = next;
+    renderTransportState();
+  },
+  get disabled(): boolean {
+    return transportButtons.length > 0 && transportButtons.every((button) => button.disabled);
+  },
+  set disabled(next: boolean) {
+    for (const button of transportButtons) button.disabled = next;
+  },
+  addEventListener(type: "change", listener: () => void): void {
+    if (type === "change") transportChangeListeners.add(listener);
+  },
+};
 export const transportHint = document.getElementById("transport-hint") as HTMLElement;
 export const endpointPreview = document.getElementById("endpoint-preview") as HTMLElement;
 export const customEndpointControls = document.getElementById("custom-endpoint-controls") as HTMLElement;
