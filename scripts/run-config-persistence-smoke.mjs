@@ -8,6 +8,7 @@ import { createRequire } from "node:module";
 const require = createRequire(import.meta.url);
 const { writeJsonAtomicSync } = require("../dist/main/main/runtime/atomic-file.js");
 const { appendRotatingLogSync } = require("../dist/main/main/runtime/rotating-log.js");
+const { SettingsFacade, normalizeGeneralSettings } = require("../dist/main/main/settings/settings-facade.js");
 const userData = join(process.env.APPDATA ?? "", "live2d-cyrene");
 const candidates = [
   "model-settings.json",
@@ -41,6 +42,43 @@ try {
     }
     results.push({ file: basename(source), semanticMatch: true, sourceUnchanged: true });
   }
+  const generalSettingsSource = join(userData, "app-settings.json");
+  let generalSettingsFacade = null;
+  if (existsSync(generalSettingsSource)) {
+    const sourceBefore = await readFile(generalSettingsSource);
+    const sourceParsed = JSON.parse(sourceBefore.toString("utf8"));
+    const isolatedSettingsPath = join(isolated, "app-settings.json");
+    const expected = normalizeGeneralSettings(sourceParsed);
+    const facade = new SettingsFacade(() => isolatedSettingsPath);
+    let notification = null;
+    facade.onChanged((before, after) => {
+      notification = {
+        beforeMatches: JSON.stringify(before) === JSON.stringify(expected),
+        afterMatches: JSON.stringify(after) === JSON.stringify(expected),
+      };
+    });
+    const loaded = facade.load();
+    const saved = facade.save({});
+    const reloaded = facade.load();
+    const sourceAfter = await readFile(generalSettingsSource);
+    generalSettingsFacade = {
+      loadMatchesNormalized: JSON.stringify(loaded) === JSON.stringify(expected),
+      saveMatchesNormalized: JSON.stringify(saved) === JSON.stringify(expected),
+      reloadMatchesNormalized: JSON.stringify(reloaded) === JSON.stringify(expected),
+      notification,
+      sourceUnchanged: hash(sourceAfter) === hash(sourceBefore),
+    };
+    if (
+      !generalSettingsFacade.loadMatchesNormalized
+      || !generalSettingsFacade.saveMatchesNormalized
+      || !generalSettingsFacade.reloadMatchesNormalized
+      || !notification?.beforeMatches
+      || !notification?.afterMatches
+      || !generalSettingsFacade.sourceUnchanged
+    ) {
+      throw new Error(`settings facade mismatch: ${JSON.stringify(generalSettingsFacade)}`);
+    }
+  }
   const chatLog = join(userData, "chat-api.log");
   let logRotation = null;
   if (existsSync(chatLog)) {
@@ -58,7 +96,7 @@ try {
       throw new Error("isolated log rotation mismatch");
     }
   }
-  console.log(JSON.stringify({ ok: true, checked: results.length, results, logRotation }, null, 2));
+  console.log(JSON.stringify({ ok: true, checked: results.length, results, generalSettingsFacade, logRotation }, null, 2));
 } finally {
   await rm(isolated, { recursive: true, force: true });
 }

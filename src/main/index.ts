@@ -5,28 +5,15 @@ import * as os from "os";
 import { createHash, randomUUID } from "crypto";
 import { pathToFileURL } from "url";
 import { IPC } from "../shared/ipc-channels";
-import { normalizeUiTheme, type UiTheme } from "../shared/ui-theme";
-import { DEFAULT_UI_FONT, isSupportedFontFileName, normalizeUiFont, type UiFont } from "../shared/ui-font";
-import { normalizeUiIcon, UI_ICON_PRESETS, type UiIcon } from "../shared/ui-icon";
+import { DEFAULT_UI_FONT, isSupportedFontFileName } from "../shared/ui-font";
+import { UI_ICON_PRESETS, type UiIcon } from "../shared/ui-icon";
 import { foldReasoning, normalizeReasoningPreference, type ReasoningPreference } from "../shared/reasoning";
 import { getUiFontResponseHeaders, isSafeUiFontRequest } from "./ui-font-protocol";
 import { writeFileAtomic, writeJsonAtomicSync } from "./runtime/atomic-file";
 import { appendRotatingLogSync } from "./runtime/rotating-log";
 import { pruneDirectoryByMtimeSync } from "./runtime/cache-pruner";
 import { AsyncOperationTracker } from "./runtime/async-operation-tracker";
-import { setAppPathProvider } from "./runtime/runtime-paths";
-import {
-  normalizeDefaultChatMode,
-  normalizeMobileMessageSegmentationMode,
-  normalizeProactiveChatMode,
-  normalizeProactiveDeliveryTarget,
-  normalizeSegmentedOutputMode,
-  type DefaultChatMode,
-  type MobileMessageSegmentationMode,
-  type ProactiveChatMode,
-  type ProactiveDeliveryTarget,
-  type SegmentedOutputMode,
-} from "../shared/preferences";
+import { getUserDataDir, setAppPathProvider } from "./runtime/runtime-paths";
 import { STATUS_KEYWORDS } from "./status-keywords";
 import {
   addL2MemoryVector,
@@ -87,11 +74,11 @@ import { buildCachedSceneIndex } from "./scene-embedding-cache";
 import type { SceneIndex } from "./scene-embedder";
 import { loadUserStickerManifest, addUserSticker, deleteUserSticker, getAllStickerConfig, isStickerIdTaken, getStickersDir } from "./sticker-storage";
 import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
-import { normalizeWindowVisibilitySettings } from "./window-visibility-settings";
 import { WindowManager } from "./windows/window-manager";
+import { SettingsFacade, type GeneralSettings } from "./settings/settings-facade";
 import type { StickerConfigItem } from "../shared/sticker-types";
 import type { ImageMessageAttachment, ChatMessage } from "../shared/chat-types";
-import type { GptsovitsSynthesizeRequest, GptsovitsTextSplitMethod, GptsovitsVersion } from "../shared/tts-types";
+import type { GptsovitsSynthesizeRequest } from "../shared/tts-types";
 import { configureRerankerForLazyInit, initReranker, getRerankerInstallStatus } from "./rag/reranker";
 import { memoryStore } from "./memory/memory-store"
 import { isL2DmaeEnabled, l2DmaeManager } from "./memory/dmae-manager"
@@ -141,7 +128,6 @@ import {
   type ChatContextMessage,
 } from "./chat-time-context";
 import { setAsrConfig } from "./asr/volcano-asr-engine";
-import { normalizeAsrHotwords, normalizeLocalAsrProfile } from "./asr/asr-settings";
 import { abortCallForShutdown, setCallWindow, registerCallIpc, setCallSettings, setCallEndedCallback, stopCall, isCallActive } from "./call/call-manager";
 import { findLatestChatContextSessionId, trimSoulForCall } from "./call/call-prompt";
 import { loadCallContextEvents } from "./call/call-context-store";
@@ -641,130 +627,6 @@ interface UserProfile {
   weatherLocationMode: "auto" | "fixed" | "off";
 }
 
-interface GeneralSettings {
-  musicEnabled: boolean;
-  musicVolume: number;
-  soundEnabled: boolean;
-  soundVolume: number;
-  petAlwaysOnTop: boolean;
-  petVisible: boolean;
-  /** 桌宠缩放因子：1.0=默认，0.5~2.0，窗口与模型同步等比缩放。 */
-  petZoom: number;
-  /** 桌宠窗口 X 坐标，未保存时为 undefined */
-  petWindowX?: number;
-  /** 桌宠窗口 Y 坐标，未保存时为 undefined */
-  petWindowY?: number;
-  sidebarVisible: boolean;
-  tasksVisible: boolean;
-  launchAtLogin: boolean;
-  language: "zh-CN";
-  uiTheme: UiTheme;
-  uiFont: UiFont;
-  uiIcon: UiIcon;
-  /** 聊天窗口打开时默认选中的模式。 */
-  defaultChatMode: DefaultChatMode;
-  /** 聊天气泡分段输出偏好。 */
-  segmentedOutputMode: SegmentedOutputMode;
-  /** 手机渠道文本消息分段发送偏好。 */
-  mobileMessageSegmentation: MobileMessageSegmentationMode;
-  /** 主动聊天功能开关占位；当前不接实际逻辑。 */
-  proactiveChatMode: ProactiveChatMode;
-  /** 主动消息最终投递到本地、微信或飞书。 */
-  proactiveDeliveryTarget: ProactiveDeliveryTarget;
-  /** 主动消息回应反馈学习：根据回复/忽略微调各场景开口频率；关闭后不记录任何反馈。 */
-  proactiveFeedbackEnabled: boolean;
-  socialContextEnabled: boolean;
-    screenMonitorEnabled: boolean;
-  // TTS 配置
-  ttsEngine: "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo";
-  ttsAutoRead: boolean;
-  ttsSpeed: number;
-  ttsVolume: number;
-  // MiniMax
-  ttsMinimaxKey: string;
-  ttsMinimaxVoiceId: string;
-  /** MiniMax 合成模型：speech-2.8-hd(高保真¥3.5/万字符) | speech-2.8-turbo(极速¥2.0/万字符) */
-  ttsMinimaxModel: "speech-2.8-hd" | "speech-2.8-turbo";
-  /** MiniMax 流式播放（边合成边播，首字延迟低）；false=完整合成收完再播 */
-  ttsStreaming: boolean;
-  // GPT-SoVITS（本地）
-  ttsGptsovitsBaseUrl: string;
-  ttsGptsovitsRefAudioPath: string;
-  ttsGptsovitsPromptText: string;
-  ttsGptsovitsFormat: "wav" | "mp3";
-  ttsGptsovitsVersion: GptsovitsVersion;
-  ttsGptsovitsGptWeightsPath: string;
-  ttsGptsovitsSovitsWeightsPath: string;
-  ttsGptsovitsTextSplitMethod: GptsovitsTextSplitMethod;
-  ttsGptsovitsTopK: number;
-  ttsGptsovitsTopP: number;
-  ttsGptsovitsTemperature: number;
-  ttsGptsovitsRepetitionPenalty: number;
-  ttsGptsovitsSampleSteps: number;
-  // 自定义云端 TTS
-  ttsCustomCloudEndpointUrl: string;
-  ttsCustomCloudApiKey: string;
-  ttsCustomCloudVoiceId: string;
-  ttsCustomCloudFormat: "wav" | "mp3";
-  ttsCustomCloudTimeoutMs: number;
-  // 小米 MiMo TTS
-  ttsMimoKey: string;
-  ttsMimoVoiceAudioPath: string;
-  ttsMimoStylePrompt: string;
-  /** 天气源：open-meteo(免配置默认) | amap(高德,需填key) */
-  weatherSource: "open-meteo" | "amap";
-  /** 天气插件是否启用（开关） */
-  weatherEnabled: boolean;
-  /** 高德天气 key（https://lbs.amap.com 注册 Web服务 key） */
-  amapKey: string;
-  /** 🚗出行工具是否启用 */
-  travelEnabled: boolean;
-  /** 🖥️ 浏览器自动化（Playwright MCP）是否启用。默认 false，需用户手动开启。 */
-  playwrightMcpEnabled: boolean;
-  // 联网搜索：选哪个搜索源 + 对应 key
-  searchEngine: "off" | "bocha" | "tavily" | "minimax";
-  searchBochaKey: string;
-  searchTavilyKey: string;
-  searchMinimaxKey: string;
-  /** ✉️邮件发送插件是否启用 */
-  emailEnabled: boolean;
-  /** SMTP 主机，如 smtp.qq.com */
-  emailSmtpHost: string;
-  /** SMTP 端口，如 465（SSL）/ 587（STARTTLS） */
-  emailSmtpPort: number;
-  /** 使用 SSL/TLS（465 通常 true，587 通常 false；用户可覆盖） */
-  emailSmtpSecure: boolean;
-  /** 发件邮箱地址 */
-  emailSmtpUser: string;
-  /** SMTP 授权码（非邮箱登录密码） */
-  emailSmtpPass: string;
-  /** 发件人显示名（可选） */
-  emailFromName: string;
-  /** 🎧ASR 服务商：off(关闭) | aliyun(阿里云) | local(本地,占位) */
-  asrEngine: "off" | "aliyun" | "local";
-  /** 阿里云智能语音交互 AppKey */
-  asrAliyunAppKey: string;
-  /** 阿里云 RAM AccessKey ID */
-  asrAliyunAccessKeyId: string;
-  /** 阿里云 RAM AccessKey Secret */
-  asrAliyunAccessKeySecret: string;
-  /** ASR 识别语言：zh(中文) | en(英文) | auto(自动) */
-  asrLanguage: "zh" | "en" | "auto";
-  /** 本地 ASR 方案：Qwen 单模型或 Paraformer + Qwen 双阶段 */
-  asrLocalProfile: "qwen17-stream" | "paraformer-qwen17" | "qwen06-stream";
-  /** 本地 ASR 热词，每行一个 */
-  asrHotwords: string[];
-  /** VAD 静默检测阈值（毫秒），500~2000，默认 1000 */
-  asrVadSilenceMs: number;
-  /** VAD 音量阈值（0~1），默认 0.01。环境吵或麦克风音量低时可调 */
-  asrVadThreshold: number;
-  /** 通话中显示文字转写 */
-  asrShowTranscript: boolean;
-  /** Opener 主动开口档位 */
-  openerMode: "off" | "quiet" | "normal" | "lively";
-}
-
-
 interface PublicModelConfig {
   mode: "auto" | "manual";
   provider: string;
@@ -810,6 +672,8 @@ const windowManager = new WindowManager({
     saveGeneralSettings({ petWindowX: x, petWindowY: y });
   },
 });
+const settingsFacade = new SettingsFacade(getGeneralSettingsPath);
+settingsFacade.onChanged(handleGeneralSettingsChanged);
 
 function getAppIconPath(icon: UiIcon): string {
   const preset = UI_ICON_PRESETS.find((item) => item.id === icon);
@@ -904,93 +768,12 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   memoryDreamEnabled: false,
 };
 
-const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
-  musicEnabled: false,
-  musicVolume: 60,
-  soundEnabled: true,
-  soundVolume: 70,
-  petAlwaysOnTop: true,
-  petVisible: true,
-  petZoom: 1,
-  sidebarVisible: true,
-  tasksVisible: true,
-  launchAtLogin: false,
-  language: "zh-CN",
-  uiTheme: "classic",
-  uiFont: DEFAULT_UI_FONT,
-  uiIcon: "cyrene-sun",
-  defaultChatMode: "collab",
-  segmentedOutputMode: "off",
-  mobileMessageSegmentation: "off",
-  proactiveChatMode: "off",
-  proactiveDeliveryTarget: "local",
-  proactiveFeedbackEnabled: true,
-  socialContextEnabled: false,
-    screenMonitorEnabled: false,
-  ttsEngine: "off",
-  ttsAutoRead: true,
-  ttsSpeed: 1,
-  ttsVolume: 1,
-  ttsMinimaxKey: "",
-  ttsMinimaxVoiceId: "",
-  ttsMinimaxModel: "speech-2.8-turbo",
-  ttsStreaming: true,
-  ttsGptsovitsBaseUrl: "http://localhost:9880",
-  ttsGptsovitsRefAudioPath: "",
-  ttsGptsovitsPromptText: "",
-  ttsGptsovitsFormat: "wav",
-  ttsGptsovitsVersion: "auto",
-  ttsGptsovitsGptWeightsPath: "",
-  ttsGptsovitsSovitsWeightsPath: "",
-  ttsGptsovitsTextSplitMethod: "cut5",
-  ttsGptsovitsTopK: 15,
-  ttsGptsovitsTopP: 1,
-  ttsGptsovitsTemperature: 1,
-  ttsGptsovitsRepetitionPenalty: 1.35,
-  ttsGptsovitsSampleSteps: 32,
-  ttsCustomCloudEndpointUrl: "",
-  ttsCustomCloudApiKey: "",
-  ttsCustomCloudVoiceId: "",
-  ttsCustomCloudFormat: "mp3",
-  ttsCustomCloudTimeoutMs: 30000,
-  ttsMimoKey: "",
-  ttsMimoVoiceAudioPath: "",
-  ttsMimoStylePrompt: "温柔、自然、略带亲近感，像在轻声陪用户聊天。",
-  weatherSource: "open-meteo",
-  weatherEnabled: false,
-  amapKey: "",
-  travelEnabled: false,
-  playwrightMcpEnabled: false,
-  searchEngine: "off",
-  searchBochaKey: "",
-  searchTavilyKey: "",
-  searchMinimaxKey: "",
-  emailEnabled: false,
-  emailSmtpHost: "",
-  emailSmtpPort: 465,
-  emailSmtpSecure: true,
-  emailSmtpUser: "",
-  emailSmtpPass: "",
-  emailFromName: "",
-  asrEngine: "off",
-  asrAliyunAppKey: "",
-  asrAliyunAccessKeyId: "",
-  asrAliyunAccessKeySecret: "",
-  asrLanguage: "zh",
-  asrLocalProfile: "paraformer-qwen17",
-  asrHotwords: [],
-  asrVadSilenceMs: 1000,
-  asrVadThreshold: 0.01,
-  asrShowTranscript: false,
-  openerMode: "off",
-};
-
 function getSettingsPath(): string {
   return path.join(app.getPath("userData"), "model-settings.json");
 }
 
 function getGeneralSettingsPath(): string {
-  return path.join(app.getPath("userData"), "app-settings.json");
+  return path.join(getUserDataDir(), "app-settings.json");
 }
 
 
@@ -1475,144 +1258,8 @@ function saveModelSettings(settings: Partial<ModelSettings>): ModelSettings {
   return final;
 }
 
-function normalizeGeneralSettings(input: Partial<GeneralSettings> | null | undefined): GeneralSettings {
-  const windowVisibility = normalizeWindowVisibilitySettings(input);
-  const clamp = (value: unknown, fallback: number) => {
-    const num = typeof value === "number" ? value : Number(value);
-    return Number.isFinite(num) ? Math.max(0, Math.min(100, Math.round(num))) : fallback;
-  };
-  const clampPort = (value: unknown, fallback: number) => {
-    const num = typeof value === "number" ? value : Number(value);
-    return Number.isFinite(num) ? Math.max(1, Math.min(65535, Math.round(num))) : fallback;
-  };
-  const clampMs = (value: unknown, fallback: number) => {
-    const num = typeof value === "number" ? value : Number(value);
-    return Number.isFinite(num) ? Math.max(1000, Math.min(120000, Math.round(num))) : fallback;
-  };
-  return {
-    musicEnabled: Boolean(input?.musicEnabled),
-    musicVolume: clamp(input?.musicVolume, DEFAULT_GENERAL_SETTINGS.musicVolume),
-    soundEnabled: input?.soundEnabled === undefined ? DEFAULT_GENERAL_SETTINGS.soundEnabled : Boolean(input.soundEnabled),
-    soundVolume: clamp(input?.soundVolume, DEFAULT_GENERAL_SETTINGS.soundVolume),
-    petAlwaysOnTop: input?.petAlwaysOnTop === undefined ? DEFAULT_GENERAL_SETTINGS.petAlwaysOnTop : Boolean(input.petAlwaysOnTop),
-    petVisible: input?.petVisible === undefined ? DEFAULT_GENERAL_SETTINGS.petVisible : Boolean(input.petVisible),
-    petZoom: typeof input?.petZoom === "number" ? Math.max(0.5, Math.min(2, input.petZoom)) : DEFAULT_GENERAL_SETTINGS.petZoom,
-    petWindowX: typeof input?.petWindowX === "number" && isFinite(input.petWindowX)
-      ? Math.round(input.petWindowX) : undefined,
-    petWindowY: typeof input?.petWindowY === "number" && isFinite(input.petWindowY)
-      ? Math.round(input.petWindowY) : undefined,
-    sidebarVisible: windowVisibility.sidebarVisible,
-    tasksVisible: windowVisibility.tasksVisible,
-    launchAtLogin: Boolean(input?.launchAtLogin),
-    language: "zh-CN",
-    uiTheme: normalizeUiTheme(input?.uiTheme),
-    uiFont: normalizeUiFont(input?.uiFont),
-    uiIcon: normalizeUiIcon(input?.uiIcon),
-    defaultChatMode: normalizeDefaultChatMode(input?.defaultChatMode),
-    segmentedOutputMode: normalizeSegmentedOutputMode(input?.segmentedOutputMode),
-    mobileMessageSegmentation: normalizeMobileMessageSegmentationMode(input?.mobileMessageSegmentation),
-    proactiveChatMode: normalizeProactiveChatMode(input?.proactiveChatMode),
-    proactiveDeliveryTarget: normalizeProactiveDeliveryTarget(input?.proactiveDeliveryTarget),
-    proactiveFeedbackEnabled: input?.proactiveFeedbackEnabled === undefined
-      ? DEFAULT_GENERAL_SETTINGS.proactiveFeedbackEnabled
-      : Boolean(input.proactiveFeedbackEnabled),
-    socialContextEnabled: input?.socialContextEnabled === undefined
-      ? DEFAULT_GENERAL_SETTINGS.socialContextEnabled
-      : Boolean(input.socialContextEnabled),
-    screenMonitorEnabled: input?.screenMonitorEnabled === undefined
-      ? DEFAULT_GENERAL_SETTINGS.screenMonitorEnabled
-      : Boolean(input.screenMonitorEnabled),
-    // TTS 配置
-    ttsEngine: (["off", "minimax", "gptsovits", "custom-cloud", "mimo"].includes(input?.ttsEngine as string) ? input?.ttsEngine : "off") as GeneralSettings["ttsEngine"],
-    ttsAutoRead: input?.ttsAutoRead === undefined ? DEFAULT_GENERAL_SETTINGS.ttsAutoRead : Boolean(input.ttsAutoRead),
-    ttsSpeed: typeof input?.ttsSpeed === "number" ? Math.max(0.5, Math.min(2, input.ttsSpeed)) : DEFAULT_GENERAL_SETTINGS.ttsSpeed,
-    ttsVolume: typeof input?.ttsVolume === "number" ? Math.max(0, Math.min(1, input.ttsVolume)) : DEFAULT_GENERAL_SETTINGS.ttsVolume,
-    ttsMinimaxKey: typeof input?.ttsMinimaxKey === "string" ? input.ttsMinimaxKey : "",
-    ttsMinimaxVoiceId: typeof input?.ttsMinimaxVoiceId === "string" ? input.ttsMinimaxVoiceId : "",
-    ttsMinimaxModel: input?.ttsMinimaxModel === "speech-2.8-hd" ? "speech-2.8-hd" : "speech-2.8-turbo",
-    ttsStreaming: input?.ttsStreaming === undefined ? true : Boolean(input.ttsStreaming),
-    weatherSource: ["open-meteo", "amap"].includes(String(input?.weatherSource))
-      ? (input!.weatherSource as "open-meteo" | "amap")
-      : "open-meteo",
-    weatherEnabled: Boolean(input?.weatherEnabled),
-    amapKey: typeof input?.amapKey === "string" ? input.amapKey : "",
-    travelEnabled: Boolean(input?.travelEnabled),
-    playwrightMcpEnabled: Boolean(input?.playwrightMcpEnabled),
-    searchEngine: ["off", "bocha", "tavily", "minimax"].includes(String(input?.searchEngine))
-      ? (input!.searchEngine as "off" | "bocha" | "tavily" | "minimax")
-      : "off",
-    searchBochaKey: typeof input?.searchBochaKey === "string" ? input.searchBochaKey : "",
-    searchTavilyKey: typeof input?.searchTavilyKey === "string" ? input.searchTavilyKey : "",
-    searchMinimaxKey: typeof input?.searchMinimaxKey === "string" ? input.searchMinimaxKey : "",
-    // 邮件（SMTP）配置
-    emailEnabled: Boolean(input?.emailEnabled),
-    emailSmtpHost: typeof input?.emailSmtpHost === "string" ? input.emailSmtpHost : "",
-    emailSmtpPort: clampPort(input?.emailSmtpPort, DEFAULT_GENERAL_SETTINGS.emailSmtpPort),
-    emailSmtpSecure: input?.emailSmtpSecure === undefined
-      ? (clampPort(input?.emailSmtpPort, DEFAULT_GENERAL_SETTINGS.emailSmtpPort) === 465)
-      : Boolean(input.emailSmtpSecure),
-    emailSmtpUser: typeof input?.emailSmtpUser === "string" ? input.emailSmtpUser : "",
-    emailSmtpPass: typeof input?.emailSmtpPass === "string" ? input.emailSmtpPass : "",
-    emailFromName: typeof input?.emailFromName === "string" ? input.emailFromName : "",
-    // ASR（语音识别）配置
-    asrEngine: ["off", "aliyun", "local"].includes(String(input?.asrEngine))
-      ? (input!.asrEngine as "off" | "aliyun" | "local")
-      : "off",
-    asrAliyunAppKey: typeof input?.asrAliyunAppKey === "string" ? input.asrAliyunAppKey : "",
-    asrAliyunAccessKeyId: typeof input?.asrAliyunAccessKeyId === "string" ? input.asrAliyunAccessKeyId : "",
-    asrAliyunAccessKeySecret: typeof input?.asrAliyunAccessKeySecret === "string" ? input.asrAliyunAccessKeySecret : "",
-    asrLanguage: ["zh", "en", "auto"].includes(String(input?.asrLanguage))
-      ? (input!.asrLanguage as "zh" | "en" | "auto")
-      : "zh",
-    asrLocalProfile: normalizeLocalAsrProfile(input?.asrLocalProfile),
-    asrHotwords: normalizeAsrHotwords(input?.asrHotwords),
-    asrVadSilenceMs: typeof input?.asrVadSilenceMs === "number"
-      ? Math.max(300, Math.min(30000, Math.round(input.asrVadSilenceMs)))
-      : DEFAULT_GENERAL_SETTINGS.asrVadSilenceMs,
-    asrVadThreshold: typeof input?.asrVadThreshold === "number"
-      ? Math.max(0.001, Math.min(0.5, Number(input.asrVadThreshold)))
-      : DEFAULT_GENERAL_SETTINGS.asrVadThreshold,
-    asrShowTranscript: Boolean(input?.asrShowTranscript),
-    openerMode: ["off", "quiet", "normal", "lively"].includes(String(input?.openerMode))
-      ? (input!.openerMode as "off" | "quiet" | "normal" | "lively")
-      : "off",
-    ttsGptsovitsBaseUrl: typeof input?.ttsGptsovitsBaseUrl === "string" ? input.ttsGptsovitsBaseUrl : DEFAULT_GENERAL_SETTINGS.ttsGptsovitsBaseUrl,
-    ttsGptsovitsRefAudioPath: typeof input?.ttsGptsovitsRefAudioPath === "string" ? input.ttsGptsovitsRefAudioPath : "",
-    ttsGptsovitsPromptText: typeof input?.ttsGptsovitsPromptText === "string" ? input.ttsGptsovitsPromptText : "",
-    ttsGptsovitsFormat: input?.ttsGptsovitsFormat === "mp3" ? "mp3" : "wav",
-    ttsGptsovitsVersion: ["auto", "v1", "v2", "v2Pro", "v2ProPlus", "v3", "v4"].includes(String(input?.ttsGptsovitsVersion))
-      ? input!.ttsGptsovitsVersion as GptsovitsVersion
-      : "auto",
-    ttsGptsovitsGptWeightsPath: typeof input?.ttsGptsovitsGptWeightsPath === "string" ? input.ttsGptsovitsGptWeightsPath : "",
-    ttsGptsovitsSovitsWeightsPath: typeof input?.ttsGptsovitsSovitsWeightsPath === "string" ? input.ttsGptsovitsSovitsWeightsPath : "",
-    ttsGptsovitsTextSplitMethod: ["cut0", "cut1", "cut2", "cut3", "cut4", "cut5"].includes(String(input?.ttsGptsovitsTextSplitMethod))
-      ? input!.ttsGptsovitsTextSplitMethod as GptsovitsTextSplitMethod
-      : "cut5",
-    ttsGptsovitsTopK: typeof input?.ttsGptsovitsTopK === "number" ? Math.max(1, Math.min(1000, Math.round(input.ttsGptsovitsTopK))) : 15,
-    ttsGptsovitsTopP: typeof input?.ttsGptsovitsTopP === "number" ? Math.max(0, Math.min(1, input.ttsGptsovitsTopP)) : 1,
-    ttsGptsovitsTemperature: typeof input?.ttsGptsovitsTemperature === "number" ? Math.max(0.01, Math.min(2, input.ttsGptsovitsTemperature)) : 1,
-    ttsGptsovitsRepetitionPenalty: typeof input?.ttsGptsovitsRepetitionPenalty === "number" ? Math.max(0.1, Math.min(10, input.ttsGptsovitsRepetitionPenalty)) : 1.35,
-    ttsGptsovitsSampleSteps: typeof input?.ttsGptsovitsSampleSteps === "number" ? Math.max(1, Math.min(100, Math.round(input.ttsGptsovitsSampleSteps))) : 32,
-    ttsCustomCloudEndpointUrl: typeof input?.ttsCustomCloudEndpointUrl === "string" ? input.ttsCustomCloudEndpointUrl : "",
-    ttsCustomCloudApiKey: typeof input?.ttsCustomCloudApiKey === "string" ? input.ttsCustomCloudApiKey : "",
-    ttsCustomCloudVoiceId: typeof input?.ttsCustomCloudVoiceId === "string" ? input.ttsCustomCloudVoiceId : "",
-    ttsCustomCloudFormat: input?.ttsCustomCloudFormat === "wav" ? "wav" : "mp3",
-    ttsCustomCloudTimeoutMs: clampMs(input?.ttsCustomCloudTimeoutMs, DEFAULT_GENERAL_SETTINGS.ttsCustomCloudTimeoutMs),
-    ttsMimoKey: typeof input?.ttsMimoKey === "string" ? input.ttsMimoKey : "",
-    ttsMimoVoiceAudioPath: typeof input?.ttsMimoVoiceAudioPath === "string" ? input.ttsMimoVoiceAudioPath : "",
-    ttsMimoStylePrompt: typeof input?.ttsMimoStylePrompt === "string" ? input.ttsMimoStylePrompt : DEFAULT_GENERAL_SETTINGS.ttsMimoStylePrompt,
-  };
-}
-
 function loadGeneralSettings(): GeneralSettings {
-  try {
-    const filePath = getGeneralSettingsPath();
-    if (!fs.existsSync(filePath)) return DEFAULT_GENERAL_SETTINGS;
-    return normalizeGeneralSettings(JSON.parse(fs.readFileSync(filePath, "utf8")) as Partial<GeneralSettings>);
-  } catch (err) {
-    console.error("[Cyrene] load general settings failed:", err);
-    return DEFAULT_GENERAL_SETTINGS;
-  }
+  return settingsFacade.load();
 }
 
 function applyGeneralSettings(settings: GeneralSettings, previous?: GeneralSettings): void {
@@ -1638,11 +1285,10 @@ function applyPetZoom(zoom: number): void {
 }
 
 function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSettings {
-  const before = loadGeneralSettings();
-  const normalized = normalizeGeneralSettings({ ...before, ...settings });
-  const filePath = getGeneralSettingsPath();
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  writeJsonAtomicSync(filePath, normalized);
+  return settingsFacade.save(settings);
+}
+
+function handleGeneralSettingsChanged(before: GeneralSettings, normalized: GeneralSettings): void {
   applyGeneralSettings(normalized, before);
   syncBuiltInToolToggles(normalized);
   if (before.uiTheme !== normalized.uiTheme) {
@@ -1654,7 +1300,6 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
   if (before.uiIcon !== normalized.uiIcon) {
     applyUiIcon(normalized.uiIcon);
   }
-  return normalized;
 }
 
 function syncBuiltInToolToggles(settings: GeneralSettings): void {
