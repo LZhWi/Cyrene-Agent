@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { _electron as electron } from "playwright";
@@ -20,8 +20,18 @@ const expected = Object.fromEntries(
 );
 
 const profileDir = await mkdtemp(join(tmpdir(), "cyrene-window-security-"));
+const roamingAppDataDir = join(profileDir, "AppData", "Roaming");
+const localAppDataDir = join(profileDir, "AppData", "Local");
+const spellingDir = join(roamingAppDataDir, "Microsoft", "Spelling", "neutral");
 let electronApp;
 try {
+  await mkdir(spellingDir, { recursive: true });
+  await mkdir(localAppDataDir, { recursive: true });
+  const emptyUtf16Dictionary = Buffer.from([0xff, 0xfe]);
+  await Promise.all(
+    ["default.dic", "default.exc", "default.acl"]
+      .map((name) => writeFile(join(spellingDir, name), emptyUtf16Dictionary)),
+  );
   const avatarPath = join(profileDir, "avatar.png");
   await writeFile(
     avatarPath,
@@ -43,6 +53,8 @@ try {
     cwd: process.cwd(),
     env: {
       ...process.env,
+      APPDATA: roamingAppDataDir,
+      LOCALAPPDATA: localAppDataDir,
       HOME: profileDir,
       USERPROFILE: profileDir,
       UV_CACHE_DIR: join(profileDir, "uv-cache"),
