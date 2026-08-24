@@ -7,7 +7,8 @@
 
 import { BrowserWindow, ipcMain } from "electron";
 import { IPC } from "../../shared/ipc-channels";
-import { VolcanoAsrStream, getAsrConfig } from "../asr/volcano-asr-engine";
+import { getAsrConfig, type AsrConfig } from "../asr/asr-config";
+import { createAsrStream, type AsrStreamSession } from "../asr/asr-dispatcher";
 import { synthesizeByEngine } from "../tts/tts-dispatcher";
 import type { TtsEngine } from "../../shared/tts-types";
 import { getAdapterForConfig, buildVendorUrl } from "../orchestrator/vendors";
@@ -20,7 +21,7 @@ const LOG_PREFIX = "[CallManager]";
 export type CallState = "IDLE" | "LISTENING" | "THINKING" | "SPEAKING" | "ERROR" | "ENDED";
 
 let callWindow: BrowserWindow | null = null;
-let asrStream: VolcanoAsrStream | null = null;
+let asrStream: AsrStreamSession | null = null;
 let currentState: CallState = "IDLE";
 let finalText = "";
 let active = false;
@@ -128,8 +129,11 @@ function sendTtsAudio(base64: string): void {
 export function startCall(): void {
   if (active) return;
   const cfg = getAsrConfig();
-  if (!cfg || cfg.engine !== "aliyun" || !cfg.appKey || !cfg.accessKeyId || !cfg.accessKeySecret) {
-    sendError("ASR 未配置：请在设置→ASR 中配置阿里云 AppKey 和 AccessKey");
+  const missingConfig = !cfg
+    || (cfg.engine === "aliyun" && (!cfg.appKey || !cfg.accessKeyId || !cfg.accessKeySecret))
+    || (cfg.engine === "mossland" && !cfg.apiKey);
+  if (missingConfig) {
+    sendError("ASR 未配置：请在设置→ASR 中选择服务商并填写凭据");
     sendState("ERROR");
     return;
   }
@@ -143,12 +147,17 @@ export function startCall(): void {
 }
 
 /** 创建并启动一个 ASR 流。 */
-function startAsrStream(cfg: { appKey: string; accessKeyId: string; accessKeySecret: string; language: string }): void {
-  asrStream = new VolcanoAsrStream(
+function startAsrStream(cfg: AsrConfig): void {
+  asrStream = createAsrStream(
+    cfg,
     (text) => sendAsrResult(text, undefined),
     (text) => { finalText = text; sendAsrResult(undefined, text); },
   );
-  asrStream.start(cfg.appKey, cfg.accessKeyId, cfg.accessKeySecret, cfg.language);
+  void asrStream.start().catch((err) => {
+    const message = err instanceof Error ? err.message : String(err);
+    sendError(`ASR 启动失败：${message}`);
+    sendState("ERROR");
+  });
 }
 
 /** 结束本轮（VAD 静默）：停 ASR → 跑 agent → TTS → 播放。 */
@@ -156,7 +165,16 @@ export async function endTurn(): Promise<void> {
   console.log(LOG_PREFIX, "endTurn 入口: active=", active, "state=", currentState, "finalText.length=", finalText.length);
   if (!active || currentState !== "LISTENING") return;
 
-  if (asrStream) asrStream.stop();
+  if (asrStream) {
+    try {
+      await asrStream.stop();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      sendError(message);
+      restartAsr();
+      return;
+    }
+  }
 
   const text = finalText.trim();
   finalText = "";
@@ -275,7 +293,9 @@ export function onTtsDone(): void {
 function restartAsr(): void {
   const cfg = getAsrConfig();
   if (!cfg) return;
-  if (asrStream) asrStream.stop();
+  if (asrStream) void Promise.resolve(asrStream.stop()).catch((err) => {
+    console.warn(LOG_PREFIX, "停止上一轮 ASR 失败:", err);
+  });
   finalText = "";
   startAsrStream(cfg);
 }
@@ -285,7 +305,9 @@ export function stopCall(): void {
   active = false;
   callHistory.length = 0;
   if (asrStream) {
-    asrStream.stop();
+    void Promise.resolve(asrStream.stop()).catch((err) => {
+      console.warn(LOG_PREFIX, "挂断时停止 ASR 失败:", err);
+    });
     asrStream = null;
   }
   sendState("ENDED");

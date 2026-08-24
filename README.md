@@ -184,7 +184,7 @@ npm run package:win:dir
 
 2. **🎙️ TTS 设置**（可选）：选择 Mossland、MiniMax、MiMo、GPT-SoVITS 或自定义云端语音合成服务。
 
-3. **🎧 ASR 设置**（可选）：如需使用语音通话，配置阿里云实时 ASR 的 AppKey 与 AccessKey。
+3. **🎧 ASR 设置**（可选）：如需使用语音通话，可配置阿里云实时 ASR 的 AppKey 与 AccessKey，或填写与 Mossland TTS 共用的 API Key。
 
 4. **📱 外部渠道**（可选）：根据需要连接飞书或微信 iLink，在手机端与 Cyrene 对话。
 
@@ -331,7 +331,7 @@ CyreneHarness 是 Cyrene Agent 的核心 Agent Loop，负责把**模型决策、
 #### 🔊 语音交互
 
 - **多 TTS 引擎** — 支持 Mossland、MiniMax、MiMo、GPT-SoVITS 与自定义云端语音服务。
-- **实时 ASR** — 支持阿里云实时语音识别，将麦克风音频转为对话输入。
+- **ASR** — 支持阿里云实时语音识别，以及 Mossland 在每轮说话结束后的完整音频转写。
 - **完整语音通话** — 通过 `LISTENING → THINKING → SPEAKING` 状态流完成连续语音交流。
 - **VAD 静默检测** — 自动判断用户是否结束说话并触发回复。
 
@@ -484,7 +484,7 @@ models/                # 本机 AI 模型（用户放置，见 MODEL_LICENSE.md�
 src/
 ├── cli/              # 命令行入口（`cyrene` 命令，实现 banner / about / version / run 子命令）
 ├── main/             # Electron 主进程
-│   ├── asr/          # 语音识别（阿里云实时 ASR）
+│   ├── asr/          # 语音识别（阿里云实时 ASR / Mossland 批量转写）
 │   ├── call/         # 语音通话核心逻辑（ASR -> agent -> TTS 轮次）
 │   ├── channels/     # 外部渠道适配层（飞书 / 微信 iLink / ...）
 │   ├── chat/         # 聊天附属（图片处理 / think 过滤 / 发送策略）

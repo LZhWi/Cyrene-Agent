@@ -22,6 +22,7 @@ export type RuntimeTimeoutStage =
   | "tts-gptsovits"
   | "tts-custom-cloud"
   | "tts-mossland"
+  | "asr-mossland"
   | "external-http"
   | "vision-caption"
   | "call-management";
@@ -67,6 +68,10 @@ const STAGE_DEFAULTS: Record<RuntimeTimeoutStage, TimeoutPolicy> = {
   },
   "tts-mossland": {
     // mossland-engine.ts DEFAULT_TIMEOUT_MS：30s
+    totalMs: 30_000,
+  },
+  "asr-mossland": {
+    // mossland-asr-engine.ts 同步上传一轮语音并等待完整转写：30s
     totalMs: 30_000,
   },
   "external-http": {

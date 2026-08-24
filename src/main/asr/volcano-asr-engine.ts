@@ -202,23 +202,3 @@ export class VolcanoAsrStream {
     return data.Token.Id;
   }
 }
-
-// ── 配置注入 ──
-
-export interface AsrConfig {
-  appKey: string;
-  accessKeyId: string;
-  accessKeySecret: string;
-  language: string;
-  engine: string;
-}
-
-let asrConfigGetter: (() => AsrConfig | null) | null = null;
-
-export function setAsrConfig(getter: () => AsrConfig | null): void {
-  asrConfigGetter = getter;
-}
-
-export function getAsrConfig(): AsrConfig | null {
-  return asrConfigGetter?.() ?? null;
-}

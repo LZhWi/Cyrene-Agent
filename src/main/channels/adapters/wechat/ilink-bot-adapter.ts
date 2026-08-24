@@ -38,7 +38,8 @@ import {
   isWechatSaveIntent,
   type InboundMediaDescriptor,
 } from "./inbound-media";
-import { getAsrConfig, VolcanoAsrStream } from "../../../asr/volcano-asr-engine";
+import { getAsrConfig, type AsrConfig } from "../../../asr/asr-config";
+import { createAsrStream } from "../../../asr/asr-dispatcher";
 import type {
   ChannelAttachment,
   ChannelCapability,
@@ -587,7 +588,9 @@ async function transcribeInboundWechatVoice(
 ): Promise<string> {
   if (!item.media) throw new Error("缺少语音下载参数");
   const cfg = getAsrConfig();
-  if (!cfg || cfg.engine !== "aliyun" || !cfg.appKey || !cfg.accessKeyId || !cfg.accessKeySecret) {
+  if (!cfg
+      || (cfg.engine === "aliyun" && (!cfg.appKey || !cfg.accessKeyId || !cfg.accessKeySecret))
+      || (cfg.engine === "mossland" && !cfg.apiKey)) {
     throw new Error("ASR 未配置");
   }
 
@@ -602,21 +605,29 @@ async function transcribeInboundWechatVoice(
     const decoded = await decode(source, sampleRate);
     pcm = Buffer.from(decoded.data);
   }
-  return transcribePcmWithAliyun(pcm, cfg);
+  return transcribePcmWithConfiguredAsr(pcm, cfg);
 }
 
-function transcribePcmWithAliyun(
-  pcm: Buffer,
-  cfg: { appKey: string; accessKeyId: string; accessKeySecret: string; language: string },
-): Promise<string> {
+async function transcribePcmWithConfiguredAsr(pcm: Buffer, cfg: AsrConfig): Promise<string> {
+  const finals: string[] = [];
+  const stream = createAsrStream(
+    cfg,
+    () => {},
+    (text) => {
+      if (text.trim()) finals.push(text.trim());
+    },
+  );
+
+  if (cfg.engine === "mossland") {
+    await stream.start();
+    stream.sendAudio(pcm);
+    const completed = await stream.stop();
+    const result = (completed || finals.join("")).trim();
+    if (result) return result;
+    throw new Error("没有识别到文字");
+  }
+
   return new Promise((resolve, reject) => {
-    const finals: string[] = [];
-    const stream = new VolcanoAsrStream(
-      () => {},
-      (text) => {
-        if (text.trim()) finals.push(text.trim());
-      },
-    );
     const timeout = setTimeout(() => {
       stream.stop();
       const result = finals.join("").trim();
@@ -624,7 +635,7 @@ function transcribePcmWithAliyun(
       else reject(new Error("ASR timeout"));
     }, 15_000);
 
-    stream.start(cfg.appKey, cfg.accessKeyId, cfg.accessKeySecret, cfg.language)
+    stream.start()
       .then(async () => {
         await delay(500);
         stream.sendAudio(pcm);
@@ -746,8 +757,12 @@ function isWechatAsrConfigured(): boolean {
       asrAliyunAppKey?: unknown;
       asrAliyunAccessKeyId?: unknown;
       asrAliyunAccessKeySecret?: unknown;
+      ttsMosslandKey?: unknown;
     };
     if (settings.asrEngine === "local") return true;
+    if (settings.asrEngine === "mossland") {
+      return Boolean(typeof settings.ttsMosslandKey === "string" && settings.ttsMosslandKey.trim());
+    }
     if (settings.asrEngine !== "aliyun") return false;
     return Boolean(
       typeof settings.asrAliyunAppKey === "string" && settings.asrAliyunAppKey.trim()

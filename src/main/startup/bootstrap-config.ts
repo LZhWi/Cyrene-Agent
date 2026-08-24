@@ -13,7 +13,7 @@ import { setTravelConfig } from "../orchestrator/travel-tools";
 import { toolRegistry } from "../orchestrator/tool-registry";
 import { resolveVendorRuntimeSettings, setVendorRuntimeSettingsGetter } from "../orchestrator/vendors/runtime-settings";
 import { setChoiceCardSender } from "../user-choice";
-import { setAsrConfig } from "../asr/volcano-asr-engine";
+import { setAsrConfig } from "../asr/asr-config";
 import { setCallSettings } from "../call/call-manager";
 import { buildCallSystemPrompt } from "../call/call-prompt-builder";
 import type { SceneIndex } from "../scene-embedder";
@@ -104,8 +104,13 @@ export function bootstrapConfigGetters(ctx: BootstrapConfigContext): void {
   // 注入 ASR 配置获取器（通话功能用，实时读 GeneralSettings）
   setAsrConfig(() => {
     const s = loadGeneralSettings();
-    if (s.asrEngine !== "aliyun") return null;
-    return { appKey: s.asrAliyunAppKey, accessKeyId: s.asrAliyunAccessKeyId, accessKeySecret: s.asrAliyunAccessKeySecret, language: s.asrLanguage, engine: s.asrEngine };
+    if (s.asrEngine === "mossland") {
+      return { engine: "mossland", apiKey: s.ttsMosslandKey };
+    }
+    if (s.asrEngine === "aliyun") {
+      return { engine: "aliyun", appKey: s.asrAliyunAppKey, accessKeyId: s.asrAliyunAccessKeyId, accessKeySecret: s.asrAliyunAccessKeySecret, language: s.asrLanguage };
+    }
+    return null;
   });
 
   // 注入通话模型/TTS 配置获取器

@@ -34,3 +34,11 @@ describe("general Harness tool concurrency settings", () => {
     expect(normalizeGeneralSettings({ maxParallelToolCalls: "invalid" } as never).maxParallelToolCalls).toBe(4);
   });
 });
+
+describe("general ASR settings", () => {
+  it("keeps Mossland as a supported ASR provider", () => {
+    const settings = normalizeGeneralSettings({ asrEngine: "mossland" } as never);
+
+    expect(settings.asrEngine).toBe("mossland");
+  });
+});

@@ -6,6 +6,7 @@ import { asrState } from "./state";
 import {
   asrEngineSelect, asrAliyunConfig,
   asrAliyunAppKeyInput, asrAliyunAccessKeyIdInput, asrAliyunAccessKeySecretInput,
+  asrMosslandConfig, asrMosslandKeyInput,
   asrLanguageSelect,
   asrVadSilenceInput, asrVadThresholdInput, asrVadThresholdValue,
   asrShowTranscriptCheckbox,
@@ -14,6 +15,9 @@ import {
 export function syncAsrVisibility(): void {
   if (asrAliyunConfig) {
     (asrAliyunConfig as HTMLElement).style.display = asrEngineSelect?.value === "aliyun" ? "block" : "none";
+  }
+  if (asrMosslandConfig) {
+    (asrMosslandConfig as HTMLElement).style.display = asrEngineSelect?.value === "mossland" ? "block" : "none";
   }
 }
 
@@ -34,6 +38,7 @@ export async function loadAsrConfig(): Promise<void> {
       if (asrAliyunAppKeyInput) asrAliyunAppKeyInput.value = String(cfg.asrAliyunAppKey ?? "");
       if (asrAliyunAccessKeyIdInput) asrAliyunAccessKeyIdInput.value = String(cfg.asrAliyunAccessKeyId ?? "");
       if (asrAliyunAccessKeySecretInput) asrAliyunAccessKeySecretInput.value = String(cfg.asrAliyunAccessKeySecret ?? "");
+      if (asrMosslandKeyInput) asrMosslandKeyInput.value = String(cfg.ttsMosslandKey ?? "");
       if (asrLanguageSelect) asrLanguageSelect.value = String(cfg.asrLanguage ?? "zh");
       if (asrVadSilenceInput) asrVadSilenceInput.value = String(cfg.asrVadSilenceMs ?? 1000);
       if (asrVadThresholdInput) {
@@ -58,6 +63,7 @@ asrEngineSelect?.addEventListener("change", () => {
 asrAliyunAppKeyInput?.addEventListener("input", () => { clearTimeout(asrState.aliyunAppKeyTimer); asrState.aliyunAppKeyTimer = setTimeout(() => void saveAsrField("asrAliyunAppKey", asrAliyunAppKeyInput.value.trim()), 800); });
 asrAliyunAccessKeyIdInput?.addEventListener("input", () => { clearTimeout(asrState.aliyunAccessKeyIdTimer); asrState.aliyunAccessKeyIdTimer = setTimeout(() => void saveAsrField("asrAliyunAccessKeyId", asrAliyunAccessKeyIdInput.value.trim()), 800); });
 asrAliyunAccessKeySecretInput?.addEventListener("input", () => { clearTimeout(asrState.aliyunAccessKeySecretTimer); asrState.aliyunAccessKeySecretTimer = setTimeout(() => void saveAsrField("asrAliyunAccessKeySecret", asrAliyunAccessKeySecretInput.value.trim()), 800); });
+asrMosslandKeyInput?.addEventListener("input", () => { clearTimeout(asrState.mosslandKeyTimer); asrState.mosslandKeyTimer = setTimeout(() => void saveAsrField("ttsMosslandKey", asrMosslandKeyInput.value.trim()), 800); });
 asrLanguageSelect?.addEventListener("change", () => void saveAsrField("asrLanguage", asrLanguageSelect.value));
 asrVadSilenceInput?.addEventListener("input", () => {
   void saveAsrField("asrVadSilenceMs", Number(asrVadSilenceInput.value) || 1000);

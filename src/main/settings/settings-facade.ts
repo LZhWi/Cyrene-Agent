@@ -241,8 +241,8 @@ export function normalizeGeneralSettings(
     emailSmtpUser: typeof input?.emailSmtpUser === "string" ? input.emailSmtpUser : "",
     emailSmtpPass: typeof input?.emailSmtpPass === "string" ? input.emailSmtpPass : "",
     emailFromName: typeof input?.emailFromName === "string" ? input.emailFromName : "",
-    asrEngine: ["off", "aliyun", "local"].includes(String(input?.asrEngine))
-      ? (input!.asrEngine as "off" | "aliyun" | "local")
+    asrEngine: ["off", "aliyun", "mossland", "local"].includes(String(input?.asrEngine))
+      ? (input!.asrEngine as "off" | "aliyun" | "mossland" | "local")
       : "off",
     asrAliyunAppKey: typeof input?.asrAliyunAppKey === "string" ? input.asrAliyunAppKey : "",
     asrAliyunAccessKeyId: typeof input?.asrAliyunAccessKeyId === "string" ? input.asrAliyunAccessKeyId : "",

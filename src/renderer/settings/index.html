@@ -1898,10 +1898,11 @@
                 <select id="asr-engine">
                   <option value="off">关闭</option>
                   <option value="aliyun">阿里云（实时语音识别）</option>
+                  <option value="mossland">Mossland（轮次结束后转写）</option>
                   <option value="local">本地（占位，敬请期待）</option>
                 </select>
               </div>
-              <p class="tts-hint">选择「阿里云」后填入下方配置。</p>
+              <p class="tts-hint">阿里云支持实时中间结果；Mossland 会在每轮说话结束后返回完整文本。</p>
             </div>
 
             <div class="tts-section" id="asr-aliyun-config">
@@ -1926,6 +1927,15 @@
                 </select>
               </div>
               <p class="tts-hint">阿里云 → 智能语音交互控制台 → 创建项目获取 AppKey。AccessKey 在 RAM 访问控制台获取（ram.console.aliyun.com/manage/ak）。Token 会自动获取，无需手动填写。</p>
+            </div>
+
+            <div class="tts-section" id="asr-mossland-config" style="display:none">
+              <h2 class="tts-section__title">Mossland 配置</h2>
+              <div class="tts-field">
+                <label for="asr-mossland-key">API Key</label>
+                <input type="password" id="asr-mossland-key" placeholder="MOSI API 平台 → API 密钥" autocomplete="off" />
+              </div>
+              <p class="tts-hint">与 Mossland TTS 共用同一 API Key。音频在 VAD 判定本轮结束后上传到 moss-transcribe，不提供实时中间字幕。</p>
             </div>
 
             <div class="tts-section">

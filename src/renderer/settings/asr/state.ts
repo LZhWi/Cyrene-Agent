@@ -5,4 +5,5 @@ export const asrState = {
   aliyunAppKeyTimer: undefined as ReturnType<typeof setTimeout> | undefined,
   aliyunAccessKeyIdTimer: undefined as ReturnType<typeof setTimeout> | undefined,
   aliyunAccessKeySecretTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+  mosslandKeyTimer: undefined as ReturnType<typeof setTimeout> | undefined,
 };

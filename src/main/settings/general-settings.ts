@@ -125,8 +125,8 @@ export interface GeneralSettings extends ChatAppearanceSettings {
   emailSmtpPass: string;
   /** 发件人显示名（可选） */
   emailFromName: string;
-  /** 🎧ASR 服务商：off(关闭) | aliyun(阿里云) | local(本地,占位) */
-  asrEngine: "off" | "aliyun" | "local";
+  /** 🎧ASR 服务商：off(关闭) | aliyun(阿里云) | mossland(MOSI) | local(本地,占位) */
+  asrEngine: "off" | "aliyun" | "mossland" | "local";
   /** 阿里云智能语音交互 AppKey */
   asrAliyunAppKey: string;
   /** 阿里云 RAM AccessKey ID */

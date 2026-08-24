@@ -143,7 +143,6 @@ import {
   type ChatContextMessage,
 } from "./chat-time-context";
 import { getDateLocale, updateLocaleContext } from "./locale-context";
-import { setAsrConfig } from "./asr/volcano-asr-engine";
 import { registerCallIpc, setCallSettings } from "./call/call-manager";
 import { initSkills, skillRegistry } from "./skills";
 

@@ -186,7 +186,7 @@ After starting the application, **click the system tray icon → Open Settings**
 
 2. **🎙️ TTS Settings** (optional): Select Mossland, MiniMax, MiMo, GPT-SoVITS, or a custom cloud-based speech synthesis service.
 
-3. **🎧 ASR Settings** (optional): To use voice calls, configure the AppKey and AccessKey for Alibaba Cloud real-time ASR.
+3. **🎧 ASR Settings** (optional): To use voice calls, configure Alibaba Cloud real-time ASR credentials or the API key shared with Mossland TTS.
 
 4. **📱 External Channels** (optional): Connect Feishu or WeChat iLink to chat with Cyrene from a mobile device.
 
@@ -466,7 +466,7 @@ The modes below are consumers of this loop:
 #### 🔊 Voice Interaction
 
 - **Multiple TTS Engines** — Supports Mossland, MiniMax, MiMo, GPT-SoVITS, and custom cloud-based speech services.
-- **Real-Time ASR** — Uses Alibaba Cloud real-time speech recognition to convert microphone audio into conversation input.
+- **ASR** — Supports Alibaba Cloud real-time speech recognition and Mossland full-turn audio transcription after each utterance.
 - **Complete Voice Calls** — Continuous voice interaction through the `LISTENING → THINKING → SPEAKING` state flow.
 - **VAD Silence Detection** — Automatically detects when the user has stopped speaking and triggers a response.
 
@@ -594,7 +594,7 @@ models/                # Local AI models placed by the user; see MODEL_LICENSE.m
 src/
 ├── cli/              # Command-line entry (`cyrene` command: banner / about / version / run)
 ├── main/             # Electron main process
-│   ├── asr/          # Speech recognition (Alibaba Cloud real-time ASR)
+│   ├── asr/          # Speech recognition (Alibaba Cloud real-time / Mossland batch transcription)
 │   ├── call/         # Voice-call core (ASR -> Agent -> TTS turns)
 │   ├── channels/     # External channel adapters (Feishu / WeChat iLink / ...)
 │   ├── chat/         # Chat support (image handling / think filtering / sending policy)

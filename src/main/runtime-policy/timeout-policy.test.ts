@@ -12,6 +12,7 @@ describe("resolveTimeoutPolicy", () => {
       ["tts-gptsovits", 180_000],
       ["tts-custom-cloud", 30_000],
       ["tts-mossland", 30_000],
+      ["asr-mossland", 30_000],
       ["external-http", 30_000],
       ["vision-caption", 30_000],
       ["call-management", 30_000],
@@ -66,6 +67,7 @@ describe("resolveTimeoutPolicy", () => {
       "tts-gptsovits",
       "tts-custom-cloud",
       "tts-mossland",
+      "asr-mossland",
       "external-http",
     ];
     for (const stage of stages) {
