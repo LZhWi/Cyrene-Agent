@@ -6,8 +6,8 @@
 // iOS 端）复用。
 //
 // 行为约定：
-//   - PC（Electron）运行时：不注入 provider 时，默认惰性 require("electron")，
-//     调用 app.getPath / app.getAppPath —— 与迁移前完全等价（含单测里的 electron mock）。
+//   - PC（Electron）运行时：主入口显式注入 Electron app provider；未注入时使用
+//     静态导入的 electron.app 作为兼容 fallback，调用行为与迁移前完全等价。
 //   - RN / 其它宿主：启动时调用 setAppPathProvider() 注入自己的实现（如 SQLite/文件目录），
 //     之后所有路径查询都走注入实现，不触碰 electron。
 //
@@ -46,7 +46,7 @@ export function setAppPathProvider(provider: AppPathProvider | null): void {
   injected = provider;
 }
 
-/** 惰性从 electron 构造默认 provider；非 electron 环境（app 不可用）返回 null。 */
+/** 从静态导入的 electron.app 构造兼容 provider；app 不可用时返回 null。 */
 function tryElectronProvider(): AppPathProvider | null {
   try {
     const app = electronApp as

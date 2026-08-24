@@ -14,6 +14,7 @@ import { writeFileAtomic, writeJsonAtomicSync } from "./runtime/atomic-file";
 import { appendRotatingLogSync } from "./runtime/rotating-log";
 import { pruneDirectoryByMtimeSync } from "./runtime/cache-pruner";
 import { AsyncOperationTracker } from "./runtime/async-operation-tracker";
+import { setAppPathProvider } from "./runtime/runtime-paths";
 import {
   normalizeDefaultChatMode,
   normalizeMobileMessageSegmentationMode,
@@ -209,6 +210,11 @@ import {
 } from "./call/call-model-store";
 
 configureDocumentIndexQueue(runDocumentIndexJob);
+
+setAppPathProvider({
+  getPath: (name) => app.getPath(name),
+  getAppPath: () => app.getAppPath(),
+});
 
 async function reconcileUserMemoryIndex(): Promise<void> {
   if (!isUserMemoryVectorStoreReady()) {
