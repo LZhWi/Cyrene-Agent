@@ -68,6 +68,27 @@ try {
   // Window creation is asynchronous; chat can become observable before the pet
   // window, so identify the root window by its packaged URL instead of arrival order.
   const main = await findPage("/renderer/index.html");
+  const readMainWindowState = async () => electronApp.evaluate(({ BrowserWindow }) => {
+    const window = BrowserWindow.getAllWindows()
+      .find((candidate) => candidate.webContents.getURL().includes("/renderer/index.html"));
+    if (!window || window.isDestroyed()) return null;
+    return {
+      bounds: window.getBounds(),
+      opacity: window.getOpacity(),
+      visible: window.isVisible(),
+    };
+  });
+  const waitForMainWindowState = async (predicate, description) => {
+    const deadline = Date.now() + 10_000;
+    let lastState = null;
+    while (Date.now() < deadline) {
+      const state = await readMainWindowState();
+      lastState = state;
+      if (state && predicate(state)) return state;
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(`Timed out waiting for main-window state: ${description}; last=${JSON.stringify(lastState)}`);
+  };
   await main.waitForFunction(() => {
     const diagnostics = window.__cyrene?.getLive2DDiagnostics?.();
     return diagnostics?.resources?.modelLoaded === true;
@@ -82,6 +103,74 @@ try {
     }
   }
   if (!live2dRendered) throw new Error("Live2D model loaded but the canvas remained transparent");
+  const initialMainWindowState = await readMainWindowState();
+  if (!initialMainWindowState) throw new Error("main BrowserWindow is unavailable");
+  const mainWindowApiResult = await main.evaluate(async () => {
+    const frame = await window.cyrene.captureFrame();
+    const cursor = await window.cyrene.getCursorPosition();
+    await window.cyrene.setInteractive(false);
+    await window.cyrene.setInteractive(true);
+    return {
+      captured: typeof frame === "string" && frame.startsWith("data:image/png;base64,"),
+      cursor,
+    };
+  });
+  if (!mainWindowApiResult.captured) throw new Error("main-window capture IPC returned no PNG data URL");
+  if (!Number.isFinite(mainWindowApiResult.cursor?.x) || !Number.isFinite(mainWindowApiResult.cursor?.y)) {
+    throw new Error(`main-window cursor IPC returned invalid coordinates: ${JSON.stringify(mainWindowApiResult.cursor)}`);
+  }
+
+  const targetX = initialMainWindowState.bounds.x + 12;
+  const targetY = initialMainWindowState.bounds.y + 12;
+  await main.evaluate(({ x, y }) => window.cyrene.moveTo(x, y), { x: targetX, y: targetY });
+  await waitForMainWindowState(
+    (state) => state.bounds.x === targetX && state.bounds.y === targetY,
+    "moveTo",
+  );
+  await main.evaluate(() => window.cyrene.setDragging(true));
+  await waitForMainWindowState((state) => Math.abs(state.opacity - 0.99) < 0.001, "drag opacity");
+  await main.evaluate(() => window.cyrene.setDragging(false));
+  await waitForMainWindowState((state) => state.opacity === 1, "drag opacity reset");
+
+  await main.evaluate(() => window.settings.setPetZoom(1.1));
+  await waitForMainWindowState(
+    (state) => state.bounds.width === initialMainWindowState.bounds.width + 40
+      && state.bounds.height === initialMainWindowState.bounds.height + 50,
+    "pet zoom",
+  );
+  const resetZoomDiagnostics = await main.evaluate(async () => {
+    const events = [];
+    const off = window.cyrene.onPetZoom((zoom) => events.push(zoom));
+    window.settings.setPetZoom(1);
+    const persisted = (await window.settings.getGeneral()).petZoom;
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    off();
+    return { persisted, events, innerWidth: window.innerWidth, innerHeight: window.innerHeight };
+  });
+  if (resetZoomDiagnostics.persisted !== 1) {
+    throw new Error(`pet zoom did not persist reset: ${JSON.stringify(resetZoomDiagnostics)}`);
+  }
+  await waitForMainWindowState(
+    (state) => state.bounds.width === initialMainWindowState.bounds.width
+      && state.bounds.height === initialMainWindowState.bounds.height,
+    `pet zoom reset ${JSON.stringify(resetZoomDiagnostics)}`,
+  );
+
+  await main.evaluate(() => window.settings.setPetVisible(false));
+  await waitForMainWindowState((state) => state.visible === false, "pet hide");
+  await main.evaluate(() => window.settings.setPetVisible(true));
+  await waitForMainWindowState((state) => state.visible === true, "pet show");
+
+  await main.evaluate(({ x, y }) => window.cyrene.moveTo(x, y), {
+    x: initialMainWindowState.bounds.x,
+    y: initialMainWindowState.bounds.y,
+  });
+  await waitForMainWindowState(
+    (state) => state.bounds.x === initialMainWindowState.bounds.x
+      && state.bounds.y === initialMainWindowState.bounds.y,
+    "position reset",
+  );
+  await main.evaluate(() => window.cyrene.setDragging(false));
   const legacyRendererCapabilities = await main.evaluate(() => {
     const marker = "__cyreneLegacyInlineSmoke";
     delete window[marker];
@@ -183,7 +272,7 @@ try {
   }
   const openerStatus = await settings.evaluate(() => window.openerBridge?.getStatus());
   if (!openerStatus || typeof openerStatus !== "object") throw new Error("settings openerBridge API is unavailable");
-  console.log(JSON.stringify({ ok: true, profileDir, results }, null, 2));
+  console.log(JSON.stringify({ ok: true, profileDir, mainWindowApiResult, results }, null, 2));
 } finally {
   if (electronApp) {
     const closeStartedAt = Date.now();

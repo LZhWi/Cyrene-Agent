@@ -88,7 +88,7 @@ import type { SceneIndex } from "./scene-embedder";
 import { loadUserStickerManifest, addUserSticker, deleteUserSticker, getAllStickerConfig, isStickerIdTaken, getStickersDir } from "./sticker-storage";
 import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
 import { normalizeWindowVisibilitySettings } from "./window-visibility-settings";
-import { PetWindowMoveController } from "./pet-window-movement";
+import { WindowManager } from "./windows/window-manager";
 import type { StickerConfigItem } from "../shared/sticker-types";
 import type { ImageMessageAttachment, ChatMessage } from "../shared/chat-types";
 import type { GptsovitsSynthesizeRequest, GptsovitsTextSplitMethod, GptsovitsVersion } from "../shared/tts-types";
@@ -234,7 +234,6 @@ async function reconcileUserMemoryIndex(): Promise<void> {
   console.log("[Memory/RAG] reconciliation:", report);
 }
 
-let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let chatWindow: BrowserWindow | null = null;
 let sidebarWindow: BrowserWindow | null = null;
@@ -247,12 +246,6 @@ let schedulerEngine: SchedulerEngine | null = null;
 let proactiveChatService: ProactiveChatService | null = null;
 let normalConversationBusyCount = 0;
 let proactiveScreenLocked = false;
-const petWindowMoveController = new PetWindowMoveController(
-  () => mainWindow,
-  ({ x, y }) => {
-    saveGeneralSettings({ petWindowX: x, petWindowY: y });
-  },
-);
 const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
   onClosed: () => setLive2dWindow(null),
 });
@@ -336,7 +329,7 @@ function shutdownDesktopRuntime(): Promise<void> {
   if (desktopShutdownPromise) return desktopShutdownPromise;
   desktopShutdownPromise = Promise.resolve().then(async () => {
     const steps: Array<[string, () => void]> = [
-      ["pet movement", () => petWindowMoveController.dispose()],
+      ["pet movement", () => windowManager.dispose()],
       ["scheduler", () => schedulerEngine?.stop()],
       ["dream scheduler", stopDreamScheduler],
       ["proactive opener", stopOpener],
@@ -810,6 +803,13 @@ const CHAT_REQUEST_TIMEOUT_MS = 300000; // FC 总预算：20 轮 × 推理模型
 const PET_WINDOW_BASE_WIDTH = 400;
 const PET_WINDOW_BASE_HEIGHT = 500;
 const STARTUP_EMBEDDING_REFRESH_DELAY_MS = 1500;
+const windowManager = new WindowManager({
+  baseWidth: PET_WINDOW_BASE_WIDTH,
+  baseHeight: PET_WINDOW_BASE_HEIGHT,
+  persistMainWindowPosition: ({ x, y }) => {
+    saveGeneralSettings({ petWindowX: x, petWindowY: y });
+  },
+});
 
 function getAppIconPath(icon: UiIcon): string {
   const preset = UI_ICON_PRESETS.find((item) => item.id === icon);
@@ -1616,13 +1616,12 @@ function loadGeneralSettings(): GeneralSettings {
 }
 
 function applyGeneralSettings(settings: GeneralSettings, previous?: GeneralSettings): void {
-  mainWindow?.setAlwaysOnTop(settings.petAlwaysOnTop, settings.petAlwaysOnTop ? "screen-saver" : "normal");
+  windowManager.setMainWindowAlwaysOnTop(settings.petAlwaysOnTop);
   if (!previous || previous.petVisible !== settings.petVisible) {
     if (settings.petVisible) {
-      if (previous) mainWindow?.showInactive();
-      else mainWindow?.show();
+      windowManager.showMainWindow(Boolean(previous));
     } else {
-      mainWindow?.hide();
+      windowManager.hideMainWindow();
     }
   }
   app.setLoginItemSettings({ openAtLogin: settings.launchAtLogin });
@@ -1634,10 +1633,7 @@ function applyGeneralSettings(settings: GeneralSettings, previous?: GeneralSetti
  * 窗口与模型同步等比缩放，比例不变，故模型始终塞满窗口、不被裁剪。
  */
 function applyPetZoom(zoom: number): void {
-  if (!mainWindow || mainWindow.isDestroyed()) return;
-  const width = Math.round(PET_WINDOW_BASE_WIDTH * zoom);
-  const height = Math.round(PET_WINDOW_BASE_HEIGHT * zoom);
-  mainWindow.setSize(width, height);
+  windowManager.applyMainWindowZoom(zoom);
   sendToLive2DWindow(IPC.PET_ZOOM, zoom);
 }
 
@@ -2437,9 +2433,7 @@ async function commitLocalProactiveMessage(input: ProactiveCommitInput): Promise
 
   // 文本已落库；气泡/TTS 前再次执行完整检查，失败时只取消展示和语音。
   const displayDecision = getProactiveCommitDecision(input.candidate, input.generationEpoch);
-  if (displayDecision.allowed && mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send(IPC.LIVE2D_SHOW_BUBBLE, payload);
-  }
+  if (displayDecision.allowed) sendToLive2DWindow(IPC.LIVE2D_SHOW_BUBBLE, payload);
   return { kind: "committed" };
 }
 
@@ -2848,7 +2842,7 @@ function broadcastToAuxWindows(channel: string, payload: unknown): void {
 }
 
 function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
-  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, gameBotWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [windowManager.getMainWindow(), chatWindow, sidebarWindow, tasksWindow, settingsWindow, gameBotWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_THEME_CHANGED, theme);
     }
@@ -2856,7 +2850,7 @@ function broadcastUiThemeChanged(theme: GeneralSettings["uiTheme"]): void {
 }
 
 function broadcastUiFontChanged(font: GeneralSettings["uiFont"]): void {
-  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, gameBotWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [windowManager.getMainWindow(), chatWindow, sidebarWindow, tasksWindow, settingsWindow, gameBotWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) {
       win.webContents.send(IPC.UI_FONT_CHANGED, font);
     }
@@ -2873,10 +2867,7 @@ function broadcastRuntimeStateChanged(): void {
 }
 
 export function sendToLive2DWindow(channel: string, payload?: unknown): void {
-  const win = mainWindow;
-  if (!win || win.isDestroyed()) return;
-  if (payload === undefined) win.webContents.send(channel);
-  else win.webContents.send(channel, payload);
+  windowManager.sendToMainWindow(channel, payload);
 }
 
 function openExternalUrl(url: string): boolean {
@@ -2931,7 +2922,7 @@ function createWindow(): void {
     }
   }
 
-  mainWindow = new BrowserWindow({
+  const mainWindow = windowManager.attachMainWindow(new BrowserWindow({
     x: restoreX,
     y: restoreY,
     width: PET_WINDOW_BASE_WIDTH,
@@ -2948,7 +2939,7 @@ function createWindow(): void {
       nodeIntegration: false,
       sandbox: false,
     },
-  });
+  }));
   live2dWindowLifecycle.attach(mainWindow);
 
   if (isDev) {
@@ -2962,10 +2953,14 @@ function createWindow(): void {
   }
 
   mainWindow.on("hide", () => {
-    mainWindow?.webContents.send(IPC.PET_VISIBILITY_CHANGED, false);
+    if (!mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send(IPC.PET_VISIBILITY_CHANGED, false);
+    }
   });
   mainWindow.on("show", () => {
-    mainWindow?.webContents.send(IPC.PET_VISIBILITY_CHANGED, true);
+    if (!mainWindow.webContents.isDestroyed()) {
+      mainWindow.webContents.send(IPC.PET_VISIBILITY_CHANGED, true);
+    }
   });
 
   applyGeneralSettings(loadGeneralSettings());
@@ -3239,9 +3234,7 @@ function createWindow(): void {
   });
 
   mainWindow.on("closed", () => {
-    petWindowMoveController.dispose();
-    live2dWindowLifecycle.clear(mainWindow ?? undefined);
-    mainWindow = null;
+    live2dWindowLifecycle.clear(mainWindow);
   });
 }
 
@@ -3673,11 +3666,7 @@ function createTray(): void {
     },
     {
       label: "显示/隐藏桌宠",
-      click: () => {
-        if (mainWindow) {
-          mainWindow.isVisible() ? mainWindow.hide() : mainWindow.show();
-        }
-      },
+      click: () => { windowManager.toggleMainWindow(); },
     },
     { type: "separator" },
     {
@@ -3697,23 +3686,21 @@ function applyUiIcon(iconSetting: UiIcon): void {
     return;
   }
   tray?.setImage(icon);
-  for (const win of [mainWindow, chatWindow, sidebarWindow, tasksWindow, settingsWindow, gameBotWindow, stickerManagerWindow, callWindow]) {
+  for (const win of [windowManager.getMainWindow(), chatWindow, sidebarWindow, tasksWindow, settingsWindow, gameBotWindow, stickerManagerWindow, callWindow]) {
     if (win && !win.isDestroyed()) win.setIcon(icon);
   }
 }
 
 ipcMain.handle(IPC.WINDOW_SET_INTERACTIVE, (_event, interactive: boolean) => {
-  if (mainWindow) {
-    mainWindow.setIgnoreMouseEvents(!interactive, { forward: true });
-  }
+  windowManager.setMainWindowInteractive(interactive);
 });
 
 ipcMain.on(IPC.WINDOW_MOVE, (_event, dx: number, dy: number) => {
-  petWindowMoveController.moveRelative(dx, dy);
+  windowManager.moveMainWindowRelative(dx, dy);
 });
 
 ipcMain.on(IPC.WINDOW_MOVE_TO, (_event, x: number, y: number) => {
-  petWindowMoveController.queueAbsolute(x, y);
+  windowManager.moveMainWindowTo(x, y);
 });
 
 /**
@@ -3742,14 +3729,7 @@ ipcMain.on(IPC.WINDOW_MOVE_TO, (_event, x: number, y: number) => {
  * translucent during the drag.
  */
 ipcMain.on(IPC.WINDOW_SET_DRAGGING, (_event, isDragging: boolean) => {
-  const window = mainWindow;
-  if (!window || window.isDestroyed()) return;
-  if (!isDragging) petWindowMoveController.finishDragging();
-  try {
-    window.setOpacity(isDragging ? 0.99 : 1.0);
-  } catch (error) {
-    console.warn("[Cyrene] Failed to update pet window dragging opacity:", error);
-  }
+  windowManager.setMainWindowDragging(isDragging);
 });
 
 /**
@@ -3763,14 +3743,7 @@ ipcMain.on(IPC.WINDOW_SET_DRAGGING, (_event, isDragging: boolean) => {
  * GPU-driven canvas updates).
  */
 ipcMain.handle(IPC.WINDOW_CAPTURE_FRAME, async () => {
-  if (!mainWindow) return null;
-  try {
-    const image = await mainWindow.webContents.capturePage();
-    return image.toDataURL();
-  } catch (err) {
-    console.error("[Cyrene] captureFrame failed:", err);
-    return null;
-  }
+  return windowManager.captureMainWindowFrame();
 });
 ipcMain.handle(IPC.WINDOW_GET_CURSOR_POSITION, () => {
   return screen.getCursorScreenPoint();
@@ -3781,8 +3754,8 @@ ipcMain.handle(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS, () => ({
 }));
 
 ipcMain.handle("debug:screenshot", async () => {
-  if (!mainWindow) return null;
-  const image = await mainWindow.webContents.capturePage();
+  const image = await windowManager.captureMainWindow();
+  if (!image) return null;
   const png = image.toPNG();
   const outPath = path.join(app.getPath("temp"), "cyrene-screenshot.png");
   fs.writeFileSync(outPath, png);
@@ -3790,11 +3763,11 @@ ipcMain.handle("debug:screenshot", async () => {
 });
 
 ipcMain.on(IPC.WINDOW_MINIMIZE, () => {
-  mainWindow?.minimize();
+  windowManager.minimizeMainWindow();
 });
 
 ipcMain.on(IPC.WINDOW_CLOSE, () => {
-  mainWindow?.hide();
+  windowManager.hideMainWindow();
 });
 
 ipcMain.on(IPC.APP_QUIT, () => {
@@ -4148,7 +4121,7 @@ ipcMain.on(IPC.SETTINGS_CLOSE_TASKS, () => {
 
 ipcMain.on(IPC.SETTINGS_SET_PET_ALWAYS_ON_TOP, (_event, value: boolean) => {
   const saved = saveGeneralSettings({ ...loadGeneralSettings(), petAlwaysOnTop: Boolean(value) });
-  mainWindow?.setAlwaysOnTop(saved.petAlwaysOnTop, saved.petAlwaysOnTop ? "screen-saver" : "normal");
+  windowManager.setMainWindowAlwaysOnTop(saved.petAlwaysOnTop);
 });
 
 ipcMain.on(IPC.SETTINGS_SET_PET_VISIBLE, (_event, value: boolean) => {
@@ -6255,7 +6228,7 @@ app.whenReady().then(async () => {
 app.on("window-all-closed", () => {});
 
 app.on("activate", () => {
-  if (mainWindow === null) {
+  if (windowManager.getMainWindow() === null) {
     createWindow();
   }
 });

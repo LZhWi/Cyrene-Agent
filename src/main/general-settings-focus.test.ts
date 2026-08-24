@@ -11,7 +11,7 @@ describe("general settings window focus", () => {
     );
 
     expect(applyBlock).toContain("previous.petVisible !== settings.petVisible");
-    expect(applyBlock).toContain("mainWindow?.showInactive()");
+    expect(applyBlock).toContain("windowManager.showMainWindow(Boolean(previous))");
     expect(source).toContain("applyGeneralSettings(normalized, before)");
   });
 });
