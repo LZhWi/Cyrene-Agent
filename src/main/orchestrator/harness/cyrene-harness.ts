@@ -66,11 +66,13 @@ export interface HarnessRun {
   state: AgentState;
   clock: TimeoutClock;
   streamController: StreamController;
-  /** 模型可见的完整工具清单（registry + harness built-in）。 */
+  /** 模型可见的完整工具清单（registry + harness built-in）。
+   *  不变量：run 期间固定不变（对前缀缓存友好）；工具集合变化 = 运行边界变化，应开启新 run。 */
   allToolSpecs: ToolSpec[];
   messages: ChatMessage[];
   toolOutputs: ToolOutputRef[];
   cache: HarnessCacheState;
+  /** 已完成的工具执行轮数（最终无工具的回复轮不计入；LLM 请求轮数 = rounds + 最终回复轮）。 */
   rounds: number;
   checkpointFailure?: string;
   /** ask_user 等交互内置工具的 dispatch 上下文。 */
@@ -93,7 +95,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
 
   while (!run.clock.isExecutionTimeout()) {
     if (run.checkpointFailure) {
-      return buildResult(`执行状态保存失败：${run.checkpointFailure}`, run.state, true, "error", run.rounds);
+      return finishRun(run, `执行状态保存失败：${run.checkpointFailure}`, true, "error");
     }
     // Task 3 / C2：cancelled 不生成 "最终回复被取消。"，finalAnswer 为空。
     if (input.signal?.aborted) return cancelledResult(run);
@@ -106,7 +108,14 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     // 注意：从 run 启动到首次 LLM fetch 之间不得引入 await 挂起点
     //（调用方/测试依赖 fetch 同步发起），因此只在真正需要压缩时才 await。
     const compaction = compactIfNeeded(run, promptLayers);
-    if (compaction) await compaction;
+    if (compaction) {
+      await compaction;
+      // 压缩已替换模型历史：checkpoint 失败 = 新 epoch 未持久化。
+      // 此时继续请求模型，崩溃恢复会拿到旧历史 + 旧周期，违反缓存周期不变量 → 立即熔断。
+      if (run.checkpointFailure) {
+        return finishRun(run, `执行状态保存失败：${run.checkpointFailure}`, true, "error");
+      }
+    }
 
     // ── 上下文容量快照 + 缓存诊断（压缩后、请求前）──
     emitContextUsage(run, "preRequest");
@@ -148,12 +157,10 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     const finalAnswer = run.streamController.commitProgressBuffer();
     input.onEvent?.({ type: "round_end", roundId });
     input.onEvent?.({ type: "final_answer", content: finalAnswer });
-    run.clock.stopActive();
     return finishRun(run, finalAnswer, false, undefined);
   }
 
   // ── 兜底：显式配置的总超时 ──
-  run.clock.stopActive();
   const finalAnswer = run.streamController.getBuffered() || buildTimeoutReply(run.state);
   input.onEvent?.({ type: "final_answer", content: finalAnswer });
   return finishRun(run, finalAnswer, true, "timeout");
@@ -257,7 +264,8 @@ function buildRoundPromptLayers(input: HarnessInput): PromptLayers {
 
 /**
  * Mid-loop compaction（v3 §10.6）：估算超预算时压缩历史并推进缓存周期。
- * 压缩会替换模型历史，因此下一次请求前必须先持久化新 epoch。
+ * 压缩会替换模型历史，因此下一次请求前必须先持久化新 epoch
+ * （主循环在压缩后检查 checkpointFailure，失败即熔断，不再发起模型请求）。
  *
  * 同步门控：未超预算时返回 undefined（不产生 await 挂起点），
  * 保证主循环到首次 LLM fetch 之间保持同步直达。
@@ -401,8 +409,9 @@ function checkpoint(run: HarnessRun): void {
   }
 }
 
-/** 用户取消的统一出口：先 checkpoint 保状态，再返回空 finalAnswer 的 cancelled 结果。 */
+/** 用户取消的统一出口：停表 → checkpoint 保状态 → 空 finalAnswer 的 cancelled 结果。 */
 function cancelledResult(run: HarnessRun): HarnessResult {
+  run.clock.stopActive();
   checkpoint(run);
   if (run.checkpointFailure) {
     return buildResult(`执行状态保存失败：${run.checkpointFailure}`, run.state, true, "error", run.rounds);
@@ -417,13 +426,14 @@ function cancelledResult(run: HarnessRun): HarnessResult {
   };
 }
 
-/** 终态统一出口：terminal 快照 → checkpoint → 构造结果。 */
+/** 终态统一出口：停表 → terminal 快照 → checkpoint → 构造结果。 */
 function finishRun(
   run: HarnessRun,
   finalAnswer: string,
   terminated: boolean,
   terminateReason: HarnessResult["terminateReason"],
 ): HarnessResult {
+  run.clock.stopActive();
   emitContextUsage(run, "terminal");
   checkpoint(run);
   if (run.checkpointFailure) {
@@ -489,6 +499,8 @@ function fingerprintCacheDiagnostic(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
+/** checkpoint 契约：messages / state / toolOutputs 必须严格 JSON-serializable
+ *  （不得含 Date / Map / Set / BigInt / class instance），否则深拷贝与持久化都会失真。 */
 function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }

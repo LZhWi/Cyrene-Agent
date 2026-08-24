@@ -511,6 +511,73 @@ describe("CyreneHarness completion (P0-A)", () => {
     ]);
   });
 
+  it("halts before the next model request when the post-compaction checkpoint fails", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ text: "## 原始任务与意图\n- 完成历史任务\n\n## 下一步\n- 继续回答" }),
+      assistantResponse({ text: "不应到达这里。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    const historicalMessages: ChatMessage[] = Array.from({ length: 20 }, (_, index) => ({
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `${index === 0 ? "旧任务" : "旧历史"}`.repeat(100),
+    }));
+
+    const result = await runCyreneHarness({
+      systemPrompt: "test system prompt",
+      messages: [
+        ...historicalMessages,
+        { role: "user", content: "请继续完成".repeat(40) },
+      ],
+      tools: [],
+      vendorConfig,
+      config: {
+        contextWindowTokens: 200,
+        reservedOutputTokens: 20,
+        safetyMarginTokens: 0,
+        compactionThreshold: 0.3,
+        compactionRetainRatio: 0.16,
+      },
+      onCheckpoint: () => { throw new Error("disk unavailable"); },
+    });
+
+    // 第一次 fetch 是压缩摘要请求；checkpoint 失败后不得再发起模型请求
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(result.terminateReason).toBe("error");
+    expect(result.finalAnswer).toContain("执行状态保存失败");
+  });
+
+  it("keeps mid-loop content as progress and commits only the last no-tool reply as final answer", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ text: "我先看看文件。", toolCalls: [mutationToolCall("inspect-call")] }),
+      assistantResponse({ text: "发现一个问题，我继续检查。", toolCalls: [mutationToolCall("fix-call")] }),
+      assistantResponse({ text: "最终结论是……" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockedDispatch.mockResolvedValue(successDispatchResult("inspect-call"));
+    const events: HarnessEvent[] = [];
+
+    const result = await runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "检查并修复" }],
+      tools: [mutationTool()],
+      vendorConfig,
+      onEvent: (event) => events.push(event),
+    });
+
+    // finalAnswer 只含最后一轮无工具回复，不混入中途内容
+    expect(result.finalAnswer).toBe("最终结论是……");
+    // 中途两轮 content 全部以 progress_text 事件流出（UI 折叠执行区）
+    const progressTexts = events
+      .filter((event): event is Extract<HarnessEvent, { type: "progress_text" }> => event.type === "progress_text")
+      .map((event) => event.content);
+    expect(progressTexts).toEqual(["我先看看文件。", "发现一个问题，我继续检查。"]);
+    const finalAnswers = events.filter(
+      (event): event is Extract<HarnessEvent, { type: "final_answer" }> => event.type === "final_answer",
+    );
+    expect(finalAnswers).toHaveLength(1);
+    expect(finalAnswers[0]?.content).toBe("最终结论是……");
+  });
+
   it("does not erase the transcript when the compaction request fails", async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce({ ok: false, json: async () => ({}) })
