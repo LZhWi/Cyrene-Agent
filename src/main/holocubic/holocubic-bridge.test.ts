@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HoloCubicBridge,
+  parseHoloCubicInputEvent,
   type HoloCubicSocket,
 } from "./holocubic-bridge";
 
@@ -54,6 +55,21 @@ describe("HoloCubicBridge", () => {
       framesSent: 1,
       framesDropped: 0,
     });
+  });
+
+  it("accepts validated text input events from the connected device", () => {
+    const socket = new FakeSocket();
+    const onInputEvent = vi.fn();
+    const bridge = new HoloCubicBridge({ captureFrame: async () => null, createSocket: () => socket, onInputEvent });
+    bridge.start({ url: "ws://device:8766", frameRate: 5 });
+    socket.open();
+
+    socket.emit("message", Buffer.from('{"version":1,"type":"key","key":"left","event":"short","at":12}'), false);
+    socket.emit("message", Buffer.from('{"type":"key","key":"left"}'), false);
+    socket.emit("message", Buffer.from("jpeg"), true);
+
+    expect(onInputEvent).toHaveBeenCalledOnce();
+    expect(bridge.getStatus()).toMatchObject({ inputEvents: 1, lastInput: { type: "key", key: "left" } });
   });
 
   it("drops ticks before capture when the socket is backpressured", async () => {
@@ -115,5 +131,15 @@ describe("HoloCubicBridge", () => {
     expect(bridge.getStatus()).toMatchObject({ state: "stopped", connected: false });
     await vi.advanceTimersByTimeAsync(5_000);
     expect(createSocket).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("parseHoloCubicInputEvent", () => {
+  it("validates IMU payloads and rejects malformed input", () => {
+    expect(parseHoloCubicInputEvent('{"version":1,"type":"imu","roll":1,"pitch":2,"gx":3,"gy":4,"gz":5,"at":6}')).toEqual({
+      version: 1, type: "imu", roll: 1, pitch: 2, gx: 3, gy: 4, gz: 5, at: 6,
+    });
+    expect(parseHoloCubicInputEvent('{"version":1,"type":"imu","roll":"bad"}')).toBeNull();
+    expect(parseHoloCubicInputEvent("not json")).toBeNull();
   });
 });

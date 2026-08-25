@@ -704,7 +704,7 @@ if (!window.settings) {
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
     getHoloCubicSettings: () => Promise.resolve({ enabled: false, host: "192.168.3.40", port: 8766, frameRate: 5, jpegQuality: 60 }),
     saveHoloCubicSettings: (c) => Promise.resolve({ enabled: false, host: "192.168.3.40", port: 8766, frameRate: 5, jpegQuality: 60, ...c }),
-    getHoloCubicStatus: () => Promise.resolve({ state: "stopped", connected: false, framesCaptured: 0, framesSent: 0, framesDropped: 0, reconnectAttempt: 0, bufferedBytes: 0, lastFrameAt: null, lastError: "" }),
+    getHoloCubicStatus: () => Promise.resolve({ state: "stopped", connected: false, framesCaptured: 0, framesSent: 0, framesDropped: 0, reconnectAttempt: 0, bufferedBytes: 0, lastFrameAt: null, lastError: "", inputEvents: 0, lastInput: null }),
     onHoloCubicStatusChanged: () => () => {},
     channelsGetStatus: () => Promise.resolve({}),
     onChannelsStatusChanged: () => () => {},
@@ -1551,8 +1551,9 @@ function renderHoloCubicStatus(status: HoloCubicStatus): void {
     reconnecting: `连接中断，正在重试（第 ${status.reconnectAttempt} 次）`,
   };
   const frameText = status.connected ? ` · 已发送 ${status.framesSent} 帧 · 丢弃 ${status.framesDropped} 帧` : "";
+  const inputText = status.inputEvents > 0 ? ` · 输入事件 ${status.inputEvents}` : "";
   const errorText = status.lastError ? ` · ${status.lastError}` : "";
-  holoCubicConnectionStatus.textContent = labels[status.state] + frameText + errorText;
+  holoCubicConnectionStatus.textContent = labels[status.state] + frameText + inputText + errorText;
 }
 
 async function loadHoloCubicSettings(): Promise<void> {

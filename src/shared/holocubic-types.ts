@@ -18,4 +18,10 @@ export interface HoloCubicStatus {
   bufferedBytes: number;
   lastFrameAt: number | null;
   lastError: string;
+  inputEvents: number;
+  lastInput: HoloCubicInputEvent | null;
 }
+
+export type HoloCubicInputEvent =
+  | { version: 1; type: "key"; key: "left" | "right" | "up" | "down" | "home"; event: string; at: number }
+  | { version: 1; type: "imu"; roll: number; pitch: number; gx: number; gy: number; gz: number; at: number };

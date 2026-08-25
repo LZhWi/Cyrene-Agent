@@ -1,5 +1,5 @@
 import { WebSocket } from "ws";
-import type { HoloCubicStatus } from "../../shared/holocubic-types";
+import type { HoloCubicInputEvent, HoloCubicStatus } from "../../shared/holocubic-types";
 
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
@@ -20,6 +20,7 @@ export interface HoloCubicSocket {
   on(event: "open", listener: () => void): this;
   on(event: "close", listener: () => void): this;
   on(event: "error", listener: (error: Error) => void): this;
+  on(event: "message", listener: (data: unknown, isBinary: boolean) => void): this;
   send(data: Buffer, options: { binary: true }, callback: (error?: Error) => void): void;
   close(code?: number, reason?: string): void;
   terminate?(): void;
@@ -29,6 +30,7 @@ export interface HoloCubicBridgeDependencies {
   captureFrame: () => Promise<Buffer | null>;
   createSocket?: (url: string) => HoloCubicSocket;
   onStatusChanged?: (status: HoloCubicBridgeStatus) => void;
+  onInputEvent?: (event: HoloCubicInputEvent) => void;
 }
 
 const DEFAULT_MAX_BUFFERED_BYTES = 512 * 1024;
@@ -68,6 +70,8 @@ export class HoloCubicBridge {
     bufferedBytes: 0,
     lastFrameAt: null,
     lastError: "",
+    inputEvents: 0,
+    lastInput: null,
   };
 
   constructor(private readonly dependencies: HoloCubicBridgeDependencies) {
@@ -88,6 +92,8 @@ export class HoloCubicBridge {
       bufferedBytes: 0,
       lastFrameAt: null,
       lastError: "",
+      inputEvents: 0,
+      lastInput: null,
     };
     this.emitStatus();
     this.connect();
@@ -142,6 +148,13 @@ export class HoloCubicBridge {
     socket.on("error", (error) => {
       if (!this.isCurrent(socket, generation)) return;
       this.patchStatus({ lastError: errorText(error) });
+    });
+    socket.on("message", (data, isBinary) => {
+      if (!this.isCurrent(socket, generation) || isBinary) return;
+      const event = parseHoloCubicInputEvent(data);
+      if (!event) return;
+      this.patchStatus({ inputEvents: this.status.inputEvents + 1, lastInput: event });
+      this.dependencies.onInputEvent?.(event);
     });
     socket.on("close", () => {
       if (!this.isCurrent(socket, generation)) return;
@@ -244,4 +257,44 @@ export class HoloCubicBridge {
   private emitStatus(): void {
     this.dependencies.onStatusChanged?.(this.getStatus());
   }
+}
+
+function finiteNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+export function parseHoloCubicInputEvent(data: unknown): HoloCubicInputEvent | null {
+  let text: string;
+  if (typeof data === "string") text = data;
+  else if (Buffer.isBuffer(data)) text = data.toString("utf8");
+  else if (data instanceof ArrayBuffer) text = Buffer.from(data).toString("utf8");
+  else return null;
+  try {
+    const value = JSON.parse(text) as Record<string, unknown>;
+    const at = finiteNumber(value.at);
+    if (value.version !== 1 || at === null) return null;
+    if (value.type === "key") {
+      const keys = ["left", "right", "up", "down", "home"];
+      if (!keys.includes(String(value.key)) || typeof value.event !== "string") return null;
+      return {
+        version: 1,
+        type: "key",
+        key: value.key as "left" | "right" | "up" | "down" | "home",
+        event: value.event,
+        at,
+      };
+    }
+    if (value.type === "imu") {
+      const roll = finiteNumber(value.roll);
+      const pitch = finiteNumber(value.pitch);
+      const gx = finiteNumber(value.gx);
+      const gy = finiteNumber(value.gy);
+      const gz = finiteNumber(value.gz);
+      if (roll === null || pitch === null || gx === null || gy === null || gz === null) return null;
+      return { version: 1, type: "imu", roll, pitch, gx, gy, gz, at };
+    }
+  } catch {
+    return null;
+  }
+  return null;
 }
