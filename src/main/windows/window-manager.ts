@@ -124,6 +124,19 @@ export class WindowManager {
     return image?.toDataURL() ?? null;
   }
 
+  async captureMainWindowJpeg(width: number, height: number, quality: number): Promise<Buffer | null> {
+    const image = await this.captureMainWindow();
+    if (!image || image.isEmpty()) return null;
+    const targetWidth = Math.max(1, Math.round(width));
+    const targetHeight = Math.max(1, Math.round(height));
+    const jpegQuality = Math.max(0, Math.min(100, Math.round(quality)));
+    return image.resize({
+      width: targetWidth,
+      height: targetHeight,
+      quality: "good",
+    }).toJPEG(jpegQuality);
+  }
+
   dispose(): void {
     this.petWindowMoveController.dispose();
   }

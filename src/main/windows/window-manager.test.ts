@@ -6,6 +6,14 @@ function createFakeWindow() {
   let destroyed = false;
   let visible = false;
   let position: [number, number] = [100, 200];
+  const resizedImage = {
+    toJPEG: vi.fn(() => Buffer.from("jpeg")),
+  };
+  const capturedImage = {
+    toDataURL: vi.fn(() => "data:image/png;base64,test"),
+    isEmpty: vi.fn(() => false),
+    resize: vi.fn(() => resizedImage),
+  };
   const window = {
     isDestroyed: vi.fn(() => destroyed),
     isVisible: vi.fn(() => visible),
@@ -25,11 +33,13 @@ function createFakeWindow() {
     webContents: {
       isDestroyed: vi.fn(() => destroyed),
       send: vi.fn(),
-      capturePage: vi.fn(async () => ({ toDataURL: () => "data:image/png;base64,test" })),
+      capturePage: vi.fn(async () => capturedImage),
     },
   };
   return {
     window,
+    capturedImage,
+    resizedImage,
     close: () => {
       destroyed = true;
       for (const listener of listeners.get("closed") ?? []) listener();
@@ -101,5 +111,15 @@ describe("WindowManager", () => {
     manager.sendToMainWindow("ignored");
     await expect(manager.captureMainWindow()).resolves.toBeNull();
     expect(fake.window.webContents.send).not.toHaveBeenCalled();
+  });
+
+  it("captures a bounded binary JPEG without changing the existing PNG path", async () => {
+    const fake = createFakeWindow();
+    const manager = createManager();
+    manager.attachMainWindow(fake.window as never);
+
+    await expect(manager.captureMainWindowJpeg(320.4, 239.6, 61.7)).resolves.toEqual(Buffer.from("jpeg"));
+    expect(fake.capturedImage.resize).toHaveBeenCalledWith({ width: 320, height: 240, quality: "good" });
+    expect(fake.resizedImage.toJPEG).toHaveBeenCalledWith(62);
   });
 });
