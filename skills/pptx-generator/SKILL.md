@@ -11,9 +11,6 @@ metadata:
   sources:
     - 'https://gitbrent.github.io/PptxGenJS/'
     - 'https://github.com/microsoft/markitdown'
-modes:
-  - work
-  - learn
 ---
 
 # PPTX 生成器与编辑器

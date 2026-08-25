@@ -5,9 +5,6 @@ license: MIT
 metadata:
   version: "2.0"
   category: document-generation
-modes:
-  - work
-  - learn
 ---
 
 # Windows-native PDF workflow
