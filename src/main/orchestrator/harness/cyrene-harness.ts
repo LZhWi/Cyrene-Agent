@@ -46,7 +46,7 @@ import { TimeoutClock } from "./timeout-clock";
 import { buildCurrentTodoNotebookContext } from "./todo-working-notebook";
 import { appendInternalTranscriptMessage, createInternalTranscriptMessage } from "./internal-transcript";
 import { callLLM, summarizeHistory } from "./harness-llm";
-import { runToolRound } from "./tool-round";
+import { runToolRound, type ToolRoundOutcome } from "./tool-round";
 import {
   buildStableSystemPrefix,
   projectCacheRelevantRequest,

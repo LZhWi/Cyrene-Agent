@@ -294,7 +294,7 @@ describe("scheduleToolCalls", () => {
       calls: [call("solo")],
       maxParallel: 2,
       classify: () => "parallel",
-      execute: () => Promise.reject(boom),
+      execute: (): Promise<string> => Promise.reject(boom),
       commit: async ({ call: toolCall }, result) => {
         commits.push({ name: toolCall.name, result });
         return "continue";
