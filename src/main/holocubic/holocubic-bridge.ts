@@ -8,6 +8,7 @@ export interface HoloCubicBridgeConfig {
   url: string;
   frameRate: number;
   maxBufferedBytes?: number;
+  connectTimeoutMs?: number;
   reconnectMinMs?: number;
   reconnectMaxMs?: number;
 }
@@ -34,6 +35,7 @@ export interface HoloCubicBridgeDependencies {
 }
 
 const DEFAULT_MAX_BUFFERED_BYTES = 512 * 1024;
+const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
 const DEFAULT_RECONNECT_MIN_MS = 500;
 const DEFAULT_RECONNECT_MAX_MS = 10_000;
 
@@ -46,6 +48,7 @@ function normalizeConfig(config: HoloCubicBridgeConfig): Required<HoloCubicBridg
     url: config.url,
     frameRate: Math.max(1, Math.min(30, Math.round(config.frameRate))),
     maxBufferedBytes: Math.max(1, Math.round(config.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES)),
+    connectTimeoutMs: Math.max(250, Math.round(config.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS)),
     reconnectMinMs: Math.max(50, Math.round(config.reconnectMinMs ?? DEFAULT_RECONNECT_MIN_MS)),
     reconnectMaxMs: Math.max(50, Math.round(config.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS)),
   };
@@ -56,6 +59,7 @@ export class HoloCubicBridge {
   private config: Required<HoloCubicBridgeConfig> | null = null;
   private socket: HoloCubicSocket | null = null;
   private frameTimer: NodeJS.Timeout | null = null;
+  private connectTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private captureInFlight = false;
   private running = false;
@@ -103,6 +107,7 @@ export class HoloCubicBridge {
     this.running = false;
     this.generation += 1;
     this.clearFrameTimer();
+    this.clearConnectTimer();
     this.clearReconnectTimer();
     const socket = this.socket;
     this.socket = null;
@@ -133,9 +138,26 @@ export class HoloCubicBridge {
       return;
     }
     this.socket = socket;
+    this.connectTimer = setTimeout(() => {
+      if (!this.isCurrent(socket, generation)) return;
+      this.socket = null;
+      this.patchStatus({
+        connected: false,
+        bufferedBytes: 0,
+        lastError: "WebSocket handshake timed out",
+      });
+      try {
+        if (socket.terminate) socket.terminate();
+        else socket.close();
+      } catch {
+        // Reconnect below even when the half-open socket cannot close cleanly.
+      }
+      this.scheduleReconnect();
+    }, this.config.connectTimeoutMs);
 
     socket.on("open", () => {
       if (!this.isCurrent(socket, generation)) return;
+      this.clearConnectTimer();
       this.patchStatus({
         state: "connected",
         connected: true,
@@ -160,6 +182,7 @@ export class HoloCubicBridge {
       if (!this.isCurrent(socket, generation)) return;
       this.socket = null;
       this.clearFrameTimer();
+      this.clearConnectTimer();
       this.patchStatus({ connected: false, bufferedBytes: 0 });
       this.scheduleReconnect();
     });
@@ -241,6 +264,12 @@ export class HoloCubicBridge {
     if (!this.frameTimer) return;
     clearInterval(this.frameTimer);
     this.frameTimer = null;
+  }
+
+  private clearConnectTimer(): void {
+    if (!this.connectTimer) return;
+    clearTimeout(this.connectTimer);
+    this.connectTimer = null;
   }
 
   private clearReconnectTimer(): void {

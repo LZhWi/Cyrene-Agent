@@ -132,6 +132,39 @@ describe("HoloCubicBridge", () => {
     await vi.advanceTimersByTimeAsync(5_000);
     expect(createSocket).toHaveBeenCalledTimes(2);
   });
+
+  it("abandons a stalled WebSocket handshake and reconnects", async () => {
+    const sockets = [new FakeSocket(), new FakeSocket()];
+    const createSocket = vi.fn(() => sockets.shift()!);
+    const bridge = new HoloCubicBridge({ captureFrame: async () => null, createSocket });
+
+    bridge.start({
+      url: "ws://device:8766",
+      frameRate: 5,
+      connectTimeoutMs: 1_000,
+      reconnectMinMs: 500,
+    });
+    const first = createSocket.mock.results[0].value as FakeSocket;
+
+    await vi.advanceTimersByTimeAsync(999);
+    expect(first.terminate).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(first.terminate).toHaveBeenCalledOnce();
+    expect(bridge.getStatus()).toMatchObject({
+      state: "reconnecting",
+      connected: false,
+      reconnectAttempt: 1,
+      lastError: "WebSocket handshake timed out",
+    });
+
+    await vi.advanceTimersByTimeAsync(500);
+    expect(createSocket).toHaveBeenCalledTimes(2);
+    const second = createSocket.mock.results[1].value as FakeSocket;
+    second.open();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(second.terminate).not.toHaveBeenCalled();
+    expect(bridge.getStatus()).toMatchObject({ state: "connected", connected: true });
+  });
 });
 
 describe("parseHoloCubicInputEvent", () => {
