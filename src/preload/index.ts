@@ -538,6 +538,16 @@ const live2dActionApi = {
 };
 contextBridge.exposeInMainWorld("live2dAction", live2dActionApi);
 
+const holoCubicRendererApi = {
+  ready: () => ipcRenderer.send(IPC.HOLOCUBIC_RENDERER_READY),
+  onInput: (callback: (payload: import("../shared/holocubic-types").HoloCubicInputEvent) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: import("../shared/holocubic-types").HoloCubicInputEvent) => callback(payload);
+    ipcRenderer.on(IPC.HOLOCUBIC_RENDER_INPUT, listener);
+    return () => ipcRenderer.removeListener(IPC.HOLOCUBIC_RENDER_INPUT, listener);
+  },
+};
+contextBridge.exposeInMainWorld("holoCubicRenderer", holoCubicRendererApi);
+
 const live2dDiagnosticsApi = {
   getMain: () => ipcRenderer.invoke(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS),
   getIpcListenerCounts: () => getLive2DIpcListenerCounts(ipcRenderer),

@@ -97,6 +97,8 @@ export const IPC = {
   HOLOCUBIC_SAVE_SETTINGS: "holocubic:save-settings",
   HOLOCUBIC_GET_STATUS: "holocubic:get-status",
   HOLOCUBIC_STATUS_CHANGED: "holocubic:status-changed",
+  HOLOCUBIC_RENDERER_READY: "holocubic:renderer-ready",
+  HOLOCUBIC_RENDER_INPUT: "holocubic:render-input",
   SETTINGS_OPEN_SIDEBAR: "settings:open-sidebar",
   SETTINGS_CLOSE_SIDEBAR: "settings:close-sidebar",
   SETTINGS_OPEN_TASKS: "settings:open-tasks",

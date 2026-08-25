@@ -17,6 +17,7 @@ export default defineConfig({
         gamebot: resolve(__dirname, "src/renderer/gamebot/index.html"),
         stickers: resolve(__dirname, "src/renderer/sticker-manager/index.html"),
         call: resolve(__dirname, "src/renderer/call/index.html"),
+        holocubic: resolve(__dirname, "src/renderer/holocubic/index.html"),
       },
     },
   },

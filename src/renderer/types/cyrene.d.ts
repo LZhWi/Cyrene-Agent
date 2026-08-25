@@ -15,5 +15,9 @@ declare global {
       onPetZoom: (callback: (zoom: number) => void) => () => void;
       onPetVisibilityChanged: (callback: (visible: boolean) => void) => () => void;
     };
+    holoCubicRenderer?: {
+      ready: () => void;
+      onInput: (callback: (payload: import("../../shared/holocubic-types").HoloCubicInputEvent) => void) => () => void;
+    };
   }
 }

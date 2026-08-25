@@ -24,9 +24,9 @@ function computeRendererBase(): string {
   let root = new URL(viteBase, docBase).href;
 
   // 生产模式下 vite base 是 "./"，子目录窗口需要往上走一级
-  // 检测：如果 root 末尾是 chat/ sidebar/ tasks/ settings/ call/ sticker-manager/，往上走
+  // 检测：如果 root 位于任一子页面目录，往上回到 renderer 根目录
   if (viteBase === "./") {
-    const subDirs = ["chat/", "sidebar/", "tasks/", "settings/", "call/", "sticker-manager/"];
+    const subDirs = ["chat/", "sidebar/", "tasks/", "settings/", "call/", "sticker-manager/", "holocubic/"];
     for (const sub of subDirs) {
       if (root.endsWith("/" + sub)) {
         root = root.replace(/[^/]+\/$/, "");

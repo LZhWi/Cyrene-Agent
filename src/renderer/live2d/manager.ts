@@ -18,6 +18,7 @@ export interface Live2DManagerOptions {
   width: number;
   height: number;
   modelPath: string;
+  maxFps?: number;
   onLoad?: () => void;
   onError?: (err: Error) => void;
 }
@@ -136,9 +137,9 @@ export class Live2DManager {
     // the display's refresh rate (144/165Hz on high-refresh laptops) — a
     // continuous WebGL load that on hybrid-GPU machines lands on the iGPU and
     // stacks with DWM + animated wallpaper to saturation (observed: iGPU 100%
-    // spikes freezing mouse/wallpaper while chat streams). 30fps is visually
-    // indistinguishable for the pet and cuts that demand to a fraction.
-    this.app.ticker.maxFPS = 30;
+    // spikes freezing mouse/wallpaper while chat streams). The desktop defaults
+    // to 30fps; low-resolution auxiliary renderers can request a lower cap.
+    this.app.ticker.maxFPS = Math.max(1, Math.min(60, Math.round(this.options.maxFps ?? 30)));
     try {
       await this.loadModel();
     } catch (err) {

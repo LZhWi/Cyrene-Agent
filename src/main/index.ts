@@ -231,6 +231,12 @@ let settingsWindow: BrowserWindow | null = null;
 let gameBotWindow: BrowserWindow | null = null;
 let stickerManagerWindow: BrowserWindow | null = null;
 let callWindow: BrowserWindow | null = null;
+let holoCubicRenderWindow: BrowserWindow | null = null;
+let holoCubicRendererReady = false;
+let holoCubicRendererReadyPromise: Promise<void> | null = null;
+let resolveHoloCubicRendererReady: (() => void) | null = null;
+let rejectHoloCubicRendererReady: ((error: Error) => void) | null = null;
+let holoCubicApplyGeneration = 0;
 let schedulerEngine: SchedulerEngine | null = null;
 let proactiveChatService: ProactiveChatService | null = null;
 let normalConversationBusyCount = 0;
@@ -319,6 +325,7 @@ function shutdownDesktopRuntime(): Promise<void> {
   desktopShutdownPromise = Promise.resolve().then(async () => {
     const steps: Array<[string, () => void]> = [
       ["HoloCubic bridge", () => holoCubicBridge.stop()],
+      ["HoloCubic renderer", destroyHoloCubicRenderer],
       ["pet movement", () => windowManager.dispose()],
       ["scheduler", () => schedulerEngine?.stop()],
       ["dream scheduler", stopDreamScheduler],
@@ -682,13 +689,94 @@ settingsFacade.onChanged(handleGeneralSettingsChanged);
 let holoCubicJpegQuality = 60;
 const holoCubicSettingsStore = new HoloCubicSettingsStore(getHoloCubicSettingsPath);
 const holoCubicBridge = new HoloCubicBridge({
-  captureFrame: () => windowManager.captureMainWindowJpeg(320, 240, holoCubicJpegQuality, 1.5),
+  captureFrame: captureHoloCubicRenderFrame,
   onStatusChanged: (status) => {
     if (settingsWindow && !settingsWindow.isDestroyed()) {
       settingsWindow.webContents.send(IPC.HOLOCUBIC_STATUS_CHANGED, status);
     }
   },
+  onInputEvent: (event) => {
+    if (!holoCubicRendererReady || !holoCubicRenderWindow || holoCubicRenderWindow.isDestroyed()) return;
+    holoCubicRenderWindow.webContents.send(IPC.HOLOCUBIC_RENDER_INPUT, event);
+  },
 });
+
+function ensureHoloCubicRenderer(): Promise<void> {
+  if (holoCubicRenderWindow && !holoCubicRenderWindow.isDestroyed() && holoCubicRendererReadyPromise) {
+    return holoCubicRendererReadyPromise;
+  }
+
+  holoCubicRendererReady = false;
+  const renderWindow = new BrowserWindow({
+    width: 320,
+    height: 240,
+    show: false,
+    frame: false,
+    backgroundColor: "#000000",
+    resizable: false,
+    skipTaskbar: true,
+    paintWhenInitiallyHidden: true,
+    webPreferences: {
+      preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      backgroundThrottling: false,
+    },
+  });
+  holoCubicRenderWindow = renderWindow;
+  holoCubicRendererReadyPromise = new Promise<void>((resolve, reject) => {
+    resolveHoloCubicRendererReady = resolve;
+    rejectHoloCubicRendererReady = reject;
+  });
+  renderWindow.on("closed", () => {
+    if (holoCubicRenderWindow !== renderWindow) return;
+    rejectHoloCubicRendererReady?.(new Error("HoloCubic renderer closed before becoming ready"));
+    holoCubicRenderWindow = null;
+    holoCubicRendererReady = false;
+    holoCubicRendererReadyPromise = null;
+    resolveHoloCubicRendererReady = null;
+    rejectHoloCubicRendererReady = null;
+    holoCubicBridge.stop();
+  });
+  renderWindow.webContents.on("did-fail-load", (_event, code, description, _url, isMainFrame) => {
+    if (!isMainFrame || holoCubicRenderWindow !== renderWindow) return;
+    rejectHoloCubicRendererReady?.(new Error(`HoloCubic renderer load failed (${code}): ${description}`));
+  });
+  const load = isDev
+    ? renderWindow.loadURL("http://localhost:5173/holocubic/")
+    : renderWindow.loadFile(path.join(__dirname, "..", "..", "renderer", "holocubic", "index.html"));
+  void load.catch((error) => rejectHoloCubicRendererReady?.(error instanceof Error ? error : new Error(String(error))));
+  return holoCubicRendererReadyPromise;
+}
+
+function destroyHoloCubicRenderer(): void {
+  const renderWindow = holoCubicRenderWindow;
+  holoCubicRenderWindow = null;
+  holoCubicRendererReady = false;
+  rejectHoloCubicRendererReady?.(new Error("HoloCubic renderer stopped"));
+  holoCubicRendererReadyPromise = null;
+  resolveHoloCubicRendererReady = null;
+  rejectHoloCubicRendererReady = null;
+  if (renderWindow && !renderWindow.isDestroyed()) renderWindow.destroy();
+}
+
+async function captureHoloCubicRenderFrame(): Promise<Buffer | null> {
+  const renderWindow = holoCubicRenderWindow;
+  if (!holoCubicRendererReady || !renderWindow || renderWindow.isDestroyed()) return null;
+  try {
+    const image = await renderWindow.webContents.capturePage();
+    if (image.isEmpty()) return null;
+    const size = image.getSize();
+    const frame = size.width === 320 && size.height === 240
+      ? image
+      : image.resize({ width: 320, height: 240, quality: "good" });
+    return frame.toJPEG(Math.max(20, Math.min(95, Math.round(holoCubicJpegQuality))));
+  } catch (error) {
+    console.error("[HoloCubic] Failed to capture independent renderer:", error);
+    return null;
+  }
+}
 
 function getAppIconPath(icon: UiIcon): string {
   const preset = UI_ICON_PRESETS.find((item) => item.id === icon);
@@ -796,14 +884,24 @@ function getHoloCubicSettingsPath(): string {
 }
 
 function applyHoloCubicSettings(settings: HoloCubicSettings): void {
+  const generation = ++holoCubicApplyGeneration;
   holoCubicJpegQuality = settings.jpegQuality;
   if (!settings.enabled) {
     holoCubicBridge.stop();
+    destroyHoloCubicRenderer();
     return;
   }
-  holoCubicBridge.start({
-    url: `tcp://${settings.host}:${settings.port}`,
-    frameRate: settings.frameRate,
+  void ensureHoloCubicRenderer().then(() => {
+    if (generation !== holoCubicApplyGeneration) return;
+    holoCubicBridge.start({
+      url: `tcp://${settings.host}:${settings.port}`,
+      frameRate: settings.frameRate,
+    });
+  }).catch((error) => {
+    if (generation !== holoCubicApplyGeneration) return;
+    console.error("[HoloCubic] Independent renderer failed to start:", error);
+    holoCubicBridge.stop();
+    destroyHoloCubicRenderer();
   });
 }
 
@@ -2542,8 +2640,19 @@ function broadcastRuntimeStateChanged(): void {
   broadcastToAuxWindows(IPC.RUNTIME_STATE_CHANGED, runtimeState);
 }
 
+const HOLOCUBIC_LIVE2D_SYNC_CHANNELS: readonly string[] = [
+  IPC.LIVE2D_PLAY_ACTION,
+  IPC.LIVE2D_SPEECH_PREPARE,
+  IPC.LIVE2D_MOUTH_START,
+  IPC.LIVE2D_MOUTH_STOP,
+];
+
 export function sendToLive2DWindow(channel: string, payload?: unknown): void {
   windowManager.sendToMainWindow(channel, payload);
+  if (!HOLOCUBIC_LIVE2D_SYNC_CHANNELS.includes(channel)) return;
+  if (!holoCubicRendererReady || !holoCubicRenderWindow || holoCubicRenderWindow.isDestroyed()) return;
+  if (payload === undefined) holoCubicRenderWindow.webContents.send(channel);
+  else holoCubicRenderWindow.webContents.send(channel, payload);
 }
 
 function openExternalUrl(url: string): boolean {
@@ -3710,6 +3819,14 @@ ipcMain.handle(IPC.HOLOCUBIC_SAVE_SETTINGS, (_event, patch: Partial<HoloCubicSet
   return settings;
 });
 ipcMain.handle(IPC.HOLOCUBIC_GET_STATUS, (): HoloCubicStatus => holoCubicBridge.getStatus());
+ipcMain.on(IPC.HOLOCUBIC_RENDERER_READY, (event) => {
+  if (!holoCubicRenderWindow || holoCubicRenderWindow.isDestroyed()) return;
+  if (event.sender !== holoCubicRenderWindow.webContents) return;
+  holoCubicRendererReady = true;
+  resolveHoloCubicRendererReady?.();
+  resolveHoloCubicRendererReady = null;
+  rejectHoloCubicRendererReady = null;
+});
 
 ipcMain.handle(IPC.UI_THEME_GET, () => {
   return loadGeneralSettings().uiTheme;
