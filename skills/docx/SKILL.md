@@ -61,9 +61,9 @@ triggers:
 
 ## 环境准备
 
-**首次使用：** `bash scripts/setup.sh`（Windows 上使用 `powershell scripts/setup.ps1`，`--minimal` 跳过可选依赖）。
+**首次使用：** `powershell -ExecutionPolicy Bypass -File scripts/setup.ps1 -Minimal`（需要完整可选预览能力时去掉 `-Minimal`）。
 
-**会话中首次操作：** `scripts/env_check.sh` — 如果返回 `NOT READY` 则不得继续。（同一会话内的后续操作可跳过此步骤。）
+**会话中首次操作：** `powershell -ExecutionPolicy Bypass -File scripts/env_check.ps1 -Json` — 如果返回 `NOT READY` 则不得继续。（同一会话内的后续操作可跳过此步骤。）
 
 ## 快速入门：直接 C# 路径
 
@@ -123,9 +123,9 @@ dotnet run --project scripts/dotnet/MiniMaxAIDocx.Cli --
 
 ## 预处理
 
-如需将 `.doc` 转为 `.docx`：`scripts/doc_to_docx.sh input.doc output_dir/`
+如需将 `.doc` 转为 `.docx`：`powershell -ExecutionPolicy Bypass -File scripts/doc_to_docx.ps1 -Input .\input.doc -OutDir .\output`
 
-编辑前预览（避免阅读原始 XML）：`scripts/docx_preview.sh document.docx`
+编辑前预览（避免阅读原始 XML）：`powershell -ExecutionPolicy Bypass -File scripts/docx_preview.ps1 -Input .\document.docx -OutDir .\preview`
 
 分析结构以用于编辑场景：`$CLI analyze --input document.docx`
 
@@ -202,11 +202,11 @@ $CLI validate --input doc.docx --xsd assets/xsd/wml-subset.xsd
 如果 XSD 仍然失败，回退到业务规则 + 预览：
 ```bash
 $CLI validate --input doc.docx --business
-scripts/docx_preview.sh doc.docx
+powershell -ExecutionPolicy Bypass -File scripts/docx_preview.ps1 -Input .\doc.docx -OutDir .\preview
 # 验证：字体污染=0，表格数量正确，图形数量正确，sectPr 数量正确
 ```
 
-最终预览：`scripts/docx_preview.sh doc.docx`
+最终预览：`powershell -ExecutionPolicy Bypass -File scripts/docx_preview.ps1 -Input .\doc.docx -OutDir .\preview`
 
 ## 关键规则
 
