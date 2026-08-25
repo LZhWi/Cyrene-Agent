@@ -15,7 +15,7 @@
  * 1. runCyreneHarness   — 主入口与主循环骨架
  * 2. 运行准备           — createRun / materializeInitialContext / buildRoundPromptLayers
  * 3. 每轮 LLM 阶段      — compactIfNeeded / emitContextUsage / emitCacheDiagnostic / callRoundLLM
- * 4. 结算出口           — checkpoint / cancelledResult / finishRun / buildResult
+ * 4. 结算出口           — checkpoint / settleRun / cancelledResult / finishRun / buildResult
  *
  * 拆分出去的实现细节（按需深入）：
  * - harness-llm.ts      — 供应商调用：流式/非流式兜底、用量记账、压缩摘要请求
@@ -142,7 +142,17 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     // ── Tool Call Processing ──
     const toolCalls = response.toolCalls ?? [];
     if (toolCalls.length > 0) {
-      const outcome = await runToolRound(run, toolCalls);
+      let outcome: ToolRoundOutcome;
+      try {
+        outcome = await runToolRound(run, toolCalls);
+      } catch (error) {
+        // 调度器已闭合 transcript（合成失败结果 + not_executed）后上抛的
+        // 非取消错误：统一走 finishRun 终态结算，不得冲出 runCyreneHarness。
+        if (input.signal?.aborted) return cancelledResult(run);
+        console.error(`${LOG_PREFIX} tool round failed:`, error);
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        return finishRun(run, `工具执行异常：${errorMsg}`, true, "error");
+      }
       if (outcome === "cancelled") return cancelledResult(run);
       input.onEvent?.({ type: "round_end", roundId });
       run.rounds++;
@@ -321,7 +331,7 @@ async function runCompaction(run: HarnessRun, roundSystemPrompt: string, budget:
 /**
  * 上下文容量快照（docs/context-usage-viewer-construction-plan.md）：
  * - preRequest：每轮 compaction 后、callLLM 前，代表本轮真正发给模型的 input；
- * - terminal：finishRun 统一出口，此时 final assistant 已写回 transcript，含最终回复。
+ * - terminal：settleRun 统一出口（所有终态共享），此时 final assistant 已写回 transcript，含最终回复。
  * harness 的动态事实已物化为 internal transcript 消息，无独立 runtimeContext 计量。
  */
 function emitContextUsage(run: HarnessRun, phase: "preRequest" | "terminal"): void {
@@ -409,10 +419,18 @@ function checkpoint(run: HarnessRun): void {
   }
 }
 
-/** 用户取消的统一出口：停表 → checkpoint 保状态 → 空 finalAnswer 的 cancelled 结果。 */
-function cancelledResult(run: HarnessRun): HarnessResult {
+/** 终态统一结算（所有终态共享）：停表 → terminal 快照 → checkpoint。
+ *  cancelled / error / timeout / success 一律经过此处，
+ *  保证上下文环 UI 拿到终态数据、可恢复状态落盘。 */
+function settleRun(run: HarnessRun): void {
   run.clock.stopActive();
+  emitContextUsage(run, "terminal");
   checkpoint(run);
+}
+
+/** 用户取消的统一出口：settleRun 后返回空 finalAnswer 的 cancelled 结果。 */
+function cancelledResult(run: HarnessRun): HarnessResult {
+  settleRun(run);
   if (run.checkpointFailure) {
     return buildResult(`执行状态保存失败：${run.checkpointFailure}`, run.state, true, "error", run.rounds);
   }
@@ -426,16 +444,14 @@ function cancelledResult(run: HarnessRun): HarnessResult {
   };
 }
 
-/** 终态统一出口：停表 → terminal 快照 → checkpoint → 构造结果。 */
+/** 终态统一出口：settleRun → checkpointFailure 降级 error → 构造结果。 */
 function finishRun(
   run: HarnessRun,
   finalAnswer: string,
   terminated: boolean,
   terminateReason: HarnessResult["terminateReason"],
 ): HarnessResult {
-  run.clock.stopActive();
-  emitContextUsage(run, "terminal");
-  checkpoint(run);
+  settleRun(run);
   if (run.checkpointFailure) {
     return buildResult(`执行状态保存失败：${run.checkpointFailure}`, run.state, true, "error", run.rounds);
   }

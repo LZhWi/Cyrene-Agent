@@ -546,6 +546,37 @@ describe("CyreneHarness completion (P0-A)", () => {
     expect(result.finalAnswer).toContain("执行状态保存失败");
   });
 
+  it("routes a tool round failure to a unified error terminal settlement", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ toolCalls: [mutationToolCall("boom-call")] }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockedDispatch.mockRejectedValue(new Error("dispatch infrastructure exploded"));
+    const events: HarnessEvent[] = [];
+    const checkpoints: HarnessCheckpoint[] = [];
+
+    // 工具轮抛出的非取消错误不得冲出 runCyreneHarness：
+    // 统一走 finishRun（terminal 快照 + checkpoint + error 终态）
+    const result = await runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "创建一个文件" }],
+      tools: [mutationTool()],
+      vendorConfig,
+      onEvent: (event) => events.push(event),
+      onCheckpoint: (checkpoint) => checkpoints.push(checkpoint),
+    });
+
+    expect(result.terminateReason).toBe("error");
+    expect(result.finalAnswer).toContain("工具执行异常");
+    const usageEvents = events.filter((event): event is Extract<HarnessEvent, { type: "context_usage" }> => event.type === "context_usage");
+    expect(usageEvents.at(-1)?.snapshot.phase).toBe("terminal");
+    expect(checkpoints.length).toBeGreaterThan(0);
+    // 工具轮失败后不再发起模型请求
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    // transcript 已闭合：合成失败结果已写回
+    expect(checkpoints.at(-1)?.messages.some((message) => message.role === "tool")).toBe(true);
+  });
+
   it("keeps mid-loop content as progress and commits only the last no-tool reply as final answer", async () => {
     const { fn: fetchMock } = fakeFetchSequencer([
       assistantResponse({ text: "我先看看文件。", toolCalls: [mutationToolCall("inspect-call")] }),
@@ -958,7 +989,7 @@ describe("CyreneHarness context usage snapshots", () => {
     expect(terminal.snapshot.totalTokens).toBe(terminal.snapshot.categories.reduce((sum, category) => sum + category.tokens, 0));
   });
 
-  it("does not emit a terminal snapshot when the run is cancelled", async () => {
+  it("emits a terminal snapshot when the run is cancelled", async () => {
     const { fn: fetchMock } = fakeFetchSequencer([
       assistantResponse({ toolCalls: [mutationToolCall("call-1")] }),
     ]);
@@ -980,8 +1011,8 @@ describe("CyreneHarness context usage snapshots", () => {
     });
 
     expect(result.terminateReason).toBe("cancelled");
+    // cancelled 与其他终态共享统一结算：同样获得 terminal 快照（上下文环终态数据）
     const usageEvents = events.filter((event): event is Extract<HarnessEvent, { type: "context_usage" }> => event.type === "context_usage");
-    expect(usageEvents.length).toBeGreaterThan(0);
-    expect(usageEvents.every((event) => event.snapshot.phase === "preRequest")).toBe(true);
+    expect(usageEvents.map((event) => event.snapshot.phase)).toEqual(["preRequest", "terminal"]);
   });
 });
