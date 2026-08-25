@@ -15,6 +15,10 @@ export interface HoloCubicStatus {
   framesSent: number;
   framesDisplayed: number;
   framesDropped: number;
+  actualFrameRate: number;
+  lastCaptureMs: number;
+  lastAckMs: number;
+  lastFrameBytes: number;
   reconnectAttempt: number;
   bufferedBytes: number;
   lastFrameAt: number | null;

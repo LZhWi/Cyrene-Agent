@@ -72,6 +72,7 @@ export class HoloCubicBridge {
   private captureInFlight = false;
   private awaitingFrameAck = false;
   private lastFrameSentAt = 0;
+  private displayedAt: number[] = [];
   private running = false;
   private generation = 0;
   private status: HoloCubicBridgeStatus = {
@@ -81,6 +82,10 @@ export class HoloCubicBridge {
     framesSent: 0,
     framesDisplayed: 0,
     framesDropped: 0,
+    actualFrameRate: 0,
+    lastCaptureMs: 0,
+    lastAckMs: 0,
+    lastFrameBytes: 0,
     reconnectAttempt: 0,
     bufferedBytes: 0,
     lastFrameAt: null,
@@ -111,6 +116,10 @@ export class HoloCubicBridge {
       framesSent: 0,
       framesDisplayed: 0,
       framesDropped: 0,
+      actualFrameRate: 0,
+      lastCaptureMs: 0,
+      lastAckMs: 0,
+      lastFrameBytes: 0,
       reconnectAttempt: 0,
       bufferedBytes: 0,
       lastFrameAt: null,
@@ -140,6 +149,7 @@ export class HoloCubicBridge {
     }
     this.captureInFlight = false;
     this.lastFrameSentAt = 0;
+    this.displayedAt = [];
     this.patchStatus({ state: "stopped", connected: false, bufferedBytes: 0 });
   }
 
@@ -169,6 +179,7 @@ export class HoloCubicBridge {
       this.clearConnectTimer();
       this.clearFrameAck();
       this.lastFrameSentAt = 0;
+      this.displayedAt = [];
       this.patchStatus({
         state: "connected",
         connected: true,
@@ -188,11 +199,28 @@ export class HoloCubicBridge {
       if (!message) return;
       if (message.type === "frame_ack") {
         if (!this.awaitingFrameAck) return;
+        const acknowledgedAt = Date.now();
+        const acknowledgementMs = Math.max(0, acknowledgedAt - this.lastFrameSentAt);
+        if (message.displayed) {
+          this.displayedAt.push(acknowledgedAt);
+          const windowStart = acknowledgedAt - 5_000;
+          while (this.displayedAt.length > 1 && this.displayedAt[0] < windowStart) {
+            this.displayedAt.shift();
+          }
+        }
+        const measuredDurationMs = this.displayedAt.length > 1
+          ? this.displayedAt[this.displayedAt.length - 1] - this.displayedAt[0]
+          : 0;
+        const actualFrameRate = measuredDurationMs > 0
+          ? ((this.displayedAt.length - 1) * 1000) / measuredDurationMs
+          : 0;
         this.clearFrameAck();
         this.patchStatus({
           framesDisplayed: this.status.framesDisplayed + (message.displayed ? 1 : 0),
           framesDropped: this.status.framesDropped + (message.displayed ? 0 : 1),
-          lastFrameAt: message.displayed ? Date.now() : this.status.lastFrameAt,
+          actualFrameRate,
+          lastAckMs: acknowledgementMs,
+          lastFrameAt: message.displayed ? acknowledgedAt : this.status.lastFrameAt,
         });
         this.startFrameTimer();
         return;
@@ -255,9 +283,14 @@ export class HoloCubicBridge {
 
     this.captureInFlight = true;
     try {
+      const captureStartedAt = Date.now();
       const frame = await this.dependencies.captureFrame();
       if (!frame || !frame.length) return;
-      this.patchStatus({ framesCaptured: this.status.framesCaptured + 1 });
+      this.patchStatus({
+        framesCaptured: this.status.framesCaptured + 1,
+        lastCaptureMs: Math.max(0, Date.now() - captureStartedAt),
+        lastFrameBytes: frame.length,
+      });
       if (!this.running || this.socket !== socket || socket.readyState !== WS_OPEN
           || socket.bufferedAmount > config.maxBufferedBytes) {
         this.patchStatus({

@@ -179,6 +179,28 @@ describe("HoloCubicBridge", () => {
     expect(socket.sent).toHaveLength(2);
   });
 
+  it("reports capture, acknowledgement, frame size, and measured display rate", async () => {
+    const socket = new FakeSocket();
+    const bridge = new HoloCubicBridge({
+      captureFrame: async () => Buffer.from("frame"),
+      createSocket: () => socket,
+    });
+    bridge.start({ url: "ws://device:8766", frameRate: 5 });
+    socket.open();
+
+    await vi.advanceTimersByTimeAsync(200);
+    socket.emit("message", Buffer.from('{"version":1,"type":"frame_ack","displayed":true,"at":12}'), false);
+    await vi.advanceTimersByTimeAsync(200);
+    socket.emit("message", Buffer.from('{"version":1,"type":"frame_ack","displayed":true,"at":13}'), false);
+
+    expect(bridge.getStatus()).toMatchObject({
+      actualFrameRate: 5,
+      lastCaptureMs: 0,
+      lastAckMs: 0,
+      lastFrameBytes: 5,
+    });
+  });
+
   it("reconnects with backoff after a disconnect and stops cleanly", async () => {
     const sockets = [new FakeSocket(), new FakeSocket()];
     const createSocket = vi.fn(() => sockets.shift()!);
