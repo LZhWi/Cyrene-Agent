@@ -40,10 +40,9 @@ def ensure_deps():
     missing = [p for p in ("reportlab", "pypdf")
                if importlib.util.find_spec(p) is None]
     if missing:
-        import subprocess
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install",
-             "--break-system-packages", "-q"] + missing
+        raise RuntimeError(
+            "Missing Python packages: " + ", ".join(missing)
+            + ". Install them with: python -m pip install " + " ".join(missing)
         )
 
 
@@ -69,9 +68,12 @@ def register_fonts(tokens: dict):
     for name, fpath in tokens.get("font_paths", {}).items():
         if os.path.exists(fpath):
             try:
-                pdfmetrics.registerFont(TTFont(name, fpath))
+                pdfmetrics.registerFont(TTFont(name, fpath, subfontIndex=0))
             except Exception:
-                pass
+                try:
+                    pdfmetrics.registerFont(TTFont(name, fpath))
+                except Exception:
+                    pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════

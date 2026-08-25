@@ -17,9 +17,8 @@ import sys
 
 def ensure_deps():
     if importlib.util.find_spec("pypdf") is None:
-        import subprocess
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--break-system-packages", "-q", "pypdf"]
+        raise RuntimeError(
+            "Missing Python package: pypdf. Install it with: python -m pip install pypdf"
         )
 
 
