@@ -76,6 +76,9 @@ import { loadUserStickerManifest, addUserSticker, deleteUserSticker, getAllStick
 import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
 import { WindowManager } from "./windows/window-manager";
 import { SettingsFacade, type GeneralSettings } from "./settings/settings-facade";
+import { HoloCubicBridge } from "./holocubic/holocubic-bridge";
+import { HoloCubicSettingsStore } from "./holocubic/holocubic-settings-store";
+import type { HoloCubicSettings, HoloCubicStatus } from "../shared/holocubic-types";
 import type { StickerConfigItem } from "../shared/sticker-types";
 import type { ImageMessageAttachment, ChatMessage } from "../shared/chat-types";
 import type { GptsovitsSynthesizeRequest } from "../shared/tts-types";
@@ -315,6 +318,7 @@ function shutdownDesktopRuntime(): Promise<void> {
   if (desktopShutdownPromise) return desktopShutdownPromise;
   desktopShutdownPromise = Promise.resolve().then(async () => {
     const steps: Array<[string, () => void]> = [
+      ["HoloCubic bridge", () => holoCubicBridge.stop()],
       ["pet movement", () => windowManager.dispose()],
       ["scheduler", () => schedulerEngine?.stop()],
       ["dream scheduler", stopDreamScheduler],
@@ -674,6 +678,16 @@ const windowManager = new WindowManager({
 });
 const settingsFacade = new SettingsFacade(getGeneralSettingsPath);
 settingsFacade.onChanged(handleGeneralSettingsChanged);
+let holoCubicJpegQuality = 60;
+const holoCubicSettingsStore = new HoloCubicSettingsStore(getHoloCubicSettingsPath);
+const holoCubicBridge = new HoloCubicBridge({
+  captureFrame: () => windowManager.captureMainWindowJpeg(320, 240, holoCubicJpegQuality),
+  onStatusChanged: (status) => {
+    if (settingsWindow && !settingsWindow.isDestroyed()) {
+      settingsWindow.webContents.send(IPC.HOLOCUBIC_STATUS_CHANGED, status);
+    }
+  },
+});
 
 function getAppIconPath(icon: UiIcon): string {
   const preset = UI_ICON_PRESETS.find((item) => item.id === icon);
@@ -774,6 +788,22 @@ function getSettingsPath(): string {
 
 function getGeneralSettingsPath(): string {
   return path.join(getUserDataDir(), "app-settings.json");
+}
+
+function getHoloCubicSettingsPath(): string {
+  return path.join(getUserDataDir(), "holocubic-settings.json");
+}
+
+function applyHoloCubicSettings(settings: HoloCubicSettings): void {
+  holoCubicJpegQuality = settings.jpegQuality;
+  if (!settings.enabled) {
+    holoCubicBridge.stop();
+    return;
+  }
+  holoCubicBridge.start({
+    url: `ws://${settings.host}:${settings.port}`,
+    frameRate: settings.frameRate,
+  });
 }
 
 
@@ -3672,6 +3702,14 @@ ipcMain.handle(IPC.SETTINGS_GET_GENERAL, () => {
   return loadGeneralSettings();
 });
 
+ipcMain.handle(IPC.HOLOCUBIC_GET_SETTINGS, () => holoCubicSettingsStore.load());
+ipcMain.handle(IPC.HOLOCUBIC_SAVE_SETTINGS, (_event, patch: Partial<HoloCubicSettings>) => {
+  const settings = holoCubicSettingsStore.save(patch);
+  applyHoloCubicSettings(settings);
+  return settings;
+});
+ipcMain.handle(IPC.HOLOCUBIC_GET_STATUS, (): HoloCubicStatus => holoCubicBridge.getStatus());
+
 ipcMain.handle(IPC.UI_THEME_GET, () => {
   return loadGeneralSettings().uiTheme;
 });
@@ -5807,6 +5845,7 @@ app.whenReady().then(async () => {
 
   const generalSettings = loadGeneralSettings();
   createWindow();
+  applyHoloCubicSettings(holoCubicSettingsStore.load());
   createChatWindow();
   if (generalSettings.sidebarVisible) createSidebarWindow();
   if (generalSettings.tasksVisible) createTasksWindow();

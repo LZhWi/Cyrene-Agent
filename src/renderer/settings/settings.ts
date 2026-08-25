@@ -31,6 +31,7 @@ import type { CallModelSettings } from "../../shared/call-types";
 import type { ChatIndexRecoveryResult, ChatSessionRecoveryResult, ChatStorageStatus } from "../../shared/chat-types";
 import type { GptsovitsSynthesizeRequest } from "../../shared/tts-types";
 import { type LoginFlowState } from "../../shared/music-types";
+import type { HoloCubicSettings, HoloCubicStatus } from "../../shared/holocubic-types";
 import {
   deriveNeteaseViewState,
   type MusicStatusSnapshot,
@@ -486,6 +487,10 @@ interface SettingsApi {
   onAsrTestError: (callback: (data: { message: string }) => void) => () => void;
   getGeneral: () => Promise<GeneralSettings>;
   saveGeneral: (config: Partial<GeneralSettings>) => Promise<GeneralSettings>;
+  getHoloCubicSettings: () => Promise<HoloCubicSettings>;
+  saveHoloCubicSettings: (config: Partial<HoloCubicSettings>) => Promise<HoloCubicSettings>;
+  getHoloCubicStatus: () => Promise<HoloCubicStatus>;
+  onHoloCubicStatusChanged: (callback: (status: HoloCubicStatus) => void) => (() => void) | void;
   pickUiFont: () => Promise<string | null>;
   importUiFont: (sourcePath: string) => Promise<UiFont>;
   resetUiFont: () => Promise<UiFont>;
@@ -697,6 +702,10 @@ if (!window.settings) {
           screenMonitorEnabled: false,
     }),
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
+    getHoloCubicSettings: () => Promise.resolve({ enabled: false, host: "192.168.3.40", port: 8766, frameRate: 5, jpegQuality: 60 }),
+    saveHoloCubicSettings: (c) => Promise.resolve({ enabled: false, host: "192.168.3.40", port: 8766, frameRate: 5, jpegQuality: 60, ...c }),
+    getHoloCubicStatus: () => Promise.resolve({ state: "stopped", connected: false, framesCaptured: 0, framesSent: 0, framesDropped: 0, reconnectAttempt: 0, bufferedBytes: 0, lastFrameAt: null, lastError: "" }),
+    onHoloCubicStatusChanged: () => () => {},
     channelsGetStatus: () => Promise.resolve({}),
     onChannelsStatusChanged: () => () => {},
     openSidebar: () => {},
@@ -743,6 +752,7 @@ bgmAudio.loop = true;
 const apiForm = document.getElementById("api-form") as HTMLFormElement;
 const appearanceForm = document.getElementById("appearance-form") as HTMLFormElement;
 const generalForm = document.getElementById("general-form") as HTMLFormElement;
+const holoCubicPanel = document.getElementById("holocubic-panel") as HTMLFormElement;
 const preferencesForm = document.getElementById("preferences-form") as HTMLFormElement;
 const sectionTitle = document.getElementById("section-title") as HTMLElement;
 const sectionHint = document.getElementById("section-hint") as HTMLElement;
@@ -759,6 +769,13 @@ const placeholderCopy = document.getElementById("placeholder-copy") as HTMLEleme
 const saveStatus = document.getElementById("save-status") as HTMLElement;
 const appearanceSaveStatus = document.getElementById("appearance-save-status") as HTMLElement;
 const generalSaveStatus = document.getElementById("general-save-status") as HTMLElement;
+const holoCubicSaveStatus = document.getElementById("holocubic-save-status") as HTMLElement;
+const holoCubicEnabledInput = document.getElementById("holocubic-enabled") as HTMLInputElement;
+const holoCubicHostInput = document.getElementById("holocubic-host") as HTMLInputElement;
+const holoCubicPortInput = document.getElementById("holocubic-port") as HTMLInputElement;
+const holoCubicFrameRateInput = document.getElementById("holocubic-frame-rate") as HTMLInputElement;
+const holoCubicJpegQualityInput = document.getElementById("holocubic-jpeg-quality") as HTMLInputElement;
+const holoCubicConnectionStatus = document.getElementById("holocubic-connection-status") as HTMLElement;
 const preferencesSaveStatus = document.getElementById("preferences-save-status") as HTMLElement;
 const cyreneSaveStatus = document.getElementById("cyrene-save-status") as HTMLElement;
 
@@ -902,6 +919,7 @@ const NAV_LABELS: Record<string, { emoji: string; title: string; hint: string }>
   general: { emoji: "⚙️", title: "通用设置", hint: "管理窗口、音频和系统行为" },
   api: { emoji: "🔑", title: "API 设置", hint: "选择预设后只需要填写 API Key。" },
   cyrene: { emoji: "🌸", title: "昔涟设置", hint: "管理 Agent 行为、记忆、RAG 与权限" },
+  holocubic: { emoji: "🧊", title: "HoloCubic", hint: "配置透明屏画面桥接与查看连接状态" },
   tts: { emoji: "🎙️", title: "TTS 设置", hint: "语音合成与朗读偏好" },
   asr: { emoji: "🎧", title: "ASR 设置", hint: "语音识别与通话配置" },
   tokens: { emoji: "📊", title: "Token 用量", hint: "查看 API 调用统计与消耗" },
@@ -1524,6 +1542,40 @@ async function loadGeneralSettings(): Promise<void> {
     setGeneralSaveStatus("读取设置失败", "is-error");
   }
 }
+
+function renderHoloCubicStatus(status: HoloCubicStatus): void {
+  const labels: Record<HoloCubicStatus["state"], string> = {
+    stopped: "桥接已停止",
+    connecting: "正在连接设备…",
+    connected: "已连接",
+    reconnecting: `连接中断，正在重试（第 ${status.reconnectAttempt} 次）`,
+  };
+  const frameText = status.connected ? ` · 已发送 ${status.framesSent} 帧 · 丢弃 ${status.framesDropped} 帧` : "";
+  const errorText = status.lastError ? ` · ${status.lastError}` : "";
+  holoCubicConnectionStatus.textContent = labels[status.state] + frameText + errorText;
+}
+
+async function loadHoloCubicSettings(): Promise<void> {
+  try {
+    const [settings, status] = await Promise.all([
+      window.settings!.getHoloCubicSettings(),
+      window.settings!.getHoloCubicStatus(),
+    ]);
+    holoCubicEnabledInput.checked = settings.enabled;
+    holoCubicHostInput.value = settings.host;
+    holoCubicPortInput.value = String(settings.port);
+    holoCubicFrameRateInput.value = String(settings.frameRate);
+    holoCubicJpegQualityInput.value = String(settings.jpegQuality);
+    renderHoloCubicStatus(status);
+    holoCubicSaveStatus.textContent = "等待保存";
+    holoCubicSaveStatus.className = "save-status";
+  } catch {
+    holoCubicSaveStatus.textContent = "读取配置失败";
+    holoCubicSaveStatus.className = "save-status is-error";
+  }
+}
+
+window.settings?.onHoloCubicStatusChanged(renderHoloCubicStatus);
 
 runtimeSyncSelect.querySelectorAll<HTMLButtonElement>(".option-block").forEach((button) => {
   button.addEventListener("click", () => {
@@ -2879,6 +2931,30 @@ generalForm.addEventListener("submit", async (e) => {
   }
 });
 
+holoCubicPanel.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  holoCubicSaveStatus.textContent = "保存并应用中…";
+  holoCubicSaveStatus.className = "save-status";
+  try {
+    const saved = await window.settings!.saveHoloCubicSettings({
+      enabled: holoCubicEnabledInput.checked,
+      host: holoCubicHostInput.value,
+      port: Number(holoCubicPortInput.value),
+      frameRate: Number(holoCubicFrameRateInput.value),
+      jpegQuality: Number(holoCubicJpegQualityInput.value),
+    });
+    holoCubicHostInput.value = saved.host;
+    holoCubicPortInput.value = String(saved.port);
+    holoCubicFrameRateInput.value = String(saved.frameRate);
+    holoCubicJpegQualityInput.value = String(saved.jpegQuality);
+    holoCubicSaveStatus.textContent = saved.enabled ? "已保存，正在连接" : "已保存，桥接已关闭";
+    holoCubicSaveStatus.className = "save-status is-ok";
+  } catch {
+    holoCubicSaveStatus.textContent = "保存失败";
+    holoCubicSaveStatus.className = "save-status is-error";
+  }
+});
+
 cyrenePanel.addEventListener("submit", async (e) => {
   e.preventDefault();
   setCyreneSaveStatus("保存中…");
@@ -3138,6 +3214,7 @@ function switchSection(section: string): void {
   const isSkills = section === "skills";
   const isTokens = section === "tokens";
   const isChannels = section === "channels";
+  const isHoloCubic = section === "holocubic";
   const isTts = section === "tts";
   const isAsr = section === "asr";
   const isMusic = section === "music";
@@ -3169,6 +3246,7 @@ function switchSection(section: string): void {
   const channelsPanel = document.getElementById("channels-panel");
   if (channelsPanel) channelsPanel.classList.toggle("is-hidden", !isChannels);
   if (isChannels) void loadChannelsPanel();
+  holoCubicPanel.classList.toggle("is-hidden", !isHoloCubic);
   const ttsPanel = document.getElementById("tts-panel");
   if (ttsPanel) ttsPanel.classList.toggle("is-hidden", !isTts);
   const asrPanel = document.getElementById("asr-panel");
@@ -3179,7 +3257,7 @@ function switchSection(section: string): void {
   else disposeMusicPanel();
   placeholderPanel.classList.toggle(
     "is-hidden",
-    isApi || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isTts || isAsr || isMusic,
+    isApi || isAppearance || isGeneral || isPreferences || isCyrene || isDisclaimer || isMemory || isUser || isChat || isTasks || isIdentity || isPlugins || isSkills || isTokens || isChannels || isHoloCubic || isTts || isAsr || isMusic,
   );
 
   if (
@@ -3198,6 +3276,7 @@ function switchSection(section: string): void {
     !isSkills &&
     !isTokens &&
     !isChannels &&
+    !isHoloCubic &&
     !isTts &&
     !isAsr &&
     !isMusic
@@ -3245,6 +3324,7 @@ function initGameBotPluginToggle(): void {
 initGameBotPluginToggle();
 void loadConfig();
 void loadGeneralSettings();
+void loadHoloCubicSettings();
 window.settings?.onChannelsStatusChanged((status) => {
   renderProactiveDeliveryAvailability(status as Record<string, { phase?: string }>);
 });

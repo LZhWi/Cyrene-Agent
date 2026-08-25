@@ -1,9 +1,8 @@
 import { WebSocket } from "ws";
+import type { HoloCubicStatus } from "../../shared/holocubic-types";
 
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
-
-export type HoloCubicConnectionState = "stopped" | "connecting" | "connected" | "reconnecting";
 
 export interface HoloCubicBridgeConfig {
   url: string;
@@ -13,17 +12,7 @@ export interface HoloCubicBridgeConfig {
   reconnectMaxMs?: number;
 }
 
-export interface HoloCubicBridgeStatus {
-  state: HoloCubicConnectionState;
-  connected: boolean;
-  framesCaptured: number;
-  framesSent: number;
-  framesDropped: number;
-  reconnectAttempt: number;
-  bufferedBytes: number;
-  lastFrameAt: number | null;
-  lastError: string;
-}
+export type HoloCubicBridgeStatus = HoloCubicStatus;
 
 export interface HoloCubicSocket {
   readonly readyState: number;

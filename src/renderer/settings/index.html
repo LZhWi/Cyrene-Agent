@@ -33,6 +33,7 @@
         <button type="button" class="nav-item" data-section="api"><span>🔑</span>API 设置</button>
         <button type="button" class="nav-item" data-section="cyrene"><span>🌸</span>昔涟设置</button>
         <button type="button" class="nav-item" data-section="channels"><span>📱</span>连接手机</button>
+        <button type="button" class="nav-item" data-section="holocubic"><span>🧊</span>HoloCubic</button>
         <button type="button" class="nav-item" data-section="tts"><span>🎙️</span>TTS 设置</button>
         <button type="button" class="nav-item" data-section="asr"><span>🎧</span>ASR 设置</button>
         <button type="button" class="nav-item" data-section="tokens"><span>📊</span>Token 用量</button>
@@ -1497,6 +1498,55 @@
             <div class="music-feedback" id="music-feedback"></div>
           </div>
         </section>
+
+        <form class="settings-panel is-hidden" id="holocubic-panel" data-panel="holocubic">
+          <div class="panel-heading">
+            <div class="panel-heading__icon">🧊</div>
+            <div>
+              <h1>HoloCubic 显示</h1>
+              <p>将桌宠主窗口缩放为 320 × 240 JPEG，并通过局域网发送到 screenDemo。</p>
+            </div>
+          </div>
+
+          <div class="settings-list">
+            <label class="setting-row">
+              <div>
+                <strong>启用画面桥接</strong>
+                <span>保存后连接设备；关闭时不会建立连接。</span>
+              </div>
+              <span class="switch"><input id="holocubic-enabled" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+            </label>
+          </div>
+
+          <div class="form-grid">
+            <label class="field">
+              <span>设备地址</span>
+              <input id="holocubic-host" type="text" autocomplete="off" spellcheck="false" placeholder="192.168.3.40" />
+            </label>
+            <label class="field">
+              <span>画面端口</span>
+              <input id="holocubic-port" type="number" min="1" max="65535" step="1" />
+            </label>
+            <label class="field">
+              <span>帧率（1–15 FPS）</span>
+              <input id="holocubic-frame-rate" type="number" min="1" max="15" step="1" />
+            </label>
+            <label class="field">
+              <span>JPEG 质量（20–95）</span>
+              <input id="holocubic-jpeg-quality" type="number" min="20" max="95" step="1" />
+            </label>
+          </div>
+
+          <div class="api-note">
+            <span>●</span>
+            <p id="holocubic-connection-status">桥接已停止</p>
+          </div>
+
+          <div class="form-actions">
+            <div class="save-status" id="holocubic-save-status">等待保存</div>
+            <button type="submit" class="save-btn">保存并应用</button>
+          </div>
+        </form>
 
         <section class="settings-panel is-hidden" id="disclaimer-panel" data-panel="disclaimer">
           <div class="panel-heading">

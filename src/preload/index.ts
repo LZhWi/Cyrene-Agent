@@ -300,6 +300,14 @@ const settingsApi = {
   },
   getGeneral: () => ipcRenderer.invoke(IPC.SETTINGS_GET_GENERAL),
   saveGeneral: (config: unknown) => ipcRenderer.invoke(IPC.SETTINGS_SAVE_GENERAL, config),
+  getHoloCubicSettings: () => ipcRenderer.invoke(IPC.HOLOCUBIC_GET_SETTINGS),
+  saveHoloCubicSettings: (config: unknown) => ipcRenderer.invoke(IPC.HOLOCUBIC_SAVE_SETTINGS, config),
+  getHoloCubicStatus: () => ipcRenderer.invoke(IPC.HOLOCUBIC_GET_STATUS),
+  onHoloCubicStatusChanged: (callback: (status: unknown) => void) => {
+    const listener = (_event: unknown, status: unknown) => callback(status);
+    ipcRenderer.on(IPC.HOLOCUBIC_STATUS_CHANGED, listener);
+    return () => ipcRenderer.off(IPC.HOLOCUBIC_STATUS_CHANGED, listener);
+  },
   pickUiFont: () => ipcRenderer.invoke(IPC.SETTINGS_PICK_UI_FONT) as Promise<string | null>,
   importUiFont: (sourcePath: string) => ipcRenderer.invoke(IPC.SETTINGS_IMPORT_UI_FONT, sourcePath) as Promise<UiFont>,
   resetUiFont: () => ipcRenderer.invoke(IPC.SETTINGS_RESET_UI_FONT) as Promise<UiFont>,
