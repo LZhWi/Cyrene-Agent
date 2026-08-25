@@ -8,10 +8,12 @@ function createFakeWindow() {
   let position: [number, number] = [100, 200];
   const resizedImage = {
     toJPEG: vi.fn(() => Buffer.from("jpeg")),
+    toBitmap: vi.fn(() => Buffer.alloc(400 * 500 * 4, 7)),
   };
   const capturedImage = {
     toDataURL: vi.fn(() => "data:image/png;base64,test"),
     isEmpty: vi.fn(() => false),
+    getSize: vi.fn(() => ({ width: 400, height: 500 })),
     resize: vi.fn(() => resizedImage),
   };
   const window = {
@@ -48,10 +50,12 @@ function createFakeWindow() {
 }
 
 function createManager(persistMainWindowPosition = vi.fn()) {
+  const composedImage = { toJPEG: vi.fn(() => Buffer.from("jpeg")) };
   return new WindowManager({
     baseWidth: 400,
     baseHeight: 500,
     persistMainWindowPosition,
+    createImageFromBitmap: vi.fn(() => composedImage as never),
   });
 }
 
@@ -119,7 +123,17 @@ describe("WindowManager", () => {
     manager.attachMainWindow(fake.window as never);
 
     await expect(manager.captureMainWindowJpeg(320.4, 239.6, 61.7)).resolves.toEqual(Buffer.from("jpeg"));
-    expect(fake.capturedImage.resize).toHaveBeenCalledWith({ width: 320, height: 240, quality: "good" });
-    expect(fake.resizedImage.toJPEG).toHaveBeenCalledWith(62);
+    expect(fake.capturedImage.resize).toHaveBeenCalledWith({ width: 192, height: 240, quality: "good" });
+    expect(fake.resizedImage.toBitmap).toHaveBeenCalledOnce();
+  });
+
+  it("keeps aspect ratio while applying a centered output zoom", async () => {
+    const fake = createFakeWindow();
+    const manager = createManager();
+    manager.attachMainWindow(fake.window as never);
+
+    await expect(manager.captureMainWindowJpeg(320, 240, 60, 1.5)).resolves.toEqual(Buffer.from("jpeg"));
+    expect(fake.capturedImage.resize).toHaveBeenCalledWith({ width: 288, height: 360, quality: "good" });
+    expect(fake.resizedImage.toBitmap).toHaveBeenCalledOnce();
   });
 });

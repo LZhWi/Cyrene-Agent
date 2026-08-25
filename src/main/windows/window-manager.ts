@@ -5,6 +5,7 @@ export interface WindowManagerOptions {
   baseWidth: number;
   baseHeight: number;
   persistMainWindowPosition: (position: { x: number; y: number }) => void;
+  createImageFromBitmap: (buffer: Buffer, size: { width: number; height: number }) => NativeImage;
 }
 
 /**
@@ -124,16 +125,53 @@ export class WindowManager {
     return image?.toDataURL() ?? null;
   }
 
-  async captureMainWindowJpeg(width: number, height: number, quality: number): Promise<Buffer | null> {
+  async captureMainWindowJpeg(width: number, height: number, quality: number, zoom = 1): Promise<Buffer | null> {
     const image = await this.captureMainWindow();
     if (!image || image.isEmpty()) return null;
     const targetWidth = Math.max(1, Math.round(width));
     const targetHeight = Math.max(1, Math.round(height));
     const jpegQuality = Math.max(0, Math.min(100, Math.round(quality)));
-    return image.resize({
+    const sourceSize = image.getSize();
+    if (sourceSize.width < 1 || sourceSize.height < 1) return null;
+    const outputZoom = Math.max(0.1, Math.min(4, Number.isFinite(zoom) ? zoom : 1));
+    const scale = Math.min(targetWidth / sourceSize.width, targetHeight / sourceSize.height) * outputZoom;
+    const fittedWidth = Math.max(1, Math.round(sourceSize.width * scale));
+    const fittedHeight = Math.max(1, Math.round(sourceSize.height * scale));
+    const fitted = image.resize({
+      width: fittedWidth,
+      height: fittedHeight,
+      quality: "good",
+    });
+    if (fittedWidth === targetWidth && fittedHeight === targetHeight) {
+      return fitted.toJPEG(jpegQuality);
+    }
+
+    const sourceBitmap = fitted.toBitmap();
+    const expectedBytes = fittedWidth * fittedHeight * 4;
+    if (sourceBitmap.length < expectedBytes) return null;
+    const canvas = Buffer.alloc(targetWidth * targetHeight * 4);
+    for (let offset = 3; offset < canvas.length; offset += 4) canvas[offset] = 255;
+    const offsetX = Math.floor((targetWidth - fittedWidth) / 2);
+    const offsetY = Math.floor((targetHeight - fittedHeight) / 2);
+    const sourceX = Math.max(0, -offsetX);
+    const sourceY = Math.max(0, -offsetY);
+    const targetX = Math.max(0, offsetX);
+    const targetY = Math.max(0, offsetY);
+    const copyWidth = Math.min(fittedWidth - sourceX, targetWidth - targetX);
+    const copyHeight = Math.min(fittedHeight - sourceY, targetHeight - targetY);
+    const sourceStride = fittedWidth * 4;
+    const targetStride = targetWidth * 4;
+    for (let y = 0; y < copyHeight; y += 1) {
+      sourceBitmap.copy(
+        canvas,
+        ((y + targetY) * targetStride) + (targetX * 4),
+        ((y + sourceY) * sourceStride) + (sourceX * 4),
+        ((y + sourceY) * sourceStride) + ((sourceX + copyWidth) * 4),
+      );
+    }
+    return this.options.createImageFromBitmap(canvas, {
       width: targetWidth,
       height: targetHeight,
-      quality: "good",
     }).toJPEG(jpegQuality);
   }
 

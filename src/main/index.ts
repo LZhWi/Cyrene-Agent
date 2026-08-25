@@ -675,13 +675,14 @@ const windowManager = new WindowManager({
   persistMainWindowPosition: ({ x, y }) => {
     saveGeneralSettings({ petWindowX: x, petWindowY: y });
   },
+  createImageFromBitmap: (buffer, size) => nativeImage.createFromBitmap(buffer, size),
 });
 const settingsFacade = new SettingsFacade(getGeneralSettingsPath);
 settingsFacade.onChanged(handleGeneralSettingsChanged);
 let holoCubicJpegQuality = 60;
 const holoCubicSettingsStore = new HoloCubicSettingsStore(getHoloCubicSettingsPath);
 const holoCubicBridge = new HoloCubicBridge({
-  captureFrame: () => windowManager.captureMainWindowJpeg(320, 240, holoCubicJpegQuality),
+  captureFrame: () => windowManager.captureMainWindowJpeg(320, 240, holoCubicJpegQuality, 1.5),
   onStatusChanged: (status) => {
     if (settingsWindow && !settingsWindow.isDestroyed()) {
       settingsWindow.webContents.send(IPC.HOLOCUBIC_STATUS_CHANGED, status);

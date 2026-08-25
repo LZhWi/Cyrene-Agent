@@ -1570,8 +1570,10 @@ async function loadHoloCubicSettings(): Promise<void> {
     renderHoloCubicStatus(status);
     holoCubicSaveStatus.textContent = "等待保存";
     holoCubicSaveStatus.className = "save-status";
-  } catch {
-    holoCubicSaveStatus.textContent = "读取配置失败";
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[HoloCubic] 读取配置失败:", error);
+    holoCubicSaveStatus.textContent = `读取配置失败：${message}`;
     holoCubicSaveStatus.className = "save-status is-error";
   }
 }
@@ -2950,8 +2952,10 @@ holoCubicPanel.addEventListener("submit", async (e) => {
     holoCubicJpegQualityInput.value = String(saved.jpegQuality);
     holoCubicSaveStatus.textContent = saved.enabled ? "已保存，正在连接" : "已保存，桥接已关闭";
     holoCubicSaveStatus.className = "save-status is-ok";
-  } catch {
-    holoCubicSaveStatus.textContent = "保存失败";
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error("[HoloCubic] 保存失败:", error);
+    holoCubicSaveStatus.textContent = `保存失败：${message}`;
     holoCubicSaveStatus.className = "save-status is-error";
   }
 });
