@@ -390,7 +390,7 @@ export function ChatComposer({
         {onSelectModelProfile && <ModelSelector activeProfileId={activeModelProfileId} onSelect={onSelectModelProfile} />}
         <span className="cy-composer__footer-spacer" />
         <ContextUsageRing usage={contextUsage} sessionId={conversationId} busy={modelBusy} />
-        <ReasoningControl />
+        <ReasoningControl sessionId={conversationId} modelProfileId={activeModelProfileId} />
         </div>
       </div>
     </div>

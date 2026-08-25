@@ -18,6 +18,11 @@ import { resolveChatContextTimezone } from "../chat-time-context";
 import type { ToolContext } from "./tool-context";
 import { VerificationRunner, resolveBuiltinExecutable } from "./verification-runner";
 import { logger, LogTag } from "../logger";
+import {
+  buildDirectShellInvocation,
+  resolveShellExecutable,
+  type ShellKind,
+} from "./shell-runtime";
 
 const LOG_PREFIX = "[BuiltinTools]";
 
@@ -184,6 +189,9 @@ function decodeShellOutput(chunks: Buffer[]): string {
 }
 
 interface ShellResult {
+  shell: ShellKind;
+  shellExecutable?: string;
+  errorCode?: "BASH_UNAVAILABLE";
   exitCode: number | null;
   stdout: string;
   stderr: string;
@@ -209,31 +217,48 @@ function killTree(child: ReturnType<typeof spawn>): void {
 /**
  * 执行一条完整 Shell 命令字符串。
  *
- * 直接执行路径用 `cmd.exe /d /s /c` 跑整行命令，支持管道（|）、重定向（> >> <）、
- * 命令连接（&& || & ;）、cmd 内建命令（dir/type/echo/del）等完整 Shell 语义。
- * SRT 沙箱路径内部也用 cmd.exe /c，所以两条路径语义一致。
+ * 默认用 `cmd.exe /d /s /c`；显式 shell=bash 时用探测到的 Git Bash 执行。
+ * 两种模式都支持各自的管道、重定向和命令连接语义。
  *
  * @param command 完整命令行字符串（如 "git status | findstr TODO"）
- * @param useSandbox true 时优先走沙箱；沙箱不可用则 fallback 到直接 cmd.exe（调用方判定是否接受）
+ * @param useSandbox true 时优先走沙箱；沙箱不可用则 fallback 到直接 Shell（调用方判定是否接受）
  */
 function runShellOnce(
   command: string,
   cwd?: string,
   extraEnv?: Record<string, string>,
   useSandbox?: boolean,
+  requestedShell: ShellKind = "cmd",
 ): Promise<ShellResult> {
   return new Promise((resolve) => {
     (async () => {
-      // 默认直接执行：cmd.exe /d /s /c 跑完整命令字符串，支持管道/重定向/内建命令
-      // /d=禁用 AutoRun（避免注册表注入命令） /s=正确处理引号包裹的命令字符串
-      let spawnCmd: string = process.env.ComSpec || "cmd.exe";
-      let spawnArgs: string[] = ["/d", "/s", "/c", command];
+      const resolvedShell = await resolveShellExecutable(requestedShell);
+      if (!resolvedShell) {
+        resolve({
+          shell: requestedShell,
+          errorCode: "BASH_UNAVAILABLE",
+          exitCode: -1,
+          stdout: "",
+          stderr: "[BASH_UNAVAILABLE] 未找到可用的 Bash。请安装 Git Bash，并确保 bash.exe 可执行。",
+          truncated: false,
+          ranViaSandbox: false,
+        });
+        return;
+      }
+
+      const directInvocation = buildDirectShellInvocation(resolvedShell, command);
+      let spawnCmd: string = directInvocation.command;
+      let spawnArgs: string[] = directInvocation.args;
       let spawnEnv: NodeJS.ProcessEnv = { ...process.env, ...extraEnv };
       let ranViaSandbox = false;
 
       if (useSandbox) {
         try {
-          const wrapped = await wrapWithSandbox(command, cwd);
+          const wrapped = await wrapWithSandbox(
+            command,
+            cwd,
+            requestedShell === "bash" ? resolvedShell.executable : undefined,
+          );
           if (wrapped) {
             spawnCmd = wrapped.argv[0];
             spawnArgs = wrapped.argv.slice(1);
@@ -241,9 +266,9 @@ function runShellOnce(
             spawnEnv = { ...wrapped.env, ...extraEnv };
             ranViaSandbox = true;
           } else {
-            // wrap 返回 null（沙箱不可用/失败）→ fallback 到直接 cmd.exe
+            // wrap 返回 null（沙箱不可用/失败）→ fallback 到直接 Shell
             // 调用方需自行判断是否接受 fallback（写副作用命令不接受 fallback）
-            console.log(LOG_PREFIX, "run_shell sandbox unavailable, fallback to direct cmd.exe");
+            console.log(LOG_PREFIX, `run_shell sandbox unavailable, fallback to direct ${requestedShell}`);
           }
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
@@ -261,7 +286,7 @@ function runShellOnce(
         // 带引号路径如 node "E:\video test\_check.js" 会变成非法模块名。
         // windowsVerbatimArguments 让 argv 原样空格拼接，引号语义完全交给 cmd。
         // 沙箱路径不加：srt-win 是 Rust 程序（MSVCRT 解析 argv），与 Node 自动转义配对正确。
-        ...(ranViaSandbox ? {} : { windowsVerbatimArguments: true }),
+        ...(ranViaSandbox || !directInvocation.windowsVerbatimArguments ? {} : { windowsVerbatimArguments: true }),
         // stdin→/dev/null(NUL)：误启动交互式进程(python/node REPL)时让它读到 EOF 立即退出，
         // 不再卡在"等 stdin 输入"上耗满超时。stdout/stderr 仍 pipe 来收集输出。
         stdio: ["ignore", "pipe", "pipe"],
@@ -298,6 +323,8 @@ function runShellOnce(
       child.on("error", (err) => {
         clearTimeout(timeoutTimer);
         resolve({
+          shell: requestedShell,
+          shellExecutable: resolvedShell.executable,
           exitCode: -1,
           stdout: decodeShellOutput(stdoutChunks),
           stderr: decodeShellOutput(stderrChunks) + "\n[spawn error] " + err.message + (ranViaSandbox ? " [sandbox]" : ""),
@@ -308,6 +335,8 @@ function runShellOnce(
       child.on("close", (code) => {
         clearTimeout(timeoutTimer);
         resolve({
+          shell: requestedShell,
+          shellExecutable: resolvedShell.executable,
           exitCode: code,
           stdout: decodeShellOutput(stdoutChunks),
           stderr: decodeShellOutput(stderrChunks),
@@ -319,6 +348,7 @@ function runShellOnce(
       // async wrapper 异常兜底（理论上不会走到，wrapWithSandbox 内部已 try/catch）
       const msg = err instanceof Error ? err.message : String(err);
       resolve({
+        shell: requestedShell,
         exitCode: -1,
         stdout: "",
         stderr: "[runShellOnce internal error] " + msg,
@@ -332,13 +362,25 @@ function runShellOnce(
 async function executeRunShell(args: Record<string, unknown>, context?: import("./tool-context").ToolContext): Promise<string> {
   const command = String(args.command || "").trim();
   const cwd = args.cwd ? String(args.cwd) : undefined;
+  const requestedShell = args.shell === undefined || args.shell === "cmd"
+    ? "cmd"
+    : args.shell === "bash"
+      ? "bash"
+      : null;
   if (!command) return "[错误] command 不能为空";
+  if (!requestedShell) {
+    return JSON.stringify({
+      command, cwd, shell: String(args.shell), errorCode: "SHELL_UNSUPPORTED",
+      exitCode: -1, stdout: "", stderr: "[SHELL_UNSUPPORTED] shell 仅支持 cmd 或 bash",
+      timedOut: false, truncated: false, effect: "unknown", sandboxed: false,
+    });
+  }
 
   // 灾难命令守卫：无论档位都拒绝（format/shutdown/dd 等明显灾难操作）
   if (isCatastrophicCommand(command)) {
     logger.info(LogTag.BuiltinTools, `[run_shell] rejected: catastrophic command="${command}"`);
     return JSON.stringify({
-      command, cwd,
+      command, cwd, shell: requestedShell,
       exitCode: -1, stdout: "", stderr: "[拒绝] 该命令被系统禁止执行",
       timedOut: false, truncated: false, effect: "unknown", sandboxed: false,
     });
@@ -350,11 +392,11 @@ async function executeRunShell(args: Record<string, unknown>, context?: import("
 
   // full 档位：直接 spawn，不走沙箱（用户已选择完全信任）
   if (level === "full") {
-    logger.info(LogTag.BuiltinTools, `[run_shell] full level → direct cmd.exe (no sandbox)`);
-    const result = await runShellOnce(command, cwd);
+    logger.info(LogTag.BuiltinTools, `[run_shell] full level → direct ${requestedShell} (no sandbox)`);
+    const result = await runShellOnce(command, cwd, undefined, false, requestedShell);
     logger.info(LogTag.BuiltinTools, `[run_shell] [full] done: exitCode=${result.exitCode} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length}`);
     return JSON.stringify({
-      command, cwd,
+      command, cwd, shell: result.shell, shellExecutable: result.shellExecutable, errorCode: result.errorCode,
       exitCode: result.exitCode,
       stdout: result.stdout,
       stderr: result.stderr,
@@ -373,7 +415,7 @@ async function executeRunShell(args: Record<string, unknown>, context?: import("
   if (requiresSandbox && !isSandboxReady()) {
     logger.info(LogTag.BuiltinTools, `[run_shell] write/unknown → sandbox not ready (level=${level}), rejected`);
     return JSON.stringify({
-      command, cwd,
+      command, cwd, shell: requestedShell,
       exitCode: -1, stdout: "",
       stderr: "[拒绝] 沙箱不可用，该命令可能修改工作区，已终止。请在设置中安装沙箱或提升权限档位。",
       timedOut: false, truncated: false, effect, sandboxed: false,
@@ -382,13 +424,13 @@ async function executeRunShell(args: Record<string, unknown>, context?: import("
 
   const useSandbox = isSandboxReady();
   logger.info(LogTag.BuiltinTools, `[run_shell] ${level} → useSandbox=${useSandbox} effect=${effect}`);
-  const result = await runShellOnce(command, cwd, undefined, useSandbox);
+  const result = await runShellOnce(command, cwd, undefined, useSandbox, requestedShell);
 
   // 写副作用命令若 fallback 到直接 spawn（沙箱 wrap 失败）→ 拒绝
   if (requiresSandbox && useSandbox && !result.ranViaSandbox) {
     logger.warn(LogTag.BuiltinTools, `[run_shell] write/unknown → sandbox wrap failed (fell back to direct spawn), rejected. stderr=${result.stderr.slice(0, 200)}`);
     return JSON.stringify({
-      command, cwd,
+      command, cwd, shell: result.shell, shellExecutable: result.shellExecutable, errorCode: result.errorCode,
       exitCode: -1, stdout: result.stdout,
       stderr: result.stderr + "\n[拒绝] 沙箱不可用，该命令可能修改工作区，已终止",
       timedOut: false, truncated: result.truncated, effect, sandboxed: false,
@@ -397,7 +439,7 @@ async function executeRunShell(args: Record<string, unknown>, context?: import("
 
   logger.info(LogTag.BuiltinTools, `[run_shell] [${level}] done: exitCode=${result.exitCode} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length} sandboxed=${result.ranViaSandbox}`);
   return JSON.stringify({
-    command, cwd,
+    command, cwd, shell: result.shell, shellExecutable: result.shellExecutable, errorCode: result.errorCode,
     exitCode: result.exitCode,
     stdout: result.stdout,
     stderr: result.stderr,
@@ -412,13 +454,16 @@ toolRegistry.register({
   id: "run_shell",
   name: "执行命令",
   description:
-    "在用户电脑上执行一条 Shell 命令字符串（通过 cmd.exe 解析）。返回 exitCode + stdout + stderr。\n\n" +
-    "支持的 Shell 语义：\n" +
+    "在用户电脑上执行一条 Shell 命令字符串。默认由 cmd.exe 解析；需要类 Unix 语法时可显式选择 bash。返回 exitCode + stdout + stderr。\n\n" +
+    "cmd 模式语义：\n" +
     "- 管道：git status | findstr TODO\n" +
     "- 重定向：npm run build > build.log 或 echo hello >> out.txt\n" +
     "- 命令串联：cd src && dir 或 git add . && git commit -m msg\n" +
     "- cmd 内建命令：dir / type / echo / del / copy / set 等可直接用\n" +
     "- 环境变量：%VAR% 会被展开\n\n" +
+    "bash 模式语义：\n" +
+    "- 设置 shell=\"bash\"，可使用 pwd / grep / sed / awk、$VAR、POSIX 管道及脚本语法\n" +
+    "- 仅在检测到可用 Git Bash 时执行；不可用会明确返回 BASH_UNAVAILABLE，不会改用 cmd\n\n" +
     "何时用：\n" +
     "- git clone / git status / git log 等版本控制操作\n" +
     "- npm install / npm run / pip install / node xxx.js 等开发操作\n" +
@@ -433,7 +478,7 @@ toolRegistry.register({
     "- 能用专用工具完成的事\n\n" +
     "安全说明：非完全信任档位下，写副作用的命令会在沙箱中执行（限制文件系统访问范围）。" +
     "灾难命令（format/shutdown/dd 等）一律拒绝。\n" +
-    "参数：command (完整命令行字符串，如 \"git status\")，cwd (可选工作目录)。",
+    "参数：command (完整命令行字符串，如 \"git status\")，cwd (可选工作目录)，shell (cmd 或 bash，默认 cmd)。",
   enabled: true,
   risk: "shell",
   modes: ["code", "work"],
@@ -443,6 +488,12 @@ toolRegistry.register({
     properties: {
       command: { type: "string", description: "完整命令行字符串，如 \"git status\"、\"npm install\"、\"dir | findstr TODO\"" },
       cwd: { type: "string", description: "工作目录绝对路径，可选" },
+      shell: {
+        type: "string",
+        enum: ["cmd", "bash"],
+        default: "cmd",
+        description: "命令解释器：cmd（默认，兼容旧命令）或 bash（需要用户已安装 Git Bash）",
+      },
     },
     required: ["command"],
   },

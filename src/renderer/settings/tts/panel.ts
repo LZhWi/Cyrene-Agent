@@ -352,6 +352,12 @@ for (const [provider, ui] of Object.entries(ttsProviderUi)) {
   void saveTtsField("ttsCustomCloudFormat", (ttsEl("tts-custom-cloud-format") as HTMLSelectElement).value as "wav" | "mp3");
 });
 
+// MiniMax 合成模型属于 select：切换即保存，不依赖 Provider 文本字段的“保存配置”按钮。
+(ttsEl("tts-minimax-model") as HTMLSelectElement).addEventListener("change", () => {
+  const value = (ttsEl("tts-minimax-model") as HTMLSelectElement).value;
+  void saveTtsField("ttsMinimaxModel", value === "speech-2.8-hd" ? "speech-2.8-hd" : "speech-2.8-turbo");
+});
+
 // MiniMax 流式播放开关
 ttsEl("tts-streaming").addEventListener("change", () => {
   void saveTtsField("ttsStreaming", ttsEl("tts-streaming").checked);

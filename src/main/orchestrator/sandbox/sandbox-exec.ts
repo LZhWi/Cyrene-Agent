@@ -286,18 +286,20 @@ export async function ensureSandboxReady(cwd: string = process.cwd()): Promise<b
 /**
  * 把命令字符串包成沙箱 argv + env。
  *
- * @param command 完整命令行字符串（如 "git status | findstr TODO"），SRT 内部用 cmd.exe /c 执行
+ * @param command 完整命令行字符串（如 "git status | findstr TODO"）
+ * @param binShell 可选命令解释器；缺省时 SRT 在 Windows 使用 cmd.exe
  * @returns {argv, env} 调用方用 spawn(argv[0], argv.slice(1), {shell:false, env, cwd, stdio})；
  *          null 表示沙箱不可用或 wrap 失败，调用方 fallback 到直接 spawn。
  *
  * 流程：
  * 1. 沙箱未就绪 → 先 ensureSandboxReady(cwd)（可能弹 UAC，失败返回 null）
- * 2. 调 wrapWithSandboxArgv(command, undefined, customConfig, undefined, cwd)
+ * 2. 调 wrapWithSandboxArgv(command, binShell, customConfig, undefined, cwd)
  *    工作区读写权限已在初始化阶段授予；customConfig 仅承载本次命令的 deny 规则
  */
 export async function wrapWithSandbox(
   command: string,
   cwd?: string,
+  binShell?: string,
 ): Promise<{ argv: string[]; env: NodeJS.ProcessEnv } | null> {
   const level = getCurrentLevel();
   logger.info(LogTag.Runtime, `[Sandbox] wrapWithSandbox: command="${command}" cwd=${cwd || "(undefined)"} level=${level}`);
@@ -340,7 +342,7 @@ export async function wrapWithSandbox(
     logger.info(LogTag.Runtime, `[Sandbox] wrapWithSandbox: calling wrapWithSandboxArgv...`);
     const wrapped = await srtModule.SandboxManager.wrapWithSandboxArgv(
       command,       // 完整命令字符串，SRT 内部 cmd.exe /c 执行
-      undefined,     // binShell：让 SRT 自己选（Windows 默认 cmd.exe）
+      binShell,      // undefined=Windows 默认 cmd.exe；Bash 模式传入已探测的 bash.exe
       customConfig,
       undefined,     // abortSignal
       resolvedCwd,

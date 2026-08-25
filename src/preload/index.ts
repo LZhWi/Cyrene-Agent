@@ -73,8 +73,8 @@ const chatApi = {
   getImageSendStrategy: (sessionId?: string) =>
     ipcRenderer.invoke(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, sessionId ? { sessionId } : undefined),
   getGeneralSettings: () => ipcRenderer.invoke(IPC.SETTINGS_GET_GENERAL),
-  getReasoningState: () => ipcRenderer.invoke(IPC.CHAT_GET_REASONING_STATE),
-  setReasoning: (payload: { providerKey: string; preference: unknown }) => ipcRenderer.invoke(IPC.CHAT_SET_REASONING, payload),
+  getReasoningState: (payload?: { sessionId?: string }) => ipcRenderer.invoke(IPC.CHAT_GET_REASONING_STATE, payload),
+  setReasoning: (payload: { sessionId?: string; providerKey: string; preference: unknown }) => ipcRenderer.invoke(IPC.CHAT_SET_REASONING, payload),
   // 截图
   startScreenshot: () => ipcRenderer.invoke(IPC.SCREENSHOT_START),
   onScreenshotInsert: (

@@ -2,7 +2,15 @@ import { BrowserWindow, ipcMain } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import { getCapabilityOrOpenAI } from "../orchestrator/vendors";
 import { normalizeReasoningPreference } from "../../shared/reasoning";
-import { loadModelSettings, saveModelSettings, loadVisionConfig, resolveModelSettingsProfile } from "../settings/model-settings";
+import {
+  listSavedModelProfiles,
+  loadModelSettings,
+  saveModelProfile,
+  saveModelSettings,
+  loadVisionConfig,
+  resolveModelSettingsProfile,
+} from "../settings/model-settings";
+import { resolveVendorRuntimeSettings } from "../orchestrator/vendors/runtime-settings";
 import { getSession } from "./chats-store";
 import { describePendingAttachment } from "../rag/file-ingest";
 import { processDocumentIndexRequest } from "../rag/document-index-ipc";
@@ -56,26 +64,42 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     return BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false;
   });
 
-  ipcMain.handle(IPC.CHAT_GET_REASONING_STATE, () => {
-    const settings = loadModelSettings();
+  ipcMain.handle(IPC.CHAT_GET_REASONING_STATE, (_event, payload?: { sessionId?: unknown }) => {
+    const baseSettings = loadModelSettings();
+    const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : undefined;
+    const session = sessionId ? getSession(sessionId) : undefined;
+    const modelProfileId = session?.modelProfileId;
+    const settings = modelProfileId
+      ? resolveModelSettingsProfile(baseSettings, modelProfileId)
+      : baseSettings;
     const cap = getCapabilityOrOpenAI(settings.provider);
     return {
       providerKey: settings.provider,
       providerId: cap.id,
       model: settings.model,
-      preference: settings.perProvider?.[settings.provider]?.reasoning,
-      thinkingOverride: settings.thinkingOverride,
+      preference: settings.reasoning,
+      thinkingOverride: resolveVendorRuntimeSettings(settings).thinkingOverride,
+      modelProfileId,
     };
   });
 
   ipcMain.handle(IPC.CHAT_SET_REASONING, (_event, payload: unknown) => {
     if (!payload || typeof payload !== "object") return;
-    const p = payload as { providerKey?: unknown; preference?: unknown };
+    const p = payload as { sessionId?: unknown; providerKey?: unknown; preference?: unknown };
     if (typeof p.providerKey !== "string" || typeof p.preference !== "object" || !p.preference) return;
-    const current = loadModelSettings();
-    if (current.provider !== p.providerKey) return;
     const normalized = normalizeReasoningPreference(p.preference);
     if (!normalized) return;
+
+    const current = loadModelSettings();
+    const session = typeof p.sessionId === "string" ? getSession(p.sessionId) : undefined;
+    if (session?.modelProfileId) {
+      const profile = listSavedModelProfiles(current).find((item) => item.id === session.modelProfileId);
+      if (!profile || profile.provider !== p.providerKey) return;
+      saveModelProfile({ ...profile, reasoning: normalized });
+      return;
+    }
+
+    if (current.provider !== p.providerKey) return;
     saveModelSettings({ reasoning: normalized });
   });
 

@@ -16,8 +16,8 @@ interface ReasoningState {
 }
 
 interface ChatReasoningApi {
-  getReasoningState: () => Promise<ReasoningState>;
-  setReasoning: (payload: { providerKey: string; preference: ReasoningPreference }) => Promise<void>;
+  getReasoningState: (payload?: { sessionId?: string }) => Promise<ReasoningState>;
+  setReasoning: (payload: { sessionId?: string; providerKey: string; preference: ReasoningPreference }) => Promise<void>;
 }
 
 function reasoningApi(): ChatReasoningApi | undefined {
@@ -38,7 +38,7 @@ function ChevronIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5" /></svg>;
 }
 
-export function ReasoningControl() {
+export function ReasoningControl({ sessionId, modelProfileId }: { sessionId?: string; modelProfileId?: string }) {
   const [providerKey, setProviderKey] = useState("");
   const [view, setView] = useState<ReasoningDropdownView>();
   const [open, setOpen] = useState(false);
@@ -47,7 +47,7 @@ export function ReasoningControl() {
     const api = reasoningApi();
     if (!api) return;
     try {
-      const state = await api.getReasoningState();
+      const state = await api.getReasoningState({ sessionId });
       setProviderKey(state.providerKey);
       setView(computeReasoningDropdown(state.providerId, state.model, state.preference, state.thinkingOverride));
     } catch {
@@ -55,7 +55,7 @@ export function ReasoningControl() {
     }
   }
 
-  useEffect(() => { void refresh(); }, []);
+  useEffect(() => { void refresh(); }, [sessionId, modelProfileId]);
 
   const activeKey = view ? preferenceKey(view.activePreference) : "auto:";
   const label = `thinking · ${preferenceLabel(view?.activePreference ?? { mode: "auto" })}`;
@@ -64,7 +64,7 @@ export function ReasoningControl() {
     const item = view?.items.find((candidate) => preferenceKey(candidate.preference) === value);
     const api = reasoningApi();
     if (!item || item.disabled || !api || !providerKey) return;
-    await api.setReasoning({ providerKey, preference: item.preference });
+    await api.setReasoning({ sessionId, providerKey, preference: item.preference });
     await refresh();
     setOpen(false);
   }
