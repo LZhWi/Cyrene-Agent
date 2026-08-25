@@ -111,13 +111,13 @@ export interface CyreneRunOptions {
   conversationId?: string;
   /** CITA 保留的用户原始 Query；旧调用方未传时从最后一条 user 消息读取。 */
   originalQuery?: string;
-  /** CITA 生成的上下文化理解，供 Action Gate 显式使用。 */
+  /** CITA 生成的上下文化理解，供模型上下文拼装显式使用。 */
   contextualizedQuery?: string;
   /** 独立 CITA 证据块；原始 user 消息不会被替换。 */
   citaContextBlock?: string;
-  /** CITA 本地校验后允许 Action Gate 引用的不透明引用集合。 */
+  /** CITA 本地校验后允许模型引用的不透明引用集合。 */
   trustedRefs?: string[];
-  /** Chat 跳过 CITA/Action Gate/Native FC；默认 Work。 */
+  /** Chat 跳过 CITA/Native FC；默认 Work。 */
   executionMode?: AgentExecutionMode;
   /** 原始 UI 模式（work / learn / chat / code），供工具做模式隔离。 */
   conversationMode?: ConversationMode;
@@ -144,9 +144,9 @@ export interface CyreneRunOptions {
   /** Plan Mode 时注入的 cyrene-plan-mode skill 正文；可变，不参与稳定缓存前缀，
    *  在 harness runtimeParts 里拼，避免进/出 plan mode 打断 stablePrefix 缓存。 */
   planSkillContext?: string;
-  /** 只应用到 Soul 最终自然语言回复，禁止影响 CITA、Action Gate 与 Native FC。 */
+  /** 只应用到 Soul 最终自然语言回复，禁止影响 CITA 与 Native FC。 */
   soulSampling?: ApprovedStyleSampling;
-  /** 不带时间戳前缀的 messages，给 Action Gate 用。未传时回退到 messages。 */
+  /** 不带时间戳前缀的 messages，给 CITA 等决策层用。未传时回退到 messages。 */
   cleanMessages?: ChatMessage[];
   /** [RESPONSE_CONTEXT] 文本，从 CITA 结果生成，给 Soul 动态追加。 */
   responseContext?: string;

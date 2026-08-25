@@ -99,35 +99,18 @@ export type StructuredOutputRequest =
       schema?: object;
     };
 
-/**
- * Action Gate 专用：直接指定 tool_choice wire 值，绕过 resolveToolChoicePolicy。
- * Native FC 不设此字段，仍走 toolChoiceIntent + resolveToolChoicePolicy。
- *
- * `none` 和 `omit` 的区别：
- * - `none`：明确发送"禁止调用工具"（wire: tool_choice: "none"）
- * - `omit`：请求里完全不出现 tool_choice 字段
- */
-export type ToolChoiceOverride =
-  | { kind: "named"; toolName: string }
-  | { kind: "required" }
-  | { kind: "auto" }
-  | { kind: "none" }
-  | { kind: "omit" };
-
 export interface ChatRequest {
   model: string;
   messages: ChatMessage[];
   tools?: ToolSpec[];
   /** Runtime semantic intent; the active Adapter maps it to named/required/any/auto/omitted wire syntax. */
   toolChoiceIntent?: { mode: "must_call"; toolName: string };
-  /** Action Gate 专用：直接指定 tool_choice wire 值，绕过 resolveToolChoicePolicy。 */
-  toolChoiceOverride?: ToolChoiceOverride;
   temperature?: number;
   topP?: number;
   frequencyPenalty?: number;
   repetitionPenalty?: number;
   stream?: boolean;
-  /** CITA/Action Gate only. Native FC keeps using real tools instead. */
+  /** CITA only. Native FC keeps using real tools instead. */
   structuredOutput?: StructuredOutputRequest;
   /**
    * 非流式调用时的 max_tokens 上限（OpenAI wire: `max_tokens`；Anthropic wire 覆盖默认 4096）。

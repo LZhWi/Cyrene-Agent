@@ -37,7 +37,7 @@ function makeBody(
   options: {
     cap?: ProviderCapability;
     config?: Partial<VendorConfig>;
-    extra?: Partial<Pick<ChatRequest, "maxTokens" | "temperature" | "topP" | "tools" | "toolChoiceOverride" | "structuredOutput" | "stream">>;
+    extra?: Partial<Pick<ChatRequest, "maxTokens" | "temperature" | "topP" | "tools" | "structuredOutput" | "stream">>;
   } = {},
 ): { url: string; headers: Record<string, string>; body: Record<string, unknown> } {
   const adapter = makeAdapter(options.cap);
@@ -173,25 +173,6 @@ describe("ResponsesAdapter — tools 扁平格式", () => {
       parameters: { type: "object" },
     });
     expect(wireTools[0]).not.toHaveProperty("function");
-  });
-
-  test("toolChoiceOverride named 映射为少一层嵌套的 {type,name}", () => {
-    const { body } = makeBody([{ role: "user", content: "hi" }], {
-      extra: { tools, toolChoiceOverride: { kind: "named", toolName: "music_search" } },
-    });
-    expect(body.tool_choice).toEqual({ type: "function", name: "music_search" });
-  });
-
-  test("toolChoiceOverride required / none 直接透传字符串", () => {
-    const required = makeBody([{ role: "user", content: "hi" }], {
-      extra: { tools, toolChoiceOverride: { kind: "required" } },
-    });
-    expect(required.body.tool_choice).toBe("required");
-
-    const none = makeBody([{ role: "user", content: "hi" }], {
-      extra: { tools, toolChoiceOverride: { kind: "none" } },
-    });
-    expect(none.body.tool_choice).toBe("none");
   });
 });
 

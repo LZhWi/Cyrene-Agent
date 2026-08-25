@@ -8,13 +8,7 @@
 
 </div>
 
-<div align="center">
 
-<img src="./docs/image/preview2.png" alt="Cyrene Agent live preview (Work mode · weather query)" width="800">
-
-<i>Live preview · Work mode invoking a tool to check the weather</i>
-
-</div>
 
 **Cyrene-Agent is a Windows Live2D AI desktop companion centered around Cyrene from _Honkai: Star Rail_.**
 
@@ -30,7 +24,7 @@
 - 🌸 **Playful Desktop Companion** — A persistent Live2D character with expressions, actions, status, mood, speech bubbles, and intelligent stickers
 - 💬 **Casual Conversation (Chat)** — Focused on character-driven interaction, with responses shaped by conversation history, user style, and long-term memory
 - 🛠️ **Assisted Work (Work)** — General-purpose task session that chains together web search, file processing, document generation, and lifestyle tools through the [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) main loop
-- 💻 **Code Collaboration (Code)** — Binds a trusted code directory, provides LSP semantic queries (definitions / references / hover / symbols / diagnostics) plus restricted read/write/exec commands; safety is enforced by Harness's Action Gate and Execution Policy
+- 💻 **Code Collaboration (Code)** — Binds a trusted code directory, provides LSP semantic queries (definitions / references / hover / symbols / diagnostics) plus restricted read/write/exec commands; safety is enforced by Harness's permission approval (Permission Policy) and Execution Policy
 - 📚 **Learning Companion (Learn)** — Binds an Obsidian Vault, accompanies users in understanding materials, organizing notes, generating exercises, and tracking progress
 - 📅 **Daily Affairs (Daily)** — General tool-enabled sessions for everyday Q&A, information organization, and light tasks
 - 🧠 **Personalized Memory** — L0 / L1 / L2 layered memory combined with the self-developed DMAE Worldbook for long-term interaction continuity
@@ -200,7 +194,7 @@ Configuration is stored in the application's `<userData>/` directory. Most chang
 | --- | :---: | --- |
 | 🌸 Live2D Desktop Companion | ✅ Available | Always-on-top companion, multiple windows, expressions, actions, mood and status, speech bubbles, and intelligent stickers |
 | 💬 Casual Conversation (Chat) | ✅ Available | Independent character-chat flow that neither exposes nor executes tools, using recent messages, social context, and user style |
-| 🛠️ Assisted Work (Work) | ✅ Available | Driven by [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts): CITA context understanding + Action Gate permission filtering + main-loop tool scheduling + uncertain-effect accounting + recoverable checkpoint; the Soul persona layer generates the reply text at the exit |
+| 🛠️ Assisted Work (Work) | ✅ Available | Driven by [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts): CITA context understanding + permission approval filtering + main-loop tool scheduling + uncertain-effect accounting + recoverable checkpoint; the Soul persona layer generates the reply text at the exit |
 | 💻 Code Collaboration (Code) | ✅ Available | Binds a trusted code directory; Coding Agent reads, modifies, verifies code, and runs commands |
 | 📚 Learning Companion (Learn) | ✅ Available | Binds an Obsidian Vault to accompany understanding, take notes, generate exercises, and track progress |
 | 📅 Daily Affairs (Daily) | ✅ Available | Reuses the CyreneHarness main loop; a general-purpose tool session for everyday Q&A, information organization, and light tasks |
@@ -393,7 +387,7 @@ The modes below are consumers of this loop:
 
 ![Work mode preview](./docs/image/work.png)
 
-- **Driven by CyreneHarness** — Each message enters the while loop in [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts): every round calls the LLM → writes back the assistant message → dispatches tools → writes back tool results → checks uncertain effects → continues or ends. Pre-processors (CITA context understanding, Action Gate permission filtering) run before the Harness entry; the Soul persona layer generates the reply text after the Harness exit.
+- **Driven by CyreneHarness** — Each message enters the while loop in [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts): every round calls the LLM → writes back the assistant message → dispatches tools → writes back tool results → checks uncertain effects → continues or ends. Pre-processors (CITA context understanding) run before the Harness entry, and permission approval filters unsafe tool calls before execution; the Soul persona layer generates the reply text after the Harness exit.
 - **Free tool chaining** — Web search, webpage reading, file R/W, document generation, and lifestyle tools can be combined on demand; the model picks the next tool without pre-orchestrated flows.
 - **Side-effect accounting** — When a non-idempotent side effect (sending email, modifying a remote file, etc.) has an unknown result, it is recorded into `state.uncertainEffects` and blocks automatic replay of the same dangerous call within the round.
 - **Failure retry and cancellation** — Tool failures retry based on error class and side-effect tier (with jittered backoff); `AbortSignal` can cancel at any time. Cancellation does not emit a "final reply" event to avoid misleading the user.
@@ -410,7 +404,7 @@ The modes below are consumers of this loop:
 >
 > Initializing Git is the safest fallback: after `git init && git add -A`, any change can be inspected with `git diff` and reverted with `git checkout -- .`.
 
-- **Code-specific tools on top of Work** — Reuses the [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) main loop and registers extra code-focused tools (read/write/edit, command execution, LSP queries, etc.); Action Gate filters unsafe calls before the Harness entry, and Execution Policy decides whether to require a second user confirmation.
+- **Code-specific tools on top of Work** — Reuses the [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) main loop and registers extra code-focused tools (read/write/edit, command execution, LSP queries, etc.); permission approval (checkPermission) filters unsafe calls before tool execution, and Execution Policy decides whether to require a second user confirmation.
 - **Trusted workspace binding** — All read/write, command execution, and LSP queries must stay inside the user-bound directory; the model cannot pick or change the workspace, and out-of-scope access (including `..` and symlink escapes) is rejected outright.
 - **Semantic code queries (LSP)** — Code mode can query definitions, references, hover details, symbols, and diagnostics inside the bound workspace without modifying files.
 - **User-managed servers** — Cyrene provides an LSP client only. It never bundles, downloads, upgrades, or silently installs language servers.
@@ -497,7 +491,7 @@ Cyrene includes many built-in and extensible tools, primarily covering the follo
 
 - Supports `stdio`, SSE, and HTTP transports.
 - Supports managing and enabling/disabling MCP Servers from Settings.
-- MCP tools are integrated into Cyrene's tool registry, Action Gate, and Execution Policy.
+- MCP tools are integrated into Cyrene's tool registry, permission approval, and Execution Policy.
 - Actual stability of third-party MCP Servers depends on their own implementations.
 
 #### 📱 External Channels
@@ -572,7 +566,7 @@ Cyrene includes many built-in and extensible tools, primarily covering the follo
 | Rich Text Rendering | `@ant-design/x-markdown` (Markdown / code highlighting / KaTeX math) |
 | Voice and Media | TTS / ASR + `silk-wasm` |
 | Native Screenshot Helper | Rust + DXGI Desktop Duplication / Direct2D / GDI + WIC PNG + NDJSON IPC |
-| Self-Developed Core | CITA (context understanding), Action Gate (permission filtering), DMAE Worldbook, unified Structured Output Pipeline |
+| Self-Developed Core | CITA (context understanding), CyreneHarness (agent loop and permission approval), DMAE Worldbook, unified Structured Output Pipeline |
 | External Channels | Feishu OpenAPI, WeChat iLink |
 | Documents and Email | ExcelJS, docx, PDFKit, Nodemailer |
 | Testing | Vitest 4 |
@@ -606,7 +600,7 @@ src/
 │   ├── lsp/          # LSP client (manager / client / server-catalog / server-discovery)
 │   ├── memory/       # L0/L1/L2 memory engine + DMAE Worldbook + entity relationship graph
 │   ├── music/        # Music companion features (playback / recommendations / sessions / MCP client)
-│   ├── orchestrator/ # Agent loop, tool scheduling, and Action Gate
+│   ├── orchestrator/ # Agent loop, tool scheduling, and permission approval
 │   │   ├── harness/  # CyreneHarness core (while loop + compaction + retry + uncertainty)
 │   │   ├── sandbox/  # Windows command-execution sandbox (@anthropic-ai/sandbox-runtime integration)
 │   │   ├── code/     # Code mode sub-module (workspace binding + LSP tools)

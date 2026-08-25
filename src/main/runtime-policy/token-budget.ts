@@ -2,19 +2,18 @@
  * Token Budget Policy — 统一管理各 LLM 阶段的 maxOutputTokens。
  *
  * 覆盖优先级（高 → 低）：
- *   1. 单次调用覆盖（override）—— 例如 action-gate repair 时加倍
+ *   1. 单次调用覆盖（override）
  *   2. Model Profile 覆盖 —— 未来按 provider/model 配置（暂未启用）
  *   3. 阶段默认值（stageDefaults）
  *
  * 使用方式：
- *   const maxTokens = resolveMaxOutputTokens({ stage: "action-gate", override: 2400 });
+ *   const maxTokens = resolveMaxOutputTokens({ stage: "task-plan", override: 2400 });
  */
 
 // ── 类型 ──
 
 export type RuntimeStage =
   | "task-plan"
-  | "action-gate"
   | "ask-soul"
   | "memory-judge"
   | "memory-compressor"
@@ -32,7 +31,7 @@ export interface TokenBudgetPolicy {
 
 export interface ResolveTokenBudgetInput {
   stage: RuntimeStage;
-  /** 单次调用覆盖（最高优先级）。例如 action-gate repair 时传 2400。 */
+  /** 单次调用覆盖（最高优先级）。 */
   override?: number;
   /** 未来扩展：按 provider/model 覆盖。暂不启用。 */
   providerModelKey?: string;
@@ -44,10 +43,6 @@ export interface ResolveTokenBudgetInput {
 const STAGE_DEFAULTS: Record<RuntimeStage, TokenBudgetPolicy> = {
   "task-plan": {
     defaultMaxOutputTokens: 1200,
-  },
-  "action-gate": {
-    defaultMaxOutputTokens: 1200,
-    // repair 时 caller 通过 override 传入 2400
   },
   "ask-soul": {
     defaultMaxOutputTokens: 1600,

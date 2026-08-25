@@ -4,7 +4,6 @@ import { resolveMaxOutputTokens, getStageTokenPolicy } from "./token-budget";
 describe("resolveMaxOutputTokens", () => {
   it("returns stage default when no override", () => {
     expect(resolveMaxOutputTokens({ stage: "task-plan" })).toBe(1200);
-    expect(resolveMaxOutputTokens({ stage: "action-gate" })).toBe(1200);
     expect(resolveMaxOutputTokens({ stage: "ask-soul" })).toBe(1600);
     expect(resolveMaxOutputTokens({ stage: "memory-judge" })).toBe(800);
     expect(resolveMaxOutputTokens({ stage: "memory-compressor" })).toBe(500);
@@ -14,7 +13,6 @@ describe("resolveMaxOutputTokens", () => {
 
   it("override takes precedence over stage default", () => {
     expect(resolveMaxOutputTokens({ stage: "task-plan", override: 2400 })).toBe(2400);
-    expect(resolveMaxOutputTokens({ stage: "action-gate", override: 2400 })).toBe(2400);
   });
 
   it("override of 0 or negative falls back to stage default", () => {
@@ -34,7 +32,7 @@ describe("resolveMaxOutputTokens", () => {
 
 describe("getStageTokenPolicy", () => {
   it("returns policy with defaultMaxOutputTokens for all stages", () => {
-    const stages = ["task-plan", "action-gate", "ask-soul", "memory-judge", "memory-compressor", "memory-reflect", "memory-resolver"] as const;
+    const stages = ["task-plan", "ask-soul", "memory-judge", "memory-compressor", "memory-reflect", "memory-resolver"] as const;
     for (const stage of stages) {
       const policy = getStageTokenPolicy(stage);
       expect(policy.defaultMaxOutputTokens).toBeGreaterThan(0);

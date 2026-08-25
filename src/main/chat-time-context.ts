@@ -5,7 +5,7 @@ export interface ChatContextMessage {
 }
 
 export interface ConversationTimeContext {
-  /** 不带时间戳前缀的干净消息（给 Action Gate 等决策层用）*/
+  /** 不带时间戳前缀的干净消息（给 CITA 等决策层用）*/
   cleanMessages: ChatContextMessage[];
   /** 带时间戳前缀的消息（给 Soul / Legacy 用，当前行为）*/
   timestampedMessages: ChatContextMessage[];

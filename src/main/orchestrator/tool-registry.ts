@@ -60,7 +60,7 @@ export interface ToolDefinition {
   catalogHint?: string;
   /** 可选分类标签，第一期暂不强制使用。 */
   category?: string;
-  /** Action Gate 使用的稳定能力标识；未填时回落到工具 id。 */
+  /** 权限审批与执行记账使用的稳定能力标识；未填时回落到工具 id。 */
   capability?: string;
   /** Runtime 校验受控参数来源；这些值不能由模型自由编造。支持带 kind 的对象形式用于类型化引用验证。 */
   controlledInput?: Record<string, ControlledInputPolicy>;
@@ -81,7 +81,7 @@ export interface ToolDefinition {
   needsContext?: boolean;
   /** Ledger 策略：success_terminal 缓存终态成功（默认），bypass 不缓存。 */
   ledgerPolicy?: "success_terminal" | "bypass";
-  /** 标记为已废弃：从新运行的 Action Gate 可用工具列表中隐藏，但保留注册用于旧会话兼容。 */
+  /** 标记为已废弃：从新运行的模型可用工具列表中隐藏，但保留注册用于旧会话兼容。 */
   deprecated?: boolean;
   /** 工具效果类型。未配置默认 "unknown"，不静默放行。 */
   effectKind?: ToolEffectKind;

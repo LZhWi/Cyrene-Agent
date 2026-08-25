@@ -16,7 +16,7 @@ function baseInput(
 ): StructuredOutputRunInput<Value, { attempt: number; minimal: boolean }> {
   let index = 0;
   return {
-    stage: "action_gate",
+    stage: "task_router",
     profile: resolveStructuredOutputProfile({
       provider: "minimax",
       model: "MiniMax-M3",

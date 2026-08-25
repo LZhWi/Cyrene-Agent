@@ -15,7 +15,6 @@ export type RunPhase =
   | "cita"
   | "router"
   | "create_plan"
-  | "action_gate"
   | "native_fc"
   | "tool_execute"
   | "plan_verify"
@@ -47,9 +46,7 @@ export interface RunExecutionStatus {
   createdArtifacts: CreatedArtifact[];
   /**
    * 整体任务是否已确认完成。
-   * 唯一来源：
-   *   - taskPlan?.status === "completed"
-   *   - directExecutionCompletionConfirmed === true（Action Gate 路由到 respond + 所有 completion evidence 满足）
+   * 唯一来源：taskPlan?.status === "completed"。
    * 不能由 createdArtifacts、工具成功数量或进入 Soul 推断。
    */
   taskCompletionConfirmed: boolean;

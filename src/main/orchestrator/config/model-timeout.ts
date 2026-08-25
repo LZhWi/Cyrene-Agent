@@ -1,7 +1,7 @@
 /**
  * 模型请求超时统一配置模块
  *
- * 唯一规则来源：所有非流式 Structured Output 调用（Task Router、Planner、Action Gate、
+ * 唯一规则来源：所有非流式 Structured Output 调用（Task Router、Planner、
  * Native FC、Memory 等）的超时配置统一从本模块获取。
  *
  * 数据流：

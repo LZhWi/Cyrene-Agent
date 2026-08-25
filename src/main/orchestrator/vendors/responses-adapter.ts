@@ -211,24 +211,7 @@ export class ResponsesAdapter implements ChatVendorAdapter {
     const tools = toWireTools(req.tools);
     if (tools) {
       body.tools = tools;
-      if (req.toolChoiceOverride) {
-        switch (req.toolChoiceOverride.kind) {
-          case "named":
-            body.tool_choice = { type: "function", name: req.toolChoiceOverride.toolName };
-            break;
-          case "required":
-            body.tool_choice = "required";
-            break;
-          case "auto":
-            body.tool_choice = "auto";
-            break;
-          case "none":
-            body.tool_choice = "none";
-            break;
-          case "omit":
-            break;
-        }
-      } else if (req.toolChoiceIntent) {
+      if (req.toolChoiceIntent) {
         const policy = resolveToolChoicePolicy({
           providerId: this.capability.id,
           model: cfg.model,

@@ -126,7 +126,7 @@ describe("resolveStructuredOutputProfile", () => {
           totalBudgetMs: 10_000,
           perAttemptTimeoutMs: 5_500,
         },
-        action_gate: {
+        task_router: {
           maxAttempts: 2,
           totalBudgetMs: 12_000,
           perAttemptTimeoutMs: 7_000,
@@ -150,7 +150,7 @@ describe("resolveStructuredOutputProfile", () => {
           perAttemptTimeoutMs: 8_000,
           minimumRemainingBudgetMs: 500,
         },
-        action_gate: {
+        task_router: {
           maxAttempts: 2,
           totalBudgetMs: 20_000,
           perAttemptTimeoutMs: 10_000,
@@ -175,7 +175,7 @@ describe("resolveStructuredOutputProfile", () => {
           perAttemptTimeoutMs: 10_000,
           minimumRemainingBudgetMs: 500,
         },
-        action_gate: {
+        task_router: {
           maxAttempts: 2,
           totalBudgetMs: 25_000,
           perAttemptTimeoutMs: 12_500,
@@ -204,7 +204,7 @@ describe("resolveStructuredOutputProfile", () => {
           perAttemptTimeoutMs: 20_000,
           minimumRemainingBudgetMs: 500,
         },
-        action_gate: {
+        task_router: {
           maxAttempts: 2,
           totalBudgetMs: 25_000,
           perAttemptTimeoutMs: 12_500,

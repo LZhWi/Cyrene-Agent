@@ -23,7 +23,7 @@
 - 🌸 **趣味桌面陪伴** — Live2D 角色常驻桌面，支持表情、动作、状态、心情、气泡互动与智能表情包
 - 💬 **日常聊天（Chat）** — 专注角色化交流，结合会话历史、用户风格与长期记忆自然回应
 - 🛠️ **辅助工作（Work）** — 通用任务会话，支持联网搜索、文件处理、文档生成、生活服务等工具的串联调用，由 CyreneHarness 主循环统一调度
-- 💻 **代码协作（Code）** — 绑定可信代码目录，提供 LSP 语义查询（定义/引用/悬停/符号/诊断）与受限的读写改命令执行，安全边界由 Harness 的 Action Gate 与 Execution Policy 统一把关
+- 💻 **代码协作（Code）** — 绑定可信代码目录，提供 LSP 语义查询（定义/引用/悬停/符号/诊断）与受限的读写改命令执行，安全边界由 Harness 的权限审批（Permission Policy）与 Execution Policy 统一把关
 - 📚 **学习陪伴（Learn）** — 绑定 Obsidian Vault，陪伴用户理解材料、整理笔记、生成练习与维护进
 - 🧠 **个性化记忆** — L0 / L1 / L2 分层记忆，结合自研记忆头像+Worldbook+沉淀长期互动
 - 🌱 **条目生命周期** — 自研DMAE算法（v4.0未实现最新v5.1）负责管理prompt在上下文中的生命周期
@@ -270,7 +270,7 @@ CyreneHarness 是 Cyrene Agent 的核心 Agent Loop，负责把**模型决策、
 >
 > 启用 Git 是最稳妥的兜底：`git init && git add -A` 后任何改动都可 `git diff` / `git checkout -- .` 还原。
 
-- **在 Work 基础上叠加代码专属工具** — 复用 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 主循环，额外注册代码专用工具集（读写改、命令执行、LSP 查询等）；Action Gate 在 Harness 入口前过滤不安全调用，Execution Policy 决定是否需要用户二次确认。
+- **在 Work 基础上叠加代码专属工具** — 复用 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 主循环，额外注册代码专用工具集（读写改、命令执行、LSP 查询等）；工具执行前由权限审批（checkPermission）过滤不安全调用，Execution Policy 决定是否需要用户二次确认。
 - **绑定可信工作目录** — 所有读写、命令执行与 LSP 查询必须落在用户预先绑定的目录内；模型无法指定或切换工作目录，越权访问（包括 `..` 与符号链接逃逸）会被直接拒绝。
 - **代码语义查询（LSP）** — Code 模式可在已绑定工作目录中查询定义、引用、悬停、符号与诊断；不会修改文件。
 - **外部服务由用户管理** — Cyrene 只提供 LSP 客户端，不随应用捆绑、下载、升级或静默安装语言服务器。
@@ -362,7 +362,7 @@ Cyrene 内置和扩展的工具较多，主要覆盖以下类别：
 
 - 支持 `stdio`、SSE 与 HTTP Transport。
 - 支持在设置页面管理和启停 MCP Server。
-- MCP 工具会统一接入 Cyrene 的工具注册、Action Gate 与 Execution Policy。
+- MCP 工具会统一接入 Cyrene 的工具注册、权限审批与 Execution Policy。
 - 第三方 MCP Server 的实际稳定性取决于其自身实现。
 
 #### 📱 外部渠道
@@ -420,7 +420,7 @@ Cyrene 内置和扩展的工具较多，主要覆盖以下类别：
 | --- | :---: | --- |
 | 🌸 Live2D 桌面陪伴 | ✅ 可用 | 支持桌宠置顶、多窗口、表情动作、心情状态、气泡互动与智能表情包 |
 | 💬 日常聊天（Chat） | ✅ 可用 | 独立角色聊天流程，不暴露或执行工具，结合近期消息、社交上下文与用户风格生成回复 |
-| 🛠️ 辅助工作（Work） | ✅ 可用 | 由 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 统一驱动：CITA 上下文理解 + Action Gate 权限过滤 + 主循环工具调度 + 不确定副作用记账 + 可恢复 checkpoint；人设层（Soul）在出口生成回复文本 |
+| 🛠️ 辅助工作（Work） | ✅ 可用 | 由 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 统一驱动：CITA 上下文理解 + 权限审批过滤 + 主循环工具调度 + 不确定副作用记账 + 可恢复 checkpoint；人设层（Soul）在出口生成回复文本 |
 | 💻 代码协作（Code） | ✅ 可用 | 绑定可信代码目录，Coding Agent 读取、修改、验证代码并执行命令 |
 | 📚 学习陪伴（Learn） | ✅ 可用 | 绑定 Obsidian Vault，陪伴理解材料、整理笔记、生成练习与维护进度 |
 | 📅 日常事务（Daily） | ✅ 可用 | 通用工具会话，处理日常问答、信息整理与轻度任务 |
@@ -462,7 +462,7 @@ Cyrene 内置和扩展的工具较多，主要覆盖以下类别：
 | 富文本渲染 | `@ant-design/x-markdown`（Markdown / 代码高亮 / KaTeX 公式） |
 | 语音与媒体 | TTS / ASR + `silk-wasm` |
 | 原生截图助手 | Rust + DXGI Desktop Duplication / Direct2D / GDI + WIC PNG + NDJSON IPC |
-| 自研核心 | CITA（上下文理解）、Action Gate（权限过滤）、DMAE Worldbook、统一 Structured Output Pipeline |
+| 自研核心 | CITA（上下文理解）、CyreneHarness（Agent 主循环与权限审批）、DMAE Worldbook、统一 Structured Output Pipeline |
 | 外部渠道 | 飞书 OpenAPI、微信 iLink |
 | 文档与邮件 | ExcelJS、docx、PDFKit、Nodemailer |
 | 测试 | Vitest 4 |
@@ -496,7 +496,7 @@ src/
 │   ├── lsp/          # LSP 客户端（manager / client / server-catalog / server-discovery）
 │   ├── memory/       # L0/L1/L2 记忆引擎 + DMAE Worldbook + 实体关系图
 │   ├── music/        # 音乐陪伴（播放 / 推荐 / 会话 / MCP 客户端）
-│   ├── orchestrator/ # Agent 主循环 + 工具调度 + Action Gate
+│   ├── orchestrator/ # Agent 主循环 + 工具调度 + 权限审批
 │   │   ├── harness/  # CyreneHarness 核心（while 循环 + compaction + retry + uncertainty）
 │   │   ├── sandbox/  # Windows 命令执行沙箱（@anthropic-ai/sandbox-runtime 接入）
 │   │   ├── code/     # Code 模式子模块（绑定工作目录 + LSP 工具）

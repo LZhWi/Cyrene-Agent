@@ -28,7 +28,6 @@ export interface ToolContext {
    * 以下来源都不能覆盖它：
    * - 用户消息中的路径
    * - Planner
-   * - Action Gate
    * - Native FC 生成的 workspaceRoot
    *
    * Work 工具和 run_verification 必须使用此目录。
