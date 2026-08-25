@@ -3,6 +3,18 @@
 > 范围：`src/main/orchestrator/harness/tool-call-scheduler.ts` 及其调用方 `tool-round.ts` / `cyrene-harness.ts`。
 > 所有结论均通过临时复现测试验证（测试已删除，未入库）；现有 7 个调度器测试全部通过，未覆盖下述场景。
 
+## 修复状态（2026-08-25 施工完成）
+
+| 问题 | 状态 | 修复 commit |
+| --- | --- | --- |
+| 1 halt 后已执行结果消失 | 已修复 | fa22ab8 / 1bdc849 |
+| 2 execute 抛错穿透、绕过 finishRun | 已修复 | 1bdc849 / 88cc508 |
+| 3 取消路径丢未提交 tool result | 已修复 | fa22ab8 |
+| 4 同会话并发无守卫 | 已修复（SESSION_RUN_ACTIVE + takeover） | 88215b3 |
+| 5 checkpoint 深拷贝 + 写放大 | 已修复（活引用契约 / 单行 JSON / index 防抖） | c2c85b5 |
+
+施工方案与批次划分见 `2026-08-25-harness-parallel-scheduling-optimization-plan.md`。
+
 ---
 
 ## 问题 1（严重）：并行组 halt 后，已执行调用的结果凭空消失
