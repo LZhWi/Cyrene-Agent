@@ -105,6 +105,12 @@ function asNonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
+/** 主进程会话守卫拒绝（agui-bridge `SESSION_RUN_ACTIVE:<runId>`）时解析出 active runId。 */
+function parseSessionRunActiveError(message: string): string | undefined {
+  const prefix = "SESSION_RUN_ACTIVE:";
+  return message.startsWith(prefix) ? message.slice(prefix.length) || undefined : undefined;
+}
+
 /** 校验后端发来的 cyrene.weather 卡片数据，返回 renderer 侧 WeatherData。 */
 function normalizeWeatherData(value: unknown): WeatherData | undefined {
   const card = asRecord(value);
@@ -432,6 +438,13 @@ export function ChatPage() {
   >({});
   const [planDrawerOpen, setPlanDrawerOpen] = useState(false);
   const [interruptedRun, setInterruptedRun] = useState<{ runId: string; rounds: number; todoCount: number } | null>(null);
+  // 会话守卫冲突（SESSION_RUN_ACTIVE，已知问题 4）：主进程拒绝了并发 run，
+  // 等用户决定是否终止旧 run 并接管重开本轮。仅 UX 层；正确性由主进程守卫保证。
+  const [sessionTakeover, setSessionTakeover] = useState<{
+    sessionId: string;
+    activeRunId: string;
+    retry: () => Promise<void>;
+  } | null>(null);
   const activeModeRef = useRef(mode);
   const activeSessionIdsRef = useRef(activeSessionIds);
   const activeScopeRef = useRef(`mode:${mode}`);
@@ -920,6 +933,7 @@ export function ChatPage() {
     session: ChatSession;
     attachments: ComposerAttachment[];
     resumeFromRunId?: string;
+    takeoverFromRunId?: string;
   }) {
     const api = aguiApi();
     const store = chatStore();
@@ -1391,6 +1405,7 @@ export function ChatPage() {
         sessionId: input.sessionId,
         recoveryContext: buildTodoRecoveryContext(input.session.messages, input.assistantId),
         ...(input.resumeFromRunId ? { resumeFromRunId: input.resumeFromRunId } : {}),
+        ...(input.takeoverFromRunId ? { takeoverFromRunId: input.takeoverFromRunId } : {}),
         imageAttachments: input.attachments
           .filter((attachment) => attachment.kind === "image" && attachment.filePath)
           .map((attachment) => ({
@@ -1400,6 +1415,8 @@ export function ChatPage() {
           })),
       });
       if (!ack.success) throw new Error(ack.error ?? "模型请求发起失败");
+      // 新 run 已被主进程接受：同会话旧的守卫冲突操作卡（若有）不再有效
+      setSessionTakeover((current) => (current && current.sessionId === input.sessionId ? null : current));
       // Task 2 / C1：立即把 ack.runId 写入 activeRunsBySession，
       // 让 cancel 在 RUN_STARTED 事件到达前也能找到正确的 runId。
       // RUN_STARTED.runId 必须与 ack.runId 一致（由 bridge 注入 options.runId 保证）。
@@ -1452,6 +1469,44 @@ export function ChatPage() {
       terminalStatus = terminalStatus ?? "runtime_error";
       completeRunActivity(true);
       const errorMessage = error instanceof Error ? error.message : String(error);
+      // 会话守卫冲突（已知问题 4）：主进程拒绝了并发 run（典型场景：F5 后立即发消息）。
+      // 不走通用错误文案，改为挂起操作卡等用户决定是否终止旧 run 并重开本轮。
+      const conflictRunId = parseSessionRunActiveError(errorMessage);
+      if (conflictRunId) {
+        processMessages = [...processMessages, createRoundProcessMessage(
+          `process-${processMessageSequence++}`,
+          "当前会话已有正在运行的任务（可能来自刷新前的旧运行），本轮未执行。",
+          toolExecutions.length,
+          activeRoundId,
+        )];
+        updateMessage(input.sessionId, input.assistantId, {
+          content: "",
+          processMessages,
+          loading: false,
+          waitingForFirstEvent: false,
+          streaming: false,
+          reasoningStreaming: false,
+          runActivity,
+          responseStarted: false,
+        });
+        persistedFinalContent = "";
+        setSessionTakeover({
+          sessionId: input.sessionId,
+          activeRunId: conflictRunId,
+          retry: async () => {
+            // 重开本轮：assistant 占位消息回到 loading，带 takeoverFromRunId 重发
+            updateMessage(input.sessionId, input.assistantId, {
+              loading: true,
+              waitingForFirstEvent: true,
+              streaming: false,
+              responseStarted: false,
+            });
+            await runModel({ ...input, takeoverFromRunId: conflictRunId });
+          },
+        });
+        await checkpointRun("terminal", true);
+        return;
+      }
       const visibleError = `模型请求失败：${errorMessage}`;
       processMessages = [...processMessages, createRoundProcessMessage(
         `process-${processMessageSequence++}`,
@@ -2212,6 +2267,16 @@ export function ChatPage() {
           <div className="cy-harness-recovery">
             <span>昔涟上次任务意外中断（已进行 {interruptedRun.rounds} 轮）。</span>
             <button type="button" onClick={() => void sendMessage("继续上次任务", interruptedRun.runId)}>继续任务</button>
+          </div>
+        )}
+        {sessionTakeover && sessionTakeover.sessionId === activeSessionId && !isCurrentScopeRunning && (
+          <div className="cy-harness-recovery">
+            <span>当前会话有正在运行的任务（可能来自刷新前），本轮消息尚未执行。</span>
+            <button type="button" onClick={() => {
+              const takeover = sessionTakeover;
+              setSessionTakeover(null);
+              void takeover.retry();
+            }}>终止并重开</button>
           </div>
         )}
         {hasMessages && (

@@ -8,13 +8,16 @@ const mocks = vi.hoisted(() => ({
   runCyreneAgent: vi.fn(),
   requestUserClarification: vi.fn(),
   agentEvents: [] as unknown[],
-  // Task 2 / C1：可定制的终态行为
+  // Task 3 / C2：可定制的终态行为
   runFinishedResult: undefined as unknown,
   emitDuplicateRunFinished: false,
   errorAfterRunFinished: null as string | null,
   skipDefaultRunFinished: false,
   // Task 3 / C2：模拟正在运行的 Observable（不自动 complete）
   neverComplete: false,
+  // 会话守卫/takeover 测试：abort 触发 RUN_FINISHED(cancelled) + complete，
+  // 模拟真实 harness 的 cancelled 结算链路（AGUI_CANCEL / takeover 都走这条链）
+  completeOnAbort: false,
 }));
 
 vi.mock("electron", () => ({
@@ -39,6 +42,7 @@ vi.mock("./orchestrator/cyrene-agent", () => ({
       // 忠实模拟真实 CyreneAgent：读 options.runId 并 stamp 到 RUN_STARTED / RUN_FINISHED，
       // 保证 bridge 的 canonical runId 全链路一致（ack.runId === RUN_STARTED.runId === RUN_FINISHED.runId）。
       const runId = (options as { runId?: string } | null | undefined)?.runId;
+      const signal = (options as { signal?: AbortSignal } | null | undefined)?.signal;
       return new Observable((subscriber) => {
         this.lastResult = { reply: "抱抱你", toolResults: [] };
         subscriber.next({ type: "RUN_STARTED", runId });
@@ -56,6 +60,17 @@ vi.mock("./orchestrator/cyrene-agent", () => ({
             subscriber.error(new Error(mocks.errorAfterRunFinished));
             return;
           }
+        }
+        // 会话守卫/takeover 测试：abort 触发 cancelled 结算链路
+        if (mocks.completeOnAbort && signal) {
+          signal.addEventListener("abort", () => {
+            subscriber.next({
+              type: "RUN_FINISHED",
+              runId,
+              result: { status: "cancelled", reason: "user_cancelled", externalEffectsMayContinue: true },
+            });
+            subscriber.complete();
+          });
         }
         // Task 3 / C2：neverComplete 模拟正在运行的 Observable，不自动 complete
         if (!mocks.neverComplete) {
@@ -94,6 +109,7 @@ describe("agui-bridge sticker event ordering", () => {
     mocks.errorAfterRunFinished = null;
     mocks.skipDefaultRunFinished = false;
     mocks.neverComplete = false;
+    mocks.completeOnAbort = false;
   });
 
   it("routes structured Ask cards to the AG-UI run sender", async () => {
@@ -794,14 +810,14 @@ describe("agui-bridge sticker event ordering", () => {
     const cancelHandler = mocks.handlers.get(IPC.AGUI_CANCEL);
     if (!runHandler || !cancelHandler) throw new Error("handlers not registered");
 
-    // 启动两个 run
+    // 启动两个 run（会话守卫要求不同会话：跨会话并发是既有能力）
     const ack1 = await runHandler(
       { sender },
-      { messages: [{ role: "user", content: "run1" }], sessionId: "chat-isolation" },
+      { messages: [{ role: "user", content: "run1" }], sessionId: "chat-isolation-a" },
     ) as { runId: string };
     const ack2 = await runHandler(
       { sender },
-      { messages: [{ role: "user", content: "run2" }], sessionId: "chat-isolation" },
+      { messages: [{ role: "user", content: "run2" }], sessionId: "chat-isolation-b" },
     ) as { runId: string };
 
     await vi.waitFor(() => expect(mocks.runCyreneAgent).toHaveBeenCalledTimes(2));
@@ -853,11 +869,11 @@ describe("agui-bridge sticker event ordering", () => {
 
     await runHandler(
       { sender },
-      { messages: [{ role: "user", content: "run1" }], sessionId: "chat-cancel-all" },
+      { messages: [{ role: "user", content: "run1" }], sessionId: "chat-cancel-all-a" },
     );
     await runHandler(
       { sender },
-      { messages: [{ role: "user", content: "run2" }], sessionId: "chat-cancel-all" },
+      { messages: [{ role: "user", content: "run2" }], sessionId: "chat-cancel-all-b" },
     );
 
     await vi.waitFor(() => expect(mocks.runCyreneAgent).toHaveBeenCalledTimes(2));
@@ -870,5 +886,263 @@ describe("agui-bridge sticker event ordering", () => {
 
     expect(signal1!.aborted).toBe(true);
     expect(signal2!.aborted).toBe(true);
+  });
+});
+
+// ── 会话级运行守卫（已知问题 4）──────────────────────────
+// 同一会话同一时刻最多一个 active run；不同会话允许并发。
+// 渲染端 busy 队列只是 UX 优化，主进程守卫才是跨进程最终一致性边界。
+describe("agui-bridge session run guard", () => {
+  const defaultBuildOptions = async () => ({
+    options: {
+      settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
+      messages: [],
+      timeoutMs: 60000,
+      toolSystemContent: "TOOL",
+      soulSystemBaseContent: "SOUL",
+    },
+    latestUserText: "hi",
+  });
+
+  function makeSender() {
+    return { isDestroyed: () => false, send: () => {} };
+  }
+
+  beforeEach(() => {
+    mocks.runFinishedResult = undefined;
+    mocks.emitDuplicateRunFinished = false;
+    mocks.errorAfterRunFinished = null;
+    mocks.skipDefaultRunFinished = false;
+    mocks.neverComplete = false;
+    mocks.completeOnAbort = false;
+  });
+
+  async function setupBridge(buildOptions = defaultBuildOptions) {
+    vi.resetModules();
+    mocks.handlers.clear();
+    mocks.runCyreneAgent.mockClear();
+    const bridge = await import("./agui-bridge");
+    bridge.registerAgUiIpc(buildOptions, async () => {}, () => null);
+    const runHandler = mocks.handlers.get(IPC.AGUI_RUN);
+    if (!runHandler) throw new Error("AGUI_RUN handler was not registered");
+    return { bridge, runHandler };
+  }
+
+  it("rejects a second same-session run with SESSION_RUN_ACTIVE while the first is unsettled", async () => {
+    mocks.getSession.mockReturnValue({ id: "guard-1", mode: "chat" });
+    mocks.skipDefaultRunFinished = true;
+    mocks.neverComplete = true;
+    const { bridge, runHandler } = await setupBridge();
+    const sender = makeSender();
+
+    const ack1 = await runHandler(
+      { sender },
+      { messages: [{ role: "user", content: "run1" }], sessionId: "guard-1" },
+    ) as { runId: string };
+    expect(bridge.__getSessionActiveRunForTest("guard-1")).toBe(ack1.runId);
+
+    // 不带 takeoverFromRunId 的同会话第二个 run → 拒绝，错误带稳定前缀 + active runId
+    await expect(runHandler(
+      { sender },
+      { messages: [{ role: "user", content: "run2" }], sessionId: "guard-1" },
+    )).rejects.toThrow(`SESSION_RUN_ACTIVE:${ack1.runId}`);
+
+    // 拒绝不得影响第一个 run：守卫仍指向 run1
+    expect(bridge.__getSessionActiveRunForTest("guard-1")).toBe(ack1.runId);
+  });
+
+  it("releases the guard after the first run settles, allowing a new run", async () => {
+    mocks.getSession.mockReturnValue({ id: "guard-2", mode: "chat" });
+    const { bridge, runHandler } = await setupBridge();
+    const sender = makeSender();
+
+    const ack1 = await runHandler(
+      { sender },
+      { messages: [{ role: "user", content: "run1" }], sessionId: "guard-2" },
+    ) as { runId: string };
+    // complete 回调链路（副作用 → endLifecycle）是异步的：等守卫真实释放
+    await vi.waitFor(() => expect(bridge.__getSessionActiveRunForTest("guard-2")).toBeUndefined());
+
+    const ack2 = await runHandler(
+      { sender },
+      { messages: [{ role: "user", content: "run2" }], sessionId: "guard-2" },
+    ) as { runId: string };
+    expect(ack2.runId).toBeTruthy();
+    expect(bridge.__getSessionActiveRunForTest("guard-2")).toBe(ack2.runId);
+  });
+
+  it("takeover aborts the active run, waits for settlement, then starts the new run", async () => {
+    mocks.getSession.mockReturnValue({ id: "guard-3", mode: "chat" });
+    // completeOnAbort：abort 触发 RUN_FINISHED(cancelled) + complete 的真实结算链路
+    mocks.skipDefaultRunFinished = true;
+    mocks.neverComplete = true;
+    mocks.completeOnAbort = true;
+    const { bridge, runHandler } = await setupBridge();
+    const sender = makeSender();
+
+    const ack1 = await runHandler(
+      { sender },
+      { messages: [{ role: "user", content: "run1" }], sessionId: "guard-3" },
+    ) as { runId: string };
+
+    const ack2 = await runHandler(
+      { sender },
+      {
+        messages: [{ role: "user", content: "run2" }],
+        sessionId: "guard-3",
+        takeoverFromRunId: ack1.runId,
+      },
+    ) as { runId: string };
+
+    expect(mocks.runCyreneAgent).toHaveBeenCalledTimes(2);
+    // 旧 run 被 takeover abort（cancelled 结算），新 run 的 signal 干净
+    const signal1 = (mocks.runCyreneAgent.mock.calls[0]?.[0] as { signal?: AbortSignal }).signal;
+    const signal2 = (mocks.runCyreneAgent.mock.calls[1]?.[0] as { signal?: AbortSignal }).signal;
+    expect(signal1!.aborted).toBe(true);
+    expect(signal2!.aborted).toBe(false);
+    // 守卫已易主到新 run
+    expect(bridge.__getSessionActiveRunForTest("guard-3")).toBe(ack2.runId);
+  });
+
+  it("rejects takeover when takeoverFromRunId does not match the active run", async () => {
+    mocks.getSession.mockReturnValue({ id: "guard-4", mode: "chat" });
+    mocks.skipDefaultRunFinished = true;
+    mocks.neverComplete = true;
+    const { bridge, runHandler } = await setupBridge();
+    const sender = makeSender();
+
+    const ack1 = await runHandler(
+      { sender },
+      { messages: [{ role: "user", content: "run1" }], sessionId: "guard-4" },
+    ) as { runId: string };
+
+    await expect(runHandler(
+      { sender },
+      {
+        messages: [{ role: "user", content: "run2" }],
+        sessionId: "guard-4",
+        takeoverFromRunId: "stale-or-wrong-run-id",
+      },
+    )).rejects.toThrow(`SESSION_RUN_ACTIVE:${ack1.runId}`);
+
+    expect(bridge.__getSessionActiveRunForTest("guard-4")).toBe(ack1.runId);
+  });
+
+  it("throws SESSION_RUN_TAKEOVER_STUCK when the active run never settles after abort", async () => {
+    mocks.getSession.mockReturnValue({ id: "guard-5", mode: "chat" });
+    // abort 后旧 run 永不结算（模拟 settlement 链路自身故障）
+    mocks.skipDefaultRunFinished = true;
+    mocks.neverComplete = true;
+    mocks.completeOnAbort = false;
+    const { bridge, runHandler } = await setupBridge();
+    bridge.__setTakeoverSettleTimeoutForTest(10);
+    const sender = makeSender();
+
+    const ack1 = await runHandler(
+      { sender },
+      { messages: [{ role: "user", content: "run1" }], sessionId: "guard-5" },
+    ) as { runId: string };
+
+    await expect(runHandler(
+      { sender },
+      {
+        messages: [{ role: "user", content: "run2" }],
+        sessionId: "guard-5",
+        takeoverFromRunId: ack1.runId,
+      },
+    )).rejects.toThrow(`SESSION_RUN_TAKEOVER_STUCK:${ack1.runId}`);
+  });
+
+  it("concurrent takeovers of the same run: exactly one wins, the loser is rejected", async () => {
+    mocks.getSession.mockReturnValue({ id: "guard-6", mode: "chat" });
+    mocks.skipDefaultRunFinished = true;
+    mocks.neverComplete = true;
+    mocks.completeOnAbort = true;
+    const { bridge, runHandler } = await setupBridge();
+    const sender = makeSender();
+
+    const ack1 = await runHandler(
+      { sender },
+      { messages: [{ role: "user", content: "run1" }], sessionId: "guard-6" },
+    ) as { runId: string };
+
+    // 两个 takeover 同 tick 发起：旧 run 结算后双双醒来重新竞争守卫，恰一个注册成功
+    const [first, second] = await Promise.allSettled([
+      runHandler({ sender }, {
+        messages: [{ role: "user", content: "a" }],
+        sessionId: "guard-6",
+        takeoverFromRunId: ack1.runId,
+      }),
+      runHandler({ sender }, {
+        messages: [{ role: "user", content: "b" }],
+        sessionId: "guard-6",
+        takeoverFromRunId: ack1.runId,
+      }),
+    ]);
+
+    const outcomes = [first.status, second.status].sort();
+    expect(outcomes).toEqual(["fulfilled", "rejected"]);
+    // 输家的 takeoverFromRunId 已不匹配新 active run → SESSION_RUN_ACTIVE（指向赢家）
+    const rejected = first.status === "rejected" ? first : second as PromiseRejectedResult;
+    expect((rejected as PromiseRejectedResult).reason.message).toMatch(/^SESSION_RUN_ACTIVE:/);
+    // 守卫恰好指向赢家
+    const fulfilled = first.status === "fulfilled" ? first : second as PromiseFulfilledResult<{ runId: string }>;
+    expect(bridge.__getSessionActiveRunForTest("guard-6")).toBe((fulfilled as PromiseFulfilledResult<{ runId: string }>).value.runId);
+  });
+
+  it("release is compare-and-delete: a mismatched runId never drops the guard", async () => {
+    mocks.getSession.mockReturnValue({ id: "guard-7", mode: "chat" });
+    mocks.skipDefaultRunFinished = true;
+    mocks.neverComplete = true;
+    const { bridge, runHandler } = await setupBridge();
+    const sender = makeSender();
+
+    const ack1 = await runHandler(
+      { sender },
+      { messages: [{ role: "user", content: "run1" }], sessionId: "guard-7" },
+    ) as { runId: string };
+
+    // 旧 run 迟到的清理（runId 不匹配）不得误删当前守卫
+    bridge.__releaseSessionGuardForTest("guard-7", "some-other-run");
+    expect(bridge.__getSessionActiveRunForTest("guard-7")).toBe(ack1.runId);
+
+    // 匹配的 runId 才释放
+    bridge.__releaseSessionGuardForTest("guard-7", ack1.runId);
+    expect(bridge.__getSessionActiveRunForTest("guard-7")).toBeUndefined();
+  });
+
+  it("releases the session guard when buildOptions throws after registration", async () => {
+    mocks.getSession.mockReturnValue({ id: "guard-8", mode: "chat" });
+    const failingBuildOptions = async () => {
+      throw new Error("boom: build options failed");
+    };
+    const { bridge, runHandler } = await setupBridge(failingBuildOptions);
+    const sender = makeSender();
+
+    await expect(runHandler(
+      { sender },
+      { messages: [{ role: "user", content: "run1" }], sessionId: "guard-8" },
+    )).rejects.toThrow("boom: build options failed");
+
+    // 早期退出路径必须释放守卫，否则该会话永久拒绝新 run
+    expect(bridge.__getSessionActiveRunForTest("guard-8")).toBeUndefined();
+  });
+
+  it("same-tick concurrent runs on one session: exactly one registers", async () => {
+    mocks.getSession.mockReturnValue({ id: "guard-9", mode: "chat" });
+    mocks.skipDefaultRunFinished = true;
+    mocks.neverComplete = true;
+    const { runHandler } = await setupBridge();
+    const sender = makeSender();
+
+    const [first, second] = await Promise.allSettled([
+      runHandler({ sender }, { messages: [{ role: "user", content: "a" }], sessionId: "guard-9" }),
+      runHandler({ sender }, { messages: [{ role: "user", content: "b" }], sessionId: "guard-9" }),
+    ]);
+
+    // 守卫注册在同步代码块内完成（get 与 set 之间无 await）→ 同 tick 竞态下恰一个赢
+    expect(first.status).toBe("fulfilled");
+    expect(second.status).toBe("rejected");
+    expect((second as PromiseRejectedResult).reason.message).toMatch(/^SESSION_RUN_ACTIVE:/);
   });
 });

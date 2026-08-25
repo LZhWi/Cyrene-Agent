@@ -101,6 +101,8 @@ export interface AguiRunInput {
   recoveryContext?: string;
   /** 用户点击“继续任务”时指定的中断 Harness Run。 */
   resumeFromRunId?: string;
+  /** 显式接管：终止指定 run 并接管该会话（渲染端识别 SESSION_RUN_ACTIVE 后重发时携带）。 */
+  takeoverFromRunId?: string;
   /** 只由主进程根据会话持久化字段注入，渲染端传值不可信。 */
   modelProfileId?: string;
 }
@@ -149,6 +151,47 @@ const activeRuns = new Map<string, {
  */
 export function __hasActiveRunForTest(runId: string): boolean {
   return activeRuns.has(runId);
+}
+
+// ── 会话级运行守卫（已知问题 4）──────────────────────────
+// 同一会话同一时刻最多一个 active run；不同会话允许并发。
+// 渲染端 busy 队列只是 UX 优化，本守卫才是跨进程最终一致性边界：
+// 无论 IPC 时序如何（如 F5 后立即发消息），正确性不依赖渲染端调度顺序。
+
+interface SessionActiveRun {
+  runId: string;
+  /** 触发该 run 的 cancelled 流程（复用 AGUI_CANCEL 同款 abort 链路）。 */
+  abort: () => void;
+  /** run 终态结算完成（endLifecycle 释放守卫时 resolve）；takeover 等它保证旧 run checkpoint 已落盘。 */
+  settled: Promise<void>;
+}
+
+const sessionActiveRuns = new Map<string, SessionActiveRun>();
+
+/** 单次 takeover 等待旧 run 结算的时间上限：结算链路自身故障时超时回顶部重检，而非无限挂起。 */
+let takeoverSettleTimeoutMs = 5_000;
+
+/** compare-and-delete 释放：迟到的旧生命周期清理不误删新 run 的守卫。 */
+function releaseSessionGuardEntry(sessionId: string, runId: string, resolveSettled?: () => void): void {
+  if (sessionActiveRuns.get(sessionId)?.runId === runId) {
+    sessionActiveRuns.delete(sessionId);
+  }
+  resolveSettled?.();
+}
+
+/** 测试专用：读取会话当前 active run 的 runId。 */
+export function __getSessionActiveRunForTest(sessionId: string): string | undefined {
+  return sessionActiveRuns.get(sessionId)?.runId;
+}
+
+/** 测试专用：缩短 takeover 结算等待上限（避免真实等待 5s）。 */
+export function __setTakeoverSettleTimeoutForTest(ms: number): void {
+  takeoverSettleTimeoutMs = ms;
+}
+
+/** 测试专用：模拟旧 run 迟到的守卫释放（验证 compare-and-delete 语义）。 */
+export function __releaseSessionGuardForTest(sessionId: string, runId: string): void {
+  releaseSessionGuardEntry(sessionId, runId);
 }
 
 let buildOptionsFn: BuildOptionsFn | null = null;
@@ -313,6 +356,47 @@ export function registerAgUiIpc(
       throw new Error(`${mode} 模式需要先绑定项目工作区`);
     }
 
+    // ── 会话级运行守卫（已知问题 4）：同一会话同一时刻最多一个 active run ──
+    // 检查 + 注册在同一同步代码块内完成（JS 单线程，get 与 set 之间无 await = 原子），
+    // 早于下方 buildOptions（async，存在竞态窗口，F5 后立即发消息即命中）。
+    // 渲染端 busy 队列不参与正确性论证：无论 IPC 时序如何，这里都是最终边界。
+    const runAbortController = new AbortController();
+    let releaseSessionGuard: (() => void) | null = null;
+    for (let takeovers = 0; ; takeovers++) {
+      const existing = sessionActiveRuns.get(sessionId);
+      if (!existing) {
+        let resolveSettled!: () => void;
+        const settled = new Promise<void>((resolve) => { resolveSettled = resolve; });
+        // 并发 takeover 中只有一个能走到这里（await 醒来后必须回顶部重新竞争）
+        sessionActiveRuns.set(sessionId, {
+          runId,
+          abort: () => runAbortController.abort(),
+          settled,
+        });
+        releaseSessionGuard = () => releaseSessionGuardEntry(sessionId, runId, resolveSettled);
+        break;
+      }
+      if (input.takeoverFromRunId !== existing.runId) {
+        lifecycle?.onConversationEnded();
+        throw new Error(`SESSION_RUN_ACTIVE:${existing.runId}`);
+      }
+      if (takeovers >= 2) {
+        // 防御上限：abort 后旧 run 始终未结算（结算链路自身故障）→ 明确报错而非无限等待
+        lifecycle?.onConversationEnded();
+        throw new Error(`SESSION_RUN_TAKEOVER_STUCK:${existing.runId}`);
+      }
+      existing.abort();
+      // 有界等待旧 run 结算（checkpoint 落盘 + 副作用收尾），超时回顶部重新竞争
+      let settleTimeout: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([
+        existing.settled,
+        new Promise<void>((resolve) => {
+          settleTimeout = setTimeout(resolve, takeoverSettleTimeoutMs);
+        }),
+      ]);
+      clearTimeout(settleTimeout);
+    }
+
     // ── Chat / Work / Learn / Code：共用 CyreneAgent 外壳 ──
     const agentExecutionMode: AgentExecutionMode = mode === "chat" ? "chat" : "work";
     let built;
@@ -325,6 +409,8 @@ export function registerAgUiIpc(
     }));
     } catch (error) {
       perf.dump();
+      releaseSessionGuard?.();
+      releaseSessionGuard = null;
       lifecycle?.onConversationEnded();
       throw error;
     }
@@ -337,10 +423,10 @@ export function registerAgUiIpc(
     // 一路传到 Agent / Harness adapter / ToolContext / 所有 AG-UI 事件。
     // ack.runId 与 RUN_STARTED.runId 必须一致（Step 5 测试断言）。
     options.runId = runId;
-    // Task 3 / C2：为本次 run 创建 AbortController，signal 一路传到 Agent / harness。
-    // AGUI_CANCEL 调用 abortController.abort()，触发 harness 返回 cancelled，
-    // CyreneAgent 发出 RUN_FINISHED(result.status="cancelled")，complete 回调自然清理。
-    const runAbortController = new AbortController();
+    // Task 3 / C2：AbortController 已在会话守卫注册前创建（守卫的 abort 需要引用它）。
+    // signal 一路传到 Agent / harness；AGUI_CANCEL / takeover 调用 abort()，
+    // 触发 harness 返回 cancelled，CyreneAgent 发出 RUN_FINISHED(result.status="cancelled")，
+    // complete 回调自然清理。
     options.signal = runAbortController.signal;
     options.requestUserClarification = (card) => requestUserClarification(card, (cardData) => {
       send({ type: "CUSTOM", name: "cyrene.choice", value: cardData, threadId, runId });
@@ -350,10 +436,19 @@ export function registerAgUiIpc(
 
     // Learn 模式：配置 Obsidian Vault 并注册工具
     if (mode === "learn" && session.workspaceBinding?.workspaceRoot) {
-      obsidianWorkspace.configure({
-        enabled: true,
-        vaultPath: session.workspaceBinding.workspaceRoot,
-      });
+      try {
+        obsidianWorkspace.configure({
+          enabled: true,
+          vaultPath: session.workspaceBinding.workspaceRoot,
+        });
+      } catch (error) {
+        // 守卫已注册：configure 失败时必须释放，否则该会话永久拒绝新 run。
+        // 语义保持"配置失败 → 中断本次 run"（learn 工具不可用时不静默降级）。
+        releaseSessionGuard?.();
+        releaseSessionGuard = null;
+        lifecycle?.onConversationEnded();
+        throw error;
+      }
       try {
         registerObsidianTools();
       } catch (err) {
@@ -373,6 +468,10 @@ export function registerAgUiIpc(
     const endLifecycle = (): void => {
       if (lifecycleEnded) return;
       lifecycleEnded = true;
+      // 释放会话守卫（compare-and-delete）并 resolve settled：
+      // 等待中的 takeover 此刻才被放行，保证其开局时旧 run 的 checkpoint 已落盘。
+      releaseSessionGuard?.();
+      releaseSessionGuard = null;
       // Learn 模式：注销 Obsidian 工具
       if (mode === "learn") {
         try { unregisterObsidianTools(); } catch { /* ignore */ }
