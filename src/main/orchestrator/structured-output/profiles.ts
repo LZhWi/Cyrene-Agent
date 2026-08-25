@@ -78,7 +78,7 @@ const DEFINITIONS: readonly ProfileDefinition[] = [
     id: "glm-json-object",
     provider: "glm",
     transport: "openai",
-    modelPattern: /^glm-(?:5\.[12]|4\.[67])(?:$|-)/i,
+    modelPattern: /^glm-(?:5\.[123]|4\.[67])(?:$|-)/i,
     tier: "B",
     mode: "provider_json_object",
     verification: "official",

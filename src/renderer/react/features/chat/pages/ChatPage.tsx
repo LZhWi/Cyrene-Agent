@@ -421,6 +421,10 @@ export function ChatPage() {
   const [pendingWorkspaceByMode, setPendingWorkspaceByMode] = useState<
     Partial<Record<ConversationMode, { path: string; displayName?: string }>>
   >({});
+  // 欢迎页（无会话）暂存的模型选择：ensureSession 建会话后落地（与 pendingWorkspaceByMode 同构）。
+  const [pendingModelProfileByMode, setPendingModelProfileByMode] = useState<
+    Partial<Record<ConversationMode, string>>
+  >({});
   const [attachmentsByScope, setAttachmentsByScope] = useState<Record<string, ComposerAttachment[]>>({});
   const [sessionsByMode, setSessionsByMode] = useState<Partial<Record<ConversationMode, ChatSessionMeta[]>>>({});
   const [activeSessionIds, setActiveSessionIds] = useState<Partial<Record<ConversationMode, string>>>({});
@@ -1679,6 +1683,16 @@ export function ChatPage() {
           ? "新任务"
           : "新对话",
     });
+    // 欢迎页暂存的模型选择在此落地（问题 2：无会话时选择器曾被静默丢弃）。
+    const pendingModelProfileId = pendingModelProfileByMode[targetMode];
+    if (pendingModelProfileId) {
+      await store.setModelProfile(session.id, pendingModelProfileId);
+      setPendingModelProfileByMode((current) => {
+        const next = { ...current };
+        delete next[targetMode];
+        return next;
+      });
+    }
     await refreshSessions(targetMode, false);
     await selectSession(session.id, targetMode);
     return session.id;
@@ -2351,10 +2365,18 @@ export function ChatPage() {
               const separator = draft && !draft.endsWith(" ") ? " " : "";
               setDrafts((current) => ({ ...current, [scopeKey]: `${draft}${separator}[sticker:${id}]` }));
             }}
-            activeModelProfileId={activeSession?.id === activeSessionId ? activeSession?.modelProfileId : undefined}
+            activeModelProfileId={
+              activeSession?.id === activeSessionId && activeSession
+                ? activeSession.modelProfileId
+                : pendingModelProfileByMode[mode]
+            }
             contextUsage={latestContextUsage}
             onSelectModelProfile={(modelProfileId) => {
-              if (!activeSessionId) return;
+              // 欢迎页（无会话）：暂存选择，ensureSession 建会话后落地；不再静默丢弃。
+              if (!activeSessionId) {
+                setPendingModelProfileByMode((current) => ({ ...current, [mode]: modelProfileId }));
+                return;
+              }
               const store = chatStore();
               if (!store) return;
               void store.setModelProfile(activeSessionId, modelProfileId).then((session) => setActiveSession(session));

@@ -51,7 +51,7 @@ const MODEL_SAMPLING_RULES: readonly ModelSamplingRule[] = [
   },
   {
     providerId: "glm",
-    modelPattern: /^glm-(?:5\.[12]|5-turbo|4\.7)$/i,
+    modelPattern: /^glm-(?:5\.[123]|5-turbo|4\.7)$/i,
     diversity: true,
   },
   {

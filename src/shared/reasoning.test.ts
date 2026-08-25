@@ -135,6 +135,12 @@ describe("MODEL_REASONING_RULES — 9 家全部存在性", () => {
     expect(cap.supportedEfforts).toEqual(["high", "max"]);
   });
 
+  test("glm glm-5.3 → toggle-effort + [high,max]", () => {
+    const cap = resolveReasoningCapability("glm", "glm-5.3");
+    expect(cap.control).toBe("toggle-effort");
+    expect(cap.supportedEfforts).toEqual(["high", "max"]);
+  });
+
   test("glm glm-4.7 → toggle only", () => {
     const cap = resolveReasoningCapability("glm", "glm-4.7");
     expect(cap.control).toBe("toggle");

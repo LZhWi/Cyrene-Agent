@@ -139,6 +139,12 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
       run.streamController.bufferProgressContent(response.text);
     }
 
+    // ── 截断可见化（问题 1 B）：finishReason=length 表示命中输出上限 ──
+    // 各协议统一映射为 "length"（anthropic-normalizer / responses-normalizer / openai 透传）。
+    if (response.finishReason === "length") {
+      console.warn(`${LOG_PREFIX} round ${run.rounds} finishReason=length (输出命中上限被截断)`);
+    }
+
     // ── Tool Call Processing ──
     const toolCalls = response.toolCalls ?? [];
     if (toolCalls.length > 0) {
@@ -164,7 +170,11 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     // 不再检查 completionObligations 或 uncertainEffects：模型已选择结束当前 turn。
     // uncertainEffects 仍作为执行期安全状态保留（阻止相同危险副作用自动重放），
     // 但不参与 final settlement。
-    const finalAnswer = run.streamController.commitProgressBuffer();
+    // 截断可见化：最终轮命中长度上限时在回复尾部追加提示，不再静默。
+    const truncatedSuffix = response.finishReason === "length"
+      ? "\n\n⚠️ 模型输出达到长度上限，以上回复可能不完整。"
+      : "";
+    const finalAnswer = run.streamController.commitProgressBuffer() + truncatedSuffix;
     input.onEvent?.({ type: "round_end", roundId });
     input.onEvent?.({ type: "final_answer", content: finalAnswer });
     return finishRun(run, finalAnswer, false, undefined);
@@ -309,7 +319,6 @@ async function runCompaction(run: HarnessRun, roundSystemPrompt: string, budget:
       roundSystemPrompt,
       history,
       run.allToolSpecs,
-      config,
       input.signal,
     ),
   });

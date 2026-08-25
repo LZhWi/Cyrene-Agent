@@ -9,7 +9,7 @@
  * - cyrene-harness.ts 的 runCompaction（mid-loop 压缩摘要）
  */
 
-import { getAdapterForConfig, streamChatWithSdk } from "../vendors";
+import { getAdapterForConfig, streamChatWithSdk, resolveTransport } from "../vendors";
 import { recordUsage, recordRequest } from "../../token-usage-store";
 import type {
   ChatMessage,
@@ -28,6 +28,23 @@ import {
 } from "../prompt-layers";
 
 /**
+ * 输出上限策略（docs/design/2026-08-26-maxtoken-model-switch-glm53-known-issues.md 问题 1）：
+ * - OpenAI / Responses 协议：max_tokens 可选，缺省即模型自身输出上限。
+ *   不传，避免固定预算把长思维链拦腰截断。
+ * - Anthropic 协议：max_tokens 必填（缺字段直接 400），传模型级安全大值。
+ *   32k 对 Claude Sonnet 4.6+（64k）/ MiniMax M3 / GLM-5.x / DeepSeek V4 均在限内。
+ *
+ * config.reservedOutputTokens 仅参与压缩预算计算（computeTokenBudget），不再限流。
+ */
+const ANTHROPIC_REQUIRED_MAX_TOKENS = 32_768;
+
+function resolveRequestMaxTokens(vendorConfig: VendorConfig): number | undefined {
+  return resolveTransport(vendorConfig) === "anthropic"
+    ? ANTHROPIC_REQUIRED_MAX_TOKENS
+    : undefined;
+}
+
+/**
  * 单次 LLM 调用（流式优先）。
  * 部分兼容模型明确拒绝 stream + tools；只在零增量、明确不支持时降级为非流式，绝不重放半截流。
  */
@@ -42,12 +59,13 @@ export async function callLLM(
 ): Promise<ChatResponse> {
   const adapter = getAdapterForConfig(vendorConfig);
   const composed = composePromptLayers(promptLayers, messages);
+  const requestMaxTokens = resolveRequestMaxTokens(vendorConfig);
   const baseRequest: ChatRequest = {
     model: vendorConfig.model,
     messages: composed.messages,
     tools: normalizeToolSpecsForCache(tools),
     stream: true,
-    maxTokens: config.reservedOutputTokens,
+    ...(requestMaxTokens !== undefined ? { maxTokens: requestMaxTokens } : {}),
     promptLayers: composed.metadata,
   };
   // 缓存路由 hints（Kimi prompt_cache_key 等）：此前只有 ChatLoop / 压缩摘要链路注入，
@@ -106,7 +124,6 @@ export async function summarizeHistory(
   systemPrompt: string,
   history: ChatMessage[],
   tools: ToolSpec[],
-  config: HarnessConfig,
   signal?: AbortSignal,
 ): Promise<string> {
   const adapter = getAdapterForConfig(vendorConfig);
@@ -120,7 +137,10 @@ export async function summarizeHistory(
     ],
     tools: normalizeToolSpecsForCache(tools),
     stream: false,
-    maxTokens: config.reservedOutputTokens,
+    // 摘要输出同样不受固定预算限制（见 resolveRequestMaxTokens 注释）。
+    ...(resolveRequestMaxTokens(vendorConfig) !== undefined
+      ? { maxTokens: resolveRequestMaxTokens(vendorConfig) }
+      : {}),
   };
 
   const http = adapter.buildRequest(chatRequest, vendorConfig);

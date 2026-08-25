@@ -50,6 +50,7 @@ const { fakeAdapter, fakeStreamChatWithSdk, recordUsage, recordRequest } = vi.ho
 vi.mock("../vendors", () => ({
   getAdapterForConfig: vi.fn(() => fakeAdapter),
   streamChatWithSdk: fakeStreamChatWithSdk,
+  resolveTransport: vi.fn(() => "openai"),
 }));
 
 vi.mock("./tool-dispatcher", () => ({
@@ -227,6 +228,37 @@ describe("CyreneHarness completion (P0-A)", () => {
     expect(fakeStreamChatWithSdk).toHaveBeenCalledWith(expect.objectContaining({
       request: expect.objectContaining({ stream: true, tools: expect.any(Array) }),
     }));
+  });
+
+  it("OpenAI 协议请求不再携带固定 maxTokens（避免思维链被 8192 预算截断）", async () => {
+    fakeStreamChatWithSdk.mockResolvedValueOnce(assistantResponse({ text: "完成。" }));
+
+    await runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "完成任务" }],
+      tools: [],
+      vendorConfig,
+    });
+
+    const request = fakeStreamChatWithSdk.mock.calls[0][0].request as Record<string, unknown>;
+    expect("maxTokens" in request).toBe(false);
+  });
+
+  it("最终回复 finishReason=length 时在尾部追加截断提示，不再静默", async () => {
+    fakeStreamChatWithSdk.mockResolvedValueOnce({
+      ...assistantResponse({ text: "写了一半的回复" }),
+      finishReason: "length",
+    });
+
+    const result = await runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "完成任务" }],
+      tools: [],
+      vendorConfig,
+    });
+
+    expect(result.finalAnswer).toContain("写了一半的回复");
+    expect(result.finalAnswer.endsWith("以上回复可能不完整。")).toBe(true);
   });
 
   it("callLLM 链路注入 applyCacheHints（Kimi prompt_cache_key 等不再漏发）", async () => {

@@ -120,7 +120,10 @@ export interface HarnessConfig {
   userWaitTimeoutMs: number;
   /** 上下文窗口大小（token） */
   contextWindowTokens: number;
-  /** 为 LLM 回复预留的 token 预算 */
+  /**
+   * 为 LLM 回复预留的 token 预算（仅参与压缩预算计算 computeTokenBudget，
+   * 不再作为请求 maxTokens 限流——见 harness-llm.ts 输出上限策略）。
+   */
   reservedOutputTokens: number;
   /** 固定安全余量（token） */
   safetyMarginTokens: number;

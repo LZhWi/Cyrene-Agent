@@ -13,6 +13,7 @@ describe("resolveStructuredOutputProfile", () => {
     ["doubao", "doubao-seed-2-1-pro-260628", "openai", "provider_json_schema"],
     ["deepseek", "deepseek-v4-pro", "openai", "provider_json_object"],
     ["qwen", "qwen3.7-plus", "openai", "provider_json_object"],
+    ["glm", "glm-5.3", "openai", "provider_json_object"],
     ["glm", "glm-5.2", "openai", "provider_json_object"],
     ["glm", "glm-5.1", "openai", "provider_json_object"],
     ["mimo", "mimo-v2.5-pro", "openai", "provider_json_object"],

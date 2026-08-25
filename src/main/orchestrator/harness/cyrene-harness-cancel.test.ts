@@ -55,6 +55,7 @@ const { fakeAdapter, fakeStreamChatWithSdk, recordUsage, recordRequest } = vi.ho
 vi.mock("../vendors", () => ({
   getAdapterForConfig: vi.fn(() => fakeAdapter),
   streamChatWithSdk: fakeStreamChatWithSdk,
+  resolveTransport: vi.fn(() => "openai"),
 }));
 
 vi.mock("./tool-dispatcher", () => ({

@@ -55,7 +55,7 @@ export const MODEL_PRESETS: ModelPreset[] = [
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     anthropicBaseUrl: "https://open.bigmodel.cn/api/anthropic",
     transport: "openai",
-    mainModels: ["glm-5.1", "glm-5-turbo", "glm-4.7"],
+    mainModels: ["glm-5.3", "glm-5.2", "glm-5.1", "glm-5-turbo", "glm-4.7"],
     iconUrl: "../icons/providers/glm.svg",
     websiteUrl: "https://open.bigmodel.cn/",
   },

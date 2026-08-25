@@ -170,7 +170,7 @@ export const MODEL_REASONING_RULES: readonly ModelReasoningRule[] = [
 
   // ── glm（智谱）──
   // 精确型号在前；glm-5 基础型号放在精确型号之后（兜底更宽的 glm-5 系列）。
-  { providerId: "glm", modelPattern: /^glm-5\.2/i, capability: {
+  { providerId: "glm", modelPattern: /^glm-5\.[23]/i, capability: {
     control: "toggle-effort",
     supportedEfforts: ["high", "max"],
     defaultEffort: "high",

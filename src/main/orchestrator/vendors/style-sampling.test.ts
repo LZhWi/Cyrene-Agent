@@ -78,6 +78,7 @@ describe("resolveApprovedStyleSampling", () => {
     ["minimax", "MiniMax-M2.7", "on"],
     ["glm", "glm-4.7", "auto"],
     ["glm", "glm-5.2", "on"],
+    ["glm", "glm-5.3", "on"],
   ] as const)("allows diversity only for known %s model %s", (providerId, model, mode) => {
     expect(resolveApprovedStyleSampling({
       providerId,
