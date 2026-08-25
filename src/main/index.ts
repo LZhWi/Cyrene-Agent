@@ -802,7 +802,7 @@ function applyHoloCubicSettings(settings: HoloCubicSettings): void {
     return;
   }
   holoCubicBridge.start({
-    url: `ws://${settings.host}:${settings.port}`,
+    url: `tcp://${settings.host}:${settings.port}`,
     frameRate: settings.frameRate,
   });
 }

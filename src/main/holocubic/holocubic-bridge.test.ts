@@ -2,6 +2,8 @@ import { EventEmitter } from "events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HoloCubicBridge,
+  encodeHoloCubicFrame,
+  extractHoloCubicControlLines,
   parseHoloCubicDeviceMessage,
   parseHoloCubicInputEvent,
   type HoloCubicSocket,
@@ -231,7 +233,7 @@ describe("HoloCubicBridge", () => {
     expect(createSocket).toHaveBeenCalledTimes(2);
   });
 
-  it("abandons a stalled WebSocket handshake and reconnects", async () => {
+  it("abandons a stalled TCP connection and reconnects", async () => {
     const sockets = [new FakeSocket(), new FakeSocket()];
     const createSocket = vi.fn(() => sockets.shift()!);
     const bridge = new HoloCubicBridge({ captureFrame: async () => null, createSocket });
@@ -252,7 +254,7 @@ describe("HoloCubicBridge", () => {
       state: "reconnecting",
       connected: false,
       reconnectAttempt: 1,
-      lastError: "WebSocket handshake timed out",
+      lastError: "TCP connection timed out",
     });
 
     await vi.advanceTimersByTimeAsync(500);
@@ -262,6 +264,21 @@ describe("HoloCubicBridge", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(second.terminate).not.toHaveBeenCalled();
     expect(bridge.getStatus()).toMatchObject({ state: "connected", connected: true });
+  });
+});
+
+describe("HoloCubic raw TCP framing", () => {
+  it("prefixes JPEG frames with a four-byte big-endian length", () => {
+    const encoded = encodeHoloCubicFrame(Buffer.from([0xff, 0xd8, 0xff]));
+    expect(encoded.subarray(0, 4).readUInt32BE(0)).toBe(3);
+    expect(encoded.subarray(4)).toEqual(Buffer.from([0xff, 0xd8, 0xff]));
+  });
+
+  it("extracts complete newline-delimited control messages and keeps a partial tail", () => {
+    expect(extractHoloCubicControlLines('{"type":"frame_ack"}\n{"type":"key"')).toEqual({
+      lines: ['{"type":"frame_ack"}'],
+      remainder: '{"type":"key"',
+    });
   });
 });
 

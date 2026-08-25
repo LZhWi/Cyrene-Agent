@@ -1,12 +1,83 @@
-import { WebSocket } from "ws";
+import { EventEmitter } from "events";
+import { createConnection, type Socket } from "net";
 import type {
   HoloCubicDeviceMessage,
   HoloCubicInputEvent,
   HoloCubicStatus,
 } from "../../shared/holocubic-types";
 
-const WS_CONNECTING = 0;
-const WS_OPEN = 1;
+const SOCKET_CONNECTING = 0;
+const SOCKET_OPEN = 1;
+const MAX_CONTROL_BUFFER_BYTES = 64 * 1024;
+
+export function encodeHoloCubicFrame(frame: Buffer): Buffer {
+  const header = Buffer.allocUnsafe(4);
+  header.writeUInt32BE(frame.length, 0);
+  return Buffer.concat([header, frame]);
+}
+
+export function extractHoloCubicControlLines(buffer: string): { lines: string[]; remainder: string } {
+  const parts = buffer.split("\n");
+  const remainder = parts.pop() ?? "";
+  return {
+    lines: parts.map((line) => line.endsWith("\r") ? line.slice(0, -1) : line).filter(Boolean),
+    remainder,
+  };
+}
+
+class HoloCubicRawSocket extends EventEmitter implements HoloCubicSocket {
+  private readonly socket: Socket;
+  private controlBuffer = "";
+
+  constructor(url: string) {
+    super();
+    const endpoint = new URL(url);
+    const port = Number(endpoint.port);
+    if (!endpoint.hostname || !Number.isInteger(port) || port < 1 || port > 65_535) {
+      throw new Error(`Invalid HoloCubic endpoint: ${url}`);
+    }
+    this.socket = createConnection({ host: endpoint.hostname, port });
+    this.socket.on("connect", () => this.emit("open"));
+    this.socket.on("close", () => this.emit("close"));
+    this.socket.on("error", (error) => this.emit("error", error));
+    this.socket.on("data", (chunk) => {
+      this.controlBuffer += chunk.toString("utf8");
+      if (Buffer.byteLength(this.controlBuffer, "utf8") > MAX_CONTROL_BUFFER_BYTES) {
+        this.controlBuffer = "";
+        this.socket.destroy(new Error("HoloCubic control buffer exceeded 64 KiB"));
+        return;
+      }
+      const parsed = extractHoloCubicControlLines(this.controlBuffer);
+      this.controlBuffer = parsed.remainder;
+      for (const line of parsed.lines) this.emit("message", Buffer.from(line, "utf8"), false);
+    });
+  }
+
+  get readyState(): number {
+    if (this.socket.destroyed) return 3;
+    return this.socket.connecting ? SOCKET_CONNECTING : SOCKET_OPEN;
+  }
+
+  get bufferedAmount(): number {
+    return this.socket.writableLength;
+  }
+
+  send(data: Buffer, _options: { binary: true }, callback: (error?: Error) => void): void {
+    if (this.readyState !== SOCKET_OPEN) {
+      callback(new Error("HoloCubic TCP socket is not open"));
+      return;
+    }
+    this.socket.write(encodeHoloCubicFrame(data), (error) => callback(error ?? undefined));
+  }
+
+  close(): void {
+    this.socket.end();
+  }
+
+  terminate(): void {
+    this.socket.destroy();
+  }
+}
 
 export interface HoloCubicBridgeConfig {
   url: string;
@@ -95,12 +166,12 @@ export class HoloCubicBridge {
   };
 
   constructor(private readonly dependencies: HoloCubicBridgeDependencies) {
-    this.createSocket = dependencies.createSocket ?? ((url) => new WebSocket(url) as HoloCubicSocket);
+    this.createSocket = dependencies.createSocket ?? ((url) => new HoloCubicRawSocket(url));
   }
 
   start(config: HoloCubicBridgeConfig): void {
     const normalized = normalizeConfig(config);
-    if (this.running && this.config?.url === normalized.url && this.socket?.readyState === WS_OPEN) {
+    if (this.running && this.config?.url === normalized.url && this.socket?.readyState === SOCKET_OPEN) {
       this.config = normalized;
       this.clearFrameTimer();
       if (!this.awaitingFrameAck) this.startFrameTimer();
@@ -140,7 +211,7 @@ export class HoloCubicBridge {
     this.clearReconnectTimer();
     const socket = this.socket;
     this.socket = null;
-    if (socket && (socket.readyState === WS_CONNECTING || socket.readyState === WS_OPEN)) {
+    if (socket && (socket.readyState === SOCKET_CONNECTING || socket.readyState === SOCKET_OPEN)) {
       try {
         socket.close(1000, "Cyrene bridge stopped");
       } catch {
@@ -171,7 +242,7 @@ export class HoloCubicBridge {
     this.socket = socket;
     this.connectTimer = setTimeout(() => {
       if (!this.isCurrent(socket, generation)) return;
-      this.abandonSocket(socket, "WebSocket handshake timed out");
+      this.abandonSocket(socket, "TCP connection timed out");
     }, this.config.connectTimeoutMs);
 
     socket.on("open", () => {
@@ -270,7 +341,7 @@ export class HoloCubicBridge {
   private async sendNextFrame(): Promise<void> {
     const socket = this.socket;
     const config = this.config;
-    if (!this.running || !socket || !config || socket.readyState !== WS_OPEN) return;
+    if (!this.running || !socket || !config || socket.readyState !== SOCKET_OPEN) return;
     if (this.captureInFlight || this.awaitingFrameAck) return;
     if (socket.bufferedAmount > config.maxBufferedBytes) {
       this.patchStatus({
@@ -291,7 +362,7 @@ export class HoloCubicBridge {
         lastCaptureMs: Math.max(0, Date.now() - captureStartedAt),
         lastFrameBytes: frame.length,
       });
-      if (!this.running || this.socket !== socket || socket.readyState !== WS_OPEN
+      if (!this.running || this.socket !== socket || socket.readyState !== SOCKET_OPEN
           || socket.bufferedAmount > config.maxBufferedBytes) {
         this.patchStatus({
           framesDropped: this.status.framesDropped + 1,
