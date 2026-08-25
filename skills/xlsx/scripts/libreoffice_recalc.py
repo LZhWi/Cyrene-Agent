@@ -36,11 +36,15 @@ def find_soffice() -> str | None:
     Locate the soffice (LibreOffice) binary.
 
     Search order:
-      1. macOS application bundle (default install location)
-      2. PATH lookup for 'soffice'
-      3. PATH lookup for 'libreoffice' (common on Linux)
+      1. standard Windows installation paths
+      2. macOS application bundle (default install location)
+      3. PATH lookup for 'soffice'
+      4. PATH lookup for 'libreoffice' (common on Linux)
     """
     candidates = [
+        r"C:\Program Files\LibreOffice\program\soffice.exe",
+        r"C:\Program Files (x86)\LibreOffice\program\soffice.exe",
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "LibreOffice", "program", "soffice.exe"),
         "/Applications/LibreOffice.app/Contents/MacOS/soffice",  # macOS
         "soffice",     # Linux / macOS if on PATH
         "libreoffice", # alternative Linux name
@@ -88,6 +92,7 @@ def recalculate(
         return False, (
             "LibreOffice not found. Tier 2 validation is unavailable in this environment. "
             "Install LibreOffice to enable dynamic formula recalculation.\n"
+            "  Windows: winget install TheDocumentFoundation.LibreOffice\n"
             "  macOS:  brew install --cask libreoffice\n"
             "  Linux:  sudo apt-get install -y libreoffice"
         )
@@ -167,17 +172,17 @@ def main() -> None:
         epilog="""
 Examples:
   # Basic recalculation
-  python3 libreoffice_recalc.py report.xlsx report_recalc.xlsx
+  python libreoffice_recalc.py report.xlsx report_recalc.xlsx
 
   # With extended timeout for large files
-  python3 libreoffice_recalc.py big_model.xlsx big_model_recalc.xlsx --timeout 120
+  python libreoffice_recalc.py big_model.xlsx big_model_recalc.xlsx --timeout 120
 
   # Check if LibreOffice is available (useful in CI)
-  python3 libreoffice_recalc.py --check
+  python libreoffice_recalc.py --check
 
   # Full validation pipeline
-  python3 libreoffice_recalc.py input.xlsx /tmp/recalc.xlsx && \\
-    python3 formula_check.py /tmp/recalc.xlsx
+  python libreoffice_recalc.py input.xlsx .\\recalc.xlsx && \\
+    python formula_check.py .\\recalc.xlsx
 """,
     )
     parser.add_argument("input", nargs="?", help="Input xlsx file path")
@@ -208,6 +213,7 @@ Examples:
         else:
             print("LibreOffice NOT available.")
             print("Tier 2 dynamic validation requires LibreOffice.")
+            print("  Windows: winget install TheDocumentFoundation.LibreOffice")
             print("  macOS:  brew install --cask libreoffice")
             print("  Linux:  sudo apt-get install -y libreoffice")
             sys.exit(2)
