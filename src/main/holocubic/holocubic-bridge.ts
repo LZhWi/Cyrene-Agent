@@ -1,5 +1,9 @@
 import { WebSocket } from "ws";
-import type { HoloCubicInputEvent, HoloCubicStatus } from "../../shared/holocubic-types";
+import type {
+  HoloCubicDeviceMessage,
+  HoloCubicInputEvent,
+  HoloCubicStatus,
+} from "../../shared/holocubic-types";
 
 const WS_CONNECTING = 0;
 const WS_OPEN = 1;
@@ -9,6 +13,7 @@ export interface HoloCubicBridgeConfig {
   frameRate: number;
   maxBufferedBytes?: number;
   connectTimeoutMs?: number;
+  frameAckTimeoutMs?: number;
   reconnectMinMs?: number;
   reconnectMaxMs?: number;
 }
@@ -36,6 +41,7 @@ export interface HoloCubicBridgeDependencies {
 
 const DEFAULT_MAX_BUFFERED_BYTES = 512 * 1024;
 const DEFAULT_CONNECT_TIMEOUT_MS = 5_000;
+const DEFAULT_FRAME_ACK_TIMEOUT_MS = 2_000;
 const DEFAULT_RECONNECT_MIN_MS = 500;
 const DEFAULT_RECONNECT_MAX_MS = 10_000;
 
@@ -49,6 +55,7 @@ function normalizeConfig(config: HoloCubicBridgeConfig): Required<HoloCubicBridg
     frameRate: Math.max(1, Math.min(30, Math.round(config.frameRate))),
     maxBufferedBytes: Math.max(1, Math.round(config.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES)),
     connectTimeoutMs: Math.max(250, Math.round(config.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS)),
+    frameAckTimeoutMs: Math.max(250, Math.round(config.frameAckTimeoutMs ?? DEFAULT_FRAME_ACK_TIMEOUT_MS)),
     reconnectMinMs: Math.max(50, Math.round(config.reconnectMinMs ?? DEFAULT_RECONNECT_MIN_MS)),
     reconnectMaxMs: Math.max(50, Math.round(config.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS)),
   };
@@ -60,8 +67,11 @@ export class HoloCubicBridge {
   private socket: HoloCubicSocket | null = null;
   private frameTimer: NodeJS.Timeout | null = null;
   private connectTimer: NodeJS.Timeout | null = null;
+  private frameAckTimer: NodeJS.Timeout | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private captureInFlight = false;
+  private awaitingFrameAck = false;
+  private lastFrameSentAt = 0;
   private running = false;
   private generation = 0;
   private status: HoloCubicBridgeStatus = {
@@ -69,6 +79,7 @@ export class HoloCubicBridge {
     connected: false,
     framesCaptured: 0,
     framesSent: 0,
+    framesDisplayed: 0,
     framesDropped: 0,
     reconnectAttempt: 0,
     bufferedBytes: 0,
@@ -83,14 +94,22 @@ export class HoloCubicBridge {
   }
 
   start(config: HoloCubicBridgeConfig): void {
+    const normalized = normalizeConfig(config);
+    if (this.running && this.config?.url === normalized.url && this.socket?.readyState === WS_OPEN) {
+      this.config = normalized;
+      this.clearFrameTimer();
+      if (!this.awaitingFrameAck) this.startFrameTimer();
+      return;
+    }
     this.stop();
-    this.config = normalizeConfig(config);
+    this.config = normalized;
     this.running = true;
     this.status = {
       state: "connecting",
       connected: false,
       framesCaptured: 0,
       framesSent: 0,
+      framesDisplayed: 0,
       framesDropped: 0,
       reconnectAttempt: 0,
       bufferedBytes: 0,
@@ -108,6 +127,7 @@ export class HoloCubicBridge {
     this.generation += 1;
     this.clearFrameTimer();
     this.clearConnectTimer();
+    this.clearFrameAck();
     this.clearReconnectTimer();
     const socket = this.socket;
     this.socket = null;
@@ -119,6 +139,7 @@ export class HoloCubicBridge {
       }
     }
     this.captureInFlight = false;
+    this.lastFrameSentAt = 0;
     this.patchStatus({ state: "stopped", connected: false, bufferedBytes: 0 });
   }
 
@@ -140,24 +161,14 @@ export class HoloCubicBridge {
     this.socket = socket;
     this.connectTimer = setTimeout(() => {
       if (!this.isCurrent(socket, generation)) return;
-      this.socket = null;
-      this.patchStatus({
-        connected: false,
-        bufferedBytes: 0,
-        lastError: "WebSocket handshake timed out",
-      });
-      try {
-        if (socket.terminate) socket.terminate();
-        else socket.close();
-      } catch {
-        // Reconnect below even when the half-open socket cannot close cleanly.
-      }
-      this.scheduleReconnect();
+      this.abandonSocket(socket, "WebSocket handshake timed out");
     }, this.config.connectTimeoutMs);
 
     socket.on("open", () => {
       if (!this.isCurrent(socket, generation)) return;
       this.clearConnectTimer();
+      this.clearFrameAck();
+      this.lastFrameSentAt = 0;
       this.patchStatus({
         state: "connected",
         connected: true,
@@ -173,8 +184,20 @@ export class HoloCubicBridge {
     });
     socket.on("message", (data, isBinary) => {
       if (!this.isCurrent(socket, generation) || isBinary) return;
-      const event = parseHoloCubicInputEvent(data);
-      if (!event) return;
+      const message = parseHoloCubicDeviceMessage(data);
+      if (!message) return;
+      if (message.type === "frame_ack") {
+        if (!this.awaitingFrameAck) return;
+        this.clearFrameAck();
+        this.patchStatus({
+          framesDisplayed: this.status.framesDisplayed + (message.displayed ? 1 : 0),
+          framesDropped: this.status.framesDropped + (message.displayed ? 0 : 1),
+          lastFrameAt: message.displayed ? Date.now() : this.status.lastFrameAt,
+        });
+        this.startFrameTimer();
+        return;
+      }
+      const event = message;
       this.patchStatus({ inputEvents: this.status.inputEvents + 1, lastInput: event });
       this.dependencies.onInputEvent?.(event);
     });
@@ -183,6 +206,7 @@ export class HoloCubicBridge {
       this.socket = null;
       this.clearFrameTimer();
       this.clearConnectTimer();
+      this.clearFrameAck();
       this.patchStatus({ connected: false, bufferedBytes: 0 });
       this.scheduleReconnect();
     });
@@ -207,20 +231,25 @@ export class HoloCubicBridge {
   private startFrameTimer(): void {
     if (!this.config || this.frameTimer) return;
     const intervalMs = Math.max(1, Math.round(1000 / this.config.frameRate));
-    this.frameTimer = setInterval(() => {
+    const elapsed = this.lastFrameSentAt > 0 ? Date.now() - this.lastFrameSentAt : 0;
+    const delayMs = this.lastFrameSentAt > 0 ? Math.max(0, intervalMs - elapsed) : intervalMs;
+    this.frameTimer = setTimeout(() => {
+      this.frameTimer = null;
       void this.sendNextFrame();
-    }, intervalMs);
+    }, delayMs);
   }
 
   private async sendNextFrame(): Promise<void> {
     const socket = this.socket;
     const config = this.config;
     if (!this.running || !socket || !config || socket.readyState !== WS_OPEN) return;
-    if (this.captureInFlight || socket.bufferedAmount > config.maxBufferedBytes) {
+    if (this.captureInFlight || this.awaitingFrameAck) return;
+    if (socket.bufferedAmount > config.maxBufferedBytes) {
       this.patchStatus({
         framesDropped: this.status.framesDropped + 1,
         bufferedBytes: socket.bufferedAmount,
       });
+      this.startFrameTimer();
       return;
     }
 
@@ -237,27 +266,52 @@ export class HoloCubicBridge {
         });
         return;
       }
+      this.awaitingFrameAck = true;
+      this.lastFrameSentAt = Date.now();
+      this.frameAckTimer = setTimeout(() => {
+        if (!this.running || this.socket !== socket || !this.awaitingFrameAck) return;
+        this.abandonSocket(socket, "Device frame acknowledgement timed out");
+      }, config.frameAckTimeoutMs);
       socket.send(frame, { binary: true }, (error) => {
         if (this.socket !== socket) return;
         if (error) {
+          this.clearFrameAck();
           this.patchStatus({ lastError: errorText(error), bufferedBytes: socket.bufferedAmount });
+          this.startFrameTimer();
           return;
         }
         this.patchStatus({
           framesSent: this.status.framesSent + 1,
           bufferedBytes: socket.bufferedAmount,
-          lastFrameAt: Date.now(),
         });
       });
     } catch (error) {
+      this.clearFrameAck();
       this.patchStatus({ lastError: errorText(error) });
     } finally {
       this.captureInFlight = false;
+      if (!this.awaitingFrameAck && this.running && this.socket === socket) this.startFrameTimer();
     }
   }
 
   private isCurrent(socket: HoloCubicSocket, generation: number): boolean {
     return this.running && this.socket === socket && this.generation === generation;
+  }
+
+  private abandonSocket(socket: HoloCubicSocket, message: string): void {
+    if (!this.running || this.socket !== socket) return;
+    this.socket = null;
+    this.clearFrameTimer();
+    this.clearConnectTimer();
+    this.clearFrameAck();
+    this.patchStatus({ connected: false, bufferedBytes: 0, lastError: message });
+    try {
+      if (socket.terminate) socket.terminate();
+      else socket.close();
+    } catch {
+      // Reconnect below even when the half-open socket cannot close cleanly.
+    }
+    this.scheduleReconnect();
   }
 
   private clearFrameTimer(): void {
@@ -270,6 +324,13 @@ export class HoloCubicBridge {
     if (!this.connectTimer) return;
     clearTimeout(this.connectTimer);
     this.connectTimer = null;
+  }
+
+  private clearFrameAck(): void {
+    this.awaitingFrameAck = false;
+    if (!this.frameAckTimer) return;
+    clearTimeout(this.frameAckTimer);
+    this.frameAckTimer = null;
   }
 
   private clearReconnectTimer(): void {
@@ -293,6 +354,11 @@ function finiteNumber(value: unknown): number | null {
 }
 
 export function parseHoloCubicInputEvent(data: unknown): HoloCubicInputEvent | null {
+  const message = parseHoloCubicDeviceMessage(data);
+  return message?.type === "frame_ack" ? null : message;
+}
+
+export function parseHoloCubicDeviceMessage(data: unknown): HoloCubicDeviceMessage | null {
   let text: string;
   if (typeof data === "string") text = data;
   else if (Buffer.isBuffer(data)) text = data.toString("utf8");
@@ -302,6 +368,10 @@ export function parseHoloCubicInputEvent(data: unknown): HoloCubicInputEvent | n
     const value = JSON.parse(text) as Record<string, unknown>;
     const at = finiteNumber(value.at);
     if (value.version !== 1 || at === null) return null;
+    if (value.type === "frame_ack") {
+      if (typeof value.displayed !== "boolean") return null;
+      return { version: 1, type: "frame_ack", displayed: value.displayed, at };
+    }
     if (value.type === "key") {
       const keys = ["left", "right", "up", "down", "home"];
       if (!keys.includes(String(value.key)) || typeof value.event !== "string") return null;

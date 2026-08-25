@@ -13,6 +13,7 @@ export interface HoloCubicStatus {
   connected: boolean;
   framesCaptured: number;
   framesSent: number;
+  framesDisplayed: number;
   framesDropped: number;
   reconnectAttempt: number;
   bufferedBytes: number;
@@ -25,3 +26,12 @@ export interface HoloCubicStatus {
 export type HoloCubicInputEvent =
   | { version: 1; type: "key"; key: "left" | "right" | "up" | "down" | "home"; event: string; at: number }
   | { version: 1; type: "imu"; roll: number; pitch: number; gx: number; gy: number; gz: number; at: number };
+
+export interface HoloCubicFrameAck {
+  version: 1;
+  type: "frame_ack";
+  displayed: boolean;
+  at: number;
+}
+
+export type HoloCubicDeviceMessage = HoloCubicInputEvent | HoloCubicFrameAck;

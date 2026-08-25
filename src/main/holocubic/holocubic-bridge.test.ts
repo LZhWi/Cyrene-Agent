@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   HoloCubicBridge,
+  parseHoloCubicDeviceMessage,
   parseHoloCubicInputEvent,
   type HoloCubicSocket,
 } from "./holocubic-bridge";
@@ -53,6 +54,7 @@ describe("HoloCubicBridge", () => {
       connected: true,
       framesCaptured: 1,
       framesSent: 1,
+      framesDisplayed: 0,
       framesDropped: 0,
     });
   });
@@ -70,6 +72,61 @@ describe("HoloCubicBridge", () => {
 
     expect(onInputEvent).toHaveBeenCalledOnce();
     expect(bridge.getStatus()).toMatchObject({ inputEvents: 1, lastInput: { type: "key", key: "left" } });
+  });
+
+  it("waits for the device frame acknowledgement before sending another frame", async () => {
+    const socket = new FakeSocket();
+    const captureFrame = vi.fn(async () => Buffer.from("frame"));
+    const bridge = new HoloCubicBridge({ captureFrame, createSocket: () => socket });
+    bridge.start({ url: "ws://device:8766", frameRate: 10 });
+    socket.open();
+
+    await vi.advanceTimersByTimeAsync(300);
+    expect(socket.sent).toHaveLength(1);
+    expect(captureFrame).toHaveBeenCalledOnce();
+    expect(bridge.getStatus()).toMatchObject({ framesSent: 1, framesDisplayed: 0, framesDropped: 0 });
+
+    socket.emit("message", Buffer.from('{"version":1,"type":"frame_ack","displayed":true,"at":12}'), false);
+    expect(bridge.getStatus()).toMatchObject({ framesDisplayed: 1, inputEvents: 0 });
+    await vi.advanceTimersByTimeAsync(100);
+    expect(socket.sent).toHaveLength(2);
+  });
+
+  it("reconnects when a submitted frame is never acknowledged", async () => {
+    const sockets = [new FakeSocket(), new FakeSocket()];
+    const createSocket = vi.fn(() => sockets.shift()!);
+    const bridge = new HoloCubicBridge({ captureFrame: async () => Buffer.from("frame"), createSocket });
+    bridge.start({
+      url: "ws://device:8766",
+      frameRate: 10,
+      frameAckTimeoutMs: 500,
+      reconnectMinMs: 250,
+    });
+    const first = createSocket.mock.results[0].value as FakeSocket;
+    first.open();
+    await vi.advanceTimersByTimeAsync(600);
+
+    expect(first.terminate).toHaveBeenCalledOnce();
+    expect(bridge.getStatus()).toMatchObject({
+      state: "reconnecting",
+      connected: false,
+      lastError: "Device frame acknowledgement timed out",
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    expect(createSocket).toHaveBeenCalledTimes(2);
+  });
+
+  it("updates frame pacing without reconnecting an open socket", async () => {
+    const socket = new FakeSocket();
+    const createSocket = vi.fn(() => socket);
+    const bridge = new HoloCubicBridge({ captureFrame: async () => null, createSocket });
+    bridge.start({ url: "ws://device:8766", frameRate: 5 });
+    socket.open();
+
+    bridge.start({ url: "ws://device:8766", frameRate: 10 });
+    expect(createSocket).toHaveBeenCalledOnce();
+    expect(socket.close).not.toHaveBeenCalled();
+    expect(bridge.getStatus()).toMatchObject({ state: "connected", connected: true });
   });
 
   it("drops ticks before capture when the socket is backpressured", async () => {
@@ -96,11 +153,30 @@ describe("HoloCubicBridge", () => {
     socket.open();
     await vi.advanceTimersByTimeAsync(300);
     expect(captureFrame).toHaveBeenCalledOnce();
-    expect(bridge.getStatus().framesDropped).toBe(2);
+    expect(bridge.getStatus().framesDropped).toBe(0);
 
     finishCapture?.(Buffer.from("frame"));
     await Promise.resolve();
     expect(socket.sent).toHaveLength(1);
+  });
+
+  it("paces the next frame from the previous send after a delayed acknowledgement", async () => {
+    const socket = new FakeSocket();
+    const bridge = new HoloCubicBridge({
+      captureFrame: async () => Buffer.from("frame"),
+      createSocket: () => socket,
+    });
+    bridge.start({ url: "ws://device:8766", frameRate: 5 });
+    socket.open();
+
+    await vi.advanceTimersByTimeAsync(200);
+    expect(socket.sent).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(150);
+    socket.emit("message", Buffer.from('{"version":1,"type":"frame_ack","displayed":true,"at":12}'), false);
+    await vi.advanceTimersByTimeAsync(49);
+    expect(socket.sent).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(socket.sent).toHaveLength(2);
   });
 
   it("reconnects with backoff after a disconnect and stops cleanly", async () => {
@@ -174,5 +250,14 @@ describe("parseHoloCubicInputEvent", () => {
     });
     expect(parseHoloCubicInputEvent('{"version":1,"type":"imu","roll":"bad"}')).toBeNull();
     expect(parseHoloCubicInputEvent("not json")).toBeNull();
+  });
+
+  it("parses frame acknowledgements separately from input events", () => {
+    const payload = '{"version":1,"type":"frame_ack","displayed":true,"at":6}';
+    expect(parseHoloCubicDeviceMessage(payload)).toEqual({
+      version: 1, type: "frame_ack", displayed: true, at: 6,
+    });
+    expect(parseHoloCubicInputEvent(payload)).toBeNull();
+    expect(parseHoloCubicDeviceMessage('{"version":1,"type":"frame_ack","displayed":"yes","at":6}')).toBeNull();
   });
 });
