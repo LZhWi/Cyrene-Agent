@@ -22,6 +22,18 @@ modes:
 
 此 skill 处理所有 PowerPoint 任务：阅读/分析已有演示文稿、通过 XML 操作编辑基于模板的幻灯片组、以及使用 PptxGenJS 从零创建演示文稿。它包含完整的设计系统（调色板、字体、风格配方）和每种幻灯片类型的详细指南。
 
+## Windows 起步
+
+从项目根目录在 PowerShell 中运行 Node.js；不需要浏览器自动化。新建演示文稿时，先从共享 Office 主题加载颜色，再使用 PptxGenJS 生成文件：
+
+```powershell
+node -e "const {loadTheme}=require('./skills/pptx-generator/scripts/theme-loader'); console.log(loadTheme('business'))"
+Set-Location .\slides
+node .\compile.js
+```
+
+`theme-loader.js` 将 `../office-design/assets/themes/` 的标准主题映射为 `primary`、`secondary`、`accent`、`light`、`bg` 五个 PptxGenJS 颜色键。中文使用 `Microsoft YaHei`，英文默认使用 Arial。除用户明确要求改版外，编辑现有 PPTX 必须保留其原有主题和字体。
+
 ## 快速参考
 
 | 任务 | 方式 |
@@ -106,13 +118,8 @@ const pptxgen = require('pptxgenjs');
 const pres = new pptxgen();
 pres.layout = 'LAYOUT_16x9';
 
-const theme = {
-  primary: "22223b",    // 深色用于背景/文本
-  secondary: "4a4e69",  // 次要强调色
-  accent: "9a8c98",     // 高亮色
-  light: "c9ada7",      // 浅强调色
-  bg: "f2e9e4"          // 背景色
-};
+const { loadTheme } = require('../skills/pptx-generator/scripts/theme-loader');
+const theme = loadTheme('business');
 
 for (let i = 1; i <= 12; i++) {  // 根据实际需要调整数量
   const num = String(i).padStart(2, '0');
@@ -123,7 +130,7 @@ for (let i = 1; i <= 12; i++) {  // 根据实际需要调整数量
 pres.writeFile({ fileName: './output/presentation.pptx' });
 ```
 
-运行方式：`cd slides && node compile.js`
+运行方式：`Set-Location .\slides; node .\compile.js`
 
 ### 第 7 步：QA（必须执行）
 
