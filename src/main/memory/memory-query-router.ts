@@ -144,16 +144,22 @@ export async function routeMemoryQuery(
   if (!settings.enabled || !settings.baseUrl || !settings.apiKey || !settings.model || !query.trim()) {
     return { ...FALLBACK_ROUTE };
   }
-  try {
-    const response = await (dependencies.request ?? requestRoute)(
-      buildPrompt(query),
-      settings,
-      dependencies.timeoutMs ?? MEMORY_QUERY_ROUTER_TIMEOUT_MS,
-    );
-    dependencies.onRawResponse?.(response);
-    return parseMemoryQueryRoute(response);
-  } catch (error) {
-    console.warn("[MemoryQueryRouter] route failed; using semantic Top 5:", error);
-    return { ...FALLBACK_ROUTE };
+  let lastError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await (dependencies.request ?? requestRoute)(
+        buildPrompt(query),
+        settings,
+        dependencies.timeoutMs ?? MEMORY_QUERY_ROUTER_TIMEOUT_MS,
+      );
+      dependencies.onRawResponse?.(response);
+      const route = parseMemoryQueryRoute(response);
+      if (route.source === "fallback") throw new Error("invalid router response");
+      return route;
+    } catch (error) {
+      lastError = error;
+    }
   }
+  console.warn("[MemoryQueryRouter] route failed twice; using semantic Top 5:", lastError);
+  return { ...FALLBACK_ROUTE };
 }

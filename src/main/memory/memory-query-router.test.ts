@@ -59,6 +59,32 @@ describe("memory query router", () => {
       confidence: 0,
       source: "fallback",
     });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries once after a transient provider failure", async () => {
+    const request = vi.fn()
+      .mockRejectedValueOnce(new Error("temporary offline"))
+      .mockResolvedValueOnce('{"needsExpansion":true,"retrievalKinds":["commitment"],"scope":"scoped_list","confidence":0.92}');
+    await expect(routeMemoryQuery("我们说好的礼物", settings, { request })).resolves.toMatchObject({
+      needsExpansion: true,
+      retrievalKinds: ["commitment"],
+      source: "llm",
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("retries once after invalid model output", async () => {
+    const request = vi.fn()
+      .mockResolvedValueOnce("commitment")
+      .mockResolvedValueOnce('{"needsExpansion":false,"retrievalKinds":[],"scope":"normal","confidence":0.8}');
+    const onRawResponse = vi.fn();
+    await expect(routeMemoryQuery("普通聊天", settings, { request, onRawResponse })).resolves.toMatchObject({
+      needsExpansion: false,
+      source: "llm",
+    });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(onRawResponse).toHaveBeenCalledTimes(2);
   });
 
   it("uses a retrieval-intent prompt instead of classifying surface words", async () => {
