@@ -402,13 +402,15 @@ async function callRoundLLM(run: HarnessRun, promptLayers: PromptLayers): Promis
 
 // ═══ 结算出口 ═════════════════════════════════════════════
 
-/** 持久化可恢复子运行状态；失败记入 checkpointFailure，由主循环统一降级为 error。 */
+/** 持久化可恢复子运行状态；失败记入 checkpointFailure，由主循环统一降级为 error。
+ *  问题 5 P0：传活引用（不再 deepClone），克隆契约由消费方（run-store /
+ *  task-session-store）在回调返回前同步完成。 */
 function checkpoint(run: HarnessRun): void {
   try {
     run.input.onCheckpoint?.({
-      messages: deepClone(run.messages),
-      state: deepClone(run.state),
-      toolOutputs: deepClone(run.toolOutputs),
+      messages: run.messages,
+      state: run.state,
+      toolOutputs: run.toolOutputs,
       rounds: run.rounds,
       cache: { ...run.cache },
       at: Date.now(),
@@ -515,8 +517,7 @@ function fingerprintCacheDiagnostic(value: unknown): string {
   return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
-/** checkpoint 契约：messages / state / toolOutputs 必须严格 JSON-serializable
- *  （不得含 Date / Map / Set / BigInt / class instance），否则深拷贝与持久化都会失真。 */
+/** 防御外部共享引用：initialState 的调用方在 run 期间可能复用/修改原对象。 */
 function deepClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T;
 }

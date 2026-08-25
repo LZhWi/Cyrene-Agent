@@ -236,7 +236,10 @@ export interface HarnessInput {
   signal?: AbortSignal;
   /** 事件回调 */
   onEvent?: (event: HarnessEvent) => void;
-  /** 每轮和终态时发送的可持久化 transcript 快照。 */
+  /** 每轮和终态时发送的可持久化 transcript 快照。
+   *  契约：Harness 传活引用（不克隆）；消费方必须在回调返回前同步完成克隆或落盘，
+   *  不得持有跨 await 的活引用。payload 必须严格 JSON-serializable
+   *  （不得含 Date / Map / Set / BigInt / class instance），否则克隆与持久化都会失真。 */
   onCheckpoint?: (checkpoint: HarnessCheckpoint) => void;
   /** 工具执行前与模型可见结果提交后的持久化边界。 */
   onToolLifecycle?: (event: HarnessToolLifecycleEvent) => void;

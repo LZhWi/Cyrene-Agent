@@ -8,6 +8,9 @@ const ROOT_DIR_NAME = "cyrene-runs";
 const SESSIONS_DIR_NAME = "sessions";
 const INDEX_FILE_NAME = "index.json";
 const SCHEMA_VERSION = 1;
+/** 问题 5 P0：index.json 写入防抖窗口（ms）。create / markTerminal / delete /
+ *  initialize 走立即写，checkpoint / recordTool 的热路径写在此窗口内合并。 */
+const INDEX_WRITE_DEBOUNCE_MS = 500;
 
 export type HarnessRunStatus = "running" | "interrupted" | "completed" | "cancelled" | "failed";
 export type PersistedToolCallStatus = "planned" | "started" | "committed" | "unknown" | "not_executed";
@@ -127,6 +130,12 @@ export class HarnessRunStore {
   private readonly indexPath: string;
   private readonly now: () => number;
   private index = new Map<string, IndexRow>();
+  /** 问题 5 P0：index 防抖写的 pending 定时器（writeIndexNow 会取消它）。 */
+  private indexWriteTimer: ReturnType<typeof setTimeout> | undefined;
+  /** 问题 5 P0：写放大量度（实例生命周期累计；markTerminal 时输出一行日志）。 */
+  private diskWrites = 0;
+  private diskBytes = 0;
+  private checkpointCount = 0;
 
   constructor(userDataRoot: string, options: HarnessRunStoreOptions = {}) {
     this.root = path.join(userDataRoot, ROOT_DIR_NAME);
@@ -158,7 +167,7 @@ export class HarnessRunStore {
       createdAt: now,
       updatedAt: now,
     };
-    this.write(session);
+    this.write(session, "now");
     this.appendEvent(session, "run_created");
     return clone(session);
   }
@@ -177,6 +186,7 @@ export class HarnessRunStore {
 
   checkpoint(runId: string, patch: HarnessRunCheckpoint): HarnessRunSession {
     const session = this.require(runId);
+    // 消费方克隆契约：harness 传活引用，这里在返回前同步 clone（问题 5 P0）
     if (patch.messages !== undefined) session.messages = clone(patch.messages);
     if (patch.state !== undefined) session.state = clone(patch.state);
     if (patch.todoItems !== undefined) session.state.todoItems = clone(patch.todoItems);
@@ -185,6 +195,7 @@ export class HarnessRunStore {
     if (patch.cache !== undefined) session.cache = clone(patch.cache);
     if (patch.request !== undefined) session.request = clone(patch.request);
     session.updatedAt = this.now();
+    this.checkpointCount += 1;
     this.write(session);
     this.appendEvent(session, "checkpoint");
     return clone(session);
@@ -216,8 +227,10 @@ export class HarnessRunStore {
     session.status = status;
     session.completedAt = this.now();
     session.updatedAt = session.completedAt;
-    this.write(session);
+    this.write(session, "now");
     this.appendEvent(session, `run_${status}`);
+    // 问题 5 P0：写放大量度基线（纯 console 观测，为 journal 化决策拿数据）
+    console.log(`[HarnessRunStore] run=${runId} terminal=${status} diskWrites=${this.diskWrites} diskBytes=${this.diskBytes} checkpoints=${this.checkpointCount}`);
     return clone(session);
   }
 
@@ -230,23 +243,43 @@ export class HarnessRunStore {
       if (fs.existsSync(events)) fs.unlinkSync(events);
       this.index.delete(row.runId);
     }
-    this.writeIndex();
+    this.writeIndexNow();
   }
 
   private initialize(): void {
     fs.mkdirSync(this.sessionsDir, { recursive: true });
     this.readIndex();
     let changed = false;
-    for (const row of this.index.values()) {
+    for (const row of [...this.index.values()]) {
+      // 孤儿行：session 文件已不存在（崩溃/手动清理遗留），直接清行
+      if (!fs.existsSync(this.sessionPath(row.runId))) {
+        this.index.delete(row.runId);
+        changed = true;
+        continue;
+      }
       const session = this.read(row.runId);
-      if (!session || session.status !== "running") continue;
+      // 文件存在但解析失败：不动行，留待下次启动或人工收敛
+      if (!session) continue;
+      if (session.status !== "running") {
+        // 权威校正：index 行滞后于 session 文件（防抖/崩溃遗留）时以文件为准
+        if (row.status !== session.status || row.updatedAt !== session.updatedAt) {
+          this.index.set(row.runId, {
+            conversationId: session.conversationId,
+            runId: session.runId,
+            status: session.status,
+            updatedAt: session.updatedAt,
+          });
+          changed = true;
+        }
+        continue;
+      }
       session.status = "interrupted";
       session.updatedAt = this.now();
-      this.write(session);
+      this.write(session, "now");
       this.appendEvent(session, "run_interrupted");
       changed = true;
     }
-    if (changed) this.writeIndex();
+    if (changed) this.writeIndexNow();
   }
 
   private require(runId: string): HarnessRunSession {
@@ -271,7 +304,8 @@ export class HarnessRunStore {
     }
   }
 
-  private write(session: HarnessRunSession): void {
+  /** session 文件每次都写（恢复的权威数据源）；index 按调用方语义分类写入。 */
+  private write(session: HarnessRunSession, mode: "now" | "lazy" = "lazy"): void {
     this.atomicWrite(this.sessionPath(session.runId), session);
     this.index.set(session.runId, {
       conversationId: session.conversationId,
@@ -279,7 +313,8 @@ export class HarnessRunStore {
       status: session.status,
       updatedAt: session.updatedAt,
     });
-    this.writeIndex();
+    if (mode === "now") this.writeIndexNow();
+    else this.writeIndexLazy();
   }
 
   private readIndex(): void {
@@ -299,7 +334,26 @@ export class HarnessRunStore {
     }
   }
 
-  private writeIndex(): void {
+  /** 热路径防抖写：窗口内多次 write() 只触发一次落盘；回调从 index 现值构造，不捕获快照。 */
+  private writeIndexLazy(): void {
+    if (this.indexWriteTimer !== undefined) return;
+    this.indexWriteTimer = setTimeout(() => {
+      this.indexWriteTimer = undefined;
+      try {
+        this.writeIndexNow();
+      } catch (error) {
+        // index 非权威数据（session 文件才是）：写失败由 initialize 权威校正兜底
+        console.warn("[HarnessRunStore] lazy index write failed:", error);
+      }
+    }, INDEX_WRITE_DEBOUNCE_MS);
+  }
+
+  /** 立即写：先取消 pending 的 lazy 定时器，防止旧回调把 stale 状态覆盖回去。 */
+  private writeIndexNow(): void {
+    if (this.indexWriteTimer !== undefined) {
+      clearTimeout(this.indexWriteTimer);
+      this.indexWriteTimer = undefined;
+    }
     this.atomicWrite(this.indexPath, [...this.index.values()]);
   }
 
@@ -317,8 +371,12 @@ export class HarnessRunStore {
 
   private atomicWrite(file: string, value: unknown): void {
     const temporary = `${file}.${process.pid}.tmp`;
-    fs.writeFileSync(temporary, JSON.stringify(value, null, 2), "utf8");
+    // 机器格式（单行 JSON）：去掉 pretty-print，体积约减半（问题 5 P0）
+    const content = JSON.stringify(value);
+    fs.writeFileSync(temporary, content, "utf8");
     fs.renameSync(temporary, file);
+    this.diskWrites += 1;
+    this.diskBytes += content.length;
   }
 }
 

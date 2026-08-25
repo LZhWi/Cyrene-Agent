@@ -577,6 +577,40 @@ describe("CyreneHarness completion (P0-A)", () => {
     expect(checkpoints.at(-1)?.messages.some((message) => message.role === "tool")).toBe(true);
   });
 
+  it("passes live transcript references to onCheckpoint instead of cloning", async () => {
+    // 问题 5 P0：harness 侧 deepClone 删除，克隆契约移交给消费方
+    // （run-store / task-session-store 在回调返回前同步 clone）。
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ toolCalls: [mutationToolCall("call-1")] }),
+      assistantResponse({ text: "完成。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockedDispatch.mockResolvedValue(successDispatchResult());
+    const snapshots: HarnessCheckpoint[] = [];
+    // 活引用共享同一数组，断言时两者 length 恒等；增长需在回调时刻记录
+    const lengthsAtCheckpoint: number[] = [];
+
+    await runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "创建一个文件" }],
+      tools: [mutationTool()],
+      vendorConfig,
+      onCheckpoint: (checkpoint) => {
+        snapshots.push(checkpoint);
+        lengthsAtCheckpoint.push(checkpoint.messages.length);
+      },
+    });
+
+    // 同一 run 内多次 checkpoint 传递同一活引用，且内容随轮次增长
+    expect(snapshots.length).toBeGreaterThanOrEqual(2);
+    const first = snapshots[0]!;
+    const last = snapshots.at(-1)!;
+    expect(last.messages).toBe(first.messages);
+    expect(lengthsAtCheckpoint.at(-1)!).toBeGreaterThan(lengthsAtCheckpoint[0]!);
+    expect(last.state).toBe(first.state);
+    expect(last.toolOutputs).toBe(first.toolOutputs);
+  });
+
   it("keeps mid-loop content as progress and commits only the last no-tool reply as final answer", async () => {
     const { fn: fetchMock } = fakeFetchSequencer([
       assistantResponse({ text: "我先看看文件。", toolCalls: [mutationToolCall("inspect-call")] }),
@@ -685,7 +719,7 @@ describe("CyreneHarness completion (P0-A)", () => {
     expect(toolMessage?.content).not.toContain("toolOutputRef");
   });
 
-  it("checkpoints a cloned transcript after tool work and before terminal settlement", async () => {
+  it("checkpoints the transcript after tool work and before terminal settlement", async () => {
     const { fn: fetchMock } = fakeFetchSequencer([
       assistantResponse({ toolCalls: [mutationToolCall("checkpoint-call")] }),
       assistantResponse({ text: "检查完成。" }),
@@ -718,10 +752,9 @@ describe("CyreneHarness completion (P0-A)", () => {
     expect(checkpoints.some((checkpoint) => checkpoint.messages.some((message) => message.role === "tool"))).toBe(true);
     expect(checkpoints.some((checkpoint) => checkpoint.toolOutputs?.[0]?.toolCallId === "checkpoint-call")).toBe(true);
     expect(checkpoints.at(-1)).toMatchObject({ rounds: 1 });
-    const last = checkpoints.at(-1);
-    if (!last) throw new Error("expected a terminal checkpoint");
-    last.messages.push({ role: "user", content: "不能污染 Harness" });
-    expect(checkpoints.at(-2)?.messages.some((message) => message.content === "不能污染 Harness")).toBe(false);
+    // 问题 5 P0 契约反转：Harness 传活引用（不再克隆），隔离由消费方 clone 保证。
+    // run 结束后 Harness 不再持有 transcript，消费方回调内同步克隆即可保证不串扰。
+    expect(checkpoints.at(-1)?.messages).toBe(checkpoints.at(-2)?.messages);
   });
 
   it("records a durable lifecycle before dispatch and after committing a tool observation", async () => {
