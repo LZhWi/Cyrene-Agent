@@ -92,7 +92,21 @@ export async function scheduleToolCalls<T>(
     const first = options.calls[index];
     if (options.classify(first) === "exclusive") {
       const execution = executionAt(index);
-      const result = await options.execute(execution);
+      let result: T;
+      try {
+        result = await options.execute(execution);
+      } catch (error) {
+        if (options.signal?.aborted) {
+          await commitNotStarted(index, "aborted_before_dispatch");
+          return { cancelled: true, halted: false };
+        }
+        // 与并行组一致：execute 抛错的槽位以合成失败结果提交（transcript 闭合），
+        // 其余未执行调用补 not_executed，再把错误上抛给工具轮统一转 error 终态。
+        const synthetic = await options.notExecuted(execution, "execution_error");
+        await options.commit(execution, synthetic);
+        await commitNotStarted(index + 1, "not_executed_after_error");
+        throw error;
+      }
       const decision = await options.commit(execution, result);
       index++;
       if (decision === "halt") {
@@ -116,8 +130,15 @@ export async function scheduleToolCalls<T>(
       await commitNotStarted(groupStart + groupResult.started, "aborted_before_dispatch");
       return { cancelled: true, halted: false };
     }
+    if (groupResult.error !== undefined) {
+      // 出错路径：为本组未发射调用（及后续所有调用）补 not_executed 闭合 transcript，再上抛
+      await commitNotStarted(groupStart + groupResult.started, "not_executed_after_error");
+      throw groupResult.error;
+    }
     if (groupResult.halted) {
-      await commitNotStarted(index, "not_executed_after_halt");
+      // halt 只停止发射；已发射调用的结果（含 halt 后完成的）在组内已全部按序提交，
+      // 这里只补从未发射的调用。
+      await commitNotStarted(groupStart + groupResult.started, "not_executed_after_halt");
       return { cancelled: false, halted: true };
     }
   }
@@ -129,6 +150,8 @@ interface ParallelGroupResult {
   started: number;
   cancelled: boolean;
   halted: boolean;
+  /** 首个非取消错误（execute / commit）；drain 完毕后由调用方闭合 transcript 再上抛。 */
+  error?: unknown;
 }
 
 async function runParallelGroup<T>(
@@ -137,12 +160,15 @@ async function runParallelGroup<T>(
   options: ToolCallSchedulerOptions<T>,
 ): Promise<ParallelGroupResult> {
   type Settled = { index: number; result?: T; error?: unknown };
-  const settled: Array<{ ready: boolean; result?: T }> = calls.map(() => ({ ready: false }));
+  // synthetic = execute 抛错的槽位：以合成失败结果提交，让 commitIndex 能推进到底（transcript 闭合）
+  const settled: Array<{ ready: boolean; synthetic: boolean; result?: T }> =
+    calls.map(() => ({ ready: false, synthetic: false }));
   const active = new Map<number, Promise<Settled>>();
   let launchIndex = 0;
   let commitIndex = 0;
   let halted = false;
   let cancelled = false;
+  let firstError: unknown;
 
   const launch = (callIndex: number): void => {
     const promise = Promise.resolve()
@@ -158,33 +184,53 @@ async function runParallelGroup<T>(
     launch(launchIndex++);
   }
 
-  while (active.size > 0) {
-    const next = await Promise.race(active.values());
-    active.delete(next.index);
-    if (next.error !== undefined) {
-      if (options.signal?.aborted) {
-        cancelled = true;
+  try {
+    while (active.size > 0) {
+      const next = await Promise.race(active.values());
+      active.delete(next.index);
+      if (next.error !== undefined) {
+        if (options.signal?.aborted) {
+          // abort 拒绝的槽位永不 ready：commitIndex 停在其前（恢复路径按 toolCalls 记录兜底）
+          cancelled = true;
+          continue;
+        }
+        if (firstError === undefined) firstError = next.error;
+        settled[next.index] = { ready: true, synthetic: true };
         continue;
       }
-      throw next.error;
-    }
-    settled[next.index] = { ready: true, result: next.result };
+      settled[next.index] = { ready: true, synthetic: false, result: next.result };
+      if (options.signal?.aborted) cancelled = true;
 
-    if (options.signal?.aborted) {
-      cancelled = true;
-      continue;
-    }
+      // 提交循环：无 halted 门 —— 已执行/已合成的事实一律按原始顺序提交。
+      // halt / 出错 / 取消只停止“发射”，不丢弃已产生的事实。
+      while (commitIndex < calls.length && settled[commitIndex].ready) {
+        const execution = calls[commitIndex]!;
+        const payload = settled[commitIndex].synthetic
+          ? await options.notExecuted(execution, "execution_error")
+          : settled[commitIndex].result as T;
+        try {
+          const decision = await options.commit(execution, payload);
+          halted = halted || decision === "halt";
+        } catch (error) {
+          // commit 消费方故障：记录错误并继续提交后续槽位（该槽位成为唯一接受的洞）
+          if (firstError === undefined) firstError = error;
+        }
+        commitIndex++;
+      }
 
-    while (!halted && commitIndex < calls.length && settled[commitIndex].ready) {
-      const decision = await options.commit(calls[commitIndex]!, settled[commitIndex].result as T);
-      commitIndex++;
-      halted = decision === "halt";
+      // 发射循环：halt / 取消 / 出错后不再发射新调用
+      while (!halted && !cancelled && firstError === undefined
+        && launchIndex < calls.length && active.size < maxParallel && !options.signal?.aborted) {
+        launch(launchIndex++);
+      }
     }
-
-    while (!halted && !cancelled && launchIndex < calls.length && active.size < maxParallel && !options.signal?.aborted) {
-      launch(launchIndex++);
-    }
+  } finally {
+    // 结构化并发兜底：任何提前退出（含上述代码自身异常）都不留下无人消费的在飞 promise
+    if (active.size > 0) await Promise.allSettled([...active.values()]);
   }
 
+  if (firstError !== undefined) {
+    return { started: launchIndex, cancelled, halted, error: firstError };
+  }
   return { started: launchIndex, cancelled, halted };
 }

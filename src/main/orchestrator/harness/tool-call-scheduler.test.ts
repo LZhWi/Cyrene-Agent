@@ -44,8 +44,9 @@ describe("classifyToolExecutionMode", () => {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => { resolve = done; });
-  return { promise, resolve };
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; });
+  return { promise, resolve, reject };
 }
 
 describe("scheduleToolCalls", () => {
@@ -173,5 +174,186 @@ describe("scheduleToolCalls", () => {
     expect(result).toEqual({ cancelled: true, halted: false });
     expect(executed).toEqual([]);
     expect(skipped).toEqual(["a:aborted_before_dispatch", "b:aborted_before_dispatch"]);
+  });
+
+  it("halt mid-group: commits every executed result and marks only un-launched calls as not executed", async () => {
+    // 4 调用、maxParallel=2：a/b 发射，commit(a) 返回 halt。
+    // 不变量：b 已发射 → 必须最终 commit；c/d 从未发射 → notExecuted。
+    const calls = [call("a"), call("b"), call("c"), call("d")];
+    const gates = calls.map(() => deferred<string>());
+    const commits: Array<{ name: string; result: unknown }> = [];
+    const skipped: string[] = [];
+
+    const scheduled = scheduleToolCalls({
+      calls,
+      maxParallel: 2,
+      classify: () => "parallel",
+      execute: ({ toolCallIndex }) => gates[toolCallIndex].promise,
+      commit: async ({ call: toolCall }, result) => {
+        commits.push({ name: toolCall.name, result });
+        return toolCall.name === "a" ? "halt" : "continue";
+      },
+      notExecuted: async ({ call: toolCall }, reason) => {
+        skipped.push(`${toolCall.name}:${reason}`);
+        return `synthetic:${reason}`;
+      },
+    });
+
+    await Promise.resolve();
+    gates[0].resolve("a");
+    await expect.poll(() => commits.map((entry) => entry.name)).toEqual(["a"]);
+    // b 已发射：halt 只停止发射新调用，不丢弃已执行的事实
+    gates[1].resolve("b");
+    const result = await scheduled;
+
+    expect(commits).toEqual([
+      { name: "a", result: "a" },
+      { name: "b", result: "b" },
+      { name: "c", result: "synthetic:not_executed_after_halt" },
+      { name: "d", result: "synthetic:not_executed_after_halt" },
+    ]);
+    expect(skipped).toEqual(["c:not_executed_after_halt", "d:not_executed_after_halt"]);
+    expect(result).toEqual({ cancelled: false, halted: true });
+  });
+
+  it("execute error: commits a synthetic failure result, drains real siblings, then propagates the error", async () => {
+    const calls = [call("a"), call("b")];
+    const bGate = deferred<string>();
+    const boom = new Error("execute infrastructure failure");
+    const commits: Array<{ name: string; result: unknown }> = [];
+    const synthetics: string[] = [];
+
+    const scheduled = scheduleToolCalls({
+      calls,
+      maxParallel: 2,
+      classify: () => "parallel",
+      execute: ({ call: toolCall }) => toolCall.name === "a"
+        ? Promise.reject(boom)
+        : bGate.promise,
+      commit: async ({ call: toolCall }, result) => {
+        commits.push({ name: toolCall.name, result });
+        return "continue";
+      },
+      notExecuted: async ({ call: toolCall }, reason) => {
+        synthetics.push(`${toolCall.name}:${reason}`);
+        return `synthetic:${reason}`;
+      },
+    });
+
+    await Promise.resolve();
+    bGate.resolve("b");
+    await expect(scheduled).rejects.toBe(boom);
+
+    // transcript 闭合：a 合成失败结果 + b 真实结果都已按序提交
+    expect(synthetics).toEqual(["a:execution_error"]);
+    expect(commits).toEqual([
+      { name: "a", result: "synthetic:execution_error" },
+      { name: "b", result: "b" },
+    ]);
+  });
+
+  it("commit error: drains in-flight siblings, best-effort commits the rest, then propagates", async () => {
+    const calls = [call("a"), call("b")];
+    const bGate = deferred<string>();
+    const commitBoom = new Error("commit consumer failure");
+    const committed: string[] = [];
+
+    const scheduled = scheduleToolCalls({
+      calls,
+      maxParallel: 2,
+      classify: () => "parallel",
+      execute: ({ call: toolCall }) => toolCall.name === "b" ? bGate.promise : Promise.resolve("a"),
+      commit: async ({ call: toolCall }) => {
+        committed.push(toolCall.name);
+        if (toolCall.name === "a") throw commitBoom;
+        return "continue";
+      },
+      notExecuted: async (_execution, reason) => reason,
+    });
+
+    await Promise.resolve();
+    bGate.resolve("b");
+    await expect(scheduled).rejects.toBe(commitBoom);
+
+    // commit 故障槽位是唯一接受的洞；后续已结算槽位仍尽力提交
+    expect(committed).toEqual(["a", "b"]);
+  });
+
+  it("cancel mid-group: commits results settled before abort and marks un-launched calls as not executed", async () => {
+    const calls = [call("a"), call("b"), call("c"), call("d")];
+    const gates = calls.map(() => deferred<string>());
+    const controller = new AbortController();
+    const commits: Array<{ name: string; result: unknown }> = [];
+    const skipped: string[] = [];
+    const executed: string[] = [];
+
+    const scheduled = scheduleToolCalls({
+      calls,
+      maxParallel: 2,
+      classify: () => "parallel",
+      signal: controller.signal,
+      execute: ({ toolCallIndex, call: toolCall }) => {
+        executed.push(toolCall.name);
+        return gates[toolCallIndex].promise;
+      },
+      commit: async ({ call: toolCall }, result) => {
+        commits.push({ name: toolCall.name, result });
+        return "continue";
+      },
+      notExecuted: async ({ call: toolCall }, reason) => {
+        skipped.push(`${toolCall.name}:${reason}`);
+        return `synthetic:${reason}`;
+      },
+    });
+
+    await Promise.resolve();
+    gates[0].resolve("a");
+    await expect.poll(() => commits.map((entry) => entry.name)).toEqual(["a"]);
+    // a 已提交、c 已补位发射；此刻取消。b/c 被 abort 拒绝 → 接受的洞（恢复路径兜底），d 从未发射 → notExecuted
+    expect(executed).toEqual(["a", "b", "c"]);
+    controller.abort();
+    gates[1].reject(new Error("aborted"));
+    gates[2].reject(new Error("aborted"));
+
+    const result = await scheduled;
+
+    expect(result).toEqual({ cancelled: true, halted: false });
+    expect(commits).toEqual([
+      { name: "a", result: "a" },
+      { name: "d", result: "synthetic:aborted_before_dispatch" },
+    ]);
+    expect(skipped).toEqual(["d:aborted_before_dispatch"]);
+  });
+
+  it("execute error on an exclusive call: commits a synthetic failure and closes the rest before rethrowing", async () => {
+    const calls = [call("a"), call("b")];
+    const boom = new Error("exclusive infrastructure failure");
+    const commits: Array<{ name: string; result: unknown }> = [];
+    const skipped: string[] = [];
+
+    const scheduled = scheduleToolCalls({
+      calls,
+      maxParallel: 2,
+      classify: (toolCall) => toolCall.name === "a" ? "exclusive" : "parallel",
+      execute: ({ call: toolCall }) => toolCall.name === "a"
+        ? Promise.reject(boom)
+        : Promise.resolve("b"),
+      commit: async ({ call: toolCall }, result) => {
+        commits.push({ name: toolCall.name, result });
+        return "continue";
+      },
+      notExecuted: async ({ call: toolCall }, reason) => {
+        skipped.push(`${toolCall.name}:${reason}`);
+        return `synthetic:${reason}`;
+      },
+    });
+
+    await expect(scheduled).rejects.toBe(boom);
+
+    expect(commits).toEqual([
+      { name: "a", result: "synthetic:execution_error" },
+      { name: "b", result: "synthetic:not_executed_after_error" },
+    ]);
+    expect(skipped).toEqual(["a:execution_error", "b:not_executed_after_error"]);
   });
 });

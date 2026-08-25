@@ -72,12 +72,22 @@ export async function runToolRound(run: HarnessRun, toolCalls: ToolCall[]): Prom
       classify: (call) => classifyToolExecutionMode(call, input.tools),
       execute: ({ call }) => executeToolCallWithRetry(run, call),
       commit: ({ call }, result) => commitToolResult(run, call, result),
-      notExecuted: async ({ call }, reason): Promise<ToolDispatchResult> => ({
-        outcome: "not_executed",
-        category: "runtime_safety",
-        tool: call.name,
-        message: reason,
-      }),
+      notExecuted: async ({ call }, reason): Promise<ToolDispatchResult> =>
+        reason === "execution_error"
+          ? {
+              // execute 抛错（基础设施故障）：合成失败结果保证 transcript 闭合（v3 §5.5），
+              // fatal 类别让模型看到诚实结果后自行决策。
+              outcome: "failure",
+              category: "fatal",
+              tool: call.name,
+              message: "工具执行异常，结果不可用（execution error）",
+            }
+          : {
+              outcome: "not_executed",
+              category: "runtime_safety",
+              tool: call.name,
+              message: reason,
+            },
     });
   } catch (error) {
     if (isCancellationError(error, input.signal)) return "cancelled";
