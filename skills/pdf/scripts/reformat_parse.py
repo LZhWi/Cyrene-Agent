@@ -16,8 +16,8 @@ Usage:
 Then pipe into the CREATE pipeline:
     python3 render_body.py --tokens tokens.json --content content.json --out body.pdf
 
-Or use make.sh reformat which does both steps:
-    bash make.sh reformat --input doc.md --type report --title "My Report" --out output.pdf
+Or use the unified command which does both steps:
+    python make.py reformat --input doc.md --type report --title "My Report" --out output.pdf
 
 Exit codes: 0 success, 1 bad args / unsupported format, 2 dep missing, 3 parse error
 """
@@ -38,9 +38,8 @@ def ensure_deps():
     if importlib.util.find_spec("pypdf") is None:
         missing.append("pypdf")
     if missing:
-        import subprocess
-        subprocess.check_call(
-            [sys.executable, "-m", "pip", "install", "--break-system-packages", "-q"] + missing
+        raise RuntimeError(
+            "Missing Python package: pypdf. Install it with: python -m pip install pypdf"
         )
 
 
@@ -365,7 +364,7 @@ def main():
         print(f"  Warnings:", file=sys.stderr)
         for w in warnings:
             print(f"    ⚠  {w}", file=sys.stderr)
-    print(f"\n  Next: bash make.sh run --content {args.out} --title '...' --type ...",
+    print(f"\n  Next: python make.py run --content {args.out} --title '...' --type ...",
           file=sys.stderr)
     print("", file=sys.stderr)
 

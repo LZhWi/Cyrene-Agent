@@ -8,8 +8,8 @@ Usage:
     python3 palette.py --meta meta.json --out tokens.json
 
 Outputs tokens.json consumed by all downstream scripts.
-Cover fonts are loaded via Google Fonts @import in the cover HTML (no local caching).
-Body fonts always use ReportLab system fonts (Times-Bold / Helvetica).
+The local renderer selects installed Windows fonts when available and otherwise
+uses standard PDF fonts.
 Exit codes: 0 success, 1 bad args, 3 write error
 """
 
@@ -219,9 +219,7 @@ PALETTES = {
     },
 }
 
-# ── Font pairs — CSS names for cover HTML, ReportLab names for body ─────────────
-# cover uses Google Fonts via @import (no local disk caching needed)
-# body always uses system fonts via ReportLab
+# ── Font pairs — display metadata plus ReportLab fallback names ─────────────────
 FONT_PAIRS = {
     "authoritative": {
         "display_css":  "Playfair Display",
@@ -429,7 +427,7 @@ def build_tokens(
         "cover_pattern": palette["cover_pattern"],
         "mood":          mood,
 
-        # Typography — CSS names for cover HTML (loaded via Google Fonts @import)
+        # Typography metadata retained for document-style compatibility
         "font_display":     font_pair["display_css"],
         "font_body":        font_pair["body_css"],
         "gfonts_import":    font_pair["gfonts_import"],

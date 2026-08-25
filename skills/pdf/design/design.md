@@ -66,11 +66,10 @@ Two typefaces maximum. Always.
 | Display (cover title, H1) | Distinctive, strong contrast, high weight | Times New Roman, Georgia (serif) |
 | Text (body, captions, UI) | Highly readable at 10–11pt | Helvetica, Arial (sans) |
 
-Cover fonts are loaded live via `@import url(...)` in the cover HTML — Playwright
-fetches them at render time, no local caching. Body pages always use system fonts
-(Times-Bold / Helvetica) via ReportLab — consistent and offline-safe.
+The renderer uses locally available Windows fonts for Chinese production documents.
+Body pages fall back to standard PDF fonts only when no local CJK font is available.
 
-Pairs by mood (cover HTML only — body always uses system fonts):
+Pairs by mood (mapped to locally available display and body fonts):
 - Authoritative: `Playfair Display` / `IBM Plex Sans`
 - Confident: `Syne` / `Nunito Sans`
 - Expressive: `Fraunces` / `Inter`
@@ -120,7 +119,7 @@ The cover is the most important page. It determines whether a reader trusts the 
 
 ### Thirteen cover patterns
 
-`cover.py` selects one based on `tokens.json["cover_pattern"]`.
+`pdf_cover.py` selects one based on `tokens.json["cover_pattern"]`.
 
 **1. `fullbleed`** — used for: `report`, `general`
 - Deep background fills 100% of page
@@ -221,23 +220,17 @@ The cover is the most important page. It determines whether a reader trusts the 
 ### Optional token: `cover_image`
 
 Patterns `magazine`, `darkroom`, and `poster` accept an optional `cover_image`
-token containing an absolute URL or `file://` path to an image.
-The image renders via `<img src="...">` — Playwright fetches it at render time.
+token containing a local image path.
+The renderer reads it directly from disk.
 If omitted, the image area is simply skipped (layout adjusts gracefully).
 
-### Cover CSS requirements (critical for Playwright rendering)
+### Cover drawing requirements
 
-These three rules must appear in every cover HTML file or the output will have
-white borders / incorrect dimensions:
-
-```css
-body { margin: 0; padding: 0; }
-html, body { width: 794px; height: 1123px; overflow: hidden; }
-```
-
-No `@page` rules needed — Playwright handles page size via the `pdf()` call.
-Do NOT use CSS `background-image` for textures — use inline SVG or `<canvas>`.
-Always use `position: absolute` + `z-index` for layered elements.
+- Draw every cover on an A4, zero-margin canvas.
+- Measure title width with the active PDF font before wrapping text.
+- Keep decorative layers inside the page bounds.
+- Draw a solid background beneath every gradient-like decoration.
+- Treat local images as optional and leave a balanced placeholder when absent.
 
 ### What always kills a cover
 
@@ -325,7 +318,7 @@ All body blocks use the same token system — colors and fonts come from `tokens
 
 **Limitations:** matplotlib mathtext covers most common expressions but not advanced LaTeX environments (`align`, `cases`, `matrix`). Split complex multi-line proofs into multiple `math` blocks.
 
-**Fallback:** if matplotlib is not installed, renders as `expression` in code style. Run `make.sh fix` to install.
+**Fallback:** if matplotlib is not installed, renders as `expression` in code style. Install it explicitly with `python -m pip install matplotlib` when richer math rendering is required.
 
 **Equation labels:** `"label": "(1)"` — rendered right-aligned beside the formula.
 

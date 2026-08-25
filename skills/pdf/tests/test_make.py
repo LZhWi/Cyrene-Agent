@@ -10,6 +10,7 @@ from pypdf import PdfReader
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
 MAKE = SCRIPTS / "make.py"
+PDF_SKILL = Path(__file__).resolve().parents[1]
 
 
 class MakeCliTests(unittest.TestCase):
@@ -63,6 +64,15 @@ class MakeCliTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue(output.exists())
             self.assertGreaterEqual(len(PdfReader(output).pages), 2)
+
+    def test_public_pdf_workflow_has_no_browser_renderer(self):
+        public_files = [PDF_SKILL / "SKILL.md", PDF_SKILL / "README.md"]
+        public_text = "\n".join(path.read_text(encoding="utf-8").lower() for path in public_files)
+
+        self.assertIn("python scripts/make.py", public_text)
+        self.assertNotIn("playwright", public_text)
+        self.assertNotIn("render_cover.js", public_text)
+        self.assertNotIn("bash scripts/make.sh", public_text)
 
 
 if __name__ == "__main__":
