@@ -195,11 +195,13 @@ async function runParallelGroup<T>(
           continue;
         }
         if (firstError === undefined) firstError = next.error;
+        // 出错槽位标记合成后直接落入提交循环：错误若是组内最后结算的
+        //（含单调用组），没有后续兄弟触发提交，合成结果必须在此刻落账。
         settled[next.index] = { ready: true, synthetic: true };
-        continue;
+      } else {
+        settled[next.index] = { ready: true, synthetic: false, result: next.result };
+        if (options.signal?.aborted) cancelled = true;
       }
-      settled[next.index] = { ready: true, synthetic: false, result: next.result };
-      if (options.signal?.aborted) cancelled = true;
 
       // 提交循环：无 halted 门 —— 已执行/已合成的事实一律按原始顺序提交。
       // halt / 出错 / 取消只停止“发射”，不丢弃已产生的事实。

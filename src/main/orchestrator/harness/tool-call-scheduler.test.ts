@@ -252,6 +252,61 @@ describe("scheduleToolCalls", () => {
     ]);
   });
 
+  it("execute error settling last: still commits its synthetic result before propagating", async () => {
+    // b 的错误最后结算（a 先成功提交）：合成结果也必须落账，transcript 不得留洞
+    const calls = [call("a"), call("b")];
+    const boom = new Error("late execute failure");
+    const commits: Array<{ name: string; result: unknown }> = [];
+    const synthetics: string[] = [];
+
+    const scheduled = scheduleToolCalls({
+      calls,
+      maxParallel: 2,
+      classify: () => "parallel",
+      execute: ({ call: toolCall }) => toolCall.name === "a"
+        ? Promise.resolve("a")
+        : new Promise((_resolve, reject) => { setTimeout(() => reject(boom), 0); }),
+      commit: async ({ call: toolCall }, result) => {
+        commits.push({ name: toolCall.name, result });
+        return "continue";
+      },
+      notExecuted: async ({ call: toolCall }, reason) => {
+        synthetics.push(`${toolCall.name}:${reason}`);
+        return `synthetic:${reason}`;
+      },
+    });
+
+    await expect(scheduled).rejects.toBe(boom);
+
+    expect(synthetics).toEqual(["b:execution_error"]);
+    expect(commits).toEqual([
+      { name: "a", result: "a" },
+      { name: "b", result: "synthetic:execution_error" },
+    ]);
+  });
+
+  it("execute error on a lone parallel call: commits its synthetic result before propagating", async () => {
+    // 单调用组：错误槽位结算后没有兄弟触发提交循环，合成结果仍必须落账
+    const boom = new Error("only call failed");
+    const commits: Array<{ name: string; result: unknown }> = [];
+
+    const scheduled = scheduleToolCalls({
+      calls: [call("solo")],
+      maxParallel: 2,
+      classify: () => "parallel",
+      execute: () => Promise.reject(boom),
+      commit: async ({ call: toolCall }, result) => {
+        commits.push({ name: toolCall.name, result });
+        return "continue";
+      },
+      notExecuted: async (_execution, reason) => `synthetic:${reason}`,
+    });
+
+    await expect(scheduled).rejects.toBe(boom);
+
+    expect(commits).toEqual([{ name: "solo", result: "synthetic:execution_error" }]);
+  });
+
   it("commit error: drains in-flight siblings, best-effort commits the rest, then propagates", async () => {
     const calls = [call("a"), call("b")];
     const bGate = deferred<string>();
