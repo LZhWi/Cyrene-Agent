@@ -81,6 +81,8 @@ dist/components/
 
 # Test & coverage
 coverage/
+__pycache__/
+*.py[cod]
 
 # Local debug/verification artifacts
 verify-*.js
