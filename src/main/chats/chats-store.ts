@@ -23,6 +23,7 @@ import {
   type ChatSessionPurpose,
   type ConversationMode,
 } from "../../shared/chat-types";
+import type { ContextUsageSnapshot } from "../../shared/context-usage";
 
 const ROOT_DIR_NAME = "cyrene-chats";
 const SESSIONS_SUBDIR = "sessions";
@@ -451,6 +452,22 @@ export function setSessionModelProfile(id: string, modelProfileId: string | unde
   if (!session) return null;
   session.modelProfileId = modelProfileId;
   session.updatedAt = Date.now();
+  writeSessionFile(session);
+  upsertMeta(metaFromSession(session));
+  return session;
+}
+
+/**
+ * 会话级最新上下文容量快照写入（上下文环形图的唯一读取点）。
+ * 手动压缩等不产生新 assistant 消息但改变上下文构成的操作走这里。
+ */
+export function setSessionContextUsage(
+  id: string,
+  snapshot: ContextUsageSnapshot,
+): ChatSession | null {
+  const session = readSessionFile(id);
+  if (!session) return null;
+  session.currentContextUsage = snapshot;
   writeSessionFile(session);
   upsertMeta(metaFromSession(session));
   return session;

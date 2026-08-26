@@ -260,6 +260,12 @@ export async function streamChatWithSdk(
     });
     return reconciled;
   } catch (error) {
+    // [image-send] 链路日志④（流式）：SDK 抛出的 APIError message 含 status 与服务端
+    // 错误体摘要（Anthropic 400 的具体 reason），落一条主进程日志便于定位。
+    console.error(
+      "[image-send] 流式请求失败:",
+      error instanceof Error ? `${error.name}: ${error.message}` : String(error),
+    );
     if (traceId) {
       dumpResponse(traceId, {
         transport: input.adapter.transport,

@@ -6,7 +6,7 @@
 // 也可以配 bearer（如 MiMo /anthropic 端点）。
 import {
   ChatMessage, ChatRequest, ChatResponse, ChatVendorAdapter,
-  HttpRequest, ProviderCapability, StreamChunk, StreamEvent,
+  ChatMessageContent, HttpRequest, ProviderCapability, StreamChunk, StreamEvent,
   TestConnectionResult, ToolCall, ToolExecutionResult, VendorConfig,
 } from "./types";
 import { authHeaderFor } from "./auth";
@@ -57,6 +57,57 @@ function markMessageCacheBreakpoint(message: Record<string, unknown>): boolean {
   return false;
 }
 
+/** Anthropic image source 白名单（官方协议仅支持这四种 media_type）。 */
+const ANTHROPIC_IMAGE_MEDIA_TYPES = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
+
+/**
+ * OpenAI 风格 content → Anthropic content blocks。
+ * - text 块照搬；
+ * - image_url 块：data URL → source.type=base64；http(s) URL → source.type=url
+ *   （原生协议两者都支持）；
+ * - data URL 的 media_type 不在 Anthropic 白名单时降级为文本占位块，避免 400。
+ */
+function toAnthropicContent(content: ChatMessageContent): string | ContentBlock[] {
+  if (typeof content === "string") return content;
+  const blocks: ContentBlock[] = [];
+  let imageBase64Count = 0;
+  let imageUrlCount = 0;
+  let imageDowngradedCount = 0;
+  for (const block of content) {
+    if (block.type === "text") {
+      blocks.push({ type: "text", text: block.text });
+    } else if (block.type === "image_url") {
+      const dataMatch = /^data:([^;]+);base64,(.+)$/.exec(block.image_url.url);
+      if (dataMatch) {
+        if (!ANTHROPIC_IMAGE_MEDIA_TYPES.has(dataMatch[1])) {
+          imageDowngradedCount += 1;
+          blocks.push({ type: "text", text: `[图片格式 ${dataMatch[1]} 暂不支持直发，已跳过]` });
+        } else {
+          imageBase64Count += 1;
+          blocks.push({
+            type: "image",
+            source: { type: "base64", media_type: dataMatch[1], data: dataMatch[2] },
+          });
+        }
+      } else {
+        imageUrlCount += 1;
+        blocks.push({
+          type: "image",
+          source: { type: "url", url: block.image_url.url },
+        });
+      }
+    }
+  }
+  // [image-send] 链路日志③：wire 转换统计（无图不打印；含全部历史图片块）。
+  if (imageBase64Count + imageUrlCount + imageDowngradedCount > 0) {
+    console.log(
+      `[image-send] anthropic wire: image 块 ${imageBase64Count} base64 / ${imageUrlCount} url`
+      + (imageDowngradedCount > 0 ? ` / ${imageDowngradedCount} 个 MIME 不在白名单已降级文本` : ""),
+    );
+  }
+  return blocks.length > 0 ? blocks : "";
+}
+
 /**
  * 把统一消息翻译成 Anthropic wire messages。
  * system 抽出来单独返回（Anthropic system 是顶层字段）。
@@ -78,7 +129,7 @@ function toWireMessages(messages: ChatMessage[], options?: { cacheBreakpoints?: 
   const wire: Array<Record<string, unknown>> = [];
   for (const m of messages.filter(x => x.role !== "system")) {
     if (m.role === "user") {
-      wire.push({ role: "user", content: m.content ?? "" });
+      wire.push({ role: "user", content: toAnthropicContent(m.content ?? "") });
     } else if (m.role === "assistant") {
       if (m.rawAssistant !== undefined) {
         wire.push({ role: "assistant", content: m.rawAssistant });

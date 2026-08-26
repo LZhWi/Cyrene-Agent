@@ -533,6 +533,9 @@ export function ChatPage() {
   const attachments = attachmentsByScope[scopeKey] ?? [];
   const sessions = sessionsByMode[mode] ?? [];
   const [activeSession, setActiveSession] = useState<ChatSession | null>(null);
+  // 会话级最新上下文快照（环形图优先读取点）：run 事件实时写入；
+  // 手动压缩后随会话重载从 session.currentContextUsage 初始化（known-issues 问题 3）。
+  const [sessionContextUsageBySession, setSessionContextUsageBySession] = useState<Record<string, ContextUsageSnapshot>>({});
 
   activeModeRef.current = mode;
   activeSessionIdsRef.current = activeSessionIds;
@@ -795,6 +798,16 @@ export function ChatPage() {
     const session = await store.get(sessionId);
     if (!session || generation !== sessionSelectionGeneration.current) return;
     setActiveSession(session);
+    // 环形图快照初始化：session 级（压缩后写入）与消息级（最近 run 留下）取最新。
+    setSessionContextUsageBySession((current) => {
+      const messageLevel = session.messages.findLast((message) => message.contextUsage)?.contextUsage;
+      const sessionLevel = session.currentContextUsage;
+      const best = sessionLevel && (!messageLevel || sessionLevel.updatedAt >= messageLevel.updatedAt)
+        ? sessionLevel
+        : messageLevel;
+      if (!best || current[sessionId]?.updatedAt === best.updatedAt) return current;
+      return { ...current, [sessionId]: best };
+    });
     setActiveSessionIds((current) => {
       const next = { ...current, [targetMode]: sessionId };
       activeSessionIdsRef.current = next;
@@ -1356,6 +1369,8 @@ export function ChatPage() {
         if (snapshot) {
           contextUsage = snapshot;
           updateMessage(input.sessionId, input.assistantId, { contextUsage: snapshot });
+          // session 级状态同步刷新：环形图优先读取点，手动压缩等场景不再依赖消息级兜底。
+          setSessionContextUsageBySession((current) => ({ ...current, [input.sessionId]: snapshot }));
           if (snapshot.phase === "terminal") void checkpointRun("running");
         }
       } else if (event.type === "CUSTOM" && event.name === "cyrene.sticker") {
@@ -1861,6 +1876,78 @@ export function ChatPage() {
     }
   }
 
+  /** 粘贴/截图临时图片大小上限：与主进程 MAX_SCREENSHOT_BYTES（20MB）一致，前端提前拦截。 */
+  const PASTE_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
+
+  function arrayBufferToBase64(buffer: ArrayBuffer): string {
+    const bytes = new Uint8Array(buffer);
+    let binary = "";
+    const chunkSize = 0x8000;
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
+    }
+    return btoa(binary);
+  }
+
+  /**
+   * Ctrl+V 粘贴图片：落主进程 screenshots/ 临时文件（复用截图链路），
+   * 构造与按钮截图相同的 ComposerAttachment 追加进当前 scope。
+   */
+  async function handlePastedImage(file: File) {
+    const targetScope = scopeKey;
+    if (!window.chat?.saveScreenshotTemp) return;
+    if (file.size > PASTE_IMAGE_MAX_BYTES) {
+      window.alert("粘贴的图片超过 20MB，已跳过。");
+      return;
+    }
+    setAttachmentBusy(true);
+    try {
+      const base64 = arrayBufferToBase64(await file.arrayBuffer());
+      const { filePath } = await window.chat.saveScreenshotTemp(base64, file.type);
+      const previewUrl = URL.createObjectURL(file);
+      localPreviewUrlsRef.current.add(previewUrl);
+      const attachment: ComposerAttachment = {
+        kind: "image",
+        name: file.name && file.name !== "image.png" ? file.name : `粘贴图片_${Date.now()}.png`,
+        filePath,
+        mime: file.type,
+        previewUrl,
+      };
+      setAttachmentsByScope((current) => ({
+        ...current,
+        [targetScope]: [...(current[targetScope] ?? []), attachment],
+      }));
+    } catch (error) {
+      const raw = error instanceof Error ? error.message : String(error);
+      const text = raw === "SCREENSHOT_TOO_LARGE"
+        ? "粘贴的图片超过 20MB。"
+        : raw === "INVALID_SCREENSHOT_IMAGE"
+          ? "粘贴的内容不是有效图片。"
+          : `粘贴图片失败：${raw}`;
+      window.alert(text);
+    } finally {
+      setAttachmentBusy(false);
+    }
+  }
+
+  /** 截图按钮：失败不再静默，按 reason 给可读提示（known-issues 问题 4）。 */
+  async function handleScreenshot() {
+    const result = await window.chat?.startScreenshot();
+    if (!result || result.ok) return;
+    const reason = typeof result.reason === "string" ? result.reason : "";
+    let text: string;
+    if (reason.startsWith("HELPER_")) {
+      text = "截图组件未就绪，请稍后重试。";
+    } else if (reason.startsWith("SCREENSHOT_CANCELLED")) {
+      text = "已取消截图。";
+    } else if (reason === "SCREENSHOT_FILE_PATH_REQUIRED") {
+      text = "截图失败：未生成截图文件。";
+    } else {
+      text = `截图失败：${reason || "未知错误"}`;
+    }
+    window.alert(text);
+  }
+
   function updateMessageAttachments(
     sessionId: string,
     messageId: string,
@@ -2184,8 +2271,10 @@ export function ChatPage() {
   const currentPendingQueue = activeSessionId
     ? (pendingQueueBySession[activeSessionId] ?? []).map((item) => ({ id: item.id, content: item.visibleContent }))
     : [];
-  // 上下文容量圆环：运行中显示当前 assistant 消息的实时快照，空闲时显示最近一次终态快照。
-  const latestContextUsage = messages.findLast((message) => message.contextUsage)?.contextUsage;
+  // 上下文容量圆环：session 级快照优先（手动压缩等不产生新消息的操作也即时刷新），
+  // 消息级快照兜底兼容旧数据；无快照不渲染。
+  const latestContextUsage = (activeSessionId ? sessionContextUsageBySession[activeSessionId] : undefined)
+    ?? messages.findLast((message) => message.contextUsage)?.contextUsage;
 
   return (
     <div className={`cy-page ${collapsed ? "is-collapsed" : ""}`}>
@@ -2360,7 +2449,8 @@ export function ChatPage() {
             onChooseWorkspace={() => void chooseWorkspace()}
             onChooseFiles={(files) => void chooseFiles(files)}
             onRemoveAttachment={removeAttachment}
-            onScreenshot={() => void window.chat?.startScreenshot()}
+            onScreenshot={() => void handleScreenshot()}
+            onPasteImage={(file) => void handlePastedImage(file)}
             onChooseSticker={(id) => {
               const separator = draft && !draft.endsWith(" ") ? " " : "";
               setDrafts((current) => ({ ...current, [scopeKey]: `${draft}${separator}[sticker:${id}]` }));

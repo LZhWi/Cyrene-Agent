@@ -181,6 +181,8 @@ export async function runChatLoop(options: ChatLoopOptions): Promise<AgentLoopRe
       });
       if (!response.ok) {
         const body = await response.text().catch(() => "");
+        // [image-send] 链路日志④：服务端拒绝时打印完整错误体（Anthropic 400 会带具体 reason）。
+        console.error(`[image-send] ChatLoop 请求被拒 HTTP ${response.status}:`, body.slice(0, 500) || "(无响应体)");
         throw new AgentRuntimeError(
           "E_MODEL_REQUEST_FAILED",
           `模型请求失败：HTTP ${response.status}${body ? ` - ${body.slice(0, 200)}` : ""}`,

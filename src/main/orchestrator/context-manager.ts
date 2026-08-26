@@ -1,4 +1,4 @@
-import type { ChatVendorAdapter, ChatMessage, ChatRequest } from "./vendors/types";
+import type { ChatVendorAdapter, ChatMessage, ChatRequest, OpenAIContentBlock } from "./vendors/types";
 import type { AgentLoopSettings, AgentLoopEvent } from "./cyrene-agent";
 import { recordRequest, recordUsage } from "../token-usage-store";
 
@@ -44,10 +44,34 @@ export function estimateTokens(text: string): number {
   return Math.ceil(nonAscii / 1.5 + ascii / 4);
 }
 
+/**
+ * 保守固定回退值。协议 ≠ tokenizer：MiniMax 模型走 Anthropic 协议并不会因此
+ * 使用 Claude 的视觉计费算法，故不绑定任何厂商公式。
+ * 现实区间：主流多模态模型单图 1k~5k token；取 4096 保守偏高——
+ * 压缩安全判定宁可高估，不可低估撞穿 context window。
+ */
+export const DEFAULT_IMAGE_TOKEN_ESTIMATE = 4096;
+
+/**
+ * 图片块不计 base64 字符串（按 DEFAULT_IMAGE_TOKEN_ESTIMATE 估算），text 块照常估算。
+ * estimateMessageTokens 与 buildContextUsageSnapshot 共用此函数，防止计量与
+ * 压缩判定口径分裂（见 docs/design/2026-08-26-image-context-screenshot-known-issues.md 问题 2）。
+ */
+export function estimateMessageContentTokens(
+  content: string | OpenAIContentBlock[],
+): number {
+  if (typeof content === "string") return estimateTokens(content);
+  let sum = 0;
+  for (const block of content) {
+    if (block.type === "text") sum += estimateTokens(block.text);
+    else sum += DEFAULT_IMAGE_TOKEN_ESTIMATE; // image_url 块
+  }
+  return sum;
+}
+
 export function estimateMessageTokens(messages: ChatMessage[]): number {
   return messages.reduce((sum, m) => {
-    const text = typeof m.content === "string" ? m.content : JSON.stringify(m.content);
-    return sum + estimateTokens(text) + 4; // +4 为角色/格式开销
+    return sum + estimateMessageContentTokens(m.content ?? "") + 4; // +4 为角色/格式开销
   }, 0);
 }
 

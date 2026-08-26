@@ -13,7 +13,7 @@
 //   尾部消息，runtimeContext 由独立参数计量，否则双重计数。
 
 import type { ChatMessage } from "./vendors/types";
-import { estimateTokens } from "./context-manager";
+import { estimateTokens, estimateMessageContentTokens } from "./context-manager";
 import { isCompactionCheckpointMessage } from "./harness/compaction";
 import type {
   ContextUsageCategory,
@@ -94,9 +94,10 @@ export function buildContextUsageSnapshot(input: ContextUsageSnapshotInput): Con
   }
 
   for (const message of input.messages) {
-    const text = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
+    // 图片块按 DEFAULT_IMAGE_TOKEN_ESTIMATE 计量（不计 base64 全长），
+    // 与 estimateMessageTokens 同口径，防止计量与压缩判定分裂。
     // +4 为角色/格式开销，与 estimateMessageTokens 一致。
-    buckets[classifyMessage(message)] += estimateTokens(text) + 4;
+    buckets[classifyMessage(message)] += estimateMessageContentTokens(message.content ?? "") + 4;
   }
 
   const categories: ContextUsageCategory[] = CATEGORY_KEYS.map((key) => ({ key, tokens: buckets[key] }));

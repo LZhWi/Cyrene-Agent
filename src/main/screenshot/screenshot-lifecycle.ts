@@ -27,6 +27,19 @@ function getScreenshotDirectory(): string {
   return path.join(app.getPath("userData"), "screenshots");
 }
 
+/**
+ * 确保 helper 的输出目录存在。
+ * WIC InitializeFromFilename 不会创建父目录：目录缺失时打开 `<uuid>.png.tmp`
+ * 直接报 0x80070003（ERROR_PATH_NOT_FOUND）。mkdir recursive 幂等，重复调用无害。
+ */
+async function ensureScreenshotDirectory(directory: string): Promise<void> {
+  try {
+    await fs.promises.mkdir(directory, { recursive: true });
+  } catch (error) {
+    console.error("[Screenshot] 创建截图目录失败:", directory, error);
+  }
+}
+
 async function saveScreenshotPasteTemp(
   base64: string,
   _mime: string,
@@ -89,6 +102,9 @@ export function initializeScreenshotService(
     screenshotDirectory,
     logger: console,
   });
+  // 启动即建目录 + 记录实际输出目录（排查 0x80070003 类路径问题）。
+  void ensureScreenshotDirectory(screenshotDirectory);
+  console.log("[Screenshot] helper output-dir =", screenshotDirectory);
 
   const service = createScreenshotService({
     client,
@@ -104,13 +120,16 @@ export function initializeScreenshotService(
     },
   });
 
-  ipcMain.handle(IPC.SCREENSHOT_START, (event) =>
-    service.startFromChatButton((data) => {
+  ipcMain.handle(IPC.SCREENSHOT_START, async (event) => {
+    // 请求前兜底重建目录：清理软件可能删掉 AppData 下的子目录，
+    // helper 的 WIC 编码不会自建父目录（0x80070003）。
+    await ensureScreenshotDirectory(screenshotDirectory);
+    return service.startFromChatButton((data) => {
       if (!event.sender.isDestroyed()) {
         event.sender.send(IPC.SCREENSHOT_INSERT, validateInsert(data));
       }
-    }),
-  );
+    });
+  });
   ipcMain.handle(IPC.SCREENSHOT_SAVE_TEMP, (_event, base64: string, mime: string) =>
     saveScreenshotPasteTemp(base64, mime),
   );

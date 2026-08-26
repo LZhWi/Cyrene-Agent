@@ -1,6 +1,6 @@
 import { Sender } from "@ant-design/x";
 import { Popover } from "antd";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent } from "react";
 import { resolveAsset } from "../../../../../shared/renderer-base";
 import type { ContextUsageSnapshot } from "../../../../../shared/context-usage";
 import { ContextUsageRing } from "./ContextUsageRing";
@@ -36,6 +36,8 @@ interface ChatComposerProps {
   onChooseFiles: (files: File[]) => void;
   onRemoveAttachment: (index: number) => void;
   onScreenshot: () => void;
+  /** 粘贴图片（Ctrl+V 剪贴板含图片且无文本时触发）；由父级落临时文件并追加附件。 */
+  onPasteImage?: (file: File) => void;
   onChooseSticker: (id: string) => void;
   activeModelProfileId?: string;
   onSelectModelProfile?: (id: string) => void;
@@ -62,6 +64,9 @@ const WELCOME_IMAGE_BY_MODE: Record<string, string> = {
   learn: learnWelcomeUrl,
   work: workWelcomeUrl,
 };
+
+/** 粘贴图片 MIME 白名单：与主进程截图临时文件的校验口径一致。 */
+const PASTE_IMAGE_MIME_WHITELIST = new Set(["image/png", "image/jpeg", "image/webp", "image/gif"]);
 
 function PlusIcon() {
   return <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>;
@@ -212,6 +217,7 @@ export function ChatComposer({
   onChooseFiles,
   onRemoveAttachment,
   onScreenshot,
+  onPasteImage,
   onChooseSticker,
   activeModelProfileId,
   onSelectModelProfile,
@@ -271,6 +277,22 @@ export function ChatComposer({
   const hasComposerHeader = attachments.length > 0 || selectedStickers.length > 0 || pendingQueue.length > 0;
   const shiftPressedRef = useRef(false);
 
+  // Ctrl+V 粘贴图片：仅当剪贴板无 text/plain 且含白名单图片时才拦截默认粘贴行为——
+  // 浏览器剪贴板常同时带 text/plain + image/png（复制网页富文本），
+  // 粗暴拦截会把用户想粘的文字吃掉。大小/临时文件由父级 handlePastedImage 负责。
+  const handlePaste = (event: ClipboardEvent<HTMLElement>) => {
+    if (!onPasteImage) return;
+    const data = event.clipboardData;
+    if (!data || Array.from(data.types).includes("text/plain")) return;
+    const imageItem = Array.from(data.items).find((item) =>
+      item.kind === "file" && PASTE_IMAGE_MIME_WHITELIST.has(item.type));
+    if (!imageItem) return;
+    const file = imageItem.getAsFile();
+    if (!file) return;
+    event.preventDefault();
+    onPasteImage(file);
+  };
+
   return (
     <div className={`cy-composer-stack ${docked ? "is-docked" : "is-centered"}`}>
       {!docked && <img className="cy-composer-welcome" src={welcomeImageUrl} alt="" />}
@@ -297,6 +319,7 @@ export function ChatComposer({
         autoSize={{ minRows: 3, maxRows: 7 }}
         onChange={onChange}
         onCancel={onCancel}
+        onPaste={handlePaste}
         onKeyDown={(event) => { shiftPressedRef.current = event.shiftKey; }}
         onSubmit={(submitValue) => {
           if (modelBusy) {

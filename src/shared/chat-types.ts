@@ -200,6 +200,12 @@ export interface ChatSession {
   pinned?: boolean;
   /** 当前会话选择的已保存模型；缺失时使用默认模型。 */
   modelProfileId?: string;
+  /**
+   * 会话级最新上下文容量快照：上下文环形图的唯一读取点（消息级 contextUsage 仅作历史兜底）。
+   * 手动压缩等「不产生新 assistant 消息但改变上下文构成」的操作写这里，
+   * 避免 UI 显示过期数据（known-issues 问题 3）。
+   */
+  currentContextUsage?: ContextUsageSnapshot;
 }
 
 // index.json 里的轻量元数据（列表渲染用）。

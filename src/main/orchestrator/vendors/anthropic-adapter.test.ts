@@ -368,4 +368,101 @@ describe("AnthropicAdapter", () => {
     const body = JSON.parse(req.body) as { messages: Array<{ role: string; content: unknown }> };
     expect(body.messages[0]).toEqual({ role: "user", content: "hi" });
   });
+
+  // ---- 图片块转换（known-issues 问题 1：Anthropic 协议发图 400）----
+
+  test("image 块：data URL 转成 Anthropic base64 image block（不再直传 OpenAI image_url）", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    const req = adapter.buildRequest(
+      {
+        model: "m",
+        messages: [{
+          role: "user",
+          content: [{ type: "image_url", image_url: { url: "data:image/png;base64,iVBORw0KGgo=" } }],
+        }],
+      },
+      { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "k" },
+    );
+    const body = JSON.parse(req.body) as { messages: Array<{ role: string; content: unknown }> };
+    expect(body.messages[0].content).toEqual([
+      { type: "image", source: { type: "base64", media_type: "image/png", data: "iVBORw0KGgo=" } },
+    ]);
+  });
+
+  test("image 块：白名单外的 data URL MIME 降级为文本占位块，避免 400", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    const req = adapter.buildRequest(
+      {
+        model: "m",
+        messages: [{
+          role: "user",
+          content: [{ type: "image_url", image_url: { url: "data:image/bmp;base64,QQ==" } }],
+        }],
+      },
+      { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "k" },
+    );
+    const body = JSON.parse(req.body) as { messages: Array<{ role: string; content: Array<{ type: string; text?: string }> }> };
+    const blocks = body.messages[0].content;
+    expect(blocks[0].type).toBe("text");
+    expect(blocks[0].text).toContain("image/bmp");
+  });
+
+  test("image 块：http URL 转成 Anthropic url image block", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    const req = adapter.buildRequest(
+      {
+        model: "m",
+        messages: [{
+          role: "user",
+          content: [{ type: "image_url", image_url: { url: "https://example.test/cat.png" } }],
+        }],
+      },
+      { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "k" },
+    );
+    const body = JSON.parse(req.body) as { messages: Array<{ role: string; content: unknown }> };
+    expect(body.messages[0].content).toEqual([
+      { type: "image", source: { type: "url", url: "https://example.test/cat.png" } },
+    ]);
+  });
+
+  test("image 块：混合 text + image 按序转换", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    const req = adapter.buildRequest(
+      {
+        model: "m",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "text", text: "看这张图" },
+            { type: "image_url", image_url: { url: "data:image/jpeg;base64,/9j/4AAQ" } },
+          ],
+        }],
+      },
+      { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "k" },
+    );
+    const body = JSON.parse(req.body) as { messages: Array<{ role: string; content: unknown }> };
+    expect(body.messages[0].content).toEqual([
+      { type: "text", text: "看这张图" },
+      { type: "image", source: { type: "base64", media_type: "image/jpeg", data: "/9j/4AAQ" } },
+    ]);
+  });
+
+  test("image 块：webp/gif 也在白名单内", () => {
+    const adapter = new AnthropicAdapter("test-anthropic", anthropicCap);
+    const req = adapter.buildRequest(
+      {
+        model: "m",
+        messages: [{
+          role: "user",
+          content: [
+            { type: "image_url", image_url: { url: "data:image/webp;base64,AAAA" } },
+            { type: "image_url", image_url: { url: "data:image/gif;base64,BBBB" } },
+          ],
+        }],
+      },
+      { provider: "p", baseUrl: "https://e.test/v1", model: "m", apiKey: "k" },
+    );
+    const body = JSON.parse(req.body) as { messages: Array<{ role: string; content: Array<{ type: string }> }> };
+    expect(body.messages[0].content.map((b) => b.type)).toEqual(["image", "image"]);
+  });
 });

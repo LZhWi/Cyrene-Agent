@@ -295,12 +295,14 @@ function withDirectImageAttachments(messages: ChatMessage[], input: AguiRunInput
   for (const image of images) {
     const validated = validateCaptionImagePath(image.filePath);
     if (!validated.ok) {
+      console.warn(`[image-send] 直发挂块失败 ${image.name}: 读取失败 ${validated.error}`);
       blocks.push({
         type: "text",
         text: `图片 ${image.name} 无法读取：${validated.error}。请诚实说明暂时无法看清这张图，不要编造图片内容。`,
       });
       continue;
     }
+    console.log(`[image-send] 直发挂块 ${image.name}: ok ${validated.mime} ${validated.buffer.length}B`);
     blocks.push({
       type: "image_url",
       image_url: { url: `data:${validated.mime};base64,${validated.buffer.toString("base64")}` },
@@ -320,7 +322,15 @@ async function withCaptionedImageAttachments(
   const images = input.imageAttachments?.filter((image) =>
     typeof image?.filePath === "string" && typeof image?.name === "string",
   ) ?? [];
-  if (images.length === 0 || !deps.captionImageForFallback) return messages;
+  if (images.length === 0) return messages;
+  // [image-send] 链路日志②：降级路径上没有独立视觉配置时，图片会被完全丢弃
+  // （只剩文件名文本）——这是一个静默失败点，必须显式告知。
+  if (!deps.captionImageForFallback) {
+    console.warn(
+      `[image-send] 图片降级但未配置独立视觉模型（captionImageForFallback 缺失），${images.length} 张图将不会带给主模型`,
+    );
+    return messages;
+  }
 
   const captionedMessages = messages.map((message) => ({ ...message }));
   const latestUserIndex = captionedMessages.map((message) => message.role).lastIndexOf("user");
@@ -332,8 +342,10 @@ async function withCaptionedImageAttachments(
   for (const image of images) {
     const result = await deps.captionImageForFallback(image.filePath);
     if (result.ok && result.caption) {
+      console.log(`[image-send] caption 降级 ${image.name}: ok`);
       imageLines.push(`- ${image.name}：${result.caption}`);
     } else {
+      console.warn(`[image-send] caption 降级 ${image.name}: 失败 ${result.error ?? "未知错误"}`);
       imageLines.push(`- ${image.name}：图片分析失败：${result.error || "图片分析失败"}。请诚实说明暂时无法看清这张图。`);
     }
   }
@@ -746,14 +758,28 @@ export async function buildAgentRunOptions(
   // `multimodal=false` is an explicit user decision: never send image bytes to
   // the main model.  Describe first with the independent vision model, then
   // give Harness only the resulting text context.
-  const primaryModelIsMultimodal = settings.multimodal !== false;
-  const fcMessages: ChatMessage[] = primaryModelIsMultimodal
+  // 直发判定只看用户开关：能力对错交给服务端仲裁（400 时 chat-loop 会用
+  // imageCaptionFallback 自动降级重试）。不维护「哪个协议支持发图」的静态表——
+  // 该信息必然滞后于服务端实际状态（MiniMax /anthropic 支持发图晚于文档标注）。
+  const directVisionOk = settings.multimodal !== false;
+  // [image-send] 链路日志①：直发判定。图片"传不过去"先看这条——
+  // direct=false 时图片走 caption 降级/文本占位，根本不会以 image 块发给主模型。
+  if (input.imageAttachments?.length) {
+    console.log("[image-send] 直发判定:", {
+      provider: settings.provider,
+      model: settings.model,
+      multimodal开关: directVisionOk,
+      图片数: input.imageAttachments.length,
+      结果: directVisionOk ? "直发 image 块" : "降级（caption/文本占位）",
+    });
+  }
+  const fcMessages: ChatMessage[] = directVisionOk
     ? withDirectImageAttachments(llmMessages as unknown as ChatMessage[], input)
     : await withCaptionedImageAttachments(llmMessages as unknown as ChatMessage[], input, deps);
-  const cleanFcMessages: ChatMessage[] = primaryModelIsMultimodal
+  const cleanFcMessages: ChatMessage[] = directVisionOk
     ? withDirectImageAttachments(cleanLlm as unknown as ChatMessage[], input)
     : await withCaptionedImageAttachments(cleanLlm as unknown as ChatMessage[], input, deps);
-  const imageCaptionFallback = primaryModelIsMultimodal
+  const imageCaptionFallback = directVisionOk
     ? buildImageCaptionFallbackMessages(
     isChatMode
       ? [soulSystemWithoutCita, soulRuntimeContext].filter(Boolean).join("\n\n---\n\n")

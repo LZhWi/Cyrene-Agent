@@ -27,6 +27,7 @@ import { getHarnessRunStore } from "../orchestrator/harness/run-store";
 import { getRunReviewTracker } from "../orchestrator/review/run-review-tracker";
 import { getAdapterForConfig } from "../orchestrator/vendors";
 import { callSummarizeModel } from "../orchestrator/context-manager";
+import { buildContextUsageSnapshot } from "../orchestrator/context-usage";
 
 function broadcastChanged(senderWebContents?: WebContents | null): void {
   for (const win of BrowserWindow.getAllWindows()) {
@@ -202,6 +203,38 @@ export function registerChatsIpc(): void {
         const nextMessages = [...head, summaryMessage, ...keepMessages];
         const updated = chatsStore.replaceMessages(sessionId, nextMessages);
         if (!updated) return { ok: false, error: "会话不存在" };
+
+        // 压缩成功后写 session 级上下文快照，环形图立即可见压缩效果
+        // （known-issues 问题 3：手动压缩不产生 run，没有 preRequest 快照）。
+        // 非 conversation 桶（systemPrompt/tools/skills 等）压缩前后不变，
+        // 从最近一条消息级快照继承；conversation 桶按压缩后消息重算。
+        const lastSnapshot = session.messages.filter((message) => message.contextUsage).pop()?.contextUsage;
+        const compactModelMessages = nextMessages
+          .filter((message) => typeof message.content === "string" && message.content.trim())
+          .map((message) => ({
+            role: message.role === "user" ? ("user" as const) : ("assistant" as const),
+            content: message.content as string,
+          }));
+        const snapshot = buildContextUsageSnapshot({
+          phase: "terminal",
+          contextWindowTokens: lastSnapshot?.contextWindowTokens
+            ?? settings.contextWindowTokens
+            ?? 256000,
+          personaContent: "",
+          messages: compactModelMessages as never,
+        });
+        if (lastSnapshot) {
+          snapshot.categories = snapshot.categories.map((category) => (
+            category.key === "conversation" || category.key === "toolDefinitions"
+              ? category
+              : {
+                  key: category.key,
+                  tokens: lastSnapshot.categories.find((item) => item.key === category.key)?.tokens ?? 0,
+                }
+          ));
+          snapshot.totalTokens = snapshot.categories.reduce((sum, category) => sum + category.tokens, 0);
+        }
+        chatsStore.setSessionContextUsage(sessionId, snapshot);
 
         // 压缩结果由主进程改写，发起窗口并不知情；必须广播给所有窗口
         // （含 sender）触发聊天窗口重载，不能走跳过 sender 的来源隔离。

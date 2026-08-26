@@ -112,7 +112,10 @@ export async function callLLM(
     signal,
   });
   if (!response.ok) {
-    const errorData = (await response.json().catch(() => ({}))) as { error?: { message?: string } };
+    // [image-send] 链路日志④：服务端拒绝时打印完整错误体（Anthropic 400 会带具体 reason）。
+    const rawBody = await response.text().catch(() => "");
+    console.error(`[image-send] LLM 请求被拒 HTTP ${response.status}:`, rawBody.slice(0, 500) || "(无响应体)");
+    const errorData = JSON.parse(rawBody || "{}") as { error?: { message?: string } };
     throw new Error(errorData.error?.message || `模型请求失败：HTTP ${response.status}`);
   }
   return recordResponseUsage(adapter.parseResponse(await response.json()));
@@ -152,6 +155,8 @@ export async function summarizeHistory(
   });
 
   if (!response.ok) {
+    const rawBody = await response.text().catch(() => "");
+    console.error(`[image-send] 摘要请求被拒 HTTP ${response.status}:`, rawBody.slice(0, 500) || "(无响应体)");
     throw new Error(`摘要请求失败：HTTP ${response.status}`);
   }
 

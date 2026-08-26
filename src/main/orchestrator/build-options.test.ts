@@ -548,6 +548,10 @@ describe("build-options", () => {
       0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
     ]))
 
+    // 直发判定只看 multimodal 开关（默认开）：任意 provider/协议都直发，
+    // 能力对错由服务端仲裁（400 时 chat-loop 走 imageCaptionFallback 降级）。
+    const deps = createBuildDeps()
+
     const result = await buildAgentRunOptions({
       messages: [
         { role: "user", content: "上一轮" },
@@ -556,7 +560,7 @@ describe("build-options", () => {
       ],
       style: "01_default.md",
       imageAttachments: [{ name: "图 像.png", filePath: imagePath, mime: "image/png" }],
-    }, createBuildDeps())
+    }, deps)
 
     const latestUser = result.options.messages.at(-1)
     expect(latestUser?.content).toEqual([
@@ -604,6 +608,55 @@ describe("build-options", () => {
     expect(userMessage?.content).toContain("这图哪里不对？")
     expect(userMessage?.content).toContain("setup.png：画面里有一张安装截图")
     expect(userMessage?.content).not.toContain("image_url")
+  })
+
+  it("MiniMax + anthropic 入口直发 image 块（anthropic-adapter 会转成 image source 块）", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-image-mm-m3-"))
+    const imagePath = path.join(dir, "shot.png")
+    fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+
+    const deps = createBuildDeps()
+    deps.loadModelSettings = () => ({
+      provider: "MiniMax（稀宇科技）", baseUrl: "https://api.minimaxi.com/anthropic", model: "MiniMax-M3", apiKey: "k",
+    })
+    deps.captionImageForFallback = async () => ({ ok: true, caption: "一张截图" })
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "看图" }],
+      imageAttachments: [{ name: "shot.png", filePath: imagePath, mime: "image/png" }],
+    }, deps)
+
+    const latestUser = result.options.messages.at(-1)
+    expect(latestUser?.content).toEqual([
+      { type: "text", text: "看图" },
+      { type: "image_url", image_url: { url: expect.stringMatching(/^data:image\/png;base64,/) } },
+    ])
+    // 直发场景构建 caption 兜底（直发 400 时可降级重试）。
+    expect(result.options.imageCaptionFallback).toBeDefined()
+  })
+
+  it("MiniMax M2.7 开关开着也直发（本地不做模型级防呆，能力由服务端仲裁）", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-image-mm-m2-"))
+    const imagePath = path.join(dir, "shot.png")
+    fs.writeFileSync(imagePath, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
+
+    const deps = createBuildDeps()
+    deps.loadModelSettings = () => ({
+      provider: "MiniMax（稀宇科技）", baseUrl: "https://api.minimaxi.com/anthropic", model: "MiniMax-M2.7", apiKey: "k",
+    })
+
+    const result = await buildAgentRunOptions({
+      messages: [{ role: "user", content: "看图" }],
+      imageAttachments: [{ name: "shot.png", filePath: imagePath, mime: "image/png" }],
+    }, deps)
+
+    // 用户开了多模态开关就直发：M2.x 拒收与否由服务端说了算，
+    // 失败时 chat-loop 用 imageCaptionFallback 降级重试。
+    const latestUser = result.options.messages.at(-1)
+    expect(latestUser?.content).toEqual([
+      { type: "text", text: "看图" },
+      { type: "image_url", image_url: { url: expect.stringMatching(/^data:image\/png;base64,/) } },
+    ])
   })
 
   it("has distinct system text for Feishu work chat", () => {

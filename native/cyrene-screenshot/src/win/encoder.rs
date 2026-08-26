@@ -214,6 +214,17 @@ fn run_encode_job(job: &EncodeJob) -> Result<(), HelperError> {
         ));
     }
 
+    // WIC InitializeFromFilename does not create parent directories; a
+    // missing output dir surfaces as 0x80070003 (ERROR_PATH_NOT_FOUND).
+    // create_dir_all is idempotent, so this is a cheap belt-and-suspenders
+    // alongside the Electron-side mkdir before spawn.
+    fs::create_dir_all(&job.output_dir).map_err(|error| {
+        HelperError::CaptureFailed(format!(
+            "create output dir {} failed: {error}",
+            job.output_dir.display()
+        ))
+    })?;
+
     // SAFETY: CoCreateInstance with CLSID_WICImagingFactory and an
     // IUnknown-derived interface (IWICImagingFactory). The factory is
     // thread-safe (WIC documentation); using CLSCTX_INPROC_SERVER (the
