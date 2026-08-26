@@ -125,6 +125,7 @@ export class WindowManager {
     return image?.toDataURL() ?? null;
   }
 
+  // TODO(holocubic-closeout): Remove this obsolete desktop-capture helper and its bitmap dependency during final cleanup.
   async captureMainWindowJpeg(width: number, height: number, quality: number, zoom = 1): Promise<Buffer | null> {
     const image = await this.captureMainWindow();
     if (!image || image.isEmpty()) return null;
