@@ -58,6 +58,13 @@ export interface ReasoningCapability {
    * Kimi K2.6 = true；K2.5 = false。
    */
   keepOnTools?: boolean;
+  /**
+   * auto 档显式映射的 effort。不设置时 auto = 不发字段（交给服务端默认）。
+   * 用于服务端默认档不可控/过重的模型：GLM-5.3 服务端默认 effort=max，
+   * auto 不发字段 ≡ max，多步任务思考会吃穿输出预算（2026-08-27 issue 3）。
+   * 设置后 auto 在 wire 层按 { mode: "on", effort: autoEffort } 发送。
+   */
+  autoEffort?: ReasoningEffort;
 }
 
 export interface ReasoningPreference {
@@ -170,12 +177,25 @@ export const MODEL_REASONING_RULES: readonly ModelReasoningRule[] = [
 
   // ── glm（智谱）──
   // 精确型号在前；glm-5 基础型号放在精确型号之后（兜底更宽的 glm-5 系列）。
-  { providerId: "glm", modelPattern: /^glm-5\.[23]/i, capability: {
+  // GLM-5.3：强制思考模型（thinking.type=disabled 服务端报错，官方文档 2026-08-26），
+  // 支持 low/high/max 三档 effort。auto 档显式映射 high —— 服务端默认 max，
+  // auto 不发字段 ≡ max，多步任务思考爆炸（2026-08-27 issue 2/3）。
+  { providerId: "glm", modelPattern: /^glm-5\.3/i, capability: {
     control: "toggle-effort",
-    supportedEfforts: ["high", "max"],
+    supportedEfforts: ["low", "high", "max"],
+    defaultEffort: "high",
+    requestStyle: "thinking-type",
+    supportsDisable: false,
+    autoEffort: "high",
+  } },
+  // GLM-5.2：支持关闭思考；effort 档位较全。auto 同样映射 high（服务端默认偏重）。
+  { providerId: "glm", modelPattern: /^glm-5\.2/i, capability: {
+    control: "toggle-effort",
+    supportedEfforts: ["low", "medium", "high", "xhigh", "max"],
     defaultEffort: "high",
     requestStyle: "thinking-type",
     supportsDisable: true,
+    autoEffort: "high",
   } },
   { providerId: "glm", modelPattern: /^glm-5-turbo$/i, capability: {
     control: "toggle",
@@ -224,6 +244,17 @@ export const MODEL_REASONING_RULES: readonly ModelReasoningRule[] = [
   { providerId: "qwen", modelPattern: /.*/, capability: UNKNOWN_CAPABILITY },
 
   // ── kimi（月之暗面）──
+  // K3：旗舰思考模型（2026-07 发布）。思考始终开启（Preserved Thinking 常开），
+  // 不用 K2.x 的 thinking 参数，用顶层 reasoning_effort（low/high/max，默认 max）。
+  // 强制思考 + 服务端默认 max → 与 GLM-5.3 同体质，auto 同样显式映射 high 防思考爆炸。
+  { providerId: "kimi", modelPattern: /^kimi-k3/i, capability: {
+    control: "effort",
+    supportedEfforts: ["low", "high", "max"],
+    defaultEffort: "high",
+    requestStyle: "openai-effort",
+    supportsDisable: false,
+    autoEffort: "high",
+  } },
   // K2.7-Code / K2.7-Code-HighSpeed 必须用精确正则（$-anchor），
   // 且排在通用 kimi-k2-thinking 系列之前。
   { providerId: "kimi", modelPattern: /^kimi-k2\.7-code-highspeed$/i, capability: {

@@ -362,9 +362,20 @@ export function getDefaultModelProfile(settings = loadModelSettings()): SavedMod
   return resolveDefaultModelProfile(listSavedModelProfiles(settings), settings.defaultModelProfileId);
 }
 
-/** 为单次对话展开已保存的模型；未找到时退回当前默认镜像。 */
+/**
+ * 为单次对话展开已保存的模型。
+ * - id 提供 → 展开该档案；档案不存在 → 退回 settings 原样（保持旧行为）。
+ * - id 缺省 → 展开**默认档案**（defaultModelProfileId，缺失时第一个档案）；无任何档案 → settings 原样。
+ *
+ * 不传 id 不能再退回顶层镜像：顶层镜像 = 当前 provider 的 perProvider 项，可能全空
+ * （用户只在档案里配了模型）。channel bot / 定时任务等不带 profileId 的调用方曾因此
+ * 拿到空 baseUrl 直接抛错——飞书/微信消息看得到不回复（2026-08-27 issue 4）。
+ */
 export function resolveModelSettingsProfile(settings: ModelSettings, id?: string): ModelSettings {
-  const profile = id ? listSavedModelProfiles(settings).find((item) => item.id === id) : undefined;
+  const profiles = listSavedModelProfiles(settings);
+  const profile = id
+    ? profiles.find((item) => item.id === id)
+    : resolveDefaultModelProfile(profiles, settings.defaultModelProfileId);
   if (!profile) return settings;
   return {
     ...settings,

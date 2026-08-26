@@ -17,8 +17,8 @@ const LOG = "[ChannelLog]";
 export interface LogEntry {
   /** ISO 时间戳 */
   at: string;
-  /** "incoming" | "outgoing" */
-  dir: "incoming" | "outgoing";
+  /** "incoming" | "outgoing" | "error"（agent 调用/发送失败，打包版排障用） */
+  dir: "incoming" | "outgoing" | "error";
   channel: string;
   senderId: string;
   senderName?: string;

@@ -155,7 +155,16 @@ toolRegistry.register({
 // 在用户机器上跑一行命令，给 agent 装 MCP 时跑 git/npm/pip 等用
 // 注意：不开 shell（spawn shell:false），命令必须是真正的可执行文件，避免 shell 注入
 
-const SHELL_TIMEOUT_MS = 5 * 60_000; // 5 分钟兜底
+// 双计时器：不看命令跑了多久，看它多久没动静。
+// - idle：连续 2 分钟无任何 stdout/stderr → 判定卡死（serve/watch 类静默进程、网络死锁）。
+//   npm install / git push / 打包这类"长但在动"的命令会持续输出，不会误杀。
+// - total：30 分钟总上限，无论如何强制结束（兜底）。
+const SHELL_IDLE_TIMEOUT_MS = 2 * 60_000;
+const SHELL_TOTAL_TIMEOUT_MS = 30 * 60_000;
+// killTree 后等 close 的宽限期。taskkill /T 在进程链断开时会漏杀孙进程，
+// 孙进程持有的 stdio 管道不关 → close 永不触发 → Promise 永不 resolve（655 分钟挂死的根因）。
+// 宽限期一到无条件强制收尸，带上已收集的部分输出。
+const SHELL_KILL_GRACE_MS = 2_000;
 const SHELL_MAX_OUTPUT = 16 * 1024;  // 单次最多 16KB stdout/stderr
 
 // ── Shell 输出解码 ─────────────────────────────────────
@@ -197,6 +206,8 @@ interface ShellResult {
   stderr: string;
   truncated: boolean;
   ranViaSandbox: boolean;
+  /** 因 idle/total 超时或外部取消而被强制终止 */
+  timedOut: boolean;
 }
 
 /** 可靠终止进程树。Windows 上 child.kill("SIGKILL") 只杀直接子进程，杀不掉孙进程。 */
@@ -229,6 +240,7 @@ function runShellOnce(
   extraEnv?: Record<string, string>,
   useSandbox?: boolean,
   requestedShell: ShellKind = "cmd",
+  signal?: AbortSignal,
 ): Promise<ShellResult> {
   return new Promise((resolve) => {
     (async () => {
@@ -242,6 +254,7 @@ function runShellOnce(
           stderr: "[BASH_UNAVAILABLE] 未找到可用的 Bash。请安装 Git Bash，并确保 bash.exe 可执行。",
           truncated: false,
           ranViaSandbox: false,
+          timedOut: false,
         });
         return;
       }
@@ -297,12 +310,65 @@ function runShellOnce(
       let stdoutBytes = 0;
       let stderrBytes = 0;
       let truncated = false;
-      const timeoutTimer = setTimeout(() => {
-        console.warn(LOG_PREFIX, "run_shell 超时，kill 进程树:", command);
+
+      // ── 双计时器 + 强制收尸 ──────────────────────────────
+      // settled 保证只 resolve 一次；close/error/强制收尸任何一方先到都安全。
+      let settled = false;
+      let idleTimer: NodeJS.Timeout | undefined;
+      let totalTimer: NodeJS.Timeout | undefined;
+      let killGraceTimer: NodeJS.Timeout | undefined;
+      const clearTimers = () => {
+        clearTimeout(idleTimer);
+        clearTimeout(totalTimer);
+        clearTimeout(killGraceTimer);
+      };
+      const finish = (result: ShellResult) => {
+        if (settled) return;
+        settled = true;
+        clearTimers();
+        if (signal) signal.removeEventListener("abort", onAbort);
+        resolve(result);
+      };
+      type StuckReason = "idle" | "total" | "cancelled";
+      const reasonText: Record<StuckReason, string> = {
+        idle: `命令连续 ${SHELL_IDLE_TIMEOUT_MS / 60_000} 分钟无任何输出（疑似常驻进程或卡死）`,
+        total: `命令超过 ${SHELL_TOTAL_TIMEOUT_MS / 60_000} 分钟总上限`,
+        cancelled: "所在任务已被用户取消",
+      };
+      const onStuck = (reason: StuckReason) => {
+        console.warn(LOG_PREFIX, `run_shell 终止(${reason})，kill 进程树:`, command);
         killTree(child);
-      }, SHELL_TIMEOUT_MS);
+        // 宽限期后强制收尸：close 事件要求 stdio 管道全关，taskkill 漏杀孙进程时
+        // 管道保持打开、close 永不触发。宽限期内 close 正常到达则 finish 已短路。
+        killGraceTimer = setTimeout(() => {
+          finish({
+            shell: requestedShell,
+            shellExecutable: resolvedShell.executable,
+            exitCode: null,
+            stdout: decodeShellOutput(stdoutChunks),
+            stderr: decodeShellOutput(stderrChunks)
+              + `\n[已终止] ${reasonText[reason]}，进程树已被强制终止。`,
+            truncated,
+            ranViaSandbox,
+            timedOut: true,
+          });
+        }, SHELL_KILL_GRACE_MS);
+      };
+      const resetIdle = () => {
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => onStuck("idle"), SHELL_IDLE_TIMEOUT_MS);
+      };
+      const onAbort = () => onStuck("cancelled");
+
+      totalTimer = setTimeout(() => onStuck("total"), SHELL_TOTAL_TIMEOUT_MS);
+      resetIdle();
+      if (signal) {
+        if (signal.aborted) onStuck("cancelled");
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
 
       child.stdout?.on("data", (chunk: Buffer) => {
+        resetIdle();
         if (stdoutBytes >= SHELL_MAX_OUTPUT) {
           truncated = true;
           return;
@@ -312,6 +378,7 @@ function runShellOnce(
         if (stdoutBytes > SHELL_MAX_OUTPUT) truncated = true;
       });
       child.stderr?.on("data", (chunk: Buffer) => {
+        resetIdle();
         if (stderrBytes >= SHELL_MAX_OUTPUT) {
           truncated = true;
           return;
@@ -321,8 +388,7 @@ function runShellOnce(
         if (stderrBytes > SHELL_MAX_OUTPUT) truncated = true;
       });
       child.on("error", (err) => {
-        clearTimeout(timeoutTimer);
-        resolve({
+        finish({
           shell: requestedShell,
           shellExecutable: resolvedShell.executable,
           exitCode: -1,
@@ -330,11 +396,11 @@ function runShellOnce(
           stderr: decodeShellOutput(stderrChunks) + "\n[spawn error] " + err.message + (ranViaSandbox ? " [sandbox]" : ""),
           truncated,
           ranViaSandbox,
+          timedOut: false,
         });
       });
       child.on("close", (code) => {
-        clearTimeout(timeoutTimer);
-        resolve({
+        finish({
           shell: requestedShell,
           shellExecutable: resolvedShell.executable,
           exitCode: code,
@@ -342,6 +408,7 @@ function runShellOnce(
           stderr: decodeShellOutput(stderrChunks),
           truncated,
           ranViaSandbox,
+          timedOut: false,
         });
       });
     })().catch((err) => {
@@ -354,6 +421,7 @@ function runShellOnce(
         stderr: "[runShellOnce internal error] " + msg,
         truncated: false,
         ranViaSandbox: false,
+        timedOut: false,
       });
     });
   });
@@ -393,14 +461,14 @@ async function executeRunShell(args: Record<string, unknown>, context?: import("
   // full 档位：直接 spawn，不走沙箱（用户已选择完全信任）
   if (level === "full") {
     logger.info(LogTag.BuiltinTools, `[run_shell] full level → direct ${requestedShell} (no sandbox)`);
-    const result = await runShellOnce(command, cwd, undefined, false, requestedShell);
-    logger.info(LogTag.BuiltinTools, `[run_shell] [full] done: exitCode=${result.exitCode} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length}`);
+    const result = await runShellOnce(command, cwd, undefined, false, requestedShell, context?.signal);
+    logger.info(LogTag.BuiltinTools, `[run_shell] [full] done: exitCode=${result.exitCode} timedOut=${result.timedOut} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length}`);
     return JSON.stringify({
       command, cwd, shell: result.shell, shellExecutable: result.shellExecutable, errorCode: result.errorCode,
       exitCode: result.exitCode,
       stdout: result.stdout,
       stderr: result.stderr,
-      timedOut: false,
+      timedOut: result.timedOut,
       truncated: result.truncated,
       effect,
       sandboxed: false,
@@ -424,7 +492,7 @@ async function executeRunShell(args: Record<string, unknown>, context?: import("
 
   const useSandbox = isSandboxReady();
   logger.info(LogTag.BuiltinTools, `[run_shell] ${level} → useSandbox=${useSandbox} effect=${effect}`);
-  const result = await runShellOnce(command, cwd, undefined, useSandbox, requestedShell);
+  const result = await runShellOnce(command, cwd, undefined, useSandbox, requestedShell, context?.signal);
 
   // 写副作用命令若 fallback 到直接 spawn（沙箱 wrap 失败）→ 拒绝
   if (requiresSandbox && useSandbox && !result.ranViaSandbox) {
@@ -433,17 +501,17 @@ async function executeRunShell(args: Record<string, unknown>, context?: import("
       command, cwd, shell: result.shell, shellExecutable: result.shellExecutable, errorCode: result.errorCode,
       exitCode: -1, stdout: result.stdout,
       stderr: result.stderr + "\n[拒绝] 沙箱不可用，该命令可能修改工作区，已终止",
-      timedOut: false, truncated: result.truncated, effect, sandboxed: false,
+      timedOut: result.timedOut, truncated: result.truncated, effect, sandboxed: false,
     });
   }
 
-  logger.info(LogTag.BuiltinTools, `[run_shell] [${level}] done: exitCode=${result.exitCode} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length} sandboxed=${result.ranViaSandbox}`);
+  logger.info(LogTag.BuiltinTools, `[run_shell] [${level}] done: exitCode=${result.exitCode} timedOut=${result.timedOut} stdout.len=${result.stdout.length} stderr.len=${result.stderr.length} sandboxed=${result.ranViaSandbox}`);
   return JSON.stringify({
     command, cwd, shell: result.shell, shellExecutable: result.shellExecutable, errorCode: result.errorCode,
     exitCode: result.exitCode,
     stdout: result.stdout,
     stderr: result.stderr,
-    timedOut: false,
+    timedOut: result.timedOut,
     truncated: result.truncated,
     effect,
     sandboxed: result.ranViaSandbox,
@@ -475,6 +543,8 @@ toolRegistry.register({
     "- 列目录 → list_dir\n" +
     "- 搜索代码内容 → search_text\n" +
     "- 下载网页 → fetch_url\n" +
+    "- 启动常驻进程（dev server / npx serve / watch / tail -f）→ 本工具只适合跑完就退出的命令，" +
+    "常驻进程会在 2 分钟无输出后被强制终止；需要预览服务时，构建完成后告知用户自行启动\n" +
     "- 能用专用工具完成的事\n\n" +
     "安全说明：非完全信任档位下，写副作用的命令会在沙箱中执行（限制文件系统访问范围）。" +
     "灾难命令（format/shutdown/dd 等）一律拒绝。\n" +

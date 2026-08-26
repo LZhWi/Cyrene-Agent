@@ -4,6 +4,7 @@ import { getCapabilityOrOpenAI } from "../orchestrator/vendors";
 import { normalizeReasoningPreference } from "../../shared/reasoning";
 import {
   listSavedModelProfiles,
+  getDefaultModelProfile,
   loadModelSettings,
   saveModelProfile,
   saveModelSettings,
@@ -64,14 +65,18 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     return BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false;
   });
 
-  ipcMain.handle(IPC.CHAT_GET_REASONING_STATE, (_event, payload?: { sessionId?: unknown }) => {
+  ipcMain.handle(IPC.CHAT_GET_REASONING_STATE, (_event, payload?: { sessionId?: unknown; modelProfileId?: unknown }) => {
     const baseSettings = loadModelSettings();
     const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : undefined;
     const session = sessionId ? getSession(sessionId) : undefined;
-    const modelProfileId = session?.modelProfileId;
-    const settings = modelProfileId
-      ? resolveModelSettingsProfile(baseSettings, modelProfileId)
-      : baseSettings;
+    // 档案解析优先级：会话绑定 > 渲染端待定档案（欢迎页暂存）> 默认档案。
+    // 不能回退顶层镜像：顶层可能是空壳（provider 指向别家、三件套全空），
+    // 与 channel bot 不回复是同一病根（2026-08-27 issue 5：欢迎页思考强度点开无反应）。
+    const profiles = listSavedModelProfiles(baseSettings);
+    const requestedId = session?.modelProfileId
+      ?? (typeof payload?.modelProfileId === "string" && payload.modelProfileId ? payload.modelProfileId : undefined);
+    const profile = profiles.find((item) => item.id === requestedId) ?? getDefaultModelProfile(baseSettings);
+    const settings = profile ? resolveModelSettingsProfile(baseSettings, profile.id) : baseSettings;
     const cap = getCapabilityOrOpenAI(settings.provider);
     return {
       providerKey: settings.provider,
@@ -79,13 +84,13 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
       model: settings.model,
       preference: settings.reasoning,
       thinkingOverride: resolveVendorRuntimeSettings(settings).thinkingOverride,
-      modelProfileId,
+      modelProfileId: profile?.id ?? null,
     };
   });
 
   ipcMain.handle(IPC.CHAT_SET_REASONING, (_event, payload: unknown) => {
     if (!payload || typeof payload !== "object") return;
-    const p = payload as { sessionId?: unknown; providerKey?: unknown; preference?: unknown };
+    const p = payload as { sessionId?: unknown; modelProfileId?: unknown; providerKey?: unknown; preference?: unknown };
     if (typeof p.providerKey !== "string" || typeof p.preference !== "object" || !p.preference) return;
     const normalized = normalizeReasoningPreference(p.preference);
     if (!normalized) return;
@@ -95,6 +100,17 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     if (session?.modelProfileId) {
       const profile = listSavedModelProfiles(current).find((item) => item.id === session.modelProfileId);
       if (!profile || profile.provider !== p.providerKey) return;
+      saveModelProfile({ ...profile, reasoning: normalized });
+      return;
+    }
+
+    // 无会话（欢迎页）：与 GET 对称——优先写渲染端待定档案，其次默认档案，
+    // 都没有才写顶层镜像。否则 GET 读的是档案、SET 写的是顶层，切了等于没切。
+    const profiles = listSavedModelProfiles(current);
+    const requestedId = typeof p.modelProfileId === "string" && p.modelProfileId ? p.modelProfileId : undefined;
+    const profile = profiles.find((item) => item.id === requestedId) ?? getDefaultModelProfile(current);
+    if (profile) {
+      if (profile.provider !== p.providerKey) return;
       saveModelProfile({ ...profile, reasoning: normalized });
       return;
     }

@@ -8,7 +8,7 @@
 // 决策树见桌面 2026-07-14-reasoning-control-layer-design.md §6.2。
 // 关键不变量：
 //   - 不修改入参 body，返回新对象
-//   - auto 不增加任何字段
+//   - auto 不增加任何字段（capability.autoEffort 显式映射除外，见下方 auto 档映射）
 //   - 不支持的 effort 已在 resolveEffectiveReasoning 退回 defaultEffort
 //     （applyReasoningPreference 信任传入的 preference）
 //   - supportsDisable=false 时 off 不发 reasoning_effort:"none"（修订 #1）
@@ -36,7 +36,7 @@ export function applyReasoningPreference(
   capability: ReasoningCapability,
   context: ApplyReasoningContext,
 ): Record<string, unknown> {
-  const effective = resolveEffectiveReasoning(
+  let effective = resolveEffectiveReasoning(
     preference,
     capability,
     getVendorRuntimeSettings().thinkingOverride,
@@ -82,12 +82,27 @@ export function applyReasoningPreference(
     return result;
   }
 
-  // 2. auto：不增加任何字段
+  // 2. auto 档显式映射（2026-08-27 issue 3）：capability.autoEffort 存在时，
+  //    auto 不再省略字段交给服务端默认 —— GLM-5.3 服务端默认 effort=max，
+  //    auto ≡ max，多步任务思考会吃穿输出预算。映射为 on + autoEffort 走下方 on 路径。
+  if (effective.mode === "auto" && capability.autoEffort) {
+    effective = { mode: "on", effort: capability.autoEffort };
+  }
+
+  // 2.5 off 折叠（2026-08-27 issue 2）：模型不支持关闭（supportsDisable=false，
+  //     如 GLM-5.3 强制思考）时，off 折叠为 on —— 否则 thinking-type 路径会发
+  //     { type: "disabled" }，强制思考模型服务端直接报错；effort 路径虽不发字段，
+  //     但会落服务端默认档（同样可能是 max）。effort 由 on 分支兜底 defaultEffort。
+  if (effective.mode === "off" && !capability.supportsDisable) {
+    effective = { mode: "on" };
+  }
+
+  // 3. auto：不增加任何字段
   if (effective.mode === "auto") {
     return result;
   }
 
-  // 3. off：按 control + requestStyle 注入关闭字段
+  // 4. off：按 control + requestStyle 注入关闭字段（supportsDisable=false 已在 2.5 折叠为 on）
   if (effective.mode === "off") {
     switch (capability.control) {
       case "toggle":
@@ -111,7 +126,7 @@ export function applyReasoningPreference(
     return result;
   }
 
-  // 4. on：按 control + requestStyle 注入启用字段
+  // 5. on：按 control + requestStyle 注入启用字段
   if (effective.mode === "on") {
     switch (capability.control) {
       case "toggle":

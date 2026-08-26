@@ -13,11 +13,13 @@ interface ReasoningState {
   model: string;
   preference?: ReasoningPreference;
   thinkingOverride?: -1 | 0 | 1;
+  /** 主进程实际解析到的档案 id（会话绑定 / 欢迎页待定 / 默认档案），SET 时原样回传保证读写对称 */
+  modelProfileId?: string | null;
 }
 
 interface ChatReasoningApi {
-  getReasoningState: (payload?: { sessionId?: string }) => Promise<ReasoningState>;
-  setReasoning: (payload: { sessionId?: string; providerKey: string; preference: ReasoningPreference }) => Promise<void>;
+  getReasoningState: (payload?: { sessionId?: string; modelProfileId?: string }) => Promise<ReasoningState>;
+  setReasoning: (payload: { sessionId?: string; modelProfileId?: string | null; providerKey: string; preference: ReasoningPreference }) => Promise<void>;
 }
 
 function reasoningApi(): ChatReasoningApi | undefined {
@@ -40,6 +42,7 @@ function ChevronIcon() {
 
 export function ReasoningControl({ sessionId, modelProfileId }: { sessionId?: string; modelProfileId?: string }) {
   const [providerKey, setProviderKey] = useState("");
+  const [resolvedProfileId, setResolvedProfileId] = useState<string | null>(null);
   const [view, setView] = useState<ReasoningDropdownView>();
   const [open, setOpen] = useState(false);
 
@@ -47,8 +50,9 @@ export function ReasoningControl({ sessionId, modelProfileId }: { sessionId?: st
     const api = reasoningApi();
     if (!api) return;
     try {
-      const state = await api.getReasoningState({ sessionId });
+      const state = await api.getReasoningState({ sessionId, modelProfileId });
       setProviderKey(state.providerKey);
+      setResolvedProfileId(state.modelProfileId ?? null);
       setView(computeReasoningDropdown(state.providerId, state.model, state.preference, state.thinkingOverride));
     } catch {
       setView(undefined);
@@ -64,7 +68,7 @@ export function ReasoningControl({ sessionId, modelProfileId }: { sessionId?: st
     const item = view?.items.find((candidate) => preferenceKey(candidate.preference) === value);
     const api = reasoningApi();
     if (!item || item.disabled || !api || !providerKey) return;
-    await api.setReasoning({ sessionId, providerKey, preference: item.preference });
+    await api.setReasoning({ sessionId, modelProfileId: resolvedProfileId, providerKey, preference: item.preference });
     await refresh();
     setOpen(false);
   }

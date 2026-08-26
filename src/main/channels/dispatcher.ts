@@ -302,7 +302,21 @@ export class ChannelDispatcher {
         replyText = result.text;
         sticker = result.sticker;
       } catch (err) {
-        console.error(LOG, "agent 调用失败:", err instanceof Error ? err.message : err);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        console.error(LOG, "agent 调用失败:", errMsg);
+        // 失败落盘（打包版看不到主进程 console；此前"看得到消息但不回复"只能靠猜，issue 4C）
+        try {
+          appendLog({
+            dir: "error",
+            channel: msg.channel,
+            senderId: msg.senderId,
+            senderName: msg.senderName,
+            chatId: msg.chatId,
+            text: `[agent 调用失败] ${errMsg}`,
+          });
+        } catch (logErr) {
+          console.warn(LOG, "appendLog (error) 失败:", logErr);
+        }
         return null;
       }
     } else {

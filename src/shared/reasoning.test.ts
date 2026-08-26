@@ -31,6 +31,16 @@ describe("MODEL_REASONING_RULES — 规则匹配优先级", () => {
     expect(cap.control).toBe("fixed-on");
   });
 
+  test("Kimi kimi-k3 → effort 控制 + openai-effort 风格 + 强制思考 + auto 映射 high", () => {
+    const cap = resolveReasoningCapability("kimi", "kimi-k3");
+    expect(cap.control).toBe("effort");
+    expect(cap.requestStyle).toBe("openai-effort");
+    expect(cap.supportedEfforts).toEqual(["low", "high", "max"]);
+    expect(cap.defaultEffort).toBe("high");
+    expect(cap.supportsDisable).toBe(false);
+    expect(cap.autoEffort).toBe("high");
+  });
+
   test("Kimi kimi-k2.6 命中精确 K2.6 正则", () => {
     const cap = resolveReasoningCapability("kimi", "kimi-k2.6");
     expect(cap.control).toBe("toggle");
@@ -129,16 +139,22 @@ describe("MODEL_REASONING_RULES — 9 家全部存在性", () => {
     expect(cap.supportedEfforts).toEqual(["high", "max"]);
   });
 
-  test("glm glm-5.2 → toggle-effort + [high,max]", () => {
+  test("glm glm-5.2 → toggle-effort + 可关闭 + autoEffort=high", () => {
     const cap = resolveReasoningCapability("glm", "glm-5.2");
     expect(cap.control).toBe("toggle-effort");
-    expect(cap.supportedEfforts).toEqual(["high", "max"]);
+    expect(cap.supportedEfforts).toEqual(["low", "medium", "high", "xhigh", "max"]);
+    expect(cap.supportsDisable).toBe(true);
+    expect(cap.autoEffort).toBe("high");
   });
 
-  test("glm glm-5.3 → toggle-effort + [high,max]", () => {
+  test("glm glm-5.3 → toggle-effort + 强制思考（不可关闭）+ [low,high,max] + autoEffort=high", () => {
     const cap = resolveReasoningCapability("glm", "glm-5.3");
     expect(cap.control).toBe("toggle-effort");
-    expect(cap.supportedEfforts).toEqual(["high", "max"]);
+    expect(cap.supportedEfforts).toEqual(["low", "high", "max"]);
+    // 官方文档 2026-08-26：GLM-5.3 不再支持关闭思考（thinking.type=disabled 报错）
+    expect(cap.supportsDisable).toBe(false);
+    // auto 不发字段 ≡ 服务端默认 max → 显式映射 high（issue 3）
+    expect(cap.autoEffort).toBe("high");
   });
 
   test("glm glm-4.7 → toggle only", () => {

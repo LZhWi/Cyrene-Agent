@@ -156,8 +156,12 @@ describe("model catalog", () => {
     expect(legacyProfile.contextWindowTokens).toBe(256000);
     expect(legacyProfile.multimodal).toBe(false);
 
-    // 未绑定档案 → 原样返回
-    expect(resolveModelSettingsProfile(settings, undefined).contextWindowTokens).toBe(256000);
+    // 未传 id → 展开默认档案（第一个建档项 p-full），不再退回顶层镜像（issue 4：
+    // 顶层镜像可能全空，channel bot 等不带 profileId 的调用方曾拿到空 baseUrl）
+    const defaultResolved = resolveModelSettingsProfile(settings, undefined);
+    expect(defaultResolved.contextWindowTokens).toBe(128000);
+    expect(defaultResolved.multimodal).toBe(true);
+    expect(defaultResolved.baseUrl).toBe("https://a.com");
   });
 
   it("cleans invalid profile-scoped fields back to undefined", () => {

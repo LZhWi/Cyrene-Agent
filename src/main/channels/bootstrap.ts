@@ -1,7 +1,7 @@
 import type { BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import { loadGeneralSettings } from "../settings/settings-facade";
-import { loadModelSettings, loadVisionConfig } from "../settings/model-settings";
+import { loadModelSettings, loadVisionConfig, resolveModelSettingsProfile } from "../settings/model-settings";
 import { CyreneAgent } from "../orchestrator/cyrene-agent";
 import { toolRegistry } from "../orchestrator/tool-registry";
 import { decideImageSendStrategy } from "../chat/image-send-strategy";
@@ -60,7 +60,8 @@ export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSu
         content: m.content,
       }));
 
-    const channelModelSettings = loadModelSettings();
+    // 图片发送策略也基于解析后的配置（默认档案）——顶层镜像可能全空（issue 4）
+    const channelModelSettings = resolveModelSettingsProfile(loadModelSettings());
     const imageSendStrategy = decideImageSendStrategy({
       multimodal: channelModelSettings.multimodal,
       vision: loadVisionConfig(),
