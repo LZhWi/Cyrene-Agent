@@ -24,6 +24,7 @@ let callWindow: BrowserWindow | null = null;
 let asrStream: AsrStreamSession | null = null;
 let currentState: CallState = "IDLE";
 let finalText = "";
+let latestPartialText = "";
 let active = false;
 
 /** 通话上下文：保留最近 N 轮对话历史（每轮 = user + assistant 一对）。
@@ -140,6 +141,7 @@ export function startCall(): void {
 
   active = true;
   finalText = "";
+  latestPartialText = "";
   callHistory.length = 0;
   console.log(LOG_PREFIX, "startCall 重置: finalText 清空, history 清空");
   startAsrStream(cfg);
@@ -150,8 +152,8 @@ export function startCall(): void {
 function startAsrStream(cfg: AsrConfig): void {
   asrStream = createAsrStream(
     cfg,
-    (text) => sendAsrResult(text, undefined),
-    (text) => { finalText = text; sendAsrResult(undefined, text); },
+    (text) => { latestPartialText = text; sendAsrResult(text, undefined); },
+    (text) => { finalText = text; latestPartialText = text; sendAsrResult(undefined, text); },
   );
   void asrStream.start().catch((err) => {
     const message = err instanceof Error ? err.message : String(err);
@@ -165,28 +167,32 @@ export async function endTurn(): Promise<void> {
   console.log(LOG_PREFIX, "endTurn 入口: active=", active, "state=", currentState, "finalText.length=", finalText.length);
   if (!active || currentState !== "LISTENING") return;
 
+  // 立即离开 LISTENING，避免批量转写等待期间被手动按钮或 VAD 重复提交。
+  sendState("THINKING");
+
   if (asrStream) {
     try {
       await asrStream.stop();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       sendError(message);
+      sendState("LISTENING");
       restartAsr();
       return;
     }
   }
 
-  const text = finalText.trim();
+  const text = finalText.trim() || latestPartialText.trim();
   finalText = "";
+  latestPartialText = "";
 
   if (!text) {
     // 空文本，直接重启 ASR 回 LISTENING
     console.log(LOG_PREFIX, "endTurn 空文本，直接重启 ASR");
+    sendState("LISTENING");
     restartAsr();
     return;
   }
-
-  sendState("THINKING");
 
   try {
     // 调 agent 获取回复
@@ -297,12 +303,15 @@ function restartAsr(): void {
     console.warn(LOG_PREFIX, "停止上一轮 ASR 失败:", err);
   });
   finalText = "";
+  latestPartialText = "";
   startAsrStream(cfg);
 }
 
 /** 挂断：清理一切。 */
 export function stopCall(): void {
   active = false;
+  finalText = "";
+  latestPartialText = "";
   callHistory.length = 0;
   if (asrStream) {
     void Promise.resolve(asrStream.stop()).catch((err) => {

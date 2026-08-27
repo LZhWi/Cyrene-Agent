@@ -155,9 +155,22 @@ body { overflow: hidden; }
 /* 柱状胶囊波形（用户说话时跳动，色值 #F7BDD6） */
 .call__mic-wave {
   display: flex; align-items: flex-end; justify-content: center; gap: 8px;
-  height: 55px; transition: opacity 0.2s; opacity: 0;
+  width: 96px; height: 55px; padding: 0 8px; border: 0;
+  background: transparent; cursor: pointer; opacity: 0;
+  transition: opacity 0.2s, transform 0.15s, filter 0.15s;
 }
 .call__mic-wave.is-active { opacity: 1; }
+.call__mic-wave.is-active:not(:disabled):hover {
+  transform: scale(1.06);
+  filter: drop-shadow(0 4px 8px rgba(247, 189, 214, 0.55));
+}
+.call__mic-wave.is-active:not(:disabled):active { transform: scale(0.94); }
+.call__mic-wave:focus-visible {
+  outline: 2px solid var(--rb-pink-200);
+  outline-offset: 5px;
+  border-radius: 12px;
+}
+.call__mic-wave:disabled { cursor: default; }
 .call__mic-wave-bar {
   width: 10px; border-radius: 5px;
   background: var(--rb-pink-200);

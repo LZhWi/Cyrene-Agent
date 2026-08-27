@@ -4,6 +4,7 @@
 // 用户说话时：柱状胶囊波形跳动 + 头像外圈音量波形
 // 昔涟说话时：电波环脉冲扩散 + 波形隐藏
 import "../ui/theme";
+import { createTurnSubmitter, type TurnSubmitter } from "./turn-submission";
 
 // ── 粒子背景 ──
 const canvas = document.getElementById("particles") as HTMLCanvasElement | null;
@@ -71,7 +72,7 @@ function drawParticles(): void {
 const statusEl = document.getElementById("call-status") as HTMLElement;
 const ringEl = document.getElementById("avatar-ring") as HTMLElement;
 const waveformCanvas = document.getElementById("waveform-canvas") as HTMLCanvasElement | null;
-const micWaveEl = document.getElementById("mic-wave") as HTMLElement;
+const micWaveEl = document.getElementById("mic-wave") as HTMLButtonElement;
 const micBars = micWaveEl ? Array.from(micWaveEl.querySelectorAll(".call__mic-wave-bar")) : [];
 const transcriptEl = document.getElementById("transcript") as HTMLElement;
 const hangupBtn = document.getElementById("hangup-btn") as HTMLButtonElement;
@@ -122,9 +123,12 @@ function stopCallTimer(): void {
 type CallState = "IDLE" | "LISTENING" | "THINKING" | "SPEAKING" | "ERROR" | "ENDED";
 let currentState: CallState = "IDLE";
 let showTranscript = false; // 从设置读取
+let turnSubmitter: TurnSubmitter | null = null;
 
 function setState(state: CallState): void {
   currentState = state;
+  if (state === "LISTENING") turnSubmitter?.reset();
+  else turnSubmitter?.syncAvailability();
   updateUI();
 }
 
@@ -370,9 +374,9 @@ function startVAD(): void {
         console.log("[Call VAD] 静默开始，准备结束本轮");
         vadSilenceTimer = setTimeout(() => {
           console.log("[Call] VAD 静默检测触发，结束本轮");
-          window.call?.turnEnd();
           vadSilenceTimer = null;
           hasSpoken = false;
+          turnSubmitter?.request();
         }, vadSilenceMs);
       }
     }
@@ -483,6 +487,20 @@ function stopTts(): void {
   if (currentAudio) { currentAudio.pause(); currentAudio = null; }
   stopLive2dMouth();
 }
+
+turnSubmitter = createTurnSubmitter({
+  button: micWaveEl,
+  isListening: () => currentState === "LISTENING",
+  sendTurn: () => {
+    if (vadSilenceTimer) {
+      clearTimeout(vadSilenceTimer);
+      vadSilenceTimer = null;
+    }
+    hasSpoken = false;
+    window.call?.turnEnd();
+  },
+});
+turnSubmitter.syncAvailability();
 
 // ── IPC 事件监听 ──
 window.call?.onState((state: string) => {
