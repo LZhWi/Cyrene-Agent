@@ -44,7 +44,7 @@ interface ChatMessage {
   content?: string;
 }
 
-type TtsAudioFormat = "mp3" | "wav" | "pcm";
+type TtsAudioFormat = "mp3" | "wav" | "pcm" | "opus";
 
 interface DispatcherTtsContext {
   channel: ChannelId;
@@ -54,7 +54,7 @@ interface DispatcherTtsResult {
   audio: Buffer;
   format: TtsAudioFormat;
   mime: string;
-  extension: ".mp3" | ".wav" | ".pcm";
+  extension: ".mp3" | ".wav" | ".pcm" | ".opus";
 }
 
 const LOG = "[ChannelDispatcher]";

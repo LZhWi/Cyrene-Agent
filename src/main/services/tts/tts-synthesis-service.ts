@@ -1,4 +1,5 @@
 import * as fs from "fs";
+import * as os from "os";
 import * as path from "path";
 import { loadGeneralSettings } from "../../settings/settings-facade";
 import type { GeneralSettings } from "../../settings/general-settings";
@@ -31,6 +32,13 @@ import {
   readTtsCacheByKey,
 } from "../../tts/tts-cache";
 import type { TtsSessionExecution } from "../../tts/tts-session-service";
+import { transcodeAudioFileToFeishuOpus } from "../../channels/adapters/feishu/audio-transcode";
+
+type ChannelTtsAudioFormat = TtsAudioFormat | "opus";
+
+export interface TtsSynthesisServiceDeps {
+  convertFeishuAudio?: (audio: Buffer, sourceFormat: TtsAudioFormat) => Promise<Buffer>;
+}
 
 export interface TtsSynthesisService {
   synthesizeSession(
@@ -45,13 +53,30 @@ export interface TtsSynthesisService {
     channel: "wechat" | "feishu",
   ): Promise<{
     audio: Buffer;
-    format: TtsAudioFormat;
+    format: ChannelTtsAudioFormat;
     mime: string;
-    extension: ".mp3" | ".wav" | ".pcm";
+    extension: ".mp3" | ".wav" | ".pcm" | ".opus";
   } | null>;
 }
 
-export function createTtsSynthesisService(): TtsSynthesisService {
+async function convertFeishuAudioWithMpv(
+  audio: Buffer,
+  sourceFormat: TtsAudioFormat,
+): Promise<Buffer> {
+  const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "cyrene-feishu-tts-"));
+  try {
+    const inputPath = path.join(tempDir, `source.${sourceFormat}`);
+    await fs.promises.writeFile(inputPath, audio);
+    const outputPath = await transcodeAudioFileToFeishuOpus(inputPath);
+    return await fs.promises.readFile(outputPath);
+  } finally {
+    await fs.promises.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+export function createTtsSynthesisService(
+  deps: TtsSynthesisServiceDeps = {},
+): TtsSynthesisService {
   async function synthesizeSession(
     request: StartTtsRequest,
     signal: AbortSignal,
@@ -251,9 +276,9 @@ export function createTtsSynthesisService(): TtsSynthesisService {
     channel: "wechat" | "feishu",
   ): Promise<{
     audio: Buffer;
-    format: TtsAudioFormat;
+    format: ChannelTtsAudioFormat;
     mime: string;
-    extension: ".mp3" | ".wav" | ".pcm";
+    extension: ".mp3" | ".wav" | ".pcm" | ".opus";
   } | null> {
     if (cfg.ttsEngine === "off") return null;
     if (cfg.ttsEngine === "minimax" && (!cfg.ttsMinimaxKey || !cfg.ttsMinimaxVoiceId)) {
@@ -271,6 +296,9 @@ export function createTtsSynthesisService(): TtsSynthesisService {
     if (cfg.ttsEngine === "mimo" && (!cfg.ttsMimoKey || !cfg.ttsMimoVoiceAudioPath)) {
       return null;
     }
+    if (cfg.ttsEngine === "mossland" && (!cfg.ttsMosslandKey || !cfg.ttsMosslandVoiceId)) {
+      return null;
+    }
 
     const ttsText = text.length > 1000 ? text.slice(0, 1000) + "…" : text;
     try {
@@ -282,16 +310,20 @@ export function createTtsSynthesisService(): TtsSynthesisService {
         apiKey:
           cfg.ttsEngine === "mimo"
             ? cfg.ttsMimoKey
+            : cfg.ttsEngine === "mossland"
+              ? cfg.ttsMosslandKey
             : cfg.ttsEngine === "custom-cloud"
               ? cfg.ttsCustomCloudApiKey
               : cfg.ttsMinimaxKey,
         voiceId:
           cfg.ttsEngine === "mimo"
             ? ""
+            : cfg.ttsEngine === "mossland"
+              ? cfg.ttsMosslandVoiceId
             : cfg.ttsEngine === "custom-cloud"
               ? cfg.ttsCustomCloudVoiceId
               : cfg.ttsMinimaxVoiceId,
-        model: cfg.ttsMinimaxModel,
+        model: cfg.ttsEngine === "mossland" ? cfg.ttsMosslandModel : cfg.ttsMinimaxModel,
         baseUrl: cfg.ttsGptsovitsBaseUrl,
         refAudioPath: cfg.ttsGptsovitsRefAudioPath,
         promptText: cfg.ttsGptsovitsPromptText,
@@ -303,6 +335,7 @@ export function createTtsSynthesisService(): TtsSynthesisService {
         voiceAudioPath: cfg.ttsMimoVoiceAudioPath,
         stylePrompt: cfg.ttsMimoStylePrompt,
         format: requestedFormat,
+        mosslandFormat: cfg.ttsMosslandFormat,
       });
       const headerHex = result.audio.subarray(0, 4).toString("hex");
       console.log(
@@ -315,6 +348,18 @@ export function createTtsSynthesisService(): TtsSynthesisService {
         "size=",
         result.audio.length,
       );
+      if (channel === "feishu") {
+        const audio = await (deps.convertFeishuAudio ?? convertFeishuAudioWithMpv)(
+          result.audio,
+          result.format,
+        );
+        return {
+          audio,
+          format: "opus",
+          mime: "audio/ogg",
+          extension: ".opus",
+        };
+      }
       const format = result.format;
       const mime = format === "wav" ? "audio/wav" : format === "pcm" ? "audio/pcm" : "audio/mpeg";
       const extension = format === "wav" ? ".wav" : format === "pcm" ? ".pcm" : ".mp3";
