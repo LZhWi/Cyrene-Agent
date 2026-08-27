@@ -444,9 +444,12 @@ export function loadModelSettings(): ModelSettings {
  * 运行时解析视觉配置。
  * multimodal=true：主模型本身支持视觉，返回主模型配置（让 read_image 等工具可用）。
  * multimodal=false：返回独立视觉模型配置（三字段齐全才有效），否则 null。
+ *
+ * 先展开默认档案再取顶层镜像（与 channel bot / 欢迎页同策略）：顶层镜像可能指向
+ * 空壳 provider（真实配置在默认档案里），直接读会把多模态主模型误判为"未启用视觉"。
  */
-export function loadVisionConfig(): VisionConfig | null {
-  const settings = loadModelSettings();
+export function loadVisionConfig(from: ModelSettings = loadModelSettings()): VisionConfig | null {
+  const settings = resolveModelSettingsProfile(from);
 
   if (settings.multimodal) {
     if (!settings.apiKey || !settings.model) return null;

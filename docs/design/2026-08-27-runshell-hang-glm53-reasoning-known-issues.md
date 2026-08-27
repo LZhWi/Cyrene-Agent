@@ -18,6 +18,7 @@
 | 9 多模态开关默认 false——多模态模型的用户没碰过开关，发图莫名降级/看不了图 | 已修复 | [model-settings.ts](../../src/main/settings/model-settings.ts)：`normalizeModelSettings` 未持久化时默认 `multimodal: true`（显式 false 保留）。安全性：直发判错有服务端 400 + chat-loop caption 自动降级兜底，与"能力对错交给服务端仲裁"的既有决策一致 |
 | 10 新模型适配：deepseek-v4-flash-vision-exp（08-21 视觉实验版）、glm-5.3-flash | 已补 | 两者均被现有正则覆盖（`/^deepseek-v4/i`、`/^glm-5\.3/i`），无需新规则；但 deepseek-v4 档位过时（官方 08-13 起 low/high/max 三档）已更新，并补 `autoEffort: high`（DeepSeek 服务端 auto 会给带工具请求上 max，同款思考爆炸陷阱）。glm-5.3-flash 经 z.ai 文档确认与 5.3 同为强制思考，规则直接继承；测试锁死两个型号的断言 |
 | 11 qwen3.8 适配确认（max/flash/2.4t-a95b） | 无需改规则 | 阿里云官方文档（08-26）：混合思考模式，`enable_thinking` 可开关（3.8 起默认开启）；Chat Completions 无 effort 档位（effort 仅 Responses API，thinking_budget 实测不生效）→ 现有 `/^qwen3/i` toggle 规则行为完全正确。已补注释 + 测试锁死三个型号 |
+| 12 多模态主模型被误判"视觉模型未启用"——`loadVisionConfig` 读顶层镜像（可能是空壳 provider），不解析默认档案；Word→PDF 时 agent 调 `read_image` 报错 | 已修复 | [model-settings.ts](../../src/main/settings/model-settings.ts)：`loadVisionConfig` 先 `resolveModelSettingsProfile` 展开默认档案再取配置。与 issue 4/5 同病根（顶层空壳），一处修复覆盖全部 6 个调用方（read_image / agent-runtime / channel bootstrap / chat-ui-ipc）。测试锁死"空壳顶层 + 默认档案多模态 → 返回主模型配置"和"multimodal=false 仍走独立 vision 配置" |
 
 验证：`tsc -p tsconfig.main.json --noEmit` 通过；vitest 全量 318 文件 / 2553 用例通过。
 
