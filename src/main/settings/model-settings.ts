@@ -176,7 +176,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   citaRepairBudgetSec: 8,
   rerankerMode: "standard",
   embeddingModel: "bgem3",
-  multimodal: false,
+  multimodal: true,
   contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
 };
 
@@ -278,7 +278,9 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
   const profile = perProvider[provider];
 
   // 迁移旧配置：vision.syncWithMain === true -> multimodal: true
-  let multimodal = input?.multimodal === true;
+  // 默认 true（未持久化时）：直发判错有服务端仲裁 + caption 自动降级兜底，
+  // 而默认 false 会让多模态模型的用户发图莫名降级/看不了图（比发错更迷惑）。
+  let multimodal = input?.multimodal !== false;
   const rawVision = input?.vision as Partial<VisionModelConfig> & { syncWithMain?: boolean } | undefined;
   if (rawVision && rawVision.syncWithMain === true) {
     multimodal = true;

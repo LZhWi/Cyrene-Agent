@@ -13,8 +13,13 @@
 | 4 飞书/微信消息看得到不回复——channel bot 不展开默认模型档案，顶层空配置直接 throw | 已修复（B+C） | [model-settings.ts](../../src/main/settings/model-settings.ts)：无 id 时展开默认档案；[dispatcher.ts](../../src/main/channels/dispatcher.ts)：失败落盘 log.jsonl |
 | 5 欢迎语界面思考强度点开无反应——GET/SET 走顶层空壳镜像，按钮被禁用 | 已修复 | [chat-ui-ipc.ts](../../src/main/chats/chat-ui-ipc.ts)：档案解析 会话 > 欢迎页待定 > 默认档案，GET/SET 对称；[ReasoningControl.tsx](../../src/renderer/react/features/chat/components/ReasoningControl.tsx)：透传待定档案 id |
 | 6 Kimi K3 缺失 reasoning 适配——K3 已是强制思考 + reasoning_effort 模型，规则表无条目 | 已补 | [reasoning.ts](../../src/shared/reasoning.ts)：`kimi-k3` → effort 控制 + openai-effort 风格 + low/high/max + `autoEffort: high`（同 GLM-5.3 体质，防 auto ≡ max 爆炸） |
+| 7 打包版 sandbox 初始化失败 `spawn srt-win.exe ENOENT`——exe 已被 asarUnpack 解到 `app.asar.unpacked`，但包内 `VENDORED_SRT_WIN_EXE` 常量指向 asar 虚拟路径，spawn 无法执行虚拟路径里的 exe | 已修复 | [sandbox-exec.ts](../../src/main/orchestrator/sandbox/sandbox-exec.ts)：`toUnpackedSrtWinPath` 把 `app.asar\` 段重写为 `app.asar.unpacked\`，`resolveSrtWin` 与 `buildSandboxConfig` 统一用重写后路径 |
+| 8 打包版启动刷 `[ChannelsSettings] safeStorage 不可用`——Windows 上 `isEncryptionAvailable()` 到 app ready 后才返回 true，而 `channelDispatcher` 是模块级单例，import 期（ready 前）构造时 `loadChannelsSettings()` 把 false 永久缓存，且 enc: 字段被解成空串缓存在内存 | 已修复 | [settings-store.ts](../../src/main/channels/settings-store.ts)：ready 前探测 false 不写缓存；[dispatcher.ts](../../src/main/channels/dispatcher.ts)：settings/limiter 改懒加载（首次使用必然在 ready 后）。新增 [settings-store-preready.test.ts](../../src/main/channels/settings-store-preready.test.ts) 验证缓存不被 ready 前的调用毒化 |
+| 9 多模态开关默认 false——多模态模型的用户没碰过开关，发图莫名降级/看不了图 | 已修复 | [model-settings.ts](../../src/main/settings/model-settings.ts)：`normalizeModelSettings` 未持久化时默认 `multimodal: true`（显式 false 保留）。安全性：直发判错有服务端 400 + chat-loop caption 自动降级兜底，与"能力对错交给服务端仲裁"的既有决策一致 |
+| 10 新模型适配：deepseek-v4-flash-vision-exp（08-21 视觉实验版）、glm-5.3-flash | 已补 | 两者均被现有正则覆盖（`/^deepseek-v4/i`、`/^glm-5\.3/i`），无需新规则；但 deepseek-v4 档位过时（官方 08-13 起 low/high/max 三档）已更新，并补 `autoEffort: high`（DeepSeek 服务端 auto 会给带工具请求上 max，同款思考爆炸陷阱）。glm-5.3-flash 经 z.ai 文档确认与 5.3 同为强制思考，规则直接继承；测试锁死两个型号的断言 |
+| 11 qwen3.8 适配确认（max/flash/2.4t-a95b） | 无需改规则 | 阿里云官方文档（08-26）：混合思考模式，`enable_thinking` 可开关（3.8 起默认开启）；Chat Completions 无 effort 档位（effort 仅 Responses API，thinking_budget 实测不生效）→ 现有 `/^qwen3/i` toggle 规则行为完全正确。已补注释 + 测试锁死三个型号 |
 
-验证：`tsc -p tsconfig.main.json --noEmit` 通过；vitest 全量 317 文件 / 2544 用例通过。
+验证：`tsc -p tsconfig.main.json --noEmit` 通过；vitest 全量 318 文件 / 2553 用例通过。
 
 ---
 

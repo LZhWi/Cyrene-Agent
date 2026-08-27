@@ -26,6 +26,17 @@ describe("MODEL_REASONING_RULES — 规则匹配优先级", () => {
     expect(cap.control).toBe("toggle");
   });
 
+  // qwen3.8 全系（max/flash/2.4t-a95b 开源版，官方 2026-08 文档）：混合思考模式，
+  // enable_thinking 可开关；Chat Completions 无 effort 档位 → 纯 toggle 命中系列规则
+  test("Qwen qwen3.8-max / qwen3.8-flash / qwen3.8-2.4t-a95b → 命中 /^qwen3/ 系列 toggle", () => {
+    for (const model of ["qwen3.8-max", "qwen3.8-flash", "qwen3.8-2.4t-a95b"]) {
+      const cap = resolveReasoningCapability("qwen", model);
+      expect(cap.control).toBe("toggle");
+      expect(cap.requestStyle).toBe("qwen-enable-thinking");
+      expect(cap.supportsDisable).toBe(true);
+    }
+  });
+
   test("Qwen qwen-max-thinking 命中 /-thinking$/ → fixed-on", () => {
     const cap = resolveReasoningCapability("qwen", "qwen-max-thinking");
     expect(cap.control).toBe("fixed-on");
@@ -133,10 +144,20 @@ describe("MODEL_REASONING_RULES — 9 家全部存在性", () => {
     expect(cap.requestStyle).toBe("anthropic-adaptive");
   });
 
-  test("deepseek deepseek-v4-pro → toggle-effort + thinking-type + [high,max]", () => {
+  test("deepseek deepseek-v4-pro → toggle-effort + thinking-type + [low,high,max] + autoEffort=high", () => {
     const cap = resolveReasoningCapability("deepseek", "deepseek-v4-pro");
     expect(cap.control).toBe("toggle-effort");
-    expect(cap.supportedEfforts).toEqual(["high", "max"]);
+    // 官方 2026-08-13 起 V4 系列三档 effort；auto 映射 high（agent 请求服务端 auto 会上 max）
+    expect(cap.supportedEfforts).toEqual(["low", "high", "max"]);
+    expect(cap.autoEffort).toBe("high");
+  });
+
+  test("deepseek deepseek-v4-flash-vision-exp（2026-08-21 视觉实验版）→ 命中 v4 系列规则", () => {
+    const cap = resolveReasoningCapability("deepseek", "deepseek-v4-flash-vision-exp");
+    expect(cap.control).toBe("toggle-effort");
+    expect(cap.supportedEfforts).toEqual(["low", "high", "max"]);
+    expect(cap.autoEffort).toBe("high");
+    expect(cap.requestStyle).toBe("thinking-type");
   });
 
   test("glm glm-5.2 → toggle-effort + 可关闭 + autoEffort=high", () => {
@@ -155,6 +176,15 @@ describe("MODEL_REASONING_RULES — 9 家全部存在性", () => {
     expect(cap.supportsDisable).toBe(false);
     // auto 不发字段 ≡ 服务端默认 max → 显式映射 high（issue 3）
     expect(cap.autoEffort).toBe("high");
+  });
+
+  test("glm glm-5.3-flash → 与 5.3 同规则（z.ai 文档：FLASH 同为强制思考，首个原生图片输入的 GLM-5）", () => {
+    const cap = resolveReasoningCapability("glm", "glm-5.3-flash");
+    expect(cap.control).toBe("toggle-effort");
+    expect(cap.supportedEfforts).toEqual(["low", "high", "max"]);
+    expect(cap.supportsDisable).toBe(false);
+    expect(cap.autoEffort).toBe("high");
+    expect(cap.requestStyle).toBe("thinking-type");
   });
 
   test("glm glm-4.7 → toggle only", () => {

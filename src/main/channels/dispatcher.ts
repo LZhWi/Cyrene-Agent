@@ -210,21 +210,32 @@ export function shouldAppendChannelTtsAudio(
 }
 
 export class ChannelDispatcher {
-  private settings: ChannelsSettings;
-  private limiter: RateLimiter;
+  private settingsCache: ChannelsSettings | null = null;
+  private limiterCache: RateLimiter | null = null;
   deps: DispatcherDeps;
 
   constructor(deps: DispatcherDeps) {
     this.deps = deps;
-    this.settings = loadChannelsSettings();
-    this.limiter = new RateLimiter(this.settings);
     reloadLogFromDisk();
+  }
+
+  /** 懒加载：channelDispatcher 是模块级单例，import 时（app ready 前）就实例化。
+   *  那时 safeStorage 还不可用，提前 load 会把 enc: 字段解成空串缓存在内存里。
+   *  首次真正使用（消息进来 / UI 交互）必然在 ready 之后。 */
+  private get settings(): ChannelsSettings {
+    if (!this.settingsCache) this.settingsCache = loadChannelsSettings();
+    return this.settingsCache;
+  }
+
+  private get limiter(): RateLimiter {
+    if (!this.limiterCache) this.limiterCache = new RateLimiter(this.settings);
+    return this.limiterCache;
   }
 
   /** 重新加载 settings（UI 改了限速配置时调） */
   reloadSettings(): void {
-    this.settings = loadChannelsSettings();
-    this.limiter = new RateLimiter(this.settings);
+    this.settingsCache = null;
+    this.limiterCache = null;
   }
 
   /**

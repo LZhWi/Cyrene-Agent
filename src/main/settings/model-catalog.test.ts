@@ -156,6 +156,13 @@ describe("model catalog", () => {
     expect(legacyProfile.contextWindowTokens).toBe(256000);
     expect(legacyProfile.multimodal).toBe(false);
 
+    // 未持久化 multimodal → 默认 true（多模态模型用户开箱即直发图片，
+    // 判错有服务端 400 + caption 自动降级兜底）；显式 false 保留
+    const defaulted = normalizeModelSettings({ provider: "GLM（智谱）" });
+    expect(defaulted.multimodal).toBe(true);
+    const optedOut = normalizeModelSettings({ provider: "GLM（智谱）", multimodal: false });
+    expect(optedOut.multimodal).toBe(false);
+
     // 未传 id → 展开默认档案（第一个建档项 p-full），不再退回顶层镜像（issue 4：
     // 顶层镜像可能全空，channel bot 等不带 profileId 的调用方曾拿到空 baseUrl）
     const defaultResolved = resolveModelSettingsProfile(settings, undefined);

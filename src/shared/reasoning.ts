@@ -165,19 +165,25 @@ export const MODEL_REASONING_RULES: readonly ModelReasoningRule[] = [
   { providerId: "claude", modelPattern: /.*/, capability: UNKNOWN_CAPABILITY },
 
   // ── deepseek ──
+  // V4 系列（flash / pro / flash-vision-exp 视觉实验版，2026-08-21 发布）统一规则：
+  // thinking 默认开启可关闭；effort 三档 low/high/max（官方 2026-08-13 起）。
+  // auto 映射 high：服务端 auto 会给带工具的 agent 请求自动上 max，
+  // 与 GLM-5.3 同款的思考爆炸陷阱（2026-08-27 多轮循环场景）。
   { providerId: "deepseek", modelPattern: /^deepseek-v4/i, capability: {
     control: "toggle-effort",
-    supportedEfforts: ["high", "max"],
+    supportedEfforts: ["low", "high", "max"],
     defaultEffort: "high",
     requestStyle: "thinking-type",
     supportsDisable: true,
+    autoEffort: "high",
   } },
   { providerId: "deepseek", modelPattern: /^deepseek-(chat|reasoner)$/i, capability: UNKNOWN_CAPABILITY },
   { providerId: "deepseek", modelPattern: /.*/, capability: UNKNOWN_CAPABILITY },
 
   // ── glm（智谱）──
   // 精确型号在前；glm-5 基础型号放在精确型号之后（兜底更宽的 glm-5 系列）。
-  // GLM-5.3：强制思考模型（thinking.type=disabled 服务端报错，官方文档 2026-08-26），
+  // GLM-5.3 / GLM-5.3-Flash：强制思考模型（thinking.type=disabled 服务端报错，
+  // 官方文档 2026-08-26；z.ai 文档明确 FLASH 同为强制思考）。
   // 支持 low/high/max 三档 effort。auto 档显式映射 high —— 服务端默认 max，
   // auto 不发字段 ≡ max，多步任务思考爆炸（2026-08-27 issue 2/3）。
   { providerId: "glm", modelPattern: /^glm-5\.3/i, capability: {
@@ -231,6 +237,9 @@ export const MODEL_REASONING_RULES: readonly ModelReasoningRule[] = [
     requestStyle: "none",
     supportsDisable: false,
   } },
+  // qwen3 系列（含 3.5/3.6/3.7/3.8 全系，官方 2026-08-26 文档）：混合思考模式，
+  // enable_thinking 开关控制，3.8 起默认开启思考。Chat Completions 无 effort 档位
+  //（effort 仅 Responses API 支持；thinking_budget 实测不生效），保持纯 toggle。
   { providerId: "qwen", modelPattern: /^qwen3/i, capability: {
     control: "toggle",
     requestStyle: "qwen-enable-thinking",
