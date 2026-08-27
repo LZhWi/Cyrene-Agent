@@ -20,8 +20,9 @@
 | 11 qwen3.8 适配确认（max/flash/2.4t-a95b） | 无需改规则 | 阿里云官方文档（08-26）：混合思考模式，`enable_thinking` 可开关（3.8 起默认开启）；Chat Completions 无 effort 档位（effort 仅 Responses API，thinking_budget 实测不生效）→ 现有 `/^qwen3/i` toggle 规则行为完全正确。已补注释 + 测试锁死三个型号 |
 | 12 多模态主模型被误判"视觉模型未启用"——`loadVisionConfig` 读顶层镜像（可能是空壳 provider），不解析默认档案；Word→PDF 时 agent 调 `read_image` 报错 | 已修复 | [model-settings.ts](../../src/main/settings/model-settings.ts)：`loadVisionConfig` 先 `resolveModelSettingsProfile` 展开默认档案再取配置。与 issue 4/5 同病根（顶层空壳），一处修复覆盖全部 6 个调用方（read_image / agent-runtime / channel bootstrap / chat-ui-ipc）。测试锁死"空壳顶层 + 默认档案多模态 → 返回主模型配置"和"multimodal=false 仍走独立 vision 配置" |
 | 13 agent 无主动记忆能力——只有 RAG 抽查（user_memory）和事后反思，用户说"记住 X"只能口头答应，看不了也写不进自己的记忆 | 已补 | [tool-registry.ts](../../src/main/orchestrator/tool-registry.ts) 新增两个工具：`read_memory`（无参=L0/L1 全量+L2 目录最新 50 条概览，带 id=读单条全文，直读 memoryStore 不走 RAG）；`write_memory`（layer+content 构造 explicit/user_explicit 候选走 memoryManager.writeMemory 既有校验链：L0 锁定保护/字段白名单/L1 分流/L2 写入+RAG 同步全继承）。工具描述明确"仅限用户主动要求"，防止普通对话误触。测试 [tool-registry-memory.test.ts](../../src/main/orchestrator/tool-registry-memory.test.ts) |
+| 14 用户机器 GPU 进程连崩 FATAL 启动失败——electron/electron#51761：真因是 MSIX/AppX 安装器（向日葵等）污染目录 DACL（孤儿 AppContainer SID + 缺 S-1-15-2-2 沙箱读取权限），Chromium GPU 沙箱初始化校验失败 int 3 断言，表象酷似显卡驱动问题 | 已修（启动自愈） | 新增 [gpu-sandbox-acl.ts](../../src/main/gpu-sandbox-acl.ts)：app ready 前（GPU 进程 spawn 前）同步自愈——icacls 查 exe 目录，缺 S-1-15-2-2 则 `/grant *S-1-15-2-2:(OI)(CI)(RX) /C`，成功写哨兵 `userData/gpu-acl-ok` 只跑一次，失败静默下次重试（软渲染模式仍作兜底）。仅打包版 + Windows 生效。测试 [gpu-sandbox-acl.test.ts](../../src/main/gpu-sandbox-acl.test.ts) 7 用例。用户侧手动修复：管理员 PowerShell 对安装目录执行 icacls reset + grant |
 
-验证：`tsc -p tsconfig.main.json --noEmit` 通过；vitest 全量 319 文件 / 2563 用例通过。
+验证：`tsc -p tsconfig.main.json --noEmit` 通过；vitest 全量 320 文件 / 2570 用例通过。
 
 ---
 
