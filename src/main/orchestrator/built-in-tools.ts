@@ -17,6 +17,7 @@ export function setLive2dWindowSender(sender: typeof sendToLive2DWindow): void {
 import { resolveChatContextTimezone } from "../chat-time-context";
 import type { ToolContext } from "./tool-context";
 import { VerificationRunner, resolveBuiltinExecutable } from "./verification-runner";
+import { resolveWorkspaceBuildCommand } from "./workspace-build-command";
 import { logger, LogTag } from "../logger";
 import {
   buildDirectShellInvocation,
@@ -675,6 +676,34 @@ toolRegistry.register({
           configPath: tsconfigPath,
         },
       };
+    } else if (verificationType === "build") {
+      const buildCommand = await resolveWorkspaceBuildCommand(actualCwd);
+      if (!buildCommand.ok) {
+        return JSON.stringify({
+          success: false,
+          errorCode: buildCommand.errorCode,
+          error: buildCommand.error,
+          verificationType,
+          command: "",
+          exitCode: -1,
+          stdout: "",
+          stderr: `[${buildCommand.errorCode}] ${buildCommand.error}`,
+          timedOut: false,
+          passed: false,
+          truncated: false,
+          durationMs: 0,
+          retryable: false,
+          actualCwd,
+        });
+      }
+      verificationCommands = {
+        build: {
+          cmd: buildCommand.command,
+          args: buildCommand.args,
+          trust: "workspace_script",
+          source: "package_script",
+        },
+      };
     } else {
       verificationCommands = {
         test: {
@@ -682,12 +711,6 @@ toolRegistry.register({
           args: ["--reporter=verbose"],
           trust: "builtin",
           source: "vitest",
-        },
-        build: {
-          cmd: process.execPath,
-          args: [path.join(path.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"), "run", "build:main"],
-          trust: "workspace_script",
-          source: "package_script",
         },
         lint: {
           cmd: process.execPath,
@@ -713,16 +736,6 @@ toolRegistry.register({
         error: `本地 Vitest 未安装: ${actualCwd}`,
         verificationType, command: "", exitCode: -1,
         stdout: "", stderr: `[VITEST_NOT_FOUND] local vitest CLI not found in ${actualCwd}`,
-        timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
-        actualCwd,
-      });
-    }
-    if (verificationType === "build" && !fs.existsSync(command.args[0])) {
-      return JSON.stringify({
-        success: false, errorCode: "NPM_CLI_NOT_FOUND",
-        error: `本地 npm CLI 不存在: ${command.args[0]}`,
-        verificationType, command: "", exitCode: -1,
-        stdout: "", stderr: `[NPM_CLI_NOT_FOUND] ${command.args[0]}`,
         timedOut: false, passed: false, truncated: false, durationMs: 0, retryable: false,
         actualCwd,
       });

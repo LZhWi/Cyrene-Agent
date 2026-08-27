@@ -15,7 +15,7 @@
  * Code 模式和 Work 工具 run_verification 共用此执行核心。
  */
 
-import { spawn } from "child_process";
+import spawn from "cross-spawn";
 import * as path from "path";
 import * as fs from "fs";
 import { policyFor, type AgentFileAccessLevel } from "../permission-policy";
