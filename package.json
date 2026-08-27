@@ -37,6 +37,7 @@
     "npm": ">=10"
   },
   "devDependencies": {
+    "@types/cross-spawn": "^6.0.6",
     "@types/diff": "^7.0.2",
     "@types/dompurify": "^3.0.5",
     "@types/js-yaml": "^4.0.9",
@@ -78,9 +79,11 @@
     "antd": "^6.5.2",
     "chart.js": "^4.5.1",
     "chokidar": "^4.0.3",
+    "cross-spawn": "^7.0.6",
     "diff": "^9.0.0",
     "docx": "^9.7.1",
     "dompurify": "^3.4.12",
+    "electron-updater": "^6.6.2",
     "exceljs": "^4.4.0",
     "extract-zip": "^2.0.1",
     "gray-matter": "^4.0.3",
@@ -92,6 +95,7 @@
     "music-metadata": "^11.15.0",
     "nodemailer": "^9.0.1",
     "openai": "7.5.0",
+    "package-manager-detector": "^1.8.0",
     "pdfkit": "^0.19.1",
     "pixi-live2d-display": "0.5.0-beta",
     "pixi.js": "^7.3.0",

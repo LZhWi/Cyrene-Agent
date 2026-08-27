@@ -163,6 +163,8 @@ import type { GitService } from "./code-git/git-service";
 import { resolveGitExecutable } from "./code-git/git-executable";
 import { registerCodeGitIpc } from "./code-git/code-git-ipc";
 import { installSingleInstanceGuard } from "./single-instance";
+import { createGitHubAppUpdateService, scheduleStartupUpdateCheck } from "./updater/github-app-updater";
+import { registerAppUpdateIpc } from "./updater/app-update-ipc";
 
 
 configureDocumentIndexQueue(runDocumentIndexJob);
@@ -489,11 +491,18 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   });
   windowManager = manager;
 
+  const appUpdateService = createGitHubAppUpdateService({
+    currentVersion: app.getVersion(),
+    isPackaged: app.isPackaged,
+  });
+  registerAppUpdateIpc({ service: appUpdateService });
+
   // 先创建主窗口但不显示，等闪屏关闭后再一起显示。
   const mainWindow = createWindow(manager, false);
 
   setLive2dWindowSender((channel, payload) => manager.sendToMainWindow(channel, payload));
   manager.createReactChatWindow();
+  scheduleStartupUpdateCheck(appUpdateService);
   if (generalSettings.sidebarVisible) manager.createSidebarWindow();
   if (generalSettings.tasksVisible) manager.createTasksWindow();
   tray = createTray({
