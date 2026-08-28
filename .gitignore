@@ -19,6 +19,7 @@ dist/renderer/live2dcubismcore.min.js
 dist/sim/
 dist/skills/
 release/
+release-*/
 .build-temp/
 # electron-builder 在仓库根生成的产物（与 release/ 同款，不进 git）
 latest.yml
@@ -58,6 +59,8 @@ build/installer/ui/dev*.log
 # 额外兜底：未跟踪的 context-usage 预览图与时间戳备份目录
 dist/renderer/context-usage/
 dist/renderer-old-*/
+# music 播放器是本地构建产物（hash 文件名每次构建变化），不进 git
+dist/renderer/music/
 
 # build/installer/ui/src/ 下的同名源图（setup/setup-loading/succeed/failed/ch）被安装 UI 引用，
 # 打包时由 vite/webpack 复制到 src/renderer/react/assets/ 作为产物副本。
