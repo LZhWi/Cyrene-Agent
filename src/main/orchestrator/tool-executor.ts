@@ -43,7 +43,18 @@ function legacyFailure(output: string): ToolExecutionOutcome | undefined {
 
   try {
     const parsed = JSON.parse(output) as Record<string, unknown> | null;
-    if (!parsed || typeof parsed !== "object" || parsed.success !== false) return undefined;
+    if (!parsed || typeof parsed !== "object") return undefined;
+    if (parsed.timedOut === true) {
+      return {
+        status: "failed",
+        output,
+        errorCode: "E_TOOL_TIMEOUT",
+        category: "timeout",
+        retryable: false,
+        effectState: "unknown",
+      };
+    }
+    if (parsed.success !== false) return undefined;
     const message = typeof parsed.error === "string"
       ? parsed.error
       : parsed.error === undefined ? "工具执行失败" : JSON.stringify(parsed.error);

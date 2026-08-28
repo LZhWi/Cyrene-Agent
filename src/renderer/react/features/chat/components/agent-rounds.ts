@@ -7,8 +7,65 @@ const LIVE_TOOL_LABELS: Record<string, string> = {
   edit_file: "编辑文件",
   search_code: "搜索代码",
   search_text: "文本搜索",
-  run_shell: "执行命令",
+  run_shell: "运行命令",
 };
+
+const TOOL_LABELS: Record<string, string> = {
+  list_dir: "浏览目录",
+  read_file: "读取文件",
+  write_file: "写入文件",
+  edit_file: "编辑文件",
+  str_replace: "修改文件",
+  apply_patch: "应用补丁",
+  search_code: "搜索代码",
+  search_text: "搜索文本",
+  run_shell: "运行命令",
+};
+
+export interface ToolExecutionPresentation {
+  label: string;
+  statusText: string;
+  detail?: string;
+}
+
+function parseToolArgs(argsText?: string): Record<string, unknown> | undefined {
+  if (!argsText) return undefined;
+  try {
+    const parsed: unknown = JSON.parse(argsText);
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function firstStringArg(args: Record<string, unknown> | undefined, keys: readonly string[]): string | undefined {
+  for (const key of keys) {
+    const value = args?.[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return undefined;
+}
+
+/** 将底层工具调用转换为对用户有用且不泄露写入正文的执行摘要。 */
+export function describeToolExecution(tool: ToolExecutionRecord): ToolExecutionPresentation {
+  const args = parseToolArgs(tool.argsText);
+  const result = parseToolArgs(tool.result);
+  const detail = tool.name === "run_shell"
+    ? firstStringArg(args, ["command"])
+    : firstStringArg(args, ["path", "filePath", "file_path", "directory", "dir"]);
+  const label = TOOL_LABELS[tool.name] ?? tool.name;
+  const action = TOOL_LABELS[tool.name] ?? "执行操作";
+  const statusText = tool.name === "run_shell" && tool.status === "error" && result?.timedOut === true
+    ? "命令运行超时"
+    : tool.status === "running"
+    ? `正在${action}`
+    : tool.status === "error"
+      ? `${action}失败`
+      : `${action}完成`;
+  return { label, statusText, detail };
+}
 
 const SUMMARY_TOOL_LABELS: Record<string, string> = {
   list_dir: "浏览|个目录",

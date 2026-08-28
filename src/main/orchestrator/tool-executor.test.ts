@@ -46,6 +46,29 @@ describe("executeToolDefinition", () => {
     expect(outcome).toMatchObject({ status: "failed", errorCode: "E_BAD", output: "bad input", retryable: true });
   });
 
+  it("treats a legacy timedOut result as a terminal timeout failure", async () => {
+    const output = JSON.stringify({
+      command: "npx serve .",
+      exitCode: null,
+      stdout: "Serving!",
+      stderr: "[已终止] 命令连续 2 分钟无任何输出，进程树已被强制终止。",
+      timedOut: true,
+      truncated: false,
+    });
+
+    const outcome = await executeToolDefinition(fakeTool(vi.fn(async () => output)), {});
+
+    expect(outcome).toMatchObject({
+      status: "failed",
+      output,
+      errorCode: "E_TOOL_TIMEOUT",
+      category: "timeout",
+      retryable: false,
+      effectState: "unknown",
+      terminal: true,
+    });
+  });
+
   it("only treats leading legacy error markers as failure", async () => {
     const marked = await executeToolDefinition(fakeTool(vi.fn(async () => "[错误] failed")), {});
     const rejected = await executeToolDefinition(fakeTool(vi.fn(async () => "[拒绝] denied")), {});

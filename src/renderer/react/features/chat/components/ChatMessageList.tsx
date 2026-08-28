@@ -8,8 +8,9 @@ import type { ContextUsageSnapshot } from "../../../../../shared/context-usage";
 import thinkingMoodUrl from "../../../assets/status-moods/思考中.png?url";
 import completedThinkingMoodUrl from "../../../assets/status-moods/提醒.png?url";
 import workingMoodUrl from "../../../assets/status-moods/工作中.png?url";
-import companionMoodUrl from "../../../assets/status-moods/陪伴中.png?url";
-import offlineMoodUrl from "../../../assets/status-moods/离线.png?url";
+import interruptedMoodUrl from "../../../assets/status-moods/已中断.png?url";
+import processedMoodUrl from "../../../assets/status-moods/已处理.png?url";
+import connectingMoodUrl from "../../../assets/status-moods/连接中.png?url";
 import { useUserAvatar } from "../../../hooks/useUserAvatar";
 import {
   assistantRenderStages,
@@ -28,7 +29,7 @@ import { resolveRevisableLastTurn, type RevisableLastTurn } from "./last-turn-ac
 import { extractMessageStickerId, stripMessageStickerMarkers } from "./message-sticker";
 import type { WeatherData } from "./weather/weather-types";
 import { WeatherCard } from "./weather/WeatherCard";
-import { countRoundChangedFiles, resolveAgentRoundTitle } from "./agent-rounds";
+import { countRoundChangedFiles, describeToolExecution, resolveAgentRoundTitle } from "./agent-rounds";
 import { TaskDelegationRow } from "./TaskDelegationRow";
 import { extractFileChanges, FileChangeCard } from "./FileChangeCard";
 import { ReviewPanel } from "./ReviewPanel";
@@ -188,7 +189,7 @@ function ModelWaitContent() {
   return (
     <section className="cy-model-wait" aria-label="等待模型响应">
       <span className="cy-model-wait__art" aria-hidden="true">
-        <img src={offlineMoodUrl} alt="" draggable={false} />
+        <img src={connectingMoodUrl} alt="" draggable={false} />
         <DotSpinner />
       </span>
       <span>昔涟正在等模型回应…</span>
@@ -277,7 +278,7 @@ function AgentRoundGroup({
   }, [running]);
 
   const roundArt = interrupted
-    ? offlineMoodUrl
+    ? interruptedMoodUrl
     : running
       ? workingMoodUrl
       : completedThinkingMoodUrl;
@@ -439,7 +440,7 @@ function RunActivityContent({
   const title = snapshot.processing
     ? `昔涟正在处理中 ${formatElapsed(snapshot.processingMs)}`
     : `昔涟已处理 ${formatElapsed(snapshot.processingMs)}`;
-  const image = snapshot.processing ? workingMoodUrl : companionMoodUrl;
+  const image = snapshot.processing ? workingMoodUrl : processedMoodUrl;
 
   return (
     <section className={`cy-run-activity${snapshot.processing ? " is-processing" : " is-complete"}`}>
@@ -487,17 +488,25 @@ function ToolExecutionContent({ tools }: { tools: ToolExecutionRecord[] }) {
       <ThoughtChain
         rootClassName="cy-tool-executions__chain"
         line="dashed"
-        items={tools.map((tool) => ({
-          key: tool.id,
-          title: tool.name,
-          description: tool.status === "running" ? "正在执行…" : tool.status === "error" ? "执行失败" : "执行完成",
-          status: tool.status === "running" ? "loading" : tool.status === "error" ? "error" : "success",
-          blink: tool.status === "running",
-          collapsible: Boolean(tool.result || tool.changes),
-          content: (tool.result || tool.changes)
-            ? <ToolResultContent result={tool.result} changes={tool.changes} />
-            : undefined,
-        }))}
+        items={tools.map((tool) => {
+          const presentation = describeToolExecution(tool);
+          return {
+            key: tool.id,
+            title: presentation.label,
+            description: (
+              <span className="cy-tool-executions__description">
+                <span className="cy-tool-executions__status">{presentation.statusText}</span>
+                {presentation.detail && <code className="cy-tool-executions__detail">{presentation.detail}</code>}
+              </span>
+            ),
+            status: tool.status === "running" ? "loading" : tool.status === "error" ? "error" : "success",
+            blink: tool.status === "running",
+            collapsible: Boolean(tool.result || tool.changes),
+            content: (tool.result || tool.changes)
+              ? <ToolResultContent result={tool.result} changes={tool.changes} />
+              : undefined,
+          };
+        })}
       />
     </section>
   );

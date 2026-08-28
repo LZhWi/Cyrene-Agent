@@ -4,6 +4,7 @@ import {
   applyAgentRoundBoundary,
   countRoundChangedFiles,
   createRoundProcessMessage,
+  describeToolExecution,
   finishAgentRound,
   resolveAgentRoundTitle,
   startAgentRound,
@@ -55,6 +56,59 @@ describe("agent round presentation", () => {
       tool("a", "list_dir", "success"),
       tool("b", "read_file", "running"),
     ])).toBe("昔涟正在读取文件");
+  });
+
+  it("describes a running shell call with its exact command", () => {
+    expect(describeToolExecution({
+      id: "shell-1",
+      name: "run_shell",
+      status: "running",
+      argsText: JSON.stringify({ command: "npm run test -- agent-rounds" }),
+    })).toEqual({
+      label: "运行命令",
+      statusText: "正在运行命令",
+      detail: "npm run test -- agent-rounds",
+    });
+  });
+
+  it("describes a file write by its target path without exposing file contents", () => {
+    expect(describeToolExecution({
+      id: "write-1",
+      name: "write_file",
+      status: "running",
+      argsText: JSON.stringify({ path: "src/renderer/App.tsx", content: "secret source" }),
+    })).toEqual({
+      label: "写入文件",
+      statusText: "正在写入文件",
+      detail: "src/renderer/App.tsx",
+    });
+  });
+
+  it("keeps the activity useful when streamed arguments are malformed", () => {
+    expect(describeToolExecution({
+      id: "shell-2",
+      name: "run_shell",
+      status: "running",
+      argsText: "{\"command\":",
+    })).toEqual({
+      label: "运行命令",
+      statusText: "正在运行命令",
+      detail: undefined,
+    });
+  });
+
+  it("distinguishes a timed-out shell command from a generic execution failure", () => {
+    expect(describeToolExecution({
+      id: "shell-timeout",
+      name: "run_shell",
+      status: "error",
+      argsText: JSON.stringify({ command: "npx serve . -l 3456" }),
+      result: JSON.stringify({ timedOut: true, exitCode: null }),
+    })).toEqual({
+      label: "运行命令",
+      statusText: "命令运行超时",
+      detail: "npx serve . -l 3456",
+    });
   });
 
   it("summarizes only truthful successful tool facts and reports failures", () => {
