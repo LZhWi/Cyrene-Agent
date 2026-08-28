@@ -62,6 +62,17 @@ function tokenMatches(header: string | undefined, expected: string): boolean {
     && timingSafeEqual(expectedBuffer, actualBuffer);
 }
 
+/** 回环地址（本机）可以免 token；其余地址（局域网 IP、WSL 虚拟网卡、0.0.0.0/::）上
+ *  任何能连到端口的对端都能冒充 NapCat 注入消息，必须配置 Access Token 鉴权。 */
+export function isLoopbackHost(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  return normalized === ""
+    || normalized === "127.0.0.1"
+    || normalized === "localhost"
+    || normalized === "::1"
+    || normalized === "::ffff:127.0.0.1";
+}
+
 export class OneBotReverseWsServer {
   private httpServer: http.Server | null = null;
   private wsServer: WebSocketServer | null = null;
@@ -81,8 +92,8 @@ export class OneBotReverseWsServer {
       this.options.customHost,
     );
     const token = this.options.accessToken?.trim() ?? "";
-    if (host === "0.0.0.0" && !token) {
-      throw new Error("QQ 监听 0.0.0.0 时必须配置 Access Token");
+    if (!isLoopbackHost(host) && !token) {
+      throw new Error(`QQ 监听非回环地址 ${host} 时必须配置 Access Token（该网络上任意进程都可冒充 NapCat 注入消息）`);
     }
     const path = this.options.path ?? ONEBOT_WS_PATH;
     const httpServer = http.createServer((_req, res) => {
@@ -213,7 +224,18 @@ export class OneBotReverseWsServer {
     if (this.httpServer) {
       const server = this.httpServer;
       this.httpServer = null;
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      // 404 handler 返回的是 keep-alive 响应，浏览器/端口扫描器摸一下端口就会留下空闲连接，
+      // server.close() 要等所有连接自然断开才回调 → 应用退出被永久阻塞。
+      // 强制断开全部连接（Node ≥ 18.2），并加 3s 兜底超时。
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, 3_000);
+        timer.unref?.();
+        server.close(() => {
+          clearTimeout(timer);
+          resolve();
+        });
+        server.closeAllConnections?.();
+      });
     }
     this.listeningInfo = null;
   }

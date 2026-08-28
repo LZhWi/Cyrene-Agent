@@ -17,7 +17,7 @@ Cyrene 通过 OneBot 11 反向 WebSocket 接入 NapCat：Cyrene 在 Windows 监�
    - NapCat 与 Cyrene 同在 Windows：选择“仅本机 127.0.0.1”。
    - 只有明确知道监听地址时才使用“自定义地址”。
 4. 保持默认端口 `6200`，填写私聊 QQ 白名单和群号白名单。
-5. Access Token 可选。跨网络使用时建议点击“生成”，先复制 Token，再保存配置。
+5. Access Token：仅“仅本机 127.0.0.1”模式可留空；WSL 虚拟网卡或自定义地址等非回环监听必须配置 Token（否则该网络上任何进程都能冒充 NapCat 注入消息）。保存时若 Token 为空会自动生成，请先复制到 NapCat 再保存。
 6. 点击“保存并启动监听”，复制页面显示的 NapCat 连接 URL。
 
 > WSL NAT 地址可能在 WSL 重启后变化。每次连接失败时，以 Cyrene 设置页实时显示的 URL 为准，不要长期写死旧 IP。
@@ -34,7 +34,7 @@ Cyrene 通过 OneBot 11 反向 WebSocket 接入 NapCat：Cyrene 在 Windows 监�
 | Report Self Message | 关闭 |
 | Reconnect Interval | `5000` ms |
 | Heart Interval | `30000` ms |
-| Token | 与 Cyrene 中生成的 Token 相同；Cyrene 留空时这里也留空 |
+| Token | 与 Cyrene 中生成的 Token 相同；仅本机 127.0.0.1 监听且 Cyrene 留空时这里也留空 |
 
 保存后，Cyrene 状态应从“等待 NapCat 连接”变为“NapCat 已连接”。点击“测试连接”可查看 QQ 号、昵称、NapCat 版本和 Stream API 状态。
 

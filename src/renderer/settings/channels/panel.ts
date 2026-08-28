@@ -55,6 +55,16 @@ function setFeishuFeedback(kind: "info" | "ok" | "err", msg: string): void {
   else channelsFeishuFeedbackEl.classList.add("channels-feedback--info");
 }
 
+/** 与主进程 onebot-reverse-ws 的 isLoopbackHost 保持一致的回环判断（渲染层本地副本） */
+function isLoopbackHostText(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  return normalized === ""
+    || normalized === "127.0.0.1"
+    || normalized === "localhost"
+    || normalized === "::1"
+    || normalized === "::ffff:127.0.0.1";
+}
+
 function setQqFeedback(kind: "info" | "ok" | "err", msg: string): void {
   if (!channelsQqFeedbackEl) return;
   channelsQqFeedbackEl.textContent = msg;
@@ -159,7 +169,9 @@ export async function loadChannelsPanel(): Promise<void> {
     if (channelsQqGroupAllowlistEl) channelsQqGroupAllowlistEl.value = (cfg.qq?.allowedGroupIds ?? []).join("\n");
     if (channelsQqTokenEl) channelsQqTokenEl.placeholder = cfg.qq?.hasAccessToken
       ? "已保存（输入新值会覆盖）"
-      : "可留空；跨网络建议配置";
+      : "留空仅允许本机 127.0.0.1 监听；WSL/跨网卡请先生成";
+    // 已保存的 token 不回显；保存时若输入为空且没有已存值，非回环监听需要先补生成
+    let hadQqToken = !!cfg.qq?.hasAccessToken;
 
     // 拉一次渠道状态
     const status = (await window.settings.channelsGetStatus()) as Record<string, { phase: string; message?: string; detail?: Record<string, unknown> }>;
@@ -369,10 +381,23 @@ export async function loadChannelsPanel(): Promise<void> {
       .catch((error) => setQqFeedback("err", error instanceof Error ? error.message : String(error)));
   });
   channelsQqSaveBtn?.addEventListener("click", async () => {
+    // 非回环监听必须鉴权（主进程会硬校验）：输入为空且无已存 token 时，
+    // 先生成并让用户复制到 NapCat，本次不落盘（token 保存后不再回显，用户就拿不到了）
+    const listenMode = channelsQqListenModeEl?.value ?? "auto";
+    const needsToken = listenMode === "wsl"
+      || (listenMode === "custom" && !isLoopbackHostText(channelsQqCustomHostEl?.value ?? ""));
+    if (channelsQqTokenEl && needsToken && !channelsQqTokenEl.value && !hadQqToken) {
+      const bytes = crypto.getRandomValues(new Uint8Array(32));
+      channelsQqTokenEl.value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+      channelsQqTokenEl.type = "text";
+      channelsQqTokenEl.select();
+      setQqFeedback("info", "非回环监听需要 Access Token：已自动生成，请先复制到 NapCat WebSocket Client 的 Token 字段，再回来点击保存。");
+      return;
+    }
     setQqFeedback("info", "正在保存并启动 QQ 监听…");
     const qq: Record<string, unknown> = {
       enabled: channelsQqEnabledEl?.checked ?? false,
-      listenMode: channelsQqListenModeEl?.value ?? "auto",
+      listenMode,
       customHost: channelsQqCustomHostEl?.value.trim() || undefined,
       port: Number(channelsQqPortEl?.value) || 6200,
       allowedPrivateUserIds: parseIdList(channelsQqPrivateAllowlistEl?.value ?? ""),
@@ -381,6 +406,7 @@ export async function loadChannelsPanel(): Promise<void> {
     if (channelsQqTokenEl?.value) qq.accessToken = channelsQqTokenEl.value;
     try {
       await window.settings.channelsSaveConfig({ qq });
+      if (qq.accessToken) hadQqToken = true;
       await window.settings.channelsRestart();
       const status = await window.settings.channelsGetStatus() as Record<string, { phase?: string; message?: string; detail?: Record<string, unknown> }>;
       renderQqDetail(status.qq);

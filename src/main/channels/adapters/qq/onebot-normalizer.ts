@@ -136,7 +136,12 @@ export async function normalizeOneBotMessage(
       textParts.push(`[QQ表情:${String(segment.data.id ?? "")}]`);
       continue;
     }
-    if (segment.type === "json") textParts.push("[JSON卡片]");
+    if (segment.type === "json") {
+      textParts.push("[JSON卡片]");
+      continue;
+    }
+    // 位置/分享/合并转发/戳一戳等未适配段：显式占位，避免内容静默丢失后 agent 毫无感知
+    textParts.push(`[未支持的消息类型:${segment.type}]`);
   }
 
   const text = textParts.join("").trim() || String(event.raw_message ?? "").trim() || "[空消息]";

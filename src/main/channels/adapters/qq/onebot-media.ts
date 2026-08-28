@@ -261,8 +261,34 @@ export class OneBotMediaManager {
     if (!response.ok) throw new Error(`QQ 媒体下载失败: HTTP ${response.status}`);
     const declared = Number(response.headers.get("content-length") ?? 0);
     if (declared > ONEBOT_BASE64_THRESHOLD_BYTES) throw new Error("旧版 NapCat URL 媒体超过 8 MiB");
-    const buffer = Buffer.from(await response.arrayBuffer());
-    if (buffer.length > ONEBOT_BASE64_THRESHOLD_BYTES) throw new Error("旧版 NapCat URL 媒体超过 8 MiB");
+    // 流式读取：content-length 缺失或伪造（chunked 传输）时 arrayBuffer() 会无上限整读进内存，
+    // 累计超过阈值立即中止，避免主进程 OOM
+    let buffer: Buffer;
+    if (response.body) {
+      const chunks: Buffer[] = [];
+      let received = 0;
+      const reader = response.body.getReader();
+      let exceeded = false;
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (!value) continue;
+          received += value.byteLength;
+          if (received > ONEBOT_BASE64_THRESHOLD_BYTES) {
+            exceeded = true;
+            throw new Error("旧版 NapCat URL 媒体超过 8 MiB");
+          }
+          chunks.push(Buffer.from(value));
+        }
+      } finally {
+        if (exceeded) void reader.cancel().catch(() => undefined);
+      }
+      buffer = Buffer.concat(chunks);
+    } else {
+      buffer = Buffer.from(await response.arrayBuffer());
+      if (buffer.length > ONEBOT_BASE64_THRESHOLD_BYTES) throw new Error("旧版 NapCat URL 媒体超过 8 MiB");
+    }
     const ext = extensionFor(kind, new URL(url).pathname);
     const targetPath = path.join(this.cacheDir, `qq-${Date.now()}-${randomUUID()}${ext}`);
     await fs.promises.writeFile(targetPath, buffer);

@@ -4,13 +4,14 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OneBotActionClient } from "./onebot-action-client";
 import { OneBotActionError } from "./onebot-action-client";
-import { OneBotMediaManager, versionAtLeast, ONEBOT_CACHE_TTL_MS, ONEBOT_MAX_FILE_BYTES } from "./onebot-media";
+import { OneBotMediaManager, versionAtLeast, ONEBOT_BASE64_THRESHOLD_BYTES, ONEBOT_CACHE_TTL_MS, ONEBOT_MAX_FILE_BYTES } from "./onebot-media";
 
 vi.mock("electron", () => ({ app: { getPath: () => os.tmpdir() } }));
 
 const tempDirs: string[] = [];
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -102,6 +103,41 @@ describe("OneBotMediaManager", () => {
     } as unknown as OneBotActionClient;
     const manager = new OneBotMediaManager(() => client, dir);
     await expect(manager.downloadSegment({ type: "file", data: { file_id: "f-1" } }, true)).rejects.toThrow(/byte count mismatch/);
+  });
+
+  it("downloads small URL media to the cache via streaming", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-qq-media-"));
+    tempDirs.push(dir);
+    const payload = Buffer.from("png-url-data");
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(new Uint8Array(payload))));
+    const manager = new OneBotMediaManager(() => null, dir);
+    const attachment = await manager.downloadSegment(
+      { type: "image", data: { url: "http://127.0.0.1:1/a.png" } },
+      false,
+    );
+    expect(fs.readFileSync(attachment.filePath!, "utf8")).toBe("png-url-data");
+  });
+
+  it("rejects URL media whose streamed body exceeds 8 MiB without content-length", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-qq-media-"));
+    tempDirs.push(dir);
+    // 无 content-length 的 chunked 响应：旧实现 arrayBuffer() 会先整读进内存再检查
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array(ONEBOT_BASE64_THRESHOLD_BYTES + 1));
+          controller.close();
+        },
+      }),
+      { status: 200 },
+    )));
+    const manager = new OneBotMediaManager(() => null, dir);
+    await expect(manager.downloadSegment(
+      { type: "image", data: { url: "http://127.0.0.1:1/a.png" } },
+      false,
+    )).rejects.toThrow(/8 MiB/);
+    // 中止后不应在缓存目录留下半截文件
+    expect(fs.readdirSync(dir).length).toBe(0);
   });
 
   it("uploads files in chunks and validates the returned SHA-256", async () => {

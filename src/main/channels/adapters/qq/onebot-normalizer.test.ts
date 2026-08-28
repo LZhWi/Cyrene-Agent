@@ -47,4 +47,28 @@ describe("normalizeOneBotMessage", () => {
     expect(result.text).toBe("先看 @被提及者 的图[image]");
     expect(result.attachments).toHaveLength(1);
   });
+
+  it("keeps a visible placeholder for unsupported segments instead of dropping them", async () => {
+    const event: OneBotMessageEvent = {
+      time: 1_700_000_000,
+      self_id: "9000",
+      post_type: "message",
+      message_type: "private",
+      message_id: "m-2",
+      user_id: "1000",
+      message: [
+        { type: "text", data: { text: "看看这个" } },
+        { type: "location", data: { lat: "31.2", lng: "121.4" } },
+        { type: "forward", data: { id: "fwd-1" } },
+      ],
+    };
+    const client = { call: vi.fn() } as unknown as OneBotActionClient;
+    const media = {
+      downloadSegment: vi.fn(),
+    } as unknown as OneBotMediaManager;
+
+    const result = await normalizeOneBotMessage(event, { selfId: "9000", client, media, supportsStream: true });
+    // 位置/合并转发等未适配段必须显式占位，不能静默消失
+    expect(result.text).toBe("看看这个[未支持的消息类型:location][未支持的消息类型:forward]");
+  });
 });

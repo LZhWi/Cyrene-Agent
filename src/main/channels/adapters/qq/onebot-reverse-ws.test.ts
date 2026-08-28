@@ -1,6 +1,7 @@
+import * as http from "node:http";
 import { describe, expect, it } from "vitest";
 import { WebSocket } from "ws";
-import { OneBotReverseWsServer, resolveOneBotListenHost } from "./onebot-reverse-ws";
+import { OneBotReverseWsServer, isLoopbackHost, resolveOneBotListenHost } from "./onebot-reverse-ws";
 
 describe("OneBotReverseWsServer", () => {
   it("resolves loopback and WSL interface modes", () => {
@@ -9,6 +10,18 @@ describe("OneBotReverseWsServer", () => {
       "vEthernet (WSL)": [{ address: "172.20.0.1", netmask: "255.255.240.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: false, cidr: "172.20.0.1/20" }],
     })).toEqual({ host: "172.20.0.1", resolvedMode: "wsl" });
     expect(resolveOneBotListenHost("auto", undefined, {})).toEqual({ host: "127.0.0.1", resolvedMode: "loopback" });
+  });
+
+  it("classifies loopback hosts", () => {
+    expect(isLoopbackHost("127.0.0.1")).toBe(true);
+    expect(isLoopbackHost("localhost")).toBe(true);
+    expect(isLoopbackHost("::1")).toBe(true);
+    expect(isLoopbackHost("[::1]")).toBe(true);
+    expect(isLoopbackHost("::ffff:127.0.0.1")).toBe(true);
+    expect(isLoopbackHost("0.0.0.0")).toBe(false);
+    expect(isLoopbackHost("::")).toBe(false);
+    expect(isLoopbackHost("192.168.1.10")).toBe(false);
+    expect(isLoopbackHost("172.20.0.1")).toBe(false);
   });
 
   it("requires a token when binding all interfaces", async () => {
@@ -20,6 +33,57 @@ describe("OneBotReverseWsServer", () => {
       onClientConnected: () => undefined,
     });
     await expect(server.start()).rejects.toThrow(/Access Token/);
+  });
+
+  it("requires a token for non-loopback custom hosts (LAN, IPv6 any)", async () => {
+    for (const customHost of ["192.168.1.10", "::"]) {
+      const server = new OneBotReverseWsServer({
+        listenMode: "custom",
+        customHost,
+        port: 0,
+        onEvent: () => undefined,
+        onClientConnected: () => undefined,
+      });
+      await expect(server.start()).rejects.toThrow(/Access Token/);
+    }
+  });
+
+  it("allows a custom loopback host without a token", async () => {
+    const server = new OneBotReverseWsServer({
+      listenMode: "custom",
+      customHost: "127.0.0.1",
+      port: 0,
+      onEvent: () => undefined,
+      onClientConnected: () => undefined,
+    });
+    const info = await server.start();
+    expect(info.host).toBe("127.0.0.1");
+    await server.stop();
+  });
+
+  it("stop() does not hang on idle keep-alive connections", async () => {
+    const server = new OneBotReverseWsServer({
+      listenMode: "loopback",
+      port: 0,
+      onEvent: () => undefined,
+      onClientConnected: () => undefined,
+    });
+    const info = await server.start();
+    // 模拟浏览器/扫描器：普通 GET 拿到 404 后连接作为 keep-alive 空闲连接留在 server 上
+    const agent = new http.Agent({ keepAlive: true });
+    await new Promise<void>((resolve, reject) => {
+      const req = http.get({ host: "127.0.0.1", port: info.port, path: "/", agent }, (res) => {
+        expect(res.statusCode).toBe(404);
+        res.resume();
+        res.once("end", resolve);
+      });
+      req.once("error", reject);
+    });
+    const startedAt = Date.now();
+    await server.stop();
+    agent.destroy();
+    // 修复前 server.close() 要等空闲 keep-alive 连接超时（默认 5s）才回调
+    expect(Date.now() - startedAt).toBeLessThan(2_000);
   });
 
   it("allows an unauthenticated loopback client when token is empty", async () => {
