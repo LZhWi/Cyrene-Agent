@@ -434,6 +434,17 @@ export async function executeAskUser(
     // AskUserAnswer.answers[] 的 field 就是上面我们塞进去的 question.id
     const rawAnswers = (rawAnswer as { answers?: Array<{ field?: string; selectedValues?: string[]; customText?: string }> })?.answers ?? [];
 
+    // 超时签名：requestUserClarification 超时统一 resolve 空 answers；
+    // 用户真实回答经校验后至少有一条。给模型明确的系统提示而非"校验失败"，
+    // 由模型自行决策：等待用户补充，或信息足够时继续完成小任务。
+    if (rawAnswers.length === 0) {
+      return {
+        outcome: "success",
+        tool: ASK_USER_TOOL_ID,
+        message: "系统提示：用户未在时限内回答问题。请停止等待用户补充；若现有信息已足够完成当前任务，可基于现有信息继续执行。",
+      };
+    }
+
     const answers: AskAnswer[] = [];
     for (const q of questions) {
       const matched = rawAnswers.find((a) => a.field === q.id);

@@ -179,7 +179,7 @@ describe("Harness user-wait builtins", () => {
     });
   });
 
-  it("treats an incomplete Ask response as a timeout instead of success", async () => {
+  it("returns a system notice for the model on Ask timeout (empty answers)", async () => {
     const result = await executeAskUser({
       id: "ask-timeout",
       name: "ask_user",
@@ -188,7 +188,8 @@ describe("Harness user-wait builtins", () => {
       }),
     }, vi.fn(async () => ({ answers: [] })));
 
-    expect(result).toMatchObject({ outcome: "failure", category: "timeout", tool: "ask_user" });
+    expect(result).toMatchObject({ outcome: "success", tool: "ask_user" });
+    expect(result.message).toContain("系统提示：用户未在时限内回答问题");
   });
 
   it("describes update_todo as a mutable notebook for multi-step tool work", () => {
