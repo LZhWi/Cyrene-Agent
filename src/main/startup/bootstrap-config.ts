@@ -1,7 +1,7 @@
 import type { BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import type { GeneralSettings } from "../settings/general-settings";
-import { loadModelSettings } from "../settings/model-settings";
+import { loadModelSettings, resolveModelSettingsProfile } from "../settings/model-settings";
 import { loadUserProfile } from "../settings-store";
 import {
   setSearchConfig,
@@ -114,9 +114,11 @@ export function bootstrapConfigGetters(ctx: BootstrapConfigContext): void {
   });
 
   // 注入通话模型/TTS 配置获取器
+  // 模型 getter 必须先展开默认档案再取字段：顶层镜像可能指向空壳 provider
+  // （用户只在档案里配了模型），直接读会导致通话报"模型配置缺失"（同 channel bot issue 4）。
   setCallSettings(
     () => {
-      const s = loadModelSettings();
+      const s = resolveModelSettingsProfile(loadModelSettings());
       return { provider: s.provider, baseUrl: s.baseUrl, model: s.model, apiKey: s.apiKey, explicitTransport: s.explicitTransport };
     },
     () => {
