@@ -6,9 +6,13 @@ vi.mock("./custom-cloud-engine", () => ({
 vi.mock("./mimo-engine", () => ({
   synthesize: vi.fn(async () => ({ audio: Buffer.from("RIFFmimo"), format: "wav" })),
 }));
+vi.mock("./mossland-engine", () => ({
+  synthesize: vi.fn(async () => ({ audio: Buffer.from("ID3moss"), format: "mp3" })),
+}));
 
 import { synthesize as customSynthesize } from "./custom-cloud-engine";
 import { synthesize as mimoSynthesize } from "./mimo-engine";
+import { synthesize as mosslandSynthesize } from "./mossland-engine";
 import { synthesizeByEngine } from "./tts-dispatcher";
 
 describe("tts-dispatcher custom-cloud", () => {
@@ -48,6 +52,21 @@ describe("tts-dispatcher mimo", () => {
       voiceAudioPath: "C:\\voices\\cyrene.mp3",
       text: "hello",
       stylePrompt: "温柔一点",
+    }));
+  });
+});
+
+describe("tts-dispatcher mossland", () => {
+  it("uses the current flash model when no model is configured", async () => {
+    await synthesizeByEngine("mossland", {
+      text: "hello",
+      apiKey: "moss-key",
+      voiceId: "voice-1",
+    });
+
+    expect(mosslandSynthesize).toHaveBeenCalledWith(expect.objectContaining({
+      model: "moss-tts-1.5-flash",
+      format: "mp3",
     }));
   });
 });

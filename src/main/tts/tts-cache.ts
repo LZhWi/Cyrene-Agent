@@ -3,6 +3,7 @@ import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
 import { type TtsAudioFormat } from "../../shared/tts-session";
+import { DEFAULT_MOSSLAND_TTS_MODEL } from "../../shared/tts-types";
 
 export function appendMinimaxTtsLog(entry: Record<string, unknown>): void {
   try {
@@ -150,9 +151,9 @@ export function buildMosslandCacheKey(payload: {
   format?: "mp3" | "wav" | "pcm";
 }): string {
   const source = JSON.stringify({
-    version: 1,
+    version: 2,
     engine: "mossland",
-    model: payload.model ?? "moss-tts",
+    model: payload.model ?? DEFAULT_MOSSLAND_TTS_MODEL,
     voiceId: payload.voiceId ?? "",
     format: payload.format ?? "mp3",
     text: payload.text,

@@ -25,6 +25,7 @@ import { normalizeWindowVisibilitySettings } from "../window-visibility-settings
 import { normalizeCitaSettings } from "../cita/settings";
 import { getGeneralSettingsPath } from "../settings-store";
 import type { GeneralSettings } from "./general-settings";
+import { DEFAULT_MOSSLAND_TTS_MODEL } from "../../shared/tts-types";
 import type { ToolModeOverrides } from "../orchestrator/tool-registry";
 import type { ConversationMode } from "../../shared/chat-types";
 import type { SkillModeOverrides } from "../skills/types";
@@ -82,7 +83,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   ttsMimoStylePrompt: "温柔、自然、略带亲近感，像在轻声陪用户聊天。",
   ttsMosslandKey: "",
   ttsMosslandVoiceId: "",
-  ttsMosslandModel: "moss-tts",
+  ttsMosslandModel: DEFAULT_MOSSLAND_TTS_MODEL,
   ttsMosslandTestText: "你好呀，我是昔涟。今天也请多多关照♪",
   ttsMosslandFormat: "mp3",
   weatherSource: "open-meteo",
@@ -118,6 +119,11 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   skillModeOverrides: {},
   lspServerOverrides: [],
 };
+
+function normalizeMosslandTtsModel(value: unknown): string {
+  const model = typeof value === "string" ? value.trim() : "";
+  return model && model !== "moss-tts" ? model : DEFAULT_MOSSLAND_TTS_MODEL;
+}
 
 const listeners = new Set<(before: GeneralSettings, after: GeneralSettings) => void>();
 
@@ -281,11 +287,9 @@ export function normalizeGeneralSettings(
       : DEFAULT_GENERAL_SETTINGS.ttsMimoStylePrompt,
     ttsMosslandKey: typeof input?.ttsMosslandKey === "string" ? input.ttsMosslandKey : "",
     ttsMosslandVoiceId: typeof input?.ttsMosslandVoiceId === "string" ? input.ttsMosslandVoiceId : "",
-    ttsMosslandModel: typeof input?.ttsMosslandModel === "string" ? input.ttsMosslandModel : DEFAULT_GENERAL_SETTINGS.ttsMosslandModel,
+    ttsMosslandModel: normalizeMosslandTtsModel(input?.ttsMosslandModel),
     ttsMosslandTestText: typeof input?.ttsMosslandTestText === "string" ? input.ttsMosslandTestText : DEFAULT_GENERAL_SETTINGS.ttsMosslandTestText,
-    ttsMosslandFormat: input?.ttsMosslandFormat === "wav" || input?.ttsMosslandFormat === "pcm"
-      ? input.ttsMosslandFormat
-      : "mp3",
+    ttsMosslandFormat: input?.ttsMosslandFormat === "wav" ? "wav" : "mp3",
     ...normalizeChatAppearance(input),
     toolModeOverrides: normalizeToolModeOverrides(input?.toolModeOverrides),
     chatToolsEnabled: Boolean(input?.chatToolsEnabled),

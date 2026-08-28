@@ -42,3 +42,33 @@ describe("general ASR settings", () => {
     expect(settings.asrEngine).toBe("mossland");
   });
 });
+
+describe("general Mossland TTS settings", () => {
+  it("uses the current flash model by default", () => {
+    expect(normalizeGeneralSettings({}).ttsMosslandModel).toBe("moss-tts-1.5-flash");
+  });
+
+  it("migrates the legacy model and synchronous pcm format", () => {
+    const settings = normalizeGeneralSettings({
+      ttsMosslandModel: "moss-tts",
+      ttsMosslandFormat: "pcm",
+    } as never);
+
+    expect(settings.ttsMosslandModel).toBe("moss-tts-1.5-flash");
+    expect(settings.ttsMosslandFormat).toBe("mp3");
+  });
+
+  it("keeps both documented synchronous models", () => {
+    expect(normalizeGeneralSettings({ ttsMosslandModel: "moss-tts-1.5-flash" } as never).ttsMosslandModel)
+      .toBe("moss-tts-1.5-flash");
+    expect(normalizeGeneralSettings({ ttsMosslandModel: "moss-tts-1.0-pro" } as never).ttsMosslandModel)
+      .toBe("moss-tts-1.0-pro");
+  });
+
+  it("defaults an empty Mossland model and trims a saved snapshot id", () => {
+    expect(normalizeGeneralSettings({ ttsMosslandModel: "   " } as never).ttsMosslandModel)
+      .toBe("moss-tts-1.5-flash");
+    expect(normalizeGeneralSettings({ ttsMosslandModel: "  moss-tts-1.5-flash-20260828  " } as never).ttsMosslandModel)
+      .toBe("moss-tts-1.5-flash-20260828");
+  });
+});

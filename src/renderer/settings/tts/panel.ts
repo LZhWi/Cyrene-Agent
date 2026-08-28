@@ -5,6 +5,7 @@
 
 import { ttsState } from "./state";
 import { TTS_FIELD_MAP, TTS_PROVIDER_FIELDS } from "./field-map";
+import { DEFAULT_MOSSLAND_TTS_MODEL, type MosslandSyncFormat } from "../../../shared/tts-types";
 import { showHtmlModal } from "../shared/modal";
 import { safeGet } from "../shared/utils";
 
@@ -61,21 +62,23 @@ interface TtsApi {
   // Mossland（api.mosi.cn）
   synthesizeMossland: (payload: {
     apiKey: string; voiceId: string; text: string;
-    speed?: number; volume?: number; model?: string;
-    format?: "mp3" | "wav" | "pcm";
-  }) => Promise<{ base64: string; cacheKey: string; cached: boolean; format: "mp3" | "wav" | "pcm" }>;
+    model?: string; format?: MosslandSyncFormat;
+  }) => Promise<{ base64: string; cacheKey: string; cached: boolean; format: MosslandSyncFormat }>;
   synthesizeCachedMossland: (payload: {
     apiKey: string; voiceId: string; text: string;
-    speed?: number; volume?: number; model?: string;
-    format?: "mp3" | "wav" | "pcm";
+    model?: string; format?: MosslandSyncFormat;
     expectedCacheKey?: string;
-  }) => Promise<{ base64: string; cacheKey: string; cached: boolean; format: "mp3" | "wav" | "pcm" }>;
+  }) => Promise<{ base64: string; cacheKey: string; cached: boolean; format: MosslandSyncFormat }>;
   cloneMossland: (payload: {
     apiKey: string; filePath: string; name?: string; description?: string;
   }) => Promise<{ voiceId: string; name?: string; createdAt?: number }>;
   listMosslandVoices: (payload: {
-    apiKey: string; limit?: number;
-  }) => Promise<{ voices: Array<{ id: string; name: string; createdAt: number }> }>;
+    apiKey: string; limit?: number; offset?: number; after?: string; status?: string;
+  }) => Promise<{
+    voices: Array<{ id: string; name: string; createdAt: number }>;
+    hasMore: boolean;
+    nextCursor?: string;
+  }>;
   pickAudioFile: () => Promise<string | null>;
   saveSettings: (tts: Record<string, unknown>) => Promise<unknown>;
   loadSettings: () => Promise<Record<string, unknown>>;
@@ -157,12 +160,21 @@ async function loadTtsConfig(): Promise<void> {
   // Mossland（UI 骨架已就位，IPC 第二步接通；字段值已写入 ttsState.config 以便保存）
   ttsEl("tts-mossland-key").value = String(ttsState.config.ttsMosslandKey ?? "");
   ttsEl("tts-mossland-voice").value = String(ttsState.config.ttsMosslandVoiceId ?? "");
-  (ttsEl("tts-mossland-model") as HTMLSelectElement).value = "moss-tts";
+  const mosslandModelSelect = ttsEl("tts-mossland-model") as HTMLSelectElement;
+  const rawMosslandModel = String(ttsState.config.ttsMosslandModel ?? "").trim();
+  const savedMosslandModel = rawMosslandModel && rawMosslandModel !== "moss-tts"
+    ? rawMosslandModel
+    : DEFAULT_MOSSLAND_TTS_MODEL;
+  if (![...mosslandModelSelect.options].some((option) => option.value === savedMosslandModel)) {
+    const savedOption = document.createElement("option");
+    savedOption.value = savedMosslandModel;
+    savedOption.textContent = `${savedMosslandModel}（已保存版本）`;
+    mosslandModelSelect.appendChild(savedOption);
+  }
+  mosslandModelSelect.value = savedMosslandModel;
   ttsEl("tts-mossland-text").value = String(ttsState.config.ttsMosslandTestText ?? TTS_TEST_TEXT);
   (ttsEl("tts-mossland-format") as HTMLSelectElement).value =
-    ttsState.config.ttsMosslandFormat === "wav" ? "wav"
-    : ttsState.config.ttsMosslandFormat === "pcm" ? "pcm"
-    : "mp3";
+    ttsState.config.ttsMosslandFormat === "wav" ? "wav" : "mp3";
   ttsState.config.ttsMosslandKey       = String(ttsEl("tts-mossland-key").value);
   ttsState.config.ttsMosslandVoiceId   = String(ttsEl("tts-mossland-voice").value);
   ttsState.config.ttsMosslandModel     = (ttsEl("tts-mossland-model") as HTMLSelectElement).value;
@@ -520,7 +532,7 @@ document.getElementById("tts-mossland-test")?.addEventListener("click", async ()
   const voiceId = ttsEl("tts-mossland-voice").value.trim();
   const text = ttsEl("tts-mossland-text").value.trim();
   const model = (ttsEl("tts-mossland-model") as HTMLSelectElement).value;
-  const format = (ttsEl("tts-mossland-format") as HTMLSelectElement).value as "mp3" | "wav" | "pcm";
+  const format = (ttsEl("tts-mossland-format") as HTMLSelectElement).value as MosslandSyncFormat;
   if (!apiKey) { window.alert("请先填写 Mossland API Key"); return; }
   if (!voiceId) { window.alert("请先填写音色 ID（可从下方拉取列表）"); return; }
   if (!text) { window.alert("请先填写试听文本"); return; }
@@ -531,11 +543,7 @@ document.getElementById("tts-mossland-test")?.addEventListener("click", async ()
   const statusEl = document.getElementById("tts-mossland-test-status");
   if (statusEl) { statusEl.textContent = "合成中…"; statusEl.className = "tts-clone-status is-loading"; }
   try {
-    const result = await window.tts.synthesizeMossland({
-      apiKey, voiceId, text, model, format,
-      speed: Number(ttsEl("tts-speed").value),
-      volume: Number(ttsEl("tts-volume").value),
-    });
+    const result = await window.tts.synthesizeMossland({ apiKey, voiceId, text, model, format });
     playTtsAudio(result.base64, result.format);
     if (statusEl) {
       statusEl.textContent = "✅ 合成成功";
@@ -597,12 +605,13 @@ document.getElementById("tts-mossland-list-voices")?.addEventListener("click", a
 
   setMosslandListStatus("正在拉取音色列表…", "loading");
   try {
-    const result = await window.tts.listMosslandVoices({ apiKey, limit: 50 });
+    const result = await window.tts.listMosslandVoices({ apiKey, limit: 150 });
     if (result.voices.length === 0) {
       setMosslandListStatus("账号下还没有已克隆的音色，请先到上方「音色克隆」创建一个。", "error");
     } else {
       renderMosslandVoiceList(result.voices);
-      setMosslandListStatus(`✅ 拉到 ${result.voices.length} 个音色。点击右侧「使用」可填入音色 ID 框。`, "ok");
+      const moreHint = result.hasMore ? "仍有更多音色，可稍后继续分页拉取。" : "";
+      setMosslandListStatus(`✅ 拉到 ${result.voices.length} 个音色。点击右侧「使用」可填入音色 ID 框。${moreHint}`, "ok");
     }
   } catch (err) {
     setMosslandListStatus("❌ " + (err instanceof Error ? err.message : String(err)), "error");
@@ -616,13 +625,8 @@ document.getElementById("tts-mossland-clone-info-btn")?.addEventListener("click"
     icon: "ⓘ",
     htmlBody: [
       '<div class="tts-clone-spec-block">',
-      '  <h4><svg class="tts-clone-spec-icon" width="18" height="18" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M24 44C35.0457 44 44 35.0457 44 24C44 12.9543 35.0457 4 24 4C12.9543 4 4 12.9543 4 24C4 35.0457 12.9543 44 24 44Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M18 22H30" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M18 28H30" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M24.0083 22V34" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M30 15L24 21L18 15" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 费用</h4>',
-      '  <p>请参阅 Mossland 平台定价页（文档未提供具体单价）。每次成功创建 voice_id 都会计费。',
-      '     与 MiniMax 不同：<strong>Mossland 没有「7 天过期」</strong>，voice_id 永久有效。</p>',
-      '</div>',
-      '<div class="tts-clone-spec-block">',
-      '  <h4><svg class="tts-clone-spec-icon" width="18" height="18" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M7 4H41" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M7 44H41" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 44C13.6667 30.6611 18 23.9944 24 24C30 24.0056 34.3333 30.6722 37 44H11Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M37 4C34.3333 17.3389 30 24.0056 24 24C18 23.9944 13.6667 17.3278 11 4H37Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linejoin="round"/><path d="M21 15H27" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M19 38H29" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 持久化规则</h4>',
-      '  <p>创建的 voice_id <strong>永久有效</strong>，无过期、无冷却。直接复制到「音色 ID」即可永久复用。</p>',
+      '  <h4>音色管理</h4>',
+      '  <p>创建成功后会返回 <code>voice_id</code>。有效期、计费和账号配额请以 Mossland 控制台的当前说明为准。</p>',
       '</div>',
       '<div class="tts-clone-spec-block">',
       '  <h4><svg class="tts-clone-spec-icon" width="18" height="18" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M8 44V4H31L40 14.5V44H8Z" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><path d="M32 14L26 16.9688V31.5" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="20.5" cy="31.5" r="5.5" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"/></svg> 参考音频 <code>audio_sample</code></h4>',
@@ -631,16 +635,14 @@ document.getElementById("tts-mossland-clone-info-btn")?.addEventListener("click"
       '    <li>字段名：<code>audio_sample</code>（必填）</li>',
       '    <li>字段名：<code>name</code>（可选，给音色起名）</li>',
       '    <li>字段名：<code>description</code>（可选，描述音色）</li>',
-      '    <li>时长限制：≤ 60 秒（实测，官方文档未标注）</li>',
-      '    <li>格式：文档示例为 wav</li>',
+      '    <li>请上传清晰、单人、低噪声的参考音频；格式和大小限制以接口返回为准</li>',
       '  </ul>',
       '</div>',
       '<div class="tts-clone-spec-block">',
       '  <h4><svg class="tts-clone-spec-icon" width="18" height="18" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><circle cx="24" cy="24" r="18" fill="none" stroke="currentColor" stroke-width="4"/><path d="M24 14V16" stroke="currentColor" stroke-width="4" stroke-linecap="round"/><circle cx="24" cy="32" r="2.5" fill="currentColor"/></svg> 后续合成</h4>',
       '  <ul>',
-      '    <li>拿到 voice_id 后，调用 <code>POST /v1/audio/speech</code>，body 形如 <code>{ model: "moss-tts", input: "...", voice_id: "..." }</code></li>',
-      '    <li>可选 <code>delivery_method: "audio" \| "url"</code>（默认 audio，二进制流；url 返回 JSON 含 URL）</li>',
-      '    <li><code>version</code> 字段为预留能力，当前请不传，服务端使用默认版本</li>',
+      '    <li>拿到 voice_id 后，调用 <code>POST /v1/audio/speech</code></li>',
+      '    <li>同步合成可选择 <code>moss-tts-1.5-flash</code> 或 <code>moss-tts-1.0-pro</code>，输出 MP3 / WAV</li>',
       '  </ul>',
       '</div>',
     ].join("\n"),

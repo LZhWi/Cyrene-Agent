@@ -94,7 +94,7 @@ export interface GeneralSettings extends ChatAppearanceSettings {
   ttsMosslandVoiceId: string;
   ttsMosslandModel: string;
   ttsMosslandTestText: string;
-  ttsMosslandFormat: "mp3" | "wav" | "pcm";
+  ttsMosslandFormat: "mp3" | "wav";
   /** 天气源：open-meteo(免配置默认) | amap(高德,需填key) */
   weatherSource: "open-meteo" | "amap";
   /** 天气插件是否启用（开关） */

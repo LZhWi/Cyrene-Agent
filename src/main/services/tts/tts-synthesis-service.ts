@@ -247,8 +247,6 @@ export function createTtsSynthesisService(
         apiKey: settings.ttsMosslandKey,
         voiceId: settings.ttsMosslandVoiceId,
         text: request.speechText,
-        speed: settings.ttsSpeed,
-        volume: settings.ttsVolume,
         model: settings.ttsMosslandModel,
         format,
       };

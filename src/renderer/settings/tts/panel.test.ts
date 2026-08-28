@@ -53,8 +53,8 @@ describe("TTS settings panel", () => {
     addSelect("tts-minimax-model", ["speech-2.8-turbo", "speech-2.8-hd"]);
     addSelect("tts-gptsovits-format", ["wav", "mp3"]);
     addSelect("tts-custom-cloud-format", ["mp3", "wav"]);
-    addSelect("tts-mossland-model", ["moss-tts"]);
-    addSelect("tts-mossland-format", ["mp3", "wav", "pcm"]);
+    addSelect("tts-mossland-model", ["moss-tts-1.5-flash", "moss-tts-1.0-pro"]);
+    addSelect("tts-mossland-format", ["mp3", "wav"]);
   });
 
   it("persists the MiniMax model immediately when the select changes", async () => {
@@ -75,5 +75,20 @@ describe("TTS settings panel", () => {
     await Promise.resolve();
 
     expect(saveSettings).toHaveBeenCalledWith({ ttsMinimaxModel: "speech-2.8-hd" });
+  });
+
+  it("restores the saved Mossland model instead of forcing the legacy model", async () => {
+    Object.assign(window, {
+      tts: {
+        loadSettings: vi.fn(async () => ({ ttsMosslandModel: "moss-tts-1.0-pro" })),
+        saveSettings: vi.fn(async () => ({})),
+      },
+    });
+
+    await import("./panel");
+    await Promise.resolve();
+
+    expect((document.getElementById("tts-mossland-model") as HTMLSelectElement).value)
+      .toBe("moss-tts-1.0-pro");
   });
 });

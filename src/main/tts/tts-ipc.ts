@@ -510,8 +510,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   // Mossland 合成（Settings「测试发音」用，无缓存）
   ipcMain.handle(IPC.TTS_SYNTHESIZE_MOSSLAND, async (_event, payload: {
     apiKey: string; voiceId: string; text: string;
-    speed?: number; volume?: number; model?: string;
-    format?: "mp3" | "wav" | "pcm";
+    model?: string; format?: "mp3" | "wav";
   }) => {
     if (!payload?.apiKey || !payload?.voiceId || !payload?.text) {
       throw new Error("缺少必要参数（apiKey/voiceId/text）");
@@ -520,8 +519,6 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
       apiKey: payload.apiKey,
       voiceId: payload.voiceId,
       text: payload.text,
-      speed: payload.speed,
-      volume: payload.volume,
       model: payload.model,
       format: payload.format,
     });
@@ -537,11 +534,10 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   // Mossland 合成 + 本地缓存（聊天自动朗读用；cache-only 兜底由 chat 侧传 "cache-only"）
   ipcMain.handle(IPC.TTS_SYNTHESIZE_CACHED_MOSSLAND, async (_event, payload: {
     apiKey: string; voiceId: string; text: string;
-    speed?: number; volume?: number; model?: string;
-    format?: "mp3" | "wav" | "pcm";
+    model?: string; format?: "mp3" | "wav";
     expectedCacheKey?: string;
   }) => {
-    const format: "mp3" | "wav" | "pcm" = payload.format ?? "mp3";
+    const format: "mp3" | "wav" = payload.format ?? "mp3";
 
     // 缓存命中
     let expectedPath: string | null = null;
@@ -574,8 +570,6 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
       apiKey: payload.apiKey,
       voiceId: payload.voiceId,
       text: payload.text,
-      speed: payload.speed,
-      volume: payload.volume,
       model: payload.model,
       format,
     });
@@ -607,12 +601,15 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
 
   // Mossland 拉取账号下音色列表
   ipcMain.handle(IPC.TTS_LIST_MOSSLAND_VOICES, async (_event, payload: {
-    apiKey: string; limit?: number;
+    apiKey: string; limit?: number; offset?: number; after?: string; status?: string;
   }) => {
     const result = await mosslandListVoices({
       apiKey: payload.apiKey,
       limit: payload.limit,
+      offset: payload.offset,
+      after: payload.after,
+      status: payload.status,
     });
-    return { voices: result.voices };
+    return result;
   });
 }

@@ -2,6 +2,9 @@
 
 export type TtsEngine = "off" | "minimax" | "gptsovits" | "custom-cloud" | "mimo" | "mossland";
 
+export const DEFAULT_MOSSLAND_TTS_MODEL = "moss-tts-1.5-flash";
+export type MosslandSyncFormat = "mp3" | "wav";
+
 /** GPT-SoVITS 合成请求（渲染端 → 主进程 IPC payload）。 */
 export interface GptsovitsSynthesizeRequest {
   baseUrl: string;             // 形如 "http://localhost:9880"，不含路径
@@ -39,10 +42,8 @@ export interface MosslandSynthesizeRequest {
   apiKey: string;               // Bearer token
   voiceId: string;              // 必填：clone 得到的 voice_id
   text: string;                 // 待合成文本
-  speed?: number;               // 0.5~2，默认 1
-  volume?: number;              // 0~1，默认 1
-  model?: string;               // 默认 "moss-tts"；暂不支持 moss-ttsd（多说话人）
-  format?: "mp3" | "wav" | "pcm";  // 默认 "mp3"
+  model?: string;               // 默认 moss-tts-1.5-flash；也允许官方快照模型 ID
+  format?: MosslandSyncFormat;  // 当前客户端的同步播放链路使用 mp3 / wav
 }
 
 /** Mossland 音色克隆请求（multipart/form-data 上传到 POST /v1/audio/voices）。 */
@@ -70,6 +71,8 @@ export interface MosslandVoiceInfo {
 /** Mossland 拉取音色列表返回。 */
 export interface MosslandListVoicesResult {
   voices: MosslandVoiceInfo[];
+  hasMore: boolean;
+  nextCursor?: string;
 }
 
 /** TTS 合成返回（主进程 → 渲染端 IPC 返回）。minimax 和 gptsovits 共用。 */

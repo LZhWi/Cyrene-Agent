@@ -6,7 +6,7 @@ import { synthesize as gptsovitsSynthesize } from "./gptsovits-engine";
 import { synthesize as customCloudSynthesize } from "./custom-cloud-engine";
 import { synthesize as mimoSynthesize } from "./mimo-engine";
 import { synthesize as mosslandSynthesize } from "./mossland-engine";
-import type { TtsEngine } from "../../shared/tts-types";
+import { DEFAULT_MOSSLAND_TTS_MODEL, type TtsEngine } from "../../shared/tts-types";
 import type { MiniMaxVocalEnhanceOptions } from "./minimax-vocal-enhancer";
 
 export interface SynthesizeByEnginePayload {
@@ -29,8 +29,8 @@ export interface SynthesizeByEnginePayload {
   // mimo 专用
   voiceAudioPath?: string;
   stylePrompt?: string;
-  // mossland 专用（与 minimax 字段重叠：apiKey/voiceId/model/format，新增 format 选项 pcm）
-  mosslandFormat?: "mp3" | "wav" | "pcm";
+  // mossland 专用（与 minimax 字段重叠：apiKey/voiceId/model/format）
+  mosslandFormat?: "mp3" | "wav";
 }
 
 export interface SynthesizeByEngineResult {
@@ -120,9 +120,7 @@ export async function synthesizeByEngine(
       apiKey: payload.apiKey,
       voiceId: payload.voiceId,
       text: payload.text,
-      speed: payload.speed,
-      volume: payload.volume,
-      model: payload.model ?? "moss-tts",
+      model: payload.model ?? DEFAULT_MOSSLAND_TTS_MODEL,
       format,
     });
     return { audio: result.audio, format: result.format };
