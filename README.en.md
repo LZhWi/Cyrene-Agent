@@ -13,7 +13,7 @@
 **Cyrene-Agent is a Windows Live2D AI desktop companion centered around Cyrene from _Honkai: Star Rail_.**
 
 > A desktop Live2D conversational Agent built with Electron and TypeScript.  
-> Centered around Cyrene's character design and powered by the self-developed DMAE memory engine,  
+> Centered around Cyrene's character design and powered by the self-developed Cyrene_Harness&DMAE memory engine,  
 > it brings character-driven conversation, personalized memory, voice interaction, tool use, and multi-platform access into a single desktop Agent,  
 > supporting five conversation modes: Chat, Work, Code, Learn, and Daily.
 
@@ -194,7 +194,7 @@ Configuration is stored in the application's `<userData>/` directory. Most chang
 | --- | :---: | --- |
 | 🌸 Live2D Desktop Companion | ✅ Available | Always-on-top companion, multiple windows, expressions, actions, mood and status, speech bubbles, and intelligent stickers |
 | 💬 Casual Conversation (Chat) | ✅ Available | Independent character-chat flow that neither exposes nor executes tools, using recent messages, social context, and user style |
-| 🛠️ Assisted Work (Work) | ✅ Available | Driven by [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts): CITA context understanding + permission approval filtering + main-loop tool scheduling + uncertain-effect accounting + recoverable checkpoint; the Soul persona layer generates the reply text at the exit |
+| 🛠️ Assisted Work (Work) | ✅ Available | Driven by [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) |
 | 💻 Code Collaboration (Code) | ✅ Available | Binds a trusted code directory; Coding Agent reads, modifies, verifies code, and runs commands |
 | 📚 Learning Companion (Learn) | ✅ Available | Binds an Obsidian Vault to accompany understanding, take notes, generate exercises, and track progress |
 | 📅 Daily Affairs (Daily) | ✅ Available | Reuses the CyreneHarness main loop; a general-purpose tool session for everyday Q&A, information organization, and light tasks |
