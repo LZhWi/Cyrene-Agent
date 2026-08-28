@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { dialog, ipcMain } from "electron";
 import { IPC } from "../../shared/ipc-channels";
+import { validateMiniMaxVoiceId } from "../../shared/minimax-voice";
 import type { StartTtsRequest } from "../../shared/tts-session";
 import { synthesize as customCloudSynthesize } from "./custom-cloud-engine";
 import { synthesize as gptsovitsSynthesize } from "./gptsovits-engine";
@@ -78,6 +79,8 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
     if (!payload?.apiKey || !payload?.fileId || !payload?.voiceId || !payload?.text) {
       throw new Error("缺少必要参数（apiKey/fileId/voiceId/text）");
     }
+    const voiceIdError = validateMiniMaxVoiceId(payload.voiceId);
+    if (voiceIdError) throw new Error(voiceIdError);
     return await minimaxCloneVoice(payload);
   });
 

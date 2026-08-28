@@ -6,6 +6,7 @@
 import { ttsState } from "./state";
 import { TTS_FIELD_MAP, TTS_PROVIDER_FIELDS } from "./field-map";
 import { DEFAULT_MOSSLAND_TTS_MODEL, type MosslandSyncFormat } from "../../../shared/tts-types";
+import { createUniqueMiniMaxVoiceId, validateMiniMaxVoiceId } from "../../../shared/minimax-voice";
 import { showHtmlModal } from "../shared/modal";
 import { safeGet } from "../shared/utils";
 
@@ -711,6 +712,8 @@ document.getElementById("tts-clone-start")?.addEventListener("click", async () =
   if (!cloneFile) { window.alert("请选择配音文件"); return; }
   if (!cloneText) { window.alert("请填写复刻文本"); return; }
   if (!voiceId) { window.alert("请填写音色命名"); return; }
+  const voiceIdError = validateMiniMaxVoiceId(voiceId);
+  if (voiceIdError) { setCloneStatus("❌ " + voiceIdError, "error"); return; }
 
   const btn = document.getElementById("tts-clone-start") as HTMLButtonElement;
   btn.disabled = true;
@@ -755,6 +758,12 @@ document.getElementById("tts-clone-start")?.addEventListener("click", async () =
     }
   } catch (err) {
     setCloneStatus("❌ " + (err instanceof Error ? err.message : String(err)), "error");
+    // 失败可能是"服务端已创建但响应丢失"（重试同 ID 会报 2039 重复），
+    // 自动换一个新的音色 ID，让用户直接点重试即可。
+    const failedVoiceId = ttsEl("tts-clone-voice-id").value.trim();
+    if (failedVoiceId) {
+      ttsEl("tts-clone-voice-id").value = createUniqueMiniMaxVoiceId();
+    }
   } finally {
     btn.disabled = false;
   }
@@ -869,6 +878,11 @@ function showCloneSpecModal(): void {
 
 document.getElementById("tts-clone-info-btn")?.addEventListener("click", showCloneSpecModal);
 document.getElementById("tts-clone-info-link")?.addEventListener("click", showCloneSpecModal);
+
+const cloneVoiceIdInput = document.getElementById("tts-clone-voice-id") as HTMLInputElement | null;
+if (cloneVoiceIdInput && !cloneVoiceIdInput.value.trim()) {
+  cloneVoiceIdInput.value = createUniqueMiniMaxVoiceId();
+}
 
 // 初始加载配置
 void loadTtsConfig();
