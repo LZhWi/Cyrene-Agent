@@ -6,9 +6,9 @@
 // 写入策略：record() 立即更新内存缓存，1 秒防抖落盘（避免高频写）。
 // 读取策略：首次访问时从磁盘加载到内存，后续直接读缓存。
 
-import { app } from "electron";
 import * as fs from "fs";
 import * as path from "path";
+import { getUserDataDir } from "./runtime/runtime-paths";
 
 export interface TokenUsageDay {
   input: number;
@@ -27,7 +27,7 @@ const DEFAULT_STORE: TokenUsageStore = { schemaVersion: 1, days: {} };
 const DEBOUNCE_MS = 1000;
 
 function getFilePath(): string {
-  return path.join(app.getPath("userData"), "token-usage.json");
+  return path.join(getUserDataDir(), "token-usage.json");
 }
 
 function todayKey(): string {

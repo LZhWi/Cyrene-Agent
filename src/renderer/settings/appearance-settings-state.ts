@@ -7,6 +7,7 @@ export interface AppearanceSettingsInput {
   petAlwaysOnTop: boolean;
   petVisible: boolean;
   petZoom: number;
+  petIdleMotionsEnabled: boolean;
 }
 
 export function buildAppearanceSettingsPatch(input: AppearanceSettingsInput): AppearanceSettingsInput {

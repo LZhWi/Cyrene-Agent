@@ -401,16 +401,71 @@ class MemoryStoreManager {
     })
   }
 
+  async updateL2Content(id: string, content: string): Promise<{ memory: L2Memory; oldRagId?: string } | null> {
+    const normalized = content.trim()
+    if (!normalized) throw new Error("L2 memory content cannot be empty")
+    const store = await this.load()
+    const mem = store.l2.find((memory) => memory.id === id)
+    if (!mem) return null
+    const oldRagId = mem.ragId
+    mem.content = normalized
+    mem.embedding = []
+    mem.syncStatus = "pending_sync"
+    mem.facets = createPendingMemoryFacets()
+    delete mem.ragId
+    delete mem.conflictWith
+    if (store.l2DmaeStates) delete store.l2DmaeStates[id]
+    store.conflictLogs = (store.conflictLogs ?? []).filter((log) => (
+      log.sourceL2Id !== id && log.targetL2Id !== id && log.resolutionMemoryId !== id
+    ))
+    if (oldRagId) {
+      for (const other of store.l2) {
+        if (other.id === id || !other.conflictWith) continue
+        other.conflictWith = other.conflictWith.filter((ragId) => ragId !== oldRagId)
+        if (other.conflictWith.length === 0) delete other.conflictWith
+      }
+    }
+    await this.save(store)
+    appendMemoryTrace({
+      op: "l2.edit",
+      layer: "L2",
+      status: "ok",
+      l2Id: id,
+      ragId: oldRagId,
+      details: { syncStatus: "pending_sync" },
+    })
+    return { memory: mem, oldRagId }
+  }
+
   async deleteL2(id: string): Promise<void> {
     const store = await this.load()
+    const deleted = store.l2.find((memory) => memory.id === id)
+    if (!deleted) return
     store.l2 = store.l2.filter((m) => m.id !== id)
     store.evidence = (store.evidence ?? []).filter((evidence) => evidence.memoryId !== id)
+    store.conflictLogs = (store.conflictLogs ?? []).filter((log) => (
+      log.sourceL2Id !== id && log.targetL2Id !== id && log.resolutionMemoryId !== id
+    ))
+    if (store.l2DmaeStates) delete store.l2DmaeStates[id]
+    for (const memory of store.l2) {
+      if (memory.supersededBy === id) delete memory.supersededBy
+      if (memory.mergedInto === id) delete memory.mergedInto
+      if (memory.subEntryIds) {
+        memory.subEntryIds = memory.subEntryIds.filter((subEntryId) => subEntryId !== id)
+        if (memory.subEntryIds.length === 0) delete memory.subEntryIds
+      }
+      if (deleted.ragId && memory.conflictWith) {
+        memory.conflictWith = memory.conflictWith.filter((ragId) => ragId !== deleted.ragId)
+        if (memory.conflictWith.length === 0) delete memory.conflictWith
+      }
+    }
     await this.save(store)
     appendMemoryTrace({
       op: "l2.delete",
       layer: "L2",
       status: "ok",
       l2Id: id,
+      ragId: deleted.ragId,
     })
   }
 
@@ -696,6 +751,14 @@ class MemoryStoreManager {
           ...(oldMemory.sourceMessageIds ?? []),
           ...(newMemory.sourceMessageIds ?? []),
         ],
+        sourceAt: Math.min(
+          oldMemory.sourceAt ?? oldMemory.createdAt,
+          newMemory.sourceAt ?? newMemory.createdAt,
+        ),
+        sourceEndAt: Math.max(
+          oldMemory.sourceEndAt ?? oldMemory.sourceAt ?? oldMemory.createdAt,
+          newMemory.sourceEndAt ?? newMemory.sourceAt ?? newMemory.createdAt,
+        ),
         isPinned: false,
         syncStatus: "pending_sync",
         evidenceIds: [
@@ -867,6 +930,7 @@ class MemoryStoreManager {
   async setPendingTurns(turns: MemoryJudgeTurn[]): Promise<void> {
     const store = await this.load()
     store.pendingTurns = turns.map((turn) => ({
+      ...turn,
       userInput: snippet(turn.userInput, 4000) ?? "",
       assistantReply: snippet(turn.assistantReply, 4000) ?? "",
     }))

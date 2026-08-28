@@ -12,8 +12,10 @@ declare global {
       setDragging: (isDragging: boolean) => void;
       captureFrame: () => Promise<string | null>;
       getCursorPosition: () => Promise<{ x: number; y: number } | null>;
+      getIdleState: () => Promise<{ systemIdleSeconds: number; screenNoChangeCount: number | null }>;
       onPetZoom: (callback: (zoom: number) => void) => () => void;
       onPetVisibilityChanged: (callback: (visible: boolean) => void) => () => void;
+      onPetIdleMotionsChanged: (callback: (enabled: boolean) => void) => () => void;
     };
     holoCubicRenderer?: {
       ready: () => void;

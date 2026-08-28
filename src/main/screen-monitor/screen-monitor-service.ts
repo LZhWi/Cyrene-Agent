@@ -164,6 +164,8 @@ class ScreenMonitorService {
   private intervalMs = PERIODIC_INTERVAL_MS;
   private lastTickStartMs = 0; // 本轮 tick 开始时刻：排程用绝对时间，防 catch 改间隔后相对延迟错锚
   private lowChangeCount = 0;
+  private consecutiveNoChangeCount = 0;
+  private observationAvailable = false;
   private lastSummary = "";
   private lastIntent: string | null = null;
   private lastSmallBitmap: Buffer | null = null; // 上一张截图的缩采样位图，像素级无变化对比用
@@ -185,6 +187,8 @@ class ScreenMonitorService {
     this.state = "periodic";
     this.intervalMs = PERIODIC_INTERVAL_MS;
     this.lowChangeCount = 0;
+    this.consecutiveNoChangeCount = 0;
+    this.observationAvailable = false;
     this.lastIntent = null;
     this.lastSmallBitmap = null;
     this.lastTickStartMs = Date.now(); // 以启动时刻为锚，首次观察在完整间隔后
@@ -202,6 +206,8 @@ class ScreenMonitorService {
       this.state = "idle";
       console.log(LOG_PREFIX, "停止周期观察");
     }
+    this.consecutiveNoChangeCount = 0;
+    this.observationAvailable = false;
   }
 
   /** 是否正在运行。 */
@@ -209,11 +215,19 @@ class ScreenMonitorService {
     return this.state === "periodic";
   }
 
+  getConsecutiveNoChangeCount(): number | null {
+    return this.isRunning() && this.observationAvailable
+      ? this.consecutiveNoChangeCount
+      : null;
+  }
+
   /** 仅测试用：重置对比基线与频率状态，保证单例在测试间隔离。 */
   resetForTests(): void {
     this.stop();
     this.intervalMs = PERIODIC_INTERVAL_MS;
     this.lowChangeCount = 0;
+    this.consecutiveNoChangeCount = 0;
+    this.observationAvailable = false;
     this.lastSummary = "";
     this.lastIntent = null;
     this.lastSmallBitmap = null;
@@ -283,6 +297,10 @@ class ScreenMonitorService {
         noChange && this.lastSummary
           ? this.recordNoChangeObservation()
           : await captureAndAnalyze(config, "periodic", this.lastSummary, capture);
+      this.consecutiveNoChangeCount = observation.noChange
+        ? this.consecutiveNoChangeCount + 1
+        : 0;
+      this.observationAvailable = true;
 
       // 从失败快重试恢复：先回全速，后续低变化判定会再决定是否降频
       if (this.intervalMs === RETRY_INTERVAL_MS) {
@@ -321,6 +339,8 @@ class ScreenMonitorService {
       console.error(LOG_PREFIX, "周期观察失败:", err instanceof Error ? err.message : String(err));
       // 失败快重试：避免低频间隔叠加失败造成 >10 分钟的观测空窗（注入侧过期阈值）
       this.intervalMs = RETRY_INTERVAL_MS;
+      this.consecutiveNoChangeCount = 0;
+      this.observationAvailable = false;
     }
 
     this.scheduleNext();

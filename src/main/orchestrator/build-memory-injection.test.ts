@@ -120,12 +120,14 @@ describe("buildMemoryInjection", () => {
 
     const context = await buildMemoryInjection("随便聊聊")
 
-    // active 正常引用，带记录日期锚点
-    expect(context).toMatch(/· 用户喜欢冰淇淋（记录于 \d{4}\/\d{1,2}\/\d{1,2}）/)
+    // active 正常引用，带精确到小时的记录时间锚点
+    expect(context).toMatch(/· 用户喜欢冰淇淋（记录于 \d{4}\/\d{1,2}\/\d{1,2} \d{2}时）/)
     // aging 标注久远印象 + 日期
     expect(context).toContain("用户在学法语（较久远的印象，记录于")
     // 冲突条目保留 ⚠️ 标注 + 日期
     expect(context).toContain("用户住在上海 ⚠️（该信息可能存在矛盾记录，记录于")
+    expect(context).toContain("相对时间，一律以同条「记录于」时间为参照")
+    expect(context).toContain("当前状态待核实，不得表述为现在仍即将发生")
     // 尾部引用指引只在命中对应档位时出现
     expect(context).toContain("提及时用不确定的语气")
     expect(context).toContain("引用前先向用户求证")
@@ -143,6 +145,7 @@ describe("buildMemoryInjection", () => {
     const context = await buildMemoryInjection("随便聊聊")
 
     expect(context).toContain("· 用户喜欢冰淇淋")
+    expect(context).toContain("相对时间，一律以同条「记录于」时间为参照")
     expect(context).not.toContain("较久远的印象")
     expect(context).not.toContain("求证")
   })
@@ -164,6 +167,23 @@ describe("buildMemoryInjection", () => {
 
     expect(context).toContain("原文：我用 React 18.2 做的前端，部署在 vercel 上；记录于")
     expect(context).toContain("原文：我喜欢吃香菇；记录于")
+  })
+
+  it("shows the verified source hour range instead of the write date", async () => {
+    const sourceAt = new Date(2026, 7, 23, 14, 37).getTime()
+    const sourceEndAt = new Date(2026, 7, 23, 18, 5).getTime()
+    ragMock.searchMemoryEntries.mockResolvedValue([
+      { id: "rag_t", text: "用户参加了剧本杀", createdAt: new Date(2026, 7, 24, 2).getTime(), score: 0.9, metadata: { l2Id: "l2_t" } },
+    ])
+    memoryStoreMock.getAllL2.mockResolvedValue([
+      { id: "l2_t", content: "用户参加了剧本杀", status: "active", conflictWith: [], sourceAt, sourceEndAt, createdAt: new Date(2026, 7, 24, 2).getTime() },
+    ])
+    const { buildMemoryInjection } = await import("./index")
+
+    const context = await buildMemoryInjection("剧本杀")
+
+    expect(context).toContain("记录于 2026/8/23 14时～2026/8/23 18时")
+    expect(context).not.toContain("2026/8/24")
   })
 })
 

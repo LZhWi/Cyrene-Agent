@@ -5,6 +5,8 @@ import { MouseFocusController } from "./live2d/focus";
 import { ExpressionResetController } from "./live2d/expression-reset";
 import { MouthSyncController } from "./live2d/mouth-sync";
 import { SpeakingMotionController } from "./live2d/speaking-motion";
+import { IdleMotionController } from "./live2d/idle-motion";
+import { DesktopNeutralRecoveryController } from "./live2d/desktop-neutral-recovery";
 import { OpenerBubbleController } from "./live2d/opener-bubble";
 import { ClickThroughController } from "./live2d/click-through";
 import { Live2DRendererLifecycleTracker } from "./live2d/lifecycle-diagnostics";
@@ -24,8 +26,10 @@ if (!window.cyrene) {
     setDragging: (_isDragging: boolean) => {},
     captureFrame: () => Promise.resolve(null),
     getCursorPosition: () => Promise.resolve(null),
+    getIdleState: () => Promise.resolve({ systemIdleSeconds: 0, screenNoChangeCount: null }),
     onPetZoom: (_cb: (zoom: number) => void) => () => {},
     onPetVisibilityChanged: (_cb: (visible: boolean) => void) => () => {},
+    onPetIdleMotionsChanged: (_cb: (enabled: boolean) => void) => () => {},
   };
 }
 
@@ -47,10 +51,13 @@ let focus: MouseFocusController | null = null;
 let expressionReset: ExpressionResetController | null = null;
 let mouthSync: MouthSyncController | null = null;
 let speakingMotion: SpeakingMotionController | null = null;
+let idleMotion: IdleMotionController | null = null;
+let desktopNeutralRecovery: DesktopNeutralRecoveryController | null = null;
 let clickThrough: ClickThroughController | null = null;
 let openerBubble: OpenerBubbleController | null = null;
 let petZoomOff: (() => void) | null = null;
 let petVisibilityOff: (() => void) | null = null;
+let petIdleMotionsOff: (() => void) | null = null;
 let petVisible = true;
 let live2dSpeechOffs: Array<() => void> = [];
 const live2dLifecycle = new Live2DRendererLifecycleTracker();
@@ -90,9 +97,17 @@ const manager = new Live2DManager({
     const model = manager.getModel();
     if (!model) return;
 
-    expressionReset = new ExpressionResetController(model);
+    expressionReset = new ExpressionResetController(model, { expressionName: "表情回正" });
     mouthSync = new MouthSyncController(model);
     speakingMotion = new SpeakingMotionController(model);
+    desktopNeutralRecovery = new DesktopNeutralRecoveryController(model, 800);
+    idleMotion = new IdleMotionController(model, {
+      resetMotionMs: 1_000,
+      onMotionEnd: () => {
+        desktopNeutralRecovery?.start();
+        void expressionReset?.resetNow();
+      },
+    });
     // Opener 主动开口气泡
     const speechOffs: Array<() => void> = [];
     const openerBubbleEl = document.getElementById("opener-bubble");
@@ -102,27 +117,44 @@ const manager = new Live2DManager({
     }
     speechOffs.push(
       trackSubscription("live2dSpeech:onPrepare", window.live2dSpeech?.onPrepare(() => {
+        desktopNeutralRecovery?.cancel();
+        idleMotion?.interruptReset();
+        idleMotion?.restartWait();
         void expressionReset?.resetNow();
         mouthSync?.stop();
         speakingMotion?.stop();
       }) ?? (() => {})),
       trackSubscription("live2dSpeech:onMouthStart", window.live2dSpeech?.onMouthStart((payload) => {
+        idleMotion?.setSuspended(true);
         mouthSync?.start(Number(payload.durationMs ?? 0));
         speakingMotion?.start();
       }) ?? (() => {})),
       trackSubscription("live2dSpeech:onMouthStop", window.live2dSpeech?.onMouthStop(() => {
         mouthSync?.stop();
         speakingMotion?.stop();
+        idleMotion?.setSuspended(false);
       }) ?? (() => {})),
     );
     // LLM-driven action bridge: when Main sends a resolved Live2DTarget, play it.
     speechOffs.push(
       trackSubscription("live2dAction:onPlayAction", window.live2dAction?.onPlayAction((target) => {
+        desktopNeutralRecovery?.cancel();
+        idleMotion?.interruptReset();
         void manager.playAction(target);
       }) ?? (() => {})),
     );
     live2dSpeechOffs = speechOffs;
     interaction = new InteractionController(canvas, model, manager.getHitAreaDefs(), {
+      repeatExpressionFallbacks: { "墨镜": "问号" },
+      bodyRegion: { left: 0.4, top: 0.6, right: 0.7, bottom: 0.83 },
+      onBodyClick: () => {
+        desktopNeutralRecovery?.cancel();
+        void idleMotion?.playRandomNow();
+      },
+      onBeforeTrigger: () => {
+        desktopNeutralRecovery?.cancel();
+        idleMotion?.interruptReset();
+      },
       onTrigger: (area) => {
         expressionReset?.restart();
         console.log("[Cyrene] hit", area.name, "->", area.group + ":" + area.motionName);
@@ -156,6 +188,28 @@ const manager = new Live2DManager({
         clickThrough?.resume();
       }
     }));
+    petIdleMotionsOff = trackSubscription(
+      "cyrene:onPetIdleMotionsChanged",
+      window.cyrene.onPetIdleMotionsChanged((enabled) => idleMotion?.setEnabled(enabled)),
+    );
+    let checkingSystemIdle = false;
+    const refreshSystemIdle = async (): Promise<void> => {
+      if (checkingSystemIdle) return;
+      checkingSystemIdle = true;
+      try {
+        const state = await window.cyrene.getIdleState();
+        idleMotion?.setScreenNoChangeCount(state.screenNoChangeCount);
+        idleMotion?.setUserIdle(Number.isFinite(state.systemIdleSeconds) && state.systemIdleSeconds >= 1);
+      } catch {
+        idleMotion?.setScreenNoChangeCount(null);
+        idleMotion?.setUserIdle(false);
+      } finally {
+        checkingSystemIdle = false;
+      }
+    };
+    const systemIdleTimer = window.setInterval(() => void refreshSystemIdle(), 500);
+    speechOffs.push(trackSubscription("systemIdle:poll", () => window.clearInterval(systemIdleTimer)));
+    void refreshSystemIdle();
 
     // 启动竞态修复：主进程在渲染进程就绪前发的 PET_ZOOM 事件会被丢弃。
     // 注册监听后主动从磁盘读一次 petZoom 并应用，确保重启后模型大小生效。
@@ -163,6 +217,7 @@ const manager = new Live2DManager({
       if (cfg?.petZoom && cfg.petZoom !== 1) {
         manager.applyZoom(cfg.petZoom);
       }
+      idleMotion?.setEnabled(cfg?.petIdleMotionsEnabled === true);
     }).catch(() => { /* 设置读取失败不影响加载 */ });
 
     (window as unknown as { __cyrene: unknown }).__cyrene = {
@@ -180,6 +235,7 @@ const manager = new Live2DManager({
           expressionReset: expressionReset !== null,
           mouthSync: mouthSync !== null,
           speakingMotion: speakingMotion !== null,
+          idleMotion: idleMotion !== null,
           clickThrough: clickThrough !== null,
           openerBubble: openerBubble !== null,
         },
@@ -211,6 +267,10 @@ window.addEventListener("beforeunload", () => {
   mouthSync = null;
   speakingMotion?.dispose();
   speakingMotion = null;
+  idleMotion?.dispose();
+  idleMotion = null;
+  desktopNeutralRecovery?.dispose();
+  desktopNeutralRecovery = null;
   focus?.dispose();
   focus = null;
   clickThrough?.dispose();
@@ -219,6 +279,8 @@ window.addEventListener("beforeunload", () => {
   petZoomOff = null;
   petVisibilityOff?.();
   petVisibilityOff = null;
+  petIdleMotionsOff?.();
+  petIdleMotionsOff = null;
   interaction?.dispose();
   interaction = null;
   manager.dispose();

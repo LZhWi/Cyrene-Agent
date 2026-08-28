@@ -45,6 +45,7 @@ import {
 import { buildMinecraftContextBlock, buildMinecraftMemoryContext } from "../game-bot/minecraft/session-context";
 import type { MinecraftSessionEvent } from "../game-bot/minecraft/types";
 import type { RetrievalPlan } from "../memory/memory-facets";
+import type { MemoryScheduleContext } from "../memory/memory-scheduler";
 
 /** index.ts 模块级符号的最小可注入子集。
  *  类型故意用宽签名（unknown / 任意 shape）—— 因为 build-options 是纯消费者，
@@ -104,7 +105,7 @@ export interface BuildOptionsDeps {
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
 export interface OnRunFinishedDeps {
   loadModelSettings: () => ModelSettingsLite;
-  scheduleMemoryWrite: (userText: string, reply: string) => void;
+  scheduleMemoryWrite: (userText: string, reply: string, context?: Partial<MemoryScheduleContext>) => void;
   inferRuntimeState: (userText: string, reply: string, flag: boolean) => { status: string };
   runtimeState: {
     status: string;
@@ -610,13 +611,15 @@ export async function onAgentRunFinished(
   deps: OnRunFinishedDeps,
   channel?: "wechat" | "feishu" | "mobile",
   memoryContextText?: string,
+  memoryScheduleContext?: Partial<MemoryScheduleContext>,
 ): Promise<{ sticker: string | null }> {
   const chatContent = result.reply;
   const sideEffectUserText = stripTurnModelContextForSideEffects(latestUserText);
   const memoryUserText = memoryContextText
     ? `${sideEffectUserText}\n\n${memoryContextText}`
     : sideEffectUserText;
-  deps.scheduleMemoryWrite(memoryUserText, chatContent);
+  if (memoryScheduleContext) deps.scheduleMemoryWrite(memoryUserText, chatContent, memoryScheduleContext);
+  else deps.scheduleMemoryWrite(memoryUserText, chatContent);
   if (result.socialContext && deps.scheduleSocialContextWrite) {
     deps.scheduleSocialContextWrite(result.socialContext, chatContent, deps.loadModelSettings());
   }

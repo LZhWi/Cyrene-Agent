@@ -34,9 +34,15 @@ function loadRecentRealTurns(limit: number): MemoryJudgeTurn[] {
       }
     }
   }
-  return turns.sort((a, b) => a.at - b.at).slice(-limit).map(({ userInput, assistantReply }) => ({
+  return turns.sort((a, b) => a.at - b.at).slice(-limit).map(({ userInput, assistantReply }, index) => ({
     userInput,
     assistantReply,
+    conversationId: "default",
+    userMessageId: `real-user-${index}`,
+    assistantMessageId: `real-assistant-${index}`,
+    userAt: index * 1000,
+    assistantAt: index * 1000 + 500,
+    validateAgainstConversation: false,
   }));
 }
 
@@ -79,9 +85,17 @@ async function simulateRetryableFailure(realTurns: MemoryJudgeTurn[], failure: E
     runDecay: vi.fn(async () => undefined),
     loadPendingTurns: vi.fn(async () => realTurns.slice(0, 5)),
     savePendingTurns: vi.fn(async (turns: MemoryJudgeTurn[]) => { lastSaved = turns.map((turn) => ({ ...turn })); }),
+    loadConversationMessages: vi.fn(async () => null),
   };
   const scheduler = new MemoryScheduler(deps);
-  scheduler.scheduleMemoryWrite(realTurns[5].userInput, realTurns[5].assistantReply);
+  scheduler.scheduleMemoryWrite(realTurns[5].userInput, realTurns[5].assistantReply, {
+    conversationId: realTurns[5].conversationId,
+    userMessageId: realTurns[5].userMessageId,
+    assistantMessageId: realTurns[5].assistantMessageId,
+    userAt: realTurns[5].userAt,
+    assistantAt: realTurns[5].assistantAt,
+    validateAgainstConversation: false,
+  });
   await vi.waitFor(() => expect(deps.replaceL1Field).toHaveBeenCalledWith("roundCount", 6));
   return { saved: lastSaved, writeMemory: deps.writeMemory };
 }

@@ -496,6 +496,95 @@ describe("memoryStore", () => {
     expect((store.evidence ?? []).some((item) => item.memoryId === memory.id)).toBe(false)
   })
 
+  it("invalidates derived state when a user edits an L2 memory", async () => {
+    const { memoryStore } = await import("./memory-store")
+    const memory = await memoryStore.addL2Memory({
+      content: "用户喜欢旧颜色",
+      triggerText: "我以前喜欢蓝色",
+      sourceConversationId: "test",
+      ragId: "rag_old",
+      syncStatus: "synced",
+      conflictWith: ["rag_conflict"],
+      isPinned: false,
+      facets: {
+        primaryKind: "preference",
+        retrievalKinds: ["preference"],
+        source: "model",
+        pendingClassification: false,
+      },
+    })
+    await memoryStore.setL2DmaeSnapshot({
+      [memory.id]: { activation: 36, userSilence: 0, modelSilence: 0, lastInjectedRound: 1, round: 1 },
+    }, 1)
+    await memoryStore.appendConflictLog({
+      status: "candidate",
+      sourceL2Id: memory.id,
+      targetL2Id: "other",
+      reason: "old-content relation",
+      confidence: 0.8,
+      detector: "local",
+    })
+
+    const result = await memoryStore.updateL2Content(memory.id, "  用户喜欢新颜色  ")
+
+    expect(result?.oldRagId).toBe("rag_old")
+    expect(result?.memory).toMatchObject({
+      content: "用户喜欢新颜色",
+      triggerText: "我以前喜欢蓝色",
+      syncStatus: "pending_sync",
+      facets: { source: "pending", pendingClassification: true },
+    })
+    expect(result?.memory.ragId).toBeUndefined()
+    expect(result?.memory.conflictWith).toBeUndefined()
+    expect((await memoryStore.getL2DmaeSnapshot()).states[memory.id]).toBeUndefined()
+    expect((await memoryStore.getConflictLogs()).some((log) => log.sourceL2Id === memory.id || log.targetL2Id === memory.id)).toBe(false)
+  })
+
+  it("cleans L2 relations and DMAE state when a user deletes a memory", async () => {
+    const { memoryStore } = await import("./memory-store")
+    const memory = await memoryStore.addL2Memory({
+      content: "需要删除的记忆",
+      triggerText: "删除它",
+      sourceConversationId: "test",
+      ragId: "rag_delete",
+      syncStatus: "synced",
+      isPinned: false,
+    })
+    const related = await memoryStore.addL2Memory({
+      content: "仍需保留的记忆",
+      triggerText: "保留它",
+      sourceConversationId: "test",
+      supersededBy: memory.id,
+      mergedInto: memory.id,
+      conflictWith: ["rag_delete", "rag_keep"],
+      subEntryIds: [memory.id, "other"],
+      isPinned: false,
+    })
+    await memoryStore.setL2DmaeSnapshot({
+      [memory.id]: { activation: 36, userSilence: 0, modelSilence: 0, lastInjectedRound: 1, round: 1 },
+    }, 1)
+    await memoryStore.appendConflictLog({
+      status: "candidate",
+      sourceL2Id: memory.id,
+      targetL2Id: related.id,
+      reason: "delete relation",
+      confidence: 0.8,
+      detector: "local",
+    })
+
+    await memoryStore.deleteL2(memory.id)
+    const store = await memoryStore.load()
+    const persistedRelated = store.l2.find((item) => item.id === related.id)
+
+    expect(store.l2.some((item) => item.id === memory.id)).toBe(false)
+    expect((store.evidence ?? []).some((item) => item.memoryId === memory.id)).toBe(false)
+    expect((store.conflictLogs ?? []).some((log) => log.sourceL2Id === memory.id || log.targetL2Id === memory.id)).toBe(false)
+    expect(store.l2DmaeStates?.[memory.id]).toBeUndefined()
+    expect(persistedRelated).toMatchObject({ conflictWith: ["rag_keep"], subEntryIds: ["other"] })
+    expect(persistedRelated?.supersededBy).toBeUndefined()
+    expect(persistedRelated?.mergedInto).toBeUndefined()
+  })
+
   it("marks L2 sync status and persists rag ids", async () => {
     const { memoryStore } = await import("./memory-store")
     const memory = await memoryStore.addL2Memory({
@@ -894,13 +983,31 @@ describe("memoryStore", () => {
     expect(await memoryStore.getPendingTurns()).toEqual([])
 
     await memoryStore.setPendingTurns([
-      { userInput: "我在学钢琴", assistantReply: "好厉害！" },
+      {
+        userInput: "我在学钢琴",
+        assistantReply: "好厉害！",
+        conversationId: "chat-1",
+        userMessageId: "u1",
+        assistantMessageId: "a1",
+        userAt: 1000,
+        assistantAt: 1500,
+        validateAgainstConversation: true,
+      },
       { userInput: "x".repeat(5000), assistantReply: "ok" },
     ])
 
     const restored = await memoryStore.getPendingTurns()
     expect(restored).toHaveLength(2)
-    expect(restored[0]).toEqual({ userInput: "我在学钢琴", assistantReply: "好厉害！" })
+    expect(restored[0]).toEqual({
+      userInput: "我在学钢琴",
+      assistantReply: "好厉害！",
+      conversationId: "chat-1",
+      userMessageId: "u1",
+      assistantMessageId: "a1",
+      userAt: 1000,
+      assistantAt: 1500,
+      validateAgainstConversation: true,
+    })
     expect(restored[1].userInput).toHaveLength(4000)
 
     // 落盘验证：重启（重新 import）后仍能读到

@@ -44,6 +44,10 @@ export interface L2Memory {
   triggerText: string
   sourceConversationId: string
   createdAt: number
+  /** 支持该记忆的原始对话时间；不保存消息 ID，缺失时回退 createdAt。 */
+  sourceAt?: number
+  /** 多轮共同支持时的来源时间范围终点。 */
+  sourceEndAt?: number
   lastAccessedAt: number
   accessCount: number
   weight: number
@@ -143,7 +147,7 @@ export interface ConflictLog {
   confidence: number
   detector: "local" | "llm" | "manual"
   /** 省略表示传统冲突候选；near_duplicate 表示仅因高相似度进入非破坏式关系裁决。 */
-  candidateType?: "conflict" | "near_duplicate"
+  candidateType?: "conflict" | "near_duplicate" | "state_transition"
   conflictScore?: number
   resolverPriority?: ConflictResolverPriority
   scoringSignals?: ConflictScoringSignals
@@ -221,6 +225,11 @@ export interface MemoryCandidate {
   forbiddenOverclaims?: string[]
   /** L2 原文对话片段（≤500 字）：judge 与 summary 同批输出，落库到 L2.sourceQuote。 */
   sourceQuote?: string
+  /** Judge 本轮临时引用（T1…T8）；仅用于本地换算来源时间，不持久化。 */
+  evidenceTurnRefs?: string[]
+  /** 由 Scheduler 根据临时轮次引用写入，不由模型直接生成。 */
+  sourceAt?: number
+  sourceEndAt?: number
   /** 仅回填注入：该事实的原始形成时间；正常提取不填（用写入时刻）。 */
   createdAt?: number
   /** MemoryJudge 与摘要同批输出；缺失或非法时回落为保守的本地标签。 */
@@ -230,6 +239,13 @@ export interface MemoryCandidate {
 export interface MemoryJudgeTurn {
   userInput: string
   assistantReply: string
+  userAt?: number
+  assistantAt?: number
+  conversationId?: string
+  userMessageId?: string
+  assistantMessageId?: string
+  /** true 时，提取前必须回查会话文件确认该轮仍存在。 */
+  validateAgainstConversation?: boolean
 }
 
 export interface MemoryStore {

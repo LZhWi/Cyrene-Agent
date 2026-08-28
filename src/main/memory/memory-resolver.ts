@@ -181,6 +181,10 @@ export async function buildResolverPayload(conflictLogId: string): Promise<Resol
 }
 
 export function buildResolverMessages(payload: ResolverPayload): Array<{ role: "system" | "user"; content: string }> {
+  const formatSourceTimestamp = (value: number) => {
+    const date = new Date(value)
+    return `${date.toLocaleString("zh-CN", { hour12: false })}（${date.toISOString()}）`
+  }
   const evidenceLines = (items: MemoryEvidence[]) => items.map((item) => (
     `- quote: ${item.quoteSnippet}\n  conversationId: ${item.conversationId ?? "unknown"}\n  sourceStatus: ${item.sourceStatus}`
   )).join("\n")
@@ -190,14 +194,22 @@ export function buildResolverMessages(payload: ResolverPayload): Array<{ role: "
     payload.conflictLog.candidateType === "near_duplicate"
       ? "注意：高向量相似度不等于重复。时间变化、数量变化、列表新增项和条件变化都属于有效增量，必须保留；只有事实完全等价时才可合并。若生成合并摘要，必须覆盖两条记忆的全部有效细节。"
       : "",
+    payload.conflictLog.candidateType === "state_transition"
+      ? "注意：这可能是同一事件从计划/承诺推进到已发生/已完成。必须结合来源时间、类型和原文判断；同主题不等于同一事件。若确认已兑现，旧计划应退出 active，且不得在合并摘要中继续写成未来待办；无法确认时保持两条并标 uncertain。"
+      : "",
+    "通用时间规则：旧记忆正文或证据中的相对时间（今天、明天、昨天、刚才、最近等）必须以旧记忆的 sourceTime 为基准；新记忆中的相对时间必须以新记忆的 sourceTime 为基准。不得锚定到 Resolver 当前运行时间，也不得用新记忆的 sourceTime 重新解释旧记忆。若 sourceTime 是范围且不足以唯一判断相对时间指向，必须保留两条并标 uncertain，不要猜测或强行合并。",
     "",
     "旧记忆：",
     `summary: ${payload.oldMemory.content}`,
+    `kind: ${payload.oldMemory.facets?.primaryKind ?? "unknown"}`,
+    `sourceTime: ${formatSourceTimestamp(payload.oldMemory.sourceAt ?? payload.oldMemory.createdAt)}${payload.oldMemory.sourceEndAt ? ` .. ${formatSourceTimestamp(payload.oldMemory.sourceEndAt)}` : ""}`,
     "evidence:",
     evidenceLines(payload.oldEvidence) || "- none",
     "",
     "新记忆：",
     `summary: ${payload.newMemory.content}`,
+    `kind: ${payload.newMemory.facets?.primaryKind ?? "unknown"}`,
+    `sourceTime: ${formatSourceTimestamp(payload.newMemory.sourceAt ?? payload.newMemory.createdAt)}${payload.newMemory.sourceEndAt ? ` .. ${formatSourceTimestamp(payload.newMemory.sourceEndAt)}` : ""}`,
     "evidence:",
     evidenceLines(payload.newEvidence) || "- none",
     "",

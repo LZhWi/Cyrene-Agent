@@ -51,7 +51,7 @@ vi.mock("../token-usage-store", () => ({
   recordUsage: vi.fn(),
 }));
 
-import { runReflectionAndCompression } from "./memory-compressor";
+import { buildCompressionPrompt, parseCompressionDecision, runReflectionAndCompression } from "./memory-compressor";
 
 function writeSettings(content: string): void {
   fs.writeFileSync(path.join(mocks.dataDir, "model-settings.json"), content, "utf8");
@@ -122,3 +122,26 @@ describe("MemoryCompressor reflection", () => {
     errorSpy.mockRestore();
   });
 });
+
+describe("MemoryCompressor timeline prompt", () => {
+  it("anchors relative time to each source and requires plan-to-outcome reasoning", () => {
+    const prompt = buildCompressionPrompt([
+      { id: "plan", content: "用户明天玩剧本杀", triggerText: "我明天白天去玩", sourceConversationId: "", sourceAt: Date.parse("2026-08-22T18:16:00Z"), createdAt: Date.parse("2026-08-24T14:00:00Z"), lastAccessedAt: 0, accessCount: 0, weight: 0, isPinned: false, status: "active", facets: { primaryKind: "commitment", retrievalKinds: ["commitment"], source: "model", pendingClassification: false } },
+      { id: "done", content: "用户玩剧本杀拿到大boss身份", triggerText: "我拿到了大boss", sourceConversationId: "", sourceAt: Date.parse("2026-08-23T15:59:00Z"), createdAt: Date.parse("2026-08-24T14:00:00Z"), lastAccessedAt: 0, accessCount: 0, weight: 0, isPinned: false, status: "active", facets: { primaryKind: "experience", retrievalKinds: ["experience"], source: "model", pendingClassification: false } },
+    ])
+
+    expect(prompt).toContain("2026-08-22T18:16:00.000Z")
+    expect(prompt).toContain("类型：commitment")
+    expect(prompt).toContain("类型：experience")
+    expect(prompt).toContain("不得继续保留为未来待办")
+  })
+
+  it("accepts structured decisions and rejects plain summaries", () => {
+    expect(parseCompressionDecision(JSON.stringify({ shouldCompress: true, summary: "用户已完成剧本杀活动", reason: "同一事件由计划推进到完成" }))).toEqual({
+      shouldCompress: true,
+      summary: "用户已完成剧本杀活动",
+      reason: "同一事件由计划推进到完成",
+    })
+    expect(parseCompressionDecision("用户已完成剧本杀活动")).toBeNull()
+  })
+})

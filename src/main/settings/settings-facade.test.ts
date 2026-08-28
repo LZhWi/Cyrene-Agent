@@ -34,6 +34,7 @@ describe("SettingsFacade", () => {
       musicVolume: 120,
       soundEnabled: false,
       petZoom: 3,
+      petIdleMotionsEnabled: true,
       petWindowX: 10.6,
       petWindowY: Number.NaN,
       sidebarVisible: false,
@@ -50,6 +51,7 @@ describe("SettingsFacade", () => {
       musicVolume: 100,
       soundEnabled: false,
       petZoom: 2,
+      petIdleMotionsEnabled: true,
       petWindowX: 11,
       sidebarVisible: false,
       tasksVisible: true,
@@ -74,12 +76,14 @@ describe("SettingsFacade", () => {
       musicVolume: 37,
       uiTheme: "classic",
       petVisible: false,
+      petIdleMotionsEnabled: true,
     });
 
     expect(saved).toMatchObject({
       musicEnabled: true,
       musicVolume: 37,
       petVisible: false,
+      petIdleMotionsEnabled: true,
       soundEnabled: true,
     });
     expect(listener).toHaveBeenCalledTimes(1);

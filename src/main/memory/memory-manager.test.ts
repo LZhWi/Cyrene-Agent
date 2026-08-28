@@ -224,6 +224,26 @@ describe("MemoryManager L2 sync", () => {
     expect(fresh.facets?.primaryKind).toBe("experience")
   })
 
+  it("persists source time separately from the memory write time", async () => {
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_timed")
+    const { memoryManager } = await import("./memory-manager")
+    const { memoryStore } = await import("./memory-store")
+    await memoryManager.writeMemory([{
+      layer: "L2",
+      content: "用户计划白天玩剧本杀",
+      confidence: 0.9,
+      triggerText: "我明天白天去玩剧本杀",
+      sourceAt: 1_000,
+      sourceEndAt: 2_000,
+    }])
+
+    const [memory] = await memoryStore.getAllL2()
+    expect(memory.sourceAt).toBe(1_000)
+    expect(memory.sourceEndAt).toBe(2_000)
+    expect(memory.createdAt).toBeGreaterThan(2_000)
+    expect(memory.sourceMessageIds).toBeUndefined()
+  })
+
   it("keeps an immediate high-cosine candidate and queues non-destructive relationship review", async () => {
     ragMock.addL2MemoryVector.mockResolvedValue("rag_new")
     embeddingMock.getEmbeddingProvider.mockReturnValue({ embed: vi.fn(async () => [1, 0]) })
@@ -387,6 +407,47 @@ describe("MemoryManager L2 sync", () => {
     const old = (await memoryStore.getAllL2()).find((memory) => memory.id === existing.id)!
     expect(old.status).not.toBe("superseded")
     expect(old.validTo).toBeUndefined()
+  })
+
+  it("queues a time-ordered commitment to experience transition for conservative resolver review", async () => {
+    ragMock.addL2MemoryVector.mockResolvedValue("rag_experience")
+    const { memoryManager } = await import("./memory-manager")
+    const { memoryStore } = await import("./memory-store")
+    const old = await memoryStore.addL2Memory({
+      content: "用户明天白天与同学玩剧本杀",
+      triggerText: "我明天白天约了同学玩剧本杀",
+      sourceConversationId: "",
+      sourceAt: 1_000,
+      ragId: "rag_commitment",
+      isPinned: false,
+      syncStatus: "synced",
+      facets: { primaryKind: "commitment", retrievalKinds: ["commitment"], source: "model", pendingClassification: false },
+    })
+    ragMock.searchMemoryEntries.mockResolvedValue([{
+      id: "rag_commitment",
+      text: old.content,
+      createdAt: 1_000,
+      score: 0.82,
+      metadata: { l2Id: old.id },
+    }])
+
+    await memoryManager.writeMemory([{
+      layer: "L2",
+      content: "用户玩剧本杀时拿到大boss身份且未被发现",
+      confidence: 0.9,
+      triggerText: "今天剧本杀我拿到了大boss",
+      sourceAt: 10_000,
+      facets: { primaryKind: "experience", retrievalKinds: ["experience"], source: "model", pendingClassification: false },
+    }])
+
+    const [log] = await memoryStore.getConflictLogs()
+    expect(log).toMatchObject({
+      candidateType: "state_transition",
+      targetL2Id: old.id,
+      resolverPriority: "normal",
+      resolverStatus: "queued",
+    })
+    expect((await memoryStore.getAllL2()).find((memory) => memory.id === old.id)?.status).toBe("active")
   })
 
   it("writes candidate conflict logs separately when local candidate detection matches", async () => {

@@ -25,6 +25,9 @@ const input = {
   content: "用户喜欢菌菇类食物",
   triggerText: "我喜欢香菇",
   sourceConversationId: "conv",
+  sourceQuote: "我喜欢香菇，也喜欢平菇",
+  sourceAt: 1000,
+  sourceEndAt: 2000,
   sources: [
     { id: "l2_a", ragId: "rag_a", status: "active" as const },
     { id: "l2_b", ragId: "rag_b", status: "active" as const },
@@ -51,6 +54,11 @@ describe("memory compression transaction", () => {
       "l2_summary",
       expect.objectContaining({ isSummary: true, subEntryIds: ["l2_a", "l2_b"] }),
     );
+    expect(deps.createSummary).toHaveBeenCalledWith(expect.objectContaining({
+      sourceQuote: input.sourceQuote,
+      sourceAt: 1000,
+      sourceEndAt: 2000,
+    }));
   });
 
   it("keeps source memories active when summary vector creation fails", async () => {

@@ -154,7 +154,85 @@ interface GroupedEntry {
   embedding: number[];
 }
 
-async function compressMemories(): Promise<number> {
+export interface CompressionDecision {
+  shouldCompress: boolean;
+  summary?: string;
+  reason: string;
+}
+
+function sourceStart(memory: L2Memory): number {
+  return memory.sourceAt ?? memory.createdAt;
+}
+
+function sourceEnd(memory: L2Memory): number {
+  return memory.sourceEndAt ?? memory.sourceAt ?? memory.createdAt;
+}
+
+function formatSourceTimestamp(value: number): string {
+  const date = new Date(value);
+  return `${date.toLocaleString("zh-CN", { hour12: false })}（${date.toISOString()}）`;
+}
+
+function extractJsonObject(raw: string): Record<string, unknown> | null {
+  const text = raw
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
+    .replace(/<think>[\s\S]*$/gi, "")
+    .replace(/```json\s*/gi, "")
+    .replace(/```\s*/gi, "")
+    .trim();
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(text.slice(start, end + 1));
+    return parsed && typeof parsed === "object" ? parsed as Record<string, unknown> : null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseCompressionDecision(raw: string): CompressionDecision | null {
+  const parsed = extractJsonObject(raw);
+  if (!parsed || typeof parsed.shouldCompress !== "boolean" || typeof parsed.reason !== "string") return null;
+  const summary = typeof parsed.summary === "string" ? parsed.summary.trim() : undefined;
+  if (parsed.shouldCompress && (!summary || summary.length < 5)) return null;
+  return {
+    shouldCompress: parsed.shouldCompress,
+    summary,
+    reason: parsed.reason.trim(),
+  };
+}
+
+export function buildCompressionPrompt(group: L2Memory[]): string {
+  const chronological = [...group].sort((a, b) => sourceStart(a) - sourceStart(b));
+  const entries = chronological.flatMap((memory, index) => [
+    `条目 ${index + 1}：`,
+    `- 来源时间：${formatSourceTimestamp(sourceStart(memory))}${sourceEnd(memory) !== sourceStart(memory) ? ` ～ ${formatSourceTimestamp(sourceEnd(memory))}` : ""}`,
+    `- 类型：${memory.facets?.primaryKind ?? "unknown"}`,
+    `- 摘要：${memory.content}`,
+    `- 原文：${memory.sourceQuote || memory.triggerText || "无"}`,
+  ]);
+  return [
+    "你是一个保守的记忆时序整理助手。以下条目仅因语义相似而成为候选组，不代表它们一定属于同一事件。",
+    "先判断这些条目是同一事件的重复/补充/计划到结果，还是不同事件。只有能够无损合并时才压缩。",
+    "要求：",
+    "- 严格按来源时间排序理解；相对时间（今天、明天、最近）必须锚定到它所在条目的来源时间，不能锚定到本次压缩时间",
+    "- 后续 experience/fact 若明确是早先 goal/commitment 的实现，摘要必须写成已经发生，不得继续保留为未来待办",
+    "- 同主题、相似措辞或同一种活动不等于同一事件；无法确认时 shouldCompress=false",
+    "- 合并时保留所有仍有效的关键细节，不编造日期、身份或因果",
+    "- summary 控制在 100 字以内",
+    "- 只输出 JSON，不要 markdown",
+    '{"shouldCompress":true,"summary":"合并后的总结","reason":"判断依据"}',
+    "若不应合并：",
+    '{"shouldCompress":false,"reason":"无法确认同一事件或会损失时序"}',
+    "",
+    ...entries,
+  ].join("\n");
+}
+
+export async function compressMemories(
+  llm: typeof callLLM = callLLM,
+): Promise<number> {
   const allL2 = await memoryStore.getAllL2();
   const activeL2 = allL2.filter((m) => m.status === "active" && !m.isSummary && m.ragId);
 
@@ -178,6 +256,7 @@ async function compressMemories(): Promise<number> {
       if (emb) withEmbedding.push({ l2, embedding: emb });
     }
   }
+  withEmbedding.sort((a, b) => sourceStart(a.l2) - sourceStart(b.l2));
 
   if (withEmbedding.length < MIN_GROUP_SIZE) {
     console.log("[MemoryCompressor] 带 embedding 的条目不足，跳过压缩");
@@ -196,8 +275,10 @@ async function compressMemories(): Promise<number> {
 
     for (let j = i + 1; j < withEmbedding.length; j++) {
       if (used.has(withEmbedding[j].l2.id)) continue;
-      const sim = cosineSimilarity(withEmbedding[i].embedding, withEmbedding[j].embedding);
-      if (sim >= SIMILARITY_THRESHOLD) {
+      const cohesive = group.every((member) => (
+        cosineSimilarity(member.embedding, withEmbedding[j].embedding) >= SIMILARITY_THRESHOLD
+      ));
+      if (cohesive) {
         group.push(withEmbedding[j]);
         used.add(withEmbedding[j].l2.id);
       }
@@ -219,36 +300,37 @@ async function compressMemories(): Promise<number> {
   let totalCompressed = 0;
   for (const group of groups) {
     try {
-      const texts = group.map((g) => `- ${g.l2.content}`);
-      const prompt = [
-        "你是一个记忆总结助手。以下是一组相似的用户记忆条目，请将它们合并成一条简洁的总结。",
-        "要求：",
-        "- 保留所有关键信息，去重",
-        "- 用中文自然语言",
-        "- 控制在 100 字以内",
-        "- 直接输出总结文本，不要额外解释",
-        "",
-        "记忆条目：",
-        ...texts,
-      ].join("\n");
-
-      const summary = await callLLM([
-        { role: "system", content: "你是一个简洁的记忆总结助手。" },
+      const chronological = [...group].sort((a, b) => sourceStart(a.l2) - sourceStart(b.l2));
+      const prompt = buildCompressionPrompt(chronological.map((entry) => entry.l2));
+      const rawDecision = await llm([
+        { role: "system", content: "你是谨慎的用户记忆时序整理助手。只输出 JSON。" },
         { role: "user", content: prompt },
       ], 8192);
 
-      if (!summary.trim()) {
-        console.warn("[MemoryCompressor] 总结拿到空 content（token 预算耗尽），跳过该组");
+      const decision = parseCompressionDecision(rawDecision);
+      if (!decision) {
+        console.warn("[MemoryCompressor] 压缩判定返回无效 JSON，保留原条目");
         continue;
       }
-      const cleanSummary = summary.replace(/^["「『]|["」』]$/g, "").trim();
-      if (cleanSummary.length < 5) continue;
+      if (!decision.shouldCompress || !decision.summary) {
+        console.log(`[MemoryCompressor] 候选组不压缩: ${decision.reason}`);
+        continue;
+      }
+      const cleanSummary = decision.summary.replace(/^["「『]|["」』]$/g, "").trim();
 
       const subEntryIds = group.map((g) => g.l2.id);
+      const sourceQuote = [...new Set(chronological
+        .map((entry) => entry.l2.sourceQuote || entry.l2.triggerText)
+        .filter((text): text is string => Boolean(text?.trim())))]
+        .join(" / ")
+        .slice(0, 500);
       await commitMemoryCompression({
         content: cleanSummary,
-        triggerText: group[0].l2.triggerText,
-        sourceConversationId: group[0].l2.sourceConversationId,
+        triggerText: chronological.at(-1)?.l2.triggerText ?? group[0].l2.triggerText,
+        sourceConversationId: chronological.at(-1)?.l2.sourceConversationId ?? group[0].l2.sourceConversationId,
+        sourceQuote: sourceQuote || undefined,
+        sourceAt: Math.min(...group.map((entry) => sourceStart(entry.l2))),
+        sourceEndAt: Math.max(...group.map((entry) => sourceEnd(entry.l2))),
         sources: group.map((entry) => ({
           id: entry.l2.id,
           ragId: entry.l2.ragId,
@@ -276,7 +358,7 @@ async function compressMemories(): Promise<number> {
       await memoryStore.appendReflectionLog({
         type: "compression",
         summary: `压缩 ${subEntryIds.length} 条记忆为一条总结`,
-        details: `原条目：${texts.join(" | ")}\n总结：${cleanSummary}`,
+        details: `原条目：${group.map((entry) => `- ${entry.l2.content}`).join(" | ")}\n判断：${decision.reason}\n总结：${cleanSummary}`,
       });
 
       totalCompressed += subEntryIds.length;

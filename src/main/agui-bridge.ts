@@ -33,6 +33,8 @@ export interface AguiRunInput {
   /** 本轮附件（文本内容，临时注入系统上下文，不存历史）。 */
   userTurnId?: string;
   assistantTurnId?: string;
+  userTurnAt?: number;
+  assistantTurnAt?: number;
   attachments?: { name: string; text: string }[];
   /** 本轮图片附件。主进程会安全读取并转成 OpenAI-compatible image_url content block。 */
   imageAttachments?: { name: string; filePath: string; mime?: string }[];
@@ -52,6 +54,14 @@ export type OnRunFinishedFn = (
   result: CyreneRunResult,
   latestUserText: string,
   memoryContextText?: string,
+  memoryScheduleContext?: {
+    conversationId: string;
+    userMessageId: string;
+    assistantMessageId: string;
+    userAt: number;
+    assistantAt: number;
+    validateAgainstConversation: boolean;
+  },
 ) => Promise<void> | void;
 
 /** 调用方注入：拿聊天窗口（广播副作用用，可空）。 */
@@ -208,7 +218,14 @@ export function registerAgUiIpc(
         try {
           control.throwIfCancelled();
           if (agent.lastResult) {
-            await onFinished(agent.lastResult, latestUserText, memoryContextText);
+            await onFinished(agent.lastResult, latestUserText, memoryContextText, {
+              conversationId: input.sessionId || "default",
+              userMessageId: input.userTurnId || `agui-user-${runId}`,
+              assistantMessageId: input.assistantTurnId || `agui-assistant-${runId}`,
+              userAt: typeof input.userTurnAt === "number" ? input.userTurnAt : Date.now(),
+              assistantAt: typeof input.assistantTurnAt === "number" ? input.assistantTurnAt : Date.now(),
+              validateAgainstConversation: Boolean(input.sessionId && input.userTurnId && input.assistantTurnId),
+            });
             control.throwIfCancelled();
             // 历史召回用：把这轮对话存入向量库（异步，不阻塞，失败不影响主流程）
             // 放在 onFinished 之后，确保记忆/sticker 等副作用先跑完

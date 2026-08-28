@@ -44,7 +44,7 @@ describe("appearance settings markup", () => {
   it("moves desktop-pet controls out of general settings", () => {
     const appearance = form("appearance-form");
     const general = form("general-form");
-    for (const id of ["pet-always-on-top", "pet-visible", "pet-zoom"]) {
+    for (const id of ["pet-always-on-top", "pet-visible", "pet-zoom", "pet-idle-motions-enabled"]) {
       expect(appearance).toContain(`id="${id}"`);
       expect(general).not.toContain(`id="${id}"`);
     }

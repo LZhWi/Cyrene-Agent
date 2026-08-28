@@ -30,7 +30,7 @@ vi.mock("../orchestrator/vendors", () => ({
 
 import { memoryJudge } from "./memory-judge";
 
-function validL2Raw(sourceQuote?: string, facets?: Record<string, unknown>): string {
+function validL2Raw(sourceQuote?: string, facets?: Record<string, unknown>, evidenceTurnRefs?: string[]): string {
   const candidate: Record<string, unknown> = {
     layer: "L2",
     summary: "用户在做前端项目",
@@ -46,10 +46,25 @@ function validL2Raw(sourceQuote?: string, facets?: Record<string, unknown>): str
   };
   if (sourceQuote !== undefined) candidate.sourceQuote = sourceQuote;
   if (facets !== undefined) candidate.facets = facets;
+  if (evidenceTurnRefs !== undefined) candidate.evidenceTurnRefs = evidenceTurnRefs;
   return JSON.stringify([candidate]);
 }
 
 describe("MemoryJudge sourceQuote", () => {
+  it("includes the persisted user and assistant timestamps for every turn", async () => {
+    mocks.llmText = "[]"
+
+    await memoryJudge.judgeRecentTurns([{
+      userInput: "带时间的消息",
+      assistantReply: "带时间的回复",
+      userAt: Date.parse("2026-08-27T01:02:03.000Z"),
+      assistantAt: Date.parse("2026-08-27T01:02:05.000Z"),
+    }], "chat-1")
+
+    expect(mocks.capturedMessages[1].content).toContain("用户时间：2026-08-27T01:02:03.000Z")
+    expect(mocks.capturedMessages[1].content).toContain("AI时间：2026-08-27T01:02:05.000Z")
+  })
+
   beforeEach(() => {
     mocks.dataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-judge-"));
     mocks.llmText = "[]";
@@ -74,6 +89,8 @@ describe("MemoryJudge sourceQuote", () => {
 
     const systemPrompt = mocks.capturedMessages.find((m) => m.role === "system")?.content ?? "";
     expect(systemPrompt).toContain("sourceQuote");
+    expect(systemPrompt).toContain("evidenceTurnRefs");
+    expect(systemPrompt).toContain("T1～T8");
     expect(systemPrompt).toContain("原话");
     expect(systemPrompt).toContain("facets");
     expect(systemPrompt).toContain("primaryKind");
@@ -83,6 +100,10 @@ describe("MemoryJudge sourceQuote", () => {
     expect(systemPrompt).toContain("wish");
     expect(systemPrompt).toContain("只有用户明确表达具体情绪");
     expect(systemPrompt).toContain("不要仅因含有「等……以后」「如果……」就返回空数组");
+    expect(systemPrompt).toContain("必须以 evidenceTurnRefs 所指轮次中事实所在消息的用户时间或 AI 时间为基准");
+    expect(systemPrompt).toContain("MemoryJudge 当前运行或返回结果的时间不是事实时间锚点");
+    expect(systemPrompt).toContain("不得把不同轮次的相对表达合并成同一个日期");
+    expect(systemPrompt).toContain("无法唯一确定时保留不确定性");
   });
 
   it("keeps the model-provided sourceQuote on the candidate", async () => {
@@ -108,6 +129,18 @@ describe("MemoryJudge sourceQuote", () => {
     const candidates = await memoryJudge.judgeRecentTurns([{ userInput: "我在做前端", assistantReply: "听起来不错" }], "chat-1");
 
     expect(candidates[0].sourceQuote).toBeUndefined();
+  });
+
+  it("keeps only valid temporary evidence turn references", async () => {
+    mocks.llmText = validL2Raw("我在做前端", undefined, ["T2", "T2", "T9", "bad"]);
+
+    const candidates = await memoryJudge.judgeRecentTurns([
+      { userInput: "上下文", assistantReply: "嗯" },
+      { userInput: "我在做前端", assistantReply: "听起来不错" },
+    ], "chat-1");
+
+    expect(candidates[0].evidenceTurnRefs).toEqual(["T2"]);
+    expect(mocks.capturedMessages[1].content).toContain("T2（第 2 轮）");
   });
 
   it("treats a missing API key as a retryable extraction failure", async () => {

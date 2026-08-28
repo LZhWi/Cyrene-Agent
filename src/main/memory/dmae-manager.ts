@@ -312,6 +312,12 @@ class L2DmaeManager {
     return describeStateMap(this.states);
   }
 
+  async removeMemory(l2Id: string): Promise<void> {
+    await this.ensureLoaded();
+    if (!this.states.delete(l2Id)) return;
+    await this.flushNow();
+  }
+
   private describeActiveSet(): string[] {
     return [...this.states.entries()]
       .filter(([, st]) => st.activation >= L2_DMAE_PARAMS.promptThreshold - L2_DMAE_PARAMS.epsilon)

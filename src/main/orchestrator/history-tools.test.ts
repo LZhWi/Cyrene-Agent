@@ -148,6 +148,8 @@ describe("recall_history V2 integration", () => {
 
     expect(result).toContain(schoolFact.text);
     expect(result).not.toContain(baseline.text);
+    expect(result).toContain("相对时间，一律以该条前方时间戳为参照");
+    expect(result).toContain("当前状态待核实，不得表述为现在仍即将发生");
   });
 
   it("falls back to the baseline result when V2 retrieval fails", async () => {
@@ -332,6 +334,8 @@ describe("history auto-injection", () => {
     const block = await runHistoryAutoInjection("对了，去年和 z 那件事后来怎么样了呀");
     expect(block).toContain("去年和 z 约好一起去看的展览");
     expect(block).toContain("只读数据");
+    expect(block).toContain("相对时间，一律以该条前方时间戳为参照");
+    expect(block).toContain("当前状态待核实，不得表述为现在仍即将发生");
   });
 
   it("stays silent when the preflight score is below threshold", async () => {

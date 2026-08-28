@@ -130,6 +130,29 @@ describe("memory conflict resolver", () => {
     expect(messages[1].content).toContain("候选类型：near_duplicate")
     expect(messages[1].content).toContain("列表新增项")
     expect(messages[1].content).toContain("必须保留")
+    expect(messages[1].content).toContain("旧记忆的 sourceTime 为基准")
+    expect(messages[1].content).toContain("新记忆的 sourceTime 为基准")
+    expect(messages[1].content).toContain("不得锚定到 Resolver 当前运行时间")
+  })
+
+  it("gives state-transition candidates source times and conservative fulfillment rules", async () => {
+    const { buildResolverMessages } = await import("./memory-resolver")
+    const payload: ResolverPayload = {
+      conflictLog: { id: "c", createdAt: 1, status: "candidate", sourceL2Id: "new", targetL2Id: "old", reason: "transition", confidence: 0.8, detector: "local", candidateType: "state_transition" },
+      oldMemory: { id: "old", content: "用户明天玩剧本杀", triggerText: "", sourceConversationId: "", sourceAt: 1000, createdAt: 2000, lastAccessedAt: 2, accessCount: 0, weight: 0, isPinned: false, status: "active", facets: { primaryKind: "commitment", retrievalKinds: ["commitment"], source: "model", pendingClassification: false } },
+      newMemory: { id: "new", content: "用户今天玩了剧本杀", triggerText: "", sourceConversationId: "", sourceAt: 9000, createdAt: 10000, lastAccessedAt: 10, accessCount: 0, weight: 0, isPinned: false, status: "active", facets: { primaryKind: "experience", retrievalKinds: ["experience"], source: "model", pendingClassification: false } },
+      oldEvidence: [], newEvidence: [], conflictScore: 70, scoringSignals: { ragCandidate: true },
+    }
+
+    const text = buildResolverMessages(payload)[1].content
+    expect(text).toContain("候选类型：state_transition")
+    expect(text).toContain("不得在合并摘要中继续写成未来待办")
+    expect(text).toContain("1970-01-01T00:00:01.000Z")
+    expect(text).toContain("kind: commitment")
+    expect(text).toContain("kind: experience")
+    expect(text).toContain("不得用新记忆的 sourceTime 重新解释旧记忆")
+    expect(text).toContain("sourceTime 是范围且不足以唯一判断")
+    expect(text).toContain("必须保留两条并标 uncertain")
   })
 
   it("rejects invalid resolver JSON", async () => {

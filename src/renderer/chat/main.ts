@@ -186,6 +186,8 @@ interface AguiApi {
     sessionId?: string;
     userTurnId?: string;
     assistantTurnId?: string;
+    userTurnAt?: number;
+    assistantTurnAt?: number;
     attachments?: { name: string; text: string }[];
     imageAttachments?: { name: string; filePath: string; mime?: string }[];
   }) => Promise<{ success: boolean; runId?: string; error?: string }>;
@@ -3999,6 +4001,8 @@ async function send(): Promise<void> {
       sessionId: currentSessionId || undefined,
       userTurnId: userMsg.id,
       assistantTurnId: streamMsgId,
+      userTurnAt: userMsg.at,
+      assistantTurnAt: streamMsg.at,
       imageAttachments: directImageAttachments.length > 0 ? directImageAttachments : undefined,
     });
     if (!ack.success) {

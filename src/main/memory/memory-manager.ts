@@ -156,6 +156,9 @@ export class MemoryManager {
       content: candidate.content,
       triggerText: candidate.triggerText,
       sourceConversationId: "",
+      sourceAt: candidate.sourceAt,
+      sourceEndAt: candidate.sourceEndAt,
+      validFrom: candidate.sourceAt ?? candidate.createdAt,
       embedding: [],
       isPinned: false,
       syncStatus: "pending_sync",
@@ -194,7 +197,14 @@ export class MemoryManager {
 
     // ── 冲突检测：检查新记忆是否与现有记忆矛盾 ──
     try {
-      await this.detectAndMarkConflicts(candidate.content, l2.id, ragId, candidate.triggerText, candidate.facets?.primaryKind)
+      await this.detectAndMarkConflicts(
+        candidate.content,
+        l2.id,
+        ragId,
+        candidate.triggerText,
+        candidate.facets?.primaryKind,
+        candidate.sourceAt,
+      )
     } catch (err) {
       console.warn("[MemoryManager] 冲突检测失败:", err)
     }
@@ -251,6 +261,7 @@ export class MemoryManager {
     newRagId: string,
     triggerText: string,
     newKind?: string,
+    newSourceAt?: number,
   ): Promise<void> {
     // 搜索语义相似的现有 L2 条目
     const allL2 = await memoryStore.getAllL2()
@@ -299,6 +310,45 @@ export class MemoryManager {
         })
         console.log(`[MemoryManager] ✅ 目标已完成，旧 goal 结束有效期: "${preview(completedGoal.content, 30)}"`)
         return
+      }
+    }
+
+    // goal/commitment → experience/fact 可能是计划兑现，而不是两个并行事实。
+    // 本地只基于类型、时间顺序和语义相似度创建候选；是否同一事件交给 Resolver，
+    // 避免把周期性活动或相似但不同的事件直接失效。
+    if (newKind === "experience" || newKind === "fact") {
+      for (const entry of similarEntries) {
+        const oldId = typeof entry.metadata?.l2Id === "string" ? entry.metadata.l2Id : ""
+        const existing = activeL2.find((memory) => memory.id === oldId)
+        const oldKind = existing?.facets?.source === "model" ? existing.facets.primaryKind : undefined
+        if (!existing || (oldKind !== "goal" && oldKind !== "commitment") || entry.score < 0.55) continue
+        const oldSourceAt = existing.sourceEndAt ?? existing.sourceAt ?? existing.createdAt
+        const effectiveNewSourceAt = newSourceAt ?? Date.now()
+        if (effectiveNewSourceAt < oldSourceAt) continue
+        const log = await memoryStore.appendConflictLog({
+          status: "candidate",
+          sourceL2Id: newL2Id,
+          targetL2Id: existing.id,
+          sourceRagId: newRagId,
+          targetRagId: existing.ragId,
+          reason: `possible temporal state transition: ${oldKind} -> ${newKind}`,
+          confidence: Math.max(0.55, Math.min(0.95, entry.score)),
+          detector: "local",
+          candidateType: "state_transition",
+        })
+        await memoryStore.scoreConflictLog(log.id, {
+          conflictScore: Math.max(60, Math.min(90, Math.round(entry.score * 100))),
+          resolverPriority: "normal",
+          scoringSignals: {
+            ragCandidate: true,
+            evidenceAvailable: (await this.getEvidenceLevel(newL2Id, existing.id)) !== "none",
+            localContradiction: false,
+            impactScope: getImpactScope(existing),
+            penalties: ["temporal_transition_requires_resolver"],
+          },
+        })
+        console.log(`[MemoryManager] 🕒 发现可能的状态推进，交由 Resolver: "${preview(existing.content, 30)}" → "${preview(content, 30)}"`)
+        break
       }
     }
 

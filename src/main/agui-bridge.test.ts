@@ -144,6 +144,50 @@ describe("agui-bridge sticker event ordering", () => {
     }));
   });
 
+  it("passes persisted turn IDs and timestamps into post-run memory scheduling", async () => {
+    vi.resetModules();
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    const sender = { id: 17, isDestroyed: () => false, send: vi.fn() };
+    const onFinished = vi.fn();
+    registerAgUiIpc(
+      async () => ({
+        options: {
+          settings: { provider: "test", baseUrl: "", model: "", apiKey: "" },
+          messages: [], timeoutMs: 1000, toolSystemContent: "TOOL", soulSystemBaseContent: "SOUL",
+        },
+        latestUserText: "带时间的消息",
+      }),
+      onFinished,
+      () => null,
+    );
+
+    const run = mocks.handlers.get(IPC.AGUI_RUN)!;
+    await run({ sender }, {
+      messages: [],
+      style: "01_default.md",
+      sessionId: "chat-1",
+      userTurnId: "u1",
+      assistantTurnId: "a1",
+      userTurnAt: 1000,
+      assistantTurnAt: 1500,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(onFinished).toHaveBeenCalledWith(
+      expect.anything(),
+      "带时间的消息",
+      undefined,
+      {
+        conversationId: "chat-1",
+        userMessageId: "u1",
+        assistantMessageId: "a1",
+        userAt: 1000,
+        assistantAt: 1500,
+        validateAgainstConversation: true,
+      },
+    );
+  });
+
   it("accepts cancellation while buildOptions is still pending and never starts the agent", async () => {
     vi.resetModules();
     const { registerAgUiIpc } = await import("./agui-bridge");

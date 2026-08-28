@@ -9,12 +9,14 @@ describe("buildAppearanceSettingsPatch", () => {
       petAlwaysOnTop: true,
       petVisible: false,
       petZoom: 1.4,
+      petIdleMotionsEnabled: true,
     })).toEqual({
       uiTheme: "pearl-white",
       uiIcon: "cyrene-pink",
       petAlwaysOnTop: true,
       petVisible: false,
       petZoom: 1.4,
+      petIdleMotionsEnabled: true,
     });
   });
 });

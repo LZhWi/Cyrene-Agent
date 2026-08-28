@@ -28,6 +28,7 @@ export interface GeneralSettings {
   petAlwaysOnTop: boolean;
   petVisible: boolean;
   petZoom: number;
+  petIdleMotionsEnabled: boolean;
   petWindowX?: number;
   petWindowY?: number;
   sidebarVisible: boolean;
@@ -111,6 +112,7 @@ export const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   petAlwaysOnTop: true,
   petVisible: true,
   petZoom: 1,
+  petIdleMotionsEnabled: false,
   sidebarVisible: true,
   tasksVisible: true,
   launchAtLogin: false,
@@ -208,6 +210,9 @@ export function normalizeGeneralSettings(
     petAlwaysOnTop: input?.petAlwaysOnTop === undefined ? DEFAULT_GENERAL_SETTINGS.petAlwaysOnTop : Boolean(input.petAlwaysOnTop),
     petVisible: input?.petVisible === undefined ? DEFAULT_GENERAL_SETTINGS.petVisible : Boolean(input.petVisible),
     petZoom: typeof input?.petZoom === "number" ? Math.max(0.5, Math.min(2, input.petZoom)) : DEFAULT_GENERAL_SETTINGS.petZoom,
+    petIdleMotionsEnabled: input?.petIdleMotionsEnabled === undefined
+      ? DEFAULT_GENERAL_SETTINGS.petIdleMotionsEnabled
+      : Boolean(input.petIdleMotionsEnabled),
     petWindowX: typeof input?.petWindowX === "number" && Number.isFinite(input.petWindowX) ? Math.round(input.petWindowX) : undefined,
     petWindowY: typeof input?.petWindowY === "number" && Number.isFinite(input.petWindowY) ? Math.round(input.petWindowY) : undefined,
     sidebarVisible: windowVisibility.sidebarVisible,

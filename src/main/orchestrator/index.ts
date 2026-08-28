@@ -76,9 +76,16 @@ export async function buildMemoryInjection(
         const l2Id = entry.metadata?.l2Id;
         const l2Entry = (typeof l2Id === "string" ? l2ById.get(l2Id) : undefined)
           ?? allL2.find((l) => l.content === m);
-        // 时间锚点：优先 L2 的 createdAt（回填条目保留原始时间），缺失时回落向量条目时间
-        const d = new Date(l2Entry?.createdAt ?? entry.createdAt);
-        const dateNote = `${d.getFullYear()}/${d.getMonth() + 1}/${d.getDate()}`;
+        // 时间锚点优先使用原始对话时间；旧条目缺失时兼容回退到写入时间。
+        const sourceStart = l2Entry?.sourceAt ?? l2Entry?.createdAt ?? entry.createdAt;
+        const sourceEnd = l2Entry?.sourceEndAt ?? sourceStart;
+        const formatHour = (value: number) => {
+          const date = new Date(value);
+          return `${date.getFullYear()}/${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, "0")}时`;
+        };
+        const startTime = formatHour(sourceStart);
+        const endTime = formatHour(sourceEnd);
+        const dateNote = startTime === endTime ? startTime : `${startTime}～${endTime}`;
         // 字面证据：优先提取期保留的 sourceQuote，缺失时回退 triggerText（也是用户原话短引文）。
         // 摘要会丢失专有名词/数字等字面信息，附上原文让模型引用时有据可依。
         const quote = (l2Entry?.sourceQuote ?? l2Entry?.triggerText ?? "").trim();
@@ -94,6 +101,7 @@ export async function buildMemoryInjection(
         return `· ${m}（${quoteNote}记录于 ${dateNote}）`;
       });
       const notes: string[] = [];
+      notes.push("时间解释：正文或原文中的「今天／明天／昨天／刚才／最近／今天下午」等相对时间，一律以同条「记录于」时间为参照，不得按当前时间重新解释；若所指时间已过去，只能视为当时的陈述或计划、当前状态待核实，不得表述为现在仍即将发生。");
       if (hasConflict) notes.push("带 ⚠️ 的条目存在矛盾记录，引用前先向用户求证，不要当作事实。");
       if (hasAging) notes.push("标注「较久远的印象」的条目可能已过时，提及时用不确定的语气，不要断言。");
       parts.push(

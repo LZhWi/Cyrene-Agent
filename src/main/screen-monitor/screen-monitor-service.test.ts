@@ -273,6 +273,7 @@ describe("失败快重试（模拟网络抖动后的完整时间线）", () => {
     // t=3min：首次观测失败
     await vi.advanceTimersByTimeAsync(180_000);
     expect(vlmMocks.captureAndAnalyze).toHaveBeenCalledTimes(1);
+    expect(screenMonitorService.getConsecutiveNoChangeCount()).toBeNull();
 
     // 重试在失败后 2 分钟（t=5min）触发；全速 3 分钟则要到 t=6min。
     // t=4min59s：快重试点未到，仍未重试
@@ -282,6 +283,7 @@ describe("失败快重试（模拟网络抖动后的完整时间线）", () => {
     // t=5min（失败后 2 分钟）：快重试成功
     await vi.advanceTimersByTimeAsync(1_000);
     expect(vlmMocks.captureAndAnalyze).toHaveBeenCalledTimes(2);
+    expect(screenMonitorService.getConsecutiveNoChangeCount()).toBe(0);
 
     // 恢复后按全速 3 分钟排程（第一次成功无对比对象，不降频）
     await vi.advanceTimersByTimeAsync(180_000);
@@ -360,6 +362,7 @@ describe("像素级无变化（跳过 VLM 复用摘要 + 无变化段延续）",
     // t=3min：首次 tick 无对比位图 → 走 VLM（建立摘要基线，写入第 1 条观测）
     await vi.advanceTimersByTimeAsync(180_000);
     expect(vlmMocks.captureAndAnalyze).toHaveBeenCalledTimes(1);
+    expect(screenMonitorService.getConsecutiveNoChangeCount()).toBe(0);
 
     // 此后截图像素级无变化
     diffMocks.bitmapsNoChange.mockReturnValue(true);
@@ -372,6 +375,7 @@ describe("像素级无变化（跳过 VLM 复用摘要 + 无变化段延续）",
     expect(first?.summary).toContain("用户在写代码");
     expect(first?.noChangeSince).toBe(t0 + 180_000); // 从首 tick 观测（最后一次内容确认）起算
     expect(observationStore.getRecent(100).length).toBe(2);
+    expect(screenMonitorService.getConsecutiveNoChangeCount()).toBe(1);
 
     // 降频至 8 分钟：t=11min 未触发，t=14min 触发
     await vi.advanceTimersByTimeAsync(5 * 60_000);
@@ -382,6 +386,7 @@ describe("像素级无变化（跳过 VLM 复用摘要 + 无变化段延续）",
     expect(second?.noChange).toBe(true);
     expect(second?.noChangeSince).toBe(t0 + 180_000); // 连续段延续不重置
     expect(observationStore.getRecent(100).length).toBe(3);
+    expect(screenMonitorService.getConsecutiveNoChangeCount()).toBe(2);
   });
 
   it("内容恢复变化：像素对比翻转为有变化，重新走 VLM", async () => {
@@ -400,5 +405,6 @@ describe("像素级无变化（跳过 VLM 复用摘要 + 无变化段延续）",
     diffMocks.bitmapsNoChange.mockReturnValue(false);
     await vi.advanceTimersByTimeAsync(8 * 60_000); // 低频 tick，像素已有变化
     expect(vlmMocks.captureAndAnalyze).toHaveBeenCalledTimes(2); // VLM 重新启用
+    expect(screenMonitorService.getConsecutiveNoChangeCount()).toBe(0);
   });
 });

@@ -22,6 +22,7 @@ const cyreneApi = {
     ipcRenderer.send(IPC.WINDOW_SET_DRAGGING, isDragging),
   captureFrame: () => ipcRenderer.invoke(IPC.WINDOW_CAPTURE_FRAME),
   getCursorPosition: () => ipcRenderer.invoke(IPC.WINDOW_GET_CURSOR_POSITION),
+  getIdleState: () => ipcRenderer.invoke(IPC.WINDOW_GET_IDLE_STATE),
   onPetZoom: (callback: (zoom: number) => void) => {
     const listener = (_e: unknown, zoom: number) => callback(zoom);
     ipcRenderer.on(IPC.PET_ZOOM, listener);
@@ -31,6 +32,11 @@ const cyreneApi = {
     const listener = (_e: unknown, visible: boolean) => callback(visible);
     ipcRenderer.on(IPC.PET_VISIBILITY_CHANGED, listener);
     return () => ipcRenderer.off(IPC.PET_VISIBILITY_CHANGED, listener);
+  },
+  onPetIdleMotionsChanged: (callback: (enabled: boolean) => void) => {
+    const listener = (_e: unknown, enabled: boolean) => callback(enabled);
+    ipcRenderer.on(IPC.PET_IDLE_MOTIONS_CHANGED, listener);
+    return () => ipcRenderer.off(IPC.PET_IDLE_MOTIONS_CHANGED, listener);
   },
 };
 
@@ -482,6 +488,8 @@ const locationApi = {
 
 const memoryPanelApi = {
   getData: () => ipcRenderer.invoke(IPC.MEMORY_PANEL_GET_DATA),
+  editL2: (id: string, content: string) => ipcRenderer.invoke(IPC.MEMORY_PANEL_EDIT_L2, { id, content }),
+  deleteL2: (id: string) => ipcRenderer.invoke(IPC.MEMORY_PANEL_DELETE_L2, { id }),
   deleteImportedDoc: (importId: string, fileName?: string) => ipcRenderer.invoke(IPC.MEMORY_PANEL_DELETE_IMPORTED_DOC, { importId, fileName }),
   saveL0: (patch: Record<string, unknown>) => ipcRenderer.invoke(IPC.MEMORY_PANEL_SAVE_L0, patch),
   saveL1: (patch: Record<string, unknown>) => ipcRenderer.invoke(IPC.MEMORY_PANEL_SAVE_L1, patch),

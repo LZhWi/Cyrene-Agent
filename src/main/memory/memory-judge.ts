@@ -178,6 +178,11 @@ function normalizeCandidate(input: unknown): MemoryCandidate | null {
   const sourceQuote = typeof record.sourceQuote === "string" && record.sourceQuote.trim()
     ? record.sourceQuote.trim().slice(0, 500)
     : undefined
+  const evidenceTurnRefs = Array.isArray(record.evidenceTurnRefs)
+    ? [...new Set(record.evidenceTurnRefs
+      .filter((item): item is string => typeof item === "string" && /^T[1-8]$/.test(item.trim()))
+      .map((item) => item.trim()))]
+    : []
   return {
     layer,
     field: typeof record.field === 'string' ? record.field : undefined,
@@ -195,6 +200,7 @@ function normalizeCandidate(input: unknown): MemoryCandidate | null {
     reason: reason.trim(),
     forbiddenOverclaims,
     sourceQuote,
+    evidenceTurnRefs,
     ...(layer === "L2" ? {
       facets: normalizeMemoryFacets(record.facets, `${summary.trim()} ${evidenceQuotes.join(" ")}`),
     } : {}),
@@ -377,6 +383,7 @@ export class MemoryJudge {
         "  \"certainty\": \"explicit|inferred|uncertain\",",
         "  \"attribution\": \"user_explicit|assistant_inferred|mixed\",",
         "  \"evidenceQuotes\": [\"用户原话短引文，必须来自用户\"],",
+        "  \"evidenceTurnRefs\": [\"T1\"],",
         "  \"sourceQuote\": \"L2 原文对话片段，仅 L2 输出\",",
         "  \"facets\": { \"primaryKind\": \"commitment|preference|goal|wish|experience|fact|emotion|other\", \"retrievalKinds\": [\"最多 3 个固定类型，且包含 primaryKind\"] },",
         "  \"contextSummary\": \"最近多轮上下文概括，不超过80字\",",
@@ -386,6 +393,9 @@ export class MemoryJudge {
         "}",
         "",
         "L1/L2 不需要 field。",
+        "每个候选必须用 evidenceTurnRefs 指出其事实依据来自哪些临时轮次（T1～T8）；只列真正支持该候选的轮次，不要把整个上下文窗口都列入。",
+        "解释候选中的相对时间（今天、明天、昨天、刚才、最近等）时，必须以 evidenceTurnRefs 所指轮次中事实所在消息的用户时间或 AI 时间为基准；MemoryJudge 当前运行或返回结果的时间不是事实时间锚点。",
+        "候选由多个 evidenceTurnRefs 支持时，必须按各轮消息时间分别解释相对时间，不得把不同轮次的相对表达合并成同一个日期；无法唯一确定时保留不确定性，不要编造具体日期，也不要把已经发生的内容改写成未来计划。",
         "L2 候选必须额外输出 sourceQuote 字段（L0/L1 不输出）：",
         "- sourceQuote = 从最近对话里挑出的最有信息量的一段原文（用户或对话原话），软上限 500 字",
         "- 目的：summary 是浓缩结论，会丢失专有名词/数字/代码等字面信息；sourceQuote 保留「用户当时说的原话」，召回时提供字面证据",
@@ -404,8 +414,10 @@ export class MemoryJudge {
       ].join("\n")
 
       const transcript = turns.map((turn, index) => [
-        `第 ${index + 1} 轮：`,
+        `T${index + 1}（第 ${index + 1} 轮）：`,
+        ...(typeof turn.userAt === "number" ? [`用户时间：${new Date(turn.userAt).toISOString()}（本地：${new Date(turn.userAt).toLocaleString("zh-CN", { hour12: false })}）`] : []),
         `用户：${turn.userInput}`,
+        ...(typeof turn.assistantAt === "number" ? [`AI时间：${new Date(turn.assistantAt).toISOString()}（本地：${new Date(turn.assistantAt).toLocaleString("zh-CN", { hour12: false })}）`] : []),
         `AI：${turn.assistantReply}`,
       ].join("\n")).join("\n\n")
 

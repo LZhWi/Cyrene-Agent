@@ -197,6 +197,8 @@ export function backfillL2FromChatLogs(): Promise<L2BackfillResult> {
               continue;
             }
             candidate.createdAt = batchTs;
+            candidate.sourceAt = batchTs;
+            candidate.sourceEndAt = batchTs;
             try {
               await memoryManager.writeMemory([candidate]);
               written += 1;

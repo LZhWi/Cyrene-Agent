@@ -110,6 +110,7 @@ import { setWeatherConfig, setSearchConfig, loadTodos, onTodosChange, setDelegat
 import { registerRecallHistoryTool, backfillChatHistoryFromChatLogs, runHistoryRetrievalSandbox } from "./orchestrator/history-tools";
 import { backfillL2FromChatLogs } from "./memory/memory-backfill";
 import { backfillMemoryFacets } from "./memory/memory-facet-backfill";
+import { deleteL2MemoryForUser, editL2MemoryForUser } from "./memory/l2-user-management";
 import { runReflectionCatchupOnce } from "./memory/memory-compressor";
 import { notifyDreamUserActivity, startDreamScheduler, stopDreamScheduler } from "./memory/memory-dream";
 import { registerDocumentTools } from "./orchestrator/document-tools";
@@ -1032,7 +1033,9 @@ async function loadMemoryPanelData() {
   return {
     l0,
     l1,
-    l2: l2.sort((a, b) => b.createdAt - a.createdAt),
+    l2: l2.sort((a, b) => (
+      (b.sourceEndAt ?? b.sourceAt ?? b.createdAt) - (a.sourceEndAt ?? a.sourceAt ?? a.createdAt)
+    )),
     importedDocs,
     reflections,
   };
@@ -1419,6 +1422,9 @@ function saveGeneralSettings(settings: Partial<GeneralSettings>): GeneralSetting
 
 function handleGeneralSettingsChanged(before: GeneralSettings, normalized: GeneralSettings): void {
   applyGeneralSettings(normalized, before);
+  if (before.petIdleMotionsEnabled !== normalized.petIdleMotionsEnabled) {
+    sendToLive2DWindow(IPC.PET_IDLE_MOTIONS_CHANGED, normalized.petIdleMotionsEnabled);
+  }
   syncBuiltInToolToggles(normalized);
   if (before.uiTheme !== normalized.uiTheme) {
     broadcastUiThemeChanged(normalized.uiTheme);
@@ -2645,6 +2651,7 @@ const HOLOCUBIC_LIVE2D_SYNC_CHANNELS: readonly string[] = [
   IPC.LIVE2D_SPEECH_PREPARE,
   IPC.LIVE2D_MOUTH_START,
   IPC.LIVE2D_MOUTH_STOP,
+  IPC.PET_IDLE_MOTIONS_CHANGED,
 ];
 
 export function sendToLive2DWindow(channel: string, payload?: unknown): void {
@@ -3533,6 +3540,12 @@ ipcMain.handle(IPC.WINDOW_CAPTURE_FRAME, async () => {
 ipcMain.handle(IPC.WINDOW_GET_CURSOR_POSITION, () => {
   return screen.getCursorScreenPoint();
 });
+ipcMain.handle(IPC.WINDOW_GET_IDLE_STATE, () => {
+  return {
+    systemIdleSeconds: powerMonitor.getSystemIdleTime(),
+    screenNoChangeCount: screenMonitorService.getConsecutiveNoChangeCount(),
+  };
+});
 
 ipcMain.handle(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS, () => ({
   window: live2dWindowLifecycle.getDiagnostics(),
@@ -4162,6 +4175,15 @@ ipcMain.handle(IPC.USER_GET_AVATAR, () => {
 });
 
 ipcMain.handle(IPC.MEMORY_PANEL_GET_DATA, () => loadMemoryPanelData());
+ipcMain.handle(IPC.MEMORY_PANEL_EDIT_L2, (_event, payload: { id?: unknown; content?: unknown }) => (
+  editL2MemoryForUser(
+    typeof payload?.id === "string" ? payload.id : "",
+    typeof payload?.content === "string" ? payload.content : "",
+  )
+));
+ipcMain.handle(IPC.MEMORY_PANEL_DELETE_L2, (_event, payload: { id?: unknown }) => (
+  deleteL2MemoryForUser(typeof payload?.id === "string" ? payload.id : "")
+));
 ipcMain.handle(IPC.MEMORY_QUERY_ROUTER_GET_SETTINGS, () => loadMemoryQueryRouterSettings());
 ipcMain.handle(IPC.MEMORY_QUERY_ROUTER_SAVE_SETTINGS, (_event, settings: Partial<MemoryQueryRouterSettings>) => (
   saveMemoryQueryRouterSettings(settings)
@@ -5611,6 +5633,7 @@ app.whenReady().then(async () => {
       // 故解析出贴纸放进字段、content 存剥离后的纯文本，与 PC 原生消息的存储约定一致。
       // 图片走独立 attachments 字段（同 PC 桌面本地发图），content 不塞 [image:*]（手机镜像所需标记由 desktopHistoryProvider 从字段合成）。
       const userAtMs = Date.now();
+      const userMessageId = randomUUID();
       const userStickerMatch = /\[sticker:([A-Za-z0-9_-]+)\]/.exec(text);
       const userSticker = userStickerMatch ? userStickerMatch[1] : null;
       const userCleanText = text.replace(/\[sticker:[^\]]+\]/g, "").trim();
@@ -5618,7 +5641,7 @@ app.whenReady().then(async () => {
         throw new Error("聊天索引等待用户批准恢复");
       }
       chatsStore.appendMessage(sessionId, {
-        id: randomUUID(),
+        id: userMessageId,
         role: "user",
         content: userCleanText,
         at: userAtMs,
@@ -5658,11 +5681,20 @@ app.whenReady().then(async () => {
       });
 
       let sticker: string | null = null;
+      const assistantAtMs = Date.now();
+      const assistantMessageId = randomUUID();
       if (agent.lastResult) {
         // 副作用侧（记忆抽取/心情/关系/她的贴纸选择）传入与 PC 逐字一致的
         // 「（用户发送表情包：…）」描述形（llmUserContent），而非原始 [sticker:id] 裸标记，
         // 完整对齐桌面原生回复的副作用输入，避免记忆里存进裸标记、或她的贴纸基于裸标记匹配。
-        const finished = await onAgentRunFinished(agent.lastResult, llmUserContent, onRunFinishedDeps, "mobile");
+        const finished = await onAgentRunFinished(agent.lastResult, llmUserContent, onRunFinishedDeps, "mobile", undefined, {
+          conversationId: sessionId,
+          userMessageId,
+          assistantMessageId,
+          userAt: userAtMs,
+          assistantAt: assistantAtMs,
+          validateAgainstConversation: true,
+        });
         sticker = finished.sticker;
       }
       const cleanReply = stripStickerStageDirections(rawReply);
@@ -5670,8 +5702,7 @@ app.whenReady().then(async () => {
       // 回复写入 proactive-chat 会话：贴纸放独立字段（PC 桌面渲染器只认 sticker 字段），
       // content 存剥离后的干净文本，与 PC 原生聊天/主动消息的存储约定一致；
       // 手机镜像所需的 [sticker:id] 标记由 desktopHistoryProvider 从字段合成回 content。
-      const assistantAtMs = Date.now();
-      chatsStore.appendMessage(sessionId, { id: randomUUID(), role: "model", content: cleanReply, at: assistantAtMs, sticker });
+      chatsStore.appendMessage(sessionId, { id: assistantMessageId, role: "model", content: cleanReply, at: assistantAtMs, sticker });
       broadcastChatsChanged();
 
       void indexConversationTurn(sessionId, describeMarkersForLlm(text), cleanReply);
@@ -5938,8 +5969,8 @@ app.whenReady().then(async () => {
   registerAgUiIpc(
     async (input: AguiRunInput) => buildAgentRunOptions(input, buildOptionsDeps),
     // 桌面 IPC 路径不消费 sticker（sticker 由 onAgentRunFinished 内部 IPC 广播承担）
-    async (result, latestUserText, memoryContextText) => {
-      await onAgentRunFinished(result, latestUserText, onRunFinishedDeps, undefined, memoryContextText);
+    async (result, latestUserText, memoryContextText, memoryScheduleContext) => {
+      await onAgentRunFinished(result, latestUserText, onRunFinishedDeps, undefined, memoryContextText, memoryScheduleContext);
     },
     () => chatWindow,
     proactiveConversationLifecycle,
