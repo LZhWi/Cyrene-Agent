@@ -26,7 +26,7 @@ import type {
 import { channelManager, type ChannelManager } from "./manager";
 import { loadChannelsSettings, type ChannelsSettings } from "./settings-store";
 import { appendLog, reloadLogFromDisk } from "./message-log";
-import { appendHistory as appendChannelHistory } from "./history-log";
+import { appendHistory as appendChannelHistory, migrateHistory } from "./history-log";
 import { resolveLocalStickerPath } from "../sticker-protocol";
 import { getStickersDir, loadUserStickerManifest } from "../sticker-storage";
 import { BUILT_IN_STICKER_FILES } from "../sticker-descriptions";
@@ -261,6 +261,9 @@ export class ChannelDispatcher {
     }
 
     const sessionId = makeSessionId(msg.channel, msg.chatId);
+    // 兼容旧版按 senderId 键控的历史：飞书 p2p 的 chatId(oc_) 与 senderId(ou_) 不同，
+    // 升级后迁移旧滑窗文件到新键，避免既有渠道用户上下文一次性丢失（微信两者同值、QQ 为新增渠道，均无影响）
+    migrateHistory(makeSessionId(msg.channel, msg.senderId), sessionId);
     recordSession(msg.channel, msg.senderId, sessionId);
     rememberProactiveChannelRecipient(msg, sessionId);
 

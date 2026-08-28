@@ -217,7 +217,11 @@ export class OneBotMediaManager {
         const buffer = Buffer.from(packet.data ?? "", "base64");
         if (buffer.length !== Number(packet.size ?? buffer.length)) throw new Error("Stream chunk size mismatch");
         if (bytesWritten + buffer.length > ONEBOT_MAX_FILE_BYTES) throw new Error("QQ 入站文件超过 100 MiB");
-        await state.handle.write(buffer, 0, buffer.length, index * chunkSize);
+        // 写入前校验偏移上界：异常/恶意的超大 index 会先造出 GB 级稀疏文件才被终验拦截
+        const offset = index * chunkSize;
+        if (offset + buffer.length > ONEBOT_MAX_FILE_BYTES) throw new Error("QQ 入站 chunk 偏移越界");
+        if (expectedSize > 0 && offset + buffer.length > expectedSize) throw new Error("Stream chunk offset exceeds file size");
+        await state.handle.write(buffer, 0, buffer.length, offset);
         indexes.add(index);
         bytesWritten += buffer.length;
       });
@@ -232,6 +236,17 @@ export class OneBotMediaManager {
       }
       if (completed.total_bytes !== undefined && bytesWritten !== completed.total_bytes) {
         throw new Error(`Stream completed byte mismatch: ${bytesWritten}/${completed.total_bytes}`);
+      }
+      // 连续性校验：字节总数与 chunk 总数都正确也可能存在"空洞"（跳写的稀疏文件），
+      // 必须确认索引集合恰为 {0..n-1}，否则损坏的附件会被当作正常文件交给 agent
+      if (indexes.size > 0) {
+        let maxIndex = -1;
+        for (const idx of indexes) {
+          if (idx > maxIndex) maxIndex = idx;
+        }
+        if (maxIndex !== indexes.size - 1) {
+          throw new Error(`Stream chunk indexes not contiguous: ${indexes.size} chunks, max index ${maxIndex}`);
+        }
       }
       return targetPath;
     } catch (error) {

@@ -10,6 +10,8 @@ interface PendingAction {
   onPacket?: (packet: OneBotStreamPacket) => void | Promise<void>;
   packetChain: Promise<void>;
   terminalReceived: boolean;
+  /** 流回调抛出的首个错误；接链时捕获，terminal 包到达时统一 reject，避免 rejected promise 无人处理导致 unhandledRejection 崩溃主进程。 */
+  packetError?: Error;
 }
 
 export class OneBotActionError extends Error {
@@ -68,24 +70,26 @@ export class OneBotActionClient {
     if (pending.terminalReceived) return true;
 
     const packet = response.data as OneBotStreamPacket;
-    pending.packetChain = pending.packetChain.then(() => pending.onPacket?.(packet));
+    // 接链时捕获回调异常：NapCat 不会因客户端回调失败而停发后续包，
+    // 若不在链上兜底，每个后续包都会产生一个无 handler 的 rejected promise（unhandledRejection → 主进程崩溃）。
+    pending.packetChain = pending.packetChain
+      .then(() => pending.onPacket?.(packet))
+      .catch((error) => {
+        pending.packetError ??= error instanceof Error ? error : new Error(String(error));
+      });
     if (packet?.type === "response") {
       pending.terminalReceived = true;
       void pending.packetChain.then(() => {
         this.finish(response.echo!);
-        pending.resolve(packet);
-      }, (error) => {
-        this.finish(response.echo!);
-        pending.reject(error instanceof Error ? error : new Error(String(error)));
+        if (pending.packetError) pending.reject(pending.packetError);
+        else pending.resolve(packet);
       });
     } else if (packet?.type === "error" || packet?.type === "reset") {
       pending.terminalReceived = true;
       void pending.packetChain.then(() => {
         this.finish(response.echo!);
-        pending.reject(new OneBotActionError(`OneBot stream ${packet.type}`));
-      }, (error) => {
-        this.finish(response.echo!);
-        pending.reject(error instanceof Error ? error : new Error(String(error)));
+        if (pending.packetError) pending.reject(pending.packetError);
+        else pending.reject(new OneBotActionError(`OneBot stream ${packet.type}`));
       });
     }
     return true;

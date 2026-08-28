@@ -59,6 +59,37 @@ describe("OneBotMediaManager", () => {
     await expect(manager.downloadSegment({ type: "file", data: { file_id: "f-1" } }, true)).rejects.toThrow(/chunk_size/);
   });
 
+  it("rejects a stream whose chunk indexes skip a position (silent hole passes byte counts)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-qq-media-"));
+    tempDirs.push(dir);
+    const client = {
+      // file_size=9, chunk_size=3：发 index 0（超长 6 字节）和 index 2（3 字节，跳过 1）——
+      // 偏移上界、字节总数、chunk 总数、total_bytes 全部对得上，但 index 1 的区间是稀疏零洞，必须被连续性校验拦下
+      callStream: vi.fn(async (_action, _params, onPacket) => {
+        await onPacket({ type: "stream", data_type: "file_info", file_name: "a.bin", file_size: 9, chunk_size: 3 });
+        await onPacket({ type: "stream", data_type: "file_chunk", index: 0, data: Buffer.from("aaaaaa").toString("base64"), size: 6 });
+        await onPacket({ type: "stream", data_type: "file_chunk", index: 2, data: Buffer.from("ccc").toString("base64"), size: 3 });
+        return { type: "response", data_type: "file_complete", total_chunks: 2, total_bytes: 9 };
+      }),
+    } as unknown as OneBotActionClient;
+    const manager = new OneBotMediaManager(() => client, dir);
+    await expect(manager.downloadSegment({ type: "file", data: { file_id: "f-1" } }, true)).rejects.toThrow(/not contiguous/);
+  });
+
+  it("rejects chunk offsets beyond the declared file size", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-qq-media-"));
+    tempDirs.push(dir);
+    const client = {
+      callStream: vi.fn(async (_action, _params, onPacket) => {
+        await onPacket({ type: "stream", data_type: "file_info", file_name: "a.bin", file_size: 6, chunk_size: 3 });
+        await onPacket({ type: "stream", data_type: "file_chunk", index: 5, data: Buffer.from("abc").toString("base64"), size: 3 });
+        return { type: "response", data_type: "file_complete", total_chunks: 1, total_bytes: 3 };
+      }),
+    } as unknown as OneBotActionClient;
+    const manager = new OneBotMediaManager(() => client, dir);
+    await expect(manager.downloadSegment({ type: "file", data: { file_id: "f-1" } }, true)).rejects.toThrow(/offset exceeds file size/);
+  });
+
   it("rejects a stream with missing chunks", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-qq-media-"));
     tempDirs.push(dir);
