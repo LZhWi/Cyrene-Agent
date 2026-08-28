@@ -33,6 +33,7 @@ import {
 } from "../../tts/tts-cache";
 import type { TtsSessionExecution } from "../../tts/tts-session-service";
 import { transcodeAudioFileToFeishuOpus } from "../../channels/adapters/feishu/audio-transcode";
+import type { ChannelId } from "../../channels/types";
 
 type ChannelTtsAudioFormat = TtsAudioFormat | "opus";
 
@@ -50,7 +51,7 @@ export interface TtsSynthesisService {
   synthesizeChannelTts(
     text: string,
     cfg: GeneralSettings,
-    channel: "wechat" | "feishu",
+    channel: ChannelId,
   ): Promise<{
     audio: Buffer;
     format: ChannelTtsAudioFormat;
@@ -271,7 +272,7 @@ export function createTtsSynthesisService(
   async function synthesizeChannelTts(
     text: string,
     cfg: GeneralSettings,
-    channel: "wechat" | "feishu",
+    channel: ChannelId,
   ): Promise<{
     audio: Buffer;
     format: ChannelTtsAudioFormat;

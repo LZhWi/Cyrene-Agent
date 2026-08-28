@@ -286,6 +286,16 @@ export interface SettingsApi {
   testVision?: (config: { baseUrl: string; apiKey: string; model: string }) => Promise<{ ok: boolean; latency: number; sample?: string; error?: string }>;
   // main → settings：要求切到指定标签（窗口已打开时由 main 发这个事件）
   onSwitchSection?: (callback: (section: string) => void) => (() => void) | void;
+  channelsGetConfig: () => Promise<any>;
+  channelsSaveConfig: (patch: unknown) => Promise<any>;
+  channelsRestart: () => Promise<{ ok: boolean }>;
+  channelsQqTestConnection: () => Promise<{ ok: boolean; error?: string; detail?: Record<string, unknown> }>;
+  channelsLogGet: (limit?: number) => Promise<unknown[]>;
+  channelsLogClear: () => Promise<{ ok: boolean }>;
+  onChannelsInstallProgress: (callback: (progress: { channel: string; phase: string; pct: number }) => void) => (() => void) | void;
+  onChannelsWechatQrcode: (callback: (dataUrl: string) => void) => (() => void) | void;
+  onChannelsWechatLoginDone: (callback: (payload: { ok: boolean; botId?: string; error?: string }) => void) => (() => void) | void;
+  channelsWechatLoginStart: () => Promise<{ ok: boolean; error?: string }>;
   channelsGetStatus: () => Promise<Record<string, { phase?: string; message?: string }>>;
   onChannelsStatusChanged: (callback: (status: unknown) => void) => (() => void) | void;
   beginScreenshotHotkeyCapture: () => Promise<boolean>;

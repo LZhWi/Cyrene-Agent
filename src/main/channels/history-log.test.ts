@@ -14,7 +14,7 @@ vi.mock("electron", () => ({
   },
 }));
 
-import { appendHistory, loadRecentHistory } from "./history-log";
+import { appendHistory, loadRecentHistory, migrateHistory } from "./history-log";
 
 describe("channels/history-log", () => {
   beforeEach(() => {
@@ -94,5 +94,44 @@ describe("channels/history-log", () => {
     expect(history[history.length - 1].content).toBe("msg249");
     // 最老一条应该是 msg50 (250 - 200 = 50)
     expect(history[0].content).toBe("msg50");
+  });
+
+  describe("migrateHistory", () => {
+    it("旧键(senderId)历史迁移到新键(chatId)，升级不丢上下文", () => {
+      const legacy = "channel:feishu:legacyhash";
+      const fresh = "channel:feishu:freshhash";
+      appendHistory(legacy, "user", "旧会话消息");
+
+      migrateHistory(legacy, fresh);
+
+      const history = loadRecentHistory(fresh, 16);
+      expect(history).toHaveLength(1);
+      expect(history[0].content).toBe("旧会话消息");
+      // 原文件保留作兜底
+      expect(loadRecentHistory(legacy, 16)).toHaveLength(1);
+    });
+
+    it("幂等：新键已有文件时不覆盖", () => {
+      const legacy = "channel:feishu:legacyhash2";
+      const fresh = "channel:feishu:freshhash2";
+      appendHistory(legacy, "user", "旧会话消息");
+      appendHistory(fresh, "user", "新会话消息");
+
+      migrateHistory(legacy, fresh);
+
+      const history = loadRecentHistory(fresh, 16);
+      expect(history).toHaveLength(1);
+      expect(history[0].content).toBe("新会话消息");
+    });
+
+    it("旧键无文件时静默无操作", () => {
+      migrateHistory("channel:feishu:never-exist", "channel:feishu:never-fresh");
+      expect(loadRecentHistory("channel:feishu:never-fresh", 16)).toEqual([]);
+    });
+
+    it("同键或空键直接返回", () => {
+      expect(() => migrateHistory("channel:feishu:same", "channel:feishu:same")).not.toThrow();
+      expect(() => migrateHistory("", "channel:feishu:x")).not.toThrow();
+    });
   });
 });

@@ -32,7 +32,7 @@
 - 🧰 **Rich Tool Ecosystem** — Web search, file processing, document generation, everyday services, music, and MCP extensions
 - 🔌 **Multi-Provider Model Support** — Tiered Structured Output and Function Calling compatibility profiles for different model providers
 - 🎨 **Customizable Appearance** — Multiple interface styles, themes, and chat font options
-- 📱 **Multi-Platform Access** — Desktop, Feishu/Lark, and WeChat iLink with shared character capabilities and conversation experience
+- 📱 **Multi-Platform Access** — Desktop, Feishu/Lark, WeChat iLink, and QQ through NapCat/OneBot 11
 - 🌙 **Proactive Chat** — Starts conversations according to time, status, and user preferences, with targeted multi-channel delivery
 
 ---
@@ -182,7 +182,7 @@ After starting the application, **click the system tray icon → Open Settings**
 
 3. **🎧 ASR Settings** (optional): To use voice calls, configure Alibaba Cloud real-time ASR credentials or the API key shared with Mossland TTS.
 
-4. **📱 External Channels** (optional): Connect Feishu or WeChat iLink to chat with Cyrene from a mobile device.
+4. **📱 External Channels** (optional): Connect Feishu, WeChat iLink, or QQ through NapCat/OneBot 11.
 
 Configuration is stored in the application's `<userData>/` directory. Most changes do not require a restart.
 
@@ -207,6 +207,7 @@ Configuration is stored in the application's `<userData>/` directory. Most chang
 | 🔌 MCP Extension Ecosystem | 🧪 Experimental | Supports stdio, SSE, and HTTP transports; actual compatibility depends on the third-party MCP Server |
 | 📱 Feishu / Lark | ✅ Available | Long-connection message access and multiple media types |
 | 📱 WeChat iLink | 🧪 Experimental | Long-poll message exchange, media handling, and mobile chat |
+| 📱 QQ / NapCat | 🧪 Experimental | OneBot 11 reverse WebSocket, private/group allowlists, replies, mentions, and cross-WSL media |
 | 🌙 Proactive Chat | 🧪 Experimental | Status evaluation, do-not-disturb policies, and delivery through desktop, Feishu, and WeChat |
 
 > ✅ **Available**: The core workflow is implemented and suitable for everyday use.  
@@ -263,7 +264,7 @@ Credentials for the LLM, separate vision model, ASR, TTS, and other third-party 
 - `<userData>/app-settings.json`: ASR, TTS, maps, search, email, and other configuration (plaintext)
 - `<userData>/weixin/credentials.json`: WeChat iLink Bot credentials (plaintext)
 - `<userData>/mcp-servers.json`: MCP Server configuration, including `env` environment variables (plaintext)
-- `<userData>/channels-settings.json`: Feishu `appSecret` / `verificationToken` / `encryptKey` (`safeStorage` encrypted)
+- `<userData>/channels-settings.json`: Channel settings; Feishu `appSecret` and QQ `accessToken` use `safeStorage`
 - `<userData>/music/netease/account.enc`: NetEase Cloud Music login cookie (`safeStorage` encrypted)
 
 Most credentials are currently stored as plaintext local files and are primarily protected by operating-system permissions on the user data directory.
@@ -498,7 +499,8 @@ Cyrene includes many built-in and extensible tools, primarily covering the follo
 
 - **Feishu / Lark** — Connects through the official SDK and WebSocket long connection without requiring a public server or tunneling.
 - **WeChat iLink** — Supports long-poll message receiving, text sending, and partial media processing.
-- **Unified Character Across Channels** — Desktop, Feishu, and WeChat share the same character design, memory, and conversation capabilities.
+- **QQ / NapCat** — Connects through a OneBot 11 reverse WebSocket with private/group allowlists, replies, mentions, and media. See the [NapCat guide](docs/user-guide/napcat-onebot.md).
+- **Unified Character Across Channels** — Desktop, Feishu, WeChat, and QQ share the same character design and memory capabilities.
 - **Channel-Specific Style** — Mobile and desktop chat can use different expression styles.
 
 #### ✨ Skill System
@@ -567,7 +569,7 @@ Cyrene includes many built-in and extensible tools, primarily covering the follo
 | Voice and Media | TTS / ASR + `silk-wasm` |
 | Native Screenshot Helper | Rust + DXGI Desktop Duplication / Direct2D / GDI + WIC PNG + NDJSON IPC |
 | Self-Developed Core | CITA (context understanding), CyreneHarness (agent loop and permission approval), DMAE Worldbook, unified Structured Output Pipeline |
-| External Channels | Feishu OpenAPI, WeChat iLink |
+| External Channels | Feishu OpenAPI, WeChat iLink, NapCat / OneBot 11 |
 | Documents and Email | ExcelJS, docx, PDFKit, Nodemailer |
 | Testing | Vitest 4 |
 
@@ -590,7 +592,7 @@ src/
 ├── main/             # Electron main process
 │   ├── asr/          # Speech recognition (Alibaba Cloud real-time / Mossland batch transcription)
 │   ├── call/         # Voice-call core (ASR -> Agent -> TTS turns)
-│   ├── channels/     # External channel adapters (Feishu / WeChat iLink / ...)
+│   ├── channels/     # External channel adapters (Feishu / WeChat iLink / QQ OneBot 11 / ...)
 │   ├── chat/         # Chat support (image handling / think filtering / sending policy)
 │   ├── chats/        # Multi-conversation history and persistence
 │   ├── cita/         # CITA context-understanding and recommendation engine

@@ -31,7 +31,7 @@
 - 🧰 **丰富工具生态** — 覆盖联网搜索、文件处理、文档生成、生活服务、音乐与 MCP 扩展
 - 🔌 **多模型厂商适配** — 针对不同厂商提供分级 Structured Output 与 Function Calling 兼容方案
 - 🎨 **个性化外观** — 支持多套界面风格、主题外观与聊天字体选择
-- 📱 **多平台接入** — 支持桌面端、飞书与微信 iLink，共享角色能力与对话体验
+- 📱 **多平台接入** — 支持桌面端、飞书、微信 iLink 与 QQ（NapCat / OneBot 11），共享角色能力与对话体验
 - 🌙 **主动聊天** — 根据时间、状态与用户偏好主动发起交流，并支持多渠道定向投递
 
 ---
@@ -369,7 +369,8 @@ Cyrene 内置和扩展的工具较多，主要覆盖以下类别：
 
 - **飞书 Lark** — 通过官方 SDK 和 WebSocket 长连接接入，无需公网服务器或内网穿透。
 - **微信 iLink** — 支持长轮询消息接收、文本发送和部分媒体处理。
-- **多渠道统一人格** — 桌面端、飞书与微信共享角色设定、记忆和会话能力。
+- **QQ / NapCat** — 通过 OneBot 11 反向 WebSocket 接入，支持白名单私聊、群内 @、引用及多媒体消息；详见 [NapCat 接入指南](docs/user-guide/napcat-onebot.md)。
+- **多渠道统一人格** — 桌面端、飞书、微信与 QQ 共享角色设定和记忆能力。
 - **渠道独立风格** — 可针对手机聊天与桌面聊天使用不同表达方式。
 
 #### ✨ Skill 系统
@@ -433,6 +434,7 @@ Cyrene 内置和扩展的工具较多，主要覆盖以下类别：
 | 🔌 MCP 扩展生态 | 🧪 实验性 | 支持 stdio、SSE 与 HTTP Transport，实际兼容性取决于第三方 MCP Server |
 | 📱 飞书 Lark | ✅ 可用 | 支持长连接消息接入与多种媒体类型 |
 | 📱 微信 iLink | 🧪 实验性 | 支持长轮询消息收发、媒体处理与手机端对话 |
+| 📱 QQ / NapCat | 🧪 实验性 | OneBot 11 反向 WebSocket、私聊/群聊白名单、引用/@ 与跨 WSL 多媒体传输 |
 | 🌙 主动聊天 | 🧪 实验性 | 支持状态判断、不打扰策略与桌面、飞书、微信多渠道投递 |
 
 > ✅ **可用**：核心流程已经实现，可用于日常体验。  
@@ -486,7 +488,7 @@ src/
 ├── main/             # Electron 主进程
 │   ├── asr/          # 语音识别（阿里云实时 ASR / Mossland 批量转写）
 │   ├── call/         # 语音通话核心逻辑（ASR -> agent -> TTS 轮次）
-│   ├── channels/     # 外部渠道适配层（飞书 / 微信 iLink / ...）
+│   ├── channels/     # 外部渠道适配层（飞书 / 微信 iLink / QQ OneBot 11 / ...）
 │   ├── chat/         # 聊天附属（图片处理 / think 过滤 / 发送策略）
 │   ├── chats/        # 多会话历史与持久化
 │   ├── cita/         # CITA 上下文理解与建议引擎
@@ -613,12 +615,12 @@ LLM、独立视觉模型、ASR、TTS 及其他第三方服务的凭据会保存�
 - `<userData>/app-settings.json`：ASR、TTS、地图、搜索、邮件等配置（明文）
 - `<userData>/weixin/credentials.json`：微信 iLink Bot 凭据（明文）
 - `<userData>/mcp-servers.json`：MCP server 配置，含 `env` 环境变量（明文）
-- `<userData>/channels-settings.json`：飞书 `appSecret` / `verificationToken` / `encryptKey`（safeStorage 加密）
+- `<userData>/channels-settings.json`：渠道配置；飞书 `appSecret` 与 QQ `accessToken` 使用 safeStorage 加密
 - `<userData>/music/netease/account.enc`：网易云音乐登录 Cookie（safeStorage 加密）
 
 目前大部分凭据仍以明文形式保存在本地文件中，主要依赖操作系统的用户目录权限进行保护。
 
-飞书渠道凭据与网易云音乐登录 Cookie 使用 Electron `safeStorage` 加密：
+飞书、QQ 渠道凭据与网易云音乐登录 Cookie 使用 Electron `safeStorage` 加密：
 
 - Windows：DPAPI
 - macOS：Keychain

@@ -8,7 +8,22 @@
 import type { WebContents } from "electron";
 
 /** 渠道 id 联合类型。新增渠道时在此扩展。 */
-export type ChannelId = "wechat" | "feishu";
+export type ChannelId = "wechat" | "feishu" | "qq";
+
+export type ChannelChatType = "private" | "group";
+
+export interface ChannelMention {
+  userId: string;
+  name?: string;
+  isBot?: boolean;
+}
+
+export interface ChannelReplyContext {
+  messageId: string;
+  senderId?: string;
+  senderName?: string;
+  text?: string;
+}
 
 /** 渠道能力声明。Dispatcher 按 cap 做降级。 */
 export interface ChannelCapability {
@@ -46,6 +61,10 @@ export interface ChannelAttachment {
 /** 入站消息。adapters → dispatcher。 */
 export interface IncomingMessage {
   channel: ChannelId;
+  /** 私聊或群聊。旧渠道未声明时按 private 处理。 */
+  chatType?: ChannelChatType;
+  /** 平台原始消息 ID。 */
+  messageId?: string;
   /** 平台原始 sender id。dispatcher 会 sha256 截断成 16 字符作为 sessionId。 */
   senderId: string;
   /** 显示名（昵称/open_id alias），用于日志/UI。 */
@@ -56,6 +75,9 @@ export interface IncomingMessage {
   threadId?: string;
   text: string;
   attachments?: ChannelAttachment[];
+  mentions?: ChannelMention[];
+  /** 最多展开一层的引用消息。 */
+  reply?: ChannelReplyContext;
   at: Date;
   /** 原始 payload，调试用，不序列化。 */
   _raw?: unknown;
@@ -79,9 +101,15 @@ export type OutgoingPart =
 /** 出站消息。dispatcher → adapters。 */
 export interface OutgoingMessage {
   channel: ChannelId;
+  chatType?: ChannelChatType;
   /** 回复给谁（私聊 = senderId；群聊 = chatId） */
   targetId: string;
   threadId?: string;
+  /** 群聊回复元数据，由平台 adapter 翻译为 reply / at 消息段。 */
+  replyContext?: {
+    messageId: string;
+    mentionUserId?: string;
+  };
   parts: OutgoingPart[];
 }
 

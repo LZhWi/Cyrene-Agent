@@ -23,6 +23,7 @@ export function createProactiveChannelRecipientRegistry(): ProactiveChannelRecip
   const recipients = new Map<ProactiveMobileChannel, RecentProactiveChannelRecipient>();
   return {
     remember(message, sessionId): void {
+      if (message.channel !== "wechat" && message.channel !== "feishu") return;
       const targetId = message.chatId.trim();
       if (!targetId || !sessionId) return;
       recipients.set(message.channel, {

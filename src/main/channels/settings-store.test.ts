@@ -55,7 +55,30 @@ describe("channels/settings-store", () => {
     const cfg = loadChannelsSettings();
     expect(cfg.wechat.enabled).toBe(false);
     expect(cfg.feishu.enabled).toBe(false);
+    expect(cfg.qq.enabled).toBe(false);
+    expect(cfg.qq.port).toBe(6200);
     expect(cfg.rateLimitPerUser).toBe(10);
+  });
+
+  it("encrypts the QQ access token and normalizes numeric allowlists", () => {
+    saveChannelsSettings({ qq: {
+      enabled: true,
+      listenMode: "wsl",
+      port: 6200,
+      accessToken: "qq-secret",
+      allowedPrivateUserIds: [" 10001 ", "bad", "10001"],
+      allowedGroupIds: ["20001"],
+      groupRequireMention: true,
+      groupReplyStyle: "reply-and-mention",
+      groupToolPolicy: "off",
+      groupMemoryPolicy: "shared-personal",
+    } });
+    const raw = fs.readFileSync(path.join(os.tmpdir(), "channels-settings.json"), "utf8");
+    expect(raw).not.toContain("qq-secret");
+    const loaded = loadChannelsSettings();
+    expect(loaded.qq.accessToken).toBe("qq-secret");
+    expect(loaded.qq.allowedPrivateUserIds).toEqual(["10001"]);
+    expect(loaded.qq.allowedGroupIds).toEqual(["20001"]);
   });
 
   it("saveChannelsSettings + load: 私密字段加密落盘 + 解密还原", () => {
