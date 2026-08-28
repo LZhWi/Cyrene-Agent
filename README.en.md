@@ -15,7 +15,7 @@
 > A desktop Live2D conversational Agent built with Electron and TypeScript.  
 > Centered around Cyrene's character design and powered by the self-developed Cyrene_Harness&DMAE memory engine,  
 > it brings character-driven conversation, personalized memory, voice interaction, tool use, and multi-platform access into a single desktop Agent,  
-> supporting five conversation modes: Chat, Work, Code, Learn, and Daily.
+> supporting four conversation modes: Chat, Work, Code, and Learn.
 
 ---
 
@@ -26,7 +26,6 @@
 - 🛠️ **Assisted Work (Work)** — General-purpose task session that chains together web search, file processing, document generation, and lifestyle tools through the [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) main loop
 - 💻 **Code Collaboration (Code)** — Binds a trusted code directory, provides LSP semantic queries (definitions / references / hover / symbols / diagnostics) plus restricted read/write/exec commands; safety is enforced by Harness's permission approval (Permission Policy) and Execution Policy
 - 📚 **Learning Companion (Learn)** — Binds an Obsidian Vault, accompanies users in understanding materials, organizing notes, generating exercises, and tracking progress
-- 📅 **Daily Affairs (Daily)** — General tool-enabled sessions for everyday Q&A, information organization, and light tasks
 - 🧠 **Personalized Memory** — L0 / L1 / L2 layered memory combined with the self-developed DMAE Worldbook for long-term interaction continuity
 - 🔊 **Voice Interaction** — Integrated TTS, ASR, and voice calls so Cyrene can listen and respond
 - 🧰 **Rich Tool Ecosystem** — Web search, file processing, document generation, everyday services, music, and MCP extensions
@@ -197,7 +196,6 @@ Configuration is stored in the application's `<userData>/` directory. Most chang
 | 🛠️ Assisted Work (Work) | ✅ Available | Driven by [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) |
 | 💻 Code Collaboration (Code) | ✅ Available | Binds a trusted code directory; Coding Agent reads, modifies, verifies code, and runs commands |
 | 📚 Learning Companion (Learn) | ✅ Available | Binds an Obsidian Vault to accompany understanding, take notes, generate exercises, and track progress |
-| 📅 Daily Affairs (Daily) | ✅ Available | Reuses the CyreneHarness main loop; a general-purpose tool session for everyday Q&A, information organization, and light tasks |
 | 🧠 Personalized Memory | ✅ Available | L0 / L1 / L2 layered memory, self-developed DMAE Worldbook, relationship profile, and long-term interaction continuity |
 | 🔊 Voice Interaction | ✅ Available | Multiple TTS engines, real-time ASR, voice calls, and VAD silence detection; some features require additional configuration |
 | 🧰 Built-in Tools | ✅ Available | Web search, webpage reading, file operations, document generation, everyday services, music, and more |
@@ -350,7 +348,7 @@ If OOM errors continue, use the Chrome DevTools Memory Profiler in development m
 
 #### ⚙️ CyreneHarness Core Loop
 
-> `Work / Code / Daily` and any session mode that requires tool invocation runs on top of **CyreneHarness**.  
+> `Work / Code / Learn` and any session mode that requires tool invocation runs on top of **CyreneHarness**.  
 > Source: [`src/main/orchestrator/harness/cyrene-harness.ts`](./src/main/orchestrator/harness/cyrene-harness.ts)
 
 CyreneHarness is the core Agent Loop of Cyrene Agent. It chains **model decisions, tool execution, side-effect accounting, and state recovery** into a continuous loop that is interruptible, recoverable, and replayable.
@@ -362,18 +360,24 @@ CyreneHarness is the core Agent Loop of Cyrene Agent. It chains **model decision
 - **Exclusive Ask path** — `ask_user` / `confirm_uncertain_effect` are user-waiting built-in tools that monopolize the round: other co-round tools return `not_executed`, and the progress buffer is discarded before continuing.
 - **Four-state outcome with uncertainEffect interception** — Tool results fall into `success / failure / unknown / not_executed`. When `unknown` is paired with `sideEffect === non_idempotent`, the side effect is recorded into `state.uncertainEffects` and `halted = true` blocks further automatic replays of the same dangerous call within the round.
 - **Failure retry** — Failed tools decide whether to retry based on `classifyToolResultError` + `resolveSideEffect`; the `sleepWithJitter` backoff is interruptible via `AbortSignal`.
-- **Mid-loop Compaction** — Each round checks the token budget and triggers an LLM-driven summary when over the threshold, preserving todos and confirmed results.
+- **Conservative parallel scheduling** — Serial by default; only explicitly concurrency-safe read-only tools run in parallel (default limit 4). Results are always committed in the original tool-call order; on halt / error / cancel, already-executed results are never dropped, and failed slots are closed with synthetic failure results so the transcript stays consistent.
+- **Dual-clock timeout** — Execution time and user-wait time are tracked separately: while `ask_user` is waiting for the user, the execution clock is paused, so user thinking time never consumes the task timeout budget.
+- **Mid-loop Compaction** — Each round checks the token budget and triggers an LLM-driven summary when over the threshold, preserving todos and confirmed results; if the post-compaction checkpoint fails, the run aborts immediately without issuing another model request.
+- **Prefix-cache discipline** — Stable prefix layering (stablePrefix / sessionPrefix / mode); volatile state such as Todos is kept out of the prefix; the tool list is frozen for the whole run; dynamic facts are materialized into the transcript once instead of being re-appended every round; `cacheEpoch` advances across compaction / recovery; vendor cache hints such as Kimi's `prompt_cache_key` are injected uniformly at the request layer.
+- **Two-tier tool output truncation** — Large outputs are persisted to disk (`ToolOutputRef`) while model messages only keep a preview; the model can call the built-in `read_tool_result` tool to read the full output on demand, drastically reducing context usage.
+- **Context-usage snapshots** — A `context_usage` snapshot event is emitted before each model request and at terminal settlement, powering the live context-ring UI.
+- **Truncation made visible** — When the output hits the model's length limit (`finishReason = length`), a notice is appended to the reply instead of failing silently.
+- **Stream-first with fallback** — Falls back to non-streaming only when zero deltas were received and the vendor explicitly rejects stream + tools; a half-replayed stream never happens; token accounting distinguishes cache hits.
 - **Signal-aware throughout** — Almost every `await` is wrapped with `raceWithSignal`; `signal.aborted` returns `cancelled()` (with `finalAnswer = ''` and **no `final_answer` event emitted**).
 - **Per-round checkpoint** — `onCheckpoint` persists `messages + state + rounds` so execution can resume after a cross-process crash.
 
-**Five terminal states:**
+**Four terminal states:**
 
 | Status | `terminated` | `terminateReason` | Trigger |
 | :---: | :---: | :---: | --- |
 | ✅ success | `false` | `undefined` | Model ends the turn without invoking any tool |
 | ⚪ cancelled | `true` | `cancelled` | `AbortSignal` fires (`finalAnswer = ''`) |
 | 🟥 error | `true` | `error` | LLM throws or checkpoint fails |
-| 🟧 max_rounds | `true` | `max_rounds` | `config.maxRounds` reached |
 | 🟨 timeout | `true` | `timeout` | `config.totalTimeoutMs` exceeded |
 
 **Main flow:**
@@ -388,7 +392,7 @@ The modes below are consumers of this loop:
 
 ![Work mode preview](./docs/image/work.png)
 
-- **Driven by CyreneHarness** — Each message enters the while loop in [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts): every round calls the LLM → writes back the assistant message → dispatches tools → writes back tool results → checks uncertain effects → continues or ends. Pre-processors (CITA context understanding) run before the Harness entry, and permission approval filters unsafe tool calls before execution; the Soul persona layer generates the reply text after the Harness exit.
+- **Driven by CyreneHarness** — Each message enters the while loop in [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts): every round calls the LLM → writes back the assistant message → dispatches tools → writes back tool results → checks uncertain effects → continues or ends. Pre-processors (CITA context understanding) run before the Harness entry, and permission approval filters unsafe tool calls before execution; inside the loop, each round carries a compact execution persona ([`prompts/cyrene_harness.md`](./prompts/cyrene_harness.md)) that only governs expression style and never leaks into tool arguments — on conflict, "task correctness > clarity > Cyrene's style"; the full Soul persona layer generates the reply text after the Harness exit.
 - **Free tool chaining** — Web search, webpage reading, file R/W, document generation, and lifestyle tools can be combined on demand; the model picks the next tool without pre-orchestrated flows.
 - **Side-effect accounting** — When a non-idempotent side effect (sending email, modifying a remote file, etc.) has an unknown result, it is recorded into `state.uncertainEffects` and blocks automatic replay of the same dangerous call within the round.
 - **Failure retry and cancellation** — Tool failures retry based on error class and side-effect tier (with jittered backoff); `AbortSignal` can cancel at any time. Cancellation does not emit a "final reply" event to avoid misleading the user.
@@ -435,13 +439,6 @@ The modes below are consumers of this loop:
 - **Accompanied Understanding** — Helps users understand materials through questions, breakdowns, analogies, and discussion rather than doing the learning for them.
 - **Notes and Exercises** — Organizes concepts, generates exercises, and records reviews inside the Vault, automatically maintaining a learning-progress overview.
 - **Respects the User's Pace** — Re-explains when the user is stuck, advances when the user is ready, and never scolds the user for wrong answers.
-
-#### 📅 Daily Affairs (Daily)
-
-- **Reuses the CyreneHarness main loop** — The default general-purpose tool session for everyday Q&A, information organization, and light tasks.
-- **Flexible tool execution chain** — Uses the same Agent shell as Work mode and invokes search, file, lifestyle, and other tools as needed.
-- **Workspace binding** — Requires binding a trusted directory as the context root; file operations and tool execution stay within that directory.
-- **Legacy session compatibility** — Unclassified historical sessions default to Daily mode and bind to a migration workspace for smooth upgrades.
 
 #### 📝 Rich Text and Code Rendering
 
@@ -555,7 +552,7 @@ Cyrene includes many built-in and extensible tools, primarily covering the follo
 | Build Tool | Vite 7 |
 | UI Rendering | HTML / CSS + React 19 + Pixi.js 7 + Ant Design X + Chart.js |
 | Live2D | `pixi-live2d-display` 0.5.0-beta + Cubism Core |
-| Agent Main Loop | [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) (while + Function Calling + streaming reasoning/tools) + Structured Output + Native Function Calling |
+| Agent Main Loop | [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) (while + Function Calling + streaming reasoning/tools + prefix-cache layering + mid-loop compaction) + Structured Output + Native Function Calling |
 | Agent Event Protocol | AG-UI (`@ag-ui/core`, `@ag-ui/client`) — decoupled from the renderer through `RUN_STARTED / STEP_* / TEXT_MESSAGE_* / TOOL_CALL_* / RUN_FINISHED` and other events |
 | Tool Dispatching | Self-developed `tool-dispatcher` + `side-effect-resolver` + `error-classifier` + `retry-policy` quartet, handling the four-state outcome (success / failure / unknown / not_executed) |
 | Sandbox Execution (Windows) | `@anthropic-ai/sandbox-runtime` (SRT) — untrusted commands run through `SandboxManager.wrapWithSandboxArgv`; falls back to direct `spawn` when not installed, with `workspace_mutation` commands still rejected |

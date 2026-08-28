@@ -215,7 +215,7 @@ npm run package:win:dir
 
 #### ⚙️ CyreneHarness 核心循环
 
-> `Work / Code / Daily` 等需要工具调用的会话模式，全部跑在 **CyreneHarness** 之上。
+> `Work / Code / Learn` 等需要工具调用的会话模式，全部跑在 **CyreneHarness** 之上。
 > 源码：[`src/main/orchestrator/harness/cyrene-harness.ts`](./src/main/orchestrator/harness/cyrene-harness.ts)
 
 CyreneHarness 是 Cyrene Agent 的核心 Agent Loop，负责把**模型决策、工具执行、副作用记账与状态恢复**串成一个可中断、可恢复、可回放的连续循环。
@@ -227,18 +227,24 @@ CyreneHarness 是 Cyrene Agent 的核心 Agent Loop，负责把**模型决策、
 - **Ask 互斥路径** — `ask_user` / `confirm_uncertain_effect` 是用户等待类内置工具，必须独占本轮：其余同轮工具全部以 `not_executed` 协议结果写回，并 `discardProgressBuffer()` 丢弃进度文本。
 - **四态 outcome 与 uncertainEffects 拦截** — 工具结果分为 `success / failure / unknown / not_executed`。当 `unknown` 且 `sideEffect === non_idempotent` 时，副作用会被记入 `state.uncertainEffects`，并 `halted = true` 暂停本轮后续同类调用，防止自动重放危险副作用。
 - **失败重试** — 工具失败时根据 `classifyToolResultError` + `resolveSideEffect` 决定是否重试；`sleepWithJitter` 退避可被 `AbortSignal` 中断。
-- **Mid-loop Compaction** — 每轮开始时根据 token 预算判断是否需要压缩上下文，超阈值时复用 LLM 做历史摘要，保留 todo 与已确定结果。
+- **保守并行调度** — 默认串行，仅"显式声明并发安全的纯读工具"可并行（默认上限 4）；结果始终按模型原始 tool-call 顺序提交；halt / error / cancel 时已执行结果不丢弃，出错槽位以合成失败结果闭合 transcript。
+- **双时钟超时** — 执行计时与用户等待计时分离：`ask_user` 等待用户期间暂停执行计时，用户思考多久都不消耗任务超时预算。
+- **Mid-loop Compaction** — 每轮开始时根据 token 预算判断是否需要压缩上下文，超阈值时复用 LLM 做历史摘要，保留 todo 与已确定结果；压缩后 checkpoint 失败立即熔断，不再发起模型请求。
+- **前缀缓存体系** — 稳定前缀分层（stablePrefix / sessionPrefix / mode），Todo 等易变状态禁止进入前缀；工具清单在 run 期间冻结；动态事实一次性物化进 transcript 而非每轮拼接；`cacheEpoch` 缓存周期跨压缩 / 恢复推进；Kimi `prompt_cache_key` 等厂商缓存 hints 在请求层统一注入。
+- **工具输出双级截断** — 大输出落盘存储（`ToolOutputRef`），模型消息只保留 preview；需要完整内容时由模型调用内置 `read_tool_result` 按需回读，大幅降低上下文占用。
+- **上下文容量快照** — 每轮请求前与终态各发一次 `context_usage` 快照事件，驱动 UI 上下文环实时显示。
+- **截断可见化** — 输出命中模型长度上限（`finishReason = length`）时在回复尾部追加提示，不静默截断。
+- **流式优先与降级** — 仅在零增量且供应商明确不支持 stream + tools 时降级非流式，绝不重放半截流；token 用量记账区分缓存命中。
 - **全程 signal-aware** — 几乎每个 `await` 都用 `raceWithSignal` 包裹，`signal.aborted` 时返回 `cancelled()`（`finalAnswer = ''`，**不发 `final_answer` 事件**）。
 - **每轮 checkpoint** — 通过 `onCheckpoint` 把 `messages` + `state` + `rounds` 持久化，跨进程崩溃后可恢复。
 
-**5 种终止状态：**
+**4 种终止状态：**
 
 | 状态 | `terminated` | `terminateReason` | 触发条件 |
 | :---: | :---: | :---: | --- |
 | ✅ success | `false` | `undefined` | 模型不再调用工具，主动结束当前 turn |
 | ⚪ cancelled | `true` | `cancelled` | `AbortSignal` 触发（`finalAnswer = ''`） |
 | 🟥 error | `true` | `error` | LLM 抛错或 checkpoint 失败 |
-| 🟧 max_rounds | `true` | `max_rounds` | 达到 `config.maxRounds` |
 | 🟨 timeout | `true` | `timeout` | 超过 `config.totalTimeoutMs` |
 
 **主流程示意：**
@@ -253,7 +259,7 @@ CyreneHarness 是 Cyrene Agent 的核心 Agent Loop，负责把**模型决策、
 
 ![Work 模式示意](./docs/image/work.png)
 
-- **CyreneHarness 主循环驱动** — 单条消息进入 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 的 while 循环：每轮调用 LLM → 写回 assistant 消息 → 派发工具 → 写回 tool result → 检查不确定副作用 → 继续或结束。预处理器（CITA 上下文理解）在 Harness 入口前完成，人设层（Soul）在 Harness 出口后生成回复文本。
+- **CyreneHarness 主循环驱动** — 单条消息进入 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 的 while 循环：每轮调用 LLM → 写回 assistant 消息 → 派发工具 → 写回 tool result → 检查不确定副作用 → 继续或结束。预处理器（CITA 上下文理解）在 Harness 入口前完成；循环内每轮携带精简执行人设（[`prompts/cyrene_harness.md`](./prompts/cyrene_harness.md)，只约束表达风格、不污染工具参数，冲突时按「任务正确性 > 信息清晰 > 昔涟风格」取舍）；完整人设层（Soul）在 Harness 出口后生成回复文本。
 - **工具自由串联** — 支持联网搜索、网页读取、文件读写、文档生成、生活服务等工具按需组合调用；模型可自行决定下一个工具，无需预先编排流程。
 - **副作用记账** — 非幂等副作用（发送邮件、修改远端文件等）结果未知时，会写入 `state.uncertainEffects` 并停止本轮同类自动重放，避免危险操作被无声重复。
 - **失败重试与中断** — 工具失败按错误分类与副作用等级决定是否重试（带退避抖动），随时可通过 `AbortSignal` 取消；取消时不会发出"最终回复"，避免误导用户。
@@ -317,7 +323,7 @@ CyreneHarness 是 Cyrene Agent 的核心 Agent Loop，负责把**模型决策、
 - **Cyrene Music 独立窗口** — 桌面端内置「Cyrene Music」播放器，支持歌单标签切换、本地缓存与播放列表管理，沉浸感更强。
 - **网易云音乐数据源** — 通过自研 `NeteaseOpenapiProvider` 调用网易云 OpenAPI，提供搜索歌曲 / 艺人 / 专辑、每日推荐、我的歌单与收藏等能力。
 - **mpv 内置播放** — 由 `MpvController` 启动打包在 `resources/bin/mpv/mpv.exe` 中的 mpv 进程，通过命名管道（Windows）或 Unix socket 收发 JSON IPC 命令，实现加载、播放、暂停、跳转、音量、停止等控制，无需唤起外部客户端。
-- **多工具串联** — 在 `Work / Daily` 模式中可与其他工具（联网搜索、文件、文档等）组合完成「搜歌 → 加入歌单 → 播放」等连续任务。
+- **多工具串联** — 在 `Work / Learn` 模式中可与其他工具（联网搜索、文件、文档等）组合完成「搜歌 → 加入歌单 → 播放」等连续任务。
 - **懒启动 + 可降级** — 音乐后端在首次真实音乐操作时才建立网络会话，空闲时不会占用资源；mpv 缺失时会进入 `client_unavailable` 路径并向 UI 提示，不影响聊天与其他核心功能。
 
 #### 🧠 个性化记忆
@@ -424,7 +430,6 @@ Cyrene 内置和扩展的工具较多，主要覆盖以下类别：
 | 🛠️ 辅助工作（Work） | ✅ 可用 | 由 [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts) 统一驱动：CITA 上下文理解 + 权限审批过滤 + 主循环工具调度 + 不确定副作用记账 + 可恢复 checkpoint；人设层（Soul）在出口生成回复文本 |
 | 💻 代码协作（Code） | ✅ 可用 | 绑定可信代码目录，Coding Agent 读取、修改、验证代码并执行命令 |
 | 📚 学习陪伴（Learn） | ✅ 可用 | 绑定 Obsidian Vault，陪伴理解材料、整理笔记、生成练习与维护进度 |
-| 📅 日常事务（Daily） | ✅ 可用 | 通用工具会话，处理日常问答、信息整理与轻度任务 |
 | 🧠 个性化记忆 | ✅ 可用 | L0 / L1 / L2 分层记忆、自研 DMAE Worldbook、关系画像与长期互动沉淀 |
 | 🔊 语音交互 | ✅ 可用 | 支持多 TTS 引擎、实时 ASR、语音通话与 VAD 静默检测，部分功能需要额外配置 |
 | 🧰 内置工具 | ✅ 可用 | 支持联网搜索、网页读取、文件操作、文档生成、生活服务、音乐等工具 |
@@ -451,7 +456,7 @@ Cyrene 内置和扩展的工具较多，主要覆盖以下类别：
 | 构建工具 | Vite 7 |
 | 界面渲染 | HTML / CSS + React 19 + Pixi.js 7 + Ant Design X + Chart.js |
 | Live2D | `pixi-live2d-display` 0.5.0-beta + Cubism Core |
-| Agent 主循环 | [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts)（while + Function Calling + 流式 reasoning/tool） + Structured Output + Native Function Calling |
+| Agent 主循环 | [CyreneHarness](./src/main/orchestrator/harness/cyrene-harness.ts)（while + Function Calling + 流式 reasoning/tool + 前缀缓存分层 + mid-loop compaction） + Structured Output + Native Function Calling |
 | Agent 事件协议 | AG-UI（`@ag-ui/core`、`@ag-ui/client`）— 通过 `RUN_STARTED / STEP_* / TEXT_MESSAGE_* / TOOL_CALL_* / RUN_FINISHED` 等事件与渲染进程解耦 |
 | 工具调度 | 自研 `tool-dispatcher` + `side-effect-resolver` + `error-classifier` + `retry-policy` 四件套，统一处理四态 outcome（success / failure / unknown / not_executed） |
 | 沙箱执行（Windows） | `@anthropic-ai/sandbox-runtime`（SRT）— 非可信命令走 SandboxManager.wrapWithSandboxArgv；未安装时回退直接 spawn，workspace_mutation 命令仍被拒绝 |
