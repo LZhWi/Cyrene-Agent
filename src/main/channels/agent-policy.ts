@@ -13,7 +13,8 @@ export function resolveChannelAgentPolicy(
   toolSandbox: ChannelToolSandbox,
   context?: { channel?: ChannelId; chatType?: ChannelChatType },
 ): ChannelAgentPolicy {
-  if (context?.channel === "qq" && context.chatType === "group") {
+  // QQ 群聊（NapCat 与官方机器人同样处理）：共享群上下文，强制纯 Chat 模式、禁工具
+  if ((context?.channel === "qq" || context?.channel === "qqbot") && context.chatType === "group") {
     return {
       executionMode: "chat",
       exposeTools: false,

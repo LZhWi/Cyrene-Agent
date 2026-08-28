@@ -167,6 +167,19 @@ export interface QqChannelConfig extends ChannelRuntimeConfig {
   groupMemoryPolicy: "shared-personal";
 }
 
+/** QQ 官方机器人渠道（QQ 开放平台 API v2）。appSecret 加密落盘，规则同飞书。 */
+export interface QqBotChannelConfig extends ChannelRuntimeConfig {
+  appId?: string;
+  /** AppSecret（ClientSecret）。磁盘密文，运行时明文，规则同飞书 appSecret。 */
+  appSecret?: string;
+  /** 所有单聊放行（openid 无法提前知道，首次联系被拒时会展示 openid 供加白） */
+  allowAnyPrivate: boolean;
+  /** 单聊用户 openid 白名单 */
+  allowedUserOpenids: string[];
+  /** 群 openid 白名单（群内事件仅 @ 机器人触发） */
+  allowedGroupOpenids: string[];
+}
+
 /** 给上层用的明文 AppSecret 读取器 */
 export function decryptFeishuSecret(cfg: FeishuChannelConfig | undefined): string {
   return decryptField(cfg?.appSecret ?? "");
@@ -178,6 +191,7 @@ export interface ChannelsSettings {
   wechat: WechatChannelConfig;
   feishu: FeishuChannelConfig;
   qq: QqChannelConfig;
+  qqbot: QqBotChannelConfig;
   /** 入站 HTTP server 绑定的端口。0 = 随机空闲。 */
   inboundPort: number;
   /** HMAC 共享密钥。启动时若为空则自动生成。 */
@@ -209,6 +223,12 @@ const DEFAULT_SETTINGS: ChannelsSettings = {
     groupReplyStyle: "reply-and-mention",
     groupToolPolicy: "off",
     groupMemoryPolicy: "shared-personal",
+  },
+  qqbot: {
+    enabled: false,
+    allowAnyPrivate: false,
+    allowedUserOpenids: [],
+    allowedGroupOpenids: [],
   },
   inboundPort: 0,
   sharedSecret: "",
@@ -243,11 +263,19 @@ function normalize(input: Partial<ChannelsSettings> | null | undefined): Channel
   const w: Partial<WechatChannelConfig> | undefined = input?.wechat;
   const f: Partial<FeishuChannelConfig> | undefined = input?.feishu;
   const q: Partial<QqChannelConfig> | undefined = input?.qq;
+  const b: Partial<QqBotChannelConfig> | undefined = input?.qqbot;
   const normalizeIds = (value: unknown): string[] => {
     if (!Array.isArray(value)) return [];
     return Array.from(new Set(value
       .map((item) => String(item).trim())
       .filter((item) => /^\d+$/.test(item))));
+  };
+  // openid 是大小写十六进制串，与 QQ 号白名单（纯数字）校验规则不同
+  const normalizeOpenids = (value: unknown): string[] => {
+    if (!Array.isArray(value)) return [];
+    return Array.from(new Set(value
+      .map((item) => String(item).trim())
+      .filter((item) => /^[A-Za-z0-9_-]{8,64}$/.test(item))));
   };
   const normalizeListenMode = (value: unknown): QqListenMode =>
     value === "loopback" || value === "wsl" || value === "custom" ? value : "auto";
@@ -289,6 +317,16 @@ feishu: {
       groupToolPolicy: "off",
       groupMemoryPolicy: "shared-personal",
     },
+    qqbot: {
+      enabled: safeBool(b?.enabled, false),
+      manualCliPath: typeof b?.manualCliPath === "string" ? b?.manualCliPath : undefined,
+      publicWebhookUrl: typeof b?.publicWebhookUrl === "string" ? b?.publicWebhookUrl : undefined,
+      appId: typeof b?.appId === "string" ? b.appId.trim() : undefined,
+      appSecret: typeof b?.appSecret === "string" ? b?.appSecret : undefined,
+      allowAnyPrivate: safeBool(b?.allowAnyPrivate, false),
+      allowedUserOpenids: normalizeOpenids(b?.allowedUserOpenids),
+      allowedGroupOpenids: normalizeOpenids(b?.allowedGroupOpenids),
+    },
     inboundPort: safeNum(input?.inboundPort, 0, 0, 65535),
     sharedSecret: typeof input?.sharedSecret === "string" ? input.sharedSecret : "",
     rateLimitPerUser: safeNum(input?.rateLimitPerUser, 10, 1, 1000),
@@ -313,6 +351,9 @@ export function loadChannelsSettings(): ChannelsSettings {
     if (loaded.qq.accessToken) {
       loaded.qq.accessToken = decryptField(loaded.qq.accessToken);
     }
+    if (loaded.qqbot.appSecret) {
+      loaded.qqbot.appSecret = decryptField(loaded.qqbot.appSecret);
+    }
     return loaded;
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -325,6 +366,7 @@ export function saveChannelsSettings(patch: Partial<ChannelsSettings>): Channels
   if (patch.wechat) merged.wechat = { ...existing.wechat, ...patch.wechat };
   if (patch.feishu) merged.feishu = { ...existing.feishu, ...patch.feishu };
   if (patch.qq) merged.qq = { ...existing.qq, ...patch.qq };
+  if (patch.qqbot) merged.qqbot = { ...existing.qqbot, ...patch.qqbot };
 
   // 私密字段加密边界：UI 传来的是明文，写盘前要 wrap
   // 避开"密文回传"场景：检测 enc:/obf:/plain: 前缀，避免重复加密。
@@ -338,6 +380,12 @@ export function saveChannelsSettings(patch: Partial<ChannelsSettings>): Channels
     const v = merged.qq.accessToken;
     if (!v.startsWith(ENC_PREFIX) && !v.startsWith(OBF_PREFIX) && !v.startsWith(PLAIN_PREFIX)) {
       merged.qq.accessToken = encryptField(v);
+    }
+  }
+  if (typeof merged.qqbot?.appSecret === "string" && merged.qqbot.appSecret) {
+    const v = merged.qqbot.appSecret;
+    if (!v.startsWith(ENC_PREFIX) && !v.startsWith(OBF_PREFIX) && !v.startsWith(PLAIN_PREFIX)) {
+      merged.qqbot.appSecret = encryptField(v);
     }
   }
 
@@ -358,6 +406,10 @@ export function saveChannelsSettings(patch: Partial<ChannelsSettings>): Channels
       ...final.qq,
       accessToken: decryptField(final.qq.accessToken ?? ""),
     },
+    qqbot: {
+      ...final.qqbot,
+      appSecret: decryptField(final.qqbot.appSecret ?? ""),
+    },
   };
   return out;
 }
@@ -367,6 +419,7 @@ export type ChannelConfigPatch = Partial<{
   wechat: Partial<WechatChannelConfig>;
   feishu: Partial<FeishuChannelConfig>;
   qq: Partial<QqChannelConfig>;
+  qqbot: Partial<QqBotChannelConfig>;
   inboundPort: number;
   sharedSecret: string;
   rateLimitPerUser: number;
@@ -382,6 +435,7 @@ interface ChannelConfigMap {
   wechat: WechatChannelConfig;
   feishu: FeishuChannelConfig;
   qq: QqChannelConfig;
+  qqbot: QqBotChannelConfig;
 }
 
 export function getChannelConfig<K extends ChannelId>(settings: ChannelsSettings, channel: K): ChannelConfigMap[K] {

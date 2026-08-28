@@ -1172,6 +1172,49 @@
             </div>
           </div>
 
+          <div class="channels-card">
+            <div class="channels-card__header">
+              <h2>QQ 机器人（官方开放平台）</h2>
+              <span class="switch"><input id="channels-qqbot-enabled" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+            </div>
+            <div class="channels-card__body">
+              <div class="channels-status" id="channels-qqbot-status">
+                <span class="channels-status__dot channels-status__dot--offline"></span>
+                <span class="channels-status__text">未启用</span>
+              </div>
+              <p class="channels-card__hint">
+                在 q.qq.com 创建机器人后填入 AppID / AppSecret。官方协议零封号风险，但仅支持被动回复
+                （单聊 60 分钟内 4 条、群聊 5 分钟内 5 条，无主动消息）；群聊仅响应白名单群中的 @。
+                新机器人默认沙箱模式，需先在开放平台添加测试用户。
+              </p>
+              <div class="form-row">
+                <label class="form-label" for="channels-qqbot-app-id">AppID</label>
+                <input type="text" id="channels-qqbot-app-id" class="form-input form-input--wide" placeholder="例如 102146862" autocomplete="off" />
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="channels-qqbot-app-secret">AppSecret</label>
+                <input type="password" id="channels-qqbot-app-secret" class="form-input form-input--wide" placeholder="点击保存配置时自动加密保存" autocomplete="off" />
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="channels-qqbot-allow-any-private">放行所有单聊</label>
+                <span class="switch"><input id="channels-qqbot-allow-any-private" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="channels-qqbot-user-allowlist">单聊用户 openid 白名单</label>
+                <textarea id="channels-qqbot-user-allowlist" class="form-input form-input--wide" rows="3" placeholder="每行一个 openid；不知道自己的 openid 时，先给机器人发一条消息，此处会显示被拒的 openid"></textarea>
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="channels-qqbot-group-allowlist">群 openid 白名单</label>
+                <textarea id="channels-qqbot-group-allowlist" class="form-input form-input--wide" rows="3" placeholder="每行一个群 openid；群内还必须 @ 机器人"></textarea>
+              </div>
+              <div class="channels-card__actions">
+                <button type="button" class="btn-secondary" id="channels-qqbot-save">保存并连接</button>
+                <button type="button" class="btn-secondary" id="channels-qqbot-test">测试连接</button>
+              </div>
+              <div class="channels-feedback" id="channels-qqbot-feedback"></div>
+            </div>
+          </div>
+
           <div class="channels-card channels-card--global">
             <div class="channels-card__header">
               <h2>全局</h2>

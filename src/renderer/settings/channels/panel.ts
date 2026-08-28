@@ -16,6 +16,9 @@ import {
   channelsQqListenModeEl, channelsQqCustomHostEl, channelsQqPortEl, channelsQqUrlEl, channelsQqUrlCopyBtn,
   channelsQqTokenEl, channelsQqTokenGenerateBtn, channelsQqTokenCopyBtn, channelsQqPrivateAllowlistEl,
   channelsQqGroupAllowlistEl, channelsQqSaveBtn, channelsQqTestBtn, channelsQqFeedbackEl,
+  channelsQqBotEnabledEl, channelsQqBotStatusEl, channelsQqBotAppIdEl, channelsQqBotAppSecretEl,
+  channelsQqBotAllowAnyPrivateEl, channelsQqBotUserAllowlistEl, channelsQqBotGroupAllowlistEl,
+  channelsQqBotSaveBtn, channelsQqBotTestBtn, channelsQqBotFeedbackEl,
 } from "./dom";
 import { proactiveDeliverySelect } from "../general/dom";
 import { normalizeProactiveDeliveryTarget } from "../../../shared/preferences";
@@ -90,6 +93,26 @@ async function copyInputValue(input: HTMLInputElement | null, label: string): Pr
 function renderQqDetail(status?: { detail?: Record<string, unknown> }): void {
   const url = status?.detail?.listenUrl;
   if (channelsQqUrlEl) channelsQqUrlEl.value = typeof url === "string" ? url : "";
+}
+
+function setQqBotFeedback(kind: "info" | "ok" | "err", msg: string): void {
+  if (!channelsQqBotFeedbackEl) return;
+  channelsQqBotFeedbackEl.textContent = msg;
+  channelsQqBotFeedbackEl.className = "channels-feedback";
+  channelsQqBotFeedbackEl.classList.add(kind === "ok" ? "channels-feedback--ok" : kind === "err" ? "channels-feedback--err" : "channels-feedback--info");
+}
+
+/** openid 白名单解析：大小写十六进制/字母数字串（与主进程 normalizeOpenids 对齐） */
+function parseOpenidList(value: string): string[] {
+  return Array.from(new Set(value.split(/[\s,，]+/u).map((item) => item.trim()).filter((item) => /^[A-Za-z0-9_-]{8,64}$/u.test(item))));
+}
+
+/** 展示最近被拒的 openid，方便用户复制进白名单（openid 无法提前得知） */
+function renderQqBotDetail(status?: { detail?: Record<string, unknown> }): void {
+  const rejected = status?.detail?.lastRejectedOpenid;
+  if (typeof rejected === "string" && rejected) {
+    setQqBotFeedback("info", `最近一条被白名单拒绝的消息来自 openid：${rejected}（复制到上方白名单可放行）`);
+  }
 }
 
 export interface LogEntry {
@@ -173,6 +196,19 @@ export async function loadChannelsPanel(): Promise<void> {
     // 已保存的 token 不回显；保存时若输入为空且没有已存值，非回环监听需要先补生成
     let hadQqToken = !!cfg.qq?.hasAccessToken;
 
+    // QQ 官方机器人字段填充（secret 加密存盘，UI 不回填明文）
+    if (channelsQqBotEnabledEl) channelsQqBotEnabledEl.checked = !!cfg.qqbot?.enabled;
+    if (channelsQqBotAppIdEl) channelsQqBotAppIdEl.value = cfg.qqbot?.appId ?? "";
+    if (channelsQqBotAppSecretEl) {
+      channelsQqBotAppSecretEl.value = "";
+      channelsQqBotAppSecretEl.placeholder = cfg.qqbot?.hasAppSecret
+        ? "已保存（输入新值会覆盖）"
+        : "点击保存配置时加密保存";
+    }
+    if (channelsQqBotAllowAnyPrivateEl) channelsQqBotAllowAnyPrivateEl.checked = !!cfg.qqbot?.allowAnyPrivate;
+    if (channelsQqBotUserAllowlistEl) channelsQqBotUserAllowlistEl.value = (cfg.qqbot?.allowedUserOpenids ?? []).join("\n");
+    if (channelsQqBotGroupAllowlistEl) channelsQqBotGroupAllowlistEl.value = (cfg.qqbot?.allowedGroupOpenids ?? []).join("\n");
+
     // 拉一次渠道状态
     const status = (await window.settings.channelsGetStatus()) as Record<string, { phase: string; message?: string; detail?: Record<string, unknown> }>;
     renderProactiveDeliveryAvailability(status);
@@ -180,6 +216,8 @@ export async function loadChannelsPanel(): Promise<void> {
     renderChannelStatus(channelsFeishuStatusEl, status.feishu?.phase ?? "offline", status.feishu?.message);
     renderChannelStatus(channelsQqStatusEl, status.qq?.phase ?? "offline", status.qq?.message);
     renderQqDetail(status.qq);
+    renderChannelStatus(channelsQqBotStatusEl, status.qqbot?.phase ?? "offline", status.qqbot?.message);
+    renderQqBotDetail(status.qqbot);
     // Phase 3.4：拉一次消息日志
     void refreshChannelsLog();
   } catch (err) {
@@ -194,6 +232,7 @@ export async function loadChannelsPanel(): Promise<void> {
         wechat: { enabled: channelsWechatEnabledEl?.checked ?? false },
         feishu: { enabled: channelsFeishuEnabledEl?.checked ?? false },
         qq: { enabled: channelsQqEnabledEl?.checked ?? false },
+        qqbot: { enabled: channelsQqBotEnabledEl?.checked ?? false },
         rateLimitPerUser: Number(channelsRateUserEl?.value) || 10,
         rateLimitPerChannel: Number(channelsRateChannelEl?.value) || 100,
         ttsEnabled: channelsTtsEl?.checked ?? true,
@@ -209,6 +248,7 @@ export async function loadChannelsPanel(): Promise<void> {
     channelsWechatEnabledEl,
     channelsFeishuEnabledEl,
     channelsQqEnabledEl,
+    channelsQqBotEnabledEl,
     channelsRateUserEl,
     channelsRateChannelEl,
     channelsTtsEl,
@@ -232,6 +272,8 @@ export async function loadChannelsPanel(): Promise<void> {
     renderChannelStatus(channelsFeishuStatusEl, s.feishu?.phase ?? "offline", s.feishu?.message);
     renderChannelStatus(channelsQqStatusEl, s.qq?.phase ?? "offline", s.qq?.message);
     renderQqDetail(s.qq);
+    renderChannelStatus(channelsQqBotStatusEl, s.qqbot?.phase ?? "offline", s.qqbot?.message);
+    renderQqBotDetail(s.qqbot);
   });
 
   // ===== 飞书交互（Phase 2 长连接版） =====
@@ -429,6 +471,55 @@ export async function loadChannelsPanel(): Promise<void> {
         : result.error ?? "连接失败");
     } catch (error) {
       setQqFeedback("err", error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  // ===== QQ 官方机器人（QQ 开放平台 API v2） =====
+
+  channelsQqBotSaveBtn?.addEventListener("click", async () => {
+    const appId = channelsQqBotAppIdEl?.value.trim() ?? "";
+    if (!appId) {
+      setQqBotFeedback("err", "请先填写 AppID（q.qq.com → 机器人开发设置里获取）。");
+      return;
+    }
+    setQqBotFeedback("info", "正在保存并连接 QQ 开放平台网关…");
+    const qqbot: Record<string, unknown> = {
+      enabled: channelsQqBotEnabledEl?.checked ?? false,
+      appId,
+      allowAnyPrivate: channelsQqBotAllowAnyPrivateEl?.checked ?? false,
+      allowedUserOpenids: parseOpenidList(channelsQqBotUserAllowlistEl?.value ?? ""),
+      allowedGroupOpenids: parseOpenidList(channelsQqBotGroupAllowlistEl?.value ?? ""),
+    };
+    // secret 不回显：留空表示沿用已存值
+    if (channelsQqBotAppSecretEl?.value) qqbot.appSecret = channelsQqBotAppSecretEl.value;
+    try {
+      await window.settings.channelsSaveConfig({ qqbot });
+      await window.settings.channelsRestart();
+      const status = await window.settings.channelsGetStatus() as Record<string, { phase?: string; message?: string }>;
+      if (channelsQqBotAppSecretEl) {
+        channelsQqBotAppSecretEl.value = "";
+        channelsQqBotAppSecretEl.placeholder = "已保存（输入新值会覆盖）";
+      }
+      setQqBotFeedback(
+        status.qqbot?.phase === "running" ? "ok" : "info",
+        status.qqbot?.phase === "running"
+          ? "网关已连接，机器人已上线。"
+          : `已保存（当前状态：${status.qqbot?.message ?? status.qqbot?.phase ?? "未知"}）`,
+      );
+    } catch (error) {
+      setQqBotFeedback("err", error instanceof Error ? error.message : String(error));
+    }
+  });
+
+  channelsQqBotTestBtn?.addEventListener("click", async () => {
+    setQqBotFeedback("info", "正在校验 AppID / AppSecret…");
+    try {
+      const result = await window.settings.channelsQqBotTestConnection();
+      setQqBotFeedback(result.ok ? "ok" : "err", result.ok
+        ? "凭证有效，可以正常连接 QQ 开放平台。"
+        : result.error ?? "连接失败");
+    } catch (error) {
+      setQqBotFeedback("err", error instanceof Error ? error.message : String(error));
     }
   });
 

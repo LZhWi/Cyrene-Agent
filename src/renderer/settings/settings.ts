@@ -204,6 +204,7 @@ if (!window.settings) {
     channelsSaveConfig: () => Promise.resolve({}),
     channelsRestart: () => Promise.resolve({ ok: false }),
     channelsQqTestConnection: () => Promise.resolve({ ok: false, error: "settings api unavailable" }),
+    channelsQqBotTestConnection: () => Promise.resolve({ ok: false, error: "settings api unavailable" }),
     channelsLogGet: () => Promise.resolve([]),
     channelsLogClear: () => Promise.resolve({ ok: true }),
     onChannelsInstallProgress: () => () => {},

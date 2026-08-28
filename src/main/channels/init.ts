@@ -17,6 +17,7 @@ import { startInboundServer, stopInboundServer } from "./inbound-server";
 import { FeishuAdapter } from "./adapters/feishu";
 import { ILinkBotAdapter, loadCredentials } from "./adapters/wechat/ilink-bot-adapter";
 import { NapCatAdapter } from "./adapters/qq/napcat-adapter";
+import { QqBotAdapter } from "./adapters/qqbot/qqbot-adapter";
 import { getRecentLog, clearLog } from "./message-log";
 import { logger, LogTag } from "../logger";
 
@@ -35,6 +36,7 @@ export function setChannelsConversationLifecycle(lifecycle: typeof conversationL
 /** 微信 adapter 全局引用（UI 登录按钮需要） */
 let wxAdapter: ILinkBotAdapter | null = null;
 let qqAdapter: NapCatAdapter | null = null;
+let qqBotAdapter: QqBotAdapter | null = null;
 
 function getPublicChannelsSettings(): Record<string, unknown> {
   const settings = loadChannelsSettings();
@@ -44,6 +46,11 @@ function getPublicChannelsSettings(): Record<string, unknown> {
       ...settings.qq,
       accessToken: undefined,
       hasAccessToken: Boolean(settings.qq.accessToken),
+    },
+    qqbot: {
+      ...settings.qqbot,
+      appSecret: undefined,
+      hasAppSecret: Boolean(settings.qqbot.appSecret),
     },
   };
 }
@@ -86,6 +93,10 @@ export async function initChannels(): Promise<void> {
 
   qqAdapter = new NapCatAdapter(broadcastChannelsStatus);
   channelManager.register(qqAdapter);
+
+  // 注册 QQ 官方机器人 adapter（QQ 开放平台 API v2，AppID/AppSecret + WebSocket 网关）
+  qqBotAdapter = new QqBotAdapter(broadcastChannelsStatus);
+  channelManager.register(qqBotAdapter);
 
   // 启动所有已注册 adapter
   await channelManager.startAll();
@@ -240,6 +251,12 @@ function registerChannelsIpc(): void {
   ipcMain.handle(IPC.CHANNELS_QQ_TEST_CONNECTION, async () => {
     if (!qqAdapter) return { ok: false, error: "QQ adapter 未初始化" };
     return await qqAdapter.testConnection();
+  });
+
+  // ── QQ 官方机器人 IPC ─────────────────────────────────────────────────────
+  ipcMain.handle(IPC.CHANNELS_QQBOT_TEST_CONNECTION, async () => {
+    if (!qqBotAdapter) return { ok: false, error: "QQ Bot adapter 未初始化" };
+    return await qqBotAdapter.testConnection();
   });
 
   // Phase 3.4：消息日志

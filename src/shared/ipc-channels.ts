@@ -350,6 +350,8 @@ export const IPC = {
   CHANNELS_FEISHU_TEST_CONNECTION: "channels:feishu:test-connection",
   CHANNELS_FEISHU_TEST_WEBHOOK_REACHABLE: "channels:feishu:test-webhook-reachable",
   CHANNELS_QQ_TEST_CONNECTION: "channels:qq:test-connection",
+  // QQ 官方机器人（QQ 开放平台）专属
+  CHANNELS_QQBOT_TEST_CONNECTION: "channels:qqbot:test-connection",
   // Phase 3.4：消息日志
   CHANNELS_LOG_GET: "channels:log:get",
   CHANNELS_LOG_CLEAR: "channels:log:clear",

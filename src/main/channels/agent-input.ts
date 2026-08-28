@@ -55,6 +55,7 @@ function channelName(channel: IncomingMessage["channel"]): string {
     case "wechat": return "微信";
     case "feishu": return "飞书";
     case "qq": return "QQ";
+    case "qqbot": return "QQ 机器人";
     default: return channel;
   }
 }
