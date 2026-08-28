@@ -345,6 +345,16 @@ export function normalizeChoiceInteraction(value: unknown): AskUserInteraction |
   };
 }
 
+/** Routes a post-run plan approval card only to the conversation that owns it. */
+export function normalizeDeferredPlanChoice(
+  value: unknown,
+  activeSessionId: string,
+): AskUserInteraction | undefined {
+  const card = asRecord(value);
+  if (asNonEmptyString(card?.sessionId) !== activeSessionId) return undefined;
+  return normalizeChoiceInteraction(value);
+}
+
 export function createAskDrafts(questions: AskUserQuestion[]): AskDrafts {
   return Object.fromEntries(questions.map((question) => [question.id, {
     source: null,

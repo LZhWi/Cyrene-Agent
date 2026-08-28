@@ -11,6 +11,7 @@ import type { TodoItem } from "../../../../../shared/todo-types";
 import {
   describePermissionRequest,
   normalizeChoiceInteraction,
+  normalizeDeferredPlanChoice,
   normalizeTaskPlanPresentation,
   isFormalAnswerCommitted,
   resolveRunFinishedStage,
@@ -45,7 +46,7 @@ import { AppUpdateEntry } from "../components/AppUpdateEntry";
 import { useUserCallPreference } from "../../../hooks/useUserNickname";
 import { resolveRevisableLastTurn } from "../components/last-turn-actions";
 import { NewTaskButton } from "../../../components/ui/NewTaskButton";
-import { shouldRunModelForMode } from "./conversation-run-policy";
+import { shouldListenForDeferredPlanEvents, shouldRunModelForMode } from "./conversation-run-policy";
 import {
   bootstrapReactSession,
   normalizeSessionMode,
@@ -675,9 +676,15 @@ export function ChatPage() {
   // 也统一在这里处理。批准后自动发送执行消息（sendMessage 自带 busy 排队机制）。
   useEffect(() => {
     const api = aguiApi();
-    if (!api?.onEvent || mode !== "code" || !activeSessionId) return;
+    if (!api?.onEvent || !shouldListenForDeferredPlanEvents(mode) || !activeSessionId) return;
     const off = api.onEvent((event) => {
-      if (event.type !== "CUSTOM" || typeof event.name !== "string" || !event.name.startsWith("cyrene.plan.")) return;
+      if (event.type !== "CUSTOM" || typeof event.name !== "string") return;
+      if (event.name === "cyrene.choice") {
+        const interaction = normalizeDeferredPlanChoice(event.value, activeSessionId);
+        if (interaction) setInteractionForSession(activeSessionId, interaction);
+        return;
+      }
+      if (!event.name.startsWith("cyrene.plan.")) return;
       const value = (event.value ?? null) as { sessionId?: string; planPath?: string; planContent?: string; text?: string } | null;
       if (value?.sessionId && value.sessionId !== activeSessionId) return;
       switch (event.name) {
@@ -710,7 +717,7 @@ export function ChatPage() {
           }
           break;
         case "cyrene.plan.completed":
-          // adapter 发出时不带 sessionId；code 模式专属事件，按当前会话处理
+          // adapter 发出时不带 sessionId；按当前计划会话处理
           setPlanReviewBySession((current) => current[activeSessionId]
             ? { ...current, [activeSessionId]: { ...current[activeSessionId], phase: "completed" } }
             : current);

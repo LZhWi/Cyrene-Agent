@@ -234,7 +234,13 @@ function startPlanReviewFlow(params: {
     });
     const answer = await requestUserClarification(
       buildPlanReviewCard(planPath),
-      (cardData) => send({ type: "CUSTOM", name: "cyrene.choice", value: cardData, threadId, runId }),
+      (cardData) => send({
+        type: "CUSTOM",
+        name: "cyrene.choice",
+        value: { ...cardData, sessionId },
+        threadId,
+        runId,
+      }),
       undefined,
       { runId, revision: 1 },
     ) as AskUserAnswer;
@@ -252,7 +258,13 @@ function startPlanReviewFlow(params: {
     console.log("[AgUiBridge][Plan] user wants to supplement, asking for details");
     const supplementAnswer = await requestUserClarification(
       buildPlanSupplementCard(),
-      (cardData) => send({ type: "CUSTOM", name: "cyrene.choice", value: cardData, threadId, runId }),
+      (cardData) => send({
+        type: "CUSTOM",
+        name: "cyrene.choice",
+        value: { ...cardData, sessionId },
+        threadId,
+        runId,
+      }),
       undefined,
       { runId, revision: 2 },
     ) as AskUserAnswer;

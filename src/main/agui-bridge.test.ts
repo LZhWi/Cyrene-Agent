@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Observable } from "rxjs";
 import { IPC } from "../shared/ipc-channels";
@@ -172,6 +175,75 @@ describe("agui-bridge sticker event ordering", () => {
       name: "cyrene.choice.dismiss",
       value: expect.objectContaining({ id: "choice-1", runId: expect.any(String), revision: 1, reason: "timeout" }),
     }));
+  });
+
+  it("tags a post-run plan approval card with its owning session", async () => {
+    const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "cyrene-plan-review-"));
+    try {
+      vi.resetModules();
+      mocks.handlers.clear();
+      mocks.agentEvents = [];
+      mocks.runCyreneAgent.mockClear();
+      mocks.requestUserClarification.mockReset();
+      mocks.getSession.mockReturnValue({
+        id: "code-plan-review",
+        mode: "code",
+        workspaceBinding: { workspaceRoot: tempRoot, displayName: "workspace", boundAt: 1 },
+      });
+      mocks.requestUserClarification.mockImplementation(async (_card, send, _onSettled, identity) => {
+        send({
+          interactionId: "plan-choice-1",
+          runId: identity.runId,
+          revision: identity.revision,
+          mode: "semantic_clarification",
+          intro: "计划已生成",
+          questions: [{
+            id: "plan_decision",
+            prompt: "是否批准此计划？",
+            required: true,
+            multiple: false,
+            options: [{ id: "approve", label: "批准计划，开始执行" }],
+            customInput: { enabled: false },
+          }],
+        });
+        return { requestId: "plan-choice-1", answers: [] };
+      });
+
+      const planMode = await import("./orchestrator/plan-mode");
+      planMode.enterPlanDiscussing("code-plan-review", tempRoot);
+      planMode.markPlanWritten("code-plan-review");
+      const planPath = planMode.getPlanPath("code-plan-review");
+      fs.mkdirSync(path.dirname(planPath), { recursive: true });
+      fs.writeFileSync(planPath, "# 测试计划\n", "utf8");
+
+      const { registerAgUiIpc } = await import("./agui-bridge");
+      const sent: Array<{ type?: string; name?: string; value?: Record<string, unknown> }> = [];
+      registerAgUiIpc(async () => ({
+        options: {
+          settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
+          messages: [], timeoutMs: 1000, toolSystemContent: "TOOL", soulSystemBaseContent: "SOUL",
+        },
+        latestUserText: "写好计划",
+      }), async () => {}, () => null);
+
+      const handler = mocks.handlers.get(IPC.AGUI_RUN);
+      if (!handler) throw new Error("AGUI_RUN handler was not registered");
+      await handler(
+        { sender: { isDestroyed: () => false, send: (_channel: string, event: typeof sent[number]) => sent.push(event) } },
+        { messages: [{ role: "user", content: "写好计划" }], sessionId: "code-plan-review" },
+      );
+      await expect.poll(() => sent.find((event) => event.name === "cyrene.choice")).toBeTruthy();
+
+      const terminalIndex = sent.findIndex((event) => event.type === "RUN_FINISHED");
+      const choiceIndex = sent.findIndex((event) => event.name === "cyrene.choice");
+      expect(choiceIndex).toBeGreaterThan(terminalIndex);
+      expect(sent[choiceIndex]?.value).toMatchObject({
+        sessionId: "code-plan-review",
+        interactionId: "plan-choice-1",
+      });
+    } finally {
+      fs.rmSync(tempRoot, { recursive: true, force: true });
+    }
   });
 
   it("turns leading <think> text into reasoning events before forwarding the assistant start", async () => {

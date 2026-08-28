@@ -9,3 +9,8 @@ export function shouldRunModelForMode(
     && !hasDemoResponse
     && !hasDemoSticker;
 }
+
+/** Plan review events are emitted after the originating run has finished. */
+export function shouldListenForDeferredPlanEvents(mode: ConversationMode): boolean {
+  return mode === "code" || mode === "chat";
+}
