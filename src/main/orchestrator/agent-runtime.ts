@@ -1,6 +1,7 @@
 import { loadPromptFile } from "../prompts/prompt-loader";
 import type { AguiRunInput } from "../agui-bridge";
 import type { ScheduledTask } from "../scheduler/types";
+import type { ChannelId } from "../channels/types";
 import type { ModelSettings } from "../settings/model-settings";
 import type { GeneralSettings } from "../settings/general-settings";
 import type { UserProfile } from "../settings-store";
@@ -83,7 +84,7 @@ type SchedulerRunOptions = Omit<CyreneRunOptions, "toolSystemContent" | "soulSys
 
 export interface AgentRuntime {
   buildOptions(input: AguiRunInput): Promise<{ options: CyreneRunOptions; latestUserText: string }>;
-  onRunFinished(result: CyreneRunResult, latestUserText: string, channel?: "wechat" | "feishu", conversationId?: string): Promise<{ sticker: string | null }>;
+  onRunFinished(result: CyreneRunResult, latestUserText: string, channel?: ChannelId, conversationId?: string): Promise<{ sticker: string | null }>;
   buildSchedulerOptions(task: ScheduledTask): Promise<SchedulerRunOptions>;
 }
 

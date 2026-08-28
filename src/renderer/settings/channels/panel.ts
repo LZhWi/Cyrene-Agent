@@ -4,15 +4,18 @@
 
 import { channelsState } from "./state";
 import {
-  channelsWechatEnabledEl, channelsFeishuEnabledEl,
+  channelsWechatEnabledEl, channelsFeishuEnabledEl, channelsQqEnabledEl,
   channelsRateUserEl, channelsRateChannelEl,
   channelsTtsEl, channelsStickerEl, channelsMirrorEl,
   channelsToolSandboxOffEl, channelsToolSandboxAllEl,
   channelsFeishuAppIdEl, channelsFeishuAppSecretEl, channelsFeishuAppSecretRevealBtn,
   channelsFeishuSaveBtn, channelsFeishuFeedbackEl,
-  channelsWechatStatusEl, channelsFeishuStatusEl,
+  channelsWechatStatusEl, channelsFeishuStatusEl, channelsQqStatusEl,
   channelsWechatLoginBtn, channelsWechatRestartBtn, channelsWechatFeedbackEl,
   channelsLogListEl, channelsLogRefreshBtn, channelsLogClearBtn,
+  channelsQqListenModeEl, channelsQqCustomHostEl, channelsQqPortEl, channelsQqUrlEl, channelsQqUrlCopyBtn,
+  channelsQqTokenEl, channelsQqTokenGenerateBtn, channelsQqTokenCopyBtn, channelsQqPrivateAllowlistEl,
+  channelsQqGroupAllowlistEl, channelsQqSaveBtn, channelsQqTestBtn, channelsQqFeedbackEl,
 } from "./dom";
 import { proactiveDeliverySelect } from "../general/dom";
 import { normalizeProactiveDeliveryTarget } from "../../../shared/preferences";
@@ -50,6 +53,43 @@ function setFeishuFeedback(kind: "info" | "ok" | "err", msg: string): void {
   if (kind === "ok") channelsFeishuFeedbackEl.classList.add("channels-feedback--ok");
   else if (kind === "err") channelsFeishuFeedbackEl.classList.add("channels-feedback--err");
   else channelsFeishuFeedbackEl.classList.add("channels-feedback--info");
+}
+
+/** 与主进程 onebot-reverse-ws 的 isLoopbackHost 保持一致的回环判断（渲染层本地副本） */
+function isLoopbackHostText(host: string): boolean {
+  const normalized = host.trim().toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+  return normalized === ""
+    || normalized === "127.0.0.1"
+    || normalized === "localhost"
+    || normalized === "::1"
+    || normalized === "::ffff:127.0.0.1";
+}
+
+function setQqFeedback(kind: "info" | "ok" | "err", msg: string): void {
+  if (!channelsQqFeedbackEl) return;
+  channelsQqFeedbackEl.textContent = msg;
+  channelsQqFeedbackEl.className = "channels-feedback";
+  channelsQqFeedbackEl.classList.add(kind === "ok" ? "channels-feedback--ok" : kind === "err" ? "channels-feedback--err" : "channels-feedback--info");
+}
+
+function parseIdList(value: string): string[] {
+  return Array.from(new Set(value.split(/[\s,，]+/u).map((item) => item.trim()).filter((item) => /^\d+$/u.test(item))));
+}
+
+async function copyInputValue(input: HTMLInputElement | null, label: string): Promise<void> {
+  const value = input?.value ?? "";
+  if (!value) throw new Error(`${label}为空`);
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  input!.select();
+  if (!document.execCommand("copy")) throw new Error(`无法复制${label}`);
+}
+
+function renderQqDetail(status?: { detail?: Record<string, unknown> }): void {
+  const url = status?.detail?.listenUrl;
+  if (channelsQqUrlEl) channelsQqUrlEl.value = typeof url === "string" ? url : "";
 }
 
 export interface LogEntry {
@@ -105,6 +145,7 @@ export async function loadChannelsPanel(): Promise<void> {
     const cfg = await window.settings.channelsGetConfig();
     if (channelsWechatEnabledEl) channelsWechatEnabledEl.checked = !!cfg.wechat.enabled;
     if (channelsFeishuEnabledEl) channelsFeishuEnabledEl.checked = !!cfg.feishu.enabled;
+    if (channelsQqEnabledEl) channelsQqEnabledEl.checked = !!cfg.qq?.enabled;
     if (channelsRateUserEl) channelsRateUserEl.value = String(cfg.rateLimitPerUser ?? 10);
     if (channelsRateChannelEl) channelsRateChannelEl.value = String(cfg.rateLimitPerChannel ?? 100);
     if (channelsTtsEl) channelsTtsEl.checked = cfg.ttsEnabled !== false;
@@ -121,12 +162,24 @@ export async function loadChannelsPanel(): Promise<void> {
         ? "已保存（输入新值会覆盖）"
         : "点击保存配置时加密保存";
     }
+    if (channelsQqListenModeEl) channelsQqListenModeEl.value = cfg.qq?.listenMode ?? "auto";
+    if (channelsQqCustomHostEl) channelsQqCustomHostEl.value = cfg.qq?.customHost ?? "";
+    if (channelsQqPortEl) channelsQqPortEl.value = String(cfg.qq?.port ?? 6200);
+    if (channelsQqPrivateAllowlistEl) channelsQqPrivateAllowlistEl.value = (cfg.qq?.allowedPrivateUserIds ?? []).join("\n");
+    if (channelsQqGroupAllowlistEl) channelsQqGroupAllowlistEl.value = (cfg.qq?.allowedGroupIds ?? []).join("\n");
+    if (channelsQqTokenEl) channelsQqTokenEl.placeholder = cfg.qq?.hasAccessToken
+      ? "已保存（输入新值会覆盖）"
+      : "留空仅允许本机 127.0.0.1 监听；WSL/跨网卡请先生成";
+    // 已保存的 token 不回显；保存时若输入为空且没有已存值，非回环监听需要先补生成
+    let hadQqToken = !!cfg.qq?.hasAccessToken;
 
     // 拉一次渠道状态
-    const status = (await window.settings.channelsGetStatus()) as Record<string, { phase: string; message?: string }>;
+    const status = (await window.settings.channelsGetStatus()) as Record<string, { phase: string; message?: string; detail?: Record<string, unknown> }>;
     renderProactiveDeliveryAvailability(status);
     renderChannelStatus(channelsWechatStatusEl, status.wechat?.phase ?? "offline", status.wechat?.message);
     renderChannelStatus(channelsFeishuStatusEl, status.feishu?.phase ?? "offline", status.feishu?.message);
+    renderChannelStatus(channelsQqStatusEl, status.qq?.phase ?? "offline", status.qq?.message);
+    renderQqDetail(status.qq);
     // Phase 3.4：拉一次消息日志
     void refreshChannelsLog();
   } catch (err) {
@@ -140,6 +193,7 @@ export async function loadChannelsPanel(): Promise<void> {
       void window.settings.channelsSaveConfig({
         wechat: { enabled: channelsWechatEnabledEl?.checked ?? false },
         feishu: { enabled: channelsFeishuEnabledEl?.checked ?? false },
+        qq: { enabled: channelsQqEnabledEl?.checked ?? false },
         rateLimitPerUser: Number(channelsRateUserEl?.value) || 10,
         rateLimitPerChannel: Number(channelsRateChannelEl?.value) || 100,
         ttsEnabled: channelsTtsEl?.checked ?? true,
@@ -154,6 +208,7 @@ export async function loadChannelsPanel(): Promise<void> {
   for (const el of [
     channelsWechatEnabledEl,
     channelsFeishuEnabledEl,
+    channelsQqEnabledEl,
     channelsRateUserEl,
     channelsRateChannelEl,
     channelsTtsEl,
@@ -167,14 +222,16 @@ export async function loadChannelsPanel(): Promise<void> {
 
   // 监听安装进度（Phase 1+ 才会收到）
   window.settings.onChannelsInstallProgress((progress) => {
-    const target = progress.channel === "wechat" ? channelsWechatStatusEl : progress.channel === "feishu" ? channelsFeishuStatusEl : null;
+    const target = progress.channel === "wechat" ? channelsWechatStatusEl : progress.channel === "feishu" ? channelsFeishuStatusEl : progress.channel === "qq" ? channelsQqStatusEl : null;
     if (target) renderChannelStatus(target, "starting", `${progress.phase} ${progress.pct}%`);
   });
   window.settings.onChannelsStatusChanged((status) => {
-    const s = status as Record<string, { phase: string; message?: string }>;
+    const s = status as Record<string, { phase: string; message?: string; detail?: Record<string, unknown> }>;
     renderProactiveDeliveryAvailability(s);
     renderChannelStatus(channelsWechatStatusEl, s.wechat?.phase ?? "offline", s.wechat?.message);
     renderChannelStatus(channelsFeishuStatusEl, s.feishu?.phase ?? "offline", s.feishu?.message);
+    renderChannelStatus(channelsQqStatusEl, s.qq?.phase ?? "offline", s.qq?.message);
+    renderQqDetail(s.qq);
   });
 
   // ===== 飞书交互（Phase 2 长连接版） =====
@@ -295,6 +352,83 @@ export async function loadChannelsPanel(): Promise<void> {
       setWechatFeedback("ok", "已重启");
     } catch (err) {
       setWechatFeedback("err", err instanceof Error ? err.message : String(err));
+    }
+  });
+
+  // ===== QQ / NapCat OneBot 11 反向 WebSocket =====
+  channelsQqListenModeEl?.addEventListener("change", () => {
+    if (channelsQqCustomHostEl) channelsQqCustomHostEl.disabled = channelsQqListenModeEl.value !== "custom";
+  });
+  if (channelsQqCustomHostEl && channelsQqListenModeEl) {
+    channelsQqCustomHostEl.disabled = channelsQqListenModeEl.value !== "custom";
+  }
+  channelsQqTokenGenerateBtn?.addEventListener("click", () => {
+    if (!channelsQqTokenEl) return;
+    const bytes = crypto.getRandomValues(new Uint8Array(32));
+    channelsQqTokenEl.value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+    channelsQqTokenEl.type = "text";
+    channelsQqTokenEl.select();
+    setQqFeedback("info", "已生成 Token，请复制到 NapCat WebSocket Client 配置后再保存。");
+  });
+  channelsQqUrlCopyBtn?.addEventListener("click", () => {
+    void copyInputValue(channelsQqUrlEl, "连接 URL")
+      .then(() => setQqFeedback("ok", "连接 URL 已复制。"))
+      .catch((error) => setQqFeedback("err", error instanceof Error ? error.message : String(error)));
+  });
+  channelsQqTokenCopyBtn?.addEventListener("click", () => {
+    void copyInputValue(channelsQqTokenEl, "Token")
+      .then(() => setQqFeedback("ok", "Token 已复制；保存后将无法从设置页读取明文。"))
+      .catch((error) => setQqFeedback("err", error instanceof Error ? error.message : String(error)));
+  });
+  channelsQqSaveBtn?.addEventListener("click", async () => {
+    // 非回环监听必须鉴权（主进程会硬校验）：输入为空且无已存 token 时，
+    // 先生成并让用户复制到 NapCat，本次不落盘（token 保存后不再回显，用户就拿不到了）
+    const listenMode = channelsQqListenModeEl?.value ?? "auto";
+    const needsToken = listenMode === "wsl"
+      || (listenMode === "custom" && !isLoopbackHostText(channelsQqCustomHostEl?.value ?? ""));
+    if (channelsQqTokenEl && needsToken && !channelsQqTokenEl.value && !hadQqToken) {
+      const bytes = crypto.getRandomValues(new Uint8Array(32));
+      channelsQqTokenEl.value = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+      channelsQqTokenEl.type = "text";
+      channelsQqTokenEl.select();
+      setQqFeedback("info", "非回环监听需要 Access Token：已自动生成，请先复制到 NapCat WebSocket Client 的 Token 字段，再回来点击保存。");
+      return;
+    }
+    setQqFeedback("info", "正在保存并启动 QQ 监听…");
+    const qq: Record<string, unknown> = {
+      enabled: channelsQqEnabledEl?.checked ?? false,
+      listenMode,
+      customHost: channelsQqCustomHostEl?.value.trim() || undefined,
+      port: Number(channelsQqPortEl?.value) || 6200,
+      allowedPrivateUserIds: parseIdList(channelsQqPrivateAllowlistEl?.value ?? ""),
+      allowedGroupIds: parseIdList(channelsQqGroupAllowlistEl?.value ?? ""),
+    };
+    if (channelsQqTokenEl?.value) qq.accessToken = channelsQqTokenEl.value;
+    try {
+      await window.settings.channelsSaveConfig({ qq });
+      if (qq.accessToken) hadQqToken = true;
+      await window.settings.channelsRestart();
+      const status = await window.settings.channelsGetStatus() as Record<string, { phase?: string; message?: string; detail?: Record<string, unknown> }>;
+      renderQqDetail(status.qq);
+      if (channelsQqTokenEl) {
+        channelsQqTokenEl.value = "";
+        channelsQqTokenEl.type = "password";
+        channelsQqTokenEl.placeholder = "已保存（输入新值会覆盖）";
+      }
+      setQqFeedback("ok", "已启动监听；请在 NapCat 中新增 WebSocket Client，并使用上方 URL。");
+    } catch (error) {
+      setQqFeedback("err", error instanceof Error ? error.message : String(error));
+    }
+  });
+  channelsQqTestBtn?.addEventListener("click", async () => {
+    setQqFeedback("info", "正在检查 NapCat 连接…");
+    try {
+      const result = await window.settings.channelsQqTestConnection();
+      setQqFeedback(result.ok ? "ok" : "err", result.ok
+        ? `连接正常：${result.detail?.nickname ? `${String(result.detail.nickname)} (` : "QQ "}${String(result.detail?.selfId ?? "")}${result.detail?.nickname ? ")" : ""}${result.detail?.appVersion ? ` · NapCat ${String(result.detail.appVersion)}` : ""} · Stream ${result.detail?.supportsStream ? "可用" : "不可用"}`
+        : result.error ?? "连接失败");
+    } catch (error) {
+      setQqFeedback("err", error instanceof Error ? error.message : String(error));
     }
   });
 

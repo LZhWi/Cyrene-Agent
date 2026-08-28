@@ -1,6 +1,18 @@
 // dispatcher 核心单元测试：sessionId hash + 限速
-import { describe, it, expect } from "vitest";
-import { makeSessionId, lookupOriginalSender } from "./dispatcher";
+import * as os from "node:os";
+import { describe, it, expect, vi } from "vitest";
+import { formatChannelUserText, makeSessionId, lookupOriginalSender } from "./dispatcher";
+
+vi.mock("electron", () => ({
+  app: {
+    getPath: () => os.tmpdir(),
+    getAppPath: () => process.cwd(),
+    getName: () => "Cyrene",
+  },
+  safeStorage: {
+    isEncryptionAvailable: () => false,
+  },
+}));
 
 describe("channels/dispatcher", () => {
   it("makeSessionId: 同 channel + 同 sender → 同 sessionId", () => {
@@ -29,5 +41,22 @@ describe("channels/dispatcher", () => {
 
   it("lookupOriginalSender: 未知 sessionId 返回 null", () => {
     expect(lookupOriginalSender("channel:feishu:0000000000000000")).toBeNull();
+  });
+
+  it("uses a shared QQ group chat id while preserving sender identity in agent text", () => {
+    expect(makeSessionId("qq", "20001")).toBe(makeSessionId("qq", "20001"));
+    expect(formatChannelUserText({
+      channel: "qq",
+      chatType: "group",
+      senderId: "10001",
+      senderName: "小明",
+      chatId: "20001",
+      text: "你好",
+      at: new Date(0),
+    })).toBe("[群聊发送者：小明 (10001)]\n你好");
+  });
+
+  it("isolates QQ private sessions by user id", () => {
+    expect(makeSessionId("qq", "10001")).not.toBe(makeSessionId("qq", "10002"));
   });
 });

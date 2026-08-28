@@ -1110,6 +1110,68 @@
             </div>
           </div>
 
+          <div class="channels-card">
+            <div class="channels-card__header">
+              <h2>QQ（NapCat / OneBot 11）</h2>
+              <span class="switch"><input id="channels-qq-enabled" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
+            </div>
+            <div class="channels-card__body">
+              <div class="channels-status" id="channels-qq-status">
+                <span class="channels-status__dot channels-status__dot--offline"></span>
+                <span class="channels-status__text">未启用</span>
+              </div>
+              <p class="channels-card__hint">
+                Cyrene 在 Windows 监听反向 WebSocket，NapCat 作为 WebSocket Client 连接。
+                群聊仅响应白名单群中的 @；群聊共享个人记忆但强制禁用工具，请只添加可信群。
+              </p>
+              <div class="form-row">
+                <label class="form-label" for="channels-qq-listen-mode">监听模式</label>
+                <select id="channels-qq-listen-mode" class="form-input form-input--wide">
+                  <option value="auto">自动（优先 WSL，失败回环）</option>
+                  <option value="wsl">Windows WSL 虚拟网卡</option>
+                  <option value="loopback">仅本机 127.0.0.1</option>
+                  <option value="custom">自定义地址</option>
+                </select>
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="channels-qq-custom-host">自定义地址</label>
+                <input type="text" id="channels-qq-custom-host" class="form-input form-input--wide" placeholder="例如 172.17.160.1" />
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="channels-qq-port">监听端口</label>
+                <input type="number" min="1" max="65535" id="channels-qq-port" class="form-input" value="6200" />
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="channels-qq-url">NapCat 连接 URL</label>
+                <div class="form-input-with-action">
+                  <input type="text" id="channels-qq-url" class="form-input form-input--wide" readonly placeholder="保存并启动后显示" />
+                  <button type="button" class="btn-secondary" id="channels-qq-url-copy">复制</button>
+                </div>
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="channels-qq-token">Access Token（可选）</label>
+                <div class="form-input-with-action">
+                  <input type="password" id="channels-qq-token" class="form-input form-input--wide" autocomplete="off" placeholder="留空表示不修改已保存 Token" />
+                  <button type="button" class="btn-secondary" id="channels-qq-token-generate">生成</button>
+                  <button type="button" class="btn-secondary" id="channels-qq-token-copy">复制</button>
+                </div>
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="channels-qq-private-allowlist">私聊 QQ 白名单</label>
+                <textarea id="channels-qq-private-allowlist" class="form-input form-input--wide" rows="3" placeholder="每行一个 QQ 号，也可用逗号分隔"></textarea>
+              </div>
+              <div class="form-row">
+                <label class="form-label" for="channels-qq-group-allowlist">群号白名单</label>
+                <textarea id="channels-qq-group-allowlist" class="form-input form-input--wide" rows="3" placeholder="每行一个群号；群内还必须 @ 机器人"></textarea>
+              </div>
+              <div class="channels-card__actions">
+                <button type="button" class="btn-secondary" id="channels-qq-save">保存并启动监听</button>
+                <button type="button" class="btn-secondary" id="channels-qq-test">测试连接</button>
+              </div>
+              <div class="channels-feedback" id="channels-qq-feedback"></div>
+            </div>
+          </div>
+
           <div class="channels-card channels-card--global">
             <div class="channels-card__header">
               <h2>全局</h2>

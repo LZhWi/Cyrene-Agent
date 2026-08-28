@@ -14,13 +14,14 @@ import type { AgentRuntime } from "../orchestrator/agent-runtime";
 import type { TtsSynthesisService } from "../services/tts/tts-synthesis-service";
 import { buildChannelAttachmentInputs } from "./agent-input";
 import { loadChannelsSettings } from "./settings-store";
-import { resolveChannelAgentPolicy } from "./agent-policy";
+import { enforceChannelAgentPolicy, resolveChannelAgentPolicy } from "./agent-policy";
 import {
   setDispatcherBuildAndRunAgent,
   setDispatcherBroadcastChat,
   setDispatcherLoadGeneralSettings,
   setDispatcherLoadRecentHistory,
   setDispatcherSynthesizeTts,
+  formatChannelUserText,
 } from "./dispatcher";
 import { initChannels, shutdownChannels } from "./init";
 
@@ -45,7 +46,10 @@ export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSu
     const channelResult: { text: string; sticker: string | null } = { text: "", sticker: null };
 
     const sandbox = loadChannelsSettings().toolSandbox;
-    const policy = resolveChannelAgentPolicy(sandbox);
+    const policy = resolveChannelAgentPolicy(sandbox, {
+      channel: msg.channel,
+      chatType: msg.chatType,
+    });
     const allTools = toolRegistry.getEnabledTools();
     const exposedTools = policy.exposeTools ? allTools : [];
     console.log(
@@ -87,10 +91,11 @@ export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSu
         }
       },
     });
+    const agentUserText = formatChannelUserText(msg);
     const { options } = await deps.agentRuntime.buildOptions({
       messages: [
         ...historyMessages,
-        { role: "user", content: msg.text },
+        { role: "user", content: agentUserText },
       ],
       style: "01_default.md",
       sessionId,
@@ -106,8 +111,7 @@ export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSu
     options.tools = policy.exposeTools
       ? [...(options.capabilities?.tools ?? exposedTools)]
       : [];
-    options.harnessInteractiveTools = policy.includeInteractiveTools;
-    options.permissionMode = policy.permissionMode;
+    enforceChannelAgentPolicy(options, policy);
 
     const threadId = `thread-${sessionId}-${Date.now()}`;
     const agent = new CyreneAgent({ threadId, description: `bot:${msg.channel}:${msg.senderId}` });
@@ -121,10 +125,10 @@ export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSu
     });
     channelResult.text = reply;
     if (agent.lastResult) {
-      const finished = await deps.agentRuntime.onRunFinished(agent.lastResult, msg.text, msg.channel, sessionId);
+      const finished = await deps.agentRuntime.onRunFinished(agent.lastResult, agentUserText, msg.channel, sessionId);
       channelResult.sticker = finished.sticker;
     }
-    void indexConversationTurn(sessionId, msg.text, reply);
+    void indexConversationTurn(sessionId, agentUserText, reply);
     return channelResult;
   });
 
