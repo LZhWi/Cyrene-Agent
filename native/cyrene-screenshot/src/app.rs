@@ -645,6 +645,19 @@ impl OverlayApp {
         );
         let selection_width = frame.width;
         let selection_height = frame.height;
+        // 排查偶发截图方向异常：记录当次捕获的关键几何/后端信息，
+        // 复现时可直接从日志定位是 rotation 检测、后端回退还是别的环节。
+        eprintln!(
+            "cyrene-screenshot: committed selection={}x{} at ({},{}) display={:?} rotation={:?} backend={} diag={:?}",
+            selection.width,
+            selection.height,
+            selection.x,
+            selection.y,
+            self.display.bounds,
+            self.display.rotation,
+            self.capture.name(),
+            self.capture.diagnostics()
+        );
 
         // Step 2: clipboard (best effort — capture-released records the flag).
         let clipboard_written = write_cf_dibv5(self.overlay.hwnd(), &frame)

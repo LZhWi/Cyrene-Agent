@@ -33,6 +33,10 @@ const PLAIN_PREFIX = "plain:";
 let safeStorageAvailable: boolean | null = null;
 function isSafeStorageAvailable(): boolean {
   if (safeStorageAvailable !== null) return safeStorageAvailable;
+  // safeStorage 在 app ready 之前不可用（Windows：ready 后才返回 true）。
+  // ready 前直接返回 false 且【不写缓存】——否则模块加载期的早期调用会把
+  // false 永久缓存，导致之后 enc: 字段全部解密失败、加密全部降级为混淆。
+  if (!app.isReady()) return false;
   try {
     safeStorageAvailable = safeStorage.isEncryptionAvailable();
   } catch {

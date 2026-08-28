@@ -11,6 +11,7 @@ import type { ReviewSnapshot } from "../shared/review-types";
 import { getLive2DIpcListenerCounts } from "./live2d-listener-diagnostics";
 import { exposeMusicApi } from "./music";
 import { normalizeChatAppearance, type ChatAppearanceSettings } from "../shared/chat-appearance";
+import type { AppUpdateApi, AppUpdateState } from "../shared/app-update";
 
 const cyreneApi = {
   minimize: () => ipcRenderer.send(IPC.WINDOW_MINIMIZE),
@@ -35,6 +36,18 @@ const cyreneApi = {
     const listener = (_e: unknown, visible: boolean) => callback(visible);
     ipcRenderer.on(IPC.PET_VISIBILITY_CHANGED, listener);
     return () => ipcRenderer.off(IPC.PET_VISIBILITY_CHANGED, listener);
+  },
+};
+
+const appUpdateApi: AppUpdateApi = {
+  getState: () => ipcRenderer.invoke(IPC.APP_UPDATE_GET_STATE),
+  check: () => ipcRenderer.invoke(IPC.APP_UPDATE_CHECK),
+  download: () => ipcRenderer.invoke(IPC.APP_UPDATE_DOWNLOAD),
+  install: () => ipcRenderer.invoke(IPC.APP_UPDATE_INSTALL),
+  onStateChanged: (callback: (state: AppUpdateState) => void) => {
+    const listener = (_event: unknown, state: AppUpdateState) => callback(state);
+    ipcRenderer.on(IPC.APP_UPDATE_STATE, listener);
+    return () => ipcRenderer.off(IPC.APP_UPDATE_STATE, listener);
   },
 };
 
@@ -92,6 +105,7 @@ const chatApi = {
 };
 
 contextBridge.exposeInMainWorld("cyrene", cyreneApi);
+contextBridge.exposeInMainWorld("appUpdate", appUpdateApi);
 contextBridge.exposeInMainWorld("chat", chatApi);
 
 // AG-UI 事件流：发起一次 agent run，通过 onEvent 回调收 AG-UI 标准事件，

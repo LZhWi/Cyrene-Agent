@@ -1,5 +1,6 @@
 import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell, dialog, globalShortcut } from "electron";
 import * as path from "path";
+import { ensureGpuSandboxAcl } from "./gpu-sandbox-acl";
 
 import { logger, LogTag } from "./logger";
 import { renderBanner } from "../shared/banner";
@@ -162,6 +163,8 @@ import type { GitService } from "./code-git/git-service";
 import { resolveGitExecutable } from "./code-git/git-executable";
 import { registerCodeGitIpc } from "./code-git/code-git-ipc";
 import { installSingleInstanceGuard } from "./single-instance";
+import { createGitHubAppUpdateService, scheduleStartupUpdateCheck } from "./updater/github-app-updater";
+import { registerAppUpdateIpc } from "./updater/app-update-ipc";
 
 
 configureDocumentIndexQueue(runDocumentIndexJob);
@@ -298,6 +301,14 @@ if (loadGeneralSettings().disableGpuElectron) {
   app.commandLine.appendSwitch("disable-gpu");
   app.commandLine.appendSwitch("enable-unsafe-swiftshader");
 }
+
+// GPU 沙箱 DACL 自愈（electron#51761）：必须在 app ready 前（GPU 进程 spawn 前）同步跑。
+// 打包版 + Windows 生效；成功写哨兵只跑一次，失败静默（软渲染模式兜底）。
+ensureGpuSandboxAcl({
+  isPackaged: app.isPackaged,
+  exeDir: path.dirname(app.getPath("exe")),
+  userDataDir: app.getPath("userData"),
+});
 
 if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   // Print the banner once at startup. It is plain text (no color, no log
@@ -480,11 +491,18 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   });
   windowManager = manager;
 
+  const appUpdateService = createGitHubAppUpdateService({
+    currentVersion: app.getVersion(),
+    isPackaged: app.isPackaged,
+  });
+  registerAppUpdateIpc({ service: appUpdateService });
+
   // 先创建主窗口但不显示，等闪屏关闭后再一起显示。
   const mainWindow = createWindow(manager, false);
 
   setLive2dWindowSender((channel, payload) => manager.sendToMainWindow(channel, payload));
   manager.createReactChatWindow();
+  scheduleStartupUpdateCheck(appUpdateService);
   if (generalSettings.sidebarVisible) manager.createSidebarWindow();
   if (generalSettings.tasksVisible) manager.createTasksWindow();
   tray = createTray({

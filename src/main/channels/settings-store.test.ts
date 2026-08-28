@@ -14,6 +14,7 @@ vi.mock("electron", () => {
   return {
     app: {
       getPath: (_k: string) => os.tmpdir(),
+      isReady: () => true,
     },
     safeStorage: {
       isEncryptionAvailable: () => true,

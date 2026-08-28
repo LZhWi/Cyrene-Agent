@@ -250,3 +250,222 @@ toolRegistry.register({
   },
 });
 
+// ── 主动记忆读写（直读 memory.json，不走 RAG）──
+// user_memory 是语义抽查（像 grep），read_memory 是通读（像 cat）：
+// 概览看「我记得哪些事」，按 id 读单条全文；write_memory 由用户主动要求触发。
+
+/** L2 概览最多列出的条数（防止几百条 L2 撑爆上下文，按时间倒序取最新）。 */
+const MEMORY_OVERVIEW_LIMIT = 50;
+
+interface L2OverviewItem {
+  id: string;
+  title: string;
+  createdAt: number;
+  status: string;
+}
+
+/** 纯函数：把 L0/L1/L2 目录格式化为概览文本（可测试）。 */
+export function formatMemoryOverview(
+  l0: Record<string, unknown>,
+  l1: Record<string, unknown>,
+  l2Items: L2OverviewItem[],
+): string {
+  const lines: string[] = [];
+
+  lines.push("== 核心画像（L0）==");
+  const l0Fields = ["preferredName", "occupation", "longTermInterests", "language", "permanentNote"];
+  const l0Labels: Record<string, string> = {
+    preferredName: "称呼", occupation: "职业", longTermInterests: "长期兴趣",
+    language: "语言习惯", permanentNote: "固定备注",
+  };
+  let l0Any = false;
+  for (const f of l0Fields) {
+    const v = String(l0[f] ?? "").trim();
+    if (v) { lines.push(`- ${l0Labels[f]}: ${v}`); l0Any = true; }
+  }
+  if (!l0Any) lines.push("- （空）");
+  if (l0.isPinned === true) lines.push("（画像已被用户锁定，工具写入会被跳过）");
+
+  lines.push("");
+  lines.push("== 近期状态（L1）==");
+  const l1Fields: Array<[string, string]> = [
+    ["recentGoals", "近期目标"], ["recentPreferences", "近期偏好"], ["currentProject", "当前项目"],
+  ];
+  let l1Any = false;
+  for (const [f, label] of l1Fields) {
+    const v = String(l1[f] ?? "").trim();
+    if (v) { lines.push(`- ${label}: ${v}`); l1Any = true; }
+  }
+  if (!l1Any) lines.push("- （空）");
+
+  lines.push("");
+  const total = l2Items.length;
+  lines.push(`== 对话记忆（L2，共 ${total} 条，列出最新 ${Math.min(total, MEMORY_OVERVIEW_LIMIT)} 条）==`);
+  if (total === 0) {
+    lines.push("- （空）");
+  } else {
+    const sorted = [...l2Items].sort((a, b) => b.createdAt - a.createdAt).slice(0, MEMORY_OVERVIEW_LIMIT);
+    for (const item of sorted) {
+      const date = new Date(item.createdAt).toISOString().slice(0, 10);
+      lines.push(`- [${item.id}] ${item.title} · ${item.status} · ${date}`);
+    }
+  }
+  lines.push("");
+  lines.push("带 id 参数可读取单条 L2 全文。");
+
+  return lines.join('\n');
+}
+
+/** 纯函数：构造 write_memory 的 MemoryCandidate（可测试）。 */
+export function buildWriteCandidate(args: {
+  layer: string;
+  content: string;
+  field?: string;
+  slug?: string;
+  sourceQuote?: string;
+  triggerText: string;
+}): {
+  layer: "L0" | "L1" | "L2";
+  content: string;
+  field?: string;
+  slug?: string;
+  sourceQuote?: string;
+  confidence: number;
+  certainty: "explicit";
+  attribution: "user_explicit";
+  shouldWrite: true;
+  triggerText: string;
+} | null {
+  const layer = args.layer.toUpperCase();
+  if (layer !== "L0" && layer !== "L1" && layer !== "L2") return null;
+  if (!args.content.trim()) return null;
+  return {
+    layer,
+    content: args.content.trim(),
+    field: args.field?.trim() || undefined,
+    slug: layer === "L2" ? args.slug?.trim() || undefined : undefined,
+    sourceQuote: layer === "L2" ? args.sourceQuote?.trim() || undefined : undefined,
+    // 工具只在用户主动要求时被调用，按用户明确事实走（通过 writeMemory 全部既有校验）
+    confidence: 1,
+    certainty: "explicit",
+    attribution: "user_explicit",
+    shouldWrite: true,
+    triggerText: args.triggerText,
+  };
+}
+
+toolRegistry.register({
+  id: 'read_memory',
+  name: '通读记忆',
+  description:
+    '完整读取自己的三层记忆（核心画像 L0 / 近期状态 L1 / 对话记忆 L2），直接读存储、不走语义检索。\n\n' +
+    '何时用：\n' +
+    '- 用户说「你到底记得我什么」「看看你的记忆」「你都记了些啥」\n' +
+    '- user_memory 检索没命中但用户坚称说过（检索是抽查，这个是通读）\n' +
+    '- 需要核对记忆内容是否准确/过时（用户说「你记错了」）\n\n' +
+    '不要用于：\n' +
+    '- 语义模糊的主题查询（「我喜欢的颜色」→ 用 user_memory 更省 token）\n' +
+    '- 导入文档内容（那是 imported_docs）\n\n' +
+    '参数：无参 = 概览（L0/L1 全量 + L2 目录最新 50 条）；id (可选，L2 条目 id) = 读该条全文。',
+  enabled: true,
+  effectKind: "read",
+  verificationPolicy: "none",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'L2 条目 id（来自概览列表），传入则读该条全文' },
+    },
+  },
+  execute: async (args) => {
+    // 懒加载避开注册期副作用（与 fs-tools 的 loadVisionConfigLazy 同模式）
+    const { memoryStore } = require("../memory/memory-store") as
+      typeof import("../memory/memory-store");
+
+    const id = String(args.id || "").trim();
+    if (id) {
+      const all = await memoryStore.getAllL2();
+      const hit = all.find((m) => m.id === id);
+      if (!hit) return `[错误] 找不到 L2 条目: ${id}（先无参调用拿概览列表）`;
+      const lines = [
+        `id: ${hit.id}`,
+        `标题: ${hit.slug || "（无）"}`,
+        `内容: ${hit.content}`,
+      ];
+      if (hit.sourceQuote) lines.push(`用户原话: ${hit.sourceQuote}`);
+      lines.push(
+        `状态: ${hit.status}${hit.isPinned ? " · 已置顶" : ""}`,
+        `创建: ${new Date(hit.createdAt).toISOString().slice(0, 10)} · 最近使用: ${new Date(hit.lastAccessedAt).toISOString().slice(0, 10)} · 使用 ${hit.accessCount} 次`,
+      );
+      return lines.join('\n');
+    }
+
+    const [l0, l1, l2All] = await Promise.all([
+      memoryStore.getL0(),
+      memoryStore.getL1(),
+      memoryStore.getAllL2(),
+    ]);
+    const items: L2OverviewItem[] = l2All.map((m) => ({
+      id: m.id,
+      title: m.slug || (m.content.length > 40 ? m.content.slice(0, 40) + "…" : m.content),
+      createdAt: m.createdAt,
+      status: m.status,
+    }));
+    return formatMemoryOverview(l0 as unknown as Record<string, unknown>, l1 as unknown as Record<string, unknown>, items);
+  },
+});
+
+toolRegistry.register({
+  id: 'write_memory',
+  name: '更新记忆',
+  description:
+    '把用户明确要求记住的信息写入记忆（L0 核心画像 / L1 近期状态 / L2 对话记忆）。\n\n' +
+    '何时用（仅限用户主动要求）：\n' +
+    '- 用户说「记住……」「更新你的记忆」「把这个记下来」「别忘了……」\n' +
+    '- 用户纠正旧记忆：「不是 X，是 Y」\n\n' +
+    '不要用于：\n' +
+    '- 普通对话中自行判断值得记的信息（那是后台反思系统的事，不要主动调用本工具）\n' +
+    '- 当前对话里临时记的东西（对话上下文本身就是记忆）\n\n' +
+    '参数：layer (必填，L0/L1/L2)，content (必填，要记住的内容)；\n' +
+    'field (L0 可选：preferredName/occupation/longTermInterests/language/permanentNote；L1 可选：recentGoals/recentPreferences/currentProject，缺省按内容自动分流)；\n' +
+    'slug (L2 可选，≤20 字标题)，sourceQuote (L2 可选，用户原话)。',
+  enabled: true,
+  effectKind: "mutation",
+  verificationPolicy: "none",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      layer: { type: 'string', description: '目标层级：L0（核心画像）/ L1（近期状态）/ L2（对话记忆）' },
+      content: { type: 'string', description: '要写入的内容' },
+      field: { type: 'string', description: 'L0/L1 目标字段（可选，缺省自动判定）' },
+      slug: { type: 'string', description: 'L2 标题（可选，≤20 字）' },
+      sourceQuote: { type: 'string', description: 'L2 用户原话（可选）' },
+    },
+    required: ['layer', 'content'],
+  },
+  execute: async (args, ctx) => {
+    const candidate = buildWriteCandidate({
+      layer: String(args.layer || ""),
+      content: String(args.content || ""),
+      field: args.field ? String(args.field) : undefined,
+      slug: args.slug ? String(args.slug) : undefined,
+      sourceQuote: args.sourceQuote ? String(args.sourceQuote) : undefined,
+      triggerText: ctx?.userQuery || String(args.content).slice(0, 50),
+    });
+    if (!candidate) return "[错误] 参数无效：layer 必须是 L0/L1/L2，content 不能为空";
+
+    // 懒加载走 memoryManager.writeMemory 既有校验链（L0 锁定/字段白名单/L1 分流/L2 写入+RAG 同步）
+    const { memoryManager } = require("../memory/memory-manager") as
+      typeof import("../memory/memory-manager");
+    const { memoryStore } = require("../memory/memory-store") as
+      typeof import("../memory/memory-store");
+
+    if (candidate.layer === "L0") {
+      const l0 = await memoryStore.getL0();
+      if (l0.isPinned) return "[跳过] 核心画像已被用户锁定（记忆面板里可解锁），本次未写入";
+    }
+
+    await memoryManager.writeMemory([candidate]);
+    return `已写入 ${candidate.layer}${candidate.field ? `（字段 ${candidate.field}）` : ""}: ${candidate.content.slice(0, 60)}${candidate.content.length > 60 ? "…" : ""}`;
+  },
+});
+

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { addModelProfile, updateModelProfile, resolveDefaultModelProfile } from "./model-catalog";
-import { normalizeModelSettings, getDefaultModelProfile, getPublicModelConfig, resolveModelSettingsProfile } from "./model-settings";
+import { normalizeModelSettings, getDefaultModelProfile, getPublicModelConfig, resolveModelSettingsProfile, loadVisionConfig } from "./model-settings";
 
 describe("model catalog", () => {
   it("keeps the first saved model as the default and rejects a duplicate key plus model", () => {
@@ -155,6 +155,55 @@ describe("model catalog", () => {
     const legacyProfile = resolveModelSettingsProfile(settings, "p-legacy");
     expect(legacyProfile.contextWindowTokens).toBe(256000);
     expect(legacyProfile.multimodal).toBe(false);
+
+    // 未持久化 multimodal → 默认 true（多模态模型用户开箱即直发图片，
+    // 判错有服务端 400 + caption 自动降级兜底）；显式 false 保留
+    const defaulted = normalizeModelSettings({ provider: "GLM（智谱）" });
+    expect(defaulted.multimodal).toBe(true);
+    const optedOut = normalizeModelSettings({ provider: "GLM（智谱）", multimodal: false });
+    expect(optedOut.multimodal).toBe(false);
+
+    // loadVisionConfig 展开默认档案：顶层空壳（issue 12）不再把多模态主模型误判为"未启用视觉"
+    const shellSettings = normalizeModelSettings({
+      provider: "MiniMax",
+      baseUrl: "",
+      apiKey: "",
+      model: "",
+      modelProfiles: [{
+        id: "glm-default",
+        provider: "GLM（智谱）",
+        baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+        apiKey: "sk-glm",
+        model: "glm-5.3-flash",
+        multimodal: true,
+      }],
+      defaultModelProfileId: "glm-default",
+    });
+    expect(loadVisionConfig(shellSettings)).toEqual({
+      baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+      apiKey: "sk-glm",
+      model: "glm-5.3-flash",
+    });
+
+    // multimodal=false 时仍走独立视觉模型配置（档案展开不吞掉全局 vision 字段）
+    const visionSettings = normalizeModelSettings({
+      provider: "MiniMax",
+      modelProfiles: [{
+        id: "text-model",
+        provider: "MiniMax",
+        apiKey: "sk-main",
+        model: "MiniMax-M3",
+        baseUrl: "https://api.minimax.chat/v1",
+        multimodal: false,
+      }],
+      defaultModelProfileId: "text-model",
+      vision: { baseUrl: "https://vi.example.com/v1", apiKey: "sk-v", model: "vi-model" },
+    });
+    expect(loadVisionConfig(visionSettings)).toEqual({
+      baseUrl: "https://vi.example.com/v1",
+      apiKey: "sk-v",
+      model: "vi-model",
+    });
 
     // 未传 id → 展开默认档案（第一个建档项 p-full），不再退回顶层镜像（issue 4：
     // 顶层镜像可能全空，channel bot 等不带 profileId 的调用方曾拿到空 baseUrl）

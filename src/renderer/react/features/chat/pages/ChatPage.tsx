@@ -41,6 +41,7 @@ import { ModelModePanel } from "../components/ModelModePanel";
 import { WindowControls } from "../../../components/ui/WindowControls";
 import { SettingsButton } from "../../../components/ui/SettingsButton";
 import { UserAvatar } from "../../../components/ui/UserAvatar";
+import { AppUpdateEntry } from "../components/AppUpdateEntry";
 import { useUserCallPreference } from "../../../hooks/useUserNickname";
 import { resolveRevisableLastTurn } from "../components/last-turn-actions";
 import { NewTaskButton } from "../../../components/ui/NewTaskButton";
@@ -2323,6 +2324,7 @@ export function ChatPage() {
             onTogglePin={(sessionId, pinned) => void handleTogglePinSession(sessionId, pinned)}
           />
         </div>
+        <AppUpdateEntry />
         <div className="cy-page-sidebar-bottom">
           <UserAvatar />
           <SettingsButton onClick={() => sidebarApi()?.openSettings("appearance")} />

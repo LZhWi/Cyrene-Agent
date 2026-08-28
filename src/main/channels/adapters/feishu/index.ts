@@ -45,6 +45,8 @@ import { loadChannelsSettings } from "../../settings-store";
 import { getAudioDurationMs } from "./audio-duration";
 import { logger, LogTag } from "../../../logger";
 
+export { transcodeAudioFileToFeishuOpus } from "./audio-transcode";
+
 const LOG = "[FeishuAdapter]";
 
 /** 飞书 capability 声明。SDK 已经把消息/图片/音频/视频/卡片/sticker 都内置支持 */
@@ -195,10 +197,13 @@ async function sendLark(channel: LarkChannel, targetId: string, part: OutgoingPa
       break;
     }
     case "audio": {
-      // 飞书 audio: { audio: { source: path/Buffer, duration } } (duration 是毫秒, 必填)
-      // SDK 内部 MediaUploader.resolveDuration 只对 Opus 自动解析;
-      // 我们 TTS 输出 mp3 → 必须先解析 mp3 时长再传 duration, 否则 SDK 报
-      // "duration could not be determined for audio; pass it explicitly"
+      // 飞书 SDK 会从 Opus 自动解析时长；兼容旧的非 Opus 音频时仍显式估算 duration。
+      if (part.mime === "audio/ogg" || path.extname(part.filePath).toLowerCase() === ".opus") {
+        result = (await channel.send(targetId, {
+          audio: { source: part.filePath },
+        } as SendInput)) ?? null;
+        break;
+      }
       const duration = await getAudioDurationMs(part.filePath);
       console.log("[Feishu audio] send file:", part.filePath, "duration:", duration, "mime:", part.mime);
       if (!duration) {
@@ -236,7 +241,9 @@ async function sendLark(channel: LarkChannel, targetId: string, part: OutgoingPa
       break;
     }
     case "sticker": {
-      result = (await channel.send(targetId, { file_key: part.imagePath } as unknown as SendInput)) ?? null;
+      result = (await channel.send(targetId, {
+        image: { source: part.imagePath },
+      } as SendInput)) ?? null;
       break;
     }
   }

@@ -176,7 +176,7 @@ const DEFAULT_MODEL_SETTINGS: ModelSettings = {
   citaRepairBudgetSec: 8,
   rerankerMode: "standard",
   embeddingModel: "bgem3",
-  multimodal: false,
+  multimodal: true,
   contextWindowTokens: DEFAULT_CONTEXT_WINDOW_TOKENS,
 };
 
@@ -278,7 +278,9 @@ export function normalizeModelSettings(input: Partial<ModelSettings> | null | un
   const profile = perProvider[provider];
 
   // 迁移旧配置：vision.syncWithMain === true -> multimodal: true
-  let multimodal = input?.multimodal === true;
+  // 默认 true（未持久化时）：直发判错有服务端仲裁 + caption 自动降级兜底，
+  // 而默认 false 会让多模态模型的用户发图莫名降级/看不了图（比发错更迷惑）。
+  let multimodal = input?.multimodal !== false;
   const rawVision = input?.vision as Partial<VisionModelConfig> & { syncWithMain?: boolean } | undefined;
   if (rawVision && rawVision.syncWithMain === true) {
     multimodal = true;
@@ -442,9 +444,12 @@ export function loadModelSettings(): ModelSettings {
  * 运行时解析视觉配置。
  * multimodal=true：主模型本身支持视觉，返回主模型配置（让 read_image 等工具可用）。
  * multimodal=false：返回独立视觉模型配置（三字段齐全才有效），否则 null。
+ *
+ * 先展开默认档案再取顶层镜像（与 channel bot / 欢迎页同策略）：顶层镜像可能指向
+ * 空壳 provider（真实配置在默认档案里），直接读会把多模态主模型误判为"未启用视觉"。
  */
-export function loadVisionConfig(): VisionConfig | null {
-  const settings = loadModelSettings();
+export function loadVisionConfig(from: ModelSettings = loadModelSettings()): VisionConfig | null {
+  const settings = resolveModelSettingsProfile(from);
 
   if (settings.multimodal) {
     if (!settings.apiKey || !settings.model) return null;

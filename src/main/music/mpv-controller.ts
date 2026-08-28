@@ -38,7 +38,7 @@ const OBSERVE_PROPS = [
   "time-pos", "pause", "duration", "volume", "eof-reached", "idle-active",
 ] as const;
 
-function detectMpvBinary(): string {
+export function detectMpvBinary(): string {
   const platform = os.platform();
   if (platform === "win32") {
     // Search order:

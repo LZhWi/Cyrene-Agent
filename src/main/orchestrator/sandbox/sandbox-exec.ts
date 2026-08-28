@@ -33,6 +33,8 @@ type SrtModule = any;
 let srtModule: SrtModule | null = null;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let srtWin: any = null;
+/** 实际可执行的 srt-win.exe 路径（打包后指向 app.asar.unpacked 里的真实文件） */
+let srtWinExePath: string | null = null;
 let sandboxReady = false;
 let sandboxDisabled = false;
 let initAttempted = false;
@@ -46,6 +48,18 @@ function isSrtDisabledByEnv(): boolean {
 
 function isWindows(): boolean {
   return process.platform === "win32";
+}
+
+/**
+ * 打包后 vendor/srt-win 由 electron-builder 的 asarUnpack 解到 app.asar.unpacked，
+ * 但包内 VENDORED_SRT_WIN_EXE 常量仍指向 app.asar 虚拟路径 ——
+ * spawn 无法执行 asar 虚拟路径里的 exe（ENOENT），需重写到真实磁盘路径。
+ */
+function toUnpackedSrtWinPath(p: string): string {
+  const asarSep = `${path.sep}app.asar${path.sep}`;
+  return p.includes(asarSep)
+    ? p.replace(asarSep, `${path.sep}app.asar.unpacked${path.sep}`)
+    : p;
 }
 
 // ── 项目根检测 ──────────────────────────────────────────
@@ -150,7 +164,7 @@ function buildSandboxConfig(level: AgentFileAccessLevel, workspaceRoot: string):
     },
     filesystem: resolveSandboxSessionFilesystem(level, workspaceRoot),
     windows: {
-      srtWin: { path: srtModule.VENDORED_SRT_WIN_EXE },
+      srtWin: { path: srtWinExePath ?? srtModule.VENDORED_SRT_WIN_EXE },
     },
   };
 }
@@ -163,7 +177,7 @@ async function initSandboxManager(level: AgentFileAccessLevel, cwd: string): Pro
   if (!srtModule) throw new Error("SRT module not loaded");
   const workspaceRoot = level === "project-read-only" ? detectProjectRoot(cwd) : path.resolve(cwd);
   const config = buildSandboxConfig(level, workspaceRoot);
-  logger.info(LogTag.Runtime, `[Sandbox] initSandboxManager: cwd=${cwd} allowWrite=${config.filesystem.allowWrite.join(",")} srtWin=${srtModule.VENDORED_SRT_WIN_EXE}`);
+  logger.info(LogTag.Runtime, `[Sandbox] initSandboxManager: cwd=${cwd} allowWrite=${config.filesystem.allowWrite.join(",")} srtWin=${config.windows.srtWin.path}`);
   await srtModule.SandboxManager.initialize(config);
   sandboxSessionKey = JSON.stringify({ level, workspaceRoot });
   logger.info(LogTag.Runtime, "[Sandbox] SandboxManager.initialize completed");
@@ -197,7 +211,8 @@ export async function initSandbox(): Promise<void> {
   try {
     // 无 default export，必须 namespace import
     srtModule = await import("@anthropic-ai/sandbox-runtime");
-    srtWin = srtModule.resolveSrtWin({ path: srtModule.VENDORED_SRT_WIN_EXE });
+    srtWinExePath = toUnpackedSrtWinPath(srtModule.VENDORED_SRT_WIN_EXE as string);
+    srtWin = srtModule.resolveSrtWin({ path: srtWinExePath });
 
     const status = await srtModule.checkWindowsSandboxStatusAsync({ srtWin });
     logger.info(LogTag.Runtime, `[Sandbox] status: user.provisioned=${status.user.provisioned} wfp.state=${status.wfp.state}`);

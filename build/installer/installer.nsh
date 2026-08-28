@@ -46,13 +46,13 @@ FunctionEnd
   CreateShortCut "$SMPROGRAMS\${MENU_FILENAME}\卸载 ${PRODUCT_FILENAME}.lnk" "$INSTDIR\${UNINSTALL_FILENAME}" "" "$INSTDIR\${UNINSTALL_FILENAME}" 0
 
   ${If} $CyreneLaunchAtLogin == ${BST_CHECKED}
-    CreateDirectory "$APPDATA\${PRODUCT_FILENAME}"
-    FileOpen $0 "$APPDATA\${PRODUCT_FILENAME}\installer-options.json" w
+    CreateDirectory "$APPDATA\${APP_PACKAGE_NAME}"
+    FileOpen $0 "$APPDATA\${APP_PACKAGE_NAME}\installer-options.json" w
     FileWrite $0 "{$\"launchAtLogin$\":true}"
     FileClose $0
   ${Else}
-    CreateDirectory "$APPDATA\${PRODUCT_FILENAME}"
-    FileOpen $0 "$APPDATA\${PRODUCT_FILENAME}\installer-options.json" w
+    CreateDirectory "$APPDATA\${APP_PACKAGE_NAME}"
+    FileOpen $0 "$APPDATA\${APP_PACKAGE_NAME}\installer-options.json" w
     FileWrite $0 "{$\"launchAtLogin$\":false}"
     FileClose $0
   ${EndIf}

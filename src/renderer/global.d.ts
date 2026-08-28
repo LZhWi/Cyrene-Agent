@@ -1,6 +1,7 @@
 // Global type augmentations for renderer
 
 import type { ReviewSnapshot } from "../shared/review-types";
+import type { AppUpdateApi } from "../shared/app-update";
 
 interface SystemApi {
   openExternal: (url: string) => Promise<{ ok: boolean; error?: string }>;
@@ -14,6 +15,7 @@ declare global {
   interface Window {
     system?: SystemApi;
     review?: ReviewApi;
+    appUpdate?: AppUpdateApi;
   }
 }
 
