@@ -21,11 +21,12 @@ describe("custom endpoint API settings UI", () => {
   });
 
   it("exposes dynamic API field labels and hints", () => {
+    const transportSelect = html.match(/id="transport-select"[\s\S]*?<\/div>/)?.[0] ?? "";
     expect(html).toContain('id="api-key-label"');
     expect(html).toContain('id="api-key-hint"');
     expect(html).toContain('id="transport-hint"');
     expect(html).toContain('id="endpoint-preview"');
-    expect(html).not.toContain('value="auto"');
+    expect(transportSelect).not.toContain('value="auto"');
   });
 
   it("ships a local custom endpoint icon", () => {

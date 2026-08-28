@@ -1,8 +1,9 @@
 import * as fs from "fs"
 import * as path from "path"
 import { app } from "electron"
+import type { ChannelId } from "../channels/types"
 
-export type RelationshipChannel = "desktop" | "wechat" | "feishu"
+export type RelationshipChannel = "desktop" | ChannelId
 
 export interface RelationshipTurnInput {
   userText: string

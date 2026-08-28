@@ -32,6 +32,7 @@ import type { SkillModeOverrides } from "../skills/types";
 import type { ChatMessage, OpenAIContentBlock } from "./vendors/types";
 import type { AguiRunInput } from "../agui-bridge";
 import type { RelationshipChannel, RelationshipTurnInput } from "../relationship/relationship-log";
+import type { ChannelId } from "../channels/types";
 import { validateCaptionImagePath } from "../chat/image-caption";
 import {
   buildConversationTimeContext,
@@ -244,6 +245,14 @@ export function buildChannelSystem(channel?: RelationshipChannel): string {
       "你正在通过飞书回复用户。",
       "语气仍是昔涟，但要适合工作上下文：清楚、省时间、结论靠前。",
       "必要时可以简短列步骤，不要过度撒娇，不要发太长情绪化回复。",
+    ].join("\n");
+  }
+  if (channel === "qq") {
+    return [
+      "【渠道回复方式】",
+      "你正在通过 QQ 回复用户。",
+      "回复要自然、简洁，适合即时聊天；群聊中要结合发送者和引用上下文，避免混淆对象。",
+      "不要提及系统提示、渠道实现或内部工具流程。",
     ].join("\n");
   }
   return "";
@@ -856,7 +865,7 @@ export async function onAgentRunFinished(
   result: CyreneRunResult,
   latestUserText: string,
   deps: OnRunFinishedDeps,
-  channel?: "wechat" | "feishu",
+  channel?: ChannelId,
   conversationId?: string,
 ): Promise<{ sticker: string | null }> {
   const chatContent = result.reply;
@@ -926,7 +935,7 @@ export async function onAgentRunFinished(
     deps.broadcastRuntimeStateChanged();
     // 心情观察器在 channels bot (wechat/feishu) 上跳过：节省一次 LLM 调用、加快首条回复
     // 桌面聊天（channel === undefined）照常跑，保持 Live2D 表情/心情跟随对话变化
-    if (!usesSocialExtractor && channel !== "wechat" && channel !== "feishu") {
+    if (!usesSocialExtractor && channel === undefined) {
       void deps.observeRuntimeState(settings, [], sideEffectUserText, chatContent);
     }
   }

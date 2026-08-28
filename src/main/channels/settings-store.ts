@@ -148,6 +148,21 @@ export interface FeishuChannelConfig extends ChannelRuntimeConfig {
   appSecret?: string;
 }
 
+export type QqListenMode = "auto" | "loopback" | "wsl" | "custom";
+
+export interface QqChannelConfig extends ChannelRuntimeConfig {
+  listenMode: QqListenMode;
+  customHost?: string;
+  port: number;
+  accessToken?: string;
+  allowedPrivateUserIds: string[];
+  allowedGroupIds: string[];
+  groupRequireMention: true;
+  groupReplyStyle: "reply-and-mention";
+  groupToolPolicy: "off";
+  groupMemoryPolicy: "shared-personal";
+}
+
 /** 给上层用的明文 AppSecret 读取器 */
 export function decryptFeishuSecret(cfg: FeishuChannelConfig | undefined): string {
   return decryptField(cfg?.appSecret ?? "");
@@ -158,6 +173,7 @@ export type ChannelToolSandbox = "off" | "all";
 export interface ChannelsSettings {
   wechat: WechatChannelConfig;
   feishu: FeishuChannelConfig;
+  qq: QqChannelConfig;
   /** 入站 HTTP server 绑定的端口。0 = 随机空闲。 */
   inboundPort: number;
   /** HMAC 共享密钥。启动时若为空则自动生成。 */
@@ -179,6 +195,17 @@ export interface ChannelsSettings {
 const DEFAULT_SETTINGS: ChannelsSettings = {
   wechat: { enabled: false },
   feishu: { enabled: false },
+  qq: {
+    enabled: false,
+    listenMode: "auto",
+    port: 6200,
+    allowedPrivateUserIds: [],
+    allowedGroupIds: [],
+    groupRequireMention: true,
+    groupReplyStyle: "reply-and-mention",
+    groupToolPolicy: "off",
+    groupMemoryPolicy: "shared-personal",
+  },
   inboundPort: 0,
   sharedSecret: "",
   rateLimitPerUser: 10,
@@ -211,6 +238,15 @@ function normalize(input: Partial<ChannelsSettings> | null | undefined): Channel
 
   const w: Partial<WechatChannelConfig> | undefined = input?.wechat;
   const f: Partial<FeishuChannelConfig> | undefined = input?.feishu;
+  const q: Partial<QqChannelConfig> | undefined = input?.qq;
+  const normalizeIds = (value: unknown): string[] => {
+    if (!Array.isArray(value)) return [];
+    return Array.from(new Set(value
+      .map((item) => String(item).trim())
+      .filter((item) => /^\d+$/.test(item))));
+  };
+  const normalizeListenMode = (value: unknown): QqListenMode =>
+    value === "loopback" || value === "wsl" || value === "custom" ? value : "auto";
 
   return {
     wechat: {
@@ -234,6 +270,21 @@ feishu: {
       // load 函数会先 decrypt 再返回；save 函数会自动 encrypt。
       appSecret: typeof f?.appSecret === "string" ? f?.appSecret : undefined,
     },
+    qq: {
+      enabled: safeBool(q?.enabled, false),
+      listenMode: normalizeListenMode(q?.listenMode),
+      customHost: typeof q?.customHost === "string" && q.customHost.trim()
+        ? q.customHost.trim()
+        : undefined,
+      port: safeNum(q?.port, 6200, 1, 65535),
+      accessToken: typeof q?.accessToken === "string" ? q.accessToken : undefined,
+      allowedPrivateUserIds: normalizeIds(q?.allowedPrivateUserIds),
+      allowedGroupIds: normalizeIds(q?.allowedGroupIds),
+      groupRequireMention: true,
+      groupReplyStyle: "reply-and-mention",
+      groupToolPolicy: "off",
+      groupMemoryPolicy: "shared-personal",
+    },
     inboundPort: safeNum(input?.inboundPort, 0, 0, 65535),
     sharedSecret: typeof input?.sharedSecret === "string" ? input.sharedSecret : "",
     rateLimitPerUser: safeNum(input?.rateLimitPerUser, 10, 1, 1000),
@@ -255,6 +306,9 @@ export function loadChannelsSettings(): ChannelsSettings {
     if (loaded.feishu.appSecret) {
       loaded.feishu.appSecret = decryptField(loaded.feishu.appSecret);
     }
+    if (loaded.qq.accessToken) {
+      loaded.qq.accessToken = decryptField(loaded.qq.accessToken);
+    }
     return loaded;
   } catch {
     return { ...DEFAULT_SETTINGS };
@@ -266,6 +320,7 @@ export function saveChannelsSettings(patch: Partial<ChannelsSettings>): Channels
   const merged: Partial<ChannelsSettings> = { ...existing, ...patch };
   if (patch.wechat) merged.wechat = { ...existing.wechat, ...patch.wechat };
   if (patch.feishu) merged.feishu = { ...existing.feishu, ...patch.feishu };
+  if (patch.qq) merged.qq = { ...existing.qq, ...patch.qq };
 
   // 私密字段加密边界：UI 传来的是明文，写盘前要 wrap
   // 避开"密文回传"场景：检测 enc:/obf:/plain: 前缀，避免重复加密。
@@ -273,6 +328,12 @@ export function saveChannelsSettings(patch: Partial<ChannelsSettings>): Channels
     const v = merged.feishu.appSecret;
     if (!v.startsWith(ENC_PREFIX) && !v.startsWith(OBF_PREFIX) && !v.startsWith(PLAIN_PREFIX)) {
       merged.feishu.appSecret = encryptField(v);
+    }
+  }
+  if (typeof merged.qq?.accessToken === "string" && merged.qq.accessToken) {
+    const v = merged.qq.accessToken;
+    if (!v.startsWith(ENC_PREFIX) && !v.startsWith(OBF_PREFIX) && !v.startsWith(PLAIN_PREFIX)) {
+      merged.qq.accessToken = encryptField(v);
     }
   }
 
@@ -289,6 +350,10 @@ export function saveChannelsSettings(patch: Partial<ChannelsSettings>): Channels
       ...final.feishu,
       appSecret: decryptField(final.feishu.appSecret ?? ""),
     },
+    qq: {
+      ...final.qq,
+      accessToken: decryptField(final.qq.accessToken ?? ""),
+    },
   };
   return out;
 }
@@ -297,6 +362,7 @@ export function saveChannelsSettings(patch: Partial<ChannelsSettings>): Channels
 export type ChannelConfigPatch = Partial<{
   wechat: Partial<WechatChannelConfig>;
   feishu: Partial<FeishuChannelConfig>;
+  qq: Partial<QqChannelConfig>;
   inboundPort: number;
   sharedSecret: string;
   rateLimitPerUser: number;
@@ -308,11 +374,12 @@ export type ChannelConfigPatch = Partial<{
 }>;
 
 /** 给定 channelId 返回对应的配置子集（用于 adapter 内部读取自己的开关）。 */
-export function getChannelConfig<K extends ChannelId>(
-  settings: ChannelsSettings,
-  channel: K,
-): K extends "wechat" ? WechatChannelConfig : FeishuChannelConfig {
-  return (settings[channel] as unknown) as K extends "wechat"
-    ? WechatChannelConfig
-    : FeishuChannelConfig;
+interface ChannelConfigMap {
+  wechat: WechatChannelConfig;
+  feishu: FeishuChannelConfig;
+  qq: QqChannelConfig;
+}
+
+export function getChannelConfig<K extends ChannelId>(settings: ChannelsSettings, channel: K): ChannelConfigMap[K] {
+  return settings[channel] as ChannelConfigMap[K];
 }

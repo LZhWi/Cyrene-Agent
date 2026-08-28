@@ -16,6 +16,7 @@ import { channelDispatcher } from "./dispatcher";
 import { startInboundServer, stopInboundServer } from "./inbound-server";
 import { FeishuAdapter } from "./adapters/feishu";
 import { ILinkBotAdapter, loadCredentials } from "./adapters/wechat/ilink-bot-adapter";
+import { NapCatAdapter } from "./adapters/qq/napcat-adapter";
 import { getRecentLog, clearLog } from "./message-log";
 import { logger, LogTag } from "../logger";
 
@@ -33,6 +34,19 @@ export function setChannelsConversationLifecycle(lifecycle: typeof conversationL
 }
 /** 微信 adapter 全局引用（UI 登录按钮需要） */
 let wxAdapter: ILinkBotAdapter | null = null;
+let qqAdapter: NapCatAdapter | null = null;
+
+function getPublicChannelsSettings(): Record<string, unknown> {
+  const settings = loadChannelsSettings();
+  return {
+    ...settings,
+    qq: {
+      ...settings.qq,
+      accessToken: undefined,
+      hasAccessToken: Boolean(settings.qq.accessToken),
+    },
+  };
+}
 
 /** app.whenReady() 调一次。idempotent。 */
 export async function initChannels(): Promise<void> {
@@ -70,6 +84,9 @@ export async function initChannels(): Promise<void> {
   wxAdapter = new ILinkBotAdapter();
   channelManager.register(wxAdapter);
 
+  qqAdapter = new NapCatAdapter(broadcastChannelsStatus);
+  channelManager.register(qqAdapter);
+
   // 启动所有已注册 adapter
   await channelManager.startAll();
 
@@ -86,10 +103,12 @@ export async function shutdownChannels(): Promise<void> {
 
 /** IPC 注册 */
 function registerChannelsIpc(): void {
-  ipcMain.handle(IPC.CHANNELS_GET_CONFIG, () => loadChannelsSettings());
+  ipcMain.handle(IPC.CHANNELS_GET_CONFIG, () => getPublicChannelsSettings());
 
   ipcMain.handle(IPC.CHANNELS_SAVE_CONFIG, (_e, patch: unknown) => {
-    return saveChannelsSettings(patch as Parameters<typeof saveChannelsSettings>[0]);
+    saveChannelsSettings(patch as Parameters<typeof saveChannelsSettings>[0]);
+    channelDispatcher.reloadSettings();
+    return getPublicChannelsSettings();
   });
 
   ipcMain.handle(IPC.CHANNELS_LIST, () => channelManager.listChannels());
@@ -216,6 +235,11 @@ function registerChannelsIpc(): void {
       ok: true,
       message: "长连接模式不需要公网 URL — SDK 已自动建立 WSS 连接",
     };
+  });
+
+  ipcMain.handle(IPC.CHANNELS_QQ_TEST_CONNECTION, async () => {
+    if (!qqAdapter) return { ok: false, error: "QQ adapter 未初始化" };
+    return await qqAdapter.testConnection();
   });
 
   // Phase 3.4：消息日志

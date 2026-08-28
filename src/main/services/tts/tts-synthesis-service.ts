@@ -31,6 +31,7 @@ import {
   readTtsCacheByKey,
 } from "../../tts/tts-cache";
 import type { TtsSessionExecution } from "../../tts/tts-session-service";
+import type { ChannelId } from "../../channels/types";
 
 export interface TtsSynthesisService {
   synthesizeSession(
@@ -42,7 +43,7 @@ export interface TtsSynthesisService {
   synthesizeChannelTts(
     text: string,
     cfg: GeneralSettings,
-    channel: "wechat" | "feishu",
+    channel: ChannelId,
   ): Promise<{
     audio: Buffer;
     format: TtsAudioFormat;
@@ -248,7 +249,7 @@ export function createTtsSynthesisService(): TtsSynthesisService {
   async function synthesizeChannelTts(
     text: string,
     cfg: GeneralSettings,
-    channel: "wechat" | "feishu",
+    channel: ChannelId,
   ): Promise<{
     audio: Buffer;
     format: TtsAudioFormat;

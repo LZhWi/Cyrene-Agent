@@ -35,10 +35,11 @@ export async function buildChannelAttachmentInputs(
           text: `【图片视觉信息】\n用户通过${channelName(msg.channel)}发送了图片：${name}\n${text}`,
         });
       }
-    } else if (item.kind === "file") {
+    } else if (item.kind === "file" || item.kind === "audio" || item.kind === "video") {
+      const label = item.kind === "audio" ? "语音" : item.kind === "video" ? "视频" : "文件";
       attachments.push({
         name,
-        text: `用户通过${channelName(msg.channel)}发送了文件：${item.filePath}`,
+        text: `用户通过${channelName(msg.channel)}发送了${label}：${item.filePath}`,
       });
     }
   }
@@ -53,6 +54,7 @@ function channelName(channel: IncomingMessage["channel"]): string {
   switch (channel) {
     case "wechat": return "微信";
     case "feishu": return "飞书";
+    case "qq": return "QQ";
     default: return channel;
   }
 }

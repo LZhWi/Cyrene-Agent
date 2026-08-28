@@ -102,12 +102,22 @@ class RateLimiter {
 }
 
 /** 计算一个稳定、匿名的 sessionId。 */
-export function makeSessionId(channel: ChannelId, senderId: string): string {
+export function makeSessionId(channel: ChannelId, chatId: string): string {
   const hash = createHash("sha256")
-    .update(`${channel}:${senderId}`)
+    .update(`${channel}:${chatId}`)
     .digest("hex")
     .slice(0, 16);
   return `channel:${channel}:${hash}`;
+}
+
+/** 给 Agent/历史使用的渠道用户文本；群聊必须保留发送者和引用上下文。 */
+export function formatChannelUserText(msg: IncomingMessage): string {
+  if (msg.chatType !== "group") return msg.text;
+  const sender = msg.senderName ? `${msg.senderName} (${msg.senderId})` : msg.senderId;
+  const reply = msg.reply?.text
+    ? `\n引用 ${msg.reply.senderName || msg.reply.senderId || "未知用户"}：${msg.reply.text}`
+    : "";
+  return `[群聊发送者：${sender}]${reply}\n${msg.text}`;
 }
 
 /** 记录 sessionId → 原始 senderId（用于调试 / 反查；不影响正常运行） */
@@ -239,7 +249,7 @@ export class ChannelDispatcher {
       return null;
     }
 
-    const sessionId = makeSessionId(msg.channel, msg.senderId);
+    const sessionId = makeSessionId(msg.channel, msg.chatId);
     recordSession(msg.channel, msg.senderId, sessionId);
     rememberProactiveChannelRecipient(msg, sessionId);
 
@@ -277,7 +287,7 @@ export class ChannelDispatcher {
 
     // Phase A2：入站消息落对话历史（下一步 LLM 取的滑窗数据源）
     try {
-      appendChannelHistory(sessionId, "user", msg.text);
+      appendChannelHistory(sessionId, "user", formatChannelUserText(msg));
     } catch (err) {
       console.warn(LOG, "appendHistory (incoming) 失败:", err);
     }
@@ -411,8 +421,15 @@ export class ChannelDispatcher {
     // 构造 OutgoingMessage，capability 降级
     const outgoing: OutgoingMessage = {
       channel: msg.channel,
+      chatType: msg.chatType ?? "private",
       targetId: msg.chatId,
       threadId: msg.threadId,
+      ...(msg.chatType === "group" && msg.messageId ? {
+        replyContext: {
+          messageId: msg.messageId,
+          mentionUserId: msg.senderId,
+        },
+      } : {}),
       parts,
     };
     return this.downgradeToCapability(outgoing, this.deps.manager.getAdapter(msg.channel)?.capability);
