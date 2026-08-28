@@ -39,11 +39,19 @@ describe("loadPromptFile in packaged builds", () => {
     expect(loadPromptFile("soul.md")).toBe("editable soul");
   });
 
-  it("falls back to the shipped defaults prompt", () => {
-    const defaults = path.join(root, "defaults", "prompts");
+  it("falls back to the shipped prompt beside Cyrene.exe", () => {
+    const defaults = path.join(root, "prompts");
     fs.mkdirSync(defaults, { recursive: true });
     fs.writeFileSync(path.join(defaults, "chat_system.md"), "default chat", "utf8");
 
     expect(loadPromptFile("chat_system.md")).toBe("default chat");
+  });
+
+  it("prefers a user prompt in userData over the shipped prompt", () => {
+    const userPrompts = path.join(root, "user-data", "prompts");
+    fs.mkdirSync(userPrompts, { recursive: true });
+    fs.writeFileSync(path.join(userPrompts, "soul.md"), "user soul\n", "utf8");
+
+    expect(loadPromptFile("soul.md")).toBe("user soul");
   });
 });

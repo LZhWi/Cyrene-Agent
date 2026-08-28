@@ -1,6 +1,8 @@
 import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, shell, dialog, globalShortcut } from "electron";
 import * as path from "path";
 import { ensureGpuSandboxAcl } from "./gpu-sandbox-acl";
+import { getExternalContentPaths } from "./external-content-paths";
+import { migrateStagedExternalContent } from "./external-content-migration";
 
 import { logger, LogTag } from "./logger";
 import { renderBanner } from "../shared/banner";
@@ -428,6 +430,13 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   const musicPaths = resolveMusicPaths();
   const musicBootstrap = bootstrapMusicService(musicPaths);
   installShutdownLatch(musicBootstrap);
+
+  // 升级迁移：把 NSIS 暂存的安装目录用户内容（prompts/skills）合并进 userData，
+  // 必须在任何 prompts/skills 读取（initSkills、prompt 加载）之前执行
+  migrateStagedExternalContent({
+    isPackaged: app.isPackaged,
+    ...getExternalContentPaths(),
+  });
 
   // Skill 系统：扫描双源 skills + 注册 meta-tool
   initSkills();

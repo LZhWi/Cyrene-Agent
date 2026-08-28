@@ -115,7 +115,10 @@ export function createAppUpdateService(options: CreateAppUpdateServiceOptions): 
     },
     install() {
       if (!isPackaged || state.phase !== "downloaded") return false;
-      updater.quitAndInstall(false, true);
+      // 静默安装：跳过 NSIS 完整向导，不再让用户选"为所有人/仅为我"，
+      // 避免 perMachine 切换导致安装目录漂移（旧目录被卸载器清空、新目录落到 C 盘）。
+      // 升级时安装目录里的用户内容由 NSIS 脚本（installer.nsh）暂存保护。
+      updater.quitAndInstall(true, true);
       return true;
     },
     onStateChanged(listener) {

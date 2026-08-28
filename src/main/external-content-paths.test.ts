@@ -41,7 +41,7 @@ describe("resolveExternalContentPaths", () => {
     expect(result.userSkillDirectories).toEqual([path.join(userData, "skills")]);
   });
 
-  it("uses editable folders beside the packaged executable before shipped defaults", () => {
+  it("keeps user-editable content in userData and shipped content beside the executable", () => {
     const installRoot = path.resolve("E:/Cyrene");
     const userData = path.resolve("E:/user-data");
 
@@ -53,15 +53,12 @@ describe("resolveExternalContentPaths", () => {
     });
 
     expect(result.promptDirectories).toEqual([
+      path.join(userData, "prompts"),
       path.join(installRoot, "prompts"),
-      path.join(installRoot, "defaults", "prompts"),
     ]);
     expect(result.builtinSkillDirectory).toBe(path.join(installRoot, "defaults", "skills"));
     expect(result.installSkillDirectory).toBe(path.join(installRoot, "skills"));
-    expect(result.userSkillDirectories).toEqual([
-      path.join(installRoot, "skills"),
-      path.join(userData, "skills"),
-    ]);
+    expect(result.userSkillDirectories).toEqual([path.join(userData, "skills")]);
   });
 });
 
