@@ -1,4 +1,4 @@
-﻿{
+{
   "compilerOptions": {
     "target": "ES2022",
     "module": "commonjs",
@@ -14,5 +14,5 @@
     "sourceMap": true
   },
   "include": ["src/main/**/*.ts", "src/shared/**/*.ts"],
-  "exclude": ["src/shared/renderer-base.ts"]
+  "exclude": ["src/shared/renderer-base.ts", "src/main/**/*.test.ts"]
 }
