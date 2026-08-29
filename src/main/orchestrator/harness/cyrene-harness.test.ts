@@ -1,12 +1,12 @@
 /**
- * Task 1 (P0-A) 失败测试：移除 Runtime-owned completion workflow
+ * CyreneHarness 完成语义测试：模型不再调用工具时立即结束
  *
- * 验收不变量（plan §Acceptance Invariants 第 1、2、10 条）：
+ * 验收不变量：
  * - Model no-tool response -> final immediately
  * - Runtime has no continue_agent settlement
  * - UncertainEffectGuard never blocks honest final
  *
- * 这里只断言 P0-A 的核心：模型不再调用工具时立即结束，
+ * 核心断言：模型不再调用工具时立即结束，
  * Runtime 不再因 completionObligations 或 uncertainEffects 否决 final。
  */
 
@@ -203,7 +203,7 @@ function mutationTool(id = "write_file"): ToolDefinition {
 
 // ── Tests ──────────────────────────────────────────────
 
-describe("CyreneHarness completion (P0-A)", () => {
+describe("CyreneHarness completion", () => {
   beforeEach(() => {
     mockedDispatch.mockReset();
     fakeStreamChatWithSdk.mockClear();
@@ -610,8 +610,8 @@ describe("CyreneHarness completion (P0-A)", () => {
   });
 
   it("passes live transcript references to onCheckpoint instead of cloning", async () => {
-    // 问题 5 P0：harness 侧 deepClone 删除，克隆契约移交给消费方
-    // （run-store / task-session-store 在回调返回前同步 clone）。
+    // 克隆契约：harness 侧不 deepClone，传活引用，
+    // 由消费方（run-store / task-session-store）在回调返回前同步 clone。
     const { fn: fetchMock } = fakeFetchSequencer([
       assistantResponse({ toolCalls: [mutationToolCall("call-1")] }),
       assistantResponse({ text: "完成。" }),
@@ -784,7 +784,7 @@ describe("CyreneHarness completion (P0-A)", () => {
     expect(checkpoints.some((checkpoint) => checkpoint.messages.some((message) => message.role === "tool"))).toBe(true);
     expect(checkpoints.some((checkpoint) => checkpoint.toolOutputs?.[0]?.toolCallId === "checkpoint-call")).toBe(true);
     expect(checkpoints.at(-1)).toMatchObject({ rounds: 1 });
-    // 问题 5 P0 契约反转：Harness 传活引用（不再克隆），隔离由消费方 clone 保证。
+    // 克隆契约：Harness 传活引用（不克隆），隔离由消费方 clone 保证。
     // run 结束后 Harness 不再持有 transcript，消费方回调内同步克隆即可保证不串扰。
     expect(checkpoints.at(-1)?.messages).toBe(checkpoints.at(-2)?.messages);
   });
