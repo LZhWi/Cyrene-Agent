@@ -24,6 +24,9 @@ export function exposeMusicApi() {
     playbackStop: () => ipcRenderer.invoke(IPC.MUSIC_PLAYBACK_STOP),
     playbackNext: () => ipcRenderer.invoke(IPC.MUSIC_PLAYBACK_NEXT),
     playbackPrev: () => ipcRenderer.invoke(IPC.MUSIC_PLAYBACK_PREV),
+    getPlaybackSession: () => ipcRenderer.invoke(IPC.MUSIC_GET_PLAYBACK_SESSION),
+    playSessionTrack: (payload: unknown) => ipcRenderer.invoke(IPC.MUSIC_PLAY_SESSION_TRACK, payload),
+    syncPlaybackSession: (payload: unknown) => ipcRenderer.invoke(IPC.MUSIC_SYNC_PLAYBACK_SESSION, payload),
     getLyrics: (encryptedId: string) => ipcRenderer.invoke(IPC.MUSIC_GET_LYRICS, { encryptedId }),
     toggleFavorite: (encryptedId: string, favorite: boolean) =>
       ipcRenderer.invoke(IPC.MUSIC_TOGGLE_FAVORITE, { encryptedId, favorite }),
@@ -51,6 +54,11 @@ export function exposeMusicApi() {
       const listener = (_: unknown, s: unknown) => h(s);
       ipcRenderer.on(IPC.MUSIC_PLAYBACK_STATE, listener);
       return () => ipcRenderer.removeListener(IPC.MUSIC_PLAYBACK_STATE, listener);
+    },
+    onPlaybackSessionChanged: (h: (s: unknown) => void) => {
+      const listener = (_: unknown, s: unknown) => h(s);
+      ipcRenderer.on(IPC.MUSIC_PLAYBACK_SESSION_CHANGED, listener);
+      return () => ipcRenderer.removeListener(IPC.MUSIC_PLAYBACK_SESSION_CHANGED, listener);
     },
     onCacheUpdated: (h: () => void) => {
       const listener = () => h();

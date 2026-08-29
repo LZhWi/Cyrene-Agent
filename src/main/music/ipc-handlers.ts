@@ -160,6 +160,21 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
   ipcMain.handle(IPC.MUSIC_PLAYBACK_PREV, () => wrap(() => service.playbackPrev(), service));
   channels.push(IPC.MUSIC_PLAYBACK_PREV);
 
+  ipcMain.handle(IPC.MUSIC_GET_PLAYBACK_SESSION, () =>
+    wrap(async () => service.getPlaybackSession(), service),
+  );
+  channels.push(IPC.MUSIC_GET_PLAYBACK_SESSION);
+
+  ipcMain.handle(IPC.MUSIC_PLAY_SESSION_TRACK, (_e, payload) =>
+    wrap(() => service.playSessionTrack(payload), service),
+  );
+  channels.push(IPC.MUSIC_PLAY_SESSION_TRACK);
+
+  ipcMain.handle(IPC.MUSIC_SYNC_PLAYBACK_SESSION, (_e, payload) =>
+    wrap(async () => service.syncPlaybackSession(payload), service),
+  );
+  channels.push(IPC.MUSIC_SYNC_PLAYBACK_SESSION);
+
   // ── UI 直连：歌词（不经 AI 工具层） ─────────────────────────
   const lyricsCache = new LyricsCache(service.getLyricsCacheDir());
   ipcMain.handle(IPC.MUSIC_GET_LYRICS, (_e, payload: { encryptedId: string }) =>
@@ -223,6 +238,11 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
       if (!win.isDestroyed()) win.webContents.send(IPC.MUSIC_PLAYBACK_STATE, playback);
     }
   });
+  const unsubPlaybackSession = service.onPlaybackSessionChange((session) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(IPC.MUSIC_PLAYBACK_SESSION_CHANGED, session);
+    }
+  });
   // 缓存索引变化（下载完成/删除/导入）→ 广播，渲染进程刷新缓存歌单
   const unsubCache = service.onCacheUpdated(() => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -234,6 +254,7 @@ export function registerMusicIpcHandlers(service: MusicService): () => void {
     for (const ch of channels) ipcMain.removeHandler(ch);
     unsubState();
     unsubPlayback();
+    unsubPlaybackSession();
     unsubCache();
   };
 }

@@ -379,6 +379,10 @@ export const IPC = {
   MUSIC_PLAYBACK_NEXT: "music:playback:next",
   MUSIC_PLAYBACK_PREV: "music:playback:prev",
   MUSIC_PLAYBACK_STATE: "music:playback:state", // main → renderer push
+  MUSIC_GET_PLAYBACK_SESSION: "music:playback-session:get",
+  MUSIC_PLAY_SESSION_TRACK: "music:playback-session:play",
+  MUSIC_SYNC_PLAYBACK_SESSION: "music:playback-session:sync",
+  MUSIC_PLAYBACK_SESSION_CHANGED: "music:playback-session:changed",
   // UI direct connect (renderer → main, not via AI tool layer)
   MUSIC_GET_LYRICS: "music:get-lyrics",
   MUSIC_TOGGLE_FAVORITE: "music:toggle-favorite",

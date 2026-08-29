@@ -49,7 +49,11 @@ const mpvMocks = vi.hoisted(() => ({
     position: 0, duration: 0, volume: 70,
   })),
   isReady: vi.fn(() => true),
-  onStateChange: vi.fn(() => () => {}),
+  listeners: new Set<(state: Record<string, unknown>) => void>(),
+  onStateChange: vi.fn((listener: (state: Record<string, unknown>) => void) => {
+    mpvMocks.listeners.add(listener);
+    return () => mpvMocks.listeners.delete(listener);
+  }),
 }));
 
 // Mock OpenapiConfigStore to always return valid config (skips real disk I/O).
@@ -195,6 +199,7 @@ beforeEach(() => {
   cacheState.inFlight.clear();
   cacheState.records.clear();
   cacheState.updatedListeners.clear();
+  mpvMocks.listeners.clear();
   // Default: restoreSession finds no token → signed_out.
   mocks.loginAnonymous.mockResolvedValue({ accessToken: "anon", refreshToken: "", expireTime: 86400 });
 });
@@ -209,6 +214,10 @@ const PATHS = {
 
 function makeService(): MusicService {
   return new MusicService(PATHS);
+}
+
+function emitMpvState(state: Record<string, unknown>): void {
+  for (const listener of mpvMocks.listeners) listener(state);
 }
 
 const songRec = (overrides: Partial<Record<string, unknown>> = {}) => ({
@@ -333,6 +342,75 @@ describe("MusicService (M3 OpenAPI)", () => {
     expect(r.state).toBe("dispatched");
     expect(mpvMocks.load).toHaveBeenCalledWith("C:/cache/enc.mp3", "replace");
     expect(mocks.getSongDetail).not.toHaveBeenCalled();
+  });
+
+  it("continues a cached list-loop session after the player window has closed", async () => {
+    mocks.getSongDetail.mockImplementation(async (id: string) => ({
+      name: id === ENC ? "第一首" : "末曲",
+      playUrl: `http://x/${id}.mp3`,
+    }));
+    const s = makeService();
+    await s.start();
+    await s.playSessionTrack({
+      queue: [
+        { id: ENC, name: "第一首", artists: [] },
+        { id: ENC2, name: "末曲", artists: [] },
+      ],
+      queueIndex: 1,
+      playbackMode: "all",
+      playlistId: "__local_cache__",
+    });
+    mpvMocks.load.mockClear();
+
+    emitMpvState({
+      eofReached: true,
+      track: { encryptedId: ENC2, name: "末曲", artists: [] },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mpvMocks.load).toHaveBeenCalledWith(`http://x/${ENC}.mp3`, "replace");
+  });
+
+  it("replays one-song mode once for repeated EOF reports", async () => {
+    mocks.getSongDetail.mockResolvedValue({ name: "晴天", playUrl: `http://x/${ENC}.mp3` });
+    const s = makeService();
+    await s.start();
+    await s.playSessionTrack({
+      queue: [{ id: ENC, name: "晴天", artists: [] }],
+      queueIndex: 0,
+      playbackMode: "one",
+      playlistId: "playlist-1",
+    });
+    mpvMocks.load.mockClear();
+
+    emitMpvState({ eofReached: true, track: { encryptedId: ENC, name: "晴天", artists: [] } });
+    emitMpvState({ eofReached: true, track: { encryptedId: ENC, name: "晴天", artists: [] } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mpvMocks.load).toHaveBeenCalledTimes(1);
+    expect(mpvMocks.load).toHaveBeenCalledWith(`http://x/${ENC}.mp3`, "replace");
+  });
+
+  it("rejects malformed playback-session input with a domain error", async () => {
+    const s = makeService();
+    await expect(s.playSessionTrack(null as unknown as Parameters<typeof s.playSessionTrack>[0]))
+      .rejects.toMatchObject({ code: "E_PLAYBACK_SESSION_INVALID" });
+    expect(() => s.syncPlaybackSession({
+      queue: [{ id: ENC, name: "晴天", artists: [] }],
+      queueIndex: 1,
+      playbackMode: "all",
+      playlistId: "playlist-1",
+    })).toThrow(expect.objectContaining({ code: "E_PLAYBACK_QUEUE_INDEX_INVALID" }));
+  });
+
+  it("keeps an idle queue whose selected index is -1", () => {
+    const s = makeService();
+    expect(s.syncPlaybackSession({
+      queue: [{ id: ENC, name: "晴天", artists: [] }],
+      queueIndex: -1,
+      playbackMode: "all",
+      playlistId: "playlist-1",
+    })).toMatchObject({ queueIndex: -1, queue: [{ id: ENC }] });
   });
 
   it("removeCachedTrack rejects when track is playing (E_CACHE_TRACK_PLAYING)", async () => {

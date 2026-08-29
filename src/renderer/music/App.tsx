@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Minus, X } from "lucide-react";
 import MusicPlayer from "./components/MusicPlayer";
 import LoadingScreen from "./components/LoadingScreen";
+import { getNextQueueIndex } from "./playback-queue";
 import type { PlaybackState as MpvPlaybackState } from "../../shared/music-types";
 import type {
   Playlist,
@@ -26,6 +27,9 @@ interface MusicApi {
   playbackToggle: () => Promise<MusicIpcResult<unknown>>;
   playbackSeek: (seconds: number) => Promise<MusicIpcResult<unknown>>;
   playbackVolume: (vol: number) => Promise<MusicIpcResult<unknown>>;
+  getPlaybackSession: () => Promise<MusicIpcResult<unknown>>;
+  playSessionTrack: (payload: unknown) => Promise<MusicIpcResult<unknown>>;
+  syncPlaybackSession: (payload: unknown) => Promise<MusicIpcResult<unknown>>;
   getLyrics: (encryptedId: string) => Promise<MusicIpcResult<unknown>>;
   toggleFavorite: (encryptedId: string, favorite: boolean) => Promise<MusicIpcResult<unknown>>;
   getCachedTracks: () => Promise<MusicIpcResult<unknown>>;
@@ -35,6 +39,7 @@ interface MusicApi {
   closeWindow: () => void;
   openSettings: (section?: string) => Promise<unknown>;
   onPlaybackState: (h: (s: unknown) => void) => (() => void) | void;
+  onPlaybackSessionChanged: (h: (s: unknown) => void) => (() => void) | void;
   onStateChanged: (h: (s: unknown) => void) => (() => void) | void;
   onCacheUpdated: (h: () => void) => (() => void) | void;
 }
@@ -58,6 +63,12 @@ interface BackendPlaylist {
   trackCount: number;
   tracks?: BackendTrack[];
 }
+interface BackendPlaybackSession {
+  queue: BackendTrack[];
+  queueIndex: number;
+  playbackMode: PlaybackMode;
+  playlistId: string;
+}
 
 function normalizeTrack(t: BackendTrack): Track {
   return {
@@ -80,6 +91,19 @@ function normalizePlaylist(p: BackendPlaylist): Playlist {
     coverImgUrl: p.coverUrl,
     trackCount: p.trackCount,
     tracks: [],
+  };
+}
+
+function toSessionTrack(track: Track): BackendTrack {
+  return {
+    id: track.encryptedId,
+    encryptedId: track.encryptedId,
+    originalId: track.originalId,
+    name: track.name,
+    artists: track.artists,
+    album: track.album,
+    durationMs: track.durationMs,
+    coverUrl: track.coverImgUrl,
   };
 }
 
@@ -167,7 +191,6 @@ export function App() {
   // 播完一次性标记（eof-reached 触发，防重复路由）；换曲时重置
   const endedRef = useRef(false);
   const lastTrackIdRef = useRef<string>("");
-  const [endedTick, setEndedTick] = useState(0);
 
   // 最新 state / activePlaylistId 的 ref（播完路由 effect 里读，避免闭包陷阱）
   const stateRef = useRef(state);
@@ -324,7 +347,6 @@ export function App() {
         mpv.eofReached === true || (mpv.paused === true && atTail && mpv.loaded !== false);
       if (ended && !endedRef.current && trackId) {
         endedRef.current = true;
-        setEndedTick((n) => n + 1);
       }
     });
     return () => {
@@ -332,26 +354,29 @@ export function App() {
     };
   }, [api, fetchLyrics]);
 
-  // ── 播完路由：单曲循环重播 / 缓存歌单自动连播 / 只放一次停在结尾 ──
+  const applyPlaybackSession = useCallback((raw: unknown) => {
+    const session = raw as Partial<BackendPlaybackSession>;
+    if (!Array.isArray(session.queue) || typeof session.queueIndex !== "number" || !session.playbackMode) return;
+    const queue = session.queue.map(normalizeTrack);
+    const currentTrack = queue[session.queueIndex] ?? null;
+    setState((s) => ({ ...s, queue, queueIndex: session.queueIndex!, playbackMode: session.playbackMode!, currentTrack }));
+    if (typeof session.playlistId === "string") setActivePlaylistId(session.playlistId);
+  }, []);
+
   useEffect(() => {
-    if (endedTick === 0) return;
-    const s = stateRef.current;
-    if (!s.currentTrack) return;
-    if (s.playbackMode === "one") {
-      playTrack(s.currentTrack);
-      return;
-    }
-    const isCache = activePlaylistIdRef.current === LOCAL_CACHE_PLAYLIST_ID;
-    if (isCache && (s.playbackMode === "all" || s.playbackMode === "shuffle")) {
-      const ni = computeNextIndex(s);
-      if (ni >= 0) {
-        const t = s.queue[ni];
-        if (t) playTrack(t);
-      }
-    }
-    // off（只放一次）→ 停在结尾，播放键可点重播
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [endedTick]);
+    if (!api) return;
+    let receivedSessionPush = false;
+    const unsub = api.onPlaybackSessionChanged?.((session) => {
+      receivedSessionPush = true;
+      applyPlaybackSession(session);
+    });
+    void api.getPlaybackSession().then((r) => {
+      if (!receivedSessionPush && r.ok && r.data) applyPlaybackSession(r.data);
+    }).catch(() => { /* session restore is optional */ });
+    return () => {
+      if (typeof unsub === "function") unsub();
+    };
+  }, [api, applyPlaybackSession]);
 
   // ── 订阅 music 状态（检测登录态） ──────────────────────────
   useEffect(() => {
@@ -514,17 +539,21 @@ export function App() {
         loadingTimer.current = null;
       }, 3000);
 
-      setState((s) => {
-        const idx = s.queue.findIndex((t) => t.encryptedId === track.encryptedId);
-        if (idx >= 0) {
-          return { ...s, currentTrack: s.queue[idx], queueIndex: idx, durationMs: s.queue[idx].durationMs ?? 0 };
-        }
-        // 不在 queue → 追加队尾
-        const queue = [...s.queue, { ...track }];
-        return { ...s, queue, currentTrack: track, queueIndex: queue.length - 1, durationMs: track.durationMs ?? 0 };
-      });
+      const current = stateRef.current;
+      const existingIndex = current.queue.findIndex((t) => t.encryptedId === track.encryptedId);
+      const queue = existingIndex >= 0 ? current.queue : [...current.queue, { ...track }];
+      const queueIndex = existingIndex >= 0 ? existingIndex : queue.length - 1;
+      const currentTrack = queue[queueIndex] ?? track;
+      setState((s) => ({ ...s, queue, queueIndex, currentTrack, durationMs: currentTrack.durationMs ?? 0 }));
 
-      void api.playTrack(track.encryptedId).catch((err) => {
+      void api.playSessionTrack({
+        queue: queue.map(toSessionTrack),
+        queueIndex,
+        playbackMode: current.playbackMode,
+        playlistId: activePlaylistIdRef.current,
+      }).then((r) => {
+        if (!r.ok) throw new Error(r.errorCode ?? "E_PLAYBACK_FAILED");
+      }).catch((err) => {
         patch({ isLoading: false, error: "播放失败：" + (err instanceof Error ? err.message : String(err)) });
       });
 
@@ -536,7 +565,6 @@ export function App() {
 
   // ── 计算下一首/上一首索引 ──────────────────────────────────
   const computeNextIndex = useCallback((s: PlaybackState): number => {
-    if (s.queue.length === 0) return -1;
     if (s.playbackMode === "shuffle" && s.queue.length > 1) {
       let ni: number;
       do {
@@ -544,9 +572,11 @@ export function App() {
       } while (ni === s.queueIndex);
       return ni;
     }
-    const atEnd = s.queueIndex >= s.queue.length - 1;
-    if (atEnd) return s.playbackMode === "all" ? 0 : -1;
-    return s.queueIndex + 1;
+    return getNextQueueIndex({
+      queueLength: s.queue.length,
+      queueIndex: s.queueIndex,
+      playbackMode: s.playbackMode,
+    });
   }, []);
 
   const computePrevIndex = useCallback((s: PlaybackState): number => {
@@ -614,28 +644,40 @@ export function App() {
         }
       },
       addToQueue(track) {
-        setState((s) =>
-          s.queue.some((t) => t.encryptedId === track.encryptedId)
-            ? s
-            : { ...s, queue: [...s.queue, { ...track }] },
-        );
+        const current = stateRef.current;
+        if (current.queue.some((t) => t.encryptedId === track.encryptedId)) return;
+        const queue = [...current.queue, { ...track }];
+        setState((s) => ({ ...s, queue }));
+        void api?.syncPlaybackSession({
+          queue: queue.map(toSessionTrack),
+          queueIndex: current.queueIndex,
+          playbackMode: current.playbackMode,
+          playlistId: activePlaylistIdRef.current,
+        });
       },
       removeFromQueue(index) {
-        setState((s) => {
-          const queue = s.queue.filter((_, i) => i !== index);
-          let queueIndex = s.queueIndex;
-          let currentTrack = s.currentTrack;
-          let isPlaying = s.isPlaying;
-          let positionMs = s.positionMs;
-          if (index < s.queueIndex) queueIndex -= 1;
-          if (index === s.queueIndex) {
-            // 删的是当前播放项 → 停止播放
-            currentTrack = null;
-            isPlaying = false;
-            positionMs = 0;
-            queueIndex = Math.min(queueIndex, queue.length - 1);
-          }
-          return { ...s, queue, queueIndex, currentTrack, isPlaying, positionMs };
+        const current = stateRef.current;
+        if (index < 0 || index >= current.queue.length) return;
+        const queue = current.queue.filter((_, i) => i !== index);
+        let queueIndex = current.queueIndex;
+        let currentTrack = current.currentTrack;
+        let isPlaying = current.isPlaying;
+        let positionMs = current.positionMs;
+        const removedCurrent = index === current.queueIndex;
+        if (index < queueIndex) queueIndex -= 1;
+        if (removedCurrent) {
+          currentTrack = null;
+          isPlaying = false;
+          positionMs = 0;
+          queueIndex = Math.min(queueIndex, queue.length - 1);
+          void api?.playbackStop();
+        }
+        setState((s) => ({ ...s, queue, queueIndex, currentTrack, isPlaying, positionMs }));
+        void api?.syncPlaybackSession({
+          queue: queue.map(toSessionTrack),
+          queueIndex,
+          playbackMode: current.playbackMode,
+          playlistId: activePlaylistIdRef.current,
         });
       },
       loadPlaylist(playlist) {
@@ -649,6 +691,13 @@ export function App() {
         const idx = set.indexOf(state.playbackMode);
         const next = set[(idx + 1) % set.length];
         patch({ playbackMode: next });
+        const current = stateRef.current;
+        void api?.syncPlaybackSession({
+          queue: current.queue.map(toSessionTrack),
+          queueIndex: current.queueIndex,
+          playbackMode: next,
+          playlistId: activePlaylistId,
+        });
         if (isCache) {
           persistedCacheRef.current = next;
           savePersistedMode(LS_MODE_CACHE, next);
