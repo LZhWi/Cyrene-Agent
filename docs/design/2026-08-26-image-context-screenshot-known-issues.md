@@ -11,6 +11,7 @@
 | --- | --- |
 | v1（2026-08-26） | 初版调研 + 修法 |
 | v2（2026-08-26） | 按外部 review 修订：① 问题 1 改为 capability 驱动（MiniMax `/anthropic` 按官方公开文档不支持 `type:image`，不能按协议假定能力）；② 问题 2 删除 `/750 + 1600` 硬编码，改为统一 estimator + 保守回退（协议 ≠ tokenizer）；③ 问题 3 撤回「无需前端改动」（已核实前端写入依赖 run 上下文的 `assistantId`），补 session 级状态长期方案；④ 问题 4 补 MIME 白名单 / 大小限制 / preventDefault 细节 |
+| v3（2026-08-29） | **修复核实关闭**：四个问题全部核实已修，状态表改为「已修」，各问题节头补修复证据。核实方式为静态代码走读（与本文调研同方法），GameBot 设计稿（`gamebot-Honkai-Star-Rail.md` §8.1）依赖此结论解除 P0 阻塞 |
 
 **贯穿性设计原则**（本次 review 的核心结论）：
 
@@ -22,16 +23,21 @@
 
 ## 问题总览
 
-| # | 问题 | 严重度 | 状态 |
+| # | 问题 | 严重度 | 状态（2026-08-29 核实） |
 | --- | --- | --- | --- |
-| 1 | Anthropic 协议发图 400：`image_url` 块未转换透传 + MiniMax `/anthropic` 端点本身不支持 image block | 高（功能不可用） | 待修 |
-| 2 | 图片按 base64 文本计量 token，虚高约百倍，连带误触发自动压缩 | 高（连带伤害） | 待修 |
-| 3 | 手动压缩后上下文环形图不刷新，需再对话一次才更新 | 中（体验 + 架构隐患） | 待修 |
-| 4 | 截图功能半成品：粘贴未实现、失败静默、multimodal 默认关 | 中 | 待修 |
+| 1 | Anthropic 协议发图 400：`image_url` 块未转换透传 + MiniMax `/anthropic` 端点本身不支持 image block | 高（功能不可用） | **已修** |
+| 2 | 图片按 base64 文本计量 token，虚高约百倍，连带误触发自动压缩 | 高（连带伤害） | **已修** |
+| 3 | 手动压缩后上下文环形图不刷新，需再对话一次才更新 | 中（体验 + 架构隐患） | **已修** |
+| 4 | 截图功能半成品：粘贴未实现、失败静默、multimodal 默认关 | 中 | **已修** |
 
 ---
 
 ## 问题 1（严重）：Anthropic 协议发不了图，OpenAI / Responses 正常
+
+> **✅ 已修**（2026-08-29 核实）：`orchestrator/vendors/anthropic-adapter.ts:60-105` 已实现
+> `image_url` → Anthropic `source.type=base64` / `source.type=url` 转换，带四种 MIME 白名单
+> （png/jpeg/webp/gif）与降级保护（不在白名单降级为文本而非发坏请求），并附 `[image-send]`
+> wire 链路诊断日志。
 
 **现象**：工具模式（Harness）带图发送直接报错：
 
@@ -193,6 +199,11 @@ Anthropic 入口 + 独立视觉 caption——修完后两条都通。
 
 ## 问题 2（严重）：图片按 base64 文本计量 token，虚高约百倍，连带误触发自动压缩
 
+> **✅ 已修**（2026-08-29 核实）：`orchestrator/context-manager.ts:47-70` 新增
+> `estimateMessageContentTokens`——图片块不再按 base64 字符计，改用固定保守回退
+> `DEFAULT_IMAGE_TOKEN_ESTIMATE = 4096`（单图现实区间 1k~5k，压缩安全判定宁高估不低估），
+> `estimateMessageTokens` 与 `buildContextUsageSnapshot` 共用此函数，计量与压缩判定口径统一。
+
 **现象**：带一张截图后，上下文环形图用量暴涨（长 JSON 占据夸张上下文）。
 
 **根因**：计量层把图片块当普通文本估算。
@@ -264,6 +275,11 @@ Anthropic 入口 + 独立视觉 caption——修完后两条都通。
 
 ## 问题 3（中）：手动压缩后环形图不刷新，需再对话一次
 
+> **✅ 已修**（2026-08-29 核实）：已按 v2 方案落地 session 级状态——
+> `ChatPage.tsx:2282-2285` 环形图取值改为「session 级快照优先（手动压缩等不产生新消息的
+> 操作也即时刷新），消息级快照兜底兼容旧数据」；配套实现见
+> `docs/context-usage-viewer-construction-plan.md`。
+
 **现象**：点环形图菜单里的"整理"压缩成功后，环形图数据不变；再发一条消息才更新。
 
 **根因**：环形图数据寄生在 assistant 消息上，只在 LLM 请求轮次产出。
@@ -315,6 +331,11 @@ run 轮次产生的快照同时写两处；所有改变上下文构成的操作�
 ---
 
 ## 问题 4（中）：截图功能半成品（四个子项）
+
+> **✅ 已修**（2026-08-29 核实，按子项）：
+> - 粘贴：`ChatComposer.tsx:283` `handlePaste` 已实现（区分文字/图片粘贴，不吞用户文字，委托 `handlePastedImage` 处理大小与临时文件）；
+> - multimodal 默认关：已随 API 档案化解除（commit `5f5c7cd`），`orchestrator/build-options.ts:773` `settings.multimodal !== false` 才直发视觉，跟随档案显式关闭才不发；
+> - 失败静默：发图链路补诊断日志（adapter `[image-send]` 三级统计 + commit `051d388` 截图捕获几何与后端诊断日志），不再无声失败。
 
 | 子项 | 现状 | 结论 |
 | --- | --- | --- |
