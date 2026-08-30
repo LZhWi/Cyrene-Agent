@@ -87,6 +87,24 @@ describe("startShell", () => {
     expect(shell.loadingShownAt).toBe(1234);
   });
 
+  it("exposes loadingShownAt recorded after startShell returned", async () => {
+    // Loading 的 ready-to-show 是异步事件：onShown 晚于 startShell resolve 才触发。
+    // ShellResult 必须用 getter 实时读取，否则 core 阶段拿到 undefined 快照，
+    // 最短展示时长会被整体跳过（回归测试）。
+    const deps = makeShellDeps();
+    let fireShown: ((at: number) => void) | undefined;
+    vi.mocked(deps.createSplashWindow).mockImplementation(({ onShown }) => {
+      fireShown = onShown;
+      return deps.splashWindow as never;
+    });
+
+    const shell = await startShell(deps);
+    expect(shell.loadingShownAt).toBeUndefined();
+
+    fireShown?.(5678);
+    expect(shell.loadingShownAt).toBe(5678);
+  });
+
   it("routes tray actions through the activation broker", async () => {
     const deps = makeShellDeps();
     await startShell(deps);

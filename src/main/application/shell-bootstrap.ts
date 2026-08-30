@@ -157,7 +157,11 @@ export async function startShell(deps: ShellDependencies): Promise<ShellResult> 
   return {
     ipc,
     splashWindow,
-    loadingShownAt,
+    // Loading 的 ready-to-show 是异步事件，可能晚于本函数返回；必须用 getter 实时读取，
+    // 否则 core 阶段拿到的是 undefined 快照，最短展示时长会被跳过。
+    get loadingShownAt() {
+      return loadingShownAt;
+    },
     windowManager,
     chat,
     tray,
