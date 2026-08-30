@@ -1,10 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { revealStartupWindows } from "./startup-window-reveal";
 
 interface FakeWindow {
   close(): void;
   isDestroyed(): boolean;
-  isVisible(): boolean;
   show(): void;
 }
 
@@ -19,7 +18,6 @@ function createFakeWindow(initiallyVisible = false): FakeWindow & {
       state.visible = false;
     },
     isDestroyed: () => state.destroyed,
-    isVisible: () => state.visible,
     show: () => {
       state.visible = true;
     },
@@ -27,36 +25,59 @@ function createFakeWindow(initiallyVisible = false): FakeWindow & {
 }
 
 describe("revealStartupWindows", () => {
-  it("keeps the pet hidden when startup finishes with petVisible disabled", () => {
+  it("closes Loading and shows the chat window", async () => {
     const splashWindow = createFakeWindow(true);
-    const petWindow = createFakeWindow(false);
-    let startupReady = false;
+    const chatWindow = createFakeWindow(false);
 
-    revealStartupWindows({
+    await revealStartupWindows({
       splashWindow,
-      petWindow,
-      petVisible: false,
-      markStartupReady: () => {
-        startupReady = true;
-      },
+      chatWindow,
+      minimumDurationMs: 0,
     });
 
-    expect(splashWindow.state).toEqual({ destroyed: true, visible: false });
-    expect(petWindow.state).toEqual({ destroyed: false, visible: false });
-    expect(startupReady).toBe(true);
+    expect(splashWindow.state.destroyed).toBe(true);
+    expect(chatWindow.state.visible).toBe(true);
   });
 
-  it("shows the pet when startup finishes with petVisible enabled", () => {
-    const splashWindow = createFakeWindow(true);
-    const petWindow = createFakeWindow(false);
+  it("waits only the remaining duration since Loading was actually shown", async () => {
+    vi.useFakeTimers();
+    try {
+      const splashWindow = createFakeWindow(true);
+      const chatWindow = createFakeWindow(false);
+      // Loading 已显示 2000ms，最短 2500ms → 只剩 500ms
+      const revealed = revealStartupWindows({
+        splashWindow,
+        chatWindow,
+        loadingShownAt: 1000,
+        minimumDurationMs: 2500,
+        now: () => 3000,
+      });
+      let settled = false;
+      void revealed.then(() => { settled = true; });
+      await vi.advanceTimersByTimeAsync(499);
+      expect(settled).toBe(false);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(true);
+      expect(splashWindow.state.destroyed).toBe(true);
+      expect(chatWindow.state.visible).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-    revealStartupWindows({
-      splashWindow,
-      petWindow,
-      petVisible: true,
-      markStartupReady: () => {},
+  it("skips the minimum delay when Loading was never shown", async () => {
+    const chatWindow = createFakeWindow(false);
+    const sleep = vi.fn(async () => undefined);
+
+    await revealStartupWindows({
+      splashWindow: null,
+      chatWindow,
+      loadingShownAt: undefined,
+      minimumDurationMs: 2500,
+      sleep,
     });
 
-    expect(petWindow.state.visible).toBe(true);
+    expect(sleep).not.toHaveBeenCalled();
+    expect(chatWindow.state.visible).toBe(true);
   });
 });

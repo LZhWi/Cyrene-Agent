@@ -220,7 +220,7 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
   // 解构会捕获 null 并导致后续 ?. 永远短路，按钮点了打不开窗口。
   ipcMain.handle(IPC.CHATS_OPEN_IN_REACT_WINDOW, (_event, sessionId: string) => {
     if (typeof sessionId !== "string" || sessionId.trim().length === 0) return false;
-    deps.windowManager?.createReactChatWindow(sessionId);
+    void deps.windowManager?.openReactChatWindow(sessionId);
     return true;
   });
 

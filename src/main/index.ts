@@ -211,7 +211,7 @@ const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2
 // activation broker 与 readiness 的装配留待 composition-root 任务接入。
 function requestWindowActivation(request: WindowActivationRequest): void {
   switch (request.kind) {
-    case "chat": windowManager?.createReactChatWindow(); break;
+    case "chat": void windowManager?.openReactChatWindow(); break;
     case "sidebar": windowManager?.createSidebarWindow(); break;
     case "settings": windowManager?.createSettingsWindow(); break;
     case "music": windowManager?.createMusicPlayerWindow(); break;
@@ -508,8 +508,11 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
 
   // 先显示启动闪屏窗口，再初始化其他窗口。
   const SPLASH_MIN_MS = 2500;
-  const splashStartedAt = Date.now();
-  const splashWindow = createSplashWindow({ isDev });
+  let splashLoadingShownAt: number | undefined;
+  const splashWindow = createSplashWindow({
+    isDev,
+    onShown: (at) => { splashLoadingShownAt = at; },
+  });
 
   const manager = createWindowManager({
     getCurrentAppIconPath,
@@ -529,7 +532,10 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   const petWindow = createPetWindow(manager, false);
 
   setLive2dWindowSender((channel, payload) => manager.sendToPetWindow(channel, payload));
-  const chatWindow = manager.createReactChatWindow();
+  // 聊天窗口壳先创建；显示由闪屏 reveal 统一驱动（临时入口行为，组合根切换后由编排器接管）。
+  const chatShell = manager.createReactChatWindowShell();
+  const chatWindow = chatShell.window;
+  chatShell.load().catch((error) => console.error("[Cyrene] chat page load failed:", error));
   scheduleStartupUpdateCheck(appUpdateService);
   if (generalSettings.sidebarVisible) manager.createSidebarWindow();
   if (generalSettings.tasksVisible) manager.createTasksWindow();
@@ -574,14 +580,20 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   schedulerSubsystem.start();
 
   // 启动流程全部完成后，再额外显示一段时间闪屏，让用户能明确看到加载画面。
+  // 最短展示时长从 Loading 实际 show() 时刻起算（loadingShownAt 未记录则跳过等待）。
   const closeSplashAndShowWindows = () => {
     setTimeout(() => {
-      revealStartupWindows({
+      void revealStartupWindows({
         splashWindow,
-        petWindow,
-        petVisible: loadGeneralSettings().petVisible,
-        markStartupReady: markStartupPhaseReady,
+        chatWindow,
+        loadingShownAt: splashLoadingShownAt,
+        minimumDurationMs: SPLASH_MIN_MS,
       });
+      // 辅助窗口的启动期 pending show 统一放行；桌宠按可见性设置显示。
+      markStartupPhaseReady();
+      if (loadGeneralSettings().petVisible && !petWindow.isDestroyed() && !petWindow.isVisible()) {
+        petWindow.show();
+      }
     }, SPLASH_MIN_MS);
   };
 

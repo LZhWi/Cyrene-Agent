@@ -3,12 +3,16 @@ import { IPC } from "../../shared/ipc-channels";
 import { createPetWindow, PET_WINDOW_BASE_HEIGHT, PET_WINDOW_BASE_WIDTH, type PetWindowSettingsSlice } from "../startup/create-pet-window";
 import {
   createCallWindow,
-  createReactChatWindow,
+  createReactChatWindowShell,
   createSettingsWindow,
   createSidebarWindow,
   createStickerManagerWindow,
   createTasksWindow,
+  loadReactChatWindowPage,
+  type ReactChatWindowHandle,
+  showReactChatWindow,
 } from "./create-aux-windows";
+import { CHAT_READY_TIMEOUT_MS, loadWindowForStartup } from "./startup-window-load";
 import { createMusicPlayerWindow } from "./create-music-player-window";
 import { broadcastToAllWindows } from "./broadcast";
 import { PetWindowMoveController } from "../pet-window-movement";
@@ -22,7 +26,10 @@ export interface WindowManagerOptions {
 
 export interface WindowManager {
   createPetWindow(showOnReady?: boolean): BrowserWindow;
-  createReactChatWindow(sessionId?: string): BrowserWindow;
+  /** 创建（或复用）未加载页面的聊天窗口壳；页面加载由显式 load() 驱动。 */
+  createReactChatWindowShell(): ReactChatWindowHandle;
+  /** 打开聊天窗口：必要时创建壳并加载页面，然后显示并分发会话。 */
+  openReactChatWindow(sessionId?: string): Promise<BrowserWindow>;
   createSidebarWindow(): void;
   createSettingsWindow(section?: string): void;
   createTasksWindow(): void;
@@ -56,6 +63,8 @@ export interface WindowManager {
 
 export function createWindowManager(options: WindowManagerOptions): WindowManager {
   let petWindow: BrowserWindow | null = null;
+  let chatShell: ReactChatWindowHandle | null = null;
+  let chatLoadPromise: Promise<void> | null = null;
   const readyHandlers: Array<(win: BrowserWindow) => void> = [];
   const closedHandlers: Array<() => void> = [];
   const movedHandlers: Array<(position: { x: number; y: number }) => void> = [];
@@ -119,7 +128,42 @@ export function createWindowManager(options: WindowManagerOptions): WindowManage
       return win;
     },
 
-    createReactChatWindow,
+    createReactChatWindowShell(): ReactChatWindowHandle {
+      if (chatShell && !chatShell.window.isDestroyed()) return chatShell;
+      const window = createReactChatWindowShell();
+      const handle: ReactChatWindowHandle = {
+        window,
+        load(sessionId?: string): Promise<void> {
+          // load() 缓存同一个 Promise：重复调用不会二次加载；
+          // sessionId 通过 show() 分发，而非重新加载页面。
+          if (!chatLoadPromise || window.isDestroyed()) {
+            chatLoadPromise = loadWindowForStartup({
+              window,
+              load: () => loadReactChatWindowPage(window, sessionId),
+              timeoutMs: CHAT_READY_TIMEOUT_MS,
+            }).catch((error) => {
+              console.error("[WindowManager] chat page load failed:", error);
+              throw error;
+            });
+          }
+          return chatLoadPromise;
+        },
+        show(sessionId?: string): void {
+          showReactChatWindow(sessionId);
+        },
+      };
+      chatShell = handle;
+      chatLoadPromise = null;
+      return handle;
+    },
+
+    async openReactChatWindow(sessionId?: string): Promise<BrowserWindow> {
+      const handle = this.createReactChatWindowShell();
+      await handle.load(sessionId);
+      handle.show(sessionId);
+      return handle.window;
+    },
+
     createSidebarWindow,
     createSettingsWindow,
     createTasksWindow,

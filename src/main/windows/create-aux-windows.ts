@@ -24,18 +24,27 @@ import {
 } from "./window-state";
 
 /**
- * 创建/复用 React 聊天窗口。
+ * React 聊天窗口句柄：壳对象 + 显式页面加载 + 显示。
+ * load() 只允许由启动编排器在全部 IPC 处理器注册后调用。
  */
-export function createReactChatWindow(sessionId?: string): BrowserWindow {
-  // 已有窗口 → 复用；dispatcher 决定立即 send 还是等 ready 后 flush
+export interface ReactChatWindowHandle {
+  window: BrowserWindow;
+  load(sessionId?: string): Promise<void>;
+  show(sessionId?: string): void;
+}
+
+/**
+ * 创建/复用 React 聊天窗口壳。
+ * 只构造 BrowserWindow 对象并登记全局状态，禁止调用 loadURL/loadFile ——
+ * 页面加载由 loadReactChatWindowPage 在核心 IPC 就绪后执行。
+ */
+export function createReactChatWindowShell(): BrowserWindow {
+  // 已有窗口 → 复用（壳不重复创建）
   if (reactChatWindow && !reactChatWindow.isDestroyed()) {
-    reactChatWindow.show();
-    reactChatWindow.focus();
-    if (sessionId) dispatchOrQueueReactSession(sessionId);
     return reactChatWindow;
   }
 
-  // 新建窗口：dispatcher 重置；URL 负责 cold start，pending 仅服务于"未 ready 期间又收到请求"
+  // 新建窗口：dispatcher 重置；pending 仅服务于"未 ready 期间又收到请求"
   reactChatSession.reset();
 
   const layout = computeLayout();
@@ -67,24 +76,6 @@ export function createReactChatWindow(sessionId?: string): BrowserWindow {
     reactChatSession.markLoading();
   });
 
-  // search 字段必须含前导 "?"（Electron url.format() 要求）
-  const search = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : undefined;
-  const indexPath = path.join(app.getAppPath(), "dist", "renderer", "react", "index.html");
-
-  if (isDev) {
-    void window
-      .loadURL(`http://localhost:5173/react/${search ?? ""}`)
-      .catch((error) => console.error("[ReactChatWindow] loadURL failed:", error));
-  } else {
-    void window
-      .loadFile(indexPath, search ? { search } : undefined)
-      .catch((error) => console.error("[ReactChatWindow] loadFile failed:", error));
-  }
-
-  window.once("ready-to-show", () => {
-    if (!window.isDestroyed()) showWindowWhenStartupReady(window);
-  });
-
   window.on("closed", () => {
     // 闭包引用 + 仅当当前全局仍指向自己时才清理，避免旧窗口 closed 误清新窗口
     if (reactChatWindow === window) {
@@ -93,6 +84,31 @@ export function createReactChatWindow(sessionId?: string): BrowserWindow {
     }
   });
   return window;
+}
+
+/**
+ * 加载聊天渲染页面。search 字段必须含前导 "?"（Electron url.format() 要求）。
+ * 失败原样向上抛（由 startup-window-load 统一判定致命性），不再吞掉。
+ */
+export function loadReactChatWindowPage(window: BrowserWindow, sessionId?: string): Promise<void> {
+  const search = sessionId ? `?sessionId=${encodeURIComponent(sessionId)}` : undefined;
+  const indexPath = path.join(app.getAppPath(), "dist", "renderer", "react", "index.html");
+
+  if (isDev) {
+    return window.loadURL(`http://localhost:5173/react/${search ?? ""}`);
+  }
+  return window.loadFile(indexPath, search ? { search } : undefined);
+}
+
+/**
+ * 显示聊天窗口（不加载页面）；带 sessionId 时走会话分发。
+ */
+export function showReactChatWindow(sessionId?: string): void {
+  const win = reactChatWindow;
+  if (!win || win.isDestroyed()) return;
+  win.show();
+  win.focus();
+  if (sessionId) dispatchOrQueueReactSession(sessionId);
 }
 
 export function dispatchOrQueueReactSession(sessionId: string): void {
