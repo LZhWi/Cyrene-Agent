@@ -628,6 +628,11 @@ export async function buildAgentRunOptions(
     : modeEnabledTools;
 
   // 三模适配层：skill 按 resolvedMode 过滤，chat 模式不暴露 skill。
+  // ⚠️ 注意：下面这组 enabledSkills/skillCatalog/autoInjected*/availableSkills 计算
+  // 在 resolveRunCapabilities 存在时会被整体覆盖重算（见下方"权威路径"注释）。
+  // 这里的第一次计算只为 fallbackCapabilities 服务（调用方未提供
+  // resolveRunCapabilities 时的兼容路径），两条路径过滤条件不同——
+  // 禁止当成重复代码"去重合并"，除非先把 fallback 路径显式化并补测试。
   let enabledSkills = resolvedMode === "chat"
     ? []
     : deps.skillRegistry.getEnabledForMode(resolvedMode, styleSettings.skillModeOverrides);
@@ -700,6 +705,7 @@ export async function buildAgentRunOptions(
     skillModeOverrides: styleSettings.skillModeOverrides,
     chatToolsEnabled: styleSettings.chatToolsEnabled === true,
   }) ?? fallbackCapabilities;
+  // ⚠️ resolveRunCapabilities 存在时的权威路径：覆盖上面 fallback 组的计算。
   enabledSkills = capabilities.skills;
   skillCatalog = deps.buildSkillCatalog(enabledSkills);
   autoInjectedSkillContext = deps.buildAutoInjectedSkillContext(enabledSkills);
@@ -724,6 +730,10 @@ export async function buildAgentRunOptions(
     ? (runTools.length > 0 ? deps.buildToolSystemPrompt(resolvedMode, runTools) : "")
     : deps.buildToolSystemPrompt(resolvedMode, runTools);
 
+  // ⚠️ 缓存契约：本函数产出的 system prompt 分层（stablePrefix vs 尾部 runtime）
+  // 的内容与拼接顺序直接影响厂商提示词缓存，且多数漂移现有测试不会变红。
+  // 改动任何拼接逻辑前，先用固定输入对 options 做逐字段黄金对照（含闭包行为）。
+  //
   // toolSystemContent 进入 harness stablePrefix（与人设层一起拼装）：
   // 工具规则 + 运行时工具目录 + 可用 Skill 路由清单。
   // skillLayerContent 是其中 Skill 目录段的独立副本（文本一致），供上下文容量
