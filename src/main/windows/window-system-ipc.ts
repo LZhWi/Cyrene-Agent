@@ -21,22 +21,22 @@ export interface WindowSystemIpcDependencies {
  */
 export function registerWindowSystemIpc(deps: WindowSystemIpcDependencies): void {
   ipcMain.handle(IPC.WINDOW_SET_INTERACTIVE, (_event, interactive: boolean) => {
-    deps.windowManager?.setMainWindowInteractive(interactive);
+    deps.windowManager?.setPetWindowInteractive(interactive);
   });
 
   ipcMain.on(IPC.WINDOW_MOVE, (_event, dx: number, dy: number) => {
-    deps.windowManager?.moveMainWindowRelative(dx, dy);
+    deps.windowManager?.movePetWindowRelative(dx, dy);
   });
 
   ipcMain.on(IPC.WINDOW_MOVE_TO, (_event, x: number, y: number) => {
-    deps.windowManager?.moveMainWindowTo(x, y);
+    deps.windowManager?.movePetWindowTo(x, y);
   });
 
   ipcMain.on(IPC.WINDOW_SET_DRAGGING, (_event, isDragging: boolean) => {
-    deps.windowManager?.setMainWindowDragging(isDragging);
+    deps.windowManager?.setPetWindowDragging(isDragging);
   });
 
-  ipcMain.handle(IPC.WINDOW_CAPTURE_FRAME, async () => deps.windowManager?.captureMainWindowFrame() ?? null);
+  ipcMain.handle(IPC.WINDOW_CAPTURE_FRAME, async () => deps.windowManager?.capturePetWindowFrame() ?? null);
   ipcMain.handle(IPC.WINDOW_GET_CURSOR_POSITION, () => deps.windowManager?.getCursorScreenPosition() ?? { x: 0, y: 0 });
 
   ipcMain.on(IPC.SIDEBAR_MINIMIZE, () => {
@@ -113,12 +113,12 @@ export function registerWindowSystemIpc(deps: WindowSystemIpcDependencies): void
   });
 
   ipcMain.on(IPC.LIVE2D_SPEECH_PREPARE, () => {
-    deps.windowManager?.sendToMainWindow(IPC.LIVE2D_SPEECH_PREPARE);
+    deps.windowManager?.sendToPetWindow(IPC.LIVE2D_SPEECH_PREPARE);
   });
   ipcMain.on(IPC.LIVE2D_MOUTH_START, (_event, payload: { durationMs?: number }) => {
-    deps.windowManager?.sendToMainWindow(IPC.LIVE2D_MOUTH_START, { durationMs: Number(payload?.durationMs ?? 0) });
+    deps.windowManager?.sendToPetWindow(IPC.LIVE2D_MOUTH_START, { durationMs: Number(payload?.durationMs ?? 0) });
   });
   ipcMain.on(IPC.LIVE2D_MOUTH_STOP, () => {
-    deps.windowManager?.sendToMainWindow(IPC.LIVE2D_MOUTH_STOP);
+    deps.windowManager?.sendToPetWindow(IPC.LIVE2D_MOUTH_STOP);
   });
 }

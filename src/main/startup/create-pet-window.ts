@@ -10,18 +10,18 @@ export const PET_WINDOW_BASE_HEIGHT = 500;
  * 仅创建阶段需要的 GeneralSettings 切片。
  * 避免反向依赖 index.ts 中的完整 loadGeneralSettings。
  */
-export interface MainWindowSettingsSlice {
+export interface PetWindowSettingsSlice {
   petWindowX?: number;
   petWindowY?: number;
 }
 
-export interface CreateMainWindowContext {
-  loadGeneralSettings: () => MainWindowSettingsSlice;
+export interface CreatePetWindowContext {
+  loadGeneralSettings: () => PetWindowSettingsSlice;
   getCurrentAppIconPath: () => string;
   isDev: boolean;
 }
 
-export interface CreateMainWindowOptions {
+export interface CreatePetWindowOptions {
   /** 窗口 ready 后是否立即 show；默认 true。启动闪屏场景可先隐藏，等闪屏关闭再显示。 */
   showOnReady?: boolean;
 }
@@ -31,9 +31,9 @@ export interface CreateMainWindowOptions {
  * 只负责机械构造：恢复上次坐标、创建 BrowserWindow、加载 URL/文件、
  * 绑定 show/hide 可见性广播。不含业务 getter 注入。
  */
-export function createMainWindow(
-  ctx: CreateMainWindowContext,
-  options: CreateMainWindowOptions = {},
+export function createPetWindow(
+  ctx: CreatePetWindowContext,
+  options: CreatePetWindowOptions = {},
 ): BrowserWindow {
   const { showOnReady = true } = options;
   const settings = ctx.loadGeneralSettings();

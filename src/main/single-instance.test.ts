@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { installSingleInstanceGuard } from "./single-instance";
 
 describe("installSingleInstanceGuard", () => {
-  it("quits a duplicate process before it can create another pet window", () => {
+  it("quits a duplicate process before it can create another application window", () => {
     const quit = vi.fn();
     const on = vi.fn();
 
@@ -11,7 +11,7 @@ describe("installSingleInstanceGuard", () => {
     expect(on).not.toHaveBeenCalled();
   });
 
-  it("focuses the existing Cyrene window when launched again", () => {
+  it("opens the existing primary Cyrene window when launched again", () => {
     let onSecondInstance: (() => void) | undefined;
     const focusExistingWindow = vi.fn();
     const on = vi.fn((_event: "second-instance", listener: () => void) => { onSecondInstance = listener; });

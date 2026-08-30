@@ -5,7 +5,7 @@ describe("buildTrayMenuTemplate", () => {
   it("offers an entry that opens or focuses the chat window", () => {
     const createReactChatWindow = vi.fn();
     const template = buildTrayMenuTemplate({
-      toggleMainWindow: vi.fn(),
+      togglePetWindow: vi.fn(),
       createReactChatWindow,
       createSidebarWindow: vi.fn(),
       createSettingsWindow: vi.fn(),

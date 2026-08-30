@@ -26,11 +26,11 @@ export interface GeneralSettingsLifecycleDependencies {
 const MINIMAX_SEARCH_MCP_ID = "minimax-web-search";
 
 export function applyGeneralSettings(settings: GeneralSettings, deps: GeneralSettingsLifecycleDependencies): void {
-  deps.windowManager?.setMainWindowAlwaysOnTop(settings.petAlwaysOnTop);
-  if (settings.petVisible) deps.windowManager?.showMainWindow();
-  else deps.windowManager?.hideMainWindow();
+  deps.windowManager?.setPetWindowAlwaysOnTop(settings.petAlwaysOnTop);
+  if (settings.petVisible) deps.windowManager?.showPetWindow();
+  else deps.windowManager?.hidePetWindow();
   syncLaunchAtLogin(settings.launchAtLogin, app);
-  deps.windowManager?.applyMainWindowZoom(settings.petZoom);
+  deps.windowManager?.applyPetWindowZoom(settings.petZoom);
 }
 
 export function applyUiIcon(iconSetting: UiIcon, deps: GeneralSettingsLifecycleDependencies): void {

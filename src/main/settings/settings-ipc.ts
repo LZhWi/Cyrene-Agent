@@ -233,7 +233,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
 
   ipcMain.on(IPC.SETTINGS_SET_PET_ALWAYS_ON_TOP, (_event, value: boolean) => {
     const saved = saveGeneralSettings({ ...getGeneralSettings(), petAlwaysOnTop: Boolean(value) });
-    deps.windowManager?.setMainWindowAlwaysOnTop(saved.petAlwaysOnTop);
+    deps.windowManager?.setPetWindowAlwaysOnTop(saved.petAlwaysOnTop);
   });
 
   ipcMain.on(IPC.SETTINGS_SET_PET_VISIBLE, (_event, value: boolean) => {
@@ -242,7 +242,7 @@ export function registerSettingsIpc(deps: SettingsIpcDependencies): void {
 
   ipcMain.on(IPC.SETTINGS_SET_PET_ZOOM, (_event, value: number) => {
     const saved = saveGeneralSettings({ ...getGeneralSettings(), petZoom: Number(value) });
-    deps.windowManager?.applyMainWindowZoom(saved.petZoom);
+    deps.windowManager?.applyPetWindowZoom(saved.petZoom);
   });
 
   ipcMain.handle(IPC.MODEL_CONFIG_GET, () => getPublicModelConfig());

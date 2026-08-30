@@ -89,9 +89,11 @@ import {
   type ScreenshotService,
 } from "./screenshot/screenshot-lifecycle";
 import { createWindowManager, type WindowManager } from "./windows/window-manager";
+import { openPrimaryWindow } from "./windows/primary-window";
 import { registerWindowSystemIpc } from "./windows/window-system-ipc";
 import { createTray } from "./tray";
 import { createSplashWindow } from "./startup/create-splash-window";
+import { revealStartupWindows } from "./startup/startup-window-reveal";
 import { enqueueLLMTask } from "./llm-queue";
 
 import { createSocialContextService, type SocialContextService } from "./services/social-context/social-context-service";
@@ -172,7 +174,10 @@ import { registerAppUpdateIpc } from "./updater/app-update-ipc";
 configureDocumentIndexQueue(runDocumentIndexJob);
 
 const isPrimaryCyreneProcess = installSingleInstanceGuard(app, () => {
-  windowManager?.showMainWindow();
+  openPrimaryWindow({
+    openChatWindow: () => windowManager?.createReactChatWindow(),
+    showPetWindow: () => windowManager?.showPetWindow(),
+  });
 });
 
 async function reconcileUserMemoryIndex(): Promise<void> {
@@ -237,13 +242,13 @@ function broadcastToAuxWindows(channel: string, payload: unknown): void {
   }
 }
 
-function createWindow(manager: WindowManager, showOnReady = true): BrowserWindow {
-  const win = manager.createMainWindow(showOnReady);
+function createPetWindow(manager: WindowManager, showOnReady = true): BrowserWindow {
+  const win = manager.createPetWindow(showOnReady);
 
-  manager.onMainWindowReady((w) => {
+  manager.onPetWindowReady((w) => {
     live2dWindowLifecycle.attach(w);
   });
-  manager.onMainWindowClosed(() => {
+  manager.onPetWindowClosed(() => {
     live2dWindowLifecycle.clear();
   });
 
@@ -422,7 +427,7 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   screenshotService = initializeScreenshotService({
     initialHotkey: initialSettings.screenshotHotkey ?? "Alt+Shift+S",
     getReactChatWindow: () => reactChatWindow,
-    captureMainWindow: () => windowManager!.captureMainWindow(),
+    capturePetWindow: () => windowManager!.capturePetWindow(),
   });
   void screenshotService.prewarm();
 
@@ -495,8 +500,8 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   const manager = createWindowManager({
     getCurrentAppIconPath,
     isDev,
-    loadMainWindowSettingsSlice: loadGeneralSettings,
-    persistMainWindowPosition: ({ x, y }) => saveGeneralSettings({ petWindowX: x, petWindowY: y }),
+    loadPetWindowSettingsSlice: loadGeneralSettings,
+    persistPetWindowPosition: ({ x, y }) => saveGeneralSettings({ petWindowX: x, petWindowY: y }),
   });
   windowManager = manager;
 
@@ -506,16 +511,16 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   });
   registerAppUpdateIpc({ service: appUpdateService });
 
-  // 先创建主窗口但不显示，等闪屏关闭后再一起显示。
-  const mainWindow = createWindow(manager, false);
+  // 先创建桌宠窗口但不显示；聊天窗口作为主要交互窗口驱动闪屏关闭。
+  const petWindow = createPetWindow(manager, false);
 
-  setLive2dWindowSender((channel, payload) => manager.sendToMainWindow(channel, payload));
-  manager.createReactChatWindow();
+  setLive2dWindowSender((channel, payload) => manager.sendToPetWindow(channel, payload));
+  const chatWindow = manager.createReactChatWindow();
   scheduleStartupUpdateCheck(appUpdateService);
   if (generalSettings.sidebarVisible) manager.createSidebarWindow();
   if (generalSettings.tasksVisible) manager.createTasksWindow();
   tray = createTray({
-    toggleMainWindow: () => manager.toggleMainWindow(),
+    togglePetWindow: () => manager.togglePetWindow(),
     createReactChatWindow: () => manager.createReactChatWindow(),
     createSidebarWindow: () => manager.createSidebarWindow(),
     createSettingsWindow: () => manager.createSettingsWindow(),
@@ -556,19 +561,18 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   // 启动流程全部完成后，再额外显示一段时间闪屏，让用户能明确看到加载画面。
   const closeSplashAndShowWindows = () => {
     setTimeout(() => {
-      if (!splashWindow.isDestroyed()) {
-        splashWindow.close();
-      }
-      if (!mainWindow.isDestroyed() && !mainWindow.isVisible()) {
-        mainWindow.show();
-      }
-      markStartupPhaseReady();
+      revealStartupWindows({
+        splashWindow,
+        petWindow,
+        petVisible: loadGeneralSettings().petVisible,
+        markStartupReady: markStartupPhaseReady,
+      });
     }, SPLASH_MIN_MS);
   };
 
-  // 主窗口可能还在加载中，等它加载完再统一显示，避免闪屏提前消失。
-  if (mainWindow.webContents.isLoadingMainFrame()) {
-    mainWindow.webContents.once("did-finish-load", closeSplashAndShowWindows);
+  // 聊天窗口是主要交互窗口；等它加载完再统一显示，避免闪屏提前消失。
+  if (chatWindow.webContents.isLoadingMainFrame()) {
+    chatWindow.webContents.once("did-finish-load", closeSplashAndShowWindows);
   } else {
     closeSplashAndShowWindows();
   }
@@ -589,7 +593,10 @@ app.on("before-quit", () => {
 });
 
 app.on("activate", () => {
-  windowManager?.createMainWindow(true);
+  openPrimaryWindow({
+    openChatWindow: () => windowManager?.createReactChatWindow(),
+    showPetWindow: () => windowManager?.showPetWindow(),
+  });
 });
 
 

@@ -2,7 +2,7 @@ import { app, Menu, nativeImage, Tray, type MenuItemConstructorOptions } from "e
 import { getCurrentAppIconPath } from "./windows/window-state";
 
 export interface CreateTrayDependencies {
-  toggleMainWindow: () => void;
+  togglePetWindow: () => void;
   createReactChatWindow: () => void;
   createSidebarWindow: () => void;
   createSettingsWindow: () => void;
@@ -29,7 +29,7 @@ export function buildTrayMenuTemplate(deps: CreateTrayDependencies): MenuItemCon
     },
     {
       label: "显示/隐藏桌宠",
-      click: () => { deps.toggleMainWindow(); },
+      click: () => { deps.togglePetWindow(); },
     },
     { type: "separator" },
     {

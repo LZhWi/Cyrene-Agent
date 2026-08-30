@@ -26,13 +26,13 @@ import {
 /**
  * 创建/复用 React 聊天窗口。
  */
-export function createReactChatWindow(sessionId?: string): void {
+export function createReactChatWindow(sessionId?: string): BrowserWindow {
   // 已有窗口 → 复用；dispatcher 决定立即 send 还是等 ready 后 flush
   if (reactChatWindow && !reactChatWindow.isDestroyed()) {
     reactChatWindow.show();
     reactChatWindow.focus();
     if (sessionId) dispatchOrQueueReactSession(sessionId);
-    return;
+    return reactChatWindow;
   }
 
   // 新建窗口：dispatcher 重置；URL 负责 cold start，pending 仅服务于"未 ready 期间又收到请求"
@@ -92,6 +92,7 @@ export function createReactChatWindow(sessionId?: string): void {
       reactChatSession.reset();
     }
   });
+  return window;
 }
 
 export function dispatchOrQueueReactSession(sessionId: string): void {

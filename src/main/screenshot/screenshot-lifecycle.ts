@@ -18,7 +18,7 @@ export type { ScreenshotService };
 export interface ScreenshotLifecycleOptions {
   initialHotkey: string;
   getReactChatWindow: () => BrowserWindow | null;
-  captureMainWindow: () => Promise<Electron.NativeImage | null>;
+  capturePetWindow: () => Promise<Electron.NativeImage | null>;
 }
 
 const MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024;
@@ -62,7 +62,7 @@ async function saveScreenshotPasteTemp(
 export function initializeScreenshotService(
   options: ScreenshotLifecycleOptions,
 ): ScreenshotService {
-  const { getReactChatWindow, captureMainWindow } = options;
+  const { getReactChatWindow, capturePetWindow } = options;
   const screenshotDirectory = getScreenshotDirectory();
 
   const validateInsert = (data: ScreenshotInsertData): ScreenshotInsertData => {
@@ -143,7 +143,7 @@ export function initializeScreenshotService(
   });
 
   ipcMain.handle("debug:screenshot", async () => {
-    const image = await captureMainWindow();
+    const image = await capturePetWindow();
     if (!image) return null;
     const png = image.toPNG();
     const outPath = path.join(app.getPath("temp"), "cyrene-screenshot.png");
