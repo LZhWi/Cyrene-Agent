@@ -50,6 +50,13 @@
 
 不得为了拆文件复制 Map、cache、AbortController 或单例。
 
+AG-UI 中两个名称相近的结算概念必须保持独立：
+
+- session run guard 的 `settled` promise 管理“这个 session 当前由哪个 run 占用，以及旧 run 的生命周期是否已经释放”。它服务于 takeover 等待和 compare-and-delete，不判断终态是否重复。
+- run finalizer 的 settlement gate 管理“这个 run 是否已经产生过 canonical terminal”。它只保证 RUN_FINISHED/RUN_ERROR exactly-once，不拥有 session 身份。
+
+实施时禁止合并这两份状态或让它们共享可变标志。session guard 管运行身份，run finalizer 管终态唯一性。
+
 ### 顺序与异步边界
 
 迁移代码时保持现有调用顺序和 `await` 边界。特别禁止：
@@ -143,12 +150,14 @@
   - 图片校验、直发 content block、caption fallback 与占位消息。
 - `orchestrator/run-options/context-assembly.ts`
   - always-on、relationship、environment、social 与 CITA 上下文收集。
+  - 只产生具名的语义上下文块，不决定最终 prompt 顺序，也不拼接 stable/session/mode/runtime layers。
 - `orchestrator/run-options/style-resolution.ts`
   - styleId 兼容解析、prompt block 和 sampling 决策。
 - `orchestrator/run-options/capability-resolution.ts`
   - 工具、Skill、搜索后端、计划只读和 authoritative/fallback capabilities 双路径。
 - `orchestrator/run-options/prompt-assembly.ts`
   - stable prefix、session/mode/runtime context 和 usage parts 组装。
+  - 只消费已计算好的上下文块并负责排列、分层与字符串组装，不重新查询 relationship、social、CITA、environment 或其他业务上下文。
 - `orchestrator/run-options/finished-effects.ts`
   - 记忆、社交原子、关系记录、运行状态和 sticker 决策。
 - `orchestrator/build-options.ts`
@@ -159,6 +168,20 @@
 ### 兼容要求
 
 保留当前 fallback capabilities 与 authoritative capabilities 双路径，禁止在本次重构中合并。Prompt 内容、分层字段、拼接顺序和缓存稳定前缀必须逐字段一致。`BuildOptionsDeps` 的现有字段保持不变。
+
+`context-assembly` 与 `prompt-assembly` 的数据边界使用显式结构表达，语义等价于：
+
+```ts
+interface AssembledRunContexts {
+  alwaysOnContext: string;
+  relationshipContext: string;
+  environmentContext: string;
+  socialContextBlock: string;
+  citaContextBlock: string;
+}
+```
+
+前者返回该结构，后者接收该结构。两者不得互相反向调用或访问对方的依赖。
 
 ## 阶段四：`harness-adapter.ts`
 
@@ -177,12 +200,14 @@
 - `orchestrator/harness/adapter/event-mapper.ts`
   - HarnessEvent 与 task lifecycle 到 AG-UI event 的映射。
 - `orchestrator/harness/adapter/terminal-mapper.ts`
-  - terminate reason、canonical terminal、run terminal store 和 review finalize。
+  - 仅执行 terminate reason、completion reason 与 canonical terminal 的纯映射。
+  - 不访问 run store、Electron app 或 review tracker。
 - `orchestrator/harness/adapter/plan-lifecycle.ts`
   - PLAN_REVIEW 回退、EXECUTING context 和执行结束事件。
 - `orchestrator/harness-adapter.ts`
   - 保留全部公开函数和重导出。
-  - `runHarnessWithAdapter` 只编排准备、运行、终态与结果返回。
+  - `runHarnessWithAdapter` 编排准备、运行、终态落库、review finalize 与结果返回。
+  - `markTerminal` 和 `finalizeReview` 继续位于该副作用编排层，并保持现有调用顺序与容错边界。
 
 ### 兼容要求
 
@@ -218,9 +243,32 @@ canonical runId、恢复校验、计划只读双层防护、checkpoint 时机、
 
 ## 测试策略
 
-### 测试先行
+### 特征测试先行
 
-每个新模块先建立针对其公开接口的测试。测试首次运行应因模块或接口尚不存在而失败，然后迁移最小代码使其通过。现有 facade 测试持续验证外部行为。
+本次是纯重构，优先使用 characterization tests 锁定现有可观察行为：
+
+1. 在旧实现仍完整存在时补齐缺失的结果、错误和调用轨迹断言，并确认测试通过。
+2. 提取代码期间，原 facade 测试必须始终保持绿色。
+3. 新模块形成稳定边界后，再为纯函数、状态变换和错误分支补针对性单元测试。
+
+不为了满足形式上的红灯阶段编造新行为；真正发现缺陷时才先写能够复现缺陷的失败测试，并把修复作为独立任务处理，不混入行为保持型重构。
+
+### 调用轨迹测试
+
+除最终返回值外，以下顺序必须通过记录调用轨迹的特征测试锁定：
+
+```text
+Dispatcher:
+readHistory → writeUser → runAgent → writeAssistant
+
+AG-UI success:
+successEffect → sticker → RUN_FINISHED
+
+Memory mutation:
+load → transform → save → notifyObsidian
+```
+
+轨迹测试断言语义步骤，不绑定新模块内部函数名，避免测试阻碍后续安全提取。
 
 ### 阶段性验证
 
