@@ -371,7 +371,7 @@ export function getDefaultModelProfile(settings = loadModelSettings()): SavedMod
  *
  * 不传 id 不能再退回顶层镜像：顶层镜像 = 当前 provider 的 perProvider 项，可能全空
  * （用户只在档案里配了模型）。channel bot / 定时任务等不带 profileId 的调用方曾因此
- * 拿到空 baseUrl 直接抛错——飞书/微信消息看得到不回复（2026-08-27 issue 4）。
+ * 拿到空 baseUrl 直接抛错——否则飞书/微信渠道会出现"消息看得到但不回复"。
  */
 export function resolveModelSettingsProfile(settings: ModelSettings, id?: string): ModelSettings {
   const profiles = listSavedModelProfiles(settings);

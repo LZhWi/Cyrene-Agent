@@ -62,7 +62,7 @@ interface PendingChoice {
   revision?: number;
   timer: NodeJS.Timeout;
   status: "open" | "resolving";
-  /** Task 3 / C2：关联的 canonical runId，用于 cancelPendingChoicesForRun。 */
+  /** 关联的 canonical runId，用于 cancelPendingChoicesForRun。 */
   runId?: string;
 }
 
@@ -203,7 +203,7 @@ export function registerChoiceIpc(): void {
 }
 
 /**
- * Task 3 / C2：取消指定 runId 关联的所有 pending choice。
+ * 取消指定 runId 关联的所有 pending choice。
  * 在 AGUI_CANCEL abort signal 后调用，清理 ask_user 卡片的 pending 状态与 timer。
  * 渲染端通过 RUN_FINISHED(result.status="cancelled") 自然收到卡片关闭信号。
  */

@@ -190,7 +190,8 @@ struct ActiveRequest {
     request_id: String,
     mode: CaptureMode,
     /// Frozen frame retained for the lifetime of the interaction. Uploaded by
-    /// reference into the GDI cache on present; clipboard/encoder land in Task 6.
+    /// reference into the GDI cache on present; the clipboard / encoder path
+    /// consumes it after commit.
     frame: FrozenFrame,
 }
 

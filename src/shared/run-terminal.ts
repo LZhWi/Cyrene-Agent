@@ -1,8 +1,8 @@
 /**
- * Run 终态与 ACK 的共享类型（Task 2 / C1）。
+ * Run 终态与 ACK 的共享类型。
  *
- * 设计依据：plan §Task 2 + Reuse Decisions
- * - @ag-ui/core@0.0.57 的 RUN_FINISHED.result 是可选 any，outcome 只支持 success/interrupt。
+ * 设计依据（@ag-ui/core@0.0.57 的约束）：
+ * - RUN_FINISHED.result 是可选 any，outcome 只支持 success/interrupt。
  * - cancelled / timeout 只写 result: { status, reason, externalEffectsMayContinue }，不写 outcome。
  * - runtime error 仍走 RUN_ERROR，但必须经过同一个 exactly-once settlement gate。
  *   gate 内部状态名一律用 `runtime_error`（冻结边界），AG-UI 事件名仍为 `RUN_ERROR`。

@@ -270,7 +270,7 @@ interface AguiEvent {
 }
 
 interface AguiApi {
-  // Task 2 / C1：返回 AguiRunAck（含 canonical runId），与 RUN_STARTED.runId 强一致。
+  // 返回 AguiRunAck（含 canonical runId），与 RUN_STARTED.runId 强一致。
   run: (input: {
     messages: Array<{ role: "user" | "model"; content: string; at?: number }>;
     userTurnId: string;
@@ -444,7 +444,7 @@ export function ChatPage() {
   >({});
   const [planDrawerOpen, setPlanDrawerOpen] = useState(false);
   const [interruptedRun, setInterruptedRun] = useState<{ runId: string; rounds: number; todoCount: number } | null>(null);
-  // 会话守卫冲突（SESSION_RUN_ACTIVE，已知问题 4）：主进程拒绝了并发 run，
+  // 会话守卫冲突（SESSION_RUN_ACTIVE）：主进程拒绝了并发 run，
   // 等用户决定是否终止旧 run 并接管重开本轮。仅 UX 层；正确性由主进程守卫保证。
   const [sessionTakeover, setSessionTakeover] = useState<{
     sessionId: string;
@@ -988,7 +988,7 @@ export function ChatPage() {
     setModelBusyByMode((current) => ({ ...current, [input.targetMode]: true }));
     const earlyTtsQueue = createEarlyTtsQueue(input.targetMode, input.sessionId, input.assistantId);
     let streamContent = "";
-    // Task 3 / C2：RUN_FINISHED.result.status，用于区分 success / cancelled / timeout / runtime_error
+    // RUN_FINISHED.result.status，用于区分 success / cancelled / timeout / runtime_error
     let terminalStatus: string | undefined;
     let reasoningContent = "";
     let reasoningBlocks: ReasoningBlock[] = [];
@@ -1165,7 +1165,7 @@ export function ChatPage() {
         runActivity = { startedAt: Date.now(), reasoningMs: 0 };
         setIsCompressingContext(false);
         if (event.runId) {
-          // Task 2 / C1：RUN_STARTED.runId 必须与 ack.runId 一致（由 bridge 注入 options.runId 保证）。
+          // RUN_STARTED.runId 必须与 ack.runId 一致（由 bridge 注入 options.runId 保证）。
           // 不一致时只 warn 不重写，避免渲染端拿到错误 runId 后无法 cancel。
           const existing = activeRunsBySession.current[input.sessionId];
           if (existing?.runId && existing.runId !== event.runId) {
@@ -1390,7 +1390,7 @@ export function ChatPage() {
           updateMessage(input.sessionId, input.assistantId, { weather });
         }
       } else if (event.type === "RUN_FINISHED") {
-        // Task 3 / C2：读取 result.status 区分终态（success / cancelled / timeout / runtime_error）
+        // 读取 result.status 区分终态（success / cancelled / timeout / runtime_error）
         const result = (event as { result?: { status?: string } }).result;
         terminalStatus = result?.status;
         if (terminalStatus !== "success") revealCancelled = true;
@@ -1444,7 +1444,7 @@ export function ChatPage() {
       if (!ack.success) throw new Error(ack.error ?? "模型请求发起失败");
       // 新 run 已被主进程接受：同会话旧的守卫冲突操作卡（若有）不再有效
       setSessionTakeover((current) => (current && current.sessionId === input.sessionId ? null : current));
-      // Task 2 / C1：立即把 ack.runId 写入 activeRunsBySession，
+      // 立即把 ack.runId 写入 activeRunsBySession，
       // 让 cancel 在 RUN_STARTED 事件到达前也能找到正确的 runId。
       // RUN_STARTED.runId 必须与 ack.runId 一致（由 bridge 注入 options.runId 保证）。
       if (ack.runId) {
@@ -1496,7 +1496,7 @@ export function ChatPage() {
       terminalStatus = terminalStatus ?? "runtime_error";
       completeRunActivity(true);
       const errorMessage = error instanceof Error ? error.message : String(error);
-      // 会话守卫冲突（已知问题 4）：主进程拒绝了并发 run（典型场景：F5 后立即发消息）。
+      // 会话守卫冲突：主进程拒绝了并发 run（典型场景：F5 后立即发消息）。
       // 不走通用错误文案，改为挂起操作卡等用户决定是否终止旧 run 并重开本轮。
       const conflictRunId = parseSessionRunActiveError(errorMessage);
       if (conflictRunId) {

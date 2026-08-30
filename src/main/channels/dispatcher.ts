@@ -328,7 +328,7 @@ export class ChannelDispatcher {
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         console.error(LOG, "agent 调用失败:", errMsg);
-        // 失败落盘（打包版看不到主进程 console；此前"看得到消息但不回复"只能靠猜，issue 4C）
+        // 失败落盘：打包版看不到主进程 console，不留文件就只能靠猜"看得到消息为什么不回复"
         try {
           appendLog({
             dir: "error",

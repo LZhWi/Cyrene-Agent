@@ -44,9 +44,9 @@ use crate::{
 
 const WINDOW_CLASS: PCWSTR = w!("CyreneScreenshotOverlayWindow");
 
-/// Confirm button id reserved for `WM_COMMAND` (T5b).
+/// Confirm button id reserved for `WM_COMMAND`.
 pub const CMD_CONFIRM: usize = 1;
-/// Cancel button id reserved for `WM_COMMAND` (T5b).
+/// Cancel button id reserved for `WM_COMMAND`.
 pub const CMD_CANCEL: usize = 2;
 
 pub const TOOLBAR_WIDTH: u32 = 232;

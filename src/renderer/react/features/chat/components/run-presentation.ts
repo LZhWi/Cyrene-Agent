@@ -96,7 +96,7 @@ export function resolveComposerSlot(interaction?: ComposerInteraction): Composer
 }
 
 /**
- * Task 3 / C2：从 RUN_FINISHED 事件 result 字段解析终态 stage。
+ * 从 RUN_FINISHED 事件 result 字段解析终态 stage。
  * - success → completed
  * - cancelled → cancelled（保留已有部分输出，不生成"任务已完成"）
  * - timeout → timeout（不伪装成功）
@@ -122,7 +122,7 @@ export function resolveRunFinishedStage(
 }
 
 /**
- * Task 3 / C2：根据终态 status 决定显示内容。
+ * 根据终态 status 决定显示内容。
  * - success：有内容用内容，空则用"任务已完成。"兜底
  * - cancelled：保留已有部分输出，空则返回空串（绝不生成"任务已完成。"）
  * - timeout：同 cancelled

@@ -64,7 +64,7 @@ export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSu
         content: m.content,
       }));
 
-    // 图片发送策略也基于解析后的配置（默认档案）——顶层镜像可能全空（issue 4）
+    // 图片发送策略也基于解析后的配置（默认档案）——顶层镜像可能是全空的空壳
     const channelModelSettings = resolveModelSettingsProfile(loadModelSettings());
     const imageSendStrategy = decideImageSendStrategy({
       multimodal: channelModelSettings.multimodal,

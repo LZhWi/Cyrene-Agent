@@ -136,7 +136,7 @@ export async function runHarnessWithAdapter(
   sendBaseEvent: (event: BaseEvent) => void,
 ): Promise<AgentLoopResult> {
   const messageId = `msg-${Date.now()}`;
-  // Task 2 / C1：使用 canonical runId（由 CyreneAgent.runWithEvents 写回 options.runId）。
+  // 使用 canonical runId（由 CyreneAgent.runWithEvents 写回 options.runId）。
   // 不再生成 harness-${Date.now()}，避免 ack.runId 与 RUN_STARTED.runId 不一致。
   // CyreneAgent 保证此字段已被填充（fallback 由 createRunId() 在 runWithEvents 入口补齐）。
   const runId = options.runId;
@@ -348,12 +348,12 @@ export async function runHarnessWithAdapter(
 
   // ── 转换结果 ──
   const completionReason = mapTerminateReason(result.terminateReason);
-  // Task 2 / C1：把 HarnessResult.terminateReason 映射为 canonical terminal，
+  // 把 HarnessResult.terminateReason 映射为 canonical terminal，
   // 供 CyreneAgent.runWithEvents 写入 RUN_FINISHED.result。
   // 优先使用 harness 自身填的 result.terminal（如果未来 harness 内部直接写）。
   // P1 修订：success 路径必须消费 Harness 的确定性状态——
   // 若 finalState.uncertainEffects 非空，externalEffectsMayContinue 必须为 true，
-  // 即使 status=success 也不能谎报 false（Task 1 已允许 unknown-side-effect 诚实 final）。
+  // 即使 status=success 也不能谎报 false（unknown-side-effect 的诚实 final 是允许的）。
   const hasUncertainEffects = result.finalState.uncertainEffects.length > 0;
   const terminal = result.terminal ?? mapTerminateReasonToTerminal(
     result.terminateReason,
@@ -486,7 +486,7 @@ export function buildHarnessSystemPrompt(options: CyreneRunOptions): string {
 
 // ── HarnessEvent → AG-UI BaseEvent ────────────────────────
 
-/** 导出供 harness-adapter.test.ts 验证 runId stamp 不变量（Issue 6）。 */
+/** 导出供 harness-adapter.test.ts 验证 runId stamp 不变量。 */
 export function sendHarnessEventAsAgui(
   event: HarnessEvent,
   messageId: string,
@@ -661,11 +661,11 @@ function mapTerminateReason(
 }
 
 /**
- * 把 HarnessResult.terminateReason 映射为 canonical CyreneRunTerminalResult（Task 2 / C1）。
+ * 把 HarnessResult.terminateReason 映射为 canonical CyreneRunTerminalResult。
  *
- * 映射策略（与 plan §Task 2 冻结边界一致）：
+ * 映射策略：
  * - undefined + hasUncertainEffects=false → success / false（模型自然收尾，无 unresolved uncertainty）
- * - undefined + hasUncertainEffects=true  → success / true（Task 1 允许的 unknown-side-effect 诚实 final）
+ * - undefined + hasUncertainEffects=true  → success / true（unknown-side-effect 的诚实 final）
  * - "max_rounds" → timeout, reason="max_rounds"
  * - "timeout" → timeout, reason="timeout"
  * - "cancelled" → cancelled, reason="user_cancelled"
@@ -674,11 +674,11 @@ function mapTerminateReason(
  * P1 修订：success 路径的 externalEffectsMayContinue 由 hasUncertainEffects 决定，
  * 不再固定 false。cancelled / timeout / runtime_error 恒为 true，不受第二参数影响。
  *
- * Issue 2：cancelled / error 不再被 default 吞成 success。
+ * cancelled / error 不再被 default 吞成 success。
  * runtime_error 必须最终走 RUN_ERROR（由 agui-bridge 在 next 回调里转换），
  * 不能触发成功收尾副作用（bridge complete 回调据 status 判定）。
  *
- * Issue 3：externalEffectsMayContinue 为必填 invariant。
+ * externalEffectsMayContinue 为必填 invariant。
  *
  * 导出供 harness-adapter.test.ts 直接单测映射不变量。
  *

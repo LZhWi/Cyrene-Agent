@@ -126,7 +126,7 @@ const aguiApi = {
     resumeFromRunId?: string;
     takeoverFromRunId?: string;
   }) =>
-    // Task 2 / C1：返回 AguiRunAck，渲染端可立即拿到 canonical runId。
+    // 返回 AguiRunAck，渲染端可立即拿到 canonical runId。
     // ack.runId 与后续 RUN_STARTED.runId 强一致（由 bridge 注入 options.runId 保证）。
     ipcRenderer.invoke(IPC.AGUI_RUN, input) as Promise<AguiRunAck>,
   onEvent: (callback: (event: unknown) => void) => {

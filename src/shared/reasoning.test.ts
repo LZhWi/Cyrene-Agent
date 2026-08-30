@@ -174,7 +174,7 @@ describe("MODEL_REASONING_RULES — 9 家全部存在性", () => {
     expect(cap.supportedEfforts).toEqual(["low", "high", "max"]);
     // 官方文档 2026-08-26：GLM-5.3 不再支持关闭思考（thinking.type=disabled 报错）
     expect(cap.supportsDisable).toBe(false);
-    // auto 不发字段 ≡ 服务端默认 max → 显式映射 high（issue 3）
+    // auto 不发字段 ≡ 服务端默认 max → 显式映射 high
     expect(cap.autoEffort).toBe("high");
   });
 

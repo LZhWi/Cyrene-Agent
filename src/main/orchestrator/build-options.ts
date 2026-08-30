@@ -615,7 +615,7 @@ export async function buildAgentRunOptions(
     })
     : undefined;
   const modeEnabledTools = deps.toolRegistry.getEnabledToolsForMode(resolvedMode, styleSettings.toolModeOverrides);
-  // 计划模式只读强制（第一层，设计稿 §5）：PLAN_DISCUSSING/PLAN_REVIEW 期间
+  // 计划模式只读强制（第一层，权限层）：PLAN_DISCUSSING/PLAN_REVIEW 期间
   // 工具列表在 run 组装时就收敛到 read-only 策略允许的风险级。
   // code 与 chat（开启工具走 harness）参与计划状态机；work 会话恒为 NORMAL 不触发过滤。
   const conversationIdForPlan = conversationId;
@@ -650,7 +650,7 @@ export async function buildAgentRunOptions(
     }
   }
 
-  // Task Router 可用 Skill 列表（Router 判断 direct/plan 和 Skill 加载用）
+  // 可用 Skill 列表（供 Skill 路由判断 direct/plan 与 Skill 加载用）
   let availableSkills: SkillRouteInfo[] = (enabledSkills as Array<Record<string, unknown>>).map((s) => ({
     id: String(s.id ?? ""),
     description: String(s.description ?? ""),

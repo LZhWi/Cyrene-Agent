@@ -397,7 +397,7 @@ fn start_emits_accepted_then_selecting_then_overlay_visible() {
     let overlay_visible = helper.next_event(EXIT_TIMEOUT);
     assert_eq!(overlay_visible["type"], "overlay-visible");
     assert_eq!(overlay_visible["requestId"], "start-visible");
-    // T5c wires a real QueryPerformanceCounter measurement into
+    // The renderer wires a real QueryPerformanceCounter measurement into
     // freezeDurationMs. The exact value is environment-dependent
     // (CI variance, monitor latency, ...), so we only assert it parses as
     // a non-negative u64 within the expected physical bound.
@@ -483,7 +483,7 @@ fn mouse_capture_reentrancy_does_not_abort_the_helper() {
 #[test]
 #[serial]
 fn overlay_visible_freeze_duration_is_non_negative() {
-    // T5c invariant: the `OverlayVisible` event carries a measured
+    // Invariant: the `OverlayVisible` event carries a measured
     // freeze_duration_ms derived from QueryPerformanceCounter between the
     // `Command::Start` accepted point and the post-DwmFlush moment. The
     // exact value is environment-dependent (capture path latency, GPU
@@ -511,7 +511,7 @@ fn overlay_visible_freeze_duration_is_non_negative() {
 #[test]
 #[serial]
 fn display_change_during_active_capture_errors() {
-    // T5c: while an overlay capture is active, WM_DISPLAYCHANGE (and
+    // While an overlay capture is active, WM_DISPLAYCHANGE (and
     // WM_DPICHANGED) must abort the interaction with a recoverable
     // `display-changed` error, hide the overlay, and return to Idle so a
     // subsequent start can re-query the display and succeed.
@@ -980,7 +980,7 @@ fn parent_shutdown_closes_a_continuous_command_producer_and_drains_stdout() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 6: clipboard + async PNG encoding smoke tests
+// Clipboard + async PNG encoding smoke tests
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -1542,7 +1542,7 @@ fn cancel_during_encode_emits_cancelled() {
 }
 
 // ---------------------------------------------------------------------------
-// Task 7: DXGI capture-pump diagnostics tests
+// DXGI capture-pump diagnostics smoke tests
 // ---------------------------------------------------------------------------
 
 fn diagnostics_field(event: &serde_json::Value, field: &str) -> u64 {
@@ -1554,7 +1554,7 @@ fn diagnostics_field(event: &serde_json::Value, field: &str) -> u64 {
 #[test]
 #[serial]
 fn start_to_overlay_visible_has_no_full_frame_cpu_readback() {
-    // Task 7 invariant: when the DXGI capture path is active (the documented
+    // Invariant: when the DXGI capture path is active (the documented
     // primary path on a healthy desktop), the helper must produce a frozen
     // frame WITHOUT reading the entire desktop back to the CPU. GDI is a
     // pull-on-demand backend that always reads back at freeze time, so the
@@ -1613,7 +1613,7 @@ fn start_to_overlay_visible_has_no_full_frame_cpu_readback() {
 #[test]
 #[serial]
 fn commit_has_selection_cpu_readback() {
-    // Task 7 invariant: after commit, the helper's diagnostics MUST record
+    // Invariant: after commit, the helper's diagnostics MUST record
     // at least one selection CPU readback regardless of backend (both DXGI
     // and GDI paths use CopySubresourceRegion or BitBlt to materialize the
     // selection into the encoder/clipboard payload).

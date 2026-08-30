@@ -115,7 +115,7 @@ export function bootstrapConfigGetters(ctx: BootstrapConfigContext): void {
 
   // 注入通话模型/TTS 配置获取器
   // 模型 getter 必须先展开默认档案再取字段：顶层镜像可能指向空壳 provider
-  // （用户只在档案里配了模型），直接读会导致通话报"模型配置缺失"（同 channel bot issue 4）。
+  // （用户只在档案里配了模型），直接读会导致通话报"模型配置缺失"（与 channel bot 读到顶层空壳镜像同病根）。
   setCallSettings(
     () => {
       const s = resolveModelSettingsProfile(loadModelSettings());

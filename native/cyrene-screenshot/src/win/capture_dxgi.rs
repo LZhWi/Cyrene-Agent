@@ -1,6 +1,6 @@
 //! DXGI Desktop Duplication capture backend.
 //!
-//! This is the **primary** capture path in Task 7. It builds a D3D11 device,
+//! This is the **primary** capture path. It builds a D3D11 device,
 //! duplicates the primary monitor output, and keeps a small pool of GPU
 //! textures alive for the duration of an interaction so that
 //!

@@ -1,5 +1,6 @@
 /**
  * 副作用解析器（v3 §5.2）
+ * 注：注释中的 "v3 §x" / "设计稿 §x" 均指 docs/design/2026-08-08-cyreneHarnessloopdesign.md（CyreneHarness 设计稿 v3）。
  *
  * 把现有 ToolDefinition.effectKind / effectResolver 映射到 Harness 的 SideEffectKind。
  * 现有 effectKind: read / mutation / verification / external_side_effect / unknown

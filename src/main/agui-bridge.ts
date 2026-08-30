@@ -39,12 +39,12 @@ import { approvePlan, getPlanPath, moveToReview, supplementPlan } from "./orches
 import { buildPlanReviewCard, buildPlanSupplementCard } from "./orchestrator/harness/plan-tools";
 import type { AskUserAnswer } from "../shared/ask-clarification";
 /**
- * Task 2 / C1：从 RUN_FINISHED 事件中提取 canonical terminal。
+ * 从 RUN_FINISHED 事件中提取规范的终态结果（terminal）。
  *
  * CyreneAgent.runWithEvents 在 success / cancelled / timeout / runtime_error 路径都会发出
  * RUN_FINISHED 并附带 `result: CyreneRunTerminalResult`。下游（bridge / settlement gate）据此决定：
  *  - 是否跑成功收尾副作用（仅 status="success"）
- *  - runtime_error 是否转走 RUN_ERROR（Issue 2）
+ *  - runtime_error 是否转走 RUN_ERROR
  *
  * 缺失 result 字段时按 success 兜底，兼容尚未升级的 upstream。
  */
@@ -57,10 +57,11 @@ function extractTerminalFromRunFinished(baseEvent: unknown): CyreneRunTerminalRe
     && typeof (result as { status: unknown }).status === "string"
   ) {
     const status = (result as { status: string }).status;
-    // Issue 1：gate 内部状态名用 runtime_error（冻结边界），AG-UI 事件名仍是 RUN_ERROR。
+    // 终态 status 与 AG-UI 事件名是两个命名空间：status 用 runtime_error，
+    // AG-UI 事件名仍是 RUN_ERROR，不要混用。
     if (status === "success" || status === "cancelled" || status === "timeout" || status === "runtime_error") {
       const reason = (result as { reason?: unknown }).reason;
-      // Issue 3：externalEffectsMayContinue 是必填 invariant；
+      // externalEffectsMayContinue 是必填 invariant；
       // upstream 缺省时按保守规则补齐（success → false，其余三态 → true）。
       const rawFlag = (result as { externalEffectsMayContinue?: unknown }).externalEffectsMayContinue;
       const externalEffectsMayContinue = typeof rawFlag === "boolean"
@@ -136,7 +137,7 @@ export interface AguiConversationLifecycle {
 
 /**
  * 单次对话的活跃订阅（用于取消）。键 = runId。
- * Task 3 / C2：每个 run 持有独立 AbortController，AGUI_CANCEL 调用 abort() 触发
+ * 每个 run 持有独立 AbortController，AGUI_CANCEL 调用 abort() 触发
  * harness 的 cancelled 流程，而非粗暴 unsubscribe()。
  */
 const activeRuns = new Map<string, {
@@ -146,14 +147,14 @@ const activeRuns = new Map<string, {
 }>();
 
 /**
- * Issue 7：测试专用——验证同步 complete 后没有幽灵 active run。
+ * 测试专用——验证同步 complete 后没有幽灵 active run。
  * 仅在测试环境使用；生产代码不要调用。
  */
 export function __hasActiveRunForTest(runId: string): boolean {
   return activeRuns.has(runId);
 }
 
-// ── 会话级运行守卫（已知问题 4）──────────────────────────
+// ── 会话级运行守卫 ────────────────────────────────────────
 // 同一会话同一时刻最多一个 active run；不同会话允许并发。
 // 渲染端 busy 队列只是 UX 优化，本守卫才是跨进程最终一致性边界：
 // 无论 IPC 时序如何（如 F5 后立即发消息），正确性不依赖渲染端调度顺序。
@@ -198,7 +199,7 @@ let buildOptionsFn: BuildOptionsFn | null = null;
 let getChatWindowFn: GetChatWindowFn = () => null;
 
 /**
- * 计划审批流（设计稿 §5 方案 Y / §8）：run 成功收尾后触发，不阻塞 RUN_FINISHED。
+ * 计划审批流：run 成功收尾后触发，不阻塞 RUN_FINISHED。
  *
  * 1. PLAN_DISCUSSING + 本轮 write_plan → PLAN_REVIEW（moveToReview 幂等，纯讨论轮不弹卡）
  * 2. 发 cyrene.plan.review（计划全文，渲染端打开独立计划窗口）+ 弹第一段审批卡（两选项）
@@ -368,7 +369,7 @@ export function registerAgUiIpc(
       throw new Error(`${mode} 模式需要先绑定项目工作区`);
     }
 
-    // ── 会话级运行守卫（已知问题 4）：同一会话同一时刻最多一个 active run ──
+    // ── 会话级运行守卫：同一会话同一时刻最多一个 active run ──
     // 检查 + 注册在同一同步代码块内完成（JS 单线程，get 与 set 之间无 await = 原子），
     // 早于下方 buildOptions（async，存在竞态窗口，F5 后立即发消息即命中）。
     // 渲染端 busy 队列不参与正确性论证：无论 IPC 时序如何，这里都是最终边界。
@@ -431,11 +432,11 @@ export function registerAgUiIpc(
     options.recoveryContext = input.recoveryContext;
     options.resumeFromRunId = input.resumeFromRunId;
     options.conversationMode = mode;
-    // Task 2 / C1：把 bridge 创建的 canonical runId 注入 CyreneRunOptions，
+    // 把 bridge 创建的 canonical runId 注入 CyreneRunOptions，
     // 一路传到 Agent / Harness adapter / ToolContext / 所有 AG-UI 事件。
-    // ack.runId 与 RUN_STARTED.runId 必须一致（Step 5 测试断言）。
+    // ack.runId 与 RUN_STARTED.runId 必须一致。
     options.runId = runId;
-    // Task 3 / C2：AbortController 已在会话守卫注册前创建（守卫的 abort 需要引用它）。
+    // AbortController 已在会话守卫注册前创建（守卫的 abort 需要引用它）。
     // signal 一路传到 Agent / harness；AGUI_CANCEL / takeover 调用 abort()，
     // 触发 harness 返回 cancelled，CyreneAgent 发出 RUN_FINISHED(result.status="cancelled")，
     // complete 回调自然清理。
@@ -472,7 +473,7 @@ export function registerAgUiIpc(
     const agent = new CyreneAgent({ threadId, description: "Cyrene 主聊天" });
 
     let pendingRunFinishedEvent: unknown | null = null;
-    // Task 2 / C1：exactly-once settlement gate。
+    // exactly-once settlement gate。
     // complete / error 两条 RxJS 回调都会先 trySettle，只有第一次进入的那条会真正发出终态事件。
     // 这覆盖：upstream 连续发两个 terminal、success 后 error、error 后 success 等竞态。
     const settlementGate = new RunSettlementGate();
@@ -549,13 +550,13 @@ export function registerAgUiIpc(
           timePrefixFilter = null;
           pendingTextStart = null;
           textStartForwarded = false;
-          // Task 2 / C1：通过 settlement gate 保证 only-once terminal。
+          // 通过 settlement gate 保证 only-once terminal。
           // 如果 upstream 已经发过 RUN_FINISHED / RUN_ERROR（gate 已结算），丢弃后续重复事件。
           const terminal = extractTerminalFromRunFinished(baseEvent);
           if (!settlementGate.trySettle(terminal)) {
             return;
           }
-          // Issue 2：runtime_error 必须走 RUN_ERROR，不缓存为 RUN_FINISHED。
+          // runtime_error 必须走 RUN_ERROR，不缓存为 RUN_FINISHED。
           // complete 回调据此跳过成功收尾副作用；渲染端只收到 RUN_ERROR 作为终态。
           if (terminal.status === "runtime_error") {
             const reason = terminal.reason ?? "E_RUN_FAILURE";
@@ -634,7 +635,7 @@ export function registerAgUiIpc(
         console.error("[AgUiBridge] run 失败:", message);
         perf.dump();
         const code = err instanceof AgentRuntimeError ? err.code : undefined;
-        // Task 2 / C1：runtime error 必须经过同一个 settlement gate。
+        // runtime error 必须经过同一个 settlement gate。
         // 如果 upstream 已经发过 RUN_FINISHED（gate 已结算为 success / cancelled / timeout），
         // 这里直接丢弃 RUN_ERROR，避免渲染端收到第二终态。
         // pendingRunFinishedEvent 仍会在 complete 回调里发出（如果 complete 被调用）；
@@ -663,8 +664,8 @@ export function registerAgUiIpc(
       complete: async () => {
         perf.mark("agent_run_complete");
         activeRuns.delete(runId);
-        // Task 2 / C1：complete 路径下 settlement 应已由 next(RUN_FINISHED) 写入。
-        // Issue 4：若 upstream 走裸 complete（没有 RUN_FINISHED），必须补发一个合成的 RUN_FINISHED，
+        // complete 路径下 settlement 应已由 next(RUN_FINISHED) 写入。
+        // 若 upstream 走裸 complete（没有 RUN_FINISHED），必须补发一个合成的 RUN_FINISHED，
         // 否则 renderer 收到零个终态事件，exactly-once 退化为 at-most-once。
         // 若已被 error 路径或 runtime_error RUN_FINISHED 结算，则保持该终态，不再补发。
         if (!settlementGate.isSettled()) {
@@ -683,7 +684,7 @@ export function registerAgUiIpc(
         const settlement = settlementGate.get();
         const isSuccessfulCompletion = settlement?.status === "success";
         try {
-          // Task 2 / C1：cancelled / timeout / runtime_error 不跑成功收尾副作用
+          // cancelled / timeout / runtime_error 不跑成功收尾副作用
           // （sticker / memory / learn-progress / 历史召回）。
           // 这些副作用假定 run 已经成功产出回复；其他终态不能保证有可用 finalAnswer。
           if (agent.lastResult && isSuccessfulCompletion) {
@@ -731,7 +732,7 @@ export function registerAgUiIpc(
         } catch (err) {
           console.warn("[AgUiBridge] 副作用失败（不影响结果）:", err);
         }
-        // Issue 2：runtime_error 已在 next 回调发过 RUN_ERROR，complete 不再补发终态事件。
+        // runtime_error 已在 next 回调发过 RUN_ERROR，complete 不再补发终态事件。
         if (settlement?.status === "runtime_error") {
           pendingRunFinishedEvent = null;
         } else if (pendingRunFinishedEvent) {
@@ -746,7 +747,7 @@ export function registerAgUiIpc(
         perf.dump();
       },
     });
-    // Issue 7：同步 Observable 在 subscribe() 返回前可能已 complete 并 delete(runId)。
+    // 同步 Observable 在 subscribe() 返回前可能已 complete 并 delete(runId)。
     // 若此时再无条件 set，会把已结算的 run 重新加入 map，留下幽灵 active run。
     // 仅在未结算（async、仍在运行）时才登记，供 cancel 取消用。
     if (!settlementGate.isSettled()) {
@@ -760,7 +761,7 @@ export function registerAgUiIpc(
   });
 
   ipcMain.handle(IPC.AGUI_CANCEL, (_event, runId?: string) => {
-    // Task 3 / C2：通过 abort signal 触发 harness 的 cancelled 流程，
+    // 通过 abort signal 触发 harness 的 cancelled 流程，
     // 而非粗暴 unsubscribe()。后者会阻止 RUN_FINISHED(result.status="cancelled")
     // 送达渲染端。abort() 让 harness 自然返回 cancelled → CyreneAgent 发出
     // RUN_FINISHED → complete 回调清理 activeRuns + endLifecycle。
@@ -770,7 +771,7 @@ export function registerAgUiIpc(
       if (run && !run.abortController.signal.aborted) {
         run.abortController.abort();
       }
-      // Task 3 / C2：清理该 run 关联的 pending permission / ask_user 卡片。
+      // 清理该 run 关联的 pending permission / ask_user 卡片。
       // 渲染端通过 RUN_FINISHED(result.status="cancelled") 自然收到卡片关闭信号。
       cancelPendingChoicesForRun(id);
       cancelPendingApprovalsForRun(id);

@@ -13,8 +13,8 @@
 //!     32-bit top-down DIB. This is the documented fallback when DXGI init
 //!     fails or when the cursor is composited into the desktop.
 //!
-//! The overlay window, the input state machine, the Direct2D draw path, and the
-//! clipboard / encoder wiring live in T5b, T5c, Task 6, and Task 7.
+//! The overlay window (with its input state machine), the Direct2D draw path,
+//! and the clipboard / encoder wiring live in the remaining `win` modules.
 
 #![cfg(windows)]
 

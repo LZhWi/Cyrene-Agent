@@ -1,5 +1,6 @@
 /**
  * 循环内上下文压缩（v3 §10.6）
+ * 注：注释中的 "v3 §x" / "设计稿 §x" 均指 docs/design/2026-08-08-cyreneHarnessloopdesign.md（CyreneHarness 设计稿 v3）。
  *
  * 三件事：
  * 1. 循环内检查点（每轮 callLLM 前检查，阈值 0.7）

@@ -1,4 +1,4 @@
-// §7.4 23 条端到端断言：构造完整 ProviderCapability + VendorConfig 形态，
+// 端到端断言：构造完整 ProviderCapability + VendorConfig 形态，
 // 调 adapter.buildRequest，断言 JSON.parse(body) 的具体 wire 字段。
 
 import { describe, expect, test } from "vitest";
@@ -64,7 +64,7 @@ const SAMPLE_TOOL: ChatRequestTool = {
 };
 
 // ── ChatGPT ──────────────────────────────────────────────
-describe("§7.4 ChatGPT 端到端", () => {
+describe("ChatGPT 端到端", () => {
   const cap = makeCap({ id: "chatgpt", transport: "openai" });
 
   test("#1 gpt-5.6 + {on, high} → reasoning_effort === 'high'", () => {
@@ -86,7 +86,7 @@ describe("§7.4 ChatGPT 端到端", () => {
 });
 
 // ── Claude ──────────────────────────────────────────────
-describe("§7.4 Claude 端到端", () => {
+describe("Claude 端到端", () => {
   const cap = makeCap({ id: "claude", transport: "anthropic" });
 
   test("#5 claude-sonnet-5 + {on, xhigh} → output_config.effort=xhigh 且 thinking.type=adaptive", () => {
@@ -116,7 +116,7 @@ describe("§7.4 Claude 端到端", () => {
 });
 
 // ── DeepSeek ──────────────────────────────────────────────
-describe("§7.4 DeepSeek 端到端", () => {
+describe("DeepSeek 端到端", () => {
   const cap = makeCap({ id: "deepseek", transport: "openai" });
 
   test("#7 deepseek-v4-pro + {on, max} → thinking.type=enabled 且 reasoning_effort=max", () => {
@@ -127,7 +127,7 @@ describe("§7.4 DeepSeek 端到端", () => {
 });
 
 // ── GLM ──────────────────────────────────────────────
-describe("§7.4 GLM 端到端", () => {
+describe("GLM 端到端", () => {
   const cap = makeCap({ id: "glm", transport: "openai" });
 
   test("#8 glm-5.2 + {on, high} → thinking.type=enabled 且 reasoning_effort=high", () => {
@@ -144,7 +144,7 @@ describe("§7.4 GLM 端到端", () => {
 });
 
 // ── Qwen ──────────────────────────────────────────────
-describe("§7.4 Qwen 端到端", () => {
+describe("Qwen 端到端", () => {
   const cap = makeCap({ id: "qwen", transport: "openai" });
 
   test("#10 qwen3-max + on → enable_thinking=true 且 body 中无 thinking", () => {
@@ -161,7 +161,7 @@ describe("§7.4 Qwen 端到端", () => {
 });
 
 // ── Kimi ──────────────────────────────────────────────
-describe("§7.4 Kimi 端到端", () => {
+describe("Kimi 端到端", () => {
   const cap = makeCap({ id: "kimi", transport: "openai" });
 
   test("#12 kimi-k2.6 + on + hasTools → thinking={type:'enabled', keep:'all'}", () => {
@@ -191,7 +191,7 @@ describe("§7.4 Kimi 端到端", () => {
 });
 
 // ── MiniMax ──────────────────────────────────────────────
-describe("§7.4 MiniMax 端到端", () => {
+describe("MiniMax 端到端", () => {
   const cap = makeCap({ id: "minimax", transport: "anthropic" });
 
   test("#17 MiniMax-M3 + off → thinking.type=disabled（走 anthropic-adaptive）", () => {
@@ -211,7 +211,7 @@ describe("§7.4 MiniMax 端到端", () => {
 });
 
 // ── MiMo ──────────────────────────────────────────────
-describe("§7.4 MiMo 端到端", () => {
+describe("MiMo 端到端", () => {
   test("#20 mimo-v2.5-pro + on (OpenAI transport) → thinking.type=enabled", () => {
     const cap = makeCap({ id: "mimo", transport: "openai" });
     const body = buildOpenAI(cap, "mimo-v2.5-pro", { mode: "on" });
@@ -226,7 +226,7 @@ describe("§7.4 MiMo 端到端", () => {
 });
 
 // ── 豆包 ──────────────────────────────────────────────
-describe("§7.4 豆包 端到端", () => {
+describe("豆包 端到端", () => {
   const cap = makeCap({ id: "doubao", transport: "openai" });
 
   test("#22 doubao-seed-2-1 + on → thinking.type=enabled", () => {
@@ -238,7 +238,7 @@ describe("§7.4 豆包 端到端", () => {
 });
 
 // ── 未知模型 ──────────────────────────────────────────────
-describe("§7.4 未知模型 端到端", () => {
+describe("未知模型 端到端", () => {
   test("#23 未知模型 + on → body 中无 reasoning 相关字段（兜底 none）", () => {
     const cap = makeCap({ id: "unknown", transport: "openai" });
     const body = buildOpenAI(cap, "anything", { mode: "on" });

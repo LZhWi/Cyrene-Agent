@@ -1,18 +1,16 @@
 /**
- * Exactly-once settlement gate（Task 2 / C1）。
- *
- * 设计依据：plan §Task 2 + Reuse Decisions
+ * Exactly-once settlement gate：保证一次 run 只记账一个终态。
  *
  * 职责：
  * - 在一次 run 的生命周期内，只允许第一个 CyreneRunTerminalResult 被记账。
  * - 任何后续 trySettle（包括 success 后再 error、cancelled 后再 timeout 等）
  *   都被静默丢弃，由调用方决定是否记录诊断日志。
  *
- * 不承担的职责（plan 明确禁止）：
+ * 不承担的职责：
  * - 不判断 completion / continue_agent；
  * - 不修改 RUN_FINISHED.result 的形状（只记账，不重写）；
  * - 不消费 ExecutionLedger / UncertainEffectGuard；
- * - 不参与 cancellation propagation（Task 3 才做）。
+ * - 不参与取消传播（取消走各 run 的 AbortController，见 agui-bridge）。
  *
  * 使用方：
  * - agui-bridge：complete / error 两条 RxJS 回调在转发终态事件前都先调 trySettle，

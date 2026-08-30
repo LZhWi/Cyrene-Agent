@@ -38,7 +38,7 @@ const mockedRunHarnessWithAdapter = vi.mocked(runHarnessWithAdapter);
 
 vi.mock("./harness-adapter", () => ({
   runHarnessWithAdapter: vi.fn(async (_options: unknown, signal: AbortSignal, _send: unknown) => {
-    // Task 3：忠实模拟真实行为——signal abort 后返回 cancelled terminal。
+    // 忠实模拟真实行为——signal abort 后返回 cancelled terminal。
     // 如果 signal 已 aborted，立即返回 cancelled；否则等 signal abort。
     if (signal.aborted) {
       return {
@@ -377,9 +377,9 @@ describe("executeToolCall business failure detection", () => {
   });
 });
 
-// ── Task 3 / C2：external signal threading + first-source-wins ──────────
+// ── external signal threading + first-source-wins ──────────
 
-describe("CyreneAgent external signal threading (Task 3)", () => {
+describe("CyreneAgent external signal threading", () => {
   beforeEach(() => {
     mockedRunHarnessWithAdapter.mockClear();
   });

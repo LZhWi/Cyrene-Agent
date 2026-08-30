@@ -71,7 +71,7 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     const session = sessionId ? getSession(sessionId) : undefined;
     // 档案解析优先级：会话绑定 > 渲染端待定档案（欢迎页暂存）> 默认档案。
     // 不能回退顶层镜像：顶层可能是空壳（provider 指向别家、三件套全空），
-    // 与 channel bot 不回复是同一病根（2026-08-27 issue 5：欢迎页思考强度点开无反应）。
+    // 与 channel bot 不回复是同一病根：不解析默认档案时拿到的是顶层空壳镜像配置。
     const profiles = listSavedModelProfiles(baseSettings);
     const requestedId = session?.modelProfileId
       ?? (typeof payload?.modelProfileId === "string" && payload.modelProfileId ? payload.modelProfileId : undefined);

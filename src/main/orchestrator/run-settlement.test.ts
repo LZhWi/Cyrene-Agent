@@ -1,11 +1,11 @@
 /**
- * Task 2 / C1 失败测试：exactly-once settlement gate。
+ * exactly-once settlement gate 单元测试。
  *
- * 验收不变量（plan §Task 2）：
+ * 验收不变量：
  * - trySettle 第一次返回 true，第二次返回 false（exactly-once）。
  * - get() 始终返回第一次的 settlement，不受后续 trySettle 影响。
  * - success / cancelled / timeout / runtime_error 四态都能被记账。
- * - externalEffectsMayContinue 是必填 invariant（Issue 3）。
+ * - externalEffectsMayContinue 是必填 invariant。
  *
  * 本文件只测纯状态 gate，不测 bridge 集成（bridge 集成测试在 agui-bridge.test.ts）。
  */

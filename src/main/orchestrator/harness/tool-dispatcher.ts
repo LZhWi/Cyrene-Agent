@@ -1,5 +1,6 @@
 /**
  * 工具分发器（v3 §3.1 / §5.7）
+ * 注：注释中的 "v3 §x" / "设计稿 §x" 均指 docs/design/2026-08-08-cyreneHarnessloopdesign.md（CyreneHarness 设计稿 v3）。
  *
  * 统一 dispatch Harness 内置工具和普通工具。
  * - 内置工具（update_todo / ask_user）：由 executeHarnessBuiltin 处理，能直接访问 state 和 emitter

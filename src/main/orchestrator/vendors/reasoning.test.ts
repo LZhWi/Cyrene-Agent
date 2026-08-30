@@ -200,14 +200,14 @@ describe("applyReasoningPreference — effort / supportsDisable（用户修订 #
   });
 
   test("effort + off + supportsDisable=false → 折叠为 on，发 defaultEffort（不发 disabled，避免落服务端默认档）", () => {
-    // 2026-08-27 issue 2：模型不支持关闭时 off 折叠为 on；
+    // 模型不支持关闭时 off 折叠为 on；
     // 发 defaultEffort 比"不发字段"安全——后者会落服务端默认档（GLM-5.3 默认 max）
     expect(applyReasoningPreference({}, { mode: "off" }, effortNoDisableCap, ctx))
       .toEqual({ reasoning_effort: "high" });
   });
 });
 
-describe("applyReasoningPreference — auto 档映射 / off 折叠（2026-08-27 issue 2/3）", () => {
+describe("applyReasoningPreference — auto 档映射 / off 折叠", () => {
   // GLM-5.3 形状：toggle-effort + thinking-type + 不可关闭 + autoEffort
   const glm53Cap: ReasoningCapability = {
     control: "toggle-effort",
