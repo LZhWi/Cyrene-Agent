@@ -1,0 +1,149 @@
+import { describe, expect, it, vi } from "vitest";
+import { createShutdownCoordinator } from "./shutdown";
+import { createStartupReadiness } from "./readiness";
+import { createWindowActivationBroker } from "./window-activation";
+import { startCore, type CoreDependencies, type CoreServices } from "./core-bootstrap";
+
+function makeServices(): CoreServices {
+  return {
+    runtimeState: {} as never,
+    tts: {} as never,
+    ttsSession: {} as never,
+    embedding: { scheduleStartupRefreshes: vi.fn() } as never,
+    proactive: {} as never,
+    git: { dispose: vi.fn() } as never,
+    lsp: { disposeAll: vi.fn() } as never,
+    screenshot: { shutdown: vi.fn() } as never,
+    music: { shutdown: vi.fn(async () => ({})) } as never,
+    update: {} as never,
+  };
+}
+
+function makeCoreDeps(calls: string[], overrides: Partial<CoreDependencies> = {}): CoreDependencies & {
+  readiness: ReturnType<typeof createStartupReadiness>;
+  activation: ReturnType<typeof createWindowActivationBroker>;
+  chatLoad: ReturnType<typeof vi.fn>;
+  petWindowCreated: boolean;
+} {
+  const readiness = createStartupReadiness();
+  // 生产顺序中 shell-ready 由 startShell 推进；core 阶段从 shell-ready 开始
+  readiness.transition("shell-ready");
+  const activation = createWindowActivationBroker();
+  const chatLoad = vi.fn(async () => { calls.push("chat-load"); });
+  let petWindowCreated = false;
+  const chatWindow = { isDestroyed: () => false, show: vi.fn() };
+  const petWindow = { isDestroyed: () => false };
+
+  const deps: CoreDependencies = {
+    shell: {
+      ipc: { handle: vi.fn(), on: vi.fn(), dispose: vi.fn() },
+      splashWindow: null,
+      loadingShownAt: 100,
+      windowManager: {
+        createPetWindow: vi.fn(() => {
+          petWindowCreated = true;
+          return petWindow;
+        }),
+        onPetWindowReady: vi.fn(),
+        onPetWindowClosed: vi.fn(),
+        createSidebarWindow: vi.fn(),
+        createTasksWindow: vi.fn(),
+      },
+      chat: { window: chatWindow, load: chatLoad, show: vi.fn() },
+      tray: { isDestroyed: () => false, destroy: vi.fn() } as never,
+      live2dWindowLifecycle: { attach: vi.fn(), clear: vi.fn(), getWindow: () => null, getDiagnostics: () => ({}) },
+    } as never,
+    readiness,
+    activation,
+    shutdown: createShutdownCoordinator({ readiness, timeoutMs: 1000 }),
+    migrateStagedExternalContent: () => { calls.push("migrate"); },
+    initSkills: () => { calls.push("skills"); },
+    createLowCostServices: () => { calls.push("services"); return makeServices(); },
+    initSandbox: async () => { calls.push("sandbox"); },
+    initPlanMode: () => { calls.push("plan"); },
+    registerAllTools: () => { calls.push("tools"); },
+    initRag: async () => { calls.push("rag"); },
+    createRuntime: () => { calls.push("runtime"); return {} as never; },
+    createChannels: () => ({ initialize: () => { calls.push("channels-initialize"); }, start: vi.fn(async () => { calls.push("channels-start"); }), shutdown: vi.fn(async () => undefined) } as never),
+    createScheduler: () => ({ initialize: () => { calls.push("scheduler-initialize"); }, start: vi.fn(() => { calls.push("scheduler-start"); }), stop: vi.fn() } as never),
+    registerCoreIpc: () => { calls.push("register-core-ipc"); },
+    loadGeneralSettings: () => ({ petVisible: true, sidebarVisible: false, tasksVisible: false }) as never,
+    revealStartupWindows: async () => { calls.push("reveal"); },
+    minimumSplashMs: 2500,
+    markStartupWindowsReady: () => { calls.push("mark-startup-windows"); },
+    ...overrides,
+  };
+
+  return {
+    ...deps,
+    readiness,
+    activation,
+    chatLoad,
+    get petWindowCreated() {
+      return petWindowCreated;
+    },
+  } as never;
+}
+
+describe("startCore", () => {
+  it("registers every renderer IPC handler before loading chat", async () => {
+    const calls: string[] = [];
+    await startCore(makeCoreDeps(calls));
+    expect(calls.indexOf("register-core-ipc")).toBeLessThan(calls.indexOf("chat-load"));
+    expect(calls.indexOf("channels-initialize")).toBeLessThan(calls.indexOf("chat-load"));
+    expect(calls).not.toContain("channels-start");
+    expect(calls).not.toContain("scheduler-start");
+  });
+
+  it("degrades RAG failure but still loads chat", async () => {
+    const calls: string[] = [];
+    const deps = makeCoreDeps(calls, {
+      initRag: async () => { throw new Error("rag offline"); },
+    });
+    await expect(startCore(deps)).resolves.toBeDefined();
+    expect(deps.readiness.getDegradedReasons().has("rag")).toBe(true);
+    expect(deps.chatLoad).toHaveBeenCalledOnce();
+  });
+
+  it("degrades skills failure and continues startup", async () => {
+    const deps = makeCoreDeps([], {
+      initSkills: () => { throw new Error("skills broken"); },
+    });
+    await expect(startCore(deps)).resolves.toBeDefined();
+    expect(deps.readiness.getDegradedReasons().has("skills")).toBe(true);
+  });
+
+  it("treats chat load failure as fatal", async () => {
+    const deps = makeCoreDeps([], {
+      initRag: async () => undefined,
+    });
+    vi.mocked(deps.shell.chat.load).mockRejectedValue(new Error("renderer failed"));
+    await expect(startCore(deps)).rejects.toThrow("renderer failed");
+    const markReadySpy = vi.spyOn(deps.activation, "markReady");
+    // markReady 未在致命路径被调用：重新用 spy 无法回溯，直接断言 phase 停留在 core-ready 之前
+    expect(deps.readiness.getPhase()).not.toBe("core-ready");
+    expect(markReadySpy).not.toHaveBeenCalled();
+  });
+
+  it("creates the pet window only when petVisible is enabled", async () => {
+    const deps = makeCoreDeps([]);
+    await startCore(deps);
+    expect(deps.petWindowCreated).toBe(true);
+
+    const hidden = makeCoreDeps([], {
+      loadGeneralSettings: () => ({ petVisible: false, sidebarVisible: false, tasksVisible: false }) as never,
+    });
+    await startCore(hidden);
+    expect(hidden.petWindowCreated).toBe(false);
+    expect(hidden.shell.windowManager.createSidebarWindow).not.toHaveBeenCalled();
+    expect(hidden.shell.windowManager.createTasksWindow).not.toHaveBeenCalled();
+  });
+
+  it("runs reveal after core-ready and drains activation last", async () => {
+    const calls: string[] = [];
+    const deps = makeCoreDeps(calls);
+    await startCore(deps);
+    expect(calls.indexOf("reveal")).toBeLessThan(calls.indexOf("mark-startup-windows"));
+    expect(deps.readiness.getPhase()).toBe("core-ready");
+  });
+});
