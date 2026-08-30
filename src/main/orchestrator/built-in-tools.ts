@@ -1,5 +1,15 @@
 // 内置高危工具 — 给 agent 装上 fetch_url / run_shell / install_mcp_server 三件武器
 // 全部走权限网关：fetch_url=network, run_shell=shell, install_mcp_server=fs-write
+//
+// 本文件正在按工具拆分到 builtin-tools/ 子目录（门禁：built-in-tools.snapshot.test.ts，
+// 锁死注册插入顺序与模型可见字段）。每个工具模块在模块加载时自行 toolRegistry.register，
+// 本文件保留为 facade：re-export 公共 API + 按原注册顺序 import 各工具模块，
+// 所有既有 import 路径与运行时行为保持不变。
+
+export { setUserTimezoneConfig, currentUserTimezone } from "./builtin-tools/timezone";
+// facade 内仍留在本文件的段落（weather 等）会调用 currentUserTimezone；
+// `export from` 不把名字引入本模块作用域，这里需要单独 import。
+import { currentUserTimezone } from "./builtin-tools/timezone";
 
 import { spawn } from "child_process";
 import { toolRegistry } from "./tool-registry";
@@ -14,7 +24,6 @@ let sendToLive2DWindow: (channel: string, payload?: unknown) => void = () => {};
 export function setLive2dWindowSender(sender: typeof sendToLive2DWindow): void {
   sendToLive2DWindow = sender;
 }
-import { resolveChatContextTimezone } from "../chat-time-context";
 import type { ToolContext } from "./tool-context";
 import { VerificationRunner, resolveBuiltinExecutable } from "./verification-runner";
 import { resolveWorkspaceBuildCommand } from "./workspace-build-command";
@@ -26,22 +35,6 @@ import {
 } from "./shell-runtime";
 
 const LOG_PREFIX = "[BuiltinTools]";
-
-/**
- * 工具侧统一 timezone 注入：index.ts 启动时调 setUserTimezoneConfig。
- * 任何工具要给模型格式化时间，统一走 `currentUserTimezone()`，禁止各自直接读 profile/Intl。
- */
-let userTimezoneGetter: (() => string | undefined) | null = null;
-
-export function setUserTimezoneConfig(timezoneGetter: () => string | undefined): void {
-  userTimezoneGetter = timezoneGetter;
-}
-
-/** 当前用户的有效时区（缺/非法时回退 Asia/Shanghai）。统一封装，所有工具复用。 */
-export function currentUserTimezone(): string {
-  const raw = userTimezoneGetter?.();
-  return resolveChatContextTimezone(raw);
-}
 
 // ── 工具 1：fetch_url ─────────────────────────────────────
 // 拉一个 URL 的纯文本 / Markdown 形式的 body，给 agent 读 README 用
