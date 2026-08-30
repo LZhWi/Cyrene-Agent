@@ -12,7 +12,7 @@ vi.mock("./vendors", () => ({
   getAdapterForConfig: vi.fn(() => ({ id: "fake-adapter" })),
 }));
 
-vi.mock("./tool-registry", () => ({
+vi.mock("./tools/registry/tool-registry", () => ({
   toolRegistry: {
     getEnabledTools: vi.fn(() => []),
     getById: vi.fn(),

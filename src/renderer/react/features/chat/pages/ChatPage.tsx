@@ -4,12 +4,10 @@ import { ChatComposer, parseComposerMessage, type ComposerAttachment } from "../
 import { ComposerSlot } from "../components/ComposerSlot";
 import { TodoPanel } from "../components/TodoPanel";
 import { CodeGitPanel } from "../components/CodeGitPanel";
-import { PlanContent, planTabLabel, planTabDotClass, type PlanReviewPhase } from "../components/PlanReviewPanel";
-import { ReviewDiffContent } from "../components/ReviewInspector";
-import { RightInspector, type InspectorTab } from "../components/RightInspector";
+import type { PlanReviewPhase } from "../components/PlanReviewPanel";
+import { ChatPageInspector, type ChatPageInspectorTabId } from "../components/ChatPageInspector";
 import type { TodoItem } from "../../../../../shared/todo-types";
 import {
-  describePermissionRequest,
   normalizeChoiceInteraction,
   normalizeDeferredPlanChoice,
   normalizeTaskPlanPresentation,
@@ -18,35 +16,48 @@ import {
   resolveTerminalContent,
   shouldClearComposerInteractionForTerminal,
   shouldDismissAsk,
-  type AgentRunStage,
   type ComposerInteraction,
 } from "../components/run-presentation";
 import { ChatMessageList, type ChatMessageItem } from "../components/ChatMessageList";
+import { ChatPageNavigation, type ChatPagePanel } from "../components/ChatPageNavigation";
+import {
+  ContextCompressionNotice,
+  FileDropOverlay,
+  RunRecoveryNotices,
+} from "../components/ChatWorkspaceNotices";
 import { applyAgentRoundBoundary, createRoundProcessMessage } from "../components/agent-rounds";
 import { applyTaskDelegationEvent, normalizeTaskDelegationEvent } from "../components/task-delegations";
-import type { WeatherData } from "../components/weather/weather-types";
 import { getTtsPlaybackSnapshot, playTtsToCompletion, stopTtsPlayback } from "../components/tts-playback";
 import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
-import { ConversationSidebar } from "../components/ConversationSidebar";
 
-import type { AgentRoundRecord, ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord, ToolFileChange } from "../../../../../shared/chat-types";
+import type { AgentRoundRecord, ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import { isContextUsageSnapshot, type ContextUsageSnapshot } from "../../../../../shared/context-usage";
-import { SidebarToggle } from "../../../components/ui/SidebarToggle";
-import { ModeSwitch } from "../../../components/ui/ModeSwitch";
-import { ToolModeButton } from "../../../components/ui/ToolModeButton";
 import { ToolModePanel } from "../components/ToolModePanel";
-import { SkillModeButton } from "../../../components/ui/SkillModeButton";
-import { ModelModeButton } from "../../../components/ui/ModelModeButton";
 import { SkillModePanel } from "../components/SkillModePanel";
 import { ModelModePanel } from "../components/ModelModePanel";
-import { WindowControls } from "../../../components/ui/WindowControls";
-import { SettingsButton } from "../../../components/ui/SettingsButton";
-import { UserAvatar } from "../../../components/ui/UserAvatar";
-import { AppUpdateEntry } from "../components/AppUpdateEntry";
 import { useUserCallPreference } from "../../../hooks/useUserNickname";
 import { resolveRevisableLastTurn } from "../components/last-turn-actions";
-import { NewTaskButton } from "../../../components/ui/NewTaskButton";
-import { shouldListenForDeferredPlanEvents, shouldRunModelForMode } from "./conversation-run-policy";
+import { shouldListenForDeferredPlanEvents } from "./conversation-run-policy";
+import { arrayBufferToBase64, containsFiles, PASTE_IMAGE_MAX_BYTES } from "./attachment-utils";
+import {
+  aguiApi,
+  chatStore,
+  choiceApi,
+  settingsApprovalApi,
+  sidebarApi,
+  type AguiEvent,
+  type ModelConfigApi,
+  type PublicModelConfig,
+} from "./chat-page-bridge";
+import {
+  getInitialMode,
+  isConversationMode,
+  normalizeWeatherData,
+  parseSessionRunActiveError,
+  permissionInteraction,
+  stageForStep,
+  toUiMessages,
+} from "./chat-page-normalizers";
 import {
   bootstrapReactSession,
   normalizeSessionMode,
@@ -65,7 +76,6 @@ import {
   hydrateSessionMessages,
   mergeHarnessTodosForSession,
   patchSessionMessage,
-  recoverInterruptedMessage,
   sessionInteraction,
   setSessionInteraction,
   setSessionInteractionBusy,
@@ -87,301 +97,6 @@ import "../components/PermissionControl.css";
 import "../components/ModelModePanel.css";
 import "../components/ChatMessageList.css";
 import "../components/ConversationSidebar.css";
-
-
-import compressingPng from "../../../assets/compressing.png";
-
-const CONVERSATION_MODES: readonly ConversationMode[] = ["chat", "work", "code", "learn"];
-
-function isConversationMode(value: string): value is ConversationMode {
-  return CONVERSATION_MODES.includes(value as ConversationMode);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
-}
-
-function asNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-/** 主进程会话守卫拒绝（agui-bridge `SESSION_RUN_ACTIVE:<runId>`）时解析出 active runId。 */
-function parseSessionRunActiveError(message: string): string | undefined {
-  const prefix = "SESSION_RUN_ACTIVE:";
-  return message.startsWith(prefix) ? message.slice(prefix.length) || undefined : undefined;
-}
-
-/** 校验后端发来的 cyrene.weather 卡片数据，返回 renderer 侧 WeatherData。 */
-function normalizeWeatherData(value: unknown): WeatherData | undefined {
-  const card = asRecord(value);
-  if (!card) return undefined;
-
-  const source = asNonEmptyString(card.source);
-  const location = asRecord(card.location);
-  const province = asNonEmptyString(location?.province);
-  const city = asNonEmptyString(location?.city);
-  const temp = typeof card.temp === "number" ? card.temp : undefined;
-  const humidity = typeof card.humidity === "number" ? card.humidity : undefined;
-
-  if (!source || !province || !city || temp === undefined || humidity === undefined) {
-    return undefined;
-  }
-
-  if (source === "open-meteo") {
-    const weatherCode = typeof card.weatherCode === "number" ? card.weatherCode : undefined;
-    const windDeg = typeof card.windDeg === "number" ? card.windDeg : undefined;
-    const windSpeed = typeof card.windSpeed === "number" ? card.windSpeed : undefined;
-    if (weatherCode === undefined || windDeg === undefined || windSpeed === undefined) return undefined;
-    return {
-      source: "open-meteo",
-      location: { province, city },
-      weatherCode,
-      temp,
-      feelsLike: typeof card.feelsLike === "number" ? card.feelsLike : temp,
-      humidity,
-      windDeg,
-      windSpeed,
-      precipitation: typeof card.precipitation === "number" ? card.precipitation : 0,
-      pressure: typeof card.pressure === "number" ? card.pressure : 0,
-    };
-  }
-
-  if (source === "amap") {
-    const weather = asNonEmptyString(card.weather);
-    const windDirection = asNonEmptyString(card.windDirection);
-    const windPower = asNonEmptyString(card.windPower);
-    const reporttime = asNonEmptyString(card.reporttime);
-    if (!weather || !windDirection || !windPower || !reporttime) return undefined;
-    return {
-      source: "amap",
-      location: { province, city },
-      weather,
-      temp,
-      humidity,
-      windDirection,
-      windPower,
-      reporttime,
-    };
-  }
-
-  return undefined;
-}
-
-const DEMO_RESPONSES: Readonly<Record<string, string>> = {
-  "1": "收到啦♪ 这是一条普通会话消息。今天也一起把界面慢慢打磨得更舒服吧。",
-  "2": [
-    "## Markdown 渲染测试",
-    "",
-    "这是一段包含 **粗体**、*斜体* 和 `行内代码` 的内容。",
-    "",
-    "- 第一项：消息列表使用 Bubble",
-    "- 第二项：正文使用 XMarkdown",
-    "- 第三项：样式仍由昔涟主题控制",
-    "",
-    "> 这是一段引用，用来观察间距、颜色和左侧边线。",
-    "",
-    "| 功能 | 状态 |",
-    "| --- | --- |",
-    "| Markdown | 正常 |",
-    "| 表格 | 正常 |",
-  ].join("\n"),
-  "3": String.raw`数学公式测试开始♪
-
-行内公式：$E = mc^2$
-
-块级公式：
-
-$$
-\int_{-\infty}^{\infty} e^{-x^2}\,dx = \sqrt{\pi}
-$$
-
-再来一个二次方程：
-
-$$
-x = \frac{-b \pm \sqrt{b^2 - 4ac}}{2a}
-$$`,
-  "4": [
-    "下面是一段 TypeScript 代码，用来测试语法高亮和复制功能：",
-    "",
-    "```ts",
-    "type CyreneMode = \"work\" | \"chat\" | \"code\" | \"learn\";",
-    "",
-    "function greeting(mode: CyreneMode): string {",
-    "  return mode === \"chat\"",
-    "    ? \"昔涟期待和你一起聊天♪\"",
-    "    : `当前模式：${mode}`;",
-    "}",
-    "",
-    "console.log(greeting(\"chat\"));",
-    "```",
-  ].join("\n"),
-};
-
-const DEMO_STICKERS: Readonly<Record<string, string>> = {
-  "5": "playful",
-};
-
-interface ChatStoreApi {
-  list: (options?: { mode?: ConversationMode }) => Promise<ChatSessionMeta[]>;
-  get: (id: string) => Promise<ChatSession | null>;
-  create: (input: { identityId: null; mode: ConversationMode; title?: string }) => Promise<ChatSession>;
-  append: (id: string, message: ChatMessage) => Promise<ChatSession | null>;
-  upsert: (id: string, message: ChatMessage) => Promise<ChatSession | null>;
-  replaceTail: (id: string, startIndex: number, messages: ChatMessage[]) => Promise<ChatSession | null>;
-  setMessageTtsCacheKey: (id: string, messageId: string, cacheKey: string, converterVersion: string) => Promise<ChatSession | null>;
-  rename: (id: string, title: string) => Promise<ChatSession | null>;
-  delete: (id: string) => Promise<boolean>;
-  setPinned: (id: string, pinned: boolean) => Promise<ChatSession | null>;
-  setModelProfile: (id: string, modelProfileId?: string) => Promise<ChatSession | null>;
-  pickWorkspaceFolder: () => Promise<{ ok: boolean; path?: string; displayName?: string; error?: string }>;
-  setWorkspace: (sessionId: string, workspaceRoot: string) => Promise<{ ok: boolean; error?: string; isEmpty?: boolean }>;
-  initLearnWorkspace: (sessionId: string) => Promise<{ ok: boolean; error?: string; created?: string[]; skipped?: string[] }>;
-  openWorkspace: (workspaceRoot: string) => Promise<{ ok: boolean; error?: string }>;
-  setActiveSession: (sessionId: string | null) => Promise<unknown>;
-  onChanged: (callback: () => void) => () => void;
-  // main → reactChatWindow：通知 ChatPage 切换到指定 sessionId
-  onReactSwitchSession: (callback: (sessionId: string) => void) => () => void;
-  // reactChatWindow → main：ChatPage 已挂好 IPC 监听，允许 flush pending sessionId
-  notifyReactReady: () => void;
-}
-
-interface SidebarApi {
-  openSettings: (section?: string) => void;
-}
-
-interface AguiEvent {
-  type?: string;
-  runId?: string;
-  messageId?: string;
-  delta?: string;
-  message?: string;
-  error?: string;
-  content?: string;
-  name?: string;
-  value?: unknown;
-  toolCallId?: string;
-  toolCallName?: string;
-  stepName?: string;
-  status?: string;
-  /** Diff Review 卡片证据；由 tool_end 事件独立携带（主进程 harness-adapter 透传）。 */
-  changes?: ToolFileChange[];
-}
-
-interface AguiApi {
-  // 返回 AguiRunAck（含 canonical runId），与 RUN_STARTED.runId 强一致。
-  run: (input: {
-    messages: Array<{ role: "user" | "model"; content: string; at?: number }>;
-    userTurnId: string;
-    assistantTurnId: string;
-    styleId?: string;
-    sessionId: string;
-    imageAttachments?: Array<{ name: string; filePath: string; mime?: string }>;
-    recoveryContext?: string;
-    resumeFromRunId?: string;
-  }) => Promise<{ success: boolean; runId: string; error?: string }>;
-  onEvent: (callback: (event: AguiEvent) => void) => () => void;
-  cancel: (runId?: string) => Promise<unknown>;
-  getInterruptedRun?: (sessionId: string) => Promise<{ runId: string; rounds: number; todoCount: number; updatedAt: number } | null>;
-}
-
-interface ChoiceApi {
-  resolve: (id: string, value: unknown) => Promise<{ ok: boolean }>;
-}
-
-interface PermissionApprovalRequest {
-  id: string;
-  runId?: string;
-  toolId: string;
-  toolName: string;
-  toolDescription: string;
-  args: Record<string, unknown>;
-  risk: string;
-}
-
-interface SettingsApprovalApi {
-  onPermissionApprovalRequest: (callback: (request: PermissionApprovalRequest) => void) => () => void;
-  resolvePermissionApproval: (id: string, allowed: boolean) => Promise<{ ok: boolean }>;
-}
-
-interface PublicModelConfig {
-  model?: unknown;
-  displayName?: string;
-  stickerSize?: "small" | "standard" | "large";
-}
-
-interface ModelConfigApi {
-  get: () => Promise<PublicModelConfig>;
-  onChanged: (callback: (config: PublicModelConfig) => void) => () => void;
-}
-
-function chatStore(): ChatStoreApi | undefined {
-  return (window as typeof window & { chatStore?: ChatStoreApi }).chatStore;
-}
-
-function sidebarApi(): SidebarApi | undefined {
-  return (window as typeof window & { sidebar?: SidebarApi }).sidebar;
-}
-
-function aguiApi(): AguiApi | undefined {
-  return (window as typeof window & { agui?: AguiApi }).agui;
-}
-
-function choiceApi(): ChoiceApi | undefined {
-  return (window as typeof window & { choice?: ChoiceApi }).choice;
-}
-
-function settingsApprovalApi(): SettingsApprovalApi | undefined {
-  return (window as typeof window & { settings?: SettingsApprovalApi }).settings;
-}
-
-function permissionInteraction(request: PermissionApprovalRequest): ComposerInteraction {
-  const target = [request.args.path, request.args.filePath]
-    .find((value): value is string => typeof value === "string" && value.trim().length > 0);
-  return {
-    kind: "permission",
-    id: request.id,
-    toolName: request.toolName || request.toolId,
-    summary: describePermissionRequest(request),
-    targetPath: target,
-  };
-}
-
-function stageForStep(stepName: string | undefined): AgentRunStage | undefined {
-  if (stepName === "agent-graph-action-gate") return { kind: "understanding" };
-  if (stepName === "agent-graph-plan") return { kind: "planning" };
-  if (stepName === "agent-graph-soul") return { kind: "responding" };
-  if (stepName?.startsWith("agent-graph-tool-")) {
-    return { kind: "executing", detail: stepName.slice("agent-graph-tool-".length) };
-  }
-  return undefined;
-}
-
-function toUiMessages(session: ChatSession): ChatMessageItem[] {
-  return session.messages.map((message) => {
-    const item: ChatMessageItem = {
-      id: message.id,
-      role: message.role === "model" ? "assistant" : "user",
-      content: message.content,
-      reasoning: message.reasoning,
-      reasoningBlocks: message.reasoningBlocks,
-      processMessages: message.processMessages,
-      agentRounds: message.agentRounds,
-      runActivity: message.runActivity,
-      ttsCacheKey: message.ttsCacheKey,
-      ttsCacheVersion: message.ttsCacheVersion,
-      responseStarted: message.role === "model" && Boolean(message.content.trim() || message.sticker),
-      sticker: message.sticker,
-      toolExecutions: message.toolExecutions,
-      attachments: message.attachments,
-      contextUsage: message.contextUsage,
-      runId: message.runSnapshot?.runId,
-    };
-    return message.runSnapshot ? recoverInterruptedMessage(item, message.runSnapshot) : item;
-  });
-}
-
 /**
  * React 窗口会话打开的纯函数 helper：
  * 从同目录的 openSessionByDeps 模块 re-export 出来，便于 ChatPage 内部组件与
@@ -393,18 +108,6 @@ export {
   type ReactSessionMode,
   type OpenSessionArgs,
 };
-
-const LAST_MODE_STORAGE_KEY = "cyrene-react-last-mode";
-
-function getInitialMode(): ConversationMode {
-  try {
-    const saved = localStorage.getItem(LAST_MODE_STORAGE_KEY);
-    if (saved && isConversationMode(saved)) return saved;
-  } catch {
-    // localStorage 不可用或数据异常时回退到默认值
-  }
-  return "chat";
-}
 
 export function ChatPage() {
   const preferredAddress = useUserCallPreference();
@@ -457,7 +160,6 @@ export function ChatPage() {
   const sessionSelectionGeneration = useRef(0);
   const dragDepthRef = useRef(0);
   const localPreviewUrlsRef = useRef(new Set<string>());
-  const demoTimers = useRef(new Set<number>());
   const activeRunsBySession = useRef<Record<string, { assistantId: string; runId?: string; mode: ConversationMode }>>({});
   const runCheckpointBySessionRef = useRef<Record<string, (status: "running" | "waiting_user") => void>>({});
   // bootstrap 标志：只由 cold-start finally 写入；模式切换 effect 仅检查
@@ -553,11 +255,6 @@ export function ChatPage() {
   }, [mode]);
 
   useEffect(() => () => {
-    for (const timer of demoTimers.current) {
-      window.clearTimeout(timer);
-      window.clearInterval(timer);
-    }
-    demoTimers.current.clear();
     for (const off of activeAguiOffsRef.current) off();
     activeAguiOffsRef.current.clear();
     activeEarlyTtsRef.current?.queue.cancel();
@@ -907,51 +604,8 @@ export function ChatPage() {
   // 渲染期间同步安装真实实现，保证 mount effect 不会先观察到默认 no-op。
   refreshSessionsRef.current = refreshSessions;
 
-  function streamDemoResponse(targetMode: ConversationMode, id: string, response: string, sessionId?: string) {
-    const earlyTtsQueue = sessionId ? createEarlyTtsQueue(targetMode, sessionId, id) : null;
-    const loadingTimer = window.setTimeout(() => {
-      demoTimers.current.delete(loadingTimer);
-      updateMessage(targetMode, id, { loading: false, streaming: true, responseStarted: true });
-
-      const characters = Array.from(response);
-      const chunkSize = Math.max(1, Math.min(4, Math.ceil(characters.length / 120)));
-      let cursor = 0;
-      let spokenCursor = 0;
-      const streamTimer = window.setInterval(() => {
-        cursor = Math.min(characters.length, cursor + chunkSize);
-        const finished = cursor >= characters.length;
-        earlyTtsQueue?.append(characters.slice(spokenCursor, cursor).join(""));
-        spokenCursor = cursor;
-        updateMessage(targetMode, id, {
-          content: characters.slice(0, cursor).join(""),
-          streaming: !finished,
-        });
-        if (finished) {
-          window.clearInterval(streamTimer);
-          demoTimers.current.delete(streamTimer);
-          if (sessionId) {
-            void chatStore()?.append(sessionId, {
-              id,
-              role: "model",
-              content: response,
-              at: Date.now(),
-            }).then((saved) => {
-              void refreshSessions(targetMode, false);
-              if (saved) finishEarlyTtsQueue(earlyTtsQueue!, response);
-              else earlyTtsQueue?.cancel();
-            });
-          } else {
-            earlyTtsQueue?.cancel();
-          }
-        }
-      }, 30);
-      demoTimers.current.add(streamTimer);
-    }, 450);
-    demoTimers.current.add(loadingTimer);
-  }
-
   async function runModel(input: {
-    targetMode: "chat" | "work" | "code";
+    targetMode: ConversationMode;
     sessionId: string;
     userMessageId: string;
     assistantId: string;
@@ -1590,7 +1244,6 @@ export function ChatPage() {
           visibleContent: next.visibleContent,
           attachments: next.attachments,
           userSticker: next.userSticker,
-          shouldRunModel: true,
           assistantId,
           userMessageId: next.id,
         });
@@ -1884,19 +1537,6 @@ export function ChatPage() {
     }
   }
 
-  /** 粘贴/截图临时图片大小上限：与主进程 MAX_SCREENSHOT_BYTES（20MB）一致，前端提前拦截。 */
-  const PASTE_IMAGE_MAX_BYTES = 20 * 1024 * 1024;
-
-  function arrayBufferToBase64(buffer: ArrayBuffer): string {
-    const bytes = new Uint8Array(buffer);
-    let binary = "";
-    const chunkSize = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunkSize) {
-      binary += String.fromCharCode(...bytes.subarray(i, i + chunkSize));
-    }
-    return btoa(binary);
-  }
-
   /**
    * Ctrl+V 粘贴图片：落主进程 screenshots/ 临时文件（复用截图链路），
    * 构造与按钮截图相同的 ComposerAttachment 追加进当前 scope。
@@ -2027,10 +1667,6 @@ export function ChatPage() {
     }));
   }
 
-  function containsFiles(dataTransfer: DataTransfer): boolean {
-    return Array.from(dataTransfer.types).includes("Files");
-  }
-
   function handleDragEnter(event: DragEvent<HTMLElement>) {
     if (!containsFiles(event.dataTransfer)) return;
     event.preventDefault();
@@ -2068,10 +1704,7 @@ export function ChatPage() {
     activeEarlyTtsRef.current = null;
     const userSticker = parsedMessage.userSticker;
     const visibleMessage = parsedMessage.visibleContent;
-    const demoResponse = DEMO_RESPONSES[message];
-    const demoSticker = DEMO_STICKERS[message];
-    const shouldRunModel = shouldRunModelForMode(mode, Boolean(demoResponse), Boolean(demoSticker));
-    const assistantId = demoResponse || demoSticker || shouldRunModel ? crypto.randomUUID() : undefined;
+    const assistantId = crypto.randomUUID();
     const userMessageId = crypto.randomUUID();
     const attachmentsForMessage = attachments.map((attachment) => ({ ...attachment }));
     const targetMode = mode;
@@ -2104,7 +1737,7 @@ export function ChatPage() {
     }
 
     // 如果当前 session 正在跑模型，新消息进入 composer 上方队列，等当前 run 结束后自动发送
-    if (shouldRunModel && isSessionBusy(sessionId)) {
+    if (isSessionBusy(sessionId)) {
       const nextQueue = {
         ...pendingQueueBySessionRef.current,
         [sessionId]: [
@@ -2125,9 +1758,6 @@ export function ChatPage() {
       visibleContent: visibleMessage,
       attachments: attachmentsForMessage,
       userSticker,
-      shouldRunModel,
-      demoResponse,
-      demoSticker,
       assistantId,
       userMessageId,
       resumeFromRunId,
@@ -2141,14 +1771,11 @@ export function ChatPage() {
     visibleContent: string;
     attachments: ComposerAttachment[];
     userSticker?: string;
-    shouldRunModel: boolean;
-    demoResponse?: string;
-    demoSticker?: string;
-    assistantId?: string;
+    assistantId: string;
     userMessageId: string;
     resumeFromRunId?: string;
   }) {
-    const { targetMode, sessionId, rawContent, visibleContent, attachments, userSticker, shouldRunModel, demoResponse, demoSticker, assistantId, userMessageId, resumeFromRunId } = input;
+    const { targetMode, sessionId, rawContent, visibleContent, attachments, userSticker, assistantId, userMessageId, resumeFromRunId } = input;
     setMessagesBySession((current) => ({
       ...current,
       [sessionId]: [
@@ -2160,16 +1787,15 @@ export function ChatPage() {
           sticker: userSticker,
           attachments: attachments.length > 0 ? attachments : undefined,
         },
-        ...(assistantId ? [{
-          id: assistantId!,
+        {
+          id: assistantId,
           role: "assistant" as const,
           content: "",
-          loading: Boolean(demoResponse || shouldRunModel),
-          waitingForFirstEvent: Boolean(shouldRunModel),
+          loading: true,
+          waitingForFirstEvent: true,
           streaming: false,
-          responseStarted: Boolean(demoSticker),
-          sticker: demoSticker,
-        }] : []),
+          responseStarted: false,
+        },
       ],
     }));
     setDrafts((current) => ({ ...current, [scopeKey]: "" }));
@@ -2200,8 +1826,7 @@ export function ChatPage() {
     if (attachments.length > 0) {
       void prepareImageAttachments(sessionId, userMessageId, attachments);
     }
-    if (demoResponse && assistantId) streamDemoResponse(targetMode, assistantId, demoResponse, sessionId);
-    if (shouldRunModel && assistantId && !updatedSession) {
+    if (!updatedSession) {
       updateMessage(targetMode, assistantId, {
         content: "模型请求失败：用户消息未能写入当前会话",
         loading: false,
@@ -2209,7 +1834,7 @@ export function ChatPage() {
         streaming: false,
         responseStarted: true,
       });
-    } else if (shouldRunModel && assistantId && updatedSession) {
+    } else {
       await runModel({
         targetMode,
         sessionId,
@@ -2283,60 +1908,47 @@ export function ChatPage() {
   // 消息级快照兜底兼容旧数据；无快照不渲染。
   const latestContextUsage = (activeSessionId ? sessionContextUsageBySession[activeSessionId] : undefined)
     ?? messages.findLast((message) => message.contextUsage)?.contextUsage;
+  const activePlan = mode === "code" && activeSessionId ? planReviewBySession[activeSessionId] : null;
 
   return (
     <div className={`cy-page ${collapsed ? "is-collapsed" : ""}`}>
-      <div className="cy-page-toggle">
-        <SidebarToggle collapsed={collapsed} onToggle={() => setCollapsed((v) => !v)} />
-      </div>
-      <div className="cy-page-top-center">
-        {!toolPanelOpen && !skillPanelOpen && !modelPanelOpen && (
-          <ModeSwitch value={mode} onChange={(nextMode) => {
-            if (isConversationMode(nextMode)) setMode(nextMode);
-          }} />
-        )}
-      </div>
-      <div className="cy-page-windows">
-        <WindowControls
-          onMinimize={() => window.chat?.minimize()}
-          onMaximize={() => window.chat?.toggleMaximize()}
-          onClose={() => window.chat?.close()}
-        />
-      </div>
-      <div className="cy-page-sidebar">
-        <div className="cy-page-newtask">
-          <NewTaskButton onClick={() => void createNewTask()} />
-          <ToolModeButton active={toolPanelOpen} onClick={() => { setToolPanelOpen((v) => !v); setSkillPanelOpen(false); setModelPanelOpen(false); }} />
-          <SkillModeButton active={skillPanelOpen} onClick={() => { setSkillPanelOpen((v) => !v); setToolPanelOpen(false); setModelPanelOpen(false); }} />
-          <ModelModeButton active={modelPanelOpen} onClick={() => { setModelPanelOpen((v) => !v); setToolPanelOpen(false); setSkillPanelOpen(false); }} />
-        </div>
-        <div className="cy-page-conversations">
-          <ConversationSidebar
-            mode={mode}
-            sessions={sessions}
-            activeSessionId={activeSessionId}
-            onSelect={(sessionId) => {
-              setToolPanelOpen(false);
-              setSkillPanelOpen(false);
-              setModelPanelOpen(false);
-              void selectSession(sessionId);
-            }}
-            onOpenProject={(workspaceRoot) => {
-              void chatStore()?.openWorkspace(workspaceRoot).then((result) => {
-                if (!result.ok) window.alert(`无法打开项目文件夹：${result.error ?? "未知错误"}`);
-              });
-            }}
-            onRename={(sessionId, newTitle) => void handleRenameSession(sessionId, newTitle)}
-            onDelete={(sessionId) => void handleDeleteSession(sessionId)}
-            onTogglePin={(sessionId, pinned) => void handleTogglePinSession(sessionId, pinned)}
-          />
-        </div>
-        <AppUpdateEntry />
-        <div className="cy-page-sidebar-bottom">
-          <UserAvatar />
-          <SettingsButton onClick={() => sidebarApi()?.openSettings("appearance")} />
-        </div>
-      </div>
+      <ChatPageNavigation
+        collapsed={collapsed}
+        toolPanelOpen={toolPanelOpen}
+        skillPanelOpen={skillPanelOpen}
+        modelPanelOpen={modelPanelOpen}
+        mode={mode}
+        sessions={sessions}
+        activeSessionId={activeSessionId}
+        onToggleCollapsed={() => setCollapsed((value) => !value)}
+        onModeChange={(nextMode) => {
+          if (isConversationMode(nextMode)) setMode(nextMode);
+        }}
+        onNewTask={() => void createNewTask()}
+        onTogglePanel={(panel: ChatPagePanel) => {
+          setToolPanelOpen((value) => panel === "tool" ? !value : false);
+          setSkillPanelOpen((value) => panel === "skill" ? !value : false);
+          setModelPanelOpen((value) => panel === "model" ? !value : false);
+        }}
+        onSelectSession={(sessionId) => {
+          setToolPanelOpen(false);
+          setSkillPanelOpen(false);
+          setModelPanelOpen(false);
+          void selectSession(sessionId);
+        }}
+        onOpenProject={(workspaceRoot) => {
+          void chatStore()?.openWorkspace(workspaceRoot).then((result) => {
+            if (!result.ok) window.alert(`无法打开项目文件夹：${result.error ?? "未知错误"}`);
+          });
+        }}
+        onRenameSession={(sessionId, newTitle) => void handleRenameSession(sessionId, newTitle)}
+        onDeleteSession={(sessionId) => void handleDeleteSession(sessionId)}
+        onTogglePinSession={(sessionId, pinned) => void handleTogglePinSession(sessionId, pinned)}
+        onMinimize={() => window.chat?.minimize()}
+        onMaximize={() => window.chat?.toggleMaximize()}
+        onCloseWindow={() => window.chat?.close()}
+        onOpenSettings={() => sidebarApi()?.openSettings("appearance")}
+      />
       <main
         className={`cy-page-main cy-workspace ${hasMessages ? "has-messages" : "is-empty"} ${isDraggingFiles ? "is-dragging-files" : ""}`}
         onDragEnter={handleDragEnter}
@@ -2344,11 +1956,7 @@ export function ChatPage() {
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
       >
-        {isDraggingFiles && (
-          <div className="cy-file-drop-overlay" aria-hidden="true">
-            <span>松开即可添加到当前对话</span>
-          </div>
-        )}
+        <FileDropOverlay visible={isDraggingFiles} />
         {modelPanelOpen ? (
           <ModelModePanel />
         ) : skillPanelOpen ? (
@@ -2375,22 +1983,19 @@ export function ChatPage() {
             }}
           />
         )}
-        {interruptedRun && !isCurrentScopeRunning && (
-          <div className="cy-harness-recovery">
-            <span>昔涟上次任务意外中断（已进行 {interruptedRun.rounds} 轮）。</span>
-            <button type="button" onClick={() => void sendMessage("继续上次任务", interruptedRun.runId)}>继续任务</button>
-          </div>
-        )}
-        {sessionTakeover && sessionTakeover.sessionId === activeSessionId && !isCurrentScopeRunning && (
-          <div className="cy-harness-recovery">
-            <span>当前会话有正在运行的任务（可能来自刷新前），本轮消息尚未执行。</span>
-            <button type="button" onClick={() => {
-              const takeover = sessionTakeover;
-              setSessionTakeover(null);
-              void takeover.retry();
-            }}>终止并重开</button>
-          </div>
-        )}
+        <RunRecoveryNotices
+          interruptedRun={interruptedRun}
+          sessionTakeover={sessionTakeover}
+          activeSessionId={activeSessionId}
+          isRunning={isCurrentScopeRunning}
+          onResume={(runId) => void sendMessage("继续上次任务", runId)}
+          onTakeover={() => {
+            const takeover = sessionTakeover;
+            if (!takeover) return;
+            setSessionTakeover(null);
+            void takeover.retry();
+          }}
+        />
         {hasMessages && (
           <ChatMessageList
             messages={messages}
@@ -2420,12 +2025,7 @@ export function ChatPage() {
             }}
           />
         )}
-        {isCompressingContext && (
-          <div className="cy-compressing-context" aria-live="polite" aria-busy="true">
-            <img src={compressingPng} className="cy-compressing-context-icon" alt="" aria-hidden="true" />
-            <span>昔涟正在压缩上下文…</span>
-          </div>
-        )}
+        <ContextCompressionNotice visible={isCompressingContext} />
         <div className="cy-workspace-composer">
           {scrollToBottomVisible && (
             <button
@@ -2527,43 +2127,22 @@ export function ChatPage() {
         </>
         )}
       </main>
-      {(() => {
-        const tabs: InspectorTab[] = [];
-        const activePlan = mode === "code" && activeSessionId ? planReviewBySession[activeSessionId] : null;
-        if (reviewInspector) {
-          tabs.push({
-            id: "diff",
-            label: "Diff",
-            content: <ReviewDiffContent runId={reviewInspector.runId} fileIndex={reviewInspector.fileIndex} />,
-          });
-        }
-        if (activePlan && planDrawerOpen) {
-          tabs.push({
-            id: "plan",
-            label: planTabLabel(activePlan.phase),
-            dotClass: planTabDotClass(activePlan.phase),
-            content: <PlanContent content={activePlan.content} phase={activePlan.phase} />,
-          });
-        }
-        if (tabs.length === 0) return null;
-        return (
-          <RightInspector
-            tabs={tabs}
-            activeTabId={inspectorTab}
-            onTabChange={(id) => setInspectorTab(id as "diff" | "plan")}
-            onClose={() => {
-              // 关当前 tab，若还有另一个 tab 则自动切过去
-              if (inspectorTab === "diff") {
-                setReviewInspector(null);
-                if (activePlan && planDrawerOpen) setInspectorTab("plan");
-              } else {
-                setPlanDrawerOpen(false);
-                if (reviewInspector) setInspectorTab("diff");
-              }
-            }}
-          />
-        );
-      })()}
+      <ChatPageInspector
+        reviewInspector={reviewInspector}
+        activePlan={activePlan}
+        planDrawerOpen={planDrawerOpen}
+        activeTabId={inspectorTab}
+        onTabChange={setInspectorTab}
+        onCloseTab={(tabId: ChatPageInspectorTabId) => {
+          if (tabId === "diff") {
+            setReviewInspector(null);
+            if (activePlan && planDrawerOpen) setInspectorTab("plan");
+          } else {
+            setPlanDrawerOpen(false);
+            if (reviewInspector) setInspectorTab("diff");
+          }
+        }}
+      />
     </div>
   );
 }

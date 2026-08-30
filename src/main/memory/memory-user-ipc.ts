@@ -5,11 +5,11 @@ import { IPC } from "../../shared/ipc-channels";
 import { createIpcScope, type IpcScope } from "../application/ipc-scope";
 import { getStickerManagerConfig, setStickerEnabled } from "../orchestrator/sticker-settings";
 import { addUserSticker, deleteUserSticker } from "../sticker-storage";
-import { loadMemoryPanelData } from "../memory/panel";
+import { loadMemoryPanelData } from "./panel";
 import { deleteImportedDoc } from "../rag";
 import { loadUserProfile, saveUserProfile, getAvatarPath } from "../settings-store";
 import { addMcpServer, removeMcpServer, listMcpServers } from "../orchestrator/mcp-manager";
-import { toolRegistry } from "../orchestrator/tool-registry";
+import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
 import type { ConversationMode } from "../../shared/chat-types";
 import { loadGeneralSettings, saveGeneralSettings } from "../settings/settings-facade";
 import { listSkillsForUi, setSkillEnabled, skillRegistry, rescanSkills } from "../skills";
@@ -23,10 +23,10 @@ import {
   stickerManagerWindow,
 } from "../windows/window-state";
 import type { EmbeddingIndexService } from "../services/embedding/embedding-index-service";
-import { memoryStore } from "../memory/memory-store";
-import { exportMemoryToObsidianVault, syncToBoundVault } from "../memory/obsidian-exporter";
-import { loadObsidianVaultConfig, saveObsidianVaultConfig, unbindVault } from "../memory/obsidian-vault-config";
-import { startVaultWatcher, stopVaultWatcher } from "../memory/obsidian-importer";
+import { memoryStore } from "./memory-store";
+import { exportMemoryToObsidianVault, syncToBoundVault } from "./obsidian-exporter";
+import { loadObsidianVaultConfig, saveObsidianVaultConfig, unbindVault } from "./obsidian-vault-config";
+import { startVaultWatcher, stopVaultWatcher } from "./obsidian-importer";
 
 export interface MemoryUserToolIpcDependencies {
   get windowManager(): WindowManager | null;

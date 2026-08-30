@@ -28,10 +28,10 @@ vi.mock("./dispatcher", () => ({
 }));
 
 // 避免拉起真实 tool registry（会级联 import RAG 等重依赖）
-vi.mock("../orchestrator/tool-registry", () => ({
+vi.mock("../orchestrator/tools/registry/tool-registry", () => ({
   toolRegistry: { getEnabledTools: () => [], getAllTools: () => [] },
 }));
-vi.mock("../orchestrator/history-tools", () => ({
+vi.mock("../orchestrator/tools/history-tools", () => ({
   indexConversationTurn: vi.fn(),
 }));
 vi.mock("../orchestrator/cyrene-agent", () => ({

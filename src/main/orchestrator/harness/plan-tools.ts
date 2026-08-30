@@ -13,7 +13,7 @@ import type { AskClarificationCard } from "../../../shared/ask-clarification";
 import type { ToolCall, ToolSpec } from "../vendors/types";
 import type { HarnessEvent, ToolObservation } from "./types";
 import { parseToolCallArgs } from "./types";
-import type { ToolContext } from "../tool-context";
+import type { ToolContext } from "../tools/registry/tool-context";
 import {
   enterPlanDiscussing,
   getPlanPath,

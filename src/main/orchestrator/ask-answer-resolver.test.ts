@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AskUserAnswer } from "../../shared/ask-clarification";
-import type { ToolDefinition } from "./tool-registry";
+import type { ToolDefinition } from "./tools/registry/tool-registry";
 import {
   buildPendingAskInput,
   createPendingAction,

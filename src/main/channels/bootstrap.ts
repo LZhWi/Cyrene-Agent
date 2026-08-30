@@ -4,13 +4,13 @@ import { IPC } from "../../shared/ipc-channels";
 import { loadGeneralSettings } from "../settings/settings-facade";
 import { loadModelSettings, loadVisionConfig, resolveModelSettingsProfile } from "../settings/model-settings";
 import { CyreneAgent } from "../orchestrator/cyrene-agent";
-import { toolRegistry } from "../orchestrator/tool-registry";
+import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
 import { decideImageSendStrategy } from "../chat/image-send-strategy";
 import {
   IMAGE_CAPTION_PROMPT,
   validateCaptionImagePath,
 } from "../chat/image-caption";
-import { indexConversationTurn } from "../orchestrator/history-tools";
+import { indexConversationTurn } from "../orchestrator/tools/history-tools";
 import type { AgentRuntime } from "../orchestrator/agent-runtime";
 import type { TtsSynthesisService } from "../services/tts/tts-synthesis-service";
 import { buildChannelAttachmentInputs } from "./agent-input";

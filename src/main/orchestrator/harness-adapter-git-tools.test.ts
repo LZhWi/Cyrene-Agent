@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ToolDefinition } from "./tool-registry";
+import type { ToolDefinition } from "./tools/registry/tool-registry";
 import { filterToolsForConversationMode } from "./harness-adapter";
 
 function tool(id: string): ToolDefinition {

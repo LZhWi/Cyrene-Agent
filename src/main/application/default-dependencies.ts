@@ -52,9 +52,9 @@ import {
   isUserMemoryVectorStoreReady,
 } from "../rag";
 import { getEmbeddingProvider, getSceneEmbeddingProvider } from "../rag/embedding";
-import { toolRegistry } from "../orchestrator/tool-registry";
-import { setLive2dWindowSender } from "../orchestrator/built-in-tools";
-import { registerAllTools } from "../orchestrator/tool-registration";
+import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
+import { setLive2dWindowSender } from "../orchestrator/tools/built-in-tools";
+import { registerAllTools } from "../orchestrator/tools/registry/tool-registration";
 import { LspManager } from "../lsp/manager";
 import { initSandbox } from "../orchestrator/sandbox/sandbox-exec";
 import {

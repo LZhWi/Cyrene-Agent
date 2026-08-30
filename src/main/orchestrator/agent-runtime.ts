@@ -28,7 +28,7 @@ import { feelingToExpression } from "../runtime-state";
 import { resolveSlashActivation } from "../skills/slash-activation";
 import type { CitaService } from "../cita";
 import type { SocialAtom, SocialExtractionInput } from "../social-context/types";
-import type { ToolDefinition, ToolModeOverrides } from "./tool-registry";
+import type { ToolDefinition, ToolModeOverrides } from "./tools/registry/tool-registry";
 import type { ConversationMode } from "../../shared/chat-types";
 import {
   buildAgentRunOptions,

@@ -30,7 +30,7 @@ vi.mock("../orchestrator/tools/music-tools", () => ({
 
 const registered: string[] = [];
 const unregistered: string[] = [];
-vi.mock("../orchestrator/tool-registry", () => ({
+vi.mock("../orchestrator/tools/registry/tool-registry", () => ({
   toolRegistry: {
     register: (t: { id: string }) => { registered.push(t.id); },
     unregister: (id: string) => { unregistered.push(id); },

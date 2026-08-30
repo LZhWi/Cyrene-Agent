@@ -1,5 +1,5 @@
 import type { ToolCall } from "../vendors/types";
-import { resolveEffectKind, type ToolDefinition } from "../tool-registry";
+import { resolveEffectKind, type ToolDefinition } from "../tools/registry/tool-registry";
 import { parseToolCallArgs } from "./types";
 import { resolveSideEffect } from "./side-effect-resolver";
 import { isHarnessBuiltin } from "./builtin-tools";

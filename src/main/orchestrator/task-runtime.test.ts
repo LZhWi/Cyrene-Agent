@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { TaskSessionStore } from "../tasks/task-session-store";
 import { buildChildPromptLayers, createTaskExecutor } from "./task-runtime";
-import type { ToolDefinition } from "./tool-registry";
+import type { ToolDefinition } from "./tools/registry/tool-registry";
 import { TaskCharacterLeasePool } from "../tasks/task-character-pool";
 import type { TaskDelegationPresentation } from "../../shared/task-session";
 

@@ -7,8 +7,8 @@
  * Harness SideEffectKind: read_only / idempotent_mutation / non_idempotent_side_effect
  */
 
-import type { ToolDefinition } from "../tool-registry";
-import { resolveEffectKind } from "../tool-registry";
+import type { ToolDefinition } from "../tools/registry/tool-registry";
+import { resolveEffectKind } from "../tools/registry/tool-registry";
 import type { SideEffectKind } from "./types";
 
 /** 静态映射表：旧 effectKind → 新 SideEffectKind */

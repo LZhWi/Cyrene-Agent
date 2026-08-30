@@ -1,7 +1,7 @@
 import { BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import { createIpcScope, type IpcScope } from "../application/ipc-scope";
-import type { ToolDefinition } from "../orchestrator/tool-registry";
+import type { ToolDefinition } from "../orchestrator/tools/registry/tool-registry";
 import type { SchedulerEngine } from "./scheduler-engine";
 import type { NewScheduledTaskInput, ScheduledTaskPatch, SchedulerIpcResult } from "./types";
 

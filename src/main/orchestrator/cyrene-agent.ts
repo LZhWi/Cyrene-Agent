@@ -15,11 +15,11 @@ import { EventType, type BaseEvent } from "@ag-ui/core";
 import { AgentRuntimeError } from "./agent-runtime-error";
 import { AgentExecutionError, type RunPhase } from "./run-execution-status";
 import { Observable } from "rxjs";
-import { toolRegistry, type ToolDefinition } from "./tool-registry";
+import { toolRegistry, type ToolDefinition } from "./tools/registry/tool-registry";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
 import { checkPermission, type ToolRiskLevel } from "../permission";
 import { getAdapterForConfig, type ChatMessage } from "./vendors";
-import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./tool-context";
+import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./tools/registry/tool-context";
 import { runChatLoop } from "./chat-loop";
 import type { RunCapabilities } from "./run-capabilities";
 import { runHarnessWithAdapter } from "./harness-adapter";
@@ -74,7 +74,7 @@ import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 import { requestUserClarification } from "../user-choice";
 import type { ConversationMode } from "../../shared/chat-types";
 import type { CyreneRunTerminalResult } from "../../shared/run-terminal";
-import { executeToolDefinition } from "./tool-executor";
+import { executeToolDefinition } from "./tools/registry/tool-executor";
 
 const executionLedgers = new ExecutionLedgerStore();
 

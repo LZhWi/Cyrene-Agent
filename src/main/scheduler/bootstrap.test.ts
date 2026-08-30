@@ -18,7 +18,7 @@ vi.mock("./scheduler-ipc", () => ({
 }));
 
 // 避免拉起真实 tool registry / CyreneAgent（级联重依赖）
-vi.mock("../orchestrator/tool-registry", () => ({
+vi.mock("../orchestrator/tools/registry/tool-registry", () => ({
   toolRegistry: { getEnabledTools: () => [], getAllTools: () => [] },
 }));
 vi.mock("../orchestrator/cyrene-agent", () => ({

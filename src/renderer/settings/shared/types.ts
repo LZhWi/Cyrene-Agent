@@ -66,6 +66,8 @@ export interface ModelSettings {
   embeddingDimensions?: number;
   multimodal: boolean;
   thinkingOverride?: -1 | 0 | 1;
+  /** 禁用 max_tokens 注入。仅对自定义端点生效（与主进程 model-settings.ts 对齐）。 */
+  disableMaxToken?: boolean;
   /** 上下文窗口大小（Token）。默认 256000。 */
   contextWindowTokens?: number;
 }
@@ -123,6 +125,8 @@ export interface GeneralSettings extends ChatAppearanceSettings {
   mobileMessageSegmentation: MobileMessageSegmentationMode;
   proactiveChatMode: ProactiveChatMode;
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
+  /** 聊天段落间距（em）。目前仅设置窗口 UI 使用，主进程归一化尚未持久化该字段。 */
+  chatParaSpacing?: number;
   screenshotHotkey?: string;
 }
 

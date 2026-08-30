@@ -56,7 +56,7 @@ export function parseSkillFrontmatter(content: string): ParsedSkill | null {
   if (d.tools !== undefined && !Array.isArray(d.tools)) return null;
   const VALID_EFFECT_KINDS = new Set(["read", "mutation", "verification", "external_side_effect"]);
   const effectKind = typeof d.effectKind === "string" && VALID_EFFECT_KINDS.has(d.effectKind)
-    ? d.effectKind as import("../orchestrator/tool-registry").ToolEffectKind
+    ? d.effectKind as import("../orchestrator/tools/registry/tool-registry").ToolEffectKind
     : undefined;
   const hiddenFromUi = d.hiddenFromUi === true || d.hiddenFromUi === "true";
   return {

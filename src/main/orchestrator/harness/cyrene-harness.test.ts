@@ -66,7 +66,7 @@ import { dispatchToolCall } from "./tool-dispatcher";
 import type { ToolDispatchResult } from "./tool-dispatcher";
 import type { HarnessCacheDiagnostic, HarnessCheckpoint, HarnessEvent } from "./types";
 import type { ChatMessage, ChatResponse, ToolCall } from "../vendors/types";
-import type { ToolDefinition } from "../tool-registry";
+import type { ToolDefinition } from "../tools/registry/tool-registry";
 import { projectCacheRelevantChatRequest } from "../prompt-layers";
 
 const mockedDispatch = vi.mocked(dispatchToolCall);

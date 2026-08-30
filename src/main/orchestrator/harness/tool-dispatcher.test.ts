@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ExecutionLedger } from "../execution-ledger";
-import { ToolExecutionError } from "../tool-execution-error";
-import type { ToolDefinition } from "../tool-registry";
+import { ToolExecutionError } from "../tools/registry/tool-execution-error";
+import type { ToolDefinition } from "../tools/registry/tool-registry";
 import type { AgentState } from "./types";
 import { dispatchToolCall, DEFAULT_TRUNCATION, truncateOutput } from "./tool-dispatcher";
 import { resolveUncertainEffect } from "./uncertain-effect-guard";

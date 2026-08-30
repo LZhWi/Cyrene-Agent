@@ -7,10 +7,10 @@ import {
   setSearchConfig,
   setUserTimezoneConfig,
   setWeatherConfig,
-} from "../orchestrator/built-in-tools";
-import { setEmailConfig } from "../orchestrator/email-tools";
-import { setTravelConfig } from "../orchestrator/travel-tools";
-import { toolRegistry } from "../orchestrator/tool-registry";
+} from "../orchestrator/tools/built-in-tools";
+import { setEmailConfig } from "../orchestrator/tools/email-tools";
+import { setTravelConfig } from "../orchestrator/tools/travel-tools";
+import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
 import { resolveVendorRuntimeSettings, setVendorRuntimeSettingsGetter } from "../orchestrator/vendors/runtime-settings";
 import { setChoiceCardSender } from "../user-choice";
 import { setAsrConfig } from "../asr/asr-config";

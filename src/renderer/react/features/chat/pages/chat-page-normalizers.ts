@@ -1,0 +1,143 @@
+import type { ChatSession, ConversationMode } from "../../../../../shared/chat-types";
+import type { ChatMessageItem } from "../components/ChatMessageList";
+import {
+  describePermissionRequest,
+  type AgentRunStage,
+  type ComposerInteraction,
+} from "../components/run-presentation";
+import type { WeatherData } from "../components/weather/weather-types";
+import type { PermissionApprovalRequest } from "./chat-page-bridge";
+import { recoverInterruptedMessage } from "./session-runtime-state";
+
+const CONVERSATION_MODES: readonly ConversationMode[] = ["chat", "work", "code", "learn"];
+const LAST_MODE_STORAGE_KEY = "cyrene-react-last-mode";
+
+export function isConversationMode(value: string): value is ConversationMode {
+  return CONVERSATION_MODES.includes(value as ConversationMode);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+function asNonEmptyString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+export function parseSessionRunActiveError(message: string): string | undefined {
+  const prefix = "SESSION_RUN_ACTIVE:";
+  return message.startsWith(prefix) ? message.slice(prefix.length) || undefined : undefined;
+}
+
+export function normalizeWeatherData(value: unknown): WeatherData | undefined {
+  const card = asRecord(value);
+  if (!card) return undefined;
+
+  const source = asNonEmptyString(card.source);
+  const location = asRecord(card.location);
+  const province = asNonEmptyString(location?.province);
+  const city = asNonEmptyString(location?.city);
+  const temp = typeof card.temp === "number" ? card.temp : undefined;
+  const humidity = typeof card.humidity === "number" ? card.humidity : undefined;
+
+  if (!source || !province || !city || temp === undefined || humidity === undefined) {
+    return undefined;
+  }
+
+  if (source === "open-meteo") {
+    const weatherCode = typeof card.weatherCode === "number" ? card.weatherCode : undefined;
+    const windDeg = typeof card.windDeg === "number" ? card.windDeg : undefined;
+    const windSpeed = typeof card.windSpeed === "number" ? card.windSpeed : undefined;
+    if (weatherCode === undefined || windDeg === undefined || windSpeed === undefined) return undefined;
+    return {
+      source: "open-meteo",
+      location: { province, city },
+      weatherCode,
+      temp,
+      feelsLike: typeof card.feelsLike === "number" ? card.feelsLike : temp,
+      humidity,
+      windDeg,
+      windSpeed,
+      precipitation: typeof card.precipitation === "number" ? card.precipitation : 0,
+      pressure: typeof card.pressure === "number" ? card.pressure : 0,
+    };
+  }
+
+  if (source === "amap") {
+    const weather = asNonEmptyString(card.weather);
+    const windDirection = asNonEmptyString(card.windDirection);
+    const windPower = asNonEmptyString(card.windPower);
+    const reporttime = asNonEmptyString(card.reporttime);
+    if (!weather || !windDirection || !windPower || !reporttime) return undefined;
+    return {
+      source: "amap",
+      location: { province, city },
+      weather,
+      temp,
+      humidity,
+      windDirection,
+      windPower,
+      reporttime,
+    };
+  }
+
+  return undefined;
+}
+
+export function permissionInteraction(request: PermissionApprovalRequest): ComposerInteraction {
+  const target = [request.args.path, request.args.filePath]
+    .find((value): value is string => typeof value === "string" && value.trim().length > 0);
+  return {
+    kind: "permission",
+    id: request.id,
+    toolName: request.toolName || request.toolId,
+    summary: describePermissionRequest(request),
+    targetPath: target,
+  };
+}
+
+export function stageForStep(stepName: string | undefined): AgentRunStage | undefined {
+  if (stepName === "agent-graph-action-gate") return { kind: "understanding" };
+  if (stepName === "agent-graph-plan") return { kind: "planning" };
+  if (stepName === "agent-graph-soul") return { kind: "responding" };
+  if (stepName?.startsWith("agent-graph-tool-")) {
+    return { kind: "executing", detail: stepName.slice("agent-graph-tool-".length) };
+  }
+  return undefined;
+}
+
+export function toUiMessages(session: ChatSession): ChatMessageItem[] {
+  return session.messages.map((message) => {
+    const item: ChatMessageItem = {
+      id: message.id,
+      role: message.role === "model" ? "assistant" : "user",
+      content: message.content,
+      reasoning: message.reasoning,
+      reasoningBlocks: message.reasoningBlocks,
+      processMessages: message.processMessages,
+      agentRounds: message.agentRounds,
+      runActivity: message.runActivity,
+      ttsCacheKey: message.ttsCacheKey,
+      ttsCacheVersion: message.ttsCacheVersion,
+      responseStarted: message.role === "model" && Boolean(message.content.trim() || message.sticker),
+      sticker: message.sticker,
+      toolExecutions: message.toolExecutions,
+      attachments: message.attachments,
+      contextUsage: message.contextUsage,
+      runId: message.runSnapshot?.runId,
+    };
+    return message.runSnapshot ? recoverInterruptedMessage(item, message.runSnapshot) : item;
+  });
+}
+
+export function getInitialMode(): ConversationMode {
+  try {
+    const saved = localStorage.getItem(LAST_MODE_STORAGE_KEY);
+    if (saved && isConversationMode(saved)) return saved;
+  } catch {
+    // localStorage 不可用或数据异常时回退到默认值
+  }
+  return "chat";
+}

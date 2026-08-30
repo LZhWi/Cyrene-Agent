@@ -84,7 +84,7 @@ vi.mock("./orchestrator/cyrene-agent", () => ({
   },
 }));
 
-vi.mock("./orchestrator/history-tools", () => ({
+vi.mock("./orchestrator/tools/history-tools", () => ({
   indexConversationTurn: vi.fn(),
 }));
 

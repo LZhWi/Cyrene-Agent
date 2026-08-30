@@ -12,10 +12,10 @@ vi.mock("../index", () => ({
   sendToLive2DWindow: vi.fn(),
 }));
 
-import { toolRegistry } from "./tool-registry";
+import { toolRegistry } from "./tools/registry/tool-registry";
 import { setCurrentLevel } from "../permission";
 import { VerificationRunner, type VerificationResult } from "./verification-runner";
-import "./built-in-tools";
+import "./tools/built-in-tools";
 
 const runVerification = toolRegistry.getById("run_verification")!.execute;
 

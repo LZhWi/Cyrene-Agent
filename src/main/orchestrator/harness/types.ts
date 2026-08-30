@@ -11,14 +11,14 @@
  */
 
 import type { ChatMessage, ToolCall, ToolSpec } from "../vendors/types";
-import type { ToolDefinition } from "../tool-registry";
+import type { ToolDefinition } from "../tools/registry/tool-registry";
 import type { CyreneRunTerminalResult } from "../../../shared/run-terminal";
 import type { TodoItem } from "../../../shared/task-session";
-import type { ToolErrorCategory } from "../tool-execution-error";
+import type { ToolErrorCategory } from "../tools/registry/tool-execution-error";
 import type { ToolFileChange } from "../../../shared/chat-types";
 import type { ContextUsageSnapshot } from "../../../shared/context-usage";
 import type { ToolOutputRef, ToolOutputStore } from "./tool-output/tool-output-store";
-export type { ToolErrorCategory } from "../tool-execution-error";
+export type { ToolErrorCategory } from "../tools/registry/tool-execution-error";
 export type { TodoItem, TodoStatus } from "../../../shared/task-session";
 
 // ── 工具调用结果 ──────────────────────────────────────────
@@ -258,7 +258,7 @@ export interface HarnessInput {
   /** 计划模式状态；控制计划工具组可见性（undefined = 不注入计划工具，兼容旧调用方/子任务）。 */
   planState?: import("../plan-mode").PlanStateName;
   /** 工具上下文（权限检查等） */
-  toolContext?: import("../tool-context").ToolContext;
+  toolContext?: import("../tools/registry/tool-context").ToolContext;
   /** 权限检查函数 */
   checkPermission?: (toolId: string, args: Record<string, unknown>) => Promise<boolean>;
   /** ExecutionLedger：可选的同进程工具去重缓存（v3 §5.5.1.1） */

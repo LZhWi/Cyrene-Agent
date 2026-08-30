@@ -1,4 +1,4 @@
-import type { ToolDefinition } from "../orchestrator/tool-registry";
+import type { ToolDefinition } from "../orchestrator/tools/registry/tool-registry";
 import type { ScheduledTask } from "./types";
 
 export function filterToolsForTask(task: ScheduledTask, allTools: ToolDefinition[]): ToolDefinition[] {

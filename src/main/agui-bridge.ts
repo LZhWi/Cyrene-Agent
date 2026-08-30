@@ -22,7 +22,7 @@ import {
 } from "./orchestrator/cyrene-agent";
 import { RunSettlementGate } from "./orchestrator/run-settlement";
 import type { AguiRunAck, CyreneRunTerminalResult } from "../shared/run-terminal";
-import { indexConversationTurn } from "./orchestrator/history-tools";
+import { indexConversationTurn } from "./orchestrator/tools/history-tools";
 import type { RelationshipChannel } from "./relationship/relationship-log";
 import { createThinkFilter, type ThinkStreamFilter, type ThinkFilterMode } from "./chat/think-filter";
 import { ChatTimeStreamPrefixFilter } from "./chat-time-stream-filter";

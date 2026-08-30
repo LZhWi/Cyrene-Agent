@@ -33,6 +33,9 @@ resources/bin/*.exe
 resources/bin/mpv/
 .cache/mpv/
 
+# Native gamebot（暂只有本地 Rust 构建产物 target/，暂不进 git）
+native/cyrene-gamebot/
+
 # M0 POC scratch（含早期 token/qr.png 敏感产物，仅本地参考）
 tmp-m0-poc/
 

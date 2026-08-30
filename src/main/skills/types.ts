@@ -1,7 +1,7 @@
 // Skill 系统 —— 类型定义。
 // id 永远 = 目录名（kebab-case），是唯一对外标识；name 仅展示，不参与匹配。
 
-import type { ToolEffectKind } from "../orchestrator/tool-registry";
+import type { ToolEffectKind } from "../orchestrator/tools/registry/tool-registry";
 
 /** Skill 可用的会话模式。chat 模式不暴露 skill。 */
 export type SkillMode = "work" | "code" | "learn";

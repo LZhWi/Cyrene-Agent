@@ -2,7 +2,7 @@ import type { MusicPaths } from "./paths";
 import { MusicService } from "./music-service";
 import { registerMusicIpcHandlers } from "./ipc-handlers";
 import { buildMusicTools } from "../orchestrator/tools/music-tools";
-import { toolRegistry } from "../orchestrator/tool-registry";
+import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
 import type { MusicShutdownReport } from "./types";
 
 export interface MusicBootstrap {

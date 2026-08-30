@@ -27,7 +27,7 @@ import {
   type CyreneRunOptions,
   type CyreneRunResult,
 } from "./cyrene-agent";
-import type { ToolDefinition, ToolModeOverrides } from "./tool-registry";
+import type { ToolDefinition, ToolModeOverrides } from "./tools/registry/tool-registry";
 import type { SkillModeOverrides } from "../skills/types";
 import type { ChatMessage, OpenAIContentBlock } from "./vendors/types";
 import type { AguiRunInput } from "../agui-bridge";

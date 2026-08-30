@@ -8,7 +8,7 @@
 
 import type { ToolCallResult } from "../types";
 import type { ToolErrorCategory } from "./types";
-import { ToolExecutionError } from "../tool-execution-error";
+import { ToolExecutionError } from "../tools/registry/tool-execution-error";
 
 /**
  * 从 Error 对象分类工具错误。

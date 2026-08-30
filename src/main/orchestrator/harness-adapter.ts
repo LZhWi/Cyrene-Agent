@@ -10,8 +10,8 @@
 import * as fs from "fs";
 import { EventType, type BaseEvent } from "@ag-ui/core";
 import type { ChatMessage, VendorConfig } from "./vendors/types";
-import type { ToolDefinition } from "./tool-registry";
-import { toolRegistry } from "./tool-registry";
+import type { ToolDefinition } from "./tools/registry/tool-registry";
+import { toolRegistry } from "./tools/registry/tool-registry";
 import { checkPermission, type ToolRiskLevel } from "../permission";
 import { policyFor } from "../permission-policy";
 import {
@@ -21,7 +21,7 @@ import {
   isPlanReadOnly,
   supplementPlan,
 } from "./plan-mode";
-import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./tool-context";
+import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./tools/registry/tool-context";
 import { runCyreneHarness } from "./harness";
 import type { HarnessEvent, HarnessInput } from "./harness";
 import {

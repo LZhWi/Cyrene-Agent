@@ -1,6 +1,6 @@
 import type { ConversationMode } from "../../shared/chat-types";
 import type { SkillEntry, SkillMode, SkillModeOverrides } from "../skills/types";
-import type { ToolDefinition, ToolModeOverrides } from "./tool-registry";
+import type { ToolDefinition, ToolModeOverrides } from "./tools/registry/tool-registry";
 import { filterToolsBySearchBackend, type SearchBackend } from "./search-backend-filter";
 
 export interface RunCapabilities {

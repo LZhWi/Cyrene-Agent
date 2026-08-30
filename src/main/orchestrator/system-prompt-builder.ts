@@ -10,8 +10,8 @@ import { ensureCustomStylePrompt } from "../style-prompt";
 import { getCapabilityOrOpenAI } from "./vendors/capabilities";
 import { resolveApprovedStyleSampling } from "./vendors/style-sampling";
 import type { ReasoningPreference } from "../../shared/reasoning";
-import { buildToolCatalog } from "./tool-catalog";
-import type { ToolDefinition } from "./tool-registry";
+import { buildToolCatalog } from "./tools/registry/tool-catalog";
+import type { ToolDefinition } from "./tools/registry/tool-registry";
 import type { ConversationMode } from "../../shared/chat-types";
 import { buildModePrompt } from "./mode-prompt-profile";
 

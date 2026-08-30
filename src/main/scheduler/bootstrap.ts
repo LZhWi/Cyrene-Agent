@@ -1,7 +1,7 @@
 import type { BrowserWindow } from "electron";
 import type { IpcScope } from "../application/ipc-scope";
 import type { AgentRuntime } from "../orchestrator/agent-runtime";
-import { toolRegistry } from "../orchestrator/tool-registry";
+import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
 import { SchedulerEngine, type SchedulerEngineDeps } from "./scheduler-engine";
 import { getSchedulerStore } from "./scheduler-store";
 import { registerSchedulerIpc } from "./scheduler-ipc";

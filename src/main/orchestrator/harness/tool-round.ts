@@ -18,7 +18,7 @@ import { parseToolCallArgs, toolCallFingerprint } from "./types";
 import { dispatchToolCall, persistToolDispatchResult, type ToolDispatchResult } from "./tool-dispatcher";
 import { classifyToolExecutionMode, scheduleToolCalls, type ToolCallScheduleResult, type ToolScheduleCommitDecision } from "./tool-call-scheduler";
 import { resolveSideEffect } from "./side-effect-resolver";
-import { extractFileChangesFromOutput } from "../tool-evidence";
+import { extractFileChangesFromOutput } from "../tools/registry/tool-evidence";
 import { classifyToolResultError } from "./error-classifier";
 import { decideRetry, getRetryParams, sleepWithJitter } from "./retry-policy";
 import { isCancellationError, raceWithSignal } from "../../abort-utils";
