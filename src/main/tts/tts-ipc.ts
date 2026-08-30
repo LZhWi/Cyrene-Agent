@@ -1,7 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { dialog, ipcMain } from "electron";
+import { dialog } from "electron";
 import { IPC } from "../../shared/ipc-channels";
+import { createIpcScope, type IpcScope } from "../application/ipc-scope";
 import { validateMiniMaxVoiceId } from "../../shared/minimax-voice";
 import type { StartTtsRequest } from "../../shared/tts-session";
 import { synthesize as customCloudSynthesize } from "./custom-cloud-engine";
@@ -27,10 +28,13 @@ import { versionTtsCacheKey } from "./tts-cache-key";
 
 export interface RegisterTtsIpcDeps {
   ttsSessionService: TtsSessionService;
+  /** 传入共享 scope 以便退出时统一注销；缺省时使用独立 scope。 */
+  ipc?: IpcScope;
 }
 
 export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
-  ipcMain.handle(IPC.TTS_SESSION_START, async (event, request: StartTtsRequest) => {
+  const ipc = deps.ipc ?? createIpcScope();
+  ipc.handle(IPC.TTS_SESSION_START, async (event, request: StartTtsRequest) => {
     if (
       !request?.requestId
       || !request.conversationId
@@ -45,14 +49,14 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
       if (!sender.isDestroyed()) sender.send(IPC.TTS_SESSION_EVENT, sessionEvent);
     });
   });
-  ipcMain.handle(IPC.TTS_SESSION_CANCEL, (_event, requestId: string) => {
+  ipc.handle(IPC.TTS_SESSION_CANCEL, (_event, requestId: string) => {
     return typeof requestId === "string" && requestId.length > 0
       ? deps.ttsSessionService.cancel(requestId)
       : false;
   });
 
   // 上传音频文件 → file_id
-  ipcMain.handle(IPC.TTS_UPLOAD, async (_event, payload: { apiKey: string; filePath: string; purpose: "voice_clone" | "prompt_audio" }) => {
+  ipc.handle(IPC.TTS_UPLOAD, async (_event, payload: { apiKey: string; filePath: string; purpose: "voice_clone" | "prompt_audio" }) => {
     if (!payload?.apiKey || !payload?.filePath) {
       throw new Error("缺少 API Key 或文件路径");
     }
@@ -60,7 +64,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   });
 
   // 选择音频文件（Electron dialog）
-  ipcMain.handle(IPC.TTS_PICK_AUDIO, async () => {
+  ipc.handle(IPC.TTS_PICK_AUDIO, async () => {
     const result = await dialog.showOpenDialog({
       title: "选择音频文件",
       filters: [{ name: "音频文件", extensions: ["mp3", "m4a", "wav"] }],
@@ -71,7 +75,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   });
 
   // 音色快速复刻 → voice_id
-  ipcMain.handle(IPC.TTS_CLONE, async (_event, payload: {
+  ipc.handle(IPC.TTS_CLONE, async (_event, payload: {
     apiKey: string; fileId: string; voiceId: string;
     promptAudioId?: string; promptText?: string;
     text: string; model?: string;
@@ -85,7 +89,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   });
 
   // 语音合成 → base64 音频（聊天朗读 / 测试发音都用这个）
-  ipcMain.handle(IPC.TTS_SYNTHESIZE, async (_event, payload: {
+  ipc.handle(IPC.TTS_SYNTHESIZE, async (_event, payload: {
     apiKey: string; voiceId: string; text: string;
     speed?: number; volume?: number; pitch?: number;
     model?: string; format?: "mp3" | "wav" | "pcm";
@@ -102,7 +106,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
     return audioBuffer.toString("base64");
   });
 
-  ipcMain.handle(IPC.TTS_SYNTHESIZE_CACHED, async (_event, payload: {
+  ipc.handle(IPC.TTS_SYNTHESIZE_CACHED, async (_event, payload: {
     apiKey: string; voiceId: string; text: string;
     speed?: number; volume?: number; pitch?: number;
     model?: string; format?: "mp3" | "wav" | "pcm";
@@ -166,7 +170,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
 
   // 流式语音合成（minimax WS 边合成边推 chunk 给渲染端播）
   // 主进程同时攒完整 buffer 落盘缓存，下次同文本走缓存
-  ipcMain.handle(IPC.TTS_STREAM_START, async (event, payload: {
+  ipc.handle(IPC.TTS_STREAM_START, async (event, payload: {
     apiKey: string; voiceId: string; text: string;
     speed?: number; volume?: number; pitch?: number;
     model?: string; format?: "mp3" | "wav" | "pcm";
@@ -245,7 +249,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   });
 
   // GPT-SoVITS 语音合成 → base64 音频（测试发音用，不缓存）
-  ipcMain.handle(IPC.TTS_SYNTHESIZE_GPTSOVITS, async (_event, payload: {
+  ipc.handle(IPC.TTS_SYNTHESIZE_GPTSOVITS, async (_event, payload: {
     baseUrl: string; refAudioPath: string; promptText: string; text: string;
     speed?: number; format?: "wav" | "mp3";
   }) => {
@@ -266,7 +270,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   });
 
   // GPT-SoVITS 语音合成 + 本地缓存（聊天朗读用）
-  ipcMain.handle(IPC.TTS_SYNTHESIZE_CACHED_GPTSOVITS, async (_event, payload: {
+  ipc.handle(IPC.TTS_SYNTHESIZE_CACHED_GPTSOVITS, async (_event, payload: {
     baseUrl: string; refAudioPath: string; promptText: string; text: string;
     speed?: number; format?: "wav" | "mp3";
     expectedCacheKey?: string;
@@ -334,7 +338,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   });
 
   // 自定义云端 TTS 合成 → base64 音频（测试发音用，不缓存）
-  ipcMain.handle(IPC.TTS_SYNTHESIZE_CUSTOM_CLOUD, async (_event, payload: {
+  ipc.handle(IPC.TTS_SYNTHESIZE_CUSTOM_CLOUD, async (_event, payload: {
     endpointUrl: string; apiKey?: string; voiceId?: string; text: string;
     speed?: number; volume?: number; format?: "wav" | "mp3"; timeoutMs?: number;
   }) => {
@@ -355,7 +359,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   });
 
   // 自定义云端 TTS 合成 + 本地缓存（聊天朗读用）
-  ipcMain.handle(IPC.TTS_SYNTHESIZE_CACHED_CUSTOM_CLOUD, async (_event, payload: {
+  ipc.handle(IPC.TTS_SYNTHESIZE_CACHED_CUSTOM_CLOUD, async (_event, payload: {
     endpointUrl: string; apiKey?: string; voiceId?: string; text: string;
     speed?: number; volume?: number; format?: "wav" | "mp3"; timeoutMs?: number;
     expectedCacheKey?: string;
@@ -423,7 +427,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   });
 
   // 小米 MiMo TTS 合成 → base64 音频（测试发音用，不缓存）
-  ipcMain.handle(IPC.TTS_SYNTHESIZE_MIMO, async (_event, payload: {
+  ipc.handle(IPC.TTS_SYNTHESIZE_MIMO, async (_event, payload: {
     apiKey: string; voiceAudioPath?: string; text: string; stylePrompt?: string;
   }) => {
     if (!payload?.apiKey || !payload?.voiceAudioPath || !payload?.text) {
@@ -446,7 +450,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   });
 
   // 小米 MiMo TTS 合成 + 本地缓存（聊天朗读用）
-  ipcMain.handle(IPC.TTS_SYNTHESIZE_CACHED_MIMO, async (_event, payload: {
+  ipc.handle(IPC.TTS_SYNTHESIZE_CACHED_MIMO, async (_event, payload: {
     apiKey: string; voiceAudioPath?: string; text: string; stylePrompt?: string;
     expectedCacheKey?: string;
   }) => {
@@ -511,7 +515,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   // ── Mossland (api.mosi.cn) ──────────────────────────────────────
 
   // Mossland 合成（Settings「测试发音」用，无缓存）
-  ipcMain.handle(IPC.TTS_SYNTHESIZE_MOSSLAND, async (_event, payload: {
+  ipc.handle(IPC.TTS_SYNTHESIZE_MOSSLAND, async (_event, payload: {
     apiKey: string; voiceId: string; text: string;
     model?: string; format?: "mp3" | "wav";
   }) => {
@@ -535,7 +539,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   });
 
   // Mossland 合成 + 本地缓存（聊天自动朗读用；cache-only 兜底由 chat 侧传 "cache-only"）
-  ipcMain.handle(IPC.TTS_SYNTHESIZE_CACHED_MOSSLAND, async (_event, payload: {
+  ipc.handle(IPC.TTS_SYNTHESIZE_CACHED_MOSSLAND, async (_event, payload: {
     apiKey: string; voiceId: string; text: string;
     model?: string; format?: "mp3" | "wav";
     expectedCacheKey?: string;
@@ -586,7 +590,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   });
 
   // Mossland 音色克隆（multipart 上传）
-  ipcMain.handle(IPC.TTS_CLONE_MOSSLAND, async (_event, payload: {
+  ipc.handle(IPC.TTS_CLONE_MOSSLAND, async (_event, payload: {
     apiKey: string; filePath: string; name?: string; description?: string;
   }) => {
     const result = await mosslandCloneVoice({
@@ -603,7 +607,7 @@ export function registerTtsIpc(deps: RegisterTtsIpcDeps): void {
   });
 
   // Mossland 拉取账号下音色列表
-  ipcMain.handle(IPC.TTS_LIST_MOSSLAND_VOICES, async (_event, payload: {
+  ipc.handle(IPC.TTS_LIST_MOSSLAND_VOICES, async (_event, payload: {
     apiKey: string; limit?: number; offset?: number; after?: string; status?: string;
   }) => {
     const result = await mosslandListVoices({

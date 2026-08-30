@@ -13,9 +13,10 @@
 // 注意：`chats:open-in-chat-window` 涉及 BrowserWindow 创建逻辑，
 // 由 src/main/index.ts 自行注册，不在本模块；本模块只管纯数据操作。
 
-import { app, BrowserWindow, ipcMain, type WebContents, dialog, shell } from "electron";
+import { app, BrowserWindow, type WebContents, dialog, shell } from "electron";
 import { randomUUID } from "crypto";
 import { IPC } from "../../shared/ipc-channels";
+import { createIpcScope, type IpcScope } from "../application/ipc-scope";
 import type { ChatMessage, ConversationMode, ConversationWorkspaceBinding } from "../../shared/chat-types";
 import * as chatsStore from "./chats-store";
 import * as fs from "fs";
@@ -49,21 +50,22 @@ const COMPACT_KEEP_RECENT = 6;
 /** 并发保护：同一会话压缩进行中时拒绝重复触发。 */
 const compactingSessions = new Set<string>();
 
-export function registerChatsIpc(): void {
+export function registerChatsIpc(ipcOption?: IpcScope): void {
+  const ipc = ipcOption ?? createIpcScope();
   chatsStore.initialize();
 
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_LIST,
     (_event, options?: { mode?: ConversationMode }) => chatsStore.listSessions(options),
   );
 
-  ipcMain.handle(IPC.CHATS_GET, (_event, id: string) => chatsStore.getSession(id));
-  ipcMain.handle(IPC.CHATS_GET_PAGE, (_event, payload: { id: string; before?: number | null; limit?: number }) => {
+  ipc.handle(IPC.CHATS_GET, (_event, id: string) => chatsStore.getSession(id));
+  ipc.handle(IPC.CHATS_GET_PAGE, (_event, payload: { id: string; before?: number | null; limit?: number }) => {
     if (!payload?.id) return null;
     return chatsStore.getSessionPage(payload.id, payload.before ?? null, payload.limit ?? 80);
   });
 
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_CREATE,
     (
       event,
@@ -80,7 +82,7 @@ export function registerChatsIpc(): void {
     },
   );
 
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_APPEND,
     (event, payload: { id: string; message: ChatMessage }) => {
       if (!payload || !payload.id || !payload.message) return null;
@@ -90,7 +92,7 @@ export function registerChatsIpc(): void {
     },
   );
 
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_UPSERT,
     (event, payload: { id: string; message: ChatMessage } | null | undefined) => {
       if (!payload?.id || !payload.message) return null;
@@ -100,7 +102,7 @@ export function registerChatsIpc(): void {
     },
   );
 
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_SET_MESSAGE_TTS_CACHE,
     (event, payload: { id: string; messageId: string; cacheKey: string; converterVersion: string }) => {
       if (!payload?.id || !payload.messageId || !payload.cacheKey || !payload.converterVersion) return null;
@@ -115,7 +117,7 @@ export function registerChatsIpc(): void {
     },
   );
 
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_REPLACE_MESSAGES,
     (event, payload: { id: string; messages: ChatMessage[] }) => {
       if (!payload || !payload.id || !Array.isArray(payload.messages)) return null;
@@ -124,7 +126,7 @@ export function registerChatsIpc(): void {
       return session;
     },
   );
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_REPLACE_TAIL,
     (event, payload: { id: string; startIndex: number; messages: ChatMessage[] }) => {
       if (!payload?.id || !Array.isArray(payload.messages)) return null;
@@ -139,7 +141,7 @@ export function registerChatsIpc(): void {
   // （不进模型上下文，原样保留）；窗口内保留最近 COMPACT_KEEP 条，其余
   // 摘要成一条记忆消息（与 Chat 模式循环内自动压缩同格式，下一轮 run
   // normalize 后作为 assistant 消息进入模型上下文）。
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_COMPACT,
     async (_event, payload: { sessionId?: unknown }) => {
       const sessionId = payload && typeof payload === "object"
@@ -248,7 +250,7 @@ export function registerChatsIpc(): void {
     },
   );
 
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_RENAME,
     (event, payload: { id: string; title: string }) => {
       if (!payload || !payload.id) return null;
@@ -258,7 +260,7 @@ export function registerChatsIpc(): void {
     },
   );
 
-  ipcMain.handle(IPC.CHATS_DELETE, async (event, id: string) => {
+  ipc.handle(IPC.CHATS_DELETE, async (event, id: string) => {
     if (!id) return false;
     const ok = chatsStore.deleteSession(id);
     if (ok) {
@@ -278,26 +280,26 @@ export function registerChatsIpc(): void {
     return ok;
   });
 
-  ipcMain.handle(IPC.CHATS_SET_PINNED, (event, payload: { id: string; pinned: boolean }) => {
+  ipc.handle(IPC.CHATS_SET_PINNED, (event, payload: { id: string; pinned: boolean }) => {
     if (!payload || typeof payload.id !== "string") return null;
     const session = chatsStore.setSessionPinned(payload.id, Boolean(payload.pinned));
     if (session) broadcastChanged(event.sender);
     return session;
   });
 
-  ipcMain.handle(IPC.CHATS_SET_MODEL_PROFILE, (event, payload: { id: string; modelProfileId?: string }) => {
+  ipc.handle(IPC.CHATS_SET_MODEL_PROFILE, (event, payload: { id: string; modelProfileId?: string }) => {
     if (!payload || typeof payload.id !== "string") return null;
     const session = chatsStore.setSessionModelProfile(payload.id, payload.modelProfileId);
     if (session) broadcastChanged(event.sender);
     return session;
   });
 
-  ipcMain.handle(IPC.CHATS_OPEN_FOLDER, async () => {
+  ipc.handle(IPC.CHATS_OPEN_FOLDER, async () => {
     await chatsStore.openStorageFolder();
     return true;
   });
 
-  ipcMain.handle(IPC.CHATS_OPEN_WORKSPACE, async (_event, workspaceRoot: unknown) => {
+  ipc.handle(IPC.CHATS_OPEN_WORKSPACE, async (_event, workspaceRoot: unknown) => {
     if (typeof workspaceRoot !== "string" || !workspaceRoot.trim()) {
       return { ok: false, error: "missing workspaceRoot" };
     }
@@ -316,7 +318,7 @@ export function registerChatsIpc(): void {
     }
   });
 
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_MIGRATE_LEGACY,
     (event, messages: ChatMessage[]) => {
       const session = chatsStore.migrateLegacyMessages(messages);
@@ -327,7 +329,7 @@ export function registerChatsIpc(): void {
 
   // ── 对话工作区绑定 ──────────────────────────────────────
 
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_SET_WORKSPACE,
     async (event, payload: { sessionId: string; workspaceRoot: string }) => {
       if (!payload?.sessionId || !payload?.workspaceRoot) {
@@ -372,7 +374,7 @@ export function registerChatsIpc(): void {
     },
   );
 
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_INIT_LEARN_WORKSPACE,
     async (_event, sessionId: string) => {
       if (!sessionId) return { ok: false, error: "missing sessionId" };
@@ -388,7 +390,7 @@ export function registerChatsIpc(): void {
     },
   );
 
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_GET_WORKSPACE,
     (_event, sessionId: string) => {
       if (!sessionId) return null;
@@ -396,7 +398,7 @@ export function registerChatsIpc(): void {
     },
   );
 
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_CLEAR_WORKSPACE,
     (event, sessionId: string) => {
       if (!sessionId) return { ok: false, error: "missing sessionId" };
@@ -416,7 +418,7 @@ export function registerChatsIpc(): void {
     },
   );
 
-  ipcMain.handle(
+  ipc.handle(
     IPC.CHATS_PICK_WORKSPACE_FOLDER,
     async (event) => {
       const win = BrowserWindow.fromWebContents(event.sender);
@@ -443,7 +445,7 @@ export function registerChatsIpc(): void {
   // 正常终止的 Run 已在 harness-adapter 主动 finalize；
   // 崩溃恢复（interrupted）的 Run 在此按 "halted" 状态补生成。
   // 仍在运行的 Run（status=running）不生成快照，避免拿到不完整的 diff。
-  ipcMain.handle(IPC.REVIEW_GET, (_event, runId: string) => {
+  ipc.handle(IPC.REVIEW_GET, (_event, runId: string) => {
     if (!runId || typeof runId !== "string") return null;
     const tracker = getRunReviewTracker(app.getPath("userData"));
     // 先尝试直接加载（正常终止的 Run 已在 harness-adapter 主动 finalize）

@@ -53,3 +53,32 @@ export function attachWindowsSessionEndHandlers(input: {
     window.removeListener("session-end", onSessionEnd);
   };
 }
+
+export interface UpdateLifecycleLike {
+  on(event: "before-quit-for-update", listener: () => void): void;
+  removeListener(event: "before-quit-for-update", listener: () => void): void;
+}
+
+/**
+ * 更新安装的防御性兜底：绕过更新 IPC 的路径直接触发 quitAndInstall 时，
+ * electron-updater 会先发出 before-quit-for-update —— 此时进入同一个幂等协调器，
+ * 让清理与安装仍按受控退出顺序执行。
+ */
+export function installUpdateShutdownFallback(input: {
+  updater: UpdateLifecycleLike;
+  coordinator: ShutdownCoordinator;
+  finalAction(): void;
+}): () => void {
+  const { updater, coordinator, finalAction } = input;
+  const onBeforeQuitForUpdate = () => {
+    if (coordinator.isStopping()) return;
+    void coordinator.requestControlledShutdown({
+      reason: "update-install",
+      finalAction,
+    });
+  };
+  updater.on("before-quit-for-update", onBeforeQuitForUpdate);
+  return () => {
+    updater.removeListener("before-quit-for-update", onBeforeQuitForUpdate);
+  };
+}

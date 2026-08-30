@@ -22,6 +22,8 @@ export interface AppUpdateService {
   getState(): AppUpdateState;
   check(): Promise<AppUpdateState>;
   download(): Promise<AppUpdateState>;
+  /** 是否满足安装条件；与 install() 拆开，保证没有清理完成前不会启动安装器。 */
+  canInstall(): boolean;
   install(): boolean;
   onStateChanged(listener: (state: AppUpdateState) => void): () => void;
 }
@@ -113,8 +115,11 @@ export function createAppUpdateService(options: CreateAppUpdateServiceOptions): 
       await downloadPromise;
       return { ...state };
     },
+    canInstall() {
+      return isPackaged && state.phase === "downloaded";
+    },
     install() {
-      if (!isPackaged || state.phase !== "downloaded") return false;
+      if (!this.canInstall()) return false;
       // 静默安装：跳过 NSIS 完整向导，不再让用户选"为所有人/仅为我"，
       // 避免 perMachine 切换导致安装目录漂移（旧目录被卸载器清空、新目录落到 C 盘）。
       // 升级时安装目录里的用户内容由 NSIS 脚本（installer.nsh）暂存保护。

@@ -4,6 +4,7 @@
 
 import { ipcMain, BrowserWindow } from "electron";
 import { app } from "electron";
+import { createIpcScope, type IpcScope } from "./application/ipc-scope";
 import * as fs from "fs";
 import * as path from "path";
 import { IPC } from "../shared/ipc-channels";
@@ -145,12 +146,13 @@ export function requestApproval(request: Omit<ApprovalRequest, "id">): Promise<b
 
 // ── IPC 注册 ──────────────────────────────────────────────
 
-export function registerPermissionIpc(): void {
-  ipcMain.handle(IPC.PERMISSION_GET_LEVEL, () => {
+export function registerPermissionIpc(ipcOption?: IpcScope): void {
+  const ipc = ipcOption ?? createIpcScope(ipcMain);
+  ipc.handle(IPC.PERMISSION_GET_LEVEL, () => {
     return { level: currentLevel };
   });
 
-  ipcMain.handle(IPC.PERMISSION_SET_LEVEL, (_event, level: AgentFileAccessLevel) => {
+  ipc.handle(IPC.PERMISSION_SET_LEVEL, (_event, level: AgentFileAccessLevel) => {
     if (!isValidLevel(level)) {
       return { ok: false, error: "无效的档位: " + String(level) };
     }
@@ -159,7 +161,7 @@ export function registerPermissionIpc(): void {
   });
 
   // 渲染端审批 UI 回传结果
-  ipcMain.handle(IPC.PERMISSION_APPROVAL_RESOLVE, (_event, payload: { id: string; allowed: boolean }) => {
+  ipc.handle(IPC.PERMISSION_APPROVAL_RESOLVE, (_event, payload: { id: string; allowed: boolean }) => {
     const pending = pendingApprovals.get(payload?.id);
     if (!pending) {
       console.warn(LOG_PREFIX, "审批回传未匹配到 pending:", payload?.id);

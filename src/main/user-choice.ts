@@ -10,8 +10,8 @@
 // (cardData) => void 回调，user-choice.ts 持有它，工具调用时触发。
 // 这样避免直接 import electron/index.ts 造成循环依赖。
 
-import { ipcMain } from "electron";
 import { IPC } from "../shared/ipc-channels";
+import { createIpcScope, type IpcScope } from "./application/ipc-scope";
 import type {
   AskCardPayload,
   AskCardSubmission,
@@ -175,9 +175,10 @@ export function requestUserClarification(
   });
 }
 
-/** 注册 CHOICE_RESOLVE handler（main 启动时调一次）。 */
-export function registerChoiceIpc(): void {
-  ipcMain.handle(IPC.CHOICE_RESOLVE, (
+/** 注册 CHOICE_RESOLVE handler（core bootstrap 启动时调一次）。 */
+export function registerChoiceIpc(ipcOption?: IpcScope): void {
+  const ipc = ipcOption ?? createIpcScope();
+  ipc.handle(IPC.CHOICE_RESOLVE, (
     _event,
     payload: { id: string; value?: string; answer?: AskUserAnswer | AskCardSubmission },
   ) => {

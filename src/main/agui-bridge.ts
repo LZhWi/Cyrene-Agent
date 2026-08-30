@@ -8,9 +8,10 @@
 // Agent 的 Observable 是内存流、跨不过进程边界。
 // 因此主进程统一持有运行并仅把事件发送给 Renderer。
 import * as fs from "fs";
-import { app, ipcMain, IpcMainInvokeEvent, WebContents } from "electron";
+import { app, IpcMainInvokeEvent, WebContents } from "electron";
 import { getHarnessRunStore } from "./orchestrator/harness/run-store";
 import { IPC } from "../shared/ipc-channels";
+import { createIpcScope, type IpcScope } from "./application/ipc-scope";
 import { Subscription } from "rxjs";
 import { AgentRuntimeError } from "./orchestrator/agent-runtime-error";
 import {
@@ -290,7 +291,7 @@ function startPlanReviewFlow(params: {
 }
 
 /**
- * 注册 AG-UI IPC。由 index.ts 在 app.whenReady() 调一次。
+ * 注册 AG-UI IPC。由 core bootstrap 在加载聊天页面前调一次。
  *
  * @param buildOptions 把渲染进程输入转成 agent options（含上下文构建）
  * @param onRunFinished agent 跑完的副作用（记忆/sticker 等）
@@ -301,11 +302,13 @@ export function registerAgUiIpc(
   onRunFinished: OnRunFinishedFn,
   getChatWindow: GetChatWindowFn,
   lifecycle?: AguiConversationLifecycle,
+  ipcOption?: IpcScope,
 ): void {
+  const ipc = ipcOption ?? createIpcScope();
   buildOptionsFn = buildOptions;
   getChatWindowFn = getChatWindow;
 
-  ipcMain.handle(IPC.HARNESS_GET_INTERRUPTED_RUN, (_event, conversationId: unknown) => {
+  ipc.handle(IPC.HARNESS_GET_INTERRUPTED_RUN, (_event, conversationId: unknown) => {
     if (typeof conversationId !== "string" || !conversationId) return null;
     const run = getHarnessRunStore(app.getPath("userData")).getLatestInterrupted(conversationId);
     return run ? {
@@ -317,7 +320,7 @@ export function registerAgUiIpc(
   });
 
   const onFinished = onRunFinished;
-  ipcMain.handle(IPC.AGUI_RUN, async (event: IpcMainInvokeEvent, rawInput: unknown) => {
+  ipc.handle(IPC.AGUI_RUN, async (event: IpcMainInvokeEvent, rawInput: unknown) => {
     if (!buildOptionsFn || !onFinished) {
       throw new Error("AG-UI 桥未初始化");
     }
@@ -760,7 +763,7 @@ export function registerAgUiIpc(
     return { success: true, runId };
   });
 
-  ipcMain.handle(IPC.AGUI_CANCEL, (_event, runId?: string) => {
+  ipc.handle(IPC.AGUI_CANCEL, (_event, runId?: string) => {
     // 通过 abort signal 触发 harness 的 cancelled 流程，
     // 而非粗暴 unsubscribe()。后者会阻止 RUN_FINISHED(result.status="cancelled")
     // 送达渲染端。abort() 让 harness 自然返回 cancelled → CyreneAgent 发出

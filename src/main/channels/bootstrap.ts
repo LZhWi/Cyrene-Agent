@@ -1,4 +1,5 @@
 import type { BrowserWindow } from "electron";
+import type { IpcScope } from "../application/ipc-scope";
 import { IPC } from "../../shared/ipc-channels";
 import { loadGeneralSettings } from "../settings/settings-facade";
 import { loadModelSettings, loadVisionConfig, resolveModelSettingsProfile } from "../settings/model-settings";
@@ -45,6 +46,8 @@ export interface ChannelsSubsystemDeps {
   agentRuntime: AgentRuntime;
   ttsSynthesisService: TtsSynthesisService;
   getReactChatWindow: () => BrowserWindow | null;
+  /** 共享 IPC scope；传入后 channels IPC 由组合根统一注销。 */
+  ipc?: IpcScope;
 }
 
 /**
@@ -172,7 +175,7 @@ export function createChannelsSubsystem(
 
   // 默认生命周期：委托到 init.ts 的显式操作（幂等）
   const defaultLifecycle: ChannelsLifecycleAdapter = {
-    initialize: () => initializeChannels(),
+    initialize: () => initializeChannels(deps.ipc),
     start: (signal?: AbortSignal) => startChannels(signal),
     shutdown: () => shutdownChannels(),
   };

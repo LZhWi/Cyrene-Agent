@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import { BrowserWindow, ipcMain } from "electron";
 import { IPC } from "../../shared/ipc-channels";
+import { createIpcScope, type IpcScope, type IpcScopeMainLike } from "../application/ipc-scope";
 import type { CodeGitChangedPayload } from "../../shared/code-git-types";
 import type { GitService } from "./git-service";
 
@@ -15,15 +16,18 @@ interface WindowLike {
 
 export interface RegisterCodeGitIpcDeps {
   ipcMain?: IpcMainLike;
+  /** 传入共享 scope 以便退出时统一注销；缺省时按旧 ipcMain 参数或全局 ipcMain 包装。 */
+  ipc?: IpcScope;
   getWindows?: () => WindowLike[];
   service: Pick<GitService, "getStatusForSession" | "watchSession" | "unwatchSession" | "switchBranchForSession" | "commitForSession" | "pushForSession" | "onChanged">;
 }
 
 export function registerCodeGitIpc(deps: RegisterCodeGitIpcDeps): void {
-  const main = deps.ipcMain ?? ipcMain;
+  const ipc: IpcScope = deps.ipc
+    ?? createIpcScope((deps.ipcMain ?? ipcMain) as IpcScopeMainLike);
   const getWindows = deps.getWindows ?? (() => BrowserWindow.getAllWindows());
 
-  main.handle(IPC.CODE_GIT_STATUS, (_event, sessionId: unknown) => {
+  ipc.handle(IPC.CODE_GIT_STATUS, (_event, sessionId: unknown) => {
     if (typeof sessionId !== "string" || !sessionId.trim()) {
       return {
         sessionId: "",
@@ -40,19 +44,19 @@ export function registerCodeGitIpc(deps: RegisterCodeGitIpcDeps): void {
     return deps.service.getStatusForSession(sessionId);
   });
 
-  main.handle(IPC.CODE_GIT_WATCH, (_event, sessionId: unknown) => deps.service.watchSession(requireSessionId(sessionId)));
-  main.handle(IPC.CODE_GIT_UNWATCH, (_event, sessionId: unknown) => deps.service.unwatchSession(requireSessionId(sessionId)));
-  main.handle(IPC.CODE_GIT_SWITCH_BRANCH, (_event, payload: unknown) => {
+  ipc.handle(IPC.CODE_GIT_WATCH, (_event, sessionId: unknown) => deps.service.watchSession(requireSessionId(sessionId)));
+  ipc.handle(IPC.CODE_GIT_UNWATCH, (_event, sessionId: unknown) => deps.service.unwatchSession(requireSessionId(sessionId)));
+  ipc.handle(IPC.CODE_GIT_SWITCH_BRANCH, (_event, payload: unknown) => {
     const input = payload as { sessionId?: unknown; branch?: unknown; create?: unknown } | null;
     if (typeof input?.branch !== "string") throw new Error("缺少分支名称");
     return deps.service.switchBranchForSession(requireSessionId(input.sessionId), input.branch, input.create === true);
   });
-  main.handle(IPC.CODE_GIT_COMMIT, (_event, payload: unknown) => {
+  ipc.handle(IPC.CODE_GIT_COMMIT, (_event, payload: unknown) => {
     const input = payload as { sessionId?: unknown; message?: unknown; paths?: unknown } | null;
     if (typeof input?.message !== "string" || !Array.isArray(input.paths) || input.paths.some((value) => typeof value !== "string" || !isSafeRendererRelativePath(value))) throw new Error("提交参数无效");
     return deps.service.commitForSession(requireSessionId(input.sessionId), input.message, input.paths);
   });
-  main.handle(IPC.CODE_GIT_PUSH, (_event, sessionId: unknown) => deps.service.pushForSession(requireSessionId(sessionId)));
+  ipc.handle(IPC.CODE_GIT_PUSH, (_event, sessionId: unknown) => deps.service.pushForSession(requireSessionId(sessionId)));
 
   deps.service.onChanged((payload) => {
     for (const window of getWindows()) {

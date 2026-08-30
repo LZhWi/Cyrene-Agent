@@ -1,9 +1,10 @@
 import * as path from "node:path";
 import * as fs from "fs";
 import { spawn } from "node:child_process";
-import { app, BrowserWindow, globalShortcut, ipcMain, nativeImage } from "electron";
+import { app, BrowserWindow, globalShortcut, nativeImage } from "electron";
 import { randomUUID } from "crypto";
 import { IPC } from "../../shared/ipc-channels";
+import { createIpcScope, type IpcScope } from "../application/ipc-scope";
 import { ElectronScreenshotHelperClient } from "./helper-client";
 import { resolveScreenshotHelperPath } from "./helper-path";
 import {
@@ -19,6 +20,8 @@ export interface ScreenshotLifecycleOptions {
   initialHotkey: string;
   getReactChatWindow: () => BrowserWindow | null;
   capturePetWindow: () => Promise<Electron.NativeImage | null>;
+  /** 传入共享 scope 以便退出时统一注销；缺省时使用独立 scope。 */
+  ipc?: IpcScope;
 }
 
 const MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024;
@@ -63,6 +66,7 @@ export function initializeScreenshotService(
   options: ScreenshotLifecycleOptions,
 ): ScreenshotService {
   const { getReactChatWindow, capturePetWindow } = options;
+  const ipc = options.ipc ?? createIpcScope();
   const screenshotDirectory = getScreenshotDirectory();
 
   const validateInsert = (data: ScreenshotInsertData): ScreenshotInsertData => {
@@ -120,7 +124,7 @@ export function initializeScreenshotService(
     },
   });
 
-  ipcMain.handle(IPC.SCREENSHOT_START, async (event) => {
+  ipc.handle(IPC.SCREENSHOT_START, async (event) => {
     // 请求前兜底重建目录：清理软件可能删掉 AppData 下的子目录，
     // helper 的 WIC 编码不会自建父目录（0x80070003）。
     await ensureScreenshotDirectory(screenshotDirectory);
@@ -130,19 +134,19 @@ export function initializeScreenshotService(
       }
     });
   });
-  ipcMain.handle(IPC.SCREENSHOT_SAVE_TEMP, (_event, base64: string, mime: string) =>
+  ipc.handle(IPC.SCREENSHOT_SAVE_TEMP, (_event, base64: string, mime: string) =>
     saveScreenshotPasteTemp(base64, mime),
   );
-  ipcMain.handle(IPC.SCREENSHOT_HOTKEY_CAPTURE_START, () => {
+  ipc.handle(IPC.SCREENSHOT_HOTKEY_CAPTURE_START, () => {
     service.suspendHotkey();
     return true;
   });
-  ipcMain.handle(IPC.SCREENSHOT_HOTKEY_CAPTURE_END, () => {
+  ipc.handle(IPC.SCREENSHOT_HOTKEY_CAPTURE_END, () => {
     service.resumeHotkey();
     return true;
   });
 
-  ipcMain.handle("debug:screenshot", async () => {
+  ipc.handle("debug:screenshot", async () => {
     const image = await capturePetWindow();
     if (!image) return null;
     const png = image.toPNG();

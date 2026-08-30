@@ -10,8 +10,9 @@
 //   - shutdownChannels()：停 adapter + inbound-server，并复位两个 flag
 //
 // 注意：startChannels 必须晚于 initRAG / initMcpManager / loadModelSettings。
-import { app, BrowserWindow, ipcMain } from "electron";
+import { app, BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc-channels";
+import { createIpcScope, type IpcScope } from "../application/ipc-scope";
 import {
   loadChannelsSettings,
   saveChannelsSettings,
@@ -61,8 +62,8 @@ function getPublicChannelsSettings(): Record<string, unknown> {
   };
 }
 
-/** app.whenReady() 调一次。只做装配，无网络副作用。idempotent。 */
-export function initializeChannels(): void {
+/** app 启动编排（core 阶段）调一次。只做装配，无网络副作用。idempotent。 */
+export function initializeChannels(ipcOption?: IpcScope): void {
   if (initialized) return;
   initialized = true;
 
@@ -81,7 +82,7 @@ export function initializeChannels(): void {
   registerAdapters();
 
   // 注册全局 IPC
-  registerChannelsIpc();
+  registerChannelsIpc(ipcOption);
 
   logger.info(LogTag.Channels, "channels module initialized");
 }
@@ -139,20 +140,21 @@ export async function shutdownChannels(): Promise<void> {
 }
 
 /** IPC 注册 */
-function registerChannelsIpc(): void {
-  ipcMain.handle(IPC.CHANNELS_GET_CONFIG, () => getPublicChannelsSettings());
+function registerChannelsIpc(ipcOption?: IpcScope): void {
+  const ipc = ipcOption ?? createIpcScope();
+  ipc.handle(IPC.CHANNELS_GET_CONFIG, () => getPublicChannelsSettings());
 
-  ipcMain.handle(IPC.CHANNELS_SAVE_CONFIG, (_e, patch: unknown) => {
+  ipc.handle(IPC.CHANNELS_SAVE_CONFIG, (_e, patch: unknown) => {
     saveChannelsSettings(patch as Parameters<typeof saveChannelsSettings>[0]);
     channelDispatcher.reloadSettings();
     return getPublicChannelsSettings();
   });
 
-  ipcMain.handle(IPC.CHANNELS_LIST, () => channelManager.listChannels());
+  ipc.handle(IPC.CHANNELS_LIST, () => channelManager.listChannels());
 
-  ipcMain.handle(IPC.CHANNELS_GET_STATUS, () => channelManager.getAllStatus());
+  ipc.handle(IPC.CHANNELS_GET_STATUS, () => channelManager.getAllStatus());
 
-  ipcMain.handle(IPC.CHANNELS_RESTART, async () => {
+  ipc.handle(IPC.CHANNELS_RESTART, async () => {
     await channelManager.stopAll();
     await channelManager.startAll();
     broadcastChannelsStatus();
@@ -161,13 +163,13 @@ function registerChannelsIpc(): void {
 
   // ── 微信 IPC (iLink 直连版) ───────────────────────────────────────────────────────
 
-  ipcMain.handle(IPC.CHANNELS_WECHAT_RUNTIME_DETECT, () => {
+  ipc.handle(IPC.CHANNELS_WECHAT_RUNTIME_DETECT, () => {
     // iLink Bot API 是腾讯的远程协议，不需本地安装
     return { installed: true, version: "ilink/1.0.0" };
   });
 
 	  // 扫码登录：Main Process 生成 PNG dataURL，推给 Renderer 显示 <img>
-	  ipcMain.handle(IPC.CHANNELS_WECHAT_LOGIN_START, async () => {
+	  ipc.handle(IPC.CHANNELS_WECHAT_LOGIN_START, async () => {
 	    if (!wxAdapter) return { ok: false, error: "adapter 未初始化" };
 	    try {
 	      const { fetchQrCode } = await import("./adapters/wechat/ilink-protocol-client");
@@ -204,11 +206,11 @@ function registerChannelsIpc(): void {
 	    }
 	  });
 
-  ipcMain.handle(IPC.CHANNELS_WECHAT_LOGIN_CANCEL, () => {
+  ipc.handle(IPC.CHANNELS_WECHAT_LOGIN_CANCEL, () => {
     return { ok: true };
   });
 
-  ipcMain.handle(IPC.CHANNELS_WECHAT_LOGIN_RESULT, async () => {
+  ipc.handle(IPC.CHANNELS_WECHAT_LOGIN_RESULT, async () => {
     if (!wxAdapter) return { connected: false };
     const status = wxAdapter.getStatus();
     return {
@@ -218,27 +220,27 @@ function registerChannelsIpc(): void {
     };
   });
 
-  ipcMain.handle(IPC.CHANNELS_WECHAT_PAIRING_LIST, () => {
+  ipc.handle(IPC.CHANNELS_WECHAT_PAIRING_LIST, () => {
     // iLink 模式没有 pairing 概念
     return [];
   });
 
-  ipcMain.handle(IPC.CHANNELS_WECHAT_PAIRING_APPROVE, () => ({ ok: false, error: "iLink 模式不支持 pairing" }));
+  ipc.handle(IPC.CHANNELS_WECHAT_PAIRING_APPROVE, () => ({ ok: false, error: "iLink 模式不支持 pairing" }));
 
-  ipcMain.handle(IPC.CHANNELS_WECHAT_LOGOUT, async () => {
+  ipc.handle(IPC.CHANNELS_WECHAT_LOGOUT, async () => {
     if (!wxAdapter) return { ok: false };
     await wxAdapter.logout();
     return { ok: true };
   });
 
-  ipcMain.handle(IPC.CHANNELS_WECHAT_RUNTIME_INSTALL, () => ({
+  ipc.handle(IPC.CHANNELS_WECHAT_RUNTIME_INSTALL, () => ({
     ok: true,
     hint: "iLink Bot API 是云端协议，无需本地安装",
   }));
 
-  ipcMain.handle(IPC.CHANNELS_WECHAT_RUNTIME_UPDATE, () => ({ ok: true }));
+  ipc.handle(IPC.CHANNELS_WECHAT_RUNTIME_UPDATE, () => ({ ok: true }));
 
-  ipcMain.handle(IPC.CHANNELS_WECHAT_INSTALL, async () => {
+  ipc.handle(IPC.CHANNELS_WECHAT_INSTALL, async () => {
     if (!wxAdapter) return { ok: false };
     await wxAdapter.stop();
     await wxAdapter.start();
@@ -246,7 +248,7 @@ function registerChannelsIpc(): void {
   });
 
   // Phase 2 长连接：测试连接 = 重建 LarkChannel（SDK 内部会自动跑 WSS handshake）
-  ipcMain.handle(IPC.CHANNELS_FEISHU_TEST_CONNECTION, async () => {
+  ipc.handle(IPC.CHANNELS_FEISHU_TEST_CONNECTION, async () => {
     const adapter = channelManager.getAdapter("feishu") as FeishuAdapter | undefined;
     if (!adapter) return { ok: false, error: "飞书 adapter 未注册" };
     const status = adapter.getStatus();
@@ -267,30 +269,30 @@ function registerChannelsIpc(): void {
   });
 
   // 长连接模式不需要 webhook URL —— 这个 IPC 保留但返回 ok 提示用户用长连接
-  ipcMain.handle(IPC.CHANNELS_FEISHU_TEST_WEBHOOK_REACHABLE, async () => {
+  ipc.handle(IPC.CHANNELS_FEISHU_TEST_WEBHOOK_REACHABLE, async () => {
     return {
       ok: true,
       message: "长连接模式不需要公网 URL — SDK 已自动建立 WSS 连接",
     };
   });
 
-  ipcMain.handle(IPC.CHANNELS_QQ_TEST_CONNECTION, async () => {
+  ipc.handle(IPC.CHANNELS_QQ_TEST_CONNECTION, async () => {
     if (!qqAdapter) return { ok: false, error: "QQ adapter 未初始化" };
     return await qqAdapter.testConnection();
   });
 
   // ── QQ 官方机器人 IPC ─────────────────────────────────────────────────────
-  ipcMain.handle(IPC.CHANNELS_QQBOT_TEST_CONNECTION, async () => {
+  ipc.handle(IPC.CHANNELS_QQBOT_TEST_CONNECTION, async () => {
     if (!qqBotAdapter) return { ok: false, error: "QQ Bot adapter 未初始化" };
     return await qqBotAdapter.testConnection();
   });
 
   // Phase 3.4：消息日志
-  ipcMain.handle(IPC.CHANNELS_LOG_GET, (_e, limit: unknown) => {
+  ipc.handle(IPC.CHANNELS_LOG_GET, (_e, limit: unknown) => {
     const n = typeof limit === "number" && limit > 0 ? limit : 100;
     return getRecentLog(n);
   });
-  ipcMain.handle(IPC.CHANNELS_LOG_CLEAR, () => {
+  ipc.handle(IPC.CHANNELS_LOG_CLEAR, () => {
     clearLog();
     return { ok: true };
   });

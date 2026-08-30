@@ -1,4 +1,5 @@
 import type { BrowserWindow } from "electron";
+import type { IpcScope } from "../application/ipc-scope";
 import type { AgentRuntime } from "../orchestrator/agent-runtime";
 import { toolRegistry } from "../orchestrator/tool-registry";
 import { SchedulerEngine, type SchedulerEngineDeps } from "./scheduler-engine";
@@ -12,6 +13,8 @@ export interface SchedulerSubsystemDeps {
   store?: ReturnType<typeof getSchedulerStore>;
   createEngine?: (deps: SchedulerEngineDeps) => SchedulerEngine;
   registerIpc?: typeof registerSchedulerIpc;
+  /** 共享 IPC scope；传入后 scheduler IPC 由组合根统一注销。 */
+  ipc?: IpcScope;
 }
 
 export interface SchedulerSubsystem {
@@ -58,7 +61,7 @@ export function createSchedulerSubsystem(deps: SchedulerSubsystemDeps): Schedule
       if (initialized) return;
       initialized = true;
       store.load();
-      registerIpc(store, engine, () => toolRegistry.getAllTools());
+      registerIpc(store, engine, () => toolRegistry.getAllTools(), deps.ipc);
     },
     /** 只启动 engine 定时器（必须在 MCP 恢复之后调用）。 */
     start(): void {
