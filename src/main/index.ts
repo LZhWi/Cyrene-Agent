@@ -90,6 +90,7 @@ import {
 } from "./screenshot/screenshot-lifecycle";
 import { createWindowManager, type WindowManager } from "./windows/window-manager";
 import { openPrimaryWindow } from "./windows/primary-window";
+import type { WindowActivationRequest } from "./application/window-activation";
 import { registerWindowSystemIpc } from "./windows/window-system-ipc";
 import { createTray } from "./tray";
 import { createSplashWindow } from "./startup/create-splash-window";
@@ -174,10 +175,7 @@ import { registerAppUpdateIpc } from "./updater/app-update-ipc";
 configureDocumentIndexQueue(runDocumentIndexJob);
 
 const isPrimaryCyreneProcess = installSingleInstanceGuard(app, () => {
-  openPrimaryWindow({
-    openChatWindow: () => windowManager?.createReactChatWindow(),
-    showPetWindow: () => windowManager?.showPetWindow(),
-  });
+  openPrimaryWindow({ requestActivation: requestWindowActivation });
 });
 
 async function reconcileUserMemoryIndex(): Promise<void> {
@@ -208,6 +206,17 @@ let codeGitService: GitService | null = null;
 const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
   onClosed: () => { /* no-op：原 setLive2dWindow 已随 opener 子系统一起移除 */ },
 });
+
+// Task 2 临时直连分发：托盘/主窗口激活统一走 request 通道；
+// activation broker 与 readiness 的装配留待 composition-root 任务接入。
+function requestWindowActivation(request: WindowActivationRequest): void {
+  switch (request.kind) {
+    case "chat": windowManager?.createReactChatWindow(); break;
+    case "sidebar": windowManager?.createSidebarWindow(); break;
+    case "settings": windowManager?.createSettingsWindow(); break;
+    case "music": windowManager?.createMusicPlayerWindow(); break;
+  }
+}
 
 // 聊天窗口当前活跃的会话 id（通过 IPC 由聊天窗口上报）；
 // 设置面板"删除当前会话"差异化提示用。聊天窗口关闭时由 closed 事件置 null。
@@ -526,10 +535,8 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
   if (generalSettings.tasksVisible) manager.createTasksWindow();
   tray = createTray({
     togglePetWindow: () => manager.togglePetWindow(),
-    createReactChatWindow: () => manager.createReactChatWindow(),
-    createSidebarWindow: () => manager.createSidebarWindow(),
-    createSettingsWindow: () => manager.createSettingsWindow(),
-    createMusicPlayerWindow: () => manager.createMusicPlayerWindow(),
+    requestActivation: requestWindowActivation,
+    quit: () => app.quit(),
   });
   // 权限模块初始化：必须在 createWindow 之后但任意工具调用之前
   bootstrapPermission();
@@ -601,10 +608,7 @@ app.on("before-quit", () => {
 });
 
 app.on("activate", () => {
-  openPrimaryWindow({
-    openChatWindow: () => windowManager?.createReactChatWindow(),
-    showPetWindow: () => windowManager?.showPetWindow(),
-  });
+  openPrimaryWindow({ requestActivation: requestWindowActivation });
 });
 
 
