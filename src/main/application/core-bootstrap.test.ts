@@ -7,6 +7,9 @@ import { startCore, type CoreDependencies, type CoreServices } from "./core-boot
 function makeServices(): CoreServices {
   return {
     runtimeState: {} as never,
+    llm: {} as never,
+    cita: {} as never,
+    social: {} as never,
     tts: {} as never,
     ttsSession: {} as never,
     embedding: { scheduleStartupRefreshes: vi.fn() } as never,
@@ -48,6 +51,8 @@ function makeCoreDeps(calls: string[], overrides: Partial<CoreDependencies> = {}
         onPetWindowClosed: vi.fn(),
         createSidebarWindow: vi.fn(),
         createTasksWindow: vi.fn(),
+        setPetWindowAlwaysOnTop: vi.fn(),
+        applyPetWindowZoom: vi.fn(),
       },
       chat: { window: chatWindow, load: chatLoad, show: vi.fn() },
       tray: { isDestroyed: () => false, destroy: vi.fn() } as never,
@@ -68,6 +73,7 @@ function makeCoreDeps(calls: string[], overrides: Partial<CoreDependencies> = {}
     createScheduler: () => ({ initialize: () => { calls.push("scheduler-initialize"); }, start: vi.fn(() => { calls.push("scheduler-start"); }), stop: vi.fn() } as never),
     registerCoreIpc: () => { calls.push("register-core-ipc"); },
     loadGeneralSettings: () => ({ petVisible: true, sidebarVisible: false, tasksVisible: false }) as never,
+    applyGeneralSettings: () => { calls.push("apply-settings"); },
     revealStartupWindows: async () => { calls.push("reveal"); },
     minimumSplashMs: 2500,
     markStartupWindowsReady: () => { calls.push("mark-startup-windows"); },

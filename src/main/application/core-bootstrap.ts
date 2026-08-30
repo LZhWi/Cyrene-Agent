@@ -24,12 +24,18 @@ import type { LspManager } from "../lsp/manager";
 import type { ScreenshotService } from "../screenshot/screenshot-lifecycle";
 import type { MusicBootstrap } from "../music/bootstrap";
 import type { AppUpdateService } from "../updater/app-update-service";
+import type { LlmClient } from "../services/llm/llm-client";
+import type { CitaService } from "../cita";
+import type { SocialContextService } from "../services/social-context/social-context-service";
 import type { ChannelsSubsystem } from "../channels/bootstrap";
 import type { SchedulerSubsystem } from "../scheduler/bootstrap";
 import type { GeneralSettings } from "../settings/general-settings";
 
 export interface CoreServices {
   runtimeState: RuntimeStateService;
+  llm: LlmClient;
+  cita: CitaService;
+  social: SocialContextService;
   tts: TtsSynthesisService;
   ttsSession: TtsSessionService;
   embedding: EmbeddingIndexService;
@@ -67,13 +73,15 @@ export interface CoreDependencies {
   createLowCostServices(): CoreServices;
   initSandbox(): void | Promise<void>;
   initPlanMode(): void;
-  registerAllTools(): void;
+  registerAllTools(services: CoreServices): void;
   initRag(): Promise<void>;
   createRuntime(services: CoreServices): AgentRuntime;
-  createChannels(services: CoreServices): ChannelsSubsystem;
-  createScheduler(services: CoreServices): SchedulerSubsystem;
+  createChannels(runtime: AgentRuntime, services: CoreServices): ChannelsSubsystem;
+  createScheduler(runtime: AgentRuntime, services: CoreServices): SchedulerSubsystem;
   registerCoreIpc(input: RegisterCoreIpcInput): void;
   loadGeneralSettings(): GeneralSettings;
+  /** 启动期一次性应用通用设置（登录项同步、桌宠偏好等）。 */
+  applyGeneralSettings(settings: GeneralSettings, services: CoreServices): void;
   revealStartupWindows(input: RevealStartupWindowsOptions): Promise<void>;
   /** Loading 最短展示时长（ms）。 */
   minimumSplashMs: number;
@@ -111,7 +119,7 @@ export async function startCore(deps: CoreDependencies): Promise<CoreResult> {
   }
 
   deps.initPlanMode();
-  deps.registerAllTools();
+  deps.registerAllTools(services);
 
   // RAG：失败记录降级，聊天仍允许启动
   try {
@@ -124,9 +132,9 @@ export async function startCore(deps: CoreDependencies): Promise<CoreResult> {
   const runtime = deps.createRuntime(services);
 
   // scheduler/channels：只装配（加载 store、注册 IPC），engine/网络启动在 background 阶段
-  const channels = deps.createChannels(services);
+  const channels = deps.createChannels(runtime, services);
   channels.initialize();
-  const scheduler = deps.createScheduler(services);
+  const scheduler = deps.createScheduler(runtime, services);
   scheduler.initialize();
 
   // 注册聊天渲染进程可能调用的全部 IPC 处理器 —— 必须先于 chat.load()
@@ -137,17 +145,19 @@ export async function startCore(deps: CoreDependencies): Promise<CoreResult> {
 
   // 桌宠：仅在设置开启时创建（不创建后隐藏、不闪现）；辅助窗口按设置创建
   const generalSettings = deps.loadGeneralSettings();
+  // 启动期一次性应用通用设置（登录项同步等）；此时桌宠未创建，show/hide 为 no-op
+  deps.applyGeneralSettings(generalSettings, services);
   if (generalSettings.petVisible) {
-    const petWindow = shell.windowManager.createPetWindow(false);
+    // showOnReady=true：页面就绪才显示，避免空窗口闪现；创建本身在核心 IPC 注册之后
+    shell.windowManager.createPetWindow(true);
     shell.windowManager.onPetWindowReady((win) => {
       shell.live2dWindowLifecycle.attach(win);
     });
     shell.windowManager.onPetWindowClosed(() => {
       shell.live2dWindowLifecycle.clear();
     });
-    if (!petWindow.isDestroyed()) {
-      shell.live2dWindowLifecycle.attach(petWindow);
-    }
+    shell.windowManager.setPetWindowAlwaysOnTop(generalSettings.petAlwaysOnTop);
+    shell.windowManager.applyPetWindowZoom(generalSettings.petZoom);
   }
   if (generalSettings.sidebarVisible) shell.windowManager.createSidebarWindow();
   if (generalSettings.tasksVisible) shell.windowManager.createTasksWindow();
