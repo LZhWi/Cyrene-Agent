@@ -19,7 +19,6 @@ export const MODEL_PRESETS: ModelPreset[] = [
     websiteUrl: "https://platform.minimaxi.com/",
     // 主模型默认走 Anthropic SDK；视觉继续走 OpenAI 兼容入口。
     visionBaseUrl: "https://api.minimaxi.com/v1",
-    supportsVision: true,
   },
   {
     // DeepSeek：v1 vendor adapter 不为它做协议层强制，仅作为 OpenAI 兼容厂商列出。
@@ -47,7 +46,6 @@ export const MODEL_PRESETS: ModelPreset[] = [
     ],
     iconUrl: "../icons/providers/volcengine.svg",
     websiteUrl: "https://www.volcengine.com/product/ark",
-    supportsVision: true,
   },
   {
     providerName: "GLM（智谱）",
@@ -67,8 +65,6 @@ export const MODEL_PRESETS: ModelPreset[] = [
     mainModels: ["kimi-k2.6", "kimi-k2.5", "kimi-k2-thinking"],
     iconUrl: "../icons/providers/kimi.svg",
     websiteUrl: "https://platform.moonshot.cn/",
-    // k2.6 / k2.7-code 支持 image_url 多模态
-    supportsVision: true,
   },
   {
     providerName: "Qwen（通义千问）",
@@ -109,9 +105,8 @@ export const MODEL_PRESETS: ModelPreset[] = [
     iconUrl: "../icons/providers/xiaomimimo.svg",
     websiteUrl: "https://mimo.mi.com/",
     visionBaseUrl: "https://api.xiaomimimo.com/v1",
-    supportsVision: true,
-    // 主模型 mimo-v2.5-pro 不适合做视觉（视觉模型是 mimo-v2.5），强制独立配置
-    independentVision: true,
+    // 主模型 mimo-v2.5-pro 不适合做视觉（视觉模型是 mimo-v2.5）；
+    // 多模态开关默认全开，仅在此预填独立视觉模型候选，用户自行决定。
     defaultVisionModel: "mimo-v2.5",
     visionModels: ["mimo-v2.5"],
   },

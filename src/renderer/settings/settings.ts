@@ -739,7 +739,8 @@ function startNewDraft(providerName: string): void {
   applyPreset(providerName);
   restoreVisionInputs(visionSnapshot);
   contextWindowInput.value = "";
-  multimodalToggle.checked = false;
+  // 新建草稿默认开多模态；applyPreset 已不再按厂商门控
+  multimodalToggle.checked = true;
   applyMultimodalUI();
   applyEditingStateUI();
   renderProfileList();
@@ -896,11 +897,10 @@ export function applyPreset(
   applyCustomEndpointUI(preset);
   updateEndpointPreview();
 
-  if (preferredMultimodal !== undefined) {
-    multimodalToggle.checked = preset.independentVision === true ? false : preferredMultimodal;
-  } else {
-    multimodalToggle.checked = preset.supportsVision === true && preset.independentVision !== true;
-  }
+  // 多模态默认开（与主进程 normalizeModelSettings 的默认值对齐）：
+  // 不按厂商/型号门控——直发判错有服务端仲裁 + caption 自动降级兜底。
+  // 要单配独立视觉模型是用户自己的事，用户自己关开关。
+  multimodalToggle.checked = preferredMultimodal ?? true;
 
   // 视觉三框：始终写入值（从 preferredVision 或 preset 默认），不受开关影响
   if (preferredVision) {
