@@ -4,7 +4,12 @@
 //   - Phase 0: 骨架 + dispatcher + inbound-server
 //   - Phase 2: 接入 FeishuAdapter（自建飞书应用 + 事件订阅）
 //
-// 注意：initChannels 必须晚于 initRAG / initMcpManager / loadModelSettings。
+// 生命周期（Task 1 起，显式化）：
+//   - initializeChannels()：注入 dispatcher、注册 adapter、注册 IPC（无网络/定时器副作用）
+//   - startChannels()：启动 inbound-server + 所有 adapter（真正的网络启动）
+//   - shutdownChannels()：停 adapter + inbound-server，并复位两个 flag
+//
+// 注意：startChannels 必须晚于 initRAG / initMcpManager / loadModelSettings。
 import { app, BrowserWindow, ipcMain } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import {
@@ -24,6 +29,7 @@ import { logger, LogTag } from "../logger";
 const LOG = "[ChannelsInit]";
 
 let initialized = false;
+let started = false;
 let conversationLifecycle: {
   onUserMessage(): void;
   onConversationStarted(): void;
@@ -55,8 +61,8 @@ function getPublicChannelsSettings(): Record<string, unknown> {
   };
 }
 
-/** app.whenReady() 调一次。idempotent。 */
-export async function initChannels(): Promise<void> {
+/** app.whenReady() 调一次。只做装配，无网络副作用。idempotent。 */
+export function initializeChannels(): void {
   if (initialized) return;
   initialized = true;
 
@@ -71,18 +77,17 @@ export async function initChannels(): Promise<void> {
     }
   });
 
+  // 注册 adapter（不启动，startChannels 时统一 startAll）
+  registerAdapters();
+
   // 注册全局 IPC
   registerChannelsIpc();
 
-  // 启动 inbound-server
-  try {
-    const handle = await startInboundServer();
-    logger.info(LogTag.InboundServer, `listening on http://127.0.0.1:${handle.port}`);
-  } catch (err) {
-    console.error(LOG, "入站 server 启动失败:", err);
-  }
+  logger.info(LogTag.Channels, "channels module initialized");
+}
 
-  // 注册 adapter
+/** 注册各渠道 adapter。adapter 构造不产生网络副作用，真正的连接在 startChannels。 */
+function registerAdapters(): void {
   const feishuAdapter = new FeishuAdapter();
   channelManager.register(feishuAdapter);
 
@@ -97,11 +102,31 @@ export async function initChannels(): Promise<void> {
   // 注册 QQ 官方机器人 adapter（QQ 开放平台 API v2，AppID/AppSecret + WebSocket 网关）
   qqBotAdapter = new QqBotAdapter(broadcastChannelsStatus);
   channelManager.register(qqBotAdapter);
+}
+
+/** 显式启动：inbound-server + 所有已注册 adapter。必须晚于 initRAG / initMcpManager。idempotent。 */
+export async function startChannels(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw signal.reason;
+  if (started) return;
+  started = true;
+
+  // 启动 inbound-server
+  try {
+    const handle = await startInboundServer();
+    logger.info(LogTag.InboundServer, `listening on http://127.0.0.1:${handle.port}`);
+  } catch (err) {
+    console.error(LOG, "入站 server 启动失败:", err);
+  }
+
+  if (signal?.aborted) {
+    await stopInboundServer();
+    throw signal.reason;
+  }
 
   // 启动所有已注册 adapter
   await channelManager.startAll();
 
-  logger.info(LogTag.Channels, "channels module ready");
+  logger.info(LogTag.Channels, "channels module started");
   broadcastChannelsStatus();
 }
 
@@ -110,6 +135,7 @@ export async function shutdownChannels(): Promise<void> {
   await channelManager.stopAll();
   await stopInboundServer();
   initialized = false;
+  started = false;
 }
 
 /** IPC 注册 */

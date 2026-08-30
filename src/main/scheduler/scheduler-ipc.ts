@@ -30,11 +30,17 @@ function broadcastChanged(): void {
   }
 }
 
+let schedulerIpcRegistered = false;
+
+/** 注册 scheduler IPC。idempotent：ipcMain.handle 对同一 channel 重复注册会抛错。 */
 export function registerSchedulerIpc(
   store: SchedulerStoreLike,
   engine: SchedulerEngine,
   getTools: () => ToolDefinition[],
 ): void {
+  if (schedulerIpcRegistered) return;
+  schedulerIpcRegistered = true;
+
   const ok = <T>(value: T): SchedulerIpcResult<T> => ({ ok: true, value });
   const fail = (err: unknown): SchedulerIpcResult => ({ ok: false, error: err instanceof Error ? err.message : String(err) });
 

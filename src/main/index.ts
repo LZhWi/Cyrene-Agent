@@ -467,14 +467,19 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
     socialAtomStore: socialContextService.store,
   });
 
-  schedulerSubsystem = createSchedulerSubsystem(agentRuntime, () => reactChatWindow);
+  // scheduler：构造 + 显式初始化（加载 store、注册 IPC），engine 启动推迟到 MCP 恢复之后。
+  schedulerSubsystem = createSchedulerSubsystem({ agentRuntime, getReactChatWindow: () => reactChatWindow });
+  schedulerSubsystem.initialize();
 
-  // 多渠道（微信/飞书/...）：组装 dispatcher 依赖并启动 channels 模块。
+  // 多渠道（微信/飞书/...）：组装 dispatcher 依赖并显式初始化 channels 模块。
+  // 注意：此处只做装配（dispatcher 注入 / adapter 注册 / IPC 注册），
+  // 真正的网络启动（inbound-server + adapter startAll）在下方 MCP 初始化完成后 startChannels。
   channelsSubsystem = createChannelsSubsystem({
     agentRuntime,
     ttsSynthesisService,
     getReactChatWindow: () => reactChatWindow,
   });
+  channelsSubsystem.initialize();
 
   registerAgUiIpc(
     (input) => agentRuntime.buildOptions(input),
@@ -556,7 +561,10 @@ if (isPrimaryCyreneProcess) app.whenReady().then(async () => {
 
   embeddingIndexService.scheduleStartupRefreshes();
 
-  schedulerSubsystem.engine.start();
+  // MCP / RAG 就绪后再显式启动 channels（inbound-server + adapter）与 scheduler 定时器。
+  // 修复：原先 channels 在构造期即自动启动，早于 MCP 恢复。
+  await channelsSubsystem.start();
+  schedulerSubsystem.start();
 
   // 启动流程全部完成后，再额外显示一段时间闪屏，让用户能明确看到加载画面。
   const closeSplashAndShowWindows = () => {
@@ -583,7 +591,7 @@ app.on("window-all-closed", () => {});
 // 应用退出前把 token 用量缓存落盘（防抖未触发的最后一次写）
 app.on("before-quit", () => {
   windowManager?.dispose();
-  schedulerSubsystem?.engine.stop();
+  schedulerSubsystem?.stop();
   proactiveLifecycle.stopProactiveTrigger();
   flushTokenUsage();
   void channelsSubsystem?.shutdown();

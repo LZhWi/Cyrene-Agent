@@ -23,9 +23,21 @@ import {
   setDispatcherSynthesizeTts,
   formatChannelUserText,
 } from "./dispatcher";
-import { initChannels, shutdownChannels } from "./init";
+import {
+  initializeChannels,
+  startChannels,
+  shutdownChannels,
+} from "./init";
+
+export interface ChannelsLifecycleAdapter {
+  initialize(): void;
+  start(signal?: AbortSignal): Promise<void>;
+  shutdown(): Promise<void>;
+}
 
 export interface ChannelsSubsystem {
+  initialize(): void;
+  start(signal?: AbortSignal): Promise<void>;
   shutdown(): Promise<void>;
 }
 
@@ -35,7 +47,14 @@ export interface ChannelsSubsystemDeps {
   getReactChatWindow: () => BrowserWindow | null;
 }
 
-export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSubsystem {
+/**
+ * 组装 channels 子系统。构造期只注入 dispatcher 依赖（纯 setter 赋值），
+ * 不做任何初始化/启动 —— initialize / start / shutdown 必须显式调用。
+ */
+export function createChannelsSubsystem(
+  deps: ChannelsSubsystemDeps,
+  lifecycle?: ChannelsLifecycleAdapter,
+): ChannelsSubsystem {
   setDispatcherLoadRecentHistory(async (sessionId, limit) => {
     const { loadRecentHistory } = await import("./history-log");
     return loadRecentHistory(sessionId, limit);
@@ -151,9 +170,17 @@ export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSu
     }
   });
 
-  void initChannels();
+  // 默认生命周期：委托到 init.ts 的显式操作（幂等）
+  const defaultLifecycle: ChannelsLifecycleAdapter = {
+    initialize: () => initializeChannels(),
+    start: (signal?: AbortSignal) => startChannels(signal),
+    shutdown: () => shutdownChannels(),
+  };
+  const adapter = lifecycle ?? defaultLifecycle;
 
   return {
-    shutdown: shutdownChannels,
+    initialize: () => adapter.initialize(),
+    start: (signal?: AbortSignal) => adapter.start(signal),
+    shutdown: () => adapter.shutdown(),
   };
 }
