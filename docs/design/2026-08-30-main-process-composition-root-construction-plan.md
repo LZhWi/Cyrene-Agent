@@ -239,7 +239,7 @@ export function createSchedulerSubsystem(deps: SchedulerSubsystemDeps): Schedule
 
 - `createChannelsSubsystem()` and `createSchedulerSubsystem()` must not start timers, servers, adapters or asynchronous work.
 
-- [ ] **Step 1: Write failing channel lifecycle tests**
+- [x] **Step 1: Write failing channel lifecycle tests**
 
 ```ts
 it("does not initialize or start channels during construction", () => {
@@ -259,7 +259,7 @@ it("starts channels only after explicit start", async () => {
 });
 ```
 
-- [ ] **Step 2: Write failing scheduler lifecycle tests**
+- [x] **Step 2: Write failing scheduler lifecycle tests**
 
 ```ts
 it("does not load the store, register IPC, or start the engine in createSchedulerSubsystem", () => {
@@ -277,7 +277,7 @@ it("does not load the store, register IPC, or start the engine in createSchedule
 });
 ```
 
-- [ ] **Step 3: Run the focused tests and verify RED**
+- [x] **Step 3: Run the focused tests and verify RED**
 
 Run:
 
@@ -287,7 +287,7 @@ npx vitest run src/main/channels/bootstrap.test.ts src/main/scheduler/bootstrap.
 
 Expected: FAIL because the factories currently perform initialization during construction and do not expose the required lifecycle methods.
 
-- [ ] **Step 4: Split channel initialization from network start**
+- [x] **Step 4: Split channel initialization from network start**
 
 Refactor `channels/init.ts` into explicit idempotent operations:
 
@@ -311,11 +311,11 @@ export async function startChannels(signal?: AbortSignal): Promise<void> {
 
 `shutdownChannels()` stops adapters and the inbound server, and resets both `initialized` and `started` flags. Preserve all existing adapter and dispatcher behavior.
 
-- [ ] **Step 5: Split scheduler initialization from timer start**
+- [x] **Step 5: Split scheduler initialization from timer start**
 
 Move `store.load()` and `registerSchedulerIpc()` into `initialize()`. `start()` calls only `engine.start()`, and `stop()` calls only `engine.stop()`.
 
-- [ ] **Step 6: Keep the old entry behavior temporarily explicit**
+- [x] **Step 6: Keep the old entry behavior temporarily explicit**
 
 In the current `index.ts`, replace implicit creation with explicit calls while already fixing the confirmed MCP/channel ordering bug:
 
@@ -333,7 +333,7 @@ schedulerSubsystem.start();
 
 Remove the old `schedulerSubsystem.engine.start()` call. Do not use `void channelsSubsystem.start()`; the temporary entry must await the explicit start until Task 9 moves it into the tracked background runner.
 
-- [ ] **Step 7: Run focused and adjacent tests**
+- [x] **Step 7: Run focused and adjacent tests**
 
 ```powershell
 npx vitest run src/main/channels/bootstrap.test.ts src/main/channels src/main/scheduler/bootstrap.test.ts src/main/scheduler
@@ -342,7 +342,7 @@ npm run build:main
 
 Expected: all selected tests pass and the main-process build exits with code 0.
 
-- [ ] **Step 8: Commit only lifecycle files**
+- [x] **Step 8: Commit only lifecycle files**
 
 ```powershell
 git add -- src/main/channels/bootstrap.ts src/main/channels/init.ts src/main/channels/bootstrap.test.ts src/main/scheduler/bootstrap.ts src/main/scheduler/scheduler-ipc.ts src/main/scheduler/bootstrap.test.ts src/main/index.ts
@@ -367,7 +367,7 @@ Before committing, run `git diff --cached --name-only` and confirm `src/main/cha
 - Consumes: `StartupPhase`, `StartupReadiness`, `WindowActivationRequest`, and `WindowActivationBroker` from the Shared Interface Contract.
 - Produces: `createStartupReadiness()` and `createWindowActivationBroker()`.
 
-- [ ] **Step 1: Write failing readiness tests**
+- [x] **Step 1: Write failing readiness tests**
 
 ```ts
 it("keeps lifecycle phase independent from degraded capabilities", () => {
@@ -389,7 +389,7 @@ it("rejects core waiters when startup fails", async () => {
 });
 ```
 
-- [ ] **Step 2: Write failing activation tests**
+- [x] **Step 2: Write failing activation tests**
 
 ```ts
 it("queues and coalesces activation until markReady", async () => {
@@ -414,7 +414,7 @@ it("rejects activation after stop", () => {
 });
 ```
 
-- [ ] **Step 3: Run tests and verify RED**
+- [x] **Step 3: Run tests and verify RED**
 
 ```powershell
 npx vitest run src/main/application/readiness.test.ts src/main/application/window-activation.test.ts
@@ -422,7 +422,7 @@ npx vitest run src/main/application/readiness.test.ts src/main/application/windo
 
 Expected: FAIL because the application lifecycle primitives do not exist.
 
-- [ ] **Step 4: Implement readiness with validated transitions**
+- [x] **Step 4: Implement readiness with validated transitions**
 
 Allow only:
 
@@ -434,11 +434,11 @@ preparing/shell-ready/core-ready/background-starting → failed
 
 `waitFor()` resolves when the requested phase is reached and rejects on `failed`, `stopping`, `stopped`, or an aborted signal.
 
-- [ ] **Step 5: Implement the activation broker**
+- [x] **Step 5: Implement the activation broker**
 
 Store pending requests in a `Map<WindowActivationRequest["kind"], WindowActivationRequest>`, replacing the previous request of the same kind. `bind()` supplies actions without marking the broker ready. `markReady()` flips the one-shot gate and drains requests. `stop()` clears pending requests and ignores future calls.
 
-- [ ] **Step 6: Route tray and primary-window actions through requests**
+- [x] **Step 6: Route tray and primary-window actions through requests**
 
 Change tray dependencies to:
 
@@ -452,14 +452,14 @@ export interface CreateTrayDependencies {
 
 Map menu items to `chat`, `sidebar`, `music`, and `settings` requests. Keep the desktop-pet toggle and quit actions immediate.
 
-- [ ] **Step 7: Run focused tests and build**
+- [x] **Step 7: Run focused tests and build**
 
 ```powershell
 npx vitest run src/main/application/readiness.test.ts src/main/application/window-activation.test.ts src/main/tray.test.ts src/main/windows/primary-window.test.ts
 npm run build:main
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add -- src/main/application/readiness.ts src/main/application/readiness.test.ts src/main/application/window-activation.ts src/main/application/window-activation.test.ts src/main/tray.ts src/main/tray.test.ts src/main/windows/primary-window.ts src/main/windows/primary-window.test.ts
@@ -510,7 +510,7 @@ export function attachWindowsSessionEndHandlers(input: {
 }): () => void;
 ```
 
-- [ ] **Step 1: Write failing shutdown order and idempotency tests**
+- [x] **Step 1: Write failing shutdown order and idempotency tests**
 
 ```ts
 it("runs fixed phases sequentially and entries within one phase concurrently", async () => {
@@ -536,7 +536,7 @@ it("runs finalAction once for repeated requests", async () => {
 });
 ```
 
-- [ ] **Step 2: Write failing emergency-flush tests**
+- [x] **Step 2: Write failing emergency-flush tests**
 
 ```ts
 it("performs emergency flush synchronously and idempotently", () => {
@@ -549,32 +549,32 @@ it("performs emergency flush synchronously and idempotently", () => {
 });
 ```
 
-- [ ] **Step 3: Write failing Electron adapter tests**
+- [x] **Step 3: Write failing Electron adapter tests**
 
 Capture `before-quit`, `query-session-end`, and `session-end` handlers with fakes. Assert the first controlled quit calls `preventDefault()`, while a finalizing quit does not. Assert both Windows session events call `emergencyFlush()` without awaiting network cleanup.
 
-- [ ] **Step 4: Run tests and verify RED**
+- [x] **Step 4: Run tests and verify RED**
 
 ```powershell
 npx vitest run src/main/application/shutdown.test.ts src/main/application/electron-lifecycle.test.ts
 ```
 
-- [ ] **Step 5: Implement fixed phases and total timeout**
+- [x] **Step 5: Implement fixed phases and total timeout**
 
 Use the exact phase order from the Shared Interface Contract. Transition readiness to `stopping` before the first phase. For each phase, call all registered disposers with one shared `AbortSignal` and await `Promise.allSettled()`. Race the entire phase chain against one deadline; when it fires, abort the signal, log incomplete resource IDs, and stop awaiting non-cooperative disposers. In both the normal and timeout paths, transition to `stopped`, set `finalizing`, then invoke the first request's `finalAction`.
 
-- [ ] **Step 6: Register token usage for both exit levels**
+- [x] **Step 6: Register token usage for both exit levels**
 
 Keep `flush()` synchronous and atomic. The production composition will register it in `flushPersistence` and as an emergency flusher; do not add Electron listeners directly inside `token-usage-store.ts`.
 
-- [ ] **Step 7: Run tests and build**
+- [x] **Step 7: Run tests and build**
 
 ```powershell
 npx vitest run src/main/application/shutdown.test.ts src/main/application/electron-lifecycle.test.ts src/main/token-usage-store.test.ts
 npm run build:main
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add -- src/main/application/shutdown.ts src/main/application/shutdown.test.ts src/main/application/electron-lifecycle.ts src/main/application/electron-lifecycle.test.ts
@@ -641,7 +641,7 @@ export interface WindowManager {
 
 Use `20_000` ms as the chat renderer `ready-to-show` timeout.
 
-- [ ] **Step 1: Write failing load-order tests**
+- [x] **Step 1: Write failing load-order tests**
 
 ```ts
 it("does not load the renderer while creating the chat window shell", () => {
@@ -654,7 +654,7 @@ it("does not load the renderer while creating the chat window shell", () => {
 });
 ```
 
-- [ ] **Step 2: Write failing failure and timeout tests**
+- [x] **Step 2: Write failing failure and timeout tests**
 
 ```ts
 it("rejects when loadURL rejects", async () => {
@@ -673,21 +673,21 @@ it("rejects when ready-to-show never arrives", async () => {
 });
 ```
 
-- [ ] **Step 3: Run tests and verify RED**
+- [x] **Step 3: Run tests and verify RED**
 
 ```powershell
 npx vitest run src/main/windows/startup-window-load.test.ts src/main/startup/startup-window-reveal.test.ts
 ```
 
-- [ ] **Step 4: Implement an idempotent chat handle**
+- [x] **Step 4: Implement an idempotent chat handle**
 
 `load()` caches one Promise. Attach `did-fail-load` and `ready-to-show` listeners before invoking `loadURL/loadFile`. Ignore subframe failures. On success, remove failure and timeout listeners. `show(sessionId)` dispatches the session ID using the existing `reactChatSession` logic and must not call `load()`.
 
-- [ ] **Step 5: Record actual Loading show time**
+- [x] **Step 5: Record actual Loading show time**
 
 Extend `createSplashWindow()` with `onShown(at: number)`. Invoke it immediately after `window.show()` using an injected monotonic clock defaulting to `performance.now()`. If splash creation or loading fails, shell bootstrap leaves `loadingShownAt` undefined and skips minimum delay.
 
-- [ ] **Step 6: Update startup reveal calculation**
+- [x] **Step 6: Update startup reveal calculation**
 
 Change reveal options to include the chat window and optional splash timestamp:
 
@@ -699,14 +699,14 @@ const remaining = loadingShownAt === undefined
 
 Close Loading and show chat. The core bootstrap then marks the activation broker ready. Desktop pet is not part of generic reveal.
 
-- [ ] **Step 7: Run focused tests and build**
+- [x] **Step 7: Run focused tests and build**
 
 ```powershell
 npx vitest run src/main/windows/startup-window-load.test.ts src/main/startup/startup-window-reveal.test.ts src/main/windows
 npm run build:main
 ```
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```powershell
 git add -- src/main/windows/startup-window-load.ts src/main/windows/startup-window-load.test.ts src/main/windows/create-aux-windows.ts src/main/windows/window-manager.ts src/main/windows/window-state.ts src/main/startup/create-splash-window.ts src/main/startup/startup-window-reveal.ts src/main/startup/startup-window-reveal.test.ts
@@ -750,7 +750,7 @@ export function createIpcScope(main?: Pick<typeof ipcMain,
 
 - Every `registerXxxIpc` function listed above accepts `{ ipc: IpcScope }` or an `IpcScope` parameter. Public IPC constants and payloads remain unchanged.
 
-- [ ] **Step 1: Write failing scope tests**
+- [x] **Step 1: Write failing scope tests**
 
 ```ts
 it("removes every handler and listener registered through the scope", () => {
@@ -771,17 +771,17 @@ it("rejects duplicate registration inside one scope", () => {
 });
 ```
 
-- [ ] **Step 2: Run the scope test and verify RED**
+- [x] **Step 2: Run the scope test and verify RED**
 
 ```powershell
 npx vitest run src/main/application/ipc-scope.test.ts
 ```
 
-- [ ] **Step 3: Implement `IpcScope`**
+- [x] **Step 3: Implement `IpcScope`**
 
 Track handled channels and listener tuples. `dispose()` is idempotent and removes them in reverse local registration order; this reverse order is only for handler teardown and is unrelated to resource shutdown phases.
 
-- [ ] **Step 4: Convert IPC registration modules mechanically**
+- [x] **Step 4: Convert IPC registration modules mechanically**
 
 For each listed module:
 
@@ -801,14 +801,14 @@ export function registerAppUpdateIpc(options: RegisterAppUpdateIpcOptions & { ip
 }
 ```
 
-- [ ] **Step 5: Run all touched IPC tests**
+- [x] **Step 5: Run all touched IPC tests**
 
 ```powershell
 npx vitest run src/main/application/ipc-scope.test.ts src/main/updater/app-update-ipc.test.ts src/main/settings src/main/chats src/main/code-git src/main/tts src/main/channels src/main/scheduler
 npm run build:main
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add -- src/main/application/ipc-scope.ts src/main/application/ipc-scope.test.ts src/main/windows/window-system-ipc.ts src/main/chats/chat-ui-ipc.ts src/main/settings/settings-ipc.ts src/main/memory/memory-user-ipc.ts src/main/tts/tts-ipc.ts src/main/chats/chats-ipc.ts src/main/code-git/code-git-ipc.ts src/main/agui-bridge.ts src/main/updater/app-update-ipc.ts src/main/scheduler/scheduler-ipc.ts src/main/channels/init.ts src/main/user-choice.ts src/main/call/call-manager.ts src/main/permission/bootstrap.ts
@@ -843,7 +843,7 @@ export interface PreReadyResult {
 export function prepareBeforeReady(deps: PreReadyDependencies): PreReadyResult;
 ```
 
-- [ ] **Step 1: Write failing order tests**
+- [x] **Step 1: Write failing order tests**
 
 ```ts
 it("performs every Electron pre-ready operation synchronously", () => {
@@ -867,13 +867,13 @@ it("does not continue primary startup for a duplicate process", () => {
 });
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```powershell
 npx vitest run src/main/application/pre-ready.test.ts
 ```
 
-- [ ] **Step 3: Move only ready-before-required code**
+- [x] **Step 3: Move only ready-before-required code**
 
 Move these operations from `index.ts` without changing order or behavior:
 
@@ -887,14 +887,14 @@ ensureGpuSandboxAcl({ isPackaged: app.isPackaged, exeDir: path.dirname(app.getPa
 
 Do not construct business services, windows or IPC scopes in this module.
 
-- [ ] **Step 4: Run tests and build**
+- [x] **Step 4: Run tests and build**
 
 ```powershell
 npx vitest run src/main/application/pre-ready.test.ts src/main/single-instance.test.ts src/main/gpu-sandbox-acl.test.ts
 npm run build:main
 ```
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add -- src/main/application/pre-ready.ts src/main/application/pre-ready.test.ts src/main/index.ts
@@ -943,7 +943,7 @@ export interface ShellResult {
 export async function startShell(deps: ShellDependencies): Promise<ShellResult>;
 ```
 
-- [ ] **Step 1: Write failing shell tests**
+- [x] **Step 1: Write failing shell tests**
 
 ```ts
 it("shows Loading but leaves the chat renderer unloaded", async () => {
@@ -963,13 +963,13 @@ it("routes tray actions through the activation broker", async () => {
 });
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```powershell
 npx vitest run src/main/application/shell-bootstrap.test.ts
 ```
 
-- [ ] **Step 3: Implement shell order**
+- [x] **Step 3: Implement shell order**
 
 The exact order is:
 
@@ -987,18 +987,18 @@ transition readiness to shell-ready
 
 Shell-safe IPC is limited to handlers whose complete dependencies already exist. Any handler used by chat but dependent on core is registered in Task 8 before `chat.load()`.
 
-- [ ] **Step 4: Register shell cleanup**
+- [x] **Step 4: Register shell cleanup**
 
 Register tray/window manager/IPC scope cleanup in `stopLocalResources`. Attach `query-session-end` and `session-end` to the chat window shell immediately after creation. Register `flushTokenUsage` in both `flushPersistence` and emergency flush.
 
-- [ ] **Step 5: Run focused tests and build**
+- [x] **Step 5: Run focused tests and build**
 
 ```powershell
 npx vitest run src/main/application/shell-bootstrap.test.ts src/main/tray.test.ts src/main/windows src/main/startup
 npm run build:main
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add -- src/main/application/context.ts src/main/application/shell-bootstrap.ts src/main/application/shell-bootstrap.test.ts src/main/tray.ts src/main/windows/window-manager.ts src/main/startup/create-splash-window.ts src/main/index.ts
@@ -1063,7 +1063,7 @@ export interface CoreResult {
 export async function startCore(deps: CoreDependencies): Promise<CoreResult>;
 ```
 
-- [ ] **Step 1: Write failing core order tests**
+- [x] **Step 1: Write failing core order tests**
 
 ```ts
 it("registers every renderer IPC handler before loading chat", async () => {
@@ -1091,13 +1091,13 @@ it("treats chat load failure as fatal", async () => {
 });
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```powershell
 npx vitest run src/main/application/core-bootstrap.test.ts
 ```
 
-- [ ] **Step 3: Move core construction from `index.ts` in exact dependency order**
+- [x] **Step 3: Move core construction from `index.ts` in exact dependency order**
 
 ```text
 migrateStagedExternalContent
@@ -1116,7 +1116,7 @@ register every remaining renderer IPC handler
 
 Move `reconcileUserMemoryIndex`, reranker initialization, embedding refresh, MCP restore, channel start, scheduler start, screenshot prewarm and update check to Task 9.
 
-- [ ] **Step 4: Load and reveal windows**
+- [x] **Step 4: Load and reveal windows**
 
 After all IPC registration completes:
 
@@ -1137,7 +1137,7 @@ await activation.markReady();
 
 Do not create the desktop pet at all when `petVisible` is false.
 
-- [ ] **Step 5: Register core resource ownership**
+- [x] **Step 5: Register core resource ownership**
 
 Register exact phases:
 
@@ -1149,14 +1149,14 @@ stopLocalResources: screenshot.shutdown, lsp.disposeAll, git.dispose, music.shut
 
 Scheduler and proactive trigger are registered by background bootstrap because they are started there.
 
-- [ ] **Step 6: Run focused and feature tests**
+- [x] **Step 6: Run focused and feature tests**
 
 ```powershell
 npx vitest run src/main/application/core-bootstrap.test.ts src/main/startup/startup-window-reveal.test.ts src/main/window-visibility-settings.test.ts src/main/music src/main/lsp src/main/code-git src/main/tts
 npm run build:main
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add -- src/main/application/core-bootstrap.ts src/main/application/core-bootstrap.test.ts src/main/application/context.ts src/main/index.ts
@@ -1213,7 +1213,7 @@ export function startBackground(deps: BackgroundDependencies): BackgroundHandle;
 
 Set `MCP_RESTORE_BARRIER_TIMEOUT_MS = 30_000`.
 
-- [ ] **Step 1: Write failing background dependency tests**
+- [x] **Step 1: Write failing background dependency tests**
 
 ```ts
 it("starts channels and scheduler after MCP succeeds", async () => {
@@ -1236,7 +1236,7 @@ it("continues after MCP barrier timeout and marks degradation", async () => {
 });
 ```
 
-- [ ] **Step 2: Write failing cancellation and late-result tests**
+- [x] **Step 2: Write failing cancellation and late-result tests**
 
 ```ts
 it("aborts cooperative tasks and disposes resources returned after stop", async () => {
@@ -1251,17 +1251,17 @@ it("aborts cooperative tasks and disposes resources returned after stop", async 
 });
 ```
 
-- [ ] **Step 3: Run and verify RED**
+- [x] **Step 3: Run and verify RED**
 
 ```powershell
 npx vitest run src/main/application/background.test.ts
 ```
 
-- [ ] **Step 4: Implement the tracked runner**
+- [x] **Step 4: Implement the tracked runner**
 
 Each task receives an AbortSignal and remains in the runner map until it settles. `stop()` aborts the shared controller, prevents new tasks, waits only up to the shutdown signal, and disposes any late result exposing `dispose()`.
 
-- [ ] **Step 5: Implement background dependency groups**
+- [x] **Step 5: Implement background dependency groups**
 
 ```text
 Group A: prune removed MCP → sync built-ins → restore MCP with 30s barrier
@@ -1273,7 +1273,7 @@ Group D: schedule update check
 
 Groups A–D start concurrently. Inside Group A, the arrows are strict. `settled` resolves after every group succeeds, fails, or times out, then transitions readiness to `ready`; failures update `degradedReasons` without rejecting the overall handle.
 
-- [ ] **Step 6: Add MCP AbortSignal support where possible**
+- [x] **Step 6: Add MCP AbortSignal support where possible**
 
 Change startup restore to:
 
@@ -1283,7 +1283,7 @@ export async function initMcpManager(options: { signal?: AbortSignal } = {}): Pr
 
 Check `signal.aborted` before each server connect and after each awaited connect. If an underlying SDK call cannot be aborted, keep its Promise tracked and disconnect a connection that completes after shutdown.
 
-- [ ] **Step 7: Register background shutdown ownership**
+- [x] **Step 7: Register background shutdown ownership**
 
 ```text
 quiesce: BackgroundTaskRunner.stop
@@ -1292,14 +1292,14 @@ stopExternalConsumers: channels
 stopExternalProviders: MCP manager
 ```
 
-- [ ] **Step 8: Run focused tests and build**
+- [x] **Step 8: Run focused tests and build**
 
 ```powershell
 npx vitest run src/main/application/background.test.ts src/main/orchestrator/mcp-manager.test.ts src/main/channels src/main/scheduler src/main/screenshot src/main/updater
 npm run build:main
 ```
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```powershell
 git add -- src/main/application/background.ts src/main/application/background.test.ts src/main/application/context.ts src/main/orchestrator/mcp-manager.ts src/main/orchestrator/mcp-manager.test.ts src/main/screenshot/screenshot-lifecycle.ts src/main/updater/github-app-updater.ts src/main/index.ts
@@ -1343,7 +1343,7 @@ export function installUpdateShutdownFallback(input: {
 }): () => void;
 ```
 
-- [ ] **Step 1: Write failing update coordination test**
+- [x] **Step 1: Write failing update coordination test**
 
 ```ts
 it("completes controlled shutdown before quitAndInstall", async () => {
@@ -1360,17 +1360,17 @@ it("completes controlled shutdown before quitAndInstall", async () => {
 });
 ```
 
-- [ ] **Step 2: Write failing native update fallback test**
+- [x] **Step 2: Write failing native update fallback test**
 
 Emit `before-quit-for-update` from a fake `autoUpdater`; assert it enters the same coordinator once. Then emit the finalizing `before-quit` from the fake Electron app; assert the app handler does not call `preventDefault()` again.
 
-- [ ] **Step 3: Run and verify RED**
+- [x] **Step 3: Run and verify RED**
 
 ```powershell
 npx vitest run src/main/updater/app-update-ipc.test.ts src/main/application/electron-lifecycle.test.ts
 ```
 
-- [ ] **Step 4: Inject controlled shutdown into update IPC**
+- [x] **Step 4: Inject controlled shutdown into update IPC**
 
 The `APP_UPDATE_INSTALL` handler becomes async:
 
@@ -1387,18 +1387,18 @@ ipc.handle(IPC.APP_UPDATE_INSTALL, async () => {
 
 Split the existing phase check from `install()` into `canInstall()` so no installer is launched before cleanup. Register `installUpdateShutdownFallback()` against the `electron-updater` `autoUpdater` instance as the defensive path for callers outside this IPC handler.
 
-- [ ] **Step 5: Wire Windows session events on the chat shell**
+- [x] **Step 5: Wire Windows session events on the chat shell**
 
 In shell bootstrap, call `attachWindowsSessionEndHandlers()` immediately after creating the chat `BrowserWindow`. The emergency callback calls only registered synchronous flushers and does not stop MCP, channels, LSP, Git or music.
 
-- [ ] **Step 6: Run tests and build**
+- [x] **Step 6: Run tests and build**
 
 ```powershell
 npx vitest run src/main/updater src/main/application/electron-lifecycle.test.ts src/main/application/shutdown.test.ts src/main/application/shell-bootstrap.test.ts
 npm run build:main
 ```
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add -- src/main/updater/app-update-ipc.ts src/main/updater/app-update-ipc.test.ts src/main/updater/app-update-service.ts src/main/updater/app-update-service.test.ts src/main/application/electron-lifecycle.ts src/main/application/electron-lifecycle.test.ts src/main/application/shell-bootstrap.ts
@@ -1446,7 +1446,7 @@ export interface Application {
 export function createApplication(deps?: ApplicationDependencies): Application;
 ```
 
-- [ ] **Step 1: Write failing top-level lifecycle test**
+- [x] **Step 1: Write failing top-level lifecycle test**
 
 ```ts
 it("runs shell, core, reveal, and background in order", async () => {
@@ -1473,13 +1473,13 @@ it("routes fatal startup through one failed state and controlled shutdown", asyn
 });
 ```
 
-- [ ] **Step 2: Run and verify RED**
+- [x] **Step 2: Run and verify RED**
 
 ```powershell
 npx vitest run src/main/application/application.test.ts
 ```
 
-- [ ] **Step 3: Implement application orchestration**
+- [x] **Step 3: Implement application orchestration**
 
 `createApplication()` may construct only readiness, activation, shutdown and dependency factories. `start()` stores stage results in local constants, creates a complete `ApplicationContext` only after `startBackground()` returns its handle, and exposes no context to bootstrap modules.
 
@@ -1500,7 +1500,7 @@ if (application.isPrimaryProcess()) {
 }
 ```
 
-- [ ] **Step 4: Remove legacy global ownership**
+- [x] **Step 4: Remove legacy global ownership**
 
 Delete from `index.ts`:
 
@@ -1516,11 +1516,11 @@ Keep all behavior in the explicit application modules.
 
 `handleFatalStartup()` must execute exactly once: transition to `failed`, write the structured error log, close Loading if it exists, show `dialog.showErrorBox("Cyrene 启动失败", message)`, then request controlled shutdown with `app.quit()` as the final action.
 
-- [ ] **Step 5: Retire the independent music shutdown latch**
+- [x] **Step 5: Retire the independent music shutdown latch**
 
 Music remains lazy through `bootstrapMusicService()`. Register `musicBootstrap.shutdown` in `stopLocalResources`; remove the production call to `installShutdownLatch`. Keep or replace its tests with an assertion that music shutdown is owned by the central coordinator. Delete `shutdown-latch.ts` only after `rg "installShutdownLatch" src` returns no production references.
 
-- [ ] **Step 6: Run application tests and build**
+- [x] **Step 6: Run application tests and build**
 
 ```powershell
 npx vitest run src/main/application src/main/index.test.ts src/main/music src/main/single-instance.test.ts src/main/startup src/main/windows
@@ -1535,7 +1535,7 @@ rg -n "ApplicationContext" src/main/application/*-bootstrap.ts src/main/applicat
 
 Expected: no bootstrap module receives or imports `ApplicationContext`; only `application.ts` constructs and retains it.
 
-- [ ] **Step 7: Verify structural acceptance**
+- [x] **Step 7: Verify structural acceptance**
 
 ```powershell
 (Get-Content -LiteralPath 'src/main/index.ts').Count
@@ -1544,7 +1544,7 @@ rg -n "createAgentRuntime|register.*Ipc|new LspManager|createWindowManager|befor
 
 Expected: line count is at most 30; `rg` returns no matches.
 
-- [ ] **Step 8: Commit the cutover**
+- [x] **Step 8: Commit the cutover**
 
 ```powershell
 git add -- src/main/application src/main/index.ts src/main/music/bootstrap.ts src/main/music/bootstrap.test.ts src/main/music/shutdown-latch.ts src/main/music/shutdown-latch.test.ts
@@ -1563,7 +1563,7 @@ git commit -m "refactor(app): install thin main process composition root"
 - Consumes: completed application composition root.
 - Produces: verified build with no legacy startup path.
 
-- [ ] **Step 1: Search for legacy ownership and untracked async startup**
+- [x] **Step 1: Search for legacy ownership and untracked async startup**
 
 ```powershell
 rg -n "installShutdownLatch|void initChannels|void screenshotService\.prewarm|app\.on\(\"before-quit\"|createReactChatWindow\(\).*load" src/main
@@ -1572,7 +1572,7 @@ rg -n "void (init|start|initialize|prewarm|restore)" src/main/application src/ma
 
 Expected: no old composition-root startup or independent music latch remains. Any intentional `void` must be owned inside `BackgroundTaskRunner` and documented next to the call.
 
-- [ ] **Step 2: Run the complete test suite**
+- [x] **Step 2: Run the complete test suite**
 
 ```powershell
 npm test
@@ -1580,7 +1580,7 @@ npm test
 
 Expected: all test files and tests pass with exit code 0; count is at least the 345-file/2712-test baseline.
 
-- [ ] **Step 3: Run all builds**
+- [x] **Step 3: Run all builds**
 
 ```powershell
 npm run build:main
@@ -1610,7 +1610,7 @@ Run these cases and record the result in the execution summary:
 6. Trigger update installation in a test build with a downloaded update: controlled cleanup finishes before installer launch.
 7. Trigger Windows sign-out or restart in a disposable test session: emergency token-usage flush runs without waiting for external services.
 
-- [ ] **Step 6: Review the final diff**
+- [x] **Step 6: Review the final diff**
 
 ```powershell
 git status --short

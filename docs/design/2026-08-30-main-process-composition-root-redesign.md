@@ -601,3 +601,15 @@ IPC 按可用时机拆分，但公开契约不变：
 - [Electron `app` 生命周期](https://www.electronjs.org/docs/latest/api/app)：Windows 系统关机、重启或注销不会触发 `before-quit`、`will-quit` 和 `quit`。
 - [Electron `BaseWindow` 会话结束事件](https://www.electronjs.org/docs/latest/api/base-window)：`query-session-end` 可短暂延迟会话结束，`session-end` 无法阻止退出。
 - [Electron `autoUpdater`](https://www.electronjs.org/docs/latest/api/auto-updater)：`quitAndInstall()` 会改变窗口关闭与 `before-quit` 的触发顺序，并提供 `before-quit-for-update`。
+
+## 19. 实现偏差记录（2026-08-30 实施）
+
+实现与 v2 设计的接口签名存在以下有意偏差，行为语义保持一致：
+
+1. **CoreServices 扩展**：在设计的 8 项服务之外增加 `llm`、`cita`、`social`、`ttsSession`、`update`，保证 Agent Runtime 与旧入口复用同一批服务实例（避免重复构造）。
+2. **ShellDependencies 签名**：`createChatShell(windowManager)` 与 `registerShellIpc({ ipc, windowManager, live2dWindowLifecycle })` 传入壳阶段已创建的对象，替代旧入口的模块级 getter；`createTray` 额外接收 `togglePetWindow`（桌宠开关保持立即执行）。
+3. **CoreDependencies 签名**：`registerAllTools(services)`、`createChannels/createScheduler(runtime, services)`、`applyGeneralSettings(settings, services)` 显式传参；`createLowCostServices()` 同时完成截图/音乐/更新服务的构造（无网络副作用）。
+4. **桌宠启动语义微调**：`petVisible === true` 时以 `createPetWindow(true)` 创建（页面 ready-to-show 后显示），避免空窗口闪现；alwaysOnTop 与 zoom 在创建后立即应用，登录项同步经 `applyGeneralSettings` 执行。
+5. **退出清理归属**：`music.shutdown`、`screenshot.shutdown`、`lsp.disposeAll`、`git.dispose`、`channels.shutdown` 在 core 阶段注册；`scheduler.stop`、主动触发器、更新检查定时器在 background 阶段注册；窗口激活代理 `stop()` 注册在 quiesce 阶段。
+6. **音乐退出闩锁退役**：`music/shutdown-latch.ts` 及其测试已删除，生产路径无残留引用。
+7. **受控退出终态**：致命启动路径最终 phase 为 `stopped`（failed → stopping → stopped），错误框与退出动作只执行一次。
