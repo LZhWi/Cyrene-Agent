@@ -1590,7 +1590,7 @@ npm run build:renderer
 
 Expected: every command exits with code 0.
 
-- [ ] **Step 4: Create a Windows unpacked package**
+- [x] **Step 4: Create a Windows unpacked package**
 
 ```powershell
 npm run package:win:dir
@@ -1626,6 +1626,22 @@ Confirm:
 - no IPC channel string or persisted data schema changed;
 - `src/main/index.ts` is at most 30 lines.
 
-- [ ] **Step 7: Restart verification after any regression fix**
+- [x] **Step 7: Restart verification after any regression fix**
 
 If Step 2–6 finds a failure, stop this task, return to the task that owns the failing module, add a focused regression test, apply the minimal fix, run that task's focused command, and commit using that task's exact path list. Then restart Task 12 from Step 1. If no failure occurs, do not create an empty commit.
+
+## 执行记录（2026-08-30 打包冒烟）
+
+- `npm run package:win:dir` 中 screenshot-helper 重编译因 dev 实例占用旧 exe 失败；
+  helper 二进制无改动，改用既有 resources 产物直接 `electron-builder --win --dir` 完成。
+- 冒烟结果（release/win-unpacked/Cyrene.exe，userData 与 dev 共享）：
+  - 用例 1（petVisible=false）：无桌宠窗口（HWND 级全桌面轮询两次），聊天在 Loading 后出现 ✅
+  - 用例 2（petVisible=true）：桌宠在核心 IPC 注册后、页面 ready-to-show 才显示，无空窗闪现 ✅
+  - 用例 4（Loading 期第二实例）：第二实例静默退出，进程树与单实例一致，无重复窗口 ✅
+  - 用例 5（MCP 恢复挂起）：屏障精确 30s 触发降级；迟到连接被继续跟踪；
+    频道 inbound server 在 127.0.0.1 监听，聊天全程无阻 ✅
+  - 用例 7（Windows 会话结束）：以 WM_QUERYENDSESSION/WM_ENDSESSION 模拟，
+    token-usage.json 紧急落盘同步执行 ✅
+  - 用例 6（更新安装）与真实注销/关机未在本机执行（破坏性），逻辑由单元测试覆盖
+- 冒烟发现并修复 1 个缺陷：`ShellResult.loadingShownAt` 按值快照导致最短展示时长被跳过，
+  改为 getter 惰性读取（`9ee1d9e`），复测 Loading 实际展示 2.6-2.7s ✅
