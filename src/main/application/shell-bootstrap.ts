@@ -16,6 +16,14 @@ import type { WindowActivationBroker, WindowActivationRequest } from "./window-a
 import type { ReactChatWindowHandle } from "../windows/create-aux-windows";
 import type { WindowManager } from "../windows/window-manager";
 
+export type Live2dWindowLifecycle = ReturnType<typeof createWindowLifecycleTracker<TrackedBrowserWindowLike>>;
+
+export interface ShellIpcRegistrationInput {
+  ipc: IpcScope;
+  windowManager: WindowManager;
+  live2dWindowLifecycle: Live2dWindowLifecycle;
+}
+
 export interface ShellDependencies {
   readiness: StartupReadiness;
   activation: WindowActivationBroker;
@@ -25,10 +33,10 @@ export interface ShellDependencies {
   createSplashWindow(options: { onShown(at: number): void }): BrowserWindow | null;
   createWindowManager(): WindowManager;
   /** 创建未加载页面的聊天窗口壳；load() 留给 core 阶段。 */
-  createChatShell(): ReactChatWindowHandle;
+  createChatShell(windowManager: WindowManager): ReactChatWindowHandle;
   registerProtocolHandlers(): void;
   /** 壳安全 IPC：仅注册依赖在壳阶段已就绪的处理器。 */
-  registerShellIpc(ipc: IpcScope): void;
+  registerShellIpc(input: ShellIpcRegistrationInput): void;
   /** 托盘：窗口类入口走激活请求；桌宠开关立即执行。 */
   createTray(input: {
     requestActivation(request: WindowActivationRequest): void;
@@ -47,7 +55,7 @@ export interface ShellResult {
   windowManager: WindowManager;
   chat: ReactChatWindowHandle;
   tray: Tray;
-  live2dWindowLifecycle: ReturnType<typeof createWindowLifecycleTracker<TrackedBrowserWindowLike>>;
+  live2dWindowLifecycle: Live2dWindowLifecycle;
 }
 
 export async function startShell(deps: ShellDependencies): Promise<ShellResult> {
@@ -65,7 +73,7 @@ export async function startShell(deps: ShellDependencies): Promise<ShellResult> 
   // 3-5. IPC Scope / WindowManager / 未加载页面的聊天窗口壳
   const ipc = deps.createIpcScope();
   const windowManager = deps.createWindowManager();
-  const chat = deps.createChatShell();
+  const chat = deps.createChatShell(windowManager);
 
   const live2dWindowLifecycle = createWindowLifecycleTracker<TrackedBrowserWindowLike>("live2d-main", {
     onClosed: () => { /* 桌宠关闭即清理，不影响聊天窗口生命周期 */ },
@@ -99,7 +107,7 @@ export async function startShell(deps: ShellDependencies): Promise<ShellResult> 
 
   // 7. 协议处理器 + 壳安全 IPC
   deps.registerProtocolHandlers();
-  deps.registerShellIpc(ipc);
+  deps.registerShellIpc({ ipc, windowManager, live2dWindowLifecycle });
 
   // 8. 托盘：所有功能窗口入口经过激活代理，退出菜单在应用层处理
   const tray = deps.createTray({
