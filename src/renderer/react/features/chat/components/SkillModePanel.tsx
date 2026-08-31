@@ -138,7 +138,8 @@ export const SkillModePanel: React.FC = () => {
       if (source !== "all" && s.source !== source) return false;
       return true;
     });
-    const shown = candidates.filter((s) => s.enabled && isVisibleForMode(s, tab, overrides));
+    // 展示全部启用技能：关掉的置灰保留在列表里，便于重新开启（与工具面板同口径）。
+    const shown = candidates.filter((s) => s.enabled);
     const searched = kw
       ? shown.filter(
           (s) =>
