@@ -52,7 +52,7 @@ const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 console.log("== QQ Music smoke ==");
 
-// 1. detection
+// 1. 检测
 // Windows 上动态 import 必须用 file:// URL，裸路径会被当成包名。
 const detectorUrl = pathToFileURL(
   path.join(repoRoot, "dist", "main", "main", "music", "qqmusic-detector.js"),
@@ -79,7 +79,7 @@ check("controllable", detection.controllable);
 check("now playing readable", detection.nowPlaying !== null,
   detection.nowPlaying ? `${detection.nowPlaying.title} — ${detection.nowPlaying.artist}` : "none");
 
-// 2/3. transport actually moves the track
+// 2/3. 传输控制是否真的切了歌
 const before = helperJson(["status"]).data.sessions.find((s) => s.appId === "QQMusic.exe");
 const fgBefore = foregroundTitle();
 
@@ -90,14 +90,14 @@ await sleep(900);
 const after = helperJson(["status"]).data.sessions.find((s) => s.appId === "QQMusic.exe");
 check("track changed", before?.title !== after?.title, `${before?.title} -> ${after?.title}`);
 
-// 4. background: foreground window must be untouched
+// 4. 后台生效：前台窗口必须没被抢走
 const fgAfter = foregroundTitle();
 check("foreground unchanged", fgBefore === fgAfter, `'${fgBefore}' -> '${fgAfter}'`);
 
-// restore
+// 还原刚才切掉的那一首
 helperJson(["prev", "--app", "QQMusic.exe"]);
 
-// 5. unsupported commands must be explicit
+// 5. 不支持的命令必须明确报错，而不是静默失败
 const searchRes = helperJson(["search"]);
 check("search refused explicitly",
   searchRes.ok === "false" && searchRes.error_code === "E_UNSUPPORTED_BY_SMTC",

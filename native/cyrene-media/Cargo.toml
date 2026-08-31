@@ -3,9 +3,9 @@ name = "cyrene-media"
 version = "0.1.0"
 edition = "2024"
 
-# Background media control via Windows SMTC (System Media Transport Controls).
-# Same `windows` crate the screenshot helper already builds against, so this
-# compiles under the same mingw-w64 GNU toolchain — no MSVC needed.
+# 通过 Windows SMTC（System Media Transport Controls）做后台媒体控制。
+# 复用 screenshot helper 已经在用的 `windows` crate，因此同一套 mingw-w64
+# GNU 工具链即可编译，不需要 MSVC。
 [dependencies]
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
