@@ -1,8 +1,8 @@
 //! Capture backend abstraction.
 //!
 //! [`CaptureBackend`] is the only interface the rest of the helper consumes
-//! to obtain a frozen frame of the primary monitor. Task 7 wires DXGI Desktop
-//! Duplication as the primary path; [`crate::win::capture_gdi::GdiCaptureBackend`]
+//! to obtain a frozen frame of the primary monitor. DXGI Desktop Duplication
+//! ([`crate::win::capture_dxgi`]) is the primary path; [`crate::win::capture_gdi::GdiCaptureBackend`]
 //! remains the documented fallback when DXGI init fails or when the system
 //! reports that the cursor is composited into the desktop.
 

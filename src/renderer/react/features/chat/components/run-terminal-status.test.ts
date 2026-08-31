@@ -1,7 +1,7 @@
 /**
- * Task 3 / C2 失败测试：renderer 侧 RUN_FINISHED 终态分类。
+ * renderer 侧 RUN_FINISHED 终态分类测试。
  *
- * 验收不变量（plan §Task 3 Renderer 行为修订）：
+ * 验收不变量：
  * - success → runStage.kind = "completed"
  * - cancelled → runStage.kind = "cancelled"，保留已有部分输出，不生成"任务已完成"
  * - timeout → runStage.kind = "timeout"，不伪装成功
@@ -14,7 +14,7 @@
 import { describe, expect, it } from "vitest";
 import { resolveRunFinishedStage, resolveTerminalContent } from "./run-presentation";
 
-describe("resolveRunFinishedStage (Task 3 renderer)", () => {
+describe("resolveRunFinishedStage", () => {
   it("maps success → completed", () => {
     expect(resolveRunFinishedStage({ status: "success" })).toEqual({ kind: "completed" });
   });
@@ -42,7 +42,7 @@ describe("resolveRunFinishedStage (Task 3 renderer)", () => {
   });
 });
 
-describe("resolveTerminalContent (Task 3 renderer)", () => {
+describe("resolveTerminalContent", () => {
   it("returns existing streamContent for success when non-empty", () => {
     expect(resolveTerminalContent("部分回复", "success")).toBe("部分回复");
   });

@@ -1,7 +1,7 @@
 /**
- * Task 3 (C2 cancellation propagation) 失败测试。
+ * CyreneHarness 取消传播测试。
  *
- * 验收不变量（plan §Task 3）：
+ * 验收不变量：
  * - Harness 在 LLM、工具、retry backoff、permission、ask_user、loop-top 任一等待阶段都可取消。
  * - cancelled 不得发 final_answer 事件，不得生成 "最终回复被取消。" finalAnswer。
  * - 每条取消链路只结算一个 terminal：terminateReason="cancelled" + finalAnswer=""。
@@ -70,7 +70,7 @@ import { dispatchToolCall } from "./tool-dispatcher";
 import type { ToolDispatchResult } from "./tool-dispatcher";
 import type { HarnessEvent, HarnessInput, HarnessResult } from "./types";
 import type { ChatMessage, ChatResponse, ToolCall } from "../vendors/types";
-import type { ToolDefinition } from "../tool-registry";
+import type { ToolDefinition } from "../tools/registry/tool-registry";
 
 const mockedDispatch = vi.mocked(dispatchToolCall);
 
@@ -247,7 +247,7 @@ function assertCancelledTerminal(result: HarnessResult, events: HarnessEvent[]):
 
 // ── Tests ──────────────────────────────────────────────
 
-describe("CyreneHarness cancellation propagation (Task 3 / C2)", () => {
+describe("CyreneHarness cancellation propagation", () => {
   beforeEach(() => {
     mockedDispatch.mockReset();
   });

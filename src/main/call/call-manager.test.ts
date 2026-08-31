@@ -149,4 +149,26 @@ describe("call turn submission", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
     expect(sentErrors).toContain("TTS 未配置：请在设置中启用 TTS 引擎");
   });
+
+  it("reports missing model config when the getter returns no api key", async () => {
+    let pushPartial!: (text: string) => void;
+    mocks.createAsrStream.mockImplementation((_config, onPartial: (text: string) => void) => {
+      pushPartial = onPartial;
+      return {
+        start: vi.fn(async () => undefined),
+        sendAudio: vi.fn(),
+        stop: vi.fn(() => undefined),
+      };
+    });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    startCall();
+    pushPartial("用户语音");
+    await endTurn();
+
+    // 模型 getter 未返回 apiKey → 不发 LLM 请求，直接报配置缺失
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(sentErrors.some((msg) => msg.includes("模型配置缺失"))).toBe(true);
+  });
 });

@@ -37,7 +37,7 @@ vi.mock("@modelcontextprotocol/sdk/client/sse.js", () => ({
 import { connectMcpServer, disconnectMcpServer } from "./mcp-adapter";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
-import { toolRegistry } from "./tool-registry";
+import { toolRegistry } from "./tools/registry/tool-registry";
 
 describe("mcp-adapter transport split", () => {
 	beforeEach(() => {

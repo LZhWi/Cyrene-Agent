@@ -5,7 +5,8 @@
 //   const cap = resolveReasoningCapability(this.capability.id, cfg.model);
 //   const finalBody = applyReasoningPreference(body, cfg.reasoning ?? {mode:"auto"}, cap, ctx);
 //
-// 决策树见桌面 2026-07-14-reasoning-control-layer-design.md §6.2。
+// 决策树：resolveEffectiveReasoning 先按能力表归一 preference，本文件再按
+// control × requestStyle 分支注入 wire 字段（见下方 1/2/2.5/3/4 各分支）。
 // 关键不变量：
 //   - 不修改入参 body，返回新对象
 //   - auto 不增加任何字段（capability.autoEffort 显式映射除外，见下方 auto 档映射）
@@ -43,7 +44,7 @@ export function applyReasoningPreference(
   );
   const result: Record<string, unknown> = { ...body };
 
-  // 日志（用户 spec §六 #7）
+  // 日志：只记 requested → effective 的映射结果，便于排查思考档位问题
   const requestedStr = `${preference.mode}/${preference.effort ?? "-"}`;
   const effectiveStr = `${effective.mode}/${effective.effort ?? "-"}`;
   if (requestedStr !== effectiveStr) {
@@ -82,14 +83,14 @@ export function applyReasoningPreference(
     return result;
   }
 
-  // 2. auto 档显式映射（2026-08-27 issue 3）：capability.autoEffort 存在时，
+  // 2. auto 档显式映射：capability.autoEffort 存在时，
   //    auto 不再省略字段交给服务端默认 —— GLM-5.3 服务端默认 effort=max，
   //    auto ≡ max，多步任务思考会吃穿输出预算。映射为 on + autoEffort 走下方 on 路径。
   if (effective.mode === "auto" && capability.autoEffort) {
     effective = { mode: "on", effort: capability.autoEffort };
   }
 
-  // 2.5 off 折叠（2026-08-27 issue 2）：模型不支持关闭（supportsDisable=false，
+  // 2.5 off 折叠：模型不支持关闭（supportsDisable=false，
   //     如 GLM-5.3 强制思考）时，off 折叠为 on —— 否则 thinking-type 路径会发
   //     { type: "disabled" }，强制思考模型服务端直接报错；effort 路径虽不发字段，
   //     但会落服务端默认档（同样可能是 max）。effort 由 on 分支兜底 defaultEffort。

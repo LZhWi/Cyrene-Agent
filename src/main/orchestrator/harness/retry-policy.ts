@@ -1,5 +1,6 @@
 /**
  * 重试策略（v3 §5.3 / §5.4）
+ * 注：注释中的 "v3 §x" / "设计稿 §x" 均指 docs/design/2026-08-08-cyreneHarnessloopdesign.md（CyreneHarness 设计稿 v3）。
  *
  * 根据 error category + side-effect 决定是否重试，以及重试参数。
  * 核心原则：不让 LLM 决定"要不要重试"——这是代码的活。

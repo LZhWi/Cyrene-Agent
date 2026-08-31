@@ -62,7 +62,7 @@ describe("createAppUpdateService", () => {
     updater.emit("update-downloaded", { version: "1.2.0", releaseNotes: null });
     expect(service.getState()).toMatchObject({ phase: "downloaded", availableVersion: "1.2.0", percent: 100 });
     expect(service.install()).toBe(true);
-    expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true);
+    expect(updater.quitAndInstall).toHaveBeenCalledWith(true, true);
   });
 
   it("does not contact GitHub or install updates in development", async () => {

@@ -15,16 +15,16 @@ import { EventType, type BaseEvent } from "@ag-ui/core";
 import { AgentRuntimeError } from "./agent-runtime-error";
 import { AgentExecutionError, type RunPhase } from "./run-execution-status";
 import { Observable } from "rxjs";
-import { toolRegistry, type ToolDefinition } from "./tool-registry";
+import { toolRegistry, type ToolDefinition } from "./tools/registry/tool-registry";
 import type { ToolCallResult, ToolExecutionOutcome } from "./types";
 import { checkPermission, type ToolRiskLevel } from "../permission";
 import { getAdapterForConfig, type ChatMessage } from "./vendors";
-import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./tool-context";
+import { contextRefRegistry, extractLastUserQuery, type ToolContext } from "./tools/registry/tool-context";
 import { runChatLoop } from "./chat-loop";
 import type { RunCapabilities } from "./run-capabilities";
 import { runHarnessWithAdapter } from "./harness-adapter";
 
-/** v3: SkillRouteInfo 类型本地定义（原 task-router.ts 将被删除） */
+/** Skill 路由条目（类型本地定义，不再依赖 task-router 模块） */
 export interface SkillRouteInfo {
   id: string;
   description: string;
@@ -40,7 +40,7 @@ export interface AgentLoopResult {
   completionReason: "no_tool" | "timeout" | "max_rounds" | "tool_error";
   totalUsage?: { input: number; output: number };
   /**
-   * Canonical 终态结算（Task 2 / C1）。
+   * Canonical 终态结算（exactly-once，见 run-settlement.ts）。
    * 由 harness-adapter 根据 HarnessResult.terminateReason 填充；
    * CyreneAgent.runWithEvents 据此决定 RUN_FINISHED.result 的形状。
    * 未设置时由 CyreneAgent 通过 completionReason 推断（兼容旧调用方）。
@@ -74,7 +74,7 @@ import type { ApprovedStyleSampling } from "./vendors/style-sampling";
 import { requestUserClarification } from "../user-choice";
 import type { ConversationMode } from "../../shared/chat-types";
 import type { CyreneRunTerminalResult } from "../../shared/run-terminal";
-import { executeToolDefinition } from "./tool-executor";
+import { executeToolDefinition } from "./tools/registry/tool-executor";
 
 const executionLedgers = new ExecutionLedgerStore();
 
@@ -97,7 +97,7 @@ export interface CyreneRunOptions {
   /** 本 Run 快照的 Harness 安全工具并发上限。 */
   maxParallelToolCalls?: number;
   /**
-   * Canonical runId（Task 2 / C1）。
+   * Canonical runId。
    * - 由 AG-UI bridge 在 IPC 入口创建，并通过本字段一路传给 Agent、Harness adapter、ToolContext、所有 AG-UI 事件。
    * - 非 bridge 调用方允许不传：CyreneAgent.runWithEvents 会 fallback 生成一次。
    * - 一旦本字段被设置，下游（runHarnessWithAdapter / ToolContext / RUN_STARTED.runId）必须使用同一值，
@@ -168,9 +168,9 @@ export interface CyreneRunOptions {
     retrievedAtoms: SocialAtom[];
     now: number;
   };
-  /** Task Router 可用 Skill 列表（feature flag 开启时使用）。Router 不依赖该字段是否存在。 */
+  /** 可用 Skill 列表（feature flag 开启时使用）。Skill 路由层不依赖该字段是否存在。 */
   availableSkills?: SkillRouteInfo[];
-  /** ExecutionLedger：同进程工具去重缓存(v3 §5.5.1.1)。CyreneAgent 内部默认从 ExecutionLedgerStore 取,调用方一般不用传。 */
+  /** ExecutionLedger：同进程工具去重缓存(设计稿 v3 §5.5.1.1,指 docs/design/2026-08-08-cyreneHarnessloopdesign.md)。CyreneAgent 内部默认从 ExecutionLedgerStore 取,调用方一般不用传。 */
   executionLedger?: ExecutionLedger;
   /**
    * 可信工作区根目录（来自 Conversation Workspace Binding）。
@@ -179,7 +179,7 @@ export interface CyreneRunOptions {
    */
   resolvedWorkspaceRoot?: string;
   /**
-   * Task 3 / C2：外部取消信号。
+   * 外部取消信号。
    * - 由 AG-UI bridge 创建的 AbortController 注入，AGUI_CANCEL 调用 abort()。
    * - CyreneAgent.runWithEvents 把它连接到内部 abortController（first-source-wins）。
    * - 一旦 abort，markAbort("user_cancelled") 触发，harness 收到 signal.aborted 后返回 cancelled。
@@ -196,7 +196,7 @@ export interface CyreneRunResult {
   executionMode?: AgentExecutionMode;
   socialContext?: CyreneRunOptions["socialContext"];
   /**
-   * Canonical 终态结算（Task 2 / C1）。
+   * Canonical 终态结算（exactly-once，见 run-settlement.ts）。
    * 桥层据此决定是否跑成功收尾副作用、是否走 RUN_ERROR 兜底等。
    * 未设置时视为 success（兼容旧调用方）。
    */
@@ -370,10 +370,10 @@ export class CyreneAgent extends AbstractAgent {
    */
   runWithEvents(options: CyreneRunOptions): Observable<BaseEvent> {
     const threadId = this.threadId;
-    // Task 2 / C1：canonical runId。Bridge 必须通过 options.runId 注入，
+    // canonical runId。Bridge 必须通过 options.runId 注入，
     // 保证 ack.runId / RUN_STARTED.runId / Harness adapter / ToolContext 全链路一致。
     // 非 bridge 调用方未传时由 createRunId() fallback 生成一次。
-    // Issue 5：不要写回 options.runId——若调用方复用同一 options 对象跑第二次，
+    // 不要写回 options.runId——若调用方复用同一 options 对象跑第二次，
     // 会污染旧 ID。构造本轮局部副本，原始 options 保持不变。
     const runId = options.runId ?? createRunId();
     const runOptions: CyreneRunOptions = {
@@ -399,7 +399,7 @@ export class CyreneAgent extends AbstractAgent {
         runOptions.signal?.removeEventListener("abort", onExternalAbort);
       };
 
-      // Task 3 / C2：把外部 signal 连接到内部 controller（first-source-wins）。
+      // 把外部 signal 连接到内部 controller（first-source-wins）。
       if (runOptions.signal?.aborted) {
         onExternalAbort();
       } else {
@@ -462,7 +462,7 @@ export class CyreneAgent extends AbstractAgent {
             });
             const conversationId = options.conversationId ?? "default";
             // Work / Learn / Code 统一通过 CyreneHarness。
-            // Issue 5：传 runOptions（含 canonical runId），不传原始 options。
+            // 传 runOptions（含 canonical runId），不传原始 options。
             result = await perf.track("harness_loop", () => runHarnessWithAdapter(
               runOptions,
               abortController.signal,
@@ -485,7 +485,7 @@ export class CyreneAgent extends AbstractAgent {
           flowLog("── 本轮完成 ────────────────────────");
 
           if (cancelled) return;
-          // Task 2 / C1：success / timeout 都通过 RUN_FINISHED.result 上报 canonical 终态。
+          // success / timeout 都通过 RUN_FINISHED.result 上报 canonical 终态。
           // Bridge 据此决定是否跑 sticker / memory 等成功收尾副作用。
           subscriber.next({
             type: EventType.RUN_FINISHED,
@@ -507,7 +507,7 @@ export class CyreneAgent extends AbstractAgent {
           );
           console.error(LOG_PREFIX, `run 失败 [${classification.source}]:`, classification.diagnostics);
           if (classification.source === "user_cancelled") {
-            // Task 2 / C1：取消走 RUN_FINISHED + result.status="cancelled"，
+            // 取消走 RUN_FINISHED + result.status="cancelled"，
             // 不伪装成 AG-UI interrupt，也不写 outcome。
             subscriber.next({
               type: EventType.RUN_FINISHED,

@@ -58,6 +58,7 @@ import { MusicInputError } from "./types";
       getLyricsCacheDir: vi.fn(() => "/tmp/lyrics-cache"),
       onStateChange: vi.fn(onStateChangeImpl),
       onPlaybackStateChange: vi.fn(() => () => {}),
+      onPlaybackSessionChange: vi.fn(() => () => {}),
       onCacheUpdated: vi.fn(() => () => {}),
       pollOnce: asyncThat(),
       beginLogin: asyncThat(),
@@ -67,6 +68,9 @@ import { MusicInputError } from "./types";
       searchTracks: asyncThat(searchImpl),
       playTrackFromUi: asyncThat(playTrackImpl),
       playPlaylist: asyncThat(playTrackImpl),
+      getPlaybackSession: vi.fn(() => null),
+      playSessionTrack: asyncThat(),
+      syncPlaybackSession: asyncThat(),
       getOpenapiConfig: asyncThat(async () => null),
       applyOpenapiConfig: asyncThat(async () => undefined),
     };
@@ -105,6 +109,9 @@ describe("registerMusicIpcHandlers", () => {
       "music:playback:stop",
       "music:playback:next",
       "music:playback:prev",
+      "music:playback-session:get",
+      "music:playback-session:play",
+      "music:playback-session:sync",
       "music:get-lyrics",
       "music:toggle-favorite",
       "music:get-cached-tracks",
@@ -126,7 +133,14 @@ describe("registerMusicIpcHandlers", () => {
     expect(removed).toContain("music:qq-control");
     // 本地音乐的文件夹导入入口
     expect(removed).toContain("music:import-local-folder");
-    expect(removed.length).toBe(29);
+    expect(removed.length).toBe(32);
+  });
+
+  it("returns the background playback session for a newly opened player window", async () => {
+    const snapshot = { queue: [], queueIndex: -1, playbackMode: "off", playlistId: "" };
+    registerMusicIpcHandlers(mockService({ getPlaybackSession: vi.fn(() => snapshot) }));
+
+    await expect(handlerMap["music:playback-session:get"](null, null)).resolves.toEqual({ ok: true, data: snapshot });
   });
 
   it("MUSIC_SEARCH: keyword too long returns ok:false errorCode", async () => {

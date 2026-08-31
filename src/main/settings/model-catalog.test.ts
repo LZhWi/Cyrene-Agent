@@ -163,7 +163,7 @@ describe("model catalog", () => {
     const optedOut = normalizeModelSettings({ provider: "GLM（智谱）", multimodal: false });
     expect(optedOut.multimodal).toBe(false);
 
-    // loadVisionConfig 展开默认档案：顶层空壳（issue 12）不再把多模态主模型误判为"未启用视觉"
+    // loadVisionConfig 展开默认档案：顶层空壳 provider 不再把多模态主模型误判为"未启用视觉"
     const shellSettings = normalizeModelSettings({
       provider: "MiniMax",
       baseUrl: "",
@@ -205,8 +205,8 @@ describe("model catalog", () => {
       model: "vi-model",
     });
 
-    // 未传 id → 展开默认档案（第一个建档项 p-full），不再退回顶层镜像（issue 4：
-    // 顶层镜像可能全空，channel bot 等不带 profileId 的调用方曾拿到空 baseUrl）
+    // 未传 id → 展开默认档案（第一个建档项 p-full），不再退回顶层镜像——
+    // 顶层镜像可能是全空的空壳，channel bot 等不带 profileId 的调用方曾因此拿到空 baseUrl
     const defaultResolved = resolveModelSettingsProfile(settings, undefined);
     expect(defaultResolved.contextWindowTokens).toBe(128000);
     expect(defaultResolved.multimodal).toBe(true);

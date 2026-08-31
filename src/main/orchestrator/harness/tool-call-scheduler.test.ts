@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ToolCall } from "../vendors/types";
-import type { ToolDefinition } from "../tool-registry";
+import type { ToolDefinition } from "../tools/registry/tool-registry";
 import { classifyToolExecutionMode, scheduleToolCalls } from "./tool-call-scheduler";
 
 function call(name: string): ToolCall {

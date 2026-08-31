@@ -1,3 +1,4 @@
+/* 标记！AI写的超大技术债，延期重构*/
 import "../ui/base.css";
 import "./settings.css";
 import "../ui/theme";
@@ -29,6 +30,7 @@ import { type ReasoningPreference } from "../../shared/reasoning";
 import { type LoginFlowState } from "../../shared/music-types";
 import { resolveApiEndpoint, type ApiTransport } from "../../shared/api-endpoint";
 import type { ChatAppearanceSettings } from "../../shared/chat-appearance";
+import type { ChatStoreApi } from "../react/features/chat/pages/chat-page-bridge";
 import {
   DEFAULT_CUSTOM_STYLE,
   normalizeCustomStyleConfig,
@@ -174,10 +176,16 @@ if (!window.settings) {
         runtimeSync: "off",
         stickerEnabled: true,
         stickerSize: "standard",
+        stickerSimilarityThreshold: 0.55,
+        chatRequestTimeoutSec: 300,
         citaRepairBudgetSec: 8,
+        multimodal: true,
       }),
     saveConfig: (c) => Promise.resolve(c as ModelSettings),
     getGeneral: () => Promise.resolve({
+      maxParallelToolCalls: 4,
+      citaEnabled: false,
+      citaSemanticEngine: "remote",
       petAlwaysOnTop: true,
       petVisible: true,
       petZoom: 1,
@@ -189,6 +197,9 @@ if (!window.settings) {
       launchAtLogin: false,
       language: "zh-CN",
       uiTheme: "pearl-white",
+      uiThemeRadius: false,
+      uiFont: DEFAULT_UI_FONT,
+      uiIcon: "cyrene-sun",
       windowCornerRadius: DEFAULT_WINDOW_CORNER_RADIUS,
       defaultChatMode: "chat",
       currentStyleId: "default",
@@ -225,6 +236,10 @@ if (!window.settings) {
     setPetAlwaysOnTop: () => {},
     setPetVisible: () => {},
     setPetZoom: () => {},
+    pickUiFont: () => Promise.resolve(null),
+    importUiFont: () => Promise.resolve(DEFAULT_UI_FONT),
+    resetUiFont: () => Promise.resolve(DEFAULT_UI_FONT),
+    previewRuntimeSync: () => {},
     openStickerManager: async () => ({ ok: false, error: "settings api unavailable" }),
     stickerPickFile: async () => null,
     stickerAdd: async () => { throw new Error("settings api unavailable"); },
@@ -741,7 +756,8 @@ function startNewDraft(providerName: string): void {
   applyPreset(providerName);
   restoreVisionInputs(visionSnapshot);
   contextWindowInput.value = "";
-  multimodalToggle.checked = false;
+  // 新建草稿默认开多模态；applyPreset 已不再按厂商门控
+  multimodalToggle.checked = true;
   applyMultimodalUI();
   applyEditingStateUI();
   renderProfileList();
@@ -898,11 +914,10 @@ export function applyPreset(
   applyCustomEndpointUI(preset);
   updateEndpointPreview();
 
-  if (preferredMultimodal !== undefined) {
-    multimodalToggle.checked = preset.independentVision === true ? false : preferredMultimodal;
-  } else {
-    multimodalToggle.checked = preset.supportsVision === true && preset.independentVision !== true;
-  }
+  // 多模态默认开（与主进程 normalizeModelSettings 的默认值对齐）：
+  // 不按厂商/型号门控——直发判错有服务端仲裁 + caption 自动降级兜底。
+  // 要单配独立视觉模型是用户自己的事，用户自己关开关。
+  multimodalToggle.checked = preferredMultimodal ?? true;
 
   // 视觉三框：始终写入值（从 preferredVision 或 preset 默认），不受开关影响
   if (preferredVision) {
@@ -1292,7 +1307,8 @@ workFlowAdaptBtn?.addEventListener("click", () => {
 
 // 测试连接按钮：调用厂商 adapter 的真实连接测试
 if (testConnectionBtn) {
-  testConnectionBtn.addEventListener("click", async () => {
+  const btn = testConnectionBtn;
+  btn.addEventListener("click", async () => {
     const provider = apiState.activeProvider;
     const baseUrl = baseUrlInput.value;
     const model = getCurrentModelValue().trim();
@@ -1308,9 +1324,9 @@ if (testConnectionBtn) {
       return;
     }
     setSaveStatus("测试连接中…");
-    testConnectionBtn.disabled = true;
+    btn.disabled = true;
     try {
-      const result = await window.settings!.testConnection({
+      const result = await window.settings!.testConnection!({
         provider,
         baseUrl,
         model,
@@ -1323,7 +1339,7 @@ if (testConnectionBtn) {
     } catch (e) {
       setSaveStatus("连接失败：" + (e instanceof Error ? e.message : String(e)), "is-error");
     } finally {
-      testConnectionBtn.disabled = false;
+      btn.disabled = false;
     }
   });
 }
@@ -1739,8 +1755,8 @@ void loadMemoryPanel();
 
 // ── 音乐工具手风琴 ─────────────────────────────────────────
 musicToggle?.addEventListener("click", () => {
-  const expanded = musicToggle.getAttribute("aria-expanded") === "true";
-  musicToggle.setAttribute("aria-expanded", String(!expanded));
+  const expanded = musicToggle?.getAttribute("aria-expanded") === "true";
+  musicToggle?.setAttribute("aria-expanded", String(!expanded));
   musicAccordionCard?.classList.toggle("is-expanded", !expanded);
   musicAccordionBody?.classList.toggle("is-collapsed", expanded);
 });
@@ -1765,12 +1781,13 @@ musicReturnBtn?.addEventListener("click", () => {
 // ── 清空聊天历史 ─────────────────────────────────────────────
 clearChatHistoryBtn.addEventListener("click", async () => {
   if (!window.confirm("清空所有聊天会话？\n此操作会删除全部历史对话，无法恢复。")) return;
+  const chatStore = (window as typeof window & { chatStore?: ChatStoreApi }).chatStore;
   try {
-    const sessions = await window.chatStore?.list();
+    const sessions = await chatStore?.list();
     if (sessions && sessions.length > 0) {
       // 串行删除（store 不支持批量删除；会话数量不会大，可接受）
       for (const s of sessions) {
-        await window.chatStore?.delete(s.id);
+        await chatStore?.delete(s.id);
       }
     }
     setGeneralSaveStatus("所有聊天会话已清空", "is-ok");

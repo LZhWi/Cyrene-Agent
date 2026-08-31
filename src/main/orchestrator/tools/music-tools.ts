@@ -10,8 +10,8 @@
 // - Added: music_get_cached_tracks, music_remove_cached_track (local cache pool)
 // - Added: music_get_playback_status, music_stop_playback (player state/control, 0 quota)
 import type { MusicService } from "../../music/music-service";
-import type { ToolDefinition } from "../tool-registry";
-import type { ToolContext } from "../tool-context";
+import type { ToolDefinition } from "./registry/tool-registry";
+import type { ToolContext } from "./registry/tool-context";
 
 const HEX32 = /^[0-9A-Fa-f]{32}$/;
 /** 播放/缓存池曲目 ID：网易云 32-hex 加密 ID，或本地导入的 `local-<hash12>`。 */

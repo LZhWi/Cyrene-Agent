@@ -1,5 +1,6 @@
 /**
  * Harness 内置工具：update_todo / ask_user（v3 §8 / §9）
+ * 注：注释中的 "v3 §x" / "设计稿 §x" 均指 docs/design/2026-08-08-cyreneHarnessloopdesign.md（CyreneHarness 设计稿 v3）。
  *
  * 这两个工具不进 toolRegistry，由 Harness Loop 内部 dispatch。
  * 它们能直接访问 AgentState 和事件发送器。

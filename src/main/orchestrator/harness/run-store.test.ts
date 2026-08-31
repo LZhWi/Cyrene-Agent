@@ -109,7 +109,7 @@ describe("HarnessRunStore", () => {
     expect(createRun(store)).toMatchObject({ runId: "run-1", status: "running", rounds: 0 });
   });
 
-  // ── 问题 5 P0：存储写放大减法 ──────────────────────────
+  // ── 存储写放大减法 ──────────────────────────────────────
 
   it("clones live references from checkpoint patches before persisting", () => {
     // 消费方克隆契约：harness 删除 deepClone 后传活引用，

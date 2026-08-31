@@ -66,6 +66,8 @@ export interface ModelSettings {
   embeddingDimensions?: number;
   multimodal: boolean;
   thinkingOverride?: -1 | 0 | 1;
+  /** 禁用 max_tokens 注入。仅对自定义端点生效（与主进程 model-settings.ts 对齐）。 */
+  disableMaxToken?: boolean;
   /** 上下文窗口大小（Token）。默认 256000。 */
   contextWindowTokens?: number;
 }
@@ -86,15 +88,9 @@ export interface ModelPreset {
   websiteUrl?: string;
   // 视觉模型的 OpenAI 兼容 baseUrl。主模型与视觉模型入口不同时使用。
   visionBaseUrl?: string;
-  // 该厂商默认主模型是否支持视觉。true 时设置页加载默认勾选"同步主模型"，
-  // 多模态用户开箱即用。与 capabilities.ts 的 supportsVision 镜像，需手动同步。
-  supportsVision?: boolean;
   // 标记为 true 时，该项在 <select> 里显示但不可选；
   // 用于"已列出但 vendor adapter 还没接好"的情况，避免用户选到后调用直接报错。
   disabled?: boolean;
-  // 视觉模型与主模型本质不同（如 MiMo 主 mimo-v2.5-pro、视觉 mimo-v2.5），
-  // 强制独立配置，无法"与主聊天模型相同"。与 supportsVision 正交。
-  independentVision?: boolean;
   // 独立视觉模型的默认值（applyPreset 在没有保存值时使用）。
   defaultVisionModel?: string;
   // 独立视觉模型的候选列表（用于视觉模型输入框的 datalist）。
@@ -129,6 +125,8 @@ export interface GeneralSettings extends ChatAppearanceSettings {
   mobileMessageSegmentation: MobileMessageSegmentationMode;
   proactiveChatMode: ProactiveChatMode;
   proactiveDeliveryTarget: ProactiveDeliveryTarget;
+  /** 聊天段落间距（em）。目前仅设置窗口 UI 使用，主进程归一化尚未持久化该字段。 */
+  chatParaSpacing?: number;
   screenshotHotkey?: string;
 }
 

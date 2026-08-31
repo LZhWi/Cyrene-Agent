@@ -3,7 +3,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { SSEClientTransport } from "@modelcontextprotocol/sdk/client/sse.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
-import { ToolDefinition, toolRegistry, type ToolEffectKind } from "./tool-registry";
+import { ToolDefinition, toolRegistry, type ToolEffectKind } from "./tools/registry/tool-registry";
 
 const LOG_PREFIX = "[MCP Adapter]";
 

@@ -1,5 +1,6 @@
 /**
  * 工具分发器（v3 §3.1 / §5.7）
+ * 注：注释中的 "v3 §x" / "设计稿 §x" 均指 docs/design/2026-08-08-cyreneHarnessloopdesign.md（CyreneHarness 设计稿 v3）。
  *
  * 统一 dispatch Harness 内置工具和普通工具。
  * - 内置工具（update_todo / ask_user）：由 executeHarnessBuiltin 处理，能直接访问 state 和 emitter
@@ -10,7 +11,7 @@
  */
 
 import type { ToolCall } from "../vendors/types";
-import type { ToolDefinition } from "../tool-registry";
+import type { ToolDefinition } from "../tools/registry/tool-registry";
 import type { ToolCallResult } from "../types";
 import type { AgentState, HarnessEvent, ToolObservation } from "./types";
 import { parseToolCallArgs, toolCallFingerprint } from "./types";
@@ -19,11 +20,11 @@ import { executeUpdateTodo, executeAskUser, executeTask } from "./builtin-tools"
 import { ENTER_PLAN_MODE_TOOL_ID, WRITE_PLAN_TOOL_ID, executeEnterPlanMode, executeWritePlan } from "./plan-tools";
 import { executeReadToolResult, READ_TOOL_RESULT_TOOL_ID } from "./tool-output/read-tool-result";
 import { resolveSideEffect } from "./side-effect-resolver";
-import { extractFileChangesFromOutput } from "../tool-evidence";
+import { extractFileChangesFromOutput } from "../tools/registry/tool-evidence";
 import { isBlockedByUncertainEffect } from "./uncertain-effect-guard";
 import { ExecutionLedger } from "../execution-ledger";
 import type { ToolExecutionOutcome } from "../types";
-import { executeToolDefinition } from "../tool-executor";
+import { executeToolDefinition } from "../tools/registry/tool-executor";
 import type { ToolOutputStore } from "./tool-output/tool-output-store";
 import { ToolOutputPersistenceError } from "./tool-output/file-tool-output-store";
 
@@ -75,7 +76,7 @@ export interface ToolDispatchContext {
   requestUserClarification?: (card: unknown) => Promise<unknown>;
   includeInteractiveTools?: boolean;
   checkPermission?: (toolId: string, args: Record<string, unknown>) => Promise<boolean>;
-  toolContext?: import("../tool-context").ToolContext;
+  toolContext?: import("../tools/registry/tool-context").ToolContext;
   truncation?: TruncationConfig;
   /** 完整工具输出持久化；生产 Harness 必须注入。 */
   toolOutputStore?: ToolOutputStore;

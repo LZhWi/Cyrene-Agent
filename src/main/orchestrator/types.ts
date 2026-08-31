@@ -1,6 +1,6 @@
 // Orchestrator types
 
-import type { ToolEffectState, ToolErrorCategory } from "./tool-execution-error";
+import type { ToolEffectState, ToolErrorCategory } from "./tools/registry/tool-execution-error";
 
 // ToolCallResult: 单次工具调用的结果
 export interface ToolCallResult {

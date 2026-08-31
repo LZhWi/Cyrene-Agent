@@ -13,6 +13,14 @@ vi.mock("electron", () => ({
   },
 }))
 
+const obsidianExporterMock = vi.hoisted(() => ({
+  notifyMemoryChanged: vi.fn(),
+}))
+
+vi.mock("./obsidian-exporter", () => ({
+  notifyMemoryChanged: obsidianExporterMock.notifyMemoryChanged,
+}))
+
 function readTraceEvents(): Array<Record<string, unknown>> {
   const tracePath = path.join(electronMock.userDataDir, "memory-trace.log")
   if (!fs.existsSync(tracePath)) return []
@@ -27,6 +35,7 @@ describe("memoryStore", () => {
   beforeEach(() => {
     electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "memory-store-"))
     vi.resetModules()
+    obsidianExporterMock.notifyMemoryChanged.mockReset()
   })
 
   it("persists L2 conflict markers and status changes", async () => {
@@ -576,5 +585,32 @@ describe("memoryStore", () => {
     expect(store.conflictLogs).toEqual([])
     expect(backups).toHaveLength(1)
     expect(readTraceEvents().some((event) => event.op === "migration.upgrade")).toBe(true)
+  })
+
+  it("saves the transformed store before notifying Obsidian", async () => {
+    const { memoryStore } = await import("./memory-store")
+    await memoryStore.load()
+    await vi.waitFor(() => expect(obsidianExporterMock.notifyMemoryChanged).toHaveBeenCalled())
+    obsidianExporterMock.notifyMemoryChanged.mockClear()
+
+    const trace: string[] = []
+    const originalLoad = memoryStore.load.bind(memoryStore)
+    const originalSave = memoryStore.save.bind(memoryStore)
+    vi.spyOn(memoryStore, "load").mockImplementation(async () => {
+      trace.push("load")
+      return originalLoad()
+    })
+    vi.spyOn(memoryStore, "save").mockImplementation(async (store) => {
+      trace.push(`save:${store.l0.preferredName}`)
+      await originalSave(store)
+    })
+    obsidianExporterMock.notifyMemoryChanged.mockImplementation(() => {
+      trace.push("notify")
+    })
+
+    await memoryStore.upsertL0Field("preferredName", "伙伴")
+    await vi.waitFor(() => expect(trace).toContain("notify"))
+
+    expect(trace).toEqual(["load", "save:伙伴", "notify"])
   })
 })

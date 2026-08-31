@@ -2,7 +2,7 @@ import type { WebContents } from "electron";
 import { IPC } from "../../shared/ipc-channels";
 import { AgentRuntimeError } from "../orchestrator/agent-runtime-error";
 import { CyreneAgent, type CyreneRunOptions } from "../orchestrator/cyrene-agent";
-import { toolRegistry } from "../orchestrator/tool-registry";
+import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
 import { filterToolsForTask } from "./tool-filter";
 import type { ScheduledRunResult, ScheduledTask, ScheduledTaskHistoryEntry } from "./types";
 

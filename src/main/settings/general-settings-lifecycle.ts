@@ -8,7 +8,7 @@ import { updateLocaleContext } from "../locale-context";
 import { validateSearchApiKey } from "../orchestrator/search-backend-filter";
 import { addMcpServer, listMcpServers, removeMcpServer } from "../orchestrator/mcp-manager";
 import { getAppIconPath } from "../app-icon";
-import { syncBuiltInToolToggles } from "../orchestrator/tool-registration";
+import { syncBuiltInToolToggles } from "../orchestrator/tools/registry/tool-registration";
 import { loadModelSettings, getPublicModelConfig } from "./model-settings";
 import type { GeneralSettings } from "./general-settings";
 import type { UiIcon } from "../../shared/ui-icon";
@@ -26,11 +26,11 @@ export interface GeneralSettingsLifecycleDependencies {
 const MINIMAX_SEARCH_MCP_ID = "minimax-web-search";
 
 export function applyGeneralSettings(settings: GeneralSettings, deps: GeneralSettingsLifecycleDependencies): void {
-  deps.windowManager?.setMainWindowAlwaysOnTop(settings.petAlwaysOnTop);
-  if (settings.petVisible) deps.windowManager?.showMainWindow();
-  else deps.windowManager?.hideMainWindow();
+  deps.windowManager?.setPetWindowAlwaysOnTop(settings.petAlwaysOnTop);
+  if (settings.petVisible) deps.windowManager?.showPetWindow();
+  else deps.windowManager?.hidePetWindow();
   syncLaunchAtLogin(settings.launchAtLogin, app);
-  deps.windowManager?.applyMainWindowZoom(settings.petZoom);
+  deps.windowManager?.applyPetWindowZoom(settings.petZoom);
 }
 
 export function applyUiIcon(iconSetting: UiIcon, deps: GeneralSettingsLifecycleDependencies): void {

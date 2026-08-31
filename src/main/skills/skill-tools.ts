@@ -4,10 +4,10 @@
 //   read_skill_reference：按需读 references 附件（带路径穿越防护）
 // 注册进现有 toolRegistry，两处 LLM 路径都从 registry 取，自动生效。
 
-import { toolRegistry, type ToolEffectKind } from "../orchestrator/tool-registry";
+import { toolRegistry, type ToolEffectKind } from "../orchestrator/tools/registry/tool-registry";
 import { skillRegistry } from "./skill-registry";
 import { logger, LogTag } from "../logger";
-import type { ToolContext } from "../orchestrator/tool-context";
+import type { ToolContext } from "../orchestrator/tools/registry/tool-context";
 
 const LOG_PREFIX = "[SkillTools]";
 

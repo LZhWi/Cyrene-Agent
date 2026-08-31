@@ -1,5 +1,6 @@
 /**
  * Harness 工具执行轮
+ * 注：注释中的 "v3 §x" / "设计稿 §x" 均指 docs/design/2026-08-08-cyreneHarnessloopdesign.md（CyreneHarness 设计稿 v3）。
  *
  * 职责：模型发起 tool call 后的一轮执行——
  * - ask_user / confirm_uncertain_effect 排他分支（v3 §9.2）
@@ -17,7 +18,7 @@ import { parseToolCallArgs, toolCallFingerprint } from "./types";
 import { dispatchToolCall, persistToolDispatchResult, type ToolDispatchResult } from "./tool-dispatcher";
 import { classifyToolExecutionMode, scheduleToolCalls, type ToolCallScheduleResult, type ToolScheduleCommitDecision } from "./tool-call-scheduler";
 import { resolveSideEffect } from "./side-effect-resolver";
-import { extractFileChangesFromOutput } from "../tool-evidence";
+import { extractFileChangesFromOutput } from "../tools/registry/tool-evidence";
 import { classifyToolResultError } from "./error-classifier";
 import { decideRetry, getRetryParams, sleepWithJitter } from "./retry-policy";
 import { isCancellationError, raceWithSignal } from "../../abort-utils";
@@ -47,7 +48,7 @@ export async function runToolRound(run: HarnessRun, toolCalls: ToolCall[]): Prom
     try {
       await runAskUserRound(run, askCalls, otherCalls);
     } catch (error) {
-      // Task 3 / C2：ask_user 等待期间 abort → cancelled
+      // ask_user 等待期间 abort → cancelled
       if (isCancellationError(error, input.signal)) return "cancelled";
       throw error;
     }

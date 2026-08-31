@@ -1,8 +1,8 @@
 import { createHash } from "crypto";
 import type { AskClarificationInput, AskMissingField, AskUserAnswer } from "../../shared/ask-clarification";
 import type { ToolCallResult } from "./types";
-import type { JsonSchemaProp, ToolDefinition } from "./tool-registry";
-import { parseAndValidateToolCallArguments } from "./tool-argument-validator";
+import type { JsonSchemaProp, ToolDefinition } from "./tools/registry/tool-registry";
+import { parseAndValidateToolCallArguments } from "./tools/registry/tool-argument-validator";
 
 export interface PendingActionContext {
   runId: string;

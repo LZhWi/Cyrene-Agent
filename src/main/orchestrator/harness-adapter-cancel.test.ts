@@ -11,7 +11,7 @@ vi.mock("./harness", async (importOriginal) => {
   return { ...actual, runCyreneHarness: runHarness };
 });
 
-vi.mock("./tool-registry", () => ({
+vi.mock("./tools/registry/tool-registry", () => ({
   toolRegistry: {
     getEnabledTools: vi.fn(() => []),
     getById,

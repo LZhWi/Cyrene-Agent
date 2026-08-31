@@ -1,5 +1,5 @@
 import type { ToolCall, ToolSpec } from "../../vendors/types";
-import type { ToolContext } from "../../tool-context";
+import type { ToolContext } from "../../tools/registry/tool-context";
 import type { ToolObservation } from "../types";
 import { parseToolCallArgs } from "../types";
 import {

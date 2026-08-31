@@ -11,12 +11,12 @@ const mocks = vi.hoisted(() => ({
   runCyreneAgent: vi.fn(),
   requestUserClarification: vi.fn(),
   agentEvents: [] as unknown[],
-  // Task 3 / C2：可定制的终态行为
+  // 可定制的终态行为
   runFinishedResult: undefined as unknown,
   emitDuplicateRunFinished: false,
   errorAfterRunFinished: null as string | null,
   skipDefaultRunFinished: false,
-  // Task 3 / C2：模拟正在运行的 Observable（不自动 complete）
+  // 模拟正在运行的 Observable（不自动 complete）
   neverComplete: false,
   // 会话守卫/takeover 测试：abort 触发 RUN_FINISHED(cancelled) + complete，
   // 模拟真实 harness 的 cancelled 结算链路（AGUI_CANCEL / takeover 都走这条链）
@@ -75,7 +75,7 @@ vi.mock("./orchestrator/cyrene-agent", () => ({
             subscriber.complete();
           });
         }
-        // Task 3 / C2：neverComplete 模拟正在运行的 Observable，不自动 complete
+        // neverComplete 模拟正在运行的 Observable，不自动 complete
         if (!mocks.neverComplete) {
           subscriber.complete();
         }
@@ -84,7 +84,7 @@ vi.mock("./orchestrator/cyrene-agent", () => ({
   },
 }));
 
-vi.mock("./orchestrator/history-tools", () => ({
+vi.mock("./orchestrator/tools/history-tools", () => ({
   indexConversationTurn: vi.fn(),
 }));
 
@@ -104,7 +104,7 @@ vi.mock("./permission", () => ({
 }));
 
 describe("agui-bridge sticker event ordering", () => {
-  // Task 2 / C1：每个测试前重置可定制的终态行为字段，
+  // 每个测试前重置可定制的终态行为字段，
   // 避免上一个测试的副作用泄漏到下一个测试。
   beforeEach(() => {
     mocks.runFinishedResult = undefined;
@@ -469,7 +469,7 @@ describe("agui-bridge sticker event ordering", () => {
     expect(mocks.runCyreneAgent).not.toHaveBeenCalled();
   });
 
-  // ── Task 2 / C1：canonical runId 与 exactly-once settlement ────────────
+  // ── canonical runId 与 exactly-once settlement ────────────
 
   it("propagates the canonical runId through ack, RUN_STARTED, options, and RUN_FINISHED", async () => {
     vi.resetModules();
@@ -653,7 +653,7 @@ describe("agui-bridge sticker event ordering", () => {
     expect(sent.some((event) => event.type === "RUN_FINISHED")).toBe(true);
   });
 
-  // ── Issue 4：裸 complete（upstream 未发 RUN_FINISHED）必须补发一个合成 RUN_FINISHED ──
+  // ── 裸 complete（upstream 未发 RUN_FINISHED）必须补发一个合成 RUN_FINISHED ──
 
   it("synthesizes exactly one RUN_FINISHED when upstream completes without emitting one", async () => {
     vi.resetModules();
@@ -704,7 +704,7 @@ describe("agui-bridge sticker event ordering", () => {
     expect(sent.some((event) => event.type === "RUN_ERROR")).toBe(false);
   });
 
-  // ── Issue 7：同步 complete 不留幽灵 active run ──
+  // ── 同步 complete 不留幽灵 active run ──
 
   it("does not register a ghost active run when the Observable completes synchronously", async () => {
     vi.resetModules();
@@ -742,11 +742,11 @@ describe("agui-bridge sticker event ordering", () => {
     // 让 microtask 跑完（mock Observable 是同步的，subscribe 返回时已 complete）
     await new Promise((resolve) => setTimeout(resolve, 0));
 
-    // 关键不变量：run 已结算，绝不能留在 activeRuns 里（否则 Task 3 重构会带上幽灵 run）
+    // 关键不变量：run 已结算，绝不能留在 activeRuns 里（否则 cancel 链路会带上幽灵 run）
     expect(__hasActiveRunForTest(ack.runId)).toBe(false);
   });
 
-  // ── Issue 2：harness 返回 terminateReason="error" → runtime_error → RUN_ERROR ──
+  // ── harness 返回 terminateReason="error" → runtime_error → RUN_ERROR ──
 
   it("routes harness runtime_error terminal to RUN_ERROR and skips success side effects", async () => {
     vi.resetModules();
@@ -795,7 +795,7 @@ describe("agui-bridge sticker event ordering", () => {
     expect(sent.some((event) => event.type === "CUSTOM" && event.name === "cyrene.sticker")).toBe(false);
   });
 
-  // ── Task 3 / C2：cancellation propagation ───────────────────────────────
+  // ── cancellation propagation（取消传播）───────────────────────────────
 
   it("AGUI_CANCEL aborts the run's AbortController (not just unsubscribe)", async () => {
     vi.resetModules();
@@ -961,7 +961,7 @@ describe("agui-bridge sticker event ordering", () => {
   });
 });
 
-// ── 会话级运行守卫（已知问题 4）──────────────────────────
+// ── 会话级运行守卫 ──────────────────────────────────────
 // 同一会话同一时刻最多一个 active run；不同会话允许并发。
 // 渲染端 busy 队列只是 UX 优化，主进程守卫才是跨进程最终一致性边界。
 describe("agui-bridge session run guard", () => {

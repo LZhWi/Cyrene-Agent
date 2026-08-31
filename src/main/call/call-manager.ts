@@ -5,8 +5,9 @@
 //
 // 配置通过 setCallSettings 注入 getter（避免 import index.ts 循环依赖）。
 
-import { BrowserWindow, ipcMain } from "electron";
+import { BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc-channels";
+import { createIpcScope, type IpcScope } from "../application/ipc-scope";
 import { getAsrConfig, type AsrConfig } from "../asr/asr-config";
 import { createAsrStream, type AsrStreamSession } from "../asr/asr-dispatcher";
 import { synthesizeByEngine } from "../tts/tts-dispatcher";
@@ -413,11 +414,12 @@ async function runAgentTurn(userText: string): Promise<string | null> {
   }
 }
 
-/** 注册通话 IPC handlers（main 启动时调一次）。 */
-export function registerCallIpc(): void {
-  ipcMain.on(IPC.CALL_START, () => startCall());
-  ipcMain.on(IPC.CALL_AUDIO_FRAME, (_event, frame: ArrayBuffer) => handleAudioFrame(Buffer.from(frame)));
-  ipcMain.on(IPC.CALL_TURN_END, () => void endTurn());
-  ipcMain.on(IPC.CALL_TTS_DONE, () => onTtsDone());
-  ipcMain.on(IPC.CALL_STOP, () => stopCall());
+/** 注册通话 IPC handlers（core bootstrap 启动时调一次）。 */
+export function registerCallIpc(ipcOption?: IpcScope): void {
+  const ipc = ipcOption ?? createIpcScope();
+  ipc.on(IPC.CALL_START, () => startCall());
+  ipc.on(IPC.CALL_AUDIO_FRAME, (_event, frame: ArrayBuffer) => handleAudioFrame(Buffer.from(frame)));
+  ipc.on(IPC.CALL_TURN_END, () => void endTurn());
+  ipc.on(IPC.CALL_TTS_DONE, () => onTtsDone());
+  ipc.on(IPC.CALL_STOP, () => stopCall());
 }

@@ -2,7 +2,7 @@
 // 从 settings.ts 抽离的纯类型。
 // 注意：MusicApi 引用了 MusicStatusSnapshot，需从 shared/music-view-state import。
 
-import type { MusicStatusSnapshot } from "../../shared/music-view-state";
+import type { MusicStatusSnapshot } from "../../../shared/music-view-state";
 
 export interface MusicSelectionTrack {
   id: string;

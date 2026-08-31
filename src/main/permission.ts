@@ -4,6 +4,7 @@
 
 import { ipcMain, BrowserWindow } from "electron";
 import { app } from "electron";
+import { createIpcScope, type IpcScope } from "./application/ipc-scope";
 import * as fs from "fs";
 import * as path from "path";
 import { IPC } from "../shared/ipc-channels";
@@ -90,7 +91,7 @@ interface PendingApproval {
   resolve: (allowed: boolean) => void;
   reject: (err: Error) => void;
   timer: NodeJS.Timeout;
-  /** Task 3 / C2：关联的 canonical runId，用于 cancelPendingApprovalsForRun。 */
+  /** 关联的 canonical runId，用于 cancelPendingApprovalsForRun。 */
   runId?: string;
 }
 
@@ -105,7 +106,7 @@ export interface ApprovalRequest {
   args: Record<string, unknown>;
   risk: ToolRiskLevel;
   timeoutMs: number;
-  /** Task 3 / C2：可选 runId，用于 cancel 时按 run 清理。 */
+  /** 可选 runId，用于 cancel 时按 run 清理。 */
   runId?: string;
 }
 
@@ -145,12 +146,13 @@ export function requestApproval(request: Omit<ApprovalRequest, "id">): Promise<b
 
 // ── IPC 注册 ──────────────────────────────────────────────
 
-export function registerPermissionIpc(): void {
-  ipcMain.handle(IPC.PERMISSION_GET_LEVEL, () => {
+export function registerPermissionIpc(ipcOption?: IpcScope): void {
+  const ipc = ipcOption ?? createIpcScope(ipcMain);
+  ipc.handle(IPC.PERMISSION_GET_LEVEL, () => {
     return { level: currentLevel };
   });
 
-  ipcMain.handle(IPC.PERMISSION_SET_LEVEL, (_event, level: AgentFileAccessLevel) => {
+  ipc.handle(IPC.PERMISSION_SET_LEVEL, (_event, level: AgentFileAccessLevel) => {
     if (!isValidLevel(level)) {
       return { ok: false, error: "无效的档位: " + String(level) };
     }
@@ -159,7 +161,7 @@ export function registerPermissionIpc(): void {
   });
 
   // 渲染端审批 UI 回传结果
-  ipcMain.handle(IPC.PERMISSION_APPROVAL_RESOLVE, (_event, payload: { id: string; allowed: boolean }) => {
+  ipc.handle(IPC.PERMISSION_APPROVAL_RESOLVE, (_event, payload: { id: string; allowed: boolean }) => {
     const pending = pendingApprovals.get(payload?.id);
     if (!pending) {
       console.warn(LOG_PREFIX, "审批回传未匹配到 pending:", payload?.id);
@@ -191,7 +193,7 @@ export async function checkPermission(input: {
   toolDescription: string;
   args: Record<string, unknown>;
   risk: ToolRiskLevel;
-  /** Task 3 / C2：可选 runId，用于 cancel 时按 run 清理 pending 审批。 */
+  /** 可选 runId，用于 cancel 时按 run 清理 pending 审批。 */
   runId?: string;
   signal?: AbortSignal;
 }): Promise<{ allowed: boolean; reason?: string }> {
@@ -222,7 +224,7 @@ export async function checkPermission(input: {
 }
 
 /**
- * Task 3 / C2：取消指定 runId 关联的所有 pending 审批。
+ * 取消指定 runId 关联的所有 pending 审批。
  * 在 AGUI_CANCEL abort signal 后调用，清理权限卡片的 pending 状态与 timer。
  * 渲染端通过 RUN_FINISHED(result.status="cancelled") 自然收到卡片关闭信号。
  */

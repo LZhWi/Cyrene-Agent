@@ -1,5 +1,6 @@
 /**
  * CyreneHarness 核心类型定义。
+ * 注：注释中的 "v3 §x" / "设计稿 §x" 均指 docs/design/2026-08-08-cyreneHarnessloopdesign.md（CyreneHarness 设计稿 v3）。
  *
  * 设计依据：docs/design/2026-08-08-cyreneHarnessloopdesign.md (v3)
  *
@@ -10,14 +11,14 @@
  */
 
 import type { ChatMessage, ToolCall, ToolSpec } from "../vendors/types";
-import type { ToolDefinition } from "../tool-registry";
+import type { ToolDefinition } from "../tools/registry/tool-registry";
 import type { CyreneRunTerminalResult } from "../../../shared/run-terminal";
 import type { TodoItem } from "../../../shared/task-session";
-import type { ToolErrorCategory } from "../tool-execution-error";
+import type { ToolErrorCategory } from "../tools/registry/tool-execution-error";
 import type { ToolFileChange } from "../../../shared/chat-types";
 import type { ContextUsageSnapshot } from "../../../shared/context-usage";
 import type { ToolOutputRef, ToolOutputStore } from "./tool-output/tool-output-store";
-export type { ToolErrorCategory } from "../tool-execution-error";
+export type { ToolErrorCategory } from "../tools/registry/tool-execution-error";
 export type { TodoItem, TodoStatus } from "../../../shared/task-session";
 
 // ── 工具调用结果 ──────────────────────────────────────────
@@ -257,7 +258,7 @@ export interface HarnessInput {
   /** 计划模式状态；控制计划工具组可见性（undefined = 不注入计划工具，兼容旧调用方/子任务）。 */
   planState?: import("../plan-mode").PlanStateName;
   /** 工具上下文（权限检查等） */
-  toolContext?: import("../tool-context").ToolContext;
+  toolContext?: import("../tools/registry/tool-context").ToolContext;
   /** 权限检查函数 */
   checkPermission?: (toolId: string, args: Record<string, unknown>) => Promise<boolean>;
   /** ExecutionLedger：可选的同进程工具去重缓存（v3 §5.5.1.1） */
@@ -278,17 +279,17 @@ export interface HarnessResult {
   /** 终止原因（兼容字段；新消费方请改用 terminal.reason） */
   terminateReason?: "timeout" | "cancelled" | "error";
   /**
-   * Canonical 终态结算（Task 2 / C1）。
+   * Canonical 终态结算（exactly-once，见 run-settlement.ts）。
    *
    * 新消费方（CyreneAgent.runWithEvents、agui-bridge settlement gate）必须读 terminal，
    * 不要再从 terminated / terminateReason 反推：
    *  - status="success"：模型自然收尾（无 tool call 或主动结束）。
    *  - status="timeout"：reason="timeout"。
-   *  - status="cancelled"：reason="user_cancelled"（Task 3 才会真正写入；Task 2 占位）。
+   *  - status="cancelled"：reason="user_cancelled"。
    *  - status="error"：reason 来自 AgentRuntimeError.code 或工具 fatal。
    *
-   * Task 2 暂由 harness-adapter 根据 terminateReason 映射填充，
-   * cyrene-harness 内部仍只写 terminated / terminateReason，避免触动 P0-A 已审过的主路径。
+   * 由 harness-adapter 根据 terminateReason 映射填充；
+   * cyrene-harness 内部仍只写 terminated / terminateReason。
    */
   terminal?: CyreneRunTerminalResult;
   /** 总执行轮数 */

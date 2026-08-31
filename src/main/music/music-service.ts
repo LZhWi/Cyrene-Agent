@@ -15,6 +15,11 @@ import { SelectionSetCache } from "./selection-set-cache";
 import { MpvController } from "./mpv-controller";
 import { CacheDownloader } from "./cache-downloader";
 import { scanAudioFiles } from "./local-music-scanner";
+import {
+  PlaybackSession,
+  type MusicPlaybackSessionSnapshot,
+  type PlaybackSessionInput,
+} from "./playback-session";
 import type { PlaybackDispatcher } from "./netease-openapi-provider";
 import { MusicInputError } from "./types";
 import { assertEncryptedId } from "./openapi-result-normalizer";
@@ -57,12 +62,16 @@ export class MusicService {
   private readonly paths: MusicPaths;
   private mpv: MpvController | null = null;
   private currentPlayback: PlaybackState["track"] | null = null;
+  private readonly playbackSession = new PlaybackSession();
+  private lastHandledEofTrackId: string | null = null;
+  private sessionAdvance: Promise<void> = Promise.resolve();
 
   private backendListeners = new Set<StateListener<MusicBackendState>>();
   private accountListeners = new Set<StateListener<MusicAccountState>>();
   private playerListeners = new Set<StateListener<MusicPlayerState>>();
   private flowListeners = new Set<StateListener<LoginFlowState>>();
   private stateListeners = new Set<StateListener<MusicStatusSnapshot>>();
+  private playbackSessionListeners = new Set<StateListener<MusicPlaybackSessionSnapshot | null>>();
   // mpv 未启动时缓存的 playback 监听器，mpv.start() 后批量补注册
   private pendingPlaybackListeners = new Set<(state: PlaybackState) => void>();
 
@@ -173,7 +182,10 @@ export class MusicService {
         return { state: "dispatched", resourceType: resource.kind, resourceId: resource.kind === "song" ? resource.track.id : "" };
       };
       this.provider = new NeteaseOpenapiProvider(this.client, dispatcher);
-      this.mpv.onStateChange(() => this.emitStateChange());
+      this.mpv.onStateChange((state) => {
+        this.emitStateChange();
+        void this.handleMpvState(state);
+      });
       // mpv 启动成功后显式广播 player: available
       this.emitPlayerChange("available");
     } catch (err) {
@@ -268,6 +280,10 @@ export class MusicService {
     return () => {
       this.pendingPlaybackListeners.delete(listener);
     };
+  }
+  onPlaybackSessionChange(listener: StateListener<MusicPlaybackSessionSnapshot | null>): () => void {
+    this.playbackSessionListeners.add(listener);
+    return () => this.playbackSessionListeners.delete(listener);
   }
 
   getSnapshot(): MusicStatusSnapshot {
@@ -454,6 +470,27 @@ export class MusicService {
     return this.mpv.getState();
   }
 
+  getPlaybackSession(): MusicPlaybackSessionSnapshot | null {
+    return this.playbackSession.snapshot();
+  }
+
+  async playSessionTrack(input: unknown): Promise<PlaybackDispatchResult> {
+    const session = this.validatePlaybackSession(input);
+    const track = session.queue[session.queueIndex];
+    if (!track) throw new MusicInputError("E_PLAYBACK_QUEUE_INDEX_INVALID");
+    await this.ensureReady();
+    this.playbackSession.replace(session);
+    this.emitPlaybackSessionChange();
+    return this.dispatchFromCacheOrProvider(track.id);
+  }
+
+  syncPlaybackSession(input: unknown): MusicPlaybackSessionSnapshot {
+    const session = this.validatePlaybackSession(input);
+    this.playbackSession.replace(session);
+    this.emitPlaybackSessionChange();
+    return this.playbackSession.snapshot()!;
+  }
+
   async playbackPlay(): Promise<void> {
     this.requireMpv();
     await this.mpv!.play();
@@ -501,6 +538,74 @@ export class MusicService {
     if (!this.mpv || !this.mpv.isReady()) {
       throw new MusicInputError("E_MPV_NOT_READY");
     }
+  }
+
+  private async handleMpvState(state: PlaybackState): Promise<void> {
+    if (state.eofReached !== true) {
+      this.lastHandledEofTrackId = null;
+      return;
+    }
+    const trackId = state.track?.encryptedId;
+    if (!trackId || trackId === this.lastHandledEofTrackId) return;
+    this.lastHandledEofTrackId = trackId;
+    this.sessionAdvance = this.sessionAdvance.then(async () => {
+      const snapshot = this.playbackSession.snapshot();
+      const current = snapshot?.queue[snapshot.queueIndex];
+      if (!snapshot || current?.id !== trackId) return;
+      const target = this.playbackSession.nextForEof();
+      if (!target) return;
+      await this.dispatchFromCacheOrProvider(target.track.id);
+      this.emitPlaybackSessionChange();
+    }).catch((err: unknown) => {
+      console.warn("[music] background session advance failed:", err instanceof Error ? err.message : err);
+    });
+    await this.sessionAdvance;
+  }
+
+  private emitPlaybackSessionChange(): void {
+    const snapshot = this.playbackSession.snapshot();
+    for (const listener of this.playbackSessionListeners) listener(snapshot);
+  }
+
+  private validatePlaybackSession(input: unknown): PlaybackSessionInput {
+    if (!input || typeof input !== "object") {
+      throw new MusicInputError("E_PLAYBACK_SESSION_INVALID");
+    }
+    const session = input as Partial<PlaybackSessionInput>;
+    const { queue, playbackMode, playlistId, queueIndex } = session;
+    if (!Array.isArray(queue) || !this.isPlaybackMode(playbackMode) || typeof playlistId !== "string") {
+      throw new MusicInputError("E_PLAYBACK_SESSION_INVALID");
+    }
+    if (typeof queueIndex !== "number" || !Number.isInteger(queueIndex)) {
+      throw new MusicInputError("E_PLAYBACK_QUEUE_INDEX_INVALID");
+    }
+    if (queue.length === 0) {
+      if (queueIndex !== -1) throw new MusicInputError("E_PLAYBACK_QUEUE_INDEX_INVALID");
+    } else if (queueIndex < -1 || queueIndex >= queue.length) {
+      throw new MusicInputError("E_PLAYBACK_QUEUE_INDEX_INVALID");
+    }
+    if (!queue.every((track) => this.isSessionTrack(track))) {
+      throw new MusicInputError("E_PLAYBACK_SESSION_INVALID");
+    }
+    return {
+      queue,
+      queueIndex,
+      playbackMode,
+      playlistId,
+    };
+  }
+
+  private isPlaybackMode(value: unknown): value is PlaybackSessionInput["playbackMode"] {
+    return value === "off" || value === "all" || value === "one" || value === "shuffle";
+  }
+
+  private isSessionTrack(value: unknown): value is MusicTrack {
+    if (!value || typeof value !== "object") return false;
+    const track = value as Partial<MusicTrack>;
+    return typeof track.id === "string" && track.id.trim().length > 0
+      && typeof track.name === "string"
+      && Array.isArray(track.artists)
+      && track.artists.every((artist) => typeof artist === "string");
   }
 
   // ── UI 直连数据（lyrics / favorite，不经 AI 工具层） ────────

@@ -12,7 +12,7 @@
  * 仅在 mode === "learn" && obsidian.enabled && vaultPath 有效时注册。
  */
 
-import { toolRegistry } from "../../orchestrator/tool-registry";
+import { toolRegistry } from "../../orchestrator/tools/registry/tool-registry";
 import { obsidianWorkspace } from "./obsidian-workspace-service";
 import { openNote } from "./obsidian-open";
 import * as path from "path";

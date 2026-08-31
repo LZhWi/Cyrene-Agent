@@ -1,6 +1,7 @@
-import { ipcMain, BrowserWindow } from "electron";
+import { BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc-channels";
-import type { ToolDefinition } from "../orchestrator/tool-registry";
+import { createIpcScope, type IpcScope } from "../application/ipc-scope";
+import type { ToolDefinition } from "../orchestrator/tools/registry/tool-registry";
 import type { SchedulerEngine } from "./scheduler-engine";
 import type { NewScheduledTaskInput, ScheduledTaskPatch, SchedulerIpcResult } from "./types";
 
@@ -30,31 +31,39 @@ function broadcastChanged(): void {
   }
 }
 
+let schedulerIpcRegistered = false;
+
+/** 注册 scheduler IPC。idempotent：同一 channel 重复注册会抛错。 */
 export function registerSchedulerIpc(
   store: SchedulerStoreLike,
   engine: SchedulerEngine,
   getTools: () => ToolDefinition[],
+  ipcOption?: IpcScope,
 ): void {
+  if (schedulerIpcRegistered) return;
+  schedulerIpcRegistered = true;
+  const ipc = ipcOption ?? createIpcScope();
+
   const ok = <T>(value: T): SchedulerIpcResult<T> => ({ ok: true, value });
   const fail = (err: unknown): SchedulerIpcResult => ({ ok: false, error: err instanceof Error ? err.message : String(err) });
 
-  ipcMain.handle(IPC.SCHEDULER_LIST, () => ok(store.getTasks()));
-  ipcMain.handle(IPC.SCHEDULER_ADD, (_event, input: NewScheduledTaskInput) => {
+  ipc.handle(IPC.SCHEDULER_LIST, () => ok(store.getTasks()));
+  ipc.handle(IPC.SCHEDULER_ADD, (_event, input: NewScheduledTaskInput) => {
     try { const r = ok(store.addTask(input)); broadcastChanged(); return r; } catch (err) { return fail(err); }
   });
-  ipcMain.handle(IPC.SCHEDULER_UPDATE, (_event, id: string, patch: ScheduledTaskPatch) => {
+  ipc.handle(IPC.SCHEDULER_UPDATE, (_event, id: string, patch: ScheduledTaskPatch) => {
     try { const r = ok(store.updateTask(id, patch)); broadcastChanged(); return r; } catch (err) { return fail(err); }
   });
-  ipcMain.handle(IPC.SCHEDULER_DELETE, (_event, id: string) => {
+  ipc.handle(IPC.SCHEDULER_DELETE, (_event, id: string) => {
     try { const r = ok(store.deleteTask(id)); broadcastChanged(); return r; } catch (err) { return fail(err); }
   });
-  ipcMain.handle(IPC.SCHEDULER_TOGGLE, (_event, id: string, enabled: boolean) => {
+  ipc.handle(IPC.SCHEDULER_TOGGLE, (_event, id: string, enabled: boolean) => {
     try { const r = ok(store.toggleTask(id, enabled)); broadcastChanged(); return r; } catch (err) { return fail(err); }
   });
-  ipcMain.handle(IPC.SCHEDULER_GET_HISTORY, (_event, taskId: string, limit?: number) => {
+  ipc.handle(IPC.SCHEDULER_GET_HISTORY, (_event, taskId: string, limit?: number) => {
     try { return ok(store.getHistory(taskId, limit)); } catch (err) { return fail(err); }
   });
-  ipcMain.handle(IPC.SCHEDULER_FIRE_NOW, async (_event, id: string) => {
+  ipc.handle(IPC.SCHEDULER_FIRE_NOW, async (_event, id: string) => {
     try {
       const result = await engine.fireNow(id);
       return result.ok ? ok(true) : { ok: false, reason: result.reason };
@@ -62,7 +71,7 @@ export function registerSchedulerIpc(
       return fail(err);
     }
   });
-  ipcMain.handle(IPC.SCHEDULER_GET_TOOLS, () => ok(getTools().map(tool => ({
+  ipc.handle(IPC.SCHEDULER_GET_TOOLS, () => ok(getTools().map(tool => ({
     id: tool.id,
     name: tool.name,
     description: tool.description,

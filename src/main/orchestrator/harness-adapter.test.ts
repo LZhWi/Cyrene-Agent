@@ -1,7 +1,7 @@
 /**
- * Task 2 / C1 修订测试：harness-adapter 的终态映射 + 子事件 runId stamp。
+ * harness-adapter 的终态映射 + 子事件 runId stamp 单元测试。
  *
- * 覆盖 Issue 2（cancelled/error 不再被吞成 success）+ Issue 6（所有 AG-UI 事件附 canonical runId）。
+ * 覆盖：cancelled/error 不再被吞成 success；所有 AG-UI 事件附 canonical runId。
  *
  * 这两个被测函数都是纯函数，直接单测，不需要 mock harness / vendor。
  */
@@ -94,7 +94,7 @@ describe("Harness recovery context", () => {
   });
 });
 
-describe("mapTerminateReasonToTerminal (Issue 2 + 3)", () => {
+describe("mapTerminateReasonToTerminal", () => {
   it("maps undefined → success with externalEffectsMayContinue=false", () => {
     expect(mapTerminateReasonToTerminal(undefined)).toStrictEqual({
       status: "success",
@@ -152,7 +152,7 @@ describe("mapTerminateReasonToTerminal (Issue 2 + 3)", () => {
     });
   });
 
-  // Issue 2 核心不变量：cancelled 不再被 default 吞成 success
+  // 核心不变量：cancelled 不再被 default 吞成 success
   it("maps cancelled → cancelled (NOT success) with externalEffectsMayContinue=true", () => {
     const terminal = mapTerminateReasonToTerminal("cancelled");
     expect(terminal.status).toBe("cancelled");
@@ -160,7 +160,7 @@ describe("mapTerminateReasonToTerminal (Issue 2 + 3)", () => {
     expect(terminal.externalEffectsMayContinue).toBe(true);
   });
 
-  // Issue 2 核心不变量：error 不再被 default 吞成 success，而是 runtime_error
+  // 核心不变量：error 不再被 default 吞成 success，而是 runtime_error
   it("maps error → runtime_error (NOT success) with externalEffectsMayContinue=true", () => {
     const terminal = mapTerminateReasonToTerminal("error");
     expect(terminal.status).toBe("runtime_error");
@@ -168,7 +168,7 @@ describe("mapTerminateReasonToTerminal (Issue 2 + 3)", () => {
     expect(terminal.externalEffectsMayContinue).toBe(true);
   });
 
-  it("never returns a terminal missing externalEffectsMayContinue (Issue 3 invariant)", () => {
+  it("never returns a terminal missing externalEffectsMayContinue", () => {
     for (const reason of [undefined, "max_rounds", "timeout", "cancelled", "error"] as const) {
       const terminal = mapTerminateReasonToTerminal(reason);
       expect(typeof terminal.externalEffectsMayContinue).toBe("boolean");
@@ -176,7 +176,7 @@ describe("mapTerminateReasonToTerminal (Issue 2 + 3)", () => {
   });
 });
 
-describe("sendHarnessEventAsAgui runId stamping (Issue 6)", () => {
+describe("sendHarnessEventAsAgui runId stamping", () => {
   const runId = "run-canonical-abc";
   const messageId = "msg-1";
   const threadId = "thread-1";
@@ -238,7 +238,7 @@ describe("sendHarnessEventAsAgui runId stamping (Issue 6)", () => {
       preview: "done",
     });
 
-    // 至少一个工具事件必须带 canonical runId（Issue 6 要求断言）
+    // 至少一个工具事件必须带 canonical runId
     const toolStart = startEvents[0] as BaseEvent & { runId?: string; toolCallId?: string };
     expect(toolStart).toBeDefined();
     expect(toolStart.runId).toBe(runId);

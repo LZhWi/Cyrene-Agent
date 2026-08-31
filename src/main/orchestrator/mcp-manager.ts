@@ -73,8 +73,12 @@ export async function pruneMcpServersByIds(serverIds: string[]): Promise<string[
 
 /**
  * 启动时自动连接所有已保存的 MCP server。
+ * 支持 AbortSignal 协作取消：退出（或恢复屏障超时后放弃等待）时，
+ * 未开始的连接不再启动；单个连接完成后若信号已中止，立即断开该连接，
+ * 保证迟到的连接不残留为无所有者资源。
  */
-export async function initMcpManager(): Promise<void> {
+export async function initMcpManager(options: { signal?: AbortSignal } = {}): Promise<void> {
+  const signal = options.signal;
   logger.info(LogTag.MCP, "initializing MCP Manager...");
   const configs = loadConfigs();
 
@@ -87,9 +91,22 @@ export async function initMcpManager(): Promise<void> {
   let failed = 0;
 
   for (const config of configs) {
+    if (signal?.aborted) {
+      console.log(LOG_PREFIX, "restore aborted, remaining servers skipped:", config.name);
+      break;
+    }
     try {
       await connectMcpServer(config);
       connected++;
+      // 连接完成后再核对一次信号：退出中则立刻断开这条迟到连接
+      if (signal?.aborted) {
+        try {
+          await disconnectMcpServer(config.id);
+        } catch {
+          // ignore
+        }
+        console.log(LOG_PREFIX, "late connection disconnected after abort:", config.name);
+      }
     } catch (err) {
       failed++;
       console.error(LOG_PREFIX, "自动连接失败 [" + config.name + "]:", (err as Error).message);

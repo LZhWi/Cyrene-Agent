@@ -6,7 +6,7 @@
 // - 场景清单：第一版只实现 morning_greeting / evening_checkin / back_from_away / work_break
 // - 天气场景仅保留 sceneId 占位 + 可选 getWeatherContext 注入；未实现天气候选生成
 //
-// 边界（按 §2.2 文档）：
+// 边界：
 // - 不修改 proactive-service.ts / proactive-policy.ts / proactive-state-store.ts / ProactiveCandidate
 // - 不实现 fallback / Function Calling / MCP / 主动刷新外部信息
 // - 不新增 desire-engine / 概率门

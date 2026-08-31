@@ -61,7 +61,7 @@ export interface ReasoningCapability {
   /**
    * auto 档显式映射的 effort。不设置时 auto = 不发字段（交给服务端默认）。
    * 用于服务端默认档不可控/过重的模型：GLM-5.3 服务端默认 effort=max，
-   * auto 不发字段 ≡ max，多步任务思考会吃穿输出预算（2026-08-27 issue 3）。
+   * auto 不发字段 ≡ max，多步任务思考会吃穿输出预算。
    * 设置后 auto 在 wire 层按 { mode: "on", effort: autoEffort } 发送。
    */
   autoEffort?: ReasoningEffort;
@@ -88,9 +88,9 @@ const UNKNOWN_CAPABILITY: ReasoningCapability = {
 /**
  * 9 家厂商规则表。第一条匹配的 capability 生效。
  *
- * 修改本表前请同步更新：
- *   - src/shared/reasoning.test.ts（A. 规则匹配优先级 + B. 9 家全部存在性）
- *   - 桌面 2026-07-14-reasoning-control-layer-design.md §3.2
+ * 修改本表前请同步更新 src/shared/reasoning.test.ts
+ * （A. 规则匹配优先级 + B. 9 家全部存在性），并保持每条规则的
+ * 注释说明 control / requestStyle / 支持档位，便于新读者核对厂商文档。
  */
 export const MODEL_REASONING_RULES: readonly ModelReasoningRule[] = [
   // ── chatgpt（OpenAI）──
@@ -185,7 +185,7 @@ export const MODEL_REASONING_RULES: readonly ModelReasoningRule[] = [
   // GLM-5.3 / GLM-5.3-Flash：强制思考模型（thinking.type=disabled 服务端报错，
   // 官方文档 2026-08-26；z.ai 文档明确 FLASH 同为强制思考）。
   // 支持 low/high/max 三档 effort。auto 档显式映射 high —— 服务端默认 max，
-  // auto 不发字段 ≡ max，多步任务思考爆炸（2026-08-27 issue 2/3）。
+  // auto 不发字段 ≡ max，多步任务思考爆炸。
   { providerId: "glm", modelPattern: /^glm-5\.3/i, capability: {
     control: "toggle-effort",
     supportedEfforts: ["low", "high", "max"],

@@ -22,13 +22,13 @@ describe("Work tool boundary", () => {
   });
 
   it("registers general coding tools and shared verification without the removed delegate", async () => {
-    const { toolRegistry } = await import("./tool-registry");
-    await import("./built-in-tools");
-    await import("./fs-tools");
-    const { registerLifeTools } = await import("./life-tools");
-    const { registerSearchCodeTool } = await import("./search-code-tools");
-    const { registerApplyPatchTool } = await import("./apply-patch-tools");
-    const { registerAstGrepTools } = await import("./ast-grep-tools");
+    const { toolRegistry } = await import("./tools/registry/tool-registry");
+    await import("./tools/built-in-tools");
+    await import("./tools/fs-tools");
+    const { registerLifeTools } = await import("./tools/life-tools");
+    const { registerSearchCodeTool } = await import("./tools/search-code-tools");
+    const { registerApplyPatchTool } = await import("./tools/apply-patch-tools");
+    const { registerAstGrepTools } = await import("./tools/ast-grep-tools");
     registerLifeTools();
     registerSearchCodeTool();
     registerApplyPatchTool();

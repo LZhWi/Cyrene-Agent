@@ -1,5 +1,6 @@
 /**
  * 工具错误分类器（v3 §5.3）
+ * 注：注释中的 "v3 §x" / "设计稿 §x" 均指 docs/design/2026-08-08-cyreneHarnessloopdesign.md（CyreneHarness 设计稿 v3）。
  *
  * 把工具执行抛出的 Error / 返回的失败结果分类为 ToolErrorCategory。
  * 分类结果供 retry-policy 决定是否重试。
@@ -7,7 +8,7 @@
 
 import type { ToolCallResult } from "../types";
 import type { ToolErrorCategory } from "./types";
-import { ToolExecutionError } from "../tool-execution-error";
+import { ToolExecutionError } from "../tools/registry/tool-execution-error";
 
 /**
  * 从 Error 对象分类工具错误。

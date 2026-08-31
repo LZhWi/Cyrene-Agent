@@ -144,7 +144,7 @@ export const ToolModePanel: React.FC = () => {
     Promise.all([
       api?.getToolCatalog?.() ?? Promise.resolve([]),
       api?.getToolModeOverrides?.() ?? Promise.resolve({}),
-      api?.getGeneralSettings?.() ?? Promise.resolve({}),
+      api?.getGeneral?.() ?? Promise.resolve({}),
     ])
       .then(([catalog, ov, general]) => {
         if (cancelled) return;
@@ -207,11 +207,9 @@ export const ToolModePanel: React.FC = () => {
   const visibleTools = useMemo(() => {
     const kw = filter.trim().toLowerCase();
     const usable = tools.filter((t) => !t.deprecated);
-    // Chat tab 展示全部启用工具（默认全关，靠开关 opt-in）；
-    // 其余 tab 维持现状：只列出当前可见工具。
-    const shown = tab === "chat"
-      ? usable.filter((t) => t.enabled)
-      : usable.filter((t) => t.enabled && isVisibleForMode(t, tab, overrides));
+    // 所有 tab 统一展示全部启用工具：关掉的工具置灰保留在列表里，便于重新开启。
+    // （此前非 chat tab 会把 override=false 的工具直接过滤掉，导致关掉后无法再打开。）
+    const shown = usable.filter((t) => t.enabled);
     const searched = kw
       ? shown.filter(
           (t) =>

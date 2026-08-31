@@ -1,5 +1,6 @@
 /**
  * 流式控制器（v3 §7 / §3.1）
+ * 注：注释中的 "v3 §x" / "设计稿 §x" 均指 docs/design/2026-08-08-cyreneHarnessloopdesign.md（CyreneHarness 设计稿 v3）。
  *
  * 管理 Progress Stream vs Final Commit：
  * - 模型 content 先 buffer

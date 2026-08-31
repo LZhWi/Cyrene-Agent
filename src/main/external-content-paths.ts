@@ -24,9 +24,11 @@ export interface SkillScanSource {
 
 /**
  * Resolve editable prompt/skill locations without coupling them to app.asar.
- * Packaged builds prefer folders beside Cyrene.exe and retain a defaults/
- * fallback so a later installer can update shipped content without replacing
- * user overrides.
+ * Packaged builds put user-editable content under userData (survives upgrades:
+ * the NSIS uninstaller wipes the whole install directory on reinstall) and read
+ * shipped content from folders beside Cyrene.exe, which the installer refreshes
+ * on every update. Old packages placed shipped skills directly in <install>/skills;
+ * that directory remains a builtin source for backward compatibility.
  */
 export function resolveExternalContentPaths(input: ExternalContentPathInput): ExternalContentPaths {
   if (!input.isPackaged) {
@@ -43,15 +45,12 @@ export function resolveExternalContentPaths(input: ExternalContentPathInput): Ex
   return {
     installRoot,
     promptDirectories: [
+      path.join(input.userDataPath, "prompts"),
       path.join(installRoot, "prompts"),
-      path.join(installRoot, "defaults", "prompts"),
     ],
     builtinSkillDirectory: path.join(installRoot, "defaults", "skills"),
     installSkillDirectory,
-    userSkillDirectories: [
-      installSkillDirectory,
-      path.join(input.userDataPath, "skills"),
-    ],
+    userSkillDirectories: [path.join(input.userDataPath, "skills")],
   };
 }
 

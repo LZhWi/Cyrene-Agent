@@ -10,7 +10,7 @@
 
 import { app } from "electron";
 import * as os from "os";
-import { toolRegistry } from "./tool-registry";
+import { toolRegistry } from "./tools/registry/tool-registry";
 import { listMcpServers } from "./mcp-manager";
 import { ACCESS_LEVEL_LABEL, getCurrentLevel, policyFor } from "../permission";
 import type { ToolRiskLevel } from "../permission";

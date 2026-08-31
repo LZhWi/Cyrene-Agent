@@ -10,8 +10,8 @@
 // (cardData) => void 回调，user-choice.ts 持有它，工具调用时触发。
 // 这样避免直接 import electron/index.ts 造成循环依赖。
 
-import { ipcMain } from "electron";
 import { IPC } from "../shared/ipc-channels";
+import { createIpcScope, type IpcScope } from "./application/ipc-scope";
 import type {
   AskCardPayload,
   AskCardSubmission,
@@ -62,7 +62,7 @@ interface PendingChoice {
   revision?: number;
   timer: NodeJS.Timeout;
   status: "open" | "resolving";
-  /** Task 3 / C2：关联的 canonical runId，用于 cancelPendingChoicesForRun。 */
+  /** 关联的 canonical runId，用于 cancelPendingChoicesForRun。 */
   runId?: string;
 }
 
@@ -175,9 +175,10 @@ export function requestUserClarification(
   });
 }
 
-/** 注册 CHOICE_RESOLVE handler（main 启动时调一次）。 */
-export function registerChoiceIpc(): void {
-  ipcMain.handle(IPC.CHOICE_RESOLVE, (
+/** 注册 CHOICE_RESOLVE handler（core bootstrap 启动时调一次）。 */
+export function registerChoiceIpc(ipcOption?: IpcScope): void {
+  const ipc = ipcOption ?? createIpcScope();
+  ipc.handle(IPC.CHOICE_RESOLVE, (
     _event,
     payload: { id: string; value?: string; answer?: AskUserAnswer | AskCardSubmission },
   ) => {
@@ -203,7 +204,7 @@ export function registerChoiceIpc(): void {
 }
 
 /**
- * Task 3 / C2：取消指定 runId 关联的所有 pending choice。
+ * 取消指定 runId 关联的所有 pending choice。
  * 在 AGUI_CANCEL abort signal 后调用，清理 ask_user 卡片的 pending 状态与 timer。
  * 渲染端通过 RUN_FINISHED(result.status="cancelled") 自然收到卡片关闭信号。
  */

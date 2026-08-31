@@ -5,7 +5,7 @@ import { memoryStore } from "../memory/memory-store";
 import { entityGraph } from "../memory/entity-graph";
 import { recordRecentMemoryInjection } from "../memory/recent-injected-memory";
 import { l2DmaeManager } from "../memory/l2-dmae-manager";
-import { toolRegistry } from "./tool-registry";
+import { toolRegistry } from "./tools/registry/tool-registry";
 
 export { ToolCallResult } from "./types";
 

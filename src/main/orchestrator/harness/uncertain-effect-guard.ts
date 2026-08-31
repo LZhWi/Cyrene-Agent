@@ -1,5 +1,6 @@
 /**
  * Uncertain Effect Guard（v3 §5.5.1.1）
+ * 注：注释中的 "v3 §x" / "设计稿 §x" 均指 docs/design/2026-08-08-cyreneHarnessloopdesign.md（CyreneHarness 设计稿 v3）。
  *
  * 仅保留副作用 fingerprint 拦截：
  * - isBlockedByUncertainEffect：阻止相同 non-idempotent 副作用的自动重放
@@ -11,8 +12,8 @@
  * 任务是否完成的语义判断由模型决定。
  *
  * 与 completion-policy.ts 的差异：原 completion-policy.ts 同时承担
- * obligation 生命周期 + uncertainEffect 拦截 + final gate。Task 1 (P0-A)
- * 把 obligation + final gate 移除，只保留本文件的副作用拦截。
+ * obligation 生命周期 + uncertainEffect 拦截 + final gate；重构时
+ * obligation + final gate 已移除，只保留本文件的副作用拦截。
  */
 
 import type { AgentState } from "./types";

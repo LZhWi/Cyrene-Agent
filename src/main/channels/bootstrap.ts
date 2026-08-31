@@ -1,15 +1,16 @@
 import type { BrowserWindow } from "electron";
+import type { IpcScope } from "../application/ipc-scope";
 import { IPC } from "../../shared/ipc-channels";
 import { loadGeneralSettings } from "../settings/settings-facade";
 import { loadModelSettings, loadVisionConfig, resolveModelSettingsProfile } from "../settings/model-settings";
 import { CyreneAgent } from "../orchestrator/cyrene-agent";
-import { toolRegistry } from "../orchestrator/tool-registry";
+import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
 import { decideImageSendStrategy } from "../chat/image-send-strategy";
 import {
   IMAGE_CAPTION_PROMPT,
   validateCaptionImagePath,
 } from "../chat/image-caption";
-import { indexConversationTurn } from "../orchestrator/history-tools";
+import { indexConversationTurn } from "../orchestrator/tools/history-tools";
 import type { AgentRuntime } from "../orchestrator/agent-runtime";
 import type { TtsSynthesisService } from "../services/tts/tts-synthesis-service";
 import { buildChannelAttachmentInputs } from "./agent-input";
@@ -23,9 +24,21 @@ import {
   setDispatcherSynthesizeTts,
   formatChannelUserText,
 } from "./dispatcher";
-import { initChannels, shutdownChannels } from "./init";
+import {
+  initializeChannels,
+  startChannels,
+  shutdownChannels,
+} from "./init";
+
+export interface ChannelsLifecycleAdapter {
+  initialize(): void;
+  start(signal?: AbortSignal): Promise<void>;
+  shutdown(): Promise<void>;
+}
 
 export interface ChannelsSubsystem {
+  initialize(): void;
+  start(signal?: AbortSignal): Promise<void>;
   shutdown(): Promise<void>;
 }
 
@@ -33,9 +46,18 @@ export interface ChannelsSubsystemDeps {
   agentRuntime: AgentRuntime;
   ttsSynthesisService: TtsSynthesisService;
   getReactChatWindow: () => BrowserWindow | null;
+  /** 共享 IPC scope；传入后 channels IPC 由组合根统一注销。 */
+  ipc?: IpcScope;
 }
 
-export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSubsystem {
+/**
+ * 组装 channels 子系统。构造期只注入 dispatcher 依赖（纯 setter 赋值），
+ * 不做任何初始化/启动 —— initialize / start / shutdown 必须显式调用。
+ */
+export function createChannelsSubsystem(
+  deps: ChannelsSubsystemDeps,
+  lifecycle?: ChannelsLifecycleAdapter,
+): ChannelsSubsystem {
   setDispatcherLoadRecentHistory(async (sessionId, limit) => {
     const { loadRecentHistory } = await import("./history-log");
     return loadRecentHistory(sessionId, limit);
@@ -64,7 +86,7 @@ export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSu
         content: m.content,
       }));
 
-    // 图片发送策略也基于解析后的配置（默认档案）——顶层镜像可能全空（issue 4）
+    // 图片发送策略也基于解析后的配置（默认档案）——顶层镜像可能是全空的空壳
     const channelModelSettings = resolveModelSettingsProfile(loadModelSettings());
     const imageSendStrategy = decideImageSendStrategy({
       multimodal: channelModelSettings.multimodal,
@@ -151,9 +173,17 @@ export function createChannelsSubsystem(deps: ChannelsSubsystemDeps): ChannelsSu
     }
   });
 
-  void initChannels();
+  // 默认生命周期：委托到 init.ts 的显式操作（幂等）
+  const defaultLifecycle: ChannelsLifecycleAdapter = {
+    initialize: () => initializeChannels(deps.ipc),
+    start: (signal?: AbortSignal) => startChannels(signal),
+    shutdown: () => shutdownChannels(),
+  };
+  const adapter = lifecycle ?? defaultLifecycle;
 
   return {
-    shutdown: shutdownChannels,
+    initialize: () => adapter.initialize(),
+    start: (signal?: AbortSignal) => adapter.start(signal),
+    shutdown: () => adapter.shutdown(),
   };
 }

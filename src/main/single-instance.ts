@@ -6,7 +6,8 @@ export interface SingleInstanceApp {
 
 /**
  * Ensures repeated launches wake the already-running application instead of
- * creating another Electron process and another pet window.
+ * creating another Electron process. The caller decides which existing
+ * application window should be focused.
  */
 export function installSingleInstanceGuard(
   app: SingleInstanceApp,

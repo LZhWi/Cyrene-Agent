@@ -1,10 +1,10 @@
 /**
- * CyreneHarness 核心循环（v3 §3.1）
+ * CyreneHarness 核心循环
  *
  * 连续 Agent Loop：while 循环 + function calling + content 流式。
  *
- * v3 关键修正：
- * - 每轮 assistant response 必须写回 messages（P0 blocker）
+ * 关键设计约束：
+ * - 每轮 assistant response 必须写回 messages（否则模型看不到自己上一轮的回复，多轮工具调用会断链）
  * - uncertainEffects 拦截重复副作用
  * - Harness 内置工具统一 dispatch
  * - 同轮多 tool call 遇 fatal/unknown 中断
@@ -18,11 +18,11 @@
  * 4. 结算出口           — checkpoint / settleRun / cancelledResult / finishRun / buildResult
  *
  * 拆分出去的实现细节（按需深入）：
- * - harness-llm.ts      — 供应商调用：流式/非流式兜底、用量记账、压缩摘要请求
- * - tool-round.ts       — 工具执行轮：ask_user 排他、调度重试、按序提交
+ * - harness-llm.ts           — 供应商调用：流式/非流式兜底、用量记账、压缩摘要请求
+ * - tool-round.ts            — 工具执行轮：ask_user 排他、调度重试、按序提交
+ * - harness-observability.ts — 上下文容量快照与缓存结构诊断（调用点仍在主循环）
  */
 
-import { createHash } from "node:crypto";
 import type {
   ChatMessage,
   ChatResponse,
@@ -40,7 +40,7 @@ import { INITIAL_HARNESS_CACHE_STATE, DEFAULT_HARNESS_CONFIG } from "./types";
 import { getHarnessBuiltinToolSpecs } from "./builtin-tools";
 import type { ToolDispatchContext } from "./tool-dispatcher";
 import { computeTokenBudget, compressForAgentLoop, type TokenBudget } from "./compaction";
-import { buildContextUsageSnapshot } from "../context-usage";
+import { emitContextUsage, emitCacheDiagnostic } from "./harness-observability";
 import { StreamController } from "./stream-controller";
 import { TimeoutClock } from "./timeout-clock";
 import { buildCurrentTodoNotebookContext } from "./todo-working-notebook";
@@ -49,7 +49,6 @@ import { callLLM, summarizeHistory } from "./harness-llm";
 import { runToolRound, type ToolRoundOutcome } from "./tool-round";
 import {
   buildStableSystemPrefix,
-  projectCacheRelevantRequest,
   type PromptLayers,
 } from "../prompt-layers";
 
@@ -84,7 +83,7 @@ export interface HarnessRun {
 // ═══ 主入口 ═══════════════════════════════════════════════
 
 /**
- * 运行 CyreneHarness（v3 §3.1）。
+ * 运行 CyreneHarness。
  *
  * 主循环每一轮：压缩检查 → LLM 调用 → 工具执行 或 最终回复。
  */
@@ -97,14 +96,14 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     if (run.checkpointFailure) {
       return finishRun(run, `执行状态保存失败：${run.checkpointFailure}`, true, "error");
     }
-    // Task 3 / C2：cancelled 不生成 "最终回复被取消。"，finalAnswer 为空。
+    // 用户取消：finalAnswer 保持为空，不生成 "最终回复被取消。" 之类的占位文案。
     if (input.signal?.aborted) return cancelledResult(run);
 
     const promptLayers = buildRoundPromptLayers(input);
     const roundId = `round-${run.rounds}`;
     input.onEvent?.({ type: "round_start", roundId });
 
-    // ── Mid-loop compaction（v3 §10.6）──
+    // ── Mid-loop compaction（循环中途压缩）──
     // 注意：从 run 启动到首次 LLM fetch 之间不得引入 await 挂起点
     //（调用方/测试依赖 fetch 同步发起），因此只在真正需要压缩时才 await。
     const compaction = compactIfNeeded(run, promptLayers);
@@ -126,20 +125,20 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     try {
       response = await callRoundLLM(run, promptLayers);
     } catch (err) {
-      // Task 3 / C2：signal abort → cancelled，不分类为 error。
+      // signal abort 属于用户取消：按 cancelled 结算，不归类为 error。
       if (input.signal?.aborted) return cancelledResult(run);
       console.error(`${LOG_PREFIX} LLM call failed:`, err);
       const errorMsg = err instanceof Error ? err.message : String(err);
       return finishRun(run, `抱歉，模型调用失败：${errorMsg}`, true, "error");
     }
 
-    // ── Assistant response 必须写回 transcript（v3 P0 blocker）──
+    // ── Assistant response 必须写回 transcript（否则模型下一轮看不到自己上一轮的回复）──
     run.messages.push(toAssistantMessage(response));
     if (response.text) {
       run.streamController.bufferProgressContent(response.text);
     }
 
-    // ── 截断可见化（问题 1 B）：finishReason=length 表示命中输出上限 ──
+    // ── 截断可见化：finishReason=length 表示命中输出上限 ──
     // 各协议统一映射为 "length"（anthropic-normalizer / responses-normalizer / openai 透传）。
     if (response.finishReason === "length") {
       console.warn(`${LOG_PREFIX} round ${run.rounds} finishReason=length (输出命中上限被截断)`);
@@ -166,7 +165,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
       continue;
     }
 
-    // ── Model Wants to End（P0-A：模型不再调用工具即结束）──
+    // ── Model Wants to End（模型不再调用工具 = 主动结束当前 turn）──
     // 不再检查 completionObligations 或 uncertainEffects：模型已选择结束当前 turn。
     // uncertainEffects 仍作为执行期安全状态保留（阻止相同危险副作用自动重放），
     // 但不参与 final settlement。
@@ -195,7 +194,7 @@ function createRun(input: HarnessInput): HarnessRun {
     ? deepClone(input.initialState)
     : { todoItems: [], uncertainEffects: [] };
 
-  // 构建 tools 清单（v3 §3.1：registry + harness built-in）
+  // 构建 tools 清单：registry 注册的工具 + harness 内置工具
   const registryToolSpecs: ToolSpec[] = input.tools.map((t) => ({
     name: t.id,
     description: t.description,
@@ -283,7 +282,7 @@ function buildRoundPromptLayers(input: HarnessInput): PromptLayers {
 // ═══ 每轮 LLM 阶段 ═══════════════════════════════════════
 
 /**
- * Mid-loop compaction（v3 §10.6）：估算超预算时压缩历史并推进缓存周期。
+ * Mid-loop compaction（循环中途压缩）：估算超预算时压缩历史并推进缓存周期。
  * 压缩会替换模型历史，因此下一次请求前必须先持久化新 epoch
  * （主循环在压缩后检查 checkpointFailure，失败即熔断，不再发起模型请求）。
  *
@@ -337,51 +336,6 @@ async function runCompaction(run: HarnessRun, roundSystemPrompt: string, budget:
   }
 }
 
-/**
- * 上下文容量快照（docs/context-usage-viewer-construction-plan.md）：
- * - preRequest：每轮 compaction 后、callLLM 前，代表本轮真正发给模型的 input；
- * - terminal：settleRun 统一出口（所有终态共享），此时 final assistant 已写回 transcript，含最终回复。
- * harness 的动态事实已物化为 internal transcript 消息，无独立 runtimeContext 计量。
- */
-function emitContextUsage(run: HarnessRun, phase: "preRequest" | "terminal"): void {
-  const { input } = run;
-  const stablePrefix = input.promptLayers?.stablePrefix ?? input.systemPrompt;
-  const usageParts = input.usageParts
-    ?? { personaContent: stablePrefix, toolLayerContent: "" };
-  input.onEvent?.({
-    type: "context_usage",
-    snapshot: buildContextUsageSnapshot({
-      phase,
-      ...(input.runId ? { runId: input.runId } : {}),
-      round: run.rounds,
-      contextWindowTokens: run.config.contextWindowTokens,
-      personaContent: usageParts.personaContent,
-      toolLayerContent: usageParts.toolLayerContent,
-      ...(usageParts.skillLayerContent ? { skillLayerContent: usageParts.skillLayerContent } : {}),
-      toolSpecs: run.allToolSpecs,
-      messages: run.messages,
-    }),
-  });
-}
-
-/** 请求前发送非敏感缓存结构诊断（hash + 计数，不含提示词正文）。 */
-function emitCacheDiagnostic(run: HarnessRun, promptLayers: PromptLayers): void {
-  const cacheRequest = projectCacheRelevantRequest({
-    stableSystem: buildStableSystemPrefix(promptLayers),
-    tools: run.allToolSpecs,
-    messages: run.messages,
-  });
-  run.input.onCacheDiagnostic?.({
-    ...(run.input.runId ? { runId: run.input.runId } : {}),
-    cacheEpoch: run.cache.cacheEpoch,
-    round: run.rounds,
-    stablePromptFingerprint: fingerprintCacheDiagnostic(cacheRequest.stableSystem),
-    toolSchemaFingerprint: fingerprintCacheDiagnostic(cacheRequest.tools),
-    messagePrefixFingerprint: fingerprintCacheDiagnostic(cacheRequest.messages),
-    messageCount: cacheRequest.messages.length,
-  });
-}
-
 /** 发起一轮 LLM 调用，并桥接 reasoning 流式事件（start/delta/end 配对）。 */
 async function callRoundLLM(run: HarnessRun, promptLayers: PromptLayers): Promise<ChatResponse> {
   const reasoningMessageId = `reasoning-${run.rounds}`;
@@ -412,8 +366,8 @@ async function callRoundLLM(run: HarnessRun, promptLayers: PromptLayers): Promis
 // ═══ 结算出口 ═════════════════════════════════════════════
 
 /** 持久化可恢复子运行状态；失败记入 checkpointFailure，由主循环统一降级为 error。
- *  问题 5 P0：传活引用（不再 deepClone），克隆契约由消费方（run-store /
- *  task-session-store）在回调返回前同步完成。 */
+ *  注意：messages/state 传的是活引用（不做 deepClone），克隆契约由消费方
+ *  （run-store / task-session-store）在回调返回前同步完成。 */
 function checkpoint(run: HarnessRun): void {
   try {
     run.input.onCheckpoint?.({
@@ -519,11 +473,6 @@ function toAssistantMessage(response: ChatResponse): ChatMessage {
     content: response.text,
     ...(response.toolCalls?.length ? { toolCalls: response.toolCalls } : {}),
   };
-}
-
-/** 缓存诊断指纹：只对结构做 hash，禁止携带提示词或工具输出正文。 */
-function fingerprintCacheDiagnostic(value: unknown): string {
-  return createHash("sha256").update(JSON.stringify(value)).digest("hex");
 }
 
 /** 防御外部共享引用：initialState 的调用方在 run 期间可能复用/修改原对象。 */

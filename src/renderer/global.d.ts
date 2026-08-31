@@ -19,24 +19,8 @@ declare global {
   }
 }
 
-// Vite ?raw 导入：把 .md 文件内联为字符串（renderMarkdown 渲染用）
-declare module "*.md?raw" {
-  const content: string;
-  export default content;
-}
-
-// Vite 静态资源导入：返回解析后的 URL 字符串
-declare module "*.png" {
-  const src: string;
-  export default src;
-}
-declare module "*.jpg" {
-  const src: string;
-  export default src;
-}
-declare module "*.svg" {
-  const src: string;
-  export default src;
-}
+// 注意：静态资源（*.png / *.svg / *.md?raw 等）的 declare module 通配声明
+// 不在此文件声明——本文件因类型导入而成为"模块"，模块内的通配声明不参与模块解析。
+// 这些声明已移至脚本式的 assets.d.ts。
 
 export {};

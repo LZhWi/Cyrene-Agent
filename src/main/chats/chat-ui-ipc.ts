@@ -1,5 +1,6 @@
-import { BrowserWindow, ipcMain } from "electron";
+import { BrowserWindow } from "electron";
 import { IPC } from "../../shared/ipc-channels";
+import { createIpcScope, type IpcScope } from "../application/ipc-scope";
 import { getCapabilityOrOpenAI } from "../orchestrator/vendors";
 import { normalizeReasoningPreference } from "../../shared/reasoning";
 import {
@@ -28,6 +29,8 @@ import { reactChatSession, reactChatWindow } from "../windows/window-state";
 export interface ChatUiIpcDependencies {
   live2dWindowLifecycle: { getDiagnostics(): unknown };
   get windowManager(): WindowManager | null;
+  /** 传入共享 scope 以便退出时统一注销；缺省时使用独立 scope。 */
+  ipc?: IpcScope;
 }
 
 let activeChatSessionId: string | null = null;
@@ -38,20 +41,21 @@ export function getActiveChatSessionId(): string | null {
 
 export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
   const { live2dWindowLifecycle } = deps;
+  const ipc = deps.ipc ?? createIpcScope();
 
-  ipcMain.handle(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS, () => ({
+  ipc.handle(IPC.LIVE2D_GET_MAIN_DIAGNOSTICS, () => ({
     window: live2dWindowLifecycle.getDiagnostics(),
   }));
 
-  ipcMain.on(IPC.CHAT_MINIMIZE, (event) => {
+  ipc.on(IPC.CHAT_MINIMIZE, (event) => {
     BrowserWindow.fromWebContents(event.sender)?.minimize();
   });
 
-  ipcMain.on(IPC.CHAT_CLOSE, (event) => {
+  ipc.on(IPC.CHAT_CLOSE, (event) => {
     BrowserWindow.fromWebContents(event.sender)?.close();
   });
 
-  ipcMain.on(IPC.CHAT_TOGGLE_MAXIMIZE, (event) => {
+  ipc.on(IPC.CHAT_TOGGLE_MAXIMIZE, (event) => {
     const senderWindow = BrowserWindow.fromWebContents(event.sender);
     if (!senderWindow) return;
     if (senderWindow.isMaximized()) {
@@ -61,17 +65,17 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     }
   });
 
-  ipcMain.handle(IPC.CHAT_IS_MAXIMIZED, (event) => {
+  ipc.handle(IPC.CHAT_IS_MAXIMIZED, (event) => {
     return BrowserWindow.fromWebContents(event.sender)?.isMaximized() ?? false;
   });
 
-  ipcMain.handle(IPC.CHAT_GET_REASONING_STATE, (_event, payload?: { sessionId?: unknown; modelProfileId?: unknown }) => {
+  ipc.handle(IPC.CHAT_GET_REASONING_STATE, (_event, payload?: { sessionId?: unknown; modelProfileId?: unknown }) => {
     const baseSettings = loadModelSettings();
     const sessionId = typeof payload?.sessionId === "string" ? payload.sessionId : undefined;
     const session = sessionId ? getSession(sessionId) : undefined;
     // 档案解析优先级：会话绑定 > 渲染端待定档案（欢迎页暂存）> 默认档案。
     // 不能回退顶层镜像：顶层可能是空壳（provider 指向别家、三件套全空），
-    // 与 channel bot 不回复是同一病根（2026-08-27 issue 5：欢迎页思考强度点开无反应）。
+    // 与 channel bot 不回复是同一病根：不解析默认档案时拿到的是顶层空壳镜像配置。
     const profiles = listSavedModelProfiles(baseSettings);
     const requestedId = session?.modelProfileId
       ?? (typeof payload?.modelProfileId === "string" && payload.modelProfileId ? payload.modelProfileId : undefined);
@@ -88,7 +92,7 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     };
   });
 
-  ipcMain.handle(IPC.CHAT_SET_REASONING, (_event, payload: unknown) => {
+  ipc.handle(IPC.CHAT_SET_REASONING, (_event, payload: unknown) => {
     if (!payload || typeof payload !== "object") return;
     const p = payload as { sessionId?: unknown; modelProfileId?: unknown; providerKey?: unknown; preference?: unknown };
     if (typeof p.providerKey !== "string" || typeof p.preference !== "object" || !p.preference) return;
@@ -119,7 +123,7 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     saveModelSettings({ reasoning: normalized });
   });
 
-  ipcMain.handle(IPC.CHAT_INGEST_FILES, async (_event, paths: unknown) => {
+  ipc.handle(IPC.CHAT_INGEST_FILES, async (_event, paths: unknown) => {
     const list = Array.isArray(paths) ? paths.filter((p): p is string => typeof p === "string") : [];
     if (list.length === 0) return [];
     try {
@@ -130,7 +134,7 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     }
   });
 
-  ipcMain.handle(IPC.CHAT_PROCESS_DOCUMENTS, async (event, payload: unknown) => {
+  ipc.handle(IPC.CHAT_PROCESS_DOCUMENTS, async (event, payload: unknown) => {
     const filePaths = payload && typeof payload === "object" && Array.isArray((payload as { filePaths?: unknown }).filePaths)
       ? (payload as { filePaths: unknown[] }).filePaths.filter((p): p is string => typeof p === "string")
       : [];
@@ -147,12 +151,12 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     });
   });
 
-  ipcMain.handle(IPC.CHAT_CANCEL_DOCUMENT_INDEX, (_event, payload: unknown) => {
+  ipc.handle(IPC.CHAT_CANCEL_DOCUMENT_INDEX, (_event, payload: unknown) => {
     const jobId = payload && typeof payload === "object" ? (payload as { jobId?: unknown }).jobId : undefined;
     return typeof jobId === "string" && cancelDocumentIndexJob(jobId);
   });
 
-  ipcMain.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {
+  ipc.handle(IPC.CHAT_CAPTION_IMAGE, async (_event, payload: unknown) => {
     const filePath = payload && typeof payload === "object"
       ? (payload as { filePath?: unknown }).filePath
       : undefined;
@@ -183,7 +187,7 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     }
   });
 
-  ipcMain.handle(IPC.CHAT_GET_IMAGE_PREVIEW, (_event, payload: unknown) => {
+  ipc.handle(IPC.CHAT_GET_IMAGE_PREVIEW, (_event, payload: unknown) => {
     const filePath = payload && typeof payload === "object"
       ? (payload as { filePath?: unknown }).filePath
       : undefined;
@@ -195,7 +199,7 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     };
   });
 
-  ipcMain.handle(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, (_event, payload: unknown) => {
+  ipc.handle(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, (_event, payload: unknown) => {
     // 按会话解析：会话绑定的档案若声明了 multimodal 则优先于全局值；
     // 无 sessionId / 会话未绑档案 / 档案未声明 → 回退全局（现行为）。
     const sessionId = payload && typeof payload === "object"
@@ -218,14 +222,14 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
   // 注意：必须用 deps.windowManager 实时读取 getter，不能在注册时解构。
   // registerChatUiIpc 在模块加载阶段调用，那时 windowManager 仍为 null，
   // 解构会捕获 null 并导致后续 ?. 永远短路，按钮点了打不开窗口。
-  ipcMain.handle(IPC.CHATS_OPEN_IN_REACT_WINDOW, (_event, sessionId: string) => {
+  ipc.handle(IPC.CHATS_OPEN_IN_REACT_WINDOW, (_event, sessionId: string) => {
     if (typeof sessionId !== "string" || sessionId.trim().length === 0) return false;
-    deps.windowManager?.createReactChatWindow(sessionId);
+    void deps.windowManager?.openReactChatWindow(sessionId);
     return true;
   });
 
   // reactChatWindow → main：声明 ChatPage 已挂好 IPC 监听
-  ipcMain.on(IPC.CHATS_REACT_READY, (event) => {
+  ipc.on(IPC.CHATS_REACT_READY, (event) => {
     const win = reactChatWindow;
     if (!win || win.isDestroyed()) return;
     if (event.sender !== win.webContents) return;
@@ -236,7 +240,7 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
   });
 
   // 聊天窗口启动/切换会话时上报当前活跃 sessionId；main 广播给所有窗口
-  ipcMain.handle(IPC.CHATS_SET_ACTIVE_SESSION, (_event, sessionId: string | null) => {
+  ipc.handle(IPC.CHATS_SET_ACTIVE_SESSION, (_event, sessionId: string | null) => {
     activeChatSessionId = sessionId ?? null;
     for (const win of BrowserWindow.getAllWindows()) {
       if (win.isDestroyed()) continue;
@@ -245,5 +249,5 @@ export function registerChatUiIpc(deps: ChatUiIpcDependencies): void {
     return true;
   });
 
-  ipcMain.handle(IPC.CHATS_GET_ACTIVE_SESSION, () => activeChatSessionId);
+  ipc.handle(IPC.CHATS_GET_ACTIVE_SESSION, () => activeChatSessionId);
 }

@@ -10,7 +10,7 @@ import type {
   SegmentedOutputMode,
 } from "../../shared/preferences";
 import type { CustomStyleConfig, StyleId } from "../../shared/style-sampling";
-import type { ToolModeOverrides } from "../orchestrator/tool-registry";
+import type { ToolModeOverrides } from "../orchestrator/tools/registry/tool-registry";
 import type { SkillModeOverrides } from "../skills/types";
 import type { LspServerOverride } from "../lsp/types";
 

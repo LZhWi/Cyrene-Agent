@@ -14,7 +14,7 @@ describe("resolveExecutionMode", () => {
   });
 });
 
-// ── Issue 5：fallback runId 不污染调用方 options 对象 ──────────────────────
+// ── fallback runId 不污染调用方 options 对象 ──────────────────────
 
 /**
  * 构造最小可用的 CyreneRunOptions。
@@ -49,7 +49,7 @@ async function captureRunStarted(options: CyreneRunOptions): Promise<{ runId: st
   return { runId };
 }
 
-describe("CyreneAgent.runWithEvents runId handling (Issue 5)", () => {
+describe("CyreneAgent.runWithEvents runId handling", () => {
   it("does not write back fallback runId to the caller's options object", async () => {
     const options = makeMinimalOptions();
     expect(options.runId).toBeUndefined();

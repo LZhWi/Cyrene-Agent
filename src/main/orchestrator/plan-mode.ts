@@ -1,5 +1,5 @@
 /**
- * 计划模式状态机（docs/superpowers/specs/2026-08-17-plan-mode-design.md §3）
+ * 计划模式状态机。
  *
  * 四状态：NORMAL / PLAN_DISCUSSING / PLAN_REVIEW / EXECUTING
  * - 会话级内存 Map，v1 不持久化（重启回 NORMAL，计划文件仍在磁盘）
@@ -93,7 +93,7 @@ export function isInPlanDiscussion(conversationId: string): boolean {
   return s === "PLAN_DISCUSSING" || s === "PLAN_REVIEW";
 }
 
-/** PLAN_DISCUSSING/PLAN_REVIEW 期间强制只读（权限覆盖器，见设计 §10 双入口语义）。 */
+/** PLAN_DISCUSSING/PLAN_REVIEW 期间强制只读。权限层与 Harness 运行时各拦一次（双入口），本函数供权限层调用。 */
 export function isPlanReadOnly(conversationId: string): boolean {
   return isInPlanDiscussion(conversationId);
 }

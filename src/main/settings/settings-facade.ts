@@ -26,7 +26,7 @@ import { normalizeCitaSettings } from "../cita/settings";
 import { getGeneralSettingsPath } from "../settings-store";
 import type { GeneralSettings } from "./general-settings";
 import { DEFAULT_MOSSLAND_TTS_MODEL } from "../../shared/tts-types";
-import type { ToolModeOverrides } from "../orchestrator/tool-registry";
+import type { ToolModeOverrides } from "../orchestrator/tools/registry/tool-registry";
 import type { ConversationMode } from "../../shared/chat-types";
 import type { SkillModeOverrides } from "../skills/types";
 import { normalizeLspServerOverrides } from "../lsp/server-catalog";

@@ -1,6 +1,6 @@
 //! Overlay renderer with a GDI primary path and optional Direct2D upgrade path.
 //!
-//! T5c guarantees:
+//! Guarantees:
 //! - Frozen frame is uploaded once and cached; mouse-move repaints reuse it.
 //! - First presentation order is paint → `UpdateWindow` → `DwmFlush` before
 //!   `overlay-visible` is emitted by the caller.
@@ -8,9 +8,9 @@
 //!   back to GDI for the whole session. The GDI path still honors the
 //!   overlay-visible ordering above.
 //!
-//! Direct2D bitmap upload/paint is deferred to Task 7's device-context path;
-//! when D2D init succeeds we still paint via GDI against the same cached
-//! frozen DIB so the first-paint / DwmFlush contract is identical.
+//! Direct2D bitmap upload/paint is not wired; when D2D init succeeds we
+//! still paint via GDI against the same cached frozen DIB so the
+//! first-paint / DwmFlush contract is identical.
 
 use windows::Win32::{
     Foundation::{COLORREF, HWND, RECT},

@@ -3,8 +3,6 @@
 // 设计原则：
 //   - 不知道任何具体平台。platform 信息只用于查找 adapter / 落日志 / 写 sessionId。
 //   - 完全无副作用：UI 广播、记忆写入、sticker 推断都在外部注入的回调里完成。
-//   - Phase 0 只搭骨架 + sessionId hash + 限速 + capability 降级工具函数。
-//     Phase 1 填入完整的 agent 调用（handleIncoming → CyreneAgent）。
 //
 // sessionId 生成规则：
 //   `channel:<channel>:<sha256(channel:senderId).slice(0,16)>`
@@ -38,7 +36,7 @@ import {
 } from "../../shared/preferences";
 import { rememberProactiveChannelRecipient } from "./proactive-delivery";
 
-/** Phase A：用于拼接历史对话的轻量 ChatMessage 形状（与 orchestrator ChatMessage 兼容）。 */
+/** 用于拼接历史对话的轻量 ChatMessage 形状（与 orchestrator ChatMessage 兼容）。 */
 interface ChatMessage {
   role: "user" | "assistant" | "system" | "tool";
   content?: string;
@@ -178,15 +176,15 @@ export interface DispatcherDeps {
   manager: ChannelManager;
   /** 渲染端 chatWindow 用于镜像显示（可选） */
   getChatWindow?: () => { webContents: { isDestroyed(): boolean; send: (channel: string, ...args: unknown[]) => void }; isDestroyed(): boolean } | null;
-  /** Phase 1+：完整 agent 调用。Phase 0 留空，返回纯 echo。
+  /** 完整 agent 调用。未注入时返回纯 echo（仅供联调）。
    *  返回 text（必填）+ sticker（可选 sticker id，由 dispatcher 解析成本地路径后纳入 OutgoingMessage.parts）。
    *  sticker 解析失败的会静默跳过（不会把坏数据塞进 parts）。 */
   buildAndRunAgent?: (msg: IncomingMessage, sessionId: string, priorMessages?: ChatMessage[]) => Promise<{ text: string; sticker: string | null }>;
-  /** Phase A：读这个 sessionId 最近 N 条对话历史（按时间顺序）。不提供时不拼历史，行为同 Phase 0。 */
+  /** 读这个 sessionId 最近 N 条对话历史（按时间顺序）。不提供时不拼历史。 */
   loadRecentChannelHistory?: (sessionId: string, limit: number) => Promise<ChatMessage[]>;
-  /** Phase 3：可选 — 把文本合成成音频。失败返回 null，dispatcher 会跳过 audio。 */
+  /** 可选 — 把文本合成成音频。失败返回 null，dispatcher 会跳过 audio。 */
   synthesizeTts?: (text: string, context: DispatcherTtsContext) => Promise<Buffer | DispatcherTtsResult | null>;
-  /** Phase 3：可选 — 桌面端镜像广播：bot 入站/出站消息通知给 chatWindow。 */
+  /** 可选 — 桌面端镜像广播：bot 入站/出站消息通知给 chatWindow。 */
   broadcastChat?: (event: {
     type: "bot:incoming" | "bot:outgoing";
     channel: string;
@@ -251,8 +249,8 @@ export class ChannelDispatcher {
   /**
    * 处理一条入站消息。这是 manager 注入到 adapter.onMessage 的回调。
    *
-   * Phase 0 行为：限速 → 计算 sessionId → 调 buildAndRunAgent（如果有）→ 构造 OutgoingMessage。
-   * 如果没注入 buildAndRunAgent，返回 echo 作为占位（仅 Phase 0 用于联调）。
+   * 流程：限速 → 计算 sessionId → 加载历史滑窗 → 本条落历史 → 调 buildAndRunAgent →
+   * 构造 OutgoingMessage。如果没注入 buildAndRunAgent，返回 echo 作为占位（仅供联调）。
    */
   async handleIncoming(msg: IncomingMessage): Promise<OutgoingMessage | null> {
     if (!this.limiter.hit(msg.channel, msg.senderId)) {
@@ -267,7 +265,7 @@ export class ChannelDispatcher {
     recordSession(msg.channel, msg.senderId, sessionId);
     rememberProactiveChannelRecipient(msg, sessionId);
 
-    // Phase 3：入站消息广播到桌面端 chatWindow（让用户看到 bot 在和谁聊天）
+    // 入站消息广播到桌面端 chatWindow（让用户看到 bot 在和谁聊天）
     if (this.settings.mirrorToDesktop) {
       try {
         this.deps.broadcastChat?.({
@@ -284,7 +282,7 @@ export class ChannelDispatcher {
       }
     }
 
-    // Phase 3.4：入站消息写日志
+    // 入站消息写日志
     try {
       appendLog({
         dir: "incoming",
@@ -299,28 +297,32 @@ export class ChannelDispatcher {
       console.warn(LOG, "appendLog (incoming) 失败:", err);
     }
 
-    // Phase A2：入站消息落对话历史（下一步 LLM 取的滑窗数据源）
+    // 先加载历史滑窗（此时还不含本条），再落本条入站消息。
+    // 顺序不能反：先 append 再 load 会让本条消息既出现在滑窗末尾、又作为新 user
+    // 消息追加给 agent，模型会把同一条消息读两遍。
+    let priorMessages: ChatMessage[] | undefined;
+    if (this.deps.buildAndRunAgent && this.deps.loadRecentChannelHistory) {
+      try {
+        priorMessages = await this.deps.loadRecentChannelHistory(sessionId, 16);
+      } catch (err) {
+        console.warn(LOG, "loadRecentChannelHistory 失败 (继续不带历史):", err);
+        priorMessages = undefined;
+      }
+    }
+
+    // 入站消息落对话历史（下一轮滑窗的数据源）
     try {
       appendChannelHistory(sessionId, "user", formatChannelUserText(msg));
     } catch (err) {
       console.warn(LOG, "appendHistory (incoming) 失败:", err);
     }
 
-    // Phase 1 实装的 agent 调用；Phase 0 没有 → echo
+    // agent 调用；未注入 → echo
     let replyText: string;
     let sticker: string | null = null;
     if (this.deps.buildAndRunAgent) {
-      // Phase A：拼接最近 16 条历史 (同桌面端 buildModelMessages 行为).
-      // 加载失败/未注入 → 不拼历史 (兼容旧实现).
-      let priorMessages: ChatMessage[] | undefined;
-      if (this.deps.loadRecentChannelHistory) {
-        try {
-          priorMessages = await this.deps.loadRecentChannelHistory(sessionId, 16);
-        } catch (err) {
-          console.warn(LOG, "loadRecentChannelHistory 失败 (继续不带历史):", err);
-          priorMessages = undefined;
-        }
-      }
+      // 拼接最近 16 条历史（同桌面端 buildModelMessages 行为）。
+      // 加载失败/未注入 → 不拼历史（兼容旧实现）。
       try {
         const result = await this.deps.buildAndRunAgent(msg, sessionId, priorMessages);
         replyText = result.text;
@@ -328,7 +330,7 @@ export class ChannelDispatcher {
       } catch (err) {
         const errMsg = err instanceof Error ? err.message : String(err);
         console.error(LOG, "agent 调用失败:", errMsg);
-        // 失败落盘（打包版看不到主进程 console；此前"看得到消息但不回复"只能靠猜，issue 4C）
+        // 失败落盘：打包版看不到主进程 console，不留文件就只能靠猜"看得到消息为什么不回复"
         try {
           appendLog({
             dir: "error",
@@ -345,7 +347,7 @@ export class ChannelDispatcher {
       }
     } else {
       replyText = `[echo][${msg.channel}][${msg.senderId}] ${msg.text}`;
-      console.log(LOG, "Phase 0 echo (无 buildAndRunAgent):", replyText);
+      console.log(LOG, "echo (无 buildAndRunAgent):", replyText);
     }
 
     // 构造 OutgoingMessage parts
@@ -354,7 +356,7 @@ export class ChannelDispatcher {
     );
     const parts: OutgoingPart[] = buildTextOutgoingParts(replyText, mobileMessageSegmentation);
 
-    // Phase 3：TTS 音频自动追加（如果启用且适配器支持 audio）
+    // TTS 音频自动追加（如果启用且适配器支持 audio）
     console.log(LOG, `TTS 决策: ttsEnabled=${this.settings.ttsEnabled} hasFn=${!!this.deps.synthesizeTts}`);
     const adapterCap = this.deps.manager.getAdapter(msg.channel)?.capability;
     console.log(LOG, `TTS 决策: adapterCap.audio=${adapterCap?.audio}`);
@@ -379,7 +381,7 @@ export class ChannelDispatcher {
       }
     }
 
-    // Phase 4：sticker 决定纳入 OutgoingMessage.parts（统一消息模型）。
+    // sticker 决定纳入 OutgoingMessage.parts（统一消息模型）。
     // 由 onAgentRunFinished 计算（同一个 embedding 匹配结果，避免重复计算），
     // dispatcher 只负责解析本地路径 + 按 cap 降级。
     // 桌面聊天窗的 sticker 由 onAgentRunFinished 内部 IPC 广播承担，此处不重复。
@@ -393,7 +395,7 @@ export class ChannelDispatcher {
       }
     }
 
-    // Phase 3：出站消息广播到桌面端
+    // 出站消息广播到桌面端
     if (this.settings.mirrorToDesktop) {
       try {
         this.deps.broadcastChat?.({
@@ -410,7 +412,7 @@ export class ChannelDispatcher {
     }
     }
 
-    // Phase 3.4：出站消息写日志（仅文本 part，附件路径不写进 JSONL）
+    // 出站消息写日志（仅文本 part，附件路径不写进 JSONL）
     try {
       appendLog({
         dir: "outgoing",
@@ -425,7 +427,7 @@ export class ChannelDispatcher {
       console.warn(LOG, "appendLog (outgoing) 失败:", err);
     }
 
-    // Phase A2：出站消息落对话历史（assistant 角色）
+    // 出站消息落对话历史（assistant 角色）
     try {
       appendChannelHistory(sessionId, "assistant", replyText);
     } catch (err) {
@@ -501,7 +503,7 @@ function normalizeTtsResult(result: Buffer | DispatcherTtsResult | null): Dispat
   return result;
 }
 
-/** 进程级单例 —— Phase 1 注入 buildAndRunAgent 后才会真正干活。 */
+/** 进程级单例 —— 注入 buildAndRunAgent 后才会真正干活。 */
 export const channelDispatcher = new ChannelDispatcher({
   manager: channelManager,
 });
@@ -514,21 +516,21 @@ export function setDispatcherBuildAndRunAgent(
   channelDispatcher.deps.buildAndRunAgent = fn;
 }
 
-/** Phase 3.1：注入 TTS 合成（返回音频或 null） */
+/** 注入 TTS 合成（返回音频或 null） */
 export function setDispatcherSynthesizeTts(
   fn: (text: string, context: DispatcherTtsContext) => Promise<Buffer | DispatcherTtsResult | null>,
 ): void {
   channelDispatcher.deps.synthesizeTts = fn;
 }
 
-/** Phase A：注入最近对话历史读取（index.ts 注入一个用 history-log 实现的闭包） */
+/** 注入最近对话历史读取（index.ts 注入一个用 history-log 实现的闭包） */
 export function setDispatcherLoadRecentHistory(
   fn: (sessionId: string, limit: number) => Promise<{ role: "user" | "assistant"; content?: string }[]>,
 ): void {
   channelDispatcher.deps.loadRecentChannelHistory = fn;
 }
 
-/** Phase 3.2：注入桌面端镜像广播（chatWindow 推送 bot 入站/出站消息） */
+/** 注入桌面端镜像广播（chatWindow 推送 bot 入站/出站消息） */
 export function setDispatcherBroadcastChat(
   fn: (event: {
     type: "bot:incoming" | "bot:outgoing";

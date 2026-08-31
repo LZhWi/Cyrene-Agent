@@ -1,5 +1,5 @@
 // LRC lyric parser: pure functions, no IO.
-// UI contract: `{ timeMs, text }[]` ascending — see refactor plan §10.1 MUSIC_GET_LYRICS.
+// UI contract: `{ timeMs, text }[]` ascending by timeMs（MUSIC_GET_LYRICS 的返回形状）。
 
 export interface LyricLine {
   timeMs: number;

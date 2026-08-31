@@ -3,7 +3,7 @@
 // 与 music-tools.ts 的分工：music-tools 走 MusicProvider，是"Cyrene 自己放歌"
 // （网易云 OpenAPI + mpv）。这里是"遥控用户已经开着的播放器"，能力上少得多
 // （没有搜索/歌单/点播，SMTC 就不提供），但换来的是零逆向、零签名、零 ToS 风险。
-import type { ToolDefinition } from "../tool-registry";
+import type { ToolDefinition } from "./registry/tool-registry";
 import { QQ_MUSIC_APP_ID, SmtcController, SmtcError, type SmtcCommand } from "../../music/smtc-controller";
 
 /** 把 SmtcError 变成给模型看的结构化结果，而不是抛异常中断整轮。 */
