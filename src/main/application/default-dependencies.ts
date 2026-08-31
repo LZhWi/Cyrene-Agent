@@ -156,6 +156,12 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
   const activation = createWindowActivationBroker();
   const shutdown = createShutdownCoordinator({ readiness, timeoutMs: SHUTDOWN_TIMEOUT_MS });
 
+  // 注入应用图标路径 getter（窗口工厂统一读取，避免循环依赖）。
+  // 必须在 shell 阶段之前注入：聊天窗口壳与托盘在 shell 阶段创建时就会读取，
+  // 若等到 core 阶段再注入，托盘会拿到空路径而显示 Electron 默认图标。
+  // getter 为惰性求值，此处注册不触发磁盘读取。
+  setGetCurrentAppIconPath(() => getAppIconPath(loadGeneralSettings().uiIcon));
+
   return {
     app,
     dialog,
@@ -248,8 +254,8 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
           ttsSynthesisService.synthesizeSession(request, signal, emit),
         );
 
-        // 注入应用图标路径 getter（窗口工厂统一读取，避免循环依赖）
-        setGetCurrentAppIconPath(() => getAppIconPath(loadGeneralSettings().uiIcon));
+        // 应用图标 getter 已在工厂体开头注入（早于 shell 阶段的窗口壳/托盘创建）。
+
         // 内置工具配置 getter（场景向量索引等）
         bootstrapConfigGetters({
           loadGeneralSettings,
