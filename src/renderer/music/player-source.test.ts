@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { canOpenPlayer, pickInitialPlaylist, LOCAL_CACHE_PLAYLIST_ID } from "./player-source";
+import { canOpenPlayer, pickInitialPlaylist, pickPlayStartIndex, LOCAL_CACHE_PLAYLIST_ID } from "./player-source";
 
 describe("canOpenPlayer", () => {
   it("只登录了网易云 → 可以打开", () => {
@@ -38,5 +38,28 @@ describe("pickInitialPlaylist", () => {
   it("本地曲库为空 → 没什么可自动选", () => {
     expect(pickInitialPlaylist({ currentId: "", localTrackCount: 0, neteasePlaylistCount: 0 }))
       .toBeNull();
+  });
+});
+
+describe("pickPlayStartIndex", () => {
+  it("刚打开播放器（无 currentTrack）→ 从队列第一首开始，而不是什么都不做", () => {
+    // 这就是「能打开播放器但点播放没反应」的那个 bug
+    expect(pickPlayStartIndex({ hasCurrentTrack: false, queueLength: 8, queueIndex: -1 })).toBe(0);
+  });
+
+  it("已有当前曲目 → 交给正常的 toggle 路径", () => {
+    expect(pickPlayStartIndex({ hasCurrentTrack: true, queueLength: 8, queueIndex: 3 })).toBeNull();
+  });
+
+  it("队列为空 → 没什么可放", () => {
+    expect(pickPlayStartIndex({ hasCurrentTrack: false, queueLength: 0, queueIndex: -1 })).toBeNull();
+  });
+
+  it("已选中某一首但还没播 → 从那一首开始", () => {
+    expect(pickPlayStartIndex({ hasCurrentTrack: false, queueLength: 8, queueIndex: 5 })).toBe(5);
+  });
+
+  it("queueIndex 越界（刚换歌单）→ 退回第一首而不是崩", () => {
+    expect(pickPlayStartIndex({ hasCurrentTrack: false, queueLength: 3, queueIndex: 99 })).toBe(0);
   });
 });

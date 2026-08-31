@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Minus, X } from "lucide-react";
 import MusicPlayer from "./components/MusicPlayer";
-import { canOpenPlayer, pickInitialPlaylist, LOCAL_CACHE_PLAYLIST_ID } from "./player-source";
+import { canOpenPlayer, pickInitialPlaylist, pickPlayStartIndex, LOCAL_CACHE_PLAYLIST_ID } from "./player-source";
 import LoadingScreen from "./components/LoadingScreen";
 import type { PlaybackState as MpvPlaybackState } from "../../shared/music-types";
 import type {
@@ -581,7 +581,21 @@ export function App() {
     () => ({
       playTrack,
       togglePlayPause() {
-        if (!api || !state.currentTrack) return;
+        if (!api) return;
+        // 刚打开播放器时 currentTrack 还是空的。原来这里直接 return，
+        // 于是点播放毫无反应——mpv 里没有任何文件，toggle 无从生效。
+        // 这时应当从队列开头真正加载一首歌。
+        const startIndex = pickPlayStartIndex({
+          hasCurrentTrack: Boolean(state.currentTrack),
+          queueLength: state.queue.length,
+          queueIndex: state.queueIndex,
+        });
+        if (startIndex !== null) {
+          const first = state.queue[startIndex];
+          if (first) playTrack(first);
+          return;
+        }
+        if (!state.currentTrack) return;
         // 播完停在结尾（keep-open）→ 点播放 = 重播当前曲（缓存秒开）
         if (endedRef.current && !state.isPlaying) {
           endedRef.current = false;
