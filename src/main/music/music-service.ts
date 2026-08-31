@@ -109,6 +109,10 @@ export class MusicService {
     if (!config) {
       this.backendState = "incompatible";
       this.emitBackendChange("incompatible");
+      // 关键：mpv 与网易云凭据无关。本地导入的曲目直接由 mpv 播本地文件，
+      // 之前 mpv 的启动写在这个 return 之后，导致没配网易云的用户
+      // 连本地音乐都放不了——播放器根本没起来。
+      await this.startMpv();
       return;
     }
     // Inject real credentials into the placeholder client (constructed with
@@ -123,7 +127,20 @@ export class MusicService {
       this.emitAccountChange(this.orchestrator.getAccountState());
     });
 
-    // Start mpv and wire its dispatcher into the provider.
+    await this.startMpv();
+  }
+
+  /**
+   * 启动 mpv 并把 dispatcher 接进 provider。
+   * 无论有没有网易云凭据都会调用——本地/缓存曲目的播放同样依赖它。
+   */
+  private async startMpv(): Promise<void> {
+    // 幂等：没有网易云凭据时 backendState 永远停在 "incompatible"，
+    // start() 的早退守卫（只认 ready/degraded）拦不住，于是每一次音乐操作
+    // 都会重跑 initOpenapi()。若这里不做保护，就会每次都 new 一个
+    // MpvController——旧实例连同注册在它上面的 IPC 监听器一起被丢掉，
+    // 表现为「歌能放但进度条不动」，同时后台堆积多个 mpv 进程。
+    if (this.mpv) return;
     this.mpv = new MpvController();
     try {
       await this.mpv.start();
@@ -592,7 +609,14 @@ export class MusicService {
   /** Trusted renderer path: IDs originate from MusicService search results. */
   async playTrackFromUi(trackId: string): Promise<PlaybackDispatchResult> {
     if (!trackId) throw new MusicInputError("E_INVALID_ID_FORMAT");
-    await this.ensureReady();
+    if (this.shuttingDown) throw new MusicInputError("E_BACKEND_NOT_READY");
+    await this.start();
+    // 命中缓存的曲目（含本地导入）直接播本地文件，完全不碰网易云 provider，
+    // 因此不要求后端就绪。否则没配网易云凭据的用户连自己导入的歌都放不了。
+    if (this.cacheDownloader.getFilePath(trackId)) {
+      return this.dispatchFromCacheOrProvider(trackId);
+    }
+    this.requireReady();
     return this.dispatchFromCacheOrProvider(trackId);
   }
 
