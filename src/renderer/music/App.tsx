@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Minus, X } from "lucide-react";
 import MusicPlayer from "./components/MusicPlayer";
+import { canOpenPlayer, pickInitialPlaylist, LOCAL_CACHE_PLAYLIST_ID } from "./player-source";
 import LoadingScreen from "./components/LoadingScreen";
 import type { PlaybackState as MpvPlaybackState } from "../../shared/music-types";
 import type {
@@ -102,8 +103,6 @@ const INITIAL_STATE: PlaybackState = {
 };
 
 // ── 本地缓存虚拟歌单 ──────────────────────────────────────────
-const LOCAL_CACHE_PLAYLIST_ID = "__local_cache__";
-
 function makeCachePlaylist(tracks: Track[]): Playlist {
   return {
     id: LOCAL_CACHE_PLAYLIST_ID,
@@ -182,6 +181,19 @@ export function App() {
     () => [makeCachePlaylist(cacheTracks), ...neteasePlaylists],
     [cacheTracks, neteasePlaylists],
   );
+
+  // 自动选源：没登录网易云但有本地曲库时，直接落到本地歌单。
+  // 否则 activePlaylistId 会一直是空串，modeSet 被判成 "online"，
+  // 用户打开播放器看到的是一个空的在线视图。
+  // 只在还没选过歌单时生效，不覆盖用户的手动选择。
+  useEffect(() => {
+    const next = pickInitialPlaylist({
+      currentId: activePlaylistId,
+      localTrackCount: cacheTracks.length,
+      neteasePlaylistCount: neteasePlaylists.length,
+    });
+    if (next) setActivePlaylistId(next);
+  }, [activePlaylistId, cacheTracks.length, neteasePlaylists.length]);
 
   const patch = useCallback((p: Partial<PlaybackState>) => {
     setState((s) => ({ ...s, ...p }));
@@ -358,12 +370,14 @@ export function App() {
     if (!api) return;
     const checkLogin = async () => {
       try {
+        // 本地曲库与网易云登录无关，无论如何都要加载——放在 if 里面的话，
+        // 「只导入了本地音乐、没登录网易云」的用户会看到一个空播放器。
+        void loadCacheTracks();
         const r = await api.getStatus();
         const snap = r.data as { account?: string; backend?: string };
         if (snap?.account === "signed_in") {
           setLoginReady(true);
           loadPlaylists();
-          void loadCacheTracks();
         } else {
           setLoginReady(false);
         }
@@ -374,10 +388,10 @@ export function App() {
     void checkLogin();
     const unsub = api.onStateChanged?.((raw) => {
       const snap = raw as { account?: string };
+      void loadCacheTracks();
       if (snap?.account === "signed_in") {
         setLoginReady(true);
         if (neteasePlaylistsRef.current.length === 0) void loadPlaylists();
-        void loadCacheTracks();
       } else {
         setLoginReady(false);
       }
@@ -753,7 +767,10 @@ export function App() {
     return <LoadingScreen />;
   }
 
-  if (!loginReady) {
+  // 播放器可用的条件是「有东西可放」，而不是「登录了网易云」：
+  // 本地导入的曲目完全不依赖网易云，之前把两者绑在一起，导致只用本地音乐
+  // 的用户永远看到「音乐服务未就绪」。
+  if (!canOpenPlayer({ neteaseSignedIn: loginReady, localTrackCount: cacheTracks.length })) {
     return (
       <div className="mp-shell">
         <div className="mp-window-chrome">
@@ -761,8 +778,8 @@ export function App() {
           <button type="button" className="win-btn win-btn--close" onClick={closeWindow} title="关闭"><X size={14} /></button>
         </div>
         <div className="mp-not-ready">
-          <p>音乐服务未就绪</p>
-          <p className="mp-not-ready-hint">请先在「设置 → 音乐」中扫码登录网易云</p>
+          <p>还没有可播放的音乐</p>
+          <p className="mp-not-ready-hint">在「设置 → 插件 → 音乐工具」里导入本地音乐，或扫码登录网易云</p>
         </div>
       </div>
     );
