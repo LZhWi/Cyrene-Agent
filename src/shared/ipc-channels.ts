@@ -398,6 +398,7 @@ export const IPC = {
   MUSIC_GET_CACHED_TRACKS: "music:get-cached-tracks",
   MUSIC_REMOVE_CACHED_TRACK: "music:remove-cached-track",
   MUSIC_IMPORT_LOCAL_TRACKS: "music:import-local-tracks",
+  MUSIC_IMPORT_LOCAL_FOLDER: "music:import-local-folder",
   // main → renderer：缓存索引变化（下载完成/删除/导入）广播
   MUSIC_CACHE_UPDATED: "music:cache-updated",
 

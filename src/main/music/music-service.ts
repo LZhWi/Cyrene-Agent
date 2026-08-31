@@ -14,6 +14,7 @@ import { OpenapiConfigStore } from "./openapi-config";
 import { SelectionSetCache } from "./selection-set-cache";
 import { MpvController } from "./mpv-controller";
 import { CacheDownloader } from "./cache-downloader";
+import { scanAudioFiles } from "./local-music-scanner";
 import type { PlaybackDispatcher } from "./netease-openapi-provider";
 import { MusicInputError } from "./types";
 import { assertEncryptedId } from "./openapi-result-normalizer";
@@ -527,6 +528,17 @@ export class MusicService {
   async importLocalFiles(filePaths: string[]): Promise<{ imported: number; skipped: number }> {
     await this.cacheDownloader.initialize();
     return this.cacheDownloader.importFiles(filePaths);
+  }
+
+  /**
+   * 导入整个文件夹：递归扫描出音频文件后复用 importLocalFiles。
+   * truncated 表示命中数量上限，调用方需要如实告诉用户结果被截断了。
+   */
+  async importLocalFolder(dir: string): Promise<{ imported: number; skipped: number; truncated: boolean }> {
+    const { files, truncated } = await scanAudioFiles(dir);
+    if (files.length === 0) return { imported: 0, skipped: 0, truncated };
+    const result = await this.importLocalFiles(files);
+    return { ...result, truncated };
   }
 
   /** 缓存索引变化（下载完成/删除/导入）订阅。 */
