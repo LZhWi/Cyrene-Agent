@@ -121,7 +121,10 @@ describe("registerMusicIpcHandlers", () => {
     disposer();
     expect(removed).toContain("music:get-status");
     expect(removed).toContain("music:play-track");
-    expect(removed.length).toBe(26);
+    // QQ 音乐（SMTC）新增的两个通道也必须被 disposer 收走
+    expect(removed).toContain("music:qq-detect");
+    expect(removed).toContain("music:qq-control");
+    expect(removed.length).toBe(28);
   });
 
   it("MUSIC_SEARCH: keyword too long returns ok:false errorCode", async () => {

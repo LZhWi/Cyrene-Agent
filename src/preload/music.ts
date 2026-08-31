@@ -12,6 +12,10 @@ export function exposeMusicApi() {
     playTrack: (trackId: string) => ipcRenderer.invoke(IPC.MUSIC_PLAY_TRACK, trackId),
     playPlaylist: (playlistId: string) => ipcRenderer.invoke(IPC.MUSIC_PLAY_PLAYLIST, playlistId),
     detectPlayer: () => ipcRenderer.invoke(IPC.MUSIC_DETECT_PLAYER),
+    // ── QQ 音乐（外部播放器，SMTC 后台控制）──
+    qqDetect: () => ipcRenderer.invoke(IPC.MUSIC_QQ_DETECT),
+    qqControl: (command: "next" | "prev" | "play" | "pause" | "toggle") =>
+      ipcRenderer.invoke(IPC.MUSIC_QQ_CONTROL, command),
     getOpenapiConfig: () => ipcRenderer.invoke(IPC.MUSIC_GET_OPENAPI_CONFIG),
     saveOpenapiConfig: (config: { appId: string; privateKey: string }) =>
       ipcRenderer.invoke(IPC.MUSIC_SAVE_OPENAPI_CONFIG, config),

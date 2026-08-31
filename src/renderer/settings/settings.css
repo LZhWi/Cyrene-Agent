@@ -4269,6 +4269,74 @@ body {
   white-space: nowrap;
 }
 
+/* 没有图标的 plugin-card--sub（QQ/Spotify/本地音乐这些占位卡）：
+   基类是 34px|1fr|auto 三列，少一个图标就会让 body 掉进 34px 那列，
+   文字被挤成一列一个字。这里按实际子元素数量收敛成两列。 */
+.plugin-card--sub:not(:has(> .plugin-card__icon)) {
+  grid-template-columns: 1fr auto;
+}
+/* 网格项默认 min-width:auto，长单词/按钮排会把列撑开挤扁邻居。 */
+.plugin-card__body {
+  min-width: 0;
+}
+/* 卡片按内容高度排列，避免一张高卡把同行的矮卡拉成一片空白。 */
+.music-platform-grid {
+  align-items: start;
+  /* 窄窗口下先收成单列。原来写死两列，窗口一窄每列只剩 ~200px，
+     中文会被折成一列一个字。
+     用 auto-fit 试过，但宽窗口下会自动排到三四列，卡片反而更窄——
+     两列才是这组卡片的设计意图，所以用断点显式控制。 */
+  grid-template-columns: 1fr;
+}
+@media (min-width: 720px) {
+  .music-platform-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* QQ 音乐卡片：状态行 + 传输控制。
+   配色一律走 --rb-* token，不写死 rgba(255,255,255,…)——那种写法在
+   pearl-white 这类浅色主题下会直接消失（按钮和背景一样白）。 */
+.qq-now-playing {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--rb-text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.qq-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+}
+.qq-btn {
+  min-width: 30px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 8px;
+  border: 1px solid var(--rb-border-soft);
+  background: var(--rb-bg-2);
+  color: var(--rb-text-default);
+  font-size: 13px;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+.qq-btn:hover { border-color: var(--rb-border-strong); }
+.qq-btn:active { background: var(--rb-bg-1); }
+/* 不用 margin-left:auto 把它推到右边——正文列只有 ~200px，推到右边会导致
+   整行换行，"重新检测"孤零零掉到第二行。跟着传输按钮排就好。 */
+.qq-btn--text { font-size: 11px; }
+
+/* 这张卡比同行的卡高，图标和角标居中会显得飘在半空，顶对齐更像状态标识。 */
+#music-platform-qq { align-items: start; }
+#music-platform-qq .plugin-card__icon,
+#music-platform-qq .plugin-placeholder-tag { margin-top: 2px; }
+
 .music-card {
   margin-top: 18px;
   padding: 16px;

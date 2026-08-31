@@ -1449,7 +1449,27 @@
                     <div class="plugin-card__icon"><img data-music-logo alt="网易云音乐" /></div>
                     <div class="plugin-card__body"><h2>网易云音乐</h2><p>扫码登录后搜索并播放歌曲。</p></div>
                   </button>
-                  <article class="plugin-card plugin-card--sub is-muted"><div class="plugin-card__body"><h2>QQ 音乐</h2><p>敬请期待</p></div><span class="plugin-placeholder-tag">敬请期待</span></article>
+                  <!-- QQ 音乐：走 Windows SMTC 后台控制，不需要登录，也没有搜索/歌单。
+                       状态由 music.qqDetect() 填充（见 settings.ts 的 refreshQQMusic）。 -->
+                  <article class="plugin-card plugin-card--sub" id="music-platform-qq" data-platform="qq">
+                    <!-- 图标不能省：.plugin-card--sub 是 34px|1fr|auto 三列网格，
+                         少了图标的话 body 会落进 34px 那列，文字被挤成一列一个字。 -->
+                    <div class="plugin-card__icon" aria-hidden="true">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M9 18V6l10-2v12" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="6.5" cy="18" r="2.5" stroke="currentColor" stroke-width="2"/><circle cx="16.5" cy="16" r="2.5" stroke="currentColor" stroke-width="2"/></svg>
+                    </div>
+                    <div class="plugin-card__body">
+                      <h2>QQ 音乐</h2>
+                      <p id="qq-status-line">正在检测…</p>
+                      <p id="qq-now-playing" class="qq-now-playing is-hidden"></p>
+                      <div id="qq-controls" class="qq-controls is-hidden">
+                        <button type="button" class="qq-btn" data-qq-cmd="prev" title="上一首">⏮</button>
+                        <button type="button" class="qq-btn" data-qq-cmd="toggle" title="播放/暂停">⏯</button>
+                        <button type="button" class="qq-btn" data-qq-cmd="next" title="下一首">⏭</button>
+                        <button type="button" class="qq-btn qq-btn--text" id="qq-refresh">重新检测</button>
+                      </div>
+                    </div>
+                    <span class="plugin-placeholder-tag is-hidden" id="qq-tag"></span>
+                  </article>
                   <article class="plugin-card plugin-card--sub is-muted"><div class="plugin-card__body"><h2>Spotify</h2><p>敬请期待</p></div><span class="plugin-placeholder-tag">敬请期待</span></article>
                   <article class="plugin-card plugin-card--sub is-muted"><div class="plugin-card__body"><h2>本地音乐</h2><p>敬请期待</p></div><span class="plugin-placeholder-tag">敬请期待</span></article>
                 </div>

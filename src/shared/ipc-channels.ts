@@ -391,6 +391,10 @@ export const IPC = {
   MUSIC_PLAYER_CLOSE: "music:player:close",
   MUSIC_PLAYER_MINIMIZE: "music:player:minimize",
   // 本地缓存歌单（边播边存 + 用户导入）
+  // QQ 音乐（外部播放器，走 Windows SMTC，不是 MusicProvider）
+  MUSIC_QQ_DETECT: "music:qq-detect",
+  MUSIC_QQ_CONTROL: "music:qq-control",
+
   MUSIC_GET_CACHED_TRACKS: "music:get-cached-tracks",
   MUSIC_REMOVE_CACHED_TRACK: "music:remove-cached-track",
   MUSIC_IMPORT_LOCAL_TRACKS: "music:import-local-tracks",

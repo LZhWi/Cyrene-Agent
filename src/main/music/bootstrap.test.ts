@@ -63,7 +63,8 @@ describe("bootstrapMusicService", () => {
     expect(MusicService).toHaveBeenCalledTimes(1);
     expect(vi.mocked(registerMusicIpcHandlers)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(buildMusicTools)).toHaveBeenCalledTimes(1);
-    expect(registered).toEqual(["music_a", "music_b"]);
+    // 外部播放器工具（SMTC）与 music 工具同一个 bootstrap 注册
+    expect(registered).toEqual(["music_a", "music_b", "external_player_status", "external_player_control"]);
     expect(b.service.start).not.toHaveBeenCalled();
     expect(b.isShuttingDown()).toBe(false);
   });
@@ -73,7 +74,7 @@ describe("bootstrapMusicService", () => {
     const report = await b.shutdown();
     expect(b.service.shutdown).toHaveBeenCalledTimes(1);
     expect(ipcDisposer).toHaveBeenCalledTimes(1);
-    expect(unregistered).toEqual(["music_a", "music_b"]);
+    expect(unregistered).toEqual(["music_a", "music_b", "external_player_status", "external_player_control"]);
     expect(report).toEqual({
       rootProcessPid: undefined,
       transportClosed: true,
