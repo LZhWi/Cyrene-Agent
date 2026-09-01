@@ -9,7 +9,7 @@ system-status/
   manifest.json
   index.cjs      # 入口：工具注册 + IPC + 弹窗管理
   ui.html        # 弹窗界面（自绘标题栏 + 数据面板）
-  avatar.png     # 随包分发的静态资源
+  avatar.png     # 随包分发的静态资源（同时充当插件图标）
 ```
 
 ## manifest.json
@@ -23,9 +23,12 @@ system-status/
   "description": "查询系统状态：CPU/内存/GPU/磁盘/网络/电池",
   "author": "Cyrene",
   "entry": "index.cjs",
+  "icon": "avatar.png",
   "defaultEnabled": false
 }
 ```
+
+`icon` 指向的图片会显示在设置页插件卡片左侧；文件缺失或超限会被静默忽略，插件照常加载。
 
 ## 要点 1：两个工具，一个带参数
 

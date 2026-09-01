@@ -8,6 +8,7 @@
 my-first-plugin/
   manifest.json
   index.cjs
+  icon.png     # 可选：插件图标（png/jpg/webp/svg，≤2MiB）
 ```
 
 ### 2. manifest.json
@@ -21,6 +22,7 @@ my-first-plugin/
   "description": "打个招呼",
   "author": "你的名字",
   "entry": "index.cjs",
+  "icon": "icon.png",
   "defaultEnabled": false
 }
 ```

@@ -53,7 +53,7 @@ modes:
   index.cjs
 ```
 
-manifest 必填字段：`apiVersion: 1`、`id`、`name`、`version`（严格三段式 SemVer）、`description`、`author`、`entry`。`id` 全小写连字符，它决定工具 id 前缀和安装目录名。
+manifest 必填字段：`apiVersion: 1`、`id`、`name`、`version`（严格三段式 SemVer）、`description`、`author`、`entry`。`id` 全小写连字符，它决定工具 id 前缀和安装目录名。可选字段 `icon`（裸文件名，png/jpg/webp/svg，≤2MiB）在设置页卡片左侧展示图标，不合法时静默忽略不影响加载。
 
 ### 3. 实现
 
