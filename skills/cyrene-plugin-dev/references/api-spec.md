@@ -25,9 +25,9 @@
 | `name` | string | 是 | 非空显示名 |
 | `version` | string | 是 | 严格 SemVer，如 `1.2.0`、`2.0.0-beta.1`（不能写 `1.0` 或 `v1.0`） |
 | `description` | string | 是 | 非空简介 |
-| `author` | string | 是 | 非空作者 |
+| `author` | string | 是 | 非空开发者或团队名称；展示在插件卡片中 |
 | `entry` | string | 是 | 插件目录内裸文件名；支持 `.cjs`、`.js`、`.mjs`；不能含子目录或 `..` |
-| `icon` | string | 否 | 插件目录内裸文件名；支持 `.png`/`.jpg`/`.jpeg`/`.webp`/`.svg`；≤2MiB；设置页卡片左侧展示；不合法时静默忽略，不影响加载 |
+| `icon` | string | 否 | 插件目录内裸文件名；支持 `.png`/`.jpg`/`.jpeg`/`.webp`/`.svg`；≤2MiB；聊天窗口插件卡片左侧展示；不合法时静默忽略，不影响加载 |
 | `defaultEnabled` | boolean | 否 | 缺省 true，**只对内置插件生效**；用户插件首次发现一律停用 |
 | `deps` | string[] | 否 | 可选值仅 `channels`、`llm`；未知值（含拼写错误）会让整个 manifest 失败 |
 
@@ -66,7 +66,7 @@ module.exports = {
     // 停用/刷新/退出时调用；关窗口、清定时器和子进程；必须可重复调用
   },
   async open() {
-    // 可选；实现了它，设置页卡片会出现"打开"按钮
+    // 可选；实现了它，聊天窗口插件卡片的“打开”按钮会变为可用
   },
 };
 ```
@@ -140,11 +140,11 @@ const text = await ctx.deps.llm.generateText(
 scan -> disabled（用户插件首次发现默认停用）
   -> 用户开启 -> starting -> running
   -> 用户停用 -> stopping -> disabled
-  -> 启动报错 -> failed（设置页显示错误，卡片有"重试"）
+  -> 启动报错 -> failed（插件面板显示错误，卡片有“重试”）
 ```
 
 - 所有 enable/disable/open/rescan/install/uninstall 操作走同一串行队列，不会并发重复注册
-- 设置页区分 `configuredEnabled`（用户想不想开）与 `status`（实际运行状态）
+- 插件面板区分 `configuredEnabled`（用户想不想开）与 `status`（实际运行状态）
 
 ---
 
@@ -178,4 +178,4 @@ my-plugin.zip
 
 ## 刷新与更新
 
-设置页"刷新插件"会重扫目录、清 CommonJS 模块缓存、以 cache-busting 重新导入 ESM、重新激活。改了代码不生效就点它。
+聊天窗口插件面板的“刷新插件”会重扫目录、清 CommonJS 模块缓存、以 cache-busting 重新导入 ESM、重新激活。改了代码不生效就点它。

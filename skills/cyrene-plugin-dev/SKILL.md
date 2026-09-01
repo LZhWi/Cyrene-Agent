@@ -53,7 +53,7 @@ modes:
   index.cjs
 ```
 
-manifest 必填字段：`apiVersion: 1`、`id`、`name`、`version`（严格三段式 SemVer）、`description`、`author`、`entry`。`id` 全小写连字符，它决定工具 id 前缀和安装目录名。可选字段 `icon`（裸文件名，png/jpg/webp/svg，≤2MiB）在设置页卡片左侧展示图标，不合法时静默忽略不影响加载。
+manifest 必填字段：`apiVersion: 1`、`id`、`name`、`version`（严格三段式 SemVer）、`description`、`author`、`entry`。`author` 填开发者或团队名称，会展示在聊天窗口的插件卡片中；`id` 全小写连字符，它决定工具 id 前缀和安装目录名。可选字段 `icon`（裸文件名，png/jpg/webp/svg，≤2MiB）在插件卡片左侧展示图标，不合法时静默忽略不影响加载。
 
 ### 3. 实现
 
@@ -88,13 +88,13 @@ p.register({
 - 把插件目录压成 zip：`Compress-Archive -Path <plugin-id>/* -DestinationPath <plugin-id>-<version>.zip`
 - zip 限制：≤50 MiB、≤2000 条目、解压总量 ≤200 MiB；不能有符号链接和 `..` 路径
 - 开发期也可以直接把文件复制到 `%APPDATA%\live2d-cyrene\plugins\<plugin-id>\`（与 zip 导入等价）
-- 安装后**默认停用**，需用户在 设置 → 功能插件 里打开开关
+- 安装后**默认停用**，需用户在聊天窗口的“插件”面板中手动启用
 
 ### 6. 安装后实测
 
 告诉用户验证三件事，缺一不可：
 
-1. 设置页插件状态为 `running`
+1. 聊天窗口插件卡片状态为 `running`
 2. 有弹窗的：点“打开”按钮窗口正常显示、关闭再开正常
 3. 有工具的：对话里问一个应触发工具的问题，确认 AI 调用并转述结果
 
@@ -102,9 +102,9 @@ p.register({
 
 按优先级查：
 
-1. **启用报错** → 设置页卡片会显示具体 error，对照铁律清单（九成是 id 前缀 / SemVer / deps 拼写）
+1. **启用报错** → 聊天窗口插件卡片会显示具体 error，对照铁律清单（九成是 id 前缀 / SemVer / deps 拼写）
 2. **启用成功但 AI 不用工具** → description 没写清场景，或对话上下文没触发
-3. **改了代码不生效** → 设置页点“刷新插件”（会清模块缓存）
+3. **改了代码不生效** → 聊天窗口插件面板点“刷新插件”（会清模块缓存）
 4. **弹窗白屏/报错** → 开发者工具看渲染端异常（`win.webContents.openDevTools()`）；多为 IPC 通道名拼错或 HTML 路径不对
 5. **扫描警告“缺少 manifest.json”** → 插件目录层级错了（zip 解压多套/少套了一层目录）
 

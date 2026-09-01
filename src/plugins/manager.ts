@@ -2,6 +2,11 @@ import path from "node:path";
 import { lstat, realpath, rm } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { IPC } from "../shared/ipc-channels";
+import type {
+  PluginListEntry,
+  PluginOverview,
+  PluginRuntimeStatus,
+} from "../shared/plugin-management";
 import { createContext, type PluginRuntime } from "./context";
 import {
   clearPluginModuleCache,
@@ -21,40 +26,7 @@ import type {
   PluginSource,
 } from "./types";
 
-export type PluginRuntimeStatus =
-  | "disabled"
-  | "starting"
-  | "running"
-  | "stopping"
-  | "failed";
-
-export interface PluginListEntry {
-  id: string;
-  name: string;
-  version: string;
-  description: string;
-  author: string;
-  entry: string;
-  apiVersion: number;
-  source: PluginSource;
-  path: string;
-  defaultEnabled: boolean;
-  /** Desired persisted state, distinct from whether activation succeeded. */
-  configuredEnabled: boolean;
-  /** Backward-compatible running flag. */
-  enabled: boolean;
-  status: PluginRuntimeStatus;
-  error?: string;
-  hasUnregister: boolean;
-  canOpen: boolean;
-  /** Icon as data URL when the plugin provides a valid icon file. */
-  icon?: string;
-}
-
-export interface PluginOverview {
-  plugins: PluginListEntry[];
-  issues: PluginScanIssue[];
-}
+export type { PluginListEntry, PluginOverview, PluginRuntimeStatus } from "../shared/plugin-management";
 
 export interface PluginScanRoot {
   path: string;

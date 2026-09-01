@@ -13,7 +13,7 @@ JavaScript 入口”交付，可注册工具、插件私有 IPC、渠道 adapter
 插件代码仍可直接使用 Node.js 能力，因此：
 
 - 用户插件首次发现后一律保持停用，即使 manifest 声明 `defaultEnabled: true`。
-- 设置页显示插件来源、实际路径、API 版本、运行状态和最后一次错误。
+- 聊天窗口插件面板显示开发者、版本、运行状态和最后一次错误。
 - 只有用户明确点击“启用”后，用户插件入口才会被加载。
 - 内置插件可使用 `defaultEnabled`，因为它与应用一起构建和发布。
 
@@ -36,7 +36,7 @@ userData/plugins/<plugin-id>/
 运行时始终以 Electron `app.getPath("userData")` 的实际返回值为准；如果开发者或测试显式
 覆盖了 `userData`，插件根目录也会随之变化。
 
-设置页支持直接选择 `.zip` 插件包。压缩包可以把 `manifest.json` 和入口文件放在 ZIP 根目录，
+聊天窗口的插件面板支持直接选择 `.zip` 插件包。压缩包可以把 `manifest.json` 和入口文件放在 ZIP 根目录，
 也可以统一放在唯一的顶层目录中：
 
 ```text
@@ -76,7 +76,7 @@ userData/plugin-data/<plugin-id>/
 ```
 
 扫描只读取每个根目录的一级子目录。单个无效插件、不可读目录或错误 manifest 会记录为
-扫描问题并展示在设置页，不会阻止 Cyrene 启动。重复 ID 保留先扫描到的插件；内置目录
+扫描问题并展示在聊天窗口的插件面板，不会阻止 Cyrene 启动。重复 ID 保留先扫描到的插件；内置目录
 优先于用户目录，因此用户插件不能覆盖内置插件。
 
 ## manifest.json
@@ -104,9 +104,9 @@ userData/plugin-data/<plugin-id>/
 | `name` | string | 是 | 非空显示名 |
 | `version` | string | 是 | 严格 SemVer，例如 `1.2.0`、`2.0.0-beta.1` |
 | `description` | string | 是 | 非空简介 |
-| `author` | string | 是 | 非空作者 |
+| `author` | string | 是 | 非空开发者或团队名称；展示在插件卡片中 |
 | `entry` | string | 是 | 插件目录内裸文件名；支持 `.cjs`、`.js`、`.mjs` |
-| `icon` | string | 否 | 插件目录内裸文件名；支持 `.png`、`.jpg`、`.jpeg`、`.webp`、`.svg`；≤2MiB。在设置页插件卡片左侧展示；不合法时静默忽略，不影响加载 |
+| `icon` | string | 否 | 插件目录内裸文件名；支持 `.png`、`.jpg`、`.jpeg`、`.webp`、`.svg`；≤2MiB。在聊天窗口插件卡片左侧展示；不合法时静默忽略，不影响加载 |
 | `defaultEnabled` | boolean | 否 | 缺省 true，但只对内置插件生效 |
 | `deps` | string[] | 否 | 可选 `channels`、`llm` |
 
@@ -262,7 +262,7 @@ starting --error--> failed
 failed --retry--> starting
 ```
 
-设置页区分：
+聊天窗口插件面板区分：
 
 - `configuredEnabled`：用户希望插件启用；
 - `status`：`disabled | starting | running | stopping | failed`；
@@ -276,7 +276,7 @@ state，避免每次启动重复尝试。
 
 ## 刷新、更新与模块缓存
 
-设置页“刷新插件”会：
+聊天窗口插件面板的“刷新插件”会：
 
 1. 重新扫描内置和用户目录；
 2. 停止并移除已删除插件；
@@ -290,7 +290,7 @@ state，避免每次启动重复尝试。
 
 ## 卸载用户插件
 
-设置页只对用户插件显示“卸载”。卸载事务按以下顺序执行：
+聊天窗口插件面板只允许删除用户插件。卸载事务按以下顺序执行：
 
 1. 确认目标来自用户插件扫描源；内置插件拒绝卸载；
 2. 确认目标是用户插件根目录中的一级普通目录，并通过真实路径再次验证没有越界；
@@ -355,7 +355,7 @@ npm run build
 
 1. 新用户插件出现但不会自动执行；
 2. 启用/停用后工具、IPC 和 adapter 对称增减；
-3. register 失败后设置页显示 `failed` 和具体错误；
+3. register 失败后插件面板显示 `failed` 和具体错误；
 4. 修改入口后点击刷新，运行行为切换到新版本；
 5. 用户插件点击卸载并确认后，程序目录、资源和启停记录消失，私有数据目录保留；
 6. 重复使用 `feishu` 等内置渠道 ID 时启用失败，内置渠道仍正常；

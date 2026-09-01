@@ -33,9 +33,7 @@ import { EarlyTtsPlaybackQueue } from "../tts/early-tts-queue";
 
 import type { AgentRoundRecord, ChatMessage, ChatSession, ChatSessionMeta, ConversationMode, ProcessMessageRecord, ReasoningBlock, RunActivityRecord, TaskDelegationDisplayRecord, ToolExecutionRecord } from "../../../../../shared/chat-types";
 import { isContextUsageSnapshot, type ContextUsageSnapshot } from "../../../../../shared/context-usage";
-import { ToolModePanel } from "../components/ToolModePanel";
-import { SkillModePanel } from "../components/SkillModePanel";
-import { ModelModePanel } from "../components/ModelModePanel";
+import { ChatPagePanelHost } from "../components/ChatPagePanelHost";
 import { useUserCallPreference } from "../../../hooks/useUserNickname";
 import { resolveRevisableLastTurn } from "../components/last-turn-actions";
 import { shouldListenForDeferredPlanEvents } from "./conversation-run-policy";
@@ -95,7 +93,6 @@ import "../components/ChatComposer.css";
 import "../components/ReasoningControl.css";
 import "../components/StyleControl.css";
 import "../components/PermissionControl.css";
-import "../components/ModelModePanel.css";
 import "../components/ChatMessageList.css";
 import "../components/ConversationSidebar.css";
 /**
@@ -114,9 +111,7 @@ export function ChatPage() {
   const { t } = useTranslation();
   const preferredAddress = useUserCallPreference();
   const [collapsed, setCollapsed] = useState(false);
-  const [toolPanelOpen, setToolPanelOpen] = useState(false);
-  const [skillPanelOpen, setSkillPanelOpen] = useState(false);
-  const [modelPanelOpen, setModelPanelOpen] = useState(false);
+  const [activePanel, setActivePanel] = useState<ChatPagePanel | null>(null);
   /** 右侧 Review 检查面板：打开时把白色工作区挤窄 */
   const [reviewInspector, setReviewInspector] = useState<{ runId: string; fileIndex: number } | null>(null);
   /** 右侧面板当前激活的 tab（diff / plan），由打开动作自动切换 */
@@ -1480,9 +1475,7 @@ export function ChatPage() {
       }
       return next;
     });
-    setToolPanelOpen(false);
-    setSkillPanelOpen(false);
-    setModelPanelOpen(false);
+    setActivePanel(null);
   }
 
   async function handleRenameSession(sessionId: string, newTitle: string) {
@@ -1918,9 +1911,7 @@ export function ChatPage() {
     <div className={`cy-page ${collapsed ? "is-collapsed" : ""}`}>
       <ChatPageNavigation
         collapsed={collapsed}
-        toolPanelOpen={toolPanelOpen}
-        skillPanelOpen={skillPanelOpen}
-        modelPanelOpen={modelPanelOpen}
+        activePanel={activePanel}
         mode={mode}
         sessions={sessions}
         activeSessionId={activeSessionId}
@@ -1930,14 +1921,10 @@ export function ChatPage() {
         }}
         onNewTask={() => void createNewTask()}
         onTogglePanel={(panel: ChatPagePanel) => {
-          setToolPanelOpen((value) => panel === "tool" ? !value : false);
-          setSkillPanelOpen((value) => panel === "skill" ? !value : false);
-          setModelPanelOpen((value) => panel === "model" ? !value : false);
+          setActivePanel((current) => current === panel ? null : panel);
         }}
         onSelectSession={(sessionId) => {
-          setToolPanelOpen(false);
-          setSkillPanelOpen(false);
-          setModelPanelOpen(false);
+          setActivePanel(null);
           void selectSession(sessionId);
         }}
         onOpenProject={(workspaceRoot) => {
@@ -1961,12 +1948,8 @@ export function ChatPage() {
         onDrop={handleDrop}
       >
         <FileDropOverlay visible={isDraggingFiles} />
-        {modelPanelOpen ? (
-          <ModelModePanel />
-        ) : skillPanelOpen ? (
-          <SkillModePanel />
-        ) : toolPanelOpen ? (
-          <ToolModePanel />
+        {activePanel ? (
+          <ChatPagePanelHost panel={activePanel} />
         ) : (
         <>
         {(mode === "work" || mode === "learn") && (
