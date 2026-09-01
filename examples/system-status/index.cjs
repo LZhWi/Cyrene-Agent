@@ -96,7 +96,7 @@ async function collectDisk(drive) {
 const systemStatusPlugin = {
   register(ctx) {
     ctx.registerTool({
-      id: "system_status",
+      id: "system-status_status",
       name: "系统状态查询",
       description: "查询本机系统状态，包括操作系统、CPU、内存、电池与开机时长。用户问电脑还剩多少电、内存占用、开了多久等问题时使用。",
       enabled: true,
@@ -114,7 +114,7 @@ const systemStatusPlugin = {
     });
 
     ctx.registerTool({
-      id: "disk_usage",
+      id: "system-status_disk",
       name: "磁盘占用查询",
       description: "查询磁盘空间占用情况。可选指定盘符（如 C、D、E），不指定则查询系统盘。",
       enabled: true,
@@ -149,7 +149,7 @@ const systemStatusPlugin = {
       };
     });
 
-    ctx.log("系统状态插件已注册: system_status / disk_usage");
+    ctx.log("系统状态插件已注册: system-status_status / system-status_disk");
   },
 
   async open() {
