@@ -1,9 +1,9 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginManager, type PluginManagerOptions } from "./manager";
-import type { PluginRuntime } from "./context";
+import { PLUGIN_CLEANUP_TIMEOUT_MS, type PluginRuntime } from "./context";
 import * as installer from "./installer";
 
 let tmp: string;
@@ -38,6 +38,7 @@ function fixturePlugin(id: string, manifestId: string = id): string {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   if (tmp) {
     rmSync(tmp, { recursive: true, force: true });
@@ -184,6 +185,76 @@ describe("PluginManager", () => {
     expect(h.getEnabledMap().demo).toBe(false);
   });
 
+  it("unregister 超时后仍释放框架资源并完成停用", async () => {
+    const h = harness();
+    writeFileSync(
+      path.join(tmp, "demo", "index.cjs"),
+      `module.exports = {
+        register(ctx) { ctx.registerIpc("ping", () => "pong"); },
+        unregister() { return new Promise(() => {}); }
+      };`,
+      "utf8",
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+    vi.useFakeTimers();
+
+    const disabling = mgr.setEnabled("demo", false);
+    await vi.advanceTimersByTimeAsync(PLUGIN_CLEANUP_TIMEOUT_MS);
+    const result = await disabling;
+
+    expect(result).toEqual({ ok: true });
+    expect(mgr.list()[0].enabled).toBe(false);
+    expect(h.ipc.has("plugin:demo:ping")).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      "[plugins] 插件 demo unregister 失败，继续释放框架资源",
+      expect.objectContaining({ message: expect.stringContaining("unregister 清理超时") }),
+    );
+  });
+
+  it("停用时在 unregister 前取消插件 signal", async () => {
+    const h = harness();
+    const marker = path.join(tmp, "signal-state");
+    writeFileSync(
+      path.join(tmp, "demo", "index.cjs"),
+      `const fs = require("node:fs");
+      let context;
+      module.exports = {
+        register(ctx) { context = ctx; },
+        unregister() { fs.writeFileSync(${JSON.stringify(marker)}, String(context.signal.aborted)); }
+      };`,
+      "utf8",
+    );
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+
+    await mgr.setEnabled("demo", false);
+
+    expect(readFileSync(marker, "utf8")).toBe("true");
+  });
+
+  it("setEnabled(false) 会执行插件登记的 onDispose 回调", async () => {
+    const h = harness();
+    const marker = path.join(tmp, "dispose-called");
+    writeFileSync(
+      path.join(tmp, "demo", "index.cjs"),
+      `const fs = require("node:fs");
+      module.exports = {
+        register(ctx) {
+          ctx.onDispose(() => fs.writeFileSync(${JSON.stringify(marker)}, "yes"));
+        }
+      };`,
+      "utf8",
+    );
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+
+    await mgr.setEnabled("demo", false);
+
+    expect(readFileSync(marker, "utf8")).toBe("yes");
+  });
+
   it("启动失败后保留 desired state 和错误；修复入口后可重试", async () => {
     const h = harness();
     writeFileSync(
@@ -225,12 +296,14 @@ describe("PluginManager", () => {
     writeFileSync(
       path.join(tmp, "demo", "index.cjs"),
       `const fs = require("node:fs");
+      let context;
       module.exports = {
         register(ctx) {
+          context = ctx;
           ctx.registerIpc("partial", () => "leaked");
           throw new Error("partial activation failed");
         },
-        unregister() { fs.writeFileSync(${JSON.stringify(rollbackMarker)}, "yes"); }
+        unregister() { fs.writeFileSync(${JSON.stringify(rollbackMarker)}, String(context.signal.aborted)); }
       };`,
       "utf8",
     );
@@ -239,7 +312,7 @@ describe("PluginManager", () => {
     const mgr = new PluginManager(h.options);
     await mgr.start();
 
-    expect(existsSync(rollbackMarker)).toBe(true);
+    expect(readFileSync(rollbackMarker, "utf8")).toBe("true");
     expect(h.ipc.has("plugin:demo:partial")).toBe(false);
     expect(mgr.list()[0]).toMatchObject({
       configuredEnabled: true,

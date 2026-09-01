@@ -3,6 +3,7 @@ import type { ToolDefinition } from "../main/orchestrator/tools/registry/tool-re
 import { createPluginStorage } from "./storage";
 import type {
   PluginChannelAdapter,
+  PluginCleanup,
   PluginContext,
   PluginDeps,
   PluginLlmService,
@@ -11,6 +12,30 @@ import type {
 } from "./types";
 
 const IPC_SEGMENT_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
+
+export const PLUGIN_CLEANUP_TIMEOUT_MS = 5_000;
+
+/** 等待单次第三方清理钩子；超时后抛错，让框架继续回收其余资源。 */
+export async function runPluginCleanup(
+  cleanup: () => void | Promise<void>,
+  label: string,
+): Promise<void> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  try {
+    // 保持既有语义：清理函数在调用 dispose/unregister 的当前轮同步开始执行。
+    const cleanupPromise = Promise.resolve(cleanup());
+    await Promise.race([
+      cleanupPromise,
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`${label} 清理超时（${PLUGIN_CLEANUP_TIMEOUT_MS}ms）`));
+        }, PLUGIN_CLEANUP_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  }
+}
 
 export interface PluginRuntime {
   toolRegistry: {
@@ -31,6 +56,8 @@ export interface PluginRuntime {
 }
 
 interface DisposableContext extends PluginContext {
+  /** 框架内部：在调用 plugin.unregister() 前进入停止阶段并触发取消。 */
+  beginStop(): void;
   /** 框架内部：卸载插件时统一清理已注册资源 */
   dispose(): Promise<void>;
 }
@@ -44,6 +71,12 @@ export function createContext(
   const registeredTools = new Set<string>();
   const registeredIpc = new Set<string>();
   const registeredAdapters = new Set<string>();
+  const cleanupCallbacks: PluginCleanup[] = [];
+  const abortController = new AbortController();
+  let stopping = false;
+  let disposed = false;
+  // 缓存同一次释放任务，避免异步清理让出事件循环时发生并发重入。
+  let disposePromise: Promise<void> | undefined;
 
   // deps 白名单生效：只有 manifest.deps 声明的依赖才会注入
   const deps: PluginDeps = {};
@@ -61,6 +94,16 @@ export function createContext(
 
   const ctx: PluginContext = {
     id,
+    signal: abortController.signal,
+    onDispose(cleanup: PluginCleanup) {
+      if (typeof cleanup !== "function") {
+        throw new Error("插件清理回调必须是函数");
+      }
+      if (stopping || disposed) {
+        throw new Error("插件停止后不能再注册清理回调");
+      }
+      cleanupCallbacks.push(cleanup);
+    },
     registerTool(tool: PluginTool) {
       const expectedPrefix = `${id}_`;
       if (!tool.id.startsWith(expectedPrefix)) {
@@ -134,35 +177,57 @@ export function createContext(
   };
 
   return Object.assign(ctx, {
-    async dispose() {
-      const cleanupErrors: unknown[] = [];
-      for (const toolId of registeredTools) {
-        try {
-          runtime.toolRegistry.unregister(toolId);
-        } catch (error) {
-          cleanupErrors.push(error);
-        }
+    beginStop() {
+      if (stopping || disposed) return;
+      stopping = true;
+      abortController.abort();
+    },
+    dispose() {
+      if (!disposePromise) {
+        disposePromise = (async () => {
+          if (!stopping) {
+            stopping = true;
+            abortController.abort();
+          }
+          const cleanupErrors: unknown[] = [];
+          for (const cleanup of cleanupCallbacks.splice(0).reverse()) {
+            try {
+              await runPluginCleanup(cleanup, `插件 ${id} onDispose`);
+            } catch (error) {
+              cleanupErrors.push(error);
+            }
+          }
+          for (const toolId of registeredTools) {
+            try {
+              runtime.toolRegistry.unregister(toolId);
+            } catch (error) {
+              cleanupErrors.push(error);
+            }
+          }
+          registeredTools.clear();
+          for (const channel of registeredIpc) {
+            try {
+              runtime.unregisterIpc(channel);
+            } catch (error) {
+              cleanupErrors.push(error);
+            }
+          }
+          registeredIpc.clear();
+          const adapterIds = Array.from(registeredAdapters);
+          registeredAdapters.clear();
+          const adapterResults = await Promise.allSettled(
+            adapterIds.map((adapterId) => runtime.channelManager.unregister(adapterId)),
+          );
+          for (const result of adapterResults) {
+            if (result.status === "rejected") cleanupErrors.push(result.reason);
+          }
+          disposed = true;
+          if (cleanupErrors.length > 0) {
+            console.warn(`[plugin:${id}] 清理资源时发生 ${cleanupErrors.length} 个错误`, cleanupErrors);
+          }
+        })();
       }
-      registeredTools.clear();
-      for (const channel of registeredIpc) {
-        try {
-          runtime.unregisterIpc(channel);
-        } catch (error) {
-          cleanupErrors.push(error);
-        }
-      }
-      registeredIpc.clear();
-      const adapterIds = Array.from(registeredAdapters);
-      registeredAdapters.clear();
-      const adapterResults = await Promise.allSettled(
-        adapterIds.map((adapterId) => runtime.channelManager.unregister(adapterId)),
-      );
-      for (const result of adapterResults) {
-        if (result.status === "rejected") cleanupErrors.push(result.reason);
-      }
-      if (cleanupErrors.length > 0) {
-        console.warn(`[plugin:${id}] 清理资源时发生 ${cleanupErrors.length} 个错误`, cleanupErrors);
-      }
+      return disposePromise;
     },
   });
 }

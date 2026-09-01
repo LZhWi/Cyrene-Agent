@@ -251,8 +251,25 @@ const config = ctx.storage.get("config");                        // 读
 ```
 
 - `register(ctx)`：启用时调用，报错则进入 failed
-- `unregister()`：停用/刷新/退出时调用，**必须在这里清理窗口、定时器、子进程**，且要能被重复调用而不崩
+- `unregister()`：停用/刷新/退出时调用，**必须在这里清理窗口、定时器、子进程**，且要能被重复调用而不崩；单次等待上限为 5 秒
+- `ctx.signal`：停用、刷新、卸载、退出或启动回滚时会先被取消，适合传给支持 `AbortSignal` 的后台工作
+- `ctx.onDispose(callback)`：登记兜底清理回调；框架会按登记的逆序等待执行，每个回调最多等待 5 秒，单个回调失败或超时不会阻止其他资源释放
 - 所有操作走串行队列，用户连点按钮也不会并发炸
+
+推荐让框架托管插件资源的停止时机：
+
+```js
+async register(ctx) {
+  const timer = setInterval(() => { /* background work */ }, 30_000);
+  ctx.onDispose(() => clearInterval(timer));
+
+  void runBackgroundWork({ signal: ctx.signal }).catch((error) => {
+    if (!ctx.signal.aborted) ctx.log("后台任务失败", error);
+  });
+}
+```
+
+`unregister()` 仍可用于兼容已有插件或需要显式编排的清理；不要在收到停止信号后继续注册新的清理回调。
 
 ---
 

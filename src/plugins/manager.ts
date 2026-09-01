@@ -7,7 +7,7 @@ import type {
   PluginOverview,
   PluginRuntimeStatus,
 } from "../shared/plugin-management";
-import { createContext, type PluginRuntime } from "./context";
+import { createContext, runPluginCleanup, type PluginRuntime } from "./context";
 import {
   clearPluginModuleCache,
   loadPlugin,
@@ -53,7 +53,10 @@ export interface PluginImportResult {
   overview?: PluginOverview;
 }
 
-type DisposableContext = PluginContext & { dispose(): Promise<void> };
+type DisposableContext = PluginContext & {
+  beginStop(): void;
+  dispose(): Promise<void>;
+};
 
 const ICON_MIME: Record<string, string> = {
   ".png": "image/png",
@@ -533,9 +536,10 @@ export class PluginManager {
       try {
         await plugin.register(ctx);
       } catch (error) {
+        ctx.beginStop();
         if (plugin.unregister) {
           try {
-            await plugin.unregister();
+            await runPluginCleanup(() => plugin.unregister!(), `插件 ${id} unregister`);
           } catch (cleanupError) {
             console.warn(`[plugins] 插件 ${id} 激活回滚时 unregister 失败`, cleanupError);
           }
@@ -560,10 +564,11 @@ export class PluginManager {
     const context = this.contexts.get(id);
     if (!plugin && !context) return;
     this.statuses.set(id, "stopping");
+    context?.beginStop();
     try {
       if (plugin?.unregister) {
         try {
-          await plugin.unregister();
+          await runPluginCleanup(() => plugin.unregister!(), `插件 ${id} unregister`);
         } catch (error) {
           console.warn(`[plugins] 插件 ${id} unregister 失败，继续释放框架资源`, error);
         }

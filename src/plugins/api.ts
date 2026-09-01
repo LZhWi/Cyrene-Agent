@@ -170,8 +170,14 @@ export interface PluginDeps {
   llm?: PluginLlmService;
 }
 
+export type PluginCleanup = () => void | Promise<void>;
+
 export interface PluginContext {
   id: string;
+  /** 插件停止或激活回滚开始前会先触发取消。 */
+  readonly signal: AbortSignal;
+  /** 登记插件自有资源的清理回调；回调按逆序且最多执行一次。 */
+  onDispose(cleanup: PluginCleanup): void;
   registerTool(tool: PluginTool): void;
   unregisterTool(toolId: string): void;
   /** Automatically namespaced as plugin:<id>:<channel>. */

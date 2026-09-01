@@ -1,13 +1,15 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAdapter } from "../main/channels/adapters/base";
-import { createContext, type PluginRuntime } from "./context";
+import { createContext, PLUGIN_CLEANUP_TIMEOUT_MS, type PluginRuntime } from "./context";
 
 let tmp: string;
 
 afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
   if (tmp) {
     rmSync(tmp, { recursive: true, force: true });
     tmp = "";
@@ -59,6 +61,90 @@ describe("createContext", () => {
     await ctx.dispose();
     expect(rt.tools).toEqual([]);
     expect(rt.ipc.has("plugin:demo:ping")).toBe(false);
+  });
+
+  it("停止时先取消 signal，再按逆序等待清理回调", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const ctx = createContext("demo", tmp, runtime());
+    const events: string[] = [];
+    ctx.onDispose(() => { events.push(`first:${ctx.signal.aborted}`); });
+    ctx.onDispose(async () => {
+      await Promise.resolve();
+      events.push(`second:${ctx.signal.aborted}`);
+    });
+
+    expect(ctx.signal.aborted).toBe(false);
+    ctx.beginStop();
+    expect(ctx.signal.aborted).toBe(true);
+    await ctx.dispose();
+
+    expect(events).toEqual(["second:true", "first:true"]);
+  });
+
+  it("清理回调失败不阻止其他回调和框架资源释放，重复 dispose 不会重跑", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const rt = runtime();
+    const ctx = createContext("demo", tmp, rt);
+    const events: string[] = [];
+    ctx.registerIpc("ping", () => "pong");
+    ctx.onDispose(() => { events.push("kept"); });
+    ctx.onDispose(() => { throw new Error("cleanup failed"); });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await ctx.dispose();
+    await ctx.dispose();
+
+    expect(events).toEqual(["kept"]);
+    expect(rt.ipc.has("plugin:demo:ping")).toBe(false);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("并发 dispose 共享同一个释放任务且不重复清理", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const rt = runtime();
+    const unregisterIpc = vi.spyOn(rt, "unregisterIpc");
+    const ctx = createContext("demo", tmp, rt);
+    let releaseCleanup!: () => void;
+    ctx.registerIpc("ping", () => "pong");
+    ctx.onDispose(() => new Promise<void>((resolve) => { releaseCleanup = resolve; }));
+
+    const first = ctx.dispose();
+    const second = ctx.dispose();
+
+    expect(second).toBe(first);
+    releaseCleanup();
+    await Promise.all([first, second]);
+    expect(unregisterIpc).toHaveBeenCalledOnce();
+  });
+
+  it("onDispose 超时后继续执行其余回调并释放框架资源", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const rt = runtime();
+    const ctx = createContext("demo", tmp, rt);
+    const events: string[] = [];
+    ctx.registerIpc("ping", () => "pong");
+    ctx.onDispose(() => { events.push("continued"); });
+    ctx.onDispose(() => new Promise<void>(() => {}));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers();
+
+    const disposing = ctx.dispose();
+    await vi.advanceTimersByTimeAsync(PLUGIN_CLEANUP_TIMEOUT_MS);
+    await disposing;
+
+    expect(events).toEqual(["continued"]);
+    expect(rt.ipc.has("plugin:demo:ping")).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      "[plugin:demo] 清理资源时发生 1 个错误",
+      [expect.objectContaining({ message: expect.stringContaining("onDispose 清理超时") })],
+    );
+  });
+
+  it("停止后拒绝新增清理回调", () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const ctx = createContext("demo", tmp, runtime());
+    ctx.beginStop();
+    expect(() => ctx.onDispose(() => {})).toThrow(/停止后/);
   });
 
   it("storage 可读写", () => {
