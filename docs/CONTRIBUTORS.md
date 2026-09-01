@@ -6,11 +6,12 @@
 
 ## 代码贡献
 
-### lll69
+### lll69 ([lll69](https://github.com/lll69))
 - 设置面板改进：`max_token` 开关、`thinkingOverride`、`uiThemeRadius`、GPU 渲染开关等
 - 超时配置体系：为 chat-loop、搜索等功能添加可配置超时，优化首轮响应
 - 搜索引擎集成：AnySearch 适配
 - 设置缓存机制与 UI 优化，移除不必要的 API Key 校验
+- （经其 fork 仓库的 `patch-0.9.0` 分支整理合入，未走 PR）
 
 ### Unknownuserfrommars ([Unknownuserfrommars](https://github.com/Unknownuserfrommars))
 - 修复截图辅助进程先退出时主进程崩溃的问题（PR #28，cherry-pick 进 master）
