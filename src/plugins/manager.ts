@@ -543,8 +543,8 @@ export class PluginManager {
         id,
         path.join(this.opts.storageRoot, id),
         this.opts.runtime,
-        record.manifest.deps,
         this.eventBus,
+        record.manifest.deps,
       );
       try {
         await plugin.register(ctx);

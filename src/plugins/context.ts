@@ -1,7 +1,7 @@
 import type { ChannelAdapter } from "../main/channels/adapters/base";
 import type { ToolDefinition } from "../main/orchestrator/tools/registry/tool-registry";
 import type { PluginEventBus } from "./events";
-import { createPluginEventBus, qualifyPluginEvent } from "./events";
+import { qualifyPluginEvent } from "./events";
 import { createPluginStorage } from "./storage";
 import type {
   PluginChannelAdapter,
@@ -68,8 +68,8 @@ export function createContext(
   id: string,
   storageRoot: string,
   runtime: PluginRuntime,
+  eventBus: Pick<PluginEventBus, "on" | "emit">,
   declaredDeps?: PluginManifest["deps"],
-  eventBus: Pick<PluginEventBus, "on" | "emit"> = createPluginEventBus(),
 ): DisposableContext {
   const registeredTools = new Set<string>();
   const registeredIpc = new Set<string>();
@@ -110,6 +110,9 @@ export function createContext(
     },
     events: {
       on(event, listener) {
+        if (stopping || disposed) {
+          throw new Error("插件停止后不能再订阅事件");
+        }
         // Context 同时跟踪退订函数，确保插件停用时不会遗留跨生命周期监听器。
         const unsubscribeFromBus = eventBus.on(
           event,
@@ -213,7 +216,13 @@ export function createContext(
             abortController.abort();
           }
           const cleanupErrors: unknown[] = [];
-          for (const unsubscribe of eventUnsubscribers) unsubscribe();
+          for (const unsubscribe of eventUnsubscribers) {
+            try {
+              unsubscribe();
+            } catch (error) {
+              cleanupErrors.push(error);
+            }
+          }
           eventUnsubscribers.clear();
           for (const cleanup of cleanupCallbacks.splice(0).reverse()) {
             try {

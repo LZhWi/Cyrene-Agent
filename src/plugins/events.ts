@@ -2,6 +2,29 @@ export type PluginEventBusListener = (payload: unknown) => void | Promise<void>;
 
 const EVENT_SEGMENT_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 
+export const PLUGIN_EVENT_LISTENER_TIMEOUT_MS = 5_000;
+
+/** 限制单个第三方事件监听器的执行时间，避免阻塞后续监听器或宿主停止流程。 */
+async function runEventListener(
+  listener: PluginEventBusListener,
+  payload: unknown,
+  event: string,
+): Promise<void> {
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      Promise.resolve().then(() => listener(payload)),
+      new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(() => {
+          reject(new Error(`事件监听器 ${event} 执行超时（${PLUGIN_EVENT_LISTENER_TIMEOUT_MS}ms）`));
+        }, PLUGIN_EVENT_LISTENER_TIMEOUT_MS);
+      }),
+    ]);
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  }
+}
+
 function validateQualifiedEventName(event: string): void {
   // 完整事件只开放宿主和插件两类命名空间，避免无所有者的全局事件。
   const segments = event.split(":");
@@ -51,7 +74,7 @@ export function createPluginEventBus(
       const snapshot = Array.from(listeners.get(event) ?? []);
       for (const subscription of snapshot) {
         try {
-          await subscription.listener(payload);
+          await runEventListener(subscription.listener, payload, event);
         } catch (error) {
           onListenerError(event, error);
         }

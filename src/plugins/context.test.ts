@@ -37,11 +37,18 @@ function runtime(): PluginRuntime & { tools: string[]; ipc: Map<string, unknown>
   };
 }
 
+function createTestContext(
+  rt: PluginRuntime = runtime(),
+  declaredDeps?: Parameters<typeof createContext>[4],
+) {
+  return createContext("demo", tmp, rt, createPluginEventBus(), declaredDeps);
+}
+
 describe("createContext", () => {
   it("registerIpc 自动加 plugin:<id>: 前缀", () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
     const rt = runtime();
-    const ctx = createContext("demo", tmp, rt);
+    const ctx = createTestContext(rt);
     ctx.registerIpc("ping", () => "pong");
     expect(rt.ipc.has("plugin:demo:ping")).toBe(true);
   });
@@ -49,7 +56,7 @@ describe("createContext", () => {
   it("dispose 清理已注册工具与 IPC", async () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
     const rt = runtime();
-    const ctx = createContext("demo", tmp, rt);
+    const ctx = createTestContext(rt);
     ctx.registerTool({
       id: "demo_tool",
       name: "t",
@@ -66,7 +73,7 @@ describe("createContext", () => {
 
   it("停止时先取消 signal，再按逆序等待清理回调", async () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
-    const ctx = createContext("demo", tmp, runtime());
+    const ctx = createTestContext();
     const events: string[] = [];
     ctx.onDispose(() => { events.push(`first:${ctx.signal.aborted}`); });
     ctx.onDispose(async () => {
@@ -85,7 +92,7 @@ describe("createContext", () => {
   it("清理回调失败不阻止其他回调和框架资源释放，重复 dispose 不会重跑", async () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
     const rt = runtime();
-    const ctx = createContext("demo", tmp, rt);
+    const ctx = createTestContext(rt);
     const events: string[] = [];
     ctx.registerIpc("ping", () => "pong");
     ctx.onDispose(() => { events.push("kept"); });
@@ -104,7 +111,7 @@ describe("createContext", () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
     const rt = runtime();
     const unregisterIpc = vi.spyOn(rt, "unregisterIpc");
-    const ctx = createContext("demo", tmp, rt);
+    const ctx = createTestContext(rt);
     let releaseCleanup!: () => void;
     ctx.registerIpc("ping", () => "pong");
     ctx.onDispose(() => new Promise<void>((resolve) => { releaseCleanup = resolve; }));
@@ -121,7 +128,7 @@ describe("createContext", () => {
   it("onDispose 超时后继续执行其余回调并释放框架资源", async () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
     const rt = runtime();
-    const ctx = createContext("demo", tmp, rt);
+    const ctx = createTestContext(rt);
     const events: string[] = [];
     ctx.registerIpc("ping", () => "pong");
     ctx.onDispose(() => { events.push("continued"); });
@@ -141,17 +148,18 @@ describe("createContext", () => {
     );
   });
 
-  it("停止后拒绝新增清理回调", () => {
+  it("停止后拒绝新增清理回调和事件订阅", () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
-    const ctx = createContext("demo", tmp, runtime());
+    const ctx = createTestContext();
     ctx.beginStop();
     expect(() => ctx.onDispose(() => {})).toThrow(/停止后/);
+    expect(() => ctx.events.on("host:runtime:ready", () => {})).toThrow(/停止后/);
   });
 
   it("插件事件自动命名并在 dispose 时退订", async () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
     const bus = createPluginEventBus();
-    const ctx = createContext("demo", tmp, runtime(), undefined, bus);
+    const ctx = createContext("demo", tmp, runtime(), bus);
     const received: unknown[] = [];
     ctx.events.on("host:runtime:ready", (payload) => { received.push(payload); });
     bus.on("plugin:demo:status", (payload) => { received.push(payload); });
@@ -164,16 +172,36 @@ describe("createContext", () => {
     expect(received).toEqual([{ ready: true }, { state: "ok" }]);
   });
 
+  it("事件退订失败不阻止其他清理回调", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const cleanup = vi.fn();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const ctx = createContext("demo", tmp, runtime(), {
+      on: () => () => { throw new Error("unsubscribe failed"); },
+      emit: async () => {},
+    });
+    ctx.events.on("host:runtime:ready", () => {});
+    ctx.onDispose(cleanup);
+
+    await ctx.dispose();
+
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(warn).toHaveBeenCalledWith(
+      "[plugin:demo] 清理资源时发生 1 个错误",
+      [expect.objectContaining({ message: "unsubscribe failed" })],
+    );
+  });
+
   it("storage 可读写", () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
-    const ctx = createContext("demo", tmp, runtime());
+    const ctx = createTestContext();
     ctx.storage.set("k", 1);
     expect(ctx.storage.get<number>("k")).toBe(1);
   });
 
   it("工具 id 不满足 <插件id>_ 前缀时抛错", () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
-    const ctx = createContext("demo", tmp, runtime());
+    const ctx = createTestContext();
     expect(() =>
       ctx.registerTool({
         id: "bad_tool",
@@ -190,7 +218,7 @@ describe("createContext", () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
     const rt = runtime();
     rt.toolRegistry.getById = () => ({ id: "demo_tool" } as never);
-    const ctx = createContext("demo", tmp, rt);
+    const ctx = createTestContext(rt);
     expect(() =>
       ctx.registerTool({
         id: "demo_tool",
@@ -208,16 +236,16 @@ describe("createContext", () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
     const rt = runtime();
     rt.channelManager.has = () => true;
-    const ctx = createContext("demo", tmp, rt, ["channels"]);
+    const ctx = createTestContext(rt, ["channels"]);
     const adapter = { id: "wechat" } as ChannelAdapter;
     await expect(ctx.registerChannelAdapter(adapter)).rejects.toThrow(/已被占用/);
   });
 
   it("未声明 deps 时不注入 channels；声明后注入", () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
-    const without = createContext("demo", tmp, runtime());
+    const without = createTestContext();
     expect(without.deps.channels).toBeUndefined();
-    const withDeps = createContext("demo", tmp, runtime(), ["channels"]);
+    const withDeps = createTestContext(runtime(), ["channels"]);
     expect(withDeps.deps.channels?.has("wechat")).toBe(false);
   });
 
@@ -232,10 +260,10 @@ describe("createContext", () => {
       },
     };
 
-    const without = createContext("demo", tmp, rt);
+    const without = createTestContext(rt);
     expect(without.deps.llm).toBeUndefined();
 
-    const withDeps = createContext("demo", tmp, rt, ["llm"]);
+    const withDeps = createTestContext(rt, ["llm"]);
     const result = await withDeps.deps.llm?.generateText([
       { role: "user", content: "你好" },
     ]);
@@ -275,7 +303,7 @@ describe("createContext", () => {
       send: async () => ({ ok: true }),
       getStatus: () => ({ enabled: true, phase: "running" }),
     };
-    const ctx = createContext("demo", tmp, rt, ["channels"]);
+    const ctx = createTestContext(rt, ["channels"]);
     await ctx.registerChannelAdapter(adapter);
 
     const disposing = ctx.dispose();
@@ -288,7 +316,7 @@ describe("createContext", () => {
 
   it("拒绝注销不属于当前插件的工具、IPC 和渠道", async () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
-    const ctx = createContext("demo", tmp, runtime(), ["channels"]);
+    const ctx = createTestContext(runtime(), ["channels"]);
     expect(() => ctx.unregisterTool("read_file")).toThrow(/不属于当前插件/);
     expect(() => ctx.unregisterIpc("missing")).toThrow(/不属于当前插件/);
     await expect(ctx.unregisterChannelAdapter("wechat")).rejects.toThrow(/不属于当前插件/);

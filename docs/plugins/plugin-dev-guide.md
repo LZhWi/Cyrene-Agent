@@ -266,8 +266,9 @@ await ctx.events.emit("updated", { value: 1 });
 // 完整事件名：plugin:<你的插件id>:updated
 ```
 
-`ctx.events.on()` 返回退订函数；即使不手动调用，停用或刷新插件时也会自动清理。异步监听器
-会被等待，某个监听器报错不会影响其他监听器。当前宿主内置事件为
+`ctx.events.on()` 返回退订函数；即使不手动调用，停用或刷新插件时也会自动清理，进入停止
+阶段后不能再新增订阅。异步监听器会被等待，某个监听器报错或执行超过 5 秒不会影响其他
+监听器。当前宿主内置事件为
 `host:plugins:ready` 和 `host:plugins:stopping`。
 
 ---

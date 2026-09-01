@@ -1,5 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
-import { createPluginEventBus } from "./events";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createPluginEventBus, PLUGIN_EVENT_LISTENER_TIMEOUT_MS } from "./events";
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 
 describe("PluginEventBus", () => {
   it("按订阅顺序等待监听器，并隔离单个监听器错误", async () => {
@@ -38,6 +43,24 @@ describe("PluginEventBus", () => {
 
     expect(first).toHaveBeenCalledTimes(2);
     expect(second).toHaveBeenCalledTimes(1);
+  });
+
+  it("监听器超时后记录错误并继续后续监听器", async () => {
+    vi.useFakeTimers();
+    const errors: unknown[] = [];
+    const bus = createPluginEventBus((event, error) => errors.push([event, error]));
+    const continued = vi.fn();
+    bus.on("host:plugins:stopping", () => new Promise<void>(() => {}));
+    bus.on("host:plugins:stopping", continued);
+
+    const emitting = bus.emit("host:plugins:stopping", undefined);
+    await vi.advanceTimersByTimeAsync(PLUGIN_EVENT_LISTENER_TIMEOUT_MS);
+    await emitting;
+
+    expect(continued).toHaveBeenCalledOnce();
+    expect(errors).toEqual([
+      ["host:plugins:stopping", expect.objectContaining({ message: expect.stringContaining("执行超时") })],
+    ]);
   });
 
   it("拒绝无命名空间或格式非法的事件名", async () => {
