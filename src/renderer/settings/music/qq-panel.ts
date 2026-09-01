@@ -85,9 +85,17 @@ export function initQQMusicPanel(): void {
     }
     const command = btn.dataset.qqCmd as QQCommand | undefined;
     if (!command) return;
-    void api.qqControl(command).then(() => {
+    void api.qqControl(command).then((res) => {
+      if (!res.ok) {
+        const line = statusLine();
+        if (line) line.textContent = "控制失败，请重试。";
+        return;
+      }
       // 控制后立刻回读一次，让"正在播放"跟上（切歌需要一点时间生效）。
       setTimeout(() => void refresh(api), 400);
+    }).catch(() => {
+      const line = statusLine();
+      if (line) line.textContent = "控制失败，请重试。";
     });
   });
 

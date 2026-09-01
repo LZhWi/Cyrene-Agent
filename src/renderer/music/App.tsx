@@ -193,6 +193,8 @@ export function App() {
   // 播完一次性标记（eof-reached 触发，防重复路由）；换曲时重置
   const endedRef = useRef(false);
   const lastTrackIdRef = useRef<string>("");
+  // currentTrack 也会被歌单选择预先赋值；单独记录 mpv 真正加载的曲目，不能混为一谈。
+  const loadedTrackIdRef = useRef<string>("");
 
   // 最新 state / activePlaylistId 的 ref（播完路由 effect 里读，避免闭包陷阱）
   const stateRef = useRef(state);
@@ -350,6 +352,11 @@ export function App() {
       // 事实源 = mpv eof-reached（keep-open 下播完停在结尾）；
       // paused && position >= duration - 1s 仅作 eof 事件丢失时的兜底
       const trackId = typeof mpv.track?.encryptedId === "string" ? mpv.track.encryptedId : undefined;
+      if (mpv.loaded === false) {
+        loadedTrackIdRef.current = "";
+      } else if (trackId) {
+        loadedTrackIdRef.current = trackId;
+      }
       if (trackId && trackId !== lastTrackIdRef.current) {
         lastTrackIdRef.current = trackId;
         endedRef.current = false;
@@ -629,6 +636,8 @@ export function App() {
         // 这时应当从队列开头真正加载一首歌。
         const startIndex = pickPlayStartIndex({
           hasCurrentTrack: Boolean(state.currentTrack),
+          isCurrentTrackLoaded:
+            Boolean(state.currentTrack) && loadedTrackIdRef.current === state.currentTrack?.encryptedId,
           queueLength: state.queue.length,
           queueIndex: state.queueIndex,
         });

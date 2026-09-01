@@ -44,23 +44,57 @@ describe("pickInitialPlaylist", () => {
 describe("pickPlayStartIndex", () => {
   it("刚打开播放器（无 currentTrack）→ 从队列第一首开始，而不是什么都不做", () => {
     // 这就是「能打开播放器但点播放没反应」的那个 bug
-    expect(pickPlayStartIndex({ hasCurrentTrack: false, queueLength: 8, queueIndex: -1 })).toBe(0);
+    expect(pickPlayStartIndex({
+      hasCurrentTrack: false,
+      isCurrentTrackLoaded: false,
+      queueLength: 8,
+      queueIndex: -1,
+    })).toBe(0);
   });
 
   it("已有当前曲目 → 交给正常的 toggle 路径", () => {
-    expect(pickPlayStartIndex({ hasCurrentTrack: true, queueLength: 8, queueIndex: 3 })).toBeNull();
+    expect(pickPlayStartIndex({
+      hasCurrentTrack: true,
+      isCurrentTrackLoaded: true,
+      queueLength: 8,
+      queueIndex: 3,
+    })).toBeNull();
+  });
+
+  it("只是预选了当前曲目但 mpv 尚未加载 → 真正加载所选曲目", () => {
+    expect(pickPlayStartIndex({
+      hasCurrentTrack: true,
+      isCurrentTrackLoaded: false,
+      queueLength: 8,
+      queueIndex: 3,
+    })).toBe(3);
   });
 
   it("队列为空 → 没什么可放", () => {
-    expect(pickPlayStartIndex({ hasCurrentTrack: false, queueLength: 0, queueIndex: -1 })).toBeNull();
+    expect(pickPlayStartIndex({
+      hasCurrentTrack: false,
+      isCurrentTrackLoaded: false,
+      queueLength: 0,
+      queueIndex: -1,
+    })).toBeNull();
   });
 
   it("已选中某一首但还没播 → 从那一首开始", () => {
-    expect(pickPlayStartIndex({ hasCurrentTrack: false, queueLength: 8, queueIndex: 5 })).toBe(5);
+    expect(pickPlayStartIndex({
+      hasCurrentTrack: false,
+      isCurrentTrackLoaded: false,
+      queueLength: 8,
+      queueIndex: 5,
+    })).toBe(5);
   });
 
   it("queueIndex 越界（刚换歌单）→ 退回第一首而不是崩", () => {
-    expect(pickPlayStartIndex({ hasCurrentTrack: false, queueLength: 3, queueIndex: 99 })).toBe(0);
+    expect(pickPlayStartIndex({
+      hasCurrentTrack: false,
+      isCurrentTrackLoaded: false,
+      queueLength: 3,
+      queueIndex: 99,
+    })).toBe(0);
   });
 });
 

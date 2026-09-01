@@ -78,14 +78,15 @@ describe("scanAudioFiles", () => {
     expect(truncated).toBe(false);
   });
 
-  it("超过递归深度上限的文件不会被收进来", async () => {
+  it("超过递归深度上限时截断并置 truncated", async () => {
     // MAX_DEPTH = 8；第 10 层应当扫不到
     const deep = Array.from({ length: 10 }, (_, i) => `d${i}`).join("/");
     await write(`${deep}/buried.mp3`);
     await write("shallow.mp3");
 
-    const { files } = await scanAudioFiles(root);
+    const { files, truncated } = await scanAudioFiles(root);
     expect(files.map((f) => path.basename(f))).toEqual(["shallow.mp3"]);
+    expect(truncated).toBe(true);
   });
 
   it("扩展名清单与文件选择框的 filters 一致", () => {

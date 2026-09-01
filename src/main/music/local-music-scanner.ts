@@ -37,7 +37,11 @@ export async function scanAudioFiles(root: string): Promise<ScanResult> {
   let truncated = false;
 
   async function walk(dir: string, depth: number): Promise<void> {
-    if (truncated || depth > MAX_DEPTH) return;
+    if (truncated) return;
+    if (depth > MAX_DEPTH) {
+      truncated = true;
+      return;
+    }
     let entries;
     try {
       entries = await fs.readdir(dir, { withFileTypes: true });

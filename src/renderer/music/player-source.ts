@@ -17,8 +17,8 @@ export function canOpenPlayer(opts: {
 }
 
 /**
- * 刚打开播放器、还没有 currentTrack 时，点「播放」该从队列的哪一首开始。
- * 返回 null 表示不适用（已有当前曲目，或队列是空的）。
+ * 当前选中的曲目还没有真正加载进 mpv 时，点「播放」该从队列的哪一首开始。
+ * 返回 null 表示不适用（当前曲目已经加载，或队列是空的）。
  *
  * 存在的原因：togglePlayPause 原本第一行就是 `if (!state.currentTrack) return;`，
  * 于是新打开的播放器点播放毫无反应——mpv 里根本没加载任何文件，
@@ -27,10 +27,11 @@ export function canOpenPlayer(opts: {
  */
 export function pickPlayStartIndex(opts: {
   hasCurrentTrack: boolean;
+  isCurrentTrackLoaded: boolean;
   queueLength: number;
   queueIndex: number;
 }): number | null {
-  if (opts.hasCurrentTrack) return null; // 正常 toggle 路径
+  if (opts.hasCurrentTrack && opts.isCurrentTrackLoaded) return null; // 正常 toggle 路径
   if (opts.queueLength === 0) return null;
   // queueIndex 可能是 -1（从没选过）或越界（歌单刚换）→ 退回第一首
   return opts.queueIndex >= 0 && opts.queueIndex < opts.queueLength ? opts.queueIndex : 0;

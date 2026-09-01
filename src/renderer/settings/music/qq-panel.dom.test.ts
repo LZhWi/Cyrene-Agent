@@ -73,6 +73,21 @@ describe("QQ 卡片接线", () => {
     expect(a.qqControl).toHaveBeenCalledWith("next");
   });
 
+  it("控制返回失败时显示错误，而不是假装成功后刷新", async () => {
+    const a = api({
+      qqControl: vi.fn(async () => ({ ok: false, errorCode: "E_QQ_CONTROL_FAILED" })),
+    });
+    getMusicApiMock.mockReturnValue(a);
+    initQQMusicPanel();
+    await flush();
+
+    (document.querySelector('[data-qq-cmd="next"]') as HTMLElement).click();
+    await flush();
+
+    expect(document.getElementById("qq-status-line")!.textContent).toContain("控制失败");
+    expect(a.qqDetect).toHaveBeenCalledTimes(1);
+  });
+
   it("不可控制时隐藏控制按钮", async () => {
     const a = api({
       qqDetect: vi.fn(async () => ({
