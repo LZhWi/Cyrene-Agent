@@ -8,6 +8,7 @@ import { createContext, type PluginRuntime } from "./context";
 let tmp: string;
 
 afterEach(() => {
+  vi.restoreAllMocks();
   if (tmp) {
     rmSync(tmp, { recursive: true, force: true });
     tmp = "";
@@ -95,6 +96,24 @@ describe("createContext", () => {
     expect(events).toEqual(["kept"]);
     expect(rt.ipc.has("plugin:demo:ping")).toBe(false);
     expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("并发 dispose 共享同一个释放任务且不重复清理", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const rt = runtime();
+    const unregisterIpc = vi.spyOn(rt, "unregisterIpc");
+    const ctx = createContext("demo", tmp, rt);
+    let releaseCleanup!: () => void;
+    ctx.registerIpc("ping", () => "pong");
+    ctx.onDispose(() => new Promise<void>((resolve) => { releaseCleanup = resolve; }));
+
+    const first = ctx.dispose();
+    const second = ctx.dispose();
+
+    expect(second).toBe(first);
+    releaseCleanup();
+    await Promise.all([first, second]);
+    expect(unregisterIpc).toHaveBeenCalledOnce();
   });
 
   it("停止后拒绝新增清理回调", () => {

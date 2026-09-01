@@ -174,9 +174,9 @@ export type PluginCleanup = () => void | Promise<void>;
 
 export interface PluginContext {
   id: string;
-  /** Aborted before plugin shutdown or activation rollback begins. */
+  /** 插件停止或激活回滚开始前会先触发取消。 */
   readonly signal: AbortSignal;
-  /** Register plugin-owned cleanup. Callbacks run once in reverse order. */
+  /** 登记插件自有资源的清理回调；回调按逆序且最多执行一次。 */
   onDispose(cleanup: PluginCleanup): void;
   registerTool(tool: PluginTool): void;
   unregisterTool(toolId: string): void;

@@ -205,6 +205,27 @@ describe("PluginManager", () => {
     expect(readFileSync(marker, "utf8")).toBe("true");
   });
 
+  it("setEnabled(false) 会执行插件登记的 onDispose 回调", async () => {
+    const h = harness();
+    const marker = path.join(tmp, "dispose-called");
+    writeFileSync(
+      path.join(tmp, "demo", "index.cjs"),
+      `const fs = require("node:fs");
+      module.exports = {
+        register(ctx) {
+          ctx.onDispose(() => fs.writeFileSync(${JSON.stringify(marker)}, "yes"));
+        }
+      };`,
+      "utf8",
+    );
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+
+    await mgr.setEnabled("demo", false);
+
+    expect(readFileSync(marker, "utf8")).toBe("yes");
+  });
+
   it("启动失败后保留 desired state 和错误；修复入口后可重试", async () => {
     const h = harness();
     writeFileSync(
