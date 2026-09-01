@@ -1,5 +1,6 @@
 import path from "node:path";
 import { lstat, realpath, rm } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { IPC } from "../shared/ipc-channels";
 import { createContext, type PluginRuntime } from "./context";
 import {
@@ -46,6 +47,8 @@ export interface PluginListEntry {
   error?: string;
   hasUnregister: boolean;
   canOpen: boolean;
+  /** Icon as data URL when the plugin provides a valid icon file. */
+  icon?: string;
 }
 
 export interface PluginOverview {
@@ -79,6 +82,29 @@ export interface PluginImportResult {
 }
 
 type DisposableContext = PluginContext & { dispose(): Promise<void> };
+
+const ICON_MIME: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+};
+
+/** 读取插件图标为 data URL；manifest 未声明或读取失败返回 undefined。 */
+function readIconDataUrl(record: PluginRecord): string | undefined {
+  const icon = record.manifest.icon;
+  if (!icon) return undefined;
+  try {
+    const ext = path.extname(icon).toLowerCase();
+    const mime = ICON_MIME[ext];
+    if (!mime) return undefined;
+    const buf = readFileSync(path.join(record.dir, icon));
+    return `data:${mime};base64,${buf.toString("base64")}`;
+  } catch {
+    return undefined;
+  }
+}
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -123,6 +149,7 @@ export class PluginManager {
           error: this.errors.get(id),
           hasUnregister: typeof plugin?.unregister === "function",
           canOpen: typeof plugin?.open === "function",
+          icon: readIconDataUrl(record),
         };
       })
       .sort((a, b) => {

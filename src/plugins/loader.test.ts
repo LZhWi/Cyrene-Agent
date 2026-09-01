@@ -90,6 +90,36 @@ describe("readManifest", () => {
     expect(readManifest(badApi)).toBeNull();
     expect(readManifest(badVersion)).toBeNull();
   });
+
+  it("icon 字段：合法时保留，非法或缺失时静默忽略", () => {
+    const ok = fixture("icon-ok", {
+      "manifest.json": JSON.stringify({ ...validManifest, icon: "logo.png" }),
+      "index.cjs": "module.exports = {};",
+      "logo.png": "fake-png-bytes",
+    });
+    expect(readManifest(ok)?.icon).toBe("logo.png");
+
+    const missing = fixture("icon-missing", {
+      "manifest.json": JSON.stringify({ ...validManifest, icon: "logo.png" }),
+      "index.cjs": "module.exports = {};",
+    });
+    expect(readManifest(missing)?.icon).toBeUndefined();
+
+    const badExt = fixture("icon-bad-ext", {
+      "manifest.json": JSON.stringify({ ...validManifest, icon: "logo.exe" }),
+      "index.cjs": "module.exports = {};",
+      "logo.exe": "x",
+    });
+    expect(readManifest(badExt)?.icon).toBeUndefined();
+
+    const traversal = fixture("icon-traversal", {
+      "manifest.json": JSON.stringify({ ...validManifest, icon: "../logo.png" }),
+      "index.cjs": "module.exports = {};",
+    });
+    const manifest = readManifest(traversal);
+    expect(manifest).not.toBeNull();
+    expect(manifest?.icon).toBeUndefined();
+  });
 });
 
 describe("scanPluginDir", () => {

@@ -27,6 +27,7 @@
 | `description` | string | 是 | 非空简介 |
 | `author` | string | 是 | 非空作者 |
 | `entry` | string | 是 | 插件目录内裸文件名；支持 `.cjs`、`.js`、`.mjs`；不能含子目录或 `..` |
+| `icon` | string | 否 | 插件目录内裸文件名；支持 `.png`/`.jpg`/`.jpeg`/`.webp`/`.svg`；≤2MiB；设置页卡片左侧展示；不合法时静默忽略，不影响加载 |
 | `defaultEnabled` | boolean | 否 | 缺省 true，**只对内置插件生效**；用户插件首次发现一律停用 |
 | `deps` | string[] | 否 | 可选值仅 `channels`、`llm`；未知值（含拼写错误）会让整个 manifest 失败 |
 

@@ -17,6 +17,8 @@ const ID_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const SEMVER_RE = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*)(?:\.(?:0|[1-9]\d*|\d*[a-zA-Z-][0-9a-zA-Z-]*))*))?(?:\+([0-9a-zA-Z-]+(?:\.[0-9a-zA-Z-]+)*))?$/;
 const DEPS_ALLOWED = new Set(["channels", "llm"]);
 const ENTRY_EXTENSIONS = new Set([".cjs", ".js", ".mjs"]);
+const ICON_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".svg"]);
+const ICON_MAX_BYTES = 2 * 1024 * 1024;
 let esmImportGeneration = 0;
 
 export interface PluginScanIssue {
@@ -34,6 +36,34 @@ export interface ManifestInspection {
 
 function asErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 图标是纯装饰字段：声明了但不合法（非裸文件名 / 扩展名不支持 / 文件缺失 /
+ * 链接指向目录外 / 超过 2MiB）时静默忽略，不让整个插件加载失败。
+ */
+function resolveIcon(dir: string, icon: unknown): string | undefined {
+  if (icon === undefined || icon === null || icon === "") return undefined;
+  if (typeof icon !== "string") return undefined;
+  if (path.basename(icon) !== icon) return undefined;
+  if (!ICON_EXTENSIONS.has(path.extname(icon).toLowerCase())) return undefined;
+  const iconPath = path.join(dir, icon);
+  let stat: ReturnType<typeof statSync>;
+  try {
+    stat = statSync(iconPath);
+  } catch {
+    return undefined;
+  }
+  if (!stat.isFile() || stat.size > ICON_MAX_BYTES) return undefined;
+  try {
+    const realDir = realpathSync(dir);
+    const realIcon = realpathSync(iconPath);
+    const relative = path.relative(realDir, realIcon);
+    if (relative.startsWith("..") || path.isAbsolute(relative)) return undefined;
+  } catch {
+    return undefined;
+  }
+  return icon;
 }
 
 export function inspectPluginDir(dir: string): ManifestInspection {
@@ -96,6 +126,7 @@ export function inspectPluginDir(dir: string): ManifestInspection {
       description: raw.description.trim(),
       author: raw.author.trim(),
       entry: raw.entry,
+      icon: resolveIcon(dir, raw.icon),
       defaultEnabled: raw.defaultEnabled !== false,
       deps,
     };

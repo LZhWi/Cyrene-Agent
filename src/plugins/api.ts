@@ -22,6 +22,8 @@ export interface PluginManifest {
   author: string;
   /** Bare file name inside the plugin directory. */
   entry: string;
+  /** Optional bare icon file name inside the plugin directory (png/jpg/webp/svg). */
+  icon?: string;
   /** Honored only for bundled plugins. User plugins always require opt-in. */
   defaultEnabled: boolean;
   /** Host services requested from Cyrene. This is not a security sandbox. */

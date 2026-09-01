@@ -24,6 +24,8 @@ export interface FeaturePluginListEntry {
   error?: string;
   hasUnregister: boolean;
   canOpen: boolean;
+  /** Icon as data URL when the plugin provides one. */
+  icon?: string;
 }
 
 export interface FeaturePluginScanIssue {
@@ -178,6 +180,15 @@ export async function renderFeaturePlugins(
   for (const item of overview.plugins) {
     const row = document.createElement("div");
     row.className = "setting-row";
+
+    let icon: HTMLImageElement | null = null;
+    if (item.icon) {
+      icon = document.createElement("img");
+      icon.src = item.icon;
+      icon.alt = "";
+      icon.className = "plugin-icon";
+    }
+
     const info = document.createElement("div");
     const name = document.createElement("strong");
     name.textContent = `${item.name} v${item.version} · ${statusText(item)}`;
@@ -298,7 +309,8 @@ export async function renderFeaturePlugins(
       });
       actions.appendChild(uninstall);
     }
-    row.append(info, actions);
+    if (icon) row.append(icon, info, actions);
+    else row.append(info, actions);
     list.appendChild(row);
   }
 }

@@ -106,6 +106,7 @@ userData/plugin-data/<plugin-id>/
 | `description` | string | 是 | 非空简介 |
 | `author` | string | 是 | 非空作者 |
 | `entry` | string | 是 | 插件目录内裸文件名；支持 `.cjs`、`.js`、`.mjs` |
+| `icon` | string | 否 | 插件目录内裸文件名；支持 `.png`、`.jpg`、`.jpeg`、`.webp`、`.svg`；≤2MiB。在设置页插件卡片左侧展示；不合法时静默忽略，不影响加载 |
 | `defaultEnabled` | boolean | 否 | 缺省 true，但只对内置插件生效 |
 | `deps` | string[] | 否 | 可选 `channels`、`llm` |
 

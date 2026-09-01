@@ -1859,6 +1859,18 @@ body {
   align-items: center;
   gap: 10px;
 }
+#feature-plugins-list .setting-row {
+  align-items: flex-start;
+}
+.plugin-icon {
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  object-fit: cover;
+  display: block;
+  margin-top: 2px;
+}
 .plugin-list {
   display: grid;
   gap: 12px;
