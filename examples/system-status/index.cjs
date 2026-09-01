@@ -3,6 +3,9 @@
 const os = require("node:os");
 const { execFile } = require("node:child_process");
 
+/** 插件自己的状态窗口实例；open() 时创建，unregister() 时关闭 */
+let pluginWin = null;
+
 /** @returns {Promise<{ok: boolean, stdout?: string, stderr?: string}>} */
 function runCommand(cmd, args) {
   return new Promise((resolve) => {
@@ -130,7 +133,93 @@ const systemStatusPlugin = {
       },
     });
 
+    ctx.registerIpc("snapshot", async () => {
+      const lines = await collectStatus();
+      const osMod = require("node:os");
+      const totalMem = osMod.totalmem();
+      const usedMem = totalMem - osMod.freemem();
+      const disk = await diskUsage("C");
+      return {
+        memory: `${formatBytes(usedMem)} / ${formatBytes(totalMem)}`,
+        memoryPercent: Math.round((usedMem / totalMem) * 100),
+        disk: disk ? `已用 ${formatBytes(disk.used)} / ${formatBytes(disk.total)}` : "无法读取",
+        diskPercent: disk ? Math.round((disk.used / disk.total) * 100) : 0,
+        cpu: `${osMod.cpus()[0] ? osMod.cpus()[0].model.trim() : "未知"} · ${osMod.cpus().length} 核`,
+        uptime: formatUptime(osMod.uptime()),
+      };
+    });
+
     ctx.log("系统状态插件已注册: system_status / disk_usage");
+  },
+
+  async open() {
+    if (pluginWin && !pluginWin.isDestroyed()) {
+      pluginWin.focus();
+      return;
+    }
+    const { BrowserWindow } = require("electron");
+    const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>系统状态</title>
+<style>
+  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #1e1e2e; color: #cdd6f4;
+         margin: 0; padding: 24px; user-select: none; }
+  h1 { font-size: 16px; margin: 0 0 16px; color: #f5c2e7; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .card { background: #313244; border-radius: 12px; padding: 14px 16px; }
+  .card .label { font-size: 12px; opacity: 0.7; margin-bottom: 6px; }
+  .card .value { font-size: 18px; font-weight: 600; }
+  .bar { height: 8px; border-radius: 4px; background: #45475a; margin-top: 8px; overflow: hidden; }
+  .bar .fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #f5c2e7, #cba6f7); }
+  #hint { margin-top: 16px; font-size: 12px; opacity: 0.5; }
+</style>
+</head>
+<body>
+  <h1>本机系统状态</h1>
+  <div class="grid">
+    <div class="card"><div class="label">内存</div><div class="value" id="mem">读取中…</div><div class="bar"><div class="fill" id="memBar"></div></div></div>
+    <div class="card"><div class="label">系统盘</div><div class="value" id="disk">读取中…</div><div class="bar"><div class="fill" id="diskBar"></div></div></div>
+    <div class="card"><div class="label">CPU</div><div class="value" id="cpu">读取中…</div></div>
+    <div class="card"><div class="label">已运行</div><div class="value" id="uptime">读取中…</div></div>
+  </div>
+  <div id="hint">数据每 3 秒刷新一次 · 来自系统状态插件</div>
+<script>
+  const { ipcRenderer } = require("electron");
+  async function refresh() {
+    try {
+      const s = await ipcRenderer.invoke("plugin:system-status:snapshot");
+      mem.textContent = s.memory;
+      memBar.style.width = s.memoryPercent + "%";
+      disk.textContent = s.disk;
+      diskBar.style.width = s.diskPercent + "%";
+      cpu.textContent = s.cpu;
+      uptime.textContent = s.uptime;
+    } catch (e) { /* 忽略单次失败 */ }
+  }
+  refresh();
+  setInterval(refresh, 3000);
+</script>
+</body>
+</html>`;
+    pluginWin = new BrowserWindow({
+      width: 480,
+      height: 360,
+      title: "系统状态",
+      resizable: true,
+      autoHideMenuBar: true,
+      webPreferences: {
+        nodeIntegration: true,
+        contextIsolation: false,
+      },
+    });
+    pluginWin.on("closed", () => { pluginWin = null; });
+    await pluginWin.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+  },
+
+  unregister() {
+    if (pluginWin && !pluginWin.isDestroyed()) pluginWin.close();
   },
 };
 
