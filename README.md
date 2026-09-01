@@ -726,7 +726,7 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
 - **贡献者名单**：详见 [docs/CONTRIBUTORS.md](./docs/CONTRIBUTORS.md)
 
 <a href="https://github.com/Playa-0v0/Cyrene-Agent/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=Playa-0v0/Cyrene-Agent&columns=10" alt="贡献者头像（实时更新，按 GitHub 提交数排序）" width="600">
+  <img src="https://contrib.rocks/image?repo=Playa-0v0/Cyrene-Agent&columns=10" alt="贡献者头像（实时更新，按 GitHub 提交数排序）" width="480">
 </a>
 
 特别感谢模型原作者慷慨授权本项目使用、修改并再分发其作品。
