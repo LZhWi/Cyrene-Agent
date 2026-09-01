@@ -1,4 +1,4 @@
-import { app } from "electron";
+import { app, dialog } from "electron";
 import path from "node:path";
 import { channelManager } from "./channels/manager";
 import type { ChannelId } from "./channels/types";
@@ -49,6 +49,27 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
     },
     loadEnabledMap: () => loadGeneralSettings().plugins,
     saveEnabledMap: (plugins) => saveGeneralSettings({ plugins }),
+    selectPluginZip: async () => {
+      const result = await dialog.showOpenDialog({
+        title: "导入 Cyrene 插件",
+        properties: ["openFile"],
+        filters: [{ name: "Cyrene 插件包", extensions: ["zip"] }],
+      });
+      return result.canceled ? undefined : result.filePaths[0];
+    },
+    confirmPluginReplace: async (plugin) => {
+      const result = await dialog.showMessageBox({
+        type: "warning",
+        title: "替换已有插件",
+        message: `用户插件 ${plugin.name}（${plugin.id}）已经存在。`,
+        detail: `是否用 ZIP 中的 ${plugin.version} 版本替换现有程序？插件私有数据将保留。`,
+        buttons: ["取消", "替换"],
+        defaultId: 0,
+        cancelId: 0,
+        noLink: true,
+      });
+      return result.response === 1;
+    },
   });
   await manager.start();
   return manager;

@@ -8,6 +8,11 @@ import {
   scanPluginDir,
   type PluginScanIssue,
 } from "./loader";
+import {
+  commitPreparedPlugin,
+  discardPreparedPlugin,
+  preparePluginZip,
+} from "./installer";
 import type {
   CyrenePlugin,
   PluginContext,
@@ -60,7 +65,17 @@ export interface PluginManagerOptions {
   runtime: PluginRuntime;
   loadEnabledMap: () => Record<string, boolean>;
   saveEnabledMap: (map: Record<string, boolean>) => void;
+  selectPluginZip?: () => Promise<string | undefined>;
+  confirmPluginReplace?: (plugin: { id: string; name: string; version: string }) => Promise<boolean>;
   onListChanged?: () => void;
+}
+
+export interface PluginImportResult {
+  ok: boolean;
+  canceled?: boolean;
+  error?: string;
+  plugin?: { id: string; name: string; version: string };
+  overview?: PluginOverview;
 }
 
 type DisposableContext = PluginContext & { dispose(): Promise<void> };
@@ -144,6 +159,12 @@ export class PluginManager {
         return this.open(id);
       });
       this.opts.runtime.registerIpc(IPC.PLUGINS_RESCAN, () => this.rescan());
+      this.opts.runtime.registerIpc(IPC.PLUGINS_IMPORT_ZIP, async () => {
+        if (!this.opts.selectPluginZip) return { ok: false, error: "当前环境不支持选择 ZIP 文件" };
+        const zipPath = await this.opts.selectPluginZip();
+        if (!zipPath) return { ok: false, canceled: true };
+        return this.installZip(zipPath);
+      });
       this.opts.runtime.registerIpc(IPC.PLUGINS_UNINSTALL, (id: unknown) => {
         if (typeof id !== "string" || !id) {
           return { ok: false, error: "id 必须是非空字符串" };
@@ -219,6 +240,72 @@ export class PluginManager {
     });
   }
 
+  installZip(zipPath: string): Promise<PluginImportResult> {
+    return this.enqueueOperation(async () => {
+      const userRoot = this.opts.scanRoots.find((root) => root.source === "user")?.path;
+      if (!userRoot) return { ok: false, error: "未配置用户插件目录" };
+
+      let prepared;
+      try {
+        prepared = await preparePluginZip(zipPath, userRoot);
+      } catch (error) {
+        return { ok: false, error: `插件包校验失败: ${errorMessage(error)}` };
+      }
+
+      const plugin = {
+        id: prepared.manifest.id,
+        name: prepared.manifest.name,
+        version: prepared.manifest.version,
+      };
+      const existingRecord = this.records.get(plugin.id);
+      if (existingRecord?.source === "builtin") {
+        await discardPreparedPlugin(prepared);
+        return { ok: false, error: `不能用用户插件覆盖内置插件: ${plugin.id}` };
+      }
+
+      const destination = path.join(userRoot, plugin.id);
+      const replacing = await lstat(destination).then(() => true, () => false);
+      if (replacing) {
+        let confirmed = false;
+        try {
+          confirmed = await this.opts.confirmPluginReplace?.(plugin) ?? false;
+        } catch (error) {
+          await discardPreparedPlugin(prepared);
+          return { ok: false, error: `无法确认是否替换插件: ${errorMessage(error)}` };
+        }
+        if (!confirmed) {
+          await discardPreparedPlugin(prepared);
+          return { ok: false, canceled: true, plugin };
+        }
+      }
+
+      if (existingRecord?.source === "user") await this.deactivate(plugin.id);
+      if (!existingRecord) {
+        const nextEnabledMap = { ...this.enabledMap };
+        delete nextEnabledMap[plugin.id];
+        try {
+          this.opts.saveEnabledMap(nextEnabledMap);
+          this.enabledMap = nextEnabledMap;
+        } catch (error) {
+          await discardPreparedPlugin(prepared);
+          return { ok: false, error: `初始化插件停用状态失败，未安装: ${errorMessage(error)}` };
+        }
+      }
+
+      try {
+        await commitPreparedPlugin(prepared, userRoot, replacing);
+      } catch (error) {
+        await this.doRescan(false);
+        this.opts.onListChanged?.();
+        return { ok: false, error: `安装插件失败: ${errorMessage(error)}` };
+      }
+
+      await this.doRescan(false);
+      this.opts.onListChanged?.();
+      return { ok: true, plugin, overview: this.overview() };
+    });
+  }
+
   uninstall(id: string): Promise<{ ok: boolean; error?: string; overview?: PluginOverview }> {
     return this.enqueueOperation(async () => {
       const record = this.records.get(id);
@@ -279,6 +366,7 @@ export class PluginManager {
         IPC.PLUGINS_SET_ENABLED,
         IPC.PLUGINS_OPEN,
         IPC.PLUGINS_RESCAN,
+        IPC.PLUGINS_IMPORT_ZIP,
         IPC.PLUGINS_UNINSTALL,
       ]) {
         try {

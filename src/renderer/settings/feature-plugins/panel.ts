@@ -1,4 +1,4 @@
-import { featurePluginsList, featurePluginsRescan } from "./dom";
+import { featurePluginsImport, featurePluginsList, featurePluginsRescan } from "./dom";
 
 export type FeaturePluginRuntimeStatus =
   | "disabled"
@@ -43,7 +43,40 @@ export interface FeaturePluginsApi {
   setEnabled(id: string, enabled: boolean): Promise<{ ok: boolean; error?: string }>;
   open(id: string): Promise<{ ok: boolean; error?: string }>;
   rescan(): Promise<FeaturePluginOverview>;
+  importZip(): Promise<{
+    ok: boolean;
+    canceled?: boolean;
+    error?: string;
+    plugin?: { id: string; name: string; version: string };
+    overview?: FeaturePluginOverview;
+  }>;
   uninstall(id: string): Promise<{ ok: boolean; error?: string; overview?: FeaturePluginOverview }>;
+}
+
+function bindImport(
+  api: FeaturePluginsApi,
+  list: HTMLElement,
+  button: HTMLButtonElement | null,
+): void {
+  if (!button || button.dataset.bound === "true") return;
+  button.dataset.bound = "true";
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    button.textContent = "导入中…";
+    try {
+      const result = await api.importZip();
+      if (!result.ok && !result.canceled) {
+        appendTransientError(list, `导入失败：${result.error ?? "未知错误"}`);
+        return;
+      }
+      if (result.ok) await renderFeaturePlugins(api, list);
+    } catch (error) {
+      appendTransientError(list, `导入失败：${error instanceof Error ? error.message : String(error)}`);
+    } finally {
+      button.disabled = false;
+      button.textContent = "导入 ZIP";
+    }
+  });
 }
 
 declare global {
@@ -120,9 +153,11 @@ export async function renderFeaturePlugins(
   api: FeaturePluginsApi | undefined = window.plugins,
   list: HTMLElement | null = featurePluginsList,
   rescanButton: HTMLButtonElement | null = featurePluginsRescan,
+  importButton: HTMLButtonElement | null = featurePluginsImport,
 ): Promise<void> {
   if (!list || !api) return;
   bindRescan(api, list, rescanButton);
+  bindImport(api, list, importButton);
   let overview: FeaturePluginOverview;
   try {
     overview = normalizeOverview(await api.list());
@@ -139,7 +174,7 @@ export async function renderFeaturePlugins(
   if (overview.plugins.length === 0) {
     const empty = document.createElement("div");
     empty.className = "settings-empty";
-    empty.textContent = "暂无插件：把插件目录放进 userData/plugins/ 后点击“刷新插件”";
+    empty.textContent = "暂无插件：可导入 ZIP，或把插件目录放进 userData/plugins/ 后点击“刷新插件”";
     list.appendChild(empty);
     return;
   }

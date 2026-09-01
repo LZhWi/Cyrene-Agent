@@ -36,6 +36,31 @@ userData/plugins/<plugin-id>/
 运行时始终以 Electron `app.getPath("userData")` 的实际返回值为准；如果开发者或测试显式
 覆盖了 `userData`，插件根目录也会随之变化。
 
+设置页支持直接选择 `.zip` 插件包。压缩包可以把 `manifest.json` 和入口文件放在 ZIP 根目录，
+也可以统一放在唯一的顶层目录中：
+
+```text
+my-plugin.zip
+└── my-plugin/
+    ├── manifest.json
+    └── index.cjs
+```
+
+导入流程不会直接在正式插件目录中解压，而是：
+
+1. 在 `userData/plugin-install-staging/` 创建随机临时目录；
+2. 逐条检查 ZIP 路径、加密标志、符号链接、数量和解压尺寸；
+3. 解压后再次遍历文件类型并按正常插件规则校验 manifest 与入口；
+4. 以 manifest 的 `id` 作为最终目录名，使用同卷 rename 提交；
+5. 新插件清除可能残留的启用记录，重扫后保持停用；
+6. 替换已有用户插件前显示确认，先备份旧目录，提交失败时恢复；
+7. 安装完成后自动重扫，插件私有数据目录不会被替换。
+
+当前限制为：ZIP 文件最多 50 MiB、最多 2000 个条目、单文件解压后最多 50 MiB、总解压量
+最多 200 MiB，异常压缩比会被拒绝。加密 ZIP、绝对路径、`..` 路径、符号链接、Windows
+保留路径和大小写冲突路径也会被拒绝。这些检查用于降低路径穿越和 ZIP bomb 风险，但插件代码
+本身仍属于可信本地原生代码，导入校验不等同于运行时沙箱。
+
 内置插件：
 
 ```text
@@ -245,7 +270,7 @@ failed --retry--> starting
 因此“配置为启用但 register 失败”不会伪装成普通停用。用户可以重试，也可以关闭 desired
 state，避免每次启动重复尝试。
 
-所有 enable、disable、open、rescan、uninstall、stop 操作经过同一生命周期队列串行执行，
+所有 enable、disable、open、rescan、install、uninstall、stop 操作经过同一生命周期队列串行执行，
 避免并发点击或多个 renderer 请求造成重复注册和 context 泄漏。
 
 ## 刷新、更新与模块缓存
@@ -334,5 +359,7 @@ npm run build
 5. 用户插件点击卸载并确认后，程序目录、资源和启停记录消失，私有数据目录保留；
 6. 重复使用 `feishu` 等内置渠道 ID 时启用失败，内置渠道仍正常；
 7. 退出时异步 `unregister()` 在退出协调器内完成，并严格早于内置 Channels 关闭。
+8. 从 ZIP 导入新插件后保持停用；替换已有插件必须确认且保留 `plugin-data`；
+9. 路径穿越、符号链接、异常尺寸和大小写冲突 ZIP 被拒绝，临时目录被清理。
 
 仓库内 `src/plugins/demo/` 是默认停用的最小内置示例。

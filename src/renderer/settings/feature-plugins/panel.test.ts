@@ -25,6 +25,7 @@ describe("feature plugin settings panel", () => {
   beforeEach(() => {
     document.body.innerHTML = [
       '<button id="feature-plugins-rescan"></button>',
+      '<button id="feature-plugins-import"></button>',
       '<div id="feature-plugins-list"></div>',
     ].join("");
     vi.resetModules();
@@ -37,6 +38,7 @@ describe("feature plugin settings panel", () => {
       setEnabled: vi.fn(async () => ({ ok: true })),
       open,
       rescan: vi.fn(async () => ({ plugins: [runningPlugin()], issues: [] })),
+      importZip: vi.fn(async () => ({ ok: false, canceled: true })),
       uninstall: vi.fn(async () => ({ ok: true })),
     };
     const { renderFeaturePlugins } = await import("./panel");
@@ -70,6 +72,7 @@ describe("feature plugin settings panel", () => {
       setEnabled: vi.fn(async () => ({ ok: false, error: "still broken" })),
       open: vi.fn(async () => ({ ok: true })),
       rescan: vi.fn(async () => ({ plugins: [], issues: [] })),
+      importZip: vi.fn(async () => ({ ok: false, canceled: true })),
       uninstall: vi.fn(async () => ({ ok: true })),
     };
     const { renderFeaturePlugins } = await import("./panel");
@@ -86,6 +89,7 @@ describe("feature plugin settings panel", () => {
       setEnabled: vi.fn(async () => ({ ok: true })),
       open: vi.fn(async () => ({ ok: true })),
       rescan: vi.fn(async () => ({ plugins: [runningPlugin()], issues: [] })),
+      importZip: vi.fn(async () => ({ ok: false, canceled: true })),
       uninstall: vi.fn(async () => ({ ok: true })),
     };
     const { renderFeaturePlugins } = await import("./panel");
@@ -94,12 +98,37 @@ describe("feature plugin settings panel", () => {
     await vi.waitFor(() => expect(api.rescan).toHaveBeenCalledTimes(1));
   });
 
+  it("imports a ZIP and refreshes the plugin list", async () => {
+    const importZip = vi.fn(async () => ({
+      ok: true,
+      plugin: { id: "example", name: "Example", version: "0.1.0" },
+    }));
+    const api = {
+      list: vi.fn()
+        .mockResolvedValueOnce({ plugins: [], issues: [] })
+        .mockResolvedValueOnce({ plugins: [runningPlugin()], issues: [] }),
+      setEnabled: vi.fn(async () => ({ ok: true })),
+      open: vi.fn(async () => ({ ok: true })),
+      rescan: vi.fn(async () => ({ plugins: [], issues: [] })),
+      importZip,
+      uninstall: vi.fn(async () => ({ ok: true })),
+    };
+    const { renderFeaturePlugins } = await import("./panel");
+    await renderFeaturePlugins(api);
+
+    document.querySelector<HTMLButtonElement>("#feature-plugins-import")!.click();
+
+    await vi.waitFor(() => expect(importZip).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(document.body.textContent).toContain("Example v0.1.0"));
+  });
+
   it("renders a useful error when the plugin list cannot be loaded", async () => {
     const api = {
       list: async () => { throw new Error("IPC unavailable"); },
       setEnabled: vi.fn(async () => ({ ok: true })),
       open: vi.fn(async () => ({ ok: true })),
       rescan: vi.fn(async () => ({ plugins: [], issues: [] })),
+      importZip: vi.fn(async () => ({ ok: false, canceled: true })),
       uninstall: vi.fn(async () => ({ ok: true })),
     };
     const { renderFeaturePlugins } = await import("./panel");
@@ -119,6 +148,7 @@ describe("feature plugin settings panel", () => {
       setEnabled: vi.fn(async () => ({ ok: true })),
       open: vi.fn(async () => ({ ok: true })),
       rescan: vi.fn(async () => ({ plugins: [], issues: [] })),
+      importZip: vi.fn(async () => ({ ok: false, canceled: true })),
       uninstall,
     };
     const { renderFeaturePlugins } = await import("./panel");

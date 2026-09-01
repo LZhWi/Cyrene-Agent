@@ -1463,9 +1463,12 @@
           <div class="plugin-panel-heading">
             <div>
               <h1 class="plugin-panel-heading__title">功能插件</h1>
-              <p>用户插件首次发现时保持停用。确认来源可信后再手动启用；刷新可发现新增和更新。卸载只删除插件程序，默认保留插件数据。</p>
+              <p>导入 ZIP 后插件默认停用，确认来源可信后再手动启用；替换和卸载只处理插件程序，默认保留插件数据。</p>
             </div>
-            <button type="button" class="save-btn save-btn--ghost" id="feature-plugins-rescan">刷新插件</button>
+            <div class="setting-actions">
+              <button type="button" class="save-btn" id="feature-plugins-import">导入 ZIP</button>
+              <button type="button" class="save-btn save-btn--ghost" id="feature-plugins-rescan">刷新插件</button>
+            </div>
           </div>
           <div id="feature-plugins-list" class="settings-list"></div>
         </section>

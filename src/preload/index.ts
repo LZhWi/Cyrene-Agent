@@ -445,6 +445,7 @@ const pluginsApi = {
     ipcRenderer.invoke(IPC.PLUGINS_SET_ENABLED, id, enabled),
   open: (id: string) => ipcRenderer.invoke(IPC.PLUGINS_OPEN, id),
   rescan: () => ipcRenderer.invoke(IPC.PLUGINS_RESCAN),
+  importZip: () => ipcRenderer.invoke(IPC.PLUGINS_IMPORT_ZIP),
   uninstall: (id: string) => ipcRenderer.invoke(IPC.PLUGINS_UNINSTALL, id),
 };
 

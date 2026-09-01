@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginManager, type PluginManagerOptions } from "./manager";
 import type { PluginRuntime } from "./context";
+import * as installer from "./installer";
 
 let tmp: string;
 
@@ -83,6 +84,7 @@ describe("PluginManager", () => {
     expect(mgr.list()[0].enabled).toBe(true);
     expect(h.ipc.has("plugins:list")).toBe(true);
     expect(h.ipc.has("plugins:rescan")).toBe(true);
+    expect(h.ipc.has("plugins:import-zip")).toBe(true);
     expect(h.ipc.has("plugins:uninstall")).toBe(true);
     expect(h.ipc.get("plugins:list")?.()).toMatchObject({
       plugins: [expect.objectContaining({ id: "demo", status: "running" })],
@@ -258,6 +260,50 @@ describe("PluginManager", () => {
       status: "disabled",
     });
     expect(h.tools).toEqual([]);
+  });
+
+  it("通过导入 IPC 安装用户插件、重扫并保持首次停用", async () => {
+    const h = harness();
+    const userRoot = path.join(tmp, "user-plugins");
+    h.options.scanRoots.push({ path: userRoot, source: "user" });
+    h.options.selectPluginZip = async () => path.join(tmp, "plugin.zip");
+    const stagingDir = path.join(userRoot, ".staging");
+    const pluginDir = path.join(stagingDir, "package");
+    const importedManifest = {
+      apiVersion: 1 as const,
+      id: "zip-demo",
+      name: "ZIP Demo",
+      version: "1.0.0",
+      description: "d",
+      author: "a",
+      entry: "index.cjs",
+      defaultEnabled: true,
+    };
+    vi.spyOn(installer, "preparePluginZip").mockResolvedValue({
+      stagingDir,
+      pluginDir,
+      manifest: importedManifest,
+    });
+    vi.spyOn(installer, "commitPreparedPlugin").mockImplementation(async () => {
+      const destination = path.join(userRoot, "zip-demo");
+      mkdirSync(destination, { recursive: true });
+      writeFileSync(path.join(destination, "manifest.json"), JSON.stringify(importedManifest));
+      writeFileSync(path.join(destination, "index.cjs"), "module.exports={register(){}}");
+      return destination;
+    });
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+
+    const result = await h.ipc.get("plugins:import-zip")?.();
+
+    expect(result).toMatchObject({ ok: true, plugin: { id: "zip-demo" } });
+    expect(mgr.list()).toContainEqual(expect.objectContaining({
+      id: "zip-demo",
+      source: "user",
+      configuredEnabled: false,
+      status: "disabled",
+    }));
+    expect(h.tools).not.toContain("zip-demo_tool");
   });
 
   it("卸载用户插件时先清理运行资源，再删除目录、启停记录并重扫", async () => {

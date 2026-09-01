@@ -26,7 +26,7 @@ export interface PluginScanIssue {
   message: string;
 }
 
-interface ManifestInspection {
+export interface ManifestInspection {
   manifest: PluginManifest | null;
   error?: string;
   fingerprint?: string;
@@ -36,7 +36,7 @@ function asErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function inspectManifest(dir: string): ManifestInspection {
+export function inspectPluginDir(dir: string): ManifestInspection {
   const manifestPath = path.join(dir, MANIFEST_FILE);
   if (!existsSync(manifestPath)) return { manifest: null, error: "缺少 manifest.json" };
   try {
@@ -112,7 +112,7 @@ function inspectManifest(dir: string): ManifestInspection {
 
 /** 读取并校验 manifest；不合法返回 null（调用方跳过并留痕日志） */
 export function readManifest(dir: string): PluginManifest | null {
-  return inspectManifest(dir).manifest;
+  return inspectPluginDir(dir).manifest;
 }
 
 /** 扫描 root 下所有一级子目录，收集带合法 manifest 的插件 */
@@ -135,7 +135,7 @@ export function scanPluginDir(
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const dir = path.join(root, entry.name);
-    const inspected = inspectManifest(dir);
+    const inspected = inspectPluginDir(dir);
     if (!inspected.manifest || !inspected.fingerprint) {
       const issue = {
         root,
