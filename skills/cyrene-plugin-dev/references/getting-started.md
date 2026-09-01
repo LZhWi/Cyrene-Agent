@@ -145,6 +145,33 @@ module.exports = {
 
 ---
 
+## 进阶速览：事件与动态上下文
+
+**事件**——监听宿主/其他插件，或广播自己的消息（发布只能用短名，框架自动加 `plugin:<插件id>:` 前缀，冒充不了别人）：
+
+```js
+ctx.events.on("host:plugins:stopping", () => saveState());   // 关机前收尾
+ctx.events.on("plugin:weather:updated", (w) => refreshUi(w)); // 听别的插件
+await ctx.events.emit("updated", { value: 1 });               // 广播自己的
+```
+
+**动态上下文**——让昔涟主动"知道"实时状态，不用用户开口问：
+
+```js
+ctx.registerPromptProvider({
+  id: "pomodoro-status",
+  modes: ["chat"],
+  async provide({ userText, signal }) {
+    if (signal.aborted) return "";
+    return `番茄钟：专注中，剩余 12 分钟`;
+  },
+});
+```
+
+内容要短而精（只写本轮有用的事实），单项配额 2 秒 / 16000 字符。详细规则见 `references/api-spec.md`。
+
+---
+
 ## 常见坑速查
 
 | 症状 | 原因 |

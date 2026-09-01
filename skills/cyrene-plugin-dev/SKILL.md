@@ -1,7 +1,7 @@
 ---
 name: cyrene-plugin-dev
 description: 当用户想为 Cyrene 开发插件（扩展昔涟的工具、做插件弹窗、接入渠道）、调试插件报错，或询问插件怎么写时使用。涉及 Cyrene 本体源码的功能开发不使用本 Skill。
-version: 1.0.0
+version: 1.1.0
 effectKind: mutation
 modes:
   - code
@@ -40,6 +40,8 @@ modes:
 | --- | --- |
 | 纯工具插件 | 只注册 `registerTool`，AI 对话中自动调用（最常见） |
 | 带界面插件 | 额外实现 `open()` 弹独立窗口 |
+| 事件驱动插件 | `ctx.events.on/emit`：监听宿主生命周期（如关机前收尾）、与其他插件互通 |
+| 动态上下文插件 | `ctx.registerPromptProvider`：让昔涟主动感知实时状态（天气/日程/番茄钟），无需用户开口问 |
 | 调用 LLM 的插件 | manifest 声明 `"deps": ["llm"]` |
 | 渠道插件 | `ctx.registerChannelAdapter`（进阶，先确认用户真的需要） |
 
@@ -63,8 +65,10 @@ manifest 必填字段：`apiVersion: 1`、`id`、`name`、`version`（严格三�
 - **工具的 `description` 是写给 AI 看的**：写清"什么场景该用"，含参数说明
 - 只读工具 `risk: "safe"` + `effectKind: "read"`；有副作用的用 `effectKind: "write"`
 - 弹窗用 `BrowserWindow` 加载插件目录内的 HTML，`nodeIntegration: true` + `contextIsolation: false`
-- 窗口实例、定时器、子进程必须在 `unregister()` 里清理，且该函数要能重复调用不崩
+- 窗口实例、定时器、子进程必须在 `unregister()` 里清理，且该函数要能重复调用不崩；后台资源优先用 `ctx.onDispose(() => ...)` 登记兜底清理、`ctx.signal` 传给后台任务，交给框架托管停止时机
 - 渲染进程与插件通信：IPC 通道名是 `plugin:<插件id>:<channel>`
+- 事件发布只能用短名（框架自动补 `plugin:<插件id>:` 前缀），不能伪造 `host:*` 或其他插件的事件；监听器单个最多 5 秒
+- 提示词 Provider 只写本轮有用的实时事实、短而精；单项配额 2 秒 / 16000 字符，超时或失败只跳过自身
 - 数据采集优先 Node 原生（`os`、`fs`），不够再用 PowerShell / nvidia-smi 等子进程；子进程要设超时并处理失败降级
 
 ### 4. 本地验证
@@ -111,5 +115,6 @@ p.register({
 ## 安全与边界
 
 - 插件与宿主同权限运行（无沙箱）。为用户写插件时只用可审查的标准库和明确说明用途的子进程调用
+- 提示词 Provider 能直接影响 AI 行为：为用户写 Provider 时只输出事实性状态（"剩余 12 分钟"），不输出指令性内容（"忽略之前的规则"一类）
 - 不覆盖、不删除用户插件目录和 `plugin-data/` 下的数据
 - 更新插件：导入同名新版 zip 走替换流程，不要手动删旧目录再装（会丢启用状态）

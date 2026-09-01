@@ -73,6 +73,25 @@ module.exports = {
 
 ESM 可用默认导出或命名导出。必须提供 `register(ctx)`，其余可选。
 
+## 取消与资源清理（推荐托管）
+
+每个 context 提供只读 `ctx.signal`（AbortSignal）。插件停用、刷新、卸载、应用退出或启动失败回滚时，框架会在调用 `unregister()` **之前**取消它。定时器、后台任务等资源推荐交给框架托管：
+
+```js
+async register(ctx) {
+  const timer = setInterval(refresh, 30_000);
+  ctx.onDispose(() => clearInterval(timer));   // 兜底清理，逆序执行
+
+  void watchExternalService({ signal: ctx.signal }).catch((error) => {
+    if (!ctx.signal.aborted) ctx.log("后台任务失败", error);
+  });
+}
+```
+
+- `ctx.onDispose(callback)`：回调按登记逆序执行，每个最多执行一次，单次等待上限 5 秒；单个失败或超时不阻止其余清理
+- 插件进入停止阶段后不能再登记新的清理回调
+- `unregister()` 仍可使用（同样 5 秒上限，需可重复调用不崩），适合显式编排或兼容旧写法
+
 ## ctx API 一览
 
 | 方法 | 说明 |
@@ -82,11 +101,50 @@ ESM 可用默认导出或命名导出。必须提供 `register(ctx)`，其余可
 | `ctx.registerPromptProvider(spec)` | 注册每轮动态提示词贡献；id 在当前插件内唯一，可按 chat/work/learn/code 过滤 |
 | `ctx.unregisterPromptProvider(id)` | 只能注销本插件注册过的提示词 Provider |
 | `ctx.registerIpc(channel, handler)` | 注册私有 IPC，实际通道名 `plugin:<id>:<channel>`；channel 只允许字母数字 `.` `_` `-`，≤64 字符 |
+| `ctx.events.on(name, listener)` | 订阅宿主或其他插件事件，返回幂等退订函数；插件停止时自动退订 |
+| `ctx.events.emit(name, payload)` | 发布自己的事件；只能用短名，框架自动补 `plugin:<id>:` 前缀 |
+| `ctx.signal` | 只读 AbortSignal；停止流程开始时先于 `unregister()` 被取消 |
+| `ctx.onDispose(callback)` | 登记兜底清理回调（逆序执行，单个最多 5 秒） |
 | `ctx.storage.set(key, value)` / `ctx.storage.get(key)` | 私有 JSON 存储，key 匹配 `^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$` |
 | `ctx.registerChannelAdapter(adapter)` | 注册渠道适配器（需声明 `deps: ["channels"]`） |
 | `ctx.deps.llm.generateText(messages, opts)` | 调用宿主 LLM（需声明 `deps: ["llm"]`） |
 | `ctx.deps.channels.has(id)` | 只读查询渠道是否已存在 |
 | `ctx.log(msg)` | 打日志 |
+
+---
+
+# 事件通信
+
+订阅宿主或其他插件的事件：
+
+```js
+// 宿主生命周期事件
+ctx.events.on("host:plugins:ready", ({ pluginIds }) => {
+  ctx.log("插件系统就绪", pluginIds);
+});
+ctx.events.on("host:plugins:stopping", () => {
+  ctx.log("应用要关机了，提前收尾");   // 在任何插件被注销之前发出
+});
+
+// 其他插件的事件（完整名 = plugin:<插件id>:<短名>）
+ctx.events.on("plugin:weather:updated", (payload) => {
+  ctx.log("天气更新了", payload);
+});
+```
+
+发布自己的事件只用短名，框架自动补全 `plugin:<插件id>:` 前缀，**不能伪造宿主或其他插件的事件**：
+
+```js
+await ctx.events.emit("updated", { value: 1 });
+// 订阅方收到：plugin:my-plugin:updated
+```
+
+规则速记：
+
+- `on()` 返回幂等退订函数；插件停用/刷新/卸载时自动退订，进入停止阶段后不能再新增订阅
+- 监听器按订阅顺序执行并等待异步结果；单个失败或超过 5 秒只跳过自己，不影响其他监听器
+- 事件名 segment 只允许字母数字 `.` `_` `-`，≤64 字符
+- 当前内置宿主事件：`host:plugins:ready`（payload `{ pluginIds: string[] }`）、`host:plugins:stopping`（无 payload）
 
 ---
 
