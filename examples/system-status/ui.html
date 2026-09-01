@@ -89,12 +89,17 @@
       min-width: 360px;
       min-height: 100%;
       margin: 0;
+      overflow: hidden; /* 无边框窗口内自适应重排，不出现滚动条 */
+      scrollbar-width: none;
       background:
         radial-gradient(circle at 6% 8%, rgba(255, 186, 218, 0.3), transparent 22rem),
         radial-gradient(circle at 94% 92%, rgba(247, 205, 224, 0.34), transparent 24rem),
         #fff9fc;
       color: var(--ink);
     }
+
+    html::-webkit-scrollbar,
+    body::-webkit-scrollbar { display: none; }
 
     body {
       user-select: none;
@@ -131,10 +136,10 @@
       position: relative;
       z-index: 1;
       display: grid;
-      grid-template-columns: minmax(0, 1fr) 112px;
-      gap: 22px;
+      grid-template-columns: minmax(0, 1fr) 96px;
+      gap: 18px;
       align-items: center;
-      padding: 28px 30px 24px;
+      padding: 18px 24px 16px;
       border-bottom: 1px solid var(--line);
       background:
         linear-gradient(125deg, rgba(255, 255, 255, 0.99), rgba(255, 242, 248, 0.88)),
@@ -165,15 +170,15 @@
     h1 {
       margin: 0;
       color: #4c3943;
-      font-size: clamp(24px, 3vw, 34px);
+      font-size: clamp(20px, 2.4vw, 27px);
       line-height: 1.16;
       letter-spacing: -0.04em;
     }
 
     .subtitle {
-      margin: 8px 0 18px;
+      margin: 6px 0 12px;
       color: var(--muted);
-      font-size: 13px;
+      font-size: 12px;
     }
 
     .info-row {
@@ -212,8 +217,8 @@
     .avatar-wrap {
       position: relative;
       justify-self: end;
-      width: 104px;
-      height: 104px;
+      width: 86px;
+      height: 86px;
       transform: rotate(2deg);
     }
 
@@ -240,8 +245,8 @@
       z-index: 1;
       display: grid;
       grid-template-columns: repeat(12, minmax(0, 1fr));
-      gap: 14px;
-      padding: 22px 30px 18px;
+      gap: 12px;
+      padding: 16px 24px 14px;
     }
 
     .card {
@@ -285,25 +290,25 @@
     .gauge-card {
       grid-column: span 3;
       display: flex;
-      min-height: 180px;
+      min-height: 148px;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      padding: 20px 14px 16px;
+      padding: 14px 12px 12px;
       text-align: center;
     }
 
     .memory-card {
       grid-column: span 6;
-      min-height: 180px;
-      padding: 22px 24px;
+      min-height: 148px;
+      padding: 16px 20px;
       background: linear-gradient(145deg, #fff, #fff8fb);
     }
 
     .disk-card {
       grid-column: span 8;
-      min-height: 212px;
-      padding: 20px 22px;
+      min-height: 172px;
+      padding: 14px 20px;
     }
 
     .optional-grid {
@@ -315,11 +320,11 @@
 
     .mini-card {
       position: relative;
-      min-height: 100px;
+      min-height: 80px;
       overflow: hidden;
-      padding: 15px;
+      padding: 12px 14px;
       border: 1px solid var(--line);
-      border-radius: 19px;
+      border-radius: 17px;
       background: var(--pink-pale);
     }
 
@@ -360,9 +365,9 @@
     .gauge {
       --value: 0;
       display: grid;
-      width: 108px;
-      height: 108px;
-      margin: 10px auto 8px;
+      width: 92px;
+      height: 92px;
+      margin: 8px auto 6px;
       place-items: center;
       border-radius: 50%;
       background: conic-gradient(var(--pink) calc(var(--value) * 1%), var(--track) 0);
@@ -372,8 +377,8 @@
 
     .gauge::before {
       grid-area: 1 / 1;
-      width: 82px;
-      height: 82px;
+      width: 70px;
+      height: 70px;
       border: 1px solid #f5e5ec;
       border-radius: 50%;
       background: #fff;
@@ -392,7 +397,7 @@
 
     .gauge-value {
       color: #4f3a44;
-      font-size: 25px;
+      font-size: 21px;
       font-weight: 800;
       letter-spacing: -0.05em;
     }
@@ -414,12 +419,12 @@
       align-items: flex-end;
       justify-content: space-between;
       gap: 16px;
-      margin: 23px 0 20px;
+      margin: 15px 0 13px;
     }
 
     .metric-main {
       color: #4c3943;
-      font-size: 36px;
+      font-size: 29px;
       font-weight: 800;
       line-height: 1;
       letter-spacing: -0.05em;
@@ -428,7 +433,7 @@
     .metric-main small {
       margin-left: 3px;
       color: var(--pink-strong);
-      font-size: 15px;
+      font-size: 13px;
       letter-spacing: 0;
     }
 
@@ -474,8 +479,8 @@
 
     .disk-list {
       display: grid;
-      gap: 15px;
-      margin-top: 20px;
+      gap: 11px;
+      margin-top: 13px;
     }
 
     .disk-row {
@@ -535,9 +540,9 @@
     }
 
     .mini-value {
-      margin-top: 13px;
+      margin-top: 9px;
       color: #503c46;
-      font-size: 18px;
+      font-size: 16px;
       font-weight: 800;
       letter-spacing: -0.03em;
     }
@@ -556,7 +561,7 @@
       display: flex;
       align-items: center;
       gap: 12px;
-      padding: 0 30px 24px;
+      padding: 0 24px 14px;
       color: #af9ba5;
       font-size: 11px;
     }
@@ -583,14 +588,14 @@
     .empty { color: #c1adb6 !important; }
 
     @media (max-width: 760px) {
-      .topbar { grid-template-columns: minmax(0, 1fr) 82px; padding: 22px 20px 20px; }
-      .avatar-wrap { width: 78px; height: 78px; }
-      .dashboard { padding: 18px 20px 16px; }
+      .topbar { grid-template-columns: minmax(0, 1fr) 72px; padding: 16px 18px 14px; }
+      .avatar-wrap { width: 68px; height: 68px; }
+      .dashboard { padding: 14px 18px 12px; }
       .gauge-card { grid-column: span 6; }
       .memory-card,
       .disk-card,
       .optional-grid { grid-column: 1 / -1; }
-      .footer { padding: 0 20px 20px; }
+      .footer { padding: 0 18px 12px; }
     }
 
     @media (max-width: 470px) {

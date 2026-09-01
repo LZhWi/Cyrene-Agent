@@ -290,9 +290,10 @@ const systemStatusPlugin = {
     const CH_MAX = "plugin:system-status:win-maximize";
     const CH_CLOSE = "plugin:system-status:win-close";
     pluginWin = new BrowserWindow({
-      width: 1020,
-      height: 800,
-      minWidth: 400,
+      width: 860,
+      height: 600,
+      minWidth: 380,
+      minHeight: 420,
       frame: false, // 无系统边框，标题栏由 ui.html 自绘
       resizable: true,
       autoHideMenuBar: true,
