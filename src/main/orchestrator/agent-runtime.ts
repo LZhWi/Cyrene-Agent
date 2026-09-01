@@ -50,6 +50,7 @@ import { resolveRunCapabilities } from "./run-capabilities";
 import { loadStickerSettings } from "./sticker-settings";
 import type { RuntimeStateService } from "./runtime-state-service";
 import type { LlmClient } from "../services/llm/llm-client";
+import type { PluginPromptBuildInput } from "../../plugins/types";
 
 type EnqueueLLMTask = <T>(
   label: string,
@@ -78,6 +79,7 @@ export interface AgentRuntimeDeps {
   socialContextScheduler: { schedule: (input: SocialExtractionInput) => void };
   chatsStore: { getWorkspaceBinding: (conversationId: string) => { workspaceRoot: string; displayName: string; boundAt: number } | undefined };
   socialAtomStore: { listActive: (conversationId: string, now: number) => SocialAtom[] };
+  buildPluginPromptContext: (input: PluginPromptBuildInput) => Promise<string>;
 }
 
 type SchedulerRunOptions = Omit<CyreneRunOptions, "toolSystemContent" | "soulSystemBaseContent">;
@@ -216,6 +218,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       getWorkspaceBinding: (conversationId: string) => {
         return rawDeps.chatsStore.getWorkspaceBinding(conversationId);
       },
+      buildPluginPromptContext: (input) => rawDeps.buildPluginPromptContext(input),
     };
   }
 
@@ -270,6 +273,11 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         buildEnvironmentContext({ provider: settings.provider, model: settings.model }, profile),
         buildSkillCatalog(scheduledSkills),
         await buildAlwaysOnContext(task.prompt, messages),
+        await rawDeps.buildPluginPromptContext({
+          source: "scheduler",
+          mode: "work",
+          userText: task.prompt,
+        }),
       ].join("\n\n---\n\n");
       return {
         settings: {

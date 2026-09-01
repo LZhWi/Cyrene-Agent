@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginManager, type PluginManagerOptions } from "./manager";
 import { PLUGIN_CLEANUP_TIMEOUT_MS, type PluginRuntime } from "./context";
+import { createPluginPromptRegistry } from "./prompts";
 import * as installer from "./installer";
 
 let tmp: string;
@@ -49,6 +50,7 @@ afterEach(() => {
 function harness(overrides: Partial<PluginManagerOptions> = {}) {
   const tools: string[] = [];
   const ipc = new Map<string, (...args: unknown[]) => unknown>();
+  const promptRegistry = createPluginPromptRegistry();
   const runtime: PluginRuntime = {
     toolRegistry: {
       register: (t) => tools.push(t.id),
@@ -61,6 +63,7 @@ function harness(overrides: Partial<PluginManagerOptions> = {}) {
     channelManager: { has: () => false, register: () => {}, unregister: async () => true, startOne: async () => {} },
     registerIpc: (c, h) => ipc.set(c, h),
     unregisterIpc: (c) => ipc.delete(c),
+    promptRegistry,
   };
   let enabledMap: Record<string, boolean> = {};
   const options: PluginManagerOptions = {
@@ -73,7 +76,7 @@ function harness(overrides: Partial<PluginManagerOptions> = {}) {
     },
     ...overrides,
   };
-  return { options, tools, ipc, getEnabledMap: () => ({ ...enabledMap }) };
+  return { options, tools, ipc, promptRegistry, getEnabledMap: () => ({ ...enabledMap }) };
 }
 
 describe("PluginManager", () => {
@@ -297,6 +300,32 @@ describe("PluginManager", () => {
     await mgr.setEnabled("demo", false);
 
     expect(readFileSync(marker, "utf8")).toBe("yes");
+  });
+
+  it("setEnabled(false) 会移除插件提示词 Provider", async () => {
+    const h = harness();
+    writeFileSync(
+      path.join(tmp, "demo", "index.cjs"),
+      `module.exports = { register(ctx) {
+        ctx.registerPromptProvider({ id: "context", provide: ({ userText }) => "插件看到：" + userText });
+      } };`,
+      "utf8",
+    );
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+
+    expect(await h.promptRegistry.build({
+      source: "conversation",
+      mode: "chat",
+      userText: "你好",
+    })).toContain("插件看到：你好");
+
+    await mgr.setEnabled("demo", false);
+    expect(await h.promptRegistry.build({
+      source: "conversation",
+      mode: "chat",
+      userText: "你好",
+    })).toBe("");
   });
 
   it("启动失败后保留 desired state 和错误；修复入口后可重试", async () => {

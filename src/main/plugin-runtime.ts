@@ -7,6 +7,7 @@ import { loadGeneralSettings, saveGeneralSettings } from "./settings/settings-fa
 import { loadModelSettings, resolveModelSettingsProfile } from "./settings/model-settings";
 import { pluginGenerateText } from "./plugin-llm";
 import { PluginManager } from "../plugins/manager";
+import { pluginPromptRegistry } from "../plugins/prompts";
 import type { LlmClient } from "./services/llm/llm-client";
 import { enqueueLLMTask } from "./llm-queue";
 import type { IpcScope } from "./application/ipc-scope";
@@ -37,6 +38,7 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
         deps.ipc.handle(channel, (_event, ...args: unknown[]) => handler(...args));
       },
       unregisterIpc: (channel) => deps.ipc.removeHandler(channel),
+      promptRegistry: pluginPromptRegistry,
       llm: {
         generateText: (messages, options) => pluginGenerateText(
           messages,
