@@ -149,7 +149,12 @@ export function createChannelsSubsystem(
     });
     channelResult.text = reply;
     if (agent.lastResult) {
-      const finished = await deps.agentRuntime.onRunFinished(agent.lastResult, agentUserText, msg.channel, sessionId);
+      const finished = await deps.agentRuntime.onRunFinished(agent.lastResult, agentUserText, {
+        source: "channel",
+        mode: options.conversationMode ?? (options.executionMode === "chat" ? "chat" : "work"),
+        conversationId: sessionId,
+        channel: msg.channel,
+      });
       channelResult.sticker = finished.sticker;
     }
     void indexConversationTurn(sessionId, agentUserText, reply);
