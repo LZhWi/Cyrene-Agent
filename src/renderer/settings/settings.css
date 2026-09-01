@@ -1850,33 +1850,14 @@ body {
   border-color: rgba(255, 182, 220, 0.42);
   box-shadow: 0 12px 26px rgba(236, 72, 153, 0.22);
 }
-.feature-plugins-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 10px;
-}
-.circle-icon-btn {
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  background: rgba(255, 255, 255, 0.04);
-  color: var(--rb-text-muted);
-  display: grid;
-  place-items: center;
-  cursor: pointer;
-  transition: transform 0.16s ease, border-color 0.16s ease, background-color 0.16s ease;
-}
-.circle-icon-btn:hover:not(:disabled) {
-  transform: translateY(-1px);
-  border-color: rgba(255, 182, 220, 0.35);
-  background: rgba(255, 110, 199, 0.12);
-  color: var(--rb-text-base);
-}
-.circle-icon-btn:disabled {
+.plugin-add-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+.feature-plugins-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 .plugin-list {
   display: grid;
