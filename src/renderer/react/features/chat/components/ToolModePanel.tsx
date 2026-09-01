@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "../../../i18n";
 import "./ToolModePanel.css";
 
 type ToolMode = "work" | "code" | "learn" | "chat";
@@ -127,6 +128,7 @@ function isVisibleForMode(tool: ToolCatalogItem, mode: ToolMode, overrides: Over
 }
 
 export const ToolModePanel: React.FC = () => {
+  const { t } = useTranslation();
   const [tools, setTools] = useState<ToolCatalogItem[]>([]);
   const [overrides, setOverrides] = useState<Overrides>({});
   const [loading, setLoading] = useState(true);
@@ -229,22 +231,22 @@ export const ToolModePanel: React.FC = () => {
   return (
     <div className="tool-panel">
       <header className="tool-panel__header">
-        <h1 className="tool-panel__title">工具</h1>
+        <h1 className="tool-panel__title">{t("toolPanel.title")}</h1>
         <p className="tool-panel__subtitle">
-          {`管理工具在 ${TABS.find((t) => t.key === tab)?.label} 模式下的可见性`}
+          {t("toolPanel.subtitle", { mode: TABS.find((item) => item.key === tab)?.label })}
         </p>
       </header>
 
       <div className="tool-panel__master">
         <div className="tool-panel__master-text">
-          <strong>Chat 模式工具增强</strong>
-          <span>开启后闲聊可用音乐、天气、搜索等工具；关闭则纯聊天</span>
+          <strong>{t("toolPanel.chatEnhanceTitle")}</strong>
+          <span>{t("toolPanel.chatEnhanceDesc")}</span>
         </div>
         <button
           type="button"
           role="switch"
           aria-checked={chatToolsEnabled}
-          aria-label="Chat 模式工具增强"
+          aria-label={t("toolPanel.chatEnhanceTitle")}
           className={"tool-card__pill tool-panel__master-pill" + (chatToolsEnabled ? " is-on" : "")}
           onClick={() => toggleChatTools(!chatToolsEnabled)}
         >
@@ -255,27 +257,27 @@ export const ToolModePanel: React.FC = () => {
       <div className="tool-panel__search-row">
         <input
           className="tool-panel__search"
-          placeholder="搜索工具…"
+          placeholder={t("toolPanel.searchPlaceholder")}
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
       </div>
 
       <div className="tool-panel__tabs">
-        {TABS.map((t) => (
+        {TABS.map((tabItem) => (
           <button
-            key={t.key}
+            key={tabItem.key}
             type="button"
-            className={"tool-panel__tab" + (tab === t.key ? " is-active" : "")}
-            onClick={() => setTab(t.key)}
+            className={"tool-panel__tab" + (tab === tabItem.key ? " is-active" : "")}
+            onClick={() => setTab(tabItem.key)}
           >
-            {t.label}
+            {tabItem.label}
           </button>
         ))}
       </div>
 
       {loading ? (
-        <div className="tool-panel__loading">加载中…</div>
+        <div className="tool-panel__loading">{t("common.loading")}</div>
       ) : (
         <div className="tool-panel__grid">
           {visibleTools.map((tool) => {
@@ -286,9 +288,9 @@ export const ToolModePanel: React.FC = () => {
                 <div className="tool-card__body">
                   <div className="tool-card__name">
                     {tool.name}
-                    {!tool.enabled && <span className="tool-card__badge">已禁用</span>}
+                    {!tool.enabled && <span className="tool-card__badge">{t("toolPanel.disabledBadge")}</span>}
                   </div>
-                  <div className="tool-card__desc">{tool.description.split("\n")[0] || "暂无描述"}</div>
+                  <div className="tool-card__desc">{tool.description.split("\n")[0] || t("toolPanel.noDescription")}</div>
                 </div>
                 <button
                   type="button"
@@ -302,7 +304,7 @@ export const ToolModePanel: React.FC = () => {
               </div>
             );
           })}
-          {visibleTools.length === 0 && <div className="tool-panel__empty">无匹配工具</div>}
+          {visibleTools.length === 0 && <div className="tool-panel__empty">{t("toolPanel.noMatch")}</div>}
         </div>
       )}
     </div>

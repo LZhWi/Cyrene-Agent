@@ -1,9 +1,12 @@
+import { useTranslation } from "../../i18n";
+
 interface NewTaskButtonProps {
   label?: string;
   onClick?: () => void;
 }
 
-export function NewTaskButton({ label = "新建", onClick }: NewTaskButtonProps) {
+export function NewTaskButton({ label, onClick }: NewTaskButtonProps) {
+  const { t } = useTranslation();
   return (
     <button className="cy-side-action" onClick={onClick} type="button">
       <span className="cy-side-action-icon">
@@ -19,7 +22,7 @@ export function NewTaskButton({ label = "新建", onClick }: NewTaskButtonProps)
           <path d="M18 22H30" stroke="currentColor" strokeWidth="4" strokeLinecap="round" />
         </svg>
       </span>
-      <span className="cy-side-action-label">{label}</span>
+      <span className="cy-side-action-label">{label ?? t("ui.newButton")}</span>
     </button>
   );
 }

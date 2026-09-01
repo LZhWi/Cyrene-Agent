@@ -1,15 +1,18 @@
+import { useTranslation } from "../../i18n";
+
 interface SkillModeButtonProps {
   active?: boolean;
   onClick?: () => void;
 }
 
 export function SkillModeButton({ active = false, onClick }: SkillModeButtonProps) {
+  const { t } = useTranslation();
   return (
     <button
       className={`cy-side-action ${active ? "is-active" : ""}`}
       onClick={onClick}
       type="button"
-      title="技能"
+      title={t("ui.skills")}
       aria-pressed={active}
     >
       <span className="cy-side-action-icon">
@@ -20,7 +23,7 @@ export function SkillModeButton({ active = false, onClick }: SkillModeButtonProp
           <path d="M14 23L22 23" stroke="currentColor" strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
         </svg>
       </span>
-      <span className="cy-side-action-label">技能</span>
+      <span className="cy-side-action-label">{t("ui.skills")}</span>
     </button>
   );
 }

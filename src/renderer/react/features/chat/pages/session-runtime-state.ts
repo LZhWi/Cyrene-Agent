@@ -2,6 +2,7 @@ import type { ChatMessageItem } from "../components/ChatMessageList";
 import type { ChatMessage, ConversationMode } from "../../../../../shared/chat-types";
 import type { ComposerInteraction } from "../components/run-presentation";
 import type { TodoItem } from "../../../../../shared/todo-types";
+import { t } from "../../../i18n";
 
 export interface SessionInteractionEntry {
   interaction: ComposerInteraction;
@@ -88,7 +89,7 @@ export function recoverInterruptedMessage(
     reasoningStreaming: false,
     loading: false,
     waitingForFirstEvent: false,
-    runStage: { kind: "failed", detail: "上次运行已中断" },
+    runStage: { kind: "failed", detail: t("chatPage.lastRunInterrupted") },
     runActivity: {
       ...(message.runActivity ?? { startedAt: snapshot.updatedAt, reasoningMs: 0 }),
       activeReasoningStartedAt: undefined,

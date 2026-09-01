@@ -87,6 +87,7 @@
     "exceljs": "^4.4.0",
     "extract-zip": "^2.0.1",
     "gray-matter": "^4.0.3",
+    "i18next": "^26.4.0",
     "js-yaml": "^5.0.0",
     "llamaindex": "^0.12.1",
     "lucide-react": "^1.32.0",

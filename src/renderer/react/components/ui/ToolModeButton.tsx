@@ -1,15 +1,18 @@
+import { useTranslation } from "../../i18n";
+
 interface ToolModeButtonProps {
   active?: boolean;
   onClick?: () => void;
 }
 
 export function ToolModeButton({ active = false, onClick }: ToolModeButtonProps) {
+  const { t } = useTranslation();
   return (
     <button
       className={`cy-side-action ${active ? "is-active" : ""}`}
       onClick={onClick}
       type="button"
-      title="工具"
+      title={t("ui.tools")}
       aria-pressed={active}
     >
       <span className="cy-side-action-icon">
@@ -24,7 +27,7 @@ export function ToolModeButton({ active = false, onClick }: ToolModeButtonProps)
           <circle cx="26" cy="26" r="5" stroke="currentColor" strokeWidth="4" />
         </svg>
       </span>
-      <span className="cy-side-action-label">工具</span>
+      <span className="cy-side-action-label">{t("ui.tools")}</span>
     </button>
   );
 }

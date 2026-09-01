@@ -1,5 +1,6 @@
 import { Popover, Segmented } from "antd";
 import { useEffect, useState } from "react";
+import { useTranslation } from "../../../i18n";
 import {
   computeReasoningDropdown,
   type ReasoningDropdownView,
@@ -41,6 +42,7 @@ function ChevronIcon() {
 }
 
 export function ReasoningControl({ sessionId, modelProfileId }: { sessionId?: string; modelProfileId?: string }) {
+  const { t } = useTranslation();
   const [providerKey, setProviderKey] = useState("");
   const [resolvedProfileId, setResolvedProfileId] = useState<string | null>(null);
   const [view, setView] = useState<ReasoningDropdownView>();
@@ -82,7 +84,7 @@ export function ReasoningControl({ sessionId, modelProfileId }: { sessionId?: st
         size="small"
         disabled={!view || view.disabled}
         value={activeKey}
-        options={(view?.items ?? [{ label: "跟随模型", preference: { mode: "auto" as const }, disabled: true }]).map((item) => ({
+        options={(view?.items ?? [{ label: t("reasoning.followModel"), preference: { mode: "auto" as const }, disabled: true }]).map((item) => ({
           label: preferenceLabel(item.preference),
           value: preferenceKey(item.preference),
           disabled: item.disabled,

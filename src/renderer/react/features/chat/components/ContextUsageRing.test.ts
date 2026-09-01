@@ -26,16 +26,21 @@ vi.mock("antd", async () => {
 vi.mock("../../../../../shared/renderer-base", () => ({ resolveAsset: (path: string) => path }));
 
 import {
-  CONTEXT_USAGE_CATEGORY_META,
   CONTEXT_USAGE_COMPACT_SRC,
-  CONTEXT_USAGE_MOOD_META,
   ContextUsageRing,
   RING_CIRCUMFERENCE,
   clampVisualRatio,
   computeUsageRatio,
+  contextUsageCategoryMeta,
+  contextUsageMoodMeta,
   formatTokenCount,
   resolveRingTone,
 } from "./ContextUsageRing";
+
+// 原 CONTEXT_USAGE_CATEGORY_META / CONTEXT_USAGE_MOOD_META 常量改为函数（t() 需按调用求值），
+// 这里取一次快照供断言使用（默认 zh-CN，与静态渲染的输出一致）。
+const CONTEXT_USAGE_CATEGORY_META = contextUsageCategoryMeta();
+const CONTEXT_USAGE_MOOD_META = contextUsageMoodMeta();
 
 const CATEGORY_KEYS: ContextUsageCategoryKey[] = [
   "systemPrompt",

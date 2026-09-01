@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useTranslation } from "../../../i18n";
 import { DownOutlined } from "@ant-design/icons";
 import { ChatComposer, parseComposerMessage, type ComposerAttachment } from "../components/ChatComposer";
 import { ComposerSlot } from "../components/ComposerSlot";
@@ -110,6 +111,7 @@ export {
 };
 
 export function ChatPage() {
+  const { t } = useTranslation();
   const preferredAddress = useUserCallPreference();
   const [collapsed, setCollapsed] = useState(false);
   const [toolPanelOpen, setToolPanelOpen] = useState(false);
@@ -267,7 +269,7 @@ export function ChatPage() {
     const targetScope = activeScopeRef.current;
     const attachment: ComposerAttachment = {
       kind: "image",
-      name: `截图_${Date.now()}.png`,
+      name: t("chatPage.screenshotAttachmentName", { ts: Date.now() }),
       filePath: data.filePath,
       mime: data.mime,
       previewUrl: data.previewUrl,
@@ -404,7 +406,7 @@ export function ChatPage() {
             setPlanReviewBySession((current) => current[value.sessionId!]
               ? { ...current, [value.sessionId!]: { ...current[value.sessionId!], phase: "executing" } }
               : current);
-            void sendMessage("已批准计划，请开始执行。");
+            void sendMessage(t("chatPage.planApprovedAutoMessage"));
           }
           break;
         case "cyrene.plan.supplement":
@@ -617,7 +619,7 @@ export function ChatPage() {
     const api = aguiApi();
     const store = chatStore();
     if (!api || !store) {
-      const visibleError = "模型请求失败：AG-UI 模型服务尚未就绪";
+      const visibleError = t("chatPage.errorModelServiceNotReady");
       updateMessage(input.sessionId, input.assistantId, {
         content: visibleError,
         loading: false,
@@ -733,7 +735,7 @@ export function ChatPage() {
       toolExecutions = index === -1
         ? [...toolExecutions, {
             id: toolId,
-            name: patch.name ?? "工具调用",
+            name: patch.name ?? t("chatPage.toolCallFallbackName"),
             status: patch.status ?? "running",
             result: patch.result,
             argsText: patch.argsText,
@@ -906,12 +908,12 @@ export function ChatPage() {
           if (stage) updateMessage(input.sessionId, input.assistantId, { runStage: stage });
         } else if (event.type === "TOOL_CALL_START" && event.toolCallId) {
           updateRunTool(event.toolCallId, {
-            name: event.toolCallName ?? "工具调用",
+            name: event.toolCallName ?? t("chatPage.toolCallFallbackName"),
             status: "running",
             roundId: activeRoundId,
           });
           updateMessage(input.sessionId, input.assistantId, {
-            runStage: { kind: "executing", detail: event.toolCallName ?? "工具调用" },
+            runStage: { kind: "executing", detail: event.toolCallName ?? t("chatPage.toolCallFallbackName") },
           });
       } else if (event.type === "TOOL_CALL_ARGS" && event.toolCallId && event.delta) {
         const currentArgs = toolExecutions.find((tool) => tool.id === event.toolCallId)?.argsText ?? "";
@@ -1063,7 +1065,7 @@ export function ChatPage() {
         if (shouldClearComposerInteractionForTerminal(activeRunId, event.runId)) {
           clearInteractionForSession(input.sessionId);
         }
-        resolveTerminal(new Error(event.message ?? event.error ?? event.content ?? "模型请求失败"));
+        resolveTerminal(new Error(event.message ?? event.error ?? event.content ?? t("chatPage.errorModelRequestFailed")));
       }
     };
     const eventGate = new RunEventGate<AguiEvent>();
@@ -1095,7 +1097,7 @@ export function ChatPage() {
             mime: attachment.mime,
           })),
       });
-      if (!ack.success) throw new Error(ack.error ?? "模型请求发起失败");
+      if (!ack.success) throw new Error(ack.error ?? t("chatPage.errorModelRequestStartFailed"));
       // 新 run 已被主进程接受：同会话旧的守卫冲突操作卡（若有）不再有效
       setSessionTakeover((current) => (current && current.sessionId === input.sessionId ? null : current));
       // 立即把 ack.runId 写入 activeRunsBySession，
@@ -1156,7 +1158,7 @@ export function ChatPage() {
       if (conflictRunId) {
         processMessages = [...processMessages, createRoundProcessMessage(
           `process-${processMessageSequence++}`,
-          "当前会话已有正在运行的任务（可能来自刷新前的旧运行），本轮未执行。",
+          t("chatPage.sessionRunActiveNotice"),
           toolExecutions.length,
           activeRoundId,
         )];
@@ -1188,7 +1190,7 @@ export function ChatPage() {
         await checkpointRun("terminal", true);
         return;
       }
-      const visibleError = `模型请求失败：${errorMessage}`;
+      const visibleError = t("chatPage.errorModelRequestFailedWith", { message: errorMessage });
       processMessages = [...processMessages, createRoundProcessMessage(
         `process-${processMessageSequence++}`,
         visibleError,
@@ -1349,15 +1351,15 @@ export function ChatPage() {
     const existing = activeSessionIdsRef.current[targetMode];
     if (existing) return existing;
     const store = chatStore();
-    if (!store) throw new Error("聊天会话服务尚未就绪");
+    if (!store) throw new Error(t("chatPage.errorChatStoreUnavailable"));
     const hasPendingWorkspace = !!pendingWorkspaceByMode[targetMode];
     const session = await store.create({
       identityId: null,
       mode: targetMode,
       title:
         targetMode === "work" || targetMode === "code" || hasPendingWorkspace
-          ? "新任务"
-          : "新对话",
+          ? t("chatPage.newTaskTitle")
+          : t("chatPage.newChatTitle"),
     });
     // 欢迎页暂存的模型选择在此落地（问题 2：无会话时选择器曾被静默丢弃）。
     const pendingModelProfileId = pendingModelProfileByMode[targetMode];
@@ -1380,16 +1382,18 @@ export function ChatPage() {
     const store = chatStore();
     if (!store) return;
     const confirmed = options?.confirm === false || window.confirm(
-      "要在当前 Obsidian Vault 中添加 Cyrene 通用学习结构吗？只会创建缺失的文件，不会覆盖已有内容。"
+      t("chatPage.learnStructureConfirm")
     );
     if (!confirmed) return;
     const result = await store.initLearnWorkspace(sessionId);
     if (!result.ok) {
-      window.alert(`添加学习结构失败：${result.error ?? "未知错误"}`);
+      window.alert(t("chatPage.learnStructureFailed", { error: result.error ?? t("chatPage.unknownError") }));
     } else {
       const created = result.created?.length ?? 0;
       const skipped = result.skipped?.length ?? 0;
-      window.alert(`已创建 ${created} 个文件/目录${skipped > 0 ? `，跳过 ${skipped} 个已存在项` : ""}。`);
+      window.alert(skipped > 0
+        ? t("chatPage.learnStructureCreatedWithSkipped", { created, skipped })
+        : t("chatPage.learnStructureCreated", { created }));
     }
   }
 
@@ -1401,20 +1405,20 @@ export function ChatPage() {
     const picked = await store.pickWorkspaceFolder();
     if (!picked.ok || !picked.path) return;
 
-    const workspace = { path: picked.path, displayName: picked.displayName ?? "工作文件夹" };
+    const workspace = { path: picked.path, displayName: picked.displayName ?? t("chatPage.defaultWorkspaceName") };
     setWorkspaceNames((current) => ({ ...current, [targetMode]: workspace.displayName }));
 
     const activeId = activeSessionIdsRef.current[targetMode];
     if (activeId) {
       const result = await store.setWorkspace(activeId, workspace.path);
       if (!result.ok) {
-        window.alert(`设置工作区失败：${result.error ?? "未知错误"}`);
+        window.alert(t("chatPage.setWorkspaceFailed", { error: result.error ?? t("chatPage.unknownError") }));
         return;
       }
       // Learn 模式：空目录询问是否初始化通用学习结构
       if (targetMode === "learn" && result.isEmpty) {
         const confirmed = window.confirm(
-          "这是一个空目录。Cyrene 可以在这里创建通用学习工作区结构（materials/、notes/、exercises/、templates/、learn/progress.md），方便你之后和 Cyrene 一起学习。\n\n是否创建？"
+          t("chatPage.emptyDirLearnStructureConfirm")
         );
         if (confirmed) {
           await initVaultStructure(activeId, { confirm: false });
@@ -1531,7 +1535,7 @@ export function ChatPage() {
         }));
       }
     } catch (error) {
-      window.alert(`文件摄入失败：${error instanceof Error ? error.message : String(error)}`);
+      window.alert(t("chatPage.ingestFilesFailed", { error: error instanceof Error ? error.message : String(error) }));
     } finally {
       setAttachmentBusy(false);
     }
@@ -1545,7 +1549,7 @@ export function ChatPage() {
     const targetScope = scopeKey;
     if (!window.chat?.saveScreenshotTemp) return;
     if (file.size > PASTE_IMAGE_MAX_BYTES) {
-      window.alert("粘贴的图片超过 20MB，已跳过。");
+      window.alert(t("chatPage.pastedImageTooLargeSkipped"));
       return;
     }
     setAttachmentBusy(true);
@@ -1556,7 +1560,7 @@ export function ChatPage() {
       localPreviewUrlsRef.current.add(previewUrl);
       const attachment: ComposerAttachment = {
         kind: "image",
-        name: file.name && file.name !== "image.png" ? file.name : `粘贴图片_${Date.now()}.png`,
+        name: file.name && file.name !== "image.png" ? file.name : t("chatPage.pastedImageAttachmentName", { ts: Date.now() }),
         filePath,
         mime: file.type,
         previewUrl,
@@ -1568,10 +1572,10 @@ export function ChatPage() {
     } catch (error) {
       const raw = error instanceof Error ? error.message : String(error);
       const text = raw === "SCREENSHOT_TOO_LARGE"
-        ? "粘贴的图片超过 20MB。"
+        ? t("chatPage.pastedImageTooLarge")
         : raw === "INVALID_SCREENSHOT_IMAGE"
-          ? "粘贴的内容不是有效图片。"
-          : `粘贴图片失败：${raw}`;
+          ? t("chatPage.pastedImageInvalid")
+          : t("chatPage.pastedImageFailed", { error: raw });
       window.alert(text);
     } finally {
       setAttachmentBusy(false);
@@ -1585,13 +1589,13 @@ export function ChatPage() {
     const reason = typeof result.reason === "string" ? result.reason : "";
     let text: string;
     if (reason.startsWith("HELPER_")) {
-      text = "截图组件未就绪，请稍后重试。";
+      text = t("chatPage.screenshotHelperNotReady");
     } else if (reason.startsWith("SCREENSHOT_CANCELLED")) {
-      text = "已取消截图。";
+      text = t("chatPage.screenshotCancelled");
     } else if (reason === "SCREENSHOT_FILE_PATH_REQUIRED") {
-      text = "截图失败：未生成截图文件。";
+      text = t("chatPage.screenshotFileMissing");
     } else {
-      text = `截图失败：${reason || "未知错误"}`;
+      text = t("chatPage.screenshotFailed", { reason: reason || t("chatPage.unknownError") });
     }
     window.alert(text);
   }
@@ -1653,7 +1657,7 @@ export function ChatPage() {
         attachment.filePath === image.filePath
           ? result.ok && result.caption
             ? { ...attachment, imageSendMode: "caption", status: "done", caption: result.caption, reason: undefined }
-            : { ...attachment, imageSendMode: "caption", status: "error", reason: result.error ?? "图片分析失败" }
+            : { ...attachment, imageSendMode: "caption", status: "error", reason: result.error ?? t("chatPage.imageCaptionFailed") }
           : attachment
       )));
     }
@@ -1718,12 +1722,12 @@ export function ChatPage() {
         setWorkspaceNames((current) => bindWorkspaceName(
           current,
           targetMode,
-          pendingWorkspace.displayName ?? "工作文件夹",
+          pendingWorkspace.displayName ?? t("chatPage.defaultWorkspaceName"),
         ));
       }
       if (workspaceResult?.ok && targetMode === "learn" && workspaceResult.isEmpty) {
         const confirmed = window.confirm(
-          "这是一个空目录。Cyrene 可以在这里创建通用学习工作区结构（materials/、notes/、exercises/、templates/、learn/progress.md），方便你之后和 Cyrene 一起学习。\n\n是否创建？"
+          t("chatPage.emptyDirLearnStructureConfirm")
         );
         if (confirmed) {
           await initVaultStructure(sessionId, { confirm: false });
@@ -1828,7 +1832,7 @@ export function ChatPage() {
     }
     if (!updatedSession) {
       updateMessage(targetMode, assistantId, {
-        content: "模型请求失败：用户消息未能写入当前会话",
+        content: t("chatPage.errorUserMessageNotPersisted"),
         loading: false,
         waitingForFirstEvent: false,
         streaming: false,
@@ -1938,7 +1942,7 @@ export function ChatPage() {
         }}
         onOpenProject={(workspaceRoot) => {
           void chatStore()?.openWorkspace(workspaceRoot).then((result) => {
-            if (!result.ok) window.alert(`无法打开项目文件夹：${result.error ?? "未知错误"}`);
+            if (!result.ok) window.alert(t("chatPage.openProjectFolderFailed", { error: result.error ?? t("chatPage.unknownError") }));
           });
         }}
         onRenameSession={(sessionId, newTitle) => void handleRenameSession(sessionId, newTitle)}
@@ -1988,7 +1992,7 @@ export function ChatPage() {
           sessionTakeover={sessionTakeover}
           activeSessionId={activeSessionId}
           isRunning={isCurrentScopeRunning}
-          onResume={(runId) => void sendMessage("继续上次任务", runId)}
+          onResume={(runId) => void sendMessage(t("chatPage.resumeLastTaskMessage"), runId)}
           onTakeover={() => {
             const takeover = sessionTakeover;
             if (!takeover) return;
@@ -2032,8 +2036,8 @@ export function ChatPage() {
               type="button"
               className="cy-workspace-composer__scroll-to-bottom"
               onClick={() => scrollToBottomRef.current()}
-              aria-label="滚动到底部"
-              title="滚动到底部"
+              aria-label={t("chatPage.scrollToBottom")}
+              title={t("chatPage.scrollToBottom")}
             >
               <DownOutlined />
             </button>
