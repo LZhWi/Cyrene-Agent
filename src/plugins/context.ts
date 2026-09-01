@@ -10,8 +10,10 @@ import type {
   PluginDeps,
   PluginLlmService,
   PluginManifest,
+  PluginPromptProvider,
   PluginTool,
 } from "./types";
+import type { PluginPromptRegistry } from "./prompts";
 
 const IPC_SEGMENT_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
 
@@ -54,6 +56,7 @@ export interface PluginRuntime {
   };
   registerIpc: (channel: string, handler: (...args: unknown[]) => unknown) => void;
   unregisterIpc: (channel: string) => void;
+  promptRegistry: Pick<PluginPromptRegistry, "register" | "unregister">;
   llm?: PluginLlmService;
 }
 
@@ -74,6 +77,7 @@ export function createContext(
   const registeredTools = new Set<string>();
   const registeredIpc = new Set<string>();
   const registeredAdapters = new Set<string>();
+  const registeredPromptProviders = new Set<string>();
   const cleanupCallbacks: PluginCleanup[] = [];
   const abortController = new AbortController();
   let stopping = false;
@@ -151,6 +155,20 @@ export function createContext(
       }
       runtime.toolRegistry.unregister(toolId);
       registeredTools.delete(toolId);
+    },
+    registerPromptProvider(provider: PluginPromptProvider) {
+      if (stopping || disposed) {
+        throw new Error("插件停止后不能再注册提示词 Provider");
+      }
+      runtime.promptRegistry.register(id, provider, abortController.signal);
+      registeredPromptProviders.add(provider.id);
+    },
+    unregisterPromptProvider(providerId: string) {
+      if (!registeredPromptProviders.has(providerId)) {
+        throw new Error(`不能注销不属于当前插件的提示词 Provider: ${providerId}`);
+      }
+      runtime.promptRegistry.unregister(id, providerId);
+      registeredPromptProviders.delete(providerId);
     },
     registerIpc(channel: string, handler: (...args: unknown[]) => unknown) {
       if (!IPC_SEGMENT_RE.test(channel)) {
@@ -239,6 +257,14 @@ export function createContext(
             }
           }
           registeredTools.clear();
+          for (const providerId of registeredPromptProviders) {
+            try {
+              runtime.promptRegistry.unregister(id, providerId);
+            } catch (error) {
+              cleanupErrors.push(error);
+            }
+          }
+          registeredPromptProviders.clear();
           for (const channel of registeredIpc) {
             try {
               runtime.unregisterIpc(channel);

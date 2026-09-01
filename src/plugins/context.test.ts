@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAdapter } from "../main/channels/adapters/base";
 import { createContext, PLUGIN_CLEANUP_TIMEOUT_MS, type PluginRuntime } from "./context";
 import { createPluginEventBus } from "./events";
+import { createPluginPromptRegistry } from "./prompts";
 
 let tmp: string;
 
@@ -34,6 +35,7 @@ function runtime(): PluginRuntime & { tools: string[]; ipc: Map<string, unknown>
     channelManager: { has: () => false, register: () => {}, unregister: async () => true, startOne: async () => {} },
     registerIpc: (c, h) => ipc.set(c, h),
     unregisterIpc: (c) => ipc.delete(c),
+    promptRegistry: createPluginPromptRegistry(),
   };
 }
 
@@ -154,6 +156,7 @@ describe("createContext", () => {
     ctx.beginStop();
     expect(() => ctx.onDispose(() => {})).toThrow(/停止后/);
     expect(() => ctx.events.on("host:runtime:ready", () => {})).toThrow(/停止后/);
+    expect(() => ctx.registerPromptProvider({ id: "late", provide: () => "" })).toThrow(/停止后/);
   });
 
   it("插件事件自动命名并在 dispose 时退订", async () => {
@@ -190,6 +193,27 @@ describe("createContext", () => {
       "[plugin:demo] 清理资源时发生 1 个错误",
       [expect.objectContaining({ message: "unsubscribe failed" })],
     );
+  });
+
+  it("只允许注销当前插件注册的提示词 Provider，并在 dispose 时自动清理", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const rt = runtime();
+    const ctx = createTestContext(rt);
+    ctx.registerPromptProvider({ id: "context", provide: () => "PLUGIN_CONTEXT" });
+
+    expect(await rt.promptRegistry.build({
+      source: "conversation",
+      mode: "chat",
+      userText: "你好",
+    })).toContain("PLUGIN_CONTEXT");
+    expect(() => ctx.unregisterPromptProvider("missing")).toThrow(/不属于当前插件/);
+
+    await ctx.dispose();
+    expect(await rt.promptRegistry.build({
+      source: "conversation",
+      mode: "chat",
+      userText: "你好",
+    })).toBe("");
   });
 
   it("storage 可读写", () => {

@@ -181,6 +181,30 @@ export interface PluginDeps {
 
 export type PluginCleanup = () => void | Promise<void>;
 
+export type PluginPromptMode = "chat" | "work" | "learn" | "code";
+
+export interface PluginPromptBuildInput {
+  /** conversation 表示用户会话，scheduler 表示定时任务。 */
+  source: "conversation" | "scheduler";
+  mode: PluginPromptMode;
+  userText: string;
+  conversationId?: string;
+  channel?: string;
+}
+
+export interface PluginPromptProviderInput extends PluginPromptBuildInput {
+  /** 插件停止时触发；Provider 应尽快结束仍在进行的异步工作。 */
+  readonly signal: AbortSignal;
+}
+
+export interface PluginPromptProvider {
+  /** 当前插件内唯一；框架会自动补全 plugin:<插件id>: 前缀。 */
+  id: string;
+  /** 缺省表示全部会话模式。 */
+  modes?: PluginPromptMode[];
+  provide(input: PluginPromptProviderInput): string | Promise<string>;
+}
+
 export interface PluginContext {
   id: string;
   /** 插件停止或激活回滚开始前会先触发取消。 */
@@ -190,6 +214,9 @@ export interface PluginContext {
   events: PluginEvents;
   registerTool(tool: PluginTool): void;
   unregisterTool(toolId: string): void;
+  /** 注册每轮动态提示词贡献；内容进入 runtime context，不改变核心提示词文件。 */
+  registerPromptProvider(provider: PluginPromptProvider): void;
+  unregisterPromptProvider(providerId: string): void;
   /** Automatically namespaced as plugin:<id>:<channel>. */
   registerIpc(channel: string, handler: (...args: unknown[]) => unknown): void;
   unregisterIpc(channel: string): void;

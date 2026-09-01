@@ -79,12 +79,35 @@ ESM 可用默认导出或命名导出。必须提供 `register(ctx)`，其余可
 |---|---|
 | `ctx.registerTool(spec)` | 注册 AI 工具，id 必须 `<插件id>_` 前缀 |
 | `ctx.unregisterTool(id)` | 只能注销本插件注册过的工具 |
+| `ctx.registerPromptProvider(spec)` | 注册每轮动态提示词贡献；id 在当前插件内唯一，可按 chat/work/learn/code 过滤 |
+| `ctx.unregisterPromptProvider(id)` | 只能注销本插件注册过的提示词 Provider |
 | `ctx.registerIpc(channel, handler)` | 注册私有 IPC，实际通道名 `plugin:<id>:<channel>`；channel 只允许字母数字 `.` `_` `-`，≤64 字符 |
 | `ctx.storage.set(key, value)` / `ctx.storage.get(key)` | 私有 JSON 存储，key 匹配 `^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$` |
 | `ctx.registerChannelAdapter(adapter)` | 注册渠道适配器（需声明 `deps: ["channels"]`） |
 | `ctx.deps.llm.generateText(messages, opts)` | 调用宿主 LLM（需声明 `deps: ["llm"]`） |
 | `ctx.deps.channels.has(id)` | 只读查询渠道是否已存在 |
 | `ctx.log(msg)` | 打日志 |
+
+---
+
+# 动态提示词 Provider
+
+```js
+ctx.registerPromptProvider({
+  id: "status",
+  modes: ["chat", "work"],
+  provide({ source, mode, userText, conversationId, channel, signal }) {
+    if (signal.aborted) return "";
+    return `插件运行状态：online；当前模式：${mode}`;
+  },
+});
+```
+
+- 框架自动命名为 `plugin:<插件id>:<provider-id>`，不同插件可复用相同短 id。
+- `modes` 缺省覆盖 chat/work/learn/code；定时任务以 `source: "scheduler"`、`mode: "work"` 调用。
+- 内容进入每轮 runtime context，不修改核心提示词文件或稳定缓存前缀。
+- 多个 Provider 并行生成、按注册顺序拼接；单个最多等待 2 秒、16000 字符，总计最多 32000 字符。
+- 失败、超时或返回空字符串只跳过当前 Provider；插件停止时自动注销。
 
 ---
 

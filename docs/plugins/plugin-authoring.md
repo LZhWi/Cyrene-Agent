@@ -237,6 +237,30 @@ await ctx.events.emit("status", { online: true });
 - `host:plugins:ready`：启动扫描和自动启用完成，payload 为 `{ pluginIds: string[] }`；
 - `host:plugins:stopping`：全局插件停止开始、任何活动插件被注销之前，payload 为 `undefined`。
 
+### 动态提示词上下文
+
+插件可以为每轮 Agent 请求提供动态 system context，而无需修改 `soul.md` 等核心提示词文件：
+
+```js
+ctx.registerPromptProvider({
+  id: "local-status",
+  modes: ["chat", "work"],
+  async provide({ source, mode, userText, conversationId, channel, signal }) {
+    if (signal.aborted) return "";
+    return `当前插件状态：online；请求来源：${source}；模式：${mode}`;
+  },
+});
+```
+
+Provider id 在当前插件内唯一，框架会补全为 `plugin:<插件id>:<provider-id>`。`modes` 可选，
+缺省覆盖 `chat`、`work`、`learn`、`code`。Provider 会收到当前用户文本、可选会话 id、
+可选渠道及插件停止信号；不会收到完整对话历史。
+
+贡献内容进入每轮变化的 runtime context，不写入稳定提示词前缀，因此不会因动态内容破坏基础提示词
+缓存。多个 Provider 并行生成、按注册顺序拼接；单个 Provider 最多等待 2 秒，失败或超时只跳过
+自身。单项最多 16000 字符，全部插件合计最多 32000 字符。插件停用、刷新、卸载或启动失败
+回滚时自动移除其 Provider，也可调用 `ctx.unregisterPromptProvider(id)` 主动注销。
+
 ### 私有存储
 
 ```js
