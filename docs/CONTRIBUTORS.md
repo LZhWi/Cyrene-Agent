@@ -24,6 +24,11 @@
 ### boring9720 ([boring9720](https://github.com/boring9720))
 - 主进程日志落盘 `userData/logs/cyrene.log`（滚动 3 份 × 5MB），打包版用户可直接附日志上报问题（PR #47）
 
+### 梨衣、 ([liyi3068238601-oss](https://github.com/liyi3068238601-oss))
+- 运行时插件系统 v1：清单校验、生命周期状态机、资源所有权隔离与串行队列（PR #42/#48）
+- 插件 ZIP 安全导入与原子安装：staging 隔离解压、路径穿越/ZIP 炸弹防护、失败自动回滚
+- 用户插件安全卸载，插件设置页与启停管理
+
 ---
 
 ## 特别鸣谢
