@@ -6,6 +6,10 @@
 
 ## 代码贡献
 
+列表按**首次贡献时间**排序，排名不区分贡献大小，感谢每一位贡献者！
+
+---
+
 ### lll69 ([lll69](https://github.com/lll69))
 - 设置面板改进：`max_token` 开关、`thinkingOverride`、`uiThemeRadius`、GPU 渲染开关等
 - 超时配置体系：为 chat-loop、搜索等功能添加可配置超时，优化首轮响应
@@ -16,11 +20,11 @@
 ### Unknownuserfrommars ([Unknownuserfrommars](https://github.com/Unknownuserfrommars))
 - 修复截图辅助进程先退出时主进程崩溃的问题（PR #28，cherry-pick 进 master）
 
-### Tobi1chi ([Tobi1chi](https://github.com/Tobi1chi))
-- NapCat OneBot 频道适配器支持（PR #40）
-
 ### Wang Xiaomei ([Asuna404-not-found](https://github.com/Asuna404-not-found))
 - 修复构建编译过程中的 Bug（PR #33，参考其修法自行合并）
+
+### Tobi1chi ([Tobi1chi](https://github.com/Tobi1chi))
+- NapCat OneBot 频道适配器支持（PR #40）
 
 ### boring9720 ([boring9720](https://github.com/boring9720))
 - 主进程日志落盘 `userData/logs/cyrene.log`（滚动 3 份 × 5MB），打包版用户可直接附日志上报问题（PR #47）
