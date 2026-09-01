@@ -32,6 +32,9 @@ import { prepareToolRuntime } from "./harness/adapter/tool-runtime";
 const LOG_PREFIX = "[HarnessAdapter]";
 export { filterToolsForConversationMode } from "./harness/adapter/run-preparation";
 
+// 兼容门面（facade）：旧调用方继续从本文件导入；具体职责下沉到 adapter/ 下的叶子模块。
+// 门面只保留公共导出和编排顺序，不重新维护 Map、缓存或控制器等运行状态。
+
 /**
  * 运行 CyreneHarness 并返回统一的 AgentLoopResult。
  *
@@ -44,6 +47,7 @@ export async function runHarnessWithAdapter(
   signal: AbortSignal,
   sendBaseEvent: (event: BaseEvent) => void,
 ): Promise<AgentLoopResult> {
+  // 准备阶段创建唯一的 runStore 实例；checkpoint、工具生命周期和终态都写入它。
   const prepared = await prepareHarnessRun(options, signal);
   const {
     messageId,
@@ -116,6 +120,7 @@ export async function runHarnessWithAdapter(
   };
 
   // ── 运行 Harness ──
+  // 这是唯一的真实执行边界。事件回调只负责同步转发，业务状态仍由各自的所有者维护。
   const result = await runCyreneHarness(harnessInput);
 
   // ── 转换结果 ──
@@ -134,6 +139,7 @@ export async function runHarnessWithAdapter(
   const terminalRunStatus = terminal.status === "success"
     ? "completed"
     : terminal.status === "cancelled" ? "cancelled" : "failed";
+  // 终态持久化必须先于 Review 收尾：Review 读取的是刚写入的不可变 run 结果。
   const finalSession = runStore.markTerminal(runId, terminalRunStatus);
 
   // ── Review 快照：Run 终止时生成不可变 ReviewSnapshot ──

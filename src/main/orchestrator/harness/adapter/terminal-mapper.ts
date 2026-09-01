@@ -1,5 +1,9 @@
 import type { CyreneRunTerminalResult } from "../../../../shared/run-terminal";
 
+/**
+ * Harness 结束原因到旧 AgentLoop 结果和标准终态（canonical terminal）的纯映射。
+ * 本模块不写 store、不发送事件，也不做 Review 收尾；副作用统一留在编排层。
+ */
 export type HarnessTerminateReason = "max_rounds" | "timeout" | "cancelled" | "error" | undefined;
 
 export function mapTerminateReason(
@@ -13,6 +17,8 @@ export function mapTerminateReason(
     case "error":
       return "tool_error";
     default:
+      // cancelled/undefined 在旧 completionReason 协议中都表示“没有工具结果”；
+      // 取消的语义由 mapTerminateReasonToTerminal 单独保留。
       return "no_tool";
   }
 }

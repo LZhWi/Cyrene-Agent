@@ -4,6 +4,10 @@ import type { TaskDelegationPresentation } from "../../../../shared/task-session
 
 const LOG_PREFIX = "[HarnessAdapter]";
 
+/**
+ * 事件适配器（event mapper）只做 HarnessEvent → AG-UI BaseEvent 的协议转换。
+ * 它不更新 run 状态、不执行工具，也不等待异步副作用；事件顺序由 Harness 保证。
+ */
 export function sendHarnessEventAsAgui(
   event: HarnessEvent,
   messageId: string,
@@ -37,6 +41,7 @@ export function sendHarnessEventAsAgui(
       break;
     }
     case "final_answer": {
+      // AG-UI 文本消息必须按 START → CONTENT → END 发出，不能为了简化而合并事件。
       send({ type: EventType.TEXT_MESSAGE_START, messageId, role: "assistant", threadId, runId } as BaseEvent);
       send({ type: EventType.TEXT_MESSAGE_CONTENT, messageId, delta: event.content, threadId, runId } as BaseEvent);
       send({ type: EventType.TEXT_MESSAGE_END, messageId, threadId, runId } as BaseEvent);
@@ -72,6 +77,7 @@ export function sendHarnessEventAsAgui(
       break;
     }
     case "tool_end": {
+      // 前端先消费工具结果，再收到 TOOL_CALL_END；调整顺序会让工具卡片短暂显示为空。
       send({
         type: EventType.TOOL_CALL_RESULT,
         messageId: `${messageId}-tool-${event.toolCallId}`,
@@ -112,8 +118,10 @@ export function sendHarnessEventAsAgui(
       break;
     }
     case "runtime_feedback":
+      // 这是 Harness 内部反馈，不属于公开 AG-UI 事件，刻意丢弃。
       break;
     case "ask_user":
+      // ask_user 由 requestUserClarification 通道处理，不能在这里重复触发询问。
       break;
     case "plan_mode_changed": {
       send({

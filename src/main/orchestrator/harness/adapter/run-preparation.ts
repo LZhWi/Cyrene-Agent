@@ -14,6 +14,10 @@ import {
 import { preparePlanRunContext } from "./plan-lifecycle";
 import { app } from "electron";
 
+/**
+ * 运行准备阶段：解析线程/运行 ID、计划上下文、恢复快照、提示词层和工具清单，
+ * 最后创建唯一的 runStore 记录。它不运行 Harness，也不创建权限检查或任务执行器。
+ */
 const CODE_ONLY_GIT_TOOL_IDS = new Set([
   "git_status",
   "git_init",
@@ -27,6 +31,7 @@ export function filterToolsForConversationMode(
   mode: ConversationMode | undefined,
   tools: ToolDefinition[],
 ): ToolDefinition[] {
+  // 这是代码模式工具过滤的唯一事实来源；只返回新数组，不修改 registry 或传入数组。
   if (mode === "code") return tools;
   return tools.filter((tool) => !CODE_ONLY_GIT_TOOL_IDS.has(tool.id));
 }
@@ -78,6 +83,7 @@ export async function prepareHarnessRun(
 ): Promise<PreparedHarnessRun> {
   const messageId = `msg-${Date.now()}`;
   const runId = options.runId;
+  // 先校验 runId，避免产生无法关联到 RUN_FINISHED/恢复记录的孤儿执行。
   if (!runId) {
     throw new Error(
       "[HarnessAdapter] options.runId is required. CyreneAgent.runWithEvents must populate it before invoking the adapter.",
@@ -134,6 +140,7 @@ export async function prepareHarnessRun(
     initialState: recovered?.state,
     kind: recovered ? "recovery" : "run_start",
   });
+  // create 必须发生在 Harness 启动前，并使用最终消息/提示词/工具指纹，供 checkpoint 和恢复校验复用。
   const harnessPromptLayers: PromptLayers = {
     stablePrefix: promptLayers.stablePrefix,
     ...(promptLayers.sessionPrefix ? { sessionPrefix: promptLayers.sessionPrefix } : {}),

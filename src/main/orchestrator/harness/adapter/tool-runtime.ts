@@ -14,6 +14,10 @@ import { sendTaskLifecycleAsAgui } from "./event-mapper";
 import type { PreparedHarnessRun } from "./run-preparation";
 import type { CyreneRunOptions } from "../../cyrene-agent";
 
+/**
+ * 为一次 Harness run 构造工具运行时（tool runtime）。
+ * signal、runId 和 permissionCheck 从父 run 原样下传，避免子任务或权限检查产生第二套生命周期。
+ */
 export interface PreparedToolRuntime {
   toolContext: ToolContext;
   checkPermission: NonNullable<HarnessInput["checkPermission"]>;
@@ -33,6 +37,7 @@ export function prepareToolRuntime(input: {
     toolId: string,
     args: Record<string, unknown>,
   ): Promise<boolean> => {
+    // allow_all 是显式总开关，会跳过后续权限检查；普通权限模式下才先执行计划只读拦截。
     if (options.permissionMode === "allow_all") return true;
     if (
       (options.conversationMode === "code" || options.conversationMode === "chat")
@@ -71,6 +76,7 @@ export function prepareToolRuntime(input: {
     permissionMode: options.permissionMode,
   };
   const toolOutputStore = new FileToolOutputStore(app.getPath("userData"));
+  // 只有 work/code 模式允许派生任务；chat 模式不创建 TaskSession，避免出现不可见的后台执行。
   const taskExecutor = options.conversationMode === "work" || options.conversationMode === "code"
     ? createTaskExecutor({
       parent: {
