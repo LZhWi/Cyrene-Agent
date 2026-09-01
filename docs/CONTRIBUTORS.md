@@ -15,11 +15,11 @@
 ### Unknownuserfrommars
 - 修复截图辅助进程先退出时主进程崩溃的问题
 
-### Tobi1chi
-- NapCat OneBot 频道适配器支持
+### Tobi1chi ([Tobi1chi](https://github.com/Tobi1chi))
+- NapCat OneBot 频道适配器支持（PR #40）
 
 ### Wang Xiaomei ([Asuna404-not-found](https://github.com/Asuna404-not-found))
-- 修复构建编译过程中的 Bug
+- 修复构建编译过程中的 Bug（PR #33，参考其修法自行合并）
 
 ### boring9720 ([boring9720](https://github.com/boring9720))
 - 主进程日志落盘 `userData/logs/cyrene.log`（滚动 3 份 × 5MB），打包版用户可直接附日志上报问题（PR #47）
