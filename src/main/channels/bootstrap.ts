@@ -39,6 +39,8 @@ export interface ChannelsLifecycleAdapter {
 export interface ChannelsSubsystem {
   initialize(): void;
   start(signal?: AbortSignal): Promise<void>;
+  /** initialize() 同步注册全部内置 adapter 后解析，插件必须等待该边界。 */
+  adaptersRegistered: Promise<void>;
   shutdown(): Promise<void>;
 }
 
@@ -181,9 +183,25 @@ export function createChannelsSubsystem(
   };
   const adapter = lifecycle ?? defaultLifecycle;
 
+  let resolveAdaptersRegistered!: () => void;
+  let rejectAdaptersRegistered!: (error: unknown) => void;
+  const adaptersRegistered = new Promise<void>((resolve, reject) => {
+    resolveAdaptersRegistered = resolve;
+    rejectAdaptersRegistered = reject;
+  });
+
   return {
-    initialize: () => adapter.initialize(),
+    initialize: () => {
+      try {
+        adapter.initialize();
+        resolveAdaptersRegistered();
+      } catch (error) {
+        rejectAdaptersRegistered(error);
+        throw error;
+      }
+    },
     start: (signal?: AbortSignal) => adapter.start(signal),
+    adaptersRegistered,
     shutdown: () => adapter.shutdown(),
   };
 }

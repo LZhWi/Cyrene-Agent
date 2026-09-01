@@ -54,4 +54,27 @@ describe("ChannelManager", () => {
     await mgr.startAll();
     expect(startCount).toBe(1);
   });
+
+  it("拒绝重复 id，避免覆盖已启动 adapter 后留下错误状态", async () => {
+    const mgr = new ChannelManager();
+    const first = fakeAdapter("feishu");
+    const second = fakeAdapter("feishu");
+    mgr.register(first);
+    await mgr.startOne("feishu" as never);
+    expect(() => mgr.register(second)).toThrow(/禁止覆盖/);
+    expect(mgr.getAdapter("feishu" as never)).toBe(first);
+    expect(second.getStatus().phase).toBe("offline");
+  });
+
+  it("startOne 对已启动 adapter 幂等", async () => {
+    const mgr = new ChannelManager();
+    const adapter = fakeAdapter("qq");
+    let starts = 0;
+    const original = adapter.start;
+    adapter.start = async () => { starts += 1; await original(); };
+    mgr.register(adapter);
+    await mgr.startOne("qq" as never);
+    await mgr.startOne("qq" as never);
+    expect(starts).toBe(1);
+  });
 });

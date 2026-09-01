@@ -115,7 +115,7 @@ describe("createContext", () => {
     const without = createContext("demo", tmp, runtime());
     expect(without.deps.channels).toBeUndefined();
     const withDeps = createContext("demo", tmp, runtime(), ["channels"]);
-    expect(withDeps.deps.channels?.channelManager).toBeDefined();
+    expect(withDeps.deps.channels?.has("wechat")).toBe(false);
   });
 
   it("只有 manifest 声明 llm 时才注入 generateText", async () => {
@@ -181,5 +181,13 @@ describe("createContext", () => {
     releaseUnregister();
     await disposing;
     expect(unregisterFinished).toBe(true);
+  });
+
+  it("拒绝注销不属于当前插件的工具、IPC 和渠道", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const ctx = createContext("demo", tmp, runtime(), ["channels"]);
+    expect(() => ctx.unregisterTool("read_file")).toThrow(/不属于当前插件/);
+    expect(() => ctx.unregisterIpc("missing")).toThrow(/不属于当前插件/);
+    await expect(ctx.unregisterChannelAdapter("wechat")).rejects.toThrow(/不属于当前插件/);
   });
 });

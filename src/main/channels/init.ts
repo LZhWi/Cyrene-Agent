@@ -61,7 +61,6 @@ function getPublicChannelsSettings(): Record<string, unknown> {
     },
   };
 }
-
 /** app 启动编排（core 阶段）调一次。只做装配，无网络副作用。idempotent。 */
 export function initializeChannels(ipcOption?: IpcScope): void {
   if (initialized) return;
@@ -100,7 +99,6 @@ function registerAdapters(): void {
   qqAdapter = new NapCatAdapter(broadcastChannelsStatus);
   channelManager.register(qqAdapter);
 
-  // 注册 QQ 官方机器人 adapter（QQ 开放平台 API v2，AppID/AppSecret + WebSocket 网关）
   qqBotAdapter = new QqBotAdapter(broadcastChannelsStatus);
   channelManager.register(qqBotAdapter);
 }

@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ function fixturePlugin(id: string, manifestId: string = id): string {
   writeFileSync(
     path.join(dir, "manifest.json"),
     JSON.stringify({
+      apiVersion: 1,
       id: manifestId,
       name: id,
       version: "1.0.0",
@@ -61,7 +62,7 @@ function harness(overrides: Partial<PluginManagerOptions> = {}) {
   };
   let enabledMap: Record<string, boolean> = {};
   const options: PluginManagerOptions = {
-    scanRoots: [path.dirname(fixturePlugin("demo"))],
+    scanRoots: [{ path: path.dirname(fixturePlugin("demo")), source: "builtin" }],
     storageRoot: path.join(tmp ?? "tmp", "storage"),
     runtime,
     loadEnabledMap: () => ({ ...enabledMap }),
@@ -81,6 +82,11 @@ describe("PluginManager", () => {
     expect(mgr.list().map((e) => e.id)).toEqual(["demo"]);
     expect(mgr.list()[0].enabled).toBe(true);
     expect(h.ipc.has("plugins:list")).toBe(true);
+    expect(h.ipc.has("plugins:rescan")).toBe(true);
+    expect(h.ipc.get("plugins:list")?.()).toMatchObject({
+      plugins: [expect.objectContaining({ id: "demo", status: "running" })],
+      issues: [],
+    });
     expect(h.ipc.has("plugins:set-enabled")).toBe(true);
     expect(h.ipc.has("plugin:demo:ping")).toBe(true);
   });
@@ -130,7 +136,7 @@ describe("PluginManager", () => {
   it("重复 id 只保留第一个扫描结果", async () => {
     const h = harness();
     fixturePlugin("demo-copy", "demo");
-    h.options.scanRoots = [path.dirname(fixturePlugin("demo"))];
+    h.options.scanRoots = [{ path: path.dirname(fixturePlugin("demo")), source: "builtin" }];
     const mgr = new PluginManager(h.options);
     await mgr.start();
     expect(mgr.list()).toHaveLength(1);
@@ -175,7 +181,7 @@ describe("PluginManager", () => {
     expect(h.getEnabledMap().demo).toBe(false);
   });
 
-  it("启动失败后显示停用；再次启用会重试", async () => {
+  it("启动失败后保留 desired state 和错误；修复入口后可重试", async () => {
     const h = harness();
     writeFileSync(
       path.join(tmp, "demo", "index.cjs"),
@@ -192,10 +198,113 @@ describe("PluginManager", () => {
 
     await mgr.start();
     expect(mgr.list()[0].enabled).toBe(false);
+    expect(mgr.list()[0]).toMatchObject({
+      configuredEnabled: true,
+      status: "failed",
+      error: "first start failed",
+    });
+
+    writeFileSync(
+      path.join(tmp, "demo", "index.cjs"),
+      `module.exports = { register(ctx) { ctx.registerIpc("ping", () => "pong"); } };`,
+      "utf8",
+    );
 
     const retried = await mgr.setEnabled("demo", true);
     expect(retried.ok).toBe(true);
     expect(mgr.list()[0].enabled).toBe(true);
     expect(h.ipc.has("plugin:demo:ping")).toBe(true);
+  });
+
+  it("register 失败时调用插件 unregister 回滚，再释放宿主资源", async () => {
+    const h = harness();
+    const rollbackMarker = path.join(tmp, "rollback-called");
+    writeFileSync(
+      path.join(tmp, "demo", "index.cjs"),
+      `const fs = require("node:fs");
+      module.exports = {
+        register(ctx) {
+          ctx.registerIpc("partial", () => "leaked");
+          throw new Error("partial activation failed");
+        },
+        unregister() { fs.writeFileSync(${JSON.stringify(rollbackMarker)}, "yes"); }
+      };`,
+      "utf8",
+    );
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+
+    expect(existsSync(rollbackMarker)).toBe(true);
+    expect(h.ipc.has("plugin:demo:partial")).toBe(false);
+    expect(mgr.list()[0]).toMatchObject({
+      configuredEnabled: true,
+      enabled: false,
+      status: "failed",
+      error: "partial activation failed",
+    });
+  });
+
+  it("用户插件首次发现时忽略作者的 defaultEnabled，等待用户确认", async () => {
+    const h = harness();
+    h.options.scanRoots = [{ path: path.dirname(fixturePlugin("demo")), source: "user" }];
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+    expect(mgr.list()[0]).toMatchObject({
+      source: "user",
+      configuredEnabled: false,
+      status: "disabled",
+    });
+    expect(h.tools).toEqual([]);
+  });
+
+  it("rescan 重新加载活动插件并清理删除的插件", async () => {
+    const h = harness();
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+    expect(h.ipc.get("plugin:demo:ping")?.()).toBe("pong");
+
+    writeFileSync(
+      path.join(tmp, "demo", "index.cjs"),
+      `module.exports = { register(ctx) {
+        ctx.registerIpc("ping", () => "v2");
+        ctx.registerTool({ id: "demo_tool", name: "t", description: "d", enabled: true, inputSchema: { type: "object", properties: {}, required: [] }, execute: async () => "ok" });
+      } };`,
+      "utf8",
+    );
+    await mgr.rescan();
+    expect(h.ipc.get("plugin:demo:ping")?.()).toBe("v2");
+    expect(h.tools).toEqual(["demo_tool"]);
+
+    rmSync(path.join(tmp, "demo"), { recursive: true, force: true });
+    await mgr.rescan();
+    expect(mgr.list()).toEqual([]);
+    expect(h.tools).toEqual([]);
+    expect(h.ipc.has("plugin:demo:ping")).toBe(false);
+  });
+
+  it("并发启用请求串行执行，不重复注册资源", async () => {
+    const h = harness({ loadEnabledMap: () => ({ demo: false }) });
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+    const [first, second] = await Promise.all([
+      mgr.setEnabled("demo", true),
+      mgr.setEnabled("demo", true),
+    ]);
+    expect(first.ok).toBe(true);
+    expect(second.ok).toBe(true);
+    expect(h.tools).toEqual(["demo_tool"]);
+  });
+
+  it("扫描根目录不可读时保留应用可用并展示问题", async () => {
+    const h = harness();
+    const invalidRoot = path.join(tmp, "not-a-directory");
+    writeFileSync(invalidRoot, "x", "utf8");
+    h.options.scanRoots = [{ path: invalidRoot, source: "user" }];
+    const mgr = new PluginManager(h.options);
+    await expect(mgr.start()).resolves.toBeUndefined();
+    expect(mgr.overview().plugins).toEqual([]);
+    expect(mgr.overview().issues[0]?.message).toMatch(/无法扫描插件目录/);
   });
 });

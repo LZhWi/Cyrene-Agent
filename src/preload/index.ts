@@ -444,6 +444,7 @@ const pluginsApi = {
   setEnabled: (id: string, enabled: boolean) =>
     ipcRenderer.invoke(IPC.PLUGINS_SET_ENABLED, id, enabled),
   open: (id: string) => ipcRenderer.invoke(IPC.PLUGINS_OPEN, id),
+  rescan: () => ipcRenderer.invoke(IPC.PLUGINS_RESCAN),
 };
 
 contextBridge.exposeInMainWorld("plugins", pluginsApi);

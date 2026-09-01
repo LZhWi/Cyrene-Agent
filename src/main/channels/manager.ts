@@ -26,10 +26,10 @@ export class ChannelManager {
     return this.adapters.has(id);
   }
 
-  /** 注册 adapter（必须在 startAll 之前调用） */
+  /** 注册 adapter（必须在 startAll 之前调用；重复 id 一律拒绝） */
   register(adapter: ChannelAdapter): void {
     if (this.adapters.has(adapter.id)) {
-      console.warn(LOG, `渠道 ${adapter.id} 已注册，覆盖旧实例`);
+      throw new Error(`渠道 ${adapter.id} 已注册，禁止覆盖现有实例`);
     }
     this.adapters.set(adapter.id, adapter);
   }
@@ -83,6 +83,7 @@ export class ChannelManager {
   async startOne(id: ChannelId): Promise<void> {
     const adapter = this.adapters.get(id);
     if (!adapter) return;
+    if (this.startedAdapters.has(id)) return;
     if (this.dispatchFn) {
       setAdapterHandler(adapter, this.makeAdapterHandler(id));
     }

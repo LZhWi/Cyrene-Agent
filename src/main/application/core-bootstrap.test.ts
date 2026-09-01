@@ -69,7 +69,16 @@ function makeCoreDeps(calls: string[], overrides: Partial<CoreDependencies> = {}
     registerAllTools: () => { calls.push("tools"); },
     initRag: async () => { calls.push("rag"); },
     createRuntime: () => { calls.push("runtime"); return {} as never; },
-    createChannels: () => ({ initialize: () => { calls.push("channels-initialize"); }, start: vi.fn(async () => { calls.push("channels-start"); }), shutdown: vi.fn(async () => undefined) } as never),
+    createChannels: () => ({
+      initialize: () => { calls.push("channels-initialize"); },
+      adaptersRegistered: Promise.resolve(),
+      start: vi.fn(async () => { calls.push("channels-start"); }),
+      shutdown: vi.fn(async () => undefined),
+    } as never),
+    startPlugins: async () => {
+      calls.push("plugins-start");
+      return { stop: vi.fn(async () => undefined) } as never;
+    },
     createScheduler: () => ({ initialize: () => { calls.push("scheduler-initialize"); }, start: vi.fn(() => { calls.push("scheduler-start"); }), stop: vi.fn() } as never),
     registerCoreIpc: () => { calls.push("register-core-ipc"); },
     loadGeneralSettings: () => ({ petVisible: true, sidebarVisible: false, tasksVisible: false }) as never,
@@ -97,6 +106,8 @@ describe("startCore", () => {
     await startCore(makeCoreDeps(calls));
     expect(calls.indexOf("register-core-ipc")).toBeLessThan(calls.indexOf("chat-load"));
     expect(calls.indexOf("channels-initialize")).toBeLessThan(calls.indexOf("chat-load"));
+    expect(calls.indexOf("channels-initialize")).toBeLessThan(calls.indexOf("plugins-start"));
+    expect(calls.indexOf("plugins-start")).toBeLessThan(calls.indexOf("chat-load"));
     expect(calls).not.toContain("channels-start");
     expect(calls).not.toContain("scheduler-start");
   });

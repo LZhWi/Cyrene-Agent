@@ -1463,8 +1463,9 @@
           <div class="plugin-panel-heading">
             <div>
               <h1 class="plugin-panel-heading__title">功能插件</h1>
-              <p>插件以“目录 + manifest.json + 入口文件”放在 userData/plugins/ 下，重启应用后即可在这里启停。</p>
+              <p>用户插件首次发现时保持停用。确认来源可信后再手动启用；刷新可发现新增、删除和更新。</p>
             </div>
+            <button type="button" class="save-btn save-btn--ghost" id="feature-plugins-rescan">刷新插件</button>
           </div>
           <div id="feature-plugins-list" class="settings-list"></div>
         </section>

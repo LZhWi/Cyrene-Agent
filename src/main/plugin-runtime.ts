@@ -1,18 +1,29 @@
-import { app, ipcMain } from "electron";
+import { app } from "electron";
 import path from "node:path";
 import { channelManager } from "./channels/manager";
 import type { ChannelId } from "./channels/types";
-import { toolRegistry } from "./orchestrator/tool-registry";
+import { toolRegistry } from "./orchestrator/tools/registry/tool-registry";
 import { loadGeneralSettings, saveGeneralSettings } from "./settings/settings-facade";
-import { loadModelSettings } from "./settings/model-settings";
+import { loadModelSettings, resolveModelSettingsProfile } from "./settings/model-settings";
 import { pluginGenerateText } from "./plugin-llm";
 import { PluginManager } from "../plugins/manager";
+import type { LlmClient } from "./services/llm/llm-client";
+import { enqueueLLMTask } from "./llm-queue";
+import type { IpcScope } from "./application/ipc-scope";
 
-export async function startPluginRuntime(): Promise<PluginManager> {
+export interface PluginRuntimeDeps {
+  llmClient: LlmClient;
+  ipc: IpcScope;
+}
+
+export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<PluginManager> {
   const userPluginRoot = path.join(app.getPath("userData"), "plugins");
   const pluginDataRoot = path.join(app.getPath("userData"), "plugin-data");
   const manager = new PluginManager({
-    scanRoots: [path.join(__dirname, "..", "plugins"), userPluginRoot],
+    scanRoots: [
+      { path: path.join(__dirname, "..", "plugins"), source: "builtin" },
+      { path: userPluginRoot, source: "user" },
+    ],
     storageRoot: pluginDataRoot,
     runtime: {
       toolRegistry,
@@ -23,11 +34,17 @@ export async function startPluginRuntime(): Promise<PluginManager> {
         startOne: (id) => channelManager.startOne(id as ChannelId),
       },
       registerIpc: (channel, handler) => {
-        ipcMain.handle(channel, (_event, ...args: unknown[]) => handler(...args));
+        deps.ipc.handle(channel, (_event, ...args: unknown[]) => handler(...args));
       },
-      unregisterIpc: (channel) => ipcMain.removeHandler(channel),
+      unregisterIpc: (channel) => deps.ipc.removeHandler(channel),
       llm: {
-        generateText: (messages) => pluginGenerateText(messages, loadModelSettings()),
+        generateText: (messages, options) => pluginGenerateText(
+          messages,
+          resolveModelSettingsProfile(loadModelSettings()),
+          deps.llmClient,
+          enqueueLLMTask,
+          options,
+        ),
       },
     },
     loadEnabledMap: () => loadGeneralSettings().plugins,

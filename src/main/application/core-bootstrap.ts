@@ -30,6 +30,7 @@ import type { SocialContextService } from "../services/social-context/social-con
 import type { ChannelsSubsystem } from "../channels/bootstrap";
 import type { SchedulerSubsystem } from "../scheduler/bootstrap";
 import type { GeneralSettings } from "../settings/general-settings";
+import type { PluginManager } from "../../plugins/manager";
 
 export interface CoreServices {
   runtimeState: RuntimeStateService;
@@ -51,6 +52,7 @@ export interface CoreResult {
   runtime: AgentRuntime;
   services: CoreServices;
   channels: ChannelsSubsystem;
+  plugins: PluginManager;
   scheduler: SchedulerSubsystem;
 }
 
@@ -77,6 +79,8 @@ export interface CoreDependencies {
   initRag(): Promise<void>;
   createRuntime(services: CoreServices): AgentRuntime;
   createChannels(runtime: AgentRuntime, services: CoreServices): ChannelsSubsystem;
+  /** 必须在内置渠道适配器注册完成后调用。 */
+  startPlugins(services: CoreServices): Promise<PluginManager>;
   createScheduler(runtime: AgentRuntime, services: CoreServices): SchedulerSubsystem;
   registerCoreIpc(input: RegisterCoreIpcInput): void;
   loadGeneralSettings(): GeneralSettings;
@@ -131,9 +135,14 @@ export async function startCore(deps: CoreDependencies): Promise<CoreResult> {
 
   const runtime = deps.createRuntime(services);
 
-  // scheduler/channels：只装配（加载 store、注册 IPC），engine/网络启动在 background 阶段
+  // channels 只装配并同步注册内置 adapter；网络启动仍在 background 阶段。
   const channels = deps.createChannels(runtime, services);
   channels.initialize();
+  await channels.adaptersRegistered;
+
+  // 插件严格晚于内置 adapter id 预留，避免插件抢占 feishu/wechat/qq 等内置 id。
+  const plugins = await deps.startPlugins(services);
+
   const scheduler = deps.createScheduler(runtime, services);
   scheduler.initialize();
 
@@ -163,6 +172,11 @@ export async function startCore(deps: CoreDependencies): Promise<CoreResult> {
   if (generalSettings.tasksVisible) shell.windowManager.createTasksWindow();
 
   // 注册核心资源清理（固定阶段）；scheduler/proactive/更新定时器由 background 注册
+  shutdown.register({
+    id: "plugins",
+    phase: "stopActiveWork",
+    dispose: async () => { await plugins.stop(); },
+  });
   shutdown.register({
     id: "channels",
     phase: "stopExternalConsumers",
@@ -203,5 +217,5 @@ export async function startCore(deps: CoreDependencies): Promise<CoreResult> {
   // 主窗口可激活：消费启动期间排队的激活请求
   await activation.markReady();
 
-  return { runtime, services, channels, scheduler };
+  return { runtime, services, channels, plugins, scheduler };
 }

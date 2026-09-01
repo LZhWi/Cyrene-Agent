@@ -1,39 +1,94 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+function runningPlugin() {
+  return {
+    id: "example",
+    name: "Example",
+    version: "0.1.0",
+    description: "example plugin",
+    author: "Cyrene",
+    entry: "index.cjs",
+    apiVersion: 1,
+    source: "user" as const,
+    path: "C:\\plugins\\example",
+    defaultEnabled: true,
+    configuredEnabled: true,
+    enabled: true,
+    status: "running" as const,
+    hasUnregister: true,
+    canOpen: true,
+  };
+}
+
 describe("feature plugin settings panel", () => {
   beforeEach(() => {
-    document.body.innerHTML = '<div id="feature-plugins-list"></div>';
+    document.body.innerHTML = [
+      '<button id="feature-plugins-rescan"></button>',
+      '<div id="feature-plugins-list"></div>',
+    ].join("");
     vi.resetModules();
   });
 
-  it("renders an enabled plugin and opens its controlled window", async () => {
+  it("renders runtime state/source and opens a running plugin", async () => {
     const open = vi.fn(async () => ({ ok: true }));
     const api = {
-      list: async () => [{
-        id: "example",
-        name: "Example",
-        version: "0.1.0",
-        description: "example plugin",
-        author: "Cyrene",
-        entry: "index.cjs",
-        defaultEnabled: true,
-        enabled: true,
-        hasUnregister: true,
-        canOpen: true,
-      }],
+      list: async () => ({ plugins: [runningPlugin()], issues: [] }),
       setEnabled: vi.fn(async () => ({ ok: true })),
       open,
+      rescan: vi.fn(async () => ({ plugins: [runningPlugin()], issues: [] })),
     };
     const { renderFeaturePlugins } = await import("./panel");
 
     await renderFeaturePlugins(api);
     const buttons = Array.from(document.querySelectorAll("button"));
-    expect(document.body.textContent).toContain("Example v0.1.0");
+    expect(document.body.textContent).toContain("Example v0.1.0 · 运行中");
+    expect(document.body.textContent).toContain("用户插件 · API v1");
     expect(buttons.map((button) => button.textContent)).toContain("打开");
 
     buttons.find((button) => button.textContent === "打开")!.click();
     await vi.waitFor(() => expect(open).toHaveBeenCalledWith("example"));
+  });
+
+  it("shows persistent activation and scan errors", async () => {
+    const api = {
+      list: async () => ({
+        plugins: [{
+          ...runningPlugin(),
+          enabled: false,
+          status: "failed" as const,
+          error: "register exploded",
+        }],
+        issues: [{
+          root: "C:\\plugins",
+          path: "C:\\plugins\\broken",
+          source: "user" as const,
+          message: "version 必须是合法 SemVer",
+        }],
+      }),
+      setEnabled: vi.fn(async () => ({ ok: false, error: "still broken" })),
+      open: vi.fn(async () => ({ ok: true })),
+      rescan: vi.fn(async () => ({ plugins: [], issues: [] })),
+    };
+    const { renderFeaturePlugins } = await import("./panel");
+    await renderFeaturePlugins(api);
+    expect(document.body.textContent).toContain("错误：register exploded");
+    expect(document.body.textContent).toContain("version 必须是合法 SemVer");
+    expect(document.body.textContent).toContain("重试");
+    expect(document.body.textContent).toContain("停用");
+  });
+
+  it("rescan button refreshes plugins without restarting", async () => {
+    const api = {
+      list: vi.fn(async () => ({ plugins: [runningPlugin()], issues: [] })),
+      setEnabled: vi.fn(async () => ({ ok: true })),
+      open: vi.fn(async () => ({ ok: true })),
+      rescan: vi.fn(async () => ({ plugins: [runningPlugin()], issues: [] })),
+    };
+    const { renderFeaturePlugins } = await import("./panel");
+    await renderFeaturePlugins(api);
+    document.querySelector<HTMLButtonElement>("#feature-plugins-rescan")!.click();
+    await vi.waitFor(() => expect(api.rescan).toHaveBeenCalledTimes(1));
   });
 
   it("renders a useful error when the plugin list cannot be loaded", async () => {
@@ -41,11 +96,11 @@ describe("feature plugin settings panel", () => {
       list: async () => { throw new Error("IPC unavailable"); },
       setEnabled: vi.fn(async () => ({ ok: true })),
       open: vi.fn(async () => ({ ok: true })),
+      rescan: vi.fn(async () => ({ plugins: [], issues: [] })),
     };
     const { renderFeaturePlugins } = await import("./panel");
 
     await renderFeaturePlugins(api);
-
     expect(document.body.textContent).toContain("插件列表加载失败：IPC unavailable");
   });
 });

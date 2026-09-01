@@ -17,6 +17,7 @@ function fixture(rel: string, files: Record<string, string>): string {
 }
 
 const validManifest = {
+  apiVersion: 1,
   id: "demo",
   name: "演示",
   version: "1.0.0",
@@ -69,12 +70,25 @@ describe("readManifest", () => {
     expect(readManifest(dir)).toBeNull();
   });
 
-  it("非法 deps 值被过滤，仅保留白名单项", () => {
+  it("拒绝未知 deps，而不是静默过滤拼写错误", () => {
     const dir = fixture("bad-deps", {
       "manifest.json": JSON.stringify({ ...validManifest, deps: ["channels", "llm", "nope"] }),
       "index.cjs": `module.exports = { register() {} };`,
     });
-    expect(readManifest(dir)?.deps).toEqual(["channels", "llm"]);
+    expect(readManifest(dir)).toBeNull();
+  });
+
+  it("拒绝不兼容 apiVersion 和非 SemVer 版本", () => {
+    const badApi = fixture("bad-api", {
+      "manifest.json": JSON.stringify({ ...validManifest, apiVersion: 2 }),
+      "index.cjs": "module.exports = {};",
+    });
+    const badVersion = fixture("bad-version", {
+      "manifest.json": JSON.stringify({ ...validManifest, version: "latest" }),
+      "index.cjs": "module.exports = {};",
+    });
+    expect(readManifest(badApi)).toBeNull();
+    expect(readManifest(badVersion)).toBeNull();
   });
 });
 
@@ -89,6 +103,13 @@ describe("scanPluginDir", () => {
     fixture("root/no-manifest", { "x.txt": "x" });
     expect(scanPluginDir(root).map((r) => r.manifest.id)).toEqual(["demo"]);
   });
+
+  it("根路径不是目录时返回问题而不抛出", () => {
+    const file = fixture("not-a-root", { "file.txt": "x" });
+    const issues: string[] = [];
+    expect(scanPluginDir(path.join(file, "file.txt"), "user", (issue) => issues.push(issue.message))).toEqual([]);
+    expect(issues[0]).toMatch(/无法扫描插件目录/);
+  });
 });
 
 describe("loadPlugin", () => {
@@ -97,7 +118,7 @@ describe("loadPlugin", () => {
       "manifest.json": JSON.stringify(validManifest),
       "index.cjs": `module.exports = { register(ctx) { ctx.log("hi"); } };`,
     });
-    const record = { manifest: readManifest(dir)!, dir, enabled: true };
+    const record = scanPluginDir(path.dirname(dir)).find((item) => item.dir === dir)!;
     const plugin = await loadPlugin(record);
     expect(typeof plugin.register).toBe("function");
   });
@@ -107,7 +128,7 @@ describe("loadPlugin", () => {
       "manifest.json": JSON.stringify(validManifest),
       "index.cjs": `module.exports = {};`,
     });
-    const record = { manifest: readManifest(dir)!, dir, enabled: true };
+    const record = scanPluginDir(path.dirname(dir)).find((item) => item.dir === dir)!;
     await expect(loadPlugin(record)).rejects.toThrow(/register/);
   });
 });
