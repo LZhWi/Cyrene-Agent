@@ -62,7 +62,6 @@ function bindImport(
   button.dataset.bound = "true";
   button.addEventListener("click", async () => {
     button.disabled = true;
-    button.textContent = "导入中…";
     try {
       const result = await api.importZip();
       if (!result.ok && !result.canceled) {
@@ -74,7 +73,6 @@ function bindImport(
       appendTransientError(list, `导入失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       button.disabled = false;
-      button.textContent = "导入 ZIP";
     }
   });
 }
@@ -136,7 +134,6 @@ function bindRescan(
   button.dataset.bound = "true";
   button.addEventListener("click", async () => {
     button.disabled = true;
-    button.textContent = "刷新中…";
     try {
       await api.rescan();
       await renderFeaturePlugins(api, list, button);
@@ -144,7 +141,6 @@ function bindRescan(
       appendTransientError(list, `刷新失败：${error instanceof Error ? error.message : String(error)}`);
     } finally {
       button.disabled = false;
-      button.textContent = "刷新插件";
     }
   });
 }
