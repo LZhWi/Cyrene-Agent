@@ -36,6 +36,7 @@ import {
 } from "./launch-at-login";
 
 const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
+  plugins: {},
   maxParallelToolCalls: 4,
   citaEnabled: false,
   citaSemanticEngine: "remote",
@@ -169,6 +170,11 @@ export function normalizeGeneralSettings(
       : DEFAULT_GENERAL_SETTINGS.maxParallelToolCalls;
   };
   return {
+    plugins: Object.fromEntries(
+      Object.entries(input?.plugins ?? {}).filter(
+        (entry): entry is [string, boolean] => typeof entry[1] === "boolean",
+      ),
+    ),
     maxParallelToolCalls: normalizeMaxParallelToolCalls(input?.maxParallelToolCalls),
     citaEnabled: cita.enabled,
     citaSemanticEngine: cita.semanticEngine,

@@ -4,6 +4,7 @@ export default defineConfig({
   test: {
     environment: "node",
     include: [
+      "src/plugins/**/*.test.ts",
       "src/main/**/*.test.ts",
       "src/renderer/**/*.test.ts",
       "src/shared/**/*.test.ts",

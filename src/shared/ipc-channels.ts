@@ -408,5 +408,10 @@ export const IPC = {
   SCREENSHOT_HOTKEY_CAPTURE_START: "screenshot:hotkey-capture-start",
   SCREENSHOT_HOTKEY_CAPTURE_END: "screenshot:hotkey-capture-end",
 
+  // plugin system
+  PLUGINS_LIST: "plugins:list",
+  PLUGINS_SET_ENABLED: "plugins:set-enabled",
+  PLUGINS_OPEN: "plugins:open",
+
 } as const;
 
