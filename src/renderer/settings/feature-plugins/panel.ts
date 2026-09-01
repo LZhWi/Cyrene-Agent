@@ -239,27 +239,37 @@ export async function renderFeaturePlugins(
       actions.appendChild(retry);
     }
 
-    const toggle = document.createElement("button");
-    toggle.type = "button";
-    toggle.className = item.configuredEnabled ? "save-btn" : "save-btn save-btn--ghost";
-    toggle.textContent = item.configuredEnabled ? "停用" : "启用";
-    toggle.disabled = item.status === "starting" || item.status === "stopping";
-    toggle.addEventListener("click", async () => {
-      toggle.disabled = true;
-      const targetEnabled = !item.configuredEnabled;
+    const toggleLabel = document.createElement("label");
+    toggleLabel.className = "switch";
+    toggleLabel.title = item.configuredEnabled ? "点击停用" : "点击启用";
+    const toggleInput = document.createElement("input");
+    toggleInput.type = "checkbox";
+    toggleInput.checked = item.configuredEnabled;
+    toggleInput.disabled = item.status === "starting" || item.status === "stopping";
+    toggleInput.addEventListener("change", async () => {
+      toggleInput.disabled = true;
+      const targetEnabled = toggleInput.checked;
       try {
         const result = await api.setEnabled(item.id, targetEnabled);
         if (!result.ok) {
+          toggleInput.checked = !targetEnabled;
           appendTransientError(row, `切换失败：${result.error ?? "未知错误"}`);
         }
         await renderFeaturePlugins(api, list, rescanButton);
       } catch (error) {
+        toggleInput.checked = !targetEnabled;
         appendTransientError(row, `切换失败：${error instanceof Error ? error.message : String(error)}`);
       } finally {
-        toggle.disabled = false;
+        toggleInput.disabled = false;
       }
     });
-    actions.appendChild(toggle);
+    const toggleTrack = document.createElement("span");
+    toggleTrack.className = "switch__track";
+    const toggleThumb = document.createElement("span");
+    toggleThumb.className = "switch__thumb";
+    toggleTrack.appendChild(toggleThumb);
+    toggleLabel.append(toggleInput, toggleTrack);
+    actions.appendChild(toggleLabel);
 
     if (item.source === "user") {
       const uninstall = document.createElement("button");

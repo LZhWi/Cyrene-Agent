@@ -361,5 +361,3 @@ npm run build
 7. 退出时异步 `unregister()` 在退出协调器内完成，并严格早于内置 Channels 关闭。
 8. 从 ZIP 导入新插件后保持停用；替换已有插件必须确认且保留 `plugin-data`；
 9. 路径穿越、符号链接、异常尺寸和大小写冲突 ZIP 被拒绝，临时目录被清理。
-
-仓库内 `src/plugins/demo/` 是默认停用的最小内置示例。

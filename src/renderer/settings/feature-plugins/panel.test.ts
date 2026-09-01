@@ -80,7 +80,9 @@ describe("feature plugin settings panel", () => {
     expect(document.body.textContent).toContain("错误：register exploded");
     expect(document.body.textContent).toContain("version 必须是合法 SemVer");
     expect(document.body.textContent).toContain("重试");
-    expect(document.body.textContent).toContain("停用");
+    const toggle = document.querySelector<HTMLInputElement>(".switch input[type=checkbox]");
+    expect(toggle).not.toBeNull();
+    expect(toggle!.checked).toBe(true);
   });
 
   it("rescan button refreshes plugins without restarting", async () => {
