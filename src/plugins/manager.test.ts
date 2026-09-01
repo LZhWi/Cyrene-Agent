@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginManager, type PluginManagerOptions } from "./manager";
-import type { PluginRuntime } from "./context";
+import { PLUGIN_CLEANUP_TIMEOUT_MS, type PluginRuntime } from "./context";
 import * as installer from "./installer";
 
 let tmp: string;
@@ -38,6 +38,7 @@ function fixturePlugin(id: string, manifestId: string = id): string {
 }
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   if (tmp) {
     rmSync(tmp, { recursive: true, force: true });
@@ -182,6 +183,34 @@ describe("PluginManager", () => {
     expect(mgr.list()[0].enabled).toBe(false);
     expect(h.ipc.has("plugin:demo:ping")).toBe(false);
     expect(h.getEnabledMap().demo).toBe(false);
+  });
+
+  it("unregister 超时后仍释放框架资源并完成停用", async () => {
+    const h = harness();
+    writeFileSync(
+      path.join(tmp, "demo", "index.cjs"),
+      `module.exports = {
+        register(ctx) { ctx.registerIpc("ping", () => "pong"); },
+        unregister() { return new Promise(() => {}); }
+      };`,
+      "utf8",
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+    vi.useFakeTimers();
+
+    const disabling = mgr.setEnabled("demo", false);
+    await vi.advanceTimersByTimeAsync(PLUGIN_CLEANUP_TIMEOUT_MS);
+    const result = await disabling;
+
+    expect(result).toEqual({ ok: true });
+    expect(mgr.list()[0].enabled).toBe(false);
+    expect(h.ipc.has("plugin:demo:ping")).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      "[plugins] 插件 demo unregister 失败，继续释放框架资源",
+      expect.objectContaining({ message: expect.stringContaining("unregister 清理超时") }),
+    );
   });
 
   it("停用时在 unregister 前取消插件 signal", async () => {

@@ -7,7 +7,7 @@ import type {
   PluginOverview,
   PluginRuntimeStatus,
 } from "../shared/plugin-management";
-import { createContext, type PluginRuntime } from "./context";
+import { createContext, runPluginCleanup, type PluginRuntime } from "./context";
 import {
   clearPluginModuleCache,
   loadPlugin,
@@ -539,7 +539,7 @@ export class PluginManager {
         ctx.beginStop();
         if (plugin.unregister) {
           try {
-            await plugin.unregister();
+            await runPluginCleanup(() => plugin.unregister!(), `插件 ${id} unregister`);
           } catch (cleanupError) {
             console.warn(`[plugins] 插件 ${id} 激活回滚时 unregister 失败`, cleanupError);
           }
@@ -568,7 +568,7 @@ export class PluginManager {
     try {
       if (plugin?.unregister) {
         try {
-          await plugin.unregister();
+          await runPluginCleanup(() => plugin.unregister!(), `插件 ${id} unregister`);
         } catch (error) {
           console.warn(`[plugins] 插件 ${id} unregister 失败，继续释放框架资源`, error);
         }

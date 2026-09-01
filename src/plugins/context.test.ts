@@ -3,11 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAdapter } from "../main/channels/adapters/base";
-import { createContext, type PluginRuntime } from "./context";
+import { createContext, PLUGIN_CLEANUP_TIMEOUT_MS, type PluginRuntime } from "./context";
 
 let tmp: string;
 
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   if (tmp) {
     rmSync(tmp, { recursive: true, force: true });
@@ -114,6 +115,29 @@ describe("createContext", () => {
     releaseCleanup();
     await Promise.all([first, second]);
     expect(unregisterIpc).toHaveBeenCalledOnce();
+  });
+
+  it("onDispose 超时后继续执行其余回调并释放框架资源", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const rt = runtime();
+    const ctx = createContext("demo", tmp, rt);
+    const events: string[] = [];
+    ctx.registerIpc("ping", () => "pong");
+    ctx.onDispose(() => { events.push("continued"); });
+    ctx.onDispose(() => new Promise<void>(() => {}));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.useFakeTimers();
+
+    const disposing = ctx.dispose();
+    await vi.advanceTimersByTimeAsync(PLUGIN_CLEANUP_TIMEOUT_MS);
+    await disposing;
+
+    expect(events).toEqual(["continued"]);
+    expect(rt.ipc.has("plugin:demo:ping")).toBe(false);
+    expect(warn).toHaveBeenCalledWith(
+      "[plugin:demo] 清理资源时发生 1 个错误",
+      [expect.objectContaining({ message: expect.stringContaining("onDispose 清理超时") })],
+    );
   });
 
   it("停止后拒绝新增清理回调", () => {
