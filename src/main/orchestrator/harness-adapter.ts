@@ -4,7 +4,7 @@
  * 把 CyreneRunOptions 转换为 HarnessInput，运行 Harness，
  * 再把 HarnessEvent 转为 AG-UI BaseEvent，HarnessResult 转为 AgentLoopResult。
  *
- * 设计依据：docs/design/2026-08-08-cyreneHarnessloopdesign.md (v3 §11)
+
  */
 
 import type { BaseEvent } from "@ag-ui/core";
@@ -128,7 +128,7 @@ export async function runHarnessWithAdapter(
   // 把 HarnessResult.terminateReason 映射为 canonical terminal，
   // 供 CyreneAgent.runWithEvents 写入 RUN_FINISHED.result。
   // 优先使用 harness 自身填的 result.terminal（如果未来 harness 内部直接写）。
-  // P1 修订：success 路径必须消费 Harness 的确定性状态——
+  // 修订：success 路径必须消费 Harness 的确定性状态——
   // 若 finalState.uncertainEffects 非空，externalEffectsMayContinue 必须为 true，
   // 即使 status=success 也不能谎报 false（unknown-side-effect 的诚实 final 是允许的）。
   const hasUncertainEffects = result.finalState.uncertainEffects.length > 0;
@@ -154,7 +154,7 @@ export async function runHarnessWithAdapter(
     console.error(`${LOG_PREFIX} finalizeReview failed:`, err);
   }
 
-  // ── 计划模式 run 尾钩（设计稿 §3）──
+  // ── 计划模式 run 尾钩──
   // 执行 run 结束（无论成败/取消）自动摘牌回 NORMAL；planPath 供前端"施工已完成"标注。
   // PLAN_DISCUSSING → PLAN_REVIEW 的转换不在 adapter 做：审批流由 agui-bridge 在
   // RUN_FINISHED 之后触发（需要 buildOptions 重开执行 run 的能力）。
