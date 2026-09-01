@@ -95,9 +95,20 @@ async function main() {
 
   await mkdir(vendorDir, { recursive: true });
   const archivePath = path.join(vendorDir, "skills-snapshot.zip");
+
+  // 没有第三方 skill 可归档：保留既有快照，避免 Compress-Archive 空参数报错
+  if (entries.length === 0) {
+    console.log("[build-skills-snapshot] 无第三方 skill 可归档，跳过（保留既有快照）");
+    return;
+  }
+
+  // 先压到临时文件、校验通过后再替换，失败不破坏既有快照
+  const stagingPath = path.join(vendorDir, "skills-snapshot.zip.tmp");
+  await rm(stagingPath, { force: true });
+  await zipWithPowerShell(entries, stagingPath);
+  await verifyArchive(stagingPath, entries);
   await rm(archivePath, { force: true });
-  await zipWithPowerShell(entries, archivePath);
-  await verifyArchive(archivePath, entries);
+  await (await import("node:fs")).promises.rename(stagingPath, archivePath);
 
   const hash = await sha256File(archivePath);
   const stat = await (await import("node:fs")).promises.stat(archivePath);
