@@ -22,11 +22,13 @@ modes:
 
 ## 前置知识：先读再写
 
-动手前必须先读这三处，以它们为准（本 Skill 只讲流程，不背抄规范）：
+动手前必须先读本 Skill 目录下的参考文件（自包含，打包版也可用）：
 
-1. `docs/plugins/plugin-dev-guide.md` —— 教程版开发指南，含最小可用模板
-2. `docs/plugins/plugin-authoring.md` —— 完整接口规范（manifest 字段表、生命周期、zip 导入限制）
-3. `examples/system-status/` —— 官方示例插件，覆盖工具 + 弹窗 + IPC 全部知识点；写新插件前通读一遍
+1. `references/getting-started.md` —— 快速上手教程，含最小可用模板和常见坑速查
+2. `references/api-spec.md` —— 完整接口规范（manifest 字段表、ctx API、生命周期、zip 导入限制）
+3. `references/example-walkthrough.md` —— 官方示例插件 system-status 走读，覆盖工具 + 弹窗 + IPC 全部知识点；写新插件前通读一遍
+
+开发版仓库中另有 `docs/plugins/` 文档和 `examples/system-status/` 源码可对照，但以 references/ 为准。
 
 ## 开发流程
 
