@@ -3,8 +3,6 @@
 // 为什么放在插件主页而不是网易云详情页里：本地音乐跟任何厂商都没关系，
 // 之前「打开播放器」按钮埋在网易云详情页，等于本地音乐必须先经过网易云
 // 才能用，这不合理。
-//
-// 复用 .qq-controls / .qq-btn 的样式：两张卡的按钮排形态一致，不再造一套。
 import type { MusicApi } from "./types";
 import { getMusicApi } from "./panel";
 

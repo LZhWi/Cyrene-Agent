@@ -34,24 +34,8 @@ export interface MusicApi {
   saveOpenapiConfig: (config: { appId: string; privateKey: string }) => Promise<MusicIpcResult<{ backend: string }>>;
   openPlayer: () => Promise<unknown>;
   onStateChanged: (h: (s: MusicStatusSnapshot) => void) => (() => void) | void;
-  // ── QQ 音乐（外部播放器，SMTC）──
-  // 与上面网易云那套无关：不需要登录，也没有搜索/歌单，只有检测 + 传输控制。
   // 本地音乐（导入到缓存池，mpv 直接播本地文件）
   getCachedTracks: () => Promise<MusicIpcResult<unknown[]>>;
   importLocalTracks: () => Promise<MusicIpcResult<unknown>>;
   importLocalFolder: () => Promise<MusicIpcResult<unknown>>;
-  qqDetect: () => Promise<MusicIpcResult<QQMusicDetection>>;
-  qqControl: (command: QQCommand) => Promise<MusicIpcResult<{ applied: string }>>;
-}
-
-export type QQCommand = "next" | "prev" | "play" | "pause" | "toggle";
-
-export interface QQMusicDetection {
-  installed: boolean;
-  installPath: string | null;
-  version: string | null;
-  running: boolean;
-  helperAvailable: boolean;
-  controllable: boolean;
-  nowPlaying: { title: string; artist: string; album: string; status: string } | null;
 }

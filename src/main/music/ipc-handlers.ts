@@ -5,8 +5,6 @@ import type { MusicService } from "./music-service";
 import { sanitizeLogLine } from "./log-sanitizer";
 import { parseLrc, mergeTranslation } from "./lyrics-parser";
 import { LyricsCache } from "./lyrics-cache";
-import { QQ_MUSIC_APP_ID, SmtcController, SmtcError, type SmtcCommand } from "./smtc-controller";
-import { detectQQMusic } from "./qqmusic-detector";
 
 export type MusicIpcResult<T> =
   | { ok: true; data: T }
@@ -35,11 +33,7 @@ function wrap<T>(
   );
 }
 
-export function registerMusicIpcHandlers(
-  service: MusicService,
-  // 注入点：测试里塞假的 controller，不去碰真的 SMTC。
-  smtc: SmtcController = new SmtcController(),
-): () => void {
+export function registerMusicIpcHandlers(service: MusicService): () => void {
   const channels: string[] = [];
 
   ipcMain.handle(IPC.MUSIC_GET_STATUS, () =>
@@ -136,36 +130,6 @@ export function registerMusicIpcHandlers(
       ),
   );
   channels.push(IPC.MUSIC_SAVE_OPENAPI_CONFIG);
-
-  // ── QQ 音乐（外部播放器 / SMTC）────────────────────────────
-  // 不走 wrap()：这条链路与 MusicService 后端就绪状态完全无关，
-  // 网易云没配置好的时候 QQ 音乐照样该能用。
-  ipcMain.handle(IPC.MUSIC_QQ_DETECT, async () => {
-    try {
-      return { ok: true as const, data: await detectQQMusic(smtc) };
-    } catch (err: unknown) {
-      console.error("[music] qq detect failed", sanitizeLogLine(String(err)));
-      return { ok: false as const, errorCode: "E_INTERNAL_ERROR" };
-    }
-  });
-  channels.push(IPC.MUSIC_QQ_DETECT);
-
-  ipcMain.handle(IPC.MUSIC_QQ_CONTROL, async (_e, command: string) => {
-    const allowed: SmtcCommand[] = ["next", "prev", "play", "pause", "toggle"];
-    if (!allowed.includes(command as SmtcCommand)) {
-      return { ok: false as const, errorCode: "E_INVALID_COMMAND" };
-    }
-    try {
-      await smtc.control(command as SmtcCommand, QQ_MUSIC_APP_ID);
-      return { ok: true as const, data: { applied: command } };
-    } catch (err: unknown) {
-      // SmtcError 的 code 是给 UI 分型用的（没装 helper / 播放器没开 / 被拒）
-      const code = err instanceof SmtcError ? err.code : "E_INTERNAL_ERROR";
-      if (code === "E_INTERNAL_ERROR") console.error("[music] qq control failed", sanitizeLogLine(String(err)));
-      return { ok: false as const, errorCode: code };
-    }
-  });
-  channels.push(IPC.MUSIC_QQ_CONTROL);
 
   // ── mpv 播放控制 ───────────────────────────────────────────
   ipcMain.handle(IPC.MUSIC_PLAYBACK_PLAY, () => wrap(() => service.playbackPlay(), service));

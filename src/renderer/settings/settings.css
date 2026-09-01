@@ -4270,12 +4270,6 @@ body {
   white-space: nowrap;
 }
 
-/* 没有图标的 plugin-card--sub（QQ/Spotify/本地音乐这些占位卡）：
-   基类是 34px|1fr|auto 三列，少一个图标就会让 body 掉进 34px 那列，
-   文字被挤成一列一个字。这里按实际子元素数量收敛成两列。 */
-.plugin-card--sub:not(:has(> .plugin-card__icon)) {
-  grid-template-columns: 1fr auto;
-}
 /* 网格项默认 min-width:auto，长单词/按钮排会把列撑开挤扁邻居。 */
 .plugin-card__body {
   min-width: 0;
@@ -4295,35 +4289,20 @@ body {
   }
 }
 
-/* 这张表里的 .is-hidden 都是按选择器逐个定义的（.settings-panel.is-hidden、
-   .field-note.is-hidden …），没有通用规则。所以新加的元素必须自己补一条，
-   否则 classList.toggle("is-hidden") 加了类却什么都不会发生——
-   典型后果是 QQ 音乐未安装/未运行时，三个点不动的死按钮照样渲染。 */
-.qq-controls.is-hidden,
-.qq-now-playing.is-hidden,
+/* 本地曲库为空时隐藏数量角标。 */
 .plugin-placeholder-tag.is-hidden {
   display: none;
 }
 
-/* QQ 音乐卡片：状态行 + 传输控制。
-   配色一律走 --rb-* token，不写死 rgba(255,255,255,…)——那种写法在
-   pearl-white 这类浅色主题下会直接消失（按钮和背景一样白）。 */
-.qq-now-playing {
-  margin-top: 4px;
-  font-size: 11px;
-  color: var(--rb-text-muted);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.qq-controls {
+/* 本地音乐卡片操作区。 */
+.music-card-actions {
   display: flex;
   align-items: center;
   gap: 6px;
   margin-top: 10px;
   flex-wrap: wrap;
 }
-.qq-btn {
+.music-card-btn {
   min-width: 30px;
   height: 26px;
   padding: 0 8px;
@@ -4337,16 +4316,9 @@ body {
   cursor: pointer;
   transition: background 0.15s ease, border-color 0.15s ease;
 }
-.qq-btn:hover { border-color: var(--rb-border-strong); }
-.qq-btn:active { background: var(--rb-bg-1); }
-/* 不用 margin-left:auto 把它推到右边——正文列只有 ~200px，推到右边会导致
-   整行换行，"重新检测"孤零零掉到第二行。跟着传输按钮排就好。 */
-.qq-btn--text { font-size: 11px; }
-
-/* 这张卡比同行的卡高，图标和角标居中会显得飘在半空，顶对齐更像状态标识。 */
-#music-platform-qq { align-items: start; }
-#music-platform-qq .plugin-card__icon,
-#music-platform-qq .plugin-placeholder-tag { margin-top: 2px; }
+.music-card-btn:hover { border-color: var(--rb-border-strong); }
+.music-card-btn:active { background: var(--rb-bg-1); }
+.music-card-btn--text { font-size: 11px; }
 
 .music-card {
   margin-top: 18px;

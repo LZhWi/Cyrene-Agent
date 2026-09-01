@@ -111,7 +111,6 @@ import {
   deleteSchedulerTask, toggleSchedulerHistory,
 } from "./scheduler/panel";
 import { loadMusicPanel, disposeMusicPanel } from "./music/panel";
-import { initQQMusicPanel } from "./music/qq-panel";
 import { initLocalMusicPanel } from "./music/local-panel";
 import { loadChannelsPanel } from "./channels/panel";
 import { renderProactiveDeliveryAvailability } from "./channels/panel";
@@ -1762,9 +1761,6 @@ musicToggle?.addEventListener("click", () => {
 });
 
 // ── 音乐工具路由 ──────────────────────────────────────────────
-// QQ 音乐卡片是自包含的（检测 + 传输控制都在卡内完成，不跳转到详情页），
-// 所以这里只需要初始化一次。
-initQQMusicPanel();
 initLocalMusicPanel();
 
 document.getElementById("music-platform-netease")?.addEventListener("click", () => {

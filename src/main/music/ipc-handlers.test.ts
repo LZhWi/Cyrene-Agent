@@ -128,12 +128,9 @@ describe("registerMusicIpcHandlers", () => {
     disposer();
     expect(removed).toContain("music:get-status");
     expect(removed).toContain("music:play-track");
-    // QQ 音乐（SMTC）新增的两个通道也必须被 disposer 收走
-    expect(removed).toContain("music:qq-detect");
-    expect(removed).toContain("music:qq-control");
     // 本地音乐的文件夹导入入口
     expect(removed).toContain("music:import-local-folder");
-    expect(removed.length).toBe(32);
+    expect(removed.length).toBe(30);
   });
 
   it("returns the background playback session for a newly opened player window", async () => {
