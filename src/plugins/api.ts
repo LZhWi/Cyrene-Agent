@@ -170,8 +170,14 @@ export interface PluginDeps {
   llm?: PluginLlmService;
 }
 
+export type PluginCleanup = () => void | Promise<void>;
+
 export interface PluginContext {
   id: string;
+  /** Aborted before plugin shutdown or activation rollback begins. */
+  readonly signal: AbortSignal;
+  /** Register plugin-owned cleanup. Callbacks run once in reverse order. */
+  onDispose(cleanup: PluginCleanup): void;
   registerTool(tool: PluginTool): void;
   unregisterTool(toolId: string): void;
   /** Automatically namespaced as plugin:<id>:<channel>. */

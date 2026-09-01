@@ -3,6 +3,7 @@ import type { ToolDefinition } from "../main/orchestrator/tools/registry/tool-re
 import { createPluginStorage } from "./storage";
 import type {
   PluginChannelAdapter,
+  PluginCleanup,
   PluginContext,
   PluginDeps,
   PluginLlmService,
@@ -31,6 +32,8 @@ export interface PluginRuntime {
 }
 
 interface DisposableContext extends PluginContext {
+  /** Framework-internal: signal shutdown before calling plugin.unregister(). */
+  beginStop(): void;
   /** 框架内部：卸载插件时统一清理已注册资源 */
   dispose(): Promise<void>;
 }
@@ -44,6 +47,10 @@ export function createContext(
   const registeredTools = new Set<string>();
   const registeredIpc = new Set<string>();
   const registeredAdapters = new Set<string>();
+  const cleanupCallbacks: PluginCleanup[] = [];
+  const abortController = new AbortController();
+  let stopping = false;
+  let disposed = false;
 
   // deps 白名单生效：只有 manifest.deps 声明的依赖才会注入
   const deps: PluginDeps = {};
@@ -61,6 +68,16 @@ export function createContext(
 
   const ctx: PluginContext = {
     id,
+    signal: abortController.signal,
+    onDispose(cleanup: PluginCleanup) {
+      if (typeof cleanup !== "function") {
+        throw new Error("插件清理回调必须是函数");
+      }
+      if (stopping || disposed) {
+        throw new Error("插件停止后不能再注册清理回调");
+      }
+      cleanupCallbacks.push(cleanup);
+    },
     registerTool(tool: PluginTool) {
       const expectedPrefix = `${id}_`;
       if (!tool.id.startsWith(expectedPrefix)) {
@@ -134,8 +151,25 @@ export function createContext(
   };
 
   return Object.assign(ctx, {
+    beginStop() {
+      if (stopping || disposed) return;
+      stopping = true;
+      abortController.abort();
+    },
     async dispose() {
+      if (disposed) return;
+      if (!stopping) {
+        stopping = true;
+        abortController.abort();
+      }
       const cleanupErrors: unknown[] = [];
+      for (const cleanup of cleanupCallbacks.splice(0).reverse()) {
+        try {
+          await cleanup();
+        } catch (error) {
+          cleanupErrors.push(error);
+        }
+      }
       for (const toolId of registeredTools) {
         try {
           runtime.toolRegistry.unregister(toolId);
@@ -160,6 +194,7 @@ export function createContext(
       for (const result of adapterResults) {
         if (result.status === "rejected") cleanupErrors.push(result.reason);
       }
+      disposed = true;
       if (cleanupErrors.length > 0) {
         console.warn(`[plugin:${id}] 清理资源时发生 ${cleanupErrors.length} 个错误`, cleanupErrors);
       }

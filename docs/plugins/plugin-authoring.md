@@ -142,6 +142,25 @@ module.exports = {
 ESM 可使用默认导出或命名导出。必须提供 `register(ctx)`；`unregister()` 与
 `open()` 可选。
 
+### 取消与资源清理
+
+每个 context 提供只读 `ctx.signal`。插件停用、刷新、卸载、应用退出或启动失败回滚时，
+框架会在调用 `unregister()` 前取消该信号。支持 `AbortSignal` 的后台工作应直接使用它。
+
+```js
+async register(ctx) {
+  const timer = setInterval(refresh, 30_000);
+  ctx.onDispose(() => clearInterval(timer));
+  void watchExternalService({ signal: ctx.signal }).catch((error) => {
+    if (!ctx.signal.aborted) ctx.log("后台任务失败", error);
+  });
+}
+```
+
+`ctx.onDispose(callback)` 登记的回调按逆序执行，并会等待异步回调结束。每个回调最多执行
+一次；单个回调失败会被记录，但不会阻止其余回调以及工具、IPC、渠道等框架资源释放。
+插件进入停止阶段后不能继续登记新的清理回调。
+
 ## 稳定 Plugin API
 
 插件面向的类型统一定义在 `src/plugins/api.ts`。该文件不导入 `src/main/**` 或

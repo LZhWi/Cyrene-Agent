@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAdapter } from "../main/channels/adapters/base";
 import { createContext, type PluginRuntime } from "./context";
 
@@ -59,6 +59,49 @@ describe("createContext", () => {
     await ctx.dispose();
     expect(rt.tools).toEqual([]);
     expect(rt.ipc.has("plugin:demo:ping")).toBe(false);
+  });
+
+  it("停止时先取消 signal，再按逆序等待清理回调", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const ctx = createContext("demo", tmp, runtime());
+    const events: string[] = [];
+    ctx.onDispose(() => { events.push(`first:${ctx.signal.aborted}`); });
+    ctx.onDispose(async () => {
+      await Promise.resolve();
+      events.push(`second:${ctx.signal.aborted}`);
+    });
+
+    expect(ctx.signal.aborted).toBe(false);
+    ctx.beginStop();
+    expect(ctx.signal.aborted).toBe(true);
+    await ctx.dispose();
+
+    expect(events).toEqual(["second:true", "first:true"]);
+  });
+
+  it("清理回调失败不阻止其他回调和框架资源释放，重复 dispose 不会重跑", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const rt = runtime();
+    const ctx = createContext("demo", tmp, rt);
+    const events: string[] = [];
+    ctx.registerIpc("ping", () => "pong");
+    ctx.onDispose(() => { events.push("kept"); });
+    ctx.onDispose(() => { throw new Error("cleanup failed"); });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    await ctx.dispose();
+    await ctx.dispose();
+
+    expect(events).toEqual(["kept"]);
+    expect(rt.ipc.has("plugin:demo:ping")).toBe(false);
+    expect(warn).toHaveBeenCalledOnce();
+  });
+
+  it("停止后拒绝新增清理回调", () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const ctx = createContext("demo", tmp, runtime());
+    ctx.beginStop();
+    expect(() => ctx.onDispose(() => {})).toThrow(/停止后/);
   });
 
   it("storage 可读写", () => {

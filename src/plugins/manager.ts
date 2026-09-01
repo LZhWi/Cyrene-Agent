@@ -53,7 +53,10 @@ export interface PluginImportResult {
   overview?: PluginOverview;
 }
 
-type DisposableContext = PluginContext & { dispose(): Promise<void> };
+type DisposableContext = PluginContext & {
+  beginStop(): void;
+  dispose(): Promise<void>;
+};
 
 const ICON_MIME: Record<string, string> = {
   ".png": "image/png",
@@ -533,6 +536,7 @@ export class PluginManager {
       try {
         await plugin.register(ctx);
       } catch (error) {
+        ctx.beginStop();
         if (plugin.unregister) {
           try {
             await plugin.unregister();
@@ -560,6 +564,7 @@ export class PluginManager {
     const context = this.contexts.get(id);
     if (!plugin && !context) return;
     this.statuses.set(id, "stopping");
+    context?.beginStop();
     try {
       if (plugin?.unregister) {
         try {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -184,6 +184,27 @@ describe("PluginManager", () => {
     expect(h.getEnabledMap().demo).toBe(false);
   });
 
+  it("停用时在 unregister 前取消插件 signal", async () => {
+    const h = harness();
+    const marker = path.join(tmp, "signal-state");
+    writeFileSync(
+      path.join(tmp, "demo", "index.cjs"),
+      `const fs = require("node:fs");
+      let context;
+      module.exports = {
+        register(ctx) { context = ctx; },
+        unregister() { fs.writeFileSync(${JSON.stringify(marker)}, String(context.signal.aborted)); }
+      };`,
+      "utf8",
+    );
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+
+    await mgr.setEnabled("demo", false);
+
+    expect(readFileSync(marker, "utf8")).toBe("true");
+  });
+
   it("启动失败后保留 desired state 和错误；修复入口后可重试", async () => {
     const h = harness();
     writeFileSync(
@@ -225,12 +246,14 @@ describe("PluginManager", () => {
     writeFileSync(
       path.join(tmp, "demo", "index.cjs"),
       `const fs = require("node:fs");
+      let context;
       module.exports = {
         register(ctx) {
+          context = ctx;
           ctx.registerIpc("partial", () => "leaked");
           throw new Error("partial activation failed");
         },
-        unregister() { fs.writeFileSync(${JSON.stringify(rollbackMarker)}, "yes"); }
+        unregister() { fs.writeFileSync(${JSON.stringify(rollbackMarker)}, String(context.signal.aborted)); }
       };`,
       "utf8",
     );
@@ -239,7 +262,7 @@ describe("PluginManager", () => {
     const mgr = new PluginManager(h.options);
     await mgr.start();
 
-    expect(existsSync(rollbackMarker)).toBe(true);
+    expect(readFileSync(rollbackMarker, "utf8")).toBe("true");
     expect(h.ipc.has("plugin:demo:partial")).toBe(false);
     expect(mgr.list()[0]).toMatchObject({
       configuredEnabled: true,
