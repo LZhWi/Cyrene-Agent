@@ -12,8 +12,8 @@
 - 搜索引擎集成：AnySearch 适配
 - 设置缓存机制与 UI 优化，移除不必要的 API Key 校验
 
-### Unknownuserfrommars
-- 修复截图辅助进程先退出时主进程崩溃的问题
+### Unknownuserfrommars ([Unknownuserfrommars](https://github.com/Unknownuserfrommars))
+- 修复截图辅助进程先退出时主进程崩溃的问题（PR #28，cherry-pick 进 master）
 
 ### Tobi1chi ([Tobi1chi](https://github.com/Tobi1chi))
 - NapCat OneBot 频道适配器支持（PR #40）
