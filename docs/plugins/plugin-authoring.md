@@ -27,6 +27,15 @@ userData/plugins/<plugin-id>/
   index.cjs
 ```
 
+打包版 Windows 默认对应：
+
+```text
+%APPDATA%\live2d-cyrene\plugins\<plugin-id>\
+```
+
+运行时始终以 Electron `app.getPath("userData")` 的实际返回值为准；如果开发者或测试显式
+覆盖了 `userData`，插件根目录也会随之变化。
+
 内置插件：
 
 ```text
@@ -236,8 +245,8 @@ failed --retry--> starting
 因此“配置为启用但 register 失败”不会伪装成普通停用。用户可以重试，也可以关闭 desired
 state，避免每次启动重复尝试。
 
-所有 enable、disable、open、rescan、stop 操作经过同一生命周期队列串行执行，避免并发
-点击或多个 renderer 请求造成重复注册和 context 泄漏。
+所有 enable、disable、open、rescan、uninstall、stop 操作经过同一生命周期队列串行执行，
+避免并发点击或多个 renderer 请求造成重复注册和 context 泄漏。
 
 ## 刷新、更新与模块缓存
 
@@ -253,16 +262,32 @@ state，避免每次启动重复尝试。
 
 活动插件会在手动刷新时重新加载，即使 manifest 没变。新增用户插件仍保持停用。
 
+## 卸载用户插件
+
+设置页只对用户插件显示“卸载”。卸载事务按以下顺序执行：
+
+1. 确认目标来自用户插件扫描源；内置插件拒绝卸载；
+2. 确认目标是用户插件根目录中的一级普通目录，并通过真实路径再次验证没有越界；
+3. 停止插件并释放工具、IPC、渠道适配器等运行资源；
+4. 清除该插件的持久启停记录，确保删除失败时也不会在下次扫描自动重启；
+5. 清理模块缓存并递归删除插件程序目录；
+6. 执行一次不重启其他活动插件的增量重扫。
+
+卸载只删除 `userData/plugins/<plugin-id>/` 中的插件程序。默认保留
+`userData/plugin-data/<plugin-id>/` 中的插件私有数据，避免卸载误删用户内容；如需彻底清除，
+应由用户另行确认后手动删除对应数据目录。
+
 ## 应用退出
 
-插件清理加入应用 shutdown latch。Cyrene 会等待：
+插件清理加入新版应用退出协调器的固定阶段。Cyrene 会依次等待：
 
 1. 插件 `unregister()`；
 2. Context 工具、IPC、渠道资源回收；
-3. 内置 Channels、截图服务、LSP 和 Git 服务关闭；
-4. 音乐子系统关闭。
+3. 插件在 `stopActiveWork` 阶段完成后，再在 `stopExternalConsumers` 阶段关闭内置 Channels；
+4. 截图服务、LSP、Git 与音乐等本地资源关闭。
 
-总等待上限为 8 秒，超时后才强制退出。插件仍应让 `unregister()` 有界且可重复调用。
+受控退出总等待上限为 10 秒，超时后中止继续等待并执行最终退出动作。插件仍应让
+`unregister()` 有界且可重复调用。
 
 ## 从最初 v1 草案迁移
 
@@ -306,8 +331,8 @@ npm run build
 2. 启用/停用后工具、IPC 和 adapter 对称增减；
 3. register 失败后设置页显示 `failed` 和具体错误；
 4. 修改入口后点击刷新，运行行为切换到新版本；
-5. 删除插件目录后刷新，插件资源和列表项消失；
+5. 用户插件点击卸载并确认后，程序目录、资源和启停记录消失，私有数据目录保留；
 6. 重复使用 `feishu` 等内置渠道 ID 时启用失败，内置渠道仍正常；
-7. 退出时异步 `unregister()` 能在 shutdown latch 内完成。
+7. 退出时异步 `unregister()` 在退出协调器内完成，并严格早于内置 Channels 关闭。
 
 仓库内 `src/plugins/demo/` 是默认停用的最小内置示例。

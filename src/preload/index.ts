@@ -445,6 +445,7 @@ const pluginsApi = {
     ipcRenderer.invoke(IPC.PLUGINS_SET_ENABLED, id, enabled),
   open: (id: string) => ipcRenderer.invoke(IPC.PLUGINS_OPEN, id),
   rescan: () => ipcRenderer.invoke(IPC.PLUGINS_RESCAN),
+  uninstall: (id: string) => ipcRenderer.invoke(IPC.PLUGINS_UNINSTALL, id),
 };
 
 contextBridge.exposeInMainWorld("plugins", pluginsApi);

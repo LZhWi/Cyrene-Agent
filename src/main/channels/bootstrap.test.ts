@@ -72,6 +72,30 @@ describe("createChannelsSubsystem lifecycle", () => {
     expect(lifecycle.start).toHaveBeenCalledOnce();
   });
 
+  it("resolves adaptersRegistered only after synchronous adapter initialization succeeds", async () => {
+    const lifecycle = { initialize: vi.fn(), start: vi.fn(async () => undefined), shutdown: vi.fn() };
+    const subsystem = createChannelsSubsystem(makeChannelsDeps(), lifecycle);
+    let settled = false;
+    void subsystem.adaptersRegistered.then(() => { settled = true; });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    subsystem.initialize();
+    await expect(subsystem.adaptersRegistered).resolves.toBeUndefined();
+    expect(settled).toBe(true);
+  });
+
+  it("rejects adaptersRegistered when adapter initialization fails", async () => {
+    const lifecycle = {
+      initialize: vi.fn(() => { throw new Error("adapter registration failed"); }),
+      start: vi.fn(async () => undefined),
+      shutdown: vi.fn(),
+    };
+    const subsystem = createChannelsSubsystem(makeChannelsDeps(), lifecycle);
+    expect(() => subsystem.initialize()).toThrow("adapter registration failed");
+    await expect(subsystem.adaptersRegistered).rejects.toThrow("adapter registration failed");
+  });
+
   it("forwards the abort signal to the lifecycle start", async () => {
     const lifecycle = { initialize: vi.fn(), start: vi.fn(async () => undefined), shutdown: vi.fn() };
     const subsystem = createChannelsSubsystem(makeChannelsDeps(), lifecycle);

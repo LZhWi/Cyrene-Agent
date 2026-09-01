@@ -73,11 +73,11 @@ function makeCoreDeps(calls: string[], overrides: Partial<CoreDependencies> = {}
       initialize: () => { calls.push("channels-initialize"); },
       adaptersRegistered: Promise.resolve(),
       start: vi.fn(async () => { calls.push("channels-start"); }),
-      shutdown: vi.fn(async () => undefined),
+      shutdown: vi.fn(async () => { calls.push("channels-stop"); }),
     } as never),
     startPlugins: async () => {
       calls.push("plugins-start");
-      return { stop: vi.fn(async () => undefined) } as never;
+      return { stop: vi.fn(async () => { calls.push("plugins-stop"); }) } as never;
     },
     createScheduler: () => ({ initialize: () => { calls.push("scheduler-initialize"); }, start: vi.fn(() => { calls.push("scheduler-start"); }), stop: vi.fn() } as never),
     registerCoreIpc: () => { calls.push("register-core-ipc"); },
@@ -122,6 +122,27 @@ describe("startCore", () => {
     expect(deps.chatLoad).toHaveBeenCalledOnce();
   });
 
+  it("waits for the built-in adapter boundary before starting plugins", async () => {
+    const calls: string[] = [];
+    let releaseAdapters!: () => void;
+    const adaptersRegistered = new Promise<void>((resolve) => { releaseAdapters = resolve; });
+    const deps = makeCoreDeps(calls, {
+      createChannels: () => ({
+        initialize: () => { calls.push("channels-initialize"); },
+        adaptersRegistered,
+        start: vi.fn(async () => undefined),
+        shutdown: vi.fn(async () => undefined),
+      } as never),
+    });
+
+    const starting = startCore(deps);
+    await vi.waitFor(() => expect(calls).toContain("channels-initialize"));
+    expect(calls).not.toContain("plugins-start");
+    releaseAdapters();
+    await starting;
+    expect(calls).toContain("plugins-start");
+  });
+
   it("degrades skills failure and continues startup", async () => {
     const deps = makeCoreDeps([], {
       initSkills: () => { throw new Error("skills broken"); },
@@ -162,5 +183,16 @@ describe("startCore", () => {
     await startCore(deps);
     expect(calls.indexOf("reveal")).toBeLessThan(calls.indexOf("mark-startup-windows"));
     expect(deps.readiness.getPhase()).toBe("core-ready");
+  });
+
+  it("stops plugins before built-in channels during controlled shutdown", async () => {
+    const calls: string[] = [];
+    const deps = makeCoreDeps(calls);
+    await startCore(deps);
+
+    await deps.shutdown.requestControlledShutdown({ reason: "test", finalAction: vi.fn() });
+
+    expect(calls.indexOf("plugins-stop")).toBeGreaterThan(-1);
+    expect(calls.indexOf("plugins-stop")).toBeLessThan(calls.indexOf("channels-stop"));
   });
 });

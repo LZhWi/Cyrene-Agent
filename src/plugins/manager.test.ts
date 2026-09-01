@@ -83,6 +83,7 @@ describe("PluginManager", () => {
     expect(mgr.list()[0].enabled).toBe(true);
     expect(h.ipc.has("plugins:list")).toBe(true);
     expect(h.ipc.has("plugins:rescan")).toBe(true);
+    expect(h.ipc.has("plugins:uninstall")).toBe(true);
     expect(h.ipc.get("plugins:list")?.()).toMatchObject({
       plugins: [expect.objectContaining({ id: "demo", status: "running" })],
       issues: [],
@@ -256,6 +257,75 @@ describe("PluginManager", () => {
       configuredEnabled: false,
       status: "disabled",
     });
+    expect(h.tools).toEqual([]);
+  });
+
+  it("卸载用户插件时先清理运行资源，再删除目录、启停记录并重扫", async () => {
+    const h = harness({ loadEnabledMap: () => ({ demo: true }) });
+    h.options.scanRoots = [{ path: path.dirname(fixturePlugin("demo")), source: "user" }];
+    const pluginDir = path.join(tmp, "demo");
+    const pluginDataDir = path.join(h.options.storageRoot, "demo");
+    mkdirSync(pluginDataDir, { recursive: true });
+    writeFileSync(path.join(pluginDataDir, "settings.json"), "{}", "utf8");
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+    expect(h.tools).toContain("demo_tool");
+
+    const result = await mgr.uninstall("demo");
+
+    expect(result.ok).toBe(true);
+    expect(existsSync(pluginDir)).toBe(false);
+    expect(existsSync(pluginDataDir)).toBe(true);
+    expect(h.tools).toEqual([]);
+    expect(h.ipc.has("plugin:demo:ping")).toBe(false);
+    expect(h.getEnabledMap()).toEqual({});
+    expect(mgr.list()).toEqual([]);
+  });
+
+  it("拒绝卸载内置插件", async () => {
+    const h = harness();
+    const pluginDir = path.join(tmp, "demo");
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+
+    const result = await mgr.uninstall("demo");
+
+    expect(result).toEqual({ ok: false, error: "内置插件不能卸载: demo" });
+    expect(existsSync(pluginDir)).toBe(true);
+    expect(mgr.list()).toHaveLength(1);
+  });
+
+  it("用户插件记录不再位于配置的用户根目录时拒绝删除", async () => {
+    const h = harness({ loadEnabledMap: () => ({ demo: true }) });
+    const pluginDir = path.join(tmp, "demo");
+    h.options.scanRoots = [{ path: path.dirname(pluginDir), source: "user" }];
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+    h.options.scanRoots = [{ path: path.join(tmp, "different-root"), source: "user" }];
+
+    const result = await mgr.uninstall("demo");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("拒绝卸载不安全的插件路径");
+    expect(existsSync(pluginDir)).toBe(true);
+    expect(h.tools).toContain("demo_tool");
+  });
+
+  it("启停记录无法持久化时不删除用户插件目录", async () => {
+    const h = harness({
+      loadEnabledMap: () => ({ demo: true }),
+      saveEnabledMap: () => { throw new Error("disk read-only"); },
+    });
+    const pluginDir = path.join(tmp, "demo");
+    h.options.scanRoots = [{ path: path.dirname(pluginDir), source: "user" }];
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+
+    const result = await mgr.uninstall("demo");
+
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain("清理插件启停记录失败，未删除目录");
+    expect(existsSync(pluginDir)).toBe(true);
     expect(h.tools).toEqual([]);
   });
 

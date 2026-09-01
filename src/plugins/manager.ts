@@ -1,7 +1,13 @@
 import path from "node:path";
+import { lstat, realpath, rm } from "node:fs/promises";
 import { IPC } from "../shared/ipc-channels";
 import { createContext, type PluginRuntime } from "./context";
-import { loadPlugin, scanPluginDir, type PluginScanIssue } from "./loader";
+import {
+  clearPluginModuleCache,
+  loadPlugin,
+  scanPluginDir,
+  type PluginScanIssue,
+} from "./loader";
 import type {
   CyrenePlugin,
   PluginContext,
@@ -138,6 +144,12 @@ export class PluginManager {
         return this.open(id);
       });
       this.opts.runtime.registerIpc(IPC.PLUGINS_RESCAN, () => this.rescan());
+      this.opts.runtime.registerIpc(IPC.PLUGINS_UNINSTALL, (id: unknown) => {
+        if (typeof id !== "string" || !id) {
+          return { ok: false, error: "id 必须是非空字符串" };
+        }
+        return this.uninstall(id);
+      });
       await this.doRescan(false);
       this.opts.onListChanged?.();
     });
@@ -207,6 +219,55 @@ export class PluginManager {
     });
   }
 
+  uninstall(id: string): Promise<{ ok: boolean; error?: string; overview?: PluginOverview }> {
+    return this.enqueueOperation(async () => {
+      const record = this.records.get(id);
+      if (!record) return { ok: false, error: `插件不存在: ${id}` };
+      if (record.source !== "user") {
+        return { ok: false, error: `内置插件不能卸载: ${id}` };
+      }
+
+      try {
+        await this.assertSafeUserPluginDirectory(record);
+      } catch (error) {
+        return { ok: false, error: `拒绝卸载不安全的插件路径: ${errorMessage(error)}` };
+      }
+
+      await this.deactivate(id);
+
+      // 先持久化“未启用”语义。即使随后目录删除失败，下一次扫描也不会自动重启插件。
+      const nextEnabledMap = { ...this.enabledMap };
+      delete nextEnabledMap[id];
+      try {
+        this.opts.saveEnabledMap(nextEnabledMap);
+        this.enabledMap = nextEnabledMap;
+      } catch (error) {
+        const message = `清理插件启停记录失败，未删除目录: ${errorMessage(error)}`;
+        this.statuses.set(id, "failed");
+        this.errors.set(id, message);
+        this.opts.onListChanged?.();
+        return { ok: false, error: message };
+      }
+
+      try {
+        // unregister() 属于第三方代码，执行后再次校验，避免它在清理阶段替换目标目录。
+        await this.assertSafeUserPluginDirectory(record);
+        clearPluginModuleCache(record.dir);
+        await rm(record.dir, { recursive: true, force: false });
+      } catch (error) {
+        const message = `删除插件目录失败: ${errorMessage(error)}`;
+        this.statuses.set(id, "disabled");
+        this.errors.set(id, message);
+        this.opts.onListChanged?.();
+        return { ok: false, error: message };
+      }
+
+      await this.doRescan(false);
+      this.opts.onListChanged?.();
+      return { ok: true, overview: this.overview() };
+    });
+  }
+
   stop(): Promise<void> {
     return this.enqueueOperation(async () => {
       if (!this.started) return;
@@ -218,6 +279,7 @@ export class PluginManager {
         IPC.PLUGINS_SET_ENABLED,
         IPC.PLUGINS_OPEN,
         IPC.PLUGINS_RESCAN,
+        IPC.PLUGINS_UNINSTALL,
       ]) {
         try {
           this.opts.runtime.unregisterIpc(channel);
@@ -248,6 +310,37 @@ export class PluginManager {
     }
     // User-installed code is never executed on first discovery without opt-in.
     return record.source === "builtin" && record.manifest.defaultEnabled;
+  }
+
+  private async assertSafeUserPluginDirectory(record: PluginRecord): Promise<void> {
+    const candidateRoot = this.opts.scanRoots.find((root) => {
+      if (root.source !== "user") return false;
+      const relative = path.relative(path.resolve(root.path), path.resolve(record.dir));
+      return relative.length > 0
+        && !relative.startsWith("..")
+        && !path.isAbsolute(relative)
+        && !relative.includes(path.sep);
+    });
+    if (!candidateRoot) throw new Error("插件目录不是用户插件根目录的一级子目录");
+
+    const stat = await lstat(record.dir);
+    if (!stat.isDirectory() || stat.isSymbolicLink()) {
+      throw new Error("插件路径不是普通目录");
+    }
+
+    const [rootReal, pluginReal] = await Promise.all([
+      realpath(candidateRoot.path),
+      realpath(record.dir),
+    ]);
+    const relative = path.relative(rootReal, pluginReal);
+    if (
+      relative.length === 0
+      || relative.startsWith("..")
+      || path.isAbsolute(relative)
+      || relative.includes(path.sep)
+    ) {
+      throw new Error("插件真实路径不在用户插件根目录的一级范围内");
+    }
   }
 
   private scanAll(): {

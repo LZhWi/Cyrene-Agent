@@ -43,6 +43,7 @@ export interface FeaturePluginsApi {
   setEnabled(id: string, enabled: boolean): Promise<{ ok: boolean; error?: string }>;
   open(id: string): Promise<{ ok: boolean; error?: string }>;
   rescan(): Promise<FeaturePluginOverview>;
+  uninstall(id: string): Promise<{ ok: boolean; error?: string; overview?: FeaturePluginOverview }>;
 }
 
 declare global {
@@ -228,6 +229,34 @@ export async function renderFeaturePlugins(
       }
     });
     actions.appendChild(toggle);
+
+    if (item.source === "user") {
+      const uninstall = document.createElement("button");
+      uninstall.type = "button";
+      uninstall.className = "save-btn save-btn--ghost";
+      uninstall.textContent = "卸载";
+      uninstall.disabled = item.status === "starting" || item.status === "stopping";
+      uninstall.addEventListener("click", async () => {
+        const confirmed = window.confirm(
+          `确定卸载用户插件“${item.name}”吗？\n\n将删除插件程序目录，但保留 userData/plugin-data 中的插件数据。`,
+        );
+        if (!confirmed) return;
+        uninstall.disabled = true;
+        try {
+          const result = await api.uninstall(item.id);
+          if (!result.ok) {
+            appendTransientError(row, `卸载失败：${result.error ?? "未知错误"}`);
+            return;
+          }
+          await renderFeaturePlugins(api, list, rescanButton);
+        } catch (error) {
+          appendTransientError(row, `卸载失败：${error instanceof Error ? error.message : String(error)}`);
+        } finally {
+          uninstall.disabled = false;
+        }
+      });
+      actions.appendChild(uninstall);
+    }
     row.append(info, actions);
     list.appendChild(row);
   }

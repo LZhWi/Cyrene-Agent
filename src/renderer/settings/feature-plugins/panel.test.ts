@@ -37,6 +37,7 @@ describe("feature plugin settings panel", () => {
       setEnabled: vi.fn(async () => ({ ok: true })),
       open,
       rescan: vi.fn(async () => ({ plugins: [runningPlugin()], issues: [] })),
+      uninstall: vi.fn(async () => ({ ok: true })),
     };
     const { renderFeaturePlugins } = await import("./panel");
 
@@ -69,6 +70,7 @@ describe("feature plugin settings panel", () => {
       setEnabled: vi.fn(async () => ({ ok: false, error: "still broken" })),
       open: vi.fn(async () => ({ ok: true })),
       rescan: vi.fn(async () => ({ plugins: [], issues: [] })),
+      uninstall: vi.fn(async () => ({ ok: true })),
     };
     const { renderFeaturePlugins } = await import("./panel");
     await renderFeaturePlugins(api);
@@ -84,6 +86,7 @@ describe("feature plugin settings panel", () => {
       setEnabled: vi.fn(async () => ({ ok: true })),
       open: vi.fn(async () => ({ ok: true })),
       rescan: vi.fn(async () => ({ plugins: [runningPlugin()], issues: [] })),
+      uninstall: vi.fn(async () => ({ ok: true })),
     };
     const { renderFeaturePlugins } = await import("./panel");
     await renderFeaturePlugins(api);
@@ -97,10 +100,37 @@ describe("feature plugin settings panel", () => {
       setEnabled: vi.fn(async () => ({ ok: true })),
       open: vi.fn(async () => ({ ok: true })),
       rescan: vi.fn(async () => ({ plugins: [], issues: [] })),
+      uninstall: vi.fn(async () => ({ ok: true })),
     };
     const { renderFeaturePlugins } = await import("./panel");
 
     await renderFeaturePlugins(api);
     expect(document.body.textContent).toContain("插件列表加载失败：IPC unavailable");
+  });
+
+  it("asks for confirmation and uninstalls only user plugins", async () => {
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const uninstall = vi.fn(async () => ({ ok: true }));
+    const builtin = { ...runningPlugin(), id: "builtin", name: "Builtin", source: "builtin" as const };
+    const api = {
+      list: vi.fn()
+        .mockResolvedValueOnce({ plugins: [runningPlugin(), builtin], issues: [] })
+        .mockResolvedValueOnce({ plugins: [builtin], issues: [] }),
+      setEnabled: vi.fn(async () => ({ ok: true })),
+      open: vi.fn(async () => ({ ok: true })),
+      rescan: vi.fn(async () => ({ plugins: [], issues: [] })),
+      uninstall,
+    };
+    const { renderFeaturePlugins } = await import("./panel");
+    await renderFeaturePlugins(api);
+
+    const uninstallButtons = Array.from(document.querySelectorAll("button"))
+      .filter((button) => button.textContent === "卸载");
+    expect(uninstallButtons).toHaveLength(1);
+    uninstallButtons[0].click();
+
+    await vi.waitFor(() => expect(uninstall).toHaveBeenCalledWith("example"));
+    expect(window.confirm).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(document.body.textContent).not.toContain("Example v0.1.0"));
   });
 });

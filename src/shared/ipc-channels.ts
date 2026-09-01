@@ -413,6 +413,7 @@ export const IPC = {
   PLUGINS_SET_ENABLED: "plugins:set-enabled",
   PLUGINS_OPEN: "plugins:open",
   PLUGINS_RESCAN: "plugins:rescan",
+  PLUGINS_UNINSTALL: "plugins:uninstall",
 
 } as const;
 
