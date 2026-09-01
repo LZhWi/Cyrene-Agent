@@ -723,6 +723,7 @@ MIT 仅约束本仓库的源代码，不适用于角色、Live2D 模型与美术
 - **Live2D 模型**：由 [@是依七哒](https://space.bilibili.com/457683484) 制作 —
   详见 [MODEL_LICENSE.md](./MODEL_LICENSE.md)
 - **Live2D Cubism SDK**：© Live2D Cubism
+- **贡献者名单**：详见 [docs/CONTRIBUTORS.md](./docs/CONTRIBUTORS.md)
 
 特别感谢模型原作者慷慨授权本项目使用、修改并再分发其作品。
 
