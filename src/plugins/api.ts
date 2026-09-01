@@ -164,6 +164,15 @@ export interface PluginStorage {
   rootDir(): string;
 }
 
+export type PluginEventListener<T = unknown> = (payload: T) => void | Promise<void>;
+
+export interface PluginEvents {
+  /** 订阅带完整命名空间的 host:* 或 plugin:<id>:* 事件。 */
+  on<T = unknown>(event: string, listener: PluginEventListener<T>): () => void;
+  /** 发布当前插件自有事件；框架自动补全为 plugin:<id>:<event>。 */
+  emit<T = unknown>(event: string, payload: T): Promise<void>;
+}
+
 export interface PluginDeps {
   /** Read-only channel discovery. Registration must use PluginContext methods. */
   channels?: { has(id: string): boolean };
@@ -178,6 +187,7 @@ export interface PluginContext {
   readonly signal: AbortSignal;
   /** 登记插件自有资源的清理回调；回调按逆序且最多执行一次。 */
   onDispose(cleanup: PluginCleanup): void;
+  events: PluginEvents;
   registerTool(tool: PluginTool): void;
   unregisterTool(toolId: string): void;
   /** Automatically namespaced as plugin:<id>:<channel>. */

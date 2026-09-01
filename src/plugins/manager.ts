@@ -8,6 +8,7 @@ import type {
   PluginRuntimeStatus,
 } from "../shared/plugin-management";
 import { createContext, runPluginCleanup, type PluginRuntime } from "./context";
+import { createPluginEventBus, qualifyHostEvent } from "./events";
 import {
   clearPluginModuleCache,
   loadPlugin,
@@ -86,6 +87,7 @@ function errorMessage(error: unknown): string {
 }
 
 export class PluginManager {
+  private readonly eventBus = createPluginEventBus();
   private records = new Map<string, PluginRecord>();
   private instances = new Map<string, CyrenePlugin>();
   private contexts = new Map<string, DisposableContext>();
@@ -137,6 +139,11 @@ export class PluginManager {
     return { plugins: this.list(), issues: [...this.scanIssues] };
   }
 
+  /** 发布宿主事件并补全 host: 前缀；单个监听器失败不会中断其余监听器。 */
+  publishHostEvent<T = unknown>(event: string, payload: T): Promise<void> {
+    return this.eventBus.emit(qualifyHostEvent(event), payload);
+  }
+
   start(): Promise<void> {
     return this.enqueueOperation(async () => {
       if (this.started) return;
@@ -174,6 +181,9 @@ export class PluginManager {
         return this.uninstall(id);
       });
       await this.doRescan(false);
+      await this.publishHostEvent("plugins:ready", {
+        pluginIds: this.list().filter((plugin) => plugin.enabled).map((plugin) => plugin.id),
+      });
       this.opts.onListChanged?.();
     });
   }
@@ -360,6 +370,7 @@ export class PluginManager {
   stop(): Promise<void> {
     return this.enqueueOperation(async () => {
       if (!this.started) return;
+      await this.publishHostEvent("plugins:stopping", undefined);
       for (const id of Array.from(this.instances.keys())) {
         await this.deactivate(id);
       }
@@ -381,6 +392,7 @@ export class PluginManager {
       this.statuses.clear();
       this.errors.clear();
       this.scanIssues = [];
+      this.eventBus.clear();
       this.started = false;
     });
   }
@@ -531,6 +543,7 @@ export class PluginManager {
         id,
         path.join(this.opts.storageRoot, id),
         this.opts.runtime,
+        this.eventBus,
         record.manifest.deps,
       );
       try {

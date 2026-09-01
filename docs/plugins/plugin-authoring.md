@@ -205,6 +205,38 @@ ctx.registerIpc("ping", () => "pong");
 实际 Electron IPC 名称为 `plugin:<plugin-id>:ping`。channel 只允许字母、数字、
 `.`、`_`、`-`，长度不超过 64。插件只能注销当前 context 注册过的 IPC。
 
+### 事件
+
+插件可订阅宿主或其他插件发布的事件：
+
+```js
+const unsubscribe = ctx.events.on("host:plugins:ready", ({ pluginIds }) => {
+  ctx.log("已启动插件", pluginIds);
+});
+
+ctx.events.on("plugin:weather:updated", (weather) => {
+  ctx.log("天气插件已更新", weather);
+});
+```
+
+`ctx.events.on()` 返回幂等的退订函数；插件停用、刷新、卸载或启动失败回滚时，Context
+也会自动退订仍然有效的监听器，进入停止阶段后不能再新增订阅。监听器按订阅顺序执行并
+等待异步结果；单个监听器失败或执行超过 5 秒会被记录，但不会阻止同一事件的其余监听器。
+
+插件只能用短事件名发布自己的事件，框架会自动添加所有者命名空间：
+
+```js
+await ctx.events.emit("status", { online: true });
+// 订阅方收到：plugin:my-plugin:status
+```
+
+插件不能伪造 `host:*` 或其他插件的事件。宿主通过
+`PluginManager.publishHostEvent("chat:message", payload)` 发布的完整名称为
+`host:chat:message`。目前内置事件：
+
+- `host:plugins:ready`：启动扫描和自动启用完成，payload 为 `{ pluginIds: string[] }`；
+- `host:plugins:stopping`：全局插件停止开始、任何活动插件被注销之前，payload 为 `undefined`。
+
 ### 私有存储
 
 ```js
