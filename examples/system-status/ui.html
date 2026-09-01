@@ -22,6 +22,68 @@
 
     * { box-sizing: border-box; }
 
+    /* ---------- 自绘标题栏（无边框窗口） ---------- */
+    .titlebar {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      height: 38px;
+      padding: 0 8px 0 22px;
+      border-bottom: 1px solid rgba(243, 220, 230, 0.55);
+      background: linear-gradient(90deg, rgba(255, 242, 248, 0.9), rgba(255, 255, 255, 0.7));
+      -webkit-app-region: drag;
+      user-select: none;
+    }
+
+    .titlebar-title {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #9c8992;
+      font-size: 12px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+    }
+
+    .titlebar-title::before {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--pink);
+      box-shadow: 0 0 0 4px rgba(239, 120, 169, 0.14);
+      content: "";
+    }
+
+    .titlebar-actions {
+      display: flex;
+      gap: 4px;
+      -webkit-app-region: no-drag;
+    }
+
+    .titlebar-btn {
+      display: grid;
+      width: 40px;
+      height: 28px;
+      place-items: center;
+      padding: 0;
+      border: none;
+      border-radius: 9px;
+      background: transparent;
+      color: #9c8992;
+      font-size: 13px;
+      line-height: 1;
+      cursor: pointer;
+      transition: background 160ms ease, color 160ms ease;
+    }
+
+    .titlebar-btn:hover { background: var(--pink-soft); color: var(--pink-strong); }
+    .titlebar-btn:active { background: #fbdcea; }
+
+    .titlebar-btn.close:hover { background: #fde8ef; color: #df4f8a; }
+
+
     html,
     body {
       min-width: 360px;
@@ -560,6 +622,14 @@
 </head>
 <body>
   <main class="app-shell" aria-label="Cyrene 系统状态面板">
+    <header class="titlebar" id="titlebar">
+      <span class="titlebar-title">Cyrene · 系统状态</span>
+      <div class="titlebar-actions">
+        <button class="titlebar-btn" id="btnMinimize" title="最小化" aria-label="最小化">─</button>
+        <button class="titlebar-btn" id="btnMaximize" title="最大化 / 还原" aria-label="最大化或还原">□</button>
+        <button class="titlebar-btn close" id="btnClose" title="关闭" aria-label="关闭">✕</button>
+      </div>
+    </header>
     <header class="topbar">
       <div>
         <p class="eyebrow">Cyrene system monitor</p>
@@ -755,6 +825,15 @@
 
     // 接线：通过插件私有 IPC 通道拉取实时快照，每 3 秒轮询
     const { ipcRenderer } = require("electron");
+
+    // 自绘标题栏：窗口控制按钮 + 双击最大化/还原
+    byId("btnMinimize").addEventListener("click", () => ipcRenderer.send("plugin:system-status:win-minimize"));
+    byId("btnMaximize").addEventListener("click", () => ipcRenderer.send("plugin:system-status:win-maximize"));
+    byId("btnClose").addEventListener("click", () => ipcRenderer.send("plugin:system-status:win-close"));
+    byId("titlebar").addEventListener("dblclick", (e) => {
+      if (e.target.closest(".titlebar-btn")) return;
+      ipcRenderer.send("plugin:system-status:win-maximize");
+    });
 
     async function poll() {
       try {

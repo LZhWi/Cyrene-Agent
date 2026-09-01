@@ -285,12 +285,15 @@ const systemStatusPlugin = {
       pluginWin.focus();
       return;
     }
-    const { BrowserWindow } = require("electron");
+    const { BrowserWindow, ipcMain } = require("electron");
+    const CH_MIN = "plugin:system-status:win-minimize";
+    const CH_MAX = "plugin:system-status:win-maximize";
+    const CH_CLOSE = "plugin:system-status:win-close";
     pluginWin = new BrowserWindow({
       width: 1020,
       height: 800,
       minWidth: 400,
-      title: "Cyrene · 系统状态",
+      frame: false, // 无系统边框，标题栏由 ui.html 自绘
       resizable: true,
       autoHideMenuBar: true,
       backgroundColor: "#fff9fc",
@@ -299,7 +302,23 @@ const systemStatusPlugin = {
         contextIsolation: false,
       },
     });
-    pluginWin.on("closed", () => { pluginWin = null; });
+    // 自定义标题栏的窗口控制：渲染进程发事件，主进程执行
+    const onMin = () => { if (pluginWin && !pluginWin.isDestroyed()) pluginWin.minimize(); };
+    const onMax = () => {
+      if (!pluginWin || pluginWin.isDestroyed()) return;
+      if (pluginWin.isMaximized()) pluginWin.unmaximize();
+      else pluginWin.maximize();
+    };
+    const onClose = () => { if (pluginWin && !pluginWin.isDestroyed()) pluginWin.close(); };
+    ipcMain.on(CH_MIN, onMin);
+    ipcMain.on(CH_MAX, onMax);
+    ipcMain.on(CH_CLOSE, onClose);
+    pluginWin.on("closed", () => {
+      ipcMain.removeListener(CH_MIN, onMin);
+      ipcMain.removeListener(CH_MAX, onMax);
+      ipcMain.removeListener(CH_CLOSE, onClose);
+      pluginWin = null;
+    });
     await pluginWin.loadFile(path.join(__dirname, "ui.html"));
   },
 
