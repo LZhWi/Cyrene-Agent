@@ -497,7 +497,7 @@ export class MusicService {
     const session = this.validatePlaybackSession(input);
     const track = session.queue[session.queueIndex];
     if (!track) throw new MusicInputError("E_PLAYBACK_QUEUE_INDEX_INVALID");
-    await this.ensureReady();
+    await this.ensureTrackPlaybackReady(track.id);
     this.playbackSession.replace(session);
     this.emitPlaybackSessionChange();
     return this.dispatchFromCacheOrProvider(track.id);
@@ -733,14 +733,7 @@ export class MusicService {
   /** Trusted renderer path: IDs originate from MusicService search results. */
   async playTrackFromUi(trackId: string): Promise<PlaybackDispatchResult> {
     if (!trackId) throw new MusicInputError("E_INVALID_ID_FORMAT");
-    if (this.shuttingDown) throw new MusicInputError("E_BACKEND_NOT_READY");
-    await this.start();
-    // 命中缓存的曲目（含本地导入）直接播本地文件，完全不碰网易云 provider，
-    // 因此不要求后端就绪。否则没配网易云凭据的用户连自己导入的歌都放不了。
-    if (this.cacheDownloader.getFilePath(trackId)) {
-      return this.dispatchFromCacheOrProvider(trackId);
-    }
-    this.requireReady();
+    await this.ensureTrackPlaybackReady(trackId);
     return this.dispatchFromCacheOrProvider(trackId);
   }
 
@@ -751,6 +744,17 @@ export class MusicService {
   }
 
   // ── Helpers ────────────────────────────────────────────────
+
+  /**
+   * 本地缓存（含用户导入）只依赖 mpv，不依赖网易云后端。
+   * 两条 UI 播放入口必须共用这道门禁，避免其中一条重新把本地音乐锁住。
+   */
+  private async ensureTrackPlaybackReady(trackId: string): Promise<void> {
+    if (this.shuttingDown) throw new MusicInputError("E_BACKEND_NOT_READY");
+    await this.start();
+    if (this.cacheDownloader.getFilePath(trackId)) return;
+    this.requireReady();
+  }
 
   private async ensureReady(): Promise<void> {
     if (this.shuttingDown) throw new MusicInputError("E_BACKEND_NOT_READY");
