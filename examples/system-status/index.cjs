@@ -1,59 +1,117 @@
 "use strict";
 
 const os = require("node:os");
+const fs = require("node:fs");
+const path = require("node:path");
 const { execFile } = require("node:child_process");
 
 /** 插件自己的状态窗口实例；open() 时创建，unregister() 时关闭 */
 let pluginWin = null;
 
+/** nvidia-smi 是否可用（失败一次后不再重试） */
+let nvidiaSmiAvailable = true;
+
+/** CPU 差分采样的上一次快照 */
+let lastCpuSample = null;
+
+/** 网络累计字节数的上一次快照（用于差分算速率） */
+let lastNetSample = null;
+
 /** @returns {Promise<{ok: boolean, stdout?: string, stderr?: string}>} */
-function runCommand(cmd, args) {
+function runCommand(cmd, args, timeout = 5000) {
   return new Promise((resolve) => {
-    execFile(cmd, args, { timeout: 5000, windowsHide: true }, (error, stdout, stderr) => {
+    execFile(cmd, args, { timeout, windowsHide: true }, (error, stdout, stderr) => {
       resolve({ ok: !error, stdout: String(stdout || ""), stderr: String(stderr || "") });
     });
   });
 }
 
-async function readWindowsBattery() {
-  const r = await runCommand("powershell.exe", [
-    "-NoProfile", "-NonInteractive", "-Command",
-    "Get-CimInstance Win32_Battery | Select-Object EstimatedChargeRemaining, BatteryStatus | ConvertTo-Json -Compress",
-  ]);
+// ---------------------------------------------------------------------------
+// CPU：os.cpus() 两次采样差分，纯进程内计算，零开销
+// ---------------------------------------------------------------------------
+function sampleCpuPercent() {
+  const cpus = os.cpus();
+  let idle = 0;
+  let total = 0;
+  for (const c of cpus) {
+    idle += c.times.idle;
+    total += c.times.user + c.times.nice + c.times.sys + c.times.idle + c.times.irq;
+  }
+  let percent = null;
+  if (lastCpuSample) {
+    const dIdle = idle - lastCpuSample.idle;
+    const dTotal = total - lastCpuSample.total;
+    if (dTotal > 0) percent = Math.max(0, Math.min(100, (1 - dIdle / dTotal) * 100));
+  }
+  lastCpuSample = { idle, total };
+  return percent;
+}
+
+// ---------------------------------------------------------------------------
+// GPU：优先 nvidia-smi（温度/占用/显存一把抓）；不可用时回退 WMI 性能计数器
+// ---------------------------------------------------------------------------
+async function readGpu() {
+  if (nvidiaSmiAvailable) {
+    const r = await runCommand("nvidia-smi", [
+      "--query-gpu=temperature.gpu,utilization.gpu,memory.used,memory.total",
+      "--format=csv,noheader,nounits",
+    ], 3000);
+    const parts = r.ok ? r.stdout.trim().split(/\s*,\s*/) : [];
+    const nums = parts.map(Number);
+    if (nums.length === 4 && nums.every((n) => Number.isFinite(n))) {
+      const [temp, util, vramUsed, vramTotal] = nums;
+      return {
+        percent: util,
+        temperature: temp,
+        vramUsedMb: vramUsed,
+        vramTotalMb: vramTotal,
+      };
+    }
+    nvidiaSmiAvailable = false; // 没装 N 卡驱动，以后不再尝试
+  }
+  return { percent: null, temperature: null, vramUsedMb: null, vramTotalMb: null };
+}
+
+// ---------------------------------------------------------------------------
+// 磁盘 + 网络 + 电池 + GPU 引擎回退：一次 PowerShell 调用全部拿完
+// ---------------------------------------------------------------------------
+async function readWindowsMisc() {
+  const script = [
+    "$r = [ordered]@{}",
+    "$r.disks = @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Select-Object DeviceID,Size,FreeSpace)",
+    "$net = Get-NetAdapterStatistics -ErrorAction SilentlyContinue | Measure-Object -Property ReceivedBytes,SentBytes -Sum",
+    "$r.net = @{ r = [double]$net.ReceivedBytes; s = [double]$net.SentBytes }",
+    "$bat = Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue",
+    "if ($bat) { $r.bat = @{ p = [int]$bat.EstimatedChargeRemaining; charging = ($bat.BatteryStatus -eq 2) } } else { $r.bat = $null }",
+    "$g = Get-CimInstance Win32_PerfFormattedData_GPUPerformanceCounters_GPUEngine -ErrorAction SilentlyContinue | Measure-Object -Property UtilizationPercentage -Sum",
+    "if ($g.Sum -ne $null) { $r.gpuEngine = [math]::Round([double]$g.Sum, 1) } else { $r.gpuEngine = $null }",
+    "ConvertTo-Json -InputObject $r -Compress -Depth 4",
+  ].join("; ");
+  const r = await runCommand("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], 8000);
   if (!r.ok || !r.stdout.trim()) return null;
   try {
-    const raw = JSON.parse(r.stdout);
-    if (raw == null) return null;
-    // BatteryStatus: 1=放电 2=充电(接交流) 其余视为异常
-    const charging = raw.BatteryStatus === 2;
-    return { percent: Number(raw.EstimatedChargeRemaining), charging };
+    return JSON.parse(r.stdout);
   } catch {
     return null;
   }
 }
 
-async function collectStatus() {
-  const cpus = os.cpus();
-  const totalMem = os.totalmem();
-  const freeMem = os.freemem();
-  const usedMem = totalMem - freeMem;
-  const load = os.loadavg()[0];
-
-  const lines = [];
-  lines.push(`系统: ${os.type()} ${os.release()} (${os.arch()})`);
-  lines.push(`主机名: ${os.hostname()}`);
-  lines.push(`CPU: ${cpus[0] ? cpus[0].model.trim() : "未知"} · ${cpus.length} 核心`);
-  lines.push(`内存: ${formatBytes(usedMem)} / ${formatBytes(totalMem)}（使用率 ${((usedMem / totalMem) * 100).toFixed(1)}%）`);
-  lines.push(`已运行: ${formatUptime(os.uptime())}`);
-  if (load > 0) lines.push(`平均负载(1min): ${load.toFixed(2)}`);
-
-  const battery = await readWindowsBattery();
-  if (battery) {
-    lines.push(`电池: ${battery.percent}%（${battery.charging ? "充电中" : "使用电池"}）`);
-  } else {
-    lines.push("电池: 未检测到（台式机或未上报）");
+// ---------------------------------------------------------------------------
+// 网络速率：累计字节差分
+// ---------------------------------------------------------------------------
+function netBytesPerSecond(net) {
+  if (!net || !Number.isFinite(net.r) || !Number.isFinite(net.s)) return null;
+  const now = Date.now();
+  const total = net.r + net.s;
+  if (!lastNetSample) {
+    lastNetSample = { total, time: now };
+    return null; // 第一次采样没有差分基准
   }
-  return lines;
+  const dBytes = total - lastNetSample.total;
+  const dSeconds = (now - lastNetSample.time) / 1000;
+  lastNetSample = { total, time: now };
+  if (dSeconds <= 0 || dBytes < 0) return null;
+  return dBytes / dSeconds;
 }
 
 function formatBytes(bytes) {
@@ -64,12 +122,96 @@ function formatBytes(bytes) {
 
 function formatUptime(seconds) {
   const h = Math.floor(seconds / 3600);
-  const m = Math.floor((seconds % 3600) / 60);
   if (h > 24) {
     const d = Math.floor(h / 24);
-    return `${d} 天 ${h % 24} 小时`;
+    return `已运行 ${d} 天 ${h % 24} 小时`;
   }
-  return `${h} 小时 ${m} 分钟`;
+  const m = Math.floor((seconds % 3600) / 60);
+  return `已运行 ${h} 小时 ${m} 分钟`;
+}
+
+function mbToGb(mb) {
+  return Math.round((mb / 1024) * 10) / 10;
+}
+
+// ---------------------------------------------------------------------------
+// 完整快照：供弹窗 UI 消费（字段结构与 ui.html 约定一致）
+// ---------------------------------------------------------------------------
+async function collectSnapshot() {
+  const cpuPercent = sampleCpuPercent();
+  const totalMem = os.totalmem();
+  const usedMem = totalMem - os.freemem();
+  const cpuInfo = os.cpus()[0];
+
+  const [gpu, misc] = await Promise.all([readGpu(), readWindowsMisc()]);
+
+  const snapshot = {
+    cpuPercent: cpuPercent == null ? null : Math.round(cpuPercent),
+    gpuPercent: null,
+    memoryPercent: Math.round((usedMem / totalMem) * 100),
+    memoryUsedGb: Math.round((usedMem / 1024 ** 3) * 10) / 10,
+    memoryTotalGb: Math.round((totalMem / 1024 ** 3) * 10) / 10,
+    disks: [],
+    gpuTemperature: gpu.temperature,
+    vramUsedGb: gpu.vramUsedMb == null ? null : mbToGb(gpu.vramUsedMb),
+    vramTotalGb: gpu.vramTotalMb == null ? null : mbToGb(gpu.vramTotalMb),
+    networkBytesPerSecond: null,
+    batteryPercent: null,
+    batteryLabel: "台式机",
+    uptime: formatUptime(os.uptime()),
+    cpuModel: cpuInfo ? `${cpuInfo.model.trim()} · ${os.cpus().length} 核` : null,
+  };
+
+  // GPU 占用：nvidia-smi 优先，WMI 引擎计数器兜底
+  if (gpu.percent != null) snapshot.gpuPercent = Math.round(gpu.percent);
+  else if (misc && Number.isFinite(misc.gpuEngine)) snapshot.gpuPercent = Math.round(Math.min(100, misc.gpuEngine));
+
+  if (misc) {
+    if (Array.isArray(misc.disks)) {
+      snapshot.disks = misc.disks
+        .filter((d) => Number.isFinite(d.Size) && d.Size > 0)
+        .map((d) => {
+          const used = d.Size - d.FreeSpace;
+          return {
+            name: d.DeviceID || "?",
+            usedGb: Math.round((used / 1024 ** 3) * 10) / 10,
+            totalGb: Math.round((d.Size / 1024 ** 3) * 10) / 10,
+            percent: Math.round((used / d.Size) * 100),
+          };
+        })
+        .slice(0, 6);
+    }
+    snapshot.networkBytesPerSecond = netBytesPerSecond(misc.net);
+    if (misc.bat && Number.isFinite(misc.bat.p)) {
+      snapshot.batteryPercent = misc.bat.p;
+      snapshot.batteryLabel = misc.bat.charging ? "充电中" : "使用电池";
+    }
+  }
+  return snapshot;
+}
+
+// ---------------------------------------------------------------------------
+// 文本版状态（给 AI 工具用的简洁输出）
+// ---------------------------------------------------------------------------
+async function collectStatus() {
+  const snapshot = await collectSnapshot();
+  const lines = [];
+  lines.push(`系统: ${os.type()} ${os.release()} (${os.arch()})`);
+  lines.push(`CPU: ${snapshot.cpuModel || "未知"}${snapshot.cpuPercent != null ? ` · 当前占用 ${snapshot.cpuPercent}%` : ""}`);
+  lines.push(`内存: ${snapshot.memoryUsedGb} / ${snapshot.memoryTotalGb} GB（使用率 ${snapshot.memoryPercent}%）`);
+  if (snapshot.gpuPercent != null) {
+    let gpuLine = `GPU: 占用 ${snapshot.gpuPercent}%`;
+    if (snapshot.gpuTemperature != null) gpuLine += ` · 温度 ${snapshot.gpuTemperature}°C`;
+    if (snapshot.vramUsedGb != null) gpuLine += ` · 显存 ${snapshot.vramUsedGb}/${snapshot.vramTotalGb} GB`;
+    lines.push(gpuLine);
+  }
+  lines.push(`已运行: ${snapshot.uptime.replace("已运行 ", "")}`);
+  if (snapshot.batteryPercent != null) {
+    lines.push(`电池: ${snapshot.batteryPercent}%（${snapshot.batteryLabel}）`);
+  } else {
+    lines.push("电池: 未检测到（台式机或未上报）");
+  }
+  return lines;
 }
 
 async function diskUsage(drive) {
@@ -98,7 +240,7 @@ const systemStatusPlugin = {
     ctx.registerTool({
       id: "system-status_status",
       name: "系统状态查询",
-      description: "查询本机系统状态，包括操作系统、CPU、内存、电池与开机时长。用户问电脑还剩多少电、内存占用、开了多久等问题时使用。",
+      description: "查询本机系统状态，包括操作系统、CPU 占用、内存、GPU、电池与开机时长。用户问电脑还剩多少电、内存占用、CPU 温度负载、开了多久等问题时使用。",
       enabled: true,
       risk: "safe",
       effectKind: "read",
@@ -133,21 +275,7 @@ const systemStatusPlugin = {
       },
     });
 
-    ctx.registerIpc("snapshot", async () => {
-      const lines = await collectStatus();
-      const osMod = require("node:os");
-      const totalMem = osMod.totalmem();
-      const usedMem = totalMem - osMod.freemem();
-      const disk = await diskUsage("C");
-      return {
-        memory: `${formatBytes(usedMem)} / ${formatBytes(totalMem)}`,
-        memoryPercent: Math.round((usedMem / totalMem) * 100),
-        disk: disk ? `已用 ${formatBytes(disk.used)} / ${formatBytes(disk.total)}` : "无法读取",
-        diskPercent: disk ? Math.round((disk.used / disk.total) * 100) : 0,
-        cpu: `${osMod.cpus()[0] ? osMod.cpus()[0].model.trim() : "未知"} · ${osMod.cpus().length} 核`,
-        uptime: formatUptime(osMod.uptime()),
-      };
-    });
+    ctx.registerIpc("snapshot", () => collectSnapshot());
 
     ctx.log("系统状态插件已注册: system-status_status / system-status_disk");
   },
@@ -158,64 +286,21 @@ const systemStatusPlugin = {
       return;
     }
     const { BrowserWindow } = require("electron");
-    const html = `<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8">
-<title>系统状态</title>
-<style>
-  body { font-family: "Segoe UI", "Microsoft YaHei", sans-serif; background: #1e1e2e; color: #cdd6f4;
-         margin: 0; padding: 24px; user-select: none; }
-  h1 { font-size: 16px; margin: 0 0 16px; color: #f5c2e7; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .card { background: #313244; border-radius: 12px; padding: 14px 16px; }
-  .card .label { font-size: 12px; opacity: 0.7; margin-bottom: 6px; }
-  .card .value { font-size: 18px; font-weight: 600; }
-  .bar { height: 8px; border-radius: 4px; background: #45475a; margin-top: 8px; overflow: hidden; }
-  .bar .fill { height: 100%; border-radius: 4px; background: linear-gradient(90deg, #f5c2e7, #cba6f7); }
-  #hint { margin-top: 16px; font-size: 12px; opacity: 0.5; }
-</style>
-</head>
-<body>
-  <h1>本机系统状态</h1>
-  <div class="grid">
-    <div class="card"><div class="label">内存</div><div class="value" id="mem">读取中…</div><div class="bar"><div class="fill" id="memBar"></div></div></div>
-    <div class="card"><div class="label">系统盘</div><div class="value" id="disk">读取中…</div><div class="bar"><div class="fill" id="diskBar"></div></div></div>
-    <div class="card"><div class="label">CPU</div><div class="value" id="cpu">读取中…</div></div>
-    <div class="card"><div class="label">已运行</div><div class="value" id="uptime">读取中…</div></div>
-  </div>
-  <div id="hint">数据每 3 秒刷新一次 · 来自系统状态插件</div>
-<script>
-  const { ipcRenderer } = require("electron");
-  async function refresh() {
-    try {
-      const s = await ipcRenderer.invoke("plugin:system-status:snapshot");
-      mem.textContent = s.memory;
-      memBar.style.width = s.memoryPercent + "%";
-      disk.textContent = s.disk;
-      diskBar.style.width = s.diskPercent + "%";
-      cpu.textContent = s.cpu;
-      uptime.textContent = s.uptime;
-    } catch (e) { /* 忽略单次失败 */ }
-  }
-  refresh();
-  setInterval(refresh, 3000);
-</script>
-</body>
-</html>`;
     pluginWin = new BrowserWindow({
-      width: 480,
-      height: 360,
-      title: "系统状态",
+      width: 1020,
+      height: 800,
+      minWidth: 400,
+      title: "Cyrene · 系统状态",
       resizable: true,
       autoHideMenuBar: true,
+      backgroundColor: "#fff9fc",
       webPreferences: {
         nodeIntegration: true,
         contextIsolation: false,
       },
     });
     pluginWin.on("closed", () => { pluginWin = null; });
-    await pluginWin.loadURL("data:text/html;charset=utf-8," + encodeURIComponent(html));
+    await pluginWin.loadFile(path.join(__dirname, "ui.html"));
   },
 
   unregister() {
