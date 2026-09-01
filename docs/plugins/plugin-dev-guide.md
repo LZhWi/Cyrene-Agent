@@ -230,6 +230,32 @@ const text = await ctx.deps.llm.generateText(
 
 ---
 
+## 给每轮对话补充动态上下文
+
+需要让昔涟知道插件的实时状态时，不必修改主程序的 `soul.md`。注册一个提示词 Provider 即可：
+
+```js
+ctx.registerPromptProvider({
+  id: "status",
+  modes: ["chat"],
+  async provide({ userText, signal }) {
+    if (signal.aborted) return "";
+    return `番茄钟状态：专注中；用户本轮问题：${userText}`;
+  },
+});
+```
+
+- `id` 只需在当前插件内唯一，框架会自动加插件命名空间
+- `modes` 可选：`chat` / `work` / `learn` / `code`；不写表示全部模式
+- 返回空字符串表示本轮不注入
+- 单个 Provider 最多等待 2 秒、最多 16000 字符；失败或超时不会打断对话
+- 所有插件合计最多注入 32000 字符
+- 停用插件时会自动注销；也可调用 `ctx.unregisterPromptProvider("status")`
+
+这些内容只进入每轮动态上下文，不会改写核心提示词文件，也不会进入稳定提示词缓存前缀。
+
+---
+
 ## 私有存储
 
 ```js

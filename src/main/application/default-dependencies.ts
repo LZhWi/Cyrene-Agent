@@ -53,6 +53,7 @@ import {
 } from "../rag";
 import { getEmbeddingProvider, getSceneEmbeddingProvider } from "../rag/embedding";
 import { toolRegistry } from "../orchestrator/tools/registry/tool-registry";
+import { pluginPromptRegistry } from "../../plugins/prompts";
 import { setLive2dWindowSender } from "../orchestrator/tools/built-in-tools";
 import { registerAllTools } from "../orchestrator/tools/registry/tool-registration";
 import { LspManager } from "../lsp/manager";
@@ -371,6 +372,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         socialContextScheduler: services.social.scheduler,
         chatsStore,
         socialAtomStore: services.social.store,
+        buildPluginPromptContext: (input) => pluginPromptRegistry.build(input),
       }),
 
       createChannels: (runtime, services) => createChannelsSubsystem({
