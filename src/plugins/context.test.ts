@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ChannelAdapter } from "../main/channels/adapters/base";
 import { createContext, PLUGIN_CLEANUP_TIMEOUT_MS, type PluginRuntime } from "./context";
+import { createPluginEventBus } from "./events";
 
 let tmp: string;
 
@@ -145,6 +146,22 @@ describe("createContext", () => {
     const ctx = createContext("demo", tmp, runtime());
     ctx.beginStop();
     expect(() => ctx.onDispose(() => {})).toThrow(/停止后/);
+  });
+
+  it("插件事件自动命名并在 dispose 时退订", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const bus = createPluginEventBus();
+    const ctx = createContext("demo", tmp, runtime(), undefined, bus);
+    const received: unknown[] = [];
+    ctx.events.on("host:runtime:ready", (payload) => { received.push(payload); });
+    bus.on("plugin:demo:status", (payload) => { received.push(payload); });
+
+    await bus.emit("host:runtime:ready", { ready: true });
+    await ctx.events.emit("status", { state: "ok" });
+    await ctx.dispose();
+    await bus.emit("host:runtime:ready", { ready: false });
+
+    expect(received).toEqual([{ ready: true }, { state: "ok" }]);
   });
 
   it("storage 可读写", () => {

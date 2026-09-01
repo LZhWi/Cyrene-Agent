@@ -1,5 +1,7 @@
 import type { ChannelAdapter } from "../main/channels/adapters/base";
 import type { ToolDefinition } from "../main/orchestrator/tools/registry/tool-registry";
+import type { PluginEventBus } from "./events";
+import { createPluginEventBus, qualifyPluginEvent } from "./events";
 import { createPluginStorage } from "./storage";
 import type {
   PluginChannelAdapter,
@@ -67,6 +69,7 @@ export function createContext(
   storageRoot: string,
   runtime: PluginRuntime,
   declaredDeps?: PluginManifest["deps"],
+  eventBus: Pick<PluginEventBus, "on" | "emit"> = createPluginEventBus(),
 ): DisposableContext {
   const registeredTools = new Set<string>();
   const registeredIpc = new Set<string>();
@@ -77,6 +80,7 @@ export function createContext(
   let disposed = false;
   // 缓存同一次释放任务，避免异步清理让出事件循环时发生并发重入。
   let disposePromise: Promise<void> | undefined;
+  const eventUnsubscribers = new Set<() => void>();
 
   // deps 白名单生效：只有 manifest.deps 声明的依赖才会注入
   const deps: PluginDeps = {};
@@ -103,6 +107,25 @@ export function createContext(
         throw new Error("插件停止后不能再注册清理回调");
       }
       cleanupCallbacks.push(cleanup);
+    },
+    events: {
+      on(event, listener) {
+        // Context 同时跟踪退订函数，确保插件停用时不会遗留跨生命周期监听器。
+        const unsubscribeFromBus = eventBus.on(
+          event,
+          listener as (payload: unknown) => void | Promise<void>,
+        );
+        const unsubscribe = () => {
+          unsubscribeFromBus();
+          eventUnsubscribers.delete(unsubscribe);
+        };
+        eventUnsubscribers.add(unsubscribe);
+        return unsubscribe;
+      },
+      emit(event, payload) {
+        // 插件只能发布自己的命名空间，不能伪造宿主或其他插件事件。
+        return eventBus.emit(qualifyPluginEvent(id, event), payload);
+      },
     },
     registerTool(tool: PluginTool) {
       const expectedPrefix = `${id}_`;
@@ -190,6 +213,8 @@ export function createContext(
             abortController.abort();
           }
           const cleanupErrors: unknown[] = [];
+          for (const unsubscribe of eventUnsubscribers) unsubscribe();
+          eventUnsubscribers.clear();
           for (const cleanup of cleanupCallbacks.splice(0).reverse()) {
             try {
               await runPluginCleanup(cleanup, `插件 ${id} onDispose`);

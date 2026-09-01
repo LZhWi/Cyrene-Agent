@@ -1,0 +1,77 @@
+export type PluginEventBusListener = (payload: unknown) => void | Promise<void>;
+
+const EVENT_SEGMENT_RE = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,63}$/;
+
+function validateQualifiedEventName(event: string): void {
+  // 完整事件只开放宿主和插件两类命名空间，避免无所有者的全局事件。
+  const segments = event.split(":");
+  if (segments.length < 2 || !segments.every((segment) => EVENT_SEGMENT_RE.test(segment))) {
+    throw new Error(`非法插件事件名: ${event}`);
+  }
+  if (segments[0] !== "host" && segments[0] !== "plugin") {
+    throw new Error(`插件事件名必须使用 host 或 plugin 命名空间: ${event}`);
+  }
+  if (segments[0] === "plugin" && segments.length < 3) {
+    throw new Error(`plugin 事件名必须包含插件 id 和事件名: ${event}`);
+  }
+}
+
+export interface PluginEventBus {
+  on(event: string, listener: PluginEventBusListener): () => void;
+  emit(event: string, payload: unknown): Promise<void>;
+  clear(): void;
+}
+
+export function createPluginEventBus(
+  onListenerError: (event: string, error: unknown) => void = (event, error) => {
+    console.warn(`[plugins] 事件监听器处理 ${event} 失败`, error);
+  },
+): PluginEventBus {
+  const listeners = new Map<string, Set<{ listener: PluginEventBusListener }>>();
+
+  return {
+    on(event, listener) {
+      validateQualifiedEventName(event);
+      if (typeof listener !== "function") throw new Error("插件事件监听器必须是函数");
+      const eventListeners = listeners.get(event) ?? new Set<{ listener: PluginEventBusListener }>();
+      const subscription = { listener };
+      eventListeners.add(subscription);
+      listeners.set(event, eventListeners);
+      let active = true;
+      return () => {
+        if (!active) return;
+        active = false;
+        eventListeners.delete(subscription);
+        if (eventListeners.size === 0) listeners.delete(event);
+      };
+    },
+    async emit(event, payload) {
+      validateQualifiedEventName(event);
+      // 固定本轮快照：监听器在回调中退订时，不改变已经开始的发布顺序。
+      const snapshot = Array.from(listeners.get(event) ?? []);
+      for (const subscription of snapshot) {
+        try {
+          await subscription.listener(payload);
+        } catch (error) {
+          onListenerError(event, error);
+        }
+      }
+    },
+    clear() {
+      listeners.clear();
+    },
+  };
+}
+
+export function qualifyPluginEvent(pluginId: string, event: string): string {
+  // 插件侧只接受单个短名称；所有者前缀由框架生成。
+  if (!EVENT_SEGMENT_RE.test(event)) throw new Error(`非法插件自定义事件名: ${event}`);
+  return `plugin:${pluginId}:${event}`;
+}
+
+export function qualifyHostEvent(event: string): string {
+  // 宿主调用方传入主题即可，不能自行选择或覆盖根命名空间。
+  const qualified = `host:${event}`;
+  validateQualifiedEventName(qualified);
+  return qualified;
+}

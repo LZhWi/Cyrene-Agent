@@ -95,6 +95,50 @@ describe("PluginManager", () => {
     expect(h.ipc.has("plugin:demo:ping")).toBe(true);
   });
 
+  it("宿主事件可发布给插件，停用后监听器被移除", async () => {
+    const h = harness();
+    const marker = path.join(tmp, "host-event");
+    writeFileSync(
+      path.join(tmp, "demo", "index.cjs"),
+      `const fs = require("node:fs");
+      module.exports = { register(ctx) {
+        ctx.events.on("host:runtime:ready", (payload) => {
+          fs.writeFileSync(${JSON.stringify(marker)}, payload.phase);
+        });
+      } };`,
+      "utf8",
+    );
+    const mgr = new PluginManager(h.options);
+    await mgr.start();
+
+    await mgr.publishHostEvent("runtime:ready", { phase: "core" });
+    expect(readFileSync(marker, "utf8")).toBe("core");
+
+    await mgr.setEnabled("demo", false);
+    await mgr.publishHostEvent("runtime:ready", { phase: "background" });
+    expect(readFileSync(marker, "utf8")).toBe("core");
+  });
+
+  it("在插件仍可接收时发布插件系统 ready 和 stopping 事件", async () => {
+    const h = harness();
+    const marker = path.join(tmp, "lifecycle-events");
+    writeFileSync(
+      path.join(tmp, "demo", "index.cjs"),
+      `const fs = require("node:fs");
+      module.exports = { register(ctx) {
+        ctx.events.on("host:plugins:ready", () => fs.appendFileSync(${JSON.stringify(marker)}, "ready\\n"));
+        ctx.events.on("host:plugins:stopping", () => fs.appendFileSync(${JSON.stringify(marker)}, "stopping\\n"));
+      } };`,
+      "utf8",
+    );
+    const mgr = new PluginManager(h.options);
+
+    await mgr.start();
+    await mgr.stop();
+
+    expect(readFileSync(marker, "utf8")).toBe("ready\nstopping\n");
+  });
+
   it("只允许打开已启用且声明 open 的插件", async () => {
     const h = harness();
     const mgr = new PluginManager(h.options);
