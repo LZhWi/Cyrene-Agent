@@ -90,6 +90,7 @@ import { registerCallIpc } from "../call/call-manager";
 import { initSkills, skillRegistry } from "../skills";
 import { createSchedulerSubsystem } from "../scheduler/bootstrap";
 import { createChannelsSubsystem } from "../channels/bootstrap";
+import { startPluginRuntime } from "../plugin-runtime";
 import { createAgentRuntime } from "../orchestrator/agent-runtime";
 import { createRuntimeStateService } from "../orchestrator/runtime-state-service";
 import { createProactiveLifecycle } from "../proactive/proactive-lifecycle";
@@ -376,6 +377,11 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         agentRuntime: runtime,
         ttsSynthesisService: services.tts,
         getReactChatWindow: () => reactChatWindow,
+        ipc: shell.ipc,
+      }),
+
+      startPlugins: (services) => startPluginRuntime({
+        llmClient: services.llm,
         ipc: shell.ipc,
       }),
 

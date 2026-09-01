@@ -1,0 +1,10 @@
+{
+  "apiVersion": 1,
+  "id": "demo",
+  "name": "演示插件",
+  "version": "0.1.0",
+  "description": "插件系统演示：注册一个工具与一个 IPC 通道",
+  "author": "liyi",
+  "entry": "index.js",
+  "defaultEnabled": false
+}

@@ -7,7 +7,7 @@
     "cyrene": "./dist/cli/index.js"
   },
   "scripts": {
-    "build:main": "tsc -p tsconfig.main.json",
+    "build:main": "node -e \"require('fs').rmSync('dist/main/plugins',{recursive:true,force:true})\" && tsc -p tsconfig.main.json && node -e \"const fs=require('fs');fs.cpSync('src/plugins','dist/main/plugins',{recursive:true,filter:s=>fs.statSync(s).isDirectory()||s.endsWith('manifest.json')})\"",
     "build:preload": "tsc -p tsconfig.preload.json",
     "build:renderer": "vite build",
     "build:cli": "node scripts/build/cli.mjs",
