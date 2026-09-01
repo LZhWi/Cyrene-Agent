@@ -116,3 +116,38 @@ describe("QQ 卡片接线", () => {
     expect(document.getElementById("qq-status-line")!.textContent).toContain("不支持");
   });
 });
+
+// classList 断言证明不了「真的隐藏了」——类加上了，但样式表里没有对应规则的话
+// 元素照样显示。这里从真实的 settings.css 里把那条规则抠出来注进 jsdom：
+// 既验证规则确实存在于源文件，又验证它真的生效。
+//
+// 刻意只注入这一条而不是整份 settings.css：整份四千多行让 jsdom 解析要 30 秒以上，
+// 为一个断言拖慢整个测试套件不值得。
+describe("is-hidden 必须真的隐藏（规则存在且生效）", () => {
+  function injectHiddenRule(): void {
+    const css = readFileSync(path.resolve(__dirname, "..", "settings.css"), "utf8");
+    const m = /.qq-controls.is-hidden[^}]*}/.exec(css);
+    expect(m, "settings.css 里找不到 .qq-controls.is-hidden 规则").not.toBeNull();
+    const style = document.createElement("style");
+    style.textContent = m![0];
+    document.head.appendChild(style);
+  }
+
+  it("加上 is-hidden 后控制条的 display 为 none", () => {
+    injectHiddenRule();
+    const controls = document.getElementById("qq-controls")!;
+
+    // 初始 markup 就带 is-hidden
+    expect(controls.classList.contains("is-hidden")).toBe(true);
+    expect(getComputedStyle(controls).display).toBe("none");
+
+    controls.classList.remove("is-hidden");
+    expect(getComputedStyle(controls).display).not.toBe("none");
+  });
+
+  it("角标和正在播放行同样在这条规则里", () => {
+    injectHiddenRule();
+    expect(getComputedStyle(document.getElementById("qq-tag")!).display).toBe("none");
+    expect(getComputedStyle(document.getElementById("qq-now-playing")!).display).toBe("none");
+  });
+});

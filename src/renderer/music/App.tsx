@@ -181,6 +181,9 @@ export function App() {
   const [searchResults, setSearchResults] = useState<Track[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [loginReady, setLoginReady] = useState(false);
+  // 网易云是否已有结论：未登录（立即成立），或已登录且歌单拉回来了。
+  // 自动选源必须等它，否则本地曲库会抢占默认歌单（本地 IPC 比网络快）。
+  const [neteaseResolved, setNeteaseResolved] = useState(false);
   const [loading, setLoading] = useState(true);
   const searchTimer = useRef<number | null>(null);
   // 记住静音前的音量，用于取消静音时恢复
@@ -214,9 +217,10 @@ export function App() {
       currentId: activePlaylistId,
       localTrackCount: cacheTracks.length,
       neteasePlaylistCount: neteasePlaylists.length,
+      neteaseResolved,
     });
     if (next) setActivePlaylistId(next);
-  }, [activePlaylistId, cacheTracks.length, neteasePlaylists.length]);
+  }, [activePlaylistId, cacheTracks.length, neteasePlaylists.length, neteaseResolved]);
 
   const patch = useCallback((p: Partial<PlaybackState>) => {
     setState((s) => ({ ...s, ...p }));
@@ -402,9 +406,12 @@ export function App() {
         const snap = r.data as { account?: string; backend?: string };
         if (snap?.account === "signed_in") {
           setLoginReady(true);
-          loadPlaylists();
+          // 已登录：等歌单真正拉回来才算有结论
+          void loadPlaylists().finally(() => setNeteaseResolved(true));
         } else {
           setLoginReady(false);
+          // 未登录：不会再有网易云歌单，立即有结论
+          setNeteaseResolved(true);
         }
       } catch {
         /* ignore */
@@ -416,9 +423,14 @@ export function App() {
       void loadCacheTracks();
       if (snap?.account === "signed_in") {
         setLoginReady(true);
-        if (neteasePlaylistsRef.current.length === 0) void loadPlaylists();
+        if (neteasePlaylistsRef.current.length === 0) {
+          void loadPlaylists().finally(() => setNeteaseResolved(true));
+        } else {
+          setNeteaseResolved(true);
+        }
       } else {
         setLoginReady(false);
+        setNeteaseResolved(true);
       }
     });
     return () => {

@@ -4295,6 +4295,16 @@ body {
   }
 }
 
+/* 这张表里的 .is-hidden 都是按选择器逐个定义的（.settings-panel.is-hidden、
+   .field-note.is-hidden …），没有通用规则。所以新加的元素必须自己补一条，
+   否则 classList.toggle("is-hidden") 加了类却什么都不会发生——
+   典型后果是 QQ 音乐未安装/未运行时，三个点不动的死按钮照样渲染。 */
+.qq-controls.is-hidden,
+.qq-now-playing.is-hidden,
+.plugin-placeholder-tag.is-hidden {
+  display: none;
+}
+
 /* QQ 音乐卡片：状态行 + 传输控制。
    配色一律走 --rb-* token，不写死 rgba(255,255,255,…)——那种写法在
    pearl-white 这类浅色主题下会直接消失（按钮和背景一样白）。 */

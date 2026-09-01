@@ -33,6 +33,11 @@ extraFiles:
 extraResources:
   - from: resources/bin/cyrene-screenshot.exe
     to: bin/cyrene-screenshot.exe
+  # QQ 音乐等外部播放器的 SMTC 控制助手。不打进包的话，
+  # smtc-controller 的两个候选路径都落空 → helperPath = null，
+  # 安装版里 QQ 音乐检测/控制整体不可用（降级是优雅的，但功能等于没有）。
+  - from: resources/bin/cyrene-media.exe
+    to: bin/cyrene-media.exe
   - from: resources/bin/mpv
     to: bin/mpv
   - from: resources/mingit

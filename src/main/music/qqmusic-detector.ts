@@ -35,7 +35,12 @@ export interface QQMusicDetection {
   running: boolean;
   /** cyrene-media.exe 是否已构建并就位。 */
   helperAvailable: boolean;
-  /** 三个条件都满足才算真正可用。 */
+  /**
+   * 真正能不能控制 = helper 在位 + SMTC 里有它的会话。
+   * 刻意不含 installed：绿色版/自定义安装在注册表里没有卸载项，
+   * installed 会是 false，但只要它跑起来了、SMTC 有会话，就是能控的。
+   * installed 只用于「没装/没开」这类安装引导文案。
+   */
   controllable: boolean;
   nowPlaying: QQMusicNowPlaying | null;
 }
@@ -98,7 +103,7 @@ export async function detectQQMusic(
     ...install,
     running: session !== null,
     helperAvailable,
-    controllable: install.installed && helperAvailable && session !== null,
+    controllable: helperAvailable && session !== null,
     nowPlaying: session && session.title
       ? { title: session.title, artist: session.artist, album: session.album, status: session.playbackStatus }
       : null,

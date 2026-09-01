@@ -16,11 +16,16 @@ interface ImportOutcome {
   skipped: number;
   cancelled?: boolean;
   truncated?: boolean;
+  /** 导入过程本身失败（IPC 报错 / 抛异常），与「扫了但一首都没有」不是一回事。 */
+  failed?: boolean;
 }
 
 /** 导入结果 → 一句人话。截断和「一首没导入」都要说清楚，别让用户以为成功了。 */
 export function describeImport(r: ImportOutcome): string {
   if (r.cancelled) return "已取消导入。";
+  // 失败要说是失败。报成「没有找到可导入的音频文件」的话，
+  // 用户会跑去翻文件夹，而不是重试。
+  if (r.failed) return "导入失败，请重试。";
   if (r.imported === 0 && r.skipped === 0) return "没有找到可导入的音频文件。";
   const parts = [`导入 ${r.imported} 首`];
   if (r.skipped > 0) parts.push(`跳过 ${r.skipped} 首（已存在）`);
@@ -81,15 +86,21 @@ export function initLocalMusicPanel(): void {
     if (btn.id === "local-import-folder" && api.importLocalFolder) {
       const line = statusLine();
       if (line) line.textContent = "正在扫描文件夹…";
-      void api.importLocalFolder().then((res) => {
-        done(res.ok ? (res.data as ImportOutcome) : { imported: 0, skipped: 0 });
-      });
+      void api.importLocalFolder()
+        .then((res) => {
+          done(res.ok ? (res.data as ImportOutcome) : { imported: 0, skipped: 0, failed: true });
+        })
+        // 没有 catch 的话，IPC 抛异常会变成 unhandled rejection，
+        // 状态行永远停在「正在扫描文件夹…」。
+        .catch(() => done({ imported: 0, skipped: 0, failed: true }));
       return;
     }
     if (btn.id === "local-import-files" && api.importLocalTracks) {
-      void api.importLocalTracks().then((res) => {
-        done(res.ok ? (res.data as ImportOutcome) : { imported: 0, skipped: 0 });
-      });
+      void api.importLocalTracks()
+        .then((res) => {
+          done(res.ok ? (res.data as ImportOutcome) : { imported: 0, skipped: 0, failed: true });
+        })
+        .catch(() => done({ imported: 0, skipped: 0, failed: true }));
       return;
     }
     if (btn.id === "local-open-player") {

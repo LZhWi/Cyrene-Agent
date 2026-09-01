@@ -127,3 +127,16 @@ describe("detectQQMusic", () => {
     expect(key).not.toMatch(/HKLMSOFTWARE/);
   });
 });
+
+describe("绿色版 / 自定义安装（注册表查不到卸载项）", () => {
+  it("注册表和已知路径都没有，但 SMTC 有会话 → 仍然算可控", async () => {
+    // controllable 刻意不含 installed：能不能控只取决于
+    // helper 在不在位 + SMTC 里有没有它的会话。
+    regReturns(null);
+    const d = await detectQQMusic(controller({ findSession: async () => SESSION }));
+
+    expect(d.installed).toBe(false);
+    expect(d.running).toBe(true);
+    expect(d.controllable).toBe(true);
+  });
+});

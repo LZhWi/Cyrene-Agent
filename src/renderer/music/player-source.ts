@@ -44,8 +44,16 @@ export function pickInitialPlaylist(opts: {
   currentId: string;
   localTrackCount: number;
   neteasePlaylistCount: number;
+  /**
+   * 网易云那边是否已经有结论（未登录，或歌单已拉回来）。
+   * 必须等它有结论再决定，否则会有竞态：loadCacheTracks 走的是本地 IPC，
+   * 几乎必然先于走网络的 getMyPlaylists 返回，于是已登录网易云、
+   * 同时又有本地缓存的用户，默认歌单会被 __local_cache__ 抢占。
+   */
+  neteaseResolved: boolean;
 }): string | null {
   if (opts.currentId) return null;                // 不覆盖用户的手动选择
+  if (!opts.neteaseResolved) return null;         // 网易云还没有结论，先别落子
   if (opts.localTrackCount === 0) return null;    // 没有本地曲库
   if (opts.neteasePlaylistCount > 0) return null; // 有网易云歌单时沿用原有的「选首个」逻辑
   return LOCAL_CACHE_PLAYLIST_ID;

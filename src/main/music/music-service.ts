@@ -149,7 +149,17 @@ export class MusicService {
     // 都会重跑 initOpenapi()。若这里不做保护，就会每次都 new 一个
     // MpvController——旧实例连同注册在它上面的 IPC 监听器一起被丢掉，
     // 表现为「歌能放但进度条不动」，同时后台堆积多个 mpv 进程。
-    if (this.mpv) return;
+    //
+    // 注意守卫条件是 isReady() 而不是「对象存在」：上一次启动失败（mpv 缺失、
+    // IPC 连不上）会留下一个没跑起来的实例，若按「存在即早退」，
+    // 「无凭据时启动失败 → 用户补配凭据 → 再次 start()」这条路径会被挡住，
+    // 结果 backendState 变 ready 但 mpv 从未运行，不重启就永远放不了歌。
+    if (this.mpv?.isReady()) return;
+    if (this.mpv) {
+      // 上一次启动失败的残留实例：先清干净再重试，避免泄漏子进程
+      try { await this.mpv.dispose(); } catch { /* ignore */ }
+      this.mpv = null;
+    }
     this.mpv = new MpvController();
     try {
       await this.mpv.start();
@@ -186,12 +196,21 @@ export class MusicService {
         this.emitStateChange();
         void this.handleMpvState(state);
       });
-      // mpv 启动成功后显式广播 player: available
+      // mpv 启动成功后显式广播 player: available。
+      // 字段必须一起写：emitPlayerChange 只通知监听器，不改 this.playerState。
+      // 只广播不落字段的话，getPlayerState() 会停在 "unknown"；而在
+      // 「首次启动失败 → 重试成功」这条路径上更糟——字段会残留上一次的
+      // "unavailable"，UI 显示播放器不可用，实际却已经跑起来了。
+      this.playerState = "available";
       this.emitPlayerChange("available");
     } catch (err) {
       // mpv not found → degraded but still functional for non-playback operations.
       console.error("[music] mpv 启动失败，播放器降级为不可用：", err instanceof Error ? err.message : err);
       this.playerState = "unavailable";
+      // 关键：把失败的实例清掉。留着的话下一次 startMpv() 会被守卫早退，
+      // 用户即便补上了凭据、装好了 mpv，也要重启应用才能恢复。
+      try { await this.mpv?.dispose(); } catch { /* ignore */ }
+      this.mpv = null;
       this.provider = new NeteaseOpenapiProvider(this.client);
       this.emitPlayerChange("unavailable");
     }

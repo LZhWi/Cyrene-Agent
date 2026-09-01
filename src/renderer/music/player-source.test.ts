@@ -21,22 +21,22 @@ describe("canOpenPlayer", () => {
 
 describe("pickInitialPlaylist", () => {
   it("没登录网易云但有本地曲库 → 自动落到本地歌单", () => {
-    expect(pickInitialPlaylist({ currentId: "", localTrackCount: 5, neteasePlaylistCount: 0 }))
+    expect(pickInitialPlaylist({ currentId: "", localTrackCount: 5, neteasePlaylistCount: 0, neteaseResolved: true }))
       .toBe(LOCAL_CACHE_PLAYLIST_ID);
   });
 
   it("用户已经选过歌单 → 不覆盖", () => {
-    expect(pickInitialPlaylist({ currentId: "已选", localTrackCount: 5, neteasePlaylistCount: 0 }))
+    expect(pickInitialPlaylist({ currentId: "已选", localTrackCount: 5, neteasePlaylistCount: 0, neteaseResolved: true }))
       .toBeNull();
   });
 
   it("有网易云歌单时不抢选择权（沿用原有的选首个歌单逻辑）", () => {
-    expect(pickInitialPlaylist({ currentId: "", localTrackCount: 5, neteasePlaylistCount: 3 }))
+    expect(pickInitialPlaylist({ currentId: "", localTrackCount: 5, neteasePlaylistCount: 3, neteaseResolved: true }))
       .toBeNull();
   });
 
   it("本地曲库为空 → 没什么可自动选", () => {
-    expect(pickInitialPlaylist({ currentId: "", localTrackCount: 0, neteasePlaylistCount: 0 }))
+    expect(pickInitialPlaylist({ currentId: "", localTrackCount: 0, neteasePlaylistCount: 0, neteaseResolved: true }))
       .toBeNull();
   });
 });
@@ -61,5 +61,25 @@ describe("pickPlayStartIndex", () => {
 
   it("queueIndex 越界（刚换歌单）→ 退回第一首而不是崩", () => {
     expect(pickPlayStartIndex({ hasCurrentTrack: false, queueLength: 3, queueIndex: 99 })).toBe(0);
+  });
+});
+
+describe("pickInitialPlaylist 的竞态保护", () => {
+  it("网易云还没有结论时不落子（本地 IPC 比网络快，否则会抢占默认歌单）", () => {
+    expect(pickInitialPlaylist({
+      currentId: "", localTrackCount: 20, neteasePlaylistCount: 0, neteaseResolved: false,
+    })).toBeNull();
+  });
+
+  it("结论出来后（未登录、无歌单）才落到本地歌单", () => {
+    expect(pickInitialPlaylist({
+      currentId: "", localTrackCount: 20, neteasePlaylistCount: 0, neteaseResolved: true,
+    })).toBe(LOCAL_CACHE_PLAYLIST_ID);
+  });
+
+  it("已登录且有歌单时，即便本地曲库更早返回也不抢", () => {
+    expect(pickInitialPlaylist({
+      currentId: "", localTrackCount: 20, neteasePlaylistCount: 5, neteaseResolved: true,
+    })).toBeNull();
   });
 });

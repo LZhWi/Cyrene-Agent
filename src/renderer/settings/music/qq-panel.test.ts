@@ -10,7 +10,9 @@ const base: QQMusicDetection = {
 
 describe("describeDetection", () => {
   it("未安装", () => {
-    const { text, tag } = describeDetection({ ...base, installed: false, version: null });
+    // 既没装记录、也没在跑（running 必须一起给 false——只要在跑就算「已连接」，
+    // 见下面绿色版那组用例）
+    const { text, tag } = describeDetection({ ...base, installed: false, running: false, version: null });
     expect(tag).toBe("未安装");
     expect(text).toContain("未检测到");
   });
@@ -45,5 +47,23 @@ describe("describeDetection", () => {
       ...base, running: false, helperAvailable: false, controllable: false,
     });
     expect(tag).toBe("组件缺失");
+  });
+});
+
+describe("绿色版 QQ 音乐（注册表查不到）", () => {
+  it("没装记录但正在运行 → 报「已连接」而不是「未检测到」", () => {
+    // 绿色版/自定义安装在注册表里没有卸载项，installed 为 false，
+    // 但 SMTC 有会话就说明它确实在跑、确实能控。
+    const { text, tag } = describeDetection({
+      installed: false, version: null, running: true, helperAvailable: true,
+    });
+    expect(tag).toBe("已连接");
+    expect(text).not.toContain("未检测到");
+  });
+
+  it("组件缺失优先于其它一切状态", () => {
+    expect(describeDetection({
+      installed: false, version: null, running: true, helperAvailable: false,
+    }).tag).toBe("组件缺失");
   });
 });

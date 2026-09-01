@@ -20,6 +20,13 @@ describe("describeImport", () => {
     expect(describeImport({ imported: 0, skipped: 0 })).toContain("没有找到");
   });
 
+  it("导入失败要说失败，不能伪装成「没找到文件」", () => {
+    // 伪装成空结果的话，用户会去翻文件夹，而不是重试
+    const t = describeImport({ imported: 0, skipped: 0, failed: true });
+    expect(t).toContain("失败");
+    expect(t).not.toContain("没有找到");
+  });
+
   it("报告导入与跳过数量", () => {
     const t = describeImport({ imported: 12, skipped: 3 });
     expect(t).toContain("导入 12 首");
@@ -130,5 +137,34 @@ describe("本地音乐卡片接线", () => {
     await flush();
 
     expect(a.getCachedTracks).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("导入的失败路径", () => {
+  it("IPC 返回 ok:false → 显示失败而不是「没找到」", async () => {
+    const a = api({ importLocalFolder: vi.fn(async () => ({ ok: false, errorCode: "E_INTERNAL_ERROR" })) });
+    getMusicApiMock.mockReturnValue(a);
+    initLocalMusicPanel();
+    await flush();
+
+    (document.getElementById("local-import-folder") as HTMLElement).click();
+    await flush();
+
+    expect(document.getElementById("local-status-line")!.textContent).toContain("失败");
+  });
+
+  it("IPC 抛异常时状态行不会卡在「正在扫描…」", async () => {
+    const a = api({ importLocalFolder: vi.fn(async () => { throw new Error("ipc boom"); }) });
+    getMusicApiMock.mockReturnValue(a);
+    initLocalMusicPanel();
+    await flush();
+
+    (document.getElementById("local-import-folder") as HTMLElement).click();
+    await flush();
+    await flush();
+
+    const text = document.getElementById("local-status-line")!.textContent ?? "";
+    expect(text).not.toContain("正在扫描");
+    expect(text).toContain("失败");
   });
 });
