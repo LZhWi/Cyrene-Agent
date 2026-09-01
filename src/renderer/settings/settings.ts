@@ -111,6 +111,7 @@ import {
   deleteSchedulerTask, toggleSchedulerHistory,
 } from "./scheduler/panel";
 import { loadMusicPanel, disposeMusicPanel } from "./music/panel";
+import { initLocalMusicPanel } from "./music/local-panel";
 import { loadChannelsPanel } from "./channels/panel";
 import { renderProactiveDeliveryAvailability } from "./channels/panel";
 import "./asr/panel";  // 副作用导入：执行事件绑定 + 初始加载
@@ -1761,6 +1762,8 @@ musicToggle?.addEventListener("click", () => {
 });
 
 // ── 音乐工具路由 ──────────────────────────────────────────────
+initLocalMusicPanel();
+
 document.getElementById("music-platform-netease")?.addEventListener("click", () => {
   switchSection("music");
   musicHomeView?.classList.add("is-hidden");
