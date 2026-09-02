@@ -148,7 +148,9 @@ export function createChannelsSubsystem(
       });
     });
     channelResult.text = reply;
-    if (agent.lastResult) {
+    // Observable 在超时终态下也会正常 complete；只有成功终态才能进入记忆、表情等成功收尾。
+    const terminalStatus = agent.lastResult?.terminal?.status;
+    if (agent.lastResult && (terminalStatus === undefined || terminalStatus === "success")) {
       const finished = await deps.agentRuntime.onRunFinished(agent.lastResult, agentUserText, {
         source: "channel",
         mode: options.conversationMode ?? (options.executionMode === "chat" ? "chat" : "work"),
