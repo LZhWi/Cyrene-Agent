@@ -71,6 +71,30 @@ describe("AgentRuntime 插件宿主事件", () => {
     releaseListener();
   });
 
+  it.each(["timeout", "cancelled", "runtime_error"] as const)(
+    "非成功终态 %s 不发布轮次完成事件",
+    async (status) => {
+      const publishPluginHostEvent = vi.fn(async () => {});
+      const runtime = createAgentRuntime(createDeps(publishPluginHostEvent));
+
+      await runtime.onRunFinished(
+        {
+          reply: "未成功结束的部分回复",
+          toolResults: [],
+          terminal: {
+            status,
+            reason: "未成功结束",
+            externalEffectsMayContinue: true,
+          },
+        },
+        "问题",
+        { source: "desktop", mode: "chat", conversationId: "conversation-not-completed" },
+      );
+
+      expect(publishPluginHostEvent).not.toHaveBeenCalled();
+    },
+  );
+
   it("成功收尾后通过真实 PluginManager 和 EventBus 到达插件监听器", async () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-turn-event-"));
     const pluginDir = path.join(tmp, "listener");

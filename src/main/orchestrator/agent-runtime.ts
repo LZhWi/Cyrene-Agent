@@ -275,6 +275,11 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         context.channel as ChannelId | undefined,
         context.conversationId,
       );
+      // 调用方应只在成功终态进入收尾；此处再守住插件事件契约，避免未来新增入口误报完成。
+      const terminalStatus = result.terminal?.status;
+      if (terminalStatus !== undefined && terminalStatus !== "success") {
+        return effects;
+      }
       const payload: PluginTurnCompletedEvent = {
         source: context.source,
         mode: context.mode,
