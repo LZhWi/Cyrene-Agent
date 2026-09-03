@@ -86,6 +86,8 @@ const chatApi = {
     ipcRenderer.on(IPC.CHAT_SET_MODE, listener);
     return () => ipcRenderer.removeListener(IPC.CHAT_SET_MODE, listener);
   },
+  notifyAssistantMessage: (payload: { messageId: string; sessionId?: string; text: string }) =>
+    ipcRenderer.send(IPC.CHAT_NOTIFY_ASSISTANT_MESSAGE, payload),
 };
 
 contextBridge.exposeInMainWorld("cyrene", cyreneApi);

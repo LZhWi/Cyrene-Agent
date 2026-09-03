@@ -35,6 +35,8 @@ export const IPC = {
   CHAT_SET_REASONING: "chat:set-reasoning",
   // 外部入口（如侧边栏"工作"按钮）指示 chat 窗口切到指定模式视图
   CHAT_SET_MODE: "chat:set-mode",
+  // chat renderer → main：完整的昔涟回复落定后，按窗口焦点决定是否显示 Windows 通知
+  CHAT_NOTIFY_ASSISTANT_MESSAGE: "chat:notify-assistant-message",
 
   // AG-UI 事件流（替换上面的 chat:stream-* 的新通道）
   AGUI_RUN: "agui:run",

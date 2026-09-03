@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
 import { createConnection, type Socket } from "net";
+import { WebSocket, WebSocketServer, type RawData } from "ws";
 import type {
   HoloCubicDeviceMessage,
   HoloCubicInputEvent,
@@ -79,6 +80,107 @@ class HoloCubicRawSocket extends EventEmitter implements HoloCubicSocket {
   }
 }
 
+function websocketDataToBuffer(data: RawData): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.from(data);
+}
+
+class HoloCubicWebSocketListener extends EventEmitter implements HoloCubicSocket {
+  private readonly server: WebSocketServer;
+  private peer: WebSocket | null = null;
+  private closed = false;
+  private closeEmitted = false;
+
+  constructor(url: string) {
+    super();
+    const endpoint = new URL(url);
+    const port = Number(endpoint.port);
+    if (!endpoint.hostname || !Number.isInteger(port) || port < 1 || port > 65_535) {
+      throw new Error(`Invalid HoloCubic listener endpoint: ${url}`);
+    }
+    this.server = new WebSocketServer({
+      host: endpoint.hostname,
+      port,
+      maxPayload: 64 * 1024,
+      perMessageDeflate: false,
+    });
+    this.server.on("connection", (peer) => {
+      if (this.closed || this.peer) {
+        peer.close(1013, "HoloCubic device already connected");
+        return;
+      }
+      this.peer = peer;
+      peer.on("message", (data, isBinary) => {
+        const payload = websocketDataToBuffer(data);
+        if (isBinary) {
+          this.emit("message", payload, true);
+          return;
+        }
+        for (const line of payload.toString("utf8").split(/\r?\n/).filter(Boolean)) {
+          this.emit("message", Buffer.from(line, "utf8"), false);
+        }
+      });
+      peer.on("error", (error) => this.emit("error", error));
+      peer.on("close", () => this.shutdown(true));
+      this.emit("open");
+    });
+    this.server.on("error", (error) => {
+      this.emit("error", error);
+      this.shutdown(true);
+    });
+  }
+
+  get readyState(): number {
+    if (this.closed) return 3;
+    return this.peer?.readyState === WebSocket.OPEN ? SOCKET_OPEN : SOCKET_CONNECTING;
+  }
+
+  get bufferedAmount(): number {
+    return this.peer?.bufferedAmount ?? 0;
+  }
+
+  send(data: Buffer, _options: { binary: true }, callback: (error?: Error) => void): void {
+    if (!this.peer || this.peer.readyState !== WebSocket.OPEN) {
+      callback(new Error("HoloCubic WebSocket peer is not open"));
+      return;
+    }
+    this.peer.send(data, { binary: true }, (error) => callback(error ?? undefined));
+  }
+
+  close(): void {
+    this.shutdown(false);
+  }
+
+  terminate(): void {
+    this.shutdown(false, true);
+  }
+
+  private shutdown(emitClose: boolean, terminatePeer = false): void {
+    if (this.closed) return;
+    this.closed = true;
+    const peer = this.peer;
+    this.peer = null;
+    try {
+      if (peer) {
+        if (terminatePeer) peer.terminate();
+        else peer.close(1000, "Cyrene bridge stopped");
+      }
+    } catch {
+      peer?.terminate();
+    }
+    try {
+      this.server.close();
+    } catch {
+      // The listener may already be closing after a startup error.
+    }
+    if (emitClose && !this.closeEmitted) {
+      this.closeEmitted = true;
+      this.emit("close");
+    }
+  }
+}
+
 export interface HoloCubicBridgeConfig {
   url: string;
   frameRate: number;
@@ -125,7 +227,9 @@ function normalizeConfig(config: HoloCubicBridgeConfig): Required<HoloCubicBridg
     url: config.url,
     frameRate: Math.max(1, Math.min(30, Math.round(config.frameRate))),
     maxBufferedBytes: Math.max(1, Math.round(config.maxBufferedBytes ?? DEFAULT_MAX_BUFFERED_BYTES)),
-    connectTimeoutMs: Math.max(250, Math.round(config.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS)),
+    connectTimeoutMs: config.connectTimeoutMs === 0
+      ? 0
+      : Math.max(250, Math.round(config.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS)),
     frameAckTimeoutMs: Math.max(250, Math.round(config.frameAckTimeoutMs ?? DEFAULT_FRAME_ACK_TIMEOUT_MS)),
     reconnectMinMs: Math.max(50, Math.round(config.reconnectMinMs ?? DEFAULT_RECONNECT_MIN_MS)),
     reconnectMaxMs: Math.max(50, Math.round(config.reconnectMaxMs ?? DEFAULT_RECONNECT_MAX_MS)),
@@ -166,7 +270,12 @@ export class HoloCubicBridge {
   };
 
   constructor(private readonly dependencies: HoloCubicBridgeDependencies) {
-    this.createSocket = dependencies.createSocket ?? ((url) => new HoloCubicRawSocket(url));
+    this.createSocket = dependencies.createSocket ?? ((url) => {
+      const protocol = new URL(url).protocol;
+      return protocol === "ws-listen:"
+        ? new HoloCubicWebSocketListener(url)
+        : new HoloCubicRawSocket(url);
+    });
   }
 
   start(config: HoloCubicBridgeConfig): void {
@@ -240,10 +349,12 @@ export class HoloCubicBridge {
       return;
     }
     this.socket = socket;
-    this.connectTimer = setTimeout(() => {
-      if (!this.isCurrent(socket, generation)) return;
-      this.abandonSocket(socket, "TCP connection timed out");
-    }, this.config.connectTimeoutMs);
+    if (this.config.connectTimeoutMs > 0) {
+      this.connectTimer = setTimeout(() => {
+        if (!this.isCurrent(socket, generation)) return;
+        this.abandonSocket(socket, "HoloCubic connection timed out");
+      }, this.config.connectTimeoutMs);
+    }
 
     socket.on("open", () => {
       if (!this.isCurrent(socket, generation)) return;

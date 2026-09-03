@@ -1,5 +1,6 @@
 export interface HoloCubicSettings {
   enabled: boolean;
+  connectionMode: "direct" | "listen";
   host: string;
   port: number;
   frameRate: number;

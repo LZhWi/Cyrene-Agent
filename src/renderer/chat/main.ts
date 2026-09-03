@@ -143,6 +143,7 @@ interface ChatApi {
     getEnabledStickers?: () => Promise<Array<{ id: string; src: string; description?: string }>>;
     /** 外部入口（侧边栏"工作"按钮）指示切到指定模式视图。 */
     onSetMode?: (callback: (mode: string) => void) => () => void;
+    notifyAssistantMessage?: (payload: { messageId: string; sessionId?: string; text: string }) => void;
   }
 
 /** AG-UI 事件流 API（window.agui）。 */
@@ -3470,6 +3471,11 @@ async function triggerCyreneGreeting(): Promise<void> {
     }
     void saveSession();
     const finishedMsgId = streamMsgId;
+    window.chat?.notifyAssistantMessage?.({
+      messageId: finishedMsgId,
+      sessionId: currentSessionId || undefined,
+      text: streamContent.trim() ? streamContent : (sticker ? "发来一张贴纸" : "发来一条新消息"),
+    });
     void pendingTtsCachePromise?.then((cache) => {
       if (!cache) return;
       const latestMsg = messages.find(m => m.id === finishedMsgId);
@@ -4026,6 +4032,11 @@ async function send(): Promise<void> {
     }
     void saveSession();
     const finishedMsgId = streamMsgId;
+    window.chat?.notifyAssistantMessage?.({
+      messageId: finishedMsgId,
+      sessionId: currentSessionId || undefined,
+      text: streamContent.trim() ? streamContent : (sticker ? "发来一张贴纸" : "发来一条新消息"),
+    });
     void pendingTtsCachePromise?.then((cache) => {
       if (!cache) return;
       const latestMsg = messages.find(m => m.id === finishedMsgId);

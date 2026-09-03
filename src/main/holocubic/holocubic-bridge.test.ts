@@ -254,7 +254,7 @@ describe("HoloCubicBridge", () => {
       state: "reconnecting",
       connected: false,
       reconnectAttempt: 1,
-      lastError: "TCP connection timed out",
+      lastError: "HoloCubic connection timed out",
     });
 
     await vi.advanceTimersByTimeAsync(500);
@@ -264,6 +264,17 @@ describe("HoloCubicBridge", () => {
     await vi.advanceTimersByTimeAsync(1_000);
     expect(second.terminate).not.toHaveBeenCalled();
     expect(bridge.getStatus()).toMatchObject({ state: "connected", connected: true });
+  });
+
+  it("can wait indefinitely for a device-initiated connection", async () => {
+    const socket = new FakeSocket();
+    const bridge = new HoloCubicBridge({ captureFrame: async () => null, createSocket: () => socket });
+
+    bridge.start({ url: "ws-listen://0.0.0.0:8776", frameRate: 5, connectTimeoutMs: 0 });
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(socket.terminate).not.toHaveBeenCalled();
+    expect(bridge.getStatus()).toMatchObject({ state: "connecting", connected: false, reconnectAttempt: 0 });
   });
 });
 

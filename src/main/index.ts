@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, protocol, net, powerMonitor, session, type WebContents } from "electron";
+import { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage, screen, shell, dialog, protocol, net, powerMonitor, session, Notification as ElectronNotification, type WebContents } from "electron";
 import * as path from "path";
 import * as fs from "fs";
 import * as os from "os";
@@ -75,6 +75,13 @@ import type { SceneIndex } from "./scene-embedder";
 import { loadUserStickerManifest, addUserSticker, deleteUserSticker, getAllStickerConfig, isStickerIdTaken, getStickersDir } from "./sticker-storage";
 import { parseLocalStickerFileFromUrl, resolveLocalStickerPath } from "./sticker-protocol";
 import { WindowManager } from "./windows/window-manager";
+import { attachWindowIconLifecycle } from "./windows/window-icon-lifecycle";
+import { createChatMessageNotifier } from "./notifications/chat-message-notifier";
+import {
+  ensureWindowsNotificationIdentity,
+  WINDOWS_APP_USER_MODEL_ID,
+  WINDOWS_TOAST_ACTIVATOR_CLSID,
+} from "./notifications/windows-notification-identity";
 import { SettingsFacade, type GeneralSettings } from "./settings/settings-facade";
 import { HoloCubicBridge } from "./holocubic/holocubic-bridge";
 import { HoloCubicSettingsStore } from "./holocubic/holocubic-settings-store";
@@ -253,6 +260,19 @@ let activeChatSessionId: string | null = null;
 let callStartedChatSessionId: string | null = null;
 
 const isDev = process.env.VITE_DEV === "1";
+
+const chatMessageNotifier = createChatMessageNotifier({
+  platform: process.platform,
+  isSupported: () => ElectronNotification.isSupported(),
+  isChatFocused: () => Boolean(chatWindow && !chatWindow.isDestroyed() && chatWindow.isFocused()),
+  createNotification: ({ title, body }) => new ElectronNotification({
+    title,
+    body,
+    icon: getCurrentAppIconPath(),
+  }),
+  openChat: (sessionId) => createChatWindow(sessionId),
+  warn: (message, error) => console.warn(`[Notification] ${message}:`, error),
+});
 
 function appendMinimaxTtsLog(entry: Record<string, unknown>): void {
   try {
@@ -787,6 +807,37 @@ function getAppIconPath(icon: UiIcon): string {
 function getCurrentAppIconPath(): string {
   return getAppIconPath(loadGeneralSettings().uiIcon);
 }
+
+function getWindowsAppIconPath(icon: UiIcon = loadGeneralSettings().uiIcon): string {
+  const preset = UI_ICON_PRESETS.find((item) => item.id === icon);
+  const fileName = (preset?.fileName ?? "cyrene-sun.png").replace(/\.png$/i, ".ico");
+  return path.join(__dirname, "..", "..", "..", "assets", "icon-presets", fileName);
+}
+
+function getCurrentWindowIconPath(): string {
+  return process.platform === "win32" && !app.isPackaged
+    ? getWindowsAppIconPath()
+    : getCurrentAppIconPath();
+}
+
+function refreshWindowsNotificationIdentity(): boolean {
+  return ensureWindowsNotificationIdentity({
+    platform: process.platform,
+    isPackaged: app.isPackaged,
+    appPath: app.getAppPath(),
+    execPath: process.execPath,
+    iconPath: getWindowsAppIconPath(),
+    startMenuProgramsDir: path.join(app.getPath("appData"), "Microsoft", "Windows", "Start Menu", "Programs"),
+    writeShortcut: (shortcutPath, operation, options) => shell.writeShortcutLink(shortcutPath, operation, options),
+    readShortcut: (shortcutPath) => {
+      if (!fs.existsSync(shortcutPath)) return null;
+      const details = shell.readShortcutLink(shortcutPath);
+      return { target: details.target, appUserModelId: details.appUserModelId };
+    },
+    removeShortcut: (shortcutPath) => fs.unlinkSync(shortcutPath),
+    warn: (message, error) => console.warn(`[Notification] ${message}:`, error ?? "unknown"),
+  });
+}
 let runtimeState: RuntimeState = {
     status: "陪伴中",
     feeling: "平静",
@@ -895,8 +946,11 @@ function applyHoloCubicSettings(settings: HoloCubicSettings): void {
   void ensureHoloCubicRenderer().then(() => {
     if (generation !== holoCubicApplyGeneration) return;
     holoCubicBridge.start({
-      url: `tcp://${settings.host}:${settings.port}`,
+      url: settings.connectionMode === "listen"
+        ? `ws-listen://${settings.host}:${settings.port}`
+        : `tcp://${settings.host}:${settings.port}`,
       frameRate: settings.frameRate,
+      connectTimeoutMs: settings.connectionMode === "listen" ? 0 : undefined,
     });
   }).catch((error) => {
     if (generation !== holoCubicApplyGeneration) return;
@@ -1434,6 +1488,7 @@ function handleGeneralSettingsChanged(before: GeneralSettings, normalized: Gener
   }
   if (before.uiIcon !== normalized.uiIcon) {
     applyUiIcon(normalized.uiIcon);
+    refreshWindowsNotificationIdentity();
   }
 }
 
@@ -2188,14 +2243,16 @@ async function commitLocalProactiveMessage(input: ProactiveCommitInput): Promise
     identityId: null,
   });
   const at = Date.now();
+  const messageId = randomUUID();
   const appended = chatsStore.appendMessage(session.id, {
-    id: randomUUID(),
+    id: messageId,
     role: "model",
     content: input.text,
     at,
   });
   if (!appended) throw new Error("主动聊天会话写入失败");
   broadcastChatsChanged();
+  chatMessageNotifier.notify({ messageId, sessionId: session.id, text: input.text });
 
   let payload: ShowBubblePayload = input.source === "fallback" && input.fallbackPayload
     ? { ...(input.fallbackPayload as ShowBubblePayload), text: input.text, sessionId: session.id }
@@ -2724,7 +2781,7 @@ function createWindow(): void {
     skipTaskbar: true,
     resizable: false,
     hasShadow: false,
-    icon: getCurrentAppIconPath(),
+    icon: getCurrentWindowIconPath(),
     webPreferences: {
       preload: path.join(__dirname, "..", "..", "preload", "preload", "index.js"),
       contextIsolation: true,
@@ -3052,7 +3109,7 @@ function createChatWindow(sessionId?: string): void {
     minWidth: 960,
     minHeight: 540,
     title: "Cyrene · 聊天",
-    icon: getCurrentAppIconPath(),
+    icon: getCurrentWindowIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
     show: false,
@@ -3129,7 +3186,7 @@ function createSidebarWindow(): void {
     minWidth: 56,
     minHeight: 540,
     title: "昔涟 · 状态",
-    icon: getCurrentAppIconPath(),
+    icon: getCurrentWindowIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
     show: false,
@@ -3176,7 +3233,7 @@ function createTasksWindow(): void {
     height: 760,
     minHeight: 540,
     title: "昔涟 · 今日日程",
-    icon: getCurrentAppIconPath(),
+    icon: getCurrentWindowIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
     show: false,
@@ -3227,7 +3284,7 @@ function createGameBotWindow(): void {
     minWidth: Math.min(760, dw),
     minHeight: Math.min(560, dh),
     title: "昔涟 · Game Bot",
-    icon: getCurrentAppIconPath(),
+    icon: getCurrentWindowIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
     show: false,
@@ -3282,7 +3339,7 @@ function createSettingsWindow(section?: string): void {
     minWidth: 920,
     minHeight: 580,
     title: "昔涟 · 设置",
-    icon: getCurrentAppIconPath(),
+    icon: getCurrentWindowIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
     show: false,
@@ -3338,6 +3395,7 @@ async function createStickerManagerWindow(): Promise<{ ok: boolean; error?: stri
     minWidth: 460,
     minHeight: 360,
     title: "表情包管理",
+    icon: getCurrentWindowIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
     show: false,
@@ -3408,7 +3466,7 @@ function createCallWindow(): void {
     minWidth: 420,
     minHeight: 600,
     title: "Cyrene · 语音通话",
-    icon: getCurrentAppIconPath(),
+    icon: getCurrentWindowIconPath(),
     backgroundColor: "#00000000",
     autoHideMenuBar: true,
     show: false,
@@ -3478,8 +3536,11 @@ function applyUiIcon(iconSetting: UiIcon): void {
     return;
   }
   tray?.setImage(icon);
+  const windowIcon = process.platform === "win32" && !app.isPackaged
+    ? nativeImage.createFromPath(getWindowsAppIconPath(iconSetting))
+    : icon;
   for (const win of [windowManager.getMainWindow(), chatWindow, sidebarWindow, tasksWindow, settingsWindow, gameBotWindow, stickerManagerWindow, callWindow]) {
-    if (win && !win.isDestroyed()) win.setIcon(icon);
+    if (win && !win.isDestroyed()) win.setIcon(windowIcon);
   }
 }
 
@@ -3591,6 +3652,11 @@ ipcMain.on(IPC.CHAT_TOGGLE_MAXIMIZE, () => {
 
 ipcMain.handle(IPC.CHAT_IS_MAXIMIZED, () => {
   return chatWindow?.isMaximized() ?? false;
+});
+
+ipcMain.on(IPC.CHAT_NOTIFY_ASSISTANT_MESSAGE, (event, payload: unknown) => {
+  if (!chatWindow || chatWindow.isDestroyed() || event.sender !== chatWindow.webContents) return;
+  chatMessageNotifier.notify(payload);
 });
 
 // 推理下拉原子读：{ providerKey, providerId, model, preference }
@@ -4562,7 +4628,18 @@ protocol.registerSchemesAsPrivileged([
   { scheme: "local-font", privileges: { standard: true, secure: true, supportFetchAPI: true, stream: true, corsEnabled: true } },
 ]);
 
+// 开发版没有安装器管理 Windows 通知身份，必须在首条通知前固定这两个值。
+// 正式安装版保留安装器/Electron 自身注册的身份，避免覆盖发行快捷方式。
+if (process.platform === "win32" && !app.isPackaged) {
+  app.setAppUserModelId(WINDOWS_APP_USER_MODEL_ID);
+  app.setToastActivatorCLSID(WINDOWS_TOAST_ACTIVATOR_CLSID);
+}
+app.on("browser-window-created", (_event, window) => {
+  attachWindowIconLifecycle(window, getCurrentWindowIconPath);
+});
+
 app.whenReady().then(async () => {
+  refreshWindowsNotificationIdentity();
   scheduleTtsCachePrune();
   const isTrustedLocationRequester = (urlString: string): boolean => {
     try {
@@ -5704,6 +5781,11 @@ app.whenReady().then(async () => {
       // 手机镜像所需的 [sticker:id] 标记由 desktopHistoryProvider 从字段合成回 content。
       chatsStore.appendMessage(sessionId, { id: assistantMessageId, role: "model", content: cleanReply, at: assistantAtMs, sticker });
       broadcastChatsChanged();
+      chatMessageNotifier.notify({
+        messageId: assistantMessageId,
+        sessionId,
+        text: cleanReply.trim() ? cleanReply : (sticker ? "发来一张贴纸" : "发来一条新消息"),
+      });
 
       void indexConversationTurn(sessionId, describeMarkersForLlm(text), cleanReply);
       return {

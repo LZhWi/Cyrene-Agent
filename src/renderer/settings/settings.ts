@@ -708,8 +708,8 @@ if (!window.settings) {
           screenMonitorEnabled: false,
     }),
     saveGeneral: (c) => Promise.resolve(c as GeneralSettings),
-    getHoloCubicSettings: () => Promise.resolve({ enabled: false, host: "192.168.3.40", port: 8766, frameRate: 5, jpegQuality: 60 }),
-    saveHoloCubicSettings: (c) => Promise.resolve({ enabled: false, host: "192.168.3.40", port: 8766, frameRate: 5, jpegQuality: 60, ...c }),
+    getHoloCubicSettings: () => Promise.resolve({ enabled: false, connectionMode: "direct", host: "192.168.3.40", port: 8766, frameRate: 5, jpegQuality: 60 }),
+    saveHoloCubicSettings: (c) => Promise.resolve({ enabled: false, connectionMode: "direct", host: "192.168.3.40", port: 8766, frameRate: 5, jpegQuality: 60, ...c }),
     getHoloCubicStatus: () => Promise.resolve({ state: "stopped", connected: false, framesCaptured: 0, framesSent: 0, framesDisplayed: 0, framesDropped: 0, actualFrameRate: 0, lastCaptureMs: 0, lastAckMs: 0, lastFrameBytes: 0, reconnectAttempt: 0, bufferedBytes: 0, lastFrameAt: null, lastError: "", inputEvents: 0, lastInput: null }),
     onHoloCubicStatusChanged: () => () => {},
     channelsGetStatus: () => Promise.resolve({}),
@@ -777,6 +777,7 @@ const appearanceSaveStatus = document.getElementById("appearance-save-status") a
 const generalSaveStatus = document.getElementById("general-save-status") as HTMLElement;
 const holoCubicSaveStatus = document.getElementById("holocubic-save-status") as HTMLElement;
 const holoCubicEnabledInput = document.getElementById("holocubic-enabled") as HTMLInputElement;
+const holoCubicConnectionModeInput = document.getElementById("holocubic-connection-mode") as HTMLSelectElement;
 const holoCubicHostInput = document.getElementById("holocubic-host") as HTMLInputElement;
 const holoCubicPortInput = document.getElementById("holocubic-port") as HTMLInputElement;
 const holoCubicFrameRateInput = document.getElementById("holocubic-frame-rate") as HTMLInputElement;
@@ -1574,6 +1575,7 @@ async function loadHoloCubicSettings(): Promise<void> {
       window.settings!.getHoloCubicStatus(),
     ]);
     holoCubicEnabledInput.checked = settings.enabled;
+    holoCubicConnectionModeInput.value = settings.connectionMode;
     holoCubicHostInput.value = settings.host;
     holoCubicPortInput.value = String(settings.port);
     holoCubicFrameRateInput.value = String(settings.frameRate);
@@ -2956,12 +2958,14 @@ holoCubicPanel.addEventListener("submit", async (e) => {
   try {
     const saved = await window.settings!.saveHoloCubicSettings({
       enabled: holoCubicEnabledInput.checked,
+      connectionMode: holoCubicConnectionModeInput.value as HoloCubicSettings["connectionMode"],
       host: holoCubicHostInput.value,
       port: Number(holoCubicPortInput.value),
       frameRate: Number(holoCubicFrameRateInput.value),
       jpegQuality: Number(holoCubicJpegQualityInput.value),
     });
     holoCubicHostInput.value = saved.host;
+    holoCubicConnectionModeInput.value = saved.connectionMode;
     holoCubicPortInput.value = String(saved.port);
     holoCubicFrameRateInput.value = String(saved.frameRate);
     holoCubicJpegQualityInput.value = String(saved.jpegQuality);

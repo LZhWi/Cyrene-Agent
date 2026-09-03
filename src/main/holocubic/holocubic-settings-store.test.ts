@@ -34,7 +34,14 @@ describe("HoloCubicSettingsStore", () => {
       jpegQuality: 1,
     });
 
-    expect(saved).toEqual({ enabled: true, host: "192.168.3.41", port: 8766, frameRate: 15, jpegQuality: 20 });
+    expect(saved).toEqual({
+      enabled: true,
+      connectionMode: "direct",
+      host: "192.168.3.41",
+      port: 8766,
+      frameRate: 15,
+      jpegQuality: 20,
+    });
     expect(JSON.parse(fs.readFileSync(filePath, "utf8"))).toEqual(saved);
     expect(fs.readdirSync(path.dirname(filePath))).toEqual(["holocubic-settings.json"]);
   });
@@ -51,10 +58,18 @@ describe("normalizeHoloCubicSettings", () => {
   it("clamps numeric fields and rejects a malformed host", () => {
     expect(normalizeHoloCubicSettings({ host: "device/path", port: 0, frameRate: 3.6, jpegQuality: 120 })).toEqual({
       enabled: false,
+      connectionMode: "direct",
       host: "192.168.3.40",
       port: 1,
       frameRate: 4,
       jpegQuality: 95,
+    });
+  });
+
+  it("accepts device-initiated listener mode", () => {
+    expect(normalizeHoloCubicSettings({ connectionMode: "listen", host: "0.0.0.0" })).toMatchObject({
+      connectionMode: "listen",
+      host: "0.0.0.0",
     });
   });
 });

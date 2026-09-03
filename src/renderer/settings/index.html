@@ -1524,7 +1524,14 @@
 
           <div class="form-grid">
             <label class="field">
-              <span>设备地址</span>
+              <span>连接模式</span>
+              <select id="holocubic-connection-mode">
+                <option value="direct">电脑连接设备（原有局域网模式）</option>
+                <option value="listen">设备连接电脑（热点 / 公网入口）</option>
+              </select>
+            </label>
+            <label class="field">
+              <span>设备地址 / 监听地址</span>
               <input id="holocubic-host" type="text" autocomplete="off" spellcheck="false" placeholder="192.168.3.40" />
             </label>
             <label class="field">
@@ -1540,6 +1547,8 @@
               <input id="holocubic-jpeg-quality" type="number" min="20" max="95" step="1" />
             </label>
           </div>
+
+          <p class="panel-hint">反向模式下电脑监听此端口；本机监听地址使用 0.0.0.0，装置端填写电脑热点地址（Windows 通常为 192.168.137.1）。</p>
 
           <div class="api-note">
             <span>●</span>

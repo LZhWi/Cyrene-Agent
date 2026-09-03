@@ -4,6 +4,7 @@ import { writeJsonAtomicSync } from "../runtime/atomic-file";
 
 export const DEFAULT_HOLOCUBIC_SETTINGS: HoloCubicSettings = {
   enabled: false,
+  connectionMode: "direct",
   host: "192.168.3.40",
   port: 8766,
   frameRate: 5,
@@ -20,6 +21,7 @@ export function normalizeHoloCubicSettings(input: Partial<HoloCubicSettings> | n
   const host = /^[a-zA-Z0-9.-]+$/.test(candidateHost) ? candidateHost : DEFAULT_HOLOCUBIC_SETTINGS.host;
   return {
     enabled: input?.enabled === undefined ? DEFAULT_HOLOCUBIC_SETTINGS.enabled : Boolean(input.enabled),
+    connectionMode: input?.connectionMode === "listen" ? "listen" : "direct",
     host,
     port: clampInteger(input?.port, DEFAULT_HOLOCUBIC_SETTINGS.port, 1, 65535),
     frameRate: clampInteger(input?.frameRate, DEFAULT_HOLOCUBIC_SETTINGS.frameRate, 1, 15),
