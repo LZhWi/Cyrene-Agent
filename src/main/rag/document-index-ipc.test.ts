@@ -28,4 +28,28 @@ describe("document index IPC core", () => {
     }));
     expect(result).toMatchObject([{ kind: "indexed", importId: "import-1" }]);
   });
+
+  it("keeps indexed small-document text and skips redundant same-turn retrieval", async () => {
+    const retrieve = vi.fn();
+    const result = await processDocumentIndexRequest({
+      filePaths: ["C:\\tmp\\small.md"],
+      query: "summarize",
+      sender: { send: vi.fn() },
+      enqueue: async () => ({
+        kind: "indexed",
+        name: "small.md",
+        chunks: 1,
+        importId: "import-small",
+        text: "small document body",
+      }),
+      retrieve,
+    });
+
+    expect(retrieve).not.toHaveBeenCalled();
+    expect(result).toMatchObject([{
+      kind: "indexed",
+      importId: "import-small",
+      text: "small document body",
+    }]);
+  });
 });

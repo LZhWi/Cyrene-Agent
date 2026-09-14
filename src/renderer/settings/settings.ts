@@ -473,6 +473,17 @@ interface MemorySandboxL2Comparison {
   states: Array<{ l2Id: string; activation: number; state: "Active" | "Dormant" | "Archived" }>;
 }
 
+interface AsrTranscriptionSnapshot {
+  state: "idle" | "decoding" | "segmenting" | "loading" | "transcribing" | "completed" | "cancelled" | "error";
+  message: string;
+  inputPath?: string;
+  outputPath?: string;
+  completedSegments?: number;
+  totalSegments?: number;
+  format?: "md" | "txt" | "docx";
+  includeTimestamps?: boolean;
+}
+
 interface SettingsApi {
   minimize: () => void;
   close: () => void;
@@ -490,6 +501,13 @@ interface SettingsApi {
   onAsrTestState: (callback: (data: { state: string; message?: string }) => void) => () => void;
   onAsrTestResult: (callback: (data: { partial?: string; final?: string }) => void) => () => void;
   onAsrTestError: (callback: (data: { message: string }) => void) => () => void;
+  asrTranscriptionPickInput: () => Promise<{ inputPath: string; suggestedOutputPath: string } | null>;
+  asrTranscriptionPickOutput: (request?: { suggestedPath?: string; format?: string }) => Promise<string | null>;
+  asrTranscriptionGetState: () => Promise<AsrTranscriptionSnapshot>;
+  asrTranscriptionStart: (request: { inputPath: string; outputPath: string; profile: string; language: string; hotwords: string[]; format: string; includeTimestamps: boolean }) => Promise<{ ok: boolean; error?: string }>;
+  asrTranscriptionCancel: () => Promise<boolean>;
+  asrTranscriptionOpenOutput: (outputPath: string) => Promise<{ ok: boolean; error?: string }>;
+  onAsrTranscriptionProgress: (callback: (data: AsrTranscriptionSnapshot) => void) => () => void;
   getGeneral: () => Promise<GeneralSettings>;
   saveGeneral: (config: Partial<GeneralSettings>) => Promise<GeneralSettings>;
   getHoloCubicSettings: () => Promise<HoloCubicSettings>;
@@ -684,6 +702,13 @@ if (!window.settings) {
     onAsrTestState: () => () => {},
     onAsrTestResult: () => () => {},
     onAsrTestError: () => () => {},
+    asrTranscriptionPickInput: () => Promise.resolve(null),
+    asrTranscriptionPickOutput: () => Promise.resolve(null),
+    asrTranscriptionGetState: () => Promise.resolve({ state: "idle", message: "长音频转写仅在桌面应用中可用" }),
+    asrTranscriptionStart: () => Promise.resolve({ ok: false, error: "长音频转写仅在桌面应用中可用" }),
+    asrTranscriptionCancel: () => Promise.resolve(false),
+    asrTranscriptionOpenOutput: () => Promise.resolve({ ok: false }),
+    onAsrTranscriptionProgress: () => () => {},
     getGeneral: () => Promise.resolve({
       musicEnabled: false,
       musicVolume: 60,
@@ -2108,6 +2133,18 @@ const asrTestTranscript = document.getElementById("asr-test-transcript") as HTML
 const asrTestEmpty = document.getElementById("asr-test-empty") as HTMLElement | null;
 const asrTestFinal = document.getElementById("asr-test-final") as HTMLElement | null;
 const asrTestPartial = document.getElementById("asr-test-partial") as HTMLElement | null;
+const asrTranscriptionCard = document.getElementById("asr-transcription-card") as HTMLElement | null;
+const asrTranscriptionPickInput = document.getElementById("asr-transcription-pick-input") as HTMLButtonElement | null;
+const asrTranscriptionPickOutput = document.getElementById("asr-transcription-pick-output") as HTMLButtonElement | null;
+const asrTranscriptionInput = document.getElementById("asr-transcription-input") as HTMLElement | null;
+const asrTranscriptionOutput = document.getElementById("asr-transcription-output") as HTMLElement | null;
+const asrTranscriptionProgress = document.getElementById("asr-transcription-progress") as HTMLProgressElement | null;
+const asrTranscriptionStatus = document.getElementById("asr-transcription-status") as HTMLElement | null;
+const asrTranscriptionStart = document.getElementById("asr-transcription-start") as HTMLButtonElement | null;
+const asrTranscriptionCancel = document.getElementById("asr-transcription-cancel") as HTMLButtonElement | null;
+const asrTranscriptionOpen = document.getElementById("asr-transcription-open") as HTMLButtonElement | null;
+const asrTranscriptionFormat = document.getElementById("asr-transcription-format") as HTMLSelectElement | null;
+const asrTranscriptionTimestamps = document.getElementById("asr-transcription-timestamps") as HTMLInputElement | null;
 
 function syncAsrVisibility(): void {
   if (asrAliyunConfig) {
@@ -2115,6 +2152,9 @@ function syncAsrVisibility(): void {
   }
   if (asrLocalConfig) {
     (asrLocalConfig as HTMLElement).style.display = asrEngineSelect?.value === "local" ? "block" : "none";
+  }
+  if (asrTranscriptionCard) {
+    asrTranscriptionCard.style.display = asrEngineSelect?.value === "local" ? "block" : "none";
   }
 }
 
@@ -2507,6 +2547,10 @@ let asrTestSilenceTimer: ReturnType<typeof setTimeout> | null = null;
 let asrTestPartialFlushTimer: ReturnType<typeof setTimeout> | null = null;
 let asrTestHasSpoken = false;
 let asrTestPartialFlushed = false;
+let asrTranscriptionInputPath = "";
+let asrTranscriptionOutputPath = "";
+let asrTranscriptionSuggestedOutputPath = "";
+let asrTranscriptionState: AsrTranscriptionSnapshot["state"] = "idle";
 const ASR_TEST_PARTIAL_FLUSH_MS = 250;
 
 function selectedAsrProfile(): string {
@@ -2516,6 +2560,58 @@ function selectedAsrProfile(): string {
 
 function currentAsrHotwords(): string[] {
   return (asrHotwordsInput?.value ?? "").split(/\r?\n/).map((item) => item.trim()).filter(Boolean).slice(0, 200);
+}
+
+function selectedAsrTranscriptionFormat(): "md" | "txt" | "docx" {
+  const format = asrTranscriptionFormat?.value;
+  return format === "txt" || format === "docx" ? format : "md";
+}
+
+function isAsrTranscriptionRunning(): boolean {
+  return ["decoding", "segmenting", "loading", "transcribing"].includes(asrTranscriptionState);
+}
+
+function renderAsrTranscription(snapshot: AsrTranscriptionSnapshot): void {
+  asrTranscriptionState = snapshot.state;
+  if (snapshot.inputPath) asrTranscriptionInputPath = snapshot.inputPath;
+  if (snapshot.outputPath) asrTranscriptionOutputPath = snapshot.outputPath;
+  if (snapshot.format && asrTranscriptionFormat) asrTranscriptionFormat.value = snapshot.format;
+  if (typeof snapshot.includeTimestamps === "boolean" && asrTranscriptionTimestamps) {
+    asrTranscriptionTimestamps.checked = snapshot.includeTimestamps;
+  }
+  if (asrTranscriptionInput) {
+    asrTranscriptionInput.textContent = asrTranscriptionInputPath || "尚未选择音频";
+    asrTranscriptionInput.title = asrTranscriptionInputPath;
+  }
+  if (asrTranscriptionOutput) {
+    asrTranscriptionOutput.textContent = asrTranscriptionOutputPath || "尚未选择输出位置";
+    asrTranscriptionOutput.title = asrTranscriptionOutputPath;
+  }
+  if (asrTranscriptionStatus) asrTranscriptionStatus.textContent = snapshot.message;
+  if (asrTranscriptionProgress) {
+    if (snapshot.totalSegments && snapshot.totalSegments > 0) {
+      asrTranscriptionProgress.max = snapshot.totalSegments;
+      asrTranscriptionProgress.value = snapshot.completedSegments ?? 0;
+    } else if (isAsrTranscriptionRunning()) {
+      asrTranscriptionProgress.removeAttribute("value");
+    } else {
+      asrTranscriptionProgress.max = 1;
+      asrTranscriptionProgress.value = snapshot.state === "completed" ? 1 : 0;
+    }
+  }
+  syncAsrTestControls();
+}
+
+function syncAsrTranscriptionControls(): void {
+  const running = isAsrTranscriptionRunning();
+  const blocked = running || asrTestRunning;
+  if (asrTranscriptionPickInput) asrTranscriptionPickInput.disabled = blocked;
+  if (asrTranscriptionPickOutput) asrTranscriptionPickOutput.disabled = blocked;
+  if (asrTranscriptionStart) asrTranscriptionStart.disabled = blocked || !asrTranscriptionInputPath || !asrTranscriptionOutputPath;
+  if (asrTranscriptionFormat) asrTranscriptionFormat.disabled = blocked;
+  if (asrTranscriptionTimestamps) asrTranscriptionTimestamps.disabled = blocked;
+  asrTranscriptionCancel?.classList.toggle("is-hidden", !running);
+  asrTranscriptionOpen?.classList.toggle("is-hidden", asrTranscriptionState !== "completed" || !asrTranscriptionOutputPath);
 }
 
 function setAsrTestUiState(next: AsrTestUiState, message?: string): void {
@@ -2535,13 +2631,16 @@ function setAsrTestUiState(next: AsrTestUiState, message?: string): void {
 function syncAsrTestControls(): void {
   asrTestCard?.classList.toggle("is-running", asrTestRunning);
   if (asrTestToggle) asrTestToggle.textContent = asrTestRunning ? "停止测试" : "开始测试";
-  if (asrEngineSelect) asrEngineSelect.disabled = asrTestRunning;
-  if (asrLanguageSelect) asrLanguageSelect.disabled = asrTestRunning;
-  if (asrHotwordsInput) asrHotwordsInput.disabled = asrTestRunning;
-  if (asrAliyunAppKeyInput) asrAliyunAppKeyInput.disabled = asrTestRunning;
-  if (asrAliyunAccessKeyIdInput) asrAliyunAccessKeyIdInput.disabled = asrTestRunning;
-  if (asrAliyunAccessKeySecretInput) asrAliyunAccessKeySecretInput.disabled = asrTestRunning;
-  for (const card of asrProfileCards) card.disabled = asrTestRunning;
+  if (asrTestToggle) asrTestToggle.disabled = isAsrTranscriptionRunning();
+  const configLocked = asrTestRunning || isAsrTranscriptionRunning();
+  if (asrEngineSelect) asrEngineSelect.disabled = configLocked;
+  if (asrLanguageSelect) asrLanguageSelect.disabled = configLocked;
+  if (asrHotwordsInput) asrHotwordsInput.disabled = configLocked;
+  if (asrAliyunAppKeyInput) asrAliyunAppKeyInput.disabled = configLocked;
+  if (asrAliyunAccessKeyIdInput) asrAliyunAccessKeyIdInput.disabled = configLocked;
+  if (asrAliyunAccessKeySecretInput) asrAliyunAccessKeySecretInput.disabled = configLocked;
+  for (const card of asrProfileCards) card.disabled = configLocked;
+  syncAsrTranscriptionControls();
 }
 
 function scrollAsrTestTranscript(): void {
@@ -2685,6 +2784,65 @@ async function startAsrTestSession(): Promise<void> {
     setAsrTestUiState("error", message);
   }
 }
+
+asrTranscriptionPickInput?.addEventListener("click", async () => {
+  const result = await window.settings?.asrTranscriptionPickInput();
+  if (!result) return;
+  asrTranscriptionInputPath = result.inputPath;
+  asrTranscriptionSuggestedOutputPath = result.suggestedOutputPath;
+  asrTranscriptionOutputPath = "";
+  renderAsrTranscription({ state: "idle", message: `请选择目录和文件名，系统会自动创建 .${selectedAsrTranscriptionFormat()} 文件` });
+});
+
+asrTranscriptionFormat?.addEventListener("change", () => {
+  asrTranscriptionOutputPath = "";
+  renderAsrTranscription({ state: "idle", message: `输出格式已改为 .${selectedAsrTranscriptionFormat()}，请重新选择保存位置` });
+});
+
+asrTranscriptionPickOutput?.addEventListener("click", async () => {
+  const result = await window.settings?.asrTranscriptionPickOutput({
+    suggestedPath: asrTranscriptionSuggestedOutputPath || undefined,
+    format: selectedAsrTranscriptionFormat(),
+  });
+  if (!result) return;
+  asrTranscriptionOutputPath = result;
+  renderAsrTranscription({ state: "idle", message: "准备就绪，可以开始转写" });
+});
+
+asrTranscriptionStart?.addEventListener("click", async () => {
+  if (!asrTranscriptionInputPath || !asrTranscriptionOutputPath) return;
+  renderAsrTranscription({
+    state: "decoding",
+    message: "正在启动本地转写…",
+    inputPath: asrTranscriptionInputPath,
+    outputPath: asrTranscriptionOutputPath,
+  });
+  const result = await window.settings?.asrTranscriptionStart({
+    inputPath: asrTranscriptionInputPath,
+    outputPath: asrTranscriptionOutputPath,
+    profile: selectedAsrProfile(),
+    language: asrLanguageSelect?.value ?? "zh",
+    hotwords: currentAsrHotwords(),
+    format: selectedAsrTranscriptionFormat(),
+    includeTimestamps: asrTranscriptionTimestamps?.checked !== false,
+  });
+  if (result && !result.ok) {
+    renderAsrTranscription({ state: "error", message: result.error || "长音频转写启动失败" });
+  }
+});
+
+asrTranscriptionCancel?.addEventListener("click", () => {
+  void window.settings?.asrTranscriptionCancel();
+});
+
+asrTranscriptionOpen?.addEventListener("click", async () => {
+  if (!asrTranscriptionOutputPath) return;
+  const result = await window.settings?.asrTranscriptionOpenOutput(asrTranscriptionOutputPath);
+  if (result && !result.ok) renderAsrTranscription({ state: "error", message: result.error || "无法打开转写结果" });
+});
+
+window.settings?.onAsrTranscriptionProgress(renderAsrTranscription);
+void window.settings?.asrTranscriptionGetState().then(renderAsrTranscription).catch(() => {});
 
 asrTestToggle?.addEventListener("click", () => {
   if (asrTestRunning) void stopAsrTestSession();

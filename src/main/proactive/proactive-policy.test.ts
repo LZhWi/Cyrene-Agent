@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   FOLLOWUP_INTERVAL_MS,
+  FOLLOWUP_MIN_SCORE,
   GLOBAL_PROACTIVE_INTERVAL_MS,
   NORMAL_QUIET_MS,
   SILENT_COOLDOWN_MS,
@@ -69,7 +70,7 @@ describe("proactive hard policy", () => {
     expect(canStartProactiveGeneration(snapshot({ generationBusy: true }), state, candidate()).reason).toBe("generation_busy");
   });
 
-  it("requires six hours, a new scene, and a stricter score for the second message", () => {
+  it("requires three hours, a new scene, and a moderately stricter score for the second message", () => {
     const state = createDefaultProactiveState();
     state.unansweredCount = 1;
     state.lastProactiveAt = NOW - FOLLOWUP_INTERVAL_MS + 1;
@@ -78,9 +79,15 @@ describe("proactive hard policy", () => {
     expect(canStartProactiveGeneration(snapshot(), state, candidate()).reason).toBe("followup_cooldown");
     state.lastProactiveAt = NOW - FOLLOWUP_INTERVAL_MS;
     expect(canStartProactiveGeneration(snapshot(), state, candidate()).reason).toBe("followup_same_scene");
-    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "rainy_day", score: 84 })).reason)
+    expect(canStartProactiveGeneration(snapshot(), state, candidate({
+      sceneId: "rainy_day",
+      score: FOLLOWUP_MIN_SCORE - 1,
+    })).reason)
       .toBe("followup_score_too_low");
-    expect(canStartProactiveGeneration(snapshot(), state, candidate({ sceneId: "rainy_day", score: 85 })).allowed)
+    expect(canStartProactiveGeneration(snapshot(), state, candidate({
+      sceneId: "rainy_day",
+      score: FOLLOWUP_MIN_SCORE,
+    })).allowed)
       .toBe(true);
   });
 

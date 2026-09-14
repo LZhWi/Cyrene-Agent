@@ -27,6 +27,10 @@ export async function processDocumentIndexRequest(input: {
       onProgress: (progress) => input.sender.send(IPC.CHAT_DOCUMENT_INDEX_PROGRESS, progress),
     });
     if (result.kind === "indexed") {
+      if (result.text !== undefined) {
+        results.push({ ...result, filePath });
+        continue;
+      }
       try {
         const retrievedChunks = await input.retrieve(result, input.query);
         results.push({ ...result, filePath, retrievedChunks });
@@ -37,6 +41,7 @@ export async function processDocumentIndexRequest(input: {
           chunks: result.chunks,
           importId: result.importId,
           cached: result.cached,
+          text: result.text,
           filePath,
           reason: error instanceof Error ? error.message : String(error),
         });

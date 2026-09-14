@@ -33,6 +33,7 @@
 //   - 不再持有 fcMessages 注入 system，原始 messages 由调用方传进来（不含 system）。
 //   - 不输出任何 AG-UI 事件，只输出 TwoPhaseEvent（中性事件），由 CyreneAgent 包装成 AG-UI。
 
+import { createHash } from "node:crypto";
 import { recordUsage } from "../token-usage-store";
 import { stripLeakedChatTimeContext } from "../chat-time-context";
 import type { ReasoningPreference } from "../../shared/reasoning";
@@ -74,6 +75,34 @@ export type TwoPhaseEvent =
   | { type: "text_message_end"; messageId: string };
 
 export type SoulPhaseReason = "no_tool" | "max_rounds" | "timeout" | "tool_error";
+
+function promptCacheHash(value: string): string {
+  return createHash("sha256").update(value).digest("hex").slice(0, 16);
+}
+
+/** 仅记录本地哈希和长度，不输出 prompt、聊天内容或图片数据。 */
+function logPromptCacheRequest(phase: "tool" | "soul", req: ChatRequest): void {
+  const messages = req.messages.map((message, index) => {
+    const serialized = JSON.stringify(message);
+    return {
+      index,
+      role: message.role,
+      chars: serialized.length,
+      sha256: promptCacheHash(serialized),
+      contentKind: Array.isArray(message.content) ? "blocks" : "text",
+    };
+  });
+  const serializedTools = JSON.stringify(req.tools ?? []);
+  console.log("[PromptCacheDiag] request(" + phase + ") =", JSON.stringify({
+    model: req.model,
+    cacheKey: typeof req.extraBody?.prompt_cache_key === "string" ? req.extraBody.prompt_cache_key : null,
+    messageCount: messages.length,
+    messages,
+    toolCount: req.tools?.length ?? 0,
+    toolsChars: serializedTools.length,
+    toolsSha256: promptCacheHash(serializedTools),
+  }));
+}
 
 export interface TwoPhaseFcOptions {
   settings: AgentLoopSettings;
@@ -353,6 +382,7 @@ export async function runTwoPhaseFcLoop(options: TwoPhaseFcOptions): Promise<Two
       }
     }
     if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, toolPhaseSettings);
+    logPromptCacheRequest("tool", req);
 
     let data: unknown;
     try {
@@ -540,6 +570,10 @@ async function runSoulPhase(args: {
 
   // 动态追加 soulToolResultsSummary（在 baseContent 之后），不重复 conversation 已有的 tool 消息
   const soulResultsSummary = buildSoulToolResultsSummary(allToolResults);
+  console.log("[PromptCacheDiag] segment(soulToolResultsSummary) =", JSON.stringify({
+    chars: soulResultsSummary.length,
+    sha256: promptCacheHash(soulResultsSummary),
+  }));
   const finalSystemContent = soulResultsSummary
     ? soulSystemBaseContent + "\n\n" + soulResultsSummary
     : soulSystemBaseContent;
@@ -559,6 +593,7 @@ async function runSoulPhase(args: {
     stream: false,
   };
   if (adapter.applyCacheHints) req = adapter.applyCacheHints(req, cfg);
+  logPromptCacheRequest("soul", req);
 
   try {
     const data = await callAdapter(adapter, req, cfg, forceSummaryTimeoutMs, signal, runtimeClass);

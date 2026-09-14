@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
-import { DOCUMENT_CHUNK_OVERLAP, DOCUMENT_CHUNK_SIZE } from "./chunk";
+import { SEMANTIC_CHUNK_TARGET } from "./semantic-chunk";
 
 const { embeddingIdentity, userDataDir } = vi.hoisted(() => ({
   embeddingIdentity: {
@@ -28,7 +28,9 @@ vi.mock("./embedding", () => ({
 
 import {
   buildDocumentCacheIdentity,
+  buildDocumentCacheIdentityFromTextSha,
   createDocumentCacheKey,
+  LEGACY_DOCUMENT_CHUNK_STRATEGY_VERSION,
   getValidDocumentCacheRecord,
   putDocumentCacheRecord,
 } from "./document-cache";
@@ -59,9 +61,9 @@ describe("document cache", () => {
     expect(first.textSha256).toBe(second.textSha256);
     expect(first.embeddingProvider).toBeTruthy();
     expect(first.embeddingModel).toBeTruthy();
-    expect(first.chunkStrategyVersion).toBe("document-chunks-v1");
-    expect(first.chunkSize).toBe(DOCUMENT_CHUNK_SIZE);
-    expect(first.chunkOverlap).toBe(DOCUMENT_CHUNK_OVERLAP);
+    expect(first.chunkStrategyVersion).toBe("document-semantic-chunks-v2");
+    expect(first.chunkSize).toBe(SEMANTIC_CHUNK_TARGET);
+    expect(first.chunkOverlap).toBe(0);
   });
 
   it("invalidates when an OpenAI-compatible embedding endpoint changes", async () => {
@@ -80,6 +82,14 @@ describe("document cache", () => {
     const second = await buildDocumentCacheIdentity("hello world");
 
     expect(createDocumentCacheKey(first)).not.toBe(createDocumentCacheKey(second));
+  });
+
+  it("keeps the legacy cache identity addressable without rewriting it", async () => {
+    const current = await buildDocumentCacheIdentityFromTextSha("abc");
+    const legacy = await buildDocumentCacheIdentityFromTextSha("abc", LEGACY_DOCUMENT_CHUNK_STRATEGY_VERSION);
+
+    expect(legacy.chunkStrategyVersion).toBe("document-chunks-v1");
+    expect(createDocumentCacheKey(legacy)).not.toBe(createDocumentCacheKey(current));
   });
 
   it("invalidates when the embedding model changes", () => {

@@ -462,6 +462,110 @@ export type ImportedDocumentChunk = {
   importId?: string;
 };
 
+const DOCUMENT_MIN_HYBRID_SCORE = 0.01;
+const DOCUMENT_MIN_RERANKER_SCORE = -6;
+const DOCUMENT_AUTO_MIN_RERANKER_SCORE = -2;
+const DOCUMENT_AUTO_MIN_ADDITIONAL_RERANKER_SCORE = 0;
+const DOCUMENT_AUTO_MIN_BGE_M3_VECTOR_SCORE = 0.68;
+const DOCUMENT_AUTO_MIN_BM25_SCORE = 6;
+const DOCUMENT_AUTO_CANDIDATE_COUNT = 24;
+
+type ImportedDocumentSearchOptions = {
+  importIds?: string[];
+  automaticInjection?: boolean;
+};
+
+function filterAutomaticDocumentResults(
+  results: Awaited<ReturnType<HybridRetriever["retrieve"]>>,
+  reranked: boolean,
+): typeof results {
+  return results.filter((result, index) => {
+    if (reranked) {
+      return result.score >= (index === 0
+        ? DOCUMENT_AUTO_MIN_RERANKER_SCORE
+        : DOCUMENT_AUTO_MIN_ADDITIONAL_RERANKER_SCORE);
+    }
+    const signals = result.retrievalSignals;
+    if (!signals) return false;
+    const model = provider?.cacheIdentity?.model.toLowerCase() ?? "";
+    const vectorThreshold = index === 0
+      ? DOCUMENT_AUTO_MIN_BGE_M3_VECTOR_SCORE
+      : DOCUMENT_AUTO_MIN_BGE_M3_VECTOR_SCORE + 0.02;
+    const bm25Threshold = index === 0
+      ? DOCUMENT_AUTO_MIN_BM25_SCORE
+      : DOCUMENT_AUTO_MIN_BM25_SCORE + 1;
+    return signals.bm25Score >= bm25Threshold
+      || (model.includes("bge-m3") && signals.vectorScore >= vectorThreshold);
+  });
+}
+
+function toImportedDocumentChunk(result: Awaited<ReturnType<HybridRetriever["retrieve"]>>[number]): ImportedDocumentChunk {
+  return {
+    text: result.entry.text,
+    score: result.score,
+    fileName: typeof result.entry.metadata?.fileName === "string" ? result.entry.metadata.fileName : undefined,
+    chunkIndex: typeof result.entry.metadata?.chunkIndex === "number" ? result.entry.metadata.chunkIndex : undefined,
+    importId: typeof result.entry.metadata?.importId === "string" ? result.entry.metadata.importId : undefined,
+  };
+}
+
+export function formatImportedDocumentChunk(chunk: ImportedDocumentChunk): string {
+  const source = chunk.fileName
+    ? `${chunk.fileName}${typeof chunk.chunkIndex === "number" ? ` #${chunk.chunkIndex + 1}` : ""}`
+    : "未命名文档片段";
+  return `【${source}】${chunk.text}`;
+}
+
+export async function searchImportedDocumentChunks(
+  query: string,
+  topK = 5,
+  options: ImportedDocumentSearchOptions = {},
+): Promise<ImportedDocumentChunk[]> {
+  if (!retriever || !query.trim() || topK <= 0) return [];
+  let results = (await retriever.retrieve(
+    query,
+    "imported_doc",
+    options.automaticInjection
+      ? Math.max(DOCUMENT_AUTO_CANDIDATE_COUNT, topK)
+      : Math.max(topK * 3, topK),
+    { importIds: options.importIds, recordRecall: false },
+  )).filter((result) => result.score >= DOCUMENT_MIN_HYBRID_SCORE);
+
+  try {
+    await ensureRerankerInitialized();
+  } catch (error) {
+    console.warn("[RAG] lazy reranker initialization failed for imported documents; using hybrid ranking:", error);
+  }
+  const reranker = getReranker();
+  let usedReranker = false;
+  if (reranker && results.length > 0) {
+    try {
+      const candidatesByText = new Map<string, typeof results>();
+      for (const result of results) {
+        const matches = candidatesByText.get(result.entry.text) ?? [];
+        matches.push(result);
+        candidatesByText.set(result.entry.text, matches);
+      }
+      const rerankedItems = await reranker.rerank(query, results.map((result) => result.entry.text));
+      results = rerankedItems.flatMap((item) => {
+        const match = candidatesByText.get(item.text)?.shift();
+        return match && item.score >= DOCUMENT_MIN_RERANKER_SCORE
+          ? [{ ...match, score: item.score }]
+          : [];
+      });
+      usedReranker = true;
+    } catch (error) {
+      console.warn("[RAG] imported document rerank failed; using hybrid ranking:", error);
+    }
+  }
+
+  if (options.automaticInjection) {
+    results = filterAutomaticDocumentResults(results, usedReranker);
+  }
+
+  return results.slice(0, topK).map(toImportedDocumentChunk);
+}
+
 export type PreparedDocumentEmbedding = {
   text: string;
   chunkIndex: number;
@@ -527,15 +631,8 @@ export async function searchImportedDocumentChunksForImportIds(
   importIds: string[],
   topK = 6,
 ): Promise<ImportedDocumentChunk[]> {
-  if (!retriever || !query.trim() || importIds.length === 0) return [];
-  const results = await retriever.retrieve(query, "imported_doc", topK, { importIds });
-  return results.map((result) => ({
-    text: result.entry.text,
-    score: result.score,
-    fileName: typeof result.entry.metadata?.fileName === "string" ? result.entry.metadata.fileName : undefined,
-    chunkIndex: typeof result.entry.metadata?.chunkIndex === "number" ? result.entry.metadata.chunkIndex : undefined,
-    importId: typeof result.entry.metadata?.importId === "string" ? result.entry.metadata.importId : undefined,
-  }));
+  if (importIds.length === 0) return [];
+  return searchImportedDocumentChunks(query, topK, { importIds });
 }
 
 // ── Build memory context (legacy, kept for compatibility) ──

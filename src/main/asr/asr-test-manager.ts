@@ -56,8 +56,13 @@ export function isAsrTestActive(): boolean {
   return state !== "stopped";
 }
 
-export async function startAsrTest(sender: WebContents, isCallActive: () => boolean): Promise<{ ok: boolean; error?: string }> {
+export async function startAsrTest(
+  sender: WebContents,
+  isCallActive: () => boolean,
+  isOfflineTranscriptionActive: () => boolean = () => false,
+): Promise<{ ok: boolean; error?: string }> {
   if (isCallActive()) return { ok: false, error: "语音通话正在进行，请先结束通话" };
+  if (isOfflineTranscriptionActive()) return { ok: false, error: "长音频转写正在进行，请先停止转写" };
   stopAsrTest();
   owner = sender;
   sender.once("destroyed", () => {
@@ -128,8 +133,11 @@ export function stopAsrTest(sender?: WebContents): void {
   shutdownAsrRuntimes();
 }
 
-export function registerAsrTestIpc(isCallActive: () => boolean): void {
-  ipcMain.handle(IPC.ASR_TEST_START, (event) => startAsrTest(event.sender, isCallActive));
+export function registerAsrTestIpc(
+  isCallActive: () => boolean,
+  isOfflineTranscriptionActive: () => boolean = () => false,
+): void {
+  ipcMain.handle(IPC.ASR_TEST_START, (event) => startAsrTest(event.sender, isCallActive, isOfflineTranscriptionActive));
   ipcMain.on(IPC.ASR_TEST_AUDIO_FRAME, (event, frame: ArrayBuffer) => sendAsrTestAudio(event.sender, frame));
   ipcMain.on(IPC.ASR_TEST_FLUSH, (event) => flushAsrTestPartial(event.sender));
   ipcMain.handle(IPC.ASR_TEST_TURN_END, (event) => finishAsrTestTurn(event.sender));

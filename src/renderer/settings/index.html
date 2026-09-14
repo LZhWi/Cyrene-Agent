@@ -2074,6 +2074,51 @@
               <p class="tts-hint">本地运行环境尚未安装时，请先在项目终端执行 <code>powershell -ExecutionPolicy Bypass -File scripts/setup-local-asr.ps1</code>。</p>
             </div>
 
+            <div class="tts-section asr-transcription-card" id="asr-transcription-card">
+              <div class="asr-test-card__header">
+                <div>
+                  <h2 class="tts-section__title">长音频转写</h2>
+                  <p class="tts-hint asr-test-card__hint">使用当前本地 ASR 的语言、热词和 Qwen 精度档位，分段生成带时间戳的 Markdown。无需预先创建文件，可自行选择目录和文件名；全程本地处理，不调用聊天模型，也不会自动导入知识库。</p>
+                </div>
+              </div>
+              <div class="tts-parameter-grid asr-transcription-options">
+                <div class="tts-field">
+                  <label for="asr-transcription-format">输出格式</label>
+                  <select id="asr-transcription-format">
+                    <option value="md">Markdown（.md）</option>
+                    <option value="txt">纯文本（.txt）</option>
+                    <option value="docx">Word（.docx）</option>
+                  </select>
+                </div>
+                <label class="setting-row asr-transcription-timestamps">
+                  <div>
+                    <strong>包含分段时间戳</strong>
+                    <p class="tts-hint">关闭后只保留连续的转写段落</p>
+                  </div>
+                  <input type="checkbox" id="asr-transcription-timestamps" checked />
+                </label>
+              </div>
+              <div class="asr-transcription-path-row">
+                <button type="button" class="ghost-btn" id="asr-transcription-pick-input">选择音频</button>
+                <span class="asr-transcription-path" id="asr-transcription-input" title="">尚未选择音频</span>
+              </div>
+              <div class="asr-transcription-path-row">
+                <button type="button" class="ghost-btn" id="asr-transcription-pick-output">选择保存位置</button>
+                <span class="asr-transcription-path" id="asr-transcription-output" title="">尚未选择输出位置</span>
+              </div>
+              <div class="asr-transcription-footer">
+                <div class="asr-transcription-progress-wrap">
+                  <progress id="asr-transcription-progress" max="1" value="0"></progress>
+                  <span id="asr-transcription-status">请选择音频和输出位置</span>
+                </div>
+                <div class="asr-test-card__actions">
+                  <button type="button" class="ghost-btn is-hidden" id="asr-transcription-open">打开结果</button>
+                  <button type="button" class="ghost-btn is-hidden" id="asr-transcription-cancel">取消</button>
+                  <button type="button" class="save-btn" id="asr-transcription-start">开始转写</button>
+                </div>
+              </div>
+            </div>
+
             <div class="tts-section asr-test-card" id="asr-test-card">
               <div class="asr-test-card__header">
                 <div>

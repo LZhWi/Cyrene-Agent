@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
 import {
   createDocumentIndexWorkerRunner,
+  prepareDocumentIndexFile,
   type DocumentIndexWorkerPort,
 } from "./document-index-worker";
 import type { QueuedDocumentIndexJob } from "./document-index-queue";
@@ -47,6 +51,22 @@ function createJob(): QueuedDocumentIndexJob & { cancel: () => void } {
 }
 
 describe("document index worker runner", () => {
+  it("prepares a small text document for indexing and keeps its inline text", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "document-index-small-"));
+    const filePath = path.join(dir, "small.md");
+    fs.writeFileSync(filePath, "small document body", "utf8");
+    try {
+      await expect(prepareDocumentIndexFile(filePath)).resolves.toMatchObject({
+        kind: "prepared-indexed",
+        name: "small.md",
+        totalChunks: 1,
+        inlineText: "small document body",
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it("persists embedding batches under one import and caches only after completion", async () => {
     const controlled = createControlledWorker();
     const persistPreparedBatch = vi.fn().mockResolvedValue(undefined);
@@ -142,5 +162,67 @@ describe("document index worker runner", () => {
     controlled.emit({ type: "completed" });
 
     await expect(running).resolves.toEqual({ kind: "indexed", name: "huge.md", chunks: 1, importId: "import-lightweight" });
+  });
+
+  it("returns small document text after indexing so the current turn can read it directly", async () => {
+    const controlled = createControlledWorker();
+    const runner = createDocumentIndexWorkerRunner({
+      createWorker: () => controlled.worker,
+      getCachedImport: vi.fn().mockResolvedValue(null),
+      getEmbeddingConfig: () => ({ provider: "local", modelKey: "minilm" }),
+      createImportId: () => "import-small",
+      persistPreparedBatch: vi.fn().mockResolvedValue(undefined),
+      putCache: vi.fn().mockResolvedValue(undefined),
+    });
+    const running = runner(createJob());
+
+    controlled.emit({ type: "prepared", result: {
+      kind: "prepared-indexed",
+      name: "small.md",
+      textSha256: "hash",
+      totalChunks: 1,
+      inlineText: "small document body",
+    } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controlled.emit({ type: "embedded-batch", chunks: [{ text: "small document body", index: 0, embedding: [1] }] });
+    controlled.emit({ type: "completed" });
+
+    await expect(running).resolves.toEqual({
+      kind: "indexed",
+      name: "small.md",
+      chunks: 1,
+      importId: "import-small",
+      text: "small document body",
+    });
+  });
+
+  it("keeps small document text available when indexing fails", async () => {
+    const controlled = createControlledWorker();
+    const runner = createDocumentIndexWorkerRunner({
+      createWorker: () => controlled.worker,
+      getCachedImport: vi.fn().mockResolvedValue(null),
+      getEmbeddingConfig: () => ({ provider: "local", modelKey: "minilm" }),
+      createImportId: () => "unused",
+      persistPreparedBatch: vi.fn(),
+      putCache: vi.fn(),
+    });
+    const running = runner(createJob());
+
+    controlled.emit({ type: "prepared", result: {
+      kind: "prepared-indexed",
+      name: "small.md",
+      textSha256: "hash",
+      totalChunks: 1,
+      inlineText: "small document body",
+    } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controlled.emit({ type: "error", reason: "embedding unavailable" });
+
+    await expect(running).resolves.toEqual({
+      kind: "text",
+      name: "small.md",
+      text: "small document body",
+      indexReason: "embedding unavailable",
+    });
   });
 });

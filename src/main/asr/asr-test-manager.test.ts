@@ -50,6 +50,12 @@ describe("ASR test manager", () => {
     expect(mocks.createAsrStream).not.toHaveBeenCalled();
   });
 
+  it("refuses to start while long-audio transcription is active", async () => {
+    const result = await startAsrTest(sender() as never, () => false, () => true);
+    expect(result).toEqual({ ok: false, error: "长音频转写正在进行，请先停止转写" });
+    expect(mocks.createAsrStream).not.toHaveBeenCalled();
+  });
+
   it("streams PCM, emits recognition text and restarts after a VAD turn", async () => {
     const streams = Array.from({ length: 2 }, () => ({
       start: vi.fn(async () => {}),

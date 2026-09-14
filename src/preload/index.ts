@@ -298,6 +298,17 @@ const settingsApi = {
     ipcRenderer.on(IPC.ASR_TEST_ERROR, listener);
     return () => ipcRenderer.removeListener(IPC.ASR_TEST_ERROR, listener);
   },
+  asrTranscriptionPickInput: () => ipcRenderer.invoke(IPC.ASR_TRANSCRIPTION_PICK_INPUT),
+  asrTranscriptionPickOutput: (request?: { suggestedPath?: string; format?: string }) => ipcRenderer.invoke(IPC.ASR_TRANSCRIPTION_PICK_OUTPUT, request),
+  asrTranscriptionGetState: () => ipcRenderer.invoke(IPC.ASR_TRANSCRIPTION_GET_STATE),
+  asrTranscriptionStart: (request: unknown) => ipcRenderer.invoke(IPC.ASR_TRANSCRIPTION_START, request),
+  asrTranscriptionCancel: () => ipcRenderer.invoke(IPC.ASR_TRANSCRIPTION_CANCEL),
+  asrTranscriptionOpenOutput: (outputPath: string) => ipcRenderer.invoke(IPC.ASR_TRANSCRIPTION_OPEN_OUTPUT, outputPath),
+  onAsrTranscriptionProgress: (callback: (data: unknown) => void) => {
+    const listener = (_event: unknown, data: unknown) => callback(data);
+    ipcRenderer.on(IPC.ASR_TRANSCRIPTION_PROGRESS, listener);
+    return () => ipcRenderer.removeListener(IPC.ASR_TRANSCRIPTION_PROGRESS, listener);
+  },
   testConnection: (config: { provider: string; baseUrl: string; model: string; apiKey: string; explicitTransport?: "openai" | "anthropic" | "auto" }) => ipcRenderer.invoke(IPC.SETTINGS_TEST_CONNECTION, config),
   testVision: (config: { baseUrl: string; apiKey: string; model: string }) => ipcRenderer.invoke(IPC.SETTINGS_TEST_VISION, config),
   // main → settings：要求切到指定标签（窗口已打开时由 main 发这个事件）

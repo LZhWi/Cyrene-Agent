@@ -13,9 +13,9 @@ export const GLOBAL_PROACTIVE_INTERVAL_MS = 2 * 60 * 60 * 1000;
  *  让 AI 能更快适应环境变化（如用户闲下来、到饭点等）。
  *  silent 时不设场景级冷却，10 分钟后任何场景都可再试。 */
 export const SILENT_COOLDOWN_MS = 10 * 60 * 1000;
-export const FOLLOWUP_INTERVAL_MS = 6 * 60 * 60 * 1000;
+export const FOLLOWUP_INTERVAL_MS = 3 * 60 * 60 * 1000;
 export const NIGHT_ACTIVE_IDLE_LIMIT_SEC = 60;
-export const FOLLOWUP_MIN_SCORE = 85;
+export const FOLLOWUP_MIN_SCORE = 65;
 
 const allow = (): ProactiveCommitDecision => ({ allowed: true, reason: "allowed" });
 const block = (reason: ProactiveCommitDecision["reason"]): ProactiveCommitDecision => ({ allowed: false, reason });

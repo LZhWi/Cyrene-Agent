@@ -24,6 +24,10 @@ export interface ChatHistoryOccurrence {
 export interface SearchResult {
   entry: MemoryEntry;
   score: number;        // 加权后的综合分数（余弦 × weight × 衰减）
+  retrievalSignals?: {
+    vectorScore: number;
+    bm25Score: number;
+  };
 }
 
 export interface VectorSearchOptions {

@@ -15,6 +15,8 @@
     "test:watch": "vitest",
     "smoke:music": "npm run build:main && node scripts/run-music-smoke.mjs",
     "eval:history": "npm run build:main && node scripts/eval-history-retrieval.mjs",
+    "eval:document-chunking": "npm run build:main && node scripts/eval-document-chunking.mjs",
+    "transcribe:local-audio": "npm run build:main && node scripts/transcribe-local-audio.mjs",
     "eval:memory-kind": "npm run build:main && node scripts/eval-memory-kind-routing.mjs",
     "eval:memory-dynamic": "npm run build:main && node scripts/eval-memory-dynamic-retrieval.mjs",
     "eval:l2-user-management-real": "npm run build:main && node scripts/eval-l2-user-management-real.mjs",
@@ -82,6 +84,7 @@
     "silk-wasm": "^3.7.1",
     "turndown": "^7.2.4",
     "wink-bm25-text-search": "^3.1.2",
+    "word-extractor": "^1.0.4",
     "ws": "^8.21.0"
   },
   "allowScripts": {

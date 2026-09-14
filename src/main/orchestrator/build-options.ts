@@ -20,6 +20,7 @@
 //   IPC.AGUI_EVENT / chatWindow（用于推 sticker）
 //
 // 这些全部塞到 BuildOptionsDeps 里。dispatcher 在 Phase 1 注入同样的 deps 即可。
+import { createHash } from "node:crypto";
 import type { CyreneRunOptions, CyreneRunResult } from "./cyrene-agent";
 import type { ToolDefinition } from "./tool-registry";
 import type { ChatMessage, OpenAIContentBlock } from "./vendors/types";
@@ -188,6 +189,17 @@ function contentToText(content: ChatMessage["content"]): string {
       .join("\n");
   }
   return "";
+}
+
+function logPromptCacheSegments(
+  phase: "tool" | "soul",
+  segments: ReadonlyArray<{ name: string; content: string }>,
+): void {
+  console.log("[PromptCacheDiag] segments(" + phase + ") =", JSON.stringify(segments.map((segment) => ({
+    name: segment.name,
+    chars: segment.content.length,
+    sha256: createHash("sha256").update(segment.content).digest("hex").slice(0, 16),
+  }))));
 }
 
 export function resolveRequiredMusicTool(
@@ -514,7 +526,8 @@ export async function buildAgentRunOptions(
   // 工具阶段：工具规则 + 运行时工具目录 + 可用 Skill 路由清单 + 环境上下文。
   // environmentContext 必须注入工具阶段：LLM 在决定工具参数时需要知道用户默认城市、桌面路径等信息，
   // 否则会自作主张猜城市/路径（如把苏州猜成武汉）。
-  const toolSystemContent = deps.buildToolSystemPrompt(runTools)
+  const toolPromptContent = deps.buildToolSystemPrompt(runTools);
+  const toolSystemContent = toolPromptContent
     + (environmentContext ? "\n\n---\n\n" + environmentContext : "")
     + (skillCatalog ? "\n\n---\n\n" + skillCatalog : "")
     + (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "")
@@ -531,11 +544,12 @@ export async function buildAgentRunOptions(
   const soulPhaseToolCorrection =
     "注意：当前回复阶段工具调用环节已经结束，上面列出的工具现在不能也不需要调用——" +
     "直接用对话里已有的工具结果（如有）自然回复即可，绝不要输出 <tool_call>、<invoke> 之类的调用指令文本。";
+  const soulPersonaContent = deps.buildSoulSystemBasePrompt(styleFile);
   const soulSystemBaseContent =
     (environmentContext ? environmentContext + "\n\n" + soulPhaseToolCorrection + "\n\n" : "") +
     (conversationTimeContext ? conversationTimeContext + "\n\n---\n\n" : "") +
     (channelSystem ? channelSystem + "\n\n" : "") +
-    deps.buildSoulSystemBasePrompt(styleFile) +
+    soulPersonaContent +
     (skillCatalog ? "\n\n---\n\n" + skillCatalog : "") +
     (autoInjectedSkillContext ? "\n\n---\n\n" + autoInjectedSkillContext : "") +
     skillActivation +
@@ -552,6 +566,38 @@ export async function buildAgentRunOptions(
     (relationshipContext ? "\n\n" + relationshipContext + "\n\n" : "") +
     (musicCompanionContext ? "\n\n" + musicCompanionContext : "") +
     attachmentContext;
+
+  // 仅输出本地诊断元数据；不会写入 prompt、消息历史或 API 请求。
+  // 空段也保留，便于从相邻两轮日志识别段落的出现或消失。
+  logPromptCacheSegments("tool", [
+    { name: "toolRulesAndCatalog", content: toolPromptContent },
+    { name: "environment", content: environmentContext },
+    { name: "skillCatalog", content: skillCatalog },
+    { name: "autoInjectedSkill", content: autoInjectedSkillContext },
+    { name: "historyAutoInjection", content: historyContextBlock },
+    { name: "musicCompanion", content: musicCompanionContext },
+  ]);
+  logPromptCacheSegments("soul", [
+    { name: "environment", content: environmentContext },
+    { name: "soulPhaseToolCorrection", content: environmentContext ? soulPhaseToolCorrection : "" },
+    { name: "conversationTime", content: conversationTimeContext },
+    { name: "channel", content: channelSystem },
+    { name: "persona", content: soulPersonaContent },
+    { name: "skillCatalog", content: skillCatalog },
+    { name: "autoInjectedSkill", content: autoInjectedSkillContext },
+    { name: "slashSkillActivation", content: skillActivation },
+    { name: "tone", content: toneInjection },
+    { name: "life", content: lifeContext },
+    { name: "memory", content: memoryInjection },
+    { name: "historyAutoInjection", content: historyContextBlock },
+    { name: "social", content: socialContextBlock },
+    { name: "call", content: callContextBlock },
+    { name: "minecraft", content: minecraftContextBlock },
+    { name: "alwaysOn", content: alwaysOnContext },
+    { name: "relationship", content: relationshipContext },
+    { name: "musicCompanion", content: musicCompanionContext },
+    { name: "attachment", content: attachmentContext },
+  ]);
 
   deps.logWorldbookInjection(alwaysOnContext, systemContent);
 

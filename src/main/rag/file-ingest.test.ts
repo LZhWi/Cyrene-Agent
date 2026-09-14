@@ -14,8 +14,10 @@ import {
   isImageExt,
   isTextExt,
   isUnsupportedExt,
+  isDocumentExt,
   getMimeFromExt,
   SMALL_THRESHOLD,
+  SMALL_TOKEN_THRESHOLD,
   type Attachment,
   type ImportFn,
 } from "./file-ingest";
@@ -101,8 +103,9 @@ describe("hasUtf16Bom / decodeTextBuffer", () => {
     const result = await ingestOneFile(fp, async () => ({ importId: "x", chunkCount: 1 }));
     expect(result).toMatchObject({
       name: "谈话记录.txt",
-      kind: "text",
+      kind: "indexed",
       text: "这是一份用记事本 Unicode 编码保存的谈话记录。",
+      importId: "x",
     });
   });
 });
@@ -130,8 +133,14 @@ describe("扩展名判断", () => {
   it("isUnsupportedExt false", () => {
     expect(isUnsupportedExt(".txt")).toBe(false);
     expect(isUnsupportedExt(".md")).toBe(false);
+    expect(isUnsupportedExt(".doc")).toBe(false);
+    expect(isUnsupportedExt(".docx")).toBe(false);
     expect(isUnsupportedExt("")).toBe(false);
     expect(isUnsupportedExt(".unknown")).toBe(false);
+  });
+  it("Word 扩展名属于可处理文档", () => {
+    expect(isDocumentExt(".doc")).toBe(true);
+    expect(isDocumentExt(".DOCX")).toBe(true);
   });
   it("isImageExt true 且返回图片 mime", () => {
     expect(isImageExt(".png")).toBe(true);
@@ -154,6 +163,19 @@ describe("describePendingAttachment", () => {
     });
     expect(text).not.toHaveProperty("text");
     expect(text).not.toHaveProperty("chunks");
+  });
+
+  it("拖入阶段把 Word 文件登记为待处理文档", () => {
+    expect(describePendingAttachment(fixture("report.docx"))).toMatchObject({
+      name: "report.docx",
+      kind: "document",
+      status: "pending",
+    });
+    expect(describePendingAttachment(fixture("legacy.doc"))).toMatchObject({
+      name: "legacy.doc",
+      kind: "document",
+      status: "pending",
+    });
   });
 
   it("拖入阶段把明确不支持的二进制或媒体格式标记为 unsupported", () => {
@@ -188,14 +210,25 @@ describe("ingestOneFile", () => {
     mockImport = vi.fn().mockResolvedValue({ importId: "import-test", chunkCount: 3 });
   });
 
-  it("小文本文件 → kind:text 内容返回", async () => {
+  it("小文本文件 → 建立索引并保留本轮全文", async () => {
     const fp = write("hello.txt", "Hello, 世界！");
     const r = await ingestOneFile(fp, mockImport);
-    expect(r.kind).toBe("text");
-    if (r.kind === "text") {
+    expect(r.kind).toBe("indexed");
+    if (r.kind === "indexed") {
       expect(r.text).toBe("Hello, 世界！");
+      expect(r.importId).toBe("import-test");
     }
-    expect(mockImport).not.toHaveBeenCalled();
+    expect(mockImport).toHaveBeenCalledWith("Hello, 世界！", "hello.txt");
+  });
+
+  it("中文长文即使未达到字符上限，也不会在本轮内联全文", async () => {
+    const longChinese = "丝".repeat(SMALL_TOKEN_THRESHOLD + 1);
+    const fp = write("long-zh.txt", longChinese);
+    const result = await ingestOneFile(fp, mockImport);
+
+    expect(result).toMatchObject({ kind: "indexed", importId: "import-test" });
+    if (result.kind === "indexed") expect(result.text).toBeUndefined();
+    expect(longChinese.length).toBeLessThan(SMALL_THRESHOLD);
   });
 
   it("大文本文件（>30k） → kind:indexed 调用 importFn", async () => {
@@ -276,13 +309,12 @@ describe("ingestOneFile", () => {
     });
   });
 
-  it("正好等于阈值 → kind:indexed（含边界）", async () => {
+  it("正好等于阈值 → 建立索引并保留本轮全文", async () => {
     const exact = "x".repeat(SMALL_THRESHOLD);
     const fp = write("exact.txt", exact);
     const r = await ingestOneFile(fp, mockImport);
-    // > threshold 才索引，== threshold 应算小（<=）
-    expect(r.kind).toBe("text");
-    expect(mockImport).not.toHaveBeenCalled();
+    expect(r).toMatchObject({ kind: "indexed", text: exact, importId: "import-test" });
+    expect(mockImport).toHaveBeenCalledWith(exact, "exact.txt");
   });
 
   it("空文件 → kind:empty", async () => {
@@ -319,10 +351,10 @@ describe("ingestOneFile", () => {
     expect(r.kind).toBe("unsupported");
   });
 
-  it("无扩展名、文本 → text", async () => {
+  it("无扩展名、文本 → 建立索引并保留本轮全文", async () => {
     const fp = write("readme", "This is my readme.");
     const r = await ingestOneFile(fp, mockImport);
-    expect(r.kind).toBe("text");
+    expect(r).toMatchObject({ kind: "indexed", text: "This is my readme.", importId: "import-test" });
   });
 
   it("文本扩展名但含 null 字节 → unsupported（二进制兜底）", async () => {
@@ -341,6 +373,19 @@ describe("ingestOneFile", () => {
       expect(r.chunks).toBe(0);
       expect(r.reason).toContain("embedding failed");
     }
+  });
+
+  it("小文件索引失败时仍返回本轮可读正文", async () => {
+    const mockFailing = vi.fn().mockRejectedValue(new Error("embedding failed"));
+    const fp = write("small-fallback.txt", "still readable this turn");
+
+    const r = await ingestOneFile(fp, mockFailing);
+
+    expect(r).toMatchObject({
+      kind: "text",
+      text: "still readable this turn",
+      indexReason: "embedding failed",
+    });
   });
 
   it("文件不存在 → unsupported", async () => {
@@ -402,7 +447,7 @@ describe("ingestPaths", () => {
     const fp = write("single.txt", "hello");
     const r = await ingestPaths([fp], mockImport);
     expect(r).toHaveLength(1);
-    expect(r[0].kind).toBe("text");
+    expect(r[0].kind).toBe("indexed");
     expect(r[0].name).toBe("single.txt");
   });
 
@@ -422,7 +467,7 @@ describe("ingestPaths", () => {
     write("sub/code.js", "const x = 1;");
     const r = await ingestPaths([fp, tmpDir], mockImport);
     expect(r).toHaveLength(3);
-    expect(r.filter((a) => a.kind === "text")).toHaveLength(2);
+    expect(r.filter((a) => a.kind === "indexed")).toHaveLength(2);
     expect(r.filter((a) => a.kind === "unsupported")).toHaveLength(1);
   });
 

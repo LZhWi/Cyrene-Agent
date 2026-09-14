@@ -9,8 +9,8 @@ export interface RetrievedDocumentChunk {
 }
 
 export type ProcessedDocument =
-  | { kind: "text"; name: string; text: string }
-  | { kind: "indexed"; name: string; chunks: number; importId?: string; reason?: string; retrievedChunks?: RetrievedDocumentChunk[] }
+  | { kind: "text"; name: string; text: string; indexReason?: string }
+  | { kind: "indexed"; name: string; chunks: number; importId?: string; text?: string; reason?: string; retrievedChunks?: RetrievedDocumentChunk[] }
   | { kind: "empty"; name: string; reason?: string }
   | { kind: "unsupported" | "error"; name: string; reason?: string }
   | { kind: "image" | "document"; name: string };

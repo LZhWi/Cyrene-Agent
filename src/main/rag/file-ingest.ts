@@ -2,13 +2,15 @@ import * as fs from "fs";
 import * as path from "path";
 import { pathToFileURL } from "url";
 import type { ImportedDocumentChunk, ImportedDocumentResult } from "./index";
+import { estimateTokens } from "./chunk";
+import { extractWordDocumentText, isWordDocumentExt } from "./word-text";
 
 // ── Public types ──
 export type AttachmentKind = "text" | "indexed" | "empty" | "unsupported" | "image" | "document";
 
 export type Attachment =
-  | { kind: "text"; name: string; text: string; filePath?: string; mime?: string }
-  | { kind: "indexed"; name: string; chunks: number; importId?: string; cached?: boolean; filePath?: string; mime?: string; reason?: string; retrievedChunks?: ImportedDocumentChunk[] }
+  | { kind: "text"; name: string; text: string; indexReason?: string; filePath?: string; mime?: string }
+  | { kind: "indexed"; name: string; chunks: number; importId?: string; cached?: boolean; text?: string; filePath?: string; mime?: string; reason?: string; retrievedChunks?: ImportedDocumentChunk[] }
   | { kind: "empty"; name: string; filePath?: string; mime?: string }
   | { kind: "unsupported"; name: string; reason: string; filePath?: string; mime?: string; status?: "error" }
   | { kind: "image"; name: string; filePath: string; mime?: string; status: "pending"; previewUrl?: string; caption?: string }
@@ -36,8 +38,14 @@ export type DocumentImportOptions = {
 export type DocumentImport = ImportFn | DocumentImportOptions;
 
 // ── Thresholds ──
-/** 小文件 vs 大文件（→RAG）的分界，字符数。 */
+/** 当轮直接注入全文的字符数上限；文档无论是否内联都会建立索引。 */
 export const SMALL_THRESHOLD = 30_000;
+/** 中文等高 token 密度文本的额外上限，避免字符数不大却占满模型上下文。 */
+export const SMALL_TOKEN_THRESHOLD = 4_000;
+
+export function shouldInlineDocumentText(text: string): boolean {
+  return text.length <= SMALL_THRESHOLD && estimateTokens(text) <= SMALL_TOKEN_THRESHOLD;
+}
 
 // ── 扩展名路由 ──
 const TEXT_EXTS = new Set([
@@ -57,7 +65,7 @@ export const IMAGE_EXTS = new Set([
 
 const UNSUPPORTED_EXTS = new Set([
   ".zip", ".7z", ".rar", ".tar", ".gz",
-  ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+  ".pdf", ".xls", ".xlsx", ".ppt", ".pptx",
   ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".ico",
   ".mp3", ".mp4", ".wav", ".avi", ".mov",
   ".exe", ".dll", ".so", ".dylib", ".bin",
@@ -91,7 +99,7 @@ export function isUnsupportedExt(ext: string): boolean {
 
 export function isDocumentExt(ext: string): boolean {
   const normalized = ext.toLowerCase();
-  return normalized === "" || isTextExt(normalized);
+  return normalized === "" || isTextExt(normalized) || isWordDocumentExt(normalized);
 }
 
 export function describePendingAttachment(filePath: string): Attachment {
@@ -170,6 +178,7 @@ async function indexLargeText(
   text: string,
   name: string,
   documentImport: DocumentImport,
+  includeText = false,
 ): Promise<Attachment> {
   const options: DocumentImportOptions = typeof documentImport === "function"
     ? { importDocument: documentImport }
@@ -184,7 +193,7 @@ async function indexLargeText(
       const cached = await options.getCachedImport(text);
       if (cached) {
         options.onProgress?.({ status: "cached", completedChunks: cached.chunkCount, totalChunks: cached.chunkCount });
-        return { name, kind: "indexed", chunks: cached.chunkCount, importId: cached.importId, cached: true };
+        return { name, kind: "indexed", chunks: cached.chunkCount, importId: cached.importId, cached: true, text: includeText ? text : undefined };
       }
     } catch (err) {
       console.warn("[RAG] document cache lookup failed:", err);
@@ -209,9 +218,12 @@ async function indexLargeText(
         console.warn("[RAG] document cache write failed:", err);
       }
     }
-    return { name, kind: "indexed", chunks: imported.chunkCount, importId: imported.importId };
+    return { name, kind: "indexed", chunks: imported.chunkCount, importId: imported.importId, text: includeText ? text : undefined };
   } catch (err: any) {
-    return { name, kind: "indexed", chunks: 0, reason: err?.message || String(err) };
+    const reason = err?.message || String(err);
+    return includeText
+      ? { name, kind: "text", text, indexReason: reason }
+      : { name, kind: "indexed", chunks: 0, reason };
   }
 }
 
@@ -253,6 +265,16 @@ export async function ingestOneFile(
   }
 
   // 类型判断与内容提取
+  if (isWordDocumentExt(ext)) {
+    try {
+      const text = await extractWordDocumentText(buf);
+      if (!text.trim()) return { name, kind: "empty" };
+      return indexLargeText(text, name, documentImport, shouldInlineDocumentText(text));
+    } catch (err: any) {
+      return { name, kind: "unsupported", reason: err?.message || String(err) };
+    }
+  }
+
   // 文本扩展名
   if (isTextExt(ext)) {
     // 二进制兜底：标题是文本但实际含 null 字节。UTF-16 BOM 文件例外（null 字节是编码特征）。
@@ -263,11 +285,7 @@ export async function ingestOneFile(
     if (!text.trim()) {
       return { name, kind: "empty" };
     }
-    if (text.length > SMALL_THRESHOLD) {
-      // 大文本 → 索引到 Vector DB
-      return indexLargeText(text, name, documentImport);
-    }
-    return { name, kind: "text", text };
+    return indexLargeText(text, name, documentImport, shouldInlineDocumentText(text));
   }
 
   // 无扩展名或未知扩展名：用 null 字节检测（UTF-16 BOM 文件例外）
@@ -279,10 +297,7 @@ export async function ingestOneFile(
   if (!text.trim()) {
     return { name, kind: "empty" };
   }
-  if (text.length > SMALL_THRESHOLD) {
-    return indexLargeText(text, name, documentImport);
-  }
-  return { name, kind: "text", text };
+  return indexLargeText(text, name, documentImport, shouldInlineDocumentText(text));
 }
 
 // ── 目录递归 ──

@@ -228,7 +228,10 @@ export class HybridRetriever {
     // 如果没有 provider，向量检索不可用，只用 BM25
     if (!this.provider) {
       const bm25Results = this.bm25Search(query, source, topK, options);
-      return bm25Results;
+      return bm25Results.map((result) => ({
+        ...result,
+        retrievalSignals: { vectorScore: 0, bm25Score: result.score },
+      }));
     }
 
     // 1. Vector 检索
@@ -265,6 +268,10 @@ export class HybridRetriever {
       score: options.semanticOnly
         ? m.vectorScore / maxV
         : (m.vectorScore / maxV) * vectorWeight + (m.bm25Score / maxB) * bm25Weight,
+      retrievalSignals: {
+        vectorScore: m.vectorScore,
+        bm25Score: m.bm25Score,
+      },
     }));
 
     scored.sort((a, b) => b.score - a.score);

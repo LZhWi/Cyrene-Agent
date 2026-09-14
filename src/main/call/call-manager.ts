@@ -10,6 +10,7 @@ import { IPC } from "../../shared/ipc-channels";
 import { getAsrConfig, type AsrConfig } from "../asr/volcano-asr-engine";
 import { createAsrStream, shutdownAsrRuntimes, type AsrStream } from "../asr/asr-factory";
 import { isAsrTestActive } from "../asr/asr-test-manager";
+import { isOfflineTranscriptionActive } from "../asr/offline-transcription-manager";
 import { synthesizeByEngine } from "../tts/tts-dispatcher";
 import type { GptsovitsTextSplitMethod, GptsovitsVersion, TtsEngine } from "../../shared/tts-types";
 import { runTwoPhaseFcLoop } from "../orchestrator/two-phase-fc-loop";
@@ -133,6 +134,11 @@ export async function startCall(): Promise<void> {
   if (active) return;
   if (isAsrTestActive()) {
     sendError("ASR 测试正在进行，请先在设置中停止测试");
+    sendState("ERROR");
+    return;
+  }
+  if (isOfflineTranscriptionActive()) {
+    sendError("长音频转写正在进行，请先在设置中停止转写");
     sendState("ERROR");
     return;
   }

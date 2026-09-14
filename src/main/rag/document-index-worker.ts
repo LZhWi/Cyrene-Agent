@@ -2,19 +2,20 @@ import * as fs from "fs";
 import * as path from "path";
 import crypto from "node:crypto";
 import { Worker, isMainThread, parentPort } from "worker_threads";
-import { iterateDocumentChunks } from "./chunk";
+import { createSemanticDocumentChunks, createSemanticDocumentUnits } from "./semantic-chunk";
 import {
   createLocalEmbeddingProvider,
   createOpenAIEmbeddingProvider,
   type EmbeddingWorkerConfig,
 } from "./embedding";
-import { decodeTextBuffer, hasUtf16Bom, isBinary, isTextExt, isUnsupportedExt, SMALL_THRESHOLD } from "./file-ingest";
+import { decodeTextBuffer, hasUtf16Bom, isBinary, isUnsupportedExt, shouldInlineDocumentText } from "./file-ingest";
+import { extractWordDocumentText, isWordDocumentExt } from "./word-text";
 import type { DocumentIndexJobResult, QueuedDocumentIndexJob } from "./document-index-queue";
 
 export type PreparedDocumentChunk = { text: string; index: number };
 
 export type PreparedDocumentIndexResult =
-  | { kind: "prepared-indexed"; name: string; textSha256: string; totalChunks: number }
+  | { kind: "prepared-indexed"; name: string; textSha256: string; totalChunks: number; inlineText?: string }
   | Exclude<DocumentIndexJobResult, { kind: "indexed" }>;
 
 type WorkerPreparedDocument = Extract<PreparedDocumentIndexResult, { kind: "prepared-indexed" }> & {
@@ -62,6 +63,16 @@ function cancelledResult(filePath: string): DocumentIndexJobResult {
 
 function errorResult(filePath: string, reason: string): DocumentIndexJobResult {
   return { kind: "error", name: path.basename(filePath), reason };
+}
+
+function indexingFailureResult(
+  filePath: string,
+  prepared: Extract<PreparedDocumentIndexResult, { kind: "prepared-indexed" }> | null,
+  reason: string,
+): DocumentIndexJobResult {
+  return prepared?.inlineText !== undefined
+    ? { kind: "text", name: prepared.name, text: prepared.inlineText, indexReason: reason }
+    : errorResult(filePath, reason);
 }
 
 export function createDocumentIndexWorkerRunner(deps: DocumentIndexWorkerRunnerDependencies) {
@@ -114,7 +125,7 @@ export function createDocumentIndexWorkerRunner(deps: DocumentIndexWorkerRunnerD
         }
         if (message.type === "error") {
           job.reportProgress({ status: "failed", reason: message.reason });
-          finish(errorResult(job.input.filePath, message.reason));
+          finish(indexingFailureResult(job.input.filePath, prepared, message.reason));
           return;
         }
         if (message.type === "result") {
@@ -143,7 +154,14 @@ export function createDocumentIndexWorkerRunner(deps: DocumentIndexWorkerRunnerD
           if (cached) {
             job.reportProgress({ status: "cached", completedChunks: cached.chunkCount, totalChunks: cached.chunkCount });
             job.reportProgress({ status: "done", completedChunks: cached.chunkCount, totalChunks: cached.chunkCount });
-            finish({ kind: "indexed", name: prepared.name, chunks: cached.chunkCount, importId: cached.importId, cached: true });
+            finish({
+              kind: "indexed",
+              name: prepared.name,
+              chunks: cached.chunkCount,
+              importId: cached.importId,
+              cached: true,
+              text: prepared.inlineText,
+            });
             return;
           }
           job.reportProgress({ status: "embedding", completedChunks: 0, totalChunks: prepared.totalChunks });
@@ -184,13 +202,25 @@ export function createDocumentIndexWorkerRunner(deps: DocumentIndexWorkerRunnerD
             return;
           }
           job.reportProgress({ status: "done", completedChunks: persistedChunks, totalChunks: persistedChunks });
-          finish({ kind: "indexed", name: prepared.name, chunks: persistedChunks, importId });
+          finish({
+            kind: "indexed",
+            name: prepared.name,
+            chunks: persistedChunks,
+            importId,
+            text: prepared.inlineText,
+          });
         }
-      }).catch((error) => finish(errorResult(job.input.filePath, error instanceof Error ? error.message : String(error))));
+      }).catch((error) => finish(indexingFailureResult(
+        job.input.filePath,
+        prepared,
+        error instanceof Error ? error.message : String(error),
+      )));
     });
-    worker.on("error", (error: Error) => finish(errorResult(job.input.filePath, error.message)));
+    worker.on("error", (error: Error) => finish(indexingFailureResult(job.input.filePath, prepared, error.message)));
     worker.on("exit", (code: number) => {
-      if (!settled && code !== 0) finish(errorResult(job.input.filePath, `document worker exited with code ${code}`));
+      if (!settled && code !== 0) {
+        finish(indexingFailureResult(job.input.filePath, prepared, `document worker exited with code ${code}`));
+      }
     });
     worker.postMessage({ type: "start", filePath: job.input.filePath, cancellationBuffer });
   });
@@ -203,7 +233,19 @@ function createDefaultRunnerDependencies(): DocumentIndexWorkerRunnerDependencie
       const cache = require("./document-cache") as typeof import("./document-cache");
       const rag = require("./index") as typeof import("./index");
       const identity = await cache.buildDocumentCacheIdentityFromTextSha(textSha256);
-      return cache.getValidDocumentCacheRecord(cache.createDocumentCacheKey(identity), rag.hasImportedDocumentChunks);
+      const current = await cache.getValidDocumentCacheRecord(
+        cache.createDocumentCacheKey(identity),
+        rag.hasImportedDocumentChunks,
+      );
+      if (current) return current;
+      const legacyIdentity = await cache.buildDocumentCacheIdentityFromTextSha(
+        textSha256,
+        cache.LEGACY_DOCUMENT_CHUNK_STRATEGY_VERSION,
+      );
+      return cache.getValidDocumentCacheRecord(
+        cache.createDocumentCacheKey(legacyIdentity),
+        rag.hasImportedDocumentChunks,
+      );
     },
     getEmbeddingConfig: () => {
       const embedding = require("./embedding") as typeof import("./embedding");
@@ -248,15 +290,7 @@ export async function retrieveQueuedDocumentChunks(
   return rag.searchImportedDocumentChunksForImportIds(query, [result.importId]);
 }
 
-function countDocumentChunks(text: string, source: string): number {
-  let count = 0;
-  for (const chunk of iterateDocumentChunks(text, source)) {
-    count = chunk.index + 1;
-  }
-  return count;
-}
-
-function prepareFile(filePath: string): WorkerPrepareFileResult {
+export async function prepareDocumentIndexFile(filePath: string): Promise<WorkerPrepareFileResult> {
   const name = path.basename(filePath);
   let stat: fs.Stats;
   try {
@@ -275,15 +309,24 @@ function prepareFile(filePath: string): WorkerPrepareFileResult {
   } catch (error) {
     return { kind: "unsupported", name, reason: error instanceof Error ? error.message : String(error) };
   }
-  if (!hasUtf16Bom(buffer) && isBinary(buffer)) return { kind: "unsupported", name, reason: "二进制文件，暂不支持" };
-  const text = decodeTextBuffer(buffer);
+  let text: string;
+  if (isWordDocumentExt(ext)) {
+    try {
+      text = await extractWordDocumentText(buffer);
+    } catch (error) {
+      return { kind: "unsupported", name, reason: error instanceof Error ? error.message : String(error) };
+    }
+  } else {
+    if (!hasUtf16Bom(buffer) && isBinary(buffer)) return { kind: "unsupported", name, reason: "二进制文件，暂不支持" };
+    text = decodeTextBuffer(buffer);
+  }
   if (!text.trim()) return { kind: "empty", name };
-  if (text.length <= SMALL_THRESHOLD) return { kind: "text", name, text };
   return {
     kind: "prepared-indexed",
     name,
     textSha256: crypto.createHash("sha256").update(text.replace(/\r\n/g, "\n").replace(/\r/g, "\n"), "utf8").digest("hex"),
-    totalChunks: countDocumentChunks(text, "doc_" + name),
+    totalChunks: createSemanticDocumentUnits(text).length,
+    inlineText: shouldInlineDocumentText(text) ? text : undefined,
     text,
   };
 }
@@ -311,7 +354,7 @@ async function runWorkerThread(): Promise<void> {
       if (message.type === "start") {
         cancellation = new Int32Array(message.cancellationBuffer);
         port.postMessage({ type: "stage", status: "reading" } satisfies WorkerOutboundMessage);
-        const result = prepareFile(message.filePath);
+        const result = await prepareDocumentIndexFile(message.filePath);
         if (isCancelled(cancellation)) {
           port.postMessage({ type: "cancelled" } satisfies WorkerOutboundMessage);
         } else if (result.kind === "prepared-indexed") {
@@ -321,6 +364,7 @@ async function runWorkerThread(): Promise<void> {
             name: result.name,
             textSha256: result.textSha256,
             totalChunks: result.totalChunks,
+            inlineText: result.inlineText,
           };
           port.postMessage({
             type: "stage",
@@ -337,32 +381,35 @@ async function runWorkerThread(): Promise<void> {
       if (!prepared) throw new Error("document worker has no prepared document");
       const provider = createWorkerEmbeddingProvider(message.embedding);
       if (!provider) throw new Error("Embedding provider is not available");
-      const batchSize = 16;
-      let completedChunks = 0;
-      let batch: Array<PreparedDocumentChunk & { embedding: number[] }> = [];
-      for (const chunk of iterateDocumentChunks(prepared.text, "doc_" + prepared.name)) {
-        if (isCancelled(cancellation)) {
+      let semantic;
+      try {
+        semantic = await createSemanticDocumentChunks(
+          prepared.text,
+          "doc_" + prepared.name,
+          (texts) => provider.embedBatch(texts),
+          {
+            isCancelled: () => isCancelled(cancellation),
+            onProgress: ({ completed, total }) => port.postMessage({
+              type: "progress",
+              completedChunks: completed,
+              totalChunks: total,
+            } satisfies WorkerOutboundMessage),
+          },
+        );
+      } catch (error) {
+        if (isCancelled(cancellation) || (error instanceof Error && error.message === "cancelled")) {
           prepared = null;
           port.postMessage({ type: "cancelled" } satisfies WorkerOutboundMessage);
           return;
         }
-        const embedding = await provider.embed(chunk.text);
-        if (isCancelled(cancellation)) {
-          prepared = null;
-          port.postMessage({ type: "cancelled" } satisfies WorkerOutboundMessage);
-          return;
-        }
-        batch.push({ text: chunk.text, index: chunk.index, embedding });
-        completedChunks += 1;
-        if (batch.length === batchSize || completedChunks === prepared.totalChunks) {
-          port.postMessage({ type: "embedded-batch", chunks: batch } satisfies WorkerOutboundMessage);
-          batch = [];
-        }
-        port.postMessage({
-          type: "progress",
-          completedChunks,
-          totalChunks: prepared.totalChunks,
-        } satisfies WorkerOutboundMessage);
+        throw error;
+      }
+      const persistBatchSize = 16;
+      for (let start = 0; start < semantic.chunks.length; start += persistBatchSize) {
+        const chunks: Array<PreparedDocumentChunk & { embedding: number[] }> = semantic.chunks
+          .slice(start, start + persistBatchSize)
+          .map((chunk) => ({ text: chunk.text, index: chunk.index, embedding: chunk.embedding }));
+        port.postMessage({ type: "embedded-batch", chunks } satisfies WorkerOutboundMessage);
       }
       prepared = null;
       port.postMessage({ type: "completed" } satisfies WorkerOutboundMessage);

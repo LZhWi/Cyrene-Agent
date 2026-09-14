@@ -3,9 +3,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { getUserDataDir } from "../runtime/runtime-paths";
 import { DOCUMENT_CHUNK_OVERLAP, DOCUMENT_CHUNK_SIZE } from "./chunk";
+import { SEMANTIC_CHUNK_TARGET } from "./semantic-chunk";
 import { getEmbeddingProviderIdentity } from "./embedding";
 
-const CHUNK_STRATEGY_VERSION = "document-chunks-v1";
+export const DOCUMENT_CHUNK_STRATEGY_VERSION = "document-semantic-chunks-v2";
+export const LEGACY_DOCUMENT_CHUNK_STRATEGY_VERSION = "document-chunks-v1";
 
 export type DocumentCacheIdentity = {
   textSha256: string;
@@ -46,17 +48,21 @@ export async function buildDocumentCacheIdentity(text: string): Promise<Document
   return buildDocumentCacheIdentityFromTextSha(sha256(normalizeDocumentTextForCache(text)));
 }
 
-export async function buildDocumentCacheIdentityFromTextSha(textSha256: string): Promise<DocumentCacheIdentity> {
+export async function buildDocumentCacheIdentityFromTextSha(
+  textSha256: string,
+  chunkStrategyVersion = DOCUMENT_CHUNK_STRATEGY_VERSION,
+): Promise<DocumentCacheIdentity> {
   const provider = await getEmbeddingProviderIdentity();
+  const legacy = chunkStrategyVersion === LEGACY_DOCUMENT_CHUNK_STRATEGY_VERSION;
   return {
     textSha256,
     embeddingProvider: provider.provider,
     embeddingModel: provider.model,
     embeddingEndpoint: provider.endpoint,
     dimensions: provider.dimensions,
-    chunkStrategyVersion: CHUNK_STRATEGY_VERSION,
-    chunkSize: DOCUMENT_CHUNK_SIZE,
-    chunkOverlap: DOCUMENT_CHUNK_OVERLAP,
+    chunkStrategyVersion,
+    chunkSize: legacy ? DOCUMENT_CHUNK_SIZE : SEMANTIC_CHUNK_TARGET,
+    chunkOverlap: legacy ? DOCUMENT_CHUNK_OVERLAP : 0,
   };
 }
 

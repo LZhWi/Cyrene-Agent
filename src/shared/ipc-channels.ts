@@ -315,6 +315,15 @@ export const IPC = {
   ASR_TEST_RESULT: "asr-test:result",
   ASR_TEST_ERROR: "asr-test:error",
 
+  // Long local-audio transcription (local files only; no LLM or document indexing)
+  ASR_TRANSCRIPTION_PICK_INPUT: "asr-transcription:pick-input",
+  ASR_TRANSCRIPTION_PICK_OUTPUT: "asr-transcription:pick-output",
+  ASR_TRANSCRIPTION_GET_STATE: "asr-transcription:get-state",
+  ASR_TRANSCRIPTION_START: "asr-transcription:start",
+  ASR_TRANSCRIPTION_CANCEL: "asr-transcription:cancel",
+  ASR_TRANSCRIPTION_OPEN_OUTPUT: "asr-transcription:open-output",
+  ASR_TRANSCRIPTION_PROGRESS: "asr-transcription:progress",
+
   // 多渠道（Phase 0 骨架，Phase 1+ 实装微信/飞书）
   CHANNELS_GET_CONFIG: "channels:get-config",
   CHANNELS_SAVE_CONFIG: "channels:save-config",

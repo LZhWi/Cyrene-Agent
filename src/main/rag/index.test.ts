@@ -7,6 +7,7 @@ import type { EmbeddingProvider } from "./embedding";
 const provider: EmbeddingProvider = {
   name: "deterministic",
   dims: 2,
+  cacheIdentity: { provider: "local", model: "Xenova/bge-m3", dimensions: 2 },
   async embed(text: string): Promise<number[]> {
     return text.includes("paragraph") || text.includes("lexical-distractor") ? [0, 1] : [1, 0];
   },
@@ -48,13 +49,16 @@ import {
   deleteHistoryEntriesBySessionId,
   deleteUserMemoryVectors,
   flushVectorStoreSync,
+  formatImportedDocumentChunk,
   getEntriesBySource,
   hasImportedDocumentChunks,
   importDocumentForTurn,
+  importPreparedDocumentForTurn,
   initRAG,
   isUserMemoryVectorStoreReady,
   resetRAG,
   searchHistoryEntries,
+  searchImportedDocumentChunks,
   searchMemoryEntries,
   searchImportedDocumentChunksForImportIds,
 } from "./index";
@@ -98,6 +102,84 @@ describe("turn document imports", () => {
     const result = await importDocumentForTurn("one paragraph", "turn-doc.md");
 
     expect(hasImportedDocumentChunks(result.importId)).toBe(true);
+  });
+
+  it("keeps document source metadata in global retrieval results", async () => {
+    await importDocumentForTurn("project deadline is Friday", "plan.md");
+
+    const chunks = await searchImportedDocumentChunks("project deadline", 3);
+
+    expect(chunks[0]).toMatchObject({ fileName: "plan.md", chunkIndex: 0 });
+    expect(formatImportedDocumentChunk(chunks[0])).toContain("【plan.md #1】");
+  });
+
+  it("filters zero-score document candidates instead of injecting unrelated text", async () => {
+    await importDocumentForTurn("one paragraph", "notes.md");
+
+    await expect(searchImportedDocumentChunks("completely unrelated query", 3)).resolves.toEqual([]);
+  });
+
+  it("reuses the configured reranker and removes low-relevance document chunks", async () => {
+    await importDocumentForTurn("one paragraph", "notes.md");
+    rerankerMock.current = {
+      rerank: vi.fn(async (_query: string, documents: string[]) => (
+        documents.map((text) => ({ text, score: -10 }))
+      )),
+    };
+
+    await expect(searchImportedDocumentChunks("paragraph", 3)).resolves.toEqual([]);
+    expect(rerankerMock.current.rerank).toHaveBeenCalledOnce();
+  });
+
+  it("applies a stricter reranker threshold only to automatic document injection", async () => {
+    await importDocumentForTurn("one paragraph", "notes.md");
+    rerankerMock.current = {
+      rerank: vi.fn(async (_query: string, documents: string[]) => (
+        documents.map((text) => ({ text, score: -3 }))
+      )),
+    };
+
+    await expect(searchImportedDocumentChunks("paragraph", 3)).resolves.toHaveLength(1);
+    await expect(searchImportedDocumentChunks("paragraph", 3, { automaticInjection: true })).resolves.toEqual([]);
+  });
+
+  it("does not pad automatic injection with a weak second reranked chunk", async () => {
+    await importDocumentForTurn("first paragraph about delivery", "first.md");
+    await importDocumentForTurn("second paragraph about delivery", "second.md");
+    rerankerMock.current = {
+      rerank: vi.fn(async (_query: string, documents: string[]) => (
+        documents.map((text) => ({ text, score: text.startsWith("first") ? 1 : -1 }))
+      )),
+    };
+
+    const chunks = await searchImportedDocumentChunks("paragraph delivery", 2, { automaticInjection: true });
+
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0].fileName).toBe("first.md");
+  });
+
+  it("uses the calibrated BGE-M3 vector floor when reranking is unavailable", async () => {
+    await importDocumentForTurn("one paragraph", "notes.md");
+
+    await expect(searchImportedDocumentChunks("paragraph", 2, { automaticInjection: true }))
+      .resolves.toHaveLength(1);
+  });
+
+  it("prefetches 24 candidates for automatic injection while keeping the final limit", async () => {
+    await importPreparedDocumentForTurn("many.md", Array.from({ length: 30 }, (_, chunkIndex) => ({
+      text: `paragraph candidate ${chunkIndex}`,
+      chunkIndex,
+      embedding: [0, 1],
+    })));
+    const rerank = vi.fn(async (_query: string, documents: string[]) => (
+      documents.map((text, index) => ({ text, score: index === 0 ? 1 : -10 }))
+    ));
+    rerankerMock.current = { rerank };
+
+    const chunks = await searchImportedDocumentChunks("paragraph", 2, { automaticInjection: true });
+
+    expect(rerank.mock.calls[0][1]).toHaveLength(24);
+    expect(chunks).toHaveLength(1);
   });
 });
 

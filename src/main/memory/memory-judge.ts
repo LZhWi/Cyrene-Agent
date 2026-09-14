@@ -241,9 +241,10 @@ async function callChatCompletions(
       model: cfg.model,
       messages: messages as ChatMessage[],
       // thinking 模型的思考计入同一预算：800 实测被挤没正文，2048 在 8 轮长转录批上
-      // 仍复现空 content；8192 给思考链充足余量。配合下方“空内容=失败”抛错，
+      // 仍复现空 content；8192 也连续出现空正文，提升到 32768 留出思考和 JSON 输出余量。
+      // 配合下方“空内容=失败”抛错，
       // 即便再被挤没也会走调用方重试，而非静默当“无值得记录”。
-      maxTokens: 8192,
+      maxTokens: 32768,
       stream: false,
     }, cfg)
 

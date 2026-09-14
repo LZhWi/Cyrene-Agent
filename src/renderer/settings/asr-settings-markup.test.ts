@@ -22,4 +22,17 @@ describe("local ASR settings markup", () => {
     expect(html).toContain('id="asr-test-partial"');
     expect(html).toContain("不调用回复模型或 TTS");
   });
+
+  it("provides local long-audio transcription controls and explains data handling", () => {
+    expect(html).toContain('id="asr-transcription-pick-input"');
+    expect(html).toContain('id="asr-transcription-pick-output"');
+    expect(html).toContain('id="asr-transcription-progress"');
+    expect(html).toContain('id="asr-transcription-cancel"');
+    expect(html).toContain('id="asr-transcription-open"');
+    expect(html).toContain('<option value="md">Markdown（.md）</option>');
+    expect(html).toContain('<option value="txt">纯文本（.txt）</option>');
+    expect(html).toContain('<option value="docx">Word（.docx）</option>');
+    expect(html).toContain('id="asr-transcription-timestamps" checked');
+    expect(html).toContain("全程本地处理，不调用聊天模型，也不会自动导入知识库");
+  });
 });

@@ -77,6 +77,7 @@ class Session:
     para_cache: dict[str, Any] = field(default_factory=dict)
     para_text: str = ""
     next_qwen_partial_bytes: int = 0
+    emit_partials: bool = True
 
 
 class Pipeline:
@@ -179,9 +180,12 @@ class Pipeline:
         except Exception:
             pass
 
-    def start(self, session_id: str) -> None:
+    def start(self, session_id: str, emit_partials: bool = True) -> None:
         interval_sec = 1.2 if self.profile == "qwen06-stream" else 2.0
-        self.sessions[session_id] = Session(next_qwen_partial_bytes=int(16000 * 2 * interval_sec))
+        self.sessions[session_id] = Session(
+            next_qwen_partial_bytes=int(16000 * 2 * interval_sec),
+            emit_partials=emit_partials,
+        )
 
     def audio(self, session_id: str, pcm: bytes) -> None:
         session = self.sessions.get(session_id)
@@ -191,7 +195,7 @@ class Pipeline:
         if self.profile == "paraformer-qwen17":
             session.para_pending.extend(pcm)
             self._drain_paraformer(session_id, session, is_final=False)
-        elif len(session.pcm) >= session.next_qwen_partial_bytes:
+        elif session.emit_partials and len(session.pcm) >= session.next_qwen_partial_bytes:
             text = self._qwen_transcribe(bytes(session.pcm))
             if text:
                 emit("partial", sessionId=session_id, text=text)
@@ -248,7 +252,8 @@ class Pipeline:
             piece = str(result[0].get("text", "")).strip() if result else ""
             if piece:
                 session.para_text += piece
-                emit("partial", sessionId=session_id, text=session.para_text)
+                if session.emit_partials:
+                    emit("partial", sessionId=session_id, text=session.para_text)
 
     def _qwen_transcribe(self, pcm: bytes) -> str:
         if not pcm:
@@ -300,7 +305,7 @@ def main() -> None:
                     list(command.get("hotwords") or []),
                 )
             elif kind == "start":
-                pipeline.start(session_id)
+                pipeline.start(session_id, command.get("emitPartials", True) is not False)
             elif kind == "audio":
                 pipeline.audio(session_id, base64.b64decode(command.get("pcm", "")))
             elif kind == "finish":

@@ -143,7 +143,8 @@ import { abortCallForShutdown, setCallWindow, registerCallIpc, setCallSettings, 
 import { findLatestChatContextSessionId, trimSoulForCall } from "./call/call-prompt";
 import { loadCallContextEvents } from "./call/call-context-store";
 import { callEventToContextMessage, type CallContextEvent } from "./call/call-context";
-import { registerAsrTestIpc, stopAsrTest } from "./asr/asr-test-manager";
+import { isAsrTestActive, registerAsrTestIpc, stopAsrTest } from "./asr/asr-test-manager";
+import { cancelOfflineTranscription, isOfflineTranscriptionActive, registerOfflineTranscriptionIpc } from "./asr/offline-transcription-manager";
 import { initSkills, skillRegistry, buildAutoInjectedSkillContext, buildSkillCatalog, parseSlashCommand, setSkillEnabled, listSkillsForUi } from "./skills";
 import {
   buildMusicCompanionContext,
@@ -354,6 +355,7 @@ function shutdownDesktopRuntime(): Promise<void> {
       ["proactive generation", () => proactiveChatService?.invalidate()],
       ["active chat runs", () => { shutdownAgUiBridge(); }],
       ["active call", abortCallForShutdown],
+      ["offline transcription", cancelOfflineTranscription],
       ["ASR test", stopAsrTest],
       ["screen monitor", () => screenMonitorService.stop()],
       ["TTS streams", () => { ttsStreamControls.cancelAll(); }],
@@ -6092,7 +6094,8 @@ app.whenReady().then(async () => {
     ipcMain.on(IPC.CALL_START, () => {
       if (!isCallActive()) callStartedChatSessionId = activeChatSessionId;
     });
-  registerAsrTestIpc(isCallActive);
+  registerAsrTestIpc(isCallActive, isOfflineTranscriptionActive);
+  registerOfflineTranscriptionIpc(isCallActive, isAsrTestActive);
   console.log("[Cyrene] 当前 agent 权限档位:", getCurrentLevel());
   try {
     const modelSettings = loadModelSettings();

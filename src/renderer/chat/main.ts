@@ -1679,7 +1679,9 @@ function renderMessageAttachments(body: HTMLElement, attachments: MessageAttachm
       const status = document.createElement("div");
       status.className = "msg__document-status";
       status.textContent = att.status === "done"
-        ? (att.processedKind === "indexed" ? `已索引 ${att.chunks ?? 0} 段` : "已处理")
+        ? (att.processedKind === "indexed"
+          ? `已索引 ${att.chunks ?? 0} 段`
+          : att.reason ? `本轮可用，索引失败：${att.reason}` : "已处理")
         : getDocumentIndexStatusLabel(att.status);
       meta.appendChild(name);
       meta.appendChild(status);
@@ -3660,7 +3662,7 @@ async function send(): Promise<void> {
           msgAtt.processedKind = processedKind;
           msgAtt.chunks = result.chunks;
           msgAtt.importId = result.kind === "indexed" ? result.importId : undefined;
-          msgAtt.reason = result.reason;
+          msgAtt.reason = result.kind === "text" ? result.indexReason : result.reason;
         }
 
         if (result.kind === "text") {
@@ -3669,23 +3671,39 @@ async function send(): Promise<void> {
           const remaining = BUDGET_CHARS - budgetUsed;
           if (remaining <= 0) {
             budgetExceeded.push(result.name);
-            hintsByKind.push(`📝 ${result.name}（附件，内容因一轮预算限制未注入）`);
+            hintsByKind.push(`${result.indexReason ? "⚠️" : "📝"} ${result.name}（附件，内容因一轮预算限制未注入${result.indexReason ? "；知识索引失败" : ""}）`);
           } else if (docText.length > remaining) {
             const clipped = docText.slice(0, remaining);
             appendDocumentContext([`文档 ${result.name} 内容节选：\n${clipped}`]);
             budgetExceeded.push(result.name);
             budgetUsed = BUDGET_CHARS;
-            hintsByKind.push(`📝 ${result.name}（附件，内容已按预算节选注入本轮上下文）`);
+            hintsByKind.push(`${result.indexReason ? "⚠️" : "📝"} ${result.name}（附件，内容已按预算节选注入本轮上下文${result.indexReason ? "；知识索引失败" : ""}）`);
           } else {
             appendDocumentContext([`文档 ${result.name} 内容：\n${docText}`]);
             budgetUsed += docText.length;
-            hintsByKind.push(`📝 ${result.name}（附件，内容已注入本轮上下文）`);
+            hintsByKind.push(`${result.indexReason ? "⚠️" : "📝"} ${result.name}（附件，内容已注入本轮上下文${result.indexReason ? "；知识索引失败" : ""}）`);
           }
         } else if (result.kind === "indexed") {
           if (result.reason && (result.chunks ?? 0) <= 0) {
             if (msgAtt) msgAtt.status = "error";
             hintsByKind.push(`⚠️ ${result.name}（文档处理失败）`);
             appendDocumentContext(buildDocumentContextLines([result]));
+          } else if (result.text !== undefined) {
+            if (msgAtt) msgAtt.status = "done";
+            const remaining = BUDGET_CHARS - budgetUsed;
+            if (remaining <= 0) {
+              budgetExceeded.push(result.name);
+              hintsByKind.push(`📚 ${result.name}（已索引 ${result.chunks ?? 0} 段，内容因一轮预算限制未注入）`);
+            } else if (result.text.length > remaining) {
+              appendDocumentContext([`文档 ${result.name} 内容节选：\n${result.text.slice(0, remaining)}`]);
+              budgetExceeded.push(result.name);
+              budgetUsed = BUDGET_CHARS;
+              hintsByKind.push(`📚 ${result.name}（已索引 ${result.chunks ?? 0} 段，内容已按预算节选注入本轮上下文）`);
+            } else {
+              appendDocumentContext([`文档 ${result.name} 内容：\n${result.text}`]);
+              budgetUsed += result.text.length;
+              hintsByKind.push(`📚 ${result.name}（已索引 ${result.chunks ?? 0} 段，内容已注入本轮上下文）`);
+            }
           } else {
             if (msgAtt) msgAtt.status = "done";
             hintsByKind.push(`📚 ${result.name}（已索引 ${result.chunks ?? 0} 段）`);
