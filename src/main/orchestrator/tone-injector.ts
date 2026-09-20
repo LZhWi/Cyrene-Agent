@@ -105,6 +105,7 @@ export async function buildToneInjection(
   recentMessages: Array<{ role: string; content: string }>,
   provider: EmbeddingProvider,
   sceneIndex: SceneIndex,
+  toneRulesOverride?: string,
 ): Promise<string> {
   // embedding 匹配场景（拼最近 3 轮上下文）
   const match = await matchScene(
@@ -115,16 +116,15 @@ export async function buildToneInjection(
     recentMessages,
   );
   const scene: SceneId = match?.scene ?? "";
+  const toneRules = toneRulesOverride?.trim() || loadToneRules();
   if (!scene) {
     // 没命中任何场景，只注入通用语气规则
-    return loadToneRules();
+    return toneRules;
   }
 
   console.log("[ToneInjector] 场景命中: " + scene + " (score=" + (match?.score.toFixed(3) ?? "?") + ")");
 
   const samples = loadSceneSamples(scene);
   const sampleInstruction = buildSampleInstruction(samples, scene);
-  const toneRules = loadToneRules();
-
   return toneRules + sampleInstruction;
 }

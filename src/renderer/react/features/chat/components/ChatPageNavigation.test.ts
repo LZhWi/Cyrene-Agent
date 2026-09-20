@@ -90,4 +90,32 @@ describe("ChatPageNavigation", () => {
     expect(html.indexOf("model-button")).toBeLessThan(html.indexOf("plugin-button:true"));
     expect(html).not.toContain("mode-switch");
   });
+
+  it("shows companion life status only beside the Chat mode switch", () => {
+    const props = {
+      collapsed: false,
+      activePanel: null,
+      sessions: [],
+      activeSessionId: undefined,
+      companionLifeStatus: { text: "正在读书", resting: false },
+      onToggleCollapsed: () => undefined,
+      onModeChange: () => undefined,
+      onNewTask: () => undefined,
+      onTogglePanel: () => undefined,
+      onSelectSession: () => undefined,
+      onOpenProject: () => undefined,
+      onRenameSession: () => undefined,
+      onDeleteSession: () => undefined,
+      onTogglePinSession: () => undefined,
+      onMinimize: () => undefined,
+      onMaximize: () => undefined,
+      onCloseWindow: () => undefined,
+      onOpenSettings: () => undefined,
+    };
+    const chat = renderToStaticMarkup(createElement(ChatPageNavigation, { ...props, mode: "chat" }));
+    const work = renderToStaticMarkup(createElement(ChatPageNavigation, { ...props, mode: "work" }));
+    expect(chat).toContain("昔涟 · 正在读书");
+    expect(chat).toContain("🌸");
+    expect(work).not.toContain("正在读书");
+  });
 });

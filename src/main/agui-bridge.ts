@@ -88,6 +88,8 @@ function extractTerminalFromRunFinished(baseEvent: unknown): CyreneRunTerminalRe
 
 /** 渲染进程发起 run 时传的输入。 */
 export interface AguiRunInput {
+  /** 主进程内部生成的轮次 ID；渲染端传值会在进入构建器前被覆盖。 */
+  runId?: string;
   messages: unknown[];   // 原始 {role, content}[]，主进程会 normalize
   /** Renderer 已落库的稳定 turn ID；用于 Chat 社交原子的证据锚点。 */
   userTurnId?: string;
@@ -122,6 +124,8 @@ export interface AguiRunInput {
   takeoverFromRunId?: string;
   /** 只由主进程根据会话持久化字段注入，渲染端传值不可信。 */
   modelProfileId?: string;
+  /** 主进程固定的本轮设置快照；渲染端传值不可信。 */
+  chatBackendSnapshot?: "native" | "companion";
 }
 
 /** 调用方（index.ts）注入：把输入转成 agent 需要的 options（含 system prompt 拼接）。 */
@@ -145,6 +149,7 @@ export type OnRunFinishedFn = (
     conversationId: string;
     channel?: string;
     runId?: string;
+    chatBackendSnapshot?: "native" | "companion";
   },
 ) => Promise<void | RunFinishedEffects> | void | RunFinishedEffects;
 
@@ -330,6 +335,7 @@ function startPlanReviewFlow(params: {
  * @param onRunFinished agent 跑完的副作用（记忆/sticker 等）
  * @param getChatWindow 聊天窗口（事件要发到这里）
  * @param pendingTurns 桌面轮次生命周期协调器；缺省不发布轮次事件（测试与早期装配）
+ * @param getChatBackend 读取桌面 Chat 后端，同轮构建、收尾与历史索引使用共同快照。
  */
 export function registerAgUiIpc(
   buildOptions: BuildOptionsFn,
@@ -338,6 +344,7 @@ export function registerAgUiIpc(
   lifecycle?: AguiConversationLifecycle,
   ipcOption?: IpcScope,
   pendingTurns?: PendingTurnLifecycle,
+  getChatBackend?: () => "native" | "companion",
 ): void {
   const ipc = ipcOption ?? createIpcScope();
   buildOptionsFn = buildOptions;
@@ -417,6 +424,7 @@ export function registerAgUiIpc(
       throw new Error(`AGUI_RUN 会话不存在: ${sessionId}`);
     }
     const mode = session.mode ?? (session.purpose === "proactive-chat" ? "chat" : "work");
+    const chatBackendSnapshot = getChatBackend?.() === "companion" ? "companion" : "native";
     if ((mode === "work" || mode === "code" || mode === "learn") && !session.workspaceBinding?.workspaceRoot) {
       lifecycle?.onConversationEnded();
       throw new Error(`${mode} 模式需要先绑定项目工作区`);
@@ -469,8 +477,10 @@ export function registerAgUiIpc(
     try {
     built = await perf.track("build_options", () => buildOptionsFn!({
       ...input,
+      runId,
       mode,
       modelProfileId: session.modelProfileId,
+      chatBackendSnapshot,
       executionMode: agentExecutionMode,
     }));
     } catch (error) {
@@ -535,6 +545,7 @@ export function registerAgUiIpc(
         mode,
         inputMessageId: input.userTurnId ?? "",
         ...(input.assistantTurnId ? { assistantMessageId: input.assistantTurnId } : {}),
+        ...(mode === "chat" ? { chatBackend: chatBackendSnapshot } : {}),
         startedAt: turnStartedAt,
         runTimeoutMs: options.timeoutMs,
       });
@@ -801,6 +812,7 @@ export function registerAgUiIpc(
               mode,
               conversationId: sessionId,
               runId,
+              ...(getChatBackend ? { chatBackendSnapshot } : {}),
             }));
             if (mode !== "code" && effects?.sticker !== undefined) {
               send({
@@ -813,11 +825,13 @@ export function registerAgUiIpc(
             }
             // 历史召回用：把这轮对话存入向量库（异步，不阻塞，失败不影响主流程）
             // 放在 onFinished 之后，确保记忆/sticker 等副作用先跑完
-            void indexConversationTurn(
-              input.sessionId || "default",
-              latestUserText,
-              lastResult.reply,
-            );
+            if (mode !== "chat" || chatBackendSnapshot === "native") {
+              void indexConversationTurn(
+                input.sessionId || "default",
+                latestUserText,
+                lastResult.reply,
+              );
+            }
 
             // Learn 模式：静默更新学习进度（异步，不阻塞，失败不影响主流程）
             if (mode === "learn" && obsidianWorkspace.isReady()) {

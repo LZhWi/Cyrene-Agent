@@ -38,6 +38,15 @@ describe("general LSP settings", () => {
   });
 });
 
+describe("桌面 Chat 原生记忆设置", () => {
+  it("旧配置默认开启，仅接受显式布尔值", () => {
+    expect(normalizeGeneralSettings({}).chatBackend).toBe("native");
+    expect(normalizeGeneralSettings({ chatBackend: "companion" } as never).chatBackend).toBe("companion");
+    expect(normalizeGeneralSettings({ chatBackend: "invalid" } as never).chatBackend).toBe("native");
+    expect(normalizeGeneralSettings({ nativeChatMemoryEnabled: false } as never).chatBackend).toBe("companion");
+  });
+});
+
 describe("general Harness tool concurrency settings", () => {
   it("defaults to four and normalizes the configured safe range", () => {
     expect(normalizeGeneralSettings({}).maxParallelToolCalls).toBe(4);

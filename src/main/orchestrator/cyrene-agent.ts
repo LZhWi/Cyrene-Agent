@@ -119,6 +119,8 @@ export interface CyreneRunOptions {
   trustedRefs?: string[];
   /** Chat 跳过 CITA/Native FC；默认 Work。 */
   executionMode?: AgentExecutionMode;
+  /** 桌面 Collab Chat 使用严格 Tool→Soul；缺省保持上游原生分流。 */
+  chatResponseMode?: "native" | "two-phase";
   /** 原始 UI 模式（work / learn / chat / code），供工具做模式隔离。 */
   conversationMode?: ConversationMode;
   timeoutMs: number;
@@ -141,6 +143,8 @@ export interface CyreneRunOptions {
   soulSystemBaseContent: string;
   /** 每次请求才附加给 Soul 的可变运行时上下文；不参与稳定缓存前缀。 */
   soulRuntimeContext?: string;
+  /** 两阶段 Chat 最终 Soul 生成前的近端行为锚点；不进入 Tool 阶段或持久化历史。 */
+  soulTailAnchorContent?: string;
   /** Plan Mode 时注入的 cyrene-plan-mode skill 正文；可变，不参与稳定缓存前缀，
    *  在 harness runtimeParts 里拼，避免进/出 plan mode 打断 stablePrefix 缓存。 */
   planSkillContext?: string;
@@ -431,9 +435,10 @@ export class CyreneAgent extends AbstractAgent {
           // Chat 工具增强：chat 会话在设置里勾选了工具（options.tools 非空）时
           // 改走 CyreneHarness（native function calling）；否则维持无工具 ChatLoop。
           const chatToolCount = (options.tools ?? []).length;
+          const twoPhaseChat = executionMode === "chat" && options.chatResponseMode === "two-phase";
           const chatWithTools = executionMode === "chat" && chatToolCount > 0;
           debugLog(
-            `${LOG_PREFIX} executionMode=${executionMode} loop=${executionMode === "chat" && !chatWithTools ? "chat" : "harness"} provider=${options.settings.provider} model=${options.settings.model}`,
+            `${LOG_PREFIX} executionMode=${executionMode} loop=${twoPhaseChat ? "two-phase" : executionMode === "chat" && !chatWithTools ? "chat" : "harness"} provider=${options.settings.provider} model=${options.settings.model}`,
           );
           const enabledToolCount = executionMode === "chat"
             ? chatToolCount
@@ -443,7 +448,7 @@ export class CyreneAgent extends AbstractAgent {
           flowLog(`2. 理解用户请求：${executionMode === "chat" ? "Chat 模式无需工具上下文" : `完成，可信引用 ${(options.trustedRefs ?? []).length} 个`}`);
 
           let result: AgentLoopResult;
-          if (executionMode === "chat" && !chatWithTools) {
+          if (executionMode === "chat" && !twoPhaseChat && !chatWithTools) {
             flowLog("3. Chat 模式：生成回复");
             result = await perf.track("chat_loop", () => runChatLoop({
               settings: options.settings,
@@ -478,6 +483,21 @@ export class CyreneAgent extends AbstractAgent {
               (baseEvent: BaseEvent) => {
                 if (!cancelled) subscriber.next(baseEvent);
               },
+              twoPhaseChat ? {
+                finalize: (toolTranscript) => runChatLoop({
+                  settings: options.settings,
+                  adapter,
+                  messages: toolTranscript,
+                  soulSystemBaseContent: options.soulSystemBaseContent,
+                  // 普通动态资料已在 Harness 启动时物化；最终行为锚点只在 Soul 生成点追加。
+                  runtimeContext: options.soulTailAnchorContent,
+                  soulSampling: options.soulSampling,
+                  timeoutMs: options.timeoutMs,
+                  onEvent,
+                  signal: abortController.signal,
+                  mode: options.conversationMode,
+                }),
+              } : undefined,
             ));
           }
 

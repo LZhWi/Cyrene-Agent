@@ -1,11 +1,15 @@
 import path from "node:path";
-import type { PluginLlmService } from "../../plugins/api";
+import type { PluginLlmService, PluginScreenObservationService, PluginUserPresenceService, PluginWeatherContextService } from "../../plugins/api";
 import type { PluginHostServiceFactory } from "../../plugins/context";
 import type { ChatSession, ChatSessionMeta } from "../../shared/chat-types";
 import {
   createPluginConversationsService,
   type PluginChatsStoreReader,
 } from "./conversations-service";
+import {
+  createPluginAssistantDeliveryService,
+  type PluginAssistantDeliverySink,
+} from "./assistant-delivery-service";
 import { createPluginSchedulerService, type PluginSchedulerStore } from "./scheduler-service";
 import { createPluginSecretsService, type SafeStorageLike } from "./secrets-service";
 import type { SpeechInputService } from "./speech-input-service";
@@ -13,6 +17,7 @@ import {
   createPluginWorkspaceService,
   type PluginWorkspaceStoreReader,
 } from "./workspace-service";
+import { pluginHostError } from "./errors";
 
 /** 宿主服务装配所需的会话存储只读视图（列表 + 会话 + 工作区绑定）。 */
 export interface PluginHostChatsReader
@@ -31,6 +36,13 @@ export interface PluginHostServicesOptions {
   }) => NonNullable<PluginLlmService["runGoal"]>;
   storage: SafeStorageLike;
   chatsReader: PluginHostChatsReader;
+  assistantDeliverySink: PluginAssistantDeliverySink;
+  /** 只返回视觉摘要的屏幕观察服务；截图不暴露给插件。 */
+  screenObservation: PluginScreenObservationService;
+  /** 不含输入内容或窗口信息的只读在场状态。 */
+  userPresence: PluginUserPresenceService;
+  /** 不暴露城市或配置的只读天气快照。 */
+  weatherContext: PluginWeatherContextService;
   /** 调度存储；必须在 store.load() 完成后再创建工厂，否则插件写入会覆盖磁盘数据。 */
   schedulerStore: PluginSchedulerStore;
   /** 独占语音输入租约服务；全局单例，由 plugin-runtime 创建一次后传入。 */
@@ -66,6 +78,31 @@ export function createHostServiceFactory(options: PluginHostServicesOptions): Pl
           reader: options.chatsReader,
           signal,
         }),
+        assistantDelivery: createPluginAssistantDeliveryService({
+          pluginId,
+          signal,
+          sink: options.assistantDeliverySink,
+        }),
+        screenObservation: {
+          observe: (input = {}) => options.screenObservation.observe({
+            ...input,
+            signal: input.signal ? AbortSignal.any([signal, input.signal]) : signal,
+          }),
+        },
+        userPresence: {
+          snapshot: async () => {
+            if (signal.aborted) throw pluginHostError("E_PLUGIN_STOPPING", "插件已停止，用户在场服务不可用");
+            return options.userPresence.snapshot();
+          },
+        },
+        weatherContext: {
+          snapshot: async () => {
+            if (signal.aborted) throw pluginHostError("E_PLUGIN_STOPPING", "插件已停止，天气上下文服务不可用");
+            const snapshot = await options.weatherContext.snapshot();
+            if (signal.aborted) throw pluginHostError("E_PLUGIN_STOPPING", "插件已停止，天气上下文服务不可用");
+            return snapshot;
+          },
+        },
         scheduler: createPluginSchedulerService({
           pluginId,
           store: options.schedulerStore,

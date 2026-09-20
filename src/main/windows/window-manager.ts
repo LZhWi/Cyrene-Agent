@@ -49,6 +49,8 @@ export interface WindowManager {
   applyPetWindowZoom(zoom: number): void;
   capturePetWindowFrame(): Promise<string | null>;
   capturePetWindow(): Promise<Electron.NativeImage | null>;
+  /** 仅供宿主屏幕变化比较排除自身动态桌宠；不可见或未创建时返回 null。 */
+  getPetWindowBounds(): Electron.Rectangle | null;
   getCursorScreenPosition(): { x: number; y: number };
   setIconForAllWindows(icon: NativeImage): void;
   sendToPetWindow(channel: string, payload?: unknown): void;
@@ -243,6 +245,10 @@ export function createWindowManager(options: WindowManagerOptions): WindowManage
         console.error("[WindowManager] capturePetWindow failed:", err);
         return null;
       }
+    },
+    getPetWindowBounds(): Electron.Rectangle | null {
+      const win = getUsablePetWindow();
+      return win?.isVisible() ? win.getBounds() : null;
     },
     getCursorScreenPosition(): { x: number; y: number } {
       return screen.getCursorScreenPoint();

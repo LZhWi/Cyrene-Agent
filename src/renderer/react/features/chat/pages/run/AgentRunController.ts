@@ -288,7 +288,7 @@ export class AgentRunController {
         toolExecutions: this.toolExecutions,
       });
       const savedAssistant = await this.checkpointRun("terminal", true);
-      this.reportRunPersisted();
+      if (savedAssistant) this.reportRunPersisted();
       if (savedAssistant && formalAnswerCommitted && this.earlyTtsQueue) {
         this.deps.host.earlyTts.finish(this.earlyTtsQueue, finalContent);
       } else this.earlyTtsQueue?.cancel();
@@ -349,9 +349,9 @@ export class AgentRunController {
         responseStarted: false,
       });
       this.persistedFinalContent = "";
-      await this.checkpointRun("terminal", true);
-      // 错误终态的快照也已落盘：上报落盘确认（runId 未知时静默跳过）
-      this.reportRunPersisted();
+      const savedAssistant = await this.checkpointRun("terminal", true);
+      // 只有错误终态快照确实落盘，才能向插件发布带消息 ID 的轮次事件。
+      if (savedAssistant) this.reportRunPersisted();
     } finally {
       if (this.checkpointTimer !== undefined) window.clearTimeout(this.checkpointTimer);
       const checkpointCallbacks = { ...this.deps.registries.checkpointTriggers.current };

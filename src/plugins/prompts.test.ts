@@ -13,6 +13,54 @@ afterEach(() => {
 });
 
 describe("PluginPromptRegistry", () => {
+  it("稳定人格层不接收用户正文，并按模式、停止信号和所有者注销过滤", async () => {
+    const registry = createPluginPromptRegistry();
+    const owner = new AbortController();
+    const provide = vi.fn(({ conversationId }) => `PERSONA:${conversationId}`);
+    registry.registerStable("companion", { id: "persona", modes: ["chat"], provide }, owner.signal);
+
+    expect(await registry.buildStable({ source: "conversation", mode: "chat", conversationId: "c1" }))
+      .toBe("PERSONA:c1");
+    expect(provide.mock.calls[0][0]).not.toHaveProperty("userText");
+    expect(await registry.buildStable({ source: "conversation", mode: "work", conversationId: "c1" })).toBe("");
+
+    expect(registry.unregisterStable("other", "persona")).toBe(false);
+    owner.abort();
+    expect(await registry.buildStable({ source: "conversation", mode: "chat", conversationId: "c1" })).toBe("");
+  });
+
+  it("keeps tool and soul stable providers in separate cache prefixes", async () => {
+    const registry = createPluginPromptRegistry();
+    const signal = new AbortController().signal;
+    registry.registerStable("companion", { id: "persona", modes: ["chat"], provide: () => "SOUL" }, signal);
+    registry.registerStable("companion", {
+      id: "tool-rules", modes: ["chat"], target: "tool", provide: ({ target }) => `TOOL:${target}`,
+    }, signal);
+
+    expect(await registry.buildStable({ source: "conversation", mode: "chat", conversationId: "c1", target: "soul" }))
+      .toBe("SOUL");
+    expect(await registry.buildStable({ source: "conversation", mode: "chat", conversationId: "c1", target: "tool" }))
+      .toBe("TOOL:tool");
+  });
+
+  it("keeps companion tone and final Soul anchor in independent targets", async () => {
+    const registry = createPluginPromptRegistry();
+    const signal = new AbortController().signal;
+    registry.registerStable("companion", {
+      id: "tone", modes: ["chat"], target: "tone", provide: () => "TONE_RULES",
+    }, signal);
+    registry.registerStable("companion", {
+      id: "tail", modes: ["chat"], target: "soul-tail", provide: () => "TAIL_ANCHOR",
+    }, signal);
+
+    expect(await registry.buildStable({ source: "conversation", mode: "chat", conversationId: "c1", target: "tone" }))
+      .toBe("TONE_RULES");
+    expect(await registry.buildStable({ source: "conversation", mode: "chat", conversationId: "c1", target: "soul-tail" }))
+      .toBe("TAIL_ANCHOR");
+    expect(await registry.buildStable({ source: "conversation", mode: "chat", conversationId: "c1", target: "soul" }))
+      .toBe("");
+  });
+
   it("按注册顺序拼接命名空间内容，并按模式过滤", async () => {
     const registry = createPluginPromptRegistry();
     const first = new AbortController();
@@ -38,6 +86,20 @@ describe("PluginPromptRegistry", () => {
       mode: "work",
       userText: "检查任务",
     })).toBe("[插件上下文：plugin:beta:shared]\nB:scheduler");
+  });
+
+  it("按 priority 跨插件排序，同值继续保持注册顺序", async () => {
+    const registry = createPluginPromptRegistry();
+    const signal = new AbortController().signal;
+    registry.register("worldbook", { id: "context", priority: 300, provide: () => "WORLD" }, signal);
+    registry.register("memory-a", { id: "context", priority: 200, provide: () => "MEMORY_A" }, signal);
+    registry.register("life", { id: "context", priority: 100, provide: () => "LIFE" }, signal);
+    registry.register("memory-b", { id: "context", priority: 200, provide: () => "MEMORY_B" }, signal);
+
+    const result = await registry.build({ source: "conversation", mode: "chat", userText: "hi" });
+    expect(result.indexOf("LIFE")).toBeLessThan(result.indexOf("MEMORY_A"));
+    expect(result.indexOf("MEMORY_A")).toBeLessThan(result.indexOf("MEMORY_B"));
+    expect(result.indexOf("MEMORY_B")).toBeLessThan(result.indexOf("WORLD"));
   });
 
   it("同一插件拒绝重复和非法 id，不同插件可使用相同短 id", () => {
@@ -113,6 +175,80 @@ describe("PluginPromptRegistry", () => {
     expect(result).toContain("plugin:demo:context-0");
     expect(result).toContain("plugin:demo:context-1");
     expect(result).not.toContain("plugin:demo:context-2");
+  });
+
+  it("旧 Provider 不产生回执，显式声明后返回完整接收回执", async () => {
+    const registry = createPluginPromptRegistry();
+    const signal = new AbortController().signal;
+    registry.register("legacy", { id: "context", provide: () => "LEGACY" }, signal);
+    registry.register("memory", {
+      id: "context",
+      consumptionReceipt: true,
+      provide: () => "MEMORY",
+    }, signal);
+
+    const result = await registry.buildDetailed({
+      source: "conversation", mode: "chat", userText: "hi", runId: "run-1",
+    });
+
+    expect(result.content).toContain("LEGACY");
+    expect(result.content).toContain("MEMORY");
+    expect(result.receipts).toEqual([{
+      providerId: "plugin:memory:context",
+      acceptedChars: 6,
+      complete: true,
+    }]);
+  });
+
+  it("回执准确报告单项和总预算截断，完全忽略的 Provider 不产生回执", async () => {
+    const registry = createPluginPromptRegistry();
+    const signal = new AbortController().signal;
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    registry.register("demo", {
+      id: "single",
+      consumptionReceipt: true,
+      provide: () => "a".repeat(MAX_PLUGIN_PROMPT_CHARS + 10),
+    }, signal);
+    registry.register("demo", {
+      id: "global",
+      consumptionReceipt: true,
+      provide: () => "b".repeat(MAX_PLUGIN_PROMPT_CHARS),
+    }, signal);
+    registry.register("demo", {
+      id: "ignored",
+      consumptionReceipt: true,
+      provide: () => "c",
+    }, signal);
+
+    const result = await registry.buildDetailed({ source: "conversation", mode: "chat", userText: "hi", runId: "run-budget" });
+
+    expect(result.content.length).toBe(MAX_PLUGIN_PROMPT_TOTAL_CHARS);
+    expect(result.receipts[0]).toMatchObject({ providerId: "plugin:demo:single", acceptedChars: MAX_PLUGIN_PROMPT_CHARS, complete: false });
+    expect(result.receipts[1]).toMatchObject({ providerId: "plugin:demo:global", complete: false });
+    expect(result.receipts[1].acceptedChars).toBeGreaterThan(0);
+    expect(result.receipts).toHaveLength(2);
+  });
+
+  it("非法 consumptionReceipt 声明在注册时拒绝", () => {
+    const registry = createPluginPromptRegistry();
+    const signal = new AbortController().signal;
+    expect(() => registry.register("bad", {
+      id: "context",
+      consumptionReceipt: "yes" as unknown as boolean,
+      provide: () => "BAD",
+    }, signal)).toThrow(/consumptionReceipt/);
+  });
+
+  it("非法 priority 声明在注册时拒绝", () => {
+    const registry = createPluginPromptRegistry();
+    const signal = new AbortController().signal;
+    for (const priority of [1.5, Number.NaN, 1001, -1001]) {
+      expect(() => registry.register("bad", {
+        id: `context-${String(priority)}`,
+        priority,
+        provide: () => "BAD",
+      }, signal)).toThrow(/priority/);
+    }
   });
 });
 

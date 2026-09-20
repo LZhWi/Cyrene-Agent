@@ -7,7 +7,7 @@ import {
   type AgentRunRegistries,
 } from "./AgentRunController";
 import type { AguiApi, AguiEvent, ChatStoreApi } from "../chat-page-bridge";
-import type { ChatSession } from "../../../../../../shared/chat-types";
+import type { ChatMessage, ChatSession } from "../../../../../../shared/chat-types";
 import type { TodoStateBySession } from "../session-runtime-state";
 import type { EarlyTtsPlaybackQueue } from "../../tts/early-tts-queue";
 
@@ -243,6 +243,26 @@ describe("AgentRunController", () => {
     expect(registries.checkpointTriggers.current["session-1"]).toBeUndefined();
     expect(registries.eventUnsubscribers.current.size).toBe(0);
     expect(host.onRunFinished).toHaveBeenCalledWith({ mode: "chat", sessionId: "session-1" });
+  });
+
+  it.each([
+    ["成功", { type: "RUN_FINISHED", runId: "run-1", result: { status: "success" } }],
+    ["错误", { type: "RUN_ERROR", runId: "run-1", message: "boom" }],
+  ] as const)("%s终态未落盘时不向插件上报消息 ID", async (_label, terminal) => {
+    const api = createFakeApi({ success: true, runId: "run-1" });
+    const store = createFakeStore();
+    store.upsert.mockImplementation(async (_id: string, message: ChatMessage) =>
+      message.runSnapshot?.status === "terminal" ? null : ({ id: "session-1" } as ChatSession));
+    const { host } = createRecordingHost();
+    const { promise } = launch(createInput(), { api, store, host, registries: createRegistries() });
+    await flush();
+
+    api.emit(RUN_STARTED_EVENT);
+    api.emit(terminal as AguiEvent);
+    await promise;
+
+    expect(store.upsert.mock.calls.at(-1)?.[1].runSnapshot?.status).toBe("terminal");
+    expect(api.reportRunPersisted).not.toHaveBeenCalled();
   });
 
   it("其他 run 的事件被门控忽略，不污染本轮消息", async () => {

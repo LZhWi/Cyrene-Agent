@@ -110,6 +110,27 @@ html, body {
   transition: left 0.25s ease;
 }
 
+.cy-companion-life-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 210px;
+  padding: 6px 10px;
+  border: 1px solid rgb(236 178 199 / 48%);
+  border-radius: 999px;
+  background: rgb(255 255 255 / 72%);
+  color: #775b68;
+  font-size: 12px;
+  line-height: 1;
+  box-shadow: 0 2px 10px rgb(193 91 132 / 8%);
+  white-space: nowrap;
+}
+
+.cy-companion-life-status__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .cy-page-windows {
   position: absolute;
   top: 10px;

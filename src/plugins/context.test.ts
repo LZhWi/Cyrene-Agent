@@ -217,6 +217,23 @@ describe("createContext", () => {
     })).toBe("");
   });
 
+  it("稳定提示词 Provider 跟随插件生命周期清理", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const rt = runtime();
+    const ctx = createTestContext(rt);
+    ctx.registerStablePromptProvider?.({ id: "persona", modes: ["chat"], provide: () => "PERSONA" });
+
+    expect(await rt.promptRegistry.buildStable({
+      source: "conversation", mode: "chat", conversationId: "c1",
+    })).toBe("PERSONA");
+    expect(() => ctx.unregisterStablePromptProvider?.("missing")).toThrow(/不属于当前插件/);
+
+    await ctx.dispose();
+    expect(await rt.promptRegistry.buildStable({
+      source: "conversation", mode: "chat", conversationId: "c1",
+    })).toBe("");
+  });
+
   it("storage 可读写", () => {
     tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
     const ctx = createTestContext();
@@ -324,6 +341,23 @@ describe("createContext", () => {
     expect(ctx.deps.llm).toBeUndefined();
     void ctx.deps.secrets?.set("k", "v");
     expect(marker).toHaveBeenCalledWith("set");
+  });
+
+  it("assistant-delivery 只有显式声明后才注入", async () => {
+    tmp = mkdtempSync(path.join(os.tmpdir(), "cyrene-ctx-test-"));
+    const postProactiveMessage = vi.fn(async () => ({
+      conversationId: "proactive-1",
+      messageId: "message-1",
+      at: "2026-09-18T00:00:00.000Z",
+    }));
+    const rt = runtime();
+    rt.hostServices = {
+      createForPlugin: () => ({ assistantDelivery: { postProactiveMessage } }),
+    };
+    expect(createTestContext(rt).deps.assistantDelivery).toBeUndefined();
+    const ctx = createTestContext(rt, ["assistant-delivery"]);
+    await expect(ctx.deps.assistantDelivery?.postProactiveMessage("你好")).resolves.toMatchObject({ messageId: "message-1" });
+    expect(postProactiveMessage).toHaveBeenCalledWith("你好");
   });
 
   it("包装 llm 服务时保留宿主提供的 runGoal", () => {

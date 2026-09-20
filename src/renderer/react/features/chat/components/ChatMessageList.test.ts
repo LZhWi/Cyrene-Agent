@@ -43,6 +43,20 @@ describe("formal answer visibility", () => {
 
     expect(createMessageItems([message], []).map((item) => item.role)).toEqual(["activity"]);
   });
+
+  it("carries only pending plugin feedback metadata to the assistant bubble", () => {
+    const message: ChatMessageItem = {
+      id: "plugin-proactive",
+      role: "assistant",
+      content: "记得休息一下呀。",
+      pluginDelivery: { pluginId: "companion-chat", ignoreFeedback: "pending" },
+    };
+    const assistant = createMessageItems([message], []).find((item) => item.role === "assistant");
+    expect(assistant?.extraInfo?.pluginDelivery).toEqual({
+      pluginId: "companion-chat",
+      ignoreFeedback: "pending",
+    });
+  });
 });
 
 describe("bound channel message presentation", () => {

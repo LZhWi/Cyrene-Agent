@@ -119,4 +119,13 @@ describe("buildAlwaysOnContext", () => {
 
     expect(ragMock.updateWorldbookActivation).toHaveBeenCalledWith("请总结这个文档", "")
   })
+
+  it("companion backend does not read or update native worldbook/profile", async () => {
+    const { buildAlwaysOnContext } = await import("./index")
+    expect(await buildAlwaysOnContext("白厄", [], false)).toBe("")
+    expect(ragMock.updateWorldbookActivation).not.toHaveBeenCalled()
+    expect(ragMock.getPermanentWorldbookEntries).not.toHaveBeenCalled()
+    expect(memoryStoreMock.getL0).not.toHaveBeenCalled()
+    expect(memoryStoreMock.getL1).not.toHaveBeenCalled()
+  })
 })

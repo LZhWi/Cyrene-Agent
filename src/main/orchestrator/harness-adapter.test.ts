@@ -53,6 +53,20 @@ describe("Harness Todo working notebook policy", () => {
     expect(chatPrompt).not.toContain("## 工具使用");
   });
 
+  it("keeps Soul persona out of the two-phase Chat tool request", () => {
+    const layers = buildHarnessPromptLayers({
+      soulSystemBaseContent: "COMPANION_SOUL_PERSONA",
+      toolSystemContent: "COLLAB_TOOL_RULES",
+      soulRuntimeContext: "PLUGIN_MEMORY",
+      conversationMode: "chat",
+      chatResponseMode: "two-phase",
+    } as never);
+
+    expect(layers.stablePrefix).toContain("COLLAB_TOOL_RULES");
+    expect(layers.stablePrefix).not.toContain("COMPANION_SOUL_PERSONA");
+    expect(layers.runtimeContext).toContain("PLUGIN_MEMORY");
+  });
+
   it("assembles the same persona prompt for Work and Code", () => {
     const common = {
       soulSystemBaseContent: "完整人设",

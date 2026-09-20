@@ -76,6 +76,39 @@ describe("chats IPC mode filtering", () => {
     }));
   });
 
+  it("publishes one ignore event only for the latest pending message of a running plugin", async () => {
+    const { registerChatsIpc } = await import("./chats-ipc");
+    const store = await import("./chats-store");
+    const publish = vi.fn(async () => undefined);
+    registerChatsIpc(undefined, {
+      isPluginRunning: (pluginId) => pluginId === "companion-chat",
+      publishPluginAssistantFeedback: publish,
+    });
+    const proactive = store.createSession({ purpose: "proactive-chat" });
+    store.appendMessage(proactive.id, {
+      id: "message-1",
+      role: "model",
+      content: "主动问候",
+      at: 1,
+      pluginDelivery: { pluginId: "companion-chat", ignoreFeedback: "pending" },
+    });
+    const ignore = mocks.handlers.get(IPC.CHATS_IGNORE_PLUGIN_MESSAGE);
+    if (!ignore) throw new Error("plugin message feedback handler was not registered");
+
+    expect(await ignore({ sender: {} }, { conversationId: proactive.id, messageId: "wrong" })).toEqual({ ok: false });
+    expect(publish).not.toHaveBeenCalled();
+    expect(await ignore({ sender: {} }, { conversationId: proactive.id, messageId: "message-1" })).toEqual({ ok: true });
+    expect(publish).toHaveBeenCalledWith({
+      pluginId: "companion-chat",
+      conversationId: proactive.id,
+      messageId: "message-1",
+      action: "ignore",
+    });
+    expect(store.getSession(proactive.id)?.messages.at(-1)?.pluginDelivery?.ignoreFeedback).toBe("ignored");
+    expect(await ignore({ sender: {} }, { conversationId: proactive.id, messageId: "message-1" })).toEqual({ ok: false });
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
   it("does not register the removed Cline plan/act IPC", async () => {
     const { registerChatsIpc } = await import("./chats-ipc");
     registerChatsIpc();

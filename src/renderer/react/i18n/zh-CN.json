@@ -78,6 +78,8 @@
     "thinkingTitle": "正在思考…",
     "thinkingDoneTitle": "思考完成",
     "assistantStickerAlt": "昔涟表情",
+    "ignoreProactive": "忽略",
+    "ignoreProactiveTitle": "忽略这条主动消息（她会少发点类似的）",
     "userStickerAlt": "用户表情",
     "cyreneAvatarAlt": "昔涟",
     "userAvatarAlt": "用户",
@@ -286,8 +288,6 @@
   "toolPanel": {
     "title": "工具",
     "subtitle": "管理工具在 {{mode}} 模式下的可见性",
-    "chatEnhanceTitle": "Chat 模式工具增强",
-    "chatEnhanceDesc": "开启后闲聊可用音乐、天气、搜索等工具；关闭则纯聊天",
     "searchPlaceholder": "搜索工具…",
     "disabledBadge": "已禁用",
     "noDescription": "暂无描述",

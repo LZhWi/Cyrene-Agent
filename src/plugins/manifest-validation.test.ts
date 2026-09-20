@@ -60,15 +60,15 @@ describe("Schema 与 Loader 一致性", () => {
     }
   });
 
-  it("五项新能力均通过 Schema 枚举并可用于 deps", () => {
-    for (const dep of ["secrets", "workspace", "conversations", "scheduler", "speech-input"]) {
+  it("八项扩展能力均通过 Schema 枚举并可用于 deps", () => {
+    for (const dep of ["secrets", "workspace", "conversations", "assistant-delivery", "screen-observation", "user-presence", "weather-context", "scheduler", "speech-input"]) {
       expect(validateManifestData({ ...validInput, deps: [dep] }).ok).toBe(true);
     }
     const inspected = inspectWithData({
       ...validInput,
-      deps: ["secrets", "conversations", "speech-input"],
+      deps: ["secrets", "conversations", "assistant-delivery", "screen-observation", "user-presence", "speech-input"],
     });
-    expect(inspected.manifest?.deps).toEqual(["secrets", "conversations", "speech-input"]);
+    expect(inspected.manifest?.deps).toEqual(["secrets", "conversations", "assistant-delivery", "screen-observation", "user-presence", "speech-input"]);
   });
 
   it("Schema 只管结构：格式问题（SemVer）由 Loader 补充拒绝", () => {

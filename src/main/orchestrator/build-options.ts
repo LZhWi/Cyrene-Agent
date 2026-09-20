@@ -37,6 +37,7 @@ import type { ChannelId } from "../channels/types";
 import { validateCaptionImagePath } from "../chat/image-caption";
 import {
   buildConversationTimeContext,
+  formatLocalTime,
   resolveChatContextTimezone,
   type ChatContextMessage,
 } from "../chat-time-context";
@@ -57,7 +58,8 @@ import type {
 import type { ConversationMode } from "../../shared/chat-types";
 import type { SkillRouteInfo } from "./cyrene-agent";
 import { filterToolsBySearchBackend, type SearchBackend } from "./search-backend-filter";
-import type { RunCapabilities } from "./run-capabilities";
+import { isNativeChatMemoryTool, type RunCapabilities } from "./run-capabilities";
+import { shouldUseNativeChatSystems } from "./chat-backend";
 import { buildStickerEmbeddingQuery } from "../sticker-query";
 import { isPlanReadOnly, getPlanState } from "./plan-mode";
 import { policyFor, type ToolRiskLevel } from "../permission-policy";
@@ -92,12 +94,14 @@ export interface BuildOptionsDeps {
     messages: ReadonlyArray<{ role: string; content?: string }>,
     provider: unknown,
     index: unknown,
+    toneRulesOverride?: string,
   ) => Promise<string>;
   sceneEmbeddingIndex: unknown;
   getSceneEmbeddingProvider: () => unknown;
   buildAlwaysOnContext: (
     userText: string,
     messages: ReadonlyArray<{ role: string; content?: string }>,
+    includeNativeChatContext?: boolean,
   ) => Promise<string>;
   buildRelationshipContext: () => Promise<string>;
   /** 明确按模式构建基础人设，不再通过 style 文件名猜模式。 */
@@ -108,7 +112,8 @@ export interface BuildOptionsDeps {
   buildSoulSystemBasePrompt: (styleFile: string) => string;
   resolveRunCapabilities?: (input: {
     mode: ConversationMode; activeSearchBackend: SearchBackend; toolModeOverrides?: ToolModeOverrides; skillModeOverrides?: SkillModeOverrides;
-    chatToolsEnabled?: boolean;
+    desktopChat?: boolean;
+    useNativeChatSystems?: boolean;
   }) => RunCapabilities;
   /** 已由 main 侧解析好的 style Markdown；build-options 只负责注入边界。 */
   readStylePrompt: (styleId: StyleId) => string;
@@ -163,12 +168,25 @@ export interface BuildOptionsDeps {
     userText: string;
     conversationId?: string;
     channel?: string;
+    runId?: string;
+    chatBackend?: "native" | "companion";
+    timezone?: string;
+  }) => Promise<string>;
+  /** 插件后端的人格稳定层；不接收本轮用户正文，空结果时回退上游原生人格。 */
+  buildPluginStablePrompt?: (input: {
+    source: "conversation";
+    mode: ConversationMode;
+    conversationId: string;
+    channel?: string;
+    runId?: string;
+    target: "soul" | "tool" | "tone" | "soul-tail";
   }) => Promise<string>;
 }
 
 /** onRunFinished 副作用所需的 deps（与 BuildOptionsDeps 部分重叠） */
 export interface OnRunFinishedDeps {
   loadModelSettings: () => ModelSettingsLite;
+  chatBackend?: () => unknown;
   scheduleMemoryWrite: (userText: string, reply: string, conversationId?: string) => void;
   scheduleSocialAtomExtraction?: (input: SocialExtractionInput) => void;
   inferRuntimeState: (userText: string, reply: string, flag: boolean) => { status: string };
@@ -225,12 +243,13 @@ export interface StyleSettingsLite {
   currentStyleId?: unknown;
   customStyle?: unknown;
   chatSocialContextEnabled?: unknown;
+  chatBackend?: unknown;
   /** 朋友圈总开关与 Chat 背景注入开关（moments-awareness 门控用）。 */
   momentsEnabled?: unknown;
   chatMomentsContextEnabled?: unknown;
   /** 工具-模式覆盖层（三模适配层）。未提供时按 modes 字段或全可见过滤。 */
   toolModeOverrides?: ToolModeOverrides;
-  /** Chat 模式工具增强总开关。未提供时视为关闭（chat 无工具，现状行为）。 */
+  /** 旧配置兼容字段；桌面 Chat 运行时不再读取该总开关。 */
   chatToolsEnabled?: boolean;
   /** Skill-模式覆盖层（三模适配层）。未提供时按 modes 字段或全可见过滤。 */
   skillModeOverrides?: SkillModeOverrides;
@@ -474,6 +493,13 @@ export async function buildAgentRunOptions(
   );
   const isChatMode = executionMode === "chat";
   const conversationId = input.sessionId || "default";
+  const resolvedMode: ConversationMode = input.mode ?? (isChatMode ? "chat" : "work");
+  const useNativeChatSystems = shouldUseNativeChatSystems({
+    mode: resolvedMode,
+    source: input.promptSource === "plugin-agent" ? undefined : input.channel ? "channel" : "desktop",
+    channel: input.channel,
+    chatBackend: input.chatBackendSnapshot ?? styleSettings.chatBackend,
+  });
 
   // 读取可信工作区绑定（来自 Conversation Workspace Binding）。
   // 某些主进程入口（例如外部渠道共享上下文）只应复用文字历史，
@@ -494,6 +520,7 @@ export async function buildAgentRunOptions(
   }
 
   const socialContextEnabled = isChatMode
+    && useNativeChatSystems
     && styleSettings.chatSocialContextEnabled === true
     && Boolean(deps.buildChatSocialContext);
   // 朋友圈 Chat 背景：总开关与子开关都开启才注入（momentsEnabled && chatMomentsContextEnabled）
@@ -503,24 +530,27 @@ export async function buildAgentRunOptions(
     && Boolean(deps.buildMomentsContext);
   const messagesForSoul = socialContextEnabled ? messages.slice(-12) : messages;
   const profile = deps.loadUserProfile();
+  const contextTimezone = resolveChatContextTimezone(profile.timezone);
   const { cleanMessages: cleanLlm, timestampedMessages: llmMessages, timeContext: conversationTimeContext } = buildConversationTimeContext(
     messagesForSoul as unknown as ChatContextMessage[],
-    resolveChatContextTimezone(profile.timezone),
+    contextTimezone,
   );
   const slimLlmMessages = llmMessages as Array<{ role: string; content?: string }>;
 
   let alwaysOnContext = "";
   try {
-    alwaysOnContext = await perf.track("build_always_on_context", () => deps.buildAlwaysOnContext(latestUserText, slimMessages));
+    alwaysOnContext = await perf.track("build_always_on_context", () => deps.buildAlwaysOnContext(latestUserText, slimMessages, useNativeChatSystems));
   } catch (err) {
     console.warn("[Cyrene] always-on context build failed:", err);
   }
 
   let relationshipContext = "";
-  try {
-    relationshipContext = await perf.track("build_relationship_context", () => deps.buildRelationshipContext());
-  } catch (err) {
-    console.warn("[Cyrene] relationship context build failed:", err);
+  if (useNativeChatSystems) {
+    try {
+      relationshipContext = await perf.track("build_relationship_context", () => deps.buildRelationshipContext());
+    } catch (err) {
+      console.warn("[Cyrene] relationship context build failed:", err);
+    }
   }
 
   let environmentContext = "";
@@ -609,6 +639,21 @@ export async function buildAgentRunOptions(
     }
   }
 
+  const useCompanionDesktopChat = !useNativeChatSystems && isChatMode
+    && resolvedMode === "chat" && !input.channel;
+  let pluginToneRules = "";
+  if (useCompanionDesktopChat) {
+    try {
+      pluginToneRules = await deps.buildPluginStablePrompt?.({
+        source: "conversation",
+        mode: resolvedMode,
+        conversationId,
+        target: "tone",
+      }) ?? "";
+    } catch (error) {
+      console.warn("[Cyrene] plugin tone rules build failed, falling back to native rules:", error);
+    }
+  }
   let toneInjection = "";
   if (deps.sceneEmbeddingIndex) {
     try {
@@ -617,10 +662,14 @@ export async function buildAgentRunOptions(
         slimLlmMessages,
         deps.getSceneEmbeddingProvider(),
         deps.sceneEmbeddingIndex,
+        pluginToneRules || undefined,
       ));
     } catch (err) {
       console.warn("[Cyrene] tone injection failed:", err);
     }
+  } else if (pluginToneRules) {
+    // 场景索引不可用时仍保留插件的基础语气规则；只跳过场景样本匹配。
+    toneInjection = pluginToneRules;
   }
 
   let attachmentContext = "";
@@ -631,7 +680,6 @@ export async function buildAgentRunOptions(
   }
 
   // 优先使用 AguiBridge 注入的真实会话模式，fallback 到执行模式（兼容旧调用方）。
-  const resolvedMode: ConversationMode = input.mode ?? (isChatMode ? "chat" : "work");
   const basePromptMode = resolvedMode;
 
   let pluginPromptContext = "";
@@ -642,6 +690,11 @@ export async function buildAgentRunOptions(
       userText: latestUserText,
       conversationId,
       channel: input.promptChannel ?? input.channel,
+      runId: input.runId,
+      ...(input.promptSource === "plugin-agent" ? {} : {
+        chatBackend: useNativeChatSystems ? "native" as const : "companion" as const,
+        timezone: contextTimezone,
+      }),
     }) ?? "";
   } catch (error) {
     console.warn("[plugins] 构建插件提示词上下文失败，已跳过", error);
@@ -723,21 +776,16 @@ export async function buildAgentRunOptions(
   // 搜索后端互斥过滤：每轮只暴露当前后端对应的搜索工具
   const generalSettings = deps.loadGeneralSettings();
   const activeSearchBackend = ((generalSettings as Record<string, unknown>).searchEngine as string ?? "off") as SearchBackend;
-  // Chat 模式工具增强（fallbackCapabilities 路径，与 resolveRunCapabilities 同口径）：
-  // 总开关开启时仅放行 Chat tab 显式勾选（override.chat===true）的工具，
-  // 严格 opt-in——不走"未声明 modes 即全可见"的默认规则，防止 fs/git 等
-  // 未声明 modes 的工具意外漏进闲聊会话。
-  const chatOptInTools = (isChatMode && styleSettings.chatToolsEnabled === true)
-    ? (modeEnabledTools as readonly ToolDefinition[]).filter(
-      (t) => styleSettings.toolModeOverrides?.[t.id]?.chat === true,
-    )
-    : [];
-  const filteredBySearch = isChatMode
-    ? filterToolsBySearchBackend(chatOptInTools as unknown as Array<{ id: string }>, activeSearchBackend)
+  // 桌面 Chat 固定使用本地 Collab 工具策略；渠道仍只保留 chatBuiltin。
+  const chatModeTools = isChatMode && !input.channel
+    ? modeEnabledTools as readonly ToolDefinition[]
+    : (modeEnabledTools as readonly ToolDefinition[]).filter((tool) => tool.chatBuiltin === true);
+  const filteredBySearch = (isChatMode
+    ? filterToolsBySearchBackend(chatModeTools as unknown as Array<{ id: string }>, activeSearchBackend)
     : filterToolsBySearchBackend(
       enabledTools as unknown as Array<{ id: string }>,
       activeSearchBackend,
-    );
+    )).filter((tool) => useNativeChatSystems || !isNativeChatMemoryTool(tool.id));
 
   const fallbackCapabilities: RunCapabilities = {
     mode: resolvedMode,
@@ -751,7 +799,8 @@ export async function buildAgentRunOptions(
     activeSearchBackend,
     toolModeOverrides: styleSettings.toolModeOverrides,
     skillModeOverrides: styleSettings.skillModeOverrides,
-    chatToolsEnabled: styleSettings.chatToolsEnabled === true,
+    desktopChat: !input.channel,
+    useNativeChatSystems,
   }) ?? fallbackCapabilities;
   // ⚠️ resolveRunCapabilities 存在时的权威路径：覆盖上面 fallback 组的计算。
   enabledSkills = capabilities.skills;
@@ -770,13 +819,57 @@ export async function buildAgentRunOptions(
     .filter((t) => t.id === "web_search" || t.id.startsWith("minimax-web-search-"))
     .map((t) => t.id);
   console.log(`[Cyrene] 搜索后端=${activeSearchBackend} 暴露搜索工具=[${searchToolIds.join(", ") || "无"}]`);
-  const baseSoulSystemPrompt = deps.buildModePrompt?.(resolvedMode)
-    ?? deps.buildSoulSystemBasePrompt(basePromptMode);
-  // Chat 工具增强开启且有勾选工具时，chat 也注入工具目录 prompt
-  //（buildToolSystemPrompt 忽略 mode，只按工具列表生成目录，chat 复用安全）。
-  const baseToolSystemPrompt = resolvedMode === "chat"
+  let pluginStablePrompt = "";
+  if (useCompanionDesktopChat) {
+    try {
+      pluginStablePrompt = await deps.buildPluginStablePrompt?.({
+        source: "conversation",
+        mode: resolvedMode,
+        conversationId,
+        target: "soul",
+      }) ?? "";
+    } catch (error) {
+      console.warn("[Cyrene] plugin stable prompt build failed, falling back to native persona:", error);
+    }
+  }
+  const baseSoulSystemPrompt = pluginStablePrompt || deps.buildModePrompt?.(resolvedMode)
+    || deps.buildSoulSystemBasePrompt(basePromptMode);
+  let pluginToolPrompt = "";
+  if (useCompanionDesktopChat) {
+    try {
+      pluginToolPrompt = await deps.buildPluginStablePrompt?.({
+        source: "conversation",
+        mode: resolvedMode,
+        conversationId,
+        target: "tool",
+      }) ?? "";
+    } catch (error) {
+      console.warn("[Cyrene] plugin tool prompt build failed, falling back to native tool rules:", error);
+    }
+  }
+  const nativeToolSystemPrompt = resolvedMode === "chat"
     ? (runTools.length > 0 ? deps.buildToolSystemPrompt(resolvedMode, runTools) : "")
     : deps.buildToolSystemPrompt(resolvedMode, runTools);
+  const baseToolSystemPrompt = [pluginToolPrompt, nativeToolSystemPrompt]
+    .filter((part) => part.trim())
+    .join("\n\n---\n\n");
+  let pluginSoulTail = "";
+  if (useCompanionDesktopChat) {
+    try {
+      pluginSoulTail = await deps.buildPluginStablePrompt?.({
+        source: "conversation",
+        mode: resolvedMode,
+        conversationId,
+        target: "soul-tail",
+      }) ?? "";
+    } catch (error) {
+      console.warn("[Cyrene] plugin Soul tail build failed, continuing without final anchor:", error);
+    }
+  }
+  if (pluginSoulTail) {
+    const tailClock = `[当前时间] ${formatLocalTime(Date.now(), contextTimezone)}（仅供你感知当下时刻，不要复述）`;
+    pluginSoulTail = `${tailClock}\n\n${pluginSoulTail}`;
+  }
 
   // ⚠️ 缓存契约：本函数产出的 system prompt 分层（stablePrefix vs 尾部 runtime）
   // 的内容与拼接顺序直接影响厂商提示词缓存，且多数漂移现有测试不会变红。
@@ -808,19 +901,23 @@ export async function buildAgentRunOptions(
     (channelSystem ? channelSystem + "\n\n" : "") +
     baseSoulSystemPrompt;
   const soulSystemBaseContent = soulSystemWithoutCita;
+  // 仅桌面 Chat 把插件资料放在画像/世界书前；稳定前缀与消息结构保持不变。
+  const useDesktopChatContextOrder = isChatMode && resolvedMode === "chat"
+    && !input.channel && input.promptSource !== "plugin-agent";
   const soulRuntimeContext = [
     environmentContext,
     conversationTimeContext,
-    chatSocialContextBlock,
+    ...(useDesktopChatContextOrder ? [] : [chatSocialContextBlock]),
     momentsContextBlock,
     stylePromptBlock,
     autoInjectedSoulContext,
     skillActivation,
     toneInjection,
+    ...(useDesktopChatContextOrder ? [pluginPromptContext, chatSocialContextBlock] : []),
     alwaysOnContext,
     relationshipContext,
     attachmentContext,
-    pluginPromptContext,
+    ...(useDesktopChatContextOrder ? [] : [pluginPromptContext]),
   ].filter((context): context is string => Boolean(context?.trim())).join("\n\n---\n\n");
 
   // 原始 messages 不携带 system。system 由 chat-loop / harness-adapter 按 promptLayers 组装。
@@ -877,6 +974,8 @@ export async function buildAgentRunOptions(
       cleanMessages: cleanFcMessages,
       conversationId,
       executionMode,
+      // 桌面 Chat 固定对齐本地 Collab 的 Tool→Soul；渠道保持上游原生路径。
+      chatResponseMode: isChatMode && resolvedMode === "chat" && !input.channel ? "two-phase" as const : "native" as const,
       originalQuery: latestUserText,
       contextualizedQuery,
       citaContextBlock,
@@ -889,6 +988,7 @@ export async function buildAgentRunOptions(
       skillLayerContent,
       soulSystemBaseContent,
       soulRuntimeContext,
+      ...(pluginSoulTail ? { soulTailAnchorContent: pluginSoulTail } : {}),
       ...(planSkillContext ? { planSkillContext } : {}),
       soulSampling,
       ...(socialContextEnabled && input.userTurnId && input.assistantTurnId ? {
@@ -927,15 +1027,21 @@ export async function onAgentRunFinished(
   deps: OnRunFinishedDeps,
   channel?: ChannelId,
   conversationId?: string,
-  finishedContext?: { runId?: string; source?: "desktop" | "channel"; mode?: string },
+  finishedContext?: { runId?: string; source?: "desktop" | "channel"; mode?: string; chatBackendSnapshot?: "native" | "companion" },
 ): Promise<{ sticker: string | null }> {
   const chatContent = result.reply;
   const sideEffectUserText = stripTurnModelContextForSideEffects(latestUserText);
+  const useNativeMemory = shouldUseNativeChatSystems({
+    mode: finishedContext?.mode,
+    source: finishedContext?.source,
+    channel,
+    chatBackend: finishedContext?.chatBackendSnapshot ?? deps.chatBackend?.(),
+  });
   const socialContext = result.executionMode === "chat" && result.socialContext?.enabled === true
     ? result.socialContext
     : undefined;
-  const usesSocialExtractor = Boolean(socialContext);
-  if (socialContext) {
+  const usesSocialExtractor = Boolean(socialContext && useNativeMemory);
+  if (useNativeMemory && socialContext) {
     deps.scheduleSocialAtomExtraction?.({
       conversationId: socialContext.conversationId,
       userTurn: {
@@ -951,7 +1057,7 @@ export async function onAgentRunFinished(
       retrievedAtoms: socialContext.retrievedAtoms,
       now: socialContext.now,
     });
-  } else {
+  } else if (useNativeMemory) {
     deps.scheduleMemoryWrite(sideEffectUserText, chatContent, conversationId);
   }
 
@@ -975,14 +1081,16 @@ export async function onAgentRunFinished(
     updatedAt: Date.now(),
   });
 
-  await perf.track("record_relationship_turn", async () => {
-    await deps.recordRelationshipTurn({
-      userText: sideEffectUserText,
-      assistantText: chatContent,
-      cyreneFeeling: deps.runtimeState.feeling ?? "平静",
-      channel: channel ?? "desktop",
+  if (useNativeMemory) {
+    await perf.track("record_relationship_turn", async () => {
+      await deps.recordRelationshipTurn({
+        userText: sideEffectUserText,
+        assistantText: chatContent,
+        cyreneFeeling: deps.runtimeState.feeling ?? "平静",
+        channel: channel ?? "desktop",
+      });
     });
-  });
+  }
 
   const stickerIndex = deps.getStickerEmbeddingIndex?.() ?? deps.stickerEmbeddingIndex;
   const stickerQuery = buildStickerEmbeddingQuery(chatContent, sideEffectUserText);

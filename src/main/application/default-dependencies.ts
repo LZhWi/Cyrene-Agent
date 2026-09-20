@@ -411,7 +411,16 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         socialContextScheduler: services.social.scheduler,
         chatsStore,
         socialAtomStore: services.social.store,
-        buildPluginPromptContext: (input) => pluginPromptRegistry.build(input),
+        buildPluginPromptContext: async (input) => {
+          const result = await pluginPromptRegistry.buildDetailed(input);
+          if (input.runId) {
+            for (const receipt of result.receipts) {
+              await lifecyclePublisher.publishPromptAccepted({ runId: input.runId, ...receipt });
+            }
+          }
+          return result.content;
+        },
+        buildPluginStablePrompt: (input) => pluginPromptRegistry.buildStable(input),
         publishPluginHostEvent: (event, payload) => pluginManager
           ? pluginManager.publishHostEvent(event, payload)
           : Promise.resolve(),
@@ -437,6 +446,22 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
           // 面板宿主窗口（首版=设置窗口）：settingsWindow 为 CJS live-binding，
           // 必须在请求时刻读取
           getPanelHostWebContents: () => settingsWindow?.webContents ?? null,
+          getScreenObservationExcludedRegions: () => {
+            const pet = shell.windowManager.getPetWindowBounds();
+            if (!pet) return [];
+            const bounds = screen.getPrimaryDisplay().bounds;
+            const left = Math.max(pet.x, bounds.x);
+            const top = Math.max(pet.y, bounds.y);
+            const right = Math.min(pet.x + pet.width, bounds.x + bounds.width);
+            const bottom = Math.min(pet.y + pet.height, bounds.y + bounds.height);
+            if (right <= left || bottom <= top) return [];
+            return [{
+              x: (left - bounds.x) / bounds.width,
+              y: (top - bounds.y) / bounds.height,
+              width: (right - left) / bounds.width,
+              height: (bottom - top) / bounds.height,
+            }];
+          },
         });
         return pluginManager;
       },
@@ -488,7 +513,10 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
         registerTtsIpc({ ipc, ttsSessionService: services.ttsSession });
 
         // 聊天会话存储 IPC（chats-store.initialize 建好 cyrene-chats 目录并加载 index）
-        registerChatsIpc(ipc);
+        registerChatsIpc(ipc, {
+          isPluginRunning: (pluginId) => pluginManager?.isRunning(pluginId) ?? false,
+          publishPluginAssistantFeedback: (event) => lifecyclePublisher.publishAssistantMessageFeedback(event),
+        });
         registerMomentsIpc(ipc);
         registerCodeGitIpc({ ipc, service: services.git });
 
@@ -500,6 +528,7 @@ export function createDefaultApplicationDependencies(): ApplicationDependencies 
           services.proactive.proactiveConversationLifecycle,
           ipc,
           pendingTurnLifecycle,
+          () => loadGeneralSettings().chatBackend,
         );
 
         // 应用更新 IPC：安装走受控退出；autoUpdater 兜底路径进入同一协调器

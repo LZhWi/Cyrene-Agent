@@ -24,6 +24,7 @@ export interface ChatStoreApi {
   upsert: (id: string, message: ChatMessage) => Promise<ChatSession | null>;
   replaceTail: (id: string, startIndex: number, messages: ChatMessage[]) => Promise<ChatSession | null>;
   setMessageTtsCacheKey: (id: string, messageId: string, cacheKey: string, converterVersion: string) => Promise<ChatSession | null>;
+  ignorePluginMessage: (conversationId: string, messageId: string) => Promise<{ ok: boolean }>;
   rename: (id: string, title: string) => Promise<ChatSession | null>;
   delete: (id: string) => Promise<boolean>;
   setPinned: (id: string, pinned: boolean) => Promise<ChatSession | null>;
@@ -48,6 +49,28 @@ export interface ChatStoreApi {
 
 export interface SidebarApi {
   openSettings: (section?: string) => void;
+}
+
+export interface CompanionLifeStatus {
+  text: string;
+  resting: boolean;
+}
+
+interface CompanionLifeStatusApi {
+  getGeneralSettings?: () => Promise<{ chatBackend?: unknown }>;
+  getCompanionLifeStatus?: () => Promise<unknown>;
+}
+
+export function normalizeCompanionLifeStatus(value: unknown): CompanionLifeStatus | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.text !== "string" || candidate.text.length === 0 || candidate.text.length > 80
+    || typeof candidate.resting !== "boolean") return null;
+  return { text: candidate.text, resting: candidate.resting };
+}
+
+export function companionLifeStatusApi(): CompanionLifeStatusApi | undefined {
+  return (window as typeof window & { chat?: CompanionLifeStatusApi }).chat;
 }
 
 export interface AguiEvent {

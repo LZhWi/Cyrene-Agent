@@ -10,6 +10,8 @@ export interface PendingTurnInput {
   inputMessageId: string;
   /** 助手占位消息 ID；只有收到对应落盘确认后才作为 finalMessageId 发布。 */
   assistantMessageId?: string;
+  /** 本轮开始时冻结的 Chat 后端；非 Chat 模式可省略。 */
+  chatBackend?: "native" | "companion";
   startedAt: number;
   /** 本轮运行超时（毫秒）；整体期限 = startedAt + runTimeoutMs + graceMs。 */
   runTimeoutMs?: number;
@@ -89,6 +91,7 @@ export function createPendingTurnLifecycle(deps: PendingTurnLifecycleDeps) {
       conversationId: entry.input.conversationId,
       inputMessageId: entry.input.inputMessageId,
       ...(finalMessageId ? { finalMessageId } : {}),
+      ...(entry.input.chatBackend ? { chatBackend: entry.input.chatBackend } : {}),
       status: entry.terminal.status,
       ...(entry.terminal.durationMs !== undefined ? { durationMs: entry.terminal.durationMs } : {}),
     });

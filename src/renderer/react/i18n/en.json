@@ -78,6 +78,8 @@
     "thinkingTitle": "Thinking…",
     "thinkingDoneTitle": "Done thinking",
     "assistantStickerAlt": "Cyrene sticker",
+    "ignoreProactive": "Ignore",
+    "ignoreProactiveTitle": "Ignore this proactive message and reduce similar messages",
     "userStickerAlt": "Your sticker",
     "cyreneAvatarAlt": "Cyrene",
     "userAvatarAlt": "You",
@@ -286,8 +288,6 @@
   "toolPanel": {
     "title": "Tools",
     "subtitle": "Choose which tools are visible in {{mode}} mode",
-    "chatEnhanceTitle": "Chat mode tool enhancements",
-    "chatEnhanceDesc": "When on, casual chat can use tools like music, weather, and search. When off, it's pure conversation",
     "searchPlaceholder": "Search tools…",
     "disabledBadge": "Disabled",
     "noDescription": "No description",

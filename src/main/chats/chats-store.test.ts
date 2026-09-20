@@ -326,6 +326,33 @@ describe("chats store", () => {
     expect(store.getSession(sessions[0].id)?.title).toBe("昔涟的主动消息");
   });
 
+  it("only marks the latest pending plugin proactive message ignored once", async () => {
+    const store = await import("./chats-store");
+    store.initialize();
+    const proactive = store.createSession({ purpose: "proactive-chat" });
+    store.appendMessage(proactive.id, {
+      id: "plugin-message",
+      role: "model",
+      content: "主动问候",
+      at: 1,
+      pluginDelivery: { pluginId: "companion-chat", ignoreFeedback: "pending" },
+    });
+
+    expect(store.markPluginMessageIgnored(proactive.id, "plugin-message")?.pluginId).toBe("companion-chat");
+    expect(store.getSession(proactive.id)?.messages.at(-1)?.pluginDelivery?.ignoreFeedback).toBe("ignored");
+    expect(store.markPluginMessageIgnored(proactive.id, "plugin-message")).toBeNull();
+
+    const ordinary = store.createSession();
+    store.appendMessage(ordinary.id, {
+      id: "ordinary-message",
+      role: "model",
+      content: "普通回复",
+      at: 1,
+      pluginDelivery: { pluginId: "companion-chat", ignoreFeedback: "pending" },
+    });
+    expect(store.markPluginMessageIgnored(ordinary.id, "ordinary-message")).toBeNull();
+  });
+
   it("persists a valid TTS cache key only on model messages without changing updatedAt", async () => {
     const store = await import("./chats-store");
     store.initialize();

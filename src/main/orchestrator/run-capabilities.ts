@@ -16,35 +16,31 @@ export interface ResolveRunCapabilitiesInput {
   activeSearchBackend: SearchBackend;
   toolModeOverrides?: ToolModeOverrides;
   skillModeOverrides?: SkillModeOverrides;
-  /** Chat 模式工具增强总开关（general-settings.chatToolsEnabled）。 */
-  chatToolsEnabled?: boolean;
+  /** 是否为桌面 Chat；桌面采用完整 Collab 工具集合，渠道只保留 chatBuiltin。 */
+  desktopChat?: boolean;
+  /** 仅桌面 Chat 改用插件记忆时为 false。 */
+  useNativeChatSystems?: boolean;
   toolRegistry: { getEnabledToolsForMode(mode: ConversationMode, overrides?: ToolModeOverrides): ToolDefinition[] };
   skillRegistry: { getEnabledForMode(mode: SkillMode, overrides?: SkillModeOverrides): SkillEntry[] };
 }
 
+const NATIVE_CHAT_MEMORY_TOOL_IDS = new Set(["user_memory", "read_memory", "write_memory", "recall_history"]);
+export function isNativeChatMemoryTool(id: string): boolean { return NATIVE_CHAT_MEMORY_TOOL_IDS.has(id); }
+
 export function resolveRunCapabilities(input: ResolveRunCapabilitiesInput): RunCapabilities {
   if (input.mode === "chat") {
-    // Chat 工具增强：总开关开启时仅放行 Chat tab 显式勾选（override.chat===true）
-    // 的工具——严格 opt-in，不走"未声明 modes 即全可见"的默认规则，
-    // 防止 fs/git 等未声明 modes 的工具意外漏进闲聊会话。Skill 恒不暴露。
-    // 例外：chatBuiltin 内置人格工具（朋友圈三件套）默认放行，
-    // 不依赖总开关与 opt-in 勾选；override.chat === false 仍可显式关闭。
-    const builtinTools = input.toolRegistry
-      .getEnabledToolsForMode("chat", input.toolModeOverrides)
-      .filter((tool) => tool.chatBuiltin === true);
-    if (!input.chatToolsEnabled) {
-      const tools = filterToolsBySearchBackend(builtinTools, input.activeSearchBackend);
+    // 桌面 Chat 对齐本地 Collab：暴露所有对 chat 可见且已启用的工具，
+    // 不再依赖上游 Chat 工具总开关或逐项 opt-in。显式 override.chat=false
+    // 仍由 registry 作为单项逃生门处理；渠道调用方继续只取 chatBuiltin。
+    const modeTools = input.toolRegistry.getEnabledToolsForMode("chat", input.toolModeOverrides);
+    const builtinTools = modeTools.filter((tool) => tool.chatBuiltin === true);
+    if (!input.desktopChat) {
+      const tools = filterToolsBySearchBackend(builtinTools, input.activeSearchBackend)
+        .filter((tool) => input.useNativeChatSystems !== false || !isNativeChatMemoryTool(tool.id));
       return { mode: input.mode, tools, toolIds: new Set(tools.map((tool) => tool.id)), skills: [], skillIds: new Set() };
     }
-    const optInTools = input.toolRegistry
-      .getEnabledToolsForMode("chat", input.toolModeOverrides)
-      .filter((tool) => input.toolModeOverrides?.[tool.id]?.chat === true);
-    // 内置工具在前；同名工具（被 opt-in 勾选的内置工具）不重复出现
-    const merged = [...builtinTools];
-    for (const tool of optInTools) {
-      if (!merged.some((existing) => existing.id === tool.id)) merged.push(tool);
-    }
-    const tools = filterToolsBySearchBackend(merged, input.activeSearchBackend);
+    const tools = filterToolsBySearchBackend(modeTools, input.activeSearchBackend)
+      .filter((tool) => input.useNativeChatSystems !== false || !isNativeChatMemoryTool(tool.id));
     return {
       mode: input.mode,
       tools,

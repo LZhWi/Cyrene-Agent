@@ -69,6 +69,10 @@ export interface ChatMessageItem {
   /** 渠道群聊的发送者/引用等隐藏模型上下文；不直接渲染。 */
   modelContext?: string;
   channelSource?: ChatMessageChannelSource;
+  pluginDelivery?: {
+    pluginId: string;
+    ignoreFeedback?: "pending" | "ignored";
+  };
 }
 
 export interface ChatMessageAttachment {
@@ -93,6 +97,7 @@ interface ChatMessageListProps {
   revisionBusy?: boolean;
   onEditLastUserMessage?: (messageId: string, content: string) => Promise<boolean>;
   onRegenerateLastResponse?: (userMessageId: string, assistantMessageId: string) => Promise<boolean>;
+  onIgnorePluginMessage?: (messageId: string) => Promise<boolean>;
   onScrollToBottomVisibilityChange?: (visible: boolean) => void;
   onRegisterScrollToBottom?: (scroll: () => void) => void;
   /** 点击 Review 文件项时打开右侧检查面板 */
@@ -105,6 +110,30 @@ const cyreneAvatarUrl = resolveAsset("avatars/cyrene-avatar.png");
 // 消息是否正在流式输出。code 渲染器收不到 MarkdownContent 的 props，用 context 传下去，
 // mermaid 块靠它在流式期间显示占位而不是渲染半截语法
 const MessageStreamingContext = createContext(false);
+
+function PluginIgnoreButton({ messageId, onIgnore }: {
+  messageId: string;
+  onIgnore: (messageId: string) => Promise<boolean>;
+}) {
+  const [busy, setBusy] = useState(false);
+  return (
+    <button
+      type="button"
+      className="cy-message-ignore-button"
+      disabled={busy}
+      title={t("messageList.ignoreProactiveTitle")}
+      aria-label={t("messageList.ignoreProactive")}
+      onClick={() => {
+        setBusy(true);
+        void onIgnore(messageId).then((ok) => {
+          if (!ok) setBusy(false);
+        }).catch(() => setBusy(false));
+      }}
+    >
+      {t("messageList.ignoreProactive")}
+    </button>
+  );
+}
 
 function MarkdownCode({ children, lang, block }: ComponentProps<{ children?: ReactNode }>) {
   const streaming = useContext(MessageStreamingContext);
@@ -763,6 +792,7 @@ function createRoles(
   onReasoningExpand: (id: string, expanded: boolean) => void,
   onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void,
   onOpenReviewInspector?: (runId: string, fileIndex: number) => void,
+  onIgnorePluginMessage?: (messageId: string) => Promise<boolean>,
 ) {
   return {
   user: {
@@ -817,7 +847,7 @@ function createRoles(
         channelSource={info.extraInfo?.channelSource}
       />
     ),
-    footer: (content: string, info: { extraInfo?: { messageId?: string; streaming?: boolean; ttsCacheKey?: string } }) => {
+    footer: (content: string, info: { extraInfo?: { messageId?: string; streaming?: boolean; ttsCacheKey?: string; pluginDelivery?: ChatMessageItem["pluginDelivery"] } }) => {
       const cleanText = content.trim();
       const messageId = info.extraInfo?.messageId;
       const canRegenerate = messageId === lastTurn?.assistantMessageId;
@@ -835,6 +865,9 @@ function createRoles(
             />
           )}
           {cleanText && <CopyButton text={cleanText} />}
+          {messageId && info.extraInfo?.pluginDelivery?.ignoreFeedback === "pending" && onIgnorePluginMessage && (
+            <PluginIgnoreButton messageId={messageId} onIgnore={onIgnorePluginMessage} />
+          )}
           {canRegenerate && (
             <LastTurnActionButton kind="regenerate" disabled={revisionBusy} onClick={onRegenerate} />
           )}
@@ -1032,6 +1065,7 @@ export function createMessageItems(messages: ChatMessageItem[], enabledStickers:
           ttsCacheKey: message.ttsCacheKey,
           stickerUrl: message.sticker ? resolveStickerUrl(message.sticker, enabledStickers) : undefined,
           channelSource: message.channelSource,
+          pluginDelivery: message.pluginDelivery,
         },
       });
     }
@@ -1058,6 +1092,7 @@ export function ChatMessageList({
   revisionBusy = false,
   onEditLastUserMessage,
   onRegenerateLastResponse,
+  onIgnorePluginMessage,
   onScrollToBottomVisibilityChange,
   onRegisterScrollToBottom,
   onOpenReviewInspector,
@@ -1145,8 +1180,9 @@ export function ChatMessageList({
       onReasoningExpand,
       onTtsCacheKey,
       onOpenReviewInspector,
+      onIgnorePluginMessage,
     ),
-    [beginEdit, cancelEdit, conversationId, editDraft, editingMessageId, lastTurn, mode, onOpenReviewInspector, onReasoningExpand, onTtsCacheKey, preferredAddress, reasoningExpanded, regenerate, revisionBusy, submitEdit, userAvatarUrl],
+    [beginEdit, cancelEdit, conversationId, editDraft, editingMessageId, lastTurn, mode, onIgnorePluginMessage, onOpenReviewInspector, onReasoningExpand, onTtsCacheKey, preferredAddress, reasoningExpanded, regenerate, revisionBusy, submitEdit, userAvatarUrl],
   );
 
   useEffect(() => {

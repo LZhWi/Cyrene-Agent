@@ -18,6 +18,10 @@ export type PluginCapability =
   | "secrets"
   | "workspace"
   | "conversations"
+  | "assistant-delivery"
+  | "screen-observation"
+  | "user-presence"
+  | "weather-context"
   | "scheduler"
   | "speech-input";
 
@@ -28,6 +32,10 @@ export const PLUGIN_CAPABILITIES: readonly PluginCapability[] = [
   "secrets",
   "workspace",
   "conversations",
+  "assistant-delivery",
+  "screen-observation",
+  "user-presence",
+  "weather-context",
   "scheduler",
   "speech-input",
 ];
@@ -113,7 +121,7 @@ export interface PluginTool {
   capability?: string;
   enabled: boolean;
   risk?: "safe" | "fs-read" | "fs-write" | "shell" | "network" | "input-control";
-  modes?: Array<"learn" | "code" | "work">;
+  modes?: Array<"chat" | "learn" | "code" | "work">;
   inputSchema: {
     type: "object";
     properties: Record<string, PluginJsonSchema>;
@@ -283,6 +291,29 @@ export interface PluginHostEventBase {
   timestamp: string;
 }
 
+/**
+ * 动态提示词 Provider 的一次内容接收回执。只表示该 Provider 的内容已进入
+ * 宿主最终插件上下文，不表示模型请求或整轮对话已经成功。插件仍应与
+ * host:turn:finished 的成功落盘终态配对后再提交访问统计等副作用。
+ */
+export interface PluginPromptAcceptedEvent extends PluginHostEventBase {
+  runId: string;
+  /** 带所有者命名空间的完整 Provider ID，例如 plugin:demo:memory-context。 */
+  providerId: string;
+  /** 实际接收的正文字符数，不含宿主添加的标题和分隔符。 */
+  acceptedChars: number;
+  /** false 表示内容受单项或总预算限制而被截断。 */
+  complete: boolean;
+}
+
+/** 插件投递的助手消息收到用户显式反馈；不含消息正文或会话历史。 */
+export interface PluginAssistantMessageFeedbackEvent extends PluginHostEventBase {
+  pluginId: string;
+  conversationId: string;
+  messageId: string;
+  action: "ignore";
+}
+
 interface PluginTurnEventBase extends PluginHostEventBase {
   runId: string;
   mode: PluginPromptMode;
@@ -325,6 +356,8 @@ export type PluginTurnFinishedEvent =
       conversationId: string;
       inputMessageId: string;
       finalMessageId?: string;
+      /** 本轮开始时冻结的 Chat 后端；插件可据此避免把原生与陪伴会话混写。 */
+      chatBackend?: "native" | "companion";
     })
   | (PluginTurnFinishedBase & {
       source: "channel";
@@ -428,6 +461,26 @@ export interface PluginMessagePage {
 export interface PluginConversationsService {
   list(input?: PluginConversationListInput): Promise<PluginConversationPage>;
   getMessages(input: PluginMessagePageInput): Promise<PluginMessagePage>;
+}
+
+/** 插件主动消息投递结果；消息在返回前已经写入宿主原生会话。 */
+export interface PluginAssistantDeliveryResult {
+  conversationId: string;
+  messageId: string;
+  at: string;
+}
+
+export interface PluginAssistantDeliveryOptions {
+  /** 在消息下方提供一次性的“忽略”反馈入口；宿主只回传结构化动作，不回传正文。 */
+  allowIgnoreFeedback?: boolean;
+}
+
+/**
+ * 受限的助手消息投递服务。插件只能向宿主管理的主动消息会话追加纯文本助手消息，
+ * 不能指定普通会话、伪造用户消息或改写既有历史。
+ */
+export interface PluginAssistantDeliveryService {
+  postProactiveMessage(text: string, options?: PluginAssistantDeliveryOptions): Promise<PluginAssistantDeliveryResult>;
 }
 
 /**
@@ -546,11 +599,47 @@ export interface PluginSpeechInputService {
   acquire(options: PluginSpeechInputAcquireOptions): Promise<PluginSpeechInputLease>;
 }
 
+export interface PluginScreenObservationService {
+  /** 截取当前主屏并由宿主视觉模型分析；图片不写盘，也不会返回给插件。 */
+  observe(input?: { focus?: string; signal?: AbortSignal }): Promise<string>;
+}
+
+/** 只读的宿主在场状态；不包含窗口标题、按键、鼠标位置或其他行为明细。 */
+export interface PluginUserPresenceSnapshot {
+  at: string;
+  idleSeconds: number;
+  screenLocked: boolean;
+}
+
+export interface PluginUserPresenceService {
+  snapshot(): Promise<PluginUserPresenceSnapshot>;
+}
+
+/** 不含城市、坐标、密钥或天气源配置的只读天气快照。 */
+export interface PluginWeatherContextSnapshot {
+  observedAt: string;
+  expiresAt: string;
+  category: "clear" | "cloudy" | "rain" | "snow" | "thunder" | "fog" | "unknown";
+  temperatureC: number;
+  precipitationMm: number;
+  todayHighC?: number;
+  previousDayHighC?: number;
+}
+
+export interface PluginWeatherContextService {
+  /** 未启用天气、未配置默认城市或查询失败时返回 null。 */
+  snapshot(): Promise<PluginWeatherContextSnapshot | null>;
+}
+
 export interface PluginDeps {
   /** Read-only channel discovery. Registration must use PluginContext methods. */
   channels?: { has(id: string): boolean };
   llm?: PluginLlmService;
   conversations?: PluginConversationsService;
+  assistantDelivery?: PluginAssistantDeliveryService;
+  screenObservation?: PluginScreenObservationService;
+  userPresence?: PluginUserPresenceService;
+  weatherContext?: PluginWeatherContextService;
   secrets?: PluginSecretsService;
   workspace?: PluginWorkspaceService;
   scheduler?: PluginSchedulerService;
@@ -572,12 +661,18 @@ interface PluginPromptBuildInputCommon {
   userText: string;
   conversationId?: string;
   channel?: string;
+  /** 宿主已解析的聊天时区（IANA）；仅用于显示相对时间，不包含位置。 */
+  timezone?: string;
+  /** 桌面轮次的稳定关联 ID；插件可与 host:turn:finished 配对后再提交消费副作用。 */
+  runId?: string;
 }
 
 /** 用户会话轮次；mode 为当前会话模式。 */
 export interface ConversationPromptBuildInput extends PluginPromptBuildInputCommon {
   source: "conversation";
   mode: PluginPromptMode;
+  /** 仅桌面 Chat 可为 companion；其他模式与渠道始终为 native。 */
+  chatBackend?: "native" | "companion";
 }
 
 /** 定时任务轮次；mode 为任务冻结的执行模式。 */
@@ -626,6 +721,8 @@ export type PluginPromptProviderInput = PluginPromptBuildInput & {
 export interface PluginPromptProvider {
   /** 当前插件内唯一；框架会自动补全 plugin:<插件id>: 前缀。 */
   id: string;
+  /** 动态上下文拼接优先级；数值越小越靠前，同值保持注册顺序。缺省为 0。 */
+  priority?: number;
   /** 缺省表示全部会话模式。 */
   modes?: PluginPromptMode[];
   /**
@@ -633,7 +730,33 @@ export interface PluginPromptProvider {
    * （与旧版行为一致），参与 moments-post 必须显式声明，防止升级后插件不知情地被扩大调用。
    */
   sources?: PluginPromptSource[];
+  /**
+   * 请求 host:prompt:accepted 接收回执。旧宿主会忽略该字段但仍正常调用 provide，
+   * 因而插件内容可安全降级，只是不提交依赖精确消费确认的副作用。
+   */
+  consumptionReceipt?: boolean;
   provide(input: PluginPromptProviderInput): string | Promise<string>;
+}
+
+/** 稳定人格层不接收本轮用户正文，避免动态内容误入模型缓存前缀。 */
+export interface PluginStablePromptProviderInput {
+  source: "conversation";
+  mode: PluginPromptMode;
+  conversationId: string;
+  channel?: string;
+  /** 分阶段提示词目标；旧 Provider 缺省只参与 soul。 */
+  target: "soul" | "tool" | "tone" | "soul-tail";
+  readonly signal: AbortSignal;
+}
+
+export interface PluginStablePromptProvider {
+  /** 当前插件内唯一；框架会自动补全插件命名空间。 */
+  id: string;
+  /** 缺省表示全部会话模式；陪伴后端通常只声明 chat。 */
+  modes?: PluginPromptMode[];
+  /** 缺省 soul；tone 复用宿主场景匹配，soul-tail 仅进入最终 Soul 生成点。 */
+  target?: "soul" | "tool" | "tone" | "soul-tail";
+  provide(input: PluginStablePromptProviderInput): string | Promise<string>;
 }
 
 export interface PluginContext {
@@ -648,6 +771,9 @@ export interface PluginContext {
   /** 注册每轮动态提示词贡献；内容进入 runtime context，不改变核心提示词文件。 */
   registerPromptProvider(provider: PluginPromptProvider): void;
   unregisterPromptProvider(providerId: string): void;
+  /** 注册稳定人格层；只有宿主明确选择插件后端时才会读取。 */
+  registerStablePromptProvider?(provider: PluginStablePromptProvider): void;
+  unregisterStablePromptProvider?(providerId: string): void;
   /** Automatically namespaced as plugin:<id>:<channel>. */
   registerIpc(channel: string, handler: (...args: unknown[]) => unknown): void;
   unregisterIpc(channel: string): void;

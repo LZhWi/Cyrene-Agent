@@ -169,6 +169,7 @@ export const IPC = {
   CHATS_APPEND: "chats:append",
   CHATS_UPSERT: "chats:upsert",
   CHATS_SET_MESSAGE_TTS_CACHE: "chats:set-message-tts-cache",
+  CHATS_IGNORE_PLUGIN_MESSAGE: "chats:ignore-plugin-message",
   CHATS_REPLACE_MESSAGES: "chats:replace-messages",
   CHATS_REPLACE_TAIL: "chats:replace-tail",
   // renderer → main：主动压缩会话上下文（模型窗口内旧消息摘要成一条记忆）

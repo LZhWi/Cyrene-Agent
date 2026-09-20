@@ -48,8 +48,20 @@ describe("createLifecyclePublisher", () => {
       risk: "fs-write",
       durationMs: 42,
     });
+    publisher.publishPromptAccepted({
+      runId: "run-1",
+      providerId: "plugin:memory:context",
+      acceptedChars: 123,
+      complete: true,
+    });
+    await publisher.publishAssistantMessageFeedback({
+      pluginId: "companion-chat",
+      conversationId: "proactive-1",
+      messageId: "message-1",
+      action: "ignore",
+    });
 
-    await vi.waitFor(() => expect(published).toHaveLength(4));
+    await vi.waitFor(() => expect(published).toHaveLength(6));
     expect(published[0]).toEqual({
       event: "turn:started",
       payload: {
@@ -84,6 +96,28 @@ describe("createLifecyclePublisher", () => {
         status: "success",
         risk: "fs-write",
         durationMs: 42,
+        eventId: "evt-1",
+        timestamp: "2026-09-03T10:00:00.000Z",
+      },
+    });
+    expect(published[4]).toEqual({
+      event: "prompt:accepted",
+      payload: {
+        runId: "run-1",
+        providerId: "plugin:memory:context",
+        acceptedChars: 123,
+        complete: true,
+        eventId: "evt-1",
+        timestamp: "2026-09-03T10:00:00.000Z",
+      },
+    });
+    expect(published[5]).toEqual({
+      event: "assistant-message:feedback",
+      payload: {
+        pluginId: "companion-chat",
+        conversationId: "proactive-1",
+        messageId: "message-1",
+        action: "ignore",
         eventId: "evt-1",
         timestamp: "2026-09-03T10:00:00.000Z",
       },

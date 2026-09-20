@@ -46,7 +46,8 @@ export function buildHarnessPromptLayers(
   options: CyreneRunOptions,
 ): PromptLayers & { usageParts?: { personaContent: string; toolLayerContent: string; skillLayerContent?: string } } {
   const personaParts: string[] = [];
-  if (options.soulSystemBaseContent) {
+  const toolOnlyChat = options.conversationMode === "chat" && options.chatResponseMode === "two-phase";
+  if (!toolOnlyChat && options.soulSystemBaseContent) {
     personaParts.push(options.soulSystemBaseContent);
   }
 

@@ -399,6 +399,23 @@ export function setMessageTtsCacheKey(
   return session;
 }
 
+/** 把插件主动消息的待处理反馈原子标为已忽略；只允许主动会话中的最后一条模型消息。 */
+export function markPluginMessageIgnored(
+  conversationId: string,
+  messageId: string,
+): { pluginId: string; session: ChatSession } | null {
+  const session = readSessionFile(conversationId);
+  if (!session || session.purpose !== "proactive-chat") return null;
+  const message = session.messages.at(-1);
+  if (!message || message.id !== messageId || message.role !== "model"
+    || message.pluginDelivery?.ignoreFeedback !== "pending") return null;
+  message.pluginDelivery.ignoreFeedback = "ignored";
+  session.updatedAt = Date.now();
+  writeSessionFile(session);
+  upsertMeta(metaFromSession(session));
+  return { pluginId: message.pluginDelivery.pluginId, session };
+}
+
 // 批量覆盖整个 messages 数组（聊天窗口流式结束/清空/错误等场景用）。
 // updatedAt 一并刷新；用户没手动改名时根据新内容重新派生。
 export function replaceMessages(id: string, messages: ChatMessage[]): ChatSession | null {

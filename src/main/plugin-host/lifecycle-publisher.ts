@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type {
+  PluginAssistantMessageFeedbackEvent,
+  PluginPromptAcceptedEvent,
   PluginSchedulerFinishedEvent,
   PluginToolFinishedEvent,
   PluginTurnFinishedEvent,
@@ -13,6 +15,8 @@ export type TurnStartedInput = DistributiveOmit<PluginTurnStartedEvent, "eventId
 export type TurnFinishedInput = DistributiveOmit<PluginTurnFinishedEvent, "eventId" | "timestamp">;
 export type SchedulerFinishedInput = Omit<PluginSchedulerFinishedEvent, "eventId" | "timestamp">;
 export type ToolFinishedInput = Omit<PluginToolFinishedEvent, "eventId" | "timestamp">;
+export type PromptAcceptedInput = Omit<PluginPromptAcceptedEvent, "eventId" | "timestamp">;
+export type AssistantMessageFeedbackInput = Omit<PluginAssistantMessageFeedbackEvent, "eventId" | "timestamp">;
 
 export interface LifecyclePublisherDeps {
   /** 事件发布入口：接 PluginManager.publishHostEvent（旁路发布，不等待监听器）。 */
@@ -27,6 +31,8 @@ export interface LifecyclePublisher {
   publishTurnFinished(event: TurnFinishedInput): void;
   publishSchedulerFinished(event: SchedulerFinishedInput): void;
   publishToolFinished(event: ToolFinishedInput): void;
+  publishPromptAccepted(event: PromptAcceptedInput): Promise<void>;
+  publishAssistantMessageFeedback(event: AssistantMessageFeedbackInput): Promise<void>;
 }
 
 /**
@@ -46,6 +52,15 @@ export function createLifecyclePublisher(deps: LifecyclePublisherDeps): Lifecycl
     });
   }
 
+  async function publishAwaited(event: string, payload: Record<string, unknown>): Promise<void> {
+    const stamped = { ...payload, eventId: nextEventId(), timestamp: now().toISOString() };
+    try {
+      await deps.publish(event, stamped);
+    } catch (error) {
+      console.warn(`[plugins] 发布宿主事件 ${event} 失败`, error);
+    }
+  }
+
   return {
     publishTurnStarted(event) {
       publish("turn:started", { ...event });
@@ -58,6 +73,12 @@ export function createLifecyclePublisher(deps: LifecyclePublisherDeps): Lifecycl
     },
     publishToolFinished(event) {
       publish("tool:finished", { ...event });
+    },
+    publishPromptAccepted(event) {
+      return publishAwaited("prompt:accepted", { ...event });
+    },
+    publishAssistantMessageFeedback(event) {
+      return publishAwaited("assistant-message:feedback", { ...event });
     },
   };
 }

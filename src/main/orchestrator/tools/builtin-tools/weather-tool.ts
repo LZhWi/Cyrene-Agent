@@ -58,6 +58,14 @@ export interface WeatherCardData {
   reporttime?: string;
 }
 
+export interface ConfiguredWeatherObservation {
+  category: "clear" | "cloudy" | "rain" | "snow" | "thunder" | "fog" | "unknown";
+  temperatureC: number;
+  precipitationMm: number;
+  todayHighC?: number;
+  previousDayHighC?: number;
+}
+
 /**
  * index.ts 启动时调用，注入默认城市/天气源/高德key/卡片回调 的读取器。
  * source: "open-meteo"（免配置默认）| "amap"（高德）
@@ -100,7 +108,7 @@ async function omResolveCity(city: string): Promise<OMCity | null> {
 }
 
 /** Open-Meteo 实时天气查询（免费免 key）。 */
-async function omFetchWeather(city: string, context?: ToolContext): Promise<string> {
+async function omFetchWeather(city: string, context?: ToolContext, emitCard = true): Promise<string> {
   const loc = await omResolveCity(city);
   if (!loc) {
     return `[错误] 找不到城市"${city}"，请确认城市名（支持中文/拼音）。`;
@@ -111,7 +119,7 @@ async function omFetchWeather(city: string, context?: ToolContext): Promise<stri
     "surface_pressure", "uv_index", "visibility",
   ].join(",");
   const dailyParams = ["temperature_2m_max", "temperature_2m_min", "weather_code", "wind_speed_10m_max", "wind_direction_10m_dominant"].join(",");
-  const url = `https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&current=${currentParams}&daily=${dailyParams}&timezone=auto`;
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${loc.latitude}&longitude=${loc.longitude}&current=${currentParams}&daily=${dailyParams}&past_days=1&forecast_days=1&timezone=auto`;
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), WEATHER_TIMEOUT_MS);
   try {
@@ -143,6 +151,7 @@ async function omFetchWeather(city: string, context?: ToolContext): Promise<stri
       city: loc.name,
       region: adm,
       weather: wmoText,
+      weatherCode: c.weather_code,
       temperature: c.temperature_2m,
       feelsLike: c.apparent_temperature,
       humidity: c.relative_humidity_2m,
@@ -152,12 +161,14 @@ async function omFetchWeather(city: string, context?: ToolContext): Promise<stri
       pressure: Math.round(c.surface_pressure),
       uv: c.uv_index,
       visibility: Math.round(c.visibility / 1000), // m → km
+      previousDayHigh: data.daily?.temperature_2m_max?.[0],
+      todayHigh: data.daily?.temperature_2m_max?.[1],
       source: "Open-Meteo",
       updateTime: new Date().toLocaleString(getDateLocale(), { hour: "2-digit", minute: "2-digit", timeZone: currentUserTimezone() }),
     };
 
     // 发送天气卡片数据给渲染端（与 renderer 侧 WeatherData 结构对齐）
-    if (weatherCardCallback) {
+    if (emitCard && weatherCardCallback) {
       weatherCardCallback({
         source: "open-meteo",
         location: { province: adm, city: loc.name },
@@ -229,7 +240,7 @@ async function amapResolveAdcode(city: string, key: string): Promise<AmapDistric
 }
 
 /** 高德实时天气查询。 */
-async function amapFetchWeather(city: string, key: string, context?: ToolContext): Promise<string> {
+async function amapFetchWeather(city: string, key: string, context?: ToolContext, emitCard = true): Promise<string> {
   const district = await amapResolveAdcode(city, key);
   if (!district) {
     return `[错误] 找不到城市"${city}"，请确认城市名（支持中文，如"无锡"）。`;
@@ -264,7 +275,7 @@ async function amapFetchWeather(city: string, key: string, context?: ToolContext
     };
 
     // 发送天气卡片数据给渲染端（与 renderer 侧 WeatherData 结构对齐）
-    if (weatherCardCallback) {
+    if (emitCard && weatherCardCallback) {
       weatherCardCallback({
         source: "amap",
         location: { province: w.province, city: w.city },
@@ -286,7 +297,7 @@ async function amapFetchWeather(city: string, key: string, context?: ToolContext
   }
 }
 
-async function executeWeather(args: Record<string, unknown>, context?: ToolContext): Promise<string> {
+async function executeWeather(args: Record<string, unknown>, context?: ToolContext, emitCard = true): Promise<string> {
   if (weatherEnabledGetter && !weatherEnabledGetter()) {
     return "[错误] 天气查询功能未启用，请在设置里开启";
   }
@@ -316,18 +327,60 @@ async function executeWeather(args: Record<string, unknown>, context?: ToolConte
 
   // 按天气源分支
   if (source === "open-meteo") {
-    return omFetchWeather(city, context);
+    return omFetchWeather(city, context, emitCard);
   }
   if (source === "amap") {
     const amapKey = amapKeyGetter?.() ?? "";
     if (!amapKey) {
       return "[错误] 还没有配置高德天气 Key。请在 设置 → 插件 → 天气查询 填入高德 Key，或切换天气源为 Open-Meteo（免配置）。";
     }
-    return amapFetchWeather(city, amapKey, context);
+    return amapFetchWeather(city, amapKey, context, emitCard);
   }
 
   // 未知天气源
   return `[错误] 未知的天气源"${source}"。请在 设置 → 插件 → 天气查询 选择 Open-Meteo 或 高德天气。`;
+}
+
+function normalizeWeatherCategory(source: string, weather: string, weatherCode?: number): ConfiguredWeatherObservation["category"] {
+  if (source === "Open-Meteo" && weatherCode !== undefined) {
+    if (weatherCode <= 1) return "clear";
+    if (weatherCode <= 3) return "cloudy";
+    if (weatherCode === 45 || weatherCode === 48) return "fog";
+    if ((weatherCode >= 51 && weatherCode <= 67) || (weatherCode >= 80 && weatherCode <= 82)) return "rain";
+    if ((weatherCode >= 71 && weatherCode <= 77) || (weatherCode >= 85 && weatherCode <= 86)) return "snow";
+    if (weatherCode >= 95) return "thunder";
+  }
+  if (/雷/.test(weather)) return "thunder";
+  if (/雪/.test(weather)) return "snow";
+  if (/雨/.test(weather)) return "rain";
+  if (/雾|霾/.test(weather)) return "fog";
+  if (/晴/.test(weather)) return "clear";
+  if (/云|阴/.test(weather)) return "cloudy";
+  return "unknown";
+}
+
+/** 插件宿主边界使用：复用已启用的天气配置，但不触发天气卡片，也不返回位置或密钥。 */
+export async function readConfiguredWeatherObservation(): Promise<ConfiguredWeatherObservation | null> {
+  const raw = await executeWeather({}, undefined, false);
+  if (!raw.startsWith("{")) return null;
+  try {
+    const value = JSON.parse(raw) as Record<string, unknown>;
+    const temperatureC = Number(value.temperature);
+    if (!Number.isFinite(temperatureC)) return null;
+    const precipitation = Number(value.precipitation ?? 0);
+    const previousDayHigh = typeof value.previousDayHigh === "number" ? value.previousDayHigh : Number.NaN;
+    const todayHigh = typeof value.todayHigh === "number" ? value.todayHigh : Number.NaN;
+    return {
+      category: normalizeWeatherCategory(String(value.source ?? ""), String(value.weather ?? ""),
+        typeof value.weatherCode === "number" ? value.weatherCode : undefined),
+      temperatureC,
+      precipitationMm: Number.isFinite(precipitation) ? Math.max(0, precipitation) : 0,
+      ...(Number.isFinite(todayHigh) ? { todayHighC: todayHigh } : {}),
+      ...(Number.isFinite(previousDayHigh) ? { previousDayHighC: previousDayHigh } : {}),
+    };
+  } catch {
+    return null;
+  }
 }
 
 export const weatherTool: ToolDefinition = {

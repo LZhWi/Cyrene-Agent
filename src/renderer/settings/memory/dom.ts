@@ -1,6 +1,9 @@
 // Memory 面板 DOM 引用
 // 从 settings.ts 抽离。ESM 静态导入保证查询在 settings.ts 顶层代码之前执行。
 
+export const chatCompanionBackendEnabledInput = document.getElementById("chat-companion-backend-enabled") as HTMLInputElement | null;
+export const chatCompanionBackendSaveStatus = document.getElementById("chat-companion-backend-save-status") as HTMLElement | null;
+
 export const memoryL0NameInput = document.getElementById("memory-l0-name") as HTMLInputElement | null;
 export const memoryL0OccupationInput = document.getElementById("memory-l0-occupation") as HTMLInputElement | null;
 export const memoryL0InterestsInput = document.getElementById("memory-l0-interests") as HTMLInputElement | null;

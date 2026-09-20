@@ -61,7 +61,7 @@ import { channelsState } from "./channels/state";
 import { mountPluginPanels } from "./plugin-panels";
 import { channelsWechatEnabledEl, channelsFeishuEnabledEl, channelsWechatStatusEl, channelsFeishuStatusEl, channelsRateUserEl, channelsRateChannelEl, channelsTtsEl, channelsStickerEl, channelsMirrorEl, channelsToolSandboxOffEl, channelsToolSandboxAllEl, channelsFeishuAppIdEl, channelsFeishuAppSecretEl, channelsFeishuAppSecretRevealBtn, channelsFeishuSaveBtn, channelsWechatLoginBtn, channelsWechatRestartBtn, channelsWechatFeedbackEl, channelsFeishuFeedbackEl, channelsLogListEl, channelsLogRefreshBtn, channelsLogClearBtn } from "./channels/dom";
 import { memoryState } from "./memory/state";
-import { memoryL0NameInput, memoryL0OccupationInput, memoryL0InterestsInput, memoryL0LanguageInput, memoryL0NoteInput, memoryL1GoalsInput, memoryL1PreferencesInput, memoryL1ProjectInput, memoryL2SearchInput, memoryL2List, memoryImportedList, memoryReflectionList, memoryL0EditBtn, memoryL0CancelBtn, memoryL1EditBtn, memoryL1CancelBtn } from "./memory/dom";
+import { chatCompanionBackendEnabledInput, chatCompanionBackendSaveStatus, memoryL0NameInput, memoryL0OccupationInput, memoryL0InterestsInput, memoryL0LanguageInput, memoryL0NoteInput, memoryL1GoalsInput, memoryL1PreferencesInput, memoryL1ProjectInput, memoryL2SearchInput, memoryL2List, memoryImportedList, memoryReflectionList, memoryL0EditBtn, memoryL0CancelBtn, memoryL1EditBtn, memoryL1CancelBtn } from "./memory/dom";
 import { schedulerState } from "./scheduler/state";
 import { schedulerNewBtn, schedulerEmpty, schedulerList, schedulerEditor, schedulerEditorTitle, schedulerEditorClose, schedulerTitleInput, schedulerPromptInput, schedulerEnabledInput, schedulerKindInput, schedulerOnceRunAtInput, schedulerTimeOfDayInput, schedulerDayOfWeekInput, schedulerIntervalEveryInput, schedulerIntervalUnitInput, schedulerToolLimitInput, schedulerToolPicker, schedulerToolEmptyHint, schedulerSaveStatus, schedulerCancelBtn, schedulerSaveBtn } from "./scheduler/dom";
 import { tokensState } from "./tokens/state";
@@ -210,6 +210,7 @@ if (!window.settings) {
       proactiveChatMode: "off",
       proactiveDeliveryTarget: "local",
       chatSocialContextEnabled: false,
+      chatBackend: "native",
       momentsEnabled: true,
       chatMomentsContextEnabled: true,
       cyreneMomentsPostingEnabled: false,
@@ -1039,6 +1040,7 @@ async function loadGeneralSettings(): Promise<void> {
     const cita = getCitaUiState({ enabled: cfg.citaEnabled, semanticEngine: cfg.citaSemanticEngine });
     citaEnabledInput.checked = cita.enabled;
     chatSocialContextEnabledInput.checked = normalizeChatSocialContextEnabled(cfg.chatSocialContextEnabled);
+    if (chatCompanionBackendEnabledInput) chatCompanionBackendEnabledInput.checked = cfg.chatBackend === "companion";
     momentsEnabledInput.checked = cfg.momentsEnabled ?? true;
     cyreneMomentsPostingEnabledInput.checked = cfg.cyreneMomentsPostingEnabled ?? false;
     cyreneMomentsReactionsEnabledInput.checked = cfg.cyreneMomentsReactionsEnabled ?? true;
@@ -1775,6 +1777,21 @@ window.settings?.onSwitchSection?.((section) => {
 
 
 // Bind edit button events
+chatCompanionBackendEnabledInput?.addEventListener("change", async () => {
+  const enabled = chatCompanionBackendEnabledInput.checked;
+  chatCompanionBackendEnabledInput.disabled = true;
+  if (chatCompanionBackendSaveStatus) chatCompanionBackendSaveStatus.textContent = "保存中…";
+  try {
+    await window.settings!.saveGeneral({ chatBackend: enabled ? "companion" : "native" });
+    if (chatCompanionBackendSaveStatus) chatCompanionBackendSaveStatus.textContent = "已保存";
+  } catch {
+    chatCompanionBackendEnabledInput.checked = !enabled;
+    if (chatCompanionBackendSaveStatus) chatCompanionBackendSaveStatus.textContent = "保存失败，已恢复原设置";
+  } finally {
+    chatCompanionBackendEnabledInput.disabled = false;
+  }
+});
+
 memoryL0EditBtn?.addEventListener("click", () => {
   if (memoryState.l0Editing) { saveL0(); } else { enterL0EditMode(); }
 });

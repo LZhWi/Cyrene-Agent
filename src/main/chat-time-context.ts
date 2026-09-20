@@ -77,7 +77,7 @@ export function normalizeChatMessagesWithTime(input: unknown): ChatContextMessag
     .slice(-24);
 }
 
-function formatLocalTime(timestamp: number, timezone: string): string {
+export function formatLocalTime(timestamp: number, timezone: string): string {
   const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: resolveChatContextTimezone(timezone),
     year: "numeric",

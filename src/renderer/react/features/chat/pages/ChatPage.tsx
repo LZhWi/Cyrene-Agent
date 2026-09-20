@@ -34,6 +34,8 @@ import {
   aguiApi,
   chatStore,
   choiceApi,
+  companionLifeStatusApi,
+  normalizeCompanionLifeStatus,
   settingsApprovalApi,
   sidebarApi,
   type ModelConfigApi,
@@ -107,6 +109,10 @@ export function ChatPage() {
   /** 右侧面板当前激活的 tab（diff / plan），由打开动作自动切换 */
   const [inspectorTab, setInspectorTab] = useState<"diff" | "plan">("plan");
   const [mode, setMode] = useState<ConversationMode>(getInitialMode);
+  const [companionLifeStatus, setCompanionLifeStatus] = useState<{
+    text: string;
+    resting: boolean;
+  } | null>(null);
   const [drafts, setDrafts] = useState<Record<string, string>>({});
 
   const [workspaceNames, setWorkspaceNames] = useState<Partial<Record<ConversationMode, string>>>({});
@@ -454,6 +460,38 @@ export function ChatPage() {
       activeEarlyTtsRef.current = null;
     }
   }, [activeSessionId, mode]);
+
+  useEffect(() => {
+    if (mode !== "chat") {
+      setCompanionLifeStatus(null);
+      return;
+    }
+    let active = true;
+    const refresh = async () => {
+      const api = companionLifeStatusApi();
+      if (!api?.getGeneralSettings || !api.getCompanionLifeStatus) {
+        if (active) setCompanionLifeStatus(null);
+        return;
+      }
+      try {
+        const settings = await api.getGeneralSettings();
+        if (settings.chatBackend !== "companion") {
+          if (active) setCompanionLifeStatus(null);
+          return;
+        }
+        const status = normalizeCompanionLifeStatus(await api.getCompanionLifeStatus());
+        if (active) setCompanionLifeStatus(status);
+      } catch {
+        if (active) setCompanionLifeStatus(null);
+      }
+    };
+    void refresh();
+    const timer = window.setInterval(() => void refresh(), 60_000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [mode]);
 
   useEffect(() => {
     const sessionId = activeSessionId;
@@ -1318,6 +1356,7 @@ export function ChatPage() {
         collapsed={collapsed}
         activePanel={activePanel}
         mode={mode}
+        companionLifeStatus={companionLifeStatus}
         sessions={sessions}
         activeSessionId={activeSessionId}
         onToggleCollapsed={() => setCollapsed((value) => !value)}
@@ -1398,6 +1437,9 @@ export function ChatPage() {
             revisionBusy={Boolean(modelBusyByMode[mode]) || lastTurnRevisionStarting}
             onEditLastUserMessage={mode === "chat" ? editLastChatUserMessage : undefined}
             onRegenerateLastResponse={mode === "chat" ? regenerateLastChatResponse : undefined}
+            onIgnorePluginMessage={mode === "chat" && activeSessionId
+              ? async (messageId) => (await chatStore()?.ignorePluginMessage(activeSessionId, messageId))?.ok === true
+              : undefined}
             onTtsCacheKey={activeSessionId
               ? (messageId, cacheKey, converterVersion) => handleTtsCacheKey(
                 activeSessionId,

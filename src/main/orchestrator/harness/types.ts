@@ -290,6 +290,11 @@ export interface HarnessInput {
   toolOutputStore?: ToolOutputStore;
   /** 父会话注入的前台子任务执行器；子 Harness 不会继续注入它。 */
   taskExecutor?: (request: import("../task-runtime").TaskExecuteRequest) => Promise<import("../task-runtime").TaskExecuteResult>;
+  /**
+   * 两阶段 Chat 的工具阶段出口。模型停止调用工具时不把该轮自由文本作为最终回复，
+   * 而是把已闭合的工具 transcript 交给独立 Soul 阶段。缺省保持 Harness 原有行为。
+   */
+  finalResponseMode?: "deliver" | "handoff";
 }
 
 export interface HarnessResult {
@@ -317,6 +322,8 @@ export interface HarnessResult {
   terminal?: CyreneRunTerminalResult;
   /** 总执行轮数 */
   rounds: number;
+  /** finalResponseMode=handoff 时返回；不包含触发交接的无工具 assistant 自由文本。 */
+  handoffMessages?: ChatMessage[];
 }
 
 // ── 辅助类型 ─────────────────────────────────────────────

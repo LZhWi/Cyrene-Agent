@@ -159,6 +159,48 @@ describe("agui-bridge sticker event ordering", () => {
     );
   });
 
+  it("本轮固定桌面 Chat 记忆开关，设置中途变化也不写原生历史索引", async () => {
+    vi.resetModules();
+    mocks.handlers.clear();
+    mocks.getSession.mockReturnValue({ id: "chat-memory-snapshot", mode: "chat" });
+    const { registerAgUiIpc } = await import("./agui-bridge");
+    const { indexConversationTurn } = await import("./orchestrator/tools/history-tools");
+    const index = vi.mocked(indexConversationTurn);
+    index.mockClear();
+    let backend: "native" | "companion" = "companion";
+    const getBackend = vi.fn(() => backend);
+    const buildOptions = vi.fn(async () => {
+      backend = "native";
+      return {
+        options: {
+          settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 },
+          messages: [], timeoutMs: 1000, toolSystemContent: "TOOL", soulSystemBaseContent: "SOUL",
+        },
+        latestUserText: "测试快照",
+      };
+    });
+    const onFinished = vi.fn(async () => ({ sticker: null }));
+    const sent: Array<{ type?: string }> = [];
+    registerAgUiIpc(buildOptions, onFinished, () => null, undefined, undefined, undefined, getBackend);
+    const handler = mocks.handlers.get(IPC.AGUI_RUN);
+    if (!handler) throw new Error("AGUI_RUN handler was not registered");
+    await handler(
+      { sender: { isDestroyed: () => false, send: (_channel: string, event: { type?: string }) => sent.push(event) } },
+      { messages: [{ role: "user", content: "测试快照" }], sessionId: "chat-memory-snapshot" },
+    );
+    await expect.poll(() => sent.filter((event) => event.type === "RUN_FINISHED").length).toBe(1);
+    expect(getBackend).toHaveBeenCalledTimes(1);
+    expect(buildOptions).toHaveBeenCalledWith(expect.objectContaining({
+      chatBackendSnapshot: "companion",
+      runId: expect.any(String),
+    }));
+    expect(onFinished).toHaveBeenCalledWith(
+      expect.objectContaining({ reply: "抱抱你" }), "测试快照",
+      expect.objectContaining({ chatBackendSnapshot: "companion" }),
+    );
+    expect(index).not.toHaveBeenCalled();
+  });
+
   it("桌面轮次事件走协调器：开始登记、终态结算、落盘确认后发布一次", async () => {
     vi.resetModules();
     mocks.handlers.clear();
@@ -222,6 +264,7 @@ describe("agui-bridge sticker event ordering", () => {
       conversationId: "chat-pending",
       inputMessageId: "msg-user-1",
       finalMessageId: "msg-assistant-1",
+      chatBackend: "native",
       status: "success",
     }));
     expect(pendingTurns.pendingCount()).toBe(0);

@@ -70,6 +70,10 @@
         "secrets",
         "workspace",
         "conversations",
+        "assistant-delivery",
+        "screen-observation",
+        "user-presence",
+        "weather-context",
         "scheduler",
         "speech-input"
       ],

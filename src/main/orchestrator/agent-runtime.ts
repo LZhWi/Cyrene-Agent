@@ -89,6 +89,7 @@ export interface AgentRuntimeDeps {
   chatsStore: { getWorkspaceBinding: (conversationId: string) => { workspaceRoot: string; displayName: string; boundAt: number } | undefined };
   socialAtomStore: { listActive: (conversationId: string, now: number) => SocialAtom[] };
   buildPluginPromptContext: (input: PluginPromptBuildInput) => Promise<string>;
+  buildPluginStablePrompt: (input: Omit<import("../../plugins/api").PluginStablePromptProviderInput, "signal">) => Promise<string>;
   publishPluginHostEvent: <T>(event: string, payload: T) => Promise<void>;
   /** 工具完成事件发布入口；缺省不发布（早期装配与测试场景）。 */
   publishToolFinished?: (event: ToolFinishedInput) => void;
@@ -102,6 +103,7 @@ export interface AgentRunFinishedContext {
   conversationId: string;
   channel?: string;
   runId?: string;
+  chatBackendSnapshot?: "native" | "companion";
 }
 
 export interface AgentRuntime {
@@ -180,20 +182,20 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
       },
       resolveSlashActivation: ((messages, mode, overrides) =>
         resolveSlashActivation(messages as any, mode, overrides)) as BuildOptionsDeps["resolveSlashActivation"],
-      buildToneInjection: ((userText, messages, provider, index) =>
-        buildToneInjection(userText, messages as any, provider as any, index as any)) as BuildOptionsDeps["buildToneInjection"],
+      buildToneInjection: ((userText, messages, provider, index, toneRulesOverride) =>
+        buildToneInjection(userText, messages as any, provider as any, index as any, toneRulesOverride)) as BuildOptionsDeps["buildToneInjection"],
       sceneEmbeddingIndex: rawDeps.getSceneEmbeddingIndex(),
       getSceneEmbeddingProvider: (() =>
         rawDeps.getSceneEmbeddingProvider() as unknown) as BuildOptionsDeps["getSceneEmbeddingProvider"],
-      buildAlwaysOnContext: ((userText, messages) =>
-        buildAlwaysOnContext(userText, messages as any)) as BuildOptionsDeps["buildAlwaysOnContext"],
+      buildAlwaysOnContext: ((userText, messages, includeNativeChatContext) =>
+        buildAlwaysOnContext(userText, messages as any, includeNativeChatContext)) as BuildOptionsDeps["buildAlwaysOnContext"],
       buildRelationshipContext,
       buildModePrompt,
       buildToolSystemPrompt: ((mode, enabledTools) =>
         buildToolSystemPrompt(mode, enabledTools as ToolDefinition[])) as BuildOptionsDeps["buildToolSystemPrompt"],
       buildSoulSystemBasePrompt,
-      resolveRunCapabilities: ({ mode, activeSearchBackend, toolModeOverrides, skillModeOverrides, chatToolsEnabled }) => resolveRunCapabilities({
-        mode, activeSearchBackend, toolModeOverrides, skillModeOverrides, chatToolsEnabled,
+      resolveRunCapabilities: ({ mode, activeSearchBackend, toolModeOverrides, skillModeOverrides, desktopChat, useNativeChatSystems }) => resolveRunCapabilities({
+        mode, activeSearchBackend, toolModeOverrides, skillModeOverrides, desktopChat, useNativeChatSystems,
         toolRegistry: rawDeps.toolRegistry,
         skillRegistry: rawDeps.skillRegistry,
       }),
@@ -244,12 +246,14 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         return rawDeps.chatsStore.getWorkspaceBinding(conversationId);
       },
       buildPluginPromptContext: (input) => rawDeps.buildPluginPromptContext(input),
+      buildPluginStablePrompt: (input) => rawDeps.buildPluginStablePrompt(input),
     };
   }
 
   function buildOnRunFinishedDeps(): OnRunFinishedDeps {
     return {
       loadModelSettings: () => rawDeps.loadModelSettings(),
+      chatBackend: () => rawDeps.loadGeneralSettings().chatBackend,
       scheduleMemoryWrite,
       scheduleSocialAtomExtraction: (input) => rawDeps.socialContextScheduler.schedule(input),
       scheduleMomentsTurn: (input) => momentsService.scheduleTurn(input),
@@ -294,7 +298,7 @@ export function createAgentRuntime(rawDeps: AgentRuntimeDeps): AgentRuntime {
         onRunFinishedDeps,
         context.channel as ChannelId | undefined,
         context.conversationId,
-        { runId: context.runId, source: context.source, mode: context.mode },
+        { runId: context.runId, source: context.source, mode: context.mode, chatBackendSnapshot: context.chatBackendSnapshot },
       );
       // 调用方应只在成功终态进入收尾；此处再守住插件事件契约，避免未来新增入口误报完成。
       const terminalStatus = result.terminal?.status;

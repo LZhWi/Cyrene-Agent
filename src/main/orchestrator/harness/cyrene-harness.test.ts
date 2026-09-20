@@ -808,6 +808,29 @@ describe("CyreneHarness completion", () => {
     expect(toolMessage?.content).not.toContain("toolOutputRef");
   });
 
+  it("projects an untruncated tool result only once for the next model round", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ toolCalls: [mutationToolCall("single-output-call")] }),
+      assistantResponse({ text: "完成。" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockedDispatch.mockResolvedValue(successDispatchResult("single-output-call"));
+
+    await runCyreneHarness({
+      systemPrompt: "you are a test agent",
+      messages: [{ role: "user", content: "执行工具" }],
+      tools: [],
+      vendorConfig,
+    });
+
+    const secondRequest = fakeStreamChatWithSdk.mock.calls[1]?.[0].request as { messages: ChatMessage[] };
+    const toolMessage = secondRequest.messages.find((message) => message.role === "tool");
+    const observation = JSON.parse(toolMessage?.content ?? "{}");
+    expect(observation.output).toBe('{"success":true,"path":"/tmp/x","sizeBytes":5}');
+    expect(observation).not.toHaveProperty("message");
+    expect(observation).not.toHaveProperty("preview");
+  });
+
   it("checkpoints the transcript after tool work and before terminal settlement", async () => {
     const { fn: fetchMock } = fakeFetchSequencer([
       assistantResponse({ toolCalls: [mutationToolCall("checkpoint-call")] }),
@@ -1202,5 +1225,55 @@ describe("CyreneHarness context usage snapshots", () => {
     // cancelled 与其他终态共享统一结算：同样获得 terminal 快照（上下文环终态数据）
     const usageEvents = events.filter((event): event is Extract<HarnessEvent, { type: "context_usage" }> => event.type === "context_usage");
     expect(usageEvents.map((event) => event.snapshot.phase)).toEqual(["preRequest", "terminal"]);
+  });
+});
+
+describe("CyreneHarness final response handoff", () => {
+  beforeEach(() => {
+    mockedDispatch.mockReset();
+    fakeStreamChatWithSdk.mockClear();
+    recordUsage.mockReset();
+  });
+
+  it("drops the no-tool assistant text and returns only the closed tool transcript", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ text: "工具阶段不应展示", toolCalls: [mutationToolCall("handoff-1")] }),
+      assistantResponse({ text: "这段工具阶段自由文本也必须丢弃" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+    mockedDispatch.mockResolvedValue(successDispatchResult("handoff-1"));
+    const events: HarnessEvent[] = [];
+
+    const result = await runCyreneHarness({
+      systemPrompt: "tool-only prompt",
+      messages: [{ role: "user", content: "执行并告诉我结果" }],
+      tools: [],
+      vendorConfig,
+      finalResponseMode: "handoff",
+      onEvent: (event) => events.push(event),
+    });
+
+    expect(result.finalAnswer).toBe("");
+    expect(result.handoffMessages).toBeDefined();
+    expect(JSON.stringify(result.handoffMessages)).toContain("handoff-1");
+    expect(JSON.stringify(result.handoffMessages)).not.toContain("这段工具阶段自由文本也必须丢弃");
+    expect(events.some((event) => event.type === "final_answer")).toBe(false);
+  });
+
+  it("hands off an ordinary no-tool turn without persisting its decision text", async () => {
+    const { fn: fetchMock } = fakeFetchSequencer([
+      assistantResponse({ text: "无需工具，但这不是最终回复" }),
+    ]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await runCyreneHarness({
+      systemPrompt: "tool-only prompt",
+      messages: [{ role: "user", content: "你好" }],
+      tools: [],
+      vendorConfig,
+      finalResponseMode: "handoff",
+    });
+
+    expect(result.handoffMessages).toEqual([{ role: "user", content: "你好" }]);
   });
 });

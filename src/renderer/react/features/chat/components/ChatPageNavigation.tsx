@@ -20,6 +20,7 @@ export interface ChatPageNavigationProps {
   collapsed: boolean;
   activePanel: ChatPagePanel | null;
   mode: ConversationMode;
+  companionLifeStatus?: { text: string; resting: boolean } | null;
   sessions: ChatSessionMeta[];
   activeSessionId?: string;
   onToggleCollapsed: () => void;
@@ -41,6 +42,7 @@ export function ChatPageNavigation({
   collapsed,
   activePanel,
   mode,
+  companionLifeStatus,
   sessions,
   activeSessionId,
   onToggleCollapsed,
@@ -65,7 +67,17 @@ export function ChatPageNavigation({
         <SidebarToggle collapsed={collapsed} onToggle={onToggleCollapsed} />
       </div>
       <div className="cy-page-top-center">
-        {!hasOpenPanel && <ModeSwitch value={mode} onChange={onModeChange} />}
+        {!hasOpenPanel && (
+          <>
+            <ModeSwitch value={mode} onChange={onModeChange} />
+            {mode === "chat" && companionLifeStatus && (
+              <span className="cy-companion-life-status" aria-live="polite">
+                <span aria-hidden="true">{companionLifeStatus.resting ? "🌙" : "🌸"}</span>
+                <span className="cy-companion-life-status__text">昔涟 · {companionLifeStatus.text}</span>
+              </span>
+            )}
+          </>
+        )}
       </div>
       <div className="cy-page-windows">
         <WindowControls onMinimize={onMinimize} onMaximize={onMaximize} onClose={onCloseWindow} />

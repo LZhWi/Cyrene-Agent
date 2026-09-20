@@ -99,13 +99,15 @@ function getWorldbookTriggerText(userInput: string): string {
 export async function buildAlwaysOnContext(
   userInput: string,
   recentMessages: Array<{ role: string; content: string }>,
+  includeNativeChatContext = true,
 ): Promise<string> {
   const parts: string[] = [];
 
-  // ── 世界书 — 永远跑 ──────────────────────────────────
+  // ── 原生世界书 ────────────────────────────────────────
+  // 陪伴后端由插件私有 WorldBook 接管时，既不读取也不推进原生 DMAE。
   // DMAE：常驻始终注入；非常驻条目按 Activation 生命周期门控。
   // updateActivation 在调 LLM 之前跑 → 用户当轮命中的条目当轮就进 Prompt。
-  try {
+  if (includeNativeChatContext) try {
     const permanentWb = getPermanentWorldbookEntries();
     if (permanentWb.length > 0) {
       parts.push("【常驻背景】\n" + permanentWb.join("\n\n"));
@@ -133,8 +135,8 @@ export async function buildAlwaysOnContext(
     console.warn("[Orchestrator] worldbook dmae failed:", err);
   }
 
-  // ── L0/L1 画像 — 永远跑 ──────────────────────────────
-  try {
+  // ── L0/L1 画像 — 桌面 Chat 切换为插件记忆时不读取 ──────
+  if (includeNativeChatContext) try {
     const l0 = await memoryStore.getL0();
     const l1 = await memoryStore.getL1();
 

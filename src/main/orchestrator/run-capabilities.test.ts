@@ -30,36 +30,43 @@ describe("resolveRunCapabilities", () => {
     skillRegistry: { getEnabledForMode: (target: "work" | "learn" | "code") => skills.filter((item) => !item.modes || item.modes.includes(target)) as any },
   });
 
-  it("makes chat capability-free when enhancement off (builtins excepted)", () => {
-    // 总开关关闭时只剩内置人格工具，其余能力全空
+  it("keeps channel chat limited to builtin tools", () => {
+    // 非桌面 Chat（渠道）只保留内置人格工具。
     const result = resolveRunCapabilities(input("chat"));
     expect([...result.toolIds]).toEqual(["moments_view", "moments_post"]);
     expect(result.skills).toEqual([]);
   });
 
-  it("keeps chat tool-free when chatToolsEnabled but nothing opted in", () => {
-    // 总开关开启但无任何 chat override 勾选：除内置人格工具外仍然空——
-    // chat 严格 opt-in，未声明 modes 的工具（read_file）不得漏进闲聊。
-    const result = resolveRunCapabilities({ ...input("chat"), chatToolsEnabled: true });
-    expect([...result.toolIds]).toEqual(["moments_view", "moments_post"]);
+  it("仅在插件接管 Chat 时移除原生记忆工具，保留其他工具与模式", () => {
+    const extraTools = [...tools, tool("user_memory", ["chat"], true), tool("weather_chat", ["chat"], true)];
+    const scoped = {
+      ...input("chat"),
+      toolRegistry: { getEnabledToolsForMode: () => extraTools.filter((item) => item.modes?.includes("chat")) as any },
+    };
+    expect(resolveRunCapabilities(scoped).toolIds).toContain("user_memory");
+    const pluginMemory = resolveRunCapabilities({ ...scoped, useNativeChatSystems: false });
+    expect(pluginMemory.toolIds).not.toContain("user_memory");
+    expect(pluginMemory.toolIds).toContain("weather_chat");
+    expect(pluginMemory.toolIds).toContain("moments_view");
+  });
+
+  it("uses every mode-eligible tool for desktop Collab without per-tool opt-in", () => {
+    const result = resolveRunCapabilities({ ...input("chat"), desktopChat: true });
+    expect([...result.toolIds]).toEqual(["read_file", "weather", "moments_view", "moments_post"]);
     expect(result.skills).toEqual([]);
   });
 
-  it("exposes only explicitly opted-in tools for enhanced chat", () => {
-    // 勾选 weather（未声明 modes）→ 放行；read_file 未勾选 → 拦截；
-    // web_search 虽是搜索工具但后端 off 时被互斥过滤（与本测试无关）；
-    // skill 恒不暴露。
+  it("keeps explicit per-tool disable as the Collab escape hatch", () => {
     const result = resolveRunCapabilities({
       ...input("chat", { weather: { chat: true }, read_file: { chat: false } }),
-      chatToolsEnabled: true,
+      desktopChat: true,
     });
-    // 内置人格工具不依赖 opt-in，排在显式勾选的工具前面；不重复
-    expect([...result.toolIds]).toEqual(["moments_view", "moments_post", "weather"]);
+    expect([...result.toolIds]).toEqual(["weather", "moments_view", "moments_post"]);
     expect(result.skills).toEqual([]);
   });
 
-  it("chat 内置人格工具：总开关关闭也可见，显式勾掉即隐藏", () => {
-    // 总开关关闭：chatBuiltin 工具仍放行（人格能力不依赖工具增强开关）
+  it("chat 内置人格工具：渠道可见，显式勾掉即隐藏", () => {
+    // 渠道 Chat 的 chatBuiltin 工具仍放行。
     const off = resolveRunCapabilities(input("chat"));
     expect([...off.toolIds]).toEqual(["moments_view", "moments_post"]);
 
@@ -67,13 +74,13 @@ describe("resolveRunCapabilities", () => {
     const banned = resolveRunCapabilities(input("chat", { moments_post: { chat: false } }));
     expect([...banned.toolIds]).toEqual(["moments_view"]);
 
-    // chatBuiltin 工具被 opt-in 显式勾选时不重复出现
+    // Collab 全量集合中 chatBuiltin 也不重复出现
     const dup = resolveRunCapabilities({
       ...input("chat", { moments_view: { chat: true }, weather: { chat: true } }),
-      chatToolsEnabled: true,
+      desktopChat: true,
     });
     expect(dup.tools.filter((t) => t.id === "moments_view")).toHaveLength(1);
-    expect([...dup.toolIds]).toEqual(["moments_view", "moments_post", "weather"]);
+    expect([...dup.toolIds]).toEqual(["read_file", "weather", "moments_view", "moments_post"]);
   });
 
   it("honors mode filtering for tools and skills", () => {

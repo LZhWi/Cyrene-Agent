@@ -603,4 +603,40 @@ describe("CyreneAgent chat tool enhancement branch", () => {
     });
     sub.unsubscribe();
   });
+
+  it("routes two-phase Collab through Harness and supplies a no-tools Soul finalizer", async () => {
+    mockedRunHarnessWithAdapter.mockResolvedValueOnce({
+      reply: "final",
+      toolResults: [],
+      completionReason: "no_tool",
+    });
+    const agent = new CyreneAgent({ threadId: "thread-collab" });
+
+    await new Promise<void>((resolve, reject) => {
+      agent.runWithEvents({
+        settings: { provider: "test", baseUrl: "", model: "", apiKey: "", contextWindowTokens: 256000 } as never,
+        messages: [{ role: "user", content: "你好" }] as never,
+        timeoutMs: 60000,
+        toolSystemContent: "TOOLS",
+        soulSystemBaseContent: "SOUL",
+        soulRuntimeContext: "MEMORY",
+        soulTailAnchorContent: "TAIL",
+        executionMode: "chat",
+        chatResponseMode: "two-phase",
+        tools: [],
+        runId: "run-collab",
+      }).subscribe({ complete: resolve, error: reject });
+    });
+
+    expect(mockedRunHarnessWithAdapter).toHaveBeenCalledOnce();
+    expect(mockedRunChatLoop).not.toHaveBeenCalled();
+    const handoff = mockedRunHarnessWithAdapter.mock.calls[0]?.[3];
+    expect(handoff).toBeDefined();
+    await handoff!.finalize([{ role: "user", content: "你好" }] as never);
+    expect(mockedRunChatLoop).toHaveBeenCalledWith(expect.objectContaining({
+      messages: [{ role: "user", content: "你好" }],
+      soulSystemBaseContent: "SOUL",
+      runtimeContext: "TAIL",
+    }));
+  });
 });

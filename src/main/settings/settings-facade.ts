@@ -41,6 +41,7 @@ const DEFAULT_GENERAL_SETTINGS: GeneralSettings = {
   citaEnabled: false,
   citaSemanticEngine: "remote",
   chatSocialContextEnabled: false,
+  chatBackend: "native",
   momentsEnabled: true,
   chatMomentsContextEnabled: true,
   cyreneMomentsPostingEnabled: false,
@@ -155,6 +156,8 @@ function notifyGeneralSettingsChanged(before: GeneralSettings, after: GeneralSet
 export function normalizeGeneralSettings(
   input: Partial<GeneralSettings> | null | undefined,
 ): GeneralSettings {
+  const legacyNativeChatMemoryEnabled = (input as { nativeChatMemoryEnabled?: unknown } | null | undefined)
+    ?.nativeChatMemoryEnabled;
   const windowVisibility = normalizeWindowVisibilitySettings(input);
   const cita = normalizeCitaSettings({
     enabled: input?.citaEnabled,
@@ -188,6 +191,12 @@ export function normalizeGeneralSettings(
     citaEnabled: cita.enabled,
     citaSemanticEngine: cita.semanticEngine,
     chatSocialContextEnabled: normalizeChatSocialContextEnabled(input?.chatSocialContextEnabled),
+    chatBackend: input?.chatBackend === "companion" || input?.chatBackend === "native"
+      ? input.chatBackend
+      // 兼容已经写入过上一版布尔开关的隔离测试配置；不删除旧字段。
+      : legacyNativeChatMemoryEnabled === false
+        ? "companion"
+        : DEFAULT_GENERAL_SETTINGS.chatBackend,
     momentsEnabled: input?.momentsEnabled === undefined
       ? DEFAULT_GENERAL_SETTINGS.momentsEnabled
       : Boolean(input.momentsEnabled),

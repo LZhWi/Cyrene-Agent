@@ -6,9 +6,11 @@ import { cp, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
+import { createRequire } from "node:module";
 import { build } from "esbuild";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+const require = createRequire(import.meta.url);
 const sdkDir = path.join(repoRoot, "packages", "plugin-sdk");
 const sdkSrc = path.join(sdkDir, "src");
 
@@ -25,7 +27,8 @@ await rm(dist, { recursive: true, force: true });
 // tsc：CJS + d.ts（直接驱动仓库内 TypeScript 的 js 入口，避免跨平台 .cmd 派生问题）
 execFileSync(
   process.execPath,
-  [path.join(repoRoot, "node_modules", "typescript", "bin", "tsc"), "-p", path.join(sdkDir, "tsconfig.json")],
+  // 兼容 npm 把 TypeScript 提升到父级 node_modules 的工作区布局，避免硬编码仓库内路径。
+  [require.resolve("typescript/bin/tsc"), "-p", path.join(sdkDir, "tsconfig.json")],
   { cwd: repoRoot, stdio: "inherit" },
 );
 

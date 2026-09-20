@@ -302,9 +302,14 @@ function toolResultMessage(
   observation: ToolObservation | { outcome: string; reason: string },
 ): ChatMessage {
   const modelObservation = { ...observation } as Record<string, unknown>;
-  if (modelObservation.truncated === true) {
-    modelObservation.output = modelObservation.preview ?? modelObservation.message;
-  }
+  // dispatcher 的 message / preview / output 在未截断时通常是同一正文；全部回传会让
+  // Tool 后续轮和 Soul handoff 各看到三份结果。模型侧只保留一个 output，运行时完整
+  // 输出仍由 toolOutputRef/checkpoint 独立保存。
+  modelObservation.output = modelObservation.truncated === true
+    ? modelObservation.preview ?? modelObservation.message
+    : modelObservation.output ?? modelObservation.preview ?? modelObservation.message;
+  delete modelObservation.message;
+  delete modelObservation.preview;
   delete modelObservation.rawResult;
   delete modelObservation.toolOutputRef;
   return {

@@ -298,6 +298,7 @@ const text = await ctx.deps.llm.generateText(
 ```js
 ctx.registerPromptProvider({
   id: "status",
+  priority: 0, // 可选：-1000..1000，越小越靠前；同值保持注册顺序
   modes: ["chat"],
   async provide({ userText, signal }) {
     if (signal.aborted) return "";
@@ -307,6 +308,7 @@ ctx.registerPromptProvider({
 ```
 
 - `id` 只需在当前插件内唯一，框架会自动加插件命名空间
+- `priority` 可选：-1000 至 1000 的整数，越小越靠前；未声明为 0，同值保持注册顺序
 - `modes` 可选：`chat` / `work` / `learn` / `code`；不写表示全部模式
 - 返回空字符串表示本轮不注入
 - 单个 Provider 最多等待 2 秒、最多 16000 字符；失败或超时不会打断对话
@@ -314,6 +316,28 @@ ctx.registerPromptProvider({
 - 停用插件时会自动注销；也可调用 `ctx.unregisterPromptProvider("status")`
 
 这些内容只进入每轮动态上下文，不会改写核心提示词文件，也不会进入稳定提示词缓存前缀。
+
+### 为陪伴 Chat 提供稳定分阶段提示词
+
+当宿主明确选择插件陪伴后端时，插件还可以注册稳定提示词 Provider。旧 Provider 不写 `target`
+时等价于 `"soul"`；可选目标为：
+
+- `"soul"`：最终回复的人格稳定前缀；
+- `"tool"`：Tool 阶段的稳定调度规则；
+- `"tone"`：交给宿主场景匹配器的基础语气规则；
+- `"soul-tail"`：只在两阶段 Chat 最终 Soul 生成前追加的近端行为锚点。
+
+```js
+ctx.registerStablePromptProvider?.({
+  id: "final-anchor",
+  modes: ["chat"],
+  target: "soul-tail",
+  provide() { return "最终回复必须遵守的稳定规则"; },
+});
+```
+
+稳定 Provider 不接收本轮用户正文。上述目标只供桌面 `companion` Chat 使用，不会改变原生后端、
+外部渠道或 Work、Code、Learn；插件停用时会随插件上下文一同注销。
 
 `sources` 声明 Provider 参与的场景，可选值为 `"conversation"`（用户会话）/ `"scheduler"`（定时任务）/ `"moments-post"`（动态发帖决策）：
 
@@ -370,6 +394,8 @@ await ctx.events.emit("updated", { value: 1 });
 - `host:turn:completed`：桌面或外部渠道的一轮对话成功完成。首版 payload 仅含
   `source`、`mode`、`conversationId` 和可选 `channel` / `runId`，不广播对话原文，
   也不含完整历史、模型配置或工具内部状态。
+- `host:assistant-message:feedback`：通过 `assistant-delivery` 投递并显式声明反馈入口的消息收到
+  `ignore` 操作；只提供插件、会话、消息 ID 与时间元数据，不提供正文。
 
 ```js
 ctx.events.on("host:turn:completed", ({ conversationId, source, mode }) => {
@@ -426,7 +452,7 @@ async register(ctx) {
 |---|---|
 | 启用报错“工具 id 必须以 xxx 开头” | 工具 id 没加 `<插件id>_` 前缀 |
 | 启用报错“version 不是 SemVer” | 版本号要写 `1.0.0`，不能是 `1.0` 或 `v1.0` |
-| 启用报错“deps 含未知值” | `deps` 接受 `channels` / `llm` / `secrets` / `workspace` / `conversations` / `scheduler` / `speech-input`，检查拼写 |
+| 启用报错“deps 含未知值” | `deps` 接受 `channels` / `llm` / `secrets` / `workspace` / `conversations` / `assistant-delivery` / `screen-observation` / `user-presence` / `weather-context` / `scheduler` / `speech-input`，检查拼写 |
 | AI 不用我的工具 | description 没写清楚使用场景，AI 不知道何时该调 |
 | 弹窗图片不显示 | 用相对路径且文件确实打进了包里 |
 | 改了代码没生效 | 聊天窗口插件面板点“刷新插件”（会清模块缓存重新加载） |

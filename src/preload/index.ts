@@ -97,6 +97,8 @@ const chatApi = {
   getImageSendStrategy: (sessionId?: string) =>
     ipcRenderer.invoke(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, sessionId ? { sessionId } : undefined),
   getGeneralSettings: () => ipcRenderer.invoke(IPC.SETTINGS_GET_GENERAL),
+  // 陪伴插件仅向原生 Chat 暴露同源的短生活状态；插件未运行时 invoke 会拒绝，渲染端降级隐藏。
+  getCompanionLifeStatus: () => ipcRenderer.invoke("plugin:companion-chat:life-status"),
   getReasoningState: (payload?: { sessionId?: string }) => ipcRenderer.invoke(IPC.CHAT_GET_REASONING_STATE, payload),
   setReasoning: (payload: { sessionId?: string; providerKey: string; preference: unknown }) => ipcRenderer.invoke(IPC.CHAT_SET_REASONING, payload),
   // 截图
@@ -680,6 +682,8 @@ const chatStoreApi = {
     ipcRenderer.invoke(IPC.CHATS_UPSERT, { id, message }),
   setMessageTtsCacheKey: (id: string, messageId: string, cacheKey: string, converterVersion: string) =>
     ipcRenderer.invoke(IPC.CHATS_SET_MESSAGE_TTS_CACHE, { id, messageId, cacheKey, converterVersion }),
+  ignorePluginMessage: (conversationId: string, messageId: string) =>
+    ipcRenderer.invoke(IPC.CHATS_IGNORE_PLUGIN_MESSAGE, { conversationId, messageId }) as Promise<{ ok: boolean }>,
   replaceMessages: (id: string, messages: unknown[]) =>
     ipcRenderer.invoke(IPC.CHATS_REPLACE_MESSAGES, { id, messages }),
   replaceTail: (id: string, startIndex: number, messages: unknown[]) =>

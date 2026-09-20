@@ -48,6 +48,30 @@ describe("chat page normalizers", () => {
     expect(toUiMessages(session)[0].modelContext).toBe("[QQ群发送者：伙伴]\n大家好");
   });
 
+  it("preserves host-authored plugin delivery feedback state", () => {
+    const session: ChatSession = {
+      id: "proactive-1",
+      title: "主动消息",
+      identityId: null,
+      mode: "chat",
+      purpose: "proactive-chat",
+      schemaVersion: 1,
+      createdAt: 1,
+      updatedAt: 2,
+      messages: [{
+        id: "message-1",
+        role: "model",
+        content: "记得休息一下呀。",
+        at: 2,
+        pluginDelivery: { pluginId: "companion-chat", ignoreFeedback: "pending" },
+      }],
+    };
+    expect(toUiMessages(session)[0].pluginDelivery).toEqual({
+      pluginId: "companion-chat",
+      ignoreFeedback: "pending",
+    });
+  });
+
   it("drops invalid persisted channel metadata during hydration", () => {
     const session: ChatSession = {
       id: "conversation-1",

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "../../../i18n";
 import toolIconUrl from "../../../assets/tools.png?url";
 import "./ToolModePanel.css";
@@ -24,43 +24,8 @@ const BASE_TABS: Array<{ key: TabKey; label: string }> = [
   { key: "work", label: "Work" },
   { key: "code", label: "Code" },
   { key: "learn", label: "Learn" },
+  { key: "chat", label: "Chat" },
 ];
-
-/** Chat 模式首次开启工具增强时预勾选的白名单：音乐全量 + 幂等只读。
- *  播放类是闲聊刚需故全放（input-control 级仍受权限档位门控）；
- *  只读类无副作用。写入后完全由用户接管，后续开关不再覆盖。 */
-const CHAT_TOOL_WHITELIST = [
-  // 音乐工具（全量）
-  "music_search",
-  "music_get_daily_recommendations",
-  "music_get_playback_status",
-  "music_my_playlists",
-  "music_playlist_detail",
-  "music_play_track",
-  "music_play_playlist",
-  "music_stop_playback",
-  "music_create_playlist",
-  "music_add_to_playlist",
-  "music_toggle_favorite",
-  "music_remove_from_playlist",
-  // 幂等只读
-  "weather",
-  "web_search",
-  "fetch_url",
-  "translate",
-  "exchange_rate",
-  "query_expense",
-  "recall_history",
-];
-
-/** Chat 模式可见性：严格 opt-in，仅显式勾选（override.chat===true）放行；
- *  内置人格工具（chatBuiltin）默认放行——与主进程 run-capabilities 同口径，
- *  用户勾掉（override.chat===false）后关闭。 */
-function isChatToolOn(tool: ToolCatalogItem, overrides: Overrides): boolean {
-  const override = overrides[tool.id]?.chat;
-  if (override !== undefined) return override;
-  return tool.chatBuiltin === true;
-}
 
 function GithubIcon() {
   return (
@@ -140,11 +105,6 @@ export const ToolModePanel: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("");
   const [tab, setTab] = useState<TabKey>("code");
-  // Chat 模式工具增强总开关（general-settings.chatToolsEnabled）
-  const [chatToolsEnabled, setChatToolsEnabled] = useState(false);
-  // 关总开关时若停在 Chat tab，回退到 Code（避免 tab 悬空）。
-  const tabRef = useRef<TabKey>("code");
-  tabRef.current = tab;
 
   useEffect(() => {
     let cancelled = false;
@@ -152,13 +112,11 @@ export const ToolModePanel: React.FC = () => {
     Promise.all([
       api?.getToolCatalog?.() ?? Promise.resolve([]),
       api?.getToolModeOverrides?.() ?? Promise.resolve({}),
-      api?.getGeneral?.() ?? Promise.resolve({}),
     ])
-      .then(([catalog, ov, general]) => {
+      .then(([catalog, ov]) => {
         if (cancelled) return;
         setTools(catalog as ToolCatalogItem[]);
         setOverrides(ov as Overrides);
-        setChatToolsEnabled((general as { chatToolsEnabled?: boolean }).chatToolsEnabled === true);
       })
       .catch((err) => console.warn("[ToolModePanel] load failed:", err))
       .finally(() => !cancelled && setLoading(false));
@@ -175,40 +133,7 @@ export const ToolModePanel: React.FC = () => {
       ?.catch((err) => console.warn("[ToolModePanel] set override failed:", err));
   }, []);
 
-  /** 总开关切换：首次开启（尚无任何 chat override）时预勾选白名单，一次性初始化。 */
-  const toggleChatTools = useCallback((next: boolean) => {
-    const prevOverrides = overrides;
-    const hasChatOverride = Object.values(prevOverrides).some((m) => m?.chat !== undefined);
-    let payload: Record<string, unknown> = { chatToolsEnabled: next };
-    let nextOverrides = prevOverrides;
-    if (next && !hasChatOverride) {
-      // 只预勾选目录里存在且全局启用的白名单工具，避免写入死键。
-      const available = new Set(tools.filter((t) => !t.deprecated && t.enabled).map((t) => t.id));
-      const initialized: Overrides = { ...prevOverrides };
-      for (const toolId of CHAT_TOOL_WHITELIST) {
-        if (available.has(toolId)) {
-          initialized[toolId] = { ...(initialized[toolId] ?? {}), chat: true };
-        }
-      }
-      nextOverrides = initialized;
-      payload = { chatToolsEnabled: true, toolModeOverrides: initialized };
-    }
-    setChatToolsEnabled(next);
-    setOverrides(nextOverrides);
-    void window.settings
-      ?.saveGeneral?.(payload)
-      ?.catch((err) => console.warn("[ToolModePanel] save general failed:", err));
-    if (next) setTab("chat");
-    else if (tabRef.current === "chat") setTab("code");
-  }, [overrides, tools]);
-
-  const TABS = useMemo(
-    () => (chatToolsEnabled ? [...BASE_TABS, { key: "chat" as TabKey, label: "Chat" }] : BASE_TABS),
-    [chatToolsEnabled],
-  );
-
   const isToolOn = useCallback((tool: ToolCatalogItem, mode: TabKey, ov: Overrides): boolean => {
-    if (mode === "chat") return isChatToolOn(tool, ov);
     return isVisibleForMode(tool, mode, ov);
   }, []);
 
@@ -240,26 +165,9 @@ export const ToolModePanel: React.FC = () => {
         <img className="tool-panel__heading-icon" src={toolIconUrl} alt="" />
         <h1 className="tool-panel__title">{t("toolPanel.title")}</h1>
         <p className="tool-panel__subtitle">
-          {t("toolPanel.subtitle", { mode: TABS.find((item) => item.key === tab)?.label })}
+          {t("toolPanel.subtitle", { mode: BASE_TABS.find((item) => item.key === tab)?.label })}
         </p>
       </header>
-
-      <div className="tool-panel__master">
-        <div className="tool-panel__master-text">
-          <strong>{t("toolPanel.chatEnhanceTitle")}</strong>
-          <span>{t("toolPanel.chatEnhanceDesc")}</span>
-        </div>
-        <button
-          type="button"
-          role="switch"
-          aria-checked={chatToolsEnabled}
-          aria-label={t("toolPanel.chatEnhanceTitle")}
-          className={"tool-card__pill tool-panel__master-pill" + (chatToolsEnabled ? " is-on" : "")}
-          onClick={() => toggleChatTools(!chatToolsEnabled)}
-        >
-          <span className="tool-card__pill-knob" />
-        </button>
-      </div>
 
       <div className="tool-panel__search-row">
         <input
@@ -271,7 +179,7 @@ export const ToolModePanel: React.FC = () => {
       </div>
 
       <div className="tool-panel__tabs">
-        {TABS.map((tabItem) => (
+        {BASE_TABS.map((tabItem) => (
           <button
             key={tabItem.key}
             type="button"

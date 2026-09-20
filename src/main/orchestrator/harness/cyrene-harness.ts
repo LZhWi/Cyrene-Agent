@@ -102,6 +102,7 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     if (input.signal?.aborted) return cancelledResult(run);
     // 工具轮上限在下一次模型请求前检查：避免超限后再产生一次 LLM 调用。
     if (run.config.maxRounds > 0 && run.rounds >= run.config.maxRounds) {
+      if (input.finalResponseMode === "handoff") return handoffResult(run, "max_rounds");
       const finalAnswer = run.streamController.getBuffered() || buildMaxRoundsReply(run.state, run.config.maxRounds);
       input.onEvent?.({ type: "final_answer", content: finalAnswer });
       return finishRun(run, finalAnswer, true, "max_rounds");
@@ -140,12 +141,6 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
       return finishRun(run, `抱歉，模型调用失败：${errorMsg}`, true, "error");
     }
 
-    // ── Assistant response 必须写回 transcript（否则模型下一轮看不到自己上一轮的回复）──
-    run.messages.push(toAssistantMessage(response));
-    if (response.text) {
-      run.streamController.bufferProgressContent(response.text);
-    }
-
     // ── 截断可见化：finishReason=length 表示命中输出上限 ──
     // 各协议统一映射为 "length"（anthropic-normalizer / responses-normalizer / openai 透传）。
     if (response.finishReason === "length") {
@@ -155,6 +150,10 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     // ── Tool Call Processing ──
     const toolCalls = response.toolCalls ?? [];
     if (toolCalls.length > 0) {
+      // 只有确实发起工具调用的 assistant 消息才属于两阶段 transcript。
+      // handoff 前最后一轮的自由文本是工具决策残留，必须丢弃。
+      run.messages.push(toAssistantMessage(response));
+      if (response.text) run.streamController.bufferProgressContent(response.text);
       let outcome: ToolRoundOutcome;
       try {
         outcome = await runToolRound(run, toolCalls);
@@ -174,6 +173,13 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
     }
 
     // ── Model Wants to End（模型不再调用工具 = 主动结束当前 turn）──
+    if (input.finalResponseMode === "handoff") {
+      input.onEvent?.({ type: "round_end", roundId });
+      return handoffResult(run, undefined);
+    }
+    // 默认 Harness 必须把最终 assistant 写回 transcript，保持既有检查点与恢复语义。
+    run.messages.push(toAssistantMessage(response));
+    if (response.text) run.streamController.bufferProgressContent(response.text);
     // 不再检查 completionObligations 或 uncertainEffects：模型已选择结束当前 turn。
     // uncertainEffects 仍作为执行期安全状态保留（阻止相同危险副作用自动重放），
     // 但不参与 final settlement。
@@ -188,9 +194,27 @@ export async function runCyreneHarness(input: HarnessInput): Promise<HarnessResu
   }
 
   // ── 兜底：显式配置的总超时 ──
+  if (input.finalResponseMode === "handoff") return handoffResult(run, "timeout");
   const finalAnswer = run.streamController.getBuffered() || buildTimeoutReply(run.state);
   input.onEvent?.({ type: "final_answer", content: finalAnswer });
   return finishRun(run, finalAnswer, true, "timeout");
+}
+
+/** 两阶段 Chat 的中间出口：结算工具阶段，但不产生或展示用户可见回复。 */
+function handoffResult(
+  run: HarnessRun,
+  reason: "max_rounds" | "timeout" | undefined,
+): HarnessResult {
+  run.streamController.discardProgressBuffer();
+  settleRun(run);
+  return {
+    finalAnswer: "",
+    finalState: deepClone(run.state),
+    terminated: false,
+    rounds: run.rounds,
+    handoffMessages: run.messages.map((message) => deepClone(message)),
+    ...(reason ? { terminateReason: reason } : {}),
+  };
 }
 
 // ═══ 运行准备 ═════════════════════════════════════════════

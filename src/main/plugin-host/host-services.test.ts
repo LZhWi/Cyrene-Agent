@@ -7,6 +7,12 @@ import { createHostServiceFactory } from "./host-services";
 import type { PluginSchedulerStore } from "./scheduler-service";
 import type { SafeStorageLike } from "./secrets-service";
 
+vi.mock("electron", () => ({
+  app: { getPath: vi.fn(() => "") },
+  shell: {},
+  webContents: { fromId: vi.fn() },
+}));
+
 const fakeStorage: SafeStorageLike = {
   isEncryptionAvailable: () => true,
   encryptString: (plainText) => Buffer.from(`enc:${plainText}`, "utf8"),
@@ -17,6 +23,13 @@ const reader = {
   listSessions: () => [],
   getSession: () => null,
   getWorkspaceBinding: () => undefined,
+};
+const assistantDeliverySink = {
+  append: vi.fn(async ({ text }: { pluginId: string; text: string }) => ({
+    conversationId: "proactive-1",
+    messageId: `message-${text}`,
+    at: "2026-09-18T00:00:00.000Z",
+  })),
 };
 
 /** 内存版调度存储假件：真实行为由 scheduler-store 测试覆盖。 */
@@ -79,6 +92,13 @@ function factory() {
     llm: { generateText: async () => "llm-result" },
     storage: fakeStorage,
     chatsReader: reader,
+    assistantDeliverySink,
+    screenObservation: { observe: async ({ focus } = {}) => `screen:${focus ?? ""}` },
+    userPresence: { snapshot: async () => ({ at: "2026-09-20T00:00:00.000Z", idleSeconds: 12, screenLocked: false }) },
+    weatherContext: { snapshot: async () => ({
+      observedAt: "2026-09-20T00:00:00.000Z", expiresAt: "2026-09-20T00:30:00.000Z",
+      category: "clear", temperatureC: 24, precipitationMm: 0,
+    }) },
     schedulerStore,
   });
 }
@@ -103,6 +123,18 @@ describe("宿主服务装配工厂", () => {
     expect(await a.workspace?.getBinding("conv-1")).toBeNull();
     const listPage = await a.conversations?.list();
     expect(listPage?.items).toEqual([]);
+    await expect(a.assistantDelivery?.postProactiveMessage("你好")).resolves.toMatchObject({
+      conversationId: "proactive-1",
+      messageId: "message-你好",
+    });
+    expect(assistantDeliverySink.append).toHaveBeenCalledWith({
+      pluginId: "plugin-a",
+      text: "你好",
+      allowIgnoreFeedback: false,
+    });
+    expect(await a.screenObservation?.observe({ focus: "当前窗口" })).toBe("screen:当前窗口");
+    expect(await a.userPresence?.snapshot()).toMatchObject({ idleSeconds: 12, screenLocked: false });
+    expect(await a.weatherContext?.snapshot()).toMatchObject({ category: "clear", temperatureC: 24 });
 
     // scheduler 服务已装配且能创建任务（新任务必然处于停用状态等待用户授权）
     const created = await a.scheduler?.createTask({
@@ -131,10 +163,19 @@ describe("宿主服务装配工厂", () => {
     await expect(deps.conversations?.list()).rejects.toSatisfy(
       (err: unknown) => isPluginHostError(err) && err.code === "E_PLUGIN_STOPPING",
     );
+    await expect(deps.assistantDelivery?.postProactiveMessage("你好")).rejects.toSatisfy(
+      (err: unknown) => isPluginHostError(err) && err.code === "E_PLUGIN_STOPPING",
+    );
     await expect(deps.workspace?.getBinding("conv-1")).rejects.toSatisfy(
       (err: unknown) => isPluginHostError(err) && err.code === "E_PLUGIN_STOPPING",
     );
     await expect(deps.scheduler?.listTasks()).rejects.toSatisfy(
+      (err: unknown) => isPluginHostError(err) && err.code === "E_PLUGIN_STOPPING",
+    );
+    await expect(deps.userPresence?.snapshot()).rejects.toSatisfy(
+      (err: unknown) => isPluginHostError(err) && err.code === "E_PLUGIN_STOPPING",
+    );
+    await expect(deps.weatherContext?.snapshot()).rejects.toSatisfy(
       (err: unknown) => isPluginHostError(err) && err.code === "E_PLUGIN_STOPPING",
     );
   });
@@ -153,6 +194,7 @@ describe("宿主服务装配工厂", () => {
       createAgentRunner,
       storage: fakeStorage,
       chatsReader: reader,
+      assistantDeliverySink,
       schedulerStore,
     } as never);
 

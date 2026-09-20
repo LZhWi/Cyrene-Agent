@@ -10,6 +10,7 @@ import type {
   PluginLlmService,
   PluginManifest,
   PluginPromptProvider,
+  PluginStablePromptProvider,
   PluginTool,
 } from "./types";
 import type { PluginPromptRegistry } from "./prompts";
@@ -27,6 +28,10 @@ const DEP_TO_FIELD: Record<string, keyof PluginDeps> = {
   secrets: "secrets",
   workspace: "workspace",
   conversations: "conversations",
+  "assistant-delivery": "assistantDelivery",
+  "screen-observation": "screenObservation",
+  "user-presence": "userPresence",
+  "weather-context": "weatherContext",
   scheduler: "scheduler",
   "speech-input": "speechInput",
 };
@@ -59,7 +64,7 @@ export interface PluginRuntime {
   };
   registerIpc: (channel: string, handler: (...args: unknown[]) => unknown) => void;
   unregisterIpc: (channel: string) => void;
-  promptRegistry: Pick<PluginPromptRegistry, "register" | "unregister">;
+  promptRegistry: Pick<PluginPromptRegistry, "register" | "unregister" | "registerStable" | "unregisterStable">;
   /** 宿主服务工厂；新宿主服务只允许从这里注入，不再向 PluginContext 增加特例。 */
   hostServices?: PluginHostServiceFactory;
   /** 未提供工厂时的兼容入口：宿主基础 LLM 服务（由框架包装 purpose 前缀）。 */
@@ -212,6 +217,20 @@ export function createContext(
       }
       runtime.promptRegistry.unregister(id, providerId);
       tracker.forget("prompt-provider", providerId);
+    },
+    registerStablePromptProvider(provider: PluginStablePromptProvider) {
+      assertAcceptingResources("注册稳定提示词 Provider");
+      runtime.promptRegistry.registerStable(id, provider, abortController.signal);
+      tracker.track("stable-prompt-provider", provider.id, () => {
+        runtime.promptRegistry.unregisterStable(id, provider.id);
+      });
+    },
+    unregisterStablePromptProvider(providerId) {
+      if (!tracker.has("stable-prompt-provider", providerId)) {
+        throw new Error(`不能注销不属于当前插件的稳定提示词 Provider: ${providerId}`);
+      }
+      runtime.promptRegistry.unregisterStable(id, providerId);
+      tracker.forget("stable-prompt-provider", providerId);
     },
     registerIpc(channel, handler) {
       if (!IPC_SEGMENT_RE.test(channel)) {

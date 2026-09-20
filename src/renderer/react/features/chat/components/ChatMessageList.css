@@ -925,6 +925,27 @@
   opacity: 0.35;
 }
 
+.cy-message-ignore-button {
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: #8e8e93;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+}
+
+.cy-message-ignore-button:hover {
+  color: var(--cy-accent);
+  background: rgb(255 255 255 / 38%);
+}
+
+.cy-message-ignore-button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
 .cy-last-turn-action__regenerate-icon {
   transform-origin: center;
   transition: transform 0.45s cubic-bezier(0.2, 0.75, 0.25, 1);

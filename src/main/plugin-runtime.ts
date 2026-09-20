@@ -1,8 +1,10 @@
-import { app, dialog, safeStorage } from "electron";
+import { app, dialog, powerMonitor, safeStorage } from "electron";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { channelManager } from "./channels/manager";
 import type { ChannelId } from "./channels/types";
 import * as chatsStore from "./chats/chats-store";
+import { broadcastChatsChanged } from "./chats/chats-ipc";
 import { toolRegistry } from "./orchestrator/tools/registry/tool-registry";
 import { loadGeneralSettings, saveGeneralSettings } from "./settings/settings-facade";
 import { loadModelSettings, resolveModelSettingsProfile } from "./settings/model-settings";
@@ -14,6 +16,10 @@ import { activeChatTargetRegistry } from "./plugin-host/active-chat-target";
 import { createSpeechInputService } from "./plugin-host/speech-input-service";
 import { createSpeechInputCommitBridge } from "./plugin-host/speech-input-commit-bridge";
 import { createSpeechInputCallController } from "./plugin-host/speech-input-call-controller";
+import { createScreenObservationService } from "./plugin-host/screen-observation-service";
+import { createUserPresenceService } from "./plugin-host/user-presence-service";
+import { createWeatherContextService } from "./plugin-host/weather-context-service";
+import { readConfiguredWeatherObservation } from "./orchestrator/tools/builtin-tools/weather-tool";
 import { installPluginPanelProtocol } from "./plugin-panel-protocol";
 import { createPluginIpcRouter } from "../plugins/ipc-router";
 import { PluginManager } from "../plugins/manager";
@@ -28,6 +34,7 @@ import type { LlmClient } from "./services/llm/llm-client";
 import { enqueueLLMTask } from "./llm-queue";
 import type { IpcScope } from "./application/ipc-scope";
 import type { AgentRuntime } from "./orchestrator/agent-runtime";
+import type { NormalizedScreenRegion } from "./plugin-host/screen-observation-diff";
 
 /** 调度存储视图：插件服务读写任务，卸载清理时按归属批量删除插件任务。 */
 export type PluginRuntimeSchedulerStore = PluginSchedulerStore & {
@@ -48,6 +55,8 @@ export interface PluginRuntimeDeps {
    * sender 校验的依据；未提供时面板转发一律拒绝（fail-closed）。
    */
   getPanelHostWebContents?: () => Electron.WebContents | null;
+  /** 当前主屏内需要从后台变化比较中排除的宿主动态区域。 */
+  getScreenObservationExcludedRegions?: () => NormalizedScreenRegion[];
 }
 
 export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<PluginManager> {
@@ -88,7 +97,7 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
       },
       promptRegistry: pluginPromptRegistry,
       // 宿主服务统一从工厂注入：channels、llm、secrets、workspace、
-      // conversations 和 scheduler 在 plugin-host/host-services.ts 装配；
+      // conversations、assistant-delivery 和 scheduler 在 plugin-host/host-services.ts 装配；
       // 后续新服务只扩展装配工厂，不再向 PluginContext 加特例。
       hostServices: createHostServiceFactory({
         pluginDataRoot,
@@ -110,6 +119,35 @@ export async function startPluginRuntime(deps: PluginRuntimeDeps): Promise<Plugi
         }),
         storage: safeStorage,
         chatsReader: chatsStore,
+        assistantDeliverySink: {
+          append: ({ pluginId, text, allowIgnoreFeedback }) => {
+            const session = chatsStore.getOrCreateSessionByPurpose("proactive-chat", {
+              title: "昔涟的主动消息",
+              identityId: null,
+            });
+            const messageId = randomUUID();
+            const at = Date.now();
+            if (!chatsStore.appendMessage(session.id, {
+              id: messageId,
+              role: "model",
+              content: text,
+              at,
+              pluginDelivery: {
+                pluginId,
+                ...(allowIgnoreFeedback ? { ignoreFeedback: "pending" as const } : {}),
+              },
+            })) {
+              throw new Error("插件主动消息写入失败");
+            }
+            broadcastChatsChanged();
+            return { conversationId: session.id, messageId, at: new Date(at).toISOString() };
+          },
+        },
+        screenObservation: createScreenObservationService({
+          getExcludedRegions: deps.getScreenObservationExcludedRegions,
+        }),
+        userPresence: createUserPresenceService(powerMonitor),
+        weatherContext: createWeatherContextService(readConfiguredWeatherObservation),
         schedulerStore: deps.schedulerStore,
         speechInput,
       }),

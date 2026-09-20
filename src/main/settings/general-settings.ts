@@ -27,6 +27,8 @@ export interface GeneralSettings extends ChatAppearanceSettings {
   citaSemanticEngine: "remote";
   /** Chat 模式的轻量社交上下文；默认关闭，开启后每轮最多多一次异步抽取调用。 */
   chatSocialContextEnabled: boolean;
+  /** 仅桌面 Chat 的日常聊天后端；其他模式与渠道始终使用上游原生实现。 */
+  chatBackend: "native" | "companion";
   /** 朋友圈功能总开关：关闭后 UI 隐藏、Chat 上下文不注入、昔涟不反应不发帖。 */
   momentsEnabled: boolean;
   /** Chat 模式注入近期朋友圈动态背景；默认开启（只读本地数据，无额外 LLM 调用）。 */

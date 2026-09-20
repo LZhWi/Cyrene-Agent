@@ -47,6 +47,8 @@ function assertTurnEventNarrowing(
   }
   if (finished.source === "desktop") {
     // finalMessageId 只在宿主确认落盘后存在，分支内按可选字段访问。
+    const backend: "native" | "companion" | undefined = finished.chatBackend;
+    void backend;
     summary.push(`desktop:${finished.status}:${finished.finalMessageId ?? "unset"}`);
   } else if (finished.source === "channel") {
     summary.push(`channel:${finished.status}:${finished.channel}`);
@@ -104,6 +106,7 @@ describe("会话只读服务类型", () => {
         conversationId: "c1",
         inputMessageId: "m1",
         finalMessageId: "m2",
+        chatBackend: "companion",
         status: "success",
       },
       async () => pages[0],

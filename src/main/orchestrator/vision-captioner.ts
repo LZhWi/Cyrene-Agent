@@ -52,6 +52,7 @@ export async function captionImage(
   image: VisionImage,
   userQuery: string,
   config: VisionConfig,
+  externalSignal?: AbortSignal,
 ): Promise<string> {
   const instruction = buildInstruction(userQuery);
   // base64 本地数据拼 data URL；公网 URL 原样直传，厂商服务器自行拉图
@@ -90,7 +91,7 @@ export async function captionImage(
   try {
     const resp = await fetch(url, {
       method: "POST",
-      signal: controller.signal,
+      signal: externalSignal ? AbortSignal.any([controller.signal, externalSignal]) : controller.signal,
       headers: {
         "Content-Type": "application/json",
         Authorization: "Bearer " + config.apiKey,
@@ -116,6 +117,10 @@ export async function captionImage(
     console.log("[Vision] 完成，耗时=" + (Date.now() - startMs) + "ms，返回长度=" + text.length);
     return text;
   } catch (err) {
+    if (externalSignal?.aborted) {
+      console.error("[Vision] 请求已取消");
+      return "[错误·运行时] 视觉模型请求已取消";
+    }
     if (err instanceof Error && err.name === "AbortError") {
       console.error("[Vision] 请求超时");
       return "[错误·运行时] 视觉模型请求超时";

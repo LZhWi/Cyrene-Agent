@@ -10,6 +10,7 @@ import {
 } from "../channels/proactive-delivery";
 import { resolveChatContextTimezone } from "../chat-time-context";
 import { buildAlwaysOnContext, buildMemoryInjection } from "../orchestrator";
+import { shouldUseNativeProactiveChat } from "../orchestrator/chat-backend";
 import { loadPromptFile } from "../prompts/prompt-loader";
 import type { GeneralSettings } from "../settings/general-settings";
 import { loadModelSettings } from "../settings/model-settings";
@@ -90,11 +91,12 @@ export function createProactiveLifecycle(options: ProactiveLifecycleOptions): Pr
     const now = Date.now();
     let idleSec = Number.POSITIVE_INFINITY;
     try { idleSec = powerMonitor.getSystemIdleTime(); } catch { /* app 尚未 ready */ }
+    const settings = options.loadGeneralSettings();
     return {
       now,
       localHour: new Date(now).getHours(),
       idleSec,
-      enabled: options.loadGeneralSettings().proactiveChatMode === "on",
+      enabled: shouldUseNativeProactiveChat(settings),
       conversationBusy: normalConversationBusyCount > 0,
       generationBusy: false,
       screenLocked: proactiveScreenLocked,

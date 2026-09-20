@@ -108,7 +108,7 @@ userData/plugin-data/<plugin-id>/
 | `entry` | string | 是 | 插件目录内裸文件名；支持 `.cjs`、`.js`、`.mjs` |
 | `icon` | string | 否 | 插件目录内裸文件名；支持 `.png`、`.jpg`、`.jpeg`、`.webp`、`.svg`；≤2MiB。在聊天窗口插件卡片左侧展示；不合法时静默忽略，不影响加载 |
 | `defaultEnabled` | boolean | 否 | 缺省 true，但只对内置插件生效 |
-| `deps` | string[] | 否 | 可选 `channels`、`llm`、`secrets`、`workspace`、`conversations`、`scheduler`、`speech-input` |
+| `deps` | string[] | 否 | 可选 `channels`、`llm`、`secrets`、`workspace`、`conversations`、`assistant-delivery`、`screen-observation`、`user-presence`、`weather-context`、`scheduler`、`speech-input` |
 
 以下情况会拒绝加载：
 
@@ -237,9 +237,10 @@ await ctx.events.emit("status", { online: true });
 - `host:plugins:ready`：启动扫描和自动启用完成，payload 为 `{ pluginIds: string[] }`；
 - `host:plugins:stopping`：全局插件停止开始、任何活动插件被注销之前，payload 为 `undefined`；
 - `host:turn:started`：一轮对话开始，payload 含 `eventId`、`timestamp`、`runId`、`mode` 和 `source`（desktop / channel / scheduler）及各来源的判别字段（desktop 携带 `conversationId` 与 `inputMessageId`；channel 携带 `channel`；scheduler 携带 `taskId` 与 `schedulerRunId`）；
-- `host:turn:finished`：一轮对话进入终态（success / cancelled / timeout / runtime_error），字段同上；desktop 分支在成功终态且 assistant 消息确认落盘后额外携带 `finalMessageId`。非成功终态不得用「当前最后一条消息」补齐该字段；
+- `host:turn:finished`：一轮对话进入终态（success / cancelled / timeout / runtime_error），字段同上；desktop Chat 分支可携带本轮开始时冻结的 `chatBackend: "native" | "companion"`，成功终态且 assistant 消息确认落盘后额外携带 `finalMessageId`。旧宿主可能没有 `chatBackend`，依赖后端隔离的插件应保守跳过；非成功终态不得用「当前最后一条消息」补齐 `finalMessageId`；
 - `host:tool:finished`：工具执行结果已确定后的只读观察通知，payload 含 `runId`、`toolId`、`toolCallId`、`status`（success / failure / unknown / not_executed）、`risk` 与可选 `durationMs`；不携带工具参数、输出正文与内部异常；
 - `host:scheduler:finished`：调度任务执行完成，payload 含 `taskId`、`schedulerRunId`、`status`、`durationMs` 与事件公共元数据，不含任务提示词与模型输出正文；
+- `host:assistant-message:feedback`：插件通过 `assistant-delivery` 投递且显式请求反馈入口的消息收到用户操作；payload 仅含 `pluginId`、`conversationId`、`messageId`、`action: "ignore"` 与事件公共元数据，不含消息正文或历史；
 - `host:turn:completed`：v1 兼容事件，仅成功终态发布；新代码请改用 `host:turn:started` / `host:turn:finished`。
 
 轮次完成事件属于旁路通知。宿主不会等待插件监听器，插件应自行排队处理持久化或网络同步，
@@ -265,9 +266,15 @@ Provider id 在当前插件内唯一，框架会补全为 `plugin:<插件id>:<pr
 可选渠道及插件停止信号；不会收到完整对话历史。
 
 贡献内容进入每轮变化的 runtime context，不写入稳定提示词前缀，因此不会因动态内容破坏基础提示词
-缓存。多个 Provider 并行生成、按注册顺序拼接；单个 Provider 最多等待 2 秒，失败或超时只跳过
+缓存。多个 Provider 并行生成；可用 `priority`（-1000 至 1000 的整数，数值越小越靠前）显式控制跨插件
+拼接顺序，未声明时为 0，同值保持注册顺序。单个 Provider 最多等待 2 秒，失败或超时只跳过
 自身。单项最多 16000 字符，全部插件合计最多 32000 字符。插件停用、刷新、卸载或启动失败
 回滚时自动移除其 Provider，也可调用 `ctx.unregisterPromptProvider(id)` 主动注销。
+
+陪伴后端还可通过 `registerStablePromptProvider` 提供分阶段稳定内容。`target` 缺省为 `"soul"`，
+也可使用 `"tool"`、`"tone"` 或 `"soul-tail"`；它们分别进入最终人格前缀、Tool 调度层、
+宿主场景语气匹配和最终 Soul 近端锚点。稳定 Provider 不接收 `userText`，仅在宿主明确选择桌面
+`companion` Chat 时消费，不影响原生后端、渠道与其他模式。
 
 #### sources 场景声明
 
@@ -294,6 +301,29 @@ ctx.registerPromptProvider({
   记忆的插件可以用它过滤，避免把其他会话的记忆注入发帖决策。
 - `moments-post` 的 `userText` 是发帖决策所依据的**最近对话摘录快照**，不是用户当前这条
   消息——不要把它当作用户指令处理，检索/过滤的语义应按「这段对话讲了什么」理解。
+
+### 受限助手消息投递与反馈
+
+manifest 声明 `"deps": ["assistant-delivery"]` 后，插件可以向宿主管理的主动消息会话追加纯文本
+助手消息。插件不能选择普通会话、伪造用户消息或改写历史。只有确实需要用户反馈时才声明入口：
+
+```js
+const result = await ctx.deps.assistantDelivery.postProactiveMessage("记得休息一下呀。", {
+  allowIgnoreFeedback: true,
+});
+
+ctx.events.on("host:assistant-message:feedback", (event) => {
+  if (event.pluginId === ctx.id && event.messageId === result.messageId && event.action === "ignore") {
+    // 只更新插件自己的策略状态；事件不含消息正文。
+  }
+});
+```
+
+`conversation` 输入还可包含宿主已经解析并校验的 IANA `timezone`。它只表示聊天显示时区，不包含
+城市、坐标或系统位置；需要显示来源时间的插件应使用该字段，不要自行读取宿主私有用户配置。
+
+`allowIgnoreFeedback` 缺省为 `false`。宿主只在该消息仍是主动会话最后一条、插件仍在运行且反馈尚未
+处理时接受一次操作；重复、过期或伪造的会话／消息 ID 会被拒绝。
 
 ### 私有存储
 
@@ -401,6 +431,19 @@ const messages = await ctx.deps.conversations.getMessages({
 ```
 
 `getMessages()` 返回的 `range` 字段是本次分页实际冻结的包含式边界；后续页的游标携带同一组边界。非法游标（已删除的消息、越过终点的游标）抛 `E_INVALID_ARGUMENT`，会话不存在抛 `E_NOT_FOUND`。
+
+### Weather-context（非定位天气快照）
+
+manifest 声明 `"deps": ["weather-context"]` 后可用。宿主复用用户已经启用和配置的天气查询，只返回带有效期的天气类别、温度、降水与可用的今昨最高温；不会向插件公开城市、坐标、Key 或天气源配置。未启用、未配置默认城市或查询失败时返回 `null`。
+
+```js
+const weather = await ctx.deps.weatherContext.snapshot();
+if (weather && Date.parse(weather.expiresAt) > Date.now()) {
+  ctx.log(`天气类别: ${weather.category}, 温度: ${weather.temperatureC}`);
+}
+```
+
+成功快照缓存 30 分钟；失败结果 5 分钟后才允许重试。读取不会触发聊天中的天气卡片。
 
 ### Scheduler（插件调度任务）
 

@@ -11,6 +11,9 @@ import {
 } from "./build-options"
 import type { SocialAtom } from "../social-context/types"
 import type { ConversationMode } from "../../shared/chat-types"
+import { buildHarnessPromptLayers } from "./harness/adapter/prompt-builder"
+import { composePromptLayers } from "./prompt-layers"
+import { getAdapterForConfig } from "./vendors"
 
 function createBuildDeps(): BuildOptionsDeps {
   return {
@@ -89,6 +92,9 @@ describe("build-options", () => {
       userText: "今天天气如何",
       conversationId: "plugin-prompt-session",
       channel: "wechat",
+      runId: undefined,
+      chatBackend: "native",
+      timezone: expect.any(String),
     });
     expect(result.options.soulRuntimeContext).toContain("[插件上下文：demo]\nchat:今天天气如何");
     expect(result.options.soulSystemBaseContent).not.toContain("插件上下文：demo");
@@ -118,7 +124,180 @@ describe("build-options", () => {
     expect(result.options.soulRuntimeContext).toContain("[plugin-agent] minecraft");
   });
 
-  it("keeps chat tool-free when enhancement switch is off", async () => {
+  it("桌面 Chat 将插件资料放在原生背景前，但稳定前缀不变", async () => {
+    const deps = createBuildDeps();
+    deps.loadGeneralSettings = () => ({
+      currentStyleId: "default",
+      customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+      chatSocialContextEnabled: true,
+    });
+    deps.buildChatSocialContext = async () => ({ contextBlock: "SOCIAL", retrievedAtoms: [] });
+    deps.buildPluginPromptContext = async () => "PLUGIN_MEMORY";
+    const input = {
+      sessionId: "chat-order", mode: "chat" as const, executionMode: "chat" as const,
+      userTurnId: "u1", assistantTurnId: "a1", messages: [{ role: "user", content: "你好" }],
+    };
+    const desktop = (await buildAgentRunOptions(input, deps)).options;
+    const channel = (await buildAgentRunOptions({ ...input, channel: "wechat" }, deps)).options;
+    expect(desktop.soulRuntimeContext.indexOf("PLUGIN_MEMORY")).toBeLessThan(desktop.soulRuntimeContext.indexOf("SOCIAL"));
+    expect(desktop.soulRuntimeContext.indexOf("SOCIAL")).toBeLessThan(desktop.soulRuntimeContext.indexOf("ALWAYS"));
+    expect(channel.soulRuntimeContext.indexOf("SOCIAL")).toBeLessThan(channel.soulRuntimeContext.indexOf("PLUGIN_MEMORY"));
+    expect(desktop.soulSystemBaseContent).not.toContain("PLUGIN_MEMORY");
+    expect(channel.soulSystemBaseContent).not.toContain("PLUGIN_MEMORY");
+  });
+
+  it("陪伴后端旁路原生画像和 WorldBook，只保留插件上下文和其他工具", async () => {
+    const deps = createBuildDeps();
+    const always = vi.fn(async (_text, _messages, includeNativeChatContext?: boolean) => includeNativeChatContext ? "原生画像和世界书" : "");
+    const relationship = vi.fn(async () => "原生关系上下文");
+    deps.buildAlwaysOnContext = always;
+    deps.buildRelationshipContext = relationship;
+    deps.buildPluginPromptContext = async () => "PLUGIN_MEMORY";
+    deps.loadGeneralSettings = () => ({
+      currentStyleId: "default",
+      customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+      chatBackend: "companion",
+      chatToolsEnabled: true,
+      toolModeOverrides: { user_memory: { chat: true }, weather: { chat: true } },
+    });
+    deps.toolRegistry.getEnabled = () => [
+      { id: "user_memory", name: "原生记忆", enabled: true },
+      { id: "weather", name: "天气", enabled: true },
+    ] as never;
+    const result = await buildAgentRunOptions({
+      sessionId: "plugin-memory", mode: "chat", executionMode: "chat",
+      messages: [{ role: "user", content: "你好" }],
+    }, deps);
+    expect(always).toHaveBeenCalledWith("你好", expect.any(Array), false);
+    expect(result.options.soulRuntimeContext).not.toContain("原生画像和世界书");
+    expect(result.options.soulRuntimeContext).not.toContain("原生关系上下文");
+    expect(relationship).not.toHaveBeenCalled();
+    expect(result.options.soulRuntimeContext).toContain("PLUGIN_MEMORY");
+    expect(result.options.tools?.map((tool) => tool.id)).toEqual(["weather"]);
+    await buildAgentRunOptions({
+      sessionId: "channel", mode: "chat", executionMode: "chat", channel: "wechat",
+      messages: [{ role: "user", content: "你好" }],
+    }, deps);
+    expect(always).toHaveBeenLastCalledWith("你好", expect.any(Array), true);
+    expect(relationship).toHaveBeenCalledTimes(1);
+  });
+
+  it("陪伴后端用插件稳定人格替换 Chat 人格，空结果与渠道均回退原生", async () => {
+    const deps = createBuildDeps();
+    deps.loadGeneralSettings = () => ({
+      currentStyleId: "default",
+      customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+      chatBackend: "companion",
+    });
+    deps.buildPluginStablePrompt = vi.fn(async ({ target }) => ({
+      soul: "COMPANION_PERSONA",
+      tool: "COMPANION_TOOL_RULES",
+      tone: "COMPANION_TONE",
+      "soul-tail": "COMPANION_TAIL",
+    })[target] ?? "");
+    deps.buildPluginPromptContext = vi.fn(async () => "");
+    const input = {
+      sessionId: "stable-profile", mode: "chat" as const, executionMode: "chat" as const,
+      messages: [{ role: "user", content: "你好" }],
+    };
+
+    const desktop = (await buildAgentRunOptions(input, deps)).options;
+    const channel = (await buildAgentRunOptions({ ...input, channel: "wechat" }, deps)).options;
+    expect(desktop.soulSystemBaseContent).toContain("COMPANION_PERSONA");
+    expect(desktop.soulSystemBaseContent).not.toContain("SOUL_SYSTEM_BASE");
+    expect(desktop.toolSystemContent).toContain("COMPANION_TOOL_RULES");
+    expect(desktop.toolSystemContent).not.toContain("COMPANION_PERSONA");
+    expect(desktop.soulRuntimeContext).toContain("COMPANION_TONE");
+    expect(desktop.soulTailAnchorContent).toContain("[当前时间]");
+    expect(desktop.soulTailAnchorContent).toContain("COMPANION_TAIL");
+    expect(channel.soulSystemBaseContent).toContain("SOUL_SYSTEM_BASE");
+    expect(deps.buildPluginPromptContext).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      source: "conversation", mode: "chat", chatBackend: "companion",
+    }));
+    expect(deps.buildPluginPromptContext).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      source: "conversation", mode: "chat", channel: "wechat", chatBackend: "native",
+    }));
+
+    deps.buildPluginStablePrompt = async () => "";
+    const fallback = (await buildAgentRunOptions(input, deps)).options;
+    expect(fallback.soulSystemBaseContent).toContain("SOUL_SYSTEM_BASE");
+  });
+
+  it("陪伴后端把插件语气交给原生场景匹配器，并单独保留最终 Soul 锚点", async () => {
+    const deps = createBuildDeps();
+    deps.loadGeneralSettings = () => ({
+      currentStyleId: "default",
+      customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+      chatBackend: "companion",
+    });
+    deps.sceneEmbeddingIndex = {};
+    deps.buildToneInjection = vi.fn(async (_text, _messages, _provider, _index, override) => `MATCHED:${override ?? "NATIVE"}`);
+    deps.buildPluginStablePrompt = vi.fn(async ({ target }) => ({
+      soul: "COMPANION_PERSONA",
+      tool: "COMPANION_TOOL",
+      tone: "COMPANION_TONE",
+      "soul-tail": "COMPANION_TAIL",
+    })[target] ?? "");
+
+    const result = await buildAgentRunOptions({
+      sessionId: "companion-tone", mode: "chat", executionMode: "chat",
+      messages: [{ role: "user", content: "你好" }],
+    }, deps);
+
+    expect(deps.buildToneInjection).toHaveBeenCalledWith(
+      "你好", expect.any(Array), null, {}, "COMPANION_TONE",
+    );
+    expect(result.options.soulRuntimeContext).toContain("MATCHED:COMPANION_TONE");
+    expect(result.options.soulTailAnchorContent).toContain("[当前时间]");
+    expect(result.options.soulTailAnchorContent).toContain("COMPANION_TAIL");
+    expect(result.options.toolSystemContent).not.toContain("COMPANION_TAIL");
+  });
+
+  it("带工具的桌面 Chat 把插件记忆作为动态资料送到 Kimi，且不暴露原生记忆工具", async () => {
+    const deps = createBuildDeps();
+    const config = {
+      provider: "Kimi（月之暗面）", baseUrl: "https://api.moonshot.cn/v1",
+      model: "kimi-k2.6", apiKey: "synthetic-only", explicitTransport: "openai" as const,
+    };
+    deps.loadModelSettings = () => config;
+    deps.loadGeneralSettings = () => ({
+      currentStyleId: "default",
+      customStyle: { diversity: { driver: "model-default" }, repetition: "model-default" },
+      chatBackend: "companion", chatToolsEnabled: true,
+      toolModeOverrides: { user_memory: { chat: true }, weather: { chat: true } },
+    });
+    deps.buildPluginPromptContext = async () => "[插件记忆] 薄荷需要浇水";
+    deps.toolRegistry.getEnabled = () => [
+      { id: "user_memory", name: "原生记忆", description: "memory", enabled: true,
+        inputSchema: { type: "object", properties: {} } },
+      { id: "weather", name: "天气", description: "weather", enabled: true,
+        inputSchema: { type: "object", properties: {} } },
+    ] as never;
+    const { options } = await buildAgentRunOptions({
+      sessionId: "tool-memory-projection", mode: "chat", executionMode: "chat",
+      chatBackendSnapshot: "companion",
+      messages: [{ role: "user", content: "薄荷要浇水吗？" }],
+    }, deps);
+    expect(options.tools.map((tool) => tool.id)).toEqual(["weather"]);
+    const layers = buildHarnessPromptLayers(options);
+    expect(layers.stablePrefix).not.toContain("[插件记忆]");
+    expect(layers.runtimeContext).toContain("[插件记忆] 薄荷需要浇水");
+    const composed = composePromptLayers(layers, options.messages);
+    const adapter = getAdapterForConfig(config);
+    const request = adapter.applyCacheHints?.({
+      model: config.model, messages: composed.messages, promptLayers: composed.metadata,
+      tools: options.tools.map((tool) => ({ name: tool.id, description: tool.description,
+        parameters: tool.inputSchema })), stream: false,
+    }, config);
+    expect(request).toBeDefined();
+    const wire = JSON.parse(adapter.buildRequest(request!, config).body);
+    expect(wire.tools.map((tool: { function: { name: string } }) => tool.function.name)).toEqual(["weather"]);
+    expect(wire.messages.at(-1).content).toContain("[插件记忆] 薄荷需要浇水");
+    expect(wire.messages[0].content).not.toContain("[插件记忆]");
+    expect(wire.prompt_cache_key).toMatch(/^cyrene:kimi:[a-f0-9]{16}$/);
+  });
+
+  it("uses Collab tools for desktop Chat even when the legacy enhancement switch is off", async () => {
     const deps = createBuildDeps();
     deps.toolRegistry.getEnabled = () => [
       { id: "music_search", name: "搜索歌曲", description: "d", enabled: true } as never,
@@ -129,11 +308,12 @@ describe("build-options", () => {
       executionMode: "chat",
       messages: [{ role: "user", content: "你好" }],
     }, deps);
-    expect(result.options.tools).toEqual([]);
-    expect(result.options.toolSystemContent).not.toContain("TOOL_SYSTEM");
+    expect(result.options.tools.map((tool) => tool.id)).toEqual(["music_search"]);
+    expect(result.options.toolSystemContent).toContain("TOOL_SYSTEM");
+    expect(result.options.chatResponseMode).toBe("two-phase");
   });
 
-  it("exposes only opted-in tools for enhanced chat", async () => {
+  it("does not require per-tool opt-in for desktop Collab", async () => {
     const deps = createBuildDeps();
     deps.loadGeneralSettings = () => ({
       currentStyleId: "default",
@@ -153,7 +333,7 @@ describe("build-options", () => {
       executionMode: "chat",
       messages: [{ role: "user", content: "放首歌" }],
     }, deps);
-    expect((result.options.tools ?? []).map((t: { id: string }) => t.id)).toEqual(["music_search"]);
+    expect((result.options.tools ?? []).map((t: { id: string }) => t.id)).toEqual(["music_search", "read_file"]);
     // 有工具时 chat 也注入工具目录 prompt（进 harness stablePrefix）。
     expect(result.options.toolSystemContent).toContain("TOOL_SYSTEM");
   });
@@ -316,7 +496,8 @@ describe("build-options", () => {
 
     expect(deps.prepareCitaTurn).not.toHaveBeenCalled()
     expect(result.options.executionMode).toBe("chat")
-    expect(result.options.tools).toEqual([])
+    expect(result.options.tools).toEqual([{ id: "music_search" }, { id: "weather" }])
+    expect(result.options.chatResponseMode).toBe("two-phase")
     expect(result.options.citaContextBlock).toBe("")
     expect(result.options.soulRuntimeContext).toContain("STYLE_PROMPT:lively")
     expect(result.options.toolSystemContent).not.toContain("STYLE_PROMPT:lively")
@@ -921,6 +1102,40 @@ describe("build-options", () => {
     })
   })
 })
+
+describe("桌面 Chat 记忆写入门禁", () => {
+  it("使用轮次快照跳过旧记忆提取，其他模式保留原生写入", async () => {
+    const scheduleMemoryWrite = vi.fn();
+    const recordRelationshipTurn = vi.fn();
+    const deps: OnRunFinishedDeps = {
+      loadModelSettings: () => ({ provider: "test", baseUrl: "", model: "", apiKey: "" }),
+      chatBackend: () => "native",
+      scheduleMemoryWrite,
+      inferRuntimeState: () => ({ status: "陪伴中" }),
+      runtimeState: { status: "陪伴中", expression: 0, updatedAt: 0 },
+      feelingToExpression: {},
+      setRuntimeState: () => {},
+      stickerEmbeddingIndex: null,
+      getEmbeddingProvider: () => null,
+      matchSticker: async () => null,
+      loadStickerSettings: () => ({}),
+      broadcastRuntimeStateChanged: () => {},
+      observeRuntimeState: async () => {},
+      recordRelationshipTurn,
+    };
+    const result = { reply: "好呀", toolResults: [] };
+    await onAgentRunFinished(result, "你好", deps, undefined, "chat-1", {
+      source: "desktop", mode: "chat", chatBackendSnapshot: "companion",
+    });
+    expect(scheduleMemoryWrite).not.toHaveBeenCalled();
+    expect(recordRelationshipTurn).not.toHaveBeenCalled();
+    await onAgentRunFinished(result, "你好", deps, undefined, "work-1", {
+      source: "desktop", mode: "work", chatBackendSnapshot: "companion",
+    });
+    expect(scheduleMemoryWrite).toHaveBeenCalledTimes(1);
+    expect(recordRelationshipTurn).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("moments context 注入（Phase 3 Chat Awareness）", () => {
   function momentsDeps(overrides: {

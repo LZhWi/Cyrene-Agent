@@ -28,9 +28,15 @@ export { sendHarnessEventAsAgui, sendTaskLifecycleAsAgui } from "./harness/adapt
 import { completePlanRun } from "./harness/adapter/plan-lifecycle";
 import { prepareHarnessRun } from "./harness/adapter/run-preparation";
 import { prepareToolRuntime } from "./harness/adapter/tool-runtime";
+import type { ChatMessage } from "./vendors/types";
 
 const LOG_PREFIX = "[HarnessAdapter]";
 export { filterToolsForConversationMode } from "./harness/adapter/run-preparation";
+
+export interface HarnessFinalHandoff {
+  /** 使用不带 tools 的 Soul 请求消费已闭合工具 transcript。 */
+  finalize(messages: ChatMessage[]): Promise<AgentLoopResult>;
+}
 
 // 兼容门面（facade）：旧调用方继续从本文件导入；具体职责下沉到 adapter/ 下的叶子模块。
 // 门面只保留公共导出和编排顺序，不重新维护 Map、缓存或控制器等运行状态。
@@ -46,6 +52,7 @@ export async function runHarnessWithAdapter(
   options: CyreneRunOptions,
   signal: AbortSignal,
   sendBaseEvent: (event: BaseEvent) => void,
+  finalHandoff?: HarnessFinalHandoff,
 ): Promise<AgentLoopResult> {
   // 准备阶段创建唯一的 runStore 实例；checkpoint、工具生命周期和终态都写入它。
   const prepared = await prepareHarnessRun(options, signal);
@@ -85,7 +92,16 @@ export async function runHarnessWithAdapter(
       contextWindowTokens: options.settings.contextWindowTokens,
     },
     signal,
+    ...(finalHandoff ? { finalResponseMode: "handoff" as const } : {}),
     onEvent: (event: HarnessEvent) => {
+      // 两阶段 Chat 的工具决策文本与 reasoning 都不是用户可见回复。
+      if (finalHandoff && (
+        event.type === "progress_text"
+        || event.type === "final_answer"
+        || event.type === "reasoning_start"
+        || event.type === "reasoning_delta"
+        || event.type === "reasoning_end"
+      )) return;
       if (!signal.aborted) {
         sendHarnessEventAsAgui(event, messageId, threadId, runId, sendBaseEvent);
       }
@@ -124,8 +140,30 @@ export async function runHarnessWithAdapter(
   // 这是唯一的真实执行边界。事件回调只负责同步转发，业务状态仍由各自的所有者维护。
   const result = await runCyreneHarness(harnessInput);
 
+  let soulResult: AgentLoopResult | undefined;
+  if (finalHandoff) {
+    if (!result.handoffMessages) {
+      runStore.markTerminal(runId, "failed");
+      throw new Error("[HarnessAdapter] 两阶段 Chat 未收到工具 transcript");
+    }
+    try {
+      soulResult = await finalHandoff.finalize(result.handoffMessages);
+    } catch (error) {
+      // Tool 阶段已经创建了可恢复 run；Soul 失败时必须收敛终态，
+      // 否则下次启动会把一次确定失败误认为崩溃中的可恢复工具任务。
+      try {
+        runStore.markTerminal(runId, signal.aborted ? "cancelled" : "failed");
+      } catch (settleError) {
+        console.error(`${LOG_PREFIX} settle failed Soul handoff:`, settleError);
+      }
+      throw error;
+    }
+  }
+
   // ── 转换结果 ──
-  const completionReason = mapTerminateReason(result.terminateReason);
+  const completionReason = result.terminateReason
+    ? mapTerminateReason(result.terminateReason)
+    : (soulResult?.completionReason ?? "no_tool");
   // 把 HarnessResult.terminateReason 映射为 canonical terminal，
   // 供 CyreneAgent.runWithEvents 写入 RUN_FINISHED.result。
   // 优先使用 harness 自身填的 result.terminal（如果未来 harness 内部直接写）。
@@ -175,10 +213,10 @@ export async function runHarnessWithAdapter(
   );
 
   return {
-    reply: result.finalAnswer,
+    reply: soulResult?.reply ?? result.finalAnswer,
     toolResults,
     completionReason,
     terminal,
-    totalUsage: undefined,
+    totalUsage: soulResult?.totalUsage,
   };
 }

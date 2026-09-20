@@ -51,7 +51,18 @@ const COMPACT_KEEP_RECENT = 6;
 /** 并发保护：同一会话压缩进行中时拒绝重复触发。 */
 const compactingSessions = new Set<string>();
 
-export function registerChatsIpc(ipcOption?: IpcScope): void {
+export function registerChatsIpc(
+  ipcOption?: IpcScope,
+  options?: {
+    isPluginRunning?: (pluginId: string) => boolean;
+    publishPluginAssistantFeedback?: (input: {
+      pluginId: string;
+      conversationId: string;
+      messageId: string;
+      action: "ignore";
+    }) => Promise<void>;
+  },
+): void {
   const ipc = ipcOption ?? createIpcScope();
   chatsStore.initialize();
 
@@ -115,6 +126,29 @@ export function registerChatsIpc(ipcOption?: IpcScope): void {
       );
       if (session) broadcastChanged(event.sender);
       return session;
+    },
+  );
+
+  ipc.handle(
+    IPC.CHATS_IGNORE_PLUGIN_MESSAGE,
+    async (_event, payload: { conversationId?: unknown; messageId?: unknown } | null | undefined) => {
+      const conversationId = payload?.conversationId;
+      const messageId = payload?.messageId;
+      if (typeof conversationId !== "string" || !conversationId
+        || typeof messageId !== "string" || !messageId) return { ok: false };
+      const session = chatsStore.getSession(conversationId);
+      const message = session?.messages.at(-1);
+      const pluginId = message?.id === messageId && message.role === "model"
+        && message.pluginDelivery?.ignoreFeedback === "pending"
+        ? message.pluginDelivery.pluginId
+        : undefined;
+      if (!pluginId || !options?.publishPluginAssistantFeedback
+        || options.isPluginRunning?.(pluginId) !== true) return { ok: false };
+      const updated = chatsStore.markPluginMessageIgnored(conversationId, messageId);
+      if (!updated || updated.pluginId !== pluginId) return { ok: false };
+      await options.publishPluginAssistantFeedback({ pluginId, conversationId, messageId, action: "ignore" });
+      broadcastChanged();
+      return { ok: true };
     },
   );
 
