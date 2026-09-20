@@ -1,0 +1,23 @@
+{
+  "baseline": "eb6c311a908c4da701869fff341972bac914b4aa",
+  "model": "kimi-k2.6",
+  "calls": 1,
+  "maxOutputTokens": 256,
+  "inputChars": 19330,
+  "promptDigest": "d561c95d51dc8d0759c6b949485e0e1492d7f1dc70dbb7f12c6e7cd9fff1beac",
+  "pluginMemoryInRuntime": true,
+  "pluginMemoryInStablePrefix": false,
+  "nativeMemoryTools": 0,
+  "protectedRootsUnchanged": true,
+  "httpStatus": 200,
+  "usage": {
+    "input": 8836,
+    "output": 166
+  },
+  "replyChars": 19,
+  "replyMentionsMint": true,
+  "replyMentionsWater": true,
+  "replyHasToolProtocol": false,
+  "finishReason": "stop",
+  "changedRoots": []
+}

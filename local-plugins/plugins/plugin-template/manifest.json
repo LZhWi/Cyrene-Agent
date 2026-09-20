@@ -1,0 +1,10 @@
+{
+  "apiVersion": 1,
+  "id": "plugin-template",
+  "name": "插件模板",
+  "version": "0.1.0",
+  "description": "验证 Cyrene Plugin API、工具注册和生命周期清理的最小模板",
+  "author": "LZhWi",
+  "entry": "index.cjs",
+  "defaultEnabled": false
+}

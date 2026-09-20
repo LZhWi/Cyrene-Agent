@@ -1,0 +1,30 @@
+{
+  "name": "cyrene-local-plugins",
+  "version": "0.1.0",
+  "private": true,
+  "description": "基于 Cyrene Plugin API v1 的本地插件开发与兼容测试基座",
+  "engines": {
+    "node": ">=24 <25",
+    "npm": ">=10"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run --config vitest.config.mjs",
+    "build": "node scripts/build.mjs",
+    "host-smoke": "node scripts/run-isolated-host-smoke.mjs",
+    "electron-host-smoke": "node scripts/run-electron-host-smoke.mjs",
+    "full-electron-host-smoke": "npm run build && node scripts/run-full-electron-host-smoke.mjs",
+    "isolated-electron-preview": "npm run build && node scripts/run-full-electron-host-smoke.mjs --visible",
+    "smoke": "node scripts/smoke-artifacts.mjs",
+    "verify": "npm run typecheck && npm run test && npm run build && npm run host-smoke && npm run smoke"
+  },
+  "devDependencies": {
+    "@playa0v0/cyrene-plugin-sdk": "file:../packages/plugin-sdk",
+    "@types/node": "20.19.43",
+    "esbuild": "0.25.12",
+    "fflate": "0.8.3",
+    "jsdom": "30.0.1",
+    "typescript": "5.9.3",
+    "vitest": "4.1.9"
+  }
+}

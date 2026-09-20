@@ -1,0 +1,11 @@
+{
+  "apiVersion": 1,
+  "id": "companion-chat",
+  "name": "独立陪伴聊天",
+  "version": "0.13.0",
+  "description": "独立会话、完整人格与 WorldBook、模型和记忆联动、生活日程及受控主动消息",
+  "author": "LZhWi",
+  "entry": "index.cjs",
+  "defaultEnabled": false,
+  "deps": ["llm", "secrets", "conversations", "assistant-delivery", "screen-observation", "user-presence", "weather-context"]
+}

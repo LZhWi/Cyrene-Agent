@@ -1,0 +1,29 @@
+{
+  "date": "2026-09-15",
+  "upstreamBaseline": "eb6c311a908c4da701869fff341972bac914b4aa",
+  "scope": "isolated native desktop Chat, synthetic conversation and plugin-private data in Cyrene-Agent-N",
+  "fixtureModelCalls": 1,
+  "realModelCalls": 1,
+  "unexpectedModelCalls": 0,
+  "model": "kimi-k2.6",
+  "realCallMaxOutputTokens": 512,
+  "providerReportedUsage": {
+    "input": 7590,
+    "output": 158
+  },
+  "nativeChatLoopUnmocked": true,
+  "firstFixtureReplySavedAndCaptured": true,
+  "secondRequestHadPluginMemory": true,
+  "secondRealReplySaved": true,
+  "secondTurnCapturedByPlugin": true,
+  "protectedRootCount": 4,
+  "changedRoots": [],
+  "secretLeakRedacted": false,
+  "temporaryRunDirectoryRemoved": true,
+  "overallPassed": true,
+  "limits": [
+    "Synthetic conversation, not a real-history or real-memory retrieval quality test",
+    "Tool-free ChatLoop, not tool-enabled Harness",
+    "One real reply, not a local-version behavioral parity assessment"
+  ]
+}

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'none'">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <link rel="stylesheet" href="ui.css">
+  <title>独立记忆档案</title>
+</head>
+<body><main>
+  <h1>独立记忆档案</h1>
+  <p>记忆始终保存在插件私有目录，不读写宿主 memory.json。可选择接入上游桌面 Chat；五个能力默认全部关闭。</p>
+  <button id="refresh">刷新状态</button><p id="status" role="status"></p>
+  <section aria-labelledby="recent-compressions-title"><h2 id="recent-compressions-title">最近压缩的组</h2><div id="recent-compression-groups"></div></section>
+  <h2>上游原生聊天接入</h2>
+  <p>各项权限独立保存。读取只接收启用后的成功桌面轮次，不扫描旧会话；自动提取才会把插件已保存的待处理轮次发给主程序当前模型；注入只在下一轮回复前提供相关插件记忆。</p>
+  <form id="native-integration-form">
+    <label><input type="checkbox" id="native-capture">读取以后成功完成的原生桌面聊天</label>
+    <label><input type="checkbox" id="native-auto-extract">满 10 轮后使用主程序当前模型自动提取</label>
+    <label><input type="checkbox" id="native-prompt-injection">在上游原生桌面 Chat 回复中自动检索并注入插件记忆（不用于外部渠道）</label>
+    <label><input type="checkbox" id="native-social-context">提取并注入短期状态／未完话题（每个成功回合额外调用一次主程序当前模型）</label>
+    <label><input type="checkbox" id="native-moments-injection">在动态发帖决策中提供相关插件记忆（不更新 DMAE）</label>
+    <button>保存原生接入设置</button><button type="button" id="native-retry">重试待处理轮次</button>
+  </form><p id="native-status"></p>
+  <h2>旧记忆来源绑定</h2>
+  <p>只处理已导入且仍标为“未核对”的旧记忆叶子。压缩摘要不直接绑定某一句原话，而在全部子项核验后推导时间包络。先加载会话标题，再选择最多 20 个会话进行只读预检；不会修改宿主会话，也不会调用模型。唯一原文可批量确认，重复原文必须逐条选择。</p>
+  <button type="button" id="history-load-conversations">加载原生会话标题</button>
+  <form id="history-preview-form">
+    <label for="history-conversations">选择扫描范围（可多选）</label>
+    <select id="history-conversations" multiple size="8"></select>
+    <button>只读匹配所选会话</button>
+  </form>
+  <button type="button" id="history-apply-unique" disabled>确认绑定全部唯一来源</button>
+  <p id="history-status"></p><section id="history-results"></section>
+  <h2>旧记忆导入</h2>
+  <p>预检只读解析指定 memory.json。实际导入仅写插件私有空库，源文件始终只读；保留有效 facets，但不导入向量、DMAE、梦境和维护日志。</p>
+  <form id="legacy-preview-form"><label for="legacy-source">源 memory.json</label><input id="legacy-source" maxlength="2048"><button>只读预检</button></form>
+  <label><input type="checkbox" id="legacy-source-attested">我已在旧系统中核验这份来源；导入时标记为“用户确认旧库已核验”，但不冒充已保存的消息 ID</label>
+  <label><input type="checkbox" id="legacy-preserve-runtime" disabled>同时保留旧权重、访问统计和 DMAE 状态（仅字段兼容时可选；不自动启用插件更新）</label>
+  <button id="legacy-import" disabled>确认导入到插件私有空库</button><pre id="legacy-preview"></pre>
+  <h2>旧向量索引</h2>
+  <p>仅复制与已导入 L2 对应的 user_memory 向量；不复制聊天历史文本，不调用原 RAG，不更新访问计数。必须先完成上方旧记忆导入。</p>
+  <form id="vector-preview-form"><label for="vector-source">源 memory-store.json</label><input id="vector-source" maxlength="2048"><button>只读预检向量</button></form>
+  <button id="vector-import" disabled>确认导入向量索引</button><pre id="vector-preview"></pre>
+  <h2>语义检索 Provider</h2>
+  <p>默认关闭。启用后，每次检索仅向指定服务发送当前查询文本；不会发送记忆库。服务输出维度必须与导入索引一致。</p>
+  <form id="embedding-form">
+    <label><input type="checkbox" id="embedding-enabled">启用语义检索</label>
+    <label for="embedding-url">OpenAI-compatible 地址</label><input id="embedding-url" maxlength="2048" placeholder="https://example.com/v1">
+    <label for="embedding-model">Embedding 模型</label><input id="embedding-model" maxlength="2048">
+    <label for="embedding-dimensions">向量维度</label><input id="embedding-dimensions" type="number" min="64" max="8192" step="1">
+    <label for="embedding-key">API Key（留空保留已有密钥）</label><input id="embedding-key" type="password" maxlength="8192" autocomplete="new-password">
+    <button>保存 Provider</button><button type="button" id="embedding-test">发送固定测试文本</button>
+  </form><p id="embedding-status"></p>
+  <h2>新记忆语义索引</h2>
+  <p>这是与查询外发分开的权限，默认关闭。启用时只把当前已有记忆记录为本地基线，不会上传；之后仅将新提取或手动编辑的可检索 L2 摘要正文发送给上方 Provider，不发送原话、证据或聊天历史。</p>
+  <form id="semantic-index-form">
+    <label><input type="checkbox" id="semantic-index-enabled">为此后新提取或编辑的记忆建立语义向量</label>
+    <button>保存新记忆索引设置</button><button type="button" id="semantic-index-retry">重试待处理摘要</button>
+  </form><p id="semantic-index-status"></p>
+  <h3>既有摘要向量补建</h3>
+  <p>先只读列出尚无当前向量的有效摘要，再选择本次范围。只有最终确认后才会把所选摘要正文逐条发送给 Provider；单次最多 100 条。</p>
+  <button type="button" id="semantic-backfill-preview">只读预检补建范围</button>
+  <form id="semantic-backfill-form">
+    <label for="semantic-backfill-entries">选择本次补建的摘要（可多选）</label>
+    <select id="semantic-backfill-entries" multiple size="10"></select>
+    <button id="semantic-backfill-apply" disabled>确认发送并补建所选摘要</button>
+  </form><p id="semantic-backfill-status"></p>
+  <h2>L0 稳定画像 / L1 近期状态</h2>
+  <p>L0 锁定只阻止自动提取，仍允许手动修改。L1 超过来源时间 30 天不再自动注入。清空字段后保存即可移除。</p>
+  <button id="lock">锁定自动画像更新</button><section id="profiles"></section>
+  <h2>画像变更确认</h2>
+  <p>同字段的新表述不会自动覆盖旧值。请核对两份证据；过时候选不能覆盖后续编辑。处理记录会保留。</p><section id="profile-changes"></section>
+  <label><input type="checkbox" id="query-expansion">启用模型辅助查询扩展（额外请求；非向量检索）</label>
+  <h2>模型辅助候选重排</h2>
+  <p>默认关闭，仅用于独立聊天和本窗口手动搜索。启用后会把当前查询与最多 12 条非置顶 L2 摘要发送给当前宿主官方模型服务；不发送原话、证据、历史或持久化 ID。置顶记忆仍保持最前，原生回复注入不会调用重排模型。</p>
+  <label><input type="checkbox" id="reranker-enabled">启用模型辅助重排</label><p id="reranker-status"></p>
+  <h2>DMAE 工作记忆</h2>
+  <p>默认关闭。启用后，仅在记忆实际注入独立聊天或上游原生回复时更新插件私有激活状态，使近期命中的 L2 最多跨 3 个未命中轮次驻留；手动搜索、预检和打开窗口不会更新激活值。不会调用模型或修改记忆正文。</p>
+  <label><input type="checkbox" id="dmae-enabled">启用 DMAE 工作记忆</label><p id="dmae-status"></p>
+  <h2>L2 生命周期候选</h2>
+  <p>默认不记录。启用后只在记忆实际注入聊天时保存插件私有的最后注入时间和次数；手动搜索、预检、原文读取及模型提取均不计入。预检仅把达到闲置期限的非置顶记忆列为候选；默认仍需人工确认，只有另行开启下方自动执行后才会每日按确定性期限降一级，绝不删除正文或证据。</p>
+  <label><input type="checkbox" id="lifecycle-enabled">记录实际注入时间</label><p id="lifecycle-status"></p>
+  <label><input type="checkbox" id="auto-lifecycle">成功桌面聊天后每日刷新生命周期候选数量</label><p id="auto-lifecycle-status"></p>
+  <label><input type="checkbox" id="auto-lifecycle-apply">自动执行确定性闲置降级（可撤销）</label><p>需先启用每日扫描。每次最多把 100 条闲置 30 天的 active 记忆降为 aging，并把扫描前已是 aging 且闲置 90 天的最多 100 条降为 archived；若已启用实际注入记录，还会把有效非置顶项的 weight 每日减 1。置顶记忆不参与，不删除正文或证据，不调用模型。</p>
+  <h3>容量瘦身预检</h3><p>复现本地版 active 300、工作集 800 与 weight × 30 天时近度排序。预检完全只读；执行必须使用当前预检结果再次确认，每组最多 100 条，只改变插件私有记忆状态，不删除正文或证据，并保留可撤销快照。</p><button id="capacity-preview">只读预检容量计划</button><button id="capacity-apply" disabled>确认执行当前容量计划</button><pre id="capacity-preview-result"></pre>
+  <form id="lifecycle-preview-form"><label for="lifecycle-target">目标状态</label><select id="lifecycle-target"><option value="aging">active → aging</option><option value="archived">aging → archived</option></select><label for="lifecycle-days">闲置天数</label><input id="lifecycle-days" type="number" min="30" max="3650" step="1" value="30"><button>只读预检候选</button></form>
+  <form id="lifecycle-apply-form"><label for="lifecycle-entries">选择要变更的候选（可多选，最多 100 条）</label><select id="lifecycle-entries" multiple size="8"></select><button id="lifecycle-apply" disabled>确认生命周期变更</button></form><p id="lifecycle-preview-status"></p><section id="lifecycle-changes"></section>
+  <h2>梦境周期与人工反思</h2>
+  <p>人工入口选择 2 至 20 条 aging 非置顶记忆，确认后才把其摘要、原话提示、最多两段关联证据和来源时间发送给当前宿主官方模型服务。完整周期则复现本地版顺序：容量瘦身、本轮降级记忆叙事、aging 聚类压缩。各阶段独立提交，叙事与压缩仍分别遵守下方授权和安全门槛。</p>
+  <label><input type="checkbox" id="auto-dream">原生 Chat 空闲 15 分钟后运行完整梦境周期（每 24 小时最多一次）</label><p id="auto-dream-status"></p>
+  <label><input type="checkbox" id="auto-dream-apply">自动保存周期生成的梦境叙事</label><p>需先启用完整梦境周期。只把通过既有长度与来源快照校验的叙事保存到插件私有梦境库；仍可撤销，是否注入聊天继续由下方独立开关控制。压缩是否自动应用由“压缩应用方式”单独决定。</p>
+  <label><input type="checkbox" id="dream-injection">把已确认梦境反思注入聊天（最近 3 段）</label><p id="dream-status"></p>
+  <form id="dream-review-form"><label for="dream-entries">选择梦境材料（可多选）</label><select id="dream-entries" multiple size="8"></select><button id="dream-review-submit">请求叙事草稿</button></form>
+  <section id="dream-reviews"></section>
+  <form id="search"><label for="query">搜索记忆与原始对话</label><input id="query" maxlength="20000"><button>搜索</button></form><pre id="result"></pre>
+  <h2>归档记忆冷召回</h2>
+  <p>只在普通 active/aging 词面与分面检索没有明确命中时，本地查找 archived 候选。预检不会注入聊天、调用模型、恢复记忆或更新 DMAE、生命周期和访问统计；恢复后该条记忆才会重新参与后续检索。</p>
+  <form id="cold-recall-preview-form"><label for="cold-recall-query">只读查询归档候选</label><input id="cold-recall-query" maxlength="20000"><button>只读预检</button></form>
+  <form id="cold-recall-restore-form"><label for="cold-recall-candidates">候选及来源证据（可多选，最多 8 条）</label><select id="cold-recall-candidates" multiple size="8"></select><button id="cold-recall-restore" disabled>确认恢复所选候选</button></form><p id="cold-recall-status"></p>
+  <h2>L2 事件记忆</h2><p>归档会停止该条摘要注入，不删除原始对话；历史检索仍可能返回相关原文。</p><section id="entries"></section>
+  <h2>维护候选收件箱</h2>
+  <p>本地扫描最多 300 条当前有效记忆，收集规范化正文完全相同的条目，并合并已有向量索引的高相似候选。预检不写入、不调用模型；选择确认后只保存候选关系，不判断冲突或重复，也不修改记忆。后续仍需逐项填入双条复核或压缩复核。</p>
+  <label><input type="checkbox" id="auto-maintenance">成功桌面聊天后低频自动收集本地候选（每 24 小时最多一次）</label><p id="auto-maintenance-status"></p>
+  <label><input type="checkbox" id="auto-review">每 5 个成功桌面聊天轮次后台复核一对收件箱候选</label><p id="auto-review-status"></p>
+  <label><input type="checkbox" id="auto-review-apply">自动应用高置信、无需澄清的安全 Resolver 计划</label><p>需先启用后台复核。仅自动关闭无变更的 unrelated/context_difference，或应用置信度至少 0.90、创建完整总结且两侧都转为 superseded/merged 的 preference_evolution。direct_conflict、uncertain、低置信和任何要求澄清的计划始终留给用户；所有实际变更仍保留严格撤销入口。</p>
+  <label><input type="checkbox" id="auto-compression">每 20 个成功桌面聊天轮次后台生成一份压缩建议</label><p id="auto-compression-status"></p>
+  <label for="auto-compression-mode">压缩应用方式</label><select id="auto-compression-mode"><option value="manual">生成建议后手动确认</option><option value="auto">符合安全条件时自动压缩</option></select><p>需先启用后台压缩。自动模式仅处理至少 3 条 aging、非置顶、非摘要记忆，且模型置信度至少 0.80 并明确确认总结完整覆盖全部来源；其他建议始终留给用户。实际变更仍保留严格撤销入口。</p>
+  <label><input type="checkbox" id="auto-reflection">每 20 个成功桌面聊天轮次后台反思一次现有 L0/L1</label><p id="auto-reflection-status"></p><p>只使用插件私有、当前可检索且能与保存的用户轮次或已核验历史证据对上的 L2 原话，最多生成 8 条待确认画像变更；不会新增空字段、直接覆盖画像或绕过 L0 锁定。模型自报置信度不构成自动采用依据。</p>
+  <button type="button" id="maintenance-preview">本地扫描维护候选</button><button type="button" id="maintenance-add" disabled>保存所选候选到收件箱</button><button type="button" id="maintenance-review-batch">模型辅助复核所选收件箱候选</button>
+  <p id="maintenance-status"></p><section id="maintenance-preview-results"></section><section id="maintenance-inbox"></section>
+  <h2>相似 L2 候选预检</h2>
+  <p>只在插件私有向量中计算余弦相似度，不调用模型、不更新 DMAE 或访问统计。相似不等于重复或冲突；结果只能用于填入下方人工双条复核。</p>
+  <button type="button" id="related-pairs-preview">本地预检相似候选</button><p id="related-pairs-status"></p><section id="related-pairs"></section>
+  <h2>L2 可撤销压缩复核</h2>
+  <p>选择 2 至 5 条有效记忆。模型只提出是否可无损合并及候选总结，不直接修改；应用时保留原条目并标为 merged，之后可在未发生其他修改时撤销。</p>
+  <button type="button" id="compression-clusters-preview">本地预检 aging 压缩聚类</button><p id="compression-clusters-status"></p><section id="compression-clusters"></section>
+  <form id="compression-review-form"><label for="compression-entries">选择压缩候选（可多选）</label><select id="compression-entries" multiple size="8"></select><button id="compression-review-submit">请求压缩复核</button></form>
+  <section id="compression-reviews"></section>
+  <h2>L2 Resolver 双条复核</h2><p>仅检查选中的两条，不扫描全库。新结果区分无关、上下文差异、偏好演进、直接冲突和证据不足，并可提出创建总结与状态变化计划；模型不直接执行，需用户确认，且可在没有后续变化时撤销。旧格式复核记录继续兼容。</p>
+  <form id="review-form"><label for="review-left">左侧记忆</label><select id="review-left"></select><label for="review-right">右侧记忆</label><select id="review-right"></select><button id="review-submit">请求模型复核</button></form>
+  <button id="cancel-review">取消复核</button><section id="entry-reviews"></section>
+</main><script src="ui.js"></script></body>
+</html>
