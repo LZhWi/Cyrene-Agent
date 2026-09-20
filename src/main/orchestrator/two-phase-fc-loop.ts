@@ -152,9 +152,9 @@ export interface TwoPhaseFcResult {
 
 const LOG_PREFIX = "[TwoPhaseFcLoop]";
 const DEFAULT_MAX_TOOL_ROUNDS = 20;
-const DEFAULT_PER_ROUND_TIMEOUT_MS = 75_000;
+const DEFAULT_PER_ROUND_TIMEOUT_MS = 900_000;
 const DEFAULT_MAX_CONSECUTIVE_TIMEOUTS = 2;
-const DEFAULT_FORCE_SUMMARY_TIMEOUT_MS = 90_000;
+const DEFAULT_FORCE_SUMMARY_TIMEOUT_MS = 1800_000;
 
 
 function sliceToDeltas(text: string, chunkSize = 1): string[] {

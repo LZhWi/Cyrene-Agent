@@ -4,6 +4,7 @@ import type { ChannelManager } from "./manager";
 import { appendHistory as appendChannelHistory } from "./history-log";
 import { appendLog as appendChannelLog, type LogEntry } from "./message-log";
 import type { ChannelId, IncomingMessage, OutgoingMessage } from "./types";
+import { loadWechatRecipient, rememberWechatRecipientSession } from "./adapters/wechat/recipient-store";
 
 export type ProactiveMobileChannel = Extract<ChannelId, "wechat" | "feishu">;
 
@@ -19,26 +20,58 @@ export interface ProactiveChannelRecipientRegistry {
   get(channel: ProactiveMobileChannel): RecentProactiveChannelRecipient | null;
 }
 
-export function createProactiveChannelRecipientRegistry(): ProactiveChannelRecipientRegistry {
+interface ProactiveChannelRecipientRegistryOptions {
+  loadWechat?: () => RecentProactiveChannelRecipient | null;
+  persistWechat?: (recipient: RecentProactiveChannelRecipient) => void;
+}
+
+export function createProactiveChannelRecipientRegistry(
+  options: ProactiveChannelRecipientRegistryOptions = {},
+): ProactiveChannelRecipientRegistry {
   const recipients = new Map<ProactiveMobileChannel, RecentProactiveChannelRecipient>();
+  let loadedWechat = false;
+  const ensureWechatLoaded = (): void => {
+    if (loadedWechat && recipients.has("wechat")) return;
+    loadedWechat = true;
+    const saved = options.loadWechat?.();
+    if (saved) recipients.set("wechat", saved);
+  };
   return {
     remember(message, sessionId): void {
+      if (message.channel === "wechat") ensureWechatLoaded();
       const targetId = message.chatId.trim();
       if (!targetId || !sessionId) return;
-      recipients.set(message.channel, {
+      const recipient = {
         targetId,
         ...(message.threadId ? { threadId: message.threadId } : {}),
         sessionId,
         updatedAt: message.at.getTime(),
-      });
+      };
+      recipients.set(message.channel, recipient);
+      if (message.channel === "wechat") options.persistWechat?.(recipient);
     },
     get(channel): RecentProactiveChannelRecipient | null {
+      if (channel === "wechat") ensureWechatLoaded();
       return recipients.get(channel) ?? null;
     },
   };
 }
 
-const defaultRecipientRegistry = createProactiveChannelRecipientRegistry();
+const defaultRecipientRegistry = createProactiveChannelRecipientRegistry({
+  loadWechat: () => {
+    const saved = loadWechatRecipient();
+    if (!saved) return null;
+    return {
+      targetId: saved.targetId,
+      // 微信实际历史写入 proactive-chat；旧 channel sessionId 仅为接口兼容字段。
+      sessionId: saved.sessionId ?? "desktop:proactive-chat",
+      updatedAt: saved.updatedAt,
+    };
+  },
+  persistWechat: (recipient) => {
+    rememberWechatRecipientSession(recipient);
+  },
+});
 
 export function rememberProactiveChannelRecipient(message: IncomingMessage, sessionId: string): void {
   defaultRecipientRegistry.remember(message, sessionId);

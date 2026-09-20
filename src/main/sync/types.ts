@@ -33,6 +33,13 @@ export const READONLY_HISTORY_STEM_PREFIX = "desktop_";
 /** 手机「桌面对话」只读镜像使用的固定 stem（对应桌面 proactive-chat 会话）。 */
 export const DESKTOP_PROACTIVE_STEM = "desktop_proactive";
 
+/** 微信已与桌面 proactive-chat 共用历史；旧 channel:wechat:* 文件不再参与双向同步。 */
+export const LEGACY_WECHAT_HISTORY_STEM_PREFIX = "channel_wechat_";
+
+export function isLegacyWechatHistoryStem(stem: string): boolean {
+  return stem.startsWith(LEGACY_WECHAT_HISTORY_STEM_PREFIX);
+}
+
 /**
  * 同步快照：一端把"自 since 以来的可合并事实"打包给对端。
  *

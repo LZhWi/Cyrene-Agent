@@ -163,7 +163,20 @@ describe("buildLifeContext", () => {
     expect(text).not.toContain("特别的日子");
   });
 
-  it("localDateKey 使用本地日期并补零", () => {
-    expect(localDateKey(new Date(2026, 0, 5, 3, 0))).toBe("2026-01-05");
+  it("日程日以本地时间 4:00 为分界并补零", () => {
+    expect(localDateKey(new Date(2026, 0, 5, 3, 59))).toBe("2026-01-04");
+    expect(localDateKey(new Date(2026, 0, 5, 4, 0))).toBe("2026-01-05");
+  });
+
+  it("午夜后到 4:00 前沿用前一天的日程与日期标题", () => {
+    const dir = makeTempDir();
+    const beforeMidnight = buildLifeContext(new Date(2026, 0, 4, 23, 30), dir);
+    const afterMidnight = buildLifeContext(new Date(2026, 0, 5, 3, 30), dir);
+
+    expect(stripCurrentLine(afterMidnight)).toBe(stripCurrentLine(beforeMidnight));
+    expect(afterMidnight).toContain("今天（1月4日）你在你的虚拟世界里的日程：");
+    expect(buildLifeContext(new Date(2026, 0, 5, 4, 0), dir)).toContain(
+      "今天（1月5日）你在你的虚拟世界里的日程：",
+    );
   });
 });

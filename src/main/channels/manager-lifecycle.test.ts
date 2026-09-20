@@ -8,6 +8,35 @@ function deferred() {
 }
 
 describe("ChannelManager lifecycle", () => {
+  it("reports the adapter delivery receipt after sending", async () => {
+    const onDeliveryResult = vi.fn();
+    const adapter = {
+      id: "wechat",
+      displayName: "WeChat",
+      capability: { text: true },
+      onMessage: null,
+      start: vi.fn(async () => undefined),
+      stop: vi.fn(async () => undefined),
+      send: vi.fn(async () => ({ ok: true, deliveredPartIndexes: [0] })),
+      getStatus: vi.fn(() => ({ enabled: true, phase: "running" })),
+    };
+    const manager = new ChannelManager();
+    manager.register(adapter as never);
+    manager.setDispatcher(async () => ({
+      channel: "wechat",
+      targetId: "wx-1",
+      parts: [{ kind: "text", text: "送达" }],
+      _onDeliveryResult: onDeliveryResult,
+    }));
+
+    await (adapter.onMessage as any)({ channel: "wechat", senderId: "wx-1", chatId: "wx-1", text: "hi", at: new Date() });
+
+    expect(onDeliveryResult).toHaveBeenCalledWith(
+      { ok: true, deliveredPartIndexes: [0] },
+      expect.objectContaining({ targetId: "wx-1" }),
+    );
+  });
+
   it("waits for an in-flight start before stopping the newly started adapter", async () => {
     const gate = deferred();
     const adapter = {

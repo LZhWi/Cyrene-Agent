@@ -7,7 +7,7 @@
 //   - 出站消息路径：dispatcher 拿到 outgoing 后调 adapter.send(outgoing)。
 //   - Manager 不感知 sessionId、不感知 cap 降级、不感知 tool 调用 —— 全部下放。
 import type { ChannelAdapter } from "./adapters/base";
-import type { ChannelId, ChannelStatus, IncomingMessage, OutgoingMessage } from "./types";
+import type { ChannelId, ChannelSendResult, ChannelStatus, IncomingMessage, OutgoingMessage } from "./types";
 import { setAdapterHandler } from "./adapters/base";
 
 const LOG = "[ChannelManager]";
@@ -112,17 +112,24 @@ export class ChannelManager {
       // （之前漏了这一步，导致回复算出来但不发，agent 静默无响应）
       if (outgoing) {
         const adapter = this.adapters.get(channel);
+        let deliveryResult: ChannelSendResult = { ok: false, error: "找不到渠道适配器" };
         if (adapter && adapter.send) {
           try {
-            const result = await adapter.send(outgoing);
-            if (!result.ok) {
-              console.warn(LOG, `adapter.send 失败 [${channel}]:`, result.error);
+            deliveryResult = await adapter.send(outgoing);
+            if (!deliveryResult.ok) {
+              console.warn(LOG, `adapter.send 失败 [${channel}]:`, deliveryResult.error);
             }
           } catch (err) {
             console.error(LOG, `adapter.send 抛错 [${channel}]:`, err);
+            deliveryResult = { ok: false, error: err instanceof Error ? err.message : String(err) };
           }
         } else {
           console.warn(LOG, `找不到 adapter 或 adapter 不支持 send [${channel}]`);
+        }
+        try {
+          await outgoing._onDeliveryResult?.(deliveryResult, outgoing);
+        } catch (err) {
+          console.error(LOG, `发送结果提交失败 [${channel}]:`, err);
         }
       }
       return outgoing;

@@ -42,7 +42,7 @@ export interface VisionImage {
   mime: string;  // 如 "image/png"
 }
 
-const VISION_TIMEOUT_MS = 30_000;
+const VISION_TIMEOUT_MS = 120_000;
 
 /**
  * 构造框架指令。判断全交给视觉模型——它本身是语言模型，

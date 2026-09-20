@@ -51,6 +51,25 @@ describe("proactive channel delivery", () => {
     expect(registry.get("feishu")).toMatchObject({ targetId: "fs-1", sessionId: "session-fs-1" });
   });
 
+  it("restores and updates the persisted WeChat recipient", () => {
+    const persistWechat = vi.fn();
+    const persisted = createProactiveChannelRecipientRegistry({
+      loadWechat: () => ({
+        targetId: "wx-saved",
+        sessionId: "session-saved",
+        updatedAt: 10,
+      }),
+      persistWechat,
+    });
+
+    expect(persisted.get("wechat")).toMatchObject({ targetId: "wx-saved", sessionId: "session-saved" });
+    persisted.remember(incoming("wechat", "wx-new"), "session-new");
+    expect(persistWechat).toHaveBeenCalledWith(expect.objectContaining({
+      targetId: "wx-new",
+      sessionId: "session-new",
+    }));
+  });
+
   it("cancels while the selected channel is offline", async () => {
     const adapter = fakeAdapter("offline");
     registry.remember(incoming("wechat", "wx-1"), "session-wx-1");

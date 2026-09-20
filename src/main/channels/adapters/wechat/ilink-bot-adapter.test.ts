@@ -25,7 +25,7 @@ describe("ILinkBotAdapter.send", () => {
 
     const result = await adapter.send(message([{ kind: "text", text: "你好" }]));
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, deliveredPartIndexes: [0] });
     expect(sendText).toHaveBeenCalledWith("wx-user-1", "你好", "ctx-1");
   });
 
@@ -41,7 +41,7 @@ describe("ILinkBotAdapter.send", () => {
       { kind: "text", text: "\n第三句！" },
     ]));
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, deliveredPartIndexes: [0, 1, 2] });
     expect(sendText).toHaveBeenNthCalledWith(1, "wx-user-1", "第一句。", "ctx-1");
     expect(sendText).toHaveBeenNthCalledWith(2, "wx-user-1", "第二句？", "ctx-1");
     expect(sendText).toHaveBeenNthCalledWith(3, "wx-user-1", "第三句！", "ctx-1");
@@ -66,7 +66,7 @@ describe("ILinkBotAdapter.send", () => {
       { kind: "sticker", stickerId: "happy", imagePath: "C:/tmp/sticker.png" },
     ]));
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, deliveredPartIndexes: [0, 1, 2] });
     expect(sendText).toHaveBeenCalledWith("wx-user-1", "看图", "ctx-1");
     expect(uploadMedia).toHaveBeenCalledTimes(2);
     expect(uploadMedia).toHaveBeenNthCalledWith(1, expect.anything(), "wx-user-1", "C:/tmp/pic.png", 1);
@@ -114,7 +114,7 @@ describe("ILinkBotAdapter.send", () => {
       { kind: "video", filePath: "C:/tmp/demo.mp4", name: "demo.mp4", mime: "video/mp4" },
     ]));
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, deliveredPartIndexes: [0, 1] });
     expect(uploadMedia).toHaveBeenNthCalledWith(1, expect.anything(), "wx-user-1", "C:/tmp/report.pdf", 3);
     expect(uploadMedia).toHaveBeenNthCalledWith(2, expect.anything(), "wx-user-1", "C:/tmp/demo.mp4", 2);
     expect(sendMessage).toHaveBeenNthCalledWith(1, "wx-user-1", [
@@ -169,7 +169,7 @@ describe("ILinkBotAdapter.send", () => {
       { kind: "audio", filePath: "package.json", mime: "audio/wav" },
     ]));
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, deliveredPartIndexes: [0, 1] });
     expect(sendText).toHaveBeenCalledWith("wx-user-1", "语音来了", "ctx-1");
     expect(encodeVoice).toHaveBeenCalledWith(expect.any(Buffer), { format: "wav" });
     expect(uploadMediaData).toHaveBeenCalledWith(expect.anything(), "wx-user-1", Buffer.from("silk-data"), 4);
@@ -215,7 +215,7 @@ describe("ILinkBotAdapter.send", () => {
       { kind: "audio", filePath: "package.json", mime: "audio/wav" },
     ]));
 
-    expect(result).toEqual({ ok: true });
+    expect(result).toEqual({ ok: true, deliveredPartIndexes: [0] });
     expect(sendText).toHaveBeenCalledWith("wx-user-1", "先把文字发出去", "ctx-1");
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
@@ -260,9 +260,9 @@ describe("ILinkBotAdapter inbound media", () => {
         expect.objectContaining({ kind: "image" }),
         "msg-1",
       );
-      // 普通图文进入 5 秒聚合窗口，尚未派发
+      // 普通图文进入 30 秒聚合窗口，尚未派发
       expect(onMessage).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
         channel: "wechat",
         senderId: "wx-user-1",
@@ -522,7 +522,7 @@ describe("ILinkBotAdapter inbound media", () => {
         "msg-voice-1",
       );
       expect(sendText).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
         channel: "wechat",
         senderId: "wx-user-1",
@@ -623,12 +623,12 @@ describe("ILinkBotAdapter inbound media", () => {
         raw: {},
       });
 
-      // 第一条之后 3s 未满 5s，且第二条重置了计时器，尚未派发
+      // 第一条之后 3s 未满 30s，且第二条重置了计时器，尚未派发
       await vi.advanceTimersByTimeAsync(3_000);
       expect(onMessage).not.toHaveBeenCalled();
 
-      // 再过 2s 补足第二条之后的静默窗口 → 合并派发
-      await vi.advanceTimersByTimeAsync(2_000);
+      // 再过 27s 补足第二条之后的静默窗口 → 合并派发
+      await vi.advanceTimersByTimeAsync(27_000);
       expect(onMessage).toHaveBeenCalledTimes(1);
       expect(onMessage).toHaveBeenCalledWith(expect.objectContaining({
         channel: "wechat",
@@ -679,12 +679,12 @@ describe("ILinkBotAdapter inbound media", () => {
 
       // 第一批 → flush → agent 开始跑（挂起）
       await sendText("m1", "第一批");
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(started).toEqual(["第一批"]);
 
       // 第一批仍在跑时来第二批 → flush 后必须等第一批结束才派发
       await sendText("m2", "第二批");
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(started).toEqual(["第一批"]);
 
       // 放行第一批 → 第二批才开始

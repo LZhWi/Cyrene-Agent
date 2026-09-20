@@ -49,6 +49,7 @@ import type { ToolRiskLevel } from "./permission";
 import { loadChannelsSettings } from "./channels/settings-store";
 import { channelManager } from "./channels/manager";
 import { canStartProactiveChannelDelivery, sendProactiveChannelMessage } from "./channels/proactive-delivery";
+import type { IncomingMessage } from "./channels/types";
 // 触发 built-in-tools 的副作用注册（fetch_url / run_shell / install_mcp_server）
 import "./orchestrator/built-in-tools";
 // 触发 fs-tools 的副作用注册（read_file / list_dir / write_file / read_image）
@@ -87,7 +88,7 @@ import { HoloCubicBridge } from "./holocubic/holocubic-bridge";
 import { HoloCubicSettingsStore } from "./holocubic/holocubic-settings-store";
 import type { HoloCubicSettings, HoloCubicStatus } from "../shared/holocubic-types";
 import type { StickerConfigItem } from "../shared/sticker-types";
-import type { ImageMessageAttachment, ChatMessage } from "../shared/chat-types";
+import type { ImageMessageAttachment, ChatMessage, MessageAttachment } from "../shared/chat-types";
 import type { GptsovitsSynthesizeRequest } from "../shared/tts-types";
 import { configureRerankerForLazyInit, initReranker, getRerankerInstallStatus } from "./rag/reranker";
 import { memoryStore } from "./memory/memory-store"
@@ -159,6 +160,7 @@ import { setDispatcherBuildAndRunAgent, setDispatcherSynthesizeTts, setDispatche
 import { setInboundChatRunner, setDesktopHistoryProvider, setProactiveReplyRunner } from "./channels/inbound-server";
 import { describeMarkersForLlm, formatStickerMarker, formatImageMarker, stripStickerStageDirections } from "./channels/mobile-markers";
 import { saveBlob } from "./channels/mobile-blobs";
+import { appendLog as appendChannelLog } from "./channels/message-log";
 import { DESKTOP_PROACTIVE_STEM } from "./sync/types";
 import { createWindowLifecycleTracker } from "./electron-window-lifecycle";
 import { clearLocation, loadLocation, saveLocation } from "./location-store";
@@ -249,6 +251,7 @@ let holoCubicApplyGeneration = 0;
 let schedulerEngine: SchedulerEngine | null = null;
 let proactiveChatService: ProactiveChatService | null = null;
 let normalConversationBusyCount = 0;
+let lastDesktopChatStyle = "01_default.md";
 let proactiveScreenLocked = false;
 const live2dWindowLifecycle = createWindowLifecycleTracker<BrowserWindow>("live2d-main", {
   onClosed: () => setLive2dWindow(null),
@@ -693,7 +696,7 @@ interface ChatReplyPayload {
 
 const RUNTIME_STATUSES: RuntimeStatus[] = ["陪伴中", "思考中", "工作中", "聆听中", "提醒中", "离线"];
 const RUNTIME_FEELINGS: RuntimeFeeling[] = ["平静", "开心", "温柔", "激动", "撒娇", "担心", "难过", "感动", "害羞"];
-const CHAT_REQUEST_TIMEOUT_MS = 300000; // FC 总预算：20 轮 × 推理模型 ~10-15s 需 300s 余量
+const CHAT_REQUEST_TIMEOUT_MS = 3600000; // FC 总预算：20 轮 × 推理模型 ~10-15s 需 300s 余量
 
 /** 桌宠窗口的基础尺寸（zoom=1.0 时）。缩放因子改变窗口与模型尺寸，二者同步。 */
 const PET_WINDOW_BASE_WIDTH = 400;
@@ -2199,6 +2202,11 @@ function updateNormalConversationBusy(delta: 1 | -1): void {
 }
 
 const proactiveConversationLifecycle = {
+  beforeUserMessage: (message: IncomingMessage) => {
+    if (message.channel !== "wechat" || !loadGeneralSettings().proactiveFeedbackEnabled) return;
+    const openerState = loadOpenerState();
+    if (settleReplyFeedback(openerState)) saveOpenerState(openerState);
+  },
   onUserMessage: () => proactiveChatService?.invalidateForUserMessage(),
   onConversationStarted: () => {
     updateNormalConversationBusy(1);
@@ -2233,11 +2241,9 @@ function recordProactiveDeliveryMetadata(input: ProactiveCommitInput): void {
   saveOpenerState(openerState);
 }
 
-async function commitLocalProactiveMessage(input: ProactiveCommitInput): Promise<ProactiveCommitResult> {
-  const initialDecision = getProactiveCommitDecision(input.candidate, input.generationEpoch);
-  if (!initialDecision.allowed) return { kind: "cancelled", reason: initialDecision.reason };
+function appendProactiveAssistantToDesktopChat(text: string): { sessionId: string; at: number } {
   if (chatsStore.getStorageStatus().status !== "ready") {
-    return { kind: "cancelled", reason: "chat_storage_recovery_pending" };
+    throw new Error("聊天索引等待用户批准恢复");
   }
 
   const session = chatsStore.getOrCreateSessionByPurpose("proactive-chat", {
@@ -2249,20 +2255,31 @@ async function commitLocalProactiveMessage(input: ProactiveCommitInput): Promise
   const appended = chatsStore.appendMessage(session.id, {
     id: messageId,
     role: "model",
-    content: input.text,
+    content: text,
     at,
   });
   if (!appended) throw new Error("主动聊天会话写入失败");
   broadcastChatsChanged();
-  chatMessageNotifier.notify({ messageId, sessionId: session.id, text: input.text });
+  chatMessageNotifier.notify({ messageId, sessionId: session.id, text });
+  return { sessionId: session.id, at };
+}
+
+async function commitLocalProactiveMessage(input: ProactiveCommitInput): Promise<ProactiveCommitResult> {
+  const initialDecision = getProactiveCommitDecision(input.candidate, input.generationEpoch);
+  if (!initialDecision.allowed) return { kind: "cancelled", reason: initialDecision.reason };
+  if (chatsStore.getStorageStatus().status !== "ready") {
+    return { kind: "cancelled", reason: "chat_storage_recovery_pending" };
+  }
+
+  const persisted = appendProactiveAssistantToDesktopChat(input.text);
 
   let payload: ShowBubblePayload = input.source === "fallback" && input.fallbackPayload
-    ? { ...(input.fallbackPayload as ShowBubblePayload), text: input.text, sessionId: session.id }
+    ? { ...(input.fallbackPayload as ShowBubblePayload), text: input.text, sessionId: persisted.sessionId }
     : {
         text: input.text,
         sceneId: input.candidate.sceneId,
-        itemId: `proactive-${at}`,
-        sessionId: session.id,
+        itemId: `proactive-${persisted.at}`,
+        sessionId: persisted.sessionId,
       };
 
   if (input.source === "model") {
@@ -2282,6 +2299,9 @@ async function commitSelectedProactiveMessage(input: ProactiveCommitInput): Prom
   const result = await routeProactiveDelivery(target, {
     commitLocal: () => commitLocalProactiveMessage(input),
     commitChannel: async (channel) => {
+      if (channel === "wechat" && chatsStore.getStorageStatus().status !== "ready") {
+        return { kind: "cancelled", reason: "chat_storage_recovery_pending" };
+      }
       const channelResult = await sendProactiveChannelMessage({
         channel,
         text: input.text,
@@ -2291,6 +2311,13 @@ async function commitSelectedProactiveMessage(input: ProactiveCommitInput): Prom
           if (loadGeneralSettings().proactiveDeliveryTarget !== channel) return false;
           return getProactiveCommitDecision(input.candidate, input.generationEpoch).allowed;
         },
+        // 微信与桌面共用 proactive-chat；写入实际成功送达的文本，部分分段成功时也保持一致。
+        appendHistory: channel === "wechat"
+          ? (_sessionId, _role, deliveredText) => {
+              appendProactiveAssistantToDesktopChat(deliveredText);
+              return null;
+            }
+          : undefined,
       });
       return channelResult.kind === "committed"
         ? { kind: "committed" }
@@ -5425,10 +5452,10 @@ app.whenReady().then(async () => {
     // 包含 sticker 决定（从 onAgentRunFinished 返回，避免在 dispatcher 端重新算一遍 embedding）。
     const channelResult: { text: string; sticker: string | null } = { text: "", sticker: null };
 
-    // Phase 3.3：按 toolSandbox 过滤可用工具
+    // 微信复用桌面工具集；其他渠道继续遵守渠道 toolSandbox。
     const sandbox = loadChannelsSettings().toolSandbox;
     const allTools = toolRegistry.getEnabledTools();
-    const filteredTools: ToolDefinition[] = sandbox === "safe-only"
+    const filteredTools: ToolDefinition[] = msg.channel !== "wechat" && sandbox === "safe-only"
       ? allTools.filter((t) => (t.risk ?? "safe") === ("safe" as ToolRiskLevel))
       : allTools;
     console.log(
@@ -5457,6 +5484,8 @@ app.whenReady().then(async () => {
     });
     const attachmentInputs = await buildChannelAttachmentInputs(msg, {
       imageMode: imageSendStrategy.mode,
+      // 微信只保留传输层渠道信息；模型侧使用与桌面聊天一致的附件措辞。
+      includeChannelName: msg.channel !== "wechat",
       captionImage: async (filePath: string) => {
         const validated = validateCaptionImagePath(filePath);
         if (!validated.ok) return { ok: false, error: validated.error };
@@ -5477,6 +5506,173 @@ app.whenReady().then(async () => {
         }
       },
     });
+
+    if (msg.channel === "wechat") {
+      const desktopSession = chatsStore.getSessionByPurpose("proactive-chat");
+      if (!desktopSession) throw new Error("暂无主动消息会话，无法回复微信消息");
+      if (chatsStore.getStorageStatus().status !== "ready") {
+        throw new Error("聊天索引等待用户批准恢复");
+      }
+
+      const desktopSessionId = desktopSession.id;
+      const desktopHistory = desktopSession.messages
+        .filter((m) => typeof m.content === "string" && m.content.trim().length > 0)
+        .slice(-16)
+        .map((m) => ({
+          role: (m.role === "model" ? "assistant" : "user") as "user" | "assistant" | "system",
+          content: describeMarkersForLlm(m.content, m.role === "model" ? "assistant" : "user"),
+          at: m.at,
+        }));
+
+      const userAtMs = Number.isFinite(msg.at.getTime()) ? msg.at.getTime() : Date.now();
+      const userMessageId = randomUUID();
+      const assistantMessageId = randomUUID();
+      const storedAttachments: MessageAttachment[] = [];
+      for (const item of msg.attachments ?? []) {
+        if (!item.filePath) continue;
+        const name = item.caption || path.basename(item.filePath);
+        if (item.kind === "image") {
+          storedAttachments.push({
+            kind: "image" as const,
+            name,
+            filePath: item.filePath,
+            mime: item.mime || "application/octet-stream",
+            previewUrl: pathToFileURL(item.filePath).toString(),
+            status: "done" as const,
+          });
+        }
+        if (item.kind === "file") {
+          storedAttachments.push({
+            kind: "document" as const,
+            name,
+            filePath: item.filePath,
+            status: "done" as const,
+          });
+        }
+      }
+
+      const appendedUserMessage = chatsStore.appendMessage(desktopSessionId, {
+        id: userMessageId,
+        role: "user",
+        content: msg.text,
+        at: userAtMs,
+        attachments: storedAttachments.length > 0 ? storedAttachments : undefined,
+      });
+      if (!appendedUserMessage) throw new Error("微信用户消息写入主动会话失败");
+      broadcastChatsChanged();
+
+      const llmUserContent = msg.text.trim()
+        || (attachmentInputs.imageAttachments?.length ? "（图片）" : "（文件）");
+      const { options } = await buildAgentRunOptions(
+        {
+          messages: [...desktopHistory, { role: "user", content: llmUserContent, at: userAtMs }],
+          style: lastDesktopChatStyle,
+          sessionId: desktopSessionId,
+          userTurnId: userMessageId,
+          assistantTurnId: assistantMessageId,
+          userTurnAt: userAtMs,
+          attachments: attachmentInputs.attachments,
+          imageAttachments: attachmentInputs.imageAttachments,
+        },
+        buildOptionsDeps,
+      );
+
+      const agent = new CyreneAgent({
+        threadId: `thread-desktop-wechat-${desktopSessionId}-${Date.now()}`,
+        description: `desktop-chat-via-wechat:${desktopSessionId}`,
+      });
+      const rawReply = await new Promise<string>((resolve, reject) => {
+        agent.runWithEvents(options).subscribe({
+          complete: () => resolve(agent.lastResult?.reply ?? ""),
+          error: (err) => reject(err instanceof Error ? err : new Error(String(err))),
+        });
+      });
+
+      let sticker: string | null = null;
+      const assistantAtMs = Date.now();
+      if (agent.lastResult) {
+        try {
+          const finished = await onAgentRunFinished(
+            agent.lastResult,
+            llmUserContent,
+            onRunFinishedDeps,
+            undefined,
+            undefined,
+            {
+              conversationId: desktopSessionId,
+              userMessageId,
+              assistantMessageId,
+              userAt: userAtMs,
+              assistantAt: assistantAtMs,
+              validateAgainstConversation: true,
+            },
+            false,
+          );
+          sticker = finished.sticker;
+        } catch (err) {
+          console.warn("[Channels] 微信回复副作用失败，继续发送文本:", err instanceof Error ? err.message : err);
+        }
+      }
+
+      const cleanReply = stripStickerStageDirections(rawReply);
+      return {
+        text: cleanReply,
+        sticker,
+        onDeliveryResult: (deliveryResult, sentMessage) => {
+          const deliveredIndexes = new Set(
+            deliveryResult.deliveredPartIndexes
+              ?? (deliveryResult.ok ? sentMessage.parts.map((_part, index) => index) : []),
+          );
+          const deliveredText = sentMessage.parts
+            .map((part, index) => deliveredIndexes.has(index) && part.kind === "text" ? part.text : "")
+            .join("");
+          const deliveredSticker = sticker && sentMessage.parts.some(
+            (part, index) => deliveredIndexes.has(index) && part.kind === "sticker" && part.stickerId === sticker,
+          ) ? sticker : null;
+          if (!deliveredText.trim() && !deliveredSticker) return;
+
+          appendChannelLog({
+            dir: "outgoing",
+            channel: "wechat",
+            senderId: msg.senderId,
+            senderName: msg.senderName,
+            chatId: msg.chatId,
+            text: deliveredText || `[sticker:${deliveredSticker}]`,
+            hasAttachments: !!deliveredSticker,
+          });
+
+          const appended = chatsStore.appendMessage(desktopSessionId, {
+            id: assistantMessageId,
+            role: "model",
+            content: deliveredText,
+            at: assistantAtMs,
+            sticker: deliveredSticker,
+          });
+          if (!appended) throw new Error("微信回复确认送达后写入主动会话失败");
+          onRunFinishedDeps.scheduleMemoryWrite(llmUserContent, deliveredText, {
+            conversationId: desktopSessionId,
+            userMessageId,
+            assistantMessageId,
+            userAt: userAtMs,
+            assistantAt: assistantAtMs,
+            validateAgainstConversation: true,
+          });
+          broadcastChatsChanged();
+          chatMessageNotifier.notify({
+            messageId: assistantMessageId,
+            sessionId: desktopSessionId,
+            text: deliveredText.trim() ? deliveredText : "发来一张贴纸",
+          });
+          void indexConversationTurn(
+            desktopSessionId,
+            llmUserContent,
+            deliveredText,
+            { userTurnId: userMessageId, assistantTurnId: assistantMessageId },
+          );
+        },
+      };
+    }
+
     const { options } = await buildAgentRunOptions(
       {
         messages: [
@@ -6051,7 +6247,10 @@ app.whenReady().then(async () => {
     },
   };
   registerAgUiIpc(
-    async (input: AguiRunInput) => buildAgentRunOptions(input, buildOptionsDeps),
+    async (input: AguiRunInput) => {
+      lastDesktopChatStyle = input.style || "01_default.md";
+      return buildAgentRunOptions(input, buildOptionsDeps);
+    },
     // 桌面 IPC 路径不消费 sticker（sticker 由 onAgentRunFinished 内部 IPC 广播承担）
     async (result, latestUserText, memoryContextText, memoryScheduleContext) => {
       await onAgentRunFinished(result, latestUserText, onRunFinishedDeps, undefined, memoryContextText, memoryScheduleContext);

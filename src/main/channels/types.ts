@@ -76,6 +76,13 @@ export type OutgoingPart =
     }
   | { kind: "sticker"; stickerId: string; imagePath: string };
 
+export interface ChannelSendResult {
+  ok: boolean;
+  error?: string;
+  /** 适配器实际成功送达的 parts 下标；未提供时，ok=true 代表全部送达。 */
+  deliveredPartIndexes?: number[];
+}
+
 /** 出站消息。dispatcher → adapters。 */
 export interface OutgoingMessage {
   channel: ChannelId;
@@ -83,6 +90,8 @@ export interface OutgoingMessage {
   targetId: string;
   threadId?: string;
   parts: OutgoingPart[];
+  /** 仅供主进程在适配器返回发送结果后提交共享会话记录。 */
+  _onDeliveryResult?: (result: ChannelSendResult, message: OutgoingMessage) => void | Promise<void>;
 }
 
 /** 渠道状态（UI 展示用） */

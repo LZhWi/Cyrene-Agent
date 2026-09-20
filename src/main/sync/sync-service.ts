@@ -26,7 +26,7 @@ import {
   mergeReflectionLogs,
 } from "./merge";
 import type { HistoryBundle, SyncApplyStats, SyncSnapshot } from "./types";
-import { READONLY_HISTORY_STEM_PREFIX } from "./types";
+import { isLegacyWechatHistoryStem, READONLY_HISTORY_STEM_PREFIX } from "./types";
 
 /** since 判定：ISO 时间戳字符串是否 >= since(ms)。 */
 function historyEntryAtOrAfter(entry: HistoryEntry, since: number): boolean {
@@ -59,6 +59,7 @@ export async function buildSyncSnapshot(deviceId: string, since = 0): Promise<Sy
 
   const history: HistoryBundle[] = [];
   for (const stem of listHistoryStems()) {
+    if (isLegacyWechatHistoryStem(stem)) continue;
     const all = readHistoryByStem(stem);
     const entries = since > 0 ? all.filter((e) => historyEntryAtOrAfter(e, since)) : all;
     if (entries.length > 0) history.push({ stem, entries });
@@ -105,6 +106,8 @@ export async function applySyncSnapshot(
   let historyAdded = 0;
   for (const bundle of incoming.history ?? []) {
     if (!bundle.stem) continue;
+    // 微信历史由 proactive-chat 单一事实源持有；拒绝旧手机客户端回推后重新生成渠道历史。
+    if (isLegacyWechatHistoryStem(bundle.stem)) continue;
     // 只读镜像 stem（如手机「桌面对话」）只用于对端展示，PC 不落地，避免生成幻影历史文件。
     if (bundle.stem.startsWith(READONLY_HISTORY_STEM_PREFIX)) continue;
     const base = readHistoryByStem(bundle.stem);

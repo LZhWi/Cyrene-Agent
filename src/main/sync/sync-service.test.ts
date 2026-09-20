@@ -31,8 +31,8 @@ describe("sync/sync-service", () => {
       isPinned: false,
     });
     await memoryStore.updateL0({ nickname: "P宝" });
-    appendHistory("channel:wechat:abc", "user", "在吗");
-    appendHistory("channel:wechat:abc", "assistant", "在的呀");
+    appendHistory("channel:feishu:abc", "user", "在吗");
+    appendHistory("channel:feishu:abc", "assistant", "在的呀");
 
     const snap = await buildSyncSnapshot("pc-test", 0);
     expect(snap.deviceId).toBe("pc-test");
@@ -41,6 +41,31 @@ describe("sync/sync-service", () => {
     expect(snap.history).toHaveLength(1);
     expect(snap.history[0].entries).toHaveLength(2);
     expect(snap.cursor).toBeGreaterThan(0);
+  });
+
+  it("does not pull or restore legacy WeChat channel history", async () => {
+    const { appendHistory, readHistoryByStem, stemForSession } = await import("../channels/history-log");
+    const { buildSyncSnapshot, applySyncSnapshot } = await import("./sync-service");
+
+    const localWechatStem = stemForSession("channel:wechat:local");
+    appendHistory("channel:wechat:local", "user", "旧微信消息");
+    appendHistory("channel:feishu:local", "user", "飞书消息");
+
+    const snap = await buildSyncSnapshot("pc-test", 0);
+    expect(snap.history.some((bundle) => bundle.stem === localWechatStem)).toBe(false);
+    expect(snap.history.some((bundle) => bundle.stem.startsWith("channel_feishu_"))).toBe(true);
+
+    const remoteWechatStem = stemForSession("channel:wechat:remote");
+    const result = await applySyncSnapshot({
+      ...snap,
+      deviceId: "mobile-test",
+      history: [{
+        stem: remoteWechatStem,
+        entries: [{ at: "2026-09-20T00:00:00.000Z", role: "user", content: "不应恢复" }],
+      }],
+    });
+    expect(result.applied.historyAdded).toBe(0);
+    expect(readHistoryByStem(remoteWechatStem)).toEqual([]);
   });
 
   it("applies a pushed snapshot: adds L2, history, and LWW L0", async () => {
@@ -57,7 +82,7 @@ describe("sync/sync-service", () => {
       isPinned: false,
     });
 
-    const stem = stemForSession("channel:wechat:remote");
+    const stem = stemForSession("channel:feishu:remote");
     const incoming = {
       deviceId: "ios-test",
       cursor: Date.now(),
@@ -137,7 +162,7 @@ describe("sync/sync-service", () => {
       isPinned: false,
     });
     const { appendHistory } = await import("../channels/history-log");
-    appendHistory("channel:wechat:x", "user", "hi");
+    appendHistory("channel:feishu:x", "user", "hi");
 
     const snap = await buildSyncSnapshot("pc-test", 0);
     const first = await applySyncSnapshot(snap);

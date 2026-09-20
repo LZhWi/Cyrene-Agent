@@ -19,6 +19,7 @@ import { app } from "electron";
 import type {
   ChannelCapability,
   ChannelId,
+  ChannelSendResult,
   IncomingMessage,
   OutgoingMessage,
   OutgoingPart,
@@ -110,6 +111,17 @@ export function makeSessionId(channel: ChannelId, senderId: string): string {
   return `channel:${channel}:${hash}`;
 }
 
+interface ChannelAgentRunResult {
+  text: string;
+  sticker: string | null;
+  onDeliveryResult?: (result: ChannelSendResult, message: OutgoingMessage) => void | Promise<void>;
+}
+
+/** 微信复用桌面 proactive-chat 会话，不再维护第二份渠道历史。 */
+export function usesDedicatedChannelHistory(channel: ChannelId): boolean {
+  return channel !== "wechat";
+}
+
 /** 记录 sessionId → 原始 senderId（用于调试 / 反查；不影响正常运行） */
 function recordSession(channel: ChannelId, senderId: string, sessionId: string): void {
   sessionIndex.set(sessionId, { channel, senderId, lastAt: Date.now() });
@@ -171,7 +183,7 @@ export interface DispatcherDeps {
   /** Phase 1+：完整 agent 调用。Phase 0 留空，返回纯 echo。
    *  返回 text（必填）+ sticker（可选 sticker id，由 dispatcher 解析成本地路径后纳入 OutgoingMessage.parts）。
    *  sticker 解析失败的会静默跳过（不会把坏数据塞进 parts）。 */
-  buildAndRunAgent?: (msg: IncomingMessage, sessionId: string, priorMessages?: ChatMessage[]) => Promise<{ text: string; sticker: string | null }>;
+  buildAndRunAgent?: (msg: IncomingMessage, sessionId: string, priorMessages?: ChatMessage[]) => Promise<ChannelAgentRunResult>;
   /** Phase A：读这个 sessionId 最近 N 条对话历史（按时间顺序）。不提供时不拼历史，行为同 Phase 0。 */
   loadRecentChannelHistory?: (sessionId: string, limit: number) => Promise<ChatMessage[]>;
   /** Phase 3：可选 — 把文本合成成音频。失败返回 null，dispatcher 会跳过 audio。 */
@@ -244,7 +256,7 @@ export class ChannelDispatcher {
     rememberProactiveChannelRecipient(msg, sessionId);
 
     // Phase 3：入站消息广播到桌面端 chatWindow（让用户看到 bot 在和谁聊天）
-    if (this.settings.mirrorToDesktop) {
+    if (this.settings.mirrorToDesktop && msg.channel !== "wechat") {
       try {
         this.deps.broadcastChat?.({
           type: "bot:incoming",
@@ -275,21 +287,24 @@ export class ChannelDispatcher {
       console.warn(LOG, "appendLog (incoming) 失败:", err);
     }
 
-    // Phase A2：入站消息落对话历史（下一步 LLM 取的滑窗数据源）
-    try {
-      appendChannelHistory(sessionId, "user", msg.text);
-    } catch (err) {
-      console.warn(LOG, "appendHistory (incoming) 失败:", err);
+    // 微信已经接入桌面 proactive-chat；其他渠道仍保留各自的滑窗历史。
+    if (usesDedicatedChannelHistory(msg.channel)) {
+      try {
+        appendChannelHistory(sessionId, "user", msg.text);
+      } catch (err) {
+        console.warn(LOG, "appendHistory (incoming) 失败:", err);
+      }
     }
 
     // Phase 1 实装的 agent 调用；Phase 0 没有 → echo
     let replyText: string;
     let sticker: string | null = null;
+    let onDeliveryResult: ChannelAgentRunResult["onDeliveryResult"];
     if (this.deps.buildAndRunAgent) {
       // Phase A：拼接最近 16 条历史 (同桌面端 buildModelMessages 行为).
       // 加载失败/未注入 → 不拼历史 (兼容旧实现).
       let priorMessages: ChatMessage[] | undefined;
-      if (this.deps.loadRecentChannelHistory) {
+      if (usesDedicatedChannelHistory(msg.channel) && this.deps.loadRecentChannelHistory) {
         try {
           priorMessages = await this.deps.loadRecentChannelHistory(sessionId, 16);
         } catch (err) {
@@ -301,6 +316,7 @@ export class ChannelDispatcher {
         const result = await this.deps.buildAndRunAgent(msg, sessionId, priorMessages);
         replyText = result.text;
         sticker = result.sticker;
+        onDeliveryResult = result.onDeliveryResult;
       } catch (err) {
         console.error(LOG, "agent 调用失败:", err instanceof Error ? err.message : err);
         return null;
@@ -356,7 +372,7 @@ export class ChannelDispatcher {
     }
 
     // Phase 3：出站消息广播到桌面端
-    if (this.settings.mirrorToDesktop) {
+    if (this.settings.mirrorToDesktop && msg.channel !== "wechat") {
       try {
         this.deps.broadcastChat?.({
           type: "bot:outgoing",
@@ -373,25 +389,29 @@ export class ChannelDispatcher {
     }
 
     // Phase 3.4：出站消息写日志（仅文本 part，附件路径不写进 JSONL）
-    try {
-      appendLog({
-        dir: "outgoing",
-        channel: msg.channel,
-        senderId: msg.senderId,
-        senderName: msg.senderName,
-        chatId: msg.chatId,
-        text: replyText,
-        hasAttachments: parts.some((p) => p.kind === "audio"),
-      });
-    } catch (err) {
-      console.warn(LOG, "appendLog (outgoing) 失败:", err);
+    if (msg.channel !== "wechat") {
+      try {
+        appendLog({
+          dir: "outgoing",
+          channel: msg.channel,
+          senderId: msg.senderId,
+          senderName: msg.senderName,
+          chatId: msg.chatId,
+          text: replyText,
+          hasAttachments: parts.some((p) => p.kind === "audio"),
+        });
+      } catch (err) {
+        console.warn(LOG, "appendLog (outgoing) 失败:", err);
+      }
     }
 
-    // Phase A2：出站消息落对话历史（assistant 角色）
-    try {
-      appendChannelHistory(sessionId, "assistant", replyText);
-    } catch (err) {
-      console.warn(LOG, "appendHistory (outgoing) 失败:", err);
+    // 微信回复在适配器确认送达后由 delivery callback 写入 proactive-chat；其他渠道仍写自己的历史。
+    if (usesDedicatedChannelHistory(msg.channel)) {
+      try {
+        appendChannelHistory(sessionId, "assistant", replyText);
+      } catch (err) {
+        console.warn(LOG, "appendHistory (outgoing) 失败:", err);
+      }
     }
 
     // 构造 OutgoingMessage，capability 降级
@@ -400,6 +420,7 @@ export class ChannelDispatcher {
       targetId: msg.chatId,
       threadId: msg.threadId,
       parts,
+      ...(onDeliveryResult ? { _onDeliveryResult: onDeliveryResult } : {}),
     };
     return this.downgradeToCapability(outgoing, this.deps.manager.getAdapter(msg.channel)?.capability);
   }
@@ -464,7 +485,7 @@ export const channelDispatcher = new ChannelDispatcher({
 /** 给 index.ts 调：注入 buildAndRunAgent（让 dispatcher 真正跑 agent）
  *  返回 text + sticker：text 直接做 reply；sticker 由 dispatcher 解析成本地路径后纳入 OutgoingMessage.parts。 */
 export function setDispatcherBuildAndRunAgent(
-  fn: (msg: IncomingMessage, sessionId: string, priorMessages?: ChatMessage[]) => Promise<{ text: string; sticker: string | null }>,
+  fn: (msg: IncomingMessage, sessionId: string, priorMessages?: ChatMessage[]) => Promise<ChannelAgentRunResult>,
 ): void {
   channelDispatcher.deps.buildAndRunAgent = fn;
 }

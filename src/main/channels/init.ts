@@ -17,6 +17,7 @@ import { startInboundServer, stopInboundServer } from "./inbound-server";
 import { FeishuAdapter } from "./adapters/feishu";
 import { ILinkBotAdapter, loadCredentials } from "./adapters/wechat/ilink-bot-adapter";
 import { getRecentLog, clearLog } from "./message-log";
+import type { IncomingMessage } from "./types";
 
 const LOG = "[ChannelsInit]";
 
@@ -26,6 +27,7 @@ let shutdownPromise: Promise<void> | null = null;
 let shutdownRequested = false;
 let ipcRegistered = false;
 let conversationLifecycle: {
+  beforeUserMessage?(message: IncomingMessage): void;
   onUserMessage(): void;
   onConversationStarted(): void;
   onConversationEnded(): void;
@@ -55,6 +57,7 @@ async function initializeChannels(): Promise<void> {
 
   // 注入 dispatcher 到 manager
   channelManager.setDispatcher(async (msg) => {
+    conversationLifecycle?.beforeUserMessage?.(msg);
     conversationLifecycle?.onUserMessage();
     conversationLifecycle?.onConversationStarted();
     try {

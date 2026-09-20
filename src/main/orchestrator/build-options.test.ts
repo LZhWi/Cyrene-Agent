@@ -76,18 +76,19 @@ describe("build-options", () => {
     expect(deps.notifyUserActivity).toHaveBeenCalledTimes(1)
   })
 
-  it("adds a concise WeChat system when the run comes from WeChat", async () => {
+  it("keeps WeChat on the desktop prompt and history-retrieval path", async () => {
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "你好" }],
       style: "01_default.md",
       channel: "wechat",
     }, createBuildDeps())
 
-    expect(result.options.soulSystemBaseContent).toContain("你正在通过微信回复用户")
+    expect(result.options.soulSystemBaseContent).not.toContain("你正在通过微信回复用户")
     expect(result.options.soulSystemBaseContent).toContain("SOUL_SYSTEM_BASE")
     expect(result.options.soulSystemBaseContent).toContain("RELATIONSHIP")
     expect(result.options.toolSystemContent).toContain("TOOL_SYSTEM")
     expect(result.options.toolSystemContent).toContain("ENV")
+    expect(result.options.enableHistoryRetrievalAutoProbe).toBe(true)
   })
 
   it("does not add channel system for desktop chat", async () => {
@@ -105,8 +106,8 @@ describe("build-options", () => {
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "还记得吗" }],
       style: "01_default.md",
-      channel: "wechat",
-      sessionId: "channel:wechat:user",
+      channel: "feishu",
+      sessionId: "channel:feishu:user",
     }, createBuildDeps())
 
     expect(result.options.enableHistoryRetrievalAutoProbe).toBe(false)
@@ -143,13 +144,13 @@ describe("build-options", () => {
     expect(result.options.socialContext?.conversationId).toBe("session-1")
   })
 
-  it("keeps social context out of external channel runs", async () => {
+  it("keeps social context out of non-desktop external channel runs", async () => {
     const deps = createBuildDeps()
     deps.isSocialContextEnabled = () => true
     deps.retrieveSocialContext = vi.fn(async () => [])
     const result = await buildAgentRunOptions({
       messages: [{ role: "user", content: "继续" }], style: "talk-soft.md", sessionId: "session-1",
-      userTurnId: "user-2", assistantTurnId: "assistant-2", channel: "wechat",
+      userTurnId: "user-2", assistantTurnId: "assistant-2", channel: "feishu",
     }, deps)
 
     expect(deps.retrieveSocialContext).not.toHaveBeenCalled()
@@ -222,10 +223,10 @@ describe("build-options", () => {
       id: "call-1", startedAt: 1_000, endedAt: 1_100, summary: "本地通话私有摘要",
     }]
     const result = await buildAgentRunOptions({
-      messages: [{ role: "user", content: "微信消息", at: 2_000 }],
+      messages: [{ role: "user", content: "飞书消息", at: 2_000 }],
       style: "01_default.md",
-      channel: "wechat",
-      sessionId: "channel:wechat:user",
+      channel: "feishu",
+      sessionId: "channel:feishu:user",
     }, deps)
 
     expect(result.options.messages.some((message) => String(message.content).includes("本地通话私有摘要"))).toBe(false)
@@ -266,10 +267,10 @@ describe("build-options", () => {
       id: "mc-1", startedAt: 1_000, endedAt: 1_100, serverLabel: "srv", players: [], summary: "本地联机私有摘要",
     }]
     const result = await buildAgentRunOptions({
-      messages: [{ role: "user", content: "微信消息", at: 2_000 }],
+      messages: [{ role: "user", content: "飞书消息", at: 2_000 }],
       style: "01_default.md",
-      channel: "wechat",
-      sessionId: "channel:wechat:user",
+      channel: "feishu",
+      sessionId: "channel:feishu:user",
     }, deps)
 
     expect(result.options.soulSystemBaseContent).not.toContain("本地联机私有摘要")
@@ -628,6 +629,18 @@ describe("build-options", () => {
       latestIndex,
       0.55,
     )
+
+    scheduleMemoryWrite.mockClear()
+    await onAgentRunFinished(
+      { reply: "等待渠道确认", toolResults: [] },
+      "微信消息",
+      deps,
+      undefined,
+      undefined,
+      undefined,
+      false,
+    )
+    expect(scheduleMemoryWrite).not.toHaveBeenCalled()
   })
 })
 

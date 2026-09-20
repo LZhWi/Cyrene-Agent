@@ -160,15 +160,6 @@ export interface UserProfileLite {
 }
 
 export function buildChannelSystem(channel?: RelationshipChannel): string {
-  if (channel === "wechat") {
-    return [
-      "【渠道回复方式】",
-      "你正在通过微信回复用户。",
-      "回复要像微信聊天消息：短、自然、有来有回。",
-      "不要写长段说明，不要提桌面端、工具调用或系统。",
-      "任务复杂时先简短确认，再安静执行。",
-    ].join("\n");
-  }
   if (channel === "feishu") {
     return [
       "【渠道回复方式】",
@@ -330,7 +321,8 @@ export async function buildAgentRunOptions(
   const profile = deps.loadUserProfile();
   const contextTimezone = resolveChatContextTimezone(profile.timezone);
   const chatContextMessages = messages as unknown as ChatContextMessage[];
-  const includeCallContext = !input.channel
+  const usesDesktopConversationContext = !input.channel || input.channel === "wechat";
+  const includeCallContext = usesDesktopConversationContext
     || Boolean(input.sessionId && deps.isProactiveConversation?.(input.sessionId));
   const callEvents = includeCallContext ? deps.getCallContextEvents?.() ?? [] : [];
   const minecraftEvents = includeCallContext ? deps.getMinecraftContextEvents?.() ?? [] : [];
@@ -409,9 +401,9 @@ export async function buildAgentRunOptions(
   const channelSystem = buildChannelSystem(input.channel);
 
   // 方案 A：命中回忆线索时系统自动检索历史并注入，绕过 tool_phase 的工具决策漏调。
-  // 门槛与 auto_probe 一致：主聊天窗口 + proactive 会话；渠道聊天不注入。
+  // 门槛与 auto_probe 一致：桌面/微信共用链路 + proactive 会话；其他外部渠道不注入。
   let historyContextBlock = "";
-  if (deps.buildHistoryAutoInjection && (!input.channel || deps.isProactiveConversation?.(input.sessionId || "default") === true)) {
+  if (deps.buildHistoryAutoInjection && (usesDesktopConversationContext || deps.isProactiveConversation?.(input.sessionId || "default") === true)) {
     try {
       historyContextBlock = await deps.buildHistoryAutoInjection(
         latestUserText,
@@ -446,7 +438,7 @@ export async function buildAgentRunOptions(
   const isTalkMode = (input.style || "").startsWith("talk");
   let socialContextBlock = "";
   let socialContext: SocialTurnContext | undefined;
-  if (!input.channel && deps.isSocialContextEnabled?.() && input.userTurnId && input.assistantTurnId && deps.retrieveSocialContext) {
+  if (usesDesktopConversationContext && deps.isSocialContextEnabled?.() && input.userTurnId && input.assistantTurnId && deps.retrieveSocialContext) {
     try {
       const retrievedAtoms = await deps.retrieveSocialContext(
         conversationId,
@@ -626,7 +618,7 @@ export async function buildAgentRunOptions(
       },
       messages: fcMessages,
       conversationId,
-      enableHistoryRetrievalAutoProbe: !input.channel || deps.isProactiveConversation?.(conversationId) === true,
+      enableHistoryRetrievalAutoProbe: usesDesktopConversationContext || deps.isProactiveConversation?.(conversationId) === true,
       requiredToolName,
       timeoutMs: deps.chatRequestTimeoutMs,
       toolSystemContent,
@@ -658,14 +650,17 @@ export async function onAgentRunFinished(
   channel?: "wechat" | "feishu" | "mobile",
   memoryContextText?: string,
   memoryScheduleContext?: Partial<MemoryScheduleContext>,
+  scheduleMemoryWriteNow = true,
 ): Promise<{ sticker: string | null }> {
   const chatContent = result.reply;
   const sideEffectUserText = stripTurnModelContextForSideEffects(latestUserText);
   const memoryUserText = memoryContextText
     ? `${sideEffectUserText}\n\n${memoryContextText}`
     : sideEffectUserText;
-  if (memoryScheduleContext) deps.scheduleMemoryWrite(memoryUserText, chatContent, memoryScheduleContext);
-  else deps.scheduleMemoryWrite(memoryUserText, chatContent);
+  if (scheduleMemoryWriteNow) {
+    if (memoryScheduleContext) deps.scheduleMemoryWrite(memoryUserText, chatContent, memoryScheduleContext);
+    else deps.scheduleMemoryWrite(memoryUserText, chatContent);
+  }
   if (result.socialContext && deps.scheduleSocialContextWrite) {
     deps.scheduleSocialContextWrite(result.socialContext, chatContent, deps.loadModelSettings());
   }
@@ -716,10 +711,8 @@ export async function onAgentRunFinished(
     deps.broadcastRuntimeStateChanged();
   } else if (settings.runtimeSync === "llm") {
     deps.broadcastRuntimeStateChanged();
-    // 心情观察器在渠道 bot (wechat/feishu) 与手机 App (mobile) 上跳过：
-    // 节省一次 LLM 调用、加快首条回复，且避免远程消息扰动桌面 Live2D 表情/心情。
-    // 桌面聊天（channel === undefined）照常跑，保持 Live2D 表情/心情跟随对话变化。
-    if (channel !== "wechat" && channel !== "feishu" && channel !== "mobile") {
+    // 飞书与手机 App (mobile) 跳过心情观察器；微信与桌面共用完整回复链路。
+    if (channel !== "feishu" && channel !== "mobile") {
       void deps.observeRuntimeState(settings, [], sideEffectUserText, chatContent);
     }
   }

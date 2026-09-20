@@ -75,4 +75,23 @@ describe("buildChannelAttachmentInputs", () => {
     await buildChannelAttachmentInputs({ ...msg, attachments: [] }, { imageMode: "caption" });
     expect(getTurnAttachedImages()).toEqual([]);
   });
+
+  it("可生成与桌面聊天一致的无渠道附件说明", async () => {
+    const msg: IncomingMessage = {
+      channel: "wechat",
+      senderId: "wx-user-1",
+      chatId: "wx-user-1",
+      text: "看看文件",
+      attachments: [{ kind: "file", filePath: "C:/cache/report.pdf", caption: "report.pdf" }],
+      at: new Date(0),
+    };
+
+    await expect(buildChannelAttachmentInputs(msg, {
+      imageMode: "direct",
+      includeChannelName: false,
+    })).resolves.toEqual({
+      attachments: [{ name: "report.pdf", text: "用户发送了文件：C:/cache/report.pdf" }],
+      imageAttachments: undefined,
+    });
+  });
 });

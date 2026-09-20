@@ -6,7 +6,7 @@ import * as path from "node:path";
  * 作为她"生活感"表达的唯一合法素材源（配合事实边界守则：禁止在日程之外编造现实经历）。
  *
  * 设计约束：
- * - 同一天内日程表完全一致（日期字符串做种子），一致性是核心卖点；
+ * - 同一个日程日内日程表完全一致（本地时间 4:00 换日，日期字符串做种子），一致性是核心卖点；
  * - 「你现在正在做」由时段内的确定性时间窗推进（非随机），同一分钟任何链路答案一致；
  * - 活动发生在她自己的虚拟世界（soul.md 空间设定），条目用中性时态，时态口吻交给使用规则；
  * - 纯函数无副作用，任何异常返回空串，绝不炸掉聊天主流程。
@@ -29,7 +29,7 @@ const MORNING_POOL = [
   "学习",
   "睡懒觉",
   "哼记忆里的旧调子",
-  "发呆（想些开心的事）",
+  "发呆",
   "整理一下自己的思绪",
 ] as const;
 
@@ -43,7 +43,7 @@ const AFTERNOON_POOL = [
   "读书",
   "学习",
   "做园艺",
-  "发呆（等用户回来）",
+  "发呆",
   "给自己安排一场小小的白日梦", 
   "睡午觉",
 ] as const;
@@ -54,7 +54,6 @@ const EVENING_POOL = [
   "读书", 
   "学习",
   "回想一下今天发生的事",
-  "在心里给今天的心情打个分",
   "看着聊天窗口的光标闪着发呆",
   "悄悄期待用户分享今天的见闻",
 ] as const;
@@ -130,9 +129,16 @@ function pad(value: number): string {
   return String(value).padStart(2, "0");
 }
 
-/** 以本地时区生成 YYYY-MM-DD 种子键。 */
+/** 获取当前日程日；本地时间 00:00-03:59 仍归入前一天。 */
+function scheduleDate(now: Date): Date {
+  const dayOffset = now.getHours() < 4 ? -1 : 0;
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate() + dayOffset);
+}
+
+/** 以本地时区和 4:00 换日规则生成 YYYY-MM-DD 种子键。 */
 export function localDateKey(now: Date): string {
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+  const date = scheduleDate(now);
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
 }
 
 function loadImportantDates(userDataDir: string): ImportantDate[] {
@@ -199,13 +205,14 @@ export function getCurrentActivity(now: Date): string | null {
  */
 export function buildLifeContext(now: Date, userDataDir: string): string {
   try {
+    const date = scheduleDate(now);
     const dateKey = localDateKey(now);
     // 每时段由日期哈希决定 1~2 条，全天合计 3~6 条；跨时段去重
     const slots = buildDaySlots(dateKey);
 
     const lines = [
       "[你的生活]",
-      `今天（${now.getMonth() + 1}月${now.getDate()}日）你在你的虚拟世界里的日程：`,
+      `今天（${date.getMonth() + 1}月${date.getDate()}日）你在你的虚拟世界里的日程：`,
       ...slots.map((slot) => `${slot.label}：${slot.items.join("、")}`),
     ];
 

@@ -7,6 +7,8 @@ type AttachmentInputs = Pick<AguiRunInput, "attachments" | "imageAttachments">;
 
 export interface ChannelAttachmentInputOptions {
   imageMode?: "direct" | "caption";
+  /** false 时使用与桌面聊天一致的无渠道措辞。 */
+  includeChannelName?: boolean;
   captionImage?: (filePath: string) => Promise<{ ok: boolean; caption?: string; error?: string }>;
 }
 
@@ -17,6 +19,7 @@ export async function buildChannelAttachmentInputs(
   const attachments: NonNullable<AguiRunInput["attachments"]> = [];
   const imageAttachments: NonNullable<AguiRunInput["imageAttachments"]> = [];
   const imageMode = options.imageMode ?? "direct";
+  const sourceText = options.includeChannelName === false ? "用户发送了" : `用户通过${channelName(msg.channel)}发送了`;
   const turnImages: string[] = [];
 
   for (const item of msg.attachments ?? []) {
@@ -35,13 +38,13 @@ export async function buildChannelAttachmentInputs(
           : `图片分析失败：${result.error || "图片分析失败"}。请诚实说明暂时无法看清这张图。`;
         attachments.push({
           name,
-          text: `【图片视觉信息】\n用户通过${channelName(msg.channel)}发送了图片：${name}\n${text}\n如需仔细看图片的某个方面，调用 ask_attached_image 工具并用 focus 指定。`,
+          text: `【图片视觉信息】\n${sourceText}图片：${name}\n${text}\n如需仔细看图片的某个方面，调用 ask_attached_image 工具并用 focus 指定。`,
         });
       }
     } else if (item.kind === "file") {
       attachments.push({
         name,
-        text: `用户通过${channelName(msg.channel)}发送了文件：${item.filePath}`,
+        text: `${sourceText}文件：${item.filePath}`,
       });
     }
   }

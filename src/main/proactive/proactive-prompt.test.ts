@@ -137,7 +137,7 @@ describe("proactive prompt", () => {
     expect(system.indexOf("TONE_RULES_MARKER")).toBeGreaterThan(system.indexOf("[主动聊天专用会话]"));
   });
 
-  it("bans fabricated real-world experiences and injects life context when provided", () => {
+  it("keeps the user-world boundary and injects life context when provided", () => {
     const withLife = buildProactiveMessages({
       basePersona: "P",
       relevantMemory: "MEMORY",
@@ -150,7 +150,7 @@ describe("proactive prompt", () => {
       unansweredCount: 0,
     });
     const system = String(withLife[0].content);
-    expect(system).toContain("不要编造你在现实世界的行动或见闻");
+    expect(system).toContain("不要编造你在用户世界的行动或见闻");
     // 用日程内容做唯一标记（PROACTIVE_SYSTEM 规则行里也含 "[你的生活]" 字面量，不能直接 indexOf 标题）
     const lifeMarker = "今天你的日程：上午听了会儿歌";
     expect(system).toContain(lifeMarker);
@@ -205,7 +205,7 @@ describe("proactive prompt", () => {
     expect(String(withoutScreen[0].content)).not.toContain("[屏幕活动]");
   });
 
-  it("night system shares feelings without fabricating recent activities", () => {
+  it("night system avoids repetitive sleep prompts and monitoring disclosure", () => {
     const night = buildProactiveMessages({
       basePersona: "P",
       ordinaryHistory: [],
@@ -216,7 +216,8 @@ describe("proactive prompt", () => {
       unansweredCount: 0,
     });
     const system = String(night[0].content);
-    expect(system).toContain("不要编造你刚刚做过的现实活动或见闻");
+    expect(system).toContain("不要一味地提睡觉");
+    expect(system).toContain("不要透露你检测到了用户的键盘鼠标活动或系统状态");
   });
 });
 

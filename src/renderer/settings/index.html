@@ -1060,7 +1060,7 @@
 
         <section class="settings-panel is-hidden" id="channels-panel" data-panel="channels">
           <details class="channels-log" id="channels-log-details">
-            <summary>💬 消息日志（最近 100 条）</summary>
+            <summary>💬 渠道收发日志（不参与对话上下文，最近 100 条）</summary>
             <div class="channels-log__actions">
               <button type="button" class="btn-secondary" id="channels-log-refresh">刷新</button>
               <button type="button" class="btn-secondary" id="channels-log-clear">清空</button>
@@ -1070,7 +1070,7 @@
             </div>
           </details>
           <h1>连接手机</h1>
-          <p class="panel-hint">把 Cyrene 接到微信、飞书等聊天平台。在外部渠道里的每个用户会拥有独立的对话上下文与记忆。</p>
+          <p class="panel-hint">把 Cyrene 接到微信、飞书等聊天平台。微信与 PC 主动聊天共用对话记录和记忆；其他渠道继续使用各自的对话上下文。</p>
 
           <div class="channels-card">
             <div class="channels-card__header">
@@ -1154,7 +1154,7 @@
               </div>
               <div class="form-row form-row--inline">
                 <span class="switch"><input id="channels-tts-enabled" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
-                <span class="form-row__label">发送 TTS 音频消息</span>
+                <span class="form-row__label">发送 TTS 音频消息（支持音频的独立渠道；微信不附加）</span>
               </div>
               <div class="form-row form-row--inline">
                 <span class="switch"><input id="channels-sticker-enabled" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
@@ -1162,7 +1162,7 @@
               </div>
               <div class="form-row form-row--inline">
                 <span class="switch"><input id="channels-mirror-desktop" type="checkbox" /><span class="switch__track"><span class="switch__thumb"></span></span></span>
-                <span class="form-row__label">桌面端镜像显示</span>
+                <span class="form-row__label">桌面端镜像显示（独立渠道；微信直接写入 PC 主动聊天）</span>
               </div>
               <div class="form-row">
                 <label class="form-label">工具权限</label>
@@ -1171,14 +1171,14 @@
                     <input type="radio" name="channels-tool-sandbox" value="all" id="channels-tool-sandbox-all" />
                     <div class="tool-permission-option__text">
                       <span class="tool-permission-option__title">全部开启</span>
-                      <span class="tool-permission-option__desc">允许天气、搜索、翻译、文件等工具在飞书/微信中使用。</span>
+                      <span class="tool-permission-option__desc">允许天气、搜索、翻译、文件等工具在独立渠道中使用；微信继承 PC 工具集。</span>
                     </div>
                   </label>
                   <label class="tool-permission-option">
                     <input type="radio" name="channels-tool-sandbox" value="safe-only" id="channels-tool-sandbox-safe" />
                     <div class="tool-permission-option__text">
                       <span class="tool-permission-option__title">安全模式</span>
-                      <span class="tool-permission-option__desc">仅允许记忆、待办等低风险工具。</span>
+                      <span class="tool-permission-option__desc">独立渠道仅允许记忆、待办等低风险工具；微信继承 PC 工具集。</span>
                     </div>
                   </label>
                 </div>
