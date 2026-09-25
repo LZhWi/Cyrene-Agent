@@ -50,6 +50,7 @@ describe("document index worker runner", () => {
   it("persists embedding batches under one import and caches only after completion", async () => {
     const controlled = createControlledWorker();
     const persistPreparedBatch = vi.fn().mockResolvedValue(undefined);
+    const flushPreparedImport = vi.fn().mockResolvedValue(undefined);
     const putCache = vi.fn().mockResolvedValue(undefined);
     const runner = createDocumentIndexWorkerRunner({
       createWorker: () => controlled.worker,
@@ -57,6 +58,7 @@ describe("document index worker runner", () => {
       getEmbeddingConfig: () => ({ provider: "local", modelKey: "bgem3" }),
       createImportId: () => "import-batched",
       persistPreparedBatch,
+      flushPreparedImport,
       putCache,
     });
     const job = createJob();
@@ -74,6 +76,8 @@ describe("document index worker runner", () => {
     expect(persistPreparedBatch).toHaveBeenCalledTimes(2);
     expect(persistPreparedBatch).toHaveBeenNthCalledWith(1, expect.objectContaining({ importId: "import-batched", chunks: [{ text: "first", index: 0, embedding: [1, 0] }] }));
     expect(persistPreparedBatch).toHaveBeenNthCalledWith(2, expect.objectContaining({ importId: "import-batched" }));
+    expect(flushPreparedImport).toHaveBeenCalledOnce();
+    expect(flushPreparedImport.mock.invocationCallOrder[0]).toBeLessThan(putCache.mock.invocationCallOrder[0]);
     expect(putCache).toHaveBeenCalledWith({ textSha256: "hash", fileName: "large.md", importId: "import-batched", chunkCount: 3 });
   });
 
@@ -87,6 +91,7 @@ describe("document index worker runner", () => {
       getEmbeddingConfig: () => ({ provider: "local", modelKey: "bgem3" }),
       createImportId: () => "import-test",
       persistPreparedBatch,
+      flushPreparedImport: vi.fn().mockResolvedValue(undefined),
       putCache,
     });
     const job = createJob();
@@ -119,6 +124,28 @@ describe("document index worker runner", () => {
     expect(putCache).not.toHaveBeenCalled();
   });
 
+  it("does not cache or report a successful import when the final flush fails", async () => {
+    const controlled = createControlledWorker();
+    const putCache = vi.fn();
+    const runner = createDocumentIndexWorkerRunner({
+      createWorker: () => controlled.worker,
+      getCachedImport: vi.fn().mockResolvedValue(null),
+      getEmbeddingConfig: () => ({ provider: "local", modelKey: "bgem3" }),
+      createImportId: () => "import-unflushed",
+      persistPreparedBatch: vi.fn().mockResolvedValue(undefined),
+      flushPreparedImport: vi.fn().mockRejectedValue(new Error("disk full")),
+      putCache,
+    });
+    const running = runner(createJob());
+    controlled.emit({ type: "prepared", result: { kind: "prepared-indexed", name: "large.md", textSha256: "hash", totalChunks: 1 } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    controlled.emit({ type: "embedded-batch", chunks: [{ text: "first", index: 0, embedding: [1, 0] }] });
+    controlled.emit({ type: "completed" });
+
+    await expect(running).resolves.toMatchObject({ kind: "error", reason: "disk full" });
+    expect(putCache).not.toHaveBeenCalled();
+  });
+
   it("does not require prepared worker messages to carry chunk text into main", async () => {
     const controlled = createControlledWorker();
     const runner = createDocumentIndexWorkerRunner({
@@ -127,6 +154,7 @@ describe("document index worker runner", () => {
       getEmbeddingConfig: () => ({ provider: "local", modelKey: "bgem3" }),
       createImportId: () => "import-lightweight",
       persistPreparedBatch: vi.fn().mockResolvedValue(undefined),
+      flushPreparedImport: vi.fn().mockResolvedValue(undefined),
       putCache: vi.fn().mockResolvedValue(undefined),
     });
     const job = createJob();

@@ -1,5 +1,4 @@
 import * as path from "path";
-import * as fs from "fs";
 import { app } from "electron";
 import { getEmbeddingProvider, resetEmbeddingProvider, EmbeddingProvider, switchEmbeddingModel as switchModel, getCurrentModelDims, EmbeddingDimensionMismatchError } from "./embedding";
 import type { EmbeddingIndexMetadata } from "./vectorstore";
@@ -105,25 +104,11 @@ export async function switchEmbeddingModel(modelKey: string): Promise<{ ok: bool
     let clearedEntries = 0;
     if (store) {
       const entries = (store as any).entries as Array<{ embedding: number[] }> | undefined;
-      if (entries && entries.length > 0) {
-        const oldDims = entries[0].embedding.length;
-        if (oldDims !== newDims) {
-          // Dimension mismatch — clear the vector store and metadata
-          const dataDir = getDataDir();
-          const storePath = path.join(dataDir, "memory-store.json");
-          const metaPath = path.join(dataDir, "memory-store-meta.json");
-          if (fs.existsSync(storePath)) {
-            clearedEntries = entries.length;
-            fs.writeFileSync(storePath, "[]", "utf8");
-            console.log("[RAG] dimension mismatch (" + oldDims + " → " + newDims + "), cleared " + clearedEntries + " entries");
-          }
-          // 清除旧的索引元数据，下次写入时会自动创建新的
-          if (fs.existsSync(metaPath)) {
-            fs.unlinkSync(metaPath);
-          }
-          // Reload store from the now-empty file
-          store = new JsonVectorStore(dataDir);
-        }
+      const oldDims = store.getIndexMeta()?.dimensions ?? entries?.[0]?.embedding.length;
+      if (oldDims !== undefined && oldDims !== newDims) {
+        clearedEntries = entries?.length ?? 0;
+        store.clearForRebuild();
+        console.log("[RAG] dimension mismatch (" + oldDims + " → " + newDims + "), cleared " + clearedEntries + " entries");
       }
     }
 
@@ -345,6 +330,7 @@ export async function importPreparedDocumentForTurn(
     : Math.random().toString(36).slice(2, 8);
   const importId = `import-${Date.now()}-${id}`;
   await appendPreparedDocumentBatch(fileName, importId, prepared);
+  await store.flush();
   return { importId, chunkCount: prepared.length };
 }
 
@@ -367,6 +353,7 @@ export async function importDocumentForTurn(
     provider,
     { isCancelled: control?.isCancelled },
   );
+  await store.flush();
   return { importId, chunkCount: chunks.length };
 }
 
@@ -518,6 +505,10 @@ export function resetRAG(): void {
 
 export function flushVectorStoreSync(): void {
   store?.flushSync();
+}
+
+export async function flushVectorStore(): Promise<void> {
+  await store?.flush();
 }
 
 export function getRAGStats() {

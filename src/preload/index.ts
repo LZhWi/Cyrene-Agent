@@ -10,7 +10,7 @@ import type { UiTheme } from "../shared/ui-theme";
 import type { UiFont } from "../shared/ui-font";
 import type { PluginPanelApi } from "../shared/plugin-management";
 import type { ReasoningPreference } from "../shared/reasoning";
-import type { DocumentIndexProgress } from "../main/rag/document-index-queue";
+import type { DocumentIndexProgress } from "../shared/document-index";
 import type { AguiRunAck } from "../shared/run-terminal";
 import type { ReviewSnapshot, ReviewRestoreOutcome } from "../shared/review-types";
 import { getLive2DIpcListenerCounts } from "./live2d-listener-diagnostics";
@@ -77,15 +77,15 @@ const chatApi = {
   /** 从 dataTransfer.files 或 fileInput.files 提取路径后批量摄入。
    *  路径提取在 preload（webUtils.getPathForFile），避免新版 Electron 中 File.path 不可用的问题。 */
   ingestDroppedFiles: async (files: File[]): Promise<unknown[]> => {
-    const paths: string[] = [];
+    const entries: Array<{ path: string; mime: string }> = [];
     for (const f of files) {
       try {
         const p = webUtils.getPathForFile(f);
-        if (p) paths.push(p);
+        if (p) entries.push({ path: p, mime: f.type });
       } catch { /* 跳过无法识别路径的文件 */ }
     }
-    if (paths.length === 0) return [];
-    return ipcRenderer.invoke(IPC.CHAT_INGEST_FILES, paths);
+    if (entries.length === 0) return [];
+    return ipcRenderer.invoke(IPC.CHAT_INGEST_FILES, entries);
   },
   processDocuments: (filePaths: string[], query: string) =>
     ipcRenderer.invoke(IPC.CHAT_PROCESS_DOCUMENTS, { filePaths, query }),
@@ -103,6 +103,11 @@ const chatApi = {
   getImageSendStrategy: (sessionId?: string) =>
     ipcRenderer.invoke(IPC.CHAT_GET_IMAGE_SEND_STRATEGY, sessionId ? { sessionId } : undefined),
   getGeneralSettings: () => ipcRenderer.invoke(IPC.SETTINGS_GET_GENERAL),
+  onCompanionFeedbackLearningChanged: (callback: (enabled: boolean) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, enabled: boolean) => callback(enabled);
+    ipcRenderer.on(IPC.COMPANION_FEEDBACK_LEARNING_CHANGED, listener);
+    return () => ipcRenderer.off(IPC.COMPANION_FEEDBACK_LEARNING_CHANGED, listener);
+  },
   // 陪伴插件仅向原生 Chat 暴露同源的短生活状态；插件未运行时 invoke 会拒绝，渲染端降级隐藏。
   getCompanionLifeStatus: () => ipcRenderer.invoke("plugin:companion-chat:life-status"),
   getReasoningState: (payload?: { sessionId?: string }) => ipcRenderer.invoke(IPC.CHAT_GET_REASONING_STATE, payload),

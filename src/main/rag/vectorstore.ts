@@ -173,7 +173,8 @@ export class JsonVectorStore {
   private entries: MemoryEntry[] = [];
   private dirty = false;
   private saveTimer: NodeJS.Timeout | null = null;
-  private persisting = false;
+  private persistTask: Promise<void> | null = null;
+  private revision = 0;
   private writeSeq = 0;
   private indexMeta: EmbeddingIndexMetadata | null = null;
 
@@ -226,20 +227,34 @@ export class JsonVectorStore {
 
   private save(): void {
     this.dirty = true;
+    this.revision++;
+    this.schedulePersist();
+  }
+
+  private schedulePersist(): void {
     if (this.saveTimer) return;
     this.saveTimer = setTimeout(() => {
       this.saveTimer = null;
-      void this.persist();
+      void this.persist().catch(() => {});
     }, 1500);
   }
 
-  private async persist(): Promise<void> {
-    if (this.persisting) {
-      this.save();
-      return;
-    }
-    this.persisting = true;
+  private persist(): Promise<void> {
+    if (this.persistTask) return this.persistTask;
+    const task = this.writeSnapshot();
+    this.persistTask = task;
+    const settled = () => {
+      this.persistTask = null;
+      if (this.dirty && !this.saveTimer) this.schedulePersist();
+    };
+    void task.then(settled, settled);
+    return task;
+  }
+
+  private async writeSnapshot(): Promise<void> {
     const seq = ++this.writeSeq;
+    const revision = this.revision;
+    const entries = this.entries.slice();
     const tmpPath = `${this.filePath}.tmp-${process.pid}-${this.instanceId}-${seq}`;
     try {
       const dir = path.dirname(this.filePath);
@@ -247,8 +262,8 @@ export class JsonVectorStore {
       const handle = await fs.promises.open(tmpPath, "w");
       try {
         await handle.write("[");
-        for (let i = 0; i < this.entries.length; i++) {
-          await handle.write(`${i > 0 ? "," : ""}${JSON.stringify(this.entries[i])}`);
+        for (let i = 0; i < entries.length; i++) {
+          await handle.write(`${i > 0 ? "," : ""}${JSON.stringify(entries[i])}`);
           if (i % 64 === 63) await new Promise<void>((resolve) => setImmediate(resolve));
         }
         await handle.write("]");
@@ -260,14 +275,52 @@ export class JsonVectorStore {
         return;
       }
       fs.renameSync(tmpPath, this.filePath);
-      this.dirty = false;
+      this.dirty = this.revision !== revision;
     } catch (err) {
       try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
+      this.dirty = true;
       console.warn("[RAG] failed to save vector store:", err);
-    } finally {
-      this.persisting = false;
-      if (this.dirty && !this.saveTimer) this.save();
+      throw err;
     }
+  }
+
+  async flush(): Promise<void> {
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    while (this.dirty || this.persistTask) {
+      await this.persist();
+      if (this.saveTimer) {
+        clearTimeout(this.saveTimer);
+        this.saveTimer = null;
+      }
+    }
+  }
+
+  /** 切换向量维度时，使旧的定时或进行中写入无法回写已清空的索引。 */
+  clearForRebuild(): void {
+    const wasDirty = this.dirty;
+    this.writeSeq++;
+    if (this.saveTimer) {
+      clearTimeout(this.saveTimer);
+      this.saveTimer = null;
+    }
+    const tmpPath = `${this.filePath}.clear-${process.pid}-${this.instanceId}`;
+    try {
+      fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
+      fs.writeFileSync(tmpPath, "[]", "utf8");
+      fs.renameSync(tmpPath, this.filePath);
+      if (fs.existsSync(this.metaFilePath)) fs.unlinkSync(this.metaFilePath);
+    } catch (err) {
+      try { fs.unlinkSync(tmpPath); } catch { /* already gone */ }
+      if (wasDirty) this.schedulePersist();
+      throw err;
+    }
+    this.entries = [];
+    this.indexMeta = null;
+    this.ivf = null;
+    this.dirty = false;
   }
 
   flushSync(): void {

@@ -102,15 +102,15 @@ export function isDocumentExt(ext: string): boolean {
   return normalized === "" || isTextExt(normalized) || isWordDocumentExt(normalized);
 }
 
-export function describePendingAttachment(filePath: string): Attachment {
+export function describePendingAttachment(filePath: string, mime?: string): Attachment {
   const ext = path.extname(filePath).toLowerCase();
   const name = path.basename(filePath);
-  if (isImageExt(ext)) {
+  if (isImageExt(ext) || (typeof mime === "string" && mime.startsWith("image/"))) {
     return {
       name,
       kind: "image",
       filePath,
-      mime: getMimeFromExt(ext),
+      mime: isImageExt(ext) ? getMimeFromExt(ext) : mime,
       previewUrl: pathToFileURL(filePath).toString(),
       status: "pending",
     };

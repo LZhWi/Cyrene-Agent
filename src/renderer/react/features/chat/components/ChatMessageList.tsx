@@ -97,6 +97,7 @@ interface ChatMessageListProps {
   preferredAddress: string;
   stickerSize?: "small" | "standard" | "large";
   segmentedOutputMode?: SegmentedOutputMode;
+  companionFeedbackLearningEnabled?: boolean;
   onTtsCacheKey?: (messageId: string, cacheKey: string, converterVersion: string) => void;
   revisionBusy?: boolean;
   onEditLastUserMessage?: (messageId: string, content: string) => Promise<boolean>;
@@ -1234,6 +1235,7 @@ export function ChatMessageList({
   preferredAddress,
   stickerSize = "standard",
   segmentedOutputMode = "off",
+  companionFeedbackLearningEnabled = false,
   onTtsCacheKey,
   revisionBusy = false,
   onEditLastUserMessage,
@@ -1272,7 +1274,7 @@ export function ChatMessageList({
     handlersRef.current.onOpenReviewInspector?.(runId, fileIndex);
   }, []);
   const canDeleteMessage = Boolean(onDeleteMessage);
-  const canIgnorePluginMessage = Boolean(onIgnorePluginMessage);
+  const canIgnorePluginMessage = companionFeedbackLearningEnabled && Boolean(onIgnorePluginMessage);
   const canReportTtsCacheKey = Boolean(onTtsCacheKey);
   const canOpenReviewInspector = Boolean(onOpenReviewInspector);
   const latest = messages.at(-1);

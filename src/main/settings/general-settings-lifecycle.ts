@@ -159,6 +159,9 @@ export function handleGeneralSettingsChanged(
   ) {
     broadcastToAllWindows(IPC.CHAT_TYPOGRAPHY_CHANGED, nextAppearance);
   }
+  if (before.companionFeedbackLearningEnabled !== after.companionFeedbackLearningEnabled) {
+    deps.broadcastToAuxWindows(IPC.COMPANION_FEEDBACK_LEARNING_CHANGED, after.companionFeedbackLearningEnabled);
+  }
   if (before.uiIcon !== after.uiIcon) {
     applyUiIcon(after.uiIcon, deps);
   }

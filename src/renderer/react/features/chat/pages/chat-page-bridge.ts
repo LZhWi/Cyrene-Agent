@@ -58,7 +58,8 @@ export interface CompanionLifeStatus {
 }
 
 interface CompanionLifeStatusApi {
-  getGeneralSettings?: () => Promise<{ chatBackend?: unknown; defaultChatMode?: unknown; segmentedOutputMode?: unknown }>;
+  getGeneralSettings?: () => Promise<{ chatBackend?: unknown; defaultChatMode?: unknown; segmentedOutputMode?: unknown; companionFeedbackLearningEnabled?: unknown }>;
+  onCompanionFeedbackLearningChanged?: (callback: (enabled: boolean) => void) => () => void;
   getCompanionLifeStatus?: () => Promise<unknown>;
 }
 

@@ -75,6 +75,15 @@ describe("chat reasoning IPC", () => {
     });
   }
 
+  it("passes file MIME through the ingest IPC so extensionless images remain images", async () => {
+    await register();
+    const handler = mocks.handlers.get(IPC.CHAT_INGEST_FILES);
+    if (!handler) throw new Error("file ingest handler was not registered");
+
+    expect(await handler({}, [{ path: "C:/temp/clipboard-image", mime: "image/png" }]))
+      .toMatchObject([{ kind: "image", mime: "image/png" }]);
+  });
+
   it("reads reasoning capability from the model profile bound to the current session", async () => {
     mocks.sessions.set("session-openai", { id: "session-openai", modelProfileId: "openai-profile" });
     await register();

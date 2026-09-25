@@ -30,6 +30,40 @@ afterEach(() => {
 });
 
 describe("Chat message rendering", () => {
+  it("hides saved proactive Ignore controls when feedback learning is off", () => {
+    (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+    vi.stubGlobal("React", { createElement });
+    HTMLElement.prototype.scrollTo = vi.fn();
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    const root = createRoot(host);
+    const message: ChatMessageItem = {
+      id: "proactive", role: "assistant", content: "你好",
+      pluginDelivery: { pluginId: "companion-chat", ignoreFeedback: "pending" },
+    };
+    const render = (enabled: boolean) => act(() => root.render(createElement(ChatMessageList, {
+      messages: [message], conversationId: "session", mode: "chat", preferredAddress: "",
+      companionFeedbackLearningEnabled: enabled,
+      onIgnorePluginMessage: async () => true,
+    })));
+    const hasIgnoreAction = () => {
+      type Action = { props?: { onIgnore?: (id: string) => Promise<boolean> } };
+      type Footer = (content: string, info: { extraInfo: { messageId: string; pluginDelivery: ChatMessageItem["pluginDelivery"] } }) => { props: { children: Action[] } };
+      const role = (listRender.mock.lastCall?.[0] as { role: { assistant: { footer: Footer } } }).role;
+      const footer = role.assistant.footer("你好", { extraInfo: { messageId: "proactive", pluginDelivery: message.pluginDelivery } });
+      return footer.props.children.some((action) => Boolean(action?.props?.onIgnore));
+    };
+
+    render(true);
+    expect(hasIgnoreAction()).toBe(true);
+    render(false);
+    expect(hasIgnoreAction()).toBe(false);
+
+    act(() => root.unmount());
+    host.remove();
+    vi.unstubAllGlobals();
+  });
+
   it("renders recent Chat messages first and loads older messages only when they enter view", () => {
     (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
     vi.stubGlobal("React", { createElement });

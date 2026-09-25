@@ -3,6 +3,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import type { EmbeddingProvider } from "./embedding";
+import { JsonVectorStore } from "./vectorstore";
 
 const provider: EmbeddingProvider = {
   name: "deterministic",
@@ -44,6 +45,7 @@ import {
   getEntriesBySource,
   hasImportedDocumentChunks,
   importDocumentForTurn,
+  importPreparedDocumentForTurn,
   initRAG,
   isUserMemoryVectorStoreReady,
   resetRAG,
@@ -81,6 +83,14 @@ describe("turn document imports", () => {
     const chunks = await searchImportedDocumentChunksForImportIds("paragraph", [result.importId], 3);
     expect(chunks.length).toBeGreaterThan(0);
     expect(chunks.every((chunk) => chunk.importId === result.importId)).toBe(true);
+  });
+
+  it("persists regular and prepared document imports before reporting success", async () => {
+    await importDocumentForTurn("one paragraph", "regular.md");
+    expect(new JsonVectorStore(path.join(tmpDir, "rag-data")).stats.total).toBeGreaterThan(0);
+
+    await importPreparedDocumentForTurn("prepared.md", [{ text: "prepared", chunkIndex: 0, embedding: [1, 0] }]);
+    expect(new JsonVectorStore(path.join(tmpDir, "rag-data")).stats.sources.imported_doc).toBeGreaterThan(1);
   });
 
   it("automatically injects only document chunks that pass the local relevance gate", async () => {

@@ -3,6 +3,7 @@ import type { GeneralSettings } from "./general-settings";
 import type { WindowManager } from "../windows/window-manager";
 import { applyGeneralSettings, handleGeneralSettingsChanged } from "./general-settings-lifecycle";
 import { syncLaunchAtLogin } from "./launch-at-login";
+import { IPC } from "../../shared/ipc-channels";
 
 vi.mock("electron", () => ({ app: {}, nativeImage: {} }));
 vi.mock("../windows/broadcast", () => ({ broadcastToAllWindows: vi.fn() }));
@@ -78,6 +79,13 @@ describe("general settings window lifecycle", () => {
     expect(h.windowManager.setPetWindowAlwaysOnTop).toHaveBeenCalledWith(false);
     expect(h.windowManager.applyPetWindowZoom).toHaveBeenCalledWith(1.5);
     expect(syncLaunchAtLogin).toHaveBeenCalledWith(true, {});
+  });
+
+  it("notifies Chat when proactive feedback learning is turned off", () => {
+    const h = createHarness();
+    const before = { ...h.settings, companionFeedbackLearningEnabled: true };
+    handleGeneralSettingsChanged(before, { ...before, companionFeedbackLearningEnabled: false }, h.deps);
+    expect(h.deps.broadcastToAuxWindows).toHaveBeenCalledWith(IPC.COMPANION_FEEDBACK_LEARNING_CHANGED, false);
   });
 
   it.each([true, false])("fully applies startup settings with petVisible=%s", (visible) => {

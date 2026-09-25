@@ -54,6 +54,7 @@ export type DocumentIndexWorkerRunnerDependencies = {
     importId: string;
     chunks: Array<PreparedDocumentChunk & { embedding: number[] }>;
   }) => Promise<void>;
+  flushPreparedImport: () => Promise<void>;
   putCache: (input: { textSha256: string; fileName: string; importId: string; chunkCount: number }) => Promise<void>;
 };
 
@@ -180,6 +181,7 @@ export function createDocumentIndexWorkerRunner(deps: DocumentIndexWorkerRunnerD
             finish(cancelledResult(job.input.filePath));
             return;
           }
+          await deps.flushPreparedImport();
           try {
             await deps.putCache({
               textSha256: prepared.textSha256,
@@ -236,6 +238,10 @@ function createDefaultRunnerDependencies(): DocumentIndexWorkerRunnerDependencie
         chunkIndex: chunk.index,
         embedding: chunk.embedding,
       })));
+    },
+    flushPreparedImport: async () => {
+      const rag = require("./index") as typeof import("./index");
+      await rag.flushVectorStore();
     },
     putCache: async ({ textSha256, fileName, importId, chunkCount }) => {
       const cache = require("./document-cache") as typeof import("./document-cache");

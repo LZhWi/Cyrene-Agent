@@ -140,6 +140,7 @@ export function ChatPage() {
   const [lastTurnRevisionStarting, setLastTurnRevisionStarting] = useState(false);
   const [stickerSize, setStickerSize] = useState<"small" | "standard" | "large">("standard");
   const [segmentedOutputMode, setSegmentedOutputMode] = useState<SegmentedOutputMode>("off");
+  const [companionFeedbackLearningEnabled, setCompanionFeedbackLearningEnabled] = useState(false);
 
   useEffect(() => {
     setCollapsedByMode((current) => current.chat ? current : { ...current, chat: true });
@@ -476,16 +477,29 @@ export function ChatPage() {
 
   useEffect(() => {
     let active = true;
-    void companionLifeStatusApi()?.getGeneralSettings?.().then((settings) => {
+    let feedbackChanged = false;
+    const api = companionLifeStatusApi();
+    const offFeedbackChanged = api?.onCompanionFeedbackLearningChanged?.((enabled) => {
+      if (active) {
+        feedbackChanged = true;
+        setCompanionFeedbackLearningEnabled(enabled === true);
+      }
+    });
+    void api?.getGeneralSettings?.().then((settings) => {
       if (!active) return;
       setMode(settings.defaultChatMode === "work" ? "work" : "chat");
       const value = settings.segmentedOutputMode;
       setSegmentedOutputMode(value === "all" || value === "chat" ? value : "off");
+      if (!feedbackChanged) setCompanionFeedbackLearningEnabled(settings.companionFeedbackLearningEnabled === true);
     }).catch(() => {
-      if (active) setSegmentedOutputMode("off");
+      if (active) {
+        setSegmentedOutputMode("off");
+        if (!feedbackChanged) setCompanionFeedbackLearningEnabled(false);
+      }
     });
     return () => {
       active = false;
+      offFeedbackChanged?.();
     };
   }, []);
 
@@ -1473,6 +1487,7 @@ export function ChatPage() {
             preferredAddress={preferredAddress}
             stickerSize={stickerSize}
             segmentedOutputMode={segmentedOutputMode}
+            companionFeedbackLearningEnabled={companionFeedbackLearningEnabled}
             revisionBusy={Boolean(modelBusyByMode[mode]) || lastTurnRevisionStarting}
             onEditLastUserMessage={mode === "chat" ? editLastChatUserMessage : undefined}
             onRegenerateLastResponse={mode === "chat" ? regenerateLastChatResponse : undefined}

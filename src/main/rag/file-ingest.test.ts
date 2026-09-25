@@ -149,6 +149,14 @@ describe("describePendingAttachment", () => {
       expect(image.status).toBe("pending");
     }
   });
+
+  it("无扩展名图片可通过渲染端传来的 MIME 进入图片线路", () => {
+    expect(describePendingAttachment(fixture("clipboard-image"), "image/png")).toMatchObject({
+      kind: "image",
+      mime: "image/png",
+    });
+    expect(describePendingAttachment(fixture("clipboard-image"), "text/plain").kind).toBe("document");
+  });
 });
 
 // ── ingestOneFile ──
